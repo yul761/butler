@@ -1,0 +1,36 @@
+import { pathKey } from "../util/env";
+
+export interface SpawnSpec {
+  file: string;
+  args: string[];
+}
+
+export function claudeArgs(req: { mode: "new" | "resume"; sessionId: string; mcpConfigPath?: string }): string[] {
+  const args = req.mode === "new" ? ["--session-id", req.sessionId] : ["--resume", req.sessionId];
+  if (req.mcpConfigPath) args.push("--mcp-config", req.mcpConfigPath);
+  return args;
+}
+
+/** 直接用 PTY 跑 claude；只有 Windows 上 npm 装的 claude.cmd 需要经过 cmd.exe。 */
+export function spawnSpec(claudePath: string, args: string[], platform: NodeJS.Platform): SpawnSpec {
+  if (platform === "win32" && /\.(cmd|bat)$/i.test(claudePath)) return { file: "cmd.exe", args: ["/c", claudePath, ...args] };
+  return { file: claudePath, args };
+}
+
+/** 去掉 Electron 和外层 Claude Code 的标记变量，防止它们泄漏给被启动的 claude。 */
+export function sessionEnv(
+  base: NodeJS.ProcessEnv,
+  x: { pathValue: string; ticketKey: string; sessionId: string },
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(base)) {
+    if (v === undefined || k.startsWith("ELECTRON_") || k === "CLAUDECODE") continue;
+    out[k] = v;
+  }
+  if (x.pathValue) out[pathKey(out)] = x.pathValue;
+  out.TERM = "xterm-256color";
+  out.COLORTERM = "truecolor";
+  out.BUTLER_TICKET = x.ticketKey;
+  out.BUTLER_SESSION = x.sessionId;
+  return out;
+}
