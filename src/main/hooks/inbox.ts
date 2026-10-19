@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from "node:fs";
+import { mkdirSync, watch, type FSWatcher } from "node:fs";
 import { mkdir, readdir, readFile, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { parseEnvelope, type HookEnvelope } from "../../shared/hook-envelope";
@@ -112,9 +112,22 @@ export class HookInbox {
 
   start(): void {
     if (this.timer) return;
+    // 先同步建目录，否则 watch() 会因目录不存在而失败，只能靠轮询。
+    try {
+      mkdirSync(this.opts.dir, { recursive: true });
+    } catch (e) {
+      this.log(`inbox: cannot create ${this.opts.dir} (${errMsg(e)})`);
+    }
     void this.drain();
     try {
-      this.watcher = watch(this.opts.dir, () => void this.drain());
+      const watcher = watch(this.opts.dir, () => void this.drain());
+      // 无 error 监听的 FSWatcher 会让 Electron 主进程崩溃；出错后只保留轮询。
+      watcher.on("error", (e) => {
+        this.log(`inbox: watcher error (${errMsg(e)}); polling only`);
+        watcher.close();
+        if (this.watcher === watcher) this.watcher = null;
+      });
+      this.watcher = watcher;
     } catch {
       this.watcher = null;
     }

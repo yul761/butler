@@ -115,3 +115,24 @@ describe("HookInbox.drain", () => {
     expect(existsSync(dir)).toBe(true);
   });
 });
+
+describe("HookInbox.start", () => {
+  it("creates a missing dir and handles a file written afterwards", async () => {
+    const dir = join(tempDir(), "inbox");
+    const seen: number[] = [];
+    const inbox = new HookInbox({
+      dir, badDir: join(dir, "bad"), intervalMs: 50,
+      handle: (e: HookEnvelope) => { seen.push(e.receivedAt); },
+    });
+    inbox.start();
+    try {
+      expect(existsSync(dir)).toBe(true);
+      writeFileSync(join(dir, "0001-a.json"), envelope(1));
+      const deadline = Date.now() + 3000;
+      while (seen.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+      expect(seen).toEqual([1]);
+    } finally {
+      inbox.stop();
+    }
+  });
+});
