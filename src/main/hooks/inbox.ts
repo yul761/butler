@@ -11,49 +11,107 @@ export interface HookInboxOptions {
   log?: (msg: string) => void;
 }
 
+/** handle 连续失败这么多次后，文件才被移到 bad/。 */
+export const MAX_HANDLE_ATTEMPTS = 3;
+
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
 /** fs.watch 在各平台上都不完全可靠，所以同时用定时轮询兜底。 */
 export class HookInbox {
   private watcher: FSWatcher | null = null;
   private timer: NodeJS.Timeout | null = null;
-  private draining = false;
+  private inflight: Promise<number> | null = null;
   private again = false;
+  /** 每个文件名已失败的 handle 次数（仅内存）。 */
+  private attempts = new Map<string, number>();
+  /** handle 已成功但删除失败的文件名：之后不再重复应用。 */
+  private applied = new Set<string>();
 
   constructor(private readonly opts: HookInboxOptions) {}
 
-  async drain(): Promise<number> {
-    if (this.draining) {
+  /** 永不 reject：所有 I/O 错误都记入 log。并发调用会共享同一个进行中的 drain。 */
+  drain(): Promise<number> {
+    if (this.inflight) {
       this.again = true;
-      return 0;
+      return this.inflight;
     }
-    this.draining = true;
+    this.inflight = this.run().finally(() => {
+      this.inflight = null;
+    });
+    return this.inflight;
+  }
+
+  private async run(): Promise<number> {
     let handled = 0;
     try {
       do {
         this.again = false;
         await mkdir(this.opts.dir, { recursive: true });
-        const names = (await readdir(this.opts.dir)).filter((n) => n.endsWith(".json")).sort();
-        for (const name of names) {
-          const file = join(this.opts.dir, name);
-          try {
-            const env = parseEnvelope(await readFile(file, "utf8"));
-            if (!env) throw new Error("invalid envelope");
-            this.opts.handle(env);
-            await unlink(file);
-            handled++;
-          } catch (e) {
-            this.opts.log?.(`inbox: ${name} -> bad (${(e as Error).message})`);
-            await mkdir(this.opts.badDir, { recursive: true });
-            await rename(file, join(this.opts.badDir, name)).catch(() => undefined);
-          }
-        }
+        const names = (await readdir(this.opts.dir))
+          .filter((n) => n.endsWith(".json") && !this.applied.has(n))
+          .sort();
+        for (const name of names) handled += await this.processFile(name);
       } while (this.again);
-    } finally {
-      this.draining = false;
+    } catch (e) {
+      this.log(`inbox: drain failed (${errMsg(e)})`);
     }
     return handled;
   }
 
+  /** 返回 1 表示本文件已应用并删除（或已应用但删除失败）。 */
+  private async processFile(name: string): Promise<number> {
+    const file = join(this.opts.dir, name);
+    let text: string;
+    try {
+      text = await readFile(file, "utf8");
+    } catch (e) {
+      this.log(`inbox: ${name} read failed (${errMsg(e)}), will retry`);
+      return 0;
+    }
+    const env = parseEnvelope(text);
+    if (!env) {
+      await this.quarantine(name, "invalid envelope");
+      return 0;
+    }
+    try {
+      this.opts.handle(env);
+    } catch (e) {
+      const n = (this.attempts.get(name) ?? 0) + 1;
+      if (n >= MAX_HANDLE_ATTEMPTS) {
+        this.attempts.delete(name);
+        await this.quarantine(name, `handler failed ${n} times: ${errMsg(e)}`);
+      } else {
+        this.attempts.set(name, n);
+        this.log(`inbox: ${name} handler failed (attempt ${n}), will retry: ${errMsg(e)}`);
+      }
+      return 0;
+    }
+    this.attempts.delete(name);
+    try {
+      await unlink(file);
+    } catch (e) {
+      this.applied.add(name);
+      this.log(`inbox: ${name} applied but unlink failed (${errMsg(e)}); will not re-apply`);
+    }
+    return 1;
+  }
+
+  private async quarantine(name: string, reason: string): Promise<void> {
+    this.log(`inbox: ${name} -> bad (${reason})`);
+    try {
+      await mkdir(this.opts.badDir, { recursive: true });
+      await rename(join(this.opts.dir, name), join(this.opts.badDir, name));
+    } catch (e) {
+      this.log(`inbox: ${name} quarantine failed (${errMsg(e)})`);
+    }
+  }
+
+  private log(msg: string): void {
+    this.opts.log?.(msg);
+  }
+
   start(): void {
+    if (this.timer) return;
     void this.drain();
     try {
       this.watcher = watch(this.opts.dir, () => void this.drain());
