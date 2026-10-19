@@ -8,6 +8,8 @@ import { extractTicketKey } from "../tickets/ticket-key";
 export const UNCLAIMED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PROMPT_LIMIT = 200;
+/** Claude Code 自己注入的标签（命令、系统提醒、hook 等），不是用户输入。 */
+const CLAUDE_TAG_RE = /^<(command-|local-command-|system-reminder|user-prompt-submit-hook|bash-(input|stdout|stderr))/;
 
 export interface DiscoveredSession {
   id: string;
@@ -39,7 +41,7 @@ export function extractUserText(entry: unknown): string | null {
             .join("\n")
         : "";
   const t = text.trim();
-  if (!t || t.startsWith("<")) return null;
+  if (!t || CLAUDE_TAG_RE.test(t)) return null;
   return t.length > PROMPT_LIMIT ? `${t.slice(0, PROMPT_LIMIT)}…` : t;
 }
 
@@ -48,8 +50,11 @@ export async function readSessionHead(file: string, maxLines = 200): Promise<Ses
   const head: SessionHead = { cwd: null, gitBranch: null, firstPrompt: null };
   const stream = createReadStream(file, { encoding: "utf8" });
   const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  // 文件消失或无权限时 readline 不会结束，关掉它以返回已读到的部分。
+  stream.once("error", () => rl.close());
   let n = 0;
   try {
+    // 读取出错（文件消失、EACCES）时保留已读到的部分，不向上抛。
     for await (const line of rl) {
       if (++n > maxLines) break;
       let entry: unknown;
@@ -65,6 +70,8 @@ export async function readSessionHead(file: string, maxLines = 200): Promise<Ses
       if (!head.firstPrompt) head.firstPrompt = extractUserText(entry);
       if (head.cwd && head.gitBranch && head.firstPrompt) break;
     }
+  } catch {
+    // 已收集的 head 原样返回。
   } finally {
     rl.close();
     stream.destroy();
@@ -100,7 +107,12 @@ export async function scanClaudeProjects(projectsDir: string, sinceMs: number): 
         continue;
       }
       if (mtime < sinceMs) continue;
-      const head = await readSessionHead(file);
+      let head: SessionHead;
+      try {
+        head = await readSessionHead(file);
+      } catch {
+        continue;
+      }
       if (!head.cwd) continue;
       found.push({ id, cwd: head.cwd, gitBranch: head.gitBranch, firstPrompt: head.firstPrompt, lastActivityAt: Math.floor(mtime) });
     }

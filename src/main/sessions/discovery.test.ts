@@ -1,4 +1,4 @@
-import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SessionsRepo } from "../db/sessions-repo";
@@ -24,6 +24,10 @@ describe("extractUserText", () => {
     expect(extractUserText({ type: "assistant" })).toBeNull();
     expect(extractUserText(user("a".repeat(300)))).toHaveLength(201);
   });
+
+  it("keeps real prompts that merely start with an HTML-like tag", () => {
+    expect(extractUserText(user("<div>修一下这个组件</div>"))).toBe("<div>修一下这个组件</div>");
+  });
 });
 
 describe("readSessionHead", () => {
@@ -32,6 +36,12 @@ describe("readSessionHead", () => {
     writeFileSync(file, lines("{not json", 42, null, { type: "summary", summary: "x" }, user("<command-name>/x</command-name>"), user("真正的问题")));
     expect(await readSessionHead(file)).toEqual({ cwd: "/work/app", gitBranch: "feature/proj-12-login", firstPrompt: "真正的问题" });
   });
+
+  it("settles promptly with an empty head when the file cannot be opened", async () => {
+    const file = join(tempDir(), `${ID1}.jsonl`);
+    const head = await readSessionHead(file);
+    expect(head).toEqual({ cwd: null, gitBranch: null, firstPrompt: null });
+  }, 2000);
 
   it("stops after maxLines", async () => {
     const file = join(tempDir(), `${ID1}.jsonl`);
@@ -56,6 +66,23 @@ describe("scanClaudeProjects", () => {
     const found = await scanClaudeProjects(root, Date.now() - 7 * 24 * 3600 * 1000);
     expect(found.map((f) => f.id)).toEqual([ID1]);
     expect(found[0]).toMatchObject({ cwd: "/work/app", firstPrompt: "recent" });
+  });
+
+  const canChmod = process.platform !== "win32" && process.getuid?.() !== 0;
+  it.skipIf(!canChmod)("keeps valid sessions when another .jsonl is unreadable", async () => {
+    const root = tempDir();
+    const proj = join(root, "-work-app");
+    mkdirSync(proj);
+    writeFileSync(join(proj, `${ID1}.jsonl`), lines(user("ok")));
+    const bad = join(proj, `${ID2}.jsonl`);
+    writeFileSync(bad, lines(user("locked")));
+    chmodSync(bad, 0o000);
+    try {
+      const found = await scanClaudeProjects(root, 0);
+      expect(found.map((f) => f.id)).toEqual([ID1]);
+    } finally {
+      chmodSync(bad, 0o644);
+    }
   });
 
   it("returns [] when the projects dir does not exist", async () => {
