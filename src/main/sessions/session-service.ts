@@ -1,0 +1,118 @@
+import {
+  effectiveStatus,
+  type OpenSessionRequest,
+  type OpenSessionResult,
+  type Session,
+  type TicketView,
+  type UnclaimedSession,
+} from "../../shared/types";
+import { claudeArgs, sessionEnv, spawnSpec } from "../claude/spawn";
+import type { SessionsRepo } from "../db/sessions-repo";
+import type { SettingsRepo } from "../db/settings-repo";
+import type { TicketsRepo } from "../db/tickets-repo";
+import { TicketError, type TicketService } from "../tickets/ticket-service";
+import { suggestTicket, UNCLAIMED_WINDOW_MS } from "./discovery";
+import type { PtyManager } from "./pty-manager";
+
+export interface SessionServiceDeps {
+  tickets: TicketsRepo;
+  sessions: SessionsRepo;
+  settings: SettingsRepo;
+  ticketService: TicketService;
+  pty: PtyManager;
+  claude: () => { path: string | null; pathValue: string };
+  newId: () => string;
+  now: () => number;
+  platform: NodeJS.Platform;
+  baseEnv: NodeJS.ProcessEnv;
+}
+
+export class SessionService {
+  constructor(private readonly d: SessionServiceDeps) {}
+
+  /** 打开的终端以启动时的 session id 为 termId；/clear 后要沿链比较当前 head。 */
+  private openHeads(): Map<string, string> {
+    const heads = new Map<string, string>();
+    for (const termId of this.d.pty.openIds()) {
+      const head = this.d.sessions.head(termId);
+      if (head) heads.set(head.id, termId);
+    }
+    return heads;
+  }
+
+  async open(req: OpenSessionRequest): Promise<OpenSessionResult> {
+    const ticket = this.d.tickets.get(req.ticketKey);
+    if (!ticket) return { ok: false, reason: "no_ticket" };
+
+    let head: Session | null = null;
+    if (req.sessionId) {
+      head = this.d.sessions.head(req.sessionId);
+      if (!head) return { ok: false, reason: "no_session" };
+      const existing = this.openHeads().get(head.id);
+      if (existing) {
+        if (req.prefill) void this.d.pty.prefill(existing, req.prefill, 0);
+        return { ok: true, termId: existing, alreadyOpen: true };
+      }
+    }
+
+    const { path: claudePath, pathValue } = this.d.claude();
+    if (!claudePath) return { ok: false, reason: "claude_missing" };
+
+    if (!req.force) {
+      const check = await this.d.ticketService.checkBranch(ticket);
+      if (!check.ok) return { ok: false, reason: "branch_mismatch", current: check.current, expected: check.expected, dirty: check.dirty };
+    }
+
+    const workDir = this.d.ticketService.workDir(ticket);
+    let termId: string;
+    let cwd: string;
+    let args: string[];
+    if (head) {
+      // claude --resume 只能在 session 当初的项目目录里找到它
+      termId = head.id;
+      cwd = head.cwd || workDir;
+      args = claudeArgs({ mode: "resume", sessionId: head.id });
+    } else {
+      termId = this.d.newId();
+      cwd = workDir;
+      args = claudeArgs({ mode: "new", sessionId: termId });
+      const now = this.d.now();
+      this.d.sessions.insertIfAbsent({ id: termId, ticketKey: ticket.key, cwd, origin: "butler", lastActivityAt: now, createdAt: now });
+    }
+
+    this.d.pty.open(termId, spawnSpec(claudePath, args, this.d.platform), {
+      cwd,
+      env: sessionEnv(this.d.baseEnv, { pathValue, ticketKey: ticket.key, sessionId: termId }),
+    });
+    if (req.prefill) void this.d.pty.prefill(termId, req.prefill);
+    return { ok: true, termId, alreadyOpen: false };
+  }
+
+  ticketViews(): TicketView[] {
+    const heads = this.openHeads();
+    return this.d.tickets.list().map((t) => {
+      const sessions = this.d.sessions
+        .listByTicket(t.key)
+        .filter((s) => !s.replacedBy)
+        .map((s) => ({ ...s, termId: heads.get(s.id) ?? null }));
+      return { ...t, effectiveStatus: effectiveStatus(t), sessions, waiting: sessions.some((s) => s.waitingForInput) };
+    });
+  }
+
+  unclaimed(): UnclaimedSession[] {
+    const pattern = this.d.settings.get("ticketPattern");
+    return this.d.sessions.listUnclaimed(this.d.now() - UNCLAIMED_WINDOW_MS).map((s) => {
+      const key = suggestTicket(s, pattern);
+      return { ...s, suggestedTicket: key, suggestionExists: !!key && !!this.d.tickets.get(key) };
+    });
+  }
+
+  claim(sessionId: string, ticketKey: string): void {
+    if (!this.d.tickets.get(ticketKey)) throw new TicketError("not_found", `找不到 ticket ${ticketKey}`);
+    this.d.sessions.setTicket(sessionId, ticketKey);
+  }
+
+  dismiss(sessionId: string): void {
+    this.d.sessions.dismiss(sessionId);
+  }
+}
