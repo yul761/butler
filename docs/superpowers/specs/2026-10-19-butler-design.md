@@ -403,3 +403,19 @@ handoff 是整个系统的数据源，由公司 Claude Code 生成，只存在�
 | Windows 上 Claude Code 执行 hook 时能运行 `butler-hook.exe` | 根据实际的 hook 执行 shell 调整命令格式 |
 | Electron 内置的 Node 能使用 `node:sqlite` 和 `statecore-mcp/lib` | 让 StateCore 作为 `statecore-mcp` 子进程运行，通过 MCP 客户端访问 |
 | `statecore-mcp/lib` 暴露了按 scope 的 remember/forget/handoff/recall/why API | 以 MCP 客户端方式调用同样的工具 |
+
+### 13.1 验证结果（2026-10-19，Claude Code 2.1.304）
+
+| 假设 | 结果 | 对设计的影响 |
+|------|------|-------------|
+| `--session-id <uuid>` | ✅ 存在 | 按 4.2 实现 |
+| `--fork-session` | ✅ 存在（"When resuming, create a new session ID"） | 按 5.1 实现；fork 出的 session 会出现在 Claude Code 项目目录里，SessionDiscovery 必须识别并隐藏它们（计划 2 处理） |
+| `--mcp-config` 叠加 | ✅ 默认叠加，`--strict-mcp-config` 才排他 | 按 4.2 / 8.4 实现 |
+| 结构化输出 | ✅ 额外发现 `--json-schema`（仅 `--print`） | handoff 和刷新直接用 `--json-schema` 约束输出，zod 校验作为第二道保险 |
+| `statecore-mcp/lib` | ✅ 导出 `createEmbeddedBackend({dataDir, scopeName, env})`，接口含 remember/recall/facts/why/forget/handoff | 可以嵌入。**但 `remember` 没有 key 参数**：note 的“取代”靠文本相似度（`isNoteRevision`），并且 notes 有数量上限，超出会淘汰最旧的一条。第 8.3 节“按 key 取代”需要在计划 4 里改为：写入前用 `facts()` 找到旧条目的 `factKey` 并 `forget`，再 `remember` 新文本；文本统一用 `[followup:<id>] ...` 这样的稳定前缀 |
+| Windows 上 hook 的执行 shell | ⏳ 只能在 Windows 机器上验证 | `butler-hook` 用正斜杠的绝对路径并加引号，cmd、PowerShell、Git Bash 都能执行；CI 的 Windows E2E 负责兜底验证 |
+| Electron 内置 Node 能用 `node:sqlite` | ⏳ 计划 1 的任务 1 用冒烟测试验证 | 如果不可用，改用 better-sqlite3 |
+
+**其他实现层面的调整：**
+- 4.2 节原本写的是“在 shell 里跑 claude”，改为**直接用 PTY 启动 `claude`**，环境变量 `PATH` 用登录 shell 读出来的值（macOS 从 Finder 启动的 GUI 应用拿不到用户的 PATH）。这样 claude 退出时标签页能直接显示退出码，不会残留一个空 shell。
+- “未认领 session”只显示最近 7 天有活动的，并且可以“忽略”；否则历史上所有 session 都会被列出来。
