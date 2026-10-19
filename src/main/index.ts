@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { runSmoke } from "./smoke";
 
 if (process.argv.includes("--smoke")) {
-  void runSmoke().then((code) => app.exit(code));
+  void runSmoke()
+    .then((code) => app.exit(code))
+    .catch(() => app.exit(1));
 } else {
   void app.whenReady().then(() => {
     const win = new BrowserWindow({
