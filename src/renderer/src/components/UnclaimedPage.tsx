@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import type { TicketView, UnclaimedSession } from "../../../shared/types";
 import { api } from "../api";
+import { reportError } from "../errors";
 import { S } from "../strings";
 
 export function UnclaimedPage({ tickets }: { tickets: TicketView[] }) {
   const [items, setItems] = useState<UnclaimedSession[] | null>(null);
   const [choice, setChoice] = useState<Record<string, string>>({});
-  const load = useCallback(async () => setItems(await api.unclaimed()), []);
+  const load = useCallback(async () => {
+    try {
+      setItems(await api.unclaimed());
+    } catch (e) {
+      reportError(e);
+    }
+  }, []);
 
   useEffect(() => {
     void load();
@@ -37,8 +44,8 @@ export function UnclaimedPage({ tickets }: { tickets: TicketView[] }) {
                     <option value="">{S.chooseTicket}</option>
                     {tickets.map((t) => <option key={t.key} value={t.key}>{t.key}</option>)}
                   </select>
-                  <button disabled={!selected} onClick={() => void api.claim(s.id, selected)}>{S.claim}</button>
-                  <button onClick={() => void api.dismiss(s.id)}>{S.dismiss}</button>
+                  <button disabled={!selected} onClick={() => api.claim(s.id, selected).catch(reportError)}>{S.claim}</button>
+                  <button onClick={() => api.dismiss(s.id).catch(reportError)}>{S.dismiss}</button>
                   {s.suggestedTicket && !s.suggestionExists && <span className="muted">{S.suggestCreate(s.suggestedTicket)}</span>}
                 </td>
               </tr>

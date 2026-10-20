@@ -30,8 +30,17 @@ interface Term {
   exited: boolean;
 }
 
+/** 最多保留多少个已退出终端的记录（用于快速失败的 claude 也能看到退出码）。 */
+export const EXITED_LIMIT = 20;
+
+export interface PtySnapshot {
+  data: string;
+  exitCode: number | null;
+}
+
 export class PtyManager {
   private readonly terms = new Map<string, Term>();
+  private readonly exited = new Map<string, { buffer: string; exitCode: number }>();
 
   constructor(
     private readonly factory: PtyFactory,
@@ -41,6 +50,7 @@ export class PtyManager {
 
   open(termId: string, spec: SpawnSpec, opts: { cwd: string; env: Record<string, string>; cols?: number; rows?: number }): void {
     if (this.terms.has(termId)) throw new Error(`terminal ${termId} already open`);
+    this.exited.delete(termId);
     const proc = this.factory(spec.file, spec.args, { cwd: opts.cwd, env: opts.env, cols: opts.cols ?? 120, rows: opts.rows ?? 32 });
     const term: Term = { proc, buffer: "", lastOutputAt: 0, exited: false };
     this.terms.set(termId, term);
@@ -52,6 +62,9 @@ export class PtyManager {
     proc.onExit(({ exitCode }) => {
       term.exited = true;
       this.terms.delete(termId);
+      this.exited.delete(termId);
+      this.exited.set(termId, { buffer: term.buffer, exitCode });
+      while (this.exited.size > EXITED_LIMIT) this.exited.delete(this.exited.keys().next().value as string);
       this.events.exit(termId, exitCode);
     });
   }
@@ -80,8 +93,12 @@ export class PtyManager {
     for (const t of [...this.terms.values()]) t.proc.kill();
   }
 
-  snapshot(termId: string): string {
-    return this.terms.get(termId)?.buffer ?? "";
+  snapshot(termId: string): PtySnapshot {
+    const live = this.terms.get(termId);
+    if (live) return { data: live.buffer, exitCode: null };
+    const done = this.exited.get(termId);
+    if (done) return { data: done.buffer, exitCode: done.exitCode };
+    return { data: "", exitCode: null };
   }
 
   /** 等 claude 的界面输出停下来（输入框就绪）后把文本写进去，不回车。 */

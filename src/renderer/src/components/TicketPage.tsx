@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { TICKET_STATUSES, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api, ButlerError } from "../api";
+import { reportError } from "../errors";
 import { S, STATUS_LABEL } from "../strings";
 import { TerminalPane } from "./TerminalPane";
 
@@ -11,7 +12,7 @@ interface Mismatch {
   dirty: boolean;
 }
 
-export function TicketPage({ ticket }: { ticket: TicketView }) {
+export function TicketPage({ ticket, onArchived }: { ticket: TicketView; onArchived: () => void }) {
   const openTerms = ticket.sessions.flatMap((s) => (s.termId ? [s.termId] : []));
   // panes 里保留已退出但还没关闭的终端，方便看到 claude 的报错输出。
   const [panes, setPanes] = useState<string[]>(openTerms);
@@ -66,12 +67,12 @@ export function TicketPage({ ticket }: { ticket: TicketView }) {
         <span className="muted">{ticket.workMode === "worktree" ? ticket.worktreePath : `${ticket.repoPath} @ ${ticket.branch}`}</span>
         <select
           value={statusValue}
-          onChange={(e) => void api.setStatus(ticket.key, e.target.value === "auto" ? null : (e.target.value as TicketStatus))}
+          onChange={(e) => api.setStatus(ticket.key, e.target.value === "auto" ? null : (e.target.value as TicketStatus)).catch(reportError)}
         >
           <option value="auto">{S.statusAuto(STATUS_LABEL[ticket.status])}</option>
           {TICKET_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
         </select>
-        <button onClick={() => void api.archive(ticket.key)}>{S.archive}</button>
+        <button onClick={() => api.archive(ticket.key).then(onArchived, reportError)}>{S.archive}</button>
       </header>
 
       <div className="sessions-bar">

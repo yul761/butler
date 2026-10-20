@@ -24,12 +24,33 @@ describe("PtyManager", () => {
     spawned[0].pty.emit("hello ");
     spawned[0].pty.emit("world");
     expect(data).toEqual([["t1", "hello "], ["t1", "world"]]);
-    expect(mgr.snapshot("t1")).toBe("hello world");
+    expect(mgr.snapshot("t1")).toEqual({ data: "hello world", exitCode: null });
     expect(mgr.openIds()).toEqual(["t1"]);
     spawned[0].pty.emitExit(3);
     expect(exits).toEqual([["t1", 3]]);
     expect(mgr.isOpen("t1")).toBe(false);
-    expect(mgr.snapshot("t1")).toBe("");
+    expect(mgr.snapshot("t1")).toEqual({ data: "hello world", exitCode: 3 });
+    expect(mgr.snapshot("nope")).toEqual({ data: "", exitCode: null });
+  });
+
+  it("evicts exited records beyond the limit", () => {
+    const { mgr, spawned } = setup();
+    for (let i = 0; i < 21; i++) {
+      mgr.open(`x${i}`, spec, opts);
+      spawned[i].pty.emitExit(i);
+    }
+    expect(mgr.snapshot("x0")).toEqual({ data: "", exitCode: null });
+    expect(mgr.snapshot("x1").exitCode).toBe(1);
+    expect(mgr.snapshot("x20").exitCode).toBe(20);
+  });
+
+  it("clears the exited record on re-open", () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("old");
+    spawned[0].pty.emitExit(1);
+    mgr.open("t1", spec, opts);
+    expect(mgr.snapshot("t1")).toEqual({ data: "", exitCode: null });
   });
 
   it("caps the replay buffer", () => {
@@ -37,7 +58,7 @@ describe("PtyManager", () => {
     mgr.open("t1", spec, opts);
     spawned[0].pty.emit("a".repeat(BUFFER_LIMIT));
     spawned[0].pty.emit("bcd");
-    const snap = mgr.snapshot("t1");
+    const snap = mgr.snapshot("t1").data;
     expect(snap).toHaveLength(BUFFER_LIMIT);
     expect(snap.endsWith("bcd")).toBe(true);
   });

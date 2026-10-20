@@ -78,3 +78,4 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; word-break: break-all; }
+.error-banner { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 16px; background: var(--panel); border-bottom: 1px solid var(--danger); color: var(--danger); }

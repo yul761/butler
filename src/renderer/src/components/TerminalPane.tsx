@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { reportError } from "../errors";
 import { S } from "../strings";
 
 export function TerminalPane({ termId, visible, onClose }: { termId: string; visible: boolean; onClose: () => void }) {
@@ -21,16 +22,25 @@ export function TerminalPane({ termId, visible, onClose }: { termId: string; vis
 
     // 主进程按顺序发送数据事件和 invoke 的返回：快照返回之前收到的数据都已包含在快照里，直接丢弃。
     let ready = false;
+    let disposed = false;
     const offData = api.onPtyData((id, data) => {
       if (id === termId && ready) term.write(data);
     });
     const offExit = api.onPtyExit((id, code) => {
       if (id === termId) setExitCode(code);
     });
-    void api.ptySnapshot(termId).then((snap) => {
-      term.write(snap);
-      ready = true;
-    });
+    void api
+      .ptySnapshot(termId)
+      .then((snap) => {
+        if (disposed) return;
+        term.write(snap.data);
+        if (snap.exitCode !== null) setExitCode(snap.exitCode);
+        ready = true;
+      })
+      .catch((e) => {
+        ready = true;
+        reportError(e);
+      });
 
     const input = term.onData((d) => api.ptyWrite(termId, d));
     const doFit = () => {
@@ -42,6 +52,7 @@ export function TerminalPane({ termId, visible, onClose }: { termId: string; vis
     ro.observe(ref.current!);
 
     return () => {
+      disposed = true;
       ro.disconnect();
       offData();
       offExit();

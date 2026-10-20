@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import type { WorkMode } from "../../../shared/types";
 import { api, ButlerError } from "../api";
+import { reportError } from "../errors";
 import { S } from "../strings";
 
 export function NewTicketDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (key: string) => void }) {
@@ -13,8 +14,12 @@ export function NewTicketDialog({ onClose, onCreated }: { onClose: () => void; o
   const [error, setError] = useState<string | null>(null);
 
   async function pick() {
-    const dir = await api.pickDirectory();
-    if (dir) setRepoPath(dir);
+    try {
+      const dir = await api.pickDirectory();
+      if (dir) setRepoPath(dir);
+    } catch (e) {
+      reportError(e);
+    }
   }
 
   async function submit(e: FormEvent) {
