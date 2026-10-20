@@ -37,6 +37,7 @@ export const S = {
   noTickets: "还没有 ticket。点左侧“新建 ticket”。",
   waitingList: "等你输入的 session",
   nothingWaiting: "没有 session 在等你。",
+  resume: "续接",
   exited: (code: number) => `claude 已退出（退出码 ${code}）`,
   branchMismatch: (current: string, expected: string) => `仓库当前在 ${current} 上，这个 ticket 的分支是 ${expected}。`,
   dirtyWarning: "工作区有未提交的改动，不会自动切换分支。",

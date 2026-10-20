@@ -6,6 +6,8 @@ import type {
 declare global {
   interface Window {
     butler: {
+      platform: string;
+      pathForFile(file: File): string;
       invoke(channel: string, ...args: unknown[]): Promise<unknown>;
       send(channel: string, ...args: unknown[]): void;
       on(channel: string, cb: (...args: never[]) => void): () => void;
@@ -24,6 +26,9 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
   if (!r.ok) throw new ButlerError(r.code, r.message);
   return r.value;
 }
+
+export const platform = (): string => window.butler.platform;
+export const pathForFile = (file: File): string => window.butler.pathForFile(file);
 
 export const api = {
   listTickets: () => call<TicketView[]>(IPC.ticketsList),

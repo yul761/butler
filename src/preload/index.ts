@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 import { EVENT_CHANNELS, INVOKE_CHANNELS, SEND_CHANNELS } from "../shared/ipc";
 
 function assertAllowed(list: readonly string[], channel: string): void {
@@ -6,6 +6,10 @@ function assertAllowed(list: readonly string[], channel: string): void {
 }
 
 contextBridge.exposeInMainWorld("butler", {
+  platform: process.platform,
+  pathForFile(file: File): string {
+    return webUtils.getPathForFile(file);
+  },
   invoke(channel: string, ...args: unknown[]): Promise<unknown> {
     assertAllowed(INVOKE_CHANNELS, channel);
     return ipcRenderer.invoke(channel, ...args);

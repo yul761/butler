@@ -2,11 +2,12 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, pathForFile, platform } from "../api";
+import { dropText } from "../drop";
 import { reportError } from "../errors";
 import { S } from "../strings";
 
-export function TerminalPane({ termId, visible, onClose }: { termId: string; visible: boolean; onClose: () => void }) {
+export function TerminalPane({ termId, visible, onClose, onResume }: { termId: string; visible: boolean; onClose: () => void; onResume: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -24,7 +25,10 @@ export function TerminalPane({ termId, visible, onClose }: { termId: string; vis
     let ready = false;
     let disposed = false;
     const offData = api.onPtyData((id, data) => {
-      if (id === termId && ready) term.write(data);
+      if (id !== termId || !ready) return;
+      term.write(data);
+      // 退出后又收到数据，说明终端被重新打开（续接）了。
+      setExitCode(null);
     });
     const offExit = api.onPtyExit((id, code) => {
       if (id === termId) setExitCode(code);
@@ -72,11 +76,18 @@ export function TerminalPane({ termId, visible, onClose }: { termId: string; vis
     });
   }, [visible, termId]);
 
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault();
+    const files = [...e.dataTransfer.files];
+    const paths = files.map((f) => pathForFile(f)).filter(Boolean);
+    if (paths.length > 0) api.ptyWrite(termId, dropText(paths, platform()));
+  }
+
   return (
-    <div className="terminal-wrap" style={{ display: visible ? "flex" : "none" }}>
+    <div className="terminal-wrap" style={{ display: visible ? "flex" : "none" }} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       {exitCode !== null && (
         <div className="exited">
-          {S.exited(exitCode)} <button onClick={onClose}>{S.close}</button>
+          {S.exited(exitCode)} <button onClick={onResume}>{S.resume}</button> <button onClick={onClose}>{S.close}</button>
         </div>
       )}
       <div className="terminal" ref={ref} />

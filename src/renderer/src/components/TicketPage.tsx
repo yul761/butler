@@ -107,7 +107,7 @@ export function TicketPage({ ticket, onArchived }: { ticket: TicketView; onArchi
       )}
 
       <div className="terminals">
-        {panes.map((id) => <TerminalPane key={id} termId={id} visible={id === active} onClose={() => closePane(id)} />)}
+        {panes.map((id) => <TerminalPane key={id} termId={id} visible={id === active} onClose={() => closePane(id)} onResume={() => void open({ ticketKey: ticket.key, sessionId: id })} />)}
       </div>
     </div>
   );
