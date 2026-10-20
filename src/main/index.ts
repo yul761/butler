@@ -17,6 +17,7 @@ import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
 import { runSmoke } from "./smoke";
 import { TicketService } from "./tickets/ticket-service";
+import { canSend } from "./safe-send";
 import { circleBitmap } from "./tray-bitmap";
 
 const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
@@ -24,6 +25,12 @@ const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
+/** bootstrap 赋值：退出前在窗口还活着时先结束所有终端进程。 */
+let shutdownSessions: () => void = () => undefined;
+
+function safeSend(channel: string, ...args: unknown[]): void {
+  if (win && canSend(win)) win.webContents.send(channel, ...args);
+}
 
 function bundledHookPath(): string {
   const name = process.platform === "win32" ? "butler-hook.exe" : "butler-hook";
@@ -41,6 +48,9 @@ function createWindow(): BrowserWindow {
     webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   w.on("ready-to-show", () => w.show());
+  w.on("closed", () => {
+    if (win === w) win = null;
+  });
   // 关窗口只是藏到托盘，终端进程继续运行。
   w.on("close", (e) => {
     if (!quitting) {
@@ -88,11 +98,11 @@ async function bootstrap(): Promise<void> {
   const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath() });
   await health.refresh();
 
-  const notify = () => win?.webContents.send(IPC.stateChanged);
+  const notify = () => safeSend(IPC.stateChanged);
   const pty = new PtyManager(nodePtyFactory, {
-    data: (id, data) => win?.webContents.send(IPC.ptyData, id, data),
+    data: (id, data) => safeSend(IPC.ptyData, id, data),
     exit: (id, code) => {
-      win?.webContents.send(IPC.ptyExit, id, code);
+      safeSend(IPC.ptyExit, id, code);
       notify();
     },
   });
@@ -124,6 +134,8 @@ async function bootstrap(): Promise<void> {
     },
   });
 
+  shutdownSessions = () => pty.killAll();
+
   registerIpc({ tickets, ticketService, sessionService, pty, health, window: () => win, now: Date.now, notify });
 
   win = createWindow();
@@ -152,6 +164,7 @@ if (process.argv.includes("--smoke")) {
   app.on("activate", showWindow);
   app.on("before-quit", () => {
     quitting = true;
+    shutdownSessions();
   });
   // 常驻托盘：窗口全部关闭也不退出。
   app.on("window-all-closed", () => undefined);
