@@ -1,0 +1,60 @@
+# Plan 1 follow-ups (deferred during execution)
+
+Collected from the plan-1 execution ledger: every deferred minor, parked finding and ruling. Plans 2–4 should triage these.
+
+## Rulings
+- Ruling R0: Work on branch plan-1-foundation in the main checkout (no separate worktree) — repo is brand-new with only docs on main, nothing to isolate from — cost if wrong: none, branch is disposable.
+- Ruling R1: Task 12 Step 7 (manual GUI E2E) cannot be performed by a subagent; implementer runs all automated checks plus a launch smoke, and the 11-item checklist is handed to the user at finish — cost if wrong: a GUI-only bug ships into plan 1 until the user runs the checklist.
+- Ruling R2: No unit tests for IPC registration, preload and React components (plan-mandated); covered by manual checklist now and Playwright E2E in plan 4 — cost if wrong: renderer/IPC wiring bugs found later.
+- Task 1: Ruling: fix the plan-mandated smoke hang (try/catch + timeout + exit 1) — the smoke command is reused as a gate in Task 12 and a hang hides failure — cost if wrong: a few lines beyond the brief
+- Task 1: Ruling: require a clean `rm -rf node_modules && pnpm install` + smoke; if spawn-helper is non-exec, make postinstall fix it — global constraint says every task's checks must pass on this machine — cost if wrong: small package.json script change
+- Ruling R3: from Task 3 on, subagents use the Co-Authored-By trailer their own harness attribution reminder names (accurate model attribution); Tasks 1-2 commits keep Opus 5.5 — cost if wrong: cosmetic commit-trailer inconsistency
+- Ruling R4: Vite configLoader warning on every vitest run violates 'pristine output' — fold a rename vitest.config.ts → vitest.config.mts (+ tsconfig.node include update) into Task 3's dispatch — cost if wrong: trivial config churn
+- Task 4: Ruling: fix now with a guard — when going through the shell, reject any arg not matching a safe-token pattern (throw), document that execText only takes trusted constant args; plan 2's `claude -p <prompt>` must pass prompts via stdin or a file, never argv — cost if wrong: small guard; plan 2 must honour the constraint
+- Task 6: Ruling: fix Critical #1 and Important #2/#3 now, plus cheap data-safety minors #4 (only drop event arrays Butler emptied), #5 (non-object hooks / non-array event → SettingsParseError), #6 (null entries don't crash), #7 (strip UTF-8 BOM) and the wrong "PowerShell" comment — the installer edits the user's real ~/.claude/settings.json; spec constraint "merge-only, never clobber" is binding — cost if wrong: ~40 lines beyond the brief
+- Task 7: Ruling: fix all three — spec §10 says bad inbox files go to inbox/bad "without blocking others" but events must not be lost; (a) catch+log inside drain; (b) parse failures → bad immediately, handler failures retried on later drains up to 3 attempts then bad, unlink failure after a successful handle → log and remember the name so it is not re-applied; (c) return the in-flight promise; plus guard double start() — cost if wrong: ~30 lines and one brief test changes from 1 drain to 3 drains for handler-failure quarantine
+- Task 8: Ruling: fix — wrap readSessionHead per file in scanClaudeProjects (skip on error) and make readSessionHead settle on stream errors; also narrow the "<" filter to known Claude Code tags (cheap, avoids dropping real prompts starting with "<") — spec Review Focus 5 "corrupt jsonl" — cost if wrong: few lines
+- Task 11: Ruling: fix both — spec §10 "PTY 意外退出 → 显示退出码" requires (1): PtyManager keeps a bounded (20) record of exited terminals' buffer+exitCode, `snapshot` returns {data, exitCode|null} through IPC, TerminalPane uses it; re-open clears the record. (2): one shared error banner in App fed by a `report(err)` helper; every fire-and-forget api call goes through it. Also cheap minors: archive navigates home; snapshot promise guarded against unmount + catch — cost if wrong: touches Task 9/10 files (pty-manager, register) in addition to renderer
+- Task 12: Ruling: fix with a safeSend guard (win && !isDestroyed) used by notify and PTY callbacks + `closed` handler nulling win; also kill PTYs in before-quit (before windows are destroyed) — cost if wrong: few lines
+- Ruling F1: one fix wave for Important #1-#4 + minors #5, #6, #9 + an integration test (hook envelope → inbox → applyHookEnvelope → ticketViews incl. out-of-order /clear and nested startup) — all are spec requirements or daily-use breakers; cheap — cost if wrong: larger final diff
+- Ruling F2 (for #1): re-link the chain only on SessionStart source ∈ {clear, compact, resume}; a SessionStart with any other source whose id ≠ head(BUTLER_SESSION) is a nested session: recorded with ticketKey null and dismissed=1, never chained, and later events never attach the terminal's ticket to a dismissed session — cost if wrong: an in-terminal nested claude stays invisible (intended)
+- Ruling F3: minors #7, #8, #10–#12 and the deferred-minor triage go to plans 2/4 as the final reviewer grouped them
+- Final: parked — trailing PTY data after exit clears the exit banner (ConPTY) — Ruling: real, deferred to plan 2 (drop data when term.exited) — cost: dead pane without buttons on Windows until fixed
+- Final: parked — resume after /clear opens a new pane, old pane keeps its banner — Ruling: cosmetic, deferred
+- Final: parked — control chars in dropped filenames reach the Claude TUI — Ruling: needs a maliciously named file; deferred to plan 2 (strip C0)
+- Final: parked — hook-triggered discovery fires for every ticketless session machine-wide — Ruling: deferred; schedule only when details missing
+- Final: parked — uncaught exceptions now only logged to file (no console in dev) — Ruling: deferred; tee to console
+- Final: parked — nested `claude --resume` / `-c` still re-links (source resume) — Ruling: accepted per F2; revisit in plan 2
+- Final: parked — lost nested SessionStart leaves ticket on row (phantom waiting session) — Ruling: minor, deferred
+
+## Deferred minors
+- Task 1: minor (deferred): node-pty spawn-helper exec bit on fresh macOS install — plan 4 packaging/CI must run install-app-deps or chmod +x
+- Task 1: minor (deferred): build:hook script references scripts/build-hook.mjs before Task 5 creates it; electron-winstaller build script ignored by pnpm (may matter for plan 4 packaging)
+- Task 1: minor (deferred): node-pty rebuild requires a C++ toolchain (Xcode CLT / VS Build Tools) — document in plan 4 README/CI
+- Task 1: minor (deferred): smoke timeout leaves pty child unkilled; index.ts smoke .catch discards error (backstop only)
+- Task 2: minor (deferred): repos tests weak spots (cycle head not pinned; fillDetails non-empty cwd preserved untested; setWaiting false/backwards-at untested); migrate silently ignores user_version > MIGRATIONS.length (downgrade); ensureDirs/FK/CHECK untested
+- Task 3: minor (deferred): GitError escapes create() unmapped (IPC shows code internal + message); user branch name not validated/-- separated (check-ref-format); invalid/permissive ticketPattern → SyntaxError / path traversal via key; extractTicketKey false positives (UTF-8, ISO-8601); switchBranch has no worktree guard; orphaned git artifact if insert fails; tests leave temp worktree dirs
+- Task 4: minor (deferred): empty PATH between markers returns ""; login PATH replaces rather than merges GUI PATH; non-POSIX $SHELL (fish/nu); quoted Windows PATH entries; existsSync matches dirs; flag regex not column-anchored; version unparsed → null with error null; execText untested
+- Task 4: minor (deferred): execText reject-before-spawn path untested; claude override path with `"` unescaped in shell command
+- Task 5: minor (deferred): butler-hook SEA binary is ~136 MiB (full node copy) — plan 4 may swap for a smaller compiled helper; Windows .exe untested
+- Task 5: minor (deferred): build:hook needs Node with --build-sea (≥25.5/26) — pin build Node or add postject fallback in plan 4 CI; no uncaughtException guard in hook/entry.ts; orphan .tmp on rename failure; silent event loss untraceable; main/readStdin untested
+- Task 6: minor (deferred): Windows rename EPERM/EBUSY retry + tmp cleanup; concurrent install temp-name clash; partial backup never replaced; uninstall rewrites when nothing to remove; $/backtick in macOS path not escaped; duplicate entries labelled partial; HealthService rethrows EACCES; installHooks throws after binary copy; Windows hook shell (PowerShell would not execute a bare quoted path) — verify on Windows in plan 4
+- Task 6: minor (deferred): dangling-symlink settings.json replaced by regular file; path containing `"` not recognised by isButlerHook; hookStatus reports "missing" (not settings_invalid) for non-object hooks so UI offers Install which then throws SettingsParseError — IPC must surface it; installHooks copies binary before settings validation
+- Task 7: minor (deferred): origin never upgraded discovered→butler on later envelope; stale Stop after newer UserPromptSubmit can set waiting (relies on filename order = event order); fs.watch may start before mkdir completes; no tests for reentrancy/start/stop
+- Task 7: minor (deferred): attempts/applied maps never pruned for externally removed files; unwritable bad/ → infinite retry/log; unlink-failure test relies on chmod (passes for wrong reason as root); start() test doesn't distinguish watcher from polling
+- Task 8: minor (deferred): line-count (not byte) cap — huge single line fully buffered; serial scan, no result cap; "HEAD" branch special case untested; sync idempotence/ID2 branch+prompt untested
+- Task 9: minor (deferred): exit handler deletes termId without identity guard (latent stale-exit race); buffer slice may cut escape sequences; prefill with newlines would submit; Windows cmd.exe quoting with --mcp-config path containing spaces (plan 4 adds mcp-config — must verify on Windows); FakePty kill exits synchronously; kill sends SIGHUP only
+- Task 10: minor (deferred): double-click race loser gets "terminal already open" error instead of alreadyOpen (re-check openHeads after await checkBranch); orphan session row if spawn throws; channel lists typed string[] not unions; ptyWrite/ptyResize no arg validation; notify skipped when open throws
+- Task 11: minor (deferred): blank flash after create until refresh; overlapping refresh can apply stale results and calls unclaimed() on every state event; raw English error strings in UI; S.openErrors may be undefined for unmapped reason; closePane picks from stale closure; settings no retry; title "" sent instead of undefined
+- Task 11: minor (deferred): error banner sits behind NewTicketDialog modal; banner has no auto-clear
+- Task 12: minor (deferred): will-quit cleanup registered only after bootstrap success; close prevention may block Windows logoff/shutdown (session-end); discovery timer not unref'd / overlap-guarded; no @2x tray icon
+- Task 12: minor (deferred): killAll runs twice on quit (before-quit + will-quit) — real node-pty kill on an already-exiting pty should be harmless but unverified; quit-with-live-sessions path not exercised end to end
+
+## Parked after final review
+- Final: parked — trailing PTY data after exit clears the exit banner (ConPTY) — Ruling: real, deferred to plan 2 (drop data when term.exited) — cost: dead pane without buttons on Windows until fixed
+- Final: parked — resume after /clear opens a new pane, old pane keeps its banner — Ruling: cosmetic, deferred
+- Final: parked — control chars in dropped filenames reach the Claude TUI — Ruling: needs a maliciously named file; deferred to plan 2 (strip C0)
+- Final: parked — hook-triggered discovery fires for every ticketless session machine-wide — Ruling: deferred; schedule only when details missing
+- Final: parked — uncaught exceptions now only logged to file (no console in dev) — Ruling: deferred; tee to console
+- Final: parked — nested `claude --resume` / `-c` still re-links (source resume) — Ruling: accepted per F2; revisit in plan 2
+- Final: parked — lost nested SessionStart leaves ticket on row (phantom waiting session) — Ruling: minor, deferred
