@@ -1,0 +1,80 @@
+:root {
+  --bg: #ffffff;
+  --panel: #f5f5f4;
+  --border: #e2e2df;
+  --text: #1c1c1a;
+  --muted: #74746f;
+  --accent: #2f6fdf;
+  --danger: #c2410c;
+  --ok: #15803d;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b1a;
+    --panel: #242422;
+    --border: #3a3a37;
+    --text: #ececea;
+    --muted: #9b9b96;
+    --accent: #6b9cf0;
+    --danger: #f08a5d;
+    --ok: #4ade80;
+  }
+}
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 13px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+button, input, select { font: inherit; color: inherit; }
+button { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+input, select { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+.muted { color: var(--muted); }
+.error { color: var(--danger); }
+.ok { color: var(--ok); }
+.badge { color: var(--accent); margin: 0 4px; }
+
+.app { display: flex; height: 100%; }
+.sidebar { width: 240px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; padding: 10px; background: var(--panel); border-right: 1px solid var(--border); }
+.sidebar .nav, .sidebar .ticket, .sidebar .new-ticket { text-align: left; border-color: transparent; background: transparent; }
+.sidebar .active { background: var(--bg); border-color: var(--border); }
+.sidebar .ticket-groups { flex: 1; overflow-y: auto; }
+.sidebar h3 { margin: 12px 4px 4px; font-size: 11px; font-weight: 600; color: var(--muted); }
+.sidebar .ticket { display: flex; width: 100%; gap: 6px; align-items: baseline; }
+.sidebar .ticket .title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.key { font-weight: 600; }
+
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.page { padding: 20px 24px; overflow-y: auto; }
+.empty { padding: 24px; color: var(--muted); }
+.card-list { list-style: none; padding: 0; display: grid; gap: 8px; }
+.card { width: 100%; display: flex; gap: 10px; text-align: left; padding: 10px 12px; }
+
+.ticket-page { display: flex; flex-direction: column; height: 100%; }
+.ticket-header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.ticket-header h2 { margin: 0; font-size: 15px; }
+.ticket-header .muted { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sessions-bar { display: flex; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.session { display: flex; gap: 6px; white-space: nowrap; }
+.session.active { border-color: var(--accent); }
+.session .action { color: var(--accent); }
+.notice { margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.terminals { flex: 1; min-height: 0; display: flex; }
+.terminal-wrap { flex: 1; min-width: 0; flex-direction: column; background: #000; }
+.terminal { flex: 1; min-height: 0; padding: 4px; }
+.exited { padding: 6px 12px; background: var(--panel); color: var(--danger); }
+
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row { display: flex; gap: 6px; }
+.row input { flex: 1; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; align-items: center; justify-content: center; }
+.modal { width: 460px; display: flex; flex-direction: column; gap: 10px; padding: 20px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); }
+.modal label { display: flex; flex-direction: column; gap: 4px; }
+.modal label.inline { flex-direction: row; align-items: center; gap: 6px; }
+.modal fieldset { border: 1px solid var(--border); border-radius: 6px; display: flex; gap: 16px; }
+.modal .actions { justify-content: flex-end; }
+.table { width: 100%; border-collapse: collapse; }
+.table th, .table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; word-break: break-all; }
