@@ -20,11 +20,14 @@ export interface SessionServiceDeps {
   settings: SettingsRepo;
   ticketService: TicketService;
   pty: PtyManager;
+  /** 首次 health 探测完成后 resolve；open 据此决定 claude 是否缺失。 */
+  ready: () => Promise<void>;
   claude: () => { path: string | null; pathValue: string };
   newId: () => string;
   now: () => number;
   platform: NodeJS.Platform;
   baseEnv: NodeJS.ProcessEnv;
+  log?: (msg: string, err?: unknown) => void;
 }
 
 export class SessionService {
@@ -40,7 +43,12 @@ export class SessionService {
     return heads;
   }
 
+  private prefill(termId: string, text: string, idleMs?: number): void {
+    this.d.pty.prefill(termId, text, idleMs).catch((e: unknown) => this.d.log?.(`prefill ${termId} failed`, e));
+  }
+
   async open(req: OpenSessionRequest): Promise<OpenSessionResult> {
+    await this.d.ready();
     const ticket = this.d.tickets.get(req.ticketKey);
     if (!ticket) return { ok: false, reason: "no_ticket" };
 
@@ -50,7 +58,7 @@ export class SessionService {
       if (!head) return { ok: false, reason: "no_session" };
       const existing = this.openHeads().get(head.id);
       if (existing) {
-        if (req.prefill) void this.d.pty.prefill(existing, req.prefill, 0);
+        if (req.prefill) this.prefill(existing, req.prefill, 0);
         return { ok: true, termId: existing, alreadyOpen: true };
       }
     }
@@ -84,7 +92,7 @@ export class SessionService {
       cwd,
       env: sessionEnv(this.d.baseEnv, { pathValue, ticketKey: ticket.key, sessionId: termId }),
     });
-    if (req.prefill) void this.d.pty.prefill(termId, req.prefill);
+    if (req.prefill) this.prefill(termId, req.prefill);
     return { ok: true, termId, alreadyOpen: false };
   }
 

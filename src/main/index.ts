@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, Menu, nativeImage, Tray } from "electron";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { IPC } from "../shared/ipc";
 import { openDatabase } from "./db/database";
 import { SessionsRepo } from "./db/sessions-repo";
@@ -8,6 +9,7 @@ import { SettingsRepo } from "./db/settings-repo";
 import { TicketsRepo } from "./db/tickets-repo";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
+import { createFileLogger, type Logger } from "./logger";
 import { HookInbox } from "./hooks/inbox";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, resolvePaths } from "./paths";
@@ -21,10 +23,13 @@ import { canSend } from "./safe-send";
 import { circleBitmap } from "./tray-bitmap";
 
 const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
+/** hook 发现没有 ticket 的 session 后，稍等片刻再扫描磁盘（合并连续事件）。 */
+const HOOK_DISCOVERY_DEBOUNCE_MS = 3000;
 
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
+let logger: Logger = () => undefined;
 /** bootstrap 赋值：退出前在窗口还活着时先结束所有终端进程。 */
 let shutdownSessions: () => void = () => undefined;
 
@@ -35,6 +40,21 @@ function safeSend(channel: string, ...args: unknown[]): void {
 function bundledHookPath(): string {
   const name = process.platform === "win32" ? "butler-hook.exe" : "butler-hook";
   return app.isPackaged ? join(process.resourcesPath, "hook", name) : join(app.getAppPath(), "build", "hook", name);
+}
+
+/** dev 模式下的渲染器地址；打包后永远不用环境变量。 */
+function devRendererUrl(): string | null {
+  return !app.isPackaged && process.env.ELECTRON_RENDERER_URL ? process.env.ELECTRON_RENDERER_URL : null;
+}
+
+function isOwnUrl(url: string): boolean {
+  const dev = devRendererUrl();
+  try {
+    if (dev) return new URL(url).origin === new URL(dev).origin;
+    return url === pathToFileURL(join(__dirname, "../renderer/index.html")).href;
+  } catch {
+    return false;
+  }
 }
 
 function createWindow(): BrowserWindow {
@@ -58,8 +78,14 @@ function createWindow(): BrowserWindow {
       w.hide();
     }
   });
-  if (process.env.ELECTRON_RENDERER_URL) void w.loadURL(process.env.ELECTRON_RENDERER_URL);
-  else void w.loadFile(join(__dirname, "../renderer/index.html"));
+  // 拖入文件等导航不能替换界面（否则 preload 桥会暴露给任意页面）；也不允许新开窗口。
+  w.webContents.on("will-navigate", (e, url) => {
+    if (!isOwnUrl(url)) e.preventDefault();
+  });
+  w.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  const dev = devRendererUrl();
+  const loaded = dev ? w.loadURL(dev) : w.loadFile(join(__dirname, "../renderer/index.html"));
+  loaded.catch((e: unknown) => logger("renderer load failed", e));
   return w;
 }
 
@@ -90,29 +116,37 @@ function createTray(): Tray {
 async function bootstrap(): Promise<void> {
   const paths = resolvePaths();
   await ensureDirs(paths);
+  logger = createFileLogger(join(paths.logs, "main.log"));
   const db = openDatabase(paths.db);
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
   const settings = new SettingsRepo(db);
   const ticketService = new TicketService({ tickets, settings, now: Date.now });
   const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath() });
-  await health.refresh();
-
   const notify = () => safeSend(IPC.stateChanged);
+  // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
+  const healthReady: Promise<void> = health.refresh().then(
+    () => notify(),
+    (e: unknown) => {
+      logger("initial health refresh failed", e);
+    },
+  );
   const pty = new PtyManager(nodePtyFactory, {
     data: (id, data) => safeSend(IPC.ptyData, id, data),
     exit: (id, code) => {
       safeSend(IPC.ptyExit, id, code);
       notify();
     },
-  });
+  }, Date.now, logger);
   const sessionService = new SessionService({
     tickets, sessions, settings, ticketService, pty,
+    ready: () => healthReady,
     claude: () => health.claude(),
     newId: randomUUID,
     now: Date.now,
     platform: process.platform,
     baseEnv: process.env,
+    log: logger,
   });
 
   const runDiscovery = async () => {
@@ -120,17 +154,32 @@ async function bootstrap(): Promise<void> {
       syncDiscovered(await scanClaudeProjects(paths.claudeProjects, Date.now() - UNCLAIMED_WINDOW_MS), sessions, Date.now());
       notify();
     } catch (e) {
-      console.error("discovery failed", e);
+      logger("discovery failed", e);
     }
+  };
+
+  let hookDiscoveryTimer: NodeJS.Timeout | null = null;
+  const scheduleDiscovery = () => {
+    if (hookDiscoveryTimer) return;
+    hookDiscoveryTimer = setTimeout(() => {
+      hookDiscoveryTimer = null;
+      void runDiscovery();
+    }, HOOK_DISCOVERY_DEBOUNCE_MS);
   };
 
   const inbox = new HookInbox({
     dir: paths.inbox,
     badDir: paths.inboxBad,
-    log: (m) => console.warn(m),
+    log: (m) => logger(m),
     handle: (env) => {
       const effect = applyHookEnvelope(env, { sessions, tickets });
-      if (effect.kind !== "ignored") notify();
+      if (effect.kind === "ignored") return;
+      notify();
+      // 还没归属任何 ticket 的 session：触发一次发现，补全 cwd / 分支 / 首条提示。
+      if (effect.kind !== "nested") {
+        const s = sessions.get(effect.sessionId);
+        if (s && !s.ticketKey && !s.dismissed) scheduleDiscovery();
+      }
     },
   });
 
@@ -146,12 +195,16 @@ async function bootstrap(): Promise<void> {
 
   app.on("will-quit", () => {
     clearInterval(discoveryTimer);
+    if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     inbox.stop();
     pty.killAll();
     tray?.destroy();
     db.close();
   });
 }
+
+process.on("uncaughtException", (e) => logger("uncaughtException", e));
+process.on("unhandledRejection", (e) => logger("unhandledRejection", e));
 
 if (process.argv.includes("--smoke")) {
   void runSmoke()

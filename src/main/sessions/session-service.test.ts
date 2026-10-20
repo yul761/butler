@@ -9,7 +9,7 @@ import { fakePtyFactory, makeRepo, memDb } from "../test-utils";
 import { PtyManager } from "./pty-manager";
 import { SessionService } from "./session-service";
 
-async function setup(opts: { claudePath?: string | null; workMode?: "branch" | "worktree" } = {}) {
+async function setup(opts: { claudePath?: string | null; workMode?: "branch" | "worktree"; ready?: () => Promise<void> } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -20,6 +20,7 @@ async function setup(opts: { claudePath?: string | null; workMode?: "branch" | "
   let n = 0;
   const service = new SessionService({
     tickets, sessions, settings, ticketService, pty,
+    ready: opts.ready ?? (async () => undefined),
     claude: () => ({ path: opts.claudePath === undefined ? "/bin/claude" : opts.claudePath, pathValue: "/login/bin" }),
     newId: () => `new-${++n}`,
     now: () => 1000,
@@ -62,6 +63,19 @@ describe("SessionService.open", () => {
     sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 3 });
     sessions.setReplacedBy("new-1", "c2");
     expect(await service.open({ ticketKey: "PROJ-1", sessionId: "c2" })).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
+    expect(spawned).toHaveLength(1);
+  });
+
+  it("waits for the first health refresh before deciding claude is missing", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { service, spawned } = await setup({ ready: () => gate });
+    let settled = false;
+    const p = service.open({ ticketKey: "PROJ-1" }).then((r) => ((settled = true), r));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false);
+    release();
+    expect(await p).toMatchObject({ ok: true });
     expect(spawned).toHaveLength(1);
   });
 

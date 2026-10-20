@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SettingsRepo } from "../db/settings-repo";
@@ -32,6 +32,17 @@ describe("HealthService", () => {
     expect((await health.uninstallHooks()).hooks).toBe("missing");
 
     writeFileSync(paths.claudeSettings, "{oops");
+    expect((await health.refresh()).hooks).toBe("settings_invalid");
+  });
+
+  it("treats any settings read failure (e.g. a directory at the path) as settings_invalid", async () => {
+    const home = tempDir();
+    const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+    mkdirSync(paths.claudeSettings, { recursive: true });
+    const health = new HealthService({
+      paths, platform: "darwin", env: {}, settings: new SettingsRepo(memDb()), bundledHookBin: "/none",
+      readPath: async () => "/usr/bin", run: async () => "",
+    });
     expect((await health.refresh()).hooks).toBe("settings_invalid");
   });
 });

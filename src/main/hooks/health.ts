@@ -6,7 +6,7 @@ import type { SettingsRepo } from "../db/settings-repo";
 import type { ButlerPaths } from "../paths";
 import type { ExecText } from "../util/exec";
 import { withPath } from "../util/env";
-import { hookCommand, hookStatus, installHookBinary, installHooks, readSettings, SettingsParseError, uninstallHooks } from "./installer";
+import { hookCommand, hookStatus, installHookBinary, installHooks, readSettings, uninstallHooks } from "./installer";
 
 export interface HealthDeps {
   paths: ButlerPaths;
@@ -38,8 +38,8 @@ export class HealthService {
     let hooks: HookStatus;
     try {
       hooks = hookStatus(await readSettings(this.d.paths.claudeSettings), hookCommand(this.d.paths.hookBin, this.d.platform));
-    } catch (e) {
-      if (!(e instanceof SettingsParseError)) throw e;
+    } catch {
+      // 解析失败、是目录、没有权限等：一律视为 settings 不可用，不让启动失败。
       hooks = "settings_invalid";
     }
     return {

@@ -118,4 +118,25 @@ describe("PtyManager", () => {
     expect(spawned.every((s) => s.pty.killed)).toBe(true);
     expect(mgr.openIds()).toEqual([]);
   });
+
+  it("logs instead of throwing when the pty rejects write/resize/kill", () => {
+    const { factory, spawned } = fakePtyFactory();
+    const logs: string[] = [];
+    const mgr = new PtyManager(factory, { data: () => undefined, exit: () => undefined }, () => Date.now(), (m) => logs.push(m));
+    mgr.open("a", spec, opts);
+    const boom = () => {
+      throw new Error("EBADF");
+    };
+    spawned[0].pty.write = boom;
+    spawned[0].pty.resize = boom;
+    spawned[0].pty.kill = boom;
+    expect(() => {
+      mgr.write("a", "x");
+      mgr.resize("a", 80, 24);
+      mgr.kill("a");
+      mgr.killAll();
+    }).not.toThrow();
+    expect(logs).toHaveLength(4);
+    expect(logs[0]).toContain("write failed");
+  });
 });

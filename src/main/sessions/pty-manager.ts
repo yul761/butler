@@ -46,7 +46,16 @@ export class PtyManager {
     private readonly factory: PtyFactory,
     private readonly events: PtyEvents,
     private readonly now: () => number = () => Date.now(),
+    private readonly log: (msg: string, err?: unknown) => void = () => undefined,
   ) {}
+
+  private guard(termId: string, what: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (e) {
+      this.log(`pty ${termId}: ${what} failed`, e);
+    }
+  }
 
   open(termId: string, spec: SpawnSpec, opts: { cwd: string; env: Record<string, string>; cols?: number; rows?: number }): void {
     if (this.terms.has(termId)) throw new Error(`terminal ${termId} already open`);
@@ -78,19 +87,19 @@ export class PtyManager {
   }
 
   write(termId: string, data: string): void {
-    this.terms.get(termId)?.proc.write(data);
+    this.guard(termId, "write", () => this.terms.get(termId)?.proc.write(data));
   }
 
   resize(termId: string, cols: number, rows: number): void {
-    if (cols > 0 && rows > 0) this.terms.get(termId)?.proc.resize(cols, rows);
+    if (cols > 0 && rows > 0) this.guard(termId, "resize", () => this.terms.get(termId)?.proc.resize(cols, rows));
   }
 
   kill(termId: string): void {
-    this.terms.get(termId)?.proc.kill();
+    this.guard(termId, "kill", () => this.terms.get(termId)?.proc.kill());
   }
 
   killAll(): void {
-    for (const t of [...this.terms.values()]) t.proc.kill();
+    for (const [id, t] of [...this.terms]) this.guard(id, "kill", () => t.proc.kill());
   }
 
   snapshot(termId: string): PtySnapshot {
@@ -109,7 +118,7 @@ export class PtyManager {
       if (!t || t.exited) return false;
       const now = this.now();
       if (t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs) {
-        t.proc.write(text);
+        this.guard(termId, "prefill write", () => t.proc.write(text));
         return true;
       }
       if (now - start >= timeoutMs) return false;
