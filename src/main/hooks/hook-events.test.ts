@@ -66,4 +66,56 @@ describe("applyHookEnvelope", () => {
     expect(applyHookEnvelope({ v: 1, receivedAt: 1, ticket: null, butlerSession: null, payload: null }, deps).kind).toBe("ignored");
     expect(applyHookEnvelope(env("Notification", "s1"), deps)).toEqual({ kind: "ignored", reason: "unhandled_event:Notification" });
   });
+
+  it("a nested claude (startup, other id) in a Butler terminal does not hijack the chain", () => {
+    const { sessions, deps } = setup();
+    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", butlerSession: "A" }), deps);
+    const eff = applyHookEnvelope(env("SessionStart", "N", { ticket: "PROJ-1", butlerSession: "A" }, { source: "startup" }), deps);
+    expect(eff).toEqual({ kind: "nested", sessionId: "N" });
+    expect(sessions.head("A")?.id).toBe("A");
+    expect(sessions.get("N")).toMatchObject({ ticketKey: null, dismissed: true });
+    // 缺少 source 同样按嵌套处理
+    expect(applyHookEnvelope(env("SessionStart", "M", { butlerSession: "A" }), deps).kind).toBe("nested");
+    expect(sessions.head("A")?.id).toBe("A");
+  });
+
+  it("later events from a nested session never attach the ticket", () => {
+    const { sessions, deps } = setup();
+    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", butlerSession: "A" }), deps);
+    applyHookEnvelope(env("SessionStart", "N", { ticket: "PROJ-1", butlerSession: "A" }, { source: "startup" }), deps);
+    for (const ev of ["Stop", "UserPromptSubmit", "SessionEnd"]) applyHookEnvelope(env(ev, "N", { ticket: "PROJ-1", butlerSession: "A" }), deps);
+    expect(sessions.get("N")).toMatchObject({ ticketKey: null, dismissed: true });
+  });
+
+  it("compact and resume chain like clear", () => {
+    const { sessions, deps } = setup();
+    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", butlerSession: "A" }), deps);
+    applyHookEnvelope(env("SessionStart", "B", { butlerSession: "A" }, { source: "compact" }), deps);
+    applyHookEnvelope(env("SessionStart", "C", { butlerSession: "A" }, { source: "resume" }), deps);
+    expect(sessions.head("A")?.id).toBe("C");
+    expect(sessions.get("C")?.ticketKey).toBe("PROJ-1");
+  });
+
+  it("out-of-order: Stop(B) before SessionStart(B, clear) still chains and keeps the ticket", () => {
+    const { sessions, deps } = setup();
+    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", butlerSession: "A" }), deps);
+    applyHookEnvelope(env("Stop", "B", { butlerSession: "A" }), deps);
+    applyHookEnvelope(env("SessionStart", "B", { butlerSession: "A" }, { source: "clear" }), deps);
+    expect(sessions.head("A")?.id).toBe("B");
+    expect(sessions.get("B")).toMatchObject({ ticketKey: "PROJ-1", dismissed: false });
+  });
+
+  it("UserPromptSubmit fills an empty firstPrompt once, with discovery's normalisation", () => {
+    const { sessions, deps } = setup();
+    applyHookEnvelope(env("UserPromptSubmit", "s1", {}, { prompt: "  fix PROJ-1 please  " }), deps);
+    expect(sessions.get("s1")?.firstPrompt).toBe("fix PROJ-1 please");
+    applyHookEnvelope(env("UserPromptSubmit", "s1", {}, { prompt: "second" }), deps);
+    expect(sessions.get("s1")?.firstPrompt).toBe("fix PROJ-1 please");
+    applyHookEnvelope(env("UserPromptSubmit", "s2", {}, { prompt: "<system-reminder>x</system-reminder>" }), deps);
+    applyHookEnvelope(env("UserPromptSubmit", "s3", {}, { prompt: "   " }), deps);
+    expect(sessions.get("s2")?.firstPrompt).toBeNull();
+    expect(sessions.get("s3")?.firstPrompt).toBeNull();
+    applyHookEnvelope(env("UserPromptSubmit", "s4", {}, { prompt: "x".repeat(300) }), deps);
+    expect(sessions.get("s4")?.firstPrompt).toBe(`${"x".repeat(200)}…`);
+  });
 });

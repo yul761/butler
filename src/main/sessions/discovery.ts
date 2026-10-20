@@ -40,6 +40,11 @@ export function extractUserText(entry: unknown): string | null {
             .map((x) => String(x.text ?? ""))
             .join("\n")
         : "";
+  return normalizePromptText(text);
+}
+
+/** 把原始用户输入规整成 firstPrompt：去空白、排除 Claude 注入的标签、截断。 */
+export function normalizePromptText(text: string): string | null {
   const t = text.trim();
   if (!t || CLAUDE_TAG_RE.test(t)) return null;
   return t.length > PROMPT_LIMIT ? `${t.slice(0, PROMPT_LIMIT)}…` : t;
