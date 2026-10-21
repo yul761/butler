@@ -5,6 +5,7 @@ import { reportError } from "../errors";
 import { sessionLabel, splitSessions } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
 import { TerminalPane } from "./TerminalPane";
+import { TicketOverview } from "./TicketOverview";
 
 const VISIBLE_SESSIONS = 3;
 
@@ -98,6 +99,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         </select>
         <button onClick={() => api.archive(ticket.key).then(onArchived, reportError)}>{S.archive}</button>
       </header>
+
+      <TicketOverview ticketKey={ticket.key} />
 
       <div className="sessions-bar">
         {ticket.sessions.length === 0 && <span className="muted">{S.noSessions}</span>}

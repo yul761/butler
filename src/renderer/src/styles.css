@@ -95,3 +95,19 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .day-list { margin: 4px 0 10px; padding-left: 20px; }
 .evening-entry { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; }
 .evening-entry p { margin: 4px 0; }
+textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; width: 100%; resize: vertical; }
+.mono { font-family: Menlo, Consolas, "Cascadia Mono", monospace; font-size: 12px; }
+.overview { border-bottom: 1px solid var(--border); }
+.overview-bar { display: flex; gap: 8px; align-items: center; padding: 6px 16px; flex-wrap: wrap; }
+.overview-bar .active { border-color: var(--accent); color: var(--accent); }
+.overview-panel { max-height: 40vh; overflow-y: auto; padding: 4px 16px 10px; }
+.followup { display: flex; gap: 10px; align-items: center; padding: 4px 0; }
+.followup .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.followup.closed .text { color: var(--muted); text-decoration: line-through; }
+.handoff-entry { padding: 8px 0; border-top: 1px solid var(--border); }
+.raw { white-space: pre-wrap; font-size: 12px; background: var(--panel); padding: 8px; border-radius: 6px; }
+.settings-section { margin-top: 24px; display: flex; flex-direction: column; gap: 12px; max-width: 760px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field .row { flex-wrap: wrap; gap: 12px; }
+label.inline { display: inline-flex; gap: 6px; align-items: center; }
+.probe { display: flex; flex-direction: column; gap: 4px; }

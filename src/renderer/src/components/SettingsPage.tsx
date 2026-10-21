@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { HealthReport } from "../../../shared/types";
 import { api } from "../api";
 import { S } from "../strings";
+import { ScheduleSettings } from "./ScheduleSettings";
 
 export function SettingsPage() {
   const [report, setReport] = useState<HealthReport | null>(null);
@@ -36,6 +37,7 @@ export function SettingsPage() {
         {claude.missingFlags.length > 0 && (<><dt>{S.missingFlags}</dt><dd className="error">{claude.missingFlags.join(" ")}</dd></>)}
         {claude.error && claude.error !== "claude_not_found" && (<><dt /><dd className="error">{claude.error}</dd></>)}
         <dt>{S.hooks}</dt><dd className={report.hooks === "installed" ? "ok" : "error"}>{S.hookStatus[report.hooks]}</dd>
+        <dt>{S.handoffCommand}</dt><dd className={report.handoffCommand === "installed" ? "ok" : "error"}>{S.handoffCommandStatus[report.handoffCommand]}</dd>
         <dt>{S.butlerHome}</dt><dd>{report.butlerHome}</dd>
         <dt>{S.claudeSettings}</dt><dd>{report.claudeSettingsPath}</dd>
       </dl>
@@ -46,6 +48,7 @@ export function SettingsPage() {
         <button className="primary" disabled={busy || report.hooks === "settings_invalid"} onClick={() => void run(api.installHooks)}>{S.installHooks}</button>
         <button disabled={busy || report.hooks === "missing"} onClick={() => void run(api.uninstallHooks)}>{S.uninstallHooks}</button>
       </div>
+      <ScheduleSettings />
     </div>
   );
 }
