@@ -1,0 +1,39 @@
+import type { Brief } from "../../shared/brief";
+import type { BriefService } from "../brief/brief-service";
+import { JOB_EVENING, type JobsRepo } from "../db/jobs-repo";
+import type { HandoffRunner } from "../handoff/runner";
+
+export interface DailyJobDeps {
+  runner: Pick<HandoffRunner, "runNightly" | "refreshForBrief">;
+  briefs: Pick<BriefService, "generateMorning" | "generateEvening">;
+  jobs: JobsRepo;
+  now: () => number;
+  isWorkingDay: () => boolean;
+  /** 早间刷新进行中（界面显示“刷新中”）。 */
+  setRefreshing: (v: boolean) => void;
+  /** 晚间小结生成后：弹系统通知。 */
+  onEvening: (brief: Brief) => void;
+}
+
+/** 晚间：批量 handoff → 晚间小结 → 系统通知。 */
+export async function nightlyJob(d: DailyJobDeps): Promise<"ok" | "partial"> {
+  // runner 的方法不是 async，可能同步抛错：包一层，让它变成 rejection 由调度器记录。
+  const batch = await Promise.resolve().then(() => d.runner.runNightly());
+  const brief = d.briefs.generateEvening();
+  d.jobs.record(JOB_EVENING, d.now(), "ok", null);
+  d.onEvening(brief);
+  return batch.status;
+}
+
+/** 早间：先用现有数据出一版（界面马上有内容），工作日再刷新 PR / tracker 状态后原地更新。 */
+export async function morningJob(d: DailyJobDeps): Promise<void> {
+  d.briefs.generateMorning();
+  if (!d.isWorkingDay()) return;
+  d.setRefreshing(true);
+  try {
+    const r = await Promise.resolve().then(() => d.runner.refreshForBrief());
+    if (r.outcomes.length > 0) d.briefs.generateMorning();
+  } finally {
+    d.setRefreshing(false);
+  }
+}

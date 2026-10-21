@@ -94,6 +94,26 @@ export class HandoffsRepo {
     return null;
   }
 
+  /** 最新的一条非刷新 handoff（任何有效性）；早间刷新不会把它顶掉。 */
+  latestFull(ticketKey: string): HandoffRecord | null {
+    const row = this.db
+      .prepare(`SELECT * FROM handoffs WHERE ticket_key = ? AND trigger != 'refresh' ORDER BY created_at DESC, id DESC LIMIT 1`)
+      .get(ticketKey) as HandoffRow | undefined;
+    return row ? toRecord(row) : null;
+  }
+
+  /** 最新的一条非刷新、payload 有效的 handoff。 */
+  latestValidFull(ticketKey: string): HandoffRecord | null {
+    const rows = this.db
+      .prepare(`SELECT * FROM handoffs WHERE ticket_key = ? AND trigger != 'refresh' AND degraded = 0 AND payload IS NOT NULL ORDER BY created_at DESC, id DESC`)
+      .iterate(ticketKey) as Iterable<HandoffRow>;
+    for (const row of rows) {
+      const rec = toRecord(row);
+      if (rec.payload) return rec;
+    }
+    return null;
+  }
+
   /** 最近一次读过 session 的 handoff（不算早间刷新）的时间；晚间批量据此判断有没有新活动。 */
   lastCapturedAt(ticketKey: string): number | null {
     const r = this.db.prepare(`SELECT MAX(created_at) AS at FROM handoffs WHERE ticket_key = ? AND trigger != 'refresh'`).get(ticketKey) as
