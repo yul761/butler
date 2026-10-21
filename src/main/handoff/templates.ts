@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Handoff } from "../../shared/handoff";
 
 const FENCE = "```";
@@ -84,14 +85,37 @@ export const DEFAULT_REFRESH_PROMPT = `只查询 ticket {{ticket}}（分支 {{br
 {{schema}}
 `;
 
-/** handoff.md 里的标记行：有它才说明文件是 Butler 写的，可以更新或卸载。 */
-export const HANDOFF_COMMAND_MARKER = "<!-- butler:handoff-command v1 -->";
+/**
+ * handoff.md 里的标记行紧跟在 front matter 之后：`<!-- butler:handoff-command v1 sha256:<hex> -->`。
+ * hex 是“去掉标记行之后的全文”的 sha256；用户改过内容 hash 就对不上，Butler 不再认它是自己的文件。
+ */
+export const HANDOFF_COMMAND_MARKER = "<!-- butler:handoff-command v1";
 
-/** 写入 Claude Code 用户级 commands 目录的 /handoff 命令。 */
-export const HANDOFF_COMMAND_MD = `---
+export function commandBodyHash(body: string): string {
+  return createHash("sha256").update(body, "utf8").digest("hex");
+}
+
+/** 在 front matter（以 `---\n...\n---\n` 开头）之后插入带 hash 的标记行。 */
+export function renderHandoffCommand(body: string): string {
+  const m = /^---\n[\s\S]*?\n---\n/.exec(body);
+  const at = m ? m[0].length : 0;
+  return `${body.slice(0, at)}${HANDOFF_COMMAND_MARKER} sha256:${commandBodyHash(body)} -->\n${body.slice(at)}`;
+}
+
+const MARKER_RE = /^(---\n[\s\S]*?\n---\n)<!-- butler:handoff-command v1 sha256:([0-9a-f]{64}) -->\n/;
+
+/** 解析 Butler 写的文件：标记行必须紧跟 front matter、hash 必须和其余内容一致，否则返回 null（不是 Butler 的，或被用户改过）。 */
+export function parseHandoffCommand(text: string): { body: string } | null {
+  const m = MARKER_RE.exec(text);
+  if (!m) return null;
+  const body = m[1] + text.slice(m[0].length);
+  return commandBodyHash(body) === m[2] ? { body } : null;
+}
+
+/** 当前版本的命令正文（不含标记行）。 */
+export const HANDOFF_COMMAND_BODY = `---
 description: 生成 Butler handoff（当前 ticket 的进度摘要）
 ---
-${HANDOFF_COMMAND_MARKER}
 请为当前 session 对应的 ticket 生成一份 handoff，供 Butler 的早间简报使用。
 
 - 依据这个 session 的完整对话；如果可以，再用 tracker MCP 工具和 \`gh pr view\` 确认 ticket 与 PR 的最新状态。
@@ -110,3 +134,6 @@ ${FENCE}
 
 $ARGUMENTS
 `;
+
+/** 写入 Claude Code 用户级 commands 目录的 /handoff 命令。 */
+export const HANDOFF_COMMAND_MD = renderHandoffCommand(HANDOFF_COMMAND_BODY);

@@ -94,4 +94,31 @@ describe("captureCommandHandoff", () => {
     expect(await captureCommandHandoff(deps, { sessionId: "s1", transcriptPath: file })).toBeNull();
     expect(await captureCommandHandoff(deps, { sessionId: "s1", transcriptPath: join(tempDir(), "missing.jsonl") })).toBeNull();
   });
+
+  it("ignores a turn where the assistant merely quotes a fence without /handoff", async () => {
+    const { deps, sessions, handoffs } = setup();
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    const file = join(tempDir(), "quote.jsonl");
+    const entries = [
+      { type: "user", message: { role: "user", content: "给我看看 handoff 的格式" } },
+      { type: "assistant", uuid: "q1", message: { role: "assistant", content: [{ type: "text", text: `${FENCE}butler-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}` }] } },
+    ];
+    writeFileSync(file, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    expect(await captureCommandHandoff(deps, { sessionId: "s1", transcriptPath: file })).toBeNull();
+    expect(handoffs.listByTicket("PROJ-1")).toHaveLength(0);
+  });
+
+  it("ingests the V4-shaped /handoff turn (command message + isMeta expansion)", async () => {
+    const { deps, sessions, handoffs } = setup();
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    const file = join(tempDir(), "v4.jsonl");
+    const entries = [
+      { type: "user", message: { role: "user", content: "<command-message>handoff</command-message>\n<command-name>/handoff</command-name>" } },
+      { type: "user", isMeta: true, message: { role: "user", content: [{ type: "text", text: `示例：\n${FENCE}butler-handoff\n{}\n${FENCE}` }] } },
+      { type: "assistant", uuid: "v1", message: { role: "assistant", content: [{ type: "text", text: `${FENCE}butler-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}` }] } },
+    ];
+    writeFileSync(file, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    expect(await captureCommandHandoff(deps, { sessionId: "s1", transcriptPath: file })).toMatchObject({ stored: true });
+    expect(handoffs.latest("PROJ-1")).toMatchObject({ trigger: "command", sourceRef: "v1" });
+  });
 });

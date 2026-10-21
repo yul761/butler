@@ -1,7 +1,7 @@
 import { chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { HandoffCommandStatus } from "../../shared/types";
-import { HANDOFF_COMMAND_MARKER, HANDOFF_COMMAND_MD } from "./templates";
+import { HANDOFF_COMMAND_BODY, HANDOFF_COMMAND_MD, parseHandoffCommand } from "./templates";
 
 export function handoffCommandPath(commandsDir: string): string {
   return join(commandsDir, "handoff.md");
@@ -16,12 +16,13 @@ async function readOrNull(file: string): Promise<string | null> {
   }
 }
 
-/** installed：和当前版本一字不差；stale：Butler 写的旧版本；conflict：用户自己的同名命令。 */
+/** installed：和当前版本一字不差；stale：hash 对得上的 Butler 旧版本；conflict：用户自己的命令，或 Butler 的文件被用户改过。 */
 export async function handoffCommandStatus(file: string): Promise<HandoffCommandStatus> {
   const text = await readOrNull(file);
   if (text === null) return "missing";
-  if (text === HANDOFF_COMMAND_MD) return "installed";
-  return text.includes(HANDOFF_COMMAND_MARKER) ? "stale" : "conflict";
+  const mine = parseHandoffCommand(text);
+  if (!mine) return "conflict"; // 没有标记行、或 hash 对不上（用户改过）。
+  return mine.body === HANDOFF_COMMAND_BODY ? "installed" : "stale";
 }
 
 /** 写入或更新 Butler 自己的版本；用户自己的 handoff.md（或读不了的路径）不覆盖，返回 conflict。符号链接保留，原子写入，保留权限位。 */

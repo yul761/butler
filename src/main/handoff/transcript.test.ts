@@ -2,7 +2,7 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { findHandoffBlock, readLastTurn } from "./transcript";
+import { findHandoffBlock, readLastTurn, readLastTurnInfo } from "./transcript";
 
 const line = (o: unknown) => `${JSON.stringify(o)}\n`;
 const user = (content: unknown, extra: Record<string, unknown> = {}) => ({ type: "user", message: { role: "user", content }, ...extra });
@@ -63,5 +63,30 @@ describe("readLastTurn / findHandoffBlock", () => {
     const file = join(tempDir(), "t.jsonl");
     writeFileSync(file, line(user("q")) + "{not json\n" + line(assistant("a1", text(BLOCK))) + "null\n");
     expect(findHandoffBlock(await readLastTurn(file))?.uuid).toBe("a1");
+  });
+
+  it("flags only /handoff turns (V4 shape, typed command) and not ordinary turns", async () => {
+    const dir = tempDir();
+    const v4 = join(dir, "v4.jsonl");
+    writeTurn(v4, [assistant("a1", text(BLOCK))]);
+    expect((await readLastTurnInfo(v4)).isHandoffCommand).toBe(true);
+    const plain = join(dir, "plain.jsonl");
+    writeFileSync(plain, line(user("请解释 handoff 格式")) + line(assistant("a1", text(BLOCK))));
+    expect(await readLastTurnInfo(plain)).toMatchObject({ isHandoffCommand: false, turn: [{ uuid: "a1" }] });
+    const meta = join(dir, "meta.jsonl");
+    writeFileSync(meta, line(user("别的")) + line(user(text("某个 skill 的展开"), { isMeta: true })) + line(assistant("a1", text(BLOCK))));
+    expect((await readLastTurnInfo(meta)).isHandoffCommand).toBe(false);
+  });
+
+  it("ignores sidechain entries entirely", async () => {
+    const file = join(tempDir(), "t.jsonl");
+    writeTurn(file, [
+      assistant("a1", text(BLOCK)),
+      { ...user("子 agent 的问题"), isSidechain: true },
+      { ...assistant("side", text(BLOCK.replace("PROJ-1", "SIDE"))), isSidechain: true },
+    ]);
+    const info = await readLastTurnInfo(file);
+    expect(info.isHandoffCommand).toBe(true);
+    expect(info.turn).toEqual([{ uuid: "a1", text: BLOCK }]);
   });
 });

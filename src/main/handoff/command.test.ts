@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
 import { handoffCommandPath, handoffCommandStatus, installHandoffCommand, uninstallHandoffCommand } from "./command";
-import { HANDOFF_COMMAND_MARKER, HANDOFF_COMMAND_MD } from "./templates";
+import { HANDOFF_COMMAND_MARKER, HANDOFF_COMMAND_MD, renderHandoffCommand } from "./templates";
+
+const OLD = renderHandoffCommand("---\ndescription: old\n---\n旧版正文\n");
 
 describe("/handoff command file", () => {
   it("installs into a missing commands dir, reports installed, and uninstalls", async () => {
@@ -18,7 +20,7 @@ describe("/handoff command file", () => {
 
   it("updates an older Butler version", async () => {
     const file = handoffCommandPath(tempDir());
-    writeFileSync(file, `old\n${HANDOFF_COMMAND_MARKER}\n`);
+    writeFileSync(file, OLD);
     expect(await handoffCommandStatus(file)).toBe("stale");
     expect(await installHandoffCommand(file)).toBe("installed");
     expect(readFileSync(file, "utf8")).toBe(HANDOFF_COMMAND_MD);
@@ -32,19 +34,42 @@ describe("/handoff command file", () => {
     expect(readFileSync(file, "utf8")).toBe("我自己的 handoff 命令");
   });
 
-  it("treats a BOM-prefixed Butler file as stale and rewrites it", async () => {
+  it("reads a BOM-prefixed Butler file and rewrites a stale one", async () => {
     const file = handoffCommandPath(tempDir());
     writeFileSync(file, `\uFEFF${HANDOFF_COMMAND_MD}`);
     expect(await handoffCommandStatus(file)).toBe("installed");
-    writeFileSync(file, `\uFEFFold\n${HANDOFF_COMMAND_MARKER}\n`);
+    writeFileSync(file, `\uFEFF${OLD}`);
     expect(await handoffCommandStatus(file)).toBe("stale");
+    expect(await installHandoffCommand(file)).toBe("installed");
+    expect(readFileSync(file, "utf8")).toBe(HANDOFF_COMMAND_MD);
+  });
+
+  it("treats a user-edited copy (valid marker, changed body) as a conflict and never overwrites or deletes it", async () => {
+    const file = handoffCommandPath(tempDir());
+    const edited = HANDOFF_COMMAND_MD.replace("只读", "我改过的只读");
+    expect(edited).not.toBe(HANDOFF_COMMAND_MD);
+    writeFileSync(file, edited);
+    expect(await handoffCommandStatus(file)).toBe("conflict");
+    expect(await installHandoffCommand(file)).toBe("conflict");
+    await uninstallHandoffCommand(file);
+    expect(readFileSync(file, "utf8")).toBe(edited);
+  });
+
+  it("treats a file that merely quotes the marker mid-text as a conflict", async () => {
+    const file = handoffCommandPath(tempDir());
+    const quoted = `我的命令，参考了 ${HANDOFF_COMMAND_MARKER} sha256:${"0".repeat(64)} -->\n正文\n`;
+    writeFileSync(file, quoted);
+    expect(await handoffCommandStatus(file)).toBe("conflict");
+    expect(await installHandoffCommand(file)).toBe("conflict");
+    await uninstallHandoffCommand(file);
+    expect(readFileSync(file, "utf8")).toBe(quoted);
   });
 
   it("updates through a symlink, keeping the link and the target's mode", async () => {
     const dir = tempDir();
     const real = join(dir, "real.md");
     const file = handoffCommandPath(join(dir, "commands"));
-    writeFileSync(real, `old\n${HANDOFF_COMMAND_MARKER}\n`);
+    writeFileSync(real, OLD);
     chmodSync(real, 0o640);
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(dir, "commands"));

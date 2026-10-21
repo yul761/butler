@@ -5,7 +5,7 @@ import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import type { IngestInput, IngestResult } from "./ingest";
 import { parseJsonLoose, validate } from "./schema";
-import { findHandoffBlock, readLastTurn, type FoundHandoff } from "./transcript";
+import { findHandoffBlock, readLastTurnInfo, type FoundHandoff } from "./transcript";
 
 export interface StopEvent {
   sessionId: string;
@@ -36,7 +36,9 @@ export interface CaptureDeps {
 export async function captureCommandHandoff(d: CaptureDeps, stop: StopEvent): Promise<IngestResult | null> {
   let found: FoundHandoff | null;
   try {
-    found = findHandoffBlock(await readLastTurn(stop.transcriptPath));
+    const last = await readLastTurnInfo(stop.transcriptPath);
+    if (!last.isHandoffCommand) return null; // 只收 /handoff 的输出，不收 assistant 随口引用的代码块。
+    found = findHandoffBlock(last.turn);
   } catch {
     return null;
   }
