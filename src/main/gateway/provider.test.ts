@@ -55,9 +55,10 @@ describe("chatCompletion against a local fake server", () => {
   it("rejects a 200 that is not a chat completion", async () => {
     const p = await provider();
     p.handle(() => ({ raw: "<html>login</html>", headers: { "content-type": "text/html" } }));
-    await expect(chatCompletion(req(p.baseUrl))).rejects.toMatchObject({ kind: "bad_response" });
+    // status 带上 2xx：gateway 据此知道服务商收下了请求、可能已经计费。
+    await expect(chatCompletion(req(p.baseUrl))).rejects.toMatchObject({ kind: "bad_response", status: 200 });
     p.handle(() => ({ body: { choices: [] } }));
-    await expect(chatCompletion(req(p.baseUrl))).rejects.toMatchObject({ kind: "bad_response" });
+    await expect(chatCompletion(req(p.baseUrl))).rejects.toMatchObject({ kind: "bad_response", status: 200 });
   });
 
   it("times out and can be cancelled", async () => {

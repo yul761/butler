@@ -27,6 +27,21 @@ const source = (): NarrativeSource => ({
 const pseudonymizer = (src: NarrativeSource, seed: number) => new Pseudonymizer({ ...src.known, people: ["张三"], terms: [] }, seededRng(seed));
 
 describe("project", () => {
+  it("can hand back the untruncated free texts without changing the payload", () => {
+    for (const level of ["metadata", "redacted", "full"] as const) {
+      const src = source();
+      src.tickets[0].blockers = ["好".repeat(TEXT_LIMIT) + " wang.lei@acme-corp.com"];
+      const plain = JSON.stringify(project(src, level, pseudonymizer(src, 7), seededRng(9)));
+      const sink: string[] = [];
+      expect(JSON.stringify(project(src, level, pseudonymizer(src, 7), seededRng(9), sink))).toBe(plain);
+      if (level === "metadata") expect(sink).toEqual([]);
+      else {
+        expect(sink).toHaveLength(LIST_LIMIT + 1 + 1);
+        expect(sink.some((t) => t.endsWith("wang.lei@acme-corp.com"))).toBe(true);
+      }
+    }
+  });
+
   it("metadata sends only placeholder ids, enums, counts and days", () => {
     const src = source();
     const p = pseudonymizer(src, 4);

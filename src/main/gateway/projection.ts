@@ -35,13 +35,25 @@ function shuffle<T>(xs: readonly T[], rng: Rng): T[] {
  * - redacted：再加假名化后的 next_steps、blockers、followup 描述（每条最多 TEXT_LIMIT 字，每类最多 LIST_LIMIT 条）；
  * - full：同 redacted 的字段，但不做假名化。
  * ticket 的顺序每次打乱；条目按 区块 → 规则 → 占位符 排序，不按真实 ticket 号排。
+ * untruncated：传入时收集每段发出的自由文本在截断之前的样子（已假名化 / 规范化），
+ * 供扫描器检查：截断可能把密钥、邮箱、主机名切成扫描器认不出的半截，但半截照样会发出去。不影响返回的 payload。
  */
-export function project(src: NarrativeSource, level: Exclude<PrivacyLevel, "off">, p: Pseudonymizer, rng: Rng): OutboundPayload {
+export function project(
+  src: NarrativeSource,
+  level: Exclude<PrivacyLevel, "off">,
+  p: Pseudonymizer,
+  rng: Rng,
+  untruncated?: string[],
+): OutboundPayload {
   if ((level as string) === "off") throw new Error("project() must not be called at privacy level off");
   const pseudo = level !== "full";
   const withText = level !== "metadata";
   const id = (key: string) => (pseudo ? p.token("T", key) : key);
-  const text = (s: string) => truncateOutside(pseudo ? p.apply(s) : normalizeText(s), TEXT_LIMIT);
+  const text = (s: string) => {
+    const full = pseudo ? p.apply(s) : normalizeText(s);
+    untruncated?.push(full);
+    return truncateOutside(full, TEXT_LIMIT);
+  };
 
   const tickets = shuffle(src.tickets, rng).map(
     (t): OutboundTicket => ({

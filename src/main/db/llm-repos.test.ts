@@ -77,6 +77,14 @@ describe("AuditRepo", () => {
     expect(audit.list()[0]).toMatchObject({ status: "failed", payloadSent: null, error: "connect refused" });
   });
 
+  it("only lets failed or declined clear the payload", () => {
+    const audit = new AuditRepo(memDb());
+    const id = audit.insert({ ...base, ts: 1, status: "pending", payloadSent: "body" });
+    // @ts-expect-error a sent request always has a body
+    expect(() => audit.finish(id, { status: "sent", payloadSent: null })).toThrow();
+    expect(audit.list()[0]).toMatchObject({ status: "pending", payloadSent: "body" });
+  });
+
   it("sums the cost since a time, pages newest first and prunes old rows", () => {
     const audit = new AuditRepo(memDb());
     const a = audit.insert({ ...base, ts: 1, status: "pending", payloadSent: "a" });

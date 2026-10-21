@@ -117,7 +117,15 @@ async function attempt(req: ChatRequest, body: string, deadline: number, totalMs
   try {
     if (!signal.aborted) state.sent = body;
     const res = await fetch(chatUrl(req.baseUrl), { method: "POST", headers, body, signal, redirect: "error" });
-    return { status: res.status, text: scrub(await readCapped(res, RESPONSE_LIMIT), req.apiKey) };
+    let raw: string;
+    try {
+      raw = await readCapped(res, RESPONSE_LIMIT);
+    } catch (e) {
+      // 带上 HTTP 状态：2xx 时服务商已经收下请求、可能已经计费。
+      if (e instanceof ProviderError) throw new ProviderError(e.kind, e.message, res.status);
+      throw e;
+    }
+    return { status: res.status, text: scrub(raw, req.apiKey) };
   } catch (e) {
     if (e instanceof ProviderError) throw e;
     if (req.signal?.aborted) throw new ProviderError("aborted", "已取消");
@@ -147,10 +155,10 @@ export const chatCompletion: ChatCall = async (req) => {
     try {
       v = JSON.parse(r.text);
     } catch {
-      throw new ProviderError("bad_response", "响应不是 JSON");
+      throw new ProviderError("bad_response", "响应不是 JSON", r.status);
     }
     const content = contentOf(v);
-    if (content === null) throw new ProviderError("bad_response", "响应里没有 choices[0].message.content");
+    if (content === null) throw new ProviderError("bad_response", "响应里没有 choices[0].message.content", r.status);
     const usage = (v as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }).usage;
     return { content, tokensIn: count(usage?.prompt_tokens), tokensOut: count(usage?.completion_tokens), raw: r.text, sentBody: body };
   } catch (e) {

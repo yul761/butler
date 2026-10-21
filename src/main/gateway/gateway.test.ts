@@ -81,7 +81,8 @@ describe("PrivacyGateway", () => {
           key: "ZETA-42", status: "blocked", pr: { state: "open", review: "pending" }, daysInStatus: 4, idleDays: 2, doneLastDay: 0,
           // orion-payments 被 U+200B 拆开；人名、敏感词、ticket 号和分支名都在自由文本里。
           nextSteps: ["和 Wang Lei 确认 orion​-payments 的退款", "ZETA-42 先别合并"],
-          blockers: ["Project Falcon 还没上线"],
+          // 全角和 en dash 写法的 ticket 号。
+          blockers: ["Project Falcon 还没上线", "等 ＺＥＴＡ－４２ 的评审", "ZETA–42 卡在 CI"],
           followups: [{ kind: "other", trigger: "after_merge", description: "合并 feature/ZETA-42-refund 后通知 wang lei", overdueDays: null }],
         },
       ],
@@ -119,6 +120,26 @@ describe("PrivacyGateway", () => {
     expect(JSON.stringify(entry)).not.toContain("wiki.internal");
   });
 
+  const CUT_SECRETS = [
+    "好".repeat(103) + " wang.lei@acme-corp.com",
+    "好".repeat(98) + " build01.prod.acme-internal.com",
+    "好".repeat(96) + " ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0",
+  ];
+  const cutCases = (["redacted", "full"] as const).flatMap((level) =>
+    (["nextSteps", "blockers"] as const).flatMap((field) => CUT_SECRETS.map((text, i) => ({ level, field, text, i }))),
+  );
+  it.each(cutCases)("blocks a secret that the length limit would cut in half ($level, $field, #$i)", async ({ level, field, text }) => {
+    h = await gatewayHarness({ level });
+    const src = sampleSource();
+    src.tickets[0][field] = [text];
+    const r = await h.gateway.narrate(src);
+    expect(r.status).toBe("blocked");
+    expect(h.provider.requests).toHaveLength(0);
+    const [entry] = h.audit.list();
+    expect(entry).toMatchObject({ id: r.auditId, status: "blocked", payloadSent: null });
+    for (const v of ["wang.lei", "acme-corp", "build01", "acme-internal", "ghp_A1b2"]) expect(JSON.stringify(entry)).not.toContain(v);
+  });
+
   it("blocks an unknown ticket key in free text, but not at the full level where real keys are intended", async () => {
     h = await gatewayHarness({ level: "redacted" });
     const src = sampleSource();
@@ -153,6 +174,16 @@ describe("PrivacyGateway", () => {
     expect(h.provider.requests).toHaveLength(1);
     expect(h.audit.list()[0]).toMatchObject({ status: "budget", payloadSent: null });
     expect(h.audit.list()[0].error).toContain("预算");
+  });
+
+  it("does not prune this month's spending even when the retention period is shorter", async () => {
+    h = await gatewayHarness();
+    h.settings.set("auditRetentionDays", "7");
+    const early = h.audit.insert(row(new Date(2026, 9, 2).getTime()));
+    h.audit.finish(early, { status: "sent", costUsd: 4.999 });
+    expect((await h.gateway.narrate(sampleSource())).status).toBe("budget");
+    expect(h.provider.requests).toHaveLength(0);
+    expect(h.audit.list().map((e) => e.id)).toContain(early);
   });
 
   it("serialises requests so the budget sees the first request's cost", async () => {
@@ -210,6 +241,75 @@ describe("PrivacyGateway", () => {
     h.setConfirm(async () => true);
     expect((await h.gateway.narrate(sampleSource())).status).toBe("ok");
     expect(h.provider.requests).toHaveLength(1);
+  });
+
+  it("never throws even when the log itself throws, and closes the audit row", async () => {
+    h = await gatewayHarness({
+      log: () => {
+        throw new Error("log boom");
+      },
+    });
+    h.settings.set("llmConfirm", "1");
+    h.setConfirm(async () => {
+      throw new Error("dialog crashed");
+    });
+    const r = await h.gateway.narrate(sampleSource());
+    expect(r).toMatchObject({ status: "failed" });
+    expect(h.audit.list()[0]).toMatchObject({ id: r.auditId, status: "declined", payloadSent: null });
+    h.setConfirm(async () => true);
+    expect((await h.gateway.narrate(sampleSource())).status).toBe("ok");
+    expect(h.provider.requests).toHaveLength(1);
+  });
+
+  it("stops waiting for the confirm dialog when the app quits", async () => {
+    h = await gatewayHarness();
+    h.settings.set("llmConfirm", "1");
+    h.setConfirm(() => new Promise<boolean>(() => undefined));
+    const ac = new AbortController();
+    const p = h.gateway.narrate(sampleSource(), ac.signal);
+    await new Promise((r) => setTimeout(r, 20));
+    ac.abort();
+    const r = await p;
+    expect(r.status).toBe("failed");
+    expect(h.provider.requests).toHaveLength(0);
+    expect(h.audit.list()[0]).toMatchObject({ id: r.auditId, status: "declined", payloadSent: null });
+    h.setConfirm(async () => true);
+    expect((await h.gateway.narrate(sampleSource())).status).toBe("ok");
+  });
+
+  it("counts the cost of a 2xx reply that is not a chat completion", async () => {
+    h = await gatewayHarness();
+    h.provider.handle(() => ({ status: 200, raw: "<html>oops</html>", headers: { "content-type": "text/html" } }));
+    const r = await h.gateway.narrate(sampleSource());
+    expect(r.status).toBe("failed");
+    const [entry] = h.audit.list();
+    expect(entry).toMatchObject({ id: r.auditId, status: "sent", payloadSent: h.bodies()[0] });
+    expect(entry.costUsd).toBeGreaterThan(0);
+    expect(entry.error).toContain("JSON");
+  });
+
+  it("still records the cost when the first audit update after a send fails", async () => {
+    h = await gatewayHarness();
+    const finish = h.audit.finish.bind(h.audit);
+    let failures = 1;
+    h.audit.finish = (id, f) => {
+      if (failures-- > 0) throw new Error("database is locked");
+      finish(id, f);
+    };
+    const r = await h.gateway.narrate(sampleSource());
+    expect(r.status).toBe("ok");
+    const [entry] = h.audit.list();
+    expect(entry.status).toBe("sent");
+    expect(entry.costUsd).toBeGreaterThan(0);
+  });
+
+  it("returns failed without throwing when the audit cannot be updated after a send", async () => {
+    h = await gatewayHarness();
+    h.audit.finish = () => {
+      throw new Error("database is locked");
+    };
+    await expect(h.gateway.narrate(sampleSource())).resolves.toMatchObject({ status: "failed" });
+    expect(h.logs.join("\n")).toContain("database is locked");
   });
 
   it("never writes the key into the audit or the log, even when the provider echoes it", async () => {
@@ -310,8 +410,12 @@ describe("PrivacyGateway", () => {
     h = await gatewayHarness();
     const ac = new AbortController();
     ac.abort();
-    expect((await h.gateway.narrate(sampleSource(), ac.signal)).status).toBe("failed");
+    const r = await h.gateway.narrate(sampleSource(), ac.signal);
+    expect(r.status).toBe("failed");
     expect(h.provider.requests).toHaveLength(0);
+    expect(h.confirms).toHaveLength(0);
+    expect(h.audit.list()).toHaveLength(1);
+    expect(h.audit.list()[0]).toMatchObject({ id: r.auditId, status: "declined", payloadSent: null, error: "app 正在退出" });
   });
 
   it("prunes audit rows past the retention period", async () => {

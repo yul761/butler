@@ -78,19 +78,22 @@ export type NewAudit =
   | (NewAuditCommon & { status: "pending" | "sent" | "failed"; payloadSent: string | null })
   | (NewAuditCommon & { status: "blocked" | "budget" | "declined"; payloadSent?: null });
 
-export interface AuditFinish {
-  status: "sent" | "failed" | "declined";
-  /**
-   * 最终发出的请求体和第一次不同时（换了 token 参数名重试）传入；省略时保留之前记录的请求体。
-   * null 表示其实什么都没发出去（例如连接前就失败）：清空 pending 时记下的请求体。declined 时一律不落盘。
-   */
-  payloadSent?: string | null;
+interface AuditFinishCommon {
   response?: string | null;
   tokensIn?: number | null;
   tokensOut?: number | null;
   costUsd?: number | null;
   error?: string | null;
 }
+
+/**
+ * payloadSent：最终发出的请求体和第一次不同时（换了 token 参数名重试）传入；省略时保留之前记录的请求体。
+ * null 表示其实什么都没发出去（例如连接前就失败），清空 pending 时记下的请求体：只有 failed / declined 可以这样传。
+ * declined 时请求体一律不落盘。
+ */
+export type AuditFinish =
+  | (AuditFinishCommon & { status: "sent"; payloadSent?: string })
+  | (AuditFinishCommon & { status: "failed" | "declined"; payloadSent?: string | null });
 
 export class AuditRepo {
   constructor(private readonly db: Db) {}
@@ -107,6 +110,9 @@ export class AuditRepo {
   }
 
   finish(id: number, f: AuditFinish): void {
+    if (f.status === "sent" && (f as { payloadSent?: string | null }).payloadSent === null) {
+      throw new Error("a sent request always has a body");
+    }
     // declined 清空请求体和响应，payloadSent: null 清空请求体；其余字段缺省时保留之前记录的值（例如花费不会被后续的 failed 清零）。
     this.db
       .prepare(

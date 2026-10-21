@@ -158,8 +158,11 @@ export interface GatewayHarness {
 /**
  * 一个连着本地假服务器、用内存数据库的 PrivacyGateway：档位默认 metadata，价格 * 1 2，月预算 5 美元，不需要 key（本机地址）。
  * chat：替换真正的 chatCompletion（测“什么都没发出去就失败”这类本地服务器造不出来的情况）。
+ * log：每条日志记进 logs 之后再交给它（测“日志本身抛错”）。
  */
-export async function gatewayHarness(o: { level?: PrivacyLevel; rng?: Rng; chat?: ChatCall } = {}): Promise<GatewayHarness> {
+export async function gatewayHarness(
+  o: { level?: PrivacyLevel; rng?: Rng; chat?: ChatCall; log?: (msg: string, err?: unknown) => void } = {},
+): Promise<GatewayHarness> {
   const db = memDb();
   const settings = new SettingsRepo(db);
   const audit = new AuditRepo(db);
@@ -182,7 +185,10 @@ export async function gatewayHarness(o: { level?: PrivacyLevel; rng?: Rng; chat?
       confirms.push(text);
       return confirm(text);
     },
-    log: (m, e) => logs.push(e === undefined ? m : `${m} ${e instanceof Error ? e.message : String(e)}`),
+    log: (m, e) => {
+      logs.push(e === undefined ? m : `${m} ${e instanceof Error ? e.message : String(e)}`);
+      o.log?.(m, e);
+    },
   });
   return {
     gateway, provider, settings, audit, terms, keys, box, confirms, logs,
