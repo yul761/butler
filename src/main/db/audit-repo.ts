@@ -155,6 +155,14 @@ export class AuditRepo {
     return r.c;
   }
 
+  /**
+   * 启动时调用：上次运行退出时还停在 pending 的记录一律改成 failed，返回改了几条。
+   * 请求体保留：退出前可能已经发出去了，用户要能看到。
+   */
+  failStalePending(error: string): number {
+    return Number(this.db.prepare(`UPDATE llm_audit SET status = 'failed', error = ? WHERE status = 'pending'`).run(cap(error)).changes);
+  }
+
   /** 删掉 beforeMs 之前的记录（保留期，设计文档 7.7）。 */
   prune(beforeMs: number): number {
     return Number(this.db.prepare(`DELETE FROM llm_audit WHERE ts < ?`).run(beforeMs).changes);

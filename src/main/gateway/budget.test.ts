@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkBudget, costUsd, estimateTokens, monthStart } from "./budget";
+import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart } from "./budget";
 
 const price = { pattern: "*", inputPerMTok: 2, outputPerMTok: 8 };
 
@@ -8,6 +8,14 @@ describe("budget", () => {
     expect(monthStart(new Date(2026, 9, 21, 9, 30).getTime())).toBe(new Date(2026, 9, 1).getTime());
     expect(monthStart(new Date(2027, 0, 1, 0, 0).getTime())).toBe(new Date(2027, 0, 1).getTime());
     expect(monthStart(new Date(2026, 11, 31, 23, 59).getTime())).toBe(new Date(2026, 11, 1).getTime());
+  });
+
+  it("prunes the audit by the retention period but never into the current month", () => {
+    const now = new Date(2026, 9, 21, 9).getTime();
+    expect(auditCutoff(now, 90)).toBe(now - 90 * 86_400_000);
+    expect(auditCutoff(now, 7)).toBe(new Date(2026, 9, 1).getTime());
+    expect(auditCutoff(now, 1)).toBe(new Date(2026, 9, 1).getTime());
+    expect(auditCutoff(new Date(2026, 9, 1, 0, 5).getTime(), 1)).toBe(new Date(2026, 8, 30, 0, 5).getTime());
   });
 
   it("estimates tokens conservatively for Chinese and ASCII", () => {

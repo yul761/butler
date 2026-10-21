@@ -1,5 +1,6 @@
 import type { BriefKind, BriefView, ItemMark } from "../../shared/brief";
 import { IPC, type IpcResult } from "../../shared/ipc";
+import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
 import type {
   CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
@@ -64,6 +65,13 @@ export const api = {
   setSetting: (key: EditableSettingKey, value: string) => call<void>(IPC.settingsSet, key, value),
   resetSetting: (key: EditableSettingKey) => call<void>(IPC.settingsReset, key),
   detectTrackerTools: () => call<McpProbe>(IPC.settingsDetectTrackerTools),
+  llmStatus: () => call<LlmStatus>(IPC.llmStatus),
+  /** key 只发这一次；之后界面只能拿到打码形式。 */
+  saveApiKey: (key: string) => call<LlmStatus>(IPC.llmKeySave, key),
+  clearApiKey: () => call<LlmStatus>(IPC.llmKeyClear),
+  terms: () => call<SensitiveTerm[]>(IPC.termsList),
+  saveTerms: (terms: SensitiveTerm[]) => call<SensitiveTerm[]>(IPC.termsSave, terms),
+  audit: (beforeId?: number) => call<AuditPage>(IPC.auditList, beforeId),
   onNavigate: (cb: (route: { page: "home"; kind?: BriefKind }) => void) => window.butler.on(IPC.appNavigate, cb),
   onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),
   onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),

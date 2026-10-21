@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, nativeImage, Notification, powerMonitor, Tray } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeImage, Notification, powerMonitor, Tray, type MessageBoxOptions } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -7,19 +7,28 @@ import { pathToFileURL } from "node:url";
 import type { Brief } from "../shared/brief";
 import { IPC } from "../shared/ipc";
 import { BriefService } from "./brief/brief-service";
+import { narrateBrief } from "./brief/narrate";
 import { runHeadless } from "./claude/headless";
 import { probeMcpTools } from "./claude/mcp-probe";
 import { projectMcpConfigs } from "./claude/project-mcp";
 import { headlessEnv } from "./claude/spawn";
+import { AuditRepo } from "./db/audit-repo";
 import { BriefsRepo } from "./db/briefs-repo";
 import { openDatabase } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
 import { HandoffsRepo } from "./db/handoffs-repo";
 import { JobsRepo } from "./db/jobs-repo";
 import { MarksRepo } from "./db/marks-repo";
+import { SecretsRepo } from "./db/secrets-repo";
 import { SessionsRepo } from "./db/sessions-repo";
 import { SettingsRepo } from "./db/settings-repo";
+import { TermsRepo } from "./db/terms-repo";
 import { TicketsRepo } from "./db/tickets-repo";
+import { auditCutoff } from "./gateway/budget";
+import { PrivacyGateway } from "./gateway/gateway";
+import { KeyStore } from "./gateway/key-store";
+import { electronSecretBox } from "./gateway/safe-storage";
+import { llmStatus } from "./gateway/status";
 import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { HandoffRunner } from "./handoff/runner";
@@ -36,7 +45,7 @@ import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, tra
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
-import { scheduleConfig } from "./settings/settings-values";
+import { llmConfig, scheduleConfig } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
 import { N } from "./strings";
 import { TicketService } from "./tickets/ticket-service";
@@ -48,6 +57,8 @@ const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
 const HOOK_DISCOVERY_DEBOUNCE_MS = 3000;
 /** 系统空闲超过这么多秒就不算“正在用电脑”（用于 tick 触发早间简报）。 */
 const ACTIVE_IDLE_SECONDS = 120;
+/** 发送前确认最多等这么久，超时视为拒绝：早间任务串行执行，对话框一直开着会挡住后面的任务。 */
+const CONFIRM_TIMEOUT_MS = 5 * 60 * 1000;
 
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -168,6 +179,32 @@ function showEveningNotification(brief: Brief): void {
   lastNotification = n;
 }
 
+/**
+ * 发送前确认（设计文档 7.6）：展示完整的出站内容，默认按钮和取消都是“不发送”。
+ * 有主窗口时把它带到前台并作为父窗口。最多等 CONFIRM_TIMEOUT_MS，超时视为拒绝；
+ * app 正在退出时立即返回 false，对话框打开中开始退出也会被关掉，不会挡住退出。
+ */
+async function confirmSend(outbound: string, quit: AbortSignal): Promise<boolean> {
+  if (quitting || quit.aborted) return false;
+  const signal = AbortSignal.any([AbortSignal.timeout(CONFIRM_TIMEOUT_MS), quit]);
+  const options: MessageBoxOptions = {
+    type: "question",
+    buttons: [N.confirmSend, N.confirmCancel],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+    title: N.confirmTitle,
+    message: N.confirmMessage,
+    detail: outbound,
+    signal,
+  };
+  const w = win && !win.isDestroyed() ? win : null;
+  if (w) showWindow();
+  const r = w ? await dialog.showMessageBox(w, options) : await dialog.showMessageBox(options);
+  // 被超时或退出关掉的对话框一律当作拒绝。
+  return r.response === 0 && !signal.aborted;
+}
+
 async function bootstrap(): Promise<void> {
   const paths = resolvePaths();
   await ensureDirs(paths);
@@ -242,10 +279,30 @@ async function bootstrap(): Promise<void> {
     signal: headlessAbort.signal,
     log: logger,
   });
+  const briefs = new BriefsRepo(db);
   const briefService = new BriefService({
-    tickets, sessions, handoffs, followups, marks: new MarksRepo(db), briefs: new BriefsRepo(db), settings,
+    tickets, sessions, handoffs, followups, marks: new MarksRepo(db), briefs, settings,
     now: Date.now, unclaimedCount: () => sessionService.unclaimed().length,
   });
+
+  const audit = new AuditRepo(db);
+  // 审计的启动收尾，先于一切读写审计的代码：上次退出时没发完的请求记为 failed（请求体保留，可能已经发出），
+  // 再按保留期清理一次（不删本月的记录，预算要用；之后 gateway 每次调用前也会清理）。
+  try {
+    const stale = audit.failStalePending(N.auditStalePending);
+    if (stale > 0) logger(`marked ${stale} audit row(s) left pending by the previous run as failed`);
+    audit.prune(auditCutoff(Date.now(), llmConfig(settings).retentionDays));
+  } catch (e) {
+    logger("audit housekeeping at startup failed", e);
+  }
+  const terms = new TermsRepo(db);
+  const keys = new KeyStore({ secrets: new SecretsRepo(db), box: electronSecretBox, now: Date.now, log: logger });
+  const gateway = new PrivacyGateway({
+    settings, audit, terms, keys, now: Date.now,
+    confirm: (outbound) => confirmSend(outbound, headlessAbort.signal),
+    log: logger,
+  });
+  let briefNarrating = false;
 
   let briefRefreshing = false;
   const dailyDeps: DailyJobDeps = {
@@ -259,6 +316,25 @@ async function bootstrap(): Promise<void> {
       notify();
     },
     aborted: () => headlessAbort.signal.aborted,
+    narrate: async (brief) => {
+      briefNarrating = true;
+      notify();
+      try {
+        await narrateBrief(
+          {
+            narrate: (src, signal) => gateway.narrate(src, signal),
+            briefs,
+            source: (b) => briefService.narrativeSource(b),
+            signal: headlessAbort.signal,
+            log: logger,
+          },
+          brief,
+        );
+      } finally {
+        briefNarrating = false;
+        notify();
+      }
+    },
     onEvening: (brief) => {
       // 退出开始后不再弹通知。
       if (headlessAbort.signal.aborted) return;
@@ -373,7 +449,10 @@ async function bootstrap(): Promise<void> {
 
   registerIpc({
     tickets, ticketService, sessionService, pty, health, followups, handoffs, settings, briefService, runner, scheduler, jobs,
+    keys, terms, audit,
+    llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     briefRefreshing: () => briefRefreshing,
+    briefNarrating: () => briefNarrating,
     rederive: (key) => {
       rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now }, key);
     },

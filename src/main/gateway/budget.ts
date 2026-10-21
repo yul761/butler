@@ -6,6 +6,16 @@ export function monthStart(now: number): number {
   return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
 }
 
+const DAY_MS = 86_400_000;
+
+/**
+ * 审计清理的截止时间：保留期之前的记录删掉，但不早于本月 1 日以后的记录——
+ * 本月的花费要留给预算检查（保留期再短也一样）。gateway 每次调用前和启动时都用它。
+ */
+export function auditCutoff(now: number, retentionDays: number): number {
+  return Math.min(now - retentionDays * DAY_MS, monthStart(now));
+}
+
 const CJK_RE = /[\u3000-\u303f\u3400-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/;
 
 /** 保守估算：CJK 每字 1 个 token，其余每 3 个字符 1 个。只用于发送前的预算检查和响应缺 usage 时的记账。 */

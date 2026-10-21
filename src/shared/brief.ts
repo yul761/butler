@@ -84,4 +84,6 @@ export interface BriefView {
   brief: Brief | null;
   /** 早间刷新（查询 PR / tracker）进行中。 */
   refreshing: boolean;
+  /** 正在生成“今日重点”（个人 API 请求进行中）。 */
+  narrating: boolean;
 }

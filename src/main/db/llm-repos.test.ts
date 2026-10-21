@@ -70,6 +70,20 @@ describe("AuditRepo", () => {
     expect(audit.list()[0].payloadSent).toBe('{"max_completion_tokens":1}');
   });
 
+  it("fails rows left pending by a previous run and keeps their payload", () => {
+    const audit = new AuditRepo(memDb());
+    const stale = audit.insert({ ...base, ts: 1, status: "pending", payloadSent: '{"a":1}' });
+    const sent = audit.insert({ ...base, ts: 2, status: "pending", payloadSent: '{"b":2}' });
+    audit.finish(sent, { status: "sent", costUsd: 0.1 });
+    const blocked = audit.insert({ ...base, ts: 3, status: "blocked", payloadSent: null });
+    expect(audit.failStalePending("quit while sending")).toBe(1);
+    const byId = new Map(audit.list().map((e) => [e.id, e]));
+    expect(byId.get(stale)).toMatchObject({ status: "failed", payloadSent: '{"a":1}', error: "quit while sending" });
+    expect(byId.get(sent)).toMatchObject({ status: "sent", costUsd: 0.1, error: null });
+    expect(byId.get(blocked)).toMatchObject({ status: "blocked", error: null });
+    expect(audit.failStalePending("again")).toBe(0);
+  });
+
   it("clears the pending payload when a failed request never left the machine", () => {
     const audit = new AuditRepo(memDb());
     const id = audit.insert({ ...base, ts: 1, status: "pending", payloadSent: '{"max_tokens":1}' });

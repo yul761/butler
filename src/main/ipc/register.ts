@@ -5,12 +5,17 @@ import { EDITABLE_SETTINGS, isEditableSetting, type EditableSettings } from "../
 import {
   FOLLOWUP_STATUSES, type CreateTicketInput, type FollowupStatus, type JobStateView, type McpProbe, type OpenSessionRequest, type TicketStatus,
 } from "../../shared/types";
+import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { BriefService } from "../brief/brief-service";
+import type { AuditRepo } from "../db/audit-repo";
 import { JOB_MORNING, JOB_NIGHTLY, type JobsRepo } from "../db/jobs-repo";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { SettingsRepo } from "../db/settings-repo";
+import type { TermsRepo } from "../db/terms-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
+import type { KeyStore } from "../gateway/key-store";
+import { auditPage } from "../gateway/status";
 import type { HandoffRunner } from "../handoff/runner";
 import type { HealthService } from "../hooks/health";
 import { addDays, localDate } from "../schedule/calendar";
@@ -20,6 +25,7 @@ import type { SessionService } from "../sessions/session-service";
 import { normalizeSetting, SettingError } from "../settings/settings-values";
 import { TicketError, type TicketService } from "../tickets/ticket-service";
 import { toIpcResult } from "./result";
+import { apiKeyArg, auditCursorArg, termsArg } from "./validate";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -34,8 +40,14 @@ export interface IpcDeps {
   runner: HandoffRunner;
   scheduler: Scheduler;
   jobs: JobsRepo;
+  keys: KeyStore;
+  terms: TermsRepo;
+  audit: AuditRepo;
+  llmStatus: () => LlmStatus;
   /** 早间刷新进行中。 */
   briefRefreshing: () => boolean;
+  /** 正在生成“今日重点”。 */
+  briefNarrating: () => boolean;
   /** followup 状态变化后重新推导 ticket 状态。 */
   rederive: (ticketKey: string) => void;
   detectTrackerTools: () => Promise<McpProbe>;
@@ -118,6 +130,7 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.briefsLatest, (kind: BriefKind): BriefView => ({
     brief: d.briefService.latest(kind === "evening" ? "evening" : "morning"),
     refreshing: d.briefRefreshing(),
+    narrating: d.briefNarrating(),
   }));
   handle(IPC.briefsRegenerate, async (): Promise<JobStateView | null> => {
     if (d.aborted()) return null;
@@ -165,4 +178,25 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
   });
   handle(IPC.settingsDetectTrackerTools, () => d.detectTrackerTools());
+
+  // 个人 API：key 只进不出，界面只拿到打码后的 LlmStatus。参数一律在运行时检查（渲染进程不可信）。
+  handle(IPC.llmStatus, (): LlmStatus => d.llmStatus());
+  handle(IPC.llmKeySave, (key: unknown): LlmStatus => {
+    d.keys.save(apiKeyArg(key));
+    d.notify();
+    return d.llmStatus();
+  });
+  handle(IPC.llmKeyClear, (): LlmStatus => {
+    d.keys.clear();
+    d.notify();
+    return d.llmStatus();
+  });
+  handle(IPC.termsList, (): SensitiveTerm[] => d.terms.list());
+  handle(IPC.termsSave, (terms: unknown): SensitiveTerm[] => {
+    d.terms.replaceAll(termsArg(terms));
+    d.notify();
+    return d.terms.list();
+  });
+  handle(IPC.auditList, (beforeId: unknown): AuditPage =>
+    auditPage({ settings: d.settings, keys: d.keys, audit: d.audit, now: d.now }, auditCursorArg(beforeId)));
 }

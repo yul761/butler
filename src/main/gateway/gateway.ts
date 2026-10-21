@@ -4,7 +4,7 @@ import type { AuditFinish, AuditRepo } from "../db/audit-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TermsRepo } from "../db/terms-repo";
 import { isLoopbackHost, llmConfig } from "../settings/settings-values";
-import { checkBudget, costUsd, estimateTokens, monthStart } from "./budget";
+import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart } from "./budget";
 import type { KeyStore } from "./key-store";
 import { NARRATIVE_MAX_TOKENS, narrativeMessages, parseNarrative } from "./narrative";
 import { project } from "./projection";
@@ -13,7 +13,6 @@ import { defaultRng, Pseudonymizer, restore } from "./pseudonym";
 import { scanOutbound } from "./scanner";
 import type { NarrativeSource, OutboundPayload, Rng } from "./types";
 
-const DAY_MS = 86_400_000;
 const QUITTING = "app 正在退出";
 
 const errorText = (e: unknown): string => {
@@ -112,7 +111,7 @@ export class PrivacyGateway {
     const cfg = llmConfig(this.d.settings);
     const now = this.d.now();
     // 保留期再短也不删本月的记录：本月的花费要留给预算检查。
-    this.d.audit.prune(Math.min(now - cfg.retentionDays * DAY_MS, monthStart(now)));
+    this.d.audit.prune(auditCutoff(now, cfg.retentionDays));
     const level = cfg.level;
     if (level === "off" || !cfg.baseUrl || !cfg.model) return result("off");
 

@@ -31,6 +31,12 @@ export const IPC = {
   settingsSet: "settings:set",
   settingsReset: "settings:reset",
   settingsDetectTrackerTools: "settings:detectTrackerTools",
+  llmStatus: "llm:status",
+  llmKeySave: "llm:keySave",
+  llmKeyClear: "llm:keyClear",
+  termsList: "terms:list",
+  termsSave: "terms:save",
+  auditList: "audit:list",
   appNavigate: "app:navigate",
 } as const;
 
@@ -42,6 +48,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.briefsLatest, IPC.briefsRegenerate, IPC.briefsMark,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
+  IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];
