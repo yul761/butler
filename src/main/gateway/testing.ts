@@ -4,8 +4,16 @@
  */
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { SecretBox } from "./key-store";
-import type { Rng } from "./types";
+import type { PrivacyLevel } from "../../shared/llm";
+import { AuditRepo } from "../db/audit-repo";
+import { SecretsRepo } from "../db/secrets-repo";
+import { SettingsRepo } from "../db/settings-repo";
+import { TermsRepo } from "../db/terms-repo";
+import { memDb } from "../test-utils";
+import { PrivacyGateway } from "./gateway";
+import { KeyStore, type SecretBox } from "./key-store";
+import type { ChatCall } from "./provider";
+import type { NarrativeSource, Rng } from "./types";
 
 /** 可复现的随机数（mulberry32）。 */
 export function seededRng(seed: number): Rng {
@@ -123,5 +131,91 @@ export function fakeSecretBox(o: { available?: boolean; broken?: boolean } = {})
     setBroken: (v) => {
       broken = v;
     },
+  };
+}
+
+/** 夹具里的“现在”：2026-10-21（周三）09:00。 */
+export const HARNESS_NOW = new Date(2026, 9, 21, 9).getTime();
+
+export interface GatewayHarness {
+  gateway: PrivacyGateway;
+  provider: FakeProvider;
+  settings: SettingsRepo;
+  audit: AuditRepo;
+  terms: TermsRepo;
+  keys: KeyStore;
+  box: FakeSecretBox;
+  /** 每次发送前确认收到的文本。 */
+  confirms: string[];
+  logs: string[];
+  setNow(ms: number): void;
+  setConfirm(fn: (text: string) => Promise<boolean>): void;
+  /** 假服务器收到的所有请求体。 */
+  bodies(): string[];
+  close(): Promise<void>;
+}
+
+/**
+ * 一个连着本地假服务器、用内存数据库的 PrivacyGateway：档位默认 metadata，价格 * 1 2，月预算 5 美元，不需要 key（本机地址）。
+ * chat：替换真正的 chatCompletion（测“什么都没发出去就失败”这类本地服务器造不出来的情况）。
+ */
+export async function gatewayHarness(o: { level?: PrivacyLevel; rng?: Rng; chat?: ChatCall } = {}): Promise<GatewayHarness> {
+  const db = memDb();
+  const settings = new SettingsRepo(db);
+  const audit = new AuditRepo(db);
+  const terms = new TermsRepo(db);
+  const box = fakeSecretBox();
+  const logs: string[] = [];
+  const keys = new KeyStore({ secrets: new SecretsRepo(db), box, now: () => 1, log: (m) => logs.push(m) });
+  const provider = await startFakeProvider();
+  settings.set("llmLevel", o.level ?? "metadata");
+  settings.set("llmBaseUrl", provider.baseUrl);
+  settings.set("llmModel", "fake-model");
+  settings.set("llmPrices", "* 1 2");
+  settings.set("llmMonthlyBudgetUsd", "5");
+  let now = HARNESS_NOW;
+  let confirm: (text: string) => Promise<boolean> = async () => true;
+  const confirms: string[] = [];
+  const gateway = new PrivacyGateway({
+    settings, audit, terms, keys, now: () => now, rng: o.rng, chat: o.chat,
+    confirm: (text) => {
+      confirms.push(text);
+      return confirm(text);
+    },
+    log: (m, e) => logs.push(e === undefined ? m : `${m} ${e instanceof Error ? e.message : String(e)}`),
+  });
+  return {
+    gateway, provider, settings, audit, terms, keys, box, confirms, logs,
+    setNow: (ms) => {
+      now = ms;
+    },
+    setConfirm: (fn) => {
+      confirm = fn;
+    },
+    bodies: () => provider.requests.map((r) => r.body),
+    close: () => provider.close(),
+  };
+}
+
+/** 典型的简报数据：PROJ-12（进行中，带自由文本）和 PROJ-123（等 review，PR 已批准），仓库 acme-billing，分支 feature/PROJ-12-login。 */
+export function sampleSource(): NarrativeSource {
+  return {
+    date: "2026-10-21",
+    tickets: [
+      {
+        key: "PROJ-12", status: "active", pr: null, daysInStatus: 1, idleDays: 0, doneLastDay: 2,
+        nextSteps: ["修好 PROJ-12 的登录"], blockers: [],
+        followups: [{ kind: "config", trigger: "after_merge", description: "改 acme-billing 的 staging 配置", overdueDays: null }],
+      },
+      {
+        key: "PROJ-123", status: "in_review", pr: { state: "open", review: "approved" }, daysInStatus: 3, idleDays: 1, doneLastDay: 0,
+        nextSteps: [], blockers: [], followups: [],
+      },
+    ],
+    items: [
+      { section: "first", rule: "pr_approved", ticketKey: "PROJ-123", days: null, count: null },
+      { section: "today", rule: "next_step", ticketKey: "PROJ-12", days: null, count: null },
+    ],
+    known: { tickets: ["PROJ-12", "PROJ-123"], repos: ["acme-billing"], branches: ["feature/PROJ-12-login"] },
   };
 }

@@ -70,6 +70,13 @@ describe("AuditRepo", () => {
     expect(audit.list()[0].payloadSent).toBe('{"max_completion_tokens":1}');
   });
 
+  it("clears the pending payload when a failed request never left the machine", () => {
+    const audit = new AuditRepo(memDb());
+    const id = audit.insert({ ...base, ts: 1, status: "pending", payloadSent: '{"max_tokens":1}' });
+    audit.finish(id, { status: "failed", payloadSent: null, error: "connect refused" });
+    expect(audit.list()[0]).toMatchObject({ status: "failed", payloadSent: null, error: "connect refused" });
+  });
+
   it("sums the cost since a time, pages newest first and prunes old rows", () => {
     const audit = new AuditRepo(memDb());
     const a = audit.insert({ ...base, ts: 1, status: "pending", payloadSent: "a" });
