@@ -132,3 +132,9 @@ export interface HandoffRecord {
   rawText: string | null;
   sourceRef: string | null;
 }
+
+/** 一次 handoff / 刷新的结果（“立即 handoff”按钮会显示它）。 */
+export type HandoffOutcome =
+  | { ticketKey: string; status: "stored"; handoffId: number; degraded: boolean }
+  | { ticketKey: string; status: "skipped"; reason: "rate_limited" | "no_session" }
+  | { ticketKey: string; status: "failed"; reason: string; message: string };
