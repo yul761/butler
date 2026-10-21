@@ -18,6 +18,8 @@ export interface HeadlessRequest {
   cwd: string;
   env: Record<string, string>;
   timeoutMs?: number;
+  /** 取消：杀整棵进程树并以 aborted 结束。 */
+  signal?: AbortSignal;
 }
 
 /** `--output-format json` 的结果（验证记录 V1）。 */
@@ -33,7 +35,7 @@ export interface ClaudeResult {
   costUsd: number | null;
 }
 
-export type HeadlessFailure = "timeout" | "spawn_failed" | "exit_nonzero" | "bad_output" | "rate_limited" | "claude_error";
+export type HeadlessFailure = "timeout" | "spawn_failed" | "exit_nonzero" | "bad_output" | "rate_limited" | "claude_error" | "aborted";
 
 export type HeadlessOutcome =
   | { ok: true; result: ClaudeResult }
@@ -58,12 +60,20 @@ const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 
 /** 解析 `--output-format json` 的输出：一个 type=result 的对象（防御性地也接受消息数组）。 */
 export function parseClaudeJson(stdout: string): ClaudeResult | null {
-  let v: unknown;
-  try {
-    v = JSON.parse(stdout.trim());
-  } catch {
-    return null;
+  const parse = (t: string): unknown => {
+    try {
+      return JSON.parse(t.trim());
+    } catch {
+      return undefined;
+    }
+  };
+  let v = parse(stdout);
+  if (v === undefined) {
+    // 整段解析失败时，退而求其次：最后一个非空行（前面可能混进了警告行）。
+    const last = stdout.split("\n").map((l) => l.trim()).filter(Boolean).pop();
+    v = last ? parse(last) : undefined;
   }
+  if (v === undefined) return null;
   const isResult = (m: unknown) => !!m && typeof m === "object" && (m as { type?: unknown }).type === "result";
   const obj = Array.isArray(v) ? [...v].reverse().find(isResult) : v;
   if (!isResult(obj)) return null;
@@ -90,17 +100,34 @@ export function isRateLimited(r: ClaudeResult | null, stderr: string): boolean {
   return r?.apiErrorStatus === 429 || r?.apiErrorStatus === 529 || RATE_LIMIT_RE.test(`${r?.resultText ?? ""}\n${stderr}`);
 }
 
-/** 结束子进程及其子进程。Windows 上 claude.cmd 经过 cmd.exe，必须杀整棵进程树。 */
+const GRACE_MS = 2000;
+
+/** 结束子进程及其子进程。POSIX 杀整个进程组（即使直接子进程已退出）；Windows 上 claude.cmd 经过 cmd.exe，用 taskkill /T。 */
 export function killTree(child: ChildProcess): void {
-  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+  const pid = child.pid;
+  if (pid === undefined) return;
   if (process.platform === "win32") {
-    execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => undefined);
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    execFile("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true }, () => undefined);
     return;
   }
-  child.kill("SIGTERM");
-  setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-  }, 3000).unref();
+  const sig = (s: NodeJS.Signals) => {
+    try {
+      process.kill(-pid, s);
+    } catch {
+      // 进程组已经不存在。
+    }
+  };
+  sig("SIGTERM");
+  setTimeout(() => sig("SIGKILL"), GRACE_MS).unref();
+}
+
+const CMD_META = /[&|<>^%]/;
+
+/** Windows 上 .cmd/.bat 的参数转义不可靠：含引号又含 cmd 元字符的参数一律拒绝，返回第一个这样的参数。 */
+export function unsafeCmdArg(args: string[], file: string, platform: NodeJS.Platform): string | null {
+  if (platform !== "win32" || !/\.(cmd|bat)$/i.test(file)) return null;
+  return args.find((a) => a.includes('"') && CMD_META.test(a)) ?? null;
 }
 
 export const runHeadless: HeadlessRun = (req) =>
@@ -110,24 +137,58 @@ export const runHeadless: HeadlessRun = (req) =>
     let stdout = "";
     let stderr = "";
     let child: ChildProcess | undefined;
+    let hardTimer: NodeJS.Timeout | undefined;
     const timeoutMs = req.timeoutMs ?? HEADLESS_TIMEOUT_MS;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      if (child) killTree(child);
-    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (hardTimer) clearTimeout(hardTimer);
+      req.signal?.removeEventListener("abort", onAbort);
+    };
     const finish = (o: HeadlessOutcome) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       resolve(o);
     };
+    const release = () => {
+      child?.stdin?.destroy();
+      child?.stdout?.destroy();
+      child?.stderr?.destroy();
+    };
+    const timeoutOutcome = (): HeadlessOutcome => ({ ok: false, reason: "timeout", message: `超过 ${Math.round(timeoutMs / 1000)} 秒没有完成`, result: null });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (child) killTree(child);
+      // 后代进程可能还握着管道，close 迟迟不来：到期强制放手并结束。
+      hardTimer = setTimeout(() => {
+        release();
+        finish(timeoutOutcome());
+      }, GRACE_MS);
+    }, timeoutMs);
+    function onAbort() {
+      if (child) killTree(child);
+      release();
+      finish({ ok: false, reason: "aborted", message: "已取消", result: null });
+    }
+
+    if (req.signal?.aborted) {
+      finish({ ok: false, reason: "aborted", message: "已取消", result: null });
+      return;
+    }
+    const bad = unsafeCmdArg(req.args, req.claudePath, process.platform);
+    if (bad !== null) {
+      finish({ ok: false, reason: "spawn_failed", message: "参数含引号和 cmd 元字符，在 Windows 的 .cmd 下无法安全传递", result: null });
+      return;
+    }
 
     try {
-      child = spawn(req.claudePath, req.args, { cwd: req.cwd, env: req.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      // POSIX 上独立进程组，超时/取消时可以整组杀掉；仍然正常等待它退出（不 unref）。
+      child = spawn(req.claudePath, req.args, { cwd: req.cwd, env: req.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: process.platform !== "win32" });
     } catch (e) {
       finish({ ok: false, reason: "spawn_failed", message: e instanceof Error ? e.message : String(e), result: null });
       return;
     }
+    req.signal?.addEventListener("abort", onAbort, { once: true });
 
     const proc = child;
     proc.stdout?.setEncoding("utf8");
@@ -141,7 +202,7 @@ export const runHeadless: HeadlessRun = (req) =>
     proc.on("error", (e) => finish({ ok: false, reason: "spawn_failed", message: e.message, result: null }));
     proc.on("close", (code) => {
       if (timedOut) {
-        finish({ ok: false, reason: "timeout", message: `超过 ${Math.round(timeoutMs / 1000)} 秒没有完成`, result: null });
+        finish(timeoutOutcome());
         return;
       }
       const result = parseClaudeJson(stdout);
@@ -151,8 +212,9 @@ export const runHeadless: HeadlessRun = (req) =>
         finish({ ok: false, reason, message, result: null });
         return;
       }
-      if (result.isError || code !== 0) {
-        finish({ ok: false, reason: isRateLimited(result, stderr) ? "rate_limited" : "claude_error", message: (result.resultText || stderr).slice(0, 500), result });
+      if (result.isError || code !== 0 || result.subtype !== "success") {
+        const message = (result.resultText || stderr || result.subtype || `exit ${code}`).slice(0, 500);
+        finish({ ok: false, reason: isRateLimited(result, stderr) ? "rate_limited" : "claude_error", message, result });
         return;
       }
       finish({ ok: true, result });

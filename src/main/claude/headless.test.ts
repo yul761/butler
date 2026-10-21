@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir, writeFakeClaude } from "../test-utils";
-import { headlessArgs, isRateLimited, parseClaudeJson, runHeadless } from "./headless";
+import { headlessArgs, isRateLimited, parseClaudeJson, runHeadless, unsafeCmdArg } from "./headless";
 
 const env = () => ({ ...process.env }) as Record<string, string>;
 
@@ -57,9 +59,14 @@ describe("runHeadless with a fake claude executable", () => {
     const dir = tempDir();
     const fake = writeFakeClaude(dir, "result({ ok: true });");
     const tricky = ['{"type":"object","properties":{"a":{"type":"string"}}}', "Bash(gh pr view:*)", "张 三 & echo pwned", "100%", "a^b|c"];
+    const hostile = '{"d":"a & b > c ^ (x) 100%"}';
+    const winCmd = process.platform === "win32";
     const prompt = '多行\n提示 "引号" $HOME %PATH% `x`';
     const out = await runHeadless({ claudePath: fake.path, args: tricky, prompt, cwd: dir, env: env() });
     expect(out).toMatchObject({ ok: true, result: { sessionId: "fork-1", structured: { ok: true } } });
+    const refused = await runHeadless({ claudePath: fake.path, args: [...tricky, hostile], prompt, cwd: dir, env: env() });
+    if (winCmd) expect(refused).toMatchObject({ ok: false, reason: "spawn_failed" });
+    else expect(refused).toMatchObject({ ok: true });
     const [call] = fake.calls();
     expect(call.args).toEqual(tricky);
     expect(call.input).toBe(prompt);
@@ -105,5 +112,61 @@ describe("runHeadless with a fake claude executable", () => {
     expect(await runHeadless({ claudePath: `${dir}/missing-claude`, args: [], prompt: "x", cwd: dir, env: env() })).toMatchObject({
       ok: false, reason: "spawn_failed",
     });
+  });
+
+  it("settles on timeout even when a grandchild holds stderr, and kills the grandchild", async () => {
+    if (process.platform === "win32") return;
+    const dir = tempDir();
+    const pidFile = join(dir, "gc.pid");
+    const fake = writeFakeClaude(
+      dir,
+      `const gc = require("node:child_process").spawn("sleep", ["30"], { stdio: ["ignore", "ignore", "inherit"] });
+       fs.writeFileSync(${JSON.stringify(pidFile)}, String(gc.pid)); setInterval(() => {}, 1000);`,
+    );
+    const started = Date.now();
+    const out = await runHeadless({ claudePath: fake.path, args: [], prompt: "x", cwd: dir, env: env(), timeoutMs: 300 });
+    expect(out).toMatchObject({ ok: false, reason: "timeout" });
+    expect(Date.now() - started).toBeLessThan(3000);
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(() => process.kill(pid, 0)).toThrow();
+  }, 10_000);
+
+  it("treats a non-success subtype as claude_error even with is_error false", async () => {
+    const dir = tempDir();
+    const fake = writeFakeClaude(dir, 'emit({ type: "result", subtype: "error_max_turns", is_error: false, session_id: "m", result: "" });');
+    expect(await runHeadless({ claudePath: fake.path, args: [], prompt: "x", cwd: dir, env: env() })).toMatchObject({
+      ok: false, reason: "claude_error", message: "error_max_turns", result: { sessionId: "m" },
+    });
+  });
+
+  it("settles once with aborted when the signal fires", async () => {
+    const dir = tempDir();
+    const fake = writeFakeClaude(dir, "setInterval(() => {}, 1000);");
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 200);
+    const out = await runHeadless({ claudePath: fake.path, args: [], prompt: "x", cwd: dir, env: env(), signal: ac.signal });
+    expect(out).toMatchObject({ ok: false, reason: "aborted" });
+    const pre = new AbortController();
+    pre.abort();
+    expect(await runHeadless({ claudePath: fake.path, args: [], prompt: "x", cwd: dir, env: env(), signal: pre.signal })).toMatchObject({ reason: "aborted" });
+  }, 10_000);
+
+  it("falls back to the last non-empty line when stdout has extra lines", async () => {
+    const dir = tempDir();
+    const fake = writeFakeClaude(dir, 'process.stdout.write("warning: something\\n"); result({ ok: 1 }); process.stdout.write("\\n");');
+    expect(await runHeadless({ claudePath: fake.path, args: [], prompt: "x", cwd: dir, env: env() })).toMatchObject({ ok: true, result: { structured: { ok: 1 } } });
+    expect(parseClaudeJson(`noise\n${JSON.stringify(OBSERVED)}\n\n`)?.sessionId).toBe(OBSERVED.session_id);
+  });
+});
+
+describe("unsafeCmdArg", () => {
+  it("flags quotes combined with cmd metacharacters, only for win32 .cmd/.bat", () => {
+    const bad = '{"d":"a & b"}';
+    expect(unsafeCmdArg(["ok", bad], "C:\\npm\\claude.cmd", "win32")).toBe(bad);
+    expect(unsafeCmdArg([bad], "C:\\x\\claude.BAT", "win32")).toBe(bad);
+    expect(unsafeCmdArg(['{"a":1}', "a & b", "100%"], "claude.cmd", "win32")).toBeNull();
+    expect(unsafeCmdArg([bad], "claude.exe", "win32")).toBeNull();
+    expect(unsafeCmdArg([bad], "/usr/bin/claude.cmd", "darwin")).toBeNull();
   });
 });

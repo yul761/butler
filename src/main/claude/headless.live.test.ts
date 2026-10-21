@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { makeRepo } from "../test-utils";
+import { makeRepo, tempDir } from "../test-utils";
 import { headlessArgs, READ_ONLY_TOOLS, runHeadless } from "./headless";
 import { locateClaude, readLoginShellPath } from "./locate";
 import { headlessEnv } from "./spawn";
@@ -26,7 +26,8 @@ describe.skipIf(!process.env.BUTLER_LIVE_CLAUDE)("runHeadless against the real c
       cwd: repo,
       args: headlessArgs({ schema, allowedTools: READ_ONLY_TOOLS }),
       prompt: "先运行 `git status`，再尝试创建文件 live.txt（内容 x）。然后回答：gitClean = 工作区是否干净，wroteFile = live.txt 现在是否存在。",
-      env: headlessEnv(process.env, { pathValue, runId: "live-test" }),
+      // BUTLER_HOME 指向临时目录：用户级 butler-hook 的上报只会落进临时 inbox。
+      env: { ...headlessEnv(process.env, { pathValue, runId: "live-test" }), BUTLER_HOME: tempDir("butler-home-") },
     });
     expect(out.ok).toBe(true);
     if (!out.ok) return;
