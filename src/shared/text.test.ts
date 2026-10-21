@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitizePrefill, stripControl } from "./text";
+import { formatDuration, sanitizePrefill, stripControl } from "./text";
 
 describe("stripControl", () => {
   it("removes C0, DEL and C1 control characters but keeps normal text", () => {
@@ -30,5 +30,13 @@ describe("sanitizePrefill", () => {
 
   it("keeps emoji in the middle of the text", () => {
     expect(sanitizePrefill("继续 😀 做 PROJ-1")).toBe("继续 😀 做 PROJ-1");
+  });
+});
+
+describe("formatDuration", () => {
+  it("never says 0 seconds", () => {
+    expect(formatDuration(300)).toBe("300 毫秒");
+    expect(formatDuration(1499)).toBe("1 秒");
+    expect(formatDuration(5 * 60 * 1000)).toBe("300 秒");
   });
 });

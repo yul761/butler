@@ -5,6 +5,30 @@ import { headlessEnv } from "./spawn";
 import { tempDir, writeFakeClaude } from "../test-utils";
 import { parseInitMessage, probeMcpTools, suggestReadOnly } from "./mcp-probe";
 
+/** 有界轮询：等文件出现并返回内容；超时抛错。 */
+async function waitForFile(path: string, ms: number): Promise<string> {
+  const end = Date.now() + ms;
+  while (!existsSync(path)) {
+    if (Date.now() > end) throw new Error(`file not written within ${ms} ms: ${path}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return readFileSync(path, "utf8");
+}
+
+/** 有界轮询：进程是否在 ms 毫秒内死掉。 */
+async function waitUntilDead(pid: number, ms: number): Promise<boolean> {
+  const end = Date.now() + ms;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    if (Date.now() > end) return false;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 /** 验证记录 V3：stream-json 的 init 消息（只保留相关字段）。 */
 const INIT = {
   type: "system",
@@ -98,10 +122,10 @@ emit(${JSON.stringify(INIT)}); setTimeout(() => {}, 60000);`;
     expect(call.input).toBe("Reply with OK.");
     expect(call.args.join(" ")).not.toContain("Reply with OK");
     if (process.platform === "win32") return;
-    expect(existsSync(gcPid)).toBe(true);
-    const pid = Number(readFileSync(gcPid, "utf8"));
-    await new Promise((r) => setTimeout(r, 500));
-    expect(() => process.kill(pid, 0)).toThrow();
+    // 孙进程的 pid 文件由子进程写，有界地等它出现，再短轮询确认它真的死了。
+    const pid = Number(await waitForFile(gcPid, 5000));
+    expect(Number.isInteger(pid) && pid > 0).toBe(true);
+    expect(await waitUntilDead(pid, 2000)).toBe(true);
   }, 20_000);
 });
 

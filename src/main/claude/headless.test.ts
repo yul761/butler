@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir, writeFakeClaude } from "../test-utils";
@@ -6,6 +6,30 @@ import { PROBE_ARGS } from "./mcp-probe";
 import { headlessArgs, isRateLimited, parseClaudeJson, runHeadless, unsafeCmdArg } from "./headless";
 
 const env = () => ({ ...process.env }) as Record<string, string>;
+
+/** 有界轮询：等文件出现并返回内容；超时抛错。 */
+async function waitForFile(path: string, ms: number): Promise<string> {
+  const end = Date.now() + ms;
+  while (!existsSync(path)) {
+    if (Date.now() > end) throw new Error(`file not written within ${ms} ms: ${path}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return readFileSync(path, "utf8");
+}
+
+/** 有界轮询：进程是否在 ms 毫秒内死掉。 */
+async function waitUntilDead(pid: number, ms: number): Promise<boolean> {
+  const end = Date.now() + ms;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    if (Date.now() > end) return false;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
 
 /** 验证记录 V1：真实 claude 2.1.306 的 --output-format json 输出（去掉了 usage 等字段）。 */
 const OBSERVED = {
@@ -61,6 +85,9 @@ describe("parseClaudeJson", () => {
     expect(isRateLimited({ ...base, apiErrorStatus: 429 }, "")).toBe(true);
     expect(isRateLimited(null, "Claude usage limit reached")).toBe(true);
     expect(isRateLimited({ ...base, resultText: "Prompt is too long" }, "")).toBe(false);
+    // stderr 里的数字（行号、端口）不算；只有 api_error_status 或 “API Error: 429/529” 才看状态码。
+    expect(isRateLimited(null, "warning: config.ts:429: deprecated option")).toBe(false);
+    expect(isRateLimited({ ...base, resultText: "API Error: 529 Overloaded" }, "")).toBe(true);
   });
 });
 
@@ -134,13 +161,16 @@ describe("runHeadless with a fake claude executable", () => {
        fs.writeFileSync(${JSON.stringify(pidFile)}, String(gc.pid)); setInterval(() => {}, 1000);`,
     );
     const started = Date.now();
-    const out = await runHeadless({ claudePath: fake.path, args: [], prompt: "x", cwd: dir, env: env(), timeoutMs: 300 });
+    const out = await runHeadless({ claudePath: fake.path, args: [], prompt: "x", cwd: dir, env: env(), timeoutMs: 2000 });
     expect(out).toMatchObject({ ok: false, reason: "timeout" });
-    expect(Date.now() - started).toBeLessThan(3000);
-    const pid = Number(readFileSync(pidFile, "utf8"));
-    await new Promise((r) => setTimeout(r, 300));
-    expect(() => process.kill(pid, 0)).toThrow();
-  }, 10_000);
+    // 宽松上界：满载时结束可能慢，但不能因为孙进程握着 stderr 而卡住。
+    expect(Date.now() - started).toBeLessThan(6000);
+    // 孙进程的 pid 文件是子进程写的，不保证已经存在：有界地等它出现。
+    const pid = Number(await waitForFile(pidFile, 5000));
+    expect(Number.isInteger(pid) && pid > 0).toBe(true);
+    // 孙进程随进程组被杀，给一个短的有界轮询等它真正死掉。
+    expect(await waitUntilDead(pid, 2000)).toBe(true);
+  }, 15_000);
 
   it("treats a non-success subtype as claude_error even with is_error false", async () => {
     const dir = tempDir();

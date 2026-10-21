@@ -21,3 +21,8 @@ export function sanitizePrefill(text: string, limit = PREFILL_LIMIT): string {
   const cut = last >= 0xd800 && last <= 0xdbff ? limit - 1 : limit;
   return flat.slice(0, cut).trimEnd();
 }
+
+/** 给用户看的时长：不到一秒时用毫秒，免得出现“超过 0 秒”。 */
+export function formatDuration(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)} 毫秒` : `${Math.round(ms / 1000)} 秒`;
+}

@@ -49,12 +49,13 @@ export function parseJsonLoose(text: string): unknown {
   return undefined;
 }
 
-const HANDOFF_BLOCK_RE = /```butler-handoff[^\n]*\n([\s\S]*?)\n?```/g;
+/** 信息串必须正好是 butler-handoff，后面只能跟空白再接别的（```butler-handoffX 不算）。 */
+const HANDOFF_BLOCK_RE = /```butler-handoff(?:[ \t][^\n]*)?\n([\s\S]*?)\n?```/g;
 
-/** 最后一个 ```butler-handoff 代码块的内容；没有就是 null。 */
+/** 最后一个非空的 ```butler-handoff 代码块的内容；没有就是 null。 */
 export function extractHandoffBlock(text: string): string | null {
-  const all = [...text.matchAll(HANDOFF_BLOCK_RE)];
-  return all.length ? all[all.length - 1][1].trim() : null;
+  const blocks = [...text.matchAll(HANDOFF_BLOCK_RE)].map((m) => m[1].trim()).filter(Boolean);
+  return blocks.length ? blocks[blocks.length - 1] : null;
 }
 
 /** `--json-schema` 的结果在 structured_output；没有时退回解析 result 文本。 */

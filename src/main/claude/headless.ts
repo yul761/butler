@@ -1,5 +1,6 @@
 import { execFile, type ChildProcess } from "node:child_process";
 import spawn from "cross-spawn";
+import { formatDuration } from "../../shared/text";
 
 export const HEADLESS_TIMEOUT_MS = 5 * 60 * 1000;
 const STDOUT_LIMIT = 20 * 1024 * 1024;
@@ -100,11 +101,17 @@ export function parseClaudeJson(stdout: string): ClaudeResult | null {
   };
 }
 
-const RATE_LIMIT_RE = /rate.?limit|usage limit|quota|overloaded|too many requests|\b429\b|\b529\b/i;
+const RATE_LIMIT_TEXT_RE = /rate.?limit|usage limit|quota|overloaded|too many requests/i;
+const API_ERROR_STATUS_RE = /\bAPI Error:\s*(?:429|529)\b/i;
 
-/** 额度用完或被限流（启发式：状态码或文本）。只在运行失败时调用。 */
+/**
+ * 额度用完或被限流（启发式）。只在运行失败时调用。
+ * 状态码只看 api_error_status 和 result 里的 “API Error: 429/529”：stderr 里随便一个 429（行号、端口）不算。
+ */
 export function isRateLimited(r: ClaudeResult | null, stderr: string): boolean {
-  return r?.apiErrorStatus === 429 || r?.apiErrorStatus === 529 || RATE_LIMIT_RE.test(`${r?.resultText ?? ""}\n${stderr}`);
+  if (r?.apiErrorStatus === 429 || r?.apiErrorStatus === 529) return true;
+  if (API_ERROR_STATUS_RE.test(r?.resultText ?? "")) return true;
+  return RATE_LIMIT_TEXT_RE.test(`${r?.resultText ?? ""}\n${stderr}`);
 }
 
 const GRACE_MS = 2000;
@@ -162,7 +169,7 @@ export const runHeadless: HeadlessRun = (req) =>
       child?.stdout?.destroy();
       child?.stderr?.destroy();
     };
-    const timeoutOutcome = (): HeadlessOutcome => ({ ok: false, reason: "timeout", message: `超过 ${Math.round(timeoutMs / 1000)} 秒没有完成`, result: null });
+    const timeoutOutcome = (): HeadlessOutcome => ({ ok: false, reason: "timeout", message: `超过 ${formatDuration(timeoutMs)} 没有完成`, result: null });
     const timer = setTimeout(() => {
       timedOut = true;
       if (child) killTree(child);

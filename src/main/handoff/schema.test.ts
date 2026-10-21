@@ -65,6 +65,12 @@ describe("loose parsing", () => {
     expect(extractHandoffBlock('```json\n{}\n```')).toBeNull();
   });
 
+  it("ignores look-alike info strings and an empty last block", () => {
+    expect(extractHandoffBlock('```butler-handoffX\n{"n":1}\n```')).toBeNull();
+    expect(extractHandoffBlock('```butler-handoff json\n{"n":1}\n```')).toBe('{"n":1}');
+    expect(extractHandoffBlock('```butler-handoff\n{"n":1}\n```\n```butler-handoff\n\n```')).toBe('{"n":1}');
+  });
+
   it("prefers structured_output and falls back to the result text", () => {
     expect(pickStructured({ structured: { a: 1 }, resultText: "x" })).toEqual({ a: 1 });
     expect(pickStructured({ structured: null, resultText: '{"b":2}' })).toEqual({ b: 2 });

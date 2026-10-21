@@ -7,9 +7,14 @@ export class GitError extends Error {
   }
 }
 
+/** git 一律在 C locale 下跑：gitErrorSummary 按英文的 fatal: / error: 前缀解析。 */
+export function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...base, LC_ALL: "C" };
+}
+
 export function git(cwd: string, args: string[]): Promise<string> {
   return new Promise((done, fail) => {
-    execFile("git", args, { cwd, windowsHide: true, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile("git", args, { cwd, env: gitEnv(process.env), windowsHide: true, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) fail(new GitError(`git ${args.join(" ")} failed: ${String(stderr).trim() || err.message}`, String(stderr)));
       else done(String(stdout).trim());
     });
@@ -73,9 +78,11 @@ export async function isValidBranchName(cwd: string, name: string): Promise<bool
   }
 }
 
-/** git 报错里给用户看的那一句：第一行 fatal:/error: 的原因，去掉前缀。 */
+export const GIT_SUMMARY_LIMIT = 300;
+
+/** git 报错里给用户看的那一句：第一行 fatal:/error: 的原因，去掉前缀，最多 300 字符。 */
 export function gitErrorSummary(e: GitError): string {
   const lines = e.stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const line = lines.find((l) => /^(fatal|error):/i.test(l)) ?? lines[0] ?? e.message;
-  return line.replace(/^(fatal|error):\s*/i, "");
+  return line.replace(/^(fatal|error):\s*/i, "").slice(0, GIT_SUMMARY_LIMIT);
 }
