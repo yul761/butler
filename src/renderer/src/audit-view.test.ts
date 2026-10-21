@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AuditEntry } from "../../shared/llm";
-import { auditStatusLabel, auditSummary, blockedText, prettyBody, prettyJson } from "./audit-view";
+import { auditStatusLabel, auditSummary, blockedText, bodyHeading, bodyMaybeSent, prettyBody, prettyJson } from "./audit-view";
 
 const entry = (over: Partial<AuditEntry> = {}): AuditEntry => ({
   id: 1, ts: 1, provider: "api.deepseek.com", model: "deepseek-chat", level: "metadata", status: "sent",
@@ -53,5 +53,14 @@ describe("audit view helpers", () => {
     const e = entry({ status: "failed", payloadSent: '{"a":1}', error: "x" });
     expect(auditSummary(e)).toContain("发送失败");
     expect(prettyBody(e.payloadSent ?? "")).toBe('{\n  "a": 1\n}');
+  });
+
+  it("only calls the body 'sent' when the call is known to have been sent", () => {
+    expect(bodyHeading("sent")).toBe("发出的内容");
+    for (const st of ["failed", "pending"] as const) {
+      expect(bodyHeading(st)).toBe("可能已发出的内容");
+      expect(bodyMaybeSent(st)).toBe(true);
+    }
+    expect(bodyMaybeSent("sent")).toBe(false);
   });
 });

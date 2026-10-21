@@ -1,20 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AuditEntry, AuditPage as AuditPageData } from "../../../shared/llm";
 import { api } from "../api";
-import { auditSummary, blockedText, prettyBody, prettyJson } from "../audit-view";
+import { auditSummary, blockedText, bodyHeading, bodyMaybeSent, prettyBody, prettyJson } from "../audit-view";
 import { reportError } from "../errors";
 import { formatUsd } from "../privacy-form";
 import { S } from "../strings";
 
-const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 /** 展开后才排版：几百 KB 的请求体不在列表渲染时处理。所有文本都只作为 React 文本子节点渲染。 */
 function EntryDetail({ e }: { e: AuditEntry }) {
   return (
     <>
       {e.blockedReason && <p className="error">{S.auditBlocked(blockedText(e.blockedReason))}</p>}
-      {e.error && <p className="error">{e.error}</p>}
-      <h4>{S.auditPayload}</h4>
+      {e.error ? <p className="error">{e.error}</p> : e.status === "declined" && <p className="muted">{S.auditDeclined}</p>}
+      {e.payloadSent && bodyMaybeSent(e.status) && <p className="muted">{S.auditMaybeSentNote}</p>}
+      <h4>{bodyHeading(e.status)}</h4>
       <pre className="raw">{e.payloadSent ? prettyBody(e.payloadSent) : S.auditNothingSent}</pre>
       {e.response && (
         <>
@@ -33,13 +34,22 @@ export function AuditPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [open, setOpen] = useState<Set<number>>(new Set());
 
+  const [failed, setFailed] = useState(false);
+  /** 每次重新加载就加一；翻页请求回来时发现变了就丢弃。 */
+  const gen = useRef(0);
+
   const load = useCallback(async () => {
+    const g = ++gen.current;
     try {
       const p = await api.audit();
+      if (g !== gen.current) return;
+      setFailed(false);
       setPage(p);
       setEntries(p.entries);
       setHasMore(p.hasMore);
     } catch (e) {
+      if (g !== gen.current) return;
+      setFailed(true);
       reportError(e);
     }
   }, []);
@@ -52,10 +62,15 @@ export function AuditPage() {
   async function more() {
     const last = entries[entries.length - 1];
     if (!last) return;
+    const g = gen.current;
     setLoadingMore(true);
     try {
       const p = await api.audit(last.id);
-      setEntries((cur) => [...cur, ...p.entries]);
+      if (g !== gen.current) return;
+      setEntries((cur) => {
+        const seen = new Set(cur.map((x) => x.id));
+        return [...cur, ...p.entries.filter((x) => !seen.has(x.id))];
+      });
       setHasMore(p.hasMore);
     } catch (e) {
       reportError(e);
@@ -64,7 +79,16 @@ export function AuditPage() {
     }
   }
 
-  if (!page) return <p className="empty">{S.loading}</p>;
+  if (!page) {
+    return failed ? (
+      <div className="empty">
+        <p className="error">{S.auditLoadFailed}</p>
+        <button onClick={() => void load()}>{S.retry}</button>
+      </div>
+    ) : (
+      <p className="empty">{S.loading}</p>
+    );
+  }
   return (
     <div className="page">
       <h2>{S.audit}</h2>

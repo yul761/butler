@@ -257,4 +257,9 @@ export const S = {
   narrativeBlocked: "今日重点没有发送：出站内容里有敏感信息（详见审计页）。",
   narrativeBudget: "今日重点没有生成：本月预算已用完，或当前模型在价格表里没有价格。",
   narrativeFailed: "今日重点生成失败（详见审计页）。",
+  auditBodyMaybeSent: "可能已发出的内容",
+  auditMaybeSentNote: "这次调用没有成功完成，下面的内容可能已经发给了服务商。",
+  auditDeclined: "你在确认框里选择了不发送（或确认超时）",
+  auditLoadFailed: "审计记录加载失败。",
+  retry: "重试",
 };
