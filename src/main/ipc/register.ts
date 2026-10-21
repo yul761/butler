@@ -31,7 +31,7 @@ export function registerIpc(d: IpcDeps): void {
     return t;
   });
   handle(IPC.ticketsSetStatus, (key: string, status: TicketStatus | null) => {
-    d.tickets.setStatusManual(key, status);
+    d.tickets.setStatusManual(key, status, d.now());
     d.notify();
   });
   handle(IPC.ticketsArchive, (key: string) => {

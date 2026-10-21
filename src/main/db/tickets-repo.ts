@@ -52,8 +52,22 @@ export class TicketsRepo {
     return rows.map(toTicket);
   }
 
-  setStatusManual(key: string, status: TicketStatus | null): void {
-    this.db.prepare(`UPDATE tickets SET status_manual = ? WHERE key = ?`).run(status, key);
+  /** 自动推导出的状态。只有状态真的变化时才更新 status_changed_at（UPDATE 右边读到的是旧值）。 */
+  setStatus(key: string, status: TicketStatus, at: number): void {
+    this.db
+      .prepare(`UPDATE tickets SET status_changed_at = CASE WHEN status = ? THEN status_changed_at ELSE ? END, status = ? WHERE key = ?`)
+      .run(status, at, status, key);
+  }
+
+  setStatusManual(key: string, status: TicketStatus | null, at: number | null = null): void {
+    this.db.prepare(`UPDATE tickets SET status_manual = ?, status_manual_at = ? WHERE key = ?`).run(status, status ? at : null, key);
+  }
+
+  statusTimes(key: string): { changedAt: number | null; manualAt: number | null } {
+    const r = this.db.prepare(`SELECT status_changed_at, status_manual_at FROM tickets WHERE key = ?`).get(key) as
+      | { status_changed_at: number | null; status_manual_at: number | null }
+      | undefined;
+    return { changedAt: r?.status_changed_at ?? null, manualAt: r?.status_manual_at ?? null };
   }
 
   archive(key: string, at: number): void {

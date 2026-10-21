@@ -1,0 +1,45 @@
+import { describe, expect, it } from "vitest";
+import { SettingsRepo } from "../db/settings-repo";
+import { memDb } from "../test-utils";
+import { normalizeSetting, parseDays, parseTime, parseToolList, parseWorkingDays, scheduleConfig, SettingError, thresholds, trackerTools } from "./settings-values";
+
+describe("settings values", () => {
+  it("parses times, working days, day counts and tool lists", () => {
+    expect(parseTime("16:00")).toEqual({ h: 16, m: 0 });
+    expect(parseTime("7:05")).toEqual({ h: 7, m: 5 });
+    expect(parseTime("24:00")).toBeNull();
+    expect(parseTime("16")).toBeNull();
+    expect([...parseWorkingDays("1, 2,5,9,x")]).toEqual([1, 2, 5]);
+    expect(parseDays("3", 2)).toBe(3);
+    expect(parseDays("-1", 2)).toBe(2);
+    expect(parseToolList("mcp__jira__get_issue, Bash(git status)\nmcp__jira__search mcp__jira__get_issue")).toEqual([
+      "mcp__jira__get_issue", "Bash(git status)", "mcp__jira__search",
+    ]);
+  });
+
+  it("normalizes editable values and rejects bad ones with a SettingError", () => {
+    expect(normalizeSetting("nightlyTime", "7:05")).toBe("07:05");
+    expect(normalizeSetting("workingDays", "5,1,1,0")).toBe("0,1,5");
+    expect(normalizeSetting("workingDays", "")).toBe("");
+    expect(normalizeSetting("trackerTools", "a, b\n\na")).toBe("a\nb");
+    expect(normalizeSetting("staleDays", " 7 ")).toBe("7");
+    expect(() => normalizeSetting("nightlyTime", "25:00")).toThrow(SettingError);
+    expect(() => normalizeSetting("workingDays", "1,7")).toThrow(SettingError);
+    expect(() => normalizeSetting("blockedDays", "two")).toThrow(SettingError);
+    expect(() => normalizeSetting("handoffPrompt", "   ")).toThrow(SettingError);
+    try {
+      normalizeSetting("nightlyTime", "x");
+    } catch (e) {
+      expect((e as SettingError).code).toBe("invalid_setting");
+    }
+  });
+
+  it("reads the schedule, thresholds and tracker tools from settings", () => {
+    const s = new SettingsRepo(memDb());
+    expect(scheduleConfig(s)).toEqual({ nightly: { h: 16, m: 0 }, workingDays: new Set([1, 2, 3, 4, 5]) });
+    expect(thresholds(s)).toEqual({ blockedDays: 2, reviewWaitDays: 2, staleDays: 5 });
+    expect(trackerTools(s)).toEqual([]);
+    s.set("nightlyTime", "garbage");
+    expect(scheduleConfig(s).nightly).toEqual({ h: 16, m: 0 });
+  });
+});

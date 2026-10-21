@@ -1,5 +1,5 @@
 import type { Session, SessionOrigin } from "../../shared/types";
-import type { Db } from "./database";
+import { withTransaction, type Db } from "./database";
 
 interface SessionRow {
   id: string;
@@ -141,15 +141,10 @@ export class SessionsRepo {
 
   /** 删除一行；指向它的 replaced_by 一并清掉，免得前一个 session 被当成“已替换”而从列表里消失。 */
   delete(id: string): void {
-    this.db.exec("BEGIN");
-    try {
+    withTransaction(this.db, () => {
       this.db.prepare(`UPDATE sessions SET replaced_by = NULL WHERE replaced_by = ?`).run(id);
       this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
+    });
     this.forgotten.add(id);
     if (this.forgotten.size > FORGOTTEN_LIMIT) this.forgotten.delete(this.forgotten.values().next().value as string);
   }

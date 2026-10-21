@@ -1,3 +1,4 @@
+import type { Handoff } from "./handoff";
 export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
 export type WorkMode = "worktree" | "branch";
@@ -96,3 +97,38 @@ export const FOLLOWUP_KINDS = ["config", "flag", "deploy", "doc", "other"] as co
 export type FollowupKind = (typeof FOLLOWUP_KINDS)[number];
 export const FOLLOWUP_TRIGGERS = ["after_merge", "after_deploy", "on_date", "none"] as const;
 export type FollowupTrigger = (typeof FOLLOWUP_TRIGGERS)[number];
+
+export const FOLLOWUP_STATUSES = ["open", "done", "snoozed", "ignored"] as const;
+export type FollowupStatus = (typeof FOLLOWUP_STATUSES)[number];
+export type FollowupSource = "jira" | "session" | "manual";
+
+export interface Followup {
+  id: string;
+  ticketKey: string;
+  kind: FollowupKind;
+  description: string;
+  trigger: FollowupTrigger;
+  /** YYYY-MM-DD，只有 trigger 为 on_date 时有值。 */
+  dueDate: string | null;
+  status: FollowupStatus;
+  /** YYYY-MM-DD；推迟到这一天（含）重新出现。 */
+  snoozedUntil: string | null;
+  source: FollowupSource;
+  createdAt: number;
+  doneAt: number | null;
+}
+
+export type HandoffTrigger = "nightly" | "manual" | "command" | "refresh";
+
+export interface HandoffRecord {
+  id: number;
+  ticketKey: string;
+  sessionId: string | null;
+  trigger: HandoffTrigger;
+  createdAt: number;
+  /** 校验通过的 handoff；degraded 时为 null。 */
+  payload: Handoff | null;
+  degraded: boolean;
+  rawText: string | null;
+  sourceRef: string | null;
+}
