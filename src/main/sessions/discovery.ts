@@ -1,4 +1,4 @@
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync, readdirSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -82,6 +82,21 @@ export async function readSessionHead(file: string, maxLines = 200): Promise<Ses
     stream.destroy();
   }
   return head;
+}
+
+/** session 的对话记录文件；Claude Code 只在第一条消息之后才写入，所以刚开就退出的 session 没有它。 */
+export function findTranscript(projectsDir: string, sessionId: string): string | null {
+  let dirs: string[];
+  try {
+    dirs = readdirSync(projectsDir);
+  } catch {
+    return null;
+  }
+  for (const d of dirs) {
+    const file = join(projectsDir, d, `${sessionId}.jsonl`);
+    if (existsSync(file)) return file;
+  }
+  return null;
 }
 
 export async function scanClaudeProjects(projectsDir: string, sinceMs: number): Promise<DiscoveredSession[]> {

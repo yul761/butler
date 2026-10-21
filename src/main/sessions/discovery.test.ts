@@ -5,7 +5,7 @@ import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { memDb, tempDir } from "../test-utils";
-import { extractUserText, readSessionHead, scanClaudeProjects, suggestTicket, syncDiscovered } from "./discovery";
+import { extractUserText, findTranscript, readSessionHead, scanClaudeProjects, suggestTicket, syncDiscovered } from "./discovery";
 
 const ID1 = "11111111-1111-4111-8111-111111111111";
 const ID2 = "22222222-2222-4222-8222-222222222222";
@@ -48,6 +48,18 @@ describe("readSessionHead", () => {
     const filler = Array.from({ length: 50 }, () => ({ type: "summary", cwd: "/w" }));
     writeFileSync(file, lines(...filler, user("late")));
     expect((await readSessionHead(file, 10)).firstPrompt).toBeNull();
+  });
+});
+
+describe("findTranscript", () => {
+  it("finds a session's jsonl in any project dir, or returns null", () => {
+    const root = tempDir();
+    mkdirSync(join(root, "-work-a"));
+    mkdirSync(join(root, "-work-b"));
+    writeFileSync(join(root, "-work-b", `${ID1}.jsonl`), "{}\n");
+    expect(findTranscript(root, ID1)).toBe(join(root, "-work-b", `${ID1}.jsonl`));
+    expect(findTranscript(root, ID2)).toBeNull();
+    expect(findTranscript(join(root, "missing"), ID1)).toBeNull();
   });
 });
 

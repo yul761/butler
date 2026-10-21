@@ -9,7 +9,7 @@ import { fakePtyFactory, makeRepo, memDb } from "../test-utils";
 import { PtyManager } from "./pty-manager";
 import { SessionService } from "./session-service";
 
-async function setup(opts: { claudePath?: string | null; workMode?: "branch" | "worktree"; ready?: () => Promise<void> } = {}) {
+async function setup(opts: { transcripts?: string[]; claudePath?: string | null; workMode?: "branch" | "worktree"; ready?: () => Promise<void> } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -21,6 +21,7 @@ async function setup(opts: { claudePath?: string | null; workMode?: "branch" | "
   const service = new SessionService({
     tickets, sessions, settings, ticketService, pty,
     ready: opts.ready ?? (async () => undefined),
+    transcriptExists: (id) => opts.transcripts === undefined || opts.transcripts.includes(id),
     claude: () => ({ path: opts.claudePath === undefined ? "/bin/claude" : opts.claudePath, pathValue: "/login/bin" }),
     newId: () => `new-${++n}`,
     now: () => 1000,
@@ -50,6 +51,14 @@ describe("SessionService.open", () => {
     sessions.setReplacedBy("a", "b");
     expect(await service.open({ ticketKey: "PROJ-1", sessionId: "a" })).toEqual({ ok: true, termId: "b", alreadyOpen: false });
     expect(spawned[0].args).toEqual(["--resume", "b"]);
+    expect(spawned[0].opts.cwd).toBe("/elsewhere");
+  });
+
+  it("starts a session with no saved transcript fresh under the same id instead of resuming", async () => {
+    const { service, sessions, spawned } = await setup({ transcripts: [] });
+    sessions.insertIfAbsent({ id: "empty", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1 });
+    expect(await service.open({ ticketKey: "PROJ-1", sessionId: "empty" })).toEqual({ ok: true, termId: "empty", alreadyOpen: false });
+    expect(spawned[0].args).toEqual(["--session-id", "empty"]);
     expect(spawned[0].opts.cwd).toBe("/elsewhere");
   });
 

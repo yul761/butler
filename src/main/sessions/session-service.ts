@@ -22,6 +22,8 @@ export interface SessionServiceDeps {
   pty: PtyManager;
   /** 首次 health 探测完成后 resolve；open 据此决定 claude 是否缺失。 */
   ready: () => Promise<void>;
+  /** 这个 session 在磁盘上有没有对话记录（没有就不能 --resume）。 */
+  transcriptExists: (sessionId: string) => boolean;
   claude: () => { path: string | null; pathValue: string };
   newId: () => string;
   now: () => number;
@@ -76,10 +78,10 @@ export class SessionService {
     let cwd: string;
     let args: string[];
     if (head) {
-      // claude --resume 只能在 session 当初的项目目录里找到它
+      // claude --resume 只能在 session 当初的项目目录里找到它；没发过消息的 session 没有记录，用同一个 id 重新开
       termId = head.id;
       cwd = head.cwd || workDir;
-      args = claudeArgs({ mode: "resume", sessionId: head.id });
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id });
     } else {
       termId = this.d.newId();
       cwd = workDir;

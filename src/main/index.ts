@@ -13,7 +13,7 @@ import { createFileLogger, type Logger } from "./logger";
 import { HookInbox } from "./hooks/inbox";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, resolvePaths } from "./paths";
-import { scanClaudeProjects, syncDiscovered, UNCLAIMED_WINDOW_MS } from "./sessions/discovery";
+import { findTranscript, scanClaudeProjects, syncDiscovered, UNCLAIMED_WINDOW_MS } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
@@ -141,6 +141,7 @@ async function bootstrap(): Promise<void> {
   const sessionService = new SessionService({
     tickets, sessions, settings, ticketService, pty,
     ready: () => healthReady,
+    transcriptExists: (id) => findTranscript(paths.claudeProjects, id) !== null,
     claude: () => health.claude(),
     newId: randomUUID,
     now: Date.now,
