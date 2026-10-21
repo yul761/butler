@@ -89,4 +89,31 @@ export const MIGRATIONS: string[] = [
     created_at INTEGER NOT NULL
   );
   `,
+  `
+  CREATE TABLE llm_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    level TEXT NOT NULL CHECK (level IN ('off', 'metadata', 'redacted', 'full')),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'failed', 'blocked', 'budget', 'declined')),
+    payload_sent TEXT,
+    response TEXT,
+    tokens_in INTEGER,
+    tokens_out INTEGER,
+    cost_usd REAL,
+    blocked_reason TEXT,
+    error TEXT
+  );
+  CREATE INDEX llm_audit_ts ON llm_audit(ts);
+  CREATE TABLE sensitive_terms (
+    term TEXT PRIMARY KEY COLLATE NOCASE,
+    category TEXT NOT NULL CHECK (category IN ('person', 'term'))
+  );
+  CREATE TABLE secrets (
+    name TEXT PRIMARY KEY,
+    value BLOB NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  `,
 ];
