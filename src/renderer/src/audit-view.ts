@@ -59,7 +59,7 @@ export function prettyBody(text: string): string {
 
 /** 请求体的标题：只有确认已发送的才叫“发出的内容”；失败或未完成的可能已经发出。 */
 export function bodyHeading(status: AuditStatus): string {
-  return status === "sent" ? S.auditPayload : S.auditBodyMaybeSent;
+  return bodyMaybeSent(status) ? S.auditBodyMaybeSent : S.auditPayload;
 }
 
 /** 失败或未完成的行带着请求体时，提醒这份内容可能已经发出。 */

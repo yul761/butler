@@ -62,5 +62,10 @@ describe("audit view helpers", () => {
       expect(bodyMaybeSent(st)).toBe(true);
     }
     expect(bodyMaybeSent("sent")).toBe(false);
+    // 拦截、超预算、拒绝：什么都没发出，标题不能说“可能已发出”。
+    for (const st of ["blocked", "budget", "declined"] as const) {
+      expect(bodyHeading(st)).toBe("发出的内容");
+      expect(bodyMaybeSent(st)).toBe(false);
+    }
   });
 });
