@@ -3,6 +3,7 @@ import type { BriefKind } from "../../shared/brief";
 import type { OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
+import { AuditPage } from "./components/AuditPage";
 import { BriefPage } from "./components/BriefPage";
 import { NewTicketDialog } from "./components/NewTicketDialog";
 import { SettingsPage } from "./components/SettingsPage";
@@ -11,7 +12,12 @@ import { TicketPage } from "./components/TicketPage";
 import { UnclaimedPage } from "./components/UnclaimedPage";
 import { S } from "./strings";
 
-export type Route = { page: "home"; kind?: BriefKind } | { page: "ticket"; key: string } | { page: "unclaimed" } | { page: "settings" };
+export type Route =
+  | { page: "home"; kind?: BriefKind }
+  | { page: "ticket"; key: string }
+  | { page: "unclaimed" }
+  | { page: "settings" }
+  | { page: "audit" };
 
 export function App() {
   const [route, setRoute] = useState<Route>({ page: "home" });
@@ -84,6 +90,7 @@ export function App() {
         )}
         {route.page === "unclaimed" && <UnclaimedPage tickets={tickets} />}
         {route.page === "settings" && <SettingsPage />}
+        {route.page === "audit" && <AuditPage />}
       </main>
       {showNew && (
         <NewTicketDialog

@@ -1,4 +1,4 @@
-import type { BriefItem, BriefSection } from "../../shared/brief";
+import type { Brief, BriefItem, BriefSection } from "../../shared/brief";
 import type { OpenSessionRequest, TicketView } from "../../shared/types";
 import { S } from "./strings";
 
@@ -30,4 +30,25 @@ export function openRequest(i: BriefItem, ticket: TicketView | undefined): OpenS
   // 已忽略的 session 不恢复（ticket.sessions 已按最近活动排序）。
   const recent = ticket.sessions.find((s) => !s.dismissed);
   return { ticketKey: i.ticketKey, ...(recent ? { sessionId: recent.id } : {}), ...(prefill ? { prefill } : {}) };
+}
+
+/** “今日重点”的每一行（只有生成成功时才有）。 */
+export function narrativeLines(b: Brief): string[] {
+  if (b.narrativeStatus !== "ok" || !b.narrative) return [];
+  return b.narrative.split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+/** 没有“今日重点”时的说明；没配置（off）时不打扰用户。 */
+export function narrativeNote(b: Brief, narrating: boolean): string | null {
+  if (narrating) return S.narrativePending;
+  switch (b.narrativeStatus) {
+    case "blocked":
+      return S.narrativeBlocked;
+    case "budget":
+      return S.narrativeBudget;
+    case "failed":
+      return S.narrativeFailed;
+    default:
+      return null;
+  }
 }

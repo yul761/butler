@@ -111,3 +111,8 @@ textarea { font: inherit; color: inherit; background: var(--bg); border: 1px sol
 .field .row { flex-wrap: wrap; gap: 12px; }
 label.inline { display: inline-flex; gap: 6px; align-items: center; }
 .probe { display: flex; flex-direction: column; gap: 4px; }
+
+.audit-entry { border-bottom: 1px solid var(--border); padding: 6px 0; }
+.audit-entry summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.audit-entry h4 { margin: 8px 0 4px; }
+.narrative ul { margin: 6px 0 0; }

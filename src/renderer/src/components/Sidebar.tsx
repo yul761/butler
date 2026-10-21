@@ -39,6 +39,7 @@ export function Sidebar({ tickets, unclaimedCount, route, onNavigate, onNew }: P
       <button className={cls("nav", route.page === "unclaimed")} onClick={() => onNavigate({ page: "unclaimed" })}>
         {S.unclaimed}{unclaimedCount > 0 ? ` (${unclaimedCount})` : ""}
       </button>
+      <button className={cls("nav", route.page === "audit")} onClick={() => onNavigate({ page: "audit" })}>{S.audit}</button>
       <button className={cls("nav", route.page === "settings")} onClick={() => onNavigate({ page: "settings" })}>{S.settings}</button>
     </nav>
   );

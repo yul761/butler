@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { BriefItem, BriefRule } from "../../shared/brief";
+import { EMPTY_BRIEF_CONTENT, type Brief, type BriefItem, type BriefRule } from "../../shared/brief";
 import type { SessionView, TicketView } from "../../shared/types";
-import { groupItems, itemActions, itemPrefill, itemTitle, openRequest } from "./brief-view";
+import { groupItems, itemActions, itemPrefill, itemTitle, narrativeLines, narrativeNote, openRequest } from "./brief-view";
 
 const item = (rule: BriefRule, over: Partial<BriefItem> = {}): BriefItem => ({
   key: `${rule}:A-1`, section: "first", rule, ticketKey: "A-1", followupId: null, text: "改 staging 配置",
@@ -52,5 +52,25 @@ describe("brief view helpers", () => {
     const dismissed = { ...session("s3"), dismissed: true };
     expect(openRequest(item("next_step"), ticket([dismissed, session("s2")]))?.sessionId).toBe("s2");
     expect(openRequest(item("next_step"), ticket([dismissed]))).toEqual({ ticketKey: "A-1", prefill: "继续：改 staging 配置（来自 A-1）" });
+  });
+});
+
+describe("today's focus", () => {
+  const brief = (over: Partial<Brief>): Brief => ({
+    id: 1, kind: "morning", date: "2026-10-21", createdAt: 1, ...EMPTY_BRIEF_CONTENT, narrative: null, narrativeStatus: "off", ...over,
+  });
+
+  it("shows the narrative lines only when it succeeded", () => {
+    expect(narrativeLines(brief({ narrativeStatus: "ok", narrative: "先合并 PR。\n\n 再处理阻塞。 " }))).toEqual(["先合并 PR。", "再处理阻塞。"]);
+    expect(narrativeLines(brief({ narrativeStatus: "failed", narrative: "旧的" }))).toEqual([]);
+  });
+
+  it("explains why there is no narrative", () => {
+    expect(narrativeNote(brief({}), true)).toBe("正在生成今日重点…");
+    expect(narrativeNote(brief({ narrativeStatus: "blocked" }), false)).toContain("敏感信息");
+    expect(narrativeNote(brief({ narrativeStatus: "budget" }), false)).toContain("预算");
+    expect(narrativeNote(brief({ narrativeStatus: "failed" }), false)).toContain("失败");
+    expect(narrativeNote(brief({ narrativeStatus: "off" }), false)).toBeNull();
+    expect(narrativeNote(brief({ narrativeStatus: "ok", narrative: "x" }), false)).toBeNull();
   });
 });

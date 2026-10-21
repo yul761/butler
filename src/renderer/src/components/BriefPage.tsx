@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Brief, BriefItem, BriefKind, BriefView } from "../../../shared/brief";
 import type { OpenSessionRequest, TicketView } from "../../../shared/types";
 import { api } from "../api";
-import { groupItems, itemActions, itemTitle, openRequest, type ItemAction } from "../brief-view";
+import { groupItems, itemActions, itemTitle, narrativeLines, narrativeNote, openRequest, type ItemAction } from "../brief-view";
 import { reportError } from "../errors";
 import { jobResultMessage } from "../job-view";
 import { S } from "../strings";
@@ -89,7 +89,7 @@ export function BriefPage({ initialKind, tickets, onOpenTicket, onUnclaimed }: P
       ) : !brief ? (
         <p className="empty">{kind === "morning" ? S.noBrief : S.noEvening}</p>
       ) : kind === "morning" ? (
-        <MorningBody brief={brief} onAct={(i, a) => void act(i, a)} onOpenTicket={(key) => onOpenTicket(key)} />
+        <MorningBody brief={brief} narrating={view.narrating} onAct={(i, a) => void act(i, a)} onOpenTicket={(key) => onOpenTicket(key)} />
       ) : (
         <EveningBody brief={brief} onOpenTicket={(key) => onOpenTicket(key)} />
       )}
@@ -117,15 +117,23 @@ function DoneList({ items }: { items: string[] }) {
   );
 }
 
-function MorningBody({ brief, onAct, onOpenTicket }: { brief: Brief; onAct: (i: BriefItem, a: ItemAction) => void; onOpenTicket: (key: string) => void }) {
+function MorningBody({ brief, narrating, onAct, onOpenTicket }: { brief: Brief; narrating: boolean; onAct: (i: BriefItem, a: ItemAction) => void; onOpenTicket: (key: string) => void }) {
   const groups = groupItems(brief.items);
+  const lines = narrativeLines(brief);
+  const note = narrativeNote(brief, narrating);
   return (
     <>
-      {/* 计划 3 的“今日重点”：计划 2 里 narrativeStatus 永远是 off，这一段不会出现。 */}
-      {brief.narrativeStatus === "ok" && brief.narrative && (
+      {(lines.length > 0 || note) && (
         <section className="narrative">
           <h3>{S.todayFocus}</h3>
-          <p>{brief.narrative}</p>
+          {lines.length > 0 && (
+            <ul className="day-list">
+              {lines.map((l, n) => (
+                <li key={n}>{l}</li>
+              ))}
+            </ul>
+          )}
+          {note && <p className="muted">{note}</p>}
         </section>
       )}
       <Notices brief={brief} />
