@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { HealthReport } from "../../../shared/types";
 import { api } from "../api";
 import { S } from "../strings";
+import { PrivacySettings } from "./PrivacySettings";
 import { ScheduleSettings } from "./ScheduleSettings";
 
 export function SettingsPage() {
@@ -49,6 +50,7 @@ export function SettingsPage() {
         <button disabled={busy || report.hooks === "missing"} onClick={() => void run(api.uninstallHooks)}>{S.uninstallHooks}</button>
       </div>
       <ScheduleSettings />
+      <PrivacySettings />
     </div>
   );
 }

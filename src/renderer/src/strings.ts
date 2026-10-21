@@ -1,3 +1,4 @@
+import type { PrivacyLevel } from "../../shared/llm";
 import type { BriefItem, BriefRule, BriefSection } from "../../shared/brief";
 import type { FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
 
@@ -194,4 +195,48 @@ export const S = {
     conflict: "已有同名的 handoff.md，不是 Butler 写的，Butler 不会覆盖",
   } as Record<string, string>,
   privacyPeopleWarning: "不在敏感词表里的人名在「redacted」档位会被发送，请把同事姓名加入敏感词表",
+  privacy: "隐私与个人 API",
+  privacyIntro: "个人 LLM API 只用来写早间简报的“今日重点”。出站内容先按档位挑字段，把 ticket 号、仓库、分支、PR 作者、ticket 标题和敏感词表里的人名与词换成每次随机的占位符，再扫描敏感信息（命中就整次不发），并记进审计页。不配置时其他功能照常可用。",
+  privacyLevel: "隐私档位",
+  privacyLevels: { off: "关闭", metadata: "仅元数据（默认）", redacted: "脱敏文本", full: "完整" } as Record<PrivacyLevel, string>,
+  privacyLevelHelp: {
+    off: "不调用个人 API。",
+    metadata: "只发占位符、状态、PR 和 follow-up 的类型、数量和天数，不发任何原文。",
+    redacted: "再加上下一步、阻塞和 follow-up 描述的短文本；敏感词表里的人名和词、ticket 号、仓库、分支、PR 作者和 ticket 标题会换成占位符，不在表里的人名不会被换掉。",
+    full: "不做替换，发送真实的 ticket 号和原文；敏感信息扫描仍然生效。StateCore 记忆（计划中）也可能把原始事件发给这个服务商，所以只应用于你信任其处理工作内容的服务商。",
+  } as Record<PrivacyLevel, string>,
+  llmFields: {
+    llmBaseUrl: "服务地址（OpenAI 兼容接口的 base URL）",
+    llmModel: "模型",
+    llmMonthlyBudgetUsd: "每月预算（美元）",
+    auditRetentionDays: "审计保留天数",
+    llmPrices: "价格表（美元 / 百万 token）",
+  } as Record<string, string>,
+  llmPlaceholders: {
+    llmBaseUrl: "https://api.deepseek.com/v1",
+    llmModel: "deepseek-chat",
+    llmMonthlyBudgetUsd: "1",
+    auditRetentionDays: "90",
+  } as Record<string, string>,
+  llmPricesHint: "每行“模型 输入价 输出价”，模型名可以用 * 通配，从上往下第一条匹配的生效。默认的 * 15 75 把任何模型都按很贵的价格算，请按你的服务商修改；本机模型可以写 * 0 0。找不到价格的模型不会被调用。",
+  apiKey: "API key",
+  apiKeyNone: "未保存",
+  apiKeyUnreadable: "已保存但无法解密，请重新输入",
+  apiKeyPlaceholder: "粘贴新的 key",
+  apiKeyHint: "key 用系统钥匙串（macOS）或 DPAPI（Windows）加密保存，之后界面上只显示末 4 位。本机服务（localhost）可以不填。",
+  clearKey: "清除",
+  monthSpend: (spent: string, budget: string) => `本月已花 ${spent} / 预算 ${budget}`,
+  llmConfirm: "每次发送前弹窗确认（展示完整的出站内容）",
+  sensitiveTerms: "敏感词表",
+  termsPeople: "人名（一行一个）",
+  termsOthers: "其他敏感词：项目代号、客户名等（一行一个）",
+  termsHint: "这些词在发送前会被换成占位符，回来以后再换回去。ticket 号、仓库名和分支名会自动处理，不用写在这里。每个至少两个字。",
+  termsSaved: "已保存。",
+  llmOff: "个人 API 已关闭：简报里不会有“今日重点”。",
+  llmNoEncryption: "系统的加密存储不可用：无法保存 API key。",
+  llmKeyUnreadable: "保存的 API key 无法解密（钥匙串被重置或换了电脑），请重新输入。",
+  llmNotConfigured: "还没有配置完：需要服务地址、模型，远程服务还需要 API key。",
+  llmNoPrice: "价格表里没有当前模型的价格：不会调用。",
+  llmOverBudget: (spent: string, budget: string) => `本月已花 ${spent}，达到预算 ${budget}：本月不再调用。`,
+  llmFullWarning: "完整档位会把真实的 ticket 号和原文发给服务商，只靠敏感信息扫描兜底。",
 };
