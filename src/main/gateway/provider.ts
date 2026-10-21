@@ -56,11 +56,24 @@ export function chatBody(req: Pick<ChatRequest, "model" | "messages" | "maxToken
   return JSON.stringify({ model: req.model, messages: req.messages, [tokenParam]: req.maxTokens, stream: false });
 }
 
+/** key 可能被回显的几种写法：原样、URL 编码、JSON 转义（例如 `/` 被写成 `\/`）。 */
+function secretForms(secret: string): Set<string> {
+  return new Set([secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1), secret.replaceAll("/", "\\/")]);
+}
+
+/** 只去掉 key 本身（各种回显写法），不动其他文本。审计里的请求体用它：要原样展示发出去的内容。 */
+export function scrubKey(text: string, secret: string | null): string {
+  if (!secret || secret.length < 4) return text;
+  let t = text;
+  for (const form of secretForms(secret)) t = t.split(form).join("***");
+  return t;
+}
+
 /** 去掉报错信息里的 key 和任何 Bearer 凭证（有的服务商把请求头原样回显）。 */
 export function scrub(text: string, secret: string | null): string {
   let t = text;
   if (secret && secret.length >= 4) {
-    for (const form of new Set([secret, encodeURIComponent(secret)])) t = t.split(form).join("***");
+    for (const form of secretForms(secret)) t = t.split(form).join("***");
   }
   return t.replace(/Bearer\s+(?!\*\*\*(?![^\s"'\\,;]))[^\s"'\\,;]+/gi, "Bearer ***");
 }

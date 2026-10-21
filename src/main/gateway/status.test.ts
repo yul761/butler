@@ -86,4 +86,32 @@ describe("auditPage", () => {
     expect(JSON.stringify(page)).not.toContain("sk-leaky");
     expect(page.entries[0].payloadSent).toBe('{"k":"***"}');
   });
+
+  it("keeps the sent body as it was sent, removing only the key itself", () => {
+    const db = memDb();
+    const audit = new AuditRepo(db);
+    const keys = new KeyStore({ secrets: new SecretsRepo(db), box: fakeSecretBox(), now: () => 1 });
+    keys.save("sk-ab/cdefgh1234");
+    const id = audit.insert({ ...row(NOW), payloadSent: '{"content":"rotate the Bearer tokenXYZ today"}' });
+    audit.finish(id, { status: "failed", error: '{"e":"bad key sk-ab\\/cdefgh1234"}' });
+    const page = auditPage({ settings: new SettingsRepo(db), audit, keys, now: () => NOW });
+    expect(page.entries[0].payloadSent).toBe('{"content":"rotate the Bearer tokenXYZ today"}');
+    expect(page.entries[0].error).toBe('{"e":"bad key ***"}');
+  });
+
+  it("does not touch the keychain when the saved key is already known to be unreadable", () => {
+    const db = memDb();
+    const audit = new AuditRepo(db);
+    let gets = 0;
+    const keys = {
+      state: () => ({ keySaved: true, keyMasked: null, keyUnreadable: true, encryptionAvailable: true }),
+      get: () => {
+        gets++;
+        return null;
+      },
+    };
+    audit.insert(row(NOW));
+    auditPage({ settings: new SettingsRepo(db), audit, keys, now: () => NOW });
+    expect(gets).toBe(0);
+  });
 });
