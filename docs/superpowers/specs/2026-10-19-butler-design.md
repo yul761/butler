@@ -269,7 +269,7 @@ handoff 是整个系统的数据源，由公司 Claude Code 生成，只存在�
 
 ### 6.5 调度
 
-- 任务：`nightly_handoff`（默认 18:30）、`evening_brief`（handoff 完成后）、`morning_brief`（事件触发）、`discovery_scan`（5 分钟）。
+- 任务：`nightly_handoff`（默认 16:00）、`evening_brief`（handoff 完成后）、`morning_brief`（事件触发）、`discovery_scan`（5 分钟）。
 - 调度器在主进程里运行，`jobs` 表记录每个任务的上次运行时间。在 `resume`、`unlock-screen` 和启动时检查错过的任务并补跑；晚间 handoff 如果错过，就在早间简报前执行。
 - 周末和非工作日默认不跑晚间 handoff。
 
