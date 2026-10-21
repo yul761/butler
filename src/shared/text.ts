@@ -15,5 +15,9 @@ export function stripControl(text: string): string {
  */
 export function sanitizePrefill(text: string, limit = PREFILL_LIMIT): string {
   const flat = text.replace(/[\r\n\t]+/g, " ").replace(CONTROL_RE, "").replace(/ {2,}/g, " ").trim();
-  return flat.length > limit ? flat.slice(0, limit) : flat;
+  if (flat.length <= limit) return flat;
+  // 不切进代理对：末尾是高代理项时少留一个单元，否则会变成 U+FFFD。
+  const last = flat.charCodeAt(limit - 1);
+  const cut = last >= 0xd800 && last <= 0xdbff ? limit - 1 : limit;
+  return flat.slice(0, cut).trimEnd();
 }

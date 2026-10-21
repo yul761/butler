@@ -139,6 +139,16 @@ describe("PtyManager", () => {
     expect(logs).toHaveLength(4);
     expect(logs[0]).toContain("write failed");
   });
+  it("does not let output from an exited process leak into a re-opened terminal", () => {
+    const { mgr, spawned, data } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emitExit(0);
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("late");
+    expect(data.filter(([id, d]) => id === "t1" && d === "late")).toEqual([]);
+    expect(mgr.snapshot("t1")).toEqual({ data: "", exitCode: null });
+  });
+
   it("drops output that arrives after the process exited", () => {
     const { mgr, spawned, data } = setup();
     mgr.open("t1", spec, opts);

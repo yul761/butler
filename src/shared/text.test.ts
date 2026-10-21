@@ -17,4 +17,18 @@ describe("sanitizePrefill", () => {
     expect(sanitizePrefill("  \u001b[2Jhi\u0003  ")).toBe("[2Jhi");
     expect(sanitizePrefill("x".repeat(600))).toHaveLength(500);
   });
+
+  it("never cuts inside a surrogate pair at the limit", () => {
+    const out = sanitizePrefill("x".repeat(499) + "😀");
+    expect(out).toBe("x".repeat(499));
+    expect(out).not.toMatch(/[\ud800-\udfff]/);
+  });
+
+  it("does not leave a trailing space when the cut lands on one", () => {
+    expect(sanitizePrefill("x".repeat(499) + " y")).toBe("x".repeat(499));
+  });
+
+  it("keeps emoji in the middle of the text", () => {
+    expect(sanitizePrefill("继续 😀 做 PROJ-1")).toBe("继续 😀 做 PROJ-1");
+  });
 });

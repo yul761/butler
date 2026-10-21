@@ -30,6 +30,18 @@ let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
 let logger: Logger = () => undefined;
+/** dev 控制台 tee：防止在 tee 里再次写日志造成递归，stderr 管道断开后停止 tee。 */
+let teeing = false;
+let teeBroken = false;
+function teeToConsole(line: string): void {
+  if (teeing || teeBroken) return;
+  teeing = true;
+  try {
+    console.error(line);
+  } finally {
+    teeing = false;
+  }
+}
 /** bootstrap 赋值：退出前在窗口还活着时先结束所有终端进程。 */
 let shutdownSessions: () => void = () => undefined;
 
@@ -116,7 +128,8 @@ function createTray(): Tray {
 async function bootstrap(): Promise<void> {
   const paths = resolvePaths();
   await ensureDirs(paths);
-  logger = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : (line) => console.error(line));
+  logger = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : teeToConsole);
+  if (!app.isPackaged) process.stderr.on("error", () => { teeBroken = true; });
   const db = openDatabase(paths.db);
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
