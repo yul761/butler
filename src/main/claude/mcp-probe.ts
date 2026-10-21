@@ -7,13 +7,32 @@ import { killTree, unsafeCmdArg } from "./headless";
 export const PROBE_ARGS = ["-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "dontAsk"];
 
 const READ_WORDS = new Set(["get", "list", "search", "read", "view", "fetch", "query", "find", "lookup", "describe"]);
+/** 任何一个词在这里，整个工具就不建议（get_or_create、search_and_replace、execute_query……）。 */
+const WRITE_WORDS = new Set([
+  "create", "update", "delete", "remove", "transition", "comment", "edit", "write", "add", "set", "send", "post", "put", "patch", "assign",
+  "merge", "close", "run", "execute", "replace", "move", "upload", "import", "archive", "insert", "upsert", "modify", "rename", "approve",
+  "reject", "publish", "sync", "trigger", "invoke", "call",
+]);
 
-/** 工具名的工具部分（mcp__server__tool 的 tool）按下划线和驼峰拆词，含查询类动词的算“只读建议”。 */
-export function suggestReadOnly(tools: string[]): string[] {
+/** claude 给 server 名做的清洗（验证记录 V3）：非 [A-Za-z0-9_-] 的字符换成 _。 */
+const sanitizeServerName = (n: string): string => n.replace(/[^A-Za-z0-9_-]/g, "_");
+
+/** 工具名去掉 mcp__<server>__ 前缀；认得 server 时按最长前缀，否则取最后一个 __ 段。 */
+function toolPart(tool: string, servers: string[]): string {
+  let best = "";
+  for (const s of servers) {
+    const prefix = `mcp__${sanitizeServerName(s)}__`;
+    if (tool.startsWith(prefix) && prefix.length > best.length) best = prefix;
+  }
+  if (best) return tool.slice(best.length);
+  return tool.split("__").pop() ?? tool;
+}
+
+/** 工具部分按下划线、连字符和驼峰拆词：至少一个查询类动词，且没有任何写类动词，才算“只读建议”。 */
+export function suggestReadOnly(tools: string[], serverNames: string[] = []): string[] {
   return tools.filter((t) => {
-    const part = t.split("__").slice(2).join("__");
-    const words = part.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[\s_-]+/).map((w) => w.toLowerCase());
-    return words.some((w) => READ_WORDS.has(w));
+    const words = toolPart(t, serverNames).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[\s_-]+/).filter(Boolean).map((w) => w.toLowerCase());
+    return words.some((w) => READ_WORDS.has(w)) && !words.some((w) => WRITE_WORDS.has(w));
   });
 }
 
@@ -32,10 +51,11 @@ export function parseInitMessage(line: string): McpProbe | null {
     const x = s as { name?: unknown; status?: unknown } | null;
     return x && typeof x.name === "string" ? [{ name: x.name, status: typeof x.status === "string" ? x.status : "" }] : [];
   });
-  return { servers, tools, suggested: suggestReadOnly(tools) };
+  return { servers, tools, suggested: suggestReadOnly(tools, servers.map((s) => s.name)) };
 }
 
 const PROBE_TIMEOUT_MS = 60_000;
+const BUF_LIMIT = 8 * 1024 * 1024;
 
 /**
  * 起一个 headless claude，读到 init 就杀掉整棵进程树（不留下 MCP server 孤儿进程）。
@@ -89,13 +109,21 @@ export function probeMcpTools(o: { claudePath: string; cwd: string; env: Record<
         const probe = parseInitMessage(buf.slice(0, i));
         buf = buf.slice(i + 1);
         if (probe) {
+          // 假设（验证记录 V3）：init 在第一次模型请求之前发出（init 约 2 秒，第一条 assistant 约 5 秒），
+          // 所以读到 init 就杀进程不会花输出 token。任务 16 会用真实 claude 验证。
           finish(null, probe);
           return;
         }
       }
+      if (buf.length > BUF_LIMIT) finish(new Error("claude 的输出过大且没有 init 消息"));
     });
     child.on("error", (e) => finish(e));
-    child.on("close", () => finish(new Error("claude 没有输出 init 消息就退出了")));
+    child.on("close", () => {
+      // 最后一行可能没有换行符。
+      const last = parseInitMessage(buf);
+      if (last) finish(null, last);
+      else finish(new Error("claude 没有输出 init 消息就退出了"));
+    });
     child.stdin?.on("error", () => undefined);
     child.stdin?.end("Reply with OK.", "utf8");
   });

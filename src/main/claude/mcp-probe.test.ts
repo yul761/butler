@@ -38,7 +38,7 @@ describe("suggestReadOnly", () => {
         "mcp__jira__getIssue", "mcp__jira__createIssue", "mcp__atlassian__searchJiraIssuesUsingJql",
         "mcp__linear__list_issues", "mcp__x__target_update", "mcp__gitlab__get_merge_request",
       ]),
-    ).toEqual(["mcp__jira__getIssue", "mcp__atlassian__searchJiraIssuesUsingJql", "mcp__linear__list_issues", "mcp__gitlab__get_merge_request"]);
+    ).toEqual(["mcp__jira__getIssue", "mcp__atlassian__searchJiraIssuesUsingJql", "mcp__linear__list_issues"]); // get_merge_request is dropped on purpose: "merge" is a write word
   });
 });
 
@@ -97,9 +97,49 @@ emit(${JSON.stringify(INIT)}); setTimeout(() => {}, 60000);`;
     expect(call.butlerSession).toBe("headless:probe1");
     expect(call.input).toBe("Reply with OK.");
     expect(call.args.join(" ")).not.toContain("Reply with OK");
-    if (process.platform === "win32" || !existsSync(gcPid)) return;
+    if (process.platform === "win32") return;
+    expect(existsSync(gcPid)).toBe(true);
     const pid = Number(readFileSync(gcPid, "utf8"));
     await new Promise((r) => setTimeout(r, 500));
     expect(() => process.kill(pid, 0)).toThrow();
+  }, 20_000);
+});
+
+describe("suggestReadOnly mixed verbs and server names", () => {
+  it("rejects tools with any write word", () => {
+    const bad = ["getOrCreateIssue", "get_or_create_user", "search_and_replace", "find_and_delete", "list_and_transition", "execute_query", "run_query"].map((n) => `mcp__x__${n}`);
+    expect(suggestReadOnly(bad)).toEqual([]);
+    const good = ["get_issue", "searchIssues", "list_projects", "jira_get_issue"].map((n) => `mcp__x__${n}`);
+    expect(suggestReadOnly(good)).toEqual(good);
+  });
+
+  it("ignores words in the server part, including servers with __", () => {
+    const servers = ["Linear (Read-only)"];
+    expect(suggestReadOnly(["mcp__Linear__Read-only___create_issue"], servers)).toEqual([]);
+    expect(suggestReadOnly(["mcp__Linear__Read-only___get_issue"], servers)).toEqual(["mcp__Linear__Read-only___get_issue"]);
+    expect(suggestReadOnly(["mcp__Linear__Read-only___make_issue"], servers)).toEqual([]);
+    expect(suggestReadOnly(["mcp__get__make_issue"])).toEqual([]);
+  });
+});
+
+describe("probeMcpTools stream handling", () => {
+  it("handles split chunks (inside a multi-byte char), junk lines, and no trailing newline", async () => {
+    const dir = tempDir();
+    const init = { ...INIT, tools: ["mcp__jira__get_issue"], mcp_servers: [{ name: "jira 中文", status: "connected" }] };
+    const body = `const b = Buffer.from(JSON.stringify(${JSON.stringify(init)}));
+const cut = b.indexOf(Buffer.from("中")) + 1;
+process.stdout.write("not json\\n{broken\\n");
+process.stdout.write(b.subarray(0, cut));
+setTimeout(() => { process.stdout.write(b.subarray(cut)); process.exit(0); }, 200);`;
+    const fake = writeFakeClaude(dir, body);
+    const probe = await probeMcpTools({ claudePath: fake.path, cwd: dir, env: env() });
+    expect(probe.servers[0].name).toBe("jira 中文");
+    expect(probe.tools).toEqual(["mcp__jira__get_issue"]);
+  }, 20_000);
+
+  it("rejects when output exceeds the buffer cap", async () => {
+    const dir = tempDir();
+    const fake = writeFakeClaude(dir, `const chunk = "x".repeat(1 << 20); let n = 0; const t = setInterval(() => { process.stdout.write(chunk); if (++n > 12) clearInterval(t); }, 5); setTimeout(() => {}, 30000);`);
+    await expect(probeMcpTools({ claudePath: fake.path, cwd: dir, env: env() })).rejects.toThrow("过大");
   }, 20_000);
 });
