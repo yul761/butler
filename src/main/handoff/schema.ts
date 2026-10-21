@@ -50,7 +50,7 @@ export function parseJsonLoose(text: string): unknown {
 }
 
 /** 信息串必须正好是 butler-handoff，后面只能跟空白再接别的（```butler-handoffX 不算）。 */
-const HANDOFF_BLOCK_RE = /```butler-handoff(?:[ \t][^\n]*)?\n([\s\S]*?)\n?```/g;
+const HANDOFF_BLOCK_RE = /```butler-handoff(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
 
 /** 最后一个非空的 ```butler-handoff 代码块的内容；没有就是 null。 */
 export function extractHandoffBlock(text: string): string | null {

@@ -65,6 +65,11 @@ describe("loose parsing", () => {
     expect(extractHandoffBlock('```json\n{}\n```')).toBeNull();
   });
 
+  it("accepts CRLF line endings", () => {
+    expect(extractHandoffBlock('```butler-handoff\r\n{"n":1}\r\n```')).toBe('{"n":1}');
+    expect(extractHandoffBlock('```butler-handoff json\r\n{"n":2}\r\n```')).toBe('{"n":2}');
+  });
+
   it("ignores look-alike info strings and an empty last block", () => {
     expect(extractHandoffBlock('```butler-handoffX\n{"n":1}\n```')).toBeNull();
     expect(extractHandoffBlock('```butler-handoff json\n{"n":1}\n```')).toBe('{"n":1}');

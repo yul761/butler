@@ -7,9 +7,15 @@ export class GitError extends Error {
   }
 }
 
-/** git 一律在 C locale 下跑：gitErrorSummary 按英文的 fatal: / error: 前缀解析。 */
+/**
+ * git 的报错消息用英文：gitErrorSummary 按 fatal: / error: 前缀解析。只改 LC_MESSAGES，
+ * 其他分类（钩子、凭据助手等）保持用户自己的 locale；LANGUAGE 会被 gettext 优先采用，所以去掉。
+ * 不碰用户自己设置的 LC_ALL。
+ */
 export function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return { ...base, LC_ALL: "C" };
+  const env: NodeJS.ProcessEnv = { ...base, LC_MESSAGES: "C" };
+  delete env.LANGUAGE;
+  return env;
 }
 
 export function git(cwd: string, args: string[]): Promise<string> {

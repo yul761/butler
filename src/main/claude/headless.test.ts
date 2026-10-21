@@ -1,35 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { tempDir, writeFakeClaude } from "../test-utils";
+import { tempDir, waitForFile, waitUntilDead, writeFakeClaude } from "../test-utils";
 import { PROBE_ARGS } from "./mcp-probe";
 import { headlessArgs, isRateLimited, parseClaudeJson, runHeadless, unsafeCmdArg } from "./headless";
 
 const env = () => ({ ...process.env }) as Record<string, string>;
-
-/** 有界轮询：等文件出现并返回内容；超时抛错。 */
-async function waitForFile(path: string, ms: number): Promise<string> {
-  const end = Date.now() + ms;
-  while (!existsSync(path)) {
-    if (Date.now() > end) throw new Error(`file not written within ${ms} ms: ${path}`);
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  return readFileSync(path, "utf8");
-}
-
-/** 有界轮询：进程是否在 ms 毫秒内死掉。 */
-async function waitUntilDead(pid: number, ms: number): Promise<boolean> {
-  const end = Date.now() + ms;
-  for (;;) {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return true;
-    }
-    if (Date.now() > end) return false;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-}
 
 /** 验证记录 V1：真实 claude 2.1.306 的 --output-format json 输出（去掉了 usage 等字段）。 */
 const OBSERVED = {

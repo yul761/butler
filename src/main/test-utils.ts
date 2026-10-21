@@ -5,6 +5,30 @@ import { join } from "node:path";
 import { openDatabase, type Db } from "./db/database";
 import type { PtyFactory, PtyProcess } from "./sessions/pty-manager";
 
+/** 有界轮询：等文件出现并返回内容；超时抛错。 */
+export async function waitForFile(path: string, ms: number): Promise<string> {
+  const end = Date.now() + ms;
+  while (!existsSync(path)) {
+    if (Date.now() > end) throw new Error(`file not written within ${ms} ms: ${path}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return readFileSync(path, "utf8");
+}
+
+/** 有界轮询：进程是否在 ms 毫秒内死掉。 */
+export async function waitUntilDead(pid: number, ms: number): Promise<boolean> {
+  const end = Date.now() + ms;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    if (Date.now() > end) return false;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 export function memDb(): Db {
   return openDatabase(":memory:");
 }
