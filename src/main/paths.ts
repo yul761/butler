@@ -21,7 +21,7 @@ export interface ButlerPaths {
 }
 
 /** 环境变量给的目录：相对路径按当前目录解析（Electron 的 setPath 只接受绝对路径）。 */
-function dirFromEnv(v: string | undefined): string | null {
+export function dirFromEnv(v: string | undefined): string | null {
   const t = v?.trim();
   if (!t) return null;
   return isAbsolute(t) ? t : resolve(t);

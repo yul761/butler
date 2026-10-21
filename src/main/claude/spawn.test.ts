@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { claudeArgs, headlessEnv, sessionEnv, spawnSpec } from "./spawn";
 
@@ -53,5 +54,16 @@ describe("claude spawn helpers", () => {
       { pathValue: "/login/bin", runId: "r1" },
     );
     expect(env).toEqual({ PATH: "/login/bin", HOME: "/h", BUTLER_SESSION: "headless:r1" });
+  });
+
+  it("turns a relative BUTLER_HOME / CLAUDE_CONFIG_DIR into an absolute path for every child", () => {
+    const base = { PATH: "/usr/bin", BUTLER_HOME: "rel/b", CLAUDE_CONFIG_DIR: "rel/c" };
+    const s = sessionEnv(base, { pathValue: "", ticketKey: "T-1", sessionId: "u" });
+    const h = headlessEnv(base, { pathValue: "", runId: "r" });
+    for (const e of [s, h]) {
+      expect(e.BUTLER_HOME).toBe(resolve("rel/b"));
+      expect(e.CLAUDE_CONFIG_DIR).toBe(resolve("rel/c"));
+    }
+    expect("BUTLER_HOME" in headlessEnv({ PATH: "/usr/bin" }, { pathValue: "", runId: "r" })).toBe(false);
   });
 });

@@ -103,7 +103,9 @@ export class Scheduler {
   /** seed 记录不算“跑过”（第一次启动时只是记一下时间）。 */
   private ranSince(name: typeof JOB_NIGHTLY | typeof JOB_MORNING, at: number): boolean {
     const j = this.d.jobs.get(name);
-    return j.lastRunAt !== null && j.lastRunAt > at && j.lastStatus !== "seeded";
+    // 只有“按按钮之后、现在之前开始、并且成功”的调度运行才算：时钟被往回校正（lastRunAt 在未来）
+    // 或调度那次失败 / 部分完成时，手动请求照常运行。
+    return j.lastRunAt !== null && j.lastRunAt > at && j.lastRunAt <= this.d.now() && j.lastStatus === "ok";
   }
 
   private enqueue(fn: () => Promise<void>): Promise<void> {

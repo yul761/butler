@@ -286,4 +286,43 @@ describe("Scheduler", () => {
     await Promise.all([scheduled, manual]);
     expect(morning).toBe(1);
   });
+
+  describe("manual run queued behind other work", () => {
+    function setup(lastMorning: { at: number; status: "ok" | "failed" | "partial" }, nowAt: () => number) {
+      let morning = 0;
+      const jobs = new JobsRepo(memDb());
+      jobs.record(JOB_NIGHTLY, at(20, 16, 1), "ok", null);
+      jobs.record(JOB_MORNING, lastMorning.at, lastMorning.status, null);
+      const scheduler = new Scheduler({
+        jobs, config: () => cfg, now: nowAt, userActive: () => true,
+        nightly: async () => "ok",
+        morning: async () => {
+          morning++;
+        },
+      });
+      return { scheduler, count: () => morning };
+    }
+
+    it("runs when lastRunAt is in the future (clock corrected backwards)", async () => {
+      const t = setup({ at: at(22, 9), status: "ok" }, () => at(21, 9));
+      await t.scheduler.runMorningNow();
+      expect(t.count()).toBe(1);
+    });
+
+    it("runs when the scheduled run that started after the click failed", async () => {
+      const clock = { now: at(21, 9) };
+      const t = setup({ at: at(21, 9, 1), status: "failed" }, () => clock.now);
+      const p = t.scheduler.runMorningNow();
+      clock.now = at(21, 9, 2);
+      await p;
+      expect(t.count()).toBe(1);
+    });
+
+    it("runs on a later click after a scheduled run finished and the clock advanced", async () => {
+      const clock = { now: at(21, 9, 5) };
+      const t = setup({ at: at(21, 9), status: "ok" }, () => clock.now);
+      await t.scheduler.runMorningNow();
+      expect(t.count()).toBe(1);
+    });
+  });
 });
