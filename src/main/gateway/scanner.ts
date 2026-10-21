@@ -3,7 +3,7 @@ import { normalizeText, PLACEHOLDER_RE } from "./pseudonym";
 
 export const DEFAULT_TICKET_PATTERN = "[A-Z][A-Z0-9]+-\\d+";
 /** 长得像 ticket 号、其实是标准或算法名的写法。 */
-const NOT_TICKETS = /^(?:UTF|ISO|SHA|AES|RSA|HTTP|TLS|SSL|ES|ECMA|RFC|CVE|IEEE|GB|COVID|MD|IPV|WCAG|PEP|JSR)-\d+$/i;
+const NOT_TICKETS = /^(?:UTF|ISO|SHA|GPT|AES|RSA|HTTP|TLS|SSL|ES|ECMA|RFC|CVE|IEEE|GB|COVID|MD|IPV|WCAG|PEP|JSR)-\d+$/i;
 
 interface Rule {
   rule: ScanRule;
@@ -12,12 +12,28 @@ interface Rule {
   accept?: (match: string) => boolean;
 }
 
-/** 看起来像文件扩展名的 TLD：foo.md、Node.js 不算域名。 */
-const FILE_LIKE_TLDS = new Set(
-  ("md js ts tsx jsx json yaml yml txt py go rs sh css html xml csv log conf lock toml ini java kt rb php c h cpp swift vue svelte sql png jpg svg pdf zip gz exe dll so dylib " +
-    "env mjs cjs scss cfg pem key map bak tmp jsonl ipynb gradle proto tf").split(" "),
+/**
+ * 域名判定用精选 TLD 集，不是“任意 2 到 24 个字母”：代码里 `this.state`、`Array.from`、`path.join` 到处都是 label.label。
+ * 已接受的代价：用了集合之外 TLD 的公司主机名，域名规则抓不到（带协议的 URL 仍由 url 规则抓）。
+ */
+const GTLDS = new Set(
+  "com net org io ai co xyz tech biz gov edu mil arpa internal corp lan intranet club shop pro mobi asia".split(" "),
 );
-const hasLabelTld = (m: string): boolean => !FILE_LIKE_TLDS.has(m.slice(m.lastIndexOf(".") + 1).toLowerCase());
+/** 同时是常见代码成员的 gTLD（this.app、user.name、logger.info）：至少 3 段才算。 */
+const AMBIGUOUS_GTLDS = new Set("app dev home local cloud site online info name store top int".split(" "));
+/** 不含 id in is it at to do me no so as be by on am pm us 这类像代码成员的 ccTLD；它们只能靠下面的二级形式抓。 */
+const CCTLDS = new Set(
+  "cn uk de jp fr kr ru ca au nl se ch sg hk tw eu br es pl dk fi nz ie il za mx ar tr ua cz".split(" "),
+);
+const SECOND_LEVELS = new Set(["co", "com", "net", "org", "gov", "edu", "ac"]);
+function isDomain(m: string): boolean {
+  const parts = m.toLowerCase().split(".");
+  const n = parts.length;
+  const tld = parts[n - 1] ?? "";
+  if (GTLDS.has(tld) || CCTLDS.has(tld)) return true;
+  if (AMBIGUOUS_GTLDS.has(tld)) return n >= 3;
+  return n >= 3 && tld.length === 2 && SECOND_LEVELS.has(parts[n - 2] ?? "");
+}
 const hasDigit = (m: string): boolean => /\d/.test(m);
 
 /**
@@ -36,8 +52,10 @@ const RULES: Rule[] = [
   { rule: "secret", re: /\beyJ[A-Za-z0-9_-]{8,300}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
   { rule: "secret", re: /\b(?:api[_-]?key|access[_-]?token|secret|password|passwd|token)\s?[:=]\s?\S{6,}/gi },
   { rule: "secret", re: /(?:密码|口令|密钥|秘钥|令牌)\s?[:：=]\s?\S{4,}/g },
-  // 密码是hunter2024 / 密码 hunter2024：后面跟 6 位以上的 ASCII 可见字符。
-  { rule: "secret", re: /(?:密码|口令|密钥|秘钥|令牌)\s?[是为]?\s?[\x21-\x7e]{6,}/g },
+  // 密码是hunter2024：分隔符（是 / 为）之后跟 6 位以上的 ASCII 可见字符。
+  { rule: "secret", re: /(?:密码|口令|密钥|秘钥|令牌)\s?[是为]\s?[\x21-\x7e]{6,}/g },
+  // 密码 hunter2024：没有分隔符时值里必须有数字，免得 "密钥 rotation 完成" 这类描述误伤。
+  { rule: "secret", re: /(?:密码|口令|密钥|秘钥|令牌)\s?(?=[\x21-\x7e]*\d)[\x21-\x7e]{6,}/g },
   // password is hunter2024：值里要有数字，免得 "token is expired" 误伤。
   { rule: "secret", re: /\b(?:api[_-]?key|access[_-]?token|secret|password|passwd|pwd|passcode|token)\s(?:is|was)\s(?=\S*\d)\S{6,}/gi },
   { rule: "secret", re: /\b(?:authorization\s?[:=]\s?)?(?:Bearer|Basic)\s(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{16,}/g },
@@ -54,9 +72,9 @@ const RULES: Rule[] = [
     re: /(?<![\w:])(?:(?:[0-9a-f]{1,4}:){1,7}:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6}|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6}|(?:[0-9a-f]{1,4}:){2,7}:)(?![\w:])/gi,
     accept: hasDigit,
   },
-  { rule: "domain", re: /\b(?:[a-z0-9-]{1,63}\.){1,8}(?:internal|corp|local|lan|intranet|intra|private|localdomain)\b/gi },
+  { rule: "domain", re: /\b(?:[a-z0-9-]{1,63}\.){1,8}(?:internal|corp|lan|intranet|localdomain)\b/gi },
   // 任意 label.label.tld（tld 2 到 24 个字母），去掉长得像文件扩展名的。
-  { rule: "domain", re: /\b(?:[a-z0-9-]{1,63}\.){1,8}[a-z]{2,24}\b/gi, accept: hasLabelTld },
+  { rule: "domain", re: /\b(?:[a-z0-9-]{1,63}\.){1,8}[a-z]{2,24}(?![A-Za-z0-9_])/gi, accept: isDomain },
   // 盘符路径（C:\ 或 C:/）放在最前，样本才带盘符。
   { rule: "path", re: /\b[A-Za-z]:[\\/][^\s"'<>|]+/g },
   // 前导边界用 lookbehind：中文紧贴路径（改一下/etc/hosts）也要命中，A/B、3/4 前面是单词字符所以不会。
