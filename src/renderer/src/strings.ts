@@ -237,6 +237,7 @@ export const S = {
   llmKeyUnreadable: "保存的 API key 无法解密（钥匙串被重置或换了电脑），请重新输入。",
   llmNotConfigured: "还没有配置完：需要服务地址、模型，远程服务还需要 API key。",
   llmNoPrice: "价格表里没有当前模型的价格：不会调用。",
+  llmZeroBudget: "每月预算是 $0：不会调用个人 API。",
   llmOverBudget: (spent: string, budget: string) => `本月已花 ${spent}，达到预算 ${budget}：本月不再调用。`,
   llmFullWarning: "完整档位会把真实的 ticket 号和原文发给服务商，只靠敏感信息扫描兜底。",
 };

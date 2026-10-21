@@ -29,7 +29,7 @@ describe("privacy form helpers", () => {
     expect(llmWarnings({ ...ok, priceKnown: false }, "metadata", 0)).toEqual(["价格表里没有当前模型的价格：不会调用。"]);
     expect(llmWarnings({ ...ok, keyUnreadable: true, configured: false }, "redacted", 0)[0]).toContain("无法解密");
     expect(llmWarnings({ ...ok, monthCostUsd: 1 }, "metadata", 0)[0]).toContain("预算");
-    expect(llmWarnings({ ...ok, monthCostUsd: 0, budgetUsd: 0 }, "metadata", 0)).toEqual([]);
+    expect(llmWarnings({ ...ok, monthCostUsd: 0, budgetUsd: 0 }, "metadata", 0)).toEqual([S.llmZeroBudget]);
     expect(llmWarnings(ok, "full", 0)[0]).toContain("真实的 ticket 号");
   });
 

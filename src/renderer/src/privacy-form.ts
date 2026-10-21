@@ -28,7 +28,9 @@ export function llmWarnings(s: LlmStatus, level: PrivacyLevel, peopleCount: numb
   if (s.keyUnreadable) out.push(S.llmKeyUnreadable);
   if (!s.configured) out.push(S.llmNotConfigured);
   else if (!s.priceKnown) out.push(S.llmNoPrice);
-  if (s.configured && s.budgetUsd > 0 && s.monthCostUsd >= s.budgetUsd) out.push(S.llmOverBudget(formatUsd(s.monthCostUsd), formatUsd(s.budgetUsd)));
+  // 预算 0 在后端等于“一次都不调用”（budget.ts 要求 已花 + 预估 ≤ 预算），要说出来，不然界面上看不出为什么没有“今日重点”。
+  if (s.configured && s.budgetUsd <= 0) out.push(S.llmZeroBudget);
+  else if (s.configured && s.monthCostUsd >= s.budgetUsd) out.push(S.llmOverBudget(formatUsd(s.monthCostUsd), formatUsd(s.budgetUsd)));
   if (level === "redacted" && peopleCount === 0) out.push(S.privacyPeopleWarning);
   if (level === "full") out.push(S.llmFullWarning);
   return out;

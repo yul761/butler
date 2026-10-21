@@ -142,7 +142,7 @@ export function PrivacySettings() {
         {S.apiKey}
         <div className="row">
           <span className="muted">{currentStatus.keySaved ? (currentStatus.keyMasked ?? S.apiKeyUnreadable) : S.apiKeyNone}</span>
-          <input ref={keyRef} type="password" autoComplete="off" spellCheck={false} placeholder={S.apiKeyPlaceholder} onChange={(e) => setHasKeyInput(e.target.value.trim() !== "")} />
+          <input ref={keyRef} type="password" autoComplete="new-password" spellCheck={false} placeholder={S.apiKeyPlaceholder} onChange={(e) => setHasKeyInput(e.target.value.trim() !== "")} />
           <button disabled={!hasKeyInput || !currentStatus.encryptionAvailable} onClick={() => void saveKey()}>{S.save}</button>
           {currentStatus.keySaved && <button onClick={() => void clearKey()}>{S.clearKey}</button>}
         </div>
