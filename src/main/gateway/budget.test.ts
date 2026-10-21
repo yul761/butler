@@ -29,4 +29,14 @@ describe("budget", () => {
     // 免费的本机模型：预算为 0 也能用。
     expect(checkBudget({ ...base, prices: [{ pattern: "*", inputPerMTok: 0, outputPerMTok: 0 }], budgetUsd: 0 })).toMatchObject({ ok: true });
   });
+
+  it("fails closed on NaN, allows spending exactly up to the budget, and blocks a priced model at budget 0", () => {
+    const base = { prices: [price], model: "m", budgetUsd: 1, spentUsd: 0, inputText: "", maxOutputTokens: 125_000 }; // estimate = exactly $1
+    expect(checkBudget(base)).toMatchObject({ ok: true });
+    expect(checkBudget({ ...base, budgetUsd: 1.0000001 })).toMatchObject({ ok: true });
+    expect(checkBudget({ ...base, spentUsd: Number.NaN })).toMatchObject({ ok: false, reason: "over_budget" });
+    expect(checkBudget({ ...base, budgetUsd: Number.NaN })).toMatchObject({ ok: false, reason: "over_budget" });
+    expect(checkBudget({ ...base, maxOutputTokens: Number.NaN })).toMatchObject({ ok: false, reason: "over_budget" });
+    expect(checkBudget({ ...base, budgetUsd: 0 })).toMatchObject({ ok: false, reason: "over_budget" });
+  });
 });

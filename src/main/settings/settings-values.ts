@@ -117,12 +117,33 @@ export function parsePriceTable(v: string): PriceRule[] {
   return rules;
 }
 
-const globToRegExp = (pattern: string): RegExp =>
-  new RegExp(`^${pattern.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`, "i");
+/** 线性回溯的通配匹配（只有 *），不区分大小写；不用正则，病态模式也不会指数膨胀。 */
+function globMatch(pattern: string, text: string): boolean {
+  const p = pattern.toLowerCase();
+  const t = text.toLowerCase();
+  let pi = 0;
+  let ti = 0;
+  let star = -1;
+  let mark = 0;
+  while (ti < t.length) {
+    if (pi < p.length && p[pi] === "*") {
+      star = pi++;
+      mark = ti;
+    } else if (pi < p.length && p[pi] === t[ti]) {
+      pi++;
+      ti++;
+    } else if (star >= 0) {
+      pi = star + 1;
+      ti = ++mark;
+    } else return false;
+  }
+  while (pi < p.length && p[pi] === "*") pi++;
+  return pi === p.length;
+}
 
 /** 从上往下第一条匹配的价格；没有匹配时为 null（不会调用）。 */
 export function priceFor(rules: readonly PriceRule[], model: string): PriceRule | null {
-  return rules.find((r) => globToRegExp(r.pattern).test(model)) ?? null;
+  return rules.find((r) => globMatch(r.pattern, model)) ?? null;
 }
 
 export const TERMS_LIMIT = 500;
@@ -249,6 +270,13 @@ export interface LlmConfig {
   retentionDays: number;
 }
 
+/** 与 normalizeSetting 同一个范围：1–3650 的整数，否则回退 90。 */
+function parseRetentionDays(v: string): number {
+  const t = v.trim();
+  const n = Number(t);
+  return /^\d{1,4}$/.test(t) && n >= 1 && n <= 3650 ? n : 90;
+}
+
 function safely<T>(f: () => T, fallback: T): T {
   try {
     return f();
@@ -270,6 +298,6 @@ export function llmConfig(s: SettingsRepo): LlmConfig {
     budgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : 0,
     prices,
     confirm: s.get("llmConfirm") === "1",
-    retentionDays: parseDays(s.get("auditRetentionDays"), 90) || 90,
+    retentionDays: parseRetentionDays(s.get("auditRetentionDays")),
   };
 }

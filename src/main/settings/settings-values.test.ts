@@ -153,4 +153,18 @@ describe("personal API settings", () => {
     expect(() => normalizeTerms("张三")).toThrow(SettingError);
     expect(() => normalizeTerms(Array.from({ length: TERMS_LIMIT + 1 }, (_, i) => ({ term: `词${i}号`, category: "term" })))).toThrow(SettingError);
   });
+
+  it("round-trips retention days up to 3650 and matches pathological patterns in linear time", () => {
+    const s = new SettingsRepo(memDb());
+    s.set("auditRetentionDays", normalizeSetting("auditRetentionDays", "1500"));
+    expect(llmConfig(s).retentionDays).toBe(1500);
+    s.set("auditRetentionDays", "3650");
+    expect(llmConfig(s).retentionDays).toBe(3650);
+    s.set("auditRetentionDays", "3651");
+    expect(llmConfig(s).retentionDays).toBe(90);
+    const rules = parsePriceTable(`${"*".repeat(25)}x 1 2`);
+    const t0 = performance.now();
+    expect(priceFor(rules, "a".repeat(60))).toBeNull();
+    expect(performance.now() - t0).toBeLessThan(50);
+  });
 });

@@ -39,7 +39,8 @@ export function checkBudget(o: {
   const price = priceFor(o.prices, o.model);
   if (!price) return { ok: false, reason: "no_price", message: `价格表里没有模型 ${o.model} 的价格，不会调用` };
   const estimateUsd = costUsd(price, estimateTokens(o.inputText), o.maxOutputTokens);
-  if (o.spentUsd + estimateUsd > o.budgetUsd) {
+  // 写成 !(a <= b)：任何 NaN 都按超预算处理（失败即拒绝）。
+  if (![o.spentUsd, o.budgetUsd, estimateUsd].every(Number.isFinite) || !(o.spentUsd + estimateUsd <= o.budgetUsd)) {
     return {
       ok: false,
       reason: "over_budget",
