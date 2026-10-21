@@ -56,7 +56,8 @@ export class BriefService {
    */
   private latestFull(ticketKey: string) {
     const full = this.d.handoffs.latestValidFull(ticketKey);
-    if (!full?.payload) return full;
+    // 没有完整 handoff 但有有效的刷新记录时，用刷新记录。
+    if (!full?.payload) return this.d.handoffs.latestValid(ticketKey);
     const refresh = this.d.handoffs.latestValid(ticketKey);
     if (!refresh?.payload || refresh.trigger !== "refresh") return full;
     if (refresh.createdAt < full.createdAt || (refresh.createdAt === full.createdAt && refresh.id < full.id)) return full;
@@ -74,8 +75,8 @@ export class BriefService {
       marks: this.d.marks.all(),
       unclaimedCount: this.d.unclaimedCount(),
       previousDay,
-      // 只取上个工作日（本地日期）当天的 handoff，旧的在前；今天补跑的晚间批量不算“昨天做的”。
-      previousDayHandoffs: this.d.handoffs.listBetween(dayStart(previousDay), dayStart(addDays(previousDay, 1))),
+      // 从上个工作日开始到现在（旧的在前，不含刷新）：包括今天早上补跑的晚间批量。
+      previousDayHandoffs: this.d.handoffs.listBetween(dayStart(previousDay), now + 1).filter((h) => h.trigger !== "refresh"),
       thresholds: thresholds(this.d.settings),
     });
     // 计划 3 在这里接 PrivacyGateway 生成“今日重点”；计划 2 永远是 off。
@@ -95,6 +96,7 @@ export class BriefService {
 
   /** 非 followup 条目的“完成 / 推迟到明天 / 忽略”。 */
   mark(itemKey: string, mark: ItemMark): void {
+    if (itemKey.startsWith("followup:")) throw new Error(`followup 条目不能用 mark：请通过 followups 标记 (${itemKey})`);
     const now = this.d.now();
     this.d.marks.set(itemKey, mark, mark === "snoozed" ? addDays(localDate(now), 1) : null, now);
   }

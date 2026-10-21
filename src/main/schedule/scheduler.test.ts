@@ -28,6 +28,8 @@ describe("isNightlyDue / isMorningDue", () => {
     expect(isNightlyDue(at(21, 9), cfg, { lastRunAt: at(20, 16), lastStatus: "failed" }, true)).toBe(true);
     expect(isNightlyDue(at(21, 9), cfg, { lastRunAt: at(20, 16), lastStatus: "partial" }, false)).toBe(false);
     expect(isNightlyDue(at(17, 20), cfg, { lastRunAt: at(16, 16), lastStatus: "ok" }, false)).toBe(false);
+    // 时钟被往回校正了好几天：上次运行时间在“未来”，当作到期。
+    expect(isNightlyDue(at(20, 17), cfg, { lastRunAt: at(25, 16), lastStatus: "ok" }, false)).toBe(true);
   });
 
   it("runs the morning brief once per day after 5:00, on events, or on a tick while the user is active", () => {

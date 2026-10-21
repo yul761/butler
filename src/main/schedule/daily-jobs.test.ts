@@ -4,7 +4,11 @@ import { JOB_EVENING, JobsRepo } from "../db/jobs-repo";
 import { memDb } from "../test-utils";
 import { morningJob, nightlyJob, type DailyJobDeps } from "./daily-jobs";
 
-const brief = (kind: BriefKind): Brief => ({ id: 1, kind, date: "2026-10-21", createdAt: 1, ...EMPTY_BRIEF_CONTENT, narrative: null, narrativeStatus: "off" });
+const brief = (kind: BriefKind, withContent = true): Brief => ({
+  id: 1, kind, date: "2026-10-21", createdAt: 1, ...EMPTY_BRIEF_CONTENT,
+  evening: kind === "evening" && withContent ? [{ ticketKey: "A-1", done: ["x"], blockers: [], next: null, degraded: false }] : [],
+  narrative: null, narrativeStatus: "off",
+});
 
 function deps(over: Partial<DailyJobDeps> = {}) {
   const calls: string[] = [];
@@ -81,5 +85,19 @@ describe("daily jobs", () => {
     morning.d.runner = { runNightly: boom, refreshForBrief: boom };
     await expect(morningJob(morning.d)).rejects.toThrow("sync boom");
     expect(morning.calls).toEqual(["morning", "refreshing=true", "refreshing=false"]);
+  });
+
+  it("nightly: no notification for an empty brief or for catching up an earlier day's slot", async () => {
+    const at = (d: number, h: number) => new Date(2026, 9, d, h).getTime();
+    const empty = deps({ now: () => at(20, 16) });
+    empty.d.briefs = { ...empty.d.briefs, generateEvening: () => brief("evening", false) };
+    await nightlyJob(empty.d, at(20, 16));
+    expect(empty.calls).toEqual(["runNightly"]);
+    const late = deps({ now: () => at(21, 8) });
+    await nightlyJob(late.d, at(20, 16));
+    expect(late.calls).toEqual(["runNightly", "evening"]);
+    const today = deps({ now: () => at(20, 16) });
+    await nightlyJob(today.d, at(20, 16));
+    expect(today.calls).toEqual(["runNightly", "evening", "notify:evening"]);
   });
 });

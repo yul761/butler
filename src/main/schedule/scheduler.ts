@@ -33,6 +33,8 @@ export function isMorningDue(now: number, job: Pick<JobState, "lastRunAt">, trig
  */
 export function isNightlyDue(now: number, cfg: ScheduleConfig, job: Pick<JobState, "lastRunAt" | "lastStatus">, morningDue: boolean): boolean {
   if (job.lastRunAt === null) return false;
+  // 上次运行时间在一天以后：时钟被往回校正过，当作到期，免得整段时间都不跑。
+  if (job.lastRunAt - now > 86_400_000) return true;
   const slot = lastNightlySlot(now, cfg);
   if (slot !== null && job.lastRunAt < slot) return true;
   return morningDue && (job.lastStatus === "partial" || job.lastStatus === "failed");
@@ -43,7 +45,8 @@ export interface SchedulerDeps {
   config: () => ScheduleConfig;
   now: () => number;
   userActive: () => boolean;
-  nightly: () => Promise<"ok" | "partial">;
+  /** slot：这次补跑 / 执行对应的晚间时刻（没有工作日时为 null）。 */
+  nightly: (slot: number | null) => Promise<"ok" | "partial">;
   morning: () => Promise<void>;
   onChange?: () => void;
   log?: (msg: string, err?: unknown) => void;
@@ -91,9 +94,10 @@ export class Scheduler {
 
   private async runNightly(): Promise<void> {
     const startedAt = this.d.now();
+    const slot = lastNightlySlot(startedAt, this.d.config());
     await this.track(
       JOB_NIGHTLY,
-      async () => this.d.jobs.record(JOB_NIGHTLY, startedAt, await Promise.resolve().then(() => this.d.nightly()), null),
+      async () => this.d.jobs.record(JOB_NIGHTLY, startedAt, await Promise.resolve().then(() => this.d.nightly(slot)), null),
       (e) => this.d.jobs.record(JOB_NIGHTLY, startedAt, "failed", message(e)),
     );
   }

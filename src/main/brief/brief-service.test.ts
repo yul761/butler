@@ -118,7 +118,7 @@ describe("BriefService", () => {
     expect(s.service.generateMorning().items.map((i) => i.rule)).toContain("pr_approved");
   });
 
-  it("takes previous-day handoffs from that local day only, oldest first", () => {
+  it("takes handoffs from the previous working day up to now, oldest first, without refreshes", () => {
     const s = setup();
     s.addTicket("A-1");
     s.addTicket("B-2");
@@ -130,10 +130,34 @@ describe("BriefService", () => {
     s.handoff("B-2", { done_today: ["周五下午"] });
     s.setNow(at(19, 8));
     s.handoff("A-1", { done_today: ["周一早上补跑的"] });
+    s.refresh("B-2", { status: "active", pr: null, jira: null });
     const brief = s.service.generateMorning();
     expect(brief.previousDay).toEqual({
       date: "2026-10-16",
-      entries: [{ ticketKey: "A-1", done: ["周五上午"] }, { ticketKey: "B-2", done: ["周五下午"] }],
+      entries: [{ ticketKey: "A-1", done: ["周五上午", "周一早上补跑的"] }, { ticketKey: "B-2", done: ["周五下午"] }],
     });
+  });
+
+  it("includes the catch-up nightly handoff in the morning brief after the laptop slept through Tuesday 16:00", () => {
+    const s = setup();
+    s.addTicket("A-1", at(20, 15));
+    s.setNow(at(21, 8, 30));
+    s.handoff("A-1", { done_today: ["周二下午的活"] });
+    s.setNow(at(21, 8, 31));
+    const brief = s.service.generateMorning();
+    expect(brief.previousDay).toEqual({ date: "2026-10-20", entries: [{ ticketKey: "A-1", done: ["周二下午的活"] }] });
+  });
+
+  it("falls back to a valid refresh when a ticket has no full handoff", () => {
+    const s = setup();
+    s.addTicket("A-1");
+    s.refresh("A-1", { status: "in_review", pr: { number: 3, url: "u", state: "open", review: "approved" }, jira: null });
+    expect(s.service.snapshot()[0].latest).toMatchObject({ trigger: "refresh" });
+    expect(s.service.generateMorning().items.map((i) => i.rule)).toContain("pr_approved");
+  });
+
+  it("refuses to mark followup items", () => {
+    const s = setup();
+    expect(() => s.service.mark("followup:f1", "done")).toThrow(/followup/);
   });
 });
