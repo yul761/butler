@@ -22,6 +22,7 @@ const NETWORK_GLOBALS = ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", 
 /** 动态 import / require 的模块名（esquery 的正则里不能有 /）。 */
 const BANNED_BUILTINS = [...NETWORK_BUILTINS, ...LOADER_BUILTINS];
 const DYNAMIC_MODULES = `/^(node:)?(${BANNED_BUILTINS.join("|")}|undici|axios|got|openai|ws|electron-updater|socket.io-client|https-proxy-agent)(\\/.*)?$/`;
+const ELECTRON_MODULE = "/^electron(\\/.*)?$/";
 const ELECTRON_NET_NAMES = `/^(${ELECTRON_NETWORK.join("|")})$/`;
 
 const egressRules = {
@@ -33,7 +34,10 @@ const egressRules = {
         ...NETWORK_PACKAGES.map((name) => ({ name, message: EGRESS_MESSAGE })),
         { name: "electron", importNames: ELECTRON_NETWORK, message: EGRESS_MESSAGE },
       ],
-      patterns: [{ group: [...BANNED_BUILTINS.flatMap((m) => [`${m}/*`, `node:${m}/*`]), "@sentry/*", "@modelcontextprotocol/*", "electron-updater/*", "socket.io-client/*", "@anthropic-ai/*", "@ai-sdk/*", "@langchain/*", "langchain", "langchain/*", "openai/*", "undici/*"], message: EGRESS_MESSAGE }],
+      patterns: [
+        { group: ["electron/*"], importNames: ELECTRON_NETWORK, message: EGRESS_MESSAGE },
+        { group: [...BANNED_BUILTINS.flatMap((m) => [`${m}/*`, `node:${m}/*`]), "@sentry/*", "@modelcontextprotocol/*", "electron-updater/*", "socket.io-client/*", "@anthropic-ai/*", "@ai-sdk/*", "@langchain/*", "langchain", "langchain/*", "openai/*", "undici/*"], message: EGRESS_MESSAGE },
+      ],
     },
   ],
   "no-restricted-globals": ["error", ...NETWORK_GLOBALS.map((name) => ({ name, message: EGRESS_MESSAGE }))],
@@ -55,12 +59,14 @@ const egressRules = {
     { selector: 'CallExpression[callee.name="createRequire"]', message: EGRESS_MESSAGE },
     { selector: 'CallExpression[callee.property.name=/^(getBuiltinModule|binding|_linkedBinding|dlopen)$/]', message: EGRESS_MESSAGE },
     // Electron：只允许具名 import 且不含联网对象；默认 / 命名空间 import、require("electron")、import("electron") 都不行。
-    { selector: 'ImportDeclaration[source.value="electron"] :matches(ImportDefaultSpecifier, ImportNamespaceSpecifier)', message: EGRESS_MESSAGE },
-    { selector: `ImportDeclaration[source.value="electron"] ImportSpecifier[imported.name=${ELECTRON_NET_NAMES}]`, message: EGRESS_MESSAGE },
-    { selector: 'ImportDeclaration[source.value="electron"] ImportSpecifier[imported.name="default"]', message: EGRESS_MESSAGE },
-    { selector: 'CallExpression[callee.name="require"][arguments.0.value="electron"]', message: EGRESS_MESSAGE },
-    { selector: 'ImportExpression[source.value="electron"]', message: EGRESS_MESSAGE },
-    { selector: 'TSExternalModuleReference[expression.value="electron"]', message: EGRESS_MESSAGE },
+    { selector: `ImportDeclaration[source.value=${ELECTRON_MODULE}] :matches(ImportDefaultSpecifier, ImportNamespaceSpecifier)`, message: EGRESS_MESSAGE },
+    { selector: `ImportDeclaration[source.value=${ELECTRON_MODULE}] ImportSpecifier[imported.name=${ELECTRON_NET_NAMES}]`, message: EGRESS_MESSAGE },
+    { selector: `ExportNamedDeclaration[source.value=${ELECTRON_MODULE}]`, message: EGRESS_MESSAGE },
+    { selector: `ExportAllDeclaration[source.value=${ELECTRON_MODULE}]`, message: EGRESS_MESSAGE },
+    { selector: `ImportDeclaration[source.value=${ELECTRON_MODULE}] ImportSpecifier[imported.name="default"]`, message: EGRESS_MESSAGE },
+    { selector: `CallExpression[callee.name="require"][arguments.0.value=${ELECTRON_MODULE}]`, message: EGRESS_MESSAGE },
+    { selector: `ImportExpression[source.value=${ELECTRON_MODULE}]`, message: EGRESS_MESSAGE },
+    { selector: `TSExternalModuleReference[expression.value=${ELECTRON_MODULE}]`, message: EGRESS_MESSAGE },
   ],
 };
 
