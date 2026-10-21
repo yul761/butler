@@ -58,3 +58,15 @@ Collected from the plan-1 execution ledger: every deferred minor, parked finding
 - Final: parked — uncaught exceptions now only logged to file (no console in dev) — Ruling: deferred; tee to console
 - Final: parked — nested `claude --resume` / `-c` still re-links (source resume) — Ruling: accepted per F2; revisit in plan 2
 - Final: parked — lost nested SessionStart leaves ticket on row (phantom waiting session) — Ruling: minor, deferred
+
+## Resolved in plan 2
+- Task 3 minor: GitError escapes create() unmapped → TicketError("git_failed") with git's own reason (plan 2 Task 1)
+- Task 3 minor: user branch name not validated → `git check-ref-format --branch`, expansion and leading "-" rejected (plan 2 Task 1)
+- Empty repository → "这个仓库还没有任何提交" (plan 2 Task 1)
+- Task 9 minor: prefill with newlines would submit → sanitizePrefill in SessionService.open (plan 2 Task 2)
+- Final parked: trailing PTY data after exit clears the exit banner → dropped in PtyManager (plan 2 Task 2)
+- Final parked: control chars in dropped filenames → stripControl in quotePath (plan 2 Task 2)
+- Final parked: uncaught exceptions only logged to file → logger tees to console in dev (plan 2 Task 2)
+- Task 10 minor: orphan session row if spawn throws; empty row when claude exits before the first message (plan 2 Task 3)
+- Task 7 minor: origin never upgraded discovered→butler (plan 2 Task 3)
+- Final parked: hook-triggered discovery for every ticketless session → only when details are missing, once per session (plan 2 Task 3)
