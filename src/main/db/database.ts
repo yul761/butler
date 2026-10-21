@@ -26,20 +26,37 @@ export function migrate(db: Db): number {
   return MIGRATIONS.length;
 }
 
+let savepointSeq = 0;
+
 /**
  * 同步事务：fn 抛错时整体回滚。fn 里不能有 await。
- * 可重入：已经在事务里（例如 SessionsRepo.delete 被包在另一个 withTransaction 里）就直接执行 fn，
- * 由最外层负责 COMMIT / ROLLBACK（SQLite 没有嵌套 BEGIN）。
+ * 可重入：已经在事务里就用 SAVEPOINT，内层抛错只回滚内层的写入（外层 catch 后继续也不会提交内层的残留），
+ * 然后继续抛出。最外层负责 COMMIT / ROLLBACK。
  */
 export function withTransaction<T>(db: Db, fn: () => T): T {
-  if (db.isTransaction) return fn();
+  if (db.isTransaction) {
+    const sp = `sp_${++savepointSeq}`;
+    db.exec(`SAVEPOINT ${sp}`);
+    try {
+      const result = fn();
+      db.exec(`RELEASE ${sp}`);
+      return result;
+    } catch (e) {
+      if (db.isTransaction) {
+        db.exec(`ROLLBACK TO ${sp}`);
+        db.exec(`RELEASE ${sp}`);
+      }
+      throw e;
+    }
+  }
   db.exec("BEGIN IMMEDIATE");
   try {
     const result = fn();
     db.exec("COMMIT");
     return result;
   } catch (e) {
-    db.exec("ROLLBACK");
+    // SQLite 可能已经自动回滚（如 SQLITE_FULL）；此时再 ROLLBACK 会抛错并盖掉原始错误。
+    if (db.isTransaction) db.exec("ROLLBACK");
     throw e;
   }
 }

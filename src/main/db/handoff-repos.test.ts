@@ -1,14 +1,19 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { Followup, Ticket } from "../../shared/types";
 import { emptyHandoff } from "../handoff/schema";
 import { memDb } from "../test-utils";
 import { BriefsRepo } from "./briefs-repo";
-import { withTransaction } from "./database";
+import { migrate, withTransaction } from "./database";
 import { FollowupsRepo } from "./followups-repo";
 import { HandoffsRepo } from "./handoffs-repo";
 import { JOB_NIGHTLY, JobsRepo } from "./jobs-repo";
 import { MarksRepo } from "./marks-repo";
 import { MIGRATIONS } from "./migrations";
+import { SessionsRepo } from "./sessions-repo";
 import { SettingsRepo } from "./settings-repo";
 import { TicketsRepo } from "./tickets-repo";
 
@@ -71,6 +76,15 @@ describe("HandoffsRepo", () => {
     expect(repo.lastCapturedAt("NOPE-1")).toBeNull();
     expect(repo.listByTicket("PROJ-1").map((h) => h.createdAt)).toEqual([400, 200, 100]);
     expect(repo.listBetween(150, 400).map((h) => h.createdAt)).toEqual([200]);
+  });
+
+  it("latestValid skips a newer row whose payload is unreadable", () => {
+    const { db } = setup();
+    const repo = new HandoffsRepo(db);
+    const payload = { ...emptyHandoff("PROJ-1"), next_steps: ["a"] };
+    repo.insert({ ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", createdAt: 100, payload, rawText: null });
+    db.prepare(`INSERT INTO handoffs (ticket_key, trigger, created_at, payload, degraded) VALUES ('PROJ-1', 'nightly', 200, '{broken', 0)`).run();
+    expect(repo.latestValid("PROJ-1")?.createdAt).toBe(100);
   });
 
   it("treats an unreadable payload as degraded", () => {
@@ -162,5 +176,43 @@ describe("withTransaction", () => {
       }),
     ).toThrow("boom");
     expect(tickets.get("PROJ-3")).toBeNull();
+  });
+
+  it("nested failure caught by the outer callback is discarded, outer writes commit", () => {
+    const { db, tickets } = setup();
+    withTransaction(db, () => {
+      tickets.insert(ticket("PROJ-4"));
+      try {
+        withTransaction(db, () => {
+          tickets.insert(ticket("PROJ-5"));
+          throw new Error("inner");
+        });
+      } catch {
+        /* swallowed */
+      }
+    });
+    expect(tickets.get("PROJ-4")).not.toBeNull();
+    expect(tickets.get("PROJ-5")).toBeNull();
+    expect(db.isTransaction).toBe(false);
+  });
+});
+
+describe("upgrade from schema v1", () => {
+  it("keeps old rows and reads new columns as unknown", () => {
+    const dir = mkdtempSync(join(tmpdir(), "butler-up-"));
+    const db = new DatabaseSync(join(dir, "v1.db"));
+    db.exec("PRAGMA foreign_keys = ON;");
+    db.exec(MIGRATIONS[0]);
+    db.exec("PRAGMA user_version = 1");
+    db.exec(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES ('OLD-1', '/r', 'branch', 'b', 1)`);
+    db.exec(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('s1', 'OLD-1', '/r', 'butler', 1)`);
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(MIGRATIONS.length);
+    const tickets = new TicketsRepo(db);
+    expect(tickets.get("OLD-1")).toMatchObject({ key: "OLD-1", status: "active" });
+    expect(tickets.statusTimes("OLD-1")).toEqual({ changedAt: null, manualAt: null });
+    expect(new SessionsRepo(db).get("s1")).not.toBeNull();
+    expect(new HandoffsRepo(db).latest("OLD-1")).toBeNull();
+    db.close();
   });
 });

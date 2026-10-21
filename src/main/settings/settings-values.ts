@@ -1,5 +1,5 @@
 import type { EditableSettingKey } from "../../shared/settings";
-import type { SettingsRepo } from "../db/settings-repo";
+import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
 
 export class SettingError extends Error {
   readonly code = "invalid_setting";
@@ -83,7 +83,12 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
 }
 
 export function scheduleConfig(s: SettingsRepo): ScheduleConfig {
-  return { nightly: parseTime(s.get("nightlyTime")) ?? { h: 16, m: 0 }, workingDays: parseWorkingDays(s.get("workingDays")) };
+  // 工作日解析出空集合（损坏的值）会让晚间任务永远不跑，所以回退到默认。
+  const days = parseWorkingDays(s.get("workingDays"));
+  return {
+    nightly: parseTime(s.get("nightlyTime")) ?? { h: 16, m: 0 },
+    workingDays: days.size > 0 ? days : parseWorkingDays(SETTING_DEFAULTS.workingDays),
+  };
 }
 
 export function thresholds(s: SettingsRepo): Thresholds {

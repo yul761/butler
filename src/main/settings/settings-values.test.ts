@@ -39,6 +39,10 @@ describe("settings values", () => {
     expect(scheduleConfig(s)).toEqual({ nightly: { h: 16, m: 0 }, workingDays: new Set([1, 2, 3, 4, 5]) });
     expect(thresholds(s)).toEqual({ blockedDays: 2, reviewWaitDays: 2, staleDays: 5 });
     expect(trackerTools(s)).toEqual([]);
+    for (const bad of ["garbage", "", "9,8"]) {
+      s.set("workingDays", bad);
+      expect(scheduleConfig(s).workingDays).toEqual(new Set([1, 2, 3, 4, 5]));
+    }
     s.set("nightlyTime", "garbage");
     expect(scheduleConfig(s).nightly).toEqual({ h: 16, m: 0 });
   });

@@ -82,13 +82,16 @@ export class HandoffsRepo {
     return this.listByTicket(ticketKey, 1)[0] ?? null;
   }
 
-  /** 最新的一条完整 handoff（含刷新）。 */
+  /** 最新的一条完整 handoff（含刷新）。payload 读不出来的行跳过，取下一条。 */
   latestValid(ticketKey: string): HandoffRecord | null {
-    const row = this.db
-      .prepare(`SELECT * FROM handoffs WHERE ticket_key = ? AND degraded = 0 AND payload IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1`)
-      .get(ticketKey) as HandoffRow | undefined;
-    const rec = row ? toRecord(row) : null;
-    return rec && rec.payload ? rec : null;
+    const rows = this.db
+      .prepare(`SELECT * FROM handoffs WHERE ticket_key = ? AND degraded = 0 AND payload IS NOT NULL ORDER BY created_at DESC, id DESC`)
+      .iterate(ticketKey) as Iterable<HandoffRow>;
+    for (const row of rows) {
+      const rec = toRecord(row);
+      if (rec.payload) return rec;
+    }
+    return null;
   }
 
   /** 最近一次读过 session 的 handoff（不算早间刷新）的时间；晚间批量据此判断有没有新活动。 */
