@@ -21,6 +21,28 @@ describe("claude spawn helpers", () => {
     expect(env).toEqual({ Path: "C:\\new", HOME: "/h", TERM: "xterm-256color", COLORTERM: "truecolor", BUTLER_TICKET: "PROJ-1", BUTLER_SESSION: "u1" });
   });
 
+  it("drops the parent Claude Code session's markers but keeps user configuration", () => {
+    const env = sessionEnv(
+      {
+        HOME: "/h",
+        CLAUDE_CODE_CHILD_SESSION: "1",
+        CLAUDE_CODE_SESSION_ID: "parent",
+        CLAUDE_CODE_SESSION_ATTENDED: "1",
+        CLAUDE_CODE_ENTRYPOINT: "cli",
+        CLAUDE_CODE_EXECPATH: "/x/claude",
+        CLAUDE_CODE_MESSAGING_SOCKET: "/tmp/sock",
+        CLAUDE_CODE_MESSAGING_TOKEN: "secret",
+        CLAUDE_CODE_SSE_PORT: "1234",
+        CLAUDE_PID: "42",
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        ANTHROPIC_MODEL: "m",
+      },
+      { pathValue: "", ticketKey: "T-1", sessionId: "u" },
+    );
+    expect(Object.keys(env).filter((k) => k.startsWith("CLAUDE"))).toEqual(["CLAUDE_CODE_USE_BEDROCK"]);
+    expect(env.ANTHROPIC_MODEL).toBe("m");
+  });
+
   it("keeps the inherited PATH when the login PATH is empty", () => {
     expect(sessionEnv({ PATH: "/usr/bin" }, { pathValue: "", ticketKey: "T-1", sessionId: "u" }).PATH).toBe("/usr/bin");
   });

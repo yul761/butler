@@ -17,6 +17,24 @@ export function spawnSpec(claudePath: string, args: string[], platform: NodeJS.P
   return { file: claudePath, args };
 }
 
+/**
+ * 外层 Claude Code 会话注入的会话级标记。Butler 若从一个 claude 会话里启动，这些变量会被继承，
+ * 被启动的 claude 会把自己当成子会话（例如不保存 transcript，导致无法 --resume），所以必须去掉。
+ * 用户自己的配置（CLAUDE_CODE_USE_BEDROCK、ANTHROPIC_* 等）保留。
+ */
+const PARENT_SESSION_VARS = new Set([
+  "CLAUDECODE",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_SESSION_ATTENDED",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_EXECPATH",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+  "CLAUDE_CODE_SSE_PORT",
+  "CLAUDE_PID",
+]);
+
 /** 去掉 Electron 和外层 Claude Code 的标记变量，防止它们泄漏给被启动的 claude。 */
 export function sessionEnv(
   base: NodeJS.ProcessEnv,
@@ -24,7 +42,7 @@ export function sessionEnv(
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) {
-    if (v === undefined || k.startsWith("ELECTRON_") || k === "CLAUDECODE") continue;
+    if (v === undefined || k.startsWith("ELECTRON_") || PARENT_SESSION_VARS.has(k)) continue;
     out[k] = v;
   }
   if (x.pathValue) out[pathKey(out)] = x.pathValue;
