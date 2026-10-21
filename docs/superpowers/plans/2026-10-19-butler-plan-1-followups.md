@@ -136,3 +136,14 @@ Triage per the plan-2 final review: items marked "→ final wave" were fixed in 
 - Final: parked — REQUIRED_FLAGS lacks --setting-sources (older claude would fail every headless run without a health warning) — Ruling: plan 3 task — cost: confusing failure on old claude
 - Final: parked — manual runMorningNow during an evaluate catch-up is not coalesced (morning runs twice) — Ruling: harmless, deferred
 - Ruling P2-R6: do NOT merge plan 2 into main yet — the user's running app is on main (renderer HMR + DB migration would disrupt their testing); stack plans 3 and 4 on this branch line and merge once at the end — cost if wrong: later merge, larger diff
+
+# Plan 3 follow-ups
+
+## Live checks
+- Plan 3 Task 1 (claude 2.1.306): MCP sources in a real git repo cwd with a project `.mcp.json` (approved in `.claude/settings.local.json`) and a local-scope server
+  - A default: butlerproj:connected, butlerlocal:connected (2 servers, 2 tools)
+  - B `--setting-sources user`: no servers, no tools (0 servers, 0 tools)
+  - C B + `--mcp-config .mcp.json`: butlerproj:connected (1 server, 1 tool)
+  - D B + `--mcp-config <exported local servers>`: butlerlocal:connected (1 server, 1 tool)
+  - no assistant message observed before kill in any run
+- Ruling P3-R1: Task 5 takes route A; INCLUDE_LOCAL_SCOPE = true — B dropped both project and local servers, and C and D each restored theirs via --mcp-config — cost if wrong: tracker MCP tools from .mcp.json / local scope unavailable to nightly handoffs (detectable in the probe)

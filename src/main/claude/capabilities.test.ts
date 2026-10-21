@@ -13,9 +13,17 @@ const HELP = `
   --disallowedTools, --disallowed-tools <tools...>
   --no-session-persistence              Disable session persistence
   --permission-mode <mode>              Permission mode to use for the session
+  --setting-sources <sources>           Comma-separated list of setting sources to load (user, project, local)
 `;
 
 describe("capabilities", () => {
+  it("warns when claude is too old to know --setting-sources", async () => {
+    const old = HELP.split("\n").filter((l) => !l.includes("--setting-sources")).join("\n");
+    const run = async (_f: string, args: string[]) => (args[0] === "--version" ? "2.0.0" : old);
+    const h = await probeClaude("/bin/claude", {}, run);
+    expect(h.missingFlags).toEqual(["--setting-sources"]);
+  });
+
   it("parses the version", () => {
     expect(parseVersion("2.1.304 (Claude Code)\n")).toBe("2.1.304");
     expect(parseVersion("garbage")).toBeNull();
