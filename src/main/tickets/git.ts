@@ -49,3 +49,33 @@ export async function createBranch(cwd: string, branch: string): Promise<void> {
 export async function checkout(cwd: string, branch: string): Promise<void> {
   await git(cwd, ["checkout", branch]);
 }
+
+/** 仓库是否至少有一个提交。空仓库没有 HEAD，建分支和 worktree 都会失败。 */
+export async function hasCommits(cwd: string): Promise<boolean> {
+  try {
+    await git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 用 git 自己的规则校验分支名。`git check-ref-format --branch` 会把 `@{-1}` 这类写法展开成别的分支，
+ * 所以输出必须和输入完全相同才算合法；以 `-` 开头的名字会被当成选项，直接拒绝。
+ */
+export async function isValidBranchName(cwd: string, name: string): Promise<boolean> {
+  if (!name || name.startsWith("-")) return false;
+  try {
+    return (await git(cwd, ["check-ref-format", "--branch", name])) === name;
+  } catch {
+    return false;
+  }
+}
+
+/** git 报错里给用户看的那一句：第一行 fatal:/error: 的原因，去掉前缀。 */
+export function gitErrorSummary(e: GitError): string {
+  const lines = e.stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const line = lines.find((l) => /^(fatal|error):/i.test(l)) ?? lines[0] ?? e.message;
+  return line.replace(/^(fatal|error):\s*/i, "");
+}

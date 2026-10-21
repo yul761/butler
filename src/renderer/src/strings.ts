@@ -56,6 +56,8 @@ export const S = {
     exists: "这个 ticket 已经存在。",
     not_git_repo: "所选目录不是 git 仓库。",
     worktree_exists: "worktree 目录已存在。",
+    invalid_branch: "分支名不合法（git 不接受这个名字）。",
+    empty_repo: "这个仓库还没有任何提交",
   } as Record<string, string>,
   unclaimedHint: "这些是最近 7 天在 Butler 之外启动的 Claude Code session。认领后就能在对应 ticket 下恢复。",
   noUnclaimed: "没有未认领的 session。",

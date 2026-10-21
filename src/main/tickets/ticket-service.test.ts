@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -94,5 +95,39 @@ describe("TicketService branch checks", () => {
     const { service } = setup();
     const t = await service.create({ key: "PROJ-9", repoPath: makeRepo(), workMode: "worktree" });
     expect(await service.checkBranch(t)).toEqual({ ok: true });
+  });
+});
+
+describe("TicketService.create input checks", () => {
+  it("rejects an empty repository with a friendly message", async () => {
+    const { service, tickets } = setup();
+    const dir = tempDir("butler-empty-");
+    execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" });
+    await expect(service.create({ key: "PROJ-20", repoPath: dir, workMode: "branch" })).rejects.toMatchObject({
+      code: "empty_repo",
+      message: "这个仓库还没有任何提交",
+    });
+    expect(tickets.get("PROJ-20")).toBeNull();
+  });
+
+  it("rejects branch names git would refuse or expand", async () => {
+    const { service } = setup();
+    const repo = makeRepo();
+    for (const branch of ["has space", "-x", "a..b", "@{-1}", "end/"]) {
+      expect(await code(service.create({ key: "PROJ-21", repoPath: repo, workMode: "branch", branch }))).toBe("invalid_branch");
+    }
+    expect(await code(service.create({ key: "PROJ-21", repoPath: repo, workMode: "branch", branch: "yc/功能-1" }))).toBe("no-error");
+  });
+
+  it("maps git failures to git_failed with git's own reason and stores nothing", async () => {
+    const { service, tickets } = setup();
+    const repo = makeRepo();
+    // main 已经在主工作区检出，git 不允许再给它建 worktree。
+    const err = await service.create({ key: "PROJ-22", repoPath: repo, workMode: "worktree", branch: "main" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TicketError);
+    expect(err).toMatchObject({ code: "git_failed" });
+    expect((err as Error).message).toMatch(/^git 操作失败：/);
+    expect((err as Error).message).not.toMatch(/fatal:/);
+    expect(tickets.get("PROJ-22")).toBeNull();
   });
 });
