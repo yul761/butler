@@ -3,9 +3,10 @@ import { ITEM_MARKS, type BriefKind, type BriefView, type ItemMark } from "../..
 import { IPC } from "../../shared/ipc";
 import { EDITABLE_SETTINGS, isEditableSetting, type EditableSettings } from "../../shared/settings";
 import {
-  FOLLOWUP_STATUSES, type CreateTicketInput, type FollowupStatus, type McpProbe, type OpenSessionRequest, type TicketStatus,
+  FOLLOWUP_STATUSES, type CreateTicketInput, type FollowupStatus, type JobStateView, type McpProbe, type OpenSessionRequest, type TicketStatus,
 } from "../../shared/types";
 import type { BriefService } from "../brief/brief-service";
+import { JOB_MORNING, JOB_NIGHTLY, type JobsRepo } from "../db/jobs-repo";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { SettingsRepo } from "../db/settings-repo";
@@ -32,6 +33,7 @@ export interface IpcDeps {
   briefService: BriefService;
   runner: HandoffRunner;
   scheduler: Scheduler;
+  jobs: JobsRepo;
   /** 早间刷新进行中。 */
   briefRefreshing: () => boolean;
   /** followup 状态变化后重新推导 ticket 状态。 */
@@ -117,10 +119,12 @@ export function registerIpc(d: IpcDeps): void {
     brief: d.briefService.latest(kind === "evening" ? "evening" : "morning"),
     refreshing: d.briefRefreshing(),
   }));
-  handle(IPC.briefsRegenerate, async () => {
-    if (d.aborted()) return;
+  handle(IPC.briefsRegenerate, async (): Promise<JobStateView | null> => {
+    if (d.aborted()) return null;
     await d.scheduler.runMorningNow();
     d.notify();
+    // 调度器把失败记在 jobs 表里而不是抛出：把结果交给界面显示。
+    return d.jobs.get(JOB_MORNING);
   });
   handle(IPC.briefsMark, (key: string, mark: ItemMark) => {
     if (!(ITEM_MARKS as readonly string[]).includes(mark)) throw new Error(`unknown mark: ${String(mark)}`);
@@ -143,10 +147,11 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
     return outcome;
   });
-  handle(IPC.jobsRunNightly, async () => {
-    if (d.aborted()) return;
+  handle(IPC.jobsRunNightly, async (): Promise<JobStateView | null> => {
+    if (d.aborted()) return null;
     await d.scheduler.runNightlyNow();
     d.notify();
+    return d.jobs.get(JOB_NIGHTLY);
   });
 
   handle(IPC.settingsGet, (): EditableSettings => Object.fromEntries(EDITABLE_SETTINGS.map((k) => [k, d.settings.get(k)])) as EditableSettings);

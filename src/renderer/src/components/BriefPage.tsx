@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Brief, BriefItem, BriefKind, BriefView } from "../../../shared/brief";
 import type { OpenSessionRequest, TicketView } from "../../../shared/types";
 import { api } from "../api";
 import { groupItems, itemActions, itemTitle, openRequest, type ItemAction } from "../brief-view";
 import { reportError } from "../errors";
+import { jobResultMessage } from "../job-view";
 import { S } from "../strings";
 
 interface Props {
@@ -18,14 +19,19 @@ const MARK = { done: "done", snooze: "snoozed", ignore: "ignored" } as const;
 
 export function BriefPage({ initialKind, tickets, onOpenTicket, onUnclaimed }: Props) {
   const [kind, setKind] = useState<BriefKind>(initialKind ?? "morning");
-  const [view, setView] = useState<BriefView | null>(null);
+  /** 记下数据属于哪个标签：切换标签时不会先闪出另一个标签的旧内容。 */
+  const [loaded, setLoaded] = useState<{ kind: BriefKind; view: BriefView } | null>(null);
   const [busy, setBusy] = useState(false);
+  /** 只采用最后一次请求的结果：慢的旧请求不会盖掉新的。 */
+  const seq = useRef(0);
 
   const load = useCallback(async () => {
+    const mine = ++seq.current;
     try {
-      setView(await api.briefLatest(kind));
+      const view = await api.briefLatest(kind);
+      if (mine === seq.current) setLoaded({ kind, view });
     } catch (e) {
-      reportError(e);
+      if (mine === seq.current) reportError(e);
     }
   }, [kind]);
 
@@ -54,7 +60,8 @@ export function BriefPage({ initialKind, tickets, onOpenTicket, onUnclaimed }: P
   async function regenerate() {
     setBusy(true);
     try {
-      await api.regenerateBrief();
+      const job = await api.regenerateBrief();
+      if (job?.lastStatus === "failed") reportError(new Error(jobResultMessage(job)));
     } catch (e) {
       reportError(e);
     } finally {
@@ -62,6 +69,7 @@ export function BriefPage({ initialKind, tickets, onOpenTicket, onUnclaimed }: P
     }
   }
 
+  const view = loaded?.kind === kind ? loaded.view : null;
   const brief = view?.brief ?? null;
   return (
     <div className="page brief">
@@ -76,7 +84,9 @@ export function BriefPage({ initialKind, tickets, onOpenTicket, onUnclaimed }: P
           <button disabled={busy || view?.refreshing === true} onClick={() => void regenerate()}>{S.regenerate}</button>
         )}
       </header>
-      {!brief ? (
+      {!view ? (
+        <p className="muted">{S.loading}</p>
+      ) : !brief ? (
         <p className="empty">{kind === "morning" ? S.noBrief : S.noEvening}</p>
       ) : kind === "morning" ? (
         <MorningBody brief={brief} onAct={(i, a) => void act(i, a)} onOpenTicket={(key) => onOpenTicket(key)} />
@@ -164,7 +174,7 @@ function EveningBody({ brief, onOpenTicket }: { brief: Brief; onOpenTicket: (key
           <button className="chip" onClick={() => onOpenTicket(e.ticketKey)}>{e.ticketKey}</button>
           {e.degraded && <span className="error"> {S.eveningDegraded}</span>}
           {e.done.length > 0 ? <DoneList items={e.done} /> : <p className="muted">{S.eveningNothingDone}</p>}
-          {e.blockers.length > 0 && <p>{S.eveningBlockers}{e.blockers.join("；")}</p>}
+          {e.blockers.length > 0 && <p>{S.eveningBlockers}{e.blockers.join(S.listSep)}</p>}
           {e.next && <p>{S.eveningNext}{e.next}</p>}
         </div>
       ))}

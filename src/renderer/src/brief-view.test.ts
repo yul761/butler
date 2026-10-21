@@ -48,5 +48,9 @@ describe("brief view helpers", () => {
     });
     expect(openRequest(item("next_step"), ticket([]))).toEqual({ ticketKey: "A-1", prefill: "继续：改 staging 配置（来自 A-1）" });
     expect(openRequest(item("unclaimed", { ticketKey: null }), undefined)).toBeNull();
+    // 已忽略的 session 不恢复，取下一个。
+    const dismissed = { ...session("s3"), dismissed: true };
+    expect(openRequest(item("next_step"), ticket([dismissed, session("s2")]))?.sessionId).toBe("s2");
+    expect(openRequest(item("next_step"), ticket([dismissed]))).toEqual({ ticketKey: "A-1", prefill: "继续：改 staging 配置（来自 A-1）" });
   });
 });

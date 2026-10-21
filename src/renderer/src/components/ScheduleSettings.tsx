@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { EditableSettingKey, EditableSettings } from "../../../shared/settings";
 import type { McpProbe } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
+import { jobResultMessage } from "../job-view";
 import { hasDay, mergeTools, probeIncomplete, toggleDay, WEEK_ORDER } from "../settings-form";
 import { S } from "../strings";
 
@@ -17,12 +18,20 @@ export function ScheduleSettings() {
   const [picked, setPicked] = useState<string[]>([]);
   const [detecting, setDetecting] = useState(false);
   const [nightlyBusy, setNightlyBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [daysBusy, setDaysBusy] = useState(false);
+  const [nightlyMessage, setNightlyMessage] = useState<string | null>(null);
+  /** 第一次加载成功之后，后续的刷新失败走全局错误条。 */
+  const loadedOnce = useRef(false);
 
   const load = useCallback(async () => {
     try {
       setValues(await api.settings());
+      setLoadError(null);
+      loadedOnce.current = true;
     } catch (e) {
-      reportError(e);
+      if (loadedOnce.current) reportError(e);
+      else setLoadError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
@@ -30,7 +39,14 @@ export function ScheduleSettings() {
     void load();
   }, [load]);
 
-  if (!values) return <p className="muted">{S.loading}</p>;
+  if (!values)
+    return loadError ? (
+      <p className="error">
+        {S.loadFailed(loadError)} <button onClick={() => void load()}>{S.retry}</button>
+      </p>
+    ) : (
+      <p className="muted">{S.loading}</p>
+    );
   const current = values;
   const value = (k: EditableSettingKey): string => draft[k] ?? current[k];
   const edit = (k: EditableSettingKey, v: string) => setDraft((d) => ({ ...d, [k]: v }));
@@ -91,12 +107,24 @@ export function ScheduleSettings() {
 
   async function runNightly() {
     setNightlyBusy(true);
+    setNightlyMessage(null);
     try {
-      await api.runNightly();
+      const job = await api.runNightly();
+      if (job) setNightlyMessage(jobResultMessage(job));
     } catch (e) {
       reportError(e);
     } finally {
       setNightlyBusy(false);
+    }
+  }
+
+  /** 保存完成（并重新读取）之前不接受下一次点击：第二次点击总是基于最新的值。 */
+  async function toggleWorkingDay(day: number) {
+    setDaysBusy(true);
+    try {
+      await save("workingDays", toggleDay(current.workingDays, day));
+    } finally {
+      setDaysBusy(false);
     }
   }
 
@@ -118,7 +146,7 @@ export function ScheduleSettings() {
         <div className="row">
           {WEEK_ORDER.map((day) => (
             <label key={day} className="inline">
-              <input type="checkbox" checked={hasDay(current.workingDays, day)} onChange={() => void save("workingDays", toggleDay(current.workingDays, day))} />
+              <input type="checkbox" checked={hasDay(current.workingDays, day)} disabled={daysBusy} onChange={() => void toggleWorkingDay(day)} />
               {S.weekdayNames[day]}
             </label>
           ))}
@@ -139,7 +167,7 @@ export function ScheduleSettings() {
 
       <div className="field">
         {S.trackerTools}
-        <textarea rows={4} className="mono" value={value("trackerTools")} onChange={(e) => edit("trackerTools", e.target.value)} />
+        <textarea rows={4} className="mono" value={value("trackerTools")} onChange={(e) => edit("trackerTools", e.target.value)} onBlur={() => saveIfEdited("trackerTools")} />
         <p className="muted">{S.trackerHint}</p>
         <div className="actions">
           <button onClick={() => void save("trackerTools")}>{S.save}</button>
@@ -178,6 +206,7 @@ export function ScheduleSettings() {
 
       <div className="actions">
         <button disabled={nightlyBusy} onClick={() => void runNightly()}>{nightlyBusy ? S.nightlyRunning : S.runNightlyNow}</button>
+        {nightlyMessage && <span className="muted">{nightlyMessage}</span>}
       </div>
     </section>
   );

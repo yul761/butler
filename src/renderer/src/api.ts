@@ -4,6 +4,7 @@ import type { EditableSettingKey, EditableSettings } from "../../shared/settings
 import type {
   CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketStatus, TicketView, UnclaimedSession,
+  JobStateView,
 } from "../../shared/types";
 
 declare global {
@@ -52,13 +53,13 @@ export const api = {
   uninstallHooks: () => call<HealthReport>(IPC.healthUninstallHooks),
   pickDirectory: () => call<string | null>(IPC.dialogPickDir),
   briefLatest: (kind: BriefKind) => call<BriefView>(IPC.briefsLatest, kind),
-  regenerateBrief: () => call<void>(IPC.briefsRegenerate),
+  regenerateBrief: () => call<JobStateView | null>(IPC.briefsRegenerate),
   markBriefItem: (key: string, mark: ItemMark) => call<void>(IPC.briefsMark, key, mark),
   followups: (ticketKey: string) => call<Followup[]>(IPC.followupsList, ticketKey),
   setFollowupStatus: (id: string, status: FollowupStatus) => call<void>(IPC.followupsSetStatus, id, status),
   handoffs: (ticketKey: string) => call<HandoffRecord[]>(IPC.handoffsList, ticketKey),
   runHandoff: (ticketKey: string) => call<HandoffOutcome>(IPC.handoffsRun, ticketKey),
-  runNightly: () => call<void>(IPC.jobsRunNightly),
+  runNightly: () => call<JobStateView | null>(IPC.jobsRunNightly),
   settings: () => call<EditableSettings>(IPC.settingsGet),
   setSetting: (key: EditableSettingKey, value: string) => call<void>(IPC.settingsSet, key, value),
   resetSetting: (key: EditableSettingKey) => call<void>(IPC.settingsReset, key),

@@ -289,7 +289,7 @@ async function bootstrap(): Promise<void> {
     });
   };
 
-  const runDiscovery = async () => {
+  const discoverOnce = async () => {
     try {
       const found = await scanClaudeProjects(paths.claudeProjects, Date.now() - UNCLAIMED_WINDOW_MS);
       syncDiscovered(found, sessions, Date.now());
@@ -298,6 +298,24 @@ async function bootstrap(): Promise<void> {
       notify();
     } catch (e) {
       logger("discovery failed", e);
+    }
+  };
+  let discovering = false;
+  let discoverAgain = false;
+  /** 同一时间只有一次扫描；扫描中又被触发（hook、定时器）就在结束后再扫一次。 */
+  const runDiscovery = async (): Promise<void> => {
+    if (discovering) {
+      discoverAgain = true;
+      return;
+    }
+    discovering = true;
+    try {
+      do {
+        discoverAgain = false;
+        await discoverOnce();
+      } while (discoverAgain);
+    } finally {
+      discovering = false;
     }
   };
 
@@ -326,6 +344,8 @@ async function bootstrap(): Promise<void> {
         void captureCommandHandoff({ sessions, tickets, ingest }, stop).then(
           (r) => {
             if (r?.stored) notify();
+            // session 没有归属 ticket、输出里的 ticket 号也不存在：记一笔，免得用户以为采集坏了。
+            else if (r && r.reason === "no_ticket") logger(`/handoff output in session ${stop.sessionId} names no known ticket; not stored`);
           },
           (e: unknown) => logger("capture /handoff failed", e),
         );
@@ -346,7 +366,7 @@ async function bootstrap(): Promise<void> {
   shutdownSessions = () => pty.killAll();
 
   registerIpc({
-    tickets, ticketService, sessionService, pty, health, followups, handoffs, settings, briefService, runner, scheduler,
+    tickets, ticketService, sessionService, pty, health, followups, handoffs, settings, briefService, runner, scheduler, jobs,
     briefRefreshing: () => briefRefreshing,
     rederive: (key) => {
       rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now }, key);

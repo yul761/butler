@@ -1,3 +1,4 @@
+import type { JobStateView } from "../../shared/types";
 import type { Db } from "./database";
 
 export const JOB_NIGHTLY = "nightly_handoff";
@@ -5,12 +6,7 @@ export const JOB_EVENING = "evening_brief";
 export const JOB_MORNING = "morning_brief";
 export type JobName = typeof JOB_NIGHTLY | typeof JOB_EVENING | typeof JOB_MORNING;
 
-export interface JobState {
-  lastRunAt: number | null;
-  /** ok | partial | failed | seeded */
-  lastStatus: string | null;
-  lastError: string | null;
-}
+export type JobState = JobStateView;
 
 export class JobsRepo {
   constructor(private readonly db: Db) {}

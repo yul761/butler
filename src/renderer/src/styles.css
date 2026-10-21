@@ -69,7 +69,7 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .row { display: flex; gap: 6px; }
 .row input { flex: 1; }
-.modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; align-items: center; justify-content: center; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; align-items: center; justify-content: center; z-index: 10; }
 .modal { width: 460px; display: flex; flex-direction: column; gap: 10px; padding: 20px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); }
 .modal label { display: flex; flex-direction: column; gap: 4px; }
 .modal label.inline { flex-direction: row; align-items: center; gap: 6px; }
@@ -80,7 +80,7 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; word-break: break-all; }
-.error-banner { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 16px; background: var(--panel); border-bottom: 1px solid var(--danger); color: var(--danger); }
+.error-banner { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 16px; background: var(--panel); border-bottom: 1px solid var(--danger); color: var(--danger); position: relative; z-index: 20; }
 
 .brief-header { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
 .tabs { display: flex; gap: 4px; }

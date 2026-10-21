@@ -147,3 +147,11 @@ export interface McpProbe {
   tools: string[];
   suggested: string[];
 }
+
+/** 一个调度任务最近一次运行的结果（jobs 表）。手动运行的按钮用它显示结果。 */
+export interface JobStateView {
+  lastRunAt: number | null;
+  /** ok | partial | failed | seeded */
+  lastStatus: string | null;
+  lastError: string | null;
+}

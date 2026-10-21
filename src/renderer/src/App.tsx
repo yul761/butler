@@ -51,6 +51,11 @@ export function App() {
   }, [refresh]);
 
   const openTicket = (key: string, req?: OpenSessionRequest) => {
+    // 简报里的 ticket 可能已经归档：不跳到空白页，也不留下悬空的打开请求。
+    if (!tickets.some((t) => t.key === key)) {
+      reportError(new Error(S.ticketMissing(key)));
+      return;
+    }
     setPendingOpen(req ?? null);
     setRoute({ page: "ticket", key });
   };

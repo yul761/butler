@@ -27,6 +27,7 @@ export function itemActions(i: BriefItem): ItemAction[] {
 export function openRequest(i: BriefItem, ticket: TicketView | undefined): OpenSessionRequest | null {
   if (!i.ticketKey || !ticket) return null;
   const prefill = itemPrefill(i);
-  const recent = ticket.sessions[0];
+  // 已忽略的 session 不恢复（ticket.sessions 已按最近活动排序）。
+  const recent = ticket.sessions.find((s) => !s.dismissed);
   return { ticketKey: i.ticketKey, ...(recent ? { sessionId: recent.id } : {}), ...(prefill ? { prefill } : {}) };
 }
