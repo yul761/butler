@@ -127,6 +127,20 @@ describe("Scheduler", () => {
     expect(jobs.get(JOB_NIGHTLY)).toMatchObject({ lastRunAt: at(20, 17), lastStatus: "failed", lastError: "claude 不见了" });
   });
 
+  it("passes a null slot (meaning today) for a manual run, so a weekend run still notifies", async () => {
+    const slots: (number | null)[] = [];
+    const scheduler = new Scheduler({
+      jobs: new JobsRepo(memDb()), config: () => cfg, now: () => at(17, 11), userActive: () => true,
+      nightly: async (slot) => {
+        slots.push(slot);
+        return "ok";
+      },
+      morning: async () => undefined,
+    });
+    await scheduler.runNightlyNow();
+    expect(slots).toEqual([null]);
+  });
+
   it("records a synchronous throw from the jobs and keeps scheduling", async () => {
     const jobs = new JobsRepo(memDb());
     const boom = () => {

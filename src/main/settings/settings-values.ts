@@ -49,6 +49,9 @@ export function parseToolList(v: string): string[] {
   return out;
 }
 
+/** tracker 工具只能是 MCP 工具名（mcp__server 或 mcp__server__tool）：Bash、带参数的规则、以 - 开头的 flag 一律不是。 */
+export const TRACKER_TOOL_RE = /^mcp__[A-Za-z0-9_-]+(__[A-Za-z0-9_-]+)?$/;
+
 export function parseDays(v: string, fallback: number): number {
   const t = v.trim();
   return /^\d{1,3}$/.test(t) ? Number(t) : fallback;
@@ -67,8 +70,12 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (tokens.some((t) => !/^[0-6]$/.test(t))) throw new SettingError("工作日只能是 0–6（0 是周日）");
       return [...new Set(tokens.map(Number))].sort((a, b) => a - b).join(",");
     }
-    case "trackerTools":
-      return parseToolList(value).join("\n");
+    case "trackerTools": {
+      const tools = parseToolList(value);
+      const bad = tools.find((t) => !TRACKER_TOOL_RE.test(t));
+      if (bad !== undefined) throw new SettingError(`tracker 工具只能是 MCP 工具名（mcp__server__tool），不接受：${bad.slice(0, 60)}`);
+      return tools.join("\n");
+    }
     case "blockedDays":
     case "reviewWaitDays":
     case "staleDays":
@@ -100,5 +107,6 @@ export function thresholds(s: SettingsRepo): Thresholds {
 }
 
 export function trackerTools(s: SettingsRepo): string[] {
-  return parseToolList(s.get("trackerTools"));
+  // 读取时再过滤一次：存储的值损坏或被改过，也不会把任意 flag / 工具带进 --allowedTools。
+  return parseToolList(s.get("trackerTools")).filter((t) => TRACKER_TOOL_RE.test(t));
 }

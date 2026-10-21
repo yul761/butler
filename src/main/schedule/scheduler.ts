@@ -45,7 +45,7 @@ export interface SchedulerDeps {
   config: () => ScheduleConfig;
   now: () => number;
   userActive: () => boolean;
-  /** slot：这次补跑 / 执行对应的晚间时刻（没有工作日时为 null）。 */
+  /** slot：这次补跑 / 执行对应的晚间时刻；手动运行或没有工作日时为 null（表示今天）。 */
   nightly: (slot: number | null) => Promise<"ok" | "partial">;
   morning: () => Promise<void>;
   onChange?: () => void;
@@ -70,7 +70,7 @@ export class Scheduler {
   }
 
   runNightlyNow(): Promise<void> {
-    return this.enqueue(() => this.runNightly());
+    return this.enqueue(() => this.runNightly(true));
   }
 
   runMorningNow(): Promise<void> {
@@ -92,9 +92,10 @@ export class Scheduler {
     if (morningDue) await this.runMorning();
   }
 
-  private async runNightly(): Promise<void> {
+  /** manual：手动运行的“时刻”就是今天（null），周末或上午手动运行也会照常通知。 */
+  private async runNightly(manual = false): Promise<void> {
     const startedAt = this.d.now();
-    const slot = lastNightlySlot(startedAt, this.d.config());
+    const slot = manual ? null : lastNightlySlot(startedAt, this.d.config());
     await this.track(
       JOB_NIGHTLY,
       async () => this.d.jobs.record(JOB_NIGHTLY, startedAt, await Promise.resolve().then(() => this.d.nightly(slot)), null),

@@ -135,12 +135,12 @@ export class HandoffRunner {
     const prompt = buildPrompt(this.d.settings.get("handoffPrompt"), this.context(t));
     const args = headlessArgs({ schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools() });
 
-    let attempt = await this.exec(key, args, prompt, cwd);
+    let attempt = await this.exec(key, args, prompt, cwd, session?.id);
     if (!attempt.ok) return attempt.outcome;
     let checked = validate(HandoffSchema, attempt.value);
     if (!checked.ok) {
       this.d.log?.(`handoff ${key}: output failed validation, retrying once: ${checked.errors}`);
-      attempt = await this.exec(key, args, retryPrompt(prompt, checked.errors), cwd);
+      attempt = await this.exec(key, args, retryPrompt(prompt, checked.errors), cwd, session?.id);
       if (!attempt.ok) return attempt.outcome;
       checked = validate(HandoffSchema, attempt.value);
     }
@@ -171,7 +171,7 @@ export class HandoffRunner {
     return { ticketKey: key, status: "stored", handoffId: r.handoffId, degraded: r.degraded };
   }
 
-  private async exec(key: string, args: string[], prompt: string, cwd: string): Promise<Exec> {
+  private async exec(key: string, args: string[], prompt: string, cwd: string, resumedId?: string): Promise<Exec> {
     await this.d.ready();
     const { path, pathValue } = this.d.claude();
     if (!path) return { ok: false, outcome: failed(key, "claude_missing", "找不到 claude 命令") };
@@ -182,7 +182,8 @@ export class HandoffRunner {
       signal: this.d.signal,
     });
     const sid = out.result?.sessionId;
-    if (sid) this.d.sessions.recordHeadless(sid, cwd, this.d.now());
+    // 返回的 id 就是被恢复的真实 session 时，绝不能把它记成 headless。
+    if (sid && sid !== resumedId) this.d.sessions.recordHeadless(sid, cwd, this.d.now());
     if (!out.ok) {
       this.d.log?.(`handoff ${key}: ${out.reason}: ${out.message}`);
       if (out.reason === "rate_limited") return { ok: false, outcome: { ticketKey: key, status: "skipped", reason: "rate_limited" } };

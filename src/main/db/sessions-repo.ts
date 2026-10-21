@@ -151,8 +151,8 @@ export class SessionsRepo {
 
   /** Butler 自己的 headless 运行产生的 session：记成已忽略，磁盘扫描永远不会把它列进“未认领”。 */
   recordHeadless(id: string, cwd: string, at: number): void {
-    this.insertIfAbsent({ id, ticketKey: null, cwd, origin: "discovered", lastActivityAt: at, createdAt: at });
-    this.dismiss(id);
+    // 只有这次调用新插入的行才忽略；已有的行（真实 session）绝不动。
+    if (this.insertIfAbsent({ id, ticketKey: null, cwd, origin: "discovered", lastActivityAt: at, createdAt: at })) this.dismiss(id);
   }
 
   /** 沿 replaced_by 链走到最新的 session（/clear、compact 会产生新 id）。 */

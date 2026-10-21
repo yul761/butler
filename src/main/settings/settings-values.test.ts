@@ -21,7 +21,7 @@ describe("settings values", () => {
     expect(normalizeSetting("nightlyTime", "7:05")).toBe("07:05");
     expect(normalizeSetting("workingDays", "5,1,1,0")).toBe("0,1,5");
     expect(normalizeSetting("workingDays", "")).toBe("");
-    expect(normalizeSetting("trackerTools", "a, b\n\na")).toBe("a\nb");
+    expect(normalizeSetting("trackerTools", "mcp__a__x, mcp__b\n\nmcp__a__x")).toBe("mcp__a__x\nmcp__b");
     expect(normalizeSetting("staleDays", " 7 ")).toBe("7");
     expect(() => normalizeSetting("nightlyTime", "25:00")).toThrow(SettingError);
     expect(() => normalizeSetting("workingDays", "1,7")).toThrow(SettingError);
@@ -32,6 +32,20 @@ describe("settings values", () => {
     } catch (e) {
       expect((e as SettingError).code).toBe("invalid_setting");
     }
+  });
+
+  it("rejects tracker tools that are not MCP tool names", () => {
+    for (const bad of ["Bash", "Bash(git push:*)", "--dangerously-skip-permissions", "--permission-mode", "mcp__ok__x, Bash"]) {
+      expect(() => normalizeSetting("trackerTools", bad)).toThrow(SettingError);
+    }
+    expect(normalizeSetting("trackerTools", "mcp__jira__get_issue mcp__linear")).toBe("mcp__jira__get_issue\nmcp__linear");
+    expect(normalizeSetting("trackerTools", "")).toBe("");
+  });
+
+  it("filters a corrupt stored trackerTools value at read time", () => {
+    const s = new SettingsRepo(memDb());
+    s.set("trackerTools", "mcp__jira__get_issue\n--dangerously-skip-permissions\nBash\nBash(git push:*)\n--permission-mode");
+    expect(trackerTools(s)).toEqual(["mcp__jira__get_issue"]);
   });
 
   it("reads the schedule, thresholds and tracker tools from settings", () => {

@@ -171,6 +171,15 @@ describe("HandoffRunner", () => {
     expect((await runner.runNightly()).outcomes).toEqual([]);
   });
 
+  it("leaves the resumed session undismissed when claude reports the resumed id", async () => {
+    const { runner, addTicket, sessions, setRespond } = setup();
+    addTicket("A-1", NOW + 10);
+    setRespond(async () => ok(valid(), "s-A-1"));
+    await runner.runNightly();
+    expect(sessions.get("s-A-1")).toMatchObject({ dismissed: false, ticketKey: "A-1" });
+    expect(sessions.listByTicket("A-1").find((s) => !s.dismissed)?.id).toBe("s-A-1");
+  });
+
   it("refreshes in_review and merged tickets without resuming and keeps the rest of the last handoff", async () => {
     const { runner, addTicket, tickets, calls, handoffs, ingest, setRespond } = setup();
     addTicket("A-1");

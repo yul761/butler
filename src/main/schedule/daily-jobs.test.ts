@@ -99,5 +99,8 @@ describe("daily jobs", () => {
     const today = deps({ now: () => at(20, 16) });
     await nightlyJob(today.d, at(20, 16));
     expect(today.calls).toEqual(["runNightly", "evening", "notify:evening"]);
+    const manual = deps({ now: () => at(17, 11) });
+    await nightlyJob(manual.d, null);
+    expect(manual.calls).toEqual(["runNightly", "evening", "notify:evening"]);
   });
 });

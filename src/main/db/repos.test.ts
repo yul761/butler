@@ -55,6 +55,13 @@ describe("SessionsRepo", () => {
     expect(repo.listUnclaimed(0)).toEqual([]);
   });
 
+  it("recordHeadless never dismisses a pre-existing session", () => {
+    const repo = setup();
+    repo.insertIfAbsent({ id: "real", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    repo.recordHeadless("real", "/w", 100);
+    expect(repo.get("real")).toMatchObject({ dismissed: false, ticketKey: "PROJ-1", cwd: "/x" });
+  });
+
   it("insertIfAbsent only inserts once", () => {
     const repo = setup();
     expect(repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "discovered", createdAt: 1 })).toBe(true);
