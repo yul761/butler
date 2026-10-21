@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { PrivacyLevel } from "../../shared/llm";
 import { NARRATIVE_SYSTEM_PROMPT } from "./narrative";
 import { chatReply, gatewayHarness, sampleSource, seededRng, type FakeRequest, type GatewayHarness } from "./testing";
-import { normalizeText } from "./pseudonym";
 import type { NarrativeSource, OutboundPayload, Rng } from "./types";
 
 const UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -100,13 +99,16 @@ function outboundWithoutSystemPrompt(body: string): string {
   return JSON.stringify(rest).normalize("NFKC").toLowerCase();
 }
 
+/**
+ * Oracle independent of the code under test: do NOT use normalizeText here.
+ * If it shared the pipeline's normalisation, a bug there (e.g. no dash folding) would hide the very leak it causes.
+ */
+const canon = (s: string) =>
+  s.normalize("NFKC").replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").replace(/[\p{Pd}\u2212]/gu, "-").replace(/\s+/g, " ").toLowerCase();
+
 function leaked(body: string, w: World): string[] {
-  const out = outboundWithoutSystemPrompt(body);
-  // 第二道：provider 收到的内容（除系统提示）再过一遍 normalizeText，原值也同样规范化。
-  const norm = normalizeText(out).toLowerCase();
-  return [...w.tickets, ...w.repos, ...w.branches, ...w.people, ...w.terms].filter(
-    (v) => out.includes(v.normalize("NFKC").toLowerCase()) || norm.includes(normalizeText(v).toLowerCase()),
-  );
+  const out = canon(outboundWithoutSystemPrompt(body));
+  return [...w.tickets, ...w.repos, ...w.branches, ...w.people, ...w.terms].filter((v) => out.includes(canon(v)));
 }
 
 /** 服务商原样引用第一个 ticket 的占位符：用来确认本地能还原。 */
@@ -135,7 +137,8 @@ describe("privacy invariant (release blocker, design §11)", () => {
         expect(h.bodies(), `seed ${seed}`).toHaveLength(1);
         expect(leaked(h.bodies()[0], w), `seed ${seed}`).toEqual([]);
         // 本地还原：narrative 里是真实的 ticket 号。
-        expect(w.tickets.some((t) => r.narrative?.includes(t)), `seed ${seed}`).toBe(true);
+        expect(w.tickets.map((t) => `先处理 ${t} 的事。`), `seed ${seed}`).toContain(r.narrative);
+        expect(r.narrative, `seed ${seed}`).not.toContain("[[");
         await h.close();
         h = null;
       }
@@ -143,9 +146,9 @@ describe("privacy invariant (release blocker, design §11)", () => {
   }
 
   it("gives the same ticket a different placeholder in every request", async () => {
-    h = await gatewayHarness();
-    await h.gateway.narrate(sampleSource());
-    await h.gateway.narrate(sampleSource());
+    h = await gatewayHarness({ rng: seededRng(99) });
+    expect((await h.gateway.narrate(sampleSource())).status).toBe("ok");
+    expect((await h.gateway.narrate(sampleSource())).status).toBe("ok");
     const ids = h.bodies().map((b) =>
       (JSON.parse((JSON.parse(b) as { messages: { content: string }[] }).messages[1].content) as OutboundPayload).tickets.map((t) => t.id),
     );
@@ -158,6 +161,9 @@ describe("privacy invariant (release blocker, design §11)", () => {
       ["redacted", "等 ZZTOP-9 合并", "blocked"],
       ["redacted", "部署前问一下 ops@example.com", "blocked"],
       ["redacted", "token=AbCdEf123456", "blocked"],
+      // 超过 120 字符：密钥、邮箱在截断处被切断，只有截断前的扫描能拦住。
+      ["redacted", "好".repeat(112) + " token=AbCdEf123456", "blocked"],
+      ["redacted", "好".repeat(103) + " wang.lei@acme-corp.com", "blocked"],
       ["full", "token=AbCdEf123456", "blocked"],
       ["full", "看 https://wiki.corp/x", "blocked"],
       // metadata 不发自由文本：同样的内容根本不会出现在请求里。
