@@ -16,8 +16,10 @@ const MAX_TRIES = 1000;
 export const defaultRng: Rng = (n) => randomInt(n);
 
 /** 不可见字符：默认可忽略码位、全部 Cf、除 \t \n \r 外的 Cc、盲文空白 U+2800。 */
-const INVISIBLE_RE = /[\p{Default_Ignorable_Code_Point}\p{Cf}\u2800]|(?![\t\n\r])\p{Cc}/gu;
-const LINE_SEP_RE = /[\u0085\u2028\u2029]/g;
+// eslint-disable-next-line no-control-regex -- 有意匹配控制字符
+const INVISIBLE_RE = /[\p{Default_Ignorable_Code_Point}\p{Cf}\u2800]|(?![\t\n\r\u000B\u000C\u001C-\u001F])\p{Cc}/gu;
+// eslint-disable-next-line no-control-regex -- 有意匹配控制字符
+const LINE_SEP_RE = /[\u000B\u000C\u001C-\u001F\u0085\u2028\u2029]/g;
 /** 去不可见字符 → NFKC → 再去一遍（NFKC 会从 U+3164 / U+FFA0 生出 U+1160 这类字符）；U+0085 / U+2028 / U+2029 当空白。 */
 const stripIgnorables = (s: string): string =>
   s

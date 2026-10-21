@@ -44,6 +44,9 @@ describe("Pseudonymizer", () => {
       ["ask Alice  Zhang", "Alice Zhang"],
       ["ask Alice\nZhang", "Alice Zhang"],
       ["ask Alice\u00A0Zhang", "Alice Zhang"],
+      ["ask Alice\vZhang", "Alice Zhang"],
+      ["ask Alice\fZhang", "Alice Zhang"],
+      ["ask Alice\u001fZhang", "Alice Zhang"],
       ["ask İlker today", "İlker"],
       ["ask İLKER today", "İlker"],
     ];
