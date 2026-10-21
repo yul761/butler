@@ -81,3 +81,17 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; word-break: break-all; }
 .error-banner { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 16px; background: var(--panel); border-bottom: 1px solid var(--danger); color: var(--danger); }
+
+.brief-header { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.tabs { display: flex; gap: 4px; }
+.tab.active { border-color: var(--accent); color: var(--accent); }
+.brief-section h3 { margin: 18px 0 8px; font-size: 13px; }
+.brief-item { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; }
+.brief-item .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.brief-item .actions { display: flex; gap: 4px; flex-shrink: 0; }
+.chip { font-weight: 600; background: transparent; }
+.notice-line { color: var(--muted); margin: 4px 0; }
+.narrative { padding: 10px 12px; background: var(--panel); border-radius: 8px; }
+.day-list { margin: 4px 0 10px; padding-left: 20px; }
+.evening-entry { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; }
+.evening-entry p { margin: 4px 0; }

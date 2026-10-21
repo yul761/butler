@@ -19,7 +19,15 @@ interface Mismatch {
   dirty: boolean;
 }
 
-export function TicketPage({ ticket, onArchived }: { ticket: TicketView; onArchived: () => void }) {
+interface Props {
+  ticket: TicketView;
+  onArchived: () => void;
+  /** 从简报点“打开”进来时要执行的打开请求。 */
+  initialOpen?: OpenSessionRequest | null;
+  onInitialOpenDone?: () => void;
+}
+
+export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOpenDone }: Props) {
   const openTerms = ticket.sessions.flatMap((s) => (s.termId ? [s.termId] : []));
   // panes 里保留已退出但还没关闭的终端，方便看到 claude 的报错输出。
   const [panes, setPanes] = useState<string[]>(openTerms);
@@ -33,6 +41,13 @@ export function TicketPage({ ticket, onArchived }: { ticket: TicketView; onArchi
     const ids = openKey ? openKey.split(",") : [];
     setPanes((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
   }, [openKey]);
+
+  // 从简报点“打开”：恢复 session 并预填提示，只执行一次。
+  useEffect(() => {
+    if (!initialOpen) return;
+    onInitialOpenDone?.();
+    void open(initialOpen);
+  }, [initialOpen]);
 
   async function open(req: OpenSessionRequest) {
     setError(null);

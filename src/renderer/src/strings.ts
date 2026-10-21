@@ -1,3 +1,4 @@
+import type { BriefItem, BriefRule, BriefSection } from "../../shared/brief";
 import type { TicketStatus } from "../../shared/types";
 
 export const STATUS_LABEL: Record<TicketStatus, string> = {
@@ -12,7 +13,7 @@ export const STATUS_LABEL: Record<TicketStatus, string> = {
 export const STATUS_ORDER: TicketStatus[] = ["merged_pending_followup", "active", "blocked", "in_review", "done"];
 
 export const S = {
-  home: "首页",
+  home: "简报",
   newTicket: "新建 ticket",
   waiting: "等你输入",
   unclaimed: "未认领 session",
@@ -38,8 +39,6 @@ export const S = {
   statusAuto: (current: string) => `自动（当前：${current}）`,
   noSessions: "还没有 session。点“新 session”开始。",
   noTickets: "还没有 ticket。点左侧“新建 ticket”。",
-  waitingList: "等你输入的 session",
-  nothingWaiting: "没有 session 在等你。",
   resume: "续接",
   exited: (code: number) => `claude 已退出（退出码 ${code}）`,
   branchMismatch: (current: string, expected: string) => `仓库当前在 ${current} 上，这个 ticket 的分支是 ${expected}。`,
@@ -88,4 +87,44 @@ export const S = {
   butlerHome: "Butler 数据目录",
   claudeSettings: "Claude Code 设置文件",
   loading: "加载中…",
+  morningBrief: "早间简报",
+  eveningBrief: "晚间小结",
+  briefRefreshing: "刷新中…",
+  regenerate: "重新生成",
+  noBrief: "还没有简报。点“重新生成”马上生成一份。",
+  noEvening: "还没有晚间小结。晚间 handoff 跑完后会自动生成。",
+  briefEmpty: "今天没有需要处理的事项。",
+  todayFocus: "今日重点",
+  previousDay: (date: string) => `上个工作日（${date}）`,
+  previousDayEmpty: "上个工作日没有记录。",
+  briefSections: { first: "🔴 先做", today: "🟡 今天", watch: "⚪ 留意" } as Record<BriefSection, string>,
+  briefRule: {
+    pr_approved: (i: BriefItem) => `PR #${i.pr?.number ?? "?"} 已经 approve，可以合并了`,
+    pr_changes_requested: (i: BriefItem) => `PR #${i.pr?.number ?? "?"} 被要求修改`,
+    followup_after_merge: (i: BriefItem) => `合并后任务：${i.text ?? ""}`,
+    followup_due: (i: BriefItem) => (i.days ? `已逾期 ${i.days} 天：${i.text ?? ""}` : `今天到期：${i.text ?? ""}`),
+    next_step: (i: BriefItem) => `下一步：${i.text ?? ""}`,
+    blocked_long: (i: BriefItem) => `已经阻塞 ${i.days ?? 0} 天${i.text ? `：${i.text}` : ""}`,
+    review_waiting: (i: BriefItem) => `PR 等 review 已经 ${i.days ?? 0} 天`,
+    stale: (i: BriefItem) => `${i.days ?? 0} 天没有活动`,
+    unclaimed: (i: BriefItem) => `${i.count ?? 0} 个未认领的 session`,
+  } as Record<BriefRule, (i: BriefItem) => string>,
+  /** “打开”时预填到 claude 输入框的一行话（主进程还会再去掉换行）。 */
+  briefPrefill: {
+    pr_approved: (i: BriefItem) => `PR #${i.pr?.number ?? ""} 已经 approve 了，检查一下 CI 然后合并（来自 ${i.ticketKey}）`,
+    pr_changes_requested: (i: BriefItem) => `处理 PR #${i.pr?.number ?? ""} 的 review 意见（来自 ${i.ticketKey}）`,
+    followup_after_merge: (i: BriefItem) => `继续 follow-up：${i.text ?? ""}（来自 ${i.ticketKey}）`,
+    followup_due: (i: BriefItem) => `继续 follow-up：${i.text ?? ""}（来自 ${i.ticketKey}）`,
+    next_step: (i: BriefItem) => `继续：${i.text ?? ""}（来自 ${i.ticketKey}）`,
+    blocked_long: (i: BriefItem) => `看看 ${i.ticketKey} 的阻塞现在解决了没有`,
+    review_waiting: (i: BriefItem) => `${i.ticketKey} 的 PR 等 review 好几天了，看下要不要催一下`,
+    stale: (i: BriefItem) => `回顾一下 ${i.ticketKey} 的进度，接下来做什么`,
+  } as Partial<Record<BriefRule, (i: BriefItem) => string>>,
+  itemActions: { open: "打开", done: "完成", snooze: "推迟到明天", ignore: "忽略", claim: "去认领" } as Record<string, string>,
+  noticeDegraded: (keys: string[]) => `handoff 不完整：${keys.join("、")}`,
+  noticeTracker: (keys: string[]) => `没有读到 tracker 信息：${keys.join("、")}（tracker MCP 不可用或没有配置）`,
+  eveningBlockers: "阻塞：",
+  eveningNext: "明天第一步：",
+  eveningDegraded: "handoff 不完整",
+  eveningNothingDone: "没有记录完成的事。",
 };
