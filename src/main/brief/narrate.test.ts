@@ -45,6 +45,24 @@ describe("narrateBrief", () => {
     expect(await narrateBrief(c.d, brief())).toBe("failed");
   });
 
+  it("survives a throwing logger", async () => {
+    const log = () => {
+      throw new Error("disk full");
+    };
+    const a = deps({ narrate: async () => Promise.reject(new Error("x")), log });
+    expect(await narrateBrief(a.d, brief())).toBe("failed");
+    const b = deps({ briefs: { setNarrative: () => { throw new Error("y"); } }, log });
+    expect(await narrateBrief(b.d, brief())).toBe("failed");
+  });
+
+  it("passes the abort signal to the gateway", async () => {
+    const ac = new AbortController();
+    let seen: AbortSignal | undefined;
+    const { d } = deps({ signal: ac.signal, narrate: async (_s, sig) => ((seen = sig), { status: "ok", narrative: "x", auditId: 1 }) });
+    await narrateBrief(d, brief());
+    expect(seen).toBe(ac.signal);
+  });
+
   it("leaves an evening summary alone", async () => {
     const { d, written } = deps();
     expect(await narrateBrief(d, brief("evening"))).toBe("off");

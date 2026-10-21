@@ -208,7 +208,8 @@ describe("BriefService.narrativeSource", () => {
     expect(src.known.tickets).toContain("OLD-9");
     expect(src.known.branches).toContain("spike/only-in-session");
     expect(src.known.repos).toContain("acme");
-    expect(src.known.repos).toEqual(expect.arrayContaining(["old9-checkout", "a1-login-tree"]));
+    expect(src.known.repos).toContain("old9-checkout");
+    expect(src.known.repos).not.toContain("a1-login-tree");
   });
 });
 
@@ -217,6 +218,7 @@ describe("prPathParts", () => {
     expect(prPathParts("https://github.com/acme/billing-svc/pull/7")).toEqual(["acme", "billing-svc"]);
     expect(prPathParts("https://gitlab.example.com/group/sub/app/-/merge_requests/3")).toEqual(["group", "sub", "app"]);
     expect(prPathParts("https://bitbucket.example.com/projects/PAY/repos/ledger/pull-requests/9")).toEqual(["PAY", "ledger"]);
+    expect(prPathParts("https://dev.azure.com/org/proj/_git/repo/pullrequest/12")).toEqual(["org", "proj", "repo"]);
     expect(prPathParts("not a url")).toEqual([]);
   });
 });

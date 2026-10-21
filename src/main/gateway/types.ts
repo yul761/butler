@@ -46,6 +46,8 @@ export interface KnownValues {
   tickets: string[];
   repos: string[];
   branches: string[];
+  /** 额外的敏感词（例如 ticket 标题），和敏感词表里的“term”类一起做 S 类占位符。 */
+  terms?: string[];
 }
 
 export interface NarrativeSource {

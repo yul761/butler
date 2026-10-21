@@ -134,7 +134,7 @@ export class PrivacyGateway {
       {
         ...src.known,
         people: terms.filter((t) => t.category === "person").map((t) => t.term),
-        terms: terms.filter((t) => t.category === "term").map((t) => t.term),
+        terms: [...terms.filter((t) => t.category === "term").map((t) => t.term), ...(src.known.terms ?? [])],
       },
       rng,
     );

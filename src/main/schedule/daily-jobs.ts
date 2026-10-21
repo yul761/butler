@@ -14,9 +14,9 @@ export interface DailyJobDeps {
   setRefreshing: (v: boolean) => void;
   /** 晚间小结生成后：弹系统通知。 */
   onEvening: (brief: Brief) => void;
-  /** 退出已开始：不再通知、不再发起新工作。 */
   /** 早间：最终的简报入库之后补“今日重点”（narrateBrief，永远不抛错）。没有配置时不传。 */
   narrate?: (brief: Brief) => Promise<unknown>;
+  /** 退出已开始：不再通知、不再发起新工作。 */
   aborted?: () => boolean;
 }
 

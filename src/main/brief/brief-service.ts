@@ -14,8 +14,14 @@ import { scheduleConfig, thresholds } from "../settings/settings-values";
 import { buildEveningBrief, buildMorningBrief, followupActive, type TicketSnapshot } from "./engine";
 
 /** PR 链接路径前面那几段：owner / group 和仓库名，它们可能出现在自由文本里，要进假名化字典。 */
-const PR_PATH_STOP = new Set(["pull", "pulls", "-", "merge_requests", "pull-requests"]);
-const PR_PATH_SKIP = new Set(["projects", "repos", "users", "scm"]);
+const PR_PATH_STOP = new Set(["pull", "pulls", "-", "merge_requests", "pull-requests", "pullrequest", "pullrequests"]);
+
+/** 太通用的名字（main、src、web……）不进字典，免得把普通词都换掉。 */
+const GENERIC_NAMES = new Set(
+  "main master develop dev head trunk release src app web api lib libs packages code repo repos server client frontend backend test tests docs".split(" "),
+);
+const identifierOk = (name: string) => name.length >= 3 && !GENERIC_NAMES.has(name.toLowerCase());
+const PR_PATH_SKIP = new Set(["projects", "repos", "users", "scm", "_git"]);
 
 export function prPathParts(url: string): string[] {
   let segments: string[];
@@ -110,7 +116,7 @@ export class BriefService {
   /**
    * “今日重点”的原始输入（还没有经过任何隐私处理，交给 PrivacyGateway）。
    * known 是假名化字典：所有 ticket 号（含已归档的）、仓库目录名、分支名、PR 链接里的 owner / 仓库名，
-   * 另外加上 worktree 目录名和 session 工作目录名（自由文本可能提到与仓库目录名不同的目录）。
+   * 另外：worktree 目录名、分支名的最后一段、所有 handoff 里的 PR owner / 仓库名和 Jira 子任务号、ticket 标题（作为敏感词）。
    */
   narrativeSource(brief: Brief): NarrativeSource {
     const now = this.d.now();
@@ -118,24 +124,37 @@ export class BriefService {
     const followups = this.d.followups.listActiveTickets().filter((f) => followupActive(f, today));
     const doneLastDay = new Map((brief.previousDay?.entries ?? []).map((e) => [e.ticketKey, e.done.length]));
     const all = this.d.tickets.list({ includeArchived: true });
+    const ticketKeys = new Set(all.map((t) => t.key));
     const repos = new Set<string>();
     const branches = new Set<string>();
-    const dir = (path: string | null) => {
-      const name = path ? basename(path) : "";
-      if (name.length >= 3) repos.add(name);
+    const terms = new Set<string>();
+    const addRepo = (name: string) => {
+      if (identifierOk(name)) repos.add(name);
+    };
+    const addBranch = (branch: string) => {
+      if (!branch || GENERIC_NAMES.has(branch.toLowerCase())) return;
+      branches.add(branch);
+      // 自由文本常只写分支名的最后一段（feature/payments-v2 写成 payments-v2）。
+      const last = branch.slice(branch.lastIndexOf("/") + 1);
+      if (last !== branch && identifierOk(last)) branches.add(last);
     };
     for (const t of all) {
-      dir(t.repoPath);
-      dir(t.worktreePath);
-      branches.add(t.branch);
-      for (const s of this.d.sessions.listByTicket(t.key)) {
-        if (s.gitBranch) branches.add(s.gitBranch);
-        dir(s.cwd);
+      addRepo(basename(t.repoPath));
+      if (t.worktreePath) addRepo(basename(t.worktreePath));
+      addBranch(t.branch);
+      const title = t.title?.trim();
+      if (title && title.length >= 3) terms.add(title);
+      for (const s of this.d.sessions.listByTicket(t.key)) if (s.gitBranch) addBranch(s.gitBranch);
+      // 所有存过的 handoff（含已归档 ticket）：PR 链接里的 owner / 仓库名、Jira 子任务号。
+      for (const h of this.d.handoffs.listByTicket(t.key, 1000)) {
+        const p = h.payload;
+        if (!p) continue;
+        if (p.pr?.url) for (const part of prPathParts(p.pr.url)) addRepo(part);
+        for (const st of p.jira?.subtasks ?? []) if (st.key) ticketKeys.add(st.key);
       }
     }
     const tickets = this.snapshot().map((t): NarrativeTicket => {
       const p = t.latest?.payload ?? null;
-      if (p?.pr?.url) for (const part of prPathParts(p.pr.url)) repos.add(part);
       return {
         key: t.key,
         status: t.status,
@@ -159,7 +178,7 @@ export class BriefService {
       date: brief.date,
       tickets,
       items: brief.items.map((i) => ({ section: i.section, rule: i.rule, ticketKey: i.ticketKey, days: i.days, count: i.count })),
-      known: { tickets: all.map((t) => t.key), repos: [...repos], branches: [...branches] },
+      known: { tickets: [...ticketKeys], repos: [...repos], branches: [...branches], terms: [...terms] },
     };
   }
 
