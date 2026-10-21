@@ -5,7 +5,7 @@ import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { memDb, tempDir } from "../test-utils";
-import { extractUserText, findTranscript, readSessionHead, scanClaudeProjects, suggestTicket, syncDiscovered } from "./discovery";
+import { extractUserText, findTranscript, needsDiscovery, readSessionHead, scanClaudeProjects, suggestTicket, syncDiscovered } from "./discovery";
 
 const ID1 = "11111111-1111-4111-8111-111111111111";
 const ID2 = "22222222-2222-4222-8222-222222222222";
@@ -124,5 +124,21 @@ describe("syncDiscovered / suggestTicket", () => {
     expect(suggestTicket({ gitBranch: "feature/proj-12-x", firstPrompt: "PROJ-99" }, DEFAULT_TICKET_PATTERN)).toBe("PROJ-12");
     expect(suggestTicket({ gitBranch: "main", firstPrompt: "看下 PROJ-99" }, DEFAULT_TICKET_PATTERN)).toBe("PROJ-99");
     expect(suggestTicket({ gitBranch: null, firstPrompt: null }, DEFAULT_TICKET_PATTERN)).toBeNull();
+  });
+});
+
+describe("needsDiscovery", () => {
+  const base = {
+    id: "a", ticketKey: null, cwd: "/w", origin: "discovered" as const, gitBranch: "main", firstPrompt: "hi",
+    lastActivityAt: 1, waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 1,
+  };
+
+  it("only asks for a scan when an unclaimed session is missing details, once per session", () => {
+    expect(needsDiscovery(base, new Set())).toBe(false);
+    expect(needsDiscovery({ ...base, gitBranch: null }, new Set())).toBe(true);
+    expect(needsDiscovery({ ...base, cwd: "" }, new Set())).toBe(true);
+    expect(needsDiscovery({ ...base, firstPrompt: null }, new Set(["a"]))).toBe(false);
+    expect(needsDiscovery({ ...base, gitBranch: null, ticketKey: "PROJ-1" }, new Set())).toBe(false);
+    expect(needsDiscovery({ ...base, gitBranch: null, dismissed: true }, new Set())).toBe(false);
   });
 });

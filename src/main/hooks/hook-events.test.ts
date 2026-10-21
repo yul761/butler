@@ -118,4 +118,13 @@ describe("applyHookEnvelope", () => {
     applyHookEnvelope(env("UserPromptSubmit", "s4", {}, { prompt: "x".repeat(300) }), deps);
     expect(sessions.get("s4")?.firstPrompt).toBe(`${"x".repeat(200)}…`);
   });
+
+  it("upgrades a discovered session to butler once a Butler terminal reports it", () => {
+    const { sessions, deps } = setup();
+    sessions.insertIfAbsent({ id: "d1", ticketKey: "PROJ-1", cwd: "/w", origin: "discovered", createdAt: 1 });
+    applyHookEnvelope(env("Stop", "d1"), deps);
+    expect(sessions.get("d1")?.origin).toBe("discovered");
+    applyHookEnvelope(env("UserPromptSubmit", "d1", { ticket: "PROJ-1", butlerSession: "d1" }), deps);
+    expect(sessions.get("d1")?.origin).toBe("butler");
+  });
 });

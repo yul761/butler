@@ -44,6 +44,8 @@ export function applyHookEnvelope(env: HookEnvelope, deps: { sessions: SessionsR
     if (inserted) return;
     sessions.fillDetails(id, { cwd, lastActivityAt: at });
     const cur = sessions.get(id);
+    // 先被磁盘扫描发现、后来在 Butler 终端里续接的 session：来源升级为 butler。
+    if (fromButler && cur && cur.origin === "discovered" && !cur.dismissed) sessions.setOrigin(id, "butler");
     // 被忽略（dismissed）的 session，例如嵌套的 claude 进程，永远不挂 ticket。
     if (key && cur && !cur.ticketKey && !cur.dismissed) sessions.setTicket(id, key);
   };

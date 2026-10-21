@@ -75,6 +75,18 @@ describe("SessionsRepo", () => {
     expect(repo.head("a")).not.toBeNull();
   });
 
+  it("setOrigin and delete (clearing pointers to the deleted row)", () => {
+    const repo = setup();
+    repo.insertIfAbsent({ id: "a", ticketKey: "PROJ-1", cwd: "/x", origin: "discovered", createdAt: 1 });
+    repo.insertIfAbsent({ id: "b", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 2 });
+    repo.setOrigin("a", "butler");
+    expect(repo.get("a")?.origin).toBe("butler");
+    repo.setReplacedBy("a", "b");
+    repo.delete("b");
+    expect(repo.get("b")).toBeNull();
+    expect(repo.get("a")?.replacedBy).toBeNull();
+  });
+
   it("listUnclaimed excludes claimed, dismissed, replaced and old sessions", () => {
     const repo = setup();
     const add = (id: string, at: number, ticketKey: string | null = null) =>

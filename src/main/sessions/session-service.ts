@@ -79,6 +79,7 @@ export class SessionService {
     let termId: string;
     let cwd: string;
     let args: string[];
+    let insertedRow = false;
     if (head) {
       // claude --resume 只能在 session 当初的项目目录里找到它；没发过消息的 session 没有记录，用同一个 id 重新开
       termId = head.id;
@@ -89,15 +90,32 @@ export class SessionService {
       cwd = workDir;
       args = claudeArgs({ mode: "new", sessionId: termId });
       const now = this.d.now();
-      this.d.sessions.insertIfAbsent({ id: termId, ticketKey: ticket.key, cwd, origin: "butler", lastActivityAt: now, createdAt: now });
+      insertedRow = this.d.sessions.insertIfAbsent({ id: termId, ticketKey: ticket.key, cwd, origin: "butler", lastActivityAt: now, createdAt: now });
     }
 
-    this.d.pty.open(termId, spawnSpec(claudePath, args, this.d.platform), {
-      cwd,
-      env: sessionEnv(this.d.baseEnv, { pathValue, ticketKey: ticket.key, sessionId: termId }),
-    });
+    try {
+      this.d.pty.open(termId, spawnSpec(claudePath, args, this.d.platform), {
+        cwd,
+        env: sessionEnv(this.d.baseEnv, { pathValue, ticketKey: ticket.key, sessionId: termId }),
+      });
+    } catch (e) {
+      // claude 没能启动：刚插入的那一行只是空壳，不能留在列表里。
+      if (insertedRow) this.d.sessions.delete(termId);
+      throw e;
+    }
     if (prefill) this.prefill(termId, prefill);
     return { ok: true, termId, alreadyOpen: false };
+  }
+
+  /**
+   * 终端退出时调用。Butler 新建、但用户一句话都没说就退出的 session 没有 transcript，也不能 --resume；
+   * 留着只会多出一个空的“新对话”按钮，删掉。
+   */
+  handleExit(termId: string): void {
+    const s = this.d.sessions.get(termId);
+    if (!s || s.origin !== "butler" || s.firstPrompt || s.replacedBy) return;
+    if (this.d.transcriptExists(termId)) return;
+    this.d.sessions.delete(termId);
   }
 
   ticketViews(): TicketView[] {

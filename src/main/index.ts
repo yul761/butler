@@ -13,7 +13,7 @@ import { createFileLogger, type Logger } from "./logger";
 import { HookInbox } from "./hooks/inbox";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, resolvePaths } from "./paths";
-import { findTranscript, scanClaudeProjects, syncDiscovered, UNCLAIMED_WINDOW_MS } from "./sessions/discovery";
+import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, UNCLAIMED_WINDOW_MS } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
@@ -148,6 +148,11 @@ async function bootstrap(): Promise<void> {
     data: (id, data) => safeSend(IPC.ptyData, id, data),
     exit: (id, code) => {
       safeSend(IPC.ptyExit, id, code);
+      try {
+        sessionService.handleExit(id);
+      } catch (e) {
+        logger("handleExit failed", e);
+      }
       notify();
     },
   }, Date.now, logger);
@@ -172,6 +177,7 @@ async function bootstrap(): Promise<void> {
     }
   };
 
+  const discoveryRequested = new Set<string>();
   let hookDiscoveryTimer: NodeJS.Timeout | null = null;
   const scheduleDiscovery = () => {
     if (hookDiscoveryTimer) return;
@@ -189,10 +195,13 @@ async function bootstrap(): Promise<void> {
       const effect = applyHookEnvelope(env, { sessions, tickets });
       if (effect.kind === "ignored") return;
       notify();
-      // 还没归属任何 ticket 的 session：触发一次发现，补全 cwd / 分支 / 首条提示。
+      // 还没归属 ticket、又缺 cwd / 分支 / 首条提示的 session：触发一次发现（每个 session 每次运行最多一次）。
       if (effect.kind !== "nested") {
         const s = sessions.get(effect.sessionId);
-        if (s && !s.ticketKey && !s.dismissed) scheduleDiscovery();
+        if (s && needsDiscovery(s, discoveryRequested)) {
+          discoveryRequested.add(s.id);
+          scheduleDiscovery();
+        }
       }
     },
   });

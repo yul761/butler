@@ -6,17 +6,17 @@ import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { TicketService } from "../tickets/ticket-service";
 import { fakePtyFactory, makeRepo, memDb } from "../test-utils";
-import { PtyManager } from "./pty-manager";
+import { PtyManager, type PtyFactory } from "./pty-manager";
 import { SessionService } from "./session-service";
 
-async function setup(opts: { transcripts?: string[]; claudePath?: string | null; workMode?: "branch" | "worktree"; ready?: () => Promise<void> } = {}) {
+async function setup(opts: { transcripts?: string[]; claudePath?: string | null; workMode?: "branch" | "worktree"; ready?: () => Promise<void>; factory?: PtyFactory } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
   const settings = new SettingsRepo(db);
   const ticketService = new TicketService({ tickets, settings, now: () => 1 });
   const { factory, spawned } = fakePtyFactory();
-  const pty = new PtyManager(factory, { data: () => undefined, exit: () => undefined });
+  const pty = new PtyManager(opts.factory ?? factory, { data: () => undefined, exit: () => undefined });
   let n = 0;
   const service = new SessionService({
     tickets, sessions, settings, ticketService, pty,
@@ -137,5 +137,35 @@ describe("SessionService views", () => {
     service.dismiss("u2");
     expect(service.unclaimed()).toEqual([]);
     expect(() => service.claim("u2", "NOPE-1")).toThrow();
+  });
+});
+
+describe("SessionService orphan rows", () => {
+  it("removes the row it inserted when claude cannot be spawned", async () => {
+    const { service, sessions } = await setup({
+      factory: () => {
+        throw new Error("spawn ENOENT");
+      },
+    });
+    await expect(service.open({ ticketKey: "PROJ-1" })).rejects.toThrow("spawn ENOENT");
+    expect(sessions.listByTicket("PROJ-1")).toEqual([]);
+  });
+
+  it("forgets a new session that exited before the first message and keeps real ones", async () => {
+    const { service, sessions } = await setup({ transcripts: [] });
+    await service.open({ ticketKey: "PROJ-1" });
+    await service.open({ ticketKey: "PROJ-1" });
+    sessions.fillDetails("new-2", { firstPrompt: "修登录" });
+    service.handleExit("new-1");
+    service.handleExit("new-2");
+    expect(sessions.get("new-1")).toBeNull();
+    expect(sessions.get("new-2")).not.toBeNull();
+  });
+
+  it("keeps sessions that have a transcript", async () => {
+    const { service, sessions } = await setup({ transcripts: ["new-1"] });
+    await service.open({ ticketKey: "PROJ-1" });
+    service.handleExit("new-1");
+    expect(sessions.get("new-1")).not.toBeNull();
   });
 });

@@ -2,6 +2,7 @@ import { createReadStream, existsSync, readdirSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
+import type { Session } from "../../shared/types";
 import type { SessionsRepo } from "../db/sessions-repo";
 import { extractTicketKey } from "../tickets/ticket-key";
 
@@ -155,4 +156,13 @@ export function syncDiscovered(found: DiscoveredSession[], sessions: SessionsRep
 
 export function suggestTicket(s: { gitBranch: string | null; firstPrompt: string | null }, pattern: string): string | null {
   return (s.gitBranch && extractTicketKey(s.gitBranch, pattern)) || (s.firstPrompt && extractTicketKey(s.firstPrompt, pattern)) || null;
+}
+
+/**
+ * hook 事件只带 cwd；分支和首条提示要靠扫描磁盘补全。已经齐全、已归属 ticket、已忽略，
+ * 或者这次运行里已经为它扫描过的 session，都不再触发扫描。
+ */
+export function needsDiscovery(s: Session, requested: ReadonlySet<string>): boolean {
+  if (s.ticketKey || s.dismissed || requested.has(s.id)) return false;
+  return !s.cwd || !s.gitBranch || !s.firstPrompt;
 }

@@ -120,6 +120,16 @@ export class SessionsRepo {
     this.db.prepare(`UPDATE sessions SET dismissed = 1 WHERE id = ?`).run(id);
   }
 
+  setOrigin(id: string, origin: SessionOrigin): void {
+    this.db.prepare(`UPDATE sessions SET origin = ? WHERE id = ?`).run(origin, id);
+  }
+
+  /** 删除一行；指向它的 replaced_by 一并清掉，免得前一个 session 被当成“已替换”而从列表里消失。 */
+  delete(id: string): void {
+    this.db.prepare(`UPDATE sessions SET replaced_by = NULL WHERE replaced_by = ?`).run(id);
+    this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+  }
+
   /** 沿 replaced_by 链走到最新的 session（/clear、compact 会产生新 id）。 */
   head(id: string): Session | null {
     let cur = this.get(id);
