@@ -77,6 +77,23 @@ describe("transcriptState", () => {
   });
 });
 
+describe("transcriptState with stray files", () => {
+  it("skips a non-directory entry such as .DS_Store and still finds the transcript", () => {
+    const root = tempDir();
+    writeFileSync(join(root, ".DS_Store"), "x");
+    mkdirSync(join(root, "-work-b"));
+    writeFileSync(join(root, "-work-b", `${ID1}.jsonl`), "{}\n");
+    expect(transcriptState(root, ID1)).toBe("present");
+  });
+
+  it("returns absent, not unknown, when a .DS_Store sits next to a project dir without the transcript", () => {
+    const root = tempDir();
+    writeFileSync(join(root, ".DS_Store"), "x");
+    mkdirSync(join(root, "-work-b"));
+    expect(transcriptState(root, ID1)).toBe("absent");
+  });
+});
+
 describe("scanClaudeProjects", () => {
   it("returns recent uuid-named sessions with a cwd", async () => {
     const root = tempDir();

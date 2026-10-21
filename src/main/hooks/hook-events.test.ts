@@ -139,6 +139,16 @@ describe("applyHookEnvelope", () => {
     expect(sessions.get("o2")).not.toBeNull();
   });
 
+  it("a tombstoned id in a clear chain does not point the previous head at a missing row", () => {
+    const { sessions, deps } = setup();
+    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", butlerSession: "A" }), deps);
+    sessions.delete("B");
+    const eff = applyHookEnvelope(env("SessionStart", "B", { butlerSession: "A" }, { source: "clear" }), deps);
+    expect(eff).toEqual({ kind: "session_started", sessionId: "B", ticketKey: "PROJ-1", replaced: null });
+    expect(sessions.get("B")).toBeNull();
+    expect(sessions.head("A")?.id).toBe("A");
+  });
+
   it("upgrades a discovered session to butler once a Butler terminal reports it", () => {
     const { sessions, deps } = setup();
     sessions.insertIfAbsent({ id: "d1", ticketKey: "PROJ-1", cwd: "/w", origin: "discovered", createdAt: 1 });

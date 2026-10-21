@@ -118,7 +118,9 @@ export function transcriptState(projectsDir: string, sessionId: string): Transcr
       statSync(join(projectsDir, d, `${sessionId}.jsonl`));
       return "present";
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") return "unknown";
+      // ENOTDIR：projects 目录里的非目录条目（如 .DS_Store），等于“这里没有”。
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return "unknown";
     }
   }
   return "absent";

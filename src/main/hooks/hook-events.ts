@@ -67,7 +67,8 @@ export function applyHookEnvelope(
       }
       ensure();
       let replaced: string | null = null;
-      if (prevHead && prevHead.id !== id) {
+      // 只有新行真的存在时才指过去（ensure 可能因 tombstone 跳过了插入）；否则前一个 head 会指向一个不存在的行。
+      if (prevHead && prevHead.id !== id && sessions.get(id)) {
         sessions.setReplacedBy(prevHead.id, id);
         replaced = prevHead.id;
       }
