@@ -1,6 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -24,21 +24,44 @@ const isObject = (v: unknown): v is Json => !!v && typeof v === "object" && !Arr
 const isServerMap = (v: unknown): v is Json => isObject(v) && Object.keys(v).length > 0;
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
-/** 读 JSON 对象；文件不存在返回 undefined（正常），损坏/读不了记日志后返回 undefined。 */
-function readJson(file: string, log?: ProjectMcpPaths["log"]): Json | undefined {
-  let text: string;
+/** 仓库里的文件（仓库的人能写）：不读符号链接、不读非普通文件，限制大小，免得被 /dev/zero 之类卡住主进程。 */
+const REPO_FILE_LIMIT = 1024 * 1024;
+const USER_FILE_LIMIT = 64 * 1024 * 1024;
+
+const errTag = (e: unknown): string => (e as NodeJS.ErrnoException)?.code ?? (e as Error)?.name ?? "error";
+
+/**
+ * 读 JSON 对象；文件不存在返回 undefined（正常），其余问题记日志后返回 undefined。
+ * 日志只写路径和错误码/类型，绝不写 e.message（JSON.parse 的消息会带出文件内容片段，~/.claude.json 里有密钥）。
+ */
+function readJson(file: string, log: ProjectMcpPaths["log"], o: { repo: boolean }): Json | undefined {
+  let fd: number | undefined;
   try {
-    text = readFileSync(file, "utf8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") log?.(`project MCP: cannot read ${file}`, e);
-    return undefined;
-  }
-  try {
-    const v: unknown = JSON.parse(text.replace(/^\uFEFF/, ""));
+    if (o.repo && lstatSync(file).isSymbolicLink()) {
+      log?.(`project MCP: ignoring symlink ${file}`);
+      return undefined;
+    }
+    fd = openSync(file, "r");
+    const st = fstatSync(fd);
+    const limit = o.repo ? REPO_FILE_LIMIT : USER_FILE_LIMIT;
+    if (!st.isFile() || st.size > limit) {
+      log?.(`project MCP: ignoring ${file} (${st.isFile() ? "too large" : "not a regular file"})`);
+      return undefined;
+    }
+    const buf = Buffer.alloc(st.size);
+    let off = 0;
+    while (off < buf.length) {
+      const n = readSync(fd, buf, off, buf.length - off, off);
+      if (n === 0) break;
+      off += n;
+    }
+    const v: unknown = JSON.parse(buf.toString("utf8", 0, off).replace(/^\uFEFF/, ""));
     if (isObject(v)) return v;
     log?.(`project MCP: ${file} is not a JSON object`);
   } catch (e) {
-    log?.(`project MCP: ${file} is not valid JSON`, e);
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") log?.(`project MCP: cannot read ${file} (${errTag(e)})`);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
   return undefined;
 }
@@ -62,14 +85,38 @@ function projectEntry(cwd: string, claudeJson: Json | undefined): Json | undefin
   return undefined;
 }
 
-/** settings.local.json 是用户本机的（Claude Code 在这里记审批）；被 git 跟踪或 git 不可用时，它可能是仓库带来的，不信。 */
-function isUntracked(cwd: string, rel: string): boolean {
+function gitEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) if (!k.toUpperCase().startsWith("GIT_")) env[k] = v;
+  env.LC_ALL = "C";
+  return env;
+}
+
+function git(cwd: string, args: string[]): { status: number | null; stdout: string } {
+  const r = spawnSync("git", args, { cwd, env: gitEnv(), timeout: 5000, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return { status: r.error ? null : r.status, stdout: r.stdout ?? "" };
+}
+
+/**
+ * settings.local.json 是用户本机的（Claude Code 在这里记审批），仓库可以自带一份冒充。只在能证明它不是仓库带来的时才信：
+ * git 明确说它未被跟踪（退出码恰为 1；128、超时、没有 git 都算不信），.claude 本身不是被跟踪的条目/gitlink（大小写不敏感），
+ * .claude 是真目录、文件是普通文件，且真实路径就是 cwd/.claude/settings.local.json。
+ */
+function localSettingsTrusted(cwd: string): boolean {
+  const rel = join(".claude", "settings.local.json");
+  const file = join(cwd, rel);
   try {
-    execFileSync("git", ["ls-files", "--error-unmatch", "--", rel], { cwd, stdio: "ignore", timeout: 5000, env: { ...process.env, LC_ALL: "C" } });
-    return false; // 退出码 0：被跟踪
-  } catch (e) {
-    return typeof (e as { status?: unknown }).status === "number"; // 非 0 退出：未跟踪或不是 git 仓库；起不来 git 则不信
+    if (!lstatSync(join(cwd, ".claude")).isDirectory()) return false;
+    const st = lstatSync(file);
+    if (st.isSymbolicLink() || !st.isFile()) return false;
+    if (realpathSync.native(file) !== join(realpathSync.native(cwd), ".claude", "settings.local.json")) return false;
+  } catch {
+    return false;
   }
+  if (git(cwd, ["ls-files", "--error-unmatch", "--", ":(icase).claude/settings.local.json"]).status !== 1) return false;
+  const dir = git(cwd, ["ls-files", "-s", "-z", "--", ":(icase).claude"]);
+  if (dir.status !== 0) return false;
+  return !dir.stdout.split("\0").some((entry) => entry.slice(entry.indexOf("\t") + 1).toLowerCase() === ".claude");
 }
 
 interface Approval {
@@ -93,17 +140,27 @@ function approvals(cwd: string, claudeJson: Json | undefined, p: ProjectMcpPaths
     if (src.enableAllProjectMcpServers === true) a.enableAll = true;
   };
   add(projectEntry(cwd, claudeJson), true);
-  if (p.claudeSettings) add(readJson(p.claudeSettings, p.log), true);
+  if (p.claudeSettings) add(readJson(p.claudeSettings, p.log, { repo: false }), true);
   const rel = join(".claude", "settings.local.json");
-  const local = readJson(join(cwd, rel), p.log);
-  if (local) add(local, isUntracked(cwd, rel));
+  const local = readJson(join(cwd, rel), p.log, { repo: true });
+  if (local) add(local, localSettingsTrusted(cwd));
   return a;
 }
 
+/** 同目录临时文件（0600）再 rename，不会留下半截或宽权限的文件。 */
 function writePrivate(file: string, servers: Json): void {
-  writeFileSync(file, JSON.stringify({ mcpServers: servers }, null, 2), { mode: 0o600 });
-  // 文件已存在时 writeFileSync 不改权限。
-  chmodSync(file, 0o600);
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify({ mcpServers: servers }, null, 2), { mode: 0o600, flag: "w" });
+    renameSync(tmp, file);
+  } catch (e) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // 临时文件没建成。
+    }
+    throw e;
+  }
 }
 
 const fileKey = (cwd: string, kind: string): string => `${kind}-${createHash("sha1").update(cwd).digest("hex").slice(0, 12)}.json`;
@@ -116,12 +173,17 @@ const fileKey = (cwd: string, kind: string): string => `${kind}-${createHash("sh
  */
 export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
   const out: string[] = [];
-  const claudeJson = readJson(p.claudeJson, p.log);
+  const claudeJson = readJson(p.claudeJson, p.log, { repo: false });
+  const localRaw = INCLUDE_LOCAL_SCOPE ? projectEntry(cwd, claudeJson)?.mcpServers : undefined;
+  const local = isServerMap(localRaw) ? localRaw : undefined;
   try {
-    const declared = readJson(join(cwd, ".mcp.json"), p.log)?.mcpServers;
+    const declared = readJson(join(cwd, ".mcp.json"), p.log, { repo: true })?.mcpServers;
     if (isServerMap(declared)) {
       const a = approvals(cwd, claudeJson, p);
-      const allowed = Object.fromEntries(Object.entries(declared).filter(([name]) => !a.disabled.has(name) && (a.enableAll || a.enabled.has(name))));
+      // 同名时本地级（用户自己写的）优先，丢掉仓库的那一项。
+      const allowed = Object.fromEntries(
+        Object.entries(declared).filter(([name]) => !a.disabled.has(name) && (a.enableAll || a.enabled.has(name)) && !(local && name in local)),
+      );
       if (isServerMap(allowed)) {
         const file = join(p.mcpDir, fileKey(cwd, "project"));
         writePrivate(file, allowed);
@@ -129,18 +191,15 @@ export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
       }
     }
   } catch (e) {
-    p.log?.("project MCP: skipping project-scope servers", e);
+    p.log?.(`project MCP: skipping project-scope servers (${errTag(e)})`);
   }
-  if (INCLUDE_LOCAL_SCOPE) {
+  if (local) {
     try {
-      const local = projectEntry(cwd, claudeJson)?.mcpServers;
-      if (isServerMap(local)) {
-        const file = join(p.mcpDir, fileKey(cwd, "local"));
-        writePrivate(file, local);
-        out.push(file);
-      }
+      const file = join(p.mcpDir, fileKey(cwd, "local"));
+      writePrivate(file, local);
+      out.push(file);
     } catch (e) {
-      p.log?.("project MCP: skipping local-scope servers", e);
+      p.log?.(`project MCP: skipping local-scope servers (${errTag(e)})`);
     }
   }
   return out;

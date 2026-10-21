@@ -39,9 +39,9 @@ export interface HandoffRunnerDeps {
   now: () => number;
   newRunId: () => string;
   timeoutMs?: number;
-  /** 退出 app 时取消所有进行中的 headless 运行：被取消的运行不写入任何东西，也不算限流。 */
   /** 设置 headlessProjectMcp 打开时调用：这个目录要额外挂的 --mcp-config 文件（计划 3 任务 5）。 */
   projectMcp?: (cwd: string) => string[];
+  /** 退出 app 时取消所有进行中的 headless 运行：被取消的运行不写入任何东西，也不算限流。 */
   signal?: AbortSignal;
   log?: (msg: string, err?: unknown) => void;
 }
