@@ -140,3 +140,10 @@ export type HandoffOutcome =
   | { ticketKey: string; status: "stored"; handoffId: number; degraded: boolean }
   | { ticketKey: string; status: "skipped"; reason: "rate_limited" | "no_session" }
   | { ticketKey: string; status: "failed"; reason: string; message: string };
+
+/** 探测到的 MCP server 和工具（设置页“检测”按钮）。suggested 是名字像查询的工具，默认勾选。 */
+export interface McpProbe {
+  servers: { name: string; status: string }[];
+  tools: string[];
+  suggested: string[];
+}
