@@ -20,7 +20,6 @@ export function deriveStatus(h: StatusInput, openFollowups: number): TicketStatu
     return openFollowups > 0 ? "merged_pending_followup" : "done";
   }
   if (h.status === "blocked") return "blocked";
-  if (h.pr?.state === "open") return "in_review";
   if (h.blockers.length > 0) return "blocked";
   if (h.pr?.state === "closed") return "active";
   return h.status === "in_review" ? "in_review" : "active";
