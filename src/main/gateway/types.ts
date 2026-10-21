@@ -39,7 +39,8 @@ export interface NarrativeItem {
 
 /**
  * 数据库里所有可能出现在自由文本里的标识：用来做假名化字典。人名和敏感词由 gateway 从敏感词表补上。
- * 限制：人名只来自敏感词表，不在表里的人名在 redacted 档位会被发送。
+ * 限制：人名只来自敏感词表，不在表里的人名在 redacted 档位会被发送；
+ * 去掉重音或加点写法（José 写成 Jose、İlker 写成 Ilker）不会被匹配；可见的组合符号（如 U+0336）不处理。
  */
 export interface KnownValues {
   tickets: string[];

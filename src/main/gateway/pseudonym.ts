@@ -15,8 +15,18 @@ const MAX_TRIES = 1000;
 
 export const defaultRng: Rng = (n) => randomInt(n);
 
-const IGNORABLE_RE = /\p{Default_Ignorable_Code_Point}/gu;
-const stripIgnorables = (s: string): string => s.normalize("NFKC").replace(IGNORABLE_RE, "");
+/** 不可见字符：默认可忽略码位、全部 Cf、除 \t \n \r 外的 Cc、盲文空白 U+2800。 */
+const INVISIBLE_RE = /[\p{Default_Ignorable_Code_Point}\p{Cf}\u2800]|(?![\t\n\r])\p{Cc}/gu;
+const LINE_SEP_RE = /[\u0085\u2028\u2029]/g;
+/** 去不可见字符 → NFKC → 再去一遍（NFKC 会从 U+3164 / U+FFA0 生出 U+1160 这类字符）；U+0085 / U+2028 / U+2029 当空白。 */
+const stripIgnorables = (s: string): string =>
+  s
+    .replace(LINE_SEP_RE, " ")
+    .replace(INVISIBLE_RE, "")
+    .normalize("NFKC")
+    .replace(LINE_SEP_RE, " ")
+    .replace(INVISIBLE_RE, "");
+const foldDashes = (s: string): string => s.replace(/[\p{Pd}\u2212]/gu, "-");
 
 /**
  * 替换和扫描之前的统一规范化：NFKC（全角变半角）、去掉零宽/软连字符等不可见字符、
@@ -24,7 +34,7 @@ const stripIgnorables = (s: string): string => s.normalize("NFKC").replace(IGNOR
  * 字典值和输入文本必须用同一个函数，否则变体写法会漏掉。
  */
 export const normalizeText = (s: string): string =>
-  stripIgnorables(s).replace(/[\p{Pd}\u2212]/gu, "-").replace(/\s+/g, " ");
+  foldDashes(stripIgnorables(s)).replace(/\s+/g, " ");
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -69,7 +79,7 @@ export class Pseudonymizer {
     // 长的优先：PROJ-123 不会被拆成 PROJ-12 + 3，分支名整体替换。
     // 用规范化后的原值（不是小写后的键）建正则，靠 i 标志不分大小写：İ 之类小写后会变形的字符才能匹配。
     const originals = [...this.toOriginal.values()].filter((v) => [...v].length >= 2).sort((a, b) => b.length - a.length);
-    this.re = originals.length ? new RegExp(originals.map(escapeRe).join("|"), "giu") : null;
+    this.re = originals.length ? new RegExp(originals.map((o) => escapeRe(o).replace(/-/g, "\\s*-\\s*")).join("|"), "giu") : null;
     this.dirty = false;
   }
 
@@ -121,7 +131,10 @@ export class Pseudonymizer {
     if (this.dirty) this.rebuild();
     if (!this.re) return t;
     // 正则的大小写折叠和 toLowerCase 偶尔不一致（少数 Unicode 字符）：查不到时也要替换，当作新的敏感词。
-    return t.replace(this.re, (m) => this.toToken.get(m.toLowerCase()) ?? this.forceToken("S", m));
+    return t.replace(this.re, (m) => {
+      const key = m.replace(/\s*-\s*/g, "-").toLowerCase();
+      return this.toToken.get(key) ?? this.forceToken("S", m);
+    });
   }
 
   get mapping(): ReadonlyMap<string, string> {
@@ -137,13 +150,20 @@ export class Pseudonymizer {
 /**
  * 把响应里的占位符换回原值。按句（。！？!?；; 和换行）检查：
  * 含未知占位符或被改坏的占位符的句子整句丢弃（设计文档 7.4）。
+ * 分句和输出都用原文（标点、上标、emoji 原样显示）；NFKC 只用在检测副本上：
+ * 检测副本里出现、原文里没有逐字出现的占位符或残片（全角、零宽字符拆开的）同样整句丢弃。
  */
 export function restore(text: string, mapping: ReadonlyMap<string, string>): { text: string; dropped: number } {
   let dropped = 0;
-  // 先 NFKC 并去掉不可见字符（全角括号/下划线、零宽字符插进占位符里的变体），但保留换行用于分句。
-  const kept = stripIgnorables(text).split(/(?<=[。！？!?；;\n])/).filter((sentence) => {
-    const tokens = sentence.match(PLACEHOLDER_RE) ?? [];
-    const bad = tokens.some((t) => !mapping.has(t)) || MANGLED_RE.test(sentence.replace(PLACEHOLDER_RE, " "));
+  const kept = text.split(/(?<=[。！？!?；;\n])/).filter((sentence) => {
+    const own = sentence.match(PLACEHOLDER_RE) ?? [];
+    const copy = foldDashes(stripIgnorables(sentence));
+    const seen = copy.match(PLACEHOLDER_RE) ?? [];
+    const bad =
+      own.some((t) => !mapping.has(t)) ||
+      seen.length !== own.length ||
+      seen.some((t) => !mapping.has(t)) ||
+      MANGLED_RE.test(copy.replace(PLACEHOLDER_RE, " "));
     if (bad) dropped++;
     return !bad;
   });

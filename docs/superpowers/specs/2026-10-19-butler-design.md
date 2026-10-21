@@ -303,7 +303,7 @@ handoff 是整个系统的数据源，由公司 Claude Code 生成，只存在�
 - 对 ticket 号、repo 名、分支名、人名（来自 PR 和 tracker 字段）以及 `sensitive_terms` 词表中的词做替换。
 - 映射表**每次请求随机生成**，只在内存里，用完即弃，所以服务商无法跨请求关联。
 - 响应里的占位符在本地还原；响应中出现未知占位符时丢弃该句。
-- 人名只来自 `sensitive_terms` 词表：Butler 不存人名字段，词表之外的人名在 `redacted` 档位会原样发送（UI 在档位选择器旁提示）。
+- 人名只来自 `sensitive_terms` 词表：Butler 不存人名字段，词表之外的人名在 `redacted` 档位会原样发送（UI 在档位选择器旁提示）。去掉重音或加点写法的名字（José 写成 Jose、İlker 写成 Ilker）也不会被匹配。
 
 ### 7.5 敏感信息扫描
 

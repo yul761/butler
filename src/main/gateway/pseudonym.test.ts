@@ -56,6 +56,35 @@ describe("Pseudonymizer", () => {
     }
   });
 
+  it("normalizeText is idempotent and strips non-default-ignorable invisibles", () => {
+    for (const x of ["PROJ\u200B-12", "PROJ\u201312", "Alice\nZhang", "ＰＲＯＪ－１２", "a\u3164b", "a\uFFA0b", "Jose\u200B\u0301"]) {
+      expect(normalizeText(normalizeText(x)), x).toBe(normalizeText(x));
+    }
+    const p = new Pseudonymizer({ ...dict, people: ["José"] }, seededRng(1));
+    expect(p.apply("ask Jose\u200B\u0301 now")).toMatch(PLACEHOLDER_RE);
+    for (const c of ["\u2800", "\u0085", "\uFFF9", "\u0600", "\u2028"]) {
+      const q = new Pseudonymizer(dict, seededRng(1));
+      const out = q.apply(`fix PROJ${c}-12`);
+      expect(out.toLowerCase(), JSON.stringify(c)).not.toContain("proj");
+    }
+  });
+
+  it("restore keeps the original punctuation and symbols", () => {
+    const p = new Pseudonymizer(dict, seededRng(3));
+    const t = p.token("T", "PROJ-12");
+    const text = `先合并 ${t}，再部署：看（日志）！℃ m² ❤️ 👨‍👩‍👧…`;
+    expect(restore(text, p.mapping)).toEqual({ text: text.replace(t, "PROJ-12"), dropped: 0 });
+  });
+
+  it("restore drops full-width, zero-width-split and en-dash placeholders", () => {
+    const p = new Pseudonymizer(dict, seededRng(3));
+    const t = p.token("T", "PROJ-12");
+    const id = t.slice(4, 8);
+    for (const bad of [`［［T_${id}］］`, `[[T_${id.slice(0, 2)}\u200B${id.slice(2)}]]`, `T\u2013${id}`, `T\u2014${id}`]) {
+      expect(restore(`坏 ${bad} 完。好。`, p.mapping), bad).toEqual({ text: "好。", dropped: 1 });
+    }
+  });
+
   it("replaces values registered through token() afterwards", () => {
     const p = new Pseudonymizer({ tickets: [], repos: [], branches: [], people: [], terms: [] }, seededRng(3));
     const t = p.token("T", "NEW-1");
