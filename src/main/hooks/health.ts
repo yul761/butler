@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import type { HealthReport, HookStatus } from "../../shared/types";
+import type { HandoffCommandStatus, HealthReport, HookStatus } from "../../shared/types";
+import { handoffCommandPath, handoffCommandStatus, installHandoffCommand, uninstallHandoffCommand } from "../handoff/command";
 import { probeClaude } from "../claude/capabilities";
 import { locateClaude, readLoginShellPath } from "../claude/locate";
 import type { SettingsRepo } from "../db/settings-repo";
@@ -24,6 +25,10 @@ export class HealthService {
 
   constructor(private readonly d: HealthDeps) {}
 
+  private commandFile(): string {
+    return handoffCommandPath(this.d.paths.claudeCommands);
+  }
+
   /** 最近一次 refresh 得到的 claude 路径和登录 shell 的 PATH。 */
   claude(): { path: string | null; pathValue: string } {
     return this.state;
@@ -42,10 +47,18 @@ export class HealthService {
       // 解析失败、是目录、没有权限等：一律视为 settings 不可用，不让启动失败。
       hooks = "settings_invalid";
     }
+    let handoffCommand: HandoffCommandStatus;
+    try {
+      handoffCommand = await handoffCommandStatus(this.commandFile());
+    } catch {
+      // 读不了（权限、是目录）就当作不是 Butler 的文件，不去碰它。
+      handoffCommand = "conflict";
+    }
     return {
       claude,
       hooks,
       hookBinInstalled: existsSync(this.d.paths.hookBin),
+      handoffCommand,
       butlerHome: this.d.paths.home,
       claudeSettingsPath: this.d.paths.claudeSettings,
     };
@@ -54,11 +67,13 @@ export class HealthService {
   async installHooks(): Promise<HealthReport> {
     await installHookBinary(this.d.bundledHookBin, this.d.paths.hookBin);
     await installHooks(this.d.paths.claudeSettings, this.d.paths.hookBin, this.d.platform);
+    await installHandoffCommand(this.commandFile());
     return this.refresh();
   }
 
   async uninstallHooks(): Promise<HealthReport> {
     await uninstallHooks(this.d.paths.claudeSettings);
+    await uninstallHandoffCommand(this.commandFile());
     return this.refresh();
   }
 }

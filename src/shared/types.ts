@@ -72,6 +72,7 @@ export type OpenSessionResult =
   | { ok: false; reason: "claude_missing" | "no_ticket" | "no_session" };
 
 export type HookStatus = "installed" | "missing" | "partial" | "stale" | "settings_invalid";
+export type HandoffCommandStatus = "installed" | "missing" | "stale" | "conflict";
 
 export interface ClaudeHealth {
   path: string | null;
@@ -85,6 +86,7 @@ export interface HealthReport {
   claude: ClaudeHealth;
   hooks: HookStatus;
   hookBinInstalled: boolean;
+  handoffCommand: HandoffCommandStatus;
   butlerHome: string;
   claudeSettingsPath: string;
 }

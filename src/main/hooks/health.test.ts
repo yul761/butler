@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SettingsRepo } from "../db/settings-repo";
@@ -23,13 +23,18 @@ describe("HealthService", () => {
     expect(first.claude).toMatchObject({ path: fakeClaude, version: "2.1.304", missingFlags: [] });
     expect(first.hooks).toBe("missing");
     expect(first.hookBinInstalled).toBe(false);
+    expect(first.handoffCommand).toBe("missing");
     expect(health.claude()).toEqual({ path: fakeClaude, pathValue: "/usr/bin" });
 
     const installed = await health.installHooks();
     expect(installed.hooks).toBe("installed");
     expect(installed.hookBinInstalled).toBe(true);
+    expect(installed.handoffCommand).toBe("installed");
+    expect(existsSync(join(paths.claudeCommands, "handoff.md"))).toBe(true);
 
-    expect((await health.uninstallHooks()).hooks).toBe("missing");
+    const removed = await health.uninstallHooks();
+    expect(removed.hooks).toBe("missing");
+    expect(removed.handoffCommand).toBe("missing");
 
     writeFileSync(paths.claudeSettings, "{oops");
     expect((await health.refresh()).hooks).toBe("settings_invalid");
@@ -44,5 +49,20 @@ describe("HealthService", () => {
       readPath: async () => "/usr/bin", run: async () => "",
     });
     expect((await health.refresh()).hooks).toBe("settings_invalid");
+  });
+
+  it("keeps a user's own /handoff command and reports the conflict", async () => {
+    const home = tempDir();
+    const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+    mkdirSync(paths.claudeCommands, { recursive: true });
+    writeFileSync(join(paths.claudeCommands, "handoff.md"), "mine");
+    const bundled = join(home, "bundled-hook");
+    writeFileSync(bundled, "#!/bin/sh\n");
+    const health = new HealthService({
+      paths, platform: "darwin", env: {}, settings: new SettingsRepo(memDb()), bundledHookBin: bundled,
+      readPath: async () => "/usr/bin", run: async () => "",
+    });
+    expect((await health.installHooks()).handoffCommand).toBe("conflict");
+    expect(readFileSync(join(paths.claudeCommands, "handoff.md"), "utf8")).toBe("mine");
   });
 });
