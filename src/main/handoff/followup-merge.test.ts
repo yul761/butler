@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HandoffFollowup } from "../../shared/handoff";
 import type { Followup } from "../../shared/types";
-import { planFollowupMerge } from "./followup-merge";
+import { normalizeDescription, planFollowupMerge } from "./followup-merge";
 
 const existing = (id: string, over: Partial<Followup> = {}): Followup => ({
   id, ticketKey: "PROJ-1", kind: "config", description: `改配置 ${id}`, trigger: "after_merge", dueDate: null,
@@ -67,6 +67,29 @@ describe("planFollowupMerge", () => {
       ctx(),
     );
     expect(plan.inserts.map((f) => f.description)).toEqual(["新的事"]);
+  });
+
+  it("treats full-width and half-width punctuation as the same description", () => {
+    expect(normalizeDescription("改（配置）")).toBe(normalizeDescription("改(配置)"));
+    const plan = planFollowupMerge([existing("a", { description: "改(配置)" })], [incoming({ description: "改（配置）", done: true })], ctx());
+    expect(plan.done).toEqual(["a"]);
+    expect(plan.inserts).toEqual([]);
+  });
+
+  it("done wins over a non-done entry for the same target, in either order", () => {
+    for (const order of [[false, true], [true, false]]) {
+      const plan = planFollowupMerge(
+        [existing("a")],
+        order.map((done) => incoming({ id: "a", description: "改配置 a", kind: done ? "config" : "deploy", done })),
+        ctx(),
+      );
+      expect(plan.done).toEqual(["a"]);
+      expect(plan.updates).toEqual([]);
+    }
+    for (const order of [[false, true], [true, false]]) {
+      const plan = planFollowupMerge([], order.map((done) => incoming({ description: "新的事", done })), ctx());
+      expect(plan.inserts).toEqual([]);
+    }
   });
 
   it("snoozed items can be completed or edited and keep their snooze otherwise", () => {
