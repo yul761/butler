@@ -91,3 +91,8 @@ export interface HealthReport {
 export function effectiveStatus(t: Pick<Ticket, "status" | "statusManual">): TicketStatus {
   return t.statusManual ?? t.status;
 }
+
+export const FOLLOWUP_KINDS = ["config", "flag", "deploy", "doc", "other"] as const;
+export type FollowupKind = (typeof FOLLOWUP_KINDS)[number];
+export const FOLLOWUP_TRIGGERS = ["after_merge", "after_deploy", "on_date", "none"] as const;
+export type FollowupTrigger = (typeof FOLLOWUP_TRIGGERS)[number];
