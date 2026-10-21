@@ -20,7 +20,7 @@ const GTLDS = new Set(
   "com net org io ai co xyz tech biz gov edu mil arpa internal corp lan intranet club shop pro mobi asia".split(" "),
 );
 /** 同时是常见代码成员的 gTLD（this.app、user.name、logger.info）：至少 3 段才算。 */
-const AMBIGUOUS_GTLDS = new Set("app dev home local cloud site online info name store top int".split(" "));
+const AMBIGUOUS_GTLDS = new Set("app dev home local private cloud site online info name store top int".split(" "));
 /** 不含 id in is it at to do me no so as be by on am pm us 这类像代码成员的 ccTLD；它们只能靠下面的二级形式抓。 */
 const CCTLDS = new Set(
   "cn uk de jp fr kr ru ca au nl se ch sg hk tw eu br es pl dk fi nz ie il za mx ar tr ua cz".split(" "),
@@ -31,9 +31,16 @@ function isDomain(m: string): boolean {
   const n = parts.length;
   const tld = parts[n - 1] ?? "";
   if (GTLDS.has(tld) || CCTLDS.has(tld)) return true;
-  if (AMBIGUOUS_GTLDS.has(tld)) return n >= 3;
+  // 歧义 TLD 只认小写：主机名都是小写，import.meta.env.DEV、process.env.HOME 这类常量写法不算。
+  if (AMBIGUOUS_GTLDS.has(tld)) return n >= 3 && m.endsWith(tld);
   return n >= 3 && tld.length === 2 && SECOND_LEVELS.has(parts[n - 2] ?? "");
 }
+/** 中文密钥关键词后面跟的是算法 / 技术名（密码 bcrypt 哈希），不是值。整词匹配，不分大小写。 */
+const ALGORITHM_NAMES = new Set(
+  "bcrypt argon2 argon2id scrypt pbkdf2 md5 sha1 sha256 sha512 hmac ed25519 rsa aes aes256 oauth oauth2 jwt totp".split(" "),
+);
+const CJK_SECRET_PREFIX = /^(?:密码|口令|密钥|秘钥|令牌)\s?[是为]?\s?/;
+const isNotAlgorithm = (m: string): boolean => !ALGORITHM_NAMES.has(m.replace(CJK_SECRET_PREFIX, "").toLowerCase());
 const hasDigit = (m: string): boolean => /\d/.test(m);
 
 /**
@@ -53,9 +60,9 @@ const RULES: Rule[] = [
   { rule: "secret", re: /\b(?:api[_-]?key|access[_-]?token|secret|password|passwd|token)\s?[:=]\s?\S{6,}/gi },
   { rule: "secret", re: /(?:密码|口令|密钥|秘钥|令牌)\s?[:：=]\s?\S{4,}/g },
   // 密码是hunter2024：分隔符（是 / 为）之后跟 6 位以上的 ASCII 可见字符。
-  { rule: "secret", re: /(?:密码|口令|密钥|秘钥|令牌)\s?[是为]\s?[\x21-\x7e]{6,}/g },
+  { rule: "secret", re: /(?:密码|口令|密钥|秘钥|令牌)\s?[是为]\s?[\x21-\x7e]{6,}/g, accept: isNotAlgorithm },
   // 密码 hunter2024：没有分隔符时值里必须有数字，免得 "密钥 rotation 完成" 这类描述误伤。
-  { rule: "secret", re: /(?:密码|口令|密钥|秘钥|令牌)\s?(?=[\x21-\x7e]*\d)[\x21-\x7e]{6,}/g },
+  { rule: "secret", re: /(?:密码|口令|密钥|秘钥|令牌)\s?(?=[\x21-\x7e]*\d)[\x21-\x7e]{6,}/g, accept: isNotAlgorithm },
   // password is hunter2024：值里要有数字，免得 "token is expired" 误伤。
   { rule: "secret", re: /\b(?:api[_-]?key|access[_-]?token|secret|password|passwd|pwd|passcode|token)\s(?:is|was)\s(?=\S*\d)\S{6,}/gi },
   { rule: "secret", re: /\b(?:authorization\s?[:=]\s?)?(?:Bearer|Basic)\s(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{16,}/g },
@@ -72,7 +79,7 @@ const RULES: Rule[] = [
     re: /(?<![\w:])(?:(?:[0-9a-f]{1,4}:){1,7}:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6}|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6}|(?:[0-9a-f]{1,4}:){2,7}:)(?![\w:])/gi,
     accept: hasDigit,
   },
-  { rule: "domain", re: /\b(?:[a-z0-9-]{1,63}\.){1,8}(?:internal|corp|lan|intranet|localdomain)\b/gi },
+  { rule: "domain", re: /\b(?:[a-z0-9-]{1,63}\.){1,8}(?:internal|corp|lan|intranet|intra|localdomain)\b/gi },
   // 任意 label.label.tld（tld 2 到 24 个字母），去掉长得像文件扩展名的。
   { rule: "domain", re: /\b(?:[a-z0-9-]{1,63}\.){1,8}[a-z]{2,24}(?![A-Za-z0-9_])/gi, accept: isDomain },
   // 盘符路径（C:\ 或 C:/）放在最前，样本才带盘符。
