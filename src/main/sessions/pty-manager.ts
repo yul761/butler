@@ -64,6 +64,8 @@ export class PtyManager {
     const term: Term = { proc, buffer: "", lastOutputAt: 0, exited: false };
     this.terms.set(termId, term);
     proc.onData((data) => {
+      // ConPTY 在进程退出后还可能吐出尾部数据；退出后一律丢弃，否则渲染进程会以为终端被重新打开而清掉退出提示。
+      if (term.exited) return;
       term.lastOutputAt = this.now();
       term.buffer = (term.buffer + data).slice(-BUFFER_LIMIT);
       this.events.data(termId, data);

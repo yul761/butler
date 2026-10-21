@@ -13,4 +13,8 @@ describe("drop quoting", () => {
     expect(dropText(["/a", "/b c"], "darwin")).toBe("'/a' '/b c'");
     expect(dropText([], "darwin")).toBe("");
   });
+  it("strips control characters from dropped names", () => {
+    expect(quotePath("/tmp/evil\u001b[31m\nname.txt", "darwin")).toBe("'/tmp/evil[31mname.txt'");
+    expect(dropText(["C:\\a\rb.txt"], "win32")).toBe('"C:\\ab.txt"');
+  });
 });

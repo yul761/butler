@@ -116,7 +116,7 @@ function createTray(): Tray {
 async function bootstrap(): Promise<void> {
   const paths = resolvePaths();
   await ensureDirs(paths);
-  logger = createFileLogger(join(paths.logs, "main.log"));
+  logger = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : (line) => console.error(line));
   const db = openDatabase(paths.db);
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);

@@ -139,4 +139,13 @@ describe("PtyManager", () => {
     expect(logs).toHaveLength(4);
     expect(logs[0]).toContain("write failed");
   });
+  it("drops output that arrives after the process exited", () => {
+    const { mgr, spawned, data } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("before");
+    spawned[0].pty.emitExit(0);
+    spawned[0].pty.emit("trailing");
+    expect(data).toEqual([["t1", "before"]]);
+    expect(mgr.snapshot("t1")).toEqual({ data: "before", exitCode: 0 });
+  });
 });

@@ -1,3 +1,4 @@
+import { sanitizePrefill } from "../../shared/text";
 import {
   effectiveStatus,
   type OpenSessionRequest,
@@ -51,6 +52,7 @@ export class SessionService {
 
   async open(req: OpenSessionRequest): Promise<OpenSessionResult> {
     await this.d.ready();
+    const prefill = req.prefill ? sanitizePrefill(req.prefill) : "";
     const ticket = this.d.tickets.get(req.ticketKey);
     if (!ticket) return { ok: false, reason: "no_ticket" };
 
@@ -60,7 +62,7 @@ export class SessionService {
       if (!head) return { ok: false, reason: "no_session" };
       const existing = this.openHeads().get(head.id);
       if (existing) {
-        if (req.prefill) this.prefill(existing, req.prefill, 0);
+        if (prefill) this.prefill(existing, prefill, 0);
         return { ok: true, termId: existing, alreadyOpen: true };
       }
     }
@@ -94,7 +96,7 @@ export class SessionService {
       cwd,
       env: sessionEnv(this.d.baseEnv, { pathValue, ticketKey: ticket.key, sessionId: termId }),
     });
-    if (req.prefill) this.prefill(termId, req.prefill);
+    if (prefill) this.prefill(termId, prefill);
     return { ok: true, termId, alreadyOpen: false };
   }
 

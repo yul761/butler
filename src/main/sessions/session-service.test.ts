@@ -104,6 +104,13 @@ describe("SessionService.open", () => {
     expect(await service.open({ ticketKey: "PROJ-1", force: true })).toMatchObject({ ok: true });
     expect(spawned[0].opts.cwd).toBe(repo);
   });
+  it("prefills a single line even when the request text has newlines", async () => {
+    const { service, spawned } = await setup();
+    await service.open({ ticketKey: "PROJ-1" });
+    spawned[0].pty.emit("ready");
+    expect(await service.open({ ticketKey: "PROJ-1", sessionId: "new-1", prefill: "继续\n做 PROJ-1\r\n" })).toMatchObject({ alreadyOpen: true });
+    expect(spawned[0].pty.written).toEqual(["继续 做 PROJ-1"]);
+  });
 });
 
 describe("SessionService views", () => {
