@@ -39,11 +39,13 @@ describe("KeyStore", () => {
   });
 
   it("reports a key that can no longer be decrypted, without logging it, and can clear it", () => {
-    const { keys, box, logs } = setup();
+    const { keys, box, logs, secrets } = setup();
     keys.save(KEY);
     box.setBroken(true);
     expect(keys.get()).toBeNull();
-    expect(keys.state()).toEqual({ keySaved: true, keyMasked: null, keyUnreadable: true, encryptionAvailable: true });
+    // state() is cached from save(); a fresh store (app restart) sees the unreadable key.
+    const keys2 = new KeyStore({ secrets, box, now: () => 1, log: (m) => logs.push(m) });
+    expect(keys2.state()).toEqual({ keySaved: true, keyMasked: null, keyUnreadable: true, encryptionAvailable: true });
     expect(logs.join("\n")).not.toContain("sk-live");
     expect(keys.clear()).toMatchObject({ keySaved: false, keyUnreadable: false });
   });
@@ -87,5 +89,56 @@ describe("KeyStore", () => {
       expect(where).not.toContain(KEY);
       expect(where).not.toContain("sk-live");
     }
+  });
+
+  it("accepts printable ASCII only and does not echo a rejected key", () => {
+    const { keys } = setup();
+    for (const bad of ["sk-abcd\u200befgh", "sk-abcd\u0085efgh", "sk-аbcdefgh", "sk-••••efgh"]) {
+      let msg = "";
+      try {
+        keys.save(bad);
+      } catch (e) {
+        expect(e).toBeInstanceOf(SettingError);
+        msg = (e as Error).message;
+      }
+      expect(msg, bad).not.toBe("");
+      expect(msg).not.toContain("sk-");
+    }
+  });
+
+  it("state() decrypts and logs once, not on every call; save and clear invalidate", () => {
+    const secrets = new SecretsRepo(memDb());
+    const inner = fakeSecretBox();
+    let decrypts = 0;
+    const box = { available: () => true, encrypt: inner.encrypt, decrypt: (d: Uint8Array) => (decrypts++, inner.decrypt(d)) };
+    const logs: string[] = [];
+    const keys = new KeyStore({ secrets, box, now: () => 1, log: (m) => logs.push(m) });
+    keys.save(KEY);
+    decrypts = 0;
+    keys.state();
+    keys.state();
+    keys.state();
+    expect(decrypts).toBe(0);
+    keys.clear();
+    expect(keys.state().keySaved).toBe(false);
+    keys.save(KEY);
+    expect(keys.state().keyMasked).toBe("••••1234");
+    // unreadable path: cache filled once
+    inner.setBroken(true);
+    const k2 = new KeyStore({ secrets, box, now: () => 1, log: (m) => logs.push(m) });
+    decrypts = 0;
+    logs.length = 0;
+    k2.state();
+    k2.state();
+    k2.state();
+    expect(decrypts).toBe(1);
+    expect(logs).toHaveLength(1);
+  });
+
+  it("get() returns null when the decrypted value fails the format check", () => {
+    const { secrets, box, keys, logs } = setup();
+    secrets.set(API_KEY_SECRET, box.encrypt("has space inside"), 1);
+    expect(keys.get()).toBeNull();
+    expect(logs).toHaveLength(1);
   });
 });
