@@ -261,5 +261,4 @@ export const S = {
   auditMaybeSentNote: "这次调用没有成功完成，下面的内容可能已经发给了服务商。",
   auditDeclined: "你在确认框里选择了不发送（或确认超时）",
   auditLoadFailed: "审计记录加载失败。",
-  retry: "重试",
 };
