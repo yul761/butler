@@ -43,6 +43,38 @@ describe("isNightlyDue / isMorningDue", () => {
   });
 });
 
+describe("isNightlyDue on non-working days", () => {
+  it("does not catch up or retry on a weekend, but catches up on Monday before the morning brief", () => {
+    // 周五 16:00 错过，周六解锁：不跑。
+    expect(isNightlyDue(at(17, 10), cfg, { lastRunAt: at(15, 16, 1), lastStatus: "ok" }, true)).toBe(false);
+    expect(isNightlyDue(at(17, 10), cfg, { lastRunAt: at(16, 16, 1), lastStatus: "partial" }, true)).toBe(false);
+    // 周一解锁 / 启动：补周五。
+    expect(isNightlyDue(at(19, 9), cfg, { lastRunAt: at(15, 16, 1), lastStatus: "ok" }, true)).toBe(true);
+  });
+
+  it("a Saturday unlock leaves the nightly job alone and Monday's unlock runs it before the morning brief", async () => {
+    const log: string[] = [];
+    const jobs = new JobsRepo(memDb());
+    jobs.record(JOB_NIGHTLY, at(15, 16, 1), "ok", null);
+    let now = at(17, 10);
+    const scheduler = new Scheduler({
+      jobs, config: () => cfg, now: () => now, userActive: () => true,
+      nightly: async () => {
+        log.push("nightly");
+        return "ok";
+      },
+      morning: async () => {
+        log.push("morning");
+      },
+    });
+    await scheduler.check("unlock");
+    expect(log).toEqual(["morning"]);
+    now = at(19, 9);
+    await scheduler.check("unlock");
+    expect(log).toEqual(["morning", "nightly", "morning"]);
+  });
+});
+
 describe("Scheduler", () => {
   function setup(start: number) {
     let now = start;

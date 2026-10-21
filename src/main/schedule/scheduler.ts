@@ -30,9 +30,12 @@ export function isMorningDue(now: number, job: Pick<JobState, "lastRunAt">, trig
 /**
  * 最近一个晚间时刻之后还没跑过 → 到期（错过的会在下一次唤醒/解锁/启动时补跑）。
  * 上次限流或失败 → 在早间简报之前再补一次。第一次启动（从没记录）不补历史。
+ * 补跑和重试只发生在今天是工作日的时候。
  */
 export function isNightlyDue(now: number, cfg: ScheduleConfig, job: Pick<JobState, "lastRunAt" | "lastStatus">, morningDue: boolean): boolean {
   if (job.lastRunAt === null) return false;
+  // 非工作日不跑晚间任务（包括补跑和重试）：周五错过的，周一解锁/启动时在早间简报前补。
+  if (!cfg.workingDays.has(weekday(localDate(now)))) return false;
   // 上次运行时间在一天以后：时钟被往回校正过，当作到期，免得整段时间都不跑。
   if (job.lastRunAt - now > 86_400_000) return true;
   const slot = lastNightlySlot(now, cfg);
