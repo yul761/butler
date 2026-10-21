@@ -140,7 +140,7 @@ describe("chatCompletion against a local fake server", () => {
 
   it("refuses unsafe base URLs without sending anything", async () => {
     const p = await provider();
-    await expect(chatCompletion(req("http://example.com/v1"))).rejects.toMatchObject({ kind: "network", sentBody: null });
+    await expect(chatCompletion(req("http://butler-test.invalid/v1"))).rejects.toMatchObject({ kind: "network", sentBody: null });
     await expect(chatCompletion(req(`${p.baseUrl}?x=1`))).rejects.toMatchObject({ kind: "network" });
     await expect(chatCompletion(req(`${p.baseUrl}#f`))).rejects.toMatchObject({ kind: "network" });
     await expect(chatCompletion(req(p.baseUrl.replace("http://", "http://u:p@")))).rejects.toMatchObject({ kind: "network" });
