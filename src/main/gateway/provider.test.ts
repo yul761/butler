@@ -69,11 +69,12 @@ describe("chatCompletion against a local fake server", () => {
     await expect(chatCompletion(req(p.baseUrl, { signal: ac.signal }))).rejects.toMatchObject({ kind: "aborted" });
   });
 
-  it("never follows a redirect, so the key cannot be forwarded", async () => {
+  it.each([301, 302, 307, 308])("never follows a %i redirect, so the key cannot be forwarded", async (status) => {
     const p = await provider();
     const other = await provider();
-    p.handle(() => ({ status: 302, headers: { location: `${other.baseUrl}/chat/completions` } }));
+    p.handle(() => ({ status, headers: { location: `${other.baseUrl}/chat/completions` } }));
     await expect(chatCompletion(req(p.baseUrl))).rejects.toMatchObject({ kind: "network" });
+    expect(p.requests.length).toBe(1);
     expect(other.requests).toHaveLength(0);
   });
 
@@ -93,8 +94,57 @@ describe("chatCompletion against a local fake server", () => {
 
   it("refuses an oversized response", async () => {
     const p = await provider();
-    p.handle(() => ({ raw: "x".repeat(RESPONSE_LIMIT + 10) }));
-    await expect(chatCompletion(req(p.baseUrl))).rejects.toMatchObject({ kind: "bad_response" });
+    p.handle(() => chatReply("x".repeat(RESPONSE_LIMIT + 10)));
+    await expect(chatCompletion(req(p.baseUrl))).rejects.toMatchObject({ kind: "bad_response", message: `响应超过 ${RESPONSE_LIMIT} 个字符` });
+  });
+
+  it("scrubs the key from a 2xx raw body and content", async () => {
+    const p = await provider();
+    p.handle(() => ({ body: { choices: [{ message: { content: `echo ${KEY} and Bearer ${KEY}` } }], debug: { headers: { authorization: `Bearer ${KEY}` } } } }));
+    const r = await chatCompletion(req(p.baseUrl));
+    expect(r.raw).not.toContain(KEY);
+    expect(r.content).not.toContain(KEY);
+    expect(r.content).toContain("***");
+  });
+
+  it("uses one deadline for the retry too", async () => {
+    const p = await provider();
+    p.handle((_r, n) =>
+      n === 1 ? { status: 400, body: { error: "use max_completion_tokens" }, delayMs: 150 } : { ...chatReply("x"), delayMs: 3000 },
+    );
+    const t0 = Date.now();
+    await expect(chatCompletion(req(p.baseUrl, { timeoutMs: 300 }))).rejects.toMatchObject({ kind: "timeout" });
+    expect(Date.now() - t0).toBeLessThan(450);
+    expect(p.requests).toHaveLength(2);
+  });
+
+  it("records the last body sent on the error", async () => {
+    const p = await provider();
+    p.handle((_r, n) => (n === 1 ? { status: 400, body: { error: "use max_completion_tokens" } } : { status: 500, body: { error: "boom" } }));
+    const err = (await chatCompletion(req(p.baseUrl)).catch((e: unknown) => e)) as ProviderError;
+    expect(err).toMatchObject({ kind: "http", status: 500 });
+    expect(err.sentBody).toBe(p.requests[1].body);
+    expect(JSON.parse(err.sentBody ?? "")).toMatchObject({ max_completion_tokens: 800 });
+  });
+
+  it("does not retry a 400 that does not mention the parameter, and retries at most once", async () => {
+    const p = await provider();
+    p.handle(() => ({ status: 400, body: { error: "nope" } }));
+    await expect(chatCompletion(req(p.baseUrl))).rejects.toMatchObject({ status: 400 });
+    expect(p.requests).toHaveLength(1);
+    const q = await provider();
+    q.handle(() => ({ status: 400, body: { error: "use max_completion_tokens" } }));
+    await expect(chatCompletion(req(q.baseUrl))).rejects.toMatchObject({ status: 400 });
+    expect(q.requests).toHaveLength(2);
+  });
+
+  it("refuses unsafe base URLs without sending anything", async () => {
+    const p = await provider();
+    await expect(chatCompletion(req("http://example.com/v1"))).rejects.toMatchObject({ kind: "network", sentBody: null });
+    await expect(chatCompletion(req(`${p.baseUrl}?x=1`))).rejects.toMatchObject({ kind: "network" });
+    await expect(chatCompletion(req(`${p.baseUrl}#f`))).rejects.toMatchObject({ kind: "network" });
+    await expect(chatCompletion(req(p.baseUrl.replace("http://", "http://u:p@")))).rejects.toMatchObject({ kind: "network" });
+    expect(p.requests).toHaveLength(0);
   });
 });
 
@@ -103,5 +153,8 @@ describe("provider helpers", () => {
     expect(JSON.parse(chatBody({ model: "m", messages: [], maxTokens: 5 }, "max_completion_tokens"))).toEqual({ model: "m", messages: [], max_completion_tokens: 5, stream: false });
     expect(scrub(`header was Bearer ${KEY} and ${KEY}`, KEY)).toBe("header was Bearer *** and ***");
     expect(scrub("Authorization: Bearer abc.def", null)).toBe("Authorization: Bearer ***");
+    expect(scrub("Bearer ***abcdef and Bearer ***", null)).toBe("Bearer *** and Bearer ***");
+    expect(scrub("k=sk%20test%2Fkey!", "sk test/key!")).toBe("k=***");
+    expect(scrub("k=sk%20test%2Fkey! raw sk test/key!", "sk test/key!")).toBe("k=*** raw ***");
   });
 });

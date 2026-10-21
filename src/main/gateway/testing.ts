@@ -71,7 +71,12 @@ export async function startFakeProvider(): Promise<FakeProvider> {
     req.on("end", () => {
       const r: FakeRequest = { method: req.method ?? "", url: req.url ?? "", headers: req.headers, body };
       requests.push(r);
-      const reply = handler(r, requests.length);
+      let reply: FakeReply;
+      try {
+        reply = handler(r, requests.length);
+      } catch (e) {
+        reply = { status: 500, body: { error: e instanceof Error ? e.message : String(e) } };
+      }
       const send = () => {
         if (res.destroyed || res.headersSent) return;
         res.writeHead(reply.status ?? 200, { "content-type": "application/json", ...reply.headers });
