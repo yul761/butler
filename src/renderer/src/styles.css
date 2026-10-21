@@ -58,6 +58,8 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .session { display: flex; gap: 6px; white-space: nowrap; }
 .session.active { border-color: var(--accent); }
 .session .action { color: var(--accent); }
+.session .label { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.session.more { color: var(--muted); }
 .notice { margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 .terminals { flex: 1; min-height: 0; display: flex; }
 .terminal-wrap { flex: 1; min-width: 0; flex-direction: column; background: #000; }

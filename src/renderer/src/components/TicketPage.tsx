@@ -2,8 +2,15 @@ import { useEffect, useState } from "react";
 import { TICKET_STATUSES, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
+import { sessionLabel, splitSessions } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
 import { TerminalPane } from "./TerminalPane";
+
+const VISIBLE_SESSIONS = 3;
+
+function formatShort(ms: number): string {
+  return new Date(ms).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
 
 interface Mismatch {
   req: OpenSessionRequest;
@@ -18,6 +25,7 @@ export function TicketPage({ ticket, onArchived }: { ticket: TicketView; onArchi
   const [panes, setPanes] = useState<string[]>(openTerms);
   const [active, setActive] = useState<string | null>(openTerms[0] ?? null);
   const [mismatch, setMismatch] = useState<Mismatch | null>(null);
+  const [showAllSessions, setShowAllSessions] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const openKey = openTerms.join(",");
@@ -58,6 +66,7 @@ export function TicketPage({ ticket, onArchived }: { ticket: TicketView; onArchi
     if (active === id) setActive(panes.find((p) => p !== id) ?? null);
   }
 
+  const sessionSplit = splitSessions(ticket.sessions, VISIBLE_SESSIONS);
   const statusValue = ticket.statusManual ?? "auto";
 
   return (
@@ -77,19 +86,24 @@ export function TicketPage({ ticket, onArchived }: { ticket: TicketView; onArchi
 
       <div className="sessions-bar">
         {ticket.sessions.length === 0 && <span className="muted">{S.noSessions}</span>}
-        {ticket.sessions.map((s) => (
+        {(showAllSessions ? ticket.sessions : sessionSplit.shown).map((s) => (
           <button
             key={s.id}
             className={s.termId && s.termId === active ? "session active" : "session"}
-            title={s.firstPrompt ?? s.id}
+            title={`${s.firstPrompt ?? S.untitledSession}\n${s.id}`}
             onClick={() => (s.termId ? setActive(s.termId) : void open({ ticketKey: ticket.key, sessionId: s.id }))}
           >
             {s.waitingForInput && <span className="badge">●</span>}
-            {s.id.slice(0, 8)}
-            <span className="muted">{s.lastActivityAt ? new Date(s.lastActivityAt).toLocaleString() : ""}</span>
+            <span className="label">{sessionLabel(s, S.untitledSession)}</span>
+            <span className="muted">{s.lastActivityAt ? formatShort(s.lastActivityAt) : ""}</span>
             <span className="action">{s.termId ? S.switchTo : S.open}</span>
           </button>
         ))}
+        {sessionSplit.hidden.length > 0 && (
+          <button className="session more" onClick={() => setShowAllSessions(!showAllSessions)}>
+            {showAllSessions ? S.collapseSessions : S.olderSessions(sessionSplit.hidden.length)}
+          </button>
+        )}
         <button className="primary" onClick={() => void open({ ticketKey: ticket.key })}>+ {S.newSession}</button>
       </div>
 
