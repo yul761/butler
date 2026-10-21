@@ -57,6 +57,13 @@ export function parseDays(v: string, fallback: number): number {
   return /^\d{1,3}$/.test(t) ? Number(t) : fallback;
 }
 
+/** 开关类设置：只接受 0 / 1。 */
+export function normalizeFlag(value: string): string {
+  const t = value.trim();
+  if (t !== "0" && t !== "1") throw new SettingError("开关只能是 0 或 1");
+  return t;
+}
+
 /** 渲染进程提交的设置值：规范化后返回，不合法时抛 SettingError（界面显示 message）。 */
 export function normalizeSetting(key: EditableSettingKey, value: string): string {
   switch (key) {
@@ -86,6 +93,11 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!value.trim()) throw new SettingError("prompt 模板不能为空");
       if (value.length > 20_000) throw new SettingError("prompt 模板太长（上限 20000 字）");
       return value;
+    default: {
+      // IPC 层已经用 isEditableSetting 拦过；这里再兜一次，免得以后新增的调用方绕过。
+      const unknown: never = key;
+      throw new SettingError(`这个设置不能在这里修改：${String(unknown)}`);
+    }
   }
 }
 

@@ -109,4 +109,12 @@ describe("daily jobs", () => {
     await nightlyJob(manual.d, null);
     expect(manual.calls).toEqual(["runNightly", "evening", "notify:evening"]);
   });
+
+  it("nightly: a run that starts before midnight still notifies for its own day", async () => {
+    const at = (d: number, h: number, m = 0) => new Date(2026, 9, d, h, m).getTime();
+    const times = [at(20, 23, 50), at(21, 0, 5)];
+    const late = deps({ now: () => (times.length > 1 ? times.shift()! : times[0]) });
+    await nightlyJob(late.d, at(20, 16));
+    expect(late.calls).toEqual(["runNightly", "evening", "notify:evening"]);
+  });
 });

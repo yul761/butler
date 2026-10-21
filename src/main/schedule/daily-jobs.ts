@@ -20,12 +20,14 @@ export interface DailyJobDeps {
 
 /** 晚间：批量 handoff → 晚间小结 → 系统通知。 */
 export async function nightlyJob(d: DailyJobDeps, slot?: number | null): Promise<"ok" | "partial"> {
+  // 用开始时间判断“是不是今天的时刻”：批量跑过午夜也照常通知。
+  const startedAt = d.now();
   // runner 的方法不是 async，可能同步抛错：包一层，让它变成 rejection 由调度器记录。
   const batch = await Promise.resolve().then(() => d.runner.runNightly());
   const brief = d.briefs.generateEvening();
   d.jobs.record(JOB_EVENING, d.now(), "ok", null);
   // 只在有内容、且跑的是今天的晚间时刻时通知；补跑以前日期的时刻不弹，早间简报里会看到。
-  const forToday = slot === undefined || slot === null || localDate(slot) === localDate(d.now());
+  const forToday = slot === undefined || slot === null || localDate(slot) === localDate(startedAt);
   if (brief.evening.length > 0 && forToday && !d.aborted?.()) d.onEvening(brief);
   return batch.status;
 }

@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolvePaths } from "./paths";
 
@@ -23,5 +23,15 @@ describe("resolvePaths", () => {
 
   it("uses .exe for the hook binary on Windows", () => {
     expect(resolvePaths({}, "win32", "/home/u").hookBin.endsWith("butler-hook.exe")).toBe(true);
+  });
+
+  it("resolves a relative BUTLER_HOME against the current directory", () => {
+    expect(resolvePaths({ BUTLER_HOME: "rel/b" }, "darwin", "/home/u").home).toBe(resolve("rel/b"));
+  });
+
+  it("finds Claude Code's global config in the config dir only when CLAUDE_CONFIG_DIR is set, and the mcp dir under BUTLER_HOME", () => {
+    expect(resolvePaths({}, "darwin", "/home/u").claudeJson).toBe(join("/home/u", ".claude.json"));
+    expect(resolvePaths({ CLAUDE_CONFIG_DIR: "/data/c" }, "darwin", "/home/u").claudeJson).toBe(join("/data/c", ".claude.json"));
+    expect(resolvePaths({}, "darwin", "/home/u").mcp).toBe(join("/home/u", ".butler", "mcp"));
   });
 });

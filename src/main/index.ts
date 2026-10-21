@@ -72,8 +72,8 @@ let shutdownSessions: () => void = () => undefined;
 const headlessAbort = new AbortController();
 
 // 隔离运行（BUTLER_HOME 指向别的目录）时也换一个 Electron 用户目录，否则单实例锁会和正在用的 Butler 冲突。
-const isolatedHome = process.env.BUTLER_HOME?.trim();
-if (isolatedHome) app.setPath("userData", join(isolatedHome, "electron"));
+// 用 resolvePaths 解析：相对路径会变成绝对路径（setPath 只接受绝对路径）。
+if (process.env.BUTLER_HOME?.trim()) app.setPath("userData", join(resolvePaths().home, "electron"));
 
 function safeSend(channel: string, ...args: unknown[]): void {
   if (win && canSend(win)) win.webContents.send(channel, ...args);

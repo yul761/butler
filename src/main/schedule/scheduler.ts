@@ -84,15 +84,26 @@ export class Scheduler {
     return this.manual(JOB_MORNING, () => this.runMorning());
   }
 
-  /** 同名任务正在跑或已排队：返回已有的 promise，不再排第二个（连点按钮不会重复运行）。 */
-  private manual(name: string, fn: () => Promise<void>): Promise<void> {
+  /**
+   * 同名任务正在跑或已排队：返回已有的 promise，不再排第二个（连点按钮不会重复运行）。
+   * 轮到它时，如果排队期间调度已经跑过同一个任务（开始时间晚于按按钮的时刻），这次就不再跑：
+   * 早间简报会花个人 API 的额度，解锁和“重新生成”撞在一起时只跑一次。
+   */
+  private manual(name: typeof JOB_NIGHTLY | typeof JOB_MORNING, fn: () => Promise<void>): Promise<void> {
     const existing = this.queuedManual.get(name) ?? this.inflight.get(name);
     if (existing) return existing;
-    const p: Promise<void> = this.enqueue(fn).finally(() => {
+    const requestedAt = this.d.now();
+    const p: Promise<void> = this.enqueue(() => (this.ranSince(name, requestedAt) ? Promise.resolve() : fn())).finally(() => {
       if (this.queuedManual.get(name) === p) this.queuedManual.delete(name);
     });
     this.queuedManual.set(name, p);
     return p;
+  }
+
+  /** seed 记录不算“跑过”（第一次启动时只是记一下时间）。 */
+  private ranSince(name: typeof JOB_NIGHTLY | typeof JOB_MORNING, at: number): boolean {
+    const j = this.d.jobs.get(name);
+    return j.lastRunAt !== null && j.lastRunAt > at && j.lastStatus !== "seeded";
   }
 
   private enqueue(fn: () => Promise<void>): Promise<void> {

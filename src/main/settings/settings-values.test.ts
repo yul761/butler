@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { EditableSettingKey } from "../../shared/settings";
 import { SettingsRepo } from "../db/settings-repo";
 import { memDb } from "../test-utils";
-import { normalizeSetting, parseDays, parseTime, parseToolList, parseWorkingDays, scheduleConfig, SettingError, thresholds, trackerTools } from "./settings-values";
+import { normalizeFlag, normalizeSetting, parseDays, parseTime, parseToolList, parseWorkingDays, scheduleConfig, SettingError, thresholds, trackerTools } from "./settings-values";
 
 describe("settings values", () => {
   it("parses times, working days, day counts and tool lists", () => {
@@ -59,5 +60,15 @@ describe("settings values", () => {
     }
     s.set("nightlyTime", "garbage");
     expect(scheduleConfig(s).nightly).toEqual({ h: 16, m: 0 });
+  });
+
+  it("rejects a key that is not editable even if a caller forgets the IPC gate", () => {
+    expect(() => normalizeSetting("claudePath" as EditableSettingKey, "/bin/sh")).toThrow(SettingError);
+  });
+
+  it("accepts only 0 or 1 for a flag", () => {
+    expect(normalizeFlag(" 1 ")).toBe("1");
+    expect(normalizeFlag("0")).toBe("0");
+    expect(() => normalizeFlag("yes")).toThrow(SettingError);
   });
 });

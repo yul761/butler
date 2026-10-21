@@ -1,4 +1,4 @@
-import { EMPTY_BRIEF_CONTENT, type Brief, type BriefContent, type BriefKind, type NarrativeStatus } from "../../shared/brief";
+import { EMPTY_BRIEF_CONTENT, type Brief, type BriefContent, type BriefNotices, type BriefKind, type NarrativeStatus } from "../../shared/brief";
 import type { Db } from "./database";
 
 interface BriefRow {
@@ -11,14 +11,17 @@ interface BriefRow {
   narrative_status: string;
 }
 
+const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
 function parseContent(text: string): BriefContent {
   try {
-    const v = JSON.parse(text) as Partial<BriefContent>;
+    const v = JSON.parse(text) as Partial<BriefContent> & { notices?: Partial<BriefNotices> };
     return {
       items: v.items ?? [],
       previousDay: v.previousDay ?? null,
       evening: v.evening ?? [],
-      notices: v.notices ?? { ...EMPTY_BRIEF_CONTENT.notices },
+      // 旧的或不完整的行：缺哪个列表就补成空的，界面不会拿到 undefined。
+      notices: { degraded: list(v.notices?.degraded), trackerUnavailable: list(v.notices?.trackerUnavailable) },
     };
   } catch {
     return structuredClone(EMPTY_BRIEF_CONTENT);

@@ -256,4 +256,34 @@ describe("Scheduler", () => {
     await s.scheduler.check("unlock");
     expect(s.log.filter((l) => l.startsWith("nightly"))).toEqual(["nightly@2026-10-20"]);
   });
+
+  it("a manual morning brief queued behind a scheduled one is not run again", async () => {
+    let now = at(21, 9);
+    let morning = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const jobs = new JobsRepo(memDb());
+    jobs.record(JOB_NIGHTLY, at(19, 16, 1), "ok", null);
+    jobs.record(JOB_MORNING, at(20, 9), "ok", null);
+    const scheduler = new Scheduler({
+      jobs, config: () => cfg, now: () => now, userActive: () => true,
+      nightly: async () => {
+        await gate;
+        return "ok";
+      },
+      morning: async () => {
+        morning++;
+      },
+    });
+    // 解锁：先补跑昨天的晚间批量（卡在 gate 上），之后才是早间简报。
+    const scheduled = scheduler.check("unlock");
+    await Promise.resolve();
+    expect(scheduler.isRunning(JOB_NIGHTLY)).toBe(true);
+    // 用户这时点了“重新生成”。
+    const manual = scheduler.runMorningNow();
+    now = at(21, 9, 1);
+    release();
+    await Promise.all([scheduled, manual]);
+    expect(morning).toBe(1);
+  });
 });

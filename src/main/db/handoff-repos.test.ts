@@ -152,6 +152,14 @@ describe("BriefsRepo / MarksRepo / JobsRepo / SettingsRepo", () => {
     repo.reset("nightlyTime");
     expect(repo.get("nightlyTime")).toBe("16:00");
   });
+
+  it("fills in missing notice lists from an older or partial brief row", () => {
+    const db = memDb();
+    db.prepare(`INSERT INTO briefs (kind, date, created_at, items) VALUES ('morning', '2026-10-21', 1, ?)`).run(
+      JSON.stringify({ items: [], notices: { degraded: ["A-1"] } }),
+    );
+    expect(new BriefsRepo(db).latest("morning")?.notices).toEqual({ degraded: ["A-1"], trackerUnavailable: [] });
+  });
 });
 
 describe("withTransaction", () => {
