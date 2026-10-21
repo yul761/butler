@@ -9,6 +9,7 @@ import { IPC } from "../shared/ipc";
 import { BriefService } from "./brief/brief-service";
 import { runHeadless } from "./claude/headless";
 import { probeMcpTools } from "./claude/mcp-probe";
+import { projectMcpConfigs } from "./claude/project-mcp";
 import { headlessEnv } from "./claude/spawn";
 import { BriefsRepo } from "./db/briefs-repo";
 import { openDatabase } from "./db/database";
@@ -225,6 +226,8 @@ async function bootstrap(): Promise<void> {
   };
   const ingest = (input: IngestInput) =>
     ingestHandoff({ db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}` }, input);
+  const projectMcp = (cwd: string): string[] =>
+    projectMcpConfigs(cwd, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger });
   const runner = new HandoffRunner({
     tickets, sessions, handoffs, followups, settings, ingest,
     workDir: (t) => ticketService.workDir(t),
@@ -235,6 +238,7 @@ async function bootstrap(): Promise<void> {
     transcriptMtime,
     now: Date.now,
     newRunId: randomUUID,
+    projectMcp,
     signal: headlessAbort.signal,
     log: logger,
   });
@@ -281,11 +285,13 @@ async function bootstrap(): Promise<void> {
     if (!path) throw new Error("找不到 claude 命令，请先在“环境检查”里确认 claude 路径");
     // MCP 可以按项目配置：有 ticket 时在第一个 ticket 的目录里探测。
     const first = tickets.list()[0];
+    const cwd = first ? ticketService.workDir(first) : homedir();
     return probeMcpTools({
       claudePath: path,
-      cwd: first ? ticketService.workDir(first) : homedir(),
+      cwd,
       env: headlessEnv(process.env, { pathValue, runId: randomUUID() }),
       signal: headlessAbort.signal,
+      mcpConfigs: settings.get("headlessProjectMcp") === "1" ? projectMcp(cwd) : [],
     });
   };
 

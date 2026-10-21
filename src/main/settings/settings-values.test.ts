@@ -24,6 +24,9 @@ describe("settings values", () => {
     expect(normalizeSetting("workingDays", "")).toBe("");
     expect(normalizeSetting("trackerTools", "mcp__a__x, mcp__b\n\nmcp__a__x")).toBe("mcp__a__x\nmcp__b");
     expect(normalizeSetting("staleDays", " 7 ")).toBe("7");
+    expect(normalizeSetting("headlessProjectMcp", "1")).toBe("1");
+    expect(normalizeSetting("headlessProjectMcp", " 0 ")).toBe("0");
+    expect(() => normalizeSetting("headlessProjectMcp", "yes")).toThrow(SettingError);
     expect(() => normalizeSetting("nightlyTime", "25:00")).toThrow(SettingError);
     expect(() => normalizeSetting("workingDays", "1,7")).toThrow(SettingError);
     expect(() => normalizeSetting("blockedDays", "two")).toThrow(SettingError);

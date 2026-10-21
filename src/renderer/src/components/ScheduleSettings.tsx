@@ -169,6 +169,11 @@ export function ScheduleSettings() {
         {S.trackerTools}
         <textarea rows={4} className="mono" value={value("trackerTools")} onChange={(e) => edit("trackerTools", e.target.value)} onBlur={() => saveIfEdited("trackerTools")} />
         <p className="muted">{S.trackerHint}</p>
+        <p className="muted">{S.trackerHintSources}</p>
+        <label className="inline">
+          <input type="checkbox" checked={current.headlessProjectMcp === "1"} onChange={(e) => void save("headlessProjectMcp", e.target.checked ? "1" : "0")} />
+          {S.headlessProjectMcp}
+        </label>
         <div className="actions">
           <button onClick={() => void save("trackerTools")}>{S.save}</button>
           <button disabled={detecting} onClick={() => void detect()}>{detecting ? S.detecting : S.detectTools}</button>

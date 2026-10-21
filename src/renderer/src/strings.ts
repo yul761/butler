@@ -172,6 +172,8 @@ export const S = {
   staleDays: "无活动超过",
   trackerTools: "tracker MCP 工具（handoff 只能调用这些，一行一个）",
   trackerHint: "例如 mcp__atlassian__getJiraIssue。只选读取类的工具：handoff 是只读的。",
+  trackerHintSources: "后台 handoff 只读你的用户级 Claude Code 设置，所以默认不加载仓库 .mcp.json 和本地级的 MCP。tracker 配在那里时，打开下面的开关。",
+  headlessProjectMcp: "后台 handoff 也加载本地级的 MCP，以及仓库 .mcp.json 里你已在 Claude Code 里批准的 MCP（会启动这些 MCP server；仓库里的 allow 规则和 hook 仍然不生效；没批准或被禁用的不加载）",
   detectTools: "从 Claude Code 检测",
   detecting: "检测中…",
   detectedTools: (n: number, s: number) => `检测到 ${n} 个 MCP 工具，其中 ${s} 个名字像查询（已默认勾选）；其余的不会默认加入，需要你自己勾选：`,

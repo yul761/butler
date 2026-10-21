@@ -83,6 +83,8 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (bad !== undefined) throw new SettingError(`tracker 工具只能是 MCP 工具名（mcp__server__tool），不接受：${bad.slice(0, 60)}`);
       return tools.join("\n");
     }
+    case "headlessProjectMcp":
+      return normalizeFlag(value);
     case "blockedDays":
     case "reviewWaitDays":
     case "staleDays":

@@ -14,6 +14,14 @@ const OBSERVED = {
 };
 
 describe("headlessArgs", () => {
+  it("adds --mcp-config files before the variadic tool lists", () => {
+    const args = headlessArgs({ schema: "{}", allowedTools: ["Read"], mcpConfigs: ["/r/.mcp.json", "/b/mcp/local.json"] });
+    const i = args.indexOf("--mcp-config");
+    expect(args.slice(i, i + 3)).toEqual(["--mcp-config", "/r/.mcp.json", "/b/mcp/local.json"]);
+    expect(args[i + 3]).toBe("--disallowedTools");
+    expect(headlessArgs({ schema: "{}", allowedTools: ["Read"], mcpConfigs: [] })).not.toContain("--mcp-config");
+  });
+
   it("resumes as a non-persistent, read-only fork and never carries the prompt", () => {
     expect(headlessArgs({ schema: '{"type":"object"}', resumeSessionId: "s-1", allowedTools: ["Read", "Bash(git status)"] })).toEqual([
       "-p", "--output-format", "json", "--json-schema", '{"type":"object"}', "--no-session-persistence", "--permission-mode", "dontAsk",

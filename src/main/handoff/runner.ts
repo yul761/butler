@@ -40,6 +40,8 @@ export interface HandoffRunnerDeps {
   newRunId: () => string;
   timeoutMs?: number;
   /** 退出 app 时取消所有进行中的 headless 运行：被取消的运行不写入任何东西，也不算限流。 */
+  /** 设置 headlessProjectMcp 打开时调用：这个目录要额外挂的 --mcp-config 文件（计划 3 任务 5）。 */
+  projectMcp?: (cwd: string) => string[];
   signal?: AbortSignal;
   log?: (msg: string, err?: unknown) => void;
 }
@@ -121,6 +123,16 @@ export class HandoffRunner {
     };
   }
 
+  private mcpConfigs(cwd: string): string[] {
+    if (this.d.settings.get("headlessProjectMcp") !== "1" || !this.d.projectMcp) return [];
+    try {
+      return this.d.projectMcp(cwd);
+    } catch (e) {
+      this.d.log?.("project MCP config failed; running without it", e);
+      return [];
+    }
+  }
+
   private allowedTools(): string[] {
     return [...READ_ONLY_TOOLS, ...trackerTools(this.d.settings)];
   }
@@ -133,7 +145,7 @@ export class HandoffRunner {
     if (!session && trigger === "nightly") return { ticketKey: key, status: "skipped", reason: "no_session" };
     const cwd = session?.cwd || this.d.workDir(t);
     const prompt = buildPrompt(this.d.settings.get("handoffPrompt"), this.context(t));
-    const args = headlessArgs({ schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools() });
+    const args = headlessArgs({ schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd) });
 
     let attempt = await this.exec(key, args, prompt, cwd, session?.id);
     if (!attempt.ok) return attempt.outcome;
@@ -154,8 +166,9 @@ export class HandoffRunner {
     if (!t) return failed(key, "no_ticket", `找不到 ticket ${key}`);
     const ctx = this.context(t);
     const prompt = buildPrompt(this.d.settings.get("refreshPrompt"), ctx);
-    const args = headlessArgs({ schema: REFRESH_JSON_SCHEMA, allowedTools: this.allowedTools() });
-    const attempt = await this.exec(key, args, prompt, this.d.workDir(t));
+    const cwd = this.d.workDir(t);
+    const args = headlessArgs({ schema: REFRESH_JSON_SCHEMA, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd) });
+    const attempt = await this.exec(key, args, prompt, cwd);
     if (!attempt.ok) return attempt.outcome;
     const checked = validate(RefreshSchema, attempt.value);
     // 刷新结果不完整就保留旧数据：不写入、不重试。

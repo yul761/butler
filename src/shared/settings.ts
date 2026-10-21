@@ -3,6 +3,7 @@ export const EDITABLE_SETTINGS = [
   "nightlyTime",
   "workingDays",
   "trackerTools",
+  "headlessProjectMcp",
   "blockedDays",
   "reviewWaitDays",
   "staleDays",

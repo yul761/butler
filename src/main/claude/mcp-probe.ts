@@ -72,8 +72,9 @@ const BUF_LIMIT = 8 * 1024 * 1024;
  * 起一个 headless claude，读到 init 就杀掉整棵进程树（不留下 MCP server 孤儿进程）。
  * env 由调用方用 headlessEnv() 生成；prompt 只走 stdin。超时、取消、提前退出都会 settle。
  */
-export function probeMcpTools(o: { claudePath: string; cwd: string; env: Record<string, string>; timeoutMs?: number; signal?: AbortSignal }): Promise<McpProbe> {
+export function probeMcpTools(o: { claudePath: string; cwd: string; env: Record<string, string>; timeoutMs?: number; signal?: AbortSignal; mcpConfigs?: string[] }): Promise<McpProbe> {
   return new Promise((resolve, reject) => {
+    const args = o.mcpConfigs?.length ? [...PROBE_ARGS, "--mcp-config", ...o.mcpConfigs] : PROBE_ARGS;
     let child: ChildProcess | undefined;
     let done = false;
     let buf = "";
@@ -100,13 +101,13 @@ export function probeMcpTools(o: { claudePath: string; cwd: string; env: Record<
       finish(new Error("已取消"));
       return;
     }
-    if (unsafeCmdArg(PROBE_ARGS, o.claudePath, process.platform) !== null) {
+    if (unsafeCmdArg(args, o.claudePath, process.platform) !== null) {
       finish(new Error("参数在 Windows 的 .cmd 下无法安全传递"));
       return;
     }
     try {
       // POSIX 上独立进程组，killTree 才能整组杀掉。
-      child = spawn(o.claudePath, PROBE_ARGS, { cwd: o.cwd, env: o.env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true, detached: process.platform !== "win32" });
+      child = spawn(o.claudePath, args, { cwd: o.cwd, env: o.env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true, detached: process.platform !== "win32" });
     } catch (e) {
       finish(e instanceof Error ? e : new Error(String(e)));
       return;

@@ -11,6 +11,8 @@ export const SETTING_DEFAULTS = {
   workingDays: "1,2,3,4,5",
   /** handoff 允许调用的 tracker MCP 工具，一行一个。 */
   trackerTools: "",
+  /** 后台 handoff / 刷新 / 探测也挂上仓库 .mcp.json（已批准的）和本地级的 MCP：1 开 0 关。 */
+  headlessProjectMcp: "0",
   blockedDays: "2",
   reviewWaitDays: "2",
   staleDays: "5",

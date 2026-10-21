@@ -26,7 +26,7 @@ const ok = (structured: unknown, sessionId = "fork-1"): HeadlessOutcome => ({
   result: { sessionId, isError: false, subtype: "success", resultText: JSON.stringify(structured), structured, permissionDenials: [], apiErrorStatus: null, costUsd: 0 },
 });
 
-function setup(opts: { run?: HeadlessRun; signal?: AbortSignal } = {}) {
+function setup(opts: { run?: HeadlessRun; signal?: AbortSignal; projectMcp?: (cwd: string) => string[] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -55,6 +55,7 @@ function setup(opts: { run?: HeadlessRun; signal?: AbortSignal } = {}) {
     now: () => NOW,
     newRunId: () => "run-1",
     signal: opts.signal,
+    projectMcp: opts.projectMcp,
   });
   /** 一个有对话记录的 ticket：session 是 s-<key>，transcript 在 mtime 时刻修改过（null 表示没有 transcript）。 */
   const addTicket = (key: string, mtime: number | null = NOW - 10) => {
@@ -69,6 +70,37 @@ function setup(opts: { run?: HeadlessRun; signal?: AbortSignal } = {}) {
 }
 
 describe("HandoffRunner", () => {
+  it("attaches project MCP configs only when the setting is on", async () => {
+    const seen: string[] = [];
+    const { runner, addTicket, calls, settings } = setup({
+      projectMcp: (cwd) => {
+        seen.push(cwd);
+        return [`${cwd}/.mcp.json`];
+      },
+    });
+    addTicket("A-1");
+    await runner.runManual("A-1");
+    expect(calls[0].args).not.toContain("--mcp-config");
+    expect(seen).toEqual([]);
+    settings.set("headlessProjectMcp", "1");
+    await runner.runManual("A-1");
+    expect(seen).toEqual(["/w/A-1"]);
+    const args = calls[1].args;
+    expect(args.slice(args.indexOf("--mcp-config"), args.indexOf("--mcp-config") + 2)).toEqual(["--mcp-config", "/w/A-1/.mcp.json"]);
+  });
+
+  it("keeps running without project MCP when building the configs throws", async () => {
+    const { runner, addTicket, calls, settings } = setup({
+      projectMcp: () => {
+        throw new Error("EACCES");
+      },
+    });
+    settings.set("headlessProjectMcp", "1");
+    addTicket("A-1");
+    expect(await runner.runManual("A-1")).toMatchObject({ status: "stored" });
+    expect(calls[0].args).not.toContain("--mcp-config");
+  });
+
   it("picks tickets whose transcript changed after the last captured handoff", () => {
     const { runner, addTicket, ingest } = setup();
     addTicket("A-1", NOW - 10);

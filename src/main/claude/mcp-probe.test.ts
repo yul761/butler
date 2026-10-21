@@ -43,6 +43,13 @@ describe("suggestReadOnly", () => {
 });
 
 describe("probeMcpTools", () => {
+  it("passes extra --mcp-config files to the probe", async () => {
+    const dir = tempDir();
+    const fake = writeFakeClaude(dir, `emit(${JSON.stringify(INIT)}); setTimeout(() => {}, 60000);`);
+    await probeMcpTools({ claudePath: fake.path, cwd: dir, env: env(), mcpConfigs: ["/r/.mcp.json"] });
+    expect(fake.calls()[0].args.slice(-2)).toEqual(["--mcp-config", "/r/.mcp.json"]);
+  }, 20_000);
+
   it("returns as soon as the init line arrives and stops claude", async () => {
     const dir = tempDir();
     const init = { ...INIT, tools: ["Read", "mcp__jira__get_issue"] };
