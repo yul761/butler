@@ -1,6 +1,9 @@
+import type { BriefKind, BriefView, ItemMark } from "../../shared/brief";
 import { IPC, type IpcResult } from "../../shared/ipc";
+import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
 import type {
-  CreateTicketInput, HealthReport, OpenSessionRequest, OpenSessionResult, Ticket, TicketStatus, TicketView, UnclaimedSession,
+  CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
+  OpenSessionResult, Ticket, TicketStatus, TicketView, UnclaimedSession,
 } from "../../shared/types";
 
 declare global {
@@ -48,6 +51,19 @@ export const api = {
   installHooks: () => call<HealthReport>(IPC.healthInstallHooks),
   uninstallHooks: () => call<HealthReport>(IPC.healthUninstallHooks),
   pickDirectory: () => call<string | null>(IPC.dialogPickDir),
+  briefLatest: (kind: BriefKind) => call<BriefView>(IPC.briefsLatest, kind),
+  regenerateBrief: () => call<void>(IPC.briefsRegenerate),
+  markBriefItem: (key: string, mark: ItemMark) => call<void>(IPC.briefsMark, key, mark),
+  followups: (ticketKey: string) => call<Followup[]>(IPC.followupsList, ticketKey),
+  setFollowupStatus: (id: string, status: FollowupStatus) => call<void>(IPC.followupsSetStatus, id, status),
+  handoffs: (ticketKey: string) => call<HandoffRecord[]>(IPC.handoffsList, ticketKey),
+  runHandoff: (ticketKey: string) => call<HandoffOutcome>(IPC.handoffsRun, ticketKey),
+  runNightly: () => call<void>(IPC.jobsRunNightly),
+  settings: () => call<EditableSettings>(IPC.settingsGet),
+  setSetting: (key: EditableSettingKey, value: string) => call<void>(IPC.settingsSet, key, value),
+  resetSetting: (key: EditableSettingKey) => call<void>(IPC.settingsReset, key),
+  detectTrackerTools: () => call<McpProbe>(IPC.settingsDetectTrackerTools),
+  onNavigate: (cb: (route: { page: "home" }) => void) => window.butler.on(IPC.appNavigate, cb),
   onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),
   onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),
   onStateChanged: (cb: () => void) => window.butler.on(IPC.stateChanged, cb),

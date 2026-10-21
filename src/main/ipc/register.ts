@@ -1,10 +1,22 @@
 import { dialog, ipcMain, type BrowserWindow } from "electron";
+import { ITEM_MARKS, type BriefKind, type BriefView, type ItemMark } from "../../shared/brief";
 import { IPC } from "../../shared/ipc";
-import type { CreateTicketInput, OpenSessionRequest, TicketStatus } from "../../shared/types";
+import { EDITABLE_SETTINGS, isEditableSetting, type EditableSettings } from "../../shared/settings";
+import {
+  FOLLOWUP_STATUSES, type CreateTicketInput, type FollowupStatus, type McpProbe, type OpenSessionRequest, type TicketStatus,
+} from "../../shared/types";
+import type { BriefService } from "../brief/brief-service";
+import type { FollowupsRepo } from "../db/followups-repo";
+import type { HandoffsRepo } from "../db/handoffs-repo";
+import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
+import type { HandoffRunner } from "../handoff/runner";
 import type { HealthService } from "../hooks/health";
+import { addDays, localDate } from "../schedule/calendar";
+import type { Scheduler } from "../schedule/scheduler";
 import type { PtyManager } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
+import { normalizeSetting, SettingError } from "../settings/settings-values";
 import { TicketError, type TicketService } from "../tickets/ticket-service";
 import { toIpcResult } from "./result";
 
@@ -14,6 +26,17 @@ export interface IpcDeps {
   sessionService: SessionService;
   pty: PtyManager;
   health: HealthService;
+  followups: FollowupsRepo;
+  handoffs: HandoffsRepo;
+  settings: SettingsRepo;
+  briefService: BriefService;
+  runner: HandoffRunner;
+  scheduler: Scheduler;
+  /** 早间刷新进行中。 */
+  briefRefreshing: () => boolean;
+  /** followup 状态变化后重新推导 ticket 状态。 */
+  rederive: (ticketKey: string) => void;
+  detectTrackerTools: () => Promise<McpProbe>;
   window: () => BrowserWindow | null;
   now: () => number;
   notify: () => void;
@@ -23,6 +46,19 @@ export function registerIpc(d: IpcDeps): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handle = (channel: string, fn: (...args: any[]) => unknown) =>
     ipcMain.handle(channel, (_e, ...args: unknown[]) => toIpcResult(() => fn(...args)));
+
+  const setFollowupStatus = (id: string, status: FollowupStatus) => {
+    if (!(FOLLOWUP_STATUSES as readonly string[]).includes(status)) throw new Error(`unknown followup status: ${String(status)}`);
+    const f = d.followups.get(id);
+    if (!f) throw new TicketError("not_found", "找不到这条 follow-up");
+    const now = d.now();
+    d.followups.setStatus(id, status, now, status === "snoozed" ? addDays(localDate(now), 1) : null);
+    d.rederive(f.ticketKey);
+  };
+  const settingKey = (key: unknown) => {
+    if (typeof key !== "string" || !isEditableSetting(key)) throw new SettingError(`这个设置不能在这里修改：${String(key)}`);
+    return key;
+  };
 
   handle(IPC.ticketsList, () => d.sessionService.ticketViews());
   handle(IPC.ticketsCreate, async (input: CreateTicketInput) => {
@@ -74,4 +110,50 @@ export function registerIpc(d: IpcDeps): void {
     const r = w ? await dialog.showOpenDialog(w, options) : await dialog.showOpenDialog(options);
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
+
+  handle(IPC.briefsLatest, (kind: BriefKind): BriefView => ({
+    brief: d.briefService.latest(kind === "evening" ? "evening" : "morning"),
+    refreshing: d.briefRefreshing(),
+  }));
+  handle(IPC.briefsRegenerate, async () => {
+    await d.scheduler.runMorningNow();
+    d.notify();
+  });
+  handle(IPC.briefsMark, (key: string, mark: ItemMark) => {
+    if (!(ITEM_MARKS as readonly string[]).includes(mark)) throw new Error(`unknown mark: ${String(mark)}`);
+    const k = String(key);
+    // followup 条目的状态在 followups 表里，不进 item_marks。
+    if (k.startsWith("followup:")) setFollowupStatus(k.slice("followup:".length), mark);
+    else d.briefService.mark(k, mark);
+    d.notify();
+  });
+
+  handle(IPC.followupsList, (ticketKey: string) => d.followups.listByTicket(ticketKey));
+  handle(IPC.followupsSetStatus, (id: string, status: FollowupStatus) => {
+    setFollowupStatus(id, status);
+    d.notify();
+  });
+
+  handle(IPC.handoffsList, (ticketKey: string) => d.handoffs.listByTicket(ticketKey));
+  handle(IPC.handoffsRun, async (ticketKey: string) => {
+    const outcome = await d.runner.runManual(ticketKey);
+    d.notify();
+    return outcome;
+  });
+  handle(IPC.jobsRunNightly, async () => {
+    await d.scheduler.runNightlyNow();
+    d.notify();
+  });
+
+  handle(IPC.settingsGet, (): EditableSettings => Object.fromEntries(EDITABLE_SETTINGS.map((k) => [k, d.settings.get(k)])) as EditableSettings);
+  handle(IPC.settingsSet, (key: string, value: unknown) => {
+    const k = settingKey(key);
+    d.settings.set(k, normalizeSetting(k, String(value ?? "")));
+    d.notify();
+  });
+  handle(IPC.settingsReset, (key: string) => {
+    d.settings.reset(settingKey(key));
+    d.notify();
+  });
+  handle(IPC.settingsDetectTrackerTools, () => d.detectTrackerTools());
 }

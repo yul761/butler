@@ -67,7 +67,12 @@ export class HealthService {
   async installHooks(): Promise<HealthReport> {
     await installHookBinary(this.d.bundledHookBin, this.d.paths.hookBin);
     await installHooks(this.d.paths.claudeSettings, this.d.paths.hookBin, this.d.platform);
-    await installHandoffCommand(this.commandFile());
+    try {
+      // 用户自己的 handoff.md 会得到 conflict（不覆盖，不抛错）；写入失败也不能让整个安装白做、健康页不刷新。
+      await installHandoffCommand(this.commandFile());
+    } catch {
+      /* refresh 会如实报告 handoffCommand 状态 */
+    }
     return this.refresh();
   }
 

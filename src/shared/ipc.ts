@@ -19,6 +19,19 @@ export const IPC = {
   healthInstallHooks: "health:installHooks",
   healthUninstallHooks: "health:uninstallHooks",
   dialogPickDir: "dialog:pickDir",
+  briefsLatest: "briefs:latest",
+  briefsRegenerate: "briefs:regenerate",
+  briefsMark: "briefs:mark",
+  followupsList: "followups:list",
+  followupsSetStatus: "followups:setStatus",
+  handoffsList: "handoffs:list",
+  handoffsRun: "handoffs:run",
+  jobsRunNightly: "jobs:runNightly",
+  settingsGet: "settings:get",
+  settingsSet: "settings:set",
+  settingsReset: "settings:reset",
+  settingsDetectTrackerTools: "settings:detectTrackerTools",
+  appNavigate: "app:navigate",
 } as const;
 
 /** 渲染进程 → 主进程，有返回值（ipcRenderer.invoke）。 */
@@ -26,10 +39,13 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.ticketsList, IPC.ticketsCreate, IPC.ticketsSetStatus, IPC.ticketsArchive, IPC.ticketsSwitchBranch,
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
+  IPC.briefsLatest, IPC.briefsRegenerate, IPC.briefsMark,
+  IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
+  IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];
 /** 主进程 → 渲染进程。 */
-export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged];
+export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.appNavigate];
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };
