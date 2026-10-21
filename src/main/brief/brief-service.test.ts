@@ -10,7 +10,7 @@ import { TicketsRepo } from "../db/tickets-repo";
 import { ingestHandoff, type IngestInput } from "../handoff/ingest";
 import { emptyHandoff } from "../handoff/schema";
 import { memDb } from "../test-utils";
-import { BriefService } from "./brief-service";
+import { BriefService, prPathParts } from "./brief-service";
 
 const at = (d: number, h = 9, m = 0) => new Date(2026, 9, d, h, m).getTime();
 
@@ -38,7 +38,7 @@ function setup() {
   const refresh = (key: string, r: { status: Handoff["status"]; pr: Handoff["pr"]; jira: Handoff["jira"] }) =>
     ingest({ ticketKey: key, sessionId: null, trigger: "refresh", rawText: null, payload: { ...emptyHandoff(key), ...r } });
   return {
-    service, tickets, addTicket, handoff, refresh,
+    service, tickets, sessions, addTicket, handoff, refresh,
     setNow: (ms: number) => void (now = ms),
     setUnclaimed: (n: number) => void (unclaimed = n),
   };
@@ -159,5 +159,64 @@ describe("BriefService", () => {
   it("refuses to mark followup items", () => {
     const s = setup();
     expect(() => s.service.mark("followup:f1", "done")).toThrow(/followup/);
+  });
+});
+
+describe("BriefService.narrativeSource", () => {
+  it("collects what the narrative needs and every identifier that could appear in free text", () => {
+    const s = setup();
+    s.addTicket("A-1");
+    s.sessions.insertIfAbsent({ id: "s-other", ticketKey: "A-1", cwd: "/w", origin: "discovered", gitBranch: "hotfix/a1-crash", createdAt: at(1) });
+    s.tickets.insert({
+      key: "OLD-9", title: null, repoPath: "/repos/legacy-app", workMode: "branch", worktreePath: null, branch: "feature/OLD-9",
+      status: "done", statusManual: null, createdAt: at(1), archivedAt: at(2),
+    });
+    s.handoff("A-1", {
+      done_today: ["做了 A"], next_steps: ["写测试"], blockers: ["等评审"],
+      pr: { number: 7, url: "https://github.com/acme/billing-svc/pull/7", state: "open", review: "approved" },
+      followups: [{ id: null, kind: "flag", description: "开开关", trigger: "on_date", due_date: "2026-10-19", done: false }],
+    });
+    const brief = s.service.generateMorning();
+    const src = s.service.narrativeSource(brief);
+    expect(src.date).toBe("2026-10-21");
+    expect(src.tickets).toHaveLength(1);
+    expect(src.tickets[0]).toMatchObject({
+      key: "A-1", status: "in_review", pr: { state: "open", review: "approved" }, doneLastDay: 1,
+      nextSteps: ["写测试"], blockers: ["等评审"],
+      followups: [{ kind: "flag", trigger: "on_date", description: "开开关", overdueDays: 2 }],
+    });
+    expect(src.items.map((i) => [i.rule, i.ticketKey])).toEqual(brief.items.map((i) => [i.rule, i.ticketKey]));
+    expect([...src.known.tickets].sort()).toEqual(["A-1", "OLD-9"]);
+    expect(src.known.repos).toEqual(expect.arrayContaining(["legacy-app", "acme", "billing-svc"]));
+    expect(src.known.branches).toEqual(expect.arrayContaining(["b", "feature/OLD-9", "hotfix/a1-crash"]));
+  });
+
+  it("lists the identifiers that free text mentions: archived ticket key, session-only branch, PR owner, worktree directory", () => {
+    const s = setup();
+    s.addTicket("A-1");
+    s.sessions.insertIfAbsent({ id: "s-wt", ticketKey: "A-1", cwd: "/work/a1-login-tree", origin: "discovered", gitBranch: "spike/only-in-session", createdAt: at(1) });
+    s.tickets.insert({
+      key: "OLD-9", title: null, repoPath: "/repos/legacy-app", workMode: "worktree", worktreePath: "/trees/old9-checkout", branch: "feature/OLD-9",
+      status: "done", statusManual: null, createdAt: at(1), archivedAt: at(2),
+    });
+    s.handoff("A-1", {
+      next_steps: ["等 OLD-9 合并后在 spike/only-in-session 上 rebase，再问 acme 的人"],
+      pr: { number: 7, url: "https://github.com/acme/billing-svc/pull/7", state: "open", review: "pending" },
+    });
+    const src = s.service.narrativeSource(s.service.generateMorning());
+    expect(src.tickets[0].nextSteps[0]).toContain("OLD-9");
+    expect(src.known.tickets).toContain("OLD-9");
+    expect(src.known.branches).toContain("spike/only-in-session");
+    expect(src.known.repos).toContain("acme");
+    expect(src.known.repos).toEqual(expect.arrayContaining(["old9-checkout", "a1-login-tree"]));
+  });
+});
+
+describe("prPathParts", () => {
+  it("takes the owner and repository from common PR links", () => {
+    expect(prPathParts("https://github.com/acme/billing-svc/pull/7")).toEqual(["acme", "billing-svc"]);
+    expect(prPathParts("https://gitlab.example.com/group/sub/app/-/merge_requests/3")).toEqual(["group", "sub", "app"]);
+    expect(prPathParts("https://bitbucket.example.com/projects/PAY/repos/ledger/pull-requests/9")).toEqual(["PAY", "ledger"]);
+    expect(prPathParts("not a url")).toEqual([]);
   });
 });

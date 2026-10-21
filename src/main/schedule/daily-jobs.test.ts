@@ -117,4 +117,36 @@ describe("daily jobs", () => {
     await nightlyJob(late.d, at(20, 16));
     expect(late.calls).toEqual(["runNightly", "evening", "notify:evening"]);
   });
+
+  it("morning: narrates the final brief once, after the refresh", async () => {
+    const r = deps();
+    let id = 0;
+    const narrated: number[] = [];
+    r.d.briefs = {
+      ...r.d.briefs,
+      generateMorning: () => {
+        r.calls.push("morning");
+        return { ...brief("morning"), id: ++id };
+      },
+    };
+    r.d.narrate = async (b) => {
+      r.calls.push("narrate");
+      narrated.push(b.id);
+    };
+    await morningJob(r.d);
+    expect(r.calls).toEqual(["morning", "refreshing=true", "refresh", "morning", "refreshing=false", "narrate"]);
+    expect(narrated).toEqual([2]);
+  });
+
+  it("morning: still narrates the first brief when the refresh fails, and does not narrate once the app is quitting", async () => {
+    const failing = deps();
+    failing.d.runner = { ...failing.d.runner, refreshForBrief: async () => Promise.reject(new Error("boom")) };
+    failing.d.narrate = async () => void failing.calls.push("narrate");
+    await expect(morningJob(failing.d)).rejects.toThrow("boom");
+    expect(failing.calls).toEqual(["morning", "refreshing=true", "refreshing=false", "narrate"]);
+    const quitting = deps({ aborted: () => true });
+    quitting.d.narrate = async () => void quitting.calls.push("narrate");
+    await morningJob(quitting.d);
+    expect(quitting.calls).not.toContain("narrate");
+  });
 });

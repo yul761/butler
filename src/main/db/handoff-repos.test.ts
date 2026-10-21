@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { EMPTY_BRIEF_CONTENT } from "../../shared/brief";
 import type { Followup, Ticket } from "../../shared/types";
 import { emptyHandoff } from "../handoff/schema";
 import { memDb } from "../test-utils";
@@ -118,6 +119,15 @@ describe("FollowupsRepo", () => {
 });
 
 describe("BriefsRepo / MarksRepo / JobsRepo / SettingsRepo", () => {
+  it("writes the narrative back onto an existing brief", () => {
+    const briefs = new BriefsRepo(memDb());
+    const b = briefs.insert({ kind: "morning", date: "2026-10-21", createdAt: 1, content: EMPTY_BRIEF_CONTENT, narrative: null, narrativeStatus: "off" });
+    briefs.setNarrative(b.id, "先合并 PR。", "ok");
+    expect(briefs.latest("morning")).toMatchObject({ id: b.id, narrative: "先合并 PR。", narrativeStatus: "ok" });
+    briefs.setNarrative(b.id, null, "blocked");
+    expect(briefs.latest("morning")).toMatchObject({ narrative: null, narrativeStatus: "blocked" });
+  });
+
   it("round-trips a brief and returns the latest of a kind", () => {
     const { db } = setup();
     const repo = new BriefsRepo(db);

@@ -59,6 +59,11 @@ export class BriefsRepo {
     return { id: Number(r.lastInsertRowid), kind: b.kind, date: b.date, createdAt: b.createdAt, ...b.content, narrative: b.narrative, narrativeStatus: b.narrativeStatus };
   }
 
+  /** 早间简报入库之后，把“今日重点”写回同一行。 */
+  setNarrative(id: number, narrative: string | null, status: NarrativeStatus): void {
+    this.db.prepare(`UPDATE briefs SET narrative = ?, narrative_status = ? WHERE id = ?`).run(narrative, status, id);
+  }
+
   latest(kind: BriefKind): Brief | null {
     const row = this.db.prepare(`SELECT * FROM briefs WHERE kind = ? ORDER BY created_at DESC, id DESC LIMIT 1`).get(kind) as BriefRow | undefined;
     return row ? toBrief(row) : null;

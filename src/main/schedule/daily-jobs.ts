@@ -15,6 +15,8 @@ export interface DailyJobDeps {
   /** 晚间小结生成后：弹系统通知。 */
   onEvening: (brief: Brief) => void;
   /** 退出已开始：不再通知、不再发起新工作。 */
+  /** 早间：最终的简报入库之后补“今日重点”（narrateBrief，永远不抛错）。没有配置时不传。 */
+  narrate?: (brief: Brief) => Promise<unknown>;
   aborted?: () => boolean;
 }
 
@@ -32,15 +34,23 @@ export async function nightlyJob(d: DailyJobDeps, slot?: number | null): Promise
   return batch.status;
 }
 
-/** 早间：先用现有数据出一版（界面马上有内容），工作日再刷新 PR / tracker 状态后原地更新。 */
+/**
+ * 早间：先用现有数据出一版（界面马上有内容），工作日再刷新 PR / tracker 状态后原地更新；
+ * 最后对最终的那一版补“今日重点”。刷新失败也会给第一版补上，然后照常把错误交给调度器。
+ */
 export async function morningJob(d: DailyJobDeps): Promise<void> {
-  d.briefs.generateMorning();
-  if (!d.isWorkingDay()) return;
-  d.setRefreshing(true);
+  let brief = d.briefs.generateMorning();
   try {
-    const r = await Promise.resolve().then(() => d.runner.refreshForBrief());
-    if (r.outcomes.length > 0) d.briefs.generateMorning();
+    if (d.isWorkingDay()) {
+      d.setRefreshing(true);
+      try {
+        const r = await Promise.resolve().then(() => d.runner.refreshForBrief());
+        if (r.outcomes.length > 0) brief = d.briefs.generateMorning();
+      } finally {
+        d.setRefreshing(false);
+      }
+    }
   } finally {
-    d.setRefreshing(false);
+    if (d.narrate && !d.aborted?.()) await d.narrate(brief);
   }
 }

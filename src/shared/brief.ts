@@ -75,7 +75,7 @@ export interface Brief extends BriefContent {
   /** YYYY-MM-DD（本地日期）。 */
   date: string;
   createdAt: number;
-  /** 计划 3 的“今日重点”。计划 2 永远是 null，narrativeStatus 永远是 "off"。 */
+  /** 早间简报的“今日重点”（计划 3，个人 LLM API）。简报先入库，之后由 narrateBrief 补上；晚间小结永远是 null / "off"。 */
   narrative: string | null;
   narrativeStatus: NarrativeStatus;
 }
