@@ -193,4 +193,5 @@ export const S = {
     stale: "需要更新（点“安装 / 修复”）",
     conflict: "已有同名的 handoff.md，不是 Butler 写的，Butler 不会覆盖",
   } as Record<string, string>,
+  privacyPeopleWarning: "不在敏感词表里的人名在「redacted」档位会被发送，请把同事姓名加入敏感词表",
 };

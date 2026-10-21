@@ -27,6 +27,55 @@ describe("Pseudonymizer", () => {
     });
   });
 
+  it("replaces invisible-character, dash and whitespace variants", () => {
+    const d = { ...dict, people: [...dict.people, "İlker"] };
+    const cases: [string, string][] = [
+      ["fix PROJ\u200B-12", "PROJ-12"],
+      ["fix PR\u200DOJ-12", "PROJ-12"],
+      ["fix PROJ\u00AD-12", "PROJ-12"],
+      ["fix PROJ-\u206012", "PROJ-12"],
+      ["fix PROJ\uFEFF-12", "PROJ-12"],
+      ["fix PROJ\u201112", "PROJ-12"],
+      ["fix PROJ\u201012", "PROJ-12"],
+      ["fix PROJ\u201312", "PROJ-12"],
+      ["fix PROJ\u201412", "PROJ-12"],
+      ["fix PROJ\u221212", "PROJ-12"],
+      ["fix PROJ\uFE6312", "PROJ-12"],
+      ["ask Alice  Zhang", "Alice Zhang"],
+      ["ask Alice\nZhang", "Alice Zhang"],
+      ["ask Alice\u00A0Zhang", "Alice Zhang"],
+      ["ask İlker today", "İlker"],
+      ["ask İLKER today", "İlker"],
+    ];
+    for (const [input, orig] of cases) {
+      const p = new Pseudonymizer(d, seededRng(1));
+      const out = p.apply(input);
+      expect(out, input).toMatch(PLACEHOLDER_RE);
+      expect(normalizeText(out).toLowerCase(), input).not.toContain(normalizeText(orig).toLowerCase());
+      expect(out.replace(/\p{Default_Ignorable_Code_Point}/gu, "").replace(/[\p{Pd}\u2212]/gu, "-").toLowerCase(), input).not.toContain(orig.toLowerCase());
+    }
+  });
+
+  it("replaces values registered through token() afterwards", () => {
+    const p = new Pseudonymizer({ tickets: [], repos: [], branches: [], people: [], terms: [] }, seededRng(3));
+    const t = p.token("T", "NEW-1");
+    expect(p.apply("see new-1 now")).toBe(`see ${t} now`);
+  });
+
+  it("never hands out an id that already occurs in the input text", () => {
+    // 桩随机数：前 4 次都返回 0（"aaaa"），之后返回 1（"bbbb"）。
+    let calls = 0;
+    const p = new Pseudonymizer({ tickets: [], repos: [], branches: [], people: [], terms: [] }, () => (calls++ < 4 ? 0 : 1), ["literal [[T_aaaa]] here"]);
+    expect(p.token("T", "ABC-1")).toBe("[[T_bbbb]]");
+  });
+
+  it("defuses a literal placeholder in the input so it cannot be restored", () => {
+    const p = new Pseudonymizer(dict, seededRng(5));
+    const t = p.token("T", "PROJ-12");
+    const out = p.apply(`user wrote ${t} literally`);
+    expect(out).not.toContain(t);
+  });
+
   it("draws fresh random placeholders for every request", () => {
     const a = new Pseudonymizer(dict);
     const b = new Pseudonymizer(dict);
@@ -51,5 +100,20 @@ describe("Pseudonymizer", () => {
     const single = t.slice(1, -1);
     const r = restore(`先合并 ${t} 的 PR。再看 [[T_0000]] 的阻塞。然后 ${upper} 收尾！最后 ${single} 部署？还有 [[S_ab 的事。`, p.mapping);
     expect(r).toEqual({ text: "先合并 PROJ-12 的 PR。", dropped: 4 });
+  });
+
+  it("restore drops leftover and spoofed placeholder forms", () => {
+    const p = new Pseudonymizer(dict, seededRng(3));
+    const id = p.token("T", "PROJ-12").slice(4, 8);
+    const forms = [`T＿${id}`, `Ｔ_${id}`, `foo T_${id}`, `fooT_${id}`, `T_${id.slice(0, 2)}\u200B${id.slice(2)}`, `T-${id}`, `[[ T_${id} ]]`, `[T_${id}]`];
+    for (const f of forms) {
+      expect(restore(`坏句子 ${f} 完。好句子。`, p.mapping), f).toEqual({ text: "好句子。", dropped: 1 });
+    }
+  });
+
+  it("restore keeps ordinary words that merely look similar", () => {
+    const p = new Pseudonymizer(dict, seededRng(3));
+    const text = "查看 SHA_1234 和 T-shirt 以及 PROJECT_abcd。";
+    expect(restore(text, p.mapping)).toEqual({ text, dropped: 0 });
   });
 });

@@ -37,6 +37,7 @@ function shuffle<T>(xs: readonly T[], rng: Rng): T[] {
  * ticket 的顺序每次打乱；条目按 区块 → 规则 → 占位符 排序，不按真实 ticket 号排。
  */
 export function project(src: NarrativeSource, level: Exclude<PrivacyLevel, "off">, p: Pseudonymizer, rng: Rng): OutboundPayload {
+  if ((level as string) === "off") throw new Error("project() must not be called at privacy level off");
   const pseudo = level !== "full";
   const withText = level !== "metadata";
   const id = (key: string) => (pseudo ? p.token("T", key) : key);
@@ -50,7 +51,7 @@ export function project(src: NarrativeSource, level: Exclude<PrivacyLevel, "off"
       days_in_status: t.daysInStatus,
       idle_days: t.idleDays,
       done_last_day: t.doneLastDay,
-      followups: t.followups.map((f) => ({
+      followups: t.followups.slice(0, LIST_LIMIT).map((f) => ({
         kind: f.kind,
         trigger: f.trigger,
         overdue_days: f.overdueDays,

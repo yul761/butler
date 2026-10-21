@@ -63,6 +63,14 @@ describe("project", () => {
     expect(out.tickets.find((t) => t.id === "PROJ-12")?.blockers).toEqual(["等张三回复"]);
   });
 
+  it("caps followups at LIST_LIMIT and refuses level off", () => {
+    const src = source();
+    const f = src.tickets[0].followups[0];
+    const many = { ...src, tickets: [{ ...src.tickets[0], followups: Array.from({ length: 6 }, () => f) }] };
+    expect(project(many, "metadata", pseudonymizer(src, 1), seededRng(1)).tickets[0].followups).toHaveLength(LIST_LIMIT);
+    expect(() => project(src, "off" as never, pseudonymizer(src, 1), seededRng(1))).toThrow();
+  });
+
   it("shuffles tickets per request so the position does not identify a ticket", () => {
     const base = source();
     const src = { ...base, tickets: Array.from({ length: 8 }, (_, i) => ({ ...base.tickets[1], key: `K-${i}` })) };
