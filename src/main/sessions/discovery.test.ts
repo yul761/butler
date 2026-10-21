@@ -5,7 +5,7 @@ import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { memDb, tempDir } from "../test-utils";
-import { extractUserText, findTranscript, needsDiscovery, readSessionHead, scanClaudeProjects, suggestTicket, syncDiscovered } from "./discovery";
+import { extractUserText, findTranscript, needsDiscovery, readSessionHead, scanClaudeProjects, suggestTicket, syncDiscovered, transcriptState } from "./discovery";
 
 const ID1 = "11111111-1111-4111-8111-111111111111";
 const ID2 = "22222222-2222-4222-8222-222222222222";
@@ -60,6 +60,20 @@ describe("findTranscript", () => {
     expect(findTranscript(root, ID1)).toBe(join(root, "-work-b", `${ID1}.jsonl`));
     expect(findTranscript(root, ID2)).toBeNull();
     expect(findTranscript(join(root, "missing"), ID1)).toBeNull();
+  });
+});
+
+describe("transcriptState", () => {
+  it("is present, absent, or unknown when the projects dir cannot be read", () => {
+    const root = tempDir();
+    mkdirSync(join(root, "-work-b"));
+    writeFileSync(join(root, "-work-b", `${ID1}.jsonl`), "{}\n");
+    expect(transcriptState(root, ID1)).toBe("present");
+    expect(transcriptState(root, ID2)).toBe("absent");
+    expect(transcriptState(join(root, "missing"), ID1)).toBe("absent");
+    const notADir = join(root, "plain-file");
+    writeFileSync(notADir, "x");
+    expect(transcriptState(notADir, ID1)).toBe("unknown");
   });
 });
 

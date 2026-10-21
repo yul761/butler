@@ -1,7 +1,7 @@
 import type { HookEnvelope } from "../../shared/hook-envelope";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
-import { normalizePromptText } from "../sessions/discovery";
+import { normalizePromptText, type TranscriptState } from "../sessions/discovery";
 
 export type HookEffect =
   | { kind: "session_started"; sessionId: string; ticketKey: string | null; replaced: string | null }
@@ -23,7 +23,10 @@ const CHAIN_SOURCES = new Set(["clear", "compact", "resume"]);
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v : null);
 
-export function applyHookEnvelope(env: HookEnvelope, deps: { sessions: SessionsRepo; tickets: TicketsRepo }): HookEffect {
+export function applyHookEnvelope(
+  env: HookEnvelope,
+  deps: { sessions: SessionsRepo; tickets: TicketsRepo; transcriptState?: (sessionId: string) => TranscriptState },
+): HookEffect {
   const p = (env.payload && typeof env.payload === "object" ? env.payload : {}) as HookPayload;
   const event = str(p.hook_event_name);
   const id = str(p.session_id);
@@ -40,6 +43,8 @@ export function applyHookEnvelope(env: HookEnvelope, deps: { sessions: SessionsR
 
   // 事件可能乱序到达（例如 Stop 先于 SessionStart 被处理），所以每种事件都先确保 session 存在。
   const ensure = (key: string | null = ticketKey) => {
+    // handleExit 删掉的空 session：迟到的事件不能把它插回来。只有真正的 prompt，或者已有 transcript，才允许重建。
+    if (sessions.wasForgotten(id) && event !== "UserPromptSubmit" && deps.transcriptState?.(id) !== "present") return;
     const inserted = sessions.insertIfAbsent({ id, ticketKey: key, cwd, origin: fromButler ? "butler" : "discovered", lastActivityAt: at, createdAt: at });
     if (inserted) return;
     sessions.fillDetails(id, { cwd, lastActivityAt: at });

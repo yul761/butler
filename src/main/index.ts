@@ -13,7 +13,7 @@ import { createFileLogger, type Logger } from "./logger";
 import { HookInbox } from "./hooks/inbox";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, resolvePaths } from "./paths";
-import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, UNCLAIMED_WINDOW_MS } from "./sessions/discovery";
+import { needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
@@ -159,7 +159,8 @@ async function bootstrap(): Promise<void> {
   const sessionService = new SessionService({
     tickets, sessions, settings, ticketService, pty,
     ready: () => healthReady,
-    transcriptExists: (id) => findTranscript(paths.claudeProjects, id) !== null,
+    transcriptExists: (id) => transcriptState(paths.claudeProjects, id) !== "absent",
+    transcriptState: (id) => transcriptState(paths.claudeProjects, id),
     claude: () => health.claude(),
     newId: randomUUID,
     now: Date.now,
@@ -170,14 +171,20 @@ async function bootstrap(): Promise<void> {
 
   const runDiscovery = async () => {
     try {
-      syncDiscovered(await scanClaudeProjects(paths.claudeProjects, Date.now() - UNCLAIMED_WINDOW_MS), sessions, Date.now());
+      const found = await scanClaudeProjects(paths.claudeProjects, Date.now() - UNCLAIMED_WINDOW_MS);
+      syncDiscovered(found, sessions, Date.now());
+      // 只有扫描真的找到了某个待补全 session 的 transcript，才记为本次运行已扫描过。
+      for (const f of found) if (discoveryPending.delete(f.id)) discoveryRequested.add(f.id);
       notify();
     } catch (e) {
       logger("discovery failed", e);
     }
   };
 
+  /** 已由扫描补全过的 session（每次运行最多触发一次）。 */
   const discoveryRequested = new Set<string>();
+  /** hook 触发、等待下一次扫描确认的 session。 */
+  const discoveryPending = new Set<string>();
   let hookDiscoveryTimer: NodeJS.Timeout | null = null;
   const scheduleDiscovery = () => {
     if (hookDiscoveryTimer) return;
@@ -192,14 +199,14 @@ async function bootstrap(): Promise<void> {
     badDir: paths.inboxBad,
     log: (m) => logger(m),
     handle: (env) => {
-      const effect = applyHookEnvelope(env, { sessions, tickets });
+      const effect = applyHookEnvelope(env, { sessions, tickets, transcriptState: (id) => transcriptState(paths.claudeProjects, id) });
       if (effect.kind === "ignored") return;
       notify();
       // 还没归属 ticket、又缺 cwd / 分支 / 首条提示的 session：触发一次发现（每个 session 每次运行最多一次）。
       if (effect.kind !== "nested") {
         const s = sessions.get(effect.sessionId);
         if (s && needsDiscovery(s, discoveryRequested)) {
-          discoveryRequested.add(s.id);
+          discoveryPending.add(s.id);
           scheduleDiscovery();
         }
       }

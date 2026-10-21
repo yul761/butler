@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readdirSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, statSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -98,6 +98,30 @@ export function findTranscript(projectsDir: string, sessionId: string): string |
     if (existsSync(file)) return file;
   }
   return null;
+}
+
+export type TranscriptState = "present" | "absent" | "unknown";
+
+/**
+ * 三态的对话记录检查：projects 目录读不了（权限、类型不对等）时返回 unknown，
+ * 不能和“确实没有记录”混为一谈，否则删行时可能误删真实 session。
+ */
+export function transcriptState(projectsDir: string, sessionId: string): TranscriptState {
+  let dirs: string[];
+  try {
+    dirs = readdirSync(projectsDir);
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unknown";
+  }
+  for (const d of dirs) {
+    try {
+      statSync(join(projectsDir, d, `${sessionId}.jsonl`));
+      return "present";
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") return "unknown";
+    }
+  }
+  return "absent";
 }
 
 export async function scanClaudeProjects(projectsDir: string, sinceMs: number): Promise<DiscoveredSession[]> {

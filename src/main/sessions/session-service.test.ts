@@ -6,10 +6,20 @@ import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { TicketService } from "../tickets/ticket-service";
 import { fakePtyFactory, makeRepo, memDb } from "../test-utils";
+import type { TranscriptState } from "./discovery";
 import { PtyManager, type PtyFactory } from "./pty-manager";
 import { SessionService } from "./session-service";
 
-async function setup(opts: { transcripts?: string[]; claudePath?: string | null; workMode?: "branch" | "worktree"; ready?: () => Promise<void>; factory?: PtyFactory } = {}) {
+async function setup(opts: {
+  transcripts?: string[];
+  transcriptState?: TranscriptState;
+  claudePath?: string | null;
+  workMode?: "branch" | "worktree";
+  ready?: () => Promise<void>;
+  factory?: PtyFactory;
+} = {}) {
+  const stateOf = (id: string): TranscriptState =>
+    opts.transcriptState ?? (opts.transcripts === undefined || opts.transcripts.includes(id) ? "present" : "absent");
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -21,7 +31,8 @@ async function setup(opts: { transcripts?: string[]; claudePath?: string | null;
   const service = new SessionService({
     tickets, sessions, settings, ticketService, pty,
     ready: opts.ready ?? (async () => undefined),
-    transcriptExists: (id) => opts.transcripts === undefined || opts.transcripts.includes(id),
+    transcriptExists: (id) => stateOf(id) !== "absent",
+    transcriptState: stateOf,
     claude: () => ({ path: opts.claudePath === undefined ? "/bin/claude" : opts.claudePath, pathValue: "/login/bin" }),
     newId: () => `new-${++n}`,
     now: () => 1000,
@@ -160,6 +171,13 @@ describe("SessionService orphan rows", () => {
     service.handleExit("new-2");
     expect(sessions.get("new-1")).toBeNull();
     expect(sessions.get("new-2")).not.toBeNull();
+  });
+
+  it("keeps the row when the transcript state cannot be determined", async () => {
+    const { service, sessions } = await setup({ transcriptState: "unknown" });
+    await service.open({ ticketKey: "PROJ-1" });
+    service.handleExit("new-1");
+    expect(sessions.get("new-1")).not.toBeNull();
   });
 
   it("keeps sessions that have a transcript", async () => {

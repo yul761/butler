@@ -12,7 +12,7 @@ import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { TicketError, type TicketService } from "../tickets/ticket-service";
-import { suggestTicket, UNCLAIMED_WINDOW_MS } from "./discovery";
+import { suggestTicket, type TranscriptState, UNCLAIMED_WINDOW_MS } from "./discovery";
 import type { PtyManager } from "./pty-manager";
 
 export interface SessionServiceDeps {
@@ -25,6 +25,8 @@ export interface SessionServiceDeps {
   ready: () => Promise<void>;
   /** 这个 session 在磁盘上有没有对话记录（没有就不能 --resume）。 */
   transcriptExists: (sessionId: string) => boolean;
+  /** 三态版本，供 handleExit 判断能否安全删行（unknown 必须保留）。 */
+  transcriptState: (sessionId: string) => TranscriptState;
   claude: () => { path: string | null; pathValue: string };
   newId: () => string;
   now: () => number;
@@ -114,7 +116,8 @@ export class SessionService {
   handleExit(termId: string): void {
     const s = this.d.sessions.get(termId);
     if (!s || s.origin !== "butler" || s.firstPrompt || s.replacedBy) return;
-    if (this.d.transcriptExists(termId)) return;
+    // 只有确认没有记录才删；读不了目录（unknown）时保留这一行。
+    if (this.d.transcriptState(termId) !== "absent") return;
     this.d.sessions.delete(termId);
   }
 

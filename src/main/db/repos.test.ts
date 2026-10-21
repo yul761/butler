@@ -87,6 +87,25 @@ describe("SessionsRepo", () => {
     expect(repo.get("a")?.replacedBy).toBeNull();
   });
 
+  it("deleting the tail of a chain keeps the head pointing at the middle row", () => {
+    const repo = setup();
+    for (const id of ["a", "b", "c"]) repo.insertIfAbsent({ id, ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    repo.setReplacedBy("a", "b");
+    repo.setReplacedBy("b", "c");
+    repo.delete("c");
+    expect(repo.head("a")?.id).toBe("b");
+    expect(repo.get("b")?.replacedBy).toBeNull();
+  });
+
+  it("remembers deleted ids until they are inserted again", () => {
+    const repo = setup();
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1 });
+    repo.delete("a");
+    expect(repo.wasForgotten("a")).toBe(true);
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 2 });
+    expect(repo.wasForgotten("a")).toBe(false);
+  });
+
   it("listUnclaimed excludes claimed, dismissed, replaced and old sessions", () => {
     const repo = setup();
     const add = (id: string, at: number, ticketKey: string | null = null) =>

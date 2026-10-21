@@ -51,7 +51,13 @@ export interface SessionDetails {
 
 const RECENCY = "COALESCE(last_activity_at, created_at)";
 
+/** 记住最近被 delete 的 id 的上限；只用来拦住迟到的 hook 事件，不必永久保存。 */
+const FORGOTTEN_LIMIT = 500;
+
 export class SessionsRepo {
+  /** 最近被删除的 session id（按删除顺序，超出上限丢弃最旧的）。 */
+  private readonly forgotten = new Set<string>();
+
   constructor(private readonly db: Db) {}
 
   insertIfAbsent(s: NewSession): boolean {
@@ -61,7 +67,16 @@ export class SessionsRepo {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt);
-    return Number(r.changes) > 0;
+    if (Number(r.changes) > 0) {
+      this.forgotten.delete(s.id);
+      return true;
+    }
+    return false;
+  }
+
+  /** 这个 id 是否刚被 delete 过（迟到的 hook 事件不应把它再插回来）。 */
+  wasForgotten(id: string): boolean {
+    return this.forgotten.has(id);
   }
 
   /** 只填补空字段；lastActivityAt 只会往后移。 */
@@ -126,8 +141,17 @@ export class SessionsRepo {
 
   /** 删除一行；指向它的 replaced_by 一并清掉，免得前一个 session 被当成“已替换”而从列表里消失。 */
   delete(id: string): void {
-    this.db.prepare(`UPDATE sessions SET replaced_by = NULL WHERE replaced_by = ?`).run(id);
-    this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare(`UPDATE sessions SET replaced_by = NULL WHERE replaced_by = ?`).run(id);
+      this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+    this.forgotten.add(id);
+    if (this.forgotten.size > FORGOTTEN_LIMIT) this.forgotten.delete(this.forgotten.values().next().value as string);
   }
 
   /** 沿 replaced_by 链走到最新的 session（/clear、compact 会产生新 id）。 */

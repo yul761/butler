@@ -119,6 +119,26 @@ describe("applyHookEnvelope", () => {
     expect(sessions.get("s4")?.firstPrompt).toBe(`${"x".repeat(200)}…`);
   });
 
+  it("late envelopes do not resurrect a deleted orphan row; a real prompt does", () => {
+    const { sessions, deps } = setup();
+    applyHookEnvelope(env("SessionStart", "o1", { ticket: "PROJ-1", butlerSession: "o1" }), deps);
+    sessions.delete("o1");
+    applyHookEnvelope(env("Stop", "o1", { ticket: "PROJ-1", butlerSession: "o1" }), deps);
+    applyHookEnvelope(env("SessionEnd", "o1"), deps);
+    applyHookEnvelope(env("SessionStart", "o1", { butlerSession: "o1" }, { source: "startup" }), deps);
+    expect(sessions.get("o1")).toBeNull();
+    applyHookEnvelope(env("UserPromptSubmit", "o1", { ticket: "PROJ-1", butlerSession: "o1" }, { prompt: "hi" }), deps);
+    expect(sessions.get("o1")).toMatchObject({ ticketKey: "PROJ-1", origin: "butler", firstPrompt: "hi" });
+  });
+
+  it("a late event re-creates a deleted row when its transcript now exists", () => {
+    const { sessions, deps } = setup();
+    applyHookEnvelope(env("SessionStart", "o2", { ticket: "PROJ-1", butlerSession: "o2" }), deps);
+    sessions.delete("o2");
+    applyHookEnvelope(env("Stop", "o2", { ticket: "PROJ-1", butlerSession: "o2" }), { ...deps, transcriptState: () => "present" });
+    expect(sessions.get("o2")).not.toBeNull();
+  });
+
   it("upgrades a discovered session to butler once a Butler terminal reports it", () => {
     const { sessions, deps } = setup();
     sessions.insertIfAbsent({ id: "d1", ticketKey: "PROJ-1", cwd: "/w", origin: "discovered", createdAt: 1 });
