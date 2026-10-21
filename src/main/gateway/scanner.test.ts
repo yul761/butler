@@ -32,6 +32,43 @@ const SHOULD_BLOCK: [ScanRule, string][] = [
   ["ticket", "和ABC-9一起上线"],
   ["ticket", "顺便修一下 PROJ\u200b-12"],
   ["ticket", "顺便修一下 PROJ\u201312"],
+  // 被占位符切开的密钥 / 邮箱
+  ["secret", "ghp_xK9[[P_kidk]]q2LmZ7vBn4RtYs8PcDe3HfJa6GoNi1T"],
+  ["secret", "sk-[[S_ab12]]-abcdEFGH1234567890xyz"],
+  ["secret", "AKIAIOS[[S_ab12]]NN7EXAMPLE"],
+  ["email", "zhang.[[P_ab12]]@example.xyz"],
+  // 中文紧贴路径
+  ["path", "改一下/etc/nginx/nginx.conf"],
+  ["path", "日志在~/logs/app.log"],
+  ["path", "看/etc/hosts"],
+  ["path", "在/Users/zhang下"],
+  ["path", "看/Users/zhang/billing/secrets.yaml"],
+  ["path", "//fileserver/share"],
+  ["path", "读 $HOME/.aws/credentials"],
+  ["path", "C:/Users/zhang"],
+  // 压缩 IPv6
+  ["ip", "2001:db8::1"],
+  ["ip", "地址 fe80::1%en0"],
+  ["ip", "::1"],
+  ["ip", "::ffff:10.0.0.1"],
+  // 域名
+  ["domain", "api.mycompany.co.uk"],
+  ["domain", "x.example.de"],
+  ["domain", "a.b.jp"],
+  ["domain", "foo.app"],
+  ["domain", "jira.mycompany.xyz/browse/X"],
+  ["domain", "nas.home.arpa"],
+  ["domain", "svc.gov"],
+  ["domain", "u.edu"],
+  // 口令 / token 的其他写法
+  ["secret", "密码是hunter2024"],
+  ["secret", "密码 hunter2024"],
+  ["secret", "数据库密码是hunter2024"],
+  ["secret", "password is hunter2024"],
+  ["secret", "Authorization: Bearer abcdef0123456789abcdef"],
+  ["secret", "sk_test_4eC39HqLyjWDarjtT1zdp7dc"],
+  ["secret", "sk_live_4eC39HqLyjWDarjtT1zdp7dc"],
+  ["secret", "rk_live_4eC39HqLyjWDarjtT1zdp7dc"],
 ];
 
 /** 不应误伤。 */
@@ -51,6 +88,7 @@ const SHOULD_PASS = [
   "用 1.5 倍超时重试",
   "token 用量 1200",
   "下周一 9 点和产品开会，讨论退款流程",
+  "std::vector 和 Foo::bar 的用法",
   "[[T_ab12]] 的 PR 等 [[P_x7k2]] review，[[R_9fqz]] 的 [[B_m3n4]] 要 rebase",
 ];
 
@@ -101,6 +139,20 @@ describe("scanOutbound options", () => {
     expect(scanOutbound(["没问题", "也没问题", "发邮件到 a@b.io"], opts).map((h) => h.rule)).toEqual(["email", "domain"]);
   });
 
+  it("known hits report the length only, never characters of the original", () => {
+    const hits = scanOutbound(["请 acme 的同事确认"], { ...opts, originals: ["ACME"] });
+    expect(hits).toEqual([{ rule: "known", sample: "…(4)" }]);
+  });
+
+  it("path samples start at the path, including a drive letter", () => {
+    expect(scanOutbound(["C:/Users/zhang"], opts)[0]).toEqual({ rule: "path", sample: "C:/…(14)" });
+    expect(scanOutbound(["在 /Users/zhang"], opts)[0]).toEqual({ rule: "path", sample: "/Us…(12)" });
+  });
+
+  it("does not report a ticket for a word cut by the scan window", () => {
+    for (let k = 180; k <= 270; k++) expect(rules("中".repeat(k) + "SHA-256")).toEqual([]);
+  });
+
   it("is stable across repeated calls (no shared regex state)", () => {
     const text = "[[T_ab12]] 和 PROJ-12";
     expect(rules(text)).toEqual(["ticket"]);
@@ -110,7 +162,7 @@ describe("scanOutbound options", () => {
 });
 
 describe("scanOutbound performance", () => {
-  const N = 50_000;
+  const N = 100_000;
   const shapes: [string, string][] = [
     ["a.", "a.".repeat(N / 2)],
     ["1.", "1.".repeat(N / 2)],
@@ -124,6 +176,12 @@ describe("scanOutbound performance", () => {
     ["eyJ-", "eyJ-".repeat(N / 4)],
     ["1:", "1:".repeat(N / 2)],
     ["x://", "x:".repeat(N / 2)],
+    ["a.md", "a.md".repeat(N / 4)],
+    ["1::", "1::".repeat(N / 3)],
+    ["a:b", "a:b:".repeat(N / 4)],
+    ["::", ":".repeat(N)],
+    ["Bearer", "Bearer a".repeat(N / 8)],
+    ["pw is", "password is ".repeat(N / 12)],
     ["spaces", "a ".repeat(N / 2)],
   ];
   it.each(shapes)("scans an adversarial %s string quickly", (_name, text) => {
