@@ -6,12 +6,15 @@ import { killTree, unsafeCmdArg } from "./headless";
 /** 读到 init 就结束，模型还没开始回答。不落盘，权限全拒。 */
 export const PROBE_ARGS = ["-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "dontAsk"];
 
-const READ_WORDS = new Set(["get", "list", "search", "read", "view", "fetch", "query", "find", "lookup", "describe"]);
+const READ_WORDS = new Set(["get", "list", "search", "read", "view", "fetch", "query", "find", "lookup", "describe", "show", "retrieve", "browse", "count", "check", "status"]);
 /** 任何一个词在这里，整个工具就不建议（get_or_create、search_and_replace、execute_query……）。 */
 const WRITE_WORDS = new Set([
   "create", "update", "delete", "remove", "transition", "comment", "edit", "write", "add", "set", "send", "post", "put", "patch", "assign",
   "merge", "close", "run", "execute", "replace", "move", "upload", "import", "archive", "insert", "upsert", "modify", "rename", "approve",
   "reject", "publish", "sync", "trigger", "invoke", "call",
+  "deploy", "cancel", "reset", "restart", "start", "stop", "save", "apply", "push", "commit", "revoke", "enable", "disable", "kill", "terminate",
+  "destroy", "link", "unlink", "mark", "resolve", "change", "install", "uninstall", "clear", "grant", "lock", "unlock", "share", "notify",
+  "schedule", "submit", "transfer", "toggle", "fork", "clone", "duplicate",
 ]);
 
 /** claude 给 server 名做的清洗（验证记录 V3）：非 [A-Za-z0-9_-] 的字符换成 _。 */
@@ -28,11 +31,19 @@ function toolPart(tool: string, servers: string[]): string {
   return tool.split("__").pop() ?? tool;
 }
 
-/** 工具部分按下划线、连字符和驼峰拆词：至少一个查询类动词，且没有任何写类动词，才算“只读建议”。 */
+const splitWords = (s: string): string[] =>
+  s.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2").replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[\s_-]+/).filter(Boolean).map((w) => w.toLowerCase());
+
+/**
+ * 只读建议（宁可漏报）：第一个词（跳过开头与 server 名相同的词）必须是查询类动词，且任何位置都没有写类动词。
+ */
 export function suggestReadOnly(tools: string[], serverNames: string[] = []): string[] {
+  const serverWords = new Set(serverNames.flatMap((n) => splitWords(sanitizeServerName(n))));
   return tools.filter((t) => {
-    const words = toolPart(t, serverNames).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[\s_-]+/).filter(Boolean).map((w) => w.toLowerCase());
-    return words.some((w) => READ_WORDS.has(w)) && !words.some((w) => WRITE_WORDS.has(w));
+    const words = splitWords(toolPart(t, serverNames));
+    let i = 0;
+    while (i < words.length - 1 && serverWords.has(words[i])) i++;
+    return words.length > 0 && READ_WORDS.has(words[i]) && !words.some((w) => WRITE_WORDS.has(w));
   });
 }
 

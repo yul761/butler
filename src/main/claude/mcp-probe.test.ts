@@ -107,10 +107,12 @@ emit(${JSON.stringify(INIT)}); setTimeout(() => {}, 60000);`;
 
 describe("suggestReadOnly mixed verbs and server names", () => {
   it("rejects tools with any write word", () => {
-    const bad = ["getOrCreateIssue", "get_or_create_user", "search_and_replace", "find_and_delete", "list_and_transition", "execute_query", "run_query"].map((n) => `mcp__x__${n}`);
+    const bad = ["getXMLDelete", "search_and_deploy", "list_and_cancel", "read_and_reset", "issue_get", "getOrCreateIssue", "get_or_create_user", "search_and_replace", "find_and_delete", "list_and_transition", "execute_query", "run_query"].map((n) => `mcp__x__${n}`);
     expect(suggestReadOnly(bad)).toEqual([]);
-    const good = ["get_issue", "searchIssues", "list_projects", "jira_get_issue"].map((n) => `mcp__x__${n}`);
+    const good = ["get_issue", "searchIssues", "list_projects", "getJSONIssue"].map((n) => `mcp__x__${n}`);
     expect(suggestReadOnly(good)).toEqual(good);
+    // A leading word that is the server's own name is skipped.
+    expect(suggestReadOnly(["mcp__jira__jira_get_issue"], ["jira"])).toEqual(["mcp__jira__jira_get_issue"]);
   });
 
   it("ignores words in the server part, including servers with __", () => {
