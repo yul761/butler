@@ -104,6 +104,7 @@ export function ScheduleSettings() {
   return (
     <section className="settings-section">
       <h2>{S.schedule}</h2>
+      <p className="muted">{S.scheduleNote}</p>
       {error && <p className="error">{error}</p>}
 
       <label className="field">

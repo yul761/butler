@@ -1,10 +1,10 @@
 import type { ChildProcess } from "node:child_process";
 import spawn from "cross-spawn";
 import type { McpProbe } from "../../shared/types";
-import { killTree, unsafeCmdArg } from "./headless";
+import { killTree, SETTING_SOURCES_ARGS, unsafeCmdArg } from "./headless";
 
 /** 读到 init 就结束，模型还没开始回答。不落盘，权限全拒。 */
-export const PROBE_ARGS = ["-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "dontAsk"];
+export const PROBE_ARGS = ["-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "dontAsk", ...SETTING_SOURCES_ARGS];
 
 const READ_WORDS = new Set(["get", "list", "search", "read", "view", "fetch", "query", "find", "lookup", "describe", "show", "retrieve", "browse", "count", "check", "status"]);
 /** 任何一个词在这里，整个工具就不建议（get_or_create、search_and_replace、execute_query……）。 */

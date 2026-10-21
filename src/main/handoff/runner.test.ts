@@ -91,8 +91,8 @@ describe("HandoffRunner", () => {
     const [req] = calls;
     expect(req.claudePath).toBe("/bin/claude");
     expect(req.cwd).toBe("/w/A-1");
-    expect(req.args.slice(0, 11)).toEqual([
-      "-p", "--output-format", "json", "--json-schema", HANDOFF_JSON_SCHEMA, "--no-session-persistence", "--permission-mode", "dontAsk",
+    expect(req.args.slice(0, 13)).toEqual([
+      "-p", "--output-format", "json", "--json-schema", HANDOFF_JSON_SCHEMA, "--no-session-persistence", "--permission-mode", "dontAsk", "--setting-sources", "user",
       "--resume", "s-A-1", "--fork-session",
     ]);
     expect(req.args.slice(req.args.indexOf("--allowedTools") + 1)).toContain("mcp__jira__get_issue");

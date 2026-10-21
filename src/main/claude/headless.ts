@@ -10,6 +10,12 @@ export const READ_ONLY_TOOLS = ["Read", "Grep", "Glob", "Bash(gh pr view:*)", "B
 /** 不管用户默认的权限模式是什么，这些写工具一律拒绝。 */
 export const DENIED_TOOLS = ["Edit", "Write", "NotebookEdit"];
 
+/**
+ * 只读用户级设置：项目 / 本地的 .claude/settings*.json（仓库里的人能写）不能给后台运行加 allow 规则。
+ * 实测（最终修复 4）："" 会连 MCP 一起去掉，所以最严格可用的是 user。
+ */
+export const SETTING_SOURCES_ARGS = ["--setting-sources", "user"];
+
 export interface HeadlessRequest {
   claudePath: string;
   args: string[];
@@ -47,10 +53,11 @@ export type HeadlessRun = (req: HeadlessRequest) => Promise<HeadlessOutcome>;
  * handoff / 刷新的参数。prompt 不在这里：它走 stdin。
  * `--no-session-persistence`：fork 不写 transcript，“未认领”永远看不到它（验证记录 V2）。
  * `--permission-mode dontAsk`：白名单以外的工具一律拒绝，不受用户默认权限模式影响。
+ * `--setting-sources user`：不继承仓库里的 allow 规则。
  * `--allowedTools` 放最后：它是可变参数，会吃掉后面的所有值。
  */
 export function headlessArgs(o: { schema: string; resumeSessionId?: string; allowedTools: string[] }): string[] {
-  const args = ["-p", "--output-format", "json", "--json-schema", o.schema, "--no-session-persistence", "--permission-mode", "dontAsk"];
+  const args = ["-p", "--output-format", "json", "--json-schema", o.schema, "--no-session-persistence", "--permission-mode", "dontAsk", ...SETTING_SOURCES_ARGS];
   if (o.resumeSessionId) args.push("--resume", o.resumeSessionId, "--fork-session");
   args.push("--disallowedTools", ...DENIED_TOOLS, "--allowedTools", ...o.allowedTools);
   return args;

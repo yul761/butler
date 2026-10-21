@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir, writeFakeClaude } from "../test-utils";
+import { PROBE_ARGS } from "./mcp-probe";
 import { headlessArgs, isRateLimited, parseClaudeJson, runHeadless, unsafeCmdArg } from "./headless";
 
 const env = () => ({ ...process.env }) as Record<string, string>;
@@ -17,10 +18,19 @@ describe("headlessArgs", () => {
   it("resumes as a non-persistent, read-only fork and never carries the prompt", () => {
     expect(headlessArgs({ schema: '{"type":"object"}', resumeSessionId: "s-1", allowedTools: ["Read", "Bash(git status)"] })).toEqual([
       "-p", "--output-format", "json", "--json-schema", '{"type":"object"}', "--no-session-persistence", "--permission-mode", "dontAsk",
+      "--setting-sources", "user",
       "--resume", "s-1", "--fork-session",
       "--disallowedTools", "Edit", "Write", "NotebookEdit",
       "--allowedTools", "Read", "Bash(git status)",
     ]);
+  });
+
+  it("restricts setting sources to user so repo-controlled allow rules are not inherited", () => {
+    const args = headlessArgs({ schema: "{}", allowedTools: ["Read"] });
+    const i = args.indexOf("--setting-sources");
+    expect(args.slice(i, i + 2)).toEqual(["--setting-sources", "user"]);
+    expect(i).toBeLessThan(args.indexOf("--allowedTools"));
+    expect(PROBE_ARGS.slice(PROBE_ARGS.indexOf("--setting-sources"), PROBE_ARGS.indexOf("--setting-sources") + 2)).toEqual(["--setting-sources", "user"]);
   });
 
   it("omits the resume flags for a fresh run", () => {

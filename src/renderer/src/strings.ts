@@ -155,6 +155,7 @@ export const S = {
   openQuestions: "待确认",
   prLine: (n: number, state: string, review: string | null) => `PR #${n} · ${state}${review ? ` · ${review}` : ""}`,
   schedule: "调度与 handoff",
+  scheduleNote: "后台总结会继承你在 ~/.claude 里允许的命令",
   nightlyTime: "晚间 handoff 时间",
   workingDays: "工作日（只在这些天跑晚间 handoff）",
   weekdayNames: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"],

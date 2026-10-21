@@ -52,7 +52,7 @@ describe("probeMcpTools", () => {
     expect(probe.tools).toEqual(["mcp__jira__get_issue"]);
     expect(probe.suggested).toEqual(["mcp__jira__get_issue"]);
     expect(Date.now() - started).toBeLessThan(10_000);
-    expect(fake.calls()[0].args).toEqual(["-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "dontAsk"]);
+    expect(fake.calls()[0].args).toEqual(["-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "dontAsk", "--setting-sources", "user"]);
   }, 20_000);
 
   it("rejects when claude exits without an init line", async () => {
