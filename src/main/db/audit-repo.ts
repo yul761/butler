@@ -4,6 +4,9 @@ import type { Db } from "./database";
 /** 审计里每段文本的上限：响应异常大时也不会把数据库撑爆。 */
 export const AUDIT_TEXT_LIMIT = 200_000;
 
+/** 这些状态下什么都没发出去：请求体和响应一律不落盘。 */
+const NO_PAYLOAD_STATUSES: ReadonlySet<string> = new Set<AuditStatus>(["blocked", "budget", "declined"]);
+
 interface AuditRow {
   id: number;
   ts: number;
@@ -20,7 +23,15 @@ interface AuditRow {
   error: string | null;
 }
 
-const cap = (s: string | null | undefined): string | null => (s == null ? null : s.length > AUDIT_TEXT_LIMIT ? s.slice(0, AUDIT_TEXT_LIMIT) : s);
+/** 截断到 AUDIT_TEXT_LIMIT，且不把代理对（surrogate pair）从中间切开。 */
+function cap(s: string | null | undefined): string | null {
+  if (s == null) return null;
+  if (s.length <= AUDIT_TEXT_LIMIT) return s;
+  let end = AUDIT_TEXT_LIMIT;
+  const last = s.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return s.slice(0, end);
+}
 
 function parseHits(text: string | null): ScanHit[] | null {
   if (!text) return null;
@@ -50,21 +61,26 @@ function toEntry(r: AuditRow): AuditEntry {
   };
 }
 
-export interface NewAudit {
+interface NewAuditCommon {
   ts: number;
   provider: string;
   model: string;
   level: PrivacyLevel;
-  status: AuditStatus;
-  /** 原样的请求体；拒发 / 超预算时为 null（什么都没发，被拦下的内容也不落盘）。 */
-  payloadSent: string | null;
   blockedReason?: ScanHit[] | null;
   error?: string | null;
 }
 
+/**
+ * 写入审计时的请求行。已经发出（或正要发出）的状态必须带请求体；
+ * blocked / budget / declined 没有发出任何东西，类型上就不允许带请求体（仓库层也会强制为 NULL）。
+ */
+export type NewAudit =
+  | (NewAuditCommon & { status: "pending" | "sent" | "failed"; payloadSent: string | null })
+  | (NewAuditCommon & { status: "blocked" | "budget" | "declined"; payloadSent?: null });
+
 export interface AuditFinish {
   status: "sent" | "failed" | "declined";
-  /** 最终发出的请求体和第一次不同时（换了 token 参数名重试）传入。 */
+  /** 最终发出的请求体和第一次不同时（换了 token 参数名重试）传入。declined 时一律不落盘。 */
   payloadSent?: string;
   response?: string | null;
   tokensIn?: number | null;
@@ -77,29 +93,50 @@ export class AuditRepo {
   constructor(private readonly db: Db) {}
 
   insert(a: NewAudit): number {
+    const payload = NO_PAYLOAD_STATUSES.has(a.status) ? null : cap(a.payloadSent ?? null);
     const r = this.db
       .prepare(
         `INSERT INTO llm_audit (ts, provider, model, level, status, payload_sent, blocked_reason, error)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(a.ts, a.provider, a.model, a.level, a.status, cap(a.payloadSent), a.blockedReason ? JSON.stringify(a.blockedReason) : null, cap(a.error));
+      .run(a.ts, a.provider, a.model, a.level, a.status, payload, a.blockedReason ? JSON.stringify(a.blockedReason) : null, cap(a.error));
     return Number(r.lastInsertRowid);
   }
 
   finish(id: number, f: AuditFinish): void {
+    // 只有 declined 会清空请求体和响应；其余字段缺省时保留之前记录的值（例如花费不会被后续的 failed 清零）。
     this.db
       .prepare(
-        `UPDATE llm_audit SET status = ?, payload_sent = COALESCE(?, payload_sent), response = ?, tokens_in = ?, tokens_out = ?, cost_usd = ?, error = ?
+        `UPDATE llm_audit SET
+           status = ?,
+           payload_sent = CASE WHEN ? = 'declined' THEN NULL ELSE COALESCE(?, payload_sent) END,
+           response = CASE WHEN ? = 'declined' THEN NULL ELSE COALESCE(?, response) END,
+           tokens_in = COALESCE(?, tokens_in),
+           tokens_out = COALESCE(?, tokens_out),
+           cost_usd = COALESCE(?, cost_usd),
+           error = ?
          WHERE id = ?`,
       )
-      .run(f.status, cap(f.payloadSent), cap(f.response), f.tokensIn ?? null, f.tokensOut ?? null, f.costUsd ?? null, cap(f.error), id);
+      .run(
+        f.status,
+        f.status,
+        cap(f.payloadSent ?? null),
+        f.status,
+        cap(f.response ?? null),
+        f.tokensIn ?? null,
+        f.tokensOut ?? null,
+        f.costUsd ?? null,
+        cap(f.error ?? null),
+        id,
+      );
   }
 
-  /** 新的在前；beforeId 用来翻页。 */
+  /** 新的在前；beforeId 用来翻页。limit 限制在 1..500。 */
   list(limit = 50, beforeId?: number): AuditEntry[] {
+    const n = Number.isFinite(limit) ? Math.min(500, Math.max(1, Math.trunc(limit))) : 50;
     const rows = this.db
       .prepare(`SELECT * FROM llm_audit WHERE (? IS NULL OR id < ?) ORDER BY id DESC LIMIT ?`)
-      .all(beforeId ?? null, beforeId ?? null, limit) as unknown as AuditRow[];
+      .all(beforeId ?? null, beforeId ?? null, n) as unknown as AuditRow[];
     return rows.map(toEntry);
   }
 

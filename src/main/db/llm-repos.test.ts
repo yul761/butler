@@ -115,3 +115,71 @@ describe("SecretsRepo", () => {
     expect(secrets.get("k")).toBeNull();
   });
 });
+
+describe("fix round 1: audit payload rules", () => {
+  it("never stores a payload or response for blocked, budget or declined rows", () => {
+    const audit = new AuditRepo(memDb());
+    // @ts-expect-error a blocked row cannot carry a payload
+    audit.insert({ ...base, ts: 1, status: "blocked", payloadSent: "secret-body" });
+    // @ts-expect-error a budget row cannot carry a payload
+    audit.insert({ ...base, ts: 2, status: "budget", payloadSent: "secret-body" });
+    // @ts-expect-error a declined row cannot carry a payload
+    audit.insert({ ...base, ts: 3, status: "declined", payloadSent: "secret-body" });
+    const rows = audit.list();
+    expect(rows).toHaveLength(3);
+    for (const r of rows) {
+      expect(r.payloadSent).toBeNull();
+      expect(r.response).toBeNull();
+    }
+  });
+
+  it("clears the payload and response when a request is declined after it was recorded", () => {
+    const audit = new AuditRepo(memDb());
+    const id = audit.insert({ ...base, ts: 1, status: "pending", payloadSent: '{"a":1}' });
+    audit.finish(id, { status: "declined", response: "r" });
+    expect(audit.list()[0]).toMatchObject({ status: "declined", payloadSent: null, response: null });
+  });
+
+  it("keeps the recorded cost and tokens when a later finish omits them", () => {
+    const audit = new AuditRepo(memDb());
+    const id = audit.insert({ ...base, ts: 1, status: "pending", payloadSent: "a" });
+    audit.finish(id, { status: "sent", response: "{}", tokensIn: 5, tokensOut: 2, costUsd: 0.5 });
+    audit.finish(id, { status: "failed", error: "x" });
+    expect(audit.costSince(0)).toBe(0.5);
+    expect(audit.list()[0]).toMatchObject({ status: "failed", response: "{}", tokensIn: 5, tokensOut: 2, costUsd: 0.5 });
+  });
+
+  it("clamps the page size to 1..500", () => {
+    const audit = new AuditRepo(memDb());
+    for (let i = 0; i < 501; i++) audit.insert({ ...base, ts: i, status: "pending", payloadSent: null });
+    expect(audit.list(0)).toHaveLength(1);
+    expect(audit.list(-5)).toHaveLength(1);
+    expect(audit.list(10_000)).toHaveLength(500);
+  });
+
+  it("cuts oversized text without splitting a surrogate pair", () => {
+    const audit = new AuditRepo(memDb());
+    const id = audit.insert({ ...base, ts: 1, status: "pending", payloadSent: null });
+    audit.finish(id, { status: "sent", response: "a".repeat(AUDIT_TEXT_LIMIT - 1) + "😀" });
+    const r = audit.list()[0].response!;
+    expect(r).toHaveLength(AUDIT_TEXT_LIMIT - 1);
+    expect(r.endsWith("a")).toBe(true);
+  });
+});
+
+describe("fix round 1: sensitive terms", () => {
+  it("normalises NFKC, drops blanks and dedupes case-insensitively", () => {
+    const terms = new TermsRepo(memDb());
+    terms.replaceAll([
+      { term: "ＰＲＯＪ", category: "term" },
+      { term: "PROJ", category: "term" },
+      { term: "  ", category: "term" },
+      { term: "", category: "term" },
+      { term: "　张三　", category: "person" },
+    ]);
+    expect(terms.list()).toEqual([
+      { term: "张三", category: "person" },
+      { term: "PROJ", category: "term" },
+    ]);
+  });
+});
