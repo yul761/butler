@@ -60,6 +60,10 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 export class Scheduler {
   private chain: Promise<void> = Promise.resolve();
   private readonly running = new Set<string>();
+  /** 正在执行的任务（不管是调度还是手动触发的）。 */
+  private readonly inflight = new Map<string, Promise<void>>();
+  /** 已排队、等待轮到的手动任务。 */
+  private readonly queuedManual = new Map<string, Promise<void>>();
 
   constructor(private readonly d: SchedulerDeps) {}
 
@@ -73,11 +77,22 @@ export class Scheduler {
   }
 
   runNightlyNow(): Promise<void> {
-    return this.enqueue(() => this.runNightly(true));
+    return this.manual(JOB_NIGHTLY, () => this.runNightly(true));
   }
 
   runMorningNow(): Promise<void> {
-    return this.enqueue(() => this.runMorning());
+    return this.manual(JOB_MORNING, () => this.runMorning());
+  }
+
+  /** 同名任务正在跑或已排队：返回已有的 promise，不再排第二个（连点按钮不会重复运行）。 */
+  private manual(name: string, fn: () => Promise<void>): Promise<void> {
+    const existing = this.queuedManual.get(name) ?? this.inflight.get(name);
+    if (existing) return existing;
+    const p: Promise<void> = this.enqueue(fn).finally(() => {
+      if (this.queuedManual.get(name) === p) this.queuedManual.delete(name);
+    });
+    this.queuedManual.set(name, p);
+    return p;
   }
 
   private enqueue(fn: () => Promise<void>): Promise<void> {
@@ -118,7 +133,16 @@ export class Scheduler {
     );
   }
 
-  private async track(name: string, fn: () => Promise<void>, onError: (e: unknown) => void): Promise<void> {
+  private track(name: string, fn: () => Promise<void>, onError: (e: unknown) => void): Promise<void> {
+    const p = this.trackInner(name, fn, onError);
+    this.inflight.set(name, p);
+    void p.finally(() => {
+      if (this.inflight.get(name) === p) this.inflight.delete(name);
+    });
+    return p;
+  }
+
+  private async trackInner(name: string, fn: () => Promise<void>, onError: (e: unknown) => void): Promise<void> {
     this.running.add(name);
     this.d.onChange?.();
     try {

@@ -63,7 +63,7 @@ export const api = {
   setSetting: (key: EditableSettingKey, value: string) => call<void>(IPC.settingsSet, key, value),
   resetSetting: (key: EditableSettingKey) => call<void>(IPC.settingsReset, key),
   detectTrackerTools: () => call<McpProbe>(IPC.settingsDetectTrackerTools),
-  onNavigate: (cb: (route: { page: "home" }) => void) => window.butler.on(IPC.appNavigate, cb),
+  onNavigate: (cb: (route: { page: "home"; kind?: BriefKind }) => void) => window.butler.on(IPC.appNavigate, cb),
   onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),
   onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),
   onStateChanged: (cb: () => void) => window.butler.on(IPC.stateChanged, cb),

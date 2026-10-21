@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasDay, mergeTools, toggleDay, WEEK_ORDER } from "./settings-form";
+import { hasDay, mergeTools, probeIncomplete, toggleDay, WEEK_ORDER } from "./settings-form";
 
 describe("settings form helpers", () => {
   it("toggles working days and keeps them sorted", () => {
@@ -14,5 +14,11 @@ describe("settings form helpers", () => {
   it("merges picked tools into the list without duplicates", () => {
     expect(mergeTools("mcp__a__get\n", ["mcp__b__list", "mcp__a__get"])).toBe("mcp__a__get\nmcp__b__list");
     expect(mergeTools("", ["x"])).toBe("x");
+  });
+
+  it("flags a probe as incomplete while any server is still pending", () => {
+    expect(probeIncomplete({ servers: [{ status: "connected" }, { status: "pending" }] })).toBe(true);
+    expect(probeIncomplete({ servers: [{ status: "connected" }, { status: "needs-auth" }, { status: "failed" }] })).toBe(false);
+    expect(probeIncomplete({ servers: [] })).toBe(false);
   });
 });

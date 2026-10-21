@@ -173,6 +173,61 @@ describe("Scheduler", () => {
     expect(slots).toEqual([null]);
   });
 
+  it("two manual runs of the same job share one run (nightly and morning)", async () => {
+    let nightly = 0;
+    let morning = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const scheduler = new Scheduler({
+      jobs: new JobsRepo(memDb()), config: () => cfg, now: () => at(20, 17), userActive: () => true,
+      nightly: async () => {
+        nightly++;
+        await gate;
+        return "ok";
+      },
+      morning: async () => {
+        morning++;
+        await gate;
+      },
+    });
+    const a = scheduler.runNightlyNow();
+    const b = scheduler.runNightlyNow();
+    const c = scheduler.runMorningNow();
+    const d = scheduler.runMorningNow();
+    expect(b).toBe(a);
+    expect(d).toBe(c);
+    release();
+    await Promise.all([a, b, c, d]);
+    expect([nightly, morning]).toEqual([1, 1]);
+    // 跑完以后可以再手动跑一次。
+    await scheduler.runNightlyNow();
+    expect(nightly).toBe(2);
+  });
+
+  it("a manual run while the scheduled run is in flight joins it instead of starting another", async () => {
+    let nightly = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const jobs = new JobsRepo(memDb());
+    jobs.record(JOB_NIGHTLY, at(19, 16, 1), "ok", null);
+    const scheduler = new Scheduler({
+      jobs, config: () => cfg, now: () => at(20, 17), userActive: () => true,
+      nightly: async () => {
+        nightly++;
+        await gate;
+        return "ok";
+      },
+      morning: async () => undefined,
+    });
+    const scheduled = scheduler.check("tick");
+    await Promise.resolve();
+    expect(scheduler.isRunning(JOB_NIGHTLY)).toBe(true);
+    const manual = scheduler.runNightlyNow();
+    release();
+    await Promise.all([scheduled, manual]);
+    expect(nightly).toBe(1);
+  });
+
   it("records a synchronous throw from the jobs and keeps scheduling", async () => {
     const jobs = new JobsRepo(memDb());
     const boom = () => {

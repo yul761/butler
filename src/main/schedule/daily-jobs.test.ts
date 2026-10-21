@@ -52,6 +52,12 @@ describe("daily jobs", () => {
     expect(jobs.get(JOB_EVENING)).toMatchObject({ lastRunAt: 123, lastStatus: "ok" });
   });
 
+  it("nightly: no notification once the app is quitting", async () => {
+    const { d, calls } = deps({ aborted: () => true });
+    await nightlyJob(d);
+    expect(calls).toEqual(["runNightly", "evening"]);
+  });
+
   it("morning: a quick brief from current data first, then refresh and regenerate on working days", async () => {
     const { d, calls } = deps();
     await morningJob(d);

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { BriefKind } from "../../shared/brief";
 import type { OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
@@ -10,7 +11,7 @@ import { TicketPage } from "./components/TicketPage";
 import { UnclaimedPage } from "./components/UnclaimedPage";
 import { S } from "./strings";
 
-export type Route = { page: "home" } | { page: "ticket"; key: string } | { page: "unclaimed" } | { page: "settings" };
+export type Route = { page: "home"; kind?: BriefKind } | { page: "ticket"; key: string } | { page: "unclaimed" } | { page: "settings" };
 
 export function App() {
   const [route, setRoute] = useState<Route>({ page: "home" });
@@ -23,7 +24,16 @@ export function App() {
 
   useEffect(() => onError(setError), []);
   // 点击晚间小结的系统通知：回到简报。
-  useEffect(() => api.onNavigate(() => setRoute({ page: "home" })), []);
+  const [navNonce, setNavNonce] = useState(0);
+  useEffect(
+    () =>
+      api.onNavigate((r) => {
+        setRoute({ page: "home", kind: r.kind });
+        // 已经在简报页时也要切到通知对应的标签：换 key 让 BriefPage 重新挂载。
+        setNavNonce((n) => n + 1);
+      }),
+    [],
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -57,7 +67,7 @@ export function App() {
             <button onClick={() => setError(null)}>{S.close}</button>
           </div>
         )}
-        {route.page === "home" && <BriefPage tickets={tickets} onOpenTicket={openTicket} onUnclaimed={() => setRoute({ page: "unclaimed" })} />}
+        {route.page === "home" && <BriefPage key={navNonce} initialKind={route.kind} tickets={tickets} onOpenTicket={openTicket} onUnclaimed={() => setRoute({ page: "unclaimed" })} />}
         {route.page === "ticket" && current && (
           <TicketPage
             key={current.key}

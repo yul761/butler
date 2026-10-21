@@ -40,6 +40,8 @@ export interface IpcDeps {
   window: () => BrowserWindow | null;
   now: () => number;
   notify: () => void;
+  /** 退出已开始：后台任务的 IPC 直接返回。 */
+  aborted: () => boolean;
 }
 
 export function registerIpc(d: IpcDeps): void {
@@ -116,6 +118,7 @@ export function registerIpc(d: IpcDeps): void {
     refreshing: d.briefRefreshing(),
   }));
   handle(IPC.briefsRegenerate, async () => {
+    if (d.aborted()) return;
     await d.scheduler.runMorningNow();
     d.notify();
   });
@@ -141,6 +144,7 @@ export function registerIpc(d: IpcDeps): void {
     return outcome;
   });
   handle(IPC.jobsRunNightly, async () => {
+    if (d.aborted()) return;
     await d.scheduler.runNightlyNow();
     d.notify();
   });

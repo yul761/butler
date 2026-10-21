@@ -161,7 +161,7 @@ function showEveningNotification(brief: Brief): void {
   const n = new Notification({ title: N.eveningTitle, body: N.eveningBody(brief.evening.length) });
   n.on("click", () => {
     showWindow();
-    safeSend(IPC.appNavigate, { page: "home" });
+    safeSend(IPC.appNavigate, { page: "home", kind: "evening" });
   });
   n.show();
   lastNotification = n;
@@ -254,7 +254,10 @@ async function bootstrap(): Promise<void> {
       briefRefreshing = v;
       notify();
     },
+    aborted: () => headlessAbort.signal.aborted,
     onEvening: (brief) => {
+      // 退出开始后不再弹通知。
+      if (headlessAbort.signal.aborted) return;
       notify();
       showEveningNotification(brief);
     },
@@ -352,6 +355,7 @@ async function bootstrap(): Promise<void> {
     window: () => win,
     now: Date.now,
     notify,
+    aborted: () => headlessAbort.signal.aborted,
   });
 
   win = createWindow();

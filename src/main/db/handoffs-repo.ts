@@ -114,9 +114,9 @@ export class HandoffsRepo {
     return null;
   }
 
-  /** 最近一次读过 session 的 handoff（不算早间刷新）的时间；晚间批量据此判断有没有新活动。 */
+  /** 最近一次读过 session 的完整 handoff（不算早间刷新和不完整的）的时间；晚间批量据此判断有没有新活动。 */
   lastCapturedAt(ticketKey: string): number | null {
-    const r = this.db.prepare(`SELECT MAX(created_at) AS at FROM handoffs WHERE ticket_key = ? AND trigger != 'refresh'`).get(ticketKey) as
+    const r = this.db.prepare(`SELECT MAX(created_at) AS at FROM handoffs WHERE ticket_key = ? AND trigger != 'refresh' AND degraded = 0`).get(ticketKey) as
       | { at: number | null }
       | undefined;
     return r?.at ?? null;

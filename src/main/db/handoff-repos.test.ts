@@ -72,7 +72,8 @@ describe("HandoffsRepo", () => {
     expect(repo.get(b!)).toMatchObject({ degraded: true, rawText: "oops", sourceRef: "u1", payload: null });
     expect(repo.latest("PROJ-1")?.trigger).toBe("refresh");
     expect(repo.latestValid("PROJ-1")?.createdAt).toBe(400);
-    expect(repo.lastCapturedAt("PROJ-1")).toBe(200);
+    // 不完整的 /handoff（200）不算：否则它会让当天的晚间批量跳过这个 ticket。
+    expect(repo.lastCapturedAt("PROJ-1")).toBe(100);
     expect(repo.lastCapturedAt("NOPE-1")).toBeNull();
     expect(repo.listByTicket("PROJ-1").map((h) => h.createdAt)).toEqual([400, 200, 100]);
     expect(repo.listBetween(150, 400).map((h) => h.createdAt)).toEqual([200]);

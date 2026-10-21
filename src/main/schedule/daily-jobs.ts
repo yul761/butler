@@ -14,6 +14,8 @@ export interface DailyJobDeps {
   setRefreshing: (v: boolean) => void;
   /** 晚间小结生成后：弹系统通知。 */
   onEvening: (brief: Brief) => void;
+  /** 退出已开始：不再通知、不再发起新工作。 */
+  aborted?: () => boolean;
 }
 
 /** 晚间：批量 handoff → 晚间小结 → 系统通知。 */
@@ -24,7 +26,7 @@ export async function nightlyJob(d: DailyJobDeps, slot?: number | null): Promise
   d.jobs.record(JOB_EVENING, d.now(), "ok", null);
   // 只在有内容、且跑的是今天的晚间时刻时通知；补跑以前日期的时刻不弹，早间简报里会看到。
   const forToday = slot === undefined || slot === null || localDate(slot) === localDate(d.now());
-  if (brief.evening.length > 0 && forToday) d.onEvening(brief);
+  if (brief.evening.length > 0 && forToday && !d.aborted?.()) d.onEvening(brief);
   return batch.status;
 }
 

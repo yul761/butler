@@ -168,6 +168,7 @@ export const S = {
   detectTools: "从 Claude Code 检测",
   detecting: "检测中…",
   detectedTools: (n: number, s: number) => `检测到 ${n} 个 MCP 工具，其中 ${s} 个名字像查询（已默认勾选）；其余的不会默认加入，需要你自己勾选：`,
+  probeIncomplete: "部分服务仍在连接，检测结果可能不完整，可稍后重新检测",
   noDetectedTools: "没有检测到 MCP 工具。",
   addSelected: "加入选中的工具并保存",
   handoffPrompt: "handoff prompt 模板",

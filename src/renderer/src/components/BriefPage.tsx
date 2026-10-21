@@ -7,6 +7,8 @@ import { reportError } from "../errors";
 import { S } from "../strings";
 
 interface Props {
+  /** 从系统通知进来时要显示的标签。 */
+  initialKind?: BriefKind;
   tickets: TicketView[];
   onOpenTicket: (key: string, req?: OpenSessionRequest) => void;
   onUnclaimed: () => void;
@@ -14,8 +16,8 @@ interface Props {
 
 const MARK = { done: "done", snooze: "snoozed", ignore: "ignored" } as const;
 
-export function BriefPage({ tickets, onOpenTicket, onUnclaimed }: Props) {
-  const [kind, setKind] = useState<BriefKind>("morning");
+export function BriefPage({ initialKind, tickets, onOpenTicket, onUnclaimed }: Props) {
+  const [kind, setKind] = useState<BriefKind>(initialKind ?? "morning");
   const [view, setView] = useState<BriefView | null>(null);
   const [busy, setBusy] = useState(false);
 

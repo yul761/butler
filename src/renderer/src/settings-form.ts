@@ -25,3 +25,8 @@ export function mergeTools(current: string, picked: string[]): string {
   for (const t of picked) if (!lines.includes(t)) lines.push(t);
   return lines.join("\n");
 }
+
+/** 检测结果里还有 server 在连接中（status=pending）：工具列表可能不完整。 */
+export function probeIncomplete(probe: { servers: { status: string }[] }): boolean {
+  return probe.servers.some((s) => s.status === "pending");
+}

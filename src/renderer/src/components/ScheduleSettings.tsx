@@ -3,7 +3,7 @@ import type { EditableSettingKey, EditableSettings } from "../../../shared/setti
 import type { McpProbe } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
-import { hasDay, mergeTools, toggleDay, WEEK_ORDER } from "../settings-form";
+import { hasDay, mergeTools, probeIncomplete, toggleDay, WEEK_ORDER } from "../settings-form";
 import { S } from "../strings";
 
 const THRESHOLDS = ["blockedDays", "reviewWaitDays", "staleDays"] as const;
@@ -15,7 +15,8 @@ export function ScheduleSettings() {
   const [error, setError] = useState<string | null>(null);
   const [probe, setProbe] = useState<McpProbe | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
-  const [busy, setBusy] = useState<"detect" | "nightly" | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [nightlyBusy, setNightlyBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -75,7 +76,7 @@ export function ScheduleSettings() {
   }
 
   async function detect() {
-    setBusy("detect");
+    setDetecting(true);
     setError(null);
     try {
       const p = await api.detectTrackerTools();
@@ -84,18 +85,18 @@ export function ScheduleSettings() {
     } catch (e) {
       reportError(e);
     } finally {
-      setBusy(null);
+      setDetecting(false);
     }
   }
 
   async function runNightly() {
-    setBusy("nightly");
+    setNightlyBusy(true);
     try {
       await api.runNightly();
     } catch (e) {
       reportError(e);
     } finally {
-      setBusy(null);
+      setNightlyBusy(false);
     }
   }
 
@@ -142,8 +143,9 @@ export function ScheduleSettings() {
         <p className="muted">{S.trackerHint}</p>
         <div className="actions">
           <button onClick={() => void save("trackerTools")}>{S.save}</button>
-          <button disabled={busy === "detect"} onClick={() => void detect()}>{busy === "detect" ? S.detecting : S.detectTools}</button>
+          <button disabled={detecting} onClick={() => void detect()}>{detecting ? S.detecting : S.detectTools}</button>
         </div>
+        {probe && probeIncomplete(probe) && <p className="muted">{S.probeIncomplete}</p>}
         {probe && probe.tools.length === 0 && <p className="muted">{S.noDetectedTools}</p>}
         {probe && probe.tools.length > 0 && (
           <div className="probe">
@@ -175,7 +177,7 @@ export function ScheduleSettings() {
       ))}
 
       <div className="actions">
-        <button disabled={busy === "nightly"} onClick={() => void runNightly()}>{busy === "nightly" ? S.nightlyRunning : S.runNightlyNow}</button>
+        <button disabled={nightlyBusy} onClick={() => void runNightly()}>{nightlyBusy ? S.nightlyRunning : S.runNightlyNow}</button>
       </div>
     </section>
   );
