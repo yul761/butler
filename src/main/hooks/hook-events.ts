@@ -1,4 +1,4 @@
-import type { HookEnvelope } from "../../shared/hook-envelope";
+import { isHeadlessEnvelope, type HookEnvelope } from "../../shared/hook-envelope";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { normalizePromptText, type TranscriptState } from "../sessions/discovery";
@@ -27,6 +27,8 @@ export function applyHookEnvelope(
   env: HookEnvelope,
   deps: { sessions: SessionsRepo; tickets: TicketsRepo; transcriptState?: (sessionId: string) => TranscriptState },
 ): HookEffect {
+  // 晚间 handoff、早间刷新、MCP 探测这些 Butler 自己的 claude 进程也会触发用户级 hook，全部忽略。
+  if (isHeadlessEnvelope(env)) return { kind: "ignored", reason: "headless" };
   const p = (env.payload && typeof env.payload === "object" ? env.payload : {}) as HookPayload;
   const event = str(p.hook_event_name);
   const id = str(p.session_id);

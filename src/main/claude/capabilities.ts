@@ -11,6 +11,9 @@ export const REQUIRED_FLAGS = [
   "--output-format",
   "--json-schema",
   "--allowedTools",
+  "--disallowedTools",
+  "--no-session-persistence",
+  "--permission-mode",
 ] as const;
 
 export function parseVersion(out: string): string | null {

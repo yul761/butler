@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Ticket } from "../../shared/types";
+import { syncDiscovered } from "../sessions/discovery";
 import { memDb } from "../test-utils";
 import { migrate } from "./database";
 import { MIGRATIONS } from "./migrations";
@@ -45,6 +46,14 @@ describe("SessionsRepo", () => {
     new TicketsRepo(db).insert(ticket("PROJ-1"));
     return new SessionsRepo(db);
   };
+
+  it("recordHeadless hides Butler's own headless sessions from unclaimed, even after a disk scan", () => {
+    const repo = setup();
+    repo.recordHeadless("h1", "/w", 100);
+    expect(repo.get("h1")).toMatchObject({ dismissed: true, ticketKey: null });
+    syncDiscovered([{ id: "h1", cwd: "/w", gitBranch: "main", firstPrompt: "x", lastActivityAt: 100 }], repo, 100);
+    expect(repo.listUnclaimed(0)).toEqual([]);
+  });
 
   it("insertIfAbsent only inserts once", () => {
     const repo = setup();

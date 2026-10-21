@@ -10,6 +10,9 @@ const HELP = `
   --output-format <format>              Output format
   --json-schema <schema>                JSON Schema for structured output
   --allowedTools, --allowed-tools <tools...>
+  --disallowedTools, --disallowed-tools <tools...>
+  --no-session-persistence              Disable session persistence
+  --permission-mode <mode>              Permission mode to use for the session
 `;
 
 describe("capabilities", () => {

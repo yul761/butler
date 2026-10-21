@@ -149,6 +149,12 @@ export class SessionsRepo {
     if (this.forgotten.size > FORGOTTEN_LIMIT) this.forgotten.delete(this.forgotten.values().next().value as string);
   }
 
+  /** Butler 自己的 headless 运行产生的 session：记成已忽略，磁盘扫描永远不会把它列进“未认领”。 */
+  recordHeadless(id: string, cwd: string, at: number): void {
+    this.insertIfAbsent({ id, ticketKey: null, cwd, origin: "discovered", lastActivityAt: at, createdAt: at });
+    this.dismiss(id);
+  }
+
   /** 沿 replaced_by 链走到最新的 session（/clear、compact 会产生新 id）。 */
   head(id: string): Session | null {
     let cur = this.get(id);

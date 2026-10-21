@@ -157,4 +157,12 @@ describe("applyHookEnvelope", () => {
     applyHookEnvelope(env("UserPromptSubmit", "d1", { ticket: "PROJ-1", butlerSession: "d1" }), deps);
     expect(sessions.get("d1")?.origin).toBe("butler");
   });
+
+  it("ignores every event from Butler's own headless runs", () => {
+    const { sessions, deps } = setup();
+    for (const ev of ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"]) {
+      expect(applyHookEnvelope(env(ev, "h1", { butlerSession: "headless:run-1" }, { source: "fork" }), deps)).toEqual({ kind: "ignored", reason: "headless" });
+    }
+    expect(sessions.get("h1")).toBeNull();
+  });
 });

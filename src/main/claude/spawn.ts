@@ -1,3 +1,4 @@
+import { HEADLESS_SESSION_PREFIX } from "../../shared/hook-envelope";
 import { pathKey } from "../util/env";
 
 export interface SpawnSpec {
@@ -35,20 +36,33 @@ const PARENT_SESSION_VARS = new Set([
   "CLAUDE_PID",
 ]);
 
-/** 去掉 Electron 和外层 Claude Code 的标记变量，防止它们泄漏给被启动的 claude。 */
+/** 去掉 Electron 和外层 Claude Code 的标记变量（以及 Butler 自己的标记），换上登录 shell 的 PATH。 */
+function cleanEnv(base: NodeJS.ProcessEnv, pathValue: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(base)) {
+    if (v === undefined || k.startsWith("ELECTRON_") || PARENT_SESSION_VARS.has(k) || k === "BUTLER_TICKET" || k === "BUTLER_SESSION") continue;
+    out[k] = v;
+  }
+  if (pathValue) out[pathKey(out)] = pathValue;
+  return out;
+}
+
+/** 交互式终端里的 claude：挂上 ticket 和启动时的 session id。 */
 export function sessionEnv(
   base: NodeJS.ProcessEnv,
   x: { pathValue: string; ticketKey: string; sessionId: string },
 ): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(base)) {
-    if (v === undefined || k.startsWith("ELECTRON_") || PARENT_SESSION_VARS.has(k)) continue;
-    out[k] = v;
-  }
-  if (x.pathValue) out[pathKey(out)] = x.pathValue;
+  const out = cleanEnv(base, x.pathValue);
   out.TERM = "xterm-256color";
   out.COLORTERM = "truecolor";
   out.BUTLER_TICKET = x.ticketKey;
   out.BUTLER_SESSION = x.sessionId;
+  return out;
+}
+
+/** headless claude（handoff、刷新、MCP 探测）：不挂 ticket；BUTLER_SESSION 带 headless: 前缀，hook 上报会被整体忽略。 */
+export function headlessEnv(base: NodeJS.ProcessEnv, x: { pathValue: string; runId: string }): Record<string, string> {
+  const out = cleanEnv(base, x.pathValue);
+  out.BUTLER_SESSION = `${HEADLESS_SESSION_PREFIX}${x.runId}`;
   return out;
 }

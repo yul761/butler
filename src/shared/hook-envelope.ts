@@ -29,3 +29,10 @@ export function parseEnvelope(text: string): HookEnvelope | null {
     ...(typeof v.raw === "string" ? { raw: v.raw } : {}),
   };
 }
+
+/** Butler 自己启动的 headless claude 用这个前缀作 BUTLER_SESSION；它们的 hook 上报全部忽略。 */
+export const HEADLESS_SESSION_PREFIX = "headless:";
+
+export function isHeadlessEnvelope(env: HookEnvelope): boolean {
+  return env.butlerSession?.startsWith(HEADLESS_SESSION_PREFIX) ?? false;
+}

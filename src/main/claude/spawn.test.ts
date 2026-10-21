@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeArgs, sessionEnv, spawnSpec } from "./spawn";
+import { claudeArgs, headlessEnv, sessionEnv, spawnSpec } from "./spawn";
 
 describe("claude spawn helpers", () => {
   it("builds new and resume args", () => {
@@ -45,5 +45,13 @@ describe("claude spawn helpers", () => {
 
   it("keeps the inherited PATH when the login PATH is empty", () => {
     expect(sessionEnv({ PATH: "/usr/bin" }, { pathValue: "", ticketKey: "T-1", sessionId: "u" }).PATH).toBe("/usr/bin");
+  });
+
+  it("builds a headless env: no ticket, a headless session marker, parent markers dropped", () => {
+    const env = headlessEnv(
+      { PATH: "/usr/bin", BUTLER_TICKET: "OLD-1", BUTLER_SESSION: "x", CLAUDECODE: "1", ELECTRON_RUN_AS_NODE: "1", HOME: "/h" },
+      { pathValue: "/login/bin", runId: "r1" },
+    );
+    expect(env).toEqual({ PATH: "/login/bin", HOME: "/h", BUTLER_SESSION: "headless:r1" });
   });
 });
