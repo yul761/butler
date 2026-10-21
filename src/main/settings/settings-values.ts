@@ -1,3 +1,4 @@
+import { PRIVACY_LEVELS, TERM_CATEGORIES, type PrivacyLevel, type SensitiveTerm, type TermCategory } from "../../shared/llm";
 import type { EditableSettingKey } from "../../shared/settings";
 import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
 
@@ -64,6 +65,91 @@ export function normalizeFlag(value: string): string {
   return t;
 }
 
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+
+/** URL.hostname 是不是本机（Ollama 之类的本地服务可以用 http、可以不配 key）。 */
+export function isLoopbackHost(hostname: string): boolean {
+  return LOOPBACK_HOSTS.has(hostname.toLowerCase());
+}
+
+/** OpenAI 兼容接口的 base URL：https（本机可以 http），不带账号、查询串和 #；去掉末尾的 / 和 /chat/completions。 */
+export function normalizeBaseUrl(v: string): string {
+  const t = v.trim();
+  if (!t) return "";
+  let u: URL;
+  try {
+    u = new URL(t);
+  } catch {
+    throw new SettingError("base URL 格式不对，例如 https://api.deepseek.com/v1");
+  }
+  if (u.username || u.password) throw new SettingError("base URL 里不能带用户名或密码");
+  if (u.search || u.hash) throw new SettingError("base URL 不能带 ? 或 # 部分");
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && isLoopbackHost(u.hostname))) {
+    throw new SettingError("base URL 必须是 https://（本机服务如 Ollama 可以用 http://localhost）");
+  }
+  const path = u.pathname.replace(/\/+$/, "").replace(/\/chat\/completions$/, "");
+  return `${u.protocol}//${u.host}${path}`;
+}
+
+export interface PriceRule {
+  /** 模型名，* 匹配任意字符，不区分大小写。 */
+  pattern: string;
+  /** 美元 / 百万 token。 */
+  inputPerMTok: number;
+  outputPerMTok: number;
+}
+
+const PRICE_NUM = /^\d{1,6}(\.\d{1,6})?$/;
+const PRICE_MODEL = /^[A-Za-z0-9._:/@*+-]{1,200}$/;
+
+/** 每行“模型 输入价 输出价”；空行和 # 开头的行忽略。格式不对时抛 SettingError（指出第几行）。 */
+export function parsePriceTable(v: string): PriceRule[] {
+  const rules: PriceRule[] = [];
+  v.split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) return;
+    const parts = line.split(/\s+/);
+    if (parts.length !== 3 || !PRICE_MODEL.test(parts[0]) || !PRICE_NUM.test(parts[1]) || !PRICE_NUM.test(parts[2])) {
+      throw new SettingError(`价格表第 ${i + 1} 行格式不对，应为“模型 输入价 输出价”（美元 / 百万 token），例如 deepseek-chat 0.27 1.1`);
+    }
+    rules.push({ pattern: parts[0], inputPerMTok: Number(parts[1]), outputPerMTok: Number(parts[2]) });
+  });
+  return rules;
+}
+
+const globToRegExp = (pattern: string): RegExp =>
+  new RegExp(`^${pattern.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`, "i");
+
+/** 从上往下第一条匹配的价格；没有匹配时为 null（不会调用）。 */
+export function priceFor(rules: readonly PriceRule[], model: string): PriceRule | null {
+  return rules.find((r) => globToRegExp(r.pattern).test(model)) ?? null;
+}
+
+export const TERMS_LIMIT = 500;
+
+/** 设置页提交的敏感词表：NFKC、压缩空白、去掉空项和只差大小写的重复项；太短、太长、太多或格式不对时抛 SettingError。 */
+export function normalizeTerms(input: unknown): SensitiveTerm[] {
+  if (!Array.isArray(input)) throw new SettingError("敏感词表格式不对");
+  const out: SensitiveTerm[] = [];
+  const seen = new Set<string>();
+  for (const x of input) {
+    const o = x as { term?: unknown; category?: unknown } | null;
+    if (!o || typeof o.term !== "string" || !(TERM_CATEGORIES as readonly string[]).includes(String(o.category))) {
+      throw new SettingError("敏感词表格式不对");
+    }
+    const term = o.term.normalize("NFKC").replace(/\s+/g, " ").trim();
+    if (!term) continue;
+    if ([...term].length < 2) throw new SettingError(`敏感词至少两个字：${term}`);
+    if (term.length > 100) throw new SettingError(`敏感词太长（上限 100 字）：${term.slice(0, 20)}…`);
+    const k = term.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ term, category: o.category as TermCategory });
+  }
+  if (out.length > TERMS_LIMIT) throw new SettingError(`敏感词最多 ${TERMS_LIMIT} 个`);
+  return out;
+}
+
 /** 渲染进程提交的设置值：规范化后返回，不合法时抛 SettingError（界面显示 message）。 */
 export function normalizeSetting(key: EditableSettingKey, value: string): string {
   switch (key) {
@@ -95,6 +181,33 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!value.trim()) throw new SettingError("prompt 模板不能为空");
       if (value.length > 20_000) throw new SettingError("prompt 模板太长（上限 20000 字）");
       return value;
+    case "llmLevel": {
+      const t = value.trim();
+      if (!(PRIVACY_LEVELS as readonly string[]).includes(t)) throw new SettingError("隐私档位只能是 off、metadata、redacted、full");
+      return t;
+    }
+    case "llmBaseUrl":
+      return normalizeBaseUrl(value);
+    case "llmModel": {
+      const t = value.trim();
+      // eslint-disable-next-line no-control-regex
+      if (t && !/^[^\s\u0000-\u001f\u007f]{1,200}$/.test(t)) throw new SettingError("模型名不能有空格，最长 200 字，例如 deepseek-chat");
+      return t;
+    }
+    case "llmMonthlyBudgetUsd": {
+      const t = value.trim();
+      if (!/^\d{1,6}(\.\d{1,2})?$/.test(t)) throw new SettingError("预算是美元金额，例如 1 或 2.50");
+      return String(Number(t));
+    }
+    case "llmPrices":
+      return parsePriceTable(value).map((r) => `${r.pattern} ${r.inputPerMTok} ${r.outputPerMTok}`).join("\n");
+    case "llmConfirm":
+      return normalizeFlag(value);
+    case "auditRetentionDays": {
+      const t = value.trim();
+      if (!/^\d{1,4}$/.test(t) || Number(t) < 1 || Number(t) > 3650) throw new SettingError("保留天数是 1–3650 的整数");
+      return String(Number(t));
+    }
     default: {
       // IPC 层已经用 isEditableSetting 拦过；这里再兜一次，免得以后新增的调用方绕过。
       const unknown: never = key;
@@ -123,4 +236,40 @@ export function thresholds(s: SettingsRepo): Thresholds {
 export function trackerTools(s: SettingsRepo): string[] {
   // 读取时再过滤一次：存储的值损坏或被改过，也不会把任意 flag / 工具带进 --allowedTools。
   return parseToolList(s.get("trackerTools")).filter((t) => TRACKER_TOOL_RE.test(t));
+}
+
+export interface LlmConfig {
+  level: PrivacyLevel;
+  /** 规范化后的 base URL；没配置或存储的值不合法时为 ""。 */
+  baseUrl: string;
+  model: string;
+  budgetUsd: number;
+  prices: PriceRule[];
+  confirm: boolean;
+  retentionDays: number;
+}
+
+function safely<T>(f: () => T, fallback: T): T {
+  try {
+    return f();
+  } catch {
+    return fallback;
+  }
+}
+
+/** 读取时一律往保守方向回退：档位坏了当作 off，价格表坏了当作空（不会调用），预算坏了当作 0。 */
+export function llmConfig(s: SettingsRepo): LlmConfig {
+  const level = s.get("llmLevel");
+  const baseUrl = safely(() => normalizeBaseUrl(s.get("llmBaseUrl")), "");
+  const prices = safely(() => parsePriceTable(s.get("llmPrices")), []);
+  const budget = Number(s.get("llmMonthlyBudgetUsd"));
+  return {
+    level: (PRIVACY_LEVELS as readonly string[]).includes(level) ? (level as PrivacyLevel) : "off",
+    baseUrl,
+    model: s.get("llmModel").trim(),
+    budgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : 0,
+    prices,
+    confirm: s.get("llmConfirm") === "1",
+    retentionDays: parseDays(s.get("auditRetentionDays"), 90) || 90,
+  };
 }

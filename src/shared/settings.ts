@@ -9,6 +9,13 @@ export const EDITABLE_SETTINGS = [
   "staleDays",
   "handoffPrompt",
   "refreshPrompt",
+  "llmLevel",
+  "llmBaseUrl",
+  "llmModel",
+  "llmMonthlyBudgetUsd",
+  "llmPrices",
+  "llmConfirm",
+  "auditRetentionDays",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { EditableSettingKey } from "../../shared/settings";
 import { SettingsRepo } from "../db/settings-repo";
 import { memDb } from "../test-utils";
-import { normalizeFlag, normalizeSetting, parseDays, parseTime, parseToolList, parseWorkingDays, scheduleConfig, SettingError, thresholds, trackerTools } from "./settings-values";
+import {
+  isLoopbackHost, llmConfig, normalizeBaseUrl, normalizeFlag, normalizeSetting, normalizeTerms, parseDays, parsePriceTable, parseTime, parseToolList,
+  parseWorkingDays, priceFor, scheduleConfig, SettingError, TERMS_LIMIT, thresholds, trackerTools,
+} from "./settings-values";
 
 describe("settings values", () => {
   it("parses times, working days, day counts and tool lists", () => {
@@ -73,5 +76,81 @@ describe("settings values", () => {
     expect(normalizeFlag(" 1 ")).toBe("1");
     expect(normalizeFlag("0")).toBe("0");
     expect(() => normalizeFlag("yes")).toThrow(SettingError);
+  });
+});
+
+describe("personal API settings", () => {
+  it("accepts https base URLs, or http only for this machine, and trims the chat path", () => {
+    expect(normalizeBaseUrl(" https://api.deepseek.com/v1/ ")).toBe("https://api.deepseek.com/v1");
+    expect(normalizeBaseUrl("https://openrouter.ai/api/v1/chat/completions")).toBe("https://openrouter.ai/api/v1");
+    expect(normalizeBaseUrl("http://localhost:11434/v1")).toBe("http://localhost:11434/v1");
+    expect(normalizeBaseUrl("http://127.0.0.1:8080")).toBe("http://127.0.0.1:8080");
+    expect(normalizeBaseUrl("http://[::1]:9/v1")).toBe("http://[::1]:9/v1");
+    expect(normalizeBaseUrl("")).toBe("");
+    for (const bad of ["http://api.example.com/v1", "https://u:p@api.example.com", "https://api.example.com/v1?key=1", "ftp://x", "not a url"]) {
+      expect(() => normalizeBaseUrl(bad), bad).toThrow(SettingError);
+    }
+    expect(isLoopbackHost("[::1]")).toBe(true);
+    expect(isLoopbackHost("localhost.evil.com")).toBe(false);
+  });
+
+  it("parses the price table and matches models with * globs, first match wins", () => {
+    const rules = parsePriceTable("# 注释\ndeepseek-* 0.27 1.1\n\ngpt-4.1 2 8\n* 15 75\n");
+    expect(rules).toEqual([
+      { pattern: "deepseek-*", inputPerMTok: 0.27, outputPerMTok: 1.1 },
+      { pattern: "gpt-4.1", inputPerMTok: 2, outputPerMTok: 8 },
+      { pattern: "*", inputPerMTok: 15, outputPerMTok: 75 },
+    ]);
+    expect(priceFor(rules, "DeepSeek-Chat")?.inputPerMTok).toBe(0.27);
+    expect(priceFor(rules, "gpt-4.1")?.inputPerMTok).toBe(2);
+    expect(priceFor(rules, "gpt-421")?.pattern).toBe("*");
+    expect(priceFor(rules.slice(0, 2), "llama3")).toBeNull();
+    for (const bad of ["gpt 1", "gpt one 2", "gpt 1 2 3", "gpt -1 2"]) expect(() => parsePriceTable(bad), bad).toThrow(SettingError);
+  });
+
+  it("normalizes and validates the personal API settings", () => {
+    expect(normalizeSetting("llmLevel", " redacted ")).toBe("redacted");
+    expect(() => normalizeSetting("llmLevel", "secret")).toThrow(SettingError);
+    expect(normalizeSetting("llmModel", " deepseek-chat ")).toBe("deepseek-chat");
+    expect(normalizeSetting("llmModel", "")).toBe("");
+    expect(() => normalizeSetting("llmModel", "deep seek")).toThrow(SettingError);
+    expect(normalizeSetting("llmMonthlyBudgetUsd", "2.50")).toBe("2.5");
+    expect(() => normalizeSetting("llmMonthlyBudgetUsd", "-1")).toThrow(SettingError);
+    expect(normalizeSetting("llmPrices", "# x\ngpt-4o-mini  0.15   0.6")).toBe("gpt-4o-mini 0.15 0.6");
+    expect(normalizeSetting("llmPrices", "")).toBe("");
+    expect(normalizeSetting("llmConfirm", "1")).toBe("1");
+    expect(normalizeSetting("auditRetentionDays", "30")).toBe("30");
+    expect(() => normalizeSetting("auditRetentionDays", "0")).toThrow(SettingError);
+    expect(normalizeSetting("llmBaseUrl", "https://api.deepseek.com/v1/")).toBe("https://api.deepseek.com/v1");
+  });
+
+  it("reads the config with safe fallbacks for corrupt stored values", () => {
+    const s = new SettingsRepo(memDb());
+    expect(llmConfig(s)).toEqual({
+      level: "metadata", baseUrl: "", model: "", budgetUsd: 1,
+      prices: [{ pattern: "*", inputPerMTok: 15, outputPerMTok: 75 }], confirm: false, retentionDays: 90,
+    });
+    s.set("llmLevel", "everything");
+    s.set("llmBaseUrl", "http://api.example.com");
+    s.set("llmPrices", "garbage");
+    s.set("llmMonthlyBudgetUsd", "lots");
+    s.set("auditRetentionDays", "0");
+    expect(llmConfig(s)).toMatchObject({ level: "off", baseUrl: "", prices: [], budgetUsd: 0, retentionDays: 90 });
+  });
+
+  it("normalizes the sensitive term list", () => {
+    expect(
+      normalizeTerms([
+        { term: " 张三 ", category: "person" },
+        { term: "Ｐｒｏｊｅｃｔ  Falcon", category: "term" },
+        { term: "project falcon", category: "term" },
+        { term: "  ", category: "term" },
+      ]),
+    ).toEqual([{ term: "张三", category: "person" }, { term: "Project Falcon", category: "term" }]);
+    expect(() => normalizeTerms([{ term: "王", category: "person" }])).toThrow(SettingError);
+    expect(() => normalizeTerms([{ term: "x".repeat(101), category: "term" }])).toThrow(SettingError);
+    expect(() => normalizeTerms([{ term: "ab", category: "boss" }])).toThrow(SettingError);
+    expect(() => normalizeTerms("张三")).toThrow(SettingError);
+    expect(() => normalizeTerms(Array.from({ length: TERMS_LIMIT + 1 }, (_, i) => ({ term: `词${i}号`, category: "term" })))).toThrow(SettingError);
   });
 });

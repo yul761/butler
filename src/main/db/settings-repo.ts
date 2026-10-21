@@ -18,6 +18,22 @@ export const SETTING_DEFAULTS = {
   staleDays: "5",
   handoffPrompt: DEFAULT_HANDOFF_PROMPT,
   refreshPrompt: DEFAULT_REFRESH_PROMPT,
+  /** 个人 API 的隐私档位：off | metadata | redacted | full（设计文档 7.3，默认 metadata）。 */
+  llmLevel: "metadata",
+  /** OpenAI 兼容接口的 base URL，例如 https://api.deepseek.com/v1。空表示没有配置（等同 off）。 */
+  llmBaseUrl: "",
+  llmModel: "",
+  /** 每月预算（美元）。 */
+  llmMonthlyBudgetUsd: "1",
+  /**
+   * 价格表：每行“模型（可用 * 通配） 输入价 输出价”，单位是美元 / 百万 token，从上往下第一条匹配的生效。
+   * 默认把任何模型都按很贵的价格算：宁可少调用，也不超支。
+   */
+  llmPrices: "* 15 75",
+  /** 发送前确认：1 开 0 关。 */
+  llmConfirm: "0",
+  /** 审计记录保留天数（设计文档 7.7，默认 90）。 */
+  auditRetentionDays: "90",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
