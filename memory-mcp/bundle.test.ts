@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -24,6 +25,13 @@ interface Reply {
 async function connect(command: string, args: string[], env: NodeJS.ProcessEnv) {
   const child = spawn(command, args, { env, stdio: ["pipe", "pipe", "pipe"] });
   const waiting = new Map<number, (r: Reply) => void>();
+  // 启动失败（如 ENOENT）时让等待中的调用带着真正的原因失败，而不是变成未处理异常、再等到超时。
+  let spawnError: Error | null = null;
+  const failers = new Set<(e: Error) => void>();
+  child.on("error", (e) => {
+    spawnError = new Error(`cannot start ${command}: ${e.message}`);
+    for (const fail of failers) fail(spawnError);
+  });
   let buf = "";
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (c: string) => {
@@ -39,10 +47,18 @@ async function connect(command: string, args: string[], env: NodeJS.ProcessEnv) 
   let nextId = 0;
   const call = (method: string, params?: unknown) =>
     new Promise<Reply>((resolve, reject) => {
+      if (spawnError) return reject(spawnError);
       const id = nextId++;
-      const timer = setTimeout(() => reject(new Error(`${method} timed out`)), 20_000);
+      const fail = (e: Error) => {
+        clearTimeout(timer);
+        failers.delete(fail);
+        reject(e);
+      };
+      const timer = setTimeout(() => fail(new Error(`${method} timed out`)), 20_000);
+      failers.add(fail);
       waiting.set(id, (r) => {
         clearTimeout(timer);
+        failers.delete(fail);
         resolve(r);
       });
       child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
@@ -65,8 +81,21 @@ const CLOSED_PORT_URLS = { MODEL_BASE_URL: CLOSED_PORT, OPENAI_BASE_URL: CLOSED_
 /** 用跑测试的 Node 直接启动 bundle。 */
 const open = (env: NodeJS.ProcessEnv, dataDir: string) => connect(process.execPath, [bundle, "--data", dataDir], env);
 
-/** 本仓库装的 Electron 可执行文件（和 `require("electron")` 在 Node 里返回的路径一样）。 */
-const electronBinary = (): string => execFileSync(process.execPath, ["-p", 'require("electron")'], { cwd: root, encoding: "utf8" }).trim();
+/**
+ * 本仓库装的 Electron 可执行文件（和 `require("electron")` 在 Node 里返回的路径一样）。
+ * Electron 44 没有 postinstall：二进制在第一次 require("electron") 时才下载，下载日志还会混进 stdout。
+ * 所以这里不 require，只按 electron/index.js 的规则（path.txt + dist/）找；没下载就直接说清楚。
+ * CI 在 pnpm install 之后跑 `pnpm exec install-electron`。
+ */
+const electronBinary = (): string => {
+  const pkg = join(root, "node_modules", "electron"); // pnpm 把直接依赖链接在这里
+  const pathFile = join(pkg, "path.txt");
+  const bin = existsSync(pathFile) ? join(pkg, "dist", readFileSync(pathFile, "utf8")) : "";
+  if (!bin || !existsSync(bin)) {
+    throw new Error(`Electron binary is not downloaded (${bin || pathFile} missing): run \`pnpm exec install-electron\` first`);
+  }
+  return bin;
+};
 
 describe("bundled StateCore MCP (design 8.4)", () => {
   it("serves StateCore's tools in the scope from STATECORE_SCOPE, and Butler reads what it wrote", async () => {
@@ -104,9 +133,10 @@ describe("bundled StateCore MCP (design 8.4)", () => {
     // claude 启动 MCP server 时：command/args 取自配置文件，环境变量 = claude 自己的环境 + 配置里的 env。
     // 这里 claude 的环境里带着用户 shell 导出的各种 key，base URL 全部指向本机一个记录请求的假服务器：
     // 清理一旦失效，这里就会收到请求（绝不会到真实的服务商）。
+    const electron = electronBinary();
     const recorder = await startFakeProvider();
     const statecoreDir = tempDir();
-    const spec = memoryServers({ launcher: { command: electronBinary(), script: bundle }, statecoreDir, ticketKey: "T-3" })["butler-memory"];
+    const spec = memoryServers({ launcher: { command: electron, script: bundle }, statecoreDir, ticketKey: "T-3" })["butler-memory"];
     const claudeEnv: NodeJS.ProcessEnv = {
       ...process.env,
       FEATURE_LLM: "true", STATECORE_DIGEST_THRESHOLD: "1",

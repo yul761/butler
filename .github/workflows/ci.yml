@@ -32,6 +32,10 @@ jobs:
           cache: pnpm
       - name: Install (rebuilds node-pty for Electron)
         run: pnpm install --frozen-lockfile
+      # Electron 44 has no postinstall: the binary is downloaded on the first require("electron"). Download it here so
+      # the memory MCP test (R1, launched under Electron) and the E2E tests never download it mid-run.
+      - name: Download the Electron binary
+        run: pnpm exec install-electron
       - run: pnpm typecheck
       - name: Lint (includes the egress rules, design 7.1)
         run: pnpm lint
