@@ -20,6 +20,17 @@ export async function readLoginShellPath(platform: NodeJS.Platform, env: NodeJS.
   }
 }
 
+/** PATH 里只保留绝对目录（去掉 Windows 条目两边的引号）：相对目录等于“当前目录”，仓库里的人能往里放同名程序。 */
+export function absolutePathEntries(pathValue: string, platform: NodeJS.Platform): string {
+  const sep = platform === "win32" ? ";" : ":";
+  const p = platform === "win32" ? path.win32 : path.posix;
+  return pathValue
+    .split(sep)
+    .map((d) => d.trim().replace(/^"(.*)"$/, "$1"))
+    .filter((d) => d && p.isAbsolute(d))
+    .join(sep);
+}
+
 export function findOnPath(
   name: string,
   pathValue: string,

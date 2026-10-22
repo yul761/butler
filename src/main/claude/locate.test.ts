@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findOnPath, locateClaude, readLoginShellPath } from "./locate";
+import { absolutePathEntries, findOnPath, locateClaude, readLoginShellPath } from "./locate";
 
 describe("readLoginShellPath", () => {
   it("extracts PATH between markers, ignoring shell noise", async () => {
@@ -32,5 +32,12 @@ describe("findOnPath / locateClaude", () => {
   it("uses an existing override and rejects a missing one", () => {
     expect(locateClaude({ override: "/x/claude", pathValue: "", platform: "darwin", exists: () => true })).toBe("/x/claude");
     expect(locateClaude({ override: "/x/claude", pathValue: "/opt/bin", platform: "darwin", exists: () => false })).toBeNull();
+  });
+});
+
+describe("absolutePathEntries", () => {
+  it("drops relative and empty PATH entries and unquotes Windows entries", () => {
+    expect(absolutePathEntries(".:/usr/bin::bin:/opt/x", "darwin")).toBe("/usr/bin:/opt/x");
+    expect(absolutePathEntries('.;"C:\\Program Files\\Git\\cmd";bin;;D:\\tools', "win32")).toBe("C:\\Program Files\\Git\\cmd;D:\\tools");
   });
 });

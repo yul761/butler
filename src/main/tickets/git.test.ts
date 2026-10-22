@@ -1,5 +1,9 @@
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { GIT_SUMMARY_LIMIT, GitError, gitEnv, gitErrorSummary } from "./git";
+import { tempDir } from "../test-utils";
+import { setGitBinary } from "../util/git-path";
+import { git, GIT_SUMMARY_LIMIT, GitError, gitEnv, gitErrorSummary } from "./git";
 
 describe("git helpers", () => {
   it("only switches git messages to English and keeps the user's locale for everything else", () => {
@@ -19,5 +23,22 @@ describe("git helpers", () => {
     const e = new GitError("git x failed", `fatal: ${"a".repeat(1000)}\n`);
     expect(gitErrorSummary(e)).toHaveLength(GIT_SUMMARY_LIMIT);
     expect(gitErrorSummary(new GitError("m", "hint: x\nerror: bad ref\n"))).toBe("bad ref");
+  });
+});
+
+describe("git invocation", () => {
+  it.skipIf(process.platform === "win32")("runs the resolved git with fsmonitor disabled", async () => {
+    const dir = tempDir();
+    const log = join(dir, "args.txt");
+    const fake = join(dir, "git");
+    writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$@" > "${log}"\necho ok\n`);
+    chmodSync(fake, 0o755);
+    setGitBinary(fake);
+    try {
+      expect(await git(dir, ["status", "--porcelain"])).toBe("ok");
+      expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["-c", "core.fsmonitor=false", "status", "--porcelain"]);
+    } finally {
+      setGitBinary("git");
+    }
   });
 });

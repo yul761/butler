@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { GIT_SAFE_ARGS, gitBinary } from "../util/git-path";
 
 /**
  * 计划 3 任务 1 的实测（Ruling P3-R1）：--setting-sources user 下本地级（~/.claude.json 里按目录记录的）MCP 会不会丢。
@@ -93,7 +94,7 @@ function gitEnv(): NodeJS.ProcessEnv {
 }
 
 function git(cwd: string, args: string[]): { status: number | null; stdout: string } {
-  const r = spawnSync("git", args, { cwd, env: gitEnv(), timeout: 5000, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  const r = spawnSync(gitBinary(), [...GIT_SAFE_ARGS, ...args], { cwd, env: gitEnv(), timeout: 5000, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   return { status: r.error ? null : r.status, stdout: r.stdout ?? "" };
 }
 
@@ -149,9 +150,9 @@ function approvals(cwd: string, claudeJson: Json | undefined, p: ProjectMcpPaths
 
 /** 同目录临时文件（0600）再 rename，不会留下半截或宽权限的文件。 */
 function writePrivate(file: string, servers: Json): void {
-  const tmp = `${file}.${process.pid}.tmp`;
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   try {
-    writeFileSync(tmp, JSON.stringify({ mcpServers: servers }, null, 2), { mode: 0o600, flag: "w" });
+    writeFileSync(tmp, JSON.stringify({ mcpServers: servers }, null, 2), { mode: 0o600, flag: "wx" });
     renameSync(tmp, file);
   } catch (e) {
     try {

@@ -52,6 +52,8 @@ import { SessionService } from "./sessions/session-service";
 import { llmConfig, memoryOn, scheduleConfig, SettingError } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
 import { N } from "./strings";
+import { pathKey } from "./util/env";
+import { resolveGit, setGitBinary } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
 import { canSend } from "./safe-send";
 import { circleBitmap } from "./tray-bitmap";
@@ -224,6 +226,9 @@ async function confirmSend(outbound: string, quit: AbortSignal): Promise<boolean
 }
 
 async function bootstrap(): Promise<void> {
+  // 先用 Butler 自己的 PATH 定下 git 的绝对路径；登录 shell 的 PATH 读到之后再更新一次。
+  const envGit = resolveGit(process.env[pathKey(process.env)] ?? "", process.platform);
+  if (envGit) setGitBinary(envGit);
   const paths = resolvePaths();
   await ensureDirs(paths);
   logger = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : teeToConsole);
@@ -252,7 +257,11 @@ async function bootstrap(): Promise<void> {
   const notify = () => safeSend(IPC.stateChanged);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
   const healthReady: Promise<void> = health.refresh().then(
-    () => notify(),
+    () => {
+      const loginGit = resolveGit(health.claude().pathValue, process.platform);
+      if (loginGit) setGitBinary(loginGit);
+      notify();
+    },
     (e: unknown) => {
       logger("initial health refresh failed", e);
     },

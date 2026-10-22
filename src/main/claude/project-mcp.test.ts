@@ -303,3 +303,26 @@ describe("projectMcpConfigs: repo-controlled files are read safely", () => {
     expect(readdirSync(s.mcpDir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
 });
+
+describe("projectMcpConfigs: case-insensitive file systems (plan 3 parked)", () => {
+  it.skipIf(process.platform !== "darwin")("does not trust a settings.local.json that git tracks under another letter case (APFS alias)", () => {
+    const s = setup();
+    s.gitInit();
+    s.writeMcp(["repoServer"]);
+    // 仓库提交的是 .CLAUDE/SETTINGS.LOCAL.JSON；在大小写不敏感的 APFS 上它就是 .claude/settings.local.json。
+    mkdirSync(join(s.repo, ".CLAUDE"));
+    writeFileSync(join(s.repo, ".CLAUDE", "SETTINGS.LOCAL.JSON"), JSON.stringify({ enabledMcpjsonServers: ["repoServer"] }));
+    s.git("add", "-A");
+    s.git("commit", "-q", "-m", "ship approvals");
+    expect(projectMcpConfigs(s.repo, s.p)).toEqual([]);
+  });
+
+  it("writes through a randomly named temporary file and leaves none behind", () => {
+    const s = setup();
+    s.writeMcp(["a"]);
+    s.writeClaudeJson({ enableAllProjectMcpServers: true });
+    projectMcpConfigs(s.repo, s.p);
+    projectMcpConfigs(s.repo, s.p);
+    expect(readdirSync(s.mcpDir).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+  });
+});

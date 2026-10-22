@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
+import { GIT_SAFE_ARGS, gitBinary } from "../util/git-path";
 
 export class GitError extends Error {
   constructor(message: string, readonly stderr: string) {
@@ -20,7 +21,7 @@ export function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 export function git(cwd: string, args: string[]): Promise<string> {
   return new Promise((done, fail) => {
-    execFile("git", args, { cwd, env: gitEnv(process.env), windowsHide: true, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(gitBinary(), [...GIT_SAFE_ARGS, ...args], { cwd, env: gitEnv(process.env), windowsHide: true, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) fail(new GitError(`git ${args.join(" ")} failed: ${String(stderr).trim() || err.message}`, String(stderr)));
       else done(String(stdout).trim());
     });
