@@ -91,6 +91,18 @@ describe("probeMcpTools settling and cleanup", () => {
     await expect(probeMcpTools({ claudePath: fake.path, cwd: dir, env: env(), signal: ac.signal })).rejects.toThrow("取消");
   }, 20_000);
 
+  it.skipIf(process.platform === "win32")("on abort (app quitting) kills at once, even a claude that ignores SIGTERM", async () => {
+    const dir = tempDir();
+    const pidFile = join(dir, "pid");
+    const fake = writeFakeClaude(dir, `process.on("SIGTERM", () => {}); fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`);
+    const ac = new AbortController();
+    const p = probeMcpTools({ claudePath: fake.path, cwd: dir, env: env(), signal: ac.signal });
+    const pid = Number(await waitForFile(pidFile, 5000));
+    ac.abort();
+    await expect(p).rejects.toThrow("取消");
+    expect(await waitUntilDead(pid, 1000)).toBe(true);
+  }, 20_000);
+
   it("kills grandchildren (orphan MCP servers) and uses the headless env, prompt via stdin only", async () => {
     const dir = tempDir();
     const gcPid = join(dir, "gc");

@@ -1,6 +1,7 @@
 import { HEADLESS_SESSION_PREFIX } from "../../shared/hook-envelope";
 import { dirFromEnv } from "../paths";
 import { pathKey } from "../util/env";
+import { resolveLaunch } from "./launch";
 
 export interface SpawnSpec {
   file: string;
@@ -13,15 +14,15 @@ export function claudeArgs(req: { mode: "new" | "resume"; sessionId: string; mcp
   return args;
 }
 
-/** 直接用 PTY 跑 claude；只有 Windows 上 npm 装的 claude.cmd 需要经过 cmd.exe。 */
-export function spawnSpec(claudePath: string, args: string[], platform: NodeJS.Platform): SpawnSpec {
-  if (platform === "win32" && /\.(cmd|bat)$/i.test(claudePath)) return { file: "cmd.exe", args: ["/c", claudePath, ...args] };
-  return { file: claudePath, args };
+/** PTY 里的 claude：Windows 上能认出的 .cmd shim 直接用 node 执行，认不出来才经过 cmd.exe（launch.ts）。 */
+export function spawnSpec(claudePath: string, args: string[], platform: NodeJS.Platform, pathValue = ""): SpawnSpec {
+  const l = resolveLaunch(claudePath, args, platform, { pathValue });
+  return { file: l.file, args: l.args };
 }
 
 /**
- * Windows 上 npm 装的 claude.cmd 要经过 cmd.exe：参数里有空白、引号、括号或 cmd 元字符时没法安全传递。
- * 这种情况下调用方不传这个参数（计划 5 去掉 cmd.exe 这一层）。
+ * 经过 cmd.exe 的 .cmd/.bat：参数里有空白、引号、括号或 cmd 元字符时没法安全传递，调用方不传这个参数。
+ * 计划 5 起只有认不出的 shim（回退到 cmd.exe）才需要这道检查。
  */
 export function cmdShimSafe(file: string, arg: string, platform: NodeJS.Platform): boolean {
   if (platform !== "win32" || !/\.(cmd|bat)$/i.test(file)) return true;

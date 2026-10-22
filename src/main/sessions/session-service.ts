@@ -7,7 +7,8 @@ import {
   type TicketView,
   type UnclaimedSession,
 } from "../../shared/types";
-import { claudeArgs, cmdShimSafe, sessionEnv, spawnSpec } from "../claude/spawn";
+import { type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
+import { claudeArgs, cmdShimSafe, sessionEnv } from "../claude/spawn";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
@@ -36,6 +37,8 @@ export interface SessionServiceDeps {
   mcpConfig?: (ticketKey: string) => string | null;
   /** 要打开这个 ticket 的 session 时调用：把它的记忆补同步一次（排进记忆的同步队列，不等它）。 */
   syncMemory?: (ticketKey: string) => void;
+  /** 读 claude.cmd shim 用的文件系统（测试注入；默认读真实磁盘）。 */
+  launchFs?: Pick<LaunchDeps, "read" | "exists">;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -83,7 +86,9 @@ export class SessionService {
 
     const workDir = this.d.ticketService.workDir(ticket);
     this.syncMemory(ticket.key);
-    const mcpConfigPath = this.mcpConfigFor(ticket.key, claudePath);
+    // 启动方式只解析一次：记忆挂载的检查和真正启动用同一个结果（P5-PF10）。
+    const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
+    const mcpConfigPath = this.mcpConfigFor(ticket.key, claudePath, launch.viaCmd);
     let termId: string;
     let cwd: string;
     let args: string[];
@@ -102,7 +107,8 @@ export class SessionService {
     }
 
     try {
-      this.d.pty.open(termId, spawnSpec(claudePath, args, this.d.platform), {
+      const { file, args: argv } = withArgs(launch, args);
+      this.d.pty.open(termId, { file, args: argv }, {
         cwd,
         env: sessionEnv(this.d.baseEnv, { pathValue, ticketKey: ticket.key, sessionId: termId }),
       });
@@ -124,8 +130,8 @@ export class SessionService {
     }
   }
 
-  /** 这个 ticket 的记忆 MCP 配置。写不出来、或者在 Windows 的 .cmd 下无法安全传递时不挂，session 照常打开。 */
-  private mcpConfigFor(ticketKey: string, claudePath: string): string | undefined {
+  /** 这个 ticket 的记忆 MCP 配置。写不出来、或者要经过 cmd.exe 又无法安全传递时不挂，session 照常打开。 */
+  private mcpConfigFor(ticketKey: string, claudePath: string, viaCmd: boolean): string | undefined {
     let file: string | null;
     try {
       file = this.d.mcpConfig?.(ticketKey) ?? null;
@@ -134,7 +140,8 @@ export class SessionService {
       return undefined;
     }
     if (!file) return undefined;
-    if (!cmdShimSafe(claudePath, file, this.d.platform)) {
+    // 计划 5：能认出的 shim 不经过 cmd.exe，路径原样传递；只有回退到 cmd.exe 时才需要这道检查（计划 4 的 P4-R7）。
+    if (viaCmd && !cmdShimSafe(claudePath, file, this.d.platform)) {
       this.d.log?.(`memory MCP not mounted for ${ticketKey}: the config path cannot pass through cmd.exe safely`);
       return undefined;
     }

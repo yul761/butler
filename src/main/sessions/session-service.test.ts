@@ -5,6 +5,7 @@ import { SessionsRepo } from "../db/sessions-repo";
 import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { TicketService } from "../tickets/ticket-service";
+import { NPM_SHIM } from "../claude/shim-fixtures";
 import { fakePtyFactory, makeRepo, memDb } from "../test-utils";
 import type { TranscriptState } from "./discovery";
 import { PtyManager, type PtyFactory } from "./pty-manager";
@@ -20,6 +21,7 @@ async function setup(opts: {
   mcpConfig?: (ticketKey: string) => string | null;
   syncMemory?: (ticketKey: string) => void;
   platform?: NodeJS.Platform;
+  launchFs?: { read: (f: string) => string; exists: (p: string) => boolean };
 } = {}) {
   const stateOf = (id: string): TranscriptState =>
     opts.transcriptState ?? (opts.transcripts === undefined || opts.transcripts.includes(id) ? "present" : "absent");
@@ -44,6 +46,7 @@ async function setup(opts: {
     baseEnv: { HOME: "/h" },
     mcpConfig: opts.mcpConfig,
     syncMemory: opts.syncMemory,
+    launchFs: opts.launchFs,
     log: (m) => logs.push(m),
   });
   const repo = makeRepo();
@@ -81,6 +84,26 @@ describe("SessionService.open", () => {
     await shim.service.open({ ticketKey: "PROJ-1" });
     expect(shim.spawned[0].args).not.toContain("--mcp-config");
     expect(shim.logs.some((l) => l.includes("memory MCP not mounted for PROJ-1"))).toBe(true);
+    // 认不出的 shim 回退到 cmd.exe：仍然经过 cmd.exe /c 启动。
+    expect(shim.spawned[0].file).toBe("cmd.exe");
+    expect(shim.spawned[0].args).toEqual(["/c", "C:\\npm\\claude.cmd", "--session-id", "new-1"]);
+  });
+
+  it("mounts memory with a spaced path when a recognised npm shim is started with node (plan 5, P4-R7 lifted)", async () => {
+    const npmDir = "C:\\Users\\John Smith\\AppData\\Roaming\\npm";
+    const cli = `${npmDir}\\node_modules\\@anthropic-ai\\claude-code\\cli.js`;
+    const files = new Map([[`${npmDir}\\claude.cmd`, NPM_SHIM], [`${npmDir}\\node.exe`, ""], [cli, ""]]);
+    const config = "C:\\Users\\John Smith\\.butler\\mcp\\tickets\\PROJ-1.json";
+    const shim = await setup({
+      platform: "win32",
+      claudePath: `${npmDir}\\claude.cmd`,
+      mcpConfig: () => config,
+      launchFs: { read: (f) => files.get(f) ?? "", exists: (p) => files.has(p) },
+    });
+    await shim.service.open({ ticketKey: "PROJ-1" });
+    expect(shim.spawned[0].file).toBe(`${npmDir}\\node.exe`);
+    expect(shim.spawned[0].args).toEqual([cli, "--session-id", "new-1", "--mcp-config", config]);
+    expect(shim.logs.some((l) => l.includes("memory MCP not mounted"))).toBe(false);
   });
 
   it("asks for a memory catch-up sync of the ticket on every new or resumed session it starts (final review 6)", async () => {

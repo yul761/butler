@@ -1,7 +1,8 @@
 import type { ChildProcess } from "node:child_process";
-import spawn from "cross-spawn";
 import type { McpProbe } from "../../shared/types";
+import { pathKey } from "../util/env";
 import { killTree, SETTING_SOURCES_ARGS, unsafeCmdArg } from "./headless";
+import { childLaunch, spawnClaude } from "./launch";
 
 /** 读到 init 就结束，模型还没开始回答。不落盘，权限全拒。 */
 export const PROBE_ARGS = ["-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "dontAsk", ...SETTING_SOURCES_ARGS];
@@ -78,13 +79,14 @@ export function probeMcpTools(o: { claudePath: string; cwd: string; env: Record<
     let child: ChildProcess | undefined;
     let done = false;
     let buf = "";
-    const finish = (err: Error | null, value?: McpProbe): void => {
+    /** 唯一杀进程的地方：每次探测最多杀一次。killNow：app 正在退出，直接 SIGKILL。 */
+    const finish = (err: Error | null, value?: McpProbe, killNow = false): void => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       o.signal?.removeEventListener("abort", onAbort);
       if (child) {
-        killTree(child);
+        killTree(child, killNow);
         // 后代进程可能还握着管道：放手，不等 close。
         child.stdin?.destroy();
         child.stdout?.destroy();
@@ -94,20 +96,22 @@ export function probeMcpTools(o: { claudePath: string; cwd: string; env: Record<
     };
     const timer = setTimeout(() => finish(new Error("等待 claude 启动超时，没有收到 init 消息")), o.timeoutMs ?? PROBE_TIMEOUT_MS);
     function onAbort(): void {
-      finish(new Error("已取消"));
+      // app 正在退出：直接杀，不等宽限期（由 finish 杀，只杀一次）。
+      finish(new Error("已取消"), undefined, true);
     }
 
     if (o.signal?.aborted) {
       finish(new Error("已取消"));
       return;
     }
-    if (unsafeCmdArg(args, o.claudePath, process.platform) !== null) {
+    // 启动方式只解析一次：检查和启动用同一个结果（P5-PF10）。只有认不出 shim、必须经过 cmd.exe 时才需要这道检查。
+    const launch = childLaunch(o.claudePath, args, process.platform, { pathValue: o.env[pathKey(o.env)] });
+    if (launch.viaCmd && unsafeCmdArg(args, o.claudePath, process.platform) !== null) {
       finish(new Error("参数在 Windows 的 .cmd 下无法安全传递"));
       return;
     }
     try {
-      // POSIX 上独立进程组，killTree 才能整组杀掉。
-      child = spawn(o.claudePath, args, { cwd: o.cwd, env: o.env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true, detached: process.platform !== "win32" });
+      child = spawnClaude(launch, { cwd: o.cwd, env: o.env, stdio: ["pipe", "pipe", "ignore"] });
     } catch (e) {
       finish(e instanceof Error ? e : new Error(String(e)));
       return;

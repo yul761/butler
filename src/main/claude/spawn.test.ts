@@ -14,6 +14,10 @@ describe("claude spawn helpers", () => {
     expect(spawnSpec("/usr/local/bin/claude", ["x"], "darwin")).toEqual({ file: "/usr/local/bin/claude", args: ["x"] });
   });
 
+  it("passes the login PATH on so a shim's node can be found", () => {
+    expect(spawnSpec("/usr/local/bin/claude", ["x"], "darwin", "/usr/bin")).toEqual({ file: "/usr/local/bin/claude", args: ["x"] });
+  });
+
   it("builds the session env", () => {
     const env = sessionEnv(
       { Path: "C:\\old", HOME: "/h", ELECTRON_RUN_AS_NODE: "1", CLAUDECODE: "1", EMPTY: undefined },

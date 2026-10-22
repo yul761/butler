@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir, waitForFile, waitUntilDead, writeFakeClaude } from "../test-utils";
 import { PROBE_ARGS } from "./mcp-probe";
-import { headlessArgs, isRateLimited, parseClaudeJson, runHeadless, unsafeCmdArg } from "./headless";
+import { headlessArgs, isRateLimited, killTree, parseClaudeJson, runHeadless, unsafeCmdArg } from "./headless";
 
 const env = () => ({ ...process.env }) as Record<string, string>;
 
@@ -220,4 +220,27 @@ describe("unsafeCmdArg", () => {
     expect(unsafeCmdArg([bad], "claude.exe", "win32")).toBeNull();
     expect(unsafeCmdArg([bad], "/usr/bin/claude.cmd", "darwin")).toBeNull();
   });
+});
+
+describe("killTree", () => {
+  it.skipIf(process.platform === "win32")("kills at once when the app is quitting, even a child that ignores SIGTERM", async () => {
+    const child = spawn("/bin/sh", ["-c", 'trap "" TERM; sleep 30'], { detached: true, stdio: "ignore" });
+    await new Promise((r) => setTimeout(r, 200));
+    const started = Date.now();
+    killTree(child, true);
+    expect(await waitUntilDead(child.pid!, 1500)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  it.skipIf(process.platform === "win32")("a cancelled run kills at once, even a claude that ignores SIGTERM", async () => {
+    const dir = tempDir();
+    const pidFile = join(dir, "pid");
+    const fake = writeFakeClaude(dir, `process.on("SIGTERM", () => {}); fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`);
+    const ac = new AbortController();
+    const run = runHeadless({ claudePath: fake.path, args: [], prompt: "x", cwd: dir, env: env(), signal: ac.signal });
+    const pid = Number(await waitForFile(pidFile, 5000));
+    ac.abort();
+    expect(await run).toMatchObject({ ok: false, reason: "aborted" });
+    expect(await waitUntilDead(pid, 1000)).toBe(true);
+  }, 10_000);
 });

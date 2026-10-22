@@ -1,6 +1,7 @@
 import { execFile, type ChildProcess } from "node:child_process";
-import spawn from "cross-spawn";
 import { formatDuration } from "../../shared/text";
+import { pathKey } from "../util/env";
+import { childLaunch, spawnClaude } from "./launch";
 
 export const HEADLESS_TIMEOUT_MS = 5 * 60 * 1000;
 const STDOUT_LIMIT = 20 * 1024 * 1024;
@@ -118,8 +119,11 @@ export function isRateLimited(r: ClaudeResult | null, stderr: string): boolean {
 
 const GRACE_MS = 2000;
 
-/** 结束子进程及其子进程。POSIX 杀整个进程组（即使直接子进程已退出）；Windows 上 claude.cmd 经过 cmd.exe，用 taskkill /T。 */
-export function killTree(child: ChildProcess): void {
+/**
+ * 结束子进程及其子进程。POSIX 杀整个进程组（即使直接子进程已退出）；Windows 上用 taskkill /T /F。
+ * now：app 正在退出——直接 SIGKILL，不等宽限期（退出后定时器不会再触发）。
+ */
+export function killTree(child: ChildProcess, now = false): void {
   const pid = child.pid;
   if (pid === undefined) return;
   if (process.platform === "win32") {
@@ -134,6 +138,10 @@ export function killTree(child: ChildProcess): void {
       // 进程组已经不存在。
     }
   };
+  if (now) {
+    sig("SIGKILL");
+    return;
+  }
   sig("SIGTERM");
   setTimeout(() => sig("SIGKILL"), GRACE_MS).unref();
 }
@@ -182,7 +190,8 @@ export const runHeadless: HeadlessRun = (req) =>
       }, GRACE_MS);
     }, timeoutMs);
     function onAbort() {
-      if (child) killTree(child);
+      // app 正在退出：直接杀，不等宽限期。
+      if (child) killTree(child, true);
       release();
       finish({ ok: false, reason: "aborted", message: "已取消", result: null });
     }
@@ -191,7 +200,9 @@ export const runHeadless: HeadlessRun = (req) =>
       finish({ ok: false, reason: "aborted", message: "已取消", result: null });
       return;
     }
-    const bad = unsafeCmdArg(req.args, req.claudePath, process.platform);
+    // 启动方式只解析一次：检查和启动用同一个结果（P5-PF10）。只有认不出 shim、必须经过 cmd.exe 时才需要这道检查。
+    const launch = childLaunch(req.claudePath, req.args, process.platform, { pathValue: req.env[pathKey(req.env)] });
+    const bad = launch.viaCmd ? unsafeCmdArg(req.args, req.claudePath, process.platform) : null;
     if (bad !== null) {
       finish({ ok: false, reason: "spawn_failed", message: "参数含引号和 cmd 元字符，在 Windows 的 .cmd 下无法安全传递", result: null });
       return;
@@ -199,7 +210,7 @@ export const runHeadless: HeadlessRun = (req) =>
 
     try {
       // POSIX 上独立进程组，超时/取消时可以整组杀掉；仍然正常等待它退出（不 unref）。
-      child = spawn(req.claudePath, req.args, { cwd: req.cwd, env: req.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: process.platform !== "win32" });
+      child = spawnClaude(launch, { cwd: req.cwd, env: req.env, stdio: ["pipe", "pipe", "pipe"] });
     } catch (e) {
       finish({ ok: false, reason: "spawn_failed", message: e instanceof Error ? e.message : String(e), result: null });
       return;
