@@ -218,12 +218,13 @@ describe("scanOutbound options", () => {
 /**
  * ReDoS / 线性时间守卫：对抗性输入的扫描时间必须随长度线性增长。
  * 不用固定的毫秒预算（CI runner 比开发机慢好几倍，200 ms 在 macOS 和 Windows runner 上都超过了），而是在同一次运行里
- * 比较 N 和 N/4 两个长度：线性时约 4 倍，二次方约 16 倍，阈值取 8。每个长度取多次中的最小值以压掉 GC/调度噪声。
+ * 比较 N 和 N/8 两个长度：线性时约 8 倍，二次方约 64 倍，阈值取 24（N/4、阈值 8 时 CI 上实测出现过 9.15 的噪声）。
+ * 每个长度取多次中的最小值以压掉 GC/调度噪声。
  * 另有一个宽松的绝对上限，兜住"线性但常数巨大"或灾难性回溯（这台机器上 N=100k 约 0.1 s，CI 约 0.3 s）。
  */
 describe("scanOutbound performance", () => {
   const N = 100_000;
-  const SCALING_LIMIT = 8;
+  const SCALING_LIMIT = 24;
   const ABSOLUTE_LIMIT_MS = 2000;
   const shapes: [string, (n: number) => string][] = [
     ["a.", (n) => "a.".repeat(n / 2)],
@@ -259,11 +260,11 @@ describe("scanOutbound performance", () => {
     return best;
   };
   it.each(shapes)("scans an adversarial %s string in linear time", (_name, make) => {
-    const small = make(N / 4);
+    const small = make(N / 8);
     const large = make(N);
     fastest(small, 1); // 预热：让正则先编译、JIT 先热起来，不算进小样本。
-    const tSmall = fastest(small, 3);
-    const tLarge = fastest(large, 2);
+    const tSmall = fastest(small, 5);
+    const tLarge = fastest(large, 3);
     expect(tLarge).toBeLessThan(ABSOLUTE_LIMIT_MS);
     // 小样本快到计时器分辨率以下时比值没有意义；这种情况下绝对上限已足以说明没有爆炸。
     if (tSmall >= 1) expect(tLarge / tSmall).toBeLessThan(SCALING_LIMIT);
