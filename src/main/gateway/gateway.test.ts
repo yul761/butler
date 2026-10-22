@@ -18,6 +18,20 @@ const REMOTE_URL = "https://llm.example.invalid/v1";
 const FAKE_KEY = "sk-test-FAKE0000";
 
 describe("PrivacyGateway", () => {
+  it("says it is off exactly when the level is off or the base URL or model is missing", async () => {
+    h = await gatewayHarness();
+    expect(h.gateway.isOff()).toBe(false);
+    h.settings.set("llmLevel", "off");
+    expect(h.gateway.isOff()).toBe(true);
+    h.settings.set("llmLevel", "metadata");
+    h.settings.set("llmModel", " ");
+    expect(h.gateway.isOff()).toBe(true);
+    h.settings.set("llmModel", "fake-model");
+    h.settings.set("llmBaseUrl", "");
+    expect(h.gateway.isOff()).toBe(true);
+    expect((await h.gateway.narrate(sampleSource())).status).toBe("off");
+  });
+
   it("does nothing when the level is off or the provider is not configured", async () => {
     h = await gatewayHarness();
     h.settings.set("llmLevel", "off");

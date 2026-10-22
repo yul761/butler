@@ -24,7 +24,7 @@ import { SessionsRepo } from "./db/sessions-repo";
 import { SettingsRepo } from "./db/settings-repo";
 import { TermsRepo } from "./db/terms-repo";
 import { TicketsRepo } from "./db/tickets-repo";
-import { auditCutoff } from "./gateway/budget";
+import { auditCutoff, stalePendingCost } from "./gateway/budget";
 import { PrivacyGateway } from "./gateway/gateway";
 import { KeyStore } from "./gateway/key-store";
 import { electronSecretBox } from "./gateway/safe-storage";
@@ -295,7 +295,7 @@ async function bootstrap(): Promise<void> {
   // 审计的启动收尾，先于一切读写审计的代码：上次退出时没发完的请求记为 failed（请求体保留，可能已经发出），
   // 再按保留期清理一次（不删本月的记录，预算要用；之后 gateway 每次调用前也会清理）。
   try {
-    const stale = audit.failStalePending(N.auditStalePending);
+    const stale = audit.failStalePending(N.auditStalePending, stalePendingCost(llmConfig(settings).prices));
     if (stale > 0) logger(`marked ${stale} audit row(s) left pending by the previous run as failed`);
     audit.prune(auditCutoff(Date.now(), llmConfig(settings).retentionDays));
   } catch (e) {
@@ -331,6 +331,7 @@ async function bootstrap(): Promise<void> {
             narrate: (src, signal) => gateway.narrate(src, signal),
             briefs,
             source: (b) => briefService.narrativeSource(b),
+            off: () => gateway.isOff(),
             signal: headlessAbort.signal,
             log: logger,
           },

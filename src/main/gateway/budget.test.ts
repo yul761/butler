@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart } from "./budget";
+import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart, sentWithoutUsage, stalePendingCost } from "./budget";
+import { NARRATIVE_MAX_TOKENS } from "./narrative";
 
 const price = { pattern: "*", inputPerMTok: 2, outputPerMTok: 8 };
 
@@ -22,6 +23,16 @@ describe("budget", () => {
     expect(estimateTokens("")).toBe(0);
     expect(estimateTokens("今天ab c")).toBe(2 + 2);
     expect(estimateTokens("abcdef")).toBe(2);
+  });
+
+  it("charges a request that was sent without usable usage by its body and the output cap", () => {
+    const body = '{"model":"m","messages":["今天"]}';
+    expect(sentWithoutUsage(price, body)).toEqual({
+      tokensIn: estimateTokens(body), tokensOut: NARRATIVE_MAX_TOKENS, costUsd: costUsd(price, estimateTokens(body), NARRATIVE_MAX_TOKENS),
+    });
+    const estimate = stalePendingCost([{ pattern: "gpt-*", inputPerMTok: 2, outputPerMTok: 8 }]);
+    expect(estimate({ model: "gpt-x", payloadSent: body })).toEqual(sentWithoutUsage(price, body));
+    expect(estimate({ model: "other", payloadSent: body })).toBeNull();
   });
 
   it("prices usage per million tokens", () => {

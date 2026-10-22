@@ -84,6 +84,28 @@ describe("AuditRepo", () => {
     expect(audit.failStalePending("again")).toBe(0);
   });
 
+  it("charges a stale pending row with a body a conservative estimate; one without a body stays free", () => {
+    const audit = new AuditRepo(memDb());
+    const withBody = audit.insert({ ...base, ts: 1, status: "pending", payloadSent: '{"a":1}' });
+    const noBody = audit.insert({ ...base, ts: 2, status: "pending", payloadSent: null });
+    const unpriced = audit.insert({ ...base, model: "unknown", ts: 3, status: "pending", payloadSent: '{"c":3}' });
+    const seen: { model: string; payloadSent: string }[] = [];
+    const estimate = (row: { model: string; payloadSent: string }) => {
+      seen.push(row);
+      return row.model === "m" ? { tokensIn: 7, tokensOut: 800, costUsd: 0.25 } : null;
+    };
+    expect(audit.failStalePending("quit while sending", estimate)).toBe(3);
+    expect(seen).toEqual([
+      { model: "m", payloadSent: '{"a":1}' },
+      { model: "unknown", payloadSent: '{"c":3}' },
+    ]);
+    const byId = new Map(audit.list().map((e) => [e.id, e]));
+    expect(byId.get(withBody)).toMatchObject({ status: "failed", payloadSent: '{"a":1}', tokensIn: 7, tokensOut: 800, costUsd: 0.25 });
+    expect(byId.get(noBody)).toMatchObject({ status: "failed", payloadSent: null, costUsd: null });
+    expect(byId.get(unpriced)).toMatchObject({ status: "failed", costUsd: null });
+    expect(audit.costSince(0)).toBe(0.25);
+  });
+
   it("clears the pending payload when a failed request never left the machine", () => {
     const audit = new AuditRepo(memDb());
     const id = audit.insert({ ...base, ts: 1, status: "pending", payloadSent: '{"max_tokens":1}' });

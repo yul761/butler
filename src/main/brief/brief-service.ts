@@ -143,7 +143,8 @@ export class BriefService {
       if (t.worktreePath) addRepo(basename(t.worktreePath));
       addBranch(t.branch);
       const title = t.title?.trim();
-      if (title && title.length >= 3) terms.add(title);
+      // 标题和其他标识符一样过停用词表：叫 test、api 的标题会把普通词都换掉。
+      if (title && identifierOk(title)) terms.add(title);
       for (const s of this.d.sessions.listByTicket(t.key)) if (s.gitBranch) addBranch(s.gitBranch);
       // 所有存过的 handoff（含已归档 ticket）：PR 链接里的 owner / 仓库名、Jira 子任务号。
       for (const h of this.d.handoffs.listByTicket(t.key, 1000)) {

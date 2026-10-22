@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const EGRESS_RULES = ["no-restricted-globals", "no-restricted-imports", "no-restricted-syntax", "no-restricted-properties"];
 const GATEWAY = join("src", "main", "gateway") + sep;
-const SOURCE = /\.(ts|tsx|js|mjs|cjs)$/;
+const SOURCE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

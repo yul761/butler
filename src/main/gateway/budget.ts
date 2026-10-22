@@ -1,4 +1,5 @@
 import { priceFor, type PriceRule } from "../settings/settings-values";
+import { NARRATIVE_MAX_TOKENS } from "./narrative";
 
 /** 本地时间当月 1 日 0 点：月度预算从这里开始算。 */
 export function monthStart(now: number): number {
@@ -31,6 +32,29 @@ export function estimateTokens(text: string): number {
 
 export function costUsd(price: PriceRule, tokensIn: number, tokensOut: number): number {
   return (tokensIn * price.inputPerMTok + tokensOut * price.outputPerMTok) / 1_000_000;
+}
+
+export interface Usage {
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+}
+
+/**
+ * 请求发出去了、但没有可用的 usage（服务商 2xx 收下了但响应用不了；上次退出时还停在 pending）：
+ * 可能已经计费，按发出的请求体和输出上限保守记账。
+ */
+export function sentWithoutUsage(price: PriceRule, sentBody: string, maxOutputTokens = NARRATIVE_MAX_TOKENS): Usage {
+  const tokensIn = estimateTokens(sentBody);
+  return { tokensIn, tokensOut: maxOutputTokens, costUsd: costUsd(price, tokensIn, maxOutputTokens) };
+}
+
+/** 启动时给上次停在 pending 的记录估花费（AuditRepo.failStalePending）。模型在价格表里没有价格时不估，记 0。 */
+export function stalePendingCost(prices: readonly PriceRule[]): (row: { model: string; payloadSent: string }) => Usage | null {
+  return (row) => {
+    const price = priceFor(prices, row.model);
+    return price ? sentWithoutUsage(price, row.payloadSent) : null;
+  };
 }
 
 export type BudgetDecision =

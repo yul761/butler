@@ -104,6 +104,17 @@ const FORMS: Record<string, string> = {
   "socket.io-client": 'import { io } from "socket.io-client"; export default io;',
   "mcp sdk": 'import { Client } from "@modelcontextprotocol/sdk/client/index.js"; export default Client;',
   ws: 'import W from "ws"; export default W;',
+  "session.fetch": 'import type { BrowserWindow } from "electron"; export function a(w: BrowserWindow) { return w.webContents.session.fetch("https://x"); }',
+  "session?.fetch": 'export function a(w: { session?: { fetch(u: string): void } }) { return w.session?.fetch("https://x"); }',
+  'session["fetch"]': 'export function a(w: { session: { fetch(u: string): void } }) { return w.session["fetch"]("https://x"); }',
+  downloadURL: 'import type { BrowserWindow } from "electron"; export function a(w: BrowserWindow) { w.webContents.downloadURL("https://x"); }',
+  'downloadURL computed': 'export function a(w: Record<string, (u: string) => void>) { w["downloadURL"]("https://x"); }',
+  "require.main.require": 'export const h = require.main.require("https");',
+  "require.main?.require": 'export const h = require.main?.require("https");',
+  "process.mainModule": 'export const h = process.mainModule?.require("https");',
+  'process["mainModule"]': 'export const h = (process as any)["mainModule"].require("https");',
+  "process.binding": 'export const b = process.binding("tcp_wrap");',
+  'process["binding"]': 'export const b = (process as any)["binding"]("tcp_wrap");',
 };
 
 async function egressCount(source: string, filePath: string): Promise<number> {
@@ -128,5 +139,70 @@ describe("egress lint rule: every form", () => {
       'const fs = require("node:fs"); fs.statSync("x");',
     ];
     for (const source of ok) expect(await egressCount(source, "src/main/brief/probe.ts"), source).toBe(0);
+  }, 60_000);
+});
+
+/** 每个文件后缀都在规则覆盖范围内（.mts / .cts / .jsx 不能成为漏网之鱼）。 */
+describe("egress lint rule: every source extension", () => {
+  const source = 'import https from "node:https";\nexport const a = fetch("https://x");\nexport default https;';
+  for (const ext of ["mts", "cts", "jsx", "mjs", "cjs", "js", "tsx"]) {
+    it(`.${ext}: flagged outside the gateway, allowed inside`, async () => {
+      const eslint = new ESLint({ cwd: root });
+      expect(await eslint.isPathIgnored(`src/main/brief/probe.${ext}`)).toBe(false);
+      const [result] = await eslint.lintText(source, { filePath: `src/main/brief/probe.${ext}` });
+      const lines = result.messages.filter((m) => m.ruleId !== null && EGRESS_RULES.includes(m.ruleId)).map((m) => m.line);
+      expect(new Set(lines)).toEqual(new Set([1, 2]));
+      expect(await egressCount(source, `src/main/gateway/probe.${ext}`)).toBe(0);
+    }, 60_000);
+  }
+});
+
+/** gateway 的内部模块（直接发请求的 provider、假服务器 testing、假名化 / 扫描 / 投影 / 提示词）只能在 gateway 里用。 */
+describe("egress lint rule: gateway internals stay inside the gateway", () => {
+  const INTERNAL = ["provider", "testing", "pseudonym", "scanner", "projection", "narrative"];
+  const PUBLIC = ["gateway", "key-store", "safe-storage", "status", "types", "budget", "statecore-env"];
+  const forms = (m: string) => [
+    `import { x } from "../gateway/${m}"; export default x;`,
+    `import { x } from "./gateway/${m}.js"; export default x;`,
+    `import { x } from "@main/gateway/${m}"; export default x;`,
+    `import type { X } from "../gateway/${m}"; export type Y = X;`,
+    `export { x } from "../gateway/${m}";`,
+    `export * from "../../main/gateway/${m}";`,
+    `export const x = require("../gateway/${m}");`,
+    `export const x = import("../gateway/${m}");`,
+    `import x = require("../gateway/${m}"); export default x;`,
+  ];
+
+  it("flags chatCompletion from ../gateway/provider in src/main/brief, not in src/main/gateway", async () => {
+    const source = 'import { chatCompletion } from "../gateway/provider";\nexport const f = chatCompletion;';
+    expect(await egressCount(source, "src/main/brief/x.ts")).toBeGreaterThan(0);
+    expect(await egressCount(source, "src/main/gateway/x.ts")).toBe(0);
+  }, 60_000);
+
+  it("flags every internal module in every import form outside the gateway", async () => {
+    for (const m of INTERNAL) {
+      for (const source of forms(m)) {
+        expect(await egressCount(source, "src/main/brief/x.ts"), source).toBeGreaterThan(0);
+        expect(await egressCount(source, "src/renderer/src/x.tsx"), source).toBeGreaterThan(0);
+        expect(await egressCount(source, "src/main/gateway/x.ts"), source).toBe(0);
+      }
+    }
+  }, 60_000);
+
+  it("allows the gateway's public modules from anywhere", async () => {
+    for (const m of PUBLIC) {
+      for (const source of forms(m).slice(0, 5)) expect(await egressCount(source, "src/main/brief/x.ts"), source).toBe(0);
+    }
+    // 名字相近但不是内部模块的不受影响。
+    expect(await egressCount('import { x } from "../gateway/provider-names"; export default x;', "src/main/brief/x.ts")).toBe(0);
+    expect(await egressCount('import { x } from "./narrative"; export default x;', "src/main/brief/x.ts")).toBe(0);
+  }, 60_000);
+
+  it("exempts test files, which still may not reach the network themselves", async () => {
+    for (const file of ["src/main/brief/x.test.ts", "src/renderer/src/x.test.tsx"]) {
+      for (const m of INTERNAL) expect(await egressCount(forms(m)[0], file), `${file} ${m}`).toBe(0);
+      expect(await egressCount('import https from "node:https"; export default https;', file), file).toBeGreaterThan(0);
+      expect(await egressCount('fetch("https://x");', file), file).toBeGreaterThan(0);
+    }
   }, 60_000);
 });

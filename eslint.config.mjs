@@ -24,6 +24,22 @@ const BANNED_BUILTINS = [...NETWORK_BUILTINS, ...LOADER_BUILTINS];
 const DYNAMIC_MODULES = `/^(node:)?(${BANNED_BUILTINS.join("|")}|undici|axios|got|openai|ws|electron-updater|socket.io-client|https-proxy-agent)(\\/.*)?$/`;
 const ELECTRON_MODULE = "/^electron(\\/.*)?$/";
 const ELECTRON_NET_NAMES = `/^(${ELECTRON_NETWORK.join("|")})$/`;
+/** 能拿到模块加载器 / 原生绑定的属性（process.binding、process.mainModule……），点号和字符串下标都算。 */
+const LOADER_PROPS = "/^(mainModule|binding|_linkedBinding|getBuiltinModule|dlopen)$/";
+const memberNamed = (names) => `:matches([computed=false][property.name=${names}], [computed=true][property.value=${names}])`;
+/** 规则覆盖的所有源码后缀。 */
+const SOURCE_FILES = ["**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"];
+const TEST_FILES = ["**/*.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"];
+
+/**
+ * gateway 的内部模块：直接发请求的 provider、测试用假服务器 testing，以及假名化 / 扫描 / 投影 / 提示词。
+ * gateway 外面只能经 PrivacyGateway（gateway.ts）和 key-store、safe-storage、status、types、budget、statecore-env 这几个公开模块。
+ * 测试文件不受这一条限制（其余出口规则照旧）。
+ */
+const GATEWAY_INTERNALS = ["provider", "testing", "pseudonym", "scanner", "projection", "narrative"];
+const GATEWAY_INTERNAL_MESSAGE = "gateway 的内部模块只能在 src/main/gateway/ 里用，外面请经 PrivacyGateway（设计文档 7.1）。";
+const GATEWAY_INTERNAL_RE = `(^|/)gateway/(${GATEWAY_INTERNALS.join("|")})(\\.[cm]?[jt]sx?)?$`;
+const GATEWAY_INTERNAL_SEL = `/(^|\\/)gateway\\/(${GATEWAY_INTERNALS.join("|")})(\\.[cm]?[jt]sx?)?$/`;
 
 const egressRules = {
   "no-restricted-imports": [
@@ -57,7 +73,11 @@ const egressRules = {
     { selector: 'ImportExpression[source.type!="Literal"]', message: EGRESS_MESSAGE },
     { selector: 'MemberExpression[object.name="module"][property.name="require"]', message: EGRESS_MESSAGE },
     { selector: 'CallExpression[callee.name="createRequire"]', message: EGRESS_MESSAGE },
-    { selector: 'CallExpression[callee.property.name=/^(getBuiltinModule|binding|_linkedBinding|dlopen)$/]', message: EGRESS_MESSAGE },
+    { selector: `MemberExpression${memberNamed(LOADER_PROPS)}`, message: EGRESS_MESSAGE },
+    { selector: `MemberExpression[object.name="require"]${memberNamed('"main"')}`, message: EGRESS_MESSAGE },
+    // Electron 里拿到的 session / webContents 也能直接联网。
+    { selector: `MemberExpression[object.type="MemberExpression"]${memberNamed('"fetch"')}:matches([object.computed=false][object.property.name=/^(session|defaultSession)$/], [object.computed=true][object.property.value=/^(session|defaultSession)$/])`, message: EGRESS_MESSAGE },
+    { selector: `MemberExpression${memberNamed('"downloadURL"')}`, message: EGRESS_MESSAGE },
     // Electron：只允许具名 import 且不含联网对象；默认 / 命名空间 import、require("electron")、import("electron") 都不行。
     { selector: `ImportDeclaration[source.value=${ELECTRON_MODULE}] :matches(ImportDefaultSpecifier, ImportNamespaceSpecifier)`, message: EGRESS_MESSAGE },
     { selector: `ImportDeclaration[source.value=${ELECTRON_MODULE}] ImportSpecifier[imported.name=${ELECTRON_NET_NAMES}]`, message: EGRESS_MESSAGE },
@@ -70,6 +90,22 @@ const egressRules = {
   ],
 };
 
+/** gateway 以外的非测试文件：在出口规则之上，再禁止 import / require gateway 的内部模块（相对路径或别名都算）。 */
+const [, egressImportOptions] = egressRules["no-restricted-imports"];
+const outsideGatewayRules = {
+  ...egressRules,
+  "no-restricted-imports": [
+    "error",
+    { ...egressImportOptions, patterns: [...egressImportOptions.patterns, { regex: GATEWAY_INTERNAL_RE, message: GATEWAY_INTERNAL_MESSAGE }] },
+  ],
+  "no-restricted-syntax": [
+    ...egressRules["no-restricted-syntax"],
+    { selector: `ImportExpression[source.value=${GATEWAY_INTERNAL_SEL}]`, message: GATEWAY_INTERNAL_MESSAGE },
+    { selector: `CallExpression[callee.name="require"][arguments.0.value=${GATEWAY_INTERNAL_SEL}]`, message: GATEWAY_INTERNAL_MESSAGE },
+    { selector: `TSExternalModuleReference[expression.value=${GATEWAY_INTERNAL_SEL}]`, message: GATEWAY_INTERNAL_MESSAGE },
+  ],
+};
+
 export default tseslint.config(
   { ignores: ["out/**", "build/**", "dist/**", "node_modules/**"] },
   js.configs.recommended,
@@ -78,7 +114,9 @@ export default tseslint.config(
     files: ["scripts/**/*.mjs"],
     languageOptions: { globals: { process: "readonly", console: "readonly" } },
   },
-  { files: ["**/*.{ts,tsx,js,mjs,cjs}"], rules: egressRules },
+  { files: SOURCE_FILES, rules: outsideGatewayRules },
+  // 测试文件可以用 gateway 的内部模块（假服务器等），但自己仍然不能联网。
+  { files: TEST_FILES, rules: egressRules },
   // 唯一出口：只有 gateway 目录可以联网。
   { files: [EGRESS_DIR], rules: Object.fromEntries(Object.keys(egressRules).map((rule) => [rule, "off"])) },
 );

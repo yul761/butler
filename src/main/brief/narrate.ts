@@ -7,6 +7,8 @@ export interface NarrateDeps {
   narrate: (src: NarrativeSource, signal?: AbortSignal) => Promise<NarrativeResult>;
   briefs: Pick<BriefsRepo, "setNarrative">;
   source: (brief: Brief) => NarrativeSource;
+  /** 个人 LLM 关闭（或没配置）时返回 true：不构建输入，直接记 off（和 gateway 关闭时返回的一样）。 */
+  off?: () => boolean;
   signal?: AbortSignal;
   log?: (msg: string, err?: unknown) => void;
 }
@@ -27,7 +29,7 @@ export async function narrateBrief(d: NarrateDeps, brief: Brief): Promise<Narrat
   if (brief.kind !== "morning") return brief.narrativeStatus;
   let r: NarrativeResult;
   try {
-    r = await d.narrate(d.source(brief), d.signal);
+    r = d.off?.() ? { status: "off", narrative: null, auditId: null } : await d.narrate(d.source(brief), d.signal);
   } catch (e) {
     safeLog(d, "narrative failed", e);
     r = { status: "failed", narrative: null, auditId: null };

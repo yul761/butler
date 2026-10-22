@@ -95,6 +95,13 @@ export type AuditFinish =
   | (AuditFinishCommon & { status: "sent"; payloadSent?: string })
   | (AuditFinishCommon & { status: "failed" | "declined"; payloadSent?: string | null });
 
+/** 启动时给上次停在 pending 的记录估的用量和花费。 */
+export interface StaleUsage {
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+}
+
 export class AuditRepo {
   constructor(private readonly db: Db) {}
 
@@ -157,10 +164,23 @@ export class AuditRepo {
 
   /**
    * 启动时调用：上次运行退出时还停在 pending 的记录一律改成 failed，返回改了几条。
-   * 请求体保留：退出前可能已经发出去了，用户要能看到。
+   * 请求体保留：退出前可能已经发出去了，用户要能看到。可能已经计费，所以有请求体的记录按 estimate
+   * 保守记账（gateway/budget.ts 的 stalePendingCost）；没有请求体、或 estimate 给不出价格的，花费保持为空（按 0 算）。
    */
-  failStalePending(error: string): number {
-    return Number(this.db.prepare(`UPDATE llm_audit SET status = 'failed', error = ? WHERE status = 'pending'`).run(cap(error)).changes);
+  failStalePending(error: string, estimate?: (row: { model: string; payloadSent: string }) => StaleUsage | null): number {
+    const rows = this.db.prepare(`SELECT id, model, payload_sent FROM llm_audit WHERE status = 'pending' ORDER BY id`).all() as unknown as Pick<AuditRow, "id" | "model" | "payload_sent">[];
+    const update = this.db.prepare(
+      `UPDATE llm_audit SET status = 'failed', error = ?,
+         tokens_in = COALESCE(?, tokens_in), tokens_out = COALESCE(?, tokens_out), cost_usd = COALESCE(?, cost_usd)
+       WHERE id = ? AND status = 'pending'`,
+    );
+    let changed = 0;
+    for (const r of rows) {
+      const usage = r.payload_sent !== null && estimate ? estimate({ model: r.model, payloadSent: r.payload_sent }) : null;
+      const ok = usage !== null && [usage.tokensIn, usage.tokensOut, usage.costUsd].every(Number.isFinite);
+      changed += Number(update.run(cap(error), ok ? usage.tokensIn : null, ok ? usage.tokensOut : null, ok ? usage.costUsd : null, r.id).changes);
+    }
+    return changed;
   }
 
   /** 删掉 beforeMs 之前的记录（保留期，设计文档 7.7）。 */

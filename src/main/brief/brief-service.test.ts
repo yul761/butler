@@ -213,6 +213,22 @@ describe("BriefService.narrativeSource", () => {
   });
 });
 
+describe("BriefService.narrativeSource ticket titles", () => {
+  it("adds ticket titles as sensitive terms, but not generic or too-short ones", () => {
+    const s = setup();
+    const add = (key: string, title: string | null) =>
+      s.tickets.insert({ key, title, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: at(1), archivedAt: null });
+    add("T-1", "Payments retry storm");
+    add("T-2", "test");
+    add("T-3", " API ");
+    add("T-4", "ab");
+    add("T-5", null);
+    add("T-6", "Main");
+    const src = s.service.narrativeSource(s.service.generateMorning());
+    expect(src.known.terms).toEqual(["Payments retry storm"]);
+  });
+});
+
 describe("prPathParts", () => {
   it("takes the owner and repository from common PR links", () => {
     expect(prPathParts("https://github.com/acme/billing-svc/pull/7")).toEqual(["acme", "billing-svc"]);

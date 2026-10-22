@@ -63,6 +63,28 @@ describe("narrateBrief", () => {
     expect(seen).toBe(ac.signal);
   });
 
+  it("does not build the narrative source when the personal LLM is off, and records off", async () => {
+    let built = 0;
+    let sent = 0;
+    const source = () => (built++, SOURCE);
+    const narrate = async () => (sent++, { status: "ok" as const, narrative: "x", auditId: 1 });
+    const off = deps({ off: () => true, source, narrate });
+    expect(await narrateBrief(off.d, brief())).toBe("off");
+    expect([built, sent]).toEqual([0, 0]);
+    expect(off.written).toEqual([[5, null, "off"]]);
+    const on = deps({ off: () => false, source, narrate });
+    expect(await narrateBrief(on.d, brief())).toBe("ok");
+    expect([built, sent]).toEqual([1, 1]);
+  });
+
+  it("marks the brief failed, without building the source, when the off check throws", async () => {
+    let built = 0;
+    const { d, written } = deps({ off: () => { throw new Error("db"); }, source: () => (built++, SOURCE) });
+    expect(await narrateBrief(d, brief())).toBe("failed");
+    expect(built).toBe(0);
+    expect(written).toEqual([[5, null, "failed"]]);
+  });
+
   it("leaves an evening summary alone", async () => {
     const { d, written } = deps();
     expect(await narrateBrief(d, brief("evening"))).toBe("off");

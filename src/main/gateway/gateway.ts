@@ -3,8 +3,8 @@ import type { ScanHit } from "../../shared/llm";
 import type { AuditFinish, AuditRepo } from "../db/audit-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TermsRepo } from "../db/terms-repo";
-import { isLoopbackHost, llmConfig } from "../settings/settings-values";
-import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart } from "./budget";
+import { isLoopbackHost, llmConfig, type LlmConfig } from "../settings/settings-values";
+import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart, sentWithoutUsage } from "./budget";
 import type { KeyStore } from "./key-store";
 import { NARRATIVE_MAX_TOKENS, narrativeMessages, parseNarrative } from "./narrative";
 import { project } from "./projection";
@@ -78,6 +78,8 @@ export function confirmText(url: string, model: string, messages: ChatMessage[])
   return [`POST ${url}`, `model: ${model}`, ...parts].join("\n\n");
 }
 
+const llmOff = (cfg: LlmConfig): boolean => cfg.level === "off" || !cfg.baseUrl || !cfg.model;
+
 /**
  * 个人 LLM API 的唯一出口（设计文档第 7 节）。只用于早间简报的“今日重点”。
  * 串行执行：两次请求不会同时通过预算检查。narrate() 永远不抛错。
@@ -98,6 +100,11 @@ export class PrivacyGateway {
     return run;
   }
 
+  /** 个人 LLM 是否关闭（档位 off，或没配 base URL / 模型）：调用方据此跳过构建输入，narrate() 用的是同一个判断。 */
+  isOff(): boolean {
+    return llmOff(llmConfig(this.d.settings));
+  }
+
   /** 日志出错（比如写日志文件失败）不能让 narrate() 抛错，也不能打断审计的收尾。 */
   private log(msg: string, err?: unknown): void {
     try {
@@ -113,7 +120,8 @@ export class PrivacyGateway {
     // 保留期再短也不删本月的记录：本月的花费要留给预算检查。
     this.d.audit.prune(auditCutoff(now, cfg.retentionDays));
     const level = cfg.level;
-    if (level === "off" || !cfg.baseUrl || !cfg.model) return result("off");
+    // level === "off" 也在 llmOff 里；写出来是为了让 level 的类型收窄。
+    if (level === "off" || llmOff(cfg)) return result("off");
 
     const url = new URL(cfg.baseUrl);
     const loopback = isLoopbackHost(url.hostname);
@@ -197,9 +205,7 @@ export class PrivacyGateway {
       if (e instanceof ProviderError && e.kind === "bad_response" && e.status !== null && e.status >= 200 && e.status < 300) {
         // 服务商以 2xx 收下了请求，只是响应用不了：可能已经计费。没有 usage，按发出的请求体和输出上限保守记账。
         const sentBody = e.sentBody ?? body;
-        const tokensIn = estimateTokens(sentBody);
-        const cost = costUsd(budget.price, tokensIn, NARRATIVE_MAX_TOKENS);
-        this.record(auditId, { status: "sent", payloadSent: sentBody, tokensIn, tokensOut: NARRATIVE_MAX_TOKENS, costUsd: cost, error: message });
+        this.record(auditId, { status: "sent", payloadSent: sentBody, ...sentWithoutUsage(budget.price, sentBody), error: message });
         return result("failed", auditId);
       }
       // 请求体真的发出去了就记下实际发出的那个（用户要能看到）；确定什么都没发出去时清空 pending 时记的请求体。
