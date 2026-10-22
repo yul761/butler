@@ -157,6 +157,10 @@ function createWindow(): BrowserWindow {
     if (!isOwnUrl(url)) e.preventDefault();
   });
   w.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // CSP 拦下了什么就记一笔（任务 6）：界面某处空白时先看这里。
+  w.webContents.on("console-message", (e) => {
+    if (/Content Security Policy/i.test(e.message)) logger(`renderer CSP violation: ${e.message}`);
+  });
   const dev = devRendererUrl();
   const loaded = dev ? w.loadURL(dev) : w.loadFile(join(__dirname, "../renderer/index.html"));
   loaded.catch((e: unknown) => logger("renderer load failed", e));
