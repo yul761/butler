@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.0
+      # .node-version is 26.3.0: build:hook needs node --build-sea.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Install (rebuilds node-pty for Electron)
+        run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - name: Lint (includes the egress rules, design 7.1)
+        run: pnpm lint
+      - name: Unit and integration tests (includes the privacy invariant, a release blocker)
+        run: pnpm test
+      - run: pnpm build
+      - name: Build butler-hook (Node SEA for this platform)
+        run: pnpm build:hook
+      # Claude Code runs hooks through Git Bash on Windows (P5-R3). windows-latest ships it; fail early if it is gone.
+      - name: Check Git Bash is available (Windows hooks run through it)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          command -v bash
+          bash --version | head -1
+          git --version
+      # The sandboxes are created under the OS temp dir (butler-e2e-*); keep them in the runner temp dir so a failure can upload them.
+      # pnpm e2e builds first (pree2e). macOS runners need no display; Windows runs Electron natively.
+      - name: End-to-end tests with a fake claude
+        run: pnpm e2e
+        env:
+          TMPDIR: ${{ runner.temp }}
+      - name: Upload E2E traces and kept sandboxes (the hook binary is already deleted from them)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-${{ matrix.os }}
+          path: |
+            test-results/
+            ${{ runner.temp }}/butler-e2e-*/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+  package:
+    needs: test
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      # Unsigned installers (design 12): never look for a signing identity.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm build:hook
+      - name: Unsigned installers (design 12)
+        run: pnpm dist
+      - name: Verify the package contents (hook, memory MCP, node-pty prebuilds)
+        run: node scripts/verify-package.mjs dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: butler-${{ matrix.os }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+          if-no-files-found: error
+          retention-days: 14
