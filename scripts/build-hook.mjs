@@ -6,7 +6,7 @@ import { build } from "esbuild";
 
 const help = execFileSync(process.execPath, ["--help"], { encoding: "utf8" });
 if (!help.includes("--build-sea")) {
-  console.error(`build:hook 需要支持 --build-sea 的 Node（当前 ${process.version}）。请换成 .node-version 里写的版本，例如 nvm install && nvm use。`);
+  console.error(`build:hook 需要支持 --build-sea 的 Node（当前 ${process.version}）。请换成 .node-version 里写的版本，例如 nvm install 26.3.0 && nvm use 26.3.0，或 fnm use。`);
   process.exit(1);
 }
 if (process.argv.includes("--check-only")) process.exit(0);

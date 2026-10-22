@@ -4,8 +4,8 @@ Thanks for helping. Butler is a personal productivity tool that handles other pe
 
 ## Toolchain
 
-- **Node.js.** Use the version in `.node-version` (26.3.0). `pnpm build:hook` needs it, because it builds `butler-hook` as a Node single executable with `node --build-sea` and refuses to run on a Node without that flag. Tests and the rest of the build need Node 22.13 or later (`node:sqlite`). With nvm: `nvm install && nvm use`.
-- **pnpm** 9.15.0, the version CI uses (`corepack enable`, or `npm i -g pnpm@9.15.0`).
+- **Node.js.** Use the version in `.node-version` (26.3.0). `pnpm build:hook` needs it, because it builds `butler-hook` as a Node single executable with `node --build-sea` and refuses to run on a Node without that flag. Tests and the rest of the build need Node 22.13 or later (`node:sqlite`). With nvm, run `nvm install 26.3.0 && nvm use 26.3.0`. nvm doesn't read `.node-version`, but fnm does (`fnm use`).
+- **pnpm.** Install pnpm 9.15.0, the version CI uses (for example `npm i -g pnpm@9.15.0`).
 - **A C++ toolchain.** `pnpm install` rebuilds the native `node-pty` module for Electron.
   - macOS: Xcode Command Line Tools (`xcode-select --install`).
   - Windows: Visual Studio Build Tools with the "Desktop development with C++" workload, and Python 3.
@@ -36,9 +36,9 @@ With a fresh `CLAUDE_CONFIG_DIR`, you may need to log in to `claude` once under 
 | `pnpm test` | Vitest unit and integration tests (Node 22.13 or later) |
 | `pnpm build` | Main, preload, renderer, and the StateCore MCP bundle |
 | `pnpm build:hook` | The `butler-hook` executable for this platform (needs the Node in `.node-version`) |
-| `pnpm e2e` | Runs `pnpm build` and `pnpm build:hook` first, then the Playwright-for-Electron tests (5 tests) |
+| `pnpm e2e` | Runs `pnpm build` and `pnpm build:hook` first, then the Playwright-for-Electron tests |
 | `pnpm e2e:only` | The same tests without rebuilding |
-| `pnpm dist` | Unsigned installers into `dist/`, for this platform only (macOS: arm64 dmg and zip; Windows: x64 NSIS) |
+| `pnpm dist` | Unsigned installers into `dist/`, for this platform only (macOS: arm64 dmg and zip; Windows: x64 NSIS). It packages what is already built, so run `pnpm build && pnpm build:hook` first. |
 
 The E2E tests are sandboxed. Each test gets its own temporary `BUTLER_HOME`, `CLAUDE_CONFIG_DIR`, home folder and temp folder, and uses a fake `claude` (`e2e/fake-claude`). They never run a real `claude` or read your real data.
 
