@@ -147,3 +147,26 @@ Triage per the plan-2 final review: items marked "→ final wave" were fixed in 
   - D B + `--mcp-config <exported local servers>`: butlerlocal:connected (1 server, 1 tool)
   - no assistant message observed before kill in any run
 - Ruling P3-R1: Task 5 takes route A; INCLUDE_LOCAL_SCOPE = true — B dropped both project and local servers, and C and D each restored theirs via --mcp-config — cost if wrong: tracker MCP tools from .mcp.json / local scope unavailable to nightly handoffs (detectable in the probe)
+
+## Resolved in plan 3
+- Plan 2 parked: `--setting-sources user` vs project / local MCP — live check in a real git repo cwd (Task 1, Ruling P3-R1); opt-in `headlessProjectMcp` via `--mcp-config` or hint-only, per the ruling (Task 5)
+- Plan 2 parked: REQUIRED_FLAGS lacks --setting-sources → added, older claude gets a health warning (Task 1)
+- Plan 2 parked: manual runMorningNow queued behind a scheduled catch-up runs again → skipped when the job already ran after the click (Task 2; now matters because each morning brief may cost personal API money)
+- Plan 2 Task 1 minor: git() lacks LC_ALL=C; summary not length-capped (Task 3)
+- Plan 2 Task 4 minor: HANDOFF_BLOCK_RE accepts butler-handoffX; empty last block shadows an earlier valid one (Task 3)
+- Plan 2 Task 5 minor: normalizeSetting has no default case; parseContent does not normalise partial notices (Task 2)
+- Plan 2 Task 7 minor: rate-limit regex matches a stray 429 in stderr; "0 秒" timeout message; live skipIf treats "0" as enabled (Task 3)
+- Plan 2 Task 12 minor: nightly run crossing local midnight treated as a catch-up (Task 2)
+- Plan 2 Task 13 minor: job failures reply ok to the renderer (IPC now returns the job state); relative BUTLER_HOME crashes; no-ticket /handoff captures dropped silently (now logged) (Tasks 2, 4)
+- Plan 2 Task 14 minor: tab switch flashes the other kind / stale load overwrite; openRequest may pick a dismissed session; pendingOpen left dangling for a missing ticket; "；" literal (Task 4)
+- Plan 2 Task 15 minor: no nightly feedback; working-day toggle stale base; settings stuck on 加载中; tracker textarea no blur-save (Task 4)
+- Plan 1 Task 11 minor: error banner behind the NewTicketDialog modal; settings no retry (Task 4)
+- Plan 1 Task 12 minor: discovery runs not overlap-guarded (Task 4)
+
+## Still open after plan 3
+- Windows and packaging items from both lists (rename EPERM/EBUSY, hook shell, killTree orphan gap, cmd.exe quoting with --mcp-config, notification AUMID, SEA size and build Node, CI) → plan 4
+- Renderer CSP (plan 4, with the packaged build); personal API requests use Node's fetch, which ignores the system proxy → revisit in plan 4 if users need a proxy
+- StateCore wiring must build its env with `statecoreEnv()` (src/main/gateway/statecore-env.ts) → plan 4
+- Low-impact minors not taken (tombstones in memory, INSERT OR IGNORE hiding CHECK violations, ROLLBACK TO masking the original error, dangling symlinks, mid-turn isMeta capture miss, server-name skip false negative, unclaimed item key changes daily, 30-minute DST test, grapheme clusters at the prefill limit) → revisit with E2E in plan 4
+- Nested `claude --resume/-c` re-links (accepted per plan 1 F2)
+- Plan 3 parked items: see the plan-3 SDD ledger summary appended by the controller.
