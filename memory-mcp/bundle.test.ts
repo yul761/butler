@@ -58,6 +58,10 @@ async function connect(command: string, args: string[], env: NodeJS.ProcessEnv) 
   return { call, tool, close };
 }
 
+/** StateCore 读的所有 base URL 都指向本机一个关闭的端口（没有就默认 api.openai.com）。 */
+const CLOSED_PORT = "http://127.0.0.1:9/v1";
+const CLOSED_PORT_URLS = { MODEL_BASE_URL: CLOSED_PORT, OPENAI_BASE_URL: CLOSED_PORT, MODEL_STRUCTURED_OUTPUT_BASE_URL: CLOSED_PORT };
+
 /** 用跑测试的 Node 直接启动 bundle。 */
 const open = (env: NodeJS.ProcessEnv, dataDir: string) => connect(process.execPath, [bundle, "--data", dataDir], env);
 
@@ -67,7 +71,8 @@ const electronBinary = (): string => execFileSync(process.execPath, ["-p", 'requ
 describe("bundled StateCore MCP (design 8.4)", () => {
   it("serves StateCore's tools in the scope from STATECORE_SCOPE, and Butler reads what it wrote", async () => {
     const dataDir = tempDir();
-    const s = await open({ ...process.env, STATECORE_SCOPE: "ticket:T-1", LOG_LEVEL: "warn" }, dataDir);
+    // 这里透传开发者自己的环境变量：万一清理失效、shell 里又导出了 key，请求也只会打到本机一个关闭的端口。
+    const s = await open({ ...process.env, ...CLOSED_PORT_URLS, STATECORE_SCOPE: "ticket:T-1", LOG_LEVEL: "warn" }, dataDir);
     try {
       const names = ((await s.call("tools/list")).result?.tools ?? []).map((t) => t.name);
       expect(names).toEqual(expect.arrayContaining(["remember", "recall", "facts", "why", "forget", "handoff"]));
@@ -83,8 +88,8 @@ describe("bundled StateCore MCP (design 8.4)", () => {
     // 万一清理失效，请求也只会打到本机一个关闭的端口，绝不会到真实的服务商。
     const s = await open(
       {
-        ...process.env, STATECORE_SCOPE: "ticket:T-2", LOG_LEVEL: "warn",
-        FEATURE_LLM: "true", MODEL_API_KEY: "sk-inherited", OPENAI_API_KEY: "sk-inherited-2", MODEL_BASE_URL: "http://127.0.0.1:9/v1", STATECORE_DIGEST_THRESHOLD: "1",
+        ...process.env, ...CLOSED_PORT_URLS, STATECORE_SCOPE: "ticket:T-2", LOG_LEVEL: "warn",
+        FEATURE_LLM: "true", MODEL_API_KEY: "sk-inherited", OPENAI_API_KEY: "sk-inherited-2", STATECORE_DIGEST_THRESHOLD: "1",
       },
       tempDir(),
     );
