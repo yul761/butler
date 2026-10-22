@@ -22,10 +22,12 @@ export interface ButlerPaths {
   claudeJson: string;
 }
 
-/** 环境变量给的目录：相对路径按当前目录解析（Electron 的 setPath 只接受绝对路径）。 */
-export function dirFromEnv(v: string | undefined): string | null {
+/** 环境变量给的目录：~ 展开到 home（GUI 启动时没有 shell 替你展开），相对路径按当前目录解析（Electron 的 setPath 只接受绝对路径）。 */
+export function dirFromEnv(v: string | undefined, home: string = homedir()): string | null {
   const t = v?.trim();
   if (!t) return null;
+  if (t === "~") return home;
+  if (t.startsWith("~/") || t.startsWith("~\\")) return join(home, t.slice(2));
   return isAbsolute(t) ? t : resolve(t);
 }
 
@@ -34,8 +36,8 @@ export function resolvePaths(
   platform: NodeJS.Platform = process.platform,
   home: string = homedir(),
 ): ButlerPaths {
-  const butlerHome = dirFromEnv(env.BUTLER_HOME) ?? join(home, ".butler");
-  const configOverride = dirFromEnv(env.CLAUDE_CONFIG_DIR);
+  const butlerHome = dirFromEnv(env.BUTLER_HOME, home) ?? join(home, ".butler");
+  const configOverride = dirFromEnv(env.CLAUDE_CONFIG_DIR, home);
   const claudeConfigDir = configOverride ?? join(home, ".claude");
   const inbox = join(butlerHome, "inbox");
   const bin = join(butlerHome, "bin");

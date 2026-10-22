@@ -35,4 +35,10 @@ describe("resolvePaths", () => {
     expect(resolvePaths({}, "darwin", "/home/u").mcp).toBe(join("/home/u", ".butler", "mcp"));
     expect(resolvePaths({}, "darwin", "/home/u").statecore).toBe(join("/home/u", ".butler", "statecore"));
   });
+
+  it("expands ~ in BUTLER_HOME and CLAUDE_CONFIG_DIR", () => {
+    expect(resolvePaths({ BUTLER_HOME: "~/bh" }, "darwin", "/home/u").home).toBe(join("/home/u", "bh"));
+    expect(resolvePaths({ BUTLER_HOME: "~" }, "darwin", "/home/u").home).toBe("/home/u");
+    expect(resolvePaths({ CLAUDE_CONFIG_DIR: "~\\cc" }, "win32", "/home/u").claudeConfigDir).toBe(join("/home/u", "cc"));
+  });
 });

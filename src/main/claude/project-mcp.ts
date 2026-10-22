@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
+import { renameWithRetrySync } from "../util/fs-retry";
 import { GIT_SAFE_ARGS, gitBinary } from "../util/git-path";
 
 /**
@@ -186,7 +187,7 @@ function writePrivate(file: string, servers: Json): void {
     } finally {
       closeSync(fd);
     }
-    renameSync(tmp, file);
+    renameWithRetrySync(tmp, file);
   } catch (e) {
     try {
       unlinkSync(tmp);

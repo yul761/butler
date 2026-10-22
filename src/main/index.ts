@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Brief } from "../shared/brief";
 import { IPC } from "../shared/ipc";
+import { APP_ID } from "./app-id";
 import { BriefService } from "./brief/brief-service";
 import { narrateBrief } from "./brief/narrate";
 import { runHeadless } from "./claude/headless";
@@ -92,6 +93,8 @@ const headlessAbort = new AbortController();
 // 隔离运行（BUTLER_HOME 指向别的目录）时也换一个 Electron 用户目录，否则单实例锁会和正在用的 Butler 冲突。
 // 用 resolvePaths 解析：相对路径会变成绝对路径（setPath 只接受绝对路径）。
 if (process.env.BUTLER_HOME?.trim()) app.setPath("userData", join(resolvePaths().home, "electron"));
+// Windows 的通知要有 AppUserModelID，否则点击通知没有反应（计划 2 Task 13）。
+if (process.platform === "win32") app.setAppUserModelId(APP_ID);
 
 function safeSend(channel: string, ...args: unknown[]): void {
   if (win && canSend(win)) win.webContents.send(channel, ...args);
@@ -139,6 +142,10 @@ function createWindow(): BrowserWindow {
   w.on("closed", () => {
     if (win === w) win = null;
   });
+  // Windows 注销 / 关机：不能再把关窗口拦成“藏到托盘”，否则会挡住系统（计划 1 Task 12）。
+  w.on("session-end", () => {
+    quitting = true;
+  });
   // 关窗口只是藏到托盘，终端进程继续运行。
   w.on("close", (e) => {
     if (!quitting) {
@@ -166,7 +173,10 @@ function showWindow(): void {
 
 function createTray(): Tray {
   const isMac = process.platform === "darwin";
-  const icon = nativeImage.createFromBitmap(circleBitmap(16, isMac ? [0, 0, 0] : [0xdf, 0x6f, 0x2f]), { width: 16, height: 16 });
+  const color: [number, number, number] = isMac ? [0, 0, 0] : [0xdf, 0x6f, 0x2f];
+  const icon = nativeImage.createFromBitmap(circleBitmap(16, color), { width: 16, height: 16, scaleFactor: 1 });
+  // 高分屏用 32×32 的 @2x 版本（计划 1 Task 12）。
+  icon.addRepresentation({ scaleFactor: 2, width: 32, height: 32, buffer: circleBitmap(32, color) });
   if (isMac) icon.setTemplateImage(true);
   const t = new Tray(icon);
   t.setToolTip("Butler");
@@ -558,6 +568,11 @@ async function bootstrap(): Promise<void> {
   void healthReady.then(() => checkSchedule("startup"));
   powerMonitor.on("resume", () => void checkSchedule("resume"));
   powerMonitor.on("unlock-screen", () => void checkSchedule("unlock"));
+  // macOS / Linux 关机：和 Windows 的 session-end 一样，不再拦着关窗口。
+  powerMonitor.on("shutdown", () => {
+    quitting = true;
+    app.quit();
+  });
   const scheduleTimer = setInterval(() => void checkSchedule("tick"), TICK_MS);
 
   app.on("will-quit", () => {

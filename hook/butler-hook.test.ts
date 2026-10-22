@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseEnvelope } from "../src/shared/hook-envelope";
@@ -37,5 +37,21 @@ describe("butler-hook", () => {
   it("parseEnvelope rejects foreign JSON", () => {
     expect(parseEnvelope('{"v":2}')).toBeNull();
     expect(parseEnvelope("not json")).toBeNull();
+  });
+
+  it("expands ~ in BUTLER_HOME like the app does", () => {
+    expect(inboxDir({ BUTLER_HOME: "~/b" }, "/h")).toBe(join("/h", "b", "inbox"));
+  });
+
+  it("removes its temporary file when the rename fails", () => {
+    const dir = join(tempDir(), "inbox");
+    const env = buildEnvelope("{}", {}, 1);
+    expect(() =>
+      writeEnvelope(dir, env, () => {
+        throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      }),
+    ).toThrow("EPERM");
+    expect(readdirSync(dir)).toEqual([]);
+    expect(existsSync(dir)).toBe(true);
   });
 });

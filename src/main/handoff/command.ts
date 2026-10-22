@@ -1,6 +1,7 @@
-import { chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { HandoffCommandStatus } from "../../shared/types";
+import { renameWithRetry } from "../util/fs-retry";
 import { HANDOFF_COMMAND_BODY, HANDOFF_COMMAND_MD, parseHandoffCommand } from "./templates";
 
 export function handoffCommandPath(commandsDir: string): string {
@@ -41,7 +42,7 @@ export async function installHandoffCommand(file: string): Promise<HandoffComman
   const tmp = `${target}.butler-tmp`;
   await writeFile(tmp, HANDOFF_COMMAND_MD, "utf8");
   if (mode !== undefined) await chmod(tmp, mode);
-  await rename(tmp, target);
+  await renameWithRetry(tmp, target);
   return "installed";
 }
 

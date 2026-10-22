@@ -1,6 +1,7 @@
-import { access, chmod, copyFile, mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { HookStatus } from "../../shared/types";
+import { renameWithRetry } from "../util/fs-retry";
 
 export const HOOK_EVENTS = ["SessionStart", "Stop", "UserPromptSubmit", "SessionEnd"] as const;
 
@@ -145,7 +146,7 @@ export async function writeSettingsAtomic(file: string, data: Json): Promise<voi
   const tmp = `${target}.butler-tmp`;
   await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
   if (mode !== undefined) await chmod(tmp, mode);
-  await rename(tmp, target);
+  await renameWithRetry(tmp, target);
 }
 
 export async function installHooks(settingsFile: string, hookBin: string, platform: NodeJS.Platform): Promise<void> {
@@ -164,5 +165,5 @@ export async function installHookBinary(src: string, dest: string): Promise<void
   const tmp = `${dest}.tmp`;
   await copyFile(src, tmp);
   await chmod(tmp, 0o755);
-  await rename(tmp, dest);
+  await renameWithRetry(tmp, dest);
 }

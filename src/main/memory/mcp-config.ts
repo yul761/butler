@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ticketScope, WORKSPACE_SCOPE } from "../../shared/memory";
+import { renameWithRetrySync } from "../util/fs-retry";
 
 /** 挂给 claude 的 server 名：不和用户自己装的 statecore 重名（设计文档 8.4）。 */
 export const MEMORY_SERVER = "butler-memory";
@@ -59,7 +60,7 @@ export function writeTicketMcpConfig(o: { mcpDir: string; ticketKey: string; lau
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   try {
     writeFileSync(tmp, JSON.stringify({ mcpServers: memoryServers(o) }, null, 2), { mode: 0o600, flag: "wx" });
-    renameSync(tmp, file);
+    renameWithRetrySync(tmp, file);
   } catch (e) {
     try {
       unlinkSync(tmp);
