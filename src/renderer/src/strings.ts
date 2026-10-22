@@ -203,7 +203,7 @@ export const S = {
     off: "不调用个人 API。",
     metadata: "只发占位符、状态、PR 和 follow-up 的类型、数量和天数，不发任何原文。",
     redacted: "再加上下一步、阻塞和 follow-up 描述的短文本；敏感词表里的人名和词、ticket 号、仓库、分支、PR 作者和 ticket 标题会换成占位符，不在表里的人名不会被换掉。",
-    full: "不做替换，发送真实的 ticket 号和原文；敏感信息扫描仍然生效。StateCore 记忆（计划中）也可能把原始事件发给这个服务商，所以只应用于你信任其处理工作内容的服务商。",
+    full: "不做替换，发送真实的 ticket 号和原文；“今日重点”仍然做敏感信息扫描。这一档还会把 claude 里记下的原始对话片段（StateCore 记忆）每晚经个人 API 蒸馏成要点，这部分不做扫描，记在审计页。只应用于你信任其处理工作内容的服务商。",
   } as Record<PrivacyLevel, string>,
   llmFields: {
     llmBaseUrl: "服务地址（OpenAI 兼容接口的 base URL）",
@@ -241,7 +241,8 @@ export const S = {
   llmOverBudget: (spent: string, budget: string) => `本月已花 ${spent}，达到预算 ${budget}：本月不再调用。`,
   llmFullWarning: "完整档位会把真实的 ticket 号和原文发给服务商，只靠敏感信息扫描兜底。",
   audit: "审计",
-  auditIntro: "每次调用个人 LLM API 的记录：原样发出的内容、响应、token 数和费用；被拦截或超预算的请求只记原因，没有发出任何内容。",
+  auditStatecore: "StateCore 记忆蒸馏",
+  auditIntro: "每次调用个人 LLM API 的记录（早间简报的“今日重点”，以及完整档位下 StateCore 记忆的蒸馏）：原样发出的内容、响应、token 数和费用；被拦截或超预算的请求只记原因，没有发出任何内容。",
   auditEmpty: "还没有调用记录。",
   auditStatus: { pending: "未完成", sent: "已发送", failed: "发送失败", blocked: "已拦截", budget: "超预算", declined: "已拒绝" } as Record<string, string>,
   auditTokens: (i: number, o: number) => `${i} / ${o} token`,

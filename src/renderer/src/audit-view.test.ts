@@ -17,6 +17,7 @@ describe("audit view helpers", () => {
     expect(auditSummary(entry({ status: "blocked", tokensIn: null, tokensOut: null, costUsd: null }))).toBe("仅元数据（默认） · 已拦截");
     expect(blockedText([{ rule: "url", sample: "htt…(23)" }, { rule: "secret", sample: "sk-…(40)" }])).toBe("网址（htt…(23)）；密钥或令牌（sk-…(40)）");
     expect(blockedText(null)).toBe("");
+    expect(auditSummary(entry({ source: "statecore", level: "full" }))).toBe("StateCore 记忆蒸馏 · 完整 · 已发送 · 120 / 40 token · $0.0023");
   });
 
   it("pretty-prints the request body including the JSON inside messages, and leaves non-JSON alone", () => {

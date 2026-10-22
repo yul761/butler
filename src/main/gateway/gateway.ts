@@ -3,7 +3,7 @@ import type { ScanHit } from "../../shared/llm";
 import type { AuditFinish, AuditRepo } from "../db/audit-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TermsRepo } from "../db/terms-repo";
-import { isLoopbackHost, llmConfig, type LlmConfig } from "../settings/settings-values";
+import { isLoopbackHost, llmConfig, type LlmConfig, type PriceRule } from "../settings/settings-values";
 import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart, sentWithoutUsage } from "./budget";
 import type { KeyStore } from "./key-store";
 import { NARRATIVE_MAX_TOKENS, narrativeMessages, parseNarrative } from "./narrative";
@@ -11,9 +11,15 @@ import { project } from "./projection";
 import { chatBody, chatCompletion, chatUrl, ProviderError, scrub, type ChatCall, type ChatMessage, type ChatResponse } from "./provider";
 import { defaultRng, Pseudonymizer, restore } from "./pseudonym";
 import { scanOutbound } from "./scanner";
-import type { NarrativeSource, OutboundPayload, Rng } from "./types";
+import type { NarrativeSource, OutboundPayload, Rng, StatecoreChatModel } from "./types";
 
 const QUITTING = "app 正在退出";
+
+/** StateCore 每次蒸馏调用的输出上限（它要求模型输出结构化 JSON）；发送前的预算检查按这个上限估算。 */
+export const STATECORE_MAX_TOKENS = 8192;
+
+/** StateCore 蒸馏调用被拒绝或失败：StateCore 把这次蒸馏记为 failed，事件留到下次。 */
+export class StatecoreCallError extends Error {}
 
 const errorText = (e: unknown): string => {
   try {
@@ -80,8 +86,31 @@ export function confirmText(url: string, model: string, messages: ChatMessage[])
 
 const llmOff = (cfg: LlmConfig): boolean => cfg.level === "off" || !cfg.baseUrl || !cfg.model;
 
+/** StateCore 蒸馏的条件（计划 4 R1 / P4-R5）：full 档位、配置齐全、没开发送前确认。 */
+const statecoreAllowed = (cfg: LlmConfig): boolean => cfg.level === "full" && !llmOff(cfg) && !cfg.confirm;
+
+/** 一次已经写好 pending 审计行、通过了预算检查的请求（send() 的输入）。 */
+interface SendRequest {
+  /** 日志里的名字（narrative / statecore）。 */
+  what: string;
+  cfg: LlmConfig;
+  apiKey: string | null;
+  messages: ChatMessage[];
+  maxTokens: number;
+  /** pending 时记下的请求体。 */
+  body: string;
+  auditId: number;
+  price: PriceRule;
+  signal?: AbortSignal;
+  /** 检查（去掉 key 之后的）响应内容，返回要记进审计的 error；可用时返回 null。不能抛错。 */
+  check: (content: string) => string | null;
+}
+
+/** send() 的结果：没收到可用的响应（审计已记 failed 或按 2xx 保守记账），或者收到了响应（recorded：花费是否记上）。 */
+type SendOutcome = { sent: false; error: string } | { sent: true; content: string; recorded: boolean };
+
 /**
- * 个人 LLM API 的唯一出口（设计文档第 7 节）。只用于早间简报的“今日重点”。
+ * 个人 LLM API 的唯一出口（设计文档第 7 节）。用于早间简报的“今日重点”，以及 full 档位下 StateCore 记忆的蒸馏（计划 4 R1）。
  * 串行执行：两次请求不会同时通过预算检查。narrate() 永远不抛错。
  */
 export class PrivacyGateway {
@@ -89,15 +118,72 @@ export class PrivacyGateway {
 
   constructor(private readonly d: GatewayDeps) {}
 
-  narrate(src: NarrativeSource, signal?: AbortSignal): Promise<NarrativeResult> {
-    const run = this.chain.then(() => this.run(src, signal)).catch((e: unknown): NarrativeResult => {
-      // 意外错误（数据库等）里不会有 key：key 只在 run() 里、只进请求头；保险起见仍去掉 Bearer 凭证。
-      this.log("narrative failed", new Error(scrub(errorText(e), null)));
-      return result("failed");
-    });
+  /** 串行队列：预算检查、发送、记账一次只有一个调用在进行（“今日重点”和 StateCore 蒸馏共用）。 */
+  private serial<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(fn);
     // 链条本身永远不会失败：一次调用出了任何问题，后面的调用照常排队执行。
     this.chain = run.catch(() => undefined);
     return run;
+  }
+
+  narrate(src: NarrativeSource, signal?: AbortSignal): Promise<NarrativeResult> {
+    return this.serial(() => this.run(src, signal)).catch((e: unknown): NarrativeResult => {
+      // 意外错误（数据库等）里不会有 key：key 只进请求头；保险起见仍去掉 Bearer 凭证。
+      this.log("narrative failed", new Error(scrub(errorText(e), null)));
+      return result("failed");
+    });
+  }
+
+  /**
+   * StateCore 蒸馏用的模型（计划 4 R1）：只有 full 档位、配置齐全、没开“发送前确认”时才给。
+   * 每次 chat() 都重新检查这些条件（蒸馏进行中改了档位也立即生效），在 gateway 里带上 key、检查预算、
+   * 写审计（source = statecore）后发送。不做敏感信息扫描：full 档位下设计文档 8.5 接受发送原始事件（Ruling P4-R1）。
+   * 被拒绝或失败时 reject（StatecoreCallError）。
+   */
+  statecoreModel(signal?: AbortSignal): StatecoreChatModel | null {
+    if (!statecoreAllowed(llmConfig(this.d.settings))) return null;
+    return {
+      chat: (messages) =>
+        this.serial(() => this.statecoreCall(messages, signal)).catch((e: unknown): never => {
+          // 意外错误（数据库等）也只以 StatecoreCallError 交出去，并去掉 Bearer 凭证。
+          throw e instanceof StatecoreCallError ? e : new StatecoreCallError(scrub(errorText(e), null));
+        }),
+    };
+  }
+
+  private async statecoreCall(input: { role: "system" | "user"; content: string }[], signal?: AbortSignal): Promise<string> {
+    const cfg = llmConfig(this.d.settings);
+    const now = this.d.now();
+    this.d.audit.prune(auditCutoff(now, cfg.retentionDays));
+    if (!statecoreAllowed(cfg)) throw new StatecoreCallError("StateCore 蒸馏只在完整档位、关闭发送前确认时运行");
+    if (signal?.aborted) throw new StatecoreCallError(QUITTING);
+    const url = new URL(cfg.baseUrl);
+    const apiKey = this.d.keys.get();
+    // 远程服务必须有 key；保存过但解不开的 key 本机服务也不发。
+    if (apiKey === null && (this.d.keys.saved() || !isLoopbackHost(url.hostname))) throw new StatecoreCallError("没有可用的 API key");
+
+    // 只取 role 和 content 两个字段，其余一概不发。
+    const messages: ChatMessage[] = input.map((m) => ({ role: m.role === "system" ? "system" : "user", content: String(m.content) }));
+    const body = chatBody({ model: cfg.model, messages, maxTokens: STATECORE_MAX_TOKENS });
+    const base = { ts: now, provider: url.host, model: cfg.model, level: "full" as const, source: "statecore" as const };
+    const budget = checkBudget({
+      prices: cfg.prices, model: cfg.model, budgetUsd: cfg.budgetUsd, spentUsd: this.d.audit.costSince(monthStart(now)),
+      inputText: messages.map((m) => m.content).join("\n"), maxOutputTokens: STATECORE_MAX_TOKENS,
+    });
+    if (!budget.ok) {
+      this.d.audit.insert({ ...base, status: "budget", payloadSent: null, error: budget.message });
+      throw new StatecoreCallError(budget.message);
+    }
+
+    const auditId = this.d.audit.insert({ ...base, status: "pending", payloadSent: body });
+    const out = await this.send({
+      what: "statecore", cfg, apiKey, messages, maxTokens: STATECORE_MAX_TOKENS, body, auditId, price: budget.price, signal,
+      check: () => null,
+    });
+    if (!out.sent) throw new StatecoreCallError(out.error);
+    // 花费没记上就不交出结果：下一次预算检查必须看得到这次的花费。
+    if (!out.recorded) throw new StatecoreCallError("审计记录写入失败");
+    return out.content;
   }
 
   /** 个人 LLM 是否关闭（档位 off，或没配 base URL / 模型）：调用方据此跳过构建输入，narrate() 用的是同一个判断。 */
@@ -195,41 +281,58 @@ export class PrivacyGateway {
       return result("failed", auditId);
     }
 
-    // 5. 发送。
+    // 5. 发送、记账、校验、还原。
+    let lines: string[] = [];
+    const out = await this.send({
+      what: "narrative", cfg, apiKey, messages, maxTokens: NARRATIVE_MAX_TOKENS, body, auditId, price: budget.price, signal,
+      check: (content) => {
+        let error: string | null = "响应不符合格式";
+        try {
+          const focus = parseNarrative(content);
+          lines = (focus ?? []).map((f) => restore(f, pseudo.mapping).text).filter((l) => l.length > 0);
+          error = focus === null ? "响应不符合格式" : lines.length === 0 ? "响应里没有可用的句子" : null;
+        } catch (e) {
+          this.log("narrative reply could not be processed", e);
+        }
+        return error;
+      },
+    });
+    if (!out.sent || !out.recorded || lines.length === 0) return result("failed", auditId);
+    return result("ok", auditId, lines.join("\n"));
+  }
+
+  /**
+   * 发送一次已写好 pending 审计行的请求，并收尾这一行（run() 和 statecoreCall() 共用）。
+   * key 只在这里进请求头；错误文本、响应里的 key 都去掉。
+   */
+  private async send(r: SendRequest): Promise<SendOutcome> {
+    const { cfg, apiKey, auditId } = r;
     let res: ChatResponse;
     try {
-      res = await (this.d.chat ?? chatCompletion)({ baseUrl: cfg.baseUrl, apiKey, model: cfg.model, messages, maxTokens: NARRATIVE_MAX_TOKENS, signal });
+      res = await (this.d.chat ?? chatCompletion)({ baseUrl: cfg.baseUrl, apiKey, model: cfg.model, messages: r.messages, maxTokens: r.maxTokens, signal: r.signal });
     } catch (e) {
       const message = scrub(errorText(e), apiKey);
-      this.log(`narrative request failed: ${message}`);
+      this.log(`${r.what} request failed: ${message}`);
       if (e instanceof ProviderError && e.kind === "bad_response" && e.status !== null && e.status >= 200 && e.status < 300) {
         // 服务商以 2xx 收下了请求，只是响应用不了：可能已经计费。没有 usage，按发出的请求体和输出上限保守记账。
-        const sentBody = e.sentBody ?? body;
-        this.record(auditId, { status: "sent", payloadSent: sentBody, ...sentWithoutUsage(budget.price, sentBody), error: message });
-        return result("failed", auditId);
+        const sentBody = e.sentBody ?? r.body;
+        this.record(auditId, { status: "sent", payloadSent: sentBody, ...sentWithoutUsage(r.price, sentBody, r.maxTokens), error: message });
+        return { sent: false, error: message };
       }
       // 请求体真的发出去了就记下实际发出的那个（用户要能看到）；确定什么都没发出去时清空 pending 时记的请求体。
       // 不是 ProviderError（不知道发没发）时保留 pending 的请求体：宁可多给用户看。
       const sent = e instanceof ProviderError ? e.sentBody : undefined;
       this.d.audit.finish(auditId, { status: "failed", error: message, ...(sent === undefined ? {} : { payloadSent: sent }) });
-      return result("failed", auditId);
+      return { sent: false, error: message };
     }
 
-    // 6. 记账、校验、还原。provider 已经去掉了 raw / content 里的 key；这里再去一次，换了 chat 实现也成立。
-    //    没有 usage 时按实际发出的请求体和收到的内容保守估算。
+    // 记账、校验。provider 已经去掉了 raw / content 里的 key；这里再去一次，换了 chat 实现也成立。
+    // 没有 usage 时按实际发出的请求体和收到的内容保守估算。
     const content = scrub(res.content, apiKey);
     const tokensIn = res.tokensIn ?? estimateTokens(res.sentBody);
     const tokensOut = res.tokensOut ?? estimateTokens(content);
-    const cost = costUsd(budget.price, tokensIn, tokensOut);
-    let lines: string[] = [];
-    let error: string | null = "响应不符合格式";
-    try {
-      const focus = parseNarrative(content);
-      lines = (focus ?? []).map((f) => restore(f, pseudo.mapping).text).filter((l) => l.length > 0);
-      error = focus === null ? "响应不符合格式" : lines.length === 0 ? "响应里没有可用的句子" : null;
-    } catch (e) {
-      this.log("narrative reply could not be processed", e);
-    }
+    const cost = costUsd(r.price, tokensIn, tokensOut);
+    const error = r.check(content);
     const recorded = this.record(auditId, {
       status: "sent",
       payloadSent: res.sentBody,
@@ -239,8 +342,7 @@ export class PrivacyGateway {
       costUsd: cost,
       error,
     });
-    if (!recorded || lines.length === 0) return result("failed", auditId);
-    return result("ok", auditId, lines.join("\n"));
+    return { sent: true, content, recorded };
   }
 
   /** 发送前确认，和“app 正在退出”赛跑：退出时不再等对话框。 */

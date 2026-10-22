@@ -11,9 +11,10 @@ export function blockedText(hits: ScanHit[] | null): string {
   return (hits ?? []).map((h) => `${S.scanRule[h.rule] ?? h.rule}（${h.sample}）`).join(S.listSep);
 }
 
-/** 列表里每一行的摘要：档位 · 状态 · token · 费用。 */
+/** 列表里每一行的摘要：（来源）· 档位 · 状态 · token · 费用。“今日重点”不写来源。 */
 export function auditSummary(e: AuditEntry): string {
   const parts = [S.privacyLevels[e.level], auditStatusLabel(e.status)];
+  if (e.source === "statecore") parts.unshift(S.auditStatecore);
   if (e.tokensIn !== null || e.tokensOut !== null) parts.push(S.auditTokens(e.tokensIn ?? 0, e.tokensOut ?? 0));
   if (e.costUsd !== null) parts.push(formatUsd(e.costUsd));
   return parts.join(" · ");
