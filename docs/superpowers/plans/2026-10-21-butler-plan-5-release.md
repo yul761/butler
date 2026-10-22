@@ -1,5 +1,7 @@
 # Butler 计划 5：发布（CSP、打包、Windows 收尾、E2E、CI、开源文档） Implementation Plan
 
+> **Note:** APP_ID was changed to `io.statecore.butler` before v1.0.0 (Windows AUMID and electron-builder `appId`). This plan keeps the original value, `io.github.yul761.butler`, as history.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把计划 1–4 做成可以发布的 v1.0：渲染进程有 CSP；`git` 和 Windows 上的 `claude.cmd` 都按绝对路径直接启动（去掉 cmd.exe 这一层，`--mcp-config` 路径里有空格也能传、超时能杀干净整棵进程树）；Windows 的通知身份、注销关机、rename 重试补齐；`butler-hook` 的构建工具链有检查；electron-builder 产出不签名的 `.dmg` 和 NSIS `.exe`；Playwright for Electron 用一个假的 claude 跑通“新建 ticket → 启动 session → hook 上报 → handoff → 早间简报 → 点击打开”；GitHub Actions 在 macOS 和 Windows 上跑全部检查和 E2E；仓库有 README、LICENSE、CONTRIBUTING 和“接入另一家公司的配置”指南。

@@ -70,16 +70,15 @@ The app is ad-hoc signed but not notarized, and macOS builds are arm64 only.
 
 1. Open the `.dmg` and drag Butler into Applications.
 2. Open Butler. macOS refuses: it says Apple cannot verify the app, or that the developer cannot be verified.
-3. Allow it in one of these ways:
-   - **System Settings → Privacy & Security**, scroll down to the message about Butler, click **Open Anyway** and confirm.
-   - On macOS 14 and earlier, you can instead right-click (Control-click) Butler in Applications, choose **Open**, then **Open** again.
-   - Or remove the quarantine flag in Terminal:
+3. Allow it with either option:
+   - **Option A: Open Anyway.** Open **System Settings → Privacy & Security**, scroll down to the message about Butler, click **Open Anyway** and confirm. On macOS 14 and earlier, you can instead right-click (Control-click) Butler in Applications, choose **Open**, then **Open** again.
+   - **Option B: Terminal.** Remove the quarantine flag from the app and everything inside it, then open Butler normally:
 
      ```sh
      xattr -dr com.apple.quarantine /Applications/Butler.app
      ```
 
-If macOS says Butler "is damaged and can't be opened", there is no **Open Anyway** button. Run `xattr -dr com.apple.quarantine /Applications/Butler.app` instead.
+If macOS says Butler "is damaged and can't be opened", there is no **Open Anyway** button. Use option B.
 
 Repeat this after every new download.
 
@@ -135,6 +134,12 @@ Apart from the hook install, Butler only reads Claude Code's files:
 
 Your personal API key is encrypted with the OS keychain (macOS Keychain / Windows DPAPI). After you save it, the UI shows at most its last 4 characters. A key shorter than 12 characters is shown only as `••••`.
 
+Butler uses the keychain only when you save a key, and later when it needs that key to show its last 4 characters or to call your API. If you never save a key, Butler never touches the keychain.
+
+On macOS, a dialog may ask whether Butler may use "butler Safe Storage" in your keychain (Electron names the item after the app's internal name, `butler`). Click **Always Allow**. The builds are ad-hoc signed, not signed with a Developer ID, so macOS treats every new version as a different app and asks again once after each upgrade. This can happen right at startup if a scheduled brief or handoff needs the key. Butler's window does not respond until you answer. If you click **Deny**, Butler can't read the saved key, and Settings shows it as unreadable; enter it again.
+
+Electron also keeps its own profile folder, with Chromium's caches and the single-instance lock: `~/Library/Application Support/butler` on macOS and `%APPDATA%\butler` on Windows. When `BUTLER_HOME` is set, Butler uses `<BUTLER_HOME>/electron` instead. On Windows this folder also holds the DPAPI-protected encryption key for the saved API key, so if you delete it, enter the API key again.
+
 ## StateCore memory
 
 Butler embeds StateCore. Each session Butler starts gets two keyless MCP servers. `butler-memory` holds this ticket's memory and `butler-workspace` holds learnings shared across tickets.
@@ -185,6 +190,7 @@ The **审计 (Audit)** page lists every call that was sent, blocked by the scann
 
 - Unsigned builds (see above). macOS builds are Apple silicon only.
 - No auto-update.
+- macOS asks again for keychain access to the saved API key after every upgrade (builds are ad-hoc signed). With no key saved, there is no prompt.
 - The app uses the default Electron icon.
 - The personal API is called with Node's `fetch`, which does not use the system proxy settings.
 - **Windows, npm-installed Claude Code.** Butler starts the npm/pnpm `claude.cmd` shim's target directly, without `cmd.exe`. The target is either the native `claude.exe` or `node <script>`.
@@ -196,7 +202,7 @@ The **审计 (Audit)** page lists every call that was sent, blocked by the scann
 
 1. **设置 → 环境检查 → 卸载 (Settings → Environment check → Uninstall)** removes Butler's hooks and `/handoff` command from Claude Code.
 2. Delete the app. On macOS, drag Butler out of Applications. On Windows, go to Settings → Apps → Butler → Uninstall.
-3. To also remove your data, delete `~/.butler`.
+3. To also remove your data, delete `~/.butler`. Neither step removes Electron's profile folder, `~/Library/Application Support/butler` on macOS or `%APPDATA%\butler` on Windows; delete it too for a clean uninstall. On macOS, if you saved an API key, you can also delete the "butler Safe Storage" item in Keychain Access.
 
 ## Development
 
