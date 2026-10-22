@@ -33,9 +33,13 @@ export function memDb(): Db {
   return openDatabase(":memory:");
 }
 
-/** realpath：macOS 的 /var 实际是 /private/var，git 返回的是真实路径。 */
+/**
+ * 真实路径：macOS 的 /var 实际是 /private/var，git 返回的是真实路径。
+ * 用 .native：Windows runner 的 os.tmpdir() 是 8.3 短路径（C:\Users\RUNNER~1\...），JS 版 realpathSync 不展开短名，
+ * 而 git rev-parse --show-toplevel 返回长路径（C:\Users\runneradmin\...），两者比较就对不上。
+ */
 export function tempDir(prefix = "butler-test-"): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
 }
 
 /** 一个带初始提交、当前分支为 main 的临时 git 仓库。 */

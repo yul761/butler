@@ -45,7 +45,7 @@ function createSandbox(): Sandbox {
   for (const f of ["out/main/index.js", "build/memory-mcp/statecore-mcp.cjs", isWin ? "build/hook/butler-hook.exe" : "build/hook/butler-hook"]) {
     if (!existsSync(join(ROOT, f))) throw new Error(`${f} is missing: run pnpm build && pnpm build:hook before pnpm e2e:only`);
   }
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "butler-e2e-")));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "butler-e2e-")));
   const butlerHome = join(dir, "Butler Home");
   const claudeConfigDir = join(dir, "claude-config");
   const bin = binDir(dir);
