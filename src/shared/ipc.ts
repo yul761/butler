@@ -37,6 +37,8 @@ export const IPC = {
   termsList: "terms:list",
   termsSave: "terms:save",
   auditList: "audit:list",
+  memoryView: "memory:view",
+  memoryWhy: "memory:why",
   appNavigate: "app:navigate",
 } as const;
 
@@ -49,6 +51,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,
+  IPC.memoryView, IPC.memoryWhy,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];

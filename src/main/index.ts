@@ -505,7 +505,7 @@ async function bootstrap(): Promise<void> {
 
   registerIpc({
     tickets, ticketService, sessionService, pty, health, followups, handoffs, settings, briefService, runner, scheduler, jobs,
-    keys, terms, audit,
+    keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     briefRefreshing: () => briefRefreshing,
     briefNarrating: () => briefNarrating,

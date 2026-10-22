@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, auditCursorArg, termsArg, TERMS_INPUT_LIMIT } from "./validate";
+import { apiKeyArg, auditCursorArg, factIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -48,5 +48,14 @@ describe("IPC argument validation", () => {
     for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 60, "12", [12], { id: 12 }, true]) {
       expect(() => auditCursorArg(bad)).toThrow();
     }
+  });
+});
+
+describe("memory IPC arguments", () => {
+  it("accepts a ticket key and a StateCore fact id, nothing else", () => {
+    expect(ticketKeyArg("PROJ-12")).toBe("PROJ-12");
+    expect(factIdArg("0e133fce-6f5f-40b6-9905-4119541d9a7e")).toBe("0e133fce-6f5f-40b6-9905-4119541d9a7e");
+    for (const bad of [undefined, null, 1, "", "x".repeat(201), {}]) expect(() => ticketKeyArg(bad), String(bad)).toThrow();
+    for (const bad of [undefined, "", "a b", "../x", "x".repeat(101), 5]) expect(() => factIdArg(bad), String(bad)).toThrow();
   });
 });

@@ -4,8 +4,9 @@ import { api } from "../api";
 import { reportError } from "../errors";
 import { followupMeta, outcomeMessage, splitFollowups, triggerLabel } from "../followup-view";
 import { S } from "../strings";
+import { MemoryPanel } from "./MemoryPanel";
 
-type Panel = "followups" | "history";
+type Panel = "followups" | "history" | "memory";
 
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -61,6 +62,7 @@ export function TicketOverview({ ticketKey }: { ticketKey: string }) {
         {pr && <span className="muted">{S.prLine(pr.number, pr.state, pr.review)}</span>}
         <button className={panel === "followups" ? "active" : ""} onClick={() => toggle("followups")}>{S.followupsTab(active.length)}</button>
         <button className={panel === "history" ? "active" : ""} onClick={() => toggle("history")}>{S.historyTab(history.length)}</button>
+        <button className={panel === "memory" ? "active" : ""} onClick={() => toggle("memory")}>{S.memoryTab}</button>
         <button disabled={running} onClick={() => void runNow()}>{running ? S.handoffRunning : S.runHandoff}</button>
         {message && <span className="muted">{message}</span>}
       </div>
@@ -99,6 +101,11 @@ export function TicketOverview({ ticketKey }: { ticketKey: string }) {
           {history.map((h) => (
             <HandoffEntry key={h.id} h={h} />
           ))}
+        </div>
+      )}
+      {panel === "memory" && (
+        <div className="overview-panel">
+          <MemoryPanel ticketKey={ticketKey} />
         </div>
       )}
     </div>

@@ -36,3 +36,15 @@ export function auditCursorArg(v: unknown): number | undefined {
   if (typeof v === "number" && Number.isSafeInteger(v) && v > 0) return v;
   throw new Error(`invalid audit cursor: ${typeof v}`);
 }
+
+/** ticket 号：1–200 字的字符串（格式由 ticket 正则决定；查不到就是空结果）。 */
+export function ticketKeyArg(v: unknown): string {
+  if (typeof v !== "string" || v.length === 0 || v.length > 200) throw new Error("invalid ticket key");
+  return v;
+}
+
+/** StateCore 的事实 / 交接 id（UUID）。 */
+export function factIdArg(v: unknown): string {
+  if (typeof v !== "string" || !/^[A-Za-z0-9-]{1,100}$/.test(v)) throw new Error("invalid memory id");
+  return v;
+}

@@ -8,6 +8,7 @@ import {
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { BriefService } from "../brief/brief-service";
 import type { AuditRepo } from "../db/audit-repo";
+import type { MemoryService } from "../memory/memory-service";
 import { JOB_MORNING, JOB_NIGHTLY, type JobsRepo } from "../db/jobs-repo";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
@@ -25,7 +26,7 @@ import type { SessionService } from "../sessions/session-service";
 import { normalizeSetting, SettingError } from "../settings/settings-values";
 import { TicketError, type TicketService } from "../tickets/ticket-service";
 import { toIpcResult } from "./result";
-import { apiKeyArg, auditCursorArg, termsArg } from "./validate";
+import { apiKeyArg, auditCursorArg, factIdArg, termsArg, ticketKeyArg } from "./validate";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -43,6 +44,7 @@ export interface IpcDeps {
   keys: KeyStore;
   terms: TermsRepo;
   audit: AuditRepo;
+  memory: Pick<MemoryService, "view" | "why">;
   llmStatus: () => LlmStatus;
   /** 早间刷新进行中。 */
   briefRefreshing: () => boolean;
@@ -199,4 +201,8 @@ export function registerIpc(d: IpcDeps): void {
   });
   handle(IPC.auditList, (beforeId: unknown): AuditPage =>
     auditPage({ settings: d.settings, keys: d.keys, audit: d.audit, now: d.now }, auditCursorArg(beforeId)));
+
+  // StateCore 记忆（设计文档 8.4）：只读。
+  handle(IPC.memoryView, (key: unknown) => d.memory.view(ticketKeyArg(key)));
+  handle(IPC.memoryWhy, (key: unknown, factId: unknown) => d.memory.why(ticketKeyArg(key), factIdArg(factId)));
 }

@@ -14,4 +14,11 @@ describe("IPC whitelist", () => {
       expect(EVENT_CHANNELS).not.toContain(c);
     }
   });
+
+  it("exposes the memory channels as invoke-only", () => {
+    for (const c of [IPC.memoryView, IPC.memoryWhy]) {
+      expect(INVOKE_CHANNELS).toContain(c);
+      expect(EVENT_CHANNELS).not.toContain(c);
+    }
+  });
 });
