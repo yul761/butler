@@ -38,16 +38,23 @@ mac:
     - target: zip
       arch: [arm64]
   category: public.app-category.developer-tools
+  # 安装包文件名固定、不带空格（GitHub 会把 release 资源名里的空格换成点，README 里写的名字就对不上了）。
+  # mac.artifactName 用于 zip，dmg.artifactName 用于 dmg；值与 electron-builder 的默认相同。
+  artifactName: "Butler-${version}-${arch}-mac.${ext}"
   # 不用开发者证书签名；after-pack.cjs 做 ad-hoc 签名（arm64 上完全不签名的 app 无法启动）。
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false
+dmg:
+  artifactName: "Butler-${version}-${arch}.${ext}"
 win:
   target:
     - target: nsis
       arch: [x64]
 # 都写明（值与 electron-builder 的默认相同），行为固定下来：按用户安装、桌面和开始菜单快捷方式、卸载时不删用户数据（~/.butler 本来也不在安装目录里）。
 nsis:
+  # 默认是 "${productName} Setup ${version}.${ext}"，带空格。
+  artifactName: "Butler-Setup-${version}.${ext}"
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

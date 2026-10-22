@@ -49,6 +49,9 @@ describe("CI workflows (design 1.3, 11)", () => {
 
   it("builds unsigned installers on both platforms and only drafts a release", () => {
     expect(release.jobs.build.strategy?.matrix.os).toEqual(["macos-14", "windows-latest"]);
+    // One platform's failure does not cancel the other's build; the release still waits for both.
+    expect(release.jobs.build.strategy?.["fail-fast"]).toBe(false);
+    expect(release.jobs.release.needs).toBe("build");
     expect(runs(release.jobs.build)).toContain("pnpm dist");
     const publish = runs(release.jobs.release).join("\n");
     expect(publish).toContain("gh release create");
@@ -75,6 +78,15 @@ describe("CI workflows (design 1.3, 11)", () => {
     const upload = steps.find((s) => s.uses?.startsWith("actions/upload-artifact@") && s.if === "failure()");
     expect(String(upload?.with?.path)).toContain("test-results/");
     expect(String(upload?.with?.path)).toContain("butler-e2e-");
+  });
+
+  it("uploads only the named installers, never the NSIS uninstaller stub", () => {
+    for (const job of [ci.jobs.package, release.jobs.build]) {
+      const upload = job.steps.find((s) => s.uses?.startsWith("actions/upload-artifact@"));
+      const globs = String(upload?.with?.path).trim().split("\n").map((l) => l.trim());
+      expect(globs).toEqual(["dist/*.dmg", "dist/*.zip", "dist/Butler-Setup-*.exe"]);
+      expect(upload?.with?.["if-no-files-found"]).toBe("error");
+    }
   });
 
   it("only cancels superseded pull request runs", () => {

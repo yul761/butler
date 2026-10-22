@@ -101,12 +101,13 @@ jobs:
         run: pnpm dist
       - name: Verify the package contents (hook, memory MCP, node-pty prebuilds)
         run: node scripts/verify-package.mjs dist
+      # Installers only: dist/Butler-Setup-*.exe, never electron-builder's __uninstaller-nsis-*.exe stub.
       - uses: actions/upload-artifact@v7
         with:
           name: butler-${{ matrix.os }}
           path: |
             dist/*.dmg
             dist/*.zip
-            dist/*.exe
+            dist/Butler-Setup-*.exe
           if-no-files-found: error
           retention-days: 14

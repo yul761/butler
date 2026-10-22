@@ -11,7 +11,8 @@ permissions:
 jobs:
   build:
     strategy:
-      fail-fast: true
+      # One platform's failure must not cancel the other's build (its logs help diagnose); the release job still needs both.
+      fail-fast: false
       matrix:
         os: [macos-14, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -48,13 +49,14 @@ jobs:
         run: pnpm dist
       - name: Verify the package contents (hook, memory MCP, node-pty prebuilds)
         run: node scripts/verify-package.mjs dist
+      # Installers only: dist/Butler-Setup-*.exe, never electron-builder's __uninstaller-nsis-*.exe stub.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: butler-${{ matrix.os }}
           path: |
             dist/*.dmg
             dist/*.zip
-            dist/*.exe
+            dist/Butler-Setup-*.exe
           if-no-files-found: error
 
   release:

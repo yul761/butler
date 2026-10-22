@@ -27,6 +27,9 @@ function expectedFiles(platform, resources) {
   return [...common, join(resources, "hook", "butler-hook"), join(pre, "pty.node"), join(pre, "spawn-helper")];
 }
 
+/** 安装包的文件名（electron-builder.yml 的 artifactName），CI 和 release 上传的也是这些。 */
+export const INSTALLER = { mac: /^Butler-[^ ]+\.(dmg|zip)$/, win: /^Butler-Setup-[^ ]+\.exe$/ };
+
 /** 返回缺失项（字符串数组）；空数组表示齐全。 */
 export function missingFromPackage(platform, distDir) {
   const mac = platform !== "win32";
@@ -35,8 +38,9 @@ export function missingFromPackage(platform, distDir) {
   const appDir = mac ? join(distDir, macDir ?? "mac-arm64", "Butler.app") : join(distDir, "win-unpacked");
   const resources = mac ? join(appDir, "Contents", "Resources") : join(appDir, "resources");
   const missing = expectedFiles(platform, resources).filter((f) => !existsSync(f));
-  const installers = existsSync(distDir) ? readdirSync(distDir).filter((f) => (mac ? /\.(dmg|zip)$/ : /\.exe$/).test(f) && statSync(join(distDir, f)).size > 0) : [];
-  if (installers.length === 0) missing.push(join(distDir, mac ? "*.dmg / *.zip" : "*.exe (NSIS installer)"));
+  // 名字与 electron-builder.yml 的 artifactName 一致；Windows 只认安装包，不认 electron-builder 可能留下的 __uninstaller-nsis-*.exe。
+  const installers = existsSync(distDir) ? readdirSync(distDir).filter((f) => INSTALLER[mac ? "mac" : "win"].test(f) && statSync(join(distDir, f)).size > 0) : [];
+  if (installers.length === 0) missing.push(join(distDir, mac ? "Butler-*.dmg / Butler-*-mac.zip" : "Butler-Setup-*.exe (NSIS installer)"));
   return missing;
 }
 

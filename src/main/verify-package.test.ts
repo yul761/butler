@@ -13,7 +13,7 @@ const WIN_FILES = [
   ...["pty.node", "conpty.node", "conpty_console_list.node", "conpty/conpty.dll", "conpty/OpenConsole.exe", "winpty.dll", "winpty-agent.exe"].map(
     (f) => `win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/${f}`,
   ),
-  "Butler Setup 1.0.0.exe",
+  "Butler-Setup-1.0.0.exe",
 ];
 
 describe("verify-package (Task 7 carry-over: what the NSIS package must contain)", () => {
@@ -42,13 +42,19 @@ describe("verify-package (Task 7 carry-over: what the NSIS package must contain)
   });
 
   it("fails when there is no installer", () => {
-    const missing = missingFromPackage("win32", make(WIN_FILES.filter((f) => !f.endsWith("Setup 1.0.0.exe"))));
+    const missing = missingFromPackage("win32", make(WIN_FILES.filter((f) => !f.endsWith("Setup-1.0.0.exe"))));
+    expect(missing.join("\n")).toContain("NSIS installer");
+  });
+
+  it("does not count electron-builder's uninstaller stub or a default-named installer as the installer", () => {
+    const files = WIN_FILES.filter((f) => !f.endsWith("Setup-1.0.0.exe"));
+    const missing = missingFromPackage("win32", make([...files, "__uninstaller-nsis-butler.exe", "Butler Setup 1.0.0.exe"]));
     expect(missing.join("\n")).toContain("NSIS installer");
   });
 
   it("fails on a zero-byte installer", () => {
     const dist = make(WIN_FILES);
-    writeFileSync(join(dist, "Butler Setup 1.0.0.exe"), "");
+    writeFileSync(join(dist, "Butler-Setup-1.0.0.exe"), "");
     expect(missingFromPackage("win32", dist).join("\n")).toContain("NSIS installer");
   });
 

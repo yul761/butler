@@ -16,7 +16,8 @@ interface BuilderConfig {
   files: string[];
   extraResources: { from: string; to: string; filter: string[] }[];
   electronFuses?: Record<string, boolean>;
-  mac: { identity: unknown; target: { target: string; arch: string[] }[] };
+  mac: { identity: unknown; artifactName: string; target: { target: string; arch: string[] }[] };
+  dmg: { artifactName: string };
   win: { target: { target: string; arch: string[] }[] };
   nsis: Record<string, unknown>;
 }
@@ -80,6 +81,7 @@ describe("packaging config (design 2.1, 12)", () => {
 
   it("pins the NSIS install behaviour: per-user, both shortcuts, user data kept on uninstall", () => {
     expect(cfg.nsis).toEqual({
+      artifactName: "Butler-Setup-${version}.${ext}",
       oneClick: false,
       perMachine: false,
       allowToChangeInstallationDirectory: true,
@@ -87,6 +89,16 @@ describe("packaging config (design 2.1, 12)", () => {
       createDesktopShortcut: true,
       createStartMenuShortcut: true,
     });
+  });
+
+  it("names the installers without spaces, as the README and the CI upload globs expect", () => {
+    // GitHub turns spaces in release asset names into dots, so "Butler Setup 1.0.0.exe" would not match the README.
+    expect(cfg.nsis.artifactName).toBe("Butler-Setup-${version}.${ext}");
+    expect(cfg.dmg.artifactName).toBe("Butler-${version}-${arch}.${ext}");
+    expect(cfg.mac.artifactName).toBe("Butler-${version}-${arch}-mac.${ext}");
+    const readme = read("README.md");
+    for (const name of ["Butler-x.y.z-arm64.dmg", "Butler-x.y.z-arm64-mac.zip", "Butler-Setup-x.y.z.exe"]) expect(readme, name).toContain(name);
+    expect(readme).not.toContain("Butler Setup");
   });
 
   it("has release metadata and scripts", () => {

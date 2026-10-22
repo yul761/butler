@@ -53,8 +53,8 @@ The UI is in Chinese. This README quotes UI labels as they appear in the app, wi
 
 Download the latest release from this repository's Releases page:
 
-- macOS: `Butler-x.y.z-arm64.dmg` (or the `-mac.zip`)
-- Windows: `Butler Setup x.y.z.exe`
+- macOS: `Butler-x.y.z-arm64.dmg` (or `Butler-x.y.z-arm64-mac.zip`)
+- Windows: `Butler-Setup-x.y.z.exe`
 
 Sizes, measured on a local macOS 1.0.0 build (the Windows installer has not been measured):
 
@@ -88,7 +88,7 @@ Repeat this after every new download.
 The NSIS installer is unsigned.
 
 1. Your browser may warn about the download. In Edge, open the download's **…** menu and choose **Keep**.
-2. Run `Butler Setup x.y.z.exe`.
+2. Run `Butler-Setup-x.y.z.exe`.
 3. SmartScreen says "Windows protected your PC". Click **More info → Run anyway**.
 4. Pick "only for me" (no admin rights needed) and an install folder.
 
