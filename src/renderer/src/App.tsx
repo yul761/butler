@@ -10,7 +10,9 @@ import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
 import { TicketPage } from "./components/TicketPage";
 import { UnclaimedPage } from "./components/UnclaimedPage";
+import { Wizard } from "./components/Wizard";
 import { S } from "./strings";
+import { needsOnboarding } from "./wizard";
 
 export type Route =
   | { page: "home"; kind?: BriefKind }
@@ -28,6 +30,8 @@ export function App() {
   /** 从简报点“打开”时要在 ticket 页上执行的打开请求（执行一次后清空）。 */
   const [pendingOpen, setPendingOpen] = useState<OpenSessionRequest | null>(null);
 
+  const [onboarding, setOnboarding] = useState(false);
+
   useEffect(() => onError(setError), []);
   // 点击晚间小结的系统通知：回到简报。
   const [navNonce, setNavNonce] = useState(0);
@@ -43,9 +47,10 @@ export function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [t, u] = await Promise.all([api.listTickets(), api.unclaimed()]);
+      const [t, u, s] = await Promise.all([api.listTickets(), api.unclaimed(), api.settings()]);
       setTickets(t);
       setUnclaimedCount(u.length);
+      setOnboarding(needsOnboarding(s));
     } catch (e) {
       reportError(e);
     }
@@ -78,19 +83,30 @@ export function App() {
             <button onClick={() => setError(null)}>{S.close}</button>
           </div>
         )}
-        {route.page === "home" && <BriefPage key={navNonce} initialKind={route.kind} tickets={tickets} onOpenTicket={openTicket} onUnclaimed={() => setRoute({ page: "unclaimed" })} />}
-        {route.page === "ticket" && current && (
-          <TicketPage
-            key={current.key}
-            ticket={current}
-            initialOpen={pendingOpen?.ticketKey === current.key ? pendingOpen : null}
-            onInitialOpenDone={() => setPendingOpen(null)}
-            onArchived={() => setRoute({ page: "home" })}
+        {onboarding ? (
+          <Wizard
+            onDone={() => {
+              setOnboarding(false);
+              setRoute({ page: "home" });
+            }}
           />
+        ) : (
+          <>
+            {route.page === "home" && <BriefPage key={navNonce} initialKind={route.kind} tickets={tickets} onOpenTicket={openTicket} onUnclaimed={() => setRoute({ page: "unclaimed" })} />}
+            {route.page === "ticket" && current && (
+              <TicketPage
+                key={current.key}
+                ticket={current}
+                initialOpen={pendingOpen?.ticketKey === current.key ? pendingOpen : null}
+                onInitialOpenDone={() => setPendingOpen(null)}
+                onArchived={() => setRoute({ page: "home" })}
+              />
+            )}
+            {route.page === "unclaimed" && <UnclaimedPage tickets={tickets} />}
+            {route.page === "settings" && <SettingsPage />}
+            {route.page === "audit" && <AuditPage />}
+          </>
         )}
-        {route.page === "unclaimed" && <UnclaimedPage tickets={tickets} />}
-        {route.page === "settings" && <SettingsPage />}
-        {route.page === "audit" && <AuditPage />}
       </main>
       {showNew && (
         <NewTicketDialog

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { EditableSettingKey, EditableSettings } from "../../../shared/settings";
-import type { McpProbe } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
 import { jobResultMessage } from "../job-view";
-import { hasDay, mergeTools, probeIncomplete, toggleDay, WEEK_ORDER } from "../settings-form";
+import { hasDay, mergeTools, toggleDay, WEEK_ORDER } from "../settings-form";
 import { S } from "../strings";
+import { TrackerToolPicker } from "./TrackerToolPicker";
 
 const THRESHOLDS = ["blockedDays", "reviewWaitDays", "staleDays"] as const;
 const PROMPTS = ["handoffPrompt", "refreshPrompt"] as const;
@@ -14,9 +14,6 @@ export function ScheduleSettings() {
   const [values, setValues] = useState<EditableSettings | null>(null);
   const [draft, setDraft] = useState<Partial<EditableSettings>>({});
   const [error, setError] = useState<string | null>(null);
-  const [probe, setProbe] = useState<McpProbe | null>(null);
-  const [picked, setPicked] = useState<string[]>([]);
-  const [detecting, setDetecting] = useState(false);
   const [nightlyBusy, setNightlyBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [daysBusy, setDaysBusy] = useState(false);
@@ -91,20 +88,6 @@ export function ScheduleSettings() {
     }
   }
 
-  async function detect() {
-    setDetecting(true);
-    setError(null);
-    try {
-      const p = await api.detectTrackerTools();
-      setProbe(p);
-      setPicked(p.suggested);
-    } catch (e) {
-      reportError(e);
-    } finally {
-      setDetecting(false);
-    }
-  }
-
   async function runNightly() {
     setNightlyBusy(true);
     setNightlyMessage(null);
@@ -128,7 +111,6 @@ export function ScheduleSettings() {
     }
   }
 
-  const togglePick = (t: string) => setPicked(picked.includes(t) ? picked.filter((x) => x !== t) : [...picked, t]);
 
   return (
     <section className="settings-section">
@@ -176,26 +158,8 @@ export function ScheduleSettings() {
         </label>
         <div className="actions">
           <button onClick={() => void save("trackerTools")}>{S.save}</button>
-          <button disabled={detecting} onClick={() => void detect()}>{detecting ? S.detecting : S.detectTools}</button>
         </div>
-        {probe && probeIncomplete(probe) && <p className="muted">{S.probeIncomplete}</p>}
-        {probe && probe.tools.length === 0 && <p className="muted">{S.noDetectedTools}</p>}
-        {probe && probe.tools.length > 0 && (
-          <div className="probe">
-            <p className="muted">{S.detectedTools(probe.tools.length, probe.suggested.length)}</p>
-            {probe.tools.map((t) => (
-              <label key={t} className="inline">
-                <input type="checkbox" checked={picked.includes(t)} onChange={() => togglePick(t)} />
-                <code>{t}</code>
-              </label>
-            ))}
-            <div className="actions">
-              <button className="primary" disabled={picked.length === 0} onClick={() => void save("trackerTools", mergeTools(value("trackerTools"), picked))}>
-                {S.addSelected}
-              </button>
-            </div>
-          </div>
-        )}
+        <TrackerToolPicker onSave={(picked) => save("trackerTools", mergeTools(value("trackerTools"), picked))} />
       </div>
 
       {PROMPTS.map((k) => (
