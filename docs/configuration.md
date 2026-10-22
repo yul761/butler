@@ -108,7 +108,7 @@ This section also shows:
 | 晚间 handoff 时间 (nightly handoff time) | `nightlyTime` | `16:00` | `HH:MM`, local time. If Butler was closed, asleep or locked at that time, the run catches up at the next launch, wake or unlock, before the morning brief. |
 | 工作日 (working days) | `workingDays` | `1,2,3,4,5` (Mon–Fri) | Checkboxes in the UI. The stored value is a comma-separated list of `0`–`6`, where `0` is Sunday. Nightly handoffs and morning refreshes run only on these days. "Previous working day" in the brief skips the other days, so Monday's brief looks back to Friday. |
 | 简报阈值（天）(brief thresholds, days): 阻塞超过 (blocked longer than) / 等 review 超过 (waiting for review longer than) / 无活动超过 (idle longer than) | `blockedDays`, `reviewWaitDays`, `staleDays` | `2`, `2`, `5` | Whole numbers from 0 to 999. A blocked ticket shows up under 🟡 今天 (today). A PR waiting for review or an idle ticket shows up under ⚪ 留意 (watch). |
-| tracker MCP 工具 (tracker MCP tools) | `trackerTools` | empty | One MCP tool name per line, in the form `mcp__<server>__<tool>`. `mcp__<server>` alone allows every tool of that server, so avoid it unless the server is read-only. Anything else, such as `Bash(...)` rules or flags, is rejected. Handoffs and refreshes may call these tools, plus `Read`, `Grep`, `Glob`, `gh pr view`, `gh pr checks`, `git log` and `git status`, plus anything your user-level Claude Code settings allow (see below). |
+| tracker MCP 工具 (tracker MCP tools) | `trackerTools` | empty | One MCP tool name per line, in the form `mcp__<server>__<tool>`. `mcp__<server>` alone allows every tool of that server, so avoid it unless the server is read-only. Anything else, such as `Bash(...)` rules or flags, is rejected. Handoffs and refreshes may call these tools, plus `Read`, `Grep`, `Glob`, `gh pr view`, `gh pr checks`, `git log` and `git status`, plus anything your user-level or managed (policy) Claude Code settings allow (see below). |
 | 后台 handoff 也加载本地级的 MCP… (unattended runs also load local-scope and approved project MCP servers) | `headlessProjectMcp` | `0` (off) | `1` or `0`. See [Plugging in your tracker](#plugging-in-your-tracker). |
 | handoff prompt 模板 (handoff prompt) | `handoffPrompt` | built in | The instructions sent to `claude` for a handoff. It can't be empty and is limited to 20,000 characters. See [Adapting the prompts](#adapting-the-prompts). |
 | 早间刷新 prompt 模板 (morning refresh prompt) | `refreshPrompt` | built in | The quick morning check of PR and tracker status. It doesn't summarise the conversation. Same limits as above. |
@@ -119,9 +119,9 @@ Handoffs and refreshes start `claude` with these flags:
 
 - `--permission-mode dontAsk`: any tool that is not allowed is refused, so there is never a prompt.
 - `--disallowedTools Edit Write NotebookEdit`: these are always denied.
-- `--setting-sources user`: only your user-level Claude Code settings apply. Allow rules and hooks in the repository's own settings do not.
+- `--setting-sources user`: your user-level Claude Code settings apply, and so do managed (policy) settings, which Claude Code always loads. Allow rules and hooks in the repository's own settings do not.
 
-The allowed tools are the list above plus the allow rules in your user-level `settings.json`. These runs are not strictly read-only. If your user-level settings allow, say, `Bash(npm:*)` or a write-capable MCP tool, unattended runs can use it too. Only `Edit`, `Write` and `NotebookEdit` are always blocked.
+The allowed tools are the list above plus the allow rules in your user-level `settings.json` and in any managed settings. These runs are not strictly read-only. If those settings allow, say, `Bash(npm:*)` or a write-capable MCP tool, unattended runs can use it too. Only `Edit`, `Write` and `NotebookEdit` are always blocked.
 
 ### Plugging in your tracker
 

@@ -13,9 +13,10 @@ The UI is in Chinese. This README quotes UI labels as they appear in the app, wi
 
 - **Tickets first.** Each ticket has its worktree or branch, its Claude Code sessions (embedded terminals), its PR state and its after-merge follow-ups. Sessions you started outside Butler in the last 7 days show up under **未认领 session (unclaimed sessions)**, so you can attach them to a ticket.
 - **Nightly handoffs.** At a time you choose, Butler asks your own logged-in `claude` to write a structured handoff for every ticket that had activity.
-  - These runs can't edit files: `Edit`, `Write` and `NotebookEdit` are always denied.
+  - `Edit`, `Write` and `NotebookEdit` are always denied.
   - Butler allows file reads, `gh pr view`, `gh pr checks`, `git log`, `git status` and the tracker MCP tools you picked.
-  - Allow rules in your user-level Claude Code settings still apply, because the runs use `--setting-sources user`.
+  - Any other permission comes from your own Claude Code settings: the user-level allow rules (the runs use `--setting-sources user`) and any managed policy settings.
+  - These runs are not strictly read-only. If your settings allow, say, `Bash(npm:*)` or a write-capable MCP tool, the runs can use it too.
 
   Inside a session you can also type `/handoff`.
 - **Morning brief.** It has three sections, then what you did on the previous working day:
@@ -58,8 +59,8 @@ Download the latest release from this repository's Releases page:
 Sizes, measured on a local macOS 1.0.0 build (the Windows installer has not been measured):
 
 - **The dmg** is about 175 MB.
-- **The installed app** is about 457 MB. About 288 MB is Electron's frameworks. About 144 MB is `butler-hook`, the program Claude Code runs for each hook. It is a Node single executable with Node 26.3.0 built in.
-- **Installing the hooks** copies `butler-hook` (about 143 MB) to `~/.butler/bin`.
+- **The installed app** is about 457 MB. About 288 MB is Electron's frameworks. About 143 MB is `butler-hook`, the program Claude Code runs for each hook. It is a Node single executable with Node 26.3.0 built in.
+- **Installing the hooks** copies `butler-hook` to `~/.butler/bin`.
 
 The builds are **not code-signed**, so your browser and OS will warn you.
 
@@ -156,7 +157,7 @@ Company work goes only through your company's `claude`. What the optional person
 
 - **关闭 (off):** nothing.
 - **仅元数据 (metadata, the default):** for 今日重点 (today's focus), placeholders, status and PR enums, follow-up kinds and triggers, counts and day numbers. No free text.
-- **脱敏文本 (redacted):** adds short next steps, blockers and follow-up descriptions. Before sending, Butler replaces these with placeholders that are new for every request:
+- **脱敏文本 (redacted):** adds short next steps, blockers and follow-up descriptions. Before sending, Butler replaces the following with placeholders that are new for every request:
   - ticket ids, including Jira subtask ids
   - repo and worktree folder names
   - branch names
