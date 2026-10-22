@@ -16,7 +16,8 @@ export type DigestOutcome = "ran" | "no-llm" | "below-threshold" | "locked" | "f
 
 /**
  * StateCore 1.0.0 每个 scope 的 notes 上限（默认 facet pack 里 notes 的 cap）。满了再追加一条，StateCore 挤掉最旧的那条。
- * forget 只是把条目藏起来：原文还在 notes 里占着位置，只有完整档位的蒸馏才会清掉（lib 不导出清理函数）。
+ * forget 只是把条目藏起来：原文还在 notes 里占着位置（lib 不导出清理函数）。蒸馏也不释放：StateCore 1.0.0 的蒸馏会把它们从 notes 里删掉，
+ * 但写快照时 carryOverConcurrentNotes 按事实登记又把它们加回 notes 末尾（任务 6 实测），所以被 forget 的条目一直占着位置。
  */
 export const NOTES_CAP = 30;
 

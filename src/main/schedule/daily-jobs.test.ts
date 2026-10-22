@@ -58,6 +58,42 @@ describe("daily jobs", () => {
     expect(calls).toEqual(["runNightly", "evening"]);
   });
 
+  it("nightly: distills memory last, and its failure does not fail the job", async () => {
+    const { d, calls } = deps({
+      distill: async () => {
+        calls.push("distill");
+        throw new Error("boom");
+      },
+    });
+    // 批量本身成功：蒸馏失败也不能把结果变成别的（默认的 "partial" 测不出回归）。
+    d.runner = {
+      ...d.runner,
+      runNightly: async () => {
+        calls.push("runNightly");
+        return { status: "ok", outcomes: [] };
+      },
+    };
+    expect(await nightlyJob(d)).toBe("ok");
+    expect(calls).toEqual(["runNightly", "evening", "notify:evening", "distill"]);
+  });
+
+  it("nightly: a distill step that throws synchronously does not fail the job either", async () => {
+    const { d, calls } = deps({
+      distill: () => {
+        calls.push("distill");
+        throw new Error("sync boom");
+      },
+    });
+    expect(await nightlyJob(d)).toBe("partial");
+    expect(calls).toEqual(["runNightly", "evening", "notify:evening", "distill"]);
+  });
+
+  it("nightly: no distillation once the app is quitting", async () => {
+    const { d, calls } = deps({ aborted: () => true, distill: async () => calls.push("distill") });
+    await nightlyJob(d);
+    expect(calls).not.toContain("distill");
+  });
+
   it("morning: a quick brief from current data first, then refresh and regenerate on working days", async () => {
     const { d, calls } = deps();
     await morningJob(d);

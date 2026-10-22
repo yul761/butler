@@ -36,7 +36,7 @@ import { HandoffRunner } from "./handoff/runner";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { MemoryService } from "./memory/memory-service";
+import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { HookInbox } from "./hooks/inbox";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, resolvePaths } from "./paths";
@@ -360,6 +360,8 @@ async function bootstrap(): Promise<void> {
         notify();
       }
     },
+    // full 档位的记忆蒸馏：每次运行都重新向 gateway 要模型（改档位不用重启），模型只经 withScope 交给嵌入式 StateCore。
+    distill: () => nightlyDistill({ memory, gateway, signal: headlessAbort.signal, log: logger }),
     onEvening: (brief) => {
       // 退出开始后不再弹通知。
       if (headlessAbort.signal.aborted) return;

@@ -1,5 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { createEmbeddedBackend } from "statecore-mcp/lib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Handoff } from "../../shared/handoff";
 import type { Followup, FollowupStatus, HandoffTrigger } from "../../shared/types";
@@ -7,8 +9,9 @@ import { FollowupsRepo } from "../db/followups-repo";
 import { HandoffsRepo } from "../db/handoffs-repo";
 import { MemorySyncRepo } from "../db/memory-sync-repo";
 import { TicketsRepo } from "../db/tickets-repo";
+import { chatReply, gatewayHarness, type GatewayHarness } from "../gateway/testing";
 import { memDb, tempDir } from "../test-utils";
-import { handoffSummary, MemoryService } from "./memory-service";
+import { handoffSummary, MemoryService, nightlyDistill } from "./memory-service";
 import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
 
 // 故障注入的接缝：withScope 默认就是真的；个别测试把真实句柄包一层（StateCore 本身始终是真的嵌入式存储）。
@@ -534,5 +537,248 @@ describe("MemoryService fix round 2 (task 4 re-review)", () => {
     // 没有新交接时再同步：不写。
     await t.memory.syncTicket("PROJ-1");
     expect((await t.memory.view("PROJ-1")).handoff).toMatchObject({ content: "状态：active。\nNext steps:\n- 补测试", versionCount: 2 });
+  });
+});
+
+/** 模拟 claude 里的 remember(consolidate: true)：写一条待蒸馏的原始事件。 */
+async function seedEvent(dataDir: string, scope: string): Promise<void> {
+  const b = createEmbeddedBackend({ dataDir, scopeName: scope, env: {}, backgroundDigest: false });
+  await b.init();
+  try {
+    await b.remember({ text: "claude 里记下的一段原始对话", consolidate: true });
+  } finally {
+    await b.close();
+  }
+}
+
+describe("MemoryService.distill (consolidate at the full level)", () => {
+  const stub = () => {
+    const calls: string[] = [];
+    return {
+      calls,
+      model: {
+        chat: async (messages: { role: "system" | "user"; content: string }[]) => {
+          calls.push(messages.map((m) => m.role).join(","));
+          throw new Error("stub model");
+        },
+      },
+    };
+  };
+
+  it("does nothing without a model or when memory is off", async () => {
+    const t = setup();
+    await seedEvent(t.dataDir, "ticket:PROJ-1");
+    const s = stub();
+    expect(await t.memory.distill(null)).toEqual({ scopes: 0, ran: 0, failed: 0 });
+    t.setEnabled(false);
+    expect(await t.memory.distill(s.model)).toEqual({ scopes: 0, ran: 0, failed: 0 });
+    expect(s.calls).toEqual([]);
+  });
+
+  it("digests only the scopes with pending events, through the given model", async () => {
+    const t = setup();
+    t.addFollowup("f_1");
+    await t.memory.syncTicket("PROJ-2");
+    await t.memory.syncTicket("PROJ-1");
+    // 事件在 Butler 第一次写 note 之后才进来：StateCore 1.0.0 第一次写 note 时建的 Digest 行会把更早的事件算成“已蒸馏”。
+    await seedEvent(t.dataDir, "ticket:PROJ-1");
+    const s = stub();
+    // 桩模型抛错：蒸馏失败，事件留到下次。
+    expect(await t.memory.distill(s.model)).toEqual({ scopes: 1, ran: 0, failed: 1 });
+    expect(s.calls.length).toBeGreaterThan(0);
+    await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (sc) => {
+      expect(await sc.pendingEvents()).toBe(1);
+    });
+  });
+
+  it("returns an empty result instead of rejecting when the store cannot open", async () => {
+    const blocker = join(tempDir(), "not-a-dir");
+    writeFileSync(blocker, "x");
+    const t = setup({ dataDir: blocker });
+    expect(await t.memory.distill(stub().model)).toEqual({ scopes: 0, ran: 0, failed: 0 });
+  });
+});
+
+/** StateCore 里这个 scope 真正的 notes（最新快照的 profile.notes，含 forget 过、看不见的）。 */
+function trueNotes(dataDir: string, scope: string): string[] {
+  const db = new DatabaseSync(join(dataDir, "statecore.db"), { readOnly: true });
+  try {
+    const sc = db.prepare(`SELECT "id" FROM "ProjectScope" WHERE "name" = ?`).get(scope) as { id: string };
+    const row = db
+      .prepare(`SELECT "state" FROM "DigestStateSnapshot" WHERE "scopeId" = ? ORDER BY "createdAt" DESC, "id" DESC LIMIT 1`)
+      .get(sc.id) as { state: string };
+    return (JSON.parse(row.state) as { profile?: { notes?: string[] } }).profile?.notes ?? [];
+  } finally {
+    db.close();
+  }
+}
+
+/** 一次合法的蒸馏输出；notes：模型提炼出的 notes 事实。 */
+const digestReply = (notes: string[] = []): string =>
+  JSON.stringify({
+    summary: "Worked on the deployment.",
+    changes: ["Deployed the service"],
+    nextSteps: ["Verify the deployment"],
+    profileFacts: notes.map((value) => ({ facet: "notes", value })),
+  });
+
+describe("MemoryService.distill and the notes Butler keeps (task 4 review F3)", () => {
+  it("resyncs a ticket after its digest: a note the digest rewrote comes back, forgotten notes stay hidden, and the slot count stays true", async () => {
+    const t = setup();
+    t.addHandoff(payload({ decisions: [{ key: "db", statement: distinct(1) }] }));
+    for (const [i, id] of ["f_a", "f_b", "f_c"].entries()) t.addFollowup(id, { description: distinct(10 + i) });
+    await t.memory.syncTicket("PROJ-1");
+    t.setFollowup("f_a", "done");
+    await t.memory.syncTicket("PROJ-1");
+    // f_a 被 forget 了：看不见，但还在 notes 里占着位置。
+    const desired = (await t.texts()).sort();
+    expect(desired).toHaveLength(3);
+    expect(trueNotes(t.dataDir, "ticket:PROJ-1")).toHaveLength(4);
+    expect((await t.slots()).used).toBe(4);
+
+    await seedEvent(t.dataDir, "ticket:PROJ-1");
+    const fb = desired.find((x) => x.startsWith("[followup:f_b]"))!;
+    // 假模型提炼出一条和 f_b 几乎一样的 note：StateCore 按相似度把它当成 f_b 的修订，原地改写了 Butler 的条目。
+    const prompts: string[] = [];
+    const model = {
+      chat: async (messages: { role: "system" | "user"; content: string }[]) => {
+        prompts.push(messages.map((m) => m.content).join("\n"));
+        return digestReply([`${fb} plus extra`]);
+      },
+    };
+    expect(await t.memory.distill(model)).toEqual({ scopes: 1, ran: 1, failed: 0 });
+    expect(prompts.length).toBeGreaterThan(0);
+
+    // 蒸馏之后马上重新同步了这个 ticket：要保留的条目一条不少，forget 过的仍然看不见。
+    expect((await t.texts()).sort()).toEqual(desired);
+    expect((await t.texts()).some((x) => x.startsWith("[followup:f_a]"))).toBe(false);
+    // 位置按 StateCore 真正的 notes 数（不信蒸馏之前的估计）。
+    expect((await t.slots()).used).toBe(trueNotes(t.dataDir, "ticket:PROJ-1").length);
+    await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
+      expect(await s.pendingEvents()).toBe(0);
+    });
+
+    // 再同步一次：什么都不改。
+    const before = await t.items();
+    await t.memory.syncTicket("PROJ-1");
+    expect(await t.items()).toEqual(before);
+    expect((await t.slots()).used).toBe(trueNotes(t.dataDir, "ticket:PROJ-1").length);
+  });
+
+  it("a plain digest of a scope with forgotten notes loses no desired note, and later syncs still count slots right", async () => {
+    const t = setup();
+    for (let i = 0; i < 4; i++) t.addFollowup(`f_${i}`, { description: distinct(20 + i) });
+    await t.memory.syncTicket("PROJ-1");
+    t.setFollowup("f_0", "done");
+    t.setFollowup("f_1", "ignored");
+    await t.memory.syncTicket("PROJ-1");
+    const desired = (await t.texts()).sort();
+    await seedEvent(t.dataDir, "ticket:PROJ-1");
+    expect(await t.memory.distill({ chat: async () => digestReply() })).toEqual({ scopes: 1, ran: 1, failed: 0 });
+    expect((await t.texts()).sort()).toEqual(desired);
+    expect((await t.slots()).used).toBe(trueNotes(t.dataDir, "ticket:PROJ-1").length);
+    // 之后的同步照常：新的 followup 写得进去，完成的 followup 被 forget，位置数一直和真实的 notes 一致。
+    t.addFollowup("f_new", { description: distinct(30) });
+    t.setFollowup("f_2", "done");
+    await t.memory.syncTicket("PROJ-1");
+    const texts = await t.texts();
+    expect(texts.some((x) => x.startsWith("[followup:f_new]"))).toBe(true);
+    expect(texts.some((x) => x.startsWith("[followup:f_2]"))).toBe(false);
+    expect(texts.some((x) => x.startsWith("[followup:f_3]"))).toBe(true);
+    expect((await t.slots()).used).toBe(trueNotes(t.dataDir, "ticket:PROJ-1").length);
+  });
+
+  it("does not resync after a failed digest, and keeps going with the other scopes", async () => {
+    const t = setup();
+    t.addFollowup("f_1", { description: distinct(1) });
+    await t.memory.syncTicket("PROJ-1");
+    await seedEvent(t.dataDir, "ticket:PROJ-1");
+    await seedEvent(t.dataDir, "ticket:PROJ-2");
+    const synced = t.synced.length;
+    const r = await t.memory.distill({
+      chat: async (messages) => {
+        // PROJ-1 的蒸馏失败，PROJ-2 的成功。
+        if (messages.some((m) => m.content.includes("ticket:PROJ-1"))) throw new Error("upstream down");
+        return digestReply();
+      },
+    });
+    expect(r).toEqual({ scopes: 2, ran: 1, failed: 1 });
+    // 只有蒸馏成功的那个 ticket 重新同步了。
+    expect(t.synced.slice(synced)).toEqual(["PROJ-2"]);
+  });
+});
+
+describe("nightlyDistill: the model reaches StateCore only through the gateway (plan 4 R1, P4-R5)", () => {
+  let h: GatewayHarness | null = null;
+  afterEach(async () => {
+    await h?.close();
+    h = null;
+  });
+
+  async function wired(level: "metadata" | "full") {
+    h = await gatewayHarness({ level });
+    h.provider.handle(() => chatReply(digestReply()));
+    const t = setup();
+    const logs: string[] = [];
+    const ctl = new AbortController();
+    const run = () => nightlyDistill({ memory: t.memory, gateway: h!.gateway, signal: ctl.signal, log: (m) => logs.push(m) });
+    return { t, h, logs, ctl, run };
+  }
+
+  it("asks the gateway again on every run: nothing below full, and raising the level needs no restart", async () => {
+    const w = await wired("metadata");
+    await seedEvent(w.t.dataDir, "ticket:PROJ-1");
+    expect(await w.run()).toEqual({ scopes: 0, ran: 0, failed: 0 });
+    expect(w.h.provider.requests).toEqual([]);
+    w.h.settings.set("llmLevel", "full");
+    expect(await w.run()).toEqual({ scopes: 1, ran: 1, failed: 0 });
+    expect(w.h.provider.requests.length).toBeGreaterThan(0);
+    expect(w.h.audit.list().every((row) => row.source === "statecore" && row.level === "full" && row.status === "sent")).toBe(true);
+    expect(w.logs).toEqual(["memory distill: 1 scope(s), 1 ran, 0 failed"]);
+    // 降回去：下一次什么都不发。
+    await seedEvent(w.t.dataDir, "ticket:PROJ-1");
+    w.h.settings.set("llmLevel", "redacted");
+    const sent = w.h.provider.requests.length;
+    expect(await w.run()).toEqual({ scopes: 0, ran: 0, failed: 0 });
+    expect(w.h.provider.requests).toHaveLength(sent);
+  });
+
+  it("never distills while confirm-before-send is on, and never asks for a confirmation (P4-R5)", async () => {
+    const w = await wired("full");
+    w.h.settings.set("llmConfirm", "1");
+    await seedEvent(w.t.dataDir, "ticket:PROJ-1");
+    expect(await w.run()).toEqual({ scopes: 0, ran: 0, failed: 0 });
+    expect(w.h.provider.requests).toEqual([]);
+    expect(w.h.confirms).toEqual([]);
+    expect(w.h.audit.list()).toEqual([]);
+  });
+
+  it("stops cleanly when the level drops mid-run: the refused digest fails once, no retry loop, no further scopes", async () => {
+    const w = await wired("full");
+    await seedEvent(w.t.dataDir, "ticket:PROJ-1");
+    await seedEvent(w.t.dataDir, "ticket:PROJ-2");
+    // 第一次调用途中用户把档位降到 redacted；这次的回复不合格，StateCore 会重试，重试被 gateway 拒绝。
+    w.h.provider.handle(() => {
+      w.h.settings.set("llmLevel", "redacted");
+      return chatReply("not json");
+    });
+    expect(await w.run()).toEqual({ scopes: 1, ran: 0, failed: 1 });
+    expect(w.h.provider.requests).toHaveLength(1);
+    expect(w.h.logs.filter((l) => l.startsWith("statecore call refused"))).toEqual(["statecore call refused: level_not_full"]);
+    expect(w.t.logs).toContain("memory distill stopped: the model is no longer allowed");
+    // 两个 scope 的事件都还在，等下次 full 档位再蒸馏。
+    for (const scope of ["ticket:PROJ-1", "ticket:PROJ-2"]) {
+      await withScope({ dataDir: w.t.dataDir, scope }, async (s) => {
+        expect(await s.pendingEvents()).toBe(1);
+      });
+    }
+  });
+
+  it("does not start once the app is quitting, and never rejects", async () => {
+    const w = await wired("full");
+    await seedEvent(w.t.dataDir, "ticket:PROJ-1");
+    w.ctl.abort();
+    expect(await w.run()).toEqual({ scopes: 0, ran: 0, failed: 0 });
+    expect(w.h.provider.requests).toEqual([]);
   });
 });

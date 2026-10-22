@@ -16,11 +16,13 @@ export interface DailyJobDeps {
   onEvening: (brief: Brief) => void;
   /** 早间：最终的简报入库之后补“今日重点”（narrateBrief，永远不抛错）。没有配置时不传。 */
   narrate?: (brief: Brief) => Promise<unknown>;
+  /** 晚间小结之后：full 档位下蒸馏 StateCore 记忆（MemoryService.distill，计划 4 R1）。失败不影响晚间任务。 */
+  distill?: () => Promise<unknown>;
   /** 退出已开始：不再通知、不再发起新工作。 */
   aborted?: () => boolean;
 }
 
-/** 晚间：批量 handoff → 晚间小结 → 系统通知。 */
+/** 晚间：批量 handoff → 晚间小结 → 系统通知 → 记忆蒸馏（full 档位）。 */
 export async function nightlyJob(d: DailyJobDeps, slot?: number | null): Promise<"ok" | "partial"> {
   // 用开始时间判断“是不是今天的时刻”：批量跑过午夜也照常通知。
   const startedAt = d.now();
@@ -31,6 +33,13 @@ export async function nightlyJob(d: DailyJobDeps, slot?: number | null): Promise
   // 只在有内容、且跑的是今天的晚间时刻时通知；补跑以前日期的时刻不弹，早间简报里会看到。
   const forToday = slot === undefined || slot === null || localDate(slot) === localDate(startedAt);
   if (brief.evening.length > 0 && forToday && !d.aborted?.()) d.onEvening(brief);
+  // 最后一步：蒸馏的失败（包括同步抛错）只到这里为止，晚间任务的结果、handoff 和小结都不受影响。
+  if (d.distill && !d.aborted?.()) {
+    const distill = d.distill;
+    await Promise.resolve()
+      .then(() => distill())
+      .catch(() => undefined);
+  }
   return batch.status;
 }
 
