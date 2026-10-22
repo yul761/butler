@@ -74,11 +74,23 @@ export interface ParsedNote extends ButlerNote {
  * StateCore 的 note 上限是 500 字。前缀最长约 115 字（kind、40 字的 id、#5 和 12 个区分词），正文最多 360 字。
  */
 export const NOTE_BODY_LIMIT = 360;
+// StateCore 1.0.0 按 UTF-16 的 text.length 量 500 字上限（tools.ts / MAX_FACT_CHARS），不是按码点；
+// 所以 NOTE_BODY_LIMIT 和 NOTE_ID_LIMIT 都是 UTF-16 单位数，截断时也不切开代理对。
 export const NOTE_ID_LIMIT = 40;
 /** 变体最多到 #5。 */
 export const MAX_NOTE_VARIANT = 5;
 
-/** 前缀里的 id：不能有空白、[、]、#（会破坏前缀），控制字符也去掉；NFKC 之后最多 NOTE_ID_LIMIT 字，空的写成 _。 */
+/** 按 UTF-16 单位数截断，不切开代理对。 */
+export function truncateUnits(text: string, limit: number): string {
+  let out = "";
+  for (const ch of text) {
+    if (out.length + ch.length > limit) break;
+    out += ch;
+  }
+  return out;
+}
+
+/** 前缀里的 id：不能有空白、[、]、#（会破坏前缀），控制字符也去掉；NFKC 之后最多 NOTE_ID_LIMIT 个 UTF-16 单位，空的写成 _。 */
 export function noteId(raw: string): string {
   const id = raw
     .normalize("NFKC")
@@ -86,13 +98,13 @@ export function noteId(raw: string): string {
     .replace(/[\s\]#[\u0000-\u001f\u007f]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-  return Array.from(id).slice(0, NOTE_ID_LIMIT).join("") || "_";
+  return truncateUnits(id, NOTE_ID_LIMIT) || "_";
 }
 
-/** 正文：NFKC，所有空白（含换行）压成一个空格，首尾去空白，最多 NOTE_BODY_LIMIT 个字符（按码点，不切开代理对）。 */
+/** 正文：NFKC，所有空白（含换行）压成一个空格，首尾去空白，最多 NOTE_BODY_LIMIT 个 UTF-16 单位（不切开代理对）。 */
 export function noteBody(raw: string): string {
   const text = raw.normalize("NFKC").replace(/\s+/g, " ").trim();
-  return Array.from(text).slice(0, NOTE_BODY_LIMIT).join("").trim();
+  return truncateUnits(text, NOTE_BODY_LIMIT).trim();
 }
 
 /** FNV-1a（32 位）：渲染进程也会用到这个文件，不能用 node:crypto。 */
@@ -130,6 +142,9 @@ function variantWords(kind: NoteKind, id: string, v: number): string[] {
 }
 
 export function noteText(n: ButlerNote, variant = 1): string {
+  if (!Number.isInteger(variant) || variant < 1 || variant > MAX_NOTE_VARIANT) {
+    throw new RangeError(`note variant must be an integer from 1 to ${MAX_NOTE_VARIANT}, got ${variant}`);
+  }
   const suffix = variant > 1 ? `#${variant} ${variantWords(n.kind, n.id, variant).join(" ")}` : "";
   return `[${n.kind}:${n.id}${suffix}] ${n.body}`;
 }

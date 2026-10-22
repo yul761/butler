@@ -1,5 +1,5 @@
 import type { Handoff } from "../../shared/handoff";
-import { NOTE_BODY_LIMIT, noteBody, noteId, parseNote, sameBody, type ButlerNote, type MemoryItem } from "../../shared/memory";
+import { NOTE_BODY_LIMIT, noteBody, noteId, parseNote, sameBody, truncateUnits, type ButlerNote, type MemoryItem } from "../../shared/memory";
 import type { Followup, FollowupKind, FollowupTrigger, HandoffRecord } from "../../shared/types";
 
 /** 一个 ticket scope 里 Butler 自己最多维护多少条：StateCore 每个 scope 的 notes 上限是 30（超出淘汰最旧的），给 Claude 自己的 remember 留 6 条。 */
@@ -8,12 +8,14 @@ export const BUTLER_NOTE_LIMIT = 24;
 const KIND_LABEL: Record<FollowupKind, string> = { config: "配置", flag: "开关", deploy: "部署", doc: "文档", other: "其他" };
 const TRIGGER_LABEL: Record<FollowupTrigger, string> = { after_merge: "合并后", after_deploy: "部署后", on_date: "到期日", none: "无触发条件" };
 
+/** 到期日在说明后缀里最多占的字数：它本该是 YYYY-MM-DD，限长是为了永远给描述留下空间。 */
+const DUE_LIMIT = 32;
+
 export function followupNote(f: Followup): ButlerNote {
-  const due = f.trigger === "on_date" && f.dueDate ? ` ${f.dueDate}` : "";
-  // 说明后缀不过 noteBody（NFKC 会把全角括号和逗号变成半角），所以先给它留出长度，再截断描述。
-  const label = noteBody(`${KIND_LABEL[f.kind]}，${TRIGGER_LABEL[f.trigger]}${due}`).replace(",", "，");
-  const suffix = `（${label}）`;
-  const desc = Array.from(noteBody(f.description)).slice(0, Math.max(0, NOTE_BODY_LIMIT - Array.from(suffix).length)).join("").trim();
+  // 说明后缀由原始片段拼成、不过 noteBody（NFKC 会把全角括号和逗号变成半角）；到期日只压空白并限长。
+  const due = f.trigger === "on_date" && f.dueDate ? ` ${truncateUnits(f.dueDate.replace(/\s+/g, " ").trim(), DUE_LIMIT)}` : "";
+  const suffix = `（${KIND_LABEL[f.kind]}，${TRIGGER_LABEL[f.trigger]}${due}）`;
+  const desc = truncateUnits(noteBody(f.description), NOTE_BODY_LIMIT - suffix.length).trim();
   return { kind: "followup", id: noteId(f.id), body: desc ? `${desc}${suffix}` : "" };
 }
 

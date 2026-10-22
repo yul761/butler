@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Handoff } from "../../shared/handoff";
 import type { MemoryItem } from "../../shared/memory";
 import type { Followup, HandoffRecord, HandoffTrigger } from "../../shared/types";
+import { NOTE_BODY_LIMIT } from "../../shared/memory";
 import { BUTLER_NOTE_LIMIT, decisionNote, desiredNotes, followupNote, planReconcile } from "./notes";
 
 const payload = (over: Partial<Handoff> = {}): Handoff => ({
@@ -22,7 +23,26 @@ describe("followup and decision notes", () => {
   it("describes a followup with its kind, trigger and due date", () => {
     expect(followupNote(followup("f_1", { description: "改 staging 配置" }))).toEqual({ kind: "followup", id: "f_1", body: "改 staging 配置（配置，合并后）" });
     expect(followupNote(followup("f_2", { kind: "flag", trigger: "on_date", dueDate: "2026-11-01", description: "关掉开关" })).body).toBe("关掉开关（开关，到期日 2026-11-01）");
+    // 不用全角的说明后缀也不被 NFKC 改写，多个逗号不受影响。
+    expect(followupNote(followup("f_3", { description: "x" })).body).toBe("x（配置，合并后）");
     expect(decisionNote("db]#1", "用\nMySQL")).toEqual({ kind: "decision", id: "db-1", body: "用 MySQL" });
+  });
+});
+
+describe("followupNote limits", () => {
+  it("truncates a long description so the whole body fits, keeping the suffix", () => {
+    const n = followupNote(followup("f_1", { description: "长".repeat(900), trigger: "on_date", dueDate: "2026-11-01" }));
+    expect(n.body.length).toBe(NOTE_BODY_LIMIT);
+    expect(n.body.endsWith("（配置，到期日 2026-11-01）")).toBe(true);
+    const emoji = followupNote(followup("f_2", { description: "😀".repeat(900) }));
+    expect(emoji.body.length).toBeLessThanOrEqual(NOTE_BODY_LIMIT);
+    expect(emoji.body.endsWith("（配置，合并后）")).toBe(true);
+  });
+
+  it("caps a pathological due date so the description survives", () => {
+    const n = followupNote(followup("f_1", { description: "改配置", trigger: "on_date", dueDate: "9".repeat(800) }));
+    expect(n.body.startsWith("改配置（配置，到期日 ")).toBe(true);
+    expect(n.body.length).toBeLessThanOrEqual(NOTE_BODY_LIMIT);
   });
 });
 

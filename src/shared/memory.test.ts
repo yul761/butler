@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NOTE_BODY_LIMIT, NOTE_ID_LIMIT, noteBody, noteId, noteText, parseNote, sameBody, ticketScope } from "./memory";
+import { MAX_NOTE_VARIANT, NOTE_BODY_LIMIT, NOTE_ID_LIMIT, noteBody, noteId, noteText, parseNote, sameBody, ticketScope } from "./memory";
 
 describe("Butler memory note format", () => {
   it("writes and parses the stable prefix", () => {
@@ -31,16 +31,41 @@ describe("Butler memory note format", () => {
     expect(noteId("Ｄｂ")).toBe("Db");
     expect(noteId("x".repeat(100))).toHaveLength(NOTE_ID_LIMIT);
     expect(noteBody("  第一行\n第二行\t\t结束  ")).toBe("第一行 第二行 结束");
-    expect(Array.from(noteBody("长".repeat(600)))).toHaveLength(NOTE_BODY_LIMIT);
-    // 不把代理对从中间切开。
+    expect(noteBody("长".repeat(600))).toHaveLength(NOTE_BODY_LIMIT);
+    // 不把代理对从中间切开；上限按 UTF-16 单位算（StateCore 量的是 text.length）。
     const emoji = noteBody("😀".repeat(500));
-    expect(Array.from(emoji)).toHaveLength(NOTE_BODY_LIMIT);
+    expect(emoji.length).toBeLessThanOrEqual(NOTE_BODY_LIMIT);
+    expect(Array.from(emoji)).toHaveLength(NOTE_BODY_LIMIT / 2);
     expect(emoji.endsWith("😀")).toBe(true);
+    expect(noteId("😀".repeat(100)).length).toBeLessThanOrEqual(NOTE_ID_LIMIT);
     const text = noteText({ kind: "decision", id: noteId("k]ey"), body: noteBody("a\nb") });
     expect(parseNote(text)).toMatchObject({ id: "k-ey", body: "a b" });
     // 最坏情况（最长的 id、最长的正文、第 5 个变体）也在 StateCore 的 500 字上限之内。
     const worst = noteText({ kind: "followup", id: noteId("i".repeat(100)), body: noteBody("长".repeat(1000)) }, 5);
-    expect(Array.from(worst).length).toBeLessThanOrEqual(500);
+    expect(worst.length).toBeLessThanOrEqual(500);
+  });
+
+  it("stays within StateCore's UTF-16 length limit with emoji-heavy ids and bodies at every variant", () => {
+    for (let v = 1; v <= MAX_NOTE_VARIANT; v++) {
+      const text = noteText({ kind: "followup", id: noteId("😀".repeat(100)), body: noteBody("😀".repeat(1000)) }, v);
+      expect(text.length, `variant ${v}`).toBeLessThanOrEqual(500);
+      expect(parseNote(text)).toMatchObject({ variant: v });
+    }
+  });
+
+  it("round-trips Unicode ids through every variant", () => {
+    for (const raw of ["数据库 选型", "😀 party", "Ｄｂ-ｋｅｙ", "é\u0301x", "ﬁle"]) {
+      const id = noteId(raw);
+      for (let v = 1; v <= MAX_NOTE_VARIANT; v++) {
+        expect(parseNote(noteText({ kind: "decision", id, body: "正文" }, v)), `${raw} #${v}`).toEqual({ kind: "decision", id, variant: v, body: "正文" });
+      }
+    }
+  });
+
+  it("rejects invalid variants", () => {
+    const n = { kind: "decision" as const, id: "a", body: "b" };
+    for (const v of [0, -1, 2.5, NaN, MAX_NOTE_VARIANT + 1]) expect(() => noteText(n, v), String(v)).toThrow(RangeError);
+    expect(() => noteText(n, MAX_NOTE_VARIANT)).not.toThrow();
   });
 
   it("compares bodies the way StateCore dedupes (case, width and spacing insensitive)", () => {
