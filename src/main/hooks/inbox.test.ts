@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { HookEnvelope } from "../../shared/hook-envelope";
@@ -63,22 +63,21 @@ describe("HookInbox.drain", () => {
   it("does not re-apply a file whose handle succeeded but whose unlink failed", async () => {
     const dir = join(tempDir(), "inbox");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "0001-a.json"), envelope(1));
+    const file = join(dir, "0001-a.json");
+    writeFileSync(file, envelope(1));
     const log = vi.fn();
     let calls = 0;
     const inbox = new HookInbox({
       dir, badDir: join(dir, "bad"), log,
       handle: () => {
         calls++;
-        // 让目录只读，使本次 unlink 失败。
-        chmodSync(dir, 0o500);
+        // 把文件换成同名目录，使本次 unlink 失败（EPERM/EISDIR）。
+        // 不用 chmod 让目录只读：Windows 上目录的只读属性挡不住删除里面的文件。
+        rmSync(file);
+        mkdirSync(file);
       },
     });
-    try {
-      expect(await inbox.drain()).toBe(1);
-    } finally {
-      chmodSync(dir, 0o755);
-    }
+    expect(await inbox.drain()).toBe(1);
     expect(log).toHaveBeenCalled();
     expect(await inbox.drain()).toBe(0);
     expect(calls).toBe(1);

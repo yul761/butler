@@ -65,19 +65,28 @@ describe("/handoff command file", () => {
     expect(readFileSync(file, "utf8")).toBe(quoted);
   });
 
-  it("updates through a symlink, keeping the link and the target's mode", async () => {
+  it("updates through a symlink, keeping the link and the target's mode", async (ctx) => {
     const dir = tempDir();
     const real = join(dir, "real.md");
     const file = handoffCommandPath(join(dir, "commands"));
     writeFileSync(real, OLD);
     chmodSync(real, 0o640);
+    // Windows 没有 POSIX 权限位：chmod 只切换只读属性，0o640 读回来是 0o666。所以比较的是 chmod 之后实际读到的 mode。
+    const mode = statSync(real).mode & 0o777;
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(dir, "commands"));
-    symlinkSync(real, file);
+    try {
+      symlinkSync(real, file);
+    } catch (e) {
+      // Windows 上建符号链接需要管理员或开发者模式；没有这个权限时（EPERM）跳过，其他错误照常失败。
+      if (process.platform === "win32" && (e as NodeJS.ErrnoException).code === "EPERM") ctx.skip();
+      throw e;
+    }
     expect(await installHandoffCommand(file)).toBe("installed");
     expect(lstatSync(file).isSymbolicLink()).toBe(true);
     expect(readFileSync(real, "utf8")).toBe(HANDOFF_COMMAND_MD);
-    expect(statSync(real).mode & 0o777).toBe(0o640);
+    expect(statSync(real).mode & 0o777).toBe(mode);
+    if (process.platform !== "win32") expect(mode).toBe(0o640);
   });
 
   it("install reports conflict and uninstall is a no-op when the path is unreadable (a directory)", async () => {
