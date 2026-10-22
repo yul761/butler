@@ -40,6 +40,9 @@ jobs:
             exit 1
           fi
       - run: pnpm install --frozen-lockfile
+      # Electron 44 has no postinstall (see ci.yml): download the binary before the tests that launch it.
+      - name: Download the Electron binary
+        run: pnpm exec install-electron
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test

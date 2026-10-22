@@ -89,6 +89,15 @@ describe("CI workflows (design 1.3, 11)", () => {
     }
   });
 
+  it("downloads the Electron binary before running the tests in every job that runs them", () => {
+    for (const job of [ci.jobs.test, release.jobs.build]) {
+      const r = runs(job);
+      const download = r.indexOf("pnpm exec install-electron");
+      expect(download).toBeGreaterThan(-1);
+      expect(download).toBeLessThan(r.indexOf("pnpm test"));
+    }
+  });
+
   it("only cancels superseded pull request runs", () => {
     expect(ci.concurrency?.["cancel-in-progress"]).toBe("${{ github.event_name == 'pull_request' }}");
   });
