@@ -60,7 +60,10 @@ export interface KeyState {
   keyMasked: string | null;
   /** 保存过但现在解不开（钥匙串被重置、换了电脑）：需要重新输入。 */
   keyUnreadable: boolean;
-  /** 系统的加密存储可用（macOS 钥匙串 / Windows DPAPI）。 */
+  /**
+   * 系统的加密存储（macOS 钥匙串 / Windows DPAPI）没有被发现不可用。只有检查失败过才是 false；
+   * 没保存 key 时 Butler 不去碰钥匙串，这时为 true（保存时才真正检查）。
+   */
   encryptionAvailable: boolean;
 }
 

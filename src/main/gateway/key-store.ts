@@ -31,6 +31,11 @@ const KEY_FORMAT = /^[\x21-\x7e]{8,512}$/;
  */
 export class KeyStore {
   private cache: { masked: string | null; unreadable: boolean } | null = null;
+  /**
+   * 系统加密存储可不可用。null = 还没查过。只在保存 key、或已经保存的 key 被解密时才去查：
+   * 在 macOS 上一查就会访问钥匙串（可能弹出授权对话框），没保存 key 时 Butler 不碰钥匙串。
+   */
+  private boxAvailable: boolean | null = null;
 
   constructor(private readonly d: KeyStoreDeps) {}
 
@@ -39,7 +44,8 @@ export class KeyStore {
     if (!KEY_FORMAT.test(k)) {
       throw new SettingError("API key 格式不对：8–512 个可打印的 ASCII 字符，不能有空格、换行或其他字符");
     }
-    if (!this.d.box.available()) throw new SettingError("系统的加密存储不可用，Butler 不会以明文保存 key");
+    this.boxAvailable = this.d.box.available();
+    if (!this.boxAvailable) throw new SettingError("系统的加密存储不可用，Butler 不会以明文保存 key");
     let cipher: Uint8Array;
     try {
       cipher = this.d.box.encrypt(k);
@@ -72,13 +78,16 @@ export class KeyStore {
 
   state(): KeyState {
     const saved = this.saved();
-    if (!saved) return { keySaved: false, keyMasked: null, keyUnreadable: false, encryptionAvailable: this.d.box.available() };
+    // 没保存 key：不碰钥匙串。报告"没发现不可用"（true），真正的检查在 save() 里。
+    if (!saved) return { keySaved: false, keyMasked: null, keyUnreadable: false, encryptionAvailable: this.boxAvailable ?? true };
     if (!this.cache) {
       const key = this.read();
       this.cache = { masked: key ? maskKey(key) : null, unreadable: key === null };
       if (key === null) this.logUnreadable();
     }
-    return { keySaved: true, keyMasked: this.cache.masked, keyUnreadable: this.cache.unreadable, encryptionAvailable: this.d.box.available() };
+    // 上面的解密（这次或之前）已经访问过钥匙串，这里再查一次可用性不会多出一次授权。
+    this.boxAvailable ??= this.d.box.available();
+    return { keySaved: true, keyMasked: this.cache.masked, keyUnreadable: this.cache.unreadable, encryptionAvailable: this.boxAvailable };
   }
 
   private read(): string | null {

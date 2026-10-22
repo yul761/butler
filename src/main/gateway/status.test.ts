@@ -52,6 +52,29 @@ describe("llmStatus", () => {
   });
 });
 
+describe("keychain access with no key saved", () => {
+  it("llmStatus() and auditPage() never call the box's availability check or decrypt", () => {
+    const db = memDb();
+    const settings = new SettingsRepo(db);
+    const audit = new AuditRepo(db);
+    const inner = fakeSecretBox();
+    const calls: string[] = [];
+    const box = {
+      available: () => (calls.push("available"), inner.available()),
+      encrypt: (p: string) => (calls.push("encrypt"), inner.encrypt(p)),
+      decrypt: (d: Uint8Array) => (calls.push("decrypt"), inner.decrypt(d)),
+    };
+    const keys = new KeyStore({ secrets: new SecretsRepo(db), box, now: () => 1 });
+    settings.set("llmBaseUrl", "https://api.deepseek.com/v1");
+    settings.set("llmModel", "deepseek-chat");
+    audit.insert({ ts: NOW, provider: "x", model: "m", level: "metadata", status: "pending", payloadSent: "{}" });
+    expect(llmStatus({ settings, keys, audit, now: () => NOW })).toMatchObject({ keySaved: false, encryptionAvailable: true, configured: false });
+    expect(auditPage({ settings, keys, audit, now: () => NOW }).entries).toHaveLength(1);
+    llmStatus({ settings, keys, audit, now: () => NOW });
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("auditPage", () => {
   const row = (ts: number) => ({ ts, provider: "x", model: "m", level: "metadata" as const, status: "pending" as const, payloadSent: "{}" });
 

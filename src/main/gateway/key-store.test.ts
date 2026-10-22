@@ -135,6 +135,51 @@ describe("KeyStore", () => {
     expect(logs).toHaveLength(1);
   });
 
+  it("never touches the keychain while no key is saved: state(), clear() and get()", () => {
+    const secrets = new SecretsRepo(memDb());
+    const inner = fakeSecretBox();
+    const calls: string[] = [];
+    const box = {
+      available: () => (calls.push("available"), inner.available()),
+      encrypt: (p: string) => (calls.push("encrypt"), inner.encrypt(p)),
+      decrypt: (d: Uint8Array) => (calls.push("decrypt"), inner.decrypt(d)),
+    };
+    const keys = new KeyStore({ secrets, box, now: () => 1 });
+    expect(keys.state()).toEqual({ keySaved: false, keyMasked: null, keyUnreadable: false, encryptionAvailable: true });
+    keys.state();
+    expect(keys.get()).toBeNull();
+    expect(keys.saved()).toBe(false);
+    expect(keys.clear()).toMatchObject({ keySaved: false, encryptionAvailable: true });
+    expect(calls).toEqual([]);
+    // Saving checks for real, once (save() then reads the key back for its masked form); later state() calls reuse both.
+    keys.save(KEY);
+    expect(calls).toEqual(["available", "encrypt", "decrypt"]);
+    calls.length = 0;
+    keys.state();
+    keys.state();
+    expect(calls).toEqual([]);
+    // After clear(), the last known answer is reported without asking the box again.
+    keys.clear();
+    expect(keys.state().encryptionAvailable).toBe(true);
+    expect(calls).toEqual([]);
+  });
+
+  it("with a key saved, a fresh store checks availability only after the decrypt, and once", () => {
+    const secrets = new SecretsRepo(memDb());
+    const inner = fakeSecretBox();
+    new KeyStore({ secrets, box: inner, now: () => 1 }).save(KEY);
+    const calls: string[] = [];
+    const box = {
+      available: () => (calls.push("available"), inner.available()),
+      encrypt: (p: string) => (calls.push("encrypt"), inner.encrypt(p)),
+      decrypt: (d: Uint8Array) => (calls.push("decrypt"), inner.decrypt(d)),
+    };
+    const keys = new KeyStore({ secrets, box, now: () => 1 });
+    expect(keys.state()).toEqual({ keySaved: true, keyMasked: "••••1234", keyUnreadable: false, encryptionAvailable: true });
+    keys.state();
+    expect(calls).toEqual(["decrypt", "available"]);
+  });
+
   it("get() returns null when the decrypted value fails the format check", () => {
     const { secrets, box, keys, logs } = setup();
     secrets.set(API_KEY_SECRET, box.encrypt("has space inside"), 1);
