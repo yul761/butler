@@ -21,7 +21,9 @@
     "build:memory-mcp": "node scripts/build-memory-mcp.mjs",
     "dist": "electron-builder --publish never",
     "dist:dir": "electron-builder --dir --publish never",
+    "pree2e": "pnpm build && pnpm build:hook",
     "e2e": "playwright test",
+    "e2e:only": "playwright test",
     "postinstall": "electron-builder install-app-deps"
   },
   "pnpm": {
