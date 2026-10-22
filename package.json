@@ -21,6 +21,7 @@
     "build:memory-mcp": "node scripts/build-memory-mcp.mjs",
     "dist": "electron-builder --publish never",
     "dist:dir": "electron-builder --dir --publish never",
+    "e2e": "playwright test",
     "postinstall": "electron-builder install-app-deps"
   },
   "pnpm": {
@@ -38,6 +39,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.0",
     "@types/cross-spawn": "6.0.6",
     "@types/node": "24.19.2",
     "@types/react": "19.3.0",
