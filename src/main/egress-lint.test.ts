@@ -120,7 +120,8 @@ const FORMS: Record<string, string> = {
 async function egressCount(source: string, filePath: string): Promise<number> {
   const eslint = new ESLint({ cwd: root });
   const [result] = await eslint.lintText(source, { filePath });
-  return result.messages.filter((m) => m.ruleId !== null && EGRESS_RULES.includes(m.ruleId)).length;
+  // gateway 里“只能用字面量模块名”是另一条规则（给 StateCore 兜底），不算出网规则。
+  return result.messages.filter((m) => m.ruleId !== null && EGRESS_RULES.includes(m.ruleId) && !m.message.includes("字面量模块名")).length;
 }
 
 describe("egress lint rule: every form", () => {
@@ -232,6 +233,21 @@ describe("StateCore is reachable only through its two entry points (plan 4 R1)",
         expect(messages.length, `${file}: ${text}`).toBeGreaterThan(0);
         expect(messages.every((m) => m.message.includes("StateCore")), `${file}: ${text}`).toBe(true);
       }
+    }
+  }, 60_000);
+
+  it("catches template-literal and variable specifiers in the gateway, and reports template literals elsewhere as StateCore", async () => {
+    for (const text of [
+      'export const m = import(`statecore-mcp/lib`);\n',
+      'const n = "statecore-mcp/lib";\nexport const m = import(n);\n',
+      'const n = "statecore-mcp/lib";\nexport const m = require(n);\n',
+      'export const m = require(`statecore-mcp`);\n',
+    ]) {
+      expect((await statecoreMessages("src/main/gateway/x.ts", text)).length, text).toBeGreaterThan(0);
+    }
+    for (const text of ['export const m = import(`statecore-mcp/lib`);\n', 'export const m = require(`statecore-mcp`);\n']) {
+      const messages = await statecoreMessages("src/main/brief/x.ts", text);
+      expect(messages.some((m) => m.message.includes("StateCore")), text).toBe(true);
     }
   }, 60_000);
 

@@ -43,6 +43,16 @@ const STATECORE_SYNTAX = [
   { selector: `ImportExpression[source.value=${STATECORE_MODULE}]`, message: STATECORE_MESSAGE },
   { selector: `CallExpression[callee.name="require"][arguments.0.value=${STATECORE_MODULE}]`, message: STATECORE_MESSAGE },
   { selector: `TSExternalModuleReference[expression.value=${STATECORE_MODULE}]`, message: STATECORE_MESSAGE },
+  // 模板字符串写法（没有表达式也一样）：开头是 statecore-mcp 就按 StateCore 报。
+  { selector: 'ImportExpression > TemplateLiteral.source[quasis.0.value.raw=/^statecore-mcp/]', message: STATECORE_MESSAGE },
+  { selector: 'CallExpression[callee.name="require"] > TemplateLiteral.arguments[quasis.0.value.raw=/^statecore-mcp/]', message: STATECORE_MESSAGE },
+];
+/** gateway 里出口规则关了，非字面量的模块名就能绕过上面的字面量检查：只允许字面量。 */
+const GATEWAY_LITERAL_MESSAGE = "gateway 里只能用字面量模块名加载模块（import() / require）。";
+const GATEWAY_LITERAL_SYNTAX = [
+  { selector: 'ImportExpression[source.type!="Literal"]', message: GATEWAY_LITERAL_MESSAGE },
+  { selector: 'CallExpression[callee.name="require"][arguments.0.type!="Literal"]', message: GATEWAY_LITERAL_MESSAGE },
+  { selector: 'CallExpression[callee.name="require"][arguments.length!=1]', message: GATEWAY_LITERAL_MESSAGE },
 ];
 const STATECORE_ENTRY_FILES = ["src/main/memory/statecore.ts", "memory-mcp/entry.ts"];
 const STATECORE_TEST_FILES = ["src/main/memory/**/*.test.ts"];
@@ -162,7 +172,7 @@ export default tseslint.config(
         "error",
         { paths: [{ name: "statecore-mcp", message: STATECORE_MESSAGE }], patterns: [{ group: ["statecore-mcp/*"], message: STATECORE_MESSAGE }] },
       ],
-      "no-restricted-syntax": ["error", ...STATECORE_SYNTAX],
+      "no-restricted-syntax": ["error", ...STATECORE_SYNTAX, ...GATEWAY_LITERAL_SYNTAX],
     },
   },
   // StateCore 的两个入口和适配层的测试（计划 4 R1）。
