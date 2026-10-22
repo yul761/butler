@@ -41,7 +41,7 @@ import { HookInbox } from "./hooks/inbox";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
-import { morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
+import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
@@ -329,6 +329,13 @@ async function bootstrap(): Promise<void> {
   let briefNarrating = false;
 
   let briefRefreshing = false;
+  // 同时只跑一次蒸馏；退出时 headlessAbort 让 gateway 拒绝 / 中止调用，蒸馏在下一个 scope 之前停下。
+  const distiller = new BackgroundRunner({
+    name: "memory distill",
+    run: (signal) => nightlyDistill({ memory, gateway, signal, log: logger }),
+    signal: headlessAbort.signal,
+    log: logger,
+  });
   const dailyDeps: DailyJobDeps = {
     runner,
     briefs: briefService,
@@ -360,8 +367,8 @@ async function bootstrap(): Promise<void> {
         notify();
       }
     },
-    // full 档位的记忆蒸馏：每次运行都重新向 gateway 要模型（改档位不用重启），模型只经 withScope 交给嵌入式 StateCore。
-    distill: () => nightlyDistill({ memory, gateway, signal: headlessAbort.signal, log: logger }),
+    // full 档位的记忆蒸馏：在后台跑，不挡调度链；每次运行都重新向 gateway 要模型（改档位不用重启），模型只经 withScope 交给嵌入式 StateCore。
+    distill: () => distiller.start(),
     onEvening: (brief) => {
       // 退出开始后不再弹通知。
       if (headlessAbort.signal.aborted) return;

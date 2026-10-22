@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { EMPTY_BRIEF_CONTENT, type Brief, type BriefKind } from "../../shared/brief";
-import { JOB_EVENING, JobsRepo } from "../db/jobs-repo";
+import { JOB_EVENING, JOB_MORNING, JOB_NIGHTLY, JobsRepo } from "../db/jobs-repo";
 import { memDb } from "../test-utils";
-import { morningJob, nightlyJob, type DailyJobDeps } from "./daily-jobs";
+import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./daily-jobs";
+import { Scheduler } from "./scheduler";
 
 const brief = (kind: BriefKind, withContent = true): Brief => ({
   id: 1, kind, date: "2026-10-21", createdAt: 1, ...EMPTY_BRIEF_CONTENT,
@@ -86,6 +87,41 @@ describe("daily jobs", () => {
     });
     expect(await nightlyJob(d)).toBe("partial");
     expect(calls).toEqual(["runNightly", "evening", "notify:evening", "distill"]);
+  });
+
+  it("nightly: records its result without waiting for distillation, and a slow distill does not delay the catch-up morning brief (I1)", async () => {
+    let finishDistill: () => void = () => undefined;
+    const distilling = new Promise<void>((resolve) => (finishDistill = resolve));
+    let distillDone = false;
+    const { d, calls } = deps({
+      distill: () => {
+        calls.push("distill");
+        return distilling.then(() => {
+          distillDone = true;
+        });
+      },
+    });
+    // 2026-10-21（周三）09:00 解锁：上次晚间任务是周一，补跑周二的，然后出早间简报。
+    const at = (day: number, h: number, m = 0) => new Date(2026, 9, day, h, m).getTime();
+    d.jobs.record(JOB_NIGHTLY, at(19, 16, 5), "ok", null);
+    const scheduler = new Scheduler({
+      jobs: d.jobs,
+      config: () => ({ nightly: { h: 16, m: 0 }, workingDays: new Set([1, 2, 3, 4, 5]) }),
+      now: () => at(21, 9),
+      userActive: () => false,
+      nightly: (slot) => nightlyJob(d, slot),
+      morning: async () => void calls.push("morning"),
+    });
+    await scheduler.check("unlock");
+    expect(calls).toEqual(["runNightly", "evening", "distill", "morning"]);
+    expect(distillDone).toBe(false);
+    expect(d.jobs.get(JOB_NIGHTLY)).toMatchObject({ lastRunAt: at(21, 9), lastStatus: "partial" });
+    expect(d.jobs.get(JOB_MORNING)).toMatchObject({ lastRunAt: at(21, 9), lastStatus: "ok" });
+    expect(scheduler.isRunning(JOB_NIGHTLY)).toBe(false);
+    finishDistill();
+    await distilling;
+    await Promise.resolve();
+    expect(distillDone).toBe(true);
   });
 
   it("nightly: no distillation once the app is quitting", async () => {
@@ -184,5 +220,69 @@ describe("daily jobs", () => {
     quitting.d.narrate = async () => void quitting.calls.push("narrate");
     await morningJob(quitting.d);
     expect(quitting.calls).not.toContain("narrate");
+  });
+});
+
+describe("BackgroundRunner (nightly distillation off the scheduler chain)", () => {
+  function runner(over: { run?: (signal: AbortSignal) => Promise<unknown>; signal?: AbortSignal } = {}) {
+    const logs: string[] = [];
+    const ctl = new AbortController();
+    const r = new BackgroundRunner({
+      name: "memory distill",
+      run: over.run ?? (async () => undefined),
+      signal: over.signal ?? ctl.signal,
+      log: (m, e) => logs.push(e === undefined ? m : `${m} ${e instanceof Error ? e.message : String(e)}`),
+    });
+    return { r, logs, ctl };
+  }
+
+  it("runs one at a time: a start while the previous run is going is skipped with a log line", async () => {
+    let finish: () => void = () => undefined;
+    let runs = 0;
+    const { r, logs } = runner({
+      run: () => {
+        runs++;
+        return new Promise<void>((resolve) => (finish = resolve));
+      },
+    });
+    const first = r.start();
+    await Promise.resolve();
+    expect(r.running()).toBe(first);
+    expect(r.start()).toBe(first);
+    expect(logs).toEqual(["memory distill skipped: the previous run is still going"]);
+    finish();
+    await first;
+    expect(runs).toBe(1);
+    expect(r.running()).toBeNull();
+    // 上一次结束之后可以再跑。
+    const second = r.start();
+    await Promise.resolve();
+    finish();
+    await second;
+    expect(runs).toBe(2);
+  });
+
+  it("only logs a failure, sync or async, and never rejects", async () => {
+    const async = runner({ run: async () => Promise.reject(new Error("boom")) });
+    await expect(async.r.start()).resolves.toBeUndefined();
+    expect(async.logs).toEqual(["memory distill failed boom"]);
+    const sync = runner({
+      run: () => {
+        throw new Error("sync boom");
+      },
+    });
+    await expect(sync.r.start()).resolves.toBeUndefined();
+    expect(sync.logs).toEqual(["memory distill failed sync boom"]);
+    expect(sync.r.running()).toBeNull();
+  });
+
+  it("hands its quit signal to the run, and starts nothing once quitting", async () => {
+    const seen: AbortSignal[] = [];
+    const { r, ctl } = runner({ run: async (signal) => void seen.push(signal) });
+    await r.start();
+    expect(seen).toEqual([ctl.signal]);
+    ctl.abort();
+    await r.start();
+    expect(seen).toHaveLength(1);
   });
 });

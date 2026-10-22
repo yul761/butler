@@ -16,8 +16,11 @@ export interface DailyJobDeps {
   onEvening: (brief: Brief) => void;
   /** 早间：最终的简报入库之后补“今日重点”（narrateBrief，永远不抛错）。没有配置时不传。 */
   narrate?: (brief: Brief) => Promise<unknown>;
-  /** 晚间小结之后：full 档位下蒸馏 StateCore 记忆（MemoryService.distill，计划 4 R1）。失败不影响晚间任务。 */
-  distill?: () => Promise<unknown>;
+  /**
+   * 晚间小结之后：在后台开始 full 档位的 StateCore 蒸馏（主进程里是 BackgroundRunner.start → nightlyDistill，计划 4 R1）。
+   * 不等它结束，失败不影响晚间任务。
+   */
+  distill?: () => unknown;
   /** 退出已开始：不再通知、不再发起新工作。 */
   aborted?: () => boolean;
 }
@@ -33,10 +36,11 @@ export async function nightlyJob(d: DailyJobDeps, slot?: number | null): Promise
   // 只在有内容、且跑的是今天的晚间时刻时通知；补跑以前日期的时刻不弹，早间简报里会看到。
   const forToday = slot === undefined || slot === null || localDate(slot) === localDate(startedAt);
   if (brief.evening.length > 0 && forToday && !d.aborted?.()) d.onEvening(brief);
-  // 最后一步：蒸馏的失败（包括同步抛错）只到这里为止，晚间任务的结果、handoff 和小结都不受影响。
+  // 最后一步，不 await（审查 I1）：蒸馏可能要很多次 LLM 调用，不能挡住调度的串行链——
+  // 晚间任务的结果要先记下，补跑时紧接着的早间简报也不能等它。失败（包括同步抛错）只到这里为止。
   if (d.distill && !d.aborted?.()) {
     const distill = d.distill;
-    await Promise.resolve()
+    void Promise.resolve()
       .then(() => distill())
       .catch(() => undefined);
   }
@@ -61,5 +65,49 @@ export async function morningJob(d: DailyJobDeps): Promise<void> {
     }
   } finally {
     if (d.narrate && !d.aborted?.()) await d.narrate(brief);
+  }
+}
+
+/**
+ * 不占调度串行链的后台任务（晚间任务之后的记忆蒸馏）。同时只跑一次：上一次还没结束时跳过，记一行日志。
+ * signal（退出时 abort）交给任务本身，abort 之后不再开始新的。失败只写日志，start() 返回的 promise 永不 reject。
+ */
+export class BackgroundRunner {
+  private current: Promise<void> | null = null;
+
+  constructor(
+    private readonly d: { name: string; run: (signal: AbortSignal) => Promise<unknown>; signal: AbortSignal; log: (msg: string, err?: unknown) => void },
+  ) {}
+
+  private log(msg: string, err?: unknown): void {
+    try {
+      this.d.log(msg, err);
+    } catch {
+      // 写日志失败不能变成未处理的 rejection。
+    }
+  }
+
+  start(): Promise<void> {
+    if (this.d.signal.aborted) return Promise.resolve();
+    if (this.current) {
+      this.log(`${this.d.name} skipped: the previous run is still going`);
+      return this.current;
+    }
+    const p = Promise.resolve()
+      .then(() => this.d.run(this.d.signal))
+      .then(
+        () => undefined,
+        (e: unknown) => this.log(`${this.d.name} failed`, e),
+      )
+      .finally(() => {
+        this.current = null;
+      });
+    this.current = p;
+    return p;
+  }
+
+  /** 正在跑的那一次（handle）；没有时为 null。 */
+  running(): Promise<void> | null {
+    return this.current;
   }
 }

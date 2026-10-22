@@ -146,6 +146,20 @@ describe("StateCore adapter (design 8, 11: write and why integration)", () => {
     });
   });
 
+  it("pins an upstream limitation of StateCore 1.0.0: an event written before the scope's first note stops counting as pending", async () => {
+    // 记录上游的已知问题，不是 Butler 想要的行为（任务 6 审查 claim 2 / M5）：
+    // 第一次写 note 时 StateCore 建一行 Digest，countPendingEvents 只数比最新 Digest 新的事件，
+    // 所以 claude 在 Butler 第一次同步之前 consolidate 的事件不算待蒸馏，只能等之后的新事件触发蒸馏时顺带处理。
+    // 升级 StateCore 后这个测试失败，说明上游改了：删掉它，并重新评估 MemoryService.distill 的相关说明。
+    const dir = tempDir();
+    await seedEvent(dir, "ticket:PROJ-11", "claude 在第一次同步之前记下的原始对话");
+    await withScope({ dataDir: dir, scope: "ticket:PROJ-11" }, async (s) => {
+      expect(await s.pendingEvents()).toBe(1);
+      await s.remember("[decision:db] 用 PostgreSQL");
+      expect(await s.pendingEvents()).toBe(0);
+    });
+  });
+
   it("never hands StateCore a model key from the environment (R1)", async () => {
     const dir = tempDir();
     await seedEvent(dir, "ticket:PROJ-6", "原始事件");

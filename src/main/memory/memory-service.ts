@@ -8,7 +8,7 @@ import type { MemorySyncRepo } from "../db/memory-sync-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import type { StatecoreChatModel } from "../gateway/types";
 import { desiredNotes, isFull, planReconcile } from "./notes";
-import { listScopeNames, NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
+import { listScopeNames, NOTES_CAP, withScope, type DigestOutcome, type ScopeHandle } from "./statecore";
 
 /** 一个 ticket 第一次同步（或积压很多）时最多回放多少条 handoff 的 learnings：workspace 的 notes 上限本来就是 30。 */
 export const BACKFILL_HANDOFFS = 20;
@@ -306,42 +306,61 @@ export class MemoryService {
 
   /**
    * full 档位：把 claude 里 consolidate 进来的原始事件蒸馏成记忆（计划 4 R1：模型只能是 PrivacyGateway.statecoreModel() 的结果）。
-   * model 为 null（不是 full 档位等）或记忆关闭时什么都不做。排在同步队列里，和写入不并发；一个 scope 失败不影响其他 scope。
-   * allowed：每个 scope 开始前再问一次模型是否还能用（档位降了、开了发送前确认、开始退出）；不能用就停下，剩下的 scope 留到下次。
+   * model 为 null（不是 full 档位等）或记忆关闭时什么都不做。永不 reject；一个 scope 失败不影响其他 scope。
+   * 每个 scope 单独排进同步队列（审查 M1）：和写入不并发，但这期间 handoff 触发的同步可以插在两个 scope 之间，不用等整轮蒸馏。
+   * 轮到一个 scope 时再检查：已经 stop()、记忆关了、allowed() 为 false（档位降了、开了发送前确认、开始退出）就停下，剩下的 scope 留到下次。
+   * notes 已满（noteSlots().used >= cap）的 ticket scope 不蒸馏（产品裁定）：StateCore 1.0.0 的蒸馏释放不了 forget 过的位置，
+   * 满的时候它提炼出的新 note 只能挤掉看得见的 Butler 条目。事件留着，等位置空出来。
    * 一个 ticket scope 蒸馏成功后马上重新同步这个 ticket（任务 4 审查 F3）：蒸馏会按相似度改写、合并、挤掉 notes，
    * Butler 要保留的条目可能被改掉或没了登记；重新同步按现状比对、每次写之前重新数位置，不沿用蒸馏之前的任何估计。
+   * "ran" 不保证每个事件都被提炼（审查 M3，StateCore 1.0.0）：分块蒸馏时失败的块被跳过，两次输出都不合格时退回上一次的摘要，
+   * 这些事件同样算作已蒸馏。
    */
-  distill(model: StatecoreChatModel | null, allowed: () => boolean = () => true): Promise<DistillResult> {
-    const empty: DistillResult = { scopes: 0, ran: 0, failed: 0 };
-    return this.enqueue(
-      "memory distill",
-      async () => {
-        const r = { ...empty };
-        if (!model || !this.d.enabled()) return r;
-        for (const scope of await listScopeNames(this.d.dataDir)) {
-          if (this.stopped || !this.d.enabled()) break;
-          if (!allowed()) {
-            this.log("memory distill stopped: the model is no longer allowed");
-            break;
-          }
-          try {
-            const outcome = await withScope({ dataDir: this.d.dataDir, scope, model }, async (s) => ((await s.pendingEvents()) > 0 ? s.digestNow() : null));
-            if (outcome === null) continue;
-            r.scopes++;
-            if (outcome === "ran") r.ran++;
-            else if (outcome === "failed") r.failed++;
-            const key = scopeTicket(scope);
-            if (outcome === "ran" && key !== null) await this.resyncAfterDigest(key);
-          } catch (e) {
-            r.scopes++;
-            r.failed++;
-            this.log(`memory distill ${scope} failed`, e);
+  async distill(model: StatecoreChatModel | null, allowed: () => boolean = () => true): Promise<DistillResult> {
+    const r: DistillResult = { scopes: 0, ran: 0, failed: 0 };
+    if (!model || !this.d.enabled()) return r;
+    const scopes = await this.enqueue("memory distill", () => listScopeNames(this.d.dataDir), []);
+    for (const scope of scopes) {
+      const step = await this.enqueue(`memory distill ${scope}`, () => this.distillScope(scope, model, allowed), "stop" as const);
+      if (step === "stop") break;
+      if (step === "skipped") continue;
+      r.scopes++;
+      if (step === "ran") r.ran++;
+      else if (step === "failed") r.failed++;
+    }
+    return r;
+  }
+
+  /** 蒸馏一个 scope（已经在队列里）。"skipped"：没有待蒸馏的事件，或 notes 已满；"stop"：整轮停下。 */
+  private async distillScope(
+    scope: string,
+    model: StatecoreChatModel,
+    allowed: () => boolean,
+  ): Promise<DigestOutcome | "skipped" | "stop"> {
+    if (this.stopped || !this.d.enabled()) return "stop";
+    if (!allowed()) {
+      this.log("memory distill stopped: the model is no longer allowed");
+      return "stop";
+    }
+    const key = scopeTicket(scope);
+    try {
+      const outcome = await withScope({ dataDir: this.d.dataDir, scope, model }, async (s): Promise<DigestOutcome | "skipped"> => {
+        if ((await s.pendingEvents()) === 0) return "skipped";
+        if (key !== null) {
+          const { used, cap } = await s.noteSlots();
+          if (used >= cap) {
+            this.log(`memory distill ${scope}: skipped, notes full (${used}/${cap})`);
+            return "skipped";
           }
         }
-        return r;
-      },
-      empty,
-    );
+        return s.digestNow();
+      });
+      if (outcome === "ran" && key !== null) await this.resyncAfterDigest(key);
+      return outcome;
+    } catch (e) {
+      this.log(`memory distill ${scope} failed`, e);
+      return "failed";
+    }
   }
 
   /** 蒸馏之后重新同步一个 ticket（已经在队列里，直接执行）。失败只写日志，不算蒸馏失败。 */
@@ -376,7 +395,7 @@ export async function nightlyDistill(d: {
   memory: Pick<MemoryService, "distill">;
   gateway: StatecoreModelSource;
   signal: AbortSignal;
-  log: (msg: string) => void;
+  log: (msg: string, err?: unknown) => void;
 }): Promise<DistillResult> {
   const empty: DistillResult = { scopes: 0, ran: 0, failed: 0 };
   try {
@@ -385,7 +404,13 @@ export async function nightlyDistill(d: {
     const r = await d.memory.distill(d.gateway.statecoreModel(d.signal), allowed);
     if (r.scopes > 0) d.log(`memory distill: ${r.scopes} scope(s), ${r.ran} ran, ${r.failed} failed`);
     return r;
-  } catch {
+  } catch (e) {
+    // 意外错误（例如读设置失败）：只记消息和错误本身，没有记忆内容；key 只在 gateway 的请求头里，不会出现在这里。
+    try {
+      d.log("memory distill failed", e);
+    } catch {
+      // 写日志失败也不能让晚间任务出错。
+    }
     return empty;
   }
 }

@@ -782,3 +782,120 @@ describe("nightlyDistill: the model reaches StateCore only through the gateway (
     expect(w.h.provider.requests).toEqual([]);
   });
 });
+
+describe("MemoryService.distill fix round 1 (task 6 review)", () => {
+  /** 认出这次蒸馏的是哪个 scope：StateCore 的提示词里带着 scope 名。 */
+  const scopeOf = (messages: { content: string }[]): string => /ticket:[A-Z]+-\d+/.exec(messages.map((m) => m.content).join("\n"))?.[0] ?? "?";
+
+  it("queues one task per scope, so a sync requested mid-run goes between two scopes (M1)", async () => {
+    const t = setup();
+    await seedEvent(t.dataDir, "ticket:PROJ-1");
+    // scope 按名字排序：ZZZ-1（没有对应的 ticket，不会重新同步）排在 PROJ-1 后面。
+    await seedEvent(t.dataDir, "ticket:ZZZ-1");
+    const order: string[] = [];
+    const memory = t.memory;
+    const r = await memory.distill({
+      chat: async (messages) => {
+        const scope = scopeOf(messages);
+        order.push(`digest ${scope} after [${t.synced.join(",")}]`);
+        // 第一个 scope 蒸馏期间来了一次 handoff 触发的同步。
+        if (scope === "ticket:PROJ-1") void memory.syncTicket("PROJ-2");
+        return digestReply();
+      },
+    });
+    expect(r).toEqual({ scopes: 2, ran: 2, failed: 0 });
+    // PROJ-1 蒸馏后马上重新同步（同一个任务里），然后是插进来的 PROJ-2，最后才是第二个 scope。
+    expect(t.logs).toEqual([]);
+    expect(order).toEqual(["digest ticket:PROJ-1 after []", "digest ticket:ZZZ-1 after [PROJ-1,PROJ-2]"]);
+  });
+
+  it("skips a ticket scope whose notes are full, logging only the count, and keeps its events (product ruling)", async () => {
+    const t = setup();
+    await realStatecore.withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
+      for (let i = 0; i < NOTES_CAP; i++) await s.remember(`Claude 自己记的 ${distinct(40 + i)}`);
+    });
+    await seedEvent(t.dataDir, "ticket:PROJ-1");
+    await seedEvent(t.dataDir, "workspace");
+    const digested: string[] = [];
+    const r = await t.memory.distill({
+      chat: async (messages) => {
+        digested.push(messages.some((m) => m.content.includes("ticket:PROJ-1")) ? "ticket:PROJ-1" : "other");
+        return digestReply();
+      },
+    });
+    // workspace 不是 ticket scope，照常蒸馏；满了的 ticket scope 一次模型调用都没有。
+    expect(r).toEqual({ scopes: 1, ran: 1, failed: 0 });
+    expect(digested).not.toContain("ticket:PROJ-1");
+    expect(t.logs).toEqual(["memory distill ticket:PROJ-1: skipped, notes full (30/30)"]);
+    expect(t.logs.some((l) => l.includes("Claude"))).toBe(false);
+    await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
+      expect(await s.pendingEvents()).toBe(1);
+      expect(await s.facts()).toHaveLength(NOTES_CAP);
+    });
+  });
+
+  it("stops before the next scope when memory is switched off mid-run (M4)", async () => {
+    const t = setup();
+    await seedEvent(t.dataDir, "ticket:PROJ-1");
+    await seedEvent(t.dataDir, "ticket:PROJ-2");
+    const digested: string[] = [];
+    const r = await t.memory.distill({
+      chat: async (messages) => {
+        digested.push(scopeOf(messages));
+        t.setEnabled(false);
+        return digestReply();
+      },
+    });
+    expect(r).toEqual({ scopes: 1, ran: 1, failed: 0 });
+    expect(digested).toEqual(["ticket:PROJ-1"]);
+    await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-2" }, async (s) => {
+      expect(await s.pendingEvents()).toBe(1);
+    });
+  });
+});
+
+describe("nightlyDistill fix round 1 (task 6 review)", () => {
+  let h: GatewayHarness | null = null;
+  afterEach(async () => {
+    await h?.close();
+    h = null;
+  });
+
+  it("leaves the remaining scopes untouched when the app starts quitting after the first scope (M4)", async () => {
+    h = await gatewayHarness({ level: "full" });
+    const t = setup();
+    await seedEvent(t.dataDir, "ticket:PROJ-1");
+    await seedEvent(t.dataDir, "ticket:PROJ-2");
+    const ctl = new AbortController();
+    h.provider.handle(() => {
+      // 第一个 scope 的调用已经发出去了，这时开始退出。
+      ctl.abort();
+      return chatReply(digestReply());
+    });
+    const logs: string[] = [];
+    const r = await nightlyDistill({ memory: t.memory, gateway: h.gateway, signal: ctl.signal, log: (m) => logs.push(m) });
+    expect(h.provider.requests).toHaveLength(1);
+    expect(r.scopes).toBe(1);
+    expect(t.logs).toContain("memory distill stopped: the model is no longer allowed");
+    await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-2" }, async (s) => {
+      expect(await s.pendingEvents()).toBe(1);
+    });
+  });
+
+  it("logs an unexpected error with its message and still resolves (M2)", async () => {
+    const t = setup();
+    const logs: string[] = [];
+    const r = await nightlyDistill({
+      memory: t.memory,
+      gateway: {
+        statecoreModel: () => {
+          throw new Error("settings unreadable");
+        },
+      },
+      signal: new AbortController().signal,
+      log: (m, e) => logs.push(`${m} ${e instanceof Error ? e.message : String(e)}`),
+    });
+    expect(r).toEqual({ scopes: 0, ran: 0, failed: 0 });
+    expect(logs).toEqual(["memory distill failed settings unreadable"]);
+  });
+});
