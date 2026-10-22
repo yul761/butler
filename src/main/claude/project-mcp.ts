@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { GIT_SAFE_ARGS, gitBinary } from "../util/git-path";
 
@@ -94,7 +94,13 @@ function gitEnv(): NodeJS.ProcessEnv {
 }
 
 function git(cwd: string, args: string[]): { status: number | null; stdout: string } {
-  const r = spawnSync(gitBinary(), [...GIT_SAFE_ARGS, ...args], { cwd, env: gitEnv(), timeout: 5000, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  let bin: string;
+  try {
+    bin = gitBinary();
+  } catch {
+    return { status: null, stdout: "" };
+  }
+  const r = spawnSync(bin, [...GIT_SAFE_ARGS, ...args], { cwd, env: gitEnv(), timeout: 5000, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   return { status: r.error ? null : r.status, stdout: r.stdout ?? "" };
 }
 
@@ -148,17 +154,44 @@ function approvals(cwd: string, claudeJson: Json | undefined, p: ProjectMcpPaths
   return a;
 }
 
-/** 同目录临时文件（0600）再 rename，不会留下半截或宽权限的文件。 */
+const STALE_TMP_MS = 60 * 60 * 1000;
+const swept = new Set<string>();
+
+/** 进程在写入和 rename 之间退出会留下 *.tmp：每个进程对每个目录清一次顶层超过一小时的。不进子目录（mcp/tickets/ 归计划 4）。 */
+function sweepStaleTmp(dir: string): void {
+  if (swept.has(dir)) return;
+  swept.add(dir);
+  try {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (!e.isFile() || !e.name.endsWith(".tmp")) continue;
+      const f = join(dir, e.name);
+      try {
+        if (Date.now() - statSync(f).mtimeMs > STALE_TMP_MS) unlinkSync(f);
+      } catch {
+        // 别的进程先清掉了，或者删不掉：下次再说。
+      }
+    }
+  } catch {
+    // 目录还不存在：没有可清的。
+  }
+}
+
+/** 同目录随机名临时文件（0600，wx：绝不覆盖已有的）再 rename，不会留下半截或宽权限的文件。 */
 function writePrivate(file: string, servers: Json): void {
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  const fd = openSync(tmp, "wx", 0o600); // 失败（含 EEXIST）时不是我们建的，什么都不删。
   try {
-    writeFileSync(tmp, JSON.stringify({ mcpServers: servers }, null, 2), { mode: 0o600, flag: "wx" });
+    try {
+      writeSync(fd, JSON.stringify({ mcpServers: servers }, null, 2));
+    } finally {
+      closeSync(fd);
+    }
     renameSync(tmp, file);
   } catch (e) {
     try {
       unlinkSync(tmp);
     } catch {
-      // 临时文件没建成。
+      // 已经没了。
     }
     throw e;
   }
@@ -174,6 +207,7 @@ const fileKey = (cwd: string, kind: string): string => `${kind}-${createHash("sh
  */
 export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
   const out: string[] = [];
+  sweepStaleTmp(p.mcpDir);
   const claudeJson = readJson(p.claudeJson, p.log, { repo: false });
   const localRaw = INCLUDE_LOCAL_SCOPE ? projectEntry(cwd, claudeJson)?.mcpServers : undefined;
   const local = isServerMap(localRaw) ? localRaw : undefined;

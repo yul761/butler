@@ -1,16 +1,40 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tempDir } from "../test-utils";
+import { GIT_SAFE_ARGS, resetGitBinary, setGitBinary } from "../util/git-path";
 import { INCLUDE_LOCAL_SCOPE, projectMcpConfigs } from "./project-mcp";
+
+const mocks = vi.hoisted(() => ({ spawnSync: undefined as undefined | ((...a: unknown[]) => unknown), randomBytes: undefined as undefined | ((n: number) => Buffer), randomResults: [] as string[] }));
+vi.mock("node:child_process", async (orig) => {
+  const actual = await orig<typeof import("node:child_process")>();
+  return { ...actual, spawnSync: (...a: unknown[]) => (mocks.spawnSync ?? (actual.spawnSync as (...x: unknown[]) => unknown))(...a) };
+});
+vi.mock("node:crypto", async (orig) => {
+  const actual = await orig<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    randomBytes: (n: number) => {
+      const b = mocks.randomBytes ? mocks.randomBytes(n) : actual.randomBytes(n);
+      mocks.randomResults.push(b.toString("hex"));
+      return b;
+    },
+  };
+});
 
 beforeEach(() => {
   // 隔离全局 git 配置，测试里的提交不受用户配置（签名、模板……）影响。
   vi.stubEnv("GIT_CONFIG_GLOBAL", process.platform === "win32" ? "NUL" : "/dev/null");
   vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  mocks.spawnSync = undefined;
+  mocks.randomBytes = undefined;
+  mocks.randomResults = [];
+  resetGitBinary();
+});
 
 function setup() {
   const root = tempDir("butler-mcp-");
@@ -324,5 +348,88 @@ describe("projectMcpConfigs: case-insensitive file systems (plan 3 parked)", () 
     projectMcpConfigs(s.repo, s.p);
     projectMcpConfigs(s.repo, s.p);
     expect(readdirSync(s.mcpDir).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+  });
+});
+
+describe("projectMcpConfigs: temporary files", () => {
+  it("uses a fresh random temp name for every write", () => {
+    const s = setup();
+    s.writeMcp(["a"]);
+    s.writeClaudeJson({ enableAllProjectMcpServers: true });
+    projectMcpConfigs(s.repo, s.p);
+    projectMcpConfigs(s.repo, s.p);
+    expect(mocks.randomResults).toHaveLength(2);
+    expect(mocks.randomResults[0]).not.toBe(mocks.randomResults[1]);
+  });
+
+  it("never overwrites or deletes a temp file it did not create (wx), and does not export that entry", () => {
+    const s = setup();
+    s.writeMcp(["a"]);
+    s.writeClaudeJson({ enableAllProjectMcpServers: true });
+    const [file] = projectMcpConfigs(s.repo, s.p);
+    const planted = `${file}.${process.pid}.deadbeef.tmp`;
+    writeFileSync(planted, "PLANTED");
+    mocks.randomBytes = () => Buffer.from("deadbeef", "hex");
+    expect(projectMcpConfigs(s.repo, s.p)).toEqual([]);
+    expect(readFileSync(planted, "utf8")).toBe("PLANTED");
+  });
+
+  it("removes its own temp file when the rename fails", () => {
+    const s = setup();
+    s.writeMcp(["a"]);
+    s.writeClaudeJson({ enableAllProjectMcpServers: true });
+    const [file] = projectMcpConfigs(s.repo, s.p);
+    rmSync(file);
+    mkdirSync(join(file, "blocker"), { recursive: true }); // rename 到非空目录上必然失败
+    expect(projectMcpConfigs(s.repo, s.p)).toEqual([]);
+    expect(s.logs.some((l) => l.includes("skipping"))).toBe(true);
+    expect(readdirSync(s.mcpDir).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32")("creates the temp file with mode 0600", () => {
+    const s = setup();
+    s.writeMcp(["a"]);
+    s.writeClaudeJson({ enableAllProjectMcpServers: true });
+    const [file] = projectMcpConfigs(s.repo, s.p);
+    expect(mode(file)).toBe(0o600);
+  });
+
+  it("sweeps stale top-level *.tmp files (older than an hour) but keeps fresh ones, other files and subfolders", () => {
+    const s = setup();
+    const old = join(s.mcpDir, "project-x.json.1.aaaa.tmp");
+    const fresh = join(s.mcpDir, "project-y.json.1.bbbb.tmp");
+    const keep = join(s.mcpDir, "project-z.json");
+    const sub = join(s.mcpDir, "tickets");
+    mkdirSync(sub);
+    const inSub = join(sub, "t1.json.1.cccc.tmp");
+    for (const f of [old, fresh, keep, inSub]) writeFileSync(f, "x");
+    const longAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    for (const f of [old, keep, inSub]) utimesSync(f, longAgo, longAgo);
+    projectMcpConfigs(s.repo, s.p);
+    expect(readdirSync(s.mcpDir).sort()).toEqual(["project-y.json.1.bbbb.tmp", "project-z.json", "tickets"]);
+    expect(readdirSync(sub)).toEqual(["t1.json.1.cccc.tmp"]);
+  });
+});
+
+describe("projectMcpConfigs: git invocation", () => {
+  it("runs the resolved absolute git with fsmonitor disabled", () => {
+    const s = setup();
+    s.writeMcp(["a"]);
+    s.writeClaudeJson({});
+    mkdirSync(join(s.repo, ".claude"));
+    writeFileSync(join(s.repo, ".claude", "settings.local.json"), JSON.stringify({ enableAllProjectMcpServers: true }));
+    const calls: { cmd: unknown; args: unknown }[] = [];
+    mocks.spawnSync = (cmd, args) => {
+      calls.push({ cmd, args });
+      return { status: 1, stdout: "", error: undefined };
+    };
+    const abs = process.platform === "win32" ? "C:\\Git\\cmd\\git.exe" : "/opt/abs/git";
+    setGitBinary(abs);
+    projectMcpConfigs(s.repo, s.p);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const c of calls) {
+      expect(c.cmd).toBe(abs);
+      expect((c.args as string[]).slice(0, 2)).toEqual(GIT_SAFE_ARGS);
+    }
   });
 });

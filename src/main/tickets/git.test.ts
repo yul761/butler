@@ -2,7 +2,7 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { setGitBinary } from "../util/git-path";
+import { applyGitResolution, resetGitBinary, setGitBinary } from "../util/git-path";
 import { git, GIT_SUMMARY_LIMIT, GitError, gitEnv, gitErrorSummary } from "./git";
 
 describe("git helpers", () => {
@@ -38,7 +38,18 @@ describe("git invocation", () => {
       expect(await git(dir, ["status", "--porcelain"])).toBe("ok");
       expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["-c", "core.fsmonitor=false", "status", "--porcelain"]);
     } finally {
-      setGitBinary("git");
+      resetGitBinary();
+    }
+  });
+});
+
+describe("git invocation without git", () => {
+  it("rejects with a clear error instead of spawning a bare git (win32 policy)", async () => {
+    applyGitResolution(null, "win32", () => undefined);
+    try {
+      await expect(git(tempDir(), ["status"])).rejects.toThrow("git not found; install Git for Windows or set PATH");
+    } finally {
+      resetGitBinary();
     }
   });
 });

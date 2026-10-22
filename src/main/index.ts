@@ -53,7 +53,7 @@ import { llmConfig, memoryOn, scheduleConfig, SettingError } from "./settings/se
 import { runSmoke } from "./smoke";
 import { N } from "./strings";
 import { pathKey } from "./util/env";
-import { resolveGit, setGitBinary } from "./util/git-path";
+import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
 import { canSend } from "./safe-send";
 import { circleBitmap } from "./tray-bitmap";
@@ -226,13 +226,12 @@ async function confirmSend(outbound: string, quit: AbortSignal): Promise<boolean
 }
 
 async function bootstrap(): Promise<void> {
-  // 先用 Butler 自己的 PATH 定下 git 的绝对路径；登录 shell 的 PATH 读到之后再更新一次。
-  const envGit = resolveGit(process.env[pathKey(process.env)] ?? "", process.platform);
-  if (envGit) setGitBinary(envGit);
   const paths = resolvePaths();
   await ensureDirs(paths);
   logger = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : teeToConsole);
   if (!app.isPackaged) process.stderr.on("error", () => { teeBroken = true; });
+  // 先用 Butler 自己的 PATH 定下 git 的绝对路径；登录 shell 的 PATH 读到之后再更新一次。
+  applyGitResolution(resolveGit(process.env[pathKey(process.env)] ?? "", process.platform), process.platform, (m) => logger(m));
   const db = openDatabase(paths.db);
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -258,8 +257,7 @@ async function bootstrap(): Promise<void> {
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
   const healthReady: Promise<void> = health.refresh().then(
     () => {
-      const loginGit = resolveGit(health.claude().pathValue, process.platform);
-      if (loginGit) setGitBinary(loginGit);
+      applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       notify();
     },
     (e: unknown) => {

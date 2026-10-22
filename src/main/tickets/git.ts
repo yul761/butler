@@ -21,7 +21,14 @@ export function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 export function git(cwd: string, args: string[]): Promise<string> {
   return new Promise((done, fail) => {
-    execFile(gitBinary(), [...GIT_SAFE_ARGS, ...args], { cwd, env: gitEnv(process.env), windowsHide: true, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    let bin: string;
+    try {
+      bin = gitBinary();
+    } catch (e) {
+      fail(new GitError((e as Error).message, ""));
+      return;
+    }
+    execFile(bin, [...GIT_SAFE_ARGS, ...args], { cwd, env: gitEnv(process.env), windowsHide: true, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) fail(new GitError(`git ${args.join(" ")} failed: ${String(stderr).trim() || err.message}`, String(stderr)));
       else done(String(stdout).trim());
     });
