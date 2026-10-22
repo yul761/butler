@@ -7,7 +7,7 @@ import {
   type TicketView,
   type UnclaimedSession,
 } from "../../shared/types";
-import { claudeArgs, sessionEnv, spawnSpec } from "../claude/spawn";
+import { claudeArgs, cmdShimSafe, sessionEnv, spawnSpec } from "../claude/spawn";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
@@ -32,6 +32,8 @@ export interface SessionServiceDeps {
   now: () => number;
   platform: NodeJS.Platform;
   baseEnv: NodeJS.ProcessEnv;
+  /** 写好这个 ticket 的记忆 --mcp-config 文件并返回路径；记忆关闭或 bundle 不存在时返回 null（设计文档 8.4）。 */
+  mcpConfig?: (ticketKey: string) => string | null;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -78,6 +80,7 @@ export class SessionService {
     }
 
     const workDir = this.d.ticketService.workDir(ticket);
+    const mcpConfigPath = this.mcpConfigFor(ticket.key, claudePath);
     let termId: string;
     let cwd: string;
     let args: string[];
@@ -86,11 +89,11 @@ export class SessionService {
       // claude --resume 只能在 session 当初的项目目录里找到它；没发过消息的 session 没有记录，用同一个 id 重新开
       termId = head.id;
       cwd = head.cwd || workDir;
-      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id });
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath });
     } else {
       termId = this.d.newId();
       cwd = workDir;
-      args = claudeArgs({ mode: "new", sessionId: termId });
+      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({ id: termId, ticketKey: ticket.key, cwd, origin: "butler", lastActivityAt: now, createdAt: now });
     }
@@ -107,6 +110,23 @@ export class SessionService {
     }
     if (prefill) this.prefill(termId, prefill);
     return { ok: true, termId, alreadyOpen: false };
+  }
+
+  /** 这个 ticket 的记忆 MCP 配置。写不出来、或者在 Windows 的 .cmd 下无法安全传递时不挂，session 照常打开。 */
+  private mcpConfigFor(ticketKey: string, claudePath: string): string | undefined {
+    let file: string | null;
+    try {
+      file = this.d.mcpConfig?.(ticketKey) ?? null;
+    } catch (e) {
+      this.d.log?.(`memory MCP config for ${ticketKey} not written`, e);
+      return undefined;
+    }
+    if (!file) return undefined;
+    if (!cmdShimSafe(claudePath, file, this.d.platform)) {
+      this.d.log?.(`memory MCP not mounted for ${ticketKey}: the config path cannot pass through cmd.exe safely`);
+      return undefined;
+    }
+    return file;
   }
 
   /**

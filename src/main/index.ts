@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, Menu, nativeImage, Notification, powerMonitor, Tray, type MessageBoxOptions } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -36,6 +36,7 @@ import { HandoffRunner } from "./handoff/runner";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
+import { writeTicketMcpConfig } from "./memory/mcp-config";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { HookInbox } from "./hooks/inbox";
 import { registerIpc } from "./ipc/register";
@@ -93,9 +94,17 @@ function safeSend(channel: string, ...args: unknown[]): void {
   if (win && canSend(win)) win.webContents.send(channel, ...args);
 }
 
+/** 开发时仓库根目录下的 build/（out/main/index.js 往上两级）。 */
+const devBuildDir = (): string => join(__dirname, "..", "..", "build");
+
 function bundledHookPath(): string {
   const name = process.platform === "win32" ? "butler-hook.exe" : "butler-hook";
-  return app.isPackaged ? join(process.resourcesPath, "hook", name) : join(app.getAppPath(), "build", "hook", name);
+  return app.isPackaged ? join(process.resourcesPath, "hook", name) : join(devBuildDir(), "hook", name);
+}
+
+/** 打包好的 StateCore MCP（任务 7）：开发时在 build/ 下（pnpm dev / build 会先生成），安装包里在 resources 下。 */
+function bundledMemoryMcpPath(): string {
+  return app.isPackaged ? join(process.resourcesPath, "memory-mcp", "statecore-mcp.cjs") : join(devBuildDir(), "memory-mcp", "statecore-mcp.cjs");
 }
 
 /** dev 模式下的渲染器地址；打包后永远不用环境变量。 */
@@ -259,6 +268,18 @@ async function bootstrap(): Promise<void> {
       notify();
     },
   }, Date.now, logger);
+  const memoryMcpScript = bundledMemoryMcpPath();
+  let memoryMcpMissingLogged = false;
+  /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。 */
+  const memoryMcpConfig = (ticketKey: string): string | null => {
+    if (settings.get("memoryEnabled") === "0") return null;
+    if (!existsSync(memoryMcpScript)) {
+      if (!memoryMcpMissingLogged) logger(`memory MCP bundle missing at ${memoryMcpScript}; sessions start without memory (run pnpm build:memory-mcp)`);
+      memoryMcpMissingLogged = true;
+      return null;
+    }
+    return writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, launcher: { command: process.execPath, script: memoryMcpScript }, statecoreDir: paths.statecore });
+  };
   const sessionService = new SessionService({
     tickets, sessions, settings, ticketService, pty,
     ready: () => healthReady,
@@ -269,6 +290,7 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     platform: process.platform,
     baseEnv: process.env,
+    mcpConfig: memoryMcpConfig,
     log: logger,
   });
 

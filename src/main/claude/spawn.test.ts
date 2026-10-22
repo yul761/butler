@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { claudeArgs, headlessEnv, sessionEnv, spawnSpec } from "./spawn";
+import { claudeArgs, cmdShimSafe, headlessEnv, sessionEnv, spawnSpec } from "./spawn";
 
 describe("claude spawn helpers", () => {
   it("builds new and resume args", () => {
@@ -65,5 +65,19 @@ describe("claude spawn helpers", () => {
       expect(e.CLAUDE_CONFIG_DIR).toBe(resolve("rel/c"));
     }
     expect("BUTLER_HOME" in headlessEnv({ PATH: "/usr/bin" }, { pathValue: "", runId: "r" })).toBe(false);
+  });
+});
+
+describe("cmdShimSafe", () => {
+  it("accepts anything when no cmd.exe is involved", () => {
+    expect(cmdShimSafe("/usr/local/bin/claude", "/Users/John Smith/.butler/mcp/A-1.json", "darwin")).toBe(true);
+    expect(cmdShimSafe("C:\\bin\\claude.exe", "C:\\Users\\John Smith\\x.json", "win32")).toBe(true);
+  });
+
+  it("rejects spaces, quotes and cmd metacharacters for a .cmd shim on Windows", () => {
+    expect(cmdShimSafe("C:\\npm\\claude.cmd", "C:\\Users\\john\\.butler\\mcp\\A-1.json", "win32")).toBe(true);
+    for (const bad of ["C:\\Users\\John Smith\\x.json", 'C:\\a"b.json', "C:\\a&b.json", "C:\\a%b.json", "C:\\a^b.json", "C:\\a(b).json"]) {
+      expect(cmdShimSafe("C:\\npm\\claude.cmd", bad, "win32"), bad).toBe(false);
+    }
   });
 });

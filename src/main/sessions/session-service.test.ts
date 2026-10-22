@@ -17,6 +17,8 @@ async function setup(opts: {
   workMode?: "branch" | "worktree";
   ready?: () => Promise<void>;
   factory?: PtyFactory;
+  mcpConfig?: (ticketKey: string) => string | null;
+  platform?: NodeJS.Platform;
 } = {}) {
   const stateOf = (id: string): TranscriptState =>
     opts.transcriptState ?? (opts.transcripts === undefined || opts.transcripts.includes(id) ? "present" : "absent");
@@ -27,6 +29,7 @@ async function setup(opts: {
   const ticketService = new TicketService({ tickets, settings, now: () => 1 });
   const { factory, spawned } = fakePtyFactory();
   const pty = new PtyManager(opts.factory ?? factory, { data: () => undefined, exit: () => undefined });
+  const logs: string[] = [];
   let n = 0;
   const service = new SessionService({
     tickets, sessions, settings, ticketService, pty,
@@ -36,15 +39,48 @@ async function setup(opts: {
     claude: () => ({ path: opts.claudePath === undefined ? "/bin/claude" : opts.claudePath, pathValue: "/login/bin" }),
     newId: () => `new-${++n}`,
     now: () => 1000,
-    platform: "darwin",
+    platform: opts.platform ?? "darwin",
     baseEnv: { HOME: "/h" },
+    mcpConfig: opts.mcpConfig,
+    log: (m) => logs.push(m),
   });
   const repo = makeRepo();
   const ticket = await ticketService.create({ key: "PROJ-1", repoPath: repo, workMode: opts.workMode ?? "worktree" });
-  return { service, sessions, tickets, spawned, pty, repo, ticket, ticketService };
+  return { service, sessions, tickets, spawned, pty, repo, ticket, ticketService, logs };
 }
 
 describe("SessionService.open", () => {
+  it("mounts the ticket's memory MCP config on new and resumed sessions (design 4.2)", async () => {
+    const asked: string[] = [];
+    const { service, spawned, sessions } = await setup({ mcpConfig: (key) => (asked.push(key), "/b/mcp/PROJ-1.json") });
+    await service.open({ ticketKey: "PROJ-1" });
+    expect(spawned[0].args).toEqual(["--session-id", "new-1", "--mcp-config", "/b/mcp/PROJ-1.json"]);
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1 });
+    await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
+    expect(spawned[1].args).toEqual(["--resume", "old", "--mcp-config", "/b/mcp/PROJ-1.json"]);
+    expect(asked).toEqual(["PROJ-1", "PROJ-1"]);
+  });
+
+  it("opens the session without memory when the config is off, fails, or cannot pass through cmd.exe", async () => {
+    const off = await setup({ mcpConfig: () => null });
+    await off.service.open({ ticketKey: "PROJ-1" });
+    expect(off.spawned[0].args).toEqual(["--session-id", "new-1"]);
+
+    const broken = await setup({
+      mcpConfig: () => {
+        throw new Error("disk full");
+      },
+    });
+    expect(await broken.service.open({ ticketKey: "PROJ-1" })).toMatchObject({ ok: true });
+    expect(broken.spawned[0].args).toEqual(["--session-id", "new-1"]);
+    expect(broken.logs.some((l) => l.includes("memory MCP config for PROJ-1 not written"))).toBe(true);
+
+    const shim = await setup({ platform: "win32", claudePath: "C:\\npm\\claude.cmd", mcpConfig: () => "C:\\Users\\John Smith\\.butler\\mcp\\PROJ-1.json" });
+    await shim.service.open({ ticketKey: "PROJ-1" });
+    expect(shim.spawned[0].args).not.toContain("--mcp-config");
+    expect(shim.logs.some((l) => l.includes("memory MCP not mounted for PROJ-1"))).toBe(true);
+  });
+
   it("starts a new session in the ticket workdir with Butler env", async () => {
     const { service, sessions, spawned, ticket } = await setup();
     expect(await service.open({ ticketKey: "PROJ-1" })).toEqual({ ok: true, termId: "new-1", alreadyOpen: false });

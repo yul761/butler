@@ -20,6 +20,15 @@ export function spawnSpec(claudePath: string, args: string[], platform: NodeJS.P
 }
 
 /**
+ * Windows 上 npm 装的 claude.cmd 要经过 cmd.exe：参数里有空白、引号、括号或 cmd 元字符时没法安全传递。
+ * 这种情况下调用方不传这个参数（计划 5 去掉 cmd.exe 这一层）。
+ */
+export function cmdShimSafe(file: string, arg: string, platform: NodeJS.Platform): boolean {
+  if (platform !== "win32" || !/\.(cmd|bat)$/i.test(file)) return true;
+  return /^[^\s"&|<>^%()!]+$/.test(arg);
+}
+
+/**
  * 外层 Claude Code 会话注入的会话级标记。Butler 若从一个 claude 会话里启动，这些变量会被继承，
  * 被启动的 claude 会把自己当成子会话（例如不保存 transcript，导致无法 --resume），所以必须去掉。
  * 用户自己的配置（CLAUDE_CODE_USE_BEDROCK、ANTHROPIC_* 等）保留。
