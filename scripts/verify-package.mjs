@@ -30,7 +30,9 @@ function expectedFiles(platform, resources) {
 /** 返回缺失项（字符串数组）；空数组表示齐全。 */
 export function missingFromPackage(platform, distDir) {
   const mac = platform !== "win32";
-  const appDir = mac ? join(distDir, "mac-arm64", "Butler.app") : join(distDir, "win-unpacked");
+  // mac 的目录名随架构变（mac-arm64、mac、mac-universal），按 mac*/Butler.app 找。
+  const macDir = existsSync(distDir) ? readdirSync(distDir).find((d) => d.startsWith("mac") && existsSync(join(distDir, d, "Butler.app"))) : undefined;
+  const appDir = mac ? join(distDir, macDir ?? "mac-arm64", "Butler.app") : join(distDir, "win-unpacked");
   const resources = mac ? join(appDir, "Contents", "Resources") : join(appDir, "resources");
   const missing = expectedFiles(platform, resources).filter((f) => !existsSync(f));
   const installers = existsSync(distDir) ? readdirSync(distDir).filter((f) => (mac ? /\.(dmg|zip)$/ : /\.exe$/).test(f) && statSync(join(distDir, f)).size > 0) : [];
