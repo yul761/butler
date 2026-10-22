@@ -11,7 +11,7 @@ describe("APP_ID", () => {
   });
 
   it("is the agreed reverse-DNS identity", () => {
-    expect(APP_ID).toBe("io.github.yul761.butler");
+    expect(APP_ID).toBe("io.statecore.butler");
   });
 
   // 计划 5 任务 7 之后 electron-builder.yml 一定存在：文件缺失或 appId 不同都算失败，不能悄悄跳过。

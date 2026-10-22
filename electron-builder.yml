@@ -1,5 +1,5 @@
 # 不签名的安装包（设计文档 2.1、12 节）。发布（推 tag、建 release）由用户完成：publish 关掉，也不配置自动更新。
-appId: io.github.yul761.butler
+appId: io.statecore.butler
 productName: Butler
 copyright: Copyright © 2026 Yuchen Lin
 directories:

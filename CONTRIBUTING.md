@@ -50,7 +50,7 @@ The E2E tests are sandboxed. Each test gets its own temporary `BUTLER_HOME`, `CL
 
 ### Notes for maintainers
 
-- **Do not change `APP_ID` (`io.github.yul761.butler`) after the first release.** It lives in `src/main/app-id.ts` and must equal `appId` in `electron-builder.yml`, which a test enforces. Windows uses it as the AppUserModelID for notifications, Start-menu shortcuts and start-at-login.
+- **Do not change `APP_ID` (`io.statecore.butler`) after the first release.** It lives in `src/main/app-id.ts` and must equal `appId` in `electron-builder.yml`, which a test enforces. Windows uses it as the AppUserModelID for notifications, Start-menu shortcuts and start-at-login.
 - **The app has no icon of its own yet.** `electron-builder.yml` points `buildResources` at `build-resources/`, which does not exist, so packages use the default Electron icon. To add one, create `build-resources/` with `icon.icns` and `icon.ico`. Don't use `build/`: that holds the hook and memory MCP build output.
 - Builds are unsigned. macOS packages get an ad-hoc signature in `scripts/after-pack.cjs` (a fully unsigned arm64 app won't launch). The README explains how users get past Gatekeeper and SmartScreen.
 
