@@ -9,6 +9,11 @@ directories:
 files:
   - out/**/*
   - package.json
+  # 运行时用不到的东西：source map，node-pty 的测试、TypeScript / C++ 源码和 winpty 源码（Windows 用 prebuilds 和 third_party/conpty）。
+  - "!**/*.map"
+  - "!**/node_modules/node-pty/lib/**/*.test.js"
+  - "!**/node_modules/node-pty/src/**"
+  - "!**/node_modules/node-pty/deps/**"
 # 原生模块不能在 asar 里执行。
 asarUnpack:
   - "**/node_modules/node-pty/**"
@@ -41,7 +46,11 @@ win:
   target:
     - target: nsis
       arch: [x64]
+# 都写明（值与 electron-builder 的默认相同），行为固定下来：按用户安装、桌面和开始菜单快捷方式、卸载时不删用户数据（~/.butler 本来也不在安装目录里）。
 nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
