@@ -237,3 +237,83 @@ Triage per the plan-2 final review: items marked "→ final wave" were fixed in 
   - Packaging must ship `build/memory-mcp/statecore-mcp.cjs` at `resources/memory-mcp/` and keep the `ELECTRON_RUN_AS_NODE` fuse enabled; the memory MCP runs on Butler's own Electron as Node.
   - Plan 5's README must not claim that the scanner covers full-level memory distillation (P4-R1). Its memory paragraph should also say that a ticket whose 30 note slots are used gets no new memory entries (the cap item above).
   - P4-R7's Windows memory-mount skip is removed by plan 5 Task 3 (no cmd.exe).
+
+# Plan 5 follow-ups
+
+## Live checks
+- Plan 5 Task 7 (electron-builder 26.15.3, macOS arm64): `--dir` build smoke `sqlite-ok 1` / `statecore-ok 1` / `pty-ok`; `Signature=adhoc`; memory MCP runs with the packaged binary as Node (RunAsNode available); spawn-helper executable after afterPack
+- Plan 5 Task 8: Playwright 1.64.0 `_electron.launch` drives Electron 44.9.0 against the built `out/main/index.js`; the CDP fallback was not needed
+- Plan 5 Task 12 (HEAD 373a183, macOS arm64): typecheck, lint, 1070 unit tests passed + `headless.live.test.ts` skipped, build, build:hook, dev smoke, E2E 5 passed; `pnpm dist` → `Butler-1.0.0-arm64.dmg` and `Butler-1.0.0-arm64-mac.zip` (~175 MB each); `verify-package.mjs dist` ok; `CFBundleIdentifier` = `io.statecore.butler`, version 1.0.0, `Signature=adhoc`, `codesign --verify --deep --strict` ok
+- Plan 5 Task 12, packaged `Butler.app` in a sandbox (temp HOME / BUTLER_HOME / CLAUDE_CONFIG_DIR, fake login shell, PATH = fake claude + /usr/bin:/bin, CLAUDECODE / CLAUDE_CODE_* / CLAUDE_PID unset): `--smoke` ok; a plain 15 s launch creates `app.db` at `user_version` 4 with no settings and writes no `main.log`; driven by Playwright, a fresh home shows the wizard (step 1 of 4), hooks install from the packaged resources (the copied `butler-hook` is byte-identical), a session's PTY gets `--mcp-config` with `butler-memory` / `butler-workspace`, a typed prompt runs the installed hook (sidebar "等你输入"), "立即 handoff" lands in the memory tab, and the generated `mcp/tickets/PKG-1.json` run as written (packaged Butler + `ELECTRON_RUN_AS_NODE=1` + `resources/memory-mcp/statecore-mcp.cjs`) answers `recall` with the handoff and the decision; no CSP messages, nothing logged, no leftover processes
+- Plan 5 Task 12: opening wizard step 4 (privacy) in the packaged app triggered a macOS keychain prompt (`SecurityAgent`) and blocked the main process until it was answered: `safeStorage.isEncryptionAvailable()` reads the app's "Safe Storage" keychain item, and each ad-hoc-signed build has a new code identity. Most likely the item already existed from earlier packaged runs with a different identity (not inspected: reading the keychain is out of bounds), so a brand-new user may see no prompt, while a user updating to a new build is likely to be asked again ("Always Allow" answers it). Not covered by E2E, which runs the dev Electron. See the manual check below
+- actionlint: not installed locally, so not run; the workflows are checked structurally by `workflows.test.ts`. Run `actionlint .github/workflows/*.yml` before pushing (`brew install actionlint`), or rely on the first CI run
+
+## Rulings
+- Ruling P5-R1: APP_ID `io.statecore.butler` is both the electron-builder appId and the Windows AUMID (test-enforced); do not change it after the first release. It was `io.github.yul761.butler` until the maintainer chose `io.statecore.butler` before v1.0.0 (42d6710)
+- Ruling P5-R2: keep the Node SEA `butler-hook` (~143 MB on disk) — a Go/Rust helper adds a toolchain; running it through Electron needs per-shell env syntax in the hook command and breaks when the app moves
+- Ruling P5-R3: Windows hooks are executed by Claude Code through Git Bash; the quoted forward-slash command works there (E2E on windows-latest); PowerShell is not a hook shell for Claude Code, so its quirk (a bare quoted string is not executed) does not apply
+- Ruling P5-R4: no auto-update in v1 — macOS auto-update requires a signed app, and electron-updater would be network code outside the gateway
+- Ruling P5-R5: macOS builds are arm64 only and ad-hoc signed in afterPack; Intel users build from source
+- Ruling P5-R6: npm/pnpm `claude.cmd` shims are started as `node <script>` (no cmd.exe), and a shim that targets a native `claude.exe` (npm `@anthropic-ai/claude-code` 2.1.307) starts that exe directly; unknown shims fall back to cmd.exe with the old argument checks
+- Ruling P5-R7: docs are in English for open-source readers; UI labels are quoted in Chinese with an English gloss
+- Ruling P5-R8: `.gitattributes` keeps text files LF (`.cmd` / `.bat` CRLF), so fixed-content tests pass on a Windows checkout
+- Pre-flight rulings P5-PF1–PF10 are in the plan-5 SDD ledger; PF5 (sandboxed SHELL and PATH, the developer's real claude never runs) applies to every E2E and isolated launch
+
+## Resolved in plan 5
+- Plan 1 R2: Playwright E2E for IPC / preload / components (Tasks 8, 9)
+- Plan 1 Task 1: spawn-helper exec bit (Task 7 afterPack); C++ toolchain documented (Task 11)
+- Plan 1 Task 5: build:hook Node check (Task 5), uncaughtException guard (Task 5), orphan .tmp on rename failure (Task 4); SEA size kept (P5-R2); Windows exe built and exercised in CI E2E (Tasks 9, 10)
+- Plan 1 Task 6: rename EPERM/EBUSY retry (Task 4); Windows hook shell (P5-R3, Task 9)
+- Plan 1 Task 9: cmd.exe quoting with `--mcp-config` (Task 3)
+- Plan 1 Task 12: window close blocking Windows logoff / shutdown; @2x tray icon (Task 4)
+- Plan 2 Task 10: Windows killTree orphan gap for shims; SIGKILL timer at quit; duplicated spawn options (Task 3)
+- Plan 2 Task 13: Windows AUMID (Task 4; value per P5-R1)
+- Plan 3: renderer CSP (Task 6); `~` in BUTLER_HOME (Task 4); git absolute path, fsmonitor off, random temp names, APFS regression test (Task 2); no-eval / no-new-func / no-implied-eval (Task 1)
+- Plan 4 P4-R7: the Windows memory-mount skip is gone for recognised shims — npm / pnpm `claude.cmd` run as `node <script>` and a shim-targeted native `claude.exe` is started directly, so the `--mcp-config` path never passes through cmd.exe and sessions get memory (Task 3). The skip (logged `memory MCP not mounted`) remains only on the cmd.exe fallback for an unrecognised shim with a path cmd.exe cannot carry
+- Plan 4 carried: packaging ships `build/memory-mcp/statecore-mcp.cjs` at `resources/memory-mcp/` with no `electronFuses` block, so RunAsNode stays on (Task 7; test-enforced, `verify-package.mjs`, and run from the packaged app in Task 12)
+- Plan 4 carried: the README states the P4-R1 carve-out (full-level distillation is not scanned; audited and budgeted) and the 30-note cap stop (Task 11, P5-PF6)
+- Plan 4 parked: MemoryPanel, the wizard and the App onboarding wiring had no component tests → E2E covers the wizard (first run, no claude, skip), relaunch after the wizard, Settings → rerun, and the MemoryPanel why chain (Tasks 8, 9, P5-PF7)
+- Found in plan 5: on quit the database closed before the PTY exit handler ("handleExit failed: database is not open") → closing flag in will-quit and a startup prune of orphan empty sessions (Task 9)
+
+## Still open after plan 5
+- Windows: unit tests, E2E and the NSIS installer are verified only by CI after the push (this machine is macOS); nothing Windows-specific was run locally
+- Code signing / notarization and auto-update (design 12: later). Ad-hoc signing means each build is a new code identity: Gatekeeper blocks the first open (README), and the keychain may ask again after an update (live check above)
+- The app ships the default Electron icon (`build-resources/` does not exist); the maintainer will design one later
+- Personal API ignores the system proxy (README known limitation)
+- Low-impact minors ruled out in plan 4 appendix C, and the plan-3 items that appendix declines (unchanged by plan 5)
+- Still open from plan 4 (not changed by plan 5):
+  - StateCore 1.0.0 upstream limitations (a)–(d) (see "Still open after plan 4")
+  - The 30-note cap: a long-lived ticket stops gaining new memory entries once its scope has seen 30 notes (now stated in the README)
+  - Ticket pattern ReDoS: a quadratic pattern can pass the vm probe and be slow on very large inputs
+  - Plan 4 parked minors except the component-test gap: case-only ticket key collisions in `mcp/tickets/`, stale ticket MCP configs, audit write vs `db.close` race on quit, conservative cost for connect-refused / DNS failures, skipped distillation night only in the log, quitting mid-wizard restarts it at step 1 and "稍后再说" is permanent until rerun, `MemoryService.view` / `why` outside the sync queue, StateCore `busy_timeout` on the main thread, the morning narrative waiting behind distillation, test-only `running()` / `idle()`, the P4-R6 wiring test matching source text, the memory tab not live-reloading notes Claude writes mid-session; variant distinguishing words visible in recall
+- Plan 5 parked (from the plan-5 SDD ledger and reviews):
+  - Shims: `npm install --ignore-scripts` (or a missing native package) leaves a ~500-byte placeholder `claude.exe`; the direct launch then fails without npm's explanatory message (Task 3)
+  - Shims: lines without `%*` that change the environment in some other way (not `SET PATH`, `_prog` or `NODE_PATH`) are dropped by the direct launch; npm and pnpm never write such lines. The "contained" check means relative target only (`..` allowed by design) (Task 3)
+  - Headless: a timeout followed by quit sends SIGTERM then SIGKILL plus a stray 2 s timer (harmless) (Task 3)
+  - Git lookup: no fallback candidates beyond PATH (Homebrew dirs only via the login-shell PATH, Git for Windows default dirs only if on PATH) (Task 2)
+  - Egress lint: `execScript` is not flagged (Task 1)
+  - Packaging: ~1.6 MB of node-pty prebuilds for other platforms ship (not worth excluding); `.map` files are excluded since the Task 7 fix round, but statecore-mcp's whole dependency tree (MCP SDK, express, hono) stays in the asar (Task 7)
+  - Packaging: afterPack signs with `codesign --deep`, which Apple deprecates for signing; it works today and `verify --deep --strict` passes (Task 7)
+  - `verify-package.mjs` checks files and sizes, not asar contents or exec bits (after-pack covers those) (Task 10)
+  - CI: `ci.yml` uses floating majors for the `actions/*` steps (release.yml and pnpm/action-setup are SHA-pinned; dependabot updates them) (Task 10)
+  - E2E: the "prompt not submitted" check after "打开" is a single read, so it is best-effort (Task 9); the fake claude's `--help` is not Commander-style and its flag list duplicates `REQUIRED_FLAGS` (Task 8)
+  - CSP: DEV_CSP is derived from PROD_CSP by string replace; dev `connect-src` allows any localhost port (Task 6)
+  - Gatekeeper: the README's two ways past Gatekeeper ("Open Anyway" in System Settings, `xattr -dr com.apple.quarantine`) were not tried on a downloaded build; macOS 15 removed the Control-click bypass (Task 11)
+  - The README does not mention the keychain prompt for the privacy page of an ad-hoc-signed build (Task 12 live check)
+  - actionlint was not run locally (Task 12)
+
+## 手动验证（用户在自己的真机上执行）
+
+执行者在 macOS 上，没有 Windows 机器，没有用真实的个人 API key，也没有在真实的 ticket 上打开过 session。推送、CI、`v1.0.0` tag 和发布由控制者完成（用户已授权），下面只列必须由你本人在真机上做的事。任何一项不符合就停下来，按 superpowers:systematic-debugging 排查。
+
+1. **macOS：下载的正式版过 Gatekeeper**：从 GitHub Release 下载 `Butler-1.0.0-arm64.dmg`，拖进“应用程序”后第一次打开 → 被 Gatekeeper 拦下 → 按 README 的方法放行（系统设置 → 隐私与安全性 → “仍要打开”；如果提示“已损坏”，用 `xattr -dr com.apple.quarantine /Applications/Butler.app`）→ 首次启动向导出现。把实际用到的方法和 macOS 版本告诉执行者（README 里的步骤没有在 macOS 15 及以上实际试过）。
+2. **macOS：钥匙串提示**：向导第 4 步（隐私）或设置页“隐私与个人 API”第一次打开时，如果弹出钥匙串提示（大意是“Butler 想要使用钥匙串中的机密信息”），输入登录密码后选“始终允许”；弹窗出现期间 Butler 整个界面不响应，属于已知现象。记下有没有弹（全新安装和升级后各一次），用于决定 README 要不要写。
+3. **隐私流程（真实的个人 API key）**：在安装包版本里按计划 3 手动验证的第 1–12 项走一遍：保存 key 后只显示末 4 位、重启后仍是打码；`strings ~/.butler/app.db | grep -c "<key 的前 8 位>"` 和 `grep -c "<key 的前 8 位>" ~/.butler/logs/main.log` 都输出 0；“仅元数据”档位重新生成后，审计里发出的内容只有占位符；“脱敏文本”档位里人名、ticket 号、仓库名都是占位符，带网址的下一步被拦截；预算、发送前确认、关闭、清除 key 都和计划 3 描述一致。测完改回“仅元数据”。
+4. **记忆标签（真实的 ticket）**：在一个真实 ticket 的 session 里 `/handoff`（或点“立即 handoff”）→ ticket 页“记忆”标签出现“最近一次交接”、决策和未完成的 follow-up；“来历”能展开版本链；从 Butler 新开一个 session，`/mcp` 里 `butler-memory` 和 `butler-workspace` 都是 connected，让 Claude `recall` 能说出刚才的交接。
+5. **Windows 安装包**：在 Windows 10/11 x64 上运行 Release 里的 `Butler Setup 1.0.0.exe` → SmartScreen“更多信息 → 仍要运行” → 可以选择安装目录 → 开始菜单里有 Butler → 首次启动向导出现。
+6. **Windows：claude.cmd 与空格路径**：用户名带空格（或把 `BUTLER_HOME` 设到带空格的目录），claude 用 npm 安装（2.1.307 起是原生 `claude.exe`）→ 从 Butler 开 session → `/mcp` 能看到 `butler-memory` 和 `butler-workspace`；`~/.butler/logs/main.log` 里没有 `memory MCP not mounted`。
+7. **Windows：hook**：在 Butler 开的 session 里说一句话 → 侧栏出现“等你输入”；`/handoff` 之后 ticket 页的 handoff 历史多一条。
+8. **Windows：通知、注销 / 关机**：设置页“立即运行晚间 handoff”，有内容时弹出晚间小结通知，点击回到 Butler；Butler 开着（窗口已关、在托盘里）时注销或关机，系统不会被 Butler 挡住。
+9. **开机自启（两个平台）**：安装包版本里勾选“开机时自动启动 Butler” → 重启后 Butler 自动打开并显示简报。
+10. **托盘图标和 CSP（两个平台）**：高分屏上托盘的圆点图标清晰；打开一个 session 终端正常显示，`~/.butler/logs/main.log` 里没有 `renderer CSP violation`。
+11. **仓库自带 git.exe（Windows，可选）**：在一个根目录放了 `git.exe`（随便复制一个别的 exe 改名）的仓库里新建 ticket → 新建成功，那个假 exe 没有被运行。
