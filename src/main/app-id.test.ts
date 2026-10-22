@@ -1,9 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { APP_ID } from "./app-id";
+import { APP_ID, shouldSetAppId } from "./app-id";
 
 describe("APP_ID", () => {
+  it("is only applied on Windows", () => {
+    expect(shouldSetAppId("win32")).toBe(true);
+    expect(shouldSetAppId("darwin")).toBe(false);
+    expect(shouldSetAppId("linux")).toBe(false);
+  });
+
   it("is the agreed reverse-DNS identity", () => {
     expect(APP_ID).toBe("io.github.yul761.butler");
   });

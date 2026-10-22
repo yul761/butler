@@ -3,3 +3,6 @@
  * 发布第一个版本之后不要再改：Windows 的开始菜单快捷方式、通知和开机自启都按它识别 Butler。
  */
 export const APP_ID = "io.github.yul761.butler";
+
+/** 只有 Windows 的通知需要 AppUserModelID。 */
+export const shouldSetAppId = (platform: NodeJS.Platform): boolean => platform === "win32";

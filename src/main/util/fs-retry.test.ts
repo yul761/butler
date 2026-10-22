@@ -11,6 +11,7 @@ describe("rename with retry (plan 1 Task 6: Windows EPERM / EBUSY)", () => {
       rename: async () => {
         if (++calls < 3) throw err(calls === 1 ? "EPERM" : "EBUSY");
       },
+      platform: "win32",
       sleep: async (ms) => {
         waits.push(ms);
       },
@@ -27,6 +28,7 @@ describe("rename with retry (plan 1 Task 6: Windows EPERM / EBUSY)", () => {
           calls++;
           throw err("EACCES");
         },
+        platform: "win32",
         sleep: async () => undefined,
       }),
     ).rejects.toThrow("EACCES");
@@ -41,6 +43,7 @@ describe("rename with retry (plan 1 Task 6: Windows EPERM / EBUSY)", () => {
           calls++;
           throw err("ENOENT");
         },
+        platform: "win32",
         sleep: () => undefined,
       }),
     ).toThrow("ENOENT");
@@ -53,8 +56,29 @@ describe("rename with retry (plan 1 Task 6: Windows EPERM / EBUSY)", () => {
       rename: () => {
         if (++calls < 2) throw err("EBUSY");
       },
+      platform: "win32",
       sleep: () => undefined,
     });
+    expect(calls).toBe(2);
+  });
+
+  it("fails immediately off Windows (no main-thread stall)", async () => {
+    let calls = 0;
+    const rename = () => {
+      calls++;
+      throw err("EACCES");
+    };
+    expect(() => renameWithRetrySync("a", "b", { rename, platform: "darwin", sleep: () => undefined })).toThrow("EACCES");
+    await expect(
+      renameWithRetry("a", "b", {
+        rename: async () => {
+          calls++;
+          throw err("EBUSY");
+        },
+        platform: "linux",
+        sleep: async () => undefined,
+      }),
+    ).rejects.toThrow("EBUSY");
     expect(calls).toBe(2);
   });
 });

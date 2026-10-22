@@ -1,5 +1,7 @@
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { inboxDir } from "../../../hook/butler-hook";
 import { claudeArgs, cmdShimSafe, headlessEnv, sessionEnv } from "./spawn";
 
 describe("claude spawn helpers", () => {
@@ -72,6 +74,18 @@ describe("cmdShimSafe", () => {
     expect(cmdShimSafe("C:\\npm\\claude.cmd", "C:\\Users\\john\\.butler\\mcp\\A-1.json", "win32")).toBe(true);
     for (const bad of ["C:\\Users\\John Smith\\x.json", 'C:\\a"b.json', "C:\\a&b.json", "C:\\a%b.json", "C:\\a^b.json", "C:\\a(b).json"]) {
       expect(cmdShimSafe("C:\\npm\\claude.cmd", bad, "win32"), bad).toBe(false);
+    }
+  });
+});
+
+describe("BUTLER_HOME agreement between spawn env and the hook", () => {
+  it("resolves ~/x and the equivalent absolute path to the same inbox", () => {
+    const x = { pathValue: "", ticketKey: "t", sessionId: "s" };
+    for (const home of ["~/x", join(homedir(), "x")]) {
+      const env = sessionEnv({ BUTLER_HOME: home }, x);
+      expect(env.BUTLER_HOME).toBe(join(homedir(), "x"));
+      expect(inboxDir(env)).toBe(join(homedir(), "x", "inbox"));
+      expect(inboxDir({ BUTLER_HOME: home })).toBe(inboxDir(env));
     }
   });
 });

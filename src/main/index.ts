@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Brief } from "../shared/brief";
 import { IPC } from "../shared/ipc";
-import { APP_ID } from "./app-id";
+import { APP_ID, shouldSetAppId } from "./app-id";
 import { BriefService } from "./brief/brief-service";
 import { narrateBrief } from "./brief/narrate";
 import { runHeadless } from "./claude/headless";
@@ -57,7 +57,8 @@ import { pathKey } from "./util/env";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
 import { canSend } from "./safe-send";
-import { circleBitmap } from "./tray-bitmap";
+import { createQuitState } from "./quit-state";
+import { circleBitmap, TRAY_IMAGES } from "./tray-bitmap";
 
 const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
 /** hook 发现没有 ticket 的 session 后，稍等片刻再扫描磁盘（合并连续事件）。 */
@@ -71,7 +72,7 @@ let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
 /** 保留最近一条通知的引用，否则它可能在用户点击前被回收。 */
 let lastNotification: Notification | null = null;
-let quitting = false;
+const quitState = createQuitState(() => app.quit());
 let logger: Logger = () => undefined;
 /** dev 控制台 tee：防止在 tee 里再次写日志造成递归，stderr 管道断开后停止 tee。 */
 let teeing = false;
@@ -94,7 +95,7 @@ const headlessAbort = new AbortController();
 // 用 resolvePaths 解析：相对路径会变成绝对路径（setPath 只接受绝对路径）。
 if (process.env.BUTLER_HOME?.trim()) app.setPath("userData", join(resolvePaths().home, "electron"));
 // Windows 的通知要有 AppUserModelID，否则点击通知没有反应（计划 2 Task 13）。
-if (process.platform === "win32") app.setAppUserModelId(APP_ID);
+if (shouldSetAppId(process.platform)) app.setAppUserModelId(APP_ID);
 
 function safeSend(channel: string, ...args: unknown[]): void {
   if (win && canSend(win)) win.webContents.send(channel, ...args);
@@ -143,12 +144,10 @@ function createWindow(): BrowserWindow {
     if (win === w) win = null;
   });
   // Windows 注销 / 关机：不能再把关窗口拦成“藏到托盘”，否则会挡住系统（计划 1 Task 12）。
-  w.on("session-end", () => {
-    quitting = true;
-  });
+  w.on("session-end", () => quitState.requestQuit());
   // 关窗口只是藏到托盘，终端进程继续运行。
   w.on("close", (e) => {
-    if (!quitting) {
+    if (!quitState.quitting) {
       e.preventDefault();
       w.hide();
     }
@@ -174,9 +173,10 @@ function showWindow(): void {
 function createTray(): Tray {
   const isMac = process.platform === "darwin";
   const color: [number, number, number] = isMac ? [0, 0, 0] : [0xdf, 0x6f, 0x2f];
-  const icon = nativeImage.createFromBitmap(circleBitmap(16, color), { width: 16, height: 16, scaleFactor: 1 });
-  // 高分屏用 32×32 的 @2x 版本（计划 1 Task 12）。
-  icon.addRepresentation({ scaleFactor: 2, width: 32, height: 32, buffer: circleBitmap(32, color) });
+  const [base, ...extra] = TRAY_IMAGES;
+  const icon = nativeImage.createFromBitmap(circleBitmap(base.size, color), { width: base.size, height: base.size, scaleFactor: base.scaleFactor });
+  // 高分屏用 @2x 版本（计划 1 Task 12）。
+  for (const r of extra) icon.addRepresentation({ scaleFactor: r.scaleFactor, width: r.size, height: r.size, buffer: circleBitmap(r.size, color) });
   if (isMac) icon.setTemplateImage(true);
   const t = new Tray(icon);
   t.setToolTip("Butler");
@@ -209,7 +209,7 @@ function showEveningNotification(brief: Brief): void {
  * app 正在退出时立即返回 false，对话框打开中开始退出也会被关掉，不会挡住退出。
  */
 async function confirmSend(outbound: string, quit: AbortSignal): Promise<boolean> {
-  if (quitting || quit.aborted) return false;
+  if (quitState.quitting || quit.aborted) return false;
   const signal = AbortSignal.any([AbortSignal.timeout(CONFIRM_TIMEOUT_MS), quit]);
   const options: MessageBoxOptions = {
     type: "question",
@@ -569,10 +569,7 @@ async function bootstrap(): Promise<void> {
   powerMonitor.on("resume", () => void checkSchedule("resume"));
   powerMonitor.on("unlock-screen", () => void checkSchedule("unlock"));
   // macOS / Linux 关机：和 Windows 的 session-end 一样，不再拦着关窗口。
-  powerMonitor.on("shutdown", () => {
-    quitting = true;
-    app.quit();
-  });
+  powerMonitor.on("shutdown", () => quitState.requestQuit());
   const scheduleTimer = setInterval(() => void checkSchedule("tick"), TICK_MS);
 
   app.on("will-quit", () => {
@@ -600,7 +597,7 @@ if (process.argv.includes("--smoke")) {
   app.on("second-instance", showWindow);
   app.on("activate", showWindow);
   app.on("before-quit", () => {
-    quitting = true;
+    quitState.markQuitting();
     headlessAbort.abort();
     shutdownSessions();
   });

@@ -6,21 +6,24 @@ const RETRYABLE = new Set(["EPERM", "EBUSY", "EACCES"]);
 export const RENAME_ATTEMPTS = 6;
 /** 20、40、80、160、320 毫秒：最多多等约 0.6 秒。 */
 const delay = (attempt: number): number => 20 * 2 ** attempt;
-const retryable = (e: unknown): boolean => RETRYABLE.has((e as NodeJS.ErrnoException)?.code ?? "");
+/** 只有 Windows 上这些错误才是“短暂占用”；其他平台立刻失败，不要卡住主线程。 */
+const retryable = (e: unknown, platform: NodeJS.Platform): boolean =>
+  platform === "win32" && RETRYABLE.has((e as NodeJS.ErrnoException)?.code ?? "");
 
 export async function renameWithRetry(
   from: string,
   to: string,
-  o: { rename?: (a: string, b: string) => Promise<void>; sleep?: (ms: number) => Promise<void> } = {},
+  o: { rename?: (a: string, b: string) => Promise<void>; sleep?: (ms: number) => Promise<void>; platform?: NodeJS.Platform } = {},
 ): Promise<void> {
   const doRename = o.rename ?? rename;
+  const platform = o.platform ?? process.platform;
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   for (let attempt = 0; ; attempt++) {
     try {
       await doRename(from, to);
       return;
     } catch (e) {
-      if (attempt >= RENAME_ATTEMPTS - 1 || !retryable(e)) throw e;
+      if (attempt >= RENAME_ATTEMPTS - 1 || !retryable(e, platform)) throw e;
       await sleep(delay(attempt));
     }
   }
@@ -30,16 +33,17 @@ export async function renameWithRetry(
 export function renameWithRetrySync(
   from: string,
   to: string,
-  o: { rename?: (a: string, b: string) => void; sleep?: (ms: number) => void } = {},
+  o: { rename?: (a: string, b: string) => void; sleep?: (ms: number) => void; platform?: NodeJS.Platform } = {},
 ): void {
   const doRename = o.rename ?? renameSync;
+  const platform = o.platform ?? process.platform;
   const sleep = o.sleep ?? ((ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms));
   for (let attempt = 0; ; attempt++) {
     try {
       doRename(from, to);
       return;
     } catch (e) {
-      if (attempt >= RENAME_ATTEMPTS - 1 || !retryable(e)) throw e;
+      if (attempt >= RENAME_ATTEMPTS - 1 || !retryable(e, platform)) throw e;
       sleep(delay(attempt));
     }
   }

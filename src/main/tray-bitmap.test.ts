@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { circleBitmap } from "./tray-bitmap";
+import { circleBitmap, TRAY_IMAGES } from "./tray-bitmap";
 
 describe("circleBitmap", () => {
   it("draws an opaque centre and transparent corners in BGRA", () => {
@@ -9,5 +9,14 @@ describe("circleBitmap", () => {
     const px = (x: number, y: number) => [...buf.subarray((y * size + x) * 4, (y * size + x) * 4 + 4)];
     expect(px(8, 8)).toEqual([0x10, 0x20, 0x30, 255]);
     expect(px(0, 0)[3]).toBe(0);
+  });
+});
+
+describe("TRAY_IMAGES", () => {
+  it("has a 1x 16px and a 2x 32px representation", () => {
+    expect(TRAY_IMAGES.map((i) => [i.scaleFactor, i.size])).toEqual([
+      [1, 16],
+      [2, 32],
+    ]);
   });
 });

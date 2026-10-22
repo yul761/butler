@@ -16,3 +16,9 @@ export function circleBitmap(size: number, bgr: [number, number, number]): Buffe
   }
   return buf;
 }
+
+/** 托盘图标的两个表示：16×16 的 1x 和 32×32 的 @2x（高分屏，计划 1 Task 12）。 */
+export const TRAY_IMAGES = [
+  { scaleFactor: 1, size: 16 },
+  { scaleFactor: 2, size: 32 },
+] as const;
