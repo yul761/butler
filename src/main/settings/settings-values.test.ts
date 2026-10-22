@@ -3,7 +3,7 @@ import type { EditableSettingKey } from "../../shared/settings";
 import { SettingsRepo } from "../db/settings-repo";
 import { memDb } from "../test-utils";
 import {
-  isLoopbackHost, llmConfig, normalizeBaseUrl, normalizeFlag, normalizeSetting, normalizeTerms, parseDays, parsePriceTable, parseTime, parseToolList,
+  isLoopbackHost, llmConfig, normalizeBaseUrl, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTerms, normalizeTicketPattern, parseDays, parsePriceTable, parseTime, parseToolList,
   parseWorkingDays, priceFor, scheduleConfig, SettingError, TERMS_LIMIT, thresholds, trackerTools,
 } from "./settings-values";
 
@@ -69,7 +69,7 @@ describe("settings values", () => {
   });
 
   it("rejects a key that is not editable even if a caller forgets the IPC gate", () => {
-    expect(() => normalizeSetting("claudePath" as EditableSettingKey, "/bin/sh")).toThrow(SettingError);
+    expect(() => normalizeSetting("notARealSetting" as EditableSettingKey, "/bin/sh")).toThrow(SettingError);
   });
 
   it("accepts only 0 or 1 for a flag", () => {
@@ -166,5 +166,37 @@ describe("personal API settings", () => {
     const t0 = performance.now();
     expect(priceFor(rules, "a".repeat(60))).toBeNull();
     expect(performance.now() - t0).toBeLessThan(50);
+  });
+});
+
+describe("general settings (design 9, 12)", () => {
+  it("accepts an empty or absolute claude path only", () => {
+    expect(normalizeSetting("claudePath", "  ")).toBe("");
+    expect(normalizeSetting("claudePath", " /usr/local/bin/claude ")).toBe("/usr/local/bin/claude");
+    for (const bad of ["claude", "./bin/claude", "/usr/bin/cl\naude", `/${"x".repeat(1000)}`]) {
+      expect(() => normalizeSetting("claudePath", bad), bad).toThrow(SettingError);
+    }
+  });
+
+  it("accepts branch templates git can turn into a branch name", () => {
+    for (const ok of ["feature/{key}", "{key}", "users/me/{key}-wip", "fix_{key}"]) expect(normalizeBranchTemplate(ok), ok).toBe(ok);
+    for (const bad of ["feature/", "feat ure/{key}", "-{key}", "/{key}", "feature/{key}/", "a..b/{key}", "{key}.lock", "{key}.", "a//{key}", "a/.{key}", "{ticket}/{key}", `${"x".repeat(100)}{key}`]) {
+      expect(() => normalizeBranchTemplate(bad), bad).toThrow(SettingError);
+    }
+  });
+
+  it("accepts ordinary ticket patterns and rejects ones that could hang the main process", () => {
+    for (const ok of ["[A-Z][A-Z0-9]+-\\d+", "[A-Z]{2,10}-\\d{1,6}", "#\\d+", "(?:ENG|OPS)-\\d+"]) expect(normalizeTicketPattern(ok), ok).toBe(ok);
+    for (const bad of ["", "(", "x".repeat(101), "(a+)+", "(\\w*)*-\\d+", "([A-Z]+-?)+\\d", "(A|AB)*-\\d+", "(?:x{1,3})+", "(\\w)\\1", ".*", "\\d*"]) {
+      expect(() => normalizeTicketPattern(bad), bad).toThrow(SettingError);
+    }
+  });
+
+  it("validates the new flags through normalizeSetting", () => {
+    expect(normalizeSetting("memoryEnabled", "0")).toBe("0");
+    expect(normalizeSetting("onboardingDone", "1")).toBe("1");
+    expect(() => normalizeSetting("memoryEnabled", "yes")).toThrow(SettingError);
+    expect(normalizeSetting("branchTemplate", " feature/{key} ")).toBe("feature/{key}");
+    expect(normalizeSetting("ticketPattern", " #\\d+ ")).toBe("#\\d+");
   });
 });

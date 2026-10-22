@@ -3,7 +3,7 @@ import { ITEM_MARKS, type BriefKind, type BriefView, type ItemMark } from "../..
 import { IPC } from "../../shared/ipc";
 import { EDITABLE_SETTINGS, isEditableSetting, type EditableSettings } from "../../shared/settings";
 import {
-  FOLLOWUP_STATUSES, type CreateTicketInput, type FollowupStatus, type JobStateView, type McpProbe, type OpenSessionRequest, type TicketStatus,
+  FOLLOWUP_STATUSES, type AutostartState, type CreateTicketInput, type FollowupStatus, type JobStateView, type McpProbe, type OpenSessionRequest, type TicketStatus,
 } from "../../shared/types";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { BriefService } from "../brief/brief-service";
@@ -27,7 +27,7 @@ import { normalizeSetting, SettingError } from "../settings/settings-values";
 import { TicketError, type TicketService } from "../tickets/ticket-service";
 import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
-import { apiKeyArg, auditCursorArg, termsArg } from "./validate";
+import { apiKeyArg, auditCursorArg, boolArg, termsArg } from "./validate";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -46,6 +46,7 @@ export interface IpcDeps {
   terms: TermsRepo;
   audit: AuditRepo;
   memory: Pick<MemoryService, "view" | "why">;
+  autostart: { get(): AutostartState; set(on: boolean): AutostartState };
   llmStatus: () => LlmStatus;
   /** 早间刷新进行中。 */
   briefRefreshing: () => boolean;
@@ -171,13 +172,16 @@ export function registerIpc(d: IpcDeps): void {
   });
 
   handle(IPC.settingsGet, (): EditableSettings => Object.fromEntries(EDITABLE_SETTINGS.map((k) => [k, d.settings.get(k)])) as EditableSettings);
-  handle(IPC.settingsSet, (key: string, value: unknown) => {
+  handle(IPC.settingsSet, async (key: string, value: unknown) => {
     const k = settingKey(key);
     d.settings.set(k, normalizeSetting(k, String(value ?? "")));
+    if (k === "claudePath") await d.health.refresh();
     d.notify();
   });
-  handle(IPC.settingsReset, (key: string) => {
-    d.settings.reset(settingKey(key));
+  handle(IPC.settingsReset, async (key: string) => {
+    const k = settingKey(key);
+    d.settings.reset(k);
+    if (k === "claudePath") await d.health.refresh();
     d.notify();
   });
   handle(IPC.settingsDetectTrackerTools, () => d.detectTrackerTools());
@@ -207,4 +211,7 @@ export function registerIpc(d: IpcDeps): void {
   const mem = memoryHandlers(d);
   handle(IPC.memoryView, mem.view);
   handle(IPC.memoryWhy, mem.why);
+
+  handle(IPC.appAutostartGet, () => d.autostart.get());
+  handle(IPC.appAutostartSet, (on: unknown) => d.autostart.set(boolArg(on)));
 }

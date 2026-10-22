@@ -48,3 +48,9 @@ export function factIdArg(v: unknown): string {
   if (typeof v !== "string" || !/^[A-Za-z0-9-]{1,100}$/.test(v)) throw new Error("invalid memory id");
   return v;
 }
+
+/** 开关：只接受真正的布尔值。 */
+export function boolArg(v: unknown): boolean {
+  if (typeof v !== "boolean") throw new Error("invalid switch value");
+  return v;
+}

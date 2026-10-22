@@ -1,4 +1,4 @@
-/** 渲染进程可以读写的设置。其余设置（claudePath、branchTemplate 等）由计划 4 的设置页处理。 */
+/** 渲染进程可以读写的设置。 */
 export const EDITABLE_SETTINGS = [
   "nightlyTime",
   "workingDays",
@@ -16,6 +16,11 @@ export const EDITABLE_SETTINGS = [
   "llmPrices",
   "llmConfirm",
   "auditRetentionDays",
+  "claudePath",
+  "branchTemplate",
+  "ticketPattern",
+  "memoryEnabled",
+  "onboardingDone",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

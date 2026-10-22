@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { PRIVACY_LEVELS, TERM_CATEGORIES, type PrivacyLevel, type SensitiveTerm, type TermCategory } from "../../shared/llm";
 import type { EditableSettingKey } from "../../shared/settings";
 import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
@@ -171,6 +172,63 @@ export function normalizeTerms(input: unknown): SensitiveTerm[] {
   return out;
 }
 
+/** 分支名模板（设计文档 4.1）：必须含 {key}；代入一个 ticket 号之后要是 git 接受的分支名（保守的子集）。 */
+export function normalizeBranchTemplate(value: string): string {
+  const t = value.trim();
+  if (!t.includes("{key}")) throw new SettingError("分支名模板必须包含 {key}，例如 feature/{key}");
+  const sample = t.replaceAll("{key}", "PROJ-1");
+  const bad =
+    t.length > 100 ||
+    !/^[A-Za-z0-9._/-]+$/.test(sample) ||
+    sample.startsWith("-") ||
+    sample.startsWith("/") ||
+    sample.endsWith("/") ||
+    sample.endsWith(".") ||
+    sample.endsWith(".lock") ||
+    sample.includes("..") ||
+    sample.includes("//") ||
+    sample.includes("/.");
+  if (bad) throw new SettingError("分支名模板只能用字母、数字和 . _ / -（不能以 - 或 / 开头、不能有 .. 或 //），最长 100 字，例如 feature/{key}");
+  return t;
+}
+
+/** 量词套量词：(a+)+、(\w*)*、(x{1,3})+ 这类，回溯随输入长度指数增长。 */
+const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*(?:[+*]|\{\d)/;
+/** 被量词修饰的分组里有分支：(A|AB)* 这类，分支重叠时同样指数增长。 */
+const QUANTIFIED_ALTERNATION = /\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)\s*(?:[+*]|\{\d)/;
+/** 再用几段“差一点就匹配”的输入实测：每段超过 PROBE_BUDGET_MS 就拒绝（输入很短，最坏情况也只卡几十毫秒）。 */
+const REDOS_PROBES = ["A".repeat(22), "A-".repeat(11), "1".repeat(22), "a".repeat(22), "AB".repeat(11)].map((s) => `${s}!`);
+const PROBE_BUDGET_MS = 20;
+
+/**
+ * ticket 号正则（设计文档 4.4、12）：在扫描器、session 发现和建 ticket 里反复执行，保存前挡住
+ * 写错的、能匹配空字符串的、带反向引用的、以及回溯会指数增长的写法（计划 3 遗留的 ReDoS 检查）。
+ */
+export function normalizeTicketPattern(value: string): string {
+  const t = value.trim();
+  if (!t || t.length > 100) throw new SettingError("ticket 号正则不能为空，最长 100 字");
+  let anchored: RegExp;
+  let search: RegExp;
+  try {
+    anchored = new RegExp(`^(?:${t})$`);
+    search = new RegExp(`(?<![A-Za-z0-9])(?:${t})(?![0-9])`, "i");
+  } catch {
+    throw new SettingError("ticket 号正则写法不对");
+  }
+  if (/\\[1-9]|\\k</.test(t)) throw new SettingError("ticket 号正则不能用反向引用");
+  if (NESTED_QUANTIFIER.test(t) || QUANTIFIED_ALTERNATION.test(t)) {
+    throw new SettingError("ticket 号正则里有套在一起的量词或被量词修饰的分支（例如 (a+)+、(A|AB)*），可能让匹配卡死");
+  }
+  if (anchored.test("")) throw new SettingError("ticket 号正则不能匹配空字符串");
+  for (const probe of REDOS_PROBES) {
+    const start = performance.now();
+    search.test(probe);
+    anchored.test(probe);
+    if (performance.now() - start > PROBE_BUDGET_MS) throw new SettingError("ticket 号正则太慢（可能让匹配卡死），请简化");
+  }
+  return t;
+}
+
 /** 渲染进程提交的设置值：规范化后返回，不合法时抛 SettingError（界面显示 message）。 */
 export function normalizeSetting(key: EditableSettingKey, value: string): string {
   switch (key) {
@@ -229,6 +287,22 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!/^\d{1,4}$/.test(t) || Number(t) < 1 || Number(t) > 3650) throw new SettingError("保留天数是 1–3650 的整数");
       return String(Number(t));
     }
+    case "claudePath": {
+      const t = value.trim();
+      if (!t) return "";
+      // eslint-disable-next-line no-control-regex
+      if (t.length > 1000 || /[\u0000-\u001f\u007f]/.test(t) || !isAbsolute(t)) {
+        throw new SettingError("claude 路径必须是绝对路径，例如 /usr/local/bin/claude；留空则自动查找");
+      }
+      return t;
+    }
+    case "branchTemplate":
+      return normalizeBranchTemplate(value);
+    case "ticketPattern":
+      return normalizeTicketPattern(value);
+    case "memoryEnabled":
+    case "onboardingDone":
+      return normalizeFlag(value);
     default: {
       // IPC 层已经用 isEditableSetting 拦过；这里再兜一次，免得以后新增的调用方绕过。
       const unknown: never = key;

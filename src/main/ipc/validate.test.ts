@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, auditCursorArg, factIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT } from "./validate";
+import { apiKeyArg, boolArg, auditCursorArg, factIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -57,5 +57,11 @@ describe("memory IPC arguments", () => {
     expect(factIdArg("0e133fce-6f5f-40b6-9905-4119541d9a7e")).toBe("0e133fce-6f5f-40b6-9905-4119541d9a7e");
     for (const bad of [undefined, null, 1, "", "x".repeat(201), {}]) expect(() => ticketKeyArg(bad), String(bad)).toThrow();
     for (const bad of [undefined, "", "a b", "../x", "x".repeat(101), 5]) expect(() => factIdArg(bad), String(bad)).toThrow();
+  });
+
+  it("accepts only a boolean for on/off switches", () => {
+    expect(boolArg(true)).toBe(true);
+    expect(boolArg(false)).toBe(false);
+    for (const bad of ["true", 1, null, undefined]) expect(() => boolArg(bad)).toThrow();
   });
 });

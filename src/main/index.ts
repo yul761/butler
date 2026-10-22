@@ -28,6 +28,7 @@ import { TicketsRepo } from "./db/tickets-repo";
 import { auditCutoff, stalePendingCost } from "./gateway/budget";
 import { PrivacyGateway } from "./gateway/gateway";
 import { KeyStore } from "./gateway/key-store";
+import { autostartState } from "./autostart";
 import { electronSecretBox } from "./gateway/safe-storage";
 import { llmStatus } from "./gateway/status";
 import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
@@ -48,7 +49,7 @@ import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, tra
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
-import { llmConfig, scheduleConfig } from "./settings/settings-values";
+import { llmConfig, scheduleConfig, SettingError } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
 import { N } from "./strings";
 import { TicketService } from "./tickets/ticket-service";
@@ -247,7 +248,7 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   const ticketService = new TicketService({ tickets, settings, now: Date.now });
-  const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath() });
+  const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath() });
   const notify = () => safeSend(IPC.stateChanged);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
   const healthReady: Promise<void> = health.refresh().then(
@@ -503,7 +504,17 @@ async function bootstrap(): Promise<void> {
 
   shutdownSessions = () => pty.killAll();
 
+  const autostart = {
+    get: () => autostartState({ packaged: app.isPackaged, platform: process.platform, openAtLogin: () => app.getLoginItemSettings().openAtLogin }),
+    set: (on: boolean) => {
+      if (!autostart.get().supported) throw new SettingError("只有安装好的 Butler 才能设置开机自启");
+      app.setLoginItemSettings({ openAtLogin: on });
+      return autostart.get();
+    },
+  };
+
   registerIpc({
+    autostart,
     tickets, ticketService, sessionService, pty, health, followups, handoffs, settings, briefService, runner, scheduler, jobs,
     keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),

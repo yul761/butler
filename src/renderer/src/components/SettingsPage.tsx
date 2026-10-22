@@ -3,6 +3,7 @@ import type { HealthReport } from "../../../shared/types";
 import { api } from "../api";
 import { S } from "../strings";
 import { PrivacySettings } from "./PrivacySettings";
+import { GeneralSettings } from "./GeneralSettings";
 import { ScheduleSettings } from "./ScheduleSettings";
 
 export function SettingsPage() {
@@ -49,6 +50,7 @@ export function SettingsPage() {
         <button className="primary" disabled={busy || report.hooks === "settings_invalid"} onClick={() => void run(api.installHooks)}>{S.installHooks}</button>
         <button disabled={busy || report.hooks === "missing"} onClick={() => void run(api.uninstallHooks)}>{S.uninstallHooks}</button>
       </div>
+      <GeneralSettings report={report} onHealth={setReport} />
       <ScheduleSettings />
       <PrivacySettings />
     </div>

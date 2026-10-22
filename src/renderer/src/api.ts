@@ -4,7 +4,7 @@ import type { MemoryView, WhyEntry } from "../../shared/memory";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
 import type {
-  CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
+  AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketStatus, TicketView, UnclaimedSession,
   JobStateView,
 } from "../../shared/types";
@@ -74,6 +74,8 @@ export const api = {
   saveTerms: (terms: SensitiveTerm[]) => call<SensitiveTerm[]>(IPC.termsSave, terms),
   audit: (beforeId?: number) => call<AuditPage>(IPC.auditList, beforeId),
   memoryView: (ticketKey: string) => call<MemoryView>(IPC.memoryView, ticketKey),
+  autostart: () => call<AutostartState>(IPC.appAutostartGet),
+  setAutostart: (on: boolean) => call<AutostartState>(IPC.appAutostartSet, on),
   memoryWhy: (ticketKey: string, factId: string) => call<WhyEntry[] | null>(IPC.memoryWhy, ticketKey, factId),
   onNavigate: (cb: (route: { page: "home"; kind?: BriefKind }) => void) => window.butler.on(IPC.appNavigate, cb),
   onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),

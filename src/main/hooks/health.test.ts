@@ -65,4 +65,21 @@ describe("HealthService", () => {
     expect((await health.installHooks()).handoffCommand).toBe("conflict");
     expect(readFileSync(join(paths.claudeCommands, "handoff.md"), "utf8")).toBe("mine");
   });
+
+  it("reports the memory store, the MCP bundle and a StateCore capture plugin the user installed", async () => {
+    const home = tempDir();
+    const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+    mkdirSync(paths.claudeConfigDir, { recursive: true });
+    const bundle = join(home, "statecore-mcp.cjs");
+    const settings = new SettingsRepo(memDb());
+    const health = new HealthService({
+      paths, platform: "darwin", env: {}, settings, bundledHookBin: "/none", memoryMcpScript: bundle,
+      readPath: async () => "/usr/bin", run: async () => "",
+    });
+    expect((await health.refresh()).memory).toEqual({ enabled: true, dataDir: paths.statecore, mcpBundle: false, statecorePlugin: false });
+    writeFileSync(bundle, "");
+    writeFileSync(paths.claudeSettings, JSON.stringify({ enabledPlugins: { "statecore@market": true } }));
+    settings.set("memoryEnabled", "0");
+    expect((await health.refresh()).memory).toEqual({ enabled: false, dataDir: paths.statecore, mcpBundle: true, statecorePlugin: true });
+  });
 });

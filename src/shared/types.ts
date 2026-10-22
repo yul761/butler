@@ -89,6 +89,15 @@ export interface HealthReport {
   handoffCommand: HandoffCommandStatus;
   butlerHome: string;
   claudeSettingsPath: string;
+  /** StateCore 记忆（设计文档第 8 节）。 */
+  memory: {
+    enabled: boolean;
+    dataDir: string;
+    /** 打包的 StateCore MCP 在不在（不在时 session 不挂记忆）。 */
+    mcpBundle: boolean;
+    /** 用户另外装了 StateCore 的捕获插件（8.5：应该卸掉）。 */
+    statecorePlugin: boolean;
+  };
 }
 
 export function effectiveStatus(t: Pick<Ticket, "status" | "statusManual">): TicketStatus {
@@ -154,4 +163,10 @@ export interface JobStateView {
   /** ok | partial | failed | seeded */
   lastStatus: string | null;
   lastError: string | null;
+}
+
+/** 开机自启（设计文档 2.2）。supported 为 false 时（开发模式、其他平台）设置页的开关是灰的。 */
+export interface AutostartState {
+  supported: boolean;
+  enabled: boolean;
 }

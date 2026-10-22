@@ -40,6 +40,8 @@ export const IPC = {
   memoryView: "memory:view",
   memoryWhy: "memory:why",
   appNavigate: "app:navigate",
+  appAutostartGet: "app:autostartGet",
+  appAutostartSet: "app:autostartSet",
 } as const;
 
 /** 渲染进程 → 主进程，有返回值（ipcRenderer.invoke）。 */
@@ -52,6 +54,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,
   IPC.memoryView, IPC.memoryWhy,
+  IPC.appAutostartGet, IPC.appAutostartSet,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];

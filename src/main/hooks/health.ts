@@ -7,6 +7,7 @@ import type { SettingsRepo } from "../db/settings-repo";
 import type { ButlerPaths } from "../paths";
 import type { ExecText } from "../util/exec";
 import { withPath } from "../util/env";
+import { statecorePluginInstalled } from "../memory/plugin-check";
 import { hookCommand, hookStatus, installHookBinary, installHooks, readSettings, uninstallHooks } from "./installer";
 
 export interface HealthDeps {
@@ -16,6 +17,8 @@ export interface HealthDeps {
   settings: SettingsRepo;
   /** 随 app 一起分发的 butler-hook，安装时复制到 paths.hookBin。 */
   bundledHookBin: string;
+  /** 打包的 StateCore MCP（任务 7）；不给时视为不存在。 */
+  memoryMcpScript?: string;
   readPath?: () => Promise<string>;
   run?: ExecText;
 }
@@ -41,8 +44,11 @@ export class HealthService {
     this.state = { path, pathValue };
 
     let hooks: HookStatus;
+    let statecorePlugin = false;
     try {
-      hooks = hookStatus(await readSettings(this.d.paths.claudeSettings), hookCommand(this.d.paths.hookBin, this.d.platform));
+      const claudeSettings = await readSettings(this.d.paths.claudeSettings);
+      hooks = hookStatus(claudeSettings, hookCommand(this.d.paths.hookBin, this.d.platform));
+      statecorePlugin = statecorePluginInstalled(claudeSettings);
     } catch {
       // 解析失败、是目录、没有权限等：一律视为 settings 不可用，不让启动失败。
       hooks = "settings_invalid";
@@ -61,6 +67,12 @@ export class HealthService {
       handoffCommand,
       butlerHome: this.d.paths.home,
       claudeSettingsPath: this.d.paths.claudeSettings,
+      memory: {
+        enabled: this.d.settings.get("memoryEnabled") !== "0",
+        dataDir: this.d.paths.statecore,
+        mcpBundle: !!this.d.memoryMcpScript && existsSync(this.d.memoryMcpScript),
+        statecorePlugin,
+      },
     };
   }
 
