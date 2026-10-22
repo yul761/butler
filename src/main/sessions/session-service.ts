@@ -7,7 +7,7 @@ import {
   type TicketView,
   type UnclaimedSession,
 } from "../../shared/types";
-import { type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
+import { launchEnv, type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
 import { claudeArgs, cmdShimSafe, sessionEnv } from "../claude/spawn";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
@@ -107,10 +107,10 @@ export class SessionService {
     }
 
     try {
-      const { file, args: argv } = withArgs(launch, args);
-      this.d.pty.open(termId, { file, args: argv }, {
+      const full = withArgs(launch, args);
+      this.d.pty.open(termId, { file: full.file, args: full.args }, {
         cwd,
-        env: sessionEnv(this.d.baseEnv, { pathValue, ticketKey: ticket.key, sessionId: termId }),
+        env: launchEnv(full, sessionEnv(this.d.baseEnv, { pathValue, ticketKey: ticket.key, sessionId: termId })),
       });
     } catch (e) {
       // claude 没能启动：刚插入的那一行只是空壳，不能留在列表里。

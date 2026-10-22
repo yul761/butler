@@ -5,7 +5,7 @@ import { SessionsRepo } from "../db/sessions-repo";
 import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { TicketService } from "../tickets/ticket-service";
-import { NPM_SHIM } from "../claude/shim-fixtures";
+import { NPM_EXE_SHIM, NPM_SHIM, PNPM_NODE_PATH, PNPM_NODE_PATH_SHIM } from "../claude/__fixtures__/shims";
 import { fakePtyFactory, makeRepo, memDb } from "../test-utils";
 import type { TranscriptState } from "./discovery";
 import { PtyManager, type PtyFactory } from "./pty-manager";
@@ -22,6 +22,7 @@ async function setup(opts: {
   syncMemory?: (ticketKey: string) => void;
   platform?: NodeJS.Platform;
   launchFs?: { read: (f: string) => string; exists: (p: string) => boolean };
+  pathValue?: string;
 } = {}) {
   const stateOf = (id: string): TranscriptState =>
     opts.transcriptState ?? (opts.transcripts === undefined || opts.transcripts.includes(id) ? "present" : "absent");
@@ -39,7 +40,7 @@ async function setup(opts: {
     ready: opts.ready ?? (async () => undefined),
     transcriptExists: (id) => stateOf(id) !== "absent",
     transcriptState: stateOf,
-    claude: () => ({ path: opts.claudePath === undefined ? "/bin/claude" : opts.claudePath, pathValue: "/login/bin" }),
+    claude: () => ({ path: opts.claudePath === undefined ? "/bin/claude" : opts.claudePath, pathValue: opts.pathValue ?? "/login/bin" }),
     newId: () => `new-${++n}`,
     now: () => 1000,
     platform: opts.platform ?? "darwin",
@@ -104,6 +105,40 @@ describe("SessionService.open", () => {
     expect(shim.spawned[0].file).toBe(`${npmDir}\\node.exe`);
     expect(shim.spawned[0].args).toEqual([cli, "--session-id", "new-1", "--mcp-config", config]);
     expect(shim.logs.some((l) => l.includes("memory MCP not mounted"))).toBe(false);
+  });
+
+  it("starts the native claude.exe behind a real npm shim directly and mounts memory (claude-code 2.1.307)", async () => {
+    const npmDir = "C:\\Users\\John Smith\\AppData\\Roaming\\npm";
+    const exe = `${npmDir}\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`;
+    const files = new Map([[`${npmDir}\\claude.cmd`, NPM_EXE_SHIM], [exe, ""]]);
+    const config = "C:\\Users\\John Smith\\.butler\\mcp\\tickets\\PROJ-1.json";
+    const shim = await setup({
+      platform: "win32",
+      claudePath: `${npmDir}\\claude.cmd`,
+      mcpConfig: () => config,
+      launchFs: { read: (f) => files.get(f) ?? "", exists: (p) => files.has(p) },
+    });
+    await shim.service.open({ ticketKey: "PROJ-1" });
+    expect(shim.spawned[0].file).toBe(exe);
+    expect(shim.spawned[0].args).toEqual(["--session-id", "new-1", "--mcp-config", config]);
+    expect(shim.logs.some((l) => l.includes("memory MCP not mounted"))).toBe(false);
+  });
+
+  it("finds a pnpm shim's node on the login PATH and passes the shim's NODE_PATH on", async () => {
+    const pnpmDir = "D:\\pnpm\\bin";
+    const cli = "D:\\pnpm\\@anthropic-ai\\claude-code\\cli.js";
+    const node = "C:\\Program Files\\nodejs\\node.exe";
+    const files = new Map([[`${pnpmDir}\\claude.cmd`, PNPM_NODE_PATH_SHIM], [cli, ""], [node, ""]]);
+    const launchFs = { read: (f: string) => files.get(f) ?? "", exists: (p: string) => files.has(p) };
+    const found = await setup({ platform: "win32", claudePath: `${pnpmDir}\\claude.cmd`, launchFs, pathValue: "C:\\Program Files\\nodejs;C:\\Windows" });
+    await found.service.open({ ticketKey: "PROJ-1" });
+    expect(found.spawned[0].file).toBe(node);
+    expect(found.spawned[0].args).toEqual([cli, "--session-id", "new-1"]);
+    expect(found.spawned[0].opts.env.NODE_PATH).toBe(PNPM_NODE_PATH);
+    // 登录 PATH 里没有 node：回退到 cmd.exe。
+    const missing = await setup({ platform: "win32", claudePath: `${pnpmDir}\\claude.cmd`, launchFs, pathValue: "C:\\Windows" });
+    await missing.service.open({ ticketKey: "PROJ-1" });
+    expect(missing.spawned[0].file).toBe("cmd.exe");
   });
 
   it("asks for a memory catch-up sync of the ticket on every new or resumed session it starts (final review 6)", async () => {

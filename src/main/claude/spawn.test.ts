@@ -1,21 +1,11 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { claudeArgs, cmdShimSafe, headlessEnv, sessionEnv, spawnSpec } from "./spawn";
+import { claudeArgs, cmdShimSafe, headlessEnv, sessionEnv } from "./spawn";
 
 describe("claude spawn helpers", () => {
   it("builds new and resume args", () => {
     expect(claudeArgs({ mode: "new", sessionId: "u1" })).toEqual(["--session-id", "u1"]);
     expect(claudeArgs({ mode: "resume", sessionId: "u1", mcpConfigPath: "/m.json" })).toEqual(["--resume", "u1", "--mcp-config", "/m.json"]);
-  });
-
-  it("runs .cmd shims through cmd.exe on Windows only", () => {
-    expect(spawnSpec("C:\\npm\\claude.cmd", ["--resume", "u"], "win32")).toEqual({ file: "cmd.exe", args: ["/c", "C:\\npm\\claude.cmd", "--resume", "u"] });
-    expect(spawnSpec("C:\\bin\\claude.exe", ["x"], "win32")).toEqual({ file: "C:\\bin\\claude.exe", args: ["x"] });
-    expect(spawnSpec("/usr/local/bin/claude", ["x"], "darwin")).toEqual({ file: "/usr/local/bin/claude", args: ["x"] });
-  });
-
-  it("passes the login PATH on so a shim's node can be found", () => {
-    expect(spawnSpec("/usr/local/bin/claude", ["x"], "darwin", "/usr/bin")).toEqual({ file: "/usr/local/bin/claude", args: ["x"] });
   });
 
   it("builds the session env", () => {

@@ -1,7 +1,7 @@
 import { execFile, type ChildProcess } from "node:child_process";
 import { formatDuration } from "../../shared/text";
 import { pathKey } from "../util/env";
-import { childLaunch, spawnClaude } from "./launch";
+import { childLaunch, isCmdShim, spawnClaude } from "./launch";
 
 export const HEADLESS_TIMEOUT_MS = 5 * 60 * 1000;
 const STDOUT_LIMIT = 20 * 1024 * 1024;
@@ -150,7 +150,7 @@ const CMD_META = /[&|<>^%]/;
 
 /** Windows 上 .cmd/.bat 的参数转义不可靠：含引号又含 cmd 元字符的参数一律拒绝，返回第一个这样的参数。 */
 export function unsafeCmdArg(args: string[], file: string, platform: NodeJS.Platform): string | null {
-  if (platform !== "win32" || !/\.(cmd|bat)$/i.test(file)) return null;
+  if (!isCmdShim(file, platform)) return null;
   return args.find((a) => a.includes('"') && CMD_META.test(a)) ?? null;
 }
 
