@@ -19,6 +19,7 @@ import { FollowupsRepo } from "./db/followups-repo";
 import { HandoffsRepo } from "./db/handoffs-repo";
 import { JobsRepo } from "./db/jobs-repo";
 import { MarksRepo } from "./db/marks-repo";
+import { MemorySyncRepo } from "./db/memory-sync-repo";
 import { SecretsRepo } from "./db/secrets-repo";
 import { SessionsRepo } from "./db/sessions-repo";
 import { SettingsRepo } from "./db/settings-repo";
@@ -35,6 +36,7 @@ import { HandoffRunner } from "./handoff/runner";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
+import { MemoryService } from "./memory/memory-service";
 import { HookInbox } from "./hooks/inbox";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, resolvePaths } from "./paths";
@@ -223,6 +225,18 @@ async function bootstrap(): Promise<void> {
   const handoffs = new HandoffsRepo(db);
   const followups = new FollowupsRepo(db);
   const jobs = new JobsRepo(db);
+  const memory = new MemoryService({
+    dataDir: paths.statecore,
+    tickets,
+    handoffs,
+    followups,
+    sync: new MemorySyncRepo(db),
+    enabled: () => settings.get("memoryEnabled") !== "0",
+    now: Date.now,
+    // 记忆标签开着时能看到新写入的内容（notify 在后面定义，这里只在调用时取用）。
+    onSynced: () => notify(),
+    log: logger,
+  });
   const ticketService = new TicketService({ tickets, settings, now: Date.now });
   const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath() });
   const notify = () => safeSend(IPC.stateChanged);
@@ -267,8 +281,12 @@ async function bootstrap(): Promise<void> {
       return null;
     }
   };
-  const ingest = (input: IngestInput) =>
-    ingestHandoff({ db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}` }, input);
+  const ingest = (input: IngestInput) => {
+    const r = ingestHandoff({ db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}` }, input);
+    // 设计文档 5.4：入库后同步写入 StateCore（异步，失败只记日志）。
+    if (r.stored && !r.degraded) void memory.syncTicket(input.ticketKey);
+    return r;
+  };
   const projectMcp = (cwd: string): string[] =>
     projectMcpConfigs(cwd, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger });
   const runner = new HandoffRunner({
@@ -462,6 +480,8 @@ async function bootstrap(): Promise<void> {
     briefNarrating: () => briefNarrating,
     rederive: (key) => {
       rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now }, key);
+      // followup 完成 / 忽略 / 恢复：StateCore 里对应的条目跟着 forget / 重写。
+      void memory.syncTicket(key);
     },
     detectTrackerTools,
     window: () => win,
@@ -474,6 +494,8 @@ async function bootstrap(): Promise<void> {
   tray = createTray();
   inbox.start();
   void runDiscovery();
+  // 启动时补齐记忆：老数据、上次退出时没写完的。
+  void memory.syncAll();
   const discoveryTimer = setInterval(() => void runDiscovery(), DISCOVERY_INTERVAL_MS);
 
   // 调度：启动（health 探测完成后）、唤醒、解锁时检查到期任务；每分钟 tick，覆盖 16:00 和整晚没锁屏的情况。
@@ -486,6 +508,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(discoveryTimer);
     clearInterval(scheduleTimer);
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
+    memory.stop();
     inbox.stop();
     pty.killAll();
     tray?.destroy();

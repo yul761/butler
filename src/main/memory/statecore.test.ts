@@ -4,7 +4,7 @@ import { createEmbeddedBackend } from "statecore-mcp/lib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ticketScope, WORKSPACE_SCOPE } from "../../shared/memory";
 import { tempDir } from "../test-utils";
-import { listScopeNames, parseDigestOutcome, withScope } from "./statecore";
+import { listScopeNames, NOTES_CAP, parseDigestOutcome, withScope } from "./statecore";
 
 // StateCore 的 pino 直接读 process.env.LOG_LEVEL（不看 env 选项），在它加载之前静音。
 vi.hoisted(() => {
@@ -79,6 +79,31 @@ describe("StateCore adapter (design 8, 11: write and why integration)", () => {
       await s.remember("[followup:f_3] 描述 f_3（配置，合并后）");
       expect(await s.remember("[followup:f_4] 描述 f_4（配置，合并后）")).toEqual({ superseded: "[followup:f_3] 描述 f_3（配置，合并后）" });
       expect((await s.facts()).map((i) => i.text)).toEqual(["[followup:f_4] 描述 f_4（配置，合并后）"]);
+    });
+  });
+
+  it("counts note slots including forgotten notes, which keep their slot until a full digest (PF2)", async () => {
+    // 两两之间 Jaccard 很低的正文，保证每次都是追加而不是修订。
+    const text = (i: number) => `[followup:t${i}] ${["alpha", "bravo", "carol", "delta", "eagle", "fable"].map((w) => `${w}${i}x${i * 7}`).join(" ")}`;
+    await withScope({ dataDir: tempDir(), scope: "ticket:PROJ-10" }, async (s) => {
+      expect(await s.noteSlots()).toEqual({ used: 0, cap: NOTES_CAP });
+      for (let i = 0; i < 3; i++) await s.remember(text(i));
+      const [first] = await s.facts();
+      await s.forget(first.factKey);
+      expect(await s.facts()).toHaveLength(2);
+      expect(await s.noteSlots()).toEqual({ used: 3, cap: NOTES_CAP });
+      // 一字不差的重写不占新位置（StateCore 当成已有的那条，仍然隐藏）。
+      await s.remember(text(0));
+      expect((await s.noteSlots()).used).toBe(3);
+      // 修订原地替换，不占新位置。
+      expect((await s.remember(`${text(1)} more`)).superseded).toBe(text(1));
+      expect((await s.noteSlots()).used).toBe(3);
+      for (let i = 3; i < NOTES_CAP; i++) await s.remember(text(i));
+      expect(await s.noteSlots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
+      // 满了以后再追加：StateCore 挤掉最旧的那条（这里是被遗忘的 t0），总数不变。
+      await s.remember(text(99));
+      expect(await s.noteSlots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
+      expect(await s.facts()).toHaveLength(NOTES_CAP);
     });
   });
 

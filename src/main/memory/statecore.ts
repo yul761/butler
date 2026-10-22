@@ -14,6 +14,12 @@ import type { StatecoreChatModel } from "../gateway/types";
 
 export type DigestOutcome = "ran" | "no-llm" | "below-threshold" | "locked" | "failed" | "unsupported";
 
+/**
+ * StateCore 1.0.0 每个 scope 的 notes 上限（默认 facet pack 里 notes 的 cap）。满了再追加一条，StateCore 挤掉最旧的那条。
+ * forget 只是把条目藏起来：原文还在 notes 里占着位置，只有完整档位的蒸馏才会清掉（lib 不导出清理函数）。
+ */
+export const NOTES_CAP = 30;
+
 export interface ScopeHandle {
   /** 确定性地写一条 note（不经 LLM）。superseded：被它取代的旧 note 的原文。 */
   remember(text: string): Promise<{ superseded: string | null }>;
@@ -23,6 +29,12 @@ export interface ScopeHandle {
   why(factId: string): Promise<WhyEntry[] | null>;
   handoff(h: { summary: string; nextSteps: string[]; openQuestions: string[] }): Promise<void>;
   activeHandoff(): Promise<MemoryHandoff | null>;
+  /**
+   * 这个 scope 的 notes 占了几个位置：看得见的加上 forget 过、但还占着位置的。
+   * 数的是 StateCore 的有效事实登记（recall 的 factRegistry 里 facet 为 notes、没被取代也没退役的条目），
+   * 再并上 facts() 里看得见的 Notes（防止个别条目没登记），按 StateCore 的规则（去首尾空白、压空白、小写）去重。
+   */
+  noteSlots(): Promise<{ used: number; cap: number }>;
   /** 等待蒸馏的 consolidate 事件数。 */
   pendingEvents(): Promise<number>;
   /** 立即蒸馏一次（只有 withScope 给了 model 才可能 ran）。 */
@@ -47,6 +59,7 @@ const WhyResult = z.object({ chain: z.array(RegistryEntry) }).nullable();
 const RecallResult = z.object({
   handoff: z.object({ id: z.string(), content: z.string(), addedAt: z.string(), versionCount: z.number() }).nullable(),
 });
+const Registry = z.object({ factRegistry: z.array(z.object({ content: z.string(), facet: z.string().optional() })) });
 const Remembered = z.object({ superseded: z.string().optional() });
 const DigestResult = z.union([
   z.object({ ran: z.literal(true) }),
@@ -56,7 +69,16 @@ const Pending = z.object({ events: z.number() }).nullable().optional();
 
 type Backend = ReturnType<typeof createEmbeddedBackend>;
 
+/** StateCore 比较 notes 是否相同的规则（addNoteFact 里的 norm）。 */
+const noteNorm = (s: string): string => s.trim().replace(/\s+/g, " ").toLowerCase();
+/** StateCore 默认 facet pack 里 notes 的展示分组。 */
+const NOTES_GROUP = "Notes";
+
 function handle(b: Backend): ScopeHandle {
+  const facts = async (): Promise<MemoryItem[]> =>
+    FactGroups.parse(await b.facts()).flatMap((g) =>
+      g.items.map((i) => ({ factKey: i.factKey, factId: i.factId, text: i.text, createdAt: i.createdAt, group: g.group })),
+    );
   return {
     async remember(text) {
       const r = Remembered.parse(await b.remember({ text }));
@@ -65,11 +87,7 @@ function handle(b: Backend): ScopeHandle {
     async forget(factKey) {
       await b.forget({ factKey });
     },
-    async facts() {
-      return FactGroups.parse(await b.facts()).flatMap((g) =>
-        g.items.map((i) => ({ factKey: i.factKey, factId: i.factId, text: i.text, createdAt: i.createdAt, group: g.group })),
-      );
-    },
+    facts,
     async why(factId) {
       const r = WhyResult.parse(await b.why({ factId }));
       return r
@@ -88,6 +106,15 @@ function handle(b: Backend): ScopeHandle {
     },
     async activeHandoff() {
       return RecallResult.parse(await b.recall({})).handoff;
+    },
+    async noteSlots() {
+      const notes = new Set(
+        Registry.parse(await b.recall({}))
+          .factRegistry.filter((e) => e.facet === "notes")
+          .map((e) => noteNorm(e.content)),
+      );
+      for (const i of await facts()) if (i.group === NOTES_GROUP) notes.add(noteNorm(i.text));
+      return { used: notes.size, cap: NOTES_CAP };
     },
     async pendingEvents() {
       return Pending.parse(await b.pendingEvents?.())?.events ?? 0;

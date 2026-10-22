@@ -36,6 +36,8 @@ export const SETTING_DEFAULTS = {
   auditRetentionDays: "90",
   /** 首次启动向导做完（或跳过）了：1。迁移 4 给已经有 ticket 的老用户直接写 1。 */
   onboardingDone: "0",
+  /** StateCore 记忆（设计文档第 8 节）：1 开 0 关。关闭时不写入、不给 claude 挂记忆 MCP。 */
+  memoryEnabled: "1",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
