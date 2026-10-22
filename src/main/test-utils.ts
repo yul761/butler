@@ -105,6 +105,7 @@ export interface FakeCall {
  * body 里可用：args、input、call（第几次调用，从 1 开始）、emit(obj)（写一行 JSON）、
  * result(structured, extra?)（写一条成功的 --output-format json 结果，session_id 为 "fork-<call>"）。
  * Windows 上额外生成一个 .cmd 包装并返回它的路径，这样测试会经过 cross-spawn 的 cmd.exe 转义。
+ * 脚本带看门狗：父进程没了（测试进程被打断）就退出，最长活 60 秒，不会留下孤儿进程（最终审查 2）。
  */
 export function writeFakeClaude(dir: string, body: string): { path: string; calls: () => FakeCall[] } {
   const log = join(dir, "fake-claude-calls.jsonl");
@@ -114,6 +115,11 @@ export function writeFakeClaude(dir: string, body: string): { path: string; call
     `#!/usr/bin/env node
 const fs = require("node:fs");
 const LOG = ${JSON.stringify(log)};
+// 看门狗：假 claude 在自己的进程组里（detached），测试进程被打断（Ctrl-C、超时后 worker 被杀）时它不会跟着死。
+// 父进程换了（变成 1 或别的收养进程）就退出；不管怎样 60 秒后也退出。两个定时器都 unref，不让进程多活。
+const PARENT = process.ppid;
+setInterval(() => { if (process.ppid !== PARENT || process.ppid === 1) process.exit(0); }, 500).unref();
+setTimeout(() => process.exit(0), 60000).unref();
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (c) => (input += c));

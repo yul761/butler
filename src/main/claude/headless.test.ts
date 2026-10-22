@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir, waitForFile, waitUntilDead, writeFakeClaude } from "../test-utils";
@@ -174,6 +175,33 @@ describe("runHeadless with a fake claude executable", () => {
     pre.abort();
     expect(await runHeadless({ claudePath: fake.path, args: [], prompt: "x", cwd: dir, env: env(), signal: pre.signal })).toMatchObject({ reason: "aborted" });
   }, 10_000);
+
+  it("the fake claude exits on its own once the process that spawned it dies (final review 2: no orphans)", async () => {
+    if (process.platform === "win32") return;
+    const dir = tempDir();
+    const pidFile = join(dir, "fake.pid");
+    // 永远不退出的 body，和上面两个测试一样；中间的父进程模拟被打断的测试 worker。
+    const fake = writeFakeClaude(dir, "setInterval(() => {}, 1000);");
+    const parent = spawn(
+      process.execPath,
+      [
+        "-e",
+        `const c = require("node:child_process").spawn(${JSON.stringify(fake.path)}, [], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
+         c.stdin.end("x"); require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); setInterval(() => {}, 1000);`,
+      ],
+      { stdio: "ignore" },
+    );
+    try {
+      const pid = Number(await waitForFile(pidFile, 5000));
+      expect(Number.isInteger(pid) && pid > 0).toBe(true);
+      expect(await waitUntilDead(pid, 300)).toBe(false);
+      parent.kill("SIGKILL");
+      // 看门狗每 500ms 看一次父进程。
+      expect(await waitUntilDead(pid, 3000)).toBe(true);
+    } finally {
+      parent.kill("SIGKILL");
+    }
+  }, 15_000);
 
   it("falls back to the last non-empty line when stdout has extra lines", async () => {
     const dir = tempDir();
