@@ -1,7 +1,15 @@
-// 把 hook 打成不依赖系统 Node 的单文件可执行程序（Node SEA）。
+// 把 hook 打成不依赖系统 Node 的单文件可执行程序（Node SEA）。需要支持 --build-sea 的 Node（见 .node-version）。
+// 用法：node scripts/build-hook.mjs [--check-only]
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { build } from "esbuild";
+
+const help = execFileSync(process.execPath, ["--help"], { encoding: "utf8" });
+if (!help.includes("--build-sea")) {
+  console.error(`build:hook 需要支持 --build-sea 的 Node（当前 ${process.version}）。请换成 .node-version 里写的版本，例如 nvm install && nvm use。`);
+  process.exit(1);
+}
+if (process.argv.includes("--check-only")) process.exit(0);
 
 const outDir = "build/hook";
 const bundle = `${outDir}/butler-hook.cjs`;

@@ -4,6 +4,9 @@
   "private": true,
   "description": "A work butler for Claude Code ticket sessions",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
   "main": "out/main/index.js",
   "scripts": {
     "predev": "node scripts/build-memory-mcp.mjs",
