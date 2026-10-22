@@ -1943,7 +1943,7 @@ export default defineConfig({
 - [ ] **Step 3: 实验：Playwright 能不能驱动 Electron 44（spike）**
 
 Run: `pnpm build && pnpm build:hook && pnpm e2e e2e/wizard.spec.ts`
-Expected: 2 passed。
+Expected: 4 passed。
 
 **备选**：`_electron.launch` 连不上 Electron 44（超时在 `firstWindow`、或报协议错误）：改成自己用 `child_process.spawn` 以 `--remote-debugging-port=0` 启动 Electron，从 stderr 读出 `DevTools listening on ws://...`，再用 `chromium.connectOverCDP(wsUrl)` 拿到页面；`launch()` 的返回值改成 `{ close(), page, console }`，两个 spec 的用法不变。把实际走的路线记进遗留清单（任务 12）。
 
@@ -2044,7 +2044,7 @@ test("new ticket → session → hook → handoff → memory → morning brief �
 - [ ] **Step 2: 运行**
 
 Run: `pnpm build && pnpm build:hook && pnpm e2e`
-Expected: 3 passed（任务 8 的两条和这一条）。
+Expected: 5 passed（任务 8 的四条和这一条）。
 
 失败时按打印出来的日志排查（superpowers:systematic-debugging），常见原因和处理：
 - 第 3 步没有出现“等你输入”：看 `fake-claude.log` 里 `hook Stop exit=` 的退出码；非 0 说明 hook 命令在这个 shell 里跑不起来——这正是 Review Focus 5 要抓的问题，修 `hookCommand()`，不要改测试。
@@ -2702,7 +2702,7 @@ git commit -m "docs: README with Gatekeeper and SmartScreen steps, MIT license, 
 - [ ] **Step 1: 全量自动检查（含 E2E）**
 
 Run: `pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm build:hook && pnpm exec electron out/main/index.js --smoke && pnpm e2e`
-Expected: 全部通过；`headless.live.test.ts` 显示 skipped；冒烟输出 `sqlite-ok 1`、`statecore-ok 1`、`pty-ok`；E2E 3 passed。
+Expected: 全部通过；`headless.live.test.ts` 显示 skipped；冒烟输出 `sqlite-ok 1`、`statecore-ok 1`、`pty-ok`；E2E 5 passed。
 
 人工复核出口和 StateCore 入口（ESLint 已经保证）：
 
