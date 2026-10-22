@@ -1,9 +1,10 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
 import {
-  applyInstall, applyUninstall, HOOK_EVENTS, hookCommand, hookStatus, installHooks, isButlerHook, readSettings,
+  applyInstall, applyUninstall, HOOK_EVENTS, hookCommand, hookStatus, installHookBinary, installHooks, isButlerHook, readSettings,
   SettingsParseError, uninstallHooks,
 } from "./installer";
 
@@ -165,5 +166,41 @@ describe("merge safety", () => {
     chmodSync(file, 0o600);
     await installHooks(file, "/b/butler-hook", "darwin");
     expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe("installHookBinary", () => {
+  it("copies the content, makes it executable and replaces an existing copy", async () => {
+    const dir = tempDir();
+    const src = join(dir, "src-hook");
+    const dest = join(dir, "bin", "butler-hook");
+    writeFileSync(src, "#!/bin/sh\nexit 0\n");
+    await installHookBinary(src, dest);
+    expect(readFileSync(dest, "utf8")).toBe("#!/bin/sh\nexit 0\n");
+    if (process.platform !== "win32") expect(statSync(dest).mode & 0o777).toBe(0o755);
+    writeFileSync(src, "v2");
+    await installHookBinary(src, dest);
+    expect(readFileSync(dest, "utf8")).toBe("v2");
+    expect(existsSync(`${dest}.tmp`)).toBe(false);
+  });
+
+  it("fails without leaving a temp file when the source is missing", async () => {
+    const dir = tempDir();
+    const dest = join(dir, "bin", "butler-hook");
+    await expect(installHookBinary(join(dir, "missing"), dest)).rejects.toThrow();
+    expect(existsSync(`${dest}.tmp`)).toBe(false);
+    expect(existsSync(dest)).toBe(false);
+  });
+
+  // A browser-downloaded app keeps com.apple.quarantine on its inner files; the copy must not inherit it.
+  it.runIf(process.platform === "darwin")("does not carry extended attributes such as com.apple.quarantine (macOS)", async () => {
+    const dir = tempDir();
+    const src = join(dir, "src-hook");
+    const dest = join(dir, "bin", "butler-hook");
+    writeFileSync(src, "#!/bin/sh\nexit 0\n");
+    execFileSync("/usr/bin/xattr", ["-w", "com.apple.quarantine", "0081;00000000;Safari;", src]);
+    expect(execFileSync("/usr/bin/xattr", [src], { encoding: "utf8" })).toContain("com.apple.quarantine");
+    await installHookBinary(src, dest);
+    expect(execFileSync("/usr/bin/xattr", [dest], { encoding: "utf8" })).not.toContain("com.apple.quarantine");
   });
 });

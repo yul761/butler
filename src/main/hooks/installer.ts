@@ -1,5 +1,7 @@
-import { access, chmod, copyFile, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { access, chmod, copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { pipeline } from "node:stream/promises";
 import type { HookStatus } from "../../shared/types";
 import { renameWithRetry } from "../util/fs-retry";
 
@@ -160,10 +162,21 @@ export async function uninstallHooks(settingsFile: string): Promise<void> {
   await writeSettingsAtomic(settingsFile, applyUninstall(settings));
 }
 
+/**
+ * 把打包的 butler-hook 复制到 ~/.butler/bin。只复制内容，不用 fs.copyFile：
+ * 从浏览器下载、用"仍要打开"放行的 app 里，hook 带着 com.apple.quarantine；复制出来的程序如果也带着，
+ * 会被 Gatekeeper 拦下，Claude Code 跑不了 hook。copyFile 带不带扩展属性取决于 libuv 的实现
+ * （cp、copyfile(3) 的 COPYFILE_ALL 都会带），流式复制（约 143 MB）一定不带。ad-hoc 签名在文件内容里，不受影响。
+ */
 export async function installHookBinary(src: string, dest: string): Promise<void> {
   await mkdir(dirname(dest), { recursive: true });
   const tmp = `${dest}.tmp`;
-  await copyFile(src, tmp);
-  await chmod(tmp, 0o755);
+  try {
+    await pipeline(createReadStream(src), createWriteStream(tmp));
+    await chmod(tmp, 0o755);
+  } catch (e) {
+    await rm(tmp, { force: true });
+    throw e;
+  }
   await renameWithRetry(tmp, dest);
 }
