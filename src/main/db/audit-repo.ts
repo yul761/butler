@@ -171,8 +171,10 @@ export class AuditRepo {
    * 请求体保留：退出前可能已经发出去了，用户要能看到。可能已经计费，所以有请求体的记录按 estimate
    * 保守记账（gateway/budget.ts 的 stalePendingCost）；没有请求体、或 estimate 给不出价格的，花费保持为空（按 0 算）。
    */
-  failStalePending(error: string, estimate?: (row: { model: string; payloadSent: string }) => StaleUsage | null): number {
-    const rows = this.db.prepare(`SELECT id, model, payload_sent FROM llm_audit WHERE status = 'pending' ORDER BY id`).all() as unknown as Pick<AuditRow, "id" | "model" | "payload_sent">[];
+  failStalePending(error: string, estimate?: (row: { model: string; payloadSent: string; source: AuditSource }) => StaleUsage | null): number {
+    const rows = this.db
+      .prepare(`SELECT id, model, payload_sent, source FROM llm_audit WHERE status = 'pending' ORDER BY id`)
+      .all() as unknown as Pick<AuditRow, "id" | "model" | "payload_sent" | "source">[];
     const update = this.db.prepare(
       `UPDATE llm_audit SET status = 'failed', error = ?,
          tokens_in = COALESCE(?, tokens_in), tokens_out = COALESCE(?, tokens_out), cost_usd = COALESCE(?, cost_usd)
@@ -180,7 +182,7 @@ export class AuditRepo {
     );
     let changed = 0;
     for (const r of rows) {
-      const usage = r.payload_sent !== null && estimate ? estimate({ model: r.model, payloadSent: r.payload_sent }) : null;
+      const usage = r.payload_sent !== null && estimate ? estimate({ model: r.model, payloadSent: r.payload_sent, source: r.source as AuditSource }) : null;
       const ok = usage !== null && [usage.tokensIn, usage.tokensOut, usage.costUsd].every(Number.isFinite);
       changed += Number(update.run(cap(error), ok ? usage.tokensIn : null, ok ? usage.tokensOut : null, ok ? usage.costUsd : null, r.id).changes);
     }

@@ -4,7 +4,7 @@ import type { AuditFinish, AuditRepo } from "../db/audit-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TermsRepo } from "../db/terms-repo";
 import { isLoopbackHost, llmConfig, type LlmConfig, type PriceRule } from "../settings/settings-values";
-import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart, sentWithoutUsage } from "./budget";
+import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart, sentWithoutUsage, STATECORE_MAX_TOKENS } from "./budget";
 import type { KeyStore } from "./key-store";
 import { NARRATIVE_MAX_TOKENS, narrativeMessages, parseNarrative } from "./narrative";
 import { project } from "./projection";
@@ -15,8 +15,14 @@ import type { NarrativeSource, OutboundPayload, Rng, StatecoreChatModel } from "
 
 const QUITTING = "app 正在退出";
 
-/** StateCore 每次蒸馏调用的输出上限（它要求模型输出结构化 JSON）；发送前的预算检查按这个上限估算。 */
-export const STATECORE_MAX_TOKENS = 8192;
+/** StateCore 每次蒸馏调用的输出上限（定义在 budget.ts：启动时给遗留的 pending 记录估花费也要用）。 */
+export { STATECORE_MAX_TOKENS };
+
+/** StateCore 每次蒸馏调用的截止时间：输出上限 8192 token，按 50～60 token/秒要两三分钟（“今日重点”沿用 provider 的 60 秒）。 */
+export const STATECORE_TIMEOUT_MS = 180_000;
+
+/** StateCore 蒸馏调用在发送前被拒绝的原因（只写进日志的代码，不含任何内容）。 */
+type StatecoreRefusal = "level_not_full" | "not_configured" | "confirm_on" | "quitting" | "bad_base_url" | "no_key";
 
 /** StateCore 蒸馏调用被拒绝或失败：StateCore 把这次蒸馏记为 failed，事件留到下次。 */
 export class StatecoreCallError extends Error {}
@@ -86,8 +92,9 @@ export function confirmText(url: string, model: string, messages: ChatMessage[])
 
 const llmOff = (cfg: LlmConfig): boolean => cfg.level === "off" || !cfg.baseUrl || !cfg.model;
 
-/** StateCore 蒸馏的条件（计划 4 R1 / P4-R5）：full 档位、配置齐全、没开发送前确认。 */
-const statecoreAllowed = (cfg: LlmConfig): boolean => cfg.level === "full" && !llmOff(cfg) && !cfg.confirm;
+/** StateCore 蒸馏的条件（计划 4 R1 / P4-R5）：full 档位、配置齐全、没开发送前确认。返回不满足的那一条（null：可以发）。 */
+const statecoreRefusal = (cfg: LlmConfig): StatecoreRefusal | null =>
+  cfg.level !== "full" ? "level_not_full" : llmOff(cfg) ? "not_configured" : cfg.confirm ? "confirm_on" : null;
 
 /** 一次已经写好 pending 审计行、通过了预算检查的请求（send() 的输入）。 */
 interface SendRequest {
@@ -97,6 +104,8 @@ interface SendRequest {
   apiKey: string | null;
   messages: ChatMessage[];
   maxTokens: number;
+  /** 截止时间；省略时用 provider 的默认值。 */
+  timeoutMs?: number;
   /** pending 时记下的请求体。 */
   body: string;
   auditId: number;
@@ -115,6 +124,8 @@ type SendOutcome = { sent: false; error: string } | { sent: true; content: strin
  */
 export class PrivacyGateway {
   private chain: Promise<unknown> = Promise.resolve();
+  /** 上一次 StateCore 调用被拒绝的原因：同一个原因连续出现只记一次日志（一次蒸馏会调用好几次模型）。 */
+  private lastStatecoreRefusal: StatecoreRefusal | null = null;
 
   constructor(private readonly d: GatewayDeps) {}
 
@@ -141,7 +152,7 @@ export class PrivacyGateway {
    * 被拒绝或失败时 reject（StatecoreCallError）。
    */
   statecoreModel(signal?: AbortSignal): StatecoreChatModel | null {
-    if (!statecoreAllowed(llmConfig(this.d.settings))) return null;
+    if (statecoreRefusal(llmConfig(this.d.settings)) !== null) return null;
     return {
       chat: (messages) =>
         this.serial(() => this.statecoreCall(messages, signal)).catch((e: unknown): never => {
@@ -155,12 +166,19 @@ export class PrivacyGateway {
     const cfg = llmConfig(this.d.settings);
     const now = this.d.now();
     this.d.audit.prune(auditCutoff(now, cfg.retentionDays));
-    if (!statecoreAllowed(cfg)) throw new StatecoreCallError("StateCore 蒸馏只在完整档位、关闭发送前确认时运行");
-    if (signal?.aborted) throw new StatecoreCallError(QUITTING);
-    const url = new URL(cfg.baseUrl);
+    const refusal = statecoreRefusal(cfg);
+    if (refusal !== null) this.refuseStatecore(refusal, "StateCore 蒸馏只在完整档位、关闭发送前确认时运行");
+    if (signal?.aborted) this.refuseStatecore("quitting", QUITTING);
+    let url: URL;
+    try {
+      url = new URL(cfg.baseUrl);
+    } catch {
+      this.refuseStatecore("bad_base_url", "base URL 无效");
+    }
     const apiKey = this.d.keys.get();
     // 远程服务必须有 key；保存过但解不开的 key 本机服务也不发。
-    if (apiKey === null && (this.d.keys.saved() || !isLoopbackHost(url.hostname))) throw new StatecoreCallError("没有可用的 API key");
+    if (apiKey === null && (this.d.keys.saved() || !isLoopbackHost(url.hostname))) this.refuseStatecore("no_key", "没有可用的 API key");
+    this.lastStatecoreRefusal = null;
 
     // 只取 role 和 content 两个字段，其余一概不发。
     const messages: ChatMessage[] = input.map((m) => ({ role: m.role === "system" ? "system" : "user", content: String(m.content) }));
@@ -177,13 +195,22 @@ export class PrivacyGateway {
 
     const auditId = this.d.audit.insert({ ...base, status: "pending", payloadSent: body });
     const out = await this.send({
-      what: "statecore", cfg, apiKey, messages, maxTokens: STATECORE_MAX_TOKENS, body, auditId, price: budget.price, signal,
-      check: () => null,
+      what: "statecore", cfg, apiKey, messages, maxTokens: STATECORE_MAX_TOKENS, timeoutMs: STATECORE_TIMEOUT_MS, body, auditId,
+      price: budget.price, signal, check: () => null,
     });
     if (!out.sent) throw new StatecoreCallError(out.error);
     // 花费没记上就不交出结果：下一次预算检查必须看得到这次的花费。
     if (!out.recorded) throw new StatecoreCallError("审计记录写入失败");
     return out.content;
+  }
+
+  /** 发送前拒绝一次 StateCore 调用：日志只记原因代码（不含内容和 key），同一个原因连续出现只记一次。 */
+  private refuseStatecore(reason: StatecoreRefusal, message: string): never {
+    if (this.lastStatecoreRefusal !== reason) {
+      this.lastStatecoreRefusal = reason;
+      this.log(`statecore call refused: ${reason}`);
+    }
+    throw new StatecoreCallError(message);
   }
 
   /** 个人 LLM 是否关闭（档位 off，或没配 base URL / 模型）：调用方据此跳过构建输入，narrate() 用的是同一个判断。 */
@@ -309,7 +336,10 @@ export class PrivacyGateway {
     const { cfg, apiKey, auditId } = r;
     let res: ChatResponse;
     try {
-      res = await (this.d.chat ?? chatCompletion)({ baseUrl: cfg.baseUrl, apiKey, model: cfg.model, messages: r.messages, maxTokens: r.maxTokens, signal: r.signal });
+      res = await (this.d.chat ?? chatCompletion)({
+        baseUrl: cfg.baseUrl, apiKey, model: cfg.model, messages: r.messages, maxTokens: r.maxTokens, signal: r.signal,
+        ...(r.timeoutMs === undefined ? {} : { timeoutMs: r.timeoutMs }),
+      });
     } catch (e) {
       const message = scrub(errorText(e), apiKey);
       this.log(`${r.what} request failed: ${message}`);
@@ -322,7 +352,13 @@ export class PrivacyGateway {
       // 请求体真的发出去了就记下实际发出的那个（用户要能看到）；确定什么都没发出去时清空 pending 时记的请求体。
       // 不是 ProviderError（不知道发没发）时保留 pending 的请求体：宁可多给用户看。
       const sent = e instanceof ProviderError ? e.sentBody : undefined;
-      this.d.audit.finish(auditId, { status: "failed", error: message, ...(sent === undefined ? {} : { payloadSent: sent }) });
+      // 请求体发出去之后超时、被取消或断线：服务商可能已经收下并计费，和启动时清理遗留 pending 一样按请求体和输出上限保守记账。
+      // 服务商明确回了非 2xx 的不记：被拒的请求没有生成。
+      const maybeBilled =
+        e instanceof ProviderError && (e.kind === "timeout" || e.kind === "aborted" || e.kind === "network") && e.sentBody !== null
+          ? sentWithoutUsage(r.price, e.sentBody, r.maxTokens)
+          : {};
+      this.d.audit.finish(auditId, { status: "failed", error: message, ...(sent === undefined ? {} : { payloadSent: sent }), ...maybeBilled });
       return { sent: false, error: message };
     }
 

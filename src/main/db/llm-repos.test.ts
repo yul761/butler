@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { PrivacyLevel } from "../../shared/llm";
+import { stalePendingCost } from "../gateway/budget";
 import { memDb } from "../test-utils";
 import { migrate } from "./database";
 import { MIGRATIONS } from "./migrations";
@@ -89,21 +90,32 @@ describe("AuditRepo", () => {
     const withBody = audit.insert({ ...base, ts: 1, status: "pending", payloadSent: '{"a":1}' });
     const noBody = audit.insert({ ...base, ts: 2, status: "pending", payloadSent: null });
     const unpriced = audit.insert({ ...base, model: "unknown", ts: 3, status: "pending", payloadSent: '{"c":3}' });
-    const seen: { model: string; payloadSent: string }[] = [];
-    const estimate = (row: { model: string; payloadSent: string }) => {
+    const seen: { model: string; payloadSent: string; source: string }[] = [];
+    const estimate = (row: { model: string; payloadSent: string; source: string }) => {
       seen.push(row);
       return row.model === "m" ? { tokensIn: 7, tokensOut: 800, costUsd: 0.25 } : null;
     };
     expect(audit.failStalePending("quit while sending", estimate)).toBe(3);
     expect(seen).toEqual([
-      { model: "m", payloadSent: '{"a":1}' },
-      { model: "unknown", payloadSent: '{"c":3}' },
+      { model: "m", payloadSent: '{"a":1}', source: "narrative" },
+      { model: "unknown", payloadSent: '{"c":3}', source: "narrative" },
     ]);
     const byId = new Map(audit.list().map((e) => [e.id, e]));
     expect(byId.get(withBody)).toMatchObject({ status: "failed", payloadSent: '{"a":1}', tokensIn: 7, tokensOut: 800, costUsd: 0.25 });
     expect(byId.get(noBody)).toMatchObject({ status: "failed", payloadSent: null, costUsd: null });
     expect(byId.get(unpriced)).toMatchObject({ status: "failed", costUsd: null });
     expect(audit.costSince(0)).toBe(0.25);
+  });
+
+  it("charges a stale StateCore pending row at StateCore's output cap, keeping its source", () => {
+    const audit = new AuditRepo(memDb());
+    const body = '{"model":"m","messages":[],"max_tokens":8192}';
+    const sc = audit.insert({ ...base, level: "full", source: "statecore", ts: 1, status: "pending", payloadSent: body });
+    const nr = audit.insert({ ...base, ts: 2, status: "pending", payloadSent: body });
+    expect(audit.failStalePending("quit while sending", stalePendingCost([{ pattern: "*", inputPerMTok: 1, outputPerMTok: 2 }]))).toBe(2);
+    const byId = new Map(audit.list().map((e) => [e.id, e]));
+    expect(byId.get(sc)).toMatchObject({ source: "statecore", status: "failed", tokensOut: 8192 });
+    expect(byId.get(nr)).toMatchObject({ source: "narrative", status: "failed", tokensOut: 800 });
   });
 
   it("clears the pending payload when a failed request never left the machine", () => {

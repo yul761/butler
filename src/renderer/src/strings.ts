@@ -196,7 +196,7 @@ export const S = {
   } as Record<string, string>,
   privacyPeopleWarning: "不在敏感词表里的人名在「redacted」档位会被发送，请把同事姓名加入敏感词表",
   privacy: "隐私与个人 API",
-  privacyIntro: "个人 LLM API 只用来写早间简报的“今日重点”。出站内容先按档位挑字段，把 ticket 号、仓库、分支、PR 作者、ticket 标题和敏感词表里的人名与词换成每次随机的占位符，再扫描敏感信息（命中就整次不发），并记进审计页。不配置时其他功能照常可用。",
+  privacyIntro: "个人 LLM API 用来写早间简报的“今日重点”；完整档位下还用来把 StateCore 记忆蒸馏成要点。“今日重点”的出站内容先按档位挑字段，把 ticket 号、仓库、分支、PR 作者、ticket 标题和敏感词表里的人名与词换成每次随机的占位符，再扫描敏感信息（命中就整次不发）。记忆蒸馏发送原始对话片段，不做扫描。每次调用都记进审计页、计入月预算。不配置时其他功能照常可用。",
   privacyLevel: "隐私档位",
   privacyLevels: { off: "关闭", metadata: "仅元数据（默认）", redacted: "脱敏文本", full: "完整" } as Record<PrivacyLevel, string>,
   privacyLevelHelp: {
@@ -239,7 +239,7 @@ export const S = {
   llmNoPrice: "价格表里没有当前模型的价格：不会调用。",
   llmZeroBudget: "每月预算是 $0：不会调用个人 API。",
   llmOverBudget: (spent: string, budget: string) => `本月已花 ${spent}，达到预算 ${budget}：本月不再调用。`,
-  llmFullWarning: "完整档位会把真实的 ticket 号和原文发给服务商，只靠敏感信息扫描兜底。",
+  llmFullWarning: "完整档位会把真实的 ticket 号和原文发给服务商，“今日重点”只靠敏感信息扫描兜底；StateCore 记忆蒸馏会发送原始事件，不做敏感信息扫描，但同样记进审计页、计入月预算。",
   audit: "审计",
   auditStatecore: "StateCore 记忆蒸馏",
   auditIntro: "每次调用个人 LLM API 的记录（早间简报的“今日重点”，以及完整档位下 StateCore 记忆的蒸馏）：原样发出的内容、响应、token 数和费用；被拦截或超预算的请求只记原因，没有发出任何内容。",

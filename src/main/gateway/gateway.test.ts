@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { PrivacyLevel } from "../../shared/llm";
-import { ProviderError, type ChatCall } from "./provider";
+import { estimateTokens } from "./budget";
+import { NARRATIVE_MAX_TOKENS } from "./narrative";
+import { chatBody, ProviderError, type ChatCall } from "./provider";
 import { normalizeText } from "./pseudonym";
 import { chatReply, gatewayHarness, HARNESS_NOW, sampleSource, type GatewayHarness } from "./testing";
 import type { NarrativeSource, OutboundPayload } from "./types";
@@ -403,6 +405,42 @@ describe("PrivacyGateway", () => {
     const r = await h.gateway.narrate(sampleSource());
     expect(r.status).toBe("failed");
     expect(h.audit.list()[0]).toMatchObject({ id: r.auditId, status: "failed", payloadSent: null, error: "connect ECONNREFUSED" });
+  });
+
+  it("charges a conservative cost when the request went out and then timed out, was cancelled or lost the connection", async () => {
+    for (const kind of ["timeout", "aborted", "network"] as const) {
+      h = await gatewayHarness({
+        chat: async (req) => {
+          throw new ProviderError(kind, `${kind} after send`, null, chatBody(req));
+        },
+      });
+      const r = await h.gateway.narrate(sampleSource());
+      expect(r.status).toBe("failed");
+      const [entry] = h.audit.list();
+      expect(entry.payloadSent).not.toBeNull();
+      const tokensIn = estimateTokens(entry.payloadSent!);
+      // 价格 * 1 2：输入按请求体估，输出按“今日重点”的上限 800。
+      expect(entry, kind).toMatchObject({ id: r.auditId, status: "failed", error: `${kind} after send`, tokensIn, tokensOut: NARRATIVE_MAX_TOKENS });
+      expect(entry.costUsd).toBeCloseTo((tokensIn * 1 + NARRATIVE_MAX_TOKENS * 2) / 1_000_000, 12);
+      await h.close();
+      h = null;
+    }
+  });
+
+  it("charges a request cancelled mid-flight by the app quitting, but not one the provider rejected with an error status", async () => {
+    h = await gatewayHarness();
+    h.provider.handle(() => ({ ...chatReply('{"focus":["OK"]}'), delayMs: 5_000 }));
+    const ac = new AbortController();
+    const p = h.gateway.narrate(sampleSource(), ac.signal);
+    while (h.provider.requests.length === 0) await new Promise((r) => setTimeout(r, 5));
+    ac.abort();
+    expect((await p).status).toBe("failed");
+    expect(h.audit.list()[0]).toMatchObject({ status: "failed", tokensOut: NARRATIVE_MAX_TOKENS });
+    expect(h.audit.list()[0].costUsd).toBeGreaterThan(0);
+
+    h.provider.handle(() => ({ status: 503, body: { error: "overloaded" } }));
+    expect((await h.gateway.narrate(sampleSource())).status).toBe("failed");
+    expect(h.audit.list()[0]).toMatchObject({ status: "failed", tokensOut: null, costUsd: null });
   });
 
   it("fails without sending when the saved key cannot be decrypted (loopback provider)", async () => {

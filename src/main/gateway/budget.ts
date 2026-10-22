@@ -1,5 +1,14 @@
+import type { AuditSource } from "../../shared/llm";
 import { priceFor, type PriceRule } from "../settings/settings-values";
 import { NARRATIVE_MAX_TOKENS } from "./narrative";
+
+/** StateCore 每次蒸馏调用的输出上限（它要求模型输出结构化 JSON）；发送前的预算检查按这个上限估算。gateway.ts 也导出它。 */
+export const STATECORE_MAX_TOKENS = 8192;
+
+/** 每种来源一次调用的输出上限：发送前的预算检查和“可能已计费”的保守记账都按它算。 */
+export function maxOutputTokens(source: AuditSource): number {
+  return source === "statecore" ? STATECORE_MAX_TOKENS : NARRATIVE_MAX_TOKENS;
+}
 
 /** 本地时间当月 1 日 0 点：月度预算从这里开始算。 */
 export function monthStart(now: number): number {
@@ -49,12 +58,22 @@ export function sentWithoutUsage(price: PriceRule, sentBody: string, maxOutputTo
   return { tokensIn, tokensOut: maxOutputTokens, costUsd: costUsd(price, tokensIn, maxOutputTokens) };
 }
 
-/** 启动时给上次停在 pending 的记录估花费（AuditRepo.failStalePending）。模型在价格表里没有价格时不估，记 0。 */
-export function stalePendingCost(prices: readonly PriceRule[]): (row: { model: string; payloadSent: string }) => Usage | null {
+/**
+ * 启动时给上次停在 pending 的记录估花费（AuditRepo.failStalePending）：输出按这条记录来源的上限算。
+ * 模型在价格表里没有价格时不估，记 0。
+ */
+export function stalePendingCost(prices: readonly PriceRule[]): (row: StaleRow) => Usage | null {
   return (row) => {
     const price = priceFor(prices, row.model);
-    return price ? sentWithoutUsage(price, row.payloadSent) : null;
+    return price ? sentWithoutUsage(price, row.payloadSent, maxOutputTokens(row.source)) : null;
   };
+}
+
+/** 启动时停在 pending、带请求体的一条记录（交给 stalePendingCost 估花费）。 */
+export interface StaleRow {
+  model: string;
+  payloadSent: string;
+  source: AuditSource;
 }
 
 export type BudgetDecision =

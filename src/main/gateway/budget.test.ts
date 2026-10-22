@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart, sentWithoutUsage, stalePendingCost } from "./budget";
+import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart, sentWithoutUsage, stalePendingCost, STATECORE_MAX_TOKENS } from "./budget";
 import { NARRATIVE_MAX_TOKENS } from "./narrative";
 
 const price = { pattern: "*", inputPerMTok: 2, outputPerMTok: 8 };
@@ -31,8 +31,13 @@ describe("budget", () => {
       tokensIn: estimateTokens(body), tokensOut: NARRATIVE_MAX_TOKENS, costUsd: costUsd(price, estimateTokens(body), NARRATIVE_MAX_TOKENS),
     });
     const estimate = stalePendingCost([{ pattern: "gpt-*", inputPerMTok: 2, outputPerMTok: 8 }]);
-    expect(estimate({ model: "gpt-x", payloadSent: body })).toEqual(sentWithoutUsage(price, body));
-    expect(estimate({ model: "other", payloadSent: body })).toBeNull();
+    expect(estimate({ model: "gpt-x", payloadSent: body, source: "narrative" })).toEqual(sentWithoutUsage(price, body));
+    expect(estimate({ model: "other", payloadSent: body, source: "narrative" })).toBeNull();
+    // StateCore 的遗留 pending 按它自己的输出上限（8192）估，不是“今日重点”的 800。
+    expect(estimate({ model: "gpt-x", payloadSent: body, source: "statecore" })).toEqual({
+      tokensIn: estimateTokens(body), tokensOut: STATECORE_MAX_TOKENS, costUsd: costUsd(price, estimateTokens(body), STATECORE_MAX_TOKENS),
+    });
+    expect(STATECORE_MAX_TOKENS).toBe(8192);
   });
 
   it("prices usage per million tokens", () => {
