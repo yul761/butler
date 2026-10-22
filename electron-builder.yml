@@ -1,0 +1,47 @@
+# 不签名的安装包（设计文档 2.1、12 节）。发布（推 tag、建 release）由用户完成：publish 关掉，也不配置自动更新。
+appId: io.github.yul761.butler
+productName: Butler
+copyright: Copyright © 2026 Yuchen Lin
+directories:
+  output: dist
+  # 图标等打包资源的目录（没有就用 Electron 默认图标）。不能用 build/：那里是 hook 和记忆 MCP 的构建产物。
+  buildResources: build-resources
+files:
+  - out/**/*
+  - package.json
+# 原生模块不能在 asar 里执行。
+asarUnpack:
+  - "**/node_modules/node-pty/**"
+extraResources:
+  - from: build/hook
+    to: hook
+    filter:
+      - butler-hook
+      - butler-hook.exe
+  - from: build/memory-mcp
+    to: memory-mcp
+    filter:
+      - statecore-mcp.cjs
+# spawn-helper 的执行位、macOS 的 ad-hoc 签名、resources 的完整性检查。
+afterPack: scripts/after-pack.cjs
+publish: null
+# 不配置 electronFuses：记忆 MCP 靠 ELECTRON_RUN_AS_NODE 运行，RunAsNode 必须保持可用。
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  category: public.app-category.developer-tools
+  # 不用开发者证书签名；after-pack.cjs 做 ad-hoc 签名（arm64 上完全不签名的 app 无法启动）。
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

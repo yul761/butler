@@ -14,9 +14,10 @@ describe("APP_ID", () => {
     expect(APP_ID).toBe("io.github.yul761.butler");
   });
 
-  it("matches the electron-builder appId once electron-builder.yml exists (Task 7)", () => {
+  // 计划 5 任务 7 之后 electron-builder.yml 一定存在：文件缺失或 appId 不同都算失败，不能悄悄跳过。
+  it("matches the electron-builder appId", () => {
     const file = join(__dirname, "../../electron-builder.yml");
-    if (!existsSync(file)) return;
+    expect(existsSync(file), `${file} is missing`).toBe(true);
     const m = /^appId:\s*["']?([^"'\s#]+)["']?/m.exec(readFileSync(file, "utf8"));
     expect(m?.[1]).toBe(APP_ID);
   });

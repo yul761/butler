@@ -159,6 +159,15 @@ export default tseslint.config(
     files: ["scripts/**/*.mjs"],
     languageOptions: { globals: { process: "readonly", console: "readonly" } },
   },
+  // CommonJS 的脚本（electron-builder 的 afterPack、E2E 的假 claude）：Node 的全局变量，允许 require。
+  {
+    files: ["scripts/**/*.cjs", "e2e/**/*.cjs"],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: { require: "readonly", module: "writable", exports: "writable", process: "readonly", console: "readonly", __dirname: "readonly", Buffer: "readonly", setTimeout: "readonly" },
+    },
+    rules: { "@typescript-eslint/no-require-imports": "off" },
+  },
   // 计划 3 遗留：eval / new Function / 字符串 setTimeout 能在运行时拼出任何代码，出口规则看不到。gateway 里也一样禁止。
   // no-implied-eval 只认声明过的全局：这里声明 setTimeout / setInterval，否则字符串形式的定时器抓不到。
   {
