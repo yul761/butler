@@ -169,4 +169,12 @@ Triage per the plan-2 final review: items marked "→ final wave" were fixed in 
 - StateCore wiring must build its env with `statecoreEnv()` (src/main/gateway/statecore-env.ts) → plan 4
 - Low-impact minors not taken (tombstones in memory, INSERT OR IGNORE hiding CHECK violations, ROLLBACK TO masking the original error, dangling symlinks, mid-turn isMeta capture miss, server-name skip false negative, unclaimed item key changes daily, 30-minute DST test, grapheme clusters at the prefill limit) → revisit with E2E in plan 4
 - Nested `claude --resume/-c` re-links (accepted per plan 1 F2)
-- Plan 3 parked items: see the plan-3 SDD ledger summary appended by the controller.
+- Plan 3 parked items (from the plan-3 SDD ledger):
+  - Project MCP trust (Task 5): APFS Unicode case-fold alias defended only by the realpath check (add a macOS regression test); bind the read fd to the trust check (dev/ino, O_NOFOLLOW|O_NONBLOCK); `git -c core.fsmonitor=false` app-wide; random temp name with `wx`; git absolute path on Windows; non-git cwd under a parent repo trusted (by design)
+  - Scanner (Task 10): custom `ticketPattern` ReDoS validation in settings; lowercase / spaced ticket ids (`proj-12`, `PROJ - 12`); octal-ish IPs; underscore hosts; IDN domains; 2-label `.local` / `.private` hosts and uppercase ambiguous-TLD hosts pass; worst case ~0.7 s per 100 KB (linear)
+  - Pseudonymizer (Task 9): substring over-replacement (`api` in `rapid`); names without accents/dots, first-name-only and traditional/simplified mismatches are not matched (documented in §7.4); English narrative sentence dropped wholesale on one bad placeholder (fails safe)
+  - Gateway / provider (Tasks 11, 13): a 2xx whose body read is cut by abort or a network error is not costed; scrub misses base64 / line-split / partial key echoes
+  - Narrative source (Task 15): PR orgs shorter than 3 chars are not registered; handoff scan capped at 1000 per ticket; a repo literally named like a stoplisted word (`api`, `web`) relies on the scanner
+  - Audit / settings (Tasks 7, 8, 16, 17, 18): `finish()` lacks a status guard; case-only term dedupe untested; token estimate not conservative for non-CJK scripts; `llmStatus` stays cached after the keychain breaks mid-session (restart shows it); audit page resets to page 1 on every state change; pretty-printed JSON is re-serialised (not byte-verbatim); a rejected key is wiped from the input
+  - Minors from Tasks 1–4: health.test fake help string hand-maintained; `~` not expanded in BUTLER_HOME; localized `hint:` line with user LC_ALL; same-field draft lost during an in-flight save
+  - Manual check: macOS confirm dialog height when the outbound body is long (Task 16)
