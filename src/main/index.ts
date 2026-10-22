@@ -59,6 +59,7 @@ import { TicketService } from "./tickets/ticket-service";
 import { canSend } from "./safe-send";
 import { createQuitState } from "./quit-state";
 import { circleBitmap, TRAY_IMAGES } from "./tray-bitmap";
+import { CSP_VIOLATION_LOG_PREFIX, isCspViolationMessage } from "./csp-log";
 
 const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
 /** hook 发现没有 ticket 的 session 后，稍等片刻再扫描磁盘（合并连续事件）。 */
@@ -159,7 +160,7 @@ function createWindow(): BrowserWindow {
   w.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   // CSP 拦下了什么就记一笔（任务 6）：界面某处空白时先看这里。
   w.webContents.on("console-message", (e) => {
-    if (/Content Security Policy/i.test(e.message)) logger(`renderer CSP violation: ${e.message}`);
+    if (isCspViolationMessage(e.message)) logger(`${CSP_VIOLATION_LOG_PREFIX} ${e.message}`);
   });
   const dev = devRendererUrl();
   const loaded = dev ? w.loadURL(dev) : w.loadFile(join(__dirname, "../renderer/index.html"));
@@ -278,10 +279,13 @@ async function bootstrap(): Promise<void> {
       logger("initial health refresh failed", e);
     },
   );
+  /** will-quit 关数据库之前置位：之后才到的终端退出事件（killAll 是异步的）不再碰数据库。没处理的空 session 下次启动时清掉。 */
+  let closing = false;
   const pty = new PtyManager(nodePtyFactory, {
     data: (id, data) => safeSend(IPC.ptyData, id, data),
     exit: (id, code) => {
       safeSend(IPC.ptyExit, id, code);
+      if (closing) return;
       try {
         sessionService.handleExit(id);
       } catch (e) {
@@ -317,6 +321,13 @@ async function bootstrap(): Promise<void> {
     syncMemory: (key) => void memory.syncTicket(key),
     log: logger,
   });
+  // 上次退出时终端还开着（退出事件来得比关数据库晚）：那时没删掉的空 session 在这里补删。
+  try {
+    const pruned = sessionService.pruneEmptySessions();
+    if (pruned > 0) logger(`pruned ${pruned} empty session(s) left from the last quit`);
+  } catch (e) {
+    logger("pruning empty sessions failed", e);
+  }
 
   const transcriptMtime = (id: string): number | null => {
     const file = findTranscript(paths.claudeProjects, id);
@@ -584,6 +595,7 @@ async function bootstrap(): Promise<void> {
     inbox.stop();
     pty.killAll();
     tray?.destroy();
+    closing = true;
     db.close();
   });
 }

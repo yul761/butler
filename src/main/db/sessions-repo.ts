@@ -117,6 +117,14 @@ export class SessionsRepo {
     return rows.map(toSession);
   }
 
+  /** Butler 新建、还没有第一句话、也没被 /clear 替换的 session：handleExit 和启动时清理空 session 的候选。 */
+  listEmptyButler(): Session[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM sessions WHERE origin = 'butler' AND (first_prompt IS NULL OR first_prompt = '') AND replaced_by IS NULL ORDER BY id`)
+      .all() as unknown as SessionRow[];
+    return rows.map(toSession);
+  }
+
   setTicket(id: string, ticketKey: string | null): void {
     this.db.prepare(`UPDATE sessions SET ticket_key = ? WHERE id = ?`).run(ticketKey, id);
   }

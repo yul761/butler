@@ -154,10 +154,29 @@ export class SessionService {
    */
   handleExit(termId: string): void {
     const s = this.d.sessions.get(termId);
-    if (!s || s.origin !== "butler" || s.firstPrompt || s.replacedBy) return;
+    if (s) this.pruneIfEmpty(s);
+  }
+
+  /**
+   * 启动时调用一次：上次退出时终端还开着，退出事件来得比关数据库晚，handleExit 没跑，空 session 留了下来。
+   * 规则和 handleExit 一样；终端还开着的（以及它 /clear 之后的 head）不动。返回删掉的行数。
+   */
+  pruneEmptySessions(): number {
+    const open = new Set([...this.d.pty.openIds(), ...this.openHeads().keys()]);
+    let pruned = 0;
+    for (const s of this.d.sessions.listEmptyButler()) {
+      if (!open.has(s.id) && this.pruneIfEmpty(s)) pruned++;
+    }
+    return pruned;
+  }
+
+  /** Butler 新建、没有第一句话、没被替换、确认没有 transcript 的 session：删掉并返回 true。 */
+  private pruneIfEmpty(s: Session): boolean {
+    if (s.origin !== "butler" || s.firstPrompt || s.replacedBy) return false;
     // 只有确认没有记录才删；读不了目录（unknown）时保留这一行。
-    if (this.d.transcriptState(termId) !== "absent") return;
-    this.d.sessions.delete(termId);
+    if (this.d.transcriptState(s.id) !== "absent") return false;
+    this.d.sessions.delete(s.id);
+    return true;
   }
 
   ticketViews(): TicketView[] {

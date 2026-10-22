@@ -306,3 +306,39 @@ describe("SessionService orphan rows", () => {
     expect(sessions.get("new-1")).not.toBeNull();
   });
 });
+
+describe("SessionService.pruneEmptySessions (startup, after a quit that skipped handleExit)", () => {
+  const row = (id: string, extra: Partial<{ origin: "butler" | "discovered"; firstPrompt: string }> = {}) => ({
+    id, ticketKey: "PROJ-1", cwd: "/w", origin: extra.origin ?? ("butler" as const), firstPrompt: extra.firstPrompt ?? null, createdAt: 1,
+  });
+
+  it("deletes only Butler sessions with no prompt, no replacement and no transcript", async () => {
+    const { service, sessions } = await setup({ transcripts: ["has-transcript"] });
+    sessions.insertIfAbsent(row("empty"));
+    sessions.insertIfAbsent(row("prompted", { firstPrompt: "修登录" }));
+    sessions.insertIfAbsent(row("discovered", { origin: "discovered" }));
+    sessions.insertIfAbsent(row("has-transcript"));
+    sessions.insertIfAbsent(row("cleared"));
+    sessions.insertIfAbsent(row("after-clear", { firstPrompt: "继续" }));
+    sessions.setReplacedBy("cleared", "after-clear");
+    expect(service.pruneEmptySessions()).toBe(1);
+    expect(sessions.get("empty")).toBeNull();
+    for (const id of ["prompted", "discovered", "has-transcript", "cleared", "after-clear"]) expect(sessions.get(id), id).not.toBeNull();
+  });
+
+  it("keeps rows whose transcript state is unknown", async () => {
+    const { service, sessions } = await setup({ transcriptState: "unknown" });
+    sessions.insertIfAbsent(row("empty"));
+    expect(service.pruneEmptySessions()).toBe(0);
+    expect(sessions.get("empty")).not.toBeNull();
+  });
+
+  it("never deletes a session whose terminal is still open", async () => {
+    const { service, sessions } = await setup({ transcripts: [] });
+    await service.open({ ticketKey: "PROJ-1" });
+    sessions.insertIfAbsent(row("orphan"));
+    expect(service.pruneEmptySessions()).toBe(1);
+    expect(sessions.get("new-1")).not.toBeNull();
+    expect(sessions.get("orphan")).toBeNull();
+  });
+});

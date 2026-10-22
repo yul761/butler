@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { CSP_VIOLATION_LOG_PREFIX, isCspViolationMessage } from "../src/main/csp-log";
 import { S, STATUS_LABEL } from "../src/renderer/src/strings";
 import { completeWizard, expect, terminalText, test } from "./fixtures";
 
@@ -73,8 +74,8 @@ test("new ticket → session → hook → handoff → memory → morning brief �
 
     // 7. CSP 没有拦下任何东西（任务 6 的运行时检查，xterm 在其中）：渲染进程的控制台，以及主进程的日志——
     //    附上 console 监听之前（页面加载时）的违规只在日志里。日志第一次写入时才创建，没有这个文件就是什么都没记。
-    expect(messages.filter((m) => /Content Security Policy/i.test(m))).toEqual([]);
-    expect(existsSync(mainLog) ? readFileSync(mainLog, "utf8") : "").not.toMatch(/CSP violation/i);
+    expect(messages.filter(isCspViolationMessage)).toEqual([]);
+    expect(existsSync(mainLog) ? readFileSync(mainLog, "utf8") : "").not.toContain(CSP_VIOLATION_LOG_PREFIX);
   } catch (e) {
     // 失败时把假 claude 的记录和 Butler 的日志打出来，CI 里直接能看（沙盒也会留下）。
     for (const f of [s.fakeLog, mainLog]) {
