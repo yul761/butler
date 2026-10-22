@@ -37,7 +37,9 @@ export async function nightlyJob(d: DailyJobDeps, slot?: number | null): Promise
   const forToday = slot === undefined || slot === null || localDate(slot) === localDate(startedAt);
   if (brief.evening.length > 0 && forToday && !d.aborted?.()) d.onEvening(brief);
   // 最后一步，不 await（审查 I1）：蒸馏可能要很多次 LLM 调用，不能挡住调度的串行链——
-  // 晚间任务的结果要先记下，补跑时紧接着的早间简报也不能等它。失败（包括同步抛错）只到这里为止。
+  // 晚间任务的结果要先记下，补跑时紧接着的早间简报不用等整轮蒸馏。但“今日重点”和蒸馏共用 gateway 的串行链：
+  // 早间的 narrate 可能要排在一个正在进行的 StateCore 调用后面，最多等这一个调用（上限 180 秒），不会等整轮（最终审查 10，接受）。
+  // 失败（包括同步抛错）只到这里为止。
   if (d.distill && !d.aborted?.()) {
     const distill = d.distill;
     void Promise.resolve()

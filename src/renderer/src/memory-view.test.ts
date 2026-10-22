@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MemoryItem, WhyEntry } from "../../shared/memory";
-import { memorySections, trailingDebounce, whyLines } from "./memory-view";
+import { memoryChangeConcerns, memorySections, trailingDebounce, whyLines } from "./memory-view";
 import { S } from "./strings";
 
 const item = (text: string, group = "Notes", factId: string | null = "id"): MemoryItem => ({ factKey: text, factId, text, createdAt: null, group });
@@ -36,6 +36,14 @@ describe("memory view helpers", () => {
       { text: "用 MySQL", when: "2026-10-21", state: "current", note: null },
       { text: "被淘汰的笔记", when: "2026-10-21", state: "retired", note: S.whyRetiredReason("cap_evicted") },
     ]);
+  });
+});
+
+describe("memoryChangeConcerns (final review 4: the memory tab reloads only on memory events for its ticket)", () => {
+  it("reloads for its own ticket and for a memory switch change, not for other tickets", () => {
+    expect(memoryChangeConcerns("PROJ-1", "PROJ-1")).toBe(true);
+    expect(memoryChangeConcerns(null, "PROJ-1")).toBe(true);
+    expect(memoryChangeConcerns("PROJ-2", "PROJ-1")).toBe(false);
   });
 });
 

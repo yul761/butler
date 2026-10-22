@@ -53,7 +53,14 @@ export function whyLines(chain: WhyEntry[], formatTime: (iso: string) => string)
 }
 
 /**
- * 尾部防抖：连续触发只在最后一次之后 ms 毫秒执行一次。stateChanged 在终端输出、hook 事件时很频繁，
+ * 记忆事件（memory:changed）是不是和这个 ticket 的记忆标签有关：changed 是同步过的 ticket，null 表示记忆开关变了（所有 ticket）。
+ */
+export function memoryChangeConcerns(changed: string | null, ticketKey: string): boolean {
+  return changed === null || changed === ticketKey;
+}
+
+/**
+ * 尾部防抖：连续触发只在最后一次之后 ms 毫秒执行一次。启动和打开记忆时会连着同步很多 ticket，
  * 每次重读都会打开 StateCore，所以记忆标签用它合并。cancel() 在卸载时调用。
  */
 export function trailingDebounce(fn: () => void, ms: number): { (): void; cancel: () => void } {

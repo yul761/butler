@@ -34,6 +34,8 @@ export interface SessionServiceDeps {
   baseEnv: NodeJS.ProcessEnv;
   /** 写好这个 ticket 的记忆 --mcp-config 文件并返回路径；记忆关闭或 bundle 不存在时返回 null（设计文档 8.4）。 */
   mcpConfig?: (ticketKey: string) => string | null;
+  /** 要打开这个 ticket 的 session 时调用：把它的记忆补同步一次（排进记忆的同步队列，不等它）。 */
+  syncMemory?: (ticketKey: string) => void;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -80,6 +82,7 @@ export class SessionService {
     }
 
     const workDir = this.d.ticketService.workDir(ticket);
+    this.syncMemory(ticket.key);
     const mcpConfigPath = this.mcpConfigFor(ticket.key, claudePath);
     let termId: string;
     let cwd: string;
@@ -110,6 +113,15 @@ export class SessionService {
     }
     if (prefill) this.prefill(termId, prefill);
     return { ok: true, termId, alreadyOpen: false };
+  }
+
+  /** 记忆补同步（最终审查 6）：失败只写日志，session 照常打开。 */
+  private syncMemory(ticketKey: string): void {
+    try {
+      this.d.syncMemory?.(ticketKey);
+    } catch (e) {
+      this.d.log?.(`memory sync for ${ticketKey} not started`, e);
+    }
   }
 
   /** 这个 ticket 的记忆 MCP 配置。写不出来、或者在 Windows 的 .cmd 下无法安全传递时不挂，session 照常打开。 */

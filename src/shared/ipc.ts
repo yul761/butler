@@ -39,6 +39,7 @@ export const IPC = {
   auditList: "audit:list",
   memoryView: "memory:view",
   memoryWhy: "memory:why",
+  memoryChanged: "memory:changed",
   appNavigate: "app:navigate",
   appAutostartGet: "app:autostartGet",
   appAutostartSet: "app:autostartSet",
@@ -59,6 +60,6 @@ export const INVOKE_CHANNELS: readonly string[] = [
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];
 /** 主进程 → 渲染进程。 */
-export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.appNavigate];
+export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.memoryChanged, IPC.appNavigate];
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };

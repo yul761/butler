@@ -1,7 +1,6 @@
 import { dialog, ipcMain, type BrowserWindow } from "electron";
 import { ITEM_MARKS, type BriefKind, type BriefView, type ItemMark } from "../../shared/brief";
 import { IPC } from "../../shared/ipc";
-import { EDITABLE_SETTINGS, isEditableSetting, type EditableSettings } from "../../shared/settings";
 import {
   FOLLOWUP_STATUSES, type AutostartState, type CreateTicketInput, type FollowupStatus, type JobStateView, type McpProbe, type OpenSessionRequest, type TicketStatus,
 } from "../../shared/types";
@@ -23,10 +22,11 @@ import { addDays, localDate } from "../schedule/calendar";
 import type { Scheduler } from "../schedule/scheduler";
 import type { PtyManager } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
-import { checkBranchTemplateFits, normalizeSetting, SettingError } from "../settings/settings-values";
+import { memoryOn } from "../settings/settings-values";
 import { TicketError, type TicketService } from "../tickets/ticket-service";
 import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
+import { settingsHandlers } from "./settings-handlers";
 import { apiKeyArg, auditCursorArg, boolArg, termsArg } from "./validate";
 
 export interface IpcDeps {
@@ -58,6 +58,8 @@ export interface IpcDeps {
   window: () => BrowserWindow | null;
   now: () => number;
   notify: () => void;
+  /** 记忆开关真的变了之后调用（on 是新的状态）：通知记忆标签，打开时补同步一次。 */
+  memoryToggled: (on: boolean) => void;
   /** 退出已开始：后台任务的 IPC 直接返回。 */
   aborted: () => boolean;
 }
@@ -74,10 +76,6 @@ export function registerIpc(d: IpcDeps): void {
     const now = d.now();
     d.followups.setStatus(id, status, now, status === "snoozed" ? addDays(localDate(now), 1) : null);
     d.rederive(f.ticketKey);
-  };
-  const settingKey = (key: unknown) => {
-    if (typeof key !== "string" || !isEditableSetting(key)) throw new SettingError(`这个设置不能在这里修改：${String(key)}`);
-    return key;
   };
 
   handle(IPC.ticketsList, () => d.sessionService.ticketViews());
@@ -171,22 +169,10 @@ export function registerIpc(d: IpcDeps): void {
     return d.jobs.get(JOB_NIGHTLY);
   });
 
-  handle(IPC.settingsGet, (): EditableSettings => Object.fromEntries(EDITABLE_SETTINGS.map((k) => [k, d.settings.get(k)])) as EditableSettings);
-  handle(IPC.settingsSet, async (key: string, value: unknown) => {
-    const k = settingKey(key);
-    const next = normalizeSetting(k, String(value ?? ""));
-    if (k === "branchTemplate") checkBranchTemplateFits(next, d.settings.get("ticketPattern"));
-    if (k === "ticketPattern") checkBranchTemplateFits(d.settings.get("branchTemplate"), next);
-    d.settings.set(k, next);
-    if (k === "claudePath") await d.health.refresh();
-    d.notify();
-  });
-  handle(IPC.settingsReset, async (key: string) => {
-    const k = settingKey(key);
-    d.settings.reset(k);
-    if (k === "claudePath") await d.health.refresh();
-    d.notify();
-  });
+  const settingsIpc = settingsHandlers(d);
+  handle(IPC.settingsGet, settingsIpc.get);
+  handle(IPC.settingsSet, settingsIpc.set);
+  handle(IPC.settingsReset, settingsIpc.reset);
   handle(IPC.settingsDetectTrackerTools, () => d.detectTrackerTools());
 
   // 个人 API：key 只进不出，界面只拿到打码后的 LlmStatus。参数一律在运行时检查（渲染进程不可信）。
@@ -211,7 +197,7 @@ export function registerIpc(d: IpcDeps): void {
     auditPage({ settings: d.settings, keys: d.keys, audit: d.audit, now: d.now }, auditCursorArg(beforeId)));
 
   // StateCore 记忆（设计文档 8.4）：只读。
-  const mem = memoryHandlers(d);
+  const mem = memoryHandlers({ tickets: d.tickets, memory: d.memory, enabled: () => memoryOn(d.settings) });
   handle(IPC.memoryView, mem.view);
   handle(IPC.memoryWhy, mem.why);
 

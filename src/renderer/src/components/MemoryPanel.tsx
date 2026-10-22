@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MemoryView, WhyEntry } from "../../../shared/memory";
 import { api } from "../api";
-import { memorySections, trailingDebounce, whyLines } from "../memory-view";
+import { memoryChangeConcerns, memorySections, trailingDebounce, whyLines } from "../memory-view";
 import { S } from "../strings";
 
-/** stateChanged 很频繁（终端输出、hook 事件），重读记忆要打开 StateCore，所以合并成一次。 */
+/** 启动补同步、打开记忆时的全量同步会连着来很多次记忆事件；重读要打开 StateCore，所以合并成一次。 */
 const RELOAD_DEBOUNCE_MS = 500;
 
 function formatIso(iso: string): string {
@@ -39,14 +39,17 @@ export function MemoryPanel({ ticketKey }: { ticketKey: string }) {
     setWhyError(null);
     void load();
     const reload = trailingDebounce(() => void load(), RELOAD_DEBOUNCE_MS);
-    const off = api.onStateChanged(reload);
+    // 只听记忆专用的事件（最终审查 4）：stateChanged 在 session 进行中很频繁，每次都重新打开 StateCore 会和 claude 里挂的 MCP 抢写锁。
+    const off = api.onMemoryChanged((changed) => {
+      if (memoryChangeConcerns(changed, ticketKey)) reload();
+    });
     return () => {
       loadSeq.current++; // 卸载或换 ticket 后，在途的响应不再写状态
       whySeq.current++;
       reload.cancel();
       off();
     };
-  }, [load]);
+  }, [load, ticketKey]);
 
   async function toggleWhy(id: string) {
     setWhyError(null);

@@ -375,6 +375,11 @@ export function thresholds(s: SettingsRepo): Thresholds {
   };
 }
 
+/** 记忆开关（memoryEnabled）：只有明确存成 "0" 才算关（默认开）。所有读这个开关的地方都用它。 */
+export function memoryOn(s: Pick<SettingsRepo, "get">): boolean {
+  return s.get("memoryEnabled") !== "0";
+}
+
 export function trackerTools(s: SettingsRepo): string[] {
   // 读取时再过滤一次：存储的值损坏或被改过，也不会把任意 flag / 工具带进 --allowedTools。
   return parseToolList(s.get("trackerTools")).filter((t) => TRACKER_TOOL_RE.test(t));

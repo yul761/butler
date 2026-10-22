@@ -4,6 +4,7 @@ import { handoffCommandPath, handoffCommandStatus, installHandoffCommand, uninst
 import { probeClaude } from "../claude/capabilities";
 import { locateClaude, readLoginShellPath } from "../claude/locate";
 import type { SettingsRepo } from "../db/settings-repo";
+import { memoryOn } from "../settings/settings-values";
 import type { ButlerPaths } from "../paths";
 import type { ExecText } from "../util/exec";
 import { withPath } from "../util/env";
@@ -68,7 +69,7 @@ export class HealthService {
       butlerHome: this.d.paths.home,
       claudeSettingsPath: this.d.paths.claudeSettings,
       memory: {
-        enabled: this.d.settings.get("memoryEnabled") !== "0",
+        enabled: memoryOn(this.d.settings),
         dataDir: this.d.paths.statecore,
         mcpBundle: !!this.d.memoryMcpScript && existsSync(this.d.memoryMcpScript),
         statecorePlugin,

@@ -18,6 +18,7 @@ async function setup(opts: {
   ready?: () => Promise<void>;
   factory?: PtyFactory;
   mcpConfig?: (ticketKey: string) => string | null;
+  syncMemory?: (ticketKey: string) => void;
   platform?: NodeJS.Platform;
 } = {}) {
   const stateOf = (id: string): TranscriptState =>
@@ -42,6 +43,7 @@ async function setup(opts: {
     platform: opts.platform ?? "darwin",
     baseEnv: { HOME: "/h" },
     mcpConfig: opts.mcpConfig,
+    syncMemory: opts.syncMemory,
     log: (m) => logs.push(m),
   });
   const repo = makeRepo();
@@ -79,6 +81,29 @@ describe("SessionService.open", () => {
     await shim.service.open({ ticketKey: "PROJ-1" });
     expect(shim.spawned[0].args).not.toContain("--mcp-config");
     expect(shim.logs.some((l) => l.includes("memory MCP not mounted for PROJ-1"))).toBe(true);
+  });
+
+  it("asks for a memory catch-up sync of the ticket on every new or resumed session it starts (final review 6)", async () => {
+    const synced: string[] = [];
+    const { service, sessions } = await setup({ syncMemory: (key) => synced.push(key) });
+    await service.open({ ticketKey: "PROJ-1" });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1 });
+    await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
+    // 已经开着的 session 只是切过去，不再同步；不存在的 ticket 什么都不做。
+    await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
+    await service.open({ ticketKey: "NOPE-1" });
+    expect(synced).toEqual(["PROJ-1", "PROJ-1"]);
+  });
+
+  it("opens the session anyway when starting the memory sync throws, and only logs it", async () => {
+    const { service, spawned, logs } = await setup({
+      syncMemory: () => {
+        throw new Error("queue gone");
+      },
+    });
+    expect(await service.open({ ticketKey: "PROJ-1" })).toMatchObject({ ok: true });
+    expect(spawned).toHaveLength(1);
+    expect(logs.some((l) => l.includes("memory sync for PROJ-1 not started"))).toBe(true);
   });
 
   it("starts a new session in the ticket workdir with Butler env", async () => {

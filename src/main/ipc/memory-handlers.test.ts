@@ -3,10 +3,10 @@ import type { MemoryView } from "../../shared/memory";
 import { memoryHandlers } from "./memory-handlers";
 
 const view: MemoryView = { enabled: true, scope: "ticket:PROJ-1", handoff: null, items: [], error: null };
-function setup() {
+function setup(enabled = true) {
   const memory = { view: vi.fn(async () => view), why: vi.fn(async () => []) };
   const tickets = { get: vi.fn((k: string) => (k === "PROJ-1" ? ({ key: k } as never) : null)) };
-  return { memory, h: memoryHandlers({ tickets, memory }) };
+  return { memory, h: memoryHandlers({ tickets, memory, enabled: () => enabled }) };
 }
 
 describe("memory IPC handlers", () => {
@@ -24,6 +24,13 @@ describe("memory IPC handlers", () => {
     expect(await h.why("NOPE-9", "abc-1")).toBeNull();
     expect(memory.view).not.toHaveBeenCalled();
     expect(memory.why).not.toHaveBeenCalled();
+  });
+
+  it("reports the real memory setting for an unknown ticket (final review 7)", async () => {
+    expect((await setup(true).h.view("NOPE-9")).enabled).toBe(true);
+    const off = setup(false);
+    expect(await off.h.view("NOPE-9")).toEqual({ enabled: false, scope: "ticket:NOPE-9", handoff: null, items: [], error: null });
+    expect(off.memory.view).not.toHaveBeenCalled();
   });
 
   it("rejects bad arguments before touching anything", async () => {

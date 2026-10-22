@@ -22,6 +22,12 @@ describe("IPC whitelist", () => {
     }
   });
 
+  it("exposes the memory-changed notification as an event only (final review 4)", () => {
+    expect(EVENT_CHANNELS).toContain(IPC.memoryChanged);
+    expect(INVOKE_CHANNELS).not.toContain(IPC.memoryChanged);
+    expect(SEND_CHANNELS).not.toContain(IPC.memoryChanged);
+  });
+
   it("exposes the autostart channels as invoke-only", () => {
     for (const c of [IPC.appAutostartGet, IPC.appAutostartSet]) expect(INVOKE_CHANNELS).toContain(c);
   });

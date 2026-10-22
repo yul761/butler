@@ -49,7 +49,7 @@ import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, tra
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
-import { llmConfig, scheduleConfig, SettingError } from "./settings/settings-values";
+import { llmConfig, memoryOn, scheduleConfig, SettingError } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
 import { N } from "./strings";
 import { TicketService } from "./tickets/ticket-service";
@@ -241,10 +241,10 @@ async function bootstrap(): Promise<void> {
     handoffs,
     followups,
     sync: new MemorySyncRepo(db),
-    enabled: () => settings.get("memoryEnabled") !== "0",
+    enabled: () => memoryOn(settings),
     now: Date.now,
-    // 记忆标签开着时能看到新写入的内容（notify 在后面定义，这里只在调用时取用）。
-    onSynced: () => notify(),
+    // 记忆标签开着时能看到新写入的内容：只发记忆专用的事件，标签不跟着每次 stateChanged 重新打开 StateCore（最终审查 4）。
+    onSynced: (key) => safeSend(IPC.memoryChanged, key),
     log: logger,
   });
   const ticketService = new TicketService({ tickets, settings, now: Date.now });
@@ -273,7 +273,7 @@ async function bootstrap(): Promise<void> {
   let memoryMcpMissingLogged = false;
   /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。 */
   const memoryMcpConfig = (ticketKey: string): string | null => {
-    if (settings.get("memoryEnabled") === "0") return null;
+    if (!memoryOn(settings)) return null;
     if (!existsSync(memoryMcpScript)) {
       if (!memoryMcpMissingLogged) logger(`memory MCP bundle missing at ${memoryMcpScript}; sessions start without memory (run pnpm build:memory-mcp)`);
       memoryMcpMissingLogged = true;
@@ -292,6 +292,8 @@ async function bootstrap(): Promise<void> {
     platform: process.platform,
     baseEnv: process.env,
     mcpConfig: memoryMcpConfig,
+    // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
+    syncMemory: (key) => void memory.syncTicket(key),
     log: logger,
   });
 
@@ -529,6 +531,11 @@ async function bootstrap(): Promise<void> {
     window: () => win,
     now: Date.now,
     notify,
+    memoryToggled: (on) => {
+      safeSend(IPC.memoryChanged, null);
+      // 记忆从关变成开：关着的时候没写进去的补同步一次（最终审查 6）。永不 reject。
+      if (on) memory.syncAll().catch((e: unknown) => logger("memory catch-up sync failed", e));
+    },
     aborted: () => headlessAbort.signal.aborted,
   });
 
