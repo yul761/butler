@@ -21,7 +21,7 @@ const NETWORK_PACKAGES = [
 const NETWORK_GLOBALS = ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "WebTransport", "RTCPeerConnection"];
 /** 动态 import / require 的模块名（esquery 的正则里不能有 /）。 */
 const BANNED_BUILTINS = [...NETWORK_BUILTINS, ...LOADER_BUILTINS];
-const DYNAMIC_MODULES = `/^(node:)?(${BANNED_BUILTINS.join("|")}|undici|axios|got|openai|ws|electron-updater|socket.io-client|https-proxy-agent)(\\/.*)?$/`;
+const DYNAMIC_MODULES = `/^(node:)?(${BANNED_BUILTINS.join("|")}|undici|axios|got|openai|ws|electron-updater|socket.io-client|https-proxy-agent|statecore-mcp)(\\/.*)?$/`;
 const ELECTRON_MODULE = "/^electron(\\/.*)?$/";
 const ELECTRON_NET_NAMES = `/^(${ELECTRON_NETWORK.join("|")})$/`;
 /** 能拿到模块加载器 / 原生绑定的属性（process.binding、process.mainModule……），点号和字符串下标都算。 */
@@ -30,6 +30,15 @@ const memberNamed = (names) => `:matches([computed=false][property.name=${names}
 /** 规则覆盖的所有源码后缀。 */
 const SOURCE_FILES = ["**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"];
 const TEST_FILES = ["**/*.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"];
+
+/**
+ * StateCore（statecore-mcp）自带联网的 http 后端，还会按环境变量（FEATURE_LLM / MODEL_*）直接调用模型。
+ * 只有这几处能用它：主进程的适配层 src/main/memory/statecore.ts（环境变量由 statecoreEnv() 生成，模型只能是 PrivacyGateway 给的）、
+ * 它所在目录的测试，以及给 claude 挂载的 MCP 入口 memory-mcp/entry.ts（先清掉环境变量里的 key）。见计划 4 Ruling R1。
+ */
+const STATECORE_MESSAGE = "StateCore 只能经 src/main/memory/statecore.ts 或 memory-mcp/entry.ts 使用（计划 4 R1：模型 key 不能绕过 PrivacyGateway）。";
+const STATECORE_ENTRY_FILES = ["src/main/memory/statecore.ts", "memory-mcp/entry.ts"];
+const STATECORE_TEST_FILES = ["src/main/memory/**/*.test.ts"];
 
 /**
  * gateway 的内部模块：直接发请求的 provider、测试用假服务器 testing，以及假名化 / 扫描 / 投影 / 提示词。
@@ -49,10 +58,12 @@ const egressRules = {
         ...BANNED_BUILTINS.flatMap((m) => [m, `node:${m}`]).map((name) => ({ name, message: EGRESS_MESSAGE })),
         ...NETWORK_PACKAGES.map((name) => ({ name, message: EGRESS_MESSAGE })),
         { name: "electron", importNames: ELECTRON_NETWORK, message: EGRESS_MESSAGE },
+        { name: "statecore-mcp", message: STATECORE_MESSAGE },
       ],
       patterns: [
         { group: ["electron/*"], importNames: ELECTRON_NETWORK, message: EGRESS_MESSAGE },
         { group: [...BANNED_BUILTINS.flatMap((m) => [`${m}/*`, `node:${m}/*`]), "@sentry/*", "@modelcontextprotocol/*", "electron-updater/*", "socket.io-client/*", "@anthropic-ai/*", "@ai-sdk/*", "@langchain/*", "langchain", "langchain/*", "openai/*", "undici/*"], message: EGRESS_MESSAGE },
+        { group: ["statecore-mcp/*"], message: STATECORE_MESSAGE },
       ],
     },
   ],
@@ -106,6 +117,22 @@ const outsideGatewayRules = {
   ],
 };
 
+/** 去掉 StateCore 那两条 import 限制（只给 STATECORE_ENTRY_FILES / STATECORE_TEST_FILES 用）。动态 import 仍然被拦。 */
+function withoutStatecore(rules) {
+  const [level, options] = rules["no-restricted-imports"];
+  return {
+    ...rules,
+    "no-restricted-imports": [
+      level,
+      {
+        ...options,
+        paths: options.paths.filter((p) => p.message !== STATECORE_MESSAGE),
+        patterns: options.patterns.filter((p) => p.message !== STATECORE_MESSAGE),
+      },
+    ],
+  };
+}
+
 export default tseslint.config(
   { ignores: ["out/**", "build/**", "dist/**", "node_modules/**"] },
   js.configs.recommended,
@@ -119,4 +146,7 @@ export default tseslint.config(
   { files: TEST_FILES, rules: egressRules },
   // 唯一出口：只有 gateway 目录可以联网。
   { files: [EGRESS_DIR], rules: Object.fromEntries(Object.keys(egressRules).map((rule) => [rule, "off"])) },
+  // StateCore 的两个入口和适配层的测试（计划 4 R1）。
+  { files: STATECORE_ENTRY_FILES, rules: withoutStatecore(outsideGatewayRules) },
+  { files: STATECORE_TEST_FILES, rules: withoutStatecore(egressRules) },
 );

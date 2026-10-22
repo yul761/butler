@@ -206,3 +206,27 @@ describe("egress lint rule: gateway internals stay inside the gateway", () => {
     }
   }, 60_000);
 });
+
+describe("StateCore is reachable only through its two entry points (plan 4 R1)", () => {
+  const probe = 'import { createEmbeddedBackend } from "statecore-mcp/lib";\nexport default createEmbeddedBackend;\n';
+  async function statecoreMessages(filePath: string, text = probe) {
+    const eslint = new ESLint({ cwd: root });
+    const [result] = await eslint.lintText(text, { filePath });
+    return result.messages.filter((m) => m.ruleId === "no-restricted-imports" || m.ruleId === "no-restricted-syntax");
+  }
+
+  it("flags statecore-mcp everywhere else, in every import form", async () => {
+    for (const file of ["src/main/brief/x.ts", "src/main/memory/memory-service.ts", "src/renderer/src/x.tsx", "hook/x.ts", "memory-mcp/clean-env.ts", "src/main/brief/x.test.ts"]) {
+      expect((await statecoreMessages(file)).length, file).toBeGreaterThan(0);
+    }
+    expect((await statecoreMessages("src/main/brief/x.ts", 'import "statecore-mcp";\n')).length).toBeGreaterThan(0);
+    expect((await statecoreMessages("src/main/brief/x.ts", 'export const m = import("statecore-mcp/lib");\n')).length).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("allows it in the adapter, its tests and the MCP entry", async () => {
+    for (const file of ["src/main/memory/statecore.ts", "src/main/memory/statecore.test.ts", "memory-mcp/entry.ts"]) {
+      expect(await statecoreMessages(file), file).toEqual([]);
+    }
+    expect(await statecoreMessages("memory-mcp/entry.ts", 'import "./clean-env";\nimport "statecore-mcp";\n')).toEqual([]);
+  }, 60_000);
+});

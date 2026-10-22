@@ -12,6 +12,8 @@ export interface ButlerPaths {
   logs: string;
   /** Butler 生成的 --mcp-config 文件。 */
   mcp: string;
+  /** StateCore 的嵌入式存储目录（里面是 statecore.db）。 */
+  statecore: string;
   claudeConfigDir: string;
   claudeSettings: string;
   claudeProjects: string;
@@ -46,6 +48,7 @@ export function resolvePaths(
     hookBin: join(bin, platform === "win32" ? "butler-hook.exe" : "butler-hook"),
     logs: join(butlerHome, "logs"),
     mcp: join(butlerHome, "mcp"),
+    statecore: join(butlerHome, "statecore"),
     claudeConfigDir,
     claudeSettings: join(claudeConfigDir, "settings.json"),
     claudeProjects: join(claudeConfigDir, "projects"),
@@ -55,5 +58,5 @@ export function resolvePaths(
 }
 
 export async function ensureDirs(p: ButlerPaths): Promise<void> {
-  for (const dir of [p.home, p.inbox, p.inboxBad, p.bin, p.logs, p.mcp]) await mkdir(dir, { recursive: true });
+  for (const dir of [p.home, p.inbox, p.inboxBad, p.bin, p.logs, p.mcp, p.statecore]) await mkdir(dir, { recursive: true });
 }

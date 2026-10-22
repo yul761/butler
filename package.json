@@ -25,6 +25,7 @@
   "dependencies": {
     "cross-spawn": "7.0.6",
     "node-pty": "1.1.0",
+    "statecore-mcp": "1.0.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
