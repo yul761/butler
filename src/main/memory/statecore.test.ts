@@ -1,10 +1,15 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createEmbeddedBackend } from "statecore-mcp/lib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ticketScope, WORKSPACE_SCOPE } from "../../shared/memory";
 import { tempDir } from "../test-utils";
-import { listScopeNames, withScope } from "./statecore";
+import { listScopeNames, parseDigestOutcome, withScope } from "./statecore";
+
+// StateCore 的 pino 直接读 process.env.LOG_LEVEL（不看 env 选项），在它加载之前静音。
+vi.hoisted(() => {
+  process.env.LOG_LEVEL = "silent";
+});
 
 const saved = { ...process.env };
 afterEach(() => {
@@ -127,6 +132,14 @@ describe("StateCore adapter (design 8, 11: write and why integration)", () => {
       expect(await s.pendingEvents()).toBe(1);
     });
     expect(seen.length).toBeGreaterThan(0);
+  });
+
+  it("validates digestNow results and maps anything unknown to unsupported", () => {
+    expect(parseDigestOutcome({ ran: true })).toBe("ran");
+    expect(parseDigestOutcome({ ran: false, reason: "locked" })).toBe("locked");
+    expect(parseDigestOutcome({ ran: false, reason: "something-new" })).toBe("unsupported");
+    expect(parseDigestOutcome({ ran: false })).toBe("unsupported");
+    expect(parseDigestOutcome(null)).toBe("unsupported");
   });
 
   it("lists no scopes and creates nothing when the store does not exist", async () => {

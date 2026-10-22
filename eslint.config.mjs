@@ -21,7 +21,7 @@ const NETWORK_PACKAGES = [
 const NETWORK_GLOBALS = ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "WebTransport", "RTCPeerConnection"];
 /** 动态 import / require 的模块名（esquery 的正则里不能有 /）。 */
 const BANNED_BUILTINS = [...NETWORK_BUILTINS, ...LOADER_BUILTINS];
-const DYNAMIC_MODULES = `/^(node:)?(${BANNED_BUILTINS.join("|")}|undici|axios|got|openai|ws|electron-updater|socket.io-client|https-proxy-agent|statecore-mcp)(\\/.*)?$/`;
+const DYNAMIC_MODULES = `/^(node:)?(${BANNED_BUILTINS.join("|")}|undici|axios|got|openai|ws|electron-updater|socket.io-client|https-proxy-agent)(\\/.*)?$/`;
 const ELECTRON_MODULE = "/^electron(\\/.*)?$/";
 const ELECTRON_NET_NAMES = `/^(${ELECTRON_NETWORK.join("|")})$/`;
 /** 能拿到模块加载器 / 原生绑定的属性（process.binding、process.mainModule……），点号和字符串下标都算。 */
@@ -37,6 +37,13 @@ const TEST_FILES = ["**/*.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"];
  * 它所在目录的测试，以及给 claude 挂载的 MCP 入口 memory-mcp/entry.ts（先清掉环境变量里的 key）。见计划 4 Ruling R1。
  */
 const STATECORE_MESSAGE = "StateCore 只能经 src/main/memory/statecore.ts 或 memory-mcp/entry.ts 使用（计划 4 R1：模型 key 不能绕过 PrivacyGateway）。";
+const STATECORE_MODULE = "/^statecore-mcp(\\/.*)?$/";
+/** 动态 import / require / import = 的 statecore-mcp：报 StateCore 的提示，而不是出网的提示。 */
+const STATECORE_SYNTAX = [
+  { selector: `ImportExpression[source.value=${STATECORE_MODULE}]`, message: STATECORE_MESSAGE },
+  { selector: `CallExpression[callee.name="require"][arguments.0.value=${STATECORE_MODULE}]`, message: STATECORE_MESSAGE },
+  { selector: `TSExternalModuleReference[expression.value=${STATECORE_MODULE}]`, message: STATECORE_MESSAGE },
+];
 const STATECORE_ENTRY_FILES = ["src/main/memory/statecore.ts", "memory-mcp/entry.ts"];
 const STATECORE_TEST_FILES = ["src/main/memory/**/*.test.ts"];
 
@@ -75,6 +82,7 @@ const egressRules = {
   ],
   "no-restricted-syntax": [
     "error",
+    ...STATECORE_SYNTAX,
     { selector: `ImportExpression[source.value=${DYNAMIC_MODULES}]`, message: EGRESS_MESSAGE },
     { selector: `CallExpression[callee.name="require"][arguments.0.value=${DYNAMIC_MODULES}]`, message: EGRESS_MESSAGE },
     { selector: `TSExternalModuleReference[expression.value=${DYNAMIC_MODULES}]`, message: EGRESS_MESSAGE },
@@ -146,6 +154,17 @@ export default tseslint.config(
   { files: TEST_FILES, rules: egressRules },
   // 唯一出口：只有 gateway 目录可以联网。
   { files: [EGRESS_DIR], rules: Object.fromEntries(Object.keys(egressRules).map((rule) => [rule, "off"])) },
+  // gateway 里出口规则关了，但 StateCore 的限制照旧（key 就在 gateway 里，R1 回归最可能出在这里）。
+  {
+    files: [EGRESS_DIR],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        { paths: [{ name: "statecore-mcp", message: STATECORE_MESSAGE }], patterns: [{ group: ["statecore-mcp/*"], message: STATECORE_MESSAGE }] },
+      ],
+      "no-restricted-syntax": ["error", ...STATECORE_SYNTAX],
+    },
+  },
   // StateCore 的两个入口和适配层的测试（计划 4 R1）。
   { files: STATECORE_ENTRY_FILES, rules: withoutStatecore(outsideGatewayRules) },
   { files: STATECORE_TEST_FILES, rules: withoutStatecore(egressRules) },

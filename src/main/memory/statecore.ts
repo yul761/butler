@@ -48,6 +48,10 @@ const RecallResult = z.object({
   handoff: z.object({ id: z.string(), content: z.string(), addedAt: z.string(), versionCount: z.number() }).nullable(),
 });
 const Remembered = z.object({ superseded: z.string().optional() });
+const DigestResult = z.union([
+  z.object({ ran: z.literal(true) }),
+  z.object({ ran: z.literal(false), reason: z.enum(["no-llm", "below-threshold", "locked", "failed", "unsupported"]) }),
+]);
 const Pending = z.object({ events: z.number() }).nullable().optional();
 
 type Backend = ReturnType<typeof createEmbeddedBackend>;
@@ -89,10 +93,16 @@ function handle(b: Backend): ScopeHandle {
       return Pending.parse(await b.pendingEvents?.())?.events ?? 0;
     },
     async digestNow() {
-      const r = await b.digestNow();
-      return r.ran ? "ran" : r.reason;
+      return parseDigestOutcome(await b.digestNow());
     },
   };
+}
+
+/** 校验 StateCore digestNow() 的结果；形状或 reason 不认识时按 "unsupported" 处理，不让未知值流出去。 */
+export function parseDigestOutcome(raw: unknown): DigestOutcome {
+  const r = DigestResult.safeParse(raw);
+  if (!r.success) return "unsupported";
+  return r.data.ran ? "ran" : r.data.reason;
 }
 
 /**

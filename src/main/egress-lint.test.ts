@@ -216,11 +216,23 @@ describe("StateCore is reachable only through its two entry points (plan 4 R1)",
   }
 
   it("flags statecore-mcp everywhere else, in every import form", async () => {
-    for (const file of ["src/main/brief/x.ts", "src/main/memory/memory-service.ts", "src/renderer/src/x.tsx", "hook/x.ts", "memory-mcp/clean-env.ts", "src/main/brief/x.test.ts"]) {
+    for (const file of ["src/main/brief/x.ts", "src/main/memory/memory-service.ts", "src/renderer/src/x.tsx", "hook/x.ts", "memory-mcp/clean-env.ts", "src/main/brief/x.test.ts", "src/main/gateway/x.ts", "src/main/gateway/x.test.ts"]) {
       expect((await statecoreMessages(file)).length, file).toBeGreaterThan(0);
     }
     expect((await statecoreMessages("src/main/brief/x.ts", 'import "statecore-mcp";\n')).length).toBeGreaterThan(0);
     expect((await statecoreMessages("src/main/brief/x.ts", 'export const m = import("statecore-mcp/lib");\n')).length).toBeGreaterThan(0);
+    for (const file of ["src/main/brief/x.ts", "src/main/gateway/x.ts", "src/main/memory/statecore.ts"]) {
+      for (const text of [
+        'export const m = import("statecore-mcp/lib");\n',
+        'const m = require("statecore-mcp");\n',
+        'import m = require("statecore-mcp/lib");\nexport default m;\n',
+        ...(file === "src/main/memory/statecore.ts" ? [] : ['export * from "statecore-mcp/lib";\n', 'import type { X } from "statecore-mcp/lib";\nexport type Y = X;\n']),
+      ]) {
+        const messages = await statecoreMessages(file, text);
+        expect(messages.length, `${file}: ${text}`).toBeGreaterThan(0);
+        expect(messages.every((m) => m.message.includes("StateCore")), `${file}: ${text}`).toBe(true);
+      }
+    }
   }, 60_000);
 
   it("allows it in the adapter, its tests and the MCP entry", async () => {
