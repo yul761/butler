@@ -26,7 +26,8 @@ import type { SessionService } from "../sessions/session-service";
 import { normalizeSetting, SettingError } from "../settings/settings-values";
 import { TicketError, type TicketService } from "../tickets/ticket-service";
 import { toIpcResult } from "./result";
-import { apiKeyArg, auditCursorArg, factIdArg, termsArg, ticketKeyArg } from "./validate";
+import { memoryHandlers } from "./memory-handlers";
+import { apiKeyArg, auditCursorArg, termsArg } from "./validate";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -203,6 +204,7 @@ export function registerIpc(d: IpcDeps): void {
     auditPage({ settings: d.settings, keys: d.keys, audit: d.audit, now: d.now }, auditCursorArg(beforeId)));
 
   // StateCore 记忆（设计文档 8.4）：只读。
-  handle(IPC.memoryView, (key: unknown) => d.memory.view(ticketKeyArg(key)));
-  handle(IPC.memoryWhy, (key: unknown, factId: unknown) => d.memory.why(ticketKeyArg(key), factIdArg(factId)));
+  const mem = memoryHandlers(d);
+  handle(IPC.memoryView, mem.view);
+  handle(IPC.memoryWhy, mem.why);
 }

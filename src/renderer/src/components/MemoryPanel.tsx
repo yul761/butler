@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MemoryView, WhyEntry } from "../../../shared/memory";
 import { api } from "../api";
-import { reportError } from "../errors";
 import { memorySections, trailingDebounce, whyLines } from "../memory-view";
 import { S } from "../strings";
 
@@ -17,11 +16,19 @@ export function MemoryPanel({ ticketKey }: { ticketKey: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [why, setWhy] = useState<{ id: string; chain: WhyEntry[] | null } | null>(null);
 
+  const [whyError, setWhyError] = useState<string | null>(null);
+  const loadSeq = useRef(0);
+  const whySeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
-      setView(await api.memoryView(ticketKey));
+      const v = await api.memoryView(ticketKey);
+      if (seq !== loadSeq.current) return;
+      setView(v);
       setLoadError(null);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setLoadError(e instanceof Error ? e.message : String(e));
     }
   }, [ticketKey]);
@@ -29,24 +36,31 @@ export function MemoryPanel({ ticketKey }: { ticketKey: string }) {
   useEffect(() => {
     setView(null);
     setWhy(null);
+    setWhyError(null);
     void load();
     const reload = trailingDebounce(() => void load(), RELOAD_DEBOUNCE_MS);
     const off = api.onStateChanged(reload);
     return () => {
+      loadSeq.current++; // 卸载或换 ticket 后，在途的响应不再写状态
+      whySeq.current++;
       reload.cancel();
       off();
     };
   }, [load]);
 
   async function toggleWhy(id: string) {
+    setWhyError(null);
     if (why?.id === id) {
+      whySeq.current++;
       setWhy(null);
       return;
     }
+    const seq = ++whySeq.current;
     try {
-      setWhy({ id, chain: await api.memoryWhy(ticketKey, id) });
+      const chain = await api.memoryWhy(ticketKey, id);
+      if (seq === whySeq.current) setWhy({ id, chain });
     } catch (e) {
-      reportError(e);
+      if (seq === whySeq.current) setWhyError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -82,6 +96,7 @@ export function MemoryPanel({ ticketKey }: { ticketKey: string }) {
   return (
     <div className="memory-panel">
       {error && <p className="error">{S.memoryLoadFailed(error)}</p>}
+      {whyError && <p className="error">{S.memoryLoadFailed(whyError)}</p>}
       <p className="muted">{S.memoryHint}</p>
       {handoff && (
         <div className="memory-handoff">
