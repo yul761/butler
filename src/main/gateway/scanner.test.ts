@@ -215,33 +215,57 @@ describe("scanOutbound options", () => {
   });
 });
 
+/**
+ * ReDoS / 线性时间守卫：对抗性输入的扫描时间必须随长度线性增长。
+ * 不用固定的毫秒预算（CI runner 比开发机慢好几倍，200 ms 在 macOS 和 Windows runner 上都超过了），而是在同一次运行里
+ * 比较 N 和 N/4 两个长度：线性时约 4 倍，二次方约 16 倍，阈值取 8。每个长度取多次中的最小值以压掉 GC/调度噪声。
+ * 另有一个宽松的绝对上限，兜住"线性但常数巨大"或灾难性回溯（这台机器上 N=100k 约 0.1 s，CI 约 0.3 s）。
+ */
 describe("scanOutbound performance", () => {
   const N = 100_000;
-  const shapes: [string, string][] = [
-    ["a.", "a.".repeat(N / 2)],
-    ["1.", "1.".repeat(N / 2)],
-    ["a-", "a-".repeat(N / 2)],
-    ["a/", "a/".repeat(N / 2)],
-    ["a./", "a./".repeat(N / 3)],
-    ["a@", "a@".repeat(N / 2)],
-    ["A1", "A1".repeat(N / 2)],
-    ["AAAA", "A".repeat(N)],
-    ["hex", "f".repeat(N) + "g"],
-    ["eyJ-", "eyJ-".repeat(N / 4)],
-    ["1:", "1:".repeat(N / 2)],
-    ["x://", "x:".repeat(N / 2)],
-    ["a.a/", "a.".repeat(N / 2) + "/"],
-    ["a.md", "a.md".repeat(N / 4)],
-    ["1::", "1::".repeat(N / 3)],
-    ["a:b", "a:b:".repeat(N / 4)],
-    ["::", ":".repeat(N)],
-    ["Bearer", "Bearer a".repeat(N / 8)],
-    ["pw is", "password is ".repeat(N / 12)],
-    ["spaces", "a ".repeat(N / 2)],
+  const SCALING_LIMIT = 8;
+  const ABSOLUTE_LIMIT_MS = 2000;
+  const shapes: [string, (n: number) => string][] = [
+    ["a.", (n) => "a.".repeat(n / 2)],
+    ["1.", (n) => "1.".repeat(n / 2)],
+    ["a-", (n) => "a-".repeat(n / 2)],
+    ["a/", (n) => "a/".repeat(n / 2)],
+    ["a./", (n) => "a./".repeat(n / 3)],
+    ["a@", (n) => "a@".repeat(n / 2)],
+    ["A1", (n) => "A1".repeat(n / 2)],
+    ["AAAA", (n) => "A".repeat(n)],
+    ["hex", (n) => "f".repeat(n) + "g"],
+    ["eyJ-", (n) => "eyJ-".repeat(n / 4)],
+    ["1:", (n) => "1:".repeat(n / 2)],
+    ["x://", (n) => "x:".repeat(n / 2)],
+    ["a.a/", (n) => "a.".repeat(n / 2) + "/"],
+    ["a.md", (n) => "a.md".repeat(n / 4)],
+    ["1::", (n) => "1::".repeat(n / 3)],
+    ["a:b", (n) => "a:b:".repeat(n / 4)],
+    ["::", (n) => ":".repeat(n)],
+    ["Bearer", (n) => "Bearer a".repeat(n / 8)],
+    ["pw is", (n) => "password is ".repeat(n / 12)],
+    ["spaces", (n) => "a ".repeat(n / 2)],
   ];
-  it.each(shapes)("scans an adversarial %s string quickly", (_name, text) => {
-    const start = performance.now();
-    scanOutbound([text], { ticketPattern: DEFAULT_TICKET_PATTERN, originals: ["acme", "feature-login", "张三"] });
-    expect(performance.now() - start).toBeLessThan(200);
-  });
+  const scanOpts: ScanOptions = { ticketPattern: DEFAULT_TICKET_PATTERN, originals: ["acme", "feature-login", "张三"] };
+  /** runs 次扫描中最快的一次（毫秒）。 */
+  const fastest = (text: string, runs: number) => {
+    let best = Infinity;
+    for (let i = 0; i < runs; i++) {
+      const start = performance.now();
+      scanOutbound([text], scanOpts);
+      best = Math.min(best, performance.now() - start);
+    }
+    return best;
+  };
+  it.each(shapes)("scans an adversarial %s string in linear time", (_name, make) => {
+    const small = make(N / 4);
+    const large = make(N);
+    fastest(small, 1); // 预热：让正则先编译、JIT 先热起来，不算进小样本。
+    const tSmall = fastest(small, 3);
+    const tLarge = fastest(large, 2);
+    expect(tLarge).toBeLessThan(ABSOLUTE_LIMIT_MS);
+    // 小样本快到计时器分辨率以下时比值没有意义；这种情况下绝对上限已足以说明没有爆炸。
+    if (tSmall >= 1) expect(tLarge / tSmall).toBeLessThan(SCALING_LIMIT);
+  }, 30_000);
 });
