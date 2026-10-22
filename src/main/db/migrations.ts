@@ -116,4 +116,13 @@ export const MIGRATIONS: string[] = [
     updated_at INTEGER NOT NULL
   );
   `,
+  `
+  CREATE TABLE memory_sync (
+    ticket_key TEXT PRIMARY KEY REFERENCES tickets(key),
+    handoff_id INTEGER NOT NULL,
+    synced_at INTEGER NOT NULL
+  );
+  ALTER TABLE llm_audit ADD COLUMN source TEXT NOT NULL DEFAULT 'narrative' CHECK (source IN ('narrative', 'statecore'));
+  INSERT OR IGNORE INTO settings (key, value) SELECT 'onboardingDone', '1' WHERE EXISTS (SELECT 1 FROM tickets);
+  `,
 ];

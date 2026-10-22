@@ -15,6 +15,10 @@ export interface SensitiveTerm {
 export const AUDIT_STATUSES = ["pending", "sent", "failed", "blocked", "budget", "declined"] as const;
 export type AuditStatus = (typeof AUDIT_STATUSES)[number];
 
+/** narrative：早间简报的“今日重点”；statecore：full 档位下 StateCore 记忆的蒸馏（计划 4 R1）。 */
+export const AUDIT_SOURCES = ["narrative", "statecore"] as const;
+export type AuditSource = (typeof AUDIT_SOURCES)[number];
+
 export const SCAN_RULES = ["secret", "url", "domain", "ip", "email", "path", "ticket", "known"] as const;
 export type ScanRule = (typeof SCAN_RULES)[number];
 export interface ScanHit {
@@ -30,6 +34,7 @@ export interface AuditEntry {
   provider: string;
   model: string;
   level: PrivacyLevel;
+  source: AuditSource;
   status: AuditStatus;
   /** 原样发出的请求体；没有发出（拒发、超预算）时为 null。 */
   payloadSent: string | null;

@@ -3,7 +3,7 @@ import type { AuditEntry } from "../../shared/llm";
 import { auditStatusLabel, auditSummary, blockedText, bodyHeading, bodyMaybeSent, prettyBody, prettyJson } from "./audit-view";
 
 const entry = (over: Partial<AuditEntry> = {}): AuditEntry => ({
-  id: 1, ts: 1, provider: "api.deepseek.com", model: "deepseek-chat", level: "metadata", status: "sent",
+  id: 1, ts: 1, provider: "api.deepseek.com", model: "deepseek-chat", level: "metadata", source: "narrative", status: "sent",
   payloadSent: null, response: null, tokensIn: 120, tokensOut: 40, costUsd: 0.0023, blockedReason: null, error: null, ...over,
 });
 

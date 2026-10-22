@@ -34,6 +34,8 @@ export const SETTING_DEFAULTS = {
   llmConfirm: "0",
   /** 审计记录保留天数（设计文档 7.7，默认 90）。 */
   auditRetentionDays: "90",
+  /** 首次启动向导做完（或跳过）了：1。迁移 4 给已经有 ticket 的老用户直接写 1。 */
+  onboardingDone: "0",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

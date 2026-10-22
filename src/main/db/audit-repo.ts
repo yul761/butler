@@ -1,4 +1,4 @@
-import type { AuditEntry, AuditStatus, PrivacyLevel, ScanHit } from "../../shared/llm";
+import type { AuditEntry, AuditSource, AuditStatus, PrivacyLevel, ScanHit } from "../../shared/llm";
 import type { Db } from "./database";
 
 /** 审计里每段文本的上限：响应异常大时也不会把数据库撑爆。 */
@@ -13,6 +13,7 @@ interface AuditRow {
   provider: string;
   model: string;
   level: string;
+  source: string;
   status: string;
   payload_sent: string | null;
   response: string | null;
@@ -50,6 +51,7 @@ function toEntry(r: AuditRow): AuditEntry {
     provider: r.provider,
     model: r.model,
     level: r.level as PrivacyLevel,
+    source: r.source as AuditSource,
     status: r.status as AuditStatus,
     payloadSent: r.payload_sent,
     response: r.response,
@@ -66,6 +68,8 @@ interface NewAuditCommon {
   provider: string;
   model: string;
   level: PrivacyLevel;
+  /** 缺省是 narrative。 */
+  source?: AuditSource;
   blockedReason?: ScanHit[] | null;
   error?: string | null;
 }
@@ -109,10 +113,10 @@ export class AuditRepo {
     const payload = NO_PAYLOAD_STATUSES.has(a.status) ? null : cap(a.payloadSent ?? null);
     const r = this.db
       .prepare(
-        `INSERT INTO llm_audit (ts, provider, model, level, status, payload_sent, blocked_reason, error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO llm_audit (ts, provider, model, level, source, status, payload_sent, blocked_reason, error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(a.ts, a.provider, a.model, a.level, a.status, payload, a.blockedReason ? JSON.stringify(a.blockedReason) : null, cap(a.error));
+      .run(a.ts, a.provider, a.model, a.level, a.source ?? "narrative", a.status, payload, a.blockedReason ? JSON.stringify(a.blockedReason) : null, cap(a.error));
     return Number(r.lastInsertRowid);
   }
 

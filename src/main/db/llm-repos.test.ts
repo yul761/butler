@@ -51,7 +51,7 @@ describe("AuditRepo", () => {
     const id = audit.insert({ ...base, ts: 10, status: "pending", payloadSent: '{"a":1}' });
     audit.finish(id, { status: "sent", response: "{}", tokensIn: 100, tokensOut: 20, costUsd: 0.0002 });
     expect(audit.list()).toEqual([
-      { id, ts: 10, ...base, status: "sent", payloadSent: '{"a":1}', response: "{}", tokensIn: 100, tokensOut: 20, costUsd: 0.0002, blockedReason: null, error: null },
+      { id, ts: 10, ...base, source: "narrative", status: "sent", payloadSent: '{"a":1}', response: "{}", tokensIn: 100, tokensOut: 20, costUsd: 0.0002, blockedReason: null, error: null },
     ]);
   });
 
