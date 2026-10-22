@@ -46,23 +46,35 @@ function byPriority(notes: ButlerNote[]): ButlerNote[] {
 }
 
 /**
- * 每次 remember 之前问一次：还能不能追加一条而不让 StateCore 挤掉别的条目（PF2）。
+ * 每次 remember 之前实测一次：还能不能追加一条而不让 StateCore 挤掉别的条目（PF2）。
  * StateCore 的 notes 上限是 30，满了再追加就挤掉最旧的那条，可能正是一条要保留的 Butler 条目；
  * 被 forget 的条目也还占着位置（只有完整档位的蒸馏才清掉）。
- * 一次 remember 可能是追加，也可能是原地修订或一字不差的空操作，事先分不出来，所以一律按追加扣一个位置；
- * 扣完了再实测一次（修订和空操作不占位置）。保守：宁可这次不写，也不挤掉任何条目。
+ * 一次 remember 可能是追加，也可能是原地修订或一字不差的空操作，事先分不出来，所以一律当成追加：没有空位就不写。
+ * 每次都重新数，而不是数一次再自己扣：claude 里挂的记忆 MCP 可能同时在往这个 scope 写。一次同步只写几条，开销很小。
  */
 function slotGuard(s: ScopeHandle): { take: () => Promise<boolean>; last: () => { used: number; cap: number } } {
-  let known: { used: number; cap: number } | null = null;
+  let known: { used: number; cap: number } = { used: 0, cap: NOTES_CAP };
   return {
     async take() {
-      if (!known || known.used >= known.cap) known = await s.noteSlots();
-      if (known.used >= known.cap) return false;
-      known.used++;
-      return true;
+      known = await s.noteSlots();
+      return known.used < known.cap;
     },
-    last: () => known ?? { used: 0, cap: NOTES_CAP },
+    last: () => known,
   };
+}
+
+/** 登记用的改写只比原文多一个词：Butler 自己的 followup（带说明后缀）和带区分词的变体保证有足够的词，StateCore 一定当成原文的修订。 */
+const FOLLOWUP_SUFFIX = /（[^（）]+，[^（）]+）$/;
+
+/**
+ * 把一条没登记的 Butler 条目（StateCore 的事实登记里没有它，facts() 里 factId 为 null）原地改写成登记过的：
+ * 前缀里加 #1，已经有 # 的再加一个区分词。正文不变，所以还是同一个条目；StateCore 把它当成原文的修订，原地替换并登记。
+ */
+function registeredText(text: string): string | null {
+  const m = /^\[([^\]]+)\] /.exec(text);
+  if (!m) return null;
+  const prefix = m[1].includes("#") ? `${m[1]} keep` : `${m[1]}#1`;
+  return `[${prefix}] ${text.slice(m[0].length)}`;
 }
 
 type WriteResult = { written: boolean; displaced: { key: string; variant: number } | null };
@@ -74,6 +86,8 @@ type WriteResult = { written: boolean; displaced: { key: string; variant: number
 export class MemoryService {
   private queue: Promise<unknown> = Promise.resolve();
   private readonly pending = new Map<string, Promise<void>>();
+  /** 每个 ticket 上一次同步“没有空位、跳过了几条”的日志：一样的就不再记（满了以后每次同步都会一样）。 */
+  private readonly lastSkip = new Map<string, string>();
   private stopped = false;
 
   constructor(private readonly d: MemoryServiceDeps) {}
@@ -168,13 +182,21 @@ export class MemoryService {
   }
 
   private async reconcile(key: string, s: ScopeHandle, desired: ButlerNote[]): Promise<void> {
-    const plan = planReconcile(await s.facts(), desired);
-    // 先 forget 再 remember（设计文档 13.1）：新文本是旧文本的修订时，StateCore 把它们串成一条 why 链。
-    for (const factKey of plan.forget) await s.forget(factKey);
-    const wanted = new Map(desired.map((n) => [noteKey(n), n]));
-    const queue = byPriority(plan.write).map((note) => ({ note, from: 1 }));
     const slots = slotGuard(s);
-    const visible = new Set((await s.facts()).map((i) => i.text));
+    const before = await s.facts();
+    const plan = planReconcile(before, desired);
+    // 先 forget 再 remember（设计文档 13.1）：新文本是旧文本的修订时，StateCore 把它们串成一条 why 链。
+    const byFactKey = new Map(before.map((i) => [i.factKey, i]));
+    for (const factKey of plan.forget) {
+      const item = byFactKey.get(factKey);
+      if (item && item.factId === null) await this.forgetUnregistered(key, s, item.text, slots.take);
+      else await s.forget(factKey);
+    }
+    // forget 过程中的改写可能动到别的条目：按现状重新比对一次再写。
+    const after = await s.facts();
+    const wanted = new Map(desired.map((n) => [noteKey(n), n]));
+    const queue = byPriority(planReconcile(after, desired).write).map((note) => ({ note, from: 1 }));
+    const visible = new Set(after.map((i) => i.text));
     // 每次重写都用更长的区分词，几轮之内必然分开；预算只是防止意外的死循环。
     let budget = desired.length * MAX_NOTE_VARIANT;
     while (queue.length > 0 && budget-- > 0) {
@@ -184,7 +206,9 @@ export class MemoryService {
         // 没有空位：这一条和后面的都不写（不挤掉任何条目）；下次同步有空位时按同样的先后再写。
         const followups = queue.filter((q) => q.note.kind === "followup").length;
         const { used, cap } = slots.last();
-        this.log(`memory ${key}: no free note slot (${used}/${cap}), skipped ${followups} followup(s), ${queue.length - followups} decision(s)`);
+        const msg = `memory ${key}: no free note slot (${used}/${cap}), skipped ${followups} followup(s), ${queue.length - followups} decision(s)`;
+        if (this.lastSkip.get(key) !== msg) this.log(msg);
+        this.lastSkip.set(key, msg);
         return;
       }
       queue.shift();
@@ -196,6 +220,31 @@ export class MemoryService {
         queue.unshift({ note: other, from: Math.min(MAX_NOTE_VARIANT, Math.max(2, displaced.variant + 1)) });
       }
     }
+    this.lastSkip.delete(key);
+  }
+
+  /**
+   * forget 一条没登记的条目之前先把它登记上（审查 1）。
+   * 别人（claude 里的 MCP）把一条 Butler 条目挤出上限之后，同样的文本再写进来时 StateCore 不给它登记（旧登记只是退役）。
+   * 这样的条目看得见时 noteSlots 还数得到它；一旦 forget，它既不在登记里、也不在 facts() 里，却还占着位置，
+   * noteSlots 就会少数一个，下一次追加可能挤掉一条要保留的条目。所以先原地改写成登记过的版本，再 forget 那个版本。
+   * 改写不保证是修订（极短的决策）时要占位置，没有空位就先不 forget，留着它下次再试：宁可多显示一条旧的，也不少数位置。
+   */
+  private async forgetUnregistered(key: string, s: ScopeHandle, text: string, take: () => Promise<boolean>): Promise<void> {
+    const parsed = parseNote(text);
+    const next = registeredText(text);
+    const surelyRevision = parsed !== null && (parsed.variant > 1 || (parsed.kind === "followup" && FOLLOWUP_SUFFIX.test(parsed.body)));
+    if (!next || (!surelyRevision && !(await take()))) {
+      this.log(`memory ${key}: kept an unregistered note visible (no free note slot to register it before forgetting)`);
+      return;
+    }
+    const r = await s.remember(next);
+    const item = (await s.facts()).find((i) => i.text === next && i.factId !== null);
+    if (r.superseded !== text || !item) {
+      this.log(`memory ${key}: could not register an unregistered note before forgetting it`);
+      return;
+    }
+    await s.forget(item.factKey);
   }
 
   /**

@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Handoff } from "../../shared/handoff";
 import type { Followup, FollowupStatus, HandoffTrigger } from "../../shared/types";
 import { FollowupsRepo } from "../db/followups-repo";
@@ -9,7 +9,22 @@ import { MemorySyncRepo } from "../db/memory-sync-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { memDb, tempDir } from "../test-utils";
 import { handoffSummary, MemoryService } from "./memory-service";
-import { NOTES_CAP, withScope } from "./statecore";
+import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
+
+// 故障注入的接缝：withScope 默认就是真的；个别测试把真实句柄包一层（StateCore 本身始终是真的嵌入式存储）。
+vi.mock("./statecore", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./statecore")>();
+  return { ...actual, withScope: vi.fn(actual.withScope) };
+});
+const realStatecore = await vi.importActual<typeof import("./statecore")>("./statecore");
+/** 之后打开的 scope 里，match 的那些换成 wrap(真实句柄)。 */
+function wrapScopes(match: (scope: string) => boolean, wrap: (s: ScopeHandle) => ScopeHandle): void {
+  vi.mocked(withScope).mockImplementation(((o: Parameters<typeof withScope>[0], fn: (s: ScopeHandle) => Promise<unknown>) =>
+    realStatecore.withScope(o, (s) => fn(match(o.scope) ? wrap(s) : s))) as typeof withScope);
+}
+afterEach(() => {
+  vi.mocked(withScope).mockImplementation(realStatecore.withScope);
+});
 
 // StateCore 的 pino 直接读 process.env.LOG_LEVEL（不看 env 选项），在它加载之前静音。
 vi.hoisted(() => {
@@ -85,7 +100,8 @@ describe("MemoryService.syncTicket (design 8.3)", () => {
     const t = setup();
     t.addHandoff(payload({ decisions: [{ key: "db", statement: "用 PostgreSQL 存储会话" }] }));
     await t.memory.syncTicket("PROJ-1");
-    t.addHandoff(payload({ decisions: [{ key: "db", statement: "用 MySQL 存储会话" }] }));
+    // 第二次交接的内容和第一次不同（内容一样的交接不会再写一个版本，见 “does not write the same handoff twice”）。
+    t.addHandoff(payload({ done_today: ["换库"], decisions: [{ key: "db", statement: "用 MySQL 存储会话" }] }));
     await t.memory.syncTicket("PROJ-1");
     expect(await t.texts()).toEqual(["[decision:db] 用 MySQL 存储会话"]);
     const view = await t.memory.view("PROJ-1");
@@ -337,5 +353,123 @@ describe("MemoryService notes cap guard (PF2: StateCore keeps forgotten notes in
     expect(ws[0]).toBe(`[learning:PROJ-1] a5 ${distinct(5)}`);
     expect(ws.at(-1)).toBe(`[learning:PROJ-1] b19 ${distinct(69)}`);
     expect(t.logs).toContain("memory PROJ-1: skipped 10 older learning(s) of this sync");
+  });
+});
+
+describe("MemoryService fix round 1 (task 4 review)", () => {
+  const scope = "ticket:PROJ-1";
+  const raw = <T>(dataDir: string, fn: (s: ScopeHandle) => Promise<T>) => realStatecore.withScope({ dataDir, scope }, fn);
+
+  it("registers an unregistered note before forgetting it, so the slot count never comes out low (finding 1)", async () => {
+    const t = setup();
+    t.addFollowup("f_1", { description: distinct(1) });
+    t.addHandoff(payload({ decisions: [{ key: "a", statement: distinct(2) }, { key: "b", statement: distinct(3) }] }));
+    await t.memory.syncTicket("PROJ-1");
+    const x = `[followup:f_1] ${distinct(1)}（配置，合并后）`;
+    const db = `[decision:b] ${distinct(3)}`;
+    expect((await t.texts()).sort()).toEqual([`[decision:a] ${distinct(2)}`, db, x].sort());
+    // claude 里的 MCP（不受 Butler 的保护）写满并多写一条：挤掉最旧的 f_1；它又一字不差地写回 f_1，挤掉 decision:a。
+    await raw(t.dataDir, async (s) => {
+      for (let i = 0; i < NOTES_CAP - 2; i++) await s.remember(`Claude 自己记的 ${distinct(10 + i)}`);
+      await s.remember(x);
+    });
+    const orphan = (await t.items()).find((i) => i.text === x);
+    expect(orphan?.factId).toBeNull(); // StateCore 没给它登记
+    expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
+    // f_1 完成：Butler 要 forget 它，并且想写回被挤掉的 decision:a。
+    t.setFollowup("f_1", "done");
+    await t.memory.syncTicket("PROJ-1");
+    const texts = await t.texts();
+    expect(texts).toContain(db); // 要保留的条目没被挤掉
+    expect(texts.some((x2) => x2.startsWith("[followup:f_1"))).toBe(false);
+    expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
+    expect(t.logs).toContain("memory PROJ-1: no free note slot (30/30), skipped 0 followup(s), 1 decision(s)");
+  });
+
+  it("measures free slots before every write, so a concurrent MCP write cannot make the estimate low (finding 2)", async () => {
+    const t = setup();
+    t.addHandoff(payload({ decisions: [{ key: "db", statement: distinct(1) }] }));
+    await t.memory.syncTicket("PROJ-1");
+    await raw(t.dataDir, async (s) => {
+      for (let i = 0; i < NOTES_CAP - 3; i++) await s.remember(`Claude 自己记的 ${distinct(10 + i)}`);
+    });
+    t.addFollowup("f_a", { description: distinct(2) });
+    t.addFollowup("f_b", { description: distinct(3) });
+    // Butler 写第一条之后，claude 里的 MCP 同时写了一条：位置刚好满了。
+    let external = false;
+    wrapScopes((sc) => sc === scope, (s) => ({
+      ...s,
+      async remember(text) {
+        const r = await s.remember(text);
+        if (!external) {
+          external = true;
+          await s.remember(`Claude 同时记的 ${distinct(99)}`);
+        }
+        return r;
+      },
+    }));
+    await t.memory.syncTicket("PROJ-1");
+    const texts = await t.texts();
+    expect(texts).toContain(`[decision:db] ${distinct(1)}`);
+    expect(texts).toContain(`[followup:f_b] ${distinct(3)}（配置，合并后）`);
+    expect(texts.some((x) => x.startsWith("[followup:f_a]"))).toBe(false);
+    expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
+  });
+
+  it("does not write the same handoff twice when a sync is retried after a partial failure (finding 4)", async () => {
+    const t = setup();
+    t.addHandoff(payload({ done_today: ["接口写完"], learnings: ["经验一"] }));
+    wrapScopes((sc) => sc === "workspace", (s) => ({ ...s, remember: async () => { throw new Error("workspace down"); } }));
+    await t.memory.syncTicket("PROJ-1");
+    expect(t.sync.cursor("PROJ-1")).toBe(0);
+    expect((await t.memory.view("PROJ-1")).handoff?.versionCount).toBe(1);
+    vi.mocked(withScope).mockImplementation(realStatecore.withScope);
+    await t.memory.syncTicket("PROJ-1");
+    expect((await t.memory.view("PROJ-1")).handoff).toMatchObject({ content: "状态：active。完成：接口写完", versionCount: 1 });
+    expect(await t.texts("workspace")).toEqual(["[learning:PROJ-1] 经验一"]);
+    expect(t.sync.cursor("PROJ-1")).toBeGreaterThan(0);
+  });
+
+  it("logs a full scope only when what it skips changes (finding 5)", async () => {
+    const t = setup();
+    await raw(t.dataDir, async (s) => {
+      for (let i = 0; i < NOTES_CAP; i++) await s.remember(`Claude 自己记的 ${distinct(10 + i)}`);
+    });
+    t.addFollowup("f_a", { description: distinct(1) });
+    const full = (n: number) => t.logs.filter((l) => l.includes("no free note slot")).length === n;
+    await t.memory.syncTicket("PROJ-1");
+    await t.memory.syncTicket("PROJ-1");
+    await t.memory.syncTicket("PROJ-1");
+    expect(full(1)).toBe(true);
+    t.addFollowup("f_b", { description: distinct(2) });
+    await t.memory.syncTicket("PROJ-1");
+    await t.memory.syncTicket("PROJ-1");
+    expect(full(2)).toBe(true);
+    expect(t.logs.at(-1)).toBe("memory PROJ-1: no free note slot (30/30), skipped 2 followup(s), 0 decision(s)");
+  });
+
+  it("keeps the cursor when a reconcile fails halfway (finding 6)", async () => {
+    const t = setup();
+    t.addFollowup("f_1", { description: distinct(1) });
+    t.addFollowup("f_2", { description: distinct(2) });
+    t.addHandoff(payload({ learnings: ["经验一"] }));
+    let writes = 0;
+    wrapScopes((sc) => sc === scope, (s) => ({
+      ...s,
+      async noteSlots() {
+        if (++writes > 1) throw new Error("injected halfway");
+        return s.noteSlots();
+      },
+    }));
+    await t.memory.syncTicket("PROJ-1");
+    expect(t.sync.cursor("PROJ-1")).toBe(0);
+    expect(t.logs).toContain("memory sync PROJ-1 failed injected halfway");
+    expect(t.synced).toEqual([]);
+    expect(await t.texts()).toHaveLength(1); // 只写了一条就失败了
+    vi.mocked(withScope).mockImplementation(realStatecore.withScope);
+    await t.memory.syncTicket("PROJ-1");
+    expect(await t.texts()).toHaveLength(2);
+    expect(t.sync.cursor("PROJ-1")).toBeGreaterThan(0);
+    expect(await t.texts("workspace")).toEqual(["[learning:PROJ-1] 经验一"]);
   });
 });

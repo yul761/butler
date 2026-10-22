@@ -110,8 +110,10 @@ describe("StateCore adapter (design 8, 11: write and why integration)", () => {
   it("stores a handoff that supersedes the previous one and walks its chain", async () => {
     await withScope({ dataDir: tempDir(), scope: "ticket:PROJ-4" }, async (s) => {
       expect(await s.activeHandoff()).toBeNull();
-      await s.handoff({ summary: "状态：active。", nextSteps: ["写测试"], openQuestions: [] });
-      await s.handoff({ summary: "状态：in_review。完成：写测试", nextSteps: ["等 review"], openQuestions: ["要不要拆 PR？"] });
+      expect(await s.handoff({ summary: "状态：active。", nextSteps: ["写测试"], openQuestions: [] })).toBe(true);
+      expect(await s.handoff({ summary: "状态：in_review。完成：写测试", nextSteps: ["等 review"], openQuestions: ["要不要拆 PR？"] })).toBe(true);
+      // 和当前交接一字不差（按 StateCore 的格式）：不再写一个版本。
+      expect(await s.handoff({ summary: " 状态：in_review。完成：写测试", nextSteps: ["等 review ", ""], openQuestions: ["要不要拆 PR？"] })).toBe(false);
       const h = await s.activeHandoff();
       expect(h).toMatchObject({ versionCount: 2 });
       expect(h?.content).toBe("状态：in_review。完成：写测试\nOpen questions:\n- 要不要拆 PR？\nNext steps:\n- 等 review");

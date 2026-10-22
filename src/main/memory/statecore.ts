@@ -27,7 +27,10 @@ export interface ScopeHandle {
   facts(): Promise<MemoryItem[]>;
   /** 一条事实（或交接）从最早到最新的版本；id 不存在时为 null。 */
   why(factId: string): Promise<WhyEntry[] | null>;
-  handoff(h: { summary: string; nextSteps: string[]; openQuestions: string[] }): Promise<void>;
+  /**
+   * 记一次交接。和当前生效的交接一字不差时不写（返回 false）：同步失败后重试不会给 why 链多加一个一样的版本。
+   */
+  handoff(h: { summary: string; nextSteps: string[]; openQuestions: string[] }): Promise<boolean>;
   activeHandoff(): Promise<MemoryHandoff | null>;
   /**
    * 这个 scope 的 notes 占了几个位置：看得见的加上 forget 过、但还占着位置的。
@@ -74,6 +77,18 @@ const noteNorm = (s: string): string => s.trim().replace(/\s+/g, " ").toLowerCas
 /** StateCore 默认 facet pack 里 notes 的展示分组。 */
 const NOTES_GROUP = "Notes";
 
+/** StateCore 1.0.0 存交接时的正文格式（formatHandoff）。 */
+function handoffContent(h: { summary: string; nextSteps: string[]; openQuestions: string[] }): string {
+  const lines = [h.summary.trim()];
+  const section = (title: string, items: string[]) => {
+    const kept = items.map((x) => x.trim()).filter(Boolean);
+    if (kept.length) lines.push(title, ...kept.map((x) => `- ${x}`));
+  };
+  section("Open questions:", h.openQuestions);
+  section("Next steps:", h.nextSteps);
+  return lines.join("\n");
+}
+
 function handle(b: Backend): ScopeHandle {
   const facts = async (): Promise<MemoryItem[]> =>
     FactGroups.parse(await b.facts()).flatMap((g) =>
@@ -102,7 +117,10 @@ function handle(b: Backend): ScopeHandle {
         : null;
     },
     async handoff(h) {
+      const active = RecallResult.parse(await b.recall({})).handoff;
+      if (active && active.content === handoffContent(h)) return false;
       await b.handoff({ summary: h.summary, nextSteps: h.nextSteps, openQuestions: h.openQuestions });
+      return true;
     },
     async activeHandoff() {
       return RecallResult.parse(await b.recall({})).handoff;
