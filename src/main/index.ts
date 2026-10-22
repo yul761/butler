@@ -181,7 +181,7 @@ function showEveningNotification(brief: Brief): void {
 
 /**
  * 发送前确认（设计文档 7.6）：展示完整的出站内容，默认按钮和取消都是“不发送”。
- * 有主窗口时把它带到前台并作为父窗口。最多等 CONFIRM_TIMEOUT_MS，超时视为拒绝；
+ * 把主窗口带到前台并作为父窗口；没有主窗口时视为拒绝。最多等 CONFIRM_TIMEOUT_MS，超时视为拒绝；
  * app 正在退出时立即返回 false，对话框打开中开始退出也会被关掉，不会挡住退出。
  */
 async function confirmSend(outbound: string, quit: AbortSignal): Promise<boolean> {
@@ -198,9 +198,15 @@ async function confirmSend(outbound: string, quit: AbortSignal): Promise<boolean
     detail: outbound,
     signal,
   };
+  // 没有主窗口时（窗口还没建好、或正在退出）直接视为拒绝：macOS 上无父窗口的对话框不响应 abort，
+  // 超时和退出都关不掉它（Electron 44 实测），会一直挡着。
   const w = win && !win.isDestroyed() ? win : null;
-  if (w) showWindow();
-  const r = w ? await dialog.showMessageBox(w, options) : await dialog.showMessageBox(options);
+  if (!w) {
+    logger("confirm-before-send: no main window, treated as declined");
+    return false;
+  }
+  showWindow();
+  const r = await dialog.showMessageBox(w, options);
   // 被超时或退出关掉的对话框一律当作拒绝。
   return r.response === 0 && !signal.aborted;
 }
