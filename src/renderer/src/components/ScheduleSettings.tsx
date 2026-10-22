@@ -159,7 +159,7 @@ export function ScheduleSettings() {
         <div className="actions">
           <button onClick={() => void save("trackerTools")}>{S.save}</button>
         </div>
-        <TrackerToolPicker onSave={(picked) => save("trackerTools", mergeTools(value("trackerTools"), picked))} />
+        <TrackerToolPicker onDetect={() => setError(null)} onSave={(picked) => save("trackerTools", mergeTools(value("trackerTools"), picked))} />
       </div>
 
       {PROMPTS.map((k) => (

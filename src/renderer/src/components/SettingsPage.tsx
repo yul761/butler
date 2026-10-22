@@ -6,7 +6,7 @@ import { PrivacySettings } from "./PrivacySettings";
 import { GeneralSettings } from "./GeneralSettings";
 import { ScheduleSettings } from "./ScheduleSettings";
 
-export function SettingsPage() {
+export function SettingsPage({ onRerunWizard }: { onRerunWizard: () => void }) {
   const [report, setReport] = useState<HealthReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +50,7 @@ export function SettingsPage() {
         <button className="primary" disabled={busy || report.hooks === "settings_invalid"} onClick={() => void run(api.installHooks)}>{S.installHooks}</button>
         <button disabled={busy || report.hooks === "missing"} onClick={() => void run(api.uninstallHooks)}>{S.uninstallHooks}</button>
       </div>
-      <GeneralSettings report={report} onHealth={setReport} />
+      <GeneralSettings report={report} onHealth={setReport} onRerunWizard={onRerunWizard} />
       <ScheduleSettings />
       <PrivacySettings />
     </div>

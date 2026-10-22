@@ -304,6 +304,7 @@ export const S = {
   wizardFinish: "开始使用",
   wizardClaudeTitle: "检查 Claude Code",
   wizardClaudeHelp: "Butler 只用你本机已登录的公司 claude 干活。找不到时：确认在终端里能运行 claude；从 Finder 启动的 app 读不到某些 shell 配置，可以在下面直接填 claude 的绝对路径（终端里 which claude 的结果）。",
+  wizardClaudePathEmptyHint: "留空表示自动查找（从登录 shell 的 PATH）。只有改动后才能保存；把已保存的路径清空再保存，就是改回自动查找。",
   wizardClaudeMissing: "没有找到能用的 claude：这一步完成之前不能继续。",
   wizardHooksTitle: "安装 hook 和 /handoff 命令",
   wizardHooksHelp: "Butler 会在你的用户级 Claude Code 设置里合并写入几个 hook（不覆盖你已有的），并加一个 /handoff 命令。它们只把事件写进 ~/.butler/inbox，不联网、不阻塞 Claude Code，随时可以在设置页一键卸载。",

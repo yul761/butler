@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HealthReport } from "../../shared/types";
-import { canAdvance, needsOnboarding, nextStep, prevStep, stepNumber, WIZARD_STEPS } from "./wizard";
+import { canAdvance, needsOnboarding, nextStep, onboardingReducer, type OnboardingState, prevStep, stepNumber, WIZARD_STEPS } from "./wizard";
 
 const report = (claude: Partial<HealthReport["claude"]>): HealthReport => ({
   claude: { path: "/usr/local/bin/claude", version: "2.1.306", flags: {}, missingFlags: [], error: null, ...claude },
@@ -40,22 +40,23 @@ describe("first-run wizard (design 9, 10)", () => {
   });
 });
 
-describe("re-running the wizard from settings", () => {
-  it("shows the wizard again as soon as a state-changed refresh reads onboardingDone=0", () => {
-    // App.refresh 在每次 state-changed 通知后重新读设置并调用 needsOnboarding。
-    const reads = [{ onboardingDone: "1" }, { onboardingDone: "0" }, { onboardingDone: "1" }];
-    expect(reads.map(needsOnboarding)).toEqual([false, true, false]);
+describe("onboarding state (App-level decision)", () => {
+  const start = null as OnboardingState;
+  it("is unknown until the first settings read, then follows onboardingDone", () => {
+    expect(onboardingReducer(start, { type: "loaded", settings: { onboardingDone: "0" } })).toBe(true);
+    expect(onboardingReducer(start, { type: "loaded", settings: { onboardingDone: "1" } })).toBe(false);
   });
-  it("treats an unexpected value as not done", () => {
-    expect(needsOnboarding({ onboardingDone: "" })).toBe(true);
+  it("fails open to the wizard when the initial read fails", () => {
+    expect(onboardingReducer(start, { type: "loadFailed" })).toBe(true);
   });
-});
-
-describe("re-running the wizard from settings", () => {
-  it("shows the wizard again as soon as a state-changed refresh reads onboardingDone=0", () => {
-    // App.refresh 在每次 state-changed 通知后重新读设置并调用 needsOnboarding。
-    const reads = [{ onboardingDone: "1" }, { onboardingDone: "0" }, { onboardingDone: "1" }];
-    expect(reads.map(needsOnboarding)).toEqual([false, true, false]);
+  it("rerun shows the wizard at once and finish hides it", () => {
+    expect(onboardingReducer(false, { type: "rerun" })).toBe(true);
+    expect(onboardingReducer(true, { type: "finished" })).toBe(false);
+  });
+  it("a late initial read never overrides rerun or finish", () => {
+    expect(onboardingReducer(true, { type: "loaded", settings: { onboardingDone: "1" } })).toBe(true);
+    expect(onboardingReducer(false, { type: "loaded", settings: { onboardingDone: "0" } })).toBe(false);
+    expect(onboardingReducer(false, { type: "loadFailed" })).toBe(false);
   });
   it("treats an unexpected value as not done", () => {
     expect(needsOnboarding({ onboardingDone: "" })).toBe(true);

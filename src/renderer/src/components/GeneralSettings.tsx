@@ -7,7 +7,7 @@ import { S } from "../strings";
 
 const TEXT_FIELDS = ["claudePath", "branchTemplate", "ticketPattern"] as const;
 
-export function GeneralSettings({ report, onHealth }: { report: HealthReport; onHealth: (r: HealthReport) => void }) {
+export function GeneralSettings({ report, onHealth, onRerunWizard }: { report: HealthReport; onHealth: (r: HealthReport) => void; onRerunWizard: () => void }) {
   const [values, setValues] = useState<EditableSettings | null>(null);
   const [draft, setDraft] = useState<Partial<EditableSettings>>({});
   const [autostart, setAutostart] = useState<AutostartState | null>(null);
@@ -118,7 +118,7 @@ export function GeneralSettings({ report, onHealth }: { report: HealthReport; on
       <p className="muted">{S.memoryExplain}</p>
       {m.statecorePlugin && <p className="error">{S.statecorePluginWarning}</p>}
       <div className="actions">
-        <button onClick={() => api.setSetting("onboardingDone", "0").catch(reportError)}>{S.rerunWizard}</button>
+        <button onClick={() => api.setSetting("onboardingDone", "0").then(onRerunWizard, reportError)}>{S.rerunWizard}</button>
       </div>
     </section>
   );

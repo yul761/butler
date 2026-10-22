@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useReducer, useState } from "react";
 import type { BriefKind } from "../../shared/brief";
 import type { OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
@@ -12,7 +12,7 @@ import { TicketPage } from "./components/TicketPage";
 import { UnclaimedPage } from "./components/UnclaimedPage";
 import { Wizard } from "./components/Wizard";
 import { S } from "./strings";
-import { needsOnboarding } from "./wizard";
+import { onboardingReducer } from "./wizard";
 
 export type Route =
   | { page: "home"; kind?: BriefKind }
@@ -30,7 +30,7 @@ export function App() {
   /** 从简报点“打开”时要在 ticket 页上执行的打开请求（执行一次后清空）。 */
   const [pendingOpen, setPendingOpen] = useState<OpenSessionRequest | null>(null);
 
-  const [onboarding, setOnboarding] = useState(false);
+  const [onboarding, dispatchOnboarding] = useReducer(onboardingReducer, null);
 
   useEffect(() => onError(setError), []);
   // 点击晚间小结的系统通知：回到简报。
@@ -47,13 +47,23 @@ export function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [t, u, s] = await Promise.all([api.listTickets(), api.unclaimed(), api.settings()]);
+      const [t, u] = await Promise.all([api.listTickets(), api.unclaimed()]);
       setTickets(t);
       setUnclaimedCount(u.length);
-      setOnboarding(needsOnboarding(s));
     } catch (e) {
       reportError(e);
     }
+  }, []);
+
+  // 向导状态只在启动时读一次；之后由“重新运行”和“完成/跳过”直接改变，不随每次 state-changed 重读。
+  useEffect(() => {
+    api.settings().then(
+      (settings) => dispatchOnboarding({ type: "loaded", settings }),
+      (e) => {
+        reportError(e);
+        dispatchOnboarding({ type: "loadFailed" });
+      },
+    );
   }, []);
 
   useEffect(() => {
@@ -83,10 +93,10 @@ export function App() {
             <button onClick={() => setError(null)}>{S.close}</button>
           </div>
         )}
-        {onboarding ? (
+        {onboarding === null ? null : onboarding ? (
           <Wizard
             onDone={() => {
-              setOnboarding(false);
+              dispatchOnboarding({ type: "finished" });
               setRoute({ page: "home" });
             }}
           />
@@ -103,7 +113,7 @@ export function App() {
               />
             )}
             {route.page === "unclaimed" && <UnclaimedPage tickets={tickets} />}
-            {route.page === "settings" && <SettingsPage />}
+            {route.page === "settings" && <SettingsPage onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "audit" && <AuditPage />}
           </>
         )}

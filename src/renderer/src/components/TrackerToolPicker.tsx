@@ -6,13 +6,14 @@ import { probeIncomplete } from "../settings-form";
 import { S } from "../strings";
 
 /** 从 Claude Code 的配置里只读检测 MCP 工具，勾选后交给 onSave（设置页和首次启动向导共用）。 */
-export function TrackerToolPicker({ onSave }: { onSave: (picked: string[]) => Promise<void> }) {
+export function TrackerToolPicker({ onSave, onDetect }: { onSave: (picked: string[]) => Promise<void>; onDetect?: () => void }) {
   const [probe, setProbe] = useState<McpProbe | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [detecting, setDetecting] = useState(false);
 
   async function detect() {
     setDetecting(true);
+    onDetect?.();
     try {
       const p = await api.detectTrackerTools();
       setProbe(p);

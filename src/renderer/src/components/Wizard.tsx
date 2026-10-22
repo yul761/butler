@@ -16,6 +16,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [claudePath, setClaudePath] = useState("");
+  const [savedClaudePath, setSavedClaudePath] = useState("");
 
   async function run(fn: () => Promise<HealthReport>) {
     setBusy(true);
@@ -31,7 +32,13 @@ export function Wizard({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     void run(api.health);
+    api.settings().then((s) => { setClaudePath(s.claudePath); setSavedClaudePath(s.claudePath); }, reportError);
   }, []);
+
+  // 换步骤时清掉上一步的提示（如“已保存”）。
+  useEffect(() => {
+    setMessage(null);
+  }, [step]);
 
   async function finish() {
     try {
@@ -45,7 +52,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   async function saveClaudePath() {
     setMessage(null);
     try {
-      await api.setSetting("claudePath", claudePath);
+      await api.setSetting("claudePath", claudePath.trim());
+      setSavedClaudePath(claudePath.trim());
       await run(api.health);
     } catch (e) {
       setMessage(errorText(e));
@@ -92,8 +100,9 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           <div className="field">
             {S.generalFields.claudePath}
             <input className="mono" value={claudePath} placeholder={S.generalPlaceholders.claudePath} onChange={(e) => setClaudePath(e.target.value)} />
+            {claudePath.trim() === "" && <p className="muted">{S.wizardClaudePathEmptyHint}</p>}
             <div className="actions">
-              <button onClick={() => void saveClaudePath()}>{S.save}</button>
+              <button disabled={claudePath.trim() === savedClaudePath} onClick={() => void saveClaudePath()}>{S.save}</button>
               <button disabled={busy} onClick={() => void run(api.health)}>{S.recheck}</button>
             </div>
           </div>
@@ -124,7 +133,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         <section className="settings-section">
           <h3>{S.wizardTrackerTitle}</h3>
           <p className="muted">{S.wizardTrackerHelp}</p>
-          <TrackerToolPicker onSave={saveTools} />
+          <TrackerToolPicker onDetect={() => setMessage(null)} onSave={saveTools} />
         </section>
       )}
 
