@@ -1,4 +1,5 @@
 import { isAbsolute } from "node:path";
+import vm from "node:vm";
 import { PRIVACY_LEVELS, TERM_CATEGORIES, type PrivacyLevel, type SensitiveTerm, type TermCategory } from "../../shared/llm";
 import type { EditableSettingKey } from "../../shared/settings";
 import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
@@ -172,60 +173,106 @@ export function normalizeTerms(input: unknown): SensitiveTerm[] {
   return out;
 }
 
+function branchNameBad(name: string): boolean {
+  return (
+    !/^[A-Za-z0-9._/-]+$/.test(name) ||
+    name.startsWith("-") ||
+    name.startsWith("/") ||
+    name.endsWith("/") ||
+    name.endsWith(".") ||
+    name.endsWith(".lock") ||
+    name.includes("..") ||
+    name.includes("//") ||
+    name.includes("/.")
+  );
+}
+
 /** 分支名模板（设计文档 4.1）：必须含 {key}；代入一个 ticket 号之后要是 git 接受的分支名（保守的子集）。 */
 export function normalizeBranchTemplate(value: string): string {
   const t = value.trim();
   if (!t.includes("{key}")) throw new SettingError("分支名模板必须包含 {key}，例如 feature/{key}");
-  const sample = t.replaceAll("{key}", "PROJ-1");
-  const bad =
-    t.length > 100 ||
-    !/^[A-Za-z0-9._/-]+$/.test(sample) ||
-    sample.startsWith("-") ||
-    sample.startsWith("/") ||
-    sample.endsWith("/") ||
-    sample.endsWith(".") ||
-    sample.endsWith(".lock") ||
-    sample.includes("..") ||
-    sample.includes("//") ||
-    sample.includes("/.");
-  if (bad) throw new SettingError("分支名模板只能用字母、数字和 . _ / -（不能以 - 或 / 开头、不能有 .. 或 //），最长 100 字，例如 feature/{key}");
+  if (t.length > 100 || branchNameBad(t.replaceAll("{key}", "PROJ-1"))) {
+    throw new SettingError("分支名模板只能用字母、数字和 . _ / -（不能以 - 或 / 开头、不能有 .. 或 //），最长 100 字，例如 feature/{key}");
+  }
   return t;
 }
 
-/** 量词套量词：(a+)+、(\w*)*、(x{1,3})+ 这类，回溯随输入长度指数增长。 */
-const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*(?:[+*]|\{\d)/;
-/** 被量词修饰的分组里有分支：(A|AB)* 这类，分支重叠时同样指数增长。 */
-const QUANTIFIED_ALTERNATION = /\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)\s*(?:[+*]|\{\d)/;
-/** 再用几段“差一点就匹配”的输入实测：每段超过 PROBE_BUDGET_MS 就拒绝（输入很短，最坏情况也只卡几十毫秒）。 */
-const REDOS_PROBES = ["A".repeat(22), "A-".repeat(11), "1".repeat(22), "a".repeat(22), "AB".repeat(11)].map((s) => `${s}!`);
-const PROBE_BUDGET_MS = 20;
+/** 这些样例里能被 ticket 号正则匹配的，代入模板之后也都要是合法分支名（例如正则 `-\d+` 配模板 `{key}` 会得到以 - 开头的名字）。 */
+const KEY_SAMPLES = ["PROJ-1", "-1", "-PROJ-1", "1-1", "A_B-1", "#1", "A.B-1", "..-1"];
+
+export function checkBranchTemplateFits(template: string, ticketPattern: string): void {
+  let anchored: RegExp;
+  try {
+    anchored = new RegExp(`^(?:${ticketPattern})$`);
+  } catch {
+    return;
+  }
+  for (const key of KEY_SAMPLES) {
+    if (anchored.test(key) && branchNameBad(template.replaceAll("{key}", key))) {
+      throw new SettingError(`分支名模板和 ticket 号正则搭配起来会得到不合法的分支名（例如 ${template.replaceAll("{key}", key)}），请调整其中之一`);
+    }
+  }
+}
+
+/** 回溯保护：候选正则在隔离的 vm 里跑，超时由 V8 强行中断（普通的计时测量没法打断正在回溯的正则）。 */
+const PROBE_TIMEOUT_MS = 250;
+const PROBE_LENGTH = 5000;
+
+/** 长对抗输入：一长串能匹配的字符，后面接一个让匹配失败的字符；再加交替和 `A…-` 后接非数字的形状。 */
+function adversarialInputs(pattern: string): string[] {
+  const seeds = new Set(["A", "a", "1", "-", " ", "AB", "A1", "A-", "1-"]);
+  // 模式自己的第一个字符类的起点或第一个字面量，让探针更贴近模式。
+  const first = /^(?:\(\?:)?(?:\[([^\]\\^])|([A-Za-z0-9#_]))/.exec(pattern);
+  const own = first?.[1] ?? first?.[2];
+  if (own) seeds.add(own);
+  const out: string[] = [];
+  for (const seed of seeds) {
+    const run = seed.repeat(Math.ceil(PROBE_LENGTH / seed.length)).slice(0, PROBE_LENGTH);
+    out.push(`${run}!`, `${run}-x`, `${run}-`, `${run}\n`);
+  }
+  out.push("AB1-".repeat(PROBE_LENGTH / 4) + "!", "A-".repeat(PROBE_LENGTH / 2) + "x", `${"A".repeat(PROBE_LENGTH)}-!`);
+  return out;
+}
+
+/** 每个探针各有 250ms 的硬超时；超时说明回溯超线性。 */
+function backtracksBadly(pattern: string): boolean {
+  const ctx = vm.createContext({ input: "" });
+  vm.runInContext(
+    `globalThis.a = null; globalThis.b = null;
+     globalThis.src = ${JSON.stringify(pattern)};
+     globalThis.a = new RegExp("^(?:" + src + ")$");
+     globalThis.b = new RegExp("(?<![A-Za-z0-9])(?:" + src + ")(?![0-9])", "i");`,
+    ctx,
+  );
+  const run = new vm.Script("a.test(input); b.test(input);");
+  try {
+    for (const input of adversarialInputs(pattern)) {
+      ctx.input = input;
+      run.runInContext(ctx, { timeout: PROBE_TIMEOUT_MS });
+    }
+  } catch {
+    return true;
+  }
+  return false;
+}
 
 /**
  * ticket 号正则（设计文档 4.4、12）：在扫描器、session 发现和建 ticket 里反复执行，保存前挡住
- * 写错的、能匹配空字符串的、带反向引用的、以及回溯会指数增长的写法（计划 3 遗留的 ReDoS 检查）。
+ * 写错的、能匹配空字符串的、带反向引用的、以及回溯会超线性增长的写法（计划 3 遗留的 ReDoS 检查）。
  */
 export function normalizeTicketPattern(value: string): string {
   const t = value.trim();
   if (!t || t.length > 100) throw new SettingError("ticket 号正则不能为空，最长 100 字");
   let anchored: RegExp;
-  let search: RegExp;
   try {
     anchored = new RegExp(`^(?:${t})$`);
-    search = new RegExp(`(?<![A-Za-z0-9])(?:${t})(?![0-9])`, "i");
+    new RegExp(`(?<![A-Za-z0-9])(?:${t})(?![0-9])`, "i");
   } catch {
     throw new SettingError("ticket 号正则写法不对");
   }
   if (/\\[1-9]|\\k</.test(t)) throw new SettingError("ticket 号正则不能用反向引用");
-  if (NESTED_QUANTIFIER.test(t) || QUANTIFIED_ALTERNATION.test(t)) {
-    throw new SettingError("ticket 号正则里有套在一起的量词或被量词修饰的分支（例如 (a+)+、(A|AB)*），可能让匹配卡死");
-  }
   if (anchored.test("")) throw new SettingError("ticket 号正则不能匹配空字符串");
-  for (const probe of REDOS_PROBES) {
-    const start = performance.now();
-    search.test(probe);
-    anchored.test(probe);
-    if (performance.now() - start > PROBE_BUDGET_MS) throw new SettingError("ticket 号正则太慢（可能让匹配卡死），请简化");
-  }
+  if (backtracksBadly(t)) throw new SettingError("ticket 号正则太慢（长文本上回溯可能卡死），请简化，例如去掉连续或嵌套的 + / *");
   return t;
 }
 

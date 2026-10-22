@@ -23,7 +23,7 @@ import { addDays, localDate } from "../schedule/calendar";
 import type { Scheduler } from "../schedule/scheduler";
 import type { PtyManager } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
-import { normalizeSetting, SettingError } from "../settings/settings-values";
+import { checkBranchTemplateFits, normalizeSetting, SettingError } from "../settings/settings-values";
 import { TicketError, type TicketService } from "../tickets/ticket-service";
 import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
@@ -174,7 +174,10 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.settingsGet, (): EditableSettings => Object.fromEntries(EDITABLE_SETTINGS.map((k) => [k, d.settings.get(k)])) as EditableSettings);
   handle(IPC.settingsSet, async (key: string, value: unknown) => {
     const k = settingKey(key);
-    d.settings.set(k, normalizeSetting(k, String(value ?? "")));
+    const next = normalizeSetting(k, String(value ?? ""));
+    if (k === "branchTemplate") checkBranchTemplateFits(next, d.settings.get("ticketPattern"));
+    if (k === "ticketPattern") checkBranchTemplateFits(d.settings.get("branchTemplate"), next);
+    d.settings.set(k, next);
     if (k === "claudePath") await d.health.refresh();
     d.notify();
   });

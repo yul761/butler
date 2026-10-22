@@ -3,7 +3,7 @@ import type { EditableSettingKey } from "../../shared/settings";
 import { SettingsRepo } from "../db/settings-repo";
 import { memDb } from "../test-utils";
 import {
-  isLoopbackHost, llmConfig, normalizeBaseUrl, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTerms, normalizeTicketPattern, parseDays, parsePriceTable, parseTime, parseToolList,
+  isLoopbackHost, llmConfig, normalizeBaseUrl, checkBranchTemplateFits, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTerms, normalizeTicketPattern, parseDays, parsePriceTable, parseTime, parseToolList,
   parseWorkingDays, priceFor, scheduleConfig, SettingError, TERMS_LIMIT, thresholds, trackerTools,
 } from "./settings-values";
 
@@ -186,8 +186,9 @@ describe("general settings (design 9, 12)", () => {
   });
 
   it("accepts ordinary ticket patterns and rejects ones that could hang the main process", () => {
-    for (const ok of ["[A-Z][A-Z0-9]+-\\d+", "[A-Z]{2,10}-\\d{1,6}", "#\\d+", "(?:ENG|OPS)-\\d+"]) expect(normalizeTicketPattern(ok), ok).toBe(ok);
-    for (const bad of ["", "(", "x".repeat(101), "(a+)+", "(\\w*)*-\\d+", "([A-Z]+-?)+\\d", "(A|AB)*-\\d+", "(?:x{1,3})+", "(\\w)\\1", ".*", "\\d*"]) {
+    for (const ok of ["[A-Z][A-Z0-9]+-\\d+", "[A-Z]{2,10}-\\d{1,6}", "#\\d+", "(?:ENG|OPS)-\\d+", "(?:PROJ|OPS)-\\d+", "[A-Z][A-Z0-9]+-\\d+"]) expect(normalizeTicketPattern(ok), ok).toBe(ok);
+    for (const bad of ["", "(", "x".repeat(101), "(a+)+", "(\\w*)*-\\d+", "([A-Z]+-?)+\\d", "(?:x{1,3})+", "(\\w)\\1", ".*", "\\d*",
+      "[A-Z]+[A-Z]+[A-Z]+-\\d+", "(?:(A+))+B", "(a|a)+$", "(\\w+\\s?)+$"]) {
       expect(() => normalizeTicketPattern(bad), bad).toThrow(SettingError);
     }
   });
@@ -198,5 +199,14 @@ describe("general settings (design 9, 12)", () => {
     expect(() => normalizeSetting("memoryEnabled", "yes")).toThrow(SettingError);
     expect(normalizeSetting("branchTemplate", " feature/{key} ")).toBe("feature/{key}");
     expect(normalizeSetting("ticketPattern", " #\\d+ ")).toBe("#\\d+");
+  });
+});
+
+describe("branch template against the ticket pattern", () => {
+  it("rejects combinations that can render an invalid branch name", () => {
+    expect(() => checkBranchTemplateFits("{key}", "-\\d+")).toThrow(SettingError);
+    expect(() => checkBranchTemplateFits("{key}", "\\S+-\\d+")).toThrow(SettingError);
+    expect(() => checkBranchTemplateFits("feature/{key}", "[A-Z][A-Z0-9]+-\\d+")).not.toThrow();
+    expect(() => checkBranchTemplateFits("feature/{key}", "-\\d+")).not.toThrow();
   });
 });

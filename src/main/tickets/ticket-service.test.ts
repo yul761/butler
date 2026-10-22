@@ -110,6 +110,15 @@ describe("TicketService.create input checks", () => {
     expect(tickets.get("PROJ-20")).toBeNull();
   });
 
+  it("rejects a rendered branch that starts with a dash (template and ticket pattern disagree)", async () => {
+    const db = memDb();
+    const settings = new SettingsRepo(db);
+    settings.set("ticketPattern", "-\\d+");
+    settings.set("branchTemplate", "{key}");
+    const service = new TicketService({ tickets: new TicketsRepo(db), settings, now: () => 1000 });
+    expect(await code(service.create({ key: "-5", repoPath: makeRepo(), workMode: "branch" }))).toBe("invalid_branch");
+  });
+
   it("rejects branch names git would refuse or expand", async () => {
     const { service } = setup();
     const repo = makeRepo();
