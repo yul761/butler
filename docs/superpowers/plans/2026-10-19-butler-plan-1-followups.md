@@ -181,3 +181,52 @@ Triage per the plan-2 final review: items marked "→ final wave" were fixed in 
   - Manual check: macOS confirm dialog height when the outbound body is long (Task 16)
   - Egress lint accepted residuals (deliberate evasion only): `Reflect.get(globalThis, "fetch")`, `eval`, `new Function`, template-literal subscripts, an aliased `session` variable; `utilityProcess.fork` scripts are linted themselves; `protocol.handle` cannot reach out without `net` → plan 4: add `no-eval` / `no-new-func`
   - A stale `pending` row from a quit while the confirm dialog was open is labelled "may have been sent" (conservative); stale rows for a model without a price are costed at $0
+
+# Plan 4 follow-ups
+
+## Live checks
+- Plan 4 Task 1 (statecore-mcp 1.0.0, embedded, temp dir): two followups with materially different text coexist; forget + remember of a revision keeps the old version on the why chain (chain length 2); a text identical to a forgotten note stays hidden; a variant prefix shows it; without a model `digestNow` is `no-llm`; two notes differing only in their id → the second supersedes the first (Jaccard ≥ 0.7) — Butler's variants carry distinguishing words and re-write a displaced note
+- Plan 4 Task 7 (Electron 44 as Node, bundled statecore-mcp ≈ 1.8 MB): initialize / tools / remember over stdio work; `MODEL_API_KEY` + `FEATURE_LLM=true` in the environment give `no model configured`
+- Plan 4 Task 11 (isolated launch, temp `BUTLER_HOME` + `CLAUDE_CONFIG_DIR`, no provider called, `llm_audit` empty): after the second launch's `syncAll()`, `user_version` 4, `memory_sync` = DEMO-42 / handoff 1; `ticket:DEMO-42` facts = the open followup and the decision, `workspace` = the learning with its `[learning:DEMO-42]` prefix; the bundled MCP (Electron as Node) `recall` on the same scope returns the handoff, decision and followup; no `--mcp-config` file written (no session opened); nothing logged
+
+## Rulings
+- Ruling P4-R1: StateCore distillation at the full level is not scanned — design 8.5 accepts sending raw events at full; it is audited (source = statecore) and budgeted — cost if wrong: raw work content reaches the user's own provider at the level whose label says so
+- Ruling P4-R2: depend on `statecore-mcp@1.0.0` from npm, exact pin (published 2026-09-24, MIT, ships `./lib` with types); no vendoring, no git dependency — cost if wrong: a later StateCore fix needs a version bump
+- Ruling P4-R3: `statecoreEnv()` loses its key-handover branch (single argument); no StateCore process ever gets a model key through its environment — cost if wrong: none (no caller used the branch)
+- Ruling P4-R4: R1 implemented through StateCore's `digestLlm` injection point (`PrivacyGateway.statecoreModel()`), not a loopback proxy: no port, no bearer token, the key never leaves the gateway — cost if wrong: claude-mounted MCP processes cannot distil (R1 forbids it anyway)
+- Ruling P4-R5: no confirm-before-send dialog for distillation; with confirm-before-send on, distillation does not run — a digest makes several model calls in the background — cost if wrong: users with confirm on get no distillation
+- Ruling P4-R6: headless handoffs / refreshes do not mount the memory MCP — their prompt already carries the previous handoff and open followups, and fewer MCP servers means fewer moving parts in unattended runs — cost if wrong: handoff prompts miss Claude's own notes
+- Ruling P4-R7: on Windows with a `.cmd` claude and a config path that cmd.exe cannot carry safely, sessions start without memory (logged) until plan 5 removes cmd.exe — cost if wrong: Windows users with spaces in their home path have no memory in sessions for one plan
+- Ruling PF2 (notes-cap guard): before every StateCore `remember` into a ticket scope, Butler counts the scope's note slots (live + forgotten) and writes nothing when the scope is full, so it never makes StateCore evict a note it wants to keep; priority when only some fit: open followups (newest first), then decisions — cost if wrong: some entries never reach StateCore (logged as counts)
+- Task 6 product ruling: the nightly distillation skips a `ticket:` scope whose notes are full (30/30) — a digest cannot free slots there, only evict — cost: full tickets are not distilled
+
+## Resolved in plan 4
+- Plan 3 still open: StateCore wiring builds its env with `statecoreEnv()` (Tasks 1, 7)
+- Plan 3 still open: StateCore at full bypassed the gateway / key in plaintext for claude-mounted MCP → R1: keyless MCP, distillation only via `PrivacyGateway.statecoreModel()` (Tasks 5, 6, 7)
+- Plan 3 parked (scanner): custom `ticketPattern` ReDoS validation in settings (Task 9)
+- Design 8.5: warning when the user also installed StateCore's capture plugin (Task 9)
+- Found while planning: in dev, `app.getAppPath()` is `out/main` when launched as `electron out/main/index.js`, so the bundled hook path was wrong in that launch style; bundled paths now resolve from `__dirname` (Task 7)
+
+## Still open after plan 4
+- Everything plan 5 lists (CSP, packaging, Windows items incl. cmd.exe quoting with `--mcp-config` and the killTree orphan gap, absolute git path, AUMID, SEA size / build Node, Playwright E2E, CI, no-eval lint, open-source docs)
+- Plan 3 items that plan 4 appendix C declines (not fixed; the reason for each is in that appendix): low-impact minors, nested `claude --resume/-c`, scanner / pseudonymizer / gateway / narrative / audit parked minors, the remaining egress-lint residuals
+- StateCore note cap (30 notes per scope, forgotten notes included): Butler maintains at most 24 of its own notes per ticket, never evicts a note in its desired set (Ruling PF2), and skips any write that would not fit. Skipped writes are logged as counts only. Forgotten notes keep their slots on statecore-mcp 1.0.0, and that holds at every privacy level, because a full digest does not free them (see below) and full ticket scopes are not digested anyway. So a long-lived ticket with a lot of followup churn stops gaining new followups and decisions once the scope has seen 30 notes. That is about 28 new Butler notes after a couple of long-lived ones, and fewer when Claude also writes into the scope. `workspace` keeps the latest 30 learnings, and StateCore evicts the oldest.
+- Variant distinguishing words are visible to Claude in recall (`[followup:f_1#2 abcd efgh ijkl] …`)
+- StateCore 1.0.0 upstream limitations (worth reporting to StateCore; Butler works around or documents them):
+  - (a) A full digest does not free forgotten-note slots. `pruneForgottenFacts` drops them, but `createDigestWithSnapshot` → `carryOverConcurrentNotes` re-appends every registry note missing from the pipeline state, without a cap check. So `profile.notes` can exceed 30, and the forgotten notes move to the end, which makes the oldest-first eviction hit live notes first.
+  - (b) Consolidate events written before Butler's first note in a scope are never counted as pending: that first write inserts a `Digest` row, and `countPendingEvents` counts only newer events. They are distilled only if a later event arrives within the digest window. This is pinned by a `statecore.test.ts` test that should be deleted if an upgrade changes it.
+  - (c) A digest that adds notes to a scope at 30/30 can evict a Butler note. Butler skips digesting ticket scopes at the cap, and the resync after a digest never evicts to restore a note. `workspace` has no resync.
+  - (d) A digest can report "ran" when it did not process every event: a refused or failed stage-2 chunk is skipped while a `Digest` row is still written, and after two invalid-JSON replies stage 2 returns a degraded result. Either way, those events count as digested with no facts.
+- Ticket pattern ReDoS: settings reject a pattern that times out a vm probe (~250 ms) on about 5k-character adversarial inputs, which catches exponential and steep polynomial patterns. A quadratic pattern can still pass and be slow on very large inputs.
+- Parked minors:
+  - Tickets whose keys differ only by case collide in `mcp/tickets/` on case-insensitive filesystems (keys are effectively uppercase).
+  - Stale `mcp/tickets/` configs for deleted tickets are not removed.
+  - An audit write can race `db.close` on quit. This predates plan 4: the `pending` row is swept at the next start with a conservative cost.
+  - A connect-refused / DNS failure is charged a conservative cost (safe direction).
+  - A skipped distillation night is visible only in the log.
+  - MemoryPanel, the wizard and the App onboarding wiring have no component tests (plan 1 R2 → plan 5 E2E).
+  - Quitting mid-wizard restarts it at step 1, and "稍后再说" (skip) is permanent until the wizard is rerun from settings.
+- Carried to plan 5:
+  - Packaging must ship `build/memory-mcp/statecore-mcp.cjs` at `resources/memory-mcp/` and keep the `ELECTRON_RUN_AS_NODE` fuse enabled; the memory MCP runs on Butler's own Electron as Node.
+  - Plan 5's README must not claim that the scanner covers full-level memory distillation (P4-R1). Its memory paragraph should also say that a ticket whose 30 note slots are used gets no new memory entries (the cap item above).
+  - P4-R7's Windows memory-mount skip is removed by plan 5 Task 3 (no cmd.exe).

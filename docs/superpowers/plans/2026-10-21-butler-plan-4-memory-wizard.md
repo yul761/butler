@@ -4461,7 +4461,7 @@ Expected：
 
 ## Still open after plan 4
 - Everything plan 5 lists (CSP, packaging, Windows items incl. cmd.exe quoting with `--mcp-config` and the killTree orphan gap, absolute git path, AUMID, SEA size / build Node, Playwright E2E, CI, no-eval lint, open-source docs)
-- StateCore note cap (30 per scope): Butler keeps at most 24 of its own notes per ticket and at most 30 learnings in `workspace` (the oldest are evicted by StateCore)
+- StateCore note cap (30 per scope, forgotten notes included): Butler maintains at most 24 of its own notes per ticket, never evicts a note in its desired set (Ruling PF2) and skips writes that would not fit (logged as counts); a long-lived ticket with followup churn stops gaining new notes once its scope has seen 30 notes (statecore-mcp 1.0.0: a full digest does not free forgotten slots); `workspace` keeps the latest 30 learnings (the oldest are evicted by StateCore)
 - Variant distinguishing words are visible to Claude in recall (`[followup:f_1#2 abcd efgh ijkl] …`)
 ```
 
@@ -4517,7 +4517,7 @@ git commit -m "docs: record plan 4 live checks, rulings and what stays open"
 
 1. 8.3 节 “`remember(key=decision:<key>)` / `remember(key=followup:<id>)`”：StateCore 的 `remember` 没有 key 参数（13.1），改为稳定前缀 + 从 app.db 计算期望状态再比对（任务 2、4）；同一条目先 forget 再 remember。和已遗忘条目一字不差、或者正文和另一条几乎一样时，写成带区分词的变体（P4-R8）。
 2. 8.3 节的 handoff 写入：`summary` 是 `状态：<status>。完成：<done_today>`（StateCore 要求 summary 非空）。只写每次同步时最新的那一条；learnings 写进 `workspace` 时带 `[learning:<KEY>]` 前缀标明来源。第一次同步最多回放 20 条 handoff 的 learnings。
-3. 8.3 节没有说 notes 的数量上限：StateCore 每个 scope 最多 30 条 notes，Butler 每个 ticket 最多维护 24 条（follow-up 优先，决策按最近变化），`workspace` 的经验只保留最近的 30 条。
+3. 8.3 节没有说 notes 的数量上限：StateCore 每个 scope 最多 30 条 notes（被 forget 的也占位，满了再追加会淘汰最旧的一条）。Butler 每个 ticket 的期望集合最多 24 条（follow-up 优先，决策按最近变化）；每次写入前实测空位，没有空位就不写（日志只记跳过的条数），从不让 StateCore 挤掉期望集合里的条目（PF2）。statecore-mcp 1.0.0 的完整档位蒸馏也不释放被遗忘条目的位置，所以长期使用、follow-up 来回变化的 ticket 在 scope 累计满 30 条后不再增加新条目。`workspace` 的经验只保留最近的 30 条（StateCore 淘汰最旧的）。
 4. 8.4 节的两个 MCP 实例命名为 `butler-memory` / `butler-workspace`（不和用户自己的 `statecore` 重名）；server 进程是打包的单文件，由 Butler 自己的 Electron 运行，不依赖用户装的 Node。
 5. 8.5 节 “`full` 时给 StateCore 设置 `FEATURE_LLM=true`”：改为任何 StateCore 进程都没有 key（R1），`full` 档位下由主进程每晚经 gateway 蒸馏（P4-R4）；不扫描（P4-R1）、开着发送前确认时不蒸馏（P4-R5）。
 6. 9 节的首次启动向导可以整体跳过；只有第一步（找到能用的 claude）阻止“下一步”。老用户由迁移 4 直接标记为已完成。
