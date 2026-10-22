@@ -52,3 +52,98 @@ export interface MemoryView {
   /** 读 StateCore 失败时的原因。 */
   error: string | null;
 }
+
+/** Butler 自己维护的条目种类（设计文档 8.3）。learnings 写在 workspace，不参与比对。 */
+export const NOTE_KINDS = ["decision", "followup"] as const;
+export type NoteKind = (typeof NOTE_KINDS)[number];
+
+export interface ButlerNote {
+  kind: NoteKind;
+  /** 决策的 key 或 followup 的 id，已经过 noteId() 处理。 */
+  id: string;
+  /** 已经过 noteBody() 处理的正文。 */
+  body: string;
+}
+
+export interface ParsedNote extends ButlerNote {
+  /** 1 表示没有变体后缀；#n 时为 n。 */
+  variant: number;
+}
+
+/**
+ * StateCore 的 note 上限是 500 字。前缀最长约 115 字（kind、40 字的 id、#5 和 12 个区分词），正文最多 360 字。
+ */
+export const NOTE_BODY_LIMIT = 360;
+export const NOTE_ID_LIMIT = 40;
+/** 变体最多到 #5。 */
+export const MAX_NOTE_VARIANT = 5;
+
+/** 前缀里的 id：不能有空白、[、]、#（会破坏前缀），控制字符也去掉；NFKC 之后最多 NOTE_ID_LIMIT 字，空的写成 _。 */
+export function noteId(raw: string): string {
+  const id = raw
+    .normalize("NFKC")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\s\]#[\u0000-\u001f\u007f]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return Array.from(id).slice(0, NOTE_ID_LIMIT).join("") || "_";
+}
+
+/** 正文：NFKC，所有空白（含换行）压成一个空格，首尾去空白，最多 NOTE_BODY_LIMIT 个字符（按码点，不切开代理对）。 */
+export function noteBody(raw: string): string {
+  const text = raw.normalize("NFKC").replace(/\s+/g, " ").trim();
+  return Array.from(text).slice(0, NOTE_BODY_LIMIT).join("").trim();
+}
+
+/** FNV-1a（32 位）：渲染进程也会用到这个文件，不能用 node:crypto。 */
+function fnv1a(s: string): number {
+  let h = 0x811c9dc5;
+  for (const ch of s) {
+    h ^= ch.codePointAt(0) ?? 0;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/**
+ * 变体 v（≥ 2）的区分词：3 × (v − 1) 个 4 个小写字母的词，由 kind:id:v 决定。
+ * StateCore 把 Jaccard ≥ 0.7 的两条 note 当成同一条的修订（后写的挤掉先写的，任务 1 实验 G）；
+ * 区分词让两条正文几乎一样的不同条目分开，也让和已遗忘条目一字不差的文本重新可见（实验 D/E）。
+ */
+function variantWords(kind: NoteKind, id: string, v: number): string[] {
+  let x = fnv1a(`${kind}:${id}:${v}`) || 1;
+  const words: string[] = [];
+  for (let i = 0; i < 3 * (v - 1); i++) {
+    let w = "";
+    for (let j = 0; j < 4; j++) {
+      // xorshift32
+      x ^= x << 13;
+      x >>>= 0;
+      x ^= x >>> 17;
+      x ^= x << 5;
+      x >>>= 0;
+      w += String.fromCharCode(97 + (x % 26));
+    }
+    words.push(w);
+  }
+  return words;
+}
+
+export function noteText(n: ButlerNote, variant = 1): string {
+  const suffix = variant > 1 ? `#${variant} ${variantWords(n.kind, n.id, variant).join(" ")}` : "";
+  return `[${n.kind}:${n.id}${suffix}] ${n.body}`;
+}
+
+const NOTE_RE = /^\[(decision|followup):([^\]#\s]+)(?:#(\d{1,3})(?: [a-z]{4})*)?\] ([\s\S]+)$/;
+
+export function parseNote(text: string): ParsedNote | null {
+  const m = NOTE_RE.exec(text);
+  if (!m) return null;
+  return { kind: m[1] as NoteKind, id: m[2], variant: m[3] ? Number(m[3]) : 1, body: m[4] };
+}
+
+/** 和 StateCore 的去重一样宽松：NFKC、忽略大小写和多余空白。 */
+export function sameBody(a: string, b: string): boolean {
+  const norm = (s: string) => s.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+  return norm(a) === norm(b);
+}
