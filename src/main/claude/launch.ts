@@ -2,7 +2,10 @@ import type { ChildProcess, StdioOptions } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import spawn from "cross-spawn";
+import { isCmdShim } from "../util/exec";
 import { absolutePathEntries, findOnPath } from "./locate";
+
+export { isCmdShim };
 
 /** 实际要执行的程序和参数。viaCmd：认不出 shim，只能经过 cmd.exe。 */
 export interface Launch {
@@ -98,10 +101,6 @@ export function parseCmdShim(content: string): CmdShim | null {
   if (!found || nodePaths.size > 1) return null;
   const [nodePath] = nodePaths;
   return nodePath ? { ...found, nodePath } : found;
-}
-
-export function isCmdShim(file: string, platform: NodeJS.Platform): boolean {
-  return platform === "win32" && /\.(cmd|bat)$/i.test(file);
 }
 
 /**

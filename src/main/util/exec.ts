@@ -11,13 +11,19 @@ export type ExecText = (file: string, args: string[], opts?: ExecOptions) => Pro
 /** Arguments that are safe to pass unquoted through cmd.exe. */
 export const SAFE_SHELL_ARG = /^[A-Za-z0-9_\-.=:/@,+]+$/;
 
+/** A Windows .cmd/.bat file (npm/pnpm shims): it only runs through cmd.exe. Re-exported by claude/launch.ts. */
+export function isCmdShim(file: string, platform: NodeJS.Platform): boolean {
+  return platform === "win32" && /\.(cmd|bat)$/i.test(file);
+}
+
 /** Decides how to spawn: whether to go through cmd.exe, the quoted command, and any argument unsafe for the shell. */
 export function shellPlan(
   file: string,
   args: string[],
   platform: NodeJS.Platform,
 ): { viaShell: boolean; command: string; unsafeArg: string | null } {
-  const viaShell = platform === "win32" && /\.(cmd|bat)$/i.test(file);
+  // Constant arguments only (health checks): a shim goes through cmd.exe here, unlike the session launch in claude/launch.ts.
+  const viaShell = isCmdShim(file, platform);
   const command = viaShell ? `"${file}"` : file;
   const unsafeArg = viaShell ? (args.find((a) => !SAFE_SHELL_ARG.test(a)) ?? null) : null;
   return { viaShell, command, unsafeArg };
