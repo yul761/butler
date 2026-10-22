@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { HealthReport } from "../../../shared/types";
 import { api } from "../api";
 import { S } from "../strings";
@@ -11,16 +11,27 @@ export function SettingsPage({ onRerunWizard }: { onRerunWizard: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 只采用最近一次的结果：进页面时的检测可能很慢（Windows 上经 cmd.exe 跑 claude），
+  // 期间保存 claude 路径后拿到的新结果不能被晚到的旧结果盖掉。
+  const seq = useRef(0);
   async function run(fn: () => Promise<HealthReport>) {
+    const mine = ++seq.current;
     setBusy(true);
     setError(null);
     try {
-      setReport(await fn());
+      const r = await fn();
+      if (mine === seq.current) setReport(r);
     } catch (e) {
-      setError((e as Error).message);
+      if (mine === seq.current) setError((e as Error).message);
     } finally {
-      setBusy(false);
+      if (mine === seq.current) setBusy(false);
     }
+  }
+  /** 子组件（保存 claude 路径后）直接给的新结果：作废还在路上的旧检测。 */
+  function applyHealth(r: HealthReport) {
+    seq.current++;
+    setBusy(false);
+    setReport(r);
   }
 
   useEffect(() => {
@@ -50,7 +61,7 @@ export function SettingsPage({ onRerunWizard }: { onRerunWizard: () => void }) {
         <button className="primary" disabled={busy || report.hooks === "settings_invalid"} onClick={() => void run(api.installHooks)}>{S.installHooks}</button>
         <button disabled={busy || report.hooks === "missing"} onClick={() => void run(api.uninstallHooks)}>{S.uninstallHooks}</button>
       </div>
-      <GeneralSettings report={report} onHealth={setReport} onRerunWizard={onRerunWizard} />
+      <GeneralSettings report={report} onHealth={applyHealth} onRerunWizard={onRerunWizard} />
       <ScheduleSettings />
       <PrivacySettings />
     </div>

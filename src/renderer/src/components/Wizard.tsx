@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { HealthReport } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
@@ -18,15 +18,20 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   const [claudePath, setClaudePath] = useState("");
   const [savedClaudePath, setSavedClaudePath] = useState("");
 
+  // 只采用最近一次检测的结果：启动时的检测在 Windows 上可能很慢（经 cmd.exe 跑 claude --version / --help），
+  // 用户在它返回之前改了 claude 路径并重新检测时，晚到的旧结果不能盖掉新结果。
+  const runSeq = useRef(0);
   async function run(fn: () => Promise<HealthReport>) {
+    const seq = ++runSeq.current;
     setBusy(true);
     setMessage(null);
     try {
-      setReport(await fn());
+      const r = await fn();
+      if (seq === runSeq.current) setReport(r);
     } catch (e) {
-      setMessage(errorText(e));
+      if (seq === runSeq.current) setMessage(errorText(e));
     } finally {
-      setBusy(false);
+      if (seq === runSeq.current) setBusy(false);
     }
   }
 
