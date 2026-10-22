@@ -48,7 +48,9 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   const dataDir = o.dataDir ?? tempDir();
   const logs: string[] = [];
   let enabled = o.enabled ?? true;
-  let now = 1000;
+  // 交接的 createdAt 默认晚于此前 StateCore 的所有写入，和产品里一样（后来的交接产生在前一次写入之后）。
+  // StateCore 的时钟是单调的（同一毫秒内多次写入时 +1），本文件里成批的写入会让它跑到真实时钟前面，所以留一分钟余量。
+  let now = Date.now();
   const synced: string[] = [];
   const memory = new MemoryService({
     dataDir, tickets, handoffs, followups, sync,
@@ -57,8 +59,8 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
     onSynced: (key) => synced.push(key),
     log: (m, e) => logs.push(e === undefined ? m : `${m} ${e instanceof Error ? e.message : String(e)}`),
   });
-  const addHandoff = (p: Handoff, trigger: HandoffTrigger = "nightly", key = "PROJ-1") =>
-    handoffs.insert({ ticketKey: key, sessionId: null, trigger, createdAt: ++now, payload: p, rawText: null })!;
+  const addHandoff = (p: Handoff, trigger: HandoffTrigger = "nightly", key = "PROJ-1", createdAt = (now = Math.max(now + 1, Date.now() + 60_000))) =>
+    handoffs.insert({ ticketKey: key, sessionId: null, trigger, createdAt, payload: p, rawText: null })!;
   const addFollowup = (id: string, over: Partial<Followup> = {}) =>
     followups.insert({
       id, ticketKey: "PROJ-1", kind: "config", description: `描述 ${id}`, trigger: "after_merge", dueDate: null,
@@ -100,8 +102,7 @@ describe("MemoryService.syncTicket (design 8.3)", () => {
     const t = setup();
     t.addHandoff(payload({ decisions: [{ key: "db", statement: "用 PostgreSQL 存储会话" }] }));
     await t.memory.syncTicket("PROJ-1");
-    // 第二次交接的内容和第一次不同（内容一样的交接不会再写一个版本，见 “does not write the same handoff twice”）。
-    t.addHandoff(payload({ done_today: ["换库"], decisions: [{ key: "db", statement: "用 MySQL 存储会话" }] }));
+    t.addHandoff(payload({ decisions: [{ key: "db", statement: "用 MySQL 存储会话" }] }));
     await t.memory.syncTicket("PROJ-1");
     expect(await t.texts()).toEqual(["[decision:db] 用 MySQL 存储会话"]);
     const view = await t.memory.view("PROJ-1");
@@ -418,7 +419,7 @@ describe("MemoryService fix round 1 (task 4 review)", () => {
 
   it("does not write the same handoff twice when a sync is retried after a partial failure (finding 4)", async () => {
     const t = setup();
-    t.addHandoff(payload({ done_today: ["接口写完"], learnings: ["经验一"] }));
+    t.addHandoff(payload({ done_today: ["接口写完"], learnings: ["经验一"] }), "nightly", "PROJ-1", Date.now() - 1000);
     wrapScopes((sc) => sc === "workspace", (s) => ({ ...s, remember: async () => { throw new Error("workspace down"); } }));
     await t.memory.syncTicket("PROJ-1");
     expect(t.sync.cursor("PROJ-1")).toBe(0);
@@ -471,5 +472,67 @@ describe("MemoryService fix round 1 (task 4 review)", () => {
     expect(await t.texts()).toHaveLength(2);
     expect(t.sync.cursor("PROJ-1")).toBeGreaterThan(0);
     expect(await t.texts("workspace")).toEqual(["[learning:PROJ-1] 经验一"]);
+  });
+});
+
+describe("MemoryService fix round 2 (task 4 re-review)", () => {
+  const scope = "ticket:PROJ-1";
+  const oldDb = "[decision:db] PostgreSQL";
+  /** decision:db 是只有两个词的短决策；claude 里的 MCP 把它挤出上限、又一字不差地写回来（挤掉了 decision:a），它就成了没登记的条目。 */
+  async function shortOrphan() {
+    const t = setup();
+    t.addHandoff(payload({ decisions: [{ key: "db", statement: "PostgreSQL" }, { key: "a", statement: distinct(2) }, { key: "b", statement: distinct(3) }] }));
+    await t.memory.syncTicket("PROJ-1");
+    expect((await t.texts()).sort()).toEqual([oldDb, `[decision:a] ${distinct(2)}`, `[decision:b] ${distinct(3)}`].sort());
+    await realStatecore.withScope({ dataDir: t.dataDir, scope }, async (s) => {
+      for (let i = 0; i < NOTES_CAP - 2; i++) await s.remember(`Claude 自己记的 ${distinct(10 + i)}`);
+      await s.remember(oldDb);
+    });
+    expect((await t.items()).find((i) => i.text === oldDb)?.factId).toBeNull();
+    expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
+    // 决策改成完全不同的一句：旧的那条（没登记）要 forget。
+    t.addHandoff(payload({ decisions: [{ key: "db", statement: "改用 MySQL cluster with replicas" }, { key: "a", statement: distinct(2) }, { key: "b", statement: distinct(3) }] }));
+    return t;
+  }
+
+  it("retires an unregistered short decision with a punctuation-only rewrite, without taking a slot (N2)", async () => {
+    const t = await shortOrphan();
+    await t.memory.syncTicket("PROJ-1");
+    const texts = await t.texts();
+    expect(texts).not.toContain(oldDb);
+    expect(texts.some((x) => x.startsWith("[decision:db]"))).toBe(false);
+    expect(texts).toContain(`[decision:b] ${distinct(3)}`);
+    expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
+    expect(t.logs).toEqual(["memory PROJ-1: no free note slot (30/30), skipped 0 followup(s), 2 decision(s)"]);
+  });
+
+  it("logs a failed registration once while it keeps failing, and keeps the note instead of undercounting (N2)", async () => {
+    const t = await shortOrphan();
+    // 注入：登记用的改写什么都没替换（例如修订到了另一条上）。
+    wrapScopes((sc) => sc === scope, (s) => ({
+      ...s,
+      remember: async (text) => (text.endsWith("。") ? { superseded: null } : s.remember(text)),
+    }));
+    await t.memory.syncTicket("PROJ-1");
+    await t.memory.syncTicket("PROJ-1");
+    const failed = () => t.logs.filter((l) => l.includes("could not register"));
+    expect(failed()).toEqual(["memory PROJ-1: could not register 1 unregistered note(s) before forgetting them"]);
+    expect(await t.texts()).toContain(oldDb); // 没登记上就不 forget
+    expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
+    vi.mocked(withScope).mockImplementation(realStatecore.withScope);
+    await t.memory.syncTicket("PROJ-1");
+    expect(await t.texts()).not.toContain(oldDb);
+    expect(failed()).toHaveLength(1);
+  });
+
+  it("writes one handoff version per handoff even when two handoffs have the same content (N1, design 8.3)", async () => {
+    const t = setup();
+    t.addHandoff(payload({ next_steps: ["补测试"] }));
+    await t.memory.syncTicket("PROJ-1");
+    t.addHandoff(payload({ next_steps: ["补测试"] }));
+    await t.memory.syncTicket("PROJ-1");
+    // 没有新交接时再同步：不写。
+    await t.memory.syncTicket("PROJ-1");
+    expect((await t.memory.view("PROJ-1")).handoff).toMatchObject({ content: "状态：active。\nNext steps:\n- 补测试", versionCount: 2 });
   });
 });

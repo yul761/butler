@@ -28,9 +28,12 @@ export interface ScopeHandle {
   /** 一条事实（或交接）从最早到最新的版本；id 不存在时为 null。 */
   why(factId: string): Promise<WhyEntry[] | null>;
   /**
-   * 记一次交接。和当前生效的交接一字不差时不写（返回 false）：同步失败后重试不会给 why 链多加一个一样的版本。
+   * 记一次交接（设计文档 8.3：每次 handoff 都写一个版本）。返回是否写了。
+   * 给了 retryAfter（这次交接在 Butler 里的 createdAt，毫秒）时：当前生效的交接一字不差、并且是在 retryAfter 当时或之后写的，
+   * 说明它就是同一次同步上一次没做完时写进去的，这次不再写，重试不会给 why 链多加一个一样的版本。
+   * 内容一样、但写在这次交接之前的（另一次 handoff 正好内容相同）照常写。
    */
-  handoff(h: { summary: string; nextSteps: string[]; openQuestions: string[] }): Promise<boolean>;
+  handoff(h: { summary: string; nextSteps: string[]; openQuestions: string[] }, retryAfter?: number): Promise<boolean>;
   activeHandoff(): Promise<MemoryHandoff | null>;
   /**
    * 这个 scope 的 notes 占了几个位置：看得见的加上 forget 过、但还占着位置的。
@@ -116,9 +119,11 @@ function handle(b: Backend): ScopeHandle {
           }))
         : null;
     },
-    async handoff(h) {
-      const active = RecallResult.parse(await b.recall({})).handoff;
-      if (active && active.content === handoffContent(h)) return false;
+    async handoff(h, retryAfter) {
+      if (retryAfter !== undefined) {
+        const active = RecallResult.parse(await b.recall({})).handoff;
+        if (active && active.content === handoffContent(h) && Date.parse(active.addedAt) >= retryAfter) return false;
+      }
       await b.handoff({ summary: h.summary, nextSteps: h.nextSteps, openQuestions: h.openQuestions });
       return true;
     },

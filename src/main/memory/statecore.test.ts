@@ -112,12 +112,28 @@ describe("StateCore adapter (design 8, 11: write and why integration)", () => {
       expect(await s.activeHandoff()).toBeNull();
       expect(await s.handoff({ summary: "状态：active。", nextSteps: ["写测试"], openQuestions: [] })).toBe(true);
       expect(await s.handoff({ summary: "状态：in_review。完成：写测试", nextSteps: ["等 review"], openQuestions: ["要不要拆 PR？"] })).toBe(true);
-      // 和当前交接一字不差（按 StateCore 的格式）：不再写一个版本。
-      expect(await s.handoff({ summary: " 状态：in_review。完成：写测试", nextSteps: ["等 review ", ""], openQuestions: ["要不要拆 PR？"] })).toBe(false);
       const h = await s.activeHandoff();
       expect(h).toMatchObject({ versionCount: 2 });
       expect(h?.content).toBe("状态：in_review。完成：写测试\nOpen questions:\n- 要不要拆 PR？\nNext steps:\n- 等 review");
       expect((await s.why(h!.id))?.map((e) => e.content.split("\n")[0])).toEqual(["状态：active。", "状态：in_review。完成：写测试"]);
+    });
+  });
+
+  it("skips a handoff only when it repeats the active one written since this handoff was made (a retry)", async () => {
+    await withScope({ dataDir: tempDir(), scope: "ticket:PROJ-11" }, async (s) => {
+      const h = { summary: "状态：in_review。完成：写测试", nextSteps: ["等 review"], openQuestions: ["要不要拆 PR？"] };
+      expect(await s.handoff(h)).toBe(true);
+      const writtenAt = Date.parse((await s.activeHandoff())!.addedAt);
+      // 同一次交接重试（当前交接写在它产生之后）；空白和空条目按 StateCore 的格式归一。
+      const same = { summary: " 状态：in_review。完成：写测试", nextSteps: ["等 review ", ""], openQuestions: ["要不要拆 PR？"] };
+      expect(await s.handoff(same, writtenAt)).toBe(false);
+      expect(await s.handoff(same, writtenAt - 1)).toBe(false);
+      expect((await s.activeHandoff())?.versionCount).toBe(1);
+      // 另一次内容碰巧相同、产生在当前交接写入之后的交接照常写；内容不同的、不给 retryAfter 的也照常写。
+      expect(await s.handoff(same, writtenAt + 1)).toBe(true);
+      expect(await s.handoff({ ...h, nextSteps: ["合并"] }, 0)).toBe(true);
+      expect(await s.handoff({ ...h, nextSteps: ["合并"] })).toBe(true);
+      expect((await s.activeHandoff())?.versionCount).toBe(4);
     });
   });
 
