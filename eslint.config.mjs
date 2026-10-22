@@ -159,6 +159,13 @@ export default tseslint.config(
     files: ["scripts/**/*.mjs"],
     languageOptions: { globals: { process: "readonly", console: "readonly" } },
   },
+  // 计划 3 遗留：eval / new Function / 字符串 setTimeout 能在运行时拼出任何代码，出口规则看不到。gateway 里也一样禁止。
+  // no-implied-eval 只认声明过的全局：这里声明 setTimeout / setInterval，否则字符串形式的定时器抓不到。
+  {
+    files: SOURCE_FILES,
+    languageOptions: { globals: { setTimeout: "readonly", setInterval: "readonly" } },
+    rules: { "no-eval": "error", "no-new-func": "error", "no-implied-eval": "error" },
+  },
   { files: SOURCE_FILES, rules: outsideGatewayRules },
   // 测试文件可以用 gateway 的内部模块（假服务器等），但自己仍然不能联网。
   { files: TEST_FILES, rules: egressRules },

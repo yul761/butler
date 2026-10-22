@@ -258,3 +258,22 @@ describe("StateCore is reachable only through its two entry points (plan 4 R1)",
     expect(await statecoreMessages("memory-mcp/entry.ts", 'import "./clean-env";\nimport "statecore-mcp";\n')).toEqual([]);
   }, 60_000);
 });
+
+describe("no eval or Function constructor anywhere (plan 3 residual)", () => {
+  const FORMS: Record<string, string> = {
+    eval: 'export const x = eval("1 + 1");',
+    "new Function": 'export const f = new Function("return 1");',
+    "Function call": 'export const f = Function("return 1");',
+    "string setTimeout": 'setTimeout("doIt()", 10);',
+  };
+  const RULES = ["no-eval", "no-new-func", "no-implied-eval"];
+  for (const [name, code] of Object.entries(FORMS)) {
+    it(`${name}: flagged in main, gateway, renderer and hook code`, async () => {
+      const eslint = new ESLint({ cwd: root });
+      for (const file of ["src/main/brief/x.ts", "src/main/gateway/x.ts", "src/renderer/src/x.tsx", "hook/x.ts"]) {
+        const [r] = await eslint.lintText(code, { filePath: file });
+        expect(r.messages.filter((m) => RULES.includes(m.ruleId ?? "")).length, `${name} ${file}`).toBeGreaterThan(0);
+      }
+    }, 60_000);
+  }
+});
