@@ -11,7 +11,7 @@ import { MemorySyncRepo } from "../db/memory-sync-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { chatReply, gatewayHarness, type GatewayHarness } from "../gateway/testing";
 import { memDb, tempDir } from "../test-utils";
-import { handoffSummary, MemoryService, nightlyDistill } from "./memory-service";
+import { DIGEST_HEADROOM, handoffSummary, MemoryService, nightlyDistill } from "./memory-service";
 import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
 
 // 故障注入的接缝：withScope 默认就是真的；个别测试把真实句柄包一层（StateCore 本身始终是真的嵌入式存储）。
@@ -826,7 +826,7 @@ describe("MemoryService.distill fix round 1 (task 6 review)", () => {
     // workspace 不是 ticket scope，照常蒸馏；满了的 ticket scope 一次模型调用都没有。
     expect(r).toEqual({ scopes: 1, ran: 1, failed: 0 });
     expect(digested).not.toContain("ticket:PROJ-1");
-    expect(t.logs).toEqual(["memory distill ticket:PROJ-1: skipped, notes full (30/30)"]);
+    expect(t.logs).toEqual(["memory distill ticket:PROJ-1: skipped, not enough free note slots (30/30, needs 6 free)"]);
     expect(t.logs.some((l) => l.includes("Claude"))).toBe(false);
     await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
       expect(await s.pendingEvents()).toBe(1);
@@ -851,6 +851,63 @@ describe("MemoryService.distill fix round 1 (task 6 review)", () => {
     await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-2" }, async (s) => {
       expect(await s.pendingEvents()).toBe(1);
     });
+  });
+});
+
+describe("MemoryService.distill headroom (final review 1: a digest must not push desired notes out of a near-full scope)", () => {
+  /** 往 PROJ-1 的 scope 里写 n 条 Claude 自己记的 note，再放一个待蒸馏的事件。 */
+  async function fill(t: ReturnType<typeof setup>, n: number, from = 60): Promise<void> {
+    await realStatecore.withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
+      for (let i = 0; i < n; i++) await s.remember(`Claude 自己记的 ${distinct(from + i)}`);
+    });
+    await seedEvent(t.dataDir, "ticket:PROJ-1");
+  }
+
+  it("skips a ticket scope with 25 notes used (fewer than DIGEST_HEADROOM free), logging only counts, and keeps its events", async () => {
+    const t = setup();
+    await fill(t, NOTES_CAP - DIGEST_HEADROOM + 1);
+    expect((await t.slots()).used).toBe(25);
+    const calls: string[] = [];
+    const r = await t.memory.distill({
+      chat: async () => {
+        calls.push("chat");
+        return digestReply();
+      },
+    });
+    expect(r).toEqual({ scopes: 0, ran: 0, failed: 0 });
+    expect(calls).toEqual([]);
+    expect(t.logs).toEqual(["memory distill ticket:PROJ-1: skipped, not enough free note slots (25/30, needs 6 free)"]);
+    await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
+      expect(await s.pendingEvents()).toBe(1);
+    });
+  });
+
+  it("digests a ticket scope with 24 notes used (exactly DIGEST_HEADROOM free)", async () => {
+    const t = setup();
+    await fill(t, NOTES_CAP - DIGEST_HEADROOM);
+    expect((await t.slots()).used).toBe(24);
+    const r = await t.memory.distill({ chat: async () => digestReply() });
+    expect(r).toEqual({ scopes: 1, ran: 1, failed: 0 });
+    expect(t.logs).toEqual([]);
+    await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
+      expect(await s.pendingEvents()).toBe(0);
+    });
+  });
+
+  it("logs by count only the desired notes a digest pushed out that the resync could not write back", async () => {
+    const t = setup();
+    // Butler 的 followup 最先写进去，是最旧的 note；再由 claude 填到 24 条。
+    t.addFollowup("f_keep", { description: distinct(1) });
+    await t.memory.syncTicket("PROJ-1");
+    await fill(t, NOTES_CAP - DIGEST_HEADROOM - 1);
+    expect((await t.slots()).used).toBe(24);
+    // 模型一次提炼出的 note 超过了余量：notes 超过 30，StateCore 挤掉最旧的（Butler 的 followup），重新同步时也没有空位。
+    const many = Array.from({ length: DIGEST_HEADROOM + 2 }, (_, i) => `Digest note ${distinct(200 + i)}`);
+    expect(await t.memory.distill({ chat: async () => digestReply(many) })).toEqual({ scopes: 1, ran: 1, failed: 0 });
+    expect((await t.texts()).some((x) => x.startsWith("[followup:f_keep]"))).toBe(false);
+    const missing = "memory PROJ-1: 1 desired note(s) still missing after distill and resync";
+    expect(t.logs.filter((l) => l === missing)).toHaveLength(1);
+    expect(t.logs.some((l) => /north|Digest note|Claude/.test(l))).toBe(false);
   });
 });
 

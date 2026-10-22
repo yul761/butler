@@ -14,6 +14,12 @@ import { listScopeNames, NOTES_CAP, withScope, type DigestOutcome, type ScopeHan
 export const BACKFILL_HANDOFFS = 20;
 /** 每次同步读多少条 handoff（决策要看全部历史）。 */
 const HANDOFF_SCAN = 200;
+/**
+ * 蒸馏一个 ticket scope 之前至少要空着的 notes 位置（最终审查 1）。一次蒸馏可能提炼出好几条 note，再加上 carry-over 重新追加的条目，
+ * 空位不够时 notes 会超过 30，StateCore 挤掉最旧的看得见的条目（可能正是一条 Butler 要保留的），之后的重新同步也没有空位写回去（PF2）。
+ * 取 6：和 BUTLER_NOTE_LIMIT（24）给 claude 留的余量一样。
+ */
+export const DIGEST_HEADROOM = 6;
 
 export interface MemoryServiceDeps {
   dataDir: string;
@@ -159,8 +165,9 @@ export class MemoryService {
     this.stopped = true;
   }
 
-  private async syncNow(key: string): Promise<void> {
-    if (!this.d.enabled() || !this.d.tickets.get(key)) return;
+  /** 同步一个 ticket；返回这次要保留的条目（记忆关了或没有这个 ticket 时什么都不做，返回 null）。 */
+  private async syncNow(key: string): Promise<ButlerNote[] | null> {
+    if (!this.d.enabled() || !this.d.tickets.get(key)) return null;
     const handoffs = this.d.handoffs.listByTicket(key, HANDOFF_SCAN);
     const full = handoffs.filter(isFull).sort((a, b) => a.id - b.id);
     const cursor = this.d.sync.cursor(key);
@@ -196,6 +203,7 @@ export class MemoryService {
     } catch (e) {
       this.log("memory onSynced callback failed", e);
     }
+    return desired;
   }
 
   private async reconcile(key: string, s: ScopeHandle, desired: ButlerNote[]): Promise<void> {
@@ -309,8 +317,9 @@ export class MemoryService {
    * model 为 null（不是 full 档位等）或记忆关闭时什么都不做。永不 reject；一个 scope 失败不影响其他 scope。
    * 每个 scope 单独排进同步队列（审查 M1）：和写入不并发，但这期间 handoff 触发的同步可以插在两个 scope 之间，不用等整轮蒸馏。
    * 轮到一个 scope 时再检查：已经 stop()、记忆关了、allowed() 为 false（档位降了、开了发送前确认、开始退出）就停下，剩下的 scope 留到下次。
-   * notes 已满（noteSlots().used >= cap）的 ticket scope 不蒸馏（产品裁定）：StateCore 1.0.0 的蒸馏释放不了 forget 过的位置，
-   * 满的时候它提炼出的新 note 只能挤掉看得见的 Butler 条目。事件留着，等位置空出来。
+   * 空位少于 DIGEST_HEADROOM（cap - used < 6）的 ticket scope 不蒸馏（产品裁定，最终审查 1）：StateCore 1.0.0 的蒸馏释放不了 forget 过的位置，
+   * 空位不够时它提炼出的新 note 会挤掉看得见的 Butler 条目，之后也写不回去。事件留着，等位置空出来。
+   * 蒸馏加重新同步之后还有要保留的条目看不见（模型一次提炼的 note 超过了余量），只记条数（同样的情况不重复记）。
    * 一个 ticket scope 蒸馏成功后马上重新同步这个 ticket（任务 4 审查 F3）：蒸馏会按相似度改写、合并、挤掉 notes，
    * Butler 要保留的条目可能被改掉或没了登记；重新同步按现状比对、每次写之前重新数位置，不沿用蒸馏之前的任何估计。
    * "ran" 不保证每个事件都被提炼（审查 M3，StateCore 1.0.0）：分块蒸馏时失败的块被跳过，两次输出都不合格时退回上一次的摘要，
@@ -331,7 +340,7 @@ export class MemoryService {
     return r;
   }
 
-  /** 蒸馏一个 scope（已经在队列里）。"skipped"：没有待蒸馏的事件，或 notes 已满；"stop"：整轮停下。 */
+  /** 蒸馏一个 scope（已经在队列里）。"skipped"：没有待蒸馏的事件，或 notes 空位不够；"stop"：整轮停下。 */
   private async distillScope(
     scope: string,
     model: StatecoreChatModel,
@@ -348,8 +357,8 @@ export class MemoryService {
         if ((await s.pendingEvents()) === 0) return "skipped";
         if (key !== null) {
           const { used, cap } = await s.noteSlots();
-          if (used >= cap) {
-            this.log(`memory distill ${scope}: skipped, notes full (${used}/${cap})`);
+          if (cap - used < DIGEST_HEADROOM) {
+            this.log(`memory distill ${scope}: skipped, not enough free note slots (${used}/${cap}, needs ${DIGEST_HEADROOM} free)`);
             return "skipped";
           }
         }
@@ -363,11 +372,18 @@ export class MemoryService {
     }
   }
 
-  /** 蒸馏之后重新同步一个 ticket（已经在队列里，直接执行）。失败只写日志，不算蒸馏失败。 */
+  /**
+   * 蒸馏之后重新同步一个 ticket（已经在队列里，直接执行）。失败只写日志，不算蒸馏失败。
+   * 同步完再看一次：要保留的条目还有看不见的（被蒸馏挤掉、又没有空位写回去），记下条数，同样的条数不重复记。
+   */
   private async resyncAfterDigest(key: string): Promise<void> {
     if (this.stopped) return;
     try {
-      await this.syncNow(key);
+      const desired = await this.syncNow(key);
+      if (desired === null) return;
+      const items = await withScope({ dataDir: this.d.dataDir, scope: ticketScope(key) }, (s) => s.facts());
+      const missing = planReconcile(items, desired).write.length;
+      this.notice(`${key}|digest`, missing ? `memory ${key}: ${missing} desired note(s) still missing after distill and resync` : null);
     } catch (e) {
       this.log(`memory sync ${key} after distill failed`, e);
     }
