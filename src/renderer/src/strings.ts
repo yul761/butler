@@ -74,7 +74,10 @@ export const S = {
     claude_missing: "找不到 claude 命令，请到设置页检查。",
     no_ticket: "ticket 不存在。",
     no_session: "session 不存在。",
+    ticket_busy: "这个 ticket 正在修改工作方式或分支，稍后再打开。",
   } as Record<string, string>,
+  oldWorkdir: (cwd: string, current: string, expected: string) =>
+    `这个 session 是在 ${cwd} 里启动的，那里现在${current === "HEAD" ? "没有在任何分支上（ticket 改过工作方式）" : `在 ${current} 上`}，不是这个 ticket 的分支 ${expected}。在那里继续可能改错地方；也可以新开一个 session。`,
   createErrors: {
     invalid_key: "ticket 号格式不对。",
     exists: "这个 ticket 已经存在。",

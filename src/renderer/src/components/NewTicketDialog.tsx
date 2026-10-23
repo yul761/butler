@@ -60,7 +60,7 @@ export function NewTicketDialog({ onClose, onCreated, onRestored }: Props) {
     <div className="modal-backdrop">
       <form className="modal" onSubmit={submit}>
         <h2>{S.newTicket}</h2>
-        <label>{S.ticketKey}<input value={key} onChange={(e) => setKey(e.target.value)} placeholder="PROJ-123" autoFocus required /></label>
+        <label>{S.ticketKey}<input value={key} onChange={(e) => { setKey(e.target.value); setArchivedKey(null); }} placeholder="PROJ-123" autoFocus required /></label>
         <label>{S.title}<input value={title} onChange={(e) => setTitle(e.target.value)} /></label>
         <label>
           {S.repo}

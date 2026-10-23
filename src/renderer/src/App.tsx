@@ -47,13 +47,16 @@ export function App() {
     [],
   );
 
-  const refresh = useCallback(async () => {
+  /** 重读 ticket 列表；失败时报错并返回 false。 */
+  const refresh = useCallback(async (): Promise<boolean> => {
     try {
       const [t, u] = await Promise.all([api.listTickets(), api.unclaimed()]);
       setTickets(t);
       setUnclaimedCount(u.length);
+      return true;
     } catch (e) {
       reportError(e);
+      return false;
     }
   }, []);
 
@@ -86,7 +89,7 @@ export function App() {
   // 恢复归档：先重读列表再跳过去，否则 ticket 页找不到它。
   const showRestored = (key: string) => {
     setShowNew(false);
-    void refresh().then(() => setRoute({ page: "ticket", key }));
+    void refresh().then((ok) => ok && setRoute({ page: "ticket", key }));
   };
 
   const current = route.page === "ticket" ? (tickets.find((t) => t.key === route.key) ?? null) : null;

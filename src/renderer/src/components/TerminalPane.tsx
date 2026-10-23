@@ -58,7 +58,7 @@ export function TerminalPane({ termId, visible, onClose, onResume }: { termId: s
       if (e.type === "keydown") {
         e.preventDefault();
         if (action === "copy") copySelection(term);
-        else pasteInto(term);
+        else if (action === "paste") pasteInto(term);
       }
       return false;
     });
@@ -104,7 +104,8 @@ export function TerminalPane({ termId, visible, onClose, onResume }: { termId: s
   // Windows / Linux 上右键和 Windows Terminal 一样：有选区复制，没有就粘贴。macOS 保持原样。
   function onContextMenu(e: React.MouseEvent) {
     const term = termRef.current;
-    if (platform() === "darwin" || !term) return;
+    // 已退出的终端不再接收输入。
+    if (platform() === "darwin" || !term || exitCode !== null) return;
     e.preventDefault();
     if (term.hasSelection()) copySelection(term);
     else pasteInto(term);

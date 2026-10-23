@@ -108,6 +108,7 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.ticketsSwitchBranch, async (key: string) => {
     const t = d.tickets.get(key);
     if (!t) throw new TicketError("not_found", `找不到 ticket ${key}`);
+    if (d.ticketService.updating(key)) throw new TicketError("busy", "这个 ticket 正在修改，稍等一下");
     await d.ticketService.switchBranch(t);
   });
 

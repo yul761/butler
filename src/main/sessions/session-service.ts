@@ -12,6 +12,7 @@ import { claudeArgs, cmdShimSafe, sessionEnv } from "../claude/spawn";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
+import { currentBranch } from "../tickets/git";
 import { TicketError, type TicketService } from "../tickets/ticket-service";
 import { suggestTicket, type TranscriptState, UNCLAIMED_WINDOW_MS } from "./discovery";
 import type { PtyManager } from "./pty-manager";
@@ -42,6 +43,12 @@ export interface SessionServiceDeps {
   log?: (msg: string, err?: unknown) => void;
 }
 
+/** 同一个目录：Windows 的路径不分大小写，也不分 / 和 \\。 */
+function samePath(a: string, b: string, platform: NodeJS.Platform): boolean {
+  const norm = (p: string) => (platform === "win32" ? p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase() : p.replace(/\/+$/, ""));
+  return norm(a) === norm(b);
+}
+
 export class SessionService {
   constructor(private readonly d: SessionServiceDeps) {}
 
@@ -64,6 +71,7 @@ export class SessionService {
     const prefill = req.prefill ? sanitizePrefill(req.prefill) : "";
     const ticket = this.d.tickets.get(req.ticketKey);
     if (!ticket) return { ok: false, reason: "no_ticket" };
+    if (this.d.ticketService.updating(ticket.key)) return { ok: false, reason: "ticket_busy" };
 
     let head: Session | null = null;
     if (req.sessionId) {
@@ -79,12 +87,17 @@ export class SessionService {
     const { path: claudePath, pathValue } = this.d.claude();
     if (!claudePath) return { ok: false, reason: "claude_missing" };
 
-    if (!req.force) {
-      const check = await this.d.ticketService.checkBranch(ticket);
-      if (!check.ok) return { ok: false, reason: "branch_mismatch", current: check.current, expected: check.expected, dirty: check.dirty };
-    }
-
     const workDir = this.d.ticketService.workDir(ticket);
+    if (!req.force) {
+      // 在别的目录里启动的旧 session（ticket 后来改过工作方式）恢复时仍在那个目录里跑：检查那里的分支，而不是 ticket 现在的目录。
+      if (head?.cwd && !samePath(head.cwd, workDir, this.d.platform)) {
+        const moved = await this.oldWorkdirCheck(head.cwd, ticket.branch);
+        if (moved) return moved;
+      } else {
+        const check = await this.d.ticketService.checkBranch(ticket);
+        if (!check.ok) return { ok: false, reason: "branch_mismatch", current: check.current, expected: check.expected, dirty: check.dirty };
+      }
+    }
     this.syncMemory(ticket.key);
     // 启动方式只解析一次：记忆挂载的检查和真正启动用同一个结果（P5-PF10）。
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
@@ -119,6 +132,20 @@ export class SessionService {
     }
     if (prefill) this.prefill(termId, prefill);
     return { ok: true, termId, alreadyOpen: false };
+  }
+
+  /**
+   * ticket 改过工作方式后，旧 session 仍在它当初的目录里恢复。那个目录已经不在 ticket 的分支上（比如离开分支的 worktree）时先提示，
+   * 免得 claude 在游离 HEAD 或别的分支上继续干活。目录读不了就不拦（交给启动本身报错）。
+   */
+  private async oldWorkdirCheck(cwd: string, expected: string): Promise<OpenSessionResult | null> {
+    let current: string;
+    try {
+      current = await currentBranch(cwd);
+    } catch {
+      return null;
+    }
+    return current === expected ? null : { ok: false, reason: "old_workdir", cwd, current, expected };
   }
 
   /** 记忆补同步（最终审查 6）：失败只写日志，session 照常打开。 */

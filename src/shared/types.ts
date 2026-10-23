@@ -77,7 +77,9 @@ export interface OpenSessionRequest {
 export type OpenSessionResult =
   | { ok: true; termId: string; alreadyOpen: boolean }
   | { ok: false; reason: "branch_mismatch"; current: string; expected: string; dirty: boolean }
-  | { ok: false; reason: "claude_missing" | "no_ticket" | "no_session" };
+  /** 要恢复的 session 是在别的目录里启动的（ticket 后来改过工作方式），那个目录现在不在 ticket 的分支上（"HEAD" 表示游离）。 */
+  | { ok: false; reason: "old_workdir"; cwd: string; current: string; expected: string }
+  | { ok: false; reason: "claude_missing" | "no_ticket" | "no_session" | "ticket_busy" };
 
 export type HookStatus = "installed" | "missing" | "partial" | "stale" | "settings_invalid";
 export type HandoffCommandStatus = "installed" | "missing" | "stale" | "conflict";

@@ -249,3 +249,51 @@ describe("TicketService.update", () => {
     expect(await currentBranch(u.worktreePath!)).toBe("fix/PROJ-47");
   });
 });
+
+describe("TicketService.update keeps the user's work", () => {
+  const open = { terminalsOpen: false };
+  const commit = (cwd: string, file: string) => {
+    writeFileSync(join(cwd, file), `${file}\n`);
+    return git(cwd, ["add", file]).then(() => git(cwd, ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", file]));
+  };
+
+  it("frees the branch of a hand-deleted worktree when switching to branch mode", async () => {
+    const { service } = setup();
+    const repo = makeRepo();
+    const t = await service.create({ key: "PROJ-50", repoPath: repo, workMode: "worktree" });
+    rmSync(t.worktreePath!, { recursive: true, force: true });
+    const u = await service.update({ key: "PROJ-50", workMode: "branch" }, open);
+    await service.switchBranch(u);
+    expect(await currentBranch(repo)).toBe("feature/PROJ-50");
+  });
+
+  it("starts a renamed branch from the ticket's old branch, not from whatever the repo has checked out", async () => {
+    const { service } = setup();
+    const repo = makeRepo();
+    const t = await service.create({ key: "PROJ-51", repoPath: repo, workMode: "worktree" });
+    await commit(t.worktreePath!, "work.txt");
+    const u = await service.update({ key: "PROJ-51", workMode: "branch", branch: "fix/PROJ-51" }, open);
+    await service.switchBranch(u);
+    expect(existsSync(join(repo, "work.txt"))).toBe(true);
+  });
+
+  it("refuses to leave a detached worktree that has commits on no branch", async () => {
+    const { service, tickets } = setup();
+    const t = await service.create({ key: "PROJ-52", repoPath: makeRepo(), workMode: "worktree" });
+    await service.update({ key: "PROJ-52", workMode: "branch" }, open);
+    // 旧 session 在离开分支的 worktree 里继续提交。
+    await commit(t.worktreePath!, "stray.txt");
+    expect(await code(service.update({ key: "PROJ-52", workMode: "worktree" }, open))).toBe("unbranched_commits");
+    expect(tickets.get("PROJ-52")).toMatchObject({ workMode: "branch", worktreePath: null });
+  });
+
+  it("refuses a second update, and reports the ticket busy, while one is running", async () => {
+    const { service } = setup();
+    await service.create({ key: "PROJ-53", repoPath: makeRepo(), workMode: "worktree" });
+    const first = service.update({ key: "PROJ-53", workMode: "branch" }, open);
+    expect(service.updating("PROJ-53")).toBe(true);
+    expect(await code(service.update({ key: "PROJ-53", branch: "x/y" }, open))).toBe("busy");
+    await first;
+    expect(service.updating("PROJ-53")).toBe(false);
+  });
+});
