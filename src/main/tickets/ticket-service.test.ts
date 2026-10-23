@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SettingsRepo } from "../db/settings-repo";
@@ -138,5 +138,114 @@ describe("TicketService.create input checks", () => {
     expect((err as Error).message).toMatch(/^git 操作失败：/);
     expect((err as Error).message).not.toMatch(/fatal:/);
     expect(tickets.get("PROJ-22")).toBeNull();
+  });
+});
+
+describe("TicketService archived keys", () => {
+  it("tells an archived key apart from an active one, and the key works again after restoring", async () => {
+    const { service, tickets } = setup();
+    const repo = makeRepo();
+    await service.create({ key: "PROJ-30", repoPath: repo, workMode: "worktree" });
+    tickets.archive("PROJ-30", 2000);
+    expect(tickets.list().map((t) => t.key)).toEqual([]);
+    expect(tickets.listArchived().map((t) => t.key)).toEqual(["PROJ-30"]);
+    expect(await code(service.create({ key: "proj-30", repoPath: repo, workMode: "branch" }))).toBe("archived");
+
+    tickets.unarchive("PROJ-30");
+    expect(tickets.list().map((t) => t.key)).toEqual(["PROJ-30"]);
+    expect(tickets.listArchived()).toEqual([]);
+    expect(await code(service.create({ key: "PROJ-30", repoPath: repo, workMode: "branch" }))).toBe("exists");
+  });
+});
+
+describe("TicketService.update", () => {
+  const open = { terminalsOpen: false };
+
+  it("changes only the title without touching git, even with terminals open", async () => {
+    const { service, tickets } = setup();
+    const t = await service.create({ key: "PROJ-40", title: "old", repoPath: makeRepo(), workMode: "worktree" });
+    await service.update({ key: "PROJ-40", title: "  new  " }, { terminalsOpen: true });
+    expect(tickets.get("PROJ-40")).toMatchObject({ title: "new", workMode: "worktree", worktreePath: t.worktreePath, branch: t.branch });
+    await service.update({ key: "PROJ-40", title: "" }, open);
+    expect(tickets.get("PROJ-40")?.title).toBeNull();
+  });
+
+  it("worktree → branch mode: the worktree leaves the branch but keeps its files, so the repo can check the branch out", async () => {
+    const { service, tickets } = setup();
+    const repo = makeRepo();
+    const t = await service.create({ key: "PROJ-41", repoPath: repo, workMode: "worktree" });
+    const wt = t.worktreePath!;
+    writeFileSync(join(wt, ".env"), "ignored-but-kept\n");
+    writeFileSync(join(wt, ".gitignore"), ".env\n");
+    await git(wt, ["add", ".gitignore"]);
+    await git(wt, ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "ignore env"]);
+
+    const u = await service.update({ key: "PROJ-41", workMode: "branch" }, open);
+    expect(u).toMatchObject({ workMode: "branch", worktreePath: null, branch: "feature/PROJ-41" });
+    expect(tickets.get("PROJ-41")).toMatchObject({ workMode: "branch", worktreePath: null });
+    expect(existsSync(join(wt, ".env"))).toBe(true);
+    expect(await currentBranch(wt)).toBe("HEAD");
+    expect(service.workDir(u)).toBe(repo);
+    await service.switchBranch(u);
+    expect(await currentBranch(repo)).toBe("feature/PROJ-41");
+  });
+
+  it("branch → worktree mode creates the worktree, and going back and forth reuses it", async () => {
+    const { service } = setup();
+    const repo = makeRepo();
+    await service.create({ key: "PROJ-42", repoPath: repo, workMode: "branch" });
+    const w = await service.update({ key: "PROJ-42", workMode: "worktree" }, open);
+    const expected = join(dirname(repo), `${basename(repo)}-worktrees`, "PROJ-42");
+    expect(w).toMatchObject({ workMode: "worktree", worktreePath: expected });
+    expect(await currentBranch(expected)).toBe("feature/PROJ-42");
+
+    await service.update({ key: "PROJ-42", workMode: "branch" }, open);
+    const again = await service.update({ key: "PROJ-42", workMode: "worktree" }, open);
+    expect(again.worktreePath).toBe(expected);
+    expect(await currentBranch(expected)).toBe("feature/PROJ-42");
+  });
+
+  it("refuses branch → worktree while the repo itself is on the ticket branch", async () => {
+    const { service, tickets } = setup();
+    const repo = makeRepo();
+    const t = await service.create({ key: "PROJ-43", repoPath: repo, workMode: "branch" });
+    await service.switchBranch(t);
+    expect(await code(service.update({ key: "PROJ-43", workMode: "worktree" }, open))).toBe("branch_checked_out");
+    expect(tickets.get("PROJ-43")).toMatchObject({ workMode: "branch", worktreePath: null });
+  });
+
+  it("changes the branch: switches inside the worktree, or just records it in branch mode", async () => {
+    const { service, tickets } = setup();
+    const repo = makeRepo();
+    const w = await service.create({ key: "PROJ-44", repoPath: repo, workMode: "worktree" });
+    await service.update({ key: "PROJ-44", branch: "fix/PROJ-44" }, open);
+    expect(await currentBranch(w.worktreePath!)).toBe("fix/PROJ-44");
+    expect(tickets.get("PROJ-44")?.branch).toBe("fix/PROJ-44");
+
+    await service.create({ key: "PROJ-45", repoPath: repo, workMode: "branch" });
+    await service.update({ key: "PROJ-45", branch: "fix/PROJ-45" }, open);
+    expect(await branchExists(repo, "fix/PROJ-45")).toBe(true);
+    expect(await currentBranch(repo)).toBe("main");
+    expect(tickets.get("PROJ-45")?.branch).toBe("fix/PROJ-45");
+  });
+
+  it("refuses git changes with terminals open, a dirty worktree or a bad branch name, and stores nothing", async () => {
+    const { service, tickets } = setup();
+    const t = await service.create({ key: "PROJ-46", repoPath: makeRepo(), workMode: "worktree" });
+    expect(await code(service.update({ key: "PROJ-46", workMode: "branch" }, { terminalsOpen: true }))).toBe("sessions_open");
+    expect(await code(service.update({ key: "PROJ-46", branch: "a..b" }, open))).toBe("invalid_branch");
+    writeFileSync(join(t.worktreePath!, "README.md"), "changed\n");
+    expect(await code(service.update({ key: "PROJ-46", workMode: "branch" }, open))).toBe("dirty");
+    expect(tickets.get("PROJ-46")).toMatchObject({ workMode: "worktree", worktreePath: t.worktreePath, branch: t.branch });
+    expect(await code(service.update({ key: "NOPE-1", title: "x" }, open))).toBe("not_found");
+  });
+
+  it("recreates a worktree whose directory was deleted by hand", async () => {
+    const { service } = setup();
+    const t = await service.create({ key: "PROJ-47", repoPath: makeRepo(), workMode: "worktree" });
+    rmSync(t.worktreePath!, { recursive: true, force: true });
+    const u = await service.update({ key: "PROJ-47", branch: "fix/PROJ-47" }, open);
+    expect(u.worktreePath).toBe(t.worktreePath);
+    expect(await currentBranch(u.worktreePath!)).toBe("fix/PROJ-47");
   });
 });

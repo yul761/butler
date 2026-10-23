@@ -70,7 +70,24 @@ export class TicketsRepo {
     return { changedAt: r?.status_changed_at ?? null, manualAt: r?.status_manual_at ?? null };
   }
 
+  /** 编辑 ticket：标题、工作方式、worktree 路径和分支一起写。 */
+  update(t: Pick<Ticket, "key" | "title" | "workMode" | "worktreePath" | "branch">): void {
+    this.db
+      .prepare(`UPDATE tickets SET title = ?, work_mode = ?, worktree_path = ?, branch = ? WHERE key = ?`)
+      .run(t.title, t.workMode, t.worktreePath, t.branch, t.key);
+  }
+
   archive(key: string, at: number): void {
     this.db.prepare(`UPDATE tickets SET archived_at = ? WHERE key = ?`).run(at, key);
+  }
+
+  unarchive(key: string): void {
+    this.db.prepare(`UPDATE tickets SET archived_at = NULL WHERE key = ?`).run(key);
+  }
+
+  /** 已归档的 ticket，最近归档的在前。 */
+  listArchived(): Ticket[] {
+    const rows = this.db.prepare(`SELECT * FROM tickets WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, key`).all() as unknown as TicketRow[];
+    return rows.map(toTicket);
   }
 }

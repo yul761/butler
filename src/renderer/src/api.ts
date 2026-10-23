@@ -5,7 +5,7 @@ import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
 import type {
   AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
-  OpenSessionResult, Ticket, TicketStatus, TicketView, UnclaimedSession,
+  OpenSessionResult, Ticket, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput,
   JobStateView,
 } from "../../shared/types";
 
@@ -42,6 +42,11 @@ export const api = {
   setStatus: (key: string, status: TicketStatus | null) => call<void>(IPC.ticketsSetStatus, key, status),
   archive: (key: string) => call<void>(IPC.ticketsArchive, key),
   switchBranch: (key: string) => call<void>(IPC.ticketsSwitchBranch, key),
+  updateTicket: (input: UpdateTicketInput) => call<Ticket>(IPC.ticketsUpdate, input),
+  archivedTickets: () => call<Ticket[]>(IPC.ticketsArchived),
+  unarchive: (key: string) => call<void>(IPC.ticketsUnarchive, key),
+  clipboardRead: () => call<string>(IPC.clipboardRead),
+  clipboardWrite: (text: string) => call<void>(IPC.clipboardWrite, text),
   openSession: (req: OpenSessionRequest) => call<OpenSessionResult>(IPC.sessionsOpen, req),
   unclaimed: () => call<UnclaimedSession[]>(IPC.sessionsUnclaimed),
   claim: (sessionId: string, ticketKey: string) => call<void>(IPC.sessionsClaim, sessionId, ticketKey),

@@ -11,7 +11,7 @@ The UI is in Chinese. This README quotes UI labels as they appear in the app, wi
 
 ## What it does
 
-- **Tickets first.** Each ticket has its worktree or branch, its Claude Code sessions (embedded terminals), its PR state and its after-merge follow-ups. Sessions you started outside Butler in the last 7 days show up under **未认领 session (unclaimed sessions)**, so you can attach them to a ticket.
+- **Tickets first.** Each ticket has its worktree or branch, its Claude Code sessions (embedded terminals), its PR state and its after-merge follow-ups. Sessions you started outside Butler in the last 7 days show up under **未认领 session (unclaimed sessions)**, so you can attach them to a ticket. **编辑 (Edit)** changes a ticket's title, work mode or branch after it is created. Archived tickets are listed under **已归档 (Archived)**, where you can restore them. In the terminal on Windows, Ctrl+V and right-click paste, and Ctrl+C copies when text is selected.
 - **Nightly handoffs.** At a time you choose, Butler asks your own logged-in `claude` to write a structured handoff for every ticket that had activity.
   - `Edit`, `Write` and `NotebookEdit` are always denied.
   - Butler allows file reads, `gh pr view`, `gh pr checks`, `git log`, `git status` and the tracker MCP tools you picked.

@@ -179,6 +179,11 @@ export class SessionService {
     return true;
   }
 
+  /** 这个 ticket 有没有正在运行的终端（/clear 之后的 head 也算在启动它的终端上）。 */
+  hasOpenTerminal(ticketKey: string): boolean {
+    return this.d.pty.openIds().some((termId) => this.d.sessions.head(termId)?.ticketKey === ticketKey);
+  }
+
   ticketViews(): TicketView[] {
     const heads = this.openHeads();
     return this.d.tickets.list().map((t) => {

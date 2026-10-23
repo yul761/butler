@@ -3,6 +3,7 @@ import type { BriefKind } from "../../shared/brief";
 import type { OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
+import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
 import { BriefPage } from "./components/BriefPage";
 import { NewTicketDialog } from "./components/NewTicketDialog";
@@ -18,6 +19,7 @@ export type Route =
   | { page: "home"; kind?: BriefKind }
   | { page: "ticket"; key: string }
   | { page: "unclaimed" }
+  | { page: "archived" }
   | { page: "settings" }
   | { page: "audit" };
 
@@ -81,6 +83,12 @@ export function App() {
     setRoute({ page: "ticket", key });
   };
 
+  // 恢复归档：先重读列表再跳过去，否则 ticket 页找不到它。
+  const showRestored = (key: string) => {
+    setShowNew(false);
+    void refresh().then(() => setRoute({ page: "ticket", key }));
+  };
+
   const current = route.page === "ticket" ? (tickets.find((t) => t.key === route.key) ?? null) : null;
 
   return (
@@ -113,6 +121,7 @@ export function App() {
               />
             )}
             {route.page === "unclaimed" && <UnclaimedPage tickets={tickets} />}
+            {route.page === "archived" && <ArchivedPage onRestored={showRestored} />}
             {route.page === "settings" && <SettingsPage onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "audit" && <AuditPage />}
           </>
@@ -121,6 +130,7 @@ export function App() {
       {showNew && (
         <NewTicketDialog
           onClose={() => setShowNew(false)}
+          onRestored={showRestored}
           onCreated={(key) => {
             setShowNew(false);
             setRoute({ page: "ticket", key });

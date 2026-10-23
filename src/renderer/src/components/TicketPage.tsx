@@ -4,6 +4,7 @@ import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
 import { sessionLabel, splitSessions } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
+import { EditTicketDialog } from "./EditTicketDialog";
 import { TerminalPane } from "./TerminalPane";
 import { TicketOverview } from "./TicketOverview";
 
@@ -36,6 +37,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   const [mismatch, setMismatch] = useState<Mismatch | null>(null);
   const [showAllSessions, setShowAllSessions] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
 
   const openKey = openTerms.join(",");
   useEffect(() => {
@@ -97,8 +99,10 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
           <option value="auto">{S.statusAuto(STATUS_LABEL[ticket.status])}</option>
           {TICKET_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
         </select>
+        <button onClick={() => setEditing(true)}>{S.edit}</button>
         <button onClick={() => api.archive(ticket.key).then(onArchived, reportError)}>{S.archive}</button>
       </header>
+      {editing && <EditTicketDialog ticket={ticket} hasSessions={ticket.sessions.length > 0} onClose={() => setEditing(false)} />}
 
       <TicketOverview ticketKey={ticket.key} />
 

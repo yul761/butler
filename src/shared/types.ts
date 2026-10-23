@@ -56,6 +56,14 @@ export interface CreateTicketInput {
   branch?: string;
 }
 
+/** 编辑 ticket：省略的字段不变。title 传空串表示清空。 */
+export interface UpdateTicketInput {
+  key: string;
+  title?: string;
+  workMode?: WorkMode;
+  branch?: string;
+}
+
 export interface OpenSessionRequest {
   ticketKey: string;
   /** 省略表示新建 session；给出时恢复该 session（会沿 replacedBy 链找到最新的）。 */

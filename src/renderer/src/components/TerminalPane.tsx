@@ -6,6 +6,10 @@ import { api, pathForFile, platform } from "../api";
 import { dropText } from "../drop";
 import { reportError } from "../errors";
 import { S } from "../strings";
+import { clipboardAction } from "../terminal-keys";
+
+/** Ctrl+V 时剪贴板里没有文字（比如截图）：照常把 ^V 交给 claude，由它自己读剪贴板里的图片。 */
+const CTRL_V = "\x16";
 
 export function TerminalPane({ termId, visible, onClose, onResume }: { termId: string; visible: boolean; onClose: () => void; onResume: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -47,6 +51,17 @@ export function TerminalPane({ termId, visible, onClose, onResume }: { termId: s
       });
 
     const input = term.onData((d) => api.ptyWrite(termId, d));
+    // Windows / Linux 的 Ctrl+C / Ctrl+V（见 terminal-keys）。preventDefault 让菜单里的粘贴快捷键不再触发第二次。
+    term.attachCustomKeyEventHandler((e) => {
+      const action = clipboardAction(e, platform(), term.hasSelection());
+      if (!action) return true;
+      if (e.type === "keydown") {
+        e.preventDefault();
+        if (action === "copy") copySelection(term);
+        else pasteInto(term);
+      }
+      return false;
+    });
     const doFit = () => {
       if (!ref.current || ref.current.offsetParent === null) return;
       fit.fit();
@@ -76,6 +91,25 @@ export function TerminalPane({ termId, visible, onClose, onResume }: { termId: s
     });
   }, [visible, termId]);
 
+  function copySelection(term: Terminal) {
+    api.clipboardWrite(term.getSelection()).catch(reportError);
+    term.clearSelection();
+  }
+
+  function pasteInto(term: Terminal) {
+    // term.paste 处理换行和 claude 打开的 bracketed paste，多行文本不会被逐行当成回车提交。
+    api.clipboardRead().then((text) => (text ? term.paste(text) : api.ptyWrite(termId, CTRL_V)), reportError);
+  }
+
+  // Windows / Linux 上右键和 Windows Terminal 一样：有选区复制，没有就粘贴。macOS 保持原样。
+  function onContextMenu(e: React.MouseEvent) {
+    const term = termRef.current;
+    if (platform() === "darwin" || !term) return;
+    e.preventDefault();
+    if (term.hasSelection()) copySelection(term);
+    else pasteInto(term);
+  }
+
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
     const files = [...e.dataTransfer.files];
@@ -84,7 +118,7 @@ export function TerminalPane({ termId, visible, onClose, onResume }: { termId: s
   }
 
   return (
-    <div className="terminal-wrap" style={{ display: visible ? "flex" : "none" }} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    <div className="terminal-wrap" style={{ display: visible ? "flex" : "none" }} onDragOver={(e) => e.preventDefault()} onDrop={onDrop} onContextMenu={onContextMenu}>
       {exitCode !== null && (
         <div className="exited">
           {S.exited(exitCode)} <button onClick={onResume}>{S.resume}</button> <button onClick={onClose}>{S.close}</button>

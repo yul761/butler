@@ -342,3 +342,17 @@ describe("SessionService.pruneEmptySessions (startup, after a quit that skipped 
     expect(sessions.get("orphan")).toBeNull();
   });
 });
+
+describe("SessionService.hasOpenTerminal", () => {
+  it("is true only while one of the ticket's terminals is running", async () => {
+    const { service, spawned, tickets, ticketService, repo } = await setup();
+    await ticketService.create({ key: "PROJ-2", repoPath: repo, workMode: "branch" });
+    expect(service.hasOpenTerminal("PROJ-1")).toBe(false);
+    await service.open({ ticketKey: "PROJ-1" });
+    expect(service.hasOpenTerminal("PROJ-1")).toBe(true);
+    expect(service.hasOpenTerminal("PROJ-2")).toBe(false);
+    spawned[0].pty.emitExit(0);
+    expect(service.hasOpenTerminal("PROJ-1")).toBe(false);
+    expect(tickets.get("PROJ-2")).not.toBeNull();
+  });
+});

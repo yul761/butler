@@ -61,6 +61,36 @@ export async function addWorktree(repo: string, path: string, branch: string, cr
   await git(repo, createBranch ? ["worktree", "add", "-b", branch, path] : ["worktree", "add", path, branch]);
 }
 
+/** 让 worktree 离开它的分支（HEAD 停在同一个提交上），分支就能在别处检出；目录和里面的文件原样保留。 */
+export async function detachHead(cwd: string): Promise<void> {
+  await git(cwd, ["checkout", "--detach"]);
+}
+
+/** 清掉目录已经不在了的 worktree 登记，否则在同一路径上重新 add 会被 git 拒绝。 */
+export async function pruneWorktrees(repo: string): Promise<void> {
+  await git(repo, ["worktree", "prune"]);
+}
+
+/** 在 cwd 里切到 branch；分支不存在时从当前 HEAD 新建。 */
+export async function switchTo(cwd: string, branch: string, create: boolean): Promise<void> {
+  await git(cwd, create ? ["checkout", "-b", branch] : ["checkout", branch]);
+}
+
+/**
+ * path 是不是 repo 登记过的 worktree（不含主工作区）。git 在 Windows 上给的是正斜杠路径，resolve 后再比；
+ * Windows 的路径不分大小写。
+ */
+export async function isWorktreeOf(repo: string, path: string): Promise<boolean> {
+  const out = await git(repo, ["worktree", "list", "--porcelain"]);
+  const norm = (p: string) => (process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p));
+  const want = norm(path);
+  return out
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith("worktree "))
+    .slice(1)
+    .some((l) => norm(l.slice("worktree ".length)) === want);
+}
+
 export async function createBranch(cwd: string, branch: string): Promise<void> {
   await git(cwd, ["branch", branch]);
 }
