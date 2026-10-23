@@ -5,7 +5,7 @@ copyright: Copyright © 2026 Yuchen Lin
 directories:
   output: dist
   # 图标等打包资源的目录。不能用 build/：那里是 hook 和记忆 MCP 的构建产物。
-  # 图标由 scripts/render-icons.cjs 从 build-resources/icon-src/ 的 SVG 生成（pnpm icons）。
+  # 图标由 scripts/render-icons.mjs 从 build-resources/icon-src/ 的 SVG 生成（pnpm icons）。
   buildResources: build-resources
 files:
   - out/**/*

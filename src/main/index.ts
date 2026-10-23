@@ -184,7 +184,7 @@ function showWindow(): void {
 
 function createTray(): Tray {
   const isMac = process.platform === "darwin";
-  // 方向 E1 的托盘图标（scripts/render-icons.cjs 生成）：16 px 加高分屏用的 @2x（计划 1 Task 12）。
+  // 方向 E1 的托盘图标（scripts/render-icons.mjs 生成）：16 px 加高分屏用的 @2x（计划 1 Task 12）。
   const set = isMac ? TRAY_ICONS.macTemplate : TRAY_ICONS.win;
   const icon = nativeImage.createFromBuffer(Buffer.from(set[1], "base64"), { scaleFactor: 1 });
   icon.addRepresentation({ scaleFactor: 2, buffer: Buffer.from(set[2], "base64") });
