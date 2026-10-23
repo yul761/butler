@@ -91,7 +91,7 @@ Repeat this after every new download.
 
 ### Windows (SmartScreen)
 
-The NSIS installer is unsigned.
+The NSIS installer is unsigned for now (see [Code signing policy](#code-signing-policy)).
 
 1. Your browser may warn about the download. In Edge, open the download's **…** menu and choose **Keep**.
 2. Run `Butler-Setup-x.y.z.exe`.
@@ -192,6 +192,29 @@ At the metadata, redacted and full levels, the 今日重点 request is scanned b
 Below the full level, a request is also blocked if it still contains a ticket id or an original value that should have been replaced. The scanner does not recognise names.
 
 The **审计 (Audit)** page lists every call that was sent, blocked by the scanner, over budget or declined at the confirmation. Some refusals are only written to the log, for example a distillation call refused because the level changed, or a saved key that can no longer be decrypted.
+
+## Code signing policy
+
+**Status:** current Windows installers are unsigned. Butler has applied for the [SignPath Foundation](https://signpath.org) program, which offers free code signing to open-source projects. This section will change once the application is approved.
+
+**Once approved:**
+- **What is signed.** Only `Butler-Setup-<version>.exe` is signed. It must be built by [`.github/workflows/release.yml`](.github/workflows/release.yml) on GitHub Actions, from a version tag on this public repository. A build made on anyone's own machine is never signed.
+- **Who signs.** The installers will carry the line: free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org). The certificate belongs to SignPath Foundation, so it is their name that Windows shows as the publisher.
+- **Approval.** Each release's signing request is approved by hand.
+
+Team roles:
+
+- **Committers and reviewers:** [@yul761](https://github.com/yul761)
+- **Approvers:** [@yul761](https://github.com/yul761)
+
+### Privacy policy
+
+This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+
+- **Network.** Butler sends no telemetry, has no accounts or license checks, and does not check for updates.
+- **Claude Code.** Butler starts your own `claude` CLI. That CLI connects to Anthropic, or to whatever endpoint your company configured, under your login and settings.
+- **Personal API.** Butler calls the personal LLM API only if you configure one, and sends only what your chosen privacy level allows (see [Privacy model](#privacy-model)).
+- **Local data.** Everything Butler stores stays on your machine (see [Where your data lives](#where-your-data-lives)).
 
 ## Known issues
 
