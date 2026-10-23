@@ -444,3 +444,37 @@ describe("SessionService with several repos and the coordinator", () => {
     expect(sessions.get("ext")).toMatchObject({ ticketKey: "PROJ-1", repoId: apiRepo.id });
   });
 });
+
+describe("SessionService.hide / unhide", () => {
+  it("hides a finished session from the ticket list (records kept), refuses a running one, and can bring it back", async () => {
+    const { service, sessions, spawned } = await setup();
+    await service.open({ ticketKey: "PROJ-1" });
+    expect(() => service.hide("new-1")).toThrow(expect.objectContaining({ code: "sessions_open" }));
+    spawned[0].pty.emitExit(0);
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1, firstPrompt: "旧的对话" });
+    service.hide("old");
+    const [view] = service.ticketViews();
+    expect(view.sessions.map((s) => s.id)).not.toContain("old");
+    expect(view.hiddenSessions.map((s) => s.id)).toEqual(["old"]);
+    expect(sessions.get("old")).toMatchObject({ ticketKey: "PROJ-1", firstPrompt: "旧的对话", dismissed: true });
+
+    // 隐藏的 session 等你输入也不在侧栏亮灯。
+    sessions.setWaiting("old", true, 2000);
+    expect(service.ticketViews()[0].waiting).toBe(false);
+
+    service.unhide("old");
+    expect(service.ticketViews()[0].sessions.map((s) => s.id)).toContain("old");
+    expect(service.ticketViews()[0].hiddenSessions).toEqual([]);
+    expect(() => service.hide("no-such")).toThrow(expect.objectContaining({ code: "not_found" }));
+  });
+
+  it("keeps showing a hidden session while its terminal runs again", async () => {
+    const { service, sessions } = await setup({ transcripts: ["old"] });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    service.hide("old");
+    await service.open({ ticketKey: "PROJ-1", sessionId: "old", force: true });
+    const [view] = service.ticketViews();
+    expect(view.sessions.map((s) => s.id)).toContain("old");
+    expect(view.hiddenSessions).toEqual([]);
+  });
+});

@@ -88,4 +88,22 @@ test("a ticket over two repos: a session per repo and a coordinator that sees bo
   } finally {
     child.kill();
   }
+
+  // 6. 多余的 session 可以从列表里隐藏（终端先退出），之后还能恢复。
+  const apiButton = page.locator(".sessions-bar .session-wrap").filter({ has: page.locator(".place", { hasText: /^api$/ }) });
+  await apiButton.locator(".session").click();
+  await page.locator(".terminal-wrap:visible .xterm").click();
+  // 一句话都没说过的 session 退出时会被当成空 session 自动删掉：先说一句。
+  await page.keyboard.type("api work");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => terminalText(page)).toContain("收到：api work");
+  await page.keyboard.type("exit");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".terminal-wrap:visible .exited")).toBeVisible();
+  await apiButton.getByRole("button", { name: /^隐藏 / }).click();
+  await expect(apiButton).toHaveCount(0);
+  await page.getByRole("button", { name: S.hiddenSessions(1), exact: true }).click();
+  await page.locator(".hidden-sessions").getByRole("button", { name: S.unhideSession, exact: true }).click();
+  await expect(apiButton).toHaveCount(1);
+  await expect(page.getByRole("button", { name: S.hiddenSessions(1), exact: true })).toHaveCount(0);
 });

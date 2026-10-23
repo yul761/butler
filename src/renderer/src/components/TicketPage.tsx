@@ -49,6 +49,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   const [mismatch, setMismatch] = useState<Mismatch | null>(null);
   const [oldWorkdir, setOldWorkdir] = useState<OldWorkdir | null>(null);
   const [showAllSessions, setShowAllSessions] = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   /** 打开的仓库对话框：null 关闭，"new" 添加，否则编辑这个仓库。 */
@@ -185,24 +186,34 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
       <div className="sessions-bar">
         {ticket.sessions.length === 0 && <span className="muted">{S.noSessions}</span>}
         {(showAllSessions ? ticket.sessions : sessionSplit.shown).map((s) => (
-          <button
-            key={s.id}
-            className={s.termId && s.termId === active ? "session active" : "session"}
-            title={`${s.firstPrompt ?? S.untitledSession}\n${s.id}`}
-            onClick={() => (s.termId ? setActive(s.termId) : void open({ ticketKey: ticket.key, sessionId: s.id }))}
-          >
-            {s.waitingForInput && <span className="badge">●</span>}
-            {sessionPlace(s, ticket.repos, S.coordinator) && <span className="place">{sessionPlace(s, ticket.repos, S.coordinator)}</span>}
-            {s.spawnedBy && <span className="muted" title={S.spawnedByCoordinator}>↳</span>}
-            <span className="label">{sessionLabel(s, S.untitledSession)}</span>
-            <span className="muted">{s.lastActivityAt ? formatShort(s.lastActivityAt) : ""}</span>
-            <span className="action">{s.termId ? S.switchTo : S.open}</span>
-          </button>
+          <span key={s.id} className="session-wrap">
+            <button
+              className={s.termId && s.termId === active ? "session active" : "session"}
+              title={`${s.firstPrompt ?? S.untitledSession}\n${s.id}`}
+              onClick={() => (s.termId ? setActive(s.termId) : void open({ ticketKey: ticket.key, sessionId: s.id }))}
+            >
+              {s.waitingForInput && <span className="badge">●</span>}
+              {sessionPlace(s, ticket.repos, S.coordinator) && <span className="place">{sessionPlace(s, ticket.repos, S.coordinator)}</span>}
+              {s.spawnedBy && <span className="muted" title={S.spawnedByCoordinator}>↳</span>}
+              <span className="label">{sessionLabel(s, S.untitledSession)}</span>
+              <span className="muted">{s.lastActivityAt ? formatShort(s.lastActivityAt) : ""}</span>
+              <span className="action">{s.termId ? S.switchTo : S.open}</span>
+            </button>
+            {/* 正在运行的终端不能隐藏。 */}
+            {!s.termId && (
+              <button className="session-hide" title={S.hideSession} aria-label={S.hideSessionNamed(sessionLabel(s, S.untitledSession))} onClick={() => api.hideSession(s.id).catch(reportError)}>
+                ×
+              </button>
+            )}
+          </span>
         ))}
         {sessionSplit.hidden.length > 0 && (
           <button className="session more" onClick={() => setShowAllSessions(!showAllSessions)}>
             {showAllSessions ? S.collapseSessions : S.olderSessions(sessionSplit.hidden.length)}
           </button>
+        )}
+        {ticket.hiddenSessions.length > 0 && (
+          <button className="session more" onClick={() => setShowHidden(!showHidden)}>{S.hiddenSessions(ticket.hiddenSessions.length)}</button>
         )}
         {ticket.repos.length > 1 && (
           <select aria-label={S.pickRepo} value={pickedRepo?.id} onChange={(e) => setNewRepoId(Number(e.target.value))}>
@@ -213,6 +224,18 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         <button title={S.coordinatorHint} onClick={() => void open({ ticketKey: ticket.key, coordinator: true })}>+ {S.newCoordinator}</button>
       </div>
 
+      {showHidden && ticket.hiddenSessions.length > 0 && (
+        <div className="notice hidden-sessions">
+          <p className="muted">{S.hiddenSessionsHint}</p>
+          {ticket.hiddenSessions.map((s) => (
+            <div key={s.id} className="row">
+              <span className="label">{sessionLabel(s, S.untitledSession)}</span>
+              <span className="muted">{s.lastActivityAt ? formatShort(s.lastActivityAt) : ""}</span>
+              <button onClick={() => api.unhideSession(s.id).catch(reportError)}>{S.unhideSession}</button>
+            </div>
+          ))}
+        </div>
+      )}
       {error && <p className="error">{error}</p>}
       {mismatch && (
         <div className="notice">

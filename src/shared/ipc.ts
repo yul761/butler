@@ -14,6 +14,8 @@ export const IPC = {
   sessionsUnclaimed: "sessions:unclaimed",
   sessionsClaim: "sessions:claim",
   sessionsDismiss: "sessions:dismiss",
+  sessionsHide: "sessions:hide",
+  sessionsUnhide: "sessions:unhide",
   ptySnapshot: "pty:snapshot",
   ptyKill: "pty:kill",
   ptyWrite: "pty:write",
@@ -57,7 +59,7 @@ export const IPC = {
 export const INVOKE_CHANNELS: readonly string[] = [
   IPC.ticketsList, IPC.ticketsCreate, IPC.ticketsSetStatus, IPC.ticketsArchive, IPC.ticketsSwitchBranch,
   IPC.ticketsUpdate, IPC.ticketsArchived, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
-  IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss,
+  IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.briefsLatest, IPC.briefsRegenerate, IPC.briefsMark,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,

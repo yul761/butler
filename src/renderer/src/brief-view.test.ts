@@ -17,7 +17,7 @@ const session = (id: string): SessionView => ({
 const REPO = { id: 1, ticketKey: "A-1", repoPath: "/r", workMode: "branch" as const, worktreePath: null, branch: "b", createdAt: 1 };
 const ticket = (sessions: SessionView[], repos = [REPO]): TicketView => ({
   key: "A-1", title: null, repos, status: "active",
-  statusManual: null, createdAt: 1, archivedAt: null, effectiveStatus: "active", sessions, waiting: false,
+  statusManual: null, createdAt: 1, archivedAt: null, effectiveStatus: "active", sessions, hiddenSessions: [], waiting: false,
 });
 
 describe("brief view helpers", () => {
