@@ -168,6 +168,10 @@ export class SessionsRepo {
     this.db.prepare(`UPDATE sessions SET dismissed = 1 WHERE id = ?`).run(id);
   }
 
+  undismiss(id: string): void {
+    this.db.prepare(`UPDATE sessions SET dismissed = 0 WHERE id = ?`).run(id);
+  }
+
   setOrigin(id: string, origin: SessionOrigin): void {
     this.db.prepare(`UPDATE sessions SET origin = ? WHERE id = ?`).run(origin, id);
   }

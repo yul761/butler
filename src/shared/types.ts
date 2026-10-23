@@ -56,6 +56,8 @@ export interface SessionView extends Session {
 export interface TicketView extends Ticket {
   effectiveStatus: TicketStatus;
   sessions: SessionView[];
+  /** 用户从列表里隐藏的 session（只是不显示，对话记录不动；可以恢复）。 */
+  hiddenSessions: SessionView[];
   waiting: boolean;
 }
 

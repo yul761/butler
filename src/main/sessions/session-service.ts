@@ -306,11 +306,14 @@ export class SessionService {
   ticketViews(): TicketView[] {
     const heads = this.openHeads();
     return this.d.tickets.list().map((t) => {
-      const sessions = this.d.sessions
+      const all = this.d.sessions
         .listByTicket(t.key)
         .filter((s) => !s.replacedBy)
         .map((s) => ({ ...s, termId: heads.get(s.id) ?? null }));
-      return { ...t, effectiveStatus: effectiveStatus(t), sessions, waiting: sessions.some((s) => s.waitingForInput) };
+      // 正在运行的终端永远显示（隐藏只对没在跑的 session 起作用）。
+      const sessions = all.filter((s) => !s.dismissed || s.termId !== null);
+      const hiddenSessions = all.filter((s) => s.dismissed && s.termId === null);
+      return { ...t, effectiveStatus: effectiveStatus(t), sessions, hiddenSessions, waiting: sessions.some((s) => s.waitingForInput) };
     });
   }
 
@@ -333,5 +336,22 @@ export class SessionService {
 
   dismiss(sessionId: string): void {
     this.d.sessions.dismiss(sessionId);
+  }
+
+  /**
+   * 把 ticket 里多余的 session 从列表里隐藏：只是不显示，对话记录、ticket 归属都不动，随时可以恢复。
+   * 终端还在跑的不能隐藏（先在终端里退出 claude）。
+   */
+  hide(sessionId: string): void {
+    const s = this.d.sessions.head(sessionId);
+    if (!s?.ticketKey) throw new TicketError("not_found", "找不到这个 session");
+    if (this.openHeads().has(s.id)) throw new TicketError("sessions_open", "这个 session 的终端还在运行，先在终端里退出 claude 再隐藏");
+    this.d.sessions.dismiss(s.id);
+  }
+
+  unhide(sessionId: string): void {
+    const s = this.d.sessions.get(sessionId);
+    if (!s?.ticketKey) throw new TicketError("not_found", "找不到这个 session");
+    this.d.sessions.undismiss(s.id);
   }
 }

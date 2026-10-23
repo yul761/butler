@@ -28,7 +28,7 @@ import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, repoIdArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
+  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, repoIdArg, sessionIdArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
 } from "./validate";
 
 export interface IpcDeps {
@@ -139,6 +139,14 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.sessionsUnclaimed, () => d.sessionService.unclaimed());
   handle(IPC.sessionsClaim, (id: string, key: string) => {
     d.sessionService.claim(id, key);
+    d.notify();
+  });
+  handle(IPC.sessionsHide, (raw: unknown) => {
+    d.sessionService.hide(sessionIdArg(raw));
+    d.notify();
+  });
+  handle(IPC.sessionsUnhide, (raw: unknown) => {
+    d.sessionService.unhide(sessionIdArg(raw));
     d.notify();
   });
   handle(IPC.sessionsDismiss, (id: string) => {

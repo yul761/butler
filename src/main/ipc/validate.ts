@@ -101,3 +101,9 @@ export function clipboardTextArg(v: unknown): string {
   if (typeof v !== "string" || v.length > 1024 * 1024) throw new Error("invalid clipboard text");
   return v;
 }
+
+/** session id：claude 的 UUID（也接受 Butler 测试里的短 id），只允许安全字符。 */
+export function sessionIdArg(v: unknown): string {
+  if (typeof v !== "string" || !/^[A-Za-z0-9-]{1,100}$/.test(v)) throw new Error("invalid session id");
+  return v;
+}
