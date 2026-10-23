@@ -161,7 +161,7 @@ Butler embeds StateCore. Each session Butler starts gets two keyless MCP servers
   - the text of notes forgotten in that scope, so the model won't bring them back
 
   In the `workspace` scope, each learning is tagged with the id of the ticket it came from. **None of this is pseudonymized or scanned.** Each sent call is recorded on the audit page as **StateCore 记忆蒸馏 (StateCore distillation)** and counts against your monthly budget.
-- **Memory fills up.** StateCore keeps at most 30 notes per scope (one scope per ticket), and forgotten notes keep their slots. Butler never evicts its own entries to make room, so a long-lived ticket stops gaining new entries once its 30 slots are used, even at the full level. Distillation skips ticket scopes with fewer than 6 free slots. See [docs/configuration.md](docs/configuration.md#how-memory-works).
+- **Memory holds 30 live notes per ticket.** StateCore keeps at most 30 notes per scope (one scope per ticket). Since statecore-mcp 1.1, finished follow-ups and replaced decisions free their slots, and distillation never pushes Butler's notes out. A ticket can still fill up if it has more than 30 open follow-ups and decisions at once (Butler keeps at most 24 of its own), or if Claude writes many notes itself. See [docs/configuration.md](docs/configuration.md#how-memory-works).
 
 ## Privacy model
 

@@ -11,7 +11,7 @@ import { MemorySyncRepo } from "../db/memory-sync-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { chatReply, gatewayHarness, type GatewayHarness } from "../gateway/testing";
 import { insertTicket, memDb, tempDir } from "../test-utils";
-import { DIGEST_HEADROOM, handoffSummary, MemoryService, nightlyDistill } from "./memory-service";
+import { handoffSummary, MemoryService, nightlyDistill } from "./memory-service";
 import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
 
 // 故障注入的接缝：withScope 默认就是真的；个别测试把真实句柄包一层（StateCore 本身始终是真的嵌入式存储）。
@@ -252,8 +252,8 @@ describe("MemoryService.syncTicket (design 8.3)", () => {
 /** 两两之间 Jaccard 很低的描述：每条都是追加，不会被 StateCore 当成别的条目的修订。 */
 const distinct = (i: number) => ["north", "pixel", "river", "stone", "tiger", "vault"].map((w) => `${w}${i}q${i * 13}`).join(" ");
 
-describe("MemoryService notes cap guard (PF2: StateCore keeps forgotten notes in the 30-note cap)", () => {
-  it("never evicts a desired note while a ticket goes through more than 30 lifetime notes, and does not churn", async () => {
+describe("MemoryService notes cap guard (PF2)", () => {
+  it("a ticket goes through more than 30 lifetime notes: finished followups free their slots, and nothing churns", async () => {
     const t = setup();
     t.addHandoff(payload({ decisions: [{ key: "db", statement: "用 PostgreSQL 存储会话" }] }));
     t.addFollowup("keep", { description: "上线前通知运维" });
@@ -261,37 +261,33 @@ describe("MemoryService notes cap guard (PF2: StateCore keeps forgotten notes in
     const pinned = await t.items();
     expect(pinned.map((i) => i.text).sort()).toEqual(["[decision:db] 用 PostgreSQL 存储会话", "[followup:keep] 上线前通知运维（配置，合并后）"]);
 
-    // 40 个 followup 先打开再完成：每个都占一个位置，forget 之后位置也不释放。
+    // 40 个 followup 先打开再完成：statecore-mcp 1.1 起 forget 释放位置，每一个都写得进去。
     for (let i = 0; i < 40; i++) {
       t.addFollowup(`tmp_${i}`, { description: distinct(i) });
       await t.memory.syncTicket("PROJ-1");
       const now = await t.items();
       // 一直写下的两条从没被挤掉、也没被重写（factId 不变）。
       for (const p of pinned) expect(now).toContainEqual(p);
-      expect((await t.slots()).used).toBeLessThanOrEqual(NOTES_CAP);
-      // 前 28 个写得进去（2 + 28 = 30），之后的没有位置，跳过。
-      expect(now.some((x) => x.text.startsWith(`[followup:tmp_${i}]`))).toBe(i < NOTES_CAP - 2);
+      expect(now.some((x) => x.text.startsWith(`[followup:tmp_${i}]`))).toBe(true);
       t.setFollowup(`tmp_${i}`, "done");
       await t.memory.syncTicket("PROJ-1");
       expect(await t.items()).toEqual(pinned);
     }
-    expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
+    expect(await t.slots()).toEqual({ used: 2, cap: NOTES_CAP });
 
     // 输入不变时第二次同步什么都不写：条目（含 factId、时间）和占用都不变。
     t.addFollowup("late", { description: distinct(99) });
     t.addHandoff(payload({ decisions: [{ key: "db", statement: "用 PostgreSQL 存储会话" }, { key: "cache", statement: "缓存用 Redis" }] }));
     await t.memory.syncTicket("PROJ-1");
     const first = await t.items();
-    expect(first).toEqual(pinned);
+    expect(first).toHaveLength(4);
+    for (const p of pinned) expect(first).toContainEqual(p);
     await t.memory.syncTicket("PROJ-1");
     expect(await t.items()).toEqual(first);
-    expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
+    expect(await t.slots()).toEqual({ used: 4, cap: NOTES_CAP });
     const chain = await t.memory.why("PROJ-1", pinned.find((p) => p.text.startsWith("[decision:db]"))!.factId!);
     expect(chain).toHaveLength(1);
-
-    // 跳过的只记条数，不记内容。
-    const skipped = t.logs.filter((l) => l.includes("skipped"));
-    expect(skipped.at(-1)).toBe("memory PROJ-1: no free note slot (30/30), skipped 1 followup(s), 1 decision(s)");
+    expect(t.logs.some((l) => l.includes("no free note slot"))).toBe(false);
     expect(t.logs.some((l) => /north|上线前|Redis|tmp_/.test(l))).toBe(false);
   });
 
@@ -364,30 +360,29 @@ describe("MemoryService fix round 1 (task 4 review)", () => {
   const scope = "ticket:PROJ-1";
   const raw = <T>(dataDir: string, fn: (s: ScopeHandle) => Promise<T>) => realStatecore.withScope({ dataDir, scope }, fn);
 
-  it("registers an unregistered note before forgetting it, so the slot count never comes out low (finding 1)", async () => {
+  it("a note the MCP pushed out and wrote back is registered again, and forgetting it frees its slot (statecore-mcp 1.1)", async () => {
     const t = setup();
     t.addFollowup("f_1", { description: distinct(1) });
     t.addHandoff(payload({ decisions: [{ key: "a", statement: distinct(2) }, { key: "b", statement: distinct(3) }] }));
     await t.memory.syncTicket("PROJ-1");
     const x = `[followup:f_1] ${distinct(1)}（配置，合并后）`;
+    const da = `[decision:a] ${distinct(2)}`;
     const db = `[decision:b] ${distinct(3)}`;
-    expect((await t.texts()).sort()).toEqual([`[decision:a] ${distinct(2)}`, db, x].sort());
     // claude 里的 MCP（不受 Butler 的保护）写满并多写一条：挤掉最旧的 f_1；它又一字不差地写回 f_1，挤掉 decision:a。
     await raw(t.dataDir, async (s) => {
       for (let i = 0; i < NOTES_CAP - 2; i++) await s.remember(`Claude 自己记的 ${distinct(10 + i)}`);
       await s.remember(x);
     });
-    const orphan = (await t.items()).find((i) => i.text === x);
-    expect(orphan?.factId).toBeNull(); // StateCore 没给它登记
+    expect((await t.items()).find((i) => i.text === x)?.factId).not.toBeNull();
     expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
-    // f_1 完成：Butler 要 forget 它，并且想写回被挤掉的 decision:a。
+    // f_1 完成：Butler forget 它，腾出的位置正好把被挤掉的 decision:a 写回去。
     t.setFollowup("f_1", "done");
     await t.memory.syncTicket("PROJ-1");
     const texts = await t.texts();
-    expect(texts).toContain(db); // 要保留的条目没被挤掉
+    expect(texts).toEqual(expect.arrayContaining([da, db]));
     expect(texts.some((x2) => x2.startsWith("[followup:f_1"))).toBe(false);
     expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
-    expect(t.logs).toContain("memory PROJ-1: no free note slot (30/30), skipped 0 followup(s), 1 decision(s)");
+    expect(t.logs.some((l) => l.includes("no free note slot"))).toBe(false);
   });
 
   it("measures free slots before every write, so a concurrent MCP write cannot make the estimate low (finding 2)", async () => {
@@ -479,55 +474,6 @@ describe("MemoryService fix round 1 (task 4 review)", () => {
 });
 
 describe("MemoryService fix round 2 (task 4 re-review)", () => {
-  const scope = "ticket:PROJ-1";
-  const oldDb = "[decision:db] PostgreSQL";
-  /** decision:db 是只有两个词的短决策；claude 里的 MCP 把它挤出上限、又一字不差地写回来（挤掉了 decision:a），它就成了没登记的条目。 */
-  async function shortOrphan() {
-    const t = setup();
-    t.addHandoff(payload({ decisions: [{ key: "db", statement: "PostgreSQL" }, { key: "a", statement: distinct(2) }, { key: "b", statement: distinct(3) }] }));
-    await t.memory.syncTicket("PROJ-1");
-    expect((await t.texts()).sort()).toEqual([oldDb, `[decision:a] ${distinct(2)}`, `[decision:b] ${distinct(3)}`].sort());
-    await realStatecore.withScope({ dataDir: t.dataDir, scope }, async (s) => {
-      for (let i = 0; i < NOTES_CAP - 2; i++) await s.remember(`Claude 自己记的 ${distinct(10 + i)}`);
-      await s.remember(oldDb);
-    });
-    expect((await t.items()).find((i) => i.text === oldDb)?.factId).toBeNull();
-    expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
-    // 决策改成完全不同的一句：旧的那条（没登记）要 forget。
-    t.addHandoff(payload({ decisions: [{ key: "db", statement: "改用 MySQL cluster with replicas" }, { key: "a", statement: distinct(2) }, { key: "b", statement: distinct(3) }] }));
-    return t;
-  }
-
-  it("retires an unregistered short decision with a punctuation-only rewrite, without taking a slot (N2)", async () => {
-    const t = await shortOrphan();
-    await t.memory.syncTicket("PROJ-1");
-    const texts = await t.texts();
-    expect(texts).not.toContain(oldDb);
-    expect(texts.some((x) => x.startsWith("[decision:db]"))).toBe(false);
-    expect(texts).toContain(`[decision:b] ${distinct(3)}`);
-    expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
-    expect(t.logs).toEqual(["memory PROJ-1: no free note slot (30/30), skipped 0 followup(s), 2 decision(s)"]);
-  });
-
-  it("logs a failed registration once while it keeps failing, and keeps the note instead of undercounting (N2)", async () => {
-    const t = await shortOrphan();
-    // 注入：登记用的改写什么都没替换（例如修订到了另一条上）。
-    wrapScopes((sc) => sc === scope, (s) => ({
-      ...s,
-      remember: async (text) => (text.endsWith("。") ? { superseded: null } : s.remember(text)),
-    }));
-    await t.memory.syncTicket("PROJ-1");
-    await t.memory.syncTicket("PROJ-1");
-    const failed = () => t.logs.filter((l) => l.includes("could not register"));
-    expect(failed()).toEqual(["memory PROJ-1: could not register 1 unregistered note(s) before forgetting them"]);
-    expect(await t.texts()).toContain(oldDb); // 没登记上就不 forget
-    expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
-    vi.mocked(withScope).mockImplementation(realStatecore.withScope);
-    await t.memory.syncTicket("PROJ-1");
-    expect(await t.texts()).not.toContain(oldDb);
-    expect(failed()).toHaveLength(1);
-  });
-
   it("writes one handoff version per handoff even when two handoffs have the same content (N1, design 8.3)", async () => {
     const t = setup();
     t.addHandoff(payload({ next_steps: ["补测试"] }));
@@ -630,11 +576,11 @@ describe("MemoryService.distill and the notes Butler keeps (task 4 review F3)", 
     await t.memory.syncTicket("PROJ-1");
     t.setFollowup("f_a", "done");
     await t.memory.syncTicket("PROJ-1");
-    // f_a 被 forget 了：看不见，但还在 notes 里占着位置。
+    // f_a 被 forget 了：看不见，也不再占位置（statecore-mcp 1.1）。
     const desired = (await t.texts()).sort();
     expect(desired).toHaveLength(3);
-    expect(trueNotes(t.dataDir, "ticket:PROJ-1")).toHaveLength(4);
-    expect((await t.slots()).used).toBe(4);
+    expect(trueNotes(t.dataDir, "ticket:PROJ-1")).toHaveLength(3);
+    expect((await t.slots()).used).toBe(3);
 
     await seedEvent(t.dataDir, "ticket:PROJ-1");
     const fb = desired.find((x) => x.startsWith("[followup:f_b]"))!;
@@ -809,28 +755,20 @@ describe("MemoryService.distill fix round 1 (task 6 review)", () => {
     expect(order).toEqual(["digest ticket:PROJ-1 after []", "digest ticket:ZZZ-1 after [PROJ-1,PROJ-2]"]);
   });
 
-  it("skips a ticket scope whose notes are full, logging only the count, and keeps its events (product ruling)", async () => {
+  it("digests a ticket scope whose notes are full without pushing any note out, and the workspace as usual", async () => {
     const t = setup();
     await realStatecore.withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
       for (let i = 0; i < NOTES_CAP; i++) await s.remember(`Claude 自己记的 ${distinct(40 + i)}`);
     });
     await seedEvent(t.dataDir, "ticket:PROJ-1");
     await seedEvent(t.dataDir, "workspace");
-    const digested: string[] = [];
-    const r = await t.memory.distill({
-      chat: async (messages) => {
-        digested.push(messages.some((m) => m.content.includes("ticket:PROJ-1")) ? "ticket:PROJ-1" : "other");
-        return digestReply();
-      },
-    });
-    // workspace 不是 ticket scope，照常蒸馏；满了的 ticket scope 一次模型调用都没有。
-    expect(r).toEqual({ scopes: 1, ran: 1, failed: 0 });
-    expect(digested).not.toContain("ticket:PROJ-1");
-    expect(t.logs).toEqual(["memory distill ticket:PROJ-1: skipped, not enough free note slots (30/30, needs 6 free)"]);
+    const r = await t.memory.distill({ chat: async () => digestReply([`Digest note ${distinct(300)}`]) });
+    expect(r).toEqual({ scopes: 2, ran: 2, failed: 0 });
     expect(t.logs.some((l) => l.includes("Claude"))).toBe(false);
     await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
-      expect(await s.pendingEvents()).toBe(1);
-      expect(await s.facts()).toHaveLength(NOTES_CAP);
+      expect(await s.pendingEvents()).toBe(0);
+      // 满了：模型提炼的那条被丢掉，调用方写的 30 条一条不少。
+      expect((await s.facts()).filter((f) => f.text.startsWith("Claude 自己记的"))).toHaveLength(NOTES_CAP);
     });
   });
 
@@ -854,7 +792,7 @@ describe("MemoryService.distill fix round 1 (task 6 review)", () => {
   });
 });
 
-describe("MemoryService.distill headroom (final review 1: a digest must not push desired notes out of a near-full scope)", () => {
+describe("MemoryService.distill on a full scope (statecore-mcp 1.1: a digest never pushes out a caller's note)", () => {
   /** 往 PROJ-1 的 scope 里写 n 条 Claude 自己记的 note，再放一个待蒸馏的事件。 */
   async function fill(t: ReturnType<typeof setup>, n: number, from = 60): Promise<void> {
     await realStatecore.withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
@@ -863,51 +801,32 @@ describe("MemoryService.distill headroom (final review 1: a digest must not push
     await seedEvent(t.dataDir, "ticket:PROJ-1");
   }
 
-  it("skips a ticket scope with 25 notes used (fewer than DIGEST_HEADROOM free), logging only counts, and keeps its events", async () => {
+  it("counts a partial digest as run, resyncs the ticket and logs it without content", async () => {
     const t = setup();
-    await fill(t, NOTES_CAP - DIGEST_HEADROOM + 1);
-    expect((await t.slots()).used).toBe(25);
-    const calls: string[] = [];
-    const r = await t.memory.distill({
-      chat: async () => {
-        calls.push("chat");
-        return digestReply();
-      },
-    });
-    expect(r).toEqual({ scopes: 0, ran: 0, failed: 0 });
-    expect(calls).toEqual([]);
-    expect(t.logs).toEqual(["memory distill ticket:PROJ-1: skipped, not enough free note slots (25/30, needs 6 free)"]);
-    await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
-      expect(await s.pendingEvents()).toBe(1);
-    });
+    t.addFollowup("f_1", { description: distinct(1) });
+    await t.memory.syncTicket("PROJ-1");
+    await seedEvent(t.dataDir, "ticket:PROJ-1");
+    wrapScopes((sc) => sc === "ticket:PROJ-1", (s) => ({ ...s, digestNow: async () => "partial" as const }));
+    expect(await t.memory.distill({ chat: async () => digestReply() })).toEqual({ scopes: 1, ran: 1, failed: 0 });
+    expect(t.logs).toEqual(["memory distill ticket:PROJ-1: partial (some events were not processed)"]);
+    expect((await t.texts()).some((x) => x.startsWith("[followup:f_1]"))).toBe(true);
   });
 
-  it("digests a ticket scope with 24 notes used (exactly DIGEST_HEADROOM free)", async () => {
+  it("digests a nearly full scope; the notes the model extracts never push Butler's out", async () => {
     const t = setup();
-    await fill(t, NOTES_CAP - DIGEST_HEADROOM);
-    expect((await t.slots()).used).toBe(24);
-    const r = await t.memory.distill({ chat: async () => digestReply() });
-    expect(r).toEqual({ scopes: 1, ran: 1, failed: 0 });
-    expect(t.logs).toEqual([]);
+    // Butler 的 followup 最先写进去，是最旧的 note；再由 claude 填到 29 条。
+    t.addFollowup("f_keep", { description: distinct(1) });
+    await t.memory.syncTicket("PROJ-1");
+    await fill(t, NOTES_CAP - 2);
+    expect((await t.slots()).used).toBe(NOTES_CAP - 1);
+    const many = Array.from({ length: 8 }, (_, i) => `Digest note ${distinct(200 + i)}`);
+    expect(await t.memory.distill({ chat: async () => digestReply(many) })).toEqual({ scopes: 1, ran: 1, failed: 0 });
+    expect((await t.texts()).some((x) => x.startsWith("[followup:f_keep]"))).toBe(true);
+    expect(t.logs.some((l) => l.includes("still missing"))).toBe(false);
+    expect((await t.slots()).used).toBeLessThanOrEqual(NOTES_CAP);
     await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
       expect(await s.pendingEvents()).toBe(0);
     });
-  });
-
-  it("logs by count only the desired notes a digest pushed out that the resync could not write back", async () => {
-    const t = setup();
-    // Butler 的 followup 最先写进去，是最旧的 note；再由 claude 填到 24 条。
-    t.addFollowup("f_keep", { description: distinct(1) });
-    await t.memory.syncTicket("PROJ-1");
-    await fill(t, NOTES_CAP - DIGEST_HEADROOM - 1);
-    expect((await t.slots()).used).toBe(24);
-    // 模型一次提炼出的 note 超过了余量：notes 超过 30，StateCore 挤掉最旧的（Butler 的 followup），重新同步时也没有空位。
-    const many = Array.from({ length: DIGEST_HEADROOM + 2 }, (_, i) => `Digest note ${distinct(200 + i)}`);
-    expect(await t.memory.distill({ chat: async () => digestReply(many) })).toEqual({ scopes: 1, ran: 1, failed: 0 });
-    expect((await t.texts()).some((x) => x.startsWith("[followup:f_keep]"))).toBe(false);
-    const missing = "memory PROJ-1: 1 desired note(s) still missing after distill and resync";
-    expect(t.logs.filter((l) => l === missing)).toHaveLength(1);
-    expect(t.logs.some((l) => /north|Digest note|Claude/.test(l))).toBe(false);
   });
 });
 

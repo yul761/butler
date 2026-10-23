@@ -14,13 +14,6 @@ import { listScopeNames, NOTES_CAP, withScope, type DigestOutcome, type ScopeHan
 export const BACKFILL_HANDOFFS = 20;
 /** 每次同步读多少条 handoff（决策要看全部历史）。 */
 const HANDOFF_SCAN = 200;
-/**
- * 蒸馏一个 ticket scope 之前至少要空着的 notes 位置（最终审查 1）。一次蒸馏可能提炼出好几条 note，再加上 carry-over 重新追加的条目，
- * 空位不够时 notes 会超过 30，StateCore 挤掉最旧的看得见的条目（可能正是一条 Butler 要保留的），之后的重新同步也没有空位写回去（PF2）。
- * 取 6：和 BUTLER_NOTE_LIMIT（24）给 claude 留的余量一样。
- */
-export const DIGEST_HEADROOM = 6;
-
 export interface MemoryServiceDeps {
   dataDir: string;
   tickets: Pick<TicketsRepo, "get" | "list">;
@@ -67,7 +60,7 @@ function byPriority(notes: ButlerNote[]): ButlerNote[] {
 /**
  * 每次 remember 之前实测一次：还能不能追加一条而不让 StateCore 挤掉别的条目（PF2）。
  * StateCore 的 notes 上限是 30，满了再追加就挤掉最旧的那条，可能正是一条要保留的 Butler 条目；
- * 被 forget 的条目也还占着位置（完整档位的蒸馏之后也一样，见 statecore.ts 的 NOTES_CAP）。
+ * claude 里挂的记忆 MCP 写的 note 和 Butler 的一样会挤掉最旧的（见 statecore.ts 的 NOTES_CAP）。
  * 一次 remember 可能是追加，也可能是原地修订或一字不差的空操作，事先分不出来，所以一律当成追加：没有空位就不写。
  * 每次都重新数，而不是数一次再自己扣：claude 里挂的记忆 MCP 可能同时在往这个 scope 写。一次同步只写几条，开销很小。
  */
@@ -81,13 +74,6 @@ function slotGuard(s: ScopeHandle): { take: () => Promise<boolean>; last: () => 
     last: () => known,
   };
 }
-
-/**
- * 把一条没登记的条目（StateCore 的事实登记里没有它，facts() 里 factId 为 null）改写成登记过的：末尾只加一个标点。
- * StateCore 比较修订时把标点当空白（normalizeText），词完全一样，Jaccard 是 1，所以一定是原地修订（替换原文、登记新文本），
- * 不会追加、不占新位置；而去空白、小写之后的文本不同，不会被当成一字不差的重复而什么都不做。
- */
-const registeredText = (text: string): string => `${text}。`;
 
 type WriteResult = { written: boolean; displaced: { key: string; variant: number } | null };
 
@@ -211,16 +197,9 @@ export class MemoryService {
     const before = await s.facts();
     const plan = planReconcile(before, desired);
     // 先 forget 再 remember（设计文档 13.1）：新文本是旧文本的修订时，StateCore 把它们串成一条 why 链。
-    const byFactKey = new Map(before.map((i) => [i.factKey, i]));
-    let unregistered = 0;
-    for (const factKey of plan.forget) {
-      const item = byFactKey.get(factKey);
-      if (item && item.factId === null) {
-        if (!(await this.forgetUnregistered(s, item.text))) unregistered++;
-      } else await s.forget(factKey);
-    }
-    this.notice(`${key}|register`, unregistered ? `memory ${key}: could not register ${unregistered} unregistered note(s) before forgetting them` : null);
-    // forget 过程中的改写可能动到别的条目：按现状重新比对一次再写。
+    // statecore-mcp 1.1 起 forget 会释放位置（没登记的条目也一样），不再需要先登记再 forget。
+    for (const factKey of plan.forget) await s.forget(factKey);
+    // 按现状重新比对一次再写（claude 里的 MCP 可能同时在写）。
     const after = await s.facts();
     const wanted = new Map(desired.map((n) => [noteKey(n), n]));
     const queue = byPriority(planReconcile(after, desired).write).map((note) => ({ note, from: 1 }));
@@ -247,22 +226,6 @@ export class MemoryService {
       }
     }
     this.notice(`${key}|slots`, null);
-  }
-
-  /**
-   * forget 一条没登记的条目之前先把它登记上（审查 1）。
-   * 别人（claude 里的 MCP）把一条 Butler 条目挤出上限之后，同样的文本再写进来时 StateCore 不给它登记（旧登记只是退役）。
-   * 这样的条目看得见时 noteSlots 还数得到它；一旦 forget，它既不在登记里、也不在 facts() 里，却还占着位置，
-   * noteSlots 就会少数一个，下一次追加可能挤掉一条要保留的条目。所以先原地改写成登记过的版本，再 forget 那个版本。
-   * 改写是原地修订、不占位置（见 registeredText）。没登记上（改写修订的是另一条）时不 forget，留着下次再试：宁可多显示一条旧的，也不少数位置。
-   */
-  private async forgetUnregistered(s: ScopeHandle, text: string): Promise<boolean> {
-    const next = registeredText(text);
-    const r = await s.remember(next);
-    const item = (await s.facts()).find((i) => i.text === next && i.factId !== null);
-    if (r.superseded !== text || !item) return false;
-    await s.forget(item.factKey);
-    return true;
   }
 
   /**
@@ -317,13 +280,12 @@ export class MemoryService {
    * model 为 null（不是 full 档位等）或记忆关闭时什么都不做。永不 reject；一个 scope 失败不影响其他 scope。
    * 每个 scope 单独排进同步队列（审查 M1）：和写入不并发，但这期间 handoff 触发的同步可以插在两个 scope 之间，不用等整轮蒸馏。
    * 轮到一个 scope 时再检查：已经 stop()、记忆关了、allowed() 为 false（档位降了、开了发送前确认、开始退出）就停下，剩下的 scope 留到下次。
-   * 空位少于 DIGEST_HEADROOM（cap - used < 6）的 ticket scope 不蒸馏（产品裁定，最终审查 1）：StateCore 1.0.0 的蒸馏释放不了 forget 过的位置，
-   * 空位不够时它提炼出的新 note 会挤掉看得见的 Butler 条目，之后也写不回去。事件留着，等位置空出来。
-   * 蒸馏加重新同步之后还有要保留的条目看不见（模型一次提炼的 note 超过了余量），只记条数（同样的情况不重复记）。
+   * statecore-mcp 1.1 起，蒸馏提炼的 note 不会挤掉调用方（Butler、claude 里的 remember）写的 note：位置满了就丢掉自己提炼的那条，
+   * 所以不再要求蒸馏前留空位。蒸馏加重新同步之后还有要保留的条目看不见，只记条数（同样的情况不重复记）。
    * 一个 ticket scope 蒸馏成功后马上重新同步这个 ticket（任务 4 审查 F3）：蒸馏会按相似度改写、合并、挤掉 notes，
    * Butler 要保留的条目可能被改掉或没了登记；重新同步按现状比对、每次写之前重新数位置，不沿用蒸馏之前的任何估计。
-   * "ran" 不保证每个事件都被提炼（审查 M3，StateCore 1.0.0）：分块蒸馏时失败的块被跳过，两次输出都不合格时退回上一次的摘要，
-   * 这些事件同样算作已蒸馏。
+   * "partial"：有的事件没处理到（失败的分块、超出预算），statecore-mcp 1.1 起如实报告；和 "ran" 一样算跑过并重新同步，另外记一笔。
+   * 完全失败时 StateCore 不写摘要，事件留着下次再试（连续失败三次后它写一份降级摘要，以免卡住）。
    */
   async distill(model: StatecoreChatModel | null, allowed: () => boolean = () => true): Promise<DistillResult> {
     const r: DistillResult = { scopes: 0, ran: 0, failed: 0 };
@@ -334,13 +296,13 @@ export class MemoryService {
       if (step === "stop") break;
       if (step === "skipped") continue;
       r.scopes++;
-      if (step === "ran") r.ran++;
+      if (step === "ran" || step === "partial") r.ran++;
       else if (step === "failed") r.failed++;
     }
     return r;
   }
 
-  /** 蒸馏一个 scope（已经在队列里）。"skipped"：没有待蒸馏的事件，或 notes 空位不够；"stop"：整轮停下。 */
+  /** 蒸馏一个 scope（已经在队列里）。"skipped"：没有待蒸馏的事件；"stop"：整轮停下。 */
   private async distillScope(
     scope: string,
     model: StatecoreChatModel,
@@ -355,16 +317,10 @@ export class MemoryService {
     try {
       const outcome = await withScope({ dataDir: this.d.dataDir, scope, model }, async (s): Promise<DigestOutcome | "skipped"> => {
         if ((await s.pendingEvents()) === 0) return "skipped";
-        if (key !== null) {
-          const { used, cap } = await s.noteSlots();
-          if (cap - used < DIGEST_HEADROOM) {
-            this.log(`memory distill ${scope}: skipped, not enough free note slots (${used}/${cap}, needs ${DIGEST_HEADROOM} free)`);
-            return "skipped";
-          }
-        }
         return s.digestNow();
       });
-      if (outcome === "ran" && key !== null) await this.resyncAfterDigest(key);
+      if (outcome === "partial") this.log(`memory distill ${scope}: partial (some events were not processed)`);
+      if ((outcome === "ran" || outcome === "partial") && key !== null) await this.resyncAfterDigest(key);
       return outcome;
     } catch (e) {
       this.log(`memory distill ${scope} failed`, e);

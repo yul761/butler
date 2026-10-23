@@ -87,7 +87,7 @@ This section also shows:
   - the handoff's learnings, to the `workspace` scope
 
   Butler also syncs a ticket at startup and when you open a session for it. It syncs again when you complete, ignore or reopen one of the ticket's follow-ups.
-- **The 30-note cap.** StateCore keeps at most 30 notes per scope, and a forgotten note keeps its slot. Before each write, Butler counts the free slots. If none is left, it skips the write rather than let StateCore evict the oldest entry, so Butler never evicts its own notes. When slots are short, open follow-ups go first, then decisions. As a result, **a long-lived ticket stops gaining new memory entries once its scope is full, even at the 完整 (full) level**. Distillation does not free those slots. The skipped entries are still in Butler's own database and on the ticket page. In the `workspace` scope, StateCore evicts the oldest learnings once it holds 30 notes.
+- **The 30-note cap.** StateCore keeps at most 30 live notes per scope. Since statecore-mcp 1.1, a forgotten note (a finished follow-up, a replaced decision) frees its slot, and notes the distillation extracts never push out notes written by Butler or by Claude's `remember`. Before each write, Butler counts the free slots. If none is left, it skips the write rather than let StateCore evict the oldest entry, so Butler never evicts its own notes. When slots are short, open follow-ups go first, then decisions. The skipped entries are still in Butler's own database and on the ticket page, and are written as soon as a slot frees up. In the `workspace` scope, StateCore evicts the oldest learnings once it holds 30 notes.
 - **The 记忆 (Memory) tab** on a ticket page shows the latest handoff, decisions, open follow-ups and other notes. Click **来历 (history)** on an entry to see its version chain. The tab refreshes after each Butler sync. It does not update live while Claude writes to memory inside a session.
 - **Distillation.** This happens only at the 完整 (full) privacy level with **发送前确认 (confirm before send)** off. It runs in the background after every nightly handoff run, including catch-up runs and **立即运行晚间 handoff (run the nightly handoff now)**. For each scope with pending events, StateCore makes one or more calls to your personal API and turns the events into notes. Together the calls send:
   - the scope name, which for a ticket is the real ticket id (`ticket:<KEY>`)
@@ -99,7 +99,7 @@ This section also shows:
 
   **None of this is pseudonymized or scanned.** The scanner covers only the 今日重点 (today's focus) path. Each call is checked against the monthly budget and refused if it would exceed it. Every sent or over-budget call is audited, and shows as **StateCore 记忆蒸馏 (StateCore distillation)** on the Audit page. A call refused for any other reason, such as the level changing or no usable key, is only written to the log.
 
-  Butler skips ticket scopes with fewer than 6 free note slots and leaves their events for later. The calls are made by Butler's main process, inside the privacy gateway, and no StateCore process ever receives the API key.
+  A run that could not process every event is reported as partial and its ticket is resynced; a run that distilled nothing leaves the events for the next night. The calls are made by Butler's main process, inside the privacy gateway, and no StateCore process ever receives the API key.
 
 ## 调度与 handoff (Schedule and handoffs)
 
