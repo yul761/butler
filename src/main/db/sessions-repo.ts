@@ -13,6 +13,9 @@ interface SessionRow {
   replaced_by: string | null;
   dismissed: number;
   created_at: number;
+  repo_id: number | null;
+  coordinator: number;
+  spawned_by: string | null;
 }
 
 function toSession(r: SessionRow): Session {
@@ -28,6 +31,9 @@ function toSession(r: SessionRow): Session {
     replacedBy: r.replaced_by,
     dismissed: r.dismissed === 1,
     createdAt: r.created_at,
+    repoId: r.repo_id === null ? null : Number(r.repo_id),
+    coordinator: r.coordinator === 1,
+    spawnedBy: r.spawned_by,
   };
 }
 
@@ -40,6 +46,9 @@ export interface NewSession {
   firstPrompt?: string | null;
   lastActivityAt?: number | null;
   createdAt: number;
+  repoId?: number | null;
+  coordinator?: boolean;
+  spawnedBy?: string | null;
 }
 
 export interface SessionDetails {
@@ -63,10 +72,13 @@ export class SessionsRepo {
   insertIfAbsent(s: NewSession): boolean {
     const r = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt);
+      .run(
+        s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
+        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null,
+      );
     if (Number(r.changes) > 0) {
       this.forgotten.delete(s.id);
       return true;
@@ -125,8 +137,9 @@ export class SessionsRepo {
     return rows.map(toSession);
   }
 
-  setTicket(id: string, ticketKey: string | null): void {
-    this.db.prepare(`UPDATE sessions SET ticket_key = ? WHERE id = ?`).run(ticketKey, id);
+  /** 换 ticket 时仓库归属一起换（null 表示不属于任何仓库）。 */
+  setTicket(id: string, ticketKey: string | null, repoId: number | null = null): void {
+    this.db.prepare(`UPDATE sessions SET ticket_key = ?, repo_id = ? WHERE id = ?`).run(ticketKey, ticketKey ? repoId : null, id);
   }
 
   setWaiting(id: string, waiting: boolean, at: number): void {
@@ -135,8 +148,20 @@ export class SessionsRepo {
       .run(waiting ? 1 : 0, at, id);
   }
 
+  /** /clear、compact 产生的新 session 接替旧的：同一个终端，仓库、总控和开启者也照旧。 */
   setReplacedBy(id: string, newId: string): void {
-    this.db.prepare(`UPDATE sessions SET replaced_by = ? WHERE id = ?`).run(newId, id);
+    withTransaction(this.db, () => {
+      this.db.prepare(`UPDATE sessions SET replaced_by = ? WHERE id = ?`).run(newId, id);
+      this.db
+        .prepare(
+          `UPDATE sessions SET
+             repo_id = COALESCE(repo_id, (SELECT o.repo_id FROM sessions o WHERE o.id = ?)),
+             coordinator = MAX(coordinator, (SELECT o.coordinator FROM sessions o WHERE o.id = ?)),
+             spawned_by = COALESCE(spawned_by, (SELECT o.spawned_by FROM sessions o WHERE o.id = ?))
+           WHERE id = ? AND ticket_key IS (SELECT o.ticket_key FROM sessions o WHERE o.id = ?)`,
+        )
+        .run(id, id, id, newId, id);
+    });
   }
 
   dismiss(id: string): void {

@@ -8,6 +8,7 @@ import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { trackerTools } from "../settings/settings-values";
+import type { HeadlessDirs } from "../tickets/ticket-service";
 import { runPool } from "../util/pool";
 import type { IngestInput, IngestResult } from "./ingest";
 import { buildPrompt, retryPrompt, type PromptContext } from "./prompt";
@@ -28,7 +29,8 @@ export interface HandoffRunnerDeps {
   followups: FollowupsRepo;
   settings: SettingsRepo;
   ingest: (input: IngestInput) => IngestResult;
-  workDir: (t: Ticket) => string;
+  /** 不 fork session 时后台 claude 在哪里跑（见 TicketService.headlessDirs）。 */
+  dirs: (t: Ticket) => HeadlessDirs;
   run: HeadlessRun;
   /** 首次 health 探测完成后 resolve。 */
   ready: () => Promise<void>;
@@ -143,9 +145,15 @@ export class HandoffRunner {
     const session = this.resumeTarget(key);
     // 晚间批量只为有对话记录的 ticket 生成；手动触发时没有 session 也照样跑（只能看 git、PR 和 tracker）。
     if (!session && trigger === "nightly") return { ticketKey: key, status: "skipped", reason: "no_session" };
-    const cwd = session?.cwd || this.d.workDir(t);
+    const dirs = this.d.dirs(t);
+    const cwd = session?.cwd || dirs.cwd;
     const prompt = buildPrompt(this.d.settings.get("handoffPrompt"), this.context(t));
-    const args = headlessArgs({ schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd) });
+    // 总控 session 在工作区目录里：项目级 MCP 按第一个仓库找，每个仓库都加进来。
+    const mcpCwd = session?.coordinator ? dirs.cwd : cwd;
+    const addDirs = dirs.repoDirs.filter((d) => d !== cwd);
+    const args = headlessArgs({
+      schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(mcpCwd), addDirs,
+    });
 
     let attempt = await this.exec(key, args, prompt, cwd, session?.id);
     if (!attempt.ok) return attempt.outcome;
@@ -166,8 +174,8 @@ export class HandoffRunner {
     if (!t) return failed(key, "no_ticket", `找不到 ticket ${key}`);
     const ctx = this.context(t);
     const prompt = buildPrompt(this.d.settings.get("refreshPrompt"), ctx);
-    const cwd = this.d.workDir(t);
-    const args = headlessArgs({ schema: REFRESH_JSON_SCHEMA, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd) });
+    const { cwd, addDirs } = this.d.dirs(t);
+    const args = headlessArgs({ schema: REFRESH_JSON_SCHEMA, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd), addDirs });
     const attempt = await this.exec(key, args, prompt, cwd);
     if (!attempt.ok) return attempt.outcome;
     const checked = validate(RefreshSchema, attempt.value);

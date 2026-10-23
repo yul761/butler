@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { TICKET_STATUSES, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
+import { TICKET_STATUSES, type OpenSessionRequest, type TicketRepo, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
+import { repoName, repoWhere, sessionPlace } from "../repos";
 import { sessionLabel, splitSessions } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
-import { EditTicketDialog } from "./EditTicketDialog";
+import { RepoDialog } from "./RepoDialog";
 import { TerminalPane } from "./TerminalPane";
 import { TicketOverview } from "./TicketOverview";
+import { TitleDialog } from "./TitleDialog";
 
 const VISIBLE_SESSIONS = 3;
 
@@ -16,6 +18,7 @@ function formatShort(ms: number): string {
 
 interface Mismatch {
   req: OpenSessionRequest;
+  repoId: number;
   current: string;
   expected: string;
   dirty: boolean;
@@ -45,7 +48,13 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   const [oldWorkdir, setOldWorkdir] = useState<OldWorkdir | null>(null);
   const [showAllSessions, setShowAllSessions] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  /** 打开的仓库对话框：null 关闭，"new" 添加，否则编辑这个仓库。 */
+  const [repoDialog, setRepoDialog] = useState<TicketRepo | "new" | null>(null);
+  const [removing, setRemoving] = useState<TicketRepo | null>(null);
+  /** 多仓库 ticket 新 session 开在哪个仓库里（默认第一个）。 */
+  const [newRepoId, setNewRepoId] = useState<number | null>(null);
+  const pickedRepo = ticket.repos.find((r) => r.id === newRepoId) ?? ticket.repos[0];
 
   const openKey = openTerms.join(",");
   useEffect(() => {
@@ -70,7 +79,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         setPanes((prev) => (prev.includes(r.termId) ? prev : [...prev, r.termId]));
         setActive(r.termId);
       } else if (r.reason === "branch_mismatch") {
-        setMismatch({ req, current: r.current, expected: r.expected, dirty: r.dirty });
+        setMismatch({ req, repoId: r.repoId, current: r.current, expected: r.expected, dirty: r.dirty });
       } else if (r.reason === "old_workdir") {
         setOldWorkdir({ req, cwd: r.cwd, current: r.current, expected: r.expected });
       } else {
@@ -83,11 +92,26 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
 
   async function switchAndOpen(m: Mismatch) {
     try {
-      await api.switchBranch(ticket.key);
+      await api.switchBranch(m.repoId);
       await open(m.req);
     } catch (e) {
       setError((e as Error).message);
     }
+  }
+
+  async function removeRepo(r: TicketRepo) {
+    setRemoving(null);
+    try {
+      await api.removeRepo(r.id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  /** 旧目录提示里的“新 session”：开在那个 session 的仓库里。 */
+  function newSessionLike(req: OpenSessionRequest) {
+    const s = ticket.sessions.find((x) => x.id === req.sessionId);
+    void open(s?.coordinator ? { ticketKey: ticket.key, coordinator: true } : { ticketKey: ticket.key, repoId: s?.repoId ?? pickedRepo?.id });
   }
 
   function closePane(id: string) {
@@ -102,7 +126,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
     <div className="ticket-page">
       <header className="ticket-header">
         <h2>{ticket.key}{ticket.title && <span className="title"> · {ticket.title}</span>}</h2>
-        <span className="muted">{ticket.workMode === "worktree" ? ticket.worktreePath : `${ticket.repoPath} @ ${ticket.branch}`}</span>
+        <span className="muted">{ticket.repos.length === 1 ? repoWhere(ticket.repos[0]) : ""}</span>
         <select
           value={statusValue}
           onChange={(e) => api.setStatus(ticket.key, e.target.value === "auto" ? null : (e.target.value as TicketStatus)).catch(reportError)}
@@ -110,10 +134,41 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
           <option value="auto">{S.statusAuto(STATUS_LABEL[ticket.status])}</option>
           {TICKET_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
         </select>
-        <button onClick={() => setEditing(true)}>{S.edit}</button>
+        <button onClick={() => setEditingTitle(true)}>{S.editTitle}</button>
         <button onClick={() => api.archive(ticket.key).then(onArchived, reportError)}>{S.archive}</button>
       </header>
-      {editing && <EditTicketDialog ticket={ticket} hasSessions={ticket.sessions.length > 0} onClose={() => setEditing(false)} />}
+      {editingTitle && <TitleDialog ticket={ticket} onClose={() => setEditingTitle(false)} />}
+      {repoDialog && (
+        <RepoDialog
+          ticketKey={ticket.key}
+          repo={repoDialog === "new" ? undefined : repoDialog}
+          hasSessions={ticket.sessions.length > 0}
+          onClose={() => setRepoDialog(null)}
+        />
+      )}
+
+      <div className="repos-bar">
+        <span className="label">{S.repos}</span>
+        {ticket.repos.length === 0 && <span className="muted">{S.noRepos}</span>}
+        {ticket.repos.map((r) => (
+          <span key={r.id} className="repo" title={repoWhere(r)}>
+            <span className="name">{repoName(r)}</span>
+            <span className="muted">{r.workMode === "worktree" ? S.worktree : r.branch}</span>
+            <button onClick={() => setRepoDialog(r)}>{S.edit}</button>
+            <button onClick={() => setRemoving(r)}>{S.removeRepo}</button>
+          </span>
+        ))}
+        <button onClick={() => setRepoDialog("new")}>+ {S.addRepo}</button>
+      </div>
+      {removing && (
+        <div className="notice">
+          <p>{S.removeRepoConfirm(repoName(removing))}</p>
+          <div className="actions">
+            <button onClick={() => void removeRepo(removing)}>{S.confirmRemove}</button>
+            <button onClick={() => setRemoving(null)}>{S.cancel}</button>
+          </div>
+        </div>
+      )}
 
       <TicketOverview ticketKey={ticket.key} />
 
@@ -127,6 +182,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
             onClick={() => (s.termId ? setActive(s.termId) : void open({ ticketKey: ticket.key, sessionId: s.id }))}
           >
             {s.waitingForInput && <span className="badge">●</span>}
+            {sessionPlace(s, ticket.repos, S.coordinator) && <span className="place">{sessionPlace(s, ticket.repos, S.coordinator)}</span>}
+            {s.spawnedBy && <span className="muted" title={S.spawnedByCoordinator}>↳</span>}
             <span className="label">{sessionLabel(s, S.untitledSession)}</span>
             <span className="muted">{s.lastActivityAt ? formatShort(s.lastActivityAt) : ""}</span>
             <span className="action">{s.termId ? S.switchTo : S.open}</span>
@@ -137,7 +194,13 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
             {showAllSessions ? S.collapseSessions : S.olderSessions(sessionSplit.hidden.length)}
           </button>
         )}
-        <button className="primary" onClick={() => void open({ ticketKey: ticket.key })}>+ {S.newSession}</button>
+        {ticket.repos.length > 1 && (
+          <select aria-label={S.pickRepo} value={pickedRepo?.id} onChange={(e) => setNewRepoId(Number(e.target.value))}>
+            {ticket.repos.map((r) => <option key={r.id} value={r.id}>{repoName(r)}</option>)}
+          </select>
+        )}
+        {pickedRepo && <button className="primary" onClick={() => void open({ ticketKey: ticket.key, repoId: pickedRepo.id })}>+ {S.newSession}</button>}
+        <button title={S.coordinatorHint} onClick={() => void open({ ticketKey: ticket.key, coordinator: true })}>+ {S.newCoordinator}</button>
       </div>
 
       {error && <p className="error">{error}</p>}
@@ -158,7 +221,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
           <p>{S.oldWorkdir(oldWorkdir.cwd, oldWorkdir.current, oldWorkdir.expected)}</p>
           <div className="actions">
             <button onClick={() => void open({ ...oldWorkdir.req, force: true })}>{S.openAnyway}</button>
-            <button onClick={() => void open({ ticketKey: ticket.key })}>+ {S.newSession}</button>
+            <button onClick={() => newSessionLike(oldWorkdir.req)}>+ {S.newSession}</button>
             <button onClick={() => setOldWorkdir(null)}>{S.cancel}</button>
           </div>
         </div>

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 function expectedFiles(platform, resources) {
   const unpacked = join(resources, "app.asar.unpacked", "node_modules", "node-pty");
-  const common = [join(resources, "memory-mcp", "statecore-mcp.cjs"), join(resources, "app.asar")];
+  const common = [join(resources, "memory-mcp", "statecore-mcp.cjs"), join(resources, "memory-mcp", "butler-sessions-mcp.cjs"), join(resources, "app.asar")];
   if (platform === "win32") {
     const pre = join(unpacked, "prebuilds", "win32-x64");
     return [

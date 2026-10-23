@@ -17,6 +17,8 @@ const flag = (name) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
 };
+/** 一个参数出现多次时的所有值（--add-dir）。 */
+const flags = (name) => args.flatMap((a, i) => (a === name && i + 1 < args.length ? [args[i + 1]] : []));
 const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
 const log = (line) => {
   if (process.env.FAKE_CLAUDE_LOG) fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, `${new Date().toISOString()} ${line}\n`);
@@ -24,7 +26,7 @@ const log = (line) => {
 
 const FLAGS = [
   "--print", "--session-id", "--resume", "--fork-session", "--mcp-config", "--output-format", "--json-schema",
-  "--allowedTools", "--disallowedTools", "--no-session-persistence", "--permission-mode", "--setting-sources",
+  "--allowedTools", "--disallowedTools", "--no-session-persistence", "--permission-mode", "--setting-sources", "--add-dir",
 ];
 const PR = { number: 7, url: "https://example.invalid/pull/7", state: "merged", review: "approved" };
 const HANDOFF = {
@@ -101,14 +103,27 @@ function interactive() {
       servers = [`unreadable ${mcp}: ${e.message}`];
     }
   }
-  log(`interactive ${has("--resume") ? "resume" : "new"} ${sessionId} mcp=${servers.join(",")}`);
+  log(`interactive ${has("--resume") ? "resume" : "new"} ${sessionId} mcp=${servers.join(",")} cwd=${cwd} adddirs=${flags("--add-dir").join("|")}`);
   runHooks("SessionStart", { session_id: sessionId, cwd, source: has("--resume") ? "resume" : "startup", transcript_path: transcript });
   out(`fake claude ready (${sessionId.slice(0, 8)})\n`);
   if (mcp) out(`mcp: ${servers.join(", ")}\n`);
   out("> ");
   const rl = readline.createInterface({ input: process.stdin });
+  // bracketed paste（总控交任务时 Butler 这样写入）：粘贴里的几行合成一条消息。PTY 按行交付，粘贴结束标记所在的那一行
+  // 只有等到 Butler 随后的回车才会到，所以读到结束标记就提交。
+  let pasting = null;
+  let pasted = null;
   rl.on("line", (raw) => {
-    const line = raw.trim();
+    if (raw.includes("\x1b[200~") || pasting) {
+      const text = raw.replace("\x1b[200~", "");
+      const end = text.indexOf("\x1b[201~");
+      pasting = [...(pasting || []), end >= 0 ? text.slice(0, end) : text];
+      if (end < 0) return;
+      pasted = pasting.join("\n");
+      pasting = null;
+    }
+    const line = pasted !== null ? pasted.trim() : raw.trim();
+    pasted = null;
     if (!line) {
       out("> ");
       return;

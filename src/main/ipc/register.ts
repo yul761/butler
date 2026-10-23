@@ -27,7 +27,9 @@ import { TicketError, type TicketService } from "../tickets/ticket-service";
 import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
-import { apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, termsArg, ticketKeyArg, updateTicketArg } from "./validate";
+import {
+  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, repoIdArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
+} from "./validate";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -92,11 +94,28 @@ export function registerIpc(d: IpcDeps): void {
     d.tickets.archive(key, d.now());
     d.notify();
   });
-  handle(IPC.ticketsUpdate, async (raw: unknown) => {
+  handle(IPC.ticketsUpdate, (raw: unknown) => {
     const input = updateTicketArg(raw);
-    const t = await d.ticketService.update(input, { terminalsOpen: d.sessionService.hasOpenTerminal(input.key) });
+    const t = d.ticketService.setTitle(input.key, input.title);
     d.notify();
     return t;
+  });
+  handle(IPC.ticketsAddRepo, async (raw: unknown) => {
+    const r = await d.ticketService.addRepo(addRepoArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.ticketsUpdateRepo, async (raw: unknown) => {
+    const input = updateRepoArg(raw);
+    const repo = d.ticketService.repo(input.repoId);
+    const r = await d.ticketService.updateRepo(input, { terminalsOpen: d.sessionService.hasOpenTerminal(repo.ticketKey, repo.id) });
+    d.notify();
+    return r;
+  });
+  handle(IPC.ticketsRemoveRepo, (raw: unknown) => {
+    const repo = d.ticketService.repo(repoIdArg(raw));
+    d.ticketService.removeRepo(repo.id, { terminalsOpen: d.sessionService.hasOpenTerminal(repo.ticketKey, repo.id) });
+    d.notify();
   });
   handle(IPC.ticketsArchived, () => d.tickets.listArchived());
   handle(IPC.ticketsUnarchive, (raw: unknown) => {
@@ -105,11 +124,8 @@ export function registerIpc(d: IpcDeps): void {
     d.tickets.unarchive(key);
     d.notify();
   });
-  handle(IPC.ticketsSwitchBranch, async (key: string) => {
-    const t = d.tickets.get(key);
-    if (!t) throw new TicketError("not_found", `找不到 ticket ${key}`);
-    if (d.ticketService.updating(key)) throw new TicketError("busy", "这个 ticket 正在修改，稍等一下");
-    await d.ticketService.switchBranch(t);
+  handle(IPC.ticketsSwitchBranch, async (raw: unknown) => {
+    await d.ticketService.switchBranch(d.ticketService.repo(repoIdArg(raw)));
   });
 
   handle(IPC.sessionsOpen, async (req: OpenSessionRequest) => {

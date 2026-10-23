@@ -6,7 +6,7 @@ import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { TicketService } from "../tickets/ticket-service";
 import { NPM_EXE_SHIM, NPM_SHIM, PNPM_NODE_PATH, PNPM_NODE_PATH_SHIM } from "../claude/__fixtures__/shims";
-import { fakePtyFactory, makeRepo, memDb } from "../test-utils";
+import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import type { TranscriptState } from "./discovery";
 import { PtyManager, type PtyFactory } from "./pty-manager";
 import { SessionService } from "./session-service";
@@ -18,7 +18,7 @@ async function setup(opts: {
   workMode?: "branch" | "worktree";
   ready?: () => Promise<void>;
   factory?: PtyFactory;
-  mcpConfig?: (ticketKey: string) => string | null;
+  mcpConfig?: (ticketKey: string, opts: { coordinator: boolean }) => string | null;
   syncMemory?: (ticketKey: string) => void;
   platform?: NodeJS.Platform;
   launchFs?: { read: (f: string) => string; exists: (p: string) => boolean };
@@ -30,7 +30,7 @@ async function setup(opts: {
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
   const settings = new SettingsRepo(db);
-  const ticketService = new TicketService({ tickets, settings, now: () => 1 });
+  const ticketService = new TicketService({ tickets, settings, now: () => 1, workspacesDir: tempDir("butler-ws-") });
   const { factory, spawned } = fakePtyFactory();
   const pty = new PtyManager(opts.factory ?? factory, { data: () => undefined, exit: () => undefined });
   const logs: string[] = [];
@@ -169,9 +169,9 @@ describe("SessionService.open", () => {
     expect(await service.open({ ticketKey: "PROJ-1" })).toEqual({ ok: true, termId: "new-1", alreadyOpen: false });
     expect(spawned[0].file).toBe("/bin/claude");
     expect(spawned[0].args).toEqual(["--session-id", "new-1"]);
-    expect(spawned[0].opts.cwd).toBe(ticket.worktreePath);
+    expect(spawned[0].opts.cwd).toBe(ticket.repos[0].worktreePath);
     expect(spawned[0].opts.env).toMatchObject({ PATH: "/login/bin", BUTLER_TICKET: "PROJ-1", BUTLER_SESSION: "new-1" });
-    expect(sessions.get("new-1")).toMatchObject({ ticketKey: "PROJ-1", origin: "butler", cwd: ticket.worktreePath });
+    expect(sessions.get("new-1")).toMatchObject({ ticketKey: "PROJ-1", origin: "butler", cwd: ticket.repos[0].worktreePath });
   });
 
   it("resumes the head of a replaced chain in the session's own cwd", async () => {
@@ -226,8 +226,10 @@ describe("SessionService.open", () => {
   });
 
   it("stops on a branch mismatch unless forced", async () => {
-    const { service, spawned, repo } = await setup({ workMode: "branch" });
-    expect(await service.open({ ticketKey: "PROJ-1" })).toEqual({ ok: false, reason: "branch_mismatch", current: "main", expected: "feature/PROJ-1", dirty: false });
+    const { service, spawned, repo, ticket } = await setup({ workMode: "branch" });
+    expect(await service.open({ ticketKey: "PROJ-1" })).toEqual({
+      ok: false, reason: "branch_mismatch", repoId: ticket.repos[0].id, current: "main", expected: "feature/PROJ-1", dirty: false,
+    });
     writeFileSync(join(repo, "README.md"), "dirty\n");
     expect(await service.open({ ticketKey: "PROJ-1" })).toMatchObject({ reason: "branch_mismatch", dirty: true });
     expect(spawned).toHaveLength(0);
@@ -360,19 +362,85 @@ describe("SessionService.hasOpenTerminal", () => {
 describe("SessionService.open after the ticket's work mode changed", () => {
   it("warns before resuming an old session in a worktree that left the ticket branch; force opens it there", async () => {
     const { service, sessions, ticket, ticketService, spawned } = await setup({ workMode: "worktree" });
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: ticket.worktreePath!, origin: "butler", createdAt: 1 });
-    await ticketService.update({ key: "PROJ-1", workMode: "branch" }, { terminalsOpen: false });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: ticket.repos[0].worktreePath!, origin: "butler", createdAt: 1, repoId: ticket.repos[0].id });
+    await ticketService.updateRepo({ repoId: ticket.repos[0].id, workMode: "branch" }, { terminalsOpen: false });
     expect(await service.open({ ticketKey: "PROJ-1", sessionId: "old" })).toEqual({
-      ok: false, reason: "old_workdir", cwd: ticket.worktreePath, current: "HEAD", expected: "feature/PROJ-1",
+      ok: false, reason: "old_workdir", cwd: ticket.repos[0].worktreePath, current: "HEAD", expected: "feature/PROJ-1",
     });
     expect(await service.open({ ticketKey: "PROJ-1", sessionId: "old", force: true })).toMatchObject({ ok: true, termId: "old" });
-    expect(spawned[0].opts.cwd).toBe(ticket.worktreePath);
+    expect(spawned[0].opts.cwd).toBe(ticket.repos[0].worktreePath);
   });
 
   it("does not open sessions while the ticket is being changed", async () => {
-    const { service, ticketService } = await setup({ workMode: "worktree" });
-    const update = ticketService.update({ key: "PROJ-1", workMode: "branch" }, { terminalsOpen: false });
+    const { service, ticketService, ticket } = await setup({ workMode: "worktree" });
+    const update = ticketService.updateRepo({ repoId: ticket.repos[0].id, workMode: "branch" }, { terminalsOpen: false });
     expect(await service.open({ ticketKey: "PROJ-1", force: true })).toEqual({ ok: false, reason: "ticket_busy" });
     await update;
+  });
+});
+
+describe("SessionService with several repos and the coordinator", () => {
+  async function multi() {
+    const env = await setup({ workMode: "worktree" });
+    const api = makeRepo();
+    await env.ticketService.addRepo({ ticketKey: "PROJ-1", repoPath: api, workMode: "worktree" });
+    const t = env.tickets.get("PROJ-1")!;
+    return { ...env, api, web: t.repos[0], apiRepo: t.repos[1] };
+  }
+
+  it("asks which repo when there are several, and opens in the chosen one", async () => {
+    const { service, spawned, sessions, web, apiRepo } = await multi();
+    expect(await service.open({ ticketKey: "PROJ-1" })).toEqual({ ok: false, reason: "pick_repo" });
+    expect(await service.open({ ticketKey: "PROJ-1", repoId: 999 })).toEqual({ ok: false, reason: "no_repo" });
+    await service.open({ ticketKey: "PROJ-1", repoId: apiRepo.id });
+    expect(spawned[0].opts.cwd).toBe(apiRepo.worktreePath);
+    expect(sessions.get("new-1")).toMatchObject({ repoId: apiRepo.id, coordinator: false, spawnedBy: null });
+    await service.open({ ticketKey: "PROJ-1", repoId: web.id });
+    expect(spawned[1].opts.cwd).toBe(web.worktreePath);
+  });
+
+  it("opens the coordinator in the ticket workspace with every repo added, and resumes it the same way", async () => {
+    const { service, spawned, sessions, web, apiRepo, ticketService, pty } = await multi();
+    await service.open({ ticketKey: "PROJ-1", coordinator: true });
+    expect(spawned[0].opts.cwd).toBe(ticketService.workspaceDir("PROJ-1"));
+    expect(spawned[0].args).toEqual(["--session-id", "new-1", "--add-dir", web.worktreePath, "--add-dir", apiRepo.worktreePath]);
+    expect(sessions.get("new-1")).toMatchObject({ coordinator: true, repoId: null });
+    pty.kill("new-1");
+    expect(await service.open({ ticketKey: "PROJ-1", sessionId: "new-1" })).toMatchObject({ ok: true });
+    expect(spawned[1].args).toEqual(["--resume", "new-1", "--add-dir", web.worktreePath, "--add-dir", apiRepo.worktreePath]);
+  });
+
+  it("opens only the coordinator on a ticket without repos", async () => {
+    const { service, spawned, ticketService } = await setup();
+    await ticketService.create({ key: "BARE-1" });
+    expect(await service.open({ ticketKey: "BARE-1" })).toEqual({ ok: false, reason: "no_repo" });
+    expect(await service.open({ ticketKey: "BARE-1", coordinator: true })).toMatchObject({ ok: true });
+    expect(spawned[0].args).toEqual(["--session-id", "new-1"]);
+  });
+
+  it("tells the memory config whether the session is the coordinator", async () => {
+    const seen: [string, boolean][] = [];
+    const { service } = await setup({ mcpConfig: (key, o) => (seen.push([key, o.coordinator]), null) });
+    await service.open({ ticketKey: "PROJ-1" });
+    await service.open({ ticketKey: "PROJ-1", coordinator: true });
+    expect(seen).toEqual([["PROJ-1", false], ["PROJ-1", true]]);
+  });
+
+  it("counts terminals per repo: the repo's own, the coordinator, and sessions of no known repo", async () => {
+    const { service, sessions, web, apiRepo } = await multi();
+    await service.open({ ticketKey: "PROJ-1", repoId: web.id });
+    expect(service.hasOpenTerminal("PROJ-1", web.id)).toBe(true);
+    expect(service.hasOpenTerminal("PROJ-1", apiRepo.id)).toBe(false);
+    await service.open({ ticketKey: "PROJ-1", coordinator: true });
+    expect(service.hasOpenTerminal("PROJ-1", apiRepo.id)).toBe(true);
+    expect(service.openTerminalCount("PROJ-1")).toBe(2);
+    expect(sessions.get("new-2")?.coordinator).toBe(true);
+  });
+
+  it("files a claimed session under the repo its directory is in", async () => {
+    const { service, sessions, apiRepo } = await multi();
+    sessions.insertIfAbsent({ id: "ext", ticketKey: null, cwd: join(apiRepo.worktreePath!, "src"), origin: "discovered", createdAt: 1 });
+    service.claim("ext", "PROJ-1");
+    expect(sessions.get("ext")).toMatchObject({ ticketKey: "PROJ-1", repoId: apiRepo.id });
   });
 });

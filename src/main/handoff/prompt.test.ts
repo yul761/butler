@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Followup, Ticket } from "../../shared/types";
-import { buildPrompt, renderTemplate, retryPrompt } from "./prompt";
+import { buildPrompt, renderTemplate, repoBranches, retryPrompt } from "./prompt";
 import { emptyHandoff } from "./schema";
 import { HANDOFF_EXAMPLE } from "./templates";
 
 const t: Ticket = {
-  key: "PROJ-1", title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "feature/PROJ-1",
+  key: "PROJ-1", title: null,
+  repos: [{ id: 1, ticketKey: "PROJ-1", repoPath: "/r", workMode: "branch", worktreePath: null, branch: "feature/PROJ-1", createdAt: 1 }],
   status: "active", statusManual: null, createdAt: 1, archivedAt: null,
 };
 const f: Followup = {
@@ -39,5 +40,15 @@ describe("prompt rendering", () => {
     expect(retryPrompt("原始", "✖ bad\n  → at status")).toBe(
       "原始\n\n上一次的输出没有通过校验，错误如下：\n✖ bad\n  → at status\n请修正这些问题，按 schema 重新输出完整的 JSON。",
     );
+  });
+});
+
+describe("{{branch}} for several repos", () => {
+  const repo = (id: number, path: string, branch: string) => ({ id, ticketKey: "PROJ-1", repoPath: path, workMode: "branch" as const, worktreePath: null, branch, createdAt: 1 });
+  it("is the branch for one repo, repo@branch for several, and says so when there is none", () => {
+    expect(repoBranches({ ...t, repos: [repo(1, "/c/web", "feature/PROJ-1")] })).toBe("feature/PROJ-1");
+    const two = repoBranches({ ...t, repos: [repo(1, "/c/web", "feature/PROJ-1"), repo(2, "/c/api", "api/PROJ-1")] });
+    expect(two).toMatch(/^web@feature\/PROJ-1, api@api\/PROJ-1（多个仓库：pr 只填/);
+    expect(repoBranches({ ...t, repos: [] })).toBe("（还没有关联仓库）");
   });
 });

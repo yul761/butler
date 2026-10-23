@@ -25,7 +25,13 @@ const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? 
 
 export function applyHookEnvelope(
   env: HookEnvelope,
-  deps: { sessions: SessionsRepo; tickets: TicketsRepo; transcriptState?: (sessionId: string) => TranscriptState },
+  deps: {
+    sessions: SessionsRepo;
+    tickets: TicketsRepo;
+    transcriptState?: (sessionId: string) => TranscriptState;
+    /** 挂到 ticket 上的 session 在哪个仓库、是不是总控（按目录判断，多仓库 ticket）。 */
+    placement?: (ticketKey: string, cwd: string) => { repoId: number | null; coordinator: boolean };
+  },
 ): HookEffect {
   // 晚间 handoff、早间刷新、MCP 探测这些 Butler 自己的 claude 进程也会触发用户级 hook，全部忽略。
   if (isHeadlessEnvelope(env)) return { kind: "ignored", reason: "headless" };
@@ -47,14 +53,18 @@ export function applyHookEnvelope(
   const ensure = (key: string | null = ticketKey) => {
     // handleExit 删掉的空 session：迟到的事件不能把它插回来。只有真正的 prompt，或者已有 transcript，才允许重建。
     if (sessions.wasForgotten(id) && event !== "UserPromptSubmit" && deps.transcriptState?.(id) !== "present") return;
-    const inserted = sessions.insertIfAbsent({ id, ticketKey: key, cwd, origin: fromButler ? "butler" : "discovered", lastActivityAt: at, createdAt: at });
+    const place = key && cwd ? deps.placement?.(key, cwd) : undefined;
+    const inserted = sessions.insertIfAbsent({
+      id, ticketKey: key, cwd, origin: fromButler ? "butler" : "discovered", lastActivityAt: at, createdAt: at,
+      repoId: place?.repoId ?? null, coordinator: place?.coordinator ?? false,
+    });
     if (inserted) return;
     sessions.fillDetails(id, { cwd, lastActivityAt: at });
     const cur = sessions.get(id);
     // 先被磁盘扫描发现、后来在 Butler 终端里续接的 session：来源升级为 butler。
     if (fromButler && cur && cur.origin === "discovered" && !cur.dismissed) sessions.setOrigin(id, "butler");
     // 被忽略（dismissed）的 session，例如嵌套的 claude 进程，永远不挂 ticket。
-    if (key && cur && !cur.ticketKey && !cur.dismissed) sessions.setTicket(id, key);
+    if (key && cur && !cur.ticketKey && !cur.dismissed) sessions.setTicket(id, key, cwd ? (deps.placement?.(key, cwd).repoId ?? null) : null);
   };
 
   switch (event) {

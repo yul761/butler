@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { memoryServers, TICKET_MCP_SUBDIR, ticketMcpFile, writeTicketMcpConfig } from "./mcp-config";
+import { memoryServers, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeTicketMcpConfig } from "./mcp-config";
 
 const launcher = { command: "/Applications/Butler.app/Contents/MacOS/Butler", script: "/Applications/Butler.app/Contents/Resources/memory-mcp/statecore-mcp.cjs" };
 
@@ -22,16 +22,33 @@ describe("ticket MCP config (design 4.2, 8.4)", () => {
 
   it("writes mcp/tickets/<ticket>.json privately, replaces it atomically and never puts a model key in it (R1)", () => {
     const mcpDir = join(tempDir(), "mcp");
-    const file = writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", launcher, statecoreDir: "/sc" });
+    const file = writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", servers: memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "PROJ-1" }) });
     expect(file).toBe(join(mcpDir, "tickets", "PROJ-1.json"));
     const text = readFileSync(file, "utf8");
     expect(JSON.parse(text)).toEqual({ mcpServers: memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "PROJ-1" }) });
     expect(text).not.toMatch(/MODEL_|OPENAI|ANTHROPIC|FEATURE_LLM|API_KEY/i);
     if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
-    writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", launcher, statecoreDir: "/sc2" });
+    writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", servers: memoryServers({ launcher, statecoreDir: "/sc2", ticketKey: "PROJ-1" }) });
     expect(readFileSync(file, "utf8")).toContain("/sc2");
     expect(readdirSync(mcpDir)).toEqual(["tickets"]);
     expect(readdirSync(join(mcpDir, "tickets"))).toEqual(["PROJ-1.json"]);
+  });
+
+  it("keeps the coordinator's config (with butler-sessions) in its own file, so plain sessions never get that server", () => {
+    const mcpDir = join(tempDir(), "mcp");
+    const sessions = sessionsServer({ launcher, ticketKey: "PROJ-1", requestsDir: "/b/control/requests", resultsDir: "/b/control/results" });
+    expect(sessions).toEqual({
+      "butler-sessions": {
+        type: "stdio", command: launcher.command, args: [launcher.script],
+        env: { ELECTRON_RUN_AS_NODE: "1", BUTLER_TICKET: "PROJ-1", BUTLER_CONTROL_REQUESTS: "/b/control/requests", BUTLER_CONTROL_RESULTS: "/b/control/results" },
+      },
+    });
+    const plain = writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", servers: memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "PROJ-1" }) });
+    const boss = writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", servers: sessions, coordinator: true });
+    expect(boss).toBe(join(mcpDir, "tickets", "coordinator", "PROJ-1.json"));
+    // 叫 PROJ-1-coordinator 的 ticket 也不会和 PROJ-1 的总控配置撞上。
+    expect(ticketMcpFile(mcpDir, "PROJ-1-coordinator")).not.toBe(boss);
+    expect(readFileSync(plain, "utf8")).not.toContain("butler-sessions");
   });
 
   it("keeps the file for an odd ticket key inside mcpDir/tickets (Review Focus 5)", () => {

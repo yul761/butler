@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
-import { memDb, tempDir } from "../test-utils";
+import { insertTicket, memDb, tempDir } from "../test-utils";
 import { extractUserText, findTranscript, needsDiscovery, readSessionHead, scanClaudeProjects, suggestTicket, syncDiscovered, transcriptState } from "./discovery";
 
 const ID1 = "11111111-1111-4111-8111-111111111111";
@@ -136,7 +136,7 @@ describe("scanClaudeProjects", () => {
 describe("syncDiscovered / suggestTicket", () => {
   it("inserts new sessions without disturbing claimed ones", () => {
     const db = memDb();
-    new TicketsRepo(db).insert({ key: "PROJ-12", title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
+    insertTicket(new TicketsRepo(db), { key: "PROJ-12", title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
     const sessions = new SessionsRepo(db);
     sessions.insertIfAbsent({ id: ID2, ticketKey: "PROJ-12", cwd: "/r", origin: "butler", lastActivityAt: 5, createdAt: 1 });
     const inserted = syncDiscovered(
@@ -161,7 +161,7 @@ describe("syncDiscovered / suggestTicket", () => {
 describe("needsDiscovery", () => {
   const base = {
     id: "a", ticketKey: null, cwd: "/w", origin: "discovered" as const, gitBranch: "main", firstPrompt: "hi",
-    lastActivityAt: 1, waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 1,
+    lastActivityAt: 1, waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null,
   };
 
   it("only asks for a scan when an unclaimed session is missing details, once per session", () => {

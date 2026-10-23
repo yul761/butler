@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { EMPTY_BRIEF_CONTENT } from "../../shared/brief";
-import type { Followup, Ticket } from "../../shared/types";
+import type { Followup } from "../../shared/types";
 import { emptyHandoff } from "../handoff/schema";
-import { memDb } from "../test-utils";
+import { insertTicket, type LegacyTicket, memDb } from "../test-utils";
 import { BriefsRepo } from "./briefs-repo";
 import { migrate, withTransaction } from "./database";
 import { FollowupsRepo } from "./followups-repo";
@@ -18,7 +18,7 @@ import { SessionsRepo } from "./sessions-repo";
 import { SettingsRepo } from "./settings-repo";
 import { TicketsRepo } from "./tickets-repo";
 
-const ticket = (key: string, over: Partial<Ticket> = {}): Ticket => ({
+const ticket = (key: string, over: Partial<LegacyTicket> = {}): LegacyTicket => ({
   key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: `feature/${key}`,
   status: "active", statusManual: null, createdAt: 1, archivedAt: null, ...over,
 });
@@ -31,7 +31,7 @@ const followup = (id: string, over: Partial<Followup> = {}): Followup => ({
 function setup() {
   const db = memDb();
   const tickets = new TicketsRepo(db);
-  tickets.insert(ticket("PROJ-1"));
+  insertTicket(tickets, ticket("PROJ-1"));
   return { db, tickets };
 }
 
@@ -99,7 +99,7 @@ describe("HandoffsRepo", () => {
 describe("FollowupsRepo", () => {
   it("inserts, updates, changes status and hides archived tickets", () => {
     const { db, tickets } = setup();
-    tickets.insert(ticket("OLD-1"));
+    insertTicket(tickets, ticket("OLD-1"));
     const repo = new FollowupsRepo(db);
     repo.insert(followup("f1"));
     repo.insert(followup("f2", { trigger: "on_date", dueDate: "2026-10-30" }));
@@ -177,7 +177,7 @@ describe("withTransaction", () => {
     const { db, tickets } = setup();
     expect(() =>
       withTransaction(db, () => {
-        tickets.insert(ticket("PROJ-2"));
+        insertTicket(tickets, ticket("PROJ-2"));
         throw new Error("boom");
       }),
     ).toThrow("boom");
@@ -189,7 +189,7 @@ describe("withTransaction", () => {
     const { db, tickets } = setup();
     expect(() =>
       withTransaction(db, () => {
-        tickets.insert(ticket("PROJ-3"));
+        insertTicket(tickets, ticket("PROJ-3"));
         expect(withTransaction(db, () => 1)).toBe(1);
         throw new Error("boom");
       }),
@@ -200,10 +200,10 @@ describe("withTransaction", () => {
   it("nested failure caught by the outer callback is discarded, outer writes commit", () => {
     const { db, tickets } = setup();
     withTransaction(db, () => {
-      tickets.insert(ticket("PROJ-4"));
+      insertTicket(tickets, ticket("PROJ-4"));
       try {
         withTransaction(db, () => {
-          tickets.insert(ticket("PROJ-5"));
+          insertTicket(tickets, ticket("PROJ-5"));
           throw new Error("inner");
         });
       } catch {

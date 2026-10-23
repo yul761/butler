@@ -10,6 +10,7 @@ const WIN_FILES = [
   "win-unpacked/resources/app.asar",
   "win-unpacked/resources/hook/butler-hook.exe",
   "win-unpacked/resources/memory-mcp/statecore-mcp.cjs",
+  "win-unpacked/resources/memory-mcp/butler-sessions-mcp.cjs",
   ...["pty.node", "conpty.node", "conpty_console_list.node", "conpty/conpty.dll", "conpty/OpenConsole.exe", "winpty.dll", "winpty-agent.exe"].map(
     (f) => `win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/${f}`,
   ),
@@ -64,6 +65,7 @@ describe("verify-package (Task 7 carry-over: what the NSIS package must contain)
       `${res}/app.asar`,
       `${res}/hook/butler-hook`,
       `${res}/memory-mcp/statecore-mcp.cjs`,
+      `${res}/memory-mcp/butler-sessions-mcp.cjs`,
       `${res}/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/pty.node`,
       `${res}/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper`,
       "Butler-1.0.0.dmg",

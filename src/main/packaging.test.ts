@@ -60,14 +60,14 @@ describe("packaging config (design 2.1, 12)", () => {
     expect(cfg.extraResources).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ from: "build/hook", to: "hook" }),
-        expect.objectContaining({ from: "build/memory-mcp", to: "memory-mcp", filter: ["statecore-mcp.cjs"] }),
+        expect.objectContaining({ from: "build/memory-mcp", to: "memory-mcp", filter: ["statecore-mcp.cjs", "butler-sessions-mcp.cjs"] }),
       ]),
     );
     expect(cfg.asarUnpack).toContain("**/node_modules/node-pty/**");
     // 主进程按 process.resourcesPath/hook/butler-hook[.exe] 和 process.resourcesPath/memory-mcp/statecore-mcp.cjs 找（index.ts）。
     const byFrom = (from: string) => cfg.extraResources.find((r) => r.from === from);
     expect(byFrom("build/hook")).toEqual({ from: "build/hook", to: "hook", filter: ["butler-hook", "butler-hook.exe"] });
-    expect(byFrom("build/memory-mcp")).toEqual({ from: "build/memory-mcp", to: "memory-mcp", filter: ["statecore-mcp.cjs"] });
+    expect(byFrom("build/memory-mcp")).toEqual({ from: "build/memory-mcp", to: "memory-mcp", filter: ["statecore-mcp.cjs", "butler-sessions-mcp.cjs"] });
   });
 
   it("ships the built app but not source maps", () => {

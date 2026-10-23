@@ -21,7 +21,7 @@ test("new ticket → session → hook → handoff → memory → morning brief �
     await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
     await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-1");
     // 这个 label 里还包着“选择…”按钮，输入框的可访问名是两段文字连起来。
-    await page.getByRole("textbox", { name: `${S.repo} ${S.pick}`, exact: true }).fill(s.repo);
+    await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
     await page.getByRole("button", { name: S.create, exact: true }).click();
     await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
 

@@ -28,7 +28,46 @@ interface Term {
   buffer: string;
   lastOutputAt: number;
   exited: boolean;
+  /** claude 的 SessionStart hook 到了（信任文件夹之类的启动对话框已经过去）。 */
+  started: boolean;
 }
+
+/** 终端输出去掉 ANSI 控制序列后的纯文本（只用来认对话框）。 */
+export function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g, "");
+}
+
+/**
+ * claude 启动时可能先问的问题：信任这个文件夹、启用项目里的 MCP server。这时候粘贴、回车等于替用户选了默认的“是”。
+ * 屏幕最后一段里出现这些字样就当对话框还在。
+ */
+const DIALOG_MARKERS = ["do you trust", "trust the files", "trust this folder", "yes, proceed", "yes, i trust", "new mcp server", "mcp servers found", "use this and all future"];
+const DIALOG_TAIL = 1000;
+
+export function dialogShowing(buffer: string): boolean {
+  const tail = stripAnsi(buffer.slice(-DIALOG_TAIL * 4)).slice(-DIALOG_TAIL).toLowerCase();
+  return DIALOG_MARKERS.some((m) => tail.includes(m));
+}
+
+export interface DeliverOptions {
+  /** 输出安静多久算输入框就绪。 */
+  idleMs?: number;
+  /** 等 SessionStart 最多多久（没装 hook 时之后只靠安静 + 对话框检查）。 */
+  startWaitMs?: number;
+  /** 总共最多等多久（包括用户自己处理启动对话框的时间）。 */
+  timeoutMs?: number;
+  /** 粘贴之后，回显安静多久再回车；最多等 settleCapMs。 */
+  settleMs?: number;
+  settleCapMs?: number;
+  /**
+   * 把换行压成空格，作为一行发送。Windows 的 ConPTY 不一定把粘贴标记交给程序，粘贴里的换行就成了回车，
+   * 任务会被拆成好几条消息提交（CI 上实际出现过）。
+   */
+  singleLine?: boolean;
+}
+
+export type DeliverResult = "sent" | "exited" | "timeout";
 
 /** 最多保留多少个已退出终端的记录（用于快速失败的 claude 也能看到退出码）。 */
 export const EXITED_LIMIT = 20;
@@ -61,7 +100,7 @@ export class PtyManager {
     if (this.terms.has(termId)) throw new Error(`terminal ${termId} already open`);
     this.exited.delete(termId);
     const proc = this.factory(spec.file, spec.args, { cwd: opts.cwd, env: opts.env, cols: opts.cols ?? 120, rows: opts.rows ?? 32 });
-    const term: Term = { proc, buffer: "", lastOutputAt: 0, exited: false };
+    const term: Term = { proc, buffer: "", lastOutputAt: 0, exited: false, started: false };
     this.terms.set(termId, term);
     proc.onData((data) => {
       // ConPTY 在进程退出后还可能吐出尾部数据；退出后一律丢弃，否则渲染进程会以为终端被重新打开而清掉退出提示。
@@ -110,6 +149,49 @@ export class PtyManager {
     const done = this.exited.get(termId);
     if (done) return { data: done.buffer, exitCode: done.exitCode };
     return { data: "", exitCode: null };
+  }
+
+  /** claude 的 SessionStart hook 到了：启动对话框已经过去，可以交任务了。 */
+  markStarted(termId: string): void {
+    const t = this.terms.get(termId);
+    if (t) t.started = true;
+  }
+
+  /**
+   * 把任务作为第一条消息交给刚启动的 claude（总控开子 session）：等 SessionStart（或者等满 startWaitMs）、输出安静、
+   * 屏幕上没有信任文件夹 / MCP 之类的启动对话框，才把文本当作一次粘贴（bracketed paste）写进去；回显安静之后回车。
+   * 对话框一直在（用户还没处理）就一直等到 timeoutMs，绝不替用户回答。text 里不能有 ESC（调用方先 sanitizeTask）。
+   */
+  async deliver(termId: string, text: string, o: DeliverOptions = {}): Promise<DeliverResult> {
+    const idleMs = o.idleMs ?? 800;
+    const start = this.now();
+    for (;;) {
+      const t = this.terms.get(termId);
+      if (!t || t.exited) return "exited";
+      const now = this.now();
+      const started = t.started || now - start >= (o.startWaitMs ?? 60_000);
+      const idle = t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs;
+      if (started && idle && !dialogShowing(t.buffer)) {
+        // 粘贴里的换行按终端的惯例写成 \r（xterm 的粘贴也是这样）：Windows 的 ConPTY 会吞掉输入里的 \n。
+        const body = o.singleLine ? text.replace(/\s*\r?\n\s*/g, " ") : text.replace(/\r?\n/g, "\r");
+        this.guard(termId, "deliver paste", () => t.proc.write(`\x1b[200~${body}\x1b[201~`));
+        break;
+      }
+      if (now - start >= (o.timeoutMs ?? 300_000)) return "timeout";
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    // 长文本的回显（Windows 的 ConPTY 尤其慢）停下来之后再回车，免得提交半截。
+    const pasted = this.now();
+    for (;;) {
+      const t = this.terms.get(termId);
+      if (!t || t.exited) return "exited";
+      const now = this.now();
+      if ((now - Math.max(t.lastOutputAt, pasted) >= (o.settleMs ?? 300)) || now - pasted >= (o.settleCapMs ?? 5000)) {
+        this.guard(termId, "deliver enter", () => t.proc.write("\r"));
+        return "sent";
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
   }
 
   /** 等 claude 的界面输出停下来（输入框就绪）后把文本写进去，不回车。 */

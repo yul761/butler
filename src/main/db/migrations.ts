@@ -125,4 +125,23 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE llm_audit ADD COLUMN source TEXT NOT NULL DEFAULT 'narrative' CHECK (source IN ('narrative', 'statecore'));
   INSERT OR IGNORE INTO settings (key, value) SELECT 'onboardingDone', '1' WHERE EXISTS (SELECT 1 FROM tickets);
   `,
+  `
+  CREATE TABLE ticket_repos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_key TEXT NOT NULL REFERENCES tickets(key),
+    repo_path TEXT NOT NULL,
+    work_mode TEXT NOT NULL CHECK (work_mode IN ('worktree', 'branch')),
+    worktree_path TEXT,
+    branch TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE (ticket_key, repo_path)
+  );
+  INSERT INTO ticket_repos (ticket_key, repo_path, work_mode, worktree_path, branch, created_at)
+    SELECT key, repo_path, work_mode, worktree_path, branch, created_at FROM tickets WHERE repo_path <> '';
+  ALTER TABLE sessions ADD COLUMN repo_id INTEGER REFERENCES ticket_repos(id);
+  ALTER TABLE sessions ADD COLUMN coordinator INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE sessions ADD COLUMN spawned_by TEXT;
+  UPDATE sessions SET repo_id = (SELECT r.id FROM ticket_repos r WHERE r.ticket_key = sessions.ticket_key)
+    WHERE ticket_key IS NOT NULL;
+  `,
 ];

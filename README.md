@@ -11,7 +11,14 @@ The UI is in Chinese. This README quotes UI labels as they appear in the app, wi
 
 ## What it does
 
-- **Tickets first.** Each ticket has its worktree or branch, its Claude Code sessions (embedded terminals), its PR state and its after-merge follow-ups. Sessions you started outside Butler in the last 7 days show up under **未认领 session (unclaimed sessions)**, so you can attach them to a ticket. **编辑 (Edit)** changes a ticket's title, work mode or branch after it is created. Archived tickets are listed under **已归档 (Archived)**, where you can restore them. In the terminal on Windows, Ctrl+V and right-click paste, and Ctrl+C copies when text is selected.
+- **Tickets first.** Each ticket has its worktree or branch, its Claude Code sessions (embedded terminals), its PR state and its after-merge follow-ups. Sessions you started outside Butler in the last 7 days show up under **未认领 session (unclaimed sessions)**, so you can attach them to a ticket. A ticket can span several repos (say, a frontend and a backend): create it with or without a repo, then add more on the ticket page. Each repo has its own work mode and branch, and **编辑 (Edit)** changes them later. A new session asks which repo to work in. A **总控 (coordinator)** session runs in the ticket's workspace folder (`~/.butler/workspaces/<ticket>`) and sees every repo through `--add-dir`. All sessions of a ticket share its memory. The coordinator also gets a `butler-sessions` MCP server with three tools:
+- `list_repos` lists the ticket's repos.
+- `start_session` opens a new session in one repo and sends it a task as its first message. The new session appears under the same ticket, where you can watch it, take over and answer its permission prompts.
+- `list_sessions` shows what each session is doing.
+
+There are deliberate limits:
+- **Communication:** the coordinator cannot type into other sessions. Sessions coordinate through the shared ticket memory.
+- **Session cap:** at most 6 terminals per ticket run at once. Archived tickets are listed under **已归档 (Archived)**, where you can restore them. In the terminal on Windows, Ctrl+V and right-click paste, and Ctrl+C copies when text is selected.
 - **Nightly handoffs.** At a time you choose, Butler asks your own logged-in `claude` to write a structured handoff for every ticket that had activity.
   - `Edit`, `Write` and `NotebookEdit` are always denied.
   - Butler allows file reads, `gh pr view`, `gh pr checks`, `git log`, `git status` and the tracker MCP tools you picked.

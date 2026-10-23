@@ -14,6 +14,8 @@ export interface Sandbox {
   claudeConfigDir: string;
   claudePath: string;
   repo: string;
+  /** 第二个仓库（多仓库 ticket 用）。 */
+  apiRepo: string;
   /** 假 claude 的运行记录（CI 失败时上传）。 */
   fakeLog: string;
 }
@@ -40,7 +42,7 @@ const NPM_STYLE_SHIM = [
  */
 const FAKE_LOGIN_SHELL = '#!/bin/sh\nfor last; do :; done\nexec /bin/sh -c "$last"\n';
 
-/** 一套全新的临时目录：BUTLER_HOME、CLAUDE_CONFIG_DIR、HOME、TMPDIR、假 claude、假登录 shell、带一个提交的 git 仓库。 */
+/** 一套全新的临时目录：BUTLER_HOME、CLAUDE_CONFIG_DIR、HOME、TMPDIR、假 claude、假登录 shell、两个各带一个提交的 git 仓库。 */
 function createSandbox(): Sandbox {
   for (const f of ["out/main/index.js", "build/memory-mcp/statecore-mcp.cjs", isWin ? "build/hook/butler-hook.exe" : "build/hook/butler-hook"]) {
     if (!existsSync(join(ROOT, f))) throw new Error(`${f} is missing: run pnpm build && pnpm build:hook before pnpm e2e:only`);
@@ -66,15 +68,20 @@ function createSandbox(): Sandbox {
     writeFileSync(loginShell(dir), FAKE_LOGIN_SHELL);
     chmodSync(loginShell(dir), 0o755);
   }
-  const repo = join(dir, "repo");
-  mkdirSync(repo);
-  const git = (...a: string[]) =>
-    execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "-c", "commit.gpgsign=false", ...a], { cwd: repo, stdio: "ignore" });
-  git("init", "-q", "-b", "main");
-  writeFileSync(join(repo, "README.md"), "e2e\n");
-  git("add", ".");
-  git("commit", "-q", "-m", "init");
-  return { dir, butlerHome, claudeConfigDir, claudePath, repo, fakeLog: join(dir, "fake-claude.log") };
+  const makeGitRepo = (name: string) => {
+    const repo = join(dir, name);
+    mkdirSync(repo);
+    const git = (...a: string[]) =>
+      execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "-c", "commit.gpgsign=false", ...a], { cwd: repo, stdio: "ignore" });
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repo, "README.md"), "e2e\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "init");
+    return repo;
+  };
+  const repo = makeGitRepo("repo");
+  const apiRepo = makeGitRepo("api");
+  return { dir, butlerHome, claudeConfigDir, claudePath, repo, apiRepo, fakeLog: join(dir, "fake-claude.log") };
 }
 
 /**

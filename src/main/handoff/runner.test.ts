@@ -1,20 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { Handoff } from "../../shared/handoff";
-import type { Ticket } from "../../shared/types";
 import { headlessArgs, READ_ONLY_TOOLS, runHeadless, unsafeCmdArg, type HeadlessOutcome, type HeadlessRequest, type HeadlessRun } from "../claude/headless";
 import { FollowupsRepo } from "../db/followups-repo";
 import { HandoffsRepo } from "../db/handoffs-repo";
 import { SessionsRepo } from "../db/sessions-repo";
 import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
-import { memDb, tempDir, writeFakeClaude } from "../test-utils";
+import { insertTicket, type LegacyTicket, memDb, tempDir, writeFakeClaude } from "../test-utils";
 import { ingestHandoff, type IngestInput } from "./ingest";
 import { HandoffRunner } from "./runner";
 import { emptyHandoff, HANDOFF_JSON_SCHEMA, REFRESH_JSON_SCHEMA } from "./schema";
 
 const NOW = 50_000;
 
-const ticket = (key: string, over: Partial<Ticket> = {}): Ticket => ({
+const ticket = (key: string, over: Partial<LegacyTicket> = {}): LegacyTicket => ({
   key, title: `标题 ${key}`, repoPath: "/r", workMode: "worktree", worktreePath: `/w/${key}`, branch: `feature/${key}`,
   status: "active", statusManual: null, createdAt: 1, archivedAt: null, ...over,
 });
@@ -26,7 +25,7 @@ const ok = (structured: unknown, sessionId = "fork-1"): HeadlessOutcome => ({
   result: { sessionId, isError: false, subtype: "success", resultText: JSON.stringify(structured), structured, permissionDenials: [], apiErrorStatus: null, costUsd: 0 },
 });
 
-function setup(opts: { run?: HeadlessRun; signal?: AbortSignal; projectMcp?: (cwd: string) => string[] } = {}) {
+function setup(opts: { run?: HeadlessRun; signal?: AbortSignal; projectMcp?: (cwd: string) => string[]; addDirs?: string[] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -46,7 +45,10 @@ function setup(opts: { run?: HeadlessRun; signal?: AbortSignal; projectMcp?: (cw
   const ingest = (input: IngestInput) => ingestHandoff({ db, tickets, handoffs, followups, now: () => NOW, newFollowupId: () => `f${++fid}` }, input);
   const runner = new HandoffRunner({
     tickets, sessions, handoffs, followups, settings, ingest,
-    workDir: (t) => t.worktreePath ?? t.repoPath,
+    dirs: (t) => {
+      const first = t.repos[0]?.worktreePath ?? t.repos[0]?.repoPath ?? "/ws";
+      return { cwd: first, addDirs: opts.addDirs ?? [], repoDirs: [first, ...(opts.addDirs ?? [])] };
+    },
     run,
     ready: async () => undefined,
     claude: () => ({ path: "/bin/claude", pathValue: "/login/bin" }),
@@ -59,7 +61,7 @@ function setup(opts: { run?: HeadlessRun; signal?: AbortSignal; projectMcp?: (cw
   });
   /** 一个有对话记录的 ticket：session 是 s-<key>，transcript 在 mtime 时刻修改过（null 表示没有 transcript）。 */
   const addTicket = (key: string, mtime: number | null = NOW - 10) => {
-    tickets.insert(ticket(key));
+    insertTicket(tickets, ticket(key));
     sessions.insertIfAbsent({ id: `s-${key}`, ticketKey: key, cwd: `/w/${key}`, origin: "butler", lastActivityAt: 1, createdAt: 1 });
     if (mtime !== null) mtimes[`s-${key}`] = mtime;
   };
@@ -196,7 +198,7 @@ describe("HandoffRunner", () => {
 
   it("manual runs without a session start fresh in the ticket workdir; the nightly batch skips them", async () => {
     const { runner, tickets, calls } = setup();
-    tickets.insert(ticket("A-1"));
+    insertTicket(tickets, ticket("A-1"));
     expect(await runner.runManual("A-1")).toMatchObject({ status: "stored" });
     expect(calls[0].args).not.toContain("--resume");
     expect(calls[0].cwd).toBe("/w/A-1");
@@ -236,6 +238,15 @@ describe("HandoffRunner", () => {
     expect(latest).toMatchObject({ trigger: "refresh", sessionId: null });
     expect(latest.payload).toMatchObject({ done_today: [], next_steps: ["合并后改配置"], pr: { state: "merged" } });
     expect(tickets.get("A-1")?.status).toBe("merged_pending_followup");
+  });
+
+  it("lets the refresh and the handoff see every repo of a multi-repo ticket (--add-dir), but not the session's own directory twice", async () => {
+    const { runner, addTicket, calls, setRespond } = setup({ addDirs: ["/w/api"] });
+    addTicket("A-1");
+    setRespond(async () => ok(valid()));
+    await runner.runManual("A-1");
+    const args = calls[0].args;
+    expect(args.filter((a, i) => args[i - 1] === "--add-dir")).toEqual(["/w/api"]);
   });
 
   it("shares one run when the same ticket is requested twice at once", async () => {

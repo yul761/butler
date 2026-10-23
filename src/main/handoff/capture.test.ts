@@ -6,7 +6,7 @@ import { FollowupsRepo } from "../db/followups-repo";
 import { HandoffsRepo } from "../db/handoffs-repo";
 import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
-import { memDb, tempDir } from "../test-utils";
+import { insertTicket, memDb, tempDir } from "../test-utils";
 import { captureCommandHandoff, stopFromEnvelope } from "./capture";
 import { ingestHandoff, type IngestInput } from "./ingest";
 import { emptyHandoff } from "./schema";
@@ -17,7 +17,7 @@ function setup() {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   for (const key of ["PROJ-1", "PROJ-2"]) {
-    tickets.insert({ key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
+    insertTicket(tickets, { key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
   }
   const sessions = new SessionsRepo(db);
   const handoffs = new HandoffsRepo(db);

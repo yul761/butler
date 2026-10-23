@@ -3,14 +3,14 @@ import type { Handoff, HandoffFollowup } from "../../shared/handoff";
 import { FollowupsRepo } from "../db/followups-repo";
 import { HandoffsRepo } from "../db/handoffs-repo";
 import { TicketsRepo } from "../db/tickets-repo";
-import { memDb } from "../test-utils";
+import { insertTicket, memDb } from "../test-utils";
 import { ingestHandoff, rederiveTicketStatus } from "./ingest";
 import { emptyHandoff } from "./schema";
 
 function setup() {
   const db = memDb();
   const tickets = new TicketsRepo(db);
-  tickets.insert({ key: "PROJ-1", title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
+  insertTicket(tickets, { key: "PROJ-1", title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
   const handoffs = new HandoffsRepo(db);
   const followups = new FollowupsRepo(db);
   let now = 1000;

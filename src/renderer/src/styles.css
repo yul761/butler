@@ -60,6 +60,11 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .session .action { color: var(--accent); }
 .session .label { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .session.more { color: var(--muted); }
+.repos-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 16px; border-bottom: 1px solid var(--border); }
+.repos-bar .label { font-weight: 600; }
+.repos-bar .repo { display: inline-flex; gap: 6px; align-items: center; padding: 2px 6px; border: 1px solid var(--border); border-radius: 6px; }
+.repos-bar .repo .name { font-weight: 600; }
+.session .place { font-size: 11px; padding: 0 4px; border-radius: 4px; background: var(--panel); border: 1px solid var(--border); }
 .notice { margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 .terminals { flex: 1; min-height: 0; display: flex; }
 .terminal-wrap { flex: 1; min-width: 0; flex-direction: column; background: #000; }

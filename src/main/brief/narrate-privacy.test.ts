@@ -10,7 +10,7 @@ import { TicketsRepo } from "../db/tickets-repo";
 import { chatReply, gatewayHarness, type GatewayHarness } from "../gateway/testing";
 import { ingestHandoff } from "../handoff/ingest";
 import { emptyHandoff } from "../handoff/schema";
-import { memDb } from "../test-utils";
+import { insertTicket, memDb } from "../test-utils";
 import { BriefService } from "./brief-service";
 import { narrateBrief } from "./narrate";
 
@@ -37,12 +37,12 @@ function world() {
   const service = new BriefService({
     tickets, sessions, handoffs, followups, marks: new MarksRepo(db), briefs, settings: new SettingsRepo(db), now: () => at(21), unclaimedCount: () => 0,
   });
-  tickets.insert({
+  insertTicket(tickets, {
     key: "PAY-12", title: "Stripe payout reconciliation", repoPath: "/Users/me/code/billing-svc", workMode: "branch", worktreePath: null,
     branch: "feature/payments-v2", status: "active", statusManual: null, createdAt: at(1), archivedAt: null,
   });
   sessions.insertIfAbsent({ id: "s1", ticketKey: "PAY-12", cwd: "/x/packages/web", origin: "discovered", gitBranch: "main", lastActivityAt: at(20), createdAt: at(1) });
-  tickets.insert({
+  insertTicket(tickets, {
     key: "OLD-9", title: null, repoPath: "/Users/me/code/ledger", workMode: "branch", worktreePath: null, branch: "old9",
     status: "done", statusManual: null, createdAt: at(1), archivedAt: null,
   });

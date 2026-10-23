@@ -3,13 +3,23 @@ export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pendin
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
 export type WorkMode = "worktree" | "branch";
 
-export interface Ticket {
-  key: string;
-  title: string | null;
+/** ticket 涉及的一个仓库：各自的工作方式和分支（设计文档 2026-10-23 多仓库 ticket）。 */
+export interface TicketRepo {
+  id: number;
+  ticketKey: string;
+  /** 仓库根目录。 */
   repoPath: string;
   workMode: WorkMode;
   worktreePath: string | null;
   branch: string;
+  createdAt: number;
+}
+
+export interface Ticket {
+  key: string;
+  title: string | null;
+  /** 按添加顺序。可以为空：ticket 建好后再添加仓库。 */
+  repos: TicketRepo[];
   status: TicketStatus;
   statusManual: TicketStatus | null;
   createdAt: number;
@@ -30,6 +40,12 @@ export interface Session {
   replacedBy: string | null;
   dismissed: boolean;
   createdAt: number;
+  /** 为 ticket 的哪个仓库开的（null：总控、或者认不出来的旧 session）。 */
+  repoId: number | null;
+  /** 总控 session：在 ticket 的工作区目录里运行，能看到所有仓库。 */
+  coordinator: boolean;
+  /** 由哪个总控 session 开启（null：用户自己开的）。 */
+  spawnedBy: string | null;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */
@@ -51,21 +67,38 @@ export interface UnclaimedSession extends Session {
 export interface CreateTicketInput {
   key: string;
   title?: string;
+  /** 省略或空串：先不关联仓库。 */
+  repoPath?: string;
+  workMode?: WorkMode;
+  branch?: string;
+}
+
+export interface AddRepoInput {
+  ticketKey: string;
   repoPath: string;
   workMode: WorkMode;
   branch?: string;
 }
 
-/** 编辑 ticket：省略的字段不变。title 传空串表示清空。 */
+/** 编辑 ticket 的标题：空串表示清空。 */
 export interface UpdateTicketInput {
   key: string;
-  title?: string;
+  title: string;
+}
+
+/** 编辑 ticket 的一个仓库：省略的字段不变。 */
+export interface UpdateRepoInput {
+  repoId: number;
   workMode?: WorkMode;
   branch?: string;
 }
 
 export interface OpenSessionRequest {
   ticketKey: string;
+  /** 新 session 开在哪个仓库里。省略时：ticket 只有一个仓库就用它，否则必须指定（或者开总控）。 */
+  repoId?: number;
+  /** 新开总控 session（工作区目录 + 每个仓库一个 --add-dir）。 */
+  coordinator?: boolean;
   /** 省略表示新建 session；给出时恢复该 session（会沿 replacedBy 链找到最新的）。 */
   sessionId?: string;
   /** 打开后预填到输入框的文本，不回车。 */
@@ -76,10 +109,10 @@ export interface OpenSessionRequest {
 
 export type OpenSessionResult =
   | { ok: true; termId: string; alreadyOpen: boolean }
-  | { ok: false; reason: "branch_mismatch"; current: string; expected: string; dirty: boolean }
+  | { ok: false; reason: "branch_mismatch"; repoId: number; current: string; expected: string; dirty: boolean }
   /** 要恢复的 session 是在别的目录里启动的（ticket 后来改过工作方式），那个目录现在不在 ticket 的分支上（"HEAD" 表示游离）。 */
   | { ok: false; reason: "old_workdir"; cwd: string; current: string; expected: string }
-  | { ok: false; reason: "claude_missing" | "no_ticket" | "no_session" | "ticket_busy" };
+  | { ok: false; reason: "claude_missing" | "no_ticket" | "no_session" | "ticket_busy" | "no_repo" | "pick_repo" };
 
 export type HookStatus = "installed" | "missing" | "partial" | "stale" | "settings_invalid";
 export type HandoffCommandStatus = "installed" | "missing" | "stale" | "conflict";

@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { HookEnvelope } from "../../shared/hook-envelope";
 import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
-import { memDb } from "../test-utils";
+import { insertTicket, memDb } from "../test-utils";
 import { applyHookEnvelope } from "./hook-events";
 
 function setup() {
   const db = memDb();
   const tickets = new TicketsRepo(db);
-  tickets.insert({ key: "PROJ-1", title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
+  insertTicket(tickets, { key: "PROJ-1", title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
   const sessions = new SessionsRepo(db);
   return { sessions, tickets, deps: { sessions, tickets } };
 }
@@ -164,5 +164,18 @@ describe("applyHookEnvelope", () => {
       expect(applyHookEnvelope(env(ev, "h1", { butlerSession: "headless:run-1" }, { source: "fork" }), deps)).toEqual({ kind: "ignored", reason: "headless" });
     }
     expect(sessions.get("h1")).toBeNull();
+  });
+});
+
+describe("hook sessions on multi-repo tickets", () => {
+  it("records which repo (or the coordinator) a hook-created session belongs to", () => {
+    const { sessions, tickets } = setup();
+    const repoId = tickets.get("PROJ-1")!.repos[0].id;
+    const placement = (key: string, cwd: string) => (cwd === "/ws/PROJ-1" ? { repoId: null, coordinator: true } : { repoId: cwd.startsWith("/r") ? repoId : null, coordinator: false });
+    const deps = { sessions, tickets, placement };
+    applyHookEnvelope(env("SessionStart", "a", { ticket: "PROJ-1", butlerSession: "a" }, { cwd: "/r/src" }), deps);
+    applyHookEnvelope(env("SessionStart", "b", { ticket: "PROJ-1", butlerSession: "b" }, { cwd: "/ws/PROJ-1" }), deps);
+    expect(sessions.get("a")).toMatchObject({ repoId, coordinator: false });
+    expect(sessions.get("b")).toMatchObject({ repoId: null, coordinator: true });
   });
 });
