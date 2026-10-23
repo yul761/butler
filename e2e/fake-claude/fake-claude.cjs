@@ -35,14 +35,14 @@ const HANDOFF = {
   done_today: ["接口写完"],
   next_steps: ["上线后改 staging 配置"],
   blockers: [],
-  pr: PR,
+  prs: [PR],
   jira: null,
   followups: [{ id: null, kind: "config", description: "改 staging 配置", trigger: "after_merge", due_date: null, done: false }],
   decisions: [{ key: "db", statement: "用 PostgreSQL" }],
   learnings: ["假 claude 的经验"],
   open_questions: [],
 };
-const REFRESH = { status: "merged_pending_followup", pr: PR, jira: null };
+const REFRESH = { status: "merged_pending_followup", prs: [PR], jira: null };
 
 /** 和 Claude Code 一样执行 settings.json 里这个事件的 command hook：stdin 是 JSON，超时 15 秒。 */
 function runHooks(event, payload) {

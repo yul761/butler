@@ -32,12 +32,24 @@ describe("buildMorningBrief", () => {
   it("puts approved and changes-requested PRs first", () => {
     const c = buildMorningBrief(input({
       tickets: [
-        snap("A-1", { status: "in_review", latest: rec("A-1", { pr: openPr("approved") }) }),
-        snap("B-2", { status: "in_review", latest: rec("B-2", { pr: openPr("changes_requested") }) }),
+        snap("A-1", { status: "in_review", latest: rec("A-1", { prs: [openPr("approved")] }) }),
+        snap("B-2", { status: "in_review", latest: rec("B-2", { prs: [openPr("changes_requested")] }) }),
       ],
     }));
     expect(summary(c)).toEqual(["first:pr_approved:A-1", "first:pr_changes_requested:B-2"]);
     expect(c.items[0]).toMatchObject({ key: "pr_approved:A-1:12", pr: { number: 12, url: "https://x/pr/12" } });
+  });
+
+  it("lists each PR of a multi-repo ticket on its own, keyed by repo, and waits on the PR still under review", () => {
+    const web = { number: 7, url: "https://github.com/acme/web/pull/7", state: "open" as const, review: "approved" as const };
+    const api = { number: 7, url: "https://github.com/acme/api/pull/7", state: "open" as const, review: "changes_requested" as const };
+    const c = buildMorningBrief(input({ tickets: [snap("M-1", { status: "in_review", latest: rec("M-1", { prs: [web, api] }) })] }));
+    expect(c.items.map((i) => i.key)).toEqual(["pr_approved:M-1:acme/web#7", "pr_changes:M-1:acme/api#7"]);
+    const pending = { ...api, review: "pending" as const };
+    const w = buildMorningBrief(input({
+      tickets: [snap("M-2", { status: "in_review", statusSince: NOW - 5 * 86_400_000, latest: rec("M-2", { prs: [web, pending] }) })],
+    }));
+    expect(w.items.find((i) => i.rule === "review_waiting")).toMatchObject({ pr: { url: api.url } });
   });
 
   it("lists open after-merge followups of merged tickets, but not done, ignored or unmerged ones", () => {
@@ -94,8 +106,8 @@ describe("buildMorningBrief", () => {
   it("watches PRs waiting for review longer than N days", () => {
     const c = buildMorningBrief(input({
       tickets: [
-        snap("A-1", { status: "in_review", statusSince: at(18), latest: rec("A-1", { pr: openPr("pending") }) }),
-        snap("B-2", { status: "in_review", statusSince: at(20), latest: rec("B-2", { pr: openPr(null) }) }),
+        snap("A-1", { status: "in_review", statusSince: at(18), latest: rec("A-1", { prs: [openPr("pending")] }) }),
+        snap("B-2", { status: "in_review", statusSince: at(20), latest: rec("B-2", { prs: [openPr(null)] }) }),
       ],
     }));
     expect(summary(c)).toEqual(["watch:review_waiting:A-1:3"]);
@@ -134,7 +146,7 @@ describe("buildMorningBrief", () => {
   it("orders sections first, today, watch", () => {
     const c = buildMorningBrief(input({
       unclaimedCount: 1,
-      tickets: [snap("Z-9", { latest: rec("Z-9", { next_steps: ["a"] }) }), snap("A-1", { status: "in_review", latest: rec("A-1", { pr: openPr("approved") }) })],
+      tickets: [snap("Z-9", { latest: rec("Z-9", { next_steps: ["a"] }) }), snap("A-1", { status: "in_review", latest: rec("A-1", { prs: [openPr("approved")] }) })],
     }));
     expect(c.items.map((i) => i.section)).toEqual(["first", "today", "watch"]);
   });

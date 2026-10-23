@@ -53,13 +53,13 @@ export function TicketOverview({ ticketKey }: { ticketKey: string }) {
   }
 
   const { active, closed } = splitFollowups(followups);
-  const pr = history.find((h) => h.payload)?.payload?.pr ?? null;
+  const prs = history.find((h) => h.payload)?.payload?.prs ?? [];
   const toggle = (p: Panel) => setPanel(panel === p ? null : p);
 
   return (
     <div className="overview">
       <div className="overview-bar">
-        {pr && <span className="muted">{S.prLine(pr.number, pr.state, pr.review)}</span>}
+        {prs.map((pr) => <span key={pr.url} className="muted" title={pr.url}>{S.prLine(prLabel(pr, prs), pr.state, pr.review)}</span>)}
         <button className={panel === "followups" ? "active" : ""} onClick={() => toggle("followups")}>{S.followupsTab(active.length)}</button>
         <button className={panel === "history" ? "active" : ""} onClick={() => toggle("history")}>{S.historyTab(history.length)}</button>
         <button className={panel === "memory" ? "active" : ""} onClick={() => toggle("memory")}>{S.memoryTab}</button>
@@ -126,14 +126,20 @@ function Section({ title, items }: { title: string; items: string[] }) {
   );
 }
 
+/** PR 的名字：只有一个时是 #号，几个（多仓库）时带上仓库名。 */
+function prLabel(pr: { number: number; url: string }, all: { url: string }[]): string {
+  const repo = all.length > 1 ? /github\.com\/[^/]+\/([^/]+)\/pull\//.exec(pr.url)?.[1] : undefined;
+  return repo ? `${repo}#${pr.number}` : `#${pr.number}`;
+}
+
 function HandoffEntry({ h }: { h: HandoffRecord }) {
-  const pr = h.payload?.pr ?? null;
+  const prs = h.payload?.prs ?? [];
   return (
     <div className="handoff-entry">
       <div>
         <strong>{formatTime(h.createdAt)}</strong> <span className="muted">{triggerLabel(h.trigger)}</span>
         {h.degraded && <span className="error"> {S.degradedBadge}</span>}
-        {pr && <span className="muted"> · {S.prLine(pr.number, pr.state, pr.review)}</span>}
+        {prs.map((pr) => <span key={pr.url} className="muted"> · {S.prLine(prLabel(pr, prs), pr.state, pr.review)}</span>)}
       </div>
       {h.payload ? (
         <>

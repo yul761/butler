@@ -201,7 +201,7 @@ export const S = {
   nextSteps: "下一步",
   blockers: "阻塞",
   openQuestions: "待确认",
-  prLine: (n: number, state: string, review: string | null) => `PR #${n} · ${state}${review ? ` · ${review}` : ""}`,
+  prLine: (name: string, state: string, review: string | null) => `PR ${name} · ${state}${review ? ` · ${review}` : ""}`,
   schedule: "调度与 handoff",
   scheduleNote: "后台总结会继承你在 ~/.claude 里允许的命令",
   nightlyTime: "晚间 handoff 时间",

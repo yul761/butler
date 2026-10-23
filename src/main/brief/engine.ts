@@ -1,5 +1,7 @@
 import type { BriefContent, BriefItem, BriefNotices, BriefRule, BriefSection, DayEntry, EveningEntry, MarkState } from "../../shared/brief";
+import type { Pr } from "../../shared/handoff";
 import type { Followup, HandoffRecord, TicketStatus } from "../../shared/types";
+import { combinedPr, prKey } from "../handoff/prs";
 import { daysBetween, dayStart, localDate } from "../schedule/calendar";
 import type { Thresholds } from "../settings/settings-values";
 
@@ -93,15 +95,18 @@ export function buildMorningBrief(i: MorningInput): BriefContent {
 
   for (const t of i.tickets) {
     const p = t.latest?.payload ?? null;
-    const pr = p?.pr ?? null;
-    const prRef = pr ? { number: pr.number, url: pr.url } : null;
+    const prs = p?.prs ?? [];
+    const combined = combinedPr(prs);
+    const ref = (pr: Pr) => ({ number: pr.number, url: pr.url });
 
-    // 🔴 先做
-    if (pr?.state === "open" && pr.review === "approved") {
-      items.push(item("first", "pr_approved", `pr_approved:${t.key}:${pr.number}`, { ticketKey: t.key, pr: prRef }));
-    }
-    if (pr?.state === "open" && pr.review === "changes_requested") {
-      items.push(item("first", "pr_changes_requested", `pr_changes:${t.key}:${pr.number}`, { ticketKey: t.key, pr: prRef }));
+    // 🔴 先做：每个打开的 PR 各算一条（多仓库 ticket 可能一个批准了、另一个要求修改）。
+    for (const pr of prs) {
+      if (pr.state === "open" && pr.review === "approved") {
+        items.push(item("first", "pr_approved", `pr_approved:${t.key}:${prKey(pr, prs)}`, { ticketKey: t.key, pr: ref(pr) }));
+      }
+      if (pr.state === "open" && pr.review === "changes_requested") {
+        items.push(item("first", "pr_changes_requested", `pr_changes:${t.key}:${prKey(pr, prs)}`, { ticketKey: t.key, pr: ref(pr) }));
+      }
     }
     for (const f of active) {
       if (f.ticketKey !== t.key) continue;
@@ -125,8 +130,10 @@ export function buildMorningBrief(i: MorningInput): BriefContent {
     }
 
     // ⚪ 留意
-    if (t.status === "in_review" && (pr === null || pr.review === null || pr.review === "pending") && inStatus > i.thresholds.reviewWaitDays) {
-      items.push(item("watch", "review_waiting", `review:${t.key}:${localDate(t.statusSince)}`, { ticketKey: t.key, days: inStatus, pr: prRef }));
+    if (t.status === "in_review" && (combined === null || combined.review === null || combined.review === "pending") && inStatus > i.thresholds.reviewWaitDays) {
+      // 链接给第一个还在等 review 的 PR。
+      const waiting = prs.find((pr) => pr.state === "open" && pr.review !== "approved") ?? null;
+      items.push(item("watch", "review_waiting", `review:${t.key}:${localDate(t.statusSince)}`, { ticketKey: t.key, days: inStatus, pr: waiting && ref(waiting) }));
     }
     const idle = daysBetween(t.lastActivityAt, i.now);
     if (idle > i.thresholds.staleDays) {

@@ -5,7 +5,7 @@ import type { FollowupKind, FollowupTrigger, TicketStatus } from "../../shared/t
 /** 返回 [0, n) 的随机整数。生产环境用 crypto.randomInt；测试用可复现的 seededRng。 */
 export type Rng = (n: number) => number;
 
-type Pr = NonNullable<Handoff["pr"]>;
+type Pr = Handoff["prs"][number];
 
 export interface NarrativeFollowup {
   kind: FollowupKind;

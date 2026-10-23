@@ -46,7 +46,7 @@ function world() {
     key: "OLD-9", title: null, repoPath: "/Users/me/code/ledger", workMode: "branch", worktreePath: null, branch: "old9",
     status: "done", statusManual: null, createdAt: at(1), archivedAt: null,
   });
-  ingest("OLD-9", null, { status: "done", pr: { number: 3, url: "https://github.com/acme-corp/ledger-api/pull/3", state: "merged", review: "approved" } });
+  ingest("OLD-9", null, { status: "done", prs: [{ number: 3, url: "https://github.com/acme-corp/ledger-api/pull/3", state: "merged", review: "approved" }] });
   tickets.archive("OLD-9", at(5));
   ingest("PAY-12", "s1", {
     status: "active",

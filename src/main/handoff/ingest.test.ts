@@ -30,7 +30,7 @@ describe("ingestHandoff", () => {
     const { deps, tickets, handoffs, followups } = setup();
     const r = ingestHandoff(deps, {
       ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: "{}",
-      payload: payload({ pr: { number: 7, url: "u", state: "open", review: "pending" }, followups: [fu(), fu({ description: "开 flag", kind: "flag" })] }),
+      payload: payload({ prs: [{ number: 7, url: "u", state: "open", review: "pending" }], followups: [fu(), fu({ description: "开 flag", kind: "flag" })] }),
     });
     expect(r).toMatchObject({ stored: true, degraded: false, status: "in_review" });
     expect(handoffs.latest("PROJ-1")?.payload?.ticket).toBe("PROJ-1");
@@ -46,12 +46,12 @@ describe("ingestHandoff", () => {
     const { deps, tickets, followups, tick } = setup();
     ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ followups: [fu(), fu({ description: "开 flag" })] }) });
     tick(10);
-    const second = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ pr: merged, followups: [fu({ id: "f1", done: true })] }) });
+    const second = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ prs: [merged], followups: [fu({ id: "f1", done: true })] }) });
     expect(second).toMatchObject({ status: "merged_pending_followup" });
     expect(followups.get("f1")).toMatchObject({ status: "done", doneAt: 1010 });
     followups.setStatus("f2", "ignored", 1020);
     tick(10);
-    const third = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "command", rawText: null, payload: payload({ pr: merged, followups: [fu({ description: "开 flag" })] }) });
+    const third = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "command", rawText: null, payload: payload({ prs: [merged], followups: [fu({ description: "开 flag" })] }) });
     expect(third).toMatchObject({ status: "done" });
     expect(followups.get("f2")?.status).toBe("ignored");
     expect(followups.listByTicket("PROJ-1")).toHaveLength(2);
@@ -79,7 +79,7 @@ describe("ingestHandoff", () => {
 
   it("re-derives the status after a followup is completed by hand", () => {
     const { deps, tickets, followups } = setup();
-    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", rawText: null, payload: payload({ pr: merged, followups: [fu()] }) });
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", rawText: null, payload: payload({ prs: [merged], followups: [fu()] }) });
     expect(tickets.get("PROJ-1")?.status).toBe("merged_pending_followup");
     followups.setStatus("f1", "done", 2000);
     expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("done");

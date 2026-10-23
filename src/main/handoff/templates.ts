@@ -10,11 +10,11 @@ export const HANDOFF_SCHEMA_DOC = `{
   done_today: string[],           // 今天实际完成的事
   next_steps: string[],           // 接下来要做的事，第一条是明天最先做的一步
   blockers: string[],             // 卡住的原因，没有就是 []
-  pr: null | {                    // 没有 PR 就是 null
+  prs: {                          // 这个 ticket 的所有 PR（多个仓库就有多个）；没有 PR 就是 []
     number: number, url: string,
     state: "open" | "merged" | "closed",
     review: "pending" | "changes_requested" | "approved" | null
-  },
+  }[],
   jira: null | {                  // tracker 读不到就是 null，不要编造
     status: string,
     subtasks: { key: string, status: string }[]
@@ -38,7 +38,7 @@ export const HANDOFF_EXAMPLE_VALUE: Handoff = {
   done_today: ["登录页改用新的 token 刷新逻辑", "补了 refresh 失败的单元测试"],
   next_steps: ["根据 review 意见拆分 AuthService", "合并后改 staging 的 token TTL 配置"],
   blockers: [],
-  pr: { number: 456, url: "https://github.com/acme/web/pull/456", state: "open", review: "pending" },
+  prs: [{ number: 456, url: "https://github.com/acme/web/pull/456", state: "open", review: "pending" }],
   jira: { status: "In Review", subtasks: [{ key: "PROJ-124", status: "Done" }] },
   followups: [
     { id: "f_1a2b3c4d", kind: "config", description: "改 staging 的 token TTL 为 15 分钟", trigger: "after_merge", due_date: null, done: false },
@@ -56,7 +56,7 @@ export const DEFAULT_HANDOFF_PROMPT = `你在为 Butler 生成 ticket {{ticket}}
 
 要求：
 1. 用 tracker MCP 工具读取 ticket {{ticket}} 的描述、评论和子任务。可用的工具：{{tracker_tools}}。工具不可用或读取失败时 jira 填 null，不要编造。
-2. 用 \`gh pr view {{branch}}\` 和 \`gh pr checks {{branch}}\` 读取 PR 状态；没有 PR 时 pr 填 null。
+2. 用 \`gh pr view <分支>\` 和 \`gh pr checks <分支>\` 读取 PR 状态（分支：{{branch}}）。ticket 涉及几个仓库就在每个仓库的目录里各查一次，把找到的 PR 都放进 prs；一个都没有时 prs 填 []。
 3. 只读：不要修改任何文件，不要提交或推送。
 4. followups 是“合并或部署之后还要做的事”（改配置、开关 feature flag、部署、写文档等）。下面列出了已有的 followups：已有的项保留原来的 id；已经做完的 done 填 true；新发现的项 id 填 null。
 5. done_today 只写今天实际完成的事；next_steps 的第一条写明天最先要做的一步。
@@ -77,11 +77,11 @@ export const DEFAULT_HANDOFF_PROMPT = `你在为 Butler 生成 ticket {{ticket}}
 /** 早间快速刷新用的默认 prompt（不 resume，只查 PR 和 tracker 状态）。 */
 export const DEFAULT_REFRESH_PROMPT = `只查询 ticket {{ticket}}（分支 {{branch}}）的最新状态，不要总结对话，也不要修改任何文件。
 
-1. 用 \`gh pr view {{branch}}\` 查询 PR 的 state 和 review 状态；没有 PR 时 pr 填 null。
+1. 用 \`gh pr view <分支>\` 查询 PR 的 state 和 review 状态（分支：{{branch}}）。几个仓库就在每个仓库的目录里各查一次，PR 都放进 prs；没有 PR 时 prs 填 []。
 2. 用 tracker MCP 工具查询 ticket {{ticket}} 的状态和子任务。可用的工具：{{tracker_tools}}。不可用时 jira 填 null。
-3. status：PR 已合并填 merged_pending_followup；PR 打开中填 in_review；其他情况沿用当前状态 {{current_status}}。
+3. status：PR 都已合并填 merged_pending_followup；还有 PR 打开中填 in_review；其他情况沿用当前状态 {{current_status}}。
 
-只输出一个 JSON 对象，包含 status、pr、jira 三个字段，含义同下：
+只输出一个 JSON 对象，包含 status、prs、jira 三个字段，含义同下：
 {{schema}}
 `;
 

@@ -1,7 +1,8 @@
 import type { Handoff } from "../../shared/handoff";
 import type { TicketStatus } from "../../shared/types";
+import { combinedPr } from "./prs";
 
-export type StatusInput = Pick<Handoff, "status" | "pr" | "blockers">;
+export type StatusInput = Pick<Handoff, "status" | "prs" | "blockers">;
 
 /**
  * 从最新一次 handoff（或刷新）推导 ticket 状态。手动状态优先由 effectiveStatus 处理，这里只算自动值。
@@ -12,15 +13,17 @@ export type StatusInput = Pick<Handoff, "status" | "pr" | "blockers">;
  * - 列出了阻塞原因 → blocked
  * - PR 被关闭（没合并）→ active
  * - 其余沿用模型的 in_review，否则 active
+ * 几个 PR（多仓库 ticket）合起来看，见 combinedPr：还有一个开着就还在 review，全部合并（关掉的不算）才算合并。
  */
 export function deriveStatus(h: StatusInput, openFollowups: number): TicketStatus {
+  const pr = combinedPr(h.prs);
   // PR 还开着就还没完成：模型的 done / merged_pending_followup 不作数（模型明确说 blocked 仍然优先）。
-  if (h.pr?.state === "open") return h.status === "blocked" ? "blocked" : "in_review";
-  if (h.pr?.state === "merged" || h.status === "done" || h.status === "merged_pending_followup") {
+  if (pr?.state === "open") return h.status === "blocked" ? "blocked" : "in_review";
+  if (pr?.state === "merged" || h.status === "done" || h.status === "merged_pending_followup") {
     return openFollowups > 0 ? "merged_pending_followup" : "done";
   }
   if (h.status === "blocked") return "blocked";
   if (h.blockers.length > 0) return "blocked";
-  if (h.pr?.state === "closed") return "active";
+  if (pr?.state === "closed") return "active";
   return h.status === "in_review" ? "in_review" : "active";
 }
