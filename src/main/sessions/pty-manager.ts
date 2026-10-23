@@ -167,7 +167,8 @@ export class PtyManager {
       const started = t.started || now - start >= (o.startWaitMs ?? 60_000);
       const idle = t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs;
       if (started && idle && !dialogShowing(t.buffer)) {
-        this.guard(termId, "deliver paste", () => t.proc.write(`\x1b[200~${text}\x1b[201~`));
+        // 粘贴里的换行按终端的惯例写成 \r（xterm 的粘贴也是这样）：Windows 的 ConPTY 会吞掉输入里的 \n。
+        this.guard(termId, "deliver paste", () => t.proc.write(`\x1b[200~${text.replace(/\r?\n/g, "\r")}\x1b[201~`));
         break;
       }
       if (now - start >= (o.timeoutMs ?? 300_000)) return "timeout";

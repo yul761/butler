@@ -119,13 +119,13 @@ describe("PtyManager", () => {
     expect(spawned[0].pty.written).toEqual([]); // 还没有 SessionStart
     mgr.markStarted("t1");
     await vi.advanceTimersByTimeAsync(200);
-    expect(spawned[0].pty.written).toEqual(["\x1b[200~写接口\n加测试\x1b[201~"]);
+    expect(spawned[0].pty.written).toEqual(["\x1b[200~写接口\r加测试\x1b[201~"]);
     spawned[0].pty.emit("写接口…");
     await vi.advanceTimersByTimeAsync(200);
     expect(spawned[0].pty.written).toHaveLength(1); // 回显还没安静
     await vi.advanceTimersByTimeAsync(400);
     expect(await p).toBe("sent");
-    expect(spawned[0].pty.written).toEqual(["\x1b[200~写接口\n加测试\x1b[201~", "\r"]);
+    expect(spawned[0].pty.written).toEqual(["\x1b[200~写接口\r加测试\x1b[201~", "\r"]);
   });
 
   it("deliver never answers a trust or MCP dialog, and waits for the user to get past it", async () => {
