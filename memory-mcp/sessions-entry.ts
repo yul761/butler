@@ -15,3 +15,5 @@ if (!ticketKey || !requestsDir || !resultsDir) {
   process.exit(2);
 }
 serveStdio(new SessionsServer({ ticketKey, from, requestsDir, resultsDir }), process.stdin, process.stdout);
+// claude 退出时关掉 stdin：跟着退出，不留下孤儿进程。
+process.stdin.on("end", () => process.exit(0));

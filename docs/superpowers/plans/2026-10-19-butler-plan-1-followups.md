@@ -317,3 +317,6 @@ Triage per the plan-2 final review: items marked "→ final wave" were fixed in 
 9. **开机自启（两个平台）**：安装包版本里勾选“开机时自动启动 Butler” → 重启后 Butler 自动打开并显示简报。
 10. **托盘图标和 CSP（两个平台）**：高分屏上托盘的圆点图标清晰；打开一个 session 终端正常显示，`~/.butler/logs/main.log` 里没有 `renderer CSP violation`。
 11. **仓库自带 git.exe（Windows，可选）**：在一个根目录放了 `git.exe`（随便复制一个别的 exe 改名）的仓库里新建 ticket → 新建成功，那个假 exe 没有被运行。
+12. **编辑和归档（1.0.1，Windows）**：建一个 worktree 模式的 ticket，在仓库栏点“编辑”改成“在原目录用分支”→ 保存成功，原 worktree 目录还在；归档后在“已归档”里能找到并恢复；用归档的号新建 ticket 时出现“恢复”按钮。
+13. **终端粘贴（1.0.1，Windows）**：在外面复制一段多行文字 → 在 Butler 的 claude 终端里 Ctrl+V 粘贴，内容作为一次粘贴出现（没有逐行提交）；右键也能粘贴；选中终端里的文字按 Ctrl+C 能复制；截图后按 Ctrl+V，claude 能粘贴图片（或按 claude 自己的说明用 Alt+V）。
+14. **多仓库 ticket 和总控（真实的 claude）**：建一个不带仓库的 ticket → 添加前端、后端两个仓库 → 分别在两个仓库开 session，`pwd` 对得上 → 开总控 session，`/mcp` 里有 `butler-sessions`（以及记忆开着时的 `butler-memory`），让它“在后端仓库开一个 session 实现 X”→ 新的 session 出现在同一个 ticket 下、标着后端仓库名和“↳”，任务已经提交，权限确认照常出现在那个终端里；`list_sessions` 能看到它。
