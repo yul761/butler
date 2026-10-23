@@ -82,7 +82,7 @@ describe("StateCore adapter (design 8, 11: write and why integration)", () => {
     });
   });
 
-  it("counts note slots including forgotten notes, which keep their slot until a full digest (PF2)", async () => {
+  it("counts only live note slots: forget frees one, an exact rewrite of a forgotten note stays hidden and free (PF2, statecore-mcp 1.1)", async () => {
     // 两两之间 Jaccard 很低的正文，保证每次都是追加而不是修订。
     const text = (i: number) => `[followup:t${i}] ${["alpha", "bravo", "carol", "delta", "eagle", "fable"].map((w) => `${w}${i}x${i * 7}`).join(" ")}`;
     await withScope({ dataDir: tempDir(), scope: "ticket:PROJ-10" }, async (s) => {
@@ -91,16 +91,16 @@ describe("StateCore adapter (design 8, 11: write and why integration)", () => {
       const [first] = await s.facts();
       await s.forget(first.factKey);
       expect(await s.facts()).toHaveLength(2);
-      expect(await s.noteSlots()).toEqual({ used: 3, cap: NOTES_CAP });
-      // 一字不差的重写不占新位置（StateCore 当成已有的那条，仍然隐藏）。
+      expect(await s.noteSlots()).toEqual({ used: 2, cap: NOTES_CAP });
+      // 一字不差地重写被遗忘的条目：仍然隐藏，也不占位置。
       await s.remember(text(0));
-      expect((await s.noteSlots()).used).toBe(3);
+      expect((await s.noteSlots()).used).toBe(2);
       // 修订原地替换，不占新位置。
       expect((await s.remember(`${text(1)} more`)).superseded).toBe(text(1));
-      expect((await s.noteSlots()).used).toBe(3);
-      for (let i = 3; i < NOTES_CAP; i++) await s.remember(text(i));
+      expect((await s.noteSlots()).used).toBe(2);
+      for (let i = 3; i < NOTES_CAP + 1; i++) await s.remember(text(i));
       expect(await s.noteSlots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
-      // 满了以后再追加：StateCore 挤掉最旧的那条（这里是被遗忘的 t0），总数不变。
+      // 满了以后再追加：StateCore 挤掉最旧的那条，总数不变。
       await s.remember(text(99));
       expect(await s.noteSlots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
       expect(await s.facts()).toHaveLength(NOTES_CAP);
@@ -146,17 +146,13 @@ describe("StateCore adapter (design 8, 11: write and why integration)", () => {
     });
   });
 
-  it("pins an upstream limitation of StateCore 1.0.0: an event written before the scope's first note stops counting as pending", async () => {
-    // 记录上游的已知问题，不是 Butler 想要的行为（任务 6 审查 claim 2 / M5）：
-    // 第一次写 note 时 StateCore 建一行 Digest，countPendingEvents 只数比最新 Digest 新的事件，
-    // 所以 claude 在 Butler 第一次同步之前 consolidate 的事件不算待蒸馏，只能等之后的新事件触发蒸馏时顺带处理。
-    // 升级 StateCore 后这个测试失败，说明上游改了：删掉它，并重新评估 MemoryService.distill 的相关说明。
+  it("keeps an event written before the scope's first note pending (fixed in statecore-mcp 1.1)", async () => {
     const dir = tempDir();
     await seedEvent(dir, "ticket:PROJ-11", "claude 在第一次同步之前记下的原始对话");
     await withScope({ dataDir: dir, scope: "ticket:PROJ-11" }, async (s) => {
       expect(await s.pendingEvents()).toBe(1);
       await s.remember("[decision:db] 用 PostgreSQL");
-      expect(await s.pendingEvents()).toBe(0);
+      expect(await s.pendingEvents()).toBe(1);
     });
   });
 
@@ -193,6 +189,8 @@ describe("StateCore adapter (design 8, 11: write and why integration)", () => {
 
   it("validates digestNow results and maps anything unknown to unsupported", () => {
     expect(parseDigestOutcome({ ran: true })).toBe("ran");
+    expect(parseDigestOutcome({ ran: true, partial: true })).toBe("partial");
+    expect(parseDigestOutcome({ ran: true, partial: false })).toBe("ran");
     expect(parseDigestOutcome({ ran: false, reason: "locked" })).toBe("locked");
     expect(parseDigestOutcome({ ran: false, reason: "something-new" })).toBe("unsupported");
     expect(parseDigestOutcome({ ran: false })).toBe("unsupported");

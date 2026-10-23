@@ -302,6 +302,19 @@ Triage per the plan-2 final review: items marked "→ final wave" were fixed in 
   - The README does not mention the keychain prompt for the privacy page of an ad-hoc-signed build (Task 12 live check)
   - actionlint was not run locally (Task 12)
 
+# After v1.0.1 (2026-10-23)
+
+## Resolved
+- Multi-repo tickets and the coordinator session (spec 2026-10-23); handoffs record every PR (`prs`), old payloads upgraded on read
+- StateCore upstream limitations (a)–(d) and the forgotten-note slot problem: fixed in statecore-mcp 1.1.0 (StateCore PRs #6, #7; tag statecore-mcp@1.1.0 / v1.8.0). Butler pins 1.1.0, counts only live note slots, drops DIGEST_HEADROOM and the register-before-forget workaround, reads `partial` digest outcomes
+- Personal API follows the system proxy (Electron `net.fetch`, no cookies, no cache)
+- Plan 1–2 audit: resume double-click race, App refresh ordering and debounce, /clear resume pane, closePane stale closure, newer-database guard, memory tab focus/interval reload, wizard resume and skipped-setup reminder, discovery head cache and 1 MB head cap, replay buffer trimmed at a line boundary, MCP configs removed on archive
+
+## Still open
+- Nested `claude --resume`/`-c` re-links (accepted per plan 1 F2); a lost nested SessionStart can leave a phantom waiting session
+- Windows: the coordinator's task is sent as one line (ConPTY may not pass bracketed-paste markers through); verify on a real device (manual check 14)
+- Signing / notarization / auto-update and the app icon (unchanged)
+
 ## 手动验证（用户在自己的真机上执行）
 
 执行者在 macOS 上，没有 Windows 机器，没有用真实的个人 API key，也没有在真实的 ticket 上打开过 session。推送、CI、`v1.0.0` tag 和发布由控制者完成（用户已授权），下面只列必须由你本人在真机上做的事。任何一项不符合就停下来，按 superpowers:systematic-debugging 排查。

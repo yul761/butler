@@ -12,12 +12,12 @@ import type { StatecoreChatModel } from "../gateway/types";
  * 主进程不长期占着连接。StateCore 的返回值类型是 unknown，这里用 zod 校验成 Butler 自己的类型。
  */
 
-export type DigestOutcome = "ran" | "no-llm" | "below-threshold" | "locked" | "failed" | "unsupported";
+/** partial：蒸馏写进去了，但有的事件没处理到（失败的分块、超出预算的事件；statecore-mcp 1.1 起如实报告）。 */
+export type DigestOutcome = "ran" | "partial" | "no-llm" | "below-threshold" | "locked" | "failed" | "unsupported";
 
 /**
- * StateCore 1.0.0 每个 scope 的 notes 上限（默认 facet pack 里 notes 的 cap）。满了再追加一条，StateCore 挤掉最旧的那条。
- * forget 只是把条目藏起来：原文还在 notes 里占着位置（lib 不导出清理函数）。蒸馏也不释放：StateCore 1.0.0 的蒸馏会把它们从 notes 里删掉，
- * 但写快照时 carryOverConcurrentNotes 按事实登记又把它们加回 notes 末尾（任务 6 实测），所以被 forget 的条目一直占着位置。
+ * StateCore 每个 scope 的 notes 上限（默认 facet pack 里 notes 的 cap）。调用方（remember）再追加一条时，StateCore 挤掉最旧的那条。
+ * statecore-mcp 1.1 起 forget 会释放位置，蒸馏提炼的 note 也不会挤掉调用方写的 note（1.0.0 两者都不成立）。
  */
 export const NOTES_CAP = 30;
 
@@ -66,10 +66,12 @@ const WhyResult = z.object({ chain: z.array(RegistryEntry) }).nullable();
 const RecallResult = z.object({
   handoff: z.object({ id: z.string(), content: z.string(), addedAt: z.string(), versionCount: z.number() }).nullable(),
 });
-const Registry = z.object({ factRegistry: z.array(z.object({ content: z.string(), facet: z.string().optional() })) });
+const Registry = z.object({
+  factRegistry: z.array(z.object({ content: z.string(), facet: z.string().optional(), supersededBy: z.string().optional(), retiredAt: z.string().optional() })),
+});
 const Remembered = z.object({ superseded: z.string().optional() });
 const DigestResult = z.union([
-  z.object({ ran: z.literal(true) }),
+  z.object({ ran: z.literal(true), partial: z.boolean().optional() }),
   z.object({ ran: z.literal(false), reason: z.enum(["no-llm", "below-threshold", "locked", "failed", "unsupported"]) }),
 ]);
 const Pending = z.object({ events: z.number() }).nullable().optional();
@@ -133,8 +135,9 @@ function handle(b: Backend): ScopeHandle {
     },
     async noteSlots() {
       const notes = new Set(
+        // statecore-mcp 1.1 起，被 forget、被修订或被挤出上限的登记都会退役，不再占位置。
         Registry.parse(await b.recall({}))
-          .factRegistry.filter((e) => e.facet === "notes")
+          .factRegistry.filter((e) => e.facet === "notes" && !e.retiredAt && !e.supersededBy)
           .map((e) => noteNorm(e.content)),
       );
       for (const i of await facts()) if (i.group === NOTES_GROUP) notes.add(noteNorm(i.text));
@@ -153,7 +156,8 @@ function handle(b: Backend): ScopeHandle {
 export function parseDigestOutcome(raw: unknown): DigestOutcome {
   const r = DigestResult.safeParse(raw);
   if (!r.success) return "unsupported";
-  return r.data.ran ? "ran" : r.data.reason;
+  if (r.data.ran) return r.data.partial ? "partial" : "ran";
+  return r.data.reason;
 }
 
 /**
