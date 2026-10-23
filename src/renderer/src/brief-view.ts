@@ -23,13 +23,17 @@ export function itemActions(i: BriefItem): ItemAction[] {
   return i.rule === "unclaimed" ? ["claim"] : ["open", "done", "snooze", "ignore"];
 }
 
-/** “打开”：恢复这个 ticket 最近的 session（ticket.sessions 已按最近活动排序），没有就新建；并预填提示。 */
+/**
+ * “打开”：恢复这个 ticket 最近的 session（ticket.sessions 已按最近活动排序），没有就新建；并预填提示。
+ * 新建时，ticket 不是正好一个仓库就开总控（它能看到所有仓库），免得要用户先选仓库、预填的提示丢掉。
+ */
 export function openRequest(i: BriefItem, ticket: TicketView | undefined): OpenSessionRequest | null {
   if (!i.ticketKey || !ticket) return null;
   const prefill = itemPrefill(i);
   // 已忽略的 session 不恢复（ticket.sessions 已按最近活动排序）。
   const recent = ticket.sessions.find((s) => !s.dismissed);
-  return { ticketKey: i.ticketKey, ...(recent ? { sessionId: recent.id } : {}), ...(prefill ? { prefill } : {}) };
+  const fresh = ticket.repos.length === 1 ? {} : { coordinator: true };
+  return { ticketKey: i.ticketKey, ...(recent ? { sessionId: recent.id } : fresh), ...(prefill ? { prefill } : {}) };
 }
 
 /** “今日重点”的每一行（只有生成成功时才有）。 */

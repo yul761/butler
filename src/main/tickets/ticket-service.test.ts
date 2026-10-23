@@ -137,13 +137,19 @@ describe("TicketService.create input checks", () => {
   it("maps git failures to git_failed with git's own reason and stores nothing", async () => {
     const { service, tickets } = setup();
     const repo = makeRepo();
-    // main 已经在主工作区检出，git 不允许再给它建 worktree。
-    const err = await service.create({ key: "PROJ-22", repoPath: repo, workMode: "worktree", branch: "main" }).catch((e: unknown) => e);
+    // 另一个 worktree 已经检出了 taken，git 不允许再给它建 worktree。
+    await git(repo, ["worktree", "add", "-b", "taken", join(tempDir(), "elsewhere")]);
+    const err = await service.create({ key: "PROJ-22", repoPath: repo, workMode: "worktree", branch: "taken" }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(TicketError);
     expect(err).toMatchObject({ code: "git_failed" });
     expect((err as Error).message).toMatch(/^git 操作失败：/);
     expect((err as Error).message).not.toMatch(/fatal:/);
     expect(tickets.get("PROJ-22")).toBeNull();
+  });
+
+  it("refuses a worktree on the branch the repo itself has checked out, with a clear reason", async () => {
+    const { service } = setup();
+    expect(await code(service.create({ key: "PROJ-23", repoPath: makeRepo(), workMode: "worktree", branch: "main" }))).toBe("branch_checked_out");
   });
 });
 
@@ -353,24 +359,50 @@ describe("TicketService with several repos", () => {
     const t = tickets.get("MULTI-4")!;
     expect(service.repoForCwd(t, join(t.repos[0].worktreePath!, "src"))?.id).toBe(t.repos[0].id);
     expect(service.repoForCwd(t, api)?.id).toBe(t.repos[1].id);
-    // 主仓库本身不是 worktree 模式仓库的工作目录。
-    expect(service.repoForCwd(t, web)).toBeNull();
+    // worktree 模式仓库的主目录也算这个仓库。
+    expect(service.repoForCwd(t, web)?.id).toBe(t.repos[0].id);
     expect(service.repoForCwd(t, `${api}-other`)).toBeNull();
+    expect(service.placement("MULTI-4", join(api, "x"))).toEqual({ repoId: t.repos[1].id, coordinator: false });
+    expect(service.placement("MULTI-4", service.workspacePath("MULTI-4"))).toEqual({ repoId: null, coordinator: true });
   });
 
-  it("runs background claude in the only repo, or in the workspace with every repo added", async () => {
+  it("runs background claude in the first repo with the others added, or in the workspace when there is none", async () => {
     const { service, tickets } = setup();
     const web = makeRepo();
     await service.create({ key: "MULTI-5", repoPath: web, workMode: "branch" });
-    expect(service.headlessDirs(tickets.get("MULTI-5")!)).toEqual({ cwd: web, addDirs: [] });
+    expect(service.headlessDirs(tickets.get("MULTI-5")!)).toEqual({ cwd: web, addDirs: [], repoDirs: [web] });
     const api = makeRepo();
     await service.addRepo({ ticketKey: "MULTI-5", repoPath: api, workMode: "branch" });
-    const dirs = service.headlessDirs(tickets.get("MULTI-5")!);
-    expect(dirs.addDirs).toEqual([web, api]);
-    expect(existsSync(dirs.cwd)).toBe(true);
-    expect(basename(dirs.cwd)).toBe("MULTI-5");
+    expect(service.headlessDirs(tickets.get("MULTI-5")!)).toEqual({ cwd: web, addDirs: [api], repoDirs: [web, api] });
     await service.create({ key: "MULTI-6" });
-    expect(service.headlessDirs(tickets.get("MULTI-6")!).addDirs).toEqual([]);
+    const bare = service.headlessDirs(tickets.get("MULTI-6")!);
+    expect(bare).toMatchObject({ addDirs: [], repoDirs: [] });
+    expect(basename(bare.cwd)).toBe("MULTI-6");
+    expect(existsSync(bare.cwd)).toBe(true);
+  });
+
+  it("re-adds a removed repo, picking up the worktree it left behind (or freeing its branch for branch mode)", async () => {
+    const { service, tickets } = setup();
+    const repo = makeRepo();
+    const t = await service.create({ key: "MULTI-8", repoPath: repo, workMode: "worktree" });
+    const wt = only(t).worktreePath!;
+    service.removeRepo(only(t).id, { terminalsOpen: false });
+    const again = await service.addRepo({ ticketKey: "MULTI-8", repoPath: repo, workMode: "worktree" });
+    expect(again.worktreePath).toBe(wt);
+    expect(await currentBranch(wt)).toBe("feature/MULTI-8");
+
+    service.removeRepo(again.id, { terminalsOpen: false });
+    const branchMode = await service.addRepo({ ticketKey: "MULTI-8", repoPath: repo, workMode: "branch" });
+    await service.switchBranch(branchMode);
+    expect(await currentBranch(repo)).toBe("feature/MULTI-8");
+    expect(tickets.get("MULTI-8")!.repos).toHaveLength(1);
+  });
+
+  it("does not add repos to an archived ticket", async () => {
+    const { service, tickets } = setup();
+    await service.create({ key: "MULTI-9" });
+    tickets.archive("MULTI-9", 2);
+    expect(await code(service.addRepo({ ticketKey: "MULTI-9", repoPath: makeRepo(), workMode: "branch" }))).toBe("archived");
   });
 
   it("locks the whole ticket while one of its repos changes", async () => {

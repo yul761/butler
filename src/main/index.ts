@@ -38,8 +38,10 @@ import { HandoffRunner } from "./handoff/runner";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { writeTicketMcpConfig } from "./memory/mcp-config";
+import { memoryServers, sessionsServer, writeTicketMcpConfig } from "./memory/mcp-config";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
+import { controlHandler } from "./control/control-handler";
+import { ControlInbox } from "./control/control-inbox";
 import { HookInbox } from "./hooks/inbox";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, resolvePaths } from "./paths";
@@ -113,6 +115,11 @@ function bundledHookPath(): string {
 /** 打包好的 StateCore MCP（任务 7）：开发时在 build/ 下（pnpm dev / build 会先生成），安装包里在 resources 下。 */
 function bundledMemoryMcpPath(): string {
   return app.isPackaged ? join(process.resourcesPath, "memory-mcp", "statecore-mcp.cjs") : join(devBuildDir(), "memory-mcp", "statecore-mcp.cjs");
+}
+
+/** 总控 session 的 butler-sessions MCP（和记忆 MCP 一起打包，放在同一个目录）。 */
+function bundledSessionsMcpPath(): string {
+  return app.isPackaged ? join(process.resourcesPath, "memory-mcp", "butler-sessions-mcp.cjs") : join(devBuildDir(), "memory-mcp", "butler-sessions-mcp.cjs");
 }
 
 /** dev 模式下的渲染器地址；打包后永远不用环境变量。 */
@@ -296,15 +303,32 @@ async function bootstrap(): Promise<void> {
   }, Date.now, logger);
   const memoryMcpScript = bundledMemoryMcpPath();
   let memoryMcpMissingLogged = false;
-  /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。 */
-  const memoryMcpConfig = (ticketKey: string): string | null => {
-    if (!memoryOn(settings)) return null;
-    if (!existsSync(memoryMcpScript)) {
-      if (!memoryMcpMissingLogged) logger(`memory MCP bundle missing at ${memoryMcpScript}; sessions start without memory (run pnpm build:memory-mcp)`);
-      memoryMcpMissingLogged = true;
-      return null;
+  let sessionsMcpMissingLogged = false;
+  /**
+   * 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）：记忆开着时挂记忆 server；
+   * 总控 session 另外挂 butler-sessions（设计文档 2026-10-23 第二步），和记忆开关无关。什么都不挂时返回 null。
+   */
+  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean }): string | null => {
+    const launcher = (script: string) => ({ command: process.execPath, script });
+    let servers = {};
+    if (memoryOn(settings)) {
+      if (existsSync(memoryMcpScript)) servers = memoryServers({ launcher: launcher(memoryMcpScript), statecoreDir: paths.statecore, ticketKey });
+      else if (!memoryMcpMissingLogged) {
+        logger(`memory MCP bundle missing at ${memoryMcpScript}; sessions start without memory (run pnpm build:memory-mcp)`);
+        memoryMcpMissingLogged = true;
+      }
     }
-    return writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, launcher: { command: process.execPath, script: memoryMcpScript }, statecoreDir: paths.statecore });
+    if (opts.coordinator) {
+      const script = bundledSessionsMcpPath();
+      if (existsSync(script)) {
+        servers = { ...servers, ...sessionsServer({ launcher: launcher(script), ticketKey, requestsDir: paths.controlRequests, resultsDir: paths.controlResults }) };
+      } else if (!sessionsMcpMissingLogged) {
+        logger(`sessions MCP bundle missing at ${script}; the coordinator cannot start sessions (run pnpm build:memory-mcp)`);
+        sessionsMcpMissingLogged = true;
+      }
+    }
+    if (Object.keys(servers).length === 0) return null;
+    return writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, suffix: opts.coordinator ? "-coordinator" : "" });
   };
   const sessionService = new SessionService({
     tickets, sessions, settings, ticketService, pty,
@@ -510,7 +534,10 @@ async function bootstrap(): Promise<void> {
     badDir: paths.inboxBad,
     log: (m) => logger(m),
     handle: (env) => {
-      const effect = applyHookEnvelope(env, { sessions, tickets, transcriptState: (id) => transcriptState(paths.claudeProjects, id) });
+      const effect = applyHookEnvelope(env, {
+        sessions, tickets, transcriptState: (id) => transcriptState(paths.claudeProjects, id),
+        placement: (key, cwd) => ticketService.placement(key, cwd),
+      });
       // Stop 之后看这一轮有没有 /handoff 的输出（异步；失败只记日志，不影响 hook 处理）。
       const stop = stopFromEnvelope(env);
       if (stop) {
@@ -571,9 +598,22 @@ async function bootstrap(): Promise<void> {
     aborted: () => headlessAbort.signal.aborted,
   });
 
+  // 总控 session 开子 session 的请求（设计文档 2026-10-23 第二步）。
+  const controlInbox = new ControlInbox({
+    requestsDir: paths.controlRequests,
+    resultsDir: paths.controlResults,
+    handle: controlHandler({
+      tickets, sessions, ticketService, sessionService, notify,
+      submit: (termId, task) => pty.submit(termId, task),
+      log: logger,
+    }),
+    log: logger,
+  });
+
   win = createWindow();
   tray = createTray();
   inbox.start();
+  controlInbox.start();
   void runDiscovery();
   // 启动时补齐记忆：老数据、上次退出时没写完的。
   void memory.syncAll();
@@ -593,6 +633,7 @@ async function bootstrap(): Promise<void> {
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     memory.stop();
     inbox.stop();
+    controlInbox.stop();
     pty.killAll();
     tray?.destroy();
     closing = true;

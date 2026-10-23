@@ -8,6 +8,7 @@ import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { trackerTools } from "../settings/settings-values";
+import type { HeadlessDirs } from "../tickets/ticket-service";
 import { runPool } from "../util/pool";
 import type { IngestInput, IngestResult } from "./ingest";
 import { buildPrompt, retryPrompt, type PromptContext } from "./prompt";
@@ -29,7 +30,7 @@ export interface HandoffRunnerDeps {
   settings: SettingsRepo;
   ingest: (input: IngestInput) => IngestResult;
   /** 不 fork session 时后台 claude 在哪里跑（见 TicketService.headlessDirs）。 */
-  dirs: (t: Ticket) => { cwd: string; addDirs: string[] };
+  dirs: (t: Ticket) => HeadlessDirs;
   run: HeadlessRun;
   /** 首次 health 探测完成后 resolve。 */
   ready: () => Promise<void>;
@@ -147,9 +148,11 @@ export class HandoffRunner {
     const dirs = this.d.dirs(t);
     const cwd = session?.cwd || dirs.cwd;
     const prompt = buildPrompt(this.d.settings.get("handoffPrompt"), this.context(t));
+    // 总控 session 在工作区目录里：项目级 MCP 按第一个仓库找，每个仓库都加进来。
+    const mcpCwd = session?.coordinator ? dirs.cwd : cwd;
+    const addDirs = dirs.repoDirs.filter((d) => d !== cwd);
     const args = headlessArgs({
-      schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd),
-      addDirs: dirs.addDirs.filter((d) => d !== cwd),
+      schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(mcpCwd), addDirs,
     });
 
     let attempt = await this.exec(key, args, prompt, cwd, session?.id);

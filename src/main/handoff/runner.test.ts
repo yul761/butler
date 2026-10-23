@@ -45,7 +45,10 @@ function setup(opts: { run?: HeadlessRun; signal?: AbortSignal; projectMcp?: (cw
   const ingest = (input: IngestInput) => ingestHandoff({ db, tickets, handoffs, followups, now: () => NOW, newFollowupId: () => `f${++fid}` }, input);
   const runner = new HandoffRunner({
     tickets, sessions, handoffs, followups, settings, ingest,
-    dirs: (t) => ({ cwd: t.repos[0]?.worktreePath ?? t.repos[0]?.repoPath ?? "/ws", addDirs: opts.addDirs ?? [] }),
+    dirs: (t) => {
+      const first = t.repos[0]?.worktreePath ?? t.repos[0]?.repoPath ?? "/ws";
+      return { cwd: first, addDirs: opts.addDirs ?? [], repoDirs: [first, ...(opts.addDirs ?? [])] };
+    },
     run,
     ready: async () => undefined,
     claude: () => ({ path: "/bin/claude", pathValue: "/login/bin" }),
@@ -238,7 +241,7 @@ describe("HandoffRunner", () => {
   });
 
   it("lets the refresh and the handoff see every repo of a multi-repo ticket (--add-dir), but not the session's own directory twice", async () => {
-    const { runner, addTicket, calls, setRespond } = setup({ addDirs: ["/w/A-1", "/w/api"] });
+    const { runner, addTicket, calls, setRespond } = setup({ addDirs: ["/w/api"] });
     addTicket("A-1");
     setRespond(async () => ok(valid()));
     await runner.runManual("A-1");

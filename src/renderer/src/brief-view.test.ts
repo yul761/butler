@@ -14,8 +14,9 @@ const session = (id: string): SessionView => ({
   id, ticketKey: "A-1", cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: 1,
   waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 1, termId: null, repoId: null, coordinator: false, spawnedBy: null,
 });
-const ticket = (sessions: SessionView[]): TicketView => ({
-  key: "A-1", title: null, repos: [], status: "active",
+const REPO = { id: 1, ticketKey: "A-1", repoPath: "/r", workMode: "branch" as const, worktreePath: null, branch: "b", createdAt: 1 };
+const ticket = (sessions: SessionView[], repos = [REPO]): TicketView => ({
+  key: "A-1", title: null, repos, status: "active",
   statusManual: null, createdAt: 1, archivedAt: null, effectiveStatus: "active", sessions, waiting: false,
 });
 
@@ -52,6 +53,9 @@ describe("brief view helpers", () => {
     const dismissed = { ...session("s3"), dismissed: true };
     expect(openRequest(item("next_step"), ticket([dismissed, session("s2")]))?.sessionId).toBe("s2");
     expect(openRequest(item("next_step"), ticket([dismissed]))).toEqual({ ticketKey: "A-1", prefill: "继续：改 staging 配置（来自 A-1）" });
+    // 没有 session、仓库不是正好一个：开总控，预填的提示不会因为要先选仓库而丢掉。
+    expect(openRequest(item("next_step"), ticket([], []))).toEqual({ ticketKey: "A-1", coordinator: true, prefill: "继续：改 staging 配置（来自 A-1）" });
+    expect(openRequest(item("next_step"), ticket([], [REPO, { ...REPO, id: 2, repoPath: "/api" }]))).toMatchObject({ coordinator: true });
   });
 });
 

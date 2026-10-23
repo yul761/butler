@@ -111,6 +111,7 @@ function interactive() {
   const rl = readline.createInterface({ input: process.stdin });
   rl.on("line", (raw) => {
     // Butler 用 bracketed paste 写入多行文本（总控开子 session 的任务）：去掉粘贴标记。
+    // eslint-disable-next-line no-control-regex
     const line = raw.replace(/\x1b\[20[01]~/g, "").trim();
     if (!line) {
       out("> ");

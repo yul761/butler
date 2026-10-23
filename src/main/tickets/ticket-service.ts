@@ -31,6 +31,13 @@ function worktreePathFor(root: string, key: string): string {
   return join(dirname(root), `${basename(root)}-worktrees`, key);
 }
 
+/** 后台 claude 的目录：cwd 加上 --add-dir；repoDirs 是这个 ticket 现有的全部仓库工作目录。 */
+export interface HeadlessDirs {
+  cwd: string;
+  addDirs: string[];
+  repoDirs: string[];
+}
+
 export type BranchCheck = { ok: true } | { ok: false; current: string; expected: string; dirty: boolean };
 
 export interface TicketServiceDeps {
@@ -112,6 +119,7 @@ export class TicketService {
   /** 给 ticket 加一个仓库：和新建 ticket 时一样校验、建 worktree / 分支。 */
   async addRepo(input: AddRepoInput): Promise<TicketRepo> {
     const t = this.ticket(input.ticketKey);
+    if (t.archivedAt !== null) throw new TicketError("archived", `ticket ${t.key} 已经归档，先恢复再添加仓库`);
     return this.exclusive(t.key, async () => {
       const prepared = await this.prepareRepo(t.key, t.repos, input);
       const id = this.d.tickets.addRepo({ ...prepared, ticketKey: t.key, createdAt: this.d.now() });
@@ -149,12 +157,18 @@ export class TicketService {
 
     let worktreePath: string | null = null;
     try {
+      const exists = await branchExists(root, branch);
+      const leftover = worktreePathFor(root, key);
       if (input.workMode === "worktree") {
-        worktreePath = worktreePathFor(root, key);
-        if (existsSync(worktreePath)) throw new TicketError("worktree_exists", `目录已存在：${worktreePath}`);
-        await addWorktree(root, worktreePath, branch, !(await branchExists(root, branch)));
-      } else if (!(await branchExists(root, branch))) {
-        await createBranch(root, branch);
+        // 以前移除（或改成分支模式）时留下的 worktree：干净的就接着用。
+        worktreePath = await this.attachWorktree(root, key, branch, exists);
+      } else {
+        // 留下的 worktree 还占着这个分支：先让它离开，主仓库之后才能检出（没有改动、没有游离提交时）。
+        if (exists && existsSync(leftover) && (await isWorktreeOf(root, leftover)) && (await currentBranch(leftover)) === branch) {
+          if (await isDirty(leftover)) throw new TicketError("dirty", `worktree 里有未提交的改动：${leftover}`);
+          await detachHead(leftover);
+        }
+        if (!exists) await createBranch(root, branch);
       }
     } catch (e) {
       throw asTicketError(e);
@@ -250,24 +264,45 @@ export class TicketService {
 
   /** 总控 session 的工作区目录（Butler 建的空目录）：~/.butler/workspaces/<ticket>。 */
   workspaceDir(ticketKey: string): string {
-    const dir = join(this.d.workspacesDir, ticketFileStem(ticketKey));
+    const dir = this.workspacePath(ticketKey);
     mkdirSync(dir, { recursive: true });
     return dir;
   }
 
-  /**
-   * 后台 claude（刷新、MCP 探测）在哪里跑：单仓库就在它的工作目录里；多个仓库（或没有仓库）在工作区目录里，
-   * 每个仓库一个 --add-dir。
-   */
-  headlessDirs(t: Ticket): { cwd: string; addDirs: string[] } {
-    const dirs = t.repos.map((r) => this.workDir(r)).filter((d) => existsSync(d));
-    if (dirs.length === 1) return { cwd: dirs[0], addDirs: [] };
-    return { cwd: this.workspaceDir(t.key), addDirs: dirs };
+  /** 同上，但不建目录。 */
+  workspacePath(ticketKey: string): string {
+    return join(this.d.workspacesDir, ticketFileStem(ticketKey));
   }
 
-  /** 找出 cwd 落在哪个仓库的工作目录里（认领、hook 发现的 session 用）。 */
+  /** hook 发现的 session 在这个 ticket 的哪个仓库里、是不是总控（在工作区目录里）。 */
+  placement(ticketKey: string, cwd: string): { repoId: number | null; coordinator: boolean } {
+    if (samePath(cwd, this.workspacePath(ticketKey))) return { repoId: null, coordinator: true };
+    const t = this.d.tickets.get(ticketKey);
+    return { repoId: (t && this.repoForCwd(t, cwd)?.id) ?? null, coordinator: false };
+  }
+
+  /**
+   * 后台 claude（刷新、handoff）在哪里跑：第一个仓库的工作目录（项目级 MCP，如 Jira / GitHub，在那里找得到），
+   * 其余仓库各一个 --add-dir。没有仓库时在工作区目录里。
+   */
+  headlessDirs(t: Ticket): HeadlessDirs {
+    const repoDirs = t.repos.map((r) => this.workDir(r)).filter((d) => existsSync(d));
+    if (repoDirs.length === 0) return { cwd: this.workspaceDir(t.key), addDirs: [], repoDirs };
+    return { cwd: repoDirs[0], addDirs: repoDirs.slice(1), repoDirs };
+  }
+
+  /**
+   * 找出 cwd 属于哪个仓库（认领、hook 发现的 session 用）：在仓库的工作目录或仓库本身里面都算；
+   * 有嵌套时取最深的那个。
+   */
   repoForCwd(t: Ticket, cwd: string): TicketRepo | null {
-    return t.repos.find((r) => isInside(cwd, this.workDir(r))) ?? null;
+    let best: { repo: TicketRepo; depth: number } | null = null;
+    for (const r of t.repos) {
+      for (const dir of [this.workDir(r), r.repoPath]) {
+        if (isInside(cwd, dir) && (!best || dir.length > best.depth)) best = { repo: r, depth: dir.length };
+      }
+    }
+    return best?.repo ?? null;
   }
 
   async checkBranch(r: TicketRepo): Promise<BranchCheck> {

@@ -166,3 +166,16 @@ describe("applyHookEnvelope", () => {
     expect(sessions.get("h1")).toBeNull();
   });
 });
+
+describe("hook sessions on multi-repo tickets", () => {
+  it("records which repo (or the coordinator) a hook-created session belongs to", () => {
+    const { sessions, tickets } = setup();
+    const repoId = tickets.get("PROJ-1")!.repos[0].id;
+    const placement = (key: string, cwd: string) => (cwd === "/ws/PROJ-1" ? { repoId: null, coordinator: true } : { repoId: cwd.startsWith("/r") ? repoId : null, coordinator: false });
+    const deps = { sessions, tickets, placement };
+    applyHookEnvelope(env("SessionStart", "a", { ticket: "PROJ-1", butlerSession: "a" }, { cwd: "/r/src" }), deps);
+    applyHookEnvelope(env("SessionStart", "b", { ticket: "PROJ-1", butlerSession: "b" }, { cwd: "/ws/PROJ-1" }), deps);
+    expect(sessions.get("a")).toMatchObject({ repoId, coordinator: false });
+    expect(sessions.get("b")).toMatchObject({ repoId: null, coordinator: true });
+  });
+});

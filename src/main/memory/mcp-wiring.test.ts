@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { projectMcpConfigs } from "../claude/project-mcp";
 import { tempDir } from "../test-utils";
-import { TICKET_MCP_SUBDIR, writeTicketMcpConfig } from "./mcp-config";
+import { memoryServers, TICKET_MCP_SUBDIR, writeTicketMcpConfig } from "./mcp-config";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const indexSource = readFileSync(join(root, "src", "main", "index.ts"), "utf8");
@@ -63,7 +63,7 @@ describe("the ticket memory MCP only reaches interactive sessions (P4-R6)", () =
     );
     const launcher = { command: "/x/Butler", script: "/x/statecore-mcp.cjs" };
     const ticketFiles = ["PROJ-1", "PROJECT-123456789012", "project-123456789012", "LOCAL-123456789012"].map((ticketKey) =>
-      writeTicketMcpConfig({ mcpDir, ticketKey, launcher, statecoreDir: "/sc" }),
+      writeTicketMcpConfig({ mcpDir, ticketKey, servers: memoryServers({ launcher, statecoreDir: "/sc", ticketKey }) }),
     );
 
     // HandoffRunner、MCP 探测和定时刷新的 --mcp-config 全部来自 projectMcpConfigs（index.ts 的 projectMcp）。

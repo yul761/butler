@@ -112,6 +112,19 @@ export class PtyManager {
     return { data: "", exitCode: null };
   }
 
+  /**
+   * 等输入框就绪后把多行文本当作一次粘贴（bracketed paste）写进去，再回车提交。总控开子 session 时用：
+   * 粘贴标记让多行任务作为一条消息提交，而不是逐行回车。text 里不能有 ESC（调用方先 sanitizeTask）。
+   */
+  async submit(termId: string, text: string, idleMs = 800, timeoutMs = 30_000, enterDelayMs = 150): Promise<boolean> {
+    if (!(await this.prefill(termId, `\x1b[200~${text}\x1b[201~`, idleMs, timeoutMs))) return false;
+    await new Promise((r) => setTimeout(r, enterDelayMs));
+    const t = this.terms.get(termId);
+    if (!t || t.exited) return false;
+    this.guard(termId, "submit enter", () => t.proc.write("\r"));
+    return true;
+  }
+
   /** 等 claude 的界面输出停下来（输入框就绪）后把文本写进去，不回车。 */
   async prefill(termId: string, text: string, idleMs = 800, timeoutMs = 20_000): Promise<boolean> {
     const start = this.now();

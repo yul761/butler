@@ -27,6 +27,7 @@ extraResources:
     to: memory-mcp
     filter:
       - statecore-mcp.cjs
+      - butler-sessions-mcp.cjs
 # spawn-helper 的执行位、macOS 的 ad-hoc 签名、resources 的完整性检查。
 afterPack: scripts/after-pack.cjs
 publish: null

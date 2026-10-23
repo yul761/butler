@@ -110,6 +110,30 @@ describe("PtyManager", () => {
     expect(await p2).toBe(false);
   });
 
+  it("submit pastes the text as one bracketed paste once the prompt is ready, then presses Enter", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    const p = mgr.submit("t1", "写接口\n加测试", 800, 20_000, 150);
+    spawned[0].pty.emit("ready");
+    await vi.advanceTimersByTimeAsync(900);
+    expect(spawned[0].pty.written).toEqual(["\x1b[200~写接口\n加测试\x1b[201~"]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await p).toBe(true);
+    expect(spawned[0].pty.written).toEqual(["\x1b[200~写接口\n加测试\x1b[201~", "\r"]);
+  });
+
+  it("submit does not press Enter into a terminal that exited after the paste", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    const p = mgr.submit("t1", "x", 800, 20_000, 150);
+    spawned[0].pty.emit("ready");
+    await vi.advanceTimersByTimeAsync(900);
+    spawned[0].pty.emitExit(0);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await p).toBe(false);
+    expect(spawned[0].pty.written).toEqual(["\x1b[200~x\x1b[201~"]);
+  });
+
   it("killAll kills every terminal", () => {
     const { mgr, spawned } = setup();
     mgr.open("a", spec, opts);

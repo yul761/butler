@@ -8,6 +8,8 @@ import { ticketFileStem } from "../util/ticket-file";
 /** 挂给 claude 的 server 名：不和用户自己装的 statecore 重名（设计文档 8.4）。 */
 export const MEMORY_SERVER = "butler-memory";
 export const WORKSPACE_SERVER = "butler-workspace";
+/** 只挂给总控 session：开子 session、列出仓库和 session（设计文档 2026-10-23 第二步）。 */
+export const SESSIONS_SERVER = "butler-sessions";
 
 /** 怎么启动打包好的 StateCore MCP：command 是 Butler 自己的 Electron（process.execPath），script 是 bundle。 */
 export interface MemoryMcpLauncher {
@@ -33,6 +35,18 @@ export function memoryServers(o: { launcher: MemoryMcpLauncher; statecoreDir: st
   return { [MEMORY_SERVER]: server(ticketScope(o.ticketKey)), [WORKSPACE_SERVER]: server(WORKSPACE_SCOPE) };
 }
 
+/** 总控的 butler-sessions server：同样用 Butler 自己的 Electron 运行；ticket 和控制目录写死在配置里。 */
+export function sessionsServer(o: { launcher: MemoryMcpLauncher; ticketKey: string; requestsDir: string; resultsDir: string }): Record<string, McpServerSpec> {
+  return {
+    [SESSIONS_SERVER]: {
+      type: "stdio",
+      command: o.launcher.command,
+      args: [o.launcher.script],
+      env: { ELECTRON_RUN_AS_NODE: "1", BUTLER_TICKET: o.ticketKey, BUTLER_CONTROL_REQUESTS: o.requestsDir, BUTLER_CONTROL_RESULTS: o.resultsDir },
+    },
+  };
+}
+
 /** ticket 的记忆配置放在 mcp/ 下自己的子目录里：和计划 3 的 project-* / local-* 文件（headless 用）永远分开（P4-R6）。 */
 export const TICKET_MCP_SUBDIR = "tickets";
 
@@ -44,13 +58,16 @@ export function ticketMcpFile(mcpDir: string, ticketKey: string, suffix = ""): s
   return join(mcpDir, TICKET_MCP_SUBDIR, `${ticketFileStem(ticketKey)}${suffix}.json`);
 }
 
-/** 写（覆盖）这个 ticket 的 --mcp-config 文件：随机名的临时文件（0600、wx）再 rename，返回文件路径。 */
-export function writeTicketMcpConfig(o: { mcpDir: string; ticketKey: string; launcher: MemoryMcpLauncher; statecoreDir: string }): string {
-  const file = ticketMcpFile(o.mcpDir, o.ticketKey);
+/**
+ * 写（覆盖）这个 ticket 的 --mcp-config 文件：随机名的临时文件（0600、wx）再 rename，返回文件路径。
+ * 总控的配置（多一个 butler-sessions）用 suffix 分开存，普通 session 的配置里永远没有它。
+ */
+export function writeTicketMcpConfig(o: { mcpDir: string; ticketKey: string; servers: Record<string, McpServerSpec>; suffix?: string }): string {
+  const file = ticketMcpFile(o.mcpDir, o.ticketKey, o.suffix);
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   try {
-    writeFileSync(tmp, JSON.stringify({ mcpServers: memoryServers(o) }, null, 2), { mode: 0o600, flag: "wx" });
+    writeFileSync(tmp, JSON.stringify({ mcpServers: o.servers }, null, 2), { mode: 0o600, flag: "wx" });
     renameWithRetrySync(tmp, file);
   } catch (e) {
     try {

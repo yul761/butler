@@ -108,6 +108,9 @@ export class SessionService {
     const placed = await this.place(ticket, head, req);
     if ("ok" in placed) return placed;
     const { repo, coordinator, cwd } = placed;
+    // place 里等了 git：这期间仓库可能被移除、ticket 可能开始修改。
+    if (this.d.ticketService.updating(ticket.key)) return { ok: false, reason: "ticket_busy" };
+    if (!head && repo && !this.d.tickets.getRepo(repo.id)) return { ok: false, reason: "no_repo" };
 
     this.syncMemory(ticket.key);
     // 启动方式只解析一次：记忆挂载的检查和真正启动用同一个结果（P5-PF10）。
@@ -281,6 +284,11 @@ export class SessionService {
       if (h?.ticketKey !== ticketKey) return false;
       return repoId === undefined || h.coordinator || h.repoId === null || h.repoId === repoId;
     });
+  }
+
+  /** 这个 session（或者它 /clear 之前的那个）有没有终端在跑。 */
+  isRunning(sessionId: string): boolean {
+    return this.openHeads().has(sessionId);
   }
 
   /** 这个 ticket 正在运行的终端数（总控开子 session 的上限用）。 */
