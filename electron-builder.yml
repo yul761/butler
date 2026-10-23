@@ -4,7 +4,8 @@ productName: Butler
 copyright: Copyright © 2026 Yuchen Lin
 directories:
   output: dist
-  # 图标等打包资源的目录（没有就用 Electron 默认图标）。不能用 build/：那里是 hook 和记忆 MCP 的构建产物。
+  # 图标等打包资源的目录。不能用 build/：那里是 hook 和记忆 MCP 的构建产物。
+  # 图标由 scripts/render-icons.mjs 从 build-resources/icon-src/ 的 SVG 生成（pnpm icons）。
   buildResources: build-resources
 files:
   - out/**/*
@@ -39,6 +40,8 @@ mac:
     - target: zip
       arch: [arm64]
   category: public.app-category.developer-tools
+  # macOS 版留出 Apple 网格要求的边距和阴影；electron-builder 转成 .icns。
+  icon: build-resources/icon.png
   # 安装包文件名固定、不带空格（GitHub 会把 release 资源名里的空格换成点，README 里写的名字就对不上了）。
   # mac.artifactName 用于 zip，dmg.artifactName 用于 dmg；值与 electron-builder 的默认相同。
   artifactName: "Butler-${version}-${arch}-mac.${ext}"
@@ -49,6 +52,8 @@ mac:
 dmg:
   artifactName: "Butler-${version}-${arch}.${ext}"
 win:
+  # 铺满画布的版本；electron-builder 转成 .ico。
+  icon: build-resources/icon-win.png
   target:
     - target: nsis
       arch: [x64]

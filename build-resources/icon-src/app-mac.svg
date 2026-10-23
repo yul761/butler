@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-12.136 -12.136 124.272 124.272">
+  <!-- Butler 应用图标（方向 E1：卡片叠）。macOS 版：按 Apple 的网格，图标主体占 1024 画布里的 824，四周留白放阴影。 -->
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1.4" stdDeviation="1.6" flood-color="#0B1220" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="100" height="100" rx="22.5" fill="#EEF2F6" filter="url(#shadow)"/>
+  <rect x="0.4" y="0.4" width="99.2" height="99.2" rx="22.1" fill="none" stroke="#D3DAE3" stroke-width="0.8"/>
+  <rect x="36" y="17" width="42" height="50" rx="6" fill="#FFFFFF" stroke="#C9D2DE"/>
+  <rect x="29" y="24" width="42" height="50" rx="6" fill="#FFFFFF" stroke="#C3CCD9"/>
+  <rect x="22" y="31" width="42" height="50" rx="6" fill="#FFFFFF" stroke="#B9C3D1"/>
+  <rect x="28" y="38" width="17" height="7" rx="3.5" fill="#2F6FEB"/>
+  <rect x="28" y="51" width="28" height="3.5" rx="1.75" fill="#C5CCD6"/>
+  <rect x="28" y="58" width="20" height="3.5" rx="1.75" fill="#C5CCD6"/>
+  <circle cx="56" cy="73" r="3.5" fill="#2E9E6B"/>
+</svg>

@@ -19,6 +19,7 @@
     "lint": "eslint .",
     "build:hook": "node scripts/build-hook.mjs",
     "build:memory-mcp": "node scripts/build-memory-mcp.mjs",
+    "icons": "electron scripts/render-icons.mjs",
     "dist": "electron-builder --publish never",
     "dist:dir": "electron-builder --dir --publish never",
     "pree2e": "pnpm build && pnpm build:hook",
