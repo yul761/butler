@@ -58,9 +58,11 @@ export type HeadlessRun = (req: HeadlessRequest) => Promise<HeadlessOutcome>;
  * `--setting-sources user`：不继承仓库里的 allow 规则。
  * `--allowedTools` 放最后：它是可变参数，会吃掉后面的所有值。
  */
-export function headlessArgs(o: { schema: string; resumeSessionId?: string; allowedTools: string[]; mcpConfigs?: string[] }): string[] {
+export function headlessArgs(o: { schema: string; resumeSessionId?: string; allowedTools: string[]; mcpConfigs?: string[]; addDirs?: string[] }): string[] {
   const args = ["-p", "--output-format", "json", "--json-schema", o.schema, "--no-session-persistence", "--permission-mode", "dontAsk", ...SETTING_SOURCES_ARGS];
   if (o.resumeSessionId) args.push("--resume", o.resumeSessionId, "--fork-session");
+  // 多仓库 ticket：每个仓库一个 --add-dir（只读工具也要能看到它们）。
+  for (const dir of o.addDirs ?? []) args.push("--add-dir", dir);
   // --mcp-config 也是可变参数：放在 --disallowedTools 之前，由下一个 flag 截断。
   if (o.mcpConfigs?.length) args.push("--mcp-config", ...o.mcpConfigs);
   args.push("--disallowedTools", ...DENIED_TOOLS, "--allowedTools", ...o.allowedTools);

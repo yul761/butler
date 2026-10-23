@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { HookEnvelope } from "../../shared/hook-envelope";
 import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
-import { memDb } from "../test-utils";
+import { insertTicket, memDb } from "../test-utils";
 import { applyHookEnvelope } from "./hook-events";
 
 function setup() {
   const db = memDb();
   const tickets = new TicketsRepo(db);
-  tickets.insert({ key: "PROJ-1", title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
+  insertTicket(tickets, { key: "PROJ-1", title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
   const sessions = new SessionsRepo(db);
   return { sessions, tickets, deps: { sessions, tickets } };
 }

@@ -2,7 +2,9 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { WorkMode } from "../shared/types";
 import { openDatabase, type Db } from "./db/database";
+import type { NewTicket, TicketsRepo } from "./db/tickets-repo";
 import type { PtyFactory, PtyProcess } from "./sessions/pty-manager";
 
 /** 有界轮询：等文件出现并返回内容；超时抛错。 */
@@ -146,4 +148,13 @@ process.stdin.on("end", () => {
   const calls = (): FakeCall[] =>
     existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as FakeCall) : [];
   return { path, calls };
+}
+
+/** 测试里按单仓库时代的写法描述 ticket：一个 ticket 带一个仓库。 */
+export type LegacyTicket = NewTicket & { repoPath: string; workMode: WorkMode; worktreePath: string | null; branch: string };
+
+/** 建 ticket，仓库字段拆成 ticket_repos 的一行。 */
+export function insertTicket(tickets: TicketsRepo, t: LegacyTicket): void {
+  const { repoPath, workMode, worktreePath, branch, ...rest } = t;
+  tickets.insert(rest, { ticketKey: t.key, repoPath, workMode, worktreePath, branch, createdAt: t.createdAt });
 }

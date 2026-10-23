@@ -7,6 +7,9 @@ export const IPC = {
   ticketsUpdate: "tickets:update",
   ticketsArchived: "tickets:archived",
   ticketsUnarchive: "tickets:unarchive",
+  ticketsAddRepo: "tickets:addRepo",
+  ticketsUpdateRepo: "tickets:updateRepo",
+  ticketsRemoveRepo: "tickets:removeRepo",
   sessionsOpen: "sessions:open",
   sessionsUnclaimed: "sessions:unclaimed",
   sessionsClaim: "sessions:claim",
@@ -53,7 +56,7 @@ export const IPC = {
 /** 渲染进程 → 主进程，有返回值（ipcRenderer.invoke）。 */
 export const INVOKE_CHANNELS: readonly string[] = [
   IPC.ticketsList, IPC.ticketsCreate, IPC.ticketsSetStatus, IPC.ticketsArchive, IPC.ticketsSwitchBranch,
-  IPC.ticketsUpdate, IPC.ticketsArchived, IPC.ticketsUnarchive,
+  IPC.ticketsUpdate, IPC.ticketsArchived, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.briefsLatest, IPC.briefsRegenerate, IPC.briefsMark,

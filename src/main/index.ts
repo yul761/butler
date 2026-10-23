@@ -266,7 +266,7 @@ async function bootstrap(): Promise<void> {
     onSynced: (key) => safeSend(IPC.memoryChanged, key),
     log: logger,
   });
-  const ticketService = new TicketService({ tickets, settings, now: Date.now });
+  const ticketService = new TicketService({ tickets, settings, now: Date.now, workspacesDir: paths.workspaces });
   const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath() });
   const notify = () => safeSend(IPC.stateChanged);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
@@ -348,7 +348,7 @@ async function bootstrap(): Promise<void> {
     projectMcpConfigs(cwd, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger });
   const runner = new HandoffRunner({
     tickets, sessions, handoffs, followups, settings, ingest,
-    workDir: (t) => ticketService.workDir(t),
+    dirs: (t) => ticketService.headlessDirs(t),
     run: runHeadless,
     ready: () => healthReady,
     claude: () => health.claude(),
@@ -451,7 +451,7 @@ async function bootstrap(): Promise<void> {
     const { path, pathValue } = health.claude();
     if (!path) throw new Error("找不到 claude 命令，请先在“环境检查”里确认 claude 路径");
     // MCP 可以按项目配置：有 ticket 时在第一个 ticket 的目录里探测。
-    const first = tickets.list()[0];
+    const first = tickets.list().find((t) => t.repos.length > 0)?.repos[0];
     const cwd = first ? ticketService.workDir(first) : homedir();
     return probeMcpTools({
       claudePath: path,

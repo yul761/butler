@@ -139,9 +139,11 @@ export class BriefService {
       if (last !== branch && identifierOk(last)) branches.add(last);
     };
     for (const t of all) {
-      addRepo(basename(t.repoPath));
-      if (t.worktreePath) addRepo(basename(t.worktreePath));
-      addBranch(t.branch);
+      for (const r of t.repos) {
+        addRepo(basename(r.repoPath));
+        if (r.worktreePath) addRepo(basename(r.worktreePath));
+        addBranch(r.branch);
+      }
       const title = t.title?.trim();
       // 标题和其他标识符一样过停用词表：叫 test、api 的标题会把普通词都换掉。
       if (title && identifierOk(title)) terms.add(title);

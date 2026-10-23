@@ -9,7 +9,7 @@ import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { ingestHandoff, type IngestInput } from "../handoff/ingest";
 import { emptyHandoff } from "../handoff/schema";
-import { memDb } from "../test-utils";
+import { insertTicket, memDb } from "../test-utils";
 import { BriefService, prPathParts } from "./brief-service";
 
 const at = (d: number, h = 9, m = 0) => new Date(2026, 9, d, h, m).getTime();
@@ -30,7 +30,7 @@ function setup() {
   });
   /** ticket 加一个最近有活动的 session（免得被算成“无活动”）。 */
   const addTicket = (key: string, activity = at(20)) => {
-    tickets.insert({ key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: at(1), archivedAt: null });
+    insertTicket(tickets, { key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: at(1), archivedAt: null });
     sessions.insertIfAbsent({ id: `s-${key}`, ticketKey: key, cwd: "/w", origin: "butler", lastActivityAt: activity, createdAt: at(1) });
   };
   const handoff = (key: string, over: Partial<Handoff>) =>
@@ -167,7 +167,7 @@ describe("BriefService.narrativeSource", () => {
     const s = setup();
     s.addTicket("A-1");
     s.sessions.insertIfAbsent({ id: "s-other", ticketKey: "A-1", cwd: "/w", origin: "discovered", gitBranch: "hotfix/a1-crash", createdAt: at(1) });
-    s.tickets.insert({
+    insertTicket(s.tickets, {
       key: "OLD-9", title: null, repoPath: "/repos/legacy-app", workMode: "branch", worktreePath: null, branch: "feature/OLD-9",
       status: "done", statusManual: null, createdAt: at(1), archivedAt: at(2),
     });
@@ -195,7 +195,7 @@ describe("BriefService.narrativeSource", () => {
     const s = setup();
     s.addTicket("A-1");
     s.sessions.insertIfAbsent({ id: "s-wt", ticketKey: "A-1", cwd: "/work/a1-login-tree", origin: "discovered", gitBranch: "spike/only-in-session", createdAt: at(1) });
-    s.tickets.insert({
+    insertTicket(s.tickets, {
       key: "OLD-9", title: null, repoPath: "/repos/legacy-app", workMode: "worktree", worktreePath: "/trees/old9-checkout", branch: "feature/OLD-9",
       status: "done", statusManual: null, createdAt: at(1), archivedAt: at(2),
     });
@@ -217,7 +217,7 @@ describe("BriefService.narrativeSource ticket titles", () => {
   it("adds ticket titles as sensitive terms, but not generic or too-short ones", () => {
     const s = setup();
     const add = (key: string, title: string | null) =>
-      s.tickets.insert({ key, title, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: at(1), archivedAt: null });
+      insertTicket(s.tickets, { key, title, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: at(1), archivedAt: null });
     add("T-1", "Payments retry storm");
     add("T-2", "test");
     add("T-3", " API ");

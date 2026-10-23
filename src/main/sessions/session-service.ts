@@ -1,9 +1,12 @@
+import { existsSync } from "node:fs";
 import { sanitizePrefill } from "../../shared/text";
 import {
   effectiveStatus,
   type OpenSessionRequest,
   type OpenSessionResult,
   type Session,
+  type Ticket,
+  type TicketRepo,
   type TicketView,
   type UnclaimedSession,
 } from "../../shared/types";
@@ -35,12 +38,27 @@ export interface SessionServiceDeps {
   platform: NodeJS.Platform;
   baseEnv: NodeJS.ProcessEnv;
   /** 写好这个 ticket 的记忆 --mcp-config 文件并返回路径；记忆关闭或 bundle 不存在时返回 null（设计文档 8.4）。 */
-  mcpConfig?: (ticketKey: string) => string | null;
+  mcpConfig?: (ticketKey: string, opts: { coordinator: boolean }) => string | null;
+  /** 目录是否存在（测试注入；默认读真实磁盘）。 */
+  dirExists?: (dir: string) => boolean;
   /** 要打开这个 ticket 的 session 时调用：把它的记忆补同步一次（排进记忆的同步队列，不等它）。 */
   syncMemory?: (ticketKey: string) => void;
   /** 读 claude.cmd shim 用的文件系统（测试注入；默认读真实磁盘）。 */
   launchFs?: Pick<LaunchDeps, "read" | "exists">;
   log?: (msg: string, err?: unknown) => void;
+}
+
+type OpenFailure = Extract<OpenSessionResult, { ok: false }>;
+
+interface Placement {
+  repo: TicketRepo | null;
+  coordinator: boolean;
+  cwd: string;
+}
+
+/** 不是渲染进程能传的打开参数：总控开子 session 时用。 */
+export interface OpenExtra {
+  spawnedBy?: string;
 }
 
 /** 同一个目录：Windows 的路径不分大小写，也不分 / 和 \\。 */
@@ -66,7 +84,7 @@ export class SessionService {
     this.d.pty.prefill(termId, text, idleMs).catch((e: unknown) => this.d.log?.(`prefill ${termId} failed`, e));
   }
 
-  async open(req: OpenSessionRequest): Promise<OpenSessionResult> {
+  async open(req: OpenSessionRequest, extra: OpenExtra = {}): Promise<OpenSessionResult> {
     await this.d.ready();
     const prefill = req.prefill ? sanitizePrefill(req.prefill) : "";
     const ticket = this.d.tickets.get(req.ticketKey);
@@ -87,36 +105,30 @@ export class SessionService {
     const { path: claudePath, pathValue } = this.d.claude();
     if (!claudePath) return { ok: false, reason: "claude_missing" };
 
-    const workDir = this.d.ticketService.workDir(ticket);
-    if (!req.force) {
-      // 在别的目录里启动的旧 session（ticket 后来改过工作方式）恢复时仍在那个目录里跑：检查那里的分支，而不是 ticket 现在的目录。
-      if (head?.cwd && !samePath(head.cwd, workDir, this.d.platform)) {
-        const moved = await this.oldWorkdirCheck(head.cwd, ticket.branch);
-        if (moved) return moved;
-      } else {
-        const check = await this.d.ticketService.checkBranch(ticket);
-        if (!check.ok) return { ok: false, reason: "branch_mismatch", current: check.current, expected: check.expected, dirty: check.dirty };
-      }
-    }
+    const placed = await this.place(ticket, head, req);
+    if ("ok" in placed) return placed;
+    const { repo, coordinator, cwd } = placed;
+
     this.syncMemory(ticket.key);
     // 启动方式只解析一次：记忆挂载的检查和真正启动用同一个结果（P5-PF10）。
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
-    const mcpConfigPath = this.mcpConfigFor(ticket.key, claudePath, launch.viaCmd);
+    const mcpConfigPath = this.mcpConfigFor(ticket.key, coordinator, claudePath, launch.viaCmd);
+    const addDirs = coordinator ? this.addDirsFor(ticket, claudePath, launch.viaCmd) : [];
     let termId: string;
-    let cwd: string;
     let args: string[];
     let insertedRow = false;
     if (head) {
       // claude --resume 只能在 session 当初的项目目录里找到它；没发过消息的 session 没有记录，用同一个 id 重新开
       termId = head.id;
-      cwd = head.cwd || workDir;
-      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath });
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, addDirs });
     } else {
       termId = this.d.newId();
-      cwd = workDir;
-      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath });
+      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, addDirs });
       const now = this.d.now();
-      insertedRow = this.d.sessions.insertIfAbsent({ id: termId, ticketKey: ticket.key, cwd, origin: "butler", lastActivityAt: now, createdAt: now });
+      insertedRow = this.d.sessions.insertIfAbsent({
+        id: termId, ticketKey: ticket.key, cwd, origin: "butler", lastActivityAt: now, createdAt: now,
+        repoId: repo?.id ?? null, coordinator, spawnedBy: extra.spawnedBy ?? null,
+      });
     }
 
     try {
@@ -135,10 +147,63 @@ export class SessionService {
   }
 
   /**
+   * 这个 session 在哪个目录里跑、属于哪个仓库：
+   * - 恢复：仍在它当初的目录里（claude --resume 只在那里找得到它）。分支检查看它的仓库；目录不是仓库现在的工作目录时，看那个目录本身。
+   * - 新总控：ticket 的工作区目录，不检查分支。
+   * - 新 session：指定的仓库；没指定时 ticket 只有一个仓库就用它。
+   */
+  private async place(ticket: Ticket, head: Session | null, req: OpenSessionRequest): Promise<Placement | OpenFailure> {
+    if (head) {
+      const repo = head.repoId === null ? null : (ticket.repos.find((r) => r.id === head.repoId) ?? null);
+      const fallback = head.coordinator || !repo ? this.d.ticketService.workspaceDir(ticket.key) : this.d.ticketService.workDir(repo);
+      const cwd = head.cwd || fallback;
+      if (!req.force && !head.coordinator && repo) {
+        if (samePath(cwd, this.d.ticketService.workDir(repo), this.d.platform)) {
+          const mismatch = await this.branchMismatch(repo);
+          if (mismatch) return mismatch;
+        } else {
+          // 在别的目录里启动的旧 session（仓库后来改过工作方式）：检查那个目录的分支，而不是仓库现在的目录。
+          const moved = await this.oldWorkdirCheck(cwd, repo.branch);
+          if (moved) return moved;
+        }
+      }
+      return { repo, coordinator: head.coordinator, cwd };
+    }
+    if (req.coordinator) return { repo: null, coordinator: true, cwd: this.d.ticketService.workspaceDir(ticket.key) };
+    const repo = req.repoId !== undefined ? ticket.repos.find((r) => r.id === req.repoId) : ticket.repos.length === 1 ? ticket.repos[0] : undefined;
+    if (!repo) return { ok: false, reason: ticket.repos.length === 0 || req.repoId !== undefined ? "no_repo" : "pick_repo" };
+    if (!req.force) {
+      const mismatch = await this.branchMismatch(repo);
+      if (mismatch) return mismatch;
+    }
+    return { repo, coordinator: false, cwd: this.d.ticketService.workDir(repo) };
+  }
+
+  private async branchMismatch(repo: TicketRepo): Promise<OpenFailure | null> {
+    const check = await this.d.ticketService.checkBranch(repo);
+    return check.ok ? null : { ok: false, reason: "branch_mismatch", repoId: repo.id, current: check.current, expected: check.expected, dirty: check.dirty };
+  }
+
+  /** 总控能看到的目录：每个仓库现在的工作目录（不存在的跳过；要经过 cmd.exe 又没法安全传递的也跳过）。 */
+  private addDirsFor(ticket: Ticket, claudePath: string, viaCmd: boolean): string[] {
+    const dirs: string[] = [];
+    for (const r of ticket.repos) {
+      const dir = this.d.ticketService.workDir(r);
+      if (!(this.d.dirExists ?? existsSync)(dir)) continue;
+      if (viaCmd && !cmdShimSafe(claudePath, dir, this.d.platform)) {
+        this.d.log?.(`coordinator for ${ticket.key}: ${dir} cannot pass through cmd.exe safely; not added`);
+        continue;
+      }
+      dirs.push(dir);
+    }
+    return dirs;
+  }
+
+  /**
    * ticket 改过工作方式后，旧 session 仍在它当初的目录里恢复。那个目录已经不在 ticket 的分支上（比如离开分支的 worktree）时先提示，
    * 免得 claude 在游离 HEAD 或别的分支上继续干活。目录读不了就不拦（交给启动本身报错）。
    */
-  private async oldWorkdirCheck(cwd: string, expected: string): Promise<OpenSessionResult | null> {
+  private async oldWorkdirCheck(cwd: string, expected: string): Promise<OpenFailure | null> {
     let current: string;
     try {
       current = await currentBranch(cwd);
@@ -158,10 +223,10 @@ export class SessionService {
   }
 
   /** 这个 ticket 的记忆 MCP 配置。写不出来、或者要经过 cmd.exe 又无法安全传递时不挂，session 照常打开。 */
-  private mcpConfigFor(ticketKey: string, claudePath: string, viaCmd: boolean): string | undefined {
+  private mcpConfigFor(ticketKey: string, coordinator: boolean, claudePath: string, viaCmd: boolean): string | undefined {
     let file: string | null;
     try {
-      file = this.d.mcpConfig?.(ticketKey) ?? null;
+      file = this.d.mcpConfig?.(ticketKey, { coordinator }) ?? null;
     } catch (e) {
       this.d.log?.(`memory MCP config for ${ticketKey} not written`, e);
       return undefined;
@@ -206,9 +271,21 @@ export class SessionService {
     return true;
   }
 
-  /** 这个 ticket 有没有正在运行的终端（/clear 之后的 head 也算在启动它的终端上）。 */
-  hasOpenTerminal(ticketKey: string): boolean {
-    return this.d.pty.openIds().some((termId) => this.d.sessions.head(termId)?.ticketKey === ticketKey);
+  /**
+   * 这个 ticket 有没有正在运行的终端（/clear 之后的 head 也算在启动它的终端上）。给了 repoId 时只算可能在这个仓库里工作的：
+   * 这个仓库的 session、总控（它能看到所有仓库），以及认不出仓库的旧 session。
+   */
+  hasOpenTerminal(ticketKey: string, repoId?: number): boolean {
+    return this.d.pty.openIds().some((termId) => {
+      const h = this.d.sessions.head(termId);
+      if (h?.ticketKey !== ticketKey) return false;
+      return repoId === undefined || h.coordinator || h.repoId === null || h.repoId === repoId;
+    });
+  }
+
+  /** 这个 ticket 正在运行的终端数（总控开子 session 的上限用）。 */
+  openTerminalCount(ticketKey: string): number {
+    return this.d.pty.openIds().filter((termId) => this.d.sessions.head(termId)?.ticketKey === ticketKey).length;
   }
 
   ticketViews(): TicketView[] {
@@ -230,9 +307,13 @@ export class SessionService {
     });
   }
 
+  /** 认领：session 的目录落在 ticket 的某个仓库里，就记成那个仓库的 session。 */
   claim(sessionId: string, ticketKey: string): void {
-    if (!this.d.tickets.get(ticketKey)) throw new TicketError("not_found", `找不到 ticket ${ticketKey}`);
-    this.d.sessions.setTicket(sessionId, ticketKey);
+    const ticket = this.d.tickets.get(ticketKey);
+    if (!ticket) throw new TicketError("not_found", `找不到 ticket ${ticketKey}`);
+    const s = this.d.sessions.get(sessionId);
+    const repo = s?.cwd ? this.d.ticketService.repoForCwd(ticket, s.cwd) : null;
+    this.d.sessions.setTicket(sessionId, ticketKey, repo?.id ?? null);
   }
 
   dismiss(sessionId: string): void {

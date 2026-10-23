@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { memDb } from "../test-utils";
+import { insertTicket, memDb } from "../test-utils";
 import { AuditRepo } from "./audit-repo";
 import { migrate } from "./database";
 import { MemorySyncRepo } from "./memory-sync-repo";
@@ -26,7 +26,6 @@ describe("migration 4", () => {
   it("adds the memory sync cursor and the audit source, keeping old audit rows as narrative", () => {
     const db = v3db(true);
     expect(migrate(db)).toBe(MIGRATIONS.length);
-    expect(MIGRATIONS.length).toBe(4);
     expect(new AuditRepo(db).list()[0]).toMatchObject({ source: "narrative", status: "sent" });
     expect(() => db.exec(`INSERT INTO llm_audit (ts, provider, model, level, status, source) VALUES (1, 'p', 'm', 'full', 'sent', 'other')`)).toThrow();
     db.close();
@@ -48,7 +47,7 @@ describe("migration 4", () => {
 describe("MemorySyncRepo", () => {
   it("starts at 0 and only moves forward", () => {
     const db = memDb();
-    new TicketsRepo(db).insert({
+    insertTicket(new TicketsRepo(db), {
       key: "PROJ-1", title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b",
       status: "active", statusManual: null, createdAt: 1, archivedAt: null,
     });

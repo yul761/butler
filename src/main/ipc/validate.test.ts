@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, boolArg, auditCursorArg, clipboardTextArg, factIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateTicketArg } from "./validate";
+import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, clipboardTextArg, factIdArg, repoIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -67,12 +67,21 @@ describe("memory IPC arguments", () => {
 });
 
 describe("ticket edit and clipboard IPC arguments", () => {
-  it("accepts a ticket update with optional fields and rejects anything else", () => {
-    expect(updateTicketArg({ key: "P-1" })).toEqual({ key: "P-1", title: undefined, branch: undefined, workMode: undefined });
-    expect(updateTicketArg({ key: "P-1", title: "t", branch: "b", workMode: "branch", extra: 1 })).toEqual({ key: "P-1", title: "t", branch: "b", workMode: "branch" });
-    for (const bad of [null, "P-1", { key: "" }, { key: "P-1", workMode: "other" }, { key: "P-1", title: 3 }, { key: "P-1", branch: "x".repeat(251) }]) {
+  it("accepts a title update, a new repo and a repo update, and rejects anything else", () => {
+    expect(updateTicketArg({ key: "P-1", title: "t", extra: 1 })).toEqual({ key: "P-1", title: "t" });
+    for (const bad of [null, "P-1", { key: "" }, { key: "P-1" }, { key: "P-1", title: 3 }, { key: "P-1", title: "x".repeat(501) }]) {
       expect(() => updateTicketArg(bad)).toThrow();
     }
+    expect(addRepoArg({ ticketKey: "P-1", repoPath: "/r", workMode: "branch" })).toEqual({ ticketKey: "P-1", repoPath: "/r", workMode: "branch", branch: undefined });
+    for (const bad of [{ ticketKey: "P-1", repoPath: "", workMode: "branch" }, { ticketKey: "P-1", repoPath: "/r" }, { ticketKey: "P-1", repoPath: "/r", workMode: "x" }]) {
+      expect(() => addRepoArg(bad)).toThrow();
+    }
+    expect(updateRepoArg({ repoId: 3, branch: "b" })).toEqual({ repoId: 3, branch: "b", workMode: undefined });
+    for (const bad of [{ repoId: 0 }, { repoId: 1.5 }, { repoId: "1" }, { repoId: 1, workMode: "x" }, { repoId: 1, branch: "x".repeat(251) }]) {
+      expect(() => updateRepoArg(bad)).toThrow();
+    }
+    expect(repoIdArg(7)).toBe(7);
+    expect(() => repoIdArg(-1)).toThrow();
   });
 
   it("accepts only a bounded string for the clipboard", () => {

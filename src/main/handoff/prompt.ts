@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type { Handoff } from "../../shared/handoff";
 import type { Followup, Ticket, TicketStatus } from "../../shared/types";
 import { HANDOFF_EXAMPLE, HANDOFF_SCHEMA_DOC } from "./templates";
@@ -15,11 +16,21 @@ export function renderTemplate(template: string, vars: Record<string, string>): 
   return template.replace(/\{\{(\w+)\}\}/g, (whole, name: string) => (Object.hasOwn(vars, name) ? vars[name] : whole));
 }
 
+/**
+ * {{branch}}：单仓库 ticket 就是分支名（和以前一样）；多个仓库写成“仓库名@分支”，逗号分隔，并提醒 pr 字段只填一个。
+ */
+export function repoBranches(t: Ticket): string {
+  if (t.repos.length === 0) return "（还没有关联仓库）";
+  if (t.repos.length === 1) return t.repos[0].branch;
+  const list = t.repos.map((r) => `${basename(r.repoPath)}@${r.branch}`).join(", ");
+  return `${list}（多个仓库：pr 只填最需要关注的那个，还没合并的优先）`;
+}
+
 function vars(c: PromptContext): Record<string, string> {
   return {
     ticket: c.ticket.key,
     title: c.ticket.title ?? "无标题",
-    branch: c.ticket.branch,
+    branch: repoBranches(c.ticket),
     current_status: c.status,
     tracker_tools: c.trackerTools.length > 0 ? c.trackerTools.join(", ") : "（没有配置 tracker MCP 工具：jira 填 null）",
     previous_handoff: c.previous ? JSON.stringify(c.previous, null, 2) : "（这是第一次 handoff）",

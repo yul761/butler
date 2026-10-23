@@ -5,7 +5,7 @@ import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
 import type {
   AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
-  OpenSessionResult, Ticket, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput,
+  OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView,
 } from "../../shared/types";
 
@@ -41,7 +41,10 @@ export const api = {
   createTicket: (input: CreateTicketInput) => call<Ticket>(IPC.ticketsCreate, input),
   setStatus: (key: string, status: TicketStatus | null) => call<void>(IPC.ticketsSetStatus, key, status),
   archive: (key: string) => call<void>(IPC.ticketsArchive, key),
-  switchBranch: (key: string) => call<void>(IPC.ticketsSwitchBranch, key),
+  switchBranch: (repoId: number) => call<void>(IPC.ticketsSwitchBranch, repoId),
+  addRepo: (input: AddRepoInput) => call<TicketRepo>(IPC.ticketsAddRepo, input),
+  updateRepo: (input: UpdateRepoInput) => call<TicketRepo>(IPC.ticketsUpdateRepo, input),
+  removeRepo: (repoId: number) => call<void>(IPC.ticketsRemoveRepo, repoId),
   updateTicket: (input: UpdateTicketInput) => call<Ticket>(IPC.ticketsUpdate, input),
   archivedTickets: () => call<Ticket[]>(IPC.ticketsArchived),
   unarchive: (key: string) => call<void>(IPC.ticketsUnarchive, key),

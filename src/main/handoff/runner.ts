@@ -28,7 +28,8 @@ export interface HandoffRunnerDeps {
   followups: FollowupsRepo;
   settings: SettingsRepo;
   ingest: (input: IngestInput) => IngestResult;
-  workDir: (t: Ticket) => string;
+  /** 不 fork session 时后台 claude 在哪里跑（见 TicketService.headlessDirs）。 */
+  dirs: (t: Ticket) => { cwd: string; addDirs: string[] };
   run: HeadlessRun;
   /** 首次 health 探测完成后 resolve。 */
   ready: () => Promise<void>;
@@ -143,9 +144,13 @@ export class HandoffRunner {
     const session = this.resumeTarget(key);
     // 晚间批量只为有对话记录的 ticket 生成；手动触发时没有 session 也照样跑（只能看 git、PR 和 tracker）。
     if (!session && trigger === "nightly") return { ticketKey: key, status: "skipped", reason: "no_session" };
-    const cwd = session?.cwd || this.d.workDir(t);
+    const dirs = this.d.dirs(t);
+    const cwd = session?.cwd || dirs.cwd;
     const prompt = buildPrompt(this.d.settings.get("handoffPrompt"), this.context(t));
-    const args = headlessArgs({ schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd) });
+    const args = headlessArgs({
+      schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd),
+      addDirs: dirs.addDirs.filter((d) => d !== cwd),
+    });
 
     let attempt = await this.exec(key, args, prompt, cwd, session?.id);
     if (!attempt.ok) return attempt.outcome;
@@ -166,8 +171,8 @@ export class HandoffRunner {
     if (!t) return failed(key, "no_ticket", `找不到 ticket ${key}`);
     const ctx = this.context(t);
     const prompt = buildPrompt(this.d.settings.get("refreshPrompt"), ctx);
-    const cwd = this.d.workDir(t);
-    const args = headlessArgs({ schema: REFRESH_JSON_SCHEMA, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd) });
+    const { cwd, addDirs } = this.d.dirs(t);
+    const args = headlessArgs({ schema: REFRESH_JSON_SCHEMA, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd), addDirs });
     const attempt = await this.exec(key, args, prompt, cwd);
     if (!attempt.ok) return attempt.outcome;
     const checked = validate(RefreshSchema, attempt.value);

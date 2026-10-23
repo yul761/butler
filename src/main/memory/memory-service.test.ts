@@ -10,7 +10,7 @@ import { HandoffsRepo } from "../db/handoffs-repo";
 import { MemorySyncRepo } from "../db/memory-sync-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { chatReply, gatewayHarness, type GatewayHarness } from "../gateway/testing";
-import { memDb, tempDir } from "../test-utils";
+import { insertTicket, memDb, tempDir } from "../test-utils";
 import { DIGEST_HEADROOM, handoffSummary, MemoryService, nightlyDistill } from "./memory-service";
 import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
 
@@ -46,7 +46,7 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   const followups = new FollowupsRepo(db);
   const sync = new MemorySyncRepo(db);
   for (const key of ["PROJ-1", "PROJ-2"]) {
-    tickets.insert({ key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
+    insertTicket(tickets, { key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
   }
   const dataDir = o.dataDir ?? tempDir();
   const logs: string[] = [];

@@ -1,8 +1,9 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ticketScope, WORKSPACE_SCOPE } from "../../shared/memory";
 import { renameWithRetrySync } from "../util/fs-retry";
+import { ticketFileStem } from "../util/ticket-file";
 
 /** 挂给 claude 的 server 名：不和用户自己装的 statecore 重名（设计文档 8.4）。 */
 export const MEMORY_SERVER = "butler-memory";
@@ -35,22 +36,12 @@ export function memoryServers(o: { launcher: MemoryMcpLauncher; statecoreDir: st
 /** ticket 的记忆配置放在 mcp/ 下自己的子目录里：和计划 3 的 project-* / local-* 文件（headless 用）永远分开（P4-R6）。 */
 export const TICKET_MCP_SUBDIR = "tickets";
 
-/** 原样做文件名的 ticket key 最长多少个字符，超过就截断再加哈希。 */
-const MAX_PLAIN_NAME = 80;
-/** Windows 的保留设备名（不分大小写，带不带扩展名都算）。 */
-const WINDOWS_RESERVED = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i;
-
 /**
- * mcp/tickets/<ticket>.json（设计文档 2.3）。自定义的 ticket 正则可能放进 /、空格之类的字符：
- * 不能做文件名的字符换成 _；改过的、只有点、太长、以点结尾或是 Windows 保留名的，换成截断后的名字（点也换成 _）
- * 加原值的短哈希，免得两个 ticket 撞名。结果永远在 mcpDir/tickets 里面。
+ * mcp/tickets/<ticket>.json（设计文档 2.3）。文件名规则见 ticketFileStem：结果永远在 mcpDir/tickets 里面。
+ * suffix 区分同一个 ticket 的不同配置（总控 session 多挂一个 server）。
  */
-export function ticketMcpFile(mcpDir: string, ticketKey: string): string {
-  const safe = ticketKey.replace(/[^A-Za-z0-9._-]/g, "_");
-  const plain = safe === ticketKey && !/^\.*$/.test(safe) && !safe.endsWith(".") && safe.length <= MAX_PLAIN_NAME && !WINDOWS_RESERVED.test(safe);
-  const hash = createHash("sha1").update(ticketKey).digest("hex").slice(0, 8);
-  const name = plain ? safe : `${safe.slice(0, 60).replace(/\./g, "_")}-${hash}`;
-  return join(mcpDir, TICKET_MCP_SUBDIR, `${name}.json`);
+export function ticketMcpFile(mcpDir: string, ticketKey: string, suffix = ""): string {
+  return join(mcpDir, TICKET_MCP_SUBDIR, `${ticketFileStem(ticketKey)}${suffix}.json`);
 }
 
 /** 写（覆盖）这个 ticket 的 --mcp-config 文件：随机名的临时文件（0600、wx）再 rename，返回文件路径。 */

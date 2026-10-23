@@ -46,7 +46,7 @@ export function NewTicketDialog({ onClose, onCreated, onRestored }: Props) {
     setError(null);
     setArchivedKey(null);
     try {
-      const t = await api.createTicket({ key, title, repoPath, workMode, branch: branch || undefined });
+      const t = await api.createTicket({ key, title, repoPath: repoPath.trim() || undefined, workMode, branch: branch || undefined });
       onCreated(t.key);
     } catch (err) {
       setError(err instanceof ButlerError ? (S.createErrors[err.code] ?? err.message) : (err as Error).message);
@@ -63,18 +63,18 @@ export function NewTicketDialog({ onClose, onCreated, onRestored }: Props) {
         <label>{S.ticketKey}<input value={key} onChange={(e) => { setKey(e.target.value); setArchivedKey(null); }} placeholder="PROJ-123" autoFocus required /></label>
         <label>{S.title}<input value={title} onChange={(e) => setTitle(e.target.value)} /></label>
         <label>
-          {S.repo}
+          {S.repoOptional}
           <div className="row">
-            <input value={repoPath} onChange={(e) => setRepoPath(e.target.value)} required />
+            <input value={repoPath} onChange={(e) => setRepoPath(e.target.value)} />
             <button type="button" onClick={pick}>{S.pick}</button>
           </div>
         </label>
-        <fieldset>
+        <fieldset disabled={!repoPath.trim()}>
           <legend>{S.workMode}</legend>
           <label className="inline"><input type="radio" checked={workMode === "worktree"} onChange={() => setWorkMode("worktree")} />{S.worktree}</label>
           <label className="inline"><input type="radio" checked={workMode === "branch"} onChange={() => setWorkMode("branch")} />{S.branch}</label>
         </fieldset>
-        <label>{S.branchName}<input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="feature/PROJ-123" /></label>
+        <label>{S.branchName}<input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="feature/PROJ-123" disabled={!repoPath.trim()} /></label>
         {error && <p className="error">{error}</p>}
         <div className="actions">
           {archivedKey && <button type="button" onClick={() => void restore(archivedKey)}>{S.restoreArchived(archivedKey)}</button>}

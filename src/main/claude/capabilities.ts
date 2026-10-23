@@ -16,6 +16,8 @@ export const REQUIRED_FLAGS = [
   "--permission-mode",
   /** 后台运行只读用户级设置（headlessArgs / PROBE_ARGS）。老版本没有它，每次后台运行都会失败。 */
   "--setting-sources",
+  // 总控 session：每个仓库一个 --add-dir（多仓库 ticket）。
+  "--add-dir",
 ] as const;
 
 export function parseVersion(out: string): string | null {

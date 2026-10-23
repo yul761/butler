@@ -14,6 +14,7 @@ const HELP = `
   --no-session-persistence              Disable session persistence
   --permission-mode <mode>              Permission mode to use for the session
   --setting-sources <sources>           Comma-separated list of setting sources to load (user, project, local)
+  --add-dir <directories...>            Additional directories to allow tool access to
 `;
 
 describe("capabilities", () => {

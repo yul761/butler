@@ -3,7 +3,7 @@ import type { TicketView } from "../../shared/types";
 import { groupTickets } from "./group";
 
 const t = (key: string, effectiveStatus: TicketView["effectiveStatus"], waiting = false): TicketView => ({
-  key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b",
+  key, title: null, repos: [],
   status: effectiveStatus, statusManual: null, createdAt: 1, archivedAt: null, effectiveStatus, sessions: [], waiting,
 });
 

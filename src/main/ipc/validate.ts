@@ -1,5 +1,5 @@
 import type { SensitiveTerm } from "../../shared/llm";
-import type { UpdateTicketInput } from "../../shared/types";
+import type { AddRepoInput, UpdateRepoInput, UpdateTicketInput, WorkMode } from "../../shared/types";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 
 /**
@@ -58,14 +58,42 @@ export function boolArg(v: unknown): boolean {
 
 const optString = (v: unknown, max: number): v is string | undefined => v === undefined || (typeof v === "string" && v.length <= max);
 
-/** 编辑 ticket 的参数：key 必填，其余字段可省略；工作方式只能是两种之一。 */
+const workModeOpt = (v: unknown): v is WorkMode | undefined => v === undefined || v === "worktree" || v === "branch";
+
+/** 编辑 ticket 的标题。 */
 export function updateTicketArg(v: unknown): UpdateTicketInput {
   const o = v as Record<string, unknown> | null;
   if (!o || typeof o !== "object") throw new Error("invalid ticket update");
   const key = ticketKeyArg(o.key);
-  if (!optString(o.title, 500) || !optString(o.branch, 250)) throw new Error("invalid ticket update");
-  if (o.workMode !== undefined && o.workMode !== "worktree" && o.workMode !== "branch") throw new Error("invalid work mode");
-  return { key, title: o.title, branch: o.branch, workMode: o.workMode };
+  if (typeof o.title !== "string" || o.title.length > 500) throw new Error("invalid ticket update");
+  return { key, title: o.title };
+}
+
+/** ticket 仓库的 id：正整数。 */
+export function repoIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) throw new Error("invalid repo id");
+  return v;
+}
+
+/** 给 ticket 加仓库：目录必填，工作方式两种之一，分支可省略。 */
+export function addRepoArg(v: unknown): AddRepoInput {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid repo");
+  const ticketKey = ticketKeyArg(o.ticketKey);
+  if (typeof o.repoPath !== "string" || o.repoPath.length === 0 || o.repoPath.length > 4096) throw new Error("invalid repo path");
+  if (o.workMode === undefined || !workModeOpt(o.workMode)) throw new Error("invalid work mode");
+  if (!optString(o.branch, 250)) throw new Error("invalid branch");
+  return { ticketKey, repoPath: o.repoPath, workMode: o.workMode, branch: o.branch };
+}
+
+/** 改仓库的工作方式和分支：省略的字段不变。 */
+export function updateRepoArg(v: unknown): UpdateRepoInput {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid repo update");
+  const repoId = repoIdArg(o.repoId);
+  if (!workModeOpt(o.workMode)) throw new Error("invalid work mode");
+  if (!optString(o.branch, 250)) throw new Error("invalid branch");
+  return { repoId, workMode: o.workMode, branch: o.branch };
 }
 
 /** 写进剪贴板的文本：终端的选区最多是整个回放缓冲。 */
