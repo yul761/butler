@@ -60,7 +60,7 @@ import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
 import { canSend } from "./safe-send";
 import { createQuitState } from "./quit-state";
-import { circleBitmap, TRAY_IMAGES } from "./tray-bitmap";
+import { TRAY_ICONS } from "./tray-icons";
 import { CSP_VIOLATION_LOG_PREFIX, isCspViolationMessage } from "./csp-log";
 
 const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
@@ -184,11 +184,11 @@ function showWindow(): void {
 
 function createTray(): Tray {
   const isMac = process.platform === "darwin";
-  const color: [number, number, number] = isMac ? [0, 0, 0] : [0xdf, 0x6f, 0x2f];
-  const [base, ...extra] = TRAY_IMAGES;
-  const icon = nativeImage.createFromBitmap(circleBitmap(base.size, color), { width: base.size, height: base.size, scaleFactor: base.scaleFactor });
-  // 高分屏用 @2x 版本（计划 1 Task 12）。
-  for (const r of extra) icon.addRepresentation({ scaleFactor: r.scaleFactor, width: r.size, height: r.size, buffer: circleBitmap(r.size, color) });
+  // 方向 E1 的托盘图标（scripts/render-icons.cjs 生成）：16 px 加高分屏用的 @2x（计划 1 Task 12）。
+  const set = isMac ? TRAY_ICONS.macTemplate : TRAY_ICONS.win;
+  const icon = nativeImage.createFromBuffer(Buffer.from(set[1], "base64"), { scaleFactor: 1 });
+  icon.addRepresentation({ scaleFactor: 2, buffer: Buffer.from(set[2], "base64") });
+  // macOS 模板图：系统按菜单栏的深浅自动着色。
   if (isMac) icon.setTemplateImage(true);
   const t = new Tray(icon);
   t.setToolTip("Butler");

@@ -198,7 +198,6 @@ The **审计 (Audit)** page lists every call that was sent, blocked by the scann
 - Unsigned builds (see above). macOS builds are Apple silicon only.
 - No auto-update.
 - macOS asks again for keychain access to the saved API key after every upgrade (builds are ad-hoc signed). With no key saved, there is no prompt.
-- The app uses the default Electron icon.
 - **Windows, npm-installed Claude Code.** Butler starts the npm/pnpm `claude.cmd` shim's target directly, without `cmd.exe`. The target is either the native `claude.exe` or `node <script>`.
   - If Claude Code was installed with `--ignore-scripts`, or its native optional package is missing, `bin\claude.exe` is only a small placeholder file.
   - Sessions then fail to start, and npm's "native binary not installed" message never appears.

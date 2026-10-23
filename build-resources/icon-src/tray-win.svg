@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Windows 托盘图标（方向 E1 的简化版）：蓝底白卡片，深色和浅色任务栏上都看得清。 -->
+  <rect x="2" y="2" width="96" height="96" rx="22" fill="#2F6FEB"/>
+  <rect x="38" y="16" width="44" height="52" rx="7" fill="none" stroke="#FFFFFF" stroke-width="7"/>
+  <rect x="20" y="32" width="44" height="54" rx="7" fill="#FFFFFF"/>
+</svg>

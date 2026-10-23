@@ -16,9 +16,9 @@ interface BuilderConfig {
   files: string[];
   extraResources: { from: string; to: string; filter: string[] }[];
   electronFuses?: Record<string, boolean>;
-  mac: { identity: unknown; artifactName: string; target: { target: string; arch: string[] }[] };
+  mac: { identity: unknown; artifactName: string; icon?: string; target: { target: string; arch: string[] }[] };
   dmg: { artifactName: string };
-  win: { target: { target: string; arch: string[] }[] };
+  win: { icon?: string; target: { target: string; arch: string[] }[] };
   nsis: Record<string, unknown>;
 }
 
@@ -46,6 +46,12 @@ describe("packaging config (design 2.1, 12)", () => {
     // 不配置 fuses：记忆 MCP 靠 ELECTRON_RUN_AS_NODE 运行。以后真要加 fuses，改这条断言时 runAsNode 必须保持 true。
     expect(cfg.electronFuses).toBeUndefined();
     expect(existsSync(`${root}${cfg.afterPack}`)).toBe(true);
+  });
+
+  it("uses the Butler icon (direction E1) on both platforms, not the default Electron one", () => {
+    expect(cfg.mac.icon).toBe("build-resources/icon.png");
+    expect(cfg.win.icon).toBe("build-resources/icon-win.png");
+    for (const f of [cfg.mac.icon, cfg.win.icon]) expect(existsSync(`${root}${String(f)}`), f).toBe(true);
   });
 
   it("has no auto-update (Ruling P5-R4): no electron-updater and the dist scripts never publish", () => {
