@@ -122,3 +122,59 @@ describe("captureCommandHandoff", () => {
     expect(handoffs.latest("PROJ-1")).toMatchObject({ trigger: "command", sourceRef: "v1" });
   });
 });
+
+describe("captureCommandHandoff when the transcript lags behind the Stop hook", () => {
+  const userHandoff = { type: "user", message: { role: "user", content: "/handoff" } };
+  const narration = { type: "assistant", uuid: "n1", message: { role: "assistant", content: [{ type: "text", text: "我先看一下 PR 状态。" }] } };
+  const write = (file: string, entries: object[]) => writeFileSync(file, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+
+  it("reads again until the answer shows up, then stores it", async () => {
+    const { deps, sessions, handoffs } = setup();
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    const file = join(tempDir(), "lag.jsonl");
+    write(file, [userHandoff, narration]);
+    const waits: number[] = [];
+    const sleep = async (ms: number) => {
+      waits.push(ms);
+      // claude 写完最后一条回答。
+      if (waits.length === 2) {
+        write(file, [userHandoff, narration, {
+          type: "assistant", uuid: "a9", message: { role: "assistant", content: [{ type: "text", text: `${FENCE}butler-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}` }] },
+        }]);
+      }
+    };
+    expect(await captureCommandHandoff({ ...deps, sleep }, { sessionId: "s1", transcriptPath: file })).toMatchObject({ stored: true });
+    expect(waits).toEqual([500, 1500]);
+    expect(handoffs.latest("PROJ-1")).toMatchObject({ trigger: "command" });
+  });
+
+  it("gives up after the last retry and says why", async () => {
+    const { deps } = setup();
+    const file = join(tempDir(), "never.jsonl");
+    write(file, [userHandoff, narration]);
+    const waits: number[] = [];
+    expect(await captureCommandHandoff({ ...deps, sleep: async (ms) => void waits.push(ms) }, { sessionId: "s1", transcriptPath: file })).toEqual({ stored: false, reason: "no_block" });
+    expect(waits).toEqual([500, 1500, 5000]);
+  });
+
+  it("does not wait at all for a turn that is not /handoff", async () => {
+    const { deps } = setup();
+    const file = join(tempDir(), "plain2.jsonl");
+    write(file, [{ type: "user", message: { role: "user", content: "随便问问" } }, narration]);
+    const waits: number[] = [];
+    expect(await captureCommandHandoff({ ...deps, sleep: async (ms) => void waits.push(ms) }, { sessionId: "s1", transcriptPath: file })).toBeNull();
+    expect(waits).toEqual([]);
+  });
+
+  it("accepts the handoff in a plain ```json block when claude did not use the butler-handoff fence", async () => {
+    const { deps, sessions, handoffs } = setup();
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    const file = join(tempDir(), "json.jsonl");
+    write(file, [userHandoff, {
+      type: "assistant", uuid: "j1",
+      message: { role: "assistant", content: [{ type: "text", text: `示例配置：\n${FENCE}json\n{"a":1}\n${FENCE}\n结果：\n${FENCE}json\n${JSON.stringify({ ...emptyHandoff("PROJ-1"), next_steps: ["合并 PR"] })}\n${FENCE}` }] },
+    }]);
+    expect(await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "s1", transcriptPath: file })).toMatchObject({ stored: true, degraded: false });
+    expect(handoffs.latest("PROJ-1")?.payload?.next_steps).toEqual(["合并 PR"]);
+  });
+});

@@ -26,23 +26,36 @@ export interface CaptureDeps {
   sessions: SessionsRepo;
   tickets: TicketsRepo;
   ingest: (input: IngestInput) => IngestResult;
+  /** 测试注入；默认真的等待。 */
+  sleep?: (ms: number) => Promise<void>;
 }
+
+/**
+ * Stop hook 有时比 claude 把最后一条回答写进 transcript 还早（Windows 上更常见）：认出是 /handoff、却还没有代码块时，
+ * 隔一会儿再读，最多再读这么多次（共约 7 秒）。
+ */
+export const CAPTURE_RETRY_MS = [500, 1500, 5000];
 
 /**
  * Stop 之后看这一轮有没有 /handoff 的输出，有就入库（trigger=command）。
  * 归属：session 已挂的 ticket；没挂的话用代码块里写的 ticket（必须已存在）。
- * 读不到文件或没有代码块时返回 null。
+ * 不是 /handoff、或读不到文件时返回 null；是 /handoff 但等了几次都没有代码块时返回 no_block（调用方记日志）。
  */
 export async function captureCommandHandoff(d: CaptureDeps, stop: StopEvent): Promise<IngestResult | null> {
+  const sleep = d.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let found: FoundHandoff | null;
-  try {
-    const last = await readLastTurnInfo(stop.transcriptPath);
-    if (!last.isHandoffCommand) return null; // 只收 /handoff 的输出，不收 assistant 随口引用的代码块。
-    found = findHandoffBlock(last.turn);
-  } catch {
-    return null;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const last = await readLastTurnInfo(stop.transcriptPath);
+      if (!last.isHandoffCommand) return null; // 只收 /handoff 的输出，不收 assistant 随口引用的代码块。
+      found = findHandoffBlock(last.turn);
+    } catch {
+      return null;
+    }
+    if (found || attempt >= CAPTURE_RETRY_MS.length) break;
+    await sleep(CAPTURE_RETRY_MS[attempt]);
   }
-  if (!found) return null;
+  if (!found) return { stored: false, reason: "no_block" };
   // 旧版本的 /handoff 命令输出单个 pr：先换成 prs 再校验。
   const checked = validate(HandoffSchema, upgradeLegacyPr(parseJsonLoose(found.block)));
   const claimed = checked.ok ? checked.value.ticket.trim().toUpperCase() : null;
