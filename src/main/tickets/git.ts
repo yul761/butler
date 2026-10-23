@@ -57,12 +57,49 @@ export async function isDirty(cwd: string): Promise<boolean> {
   return (await git(cwd, ["status", "--porcelain"])).length > 0;
 }
 
-export async function addWorktree(repo: string, path: string, branch: string, createBranch: boolean): Promise<void> {
-  await git(repo, createBranch ? ["worktree", "add", "-b", branch, path] : ["worktree", "add", path, branch]);
+/** 新建分支时从 start 开始（省略就是当前 HEAD）。 */
+export async function addWorktree(repo: string, path: string, branch: string, createBranch: boolean, start?: string): Promise<void> {
+  await git(repo, createBranch ? ["worktree", "add", "-b", branch, path, ...(start ? [start] : [])] : ["worktree", "add", path, branch]);
 }
 
-export async function createBranch(cwd: string, branch: string): Promise<void> {
-  await git(cwd, ["branch", branch]);
+/** 让 worktree 离开它的分支（HEAD 停在同一个提交上），分支就能在别处检出；目录和里面的文件原样保留。 */
+export async function detachHead(cwd: string): Promise<void> {
+  await git(cwd, ["checkout", "--detach"]);
+}
+
+/** 清掉目录已经不在了的 worktree 登记，否则在同一路径上重新 add 会被 git 拒绝。 */
+export async function pruneWorktrees(repo: string): Promise<void> {
+  await git(repo, ["worktree", "prune"]);
+}
+
+/** 在 cwd 里切到 branch；分支不存在时从当前 HEAD 新建。 */
+export async function switchTo(cwd: string, branch: string, create: boolean, start?: string): Promise<void> {
+  await git(cwd, create ? ["checkout", "-b", branch, ...(start ? [start] : [])] : ["checkout", branch]);
+}
+
+/** HEAD 上不属于任何分支的提交数（游离 HEAD 上新做的提交）。离开这个 HEAD 之后它们只剩 reflog 能找到。 */
+export async function unbranchedCommits(cwd: string): Promise<number> {
+  const out = await git(cwd, ["rev-list", "--count", "HEAD", "--not", "--branches"]);
+  return Number(out) || 0;
+}
+
+/**
+ * path 是不是 repo 登记过的 worktree（不含主工作区）。git 在 Windows 上给的是正斜杠路径，resolve 后再比；
+ * Windows 的路径不分大小写。
+ */
+export async function isWorktreeOf(repo: string, path: string): Promise<boolean> {
+  const out = await git(repo, ["worktree", "list", "--porcelain"]);
+  const norm = (p: string) => (process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p));
+  const want = norm(path);
+  return out
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith("worktree "))
+    .slice(1)
+    .some((l) => norm(l.slice("worktree ".length)) === want);
+}
+
+export async function createBranch(cwd: string, branch: string, start?: string): Promise<void> {
+  await git(cwd, ["branch", branch, ...(start ? [start] : [])]);
 }
 
 export async function checkout(cwd: string, branch: string): Promise<void> {

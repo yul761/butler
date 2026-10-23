@@ -1,4 +1,4 @@
-import { dialog, ipcMain, type BrowserWindow } from "electron";
+import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { ITEM_MARKS, type BriefKind, type BriefView, type ItemMark } from "../../shared/brief";
 import { IPC } from "../../shared/ipc";
 import {
@@ -27,7 +27,7 @@ import { TicketError, type TicketService } from "../tickets/ticket-service";
 import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
-import { apiKeyArg, auditCursorArg, boolArg, termsArg } from "./validate";
+import { apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, termsArg, ticketKeyArg, updateTicketArg } from "./validate";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -92,9 +92,23 @@ export function registerIpc(d: IpcDeps): void {
     d.tickets.archive(key, d.now());
     d.notify();
   });
+  handle(IPC.ticketsUpdate, async (raw: unknown) => {
+    const input = updateTicketArg(raw);
+    const t = await d.ticketService.update(input, { terminalsOpen: d.sessionService.hasOpenTerminal(input.key) });
+    d.notify();
+    return t;
+  });
+  handle(IPC.ticketsArchived, () => d.tickets.listArchived());
+  handle(IPC.ticketsUnarchive, (raw: unknown) => {
+    const key = ticketKeyArg(raw);
+    if (!d.tickets.get(key)) throw new TicketError("not_found", `找不到 ticket ${key}`);
+    d.tickets.unarchive(key);
+    d.notify();
+  });
   handle(IPC.ticketsSwitchBranch, async (key: string) => {
     const t = d.tickets.get(key);
     if (!t) throw new TicketError("not_found", `找不到 ticket ${key}`);
+    if (d.ticketService.updating(key)) throw new TicketError("busy", "这个 ticket 正在修改，稍等一下");
     await d.ticketService.switchBranch(t);
   });
 
@@ -121,6 +135,10 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.healthGet, () => d.health.refresh());
   handle(IPC.healthInstallHooks, () => d.health.installHooks());
   handle(IPC.healthUninstallHooks, () => d.health.uninstallHooks());
+
+  // 终端的复制粘贴：xterm 在 Windows 上把 Ctrl+V 当成 ^V 发给 claude，渲染进程拦下按键后经这里读写系统剪贴板。
+  handle(IPC.clipboardRead, () => clipboard.readText());
+  handle(IPC.clipboardWrite, (text: unknown) => clipboard.writeText(clipboardTextArg(text)));
 
   handle(IPC.dialogPickDir, async () => {
     const w = d.window();

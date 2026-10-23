@@ -1,17 +1,17 @@
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { CreateTicketInput, Ticket } from "../../shared/types";
+import type { CreateTicketInput, Ticket, UpdateTicketInput } from "../../shared/types";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import {
-  addWorktree, branchExists, checkout, createBranch, currentBranch, GitError, gitErrorSummary, hasCommits, isDirty,
-  isValidBranchName, repoRoot,
+  addWorktree, branchExists, checkout, createBranch, currentBranch, detachHead, GitError, gitErrorSummary, hasCommits, isDirty,
+  isValidBranchName, isWorktreeOf, pruneWorktrees, repoRoot, switchTo, unbranchedCommits,
 } from "./git";
 import { isValidTicketKey, renderBranch } from "./ticket-key";
 
 export type TicketErrorCode =
-  | "invalid_key" | "exists" | "not_git_repo" | "worktree_exists" | "dirty" | "not_found"
-  | "invalid_branch" | "empty_repo" | "git_failed";
+  | "invalid_key" | "exists" | "archived" | "not_git_repo" | "worktree_exists" | "dirty" | "not_found"
+  | "invalid_branch" | "empty_repo" | "git_failed" | "sessions_open" | "branch_checked_out" | "busy" | "unbranched_commits";
 
 export class TicketError extends Error {
   constructor(readonly code: TicketErrorCode, message: string) {
@@ -24,6 +24,11 @@ function asTicketError(e: unknown): unknown {
   return e instanceof GitError ? new TicketError("git_failed", `git 操作失败：${gitErrorSummary(e)}`) : e;
 }
 
+/** ticket 的 worktree 放在仓库旁边：<仓库>-worktrees/<ticket 号>。 */
+function worktreePathFor(root: string, key: string): string {
+  return join(dirname(root), `${basename(root)}-worktrees`, key);
+}
+
 export type BranchCheck = { ok: true } | { ok: false; current: string; expected: string; dirty: boolean };
 
 export interface TicketServiceDeps {
@@ -33,12 +38,21 @@ export interface TicketServiceDeps {
 }
 
 export class TicketService {
+  /** 正在 update 的 ticket：期间不能再改，也不能打开 session（目录可能正被切换）。 */
+  private readonly updatingKeys = new Set<string>();
+
   constructor(private readonly d: TicketServiceDeps) {}
+
+  updating(key: string): boolean {
+    return this.updatingKeys.has(key);
+  }
 
   async create(input: CreateTicketInput): Promise<Ticket> {
     const key = input.key.trim().toUpperCase();
     if (!isValidTicketKey(key, this.d.settings.get("ticketPattern"))) throw new TicketError("invalid_key", `ticket 号格式不对：${input.key}`);
-    if (this.d.tickets.get(key)) throw new TicketError("exists", `ticket ${key} 已经存在`);
+    const existing = this.d.tickets.get(key);
+    if (existing?.archivedAt != null) throw new TicketError("archived", `ticket ${key} 已经归档，可以在“已归档”里恢复`);
+    if (existing) throw new TicketError("exists", `ticket ${key} 已经存在`);
 
     let root: string;
     try {
@@ -55,7 +69,7 @@ export class TicketService {
     let worktreePath: string | null = null;
     try {
       if (input.workMode === "worktree") {
-        worktreePath = join(dirname(root), `${basename(root)}-worktrees`, key);
+        worktreePath = worktreePathFor(root, key);
         if (existsSync(worktreePath)) throw new TicketError("worktree_exists", `目录已存在：${worktreePath}`);
         await addWorktree(root, worktreePath, branch, !(await branchExists(root, branch)));
       } else if (!(await branchExists(root, branch))) {
@@ -79,6 +93,91 @@ export class TicketService {
     };
     this.d.tickets.insert(ticket);
     return ticket;
+  }
+
+  /**
+   * 编辑 ticket。改标题随时可以；改工作方式或分支要动 git，这个 ticket 有终端在跑时拒绝（claude 的工作目录会被换掉）。
+   * - worktree → 分支模式：worktree 先离开分支（detach），目录和文件原样保留，主仓库之后就能检出这个分支。
+   * - 分支模式 → worktree：在 <仓库>-worktrees/<key> 建 worktree；那里已经是这个仓库的 worktree（以前改回分支模式留下的）就复用。
+   * - 只改分支：worktree 模式在 worktree 里切过去，分支模式只记下新分支（下次打开 session 时照常检查、提示切换）。
+   * 分支不存在就新建。有未提交改动的 worktree 一律不动。已有 session 的工作目录不变，仍在原来的目录里恢复。
+   */
+  async update(input: UpdateTicketInput, opts: { terminalsOpen: boolean }): Promise<Ticket> {
+    const t = this.d.tickets.get(input.key);
+    if (!t) throw new TicketError("not_found", `找不到 ticket ${input.key}`);
+    const title = input.title === undefined ? t.title : input.title.trim() || null;
+    const workMode = input.workMode ?? t.workMode;
+    const branch = input.branch?.trim() || t.branch;
+    let worktreePath = t.worktreePath;
+
+    if (workMode !== t.workMode || branch !== t.branch) {
+      if (opts.terminalsOpen) throw new TicketError("sessions_open", "这个 ticket 还有终端在运行，先在终端里退出 claude 再改工作方式或分支");
+      if (this.updatingKeys.has(t.key)) throw new TicketError("busy", "这个 ticket 正在修改，稍等一下");
+      this.updatingKeys.add(t.key);
+      try {
+        worktreePath = await this.moveWork(t, workMode, branch);
+      } finally {
+        this.updatingKeys.delete(t.key);
+      }
+    }
+
+    const updated: Ticket = { ...t, title, workMode, worktreePath, branch };
+    this.d.tickets.update(updated);
+    return updated;
+  }
+
+  /** update 的 git 部分，返回新的 worktree 路径（分支模式是 null）。新分支从 ticket 原来的分支开始。 */
+  private async moveWork(t: Ticket, workMode: Ticket["workMode"], branch: string): Promise<string | null> {
+    const root = t.repoPath;
+    if (!(await isValidBranchName(root, branch))) throw new TicketError("invalid_branch", `分支名不合法：${branch}`);
+    try {
+      const exists = await branchExists(root, branch);
+      const start = branch !== t.branch && (await branchExists(root, t.branch)) ? t.branch : undefined;
+      if (t.workMode === "worktree" && t.worktreePath && existsSync(t.worktreePath)) {
+        if (await isDirty(t.worktreePath)) throw new TicketError("dirty", `worktree 里有未提交的改动：${t.worktreePath}`);
+        await this.refuseUnbranched(t.worktreePath);
+        if (workMode === "worktree") {
+          await switchTo(t.worktreePath, branch, !exists, start);
+          return t.worktreePath;
+        }
+        await detachHead(t.worktreePath);
+        if (!exists) await createBranch(root, branch, start);
+        return null;
+      }
+      // 手动删掉的 worktree 还登记着、占着分支：先清掉登记，主仓库才能检出这个分支。
+      if (t.workMode === "worktree") await pruneWorktrees(root);
+      if (workMode === "worktree") return await this.attachWorktree(root, t.key, branch, exists, start);
+      if (!exists) await createBranch(root, branch, start);
+      return null;
+    } catch (e) {
+      throw asTicketError(e);
+    }
+  }
+
+  /** 游离 HEAD 上有不属于任何分支的提交：切走就只剩 reflog 能找到，拒绝。 */
+  private async refuseUnbranched(dir: string): Promise<void> {
+    const n = await unbranchedCommits(dir);
+    if (n > 0) {
+      throw new TicketError("unbranched_commits", `${dir} 的游离 HEAD 上有 ${n} 个不在任何分支上的提交。先给它们建个分支（git branch <名字>）再改`);
+    }
+  }
+
+  /** 分支模式改成 worktree（或者原来的 worktree 目录不见了）：建一个新的，或者复用这个 ticket 以前留下的。 */
+  private async attachWorktree(root: string, key: string, branch: string, exists: boolean, start?: string): Promise<string> {
+    const path = worktreePathFor(root, key);
+    if (exists && (await currentBranch(root)) === branch) {
+      throw new TicketError("branch_checked_out", `主仓库现在就在 ${branch} 上，git 不允许同一个分支同时检出两次。先把主仓库切到别的分支再改成 worktree`);
+    }
+    if (existsSync(path)) {
+      if (!(await isWorktreeOf(root, path))) throw new TicketError("worktree_exists", `目录已存在：${path}`);
+      if (await isDirty(path)) throw new TicketError("dirty", `worktree 里有未提交的改动：${path}`);
+      await this.refuseUnbranched(path);
+      await switchTo(path, branch, !exists, start);
+    } else {
+      await pruneWorktrees(root);
+      await addWorktree(root, path, branch, !exists, start);
+    }
+    return path;
   }
 
   workDir(t: Ticket): string {

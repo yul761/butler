@@ -4,6 +4,7 @@ import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
 import { sessionLabel, splitSessions } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
+import { EditTicketDialog } from "./EditTicketDialog";
 import { TerminalPane } from "./TerminalPane";
 import { TicketOverview } from "./TicketOverview";
 
@@ -20,6 +21,13 @@ interface Mismatch {
   dirty: boolean;
 }
 
+interface OldWorkdir {
+  req: OpenSessionRequest;
+  cwd: string;
+  current: string;
+  expected: string;
+}
+
 interface Props {
   ticket: TicketView;
   onArchived: () => void;
@@ -34,8 +42,10 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   const [panes, setPanes] = useState<string[]>(openTerms);
   const [active, setActive] = useState<string | null>(openTerms[0] ?? null);
   const [mismatch, setMismatch] = useState<Mismatch | null>(null);
+  const [oldWorkdir, setOldWorkdir] = useState<OldWorkdir | null>(null);
   const [showAllSessions, setShowAllSessions] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
 
   const openKey = openTerms.join(",");
   useEffect(() => {
@@ -53,6 +63,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   async function open(req: OpenSessionRequest) {
     setError(null);
     setMismatch(null);
+    setOldWorkdir(null);
     try {
       const r = await api.openSession(req);
       if (r.ok) {
@@ -60,6 +71,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         setActive(r.termId);
       } else if (r.reason === "branch_mismatch") {
         setMismatch({ req, current: r.current, expected: r.expected, dirty: r.dirty });
+      } else if (r.reason === "old_workdir") {
+        setOldWorkdir({ req, cwd: r.cwd, current: r.current, expected: r.expected });
       } else {
         setError(S.openErrors[r.reason]);
       }
@@ -97,8 +110,10 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
           <option value="auto">{S.statusAuto(STATUS_LABEL[ticket.status])}</option>
           {TICKET_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
         </select>
+        <button onClick={() => setEditing(true)}>{S.edit}</button>
         <button onClick={() => api.archive(ticket.key).then(onArchived, reportError)}>{S.archive}</button>
       </header>
+      {editing && <EditTicketDialog ticket={ticket} hasSessions={ticket.sessions.length > 0} onClose={() => setEditing(false)} />}
 
       <TicketOverview ticketKey={ticket.key} />
 
@@ -134,6 +149,17 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
             <button disabled={mismatch.dirty} onClick={() => void switchAndOpen(mismatch)}>{S.switchAndOpen}</button>
             <button onClick={() => void open({ ...mismatch.req, force: true })}>{S.openAnyway}</button>
             <button onClick={() => setMismatch(null)}>{S.cancel}</button>
+          </div>
+        </div>
+      )}
+
+      {oldWorkdir && (
+        <div className="notice">
+          <p>{S.oldWorkdir(oldWorkdir.cwd, oldWorkdir.current, oldWorkdir.expected)}</p>
+          <div className="actions">
+            <button onClick={() => void open({ ...oldWorkdir.req, force: true })}>{S.openAnyway}</button>
+            <button onClick={() => void open({ ticketKey: ticket.key })}>+ {S.newSession}</button>
+            <button onClick={() => setOldWorkdir(null)}>{S.cancel}</button>
           </div>
         </div>
       )}

@@ -1,4 +1,5 @@
 import type { SensitiveTerm } from "../../shared/llm";
+import type { UpdateTicketInput } from "../../shared/types";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 
 /**
@@ -52,5 +53,23 @@ export function factIdArg(v: unknown): string {
 /** 开关：只接受真正的布尔值。 */
 export function boolArg(v: unknown): boolean {
   if (typeof v !== "boolean") throw new Error("invalid switch value");
+  return v;
+}
+
+const optString = (v: unknown, max: number): v is string | undefined => v === undefined || (typeof v === "string" && v.length <= max);
+
+/** 编辑 ticket 的参数：key 必填，其余字段可省略；工作方式只能是两种之一。 */
+export function updateTicketArg(v: unknown): UpdateTicketInput {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid ticket update");
+  const key = ticketKeyArg(o.key);
+  if (!optString(o.title, 500) || !optString(o.branch, 250)) throw new Error("invalid ticket update");
+  if (o.workMode !== undefined && o.workMode !== "worktree" && o.workMode !== "branch") throw new Error("invalid work mode");
+  return { key, title: o.title, branch: o.branch, workMode: o.workMode };
+}
+
+/** 写进剪贴板的文本：终端的选区最多是整个回放缓冲。 */
+export function clipboardTextArg(v: unknown): string {
+  if (typeof v !== "string" || v.length > 1024 * 1024) throw new Error("invalid clipboard text");
   return v;
 }

@@ -56,6 +56,14 @@ export interface CreateTicketInput {
   branch?: string;
 }
 
+/** 编辑 ticket：省略的字段不变。title 传空串表示清空。 */
+export interface UpdateTicketInput {
+  key: string;
+  title?: string;
+  workMode?: WorkMode;
+  branch?: string;
+}
+
 export interface OpenSessionRequest {
   ticketKey: string;
   /** 省略表示新建 session；给出时恢复该 session（会沿 replacedBy 链找到最新的）。 */
@@ -69,7 +77,9 @@ export interface OpenSessionRequest {
 export type OpenSessionResult =
   | { ok: true; termId: string; alreadyOpen: boolean }
   | { ok: false; reason: "branch_mismatch"; current: string; expected: string; dirty: boolean }
-  | { ok: false; reason: "claude_missing" | "no_ticket" | "no_session" };
+  /** 要恢复的 session 是在别的目录里启动的（ticket 后来改过工作方式），那个目录现在不在 ticket 的分支上（"HEAD" 表示游离）。 */
+  | { ok: false; reason: "old_workdir"; cwd: string; current: string; expected: string }
+  | { ok: false; reason: "claude_missing" | "no_ticket" | "no_session" | "ticket_busy" };
 
 export type HookStatus = "installed" | "missing" | "partial" | "stale" | "settings_invalid";
 export type HandoffCommandStatus = "installed" | "missing" | "stale" | "conflict";

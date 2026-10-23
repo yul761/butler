@@ -342,3 +342,37 @@ describe("SessionService.pruneEmptySessions (startup, after a quit that skipped 
     expect(sessions.get("orphan")).toBeNull();
   });
 });
+
+describe("SessionService.hasOpenTerminal", () => {
+  it("is true only while one of the ticket's terminals is running", async () => {
+    const { service, spawned, tickets, ticketService, repo } = await setup();
+    await ticketService.create({ key: "PROJ-2", repoPath: repo, workMode: "branch" });
+    expect(service.hasOpenTerminal("PROJ-1")).toBe(false);
+    await service.open({ ticketKey: "PROJ-1" });
+    expect(service.hasOpenTerminal("PROJ-1")).toBe(true);
+    expect(service.hasOpenTerminal("PROJ-2")).toBe(false);
+    spawned[0].pty.emitExit(0);
+    expect(service.hasOpenTerminal("PROJ-1")).toBe(false);
+    expect(tickets.get("PROJ-2")).not.toBeNull();
+  });
+});
+
+describe("SessionService.open after the ticket's work mode changed", () => {
+  it("warns before resuming an old session in a worktree that left the ticket branch; force opens it there", async () => {
+    const { service, sessions, ticket, ticketService, spawned } = await setup({ workMode: "worktree" });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: ticket.worktreePath!, origin: "butler", createdAt: 1 });
+    await ticketService.update({ key: "PROJ-1", workMode: "branch" }, { terminalsOpen: false });
+    expect(await service.open({ ticketKey: "PROJ-1", sessionId: "old" })).toEqual({
+      ok: false, reason: "old_workdir", cwd: ticket.worktreePath, current: "HEAD", expected: "feature/PROJ-1",
+    });
+    expect(await service.open({ ticketKey: "PROJ-1", sessionId: "old", force: true })).toMatchObject({ ok: true, termId: "old" });
+    expect(spawned[0].opts.cwd).toBe(ticket.worktreePath);
+  });
+
+  it("does not open sessions while the ticket is being changed", async () => {
+    const { service, ticketService } = await setup({ workMode: "worktree" });
+    const update = ticketService.update({ key: "PROJ-1", workMode: "branch" }, { terminalsOpen: false });
+    expect(await service.open({ ticketKey: "PROJ-1", force: true })).toEqual({ ok: false, reason: "ticket_busy" });
+    await update;
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, boolArg, auditCursorArg, factIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT } from "./validate";
+import { apiKeyArg, boolArg, auditCursorArg, clipboardTextArg, factIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -63,5 +63,21 @@ describe("memory IPC arguments", () => {
     expect(boolArg(true)).toBe(true);
     expect(boolArg(false)).toBe(false);
     for (const bad of ["true", 1, null, undefined]) expect(() => boolArg(bad)).toThrow();
+  });
+});
+
+describe("ticket edit and clipboard IPC arguments", () => {
+  it("accepts a ticket update with optional fields and rejects anything else", () => {
+    expect(updateTicketArg({ key: "P-1" })).toEqual({ key: "P-1", title: undefined, branch: undefined, workMode: undefined });
+    expect(updateTicketArg({ key: "P-1", title: "t", branch: "b", workMode: "branch", extra: 1 })).toEqual({ key: "P-1", title: "t", branch: "b", workMode: "branch" });
+    for (const bad of [null, "P-1", { key: "" }, { key: "P-1", workMode: "other" }, { key: "P-1", title: 3 }, { key: "P-1", branch: "x".repeat(251) }]) {
+      expect(() => updateTicketArg(bad)).toThrow();
+    }
+  });
+
+  it("accepts only a bounded string for the clipboard", () => {
+    expect(clipboardTextArg("hi")).toBe("hi");
+    expect(() => clipboardTextArg(3)).toThrow();
+    expect(() => clipboardTextArg("x".repeat(1024 * 1024 + 1))).toThrow();
   });
 });

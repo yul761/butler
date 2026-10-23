@@ -4,6 +4,9 @@ export const IPC = {
   ticketsSetStatus: "tickets:setStatus",
   ticketsArchive: "tickets:archive",
   ticketsSwitchBranch: "tickets:switchBranch",
+  ticketsUpdate: "tickets:update",
+  ticketsArchived: "tickets:archived",
+  ticketsUnarchive: "tickets:unarchive",
   sessionsOpen: "sessions:open",
   sessionsUnclaimed: "sessions:unclaimed",
   sessionsClaim: "sessions:claim",
@@ -43,11 +46,14 @@ export const IPC = {
   appNavigate: "app:navigate",
   appAutostartGet: "app:autostartGet",
   appAutostartSet: "app:autostartSet",
+  clipboardRead: "clipboard:read",
+  clipboardWrite: "clipboard:write",
 } as const;
 
 /** 渲染进程 → 主进程，有返回值（ipcRenderer.invoke）。 */
 export const INVOKE_CHANNELS: readonly string[] = [
   IPC.ticketsList, IPC.ticketsCreate, IPC.ticketsSetStatus, IPC.ticketsArchive, IPC.ticketsSwitchBranch,
+  IPC.ticketsUpdate, IPC.ticketsArchived, IPC.ticketsUnarchive,
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.briefsLatest, IPC.briefsRegenerate, IPC.briefsMark,
@@ -55,7 +61,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,
   IPC.memoryView, IPC.memoryWhy,
-  IPC.appAutostartGet, IPC.appAutostartSet,
+  IPC.appAutostartGet, IPC.appAutostartSet, IPC.clipboardRead, IPC.clipboardWrite,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];
