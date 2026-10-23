@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { MAX_RUNNING_PER_TICKET, sanitizeTask, type ControlRequest, type ControlResult } from "../../shared/control";
+import { MAX_RUNNING_PER_TICKET, sanitizeTask, taskMessage, type ControlRequest, type ControlResult } from "../../shared/control";
 import type { OpenSessionResult, Ticket, TicketRepo } from "../../shared/types";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
@@ -11,8 +11,8 @@ export interface ControlHandlerDeps {
   sessions: SessionsRepo;
   ticketService: Pick<TicketService, "workDir">;
   sessionService: Pick<SessionService, "open" | "openTerminalCount" | "isRunning">;
-  /** 把任务作为第一条消息交给新 session（等输入框就绪、粘贴、回车）。 */
-  submit: (termId: string, task: string) => Promise<boolean>;
+  /** 把任务作为第一条消息交给新 session（等启动对话框过去、输入框就绪、粘贴、回车）。 */
+  submit: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout">;
   notify: () => void;
   log?: (msg: string, err?: unknown) => void;
 }
@@ -92,11 +92,14 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     const r = await d.sessionService.open({ ticketKey: t.key, repoId: repo.id }, { spawnedBy: spawner(t, req.from) ?? undefined });
     if (!r.ok) return fail(openError(r, repo));
     d.notify();
-    // 不等任务写完：等输入框就绪可能要十几秒，总控先拿到 session id。
-    d.submit(r.termId, task).then(
-      (done) => done || d.log?.(`control: task for ${r.termId} not delivered (terminal exited or never got ready)`),
+    // 不等任务写完：等输入框就绪可能要十几秒（用户还要处理信任文件夹之类的对话框），总控先拿到 session id。
+    d.submit(r.termId, taskMessage(task)).then(
+      (res) => res === "sent" || d.log?.(`control: task for ${r.termId} not delivered (${res})`),
       (e: unknown) => d.log?.(`control: task for ${r.termId} failed`, e),
     );
-    return ok({ sessionId: r.termId, repo: name(repo), dir: d.ticketService.workDir(repo) });
+    return ok({
+      sessionId: r.termId, repo: name(repo), dir: d.ticketService.workDir(repo),
+      note: "任务会在新 session 的输入框就绪后提交；如果它先弹出信任文件夹之类的确认，要等用户在 Butler 里处理。",
+    });
   };
 }

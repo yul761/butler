@@ -9,8 +9,10 @@ export interface ControlInboxOptions {
   resultsDir: string;
   handle: (req: ControlRequest) => Promise<ControlResult>;
   intervalMs?: number;
-  /** 没人取走的结果文件（总控等超时了）保留多久。 */
+  /** 没人取走的结果文件（总控等超时了）、写了一半的临时文件保留多久。 */
   staleMs?: number;
+  /** 请求文件超过这个年纪就不再执行（比如 Butler 没开着时留下的）：总控早就等超时了。 */
+  maxRequestAgeMs?: number;
   now?: () => number;
   log?: (msg: string, err?: unknown) => void;
 }
@@ -32,7 +34,12 @@ export class ControlInbox {
     } catch (e) {
       this.o.log?.("control inbox: watch failed; polling only", e);
     }
-    this.timer = setInterval(() => void this.drain(), this.o.intervalMs ?? 1000);
+    let ticks = 0;
+    this.timer = setInterval(() => {
+      void this.drain();
+      // 大约每分钟清一次没人取走的结果。
+      if (++ticks % 60 === 0) void this.sweepStale();
+    }, this.o.intervalMs ?? 1000);
     this.timer.unref?.();
     void this.drain();
   }
@@ -76,7 +83,9 @@ export class ControlInbox {
     const id = name.slice(0, -".json".length);
     const file = join(this.o.requestsDir, name);
     let raw: string;
+    let age: number;
     try {
+      age = (this.o.now ?? Date.now)() - (await stat(file)).mtimeMs;
       raw = await readFile(file, "utf8");
       // 先删掉再处理：处理到一半退出也不会在下次启动时重复开 session。
       await unlink(file);
@@ -85,6 +94,10 @@ export class ControlInbox {
     }
     if (!CONTROL_ID_RE.test(id)) {
       this.o.log?.(`control inbox: dropped ${name} (bad id)`);
+      return 0;
+    }
+    if (age > (this.o.maxRequestAgeMs ?? 90_000)) {
+      this.o.log?.(`control inbox: dropped ${name} (${Math.round(age / 1000)} s old; nobody is waiting for it any more)`);
       return 0;
     }
     let result: ControlResult;
@@ -106,16 +119,21 @@ export class ControlInbox {
     return 1;
   }
 
-  /** 启动时清掉没人取走的旧结果。 */
+  /** 清掉没人取走的旧结果，以及两边留下的临时文件（启动时和之后每分钟）。 */
   private async sweepStale(): Promise<void> {
     const now = (this.o.now ?? Date.now)();
-    try {
-      for (const n of await readdir(this.o.resultsDir)) {
-        const f = join(this.o.resultsDir, n);
-        if (now - (await stat(f)).mtimeMs > (this.o.staleMs ?? 10 * 60_000)) await unlink(f);
+    const old = this.o.staleMs ?? 10 * 60_000;
+    const sweep = async (dir: string, match: (n: string) => boolean) => {
+      try {
+        for (const n of (await readdir(dir)).filter(match)) {
+          const f = join(dir, n);
+          if (now - (await stat(f)).mtimeMs > old) await unlink(f);
+        }
+      } catch {
+        // 目录还不存在，或者文件刚被拿走。
       }
-    } catch {
-      // 目录还不存在。
-    }
+    };
+    await sweep(this.o.resultsDir, () => true);
+    await sweep(this.o.requestsDir, (n) => n.endsWith(".tmp"));
   }
 }

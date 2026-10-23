@@ -109,10 +109,21 @@ function interactive() {
   if (mcp) out(`mcp: ${servers.join(", ")}\n`);
   out("> ");
   const rl = readline.createInterface({ input: process.stdin });
+  // bracketed paste（总控交任务时 Butler 这样写入）：粘贴里的几行合成一条消息。PTY 按行交付，粘贴结束标记所在的那一行
+  // 只有等到 Butler 随后的回车才会到，所以读到结束标记就提交。
+  let pasting = null;
+  let pasted = null;
   rl.on("line", (raw) => {
-    // Butler 用 bracketed paste 写入多行文本（总控开子 session 的任务）：去掉粘贴标记。
-    // eslint-disable-next-line no-control-regex
-    const line = raw.replace(/\x1b\[20[01]~/g, "").trim();
+    if (raw.includes("\x1b[200~") || pasting) {
+      const text = raw.replace("\x1b[200~", "");
+      const end = text.indexOf("\x1b[201~");
+      pasting = [...(pasting || []), end >= 0 ? text.slice(0, end) : text];
+      if (end < 0) return;
+      pasted = pasting.join("\n");
+      pasting = null;
+    }
+    const line = pasted !== null ? pasted.trim() : raw.trim();
+    pasted = null;
     if (!line) {
       out("> ");
       return;

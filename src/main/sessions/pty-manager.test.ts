@@ -110,28 +110,53 @@ describe("PtyManager", () => {
     expect(await p2).toBe(false);
   });
 
-  it("submit pastes the text as one bracketed paste once the prompt is ready, then presses Enter", async () => {
+  it("deliver waits for SessionStart and a quiet prompt, pastes once, then presses Enter after the echo settles", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);
-    const p = mgr.submit("t1", "写接口\n加测试", 800, 20_000, 150);
-    spawned[0].pty.emit("ready");
-    await vi.advanceTimersByTimeAsync(900);
-    expect(spawned[0].pty.written).toEqual(["\x1b[200~写接口\n加测试\x1b[201~"]);
+    const p = mgr.deliver("t1", "写接口\n加测试", { idleMs: 800, startWaitMs: 60_000, settleMs: 300 });
+    spawned[0].pty.emit("welcome");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(spawned[0].pty.written).toEqual([]); // 还没有 SessionStart
+    mgr.markStarted("t1");
     await vi.advanceTimersByTimeAsync(200);
-    expect(await p).toBe(true);
+    expect(spawned[0].pty.written).toEqual(["\x1b[200~写接口\n加测试\x1b[201~"]);
+    spawned[0].pty.emit("写接口…");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(spawned[0].pty.written).toHaveLength(1); // 回显还没安静
+    await vi.advanceTimersByTimeAsync(400);
+    expect(await p).toBe("sent");
     expect(spawned[0].pty.written).toEqual(["\x1b[200~写接口\n加测试\x1b[201~", "\r"]);
   });
 
-  it("submit does not press Enter into a terminal that exited after the paste", async () => {
+  it("deliver never answers a trust or MCP dialog, and waits for the user to get past it", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);
-    const p = mgr.submit("t1", "x", 800, 20_000, 150);
-    spawned[0].pty.emit("ready");
-    await vi.advanceTimersByTimeAsync(900);
+    const p = mgr.deliver("t1", "task", { idleMs: 800, startWaitMs: 1000, timeoutMs: 600_000 });
+    spawned[0].pty.emit("\x1b[1m Do you trust the files in this folder?\x1b[0m\r\n ❯ 1. Yes, proceed\r\n   2. No, exit");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(spawned[0].pty.written).toEqual([]);
+    // 用户选了“是”：claude 重画欢迎界面和输入框。
+    spawned[0].pty.emit(`\x1b[2J${"─".repeat(1200)}\r\n> `);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(spawned[0].pty.written[0]).toBe("\x1b[200~task\x1b[201~");
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(await p).toBe("sent");
+  });
+
+  it("deliver gives up when the terminal exits or the user never gets past the dialog", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    const p1 = mgr.deliver("t1", "x");
     spawned[0].pty.emitExit(0);
     await vi.advanceTimersByTimeAsync(200);
-    expect(await p).toBe(false);
-    expect(spawned[0].pty.written).toEqual(["\x1b[200~x\x1b[201~"]);
+    expect(await p1).toBe("exited");
+
+    mgr.open("t2", spec, opts);
+    const p2 = mgr.deliver("t2", "x", { startWaitMs: 100, timeoutMs: 5000 });
+    spawned[1].pty.emit("New MCP server found in .mcp.json");
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(await p2).toBe("timeout");
+    expect(spawned[1].pty.written).toEqual([]);
   });
 
   it("killAll kills every terminal", () => {

@@ -59,6 +59,18 @@ describe("butler-sessions MCP server", () => {
     expect(await server.handle({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "list_sessions" } })).toMatchObject({
       result: { isError: true, content: [{ text: expect.stringContaining("没有回应") }] },
     });
+    expect(await server.handle({ jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t" } } })).toMatchObject({
+      result: { isError: true, content: [{ text: expect.stringContaining("list_sessions") }] },
+    });
+  });
+
+  it("withdraws pending requests when it shuts down", async () => {
+    const { server, requestsDir } = setup(5000);
+    void server.handle({ jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t" } } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(readdirSync(requestsDir).filter((n) => n.endsWith(".json"))).toHaveLength(1);
+    server.withdrawAll();
+    expect(readdirSync(requestsDir)).toEqual([]);
   });
 
   it("withdraws a request nobody picked up", async () => {

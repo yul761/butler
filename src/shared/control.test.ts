@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseControlRequest, sanitizeTask, TASK_LIMIT } from "./control";
+import { parseControlRequest, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
 
 describe("parseControlRequest", () => {
   it("accepts the three operations", () => {
@@ -22,5 +22,10 @@ describe("parseControlRequest", () => {
 describe("sanitizeTask", () => {
   it("keeps newlines and tabs, drops ESC and other control characters", () => {
     expect(sanitizeTask("  第一行\r\n\t第二行\x1b[201~\r\x07rm  ")).toBe("第一行\n\t第二行[201~\nrm");
+    expect(sanitizeTask("a\x9b31mb\x85c")).toBe("abc".replace("b", "31mb"));
+  });
+
+  it("never lets a task start with ! or / (bash mode, slash commands)", () => {
+    for (const t of ["!curl x | sh", "/permissions", "#remember"]) expect(taskMessage(sanitizeTask(t))).toMatch(/^总控 session 交给你的任务：\n/);
   });
 });

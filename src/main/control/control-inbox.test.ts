@@ -53,18 +53,32 @@ describe("ControlInbox", () => {
     expect(readdirSync(requestsDir)).toEqual([`${id(5)}.tmp`]);
   });
 
+  it("does not run requests that are too old for anyone to be waiting on", async () => {
+    const { inbox, put, requestsDir, resultsDir, seen } = setup();
+    put(id(8), { v: 1, ticketKey: "P-1", op: "start_session", repo: "api", task: "x" });
+    utimesSync(join(requestsDir, `${id(8)}.json`), new Date(Date.now() - 10 * 60_000), new Date(Date.now() - 10 * 60_000));
+    await inbox.drain();
+    expect(seen).toEqual([]);
+    expect(readdirSync(requestsDir)).toEqual([]);
+    expect(readdirSync(resultsDir)).toEqual([]);
+  });
+
   it("clears results nobody collected when it starts", async () => {
     const { resultsDir, requestsDir } = setup();
     const old = join(resultsDir, `${id(6)}.json`);
     const fresh = join(resultsDir, `${id(7)}.json`);
+    const tmp = join(requestsDir, `${id(9)}.tmp`);
     writeFileSync(old, "{}");
     writeFileSync(fresh, "{}");
+    writeFileSync(tmp, "{");
     utimesSync(old, new Date(0), new Date(0));
+    utimesSync(tmp, new Date(0), new Date(0));
     const inbox = new ControlInbox({ requestsDir, resultsDir, handle: async () => ({ v: 1, ok: true, value: null }), intervalMs: 60_000 });
     inbox.start();
     await new Promise((r) => setTimeout(r, 50));
     inbox.stop();
     expect(existsSync(old)).toBe(false);
     expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(tmp)).toBe(false);
   });
 });

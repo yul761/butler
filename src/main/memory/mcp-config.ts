@@ -50,20 +50,23 @@ export function sessionsServer(o: { launcher: MemoryMcpLauncher; ticketKey: stri
 /** ticket 的记忆配置放在 mcp/ 下自己的子目录里：和计划 3 的 project-* / local-* 文件（headless 用）永远分开（P4-R6）。 */
 export const TICKET_MCP_SUBDIR = "tickets";
 
+/** 总控 session 的配置放在 mcp/tickets/ 下自己的子目录里：ticket 号再怎么起名也不会和普通配置撞上。 */
+export const COORDINATOR_MCP_SUBDIR = "coordinator";
+
 /**
- * mcp/tickets/<ticket>.json（设计文档 2.3）。文件名规则见 ticketFileStem：结果永远在 mcpDir/tickets 里面。
- * suffix 区分同一个 ticket 的不同配置（总控 session 多挂一个 server）。
+ * mcp/tickets/<ticket>.json（设计文档 2.3）；总控的是 mcp/tickets/coordinator/<ticket>.json。文件名规则见 ticketFileStem：
+ * 结果永远在 mcpDir/tickets 里面。
  */
-export function ticketMcpFile(mcpDir: string, ticketKey: string, suffix = ""): string {
-  return join(mcpDir, TICKET_MCP_SUBDIR, `${ticketFileStem(ticketKey)}${suffix}.json`);
+export function ticketMcpFile(mcpDir: string, ticketKey: string, coordinator = false): string {
+  return join(mcpDir, TICKET_MCP_SUBDIR, ...(coordinator ? [COORDINATOR_MCP_SUBDIR] : []), `${ticketFileStem(ticketKey)}.json`);
 }
 
 /**
  * 写（覆盖）这个 ticket 的 --mcp-config 文件：随机名的临时文件（0600、wx）再 rename，返回文件路径。
- * 总控的配置（多一个 butler-sessions）用 suffix 分开存，普通 session 的配置里永远没有它。
+ * 总控的配置（多一个 butler-sessions）分开存，普通 session 的配置里永远没有它。
  */
-export function writeTicketMcpConfig(o: { mcpDir: string; ticketKey: string; servers: Record<string, McpServerSpec>; suffix?: string }): string {
-  const file = ticketMcpFile(o.mcpDir, o.ticketKey, o.suffix);
+export function writeTicketMcpConfig(o: { mcpDir: string; ticketKey: string; servers: Record<string, McpServerSpec>; coordinator?: boolean }): string {
+  const file = ticketMcpFile(o.mcpDir, o.ticketKey, o.coordinator);
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   try {

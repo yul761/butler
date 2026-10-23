@@ -328,7 +328,7 @@ async function bootstrap(): Promise<void> {
       }
     }
     if (Object.keys(servers).length === 0) return null;
-    return writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, suffix: opts.coordinator ? "-coordinator" : "" });
+    return writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator });
   };
   const sessionService = new SessionService({
     tickets, sessions, settings, ticketService, pty,
@@ -551,6 +551,8 @@ async function bootstrap(): Promise<void> {
         );
       }
       if (effect.kind === "ignored") return;
+      // 总控开的子 session 等这个信号才交任务（信任文件夹之类的启动对话框已经过去）。
+      if (effect.kind === "session_started") pty.markStarted(effect.sessionId);
       notify();
       // 还没归属 ticket、又缺 cwd / 分支 / 首条提示的 session：触发一次发现（每个 session 每次运行最多一次）。
       if (effect.kind !== "nested") {
@@ -604,7 +606,7 @@ async function bootstrap(): Promise<void> {
     resultsDir: paths.controlResults,
     handle: controlHandler({
       tickets, sessions, ticketService, sessionService, notify,
-      submit: (termId, task) => pty.submit(termId, task),
+      submit: (termId, message) => pty.deliver(termId, message),
       log: logger,
     }),
     log: logger,

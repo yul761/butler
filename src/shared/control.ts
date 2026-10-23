@@ -42,7 +42,15 @@ export function sanitizeTask(text: string): string {
   return text
     .replace(/\r\n?/g, "\n")
     // eslint-disable-next-line no-control-regex
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "")
     .trim()
     .slice(0, TASK_LIMIT);
+}
+
+/**
+ * 交给子 session 的第一条消息：固定的开头加上任务。任务本身可能以 ! 或 / 开头（claude 的 bash 模式、斜杠命令，不经过权限确认），
+ * 有了开头它永远只是一段普通的提示。
+ */
+export function taskMessage(task: string): string {
+  return `总控 session 交给你的任务：\n${task}`;
 }

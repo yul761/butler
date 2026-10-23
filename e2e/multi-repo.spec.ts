@@ -53,11 +53,16 @@ test("a ticket over two repos: a session per repo and a coordinator that sees bo
 
   // 5. 总控的 mcp 配置里有 butler-sessions（普通 session 的没有）；按配置启动它，调用 start_session。
   await expect.poll(fakeLog).toMatch(/mcp=[^\n]*butler-sessions[^\n]*cwd=/);
-  const config = JSON.parse(readFileSync(join(s.butlerHome, "mcp", "tickets", "FULL-1-coordinator.json"), "utf8")) as {
+  const config = JSON.parse(readFileSync(join(s.butlerHome, "mcp", "tickets", "coordinator", "FULL-1.json"), "utf8")) as {
     mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
   };
   const server = config.mcpServers["butler-sessions"];
-  const child = spawn(server.command, server.args, { env: { ...server.env, PATH: process.env.PATH ?? "" }, stdio: ["pipe", "pipe", "inherit"] });
+  // claude 会把自己的环境变量（包括 Butler 给的 BUTLER_SESSION）传给 MCP server：这里按总控的 session id 补上。
+  const coordinatorId = /interactive new (\S+) mcp=[^\n]*butler-sessions/.exec(fakeLog())![1];
+  const child = spawn(server.command, server.args, {
+    env: { ...server.env, BUTLER_SESSION: coordinatorId, PATH: process.env.PATH ?? "" },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
   try {
     const replies = createInterface({ input: child.stdout });
     const next = () => new Promise<{ id: number; result: { content: { text: string }[]; isError?: boolean } }>((r) => replies.once("line", (l) => r(JSON.parse(l))));
@@ -71,11 +76,15 @@ test("a ticket over two repos: a session per repo and a coordinator that sees bo
 
     // 子 session 出现在同一个 ticket 下，开在 repo 的 worktree 里，任务作为第一条消息提交。
     await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace cwd=${worktree} adddirs=\n`);
-    const childButton = page.locator(".sessions-bar .session").filter({ hasText: "boss-says-build-the-ui" });
+    const childButton = page.locator(".sessions-bar .session").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
     await expect(childButton).toBeVisible();
+    await expect(childButton).toHaveAttribute("title", /^总控 session 交给你的任务：\nboss-says-build-the-ui\n/);
     await expect(childButton.locator(".place")).toHaveText("repo");
     await childButton.click();
-    await expect.poll(() => terminalText(page)).toContain("收到：boss-says-build-the-ui");
+    // 任务带着固定的开头、作为一条消息提交（多行粘贴没有被逐行回车）。
+    await expect.poll(() => terminalText(page)).toContain("收到：总控 session 交给你的任务：");
+    await expect.poll(() => terminalText(page)).toContain("boss-says-build-the-ui");
+    expect(await terminalText(page)).not.toContain("收到：boss-says-build-the-ui");
   } finally {
     child.kill();
   }

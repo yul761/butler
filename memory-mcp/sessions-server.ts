@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { renameWithRetrySync } from "../src/main/util/fs-retry";
 import { CONTROL_VERSION, TASK_LIMIT, type ControlRequest, type ControlResult } from "../src/shared/control";
 
 /**
@@ -61,7 +62,22 @@ export const TOOLS = [
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class SessionsServer {
+  /** 写出去、还没等到结果的请求文件。 */
+  private readonly pending = new Set<string>();
+
   constructor(private readonly o: SessionsServerOptions) {}
+
+  /** 退出前撤回还没被 Butler 拿走的请求：没人等结果了，不该再去开 session。 */
+  withdrawAll(): void {
+    for (const f of this.pending) {
+      try {
+        unlinkSync(f);
+      } catch {
+        // Butler 已经拿走了。
+      }
+    }
+    this.pending.clear();
+  }
 
   /** 处理一条消息；通知（没有 id）返回 null。 */
   async handle(msg: JsonRpcMessage): Promise<object | null> {
@@ -106,7 +122,13 @@ export class SessionsServer {
         return toolError(`没有这个工具：${String(params.name)}`);
     }
     const result = await this.send(req);
-    if (!result) return toolError("Butler 没有回应（Butler 没在运行？）");
+    if (!result) {
+      return toolError(
+        req.op === "start_session"
+          ? "Butler 没有及时回应（可能没在运行）。session 也可能已经开了：重试之前先用 list_sessions 看一下。"
+          : "Butler 没有回应（Butler 没在运行？）",
+      );
+    }
     if (!result.ok) return toolError(result.error);
     return { content: [{ type: "text", text: JSON.stringify(result.value, null, 2) }] };
   }
@@ -118,27 +140,39 @@ export class SessionsServer {
     const file = join(this.o.requestsDir, `${id}.json`);
     const tmp = join(this.o.requestsDir, `${id}.tmp`);
     writeFileSync(tmp, JSON.stringify(req), { mode: 0o600 });
-    renameSync(tmp, file);
-    const resultFile = join(this.o.resultsDir, `${id}.json`);
-    const end = Date.now() + (this.o.timeoutMs ?? 60_000);
-    while (Date.now() < end) {
-      if (existsSync(resultFile)) {
-        try {
-          const r = JSON.parse(readFileSync(resultFile, "utf8")) as ControlResult;
-          unlinkSync(resultFile);
-          return r;
-        } catch {
-          // 结果文件还没写完（rename 之前不会出现，这里只是兜底）。
-        }
-      }
-      await sleep(this.o.pollMs ?? 200);
-    }
+    renameWithRetrySync(tmp, file);
+    this.pending.add(file);
     try {
-      unlinkSync(file);
-    } catch {
-      // Butler 已经拿走了请求。
+      const resultFile = join(this.o.resultsDir, `${id}.json`);
+      const end = Date.now() + (this.o.timeoutMs ?? 60_000);
+      while (Date.now() < end) {
+        if (existsSync(resultFile)) {
+          let r: ControlResult | null = null;
+          try {
+            r = JSON.parse(readFileSync(resultFile, "utf8")) as ControlResult;
+          } catch {
+            // 结果文件还没写完（rename 之前不会出现，这里只是兜底）。
+          }
+          if (r) {
+            try {
+              unlinkSync(resultFile);
+            } catch {
+              // Windows 上可能被短暂占用：结果已经读到了，留下的文件由 Butler 定期清理。
+            }
+            return r;
+          }
+        }
+        await sleep(this.o.pollMs ?? 200);
+      }
+      try {
+        unlinkSync(file);
+      } catch {
+        // Butler 已经拿走了请求。
+      }
+      return null;
+    } finally {
+      this.pending.delete(file);
     }
-    return null;
   }
 }
 

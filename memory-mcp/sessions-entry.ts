@@ -14,6 +14,10 @@ if (!ticketKey || !requestsDir || !resultsDir) {
   process.stderr.write("butler-sessions: BUTLER_TICKET / BUTLER_CONTROL_REQUESTS / BUTLER_CONTROL_RESULTS are required\n");
   process.exit(2);
 }
-serveStdio(new SessionsServer({ ticketKey, from, requestsDir, resultsDir }), process.stdin, process.stdout);
-// claude 退出时关掉 stdin：跟着退出，不留下孤儿进程。
-process.stdin.on("end", () => process.exit(0));
+const server = new SessionsServer({ ticketKey, from, requestsDir, resultsDir });
+serveStdio(server, process.stdin, process.stdout);
+// claude 退出时关掉 stdin：撤回没人再等的请求，跟着退出，不留下孤儿进程。
+process.stdin.on("end", () => {
+  server.withdrawAll();
+  process.exit(0);
+});

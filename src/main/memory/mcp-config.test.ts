@@ -44,8 +44,10 @@ describe("ticket MCP config (design 4.2, 8.4)", () => {
       },
     });
     const plain = writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", servers: memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "PROJ-1" }) });
-    const boss = writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", servers: sessions, suffix: "-coordinator" });
-    expect(boss).toBe(join(mcpDir, "tickets", "PROJ-1-coordinator.json"));
+    const boss = writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", servers: sessions, coordinator: true });
+    expect(boss).toBe(join(mcpDir, "tickets", "coordinator", "PROJ-1.json"));
+    // 叫 PROJ-1-coordinator 的 ticket 也不会和 PROJ-1 的总控配置撞上。
+    expect(ticketMcpFile(mcpDir, "PROJ-1-coordinator")).not.toBe(boss);
     expect(readFileSync(plain, "utf8")).not.toContain("butler-sessions");
   });
 

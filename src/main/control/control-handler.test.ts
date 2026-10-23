@@ -34,7 +34,7 @@ async function setup() {
   let notified = 0;
   const handle = controlHandler({
     tickets, sessions, ticketService, sessionService,
-    submit: async (termId, task) => (submitted.push([termId, task]), true),
+    submit: async (termId, task) => (submitted.push([termId, task]), "sent" as const),
     notify: () => notified++,
   });
   const web = makeRepo();
@@ -66,10 +66,10 @@ describe("controlHandler", () => {
     await sessionService.open({ ticketKey: "FULL-1", coordinator: true });
     const apiRepo = tickets.get("FULL-1")!.repos[1];
     const r = await handle({ ...base, from: "s-1", op: "start_session", repo: api.split(/[\\/]/).pop()!.toUpperCase(), task: "写接口\x1b[201~\r\n加测试" });
-    expect(r).toEqual({ v: 1, ok: true, value: { sessionId: "s-2", repo: expect.any(String), dir: apiRepo.worktreePath } });
+    expect(r).toEqual({ v: 1, ok: true, value: { sessionId: "s-2", repo: expect.any(String), dir: apiRepo.worktreePath, note: expect.any(String) } });
     expect(spawned[1].opts.cwd).toBe(apiRepo.worktreePath);
     expect(sessions.get("s-2")).toMatchObject({ ticketKey: "FULL-1", repoId: apiRepo.id, spawnedBy: "s-1", coordinator: false });
-    expect(submitted).toEqual([["s-2", "写接口[201~\n加测试"]]);
+    expect(submitted).toEqual([["s-2", "总控 session 交给你的任务：\n写接口[201~\n加测试"]]);
     expect(notified()).toBe(1);
 
     const listed = await handle({ ...base, op: "list_sessions" });
