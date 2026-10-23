@@ -60,6 +60,11 @@ export interface DeliverOptions {
   /** 粘贴之后，回显安静多久再回车；最多等 settleCapMs。 */
   settleMs?: number;
   settleCapMs?: number;
+  /**
+   * 把换行压成空格，作为一行发送。Windows 的 ConPTY 不一定把粘贴标记交给程序，粘贴里的换行就成了回车，
+   * 任务会被拆成好几条消息提交（CI 上实际出现过）。
+   */
+  singleLine?: boolean;
 }
 
 export type DeliverResult = "sent" | "exited" | "timeout";
@@ -168,7 +173,8 @@ export class PtyManager {
       const idle = t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs;
       if (started && idle && !dialogShowing(t.buffer)) {
         // 粘贴里的换行按终端的惯例写成 \r（xterm 的粘贴也是这样）：Windows 的 ConPTY 会吞掉输入里的 \n。
-        this.guard(termId, "deliver paste", () => t.proc.write(`\x1b[200~${text.replace(/\r?\n/g, "\r")}\x1b[201~`));
+        const body = o.singleLine ? text.replace(/\s*\r?\n\s*/g, " ") : text.replace(/\r?\n/g, "\r");
+        this.guard(termId, "deliver paste", () => t.proc.write(`\x1b[200~${body}\x1b[201~`));
         break;
       }
       if (now - start >= (o.timeoutMs ?? 300_000)) return "timeout";

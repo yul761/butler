@@ -128,6 +128,16 @@ describe("PtyManager", () => {
     expect(spawned[0].pty.written).toEqual(["\x1b[200~写接口\r加测试\x1b[201~", "\r"]);
   });
 
+  it("deliver can send the task as a single line (Windows)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    const p = mgr.deliver("t1", "开头：\n写接口\n  加测试", { startWaitMs: 0, singleLine: true });
+    spawned[0].pty.emit("ready");
+    await vi.advanceTimersByTimeAsync(7000);
+    expect(await p).toBe("sent");
+    expect(spawned[0].pty.written).toEqual(["\x1b[200~开头： 写接口 加测试\x1b[201~", "\r"]);
+  });
+
   it("deliver never answers a trust or MCP dialog, and waits for the user to get past it", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);
