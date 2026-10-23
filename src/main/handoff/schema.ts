@@ -58,6 +58,20 @@ export function extractHandoffBlock(text: string): string | null {
   return blocks.length ? blocks[blocks.length - 1] : null;
 }
 
+const JSON_BLOCK_RE = /```json(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
+
+/**
+ * /handoff 那一轮里没有 butler-handoff 代码块时的退路：claude 有时把结果写成普通的 ```json 代码块。
+ * 只收看起来就是 handoff 的那个（有 ticket 和 next_steps），取最后一个。
+ */
+export function extractJsonHandoffBlock(text: string): string | null {
+  const blocks = [...text.matchAll(JSON_BLOCK_RE)].map((m) => m[1].trim()).filter((b) => {
+    const v = parseJsonLoose(b) as Record<string, unknown> | null;
+    return !!v && typeof v === "object" && typeof v.ticket === "string" && Array.isArray(v.next_steps);
+  });
+  return blocks.length ? blocks[blocks.length - 1] : null;
+}
+
 /** `--json-schema` 的结果在 structured_output；没有时退回解析 result 文本。 */
 export function pickStructured(r: { structured: unknown; resultText: string }): unknown {
   return r.structured !== null && r.structured !== undefined ? r.structured : parseJsonLoose(r.resultText);

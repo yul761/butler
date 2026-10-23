@@ -28,7 +28,7 @@ export interface IngestInput {
 
 export type IngestResult =
   | { stored: true; handoffId: number; degraded: boolean; status: TicketStatus | null }
-  | { stored: false; reason: "no_ticket" | "duplicate" };
+  | { stored: false; reason: "no_ticket" | "duplicate" | "no_block" };
 
 type StatusDeps = Pick<IngestDeps, "tickets" | "handoffs" | "followups" | "now">;
 

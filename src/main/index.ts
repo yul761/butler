@@ -546,8 +546,9 @@ async function bootstrap(): Promise<void> {
         void captureCommandHandoff({ sessions, tickets, ingest }, stop).then(
           (r) => {
             if (r?.stored) notify();
-            // session 没有归属 ticket、输出里的 ticket 号也不存在：记一笔，免得用户以为采集坏了。
+            // session 没有归属 ticket、输出里的 ticket 号也不存在，或者等了几次都没读到结果：记一笔，免得用户以为采集坏了。
             else if (r && r.reason === "no_ticket") logger(`/handoff output in session ${stop.sessionId} names no known ticket; not stored`);
+            else if (r && r.reason === "no_block") logger(`/handoff in session ${stop.sessionId}: no handoff block found in the transcript; not stored`);
           },
           (e: unknown) => logger("capture /handoff failed", e),
         );
