@@ -102,7 +102,8 @@ describe("packaging config (design 2.1, 12)", () => {
   });
 
   it("has release metadata and scripts", () => {
-    expect(pkg.version).toBe("1.0.0");
+    // 发布的版本号：普通的 x.y.z（release.yml 要求 tag 和它一致）。
+    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(pkg.main).toBe("out/main/index.js");
     expect(pkg.author).toBe("Yuchen Lin");
     expect(pkg.scripts.dist).toBe("electron-builder --publish never");
