@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { HealthReport } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
+import { savedWizardStep, saveWizardStep, setWizardSkipped } from "../local-prefs";
 import { mergeTools } from "../settings-form";
 import { S } from "../strings";
 import { canAdvance, nextStep, prevStep, stepNumber, type WizardStep } from "../wizard";
@@ -11,7 +12,8 @@ import { TrackerToolPicker } from "./TrackerToolPicker";
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function Wizard({ onDone }: { onDone: () => void }) {
-  const [step, setStep] = useState<WizardStep>("claude");
+  // 上次退出时停在哪一步就从哪一步继续（只记在这台机器上）。
+  const [step, setStep] = useState<WizardStep>(() => savedWizardStep() ?? "claude");
   const [report, setReport] = useState<HealthReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -40,14 +42,18 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     api.settings().then((s) => { setClaudePath(s.claudePath); setSavedClaudePath(s.claudePath); }, reportError);
   }, []);
 
-  // 换步骤时清掉上一步的提示（如“已保存”）。
+  // 换步骤时清掉上一步的提示（如“已保存”），并记下当前步骤。
   useEffect(() => {
     setMessage(null);
+    saveWizardStep(step);
   }, [step]);
 
-  async function finish() {
+  /** skipped：点的是“稍后再说”，简报页会提醒还没设置完。 */
+  async function finish(skipped: boolean) {
     try {
       await api.setSetting("onboardingDone", "1");
+      saveWizardStep(null);
+      setWizardSkipped(skipped);
       onDone();
     } catch (e) {
       reportError(e);
@@ -161,13 +167,13 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       <div className="actions">
         {step !== "claude" && step !== "done" && <button onClick={() => setStep(prevStep(step))}>{S.wizardBack}</button>}
         {step === "done" ? (
-          <button className="primary" onClick={() => void finish()}>{S.wizardFinish}</button>
+          <button className="primary" onClick={() => void finish(false)}>{S.wizardFinish}</button>
         ) : (
           <button className="primary" disabled={busy || !canAdvance(step, report)} onClick={() => setStep(nextStep(step))}>
             {S.wizardNext}
           </button>
         )}
-        {step !== "done" && <button onClick={() => void finish()}>{S.wizardSkip}</button>}
+        {step !== "done" && <button onClick={() => void finish(true)}>{S.wizardSkip}</button>}
       </div>
     </div>
   );

@@ -62,6 +62,8 @@ export interface IpcDeps {
   notify: () => void;
   /** 记忆开关真的变了之后调用（on 是新的状态）：通知记忆标签，打开时补同步一次。 */
   memoryToggled: (on: boolean) => void;
+  /** ticket 归档之后：清掉它留下的 MCP 配置文件。 */
+  onArchived?: (ticketKey: string) => void;
   /** 退出已开始：后台任务的 IPC 直接返回。 */
   aborted: () => boolean;
 }
@@ -92,6 +94,7 @@ export function registerIpc(d: IpcDeps): void {
   });
   handle(IPC.ticketsArchive, (key: string) => {
     d.tickets.archive(key, d.now());
+    d.onArchived?.(key);
     d.notify();
   });
   handle(IPC.ticketsUpdate, (raw: unknown) => {

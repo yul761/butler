@@ -82,3 +82,14 @@ export function writeTicketMcpConfig(o: { mcpDir: string; ticketKey: string; ser
   }
   return file;
 }
+
+/** ticket 归档时删掉它的 --mcp-config 文件（普通的和总控的）；恢复后下次打开 session 会重新写。 */
+export function removeTicketMcpConfigs(mcpDir: string, ticketKey: string): void {
+  for (const file of [ticketMcpFile(mcpDir, ticketKey), ticketMcpFile(mcpDir, ticketKey, true)]) {
+    try {
+      unlinkSync(file);
+    } catch {
+      // 本来就没有。
+    }
+  }
+}

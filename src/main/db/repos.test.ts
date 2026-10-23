@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { syncDiscovered } from "../sessions/discovery";
 import { insertTicket, type LegacyTicket, memDb } from "../test-utils";
-import { migrate } from "./database";
+import { migrate, NewerDatabaseError } from "./database";
 import { MIGRATIONS } from "./migrations";
 import { SessionsRepo } from "./sessions-repo";
 import { SettingsRepo } from "./settings-repo";
@@ -212,5 +212,15 @@ describe("TicketsRepo repos and session placement", () => {
     sessions.insertIfAbsent({ id: "d", ticketKey: "M-2", cwd: "/ws", origin: "butler", createdAt: 2 });
     sessions.setReplacedBy("c", "d");
     expect(sessions.get("d")).toMatchObject({ coordinator: true, repoId: null });
+  });
+});
+
+describe("opening data from a newer Butler", () => {
+  it("refuses a database whose version is newer than this build knows", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`PRAGMA user_version = ${MIGRATIONS.length + 1}`);
+    expect(() => migrate(db)).toThrow(NewerDatabaseError);
+    expect(() => migrate(db)).toThrow(/更新版本的 Butler/);
+    db.close();
   });
 });

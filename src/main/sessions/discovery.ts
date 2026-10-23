@@ -51,10 +51,13 @@ export function normalizePromptText(text: string): string | null {
   return t.length > PROMPT_LIMIT ? `${t.slice(0, PROMPT_LIMIT)}…` : t;
 }
 
+/** 文件开头最多读多少字节：一行就是一张粘贴的大图时，也不会把整个文件读进内存。 */
+export const HEAD_BYTE_LIMIT = 1024 * 1024;
+
 /** 只读文件开头，历史文件可能有几十 MB。 */
 export async function readSessionHead(file: string, maxLines = 200): Promise<SessionHead> {
   const head: SessionHead = { cwd: null, gitBranch: null, firstPrompt: null };
-  const stream = createReadStream(file, { encoding: "utf8" });
+  const stream = createReadStream(file, { encoding: "utf8", end: HEAD_BYTE_LIMIT - 1 });
   const rl = createInterface({ input: stream, crlfDelay: Infinity });
   // 文件消失或无权限时 readline 不会结束，关掉它以返回已读到的部分。
   stream.once("error", () => rl.close());
@@ -126,7 +129,14 @@ export function transcriptState(projectsDir: string, sessionId: string): Transcr
   return "absent";
 }
 
-export async function scanClaudeProjects(projectsDir: string, sinceMs: number): Promise<DiscoveredSession[]> {
+/**
+ * transcript 只会往后追加：开头的 cwd、分支和第一句话一旦齐全就不会再变。扫描时记住齐全的开头，
+ * 之后每 5 分钟的扫描不再重读这些文件。
+ */
+export type HeadCache = Map<string, SessionHead>;
+const HEAD_CACHE_LIMIT = 5000;
+
+export async function scanClaudeProjects(projectsDir: string, sinceMs: number, cache?: HeadCache): Promise<DiscoveredSession[]> {
   let dirs: string[];
   try {
     dirs = await readdir(projectsDir);
@@ -155,10 +165,18 @@ export async function scanClaudeProjects(projectsDir: string, sinceMs: number): 
       }
       if (mtime < sinceMs) continue;
       let head: SessionHead;
-      try {
-        head = await readSessionHead(file);
-      } catch {
-        continue;
+      const cached = cache?.get(file);
+      if (cached) head = cached;
+      else {
+        try {
+          head = await readSessionHead(file);
+        } catch {
+          continue;
+        }
+        if (cache && head.cwd && head.gitBranch && head.firstPrompt) {
+          if (cache.size >= HEAD_CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
+          cache.set(file, head);
+        }
       }
       if (!head.cwd) continue;
       found.push({ id, cwd: head.cwd, gitBranch: head.gitBranch, firstPrompt: head.firstPrompt, lastActivityAt: Math.floor(mtime) });

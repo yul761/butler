@@ -72,6 +72,17 @@ export type DeliverResult = "sent" | "exited" | "timeout";
 /** 最多保留多少个已退出终端的记录（用于快速失败的 claude 也能看到退出码）。 */
 export const EXITED_LIMIT = 20;
 
+/**
+ * 回放缓冲超过上限时从头截掉。直接按字符截可能切在一个控制序列中间（回放时第一行乱码）：
+ * 截完再丢到第一个换行之后（只在开头 4 KB 里找，找不到就原样保留）。
+ */
+export function trimBuffer(s: string): string {
+  if (s.length <= BUFFER_LIMIT) return s;
+  const cut = s.slice(-BUFFER_LIMIT);
+  const nl = cut.indexOf("\n");
+  return nl >= 0 && nl < 4096 ? cut.slice(nl + 1) : cut;
+}
+
 export interface PtySnapshot {
   data: string;
   exitCode: number | null;
@@ -106,7 +117,7 @@ export class PtyManager {
       // ConPTY 在进程退出后还可能吐出尾部数据；退出后一律丢弃，否则渲染进程会以为终端被重新打开而清掉退出提示。
       if (term.exited) return;
       term.lastOutputAt = this.now();
-      term.buffer = (term.buffer + data).slice(-BUFFER_LIMIT);
+      term.buffer = trimBuffer(term.buffer + data);
       this.events.data(termId, data);
     });
     proc.onExit(({ exitCode }) => {

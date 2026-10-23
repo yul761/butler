@@ -1,8 +1,8 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { memoryServers, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeTicketMcpConfig } from "./mcp-config";
+import { memoryServers, removeTicketMcpConfigs, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeTicketMcpConfig } from "./mcp-config";
 
 const launcher = { command: "/Applications/Butler.app/Contents/MacOS/Butler", script: "/Applications/Butler.app/Contents/Resources/memory-mcp/statecore-mcp.cjs" };
 
@@ -49,6 +49,9 @@ describe("ticket MCP config (design 4.2, 8.4)", () => {
     // 叫 PROJ-1-coordinator 的 ticket 也不会和 PROJ-1 的总控配置撞上。
     expect(ticketMcpFile(mcpDir, "PROJ-1-coordinator")).not.toBe(boss);
     expect(readFileSync(plain, "utf8")).not.toContain("butler-sessions");
+    removeTicketMcpConfigs(mcpDir, "PROJ-1");
+    expect(existsSync(plain) || existsSync(boss)).toBe(false);
+    removeTicketMcpConfigs(mcpDir, "PROJ-1");
   });
 
   it("keeps the file for an odd ticket key inside mcpDir/tickets (Review Focus 5)", () => {

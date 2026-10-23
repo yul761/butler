@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakePtyFactory } from "../test-utils";
-import { BUFFER_LIMIT, PtyManager } from "./pty-manager";
+import { BUFFER_LIMIT, PtyManager, trimBuffer } from "./pty-manager";
 
 function setup() {
   const { factory, spawned } = fakePtyFactory();
@@ -216,5 +216,17 @@ describe("PtyManager", () => {
     spawned[0].pty.emit("trailing");
     expect(data).toEqual([["t1", "before"]]);
     expect(mgr.snapshot("t1")).toEqual({ data: "before", exitCode: 0 });
+  });
+});
+
+describe("trimBuffer", () => {
+  it("keeps short buffers and cuts long ones at a line boundary", () => {
+    expect(trimBuffer("abc")).toBe("abc");
+    const long = `\x1b[31m${"x".repeat(BUFFER_LIMIT)}\nnext line`;
+    const t = trimBuffer(long);
+    expect(t.length).toBeLessThanOrEqual(BUFFER_LIMIT);
+    expect(t.startsWith("x") || t.startsWith("next")).toBe(true);
+    const lines = `${"a".repeat(100)}\n`.repeat(Math.ceil(BUFFER_LIMIT / 101) + 50);
+    expect(trimBuffer(lines).startsWith("a".repeat(100))).toBe(true);
   });
 });

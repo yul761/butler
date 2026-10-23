@@ -5,6 +5,7 @@ import { api } from "../api";
 import { groupItems, itemActions, itemTitle, narrativeLines, narrativeNote, openRequest, type ItemAction } from "../brief-view";
 import { reportError } from "../errors";
 import { jobResultMessage } from "../job-view";
+import { setWizardSkipped, wizardSkipped } from "../local-prefs";
 import { S } from "../strings";
 
 interface Props {
@@ -13,11 +14,14 @@ interface Props {
   tickets: TicketView[];
   onOpenTicket: (key: string, req?: OpenSessionRequest) => void;
   onUnclaimed: () => void;
+  /** 跳过了向导的人点“继续设置”：重新打开向导。 */
+  onResumeSetup: () => void;
 }
 
 const MARK = { done: "done", snooze: "snoozed", ignore: "ignored" } as const;
 
-export function BriefPage({ initialKind, tickets, onOpenTicket, onUnclaimed }: Props) {
+export function BriefPage({ initialKind, tickets, onOpenTicket, onUnclaimed, onResumeSetup }: Props) {
+  const [skipped, setSkipped] = useState(wizardSkipped);
   const [kind, setKind] = useState<BriefKind>(initialKind ?? "morning");
   /** 记下数据属于哪个标签：切换标签时不会先闪出另一个标签的旧内容。 */
   const [loaded, setLoaded] = useState<{ kind: BriefKind; view: BriefView } | null>(null);
@@ -73,6 +77,15 @@ export function BriefPage({ initialKind, tickets, onOpenTicket, onUnclaimed }: P
   const brief = view?.brief ?? null;
   return (
     <div className="page brief">
+      {skipped && (
+        <div className="notice">
+          <p>{S.setupSkipped}</p>
+          <div className="actions">
+            <button className="primary" onClick={onResumeSetup}>{S.resumeSetup}</button>
+            <button onClick={() => { setWizardSkipped(false); setSkipped(false); }}>{S.dismissForever}</button>
+          </div>
+        </div>
+      )}
       <header className="brief-header">
         <div className="tabs">
           <button className={kind === "morning" ? "tab active" : "tab"} onClick={() => setKind("morning")}>{S.morningBrief}</button>

@@ -173,3 +173,24 @@ describe("needsDiscovery", () => {
     expect(needsDiscovery({ ...base, gitBranch: null, dismissed: true }, new Set())).toBe(false);
   });
 });
+
+describe("scanClaudeProjects head cache", () => {
+  it("remembers complete heads and stops re-reading those files, but re-reads incomplete ones", async () => {
+    const root = tempDir("butler-scan-cache-");
+    const dir = join(root, "-proj");
+    mkdirSync(dir);
+    const complete = join(dir, "11111111-1111-4111-8111-111111111111.jsonl");
+    const partial = join(dir, "22222222-2222-4222-8222-222222222222.jsonl");
+    const line = (o: object) => `${JSON.stringify(o)}\n`;
+    writeFileSync(complete, line({ type: "user", cwd: "/w", gitBranch: "feature/P-1", message: { role: "user", content: "hi" } }));
+    writeFileSync(partial, line({ type: "system", cwd: "/w" }));
+    const cache = new Map();
+    await scanClaudeProjects(root, 0, cache);
+    expect([...cache.keys()]).toEqual([complete]);
+    // 缓存里的开头不再读文件：改掉文件内容也还是旧的开头。
+    writeFileSync(complete, line({ type: "user", cwd: "/changed", gitBranch: "x", message: { role: "user", content: "x" } }));
+    const again = await scanClaudeProjects(root, 0, cache);
+    expect(again.find((s) => s.id.startsWith("1111"))?.cwd).toBe("/w");
+    expect(again.find((s) => s.id.startsWith("2222"))?.cwd).toBe("/w");
+  });
+});

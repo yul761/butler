@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TICKET_STATUSES, type OpenSessionRequest, type TicketRepo, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
@@ -43,6 +43,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   const openTerms = ticket.sessions.flatMap((s) => (s.termId ? [s.termId] : []));
   // panes 里保留已退出但还没关闭的终端，方便看到 claude 的报错输出。
   const [panes, setPanes] = useState<string[]>(openTerms);
+  const panesRef = useRef(panes);
+  panesRef.current = panes;
   const [active, setActive] = useState<string | null>(openTerms[0] ?? null);
   const [mismatch, setMismatch] = useState<Mismatch | null>(null);
   const [oldWorkdir, setOldWorkdir] = useState<OldWorkdir | null>(null);
@@ -76,7 +78,12 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
     try {
       const r = await api.openSession(req);
       if (r.ok) {
-        setPanes((prev) => (prev.includes(r.termId) ? prev : [...prev, r.termId]));
+        // /clear 之后续接：终端换成了新的 session id，旧的（已退出的）面板原地换成新的，不再多出一个。
+        const replaced = req.sessionId && req.sessionId !== r.termId ? req.sessionId : null;
+        setPanes((prev) => {
+          if (prev.includes(r.termId)) return replaced ? prev.filter((p) => p !== replaced) : prev;
+          return replaced && prev.includes(replaced) ? prev.map((p) => (p === replaced ? r.termId : p)) : [...prev, r.termId];
+        });
         setActive(r.termId);
       } else if (r.reason === "branch_mismatch") {
         setMismatch({ req, repoId: r.repoId, current: r.current, expected: r.expected, dirty: r.dirty });
@@ -115,8 +122,11 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   }
 
   function closePane(id: string) {
-    setPanes((prev) => prev.filter((p) => p !== id));
-    if (active === id) setActive(panes.find((p) => p !== id) ?? null);
+    // 用最新的面板列表选下一个（连续关闭时 panes 闭包可能已经过时）。
+    const rest = panesRef.current.filter((p) => p !== id);
+    panesRef.current = rest;
+    setPanes(rest);
+    setActive((cur) => (cur === id ? (rest[0] ?? null) : cur));
   }
 
   const sessionSplit = splitSessions(ticket.sessions, VISIBLE_SESSIONS);
