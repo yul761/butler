@@ -40,15 +40,15 @@ describe("CLI JSON Schema", () => {
     };
     expect(s.type).toBe("object");
     expect([...s.required].sort()).toEqual([
-      "blockers", "decisions", "done_today", "followups", "jira", "learnings", "next_steps", "open_questions", "pr", "status", "ticket",
+      "blockers", "decisions", "done_today", "followups", "jira", "learnings", "next_steps", "open_questions", "prs", "status", "ticket",
     ]);
     expect(Object.keys(s.properties.followups.items?.properties ?? {})).toContain("due_date");
     for (const key of ["$schema", "minimum", "maximum", "minLength", "pattern"]) expect(HANDOFF_JSON_SCHEMA).not.toContain(`"${key}"`);
   });
 
-  it("refresh schema only asks for status, pr and jira", () => {
-    expect((JSON.parse(REFRESH_JSON_SCHEMA) as { required: string[] }).required.sort()).toEqual(["jira", "pr", "status"]);
-    expect(RefreshSchema.safeParse({ status: "in_review", pr: null, jira: null }).success).toBe(true);
+  it("refresh schema only asks for status, prs and jira", () => {
+    expect((JSON.parse(REFRESH_JSON_SCHEMA) as { required: string[] }).required.sort()).toEqual(["jira", "prs", "status"]);
+    expect(RefreshSchema.safeParse({ status: "in_review", prs: [], jira: null }).success).toBe(true);
   });
 });
 

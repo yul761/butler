@@ -48,7 +48,7 @@ describe("{{branch}} for several repos", () => {
   it("is the branch for one repo, repo@branch for several, and says so when there is none", () => {
     expect(repoBranches({ ...t, repos: [repo(1, "/c/web", "feature/PROJ-1")] })).toBe("feature/PROJ-1");
     const two = repoBranches({ ...t, repos: [repo(1, "/c/web", "feature/PROJ-1"), repo(2, "/c/api", "api/PROJ-1")] });
-    expect(two).toMatch(/^web@feature\/PROJ-1, api@api\/PROJ-1（多个仓库：pr 只填/);
+    expect(two).toMatch(/^web@feature\/PROJ-1, api@api\/PROJ-1（多个仓库：每个仓库的 PR 都放进 prs）$/);
     expect(repoBranches({ ...t, repos: [] })).toBe("（还没有关联仓库）");
   });
 });

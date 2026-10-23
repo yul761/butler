@@ -35,7 +35,7 @@ function setup() {
   };
   const handoff = (key: string, over: Partial<Handoff>) =>
     ingest({ ticketKey: key, sessionId: `s-${key}`, trigger: "nightly", rawText: null, payload: { ...emptyHandoff(key), ...over } });
-  const refresh = (key: string, r: { status: Handoff["status"]; pr: Handoff["pr"]; jira: Handoff["jira"] }) =>
+  const refresh = (key: string, r: { status: Handoff["status"]; prs: Handoff["prs"]; jira: Handoff["jira"] }) =>
     ingest({ ticketKey: key, sessionId: null, trigger: "refresh", rawText: null, payload: { ...emptyHandoff(key), ...r } });
   return {
     service, tickets, sessions, addTicket, handoff, refresh,
@@ -108,13 +108,13 @@ describe("BriefService", () => {
     const before = s.service.generateMorning().items.map((i) => i.key);
     expect(before).toHaveLength(1);
     s.setNow(at(21, 8));
-    s.refresh("A-1", { status: "active", pr: null, jira: { status: "In Progress", subtasks: [] } });
+    s.refresh("A-1", { status: "active", prs: [], jira: { status: "In Progress", subtasks: [] } });
     const snap = s.service.snapshot()[0];
     expect(snap.latest?.trigger).toBe("nightly");
     expect(snap.latest?.payload?.jira?.status).toBe("In Progress");
     expect(s.service.generateMorning().items.map((i) => i.key)).toEqual(before);
-    s.refresh("A-1", { status: "in_review", pr: { number: 7, url: "u", state: "open", review: "approved" }, jira: null });
-    expect(s.service.snapshot()[0].latest).toMatchObject({ trigger: "nightly", payload: { pr: { review: "approved" } } });
+    s.refresh("A-1", { status: "in_review", prs: [{ number: 7, url: "u", state: "open", review: "approved" }], jira: null });
+    expect(s.service.snapshot()[0].latest).toMatchObject({ trigger: "nightly", payload: { prs: [{ review: "approved" }] } });
     expect(s.service.generateMorning().items.map((i) => i.rule)).toContain("pr_approved");
   });
 
@@ -130,7 +130,7 @@ describe("BriefService", () => {
     s.handoff("B-2", { done_today: ["周五下午"] });
     s.setNow(at(19, 8));
     s.handoff("A-1", { done_today: ["周一早上补跑的"] });
-    s.refresh("B-2", { status: "active", pr: null, jira: null });
+    s.refresh("B-2", { status: "active", prs: [], jira: null });
     const brief = s.service.generateMorning();
     expect(brief.previousDay).toEqual({
       date: "2026-10-16",
@@ -151,7 +151,7 @@ describe("BriefService", () => {
   it("falls back to a valid refresh when a ticket has no full handoff", () => {
     const s = setup();
     s.addTicket("A-1");
-    s.refresh("A-1", { status: "in_review", pr: { number: 3, url: "u", state: "open", review: "approved" }, jira: null });
+    s.refresh("A-1", { status: "in_review", prs: [{ number: 3, url: "u", state: "open", review: "approved" }], jira: null });
     expect(s.service.snapshot()[0].latest).toMatchObject({ trigger: "refresh" });
     expect(s.service.generateMorning().items.map((i) => i.rule)).toContain("pr_approved");
   });
@@ -173,7 +173,7 @@ describe("BriefService.narrativeSource", () => {
     });
     s.handoff("A-1", {
       done_today: ["做了 A"], next_steps: ["写测试"], blockers: ["等评审"],
-      pr: { number: 7, url: "https://github.com/acme/billing-svc/pull/7", state: "open", review: "approved" },
+      prs: [{ number: 7, url: "https://github.com/acme/billing-svc/pull/7", state: "open", review: "approved" }],
       followups: [{ id: null, kind: "flag", description: "开开关", trigger: "on_date", due_date: "2026-10-19", done: false }],
     });
     const brief = s.service.generateMorning();
@@ -201,7 +201,7 @@ describe("BriefService.narrativeSource", () => {
     });
     s.handoff("A-1", {
       next_steps: ["等 OLD-9 合并后在 spike/only-in-session 上 rebase，再问 acme 的人"],
-      pr: { number: 7, url: "https://github.com/acme/billing-svc/pull/7", state: "open", review: "pending" },
+      prs: [{ number: 7, url: "https://github.com/acme/billing-svc/pull/7", state: "open", review: "pending" }],
     });
     const src = s.service.narrativeSource(s.service.generateMorning());
     expect(src.tickets[0].nextSteps[0]).toContain("OLD-9");

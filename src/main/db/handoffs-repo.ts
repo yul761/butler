@@ -1,4 +1,4 @@
-import type { Handoff } from "../../shared/handoff";
+import { upgradeLegacyPr, type Handoff } from "../../shared/handoff";
 import type { HandoffRecord, HandoffTrigger } from "../../shared/types";
 import type { Db } from "./database";
 
@@ -17,7 +17,8 @@ interface HandoffRow {
 function parsePayload(text: string | null): Handoff | null {
   if (!text) return null;
   try {
-    return JSON.parse(text) as Handoff;
+    // 1.1 之前存的是单个 pr。
+    return upgradeLegacyPr(JSON.parse(text)) as Handoff;
   } catch {
     return null;
   }

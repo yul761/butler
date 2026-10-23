@@ -221,7 +221,7 @@ describe("HandoffRunner", () => {
     ingest({
       ticketKey: "A-1", sessionId: "s-A-1", trigger: "nightly", rawText: null,
       payload: valid({
-        pr: { number: 9, url: "u", state: "open", review: "pending" },
+        prs: [{ number: 9, url: "u", state: "open", review: "pending" }],
         done_today: ["做了 X"],
         next_steps: ["合并后改配置"],
         followups: [{ id: null, kind: "config", description: "改配置", trigger: "after_merge", due_date: null, done: false }],
@@ -236,7 +236,8 @@ describe("HandoffRunner", () => {
     expect(calls[0].cwd).toBe("/w/A-1");
     const latest = handoffs.latest("A-1")!;
     expect(latest).toMatchObject({ trigger: "refresh", sessionId: null });
-    expect(latest.payload).toMatchObject({ done_today: [], next_steps: ["合并后改配置"], pr: { state: "merged" } });
+    // 回复用的是旧的单个 pr 写法：入库前换成 prs。
+    expect(latest.payload).toMatchObject({ done_today: [], next_steps: ["合并后改配置"], prs: [{ state: "merged" }] });
     expect(tickets.get("A-1")?.status).toBe("merged_pending_followup");
   });
 

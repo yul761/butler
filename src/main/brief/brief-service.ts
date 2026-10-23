@@ -2,6 +2,7 @@ import { basename } from "node:path";
 import type { Brief, BriefKind, ItemMark } from "../../shared/brief";
 import { effectiveStatus } from "../../shared/types";
 import type { BriefsRepo } from "../db/briefs-repo";
+import { combinedPr } from "../handoff/prs";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { MarksRepo } from "../db/marks-repo";
@@ -84,7 +85,7 @@ export class BriefService {
     const refresh = this.d.handoffs.latestValid(ticketKey);
     if (!refresh?.payload || refresh.trigger !== "refresh") return full;
     if (refresh.createdAt < full.createdAt || (refresh.createdAt === full.createdAt && refresh.id < full.id)) return full;
-    return { ...full, payload: { ...full.payload, status: refresh.payload.status, pr: refresh.payload.pr, jira: refresh.payload.jira } };
+    return { ...full, payload: { ...full.payload, status: refresh.payload.status, prs: refresh.payload.prs, jira: refresh.payload.jira } };
   }
 
   generateMorning(): Brief {
@@ -152,7 +153,7 @@ export class BriefService {
       for (const h of this.d.handoffs.listByTicket(t.key, 1000)) {
         const p = h.payload;
         if (!p) continue;
-        if (p.pr?.url) for (const part of prPathParts(p.pr.url)) addRepo(part);
+        for (const pr of p.prs) if (pr.url) for (const part of prPathParts(pr.url)) addRepo(part);
         for (const st of p.jira?.subtasks ?? []) if (st.key) ticketKeys.add(st.key);
       }
     }
@@ -161,7 +162,8 @@ export class BriefService {
       return {
         key: t.key,
         status: t.status,
-        pr: p?.pr ? { state: p.pr.state, review: p.pr.review } : null,
+        // 几个 PR 合起来的状态（隐私处理之前只有状态，没有链接）。
+        pr: p ? combinedPr(p.prs) : null,
         daysInStatus: daysBetween(t.statusSince, now),
         idleDays: daysBetween(t.lastActivityAt, now),
         doneLastDay: doneLastDay.get(t.key) ?? 0,

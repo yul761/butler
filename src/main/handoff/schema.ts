@@ -65,7 +65,7 @@ export function pickStructured(r: { structured: unknown; resultText: string }): 
 
 export function emptyHandoff(ticket: string): Handoff {
   return {
-    ticket, status: "active", done_today: [], next_steps: [], blockers: [], pr: null, jira: null,
+    ticket, status: "active", done_today: [], next_steps: [], blockers: [], prs: [], jira: null,
     followups: [], decisions: [], learnings: [], open_questions: [],
   };
 }

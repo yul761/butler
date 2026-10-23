@@ -1,4 +1,4 @@
-import { HandoffSchema, RefreshSchema, type Handoff } from "../../shared/handoff";
+import { HandoffSchema, RefreshSchema, upgradeLegacyPr, type Handoff } from "../../shared/handoff";
 import { effectiveStatus, type HandoffOutcome, type Session, type Ticket } from "../../shared/types";
 import { headlessArgs, READ_ONLY_TOOLS, type HeadlessRun } from "../claude/headless";
 import { headlessEnv } from "../claude/spawn";
@@ -157,12 +157,12 @@ export class HandoffRunner {
 
     let attempt = await this.exec(key, args, prompt, cwd, session?.id);
     if (!attempt.ok) return attempt.outcome;
-    let checked = validate(HandoffSchema, attempt.value);
+    let checked = validate(HandoffSchema, upgradeLegacyPr(attempt.value));
     if (!checked.ok) {
       this.d.log?.(`handoff ${key}: output failed validation, retrying once: ${checked.errors}`);
       attempt = await this.exec(key, args, retryPrompt(prompt, checked.errors), cwd, session?.id);
       if (!attempt.ok) return attempt.outcome;
-      checked = validate(HandoffSchema, attempt.value);
+      checked = validate(HandoffSchema, upgradeLegacyPr(attempt.value));
     }
     const r = this.d.ingest({ ticketKey: key, sessionId: session?.id ?? null, trigger, payload: checked.ok ? checked.value : null, rawText: attempt.rawText });
     if (!r.stored) return failed(key, r.reason, r.reason);
@@ -178,13 +178,13 @@ export class HandoffRunner {
     const args = headlessArgs({ schema: REFRESH_JSON_SCHEMA, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd), addDirs });
     const attempt = await this.exec(key, args, prompt, cwd);
     if (!attempt.ok) return attempt.outcome;
-    const checked = validate(RefreshSchema, attempt.value);
+    const checked = validate(RefreshSchema, upgradeLegacyPr(attempt.value));
     // 刷新结果不完整就保留旧数据：不写入、不重试。
     if (!checked.ok) return failed(key, "invalid_output", checked.errors);
     // 存成一条完整的 handoff，简报永远只看“最新一条完整 handoff”。done_today 清空，免得“上个工作日”重复计算。
     const base: Handoff = ctx.previous ?? emptyHandoff(key);
     const payload: Handoff = {
-      ...base, ticket: key, status: checked.value.status, pr: checked.value.pr, jira: checked.value.jira,
+      ...base, ticket: key, status: checked.value.status, prs: checked.value.prs, jira: checked.value.jira,
       done_today: [], followups: [], decisions: [], learnings: [],
     };
     const r = this.d.ingest({ ticketKey: key, sessionId: null, trigger: "refresh", payload, rawText: attempt.rawText });

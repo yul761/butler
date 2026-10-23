@@ -34,7 +34,8 @@ export const HandoffSchema = z.object({
   done_today: z.array(z.string()),
   next_steps: z.array(z.string()),
   blockers: z.array(z.string()),
-  pr: PrSchema.nullable(),
+  /** 这个 ticket 的所有 PR（多仓库 ticket 每个仓库一个）；没有就是 []。 */
+  prs: z.array(PrSchema),
   jira: JiraSchema.nullable(),
   followups: z.array(HandoffFollowupSchema),
   decisions: z.array(z.object({ key: z.string(), statement: z.string() })),
@@ -45,10 +46,23 @@ export const HandoffSchema = z.object({
 /** 早间快速刷新只查 PR 和 tracker 状态（schema 的子集）。 */
 export const RefreshSchema = z.object({
   status: z.enum(TICKET_STATUSES),
-  pr: PrSchema.nullable(),
+  prs: z.array(PrSchema),
   jira: JiraSchema.nullable(),
 });
 
+/**
+ * 1.1 之前的 handoff 只有一个 pr（null 或一个对象）：存下来的旧记录、旧版本 /handoff 命令的输出都可能是这样。
+ * 有 pr 没有 prs 时换成 prs（[] 或 [pr]），其余原样返回。校验和读库之前都先过一遍。
+ */
+export function upgradeLegacyPr(v: unknown): unknown {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return v;
+  const o = v as Record<string, unknown>;
+  if (!("pr" in o) || "prs" in o) return v;
+  const { pr, ...rest } = o;
+  return { ...rest, prs: pr ? [pr] : [] };
+}
+
 export type Handoff = z.infer<typeof HandoffSchema>;
+export type Pr = z.infer<typeof PrSchema>;
 export type HandoffFollowup = z.infer<typeof HandoffFollowupSchema>;
 export type RefreshResult = z.infer<typeof RefreshSchema>;

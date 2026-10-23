@@ -23,7 +23,7 @@ export function repoBranches(t: Ticket): string {
   if (t.repos.length === 0) return "（还没有关联仓库）";
   if (t.repos.length === 1) return t.repos[0].branch;
   const list = t.repos.map((r) => `${basename(r.repoPath)}@${r.branch}`).join(", ");
-  return `${list}（多个仓库：pr 只填最需要关注的那个，还没合并的优先）`;
+  return `${list}（多个仓库：每个仓库的 PR 都放进 prs）`;
 }
 
 function vars(c: PromptContext): Record<string, string> {

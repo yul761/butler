@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { HandoffSchema } from "../../shared/handoff";
+import { HandoffSchema, upgradeLegacyPr } from "../../shared/handoff";
 import { isHeadlessEnvelope, type HookEnvelope } from "../../shared/hook-envelope";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
@@ -43,7 +43,8 @@ export async function captureCommandHandoff(d: CaptureDeps, stop: StopEvent): Pr
     return null;
   }
   if (!found) return null;
-  const checked = validate(HandoffSchema, parseJsonLoose(found.block));
+  // 旧版本的 /handoff 命令输出单个 pr：先换成 prs 再校验。
+  const checked = validate(HandoffSchema, upgradeLegacyPr(parseJsonLoose(found.block)));
   const claimed = checked.ok ? checked.value.ticket.trim().toUpperCase() : null;
   const ticketKey = d.sessions.get(stop.sessionId)?.ticketKey ?? (claimed && d.tickets.get(claimed) ? claimed : null);
   if (!ticketKey) return { stored: false, reason: "no_ticket" };

@@ -35,7 +35,7 @@ vi.hoisted(() => {
 });
 
 const payload = (over: Partial<Handoff> = {}): Handoff => ({
-  ticket: "PROJ-1", status: "active", done_today: [], next_steps: [], blockers: [], pr: null, jira: null,
+  ticket: "PROJ-1", status: "active", done_today: [], next_steps: [], blockers: [], prs: [], jira: null,
   followups: [], decisions: [], learnings: [], open_questions: [], ...over,
 });
 
