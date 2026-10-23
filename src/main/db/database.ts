@@ -10,8 +10,16 @@ export function openDatabase(file: string): Db {
   return db;
 }
 
+/** 数据库比这个版本的 Butler 新（装回了旧版本）：不能在不认识的表结构上运行。 */
+export class NewerDatabaseError extends Error {
+  constructor(readonly found: number, readonly known: number) {
+    super(`这份数据是更新版本的 Butler 创建的（数据版本 ${found}，这个 Butler 只认识到 ${known}）。请安装最新版本的 Butler 再打开。`);
+  }
+}
+
 export function migrate(db: Db): number {
   const { user_version: current } = db.prepare("PRAGMA user_version").get() as { user_version: number };
+  if (current > MIGRATIONS.length) throw new NewerDatabaseError(current, MIGRATIONS.length);
   for (let i = current; i < MIGRATIONS.length; i++) {
     db.exec("BEGIN");
     try {

@@ -6,6 +6,8 @@ import { S } from "../strings";
 
 /** 启动补同步、打开记忆时的全量同步会连着来很多次记忆事件；重读要打开 StateCore，所以合并成一次。 */
 const RELOAD_DEBOUNCE_MS = 500;
+/** 记忆标签开着时多久重读一次（claude 在 session 里写的记忆）。 */
+const MEMORY_POLL_MS = 30_000;
 
 function formatIso(iso: string): string {
   return new Date(iso).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -43,11 +45,19 @@ export function MemoryPanel({ ticketKey }: { ticketKey: string }) {
     const off = api.onMemoryChanged((changed) => {
       if (memoryChangeConcerns(changed, ticketKey)) reload();
     });
+    // claude 在 session 里经 MCP 写的记忆不会触发 memory:changed：标签开着时，回到窗口就重读，另外每 30 秒（窗口可见时）重读一次。
+    const onFocus = () => reload();
+    window.addEventListener("focus", onFocus);
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible") reload();
+    }, MEMORY_POLL_MS);
     return () => {
       loadSeq.current++; // 卸载或换 ticket 后，在途的响应不再写状态
       whySeq.current++;
       reload.cancel();
       off();
+      window.removeEventListener("focus", onFocus);
+      clearInterval(poll);
     };
   }, [load, ticketKey]);
 

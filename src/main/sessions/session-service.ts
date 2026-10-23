@@ -108,8 +108,15 @@ export class SessionService {
     const placed = await this.place(ticket, head, req);
     if ("ok" in placed) return placed;
     const { repo, coordinator, cwd } = placed;
-    // place 里等了 git：这期间仓库可能被移除、ticket 可能开始修改。
+    // place 里等了 git：这期间仓库可能被移除、ticket 可能开始修改，同一个 session 也可能已经被另一次点击打开了。
     if (this.d.ticketService.updating(ticket.key)) return { ok: false, reason: "ticket_busy" };
+    if (head) {
+      const opened = this.openHeads().get(head.id);
+      if (opened) {
+        if (prefill) this.prefill(opened, prefill, 0);
+        return { ok: true, termId: opened, alreadyOpen: true };
+      }
+    }
     if (!head && repo && !this.d.tickets.getRepo(repo.id)) return { ok: false, reason: "no_repo" };
 
     this.syncMemory(ticket.key);

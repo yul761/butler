@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { BriefKind } from "../../shared/brief";
 import type { OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
@@ -14,6 +14,9 @@ import { UnclaimedPage } from "./components/UnclaimedPage";
 import { Wizard } from "./components/Wizard";
 import { S } from "./strings";
 import { onboardingReducer } from "./wizard";
+
+/** 状态变化事件合并的时间窗。 */
+const STATE_DEBOUNCE_MS = 80;
 
 export type Route =
   | { page: "home"; kind?: BriefKind }
@@ -47,15 +50,19 @@ export function App() {
     [],
   );
 
+  /** 每次 refresh 的序号：只有最新一次的结果写进状态（hook 事件密集时，慢的旧响应不会盖掉新的）。 */
+  const refreshSeq = useRef(0);
   /** 重读 ticket 列表；失败时报错并返回 false。 */
   const refresh = useCallback(async (): Promise<boolean> => {
+    const seq = ++refreshSeq.current;
     try {
       const [t, u] = await Promise.all([api.listTickets(), api.unclaimed()]);
+      if (seq !== refreshSeq.current) return true;
       setTickets(t);
       setUnclaimedCount(u.length);
       return true;
     } catch (e) {
-      reportError(e);
+      if (seq === refreshSeq.current) reportError(e);
       return false;
     }
   }, []);
@@ -73,7 +80,16 @@ export function App() {
 
   useEffect(() => {
     void refresh();
-    return api.onStateChanged(() => void refresh());
+    // hook 事件一来一串：合并成一次刷新。
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const off = api.onStateChanged(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void refresh(), STATE_DEBOUNCE_MS);
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      off();
+    };
   }, [refresh]);
 
   const openTicket = (key: string, req?: OpenSessionRequest) => {
@@ -113,7 +129,7 @@ export function App() {
           />
         ) : (
           <>
-            {route.page === "home" && <BriefPage key={navNonce} initialKind={route.kind} tickets={tickets} onOpenTicket={openTicket} onUnclaimed={() => setRoute({ page: "unclaimed" })} />}
+            {route.page === "home" && <BriefPage key={navNonce} initialKind={route.kind} tickets={tickets} onOpenTicket={openTicket} onUnclaimed={() => setRoute({ page: "unclaimed" })} onResumeSetup={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "ticket" && current && (
               <TicketPage
                 key={current.key}
@@ -136,8 +152,8 @@ export function App() {
           onRestored={showRestored}
           onCreated={(key) => {
             setShowNew(false);
-            setRoute({ page: "ticket", key });
-            void refresh();
+            // 先重读列表再跳过去，免得 ticket 页一闪而过的空白。
+            void refresh().then(() => setRoute({ page: "ticket", key }));
           }}
         />
       )}

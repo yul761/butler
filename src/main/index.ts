@@ -15,7 +15,7 @@ import { projectMcpConfigs } from "./claude/project-mcp";
 import { headlessEnv } from "./claude/spawn";
 import { AuditRepo } from "./db/audit-repo";
 import { BriefsRepo } from "./db/briefs-repo";
-import { openDatabase } from "./db/database";
+import { NewerDatabaseError, openDatabase } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
 import { HandoffsRepo } from "./db/handoffs-repo";
 import { JobsRepo } from "./db/jobs-repo";
@@ -38,7 +38,7 @@ import { HandoffRunner } from "./handoff/runner";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { memoryServers, sessionsServer, writeTicketMcpConfig } from "./memory/mcp-config";
+import { memoryServers, removeTicketMcpConfigs, sessionsServer, writeTicketMcpConfig } from "./memory/mcp-config";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
@@ -48,7 +48,7 @@ import { ensureDirs, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
-import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS } from "./sessions/discovery";
+import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
@@ -486,9 +486,11 @@ async function bootstrap(): Promise<void> {
     });
   };
 
+  /** 已经读齐的 transcript 开头（见 scanClaudeProjects）。 */
+  const discoveryHeads: HeadCache = new Map();
   const discoverOnce = async () => {
     try {
-      const found = await scanClaudeProjects(paths.claudeProjects, Date.now() - UNCLAIMED_WINDOW_MS);
+      const found = await scanClaudeProjects(paths.claudeProjects, Date.now() - UNCLAIMED_WINDOW_MS, discoveryHeads);
       syncDiscovered(found, sessions, Date.now());
       // 只有扫描真的找到了某个待补全 session 的 transcript，才记为本次运行已扫描过。
       for (const f of found) if (discoveryPending.delete(f.id)) discoveryRequested.add(f.id);
@@ -577,6 +579,7 @@ async function bootstrap(): Promise<void> {
   };
 
   registerIpc({
+    onArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
     autostart,
     tickets, ticketService, sessionService, pty, health, followups, handoffs, settings, briefService, runner, scheduler, jobs,
     keys, terms, audit, memory,
@@ -666,7 +669,9 @@ if (process.argv.includes("--smoke")) {
     .whenReady()
     .then(bootstrap)
     .catch((e: unknown) => {
-      dialog.showErrorBox("Butler 启动失败", e instanceof Error ? (e.stack ?? e.message) : String(e));
+      // 数据比程序新：给一句能看懂的话，不贴调用栈。
+      const text = e instanceof NewerDatabaseError ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e);
+      dialog.showErrorBox("Butler 启动失败", text);
       app.exit(1);
     });
 }
