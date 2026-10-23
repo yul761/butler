@@ -1,4 +1,11 @@
+import { net } from "electron";
 import { formatDuration } from "../../shared/text";
+
+/**
+ * 发请求用 Electron 的 net.fetch：它走 Chromium 的网络栈，遵循系统代理设置（包括 PAC），公司网络要经代理时也能用。
+ * 不在 Electron 主进程里（单元测试）时没有 net，退回 Node 的 fetch。
+ */
+const httpFetch: typeof fetch = (input, init) => (typeof net?.fetch === "function" ? net.fetch(input as string, init) : fetch(input, init));
 
 export interface ChatMessage {
   role: "system" | "user";
@@ -129,7 +136,8 @@ async function attempt(req: ChatRequest, body: string, deadline: number, totalMs
   if (req.apiKey) headers.authorization = `Bearer ${req.apiKey}`;
   try {
     if (!signal.aborted) state.sent = body;
-    const res = await fetch(chatUrl(req.baseUrl), { method: "POST", headers, body, signal, redirect: "error" });
+    // 不带、也不存 cookie，不走缓存：Electron 的默认 session 和窗口共用。
+    const res = await httpFetch(chatUrl(req.baseUrl), { method: "POST", headers, body, signal, redirect: "error", credentials: "omit", cache: "no-store" });
     let raw: string;
     try {
       raw = await readCapped(res, RESPONSE_LIMIT);

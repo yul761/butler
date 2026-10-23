@@ -197,7 +197,7 @@ Add the people you work with to **人名 (people)**. That protects them at the r
 
 A saved key that can no longer be decrypted, for example after the keychain was reset, is only written to the log. It is not audited.
 
-The personal API is called with Node's `fetch`, which does not use your system proxy settings.
+The personal API is called through Electron's network stack, so it follows your system proxy settings (including PAC scripts).
 
 ## Several companies or profiles
 
