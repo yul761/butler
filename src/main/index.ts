@@ -34,6 +34,7 @@ import { electronSecretBox } from "./gateway/safe-storage";
 import { llmStatus } from "./gateway/status";
 import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
+import { cleanupTicketWorktrees, isMerged } from "./tickets/worktree-cleanup";
 import { HandoffRunner } from "./handoff/runner";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
@@ -362,12 +363,30 @@ async function bootstrap(): Promise<void> {
       return null;
     }
   };
+  /** PR 合并后清理 ticket 的 worktree（设计文档 2026-10-26）：不阻塞调用方，结果只影响 ticket 页的显示。 */
+  const cleanupMerged = (ticketKey: string): void => {
+    if (!isMerged(handoffs, ticketKey)) return;
+    cleanupTicketWorktrees({ tickets, ticketService, repoBusy: (k, id) => sessionService.hasRepoTerminal(k, id), now: Date.now }, ticketKey).then(
+      (out) => {
+        if (out.some((o) => o.result !== "skipped")) {
+          logger(`worktree cleanup for ${ticketKey}: ${out.map((o) => `${o.repoId}=${o.result}`).join(", ")}`);
+          notify();
+        }
+      },
+      (e: unknown) => logger(`worktree cleanup for ${ticketKey} failed`, e),
+    );
+  };
   const ingest = (input: IngestInput) => {
     const r = ingestHandoff({ db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}` }, input);
     // 设计文档 5.4：入库后同步写入 StateCore（异步，失败只记日志）。
-    if (r.stored && !r.degraded) void memory.syncTicket(input.ticketKey);
+    if (r.stored && !r.degraded) {
+      void memory.syncTicket(input.ticketKey);
+      cleanupMerged(input.ticketKey);
+    }
     return r;
   };
+  // 升级前就已经合并的 ticket：启动时补清理一次。
+  for (const t of tickets.list()) cleanupMerged(t.key);
   const projectMcp = (cwd: string): string[] =>
     projectMcpConfigs(cwd, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger });
   const runner = new HandoffRunner({

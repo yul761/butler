@@ -164,7 +164,9 @@ export class SessionService {
    */
   private async place(ticket: Ticket, head: Session | null, req: OpenSessionRequest): Promise<Placement | OpenFailure> {
     if (head) {
-      const repo = head.repoId === null ? null : (ticket.repos.find((r) => r.id === head.repoId) ?? null);
+      let repo = head.repoId === null ? null : (ticket.repos.find((r) => r.id === head.repoId) ?? null);
+      // 在被清理掉的 worktree 里跑过的 session：claude --resume 要在原来的目录里，先把它重建出来（设计文档 2026-10-26）。
+      if (repo?.worktreePath && head.cwd && samePath(head.cwd, repo.worktreePath, this.d.platform)) repo = await this.d.ticketService.ensureWorktree(repo);
       const fallback = head.coordinator || !repo ? this.d.ticketService.workspaceDir(ticket.key) : this.d.ticketService.workDir(repo);
       const cwd = head.cwd || fallback;
       if (!req.force && !head.coordinator && repo) {
@@ -180,8 +182,9 @@ export class SessionService {
       return { repo, coordinator: head.coordinator, cwd };
     }
     if (req.coordinator) return { repo: null, coordinator: true, cwd: this.d.ticketService.workspaceDir(ticket.key) };
-    const repo = req.repoId !== undefined ? ticket.repos.find((r) => r.id === req.repoId) : ticket.repos.length === 1 ? ticket.repos[0] : undefined;
-    if (!repo) return { ok: false, reason: ticket.repos.length === 0 || req.repoId !== undefined ? "no_repo" : "pick_repo" };
+    const picked = req.repoId !== undefined ? ticket.repos.find((r) => r.id === req.repoId) : ticket.repos.length === 1 ? ticket.repos[0] : undefined;
+    if (!picked) return { ok: false, reason: ticket.repos.length === 0 || req.repoId !== undefined ? "no_repo" : "pick_repo" };
+    const repo = await this.d.ticketService.ensureWorktree(picked);
     if (!req.force) {
       const mismatch = await this.branchMismatch(repo);
       if (mismatch) return mismatch;
@@ -290,6 +293,14 @@ export class SessionService {
       const h = this.d.sessions.head(termId);
       if (h?.ticketKey !== ticketKey) return false;
       return repoId === undefined || h.coordinator || h.repoId === null || h.repoId === repoId;
+    });
+  }
+
+  /** 这个仓库自己的 session 有没有终端在跑（不算总控和认不出仓库的旧 session）：合并后清理 worktree 用。 */
+  hasRepoTerminal(ticketKey: string, repoId: number): boolean {
+    return this.d.pty.openIds().some((termId) => {
+      const h = this.d.sessions.head(termId);
+      return h?.ticketKey === ticketKey && h.repoId === repoId;
     });
   }
 

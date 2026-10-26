@@ -297,6 +297,28 @@ export class TicketService {
     return path;
   }
 
+  /**
+   * PR 合并后被自动清理的 worktree（设计文档 2026-10-26）：在原来的路径上从保留的分支重建，分支不在了就从仓库当前 HEAD 新建。
+   * 没被清理过就原样返回。
+   */
+  async ensureWorktree(r: TicketRepo): Promise<TicketRepo> {
+    if (r.worktreeRemovedAt === null || r.workMode !== "worktree" || !r.worktreePath) return r;
+    const path = r.worktreePath;
+    return this.exclusive(r.ticketKey, async () => {
+      try {
+        if (!existsSync(path)) {
+          await pruneWorktrees(r.repoPath);
+          await addWorktree(r.repoPath, path, r.branch, !(await branchExists(r.repoPath, r.branch)));
+        }
+      } catch (e) {
+        throw asTicketError(e);
+      }
+      this.d.tickets.markWorktreeRemoved(r.id, null);
+      this.d.tickets.setCleanupBlocked(r.id, null);
+      return this.repo(r.id);
+    });
+  }
+
   /** 仓库的工作目录：worktree，或者仓库本身。 */
   workDir(r: TicketRepo): string {
     return r.worktreePath ?? r.repoPath;

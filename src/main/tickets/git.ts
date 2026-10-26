@@ -102,6 +102,11 @@ export async function detachHead(cwd: string): Promise<void> {
   await git(cwd, ["checkout", "--detach"]);
 }
 
+/** 删掉一个 worktree（目录和登记）。不加 --force：有改动或未跟踪文件时 git 会拒绝。分支保留。 */
+export async function removeWorktree(repo: string, path: string): Promise<void> {
+  await git(repo, ["worktree", "remove", path]);
+}
+
 /** 清掉目录已经不在了的 worktree 登记，否则在同一路径上重新 add 会被 git 拒绝。 */
 export async function pruneWorktrees(repo: string): Promise<void> {
   await git(repo, ["worktree", "prune"]);

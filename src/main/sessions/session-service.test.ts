@@ -1,10 +1,11 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SessionsRepo } from "../db/sessions-repo";
 import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { TicketService } from "../tickets/ticket-service";
+import { cleanupTicketWorktrees } from "../tickets/worktree-cleanup";
 import { NPM_EXE_SHIM, NPM_SHIM, PNPM_NODE_PATH, PNPM_NODE_PATH_SHIM } from "../claude/__fixtures__/shims";
 import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import type { TranscriptState } from "./discovery";
@@ -54,6 +55,35 @@ async function setup(opts: {
   const ticket = await ticketService.create({ key: "PROJ-1", repoPath: repo, workMode: opts.workMode ?? "worktree" });
   return { service, sessions, tickets, spawned, pty, repo, ticket, ticketService, logs };
 }
+
+describe("SessionService and cleaned-up worktrees (design 2026-10-26)", () => {
+  it("rebuilds the worktree before resuming a session that ran in it, and before a new one", async () => {
+    const { service, sessions, spawned, ticket, tickets, ticketService, pty } = await setup({ workMode: "worktree" });
+    const dir = ticket.repos[0].worktreePath!;
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: dir, origin: "butler", createdAt: 1, repoId: ticket.repos[0].id });
+    await cleanupTicketWorktrees({ tickets, ticketService, repoBusy: () => false, now: () => 5 }, "PROJ-1");
+    expect(existsSync(dir)).toBe(false);
+    expect(await service.open({ ticketKey: "PROJ-1", sessionId: "old" })).toMatchObject({ ok: true });
+    expect(spawned[0].opts.cwd).toBe(dir);
+    expect(existsSync(dir)).toBe(true);
+    expect(tickets.getRepo(ticket.repos[0].id)?.worktreeRemovedAt).toBeNull();
+
+    pty.kill("old");
+    await cleanupTicketWorktrees({ tickets, ticketService, repoBusy: () => false, now: () => 6 }, "PROJ-1");
+    expect(await service.open({ ticketKey: "PROJ-1" })).toMatchObject({ ok: true });
+    expect(existsSync(dir)).toBe(true);
+  });
+
+  it("counts only the repo's own sessions as busy for cleanup", async () => {
+    const { service, ticket } = await setup({ workMode: "worktree" });
+    const repoId = ticket.repos[0].id;
+    expect(service.hasRepoTerminal("PROJ-1", repoId)).toBe(false);
+    await service.open({ ticketKey: "PROJ-1", coordinator: true });
+    expect(service.hasRepoTerminal("PROJ-1", repoId)).toBe(false);
+    await service.open({ ticketKey: "PROJ-1" });
+    expect(service.hasRepoTerminal("PROJ-1", repoId)).toBe(true);
+  });
+});
 
 describe("SessionService.open", () => {
   it("mounts the ticket's memory MCP config on new and resumed sessions (design 4.2)", async () => {
