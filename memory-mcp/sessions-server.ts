@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { join } from "node:path";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
 import { CONTROL_VERSION, TASK_LIMIT, type ControlRequest, type ControlResult } from "../src/shared/control";
+import type { Lang } from "../src/shared/i18n";
 
 /**
  * butler-sessions：只挂给总控 session 的 MCP server（设计文档 2026-10-23 第二步）。stdio 上按行收发 JSON-RPC 2.0；
@@ -12,6 +13,8 @@ import { CONTROL_VERSION, TASK_LIMIT, type ControlRequest, type ControlResult } 
 export interface SessionsServerOptions {
   /** 这个总控管哪个 ticket（或哪个 feature，设计文档 2026-10-26）：来自 Butler 写的 mcp 配置，不来自模型。 */
   scope: { ticketKey: string } | { featureId: number };
+  /** 工具描述和错误用哪种语言（Butler 写进 mcp 配置的 BUTLER_LANG；设计文档 2026-10-26）。默认中文。 */
+  lang?: Lang;
   /** 总控自己的 session id（claude 传下来的 BUTLER_SESSION），子 session 记成由它开启。 */
   from: string | null;
   requestsDir: string;
@@ -90,13 +93,91 @@ export const FEATURE_TOOLS = [
   },
 ] as const;
 
+/** 英文版：工具名、参数和 schema 一样，只有描述不同。 */
+export const TOOLS_EN = [
+  {
+    ...TOOLS[0],
+    description: "List this ticket's repos (name, working folder, branch). Use these names for start_session's repo argument.",
+  },
+  {
+    ...TOOLS[1],
+    description:
+      "Open a new Claude Code session in one of this ticket's repos and send it task as its first message. The new session appears under the same ticket in Butler, " +
+      "where the user can watch it and take over; the user still answers its permission prompts. All sessions share this ticket's memory: write the background and agreements to memory first. Returns the new session's id.",
+    inputSchema: {
+      ...TOOLS[1].inputSchema,
+      properties: {
+        repo: { type: "string", description: "repo name (name in list_repos) or working folder" },
+        task: { type: "string", description: `the task for the new session, at most ${TASK_LIMIT} characters` },
+      },
+    },
+  },
+  {
+    ...TOOLS[2],
+    description: "List this ticket's sessions: repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it.",
+  },
+] as const;
+
+export const FEATURE_TOOLS_EN = [
+  {
+    ...FEATURE_TOOLS[0],
+    description: "List this feature's tickets: id, title, status, and each ticket's repos (name, working folder, branch). Every ticket has its own branch and worktree.",
+  },
+  {
+    ...FEATURE_TOOLS[1],
+    description:
+      "Open a new Claude Code session for one of this feature's tickets, working in that ticket's repo (worktree), and send it task as its first message. " +
+      "The new session appears under that ticket in Butler, where the user can watch it and take over; the user still answers its permission prompts. " +
+      "Write the API contract between frontend and backend and any shared background to the feature memory (butler-feature) first; every ticket's sessions can read it. Returns the new session's id.",
+    inputSchema: {
+      ...FEATURE_TOOLS[1].inputSchema,
+      properties: {
+        ticket: { type: "string", description: "the ticket id (key in list_tickets)" },
+        repo: { type: "string", description: "repo name or working folder; may be left out when the ticket has one repo" },
+        task: { type: "string", description: `the task for the new session, at most ${TASK_LIMIT} characters` },
+      },
+    },
+  },
+  {
+    ...FEATURE_TOOLS[2],
+    description: "List this feature's sessions (the feature coordinator's and every ticket's): ticket, repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it.",
+  },
+] as const;
+
+const TEXT = {
+  zh: {
+    noReplyStart: "Butler 没有及时回应（可能没在运行）。session 也可能已经开了：重试之前先用 list_sessions 看一下。",
+    noReply: "Butler 没有回应（Butler 没在运行？）",
+    needRepoTask: "start_session 需要 repo 和 task 两个字符串参数",
+    needTicketTask: "start_session 需要 ticket 和 task 两个字符串参数",
+    repoString: "repo 必须是字符串",
+    taskTooLong: `task 太长（最多 ${TASK_LIMIT} 字）`,
+    noTool: (t: string) => `没有这个工具：${t}`,
+  },
+  en: {
+    noReplyStart: "Butler did not answer in time (it may not be running). The session may already be open: check with list_sessions before retrying.",
+    noReply: "Butler did not answer (is Butler running?)",
+    needRepoTask: "start_session needs two string arguments, repo and task",
+    needTicketTask: "start_session needs two string arguments, ticket and task",
+    repoString: "repo must be a string",
+    taskTooLong: `task is too long (at most ${TASK_LIMIT} characters)`,
+    noTool: (t: string) => `No such tool: ${t}`,
+  },
+};
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class SessionsServer {
   /** 写出去、还没等到结果的请求文件。 */
   private readonly pending = new Set<string>();
 
-  constructor(private readonly o: SessionsServerOptions) {}
+  private readonly en: boolean;
+  private readonly text: (typeof TEXT)["zh"];
+
+  constructor(private readonly o: SessionsServerOptions) {
+    this.en = o.lang === "en";
+    this.text = TEXT[this.en ? "en" : "zh"];
+  }
 
   /** 退出前撤回还没被 Butler 拿走的请求：没人等结果了，不该再去开 session。 */
   withdrawAll(): void {
@@ -124,7 +205,7 @@ export class SessionsServer {
       case "ping":
         return reply({});
       case "tools/list":
-        return reply({ tools: "featureId" in this.o.scope ? FEATURE_TOOLS : TOOLS });
+        return reply({ tools: "featureId" in this.o.scope ? (this.en ? FEATURE_TOOLS_EN : FEATURE_TOOLS) : this.en ? TOOLS_EN : TOOLS });
       case "tools/call":
         return reply(await this.call(msg.params ?? {}));
       default:
@@ -141,8 +222,8 @@ export class SessionsServer {
     if (!result) {
       return toolError(
         req.op === "start_session"
-          ? "Butler 没有及时回应（可能没在运行）。session 也可能已经开了：重试之前先用 list_sessions 看一下。"
-          : "Butler 没有回应（Butler 没在运行？）",
+          ? this.text.noReplyStart
+          : this.text.noReply,
       );
     }
     if (!result.ok) return toolError(result.error);
@@ -157,11 +238,11 @@ export class SessionsServer {
       case "list_sessions":
         return { ...base, op: "list_sessions" };
       case "start_session":
-        if (typeof args.repo !== "string" || typeof args.task !== "string") return toolError("start_session 需要 repo 和 task 两个字符串参数");
-        if (args.task.length > TASK_LIMIT) return toolError(`task 太长（最多 ${TASK_LIMIT} 字）`);
+        if (typeof args.repo !== "string" || typeof args.task !== "string") return toolError(this.text.needRepoTask);
+        if (args.task.length > TASK_LIMIT) return toolError(this.text.taskTooLong);
         return { ...base, op: "start_session", repo: args.repo, task: args.task };
       default:
-        return toolError(`没有这个工具：${String(tool)}`);
+        return toolError(this.text.noTool(String(tool)));
     }
   }
 
@@ -173,12 +254,12 @@ export class SessionsServer {
       case "list_sessions":
         return { ...base, op: "list_sessions" };
       case "start_session":
-        if (typeof args.ticket !== "string" || typeof args.task !== "string") return toolError("start_session 需要 ticket 和 task 两个字符串参数");
-        if (args.repo !== undefined && typeof args.repo !== "string") return toolError("repo 必须是字符串");
-        if (args.task.length > TASK_LIMIT) return toolError(`task 太长（最多 ${TASK_LIMIT} 字）`);
+        if (typeof args.ticket !== "string" || typeof args.task !== "string") return toolError(this.text.needTicketTask);
+        if (args.repo !== undefined && typeof args.repo !== "string") return toolError(this.text.repoString);
+        if (args.task.length > TASK_LIMIT) return toolError(this.text.taskTooLong);
         return { ...base, op: "start_session", ticket: args.ticket, ...(typeof args.repo === "string" && { repo: args.repo }), task: args.task };
       default:
-        return toolError(`没有这个工具：${String(tool)}`);
+        return toolError(this.text.noTool(String(tool)));
     }
   }
 

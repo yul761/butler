@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { currentLang } from "../i18n";
 import type { ChatMessage } from "./provider";
 import type { OutboundPayload } from "./types";
 
@@ -15,9 +16,19 @@ export const NARRATIVE_SYSTEM_PROMPT = [
   '4. 只输出一个 JSON 对象，不要输出任何别的文字，格式：{"focus": ["第一句", "第二句"]}',
 ].join("\n");
 
+/** 英文用户的系统提示（设计文档 2026-10-26）：规则一样，“今日重点”写英文。 */
+export const NARRATIVE_SYSTEM_PROMPT_EN = [
+  "You are the user's work assistant. The user gives you this morning's work brief as JSON. From it, write “Today's focus”: 2 to 4 sentences in English, one thing per sentence, the most urgent first.",
+  "Rules:",
+  "1. Values like [[T_ab12]] in the data are placeholders (T is a ticket, R a repo, B a branch, P a person, S another name). When you mention them, copy them exactly: don't rewrite, translate or split them, and never invent new placeholders.",
+  "2. Say only what the data says. Don't guess at anything the data doesn't contain, and don't output URLs, paths or code.",
+  "3. Field meanings: section first means do first, today means today, watch means keep an eye on; rule pr_approved is a PR approved and ready to merge, pr_changes_requested a PR with requested changes, followup_after_merge a follow-up after a merge, followup_due a due to-do, next_step the next step, blocked_long blocked for days, review_waiting waiting for review for days, stale no activity for days, unclaimed unclaimed sessions; days is a number of days, count a count.",
+  '4. Output only one JSON object and nothing else, in this format: {"focus": ["first sentence", "second sentence"]}',
+].join("\n");
+
 export function narrativeMessages(payload: OutboundPayload): ChatMessage[] {
   return [
-    { role: "system", content: NARRATIVE_SYSTEM_PROMPT },
+    { role: "system", content: currentLang() === "en" ? NARRATIVE_SYSTEM_PROMPT_EN : NARRATIVE_SYSTEM_PROMPT },
     { role: "user", content: JSON.stringify(payload) },
   ];
 }

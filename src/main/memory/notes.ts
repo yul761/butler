@@ -1,12 +1,21 @@
 import type { Handoff } from "../../shared/handoff";
 import { NOTE_BODY_LIMIT, noteBody, noteId, parseNote, sameBody, truncateUnits, type ButlerNote, type MemoryItem } from "../../shared/memory";
+import type { Lang } from "../../shared/i18n";
 import type { Followup, FollowupKind, FollowupTrigger, HandoffRecord } from "../../shared/types";
+import { currentLang } from "../i18n";
 
 /** 一个 ticket scope 里 Butler 自己最多维护多少条：StateCore 每个 scope 的 notes 上限是 30（超出淘汰最旧的），给 Claude 自己的 remember 留 6 条。 */
 export const BUTLER_NOTE_LIMIT = 24;
 
-const KIND_LABEL: Record<FollowupKind, string> = { config: "配置", flag: "开关", deploy: "部署", doc: "文档", other: "其他" };
-const TRIGGER_LABEL: Record<FollowupTrigger, string> = { after_merge: "合并后", after_deploy: "部署后", on_date: "到期日", none: "无触发条件" };
+/** 写进记忆的标签跟着语言走（设计文档 2026-10-26）：claude 读到的是当前语言。 */
+const KIND_LABEL: Record<Lang, Record<FollowupKind, string>> = {
+  zh: { config: "配置", flag: "开关", deploy: "部署", doc: "文档", other: "其他" },
+  en: { config: "config", flag: "flag", deploy: "deploy", doc: "docs", other: "other" },
+};
+const TRIGGER_LABEL: Record<Lang, Record<FollowupTrigger, string>> = {
+  zh: { after_merge: "合并后", after_deploy: "部署后", on_date: "到期日", none: "无触发条件" },
+  en: { after_merge: "after merge", after_deploy: "after deploy", on_date: "due", none: "no trigger" },
+};
 
 /** 到期日在说明后缀里最多占的字数：它本该是 YYYY-MM-DD，限长是为了永远给描述留下空间。 */
 const DUE_LIMIT = 32;
@@ -14,7 +23,9 @@ const DUE_LIMIT = 32;
 export function followupNote(f: Followup): ButlerNote {
   // 说明后缀由原始片段拼成、不过 noteBody（NFKC 会把全角括号和逗号变成半角）；到期日只压空白并限长。
   const due = f.trigger === "on_date" && f.dueDate ? ` ${truncateUnits(f.dueDate.replace(/\s+/g, " ").trim(), DUE_LIMIT)}` : "";
-  const suffix = `（${KIND_LABEL[f.kind]}，${TRIGGER_LABEL[f.trigger]}${due}）`;
+  const l = currentLang();
+  const labels = `${KIND_LABEL[l][f.kind]}${l === "zh" ? "，" : ", "}${TRIGGER_LABEL[l][f.trigger]}${due}`;
+  const suffix = l === "zh" ? `（${labels}）` : ` (${labels})`;
   const desc = truncateUnits(noteBody(f.description), NOTE_BODY_LIMIT - suffix.length).trim();
   return { kind: "followup", id: noteId(f.id), body: desc ? `${desc}${suffix}` : "" };
 }
@@ -88,4 +99,11 @@ export function planReconcile(current: MemoryItem[], desired: ButlerNote[]): Rec
   }
   for (const [key, have] of byKey) if (!wanted.has(key)) for (const h of have) plan.forget.push(h.factKey);
   return plan;
+}
+
+/** StateCore 里交接的摘要（设计文档 8.3：summary = done_today），用当前语言。 */
+export function handoffSummaryFor(p: Pick<Handoff, "status" | "done_today">): string {
+  const done = p.done_today.map((s) => s.trim()).filter(Boolean);
+  if (currentLang() === "en") return done.length ? `Status: ${p.status}. Done: ${done.join("; ")}` : `Status: ${p.status}.`;
+  return done.length ? `状态：${p.status}。完成：${done.join("；")}` : `状态：${p.status}。`;
 }

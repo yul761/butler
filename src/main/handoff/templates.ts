@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Handoff } from "../../shared/handoff";
+import type { Lang } from "../../shared/i18n";
 
 const FENCE = "```";
 
@@ -51,6 +52,53 @@ export const HANDOFF_EXAMPLE_VALUE: Handoff = {
 
 export const HANDOFF_EXAMPLE = JSON.stringify(HANDOFF_EXAMPLE_VALUE, null, 2);
 
+/** 英文版的字段说明和例子（设计文档 2026-10-26 中英文切换）：结构和中文版一样，只有说明和例子的文字不同。 */
+export const HANDOFF_SCHEMA_DOC_EN = `{
+  ticket: string,                 // the ticket id, for example "PROJ-123"
+  status: "active" | "in_review" | "blocked" | "merged_pending_followup" | "done",
+  done_today: string[],           // what was actually finished today
+  next_steps: string[],           // what comes next; the first item is the first step tomorrow
+  blockers: string[],             // what is in the way; [] if nothing
+  prs: {                          // every PR of this ticket (several repos means several PRs); [] if there is none
+    number: number, url: string,
+    state: "open" | "merged" | "closed",
+    review: "pending" | "changes_requested" | "approved" | null
+  }[],
+  jira: null | {                  // null if the tracker can't be read; never make it up
+    status: string,
+    subtasks: { key: string, status: string }[]
+  },
+  followups: {                    // what still has to happen after the merge or deploy
+    id: string | null,            // keep the id of an existing item; null for a new one
+    kind: "config" | "flag" | "deploy" | "doc" | "other",
+    description: string,
+    trigger: "after_merge" | "after_deploy" | "on_date" | "none",
+    due_date: string | null,      // YYYY-MM-DD, only when trigger is on_date
+    done: boolean
+  }[],
+  decisions: { key: string, statement: string }[],   // decisions made; key is a short English identifier
+  learnings: string[],            // lessons other tickets can use later
+  open_questions: string[]
+}`;
+
+export const HANDOFF_EXAMPLE_VALUE_EN: Handoff = {
+  ...HANDOFF_EXAMPLE_VALUE,
+  done_today: ["Moved the login page to the new token refresh logic", "Added unit tests for a failed refresh"],
+  next_steps: ["Split AuthService as the review asked", "After the merge, change the token TTL config on staging"],
+  followups: [
+    { id: "f_1a2b3c4d", kind: "config", description: "Set the token TTL on staging to 15 minutes", trigger: "after_merge", due_date: null, done: false },
+    { id: null, kind: "flag", description: "Turn the new_login flag on for everyone", trigger: "on_date", due_date: "2026-10-30", done: false },
+  ],
+  decisions: [{ key: "token-storage", statement: "The refresh token lives only in an httpOnly cookie" }],
+  learnings: ["This repo's e2e tests need pnpm seed first"],
+  open_questions: ["Should the TTL match the mobile app?"],
+};
+
+export const HANDOFF_EXAMPLE_EN = JSON.stringify(HANDOFF_EXAMPLE_VALUE_EN, null, 2);
+
+export const handoffSchemaDoc = (l: Lang): string => (l === "en" ? HANDOFF_SCHEMA_DOC_EN : HANDOFF_SCHEMA_DOC);
+export const handoffExample = (l: Lang): string => (l === "en" ? HANDOFF_EXAMPLE_EN : HANDOFF_EXAMPLE);
+
 /** 晚间批量和“立即 handoff”用的默认 prompt（设置里可改）。占位符由 src/main/handoff/prompt.ts 填充。 */
 export const DEFAULT_HANDOFF_PROMPT = `你在为 Butler 生成 ticket {{ticket}}（{{title}}，分支 {{branch}}）的 handoff：总结这个 session 到目前为止的进度，供明天早上的简报使用。
 
@@ -84,6 +132,42 @@ export const DEFAULT_REFRESH_PROMPT = `只查询 ticket {{ticket}}（分支 {{br
 只输出一个 JSON 对象，包含 status、prs、jira 三个字段，含义同下：
 {{schema}}
 `;
+
+export const DEFAULT_HANDOFF_PROMPT_EN = `You are writing Butler's handoff for ticket {{ticket}} ({{title}}, branch {{branch}}): summarize this session's progress so far for tomorrow morning's brief.
+
+Requirements:
+1. Read ticket {{ticket}}'s description, comments and subtasks with the tracker MCP tools. Available tools: {{tracker_tools}}. If the tools are unavailable or fail, set jira to null; never make it up.
+2. Read the PR state with \`gh pr view <branch>\` and \`gh pr checks <branch>\` (branch: {{branch}}). If the ticket spans several repos, check in each repo's folder and put every PR you find into prs; if there is none, set prs to [].
+3. Read only: don't change any file, don't commit or push.
+4. followups are "what still has to happen after the merge or deploy" (config changes, feature flags, deploys, docs and so on). The existing followups are listed below: keep their ids; set done to true for the ones that are finished; use null as the id of a new item.
+5. done_today lists only what was actually finished today; the first item of next_steps is the first step tomorrow.
+6. Write every text field in English.
+
+Previous handoff:
+{{previous_handoff}}
+
+Existing followups:
+{{open_followups}}
+
+Output one JSON object with these fields:
+{{schema}}
+
+Example:
+{{example}}
+`;
+
+export const DEFAULT_REFRESH_PROMPT_EN = `Only look up the latest state of ticket {{ticket}} (branch {{branch}}). Don't summarize the conversation and don't change any file.
+
+1. Look up the PR state and review state with \`gh pr view <branch>\` (branch: {{branch}}). With several repos, check in each repo's folder and put every PR into prs; if there is none, set prs to [].
+2. Look up ticket {{ticket}}'s status and subtasks with the tracker MCP tools. Available tools: {{tracker_tools}}. If they are unavailable, set jira to null.
+3. status: merged_pending_followup if all PRs are merged; in_review if a PR is still open; otherwise keep the current status {{current_status}}.
+
+Output only one JSON object with the three fields status, prs and jira, meaning the same as below:
+{{schema}}
+`;
+
+export const defaultHandoffPrompt = (l: Lang): string => (l === "en" ? DEFAULT_HANDOFF_PROMPT_EN : DEFAULT_HANDOFF_PROMPT);
+export const defaultRefreshPrompt = (l: Lang): string => (l === "en" ? DEFAULT_REFRESH_PROMPT_EN : DEFAULT_REFRESH_PROMPT);
 
 /**
  * handoff.md 里的标记行紧跟在 front matter 之后：`<!-- butler:handoff-command v1 sha256:<hex> -->`。
@@ -137,3 +221,29 @@ $ARGUMENTS
 
 /** 写入 Claude Code 用户级 commands 目录的 /handoff 命令。 */
 export const HANDOFF_COMMAND_MD = renderHandoffCommand(HANDOFF_COMMAND_BODY);
+
+export const HANDOFF_COMMAND_BODY_EN = `---
+description: Write a Butler handoff (a progress summary of the current ticket)
+---
+Write a handoff for the ticket of this session, for Butler's morning brief.
+
+- Base it on this session's whole conversation; if you can, confirm the latest state of the ticket and its PRs with the tracker MCP tools and \`gh pr view\`.
+- Read only: don't change files, don't commit or push.
+- Set ticket to the current ticket id (usually in the branch name, for example PROJ-123).
+- For an existing followup, use its id if you know it; otherwise use null.
+- Write every text field in English.
+- Finish with one ${FENCE}butler-handoff code block that contains a single JSON object; write nothing after the code block.
+
+Fields:
+${HANDOFF_SCHEMA_DOC_EN}
+
+Example:
+${FENCE}butler-handoff
+${HANDOFF_EXAMPLE_EN}
+${FENCE}
+
+$ARGUMENTS
+`;
+
+export const handoffCommandBody = (l: Lang): string => (l === "en" ? HANDOFF_COMMAND_BODY_EN : HANDOFF_COMMAND_BODY);
+export const handoffCommandMd = (l: Lang): string => renderHandoffCommand(handoffCommandBody(l));

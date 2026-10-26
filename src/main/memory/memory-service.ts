@@ -7,7 +7,7 @@ import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { MemorySyncRepo } from "../db/memory-sync-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import type { StatecoreChatModel } from "../gateway/types";
-import { desiredNotes, isFull, planReconcile } from "./notes";
+import { desiredNotes, handoffSummaryFor, isFull, planReconcile } from "./notes";
 import { listScopeNames, NOTES_CAP, withScope, type DigestOutcome, type ScopeHandle } from "./statecore";
 
 /** 一个 ticket 第一次同步（或积压很多）时最多回放多少条 handoff 的 learnings：workspace 的 notes 上限本来就是 30。 */
@@ -42,8 +42,7 @@ const scopeTicket = (scope: string): string | null =>
 
 /** StateCore 里交接的摘要（设计文档 8.3：summary = done_today）。 */
 export function handoffSummary(p: Handoff): string {
-  const done = p.done_today.map((s) => s.trim()).filter(Boolean);
-  return done.length ? `状态：${p.status}。完成：${done.join("；")}` : `状态：${p.status}。`;
+  return handoffSummaryFor(p);
 }
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));

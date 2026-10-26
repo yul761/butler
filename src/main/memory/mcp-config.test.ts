@@ -40,7 +40,7 @@ describe("ticket MCP config (design 4.2, 8.4)", () => {
     expect(sessions).toEqual({
       "butler-sessions": {
         type: "stdio", command: launcher.command, args: [launcher.script],
-        env: { ELECTRON_RUN_AS_NODE: "1", BUTLER_TICKET: "PROJ-1", BUTLER_CONTROL_REQUESTS: "/b/control/requests", BUTLER_CONTROL_RESULTS: "/b/control/results" },
+        env: { ELECTRON_RUN_AS_NODE: "1", BUTLER_TICKET: "PROJ-1", BUTLER_LANG: "zh", BUTLER_CONTROL_REQUESTS: "/b/control/requests", BUTLER_CONTROL_RESULTS: "/b/control/results" },
       },
     });
     const plain = writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", servers: memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "PROJ-1" }) });

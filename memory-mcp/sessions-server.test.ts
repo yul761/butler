@@ -5,12 +5,12 @@ import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
 import { FEATURE_TOOLS, SessionsServer, serveStdio, TOOLS } from "./sessions-server";
 
-function setup(timeoutMs = 2000, scope: { ticketKey: string } | { featureId: number } = { ticketKey: "P-1" }) {
+function setup(timeoutMs = 2000, scope: { ticketKey: string } | { featureId: number } = { ticketKey: "P-1" }, lang: "zh" | "en" = "zh") {
   const dir = tempDir("butler-control-");
   const requestsDir = join(dir, "requests");
   const resultsDir = join(dir, "results");
   mkdirSync(resultsDir, { recursive: true });
-  const server = new SessionsServer({ scope, from: "boss", requestsDir, resultsDir, timeoutMs, pollMs: 10 });
+  const server = new SessionsServer({ scope, lang, from: "boss", requestsDir, resultsDir, timeoutMs, pollMs: 10 });
   /** 扮演 Butler：等一个请求出现，读出来，写回结果。 */
   const answer = async (result: object) => {
     for (;;) {
@@ -126,5 +126,17 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
     expect(noTicket.result.isError).toBe(true);
     const repos = (await server.handle({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "list_repos", arguments: {} } })) as { result: { isError?: boolean } };
     expect(repos.result.isError).toBe(true);
+  });
+});
+
+describe("butler-sessions in English (design 2026-10-26 i18n)", () => {
+  it("describes its tools and errors in English", async () => {
+    for (const scope of [{ ticketKey: "P-1" }, { featureId: 7 }]) {
+      const { server } = setup(2000, scope, "en");
+      const list = (await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: unknown[] } };
+      expect(/[\u4e00-\u9fff]/.test(JSON.stringify(list.result.tools))).toBe(false);
+      const bad = (await server.handle({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "nope", arguments: {} } })) as { result: { content: { text: string }[] } };
+      expect(bad.result.content[0].text).toBe("No such tool: nope");
+    }
   });
 });

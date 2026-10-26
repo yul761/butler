@@ -1,3 +1,5 @@
+import type { Lang } from "./i18n";
+
 /**
  * 总控 session 开子 session（设计文档 2026-10-23 第二步）：butler-sessions MCP server ↔ Butler 主进程，走文件。
  * 请求：<control>/requests/<id>.json；结果：<control>/results/<id>.json（同一个 id）。
@@ -77,6 +79,6 @@ export function sanitizeTask(text: string): string {
  * 交给子 session 的第一条消息：固定的开头加上任务。任务本身可能以 ! 或 / 开头（claude 的 bash 模式、斜杠命令，不经过权限确认），
  * 有了开头它永远只是一段普通的提示。
  */
-export function taskMessage(task: string): string {
-  return `总控 session 交给你的任务：\n${task}`;
+export function taskMessage(task: string, lang: Lang = "zh"): string {
+  return `${lang === "en" ? "Task from the coordinator session:" : "总控 session 交给你的任务："}\n${task}`;
 }

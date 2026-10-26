@@ -16,7 +16,8 @@ if ((!ticketKey && featureId === null) || !requestsDir || !resultsDir) {
   process.stderr.write("butler-sessions: BUTLER_TICKET or BUTLER_FEATURE, BUTLER_CONTROL_REQUESTS and BUTLER_CONTROL_RESULTS are required\n");
   process.exit(2);
 }
-const server = new SessionsServer({ scope: featureId !== null ? { featureId } : { ticketKey }, from, requestsDir, resultsDir });
+const lang = env.BUTLER_LANG === "en" ? "en" : "zh";
+const server = new SessionsServer({ scope: featureId !== null ? { featureId } : { ticketKey }, lang, from, requestsDir, resultsDir });
 serveStdio(server, process.stdin, process.stdout);
 // claude 退出时关掉 stdin：撤回没人再等的请求，跟着退出，不留下孤儿进程。
 process.stdin.on("end", () => {

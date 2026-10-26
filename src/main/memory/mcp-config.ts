@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { featureScope, ticketScope, WORKSPACE_SCOPE } from "../../shared/memory";
+import { currentLang } from "../i18n";
 import { renameWithRetrySync } from "../util/fs-retry";
 import { ticketFileStem } from "../util/ticket-file";
 
@@ -55,6 +56,8 @@ export function sessionsServer(o: {
   resultsDir: string;
 }): Record<string, McpServerSpec> {
   const target: Record<string, string> = "featureId" in o.scope ? { BUTLER_FEATURE: String(o.scope.featureId) } : { BUTLER_TICKET: o.scope.ticketKey };
+  // 工具描述跟着 Butler 的语言（设计文档 2026-10-26）。
+  target.BUTLER_LANG = currentLang();
   return {
     [SESSIONS_SERVER]: {
       type: "stdio",
