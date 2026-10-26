@@ -5,6 +5,7 @@ import { reportError } from "../errors";
 import { savedWizardStep, saveWizardStep, setWizardSkipped } from "../local-prefs";
 import { mergeTools } from "../settings-form";
 import { S } from "../strings";
+import { LanguagePicker } from "./LanguagePicker";
 import { canAdvance, nextStep, prevStep, stepNumber, type WizardStep } from "../wizard";
 import { PrivacySettings } from "./PrivacySettings";
 import { TrackerToolPicker } from "./TrackerToolPicker";
@@ -87,6 +88,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   return (
     <div className="page wizard" data-testid="wizard">
       <h2>{S.wizardTitle}</h2>
+      <LanguagePicker />
       {step !== "done" && <p className="muted">{S.wizardStep(n, total)}</p>}
 
       {step === "claude" && (

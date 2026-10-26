@@ -1,8 +1,10 @@
+import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
+import { EN, EN_STATUS } from "./strings-en";
 import type { BriefItem, BriefRule, BriefSection } from "../../shared/brief";
 import type { FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
 
-export const STATUS_LABEL: Record<TicketStatus, string> = {
+const ZH_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "已合并·待收尾",
   active: "进行中",
   blocked: "阻塞",
@@ -13,8 +15,11 @@ export const STATUS_LABEL: Record<TicketStatus, string> = {
 /** 侧栏分组顺序：最容易被遗忘的放最上面。 */
 export const STATUS_ORDER: TicketStatus[] = ["merged_pending_followup", "active", "blocked", "in_review", "done"];
 
-export const S = {
+const ZH = {
   home: "简报",
+  language: "语言 / Language",
+  languageOptions: { auto: "跟随系统", zh: "中文", en: "English" } as Record<string, string>,
+  languageHint: "界面、Butler 的提示和发给 claude 的默认提示词都会切换；你自己改过的提示词不变，以前生成的内容不会翻译。",
   newTicket: "新建 ticket",
   newFeature: "新建 feature",
   features: "Feature",
@@ -393,3 +398,18 @@ export const S = {
   wizardDoneTitle: "准备好了",
   wizardDoneHelp: "点左侧“新建 ticket”开始。每晚 Butler 会为有活动的 ticket 生成 handoff，早上打开就能看到简报。这些设置之后都能在设置页修改，也可以从设置页重新运行这个向导。",
 };
+
+export type UiStrings = typeof ZH;
+
+/** 两种语言的文案（设计文档 2026-10-26 中英文切换）。英文表的类型就是中文表的类型：少一个键、多一个键都编译不过。 */
+export const STRINGS: Record<Lang, UiStrings> = { zh: ZH, en: EN };
+const STATUS: Record<Lang, Record<TicketStatus, string>> = { zh: ZH_STATUS, en: EN_STATUS };
+
+/** 当前语言的文案。渲染前由 main.tsx 用 setUiLang 设好；改语言后整个窗口重新加载。 */
+export let S: UiStrings = ZH;
+export let STATUS_LABEL: Record<TicketStatus, string> = ZH_STATUS;
+
+export function setUiLang(l: Lang): void {
+  S = STRINGS[l];
+  STATUS_LABEL = STATUS[l];
+}

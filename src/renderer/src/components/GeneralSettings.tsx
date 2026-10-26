@@ -4,6 +4,7 @@ import type { AutostartState, HealthReport } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
+import { LanguagePicker } from "./LanguagePicker";
 
 const TEXT_FIELDS = ["claudePath", "branchTemplate", "ticketPattern"] as const;
 
@@ -78,6 +79,7 @@ export function GeneralSettings({ report, onHealth, onRerunWizard }: { report: H
   return (
     <section className="settings-section">
       <h2>{S.general}</h2>
+      <LanguagePicker />
       {error && <p className="error">{error}</p>}
       {TEXT_FIELDS.map((k) => (
         <div key={k} className="field">
