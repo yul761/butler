@@ -37,6 +37,9 @@ export interface Feature {
   archivedAt: number | null;
 }
 
+/** 选目录的结果：仓库本身、上一层目录（列出下一层的仓库），或者都不是。 */
+export type ScanResult = { kind: "repo"; root: string } | { kind: "parent"; repos: string[] } | { kind: "none" };
+
 export interface Ticket {
   key: string;
   title: string | null;

@@ -9,6 +9,4 @@ export function extractTicketKey(text: string, pattern = DEFAULT_TICKET_PATTERN)
   return m ? m[0].toUpperCase() : null;
 }
 
-export function renderBranch(template: string, key: string): string {
-  return template.replaceAll("{key}", key);
-}
+export { renderBranch } from "../../shared/branch";

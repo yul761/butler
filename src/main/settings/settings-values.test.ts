@@ -179,7 +179,11 @@ describe("general settings (design 9, 12)", () => {
   });
 
   it("accepts branch templates git can turn into a branch name", () => {
-    for (const ok of ["feature/{key}", "{key}", "users/me/{key}-wip", "fix_{key}"]) expect(normalizeBranchTemplate(ok), ok).toBe(ok);
+    for (const ok of ["feature/{key}", "{key}", "users/me/{key}-wip", "fix_{key}", "{key_lower}-{title}", "feature/{key}-{title}"]) {
+      expect(normalizeBranchTemplate(ok), ok).toBe(ok);
+    }
+    // {title} 单独不够：没有标题时分支名就是空的。
+    expect(() => normalizeBranchTemplate("{title}")).toThrow(SettingError);
     for (const bad of ["feature/", "feat ure/{key}", "-{key}", "/{key}", "feature/{key}/", "a..b/{key}", "{key}.lock", "{key}.", "a//{key}", "a/.{key}", "{ticket}/{key}", `${"x".repeat(100)}{key}`]) {
       expect(() => normalizeBranchTemplate(bad), bad).toThrow(SettingError);
     }
@@ -205,6 +209,8 @@ describe("general settings (design 9, 12)", () => {
 describe("branch template against the ticket pattern", () => {
   it("rejects combinations that can render an invalid branch name", () => {
     expect(() => checkBranchTemplateFits("{key}", "-\\d+")).toThrow(SettingError);
+    expect(() => checkBranchTemplateFits("{key_lower}-{title}", "[A-Z][A-Z0-9]+-\\d+")).not.toThrow();
+    expect(() => checkBranchTemplateFits("{key_lower}", "-\\d+")).toThrow(SettingError);
     expect(() => checkBranchTemplateFits("{key}", "\\S+-\\d+")).toThrow(SettingError);
     expect(() => checkBranchTemplateFits("feature/{key}", "[A-Z][A-Z0-9]+-\\d+")).not.toThrow();
     expect(() => checkBranchTemplateFits("feature/{key}", "-\\d+")).not.toThrow();

@@ -1,3 +1,4 @@
+import { renderBranch } from "../../shared/branch";
 import { isAbsolute } from "node:path";
 import vm from "node:vm";
 import { PRIVACY_LEVELS, TERM_CATEGORIES, type PrivacyLevel, type SensitiveTerm, type TermCategory } from "../../shared/llm";
@@ -187,11 +188,17 @@ function branchNameBad(name: string): boolean {
   );
 }
 
-/** 分支名模板（设计文档 4.1）：必须含 {key}；代入一个 ticket 号之后要是 git 接受的分支名（保守的子集）。 */
+/** 模板代入时用的标题样例：没有标题，和一个普通的英文标题。 */
+const TITLE_SAMPLES = ["", "Add payment API"];
+
+/**
+ * 分支名模板（设计文档 4.1、2026-10-26）：必须含 {key} 或 {key_lower}；代入一个 ticket 号（和有、没有标题两种情况）之后
+ * 要是 git 接受的分支名（保守的子集）。
+ */
 export function normalizeBranchTemplate(value: string): string {
   const t = value.trim();
-  if (!t.includes("{key}")) throw new SettingError("分支名模板必须包含 {key}，例如 feature/{key}");
-  if (t.length > 100 || branchNameBad(t.replaceAll("{key}", "PROJ-1"))) {
+  if (!t.includes("{key}") && !t.includes("{key_lower}")) throw new SettingError("分支名模板必须包含 {key} 或 {key_lower}，例如 feature/{key}");
+  if (t.length > 100 || TITLE_SAMPLES.some((title) => branchNameBad(renderBranch(t, "PROJ-1", title)))) {
     throw new SettingError("分支名模板只能用字母、数字和 . _ / -（不能以 - 或 / 开头、不能有 .. 或 //），最长 100 字，例如 feature/{key}");
   }
   return t;
@@ -208,8 +215,10 @@ export function checkBranchTemplateFits(template: string, ticketPattern: string)
     return;
   }
   for (const key of KEY_SAMPLES) {
-    if (anchored.test(key) && branchNameBad(template.replaceAll("{key}", key))) {
-      throw new SettingError(`分支名模板和 ticket 号正则搭配起来会得到不合法的分支名（例如 ${template.replaceAll("{key}", key)}），请调整其中之一`);
+    if (!anchored.test(key)) continue;
+    for (const title of TITLE_SAMPLES) {
+      const branch = renderBranch(template, key, title);
+      if (branchNameBad(branch)) throw new SettingError(`分支名模板和 ticket 号正则搭配起来会得到不合法的分支名（例如 ${branch}），请调整其中之一`);
     }
   }
 }

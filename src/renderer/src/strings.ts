@@ -327,7 +327,7 @@ export const S = {
   generalPlaceholders: { claudePath: "留空：从登录 shell 的 PATH 里自动查找", branchTemplate: "feature/{key}", ticketPattern: "[A-Z][A-Z0-9]+-\\d+" } as Record<string, string>,
   generalHelp: {
     claudePath: "公司的 claude 不在 PATH 上时填它的绝对路径。改完会重新检测。",
-    branchTemplate: "worktree 模式新建分支时用；{key} 换成 ticket 号。",
+    branchTemplate: "新建分支时用。可用 {key}（ticket 号）、{key_lower}（小写 ticket 号）、{title}（标题，转成小写英文和 -；没有英文时省略），例如 {key_lower}-{title}。",
     ticketPattern: "用来识别 ticket 号（新建 ticket、认领 session、隐私扫描）。不要写会让匹配卡死的写法，例如 (a+)+。",
   } as Record<string, string>,
   autostart: "开机时自动启动 Butler",

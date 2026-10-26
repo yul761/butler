@@ -125,6 +125,19 @@ describe("TicketService.create input checks", () => {
     expect(await code(service.create({ key: "-5", repoPath: makeRepo(), workMode: "branch" }))).toBe("invalid_branch");
   });
 
+  it("names the branch from the template's {key_lower} and {title}, on create and when adding a repo", async () => {
+    const db = memDb();
+    const settings = new SettingsRepo(db);
+    settings.set("branchTemplate", "{key_lower}-{title}");
+    const service = new TicketService({ tickets: new TicketsRepo(db), settings, now: () => 1000, workspacesDir: tempDir("butler-ws-") });
+    const t = await service.create({ key: "DMS-1234", title: "Add payment API", repoPath: makeRepo(), workMode: "branch" });
+    expect(only(t).branch).toBe("dms-1234-add-payment-api");
+    const added = await service.addRepo({ ticketKey: "DMS-1234", repoPath: makeRepo(), workMode: "branch" });
+    expect(added.branch).toBe("dms-1234-add-payment-api");
+    const untitled = await service.create({ key: "DMS-1235", repoPath: makeRepo(), workMode: "branch" });
+    expect(only(untitled).branch).toBe("dms-1235");
+  });
+
   it("rejects branch names git would refuse or expand", async () => {
     const { service } = setup();
     const repo = makeRepo();

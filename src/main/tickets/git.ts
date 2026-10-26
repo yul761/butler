@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
-import { resolve } from "node:path";
+import { readdir } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import type { ScanResult } from "../../shared/types";
 import { GIT_SAFE_ARGS, gitBinary } from "../util/git-path";
 
 export class GitError extends Error {
@@ -38,6 +40,39 @@ export function git(cwd: string, args: string[]): Promise<string> {
 /** git 在 Windows 上返回正斜杠路径，resolve 统一成本平台格式。 */
 export async function repoRoot(dir: string): Promise<string> {
   return resolve(await git(dir, ["rev-parse", "--show-toplevel"]));
+}
+
+/** dir 自己就是 git 仓库的根目录（不是在别的仓库里面的普通目录）。 */
+async function isRepoRoot(dir: string): Promise<boolean> {
+  try {
+    return (await repoRoot(dir)) === resolve(dir);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 选目录时用（设计文档 2026-10-26）：dir 在仓库里 → 那个仓库的根目录；不在 → 它下一层里的仓库（不进隐藏目录，按名字排序）；
+ * 下一层也没有 → none。
+ */
+export async function scanRepos(dir: string): Promise<ScanResult> {
+  try {
+    return { kind: "repo", root: await repoRoot(dir) };
+  } catch {
+    // 不是仓库：往下找一层。
+  }
+  let names: string[];
+  try {
+    names = (await readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => e.name);
+  } catch {
+    return { kind: "none" };
+  }
+  const repos: string[] = [];
+  for (const name of names.sort()) {
+    const child = join(resolve(dir), name);
+    if (await isRepoRoot(child)) repos.push(child);
+  }
+  return repos.length > 0 ? { kind: "parent", repos } : { kind: "none" };
 }
 
 export function currentBranch(cwd: string): Promise<string> {

@@ -108,7 +108,7 @@ export class TicketService {
 
     const now = this.d.now();
     const repoPath = input.repoPath?.trim();
-    const repo = repoPath ? await this.prepareRepo(key, [], { repoPath, workMode: input.workMode ?? "worktree", branch: input.branch }) : undefined;
+    const repo = repoPath ? await this.prepareRepo(key, [], { repoPath, workMode: input.workMode ?? "worktree", branch: input.branch, title: input.title }) : undefined;
     this.d.tickets.insert(
       { key, title: input.title?.trim() || null, status: "active", statusManual: null, createdAt: now, archivedAt: null },
       repo && { ...repo, ticketKey: key, createdAt: now },
@@ -121,7 +121,7 @@ export class TicketService {
     const t = this.ticket(input.ticketKey);
     if (t.archivedAt !== null) throw new TicketError("archived", `ticket ${t.key} 已经归档，先恢复再添加仓库`);
     return this.exclusive(t.key, async () => {
-      const prepared = await this.prepareRepo(t.key, t.repos, input);
+      const prepared = await this.prepareRepo(t.key, t.repos, { ...input, title: t.title });
       const id = this.d.tickets.addRepo({ ...prepared, ticketKey: t.key, createdAt: this.d.now() });
       return this.repo(id);
     });
@@ -141,7 +141,7 @@ export class TicketService {
   private async prepareRepo(
     key: string,
     existing: TicketRepo[],
-    input: { repoPath: string; workMode: WorkMode; branch?: string },
+    input: { repoPath: string; workMode: WorkMode; branch?: string; title?: string | null },
   ): Promise<Pick<TicketRepo, "repoPath" | "workMode" | "worktreePath" | "branch">> {
     let root: string;
     try {
@@ -152,7 +152,7 @@ export class TicketService {
     if (existing.some((r) => samePath(r.repoPath, root))) throw new TicketError("repo_exists", `这个 ticket 已经有仓库 ${root}`);
     if (!(await hasCommits(root))) throw new TicketError("empty_repo", "这个仓库还没有任何提交");
 
-    const branch = input.branch?.trim() || renderBranch(this.d.settings.get("branchTemplate"), key);
+    const branch = input.branch?.trim() || renderBranch(this.d.settings.get("branchTemplate"), key, input.title);
     if (!(await isValidBranchName(root, branch))) throw new TicketError("invalid_branch", `分支名不合法：${branch}`);
 
     let worktreePath: string | null = null;
