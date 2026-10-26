@@ -3,11 +3,11 @@ import type { SessionView, TicketRepo } from "../../shared/types";
 import { lastSegment, repoWhere, sessionPlace } from "./repos";
 
 const repo = (id: number, path: string, extra: Partial<TicketRepo> = {}): TicketRepo => ({
-  id, ticketKey: "P-1", repoPath: path, workMode: "branch", worktreePath: null, branch: "feature/P-1", createdAt: 1, ...extra,
+  id, ticketKey: "P-1", repoPath: path, workMode: "branch", worktreePath: null, branch: "feature/P-1", createdAt: 1, worktreeRemovedAt: null, cleanupBlocked: null, ...extra,
 });
 const session = (extra: Partial<SessionView>): SessionView => ({
   id: "s", ticketKey: "P-1", cwd: "/x", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
-  replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, termId: null, ...extra,
+  replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, termId: null, ...extra,
 });
 
 describe("repo labels", () => {

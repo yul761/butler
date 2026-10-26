@@ -144,4 +144,24 @@ export const MIGRATIONS: string[] = [
   UPDATE sessions SET repo_id = (SELECT r.id FROM ticket_repos r WHERE r.ticket_key = sessions.ticket_key)
     WHERE ticket_key IS NOT NULL;
   `,
+  `
+  CREATE TABLE features (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    workspace_dir TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    archived_at INTEGER
+  );
+  CREATE TABLE feature_repos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feature_id INTEGER NOT NULL REFERENCES features(id),
+    repo_path TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE (feature_id, repo_path)
+  );
+  ALTER TABLE tickets ADD COLUMN feature_id INTEGER REFERENCES features(id);
+  ALTER TABLE sessions ADD COLUMN feature_id INTEGER REFERENCES features(id);
+  ALTER TABLE ticket_repos ADD COLUMN worktree_removed_at INTEGER;
+  ALTER TABLE ticket_repos ADD COLUMN cleanup_blocked TEXT;
+  `,
 ];

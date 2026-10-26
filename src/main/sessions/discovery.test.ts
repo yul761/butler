@@ -161,7 +161,7 @@ describe("syncDiscovered / suggestTicket", () => {
 describe("needsDiscovery", () => {
   const base = {
     id: "a", ticketKey: null, cwd: "/w", origin: "discovered" as const, gitBranch: "main", firstPrompt: "hi",
-    lastActivityAt: 1, waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null,
+    lastActivityAt: 1, waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null,
   };
 
   it("only asks for a scan when an unclaimed session is missing details, once per session", () => {

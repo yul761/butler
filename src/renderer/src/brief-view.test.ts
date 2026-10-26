@@ -12,12 +12,12 @@ const RULES: BriefRule[] = [
 ];
 const session = (id: string): SessionView => ({
   id, ticketKey: "A-1", cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: 1,
-  waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 1, termId: null, repoId: null, coordinator: false, spawnedBy: null,
+  waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 1, termId: null, repoId: null, coordinator: false, spawnedBy: null, featureId: null,
 });
-const REPO = { id: 1, ticketKey: "A-1", repoPath: "/r", workMode: "branch" as const, worktreePath: null, branch: "b", createdAt: 1 };
+const REPO = { id: 1, ticketKey: "A-1", repoPath: "/r", workMode: "branch" as const, worktreePath: null, branch: "b", createdAt: 1, worktreeRemovedAt: null, cleanupBlocked: null };
 const ticket = (sessions: SessionView[], repos = [REPO]): TicketView => ({
   key: "A-1", title: null, repos, status: "active",
-  statusManual: null, createdAt: 1, archivedAt: null, effectiveStatus: "active", sessions, hiddenSessions: [], waiting: false,
+  statusManual: null, createdAt: 1, archivedAt: null, featureId: null, effectiveStatus: "active", sessions, hiddenSessions: [], waiting: false,
 });
 
 describe("brief view helpers", () => {

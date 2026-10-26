@@ -13,6 +13,28 @@ export interface TicketRepo {
   worktreePath: string | null;
   branch: string;
   createdAt: number;
+  /** PR 合并后 worktree 已被自动清理（设计文档 2026-10-26）；再开 session 时重建。 */
+  worktreeRemovedAt: number | null;
+  /** 上次没能自动清理的原因（给用户看）。 */
+  cleanupBlocked: string | null;
+}
+
+/** feature 涉及的源仓库：在 feature 下建 ticket 时从这里选（设计文档 2026-10-26）。 */
+export interface FeatureRepo {
+  id: number;
+  featureId: number;
+  repoPath: string;
+  createdAt: number;
+}
+
+/** 一组 ticket 加一个工作区目录：feature 下 ticket 的 worktree 都放在工作区里，feature 总控在那里打开。 */
+export interface Feature {
+  id: number;
+  name: string;
+  workspaceDir: string;
+  repos: FeatureRepo[];
+  createdAt: number;
+  archivedAt: number | null;
 }
 
 export interface Ticket {
@@ -24,6 +46,8 @@ export interface Ticket {
   statusManual: TicketStatus | null;
   createdAt: number;
   archivedAt: number | null;
+  /** 属于哪个 feature（null：单独的 ticket）。 */
+  featureId: number | null;
 }
 
 export type SessionOrigin = "butler" | "discovered";
@@ -46,6 +70,8 @@ export interface Session {
   coordinator: boolean;
   /** 由哪个总控 session 开启（null：用户自己开的）。 */
   spawnedBy: string | null;
+  /** feature 总控 session 属于哪个 feature（这时 ticketKey 为 null、coordinator 为 true）。 */
+  featureId: number | null;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */

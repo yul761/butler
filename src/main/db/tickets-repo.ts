@@ -12,6 +12,7 @@ interface TicketRow {
   status_manual: string | null;
   created_at: number;
   archived_at: number | null;
+  feature_id: number | null;
 }
 
 interface RepoRow {
@@ -22,6 +23,8 @@ interface RepoRow {
   worktree_path: string | null;
   branch: string;
   created_at: number;
+  worktree_removed_at: number | null;
+  cleanup_blocked: string | null;
 }
 
 function toRepo(r: RepoRow): TicketRepo {
@@ -33,11 +36,14 @@ function toRepo(r: RepoRow): TicketRepo {
     worktreePath: r.worktree_path,
     branch: r.branch,
     createdAt: r.created_at,
+    worktreeRemovedAt: r.worktree_removed_at,
+    cleanupBlocked: r.cleanup_blocked,
   };
 }
 
-export type NewTicket = Omit<Ticket, "repos">;
-export type NewRepo = Omit<TicketRepo, "id">;
+/** featureId 省略表示单独的 ticket。 */
+export type NewTicket = Omit<Ticket, "repos" | "featureId"> & { featureId?: number | null };
+export type NewRepo = Omit<TicketRepo, "id" | "worktreeRemovedAt" | "cleanupBlocked">;
 
 export class TicketsRepo {
   constructor(private readonly db: Db) {}
@@ -51,6 +57,7 @@ export class TicketsRepo {
       statusManual: r.status_manual as TicketStatus | null,
       createdAt: r.created_at,
       archivedAt: r.archived_at,
+      featureId: r.feature_id === null ? null : Number(r.feature_id),
     };
   }
 
@@ -59,10 +66,10 @@ export class TicketsRepo {
     return withTransaction(this.db, () => {
       this.db
         .prepare(
-          `INSERT INTO tickets (key, title, repo_path, work_mode, worktree_path, branch, status, status_manual, created_at, archived_at)
-           VALUES (?, ?, '', 'branch', NULL, '', ?, ?, ?, ?)`,
+          `INSERT INTO tickets (key, title, repo_path, work_mode, worktree_path, branch, status, status_manual, created_at, archived_at, feature_id)
+           VALUES (?, ?, '', 'branch', NULL, '', ?, ?, ?, ?, ?)`,
         )
-        .run(t.key, t.title, t.status, t.statusManual, t.createdAt, t.archivedAt);
+        .run(t.key, t.title, t.status, t.statusManual, t.createdAt, t.archivedAt, t.featureId ?? null);
       return repo ? this.addRepo(repo) : null;
     });
   }
@@ -75,6 +82,15 @@ export class TicketsRepo {
   list(opts: { includeArchived?: boolean } = {}): Ticket[] {
     const where = opts.includeArchived ? "" : "WHERE archived_at IS NULL";
     const rows = this.db.prepare(`SELECT * FROM tickets ${where} ORDER BY created_at DESC, key`).all() as unknown as TicketRow[];
+    return rows.map((r) => this.toTicket(r));
+  }
+
+  /** 这个 feature 下的 ticket，按建立顺序。 */
+  listByFeature(featureId: number, opts: { includeArchived?: boolean } = {}): Ticket[] {
+    const archived = opts.includeArchived ? "" : "AND archived_at IS NULL";
+    const rows = this.db
+      .prepare(`SELECT * FROM tickets WHERE feature_id = ? ${archived} ORDER BY created_at, key`)
+      .all(featureId) as unknown as TicketRow[];
     return rows.map((r) => this.toTicket(r));
   }
 
@@ -99,9 +115,20 @@ export class TicketsRepo {
     return rows.map(toRepo);
   }
 
-  /** 改一个仓库的工作方式、worktree 路径和分支。 */
+  /** 改一个仓库的工作方式、worktree 路径和分支。worktree 由此重新建好，不再算"已清理"。 */
   updateRepo(r: Pick<TicketRepo, "id" | "workMode" | "worktreePath" | "branch">): void {
-    this.db.prepare(`UPDATE ticket_repos SET work_mode = ?, worktree_path = ?, branch = ? WHERE id = ?`).run(r.workMode, r.worktreePath, r.branch, r.id);
+    this.db
+      .prepare(`UPDATE ticket_repos SET work_mode = ?, worktree_path = ?, branch = ?, worktree_removed_at = NULL, cleanup_blocked = NULL WHERE id = ?`)
+      .run(r.workMode, r.worktreePath, r.branch, r.id);
+  }
+
+  /** worktree 被自动清理了（at）或重建了（null）。 */
+  markWorktreeRemoved(repoId: number, at: number | null): void {
+    this.db.prepare(`UPDATE ticket_repos SET worktree_removed_at = ? WHERE id = ?`).run(at, repoId);
+  }
+
+  setCleanupBlocked(repoId: number, reason: string | null): void {
+    this.db.prepare(`UPDATE ticket_repos SET cleanup_blocked = ? WHERE id = ?`).run(reason, repoId);
   }
 
   /** 解除仓库和 ticket 的关联（磁盘上的东西不动）。为它开过的 session 留着，只是不再算在这个仓库名下。 */

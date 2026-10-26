@@ -4,7 +4,7 @@ import { sessionLabel, splitSessions } from "./sessions";
 
 const s = (id: string, over: Partial<SessionView> = {}): SessionView => ({
   id, ticketKey: "T-1", cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null,
-  waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 1, termId: null, repoId: null, coordinator: false, spawnedBy: null, ...over,
+  waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 1, termId: null, repoId: null, coordinator: false, spawnedBy: null, featureId: null, ...over,
 });
 
 describe("sessionLabel", () => {

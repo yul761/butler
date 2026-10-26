@@ -16,6 +16,7 @@ interface SessionRow {
   repo_id: number | null;
   coordinator: number;
   spawned_by: string | null;
+  feature_id: number | null;
 }
 
 function toSession(r: SessionRow): Session {
@@ -34,6 +35,7 @@ function toSession(r: SessionRow): Session {
     repoId: r.repo_id === null ? null : Number(r.repo_id),
     coordinator: r.coordinator === 1,
     spawnedBy: r.spawned_by,
+    featureId: r.feature_id === null ? null : Number(r.feature_id),
   };
 }
 
@@ -49,6 +51,7 @@ export interface NewSession {
   repoId?: number | null;
   coordinator?: boolean;
   spawnedBy?: string | null;
+  featureId?: number | null;
 }
 
 export interface SessionDetails {
@@ -72,12 +75,12 @@ export class SessionsRepo {
   insertIfAbsent(s: NewSession): boolean {
     const r = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
-        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null,
+        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null,
       );
     if (Number(r.changes) > 0) {
       this.forgotten.delete(s.id);
@@ -118,11 +121,24 @@ export class SessionsRepo {
     return rows.map(toSession);
   }
 
+  /** feature 总控 session（ticket_key 为空、feature_id 是这个 feature 的）。 */
+  listByFeature(featureId: number): Session[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM sessions WHERE feature_id = ? AND ticket_key IS NULL ORDER BY ${RECENCY} DESC, id`)
+      .all(featureId) as unknown as SessionRow[];
+    return rows.map(toSession);
+  }
+
+  /** 记成这个 feature 的总控。 */
+  setFeature(id: string, featureId: number): void {
+    this.db.prepare(`UPDATE sessions SET feature_id = ?, coordinator = 1 WHERE id = ?`).run(featureId, id);
+  }
+
   listUnclaimed(sinceMs: number): Session[] {
     const rows = this.db
       .prepare(
         `SELECT * FROM sessions
-         WHERE ticket_key IS NULL AND dismissed = 0 AND replaced_by IS NULL AND ${RECENCY} >= ?
+         WHERE ticket_key IS NULL AND feature_id IS NULL AND dismissed = 0 AND replaced_by IS NULL AND ${RECENCY} >= ?
          ORDER BY ${RECENCY} DESC, id`,
       )
       .all(sinceMs) as unknown as SessionRow[];
@@ -148,7 +164,7 @@ export class SessionsRepo {
       .run(waiting ? 1 : 0, at, id);
   }
 
-  /** /clear、compact 产生的新 session 接替旧的：同一个终端，仓库、总控和开启者也照旧。 */
+  /** /clear、compact 产生的新 session 接替旧的：同一个终端，仓库、总控、开启者和 feature 也照旧。 */
   setReplacedBy(id: string, newId: string): void {
     withTransaction(this.db, () => {
       this.db.prepare(`UPDATE sessions SET replaced_by = ? WHERE id = ?`).run(newId, id);
@@ -157,10 +173,11 @@ export class SessionsRepo {
           `UPDATE sessions SET
              repo_id = COALESCE(repo_id, (SELECT o.repo_id FROM sessions o WHERE o.id = ?)),
              coordinator = MAX(coordinator, (SELECT o.coordinator FROM sessions o WHERE o.id = ?)),
-             spawned_by = COALESCE(spawned_by, (SELECT o.spawned_by FROM sessions o WHERE o.id = ?))
+             spawned_by = COALESCE(spawned_by, (SELECT o.spawned_by FROM sessions o WHERE o.id = ?)),
+             feature_id = COALESCE(feature_id, (SELECT o.feature_id FROM sessions o WHERE o.id = ?))
            WHERE id = ? AND ticket_key IS (SELECT o.ticket_key FROM sessions o WHERE o.id = ?)`,
         )
-        .run(id, id, id, newId, id);
+        .run(id, id, id, id, newId, id);
     });
   }
 

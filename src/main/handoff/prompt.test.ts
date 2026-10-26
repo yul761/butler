@@ -6,8 +6,8 @@ import { HANDOFF_EXAMPLE } from "./templates";
 
 const t: Ticket = {
   key: "PROJ-1", title: null,
-  repos: [{ id: 1, ticketKey: "PROJ-1", repoPath: "/r", workMode: "branch", worktreePath: null, branch: "feature/PROJ-1", createdAt: 1 }],
-  status: "active", statusManual: null, createdAt: 1, archivedAt: null,
+  repos: [{ id: 1, ticketKey: "PROJ-1", repoPath: "/r", workMode: "branch", worktreePath: null, branch: "feature/PROJ-1", createdAt: 1, worktreeRemovedAt: null, cleanupBlocked: null }],
+  status: "active", statusManual: null, createdAt: 1, archivedAt: null, featureId: null,
 };
 const f: Followup = {
   id: "f1", ticketKey: "PROJ-1", kind: "flag", description: "开 flag {{ticket}}", trigger: "on_date", dueDate: "2026-10-30",
@@ -44,7 +44,7 @@ describe("prompt rendering", () => {
 });
 
 describe("{{branch}} for several repos", () => {
-  const repo = (id: number, path: string, branch: string) => ({ id, ticketKey: "PROJ-1", repoPath: path, workMode: "branch" as const, worktreePath: null, branch, createdAt: 1 });
+  const repo = (id: number, path: string, branch: string) => ({ id, ticketKey: "PROJ-1", repoPath: path, workMode: "branch" as const, worktreePath: null, branch, createdAt: 1, worktreeRemovedAt: null, cleanupBlocked: null });
   it("is the branch for one repo, repo@branch for several, and says so when there is none", () => {
     expect(repoBranches({ ...t, repos: [repo(1, "/c/web", "feature/PROJ-1")] })).toBe("feature/PROJ-1");
     const two = repoBranches({ ...t, repos: [repo(1, "/c/web", "feature/PROJ-1"), repo(2, "/c/api", "api/PROJ-1")] });

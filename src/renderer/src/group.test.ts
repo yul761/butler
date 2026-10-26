@@ -4,7 +4,7 @@ import { groupTickets } from "./group";
 
 const t = (key: string, effectiveStatus: TicketView["effectiveStatus"], waiting = false): TicketView => ({
   key, title: null, repos: [],
-  status: effectiveStatus, statusManual: null, createdAt: 1, archivedAt: null, effectiveStatus, sessions: [], hiddenSessions: [], waiting,
+  status: effectiveStatus, statusManual: null, createdAt: 1, archivedAt: null, featureId: null, effectiveStatus, sessions: [], hiddenSessions: [], waiting,
 });
 
 describe("groupTickets", () => {
