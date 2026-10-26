@@ -435,7 +435,8 @@ export class SessionService {
     const tickets = this.allTicketViews(heads);
     return (this.d.features?.list() ?? []).map((f) => {
       const { sessions, hiddenSessions } = this.split(this.d.sessions.listByFeature(f.id), heads);
-      const own = tickets.filter((t) => t.featureId === f.id);
+      // 按建立顺序（和 list_tickets 一样），不是单独 ticket 列表的最新在前。
+      const own = tickets.filter((t) => t.featureId === f.id).sort((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
       return { ...f, tickets: own, sessions, hiddenSessions, waiting: sessions.some((s) => s.waitingForInput) || own.some((t) => t.waiting) };
     });
   }

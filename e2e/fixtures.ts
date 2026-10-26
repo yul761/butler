@@ -42,6 +42,18 @@ const NPM_STYLE_SHIM = [
  */
 const FAKE_LOGIN_SHELL = '#!/bin/sh\nfor last; do :; done\nexec /bin/sh -c "$last"\n';
 
+/** 在 path 建一个带一个提交、当前分支为 main 的 git 仓库（目录会被建出来，可以多层）。 */
+export function makeGitRepo(path: string): string {
+  mkdirSync(path, { recursive: true });
+  const git = (...a: string[]) =>
+    execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "-c", "commit.gpgsign=false", ...a], { cwd: path, stdio: "ignore" });
+  git("init", "-q", "-b", "main");
+  writeFileSync(join(path, "README.md"), "e2e\n");
+  git("add", ".");
+  git("commit", "-q", "-m", "init");
+  return path;
+}
+
 /** 一套全新的临时目录：BUTLER_HOME、CLAUDE_CONFIG_DIR、HOME、TMPDIR、假 claude、假登录 shell、两个各带一个提交的 git 仓库。 */
 function createSandbox(): Sandbox {
   for (const f of ["out/main/index.js", "build/memory-mcp/statecore-mcp.cjs", isWin ? "build/hook/butler-hook.exe" : "build/hook/butler-hook"]) {
@@ -68,19 +80,8 @@ function createSandbox(): Sandbox {
     writeFileSync(loginShell(dir), FAKE_LOGIN_SHELL);
     chmodSync(loginShell(dir), 0o755);
   }
-  const makeGitRepo = (name: string) => {
-    const repo = join(dir, name);
-    mkdirSync(repo);
-    const git = (...a: string[]) =>
-      execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "-c", "commit.gpgsign=false", ...a], { cwd: repo, stdio: "ignore" });
-    git("init", "-q", "-b", "main");
-    writeFileSync(join(repo, "README.md"), "e2e\n");
-    git("add", ".");
-    git("commit", "-q", "-m", "init");
-    return repo;
-  };
-  const repo = makeGitRepo("repo");
-  const apiRepo = makeGitRepo("api");
+  const repo = makeGitRepo(join(dir, "repo"));
+  const apiRepo = makeGitRepo(join(dir, "api"));
   return { dir, butlerHome, claudeConfigDir, claudePath, repo, apiRepo, fakeLog: join(dir, "fake-claude.log") };
 }
 
