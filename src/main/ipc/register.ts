@@ -2,7 +2,7 @@ import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { ITEM_MARKS, type BriefKind, type BriefView, type ItemMark } from "../../shared/brief";
 import { IPC } from "../../shared/ipc";
 import {
-  FOLLOWUP_STATUSES, type AutostartState, type CreateTicketInput, type FollowupStatus, type JobStateView, type McpProbe, type OpenSessionRequest, type TicketStatus,
+  FOLLOWUP_STATUSES, type AutostartState, type FollowupStatus, type JobStateView, type McpProbe, type OpenSessionRequest, type TicketStatus,
 } from "../../shared/types";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { BriefService } from "../brief/brief-service";
@@ -23,17 +23,22 @@ import type { Scheduler } from "../schedule/scheduler";
 import type { PtyManager } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
 import { memoryOn } from "../settings/settings-values";
+import type { FeatureService } from "../tickets/feature-service";
+import { scanRepos } from "../tickets/git";
 import { TicketError, type TicketService } from "../tickets/ticket-service";
+import type { CleanupOutcome } from "../tickets/worktree-cleanup";
 import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, repoIdArg, sessionIdArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
+  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, openFeatureArg,
+  repoIdArg, sessionIdArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
 } from "./validate";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
   ticketService: TicketService;
+  featureService: FeatureService;
   sessionService: SessionService;
   pty: PtyManager;
   health: HealthService;
@@ -64,6 +69,10 @@ export interface IpcDeps {
   memoryToggled: (on: boolean) => void;
   /** ticket 归档之后：清掉它留下的 MCP 配置文件。 */
   onArchived?: (ticketKey: string) => void;
+  /** feature 归档之后：清掉 feature 总控的 MCP 配置文件。 */
+  onFeatureArchived?: (featureId: number) => void;
+  /** “重新检查”：PR 已合并时按规则再清理一次这个 ticket 的 worktree（设计文档 2026-10-26）。 */
+  recheckCleanup: (ticketKey: string) => Promise<CleanupOutcome[]>;
   /** 退出已开始：后台任务的 IPC 直接返回。 */
   aborted: () => boolean;
 }
@@ -83,8 +92,8 @@ export function registerIpc(d: IpcDeps): void {
   };
 
   handle(IPC.ticketsList, () => d.sessionService.ticketViews());
-  handle(IPC.ticketsCreate, async (input: CreateTicketInput) => {
-    const t = await d.ticketService.create(input);
+  handle(IPC.ticketsCreate, async (raw: unknown) => {
+    const t = await d.ticketService.create(createTicketArg(raw));
     d.notify();
     return t;
   });
@@ -130,6 +139,51 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.ticketsSwitchBranch, async (raw: unknown) => {
     await d.ticketService.switchBranch(d.ticketService.repo(repoIdArg(raw)));
   });
+
+  handle(IPC.ticketsRecheckCleanup, async (raw: unknown) => {
+    const out = await d.recheckCleanup(ticketKeyArg(raw));
+    d.notify();
+    return out;
+  });
+
+  // feature（设计文档 2026-10-26）
+  handle(IPC.featuresList, () => d.sessionService.featureViews());
+  handle(IPC.featuresCreate, async (raw: unknown) => {
+    const f = await d.featureService.create(createFeatureArg(raw));
+    d.notify();
+    return f;
+  });
+  handle(IPC.featuresRename, (id: unknown, name: unknown) => {
+    const f = d.featureService.rename(featureIdArg(id), featureNameArg(name));
+    d.notify();
+    return f;
+  });
+  handle(IPC.featuresAddRepo, async (id: unknown, path: unknown) => {
+    const r = await d.featureService.addRepo(featureIdArg(id), dirArg(path));
+    d.notify();
+    return r;
+  });
+  handle(IPC.featuresRemoveRepo, (featureRepoId: unknown) => {
+    d.featureService.removeRepo(repoIdArg(featureRepoId));
+    d.notify();
+  });
+  handle(IPC.featuresArchive, (raw: unknown) => {
+    const id = featureIdArg(raw);
+    d.featureService.archive(id, { terminalsOpen: d.sessionService.hasFeatureTerminal(id) });
+    d.onFeatureArchived?.(id);
+    d.notify();
+  });
+  handle(IPC.featuresArchived, () => d.featureService.listArchived());
+  handle(IPC.featuresUnarchive, (raw: unknown) => {
+    d.featureService.unarchive(featureIdArg(raw));
+    d.notify();
+  });
+  handle(IPC.featuresOpenSession, async (raw: unknown) => {
+    const r = await d.sessionService.openFeature(openFeatureArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.reposScan, (raw: unknown) => scanRepos(dirArg(raw)));
 
   handle(IPC.sessionsOpen, async (req: OpenSessionRequest) => {
     const r = await d.sessionService.open(req);

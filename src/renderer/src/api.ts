@@ -6,7 +6,7 @@ import type { EditableSettingKey, EditableSettings } from "../../shared/settings
 import type {
   AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
-  JobStateView,
+  JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureView, OpenFeatureSessionRequest, ScanResult,
 } from "../../shared/types";
 
 declare global {
@@ -51,6 +51,17 @@ export const api = {
   clipboardRead: () => call<string>(IPC.clipboardRead),
   clipboardWrite: (text: string) => call<void>(IPC.clipboardWrite, text),
   openSession: (req: OpenSessionRequest) => call<OpenSessionResult>(IPC.sessionsOpen, req),
+  recheckCleanup: (ticketKey: string) => call<unknown>(IPC.ticketsRecheckCleanup, ticketKey),
+  listFeatures: () => call<FeatureView[]>(IPC.featuresList),
+  createFeature: (input: CreateFeatureInput) => call<Feature>(IPC.featuresCreate, input),
+  renameFeature: (id: number, name: string) => call<Feature>(IPC.featuresRename, id, name),
+  addFeatureRepo: (id: number, repoPath: string) => call<FeatureRepo>(IPC.featuresAddRepo, id, repoPath),
+  removeFeatureRepo: (featureRepoId: number) => call<void>(IPC.featuresRemoveRepo, featureRepoId),
+  archiveFeature: (id: number) => call<void>(IPC.featuresArchive, id),
+  archivedFeatures: () => call<Feature[]>(IPC.featuresArchived),
+  unarchiveFeature: (id: number) => call<void>(IPC.featuresUnarchive, id),
+  openFeatureSession: (req: OpenFeatureSessionRequest) => call<OpenSessionResult>(IPC.featuresOpenSession, req),
+  scanRepos: (dir: string) => call<ScanResult>(IPC.reposScan, dir),
   unclaimed: () => call<UnclaimedSession[]>(IPC.sessionsUnclaimed),
   claim: (sessionId: string, ticketKey: string) => call<void>(IPC.sessionsClaim, sessionId, ticketKey),
   dismiss: (sessionId: string) => call<void>(IPC.sessionsDismiss, sessionId),

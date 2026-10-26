@@ -34,6 +34,10 @@ export class FeatureService {
     return f;
   }
 
+  listArchived(): Feature[] {
+    return this.d.features.listArchived();
+  }
+
   /** 工作区默认放在仓库上一层的旁边：~/Code/shop/frontend → ~/Code/shop-features/<名字>。 */
   defaultWorkspace(repoPaths: string[], name: string): string {
     const parent = dirname(repoPaths[0]);

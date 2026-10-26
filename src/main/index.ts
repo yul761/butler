@@ -36,11 +36,12 @@ import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupTicketWorktrees, isMerged } from "./tickets/worktree-cleanup";
 import { FeaturesRepo } from "./db/features-repo";
+import { FeatureService } from "./tickets/feature-service";
 import { HandoffRunner } from "./handoff/runner";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { memoryServers, removeTicketMcpConfigs, sessionsServer, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { memoryServers, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
@@ -383,10 +384,11 @@ async function bootstrap(): Promise<void> {
       return null;
     }
   };
+  const cleanupDeps = { tickets, ticketService, repoBusy: (k: string, id: number) => sessionService.hasRepoTerminal(k, id), now: Date.now };
   /** PR 合并后清理 ticket 的 worktree（设计文档 2026-10-26）：不阻塞调用方，结果只影响 ticket 页的显示。 */
   const cleanupMerged = (ticketKey: string): void => {
     if (!isMerged(handoffs, ticketKey)) return;
-    cleanupTicketWorktrees({ tickets, ticketService, repoBusy: (k, id) => sessionService.hasRepoTerminal(k, id), now: Date.now }, ticketKey).then(
+    cleanupTicketWorktrees(cleanupDeps, ticketKey).then(
       (out) => {
         if (out.some((o) => o.result !== "skipped")) {
           logger(`worktree cleanup for ${ticketKey}: ${out.map((o) => `${o.repoId}=${o.result}`).join(", ")}`);
@@ -619,10 +621,13 @@ async function bootstrap(): Promise<void> {
     },
   };
 
+  const featureService = new FeatureService({ features, tickets, db, now: Date.now, onTicketArchived: (key) => removeTicketMcpConfigs(paths.mcp, key) });
   registerIpc({
     onArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
+    onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
+    recheckCleanup: async (key) => (isMerged(handoffs, key) ? cleanupTicketWorktrees(cleanupDeps, key) : []),
     autostart,
-    tickets, ticketService, sessionService, pty, health, followups, handoffs, settings, briefService, runner, scheduler, jobs,
+    tickets, ticketService, featureService, sessionService, pty, health, followups, handoffs, settings, briefService, runner, scheduler, jobs,
     keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     briefRefreshing: () => briefRefreshing,

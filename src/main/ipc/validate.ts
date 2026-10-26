@@ -1,5 +1,7 @@
 import type { SensitiveTerm } from "../../shared/llm";
-import type { AddRepoInput, UpdateRepoInput, UpdateTicketInput, WorkMode } from "../../shared/types";
+import type {
+  AddRepoInput, CreateFeatureInput, CreateTicketInput, OpenFeatureSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
+} from "../../shared/types";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 
 /**
@@ -106,4 +108,64 @@ export function clipboardTextArg(v: unknown): string {
 export function sessionIdArg(v: unknown): string {
   if (typeof v !== "string" || !/^[A-Za-z0-9-]{1,100}$/.test(v)) throw new Error("invalid session id");
   return v;
+}
+
+/** 目录：1–4096 字的字符串（存在与否由调用方检查）。 */
+export function dirArg(v: unknown): string {
+  if (typeof v !== "string" || v.length === 0 || v.length > 4096) throw new Error("invalid directory");
+  return v;
+}
+
+/** feature 的 id：正整数。 */
+export function featureIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) throw new Error("invalid feature id");
+  return v;
+}
+
+/** 一次最多选这么多个仓库。 */
+const REPO_PATHS_LIMIT = 20;
+
+function repoPathsArg(v: unknown): string[] {
+  if (!Array.isArray(v) || v.length === 0 || v.length > REPO_PATHS_LIMIT) throw new Error("invalid repo paths");
+  return (v as unknown[]).map(dirArg);
+}
+
+/** feature 名：1–100 字。 */
+export function featureNameArg(v: unknown): string {
+  if (typeof v !== "string" || v.trim().length === 0 || v.length > 100) throw new Error("invalid feature name");
+  return v;
+}
+
+/** 新建 feature（设计文档 2026-10-26）。 */
+export function createFeatureArg(v: unknown): CreateFeatureInput {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid feature");
+  if (o.workspaceDir !== undefined) dirArg(o.workspaceDir);
+  return { name: featureNameArg(o.name), repoPaths: repoPathsArg(o.repoPaths), workspaceDir: o.workspaceDir as string | undefined };
+}
+
+/** 新建 ticket：可以带 feature 和好几个仓库。 */
+export function createTicketArg(v: unknown): CreateTicketInput {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid ticket");
+  const key = ticketKeyArg(o.key);
+  if (!optString(o.title, 500) || !optString(o.repoPath, 4096) || !optString(o.branch, 250)) throw new Error("invalid ticket");
+  if (!workModeOpt(o.workMode)) throw new Error("invalid work mode");
+  return {
+    key, title: o.title, repoPath: o.repoPath, workMode: o.workMode, branch: o.branch,
+    repoPaths: o.repoPaths === undefined ? undefined : repoPathsArg(o.repoPaths),
+    featureId: o.featureId === undefined ? undefined : featureIdArg(o.featureId),
+  };
+}
+
+/** 打开 feature 总控。 */
+export function openFeatureArg(v: unknown): OpenFeatureSessionRequest {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid feature session request");
+  if (!optString(o.prefill, 100_000)) throw new Error("invalid prefill");
+  return {
+    featureId: featureIdArg(o.featureId),
+    ...(o.sessionId !== undefined && { sessionId: sessionIdArg(o.sessionId) }),
+    ...(o.prefill !== undefined && { prefill: o.prefill }),
+  };
 }

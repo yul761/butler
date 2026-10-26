@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, openFeatureArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -95,5 +95,41 @@ describe("session id argument", () => {
   it("accepts ids made of letters, digits and dashes only", () => {
     expect(sessionIdArg("1125e68e-5407-4868-9ca8-5a306155f393")).toBe("1125e68e-5407-4868-9ca8-5a306155f393");
     for (const bad of ["", "../x", "a b", 3, null, "x".repeat(101)]) expect(() => sessionIdArg(bad)).toThrow();
+  });
+});
+
+describe("feature IPC arguments (design 2026-10-26)", () => {
+  it("accepts a feature with a bounded name and 1–20 repo paths", () => {
+    expect(createFeatureArg({ name: "结账改版", repoPaths: ["/c/shop/frontend"] })).toEqual({ name: "结账改版", repoPaths: ["/c/shop/frontend"], workspaceDir: undefined });
+    expect(createFeatureArg({ name: "x", repoPaths: ["/a"], workspaceDir: "/w" }).workspaceDir).toBe("/w");
+    for (const bad of [
+      null, { name: "", repoPaths: ["/a"] }, { name: "x".repeat(101), repoPaths: ["/a"] }, { name: "x", repoPaths: [] },
+      { name: "x", repoPaths: Array(21).fill("/a") }, { name: "x", repoPaths: [""] }, { name: "x", repoPaths: ["x".repeat(4097)] },
+      { name: "x", repoPaths: "/a" }, { name: "x", repoPaths: ["/a"], workspaceDir: 5 },
+    ]) {
+      expect(() => createFeatureArg(bad), JSON.stringify(bad)?.slice(0, 80)).toThrow();
+    }
+  });
+
+  it("accepts only positive integers as a feature id", () => {
+    expect(featureIdArg(3)).toBe(3);
+    for (const bad of [0, -1, 1.5, "3", null, undefined]) expect(() => featureIdArg(bad)).toThrow();
+  });
+
+  it("checks the feature id and repo paths a new ticket carries", () => {
+    expect(createTicketArg({ key: "DMS-1", featureId: 2, repoPaths: ["/a", "/b"], workMode: "worktree" })).toMatchObject({ key: "DMS-1", featureId: 2, repoPaths: ["/a", "/b"] });
+    expect(createTicketArg({ key: "DMS-1", title: "t", repoPath: "/a", workMode: "branch", branch: "b" })).toEqual({
+      key: "DMS-1", title: "t", repoPath: "/a", workMode: "branch", branch: "b", repoPaths: undefined, featureId: undefined,
+    });
+    for (const bad of [{ key: "DMS-1", featureId: "2" }, { key: "DMS-1", repoPaths: [""] }, { key: "DMS-1", workMode: "copy" }, { key: "" }]) {
+      expect(() => createTicketArg(bad), JSON.stringify(bad)).toThrow();
+    }
+  });
+
+  it("checks the feature session request and the directory to scan", () => {
+    expect(openFeatureArg({ featureId: 1, sessionId: "abc-1", prefill: "hi" })).toEqual({ featureId: 1, sessionId: "abc-1", prefill: "hi" });
+    expect(() => openFeatureArg({ featureId: 1, sessionId: "../x" })).toThrow();
+    expect(dirArg("/c/shop")).toBe("/c/shop");
+    for (const bad of ["", 5, "x".repeat(4097)]) expect(() => dirArg(bad)).toThrow();
   });
 });
