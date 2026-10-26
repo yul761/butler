@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from "react";
 import type { TicketRepo, WorkMode } from "../../../shared/types";
 import { api, ButlerError } from "../api";
-import { reportError } from "../errors";
 import { repoName } from "../repos";
+import { RepoPicker } from "./RepoPicker";
 import { S } from "../strings";
 
 interface Props {
@@ -15,7 +15,8 @@ interface Props {
 
 /** 添加仓库，或者改一个仓库的工作方式和分支。git 的改动由主进程检查（有终端在跑、未提交改动时拒绝）。 */
 export function RepoDialog({ ticketKey, repo, hasSessions, onClose }: Props) {
-  const [repoPath, setRepoPath] = useState("");
+  /** 添加时要加的仓库：选了上一层目录就是勾选的那几个（设计文档 2026-10-26）。 */
+  const [repoPaths, setRepoPaths] = useState<string[]>([]);
   const [workMode, setWorkMode] = useState<WorkMode>(repo?.workMode ?? "worktree");
   const [branch, setBranch] = useState(repo?.branch ?? "");
   const [busy, setBusy] = useState(false);
@@ -27,22 +28,13 @@ export function RepoDialog({ ticketKey, repo, hasSessions, onClose }: Props) {
     ? workMode === "branch" ? S.editModeHint.toBranch : S.editModeHint.toWorktree
     : branchChanged ? S.editModeHint.branch : null;
 
-  async function pick() {
-    try {
-      const dir = await api.pickDirectory();
-      if (dir) setRepoPath(dir);
-    } catch (e) {
-      reportError(e);
-    }
-  }
-
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
       if (repo) await api.updateRepo({ repoId: repo.id, workMode, branch: branch.trim() || undefined });
-      else await api.addRepo({ ticketKey, repoPath, workMode, branch: branch.trim() || undefined });
+      else for (const repoPath of repoPaths) await api.addRepo({ ticketKey, repoPath, workMode, branch: branch.trim() || undefined });
       onClose();
     } catch (err) {
       setError(err instanceof ButlerError ? (S.createErrors[err.code] ?? err.message) : (err as Error).message);
@@ -58,13 +50,7 @@ export function RepoDialog({ ticketKey, repo, hasSessions, onClose }: Props) {
         {repo ? (
           <div className="muted">{S.repo}：{repo.repoPath}</div>
         ) : (
-          <label>
-            {S.repo}
-            <div className="row">
-              <input value={repoPath} onChange={(e) => setRepoPath(e.target.value)} required autoFocus />
-              <button type="button" onClick={pick}>{S.pick}</button>
-            </div>
-          </label>
+          <RepoPicker label={S.repo} onChange={setRepoPaths} required autoFocus />
         )}
         <fieldset>
           <legend>{S.workMode}</legend>

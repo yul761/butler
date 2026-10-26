@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionView, TicketRepo } from "../../shared/types";
-import { lastSegment, repoWhere, sessionPlace } from "./repos";
+import { lastSegment, repoWhere, scanToSelection, sessionPlace } from "./repos";
 
 const repo = (id: number, path: string, extra: Partial<TicketRepo> = {}): TicketRepo => ({
   id, ticketKey: "P-1", repoPath: path, workMode: "branch", worktreePath: null, branch: "feature/P-1", createdAt: 1, worktreeRemovedAt: null, cleanupBlocked: null, ...extra,
@@ -27,5 +27,17 @@ describe("repo labels", () => {
     expect(sessionPlace(session({ coordinator: true }), repos, "总控")).toBe("总控");
     expect(sessionPlace(session({ repoId: 1 }), [repos[0]], "总控")).toBeNull();
     expect(sessionPlace(session({ repoId: null }), repos, "总控")).toBeNull();
+  });
+});
+
+describe("scanToSelection (design 2026-10-26)", () => {
+  it("uses the repo root for a repo", () => {
+    expect(scanToSelection({ kind: "repo", root: "/c/shop/frontend" }, "/c/shop/frontend/src")).toEqual({ paths: ["/c/shop/frontend"], options: null, notFound: false });
+  });
+  it("offers every repo of a parent directory, all picked", () => {
+    expect(scanToSelection({ kind: "parent", repos: ["/c/shop/a", "/c/shop/b"] }, "/c/shop")).toEqual({ paths: ["/c/shop/a", "/c/shop/b"], options: ["/c/shop/a", "/c/shop/b"], notFound: false });
+  });
+  it("keeps what was typed when nothing is found, so the main process reports why", () => {
+    expect(scanToSelection({ kind: "none" }, "/tmp/x")).toEqual({ paths: ["/tmp/x"], options: null, notFound: true });
   });
 });

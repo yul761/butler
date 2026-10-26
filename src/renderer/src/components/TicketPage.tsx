@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { TICKET_STATUSES, type OpenSessionRequest, type TicketRepo, type TicketStatus, type TicketView } from "../../../shared/types";
+import { TICKET_STATUSES, type Feature, type OpenSessionRequest, type TicketRepo, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
 import { repoName, repoWhere, sessionPlace } from "../repos";
@@ -37,9 +37,12 @@ interface Props {
   /** 从简报点“打开”进来时要执行的打开请求。 */
   initialOpen?: OpenSessionRequest | null;
   onInitialOpenDone?: () => void;
+  /** ticket 属于的 feature（设计文档 2026-10-26）。 */
+  feature?: Pick<Feature, "id" | "name"> | null;
+  onOpenFeature?: (id: number) => void;
 }
 
-export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOpenDone }: Props) {
+export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOpenDone, feature = null, onOpenFeature }: Props) {
   const openTerms = ticket.sessions.flatMap((s) => (s.termId ? [s.termId] : []));
   // panes 里保留已退出但还没关闭的终端，方便看到 claude 的报错输出。
   const [panes, setPanes] = useState<string[]>(openTerms);
@@ -148,6 +151,11 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         <button onClick={() => setEditingTitle(true)}>{S.editTitle}</button>
         <button onClick={() => api.archive(ticket.key).then(onArchived, reportError)}>{S.archive}</button>
       </header>
+      {feature && (
+        <div className="muted feature-link">
+          {S.inFeature} <button className="link" onClick={() => onOpenFeature?.(feature.id)}>{feature.name}</button>
+        </div>
+      )}
       {editingTitle && <TitleDialog ticket={ticket} onClose={() => setEditingTitle(false)} />}
       {repoDialog && (
         <RepoDialog
@@ -165,12 +173,21 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
           <span key={r.id} className="repo" title={repoWhere(r)}>
             <span className="name">{repoName(r)}</span>
             <span className="muted">{r.workMode === "worktree" ? S.worktree : r.branch}</span>
+            {r.worktreeRemovedAt !== null && <span className="muted">{S.worktreeRemoved}</span>}
             <button onClick={() => setRepoDialog(r)}>{S.edit}</button>
             <button onClick={() => setRemoving(r)}>{S.removeRepo}</button>
           </span>
         ))}
         <button onClick={() => setRepoDialog("new")}>+ {S.addRepo}</button>
       </div>
+      {ticket.repos.filter((r) => r.cleanupBlocked).map((r) => (
+        <div key={r.id} className="notice">
+          <p>{S.cleanupBlocked(repoName(r), r.cleanupBlocked!)}</p>
+          <div className="actions">
+            <button onClick={() => api.recheckCleanup(ticket.key).catch(reportError)}>{S.recheckCleanup}</button>
+          </div>
+        </div>
+      ))}
       {removing && (
         <div className="notice">
           <p>{S.removeRepoConfirm(repoName(removing))}</p>

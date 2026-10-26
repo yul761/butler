@@ -1,4 +1,4 @@
-import type { SessionView, TicketRepo } from "../../shared/types";
+import type { ScanResult, SessionView, TicketRepo } from "../../shared/types";
 
 /** 路径的最后一段（渲染进程没有 node:path；两种分隔符都认）。 */
 export function lastSegment(path: string): string {
@@ -22,4 +22,14 @@ export function sessionPlace(s: SessionView, repos: TicketRepo[], coordinatorLab
   if (repos.length <= 1) return null;
   const r = repos.find((x) => x.id === s.repoId);
   return r ? repoName(r) : null;
+}
+
+/**
+ * 选目录的结果变成要提交的仓库（设计文档 2026-10-26）：仓库 → 它的根目录；上一层目录 → 下一层的仓库全选，给出勾选项；
+ * 都不是 → 保留输入的目录，交给主进程报出具体原因。
+ */
+export function scanToSelection(scan: ScanResult, typed: string): { paths: string[]; options: string[] | null; notFound: boolean } {
+  if (scan.kind === "repo") return { paths: [scan.root], options: null, notFound: false };
+  if (scan.kind === "parent") return { paths: [...scan.repos], options: scan.repos, notFound: false };
+  return { paths: [typed], options: null, notFound: true };
 }

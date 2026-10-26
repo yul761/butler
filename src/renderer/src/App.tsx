@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { BriefKind } from "../../shared/brief";
-import type { OpenSessionRequest, TicketView } from "../../shared/types";
+import type { FeatureView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
 import { BriefPage } from "./components/BriefPage";
+import { FeaturePage } from "./components/FeaturePage";
+import { NewFeatureDialog } from "./components/NewFeatureDialog";
 import { NewTicketDialog } from "./components/NewTicketDialog";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
@@ -21,6 +23,7 @@ const STATE_DEBOUNCE_MS = 80;
 export type Route =
   | { page: "home"; kind?: BriefKind }
   | { page: "ticket"; key: string }
+  | { page: "feature"; id: number }
   | { page: "unclaimed" }
   | { page: "archived" }
   | { page: "settings" }
@@ -28,7 +31,10 @@ export type Route =
 
 export function App() {
   const [route, setRoute] = useState<Route>({ page: "home" });
+  /** 单独的 ticket；feature 下的 ticket 在 features[].tickets 里。 */
   const [tickets, setTickets] = useState<TicketView[]>([]);
+  const [features, setFeatures] = useState<FeatureView[]>([]);
+  const [showNewFeature, setShowNewFeature] = useState(false);
   const [unclaimedCount, setUnclaimedCount] = useState(0);
   const [showNew, setShowNew] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,9 +62,10 @@ export function App() {
   const refresh = useCallback(async (): Promise<boolean> => {
     const seq = ++refreshSeq.current;
     try {
-      const [t, u] = await Promise.all([api.listTickets(), api.unclaimed()]);
+      const [t, f, u] = await Promise.all([api.listTickets(), api.listFeatures(), api.unclaimed()]);
       if (seq !== refreshSeq.current) return true;
       setTickets(t);
+      setFeatures(f);
       setUnclaimedCount(u.length);
       return true;
     } catch (e) {
@@ -92,9 +99,12 @@ export function App() {
     };
   }, [refresh]);
 
+  /** 所有未归档的 ticket，含 feature 下的（简报、认领、ticket 页都按 ticket 号找）。 */
+  const allTickets = [...tickets, ...features.flatMap((f) => f.tickets)];
+
   const openTicket = (key: string, req?: OpenSessionRequest) => {
     // 简报里的 ticket 可能已经归档：不跳到空白页，也不留下悬空的打开请求。
-    if (!tickets.some((t) => t.key === key)) {
+    if (!allTickets.some((t) => t.key === key)) {
       reportError(new Error(S.ticketMissing(key)));
       return;
     }
@@ -108,11 +118,17 @@ export function App() {
     void refresh().then((ok) => ok && setRoute({ page: "ticket", key }));
   };
 
-  const current = route.page === "ticket" ? (tickets.find((t) => t.key === route.key) ?? null) : null;
+  const current = route.page === "ticket" ? (allTickets.find((t) => t.key === route.key) ?? null) : null;
+  const currentFeature = route.page === "feature" ? (features.find((f) => f.id === route.id) ?? null) : null;
+  const featureOf = (t: TicketView) => (t.featureId === null ? null : (features.find((f) => f.id === t.featureId) ?? null));
+  const goTicket = (key: string) => void refresh().then(() => setRoute({ page: "ticket", key }));
 
   return (
     <div className="app">
-      <Sidebar tickets={tickets} unclaimedCount={unclaimedCount} route={route} onNavigate={setRoute} onNew={() => setShowNew(true)} />
+      <Sidebar
+        tickets={tickets} features={features} unclaimedCount={unclaimedCount} route={route} onNavigate={setRoute}
+        onNew={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)}
+      />
       <main className="main">
         {error && (
           <div className="error-banner">
@@ -129,7 +145,7 @@ export function App() {
           />
         ) : (
           <>
-            {route.page === "home" && <BriefPage key={navNonce} initialKind={route.kind} tickets={tickets} onOpenTicket={openTicket} onUnclaimed={() => setRoute({ page: "unclaimed" })} onResumeSetup={() => dispatchOnboarding({ type: "rerun" })} />}
+            {route.page === "home" && <BriefPage key={navNonce} initialKind={route.kind} tickets={allTickets} onOpenTicket={openTicket} onUnclaimed={() => setRoute({ page: "unclaimed" })} onResumeSetup={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "ticket" && current && (
               <TicketPage
                 key={current.key}
@@ -137,15 +153,35 @@ export function App() {
                 initialOpen={pendingOpen?.ticketKey === current.key ? pendingOpen : null}
                 onInitialOpenDone={() => setPendingOpen(null)}
                 onArchived={() => setRoute({ page: "home" })}
+                feature={featureOf(current)}
+                onOpenFeature={(id) => setRoute({ page: "feature", id })}
               />
             )}
-            {route.page === "unclaimed" && <UnclaimedPage tickets={tickets} />}
-            {route.page === "archived" && <ArchivedPage onRestored={showRestored} />}
+            {route.page === "feature" && currentFeature && (
+              <FeaturePage
+                key={currentFeature.id}
+                feature={currentFeature}
+                onOpenTicket={(key) => setRoute({ page: "ticket", key })}
+                onArchived={() => setRoute({ page: "home" })}
+                onTicketCreated={goTicket}
+              />
+            )}
+            {route.page === "unclaimed" && <UnclaimedPage tickets={allTickets} />}
+            {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={(id) => void refresh().then(() => setRoute({ page: "feature", id }))} />}
             {route.page === "settings" && <SettingsPage onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "audit" && <AuditPage />}
           </>
         )}
       </main>
+      {showNewFeature && (
+        <NewFeatureDialog
+          onClose={() => setShowNewFeature(false)}
+          onCreated={(id) => {
+            setShowNewFeature(false);
+            void refresh().then(() => setRoute({ page: "feature", id }));
+          }}
+        />
+      )}
       {showNew && (
         <NewTicketDialog
           onClose={() => setShowNew(false)}

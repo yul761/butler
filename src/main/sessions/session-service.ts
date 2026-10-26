@@ -467,14 +467,15 @@ export class SessionService {
    */
   hide(sessionId: string): void {
     const s = this.d.sessions.head(sessionId);
-    if (!s?.ticketKey) throw new TicketError("not_found", "找不到这个 session");
+    // ticket 的 session，或者 feature 总控。
+    if (!s || (!s.ticketKey && s.featureId === null)) throw new TicketError("not_found", "找不到这个 session");
     if (this.openHeads().has(s.id)) throw new TicketError("sessions_open", "这个 session 的终端还在运行，先在终端里退出 claude 再隐藏");
     this.d.sessions.dismiss(s.id);
   }
 
   unhide(sessionId: string): void {
     const s = this.d.sessions.get(sessionId);
-    if (!s?.ticketKey) throw new TicketError("not_found", "找不到这个 session");
+    if (!s || (!s.ticketKey && s.featureId === null)) throw new TicketError("not_found", "找不到这个 session");
     this.d.sessions.undismiss(s.id);
   }
 }

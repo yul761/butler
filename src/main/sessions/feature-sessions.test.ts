@@ -125,4 +125,14 @@ describe("feature coordinator sessions (design 2026-10-26)", () => {
     expect(sessions.head("new-1")?.id).toBe("c2");
     expect(existsSync(feature.workspaceDir)).toBe(true);
   });
+
+  it("hides and restores a feature coordinator session", async () => {
+    const { service, sessions, feature, pty } = await setup();
+    await service.openFeature({ featureId: feature.id });
+    pty.kill("new-1");
+    service.hide("new-1");
+    expect(service.featureViews()[0].hiddenSessions.map((s) => s.id)).toEqual(["new-1"]);
+    service.unhide("new-1");
+    expect(sessions.get("new-1")?.dismissed).toBe(false);
+  });
 });
