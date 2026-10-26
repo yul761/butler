@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
@@ -17,6 +17,8 @@ function setup(timeoutMs = 2000, scope: { ticketKey: string } | { featureId: num
       const names = readdirSync(requestsDir, { withFileTypes: true }).filter((e) => e.name.endsWith(".json")).map((e) => e.name);
       if (names.length > 0) {
         const req = JSON.parse(readFileSync(join(requestsDir, names[0]), "utf8")) as object;
+        // 和 Butler 一样拿走请求，下一次 answer 不会再读到它。
+        unlinkSync(join(requestsDir, names[0]));
         writeFileSync(join(resultsDir, names[0]), JSON.stringify(result));
         return req;
       }
