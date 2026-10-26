@@ -3,14 +3,14 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
-import { SessionsServer, serveStdio, TOOLS } from "./sessions-server";
+import { FEATURE_TOOLS, SessionsServer, serveStdio, TOOLS } from "./sessions-server";
 
-function setup(timeoutMs = 2000) {
+function setup(timeoutMs = 2000, scope: { ticketKey: string } | { featureId: number } = { ticketKey: "P-1" }) {
   const dir = tempDir("butler-control-");
   const requestsDir = join(dir, "requests");
   const resultsDir = join(dir, "results");
   mkdirSync(resultsDir, { recursive: true });
-  const server = new SessionsServer({ ticketKey: "P-1", from: "boss", requestsDir, resultsDir, timeoutMs, pollMs: 10 });
+  const server = new SessionsServer({ scope, from: "boss", requestsDir, resultsDir, timeoutMs, pollMs: 10 });
   /** 扮演 Butler：等一个请求出现，读出来，写回结果。 */
   const answer = async (result: object) => {
     for (;;) {
@@ -93,5 +93,36 @@ describe("butler-sessions MCP server", () => {
     expect(msgs).toContainEqual({ jsonrpc: "2.0", id: 1, result: {} });
     expect(msgs).toContainEqual({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
     expect(TOOLS.length).toBe(3);
+  });
+});
+
+describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => {
+  it("lists the feature tools", async () => {
+    const { server } = setup(2000, { featureId: 7 });
+    const list = (await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string }[] } };
+    expect(list.result.tools.map((t) => t.name)).toEqual(["list_tickets", "start_session", "list_sessions"]);
+    expect(list.result.tools).toEqual(FEATURE_TOOLS);
+    const start = FEATURE_TOOLS.find((t) => t.name === "start_session")!;
+    expect(start.inputSchema.required).toEqual(["ticket", "task"]);
+  });
+
+  it("sends start_session for a ticket of this feature, with or without a repo", async () => {
+    const { server, answer } = setup(2000, { featureId: 7 });
+    const call = server.handle({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "start_session", arguments: { ticket: "DMS-1", task: "做购物车" } } });
+    const req = await answer({ v: 1, ok: true, value: { sessionId: "c1" } });
+    expect(req).toEqual({ v: 1, featureId: 7, from: "boss", op: "start_session", ticket: "DMS-1", task: "做购物车" });
+    expect(JSON.stringify(await call)).toContain("c1");
+
+    const withRepo = server.handle({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "start_session", arguments: { ticket: "DMS-1", repo: "frontend", task: "x" } } });
+    expect(await answer({ v: 1, ok: true, value: {} })).toMatchObject({ ticket: "DMS-1", repo: "frontend" });
+    await withRepo;
+  });
+
+  it("rejects start_session without a ticket, and the ticket-only tool", async () => {
+    const { server } = setup(2000, { featureId: 7 });
+    const noTicket = (await server.handle({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "start_session", arguments: { task: "x" } } })) as { result: { isError?: boolean } };
+    expect(noTicket.result.isError).toBe(true);
+    const repos = (await server.handle({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "list_repos", arguments: {} } })) as { result: { isError?: boolean } };
+    expect(repos.result.isError).toBe(true);
   });
 });

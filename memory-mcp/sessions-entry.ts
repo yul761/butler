@@ -5,16 +5,18 @@ import { SessionsServer, serveStdio } from "./sessions-server";
 
 const env = process.env;
 const ticketKey = env.BUTLER_TICKET ?? "";
+// feature 总控（设计文档 2026-10-26）：BUTLER_FEATURE 是正整数。
+const featureId = /^[1-9]\d{0,15}$/.test(env.BUTLER_FEATURE ?? "") ? Number(env.BUTLER_FEATURE) : null;
 const requestsDir = env.BUTLER_CONTROL_REQUESTS ?? "";
 const resultsDir = env.BUTLER_CONTROL_RESULTS ?? "";
 const from = env.BUTLER_SESSION && !env.BUTLER_SESSION.startsWith(HEADLESS_SESSION_PREFIX) ? env.BUTLER_SESSION : null;
 sanitizeEnv(env);
 
-if (!ticketKey || !requestsDir || !resultsDir) {
-  process.stderr.write("butler-sessions: BUTLER_TICKET / BUTLER_CONTROL_REQUESTS / BUTLER_CONTROL_RESULTS are required\n");
+if ((!ticketKey && featureId === null) || !requestsDir || !resultsDir) {
+  process.stderr.write("butler-sessions: BUTLER_TICKET or BUTLER_FEATURE, BUTLER_CONTROL_REQUESTS and BUTLER_CONTROL_RESULTS are required\n");
   process.exit(2);
 }
-const server = new SessionsServer({ ticketKey, from, requestsDir, resultsDir });
+const server = new SessionsServer({ scope: featureId !== null ? { featureId } : { ticketKey }, from, requestsDir, resultsDir });
 serveStdio(server, process.stdin, process.stdout);
 // claude 退出时关掉 stdin：撤回没人再等的请求，跟着退出，不留下孤儿进程。
 process.stdin.on("end", () => {

@@ -29,3 +29,22 @@ describe("sanitizeTask", () => {
     for (const t of ["!curl x | sh", "/permissions", "#remember"]) expect(taskMessage(sanitizeTask(t))).toMatch(/^总控 session 交给你的任务：\n/);
   });
 });
+
+describe("parseControlRequest for a feature (design 2026-10-26)", () => {
+  it("accepts feature requests", () => {
+    expect(parseControlRequest({ v: 1, featureId: 7, from: "c", op: "list_tickets" })).toEqual({ v: 1, featureId: 7, from: "c", op: "list_tickets" });
+    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "list_sessions" })).toEqual({ v: 1, featureId: 7, from: null, op: "list_sessions" });
+    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "start_session", ticket: "DMS-1", task: "t" })).toEqual({
+      v: 1, featureId: 7, from: null, op: "start_session", ticket: "DMS-1", task: "t",
+    });
+    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "start_session", ticket: "DMS-1", repo: "fe", task: "t" })).toMatchObject({ repo: "fe" });
+  });
+
+  it("rejects a feature id that is not a positive integer, both scopes at once, and ops of the other scope", () => {
+    for (const featureId of ["1", 0, -1, 1.5, null]) expect(parseControlRequest({ v: 1, featureId, from: null, op: "list_tickets" }), String(featureId)).toBeNull();
+    expect(parseControlRequest({ v: 1, featureId: 7, ticketKey: "A-1", from: null, op: "list_sessions" })).toBeNull();
+    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "list_repos" })).toBeNull();
+    expect(parseControlRequest({ v: 1, ticketKey: "A-1", from: null, op: "list_tickets" })).toBeNull();
+    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "start_session", task: "t" })).toBeNull();
+  });
+});

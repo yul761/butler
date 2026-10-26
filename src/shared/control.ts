@@ -13,24 +13,48 @@ export const TASK_LIMIT = 8000;
 /** 请求 id：文件名，只用安全字符。 */
 export const CONTROL_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 
-export type ControlRequest =
+/** ticket 总控的请求（设计文档 2026-10-23）。 */
+export type TicketControlRequest =
   | { v: 1; ticketKey: string; from: string | null; op: "list_repos" }
   | { v: 1; ticketKey: string; from: string | null; op: "list_sessions" }
   | { v: 1; ticketKey: string; from: string | null; op: "start_session"; repo: string; task: string };
 
+/** feature 总控的请求（设计文档 2026-10-26）：start_session 指定 ticket，ticket 只有一个仓库时 repo 可以省略。 */
+export type FeatureControlRequest =
+  | { v: 1; featureId: number; from: string | null; op: "list_tickets" }
+  | { v: 1; featureId: number; from: string | null; op: "list_sessions" }
+  | { v: 1; featureId: number; from: string | null; op: "start_session"; ticket: string; repo?: string; task: string };
+
+export type ControlRequest = TicketControlRequest | FeatureControlRequest;
+
 export type ControlResult = { v: 1; ok: true; value: unknown } | { v: 1; ok: false; error: string };
 
-/** 主进程按运行时类型检查请求（文件谁都能写）：不合规返回 null。 */
+const okTask = (t: unknown): t is string => typeof t === "string" && t.trim().length > 0 && t.length <= TASK_LIMIT;
+const okName = (x: unknown, max: number): x is string => typeof x === "string" && x.length > 0 && x.length <= max;
+
+/** 主进程按运行时类型检查请求（文件谁都能写）：不合规返回 null。ticketKey 和 featureId 必须正好有一个。 */
 export function parseControlRequest(raw: unknown): ControlRequest | null {
   const o = raw as Record<string, unknown> | null;
   if (!o || typeof o !== "object" || o.v !== CONTROL_VERSION) return null;
-  if (typeof o.ticketKey !== "string" || o.ticketKey.length === 0 || o.ticketKey.length > 200) return null;
   const from = typeof o.from === "string" && o.from.length > 0 && o.from.length <= 100 ? o.from : null;
+  if ("featureId" in o) {
+    if ("ticketKey" in o || !Number.isSafeInteger(o.featureId) || (o.featureId as number) <= 0) return null;
+    const base = { v: 1 as const, featureId: o.featureId as number, from };
+    if (o.op === "list_tickets") return { ...base, op: "list_tickets" };
+    if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
+    if (o.op === "start_session") {
+      if (!okName(o.ticket, 200) || !okTask(o.task)) return null;
+      if (o.repo !== undefined && !okName(o.repo, 4096)) return null;
+      return { ...base, op: "start_session", ticket: o.ticket, ...(o.repo !== undefined && { repo: o.repo as string }), task: o.task };
+    }
+    return null;
+  }
+  if (!okName(o.ticketKey, 200)) return null;
   const base = { v: 1 as const, ticketKey: o.ticketKey, from };
-  if (o.op === "list_repos" || o.op === "list_sessions") return { ...base, op: o.op };
+  if (o.op === "list_repos") return { ...base, op: "list_repos" };
+  if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
   if (o.op === "start_session") {
-    if (typeof o.repo !== "string" || o.repo.length === 0 || o.repo.length > 4096) return null;
-    if (typeof o.task !== "string" || o.task.trim().length === 0 || o.task.length > TASK_LIMIT) return null;
+    if (!okName(o.repo, 4096) || !okTask(o.task)) return null;
     return { ...base, op: "start_session", repo: o.repo, task: o.task };
   }
   return null;

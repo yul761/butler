@@ -649,7 +649,7 @@ async function bootstrap(): Promise<void> {
     requestsDir: paths.controlRequests,
     resultsDir: paths.controlResults,
     handle: controlHandler({
-      tickets, sessions, ticketService, sessionService, notify,
+      tickets, sessions, features, ticketService, sessionService, notify,
       submit: (termId, message) => pty.deliver(termId, message, { singleLine: process.platform === "win32" }),
       log: logger,
     }),
