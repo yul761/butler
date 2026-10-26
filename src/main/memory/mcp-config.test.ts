@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { memoryServers, removeTicketMcpConfigs, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeTicketMcpConfig } from "./mcp-config";
+import { featureMcpFile, memoryServers, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
 
 const launcher = { command: "/Applications/Butler.app/Contents/MacOS/Butler", script: "/Applications/Butler.app/Contents/Resources/memory-mcp/statecore-mcp.cjs" };
 
@@ -36,7 +36,7 @@ describe("ticket MCP config (design 4.2, 8.4)", () => {
 
   it("keeps the coordinator's config (with butler-sessions) in its own file, so plain sessions never get that server", () => {
     const mcpDir = join(tempDir(), "mcp");
-    const sessions = sessionsServer({ launcher, ticketKey: "PROJ-1", requestsDir: "/b/control/requests", resultsDir: "/b/control/results" });
+    const sessions = sessionsServer({ launcher, scope: { ticketKey: "PROJ-1" }, requestsDir: "/b/control/requests", resultsDir: "/b/control/results" });
     expect(sessions).toEqual({
       "butler-sessions": {
         type: "stdio", command: launcher.command, args: [launcher.script],
@@ -99,5 +99,33 @@ describe("ticket MCP config (design 4.2, 8.4)", () => {
     for (const key of ["CONF-1", "COM10", "LPT0", "NULL-2"]) expect(name(key), key).toBe(key);
     // Windows 会吃掉结尾的点：以点结尾的 key 也换成带哈希的名字。
     expect(name("A.")).toMatch(/^A_-[0-9a-f]{8}$/);
+  });
+});
+
+describe("feature memory and coordinator config (design 2026-10-26)", () => {
+  it("adds butler-feature to a feature ticket's servers, and gives the feature coordinator no ticket memory", () => {
+    const ticket = memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "DMS-1", featureId: 7 });
+    expect(Object.keys(ticket)).toEqual(["butler-memory", "butler-workspace", "butler-feature"]);
+    expect(ticket["butler-feature"].env.STATECORE_SCOPE).toBe("feature:7");
+    const coord = memoryServers({ launcher, statecoreDir: "/sc", featureId: 7 });
+    expect(Object.keys(coord)).toEqual(["butler-workspace", "butler-feature"]);
+  });
+
+  it("points the feature coordinator's sessions server at the feature, not a ticket", () => {
+    const s = sessionsServer({ launcher, scope: { featureId: 7 }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
+    expect(s.env.BUTLER_FEATURE).toBe("7");
+    expect(s.env.BUTLER_TICKET).toBeUndefined();
+    const t = sessionsServer({ launcher, scope: { ticketKey: "A-1" }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
+    expect(t.env.BUTLER_TICKET).toBe("A-1");
+  });
+
+  it("writes and removes the feature's config under mcp/features", () => {
+    const mcpDir = tempDir();
+    const file = writeFeatureMcpConfig({ mcpDir, featureId: 7, servers: memoryServers({ launcher, statecoreDir: "/sc", featureId: 7 }) });
+    expect(file).toBe(featureMcpFile(mcpDir, 7));
+    expect(file).toBe(join(mcpDir, "features", "7.json"));
+    expect(existsSync(file)).toBe(true);
+    removeFeatureMcpConfig(mcpDir, 7);
+    expect(existsSync(file)).toBe(false);
   });
 });

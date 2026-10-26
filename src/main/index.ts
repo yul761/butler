@@ -35,11 +35,12 @@ import { llmStatus } from "./gateway/status";
 import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupTicketWorktrees, isMerged } from "./tickets/worktree-cleanup";
+import { FeaturesRepo } from "./db/features-repo";
 import { HandoffRunner } from "./handoff/runner";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { memoryServers, removeTicketMcpConfigs, sessionsServer, writeTicketMcpConfig } from "./memory/mcp-config";
+import { memoryServers, removeTicketMcpConfigs, sessionsServer, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
@@ -258,6 +259,8 @@ async function bootstrap(): Promise<void> {
   const db = openDatabase(paths.db);
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
+  const features = new FeaturesRepo(db);
+  const featureForCwd = (cwd: string): number | null => features.byWorkspace(cwd)?.id ?? null;
   const settings = new SettingsRepo(db);
   const handoffs = new HandoffsRepo(db);
   const followups = new FollowupsRepo(db);
@@ -274,7 +277,7 @@ async function bootstrap(): Promise<void> {
     onSynced: (key) => safeSend(IPC.memoryChanged, key),
     log: logger,
   });
-  const ticketService = new TicketService({ tickets, settings, now: Date.now, workspacesDir: paths.workspaces });
+  const ticketService = new TicketService({ tickets, features, settings, now: Date.now, workspacesDir: paths.workspaces });
   const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath() });
   const notify = () => safeSend(IPC.stateChanged);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
@@ -309,27 +312,42 @@ async function bootstrap(): Promise<void> {
    * 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）：记忆开着时挂记忆 server；
    * 总控 session 另外挂 butler-sessions（设计文档 2026-10-23 第二步），和记忆开关无关。什么都不挂时返回 null。
    */
-  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean }): string | null => {
-    const launcher = (script: string) => ({ command: process.execPath, script });
+  /**
+   * 记忆 server（记忆开着时）加上总控的 butler-sessions（设计文档 2026-10-23 第二步，和记忆开关无关）。
+   * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）；scope 是总控管的 ticket 或 feature，普通 session 为 null。
+   */
+  const launcher = (script: string) => ({ command: process.execPath, script });
+  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null }, scope: { ticketKey: string } | { featureId: number } | null) => {
     let servers = {};
     if (memoryOn(settings)) {
-      if (existsSync(memoryMcpScript)) servers = memoryServers({ launcher: launcher(memoryMcpScript), statecoreDir: paths.statecore, ticketKey });
+      if (existsSync(memoryMcpScript)) servers = memoryServers({ launcher: launcher(memoryMcpScript), statecoreDir: paths.statecore, ...mem });
       else if (!memoryMcpMissingLogged) {
         logger(`memory MCP bundle missing at ${memoryMcpScript}; sessions start without memory (run pnpm build:memory-mcp)`);
         memoryMcpMissingLogged = true;
       }
     }
-    if (opts.coordinator) {
+    if (scope) {
       const script = bundledSessionsMcpPath();
       if (existsSync(script)) {
-        servers = { ...servers, ...sessionsServer({ launcher: launcher(script), ticketKey, requestsDir: paths.controlRequests, resultsDir: paths.controlResults }) };
+        servers = { ...servers, ...sessionsServer({ launcher: launcher(script), scope, requestsDir: paths.controlRequests, resultsDir: paths.controlResults }) };
       } else if (!sessionsMcpMissingLogged) {
         logger(`sessions MCP bundle missing at ${script}; the coordinator cannot start sessions (run pnpm build:memory-mcp)`);
         sessionsMcpMissingLogged = true;
       }
     }
+    return servers;
+  };
+  /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。什么都不挂时返回 null。 */
+  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null }): string | null => {
+    const servers = mcpServers({ ticketKey, featureId: opts.featureId }, opts.coordinator ? { ticketKey } : null);
     if (Object.keys(servers).length === 0) return null;
     return writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator });
+  };
+  /** feature 总控：feature 记忆、全局记忆和 feature 模式的 butler-sessions。 */
+  const featureMcpConfig = (featureId: number): string | null => {
+    const servers = mcpServers({ featureId }, { featureId });
+    if (Object.keys(servers).length === 0) return null;
+    return writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers });
   };
   const sessionService = new SessionService({
     tickets, sessions, settings, ticketService, pty,
@@ -342,6 +360,8 @@ async function bootstrap(): Promise<void> {
     platform: process.platform,
     baseEnv: process.env,
     mcpConfig: memoryMcpConfig,
+    featureMcpConfig,
+    features,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
     log: logger,
@@ -510,7 +530,7 @@ async function bootstrap(): Promise<void> {
   const discoverOnce = async () => {
     try {
       const found = await scanClaudeProjects(paths.claudeProjects, Date.now() - UNCLAIMED_WINDOW_MS, discoveryHeads);
-      syncDiscovered(found, sessions, Date.now());
+      syncDiscovered(found, sessions, Date.now(), featureForCwd);
       // 只有扫描真的找到了某个待补全 session 的 transcript，才记为本次运行已扫描过。
       for (const f of found) if (discoveryPending.delete(f.id)) discoveryRequested.add(f.id);
       notify();
@@ -558,6 +578,7 @@ async function bootstrap(): Promise<void> {
       const effect = applyHookEnvelope(env, {
         sessions, tickets, transcriptState: (id) => transcriptState(paths.claudeProjects, id),
         placement: (key, cwd) => ticketService.placement(key, cwd),
+        featureForCwd,
       });
       // Stop 之后看这一轮有没有 /handoff 的输出（异步；失败只记日志，不影响 hook 处理）。
       const stop = stopFromEnvelope(env);

@@ -90,6 +90,15 @@ export interface TicketView extends Ticket {
   waiting: boolean;
 }
 
+/** feature 页和侧边栏用：feature 加上它的 ticket 和 feature 总控 session（设计文档 2026-10-26）。 */
+export interface FeatureView extends Feature {
+  tickets: TicketView[];
+  sessions: SessionView[];
+  hiddenSessions: SessionView[];
+  /** feature 总控或者它的任何一个 ticket 在等用户输入。 */
+  waiting: boolean;
+}
+
 export interface UnclaimedSession extends Session {
   suggestedTicket: string | null;
   suggestionExists: boolean;
@@ -148,6 +157,13 @@ export interface OpenSessionRequest {
   prefill?: string;
   /** 跳过分支检查。 */
   force?: boolean;
+}
+
+/** 打开 feature 总控：新开，或者恢复 sessionId。 */
+export interface OpenFeatureSessionRequest {
+  featureId: number;
+  sessionId?: string;
+  prefill?: string;
 }
 
 export type OpenSessionResult =

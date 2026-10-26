@@ -10,6 +10,11 @@ export function ticketScope(key: string): string {
   return `ticket:${key}`;
 }
 
+/** 每个 feature 一个 scope（设计文档 2026-10-26）：前后端 ticket 之间共享接口约定之类。 */
+export function featureScope(id: number): string {
+  return `feature:${id}`;
+}
+
 /** StateCore facts() 里的一条（只取 Butler 用得到的字段）。 */
 export interface MemoryItem {
   /** forget 用的 key（分组名 + 正文的哈希）。 */

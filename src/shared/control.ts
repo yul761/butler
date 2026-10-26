@@ -6,6 +6,8 @@
 export const CONTROL_VERSION = 1;
 /** 一个 ticket 同时最多这么多个运行中的终端（含总控）。到上限时 start_session 返回错误。 */
 export const MAX_RUNNING_PER_TICKET = 6;
+/** 一个 feature 同时最多这么多个运行中的终端（feature 总控 + 它所有 ticket 的终端；设计文档 2026-10-26）。 */
+export const MAX_RUNNING_PER_FEATURE = 8;
 /** start_session 的任务最长多少字。 */
 export const TASK_LIMIT = 8000;
 /** 请求 id：文件名，只用安全字符。 */

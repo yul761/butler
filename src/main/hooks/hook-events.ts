@@ -31,6 +31,8 @@ export function applyHookEnvelope(
     transcriptState?: (sessionId: string) => TranscriptState;
     /** 挂到 ticket 上的 session 在哪个仓库、是不是总控（按目录判断，多仓库 ticket）。 */
     placement?: (ticketKey: string, cwd: string) => { repoId: number | null; coordinator: boolean };
+    /** cwd 恰好是哪个未归档 feature 的工作区：那里的 claude 是 feature 总控（设计文档 2026-10-26）。 */
+    featureForCwd?: (cwd: string) => number | null;
   },
 ): HookEffect {
   // 晚间 handoff、早间刷新、MCP 探测这些 Butler 自己的 claude 进程也会触发用户级 hook，全部忽略。
@@ -50,13 +52,15 @@ export function applyHookEnvelope(
   const fromButler = Boolean(env.butlerSession || env.ticket);
 
   // 事件可能乱序到达（例如 Stop 先于 SessionStart 被处理），所以每种事件都先确保 session 存在。
-  const ensure = (key: string | null = ticketKey) => {
+  // 没有 ticket 的 session：feature 总控终端里 /clear 之后的新段沿用 feature；在 feature 工作区里打开的 claude 也算 feature 总控。
+  const featureId = ticketKey ? null : (prevHead?.featureId ?? (cwd ? (deps.featureForCwd?.(cwd) ?? null) : null));
+  const ensure = (key: string | null = ticketKey, feature: number | null = featureId) => {
     // handleExit 删掉的空 session：迟到的事件不能把它插回来。只有真正的 prompt，或者已有 transcript，才允许重建。
     if (sessions.wasForgotten(id) && event !== "UserPromptSubmit" && deps.transcriptState?.(id) !== "present") return;
     const place = key && cwd ? deps.placement?.(key, cwd) : undefined;
     const inserted = sessions.insertIfAbsent({
       id, ticketKey: key, cwd, origin: fromButler ? "butler" : "discovered", lastActivityAt: at, createdAt: at,
-      repoId: place?.repoId ?? null, coordinator: place?.coordinator ?? false,
+      repoId: place?.repoId ?? null, coordinator: (place?.coordinator ?? false) || (!key && feature !== null), featureId: key ? null : feature,
     });
     if (inserted) return;
     sessions.fillDetails(id, { cwd, lastActivityAt: at });
@@ -65,6 +69,7 @@ export function applyHookEnvelope(
     if (fromButler && cur && cur.origin === "discovered" && !cur.dismissed) sessions.setOrigin(id, "butler");
     // 被忽略（dismissed）的 session，例如嵌套的 claude 进程，永远不挂 ticket。
     if (key && cur && !cur.ticketKey && !cur.dismissed) sessions.setTicket(id, key, cwd ? (deps.placement?.(key, cwd).repoId ?? null) : null);
+    if (!key && feature !== null && cur && !cur.ticketKey && cur.featureId === null && !cur.dismissed) sessions.setFeature(id, feature);
   };
 
   switch (event) {
@@ -72,7 +77,7 @@ export function applyHookEnvelope(
       const source = str(p.source);
       if (prevHead && prevHead.id !== id && !(source && CHAIN_SOURCES.has(source))) {
         // 终端里嵌套启动的 claude（如 `claude -p`）继承了 BUTLER_SESSION，但不是这个终端的会话。
-        ensure(null);
+        ensure(null, null);
         if (sessions.get(id)?.ticketKey) sessions.setTicket(id, null);
         sessions.dismiss(id);
         return { kind: "nested", sessionId: id };

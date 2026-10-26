@@ -59,15 +59,15 @@ function cleanEnv(base: NodeJS.ProcessEnv, pathValue: string): Record<string, st
   return out;
 }
 
-/** 交互式终端里的 claude：挂上 ticket 和启动时的 session id。 */
+/** 交互式终端里的 claude：挂上 ticket 和启动时的 session id。feature 总控没有 ticket（设计文档 2026-10-26）。 */
 export function sessionEnv(
   base: NodeJS.ProcessEnv,
-  x: { pathValue: string; ticketKey: string; sessionId: string },
+  x: { pathValue: string; ticketKey?: string; sessionId: string },
 ): Record<string, string> {
   const out = cleanEnv(base, x.pathValue);
   out.TERM = "xterm-256color";
   out.COLORTERM = "truecolor";
-  out.BUTLER_TICKET = x.ticketKey;
+  if (x.ticketKey !== undefined) out.BUTLER_TICKET = x.ticketKey;
   out.BUTLER_SESSION = x.sessionId;
   return out;
 }

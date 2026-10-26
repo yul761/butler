@@ -2,9 +2,13 @@ import { existsSync } from "node:fs";
 import { sanitizePrefill } from "../../shared/text";
 import {
   effectiveStatus,
+  type Feature,
+  type FeatureView,
+  type OpenFeatureSessionRequest,
   type OpenSessionRequest,
   type OpenSessionResult,
   type Session,
+  type SessionView,
   type Ticket,
   type TicketRepo,
   type TicketView,
@@ -12,11 +16,12 @@ import {
 } from "../../shared/types";
 import { launchEnv, type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
 import { claudeArgs, cmdShimSafe, sessionEnv } from "../claude/spawn";
+import type { FeaturesRepo } from "../db/features-repo";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { currentBranch } from "../tickets/git";
-import { TicketError, type TicketService } from "../tickets/ticket-service";
+import { isInside, TicketError, type TicketService } from "../tickets/ticket-service";
 import { suggestTicket, type TranscriptState, UNCLAIMED_WINDOW_MS } from "./discovery";
 import type { PtyManager } from "./pty-manager";
 
@@ -37,8 +42,15 @@ export interface SessionServiceDeps {
   now: () => number;
   platform: NodeJS.Platform;
   baseEnv: NodeJS.ProcessEnv;
-  /** 写好这个 ticket 的记忆 --mcp-config 文件并返回路径；记忆关闭或 bundle 不存在时返回 null（设计文档 8.4）。 */
-  mcpConfig?: (ticketKey: string, opts: { coordinator: boolean }) => string | null;
+  /**
+   * 写好这个 ticket 的记忆 --mcp-config 文件并返回路径；记忆关闭或 bundle 不存在时返回 null（设计文档 8.4）。
+   * featureId：ticket 属于的 feature，要多挂 feature 的记忆（设计文档 2026-10-26）。
+   */
+  mcpConfig?: (ticketKey: string, opts: { coordinator: boolean; featureId: number | null }) => string | null;
+  /** feature 总控的 --mcp-config 文件（feature 记忆、全局记忆、butler-sessions）。 */
+  featureMcpConfig?: (featureId: number) => string | null;
+  /** feature（设计文档 2026-10-26）；不给就没有 feature 总控。 */
+  features?: FeaturesRepo;
   /** 目录是否存在（测试注入；默认读真实磁盘）。 */
   dirExists?: (dir: string) => boolean;
   /** 要打开这个 ticket 的 session 时调用：把它的记忆补同步一次（排进记忆的同步队列，不等它）。 */
@@ -122,7 +134,7 @@ export class SessionService {
     this.syncMemory(ticket.key);
     // 启动方式只解析一次：记忆挂载的检查和真正启动用同一个结果（P5-PF10）。
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
-    const mcpConfigPath = this.mcpConfigFor(ticket.key, coordinator, claudePath, launch.viaCmd);
+    const mcpConfigPath = this.configPath(ticket.key, () => this.d.mcpConfig?.(ticket.key, { coordinator, featureId: ticket.featureId }) ?? null, claudePath, launch.viaCmd);
     const addDirs = coordinator ? this.addDirsFor(ticket, claudePath, launch.viaCmd) : [];
     let termId: string;
     let args: string[];
@@ -235,22 +247,93 @@ export class SessionService {
     }
   }
 
-  /** 这个 ticket 的记忆 MCP 配置。写不出来、或者要经过 cmd.exe 又无法安全传递时不挂，session 照常打开。 */
-  private mcpConfigFor(ticketKey: string, coordinator: boolean, claudePath: string, viaCmd: boolean): string | undefined {
+  /** 记忆 MCP 配置（label 是 ticket 号或 feature）。写不出来、或者要经过 cmd.exe 又无法安全传递时不挂，session 照常打开。 */
+  private configPath(label: string, write: () => string | null, claudePath: string, viaCmd: boolean): string | undefined {
     let file: string | null;
     try {
-      file = this.d.mcpConfig?.(ticketKey, { coordinator }) ?? null;
+      file = write();
     } catch (e) {
-      this.d.log?.(`memory MCP config for ${ticketKey} not written`, e);
+      this.d.log?.(`memory MCP config for ${label} not written`, e);
       return undefined;
     }
     if (!file) return undefined;
     // 计划 5：能认出的 shim 不经过 cmd.exe，路径原样传递；只有回退到 cmd.exe 时才需要这道检查（计划 4 的 P4-R7）。
     if (viaCmd && !cmdShimSafe(claudePath, file, this.d.platform)) {
-      this.d.log?.(`memory MCP not mounted for ${ticketKey}: the config path cannot pass through cmd.exe safely`);
+      this.d.log?.(`memory MCP not mounted for ${label}: the config path cannot pass through cmd.exe safely`);
       return undefined;
     }
     return file;
+  }
+
+  /**
+   * feature 总控（设计文档 2026-10-26）：在 feature 的工作区里打开，feature 下 ticket 的 worktree 都在里面；
+   * 工作区外面的仓库目录（分支模式、别处的 worktree）各加一个 --add-dir。不设 BUTLER_TICKET。
+   */
+  async openFeature(req: OpenFeatureSessionRequest): Promise<OpenSessionResult> {
+    await this.d.ready();
+    const prefill = req.prefill ? sanitizePrefill(req.prefill) : "";
+    const feature = this.d.features?.get(req.featureId);
+    if (!feature || feature.archivedAt !== null) return { ok: false, reason: "no_ticket" };
+
+    let head: Session | null = null;
+    if (req.sessionId) {
+      head = this.d.sessions.head(req.sessionId);
+      if (!head || head.featureId !== feature.id) return { ok: false, reason: "no_session" };
+      const existing = this.openHeads().get(head.id);
+      if (existing) {
+        if (prefill) this.prefill(existing, prefill, 0);
+        return { ok: true, termId: existing, alreadyOpen: true };
+      }
+    }
+    const { path: claudePath, pathValue } = this.d.claude();
+    if (!claudePath) return { ok: false, reason: "claude_missing" };
+
+    const workspace = this.d.ticketService.featureWorkspaceDir(feature.id);
+    const cwd = head?.cwd || workspace;
+    const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
+    const mcpConfigPath = this.configPath(`feature ${feature.id}`, () => this.d.featureMcpConfig?.(feature.id) ?? null, claudePath, launch.viaCmd);
+    const addDirs = this.featureAddDirs(feature, claudePath, launch.viaCmd);
+    let termId: string;
+    let args: string[];
+    let insertedRow = false;
+    if (head) {
+      termId = head.id;
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, addDirs });
+    } else {
+      termId = this.d.newId();
+      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, addDirs });
+      const now = this.d.now();
+      insertedRow = this.d.sessions.insertIfAbsent({
+        id: termId, ticketKey: null, cwd, origin: "butler", lastActivityAt: now, createdAt: now, coordinator: true, featureId: feature.id,
+      });
+    }
+    try {
+      const full = withArgs(launch, args);
+      this.d.pty.open(termId, { file: full.file, args: full.args }, { cwd, env: launchEnv(full, sessionEnv(this.d.baseEnv, { pathValue, sessionId: termId })) });
+    } catch (e) {
+      if (insertedRow) this.d.sessions.delete(termId);
+      throw e;
+    }
+    if (prefill) this.prefill(termId, prefill);
+    return { ok: true, termId, alreadyOpen: false };
+  }
+
+  /** feature 总控要另外加的目录：feature 下未归档 ticket 的仓库工作目录里，不在工作区里面的（同样的存在、cmd.exe 检查）。 */
+  private featureAddDirs(feature: Feature, claudePath: string, viaCmd: boolean): string[] {
+    const dirs: string[] = [];
+    for (const t of this.d.tickets.listByFeature(feature.id)) {
+      for (const r of t.repos) {
+        const dir = this.d.ticketService.workDir(r);
+        if (isInside(dir, feature.workspaceDir) || dirs.some((d) => samePath(d, dir, this.d.platform))) continue;
+        if (!(this.d.dirExists ?? existsSync)(dir)) continue;
+        if (viaCmd && !cmdShimSafe(claudePath, dir, this.d.platform)) {
+          this.d.log?.(`coordinator for feature ${feature.id}: ${dir} cannot pass through cmd.exe safely; not added`);
+          continue;
+        }
+        dirs.push(dir);
+      }
+    }
+    return dirs;
   }
 
   /**
@@ -314,17 +397,46 @@ export class SessionService {
     return this.d.pty.openIds().filter((termId) => this.d.sessions.head(termId)?.ticketKey === ticketKey).length;
   }
 
-  ticketViews(): TicketView[] {
-    const heads = this.openHeads();
+  /** feature 正在运行的终端数：feature 总控，加上它所有 ticket 的终端。 */
+  featureTerminalCount(featureId: number): number {
+    const keys = new Set(this.d.tickets.listByFeature(featureId).map((t) => t.key));
+    return this.d.pty.openIds().filter((termId) => {
+      const h = this.d.sessions.head(termId);
+      return !!h && (h.featureId === featureId || (h.ticketKey !== null && keys.has(h.ticketKey)));
+    }).length;
+  }
+
+  hasFeatureTerminal(featureId: number): boolean {
+    return this.featureTerminalCount(featureId) > 0;
+  }
+
+  /** session 行加上它的终端；分成显示的和隐藏的（正在运行的终端永远显示，隐藏只对没在跑的 session 起作用）。 */
+  private split(rows: Session[], heads: Map<string, string>): { sessions: SessionView[]; hiddenSessions: SessionView[] } {
+    const all = rows.filter((s) => !s.replacedBy).map((s) => ({ ...s, termId: heads.get(s.id) ?? null }));
+    return { sessions: all.filter((s) => !s.dismissed || s.termId !== null), hiddenSessions: all.filter((s) => s.dismissed && s.termId === null) };
+  }
+
+  private allTicketViews(heads: Map<string, string>): TicketView[] {
     return this.d.tickets.list().map((t) => {
-      const all = this.d.sessions
-        .listByTicket(t.key)
-        .filter((s) => !s.replacedBy)
-        .map((s) => ({ ...s, termId: heads.get(s.id) ?? null }));
-      // 正在运行的终端永远显示（隐藏只对没在跑的 session 起作用）。
-      const sessions = all.filter((s) => !s.dismissed || s.termId !== null);
-      const hiddenSessions = all.filter((s) => s.dismissed && s.termId === null);
+      const { sessions, hiddenSessions } = this.split(this.d.sessions.listByTicket(t.key), heads);
       return { ...t, effectiveStatus: effectiveStatus(t), sessions, hiddenSessions, waiting: sessions.some((s) => s.waitingForInput) };
+    });
+  }
+
+  /** 单独的 ticket（属于未归档 feature 的在 featureViews 里）。 */
+  ticketViews(): TicketView[] {
+    const active = new Set((this.d.features?.list() ?? []).map((f) => f.id));
+    return this.allTicketViews(this.openHeads()).filter((t) => t.featureId === null || !active.has(t.featureId));
+  }
+
+  /** 未归档的 feature，带上它的 ticket 和 feature 总控 session。 */
+  featureViews(): FeatureView[] {
+    const heads = this.openHeads();
+    const tickets = this.allTicketViews(heads);
+    return (this.d.features?.list() ?? []).map((f) => {
+      const { sessions, hiddenSessions } = this.split(this.d.sessions.listByFeature(f.id), heads);
+      const own = tickets.filter((t) => t.featureId === f.id);
+      return { ...f, tickets: own, sessions, hiddenSessions, waiting: sessions.some((s) => s.waitingForInput) || own.some((t) => t.waiting) };
     });
   }
 
