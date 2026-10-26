@@ -7,6 +7,8 @@ interface Deps {
   notify: () => void;
   /** 记忆开关真的变了（保存或恢复默认）之后调用，on 是新的状态。 */
   memoryToggled: (on: boolean) => void;
+  /** language 改了之后（在 notify 之前）重新解析当前语言。 */
+  languageChanged?: () => void;
 }
 
 /**
@@ -29,6 +31,7 @@ export function settingsHandlers(d: Deps): {
     const memoryBefore = memoryOn(d.settings);
     write();
     const memoryAfter = memoryOn(d.settings);
+    if (k === "language") d.languageChanged?.();
     d.notify();
     if (memoryAfter !== memoryBefore) d.memoryToggled(memoryAfter);
   };

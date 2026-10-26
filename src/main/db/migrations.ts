@@ -164,4 +164,9 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE ticket_repos ADD COLUMN worktree_removed_at INTEGER;
   ALTER TABLE ticket_repos ADD COLUMN cleanup_blocked TEXT;
   `,
+  `
+  INSERT OR IGNORE INTO settings (key, value)
+    SELECT 'language', 'zh'
+    WHERE EXISTS (SELECT 1 FROM tickets) OR EXISTS (SELECT 1 FROM settings WHERE key = 'onboardingDone' AND value = '1');
+  `,
 ];

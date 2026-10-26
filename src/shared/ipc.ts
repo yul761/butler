@@ -61,6 +61,7 @@ export const IPC = {
   memoryChanged: "memory:changed",
   appNavigate: "app:navigate",
   appAutostartGet: "app:autostartGet",
+  appLanguage: "app:language",
   appAutostartSet: "app:autostartSet",
   clipboardRead: "clipboard:read",
   clipboardWrite: "clipboard:write",
@@ -79,7 +80,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,
   IPC.memoryView, IPC.memoryWhy,
-  IPC.appAutostartGet, IPC.appAutostartSet, IPC.clipboardRead, IPC.clipboardWrite,
+  IPC.appAutostartGet, IPC.appAutostartSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];

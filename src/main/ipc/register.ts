@@ -27,6 +27,7 @@ import type { FeatureService } from "../tickets/feature-service";
 import { scanRepos } from "../tickets/git";
 import { TicketError, type TicketService } from "../tickets/ticket-service";
 import type { CleanupOutcome } from "../tickets/worktree-cleanup";
+import { currentLang } from "../i18n";
 import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
@@ -73,6 +74,8 @@ export interface IpcDeps {
   onFeatureArchived?: (featureId: number) => void;
   /** “重新检查”：PR 已合并时按规则再清理一次这个 ticket 的 worktree（设计文档 2026-10-26）。 */
   recheckCleanup: (ticketKey: string) => Promise<CleanupOutcome[]>;
+  /** language 设置保存或恢复默认之后：重新解析当前语言（设计文档 2026-10-26）。 */
+  languageChanged?: () => void;
   /** 退出已开始：后台任务的 IPC 直接返回。 */
   aborted: () => boolean;
 }
@@ -301,5 +304,6 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.memoryWhy, mem.why);
 
   handle(IPC.appAutostartGet, () => d.autostart.get());
+  handle(IPC.appLanguage, () => currentLang());
   handle(IPC.appAutostartSet, (on: unknown) => d.autostart.set(boolArg(on)));
 }

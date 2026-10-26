@@ -216,3 +216,10 @@ describe("branch template against the ticket pattern", () => {
     expect(() => checkBranchTemplateFits("feature/{key}", "-\\d+")).not.toThrow();
   });
 });
+
+describe("language setting (design 2026-10-26 i18n)", () => {
+  it("accepts auto, zh and en only", () => {
+    for (const ok of ["auto", "zh", "en"]) expect(normalizeSetting("language", ` ${ok} `)).toBe(ok);
+    for (const bad of ["fr", "", "ZH-cn"]) expect(() => normalizeSetting("language", bad), bad).toThrow(SettingError);
+  });
+});

@@ -21,6 +21,7 @@ export const EDITABLE_SETTINGS = [
   "ticketPattern",
   "memoryEnabled",
   "onboardingDone",
+  "language",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

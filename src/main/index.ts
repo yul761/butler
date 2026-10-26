@@ -36,6 +36,8 @@ import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeaturesRepo } from "./db/features-repo";
+import { setLang } from "./i18n";
+import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
 import { HandoffRunner } from "./handoff/runner";
 import { HealthService } from "./hooks/health";
@@ -263,6 +265,9 @@ async function bootstrap(): Promise<void> {
   const features = new FeaturesRepo(db);
   const featureForCwd = (cwd: string): number | null => features.byWorkspace(cwd)?.id ?? null;
   const settings = new SettingsRepo(db);
+  /** 当前语言：BUTLER_LANG > 设置 > 系统首选语言（设计文档 2026-10-26）。 */
+  const applyLanguage = () => setLang(resolveLang(settings.get("language"), app.getPreferredSystemLanguages(), process.env.BUTLER_LANG));
+  applyLanguage();
   const handoffs = new HandoffsRepo(db);
   const followups = new FollowupsRepo(db);
   const jobs = new JobsRepo(db);
@@ -629,6 +634,7 @@ async function bootstrap(): Promise<void> {
   const featureService = new FeatureService({ features, tickets, db, now: Date.now, onTicketArchived: (key) => removeTicketMcpConfigs(paths.mcp, key) });
   registerIpc({
     onArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
+    languageChanged: applyLanguage,
     onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,

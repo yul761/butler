@@ -1,4 +1,5 @@
 import type { BriefKind, BriefView, ItemMark } from "../../shared/brief";
+import type { Lang } from "../../shared/i18n";
 import { IPC, type IpcResult } from "../../shared/ipc";
 import type { MemoryView, WhyEntry } from "../../shared/memory";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
@@ -96,6 +97,7 @@ export const api = {
   audit: (beforeId?: number) => call<AuditPage>(IPC.auditList, beforeId),
   memoryView: (ticketKey: string) => call<MemoryView>(IPC.memoryView, ticketKey),
   autostart: () => call<AutostartState>(IPC.appAutostartGet),
+  language: () => call<Lang>(IPC.appLanguage),
   setAutostart: (on: boolean) => call<AutostartState>(IPC.appAutostartSet, on),
   memoryWhy: (ticketKey: string, factId: string) => call<WhyEntry[] | null>(IPC.memoryWhy, ticketKey, factId),
   onNavigate: (cb: (route: { page: "home"; kind?: BriefKind }) => void) => window.butler.on(IPC.appNavigate, cb),

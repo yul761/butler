@@ -1,4 +1,5 @@
 import { renderBranch } from "../../shared/branch";
+import { LANG_SETTINGS } from "../../shared/i18n";
 import { isAbsolute } from "node:path";
 import vm from "node:vm";
 import { PRIVACY_LEVELS, TERM_CATEGORIES, type PrivacyLevel, type SensitiveTerm, type TermCategory } from "../../shared/llm";
@@ -359,6 +360,11 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "memoryEnabled":
     case "onboardingDone":
       return normalizeFlag(value);
+    case "language": {
+      const t = value.trim();
+      if (!(LANG_SETTINGS as readonly string[]).includes(t)) throw new SettingError("语言只能是 auto、zh 或 en");
+      return t;
+    }
     default: {
       // IPC 层已经用 isEditableSetting 拦过；这里再兜一次，免得以后新增的调用方绕过。
       const unknown: never = key;

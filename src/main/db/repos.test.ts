@@ -224,3 +224,28 @@ describe("opening data from a newer Butler", () => {
     db.close();
   });
 });
+
+describe("migration 7: language (design 2026-10-26 i18n)", () => {
+  const upTo6 = () => {
+    const db = new DatabaseSync(":memory:");
+    for (const sql of MIGRATIONS.slice(0, 6)) db.exec(sql);
+    db.exec("PRAGMA user_version = 6");
+    return db;
+  };
+
+  it("keeps Chinese for an install that already has tickets or finished the wizard", () => {
+    const withTicket = upTo6();
+    withTicket.prepare(`INSERT INTO tickets (key, title, repo_path, work_mode, worktree_path, branch, status, created_at) VALUES ('A-1', NULL, '', 'branch', NULL, '', 'active', 1)`).run();
+    migrate(withTicket);
+    expect(new SettingsRepo(withTicket).get("language")).toBe("zh");
+
+    const onboarded = upTo6();
+    onboarded.prepare(`INSERT INTO settings (key, value) VALUES ('onboardingDone', '1')`).run();
+    migrate(onboarded);
+    expect(new SettingsRepo(onboarded).get("language")).toBe("zh");
+  });
+
+  it("leaves a fresh install on auto", () => {
+    expect(new SettingsRepo(memDb()).get("language")).toBe("auto");
+  });
+});
