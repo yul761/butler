@@ -1,4 +1,5 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SessionsRepo } from "../db/sessions-repo";
@@ -72,6 +73,22 @@ describe("SessionService and cleaned-up worktrees (design 2026-10-26)", () => {
     await cleanupTicketWorktrees({ tickets, ticketService, repoBusy: () => false, now: () => 6 }, "PROJ-1");
     expect(await service.open({ ticketKey: "PROJ-1" })).toMatchObject({ ok: true });
     expect(existsSync(dir)).toBe(true);
+  });
+
+  it("rebuilds the worktree before resuming a session that ran in a subdirectory of it", async () => {
+    const { service, sessions, spawned, ticket, tickets, ticketService } = await setup({ workMode: "worktree" });
+    const dir = ticket.repos[0].worktreePath!;
+    const sub = join(dir, "packages", "api");
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(join(sub, "index.ts"), "x");
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-qm", "sub"], { cwd: dir });
+    sessions.insertIfAbsent({ id: "nested", ticketKey: "PROJ-1", cwd: sub, origin: "discovered", createdAt: 1, repoId: ticket.repos[0].id });
+    await cleanupTicketWorktrees({ tickets, ticketService, repoBusy: () => false, now: () => 5 }, "PROJ-1");
+    expect(existsSync(sub)).toBe(false);
+    expect(await service.open({ ticketKey: "PROJ-1", sessionId: "nested", force: true })).toMatchObject({ ok: true });
+    expect(spawned[0].opts.cwd).toBe(sub);
+    expect(existsSync(sub)).toBe(true);
   });
 
   it("counts only the repo's own sessions as busy for cleanup", async () => {

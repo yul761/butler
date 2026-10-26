@@ -1,5 +1,6 @@
-import { mkdirSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { mkdirSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { CreateFeatureInput, Feature, FeatureRepo } from "../../shared/types";
 import { withTransaction, type Db } from "../db/database";
 import type { FeaturesRepo } from "../db/features-repo";
@@ -16,6 +17,8 @@ export interface FeatureServiceDeps {
   onTicketArchived?: (ticketKey: string) => void;
   /** 给了就把归档 / 恢复放进一个事务。 */
   db?: Db;
+  /** 展开工作区路径里的 ~（测试注入；默认是用户目录）。 */
+  homeDir?: string;
 }
 
 /** feature 名最长多少字。 */
@@ -44,6 +47,21 @@ export class FeatureService {
     return join(dirname(parent), `${basename(parent)}-features`, featureDirName(name));
   }
 
+  /**
+   * 工作区目录：展开 ~，必须是绝对路径；建好之后存真实路径（claude 和 hook 报上来的 cwd 是真实路径，经过 symlink 的写法对不上）。
+   */
+  private workspacePath(dir: string): string {
+    const expanded = dir === "~" || dir.startsWith("~/") || dir.startsWith("~\\") ? join(this.d.homeDir ?? homedir(), dir.slice(1)) : dir;
+    if (!isAbsolute(expanded)) throw new TicketError("invalid_workspace", `工作区目录要写完整路径（例如 ~/Code/shop-features/名字）：${dir}`);
+    const abs = resolve(expanded);
+    try {
+      mkdirSync(abs, { recursive: true });
+      return realpathSync.native(abs);
+    } catch (e) {
+      throw new TicketError("invalid_workspace", `建不了工作区目录 ${abs}：${(e as Error).message}`);
+    }
+  }
+
   private static checkName(name: string): string {
     const n = name.trim();
     if (!n || n.length > FEATURE_NAME_LIMIT) throw new TicketError("invalid_name", `feature 名字不能为空，最长 ${FEATURE_NAME_LIMIT} 字`);
@@ -66,9 +84,8 @@ export class FeatureService {
       const root = await FeatureService.root(p);
       if (!roots.some((r) => samePath(r, root))) roots.push(root);
     }
-    const workspaceDir = input.workspaceDir?.trim() || this.defaultWorkspace(roots, name);
+    const workspaceDir = this.workspacePath(input.workspaceDir?.trim() || this.defaultWorkspace(roots, name));
     if (this.d.features.byWorkspace(workspaceDir)) throw new TicketError("workspace_taken", `另一个 feature 已经在用这个工作区：${workspaceDir}`);
-    mkdirSync(workspaceDir, { recursive: true });
     const now = this.d.now();
     const id = this.tx(() => {
       const fid = this.d.features.insert({ name, workspaceDir, createdAt: now });

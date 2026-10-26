@@ -110,4 +110,21 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
   await expect(page.locator(".repos-bar").getByText(S.worktreeRemoved, { exact: true })).toBeVisible();
   expect(existsSync(feWorktree)).toBe(false);
   expect(existsSync(beWorktree)).toBe(true);
+
+  // 7. feature 总控说过话、退出之后可以从列表里隐藏，也能在 feature 页上恢复。
+  await page.locator(".sidebar .ticket.feature").click();
+  const coordinator = page.locator(".feature-page .sessions-bar .session-wrap");
+  await coordinator.locator(".session").click();
+  await page.locator(".terminal-wrap:visible .xterm").click();
+  await page.keyboard.type("plan the api");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => terminalText(page)).toContain("收到：plan the api");
+  await page.keyboard.type("exit");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".terminal-wrap:visible .exited")).toBeVisible();
+  await coordinator.getByRole("button", { name: /^隐藏 / }).click();
+  await expect(coordinator).toHaveCount(0);
+  await page.locator(".feature-page").getByRole("button", { name: S.hiddenSessions(1), exact: true }).click();
+  await page.locator(".feature-page .hidden-sessions").getByRole("button", { name: S.unhideSession, exact: true }).click();
+  await expect(coordinator).toHaveCount(1);
 });

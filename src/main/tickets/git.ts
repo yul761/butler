@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readdir } from "node:fs/promises";
+import { readdir, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { ScanResult } from "../../shared/types";
 import { GIT_SAFE_ARGS, gitBinary } from "../util/git-path";
@@ -45,7 +45,8 @@ export async function repoRoot(dir: string): Promise<string> {
 /** dir 自己就是 git 仓库的根目录（不是在别的仓库里面的普通目录）。 */
 async function isRepoRoot(dir: string): Promise<boolean> {
   try {
-    return (await repoRoot(dir)) === resolve(dir);
+    // git 给的是真实路径：经过 symlink 的目录要先展开再比。
+    return (await repoRoot(dir)) === resolve(await realpath(dir));
   } catch {
     return false;
   }
@@ -102,9 +103,20 @@ export async function detachHead(cwd: string): Promise<void> {
   await git(cwd, ["checkout", "--detach"]);
 }
 
-/** 删掉一个 worktree（目录和登记）。不加 --force：有改动或未跟踪文件时 git 会拒绝。分支保留。 */
+/**
+ * 有没有未提交的改动或未跟踪的文件，不管用户的 status.showUntrackedFiles 怎么设（设成 no 时普通的 status 看不到未跟踪文件）。
+ * 被 .gitignore 忽略的不算。
+ */
+export async function hasLocalChanges(cwd: string): Promise<boolean> {
+  return (await git(cwd, ["status", "--porcelain", "--untracked-files=all"])).length > 0;
+}
+
+/**
+ * 删掉一个 worktree（目录和登记）。不加 --force：有改动或未跟踪文件时 git 会拒绝；git 自己的这道检查也读 status.showUntrackedFiles，
+ * 这里强制成 normal，免得未跟踪文件被当成干净的一起删掉。分支保留。
+ */
 export async function removeWorktree(repo: string, path: string): Promise<void> {
-  await git(repo, ["worktree", "remove", path]);
+  await git(repo, ["-c", "status.showUntrackedFiles=normal", "worktree", "remove", path]);
 }
 
 /** 清掉目录已经不在了的 worktree 登记，否则在同一路径上重新 add 会被 git 拒绝。 */

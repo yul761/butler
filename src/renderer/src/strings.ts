@@ -136,6 +136,7 @@ export const S = {
     repo_exists: "已经有这个仓库了。",
     invalid_name: "feature 名字不能为空，最长 100 字。",
     workspace_taken: "另一个 feature 已经在用这个工作区目录。",
+    invalid_workspace: "工作区目录要写完整路径（可以用 ~ 开头），并且要能建出来。",
     not_found: "找不到它了（可能已经删掉或归档）。",
     sessions_open: "还有终端在运行，先在终端里退出 claude。",
   } as Record<string, string>,

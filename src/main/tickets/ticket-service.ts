@@ -14,7 +14,7 @@ import { isValidTicketKey, renderBranch } from "./ticket-key";
 export type TicketErrorCode =
   | "invalid_key" | "exists" | "archived" | "not_git_repo" | "worktree_exists" | "dirty" | "not_found"
   | "invalid_branch" | "empty_repo" | "git_failed" | "sessions_open" | "branch_checked_out" | "busy" | "unbranched_commits"
-  | "repo_exists" | "invalid_name" | "workspace_taken";
+  | "repo_exists" | "invalid_name" | "workspace_taken" | "invalid_workspace";
 
 export class TicketError extends Error {
   constructor(readonly code: TicketErrorCode, message: string) {
@@ -83,8 +83,8 @@ export class TicketService {
     return this.updatingKeys.has(key);
   }
 
-  /** 同一个 ticket 的仓库改动一次只做一个。 */
-  private async exclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  /** 同一个 ticket 的仓库改动（包括合并后的清理）一次只做一个；已经有一个在做时抛 busy。 */
+  async exclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
     if (this.updatingKeys.has(key)) throw new TicketError("busy", "这个 ticket 正在修改，稍等一下");
     this.updatingKeys.add(key);
     try {
@@ -309,6 +309,9 @@ export class TicketService {
         if (!existsSync(path)) {
           await pruneWorktrees(r.repoPath);
           await addWorktree(r.repoPath, path, r.branch, !(await branchExists(r.repoPath, r.branch)));
+        } else if (!(await isWorktreeOf(r.repoPath, path))) {
+          // 清理之后有人在原来的位置写了文件（比如 feature 总控），那里已经不是 worktree：不接管它，免得 claude 在一个普通目录里干活。
+          throw new TicketError("worktree_exists", `${path} 已经不是这个仓库的 worktree（清理之后又有文件写到了那里）。先把它挪开再打开 session`);
         }
       } catch (e) {
         throw asTicketError(e);

@@ -178,7 +178,7 @@ export class SessionService {
     if (head) {
       let repo = head.repoId === null ? null : (ticket.repos.find((r) => r.id === head.repoId) ?? null);
       // 在被清理掉的 worktree 里跑过的 session：claude --resume 要在原来的目录里，先把它重建出来（设计文档 2026-10-26）。
-      if (repo?.worktreePath && head.cwd && samePath(head.cwd, repo.worktreePath, this.d.platform)) repo = await this.d.ticketService.ensureWorktree(repo);
+      if (repo?.worktreePath && head.cwd && isInside(head.cwd, repo.worktreePath)) repo = await this.d.ticketService.ensureWorktree(repo);
       const fallback = head.coordinator || !repo ? this.d.ticketService.workspaceDir(ticket.key) : this.d.ticketService.workDir(repo);
       const cwd = head.cwd || fallback;
       if (!req.force && !head.coordinator && repo) {

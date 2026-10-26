@@ -6,8 +6,8 @@ import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { makeRepo, memDb, tempDir } from "../test-utils";
 import { branchExists, currentBranch } from "./git";
-import { TicketService } from "./ticket-service";
-import { cleanupTicketWorktrees } from "./worktree-cleanup";
+import { TicketError, TicketService } from "./ticket-service";
+import { cleanupIfMerged, cleanupTicketWorktrees } from "./worktree-cleanup";
 
 async function setup(workMode: "worktree" | "branch" = "worktree") {
   const db = memDb();
@@ -89,12 +89,59 @@ describe("cleanupTicketWorktrees", () => {
 
   it("skips everything while the ticket is being changed", async () => {
     const { tickets, r, repo } = await setup();
-    const updating = { updating: () => true };
-    expect(await cleanupTicketWorktrees({ tickets, ticketService: updating, repoBusy: () => false, now: () => 1 }, "DMS-1")).toEqual([
+    const busy = { exclusive: async () => { throw new TicketError("busy", "x"); } };
+    expect(await cleanupTicketWorktrees({ tickets, ticketService: busy, repoBusy: () => false, now: () => 1 }, "DMS-1")).toEqual([
       { repoId: r.id, result: "skipped" },
     ]);
     expect(existsSync(r.worktreePath!)).toBe(true);
     expect(repo).toBeTruthy();
+  });
+});
+
+describe("cleanup safety (final review)", () => {
+  it("still sees untracked files when git is set to hide them (status.showUntrackedFiles=no)", async () => {
+    const { clean, dir, repo, g } = await setup();
+    g(repo, "config", "status.showUntrackedFiles", "no");
+    writeFileSync(join(dir, "untracked.txt"), "keep me");
+    expect((await clean())[0]).toMatchObject({ result: "blocked", reason: "worktree 里有未提交的改动或未跟踪的文件" });
+    expect(existsSync(join(dir, "untracked.txt"))).toBe(true);
+  });
+
+  it("holds the ticket's lock while it runs, so a second pass or an open waits its turn", async () => {
+    const { clean, ticketService, r, tickets } = await setup();
+    const first = clean();
+    expect(ticketService.updating("DMS-1")).toBe(true);
+    const second = await clean();
+    expect(second).toEqual([{ repoId: r.id, result: "skipped" }]);
+    expect((await first)[0].result).toBe("removed");
+    expect(ticketService.updating("DMS-1")).toBe(false);
+    expect(tickets.getRepo(r.id)?.cleanupBlocked).toBeNull();
+  });
+
+  it("checks the repo's terminals again right before removing", async () => {
+    const { tickets, ticketService, r, dir } = await setup();
+    let calls = 0;
+    const out = await cleanupTicketWorktrees({ tickets, ticketService, repoBusy: () => ++calls > 1, now: () => 1 }, "DMS-1");
+    expect(out[0]).toMatchObject({ result: "blocked", reason: "这个仓库的终端还在运行" });
+    expect(existsSync(dir)).toBe(true);
+    expect(r).toBeTruthy();
+  });
+});
+
+describe("cleanupIfMerged", () => {
+  const merged = { latestValid: () => ({ payload: { prs: [{ number: 1, url: "u", state: "merged", review: null }] } }) } as never;
+  const open = { latestValid: () => ({ payload: { prs: [{ number: 2, url: "u", state: "open", review: null }] } }) } as never;
+
+  it("cleans a merged ticket and only clears old reasons for one that is no longer merged", async () => {
+    const { tickets, ticketService, r, dir, setBusy } = await setup();
+    const d = { tickets, ticketService, repoBusy: () => false, now: () => 1 };
+    setBusy(true);
+    await cleanupTicketWorktrees({ ...d, repoBusy: () => true }, "DMS-1");
+    expect(tickets.getRepo(r.id)?.cleanupBlocked).not.toBeNull();
+    expect(await cleanupIfMerged(d, open, "DMS-1")).toEqual([]);
+    expect(tickets.getRepo(r.id)?.cleanupBlocked).toBeNull();
+    expect(existsSync(dir)).toBe(true);
+    expect((await cleanupIfMerged(d, merged, "DMS-1"))[0].result).toBe("removed");
   });
 });
 
@@ -107,6 +154,15 @@ describe("TicketService.ensureWorktree", () => {
     expect(await currentBranch(dir)).toBe(r.branch);
     expect(back).toMatchObject({ worktreeRemovedAt: null, worktreePath: dir });
     expect(tickets.getRepo(r.id)?.worktreeRemovedAt).toBeNull();
+  });
+
+  it("refuses to adopt a plain directory that took the cleaned worktree's place", async () => {
+    const { clean, dir, r, ticketService, tickets } = await setup();
+    await clean();
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "x.ts"), "written after cleanup");
+    await expect(ticketService.ensureWorktree(tickets.getRepo(r.id)!)).rejects.toMatchObject({ code: "worktree_exists" });
+    expect(tickets.getRepo(r.id)?.worktreeRemovedAt).not.toBeNull();
   });
 
   it("leaves a repo whose worktree was never removed alone", async () => {

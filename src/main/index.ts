@@ -34,7 +34,7 @@ import { electronSecretBox } from "./gateway/safe-storage";
 import { llmStatus } from "./gateway/status";
 import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
-import { cleanupTicketWorktrees, isMerged } from "./tickets/worktree-cleanup";
+import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeaturesRepo } from "./db/features-repo";
 import { FeatureService } from "./tickets/feature-service";
 import { HandoffRunner } from "./handoff/runner";
@@ -298,11 +298,14 @@ async function bootstrap(): Promise<void> {
     exit: (id, code) => {
       safeSend(IPC.ptyExit, id, code);
       if (closing) return;
+      // 合并后因为这个终端还在跑而没清理的 worktree：终端一退出就再试（设计文档 2026-10-26）。
+      const exitedTicket = sessions.head(id)?.ticketKey ?? null;
       try {
         sessionService.handleExit(id);
       } catch (e) {
         logger("handleExit failed", e);
       }
+      if (exitedTicket) cleanupMerged(exitedTicket);
       notify();
     },
   }, Date.now, logger);
@@ -386,9 +389,8 @@ async function bootstrap(): Promise<void> {
   };
   const cleanupDeps = { tickets, ticketService, repoBusy: (k: string, id: number) => sessionService.hasRepoTerminal(k, id), now: Date.now };
   /** PR 合并后清理 ticket 的 worktree（设计文档 2026-10-26）：不阻塞调用方，结果只影响 ticket 页的显示。 */
-  const cleanupMerged = (ticketKey: string): void => {
-    if (!isMerged(handoffs, ticketKey)) return;
-    cleanupTicketWorktrees(cleanupDeps, ticketKey).then(
+  function cleanupMerged(ticketKey: string): void {
+    cleanupIfMerged(cleanupDeps, handoffs, ticketKey).then(
       (out) => {
         if (out.some((o) => o.result !== "skipped")) {
           logger(`worktree cleanup for ${ticketKey}: ${out.map((o) => `${o.repoId}=${o.result}`).join(", ")}`);
@@ -397,7 +399,7 @@ async function bootstrap(): Promise<void> {
       },
       (e: unknown) => logger(`worktree cleanup for ${ticketKey} failed`, e),
     );
-  };
+  }
   const ingest = (input: IngestInput) => {
     const r = ingestHandoff({ db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}` }, input);
     // 设计文档 5.4：入库后同步写入 StateCore（异步，失败只记日志）。
@@ -407,8 +409,11 @@ async function bootstrap(): Promise<void> {
     }
     return r;
   };
-  // 升级前就已经合并的 ticket：启动时补清理一次。
-  for (const t of tickets.list()) cleanupMerged(t.key);
+  // 升级前就已经合并的 ticket（包括已归档的：堆在磁盘上的大多是它们）：启动时补清理一次。
+  // 等登录 shell 的 PATH 生效之后再跑，否则 GUI 进程的 PATH 里找不到 git，每个 ticket 都会被记成“git 操作失败”。
+  void healthReady.then(() => {
+    for (const t of tickets.list({ includeArchived: true })) cleanupMerged(t.key);
+  });
   const projectMcp = (cwd: string): string[] =>
     projectMcpConfigs(cwd, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger });
   const runner = new HandoffRunner({
@@ -625,7 +630,7 @@ async function bootstrap(): Promise<void> {
   registerIpc({
     onArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
     onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
-    recheckCleanup: async (key) => (isMerged(handoffs, key) ? cleanupTicketWorktrees(cleanupDeps, key) : []),
+    recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,
     tickets, ticketService, featureService, sessionService, pty, health, followups, handoffs, settings, briefService, runner, scheduler, jobs,
     keys, terms, audit, memory,

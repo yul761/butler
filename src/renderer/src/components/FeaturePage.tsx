@@ -33,6 +33,7 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
   const [renaming, setRenaming] = useState<string | null>(null);
   const [addingRepo, setAddingRepo] = useState<string[] | null>(null);
   const [newTicket, setNewTicket] = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
 
   const openKey = openTerms.join(",");
   useEffect(() => {
@@ -176,8 +177,22 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
             )}
           </span>
         ))}
+        {feature.hiddenSessions.length > 0 && (
+          <button className="session more" onClick={() => setShowHidden(!showHidden)}>{S.hiddenSessions(feature.hiddenSessions.length)}</button>
+        )}
         <button className="primary" title={S.featureCoordinatorHint} onClick={() => void open({ featureId: feature.id })}>+ {S.newCoordinator}</button>
       </div>
+      {showHidden && feature.hiddenSessions.length > 0 && (
+        <div className="notice hidden-sessions">
+          <p className="muted">{S.hiddenSessionsHint}</p>
+          {feature.hiddenSessions.map((s) => (
+            <div key={s.id} className="row">
+              <span className="label">{sessionLabel(s, S.untitledSession)}</span>
+              <button onClick={() => api.unhideSession(s.id).catch(reportError)}>{S.unhideSession}</button>
+            </div>
+          ))}
+        </div>
+      )}
       {error && <p className="error">{error}</p>}
 
       <div className="terminals">

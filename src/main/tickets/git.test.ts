@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { makeRepo, tempDir } from "../test-utils";
 import { applyGitResolution, resetGitBinary, setGitBinary } from "../util/git-path";
 import { execFileSync } from "node:child_process";
-import { renameSync } from "node:fs";
+import { renameSync, symlinkSync } from "node:fs";
 import { git, GIT_SUMMARY_LIMIT, GitError, gitEnv, gitErrorSummary, scanRepos } from "./git";
 
 describe("git helpers", () => {
@@ -75,6 +75,15 @@ describe("scanRepos", () => {
   it("lists the repos one level down, sorted, skipping hidden directories", async () => {
     const parent = parentDir();
     expect(await scanRepos(parent)).toEqual({ kind: "parent", repos: [join(parent, "backend"), join(parent, "frontend")] });
+  });
+
+  it("finds the repos of a parent directory reached through a symlink", async () => {
+    const parent = parentDir();
+    const link = join(tempDir("butler-link-"), "code");
+    symlinkSync(parent, link);
+    const r = await scanRepos(link);
+    expect(r.kind).toBe("parent");
+    expect(r.kind === "parent" && r.repos.length).toBe(2);
   });
 
   it("does not count a plain directory inside a repo-less parent", async () => {

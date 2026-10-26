@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, renameSync, symlinkSync } from "node:fs";
 import { join, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FeaturesRepo } from "../db/features-repo";
@@ -31,9 +31,10 @@ function setup() {
   const archived: string[] = [];
   let now = 1000;
   const clock = () => now;
-  const featureService = new FeatureService({ features, tickets, now: clock, onTicketArchived: (k) => archived.push(k) });
+  const home = tempDir("butler-home-");
+  const featureService = new FeatureService({ features, tickets, now: clock, onTicketArchived: (k) => archived.push(k), homeDir: home });
   const ticketService = new TicketService({ tickets, features, settings, now: clock, workspacesDir: tempDir("butler-ws-") });
-  return { tickets, features, featureService, ticketService, archived, tick: (n: number) => (now = n) };
+  return { tickets, features, featureService, ticketService, archived, home, tick: (n: number) => (now = n) };
 }
 
 const code = async (p: Promise<unknown> | (() => unknown)) => {
@@ -85,6 +86,20 @@ describe("FeatureService", () => {
     expect(await code(featureService.create({ name: "x", repoPaths: [tempDir()] }))).toBe("not_git_repo");
     await featureService.create({ name: "x", repoPaths: [s.frontend] });
     expect(await code(featureService.create({ name: "x", repoPaths: [s.backend] }))).toBe("workspace_taken");
+  });
+
+  it("expands ~, refuses a relative workspace and stores the real path behind a symlink", async () => {
+    const { featureService, home } = setup();
+    const s = shop();
+    expect(await code(featureService.create({ name: "a", repoPaths: [s.frontend], workspaceDir: "ws/a" }))).toBe("invalid_workspace");
+    const tilde = await featureService.create({ name: "b", repoPaths: [s.frontend], workspaceDir: "~/features/b" });
+    expect(tilde.workspaceDir).toBe(join(home, "features", "b"));
+    expect(existsSync(tilde.workspaceDir)).toBe(true);
+    const real = tempDir("butler-real-");
+    const link = join(tempDir("butler-link-"), "ln");
+    symlinkSync(real, link);
+    const linked = await featureService.create({ name: "c", repoPaths: [s.frontend], workspaceDir: join(link, "c") });
+    expect(linked.workspaceDir).toBe(join(realpathSync(real), "c"));
   });
 
   it("adds, removes and renames", async () => {
