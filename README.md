@@ -19,6 +19,13 @@ The UI is in Chinese. This README quotes UI labels as they appear in the app, wi
 There are deliberate limits:
 - **Communication:** the coordinator cannot type into other sessions. Sessions coordinate through the shared ticket memory.
 - **Session cap:** at most 6 terminals per ticket run at once. Archived tickets are listed under **已归档 (Archived)**, where you can restore them. In the terminal on Windows, Ctrl+V and right-click paste, and Ctrl+C copies when text is selected.
+- **Features: several tickets, one workspace.** A feature has a name and groups tickets, say two frontend and two backend tickets, each with its own Jira id and branch. Create it with **+ 新建 feature (new feature)**. When asked for a repo you can pick the folder that holds your repos, such as `~/Code/shop` with `frontend/` and `backend/` inside. Butler lists the repos one level down and you tick the ones you want. Picking a parent folder works the same way when you create a ticket or add a repo. Every ticket in a feature gets its worktrees inside the feature's workspace, `<parent>-features/<feature name>` next to the parent folder by default, for example `~/Code/shop-features/checkout/frontend-dms-1234`. That way several tickets in one repo can be worked on at the same time. A feature's **总控 (coordinator)** session runs in the workspace and sees every ticket's worktree. Its `butler-sessions` server offers:
+  - `list_tickets`, which lists the feature's tickets and their repos;
+  - `start_session`, which opens a session in a ticket (naming the repo only when the ticket has several) and sends it a task;
+  - `list_sessions`, which shows the sessions of the coordinator and of every ticket.
+
+  A feature runs at most 8 terminals at once. All its sessions also share a feature memory, `butler-feature`, for things like the API contract between frontend and backend. A `claude` you open yourself in the workspace folder counts as the feature's coordinator. Archiving a feature archives its tickets too; restoring it brings back the tickets archived with it.
+- **Worktree cleanup after merge.** Once a handoff reports that a ticket's PR is merged, Butler removes that ticket's worktrees with `git worktree remove`. The branch is kept, and opening a session there again rebuilds the worktree. Butler does not remove a worktree that has uncommitted changes or untracked files, or one whose own session is still running in a terminal. In that case the ticket page shows why, with a **重新检查 (check again)** button, and Butler tries again when that terminal exits. Files ignored by `.gitignore` (`node_modules`, a local `.env`) are removed with the worktree.
 - **Nightly handoffs.** At a time you choose, Butler asks your own logged-in `claude` to write a structured handoff for every ticket that had activity.
   - `Edit`, `Write` and `NotebookEdit` are always denied.
   - Butler allows file reads, `gh pr view`, `gh pr checks`, `git log`, `git status` and the tracker MCP tools you picked.
@@ -126,8 +133,12 @@ You can run the wizard again from Settings. [docs/configuration.md](docs/configu
 | `~/.butler/inbox/` | Hook reports waiting to be processed (`inbox/bad/` keeps unreadable ones) |
 | `~/.butler/bin/butler-hook` | The hook program Claude Code runs (`butler-hook.exe` on Windows) |
 | `~/.butler/mcp/tickets/<ticket>.json` | The memory `--mcp-config` file, rewritten each time a session for that ticket is opened |
+| `~/.butler/mcp/features/<id>.json` | The `--mcp-config` file of a feature's coordinator |
+| `~/.butler/workspaces/<ticket>/` | The empty folder a ticket's coordinator runs in |
 | `~/.butler/mcp/project-*.json`, `local-*.json` | Copies of your MCP server entries for unattended runs. Written only when **后台 handoff 也加载本地级的 MCP…** (`headlessProjectMcp`) is on. These are private files because they can contain tokens. |
 | `~/.butler/logs/main.log` | Logs |
+
+A feature's workspace is not under `~/.butler`: it sits next to your repos (see [What it does](#what-it-does)), and holds that feature's worktrees.
 
 On Windows `~` is `%USERPROFILE%`. Set `BUTLER_HOME` to use another folder. Butler also honours `CLAUDE_CONFIG_DIR` for the Claude Code configuration it reads and the hooks it installs.
 
@@ -149,7 +160,7 @@ Electron also keeps its own profile folder, with Chromium's caches and the singl
 
 ## StateCore memory
 
-Butler embeds StateCore. Each session Butler starts gets two keyless MCP servers. `butler-memory` holds this ticket's memory and `butler-workspace` holds learnings shared across tickets.
+Butler embeds StateCore. Each session Butler starts gets two keyless MCP servers. `butler-memory` holds this ticket's memory and `butler-workspace` holds learnings shared across tickets. Sessions of a ticket in a feature also get `butler-feature`, the feature's memory (scope `feature:<id>`), which a feature's coordinator gets together with `butler-workspace`.
 
 **Do not also install StateCore's own Claude Code capture plugin.** Butler already provides StateCore memory in the sessions it starts, and with both installed memory is recorded twice. Settings warns you if it finds the plugin.
 
