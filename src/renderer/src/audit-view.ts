@@ -8,7 +8,7 @@ export function auditStatusLabel(s: AuditStatus): string {
 
 /** 拦截原因：规则名（打码样本）。 */
 export function blockedText(hits: ScanHit[] | null): string {
-  return (hits ?? []).map((h) => `${S.scanRule[h.rule] ?? h.rule}（${h.sample}）`).join(S.listSep);
+  return (hits ?? []).map((h) => S.withSample(S.scanRule[h.rule] ?? h.rule, h.sample)).join(S.listSep);
 }
 
 /** 列表里每一行的摘要：（来源）· 档位 · 状态 · token · 费用。“今日重点”不写来源。 */

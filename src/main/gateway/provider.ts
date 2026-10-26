@@ -151,7 +151,7 @@ async function attempt(req: ChatRequest, body: string, deadline: number, totalMs
     if (e instanceof ProviderError) throw e;
     if (req.signal?.aborted) throw new ProviderError("aborted", M().cancelled);
     if (timeout.aborted) throw new ProviderError("timeout", M().noResponseAfter(M().duration(totalMs)));
-    const cause = e instanceof Error ? `${e.message}${e.cause instanceof Error ? `：${e.cause.message}` : ""}` : String(e);
+    const cause = e instanceof Error ? `${e.message}${e.cause instanceof Error ? `${M().causeSep}${e.cause.message}` : ""}` : String(e);
     throw new ProviderError("network", scrub(cause, req.apiKey));
   }
 }
@@ -170,7 +170,7 @@ export const chatCompletion: ChatCall = async (req) => {
       r = await attempt(req, body, deadline, totalMs, state);
     }
     if (r.status < 200 || r.status >= 300) {
-      throw new ProviderError("http", `HTTP ${r.status}：${r.text.slice(0, 300)}`, r.status);
+      throw new ProviderError("http", M().httpError(r.status, r.text.slice(0, 300)), r.status);
     }
     let v: unknown;
     try {

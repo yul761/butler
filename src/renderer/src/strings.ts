@@ -19,7 +19,10 @@ const ZH = {
   home: "简报",
   language: "语言 / Language",
   languageOptions: { auto: "跟随系统", zh: "中文", en: "English" } as Record<string, string>,
-  languageHint: "界面、Butler 的提示和发给 claude 的默认提示词都会切换；你自己改过的提示词不变，以前生成的内容不会翻译。",
+  languageHint: "界面、Butler 的提示和发给 claude 的默认提示词都会切换；你自己改过的提示词不变，以前生成的内容不会翻译。切换之后，设置 → 环境检查里的 /handoff 命令会显示需要更新：点“安装 / 修复”，session 里的 /handoff 也会换成新语言。",
+  /** 标签加值：中文用全角冒号，英文用半角。 */
+  labelled: (label: string, value: string) => `${label}：${value}`,
+  withSample: (what: string, sample: string) => `${what}（${sample}）`,
   newTicket: "新建 ticket",
   newFeature: "新建 feature",
   features: "Feature",
@@ -412,4 +415,6 @@ export let STATUS_LABEL: Record<TicketStatus, string> = ZH_STATUS;
 export function setUiLang(l: Lang): void {
   S = STRINGS[l];
   STATUS_LABEL = STATUS[l];
+  // 屏幕阅读器按页面的 lang 选语音（测试里没有 document）。
+  if (typeof document !== "undefined") document.documentElement.lang = l === "en" ? "en" : "zh-CN";
 }

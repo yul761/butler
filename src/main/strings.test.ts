@@ -39,4 +39,13 @@ describe("main-process messages in two languages (design 2026-10-26 i18n)", () =
     const [out] = await cleanupTicketWorktrees({ tickets, ticketService, repoBusy: () => false, now: () => 1 }, "DMS-1");
     expect(out.reason).toBe("the worktree has uncommitted changes or untracked files");
   });
+
+  it("uses singular and plural, and ASCII punctuation, in English", () => {
+    expect(MAIN_STRINGS.en.eveningBody(1)).toBe("1 ticket made progress today. Click to see it.");
+    expect(MAIN_STRINGS.en.eveningBody(2)).toBe("2 tickets made progress today. Click to see them.");
+    expect(MAIN_STRINGS.en.causeSep).toBe(": ");
+    expect(MAIN_STRINGS.zh.causeSep).toBe("：");
+    expect(MAIN_STRINGS.en.httpError(500, "boom")).toBe("HTTP 500: boom");
+    expect(MAIN_STRINGS.zh.httpError(500, "boom")).toBe("HTTP 500：boom");
+  });
 });

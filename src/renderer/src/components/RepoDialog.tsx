@@ -48,7 +48,7 @@ export function RepoDialog({ ticketKey, repo, hasSessions, onClose }: Props) {
       <form className="modal" onSubmit={submit}>
         <h2>{repo ? S.editRepoTitle(repoName(repo)) : S.addRepoTitle(ticketKey)}</h2>
         {repo ? (
-          <div className="muted">{S.repo}：{repo.repoPath}</div>
+          <div className="muted">{S.labelled(S.repo, repo.repoPath)}</div>
         ) : (
           <RepoPicker label={S.repo} onChange={setRepoPaths} required autoFocus />
         )}

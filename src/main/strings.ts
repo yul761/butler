@@ -130,6 +130,9 @@ const ZH = {
   newerDatabase: (found: number, known: number) => `这份数据是更新版本的 Butler 创建的（数据版本 ${found}，这个 Butler 只认识到 ${known}）。请安装最新版本的 Butler 再打开。`,
   followupNoMark: (key: string) => `followup 条目不能用 mark：请通过 followups 标记 (${key})`,
   badRequest: "请求格式不对",
+  /** 错误原因之间的分隔。 */
+  causeSep: "：",
+  httpError: (status: number, text: string) => `HTTP ${status}：${text}`,
   // 总控（butler-sessions）的回复
   ctlBranchMismatch: (repo: string, current: string, expected: string) => `仓库 ${repo} 现在在 ${current} 上，不是这个 ticket 的分支 ${expected}。请用户在 Butler 里切换分支后再试`,
   ctlClaudeMissing: "Butler 找不到 claude 命令",
@@ -155,7 +158,7 @@ export type MainStrings = typeof ZH;
 
 const EN: MainStrings = {
   eveningTitle: "Butler evening summary",
-  eveningBody: (n: number) => (n > 0 ? `${n} tickets made progress today. Click to see them.` : "No new handoffs today."),
+  eveningBody: (n: number) => (n === 1 ? "1 ticket made progress today. Click to see it." : n > 0 ? `${n} tickets made progress today. Click to see them.` : "No new handoffs today."),
   confirmTitle: "Butler: confirm before sending",
   confirmMessage: "Send the content below to your personal LLM provider to write “Today's focus”?",
   confirmSend: "Send",
@@ -268,6 +271,8 @@ const EN: MainStrings = {
   newerDatabase: (found: number, known: number) => `This data was created by a newer Butler (data version ${found}; this Butler knows up to ${known}). Install the latest Butler to open it.`,
   followupNoMark: (key: string) => `Follow-up items can't be marked here; mark them through follow-ups (${key})`,
   badRequest: "Malformed request",
+  causeSep: ": ",
+  httpError: (status: number, text: string) => `HTTP ${status}: ${text}`,
   ctlBranchMismatch: (repo: string, current: string, expected: string) => `Repo ${repo} is on ${current}, not on this ticket's branch ${expected}. Ask the user to switch branches in Butler, then try again`,
   ctlClaudeMissing: "Butler can't find the claude command",
   ctlTicketBusy: "This ticket's repo settings are being changed. Try again in a moment",

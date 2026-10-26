@@ -3,6 +3,9 @@ import type { PrivacyLevel } from "../../shared/llm";
 import type { FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
 import type { UiStrings } from "./strings";
 
+/** "1 ticket", "2 tickets". */
+const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+
 /** English UI strings (design 2026-10-26 i18n). Same keys and shapes as the Chinese table in strings.ts. */
 export const EN_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "Merged · follow-ups left",
@@ -16,7 +19,9 @@ export const EN: UiStrings = {
   home: "Brief",
   language: "语言 / Language",
   languageOptions: { auto: "Follow the system", zh: "中文", en: "English" } as Record<string, string>,
-  languageHint: "Switches the interface, Butler's messages and the default prompts sent to claude. Prompts you edited yourself are kept, and content generated earlier is not translated.",
+  languageHint: "Switches the interface, Butler's messages and the default prompts sent to claude. Prompts you edited yourself are kept, and content generated earlier is not translated. Afterwards, Settings → Environment check shows the /handoff command as needing an update: click “Install / repair” so /handoff in your sessions also uses the new language.",
+  labelled: (label: string, value: string) => `${label}: ${value}`,
+  withSample: (what: string, sample: string) => `${what} (${sample})`,
   newTicket: "New ticket",
   newFeature: "New feature",
   features: "Features",
@@ -33,7 +38,7 @@ export const EN: UiStrings = {
   newTicketIn: (name: string) => `New ticket in ${name}`,
   pickFeatureRepos: "Repos (each ticked repo gets its own worktree)",
   notRepoNorParent: "This folder is not a git repo, and there is none one level down.",
-  subReposFound: (n: number) => `This is a parent folder with ${n} repos:`,
+  subReposFound: (count: number) => `This is a parent folder with ${n(count, "repo")}:`,
   worktreeRemoved: "worktree removed (rebuilt when you open a session)",
   cleanupBlocked: (repo: string, reason: string) => `${repo}: the worktree was not removed after the merge: ${reason}`,
   recheckCleanup: "Check again",
@@ -59,7 +64,7 @@ export const EN: UiStrings = {
   open: "Open",
   switchTo: "Switch to",
   untitledSession: "New conversation",
-  olderSessions: (n: number) => `Older (${n})`,
+  olderSessions: (count: number) => `Older (${count})`,
   collapseSessions: "Collapse",
   hideSession: "Hide from the list (the conversation is kept and can be restored)",
   hideSessionNamed: (name: string) => `Hide ${name}`,
@@ -186,12 +191,12 @@ export const EN: UiStrings = {
     pr_approved: (i: BriefItem) => `PR #${i.pr?.number ?? "?"} is approved and can be merged`,
     pr_changes_requested: (i: BriefItem) => `PR #${i.pr?.number ?? "?"} has requested changes`,
     followup_after_merge: (i: BriefItem) => `After merge: ${i.text ?? ""}`,
-    followup_due: (i: BriefItem) => (i.days ? `${i.days} days overdue: ${i.text ?? ""}` : `Due today: ${i.text ?? ""}`),
+    followup_due: (i: BriefItem) => (i.days ? `${n(i.days, "day")} overdue: ${i.text ?? ""}` : `Due today: ${i.text ?? ""}`),
     next_step: (i: BriefItem) => `Next: ${i.text ?? ""}`,
-    blocked_long: (i: BriefItem) => `Blocked for ${i.days ?? 0} days${i.text ? `: ${i.text}` : ""}`,
-    review_waiting: (i: BriefItem) => `PR waiting for review for ${i.days ?? 0} days`,
-    stale: (i: BriefItem) => `No activity for ${i.days ?? 0} days`,
-    unclaimed: (i: BriefItem) => `${i.count ?? 0} unclaimed sessions`,
+    blocked_long: (i: BriefItem) => `Blocked for ${n(i.days ?? 0, "day")}${i.text ? `: ${i.text}` : ""}`,
+    review_waiting: (i: BriefItem) => `PR waiting for review for ${n(i.days ?? 0, "day")}`,
+    stale: (i: BriefItem) => `No activity for ${n(i.days ?? 0, "day")}`,
+    unclaimed: (i: BriefItem) => n(i.count ?? 0, "unclaimed session"),
   } as Record<BriefRule, (i: BriefItem) => string>,
   briefPrefill: {
     pr_approved: (i: BriefItem) => `PR #${i.pr?.number ?? ""} is approved: check CI, then merge it (from ${i.ticketKey})`,
@@ -252,7 +257,7 @@ export const EN: UiStrings = {
   headlessProjectMcp: "Background handoffs also load local-scope MCP servers, and the servers in a repo's .mcp.json that you approved in Claude Code (this starts those servers; the repo's allow rules and hooks still don't apply; unapproved or disabled servers are not loaded)",
   detectTools: "Detect from Claude Code",
   detecting: "Detecting…",
-  detectedTools: (n: number, s: number) => `Found ${n} MCP tools; ${s} have query-like names and are ticked. The others are not added unless you tick them:`,
+  detectedTools: (count: number, s: number) => `Found ${n(count, "MCP tool")}; ${s} ${s === 1 ? "has a query-like name and is" : "have query-like names and are"} ticked. The others are not added unless you tick them:`,
   probeIncomplete: "Some servers are still connecting, so the result may be incomplete. You can detect again later",
   noDetectedTools: "No MCP tools found.",
   addSelected: "Add the ticked tools and save",
@@ -320,7 +325,7 @@ export const EN: UiStrings = {
   auditIntro: "Every call to your personal LLM API (the morning brief's Today's focus, and StateCore memory distillation at the full level): exactly what was sent, the response, token counts and cost. Blocked or over-budget requests only record why; nothing was sent for them.",
   auditEmpty: "No calls yet.",
   auditStatus: { pending: "Unfinished", sent: "Sent", failed: "Failed", blocked: "Blocked", budget: "Over budget", declined: "Declined" } as Record<string, string>,
-  auditTokens: (i: number, o: number) => `${i} / ${o} tokens`,
+  auditTokens: (i: number, o: number) => `${i} / ${n(o, "token")}`,
   scanRule: {
     secret: "a key or token", url: "a URL", domain: "a domain", ip: "an IP address", email: "an email address", path: "a file path", ticket: "an unreplaced ticket id", known: "an unreplaced original value",
   } as Record<string, string>,
@@ -343,7 +348,7 @@ export const EN: UiStrings = {
   memoryEmpty: "This ticket has no memory yet. Progress, decisions and open follow-ups appear after a handoff.",
   memoryLoadFailed: (m: string) => `Could not read memory: ${m}`,
   memoryHandoff: "Latest handoff",
-  memoryVersions: (n: number) => `${n} versions`,
+  memoryVersions: (count: number) => n(count, "version"),
   memoryWhy: "History",
   memoryWhyTitle: "Version history (oldest first)",
   memoryDecisions: "Decisions",

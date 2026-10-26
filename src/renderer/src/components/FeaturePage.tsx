@@ -108,7 +108,7 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
             <button type="button" onClick={() => setRenaming(null)}>{S.cancel}</button>
           </form>
         )}
-        <span className="muted" title={feature.workspaceDir}>{S.featureWorkspace}：{feature.workspaceDir}</span>
+        <span className="muted" title={feature.workspaceDir}>{S.labelled(S.featureWorkspace, feature.workspaceDir)}</span>
         {renaming === null && <button onClick={() => setRenaming(feature.name)}>{S.rename}</button>}
         <button onClick={() => void archive()}>{S.archiveFeature}</button>
       </header>
