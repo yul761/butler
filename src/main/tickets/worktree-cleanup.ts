@@ -4,6 +4,7 @@ import type { TicketsRepo } from "../db/tickets-repo";
 import { combinedPr } from "../handoff/prs";
 import { GitError, gitErrorSummary, hasLocalChanges, removeWorktree, unbranchedCommits } from "./git";
 import { TicketError, type TicketService } from "./ticket-service";
+import { M } from "../strings";
 
 export type CleanupOutcome = { repoId: number; result: "removed" | "blocked" | "skipped"; reason?: string };
 
@@ -24,11 +25,11 @@ export function isMerged(handoffs: Pick<HandoffsRepo, "latestValid">, ticketKey:
 
 /** 为什么这个 worktree 现在不能删；能删时返回 null。 */
 async function blocker(d: CleanupDeps, ticketKey: string, repoId: number, dir: string): Promise<string | null> {
-  if (d.repoBusy(ticketKey, repoId)) return "这个仓库的终端还在运行";
+  if (d.repoBusy(ticketKey, repoId)) return M().cleanupTerminalRunning;
   // 被 .gitignore 忽略的文件（node_modules 之类）不算：git worktree remove 也不管它们。
-  if (await hasLocalChanges(dir)) return "worktree 里有未提交的改动或未跟踪的文件";
+  if (await hasLocalChanges(dir)) return M().cleanupLocalChanges;
   // 没 push 的提交不拦：本地分支保留，提交不会丢。只有游离 HEAD 上不属于任何分支的提交会随目录一起丢。
-  if ((await unbranchedCommits(dir)) > 0) return "游离 HEAD 上有不在任何分支上的提交";
+  if ((await unbranchedCommits(dir)) > 0) return M().cleanupUnbranched;
   return null;
 }
 
@@ -49,10 +50,10 @@ export async function cleanupTicketWorktrees(d: CleanupDeps, ticketKey: string):
         try {
           reason = await blocker(d, ticketKey, r.id, dir);
           // 上面等 git 的时候可能刚开了终端（开 session 在锁外先占了终端的情况）：删之前再看一眼。
-          if (!reason && d.repoBusy(ticketKey, r.id)) reason = "这个仓库的终端还在运行";
+          if (!reason && d.repoBusy(ticketKey, r.id)) reason = M().cleanupTerminalRunning;
           if (!reason) await removeWorktree(r.repoPath, dir);
         } catch (e) {
-          reason = e instanceof GitError ? `git 操作失败：${gitErrorSummary(e)}` : (e as Error).message;
+          reason = e instanceof GitError ? M().gitFailed(gitErrorSummary(e)) : (e as Error).message;
         }
         if (reason) {
           d.tickets.setCleanupBlocked(r.id, reason);

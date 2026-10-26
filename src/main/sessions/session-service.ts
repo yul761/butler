@@ -24,6 +24,7 @@ import { currentBranch } from "../tickets/git";
 import { isInside, TicketError, type TicketService } from "../tickets/ticket-service";
 import { suggestTicket, type TranscriptState, UNCLAIMED_WINDOW_MS } from "./discovery";
 import type { PtyManager } from "./pty-manager";
+import { M } from "../strings";
 
 export interface SessionServiceDeps {
   tickets: TicketsRepo;
@@ -452,7 +453,7 @@ export class SessionService {
   /** 认领：session 的目录落在 ticket 的某个仓库里，就记成那个仓库的 session。 */
   claim(sessionId: string, ticketKey: string): void {
     const ticket = this.d.tickets.get(ticketKey);
-    if (!ticket) throw new TicketError("not_found", `找不到 ticket ${ticketKey}`);
+    if (!ticket) throw new TicketError("not_found", M().ticketNotFound(ticketKey));
     const s = this.d.sessions.get(sessionId);
     const repo = s?.cwd ? this.d.ticketService.repoForCwd(ticket, s.cwd) : null;
     this.d.sessions.setTicket(sessionId, ticketKey, repo?.id ?? null);
@@ -469,14 +470,14 @@ export class SessionService {
   hide(sessionId: string): void {
     const s = this.d.sessions.head(sessionId);
     // ticket 的 session，或者 feature 总控。
-    if (!s || (!s.ticketKey && s.featureId === null)) throw new TicketError("not_found", "找不到这个 session");
-    if (this.openHeads().has(s.id)) throw new TicketError("sessions_open", "这个 session 的终端还在运行，先在终端里退出 claude 再隐藏");
+    if (!s || (!s.ticketKey && s.featureId === null)) throw new TicketError("not_found", M().sessionNotFound);
+    if (this.openHeads().has(s.id)) throw new TicketError("sessions_open", M().sessionTerminalHide);
     this.d.sessions.dismiss(s.id);
   }
 
   unhide(sessionId: string): void {
     const s = this.d.sessions.get(sessionId);
-    if (!s || (!s.ticketKey && s.featureId === null)) throw new TicketError("not_found", "找不到这个 session");
+    if (!s || (!s.ticketKey && s.featureId === null)) throw new TicketError("not_found", M().sessionNotFound);
     this.d.sessions.undismiss(s.id);
   }
 }

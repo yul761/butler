@@ -1,6 +1,7 @@
 import type { KeyState } from "../../shared/llm";
 import type { SecretsRepo } from "../db/secrets-repo";
 import { SettingError } from "../settings/settings-values";
+import { M } from "../strings";
 
 export const API_KEY_SECRET = "llm_api_key";
 
@@ -42,16 +43,16 @@ export class KeyStore {
   save(key: string): KeyState {
     const k = key.trim();
     if (!KEY_FORMAT.test(k)) {
-      throw new SettingError("API key 格式不对：8–512 个可打印的 ASCII 字符，不能有空格、换行或其他字符");
+      throw new SettingError(M().apiKeyFormatLong);
     }
     this.boxAvailable = this.d.box.available();
-    if (!this.boxAvailable) throw new SettingError("系统的加密存储不可用，Butler 不会以明文保存 key");
+    if (!this.boxAvailable) throw new SettingError(M().noEncryption);
     let cipher: Uint8Array;
     try {
       cipher = this.d.box.encrypt(k);
     } catch {
       // 不转发底层错误：有的实现会把明文带进 message。
-      throw new SettingError("系统的加密存储出错，key 没有保存");
+      throw new SettingError(M().encryptionFailed);
     }
     this.d.secrets.set(API_KEY_SECRET, cipher, this.d.now());
     this.cache = null;

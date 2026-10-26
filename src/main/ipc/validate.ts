@@ -3,6 +3,7 @@ import type {
   AddRepoInput, CreateFeatureInput, CreateTicketInput, OpenFeatureSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
+import { M } from "../strings";
 
 /**
  * 渲染进程不可信：IPC 参数在主进程里按运行时类型检查，不合规就抛错（toIpcResult 包装成 { ok: false }）。
@@ -18,17 +19,17 @@ const TERM_INPUT_LENGTH = 1000;
 
 export function apiKeyArg(v: unknown): string {
   // 报错里不带输入：它可能就是 key。
-  if (typeof v !== "string" || v.length > API_KEY_INPUT_LIMIT) throw new SettingError("API key 格式不对");
+  if (typeof v !== "string" || v.length > API_KEY_INPUT_LIMIT) throw new SettingError(M().apiKeyFormat);
   return v;
 }
 
 export function termsArg(v: unknown): SensitiveTerm[] {
-  if (!Array.isArray(v)) throw new SettingError("敏感词表格式不对");
-  if (v.length > TERMS_INPUT_LIMIT) throw new SettingError(`敏感词最多 ${TERMS_LIMIT} 个`);
+  if (!Array.isArray(v)) throw new SettingError(M().termsFormat);
+  if (v.length > TERMS_INPUT_LIMIT) throw new SettingError(M().tooManyTerms(TERMS_LIMIT));
   for (const x of v as unknown[]) {
     const o = x as { term?: unknown } | null;
-    if (!o || typeof o !== "object" || typeof o.term !== "string") throw new SettingError("敏感词表格式不对");
-    if (o.term.length > TERM_INPUT_LENGTH) throw new SettingError("敏感词太长（上限 100 字）");
+    if (!o || typeof o !== "object" || typeof o.term !== "string") throw new SettingError(M().termsFormat);
+    if (o.term.length > TERM_INPUT_LENGTH) throw new SettingError(M().termTooLongShort);
   }
   return normalizeTerms(v);
 }

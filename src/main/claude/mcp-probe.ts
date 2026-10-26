@@ -3,6 +3,7 @@ import type { McpProbe } from "../../shared/types";
 import { pathKey } from "../util/env";
 import { killTree, SETTING_SOURCES_ARGS, unsafeCmdArg } from "./headless";
 import { childLaunch, spawnClaude } from "./launch";
+import { M } from "../strings";
 
 /** 读到 init 就结束，模型还没开始回答。不落盘，权限全拒。 */
 export const PROBE_ARGS = ["-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "dontAsk", ...SETTING_SOURCES_ARGS];
@@ -94,20 +95,20 @@ export function probeMcpTools(o: { claudePath: string; cwd: string; env: Record<
       if (err) reject(err);
       else resolve(value as McpProbe);
     };
-    const timer = setTimeout(() => finish(new Error("等待 claude 启动超时，没有收到 init 消息")), o.timeoutMs ?? PROBE_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(new Error(M().probeTimeout)), o.timeoutMs ?? PROBE_TIMEOUT_MS);
     function onAbort(): void {
       // app 正在退出：直接杀，不等宽限期（由 finish 杀，只杀一次）。
-      finish(new Error("已取消"), undefined, true);
+      finish(new Error(M().cancelled), undefined, true);
     }
 
     if (o.signal?.aborted) {
-      finish(new Error("已取消"));
+      finish(new Error(M().cancelled));
       return;
     }
     // 启动方式只解析一次：检查和启动用同一个结果（P5-PF10）。只有认不出 shim、必须经过 cmd.exe 时才需要这道检查。
     const launch = childLaunch(o.claudePath, args, process.platform, { pathValue: o.env[pathKey(o.env)] });
     if (launch.viaCmd && unsafeCmdArg(args, o.claudePath, process.platform) !== null) {
-      finish(new Error("参数在 Windows 的 .cmd 下无法安全传递"));
+      finish(new Error(M().cmdUnsafeShort));
       return;
     }
     try {
@@ -131,14 +132,14 @@ export function probeMcpTools(o: { claudePath: string; cwd: string; env: Record<
           return;
         }
       }
-      if (buf.length > BUF_LIMIT) finish(new Error("claude 的输出过大且没有 init 消息"));
+      if (buf.length > BUF_LIMIT) finish(new Error(M().probeTooLarge));
     });
     child.on("error", (e) => finish(e));
     child.on("close", () => {
       // 最后一行可能没有换行符。
       const last = parseInitMessage(buf);
       if (last) finish(null, last);
-      else finish(new Error("claude 没有输出 init 消息就退出了"));
+      else finish(new Error(M().probeNoInit));
     });
     child.stdin?.on("error", () => undefined);
     child.stdin?.end("Reply with OK.", "utf8");

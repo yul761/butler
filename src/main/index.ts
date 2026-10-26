@@ -36,7 +36,7 @@ import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeaturesRepo } from "./db/features-repo";
-import { setLang } from "./i18n";
+import { onLangChange, setLang } from "./i18n";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
 import { HandoffRunner } from "./handoff/runner";
@@ -59,7 +59,7 @@ import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
 import { llmConfig, memoryOn, scheduleConfig, SettingError } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
-import { N } from "./strings";
+import { M } from "./strings";
 import { pathKey } from "./util/env";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
@@ -197,21 +197,25 @@ function createTray(): Tray {
   if (isMac) icon.setTemplateImage(true);
   const t = new Tray(icon);
   t.setToolTip("Butler");
-  t.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: "打开 Butler", click: showWindow },
-      { type: "separator" },
-      { label: "退出", click: () => app.quit() },
-    ]),
-  );
+  t.setContextMenu(trayMenu());
+  // 改语言之后菜单换成新语言（设计文档 2026-10-26）。
+  onLangChange(() => t.setContextMenu(trayMenu()));
   t.on("click", showWindow);
   return t;
+}
+
+function trayMenu(): Menu {
+  return Menu.buildFromTemplate([
+    { label: M().trayOpen, click: showWindow },
+    { type: "separator" },
+    { label: M().trayQuit, click: () => app.quit() },
+  ]);
 }
 
 function showEveningNotification(brief: Brief): void {
   if (!Notification.isSupported()) return;
   lastNotification?.close();
-  const n = new Notification({ title: N.eveningTitle, body: N.eveningBody(brief.evening.length) });
+  const n = new Notification({ title: M().eveningTitle, body: M().eveningBody(brief.evening.length) });
   n.on("click", () => {
     showWindow();
     safeSend(IPC.appNavigate, { page: "home", kind: "evening" });
@@ -230,12 +234,12 @@ async function confirmSend(outbound: string, quit: AbortSignal): Promise<boolean
   const signal = AbortSignal.any([AbortSignal.timeout(CONFIRM_TIMEOUT_MS), quit]);
   const options: MessageBoxOptions = {
     type: "question",
-    buttons: [N.confirmSend, N.confirmCancel],
+    buttons: [M().confirmSend, M().confirmCancel],
     defaultId: 1,
     cancelId: 1,
     noLink: true,
-    title: N.confirmTitle,
-    message: N.confirmMessage,
+    title: M().confirmTitle,
+    message: M().confirmMessage,
     detail: outbound,
     signal,
   };
@@ -445,7 +449,7 @@ async function bootstrap(): Promise<void> {
   // 审计的启动收尾，先于一切读写审计的代码：上次退出时没发完的请求记为 failed（请求体保留，可能已经发出），
   // 再按保留期清理一次（不删本月的记录，预算要用；之后 gateway 每次调用前也会清理）。
   try {
-    const stale = audit.failStalePending(N.auditStalePending, stalePendingCost(llmConfig(settings).prices));
+    const stale = audit.failStalePending(M().auditStalePending, stalePendingCost(llmConfig(settings).prices));
     if (stale > 0) logger(`marked ${stale} audit row(s) left pending by the previous run as failed`);
     audit.prune(auditCutoff(Date.now(), llmConfig(settings).retentionDays));
   } catch (e) {
@@ -524,7 +528,7 @@ async function bootstrap(): Promise<void> {
   const detectTrackerTools = async () => {
     await healthReady;
     const { path, pathValue } = health.claude();
-    if (!path) throw new Error("找不到 claude 命令，请先在“环境检查”里确认 claude 路径");
+    if (!path) throw new Error(M().claudeMissingCheck);
     // MCP 可以按项目配置：有 ticket 时在第一个 ticket 的目录里探测。
     const first = tickets.list().find((t) => t.repos.length > 0)?.repos[0];
     const cwd = first ? ticketService.workDir(first) : homedir();
@@ -625,7 +629,7 @@ async function bootstrap(): Promise<void> {
   const autostart = {
     get: () => autostartState({ packaged: app.isPackaged, platform: process.platform, openAtLogin: () => app.getLoginItemSettings().openAtLogin }),
     set: (on: boolean) => {
-      if (!autostart.get().supported) throw new SettingError("只有安装好的 Butler 才能设置开机自启");
+      if (!autostart.get().supported) throw new SettingError(M().autostartUnsupported);
       app.setLoginItemSettings({ openAtLogin: on });
       return autostart.get();
     },
@@ -728,7 +732,7 @@ if (process.argv.includes("--smoke")) {
     .catch((e: unknown) => {
       // 数据比程序新：给一句能看懂的话，不贴调用栈。
       const text = e instanceof NewerDatabaseError ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e);
-      dialog.showErrorBox("Butler 启动失败", text);
+      dialog.showErrorBox(M().startupFailed, text);
       app.exit(1);
     });
 }

@@ -13,6 +13,7 @@ import { runPool } from "../util/pool";
 import type { IngestInput, IngestResult } from "./ingest";
 import { buildPrompt, retryPrompt, type PromptContext } from "./prompt";
 import { emptyHandoff, HANDOFF_JSON_SCHEMA, pickStructured, REFRESH_JSON_SCHEMA, validate } from "./schema";
+import { M } from "../strings";
 
 export const HANDOFF_CONCURRENCY = 2;
 
@@ -89,7 +90,7 @@ export class HandoffRunner {
     let rateLimited = false;
     const outcomes = await runPool(keys, HANDOFF_CONCURRENCY, async (key): Promise<HandoffOutcome> => {
       // 公司额度用完或被限流：剩下的不再发起（不重试轰炸），留给早间补跑。
-      if (this.d.signal?.aborted) return failed(key, "aborted", "已取消");
+      if (this.d.signal?.aborted) return failed(key, "aborted", M().cancelled);
       if (rateLimited) return { ticketKey: key, status: "skipped", reason: "rate_limited" };
       const o = await this.once(key, () => fn(key));
       if (o.status === "skipped" && o.reason === "rate_limited") rateLimited = true;
@@ -141,7 +142,7 @@ export class HandoffRunner {
 
   private async full(key: string, trigger: "nightly" | "manual"): Promise<HandoffOutcome> {
     const t = this.d.tickets.get(key);
-    if (!t) return failed(key, "no_ticket", `找不到 ticket ${key}`);
+    if (!t) return failed(key, "no_ticket", M().ticketNotFound(key));
     const session = this.resumeTarget(key);
     // 晚间批量只为有对话记录的 ticket 生成；手动触发时没有 session 也照样跑（只能看 git、PR 和 tracker）。
     if (!session && trigger === "nightly") return { ticketKey: key, status: "skipped", reason: "no_session" };
@@ -171,7 +172,7 @@ export class HandoffRunner {
 
   private async refresh(key: string): Promise<HandoffOutcome> {
     const t = this.d.tickets.get(key);
-    if (!t) return failed(key, "no_ticket", `找不到 ticket ${key}`);
+    if (!t) return failed(key, "no_ticket", M().ticketNotFound(key));
     const ctx = this.context(t);
     const prompt = buildPrompt(this.d.settings.get("refreshPrompt"), ctx);
     const { cwd, addDirs } = this.d.dirs(t);
@@ -195,7 +196,7 @@ export class HandoffRunner {
   private async exec(key: string, args: string[], prompt: string, cwd: string, resumedId?: string): Promise<Exec> {
     await this.d.ready();
     const { path, pathValue } = this.d.claude();
-    if (!path) return { ok: false, outcome: failed(key, "claude_missing", "找不到 claude 命令") };
+    if (!path) return { ok: false, outcome: failed(key, "claude_missing", M().claudeMissing) };
     const out = await this.d.run({
       claudePath: path, args, prompt, cwd,
       env: headlessEnv(this.d.baseEnv, { pathValue, runId: this.d.newRunId() }),

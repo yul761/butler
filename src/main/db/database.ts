@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { MIGRATIONS } from "./migrations";
+import { M } from "../strings";
 
 export type Db = DatabaseSync;
 
@@ -13,7 +14,7 @@ export function openDatabase(file: string): Db {
 /** 数据库比这个版本的 Butler 新（装回了旧版本）：不能在不认识的表结构上运行。 */
 export class NewerDatabaseError extends Error {
   constructor(readonly found: number, readonly known: number) {
-    super(`这份数据是更新版本的 Butler 创建的（数据版本 ${found}，这个 Butler 只认识到 ${known}）。请安装最新版本的 Butler 再打开。`);
+    super(M().newerDatabase(found, known));
   }
 }
 

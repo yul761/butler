@@ -13,6 +13,7 @@ import type { NarrativeSource, NarrativeTicket } from "../gateway/types";
 import { addDays, daysBetween, dayStart, localDate, previousWorkingDay } from "../schedule/calendar";
 import { scheduleConfig, thresholds } from "../settings/settings-values";
 import { buildEveningBrief, buildMorningBrief, followupActive, type TicketSnapshot } from "./engine";
+import { M } from "../strings";
 
 /** PR 链接路径前面那几段：owner / group 和仓库名，它们可能出现在自由文本里，要进假名化字典。 */
 const PR_PATH_STOP = new Set(["pull", "pulls", "-", "merge_requests", "pull-requests", "pullrequest", "pullrequests"]);
@@ -193,7 +194,7 @@ export class BriefService {
 
   /** 非 followup 条目的“完成 / 推迟到明天 / 忽略”。 */
   mark(itemKey: string, mark: ItemMark): void {
-    if (itemKey.startsWith("followup:")) throw new Error(`followup 条目不能用 mark：请通过 followups 标记 (${itemKey})`);
+    if (itemKey.startsWith("followup:")) throw new Error(M().followupNoMark(itemKey));
     const now = this.d.now();
     this.d.marks.set(itemKey, mark, mark === "snoozed" ? addDays(localDate(now), 1) : null, now);
   }

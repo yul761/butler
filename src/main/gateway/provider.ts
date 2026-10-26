@@ -1,5 +1,5 @@
 import { net } from "electron";
-import { formatDuration } from "../../shared/text";
+import { M } from "../strings";
 
 /**
  * 发请求用 Electron 的 net.fetch：它走 Chromium 的网络栈，遵循系统代理设置（包括 PAC），公司网络要经代理时也能用。
@@ -96,7 +96,7 @@ async function readCapped(res: Response, limit: number): Promise<string> {
     out += decoder.decode(value, { stream: true });
     if (out.length > limit) {
       await reader.cancel().catch(() => undefined);
-      throw new ProviderError("bad_response", `响应超过 ${limit} 个字符`);
+      throw new ProviderError("bad_response", M().responseTooLong(limit));
     }
   }
   return out + decoder.decode();
@@ -119,12 +119,12 @@ function checkUrl(baseUrl: string): void {
   try {
     u = new URL(baseUrl);
   } catch {
-    throw new ProviderError("network", "base URL 无效");
+    throw new ProviderError("network", M().badBaseUrl);
   }
   const loopback = ["127.0.0.1", "[::1]", "localhost"].includes(u.hostname);
   const okScheme = u.protocol === "https:" || (u.protocol === "http:" && loopback);
   if (!okScheme || u.search || u.hash || u.username || u.password) {
-    throw new ProviderError("network", "base URL 不安全：必须是 https（本机可用 http），且不能带查询、片段或用户信息");
+    throw new ProviderError("network", M().unsafeBaseUrl);
   }
 }
 
@@ -149,8 +149,8 @@ async function attempt(req: ChatRequest, body: string, deadline: number, totalMs
     return { status: res.status, text: scrub(raw, req.apiKey) };
   } catch (e) {
     if (e instanceof ProviderError) throw e;
-    if (req.signal?.aborted) throw new ProviderError("aborted", "已取消");
-    if (timeout.aborted) throw new ProviderError("timeout", `超过 ${formatDuration(totalMs)}没有响应`);
+    if (req.signal?.aborted) throw new ProviderError("aborted", M().cancelled);
+    if (timeout.aborted) throw new ProviderError("timeout", M().noResponseAfter(M().duration(totalMs)));
     const cause = e instanceof Error ? `${e.message}${e.cause instanceof Error ? `：${e.cause.message}` : ""}` : String(e);
     throw new ProviderError("network", scrub(cause, req.apiKey));
   }
@@ -176,10 +176,10 @@ export const chatCompletion: ChatCall = async (req) => {
     try {
       v = JSON.parse(r.text);
     } catch {
-      throw new ProviderError("bad_response", "响应不是 JSON", r.status);
+      throw new ProviderError("bad_response", M().responseNotJson, r.status);
     }
     const content = contentOf(v);
-    if (content === null) throw new ProviderError("bad_response", "响应里没有 choices[0].message.content", r.status);
+    if (content === null) throw new ProviderError("bad_response", M().responseNoContent, r.status);
     const usage = (v as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }).usage;
     return { content, tokensIn: count(usage?.prompt_tokens), tokensOut: count(usage?.completion_tokens), raw: r.text, sentBody: body };
   } catch (e) {

@@ -3,6 +3,7 @@ import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promi
 import { join } from "node:path";
 import { CONTROL_ID_RE, parseControlRequest, type ControlRequest, type ControlResult } from "../../shared/control";
 import { renameWithRetry } from "../util/fs-retry";
+import { M } from "../strings";
 
 export interface ControlInboxOptions {
   requestsDir: string;
@@ -103,7 +104,7 @@ export class ControlInbox {
     let result: ControlResult;
     try {
       const req = parseControlRequest(JSON.parse(raw));
-      result = req ? await this.o.handle(req) : { v: 1, ok: false, error: "请求格式不对" };
+      result = req ? await this.o.handle(req) : { v: 1, ok: false, error: M().badRequest };
     } catch (e) {
       this.o.log?.(`control inbox: ${name} failed`, e);
       result = { v: 1, ok: false, error: e instanceof Error ? e.message : String(e) };

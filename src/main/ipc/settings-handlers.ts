@@ -1,6 +1,7 @@
 import { EDITABLE_SETTINGS, isEditableSetting, type EditableSettingKey, type EditableSettings } from "../../shared/settings";
 import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
 import { checkBranchTemplateFits, memoryOn, normalizeSetting, SettingError } from "../settings/settings-values";
+import { M } from "../strings";
 
 interface Deps {
   settings: Pick<SettingsRepo, "get" | "set" | "reset">;
@@ -21,7 +22,7 @@ export function settingsHandlers(d: Deps): {
   reset: (key: unknown) => void;
 } {
   const settingKey = (key: unknown): EditableSettingKey => {
-    if (typeof key !== "string" || !isEditableSetting(key)) throw new SettingError(`这个设置不能在这里修改：${String(key)}`);
+    if (typeof key !== "string" || !isEditableSetting(key)) throw new SettingError(M().settingNotEditable(String(key)));
     return key;
   };
   /** 把 k 改成 next 之前检查，检查通过才 write；记忆开关变了就通知。 */

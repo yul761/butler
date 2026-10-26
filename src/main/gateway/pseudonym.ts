@@ -1,5 +1,6 @@
 import { randomInt } from "node:crypto";
 import type { Rng } from "./types";
+import { M } from "../strings";
 
 /** T ticket、R 仓库、B 分支、P 人名、S 其他敏感词。 */
 export type PlaceholderKind = "T" | "R" | "B" | "P" | "S";
@@ -105,7 +106,7 @@ export class Pseudonymizer {
       const token = `[[${kind}_${id}]]`;
       if (!this.toOriginal.has(token) && !this.seen.some((t) => t.includes(token.toLowerCase()))) return token;
     }
-    throw new Error("无法生成不重复的占位符（随机数源有问题）");
+    throw new Error(M().placeholderFailed);
   }
 
   /** 这个值的占位符；不在字典里的值（比如字典之外的 ticket id）现场分配。 */

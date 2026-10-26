@@ -5,6 +5,7 @@ import vm from "node:vm";
 import { PRIVACY_LEVELS, TERM_CATEGORIES, type PrivacyLevel, type SensitiveTerm, type TermCategory } from "../../shared/llm";
 import type { EditableSettingKey } from "../../shared/settings";
 import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
+import { M } from "../strings";
 
 export class SettingError extends Error {
   readonly code = "invalid_setting";
@@ -65,7 +66,7 @@ export function parseDays(v: string, fallback: number): number {
 /** 开关类设置：只接受 0 / 1。 */
 export function normalizeFlag(value: string): string {
   const t = value.trim();
-  if (t !== "0" && t !== "1") throw new SettingError("开关只能是 0 或 1");
+  if (t !== "0" && t !== "1") throw new SettingError(M().flagValue);
   return t;
 }
 
@@ -84,12 +85,12 @@ export function normalizeBaseUrl(v: string): string {
   try {
     u = new URL(t);
   } catch {
-    throw new SettingError("base URL 格式不对，例如 https://api.deepseek.com/v1");
+    throw new SettingError(M().baseUrlFormat);
   }
-  if (u.username || u.password) throw new SettingError("base URL 里不能带用户名或密码");
-  if (u.search || u.hash) throw new SettingError("base URL 不能带 ? 或 # 部分");
+  if (u.username || u.password) throw new SettingError(M().baseUrlCredentials);
+  if (u.search || u.hash) throw new SettingError(M().baseUrlQuery);
   if (u.protocol !== "https:" && !(u.protocol === "http:" && isLoopbackHost(u.hostname))) {
-    throw new SettingError("base URL 必须是 https://（本机服务如 Ollama 可以用 http://localhost）");
+    throw new SettingError(M().baseUrlHttps);
   }
   const path = u.pathname.replace(/\/+$/, "").replace(/\/chat\/completions$/, "");
   return `${u.protocol}//${u.host}${path}`;
@@ -114,7 +115,7 @@ export function parsePriceTable(v: string): PriceRule[] {
     if (!line || line.startsWith("#")) return;
     const parts = line.split(/\s+/);
     if (parts.length !== 3 || !PRICE_MODEL.test(parts[0]) || !PRICE_NUM.test(parts[1]) || !PRICE_NUM.test(parts[2])) {
-      throw new SettingError(`价格表第 ${i + 1} 行格式不对，应为“模型 输入价 输出价”（美元 / 百万 token），例如 deepseek-chat 0.27 1.1`);
+      throw new SettingError(M().priceLine(i + 1));
     }
     rules.push({ pattern: parts[0], inputPerMTok: Number(parts[1]), outputPerMTok: Number(parts[2]) });
   });
@@ -154,24 +155,24 @@ export const TERMS_LIMIT = 500;
 
 /** 设置页提交的敏感词表：NFKC、压缩空白、去掉空项和只差大小写的重复项；太短、太长、太多或格式不对时抛 SettingError。 */
 export function normalizeTerms(input: unknown): SensitiveTerm[] {
-  if (!Array.isArray(input)) throw new SettingError("敏感词表格式不对");
+  if (!Array.isArray(input)) throw new SettingError(M().termsFormat);
   const out: SensitiveTerm[] = [];
   const seen = new Set<string>();
   for (const x of input) {
     const o = x as { term?: unknown; category?: unknown } | null;
     if (!o || typeof o.term !== "string" || !(TERM_CATEGORIES as readonly string[]).includes(String(o.category))) {
-      throw new SettingError("敏感词表格式不对");
+      throw new SettingError(M().termsFormat);
     }
     const term = o.term.normalize("NFKC").replace(/\s+/g, " ").trim();
     if (!term) continue;
-    if ([...term].length < 2) throw new SettingError(`敏感词至少两个字：${term}`);
-    if (term.length > 100) throw new SettingError(`敏感词太长（上限 100 字）：${term.slice(0, 20)}…`);
+    if ([...term].length < 2) throw new SettingError(M().termTooShort(term));
+    if (term.length > 100) throw new SettingError(M().termTooLong(term.slice(0, 20)));
     const k = term.toLowerCase();
     if (seen.has(k)) continue;
     seen.add(k);
     out.push({ term, category: o.category as TermCategory });
   }
-  if (out.length > TERMS_LIMIT) throw new SettingError(`敏感词最多 ${TERMS_LIMIT} 个`);
+  if (out.length > TERMS_LIMIT) throw new SettingError(M().tooManyTerms(TERMS_LIMIT));
   return out;
 }
 
@@ -198,9 +199,9 @@ const TITLE_SAMPLES = ["", "Add payment API"];
  */
 export function normalizeBranchTemplate(value: string): string {
   const t = value.trim();
-  if (!t.includes("{key}") && !t.includes("{key_lower}")) throw new SettingError("分支名模板必须包含 {key} 或 {key_lower}，例如 feature/{key}");
+  if (!t.includes("{key}") && !t.includes("{key_lower}")) throw new SettingError(M().branchTemplateKey);
   if (t.length > 100 || TITLE_SAMPLES.some((title) => branchNameBad(renderBranch(t, "PROJ-1", title)))) {
-    throw new SettingError("分支名模板只能用字母、数字和 . _ / -（不能以 - 或 / 开头、不能有 .. 或 //），最长 100 字，例如 feature/{key}");
+    throw new SettingError(M().branchTemplateChars);
   }
   return t;
 }
@@ -219,7 +220,7 @@ export function checkBranchTemplateFits(template: string, ticketPattern: string)
     if (!anchored.test(key)) continue;
     for (const title of TITLE_SAMPLES) {
       const branch = renderBranch(template, key, title);
-      if (branchNameBad(branch)) throw new SettingError(`分支名模板和 ticket 号正则搭配起来会得到不合法的分支名（例如 ${branch}），请调整其中之一`);
+      if (branchNameBad(branch)) throw new SettingError(M().branchTemplatePattern(branch));
     }
   }
 }
@@ -272,17 +273,17 @@ function backtracksBadly(pattern: string): boolean {
  */
 export function normalizeTicketPattern(value: string): string {
   const t = value.trim();
-  if (!t || t.length > 100) throw new SettingError("ticket 号正则不能为空，最长 100 字");
+  if (!t || t.length > 100) throw new SettingError(M().patternLength);
   let anchored: RegExp;
   try {
     anchored = new RegExp(`^(?:${t})$`);
     new RegExp(`(?<![A-Za-z0-9])(?:${t})(?![0-9])`, "i");
   } catch {
-    throw new SettingError("ticket 号正则写法不对");
+    throw new SettingError(M().patternSyntax);
   }
-  if (/\\[1-9]|\\k</.test(t)) throw new SettingError("ticket 号正则不能用反向引用");
-  if (anchored.test("")) throw new SettingError("ticket 号正则不能匹配空字符串");
-  if (backtracksBadly(t)) throw new SettingError("ticket 号正则太慢（长文本上回溯可能卡死），请简化，例如去掉连续或嵌套的 + / *");
+  if (/\\[1-9]|\\k</.test(t)) throw new SettingError(M().patternBackref);
+  if (anchored.test("")) throw new SettingError(M().patternEmpty);
+  if (backtracksBadly(t)) throw new SettingError(M().patternSlow);
   return t;
 }
 
@@ -291,18 +292,18 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
   switch (key) {
     case "nightlyTime": {
       const t = parseTime(value);
-      if (!t) throw new SettingError("时间格式应为 HH:MM，例如 16:00");
+      if (!t) throw new SettingError(M().timeFormat);
       return `${String(t.h).padStart(2, "0")}:${String(t.m).padStart(2, "0")}`;
     }
     case "workingDays": {
       const tokens = value.split(/[\s,]+/).filter(Boolean);
-      if (tokens.some((t) => !/^[0-6]$/.test(t))) throw new SettingError("工作日只能是 0–6（0 是周日）");
+      if (tokens.some((t) => !/^[0-6]$/.test(t))) throw new SettingError(M().workingDays);
       return [...new Set(tokens.map(Number))].sort((a, b) => a - b).join(",");
     }
     case "trackerTools": {
       const tools = parseToolList(value);
       const bad = tools.find((t) => !TRACKER_TOOL_RE.test(t));
-      if (bad !== undefined) throw new SettingError(`tracker 工具只能是 MCP 工具名（mcp__server__tool），不接受：${bad.slice(0, 60)}`);
+      if (bad !== undefined) throw new SettingError(M().trackerTool(bad.slice(0, 60)));
       return tools.join("\n");
     }
     case "headlessProjectMcp":
@@ -310,16 +311,16 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "blockedDays":
     case "reviewWaitDays":
     case "staleDays":
-      if (!/^\d{1,3}$/.test(value.trim())) throw new SettingError("天数必须是 0–999 的整数");
+      if (!/^\d{1,3}$/.test(value.trim())) throw new SettingError(M().days);
       return String(Number(value.trim()));
     case "handoffPrompt":
     case "refreshPrompt":
-      if (!value.trim()) throw new SettingError("prompt 模板不能为空");
-      if (value.length > 20_000) throw new SettingError("prompt 模板太长（上限 20000 字）");
+      if (!value.trim()) throw new SettingError(M().promptEmpty);
+      if (value.length > 20_000) throw new SettingError(M().promptTooLong);
       return value;
     case "llmLevel": {
       const t = value.trim();
-      if (!(PRIVACY_LEVELS as readonly string[]).includes(t)) throw new SettingError("隐私档位只能是 off、metadata、redacted、full");
+      if (!(PRIVACY_LEVELS as readonly string[]).includes(t)) throw new SettingError(M().privacyLevel);
       return t;
     }
     case "llmBaseUrl":
@@ -327,12 +328,12 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "llmModel": {
       const t = value.trim();
       // eslint-disable-next-line no-control-regex
-      if (t && !/^[^\s\u0000-\u001f\u007f]{1,200}$/.test(t)) throw new SettingError("模型名不能有空格，最长 200 字，例如 deepseek-chat");
+      if (t && !/^[^\s\u0000-\u001f\u007f]{1,200}$/.test(t)) throw new SettingError(M().modelName);
       return t;
     }
     case "llmMonthlyBudgetUsd": {
       const t = value.trim();
-      if (!/^\d{1,6}(\.\d{1,2})?$/.test(t)) throw new SettingError("预算是美元金额，例如 1 或 2.50");
+      if (!/^\d{1,6}(\.\d{1,2})?$/.test(t)) throw new SettingError(M().budget);
       return String(Number(t));
     }
     case "llmPrices":
@@ -341,7 +342,7 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       return normalizeFlag(value);
     case "auditRetentionDays": {
       const t = value.trim();
-      if (!/^\d{1,4}$/.test(t) || Number(t) < 1 || Number(t) > 3650) throw new SettingError("保留天数是 1–3650 的整数");
+      if (!/^\d{1,4}$/.test(t) || Number(t) < 1 || Number(t) > 3650) throw new SettingError(M().retention);
       return String(Number(t));
     }
     case "claudePath": {
@@ -349,7 +350,7 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!t) return "";
       // eslint-disable-next-line no-control-regex
       if (t.length > 1000 || /[\u0000-\u001f\u007f]/.test(t) || !isAbsolute(t)) {
-        throw new SettingError("claude 路径必须是绝对路径，例如 /usr/local/bin/claude；留空则自动查找");
+        throw new SettingError(M().claudePathAbsolute);
       }
       return t;
     }
@@ -362,13 +363,13 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       return normalizeFlag(value);
     case "language": {
       const t = value.trim();
-      if (!(LANG_SETTINGS as readonly string[]).includes(t)) throw new SettingError("语言只能是 auto、zh 或 en");
+      if (!(LANG_SETTINGS as readonly string[]).includes(t)) throw new SettingError(M().language);
       return t;
     }
     default: {
       // IPC 层已经用 isEditableSetting 拦过；这里再兜一次，免得以后新增的调用方绕过。
       const unknown: never = key;
-      throw new SettingError(`这个设置不能在这里修改：${String(unknown)}`);
+      throw new SettingError(M().settingNotEditable(String(unknown)));
     }
   }
 }

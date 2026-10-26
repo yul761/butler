@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { HookStatus } from "../../shared/types";
 import { renameWithRetry } from "../util/fs-retry";
+import { M } from "../strings";
 
 export const HOOK_EVENTS = ["SessionStart", "Stop", "UserPromptSubmit", "SessionEnd"] as const;
 
@@ -82,11 +83,11 @@ export function applyUninstall(settings: Json): Json {
 /** settings.hooks 或 hooks[event] 类型不对时抛 SettingsParseError，不做任何覆盖。 */
 export function applyInstall(settings: Json, command: string): Json {
   const current = settings.hooks;
-  if (current !== undefined && !isObj(current)) throw new SettingsParseError("settings.json 的 hooks 不是对象，Butler 不会修改它");
+  if (current !== undefined && !isObj(current)) throw new SettingsParseError(M().hooksNotObject);
   for (const event of HOOK_EVENTS) {
     const cur = isObj(current) ? current[event] : undefined;
     if (cur !== undefined && !Array.isArray(cur)) {
-      throw new SettingsParseError(`settings.json 的 hooks.${event} 不是数组，Butler 不会修改它`);
+      throw new SettingsParseError(M().hooksEventNotArray(event));
     }
   }
   const next = applyUninstall(settings);
@@ -122,7 +123,7 @@ export async function readSettings(file: string): Promise<Json> {
   } catch {
     // 落到下面统一报错
   }
-  throw new SettingsParseError(`${file} 不是合法的 JSON 对象，Butler 不会修改它`);
+  throw new SettingsParseError(M().notJsonObject(file));
 }
 
 async function exists(p: string): Promise<boolean> {

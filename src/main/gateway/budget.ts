@@ -1,6 +1,7 @@
 import type { AuditSource } from "../../shared/llm";
 import { priceFor, type PriceRule } from "../settings/settings-values";
 import { NARRATIVE_MAX_TOKENS } from "./narrative";
+import { M } from "../strings";
 
 /** StateCore 每次蒸馏调用的输出上限（它要求模型输出结构化 JSON）；发送前的预算检查按这个上限估算。gateway.ts 也导出它。 */
 export const STATECORE_MAX_TOKENS = 8192;
@@ -90,14 +91,14 @@ export function checkBudget(o: {
   maxOutputTokens: number;
 }): BudgetDecision {
   const price = priceFor(o.prices, o.model);
-  if (!price) return { ok: false, reason: "no_price", message: `价格表里没有模型 ${o.model} 的价格，不会调用` };
+  if (!price) return { ok: false, reason: "no_price", message: M().noPrice(o.model) };
   const estimateUsd = costUsd(price, estimateTokens(o.inputText), o.maxOutputTokens);
   // 写成 !(a <= b)：任何 NaN 都按超预算处理（失败即拒绝）。
   if (![o.spentUsd, o.budgetUsd, estimateUsd].every(Number.isFinite) || !(o.spentUsd + estimateUsd <= o.budgetUsd)) {
     return {
       ok: false,
       reason: "over_budget",
-      message: `本月已花 $${o.spentUsd.toFixed(4)}，这次预计 $${estimateUsd.toFixed(4)}，会超过预算 $${o.budgetUsd}`,
+      message: M().overBudget(o.spentUsd.toFixed(4), estimateUsd.toFixed(4), String(o.budgetUsd)),
     };
   }
   return { ok: true, price, estimateUsd };

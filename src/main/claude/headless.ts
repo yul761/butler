@@ -1,7 +1,7 @@
 import { execFile, type ChildProcess } from "node:child_process";
-import { formatDuration } from "../../shared/text";
 import { pathKey } from "../util/env";
 import { childLaunch, isCmdShim, spawnClaude } from "./launch";
+import { M } from "../strings";
 
 export const HEADLESS_TIMEOUT_MS = 5 * 60 * 1000;
 const STDOUT_LIMIT = 20 * 1024 * 1024;
@@ -181,7 +181,7 @@ export const runHeadless: HeadlessRun = (req) =>
       child?.stdout?.destroy();
       child?.stderr?.destroy();
     };
-    const timeoutOutcome = (): HeadlessOutcome => ({ ok: false, reason: "timeout", message: `超过 ${formatDuration(timeoutMs)} 没有完成`, result: null });
+    const timeoutOutcome = (): HeadlessOutcome => ({ ok: false, reason: "timeout", message: M().timedOutAfter(M().duration(timeoutMs)), result: null });
     const timer = setTimeout(() => {
       timedOut = true;
       if (child) killTree(child);
@@ -195,18 +195,18 @@ export const runHeadless: HeadlessRun = (req) =>
       // app 正在退出：直接杀，不等宽限期。
       if (child) killTree(child, true);
       release();
-      finish({ ok: false, reason: "aborted", message: "已取消", result: null });
+      finish({ ok: false, reason: "aborted", message: M().cancelled, result: null });
     }
 
     if (req.signal?.aborted) {
-      finish({ ok: false, reason: "aborted", message: "已取消", result: null });
+      finish({ ok: false, reason: "aborted", message: M().cancelled, result: null });
       return;
     }
     // 启动方式只解析一次：检查和启动用同一个结果（P5-PF10）。只有认不出 shim、必须经过 cmd.exe 时才需要这道检查。
     const launch = childLaunch(req.claudePath, req.args, process.platform, { pathValue: req.env[pathKey(req.env)] });
     const bad = launch.viaCmd ? unsafeCmdArg(req.args, req.claudePath, process.platform) : null;
     if (bad !== null) {
-      finish({ ok: false, reason: "spawn_failed", message: "参数含引号和 cmd 元字符，在 Windows 的 .cmd 下无法安全传递", result: null });
+      finish({ ok: false, reason: "spawn_failed", message: M().cmdUnsafe, result: null });
       return;
     }
 

@@ -35,6 +35,7 @@ import {
   addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, openFeatureArg,
   repoIdArg, sessionIdArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
 } from "./validate";
+import { M } from "../strings";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -88,7 +89,7 @@ export function registerIpc(d: IpcDeps): void {
   const setFollowupStatus = (id: string, status: FollowupStatus) => {
     if (!(FOLLOWUP_STATUSES as readonly string[]).includes(status)) throw new Error(`unknown followup status: ${String(status)}`);
     const f = d.followups.get(id);
-    if (!f) throw new TicketError("not_found", "找不到这条 follow-up");
+    if (!f) throw new TicketError("not_found", M().followupNotFound);
     const now = d.now();
     d.followups.setStatus(id, status, now, status === "snoozed" ? addDays(localDate(now), 1) : null);
     d.rederive(f.ticketKey);
@@ -135,7 +136,7 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.ticketsArchived, () => d.tickets.listArchived());
   handle(IPC.ticketsUnarchive, (raw: unknown) => {
     const key = ticketKeyArg(raw);
-    if (!d.tickets.get(key)) throw new TicketError("not_found", `找不到 ticket ${key}`);
+    if (!d.tickets.get(key)) throw new TicketError("not_found", M().ticketNotFound(key));
     d.tickets.unarchive(key);
     d.notify();
   });

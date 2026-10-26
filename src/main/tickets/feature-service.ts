@@ -8,6 +8,7 @@ import type { TicketsRepo } from "../db/tickets-repo";
 import { featureDirName } from "../util/ticket-file";
 import { repoRoot } from "./git";
 import { samePath, TicketError } from "./ticket-service";
+import { M } from "../strings";
 
 export interface FeatureServiceDeps {
   features: FeaturesRepo;
@@ -33,7 +34,7 @@ export class FeatureService {
 
   get(id: number): Feature {
     const f = this.d.features.get(id);
-    if (!f) throw new TicketError("not_found", "找不到这个 feature");
+    if (!f) throw new TicketError("not_found", M().featureNotFound);
     return f;
   }
 
@@ -52,19 +53,19 @@ export class FeatureService {
    */
   private workspacePath(dir: string): string {
     const expanded = dir === "~" || dir.startsWith("~/") || dir.startsWith("~\\") ? join(this.d.homeDir ?? homedir(), dir.slice(1)) : dir;
-    if (!isAbsolute(expanded)) throw new TicketError("invalid_workspace", `工作区目录要写完整路径（例如 ~/Code/shop-features/名字）：${dir}`);
+    if (!isAbsolute(expanded)) throw new TicketError("invalid_workspace", M().workspaceNotAbsolute(dir));
     const abs = resolve(expanded);
     try {
       mkdirSync(abs, { recursive: true });
       return realpathSync.native(abs);
     } catch (e) {
-      throw new TicketError("invalid_workspace", `建不了工作区目录 ${abs}：${(e as Error).message}`);
+      throw new TicketError("invalid_workspace", M().workspaceCannotCreate(abs, (e as Error).message));
     }
   }
 
   private static checkName(name: string): string {
     const n = name.trim();
-    if (!n || n.length > FEATURE_NAME_LIMIT) throw new TicketError("invalid_name", `feature 名字不能为空，最长 ${FEATURE_NAME_LIMIT} 字`);
+    if (!n || n.length > FEATURE_NAME_LIMIT) throw new TicketError("invalid_name", M().featureNameInvalid(FEATURE_NAME_LIMIT));
     return n;
   }
 
@@ -72,20 +73,20 @@ export class FeatureService {
     try {
       return await repoRoot(path);
     } catch {
-      throw new TicketError("not_git_repo", `${path} 不是 git 仓库`);
+      throw new TicketError("not_git_repo", M().notGitRepo(path));
     }
   }
 
   async create(input: CreateFeatureInput): Promise<Feature> {
     const name = FeatureService.checkName(input.name);
-    if (input.repoPaths.length === 0) throw new TicketError("not_git_repo", "至少选一个仓库");
+    if (input.repoPaths.length === 0) throw new TicketError("not_git_repo", M().pickAtLeastOneRepo);
     const roots: string[] = [];
     for (const p of input.repoPaths) {
       const root = await FeatureService.root(p);
       if (!roots.some((r) => samePath(r, root))) roots.push(root);
     }
     const workspaceDir = this.workspacePath(input.workspaceDir?.trim() || this.defaultWorkspace(roots, name));
-    if (this.d.features.byWorkspace(workspaceDir)) throw new TicketError("workspace_taken", `另一个 feature 已经在用这个工作区：${workspaceDir}`);
+    if (this.d.features.byWorkspace(workspaceDir)) throw new TicketError("workspace_taken", M().workspaceTaken(workspaceDir));
     const now = this.d.now();
     const id = this.tx(() => {
       const fid = this.d.features.insert({ name, workspaceDir, createdAt: now });
@@ -98,13 +99,13 @@ export class FeatureService {
   async addRepo(featureId: number, repoPath: string): Promise<FeatureRepo> {
     const f = this.get(featureId);
     const root = await FeatureService.root(repoPath);
-    if (f.repos.some((r) => samePath(r.repoPath, root))) throw new TicketError("repo_exists", `这个 feature 已经有仓库 ${root}`);
+    if (f.repos.some((r) => samePath(r.repoPath, root))) throw new TicketError("repo_exists", M().featureHasRepo(root));
     return this.d.features.getRepo(this.d.features.addRepo(featureId, root, this.d.now()))!;
   }
 
   /** 只影响以后建 ticket 时的选项；已有 ticket 的仓库、磁盘上的东西都不动。 */
   removeRepo(featureRepoId: number): void {
-    if (!this.d.features.getRepo(featureRepoId)) throw new TicketError("not_found", "找不到这个仓库");
+    if (!this.d.features.getRepo(featureRepoId)) throw new TicketError("not_found", M().repoNotFound);
     this.d.features.removeRepo(featureRepoId);
   }
 
@@ -119,7 +120,7 @@ export class FeatureService {
   archive(featureId: number, opts: { terminalsOpen: boolean }): void {
     const f = this.get(featureId);
     if (f.archivedAt !== null) return;
-    if (opts.terminalsOpen) throw new TicketError("sessions_open", "这个 feature 还有终端在运行，先在终端里退出 claude 再归档");
+    if (opts.terminalsOpen) throw new TicketError("sessions_open", M().featureTerminalsArchive);
     const now = this.d.now();
     const keys = this.d.tickets.listByFeature(featureId).map((t) => t.key);
     this.tx(() => {

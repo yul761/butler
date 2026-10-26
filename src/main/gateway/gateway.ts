@@ -12,8 +12,8 @@ import { chatBody, chatCompletion, chatUrl, ProviderError, scrub, type ChatCall,
 import { defaultRng, Pseudonymizer, restore } from "./pseudonym";
 import { scanOutbound } from "./scanner";
 import type { NarrativeSource, OutboundPayload, Rng, StatecoreChatModel } from "./types";
+import { M } from "../strings";
 
-const QUITTING = "app 正在退出";
 
 /** StateCore 每次蒸馏调用的输出上限（定义在 budget.ts：启动时给遗留的 pending 记录估花费也要用）。 */
 export { STATECORE_MAX_TOKENS };
@@ -167,17 +167,17 @@ export class PrivacyGateway {
     const now = this.d.now();
     this.d.audit.prune(auditCutoff(now, cfg.retentionDays));
     const refusal = statecoreRefusal(cfg);
-    if (refusal !== null) this.refuseStatecore(refusal, "StateCore 蒸馏只在完整档位、关闭发送前确认时运行");
-    if (signal?.aborted) this.refuseStatecore("quitting", QUITTING);
+    if (refusal !== null) this.refuseStatecore(refusal, M().statecoreFullOnly);
+    if (signal?.aborted) this.refuseStatecore("quitting", M().appQuitting);
     let url: URL;
     try {
       url = new URL(cfg.baseUrl);
     } catch {
-      this.refuseStatecore("bad_base_url", "base URL 无效");
+      this.refuseStatecore("bad_base_url", M().badBaseUrl);
     }
     const apiKey = this.d.keys.get();
     // 远程服务必须有 key；保存过但解不开的 key 本机服务也不发。
-    if (apiKey === null && (this.d.keys.saved() || !isLoopbackHost(url.hostname))) this.refuseStatecore("no_key", "没有可用的 API key");
+    if (apiKey === null && (this.d.keys.saved() || !isLoopbackHost(url.hostname))) this.refuseStatecore("no_key", M().noApiKey);
     this.lastStatecoreRefusal = null;
 
     // 只取 role 和 content 两个字段，其余一概不发。
@@ -200,7 +200,7 @@ export class PrivacyGateway {
     });
     if (!out.sent) throw new StatecoreCallError(out.error);
     // 花费没记上就不交出结果：下一次预算检查必须看得到这次的花费。
-    if (!out.recorded) throw new StatecoreCallError("审计记录写入失败");
+    if (!out.recorded) throw new StatecoreCallError(M().auditWriteFailed);
     return out.content;
   }
 
@@ -288,14 +288,14 @@ export class PrivacyGateway {
     if (hits.length > 0) return result("blocked", this.d.audit.insert({ ...base, status: "blocked", payloadSent: null, blockedReason: hits }));
 
     // app 正在退出：不确认、不发送，留一条 declined（没有请求体）。
-    if (signal?.aborted) return result("failed", this.d.audit.insert({ ...base, status: "declined", error: QUITTING }));
+    if (signal?.aborted) return result("failed", this.d.audit.insert({ ...base, status: "declined", error: M().appQuitting }));
 
     // 4. 写审计（原样的请求体），再按设置请用户确认。
     const auditId = this.d.audit.insert({ ...base, status: "pending", payloadSent: body });
     if (cfg.confirm) {
       const answer = await this.askConfirm(confirmText(chatUrl(cfg.baseUrl), cfg.model, messages), signal);
       if (answer === "error") {
-        this.d.audit.finish(auditId, { status: "declined", error: "发送前确认出错" });
+        this.d.audit.finish(auditId, { status: "declined", error: M().confirmFailed });
         return result("failed", auditId);
       }
       if (answer === "no") {
@@ -304,7 +304,7 @@ export class PrivacyGateway {
       }
     }
     if (signal?.aborted) {
-      this.d.audit.finish(auditId, { status: "declined", error: QUITTING });
+      this.d.audit.finish(auditId, { status: "declined", error: M().appQuitting });
       return result("failed", auditId);
     }
 
@@ -313,11 +313,11 @@ export class PrivacyGateway {
     const out = await this.send({
       what: "narrative", cfg, apiKey, messages, maxTokens: NARRATIVE_MAX_TOKENS, body, auditId, price: budget.price, signal,
       check: (content) => {
-        let error: string | null = "响应不符合格式";
+        let error: string | null = M().badResponseShape;
         try {
           const focus = parseNarrative(content);
           lines = (focus ?? []).map((f) => restore(f, pseudo.mapping).text).filter((l) => l.length > 0);
-          error = focus === null ? "响应不符合格式" : lines.length === 0 ? "响应里没有可用的句子" : null;
+          error = focus === null ? M().badResponseShape : lines.length === 0 ? M().noUsableSentence : null;
         } catch (e) {
           this.log("narrative reply could not be processed", e);
         }
