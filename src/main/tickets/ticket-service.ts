@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { AddRepoInput, CreateTicketInput, Ticket, TicketRepo, UpdateRepoInput, WorkMode } from "../../shared/types";
+import type { FeaturesRepo } from "../db/features-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { ticketFileStem } from "../util/ticket-file";
@@ -13,7 +14,7 @@ import { isValidTicketKey, renderBranch } from "./ticket-key";
 export type TicketErrorCode =
   | "invalid_key" | "exists" | "archived" | "not_git_repo" | "worktree_exists" | "dirty" | "not_found"
   | "invalid_branch" | "empty_repo" | "git_failed" | "sessions_open" | "branch_checked_out" | "busy" | "unbranched_commits"
-  | "repo_exists";
+  | "repo_exists" | "invalid_name" | "workspace_taken";
 
 export class TicketError extends Error {
   constructor(readonly code: TicketErrorCode, message: string) {
@@ -26,9 +27,14 @@ function asTicketError(e: unknown): unknown {
   return e instanceof GitError ? new TicketError("git_failed", `git 操作失败：${gitErrorSummary(e)}`) : e;
 }
 
-/** ticket 的 worktree 放在仓库旁边：<仓库>-worktrees/<ticket 号>。 */
+/** 单独 ticket 的 worktree 放在仓库旁边：<仓库>-worktrees/<ticket 号>。 */
 function worktreePathFor(root: string, key: string): string {
   return join(dirname(root), `${basename(root)}-worktrees`, key);
+}
+
+/** feature 下 ticket 的 worktree 放在工作区里：<工作区>/<仓库名>-<小写 ticket 号>（设计文档 2026-10-26）。 */
+function featureWorktreePath(workspaceDir: string, root: string, key: string): string {
+  return join(workspaceDir, `${basename(root)}-${ticketFileStem(key).toLowerCase()}`);
 }
 
 /** 后台 claude 的目录：cwd 加上 --add-dir；repoDirs 是这个 ticket 现有的全部仓库工作目录。 */
@@ -42,6 +48,8 @@ export type BranchCheck = { ok: true } | { ok: false; current: string; expected:
 
 export interface TicketServiceDeps {
   tickets: TicketsRepo;
+  /** feature（设计文档 2026-10-26）；不给就没有 feature 下的 ticket。 */
+  features?: FeaturesRepo;
   settings: SettingsRepo;
   now: () => number;
   /** 总控 session 的工作区目录放在这里面（~/.butler/workspaces）。 */
@@ -98,21 +106,35 @@ export class TicketService {
     return r;
   }
 
-  /** 新 ticket。仓库可以不填（之后再添加）；填了就和添加仓库一样建 worktree / 分支。 */
+  /**
+   * 新 ticket。仓库可以不填（之后再添加）；填了就和添加仓库一样建 worktree / 分支，可以一次填好几个。
+   * 建在 feature 下时 worktree 放进 feature 的工作区。任何一个仓库失败都不建 ticket（已经建好的 worktree 留着，下次复用）。
+   */
   async create(input: CreateTicketInput): Promise<Ticket> {
     const key = input.key.trim().toUpperCase();
     if (!isValidTicketKey(key, this.d.settings.get("ticketPattern"))) throw new TicketError("invalid_key", `ticket 号格式不对：${input.key}`);
     const existing = this.d.tickets.get(key);
     if (existing?.archivedAt != null) throw new TicketError("archived", `ticket ${key} 已经归档，可以在“已归档”里恢复`);
     if (existing) throw new TicketError("exists", `ticket ${key} 已经存在`);
+    const featureId = input.featureId ?? null;
+    if (featureId !== null) {
+      const f = this.d.features?.get(featureId);
+      if (!f) throw new TicketError("not_found", "找不到这个 feature");
+      if (f.archivedAt !== null) throw new TicketError("archived", `feature ${f.name} 已经归档，先恢复再建 ticket`);
+    }
 
     const now = this.d.now();
-    const repoPath = input.repoPath?.trim();
-    const repo = repoPath ? await this.prepareRepo(key, [], { repoPath, workMode: input.workMode ?? "worktree", branch: input.branch, title: input.title }) : undefined;
+    const paths = (input.repoPaths ?? (input.repoPath ? [input.repoPath] : [])).map((p) => p.trim()).filter(Boolean);
+    const repos: Awaited<ReturnType<TicketService["prepareRepo"]>>[] = [];
+    for (const repoPath of paths) {
+      repos.push(await this.prepareRepo(key, repos, { repoPath, workMode: input.workMode ?? "worktree", branch: input.branch, title: input.title }, featureId));
+    }
+    const [first, ...rest] = repos.map((r) => ({ ...r, ticketKey: key, createdAt: now }));
     this.d.tickets.insert(
-      { key, title: input.title?.trim() || null, status: "active", statusManual: null, createdAt: now, archivedAt: null },
-      repo && { ...repo, ticketKey: key, createdAt: now },
+      { key, title: input.title?.trim() || null, status: "active", statusManual: null, createdAt: now, archivedAt: null, featureId },
+      first,
     );
+    for (const r of rest) this.d.tickets.addRepo(r);
     return this.ticket(key);
   }
 
@@ -121,7 +143,7 @@ export class TicketService {
     const t = this.ticket(input.ticketKey);
     if (t.archivedAt !== null) throw new TicketError("archived", `ticket ${t.key} 已经归档，先恢复再添加仓库`);
     return this.exclusive(t.key, async () => {
-      const prepared = await this.prepareRepo(t.key, t.repos, { ...input, title: t.title });
+      const prepared = await this.prepareRepo(t.key, t.repos, { ...input, title: t.title }, t.featureId);
       const id = this.d.tickets.addRepo({ ...prepared, ticketKey: t.key, createdAt: this.d.now() });
       return this.repo(id);
     });
@@ -140,8 +162,9 @@ export class TicketService {
   /** 校验仓库并建好 worktree / 分支，返回要存的字段。 */
   private async prepareRepo(
     key: string,
-    existing: TicketRepo[],
+    existing: Pick<TicketRepo, "repoPath">[],
     input: { repoPath: string; workMode: WorkMode; branch?: string; title?: string | null },
+    featureId: number | null,
   ): Promise<Pick<TicketRepo, "repoPath" | "workMode" | "worktreePath" | "branch">> {
     let root: string;
     try {
@@ -158,10 +181,10 @@ export class TicketService {
     let worktreePath: string | null = null;
     try {
       const exists = await branchExists(root, branch);
-      const leftover = worktreePathFor(root, key);
+      const leftover = this.worktreePath(key, featureId, root);
       if (input.workMode === "worktree") {
         // 以前移除（或改成分支模式）时留下的 worktree：干净的就接着用。
-        worktreePath = await this.attachWorktree(root, key, branch, exists);
+        worktreePath = await this.attachWorktree(root, leftover, branch, exists);
       } else {
         // 留下的 worktree 还占着这个分支：先让它离开，主仓库之后才能检出（没有改动、没有游离提交时）。
         if (exists && existsSync(leftover) && (await isWorktreeOf(root, leftover)) && (await currentBranch(leftover)) === branch) {
@@ -223,7 +246,7 @@ export class TicketService {
       }
       // 手动删掉的 worktree 还登记着、占着分支：先清掉登记，主仓库才能检出这个分支。
       if (t.workMode === "worktree") await pruneWorktrees(root);
-      if (workMode === "worktree") return await this.attachWorktree(root, t.ticketKey, branch, exists, start);
+      if (workMode === "worktree") return await this.attachWorktree(root, this.worktreePath(t.ticketKey, this.featureOf(t.ticketKey), root), branch, exists, start);
       if (!exists) await createBranch(root, branch, start);
       return null;
     } catch (e) {
@@ -239,9 +262,26 @@ export class TicketService {
     }
   }
 
-  /** 分支模式改成 worktree（或者原来的 worktree 目录不见了）：建一个新的，或者复用这个 ticket 以前留下的。 */
-  private async attachWorktree(root: string, key: string, branch: string, exists: boolean, start?: string): Promise<string> {
-    const path = worktreePathFor(root, key);
+  /** ticket 在这个仓库里的 worktree 放在哪：feature 下的放进工作区，否则在仓库旁边。 */
+  private worktreePath(key: string, featureId: number | null, root: string): string {
+    const f = featureId === null ? null : this.d.features?.get(featureId);
+    return f ? featureWorktreePath(f.workspaceDir, root, key) : worktreePathFor(root, key);
+  }
+
+  private featureOf(key: string): number | null {
+    return this.d.tickets.get(key)?.featureId ?? null;
+  }
+
+  /** feature 总控的工作目录：feature 的工作区（不在就建）。 */
+  featureWorkspaceDir(featureId: number): string {
+    const f = this.d.features?.get(featureId);
+    if (!f) throw new TicketError("not_found", "找不到这个 feature");
+    mkdirSync(f.workspaceDir, { recursive: true });
+    return f.workspaceDir;
+  }
+
+  /** 分支模式改成 worktree（或者原来的 worktree 目录不见了）：在 path 建一个新的，或者复用这个 ticket 以前留下的。 */
+  private async attachWorktree(root: string, path: string, branch: string, exists: boolean, start?: string): Promise<string> {
     if (exists && (await currentBranch(root)) === branch) {
       throw new TicketError("branch_checked_out", `主仓库现在就在 ${branch} 上，git 不允许同一个分支同时检出两次。先把主仓库切到别的分支再改成 worktree`);
     }

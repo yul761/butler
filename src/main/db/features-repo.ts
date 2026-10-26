@@ -1,6 +1,6 @@
 import type { Feature, FeatureRepo } from "../../shared/types";
 import { samePath } from "../tickets/ticket-service";
-import { withTransaction, type Db } from "./database";
+import type { Db } from "./database";
 
 interface FeatureRow {
   id: number;
@@ -82,7 +82,7 @@ export class FeaturesRepo {
   }
 
   archive(id: number, at: number): void {
-    withTransaction(this.db, () => this.db.prepare(`UPDATE features SET archived_at = ? WHERE id = ?`).run(at, id));
+    this.db.prepare(`UPDATE features SET archived_at = ? WHERE id = ?`).run(at, id);
   }
 
   unarchive(id: number): void {

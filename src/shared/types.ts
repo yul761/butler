@@ -100,8 +100,20 @@ export interface CreateTicketInput {
   title?: string;
   /** 省略或空串：先不关联仓库。 */
   repoPath?: string;
+  /** 一次加好几个仓库（选了上一层目录、或者 feature 的几个仓库）；和 repoPath 二选一。 */
+  repoPaths?: string[];
+  /** 建在这个 feature 下：worktree 放进 feature 的工作区。 */
+  featureId?: number;
   workMode?: WorkMode;
   branch?: string;
+}
+
+export interface CreateFeatureInput {
+  name: string;
+  /** 仓库根目录（或仓库里的目录）；至少一个。 */
+  repoPaths: string[];
+  /** 省略：<仓库的上一层>-features/<名字>。 */
+  workspaceDir?: string;
 }
 
 export interface AddRepoInput {
