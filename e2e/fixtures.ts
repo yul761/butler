@@ -18,6 +18,11 @@ export interface Sandbox {
   apiRepo: string;
   /** 假 claude 的运行记录（CI 失败时上传）。 */
   fakeLog: string;
+  /**
+   * 传给 Butler 的 BUTLER_LANG（设计文档 2026-10-26）：默认 zh，测试按中文文案找界面元素，和这台机器的系统语言无关。
+   * null 表示不设，让设置（和系统语言）决定。
+   */
+  lang: "zh" | "en" | null;
 }
 
 const isWin = process.platform === "win32";
@@ -82,7 +87,7 @@ function createSandbox(): Sandbox {
   }
   const repo = makeGitRepo(join(dir, "repo"));
   const apiRepo = makeGitRepo(join(dir, "api"));
-  return { dir, butlerHome, claudeConfigDir, claudePath, repo, apiRepo, fakeLog: join(dir, "fake-claude.log") };
+  return { dir, butlerHome, claudeConfigDir, claudePath, repo, apiRepo, fakeLog: join(dir, "fake-claude.log"), lang: "zh" };
 }
 
 /**
@@ -132,6 +137,7 @@ function sandboxEnv(s: Sandbox): Record<string, string> {
   env.BUTLER_HOME = s.butlerHome;
   env.CLAUDE_CONFIG_DIR = s.claudeConfigDir;
   env.FAKE_CLAUDE_LOG = s.fakeLog;
+  if (s.lang) env.BUTLER_LANG = s.lang;
   return env;
 }
 

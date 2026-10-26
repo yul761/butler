@@ -5,9 +5,9 @@ macOS (Apple silicon) and Windows (x64). MIT licensed.
 
 **Local-first.** Butler keeps its data in local SQLite files. Data leaves your machine only through your own `claude` and, if you configure one, a personal LLM API. That API receives only what your privacy level allows, and every call it receives is logged on an audit page.
 
-> 中文简介：Butler 用一个桌面应用管理“每个 ticket 一个 Claude Code session”的工作方式：每晚自动为有进展的 ticket 生成交接（handoff），早上一打开就是简报，点一下就回到对应的 session；记忆由本地的 StateCore 管理。界面是中文的。
+> 中文简介：Butler 用一个桌面应用管理“每个 ticket 一个 Claude Code session”的工作方式：每晚自动为有进展的 ticket 生成交接（handoff），早上一打开就是简报，点一下就回到对应的 session；记忆由本地的 StateCore 管理。界面有中文和英文两种，默认跟系统语言，可以在设置里改。
 
-The UI is in Chinese. This README quotes UI labels as they appear in the app, with an English gloss, for example **设置 (Settings)**.
+The UI comes in Chinese and English. It follows your system language at first (Chinese for any Chinese locale, English otherwise); change it under **设置 → 常规 → 语言 / Language (Settings → General → Language)** or on the first-run wizard. The language also switches the default prompts Butler sends to `claude`, so handoffs, the morning brief's focus and memory notes are written in that language; prompts you edited yourself are kept. Installs upgraded from 1.2.0 or earlier stay in Chinese until you change it. This README quotes UI labels as they appear in the Chinese UI, with the English label, for example **设置 (Settings)**.
 
 ## What it does
 
