@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, nativeImage, Notification, powerMonitor, Tray, type MessageBoxOptions } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, Tray, type MessageBoxOptions } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -68,6 +68,7 @@ import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
 import { canSend } from "./safe-send";
 import { createQuitState } from "./quit-state";
+import { KeepAwake } from "./keep-awake";
 import { TRAY_ICONS } from "./tray-icons";
 import { CSP_VIOLATION_LOG_PREFIX, isCspViolationMessage } from "./csp-log";
 
@@ -81,6 +82,8 @@ const CONFIRM_TIMEOUT_MS = 5 * 60 * 1000;
 
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
+/** 防休眠开关（托盘菜单和侧边栏都能开关）；bootstrap 里建好。 */
+let keepAwake: KeepAwake | null = null;
 /** 保留最近一条通知的引用，否则它可能在用户点击前被回收。 */
 let lastNotification: Notification | null = null;
 const quitState = createQuitState(() => app.quit());
@@ -199,10 +202,13 @@ function createTray(): Tray {
   // macOS 模板图：系统按菜单栏的深浅自动着色。
   if (isMac) icon.setTemplateImage(true);
   const t = new Tray(icon);
-  t.setToolTip("Butler");
+  t.setToolTip(trayTooltip());
   t.setContextMenu(trayMenu());
   // 改语言之后菜单换成新语言（设计文档 2026-10-26）。
-  onLangChange(() => t.setContextMenu(trayMenu()));
+  onLangChange(() => {
+    t.setContextMenu(trayMenu());
+    t.setToolTip(trayTooltip());
+  });
   t.on("click", showWindow);
   return t;
 }
@@ -210,9 +216,14 @@ function createTray(): Tray {
 function trayMenu(): Menu {
   return Menu.buildFromTemplate([
     { label: M().trayOpen, click: showWindow },
+    { label: M().trayKeepAwake, type: "checkbox", checked: keepAwake?.isOn() ?? false, click: (item) => keepAwake?.set(item.checked) },
     { type: "separator" },
     { label: M().trayQuit, click: () => app.quit() },
   ]);
+}
+
+function trayTooltip(): string {
+  return keepAwake?.isOn() ? M().trayTooltipKeepAwake : "Butler";
 }
 
 function showEveningNotification(brief: Brief): void {
@@ -679,7 +690,19 @@ async function bootstrap(): Promise<void> {
   };
 
   const featureService = new FeatureService({ features, tickets, db, now: Date.now, onTicketArchived: (key) => removeTicketMcpConfigs(paths.mcp, key) });
+  // 防休眠：只在内存里，启动时是关的。状态一变，托盘菜单、提示文字和界面都跟着更新。
+  keepAwake = new KeepAwake({
+    blocker: powerSaveBlocker,
+    onChange: (on) => {
+      tray?.setContextMenu(trayMenu());
+      tray?.setToolTip(trayTooltip());
+      safeSend(IPC.appKeepAwakeChanged, on);
+    },
+    log: logger,
+  });
+  const keepAwakeSwitch = keepAwake;
   registerIpc({
+    keepAwake: keepAwakeSwitch,
     onArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
     languageChanged: applyLanguage,
     onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
@@ -734,6 +757,8 @@ async function bootstrap(): Promise<void> {
   powerMonitor.on("unlock-screen", () => void checkSchedule("unlock"));
   // macOS / Linux 关机：和 Windows 的 session-end 一样，不再拦着关窗口。
   powerMonitor.on("shutdown", () => quitState.requestQuit());
+  // 合上盖子（进入睡眠）时关掉防休眠，醒来后保持关闭，要用再手动打开。
+  powerMonitor.on("suspend", () => keepAwakeSwitch.set(false));
   const scheduleTimer = setInterval(() => void checkSchedule("tick"), TICK_MS);
 
   app.on("will-quit", () => {
@@ -744,6 +769,7 @@ async function bootstrap(): Promise<void> {
     inbox.stop();
     controlInbox.stop();
     pty.killAll();
+    keepAwakeSwitch.set(false);
     tray?.destroy();
     closing = true;
     db.close();

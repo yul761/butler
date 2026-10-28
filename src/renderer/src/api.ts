@@ -100,11 +100,14 @@ export const api = {
   autostart: () => call<AutostartState>(IPC.appAutostartGet),
   language: () => call<Lang>(IPC.appLanguage),
   setAutostart: (on: boolean) => call<AutostartState>(IPC.appAutostartSet, on),
+  keepAwake: () => call<boolean>(IPC.appKeepAwakeGet),
+  setKeepAwake: (on: boolean) => call<boolean>(IPC.appKeepAwakeSet, on),
   memoryWhy: (ticketKey: string, factId: string) => call<WhyEntry[] | null>(IPC.memoryWhy, ticketKey, factId),
   onNavigate: (cb: (route: { page: "home"; kind?: BriefKind }) => void) => window.butler.on(IPC.appNavigate, cb),
   onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),
   onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),
   onStateChanged: (cb: () => void) => window.butler.on(IPC.stateChanged, cb),
+  onKeepAwakeChanged: (cb: (on: boolean) => void) => window.butler.on(IPC.appKeepAwakeChanged, cb),
   /** 记忆写进了 StateCore（ticketKey），或记忆开关变了（null：所有 ticket）。 */
   onMemoryChanged: (cb: (ticketKey: string | null) => void) => window.butler.on(IPC.memoryChanged, cb),
 };

@@ -58,6 +58,8 @@ export interface IpcDeps {
   audit: AuditRepo;
   memory: Pick<MemoryService, "view" | "why">;
   autostart: { get(): AutostartState; set(on: boolean): AutostartState };
+  /** 防休眠开关（只在内存里，启动时是关的）。 */
+  keepAwake: { isOn(): boolean; set(on: boolean): void };
   llmStatus: () => LlmStatus;
   /** 早间刷新进行中。 */
   briefRefreshing: () => boolean;
@@ -315,4 +317,9 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.appAutostartGet, () => d.autostart.get());
   handle(IPC.appLanguage, () => currentLang());
   handle(IPC.appAutostartSet, (on: unknown) => d.autostart.set(boolArg(on)));
+  handle(IPC.appKeepAwakeGet, () => d.keepAwake.isOn());
+  handle(IPC.appKeepAwakeSet, (on: unknown) => {
+    d.keepAwake.set(boolArg(on));
+    return d.keepAwake.isOn();
+  });
 }

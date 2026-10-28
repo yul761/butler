@@ -19,6 +19,8 @@ const ZH = {
   /** 审计里上次运行退出时还没发完的请求。 */
   auditStalePending: "Butler 在发送过程中退出，无法确认是否已发出",
   trayOpen: "打开 Butler",
+  trayKeepAwake: "防止休眠",
+  trayTooltipKeepAwake: "Butler · 防休眠中",
   trayQuit: "退出",
   startupFailed: "Butler 启动失败",
   claudeMissingCheck: "找不到 claude 命令，请先在“环境检查”里确认 claude 路径",
@@ -165,6 +167,8 @@ const EN: MainStrings = {
   confirmCancel: "Don't send",
   auditStalePending: "Butler quit while sending; it can't tell whether this was sent",
   trayOpen: "Open Butler",
+  trayKeepAwake: "Keep awake",
+  trayTooltipKeepAwake: "Butler · keeping awake",
   trayQuit: "Quit",
   startupFailed: "Butler could not start",
   claudeMissingCheck: "The claude command was not found. Check the claude path under “Environment check” first",

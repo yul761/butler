@@ -36,6 +36,7 @@ export function App() {
   const [features, setFeatures] = useState<FeatureView[]>([]);
   const [showNewFeature, setShowNewFeature] = useState(false);
   const [unclaimedCount, setUnclaimedCount] = useState(0);
+  const [keepAwake, setKeepAwake] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** 从简报点“打开”时要在 ticket 页上执行的打开请求（执行一次后清空）。 */
@@ -44,6 +45,11 @@ export function App() {
   const [onboarding, dispatchOnboarding] = useReducer(onboardingReducer, null);
 
   useEffect(() => onError(setError), []);
+  // 防休眠开关：托盘菜单里改了、或者合上盖子自动关掉，主进程都会通知。
+  useEffect(() => {
+    api.keepAwake().then(setKeepAwake, reportError);
+    return api.onKeepAwakeChanged(setKeepAwake);
+  }, []);
   // 点击晚间小结的系统通知：回到简报。
   const [navNonce, setNavNonce] = useState(0);
   useEffect(
@@ -128,6 +134,7 @@ export function App() {
       <Sidebar
         tickets={tickets} features={features} unclaimedCount={unclaimedCount} route={route} onNavigate={setRoute}
         onNew={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)}
+        keepAwake={keepAwake} onKeepAwake={(on) => api.setKeepAwake(on).then(setKeepAwake, reportError)}
       />
       <main className="main">
         {error && (

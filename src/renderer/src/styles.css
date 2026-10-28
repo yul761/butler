@@ -48,6 +48,8 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .sidebar .nav, .sidebar .ticket, .sidebar .new-ticket { text-align: left; border-color: transparent; background: transparent; }
 .sidebar .active { background: var(--bg); border-color: var(--border); }
 .sidebar .ticket-groups { flex: 1; overflow-y: auto; }
+.sidebar .keep-awake { display: flex; align-items: center; gap: 6px; padding: 6px 8px; margin-top: 4px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; cursor: pointer; }
+.sidebar .keep-awake.active { color: var(--accent); background: transparent; border-color: var(--border); font-weight: 600; }
 .sidebar h3 { margin: 12px 4px 4px; font-size: 11px; font-weight: 600; color: var(--muted); }
 .sidebar .ticket { display: flex; width: 100%; gap: 6px; align-items: baseline; }
 .sidebar .ticket .title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

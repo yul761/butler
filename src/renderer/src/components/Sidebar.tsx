@@ -12,11 +12,14 @@ interface Props {
   onNavigate: (r: Route) => void;
   onNew: () => void;
   onNewFeature: () => void;
+  /** 防休眠开关（托盘菜单里也有同一个）。 */
+  keepAwake: boolean;
+  onKeepAwake: (on: boolean) => void;
 }
 
 const cls = (base: string, active: boolean) => (active ? `${base} active` : base);
 
-export function Sidebar({ tickets, features, unclaimedCount, route, onNavigate, onNew, onNewFeature }: Props) {
+export function Sidebar({ tickets, features, unclaimedCount, route, onNavigate, onNew, onNewFeature, keepAwake, onKeepAwake }: Props) {
   const ticketButton = (t: TicketView) => (
     <button
       key={t.key}
@@ -61,6 +64,10 @@ export function Sidebar({ tickets, features, unclaimedCount, route, onNavigate, 
       <button className={cls("nav", route.page === "archived")} onClick={() => onNavigate({ page: "archived" })}>{S.archived}</button>
       <button className={cls("nav", route.page === "audit")} onClick={() => onNavigate({ page: "audit" })}>{S.audit}</button>
       <button className={cls("nav", route.page === "settings")} onClick={() => onNavigate({ page: "settings" })}>{S.settings}</button>
+      <label className={cls("keep-awake", keepAwake)} title={S.keepAwakeHint}>
+        <input type="checkbox" checked={keepAwake} onChange={(e) => onKeepAwake(e.target.checked)} />
+        {keepAwake ? S.keepAwakeOn : S.keepAwake}
+      </label>
     </nav>
   );
 }

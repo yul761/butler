@@ -41,6 +41,7 @@ There are deliberate limits:
   - **⚪ 留意 (watch)**
 
   **打开 (Open)** on an item resumes the right session with a prompt already typed in.
+- **Keep awake.** When sessions should keep running while you're away with the lid open, tick **防止休眠 (Keep awake)** at the bottom of the sidebar or in the tray menu. While it's on, the computer doesn't sleep when idle and the screen stays on. It turns off when you untick it, when the computer goes to sleep (closing the lid), and when Butler quits, and Butler always starts with it off. Closing the lid still puts a Mac to sleep; on Windows that depends on your lid setting.
 - **Memory.** Progress, decisions, open follow-ups and cross-ticket learnings go into a local [StateCore](https://github.com/yul761/StateCore) store. Every session Butler starts can `recall` them. The ticket page has a **记忆 (Memory)** tab that shows each entry's history.
 - **Optional personal LLM summary.** **今日重点 (today's focus)** is a short paragraph from an OpenAI-compatible API that you pay for. It goes through a privacy gateway with:
   - a choice of privacy level, and field allow-listing for that level
