@@ -50,7 +50,7 @@ describe("packaging config (design 2.1, 12)", () => {
 
   it("uses the Butler icon (direction E1) on both platforms, not the default Electron one", () => {
     expect(cfg.mac.icon).toBe("build-resources/icon.png");
-    expect(cfg.win.icon).toBe("build-resources/icon-win.png");
+    expect(cfg.win.icon).toBe("build-resources/icon.ico");
     for (const f of [cfg.mac.icon, cfg.win.icon]) expect(existsSync(`${root}${String(f)}`), f).toBe(true);
   });
 

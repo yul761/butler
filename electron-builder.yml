@@ -52,8 +52,8 @@ mac:
 dmg:
   artifactName: "Butler-${version}-${arch}.${ext}"
 win:
-  # 铺满画布的版本；electron-builder 转成 .ico。
-  icon: build-resources/icon-win.png
+  # render-icons.mjs 生成的多尺寸 .ico：小尺寸是专门画的简化版，不让 Windows 从大图缩下来糊掉。
+  icon: build-resources/icon.ico
   target:
     - target: nsis
       arch: [x64]

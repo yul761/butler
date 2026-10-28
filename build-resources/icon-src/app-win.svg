@@ -1,12 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 102 102">
-  <!-- Butler 应用图标（方向 E1：卡片叠）。Windows 版：铺满画布（.ico、任务栏、托盘都用它），不留阴影边。 -->
-  <rect x="0" y="0" width="100" height="100" rx="22" fill="#EEF2F6"/>
-  <rect x="0.5" y="0.5" width="99" height="99" rx="21.5" fill="none" stroke="#C7D0DC" stroke-width="1"/>
-  <rect x="36" y="17" width="42" height="50" rx="6" fill="#FFFFFF" stroke="#C9D2DE"/>
-  <rect x="29" y="24" width="42" height="50" rx="6" fill="#FFFFFF" stroke="#C3CCD9"/>
-  <rect x="22" y="31" width="42" height="50" rx="6" fill="#FFFFFF" stroke="#B9C3D1"/>
-  <rect x="28" y="38" width="17" height="7" rx="3.5" fill="#2F6FEB"/>
-  <rect x="28" y="51" width="28" height="3.5" rx="1.75" fill="#C5CCD6"/>
-  <rect x="28" y="58" width="20" height="3.5" rx="1.75" fill="#C5CCD6"/>
-  <circle cx="56" cy="73" r="3.5" fill="#2E9E6B"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Butler 应用图标（方向 E1：卡片叠）。Windows 版：铺满画布，不留阴影边；.ico 里 48 px 及以上用它，更小的用 tray-win.svg。
+       蓝底白卡片：任务栏上只有 24–32 px，浅底细描边会糊成一个白块，这里只用大色块。 -->
+  <rect x="2" y="2" width="96" height="96" rx="22" fill="#2F6FEB"/>
+  <rect x="42" y="14" width="42" height="50" rx="7" fill="#FFFFFF" fill-opacity="0.45"/>
+  <rect x="31" y="25" width="42" height="50" rx="7" fill="#FFFFFF" fill-opacity="0.7"/>
+  <rect x="20" y="36" width="42" height="50" rx="7" fill="#FFFFFF"/>
+  <rect x="27" y="44" width="17" height="7" rx="3.5" fill="#2F6FEB"/>
+  <rect x="27" y="57" width="27" height="4" rx="2" fill="#B9C6DA"/>
+  <rect x="27" y="65" width="19" height="4" rx="2" fill="#B9C6DA"/>
+  <circle cx="53" cy="77" r="4" fill="#2E9E6B"/>
 </svg>

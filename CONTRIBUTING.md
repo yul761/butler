@@ -51,7 +51,7 @@ The E2E tests are sandboxed. Each test gets its own temporary `BUTLER_HOME`, `CL
 ### Notes for maintainers
 
 - **Do not change `APP_ID` (`io.statecore.butler`) after the first release.** It lives in `src/main/app-id.ts` and must equal `appId` in `electron-builder.yml`, which a test enforces. Windows uses it as the AppUserModelID for notifications, Start-menu shortcuts and start-at-login.
-- **The app has no icon of its own yet.** `electron-builder.yml` points `buildResources` at `build-resources/`, which does not exist, so packages use the default Electron icon. To add one, create `build-resources/` with `icon.icns` and `icon.ico`. Don't use `build/`: that holds the hook and memory MCP build output.
+- **Icons are generated.** The SVG sources are in `build-resources/icon-src/`; `pnpm icons` renders `build-resources/icon.png` (macOS), the multi-size `build-resources/icon.ico` (Windows; 32 px and below use the simplified tray artwork) and `src/main/tray-icons.ts`. Commit the generated files. A test checks that every icon's background contrasts with both dark and light taskbars. Don't put packaging resources in `build/`: that holds the hook and memory MCP build output.
 - Builds are unsigned. macOS packages get an ad-hoc signature in `scripts/after-pack.cjs` (a fully unsigned arm64 app won't launch). The README explains how users get past Gatekeeper and SmartScreen.
 
 ## Architecture in brief
