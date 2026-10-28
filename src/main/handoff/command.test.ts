@@ -1,9 +1,10 @@
 import { chmodSync, existsSync, lstatSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
 import { handoffCommandPath, handoffCommandStatus, installHandoffCommand, uninstallHandoffCommand } from "./command";
-import { HANDOFF_COMMAND_MARKER, HANDOFF_COMMAND_MD, renderHandoffCommand } from "./templates";
+import { setLang } from "../i18n";
+import { commandBodyHash, featureCoordinatorSection, HANDOFF_COMMAND_MARKER, HANDOFF_COMMAND_MD, handoffCommandBody, renderHandoffCommand } from "./templates";
 
 const OLD = renderHandoffCommand("---\ndescription: old\n---\n旧版正文\n");
 
@@ -98,4 +99,39 @@ describe("/handoff command file", () => {
     expect(await installHandoffCommand(file)).toBe("conflict");
     await expect(uninstallHandoffCommand(file)).resolves.toBeUndefined();
   });
+});
+
+describe("/handoff command for feature coordinators", () => {
+  afterEach(() => setLang("zh"));
+
+  /** 加 feature 总控那一段之前的正文（计划 8 之前）：去掉那一段、换回原来的 description，hash 必须和当时的一致。 */
+  const PREVIOUS = {
+    zh: {
+      hash: "e1b25b8d150d6a4496b2c2361e31cbe2b17d7c233d7430e8d724b1346aa4e8e8",
+      description: ["生成 Butler handoff（当前 ticket 的进度摘要；在 feature 总控里是 feature 汇总）", "生成 Butler handoff（当前 ticket 的进度摘要）"],
+    },
+    en: {
+      hash: "d942faeb2ca90337a20ae215bef582b6206c62eb252be0c4ad8d06eb4b6c46f8",
+      description: [
+        "Write a Butler handoff (a progress summary of the current ticket; in a feature coordinator, of the feature)",
+        "Write a Butler handoff (a progress summary of the current ticket)",
+      ],
+    },
+  } as const;
+
+  for (const l of ["zh", "en"] as const) {
+    it(`reports the previous ${l} body as stale and replaces it`, async () => {
+      setLang(l);
+      const [now, before] = PREVIOUS[l].description;
+      const current = handoffCommandBody(l);
+      expect(current).toContain(featureCoordinatorSection(l));
+      const previous = current.replace(featureCoordinatorSection(l), "").replace(now, before);
+      expect(commandBodyHash(previous)).toBe(PREVIOUS[l].hash);
+      const file = handoffCommandPath(tempDir());
+      writeFileSync(file, renderHandoffCommand(previous));
+      expect(await handoffCommandStatus(file)).toBe("stale");
+      expect(await installHandoffCommand(file)).toBe("installed");
+      expect(readFileSync(file, "utf8")).toContain("butler-feature-handoff");
+    });
+  }
 });

@@ -1,5 +1,5 @@
 import { open } from "node:fs/promises";
-import { extractHandoffBlock, extractJsonHandoffBlock } from "./schema";
+import { extractFeatureHandoffBlock, extractHandoffBlock, extractJsonHandoffBlock } from "./schema";
 
 export interface AssistantText {
   uuid: string | null;
@@ -124,6 +124,15 @@ export function findHandoffBlock(turn: AssistantText[]): FoundHandoff | null {
       const block = extract(turn[i].text);
       if (block !== null) return { uuid: turn[i].uuid, block };
     }
+  }
+  return null;
+}
+
+/** 这一轮里最后一个 butler-feature-handoff 代码块（feature 总控的 /handoff）；不认 ```json 之类的代码块。 */
+export function findFeatureHandoffBlock(turn: AssistantText[]): FoundHandoff | null {
+  for (let i = turn.length - 1; i >= 0; i--) {
+    const block = extractFeatureHandoffBlock(turn[i].text);
+    if (block !== null) return { uuid: turn[i].uuid, block };
   }
   return null;
 }

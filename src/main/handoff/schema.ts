@@ -59,6 +59,15 @@ export function extractHandoffBlock(text: string): string | null {
   return blocks.length ? blocks[blocks.length - 1] : null;
 }
 
+/** feature 总控的 /handoff 输出（设计文档 2026-10-28）：信息串必须正好是 butler-feature-handoff，规则同上；两种代码块互不匹配。 */
+const FEATURE_HANDOFF_BLOCK_RE = /```butler-feature-handoff(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
+
+/** 最后一个非空的 ```butler-feature-handoff 代码块的内容；没有就是 null。 */
+export function extractFeatureHandoffBlock(text: string): string | null {
+  const blocks = [...text.matchAll(FEATURE_HANDOFF_BLOCK_RE)].map((m) => m[1].trim()).filter(Boolean);
+  return blocks.length ? blocks[blocks.length - 1] : null;
+}
+
 const JSON_BLOCK_RE = /```json(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
 
 /**

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { HandoffSchema, RefreshSchema } from "../../shared/handoff";
 import {
-  emptyHandoff, extractHandoffBlock, HANDOFF_JSON_SCHEMA, parseJsonLoose, pickStructured, REFRESH_JSON_SCHEMA, validate,
+  emptyHandoff, extractFeatureHandoffBlock, extractHandoffBlock, HANDOFF_JSON_SCHEMA, parseJsonLoose, pickStructured, REFRESH_JSON_SCHEMA, validate,
 } from "./schema";
+import { featureHandoffExample, featureHandoffSchemaDoc } from "./feature-templates";
 import {
-  DEFAULT_HANDOFF_PROMPT, DEFAULT_REFRESH_PROMPT, HANDOFF_COMMAND_MARKER, HANDOFF_COMMAND_MD, HANDOFF_EXAMPLE, HANDOFF_EXAMPLE_VALUE,
+  DEFAULT_HANDOFF_PROMPT, DEFAULT_REFRESH_PROMPT, HANDOFF_COMMAND_MARKER, HANDOFF_COMMAND_MD, HANDOFF_EXAMPLE, HANDOFF_EXAMPLE_VALUE, handoffCommandBody,
 } from "./templates";
 
 describe("handoff schema", () => {
@@ -76,6 +77,21 @@ describe("loose parsing", () => {
     expect(extractHandoffBlock('```butler-handoff\n{"n":1}\n```\n```butler-handoff\n\n```')).toBe('{"n":1}');
   });
 
+  it("keeps the ticket and the feature fences apart", () => {
+    expect(extractHandoffBlock('```butler-feature-handoff\n{"n":1}\n```')).toBeNull();
+    expect(extractFeatureHandoffBlock('```butler-handoff\n{"n":1}\n```')).toBeNull();
+    const both = '```butler-handoff\n{"t":1}\n```\n```butler-feature-handoff\n{"f":1}\n```';
+    expect(extractHandoffBlock(both)).toBe('{"t":1}');
+    expect(extractFeatureHandoffBlock(both)).toBe('{"f":1}');
+  });
+
+  it("finds the last non-empty feature block, with CRLF and an info suffix, but not a look-alike", () => {
+    expect(extractFeatureHandoffBlock('```butler-feature-handoff\n{"n":1}\n```\n```butler-feature-handoff json\r\n{"n":2}\r\n```')).toBe('{"n":2}');
+    expect(extractFeatureHandoffBlock('```butler-feature-handoff\n{"n":1}\n```\n```butler-feature-handoff\n\n```')).toBe('{"n":1}');
+    expect(extractFeatureHandoffBlock('```butler-feature-handoffX\n{"n":1}\n```')).toBeNull();
+    expect(extractFeatureHandoffBlock("没有代码块")).toBeNull();
+  });
+
   it("prefers structured_output and falls back to the result text", () => {
     expect(pickStructured({ structured: { a: 1 }, resultText: "x" })).toEqual({ a: 1 });
     expect(pickStructured({ structured: null, resultText: '{"b":2}' })).toEqual({ b: 2 });
@@ -95,5 +111,17 @@ describe("templates", () => {
     expect(HANDOFF_COMMAND_MD).toContain(HANDOFF_COMMAND_MARKER);
     expect(HANDOFF_COMMAND_MD).toContain("```butler-handoff");
     expect(HANDOFF_COMMAND_MD).toContain("$ARGUMENTS");
+  });
+
+  it("the /handoff command tells a feature coordinator to check list_tickets and write a butler-feature-handoff block", () => {
+    for (const l of ["zh", "en"] as const) {
+      const body = handoffCommandBody(l);
+      expect(body).toContain("list_tickets");
+      expect(body).toContain("butler-sessions");
+      expect(body).toContain("```butler-feature-handoff");
+      expect(body).toContain(featureHandoffSchemaDoc(l));
+      expect(body).toContain(`\`\`\`butler-feature-handoff\n${featureHandoffExample(l)}\n\`\`\``);
+      expect(extractFeatureHandoffBlock(`\`\`\`butler-feature-handoff\n${featureHandoffExample(l)}\n\`\`\``)).toBe(featureHandoffExample(l));
+    }
   });
 });

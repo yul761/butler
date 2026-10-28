@@ -33,6 +33,7 @@ import { autostartState } from "./autostart";
 import { electronSecretBox } from "./gateway/safe-storage";
 import { llmStatus } from "./gateway/status";
 import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
+import type { FeatureIngestResult } from "./handoff/feature-ingest";
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeaturesRepo } from "./db/features-repo";
@@ -599,7 +600,9 @@ async function bootstrap(): Promise<void> {
       // Stop 之后看这一轮有没有 /handoff 的输出（异步；失败只记日志，不影响 hook 处理）。
       const stop = stopFromEnvelope(env);
       if (stop) {
-        void captureCommandHandoff({ sessions, tickets, ingest }, stop).then(
+        // 临时占位：feature 汇总的入库和子 ticket handoff 还没接上（计划 8 Task 4），在那之前总控里的 /handoff 不入库。
+        const ingestFeature = (): FeatureIngestResult => ({ stored: false, reason: "no_feature" });
+        void captureCommandHandoff({ sessions, tickets, ingest, ingestFeature, afterFeatureCommand: () => undefined }, stop).then(
           (r) => {
             if (r?.stored) notify();
             // session 没有归属 ticket、输出里的 ticket 号也不存在，或者等了几次都没读到结果：记一笔，免得用户以为采集坏了。

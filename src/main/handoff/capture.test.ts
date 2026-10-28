@@ -2,12 +2,15 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { HookEnvelope } from "../../shared/hook-envelope";
+import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
+import { FeaturesRepo } from "../db/features-repo";
 import { FollowupsRepo } from "../db/followups-repo";
 import { HandoffsRepo } from "../db/handoffs-repo";
 import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { insertTicket, memDb, tempDir } from "../test-utils";
 import { captureCommandHandoff, stopFromEnvelope } from "./capture";
+import { ingestFeatureHandoff, type FeatureIngestInput } from "./feature-ingest";
 import { ingestHandoff, type IngestInput } from "./ingest";
 import { emptyHandoff } from "./schema";
 
@@ -24,7 +27,18 @@ function setup() {
   const followups = new FollowupsRepo(db);
   let n = 0;
   const ingest = (input: IngestInput) => ingestHandoff({ db, tickets, handoffs, followups, now: () => 100, newFollowupId: () => `f${++n}` }, input);
-  return { deps: { sessions, tickets, ingest }, sessions, handoffs };
+  // feature 1..3；总控测试用 3（id 不是 1，免得和别的计数巧合对上）。
+  const features = new FeaturesRepo(db);
+  for (const name of ["a", "b", "c"]) features.insert({ name, workspaceDir: `/w/${name}`, createdAt: 1 });
+  const featureHandoffs = new FeatureHandoffsRepo(db);
+  const featureInputs: FeatureIngestInput[] = [];
+  const ingestFeature = (input: FeatureIngestInput) => {
+    featureInputs.push(input);
+    return ingestFeatureHandoff({ features, tickets, featureHandoffs, now: () => 100 }, input);
+  };
+  const afterCalls: [number, number | null][] = [];
+  const afterFeatureCommand = (featureId: number, handoffId: number | null) => void afterCalls.push([featureId, handoffId]);
+  return { deps: { sessions, tickets, ingest, ingestFeature, afterFeatureCommand }, sessions, handoffs, featureHandoffs, featureInputs, afterCalls };
 }
 
 /** 一个只有“/handoff + 回答”的 transcript；payload 是字符串时原样放进代码块。 */
@@ -176,5 +190,125 @@ describe("captureCommandHandoff when the transcript lags behind the Stop hook", 
     }]);
     expect(await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "s1", transcriptPath: file })).toMatchObject({ stored: true, degraded: false });
     expect(handoffs.latest("PROJ-1")?.payload?.next_steps).toEqual(["合并 PR"]);
+  });
+});
+
+describe("captureCommandHandoff in a feature coordinator", () => {
+  const userHandoff = { type: "user", message: { role: "user", content: "/handoff" } };
+  const write = (entries: object[]) => {
+    const file = join(tempDir(), "c.jsonl");
+    writeFileSync(file, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    return file;
+  };
+  const answer = (uuid: string, text: string) => ({ type: "assistant", uuid, message: { role: "assistant", content: [{ type: "text", text }] } });
+  const summary = { summary: "前端等 review，后端还差错误码。", blockers: [], next_steps: [{ ticket: "proj-1", text: "补错误码" }], decisions: [], open_questions: [] };
+  const featureBlock = (v: unknown) => `${FENCE}butler-feature-handoff\n${typeof v === "string" ? v : JSON.stringify(v)}\n${FENCE}`;
+  const coordinator = (sessions: SessionsRepo, id = "c1") =>
+    sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/w/c", origin: "butler", createdAt: 1, coordinator: true, featureId: 3 });
+
+  it("stores the feature block as a command summary and starts the child handoffs once", async () => {
+    const { deps, sessions, handoffs, featureHandoffs, featureInputs, afterCalls } = setup();
+    coordinator(sessions);
+    const file = write([userHandoff, answer("f1", `好的。\n${featureBlock(summary)}`)]);
+    const r = await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "c1", transcriptPath: file });
+    expect(r).toMatchObject({ featureId: 3, stored: true, degraded: false });
+    expect(featureInputs).toHaveLength(1);
+    expect(featureInputs[0]).toMatchObject({ featureId: 3, trigger: "command", sessionId: "c1", sourceRef: "f1", rawText: JSON.stringify(summary) });
+    const stored = featureHandoffs.latest(3);
+    expect(stored).toMatchObject({ trigger: "command", sessionId: "c1", payload: { summary: summary.summary } });
+    expect(afterCalls).toEqual([[3, stored?.id]]);
+    expect(handoffs.listByTicket("PROJ-1")).toHaveLength(0);
+  });
+
+  it("does not start the children again when the same Stop is handled twice", async () => {
+    const { deps, sessions, featureHandoffs, afterCalls } = setup();
+    coordinator(sessions);
+    const file = write([userHandoff, answer("f1", featureBlock(summary))]);
+    await captureCommandHandoff(deps, { sessionId: "c1", transcriptPath: file });
+    expect(await captureCommandHandoff(deps, { sessionId: "c1", transcriptPath: file })).toEqual({ featureId: 3, stored: false, reason: "duplicate" });
+    expect(featureHandoffs.listByFeature(3)).toHaveLength(1);
+    expect(afterCalls).toHaveLength(1);
+  });
+
+  it("keeps an invalid feature block as a degraded summary", async () => {
+    const { deps, sessions, featureHandoffs, afterCalls } = setup();
+    coordinator(sessions);
+    const raw = '{"summary":""}';
+    const file = write([userHandoff, answer("f2", featureBlock(raw))]);
+    expect(await captureCommandHandoff(deps, { sessionId: "c1", transcriptPath: file })).toMatchObject({ featureId: 3, stored: true, degraded: true });
+    expect(featureHandoffs.latest(3)).toMatchObject({ degraded: true, rawText: raw, payload: null });
+    expect(afterCalls).toEqual([[3, featureHandoffs.latest(3)?.id]]);
+  });
+
+  it("stores nothing for a ticket block naming an existing ticket, but still starts the children", async () => {
+    const { deps, sessions, handoffs, featureHandoffs, featureInputs, afterCalls } = setup();
+    coordinator(sessions);
+    const ingested: IngestInput[] = [];
+    const ingest = (i: IngestInput) => {
+      ingested.push(i);
+      return deps.ingest(i);
+    };
+    const file = write([userHandoff, answer("t1", `${FENCE}butler-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}`)]);
+    const r = await captureCommandHandoff({ ...deps, ingest, sleep: async () => undefined }, { sessionId: "c1", transcriptPath: file });
+    expect(r).toEqual({ featureId: 3, stored: false, reason: "wrong_block" });
+    expect(ingested).toHaveLength(0);
+    expect(featureInputs).toHaveLength(0);
+    expect(handoffs.listByTicket("PROJ-1")).toHaveLength(0);
+    expect(featureHandoffs.listByFeature(3)).toHaveLength(0);
+    expect(afterCalls).toEqual([[3, null]]);
+  });
+
+  it("gives up after the retries with no_block and still starts the children", async () => {
+    const { deps, sessions, featureInputs, afterCalls } = setup();
+    coordinator(sessions);
+    const file = write([userHandoff, answer("n1", "我先看一下各 ticket。")]);
+    const waits: number[] = [];
+    const r = await captureCommandHandoff({ ...deps, sleep: async (ms) => void waits.push(ms) }, { sessionId: "c1", transcriptPath: file });
+    expect(r).toEqual({ featureId: 3, stored: false, reason: "no_block" });
+    expect(waits).toEqual([500, 1500, 5000]);
+    expect(featureInputs).toHaveLength(0);
+    expect(afterCalls).toEqual([[3, null]]);
+  });
+
+  it("waits for a late feature block like the ticket path does", async () => {
+    const { deps, sessions, featureHandoffs } = setup();
+    coordinator(sessions);
+    const file = write([userHandoff, answer("n1", "我先看一下各 ticket。")]);
+    const sleep = async () => {
+      writeFileSync(file, [userHandoff, answer("n1", "我先看一下各 ticket。"), answer("f9", featureBlock(summary))].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    };
+    expect(await captureCommandHandoff({ ...deps, sleep }, { sessionId: "c1", transcriptPath: file })).toMatchObject({ featureId: 3, stored: true });
+    expect(featureHandoffs.latest(3)?.sourceRef).toBe("f9");
+  });
+
+  it("treats the new head after /clear as the same coordinator", async () => {
+    const { deps, sessions, featureHandoffs, featureInputs, afterCalls } = setup();
+    coordinator(sessions, "c0");
+    sessions.insertIfAbsent({ id: "c1", ticketKey: null, cwd: "/w/c", origin: "butler", createdAt: 2 });
+    sessions.setReplacedBy("c0", "c1");
+    expect(sessions.get("c1")?.featureId).toBe(3);
+    const file = write([userHandoff, answer("f1", featureBlock(summary))]);
+    expect(await captureCommandHandoff(deps, { sessionId: "c1", transcriptPath: file })).toMatchObject({ featureId: 3, stored: true });
+    expect(featureInputs[0]).toMatchObject({ featureId: 3, trigger: "command", sessionId: "c1" });
+    expect(featureHandoffs.latest(3)?.sessionId).toBe("c1");
+    expect(afterCalls).toEqual([[3, featureHandoffs.latest(3)?.id]]);
+  });
+
+  it("falls back to a hash of the block as sourceRef when the entry has no uuid", async () => {
+    const { deps, sessions, featureHandoffs } = setup();
+    coordinator(sessions);
+    const entry = { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: featureBlock(summary) }] } };
+    const file = write([userHandoff, entry]);
+    await captureCommandHandoff(deps, { sessionId: "c1", transcriptPath: file });
+    expect(featureHandoffs.latest(3)?.sourceRef).toMatch(/^c1:[0-9a-f]{40}$/);
+  });
+
+  it("leaves a ticket session alone even if it outputs a feature block", async () => {
+    const { deps, sessions, featureInputs, afterCalls } = setup();
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    const file = write([userHandoff, answer("f1", featureBlock(summary))]);
+    expect(await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "s1", transcriptPath: file })).toEqual({ stored: false, reason: "no_block" });
+    expect(featureInputs).toHaveLength(0);
+    expect(afterCalls).toHaveLength(0);
   });
 });
