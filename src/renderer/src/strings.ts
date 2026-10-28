@@ -49,7 +49,6 @@ const ZH = {
   featureSummarySkipped: {
     nothing_to_summarize: "还没有可以总结的内容：先开一个总控 session 或让 ticket 生成 handoff。",
     rate_limited: "公司 Claude 额度用完或被限流，稍后再试。",
-    no_activity: "上次汇总之后没有新的活动。",
   } as Record<string, string>,
   featureSummaryFailed: (m: string) => `汇总失败：${m}`,
   noPr: "还没有 PR",

@@ -47,7 +47,6 @@ export const EN: UiStrings = {
   featureSummarySkipped: {
     nothing_to_summarize: "Nothing to summarize yet: open a coordinator session first, or let a ticket produce a handoff.",
     rate_limited: "Your company's Claude quota is used up or rate limited. Try again later.",
-    no_activity: "Nothing new since the last summary.",
   } as Record<string, string>,
   featureSummaryFailed: (m: string) => `Summary failed: ${m}`,
   noPr: "No PR yet",

@@ -30,9 +30,10 @@ export interface CaptureDeps {
   ingestFeature: (input: FeatureIngestInput) => FeatureIngestResult;
   /**
    * feature 总控的 /handoff 之后，给这个 feature 下有活动的 ticket 各跑一次 handoff（后台，capture 不等它）。
-   * handoffId 是这次存下的汇总；没存下（代码块类型不对、没有代码块）时为 null。
+   * handoffId 是这次存下的汇总；没存下（代码块类型不对、没有代码块）时为 null，这时 Butler 从 sessionId
+   * 这个 session fork 出来自己生成汇总（见 FeatureSummaryRunner.runFromCommand、featureCommandFollowup）。
    */
-  afterFeatureCommand: (featureId: number, handoffId: number | null) => void;
+  afterFeatureCommand: (featureId: number, handoffId: number | null, sessionId: string) => void;
   /** 测试注入；默认真的等待。 */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -95,9 +96,11 @@ export async function captureCommandHandoff(d: CaptureDeps, stop: StopEvent): Pr
 }
 
 /**
- * feature 总控里的 /handoff：只收 butler-feature-handoff 代码块，存成这个 feature 的汇总（校验失败存成 degraded）。
+ * feature 总控里的 /handoff：只收 butler-feature-handoff 代码块（没有时退回看起来是 feature 汇总的 ```json 代码块），
+ * 存成这个 feature 的汇总（校验失败存成 degraded）。
  * 总控按旧习惯输出了 ticket 的 butler-handoff 代码块时，当作没有输出（wrong_block）：总控不属于任何 ticket，代码块里的 ticket 号也不能认领它。
- * 存下新汇总、wrong_block、no_block 都触发子 ticket 的 handoff；duplicate 不触发（第一次采集已经触发过）。
+ * 存下新汇总、wrong_block、no_block 都调用 afterFeatureCommand（后两种 handoffId 为 null：用户自己开的总控没有 Butler 的
+ * MCP，常常写不出 feature 代码块，由调用方退回 Butler 自己生成）；duplicate 不调用（第一次采集已经调用过）。
  */
 async function captureFeatureHandoff(d: CaptureDeps, stop: StopEvent, featureId: number): Promise<FeatureCaptureResult | null> {
   const r = await awaitCommandOutput(d, stop, (turn) => {
@@ -108,7 +111,7 @@ async function captureFeatureHandoff(d: CaptureDeps, stop: StopEvent, featureId:
   if (!r) return null;
   const found = r.found?.feature;
   if (!found) {
-    d.afterFeatureCommand(featureId, null);
+    d.afterFeatureCommand(featureId, null, stop.sessionId);
     return { featureId, stored: false, reason: r.found ? "wrong_block" : "no_block" };
   }
   const checked = validate(FeatureHandoffSchema, parseJsonLoose(found.block));
@@ -116,6 +119,6 @@ async function captureFeatureHandoff(d: CaptureDeps, stop: StopEvent, featureId:
     featureId, sessionId: stop.sessionId, trigger: "command",
     payload: checked.ok ? checked.value : null, rawText: found.block, sourceRef: sourceRefOf(stop, found),
   });
-  if (res.stored) d.afterFeatureCommand(featureId, res.handoffId);
+  if (res.stored) d.afterFeatureCommand(featureId, res.handoffId, stop.sessionId);
   return { featureId, ...res };
 }

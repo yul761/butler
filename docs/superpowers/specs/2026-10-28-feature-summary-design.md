@@ -85,7 +85,7 @@ FeatureHandoffSchema = z.object({
 ### 总控里的 `/handoff`
 
 - `/handoff` 命令要让总控知道自己是 feature 总控，并输出 feature 汇总的代码块（和 ticket 的 `butler-handoff` 区分开，例如用 ` ```butler-feature-handoff `）。怎么判断留给实现者（见下文）。
-- **以 Butler 的记录为准**：Stop 事件的 session 在库里是某个 feature 的总控（`sessions.feature_id` 不为空）时，按 feature 汇总处理；代码块的类型对不上时，当作没有输出（记日志），但下面"给子 ticket 跑 handoff"照样触发。
+- **以 Butler 的记录为准**：Stop 事件的 session 在库里是某个 feature 的总控（`sessions.feature_id` 不为空）时，按 feature 汇总处理；代码块的类型对不上时，当作没有输出（记日志），但下面"给子 ticket 跑 handoff"照样触发。用户自己在工作区里开的 `claude` 也算总控，但没有 Butler 的 MCP，常常写不出 feature 代码块：这一轮没存下汇总（代码块类型不对或没有代码块）时，Butler 退回自己生成——headless `--resume <跑 /handoff 的那个 session> --fork-session`，和晚间、手动同样的 prompt 和校验，存成来源"总控 /handoff"，之后照样给子 ticket 跑 handoff。
 - 存进 `feature_handoffs`，trigger 记为 `command`，同一个代码块不重复入库（`source_ref`，同 ticket）。
 - 然后在后台给这个 feature 下有活动的 ticket 各跑一次 handoff（规则同上）。这些 handoff 的 trigger 照 ticket 现有的手动触发记。
 - 普通 ticket session 里的 `/handoff` 行为不变。

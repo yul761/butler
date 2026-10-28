@@ -34,7 +34,7 @@ import { electronSecretBox } from "./gateway/safe-storage";
 import { llmStatus } from "./gateway/status";
 import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
 import { ingestFeatureHandoff, type FeatureIngestInput } from "./handoff/feature-ingest";
-import { FeatureSummaryRunner } from "./handoff/feature-runner";
+import { featureCommandFollowup, FeatureSummaryRunner } from "./handoff/feature-runner";
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
@@ -469,16 +469,10 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   /**
-   * 总控里的 /handoff 之后给子 ticket 跑 handoff（后台）。capture 不等它；同步抛错也只记日志，
-   * 不能打断 captureCommandHandoff（否则已经存下的汇总收不到 notify）。
+   * 总控里的 /handoff 之后（后台）：存下了汇总就给子 ticket 跑 handoff；没存下（用户自己开的总控没有 Butler 的 MCP，
+   * 输出了 ticket 代码块或没有代码块）就由 Butler 从那个 session fork 出来自己生成汇总。见 featureCommandFollowup。
    */
-  const afterFeatureCommand = (featureId: number, handoffId: number | null): void => {
-    try {
-      void featureRunner.afterCommand(featureId, handoffId).then(notify, (e: unknown) => logger(`child handoffs after /handoff in feature ${featureId} failed`, e));
-    } catch (e) {
-      logger(`child handoffs after /handoff in feature ${featureId} failed`, e);
-    }
-  };
+  const afterFeatureCommand = featureCommandFollowup(featureRunner, { notify, log: logger });
   const briefs = new BriefsRepo(db);
   const briefService = new BriefService({
     tickets, sessions, handoffs, followups, marks: new MarksRepo(db), briefs, settings,
@@ -524,6 +518,7 @@ async function bootstrap(): Promise<void> {
       notify();
     },
     aborted: () => headlessAbort.signal.aborted,
+    log: logger,
     narrate: async (brief) => {
       briefNarrating = true;
       notify();

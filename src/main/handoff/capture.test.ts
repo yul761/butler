@@ -36,8 +36,8 @@ function setup() {
     featureInputs.push(input);
     return ingestFeatureHandoff({ features, tickets, featureHandoffs, now: () => 100 }, input);
   };
-  const afterCalls: [number, number | null][] = [];
-  const afterFeatureCommand = (featureId: number, handoffId: number | null) => void afterCalls.push([featureId, handoffId]);
+  const afterCalls: [number, number | null, string][] = [];
+  const afterFeatureCommand = (featureId: number, handoffId: number | null, sessionId: string) => void afterCalls.push([featureId, handoffId, sessionId]);
   return { deps: { sessions, tickets, ingest, ingestFeature, afterFeatureCommand }, sessions, handoffs, featureHandoffs, featureInputs, afterCalls };
 }
 
@@ -216,7 +216,7 @@ describe("captureCommandHandoff in a feature coordinator", () => {
     expect(featureInputs[0]).toMatchObject({ featureId: 3, trigger: "command", sessionId: "c1", sourceRef: "f1", rawText: JSON.stringify(summary) });
     const stored = featureHandoffs.latest(3);
     expect(stored).toMatchObject({ trigger: "command", sessionId: "c1", payload: { summary: summary.summary } });
-    expect(afterCalls).toEqual([[3, stored?.id]]);
+    expect(afterCalls).toEqual([[3, stored?.id, "c1"]]);
     expect(handoffs.listByTicket("PROJ-1")).toHaveLength(0);
   });
 
@@ -237,7 +237,7 @@ describe("captureCommandHandoff in a feature coordinator", () => {
     const file = write([userHandoff, answer("f2", featureBlock(raw))]);
     expect(await captureCommandHandoff(deps, { sessionId: "c1", transcriptPath: file })).toMatchObject({ featureId: 3, stored: true, degraded: true });
     expect(featureHandoffs.latest(3)).toMatchObject({ degraded: true, rawText: raw, payload: null });
-    expect(afterCalls).toEqual([[3, featureHandoffs.latest(3)?.id]]);
+    expect(afterCalls).toEqual([[3, featureHandoffs.latest(3)?.id, "c1"]]);
   });
 
   it("stores nothing for a ticket block naming an existing ticket, but still starts the children", async () => {
@@ -255,7 +255,28 @@ describe("captureCommandHandoff in a feature coordinator", () => {
     expect(featureInputs).toHaveLength(0);
     expect(handoffs.listByTicket("PROJ-1")).toHaveLength(0);
     expect(featureHandoffs.listByFeature(3)).toHaveLength(0);
-    expect(afterCalls).toEqual([[3, null]]);
+    expect(afterCalls).toEqual([[3, null, "c1"]]);
+  });
+
+  it("accepts a feature summary in a plain ```json block", async () => {
+    const { deps, sessions, featureHandoffs, afterCalls } = setup();
+    coordinator(sessions);
+    const file = write([userHandoff, answer("j1", `示例：\n${FENCE}json\n{"a":1}\n${FENCE}\n结果：\n${FENCE}json\n${JSON.stringify(summary)}\n${FENCE}`)]);
+    const r = await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "c1", transcriptPath: file });
+    expect(r).toMatchObject({ featureId: 3, stored: true, degraded: false });
+    expect(featureHandoffs.latest(3)).toMatchObject({ trigger: "command", sessionId: "c1", sourceRef: "j1", payload: { summary: summary.summary } });
+    expect(afterCalls).toEqual([[3, featureHandoffs.latest(3)?.id, "c1"]]);
+  });
+
+  it("does not take a ticket handoff in a plain ```json block as the feature summary", async () => {
+    const { deps, sessions, handoffs, featureInputs, afterCalls } = setup();
+    coordinator(sessions);
+    const file = write([userHandoff, answer("j2", `${FENCE}json\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}`)]);
+    const r = await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "c1", transcriptPath: file });
+    expect(r).toEqual({ featureId: 3, stored: false, reason: "wrong_block" });
+    expect(featureInputs).toHaveLength(0);
+    expect(handoffs.listByTicket("PROJ-1")).toHaveLength(0);
+    expect(afterCalls).toEqual([[3, null, "c1"]]);
   });
 
   it("gives up after the retries with no_block and still starts the children", async () => {
@@ -267,7 +288,7 @@ describe("captureCommandHandoff in a feature coordinator", () => {
     expect(r).toEqual({ featureId: 3, stored: false, reason: "no_block" });
     expect(waits).toEqual([500, 1500, 5000]);
     expect(featureInputs).toHaveLength(0);
-    expect(afterCalls).toEqual([[3, null]]);
+    expect(afterCalls).toEqual([[3, null, "c1"]]);
   });
 
   it("waits for a late feature block like the ticket path does", async () => {
@@ -291,7 +312,7 @@ describe("captureCommandHandoff in a feature coordinator", () => {
     expect(await captureCommandHandoff(deps, { sessionId: "c1", transcriptPath: file })).toMatchObject({ featureId: 3, stored: true });
     expect(featureInputs[0]).toMatchObject({ featureId: 3, trigger: "command", sessionId: "c1" });
     expect(featureHandoffs.latest(3)?.sessionId).toBe("c1");
-    expect(afterCalls).toEqual([[3, featureHandoffs.latest(3)?.id]]);
+    expect(afterCalls).toEqual([[3, featureHandoffs.latest(3)?.id, "c1"]]);
   });
 
   it("falls back to a hash of the block as sourceRef when the entry has no uuid", async () => {

@@ -45,8 +45,8 @@ export const HandoffSchema = z.object({
 
 /** feature 汇总（设计文档 2026-10-28）：总控 session + 下属 ticket 的 handoff 合成的整体进展。 */
 export const FeatureHandoffSchema = z.object({
-  /** 一段话：整体到哪了。 */
-  summary: z.string().min(1),
+  /** 一段话：整体到哪了。去掉首尾空白后不能为空。 */
+  summary: z.string().trim().min(1),
   /** 卡在哪；提到 ticket 时写 ticket 号。 */
   blockers: z.array(z.string()),
   /** ticket 必须是这个 feature 下的 ticket 号或 null；入库时规范化。 */

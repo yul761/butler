@@ -26,6 +26,8 @@ export interface DailyJobDeps {
   distill?: () => unknown;
   /** 退出已开始：不再通知、不再发起新工作。 */
   aborted?: () => boolean;
+  /** 写日志（feature 批次出错时用）；没有时不记。 */
+  log?: (msg: string, err?: unknown) => void;
 }
 
 /** 晚间：批量 handoff → feature 汇总 → 晚间小结 → 系统通知 → 记忆蒸馏（full 档位）。 */
@@ -41,7 +43,19 @@ export async function nightlyJob(d: DailyJobDeps, slot?: number | null): Promise
   if (features) {
     const limited = batch.outcomes.some((o) => o.status === "skipped" && o.reason === "rate_limited");
     if (limited) status = "partial";
-    else if ((await Promise.resolve().then(() => features.runNightly())).status === "partial") status = "partial";
+    else {
+      // feature 批次出错（包括同步抛错）不能挡住晚间小结：记一笔，批次记为 partial，照常往下走。
+      try {
+        if ((await Promise.resolve().then(() => features.runNightly())).status === "partial") status = "partial";
+      } catch (e) {
+        status = "partial";
+        try {
+          d.log?.("nightly feature summaries failed", e);
+        } catch {
+          // 写日志失败也不能挡住晚间小结。
+        }
+      }
+    }
   }
   const brief = d.briefs.generateEvening();
   d.jobs.record(JOB_EVENING, d.now(), "ok", null);

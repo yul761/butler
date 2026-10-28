@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { HandoffSchema, RefreshSchema } from "../../shared/handoff";
 import {
-  emptyHandoff, extractFeatureHandoffBlock, extractHandoffBlock, HANDOFF_JSON_SCHEMA, parseJsonLoose, pickStructured, REFRESH_JSON_SCHEMA, validate,
+  emptyHandoff, extractFeatureHandoffBlock, extractHandoffBlock, extractJsonFeatureHandoffBlock, FEATURE_HANDOFF_JSON_SCHEMA, HANDOFF_JSON_SCHEMA, parseJsonLoose, pickStructured, REFRESH_JSON_SCHEMA, validate,
 } from "./schema";
 import { featureHandoffExample, featureHandoffSchemaDoc } from "./feature-templates";
 import {
@@ -51,6 +51,13 @@ describe("CLI JSON Schema", () => {
     expect((JSON.parse(REFRESH_JSON_SCHEMA) as { required: string[] }).required.sort()).toEqual(["jira", "prs", "status"]);
     expect(RefreshSchema.safeParse({ status: "in_review", prs: [], jira: null }).success).toBe(true);
   });
+
+  it("feature summary schema still generates for --json-schema, summary a plain string", () => {
+    // summary 不许是空白只在 zod 里校验；传给 claude 的版本里不带 minLength。
+    const f = JSON.parse(FEATURE_HANDOFF_JSON_SCHEMA) as { required: string[]; properties: Record<string, unknown> };
+    expect(f.required.sort()).toEqual(["blockers", "decisions", "next_steps", "open_questions", "summary"]);
+    expect(f.properties.summary).toEqual({ type: "string" });
+  });
 });
 
 describe("loose parsing", () => {
@@ -90,6 +97,17 @@ describe("loose parsing", () => {
     expect(extractFeatureHandoffBlock('```butler-feature-handoff\n{"n":1}\n```\n```butler-feature-handoff\n\n```')).toBe('{"n":1}');
     expect(extractFeatureHandoffBlock('```butler-feature-handoffX\n{"n":1}\n```')).toBeNull();
     expect(extractFeatureHandoffBlock("没有代码块")).toBeNull();
+  });
+
+  it("takes a feature summary from a plain ```json block, but not a ticket handoff or anything else", () => {
+    const feature = JSON.stringify({ summary: "整体进展", blockers: [], next_steps: [], decisions: [], open_questions: [] });
+    const ticket = JSON.stringify(emptyHandoff("PROJ-1"));
+    expect(extractJsonFeatureHandoffBlock(`\`\`\`json\n{"a":1}\n\`\`\`\n\`\`\`json\n${feature}\n\`\`\``)).toBe(feature);
+    expect(extractJsonFeatureHandoffBlock(`\`\`\`json\n${ticket}\n\`\`\``)).toBeNull();
+    // 带 ticket 字段的对象就算也有 summary 和 next_steps，也不当成 feature 汇总。
+    expect(extractJsonFeatureHandoffBlock(`\`\`\`json\n${JSON.stringify({ ...emptyHandoff("PROJ-1"), summary: "x" })}\n\`\`\``)).toBeNull();
+    expect(extractJsonFeatureHandoffBlock('```json\n{"summary":1,"next_steps":[]}\n```')).toBeNull();
+    expect(extractJsonFeatureHandoffBlock(`\`\`\`butler-handoff\n${feature}\n\`\`\``)).toBeNull();
   });
 
   it("prefers structured_output and falls back to the result text", () => {

@@ -11,7 +11,7 @@ import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { insertTicket, type LegacyTicket, memDb } from "../test-utils";
 import { ingestFeatureHandoff } from "./feature-ingest";
-import { FeatureSummaryRunner } from "./feature-runner";
+import { featureCommandFollowup, FeatureSummaryRunner } from "./feature-runner";
 import { ingestHandoff, type IngestInput } from "./ingest";
 import { emptyHandoff, FEATURE_HANDOFF_JSON_SCHEMA } from "./schema";
 
@@ -314,5 +314,96 @@ describe("FeatureSummaryRunner.afterCommand", () => {
     await runner.afterCommand(featureId, null);
     expect(childRuns).toEqual(["A-1"]);
     expect(featureHandoffs.get(id)?.coversUntil).toBeNull();
+  });
+});
+
+describe("FeatureSummaryRunner.runFromCommand", () => {
+  it("forks the session that ran /handoff (not the most recent one), stores a command summary, then runs the children and sets coversUntil", async () => {
+    const { runner, featureId, calls, order, childRuns, featureHandoffs, addTicket, addCoordinator, setTicketCandidates, setNow, onChild } = setup();
+    addTicket("A-1");
+    setTicketCandidates(["A-1"]);
+    addCoordinator("c-mine", 20, 1);
+    addCoordinator("c-new", 30, 5);
+    const seen: (number | null)[] = [];
+    onChild(() => seen.push(featureHandoffs.latest(featureId)!.coversUntil));
+    setNow(900);
+    const o = await runner.runFromCommand(featureId, "c-mine");
+    expect(o).toMatchObject({ featureId, status: "stored", degraded: false });
+    expect(calls).toHaveLength(1);
+    const resume = calls[0].args.indexOf("--resume");
+    expect(calls[0].args.slice(resume, resume + 3)).toEqual(["--resume", "c-mine", "--fork-session"]);
+    expect(calls[0].args[calls[0].args.indexOf("--json-schema") + 1]).toBe(FEATURE_HANDOFF_JSON_SCHEMA);
+    expect(calls[0].cwd).toBe(WS);
+    expect(order).toEqual(["feature", "ticket:A-1"]);
+    expect(childRuns).toEqual(["A-1"]);
+    expect(seen).toEqual([null]);
+    expect(featureHandoffs.latest(featureId)).toMatchObject({ trigger: "command", sessionId: "c-mine", coversUntil: 900, payload: summary() });
+    expect(o.status === "stored" && o.handoffId).toBe(featureHandoffs.latest(featureId)?.id);
+  });
+
+  it("validates and retries like the other runs", async () => {
+    const { runner, featureId, calls, featureHandoffs, addCoordinator, setRespond } = setup();
+    addCoordinator("c-1", 30);
+    setRespond(async (_req, n) => (n === 1 ? ok({ ...summary(), summary: "  " }) : ok(summary())));
+    expect(await runner.runFromCommand(featureId, "c-1")).toMatchObject({ status: "stored", degraded: false });
+    expect(calls).toHaveLength(2);
+    expect(calls[1].prompt).toContain("上一次的输出没有通过校验");
+    expect(featureHandoffs.listByFeature(featureId)).toHaveLength(1);
+  });
+
+  it("still runs the children when nothing was stored, without touching coversUntil", async () => {
+    const { runner, featureId, childRuns, featureHandoffs, addTicket, addCoordinator, addSummary, setRespond, setTicketCandidates } = setup();
+    addTicket("A-1");
+    setTicketCandidates(["A-1"]);
+    addCoordinator("c-1", 30);
+    const old = addSummary(10);
+    setRespond(async () => ({ ok: false, reason: "rate_limited", message: "429", result: null }));
+    expect(await runner.runFromCommand(featureId, "c-1")).toEqual({ featureId, status: "skipped", reason: "rate_limited" });
+    expect(childRuns).toEqual(["A-1"]);
+    expect(featureHandoffs.get(old)?.coversUntil).toBeNull();
+    expect(featureHandoffs.listByFeature(featureId)).toHaveLength(1);
+  });
+
+  it("shares the run with a manual update of the same feature that is already going", async () => {
+    const { runner, featureId, calls, featureHandoffs, addCoordinator } = setup();
+    addCoordinator("c-1", 30);
+    const [a, b] = await Promise.all([runner.runManual(featureId), runner.runFromCommand(featureId, "c-1")]);
+    expect(a).toEqual(b);
+    expect(calls).toHaveLength(1);
+    expect(featureHandoffs.listByFeature(featureId)).toHaveLength(1);
+  });
+});
+
+describe("featureCommandFollowup (capture → runner wiring in index.ts)", () => {
+  const harness = () => {
+    const log: string[] = [];
+    const seen: string[] = [];
+    let notified = 0;
+    const runner = {
+      afterCommand: async (featureId: number, handoffId: number | null) => void seen.push(`after:${featureId}:${handoffId}`),
+      runFromCommand: async (featureId: number, sessionId: string) => {
+        seen.push(`from:${featureId}:${sessionId}`);
+        return { featureId, status: "stored" as const, handoffId: 7, degraded: false };
+      },
+    };
+    const follow = featureCommandFollowup(runner, { notify: () => void notified++, log: (m) => void log.push(m) });
+    return { follow, log, seen, notified: () => notified };
+  };
+
+  it("only runs the children when /handoff stored a summary", async () => {
+    const h = harness();
+    h.follow(3, 12, "c1");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.seen).toEqual(["after:3:12"]);
+    expect(h.notified()).toBe(1);
+  });
+
+  it("generates the summary itself from that session when /handoff stored nothing, and logs that the fallback ran", async () => {
+    const h = harness();
+    h.follow(3, null, "c1");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.seen).toEqual(["from:3:c1"]);
+    expect(h.log.some((m) => m.includes("feature 3") && m.includes("c1") && m.includes("fallback"))).toBe(true);
+    expect(h.notified()).toBe(1);
   });
 });

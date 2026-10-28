@@ -278,7 +278,7 @@ export interface FeatureHandoffRecord {
 /** 一次 feature 汇总的结果。 */
 export type FeatureHandoffOutcome =
   | { featureId: number; status: "stored"; handoffId: number; degraded: boolean }
-  | { featureId: number; status: "skipped"; reason: "rate_limited" | "no_activity" | "nothing_to_summarize" }
+  | { featureId: number; status: "skipped"; reason: "rate_limited" | "nothing_to_summarize" }
   | { featureId: number; status: "failed"; reason: string; message: string };
 
 /** 探测到的 MCP server 和工具（设置页“检测”按钮）。suggested 是名字像查询的工具，默认勾选。 */

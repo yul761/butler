@@ -80,7 +80,7 @@ describe("UI strings in two languages (design 2026-10-26 i18n)", () => {
       expect(s.runFeatureSummary).toBeTruthy();
       expect(s.featureSummaryRunning).toBeTruthy();
       expect(Object.keys(s.featureSummaryTrigger).sort()).toEqual(["command", "manual", "nightly"]);
-      expect(Object.keys(s.featureSummarySkipped).sort()).toEqual(["no_activity", "nothing_to_summarize", "rate_limited"]);
+      expect(Object.keys(s.featureSummarySkipped).sort()).toEqual(["nothing_to_summarize", "rate_limited"]);
       expect(Object.keys(s.prPill).sort()).toEqual(["approved", "changes", "closed", "merged", "pending"]);
       expect(s.noPr).toBeTruthy();
     }

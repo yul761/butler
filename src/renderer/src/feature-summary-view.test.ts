@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { Pr } from "../../shared/handoff";
 import type { FeatureHandoffRecord, FeatureView, TicketView } from "../../shared/types";
-import { featureHeadline, firstSentence, groupByFeature, prLabel, prPill, summaryOutcomeMessage } from "./feature-summary-view";
+import { featureHeadline, firstSentence, groupByFeature, prLabel, prPill, summaryOutcomeIsError, summaryOutcomeMessage } from "./feature-summary-view";
 import { STRINGS, setUiLang } from "./strings";
 
 const ticket = (key: string, featureId: number | null): TicketView => ({
@@ -108,5 +108,16 @@ describe("summaryOutcomeMessage", () => {
     setUiLang("en");
     expect(summaryOutcomeMessage({ featureId: 1, status: "skipped", reason: "nothing_to_summarize" })).toContain("coordinator session");
     expect(summaryOutcomeMessage({ featureId: 1, status: "skipped", reason: "rate_limited" })).toContain("rate limited");
+  });
+});
+
+describe("summaryOutcomeIsError", () => {
+  it("shows failures and rate limits as errors, but nothing_to_summarize as plain information", () => {
+    expect(summaryOutcomeIsError({ featureId: 1, status: "failed", reason: "timeout", message: "超时" })).toBe(true);
+    expect(summaryOutcomeIsError({ featureId: 1, status: "skipped", reason: "rate_limited" })).toBe(true);
+    expect(summaryOutcomeIsError({ featureId: 1, status: "skipped", reason: "nothing_to_summarize" })).toBe(false);
+    expect(summaryOutcomeIsError({ featureId: 1, status: "stored", handoffId: 2, degraded: false })).toBe(false);
+    // 存下的是 degraded（输出没通过校验）照旧按错误显示。
+    expect(summaryOutcomeIsError({ featureId: 1, status: "stored", handoffId: 2, degraded: true })).toBe(true);
   });
 });

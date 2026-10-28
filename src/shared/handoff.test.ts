@@ -30,4 +30,8 @@ describe("FeatureHandoffSchema", () => {
   it("rejects an empty summary", () => {
     expect(FeatureHandoffSchema.safeParse({ ...ok, summary: "" }).success).toBe(false);
   });
+  it("rejects a whitespace-only summary", () => {
+    expect(FeatureHandoffSchema.safeParse({ ...ok, summary: "  " }).success).toBe(false);
+    expect(FeatureHandoffSchema.safeParse({ ...ok, summary: "\n\t " }).success).toBe(false);
+  });
 });

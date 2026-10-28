@@ -82,6 +82,18 @@ export function extractJsonHandoffBlock(text: string): string | null {
   return blocks.length ? blocks[blocks.length - 1] : null;
 }
 
+/**
+ * feature 总控 /handoff 的同样退路：没有 butler-feature-handoff 代码块时，收看起来就是 feature 汇总的 ```json 代码块
+ * （有字符串 summary 和数组 next_steps），取最后一个。带 ticket 字段的是 ticket 的 handoff，不收。
+ */
+export function extractJsonFeatureHandoffBlock(text: string): string | null {
+  const blocks = [...text.matchAll(JSON_BLOCK_RE)].map((m) => m[1].trim()).filter((b) => {
+    const v = parseJsonLoose(b) as Record<string, unknown> | null;
+    return !!v && typeof v === "object" && !("ticket" in v) && typeof v.summary === "string" && Array.isArray(v.next_steps);
+  });
+  return blocks.length ? blocks[blocks.length - 1] : null;
+}
+
 /** `--json-schema` 的结果在 structured_output；没有时退回解析 result 文本。 */
 export function pickStructured(r: { structured: unknown; resultText: string }): unknown {
   return r.structured !== null && r.structured !== undefined ? r.structured : parseJsonLoose(r.resultText);

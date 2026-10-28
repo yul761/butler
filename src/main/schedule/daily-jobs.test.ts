@@ -102,6 +102,35 @@ describe("daily jobs", () => {
       expect(calls).toEqual(["runNightly", "features", "evening", "notify:evening"]);
     });
 
+    it("a feature batch that rejects or throws only logs: the evening brief, its record and notification still happen, and the job is partial", async () => {
+      for (const fail of ["reject", "throw"] as const) {
+        const { d, calls, jobs } = deps();
+        const logs: [string, unknown][] = [];
+        d.runner = okTickets(calls);
+        d.log = (msg, err) => void logs.push([msg, err]);
+        const boom = new Error("db locked");
+        d.features = {
+          runNightly: () => {
+            calls.push("features");
+            if (fail === "throw") throw boom;
+            return Promise.reject(boom);
+          },
+        };
+        expect(await nightlyJob(d)).toBe("partial");
+        expect(calls).toEqual(["runNightly", "features", "evening", "notify:evening"]);
+        expect(jobs.get(JOB_EVENING)).toMatchObject({ lastRunAt: 123, lastStatus: "ok" });
+        expect(logs).toEqual([["nightly feature summaries failed", boom]]);
+      }
+    });
+
+    it("a feature batch failure without a log function still lets the evening brief run", async () => {
+      const { d, calls } = deps();
+      d.runner = okTickets(calls);
+      d.features = { runNightly: () => Promise.reject(new Error("x")) };
+      expect(await nightlyJob(d)).toBe("partial");
+      expect(calls).toEqual(["runNightly", "evening", "notify:evening"]);
+    });
+
     it("without features the job is unchanged", async () => {
       const { d, calls } = deps();
       d.runner = okTickets(calls);

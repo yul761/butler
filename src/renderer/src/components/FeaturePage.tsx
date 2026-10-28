@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { FeatureView, OpenFeatureSessionRequest } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
-import { prLabel, prPill, summaryOutcomeMessage } from "../feature-summary-view";
+import { prLabel, prPill, summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary-view";
 import { lastSegment } from "../repos";
 import { sessionLabel } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
@@ -248,7 +248,7 @@ function FeatureProgress({ feature, onOpenTicket }: { feature: FeatureView; onOp
     setMessage(null);
     try {
       const o = await api.runFeatureSummary(feature.id);
-      setMessage({ text: summaryOutcomeMessage(o), bad: o.status !== "stored" || o.degraded });
+      setMessage({ text: summaryOutcomeMessage(o), bad: summaryOutcomeIsError(o) });
     } catch (e) {
       setMessage({ text: errorText(e), bad: true });
     } finally {

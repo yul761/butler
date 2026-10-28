@@ -1,5 +1,5 @@
 import { FeatureHandoffSchema } from "../../shared/handoff";
-import { effectiveStatus, type FeatureHandoffOutcome, type HandoffOutcome, type Session } from "../../shared/types";
+import { effectiveStatus, type FeatureHandoffOutcome, type FeatureHandoffTrigger, type HandoffOutcome } from "../../shared/types";
 import { headlessArgs, READ_ONLY_TOOLS } from "../claude/headless";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";
@@ -97,6 +97,24 @@ export class FeatureSummaryRunner {
     });
   }
 
+  /**
+   * 总控里的 /handoff 没存下汇总（wrong_block / no_block，多半是用户自己开的总控、没有 Butler 的 MCP）时的退路：
+   * Butler 自己 fork 跑 /handoff 的那个 session 生成汇总（trigger=command，sessionId 记成它），再走 afterCommand
+   * （先子 ticket，再 coversUntil）。和 runManual、晚间批量共用 once：同一个 feature 正在跑时共用那次的结果，不重复跑。
+   */
+  runFromCommand(featureId: number, sessionId: string): Promise<FeatureHandoffOutcome> {
+    return this.once(featureId, async () => {
+      const o = await this.generate(featureId, "command", sessionId);
+      // 子 ticket 出错不影响已经存下的汇总：只记日志。
+      try {
+        await this.afterCommand(featureId, o.status === "stored" ? o.handoffId : null);
+      } catch (e) {
+        this.d.log?.(`child handoffs after the fallback summary of feature ${featureId} failed`, e);
+      }
+      return o;
+    });
+  }
+
   /** feature 下有活动的 ticket 各跑一次手动 handoff（并发受 HANDOFF_CONCURRENCY 限制）。 */
   runChildren(featureId: number): Promise<HandoffOutcome[]> {
     const due = new Set(this.d.ticketRunner.candidates());
@@ -124,8 +142,12 @@ export class FeatureSummaryRunner {
     return p;
   }
 
-  /** 要 fork 的总控 session：最近活动的、没被替换、没隐藏、有 transcript 的那个。 */
-  private resumeTarget(featureId: number): Session | null {
+  /**
+   * 要 fork 的总控 session：指定了 sessionId（总控 /handoff 的退路）就是它；
+   * 否则是最近活动的、没被替换、没隐藏、有 transcript 的那个。
+   */
+  private resumeTarget(featureId: number, sessionId?: string): { id: string; cwd: string } | null {
+    if (sessionId !== undefined) return { id: sessionId, cwd: this.d.sessions.get(sessionId)?.cwd ?? "" };
     return this.d.sessions.listByFeature(featureId).find((s) => !s.replacedBy && !s.dismissed && this.d.transcriptMtime(s.id) !== null) ?? null;
   }
 
@@ -150,10 +172,10 @@ export class FeatureSummaryRunner {
     }
   }
 
-  private async generate(featureId: number, trigger: "nightly" | "manual"): Promise<FeatureHandoffOutcome> {
+  private async generate(featureId: number, trigger: FeatureHandoffTrigger, sessionId?: string): Promise<FeatureHandoffOutcome> {
     const feature = this.d.features.get(featureId);
     if (!feature) return failed(featureId, "no_feature", M().featureNotFound);
-    const session = this.resumeTarget(featureId);
+    const session = this.resumeTarget(featureId, sessionId);
     // 没有总控对话、也没有任何有效的 ticket handoff：没东西可写，不花额度。
     if (!session && !this.d.tickets.listByFeature(featureId).some((t) => this.d.handoffs.latestValid(t.key))) {
       return { featureId, status: "skipped", reason: "nothing_to_summarize" };
@@ -194,4 +216,33 @@ export class FeatureSummaryRunner {
     if (r.reason === "rate_limited") return { ok: false, outcome: { featureId, status: "skipped", reason: "rate_limited" } };
     return { ok: false, outcome: failed(featureId, r.reason, r.message) };
   }
+}
+
+/**
+ * index.ts 交给 capture 的 afterFeatureCommand：总控里的 /handoff 存下了汇总时，后台给子 ticket 跑 handoff；
+ * 没存下（handoffId 为 null）时记一笔，然后后台由 Butler 从那个 session 自己生成汇总（runFromCommand，里面也会跑子 ticket）。
+ * capture 不等它；结束后刷新界面。同步抛错也只记日志，不能打断 captureCommandHandoff（否则已经存下的汇总收不到 notify）。
+ */
+export function featureCommandFollowup(
+  runner: Pick<FeatureSummaryRunner, "afterCommand" | "runFromCommand">,
+  o: { notify: () => void; log: (msg: string, err?: unknown) => void },
+): (featureId: number, handoffId: number | null, sessionId: string) => void {
+  return (featureId, handoffId, sessionId) => {
+    try {
+      if (handoffId !== null) {
+        void runner.afterCommand(featureId, handoffId).then(o.notify, (e: unknown) => o.log(`child handoffs after /handoff in feature ${featureId} failed`, e));
+        return;
+      }
+      o.log(`/handoff in feature ${featureId} coordinator session ${sessionId} stored no summary; fallback: generating it from that session in the background`);
+      void runner.runFromCommand(featureId, sessionId).then(
+        (r) => {
+          if (r.status !== "stored") o.log(`fallback feature summary for feature ${featureId}: ${r.status}: ${r.status === "failed" ? r.message : r.reason}`);
+          o.notify();
+        },
+        (e: unknown) => o.log(`fallback feature summary for feature ${featureId} failed`, e),
+      );
+    } catch (e) {
+      o.log(`follow-up after /handoff in feature ${featureId} failed`, e);
+    }
+  };
 }
