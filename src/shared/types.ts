@@ -1,4 +1,4 @@
-import type { Handoff } from "./handoff";
+import type { FeatureHandoff, Handoff } from "./handoff";
 export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
 export type WorkMode = "worktree" | "branch";
@@ -251,6 +251,31 @@ export type HandoffOutcome =
   | { ticketKey: string; status: "stored"; handoffId: number; degraded: boolean }
   | { ticketKey: string; status: "skipped"; reason: "rate_limited" | "no_session" }
   | { ticketKey: string; status: "failed"; reason: string; message: string };
+
+export type FeatureHandoffTrigger = "nightly" | "manual" | "command";
+
+/** feature 汇总（feature_handoffs 表，只追加）。 */
+export interface FeatureHandoffRecord {
+  id: number;
+  featureId: number;
+  /** 来源的总控 session；没有总控 session 时为 null。 */
+  sessionId: string | null;
+  trigger: FeatureHandoffTrigger;
+  createdAt: number;
+  /** 这份汇总读到了哪个时间点的 ticket handoff / 总控对话；还没写过为 null。 */
+  coversUntil: number | null;
+  /** 校验通过的汇总；degraded 时为 null。 */
+  payload: FeatureHandoff | null;
+  degraded: boolean;
+  rawText: string | null;
+  sourceRef: string | null;
+}
+
+/** 一次 feature 汇总的结果。 */
+export type FeatureHandoffOutcome =
+  | { featureId: number; status: "stored"; handoffId: number; degraded: boolean }
+  | { featureId: number; status: "skipped"; reason: "rate_limited" | "no_activity" | "nothing_to_summarize" }
+  | { featureId: number; status: "failed"; reason: string; message: string };
 
 /** 探测到的 MCP server 和工具（设置页“检测”按钮）。suggested 是名字像查询的工具，默认勾选。 */
 export interface McpProbe {

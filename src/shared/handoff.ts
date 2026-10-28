@@ -43,6 +43,19 @@ export const HandoffSchema = z.object({
   open_questions: z.array(z.string()),
 });
 
+/** feature 汇总（设计文档 2026-10-28）：总控 session + 下属 ticket 的 handoff 合成的整体进展。 */
+export const FeatureHandoffSchema = z.object({
+  /** 一段话：整体到哪了。 */
+  summary: z.string().min(1),
+  /** 卡在哪；提到 ticket 时写 ticket 号。 */
+  blockers: z.array(z.string()),
+  /** ticket 必须是这个 feature 下的 ticket 号或 null；入库时规范化。 */
+  next_steps: z.array(z.object({ ticket: z.string().nullable(), text: z.string() })),
+  /** 跨 ticket 的约定，例如接口、错误码。 */
+  decisions: z.array(z.object({ key: z.string(), statement: z.string() })),
+  open_questions: z.array(z.string()),
+});
+
 /** 早间快速刷新只查 PR 和 tracker 状态（schema 的子集）。 */
 export const RefreshSchema = z.object({
   status: z.enum(TICKET_STATUSES),
@@ -63,6 +76,7 @@ export function upgradeLegacyPr(v: unknown): unknown {
 }
 
 export type Handoff = z.infer<typeof HandoffSchema>;
+export type FeatureHandoff = z.infer<typeof FeatureHandoffSchema>;
 export type Pr = z.infer<typeof PrSchema>;
 export type HandoffFollowup = z.infer<typeof HandoffFollowupSchema>;
 export type RefreshResult = z.infer<typeof RefreshSchema>;

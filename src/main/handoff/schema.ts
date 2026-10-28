@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HandoffSchema, RefreshSchema, type Handoff } from "../../shared/handoff";
+import { FeatureHandoffSchema, HandoffSchema, RefreshSchema, type Handoff } from "../../shared/handoff";
 
 /** 这些约束只交给 zod 校验；传给 --json-schema 的版本里去掉，免得 claude 那一侧不支持而整个请求失败。 */
 const DROPPED_KEYS = new Set(["$schema", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength", "pattern", "format"]);
@@ -22,6 +22,7 @@ export function toCliJsonSchema(schema: z.ZodType): string {
 
 export const HANDOFF_JSON_SCHEMA = toCliJsonSchema(HandoffSchema);
 export const REFRESH_JSON_SCHEMA = toCliJsonSchema(RefreshSchema);
+export const FEATURE_HANDOFF_JSON_SCHEMA = toCliJsonSchema(FeatureHandoffSchema);
 
 export type Validated<T> = { ok: true; value: T } | { ok: false; errors: string };
 

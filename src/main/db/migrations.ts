@@ -169,4 +169,19 @@ export const MIGRATIONS: string[] = [
     SELECT 'language', 'zh'
     WHERE EXISTS (SELECT 1 FROM tickets) OR EXISTS (SELECT 1 FROM settings WHERE key = 'onboardingDone' AND value = '1');
   `,
+  `
+  CREATE TABLE feature_handoffs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feature_id INTEGER NOT NULL REFERENCES features(id),
+    session_id TEXT,
+    trigger TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    covers_until INTEGER,
+    payload TEXT,
+    degraded INTEGER NOT NULL DEFAULT 0,
+    raw_text TEXT,
+    source_ref TEXT UNIQUE
+  );
+  CREATE INDEX idx_feature_handoffs_feature ON feature_handoffs (feature_id, created_at);
+  `,
 ];

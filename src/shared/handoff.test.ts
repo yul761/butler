@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HandoffSchema, upgradeLegacyPr } from "./handoff";
+import { FeatureHandoffSchema, HandoffSchema, upgradeLegacyPr } from "./handoff";
 
 describe("upgradeLegacyPr", () => {
   it("turns the old single pr into prs and leaves new payloads alone", () => {
@@ -18,5 +18,16 @@ describe("upgradeLegacyPr", () => {
     };
     expect(HandoffSchema.safeParse(old).success).toBe(false);
     expect(HandoffSchema.safeParse(upgradeLegacyPr(old)).success).toBe(true);
+  });
+});
+
+describe("FeatureHandoffSchema", () => {
+  const ok = { summary: "整体进展", blockers: [], next_steps: [], decisions: [], open_questions: [] };
+  it("accepts a valid summary and null-ticket next steps", () => {
+    expect(FeatureHandoffSchema.safeParse(ok).success).toBe(true);
+    expect(FeatureHandoffSchema.safeParse({ ...ok, next_steps: [{ ticket: null, text: "x" }] }).success).toBe(true);
+  });
+  it("rejects an empty summary", () => {
+    expect(FeatureHandoffSchema.safeParse({ ...ok, summary: "" }).success).toBe(false);
   });
 });
