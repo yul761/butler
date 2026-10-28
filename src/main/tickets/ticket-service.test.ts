@@ -2,10 +2,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { FeaturesRepo } from "../db/features-repo";
 import { SettingsRepo } from "../db/settings-repo";
 import type { Ticket } from "../../shared/types";
 import { TicketsRepo } from "../db/tickets-repo";
-import { makeRepo, memDb, tempDir } from "../test-utils";
+import { insertTicket, type LegacyTicket, makeRepo, memDb, tempDir } from "../test-utils";
 import { branchExists, currentBranch, git } from "./git";
 import { TicketError, TicketService } from "./ticket-service";
 
@@ -426,5 +427,30 @@ describe("TicketService with several repos", () => {
     expect(await code(service.addRepo({ ticketKey: "MULTI-7", repoPath: makeRepo(), workMode: "branch" }))).toBe("busy");
     expect(() => service.removeRepo(r.id, open)).toThrow(expect.objectContaining({ code: "busy" }));
     await pending;
+  });
+});
+
+describe("TicketService.featureHeadlessDirs", () => {
+  it("runs in the feature workspace and adds the existing work dirs outside it, once each, skipping archived tickets", () => {
+    const db = memDb();
+    const tickets = new TicketsRepo(db);
+    const features = new FeaturesRepo(db);
+    const service = new TicketService({ tickets, features, settings: new SettingsRepo(db), now: () => 1000, workspacesDir: tempDir("butler-ws-") });
+    const ws = tempDir("butler-feature-ws-");
+    const featureId = features.insert({ name: "f", workspaceDir: ws, createdAt: 1 });
+    const inside = join(ws, "web-f-1");
+    mkdirSync(inside);
+    const outside = tempDir("butler-outside-");
+    const gone = join(tempDir("butler-gone-"), "wt");
+    const archivedDir = tempDir("butler-archived-");
+    const add = (key: string, over: Partial<LegacyTicket>) =>
+      insertTicket(tickets, { key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null, featureId, ...over });
+    add("F-1", { repoPath: "/r/web", workMode: "worktree", worktreePath: inside });
+    add("F-2", { repoPath: outside });
+    add("F-3", { repoPath: outside });
+    add("F-4", { repoPath: "/r/api", workMode: "worktree", worktreePath: gone });
+    add("F-5", { repoPath: archivedDir, archivedAt: 5 });
+    add("OTHER-1", { repoPath: tempDir("butler-other-"), featureId: null });
+    expect(service.featureHeadlessDirs(featureId)).toEqual({ cwd: ws, addDirs: [outside], repoDirs: [inside, outside, gone] });
   });
 });

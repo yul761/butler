@@ -1,10 +1,8 @@
 import { HandoffSchema, RefreshSchema, upgradeLegacyPr, type Handoff } from "../../shared/handoff";
 import { effectiveStatus, type HandoffOutcome, type Session, type Ticket } from "../../shared/types";
-import { headlessArgs, READ_ONLY_TOOLS, type HeadlessRun } from "../claude/headless";
-import { headlessEnv } from "../claude/spawn";
+import { headlessArgs, READ_ONLY_TOOLS } from "../claude/headless";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
-import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { trackerTools } from "../settings/settings-values";
@@ -12,7 +10,8 @@ import type { HeadlessDirs } from "../tickets/ticket-service";
 import { runPool } from "../util/pool";
 import type { IngestInput, IngestResult } from "./ingest";
 import { buildPrompt, retryPrompt, type PromptContext } from "./prompt";
-import { emptyHandoff, HANDOFF_JSON_SCHEMA, pickStructured, REFRESH_JSON_SCHEMA, validate } from "./schema";
+import { execHeadlessJson, type HeadlessExecDeps } from "./headless-exec";
+import { emptyHandoff, HANDOFF_JSON_SCHEMA, REFRESH_JSON_SCHEMA, validate } from "./schema";
 import { M } from "../strings";
 
 export const HANDOFF_CONCURRENCY = 2;
@@ -23,30 +22,18 @@ export interface BatchResult {
   outcomes: HandoffOutcome[];
 }
 
-export interface HandoffRunnerDeps {
+export interface HandoffRunnerDeps extends HeadlessExecDeps {
   tickets: TicketsRepo;
-  sessions: SessionsRepo;
   handoffs: HandoffsRepo;
   followups: FollowupsRepo;
   settings: SettingsRepo;
   ingest: (input: IngestInput) => IngestResult;
   /** 不 fork session 时后台 claude 在哪里跑（见 TicketService.headlessDirs）。 */
   dirs: (t: Ticket) => HeadlessDirs;
-  run: HeadlessRun;
-  /** 首次 health 探测完成后 resolve。 */
-  ready: () => Promise<void>;
-  claude: () => { path: string | null; pathValue: string };
-  baseEnv: NodeJS.ProcessEnv;
   /** session 的 transcript 修改时间；没有 transcript 时为 null。 */
   transcriptMtime: (sessionId: string) => number | null;
-  now: () => number;
-  newRunId: () => string;
-  timeoutMs?: number;
   /** 设置 headlessProjectMcp 打开时调用：这个目录要额外挂的 --mcp-config 文件（计划 3 任务 5）。 */
   projectMcp?: (cwd: string) => string[];
-  /** 退出 app 时取消所有进行中的 headless 运行：被取消的运行不写入任何东西，也不算限流。 */
-  signal?: AbortSignal;
-  log?: (msg: string, err?: unknown) => void;
 }
 
 type Exec = { ok: true; value: unknown; rawText: string } | { ok: false; outcome: HandoffOutcome };
@@ -194,23 +181,9 @@ export class HandoffRunner {
   }
 
   private async exec(key: string, args: string[], prompt: string, cwd: string, resumedId?: string): Promise<Exec> {
-    await this.d.ready();
-    const { path, pathValue } = this.d.claude();
-    if (!path) return { ok: false, outcome: failed(key, "claude_missing", M().claudeMissing) };
-    const out = await this.d.run({
-      claudePath: path, args, prompt, cwd,
-      env: headlessEnv(this.d.baseEnv, { pathValue, runId: this.d.newRunId() }),
-      timeoutMs: this.d.timeoutMs,
-      signal: this.d.signal,
-    });
-    const sid = out.result?.sessionId;
-    // 返回的 id 就是被恢复的真实 session 时，绝不能把它记成 headless。
-    if (sid && sid !== resumedId) this.d.sessions.recordHeadless(sid, cwd, this.d.now());
-    if (!out.ok) {
-      this.d.log?.(`handoff ${key}: ${out.reason}: ${out.message}`);
-      if (out.reason === "rate_limited") return { ok: false, outcome: { ticketKey: key, status: "skipped", reason: "rate_limited" } };
-      return { ok: false, outcome: failed(key, out.reason, out.message) };
-    }
-    return { ok: true, value: pickStructured(out.result), rawText: out.result.resultText || JSON.stringify(out.result.structured ?? null) };
+    const r = await execHeadlessJson(this.d, { label: `handoff ${key}`, args, prompt, cwd, resumedId });
+    if (r.ok) return r;
+    if (r.reason === "rate_limited") return { ok: false, outcome: { ticketKey: key, status: "skipped", reason: "rate_limited" } };
+    return { ok: false, outcome: failed(key, r.reason, r.message) };
   }
 }

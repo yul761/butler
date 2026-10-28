@@ -74,6 +74,25 @@ export function isInside(child: string, parent: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
+/**
+ * feature 的工作区之外还要 --add-dir 的目录：不在工作区里面、目录存在的，去重。
+ * 总控 session 和后台 claude 共用；same、exists 可以换成调用方自己的（平台、测试注入）。
+ */
+export function dirsOutsideWorkspace(
+  dirs: string[],
+  workspaceDir: string,
+  o: { same?: (a: string, b: string) => boolean; exists?: (dir: string) => boolean } = {},
+): string[] {
+  const same = o.same ?? samePath;
+  const exists = o.exists ?? existsSync;
+  const out: string[] = [];
+  for (const dir of dirs) {
+    if (isInside(dir, workspaceDir) || out.some((d) => same(d, dir)) || !exists(dir)) continue;
+    out.push(dir);
+  }
+  return out;
+}
+
 export class TicketService {
   /** 正在改仓库的 ticket：期间不能再改，也不能打开 session（目录可能正被切换）。 */
   private readonly updatingKeys = new Set<string>();
@@ -279,6 +298,25 @@ export class TicketService {
     if (!f) throw new TicketError("not_found", M().featureNotFound);
     mkdirSync(f.workspaceDir, { recursive: true });
     return f.workspaceDir;
+  }
+
+  /** feature 下未归档 ticket 的全部仓库工作目录（去重）。 */
+  featureWorkDirs(featureId: number): string[] {
+    const dirs: string[] = [];
+    for (const t of this.d.tickets.listByFeature(featureId)) {
+      for (const r of t.repos) {
+        const dir = this.workDir(r);
+        if (!dirs.some((d) => samePath(d, dir))) dirs.push(dir);
+      }
+    }
+    return dirs;
+  }
+
+  /** feature 汇总的后台 claude：在工作区里跑，工作区外的仓库目录各一个 --add-dir（同总控 session）。 */
+  featureHeadlessDirs(featureId: number): HeadlessDirs {
+    const cwd = this.featureWorkspaceDir(featureId);
+    const repoDirs = this.featureWorkDirs(featureId);
+    return { cwd, addDirs: dirsOutsideWorkspace(repoDirs, cwd), repoDirs };
   }
 
   /** 分支模式改成 worktree（或者原来的 worktree 目录不见了）：在 path 建一个新的，或者复用这个 ticket 以前留下的。 */

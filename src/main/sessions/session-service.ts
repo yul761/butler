@@ -21,7 +21,7 @@ import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { currentBranch } from "../tickets/git";
-import { isInside, TicketError, type TicketService } from "../tickets/ticket-service";
+import { dirsOutsideWorkspace, isInside, TicketError, type TicketService } from "../tickets/ticket-service";
 import { suggestTicket, type TranscriptState, UNCLAIMED_WINDOW_MS } from "./discovery";
 import type { PtyManager } from "./pty-manager";
 import { M } from "../strings";
@@ -321,20 +321,13 @@ export class SessionService {
 
   /** feature 总控要另外加的目录：feature 下未归档 ticket 的仓库工作目录里，不在工作区里面的（同样的存在、cmd.exe 检查）。 */
   private featureAddDirs(feature: Feature, claudePath: string, viaCmd: boolean): string[] {
-    const dirs: string[] = [];
-    for (const t of this.d.tickets.listByFeature(feature.id)) {
-      for (const r of t.repos) {
-        const dir = this.d.ticketService.workDir(r);
-        if (isInside(dir, feature.workspaceDir) || dirs.some((d) => samePath(d, dir, this.d.platform))) continue;
-        if (!(this.d.dirExists ?? existsSync)(dir)) continue;
-        if (viaCmd && !cmdShimSafe(claudePath, dir, this.d.platform)) {
-          this.d.log?.(`coordinator for feature ${feature.id}: ${dir} cannot pass through cmd.exe safely; not added`);
-          continue;
-        }
-        dirs.push(dir);
-      }
-    }
-    return dirs;
+    const all = this.d.tickets.listByFeature(feature.id).flatMap((t) => t.repos.map((r) => this.d.ticketService.workDir(r)));
+    const dirs = dirsOutsideWorkspace(all, feature.workspaceDir, { same: (a, b) => samePath(a, b, this.d.platform), exists: this.d.dirExists ?? existsSync });
+    return dirs.filter((dir) => {
+      if (!viaCmd || cmdShimSafe(claudePath, dir, this.d.platform)) return true;
+      this.d.log?.(`coordinator for feature ${feature.id}: ${dir} cannot pass through cmd.exe safely; not added`);
+      return false;
+    });
   }
 
   /**
