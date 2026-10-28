@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Followup, FollowupStatus, HandoffRecord } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
+import { prLabel } from "../feature-summary-view";
 import { followupMeta, outcomeMessage, splitFollowups, triggerLabel } from "../followup-view";
 import { S } from "../strings";
 import { MemoryPanel } from "./MemoryPanel";
@@ -124,12 +125,6 @@ function Section({ title, items }: { title: string; items: string[] }) {
       </ul>
     </div>
   );
-}
-
-/** PR 的名字：只有一个时是 #号，几个（多仓库）时带上仓库名。 */
-function prLabel(pr: { number: number; url: string }, all: { url: string }[]): string {
-  const repo = all.length > 1 ? /github\.com\/[^/]+\/([^/]+)\/pull\//.exec(pr.url)?.[1] : undefined;
-  return repo ? `${repo}#${pr.number}` : `#${pr.number}`;
 }
 
 function HandoffEntry({ h }: { h: HandoffRecord }) {

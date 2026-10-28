@@ -145,7 +145,7 @@ export function App() {
           />
         ) : (
           <>
-            {route.page === "home" && <BriefPage key={navNonce} initialKind={route.kind} tickets={allTickets} onOpenTicket={openTicket} onUnclaimed={() => setRoute({ page: "unclaimed" })} onResumeSetup={() => dispatchOnboarding({ type: "rerun" })} />}
+            {route.page === "home" && <BriefPage key={navNonce} initialKind={route.kind} tickets={allTickets} features={features} onOpenTicket={openTicket} onUnclaimed={() => setRoute({ page: "unclaimed" })} onResumeSetup={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "ticket" && current && (
               <TicketPage
                 key={current.key}

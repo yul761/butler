@@ -72,6 +72,20 @@ describe("UI strings in two languages (design 2026-10-26 i18n)", () => {
     }
   });
 
+  it("has the feature summary strings in both languages", () => {
+    for (const s of [STRINGS.zh, STRINGS.en]) {
+      expect(s.featureProgress).toBeTruthy();
+      expect(s.featureSummaryNone).toBeTruthy();
+      expect(s.featureSummaryDegraded).toBeTruthy();
+      expect(s.runFeatureSummary).toBeTruthy();
+      expect(s.featureSummaryRunning).toBeTruthy();
+      expect(Object.keys(s.featureSummaryTrigger).sort()).toEqual(["command", "manual", "nightly"]);
+      expect(Object.keys(s.featureSummarySkipped).sort()).toEqual(["no_activity", "nothing_to_summarize", "rate_limited"]);
+      expect(Object.keys(s.prPill).sort()).toEqual(["approved", "changes", "closed", "merged", "pending"]);
+      expect(s.noPr).toBeTruthy();
+    }
+  });
+
   it("mentions in the language hint that /handoff needs an update after a switch", () => {
     expect(STRINGS.en.languageHint).toContain("/handoff");
     expect(STRINGS.zh.languageHint).toContain("/handoff");

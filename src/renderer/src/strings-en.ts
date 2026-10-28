@@ -1,6 +1,6 @@
 import type { BriefItem, BriefRule, BriefSection } from "../../shared/brief";
 import type { PrivacyLevel } from "../../shared/llm";
-import type { FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
+import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
 import type { UiStrings } from "./strings";
 
 /** "1 ticket", "2 tickets". */
@@ -35,6 +35,23 @@ export const EN: UiStrings = {
   noFeatureTickets: "No tickets yet. Click “New ticket”.",
   featureCoordinatorHint: "The feature coordinator runs in the workspace, sees every ticket's worktree and can open sessions in the tickets.",
   noFeatureSessions: "No coordinator session yet.",
+  featureProgress: "Overall progress",
+  featureSummaryNone: "No summary yet. One is made automatically in the evening, or click “Update now”.",
+  featureSummaryDegraded: "Incomplete summary: claude's output did not pass validation. The original text is below.",
+  featureBlocked: "Stuck",
+  featureSummaryTrigger: { nightly: "nightly", manual: "updated by hand", command: "coordinator /handoff" } as Record<FeatureHandoffTrigger, string>,
+  runFeatureSummary: "Update now",
+  featureSummaryRunning: "Updating…",
+  featureSummaryStored: "Summary updated.",
+  featureSummaryStoredDegraded: "Incomplete summary: claude's output did not pass validation. The original text was saved.",
+  featureSummarySkipped: {
+    nothing_to_summarize: "Nothing to summarize yet: open a coordinator session first, or let a ticket produce a handoff.",
+    rate_limited: "Your company's Claude quota is used up or rate limited. Try again later.",
+    no_activity: "Nothing new since the last summary.",
+  } as Record<string, string>,
+  featureSummaryFailed: (m: string) => `Summary failed: ${m}`,
+  noPr: "No PR yet",
+  prPill: { merged: "merged", approved: "approved", changes: "changes requested", pending: "awaiting review", closed: "closed" } as Record<string, string>,
   newTicketIn: (name: string) => `New ticket in ${name}`,
   pickFeatureRepos: "Repos (each ticked repo gets its own worktree)",
   notRepoNorParent: "This folder is not a git repo, and there is none one level down.",

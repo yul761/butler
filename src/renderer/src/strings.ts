@@ -2,7 +2,7 @@ import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
 import type { BriefItem, BriefRule, BriefSection } from "../../shared/brief";
-import type { FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
+import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "已合并·待收尾",
@@ -36,6 +36,24 @@ const ZH = {
   noFeatureTickets: "还没有 ticket。点“新建 ticket”。",
   featureCoordinatorHint: "feature 总控在工作区里运行，能看到所有 ticket 的 worktree，可以给各个 ticket 开子 session。",
   noFeatureSessions: "还没有总控 session。",
+  // feature 汇总（设计文档 2026-10-28）
+  featureProgress: "整体进度",
+  featureSummaryNone: "还没有汇总。晚上会自动生成，也可以点“立即更新”。",
+  featureSummaryDegraded: "汇总不完整：claude 的输出没有通过校验，下面是原文。",
+  featureBlocked: "卡住",
+  featureSummaryTrigger: { nightly: "晚间自动", manual: "手动更新", command: "总控 /handoff" } as Record<FeatureHandoffTrigger, string>,
+  runFeatureSummary: "立即更新",
+  featureSummaryRunning: "更新中…",
+  featureSummaryStored: "汇总已更新。",
+  featureSummaryStoredDegraded: "汇总不完整：claude 的输出没有通过校验，原文已保存。",
+  featureSummarySkipped: {
+    nothing_to_summarize: "还没有可以总结的内容：先开一个总控 session 或让 ticket 生成 handoff。",
+    rate_limited: "公司 Claude 额度用完或被限流，稍后再试。",
+    no_activity: "上次汇总之后没有新的活动。",
+  } as Record<string, string>,
+  featureSummaryFailed: (m: string) => `汇总失败：${m}`,
+  noPr: "还没有 PR",
+  prPill: { merged: "已合并", approved: "已 approve", changes: "要改", pending: "待 review", closed: "已关闭" } as Record<string, string>,
   newTicketIn: (name: string) => `在 ${name} 下新建 ticket`,
   pickFeatureRepos: "仓库（每个勾选的仓库各建一个 worktree）",
   notRepoNorParent: "这个目录不是 git 仓库，下一层也没有。",

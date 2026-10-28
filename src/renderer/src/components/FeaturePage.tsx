@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { FeatureView, OpenFeatureSessionRequest } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
+import { prLabel, prPill, summaryOutcomeMessage } from "../feature-summary-view";
 import { lastSegment } from "../repos";
 import { sessionLabel } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
@@ -19,8 +20,13 @@ interface Props {
 
 const errorText = (e: unknown) => (e instanceof ButlerError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
 
+function formatTime(ms: number): string {
+  return new Date(ms).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 /**
- * feature 页（设计文档 2026-10-26）：名字、工作区、仓库、下面的 ticket，以及 feature 总控 session 和它们的终端。
+ * feature 页（设计文档 2026-10-26、2026-10-28）：从上到下是名字和工作区、整体进度（feature 汇总）、
+ * ticket 表（带 PR 状态），然后是仓库、feature 总控 session 和它们的终端。
  */
 export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated }: Props) {
   const openTerms = feature.sessions.flatMap((s) => (s.termId ? [s.termId] : []));
@@ -96,6 +102,9 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
     }
   }
 
+  // 整个 feature 不止一个 PR 时，PR 标签带上仓库名。
+  const allPrs = Object.values(feature.ticketPrs).flat();
+
   return (
     <div className="ticket-page feature-page">
       <header className="ticket-header">
@@ -112,6 +121,50 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
         {renaming === null && <button onClick={() => setRenaming(feature.name)}>{S.rename}</button>}
         <button onClick={() => void archive()}>{S.archiveFeature}</button>
       </header>
+
+      <div className="feature-overview">
+        <FeatureProgress feature={feature} onOpenTicket={onOpenTicket} />
+        <section className="feature-tickets">
+          <h3>{S.featureTickets}</h3>
+          {feature.tickets.length === 0 ? (
+            <p className="muted">{S.noFeatureTickets}</p>
+          ) : (
+            <table className="ticket-table">
+              <tbody>
+                {feature.tickets.map((t) => {
+                  const prs = feature.ticketPrs[t.key] ?? [];
+                  // 点一行进 ticket 页；号码是按钮，键盘也能用（点击冒泡到这一行）。
+                  return (
+                    <tr key={t.key} onClick={() => onOpenTicket(t.key)}>
+                      <td><button className="chip">{t.key}</button></td>
+                      <td className="title">{t.title ?? ""}</td>
+                      <td className="muted status">{STATUS_LABEL[t.effectiveStatus]}</td>
+                      <td>
+                        {prs.length === 0 && <span className="pill none">{S.noPr}</span>}
+                        {prs.map((pr) => (
+                          <span key={pr.url} className={`pill ${prPill(pr)}`} title={pr.url}>
+                            {prLabel(pr, allPrs)} {S.prPill[prPill(pr)]}
+                          </span>
+                        ))}
+                      </td>
+                      <td>{t.waiting && <span className="badge" title={S.waiting}>●</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+          <button onClick={() => setNewTicket(true)}>+ {S.newTicket}</button>
+        </section>
+      </div>
+      {newTicket && (
+        <NewTicketDialog
+          feature={feature}
+          onClose={() => setNewTicket(false)}
+          onRestored={(key) => (setNewTicket(false), onTicketCreated(key))}
+          onCreated={(key) => (setNewTicket(false), onTicketCreated(key))}
+        />
+      )}
 
       <div className="repos-bar" title={S.featureReposHint}>
         <span className="label">{S.featureRepos}</span>
@@ -131,29 +184,6 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
             <button type="button" onClick={() => setAddingRepo(null)}>{S.cancel}</button>
           </div>
         </form>
-      )}
-
-      <section className="feature-tickets">
-        <h3>{S.featureTickets}</h3>
-        {feature.tickets.length === 0 && <p className="muted">{S.noFeatureTickets}</p>}
-        {feature.tickets.map((t) => (
-          <button key={t.key} className="ticket" onClick={() => onOpenTicket(t.key)}>
-            <span className="key">{t.key}</span>
-            {t.title && <span className="title">{t.title}</span>}
-            <span className="muted">{STATUS_LABEL[t.effectiveStatus]}</span>
-            <span className="muted">{t.repos.map((r) => lastSegment(r.repoPath)).join(", ")}</span>
-            {t.waiting && <span className="badge" title={S.waiting}>●</span>}
-          </button>
-        ))}
-        <button onClick={() => setNewTicket(true)}>+ {S.newTicket}</button>
-      </section>
-      {newTicket && (
-        <NewTicketDialog
-          feature={feature}
-          onClose={() => setNewTicket(false)}
-          onRestored={(key) => (setNewTicket(false), onTicketCreated(key))}
-          onCreated={(key) => (setNewTicket(false), onTicketCreated(key))}
-        />
       )}
 
       <div className="sessions-bar">
@@ -199,5 +229,74 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
         {panes.map((id) => <TerminalPane key={id} termId={id} visible={id === active} onClose={() => closePane(id)} onResume={() => void open({ featureId: feature.id, sessionId: id })} />)}
       </div>
     </div>
+  );
+}
+
+/**
+ * 整体进度（设计文档 2026-10-28）：最新一份 feature 汇总的那段话、卡住的地方、下一步，
+ * 以及生成时间、来源和“立即更新”按钮。只显示最新一份，不做历史。
+ */
+function FeatureProgress({ feature, onOpenTicket }: { feature: FeatureView; onOpenTicket: (key: string) => void }) {
+  const [running, setRunning] = useState(false);
+  const [message, setMessage] = useState<{ text: string; bad: boolean } | null>(null);
+  const summary = feature.summary;
+  // 汇总里的 ticket 后来可能归档了：只有还在这个 feature 下的才能点。
+  const keys = new Set(feature.tickets.map((t) => t.key));
+
+  async function runNow() {
+    setRunning(true);
+    setMessage(null);
+    try {
+      const o = await api.runFeatureSummary(feature.id);
+      setMessage({ text: summaryOutcomeMessage(o), bad: o.status !== "stored" || o.degraded });
+    } catch (e) {
+      setMessage({ text: errorText(e), bad: true });
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <section className="feature-progress">
+      <h3>{S.featureProgress}</h3>
+      {!summary ? (
+        <p className="muted">{S.featureSummaryNone}</p>
+      ) : summary.payload ? (
+        <div className="feature-summary">
+          <p>{summary.payload.summary}</p>
+          {summary.payload.blockers.map((b, n) => (
+            <p key={n} className="blocker">{S.labelled(S.featureBlocked, b)}</p>
+          ))}
+          {summary.payload.next_steps.length > 0 && (
+            <>
+              <strong>{S.nextSteps}</strong>
+              <ul>
+                {summary.payload.next_steps.map((step, n) => (
+                  <li key={n}>
+                    {step.ticket && (keys.has(step.ticket) ? (
+                      <button className="chip" onClick={() => onOpenTicket(step.ticket!)}>{step.ticket}</button>
+                    ) : (
+                      <span className="key">{step.ticket}</span>
+                    ))}
+                    {step.ticket && " "}
+                    {step.text}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="feature-summary">
+          <p className="error">{S.featureSummaryDegraded}</p>
+          <pre className="raw">{summary.rawText ?? ""}</pre>
+        </div>
+      )}
+      <div className="summary-meta">
+        {summary && <span className="muted">{formatTime(summary.createdAt)} · {S.featureSummaryTrigger[summary.trigger]}</span>}
+        <button disabled={running} onClick={() => void runNow()}>{running ? S.featureSummaryRunning : S.runFeatureSummary}</button>
+        {message && <span className={message.bad ? "error" : "muted"}>{message.text}</span>}
+      </div>
+    </section>
   );
 }
