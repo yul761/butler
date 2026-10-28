@@ -1,13 +1,15 @@
 import type { Handoff } from "../../shared/handoff";
 import {
-  MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, ticketScope, WORKSPACE_SCOPE, type ButlerNote, type MemoryView, type WhyEntry,
+  featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, ticketScope, WORKSPACE_SCOPE, type ButlerNote, type MemoryView, type WhyEntry,
 } from "../../shared/memory";
+import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
+import type { FeaturesRepo } from "../db/features-repo";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { MemorySyncRepo } from "../db/memory-sync-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import type { StatecoreChatModel } from "../gateway/types";
-import { desiredNotes, handoffSummaryFor, isFull, planReconcile } from "./notes";
+import { desiredNotes, featureDecisionNotes, handoffSummaryFor, isFull, planReconcile } from "./notes";
 import { listScopeNames, NOTES_CAP, withScope, type DigestOutcome, type ScopeHandle } from "./statecore";
 
 /** 一个 ticket 第一次同步（或积压很多）时最多回放多少条 handoff 的 learnings：workspace 的 notes 上限本来就是 30。 */
@@ -19,6 +21,8 @@ export interface MemoryServiceDeps {
   tickets: Pick<TicketsRepo, "get" | "list">;
   handoffs: Pick<HandoffsRepo, "listByTicket">;
   followups: Pick<FollowupsRepo, "listByTicket">;
+  features: Pick<FeaturesRepo, "get" | "list">;
+  featureHandoffs: Pick<FeatureHandoffsRepo, "listByFeature">;
   sync: MemorySyncRepo;
   /** 设置里的记忆开关（memoryEnabled）。 */
   enabled: () => boolean;
@@ -135,9 +139,29 @@ export class MemoryService {
     return p;
   }
 
-  /** 所有未归档的 ticket（启动时补齐：老数据、上次退出时没写完的）。 */
+  /** 把一个 feature 最新的有效汇总写进 feature scope（设计文档 2026-10-28）。排队、合并的规则同 syncTicket。 */
+  syncFeature(featureId: number): Promise<void> {
+    const key = featureScope(featureId);
+    const waiting = this.pending.get(key);
+    if (waiting) return waiting;
+    const p = this.enqueue(
+      `memory sync ${key}`,
+      async () => {
+        this.pending.delete(key);
+        await this.syncFeatureNow(featureId);
+      },
+      undefined,
+    );
+    this.pending.set(key, p);
+    return p;
+  }
+
+  /** 所有未归档的 ticket 和 feature（启动时补齐：老数据、上次退出时没写完的）。 */
   async syncAll(): Promise<void> {
-    await Promise.all(this.d.tickets.list().map((t) => this.syncTicket(t.key)));
+    await Promise.all([
+      ...this.d.tickets.list().map((t) => this.syncTicket(t.key)),
+      ...this.d.features.list().map((f) => this.syncFeature(f.id)),
+    ]);
   }
 
   /** 队列清空时 resolve。 */
@@ -189,6 +213,34 @@ export class MemoryService {
       this.log("memory onSynced callback failed", e);
     }
     return desired;
+  }
+
+  /**
+   * 同步一个 feature：交接是最新一份有效汇总（summary、next_steps 的文字、open_questions），决策按 key 写成 note。
+   * 汇总没有 followups 和 learnings，不写 workspace。还没有有效汇总时不打开 scope。
+   * 不用 memory_sync 的游标：那张表的 key 引用 tickets(key)（外键开着），feature 写不进去。
+   * 改用 StateCore 自己的记录判断“这份汇总写过没有”：handoff 的 retryAfter 传汇总的 createdAt，
+   * 正文相同、又是在这份汇总生成之后写的，就不再写；正文不同（新汇总、数据被删过）就写。
+   * 所以没有新汇总时不会重复写，内容相同的新汇总也照样记一个版本（同 ticket 的 N1）。
+   */
+  private async syncFeatureNow(featureId: number): Promise<void> {
+    if (!this.d.enabled() || !this.d.features.get(featureId)) return;
+    const latest = this.d.featureHandoffs.listByFeature(featureId, HANDOFF_SCAN).find((h) => h.payload !== null && !h.degraded);
+    const p = latest?.payload;
+    if (!latest || !p) return;
+    const key = featureScope(featureId);
+    await withScope({ dataDir: this.d.dataDir, scope: key }, async (s) => {
+      await s.handoff(
+        { summary: p.summary, nextSteps: p.next_steps.map((n) => n.text), openQuestions: p.open_questions },
+        latest.createdAt,
+      );
+      await this.reconcile(key, s, featureDecisionNotes(p.decisions));
+    });
+    try {
+      this.d.onSynced?.(key);
+    } catch (e) {
+      this.log("memory onSynced callback failed", e);
+    }
   }
 
   private async reconcile(key: string, s: ScopeHandle, desired: ButlerNote[]): Promise<void> {

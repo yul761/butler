@@ -53,6 +53,63 @@ describe("daily jobs", () => {
     expect(jobs.get(JOB_EVENING)).toMatchObject({ lastRunAt: 123, lastStatus: "ok" });
   });
 
+  describe("feature summaries", () => {
+    const okTickets = (calls: string[], outcomes: Awaited<ReturnType<DailyJobDeps["runner"]["runNightly"]>>["outcomes"] = []) => ({
+      runNightly: async () => {
+        calls.push("runNightly");
+        return { status: "ok" as const, outcomes };
+      },
+      refreshForBrief: async () => ({ status: "ok" as const, outcomes: [] }),
+    });
+    const featureRunner = (calls: string[], status: "ok" | "partial" = "ok") => ({
+      runNightly: async () => {
+        calls.push("features");
+        return { status, outcomes: [] };
+      },
+    });
+
+    it("runs after the ticket batch and before the evening summary", async () => {
+      const { d, calls } = deps();
+      d.runner = okTickets(calls);
+      d.features = featureRunner(calls);
+      expect(await nightlyJob(d)).toBe("ok");
+      expect(calls).toEqual(["runNightly", "features", "evening", "notify:evening"]);
+    });
+
+    it("is skipped when the ticket batch was rate limited, and the job is partial", async () => {
+      const { d, calls } = deps();
+      d.runner = okTickets(calls, [
+        { ticketKey: "A-1", status: "stored", handoffId: 1, degraded: false },
+        { ticketKey: "A-2", status: "skipped", reason: "rate_limited" },
+      ]);
+      d.features = featureRunner(calls);
+      expect(await nightlyJob(d)).toBe("partial");
+      expect(calls).toEqual(["runNightly", "evening", "notify:evening"]);
+    });
+
+    it("a partial feature batch makes the job partial", async () => {
+      const { d, calls } = deps();
+      d.runner = okTickets(calls);
+      d.features = featureRunner(calls, "partial");
+      expect(await nightlyJob(d)).toBe("partial");
+      expect(calls).toEqual(["runNightly", "features", "evening", "notify:evening"]);
+    });
+
+    it("a partial ticket batch (not rate limited) still runs the features and stays partial", async () => {
+      const { d, calls } = deps();
+      d.features = featureRunner(calls);
+      expect(await nightlyJob(d)).toBe("partial");
+      expect(calls).toEqual(["runNightly", "features", "evening", "notify:evening"]);
+    });
+
+    it("without features the job is unchanged", async () => {
+      const { d, calls } = deps();
+      d.runner = okTickets(calls);
+      expect(await nightlyJob(d)).toBe("ok");
+      expect(calls).toEqual(["runNightly", "evening", "notify:evening"]);
+    });
+  });
+
   it("nightly: no notification once the app is quitting", async () => {
     const { d, calls } = deps({ aborted: () => true });
     await nightlyJob(d);

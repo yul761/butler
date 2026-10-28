@@ -3,13 +3,16 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createEmbeddedBackend } from "statecore-mcp/lib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Handoff } from "../../shared/handoff";
+import type { FeatureHandoff, Handoff } from "../../shared/handoff";
 import type { Followup, FollowupStatus, HandoffTrigger } from "../../shared/types";
+import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
+import { FeaturesRepo } from "../db/features-repo";
 import { FollowupsRepo } from "../db/followups-repo";
 import { HandoffsRepo } from "../db/handoffs-repo";
 import { MemorySyncRepo } from "../db/memory-sync-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { chatReply, gatewayHarness, type GatewayHarness } from "../gateway/testing";
+import { featureScope } from "../../shared/memory";
 import { insertTicket, memDb, tempDir } from "../test-utils";
 import { handoffSummary, MemoryService, nightlyDistill } from "./memory-service";
 import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
@@ -45,6 +48,10 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   const handoffs = new HandoffsRepo(db);
   const followups = new FollowupsRepo(db);
   const sync = new MemorySyncRepo(db);
+  const features = new FeaturesRepo(db);
+  const featureHandoffs = new FeatureHandoffsRepo(db);
+  // feature 1、2、3；测试里主要用 3。
+  for (const name of ["F1", "F2", "F3"]) features.insert({ name, workspaceDir: `/w/${name}`, createdAt: 1 });
   for (const key of ["PROJ-1", "PROJ-2"]) {
     insertTicket(tickets, { key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
   }
@@ -56,7 +63,7 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   let now = Date.now();
   const synced: string[] = [];
   const memory = new MemoryService({
-    dataDir, tickets, handoffs, followups, sync,
+    dataDir, tickets, handoffs, followups, sync, features, featureHandoffs,
     enabled: () => enabled,
     now: () => now,
     onSynced: (key) => synced.push(key),
@@ -70,11 +77,115 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
       status: "open", snoozedUntil: null, source: "session", createdAt: ++now, doneAt: null, ...over,
     });
   const setFollowup = (id: string, status: FollowupStatus) => followups.setStatus(id, status, ++now);
+  // 汇总的时间用真实时钟：同一份内容是否已经写过，要拿 StateCore 写入的时间和它比（见 syncFeature）。
+  const addSummary = (p: FeatureHandoff | null, featureId = 3, createdAt = Date.now()) =>
+    featureHandoffs.insert({ featureId, sessionId: null, trigger: "nightly", createdAt, payload: p, rawText: null })!;
   const texts = (scope = "ticket:PROJ-1") => withScope({ dataDir, scope }, async (s) => (await s.facts()).map((i) => i.text));
   const items = (scope = "ticket:PROJ-1") => withScope({ dataDir, scope }, (s) => s.facts());
   const slots = (scope = "ticket:PROJ-1") => withScope({ dataDir, scope }, (s) => s.noteSlots());
-  return { memory, dataDir, sync, logs, synced, addHandoff, addFollowup, setFollowup, texts, items, slots, setEnabled: (v: boolean) => (enabled = v) };
+  return {
+    memory, dataDir, sync, logs, synced, features, addHandoff, addFollowup, setFollowup, addSummary, texts, items, slots,
+    setEnabled: (v: boolean) => (enabled = v),
+  };
 }
+
+const summary = (over: Partial<FeatureHandoff> = {}): FeatureHandoff => ({
+  summary: "接口联调完了，前端在等错误码", blockers: [], next_steps: [], decisions: [], open_questions: [], ...over,
+});
+
+describe("MemoryService.syncFeature (design 2026-10-28, 记忆)", () => {
+  const scope = featureScope(3);
+  const handoffOf = (t: ReturnType<typeof setup>) => withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
+
+  it("writes the latest summary as the handoff of the feature scope and its decisions as notes", async () => {
+    const t = setup();
+    t.addSummary(summary({
+      next_steps: [{ ticket: "PROJ-1", text: "补后端的错误码" }, { ticket: null, text: "约前端联调" }],
+      open_questions: ["要不要拆成两个 PR？"],
+      decisions: [{ key: "errors", statement: "错误码统一用 E 开头的四位数" }, { key: "api", statement: "接口走 REST" }],
+    }));
+    await t.memory.syncFeature(3);
+    expect((await handoffOf(t))?.content).toBe("接口联调完了，前端在等错误码\nOpen questions:\n- 要不要拆成两个 PR？\nNext steps:\n- 补后端的错误码\n- 约前端联调");
+    expect((await t.texts(scope)).sort()).toEqual(["[decision:api] 接口走 REST", "[decision:errors] 错误码统一用 E 开头的四位数"]);
+    // 不碰 ticket scope 和 workspace。
+    expect(await t.texts("workspace")).toEqual([]);
+    expect(t.synced).toEqual([scope]);
+  });
+
+  it("forgets a decision the newer summary no longer has, and replaces a changed one", async () => {
+    const t = setup();
+    t.addSummary(summary({ decisions: [{ key: "errors", statement: "错误码用四位数" }, { key: "api", statement: "接口走 REST" }] }));
+    await t.memory.syncFeature(3);
+    t.addSummary(summary({ summary: "前端接上了", decisions: [{ key: "errors", statement: "错误码用五位数" }] }));
+    await t.memory.syncFeature(3);
+    expect(await t.texts(scope)).toEqual(["[decision:errors] 错误码用五位数"]);
+    expect(await handoffOf(t)).toMatchObject({ content: "前端接上了", versionCount: 2 });
+  });
+
+  it("writes the handoff once per summary: a second sync with nothing new does not write it again", async () => {
+    const t = setup();
+    t.addSummary(summary({ decisions: [{ key: "api", statement: "接口走 REST" }] }));
+    await t.memory.syncFeature(3);
+    const before = await handoffOf(t);
+    await t.memory.syncFeature(3);
+    expect(await handoffOf(t)).toEqual(before);
+    expect(before?.versionCount).toBe(1);
+    expect(await t.texts(scope)).toEqual(["[decision:api] 接口走 REST"]);
+  });
+
+  it("a later summary with the same text still gets its own handoff version", async () => {
+    const t = setup();
+    t.addSummary(summary());
+    await t.memory.syncFeature(3);
+    // 晚于上一次写入之后生成的汇总（StateCore 的时钟可能略快于真实时钟，留一分钟余量）。
+    t.addSummary(summary(), 3, Date.now() + 60_000);
+    await t.memory.syncFeature(3);
+    expect((await handoffOf(t))?.versionCount).toBe(2);
+  });
+
+  it("skips degraded summaries: the latest valid one is what counts", async () => {
+    const t = setup();
+    t.addSummary(summary({ summary: "有效的那份" }));
+    t.addSummary(null);
+    await t.memory.syncFeature(3);
+    expect((await handoffOf(t))?.content).toBe("有效的那份");
+  });
+
+  it("rewrites the handoff when the StateCore data was deleted", async () => {
+    const t = setup();
+    t.addSummary(summary());
+    await t.memory.syncFeature(3);
+    const t2 = setup({ dataDir: tempDir() });
+    t2.addSummary(summary());
+    await t2.memory.syncFeature(3);
+    expect((await handoffOf(t2))?.content).toBe("接口联调完了，前端在等错误码");
+  });
+
+  it("does nothing when memory is off, for an unknown feature, or before the first valid summary", async () => {
+    const off = setup({ enabled: false });
+    off.addSummary(summary({ decisions: [{ key: "api", statement: "接口走 REST" }] }));
+    await off.memory.syncFeature(3);
+    expect(await handoffOf(off)).toBeNull();
+    expect(await off.texts(scope)).toEqual([]);
+    expect(off.synced).toEqual([]);
+    const t = setup();
+    await t.memory.syncFeature(99);
+    t.addSummary(null);
+    await t.memory.syncFeature(3);
+    expect(await handoffOf(t)).toBeNull();
+    expect(t.synced).toEqual([]);
+  });
+
+  it("syncAll also syncs the features that are not archived", async () => {
+    const t = setup();
+    t.addSummary(summary({ summary: "feature 3" }), 3);
+    t.addSummary(summary({ summary: "feature 2" }), 2);
+    t.features.archive(2, 1);
+    await t.memory.syncAll();
+    expect((await handoffOf(t))?.content).toBe("feature 3");
+    expect(await withScope({ dataDir: t.dataDir, scope: featureScope(2) }, (s) => s.activeHandoff())).toBeNull();
+  });
+});
 
 describe("handoffSummary", () => {
   it("states the status and what was done", () => {

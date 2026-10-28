@@ -33,9 +33,11 @@ import { autostartState } from "./autostart";
 import { electronSecretBox } from "./gateway/safe-storage";
 import { llmStatus } from "./gateway/status";
 import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
-import type { FeatureIngestResult } from "./handoff/feature-ingest";
+import { ingestFeatureHandoff, type FeatureIngestInput } from "./handoff/feature-ingest";
+import { FeatureSummaryRunner } from "./handoff/feature-runner";
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
+import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
 import { FeaturesRepo } from "./db/features-repo";
 import { onLangChange, setLang } from "./i18n";
 import { resolveLang } from "../shared/i18n";
@@ -276,11 +278,14 @@ async function bootstrap(): Promise<void> {
   const handoffs = new HandoffsRepo(db);
   const followups = new FollowupsRepo(db);
   const jobs = new JobsRepo(db);
+  const featureHandoffs = new FeatureHandoffsRepo(db);
   const memory = new MemoryService({
     dataDir: paths.statecore,
     tickets,
     handoffs,
     followups,
+    features,
+    featureHandoffs,
     sync: new MemorySyncRepo(db),
     enabled: () => memoryOn(settings),
     now: Date.now,
@@ -440,6 +445,40 @@ async function bootstrap(): Promise<void> {
     signal: headlessAbort.signal,
     log: logger,
   });
+  /** feature 汇总入库（设计文档 2026-10-28）：存下有效的汇总后写进 feature 的记忆（异步，失败只记日志），界面刷新。 */
+  const ingestFeature = (input: FeatureIngestInput) => {
+    const r = ingestFeatureHandoff({ features, tickets, featureHandoffs, now: Date.now }, input);
+    if (r.stored && !r.degraded) void memory.syncFeature(input.featureId);
+    if (r.stored) notify();
+    return r;
+  };
+  const featureRunner = new FeatureSummaryRunner({
+    features, tickets, handoffs, featureHandoffs, settings, sessions,
+    ingest: ingestFeature,
+    ticketRunner: runner,
+    dirs: (id) => ticketService.featureHeadlessDirs(id),
+    run: runHeadless,
+    ready: () => healthReady,
+    claude: () => health.claude(),
+    baseEnv: process.env,
+    transcriptMtime,
+    now: Date.now,
+    newRunId: randomUUID,
+    projectMcp,
+    signal: headlessAbort.signal,
+    log: logger,
+  });
+  /**
+   * 总控里的 /handoff 之后给子 ticket 跑 handoff（后台）。capture 不等它；同步抛错也只记日志，
+   * 不能打断 captureCommandHandoff（否则已经存下的汇总收不到 notify）。
+   */
+  const afterFeatureCommand = (featureId: number, handoffId: number | null): void => {
+    try {
+      void featureRunner.afterCommand(featureId, handoffId).then(notify, (e: unknown) => logger(`child handoffs after /handoff in feature ${featureId} failed`, e));
+    } catch (e) {
+      logger(`child handoffs after /handoff in feature ${featureId} failed`, e);
+    }
+  };
   const briefs = new BriefsRepo(db);
   const briefService = new BriefService({
     tickets, sessions, handoffs, followups, marks: new MarksRepo(db), briefs, settings,
@@ -475,6 +514,7 @@ async function bootstrap(): Promise<void> {
   });
   const dailyDeps: DailyJobDeps = {
     runner,
+    features: featureRunner,
     briefs: briefService,
     jobs,
     now: Date.now,
@@ -600,11 +640,16 @@ async function bootstrap(): Promise<void> {
       // Stop 之后看这一轮有没有 /handoff 的输出（异步；失败只记日志，不影响 hook 处理）。
       const stop = stopFromEnvelope(env);
       if (stop) {
-        // 临时占位：feature 汇总的入库和子 ticket handoff 还没接上（计划 8 Task 4），在那之前总控里的 /handoff 不入库。
-        const ingestFeature = (): FeatureIngestResult => ({ stored: false, reason: "no_feature" });
-        void captureCommandHandoff({ sessions, tickets, ingest, ingestFeature, afterFeatureCommand: () => undefined }, stop).then(
+        void captureCommandHandoff({ sessions, tickets, ingest, ingestFeature, afterFeatureCommand }, stop).then(
           (r) => {
             if (r?.stored) notify();
+            // feature 总控（设计文档 2026-10-28）：没存下时记一笔；子 ticket 的 handoff 照样在后台跑（afterFeatureCommand）。
+            else if (r && "featureId" in r) {
+              const where = `/handoff in feature ${r.featureId} coordinator session ${stop.sessionId}`;
+              if (r.reason === "wrong_block") logger(`${where}: printed a ticket butler-handoff block instead of a butler-feature-handoff block; not stored`);
+              else if (r.reason === "no_block") logger(`${where}: no feature handoff block found in the transcript; not stored`);
+              else if (r.reason === "no_feature") logger(`${where}: the feature no longer exists; not stored`);
+            }
             // session 没有归属 ticket、输出里的 ticket 号也不存在，或者等了几次都没读到结果：记一笔，免得用户以为采集坏了。
             else if (r && r.reason === "no_ticket") logger(`/handoff output in session ${stop.sessionId} names no known ticket; not stored`);
             else if (r && r.reason === "no_block") logger(`/handoff in session ${stop.sessionId}: no handoff block found in the transcript; not stored`);
