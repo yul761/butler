@@ -5,3 +5,6 @@ dist/
 *.log
 .DS_Store
 test-results/
+
+# superpowers 头脑风暴的草图
+.superpowers/
