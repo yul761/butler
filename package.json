@@ -1,6 +1,6 @@
 {
   "name": "butler",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "private": true,
   "description": "A work butler for Claude Code ticket sessions",
   "author": "Yuchen Lin",
