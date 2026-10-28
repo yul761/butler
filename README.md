@@ -25,6 +25,8 @@ There are deliberate limits:
   - `list_sessions`, which shows the sessions of the coordinator and of every ticket.
 
   A feature runs at most 8 terminals at once. All its sessions also share a feature memory, `butler-feature`, for things like the API contract between frontend and backend. A `claude` you open yourself in the workspace folder counts as the feature's coordinator. Archiving a feature archives its tickets too; restoring it brings back the tickets archived with it.
+
+  The feature page starts with **整体进度 (Overall progress)**: a summary across the feature's tickets, with what is in the way and what comes next, followed by a table of the tickets and their PRs. The summary is written by the nightly run for features with new activity, by `/handoff` in the coordinator, or when you click **立即更新 (Update now)**. It never shows a completion percentage.
 - **Worktree cleanup after merge.** Once a handoff reports that a ticket's PR is merged, Butler removes that ticket's worktrees with `git worktree remove`. The branch is kept, and opening a session there again rebuilds the worktree. Butler does not remove a worktree that has uncommitted changes or untracked files, or one whose own session is still running in a terminal. In that case the ticket page shows why, with a **重新检查 (check again)** button, and Butler tries again when that terminal exits. Files ignored by `.gitignore` (`node_modules`, a local `.env`) are removed with the worktree.
 - **Nightly handoffs.** At a time you choose, Butler asks your own logged-in `claude` to write a structured handoff for every ticket that had activity.
   - `Edit`, `Write` and `NotebookEdit` are always denied.
@@ -32,7 +34,7 @@ There are deliberate limits:
   - Any other permission comes from your own Claude Code settings: the user-level allow rules (the runs use `--setting-sources user`) and any managed policy settings.
   - These runs are not strictly read-only. If your settings allow, say, `Bash(npm:*)` or a write-capable MCP tool, the runs can use it too.
 
-  Inside a session you can also type `/handoff`.
+  Inside a session you can also type `/handoff`. In a feature's coordinator, `/handoff` writes the feature's summary instead of a ticket handoff, and Butler then runs handoffs in the background for the feature's tickets that had activity since their last one.
 - **Morning brief.** It has three sections, then what you did on the previous working day:
   - **🔴 先做 (do first):** approved PRs, requested changes, after-merge follow-ups and due items
   - **🟡 今天 (today)**

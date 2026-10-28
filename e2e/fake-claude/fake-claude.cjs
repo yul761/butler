@@ -3,7 +3,8 @@
 //   --version / --help（列出 Butler 检查的全部参数）；
 //   交互模式（在 PTY 里）：打印就绪行和挂载的 MCP server 名；每读到一行输入就写 transcript、
 //     按 CLAUDE_CONFIG_DIR/settings.json 执行 hook（macOS 用 /bin/sh，Windows 用 Git Bash，和 Claude Code 一样）；
-//   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff 或刷新结果；stream-json 的 MCP 探测只回 init。
+//     输入 /handoff 时按 Claude Code 的格式写命令消息，回一个 handoff 代码块（feature 总控里是 butler-feature-handoff）；
+//   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果或 feature 汇总；stream-json 的 MCP 探测只回 init。
 "use strict";
 const fs = require("node:fs");
 const os = require("node:os");
@@ -28,7 +29,7 @@ const FLAGS = [
   "--print", "--session-id", "--resume", "--fork-session", "--mcp-config", "--output-format", "--json-schema",
   "--allowedTools", "--disallowedTools", "--no-session-persistence", "--permission-mode", "--setting-sources", "--add-dir",
 ];
-const PR = { number: 7, url: "https://example.invalid/pull/7", state: "merged", review: "approved" };
+const PR = { number: 7, url: "https://github.com/acme/backend/pull/7", state: "merged", review: "approved" };
 const HANDOFF = {
   ticket: "",
   status: "merged_pending_followup",
@@ -43,6 +44,42 @@ const HANDOFF = {
   open_questions: [],
 };
 const REFRESH = { status: "merged_pending_followup", prs: [PR], jira: null };
+/** ticket session 里键入 /handoff 时输出的 butler-handoff：PR 还开着、已 approve（不会触发 worktree 清理）。 */
+const COMMAND_HANDOFF = {
+  ...HANDOFF,
+  status: "in_review",
+  done_today: ["结账页写完"],
+  next_steps: ["等 review"],
+  prs: [{ number: 12, url: "https://github.com/acme/frontend/pull/12", state: "open", review: "approved" }],
+  followups: [],
+  decisions: [],
+  learnings: [],
+};
+/** feature 总控里键入 /handoff 时输出的 butler-feature-handoff。ticket 号故意写成小写，入库时规范成大写。 */
+const COMMAND_FEATURE_HANDOFF = {
+  summary: "结账页前端（DMS-1）已提 PR 等合并；后端下单接口（DMS-2）还在写，两边还没联调。",
+  blockers: ["DMS-2 等支付网关的测试账号"],
+  next_steps: [{ ticket: "dms-2", text: "写完下单接口" }, { ticket: null, text: "两边合并后联调结账流程" }],
+  decisions: [{ key: "order-api", statement: "下单接口返回 order_id" }],
+  open_questions: [],
+};
+/** 手动"立即更新"（headless，--json-schema 是 feature 汇总）的结果，跟着 prompt 的语言走。 */
+const FEATURE_SUMMARY = {
+  zh: {
+    summary: "后端下单接口（DMS-2）已合并；前端结账页（DMS-1）的 PR 已 approve，合并后就能联调。",
+    blockers: ["DMS-1 等支付表单的设计 review"],
+    next_steps: [{ ticket: "DMS-1", text: "合并结账页的 PR" }, { ticket: null, text: "在 staging 联调结账流程" }],
+    decisions: [{ key: "order-api", statement: "下单接口返回 order_id" }],
+    open_questions: [],
+  },
+  en: {
+    summary: "The backend order API (DMS-2) is merged; the frontend checkout page (DMS-1) has an approved PR, and the two can be wired up once it is merged.",
+    blockers: ["DMS-1 is waiting for the design review of the payment form"],
+    next_steps: [{ ticket: "DMS-1", text: "Merge the checkout page PR" }, { ticket: null, text: "Test the checkout flow end to end on staging" }],
+    decisions: [{ key: "order-api", statement: "The order API returns order_id" }],
+    open_questions: [],
+  },
+};
 
 /** 和 Claude Code 一样执行 settings.json 里这个事件的 command hook：stdin 是 JSON，超时 15 秒。 */
 function runHooks(event, payload) {
@@ -68,7 +105,7 @@ function headless() {
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (c) => (input += c));
   process.stdin.on("end", () => {
-    log(`headless ${args.filter((a) => !a.startsWith("{")).join(" ")} prompt=${input.length}`);
+    log(`headless ${args.filter((a) => !a.startsWith("{")).join(" ")} prompt=${input.length} cwd=${process.cwd()}`);
     if (flag("--output-format") === "stream-json") {
       process.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", session_id: "probe", mcp_servers: [], tools: [] })}\n`);
       return;
@@ -79,7 +116,10 @@ function headless() {
     } catch {
       // 按 handoff 处理。
     }
-    const structured = schema.properties && schema.properties.followups ? HANDOFF : REFRESH;
+    const props = schema.properties || {};
+    // prompt 的第一行有中文就当中文，否则英文（Butler 按界面语言出 prompt）。
+    const lang = /[\u4e00-\u9fff]/.test(input.split("\n")[0]) ? "zh" : "en";
+    const structured = props.followups ? HANDOFF : props.open_questions && props.summary ? FEATURE_SUMMARY[lang] : REFRESH;
     const result = { type: "result", subtype: "success", is_error: false, session_id: `fork-${Date.now()}`, result: JSON.stringify(structured), structured_output: structured, permission_denials: [], total_cost_usd: 0 };
     process.stdout.write(`${JSON.stringify(result)}\n`);
   });
@@ -132,10 +172,29 @@ function interactive() {
       runHooks("SessionEnd", { session_id: sessionId, cwd, reason: "exit", transcript_path: transcript });
       process.exit(0);
     }
-    append({ type: "user", message: { role: "user", content: line } });
+    const command = /^\/handoff(\s|$)/.test(line);
+    if (command) {
+      // Claude Code 的斜杠命令：一条命令消息，再跟一条 isMeta 的命令文件展开。
+      append({ type: "user", message: { role: "user", content: "<command-message>handoff</command-message>\n<command-name>/handoff</command-name>" } });
+      let body = "";
+      try {
+        body = fs.readFileSync(path.join(configDir, "commands", "handoff.md"), "utf8");
+      } catch {
+        // 没装命令文件也照样回代码块。
+      }
+      append({ type: "user", isMeta: true, message: { role: "user", content: [{ type: "text", text: body }] } });
+    } else {
+      append({ type: "user", message: { role: "user", content: line } });
+    }
     runHooks("UserPromptSubmit", { session_id: sessionId, cwd, prompt: line, transcript_path: transcript });
-    const reply = `收到：${line}`;
-    append({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: reply }] } });
+    // 挂着 butler-sessions 的是 feature 总控。
+    const coordinator = servers.includes("butler-sessions");
+    const reply = !command
+      ? `收到：${line}`
+      : coordinator
+        ? `handoff：\n\n\`\`\`butler-feature-handoff\n${JSON.stringify(COMMAND_FEATURE_HANDOFF, null, 2)}\n\`\`\``
+        : `handoff：\n\n\`\`\`butler-handoff\n${JSON.stringify(COMMAND_HANDOFF, null, 2)}\n\`\`\``;
+    append({ type: "assistant", uuid: `a-${Date.now()}`, message: { role: "assistant", content: [{ type: "text", text: reply }] } });
     out(`${reply}\n`);
     runHooks("Stop", { session_id: sessionId, cwd, stop_hook_active: false, transcript_path: transcript });
     out("> ");

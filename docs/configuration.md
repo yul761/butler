@@ -116,6 +116,8 @@ This section also shows:
 
 The section also has **立即运行晚间 handoff (run the nightly handoff now)**.
 
+After the tickets, the nightly run also writes a summary for every feature whose coordinator session or tickets had new activity since its last summary. It forks the coordinator session when there is one and uses the same read-only flags as a handoff. If the ticket run was rate limited, no feature summaries are written that night and the morning catch-up does them. A feature's page also has **立即更新 (Update now)**, which first runs handoffs for the feature's tickets that had activity and then writes the summary. `/handoff` in a coordinator writes the summary from the conversation itself.
+
 Handoffs and refreshes start `claude` with these flags:
 
 - `--permission-mode dontAsk`: any tool that is not allowed is refused, so there is never a prompt.
