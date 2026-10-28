@@ -9,6 +9,7 @@ import { S, STATUS_LABEL } from "../strings";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { RepoPicker } from "./RepoPicker";
 import { TerminalPane } from "./TerminalPane";
+import { useCollapsed } from "./useCollapsed";
 
 interface Props {
   feature: FeatureView;
@@ -102,6 +103,8 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
     }
   }
 
+  const [ticketsCollapsed, toggleTickets] = useCollapsed(`tickets:${feature.id}`);
+
   // 整个 feature 不止一个 PR 时，PR 标签带上仓库名。
   const allPrs = Object.values(feature.ticketPrs).flat();
 
@@ -125,8 +128,15 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
       <div className="feature-overview">
         <FeatureProgress feature={feature} onOpenTicket={onOpenTicket} />
         <section className="feature-tickets">
-          <h3>{S.featureTickets}</h3>
-          {feature.tickets.length === 0 ? (
+          <h3>
+            <button className="section-toggle" aria-expanded={!ticketsCollapsed} onClick={toggleTickets}>
+              <span className="twisty">{ticketsCollapsed ? "▸" : "▾"}</span>
+              {S.featureTickets}
+              <span className="muted">{feature.tickets.length}</span>
+              {ticketsCollapsed && feature.tickets.some((t) => t.waiting) && <span className="badge" title={S.waiting}>●</span>}
+            </button>
+          </h3>
+          {ticketsCollapsed ? null : feature.tickets.length === 0 ? (
             <p className="muted">{S.noFeatureTickets}</p>
           ) : (
             <table className="ticket-table">
@@ -154,7 +164,7 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
               </tbody>
             </table>
           )}
-          <button onClick={() => setNewTicket(true)}>+ {S.newTicket}</button>
+          {!ticketsCollapsed && <button onClick={() => setNewTicket(true)}>+ {S.newTicket}</button>}
         </section>
       </div>
       {newTicket && (

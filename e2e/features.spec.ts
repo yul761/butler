@@ -72,6 +72,12 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
 
   // 侧栏：feature 下面缩进列着它的两个 ticket，不在按状态分组的列表里。
   await expect(page.locator(".sidebar .feature-group .feature-tickets .ticket .key")).toHaveText(["DMS-1", "DMS-2"]);
+  // 三角收起 feature 下的 ticket：正在看的 DMS-2 还留着；再点展开。
+  const twisty = page.locator(".sidebar .feature-group .twisty");
+  await twisty.click();
+  await expect(page.locator(".sidebar .feature-group .feature-tickets .ticket .key")).toHaveText(["DMS-2"]);
+  await twisty.click();
+  await expect(page.locator(".sidebar .feature-group .feature-tickets .ticket .key")).toHaveText(["DMS-1", "DMS-2"]);
 
   // 3. feature 总控：在工作区里打开（worktree 都在里面，不需要 --add-dir），挂 feature 记忆和 feature 模式的 butler-sessions。
   await page.locator(".sidebar .ticket.feature").click();
@@ -191,6 +197,15 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await expect(progress.getByText(S.featureSummaryNone, { exact: true })).toBeVisible();
   await expect(row("DMS-1").locator(".pill")).toHaveText([`#12 ${S.prPill.approved}`]);
   await expect(row("DMS-2").locator(".pill")).toHaveText([S.noPr]);
+  // ticket 表能收起，离开再回来还是收起的；再展开。
+  const ticketsToggle = page.locator(".feature-page .section-toggle");
+  await ticketsToggle.click();
+  await expect(page.locator(".feature-page .ticket-table")).toHaveCount(0);
+  await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
+  await featurePage();
+  await expect(page.locator(".feature-page .ticket-table")).toHaveCount(0);
+  await ticketsToggle.click();
+  await expect(row("DMS-1")).toBeVisible();
 
   // 3. 总控里 /handoff：输出 butler-feature-handoff，存成 feature 汇总。
   await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();

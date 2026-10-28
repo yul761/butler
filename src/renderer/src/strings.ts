@@ -34,6 +34,8 @@ const ZH = {
   featureReposHint: "在这个 feature 下建 ticket 时从这些仓库里选。移除只影响以后的选项。",
   featureTickets: "Ticket",
   noFeatureTickets: "还没有 ticket。点“新建 ticket”。",
+  expand: "展开",
+  collapse: "收起",
   featureCoordinatorHint: "feature 总控在工作区里运行，能看到所有 ticket 的 worktree，可以给各个 ticket 开子 session。",
   noFeatureSessions: "还没有总控 session。",
   // feature 汇总（设计文档 2026-10-28）

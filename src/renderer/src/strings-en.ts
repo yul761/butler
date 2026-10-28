@@ -33,6 +33,8 @@ export const EN: UiStrings = {
   featureReposHint: "New tickets in this feature pick their repos from these. Removing one only affects future choices.",
   featureTickets: "Tickets",
   noFeatureTickets: "No tickets yet. Click “New ticket”.",
+  expand: "Expand",
+  collapse: "Collapse",
   featureCoordinatorHint: "The feature coordinator runs in the workspace, sees every ticket's worktree and can open sessions in the tickets.",
   noFeatureSessions: "No coordinator session yet.",
   featureProgress: "Overall progress",

@@ -1,6 +1,7 @@
 import type { FeatureView, TicketView } from "../../../shared/types";
 import type { Route } from "../App";
 import { groupTickets } from "../group";
+import { useCollapsed } from "./useCollapsed";
 import { S, STATUS_LABEL } from "../strings";
 
 interface Props {
@@ -41,13 +42,7 @@ export function Sidebar({ tickets, features, unclaimedCount, route, onNavigate, 
           <section>
             <h3>{S.features}</h3>
             {features.map((f) => (
-              <div key={f.id} className="feature-group">
-                <button className={cls("ticket feature", route.page === "feature" && route.id === f.id)} onClick={() => onNavigate({ page: "feature", id: f.id })}>
-                  <span className="key">{f.name}</span>
-                  {f.sessions.some((s) => s.waitingForInput) && <span className="badge" title={S.waiting}>●</span>}
-                </button>
-                <div className="feature-tickets">{f.tickets.map(ticketButton)}</div>
-              </div>
+              <FeatureGroup key={f.id} feature={f} route={route} onNavigate={onNavigate} ticketButton={ticketButton} />
             ))}
           </section>
         )}
@@ -69,5 +64,42 @@ export function Sidebar({ tickets, features, unclaimedCount, route, onNavigate, 
         {keepAwake ? S.keepAwakeOn : S.keepAwake}
       </label>
     </nav>
+  );
+}
+
+interface FeatureGroupProps {
+  feature: FeatureView;
+  route: Route;
+  onNavigate: (r: Route) => void;
+  ticketButton: (t: TicketView) => React.ReactNode;
+}
+
+/** 侧栏里的一个 feature：前面的三角收起/展开它下面的 ticket，点名字进 feature 页。 */
+function FeatureGroup({ feature: f, route, onNavigate, ticketButton }: FeatureGroupProps) {
+  const [collapsed, toggle] = useCollapsed(`sidebar:${f.id}`);
+  // 收起时正在看的那个 ticket 还留着，不然不知道自己在哪。
+  const shown = collapsed ? f.tickets.filter((t) => route.page === "ticket" && route.key === t.key) : f.tickets;
+  const waiting = f.sessions.some((s) => s.waitingForInput) || (collapsed && f.tickets.some((t) => t.waiting));
+  return (
+    <div className="feature-group">
+      <div className="feature-row">
+        <button
+          className="twisty"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? S.expand : S.collapse}
+          title={collapsed ? S.expand : S.collapse}
+          disabled={f.tickets.length === 0}
+          onClick={toggle}
+        >
+          {collapsed ? "▸" : "▾"}
+        </button>
+        <button className={cls("ticket feature", route.page === "feature" && route.id === f.id)} onClick={() => onNavigate({ page: "feature", id: f.id })}>
+          <span className="key">{f.name}</span>
+          {collapsed && <span className="title">{f.tickets.length}</span>}
+          {waiting && <span className="badge" title={S.waiting}>●</span>}
+        </button>
+      </div>
+      {shown.length > 0 && <div className="feature-tickets">{shown.map(ticketButton)}</div>}
+    </div>
   );
 }
