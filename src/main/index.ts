@@ -82,6 +82,8 @@ const CONFIRM_TIMEOUT_MS = 5 * 60 * 1000;
 
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
+/** e2e 设 BUTLER_BACKGROUND_WINDOWS=1：窗口不激活、macOS 上不进 Dock，测试跑起来不把焦点从别的程序抢过来。 */
+const BACKGROUND_WINDOWS = process.env.BUTLER_BACKGROUND_WINDOWS === "1";
 /** 防休眠开关（托盘菜单和侧边栏都能开关）；bootstrap 里建好。 */
 let keepAwake: KeepAwake | null = null;
 /** 保留最近一条通知的引用，否则它可能在用户点击前被回收。 */
@@ -158,7 +160,8 @@ function createWindow(): BrowserWindow {
     title: "Butler",
     webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
-  w.on("ready-to-show", () => w.show());
+  // 自动化测试（e2e）在后台开窗口：不抢焦点，不打断用户在别的程序里打字。
+  w.on("ready-to-show", () => (BACKGROUND_WINDOWS ? w.showInactive() : w.show()));
   w.on("closed", () => {
     if (win === w) win = null;
   });
@@ -797,6 +800,9 @@ if (process.argv.includes("--smoke")) {
   app.on("window-all-closed", () => undefined);
   void app
     .whenReady()
+    .then(() => {
+      if (BACKGROUND_WINDOWS && process.platform === "darwin") app.setActivationPolicy("accessory");
+    })
     .then(bootstrap)
     .catch((e: unknown) => {
       // 数据比程序新：给一句能看懂的话，不贴调用栈。

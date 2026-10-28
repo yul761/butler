@@ -137,6 +137,8 @@ function sandboxEnv(s: Sandbox): Record<string, string> {
   env.BUTLER_HOME = s.butlerHome;
   env.CLAUDE_CONFIG_DIR = s.claudeConfigDir;
   env.FAKE_CLAUDE_LOG = s.fakeLog;
+  // 窗口在后台打开，不抢焦点（用户反馈 2026-10-28：跑测试时正在别处打字被打断）。
+  env.BUTLER_BACKGROUND_WINDOWS = "1";
   if (s.lang) env.BUTLER_LANG = s.lang;
   return env;
 }
