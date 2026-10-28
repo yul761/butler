@@ -1,7 +1,9 @@
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
+import { HandoffsRepo } from "../db/handoffs-repo";
 import { SessionsRepo } from "../db/sessions-repo";
 import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
@@ -18,6 +20,8 @@ async function setup() {
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
   const features = new FeaturesRepo(db);
+  const featureHandoffs = new FeatureHandoffsRepo(db);
+  const handoffs = new HandoffsRepo(db);
   const settings = new SettingsRepo(db);
   const ticketService = new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("butler-ws-") });
   const featureService = new FeatureService({ features, tickets, now: () => 1 });
@@ -36,7 +40,7 @@ async function setup() {
   const mcpAsked: { key: string; coordinator: boolean; featureId: number | null }[] = [];
   let n = 0;
   const service = new SessionService({
-    tickets, sessions, settings, ticketService, pty, features,
+    tickets, sessions, settings, ticketService, pty, features, featureHandoffs, handoffs,
     ready: async () => undefined,
     transcriptExists: () => true,
     transcriptState: () => "present",
@@ -48,7 +52,7 @@ async function setup() {
     mcpConfig: (key, o) => (mcpAsked.push({ key, ...o }), `/mcp/${key}.json`),
     featureMcpConfig: (id) => `/mcp/features/${id}.json`,
   });
-  return { service, sessions, tickets, features, spawned, pty, feature, fe, be, backend, mcpAsked };
+  return { service, featureHandoffs, handoffs, sessions, tickets, features, spawned, pty, feature, fe, be, backend, mcpAsked };
 }
 
 describe("feature coordinator sessions (design 2026-10-26)", () => {
@@ -86,6 +90,22 @@ describe("feature coordinator sessions (design 2026-10-26)", () => {
     expect(fv.id).toBe(feature.id);
     expect(fv.tickets.map((t) => t.key).sort()).toEqual(["DMS-1", "DMS-2"]);
     expect(fv.sessions.map((s) => [s.id, s.termId])).toEqual([["new-1", "new-1"]]);
+  });
+
+  it("carries the latest feature summary (degraded too) and each ticket's PRs from its latest valid handoff", async () => {
+    const { service, feature, featureHandoffs, handoffs } = await setup();
+    expect(service.featureViews()[0].summary).toBeNull();
+    const pr = { repo: "frontend", url: "https://x/pr/1", state: "open" } as never;
+    const payload = (prs: unknown[]) => ({ ticket: "DMS-1", status: "active", done_today: [], next_steps: [], blockers: [], prs, jira: null, followups: [], decisions: [], learnings: [], open_questions: [] }) as never;
+    handoffs.insert({ ticketKey: "DMS-1", sessionId: null, trigger: "manual", createdAt: 10, payload: payload([]), rawText: null });
+    handoffs.insert({ ticketKey: "DMS-1", sessionId: null, trigger: "refresh", createdAt: 20, payload: payload([pr]), rawText: null });
+    handoffs.insert({ ticketKey: "DMS-2", sessionId: null, trigger: "manual", createdAt: 20, payload: null, rawText: "bad" });
+    featureHandoffs.insert({ featureId: feature.id, sessionId: null, trigger: "manual", createdAt: 1, payload: { summary: "a", blockers: [], next_steps: [], decisions: [], open_questions: [] }, rawText: null });
+    featureHandoffs.insert({ featureId: feature.id, sessionId: null, trigger: "manual", createdAt: 2, payload: null, rawText: "bad" });
+    const fv = service.featureViews()[0];
+    expect(fv.summary).toMatchObject({ createdAt: 2, degraded: true });
+    expect(fv.ticketPrs["DMS-1"]).toEqual([pr]);
+    expect(fv.ticketPrs["DMS-2"]).toEqual([]);
   });
 
   it("counts the coordinator and every ticket's terminals toward the feature", async () => {

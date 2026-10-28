@@ -31,4 +31,9 @@ describe("IPC whitelist", () => {
   it("exposes the autostart channels as invoke-only", () => {
     for (const c of [IPC.appAutostartGet, IPC.appAutostartSet]) expect(INVOKE_CHANNELS).toContain(c);
   });
+
+  it("exposes the feature summary run as invoke-only", () => {
+    expect(INVOKE_CHANNELS).toContain(IPC.featuresSummaryRun);
+    expect(EVENT_CHANNELS).not.toContain(IPC.featuresSummaryRun);
+  });
 });

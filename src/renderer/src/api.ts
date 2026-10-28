@@ -7,7 +7,7 @@ import type { EditableSettingKey, EditableSettings } from "../../shared/settings
 import type {
   AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
-  JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureView, OpenFeatureSessionRequest, ScanResult,
+  JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, ScanResult,
 } from "../../shared/types";
 
 declare global {
@@ -83,6 +83,7 @@ export const api = {
   setFollowupStatus: (id: string, status: FollowupStatus) => call<void>(IPC.followupsSetStatus, id, status),
   handoffs: (ticketKey: string) => call<HandoffRecord[]>(IPC.handoffsList, ticketKey),
   runHandoff: (ticketKey: string) => call<HandoffOutcome>(IPC.handoffsRun, ticketKey),
+  runFeatureSummary: (featureId: number) => call<FeatureHandoffOutcome>(IPC.featuresSummaryRun, featureId),
   runNightly: () => call<JobStateView | null>(IPC.jobsRunNightly),
   settings: () => call<EditableSettings>(IPC.settingsGet),
   setSetting: (key: EditableSettingKey, value: string) => call<void>(IPC.settingsSet, key, value),

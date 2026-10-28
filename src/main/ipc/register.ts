@@ -17,6 +17,7 @@ import type { TicketsRepo } from "../db/tickets-repo";
 import type { KeyStore } from "../gateway/key-store";
 import { auditPage } from "../gateway/status";
 import type { HandoffRunner } from "../handoff/runner";
+import type { FeatureSummaryRunner } from "../handoff/feature-runner";
 import type { HealthService } from "../hooks/health";
 import { addDays, localDate } from "../schedule/calendar";
 import type { Scheduler } from "../schedule/scheduler";
@@ -49,6 +50,7 @@ export interface IpcDeps {
   settings: SettingsRepo;
   briefService: BriefService;
   runner: HandoffRunner;
+  featureRunner: Pick<FeatureSummaryRunner, "runManual">;
   scheduler: Scheduler;
   jobs: JobsRepo;
   keys: KeyStore;
@@ -262,6 +264,12 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.handoffsList, (ticketKey: string) => d.handoffs.listByTicket(ticketKey));
   handle(IPC.handoffsRun, async (ticketKey: string) => {
     const outcome = await d.runner.runManual(ticketKey);
+    d.notify();
+    return outcome;
+  });
+  // 手动“立即更新”feature 汇总：和 ticket 的手动 handoff 一样，跑完刷新界面。
+  handle(IPC.featuresSummaryRun, async (raw: unknown) => {
+    const outcome = await d.featureRunner.runManual(featureIdArg(raw));
     d.notify();
     return outcome;
   });

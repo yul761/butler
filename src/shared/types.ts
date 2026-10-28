@@ -1,4 +1,4 @@
-import type { FeatureHandoff, Handoff } from "./handoff";
+import type { FeatureHandoff, Handoff, Pr } from "./handoff";
 export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
 export type WorkMode = "worktree" | "branch";
@@ -97,6 +97,10 @@ export interface FeatureView extends Feature {
   hiddenSessions: SessionView[];
   /** feature 总控或者它的任何一个 ticket 在等用户输入。 */
   waiting: boolean;
+  /** 最新一条 feature 汇总（可能是 degraded）；还没有为 null。 */
+  summary: FeatureHandoffRecord | null;
+  /** 每个 ticket 的 PR：取最新一条有效 handoff（含 refresh）里的，没有 handoff 为 []。 */
+  ticketPrs: Record<string, Pr[]>;
 }
 
 export interface UnclaimedSession extends Session {

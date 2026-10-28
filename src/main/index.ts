@@ -380,7 +380,7 @@ async function bootstrap(): Promise<void> {
     baseEnv: process.env,
     mcpConfig: memoryMcpConfig,
     featureMcpConfig,
-    features,
+    features, featureHandoffs, handoffs,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
     log: logger,
@@ -690,7 +690,7 @@ async function bootstrap(): Promise<void> {
     onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,
-    tickets, ticketService, featureService, sessionService, pty, health, followups, handoffs, settings, briefService, runner, scheduler, jobs,
+    tickets, ticketService, featureService, sessionService, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs,
     keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     briefRefreshing: () => briefRefreshing,

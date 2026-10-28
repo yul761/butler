@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { sanitizePrefill } from "../../shared/text";
+import type { Pr } from "../../shared/handoff";
 import {
   effectiveStatus,
   type Feature,
@@ -16,7 +17,9 @@ import {
 } from "../../shared/types";
 import { launchEnv, type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
 import { claudeArgs, cmdShimSafe, sessionEnv } from "../claude/spawn";
+import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";
+import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
@@ -52,6 +55,10 @@ export interface SessionServiceDeps {
   featureMcpConfig?: (featureId: number) => string | null;
   /** feature（设计文档 2026-10-26）；不给就没有 feature 总控。 */
   features?: FeaturesRepo;
+  /** feature 汇总（设计文档 2026-10-28）；不给 FeatureView 里 summary 为 null。 */
+  featureHandoffs?: Pick<FeatureHandoffsRepo, "latest">;
+  /** 取 ticket 的最新有效 handoff 里的 PR；不给就都是 []。 */
+  handoffs?: Pick<HandoffsRepo, "latestValid">;
   /** 目录是否存在（测试注入；默认读真实磁盘）。 */
   dirExists?: (dir: string) => boolean;
   /** 要打开这个 ticket 的 session 时调用：把它的记忆补同步一次（排进记忆的同步队列，不等它）。 */
@@ -431,7 +438,12 @@ export class SessionService {
       const { sessions, hiddenSessions } = this.split(this.d.sessions.listByFeature(f.id), heads);
       // 按建立顺序（和 list_tickets 一样），不是单独 ticket 列表的最新在前。
       const own = tickets.filter((t) => t.featureId === f.id).sort((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
-      return { ...f, tickets: own, sessions, hiddenSessions, waiting: sessions.some((s) => s.waitingForInput) || own.some((t) => t.waiting) };
+      const ticketPrs: Record<string, Pr[]> = {};
+      for (const t of own) ticketPrs[t.key] = this.d.handoffs?.latestValid(t.key)?.payload?.prs ?? [];
+      return {
+        ...f, tickets: own, sessions, hiddenSessions, waiting: sessions.some((s) => s.waitingForInput) || own.some((t) => t.waiting),
+        summary: this.d.featureHandoffs?.latest(f.id) ?? null, ticketPrs,
+      };
     });
   }
 
