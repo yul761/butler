@@ -63,7 +63,7 @@ export interface SessionServiceDeps {
   /** feature 汇总（设计文档 2026-10-28）；不给 FeatureView 里 summary 为 null。 */
   featureHandoffs?: Pick<FeatureHandoffsRepo, "latest">;
   /** 取 ticket 的最新有效 handoff 里的 PR；不给就都是 []。 */
-  handoffs?: Pick<HandoffsRepo, "latestValid">;
+  handoffs?: Pick<HandoffsRepo, "knownPrs">;
   /** 目录是否存在（测试注入；默认读真实磁盘）。 */
   dirExists?: (dir: string) => boolean;
   /** 要打开这个 ticket 的 session 时调用：把它的记忆补同步一次（排进记忆的同步队列，不等它）。 */
@@ -446,7 +446,7 @@ export class SessionService {
       // 按建立顺序（和 list_tickets 一样），不是单独 ticket 列表的最新在前。
       const own = tickets.filter((t) => t.featureId === f.id).sort((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
       const ticketPrs: Record<string, Pr[]> = {};
-      for (const t of own) ticketPrs[t.key] = this.d.handoffs?.latestValid(t.key)?.payload?.prs ?? [];
+      for (const t of own) ticketPrs[t.key] = this.d.handoffs?.knownPrs(t.key) ?? [];
       return {
         ...f, tickets: own, sessions, hiddenSessions, waiting: sessions.some((s) => s.waitingForInput) || own.some((t) => t.waiting),
         summary: this.d.featureHandoffs?.latest(f.id) ?? null, ticketPrs,

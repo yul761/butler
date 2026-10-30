@@ -157,7 +157,7 @@ export class FeatureSummaryRunner {
       title: t.title,
       status: effectiveStatus(t),
       // PR 取最新的有效 handoff（早间刷新会更新它）；完成、下一步取最新的完整 handoff（刷新会清空 done_today）。
-      prs: this.d.handoffs.latestValid(t.key)?.payload?.prs ?? [],
+      prs: this.d.handoffs.knownPrs(t.key),
       latest: this.d.handoffs.latestValidFull(t.key)?.payload ?? null,
     }));
   }

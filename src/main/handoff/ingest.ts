@@ -1,5 +1,6 @@
 import type { Handoff } from "../../shared/handoff";
 import type { HandoffTrigger, TicketStatus } from "../../shared/types";
+import { rememberMergedPrs } from "../../shared/pr-memory";
 import { withTransaction, type Db } from "../db/database";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
@@ -44,8 +45,10 @@ export function ingestHandoff(d: IngestDeps, input: IngestInput): IngestResult {
   if (!d.tickets.get(input.ticketKey)) return { stored: false, reason: "no_ticket" };
   const now = d.now();
   return withTransaction(d.db, (): IngestResult => {
-    // ticket 以 Butler 的记录为准，模型写错了也不影响归属。
-    const payload = input.payload ? { ...input.payload, ticket: input.ticketKey } : null;
+    // ticket 以 Butler 的记录为准，模型写错了也不影响归属。以前合并过的 PR 记着（模型这次没提、或者报错了状态）。
+    const payload = input.payload
+      ? { ...input.payload, ticket: input.ticketKey, prs: rememberMergedPrs(input.payload.prs, [d.handoffs.knownPrs(input.ticketKey)]) }
+      : null;
     const id = d.handoffs.insert({
       ticketKey: input.ticketKey, sessionId: input.sessionId, trigger: input.trigger, createdAt: now,
       payload, rawText: input.rawText, sourceRef: input.sourceRef ?? null,

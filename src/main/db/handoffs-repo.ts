@@ -1,4 +1,5 @@
-import { upgradeLegacyPr, type Handoff } from "../../shared/handoff";
+import { upgradeLegacyPr, type Handoff, type Pr } from "../../shared/handoff";
+import { rememberMergedPrs } from "../../shared/pr-memory";
 import type { HandoffRecord, HandoffTrigger } from "../../shared/types";
 import type { Db } from "./database";
 
@@ -93,6 +94,22 @@ export class HandoffsRepo {
       if (rec.payload) return rec;
     }
     return null;
+  }
+
+  /**
+   * 这个 ticket 的 PR：最新一条有效 handoff（含刷新）里的，加上以前任何一条里记下“已合并”的（rememberMergedPrs）。
+   * 没有有效 handoff 时是 []。
+   */
+  knownPrs(ticketKey: string): Pr[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM handoffs WHERE ticket_key = ? AND degraded = 0 AND payload IS NOT NULL ORDER BY created_at DESC, id DESC`)
+      .iterate(ticketKey) as Iterable<HandoffRow>;
+    const lists: Pr[][] = [];
+    for (const row of rows) {
+      const prs = toRecord(row).payload?.prs;
+      if (prs) lists.push(prs);
+    }
+    return lists.length === 0 ? [] : rememberMergedPrs(lists[0], lists.slice(1));
   }
 
   /** 最新的一条非刷新 handoff（任何有效性）；早间刷新不会把它顶掉。 */

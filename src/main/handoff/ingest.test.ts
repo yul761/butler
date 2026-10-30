@@ -26,6 +26,33 @@ const fu = (over: Partial<HandoffFollowup> = {}): HandoffFollowup => ({
 const merged = { number: 7, url: "u", state: "merged" as const, review: "approved" as const };
 
 describe("ingestHandoff", () => {
+  it("remembers a merged PR that later handoffs and refreshes leave out, but not an open one", () => {
+    const { deps, tickets, handoffs, tick } = setup();
+    const open2 = { number: 8, url: "u8", state: "open" as const, review: "pending" as const };
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ prs: [merged, open2] }) });
+    tick(10);
+    // 刷新（worktree 清理之后）没找到 PR：合并过的 #7 记着，开着的 #8 不补。
+    const r = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "refresh", rawText: null, payload: payload({ prs: [] }) });
+    expect(r).toMatchObject({ status: "done" });
+    expect(handoffs.latest("PROJ-1")?.payload?.prs).toEqual([merged]);
+    expect(handoffs.knownPrs("PROJ-1")).toEqual([merged]);
+    expect(tickets.get("PROJ-1")?.status).toBe("done");
+    tick(10);
+    // 再下一条把 #7 报成开着：还是已合并。
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ prs: [{ ...merged, state: "open" }] }) });
+    expect(handoffs.latest("PROJ-1")?.payload?.prs).toEqual([{ ...merged, state: "merged" }]);
+  });
+
+  it("knownPrs recovers merged PRs from older handoffs stored before this fix", () => {
+    const { handoffs } = setup();
+    handoffs.insert({ ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", createdAt: 1, payload: payload({ ticket: "PROJ-1", prs: [merged] }), rawText: null, sourceRef: null });
+    handoffs.insert({ ticketKey: "PROJ-1", sessionId: null, trigger: "refresh", createdAt: 2, payload: payload({ ticket: "PROJ-1", prs: [] }), rawText: null, sourceRef: null });
+    handoffs.insert({ ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", createdAt: 3, payload: null, rawText: "broken", sourceRef: null });
+    expect(handoffs.latestValid("PROJ-1")?.payload?.prs).toEqual([]);
+    expect(handoffs.knownPrs("PROJ-1")).toEqual([merged]);
+    expect(handoffs.knownPrs("NONE-1")).toEqual([]);
+  });
+
   it("stores the handoff under the right ticket, creates followups and derives the status", () => {
     const { deps, tickets, handoffs, followups } = setup();
     const r = ingestHandoff(deps, {

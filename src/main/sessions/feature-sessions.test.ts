@@ -96,7 +96,7 @@ describe("feature coordinator sessions (design 2026-10-26)", () => {
     expect(fv.sessions.map((s) => [s.id, s.termId])).toEqual([["new-1", "new-1"]]);
   });
 
-  it("carries the latest feature summary (degraded too) and each ticket's PRs from its latest valid handoff", async () => {
+  it("carries the latest feature summary (degraded too) and each ticket's PRs from its latest valid handoff, plus merged ones from before", async () => {
     const { service, feature, featureHandoffs, handoffs } = await setup();
     expect(service.featureViews()[0].summary).toBeNull();
     const pr = { repo: "frontend", url: "https://x/pr/1", state: "open" } as never;
@@ -110,6 +110,11 @@ describe("feature coordinator sessions (design 2026-10-26)", () => {
     expect(fv.summary).toMatchObject({ createdAt: 2, degraded: true });
     expect(fv.ticketPrs["DMS-1"]).toEqual([pr]);
     expect(fv.ticketPrs["DMS-2"]).toEqual([]);
+    // 之后的 handoff 不再提 PR：合并过的照样显示（不会变成“还没有 PR”）。
+    const mergedPr = { number: 9, url: "https://x/pr/9", state: "merged", review: null };
+    handoffs.insert({ ticketKey: "DMS-2", sessionId: null, trigger: "manual", createdAt: 30, payload: { ...(payload([mergedPr]) as object), ticket: "DMS-2" } as never, rawText: null });
+    handoffs.insert({ ticketKey: "DMS-2", sessionId: null, trigger: "refresh", createdAt: 40, payload: { ...(payload([]) as object), ticket: "DMS-2" } as never, rawText: null });
+    expect(service.featureViews()[0].ticketPrs["DMS-2"]).toEqual([mergedPr]);
   });
 
   it("counts the coordinator and every ticket's terminals toward the feature", async () => {

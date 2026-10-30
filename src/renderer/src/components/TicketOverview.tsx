@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { rememberMergedPrs } from "../../../shared/pr-memory";
 import type { Followup, FollowupStatus, HandoffRecord } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
@@ -54,7 +55,9 @@ export function TicketOverview({ ticketKey }: { ticketKey: string }) {
   }
 
   const { active, closed } = splitFollowups(followups);
-  const prs = history.find((h) => h.payload)?.payload?.prs ?? [];
+  // 最新一条有效 handoff 的 PR，加上以前记下已合并的（和 feature 页一样）。
+  const [latestPrs, ...olderPrs] = history.flatMap((h) => (h.payload ? [h.payload.prs] : []));
+  const prs = latestPrs ? rememberMergedPrs(latestPrs, olderPrs) : [];
   const toggle = (p: Panel) => setPanel(panel === p ? null : p);
 
   return (
