@@ -8,6 +8,7 @@ import { sessionLabel } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { RepoPicker } from "./RepoPicker";
+import { EndSessionButton } from "./EndSessionButton";
 import { TerminalPane } from "./TerminalPane";
 import { useCollapsed } from "./useCollapsed";
 
@@ -210,7 +211,9 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
               <span className="label">{sessionLabel(s, S.untitledSession)}</span>
               <span className="action">{s.termId ? S.switchTo : S.open}</span>
             </button>
-            {!s.termId && (
+            {s.termId ? (
+              <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => closePane(s.termId!)} />
+            ) : (
               <button className="session-hide" title={S.hideSession} aria-label={S.hideSessionNamed(sessionLabel(s, S.untitledSession))} onClick={() => api.hideSession(s.id).catch(reportError)}>
                 ×
               </button>
@@ -244,11 +247,12 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
 
 /**
  * 整体进度（设计文档 2026-10-28）：最新一份 feature 汇总的那段话、卡住的地方、下一步，
- * 以及生成时间、来源和“立即更新”按钮。只显示最新一份，不做历史。
+ * 以及生成时间、来源和“立即更新”按钮。只显示最新一份，不做历史。可以收起（每个 feature 各记各的），收起时只留一行开头。
  */
 function FeatureProgress({ feature, onOpenTicket }: { feature: FeatureView; onOpenTicket: (key: string) => void }) {
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<{ text: string; bad: boolean } | null>(null);
+  const [collapsed, toggle] = useCollapsed(`progress:${feature.id}`);
   const summary = feature.summary;
   // 汇总里的 ticket 后来可能归档了：只有还在这个 feature 下的才能点。
   const keys = new Set(feature.tickets.map((t) => t.key));
@@ -266,10 +270,21 @@ function FeatureProgress({ feature, onOpenTicket }: { feature: FeatureView; onOp
     }
   }
 
+  // 收起时标题后面只留一行：汇总的开头，卡住时再加卡住的条数。
+  const preview = summary?.payload?.summary ?? "";
+  const blockers = summary?.payload?.blockers.length ?? 0;
+
   return (
     <section className="feature-progress">
-      <h3>{S.featureProgress}</h3>
-      {!summary ? (
+      <h3>
+        <button className="section-toggle" aria-expanded={!collapsed} onClick={toggle}>
+          <span className="twisty">{collapsed ? "▸" : "▾"}</span>
+          {S.featureProgress}
+        </button>
+        {collapsed && blockers > 0 && <span className="blocker">{S.featureBlockedCount(blockers)}</span>}
+        {collapsed && preview && <span className="preview muted" title={preview}>{preview}</span>}
+      </h3>
+      {collapsed ? null : !summary ? (
         <p className="muted">{S.featureSummaryNone}</p>
       ) : summary.payload ? (
         <div className="feature-summary">
@@ -302,11 +317,13 @@ function FeatureProgress({ feature, onOpenTicket }: { feature: FeatureView; onOp
           <pre className="raw">{summary.rawText ?? ""}</pre>
         </div>
       )}
-      <div className="summary-meta">
-        {summary && <span className="muted">{formatTime(summary.createdAt)} · {S.featureSummaryTrigger[summary.trigger]}</span>}
-        <button disabled={running} onClick={() => void runNow()}>{running ? S.featureSummaryRunning : S.runFeatureSummary}</button>
-        {message && <span className={message.bad ? "error" : "muted"}>{message.text}</span>}
-      </div>
+      {!collapsed && (
+        <div className="summary-meta">
+          {summary && <span className="muted">{formatTime(summary.createdAt)} · {S.featureSummaryTrigger[summary.trigger]}</span>}
+          <button disabled={running} onClick={() => void runNow()}>{running ? S.featureSummaryRunning : S.runFeatureSummary}</button>
+          {message && <span className={message.bad ? "error" : "muted"}>{message.text}</span>}
+        </div>
+      )}
     </section>
   );
 }

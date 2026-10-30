@@ -40,6 +40,7 @@ const ZH = {
   noFeatureSessions: "还没有总控 session。",
   // feature 汇总（设计文档 2026-10-28）
   featureProgress: "整体进度",
+  featureBlockedCount: (n: number) => `${n} 处卡住`,
   featureSummaryNone: "还没有汇总。晚上会自动生成，也可以点“立即更新”。",
   featureSummaryDegraded: "汇总不完整：claude 的输出没有通过校验，下面是原文。",
   featureBlocked: "卡住",
@@ -91,6 +92,9 @@ const ZH = {
   collapseSessions: "收起",
   hideSession: "从列表里隐藏（对话记录不会删除，可以恢复）",
   hideSessionNamed: (name: string) => `隐藏 ${name}`,
+  endSession: "结束这个 session（对话记录会保留，之后可以再打开）",
+  endSessionConfirm: "确认结束？",
+  endSessionNamed: (name: string) => `结束 ${name}`,
   hiddenSessions: (n: number) => `已隐藏 (${n})`,
   hiddenSessionsHint: "这些 session 只是不在列表里显示，对话记录还在。恢复后可以继续用。",
   unhideSession: "恢复",

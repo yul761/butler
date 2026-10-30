@@ -15,6 +15,7 @@ const HELP = `
   --permission-mode <mode>              Permission mode to use for the session
   --setting-sources <sources>           Comma-separated list of setting sources to load (user, project, local)
   --add-dir <directories...>            Additional directories to allow tool access to
+  --settings <file-or-json>             Path to a settings JSON file or a JSON string to load additional settings from
 `;
 
 describe("capabilities", () => {

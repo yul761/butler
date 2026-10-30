@@ -178,12 +178,12 @@ function sweepStaleTmp(dir: string): void {
 }
 
 /** 同目录随机名临时文件（0600，wx：绝不覆盖已有的）再 rename，不会留下半截或宽权限的文件。 */
-function writePrivate(file: string, servers: Json): void {
+function writePrivate(file: string, content: Json): void {
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   const fd = openSync(tmp, "wx", 0o600); // 失败（含 EEXIST）时不是我们建的，什么都不删。
   try {
     try {
-      writeSync(fd, JSON.stringify({ mcpServers: servers }, null, 2));
+      writeSync(fd, JSON.stringify(content, null, 2));
     } finally {
       closeSync(fd);
     }
@@ -222,7 +222,7 @@ export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
       );
       if (isServerMap(allowed)) {
         const file = join(p.mcpDir, fileKey(cwd, "project"));
-        writePrivate(file, allowed);
+        writePrivate(file, { mcpServers: allowed });
         out.push(file);
       }
     }
@@ -232,11 +232,33 @@ export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
   if (local) {
     try {
       const file = join(p.mcpDir, fileKey(cwd, "local"));
-      writePrivate(file, local);
+      writePrivate(file, { mcpServers: local });
       out.push(file);
     } catch (e) {
       p.log?.(`project MCP: skipping local-scope servers (${errTag(e)})`);
     }
   }
   return out;
+}
+
+/**
+ * Butler 打开的交互 session 用的 --settings 文件：仓库 .mcp.json 里的 server 直接启用，不再停在
+ * “发现新的 MCP server，选择要启用哪些”的对话框上（worktree 是新目录，Claude Code 每次都会问；总控交给子 session 的任务会一直等着）。
+ * 用户在这些目录（session 的目录、仓库主目录）里禁用过的 server 一并写进 disabledMcpjsonServers：禁用优先于全部启用。
+ * 文件名按内容取 hash，内容一样就是同一个文件。写不了记日志返回 null（照旧弹出对话框）。
+ */
+export function projectMcpApprovalSettings(dirs: string[], p: ProjectMcpPaths): string | null {
+  try {
+    sweepStaleTmp(p.mcpDir);
+    const claudeJson = readJson(p.claudeJson, p.log, { repo: false });
+    const disabled = new Set<string>();
+    for (const dir of new Set(dirs)) for (const n of approvals(dir, claudeJson, p).disabled) disabled.add(n);
+    const content = { enableAllProjectMcpServers: true, disabledMcpjsonServers: [...disabled].sort() };
+    const file = join(p.mcpDir, `approve-${createHash("sha1").update(JSON.stringify(content)).digest("hex").slice(0, 12)}.json`);
+    writePrivate(file, content);
+    return file;
+  } catch (e) {
+    p.log?.(`project MCP: approval settings not written (${errTag(e)})`);
+    return null;
+  }
 }

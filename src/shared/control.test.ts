@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseControlRequest, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
+import { MAX_CREATE_REPOS, parseControlRequest, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
 
 describe("parseControlRequest", () => {
   it("accepts the three operations", () => {
@@ -43,8 +43,28 @@ describe("parseControlRequest for a feature (design 2026-10-26)", () => {
   it("rejects a feature id that is not a positive integer, both scopes at once, and ops of the other scope", () => {
     for (const featureId of ["1", 0, -1, 1.5, null]) expect(parseControlRequest({ v: 1, featureId, from: null, op: "list_tickets" }), String(featureId)).toBeNull();
     expect(parseControlRequest({ v: 1, featureId: 7, ticketKey: "A-1", from: null, op: "list_sessions" })).toBeNull();
-    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "list_repos" })).toBeNull();
     expect(parseControlRequest({ v: 1, ticketKey: "A-1", from: null, op: "list_tickets" })).toBeNull();
+    expect(parseControlRequest({ v: 1, ticketKey: "A-1", from: null, op: "create_ticket", ticket: "A-2" })).toBeNull();
     expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "start_session", task: "t" })).toBeNull();
+  });
+
+  it("accepts list_repos and create_ticket, dropping unknown fields", () => {
+    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "list_repos", repo: "x" })).toEqual({ v: 1, featureId: 7, from: null, op: "list_repos" });
+    expect(parseControlRequest({ v: 1, featureId: 7, from: "c", op: "create_ticket", ticket: "DMS-9" })).toEqual({ v: 1, featureId: 7, from: "c", op: "create_ticket", ticket: "DMS-9" });
+    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "create_ticket", ticket: "DMS-9", title: "", repos: ["fe", "be"], branch: "b", x: 1 })).toEqual({
+      v: 1, featureId: 7, from: null, op: "create_ticket", ticket: "DMS-9", title: "", repos: ["fe", "be"], branch: "b",
+    });
+  });
+
+  it("rejects malformed create_ticket requests", () => {
+    const base = { v: 1, featureId: 7, from: null, op: "create_ticket" };
+    expect(parseControlRequest({ ...base })).toBeNull();
+    expect(parseControlRequest({ ...base, ticket: "" })).toBeNull();
+    expect(parseControlRequest({ ...base, ticket: "A-1", title: 5 })).toBeNull();
+    expect(parseControlRequest({ ...base, ticket: "A-1", title: "x".repeat(501) })).toBeNull();
+    expect(parseControlRequest({ ...base, ticket: "A-1", branch: "" })).toBeNull();
+    expect(parseControlRequest({ ...base, ticket: "A-1", repos: "fe" })).toBeNull();
+    expect(parseControlRequest({ ...base, ticket: "A-1", repos: ["fe", 3] })).toBeNull();
+    expect(parseControlRequest({ ...base, ticket: "A-1", repos: Array.from({ length: MAX_CREATE_REPOS + 1 }, (_, i) => `r${i}`) })).toBeNull();
   });
 });

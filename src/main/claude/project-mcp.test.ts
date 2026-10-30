@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tempDir } from "../test-utils";
 import { GIT_SAFE_ARGS, resetGitBinary, setGitBinary } from "../util/git-path";
-import { INCLUDE_LOCAL_SCOPE, projectMcpConfigs } from "./project-mcp";
+import { INCLUDE_LOCAL_SCOPE, projectMcpApprovalSettings, projectMcpConfigs } from "./project-mcp";
 
 const mocks = vi.hoisted(() => ({ spawnSync: undefined as undefined | ((...a: unknown[]) => unknown), randomBytes: undefined as undefined | ((n: number) => Buffer), randomResults: [] as string[] }));
 vi.mock("node:child_process", async (orig) => {
@@ -431,5 +431,43 @@ describe("projectMcpConfigs: git invocation", () => {
       expect(c.cmd).toBe(abs);
       expect((c.args as string[]).slice(0, 2)).toEqual(GIT_SAFE_ARGS);
     }
+  });
+});
+
+describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json picker", () => {
+  const read = (file: string) => JSON.parse(readFileSync(file, "utf8")) as { enableAllProjectMcpServers: boolean; disabledMcpjsonServers: string[] };
+
+  it("enables every project server, keeping what the user disabled in any of the given directories", () => {
+    const s = setup();
+    const worktree = join(s.root, "worktree");
+    mkdirSync(worktree);
+    writeFileSync(s.paths.claudeJson, JSON.stringify({ projects: { [s.repo]: { disabledMcpjsonServers: ["evil"], enabledMcpjsonServers: ["jira"] }, [worktree]: { disabledMcpjsonServers: ["noisy"] } } }));
+    writeFileSync(s.paths.claudeSettings, JSON.stringify({ disabledMcpjsonServers: ["global-off"] }));
+    const file = projectMcpApprovalSettings([worktree, s.repo, s.repo], s.p);
+    expect(file).not.toBeNull();
+    expect(file!.startsWith(s.mcpDir)).toBe(true);
+    expect(read(file!)).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: ["evil", "global-off", "noisy"] });
+    if (process.platform !== "win32") expect(mode(file!)).toBe(0o600);
+  });
+
+  it("reuses one file for the same content and never writes into the repo", () => {
+    const s = setup();
+    const a = projectMcpApprovalSettings([s.repo], s.p);
+    const b = projectMcpApprovalSettings([s.repo], s.p);
+    expect(a).toBe(b);
+    expect(read(a!)).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [] });
+    expect(readdirSync(s.repo)).toEqual([]);
+    expect(readdirSync(s.mcpDir)).toHaveLength(1);
+  });
+
+  it("missing or corrupt ~/.claude.json still enables the servers; an unwritable mcp dir gives null and a log line", () => {
+    const s = setup();
+    expect(projectMcpApprovalSettings([s.repo], s.p)).not.toBeNull();
+    writeFileSync(s.paths.claudeJson, "{ broken");
+    expect(projectMcpApprovalSettings([s.repo], s.p)).not.toBeNull();
+    rmSync(s.mcpDir, { recursive: true });
+    writeFileSync(s.mcpDir, "not a dir");
+    expect(projectMcpApprovalSettings([s.repo], s.p)).toBeNull();
+    expect(s.logs.some((l) => l.includes("approval settings not written"))).toBe(true);
   });
 });

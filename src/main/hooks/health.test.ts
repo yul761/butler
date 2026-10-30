@@ -16,7 +16,7 @@ describe("HealthService", () => {
     writeFileSync(bundled, "#!/bin/sh\n");
     const settings = new SettingsRepo(memDb());
     settings.set("claudePath", fakeClaude);
-    const run = async (_f: string, args: string[]) => (args[0] === "--version" ? "2.1.304" : "--print --session-id --resume --fork-session --mcp-config --output-format --json-schema --allowedTools --disallowedTools --no-session-persistence --permission-mode --setting-sources --add-dir");
+    const run = async (_f: string, args: string[]) => (args[0] === "--version" ? "2.1.304" : "--print --session-id --resume --fork-session --mcp-config --output-format --json-schema --allowedTools --disallowedTools --no-session-persistence --permission-mode --setting-sources --add-dir --settings");
     const health = new HealthService({ paths, platform: "darwin", env: {}, settings, bundledHookBin: bundled, readPath: async () => "/usr/bin", run });
 
     const first = await health.refresh();

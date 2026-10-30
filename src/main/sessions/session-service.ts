@@ -53,6 +53,11 @@ export interface SessionServiceDeps {
   mcpConfig?: (ticketKey: string, opts: { coordinator: boolean; featureId: number | null }) => string | null;
   /** feature 总控的 --mcp-config 文件（feature 记忆、全局记忆、butler-sessions）。 */
   featureMcpConfig?: (featureId: number) => string | null;
+  /**
+   * 交互 session 的 --settings 文件：直接启用仓库 .mcp.json 里的 server，不停在选择对话框上（用户在 dirs 里禁用过的照旧禁用）。
+   * 返回 null 时不加 --settings。
+   */
+  mcpSettings?: (dirs: string[]) => string | null;
   /** feature（设计文档 2026-10-26）；不给就没有 feature 总控。 */
   features?: FeaturesRepo;
   /** feature 汇总（设计文档 2026-10-28）；不给 FeatureView 里 summary 为 null。 */
@@ -143,6 +148,7 @@ export class SessionService {
     // 启动方式只解析一次：记忆挂载的检查和真正启动用同一个结果（P5-PF10）。
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
     const mcpConfigPath = this.configPath(ticket.key, () => this.d.mcpConfig?.(ticket.key, { coordinator, featureId: ticket.featureId }) ?? null, claudePath, launch.viaCmd);
+    const settingsPath = this.configPath(ticket.key, () => this.d.mcpSettings?.([cwd, ...ticket.repos.map((r) => r.repoPath)]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
     const addDirs = coordinator ? this.addDirsFor(ticket, claudePath, launch.viaCmd) : [];
     let termId: string;
     let args: string[];
@@ -150,10 +156,10 @@ export class SessionService {
     if (head) {
       // claude --resume 只能在 session 当初的项目目录里找到它；没发过消息的 session 没有记录，用同一个 id 重新开
       termId = head.id;
-      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, addDirs });
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs });
     } else {
       termId = this.d.newId();
-      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, addDirs });
+      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
         id: termId, ticketKey: ticket.key, cwd, origin: "butler", lastActivityAt: now, createdAt: now,
@@ -256,18 +262,18 @@ export class SessionService {
   }
 
   /** 记忆 MCP 配置（label 是 ticket 号或 feature）。写不出来、或者要经过 cmd.exe 又无法安全传递时不挂，session 照常打开。 */
-  private configPath(label: string, write: () => string | null, claudePath: string, viaCmd: boolean): string | undefined {
+  private configPath(label: string, write: () => string | null, claudePath: string, viaCmd: boolean, kind = "memory MCP config"): string | undefined {
     let file: string | null;
     try {
       file = write();
     } catch (e) {
-      this.d.log?.(`memory MCP config for ${label} not written`, e);
+      this.d.log?.(`${kind} for ${label} not written`, e);
       return undefined;
     }
     if (!file) return undefined;
     // 计划 5：能认出的 shim 不经过 cmd.exe，路径原样传递；只有回退到 cmd.exe 时才需要这道检查（计划 4 的 P4-R7）。
     if (viaCmd && !cmdShimSafe(claudePath, file, this.d.platform)) {
-      this.d.log?.(`memory MCP not mounted for ${label}: the config path cannot pass through cmd.exe safely`);
+      this.d.log?.(`${kind} not passed for ${label}: the path cannot pass through cmd.exe safely`);
       return undefined;
     }
     return file;
@@ -300,16 +306,17 @@ export class SessionService {
     const cwd = head?.cwd || workspace;
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
     const mcpConfigPath = this.configPath(`feature ${feature.id}`, () => this.d.featureMcpConfig?.(feature.id) ?? null, claudePath, launch.viaCmd);
+    const settingsPath = this.configPath(`feature ${feature.id}`, () => this.d.mcpSettings?.([cwd, ...feature.repos.map((r) => r.repoPath)]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
     const addDirs = this.featureAddDirs(feature, claudePath, launch.viaCmd);
     let termId: string;
     let args: string[];
     let insertedRow = false;
     if (head) {
       termId = head.id;
-      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, addDirs });
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs });
     } else {
       termId = this.d.newId();
-      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, addDirs });
+      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
         id: termId, ticketKey: null, cwd, origin: "butler", lastActivityAt: now, createdAt: now, coordinator: true, featureId: feature.id,

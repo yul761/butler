@@ -21,9 +21,17 @@ export type TicketControlRequest =
   | { v: 1; ticketKey: string; from: string | null; op: "list_sessions" }
   | { v: 1; ticketKey: string; from: string | null; op: "start_session"; repo: string; task: string };
 
-/** feature 总控的请求（设计文档 2026-10-26）：start_session 指定 ticket，ticket 只有一个仓库时 repo 可以省略。 */
+/** create_ticket 最多一次挂几个仓库。 */
+export const MAX_CREATE_REPOS = 20;
+
+/**
+ * feature 总控的请求（设计文档 2026-10-26）：start_session 指定 ticket，ticket 只有一个仓库时 repo 可以省略。
+ * create_ticket：在 feature 下建 ticket（worktree 放进 feature 工作区）；feature 只有一个仓库时 repos 可以省略。
+ */
 export type FeatureControlRequest =
   | { v: 1; featureId: number; from: string | null; op: "list_tickets" }
+  | { v: 1; featureId: number; from: string | null; op: "list_repos" }
+  | { v: 1; featureId: number; from: string | null; op: "create_ticket"; ticket: string; title?: string; repos?: string[]; branch?: string }
   | { v: 1; featureId: number; from: string | null; op: "list_sessions" }
   | { v: 1; featureId: number; from: string | null; op: "start_session"; ticket: string; repo?: string; task: string };
 
@@ -43,7 +51,20 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     if ("ticketKey" in o || !Number.isSafeInteger(o.featureId) || (o.featureId as number) <= 0) return null;
     const base = { v: 1 as const, featureId: o.featureId as number, from };
     if (o.op === "list_tickets") return { ...base, op: "list_tickets" };
+    if (o.op === "list_repos") return { ...base, op: "list_repos" };
     if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
+    if (o.op === "create_ticket") {
+      if (!okName(o.ticket, 200)) return null;
+      if (o.title !== undefined && (typeof o.title !== "string" || o.title.length > 500)) return null;
+      if (o.branch !== undefined && !okName(o.branch, 250)) return null;
+      if (o.repos !== undefined && (!Array.isArray(o.repos) || o.repos.length > MAX_CREATE_REPOS || !o.repos.every((r) => okName(r, 4096)))) return null;
+      return {
+        ...base, op: "create_ticket", ticket: o.ticket,
+        ...(o.title !== undefined && { title: o.title as string }),
+        ...(o.repos !== undefined && { repos: o.repos as string[] }),
+        ...(o.branch !== undefined && { branch: o.branch as string }),
+      };
+    }
     if (o.op === "start_session") {
       if (!okName(o.ticket, 200) || !okTask(o.task)) return null;
       if (o.repo !== undefined && !okName(o.repo, 4096)) return null;

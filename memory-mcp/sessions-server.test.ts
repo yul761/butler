@@ -1,9 +1,9 @@
-import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
-import { FEATURE_TOOLS, SessionsServer, serveStdio, TOOLS } from "./sessions-server";
+import { FEATURE_TOOLS, FEATURE_TOOLS_EN, SessionsServer, serveStdio, TOOLS } from "./sessions-server";
 
 function setup(timeoutMs = 2000, scope: { ticketKey: string } | { featureId: number } = { ticketKey: "P-1" }, lang: "zh" | "en" = "zh") {
   const dir = tempDir("butler-control-");
@@ -102,8 +102,12 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
   it("lists the feature tools", async () => {
     const { server } = setup(2000, { featureId: 7 });
     const list = (await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-    expect(list.result.tools.map((t) => t.name)).toEqual(["list_tickets", "start_session", "list_sessions"]);
+    expect(list.result.tools.map((t) => t.name)).toEqual(["list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions"]);
     expect(list.result.tools).toEqual(FEATURE_TOOLS);
+    // 英文版只换描述：名字、顺序、必填参数一样。
+    const shape = (tools: readonly { name: string; inputSchema: object }[]) => tools.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]);
+    expect(shape(FEATURE_TOOLS_EN)).toEqual(shape(FEATURE_TOOLS));
+    expect(FEATURE_TOOLS.find((t) => t.name === "create_ticket")!.inputSchema.required).toEqual(["ticket"]);
     const start = FEATURE_TOOLS.find((t) => t.name === "start_session")!;
     expect(start.inputSchema.required).toEqual(["ticket", "task"]);
   });
@@ -120,12 +124,37 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
     await withRepo;
   });
 
-  it("rejects start_session without a ticket, and the ticket-only tool", async () => {
+  it("rejects start_session without a ticket", async () => {
     const { server } = setup(2000, { featureId: 7 });
     const noTicket = (await server.handle({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "start_session", arguments: { task: "x" } } })) as { result: { isError?: boolean } };
     expect(noTicket.result.isError).toBe(true);
-    const repos = (await server.handle({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "list_repos", arguments: {} } })) as { result: { isError?: boolean } };
-    expect(repos.result.isError).toBe(true);
+  });
+
+  it("sends list_repos and create_ticket for this feature", async () => {
+    const { server, answer } = setup(2000, { featureId: 7 });
+    const repos = server.handle({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "list_repos", arguments: {} } });
+    expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ v: 1, featureId: 7, from: "boss", op: "list_repos" });
+    await repos;
+
+    const create = server.handle({
+      jsonrpc: "2.0", id: 6, method: "tools/call",
+      params: { name: "create_ticket", arguments: { ticket: "DMS-9", title: "购物车", repos: ["frontend", "backend"], branch: "  " } },
+    });
+    // 空白分支名等于没给（用分支模板）。
+    expect(await answer({ v: 1, ok: true, value: { key: "DMS-9" } })).toEqual({
+      v: 1, featureId: 7, from: "boss", op: "create_ticket", ticket: "DMS-9", title: "购物车", repos: ["frontend", "backend"],
+    });
+    expect(JSON.stringify(await create)).toContain("DMS-9");
+  });
+
+  it("rejects bad create_ticket arguments without asking Butler, and says what to check when Butler is slow", async () => {
+    const { server, requestsDir } = setup(30, { featureId: 7 });
+    const call = (id: number, args: object) => server.handle({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "create_ticket", arguments: args } });
+    for (const [n, args] of [[1, {}], [2, { ticket: "A-1", repos: "fe" }], [3, { ticket: "A-1", repos: [1] }], [4, { ticket: "A-1", title: 3 }]] as const) {
+      expect(await call(n, args), String(n)).toMatchObject({ result: { isError: true } });
+    }
+    expect(existsSync(requestsDir)).toBe(false);
+    expect(await call(5, { ticket: "A-1" })).toMatchObject({ result: { isError: true, content: [{ text: expect.stringContaining("list_tickets") }] } });
   });
 });
 

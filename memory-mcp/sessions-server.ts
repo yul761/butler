@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
-import { CONTROL_VERSION, TASK_LIMIT, type ControlRequest, type ControlResult } from "../src/shared/control";
+import { CONTROL_VERSION, MAX_CREATE_REPOS, TASK_LIMIT, type ControlRequest, type ControlResult } from "../src/shared/control";
 import type { Lang } from "../src/shared/i18n";
 
 /**
@@ -70,6 +70,29 @@ export const FEATURE_TOOLS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
+    name: "list_repos",
+    description: "列出这个 feature 的仓库（名字、路径）。create_ticket 的 repos 参数用这里的名字。",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "create_ticket",
+    description:
+      "在这个 feature 下新建一个 ticket：在选中的仓库里各建一个分支和 worktree（放在 feature 工作区里），ticket 马上出现在 Butler 里这个 feature 下面。" +
+      "先和用户讨论好这个 feature 要拆成哪些 ticket、每个 ticket 做什么，再逐个建；建好后用 start_session 在 ticket 里开 session 交代任务。" +
+      "ticket 号必须符合 Butler 设置里的格式（默认像 PROJ-123）；有 Jira 号就用 Jira 号。返回 ticket 的仓库、工作目录和分支。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ticket: { type: "string", description: "ticket 号，例如 PROJ-123" },
+        title: { type: "string", description: "标题（可选）" },
+        repos: { type: "array", items: { type: "string" }, maxItems: MAX_CREATE_REPOS, description: "这个 ticket 用到的仓库名（list_repos 里的 name）；feature 只有一个仓库时可以省略" },
+        branch: { type: "string", description: "分支名（可选，默认按 Butler 设置里的分支模板生成）" },
+      },
+      required: ["ticket"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "start_session",
     description:
       "为这个 feature 下的某个 ticket 新开一个 Claude Code session，在那个 ticket 的仓库（worktree）里工作，把 task 当作第一条消息发给它。" +
@@ -125,12 +148,32 @@ export const FEATURE_TOOLS_EN = [
   },
   {
     ...FEATURE_TOOLS[1],
+    description: "List this feature's repos (name, path). Use these names for create_ticket's repos argument.",
+  },
+  {
+    ...FEATURE_TOOLS[2],
+    description:
+      "Create a ticket in this feature: a branch and a worktree in each chosen repo (inside the feature's workspace). The ticket appears under this feature in Butler right away. " +
+      "First agree with the user which tickets the feature splits into and what each one does, then create them one by one; afterwards use start_session to open a session in each ticket and hand it its task. " +
+      "The ticket id must match the format in Butler's settings (by default like PROJ-123); use the Jira id if there is one. Returns the ticket's repos, working folders and branches.",
+    inputSchema: {
+      ...FEATURE_TOOLS[2].inputSchema,
+      properties: {
+        ticket: { type: "string", description: "the ticket id, for example PROJ-123" },
+        title: { type: "string", description: "a title (optional)" },
+        repos: { type: "array", items: { type: "string" }, maxItems: MAX_CREATE_REPOS, description: "the repos this ticket uses (name in list_repos); may be left out when the feature has one repo" },
+        branch: { type: "string", description: "the branch name (optional; by default made from the branch template in Butler's settings)" },
+      },
+    },
+  },
+  {
+    ...FEATURE_TOOLS[3],
     description:
       "Open a new Claude Code session for one of this feature's tickets, working in that ticket's repo (worktree), and send it task as its first message. " +
       "The new session appears under that ticket in Butler, where the user can watch it and take over; the user still answers its permission prompts. " +
       "Write the API contract between frontend and backend and any shared background to the feature memory (butler-feature) first; every ticket's sessions can read it. Returns the new session's id.",
     inputSchema: {
-      ...FEATURE_TOOLS[1].inputSchema,
+      ...FEATURE_TOOLS[3].inputSchema,
       properties: {
         ticket: { type: "string", description: "the ticket id (key in list_tickets)" },
         repo: { type: "string", description: "repo name or working folder; may be left out when the ticket has one repo" },
@@ -139,7 +182,7 @@ export const FEATURE_TOOLS_EN = [
     },
   },
   {
-    ...FEATURE_TOOLS[2],
+    ...FEATURE_TOOLS[4],
     description: "List this feature's sessions (the feature coordinator's and every ticket's): ticket, repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it.",
   },
 ] as const;
@@ -148,6 +191,9 @@ const TEXT = {
   zh: {
     noReplyStart: "Butler 没有及时回应（可能没在运行）。session 也可能已经开了：重试之前先用 list_sessions 看一下。",
     noReply: "Butler 没有回应（Butler 没在运行？）",
+    noReplyCreate: "Butler 没有及时回应（可能没在运行，或者还在建 worktree）。ticket 也可能已经建好：重试之前先用 list_tickets 看一下。",
+    needTicket: "create_ticket 需要字符串参数 ticket",
+    badCreateArgs: `title、branch 必须是字符串，repos 必须是最多 ${MAX_CREATE_REPOS} 个字符串的数组`,
     needRepoTask: "start_session 需要 repo 和 task 两个字符串参数",
     needTicketTask: "start_session 需要 ticket 和 task 两个字符串参数",
     repoString: "repo 必须是字符串",
@@ -157,6 +203,9 @@ const TEXT = {
   en: {
     noReplyStart: "Butler did not answer in time (it may not be running). The session may already be open: check with list_sessions before retrying.",
     noReply: "Butler did not answer (is Butler running?)",
+    noReplyCreate: "Butler did not answer in time (it may not be running, or it is still creating worktrees). The ticket may already exist: check with list_tickets before retrying.",
+    needTicket: "create_ticket needs a string argument, ticket",
+    badCreateArgs: `title and branch must be strings, and repos an array of at most ${MAX_CREATE_REPOS} strings`,
     needRepoTask: "start_session needs two string arguments, repo and task",
     needTicketTask: "start_session needs two string arguments, ticket and task",
     repoString: "repo must be a string",
@@ -164,6 +213,9 @@ const TEXT = {
     noTool: (t: string) => `No such tool: ${t}`,
   },
 };
+
+/** create_ticket 等结果的时间是平常的几倍（要建 worktree）。 */
+const CREATE_WAIT_FACTOR = 3;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -218,12 +270,15 @@ export class SessionsServer {
     const args = (params.arguments ?? {}) as Record<string, unknown>;
     const req = "featureId" in this.o.scope ? this.featureRequest(this.o.scope.featureId, params.name, args) : this.ticketRequest(this.o.scope.ticketKey, params.name, args);
     if ("content" in req) return req;
-    const result = await this.send(req);
+    // 建 ticket 要建 worktree（大仓库在 Windows 上可能要一会儿）：多等一些。
+    const result = await this.send(req, req.op === "create_ticket" ? CREATE_WAIT_FACTOR : 1);
     if (!result) {
       return toolError(
         req.op === "start_session"
           ? this.text.noReplyStart
-          : this.text.noReply,
+          : req.op === "create_ticket"
+            ? this.text.noReplyCreate
+            : this.text.noReply,
       );
     }
     if (!result.ok) return toolError(result.error);
@@ -251,8 +306,24 @@ export class SessionsServer {
     switch (tool) {
       case "list_tickets":
         return { ...base, op: "list_tickets" };
+      case "list_repos":
+        return { ...base, op: "list_repos" };
       case "list_sessions":
         return { ...base, op: "list_sessions" };
+      case "create_ticket": {
+        if (typeof args.ticket !== "string") return toolError(this.text.needTicket);
+        const { title, repos, branch } = args;
+        const okRepos = repos === undefined || (Array.isArray(repos) && repos.length <= MAX_CREATE_REPOS && repos.every((r) => typeof r === "string"));
+        if ((title !== undefined && typeof title !== "string") || (branch !== undefined && typeof branch !== "string") || !okRepos) {
+          return toolError(this.text.badCreateArgs);
+        }
+        return {
+          ...base, op: "create_ticket", ticket: args.ticket,
+          ...(typeof title === "string" && { title }),
+          ...(Array.isArray(repos) && { repos: repos as string[] }),
+          ...(typeof branch === "string" && branch.trim() && { branch: branch.trim() }),
+        };
+      }
       case "start_session":
         if (typeof args.ticket !== "string" || typeof args.task !== "string") return toolError(this.text.needTicketTask);
         if (args.repo !== undefined && typeof args.repo !== "string") return toolError(this.text.repoString);
@@ -264,7 +335,7 @@ export class SessionsServer {
   }
 
   /** 写请求文件（临时文件 + rename），等同名的结果文件。超时返回 null，并撤回还没被处理的请求。 */
-  async send(req: ControlRequest): Promise<ControlResult | null> {
+  async send(req: ControlRequest, waitFactor = 1): Promise<ControlResult | null> {
     const id = randomUUID();
     mkdirSync(this.o.requestsDir, { recursive: true });
     const file = join(this.o.requestsDir, `${id}.json`);
@@ -274,7 +345,7 @@ export class SessionsServer {
     this.pending.add(file);
     try {
       const resultFile = join(this.o.resultsDir, `${id}.json`);
-      const end = Date.now() + (this.o.timeoutMs ?? 60_000);
+      const end = Date.now() + (this.o.timeoutMs ?? 60_000) * waitFactor;
       while (Date.now() < end) {
         if (existsSync(resultFile)) {
           let r: ControlResult | null = null;

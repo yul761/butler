@@ -8,6 +8,7 @@ describe("claude spawn helpers", () => {
   it("builds new and resume args", () => {
     expect(claudeArgs({ mode: "new", sessionId: "u1" })).toEqual(["--session-id", "u1"]);
     expect(claudeArgs({ mode: "resume", sessionId: "u1", mcpConfigPath: "/m.json" })).toEqual(["--resume", "u1", "--mcp-config", "/m.json"]);
+    expect(claudeArgs({ mode: "new", sessionId: "u1", settingsPath: "/s.json" })).toEqual(["--session-id", "u1", "--settings", "/s.json"]);
   });
 
   it("builds the session env", () => {

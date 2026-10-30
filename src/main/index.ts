@@ -11,7 +11,7 @@ import { BriefService } from "./brief/brief-service";
 import { narrateBrief } from "./brief/narrate";
 import { runHeadless } from "./claude/headless";
 import { probeMcpTools } from "./claude/mcp-probe";
-import { projectMcpConfigs } from "./claude/project-mcp";
+import { projectMcpApprovalSettings, projectMcpConfigs } from "./claude/project-mcp";
 import { headlessEnv } from "./claude/spawn";
 import { AuditRepo } from "./db/audit-repo";
 import { BriefsRepo } from "./db/briefs-repo";
@@ -393,6 +393,7 @@ async function bootstrap(): Promise<void> {
     platform: process.platform,
     baseEnv: process.env,
     mcpConfig: memoryMcpConfig,
+    mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger }),
     featureMcpConfig,
     features, featureHandoffs, handoffs,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
@@ -740,6 +741,7 @@ async function bootstrap(): Promise<void> {
     handle: controlHandler({
       tickets, sessions, features, ticketService, sessionService, notify,
       submit: (termId, message) => pty.deliver(termId, message, { singleLine: process.platform === "win32" }),
+      ticketPattern: () => settings.get("ticketPattern"),
       log: logger,
     }),
     log: logger,

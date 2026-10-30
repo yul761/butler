@@ -2,25 +2,28 @@ import { basename } from "node:path";
 import {
   MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, taskMessage, type ControlRequest, type ControlResult, type FeatureControlRequest,
 } from "../../shared/control";
-import { effectiveStatus, type OpenSessionResult, type Ticket, type TicketRepo } from "../../shared/types";
+import { effectiveStatus, type Feature, type FeatureRepo, type OpenSessionResult, type Ticket, type TicketRepo } from "../../shared/types";
 import type { FeaturesRepo } from "../db/features-repo";
 import { currentLang } from "../i18n";
 import { M } from "../strings";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import type { SessionService } from "../sessions/session-service";
-import { samePath, type TicketService } from "../tickets/ticket-service";
+import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
+import { samePath, TicketError, type TicketService } from "../tickets/ticket-service";
 
 export interface ControlHandlerDeps {
   tickets: TicketsRepo;
   sessions: SessionsRepo;
-  ticketService: Pick<TicketService, "workDir">;
+  ticketService: Pick<TicketService, "workDir" | "create">;
   sessionService: Pick<SessionService, "open" | "openTerminalCount" | "isRunning"> & Partial<Pick<SessionService, "featureTerminalCount">>;
   /** feature 总控的请求（设计文档 2026-10-26）；不给就拒绝。 */
   features?: FeaturesRepo;
   /** 把任务作为第一条消息交给新 session（等启动对话框过去、输入框就绪、粘贴、回车）。 */
   submit: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout">;
   notify: () => void;
+  /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
+  ticketPattern?: () => string;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -45,7 +48,7 @@ function openError(r: Extract<OpenSessionResult, { ok: false }>, repo: TicketRep
  * 处理总控发来的请求（设计文档 2026-10-23 第二步）。请求文件谁都能写：ticket、仓库、开启者都在这里重新核对。
  */
 export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => Promise<ControlResult> {
-  const name = (r: TicketRepo) => basename(r.repoPath);
+  const name = (r: { repoPath: string }) => basename(r.repoPath);
   const repoNameOf = (t: Ticket, id: number | null) => {
     const r = t.repos.find((x) => x.id === id);
     return r ? name(r) : null;
@@ -98,6 +101,47 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     startedByCoordinator: s.spawnedBy !== null,
   });
 
+  /**
+   * 总控在 feature 下建 ticket：和界面上“新建 ticket”一样走 TicketService.create（worktree 模式，放进 feature 工作区）。
+   * 仓库按名字或路径从 feature 的仓库里选；feature 只有一个仓库时可以不写。
+   */
+  const createTicket = async (f: Feature, req: Extract<FeatureControlRequest, { op: "create_ticket" }>): Promise<ControlResult> => {
+    const names = f.repos.map(name).join(", ");
+    if (f.repos.length === 0) return fail(M().ctlFeatureNoRepos);
+    let picked: FeatureRepo[];
+    if (req.repos === undefined || req.repos.length === 0) {
+      if (f.repos.length > 1) return fail(M().ctlPickFeatureRepos(names));
+      picked = f.repos;
+    } else {
+      picked = [];
+      for (const wanted of req.repos) {
+        const byPath = f.repos.find((r) => samePath(wanted, r.repoPath));
+        const byName = f.repos.filter((r) => name(r).toLowerCase() === wanted.trim().toLowerCase());
+        const r = byPath ?? (byName.length === 1 ? byName[0] : null);
+        if (!r) return fail(byName.length > 1 ? M().ctlRepoAmbiguous(wanted, byName.map((x) => x.repoPath).join(", ")) : M().ctlNoSuchFeatureRepo(wanted, names));
+        if (!picked.includes(r)) picked.push(r);
+      }
+    }
+    let t: Ticket;
+    try {
+      t = await d.ticketService.create({
+        key: req.ticket, title: req.title, featureId: f.id, workMode: "worktree",
+        repoPaths: picked.map((r) => r.repoPath), ...(req.branch !== undefined && { branch: req.branch }),
+      });
+    } catch (e) {
+      if (e instanceof TicketError && e.code === "invalid_key") return fail(M().ctlInvalidKey(req.ticket, d.ticketPattern?.() ?? DEFAULT_TICKET_PATTERN));
+      if (e instanceof TicketError) return fail(e.message);
+      d.log?.(`control: create_ticket ${req.ticket} failed`, e);
+      return fail((e as Error).message);
+    }
+    d.notify();
+    return ok({
+      key: t.key, title: t.title,
+      repos: t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), branch: r.branch })),
+      note: M().ctlTicketCreated,
+    });
+  };
+
   /** feature 总控（设计文档 2026-10-26）：feature 和 ticket 都在这里重新核对，ticket 必须属于这个 feature 且未归档。 */
   const featureRequest = async (req: FeatureControlRequest): Promise<ControlResult> => {
     const f = d.features?.get(req.featureId);
@@ -110,6 +154,12 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
         repos: t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), branch: r.branch })),
       })));
     }
+
+    if (req.op === "list_repos") {
+      return ok(f.repos.map((r) => ({ name: name(r), path: r.repoPath })));
+    }
+
+    if (req.op === "create_ticket") return createTicket(f, req);
 
     if (req.op === "list_sessions") {
       const visible = <T extends { replacedBy: string | null; dismissed: boolean }>(rows: T[]) => rows.filter((s) => !s.replacedBy && !s.dismissed);

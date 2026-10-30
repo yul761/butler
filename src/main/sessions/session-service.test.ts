@@ -21,6 +21,7 @@ async function setup(opts: {
   ready?: () => Promise<void>;
   factory?: PtyFactory;
   mcpConfig?: (ticketKey: string, opts: { coordinator: boolean }) => string | null;
+  mcpSettings?: (dirs: string[]) => string | null;
   syncMemory?: (ticketKey: string) => void;
   platform?: NodeJS.Platform;
   launchFs?: { read: (f: string) => string; exists: (p: string) => boolean };
@@ -48,6 +49,7 @@ async function setup(opts: {
     platform: opts.platform ?? "darwin",
     baseEnv: { HOME: "/h" },
     mcpConfig: opts.mcpConfig,
+    mcpSettings: opts.mcpSettings,
     syncMemory: opts.syncMemory,
     launchFs: opts.launchFs,
     log: (m) => logs.push(m),
@@ -114,6 +116,28 @@ describe("SessionService.open", () => {
     expect(asked).toEqual(["PROJ-1", "PROJ-1"]);
   });
 
+  it("passes the .mcp.json approval settings, asked with the session's folder and the repo roots", async () => {
+    const asked: string[][] = [];
+    const { service, spawned, sessions, repo, ticket } = await setup({ mcpSettings: (dirs) => (asked.push(dirs), "/b/mcp/approve-1.json") });
+    await service.open({ ticketKey: "PROJ-1" });
+    expect(spawned[0].args).toEqual(["--session-id", "new-1", "--settings", "/b/mcp/approve-1.json"]);
+    expect(asked[0]).toEqual([ticket.repos[0].worktreePath, repo]);
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1 });
+    await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
+    expect(spawned[1].args).toEqual(["--resume", "old", "--settings", "/b/mcp/approve-1.json"]);
+  });
+
+  it("opens the session without the approval settings when they cannot be written", async () => {
+    const { service, spawned, logs } = await setup({
+      mcpSettings: () => {
+        throw new Error("disk full");
+      },
+    });
+    expect(await service.open({ ticketKey: "PROJ-1" })).toMatchObject({ ok: true });
+    expect(spawned[0].args).toEqual(["--session-id", "new-1"]);
+    expect(logs.some((l) => l.includes("MCP approval settings for PROJ-1 not written"))).toBe(true);
+  });
+
   it("opens the session without memory when the config is off, fails, or cannot pass through cmd.exe", async () => {
     const off = await setup({ mcpConfig: () => null });
     await off.service.open({ ticketKey: "PROJ-1" });
@@ -131,7 +155,7 @@ describe("SessionService.open", () => {
     const shim = await setup({ platform: "win32", claudePath: "C:\\npm\\claude.cmd", mcpConfig: () => "C:\\Users\\John Smith\\.butler\\mcp\\PROJ-1.json" });
     await shim.service.open({ ticketKey: "PROJ-1" });
     expect(shim.spawned[0].args).not.toContain("--mcp-config");
-    expect(shim.logs.some((l) => l.includes("memory MCP not mounted for PROJ-1"))).toBe(true);
+    expect(shim.logs.some((l) => l.includes("memory MCP config not passed for PROJ-1"))).toBe(true);
     // 认不出的 shim 回退到 cmd.exe：仍然经过 cmd.exe /c 启动。
     expect(shim.spawned[0].file).toBe("cmd.exe");
     expect(shim.spawned[0].args).toEqual(["/c", "C:\\npm\\claude.cmd", "--session-id", "new-1"]);
@@ -151,7 +175,7 @@ describe("SessionService.open", () => {
     await shim.service.open({ ticketKey: "PROJ-1" });
     expect(shim.spawned[0].file).toBe(`${npmDir}\\node.exe`);
     expect(shim.spawned[0].args).toEqual([cli, "--session-id", "new-1", "--mcp-config", config]);
-    expect(shim.logs.some((l) => l.includes("memory MCP not mounted"))).toBe(false);
+    expect(shim.logs.some((l) => l.includes("memory MCP config not passed"))).toBe(false);
   });
 
   it("starts the native claude.exe behind a real npm shim directly and mounts memory (claude-code 2.1.307)", async () => {
@@ -168,7 +192,7 @@ describe("SessionService.open", () => {
     await shim.service.open({ ticketKey: "PROJ-1" });
     expect(shim.spawned[0].file).toBe(exe);
     expect(shim.spawned[0].args).toEqual(["--session-id", "new-1", "--mcp-config", config]);
-    expect(shim.logs.some((l) => l.includes("memory MCP not mounted"))).toBe(false);
+    expect(shim.logs.some((l) => l.includes("memory MCP config not passed"))).toBe(false);
   });
 
   it("finds a pnpm shim's node on the login PATH and passes the shim's NODE_PATH on", async () => {

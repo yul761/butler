@@ -38,6 +38,7 @@ async function setup() {
   const { factory, spawned } = fakePtyFactory();
   const pty = new PtyManager(factory, { data: () => undefined, exit: () => undefined });
   const mcpAsked: { key: string; coordinator: boolean; featureId: number | null }[] = [];
+  const settingsAsked: string[][] = [];
   let n = 0;
   const service = new SessionService({
     tickets, sessions, settings, ticketService, pty, features, featureHandoffs, handoffs,
@@ -51,17 +52,20 @@ async function setup() {
     baseEnv: { HOME: "/h" },
     mcpConfig: (key, o) => (mcpAsked.push({ key, ...o }), `/mcp/${key}.json`),
     featureMcpConfig: (id) => `/mcp/features/${id}.json`,
+    mcpSettings: (dirs) => (settingsAsked.push(dirs), "/mcp/approve.json"),
   });
-  return { service, featureHandoffs, handoffs, sessions, tickets, features, spawned, pty, feature, fe, be, backend, mcpAsked };
+  return { service, featureHandoffs, handoffs, sessions, tickets, features, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, settingsAsked };
 }
 
 describe("feature coordinator sessions (design 2026-10-26)", () => {
   it("opens in the workspace, adds only the repos outside it, and is not a ticket session", async () => {
-    const { service, spawned, sessions, feature, backend } = await setup();
+    const { service, spawned, sessions, feature, frontend, backend, settingsAsked } = await setup();
     expect(await service.openFeature({ featureId: feature.id })).toEqual({ ok: true, termId: "new-1", alreadyOpen: false });
     const s = spawned[0];
     expect(s.opts.cwd).toBe(feature.workspaceDir);
-    expect(s.args).toEqual(["--session-id", "new-1", "--mcp-config", `/mcp/features/${feature.id}.json`, "--add-dir", backend]);
+    expect(s.args).toEqual(["--session-id", "new-1", "--mcp-config", `/mcp/features/${feature.id}.json`, "--settings", "/mcp/approve.json", "--add-dir", backend]);
+    // 仓库 .mcp.json 的审批：工作区和 feature 的每个仓库里用户禁用过的照旧禁用。
+    expect(settingsAsked).toEqual([[feature.workspaceDir, frontend, backend]]);
     expect(s.opts.env.BUTLER_TICKET).toBeUndefined();
     expect(s.opts.env.BUTLER_SESSION).toBe("new-1");
     expect(sessions.get("new-1")).toMatchObject({ ticketKey: null, featureId: feature.id, coordinator: true, cwd: feature.workspaceDir });

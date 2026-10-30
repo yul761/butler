@@ -18,6 +18,8 @@ export const REQUIRED_FLAGS = [
   "--setting-sources",
   // 总控 session：每个仓库一个 --add-dir（多仓库 ticket）。
   "--add-dir",
+  // 交互 session：自动启用仓库 .mcp.json 里的 server（projectMcpApprovalSettings）。
+  "--settings",
 ] as const;
 
 export function parseVersion(out: string): string | null {

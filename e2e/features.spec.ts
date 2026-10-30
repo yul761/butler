@@ -109,22 +109,35 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
     const reply = await next();
     expect(reply.result.isError).toBeUndefined();
     started = JSON.parse(reply.result.content[0].text) as typeof started;
+    // 总控直接建 ticket：DMS-3 用 backend，马上出现在侧栏的 feature 下面。
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "create_ticket", arguments: { ticket: "dms-3", title: "Refunds", repos: ["backend"] } } })}\n`);
+    const created = await next();
+    expect(created.result.isError).toBeUndefined();
+    expect(JSON.parse(created.result.content[0].text)).toMatchObject({ key: "DMS-3", repos: [{ name: "backend", dir: join(workspace, "backend-dms-3") }] });
   } finally {
     child.kill();
   }
   expect(started).toMatchObject({ ticket: "DMS-1", repo: "frontend" });
+  await expect(page.locator(".sidebar .feature-group .feature-tickets .ticket .key")).toHaveText(["DMS-1", "DMS-2", "DMS-3"]);
+  expect(existsSync(join(workspace, "backend-dms-3"))).toBe(true);
   // 子 session 是 DMS-1 的普通 session：在它的 worktree 里，挂 ticket 记忆和 feature 记忆，没有 butler-sessions。
   await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-feature cwd=${feWorktree} adddirs=\n`);
 
-  // 5. 在 DMS-1 里看到子 session，等任务提交后退出它（这个仓库自己的终端在跑时不会清理）。
+  // 5. 在 DMS-1 里看到子 session，等任务提交后用按钮旁的 × 结束它（点两次；这个仓库自己的终端在跑时不会清理）。
   await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
-  const childButton = page.locator(".sessions-bar .session").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
+  const childWrap = page.locator(".sessions-bar .session-wrap").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
+  const childButton = childWrap.locator(".session");
   await expect(childButton).toBeVisible();
   await childButton.click();
-  // 等任务真的提交了（假 claude 回了“收到：”）再输入：粘贴之后、回车之前打的字会并进同一条消息。
   await expect.poll(() => terminalText(page)).toContain("收到：总控 session 交给你的任务：");
-  await typeLine(page, "exit");
-  await expect(page.locator(".terminal-wrap:visible .exited")).toBeVisible();
+  const end = childWrap.getByRole("button", { name: /^结束 / });
+  await end.click();
+  await expect(end).toHaveText(S.endSessionConfirm);
+  await end.click();
+  // 终端面板关掉，按钮变回“打开”，旁边的 × 变成隐藏。
+  await expect(childButton.locator(".action")).toHaveText(S.open);
+  await expect(page.locator(".terminal-wrap")).toHaveCount(0);
+  await expect(childWrap.getByRole("button", { name: /^隐藏 / })).toBeVisible();
 
   // 6. handoff：假 claude 报告 PR 已合并 → worktree 被删掉（分支保留），仓库一行标着“已清理”。总控还开着也不拦。
   await page.getByRole("button", { name: S.runHandoff, exact: true }).click();
@@ -198,7 +211,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await expect(row("DMS-1").locator(".pill")).toHaveText([`#12 ${S.prPill.approved}`]);
   await expect(row("DMS-2").locator(".pill")).toHaveText([S.noPr]);
   // ticket 表能收起，离开再回来还是收起的；再展开。
-  const ticketsToggle = page.locator(".feature-page .section-toggle");
+  const ticketsToggle = page.locator(".feature-page .feature-tickets .section-toggle");
   await ticketsToggle.click();
   await expect(page.locator(".feature-page .ticket-table")).toHaveCount(0);
   await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
@@ -240,6 +253,20 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await expect(progress.locator(".summary-meta .muted").first()).toContainText(S.featureSummaryTrigger.manual);
   expect(headlessLines()).toHaveLength(2);
   expect(headlessLines()[1]).toContain(`--resume ${coordinatorId} --fork-session`);
+
+  // 整体进度能收起：只留一行开头和卡住的条数，离开再回来还是收起的；终端至少占窗口一半高。再展开。
+  const progressToggle = progress.locator(".section-toggle");
+  await progressToggle.click();
+  await expect(summary).toHaveCount(0);
+  await expect(progress.locator(".preview")).toHaveText("后端下单接口（DMS-2）已合并；前端结账页（DMS-1）的 PR 已 approve，合并后就能联调。");
+  await expect(progress.locator("h3 .blocker")).toHaveText(S.featureBlockedCount(1));
+  await ticketPage("DMS-1");
+  await featurePage();
+  await expect(summary).toHaveCount(0);
+  const heights = await page.evaluate(() => ({ terminals: document.querySelector(".feature-page .terminals")!.getBoundingClientRect().height, window: window.innerHeight }));
+  expect(heights.terminals).toBeGreaterThanOrEqual(heights.window / 2 - 1);
+  await progressToggle.click();
+  await expect(summary.locator("p").first()).toBeVisible();
   if (shots) {
     mkdirSync(shots, { recursive: true });
     await page.screenshot({ path: join(shots, "feature-page-zh.png") });
@@ -255,7 +282,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await expect(en.locator(".sidebar button.nav").filter({ hasText: new RegExp(`^${E.settings}$`) })).toBeVisible();
   await en.locator(".sidebar .ticket.feature").click();
   const enProgress = en.locator(".feature-page .feature-progress");
-  await expect(enProgress.getByRole("heading", { name: E.featureProgress, exact: true })).toBeVisible();
+  await expect(enProgress.locator(".section-toggle")).toContainText(E.featureProgress);
   await enProgress.getByRole("button", { name: E.runFeatureSummary, exact: true }).click();
   await expect(enProgress.getByText(E.featureSummaryStored, { exact: true })).toBeVisible();
   await expect(enProgress.locator(".feature-summary p").first()).toContainText("The backend order API (DMS-2) is merged");

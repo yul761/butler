@@ -36,10 +36,11 @@ async function setup() {
     baseEnv: {},
   });
   const submitted: [string, string][] = [];
+  let notified = 0;
   const handle = controlHandler({
     tickets, sessions, features, ticketService, sessionService,
     submit: async (termId, task) => (submitted.push([termId, task]), "sent" as const),
-    notify: () => undefined,
+    notify: () => void notified++,
   });
   const parent = join(tempDir("butler-code-"), "shop");
   mkdirSync(parent);
@@ -53,7 +54,7 @@ async function setup() {
   await ticketService.create({ key: "DMS-2", featureId: feature.id, repoPaths: [frontend, backend], workMode: "worktree" });
   await ticketService.create({ key: "OTH-1", featureId: other.id, repoPaths: [frontend], workMode: "worktree" });
   const base = { v: 1 as const, featureId: feature.id, from: null };
-  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend };
+  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, notified: () => notified };
 }
 
 describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
@@ -139,5 +140,49 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
       ["DMS-1", basename(join("x", "frontend")), true],
       [null, "总控", false],
     ].sort());
+  });
+
+  it("lists the feature's repos", async () => {
+    const { handle, base, frontend, backend } = await setup();
+    expect(await handle({ ...base, op: "list_repos" })).toEqual({ v: 1, ok: true, value: [{ name: "frontend", path: frontend }, { name: "backend", path: backend }] });
+  });
+
+  it("creates a ticket in the chosen repos, inside the feature's workspace, and starts a session in it", async () => {
+    const { handle, base, feature, tickets, spawned, notified } = await setup();
+    const r = await handle({ ...base, op: "create_ticket", ticket: "dms-3", title: "Payment", repos: ["Backend"] });
+    expect(r).toEqual({
+      v: 1, ok: true,
+      value: {
+        key: "DMS-3", title: "Payment",
+        repos: [{ name: "backend", dir: join(feature.workspaceDir, "backend-dms-3"), branch: "feature/DMS-3" }],
+        note: expect.stringContaining("start_session"),
+      },
+    });
+    expect(tickets.get("DMS-3")).toMatchObject({ featureId: feature.id, title: "Payment" });
+    expect(notified()).toBe(1);
+    expect(await handle({ ...base, op: "start_session", ticket: "DMS-3", task: "做支付" })).toMatchObject({ ok: true, value: { ticket: "DMS-3", repo: "backend" } });
+    expect(spawned.at(-1)!.opts.cwd).toBe(join(feature.workspaceDir, "backend-dms-3"));
+  });
+
+  it("takes the only repo of a single-repo feature, and a branch name", async () => {
+    const { handle, other } = await setup();
+    const r = await handle({ v: 1, featureId: other.id, from: null, op: "create_ticket", ticket: "OTH-2", branch: "oth/two" });
+    expect(r).toMatchObject({ ok: true, value: { key: "OTH-2", repos: [{ name: "frontend", branch: "oth/two" }] } });
+  });
+
+  it("explains what is wrong instead of creating anything", async () => {
+    const { handle, base, tickets, notified } = await setup();
+    const err = async (req: object) => {
+      const r = await handle({ ...base, op: "create_ticket", ticket: "DMS-4", ...req });
+      if (r.ok) throw new Error("created");
+      return r.error;
+    };
+    expect(await err({})).toContain("frontend, backend");
+    expect(await err({ repos: ["mobile"] })).toContain("这个 feature 没有仓库 mobile");
+    expect(await err({ ticket: "cart work", repos: ["frontend"] })).toContain("[A-Z][A-Z0-9]+-\\d+");
+    expect(await err({ ticket: "DMS-1", repos: ["frontend"] })).toContain("DMS-1");
+    expect(tickets.get("DMS-4")).toBeNull();
+    expect(notified()).toBe(0);
+    expect(await handle({ ...base, featureId: 999, op: "create_ticket", ticket: "DMS-4" })).toMatchObject({ ok: false });
   });
 });

@@ -154,6 +154,11 @@ const ZH = {
   ctlTicketNoRepo: (key: string) => `ticket ${key} 还没有仓库`,
   ctlPickRepo: (key: string, names: string) => `ticket ${key} 有几个仓库，请用 repo 指定：${names}`,
   ctlTicketGone: (key: string) => `找不到 ticket ${key}（可能已经归档）`,
+  ctlFeatureNoRepos: "这个 feature 还没有仓库，请用户先在 Butler 的 feature 页添加仓库",
+  ctlPickFeatureRepos: (names: string) => `这个 feature 有几个仓库，请用 repos 指定这个 ticket 用哪些：${names}`,
+  ctlNoSuchFeatureRepo: (wanted: string, names: string) => `这个 feature 没有仓库 ${wanted}。现有的仓库：${names}`,
+  ctlInvalidKey: (key: string, pattern: string) => `ticket 号格式不对：${key}。要完整符合 Butler 设置里的格式 ${pattern}（例如 PROJ-123）；有 Jira 号就用 Jira 号`,
+  ctlTicketCreated: "ticket 已经建好，出现在 Butler 里这个 feature 下面。用 start_session 在它的仓库里开 session、交代任务。",
 };
 
 export type MainStrings = typeof ZH;
@@ -295,6 +300,11 @@ const EN: MainStrings = {
   ctlTicketNoRepo: (key: string) => `Ticket ${key} has no repo yet`,
   ctlPickRepo: (key: string, names: string) => `Ticket ${key} has several repos; name one with repo: ${names}`,
   ctlTicketGone: (key: string) => `Ticket ${key} was not found (it may be archived)`,
+  ctlFeatureNoRepos: "This feature has no repos yet. Ask the user to add one on the feature page in Butler first",
+  ctlPickFeatureRepos: (names: string) => `This feature has several repos; name the ones this ticket uses with repos: ${names}`,
+  ctlNoSuchFeatureRepo: (wanted: string, names: string) => `This feature has no repo ${wanted}. Its repos: ${names}`,
+  ctlInvalidKey: (key: string, pattern: string) => `The ticket id is not in the expected format: ${key}. It must fully match the pattern in Butler's settings, ${pattern} (for example PROJ-123); use the Jira id if there is one`,
+  ctlTicketCreated: "The ticket is created and appears under this feature in Butler. Use start_session to open a session in its repo and hand it a task.",
 };
 
 export const MAIN_STRINGS: Record<Lang, MainStrings> = { zh: ZH, en: EN };
