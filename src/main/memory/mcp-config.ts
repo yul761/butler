@@ -55,14 +55,19 @@ export function memoryServers(o: {
   };
 }
 
-/** 总控的 butler-sessions server：同样用 Butler 自己的 Electron 运行；ticket（或 feature）和控制目录写死在配置里。 */
+/** 总控的 butler-sessions server：同样用 Butler 自己的 Electron 运行；ticket（feature、epic）和控制目录写死在配置里。 */
 export function sessionsServer(o: {
   launcher: MemoryMcpLauncher;
-  scope: { ticketKey: string } | { featureId: number };
+  /** epic: feature 总控的 feature 属于某个 epic（多出 epic_context 工具）。 */
+  scope: { ticketKey: string } | { featureId: number; epic?: boolean } | { epicId: number };
   requestsDir: string;
   resultsDir: string;
 }): Record<string, McpServerSpec> {
-  const target: Record<string, string> = "featureId" in o.scope ? { BUTLER_FEATURE: String(o.scope.featureId) } : { BUTLER_TICKET: o.scope.ticketKey };
+  const scope = o.scope;
+  const target: Record<string, string> =
+    "epicId" in scope ? { BUTLER_EPIC: String(scope.epicId) }
+    : "featureId" in scope ? { BUTLER_FEATURE: String(scope.featureId), ...(scope.epic && { BUTLER_FEATURE_EPIC: "1" }) }
+    : { BUTLER_TICKET: scope.ticketKey };
   // 工具描述跟着 Butler 的语言（设计文档 2026-10-26）。
   target.BUTLER_LANG = currentLang();
   return {

@@ -54,14 +54,15 @@ export class FeatureService {
     return checkNameLimit(name, FEATURE_NAME_LIMIT, M().featureNameInvalid(FEATURE_NAME_LIMIT));
   }
 
-  async create(input: CreateFeatureInput): Promise<Feature> {
+  /** epicId、brief：epic session 的 create_feature 一次建好；界面上建 feature 不带。 */
+  async create(input: CreateFeatureInput & { epicId?: number; brief?: string }): Promise<Feature> {
     const name = FeatureService.checkName(input.name);
     const roots = await uniqueRoots(input.repoPaths);
     const workspaceDir = resolveWorkspaceDir(input.workspaceDir?.trim() || this.defaultWorkspace(roots, name), this.d.homeDir);
     if (this.d.features.byWorkspace(workspaceDir)) throw new TicketError("workspace_taken", M().workspaceTaken(workspaceDir));
     const now = this.d.now();
     const id = this.tx(() => {
-      const fid = this.d.features.insert({ name, workspaceDir, createdAt: now });
+      const fid = this.d.features.insert({ name, workspaceDir, createdAt: now, epicId: input.epicId, brief: input.brief });
       for (const r of roots) this.d.features.addRepo(fid, r, now);
       return fid;
     });

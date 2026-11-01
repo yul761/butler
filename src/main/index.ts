@@ -381,7 +381,7 @@ async function bootstrap(): Promise<void> {
    * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）、epic 的（设计文档 2026-11-01）；scope 是总控管的 ticket 或 feature，普通 session 为 null。
    */
   const launcher = (script: string) => ({ command: process.execPath, script });
-  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null; epicId?: number | null }, scope: { ticketKey: string } | { featureId: number } | null) => {
+  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null; epicId?: number | null }, scope: { ticketKey: string } | { featureId: number; epic?: boolean } | { epicId: number } | null) => {
     let servers = {};
     if (memoryOn(settings)) {
       if (existsSync(memoryMcpScript)) servers = memoryServers({ launcher: launcher(memoryMcpScript), statecoreDir: paths.statecore, ...mem });
@@ -409,13 +409,13 @@ async function bootstrap(): Promise<void> {
   };
   /** feature 总控：feature 记忆、全局记忆和 feature 模式的 butler-sessions；feature 属于 epic 时加 epic 记忆。 */
   const featureMcpConfig = (featureId: number, epicId: number | null): string | null => {
-    const servers = mcpServers({ featureId, epicId }, { featureId });
+    const servers = mcpServers({ featureId, epicId }, { featureId, epic: epicId !== null });
     if (Object.keys(servers).length === 0) return null;
     return writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers });
   };
-  /** epic session：epic 记忆和全局记忆。 */
+  /** epic session：epic 记忆、全局记忆和 epic 模式的 butler-sessions（list_features、list_repos、create_feature）。 */
   const epicMcpConfig = (epicId: number): string | null => {
-    const servers = mcpServers({ epicId }, null);
+    const servers = mcpServers({ epicId }, { epicId });
     if (Object.keys(servers).length === 0) return null;
     return writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers });
   };
@@ -805,6 +805,7 @@ async function bootstrap(): Promise<void> {
     resultsDir: paths.controlResults,
     handle: controlHandler({
       tickets, sessions, features, ticketService, sessionService, notify,
+      epics, featureService, epicRows: (id) => sessionService.epicFeatureRows(id),
       activity: (id) => activityMonitor.get(id),
       activityOutput: (id) => activityMonitor.output(id),
       submit: submitTask,

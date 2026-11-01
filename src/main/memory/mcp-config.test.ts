@@ -162,3 +162,20 @@ describe("epic memory (design 2026-11-01)", () => {
     if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 });
+
+describe("epic sessions server (design 2026-11-01)", () => {
+  it("points the epic session's sessions server at the epic", () => {
+    const s = sessionsServer({ launcher, scope: { epicId: 3 }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
+    expect(s.env.BUTLER_EPIC).toBe("3");
+    expect(s.env.BUTLER_FEATURE).toBeUndefined();
+    expect(s.env.BUTLER_TICKET).toBeUndefined();
+    expect(s.env.BUTLER_FEATURE_EPIC).toBeUndefined();
+  });
+
+  it("marks a feature coordinator that belongs to an epic", () => {
+    const inEpic = sessionsServer({ launcher, scope: { featureId: 7, epic: true }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
+    expect(inEpic.env).toMatchObject({ BUTLER_FEATURE: "7", BUTLER_FEATURE_EPIC: "1" });
+    const plain = sessionsServer({ launcher, scope: { featureId: 7 }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
+    expect(plain.env.BUTLER_FEATURE_EPIC).toBeUndefined();
+  });
+});

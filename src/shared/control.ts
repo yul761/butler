@@ -24,6 +24,11 @@ export type TicketControlRequest =
   | { v: 1; ticketKey: string; from: string | null; op: "session_activity"; session: string }
   | { v: 1; ticketKey: string; from: string | null; op: "start_session"; repo: string; task: string };
 
+/** epic session 建 feature 时 brief 最多这么多字符，超出直接拒绝。 */
+export const BRIEF_LIMIT = 4000;
+/** list_features、epic_context 里每个 feature 的 summary 最多这么多字符（超出截断）。 */
+export const SUMMARY_LIMIT = 1000;
+
 /** create_ticket 最多一次挂几个仓库。 */
 export const MAX_CREATE_REPOS = 20;
 
@@ -37,9 +42,17 @@ export type FeatureControlRequest =
   | { v: 1; featureId: number; from: string | null; op: "create_ticket"; ticket: string; title?: string; repos?: string[]; branch?: string }
   | { v: 1; featureId: number; from: string | null; op: "list_sessions" }
   | { v: 1; featureId: number; from: string | null; op: "session_activity"; session: string }
-  | { v: 1; featureId: number; from: string | null; op: "start_session"; ticket: string; repo?: string; task: string };
+  | { v: 1; featureId: number; from: string | null; op: "start_session"; ticket: string; repo?: string; task: string }
+  /** feature 属于 epic 时：epic 名字和同一 epic 下其他 feature 的情况。 */
+  | { v: 1; featureId: number; from: string | null; op: "epic_context" };
 
-export type ControlRequest = TicketControlRequest | FeatureControlRequest;
+/** epic session 的请求（设计文档 2026-11-01）：create_feature 在 epic 下建 feature，epic 只有一个仓库时 repos 可以省略。 */
+export type EpicControlRequest =
+  | { v: 1; epicId: number; from: string | null; op: "list_features" }
+  | { v: 1; epicId: number; from: string | null; op: "list_repos" }
+  | { v: 1; epicId: number; from: string | null; op: "create_feature"; name: string; repos?: string[]; brief: string };
+
+export type ControlRequest = TicketControlRequest | FeatureControlRequest | EpicControlRequest;
 
 export type ControlResult = { v: 1; ok: true; value: unknown } | { v: 1; ok: false; error: string };
 
@@ -51,12 +64,25 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   const o = raw as Record<string, unknown> | null;
   if (!o || typeof o !== "object" || o.v !== CONTROL_VERSION) return null;
   const from = typeof o.from === "string" && o.from.length > 0 && o.from.length <= 100 ? o.from : null;
+  if ("epicId" in o) {
+    if ("ticketKey" in o || "featureId" in o || !Number.isSafeInteger(o.epicId) || (o.epicId as number) <= 0) return null;
+    const base = { v: 1 as const, epicId: o.epicId as number, from };
+    if (o.op === "list_features") return { ...base, op: "list_features" };
+    if (o.op === "list_repos") return { ...base, op: "list_repos" };
+    if (o.op === "create_feature") {
+      if (!okName(o.name, 500) || typeof o.brief !== "string" || o.brief.length > BRIEF_LIMIT) return null;
+      if (o.repos !== undefined && (!Array.isArray(o.repos) || o.repos.length > MAX_CREATE_REPOS || !o.repos.every((r) => okName(r, 4096)))) return null;
+      return { ...base, op: "create_feature", name: o.name, brief: o.brief, ...(o.repos !== undefined && { repos: o.repos as string[] }) };
+    }
+    return null;
+  }
   if ("featureId" in o) {
     if ("ticketKey" in o || !Number.isSafeInteger(o.featureId) || (o.featureId as number) <= 0) return null;
     const base = { v: 1 as const, featureId: o.featureId as number, from };
     if (o.op === "list_tickets") return { ...base, op: "list_tickets" };
     if (o.op === "list_repos") return { ...base, op: "list_repos" };
     if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
+    if (o.op === "epic_context") return { ...base, op: "epic_context" };
     if (o.op === "session_activity") return okName(o.session, 200) ? { ...base, op: "session_activity", session: o.session } : null;
     if (o.op === "create_ticket") {
       if (!okName(o.ticket, 200)) return null;
