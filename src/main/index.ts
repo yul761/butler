@@ -735,12 +735,14 @@ async function bootstrap(): Promise<void> {
   };
 
   const epics = new EpicsRepo(db);
-  const epicService = new EpicService({ epics, features, db, now: Date.now });
+  // EpicService 要用 FeatureService 归档 / 恢复 feature，FeatureService 又要通知 EpicService 补仓库：用 let 打破循环。
+  let epicService: EpicService | undefined;
   const featureService = new FeatureService({
     features, tickets, epics, db, now: Date.now,
     onTicketArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
-    onRepoAdded: (featureId, repoPath) => epicService.ensureFeatureRepo(featureId, repoPath),
+    onRepoAdded: (featureId, repoPath) => epicService?.ensureFeatureRepo(featureId, repoPath),
   });
+  epicService = new EpicService({ epics, features, featureService, db, now: Date.now });
   // 防休眠：只在内存里，启动时是关的。状态一变，托盘菜单、提示文字和界面都跟着更新。
   keepAwake = new KeepAwake({
     blocker: powerSaveBlocker,

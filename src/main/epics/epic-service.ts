@@ -3,12 +3,15 @@ import { withTransaction, type Db } from "../db/database";
 import type { EpicsRepo } from "../db/epics-repo";
 import type { FeaturesRepo } from "../db/features-repo";
 import { M } from "../strings";
+import type { FeatureService } from "../tickets/feature-service";
 import { samePath, TicketError } from "../tickets/ticket-service";
 import { checkNameLimit, defaultWorkspaceDir, gitRootOf, resolveWorkspaceDir, uniqueRoots } from "../tickets/workspace";
 
 export interface EpicServiceDeps {
   epics: EpicsRepo;
   features: FeaturesRepo;
+  /** 归档 / 恢复 epic 下的 feature 时走它，和单独归档 feature 的做法（连带 ticket）完全一致。 */
+  featureService: FeatureService;
   now: () => number;
   /** 给了就把多步写入放进一个事务。 */
   db?: Db;
@@ -86,24 +89,29 @@ export class EpicService {
     this.d.epics.removeRepo(epicRepoId);
   }
 
-  /** epic 和它还没归档的 feature 用同一个时间戳归档；之前单独归档的 feature 保持原时间。 */
-  archive(epicId: number): void {
+  /**
+   * epic 和它还没归档的 feature（连同这些 feature 下还没归档的 ticket）用同一个时间戳归档；之前单独归档的保持原样。
+   * 和归档 feature 一样，有终端在跑时整个拒绝（先检查，不会归档一半）：epic 自己的 session，或任何一个要归档的 feature 的终端。
+   */
+  archive(epicId: number, opts: { terminalsOpen: boolean; featureTerminalsOpen: (featureId: number) => boolean }): void {
     const e = this.get(epicId);
     if (e.archivedAt !== null) return;
+    const live = this.d.features.listByEpic(epicId);
+    if (opts.terminalsOpen || live.some((f) => opts.featureTerminalsOpen(f.id))) throw new TicketError("sessions_open", M().epicTerminalsArchive);
     const now = this.d.now();
     this.tx(() => {
-      for (const f of this.d.features.listByEpic(epicId)) this.d.features.archive(f.id, now);
+      for (const f of live) this.d.featureService.archive(f.id, { terminalsOpen: false, at: now });
       this.d.epics.archive(epicId, now);
     });
   }
 
-  /** 恢复 epic，以及和它一起归档的 feature（时间戳相同的；之前单独归档的保持归档）。 */
+  /** 恢复 epic，以及和它一起归档的 feature（时间戳相同的；之前单独归档的保持归档）。每个 feature 的恢复交给 FeatureService（连带 ticket）。 */
   unarchive(epicId: number): void {
     const e = this.get(epicId);
     if (e.archivedAt === null) return;
     const together = this.d.features.listByEpic(epicId, { includeArchived: true }).filter((f) => f.archivedAt === e.archivedAt);
     this.tx(() => {
-      for (const f of together) this.d.features.unarchive(f.id);
+      for (const f of together) this.d.featureService.unarchive(f.id);
       this.d.epics.unarchive(epicId);
     });
   }

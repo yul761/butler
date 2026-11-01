@@ -88,12 +88,12 @@ export class FeatureService {
     return this.get(featureId);
   }
 
-  /** feature 和它还没归档的 ticket 用同一个时间戳归档；有终端在跑时拒绝。 */
-  archive(featureId: number, opts: { terminalsOpen: boolean }): void {
+  /** feature 和它还没归档的 ticket 用同一个时间戳归档（at：由 epic 归档传入的统一时间戳）；有终端在跑时拒绝。 */
+  archive(featureId: number, opts: { terminalsOpen: boolean; at?: number }): void {
     const f = this.get(featureId);
     if (f.archivedAt !== null) return;
     if (opts.terminalsOpen) throw new TicketError("sessions_open", M().featureTerminalsArchive);
-    const now = this.d.now();
+    const now = opts.at ?? this.d.now();
     const keys = this.d.tickets.listByFeature(featureId).map((t) => t.key);
     this.tx(() => {
       for (const k of keys) this.d.tickets.archive(k, now);
