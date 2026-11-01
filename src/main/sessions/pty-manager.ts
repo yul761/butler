@@ -50,6 +50,14 @@ export function dialogShowing(buffer: string): boolean {
   return DIALOG_MARKERS.some((m) => tail.includes(m));
 }
 
+/** 权限确认提示（“Do you want to proceed?” 等）：session 在等人点，不算卡住。 */
+const PERMISSION_MARKERS = ["do you want to proceed", "do you want to make this edit", "do you want to create"];
+
+export function permissionPromptShowing(buffer: string): boolean {
+  const tail = stripAnsi(buffer.slice(-DIALOG_TAIL * 4)).slice(-DIALOG_TAIL).toLowerCase();
+  return PERMISSION_MARKERS.some((m) => tail.includes(m));
+}
+
 export interface DeliverOptions {
   /** 输出安静多久算输入框就绪。 */
   idleMs?: number;

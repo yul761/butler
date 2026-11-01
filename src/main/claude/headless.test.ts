@@ -23,6 +23,12 @@ describe("headlessArgs", () => {
     expect(headlessArgs({ schema: "{}", allowedTools: ["Read"], mcpConfigs: [] })).not.toContain("--mcp-config");
   });
 
+  it("omits --allowedTools when the list is empty (a variadic flag with no value is a CLI error)", () => {
+    const args = headlessArgs({ schema: "{}", allowedTools: [] });
+    expect(args).not.toContain("--allowedTools");
+    expect(args.slice(-4)).toEqual(["--disallowedTools", "Edit", "Write", "NotebookEdit"]);
+  });
+
   it("resumes as a non-persistent, read-only fork and never carries the prompt", () => {
     expect(headlessArgs({ schema: '{"type":"object"}', resumeSessionId: "s-1", allowedTools: ["Read", "Bash(git status)"] })).toEqual([
       "-p", "--output-format", "json", "--json-schema", '{"type":"object"}', "--no-session-persistence", "--permission-mode", "dontAsk",

@@ -65,7 +65,9 @@ export function headlessArgs(o: { schema: string; resumeSessionId?: string; allo
   for (const dir of o.addDirs ?? []) args.push("--add-dir", dir);
   // --mcp-config 也是可变参数：放在 --disallowedTools 之前，由下一个 flag 截断。
   if (o.mcpConfigs?.length) args.push("--mcp-config", ...o.mcpConfigs);
-  args.push("--disallowedTools", ...DENIED_TOOLS, "--allowedTools", ...o.allowedTools);
+  args.push("--disallowedTools", ...DENIED_TOOLS);
+  // 可变参数后面没有值会让 CLI 报错：空列表就不传，dontAsk 本来就拒绝白名单以外的一切。
+  if (o.allowedTools.length) args.push("--allowedTools", ...o.allowedTools);
   return args;
 }
 
