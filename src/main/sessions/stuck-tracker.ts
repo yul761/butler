@@ -49,6 +49,8 @@ const blankEntry = (noJudgeUntil: number): Entry => ({ last: null, lastAt: 0, qu
 export class StuckTracker {
   private entries = new Map<string, Entry>();
 
+  constructor(private readonly checkMs = STUCK_CHECK_MS) {}
+
   /** 记一次样本。返回 true 表示现在该请 Claude 判断。 */
   observe(id: string, sample: StuckSample, now: number): boolean {
     const known = this.entries.get(id);
@@ -59,7 +61,7 @@ export class StuckTracker {
     const e = known ?? blankEntry(0);
     this.entries.set(id, e);
     const last = e.last;
-    const gap = now - e.lastAt > STUCK_CHECK_MS * 2;
+    const gap = now - e.lastAt > this.checkMs * 2;
     e.last = sample;
     e.lastAt = now;
     // 第一次观察只是基线，没有可比较的对象，不算没变化。

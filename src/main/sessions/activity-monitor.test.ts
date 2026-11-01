@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Feature, Session, Ticket } from "../../shared/types";
 import { setLang } from "../i18n";
 import { tempDir } from "../test-utils";
-import { ACTIVITY_TICK_MS, ActivityMonitor, type ActivityDeps, deriveActivity } from "./activity-monitor";
+import { ACTIVITY_TICK_MS, ActivityMonitor, activityIntervals, type ActivityDeps, deriveActivity } from "./activity-monitor";
 import { applyEntry, newTranscriptState } from "./activity-parse";
 import type { StuckInput } from "./stuck-judge";
 import { STUCK_CHECK_MS, type StuckVerdict } from "./stuck-tracker";
@@ -40,7 +40,7 @@ const row = (id: string, over: Partial<Session> = {}): Session => ({
 });
 
 /** 假的依赖：session、ticket、feature 是内存表，transcript 和输出文件是真的临时文件。 */
-function harness() {
+function harness(over: Partial<ActivityDeps> = {}) {
   const dir = tempDir("butler-activity-");
   const heads = new Map<string, Session>();
   const open = new Set<string>();
@@ -84,6 +84,7 @@ function harness() {
       return cpu;
     },
     log: (m, e) => logs.push(`${m} ${e instanceof Error ? e.message : ""}`),
+    ...over,
   };
   const monitor = new ActivityMonitor(deps);
 
@@ -1092,7 +1093,60 @@ describe("ActivityMonitor stuck detection", () => {
   });
 });
 
+describe("activityIntervals", () => {
+  const production = { tickMs: ACTIVITY_TICK_MS, stuckCheckMs: STUCK_CHECK_MS };
+  const asked = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_STUCK_CHECK_MS: "1000" };
+
+  it("stays at 10 seconds and 3 minutes by default", () => {
+    expect(activityIntervals({})).toEqual({ tickMs: 10_000, stuckCheckMs: 180_000 });
+  });
+
+  it("honours the variables only under the e2e flag", () => {
+    expect(activityIntervals(asked)).toEqual(production);
+    expect(activityIntervals({ ...asked, BUTLER_BACKGROUND_WINDOWS: "0" })).toEqual(production);
+    expect(activityIntervals({ ...asked, BUTLER_BACKGROUND_WINDOWS: "1" })).toEqual({ tickMs: 200, stuckCheckMs: 1000 });
+  });
+
+  it("keeps the default for a value that is not a positive whole number", () => {
+    for (const bad of ["", "0", "-5", "1.5", "soon"]) {
+      expect(activityIntervals({ BUTLER_BACKGROUND_WINDOWS: "1", BUTLER_ACTIVITY_TICK_MS: bad, BUTLER_STUCK_CHECK_MS: bad }), bad).toEqual(production);
+    }
+  });
+});
+
 describe("ActivityMonitor lifecycle", () => {
+  it("refreshes on the configured interval", async () => {
+    vi.useFakeTimers();
+    const h = harness({ intervals: { tickMs: 200, stuckCheckMs: 1000 } });
+    const tick = vi.spyOn(h.monitor, "tick").mockResolvedValue();
+    h.monitor.start();
+    await vi.advanceTimersByTimeAsync(1000);
+    h.monitor.stop();
+    expect(tick).toHaveBeenCalledTimes(6);
+  });
+
+  it("samples and judges on the configured check interval", async () => {
+    const h = harness({ intervals: { tickMs: 200, stuckCheckMs: 1000 } });
+    h.openSession("s1");
+    h.busy("s1");
+    for (const at of [1000, 1500, 2000, 2500, 3000]) await h.monitor.tick(at);
+    await flush();
+    expect(h.judgeCalls).toHaveLength(1);
+  });
+
+  it("uses the configured check interval for the gap rule too", async () => {
+    const h = harness({ intervals: { tickMs: 200, stuckCheckMs: 1000 } });
+    h.openSession("s1");
+    h.busy("s1");
+    // 第二次检查隔了 2500 毫秒，比两个检查间隔长：连不上，要再两次才算可疑。
+    for (const at of [1000, 3500, 4500]) await h.monitor.tick(at);
+    await flush();
+    expect(h.judgeCalls).toHaveLength(0);
+    await h.monitor.tick(5500);
+    await flush();
+    expect(h.judgeCalls).toHaveLength(1);
+  });
+
   it("skips a tick that overlaps the previous one", async () => {
     const h = harness();
     let release: () => void = () => undefined;

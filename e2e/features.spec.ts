@@ -1,8 +1,9 @@
-import type { Page } from "@playwright/test";
+import type { ElectronApplication, Page } from "@playwright/test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { DatabaseSync } from "node:sqlite";
 import { S, STRINGS } from "../src/renderer/src/strings";
 import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox } from "./fixtures";
 
@@ -290,4 +291,347 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await expect(enProgress.locator(".summary-meta .muted").first()).toContainText(E.featureSummaryTrigger.manual);
   await expect(en.locator(".feature-page .ticket-table tr").filter({ hasText: "DMS-2" }).locator(".pill")).toHaveText([`backend#7 ${E.prPill.merged}`]);
   if (shots) await en.screenshot({ path: join(shots, "feature-page-en.png") });
+});
+
+/** 假 claude 跑的命令：够长，状态列放不下；第一个词让它归类成“跑测试”。 */
+const LONG_COMMAND = "pnpm test --filter @acme/checkout-frontend --run --reporter=verbose";
+/** 假 claude 写进输出文件的内容。 */
+const COMMAND_OUTPUT = Array.from({ length: 8 }, (_, i) => `step ${i + 1} of 8`);
+const VERDICT_REASON = { zh: "测试进程在等一个不会来的信号", en: "The test process is waiting for a signal that will not come" };
+const VERDICT_ACTION = { zh: "确认测试进程没有在动，再决定要不要杀掉重跑", en: "Check that the test process is idle, then decide whether to kill and rerun it" };
+const STUCK_CHECK_MS = 1000;
+
+/** main 进程里记下的通知。 */
+type Captured = { notifications: Electron.Notification[] };
+
+/** 接过系统通知：不在桌面上弹出来，测试自己“点”。必须在 session 卡住之前调用。 */
+async function captureNotifications(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ Notification }) => {
+    const shown: Electron.Notification[] = [];
+    (globalThis as unknown as Captured).notifications = shown;
+    Notification.isSupported = () => true;
+    Notification.prototype.show = function show(this: Electron.Notification) {
+      shown.push(this);
+    };
+  });
+}
+
+const notifications = (app: ElectronApplication) =>
+  app.evaluate(() => (globalThis as unknown as Captured).notifications.map((n) => ({ title: n.title, body: n.body })));
+
+const clickNotification = (app: ElectronApplication, index: number) =>
+  app.evaluate((_, i) => void (globalThis as unknown as Captured).notifications[i].emit("click"), index);
+
+const hideWindow = (app: ElectronApplication) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
+const windowVisible = (app: ElectronApplication) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible());
+const resizeWindow = (app: ElectronApplication, width: number, height: number) =>
+  app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height), { width, height });
+
+/** 终端区至少占窗口一半高，而且整个在窗口里。 */
+async function expectTerminalsKeepHalf(page: Page): Promise<void> {
+  const m = await page.evaluate(() => {
+    const r = document.querySelector(".feature-page .terminals")!.getBoundingClientRect();
+    return { height: r.height, bottom: r.bottom, window: window.innerHeight };
+  });
+  expect(m.height, JSON.stringify(m)).toBeGreaterThanOrEqual(m.window * 0.5);
+  expect(m.bottom, JSON.stringify(m)).toBeLessThanOrEqual(m.window);
+}
+
+/** 直接读 Butler 的数据库（只读）：有些事界面上看不出来。 */
+function dbRows<T>(s: Sandbox, sql: string, ...params: string[]): T[] {
+  const db = new DatabaseSync(join(s.butlerHome, "app.db"), { readOnly: true });
+  try {
+    return db.prepare(sql).all(...params) as T[];
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * 设计文档 2026-10-31（ticket 实时状态）：假 claude 写 transcript 和真实位置的 tasks/<id>.output → feature 页显示活动
+ * → 本地检查（真的 ps、真的 pty pid）判定可疑，真的 headless 判断 stuck: true → 红点、通知 → 面板展开、缩回、再打开内容还在，
+ * 终端区至少占一半高，终端能输入 → 忽略 → 恢复活动红点消失、再次卡住 → 开修复 session，收到四条规则，不算总控
+ * → 点通知展开面板，feature 页不重新挂载，当前终端不变 → 重启后换成英文再卡住一次。
+ * 设了 BUTLER_E2E_SHOTS_DIR 时截图存到那里，文件名 live-status-*.png（CI 不设）。
+ */
+test("live status and stuck handling on the feature page", async ({ makeSandbox, launch }) => {
+  test.skip(process.platform === "win32", "Windows has no tasks directory or CPU reading in this version: only the command and duration show");
+  const s = makeSandbox();
+  s.env = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_STUCK_CHECK_MS: String(STUCK_CHECK_MS) };
+  const workspace = join(s.dir, "shop-features", "checkout");
+  const worktree = join(workspace, "frontend-dms-1");
+  const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
+  const sessionIn = (cwd: string) => new RegExp(`interactive new (\\S+) mcp=\\S* cwd=${escapeRe(cwd)} `).exec(fakeLog())?.[1];
+  const judgePrompts = () => [...fakeLog().matchAll(/ judge prompt (.+)/g)].map((m) => JSON.parse(m[1]) as string);
+  const shots = process.env.BUTLER_E2E_SHOTS_DIR;
+  const shot = async (target: Page, name: string, colorScheme: "light" | "dark") => {
+    if (!shots) return;
+    mkdirSync(shots, { recursive: true });
+    await target.emulateMedia({ colorScheme });
+    await target.screenshot({ path: join(shots, name) });
+  };
+
+  const { app, page } = await launch(s);
+  // 渲染进程的异常会让整页变白：一个都不能有。
+  const pageErrors: string[] = [];
+  page.on("pageerror", (e) => pageErrors.push(e.message));
+  await captureNotifications(app);
+  await completeWizard(page, s);
+  await createCheckoutFeature(page, s);
+  await newFeatureTicket(page, "DMS-1", "frontend");
+  await page.locator(".feature-link").getByRole("button", { name: "checkout", exact: true }).click();
+  await newFeatureTicket(page, "DMS-2", "backend");
+  const ticketPage = (key: string) => page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: key }).click();
+  const featurePage = () => page.locator(".sidebar .ticket.feature").click();
+  const onFeaturePage = () => expect(page.getByRole("heading", { name: "checkout", exact: true })).toBeVisible();
+  const onTicketPage = (key: string) => expect(page.getByRole("heading", { name: key, exact: true })).toBeVisible();
+  const row = (key: string) => page.locator(".feature-page .ticket-table tr").filter({ hasText: key });
+
+  // 1. 总控开着，并且有一份汇总：概览区的内容比较多，修复 session 的任务里也要写上总控的名字。
+  await featurePage();
+  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+  const coordinatorId = sessionIn(workspace)!;
+  expect(coordinatorId).toBeTruthy();
+  await typeLine(page, "/handoff");
+  await expect(page.locator(".feature-summary p").first()).toBeVisible();
+
+  // 2. DMS-1 的 session 开始跑一个命令，这一轮不结束。
+  await ticketPage("DMS-1");
+  await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+  const stuckId = sessionIn(worktree)!;
+  expect(stuckId).toBeTruthy();
+  await typeLine(page, `/fake-bash ${LONG_COMMAND}`);
+  await expect.poll(fakeLog).toContain(" task output ");
+  const outputFile = /task output (.+)/.exec(fakeLog())![1];
+
+  // 3. 状态列显示这个 session 此刻在干什么；没有运行中 session 的 DMS-2 还是原来的 ticket 状态。
+  await featurePage();
+  const activity = row("DMS-1").locator(".status .activity");
+  await expect(activity.locator(".main")).toHaveText(S.activity.test);
+  await expect(activity.locator("small")).toContainText(LONG_COMMAND.slice(0, 40));
+  await expect(row("DMS-2").locator(".status")).not.toHaveText("");
+  await expect(row("DMS-2").locator(".status .activity")).toHaveCount(0);
+
+  // 4. 两次检查没变化 → 真的 headless 判断 stuck: true → 红点、淡红底色和一条通知。点红点之前面板是关着的。
+  const dot = row("DMS-1").getByRole("button", { name: `DMS-1 ${S.stuckDot}`, exact: true });
+  const panel = page.locator(".stuck-panel");
+  await expect(dot).toBeVisible();
+  await expect(row("DMS-1")).toHaveClass(/stuck/);
+  await expect(panel).toHaveCount(0);
+  await expect.poll(() => notifications(app)).toHaveLength(1);
+  const [shown] = await notifications(app);
+  expect(shown.title).toContain("DMS-1");
+  expect(shown.body).toContain(VERDICT_REASON.zh);
+
+  // 判断用的 prompt 证明这些都是真的读到的：transcript、tasks 目录的输出文件、ps 读到的子进程 CPU（读不到时写的是“未知”）。
+  expect(judgePrompts()).toHaveLength(1);
+  expect(judgePrompts()[0]).toContain(LONG_COMMAND.slice(0, 40));
+  expect(judgePrompts()[0]).toContain(COMMAND_OUTPUT.join("\n"));
+  expect(judgePrompts()[0]).toContain("子进程最近几分钟几乎没有用 CPU。");
+  // headless 自己的 session 不进“未认领”。
+  expect(dbRows(s, "SELECT cwd, dismissed FROM sessions WHERE id LIKE 'judge-%'")).toEqual([{ cwd: worktree, dismissed: 1 }]);
+
+  // “已 N 分钟没有新输出”完整显示，不会被截掉；鼠标放上去也能看到全文。
+  const sub = activity.locator("small");
+  await expect(sub).toContainText(S.activitySilent(S.durationMinutes(1)));
+  await expect(sub).toHaveAttribute("title", (await sub.textContent())!);
+  expect(await sub.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+  if (shots) await row("DMS-1").screenshot({ path: join(shots, "live-status-row.png") });
+
+  // 5. 点红点展开面板，不进 ticket 页。概览区内容多时自己滚到面板，按钮看得到。面板只显示最后 6 行。
+  const fix = panel.getByRole("button", { name: S.stuckFix, exact: true });
+  await dot.click();
+  await expect(fix).toBeInViewport();
+  await onFeaturePage();
+  await expect(panel).toContainText(VERDICT_REASON.zh);
+  await expect(panel).toContainText(VERDICT_ACTION.zh);
+  await expect(panel.locator(".stuck-log")).toHaveText(COMMAND_OUTPUT.slice(-6).join("\n"));
+  await shot(page, "live-status-zh.png", "light");
+  await shot(page, "live-status-zh-dark.png", "dark");
+
+  // 6. 缩回再打开，内容还在。
+  const content = await panel.innerText();
+  await dot.click();
+  await expect(panel).toHaveCount(0);
+  await onFeaturePage();
+  await dot.click();
+  await expect(panel).toBeVisible();
+  expect(await panel.innerText()).toBe(content);
+
+  // 7. 面板开着：终端区至少占窗口一半高，窗口缩到最小也一样，这时概览区自己滚动，面板的按钮还够得着。
+  await expectTerminalsKeepHalf(page);
+  await resizeWindow(app, 900, 600);
+  await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeLessThanOrEqual(600);
+  await expectTerminalsKeepHalf(page);
+  await fix.scrollIntoViewIfNeeded();
+  await expect(fix).toBeInViewport();
+  await resizeWindow(app, 1280, 820);
+  await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeGreaterThan(600);
+
+  // 8. 面板开着，按键照样到终端，也有回复。
+  await typeLine(page, "hello with the panel open");
+  await expect.poll(() => terminalText(page)).toContain("收到：hello with the panel open");
+  await expect(panel).toBeVisible();
+
+  // 9. 点这一行的其他位置和“看终端”都进 ticket 页。在别的页面上，侧栏的 feature 行也有红点。回来时面板还开着。
+  await row("DMS-1").locator(".status").click();
+  await onTicketPage("DMS-1");
+  await expect(page.locator(".sidebar .feature-group .stuck-mark")).toBeVisible();
+  await featurePage();
+  await expect(panel).toBeVisible();
+  await panel.getByRole("button", { name: S.stuckViewTerminal, exact: true }).click();
+  await onTicketPage("DMS-1");
+  await featurePage();
+
+  // 10. “没事，忽略”（activity:dismiss）：红点消失；没有新动静就不再判断、不再提醒。
+  await panel.getByRole("button", { name: S.stuckDismiss, exact: true }).click();
+  await expect(dot).toHaveCount(0);
+  await expect(panel).toHaveCount(0);
+  await page.waitForTimeout(4 * STUCK_CHECK_MS);
+  await expect(dot).toHaveCount(0);
+  expect(judgePrompts()).toHaveLength(1);
+  expect(await notifications(app)).toHaveLength(1);
+
+  // 11. 命令又有输出之后再卡住：再判断一次、再提醒一次，面板显示新的输出。
+  appendFileSync(outputFile, "step 9 of 8\n");
+  await expect(dot).toBeVisible();
+  await expect.poll(() => notifications(app)).toHaveLength(2);
+  expect(judgePrompts()).toHaveLength(2);
+  await expect(panel.locator(".stuck-log")).toContainText("step 9 of 8");
+
+  // 12. 还卡着的时候有了新输出：红点自己消失，不用等下一次判断。之后再卡住一次，给后面的步骤用。
+  appendFileSync(outputFile, "step 10 of 8\n");
+  await expect(dot).toHaveCount(0);
+  await expect(dot).toBeVisible();
+  await expect.poll(() => notifications(app)).toHaveLength(3);
+
+  // 13. “开新 session 解决”（session:openFix）：feature 页上多一个“修复 DMS-1”的 session，切到它的终端。
+  await fix.click();
+  const fixButton = page.locator(".feature-page .sessions-bar .session").filter({ hasText: S.fixSessionFor("DMS-1") });
+  await expect(fixButton).toHaveClass(/active/);
+  const fixId = (await fixButton.getAttribute("title"))!.split("\n")[1];
+  expect(fixId).toBeTruthy();
+  expect(fixId).not.toBe(coordinatorId);
+
+  // 14. 新 session 收到任务：四条规则、两个 session 的名字（登记文件里查到的）、卡住 session 的资料。
+  const fixTranscript = join(s.claudeConfigDir, "projects", workspace.replace(/[^A-Za-z0-9]/g, "-"), `${fixId}.jsonl`);
+  const firstMessage = () => {
+    if (!existsSync(fixTranscript)) return "";
+    const line = readFileSync(fixTranscript, "utf8").split("\n")[0];
+    return (JSON.parse(line) as { message: { content: string } }).message.content;
+  };
+  await expect.poll(firstMessage).toContain("Butler 开了这个 session 来解决一个卡住的 session。");
+  const task = firstMessage();
+  expect(task).toContain("1. 目标是让卡住的 session 能继续，不接手那个 ticket 的工作。");
+  expect(task).toContain("2. 要杀进程时先问用户，用户确认后才杀。");
+  expect(task).toContain("3. 改 branch、停进程这类可能影响原 session 的事，先用 SendMessage 告诉原 session，再动手。其他事不用同步。");
+  expect(task).toContain(`4. 解决后用 SendMessage 告诉总控 session fake-${coordinatorId.slice(0, 8)} 问题已解决。`);
+  expect(task).toContain(`session：${stuckId}`);
+  expect(task).toContain(`名字：fake-${stuckId.slice(0, 8)}`);
+  expect(task).toContain(`目录：${worktree}`);
+  expect(task).toContain(`原因：${VERDICT_REASON.zh}`);
+  expect(task).toContain("step 10 of 8");
+  await expect.poll(() => terminalText(page)).toContain("收到：Butler 开了这个 session");
+
+  // 15. 不存成总控；原 session 不受影响，还是卡住的。同一个卡住的 session 再点一次，回到同一个修复 session。
+  expect(dbRows(s, "SELECT coordinator, fixes_session AS fixes, ticket_key AS ticket FROM sessions WHERE id = ?", fixId)).toEqual([{ coordinator: 0, fixes: stuckId, ticket: null }]);
+  await expect(dot).toBeVisible();
+  await fix.click();
+  await expect(page.locator(".feature-page .sessions-bar .session")).toHaveCount(2);
+
+  // 16. 点通知（feature 页已经开着，ticket 区收起、面板关着）：窗口回来，展开 ticket 区和面板，页面不重新挂载，当前终端不变。
+  //     切到排在后面的那个终端：页面重新挂载的话，当前终端会回到第一个。
+  await page.locator(".feature-page .sessions-bar .session").last().click();
+  const active = page.locator(".feature-page .sessions-bar .session.active");
+  const activeTitle = (await active.getAttribute("title"))!;
+  const screen = await terminalText(page);
+  await page.evaluate(() => document.querySelector(".feature-page")!.setAttribute("data-e2e-mounted", "1"));
+  await dot.click();
+  await expect(panel).toHaveCount(0);
+  await page.locator(".feature-page .feature-tickets .section-toggle").click();
+  await expect(page.locator(".feature-page .ticket-table")).toHaveCount(0);
+  await expect(page.locator(".feature-page .feature-tickets .stuck-mark")).toBeVisible();
+  await hideWindow(app);
+  await clickNotification(app, 0);
+  await expect.poll(() => windowVisible(app)).toBe(true);
+  await expect(fix).toBeInViewport();
+  await expect(page.locator(".feature-page[data-e2e-mounted]")).toHaveCount(1);
+  await expect(active).toHaveAttribute("title", activeTitle);
+  expect(await terminalText(page)).toBe(screen);
+
+  // 17. 在别的页面上点通知：打开这个 feature 页，展开面板。
+  await dot.click();
+  await expect(panel).toHaveCount(0);
+  await ticketPage("DMS-2");
+  await clickNotification(app, 1);
+  await onFeaturePage();
+  await expect(fix).toBeInViewport();
+
+  // 18. 修复 session 比总控新，但 feature 汇总还是 fork 总控：它不会被选成总控。
+  const progress = page.locator(".feature-page .feature-progress");
+  await progress.getByRole("button", { name: S.runFeatureSummary, exact: true }).click();
+  await expect(progress.getByText(S.featureSummaryStored, { exact: true })).toBeVisible();
+  expect(fakeLog()).toContain(`--resume ${coordinatorId} --fork-session`);
+  expect(fakeLog()).not.toContain(`--resume ${fixId}`);
+
+  // 19. 卡住的 session 还在被监视时退出：监视先停，数据库才关，日志里没有错误。
+  expect(pageErrors).toEqual([]);
+  await app.close();
+  const log = () => readFileSync(join(s.butlerHome, "logs", "main.log"), "utf8");
+  expect(log()).not.toMatch(/activity tick failed|activity of session|stuck judge/);
+
+  // 20. 重启后是英文：卡住状态不留，DMS-2 新跑的命令重新判断，判断结果和界面都是英文。
+  s.lang = "en";
+  const E = STRINGS.en;
+  const english = await launch(s);
+  const en = english.page;
+  await captureNotifications(english.app);
+  await en.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-2" }).click();
+  await en.getByRole("button", { name: `+ ${E.newSession}`, exact: true }).click();
+  await expect.poll(() => terminalText(en)).toContain("fake claude ready");
+  await typeLine(en, "/fake-bash git push origin feature/checkout");
+  await en.locator(".sidebar .ticket.feature").click();
+  const enRow = en.locator(".feature-page .ticket-table tr").filter({ hasText: "DMS-2" });
+  await expect(enRow.locator(".activity .main")).toHaveText(E.activity.push);
+  await expect(enRow.getByRole("button", { name: `DMS-2 ${E.stuckDot}`, exact: true })).toBeVisible();
+  await expect(enRow.locator(".activity small")).toContainText(E.activitySilent(E.durationMinutes(1)));
+  await enRow.getByRole("button", { name: `DMS-2 ${E.stuckDot}`, exact: true }).click();
+  const enPanel = en.locator(".stuck-panel");
+  await expect(enPanel).toContainText(VERDICT_REASON.en);
+  await expect(enPanel).toContainText(VERDICT_ACTION.en);
+  await expect(enPanel.getByRole("button", { name: E.stuckFix, exact: true })).toBeVisible();
+  await shot(en, "live-status-en.png", "light");
+  await shot(en, "live-status-en-dark.png", "dark");
+});
+
+/**
+ * 设计文档 2026-10-31：这一轮结束了但后台命令还在跑，session 在等命令，不是等用户，状态列显示命令并标“后台”；
+ * 完成通知之后回到“等你回话”。检查间隔保持 3 分钟，这个测试不会走到卡住判断。
+ */
+test("live status: a background command stays on the row after its turn ends", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await createCheckoutFeature(page, s);
+  await newFeatureTicket(page, "DMS-1", "frontend");
+  await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+  await typeLine(page, "/fake-bg git push origin feature/checkout");
+  await expect.poll(() => terminalText(page)).toContain("收到：/fake-bg git push");
+
+  await page.locator(".sidebar .ticket.feature").click();
+  const row = page.locator(".feature-page .ticket-table tr").filter({ hasText: "DMS-1" });
+  await expect(row.locator(".activity .main")).toHaveText(S.activityBackground(S.activity.push));
+  // 没有卡住的行也带完整文字的提示：这一列放不下时靠它看全。
+  await expect(row.locator(".activity small")).toHaveAttribute("title", S.durationNow);
+  await expect(row.locator(".badge")).toBeVisible();
+
+  await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
+  await typeLine(page, "/fake-bg-done");
+  await page.locator(".sidebar .ticket.feature").click();
+  await expect(row.locator(".activity .main")).toHaveText(S.activity.waiting);
+  await expect(row.locator(".stuck-dot")).toHaveCount(0);
 });

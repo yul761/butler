@@ -24,6 +24,25 @@ const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
 const AGENT_TOOLS = new Set(["Agent", "Task"]);
 
+export interface ActivityIntervals {
+  tickMs: number;
+  stuckCheckMs: number;
+}
+
+const positiveMs = (v: string | undefined, fallback: number): number => (/^[1-9]\d*$/.test(v ?? "") ? Number(v) : fallback);
+
+/**
+ * 活动刷新和卡住检查的间隔，只在这里读环境变量。e2e 等不起 3 分钟，把它们调短；
+ * 只有 e2e 的标记 BUTLER_BACKGROUND_WINDOWS=1 在时才算数，正常运行永远是 10 秒和 3 分钟。
+ */
+export function activityIntervals(env: NodeJS.ProcessEnv): ActivityIntervals {
+  const test = env.BUTLER_BACKGROUND_WINDOWS === "1";
+  return {
+    tickMs: test ? positiveMs(env.BUTLER_ACTIVITY_TICK_MS, ACTIVITY_TICK_MS) : ACTIVITY_TICK_MS,
+    stuckCheckMs: test ? positiveMs(env.BUTLER_STUCK_CHECK_MS, STUCK_CHECK_MS) : STUCK_CHECK_MS,
+  };
+}
+
 export interface StuckInfo {
   sessionId: string;
   ticketKey: string;
@@ -44,6 +63,8 @@ export interface ActivityDeps {
   /** 一次卡住只调一次。 */
   onStuck: (info: StuckInfo) => void;
   now: () => number;
+  /** 默认 10 秒和 3 分钟。 */
+  intervals?: ActivityIntervals;
   /** 测试注入；默认用 proc-tree 读真实进程树。 */
   childCpu?: (rootPid: number) => Promise<number | null>;
   /** 测试注入；默认是 Claude 放命令输出的目录。 */
@@ -124,7 +145,9 @@ interface Tracked {
  * 键是 sessions.head() 的 id：/clear 后新 id 接替旧 id，旧 id 的记录清掉。全部只存内存。
  */
 export class ActivityMonitor {
-  private readonly tracker = new StuckTracker();
+  private readonly tickMs: number;
+  private readonly stuckCheckMs: number;
+  private readonly tracker: StuckTracker;
   private readonly tracked = new Map<string, Tracked>();
   /** 可疑、等着空出名额去判断的 session。 */
   private readonly wanted = new Set<string>();
@@ -133,12 +156,16 @@ export class ActivityMonitor {
   private ticking = false;
   private stopped = false;
 
-  constructor(private readonly d: ActivityDeps) {}
+  constructor(private readonly d: ActivityDeps) {
+    this.tickMs = d.intervals?.tickMs ?? ACTIVITY_TICK_MS;
+    this.stuckCheckMs = d.intervals?.stuckCheckMs ?? STUCK_CHECK_MS;
+    this.tracker = new StuckTracker(this.stuckCheckMs);
+  }
 
   start(): void {
     this.stopped = false;
     void this.tick(this.d.now());
-    this.timer = setInterval(() => void this.tick(this.d.now()), ACTIVITY_TICK_MS);
+    this.timer = setInterval(() => void this.tick(this.d.now()), this.tickMs);
   }
 
   /** 退出时在关数据库之前调用：之后不再碰数据库，迟到的判断结果也不再生效。 */
@@ -283,7 +310,7 @@ export class ActivityMonitor {
     }
     if (grew || !t.eligible) this.wanted.delete(t.id);
     const moved = this.tracker.state(t.id).stuck && (grew || !t.eligible);
-    if (!moved && now - t.lastSampleAt < STUCK_CHECK_MS) return;
+    if (!moved && now - t.lastSampleAt < this.stuckCheckMs) return;
     t.lastSampleAt = now;
     if (t.eligible) {
       const cpu = await this.childCpu(t.termId);

@@ -56,7 +56,7 @@ import { ensureDirs, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
-import { ActivityMonitor, type StuckInfo } from "./sessions/activity-monitor";
+import { ActivityMonitor, activityIntervals, type StuckInfo } from "./sessions/activity-monitor";
 import { sessionRegistryName } from "./sessions/activity-sources";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
@@ -196,6 +196,10 @@ function createWindow(): BrowserWindow {
 
 function showWindow(): void {
   if (!win) return;
+  if (BACKGROUND_WINDOWS) {
+    win.showInactive();
+    return;
+  }
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
@@ -409,6 +413,7 @@ async function bootstrap(): Promise<void> {
     notify,
     onStuck: showStuckNotification,
     now: Date.now,
+    intervals: activityIntervals(process.env),
     log: logger,
   });
   /** 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。 */

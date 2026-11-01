@@ -222,4 +222,15 @@ describe("StuckTracker", () => {
     expect(t.observe("a", S({ transcriptSize: 200 }), C * 6)).toBe(false);
     expect(t.observe("a", S({ transcriptSize: 200 }), C * 7)).toBe(true);
   });
+
+  it("uses the check interval it was given for the gap rule", () => {
+    const t = new StuckTracker(1000);
+    t.observe("a", S(), 0);
+    t.observe("a", S(), 1000);
+    expect(t.observe("a", S(), 2000)).toBe(true);
+    const gap = new StuckTracker(1000);
+    gap.observe("a", S(), 0);
+    gap.observe("a", S(), 1000);
+    expect(gap.observe("a", S(), 3001)).toBe(false);
+  });
 });
