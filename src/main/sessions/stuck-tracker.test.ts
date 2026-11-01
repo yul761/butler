@@ -72,7 +72,7 @@ describe("StuckTracker", () => {
     let at = C * 2;
     while (at + C < C * 2 + STUCK_REJUDGE_MS) expect(t.observe("a", S(), (at += C))).toBe(false);
     expect(t.state("a").stuck).toBe(false);
-    expect(t.observe("a", S(), (at += C))).toBe(true);
+    expect(t.observe("a", S(), at + C)).toBe(true);
   });
 
   it("judged(stuck:true) 返回 newly_stuck，同一次卡住再判断返回 none", () => {
