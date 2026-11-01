@@ -7,6 +7,7 @@ import { dropText } from "../drop";
 import { reportError } from "../errors";
 import { S } from "../strings";
 import { clipboardAction } from "../terminal-keys";
+import { compositionShift } from "./composition-fit";
 
 /** Ctrl+V 时剪贴板里没有文字（比如截图）：照常把 ^V 交给 claude，由它自己读剪贴板里的图片。 */
 const CTRL_V = "\x16";
@@ -62,6 +63,25 @@ export function TerminalPane({ termId, visible, onClose, onResume }: { termId: s
       }
       return false;
     });
+    // 拼音框超出终端右边时往左移，保持可见。xterm 自己会写 left，所以只用 transform；结束输入时清掉。
+    let fitFrame = 0;
+    const fitComposition = () => {
+      cancelAnimationFrame(fitFrame);
+      fitFrame = requestAnimationFrame(() => {
+        const view = ref.current?.querySelector<HTMLElement>(".composition-view");
+        const wrap = ref.current?.parentElement;
+        if (!view || !wrap) return;
+        view.style.transform = "";
+        if (!view.classList.contains("active")) return;
+        const v = view.getBoundingClientRect();
+        const w = wrap.getBoundingClientRect();
+        const shift = compositionShift({ viewLeft: v.left - w.left, viewWidth: v.width, containerWidth: w.width });
+        if (shift > 0) view.style.transform = `translateX(${-shift}px)`;
+      });
+    };
+    const textarea = term.textarea;
+    textarea?.addEventListener("compositionupdate", fitComposition);
+    textarea?.addEventListener("compositionend", fitComposition);
     const doFit = () => {
       if (!ref.current || ref.current.offsetParent === null) return;
       fit.fit();
@@ -73,6 +93,9 @@ export function TerminalPane({ termId, visible, onClose, onResume }: { termId: s
     return () => {
       disposed = true;
       ro.disconnect();
+      cancelAnimationFrame(fitFrame);
+      textarea?.removeEventListener("compositionupdate", fitComposition);
+      textarea?.removeEventListener("compositionend", fitComposition);
       offData();
       offExit();
       input.dispose();

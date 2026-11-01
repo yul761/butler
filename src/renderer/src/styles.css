@@ -138,8 +138,9 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .notice { margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 /* 上面的内容再多，终端（claude code session）也至少占窗口一半高；上面能缩的部分（feature 概览）自己滚动。 */
 .terminals { flex: 1 0 50vh; min-height: 50vh; display: flex; }
-.terminal-wrap { flex: 1; min-width: 0; flex-direction: column; background: #000; }
-.terminal { flex: 1; min-height: 0; padding: 4px; }
+.terminal-wrap { flex: 1; min-width: 0; flex-direction: column; background: #000; overflow: clip; }
+/* Chromium 默认会把 ，。（ 等标点量窄，实际却占满一格，后面的字和拼音框就错位；space-all 让它们按整格量。 */
+.terminal { flex: 1; min-height: 0; padding: 4px; text-spacing-trim: space-all; }
 .exited { padding: 6px 12px; background: var(--panel); color: var(--danger); }
 
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
