@@ -1,11 +1,12 @@
 import { stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { ACTIVITY_OUTPUT_LIMIT } from "../../shared/control";
 import type { ActivityKind, SessionActivity } from "../../shared/activity";
 import type { Feature, Session, Ticket } from "../../shared/types";
 import { M } from "../strings";
 import { backgroundTasks, classifyCommand, currentTool, DETAIL_LIMIT, newTranscriptState, type BackgroundTask, type RunningTool, type TranscriptState } from "./activity-parse";
-import { foregroundOutputFile, readOutputTail, tasksDirFor, TranscriptTail } from "./activity-sources";
+import { foregroundOutputFile, readOutputTail, tasksDirFor, TranscriptTail, utf8Tail } from "./activity-sources";
 import { childCpuMs } from "./proc-tree";
 import { permissionPromptShowing, stripAnsi, type PtySnapshot } from "./pty-manager";
 import type { StuckInput } from "./stuck-judge";
@@ -78,15 +79,6 @@ export function deriveActivity(s: TranscriptState, atPermissionPrompt: boolean):
   if (tool) return { ...toolActivity(tool), background: false, startedAt: tool.startedAt, eligible };
   if (task) return { ...classifyCommand(task.command), background: true, startedAt: task.startedAt, eligible };
   return { kind: s.turnOpen ? "thinking" : "waiting", ...noTool };
-}
-
-/** 文字的最后 maxBytes 字节，不切开 UTF-8 字符。 */
-function utf8Tail(text: string, maxBytes: number): string {
-  const buf = Buffer.from(text, "utf8");
-  if (buf.length <= maxBytes) return text;
-  let start = buf.length - maxBytes;
-  while (start < buf.length && (buf[start] & 0xc0) === 0x80) start++;
-  return buf.subarray(start).toString("utf8");
 }
 
 /** 读不了返回 null。 */
@@ -178,7 +170,7 @@ export class ActivityMonitor {
 
   /** 当前命令输出的末尾，最多 4096 字节（不切开 UTF-8 字符）；读不到返回 ""。 */
   async output(sessionId: string): Promise<string> {
-    return this.tracked.get(sessionId)?.outputText ?? "";
+    return utf8Tail(this.tracked.get(sessionId)?.outputText ?? "", ACTIVITY_OUTPUT_LIMIT);
   }
 
   /** 用户点了“没事，忽略”：这一次不再提醒，直到 session 恢复活动后再次卡住。 */

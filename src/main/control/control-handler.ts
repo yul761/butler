@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import type { SessionActivity } from "../../shared/activity";
 import {
-  ACTIVITY_OUTPUT_LIMIT, MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, taskMessage, type ControlRequest, type ControlResult, type FeatureControlRequest,
+  MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, taskMessage, type ControlRequest, type ControlResult, type FeatureControlRequest,
 } from "../../shared/control";
 import { effectiveStatus, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
 import type { FeaturesRepo } from "../db/features-repo";
@@ -30,15 +30,6 @@ export interface ControlHandlerDeps {
   /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
   ticketPattern?: () => string;
   log?: (msg: string, err?: unknown) => void;
-}
-
-/** 文字的最后 maxBytes 字节，不切开 UTF-8 字符。 */
-function utf8Tail(text: string, maxBytes: number): string {
-  const buf = Buffer.from(text, "utf8");
-  if (buf.length <= maxBytes) return text;
-  let start = buf.length - maxBytes;
-  while (start < buf.length && (buf[start] & 0xc0) === 0x80) start++;
-  return buf.subarray(start).toString("utf8");
 }
 
 const ok = (value: unknown): ControlResult => ({ v: 1, ok: true, value });
@@ -130,10 +121,11 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     const h = d.sessions.head(wanted);
     if (!h || !belongs(h)) return fail(M().ctlNoSuchSession(wanted));
     const a = listedActivity(h.id);
-    if (!a) return ok({ sessionId: h.id, activity: null, output: "" });
+    // 监控还没看到：键和有活动时一样，值都是 null
+    if (!a) return ok({ sessionId: h.id, kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, output: "" });
     let output = "";
     try {
-      output = utf8Tail((await d.activityOutput?.(h.id)) ?? "", ACTIVITY_OUTPUT_LIMIT);
+      output = (await d.activityOutput?.(h.id)) ?? "";
     } catch (e) {
       d.log?.(`control: output of ${h.id} failed`, e);
     }

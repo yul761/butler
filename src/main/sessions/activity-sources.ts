@@ -162,3 +162,12 @@ export async function sessionRegistryName(sessionsDir: string, sessionId: string
   }
   return null;
 }
+
+/** 文字的最后 maxBytes 字节，不切开 UTF-8 字符。 */
+export function utf8Tail(text: string, maxBytes: number): string {
+  const buf = Buffer.from(text, "utf8");
+  if (buf.length <= maxBytes) return text;
+  let start = buf.length - maxBytes;
+  while (start < buf.length && (buf[start] & 0xc0) === 0x80) start++;
+  return buf.subarray(start).toString("utf8");
+}

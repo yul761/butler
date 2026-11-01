@@ -143,22 +143,13 @@ describe("controlHandler", () => {
       expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toMatchObject({ ok: true, value: { sessionId: "s-2", kind: "ci" } });
     });
 
-    it("caps the output at 4096 bytes without cutting a character", async () => {
-      const { handle, sessionService, activities, outputs } = await setup();
-      await sessionService.open({ ticketKey: "FULL-1", repoId: 1 });
-      activities.set("s-1", activity("s-1"));
-      outputs.set("s-1", "界".repeat(2000));
-      const r = await handle({ ...base, op: "session_activity", session: "s-1" });
-      const out = (r.ok ? (r.value as { output: string }).output : "");
-      expect(Buffer.byteLength(out)).toBeLessThanOrEqual(4096);
-      expect(out).not.toContain("\ufffd");
-      expect(out.length).toBeGreaterThan(1300);
-    });
-
-    it("answers a session the monitor has not seen with a null activity", async () => {
+    it("answers a session the monitor has not seen with the same keys, all null", async () => {
       const { handle, sessionService } = await setup();
       await sessionService.open({ ticketKey: "FULL-1", repoId: 1 });
-      expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toEqual({ v: 1, ok: true, value: { sessionId: "s-1", activity: null, output: "" } });
+      expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toEqual({
+        v: 1, ok: true,
+        value: { sessionId: "s-1", kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, output: "" },
+      });
     });
 
     it("refuses a session of another ticket and an unknown one", async () => {

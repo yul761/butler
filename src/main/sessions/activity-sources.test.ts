@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
 import { backgroundTasks, currentTool } from "./activity-parse";
-import { foregroundOutputFile, readOutputTail, sessionRegistryName, TranscriptTail, tasksDirFor } from "./activity-sources";
+import { foregroundOutputFile, readOutputTail, sessionRegistryName, TranscriptTail, tasksDirFor, utf8Tail } from "./activity-sources";
 
 const use = (id: string, command = "ls") =>
   JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: "Bash", input: { command } }] } });
@@ -175,5 +175,15 @@ describe("sessionRegistryName", () => {
     expect(await sessionRegistryName(d, "sid")).toBe("my session");
     expect(await sessionRegistryName(d, "zzz")).toBeNull();
     expect(await sessionRegistryName(join(d, "missing"), "sid")).toBeNull();
+  });
+});
+
+describe("utf8Tail", () => {
+  it("keeps short text, and cuts long text on a character boundary", () => {
+    expect(utf8Tail("abc", 10)).toBe("abc");
+    expect(utf8Tail("abcdef", 3)).toBe("def");
+    const cut = utf8Tail("界".repeat(10), 7);
+    expect(cut).toBe("界界");
+    expect(Buffer.byteLength(cut)).toBeLessThanOrEqual(7);
   });
 });
