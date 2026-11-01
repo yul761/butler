@@ -477,8 +477,19 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await resizeWindow(app, 900, 600);
   await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeLessThanOrEqual(600);
   await expectTerminalsKeepHalf(page);
-  await fix.scrollIntoViewIfNeeded();
-  await expect(fix).toBeInViewport();
+  // 窗口矮、面板比概览区还高时，点红点后按钮（含“收起”）也要都看得到，不靠测试自己去滚。
+  const collapse = panel.getByRole("button", { name: S.collapse, exact: true });
+  await dot.click();
+  await expect(panel).toHaveCount(0);
+  await dot.click();
+  await expect(panel).toBeVisible();
+  const heights = await page.evaluate(() => ({
+    panel: document.querySelector(".stuck-panel")!.getBoundingClientRect().height,
+    overview: document.querySelector(".feature-overview")!.clientHeight,
+  }));
+  expect(heights.panel, JSON.stringify(heights)).toBeGreaterThan(heights.overview);
+  await expect(fix).toBeInViewport({ ratio: 1 });
+  await expect(collapse).toBeInViewport({ ratio: 1 });
   await resizeWindow(app, 1280, 820);
   await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeGreaterThan(600);
 

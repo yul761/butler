@@ -295,7 +295,14 @@ function TicketRow({ ticket: t, activity, prs, allPrs, now, onOpenTicket, onFix,
   // 记着“展开”的面板在回到这一页或再次卡住时自己出现，不动用户正在看的位置。
   const panelRow = useRef<HTMLTableRowElement>(null);
   const [dotClicks, setDotClicks] = useState(0);
-  const showPanel = () => panelRow.current?.scrollIntoView({ block: "nearest" });
+  // 面板整个放得下就整个显示（nearest）；比概览区还高时 nearest 不会带出底部，按钮在最下面，改成对齐底边。
+  const showPanel = () => {
+    const row = panelRow.current;
+    if (!row) return;
+    const port = row.closest(".feature-overview");
+    const tall = port !== null && row.getBoundingClientRect().height > port.clientHeight;
+    row.scrollIntoView({ block: tall ? "end" : "nearest" });
+  };
   useEffect(() => {
     if (dotClicks > 0) showPanel();
   }, [dotClicks]);
