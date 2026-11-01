@@ -63,7 +63,14 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
   const message = isObj(entry.message) ? entry.message : null;
 
   if (entry.type === "assistant" && message) {
-    if (message.stop_reason === "end_turn") s.turnOpen = false;
+    // 后台任务靠 notification 清，没拿到结果的前台工具（被打断）在轮次结束时清掉
+    if (message.stop_reason === "end_turn") {
+      s.turnOpen = false;
+      s.running.clear();
+    } else {
+      // 后台任务完成会让 Claude 在没有用户消息的情况下重新开始一轮
+      s.turnOpen = true;
+    }
     if (!Array.isArray(message.content)) return;
     for (const block of message.content) {
       if (!isObj(block) || block.type !== "tool_use" || typeof block.id !== "string") continue;
@@ -81,26 +88,32 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
   }
 
   if (entry.type === "user") {
-    if (extractUserText(entry) !== null) {
-      s.turnOpen = true;
-      return;
-    }
-    if (!message || !Array.isArray(message.content)) return;
-    const taskId = isObj(entry.toolUseResult) && typeof entry.toolUseResult.backgroundTaskId === "string" ? entry.toolUseResult.backgroundTaskId : null;
-    for (const block of message.content) {
-      if (!isObj(block) || block.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
-      const tool = s.running.get(block.tool_use_id);
-      s.running.delete(block.tool_use_id);
-      if (taskId && tool) {
-        const m = /Output is being written to:\s*(.+?\.output)\.?\s*$/m.exec(resultText(block.content));
-        s.background.set(taskId, { taskId, toolUseId: tool.id, command: tool.command ?? "", outputFile: m ? m[1].trim() : null, startedAt: tool.startedAt });
+    // tool_result 在任何路径下都要处理，文字和结果可能在同一条记录里
+    if (message && Array.isArray(message.content)) {
+      const taskId = isObj(entry.toolUseResult) && typeof entry.toolUseResult.backgroundTaskId === "string" ? entry.toolUseResult.backgroundTaskId : null;
+      for (const block of message.content) {
+        if (!isObj(block) || block.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
+        const tool = s.running.get(block.tool_use_id);
+        s.running.delete(block.tool_use_id);
+        if (taskId && tool) {
+          const m = /Output is being written to:\s*(.+?\.output)\.?\s*$/m.exec(resultText(block.content));
+          s.background.set(taskId, { taskId, toolUseId: tool.id, command: tool.command ?? "", outputFile: m ? m[1].trim() : null, startedAt: tool.startedAt });
+        }
       }
+    }
+    if (extractUserText(entry) !== null) {
+      // 新的用户消息：上一轮没拿到结果的前台工具不会再有结果了
+      s.running.clear();
+      s.turnOpen = true;
     }
     return;
   }
 
   if (entry.type === "system") {
-    if (entry.subtype === "turn_duration" || entry.subtype === "stop_hook_summary") s.turnOpen = false;
+    if (entry.subtype === "turn_duration" || entry.subtype === "stop_hook_summary") {
+      s.turnOpen = false;
+      s.running.clear();
+    }
     return;
   }
 
