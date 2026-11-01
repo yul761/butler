@@ -175,22 +175,24 @@ export class SessionsRepo {
   /**
    * /clear、compact 产生的新 session 接替旧的：同一个终端，仓库、总控、开启者、feature 和修复目标也照旧。
    * 修复 session 的新段不是总控：磁盘扫描可能先按目录把它记成了总控，这里清掉。
+   * /resume（source 是 "resume"）接上的是已有的 session，不是新段：总控、feature、修复目标都留它自己的。resume 出来的新 id 由 hook 插入时继承。
    */
-  setReplacedBy(id: string, newId: string): void {
+  setReplacedBy(id: string, newId: string, source?: string | null): void {
+    const old = (column: string) => `(SELECT o.${column} FROM sessions o WHERE o.id = ?1)`;
+    const role = `,
+      coordinator = CASE WHEN ${old("fixes_session")} IS NULL THEN MAX(coordinator, ${old("coordinator")}) ELSE 0 END,
+      feature_id = COALESCE(feature_id, ${old("feature_id")}),
+      fixes_session = COALESCE(fixes_session, ${old("fixes_session")})`;
     withTransaction(this.db, () => {
-      this.db.prepare(`UPDATE sessions SET replaced_by = ? WHERE id = ?`).run(newId, id);
+      this.db.prepare(`UPDATE sessions SET replaced_by = ?2 WHERE id = ?1`).run(id, newId);
       this.db
         .prepare(
           `UPDATE sessions SET
-             repo_id = COALESCE(repo_id, (SELECT o.repo_id FROM sessions o WHERE o.id = ?)),
-             coordinator = CASE WHEN (SELECT o.fixes_session FROM sessions o WHERE o.id = ?) IS NULL
-               THEN MAX(coordinator, (SELECT o.coordinator FROM sessions o WHERE o.id = ?)) ELSE 0 END,
-             spawned_by = COALESCE(spawned_by, (SELECT o.spawned_by FROM sessions o WHERE o.id = ?)),
-             feature_id = COALESCE(feature_id, (SELECT o.feature_id FROM sessions o WHERE o.id = ?)),
-             fixes_session = COALESCE(fixes_session, (SELECT o.fixes_session FROM sessions o WHERE o.id = ?))
-           WHERE id = ? AND ticket_key IS (SELECT o.ticket_key FROM sessions o WHERE o.id = ?)`,
+             repo_id = COALESCE(repo_id, ${old("repo_id")}),
+             spawned_by = COALESCE(spawned_by, ${old("spawned_by")})${source === "resume" ? "" : role}
+           WHERE id = ?2 AND ticket_key IS ${old("ticket_key")}`,
         )
-        .run(id, id, id, id, id, id, newId, id);
+        .run(id, newId);
     });
   }
 

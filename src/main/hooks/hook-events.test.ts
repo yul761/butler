@@ -224,6 +224,47 @@ describe("hook sessions in a fix session's terminal", () => {
     expect(sessions.head("fix")?.id).toBe("fix");
   });
 
+  it("leaves an existing coordinator a coordinator when /resume in the fix terminal picks it", () => {
+    const { sessions, featureId, deps } = fixSetup();
+    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    const eff = applyHookEnvelope(env("SessionStart", "c", inFix, { cwd: "/ws", source: "resume" }), deps);
+    expect(eff).toEqual({ kind: "session_started", sessionId: "c", ticketKey: null, replaced: "fix" });
+    expect(sessions.head("fix")?.id).toBe("c");
+    expect(sessions.get("c")).toMatchObject({ coordinator: true, fixesSession: null, featureId });
+    expect(sessions.listFeatureCoordinators(featureId).map((s) => s.id)).toEqual(["c"]);
+  });
+
+  it("leaves an existing fix session a fix session when /resume in a coordinator terminal picks it", () => {
+    const { sessions, featureId, deps } = fixSetup();
+    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    applyHookEnvelope(env("SessionStart", "fix", { butlerSession: "c" }, { cwd: "/ws", source: "resume" }), deps);
+    expect(sessions.head("c")?.id).toBe("fix");
+    expect(sessions.get("fix")).toMatchObject({ coordinator: false, fixesSession: "stuck-1", featureId });
+  });
+
+  it("does not pull an unclaimed session into the feature when /resume in the fix terminal picks it", () => {
+    const { sessions, featureId, deps } = fixSetup();
+    sessions.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/elsewhere", origin: "discovered", createdAt: 1 });
+    applyHookEnvelope(env("SessionStart", "loose", inFix, { cwd: "/elsewhere", source: "resume" }), deps);
+    expect(sessions.head("fix")?.id).toBe("loose");
+    expect(sessions.get("loose")).toMatchObject({ coordinator: false, fixesSession: null, featureId: null });
+    expect(sessions.listFeatureCoordinators(featureId)).toEqual([]);
+  });
+
+  it("gives a new id from /resume in the fix terminal the fix session's place", () => {
+    const { sessions, featureId, deps } = fixSetup();
+    applyHookEnvelope(env("SessionStart", "fix-2", inFix, { cwd: "/ws", source: "resume" }), deps);
+    expect(sessions.head("fix")).toMatchObject({ id: "fix-2", coordinator: false, fixesSession: "stuck-1", featureId });
+  });
+
+  it("still claims an unclaimed session for the feature when /resume in a coordinator terminal picks it", () => {
+    const { sessions, featureId, deps } = fixSetup();
+    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    sessions.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/elsewhere", origin: "discovered", createdAt: 1 });
+    applyHookEnvelope(env("SessionStart", "loose", { butlerSession: "c" }, { cwd: "/elsewhere", source: "resume" }), deps);
+    expect(sessions.get("loose")).toMatchObject({ coordinator: true, fixesSession: null, featureId });
+  });
+
   it("still makes a real coordinator's new head a coordinator", () => {
     const { sessions, featureId, deps } = fixSetup();
     sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });

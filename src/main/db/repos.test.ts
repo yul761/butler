@@ -297,6 +297,23 @@ describe("migration 9: fix sessions", () => {
     expect(repo.get("fix-2")).toMatchObject({ coordinator: false, fixesSession: "stuck-1" });
   });
 
+  it("leaves an existing session its own role when /resume picks it", () => {
+    const { repo, featureId } = featureDb();
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    repo.setReplacedBy("fix", "c", "resume");
+    expect(repo.get("fix")?.replacedBy).toBe("c");
+    expect(repo.get("c")).toMatchObject({ coordinator: true, fixesSession: null, featureId });
+  });
+
+  it("does not hand a feature or a role to an existing session on /resume, but still its opener", () => {
+    const { repo, featureId } = featureDb();
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, spawnedBy: "boss", fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 1 });
+    repo.setReplacedBy("fix", "loose", "resume");
+    expect(repo.get("loose")).toMatchObject({ coordinator: false, fixesSession: null, featureId: null, spawnedBy: "boss" });
+  });
+
   it("still carries the coordinator mark across /clear for a real coordinator", () => {
     const { repo, featureId } = featureDb();
     repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
