@@ -33,6 +33,8 @@ export function applyHookEnvelope(
     placement?: (ticketKey: string, cwd: string) => { repoId: number | null; coordinator: boolean };
     /** cwd 恰好是哪个未归档 feature 的工作区：那里的 claude 是 feature 总控（设计文档 2026-10-26）。 */
     featureForCwd?: (cwd: string) => number | null;
+    /** cwd 恰好是哪个未归档 epic 的工作区：那里的 claude 是 epic session（设计文档 2026-11-01）。 */
+    epicForCwd?: (cwd: string) => number | null;
   },
 ): HookEffect {
   // 晚间 handoff、早间刷新、MCP 探测这些 Butler 自己的 claude 进程也会触发用户级 hook，全部忽略。
@@ -52,10 +54,12 @@ export function applyHookEnvelope(
   const fromButler = Boolean(env.butlerSession || env.ticket);
 
   // 事件可能乱序到达（例如 Stop 先于 SessionStart 被处理），所以每种事件都先确保 session 存在。
-  // 没有 ticket 的 session：feature 总控终端里 /clear 之后的新段沿用 feature；在 feature 工作区里打开的 claude 也算 feature 总控。
-  const featureId = ticketKey ? null : (prevHead?.featureId ?? (cwd ? (deps.featureForCwd?.(cwd) ?? null) : null));
-  const ensure = (key: string | null = ticketKey, feature: number | null = featureId) => {
-    // 修复 session 终端里 /clear 之后的新段还是修复 session，不是总控。嵌套的 claude（ensure(null, null)）不算。
+  // 没有 ticket 的 session：终端里 /clear 之后的新段沿用上一段的 feature 或 epic，不再看目录；在 feature 工作区里打开的 claude 算 feature 总控，在 epic 工作区里打开的算 epic session。
+  const terminalEpic = prevHead?.epicId ?? null;
+  const featureId = ticketKey || terminalEpic !== null ? null : (prevHead?.featureId ?? (cwd ? (deps.featureForCwd?.(cwd) ?? null) : null));
+  const epicId = ticketKey || featureId !== null ? null : (terminalEpic ?? (cwd ? (deps.epicForCwd?.(cwd) ?? null) : null));
+  const ensure = (key: string | null = ticketKey, feature: number | null = featureId, epic: number | null = epicId) => {
+    // 修复 session 终端里 /clear 之后的新段还是修复 session，不是总控。嵌套的 claude（ensure(null, null, null)）不算。
     const fixes = feature !== null ? (prevHead?.fixesSession ?? null) : null;
     // handleExit 删掉的空 session：迟到的事件不能把它插回来。只有真正的 prompt，或者已有 transcript，才允许重建。
     if (sessions.wasForgotten(id) && event !== "UserPromptSubmit" && deps.transcriptState?.(id) !== "present") return;
@@ -63,15 +67,17 @@ export function applyHookEnvelope(
     const inserted = sessions.insertIfAbsent({
       id, ticketKey: key, cwd, origin: fromButler ? "butler" : "discovered", lastActivityAt: at, createdAt: at,
       repoId: place?.repoId ?? null, coordinator: (place?.coordinator ?? false) || (!key && feature !== null && !fixes), featureId: key ? null : feature, fixesSession: fixes,
+      epicId: epic,
     });
+    // epic 的归属只在插入时定：/resume 选到的已有行不改（和修复 session 同样的规则），/clear 的新段由 setReplacedBy 接上。
     if (inserted) return;
     sessions.fillDetails(id, { cwd, lastActivityAt: at });
     const cur = sessions.get(id);
     // 先被磁盘扫描发现、后来在 Butler 终端里续接的 session：来源升级为 butler。
     if (fromButler && cur && cur.origin === "discovered" && !cur.dismissed) sessions.setOrigin(id, "butler");
-    // 被忽略（dismissed）的 session，例如嵌套的 claude 进程，永远不挂 ticket。
-    if (key && cur && !cur.ticketKey && !cur.dismissed) sessions.setTicket(id, key, cwd ? (deps.placement?.(key, cwd).repoId ?? null) : null);
-    if (!key && feature !== null && !fixes && cur && !cur.ticketKey && cur.featureId === null && !cur.dismissed) sessions.setFeature(id, feature);
+    // 被忽略（dismissed）的 session，例如嵌套的 claude 进程，永远不挂 ticket。epic session 也不挂。
+    if (key && cur && !cur.ticketKey && cur.epicId === null && !cur.dismissed) sessions.setTicket(id, key, cwd ? (deps.placement?.(key, cwd).repoId ?? null) : null);
+    if (!key && feature !== null && !fixes && cur && !cur.ticketKey && cur.featureId === null && cur.epicId === null && !cur.dismissed) sessions.setFeature(id, feature);
   };
 
   switch (event) {
@@ -79,8 +85,10 @@ export function applyHookEnvelope(
       const source = str(p.source);
       if (prevHead && prevHead.id !== id && !(source && CHAIN_SOURCES.has(source))) {
         // 终端里嵌套启动的 claude（如 `claude -p`）继承了 BUTLER_SESSION，但不是这个终端的会话。
-        ensure(null, null);
+        ensure(null, null, null);
         if (sessions.get(id)?.ticketKey) sessions.setTicket(id, null);
+        // 它的 Stop 可能先到，已经按这个终端记成了 epic session。
+        if (sessions.get(id)?.epicId) sessions.setEpic(id, null);
         sessions.dismiss(id);
         return { kind: "nested", sessionId: id };
       }

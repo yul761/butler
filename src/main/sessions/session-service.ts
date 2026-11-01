@@ -4,8 +4,11 @@ import { sanitizePrefill } from "../../shared/text";
 import type { Pr } from "../../shared/handoff";
 import {
   effectiveStatus,
+  type Epic,
+  type EpicView,
   type Feature,
   type FeatureView,
+  type OpenEpicSessionRequest,
   type OpenFeatureSessionRequest,
   type OpenFixSessionRequest,
   type OpenSessionRequest,
@@ -19,10 +22,11 @@ import {
 } from "../../shared/types";
 import { launchEnv, type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
 import { claudeArgs, cmdShimSafe, sessionEnv } from "../claude/spawn";
+import type { EpicsRepo } from "../db/epics-repo";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
-import type { SessionsRepo } from "../db/sessions-repo";
+import type { NewSession, SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { currentLang } from "../i18n";
@@ -53,11 +57,13 @@ export interface SessionServiceDeps {
   baseEnv: NodeJS.ProcessEnv;
   /**
    * 写好这个 ticket 的记忆 --mcp-config 文件并返回路径；记忆关闭或 bundle 不存在时返回 null（设计文档 8.4）。
-   * featureId：ticket 属于的 feature，要多挂 feature 的记忆（设计文档 2026-10-26）。
+   * featureId：ticket 属于的 feature，要多挂 feature 的记忆（设计文档 2026-10-26）。epicId：这个 feature 属于的 epic，要多挂 epic 的记忆。
    */
-  mcpConfig?: (ticketKey: string, opts: { coordinator: boolean; featureId: number | null }) => string | null;
-  /** feature 总控的 --mcp-config 文件（feature 记忆、全局记忆、butler-sessions）。 */
-  featureMcpConfig?: (featureId: number) => string | null;
+  mcpConfig?: (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }) => string | null;
+  /** feature 总控的 --mcp-config 文件（feature 记忆、全局记忆、butler-sessions；feature 属于 epic 时加 epic 记忆）。 */
+  featureMcpConfig?: (featureId: number, epicId: number | null) => string | null;
+  /** epic session 的 --mcp-config 文件。 */
+  epicMcpConfig?: (epicId: number) => string | null;
   /**
    * 交互 session 的 --settings 文件：直接启用仓库 .mcp.json 里的 server，不停在选择对话框上（用户在 dirs 里禁用过的照旧禁用）。
    * 返回 null 时不加 --settings。
@@ -65,6 +71,8 @@ export interface SessionServiceDeps {
   mcpSettings?: (dirs: string[]) => string | null;
   /** feature（设计文档 2026-10-26）；不给就没有 feature 总控。 */
   features?: FeaturesRepo;
+  /** epic（设计文档 2026-11-01）；不给就没有 epic session。 */
+  epics?: EpicsRepo;
   /** feature 汇总（设计文档 2026-10-28）；不给 FeatureView 里 summary 为 null。 */
   featureHandoffs?: Pick<FeatureHandoffsRepo, "latest">;
   /** 取 ticket 的最新有效 handoff 里的 PR；不给就都是 []。 */
@@ -91,6 +99,22 @@ interface Placement {
   coordinator: boolean;
   cwd: string;
 }
+
+/** 在工作区里启动 claude 时，feature 级 session 和 epic session 各自不同的地方。 */
+interface WorkspaceTarget {
+  /** 日志里的称呼。 */
+  label: string;
+  workspace: string;
+  /** 源仓库（用户在这些目录里禁用过的项目 MCP 照旧禁用）。 */
+  repoPaths: string[];
+  /** 要 claude 看到的目录；工作区里面的、不存在的不加 --add-dir。 */
+  dirs: string[];
+  mcpConfig: () => string | null;
+  /** 新建 session 时这一行的角色。 */
+  row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "epicId">;
+}
+
+type Claude = { path: string; pathValue: string };
 
 /** 不是渲染进程能传的打开参数：总控开子 session 时用。 */
 export interface OpenExtra {
@@ -164,7 +188,8 @@ export class SessionService {
     this.syncMemory(ticket.key);
     // 启动方式只解析一次：记忆挂载的检查和真正启动用同一个结果（P5-PF10）。
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
-    const mcpConfigPath = this.configPath(ticket.key, () => this.d.mcpConfig?.(ticket.key, { coordinator, featureId: ticket.featureId }) ?? null, claudePath, launch.viaCmd);
+    const epicId = ticket.featureId === null ? null : (this.d.features?.get(ticket.featureId)?.epicId ?? null);
+    const mcpConfigPath = this.configPath(ticket.key, () => this.d.mcpConfig?.(ticket.key, { coordinator, featureId: ticket.featureId, epicId }) ?? null, claudePath, launch.viaCmd);
     const settingsPath = this.configPath(ticket.key, () => this.d.mcpSettings?.([cwd, ...ticket.repos.map((r) => r.repoPath)]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
     const addDirs = coordinator ? this.addDirsFor(ticket, claudePath, launch.viaCmd) : [];
     let termId: string;
@@ -302,14 +327,33 @@ export class SessionService {
    */
   async openFeature(req: OpenFeatureSessionRequest): Promise<OpenSessionResult> {
     await this.d.ready();
-    const prefill = req.prefill ? sanitizePrefill(req.prefill) : "";
     const feature = this.d.features?.get(req.featureId);
     if (!feature || feature.archivedAt !== null) return { ok: false, reason: "no_ticket" };
+    return this.resumeOrStart(req, (head) => head.featureId === feature.id, (claude, head) => this.startInFeature(feature, claude, { head }));
+  }
 
+  /**
+   * epic session（设计文档 2026-11-01）：在 epic 的工作区里打开，每个仓库一个 --add-dir，方便规划时读代码。不设 BUTLER_TICKET。
+   * 不是总控：feature 汇总、handoff 和 ActivityMonitor 都不处理它。
+   */
+  async openEpic(req: OpenEpicSessionRequest): Promise<OpenSessionResult> {
+    await this.d.ready();
+    const epic = this.d.epics?.get(req.epicId);
+    if (!epic || epic.archivedAt !== null) return { ok: false, reason: "no_ticket" };
+    return this.resumeOrStart(req, (head) => head.epicId === epic.id, (claude, head) => this.startInEpic(epic, claude, head));
+  }
+
+  /** 恢复 sessionId 这个 session（属于这里、终端还开着时直接用那个终端），或者新开一个。start 返回终端 id。 */
+  private async resumeOrStart(
+    req: { sessionId?: string; prefill?: string },
+    belongs: (head: Session) => boolean,
+    start: (claude: Claude, head: Session | null) => string | OpenFailure,
+  ): Promise<OpenSessionResult> {
+    const prefill = req.prefill ? sanitizePrefill(req.prefill) : "";
     let head: Session | null = null;
     if (req.sessionId) {
       head = this.d.sessions.head(req.sessionId);
-      if (!head || head.featureId !== feature.id) return { ok: false, reason: "no_session" };
+      if (!head || !belongs(head)) return { ok: false, reason: "no_session" };
       const existing = this.openHeads().get(head.id);
       if (existing) {
         if (prefill) this.prefill(existing, prefill, 0);
@@ -318,7 +362,8 @@ export class SessionService {
     }
     const claude = this.d.claude();
     if (!claude.path) return { ok: false, reason: "claude_missing" };
-    const termId = this.startInFeature(feature, { path: claude.path, pathValue: claude.pathValue }, { head });
+    const termId = start({ path: claude.path, pathValue: claude.pathValue }, head);
+    if (typeof termId !== "string") return termId;
     if (prefill) this.prefill(termId, prefill);
     return { ok: true, termId, alreadyOpen: false };
   }
@@ -381,15 +426,40 @@ export class SessionService {
   }
 
   /** 在 feature 工作区里启动 claude，返回终端 id：恢复 head；没有 head 时新建一行，给了 fixes 就是修复 session，否则是总控。 */
-  private startInFeature(feature: Feature, claude: { path: string; pathValue: string }, from: { head?: Session | null; fixes?: string }): string {
+  private startInFeature(feature: Feature, claude: Claude, from: { head?: Session | null; fixes?: string }): string {
+    return this.startInWorkspace({
+      label: `feature ${feature.id}`,
+      workspace: this.d.ticketService.featureWorkspaceDir(feature.id),
+      repoPaths: feature.repos.map((r) => r.repoPath),
+      // feature 下未归档 ticket 的仓库工作目录。
+      dirs: this.d.tickets.listByFeature(feature.id).flatMap((t) => t.repos.map((r) => this.d.ticketService.workDir(r))),
+      mcpConfig: () => this.d.featureMcpConfig?.(feature.id, feature.epicId) ?? null,
+      row: { coordinator: !from.fixes, featureId: feature.id, fixesSession: from.fixes ?? null },
+    }, claude, from.head ?? null);
+  }
+
+  /** 工作区是 Butler 建 epic 时建好的；不见了（用户删了、盘没挂上）就报错，不在原处建一个空目录。 */
+  private startInEpic(epic: Epic, claude: Claude, head: Session | null): string | OpenFailure {
+    if (!(this.d.dirExists ?? existsSync)(head?.cwd || epic.workspaceDir)) return { ok: false, reason: "no_repo" };
+    const repoPaths = epic.repos.map((r) => r.repoPath);
+    return this.startInWorkspace({
+      label: `epic ${epic.id}`,
+      workspace: epic.workspaceDir,
+      repoPaths,
+      dirs: repoPaths,
+      mcpConfig: () => this.d.epicMcpConfig?.(epic.id) ?? null,
+      row: { epicId: epic.id },
+    }, claude, head);
+  }
+
+  /** 在工作区里启动 claude，返回终端 id：恢复 head；没有 head 时按 target.row 新建一行。 */
+  private startInWorkspace(target: WorkspaceTarget, claude: Claude, head: Session | null): string {
     const { path: claudePath, pathValue } = claude;
-    const head = from.head ?? null;
-    const workspace = this.d.ticketService.featureWorkspaceDir(feature.id);
-    const cwd = head?.cwd || workspace;
+    const cwd = head?.cwd || target.workspace;
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
-    const mcpConfigPath = this.configPath(`feature ${feature.id}`, () => this.d.featureMcpConfig?.(feature.id) ?? null, claudePath, launch.viaCmd);
-    const settingsPath = this.configPath(`feature ${feature.id}`, () => this.d.mcpSettings?.([cwd, ...feature.repos.map((r) => r.repoPath)]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
-    const addDirs = this.featureAddDirs(feature, claudePath, launch.viaCmd);
+    const mcpConfigPath = this.configPath(target.label, target.mcpConfig, claudePath, launch.viaCmd);
+    const settingsPath = this.configPath(target.label, () => this.d.mcpSettings?.([cwd, ...target.repoPaths]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
+    const addDirs = this.workspaceAddDirs(target, claudePath, launch.viaCmd);
     let termId: string;
     let args: string[];
     let insertedRow = false;
@@ -401,7 +471,7 @@ export class SessionService {
       args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
-        id: termId, ticketKey: null, cwd, origin: "butler", lastActivityAt: now, createdAt: now, coordinator: !from.fixes, featureId: feature.id, fixesSession: from.fixes ?? null,
+        id: termId, ticketKey: null, cwd, origin: "butler", lastActivityAt: now, createdAt: now, ...target.row,
       });
     }
     try {
@@ -414,13 +484,12 @@ export class SessionService {
     return termId;
   }
 
-  /** feature 总控要另外加的目录：feature 下未归档 ticket 的仓库工作目录里，不在工作区里面的（同样的存在、cmd.exe 检查）。 */
-  private featureAddDirs(feature: Feature, claudePath: string, viaCmd: boolean): string[] {
-    const all = this.d.tickets.listByFeature(feature.id).flatMap((t) => t.repos.map((r) => this.d.ticketService.workDir(r)));
-    const dirs = dirsOutsideWorkspace(all, feature.workspaceDir, { same: (a, b) => samePath(a, b, this.d.platform), exists: this.d.dirExists ?? existsSync });
+  /** 工作区之外要另外加的目录（同样的存在、cmd.exe 检查）。 */
+  private workspaceAddDirs(target: WorkspaceTarget, claudePath: string, viaCmd: boolean): string[] {
+    const dirs = dirsOutsideWorkspace(target.dirs, target.workspace, { same: (a, b) => samePath(a, b, this.d.platform), exists: this.d.dirExists ?? existsSync });
     return dirs.filter((dir) => {
       if (!viaCmd || cmdShimSafe(claudePath, dir, this.d.platform)) return true;
-      this.d.log?.(`coordinator for feature ${feature.id}: ${dir} cannot pass through cmd.exe safely; not added`);
+      this.d.log?.(`session in ${target.label}: ${dir} cannot pass through cmd.exe safely; not added`);
       return false;
     });
   }
@@ -499,6 +568,15 @@ export class SessionService {
     return this.featureTerminalCount(featureId) > 0;
   }
 
+  /** epic 自己的 session 正在运行的终端数（不算它下面的 feature）。 */
+  epicTerminalCount(epicId: number): number {
+    return this.d.pty.openIds().filter((termId) => this.d.sessions.head(termId)?.epicId === epicId).length;
+  }
+
+  hasEpicTerminal(epicId: number): boolean {
+    return this.epicTerminalCount(epicId) > 0;
+  }
+
   /** session 行加上它的终端；分成显示的和隐藏的（正在运行的终端永远显示，隐藏只对没在跑的 session 起作用）。 */
   private split(rows: Session[], heads: Map<string, string>): { sessions: SessionView[]; hiddenSessions: SessionView[] } {
     const all = rows.filter((s) => !s.replacedBy).map((s) => ({ ...s, termId: heads.get(s.id) ?? null }));
@@ -540,6 +618,15 @@ export class SessionService {
     });
   }
 
+  /** 未归档的 epic，带上它的 session。 */
+  epicViews(): EpicView[] {
+    const heads = this.openHeads();
+    return (this.d.epics?.list() ?? []).map((e) => {
+      const { sessions, hiddenSessions } = this.split(this.d.sessions.listByEpic(e.id), heads);
+      return { ...e, sessions, hiddenSessions, waiting: sessions.some((s) => s.waitingForInput), stuck: false, features: [] };
+    });
+  }
+
   unclaimed(): UnclaimedSession[] {
     const pattern = this.d.settings.get("ticketPattern");
     return this.d.sessions.listUnclaimed(this.d.now() - UNCLAIMED_WINDOW_MS).map((s) => {
@@ -567,15 +654,15 @@ export class SessionService {
    */
   hide(sessionId: string): void {
     const s = this.d.sessions.head(sessionId);
-    // ticket 的 session，或者 feature 级 session。
-    if (!s || (!s.ticketKey && s.featureId === null)) throw new TicketError("not_found", M().sessionNotFound);
+    // ticket 的 session、feature 级 session，或者 epic session。
+    if (!s || (!s.ticketKey && s.featureId === null && s.epicId === null)) throw new TicketError("not_found", M().sessionNotFound);
     if (this.openHeads().has(s.id)) throw new TicketError("sessions_open", M().sessionTerminalHide);
     this.d.sessions.dismiss(s.id);
   }
 
   unhide(sessionId: string): void {
     const s = this.d.sessions.get(sessionId);
-    if (!s || (!s.ticketKey && s.featureId === null)) throw new TicketError("not_found", M().sessionNotFound);
+    if (!s || (!s.ticketKey && s.featureId === null && s.epicId === null)) throw new TicketError("not_found", M().sessionNotFound);
     this.d.sessions.undismiss(s.id);
   }
 }

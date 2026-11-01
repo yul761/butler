@@ -60,6 +60,22 @@ export interface Epic {
   repos: EpicRepo[];
 }
 
+export type EpicFeatureStatus = "stuck" | "waiting" | "not_started" | "active" | "archived";
+
+/** epic 页一行：一个 feature 的状态和最新汇总里的进度。 */
+export interface EpicFeatureRow {
+  id: number;
+  name: string;
+  status: EpicFeatureStatus;
+  archivedAt: number | null;
+  /** 最新汇总的时间；还没有汇总为 null。 */
+  summaryAt: number | null;
+  summary: string | null;
+  blockers: string[];
+  decisions: { key: string; statement: string }[];
+  openQuestions: string[];
+}
+
 /** 选目录的结果：仓库本身、上一层目录（列出下一层的仓库），或者都不是。 */
 export type ScanResult = { kind: "repo"; root: string } | { kind: "parent"; repos: string[] } | { kind: "none" };
 
@@ -132,6 +148,17 @@ export interface FeatureView extends Feature {
   activity: Record<string, SessionActivity>;
 }
 
+/** epic 页和侧边栏用：epic 加上它的 session 和下面各 feature 的情况。 */
+export interface EpicView extends Epic {
+  sessions: SessionView[];
+  hiddenSessions: SessionView[];
+  /** epic session 或者它下面的 feature 在等用户输入。 */
+  waiting: boolean;
+  /** 下面有 feature 卡住了。 */
+  stuck: boolean;
+  features: EpicFeatureRow[];
+}
+
 export interface UnclaimedSession extends Session {
   suggestedTicket: string | null;
   suggestionExists: boolean;
@@ -195,6 +222,13 @@ export interface OpenSessionRequest {
 /** 打开 feature 总控：新开，或者恢复 sessionId。 */
 export interface OpenFeatureSessionRequest {
   featureId: number;
+  sessionId?: string;
+  prefill?: string;
+}
+
+/** 打开 epic session：新开，或者恢复 sessionId。 */
+export interface OpenEpicSessionRequest {
+  epicId: number;
   sessionId?: string;
   prefill?: string;
 }

@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
 import { MAX_RUNNING_PER_FEATURE } from "../../shared/control";
+import { EpicsRepo } from "../db/epics-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { HandoffsRepo } from "../db/handoffs-repo";
@@ -23,6 +24,7 @@ async function setup() {
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
   const features = new FeaturesRepo(db);
+  const epics = new EpicsRepo(db);
   const featureHandoffs = new FeatureHandoffsRepo(db);
   const handoffs = new HandoffsRepo(db);
   const settings = new SettingsRepo(db);
@@ -40,7 +42,9 @@ async function setup() {
   await ticketService.create({ key: "SOLO-1", repoPath: makeRepo(), workMode: "branch" });
   const { factory, spawned } = fakePtyFactory();
   const pty = new PtyManager(factory, { data: () => undefined, exit: () => undefined });
-  const mcpAsked: { key: string; coordinator: boolean; featureId: number | null }[] = [];
+  const mcpAsked: { key: string; coordinator: boolean; featureId: number | null; epicId: number | null }[] = [];
+  const featureMcpAsked: [number, number | null][] = [];
+  const epicMcpAsked: number[] = [];
   const settingsAsked: string[][] = [];
   const activities = new Map<string, SessionActivity>();
   const names = new Map<string, string>();
@@ -51,7 +55,7 @@ async function setup() {
   let submit: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout"> = async (termId, message) => (submitted.push([termId, message]), "sent");
   let n = 0;
   const service = new SessionService({
-    tickets, sessions, settings, ticketService, pty, features, featureHandoffs, handoffs,
+    tickets, sessions, settings, ticketService, pty, features, epics, featureHandoffs, handoffs,
     activity: (id) => activities.get(id) ?? null,
     sessionName: async (id) => (namesAsked.push(id), names.get(id) ?? null),
     submit: (termId, message) => submit(termId, message),
@@ -65,11 +69,12 @@ async function setup() {
     platform: "darwin",
     baseEnv: { HOME: "/h" },
     mcpConfig: (key, o) => (mcpAsked.push({ key, ...o }), `/mcp/${key}.json`),
-    featureMcpConfig: (id) => `/mcp/features/${id}.json`,
+    featureMcpConfig: (id, epicId) => (featureMcpAsked.push([id, epicId]), `/mcp/features/${id}.json`),
+    epicMcpConfig: (id) => (epicMcpAsked.push(id), `/mcp/epics/${id}.json`),
     mcpSettings: (dirs) => (settingsAsked.push(dirs), "/mcp/approve.json"),
   });
   return {
-    service, featureHandoffs, handoffs, sessions, tickets, features, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, settingsAsked,
+    service, featureHandoffs, handoffs, sessions, tickets, features, epics, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, featureMcpAsked, epicMcpAsked, settingsAsked,
     activities, names, namesAsked, submitted, claude, logs, setSubmit: (f: typeof submit) => (submit = f),
   };
 }
@@ -149,8 +154,8 @@ describe("feature coordinator sessions (design 2026-10-26)", () => {
     await service.open({ ticketKey: "DMS-1" });
     await service.open({ ticketKey: "SOLO-1", force: true });
     expect(mcpAsked).toEqual([
-      { key: "DMS-1", coordinator: false, featureId: feature.id },
-      { key: "SOLO-1", coordinator: false, featureId: null },
+      { key: "DMS-1", coordinator: false, featureId: feature.id, epicId: null },
+      { key: "SOLO-1", coordinator: false, featureId: null, epicId: null },
     ]);
   });
 
@@ -180,6 +185,172 @@ describe("feature coordinator sessions (design 2026-10-26)", () => {
     expect(service.featureViews()[0].hiddenSessions.map((s) => s.id)).toEqual(["new-1"]);
     service.unhide("new-1");
     expect(sessions.get("new-1")?.dismissed).toBe(false);
+  });
+});
+
+describe("epic sessions (design 2026-11-01)", () => {
+  /** 一个 epic：仓库是 frontend 和 backend，工作区在仓库外面。 */
+  async function epicSetup() {
+    const ctx = await setup();
+    const workspaceDir = tempDir("butler-epic-");
+    const epicId = ctx.epics.insert({ name: "launch", workspaceDir, createdAt: 1 });
+    ctx.epics.addRepo(epicId, ctx.frontend, 1);
+    ctx.epics.addRepo(epicId, ctx.backend, 1);
+    return { ...ctx, workspaceDir, epicId };
+  }
+
+  it("opens in the epic workspace with an --add-dir per repo, as neither a ticket nor a feature session", async () => {
+    const { service, spawned, sessions, frontend, backend, settingsAsked, epicMcpAsked, workspaceDir, epicId } = await epicSetup();
+    expect(await service.openEpic({ epicId })).toEqual({ ok: true, termId: "new-1", alreadyOpen: false });
+    const s = spawned[0];
+    expect(s.opts.cwd).toBe(workspaceDir);
+    expect(s.args).toEqual(["--session-id", "new-1", "--mcp-config", `/mcp/epics/${epicId}.json`, "--settings", "/mcp/approve.json", "--add-dir", frontend, "--add-dir", backend]);
+    expect(epicMcpAsked).toEqual([epicId]);
+    expect(settingsAsked).toEqual([[workspaceDir, frontend, backend]]);
+    expect(s.opts.env.BUTLER_TICKET).toBeUndefined();
+    expect(s.opts.env.BUTLER_SESSION).toBe("new-1");
+    expect(sessions.get("new-1")).toMatchObject({ ticketKey: null, featureId: null, epicId, coordinator: false, fixesSession: null, cwd: workspaceDir, origin: "butler" });
+  });
+
+  it("adds no directory for a repo that is gone or already inside the workspace", async () => {
+    const { service, spawned, epics, frontend, workspaceDir, epicId } = await epicSetup();
+    epics.addRepo(epicId, join(workspaceDir, "inside"), 1);
+    epics.addRepo(epicId, join(workspaceDir, "..", "no-such-repo-here"), 1);
+    mkdirSync(join(workspaceDir, "inside"));
+    await service.openEpic({ epicId });
+    const dirs = spawned[0].args.filter((_, i, all) => all[i - 1] === "--add-dir");
+    expect(dirs).toContain(frontend);
+    expect(dirs).toHaveLength(2);
+  });
+
+  it("resumes its own session, reuses an open terminal and prefills there", async () => {
+    const { service, spawned, sessions, pty, workspaceDir, epicId } = await epicSetup();
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: workspaceDir, origin: "butler", createdAt: 1, epicId });
+    expect(await service.openEpic({ epicId, sessionId: "old" })).toEqual({ ok: true, termId: "old", alreadyOpen: false });
+    expect(spawned[0].args.slice(0, 2)).toEqual(["--resume", "old"]);
+    const prefill = vi.spyOn(pty, "prefill").mockResolvedValue(undefined as never);
+    expect(await service.openEpic({ epicId, sessionId: "old", prefill: "接着规划" })).toEqual({ ok: true, termId: "old", alreadyOpen: true });
+    expect(prefill).toHaveBeenCalledWith("old", "接着规划", 0);
+    expect(spawned).toHaveLength(1);
+  });
+
+  it("refuses a session that is not this epic's", async () => {
+    const { service, sessions, epics, feature, workspaceDir, epicId } = await epicSetup();
+    const other = epics.insert({ name: "other", workspaceDir: tempDir("butler-epic-"), createdAt: 1 });
+    sessions.insertIfAbsent({ id: "theirs", ticketKey: null, cwd: workspaceDir, origin: "butler", createdAt: 1, epicId: other });
+    sessions.insertIfAbsent({ id: "coord", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, coordinator: true });
+    for (const sessionId of ["theirs", "coord", "nope"]) expect(await service.openEpic({ epicId, sessionId }), sessionId).toEqual({ ok: false, reason: "no_session" });
+  });
+
+  it("refuses a missing or archived epic, and a missing claude", async () => {
+    const { service, epics, claude, spawned, epicId } = await epicSetup();
+    expect(await service.openEpic({ epicId: 999 })).toEqual({ ok: false, reason: "no_ticket" });
+    claude.path = null;
+    expect(await service.openEpic({ epicId })).toEqual({ ok: false, reason: "claude_missing" });
+    epics.archive(epicId, 5);
+    expect(await service.openEpic({ epicId })).toEqual({ ok: false, reason: "no_ticket" });
+    expect(spawned).toEqual([]);
+  });
+
+  it("returns an error, without throwing or leaving a row, when the workspace is gone", async () => {
+    const { service, spawned, sessions, workspaceDir, epicId } = await epicSetup();
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: workspaceDir, origin: "butler", createdAt: 1, epicId });
+    rmSync(workspaceDir, { recursive: true });
+    await expect(service.openEpic({ epicId })).resolves.toEqual({ ok: false, reason: "no_repo" });
+    await expect(service.openEpic({ epicId, sessionId: "old" })).resolves.toEqual({ ok: false, reason: "no_repo" });
+    expect(spawned).toEqual([]);
+    expect(sessions.listByEpic(epicId).map((s) => s.id)).toEqual(["old"]);
+  });
+
+  it("leaves no empty row when claude cannot start", async () => {
+    const { service, pty, sessions, epicId } = await epicSetup();
+    vi.spyOn(pty, "open").mockImplementation(() => {
+      throw new Error("spawn failed");
+    });
+    await expect(service.openEpic({ epicId })).rejects.toThrow("spawn failed");
+    expect(sessions.get("new-1")).toBeNull();
+  });
+
+  it("follows /clear: the new head stays an epic session on the same terminal", async () => {
+    const { service, sessions, tickets, epics, epicId, workspaceDir, spawned } = await epicSetup();
+    await service.openEpic({ epicId });
+    applyHookEnvelope(
+      { v: 1, receivedAt: 100, ticket: null, butlerSession: "new-1", payload: { hook_event_name: "SessionStart", session_id: "e-2", cwd: workspaceDir, source: "clear" } },
+      { sessions, tickets, epicForCwd: (cwd) => epics.byWorkspace(cwd)?.id ?? null },
+    );
+    expect(sessions.head("new-1")).toMatchObject({ id: "e-2", epicId, coordinator: false });
+    expect(await service.openEpic({ epicId, sessionId: "new-1" })).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
+    expect(service.epicTerminalCount(epicId)).toBe(1);
+    expect(spawned).toHaveLength(1);
+  });
+
+  it("is no feature coordinator and not unclaimed", async () => {
+    const { service, sessions, feature, epicId } = await epicSetup();
+    await service.openEpic({ epicId });
+    expect(sessions.listFeatureCoordinators(feature.id)).toEqual([]);
+    expect(service.featureViews()[0].sessions).toEqual([]);
+    expect(service.featureTerminalCount(feature.id)).toBe(0);
+    expect(service.unclaimed()).toEqual([]);
+  });
+
+  it("counts only the epic's own terminals", async () => {
+    const { service, spawned, feature, epicId } = await epicSetup();
+    expect(service.hasEpicTerminal(epicId)).toBe(false);
+    await service.openEpic({ epicId });
+    await service.openFeature({ featureId: feature.id });
+    expect(service.epicTerminalCount(epicId)).toBe(1);
+    expect(service.hasEpicTerminal(epicId)).toBe(true);
+    spawned[0].pty.emitExit(0);
+    expect(service.hasEpicTerminal(epicId)).toBe(false);
+  });
+
+  it("lists epics with their sessions and terminals; progress comes later", async () => {
+    const { service, sessions, epics, pty, epicId, frontend, backend } = await epicSetup();
+    const archived = epics.insert({ name: "old", workspaceDir: tempDir("butler-epic-"), createdAt: 1 });
+    epics.archive(archived, 5);
+    await service.openEpic({ epicId });
+    const [view, ...rest] = service.epicViews();
+    expect(rest).toEqual([]);
+    expect(view).toMatchObject({ id: epicId, name: "launch", features: [], waiting: false, stuck: false, hiddenSessions: [] });
+    expect(view.repos.map((r) => r.repoPath)).toEqual([frontend, backend]);
+    expect(view.sessions.map((s) => [s.id, s.termId])).toEqual([["new-1", "new-1"]]);
+    sessions.setWaiting("new-1", true, 2000);
+    expect(service.epicViews()[0].waiting).toBe(true);
+    pty.kill("new-1");
+    service.hide("new-1");
+    expect(service.epicViews()[0]).toMatchObject({ sessions: [], hiddenSessions: [expect.objectContaining({ id: "new-1", termId: null })] });
+    service.unhide("new-1");
+    expect(service.epicViews()[0].sessions.map((s) => s.id)).toEqual(["new-1"]);
+  });
+
+  it("gives every session of a feature in an epic the epic memory, and leaves other features alone", async () => {
+    const { service, features, feature, mcpAsked, featureMcpAsked, activities, epicId } = await epicSetup();
+    await service.openFeature({ featureId: feature.id });
+    await service.open({ ticketKey: "SOLO-1", force: true });
+    features.setEpic(feature.id, epicId);
+    await service.openFeature({ featureId: feature.id });
+    const ticket = await service.open({ ticketKey: "DMS-1" });
+    await service.open({ ticketKey: "DMS-1", coordinator: true });
+    await service.open({ ticketKey: "SOLO-1", force: true });
+    if (!ticket.ok) throw new Error("did not open");
+    activities.set(ticket.termId, stuckActivity(ticket.termId));
+    await service.openFix({ featureId: feature.id, stuckSessionId: ticket.termId });
+    expect(featureMcpAsked).toEqual([[feature.id, null], [feature.id, epicId], [feature.id, epicId]]);
+    expect(mcpAsked).toEqual([
+      { key: "SOLO-1", coordinator: false, featureId: null, epicId: null },
+      { key: "DMS-1", coordinator: false, featureId: feature.id, epicId },
+      { key: "DMS-1", coordinator: true, featureId: feature.id, epicId },
+      { key: "SOLO-1", coordinator: false, featureId: null, epicId: null },
+    ]);
+  });
+
+  it("does not rewrite the config of a running session when its feature moves", async () => {
+    const { service, features, feature, featureMcpAsked, epicId } = await epicSetup();
+    await service.openFeature({ featureId: feature.id });
+    features.setEpic(feature.id, epicId);
+    expect(featureMcpAsked).toEqual([[feature.id, null]]);
+    expect(await service.openFeature({ featureId: feature.id, sessionId: "new-1" })).toMatchObject({ alreadyOpen: true });
+    expect(featureMcpAsked).toEqual([[feature.id, null]]);
   });
 });
 

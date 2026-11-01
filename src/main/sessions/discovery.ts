@@ -185,15 +185,22 @@ export async function scanClaudeProjects(projectsDir: string, sinceMs: number, c
   return found;
 }
 
-/** featureForCwd：在 feature 工作区里的 session 直接记成那个 feature 的总控，不进“未认领”（设计文档 2026-10-26）。 */
-export function syncDiscovered(found: DiscoveredSession[], sessions: SessionsRepo, now: number, featureForCwd?: (cwd: string) => number | null): string[] {
+/**
+ * featureForCwd：在 feature 工作区里的 session 直接记成那个 feature 的总控，不进“未认领”（设计文档 2026-10-26）。
+ * epicForCwd：同样，在 epic 工作区里的记成 epic session（设计文档 2026-11-01）。
+ */
+export function syncDiscovered(
+  found: DiscoveredSession[], sessions: SessionsRepo, now: number,
+  featureForCwd?: (cwd: string) => number | null, epicForCwd?: (cwd: string) => number | null,
+): string[] {
   const inserted: string[] = [];
   for (const s of found) {
     const featureId = s.cwd ? (featureForCwd?.(s.cwd) ?? null) : null;
+    const epicId = s.cwd && featureId === null ? (epicForCwd?.(s.cwd) ?? null) : null;
     const isNew = sessions.insertIfAbsent({
       id: s.id, ticketKey: null, cwd: s.cwd, origin: "discovered",
       gitBranch: s.gitBranch, firstPrompt: s.firstPrompt, lastActivityAt: s.lastActivityAt, createdAt: now,
-      featureId, coordinator: featureId !== null,
+      featureId, coordinator: featureId !== null, epicId,
     });
     if (isNew) inserted.push(s.id);
     else sessions.fillDetails(s.id, { cwd: s.cwd, gitBranch: s.gitBranch, firstPrompt: s.firstPrompt, lastActivityAt: s.lastActivityAt });

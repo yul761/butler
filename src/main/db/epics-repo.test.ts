@@ -86,7 +86,8 @@ describe("epic sessions", () => {
   const epicDb = () => {
     const db = memDb();
     const epicId = new EpicsRepo(db).insert({ name: "e", workspaceDir: "/e", createdAt: 1 });
-    return { repo: new SessionsRepo(db), epicId };
+    const featureId = new FeaturesRepo(db).insert({ name: "f", workspaceDir: "/f", createdAt: 1 });
+    return { repo: new SessionsRepo(db), epicId, featureId };
   };
 
   it("carries epicId to the session that replaces it after /clear", () => {
@@ -103,6 +104,32 @@ describe("epic sessions", () => {
     repo.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/e", origin: "butler", createdAt: 2 });
     repo.setReplacedBy("a", "loose", "resume");
     expect(repo.get("loose")?.epicId).toBeNull();
+  });
+
+  it("clears the epic of a row that turned out not to be an epic session", () => {
+    const { repo, epicId } = epicDb();
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/e", origin: "butler", createdAt: 1, epicId });
+    repo.setEpic("a", null);
+    expect(repo.get("a")?.epicId).toBeNull();
+    expect(repo.listByEpic(epicId)).toEqual([]);
+  });
+
+  it("makes an epic session's new head epic-only, whatever a disk scan recorded first", () => {
+    const { repo, epicId, featureId } = epicDb();
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/e", origin: "butler", createdAt: 1, epicId });
+    repo.insertIfAbsent({ id: "a-2", ticketKey: null, cwd: "/f", origin: "discovered", createdAt: 2, featureId, coordinator: true });
+    repo.setReplacedBy("a", "a-2");
+    expect(repo.get("a-2")).toMatchObject({ epicId, featureId: null, coordinator: false });
+    expect(repo.listFeatureCoordinators(featureId)).toEqual([]);
+  });
+
+  it("makes a feature coordinator's new head feature-only, whatever a disk scan recorded first", () => {
+    const { repo, epicId, featureId } = epicDb();
+    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/f", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    repo.insertIfAbsent({ id: "c-2", ticketKey: null, cwd: "/e", origin: "discovered", createdAt: 2, epicId });
+    repo.setReplacedBy("c", "c-2");
+    expect(repo.get("c-2")).toMatchObject({ epicId: null, featureId, coordinator: true });
+    expect(repo.listByEpic(epicId)).toEqual([]);
   });
 
   it("does not offer an epic session as unclaimed", () => {

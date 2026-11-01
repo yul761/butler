@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { HookEnvelope } from "../../shared/hook-envelope";
+import { EpicsRepo } from "../db/epics-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { FollowupsRepo } from "../db/followups-repo";
@@ -38,7 +39,8 @@ function setup() {
   };
   const afterCalls: [number, number | null, string][] = [];
   const afterFeatureCommand = (featureId: number, handoffId: number | null, sessionId: string) => void afterCalls.push([featureId, handoffId, sessionId]);
-  return { deps: { sessions, tickets, ingest, ingestFeature, afterFeatureCommand }, sessions, handoffs, featureHandoffs, featureInputs, afterCalls };
+  const epicId = new EpicsRepo(db).insert({ name: "e", workspaceDir: "/e", createdAt: 1 });
+  return { deps: { sessions, tickets, ingest, ingestFeature, afterFeatureCommand }, sessions, handoffs, featureHandoffs, featureInputs, afterCalls, epicId };
 }
 
 /** 一个只有“/handoff + 回答”的 transcript；payload 是字符串时原样放进代码块。 */
@@ -190,6 +192,25 @@ describe("captureCommandHandoff when the transcript lags behind the Stop hook", 
     }]);
     expect(await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "s1", transcriptPath: file })).toMatchObject({ stored: true, degraded: false });
     expect(handoffs.latest("PROJ-1")?.payload?.next_steps).toEqual(["合并 PR"]);
+  });
+});
+
+describe("captureCommandHandoff in an epic session", () => {
+  it("stores nothing, whichever block it printed, even one naming an existing ticket", async () => {
+    const { deps, sessions, handoffs, featureHandoffs, featureInputs, afterCalls, epicId } = setup();
+    sessions.insertIfAbsent({ id: "e1", ticketKey: null, cwd: "/e", origin: "butler", createdAt: 1, epicId });
+    const feature = join(tempDir(), "f.jsonl");
+    const summary = { summary: "规划", blockers: [], next_steps: [], decisions: [], open_questions: [] };
+    writeFileSync(feature, [
+      { type: "user", message: { role: "user", content: "/handoff" } },
+      { type: "assistant", uuid: "f1", message: { role: "assistant", content: [{ type: "text", text: `${FENCE}butler-feature-handoff\n${JSON.stringify(summary)}\n${FENCE}` }] } },
+    ].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    expect(await captureCommandHandoff(deps, { sessionId: "e1", transcriptPath: transcript(emptyHandoff("PROJ-1")) })).toBeNull();
+    expect(await captureCommandHandoff(deps, { sessionId: "e1", transcriptPath: feature })).toBeNull();
+    expect(handoffs.listByTicket("PROJ-1")).toEqual([]);
+    for (const id of [1, 2, 3]) expect(featureHandoffs.listByFeature(id)).toEqual([]);
+    expect(featureInputs).toEqual([]);
+    expect(afterCalls).toEqual([]);
   });
 });
 

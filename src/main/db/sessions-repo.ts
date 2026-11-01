@@ -153,8 +153,8 @@ export class SessionsRepo {
     return rows.map(toSession);
   }
 
-  /** 记成这个 epic 的 session。 */
-  setEpic(id: string, epicId: number): void {
+  /** 记成这个 epic 的 session；null：它不是 epic session（嵌套的 claude）。 */
+  setEpic(id: string, epicId: number | null): void {
     this.db.prepare(`UPDATE sessions SET epic_id = ? WHERE id = ?`).run(epicId, id);
   }
 
@@ -191,14 +191,15 @@ export class SessionsRepo {
   /**
    * /clear、compact 产生的新 session 接替旧的：同一个终端，仓库、总控、开启者、feature 和修复目标也照旧。
    * 修复 session 的新段不是总控：磁盘扫描可能先按目录把它记成了总控，这里清掉。
+   * epic session 和 feature 级 session 互斥，同样以旧 session 为准：epic session 的新段不会是 feature 总控，反过来也一样。
    * /resume（source 是 "resume"）接上的是已有的 session，不是新段：总控、feature、修复目标都留它自己的。resume 出来的新 id 由 hook 插入时继承。
    */
   setReplacedBy(id: string, newId: string, source?: string | null): void {
     const old = (column: string) => `(SELECT o.${column} FROM sessions o WHERE o.id = ?1)`;
     const role = `,
-      coordinator = CASE WHEN ${old("fixes_session")} IS NULL THEN MAX(coordinator, ${old("coordinator")}) ELSE 0 END,
-      feature_id = COALESCE(feature_id, ${old("feature_id")}),
-      epic_id = COALESCE(epic_id, ${old("epic_id")}),
+      coordinator = CASE WHEN ${old("fixes_session")} IS NULL AND ${old("epic_id")} IS NULL THEN MAX(coordinator, ${old("coordinator")}) ELSE 0 END,
+      feature_id = CASE WHEN ${old("epic_id")} IS NULL THEN COALESCE(feature_id, ${old("feature_id")}) END,
+      epic_id = CASE WHEN ${old("feature_id")} IS NULL THEN COALESCE(epic_id, ${old("epic_id")}) END,
       fixes_session = COALESCE(fixes_session, ${old("fixes_session")})`;
     withTransaction(this.db, () => {
       this.db.prepare(`UPDATE sessions SET replaced_by = ?2 WHERE id = ?1`).run(id, newId);

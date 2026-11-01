@@ -48,7 +48,7 @@ import { HandoffRunner } from "./handoff/runner";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { memoryServers, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { memoryServers, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
@@ -311,6 +311,8 @@ async function bootstrap(): Promise<void> {
   const sessions = new SessionsRepo(db);
   const features = new FeaturesRepo(db);
   const featureForCwd = (cwd: string): number | null => features.byWorkspace(cwd)?.id ?? null;
+  const epics = new EpicsRepo(db);
+  const epicForCwd = (cwd: string): number | null => epics.byWorkspace(cwd)?.id ?? null;
   const settings = new SettingsRepo(db);
   /** 当前语言：BUTLER_LANG > 设置 > 系统首选语言（设计文档 2026-10-26）。 */
   const applyLanguage = () => setLang(resolveLang(settings.get("language"), app.getPreferredSystemLanguages(), process.env.BUTLER_LANG));
@@ -373,10 +375,10 @@ async function bootstrap(): Promise<void> {
    */
   /**
    * 记忆 server（记忆开着时）加上总控的 butler-sessions（设计文档 2026-10-23 第二步，和记忆开关无关）。
-   * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）；scope 是总控管的 ticket 或 feature，普通 session 为 null。
+   * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）、epic 的（设计文档 2026-11-01）；scope 是总控管的 ticket 或 feature，普通 session 为 null。
    */
   const launcher = (script: string) => ({ command: process.execPath, script });
-  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null }, scope: { ticketKey: string } | { featureId: number } | null) => {
+  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null; epicId?: number | null }, scope: { ticketKey: string } | { featureId: number } | null) => {
     let servers = {};
     if (memoryOn(settings)) {
       if (existsSync(memoryMcpScript)) servers = memoryServers({ launcher: launcher(memoryMcpScript), statecoreDir: paths.statecore, ...mem });
@@ -397,16 +399,22 @@ async function bootstrap(): Promise<void> {
     return servers;
   };
   /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。什么都不挂时返回 null。 */
-  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null }): string | null => {
-    const servers = mcpServers({ ticketKey, featureId: opts.featureId }, opts.coordinator ? { ticketKey } : null);
+  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }): string | null => {
+    const servers = mcpServers({ ticketKey, featureId: opts.featureId, epicId: opts.epicId }, opts.coordinator ? { ticketKey } : null);
     if (Object.keys(servers).length === 0) return null;
     return writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator });
   };
-  /** feature 总控：feature 记忆、全局记忆和 feature 模式的 butler-sessions。 */
-  const featureMcpConfig = (featureId: number): string | null => {
-    const servers = mcpServers({ featureId }, { featureId });
+  /** feature 总控：feature 记忆、全局记忆和 feature 模式的 butler-sessions；feature 属于 epic 时加 epic 记忆。 */
+  const featureMcpConfig = (featureId: number, epicId: number | null): string | null => {
+    const servers = mcpServers({ featureId, epicId }, { featureId });
     if (Object.keys(servers).length === 0) return null;
     return writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers });
+  };
+  /** epic session：epic 记忆和全局记忆。 */
+  const epicMcpConfig = (epicId: number): string | null => {
+    const servers = mcpServers({ epicId }, null);
+    if (Object.keys(servers).length === 0) return null;
+    return writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers });
   };
   const activityMonitor = new ActivityMonitor({
     sessions, tickets, features, pty,
@@ -436,7 +444,8 @@ async function bootstrap(): Promise<void> {
     mcpConfig: memoryMcpConfig,
     mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger }),
     featureMcpConfig,
-    features, featureHandoffs, handoffs,
+    epicMcpConfig,
+    features, epics, featureHandoffs, handoffs,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
     log: logger,
@@ -638,7 +647,7 @@ async function bootstrap(): Promise<void> {
   const discoverOnce = async () => {
     try {
       const found = await scanClaudeProjects(paths.claudeProjects, Date.now() - UNCLAIMED_WINDOW_MS, discoveryHeads);
-      syncDiscovered(found, sessions, Date.now(), featureForCwd);
+      syncDiscovered(found, sessions, Date.now(), featureForCwd, epicForCwd);
       // 只有扫描真的找到了某个待补全 session 的 transcript，才记为本次运行已扫描过。
       for (const f of found) if (discoveryPending.delete(f.id)) discoveryRequested.add(f.id);
       notify();
@@ -686,7 +695,7 @@ async function bootstrap(): Promise<void> {
       const effect = applyHookEnvelope(env, {
         sessions, tickets, transcriptState: (id) => transcriptState(paths.claudeProjects, id),
         placement: (key, cwd) => ticketService.placement(key, cwd),
-        featureForCwd,
+        featureForCwd, epicForCwd,
       });
       // Stop 之后看这一轮有没有 /handoff 的输出（异步；失败只记日志，不影响 hook 处理）。
       const stop = stopFromEnvelope(env);
@@ -734,7 +743,6 @@ async function bootstrap(): Promise<void> {
     },
   };
 
-  const epics = new EpicsRepo(db);
   // EpicService 要用 FeatureService 归档 / 恢复 feature，FeatureService 又要通知 EpicService 补仓库：回调里才用到 epicService，构造时还不需要。
   const featureService = new FeatureService({
     features, tickets, epics, db, now: Date.now,

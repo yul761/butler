@@ -15,6 +15,11 @@ export function featureScope(id: number): string {
   return `feature:${id}`;
 }
 
+/** 每个 epic 一个 scope（设计文档 2026-11-01）：epic 下所有层的 session 共用。 */
+export function epicScope(id: number): string {
+  return `epic:${id}`;
+}
+
 /** StateCore facts() 里的一条（只取 Butler 用得到的字段）。 */
 export interface MemoryItem {
   /** forget 用的 key（分组名 + 正文的哈希）。 */

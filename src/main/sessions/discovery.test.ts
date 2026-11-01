@@ -1,6 +1,8 @@
 import { chmodSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { EpicsRepo } from "../db/epics-repo";
+import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
@@ -149,6 +151,20 @@ describe("syncDiscovered / suggestTicket", () => {
     expect(inserted).toEqual([ID1]);
     expect(sessions.get(ID1)).toMatchObject({ origin: "discovered", ticketKey: null });
     expect(sessions.get(ID2)).toMatchObject({ ticketKey: "PROJ-12", cwd: "/r", origin: "butler", lastActivityAt: 20 });
+  });
+
+  it("records a session found in an epic workspace as that epic's, and a feature workspace still wins", () => {
+    const db = memDb();
+    const sessions = new SessionsRepo(db);
+    const epicId = new EpicsRepo(db).insert({ name: "e", workspaceDir: "/es", createdAt: 1 });
+    const featureId = new FeaturesRepo(db).insert({ name: "f", workspaceDir: "/fs", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "kept", ticketKey: null, cwd: "/es", origin: "discovered", createdAt: 1 });
+    const row = (id: string, cwd: string) => ({ id, cwd, gitBranch: null, firstPrompt: null, lastActivityAt: 10 });
+    syncDiscovered([row("e", "/es"), row("f", "/fs"), row("x", "/x"), row("kept", "/es")], sessions, 100, (cwd) => (cwd === "/fs" ? featureId : null), (cwd) => (cwd === "/es" || cwd === "/fs" ? epicId : null));
+    expect(sessions.get("e")).toMatchObject({ epicId, featureId: null, coordinator: false });
+    expect(sessions.get("f")).toMatchObject({ epicId: null, featureId, coordinator: true });
+    expect(sessions.get("x")).toMatchObject({ epicId: null, featureId: null });
+    expect(sessions.get("kept")?.epicId).toBeNull();
   });
 
   it("suggests from branch first, then prompt", () => {

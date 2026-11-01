@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HookEnvelope } from "../../shared/hook-envelope";
+import { EpicsRepo } from "../db/epics-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
@@ -270,5 +271,141 @@ describe("hook sessions in a fix session's terminal", () => {
     sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
     applyHookEnvelope(env("SessionStart", "c-2", { butlerSession: "c" }, { cwd: "/ws", source: "clear" }), deps);
     expect(sessions.get("c-2")).toMatchObject({ coordinator: true, featureId, fixesSession: null });
+  });
+});
+
+describe("hook sessions and epics", () => {
+  function epicSetup() {
+    const db = memDb();
+    const tickets = new TicketsRepo(db);
+    insertTicket(tickets, { key: "PROJ-1", title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
+    const sessions = new SessionsRepo(db);
+    const featureId = new FeaturesRepo(db).insert({ name: "f", workspaceDir: "/fs", createdAt: 1 });
+    const epicsRepo = new EpicsRepo(db);
+    const epicId = epicsRepo.insert({ name: "e", workspaceDir: "/es", createdAt: 1 });
+    const otherEpic = epicsRepo.insert({ name: "o", workspaceDir: "/os", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "e1", ticketKey: null, cwd: "/es", origin: "butler", createdAt: 1, epicId });
+    const deps = {
+      sessions, tickets,
+      featureForCwd: (cwd: string) => (cwd === "/fs" ? featureId : null),
+      epicForCwd: (cwd: string) => (cwd === "/es" ? epicId : cwd === "/os" ? otherEpic : null),
+    };
+    return { sessions, featureId, epicId, otherEpic, deps };
+  }
+  const inEpic = { butlerSession: "e1" };
+
+  it("keeps the new head an epic session across /clear and compact, and never a coordinator", () => {
+    const { sessions, epicId, deps } = epicSetup();
+    const eff = applyHookEnvelope(env("SessionStart", "e2", inEpic, { cwd: "/es", source: "clear" }), deps);
+    expect(eff).toEqual({ kind: "session_started", sessionId: "e2", ticketKey: null, replaced: "e1" });
+    expect(sessions.head("e1")).toMatchObject({ id: "e2", epicId, featureId: null, ticketKey: null, coordinator: false });
+    applyHookEnvelope(env("SessionStart", "e3", inEpic, { cwd: "/es", source: "compact" }), deps);
+    expect(sessions.head("e1")).toMatchObject({ id: "e3", epicId, coordinator: false });
+    expect(sessions.listByEpic(epicId).filter((s) => !s.replacedBy).map((s) => s.id)).toEqual(["e3"]);
+  });
+
+  it("keeps the epic when Stop arrives before SessionStart, or the new segment reports another directory", () => {
+    const { sessions, epicId, deps } = epicSetup();
+    applyHookEnvelope(env("Stop", "e2", inEpic, { cwd: "/somewhere/else" }), deps);
+    expect(sessions.get("e2")).toMatchObject({ epicId, coordinator: false });
+    applyHookEnvelope(env("SessionStart", "e2", inEpic, { cwd: "/somewhere/else", source: "clear" }), deps);
+    expect(sessions.head("e1")).toMatchObject({ id: "e2", epicId });
+  });
+
+  it("does not turn an epic terminal's new head into a feature coordinator because of its directory", () => {
+    const { sessions, featureId, epicId, deps } = epicSetup();
+    applyHookEnvelope(env("Stop", "e2", inEpic, { cwd: "/fs" }), deps);
+    expect(sessions.get("e2")).toMatchObject({ epicId, featureId: null, coordinator: false });
+    applyHookEnvelope(env("SessionStart", "e2", inEpic, { cwd: "/fs", source: "clear" }), deps);
+    expect(sessions.head("e1")).toMatchObject({ id: "e2", epicId, featureId: null, coordinator: false });
+    expect(sessions.listFeatureCoordinators(featureId)).toEqual([]);
+  });
+
+  it("leaves an unclaimed session alone when /resume in the epic terminal picks it, also on its later events", () => {
+    const { sessions, deps } = epicSetup();
+    sessions.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/elsewhere", origin: "discovered", createdAt: 1 });
+    applyHookEnvelope(env("SessionStart", "loose", inEpic, { cwd: "/elsewhere", source: "resume" }), deps);
+    expect(sessions.head("e1")?.id).toBe("loose");
+    for (const ev of ["Stop", "UserPromptSubmit"]) applyHookEnvelope(env(ev, "loose", inEpic, { cwd: "/es" }), deps);
+    expect(sessions.get("loose")).toMatchObject({ epicId: null, featureId: null, ticketKey: null, coordinator: false });
+  });
+
+  it("does not pull an existing session in when its Stop arrives before the /resume SessionStart", () => {
+    const { sessions, deps } = epicSetup();
+    sessions.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/es", origin: "discovered", createdAt: 1 });
+    applyHookEnvelope(env("Stop", "loose", inEpic, { cwd: "/es" }), deps);
+    applyHookEnvelope(env("SessionStart", "loose", inEpic, { cwd: "/es", source: "resume" }), deps);
+    expect(sessions.get("loose")?.epicId).toBeNull();
+  });
+
+  it("keeps each existing session's owner when /resume picks it", () => {
+    const { sessions, featureId, otherEpic, epicId, deps } = epicSetup();
+    sessions.insertIfAbsent({ id: "theirs", ticketKey: null, cwd: "/os", origin: "butler", createdAt: 1, epicId: otherEpic });
+    sessions.insertIfAbsent({ id: "coord", ticketKey: null, cwd: "/fs", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    applyHookEnvelope(env("SessionStart", "theirs", inEpic, { cwd: "/es", source: "resume" }), deps);
+    expect(sessions.get("theirs")?.epicId).toBe(otherEpic);
+    // 换一个 epic 终端，选到 feature 总控：总控还是总控，不算 epic session。
+    sessions.insertIfAbsent({ id: "e9", ticketKey: null, cwd: "/es", origin: "butler", createdAt: 1, epicId });
+    applyHookEnvelope(env("SessionStart", "coord", { butlerSession: "e9" }, { cwd: "/fs", source: "resume" }), deps);
+    expect(sessions.get("coord")).toMatchObject({ epicId: null, featureId, coordinator: true });
+  });
+
+  it("gives a new id from /resume in the epic terminal the epic", () => {
+    const { sessions, epicId, deps } = epicSetup();
+    applyHookEnvelope(env("SessionStart", "e2", inEpic, { cwd: "/es", source: "resume" }), deps);
+    expect(sessions.head("e1")).toMatchObject({ id: "e2", epicId });
+  });
+
+  it("leaves an epic session an epic session when a feature or ticket terminal's /resume picks it", () => {
+    const { sessions, featureId, epicId, deps } = epicSetup();
+    sessions.insertIfAbsent({ id: "coord", ticketKey: null, cwd: "/fs", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    applyHookEnvelope(env("SessionStart", "e1", { butlerSession: "coord" }, { cwd: "/es", source: "resume" }), deps);
+    expect(sessions.get("e1")).toMatchObject({ epicId, featureId: null, ticketKey: null, coordinator: false });
+    sessions.insertIfAbsent({ id: "e2", ticketKey: null, cwd: "/es", origin: "butler", createdAt: 1, epicId });
+    sessions.insertIfAbsent({ id: "t1", ticketKey: "PROJ-1", cwd: "/r", origin: "butler", createdAt: 1 });
+    applyHookEnvelope(env("SessionStart", "e2", { ticket: "PROJ-1", butlerSession: "t1" }, { cwd: "/es", source: "resume" }), deps);
+    expect(sessions.get("e2")).toMatchObject({ epicId, ticketKey: null });
+  });
+
+  it("keeps a nested claude out of the epic, in any order of its events", () => {
+    const { sessions, epicId, deps } = epicSetup();
+    expect(applyHookEnvelope(env("SessionStart", "n1", inEpic, { cwd: "/es", source: "startup" }), deps)).toEqual({ kind: "nested", sessionId: "n1" });
+    expect(sessions.get("n1")).toMatchObject({ epicId: null, featureId: null, dismissed: true });
+    for (const ev of ["UserPromptSubmit", "Stop", "SessionEnd"]) applyHookEnvelope(env(ev, "n1", inEpic, { cwd: "/es" }), deps);
+    expect(sessions.get("n1")).toMatchObject({ epicId: null, dismissed: true });
+    // Stop 先到时已经按终端记成了 epic session，SessionStart 认出是嵌套后要清掉。
+    applyHookEnvelope(env("Stop", "n2", inEpic, { cwd: "/es" }), deps);
+    applyHookEnvelope(env("SessionStart", "n2", inEpic, { cwd: "/es", source: "startup" }), deps);
+    expect(sessions.get("n2")).toMatchObject({ epicId: null, dismissed: true });
+    expect(sessions.head("e1")?.id).toBe("e1");
+    expect(sessions.listByEpic(epicId).map((s) => s.id)).toEqual(["e1"]);
+  });
+
+  it("counts a claude the user opened exactly in the epic workspace as an epic session", () => {
+    const { sessions, epicId, deps } = epicSetup();
+    applyHookEnvelope(env("SessionStart", "d1", {}, { cwd: "/es" }), deps);
+    expect(sessions.get("d1")).toMatchObject({ epicId, featureId: null, ticketKey: null, coordinator: false, origin: "discovered" });
+    expect(sessions.listUnclaimed(0).map((s) => s.id)).not.toContain("d1");
+    applyHookEnvelope(env("SessionStart", "d2", {}, { cwd: "/es/notes" }), deps);
+    expect(sessions.get("d2")?.epicId).toBeNull();
+  });
+
+  it("does not make an epic session a coordinator when it later reports a feature workspace", () => {
+    const { sessions, featureId, epicId, deps } = epicSetup();
+    applyHookEnvelope(env("SessionStart", "d1", {}, { cwd: "/es" }), deps);
+    applyHookEnvelope(env("Stop", "d1", {}, { cwd: "/fs" }), deps);
+    expect(sessions.get("d1")).toMatchObject({ epicId, featureId: null, coordinator: false });
+    expect(sessions.listFeatureCoordinators(featureId)).toEqual([]);
+  });
+
+  it("keeps ticket and feature terminals theirs in an epic workspace", () => {
+    const { sessions, featureId, deps } = epicSetup();
+    applyHookEnvelope(env("SessionStart", "t1", { ticket: "PROJ-1", butlerSession: "t1" }, { cwd: "/es" }), deps);
+    expect(sessions.get("t1")).toMatchObject({ ticketKey: "PROJ-1", epicId: null });
+    sessions.insertIfAbsent({ id: "c1", ticketKey: null, cwd: "/fs", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    applyHookEnvelope(env("SessionStart", "c2", { butlerSession: "c1" }, { cwd: "/es", source: "clear" }), deps);
+    expect(sessions.get("c2")).toMatchObject({ featureId, epicId: null, coordinator: true });
+    applyHookEnvelope(env("SessionStart", "w1", {}, { cwd: "/fs" }), deps);
+    expect(sessions.get("w1")).toMatchObject({ featureId, epicId: null, coordinator: true });
   });
 });

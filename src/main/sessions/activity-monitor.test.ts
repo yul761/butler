@@ -432,6 +432,12 @@ describe("ActivityMonitor stuck detection scope", () => {
     await judgedNever(h, "s1");
   });
 
+  it("does not check an epic session", async () => {
+    const h = harness();
+    h.openSession("s1", { ticketKey: null, epicId: 3 });
+    await judgedNever(h, "s1");
+  });
+
   it("does not check a ticket coordinator", async () => {
     const h = harness();
     h.openSession("s1", { coordinator: true, repoId: null });

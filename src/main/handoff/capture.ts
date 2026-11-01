@@ -76,11 +76,12 @@ const sourceRefOf = (stop: StopEvent, found: FoundHandoff): string =>
  * 归属以 Butler 的记录为准：session 是 feature 总控（featureId 不为空）时存成 feature 汇总，见 captureFeatureHandoff；
  * 否则归到 session 已挂的 ticket，没挂的话用代码块里写的 ticket（必须已存在）。
  * 修复 session 不是总控，也不接手 ticket 的工作：它的 /handoff 不收，返回 null。
+ * epic session 也不收：规划和决定靠 epic 记忆保留，代码块里的 ticket 号也不能认领它。
  * 不是 /handoff、或读不到文件时返回 null；是 /handoff 但等了几次都没有代码块时返回 no_block（调用方记日志）。
  */
 export async function captureCommandHandoff(d: CaptureDeps, stop: StopEvent): Promise<IngestResult | FeatureCaptureResult | null> {
   const session = d.sessions.get(stop.sessionId);
-  if (session?.fixesSession) return null;
+  if (session?.fixesSession || session?.epicId) return null;
   const featureId = session?.featureId ?? null;
   if (featureId !== null) return captureFeatureHandoff(d, stop, featureId);
   const r = await awaitCommandOutput(d, stop, findHandoffBlock);
