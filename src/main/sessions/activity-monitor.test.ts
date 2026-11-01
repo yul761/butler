@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Feature, Session, Ticket } from "../../shared/types";
@@ -19,6 +19,7 @@ const toolUse = (id: string, name: string, input: Record<string, unknown> = {}) 
 });
 const toolResult = (id: string) => ({ type: "user", timestamp: AT, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } });
 const endTurn = () => ({ type: "assistant", timestamp: AT, message: { stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } });
+const interrupted = (text = "[Request interrupted by user]") => ({ type: "user", timestamp: AT, message: { role: "user", content: [{ type: "text", text }] } });
 const thinking = () => ({ type: "assistant", timestamp: AT, message: { stop_reason: null, content: [{ type: "text", text: "hmm" }] } });
 const backgroundStarted = (toolId: string, taskId: string, file: string) => ({
   type: "user",
@@ -683,6 +684,38 @@ describe("ActivityMonitor stuck detection", () => {
     expect(h.judgeCalls).toHaveLength(2);
   });
 
+  it("records stuck: false that arrives during a permission prompt", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.busy("s1");
+    await h.checks(3);
+    h.screens.set("s1", "Do you want to proceed?");
+    await h.beat();
+    h.judgeResults[0]({ stuck: false, reason: "", action: "" });
+    await flush();
+    h.screens.set("s1", "running");
+    // 结论在 10 秒后到，静默期到那之后的 10 分钟：后面三次检查都在里面
+    await h.checks(3);
+    expect(h.judgeCalls).toHaveLength(1);
+    await h.checks(1);
+    expect(h.judgeCalls).toHaveLength(2);
+  });
+
+  it("records stuck: false that arrives after the output grew", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.busy("s1");
+    await h.checks(3);
+    h.transcript("s1", thinking());
+    await h.beat();
+    h.judgeResults[0]({ stuck: false, reason: "", action: "" });
+    await flush();
+    await h.checks(3);
+    expect(h.judgeCalls).toHaveLength(1);
+    await h.checks(1);
+    expect(h.judgeCalls).toHaveLength(2);
+  });
+
   it("keeps the 10 quiet minutes when a permission prompt came and went", async () => {
     const h = harness();
     h.openSession("s1");
@@ -820,6 +853,133 @@ describe("ActivityMonitor stuck detection", () => {
     h.transcript("s1", thinking());
     await h.checks(3);
     expect(h.judgeCalls).toHaveLength(2);
+  });
+
+  it("treats a session interrupted with Esc as waiting, not thinking, and never judges it", async () => {
+    for (const text of ["[Request interrupted by user]", "[Request interrupted by user for tool use]"]) {
+      const h = harness();
+      h.openSession("s1");
+      h.busy("s1");
+      h.transcript("s1", interrupted(text));
+      await h.checks(5);
+      expect(h.monitor.get("s1")).toMatchObject({ kind: "waiting", background: false, stuck: false });
+      expect(h.judgeCalls).toEqual([]);
+    }
+  });
+
+  it("keeps checking a background command after an interrupt", async () => {
+    const h = harness();
+    const out = join(h.dir, "bg.output");
+    writeFileSync(out, "start\n");
+    h.openSession("s1");
+    h.transcript("s1", toolUse("t1", "Bash", { command: "git push", run_in_background: true }), backgroundStarted("t1", "b1", out), interrupted());
+    await h.checks(3);
+    expect(h.monitor.get("s1")).toMatchObject({ kind: "push", background: true });
+    expect(h.judgeCalls).toHaveLength(1);
+  });
+
+  describe("a transient read failure", () => {
+    /** s1 卡住之后，f 让某个文件读不了一下，再恢复。 */
+    const stuckThenBlip = async (h: ReturnType<typeof harness>, blip: () => () => void) => {
+      await h.checks(3);
+      h.judgeResults[0]({ stuck: true, reason: "r", action: "a" });
+      await flush();
+      const at = h.monitor.get("s1")!.lastOutputAt;
+      const restore = blip();
+      await h.beat();
+      expect(h.monitor.get("s1")).toMatchObject({ stuck: true, reason: "r", action: "a", lastOutputAt: at });
+      restore();
+      await h.beat();
+      expect(h.monitor.get("s1")).toMatchObject({ stuck: true, lastOutputAt: at });
+      await h.checks(4);
+      expect(h.monitor.get("s1")).toMatchObject({ stuck: true, lastOutputAt: at });
+      expect(h.judgeCalls).toHaveLength(1);
+      expect(h.stuckInfos).toHaveLength(1);
+    };
+    const gone = (file: string) => () => {
+      const body = readFileSync(file);
+      rmSync(file);
+      return () => writeFileSync(file, body);
+    };
+
+    it("of the transcript is not growth", async () => {
+      const h = harness();
+      h.openSession("s1");
+      h.busy("s1");
+      await stuckThenBlip(h, gone(join(h.dir, "s1.jsonl")));
+    });
+
+    it("of the shown output file is not growth", async () => {
+      const h = harness();
+      const out = join(h.dir, "bg.output");
+      writeFileSync(out, "start\n");
+      h.openSession("s1");
+      h.transcript("s1", toolUse("t1", "Bash", { command: "git push", run_in_background: true }), backgroundStarted("t1", "b1", out), endTurn());
+      await stuckThenBlip(h, gone(out));
+    });
+
+    it("of an older background task's file is not growth", async () => {
+      const h = harness();
+      const a = join(h.dir, "a.output");
+      const b = join(h.dir, "b.output");
+      writeFileSync(a, "older\n");
+      writeFileSync(b, "newer\n");
+      h.openSession("s1");
+      h.transcript(
+        "s1",
+        toolUse("t1", "Bash", { command: "x", run_in_background: true }), backgroundStarted("t1", "a", a),
+        toolUse("t2", "Bash", { command: "y", run_in_background: true }), backgroundStarted("t2", "b", b),
+        endTurn(),
+      );
+      await stuckThenBlip(h, gone(a));
+    });
+
+    it("of the tasks directory is not growth for a foreground command", async () => {
+      const h = harness();
+      const tasks = join(h.dir, "tasks");
+      mkdirSync(tasks);
+      writeFileSync(join(tasks, "x.output"), "running\n");
+      h.openSession("s1");
+      h.transcript("s1", { ...toolUse("t1", "Bash", { command: "pnpm build" }), timestamp: new Date().toISOString() });
+      await stuckThenBlip(h, () => {
+        const body = readFileSync(join(tasks, "x.output"));
+        rmSync(tasks, { recursive: true });
+        return () => {
+          mkdirSync(tasks);
+          writeFileSync(join(tasks, "x.output"), body);
+        };
+      });
+    });
+
+    it("still lets real growth after the failure clear the mark", async () => {
+      const h = harness();
+      h.openSession("s1");
+      h.busy("s1");
+      await h.checks(3);
+      h.judgeResults[0]({ stuck: true, reason: "r", action: "a" });
+      await flush();
+      const file = join(h.dir, "s1.jsonl");
+      const body = readFileSync(file);
+      rmSync(file);
+      await h.beat();
+      writeFileSync(file, body);
+      h.transcript("s1", toolResult("s1-t"));
+      await h.beat();
+      expect(h.monitor.get("s1")?.stuck).toBe(false);
+    });
+
+    it("still counts a finished background task's file leaving the sum as a change", async () => {
+      const h = harness();
+      const out = join(h.dir, "bg.output");
+      writeFileSync(out, "start\n");
+      h.openSession("s1");
+      h.transcript("s1", toolUse("t1", "Bash", { command: "git push", run_in_background: true }), backgroundStarted("t1", "b1", out), endTurn());
+      await h.beat();
+      const at = h.monitor.get("s1")!.lastOutputAt;
+      h.transcript("s1", backgroundDone("b1"));
+      await h.beat();
+      expect(h.monitor.get("s1")!.lastOutputAt).toBeGreaterThan(at!);
+    });
   });
 
   it("ignores dismissing an unknown session", () => {

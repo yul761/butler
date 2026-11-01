@@ -89,7 +89,8 @@ function utf8Tail(text: string, maxBytes: number): string {
   return buf.subarray(start).toString("utf8");
 }
 
-const fileSize = (file: string): Promise<number> => stat(file).then((s) => s.size, () => 0);
+/** 读不了返回 null。 */
+const fileSize = (file: string): Promise<number | null> => stat(file).then((s) => s.size, () => null);
 
 /** 给 Claude 看的一句话：现在在做什么。 */
 function describeActivity(a: SessionActivity): string {
@@ -113,6 +114,8 @@ interface Tracked {
   transcriptSize: number;
   /** 所有相关输出文件的大小之和。 */
   outputSize: number;
+  /** 上一次看到的每个输出文件的大小：一时读不了时沿用，不能当成文件变了。 */
+  fileSizes: Map<string, number>;
   outputText: string;
   lastOutputAt: number | null;
   eligible: boolean;
@@ -231,7 +234,7 @@ export class ActivityMonitor {
 
   private track(id: string, termId: string): Tracked {
     const t: Tracked = {
-      id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, outputText: "", lastOutputAt: null,
+      id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, fileSizes: new Map(), outputText: "", lastOutputAt: null,
       eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null,
     };
     this.tracked.set(id, t);
@@ -264,8 +267,13 @@ export class ActivityMonitor {
     let shown = files.at(-1) ?? null;
     if (tool?.name === "Bash") shown = dir ? await foregroundOutputFile(dir, tool.startedAt, new Set(files.map((f) => basename(f)))) : null;
     const tail = shown ? await readOutputTail(shown) : null;
-    let size = tail?.size ?? 0;
-    for (const f of files) if (f !== shown) size += await fileSize(f);
+    const sizes = new Map<string, number>();
+    if (shown) sizes.set(shown, tail?.size ?? t.fileSizes.get(shown) ?? 0);
+    for (const f of files) if (f !== shown) sizes.set(f, (await fileSize(f)) ?? t.fileSizes.get(f) ?? 0);
+    // 前台命令还在跑却找不到它的输出文件：tasks 目录一时读不了，上次的大小继续算。
+    if (tool?.name === "Bash" && !shown) for (const [f, n] of t.fileSizes) if (!sizes.has(f)) sizes.set(f, n);
+    t.fileSizes = sizes;
+    const size = [...sizes.values()].reduce((sum, n) => sum + n, 0);
     return { size, lines: tail?.lines ?? [], text: tail ? utf8Tail(tail.text, JUDGE_OUTPUT_BYTES) : "" };
   }
 
@@ -333,8 +341,10 @@ export class ActivityMonitor {
     } finally {
       this.judging.delete(t.id);
     }
-    // 判断期间 session 退出、/clear、有了新输出或者转去等人确认：这个结论已经过时了。
-    if (this.stopped || this.tracked.get(t.id) !== t || t.lastOutputAt !== quietSince || !t.eligible) return;
+    // 判断期间 session 退出或者 /clear：这个结论和现在的 session 无关了。
+    if (this.stopped || this.tracked.get(t.id) !== t) return;
+    // 有了新输出或者转去等人确认：“卡住”已经过时，“没卡住”照样算数，10 分钟静默期要记下。
+    if (verdict?.stuck && (t.lastOutputAt !== quietSince || !t.eligible)) return;
     const result = this.tracker.judged(t.id, verdict, this.d.now());
     if (this.syncVerdict(t)) this.d.notify();
     if (result === "newly_stuck" && verdict) this.d.onStuck({ sessionId: t.id, ...scope, reason: verdict.reason });

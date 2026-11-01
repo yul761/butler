@@ -1,4 +1,4 @@
-import { appendFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
@@ -63,6 +63,25 @@ describe("TranscriptTail", () => {
     const r = await new TranscriptTail(join(tempDir(), "none.jsonl")).read();
     expect(r.size).toBe(0);
     expect(backgroundTasks(r.state)).toEqual([]);
+  });
+
+  it("keeps the last size and state when a later read fails, and resumes after", async () => {
+    const f = join(tempDir(), "t.jsonl");
+    const body = use("a") + "\n";
+    writeFileSync(f, body);
+    const tail = new TranscriptTail(f);
+    const first = await tail.read();
+    expect(first.size).toBe(Buffer.byteLength(body));
+
+    rmSync(f);
+    const failed = await tail.read();
+    expect(failed.size).toBe(first.size);
+    expect(currentTool(failed.state)?.id).toBe("a");
+
+    writeFileSync(f, body + result("a") + "\n");
+    const back = await tail.read();
+    expect(back.size).toBeGreaterThan(first.size);
+    expect(currentTool(back.state)).toBeNull();
   });
 
   it("handles a multi-byte character split across reads", async () => {

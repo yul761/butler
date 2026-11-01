@@ -30,6 +30,9 @@ export function newTranscriptState(): TranscriptState {
   return { running: new Map(), background: new Map(), turnOpen: false };
 }
 
+/** 用户按 Esc 打断时 Claude Code 写的文字（也有 for tool use 的说法）；它后面不会再有结束这一轮的记录。 */
+const INTERRUPT_PREFIX = "[Request interrupted by user";
+
 const PUSH_RE = /\bgit\s+push\b/;
 const CI_RE = /\bgh\s+run\s+watch\b|\bgh\s+pr\s+checks\b.*--watch/;
 const TEST_RE = /\b(?:(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?test|vitest|jest|pytest|go\s+test|cargo\s+test|playwright\s+test|mocha)\b/;
@@ -101,10 +104,11 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
         }
       }
     }
-    if (extractUserText(entry) !== null) {
-      // 新的用户消息：上一轮没拿到结果的前台工具不会再有结果了
+    const text = extractUserText(entry);
+    if (text !== null) {
+      // 新的用户消息或者打断：上一轮没拿到结果的前台工具不会再有结果了
       s.running.clear();
-      s.turnOpen = true;
+      s.turnOpen = !text.startsWith(INTERRUPT_PREFIX);
     }
     return;
   }

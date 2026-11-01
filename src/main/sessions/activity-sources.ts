@@ -14,6 +14,8 @@ export class TranscriptTail {
   /** 正在丢弃一行的剩余部分（从文件中间开始读时，第一段是半行）。 */
   private skipping = false;
   private state: TranscriptState = newTranscriptState();
+  /** 上一次读成功时的文件大小：一时读不了不能当成文件变了。 */
+  private lastSize = 0;
 
   constructor(
     private readonly file: string,
@@ -32,16 +34,18 @@ export class TranscriptTail {
           this.skipping = this.offset > 0;
         }
         const len = size - this.offset;
-        if (len <= 0) return { state: this.state, size };
-        const buf = Buffer.alloc(len);
-        const { bytesRead } = await fh.read(buf, 0, len, this.offset);
-        this.consume(buf.subarray(0, bytesRead));
+        if (len > 0) {
+          const buf = Buffer.alloc(len);
+          const { bytesRead } = await fh.read(buf, 0, len, this.offset);
+          this.consume(buf.subarray(0, bytesRead));
+        }
+        this.lastSize = size;
         return { state: this.state, size };
       } finally {
         await fh.close();
       }
     } catch {
-      return { state: this.state, size: 0 };
+      return { state: this.state, size: this.lastSize };
     }
   }
 

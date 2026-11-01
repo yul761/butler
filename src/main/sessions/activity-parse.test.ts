@@ -131,6 +131,53 @@ describe("applyEntry across turns", () => {
     expect(currentTool(s)).toBeNull();
   });
 
+  describe("an interrupt (Esc)", () => {
+    const say = (content: unknown) => ({ type: "user", message: { role: "user", content } });
+
+    it.each([
+      ["a plain interrupt", "[Request interrupted by user]"],
+      ["an interrupt during a tool", "[Request interrupted by user for tool use]"],
+      ["text blocks", [{ type: "text", text: "[Request interrupted by user]" }]],
+    ])("ends the turn and clears running tools: %s", (_name, content) => {
+      const s = newTranscriptState();
+      applyEntry(s, toolUse("t1", "Bash", { command: "sleep 99" }));
+      expect(s.turnOpen).toBe(true);
+      applyEntry(s, say(content));
+      expect(s.turnOpen).toBe(false);
+      expect(currentTool(s)).toBeNull();
+    });
+
+    it("leaves background tasks alone", () => {
+      const s = newTranscriptState();
+      applyEntry(s, toolUse("t1", "Bash", { command: "pnpm dev" }));
+      applyEntry(s, toolResult("t1", "Output is being written to: /tmp/x/abc.output", { toolUseResult: { backgroundTaskId: "abc" } }));
+      applyEntry(s, say("[Request interrupted by user]"));
+      expect(s.turnOpen).toBe(false);
+      expect(backgroundTasks(s).map((b) => b.taskId)).toEqual(["abc"]);
+    });
+
+    it("handles the tool result in the same entry", () => {
+      const s = newTranscriptState();
+      applyEntry(s, toolUse("t1", "Bash", { command: "pnpm dev" }));
+      applyEntry(s, say([{ type: "tool_result", tool_use_id: "t1", content: "stopped" }, { type: "text", text: "[Request interrupted by user for tool use]" }]));
+      expect(s.turnOpen).toBe(false);
+      expect(currentTool(s)).toBeNull();
+    });
+
+    it("opens the next turn on the next real message", () => {
+      const s = newTranscriptState();
+      applyEntry(s, say("[Request interrupted by user]"));
+      applyEntry(s, say("try again"));
+      expect(s.turnOpen).toBe(true);
+    });
+
+    it("does not mistake a message that only mentions it", () => {
+      const s = newTranscriptState();
+      applyEntry(s, say("why did I see [Request interrupted by user] just now?"));
+      expect(s.turnOpen).toBe(true);
+    });
+  });
+
   it("opens the turn on any assistant entry that is not end_turn (task notification restart)", () => {
     const s = newTranscriptState();
     applyEntry(s, { type: "assistant", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } });
