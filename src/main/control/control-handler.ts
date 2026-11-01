@@ -30,7 +30,7 @@ export interface ControlHandlerDeps {
   epicRows?: (epicId: number) => EpicFeatureRow[];
   /** 重新渲染 epic 的 handoff（排进记忆的同步队列，不等它）。 */
   syncEpic?: (epicId: number) => void;
-  /** 后台给 epic 下有新活动的 feature 生成汇总（FeatureSummaryRunner.refreshEpic），不等它。 */
+  /** 后台给 epic 下有新活动的 feature 生成汇总（FeatureSummaryRunner.refreshEpic），不等它。这时打开总控，规划会等它（SessionService.sendBrief）。 */
   refreshEpic?: (epicId: number, exceptFeatureId?: number) => void;
   /** session 此刻的活动；监控还没看到它时为 null。 */
   activity?: (sessionId: string) => SessionActivity | null;

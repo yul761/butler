@@ -5,7 +5,7 @@ import { EpicsRepo } from "../db/epics-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { memDb } from "../test-utils";
-import { epicFeatureRows, EPIC_HANDOFF_MAX_CHARS, newestSummaryFirst, renderEpicHandoff, rowSections, type LiveFeature } from "./epic-info";
+import { carriedEpicPlan, epicFeatureRows, EPIC_HANDOFF_MAX_CHARS, EPIC_PLAN_MAX_CHARS, newestSummaryFirst, renderEpicHandoff, rowSections, type LiveFeature } from "./epic-info";
 
 const summary = (over: Partial<FeatureHandoff> = {}): FeatureHandoff => ({
   summary: "接口联调完了", blockers: [], next_steps: [], decisions: [], open_questions: [], ...over,
@@ -150,5 +150,78 @@ describe("renderEpicHandoff", () => {
     expect(out).toContain("## F10\n");
     expect(out).not.toContain("## F1\n");
     expect(renderEpicHandoff([row(1, { summary: "y".repeat(20000) })], "en").length).toBe(EPIC_HANDOFF_MAX_CHARS);
+  });
+});
+
+describe("the epic session's own handoff inside the rendered text", () => {
+  const INTRO = { zh: renderEpicHandoff([row(1)], "zh").split("\n\n")[0], en: renderEpicHandoff([row(1)], "en").split("\n\n")[0] };
+
+  it("puts the plan after the intro and before the features", () => {
+    const out = renderEpicHandoff([row(1)], "zh", "先做支付");
+    expect(out.startsWith(INTRO.zh)).toBe(true);
+    expect(out.indexOf("先做支付")).toBeLessThan(out.indexOf("## F1\n"));
+  });
+
+  it("takes a handoff that is not Butler's as the plan, whole", () => {
+    expect(carriedEpicPlan("  先做支付\nNext steps:\n- 拆 ticket\n")).toBe("先做支付\nNext steps:\n- 拆 ticket");
+  });
+
+  it("finds nothing to carry in Butler's own text, in either language", () => {
+    for (const lang of ["zh", "en"] as const) {
+      expect(carriedEpicPlan(renderEpicHandoff([row(1)], lang))).toBeNull();
+      // 移出最后一个 feature 之后的正文也是 Butler 自己的。
+      expect(carriedEpicPlan(renderEpicHandoff([], lang))).toBeNull();
+    }
+  });
+
+  it("reads the plan back out of a rendered text, in either language, without the features", () => {
+    for (const lang of ["zh", "en"] as const) expect(carriedEpicPlan(renderEpicHandoff([row(1)], lang, "先做支付\n\n## 看起来像 feature"))).toBe("先做支付\n\n## 看起来像 feature");
+  });
+
+  it("does not grow or nest when it is carried again and again", () => {
+    const once = renderEpicHandoff([row(1)], "zh", "先做支付");
+    let out = once;
+    for (let i = 0; i < 3; i++) out = renderEpicHandoff([row(1)], "zh", carriedEpicPlan(out));
+    expect(out).toBe(once);
+    // 换语言也一样：只换 intro。
+    expect(carriedEpicPlan(renderEpicHandoff([row(1)], "en", carriedEpicPlan(once)))).toBe("先做支付");
+  });
+
+  it("keeps a plan with no features left, and ignores a blank one", () => {
+    const out = renderEpicHandoff([], "en", "first the payments");
+    expect(out).toContain("no features");
+    expect(carriedEpicPlan(out)).toBe("first the payments");
+    expect(renderEpicHandoff([row(1)], "en", "  ")).toBe(renderEpicHandoff([row(1)], "en"));
+  });
+
+  it("is not fooled by a plan that quotes the whole rendered text, or by a feature that looks like the section", () => {
+    const quoted = `我抄了一份：\n${renderEpicHandoff([row(1)], "zh", "旧规划")}\n后面还有字`;
+    const out = renderEpicHandoff([row(1)], "zh", carriedEpicPlan(quoted));
+    expect(carriedEpicPlan(out)).toContain("后面还有字");
+    expect(renderEpicHandoff([row(1)], "zh", carriedEpicPlan(out))).toBe(out);
+    const tag = renderEpicHandoff([], "zh", "x").split("\n")[2];
+    expect(carriedEpicPlan(renderEpicHandoff([row(1, { summary: tag })], "zh"))).toBeNull();
+  });
+
+  it("stays inside the cap: a long plan is cut, leaves room for the newest feature, and stops shrinking", () => {
+    const rows = Array.from({ length: 10 }, (_, i) => row(i + 1, { summary: `${"x".repeat(1500)}#${i + 1}` }));
+    const out = renderEpicHandoff(rows, "en", "p".repeat(20000));
+    expect(out.length).toBeLessThanOrEqual(EPIC_HANDOFF_MAX_CHARS);
+    expect(out).toContain("## F10\n");
+    expect(out).not.toContain("## F9\n");
+    const plan = carriedEpicPlan(out)!;
+    expect(plan.length).toBeLessThanOrEqual(EPIC_PLAN_MAX_CHARS);
+    expect(plan.startsWith("ppp")).toBe(true);
+    expect(renderEpicHandoff(rows, "en", plan)).toBe(out);
+  });
+
+  it("drops the oldest features to make room for a plan that fits", () => {
+    const rows = Array.from({ length: 4 }, (_, i) => row(i + 1, { summary: `${"x".repeat(1500)}#${i + 1}` }));
+    expect(renderEpicHandoff(rows, "en")).toContain("## F1\n");
+    const out = renderEpicHandoff(rows, "en", "p".repeat(5000));
+    expect(out).toContain("p".repeat(5000));
+    expect(out).toContain("## F4\n");
+    expect(out).not.toContain("## F1\n");
+    expect(out.length).toBeLessThanOrEqual(EPIC_HANDOFF_MAX_CHARS);
   });
 });

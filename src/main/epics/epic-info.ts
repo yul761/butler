@@ -28,6 +28,11 @@ export interface EpicInfoDeps {
 /** epic handoff 最多放多少个 feature、总长最多多少字符。 */
 export const EPIC_HANDOFF_FEATURES = 10;
 export const EPIC_HANDOFF_MAX_CHARS = 8000;
+/**
+ * epic session 自己的交接（见 carriedEpicPlan）最多占多少字符。规划优先：它只有这一份，feature 的情况随时能从数据库重新渲染；
+ * 但总要给最新的 feature 留位置，否则 ticket 的 session recall 时什么进度都读不到。
+ */
+export const EPIC_PLAN_MAX_CHARS = 6000;
 
 /** 最近有汇总的在前，没有汇总的排最后。 */
 export const newestSummaryFirst = (a: EpicFeatureRow, b: EpicFeatureRow): number => (b.summaryAt ?? -1) - (a.summaryAt ?? -1);
@@ -102,22 +107,58 @@ const TEXT = {
   },
 };
 
+/** 第一行永远是这句话：它是 Butler 自己写的 handoff 的标记。切过语言时 scope 里可能还是另一种语言写的，两种都认。 */
+const INTROS = [TEXT.zh.intro, TEXT.en.intro];
+/** 带着走的那一段的分隔符，不分语言。一定紧跟在 intro 后面，后面的 feature 怎么写都不会被认成这一段。 */
+const PLAN_OPEN = "<epic-session-handoff>";
+const PLAN_CLOSE = "</epic-session-handoff>";
+
+/**
+ * 从 scope 当前生效的 handoff 里取出要带着走的 epic session 交接（规划）：StateCore 每个 scope 只有一份生效的 handoff，
+ * butler-epic 的 handoff 工具和 syncEpic 写的是同一份，不带上的话下一次同步就把规划冲掉了。
+ * 不是 Butler 写的：整份都是（一份新的交接就这样换掉之前带着的）。Butler 写的：只取分隔符里的那一段，没有就是 null，feature 的情况不算。
+ */
+export function carriedEpicPlan(active: string): string | null {
+  const text = active.trim();
+  const intro = INTROS.find((i) => text.startsWith(i));
+  if (intro === undefined) return text || null;
+  const rest = text.slice(intro.length).trimStart();
+  const end = rest.indexOf(PLAN_CLOSE);
+  if (!rest.startsWith(PLAN_OPEN) || end < 0) return null;
+  return rest.slice(PLAN_OPEN.length, end).trim() || null;
+}
+
+/**
+ * 分隔符包起来的一段；空白的规划没有这一段。正文里的分隔符去掉（epic session 可能把 recall 读到的内容抄进自己的交接），
+ * 这样第一个结束符一定是这一段的结尾，carriedEpicPlan 读回来的和写进去的一字不差，不嵌套、不变长。
+ * 超长时截断尾部，截断后就不再超长，之后的同步不会再动它。
+ */
+function planSection(plan: string): string | null {
+  const body = plan.replaceAll(PLAN_OPEN, "").replaceAll(PLAN_CLOSE, "").trim();
+  if (!body) return null;
+  const kept = body.length > EPIC_PLAN_MAX_CHARS ? `${body.slice(0, EPIC_PLAN_MAX_CHARS - 1).trimEnd()}…` : body;
+  return `${PLAN_OPEN}\n${kept}\n${PLAN_CLOSE}`;
+}
+
 function renderRow(r: EpicFeatureRow, t: (typeof TEXT)["zh"]): string {
   // 只标已归档：进行中、卡住、等回话这些状态变了不会重新同步，写进去会过时。
   return [r.status === "archived" ? `## ${r.name} (${t.status.archived})` : `## ${r.name}`, r.summary ?? t.noSummary, ...rowSections(r, t)].join("\n");
 }
 
 /**
- * 渲染成给 `epic:<id>` scope 的一份 handoff 正文：最近有汇总的 10 个 feature（含已归档，标明），总长不超过 8000 字符，
- * 超出时先丢最旧的 feature。一个 feature 都放不下时截断第一个。
+ * 渲染成给 `epic:<id>` scope 的一份 handoff 正文：开头是 intro，然后是带着走的 epic session 交接（plan，见 carriedEpicPlan），
+ * 再是最近有汇总的 10 个 feature（含已归档，标明）。总长不超过 8000 字符，超出时先丢最旧的 feature。一个 feature 都放不下时截断第一个：
+ * plan 有自己的上限，截不到它和它的结束符。
  */
-export function renderEpicHandoff(rows: EpicFeatureRow[], lang: Lang): string {
+export function renderEpicHandoff(rows: EpicFeatureRow[], lang: Lang, plan: string | null = null): string {
   const t = TEXT[lang];
-  if (rows.length === 0) return t.none;
+  const section = plan === null ? null : planSection(plan);
+  const head = section === null ? [t.intro] : [t.intro, section];
+  if (rows.length === 0) return [...head, t.none].join("\n\n");
   // 最近的在前（稳定排序：时间相同时保持传入的顺序）。
   const recent = [...rows].sort(newestSummaryFirst).slice(0, EPIC_HANDOFF_FEATURES);
   const blocks = recent.map((r) => renderRow(r, t));
-  const join = (n: number) => [t.intro, ...blocks.slice(0, n)].join("\n\n");
+  const join = (n: number) => [...head, ...blocks.slice(0, n)].join("\n\n");
   let n = blocks.length;
   while (n > 1 && join(n).length > EPIC_HANDOFF_MAX_CHARS) n--;
   // 去掉首尾空白：StateCore 存 handoff 时会去掉，不去的话下次同步比对不出“一样”。

@@ -436,6 +436,8 @@ async function bootstrap(): Promise<void> {
     activity: (id) => activityMonitor.get(id),
     sessionName: (id) => sessionRegistryName(paths.claudeSessions, id),
     submit: submitTask,
+    // featureRunner 在后面才建好：回调里才用到。
+    epicRefresh: (id) => featureRunner.epicRefresh(id),
     ready: () => healthReady,
     transcriptExists: (id) => transcriptState(paths.claudeProjects, id) !== "absent",
     transcriptState: (id) => transcriptState(paths.claudeProjects, id),

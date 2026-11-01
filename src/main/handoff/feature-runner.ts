@@ -51,19 +51,26 @@ export const ARCHIVE_SUMMARY_LIMIT_MS = 2 * 60_000;
 /** feature 汇总（设计文档 2026-10-28）：晚间批量、手动"立即更新"，以及总控 /handoff 之后给子 ticket 补跑。 */
 export class FeatureSummaryRunner {
   private readonly inflight = new Map<number, Promise<FeatureHandoffOutcome>>();
+  /** 每个 epic 正在跑的 refreshEpic（永不 reject）。 */
+  private readonly epicRefreshes = new Map<number, Promise<void>>();
 
   constructor(private readonly d: FeatureRunnerDeps) {}
 
   /**
-   * 有新活动的未归档 feature：总控 session 的 transcript 晚于最新有效汇总，
-   * 或者下面有 ticket 在汇总覆盖到的时间之后捕获了新的 handoff（不算 refresh 和 degraded）。
+   * 晚间批量的名单：有新活动的未归档 feature，规则见 hasNewActivity。
+   * 不用 staleFeature：晚间 ticket 批次已经先跑过，跑成的 ticket 走 hasNewActivity 的第二条；还留在 ticket 名单里的是这一晚没跑成的，
+   * 而 runNightly 不补跑子 ticket，算进来只会没有新材料地重新生成，失败多少晚就花多少晚的额度。
+   * session 全被隐藏的 ticket 甚至永远留在名单里（晚间是 no_session），它的 feature 就每晚都生成一次。
    */
   candidates(): number[] {
-    return this.d.features.list().map((f) => f.id).filter((id) => this.staleFeature(id));
+    return this.d.features.list().map((f) => f.id).filter((id) => this.hasNewActivity(id));
   }
 
-  /** 最新有效汇总之后有没有新活动（规则见 candidates）。 */
-  staleFeature(id: number): boolean {
+  /**
+   * 最新有效汇总之后有没有已经捕获到的新活动：总控 session 的 transcript 晚于汇总，
+   * 或者下面有 ticket 在汇总覆盖到的时间之后捕获了新的 handoff（不算 refresh 和 degraded）。
+   */
+  private hasNewActivity(id: number): boolean {
     const last = this.d.featureHandoffs.latestValid(id);
     const coordinator = Math.max(0, ...this.d.sessions.listFeatureCoordinators(id).map((s) => this.d.transcriptMtime(s.id) ?? 0));
     if (coordinator > (last?.createdAt ?? 0)) return true;
@@ -72,12 +79,34 @@ export class FeatureSummaryRunner {
   }
 
   /**
+   * 现在生成汇总值不值：有新活动，或者下面有 ticket 的 session 用过、还没跑 handoff（用户只在 ticket 里干活、没跑 /handoff）。
+   * 走 runManual，会先给这些 ticket 跑 handoff，汇总读得到今天的进度。
+   */
+  staleFeature(id: number): boolean {
+    if (this.hasNewActivity(id)) return true;
+    const due = new Set(this.d.ticketRunner.candidates());
+    return this.d.tickets.listByFeature(id).some((t) => due.has(t.key));
+  }
+
+  /**
    * epic session 建 feature 时（设计文档 2026-11-01“交接要新鲜”）：后台给 epic 下未归档、有新活动的 feature 各生成一份汇总。
-   * 调用方不等它；失败只记日志。exceptFeatureId：刚建的 feature，不用看。
+   * 调用方不等它；失败只记日志。exceptFeatureId：刚建的 feature，不用看。等它用 epicRefresh。
    */
   refreshEpic(epicId: number, exceptFeatureId?: number): void {
     const run = async () => this.summarizeStale(this.d.features.listByEpic(epicId).map((f) => f.id).filter((id) => id !== exceptFeatureId));
-    run().catch((e: unknown) => this.d.log?.(`refreshing the summaries of epic ${epicId} failed`, e));
+    const running = run().catch((e: unknown) => this.d.log?.(`refreshing the summaries of epic ${epicId} failed`, e));
+    // 上一次还没跑完时连上它：等的人要等到这个 epic 所有正在跑的都结束。
+    const all: Promise<void> = Promise.all([this.epicRefreshes.get(epicId), running])
+      .then(() => undefined)
+      .finally(() => {
+        if (this.epicRefreshes.get(epicId) === all) this.epicRefreshes.delete(epicId);
+      });
+    this.epicRefreshes.set(epicId, all);
+  }
+
+  /** 这个 epic 正在跑的 refreshEpic，永不 reject；没有在跑时是 undefined。 */
+  epicRefresh(epicId: number): Promise<void> | undefined {
+    return this.epicRefreshes.get(epicId);
   }
 
   /**

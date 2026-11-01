@@ -87,6 +87,8 @@ export interface SessionServiceDeps {
   sessionName?: (sessionId: string) => Promise<string | null>;
   /** 把任务作为第一条消息交给新 session（修复 session 的任务、feature 的规划）。 */
   submit?: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout">;
+  /** 这个 epic 正在后台生成的汇总（FeatureSummaryRunner.epicRefresh），永不 reject；没有在跑时是 undefined。 */
+  epicRefresh?: (epicId: number) => Promise<void> | undefined;
   /** 目录是否存在（测试注入；默认读真实磁盘）。 */
   dirExists?: (dir: string) => boolean;
   /** 要打开这个 ticket 的 session 时调用：把它的记忆补同步一次（排进记忆的同步队列，不等它）。 */
@@ -95,6 +97,9 @@ export interface SessionServiceDeps {
   launchFs?: Pick<LaunchDeps, "read" | "exists">;
   log?: (msg: string, err?: unknown) => void;
 }
+
+/** 规划最多等后台汇总这么久：总控开着，用户在等，过了这个时间就用已有的内容发。 */
+export const BRIEF_REFRESH_WAIT_MS = 60_000;
 
 type OpenFailure = Extract<OpenSessionResult, { ok: false }>;
 
@@ -346,16 +351,23 @@ export class SessionService {
   /**
    * 第一次开总控时把规划和其他 feature 的情况发过去（设计文档 2026-11-01“规划到开工的流程”）。只有新开的总控走到这里：
    * 恢复的、运行中的总控和修复 session 都不走。投递成功才记 briefSentAt，失败时下一个新总控重发。不等投递，出错只记日志，session 已经开了。
+   * epic 的汇总正在后台生成时（create_feature 刚触发）先等它，最多 BRIEF_REFRESH_WAIT_MS，这样其他 feature 的进度是新的。
+   * 从等待开始就算在投递中，这期间再开总控不会多发。等完按现状判断：feature 可能已经归档或移走了。
    */
   private async sendBrief(feature: Feature, termId: string): Promise<void> {
-    const { id, brief, epicId } = feature;
-    if (!this.d.submit || !brief?.trim() || feature.briefSentAt !== null || epicId === null || this.briefsSending.has(id)) return;
+    const { id } = feature;
+    if (!this.d.submit || !feature.brief?.trim() || feature.briefSentAt !== null || feature.epicId === null || this.briefsSending.has(id)) return;
     this.briefsSending.add(id);
     try {
-      const epic = this.d.epics?.get(epicId);
+      const inflight = this.d.epicRefresh?.(feature.epicId);
+      if (inflight) await this.refreshedOrTimedOut(inflight, id);
+      const current = this.d.features?.get(id);
+      const brief = current?.brief;
+      if (!current || current.archivedAt !== null || current.epicId === null || !brief?.trim()) return;
+      const epic = this.d.epics?.get(current.epicId);
       if (!epic || epic.archivedAt !== null) return;
       const others = this.epicFeatureRows(epic.id).filter((r) => r.id !== id);
-      const res = await this.d.submit(termId, epicBriefMessage({ feature: feature.name, epic: epic.name, brief, others }, currentLang()));
+      const res = await this.d.submit(termId, epicBriefMessage({ feature: current.name, epic: epic.name, brief, others }, currentLang()));
       if (res === "sent") this.d.features?.setBriefSentAt(id, this.d.now());
       else this.d.log?.(`brief of feature ${id} not delivered (${res})`);
     } catch (e) {
@@ -363,6 +375,18 @@ export class SessionService {
     } finally {
       this.briefsSending.delete(id);
     }
+  }
+
+  private async refreshedOrTimedOut(inflight: Promise<void>, featureId: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        this.d.log?.(`brief of feature ${featureId}: summaries still running after ${BRIEF_REFRESH_WAIT_MS} ms, sending without them`);
+        resolve();
+      }, BRIEF_REFRESH_WAIT_MS);
+    });
+    await Promise.race([inflight, limit]);
+    clearTimeout(timer);
   }
 
   /**
@@ -534,10 +558,13 @@ export class SessionService {
   }
 
   /**
-   * 终端退出时调用。Butler 新建、但用户一句话都没说就退出的 session 没有 transcript，也不能 --resume；
-   * 留着只会多出一个空的“新对话”按钮，删掉。
+   * 终端退出时调用。进程没了就不可能在等用户：× 直接杀进程，可能没有 SessionEnd hook，等待标记要在这里清掉，不然一路传到 feature 和 epic。
+   * 清的是 head（/clear 之后 termId 还是启动时的 id）；结束不算活动，lastActivityAt 不动。
+   * Butler 新建、但用户一句话都没说就退出的 session 没有 transcript，也不能 --resume；留着只会多出一个空的“新对话”按钮，删掉。
    */
   handleExit(termId: string): void {
+    const head = this.d.sessions.head(termId);
+    if (head?.waitingForInput) this.d.sessions.setWaiting(head.id, false, head.lastActivityAt ?? 0);
     const s = this.d.sessions.get(termId);
     if (s) this.pruneIfEmpty(s);
   }

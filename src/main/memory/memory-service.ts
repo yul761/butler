@@ -3,7 +3,7 @@ import {
   epicScope, featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, ticketScope, WORKSPACE_SCOPE, type ButlerNote, type MemoryView, type WhyEntry,
 } from "../../shared/memory";
 import type { EpicFeatureRow } from "../../shared/types";
-import { renderEpicHandoff } from "../epics/epic-info";
+import { carriedEpicPlan, EPIC_PLAN_MAX_CHARS, renderEpicHandoff } from "../epics/epic-info";
 import { currentLang } from "../i18n";
 import type { EpicsRepo } from "../db/epics-repo";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
@@ -274,13 +274,17 @@ export class MemoryService {
   /**
    * 渲染好的正文和 StateCore 里当前的一字不差时不再写（retryAfter 传 0：只比正文）。
    * 一个 feature 都没有时也要写（移出最后一个 feature 后，旧内容不能留着）。
+   * 当前生效的 handoff 里有 epic session 自己的交接时带上它（见 carriedEpicPlan），否则规划就被这次同步冲掉了。
    */
   private async syncEpicNow(epicId: number): Promise<void> {
     if (!this.d.enabled() || !this.d.epics.get(epicId)) return;
     const key = epicScope(epicId);
-    const text = renderEpicHandoff(this.d.epicRows(epicId), currentLang());
+    const rows = this.d.epicRows(epicId);
     await withScope({ dataDir: this.d.dataDir, scope: key }, async (s) => {
-      await s.handoff({ summary: text, nextSteps: [], openQuestions: [] }, 0);
+      const active = await s.activeHandoff();
+      const plan = active && carriedEpicPlan(active.content);
+      if (plan && plan.length > EPIC_PLAN_MAX_CHARS) this.log(`memory ${key}: the epic session's handoff was cut from ${plan.length} to ${EPIC_PLAN_MAX_CHARS} characters`);
+      await s.handoff({ summary: renderEpicHandoff(rows, currentLang(), plan), nextSteps: [], openQuestions: [] }, 0);
     });
     try {
       this.d.onSynced?.(key);

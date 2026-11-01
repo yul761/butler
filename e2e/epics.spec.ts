@@ -507,6 +507,84 @@ test("a stuck ticket marks its feature and epic", async ({ makeSandbox, launch }
   await expect(sidebarFeatures).toHaveText(["logs"]);
 });
 
+/** × 杀掉进程：没有 SessionEnd hook，等待标记只能由退出事件清掉。ticket → feature → epic 三层都要消失，epic 页这一行也不再等回话。 */
+test("ending a waiting session with × clears the mark at every level", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const shop = join(s.dir, "shop");
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  makeGitRepo(join(shop, "frontend"));
+  makeGitRepo(join(shop, "backend"));
+  const { epicRow, featureRow, sidebarTicket, row, goToEpic } = places(page);
+
+  await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "checkout-revamp", shop);
+  await create(page, page.locator(".epic-page .epic-features").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "logs", shop);
+  await newTicket(page, "DMS-1", "frontend", "backend");
+  await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+  await typeLine(page, "hello");
+  await expect.poll(() => terminalText(page)).toContain("收到：hello");
+  await expect(sidebarTicket("DMS-1").locator(".badge")).toBeVisible();
+  await expect(featureRow("logs").locator(".badge")).toBeVisible();
+  await expect(epicRow.locator(".badge")).toBeVisible();
+
+  const end = page.getByTitle(S.endSession, { exact: true });
+  await end.click();
+  await end.click();
+  await expect(end).toHaveCount(0);
+  await expect(sidebarTicket("DMS-1").locator(".badge")).toHaveCount(0);
+  await expect(featureRow("logs").locator(".badge")).toHaveCount(0);
+  await expect(epicRow.locator(".badge")).toHaveCount(0);
+  await goToEpic();
+  await expect(row("logs").locator(".status")).toContainText(S.epicStatus.active);
+  await expect(row("logs").locator(".badge")).toHaveCount(0);
+  expect(dbRows(s, "SELECT COUNT(*) AS n FROM sessions WHERE waiting_for_input = 1")).toEqual([{ n: 0 }]);
+});
+
+/**
+ * 设计文档 2026-11-01“规划到开工的流程”第 5 步：create_feature 在后台更新其他 feature 的汇总，紧接着开总控时，规划等这份汇总出来再发。
+ * 这里走的是 index.ts 真实的接线：假 claude 的汇总卡在 gate 上，打开总控不受影响，放开之后第一条消息里就有最新进度。
+ */
+test("the plan waits for the summaries create_feature started", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const gate = join(s.dir, "hold-summaries");
+  s.env = { FAKE_CLAUDE_SUMMARY_GATE: gate };
+  const shop = join(s.dir, "shop");
+  const payWorkspace = join(s.dir, "shop-features", "pay");
+  const epicWorkspace = join(s.dir, "shop-epics", "epic-a");
+  const nextWorkspace = join(s.dir, "shop-features", "next");
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  makeGitRepo(join(shop, "frontend"));
+  makeGitRepo(join(shop, "backend"));
+  const { row, goToEpic } = places(page);
+
+  await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "epic-a", shop);
+  await create(page, page.locator(".epic-page .epic-features").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "pay", shop);
+  await newCoordinator(page, s, payWorkspace);
+  await typeLine(page, "note");
+  await expect.poll(() => terminalText(page)).toContain("收到：note");
+  await exitSession(page);
+  await goToEpic();
+  await page.locator(".epic-page").getByRole("button", { name: `+ ${S.newEpicSession}`, exact: true }).click();
+  await expect.poll(() => sessionsIn(s, epicWorkspace)).toHaveLength(1);
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+
+  writeFileSync(gate, "");
+  expect((await callTool(page, s, "create_feature", { name: "next", repos: ["backend"], brief: "下一步。" })).error).toBe(false);
+  await expect.poll(() => fakeLog(s)).toContain(" summary held");
+  await row("next").locator(".progress").click();
+  await expect(page.getByRole("heading", { name: "next", exact: true })).toBeVisible();
+  const coordinator = await newCoordinator(page, s, nextWorkspace);
+  await page.waitForTimeout(DELIVERY_MS);
+  expect(plansIn(s, nextWorkspace, PLAN_HEAD.zh)).toBe(0);
+
+  rmSync(gate);
+  await expect.poll(() => messagesIn(s, nextWorkspace)[coordinator]?.[0] ?? "").toContain(`进度：${FRESH_SUMMARY}`);
+  expect(plansIn(s, nextWorkspace, PLAN_HEAD.zh)).toBe(1);
+  await expect.poll(() => dbRows(s, "SELECT brief_sent_at IS NOT NULL AS sent FROM features WHERE name = 'next'")).toEqual([{ sent: 1 }]);
+});
+
 /**
  * 设计文档 2026-11-01“交接要新鲜”：归档 epic 下的 feature 之前先生成汇总，要等真的 headless 跑完。FAKE_CLAUDE_SUMMARY_GATE 让假 claude 一直等，
  * 所以这段时间想看多久看多久：按钮显示进行中；走开的人留在原处（看的页面跟着归档了才回简报）；等待期间开了终端，归档被拒，错误显示在顶部。

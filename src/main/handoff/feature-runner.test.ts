@@ -328,7 +328,7 @@ describe("FeatureSummaryRunner.runManual", () => {
 });
 
 describe("FeatureSummaryRunner.staleFeature", () => {
-  it("uses the same rule as candidates", () => {
+  it("counts the same activity as candidates", () => {
     const { runner, featureId, features, addCoordinator, addSummary, addTicket, ticketHandoff } = setup();
     const quiet = features.insert({ name: "没动静", workspaceDir: "/ws/quiet", createdAt: 2 });
     expect(runner.staleFeature(featureId)).toBe(false);
@@ -341,6 +341,29 @@ describe("FeatureSummaryRunner.staleFeature", () => {
     expect(runner.staleFeature(featureId)).toBe(true);
     expect(runner.staleFeature(quiet)).toBe(false);
     expect(runner.candidates()).toEqual([featureId]);
+  });
+
+  it("also counts a ticket session that was used without a /handoff", () => {
+    const { runner, featureId, features, addSummary, addTicket, setTicketCandidates } = setup();
+    addSummary(200);
+    addTicket("A-1");
+    addTicket("X-9", {}, features.insert({ name: "别的", workspaceDir: "/ws/other", createdAt: 1 }));
+    expect(runner.staleFeature(featureId)).toBe(false);
+    setTicketCandidates(["X-9"]);
+    expect(runner.staleFeature(featureId)).toBe(false);
+    setTicketCandidates(["A-1"]);
+    expect(runner.staleFeature(featureId)).toBe(true);
+  });
+
+  it("leaves the nightly batch alone: the ticket batch runs first, and a ticket it could not capture adds nothing new to summarize", async () => {
+    const { runner, featureId, calls, addSummary, addTicket, setTicketCandidates } = setup();
+    addSummary(200);
+    addTicket("A-1");
+    setTicketCandidates(["A-1"]);
+    expect(runner.staleFeature(featureId)).toBe(true);
+    expect(runner.candidates()).toEqual([]);
+    expect(await runner.runNightly()).toEqual({ status: "ok", outcomes: [] });
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -410,6 +433,90 @@ describe("FeatureSummaryRunner.refreshEpic", () => {
     });
     expect(() => runner.refreshEpic(epicId)).not.toThrow();
     await vi.waitFor(() => expect(logs.join("\n")).toContain(`epic ${epicId}`));
+  });
+
+  it("summarizes a feature whose only news is in a ticket session, with that ticket's handoff in the prompt", async () => {
+    const { runner, epicId, featureId, calls, childRuns, featureHandoffs, addTicket, addSummary, ticketHandoff, setTicketCandidates, onChild } = epicSetup();
+    addSummary(40);
+    addTicket("A-1");
+    setTicketCandidates(["A-1"]);
+    onChild((key) => ticketHandoff(key, 45, { next_steps: ["今天做到一半的退款接口"] }));
+    runner.refreshEpic(epicId);
+    await vi.waitFor(() => expect(featureHandoffs.latest(featureId)?.trigger).toBe("manual"));
+    expect(childRuns).toEqual(["A-1"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].prompt).toContain("今天做到一半的退款接口");
+  });
+
+  describe("the run in flight, per epic", () => {
+    it("is there while the summaries run, ends after they are stored, and is gone afterwards", async () => {
+      const { runner, epicId, featureId, addCoordinator, setRespond, featureHandoffs, calls } = epicSetup();
+      addCoordinator("c-1", 30, 1, featureId);
+      let finish: () => void = () => undefined;
+      const gate = new Promise<void>((r) => (finish = r));
+      setRespond(async () => {
+        await gate;
+        return ok(summary());
+      });
+      expect(runner.epicRefresh(epicId)).toBeUndefined();
+      runner.refreshEpic(epicId);
+      const inflight = runner.epicRefresh(epicId);
+      expect(inflight).toBeInstanceOf(Promise);
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      finish();
+      await inflight;
+      expect(featureHandoffs.latest(featureId)).not.toBeNull();
+      expect(runner.epicRefresh(epicId)).toBeUndefined();
+    });
+
+    it("is kept per epic", async () => {
+      const { runner, db, epicId, featureId, features, addCoordinator, setRespond } = epicSetup();
+      const otherEpic = new EpicsRepo(db).insert({ name: "另一个", workspaceDir: "/e2", createdAt: 1 });
+      features.insert({ name: "别的", workspaceDir: "/ws/o", createdAt: 2, epicId: otherEpic });
+      addCoordinator("c-1", 30, 1, featureId);
+      setRespond(() => new Promise(() => undefined));
+      runner.refreshEpic(epicId);
+      expect(runner.epicRefresh(epicId)).toBeDefined();
+      expect(runner.epicRefresh(otherEpic)).toBeUndefined();
+    });
+
+    it("covers a second refresh that starts while the first still runs", async () => {
+      const { runner, epicId, featureId, add, addCoordinator, setRespond, featureHandoffs, calls } = epicSetup();
+      const second = add("第二个");
+      addCoordinator("c-1", 30, 1, featureId);
+      const release: (() => void)[] = [];
+      setRespond(async () => {
+        await new Promise<void>((r) => release.push(r));
+        return ok(summary());
+      });
+      // 第一次跳过 second，第二次跳过 featureId：两次各跑一个。
+      runner.refreshEpic(epicId, second);
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      addCoordinator("c-2", 30, 1, second);
+      runner.refreshEpic(epicId, featureId);
+      const inflight = runner.epicRefresh(epicId)!;
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
+      let done = false;
+      void inflight.then(() => (done = true));
+      release[1]();
+      await vi.waitFor(() => expect(featureHandoffs.latest(second)).not.toBeNull());
+      await new Promise((r) => setTimeout(r, 0));
+      expect(done).toBe(false);
+      expect(runner.epicRefresh(epicId)).toBe(inflight);
+      release[0]();
+      await inflight;
+      expect(runner.epicRefresh(epicId)).toBeUndefined();
+    });
+
+    it("resolves when a run fails", async () => {
+      const { runner, epicId, features } = epicSetup();
+      vi.spyOn(features, "listByEpic").mockImplementation(() => {
+        throw new Error("db gone");
+      });
+      runner.refreshEpic(epicId);
+      await expect(runner.epicRefresh(epicId)).resolves.toBeUndefined();
+      expect(runner.epicRefresh(epicId)).toBeUndefined();
+    });
   });
 });
 
@@ -520,6 +627,22 @@ describe("archiving a feature with the real runner", () => {
     addSummary(40);
     await svc.archive(featureId, closed);
     expect(calls).toHaveLength(0);
+    expect(features.get(featureId)?.archivedAt).toBe(60_000);
+  });
+
+  it("runs the ticket session's handoff and summarizes before archiving when only a ticket session was used", async () => {
+    const { svc, features, featureId, featureHandoffs, childRuns, calls, addSummary, ticketHandoff, setTicketCandidates, onChild } = archiveSetup();
+    addSummary(40);
+    setTicketCandidates(["A-1"]);
+    onChild((key) => {
+      expect(features.get(featureId)?.archivedAt).toBeNull();
+      ticketHandoff(key, 45, { next_steps: ["今天做到一半的退款接口"] });
+    });
+    await svc.archive(featureId, closed);
+    expect(childRuns).toEqual(["A-1"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].prompt).toContain("今天做到一半的退款接口");
+    expect(featureHandoffs.latest(featureId)?.trigger).toBe("manual");
     expect(features.get(featureId)?.archivedAt).toBe(60_000);
   });
 

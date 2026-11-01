@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
 import { MAX_RUNNING_PER_FEATURE } from "../../shared/control";
 import { EpicsRepo } from "../db/epics-repo";
@@ -16,7 +16,7 @@ import { TicketService } from "../tickets/ticket-service";
 import { setLang } from "../i18n";
 import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import { PtyManager } from "./pty-manager";
-import { SessionService } from "./session-service";
+import { BRIEF_REFRESH_WAIT_MS, SessionService } from "./session-service";
 
 /** 一个 feature：frontend 的 ticket 用 worktree（在工作区里），backend 的 ticket 用分支模式（在工作区外面）。 */
 async function setup() {
@@ -53,9 +53,11 @@ async function setup() {
   const claude: { path: string | null } = { path: "/bin/claude" };
   const logs: string[] = [];
   let submit: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout"> = async (termId, message) => (submitted.push([termId, message]), "sent");
+  let epicRefresh: (epicId: number) => Promise<void> | undefined = () => undefined;
   let n = 0;
   const service = new SessionService({
     tickets, sessions, settings, ticketService, pty, features, epics, featureHandoffs, handoffs,
+    epicRefresh: (id) => epicRefresh(id),
     activity: (id) => activities.get(id) ?? null,
     sessionName: async (id) => (namesAsked.push(id), names.get(id) ?? null),
     submit: (termId, message) => submit(termId, message),
@@ -76,6 +78,7 @@ async function setup() {
   return {
     service, featureService, ticketService, featureHandoffs, handoffs, sessions, tickets, features, epics, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, featureMcpAsked, epicMcpAsked, settingsAsked,
     activities, names, namesAsked, submitted, claude, logs, setSubmit: (f: typeof submit) => (submit = f),
+    setEpicRefresh: (f: typeof epicRefresh) => (epicRefresh = f),
   };
 }
 
@@ -585,6 +588,107 @@ describe("the first message of a feature in an epic (design 2026-11-01)", () => 
     await delivered();
     expect(features.get(fid)?.briefSentAt).toBeNull();
     expect(logs.join("\n")).toContain(`feature ${fid}`);
+  });
+
+  describe("while a refresh of the epic is running (create_feature just started one)", () => {
+    afterEach(() => vi.useRealTimers());
+
+    /** 假时钟；epic 下一个还在开发的 feature，它的汇总正在后台生成。finish：写下这份汇总，结束那次刷新。 */
+    async function refreshSetup() {
+      const ctx = await briefSetup();
+      const sibling = ctx.features.insert({ name: "退款", workspaceDir: "/w/refunds", createdAt: 1, epicId: ctx.epicId });
+      let end: () => void = () => undefined;
+      const inflight = new Promise<void>((r) => (end = r));
+      const asked: number[] = [];
+      ctx.setEpicRefresh((id) => (asked.push(id), inflight));
+      vi.useFakeTimers();
+      const finish = async () => {
+        ctx.featureHandoffs.insert({ featureId: sibling, sessionId: null, trigger: "manual", createdAt: 700, rawText: null, payload: { summary: "退款今天做完了", blockers: [], next_steps: [], decisions: [], open_questions: [] } });
+        end();
+        await vi.advanceTimersByTimeAsync(0);
+      };
+      return { ...ctx, sibling, finish, asked };
+    }
+
+    it("opens at once, and the message waits for the summary and carries it", async () => {
+      const { service, features, submitted, epicId, fid, finish, asked } = await refreshSetup();
+      const r = await service.openFeature({ featureId: fid });
+      expect(r).toMatchObject({ ok: true, alreadyOpen: false });
+      expect(asked).toEqual([epicId]);
+      await vi.advanceTimersByTimeAsync(BRIEF_REFRESH_WAIT_MS - 1);
+      expect(submitted).toEqual([]);
+      expect(features.get(fid)?.briefSentAt).toBeNull();
+      await finish();
+      expect(submitted).toHaveLength(1);
+      expect(submitted[0][1]).toContain("退款今天做完了");
+      expect(features.get(fid)?.briefSentAt).toBe(1000);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("gives up after 60 seconds: sends what there is, once, and logs it", async () => {
+      const { service, features, submitted, logs, fid, finish } = await refreshSetup();
+      await service.openFeature({ featureId: fid });
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(submitted).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(submitted).toHaveLength(1);
+      expect(submitted[0][1]).toContain("先做微信支付");
+      expect(submitted[0][1]).not.toContain("退款今天做完了");
+      expect(features.get(fid)?.briefSentAt).toBe(1000);
+      expect(logs.join("\n")).toContain(`feature ${fid}`);
+      // 汇总这时才到：不再发第二条。
+      await finish();
+      await service.openFeature({ featureId: fid });
+      await vi.advanceTimersByTimeAsync(BRIEF_REFRESH_WAIT_MS);
+      expect(submitted).toHaveLength(1);
+    });
+
+    it("sends once when a second coordinator opens during the wait, to the first one", async () => {
+      const { service, submitted, fid, finish } = await refreshSetup();
+      const first = await service.openFeature({ featureId: fid });
+      await vi.advanceTimersByTimeAsync(1000);
+      await service.openFeature({ featureId: fid });
+      await finish();
+      expect(submitted.map(([id]) => id)).toEqual([(first as { termId: string }).termId]);
+    });
+
+    it("does not record a delivery that failed after the wait, and the next new coordinator gets it", async () => {
+      const { service, features, submitted, setSubmit, setEpicRefresh, fid, finish } = await refreshSetup();
+      setSubmit(async () => "exited");
+      await service.openFeature({ featureId: fid });
+      await finish();
+      expect(features.get(fid)?.briefSentAt).toBeNull();
+      setSubmit(async (termId, message) => (submitted.push([termId, message]), "sent"));
+      setEpicRefresh(() => undefined);
+      await service.openFeature({ featureId: fid });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(submitted).toHaveLength(1);
+      expect(features.get(fid)?.briefSentAt).toBe(1000);
+    });
+
+    it("goes by what is true after the wait: an archived feature or one moved out gets nothing", async () => {
+      for (const leave of [
+        (c: Awaited<ReturnType<typeof refreshSetup>>) => c.features.archive(c.fid, 5),
+        (c: Awaited<ReturnType<typeof refreshSetup>>) => c.features.setEpic(c.fid, null),
+        (c: Awaited<ReturnType<typeof refreshSetup>>) => c.epics.archive(c.epicId, 5),
+      ]) {
+        vi.useRealTimers();
+        const ctx = await refreshSetup();
+        await ctx.service.openFeature({ featureId: ctx.fid });
+        leave(ctx);
+        await ctx.finish();
+        expect(ctx.submitted).toEqual([]);
+        expect(ctx.features.get(ctx.fid)?.briefSentAt).toBeNull();
+      }
+    });
+
+    it("changes nothing without a refresh: the message goes out at once and no timer is left", async () => {
+      const { service, submitted, setEpicRefresh, fid } = await refreshSetup();
+      setEpicRefresh(() => undefined);
+      await service.openFeature({ featureId: fid });
+      expect(submitted).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 });
 

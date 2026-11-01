@@ -15,6 +15,8 @@ import { TicketsRepo } from "../db/tickets-repo";
 import { chatReply, gatewayHarness, type GatewayHarness } from "../gateway/testing";
 import { epicScope, featureScope } from "../../shared/memory";
 import type { EpicFeatureRow } from "../../shared/types";
+import { EPIC_HANDOFF_MAX_CHARS, EPIC_PLAN_MAX_CHARS } from "../epics/epic-info";
+import { setLang } from "../i18n";
 import { insertTicket, memDb, tempDir } from "../test-utils";
 import { handoffSummary, MemoryService, nightlyDistill } from "./memory-service";
 import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
@@ -248,6 +250,103 @@ describe("MemoryService.syncEpic (design 2026-11-01, epic handoff)", () => {
     wrapScopes((sc) => sc === scope, (s) => ({ ...s, handoff: () => Promise.reject(new Error("boom")) }));
     await expect(t.memory.syncEpic(1)).resolves.toBeUndefined();
     expect(t.logs.some((l) => l.includes("boom"))).toBe(true);
+  });
+
+  describe("the epic session's own handoff (butler-epic's handoff tool writes to the same scope)", () => {
+    /** 像 epic session 里挂的记忆 MCP 那样写一份交接。 */
+    const sessionWrites = (t: ReturnType<typeof setup>, h: { summary: string; nextSteps?: string[]; openQuestions?: string[] }) =>
+      withScope({ dataDir: t.dataDir, scope }, (s) => s.handoff({ nextSteps: [], openQuestions: [], ...h }));
+    const count = (text: string, part: string) => text.split(part).length - 1;
+
+    afterEach(() => setLang("zh"));
+
+    it("carries it through later syncs without nesting, and a newer one replaces it", async () => {
+      const t = setup();
+      t.setEpicRows([row()]);
+      await t.memory.syncEpic(1);
+      await sessionWrites(t, { summary: "规划：先做支付，再做退款", nextSteps: ["拆 ticket"], openQuestions: ["退款放哪个 feature"] });
+
+      await t.memory.syncEpic(1);
+      const carried = await handoffOf(t);
+      const content = carried?.content ?? "";
+      for (const part of ["规划：先做支付，再做退款", "- 拆 ticket", "- 退款放哪个 feature", "## 支付\n接口联调完了"]) expect(count(content, part), part).toBe(1);
+      expect(content.indexOf("规划：先做支付")).toBeLessThan(content.indexOf("## 支付"));
+
+      // 第二次同步：一字不差，不多写一个版本。
+      await t.memory.syncEpic(1);
+      expect(await handoffOf(t)).toEqual(carried);
+
+      // feature 变了：换的只是 feature 那部分。
+      t.setEpicRows([row({ summary: "支付上线了" })]);
+      await t.memory.syncEpic(1);
+      const moved = (await handoffOf(t))?.content ?? "";
+      expect(count(moved, "规划：先做支付，再做退款")).toBe(1);
+      expect(moved).toContain("支付上线了");
+      expect(moved).not.toContain("接口联调完了");
+      expect(moved.length).toBeLessThan(content.length + 10);
+
+      // 新的交接换掉带着的那份，之后带的是新的。
+      await sessionWrites(t, { summary: "规划：改成先做退款" });
+      await t.memory.syncEpic(1);
+      await t.memory.syncEpic(1);
+      const newer = (await handoffOf(t))?.content ?? "";
+      expect(count(newer, "规划：改成先做退款")).toBe(1);
+      expect(newer).not.toContain("规划：先做支付");
+      expect(newer).not.toContain("拆 ticket");
+      expect(newer).toContain("支付上线了");
+    });
+
+    it("keeps it inside the cap with a very long plan, and stops writing once it is cut", async () => {
+      const t = setup();
+      t.setEpicRows([row()]);
+      await sessionWrites(t, { summary: "长".repeat(20000) });
+      await t.memory.syncEpic(1);
+      const first = await handoffOf(t);
+      expect(first?.content.length).toBeLessThanOrEqual(EPIC_HANDOFF_MAX_CHARS);
+      expect(first?.content).toContain("长".repeat(EPIC_PLAN_MAX_CHARS - 1));
+      expect(first?.content).toContain("## 支付");
+      await t.memory.syncEpic(1);
+      expect(await handoffOf(t)).toEqual(first);
+      // 只有真的丢了字的那一次记日志。
+      expect(t.logs.filter((l) => l.includes("cut"))).toHaveLength(1);
+    });
+
+    it("survives the last feature leaving, and does not take Butler's empty text for a plan", async () => {
+      const t = setup();
+      t.setEpicRows([]);
+      await t.memory.syncEpic(1);
+      t.setEpicRows([row()]);
+      await t.memory.syncEpic(1);
+      const none = "这个 epic 下还没有 feature";
+      expect((await handoffOf(t))?.content).not.toContain(none);
+
+      await sessionWrites(t, { summary: "规划：先做支付" });
+      t.setEpicRows([]);
+      await t.memory.syncEpic(1);
+      expect((await handoffOf(t))?.content).toContain("规划：先做支付");
+      t.setEpicRows([row()]);
+      await t.memory.syncEpic(1);
+      const back = (await handoffOf(t))?.content ?? "";
+      expect(count(back, "规划：先做支付")).toBe(1);
+      expect(back).not.toContain(none);
+    });
+
+    it("does not take Butler's own text for a plan after the language changed", async () => {
+      const t = setup();
+      t.setEpicRows([row()]);
+      await t.memory.syncEpic(1);
+      setLang("en");
+      await t.memory.syncEpic(1);
+      const en = (await handoffOf(t))?.content ?? "";
+      expect(en).not.toContain("Butler 自动整理");
+      await sessionWrites(t, { summary: "plan: payments first" });
+      await t.memory.syncEpic(1);
+      setLang("zh");
+      await t.memory.syncEpic(1);
+      const zh = (await handoffOf(t))?.content ?? "";
+      expect(zh).not.toContain("compiled by Butler");
+      expect(count(zh, "plan: payments first")).toBe(1);
+    });
   });
 });
 
