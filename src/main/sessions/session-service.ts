@@ -656,7 +656,9 @@ export class SessionService {
     let waiting = false;
     const rows = epicFeatureRows(epicId, {
       features: this.d.features,
-      latestValid: (id, stamp) => {
+      latestValid: (id, base) => {
+        // 已归档的 feature 归档之后还可能有汇总入库（晚到的运行）：stamp 再带上最新一条汇总的 id（按索引取一行，很便宜）。
+        const stamp = base.startsWith("a") ? `${base}:${fh.latest(id)?.id ?? 0}` : base;
         const hit = this.validSummaries.get(id);
         if (hit && hit.stamp === stamp) return hit.rec;
         const rec = fh.latestValid(id);

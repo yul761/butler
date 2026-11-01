@@ -365,13 +365,19 @@ describe("epic sessions (design 2026-11-01)", () => {
     for (let i = 0; i < 3; i++) expect(service.epicViews()[0].features[0]).toMatchObject({ status: "archived", summary: "老的" });
     expect(valid).toHaveBeenCalledTimes(1);
     expect(views).not.toHaveBeenCalled();
+    // 归档之后才入库的有效汇总（晚到的运行）：马上看得到，之后不再重复查。
+    featureHandoffs.insert({ featureId: feature.id, sessionId: null, trigger: "manual", createdAt: 8, payload: { ...sum, summary: "晚到的" }, rawText: null });
+    for (let i = 0; i < 3; i++) expect(service.epicViews()[0].features[0]).toMatchObject({ status: "archived", summary: "晚到的", summaryAt: 8 });
+    expect(valid).toHaveBeenCalledTimes(2);
+    expect(service.epicFeatureRows(epicId)[0]).toMatchObject({ summary: "晚到的" });
+    expect(valid).toHaveBeenCalledTimes(2);
     // 恢复后有了新汇总：重新查一次，之后不再查。
     features.unarchive(feature.id);
-    featureHandoffs.insert({ featureId: feature.id, sessionId: null, trigger: "manual", createdAt: 6, payload: { ...sum, summary: "新的" }, rawText: null });
+    featureHandoffs.insert({ featureId: feature.id, sessionId: null, trigger: "manual", createdAt: 10, payload: { ...sum, summary: "新的" }, rawText: null });
     valid.mockClear();
     for (let i = 0; i < 3; i++) expect(service.epicViews()[0].features[0]).toMatchObject({ summary: "新的" });
     expect(valid).toHaveBeenCalledTimes(0);
-    featureHandoffs.insert({ featureId: feature.id, sessionId: null, trigger: "manual", createdAt: 7, payload: null, rawText: "bad" });
+    featureHandoffs.insert({ featureId: feature.id, sessionId: null, trigger: "manual", createdAt: 11, payload: null, rawText: "bad" });
     for (let i = 0; i < 3; i++) expect(service.epicViews()[0].features[0]).toMatchObject({ summary: "新的" });
     expect(valid).toHaveBeenCalledTimes(1);
   });
