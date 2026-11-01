@@ -6,6 +6,7 @@ import {
 } from "../../shared/types";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { BriefService } from "../brief/brief-service";
+import type { EpicService } from "../epics/epic-service";
 import type { AuditRepo } from "../db/audit-repo";
 import type { MemoryService } from "../memory/memory-service";
 import { JOB_MORNING, JOB_NIGHTLY, type JobsRepo } from "../db/jobs-repo";
@@ -34,8 +35,8 @@ import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, openFeatureArg, openFixArg,
-  repoIdArg, sessionIdArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
+  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, moveTargetArg,
+  openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
 } from "./validate";
 import { M } from "../strings";
 
@@ -43,6 +44,7 @@ export interface IpcDeps {
   tickets: TicketsRepo;
   ticketService: TicketService;
   featureService: FeatureService;
+  epicService: EpicService;
   sessionService: SessionService;
   activity: Pick<ActivityMonitor, "dismiss">;
   pty: PtyManager;
@@ -177,9 +179,10 @@ export function registerIpc(d: IpcDeps): void {
     d.featureService.removeRepo(repoIdArg(featureRepoId));
     d.notify();
   });
-  handle(IPC.featuresArchive, (raw: unknown) => {
+  handle(IPC.featuresArchive, async (raw: unknown) => {
     const id = featureIdArg(raw);
-    d.featureService.archive(id, { terminalsOpen: d.sessionService.hasFeatureTerminal(id) });
+    // epic 下的 feature 要先生成汇总，最多等两分钟。
+    await d.featureService.archive(id, { terminalsOpen: () => d.sessionService.hasFeatureTerminal(id) });
     d.onFeatureArchived?.(id);
     d.notify();
   });
@@ -193,6 +196,52 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
     return r;
   });
+  handle(IPC.featuresMove, (id: unknown, target: unknown) => {
+    d.epicService.moveFeature(featureIdArg(id), moveTargetArg(target));
+    d.notify();
+  });
+
+  // epic（设计文档 2026-11-01）
+  handle(IPC.epicsList, () => d.sessionService.epicViews());
+  handle(IPC.epicsCreate, async (raw: unknown) => {
+    const e = await d.epicService.create(createEpicArg(raw));
+    d.notify();
+    return e;
+  });
+  handle(IPC.epicsRename, (id: unknown, name: unknown) => {
+    const e = d.epicService.rename(epicIdArg(id), epicNameArg(name));
+    d.notify();
+    return e;
+  });
+  handle(IPC.epicsAddRepo, async (id: unknown, path: unknown) => {
+    const r = await d.epicService.addRepo(epicIdArg(id), dirArg(path));
+    d.notify();
+    return r;
+  });
+  handle(IPC.epicsRemoveRepo, (epicRepoId: unknown) => {
+    d.epicService.removeRepo(repoIdArg(epicRepoId));
+    d.notify();
+  });
+  handle(IPC.epicsArchive, async (raw: unknown) => {
+    const id = epicIdArg(raw);
+    // 下面的 feature 要先生成汇总，最多等两分钟。终端查两次（等之前、等之后），所以传函数。
+    await d.epicService.archive(id, {
+      terminalsOpen: () => d.sessionService.hasEpicTerminal(id),
+      featureTerminalsOpen: (featureId) => d.sessionService.hasFeatureTerminal(featureId),
+    });
+    d.notify();
+  });
+  handle(IPC.epicsArchived, () => d.epicService.listArchived());
+  handle(IPC.epicsUnarchive, (raw: unknown) => {
+    d.epicService.unarchive(epicIdArg(raw));
+    d.notify();
+  });
+  handle(IPC.epicsOpenSession, async (raw: unknown) => {
+    const r = await d.sessionService.openEpic(openEpicArg(raw));
+    d.notify();
+    return r;
+  });
+
   handle(IPC.reposScan, (raw: unknown) => scanRepos(dirArg(raw)));
 
   handle(IPC.sessionsOpen, async (req: OpenSessionRequest) => {

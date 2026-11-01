@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import type { BriefKind } from "../../shared/brief";
-import type { FeatureView, OpenSessionRequest, TicketView } from "../../shared/types";
+import type { EpicView, FeatureView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
 import { setCollapsed } from "./local-prefs";
+import { routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
 import { BriefPage } from "./components/BriefPage";
+import { EpicPage } from "./components/EpicPage";
 import { FeaturePage, type StuckReveal } from "./components/FeaturePage";
+import { NewEpicDialog } from "./components/NewEpicDialog";
 import { NewFeatureDialog } from "./components/NewFeatureDialog";
 import { NewTicketDialog } from "./components/NewTicketDialog";
 import { SettingsPage } from "./components/SettingsPage";
@@ -25,6 +28,7 @@ export type Route =
   | { page: "home"; kind?: BriefKind }
   | { page: "ticket"; key: string }
   | { page: "feature"; id: number }
+  | { page: "epic"; id: number }
   | { page: "unclaimed" }
   | { page: "archived" }
   | { page: "settings" }
@@ -35,7 +39,9 @@ export function App() {
   /** 单独的 ticket；feature 下的 ticket 在 features[].tickets 里。 */
   const [tickets, setTickets] = useState<TicketView[]>([]);
   const [features, setFeatures] = useState<FeatureView[]>([]);
+  const [epics, setEpics] = useState<EpicView[]>([]);
   const [showNewFeature, setShowNewFeature] = useState(false);
+  const [showNewEpic, setShowNewEpic] = useState(false);
   const [unclaimedCount, setUnclaimedCount] = useState(0);
   const [keepAwake, setKeepAwake] = useState(false);
   const [showNew, setShowNew] = useState(false);
@@ -78,10 +84,11 @@ export function App() {
   const refresh = useCallback(async (): Promise<boolean> => {
     const seq = ++refreshSeq.current;
     try {
-      const [t, f, u] = await Promise.all([api.listTickets(), api.listFeatures(), api.unclaimed()]);
+      const [t, f, e, u] = await Promise.all([api.listTickets(), api.listFeatures(), api.listEpics(), api.unclaimed()]);
       if (seq !== refreshSeq.current) return true;
       setTickets(t);
       setFeatures(f);
+      setEpics(e);
       setUnclaimedCount(u.length);
       return true;
     } catch (e) {
@@ -118,6 +125,12 @@ export function App() {
   /** 所有未归档的 ticket，含 feature 下的（简报、认领、ticket 页都按 ticket 号找）。 */
   const allTickets = [...tickets, ...features.flatMap((f) => f.tickets)];
 
+  // 归档可能要等两分钟：等完时用户在看别的页面就留在那里；在看的页面跟着归档了（feature、ticket 跟着 epic）就回简报，不留空白。
+  // 只在列表变了时检查，不看 route：跳转时列表可能还没刷新（刷新被新的一次顶掉时），这时对象并没有消失。layout effect：空白不画出来。
+  useLayoutEffect(() => {
+    if (routeGone(route, allTickets, features, epics)) setRoute({ page: "home" });
+  }, [tickets, features, epics]);
+
   const openTicket = (key: string, req?: OpenSessionRequest) => {
     // 简报里的 ticket 可能已经归档：不跳到空白页，也不留下悬空的打开请求。
     if (!allTickets.some((t) => t.key === key)) {
@@ -136,14 +149,17 @@ export function App() {
 
   const current = route.page === "ticket" ? (allTickets.find((t) => t.key === route.key) ?? null) : null;
   const currentFeature = route.page === "feature" ? (features.find((f) => f.id === route.id) ?? null) : null;
+  const currentEpic = route.page === "epic" ? (epics.find((e) => e.id === route.id) ?? null) : null;
   const featureOf = (t: TicketView) => (t.featureId === null ? null : (features.find((f) => f.id === t.featureId) ?? null));
   const goTicket = (key: string) => void refresh().then(() => setRoute({ page: "ticket", key }));
+  const goFeature = (id: number) => void refresh().then(() => setRoute({ page: "feature", id }));
+  const goEpic = (id: number) => void refresh().then(() => setRoute({ page: "epic", id }));
 
   return (
     <div className="app">
       <Sidebar
-        tickets={tickets} features={features} unclaimedCount={unclaimedCount} route={route} onNavigate={setRoute}
-        onNew={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)}
+        tickets={tickets} features={features} epics={epics} unclaimedCount={unclaimedCount} route={route} onNavigate={setRoute}
+        onNew={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)} onNewEpic={() => setShowNewEpic(true)}
         keepAwake={keepAwake} onKeepAwake={(on) => api.setKeepAwake(on).then(setKeepAwake, reportError)}
       />
       <main className="main">
@@ -178,15 +194,23 @@ export function App() {
               <FeaturePage
                 key={currentFeature.id}
                 feature={currentFeature}
+                epics={epics}
                 onOpenTicket={(key) => setRoute({ page: "ticket", key })}
-                onArchived={() => setRoute({ page: "home" })}
                 onTicketCreated={goTicket}
                 reveal={stuckReveal}
                 onRevealed={() => setStuckReveal(null)}
               />
             )}
+            {route.page === "epic" && currentEpic && (
+              <EpicPage
+                key={currentEpic.id}
+                epic={currentEpic}
+                onOpenFeature={(id) => setRoute({ page: "feature", id })}
+                onFeatureCreated={goFeature}
+              />
+            )}
             {route.page === "unclaimed" && <UnclaimedPage tickets={allTickets} />}
-            {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={(id) => void refresh().then(() => setRoute({ page: "feature", id }))} />}
+            {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} onEpicRestored={goEpic} />}
             {route.page === "settings" && <SettingsPage onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "audit" && <AuditPage />}
           </>
@@ -197,7 +221,16 @@ export function App() {
           onClose={() => setShowNewFeature(false)}
           onCreated={(id) => {
             setShowNewFeature(false);
-            void refresh().then(() => setRoute({ page: "feature", id }));
+            goFeature(id);
+          }}
+        />
+      )}
+      {showNewEpic && (
+        <NewEpicDialog
+          onClose={() => setShowNewEpic(false)}
+          onCreated={(id) => {
+            setShowNewEpic(false);
+            goEpic(id);
           }}
         />
       )}

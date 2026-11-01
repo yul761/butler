@@ -193,7 +193,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await typeLine(page, "/handoff");
-  await expect.poll(() => terminalText(page)).toContain("butler-handoff");
+  await expect.poll(() => terminalText(page)).toContain("next_steps");
 
   // 2. DMS-2：session 里有新的对话（之后算“有活动”），还没有 handoff。
   await ticketPage("DMS-2");
@@ -477,8 +477,19 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await resizeWindow(app, 900, 600);
   await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeLessThanOrEqual(600);
   await expectTerminalsKeepHalf(page);
-  await fix.scrollIntoViewIfNeeded();
-  await expect(fix).toBeInViewport();
+  // 窗口矮、面板比概览区还高时，点红点后按钮（含“收起”）也要都看得到，不靠测试自己去滚。
+  const collapse = panel.getByRole("button", { name: S.collapse, exact: true });
+  await dot.click();
+  await expect(panel).toHaveCount(0);
+  await dot.click();
+  await expect(panel).toBeVisible();
+  const heights = await page.evaluate(() => ({
+    panel: document.querySelector(".stuck-panel")!.getBoundingClientRect().height,
+    overview: document.querySelector(".feature-overview")!.clientHeight,
+  }));
+  expect(heights.panel, JSON.stringify(heights)).toBeGreaterThan(heights.overview);
+  await expect(fix).toBeInViewport({ ratio: 1 });
+  await expect(collapse).toBeInViewport({ ratio: 1 });
   await resizeWindow(app, 1280, 820);
   await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeGreaterThan(600);
 
@@ -549,7 +560,7 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   expect(task).toContain(`目录：${worktree}`);
   expect(task).toContain(`原因：${VERDICT_REASON.zh}`);
   expect(task).toContain("step 10 of 8");
-  await expect.poll(() => terminalText(page)).toContain("收到：Butler 开了这个 session");
+  await expect.poll(() => terminalText(page)).toContain("step 10 of 8");
 
   // 15. 不存成总控；原 session 不受影响，还是卡住的。同一个卡住的 session 再点一次，回到同一个修复 session。
   expect(dbRows(s, "SELECT coordinator, fixes_session AS fixes, ticket_key AS ticket FROM sessions WHERE id = ?", fixId)).toEqual([{ coordinator: 0, fixes: stuckId, ticket: null }]);

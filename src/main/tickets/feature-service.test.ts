@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, realpathSync, renameSync, symlinkSync } from "node:fs";
 import { join, sep } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { EpicsRepo } from "../db/epics-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
@@ -122,9 +123,9 @@ describe("FeatureService", () => {
     await ticketService.create({ key: "DMS-2", featureId: f.id });
     tick(2000);
     tickets.archive("DMS-2", 2000);
-    expect(await code(() => featureService.archive(f.id, { terminalsOpen: true }))).toBe("sessions_open");
+    expect(await code(() => featureService.archive(f.id, { terminalsOpen: () => true }))).toBe("sessions_open");
     tick(3000);
-    featureService.archive(f.id, { terminalsOpen: false });
+    await featureService.archive(f.id, { terminalsOpen: () => false });
     expect(archived).toEqual(["DMS-1"]);
     expect(tickets.get("DMS-1")?.archivedAt).toBe(3000);
     featureService.unarchive(f.id);
@@ -171,7 +172,124 @@ describe("tickets in a feature", () => {
     const s = shop();
     expect(await code(ticketService.create({ key: "DMS-1", featureId: 99 }))).toBe("not_found");
     const f = await featureService.create({ name: "x", repoPaths: [s.frontend] });
-    featureService.archive(f.id, { terminalsOpen: false });
+    await featureService.archive(f.id, { terminalsOpen: () => false });
     expect(await code(ticketService.create({ key: "DMS-2", featureId: f.id }))).toBe("archived");
+  });
+});
+
+describe("FeatureService.archive summarizes first (design 2026-11-01)", () => {
+  function archiveSetup(refresh: (ids: number[]) => Promise<void>) {
+    const db = memDb();
+    const features = new FeaturesRepo(db);
+    const tickets = new TicketsRepo(db);
+    const epicId = new EpicsRepo(db).insert({ name: "e", workspaceDir: "/e", createdAt: 1 });
+    const logs: string[] = [];
+    const svc = new FeatureService({ features, tickets, now: () => 5, refreshBeforeArchive: refresh, log: (m) => logs.push(m) });
+    const inside = features.insert({ name: "in", workspaceDir: "/w/in", createdAt: 1, epicId });
+    const outside = features.insert({ name: "out", workspaceDir: "/w/out", createdAt: 1 });
+    tickets.insert({ key: "A-1", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null, featureId: inside });
+    return { svc, features, tickets, inside, outside, logs };
+  }
+  const closed = { terminalsOpen: () => false };
+
+  it("summarizes before anything is archived", async () => {
+    const seen: (number | null | undefined)[] = [];
+    const t = archiveSetup(async () => {
+      seen.push(t.features.get(t.inside)?.archivedAt, t.tickets.get("A-1")?.archivedAt);
+    });
+    await t.svc.archive(t.inside, closed);
+    expect(seen).toEqual([null, null]);
+    expect(t.features.get(t.inside)?.archivedAt).toBe(5);
+    expect(t.tickets.get("A-1")?.archivedAt).toBe(5);
+  });
+
+  it("archives anyway when the summary fails, and logs it", async () => {
+    const t = archiveSetup(() => Promise.reject(new Error("boom")));
+    await t.svc.archive(t.inside, closed);
+    expect(t.features.get(t.inside)?.archivedAt).toBe(5);
+    expect(t.logs.join("\n")).toContain(`${t.inside}`);
+  });
+
+  it("runs one summary and one archive for two clicks", async () => {
+    let runs = 0;
+    let finish: () => void = () => undefined;
+    const t = archiveSetup(() => {
+      runs++;
+      return new Promise((r) => (finish = r));
+    });
+    const changed = vi.spyOn(t.features, "archive");
+    const a = t.svc.archive(t.inside, closed);
+    const b = t.svc.archive(t.inside, closed);
+    await Promise.resolve();
+    finish();
+    await Promise.all([a, b]);
+    expect(runs).toBe(1);
+    expect(changed).toHaveBeenCalledTimes(1);
+    // 归档完了可以再走一遍流程（恢复之后再归档）。
+    t.svc.unarchive(t.inside);
+    const again = t.svc.archive(t.inside, closed);
+    await Promise.resolve();
+    finish();
+    await again;
+    expect(runs).toBe(2);
+  });
+
+  it("does not summarize a feature outside any epic", async () => {
+    let runs = 0;
+    const t = archiveSetup(async () => void runs++);
+    await t.svc.archive(t.outside, closed);
+    expect(runs).toBe(0);
+    expect(t.features.get(t.outside)?.archivedAt).toBe(5);
+  });
+
+  it("refuses before summarizing when a terminal is open", async () => {
+    let runs = 0;
+    const t = archiveSetup(async () => void runs++);
+    expect(await code(() => t.svc.archive(t.inside, { terminalsOpen: () => true }))).toBe("sessions_open");
+    expect(runs).toBe(0);
+  });
+
+  it("refuses when a terminal opened while the summary ran", async () => {
+    let open = false;
+    const t = archiveSetup(async () => void (open = true));
+    expect(await code(() => t.svc.archive(t.inside, { terminalsOpen: () => open }))).toBe("sessions_open");
+    expect(t.features.get(t.inside)?.archivedAt).toBeNull();
+    expect(t.tickets.get("A-1")?.archivedAt).toBeNull();
+  });
+
+  it("leaves a feature alone that was archived with its epic while the summary ran", async () => {
+    const t = archiveSetup(async () => t.svc.archiveNow(t.inside, 3));
+    await t.svc.archive(t.inside, { terminalsOpen: () => false });
+    expect(t.features.get(t.inside)?.archivedAt).toBe(3);
+  });
+
+  it("archives at once with nothing to wait for when no summarizer is given", async () => {
+    const t = archiveSetup(async () => undefined);
+    const plain = new FeatureService({ features: t.features, tickets: t.tickets, now: () => 7 });
+    await plain.archive(t.inside, closed);
+    expect(t.features.get(t.inside)?.archivedAt).toBe(7);
+  });
+});
+
+describe("FeatureService tells the epic about changes", () => {
+  it("on rename, archive and unarchive of a feature in an epic, and not for one outside any epic", async () => {
+    const db = memDb();
+    const features = new FeaturesRepo(db);
+    const tickets = new TicketsRepo(db);
+    const epicId = new EpicsRepo(db).insert({ name: "e", workspaceDir: "/e", createdAt: 1 });
+    const changed: number[] = [];
+    const svc = new FeatureService({ features, tickets, now: () => 5, onEpicChanged: (id) => void changed.push(id) });
+    const inside = features.insert({ name: "in", workspaceDir: "/w/in", createdAt: 1 });
+    const outside = features.insert({ name: "out", workspaceDir: "/w/out", createdAt: 1 });
+    features.setEpic(inside, epicId);
+    svc.rename(outside, "x");
+    await svc.archive(outside, { terminalsOpen: () => false });
+    expect(changed).toEqual([]);
+    svc.rename(inside, "renamed");
+    await svc.archive(inside, { terminalsOpen: () => false });
+    svc.unarchive(inside);
+    expect(changed).toEqual([epicId, epicId, epicId]);
+    const boom = new FeatureService({ features, tickets, now: () => 5, onEpicChanged: () => { throw new Error("x"); } });
+    expect(boom.rename(inside, "again").name).toBe("again");
   });
 });

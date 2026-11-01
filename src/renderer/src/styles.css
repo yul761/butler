@@ -75,6 +75,9 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .feature-summary .blocker { color: var(--danger); }
 .feature-summary ul { margin: 2px 0 0; padding-left: 20px; }
 .feature-summary .chip { padding: 0 4px 0 0; border: none; color: var(--accent); }
+/* 规划（epic session 写的）：保留换行，可以收起。 */
+.feature-brief { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.feature-brief p { margin: 4px 0 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .summary-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; }
 .ticket-table { width: 100%; border-collapse: collapse; margin: 2px 0 8px; }
 .ticket-table tr { cursor: pointer; }
@@ -88,6 +91,12 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .ticket-table tr.stuck td { background: color-mix(in srgb, #dc2626 8%, transparent); }
 /* 卡住时最要紧的是“已 N 分钟没有新输出”，在这段文字的最后：折行显示，不截断。 */
 .ticket-table tr.stuck .activity small { color: var(--danger); white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+/* epic 页（设计文档 2026-11-01，草图 A）：一行一个 feature，一句进度放不下时折行。 */
+.epic-features .name, .epic-archived .name { font-weight: 600; white-space: nowrap; }
+.epic-features .progress, .epic-archived .progress { width: 100%; overflow-wrap: anywhere; }
+.epic-features .status.stuck { color: var(--danger); }
+.ticket-table tr.archived { cursor: default; }
+.ticket-table tr.archived:hover { background: none; }
 .stuck-mark, .stuck-dot { color: #dc2626; margin: 0 4px; }
 .stuck-dot { border: none; background: none; padding: 0 2px; cursor: pointer; }
 .ticket-table tr.stuck-panel-row { cursor: default; }
@@ -118,6 +127,8 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .ticket-header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 .ticket-header h2 { margin: 0; font-size: 15px; }
 .ticket-header .muted { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ticket-header .move-to-epic { display: inline-flex; gap: 6px; align-items: center; flex-shrink: 0; white-space: nowrap; color: var(--muted); }
+.ticket-header .move-to-epic select { max-width: 160px; color: var(--text); }
 .sessions-bar { display: flex; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
 .session { display: flex; gap: 6px; white-space: nowrap; }
 .session.active { border-color: var(--accent); }
@@ -138,8 +149,9 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .notice { margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 /* 上面的内容再多，终端（claude code session）也至少占窗口一半高；上面能缩的部分（feature 概览）自己滚动。 */
 .terminals { flex: 1 0 50vh; min-height: 50vh; display: flex; }
-.terminal-wrap { flex: 1; min-width: 0; flex-direction: column; background: #000; }
-.terminal { flex: 1; min-height: 0; padding: 4px; }
+.terminal-wrap { flex: 1; min-width: 0; flex-direction: column; background: #000; overflow: clip; }
+/* Chromium 默认会把 ，。（ 等标点量窄，实际却占满一格，后面的字和拼音框就错位；space-all 让它们按整格量。 */
+.terminal { flex: 1; min-height: 0; padding: 4px; text-spacing-trim: space-all; }
 .exited { padding: 6px 12px; background: var(--panel); color: var(--danger); }
 
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

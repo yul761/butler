@@ -8,6 +8,9 @@ interface FeatureRow {
   workspace_dir: string;
   created_at: number;
   archived_at: number | null;
+  epic_id: number | null;
+  brief: string | null;
+  brief_sent_at: number | null;
 }
 
 interface FeatureRepoRow {
@@ -32,11 +35,16 @@ export class FeaturesRepo {
       repos: repos.map(toRepo),
       createdAt: r.created_at,
       archivedAt: r.archived_at,
+      epicId: r.epic_id === null ? null : Number(r.epic_id),
+      brief: r.brief,
+      briefSentAt: r.brief_sent_at,
     };
   }
 
-  insert(f: { name: string; workspaceDir: string; createdAt: number }): number {
-    const res = this.db.prepare(`INSERT INTO features (name, workspace_dir, created_at) VALUES (?, ?, ?)`).run(f.name, f.workspaceDir, f.createdAt);
+  insert(f: { name: string; workspaceDir: string; createdAt: number; epicId?: number | null; brief?: string | null }): number {
+    const res = this.db
+      .prepare(`INSERT INTO features (name, workspace_dir, created_at, epic_id, brief) VALUES (?, ?, ?, ?, ?)`)
+      .run(f.name, f.workspaceDir, f.createdAt, f.epicId ?? null, f.brief ?? null);
     return Number(res.lastInsertRowid);
   }
 
@@ -60,6 +68,22 @@ export class FeaturesRepo {
   /** 工作区就是这个目录的未归档 feature（Windows 不分大小写）。 */
   byWorkspace(dir: string): Feature | null {
     return this.list().find((f) => samePath(f.workspaceDir, dir)) ?? null;
+  }
+
+  /** 某个 epic 下的 feature（默认不含已归档）。 */
+  listByEpic(epicId: number, opts: { includeArchived?: boolean } = {}): Feature[] {
+    const where = opts.includeArchived ? "" : "AND archived_at IS NULL";
+    const rows = this.db.prepare(`SELECT * FROM features WHERE epic_id = ? ${where} ORDER BY created_at DESC, id`).all(epicId) as unknown as FeatureRow[];
+    return rows.map((r) => this.toFeature(r));
+  }
+
+  /** 只改归属，不动工作区；null 表示移出 epic。 */
+  setEpic(id: number, epicId: number | null): void {
+    this.db.prepare(`UPDATE features SET epic_id = ? WHERE id = ?`).run(epicId, id);
+  }
+
+  setBriefSentAt(id: number, at: number): void {
+    this.db.prepare(`UPDATE features SET brief_sent_at = ? WHERE id = ?`).run(at, id);
   }
 
   setName(id: number, name: string): void {

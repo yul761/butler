@@ -382,6 +382,53 @@ describe("SessionService orphan rows", () => {
   });
 });
 
+describe("SessionService.handleExit clears the waiting mark (a dead process cannot be waiting)", () => {
+  const row = (id: string) => ({ id, ticketKey: "PROJ-1", cwd: "/w", origin: "butler" as const, firstPrompt: "修登录", lastActivityAt: 500, createdAt: 1 });
+
+  it("clears it on a session that stays, and leaves its last activity alone: ending it is not activity", async () => {
+    const { service, sessions } = await setup();
+    sessions.insertIfAbsent(row("s-1"));
+    sessions.setWaiting("s-1", true, 600);
+    service.handleExit("s-1");
+    expect(sessions.get("s-1")).toMatchObject({ waitingForInput: false, lastActivityAt: 600 });
+  });
+
+  it("clears it on the head after /clear: the terminal keeps the id it started with", async () => {
+    const { service, sessions } = await setup();
+    sessions.insertIfAbsent(row("s-1"));
+    sessions.insertIfAbsent(row("after-clear"));
+    sessions.setReplacedBy("s-1", "after-clear", "clear");
+    sessions.setWaiting("after-clear", true, 600);
+    service.handleExit("s-1");
+    expect(sessions.get("after-clear")).toMatchObject({ waitingForInput: false, lastActivityAt: 600 });
+  });
+
+  it("leaves other sessions of the ticket waiting", async () => {
+    const { service, sessions } = await setup();
+    sessions.insertIfAbsent(row("s-1"));
+    sessions.insertIfAbsent(row("s-2"));
+    sessions.setWaiting("s-1", true, 600);
+    sessions.setWaiting("s-2", true, 600);
+    service.handleExit("s-1");
+    expect(sessions.get("s-2")?.waitingForInput).toBe(true);
+  });
+
+  it("still forgets an empty session", async () => {
+    const { service, sessions } = await setup({ transcripts: [] });
+    await service.open({ ticketKey: "PROJ-1" });
+    sessions.setWaiting("new-1", true, 600);
+    service.handleExit("new-1");
+    expect(sessions.get("new-1")).toBeNull();
+  });
+
+  it("does not touch a session that was not waiting", async () => {
+    const { service, sessions } = await setup();
+    sessions.insertIfAbsent({ ...row("s-1"), lastActivityAt: null });
+    service.handleExit("s-1");
+    expect(sessions.get("s-1")).toMatchObject({ waitingForInput: false, lastActivityAt: null });
+  });
+});
+
 describe("SessionService.pruneEmptySessions (startup, after a quit that skipped handleExit)", () => {
   const row = (id: string, extra: Partial<{ origin: "butler" | "discovered"; firstPrompt: string }> = {}) => ({
     id, ticketKey: "PROJ-1", cwd: "/w", origin: extra.origin ?? ("butler" as const), firstPrompt: extra.firstPrompt ?? null, createdAt: 1,

@@ -431,6 +431,25 @@ describe("TicketService with several repos", () => {
 });
 
 describe("TicketService.featureHeadlessDirs", () => {
+  it("for an archived feature, keeps the repos of the tickets archived with it", () => {
+    const db = memDb();
+    const features = new FeaturesRepo(db);
+    const tickets = new TicketsRepo(db);
+    const service = new TicketService({ tickets, features, settings: new SettingsRepo(db), now: () => 1, workspacesDir: tempDir("butler-ws-") });
+    const ws = tempDir("butler-feature-");
+    const outside = tempDir("butler-outside-");
+    const earlier = tempDir("butler-earlier-");
+    const featureId = features.insert({ name: "f", workspaceDir: ws, createdAt: 1 });
+    const add = (key: string, repoPath: string) =>
+      insertTicket(tickets, { key, title: null, repoPath, workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null, featureId });
+    add("A-1", outside);
+    add("A-2", earlier);
+    tickets.archive("A-2", 5);
+    tickets.archive("A-1", 9);
+    features.archive(featureId, 9);
+    expect(service.featureHeadlessDirs(featureId)).toEqual({ cwd: ws, addDirs: [outside], repoDirs: [outside] });
+  });
+
   it("runs in the feature workspace and adds the existing work dirs outside it, once each, skipping archived tickets", () => {
     const db = memDb();
     const tickets = new TicketsRepo(db);

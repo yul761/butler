@@ -1,15 +1,18 @@
 import { basename } from "node:path";
 import type { SessionActivity } from "../../shared/activity";
 import {
-  MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, taskMessage, type ControlRequest, type ControlResult, type FeatureControlRequest,
+  BRIEF_LIMIT, MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, SUMMARY_LIMIT, taskMessage,
+  type ControlRequest, type ControlResult, type EpicControlRequest, type FeatureControlRequest,
 } from "../../shared/control";
-import { effectiveStatus, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
+import { effectiveStatus, type Epic, type EpicFeatureRow, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
+import type { EpicsRepo } from "../db/epics-repo";
 import type { FeaturesRepo } from "../db/features-repo";
 import { currentLang } from "../i18n";
 import { M } from "../strings";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import type { SessionService } from "../sessions/session-service";
+import { FEATURE_NAME_LIMIT, type FeatureService } from "../tickets/feature-service";
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { samePath, TicketError, type TicketService } from "../tickets/ticket-service";
 
@@ -20,6 +23,15 @@ export interface ControlHandlerDeps {
   sessionService: Pick<SessionService, "open" | "openTerminalCount" | "isRunning"> & Partial<Pick<SessionService, "featureTerminalCount">>;
   /** feature 总控的请求（设计文档 2026-10-26）；不给就拒绝。 */
   features?: FeaturesRepo;
+  /** epic session 的请求（设计文档 2026-11-01）和 feature 总控的 epic_context；不给就拒绝。 */
+  epics?: Pick<EpicsRepo, "get">;
+  featureService?: Pick<FeatureService, "create">;
+  /** epic 下每个 feature 的情况（含已归档），直接读库，不经过 epic 记忆。 */
+  epicRows?: (epicId: number) => EpicFeatureRow[];
+  /** 重新渲染 epic 的 handoff（排进记忆的同步队列，不等它）。 */
+  syncEpic?: (epicId: number) => void;
+  /** 后台给 epic 下有新活动的 feature 生成汇总（FeatureSummaryRunner.refreshEpic），不等它。这时打开总控，规划会等它（SessionService.sendBrief）。 */
+  refreshEpic?: (epicId: number, exceptFeatureId?: number) => void;
   /** session 此刻的活动；监控还没看到它时为 null。 */
   activity?: (sessionId: string) => SessionActivity | null;
   /** session 当前命令输出的末尾（上限 4KB）。 */
@@ -173,10 +185,81 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     });
   };
 
+  /** 一个 feature 的情况交给模型：summary 超长时截断（汇总是数据，不是指令，这里只截长度）。 */
+  const rowOut = (r: EpicFeatureRow): EpicFeatureRow => ({ ...r, summary: r.summary === null ? null : r.summary.slice(0, SUMMARY_LIMIT) });
+
+  /**
+   * epic session 在 epic 下建 feature：复用 FeatureService.create（工作区、仓库校验和界面上建一样），再写上 epic_id 和 brief。
+   * 不开总控：用户点进 feature 自己开，开的时候 brief 才发出去。名字、仓库、brief 全部核对通过才建，出错什么都不留下。
+   */
+  const createFeature = async (e: Epic, req: Extract<EpicControlRequest, { op: "create_feature" }>): Promise<ControlResult> => {
+    const featureName = req.name.trim();
+    if (!featureName || featureName.length > FEATURE_NAME_LIMIT) return fail(M().featureNameInvalid(FEATURE_NAME_LIMIT));
+    // 名字会变成工作区目录名：不能带路径分隔符，也不能是 . 或 ..
+    if (/[\\/]/.test(featureName) || /^\.+$/.test(featureName)) return fail(M().ctlFeatureNameBad);
+    const taken = (d.features?.list({ includeArchived: true }) ?? []).some((f) => f.name.trim().toLowerCase() === featureName.toLowerCase());
+    if (taken) return fail(M().ctlFeatureNameTaken(featureName));
+    const brief = req.brief.trim();
+    if (!brief || req.brief.length > BRIEF_LIMIT) return fail(M().ctlBriefInvalid(BRIEF_LIMIT));
+
+    const names = e.repos.map(name).join(", ");
+    if (e.repos.length === 0) return fail(M().ctlEpicNoRepos);
+    let picked: typeof e.repos;
+    if (req.repos === undefined || req.repos.length === 0) {
+      if (e.repos.length > 1) return fail(M().ctlPickEpicRepos(names));
+      picked = e.repos;
+    } else {
+      picked = [];
+      for (const wanted of req.repos) {
+        const byPath = e.repos.find((r) => samePath(wanted, r.repoPath));
+        const byName = e.repos.filter((r) => name(r).toLowerCase() === wanted.trim().toLowerCase());
+        const r = byPath ?? (byName.length === 1 ? byName[0] : null);
+        if (!r) return fail(byName.length > 1 ? M().ctlRepoAmbiguous(wanted, byName.map((x) => x.repoPath).join(", ")) : M().ctlNoSuchEpicRepo(wanted, names));
+        if (!picked.includes(r)) picked.push(r);
+      }
+    }
+    if (!d.featureService) return fail(M().ctlEpicGone);
+    let f: Feature;
+    try {
+      f = await d.featureService.create({ name: featureName, repoPaths: picked.map((r) => r.repoPath), epicId: e.id, brief });
+    } catch (err) {
+      if (err instanceof TicketError) return fail(err.message);
+      d.log?.(`control: create_feature ${featureName} failed`, err);
+      return fail((err as Error).message);
+    }
+    d.notify();
+    // 新 feature 要出现在 epic 的 handoff 里；其他 feature 趁这时更新汇总，下一个 feature 才读得到新鲜的进度。都不等，失败只记日志，不影响返回。
+    try {
+      d.syncEpic?.(e.id);
+      d.refreshEpic?.(e.id, f.id);
+    } catch (err) {
+      d.log?.(`control: refreshing epic ${e.id} after create_feature ${featureName} failed`, err);
+    }
+    return ok({ id: f.id, name: f.name, repos: f.repos.map(name), note: M().ctlFeatureCreated });
+  };
+
+  /** epic session（设计文档 2026-11-01）：epic 在这里重新核对，已归档的全部拒绝。 */
+  const epicRequest = async (req: EpicControlRequest): Promise<ControlResult> => {
+    const e = d.epics?.get(req.epicId);
+    if (!e || e.archivedAt !== null) return fail(M().ctlEpicGone);
+    if (req.op === "list_repos") return ok(e.repos.map((r) => ({ name: name(r), path: r.repoPath })));
+    if (req.op === "list_features") return ok((d.epicRows?.(e.id) ?? []).map(rowOut));
+    return createFeature(e, req);
+  };
+
+  /** feature 总控查同一 epic 下别的 feature：不含自己。 */
+  const epicContext = (f: Feature): ControlResult => {
+    const e = f.epicId === null ? null : d.epics?.get(f.epicId);
+    if (!e) return fail(M().ctlNoEpic);
+    if (e.archivedAt !== null) return fail(M().ctlEpicGone);
+    return ok({ epic: e.name, features: (d.epicRows?.(e.id) ?? []).filter((r) => r.id !== f.id).map(rowOut) });
+  };
+
   /** feature 总控（设计文档 2026-10-26）：feature 和 ticket 都在这里重新核对，ticket 必须属于这个 feature 且未归档。 */
   const featureRequest = async (req: FeatureControlRequest): Promise<ControlResult> => {
     const f = d.features?.get(req.featureId);
     if (!f || f.archivedAt !== null) return fail(M().ctlFeatureGone);
+    if (req.op === "epic_context") return epicContext(f);
     const own = d.tickets.listByFeature(f.id);
 
     if (req.op === "list_tickets") {
@@ -224,6 +307,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   };
 
   return async (req) => {
+    if ("epicId" in req) return epicRequest(req);
     if ("featureId" in req) return featureRequest(req);
     const t = d.tickets.get(req.ticketKey);
     if (!t || t.archivedAt !== null) return fail(M().ctlTicketGone(req.ticketKey));

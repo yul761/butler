@@ -94,6 +94,15 @@ export class TicketsRepo {
     return rows.map((r) => this.toTicket(r));
   }
 
+  /**
+   * feature 现在的 ticket：未归档的 feature 是它未归档的 ticket；已归档的 feature 是和它一起归档的那些（时间戳相同），之前单独归档的不算。
+   * 给归档时超时、归档之后才走到这里的汇总用：这时 ticket 已经归档了，listByFeature 读不到。
+   */
+  listWithFeature(feature: { id: number; archivedAt: number | null }): Ticket[] {
+    if (feature.archivedAt === null) return this.listByFeature(feature.id);
+    return this.listByFeature(feature.id, { includeArchived: true }).filter((t) => t.archivedAt === feature.archivedAt);
+  }
+
   setTitle(key: string, title: string | null): void {
     this.db.prepare(`UPDATE tickets SET title = ? WHERE key = ?`).run(title, key);
   }

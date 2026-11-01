@@ -35,6 +35,18 @@ describe("ingestFeatureHandoff", () => {
     expect(rec.payload?.next_steps).toEqual([{ ticket: "DMS-1234", text: "a" }, { ticket: null, text: "b" }]);
   });
 
+  it("tells the caller about a valid summary only, and a failing callback does not fail the ingest", () => {
+    const { deps, featureId } = setup();
+    const seen: number[] = [];
+    const withHook = { ...deps, onValidStored: (id: number) => void seen.push(id) };
+    ingestFeatureHandoff(withHook, { featureId, sessionId: null, trigger: "command", payload: null, rawText: "x", sourceRef: "a" });
+    ingestFeatureHandoff(withHook, { featureId, sessionId: null, trigger: "command", payload: payload([]), rawText: null, sourceRef: "b" });
+    ingestFeatureHandoff(withHook, { featureId, sessionId: null, trigger: "command", payload: payload([]), rawText: null, sourceRef: "b" });
+    expect(seen).toEqual([featureId]);
+    const boom = { ...deps, onValidStored: () => { throw new Error("x"); } };
+    expect(ingestFeatureHandoff(boom, { featureId, sessionId: null, trigger: "command", payload: payload([]), rawText: null })).toMatchObject({ stored: true });
+  });
+
   it("stores a null payload as degraded and dedupes by sourceRef", () => {
     const { deps, featureId } = setup();
     const input = { featureId, sessionId: null, trigger: "command" as const, payload: null, rawText: "x", sourceRef: "u" };

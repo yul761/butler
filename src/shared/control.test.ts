@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_CREATE_REPOS, parseControlRequest, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
+import { BRIEF_LIMIT, MAX_CREATE_REPOS, parseControlRequest, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
 
 describe("parseControlRequest", () => {
   it("accepts the three operations", () => {
@@ -70,5 +70,31 @@ describe("parseControlRequest for a feature (design 2026-10-26)", () => {
     expect(parseControlRequest({ ...base, ticket: "A-1", repos: "fe" })).toBeNull();
     expect(parseControlRequest({ ...base, ticket: "A-1", repos: ["fe", 3] })).toBeNull();
     expect(parseControlRequest({ ...base, ticket: "A-1", repos: Array.from({ length: MAX_CREATE_REPOS + 1 }, (_, i) => `r${i}`) })).toBeNull();
+  });
+});
+
+describe("parseControlRequest for an epic (design 2026-11-01)", () => {
+  it("accepts epic requests", () => {
+    expect(parseControlRequest({ v: 1, epicId: 3, from: "c", op: "list_features" })).toEqual({ v: 1, epicId: 3, from: "c", op: "list_features" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "list_repos" })).toEqual({ v: 1, epicId: 3, from: null, op: "list_repos" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "checkout", brief: "做结账" })).toEqual({ v: 1, epicId: 3, from: null, op: "create_feature", name: "checkout", brief: "做结账" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "c", repos: ["a"], brief: "b" })).toMatchObject({ repos: ["a"] });
+  });
+
+  it("rejects malformed epic requests, and an epicId next to a feature or ticket", () => {
+    for (const bad of [
+      { v: 1, epicId: 0, op: "list_features" }, { v: 1, epicId: "3", op: "list_features" }, { v: 1, epicId: 3, op: "send_keys" },
+      { v: 1, epicId: 3, featureId: 2, op: "list_features" }, { v: 1, epicId: 3, ticketKey: "P-1", op: "list_features" },
+      { v: 1, epicId: 3, op: "create_feature", name: "", brief: "b" }, { v: 1, epicId: 3, op: "create_feature", name: "c" },
+      { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "x".repeat(BRIEF_LIMIT + 1) },
+      { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", repos: "a" },
+      { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", repos: Array(MAX_CREATE_REPOS + 1).fill("a") },
+    ]) {
+      expect(parseControlRequest(bad)).toBeNull();
+    }
+  });
+
+  it("accepts epic_context from a feature coordinator", () => {
+    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "epic_context" })).toEqual({ v: 1, featureId: 7, from: null, op: "epic_context" });
   });
 });

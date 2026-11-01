@@ -262,7 +262,7 @@ describe("migration 9: fix sessions", () => {
   it("gives existing sessions no fixesSession", () => {
     const db = upTo8();
     db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('old', NULL, '/w', 'butler', 1)`).run();
-    expect(migrate(db)).toBe(9);
+    expect(migrate(db)).toBe(MIGRATIONS.length);
     expect(new SessionsRepo(db).get("old")?.fixesSession).toBeNull();
   });
 

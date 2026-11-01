@@ -3,17 +3,20 @@
 //   --version / --help（列出 Butler 检查的全部参数）；
 //   交互模式（在 PTY 里）：打印就绪行和挂载的 MCP server 名；每读到一行输入就写 transcript、
 //     按 CLAUDE_CONFIG_DIR/settings.json 执行 hook（macOS 用 /bin/sh，Windows 用 Git Bash，和 Claude Code 一样）；
-//     输入 /handoff 时按 Claude Code 的格式写命令消息，回一个 handoff 代码块（feature 总控里是 butler-feature-handoff）；
+//     输入 /handoff 时按 Claude Code 的格式写命令消息，回一个 handoff 代码块（feature 总控里是 butler-feature-handoff，
+//     /handoff <问题> 把它写进 open_questions）；
 //     输入 /fake-bash <命令> 时像 Bash 工具在跑：写一条没有结果的 tool_use 和 tasks/<id>.output，这一轮不结束；
 //     输入 /fake-bg <命令> 时像后台命令：tool_result 带任务 id 和输出文件，这一轮结束；/fake-bg-done 写它的完成通知；
+//     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 butler-sessions，调用它，结果写进运行记录；
 //     启动时写一份 sessions/<pid>.json 登记文件，Butler 从这里查 session 的名字；
 //   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果、feature 汇总或卡住判断；stream-json 的 MCP 探测只回 init。
+//     FAKE_CLAUDE_SUMMARY_GATE 指向的文件存在时，feature 汇总等到文件被删掉才回答：e2e 用它控制归档前要等多久。
 "use strict";
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 
 const args = process.argv.slice(2);
 const has = (name) => args.includes(name);
@@ -134,9 +137,32 @@ function headless() {
     const judge = !!props.stuck;
     // 整个 prompt 记下来：e2e 用它确认 Butler 真的读到了输出和子进程 CPU。
     if (judge) log(`judge prompt ${JSON.stringify(input)}`);
-    const structured = judge ? STUCK_VERDICT[lang] : props.followups ? HANDOFF : props.open_questions && props.summary ? FEATURE_SUMMARY[lang] : REFRESH;
+    const summary = !judge && !props.followups && !!props.open_questions && !!props.summary;
+    const structured = judge ? STUCK_VERDICT[lang] : props.followups ? HANDOFF : summary ? FEATURE_SUMMARY[lang] : REFRESH;
     const result = { type: "result", subtype: "success", is_error: false, session_id: `${judge ? "judge" : "fork"}-${Date.now()}`, result: JSON.stringify(structured), structured_output: structured, permission_denials: [], total_cost_usd: 0 };
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    const gate = summary ? process.env.FAKE_CLAUDE_SUMMARY_GATE : undefined;
+    const held = () => gate !== undefined && fs.existsSync(gate);
+    const answer = () => (held() ? setTimeout(answer, 50) : process.stdout.write(`${JSON.stringify(result)}\n`));
+    if (held()) log("summary held");
+    answer();
+  });
+}
+
+/** 和 Claude Code 一样：按配置启动 stdio 的 MCP server，握手后调用一个工具。env 在继承的环境上叠加配置里的，BUTLER_SESSION 就是这样传下去的。 */
+function callMcpTool(configPath, tool, input) {
+  return new Promise((resolve, reject) => {
+    const server = JSON.parse(fs.readFileSync(configPath, "utf8")).mcpServers["butler-sessions"];
+    const child = spawn(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+    const send = (id, method, params) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    child.on("error", reject);
+    readline.createInterface({ input: child.stdout }).on("line", (reply) => {
+      const m = JSON.parse(reply);
+      if (m.id === 1) send(2, "tools/call", { name: tool, arguments: input });
+      if (m.id !== 2) return;
+      child.kill();
+      resolve(m.result);
+    });
+    send(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {} });
   });
 }
 
@@ -214,6 +240,7 @@ function interactive() {
       return;
     }
     const bash = /^\/fake-(bash|bg) (.+)$/.exec(line);
+    const tool = /^\/fake-mcp (\S+)(?: (.+))?$/.exec(line);
     const command = /^\/handoff(\s|$)/.test(line);
     if (command) {
       // Claude Code 的斜杠命令：一条命令消息，再跟一条 isMeta 的命令文件展开。
@@ -240,17 +267,32 @@ function interactive() {
       backgroundTask = taskId;
       append({ type: "user", toolUseResult: { backgroundTaskId: taskId }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: `Command running in background with ID: ${taskId}. Output is being written to: ${output}. You will be notified when it completes \u2014 do not poll that file or sleep while waiting.` }] } });
     }
+    const endTurn = (reply) => {
+      append({ type: "assistant", uuid: `a-${Date.now()}`, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: reply }] } });
+      out(`${reply}\n`);
+      runHooks("Stop", { session_id: sessionId, cwd, stop_hook_active: false, transcript_path: transcript });
+      out("> ");
+    };
+    if (tool) {
+      // 工具在等 Butler 回话，这一轮结束不了；结果记下来给 e2e 读，终端里的文字会被折行。
+      callMcpTool(mcp, tool[1], tool[2] ? JSON.parse(tool[2]) : {}).then(
+        (result) => {
+          log(`mcp result ${JSON.stringify(result)}`);
+          endTurn(`工具返回：${tool[1]}`);
+        },
+        (e) => endTurn(`工具失败：${e.message}`),
+      );
+      return;
+    }
     // 挂着 butler-sessions 的是 feature 总控。
     const coordinator = servers.includes("butler-sessions");
-    const reply = !command
+    const question = /^\/handoff\s+(.+)$/.exec(line);
+    const featureHandoff = { ...COMMAND_FEATURE_HANDOFF, open_questions: question ? [question[1]] : [] };
+    endTurn(!command
       ? `收到：${line}`
       : coordinator
-        ? `handoff：\n\n\`\`\`butler-feature-handoff\n${JSON.stringify(COMMAND_FEATURE_HANDOFF, null, 2)}\n\`\`\``
-        : `handoff：\n\n\`\`\`butler-handoff\n${JSON.stringify(COMMAND_HANDOFF, null, 2)}\n\`\`\``;
-    append({ type: "assistant", uuid: `a-${Date.now()}`, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: reply }] } });
-    out(`${reply}\n`);
-    runHooks("Stop", { session_id: sessionId, cwd, stop_hook_active: false, transcript_path: transcript });
-    out("> ");
+        ? `handoff：\n\n\`\`\`butler-feature-handoff\n${JSON.stringify(featureHandoff, null, 2)}\n\`\`\``
+        : `handoff：\n\n\`\`\`butler-handoff\n${JSON.stringify(COMMAND_HANDOFF, null, 2)}\n\`\`\``);
   });
   rl.on("close", () => process.exit(0));
 }

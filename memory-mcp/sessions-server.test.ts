@@ -3,9 +3,10 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
-import { FEATURE_TOOLS, FEATURE_TOOLS_EN, SessionsServer, serveStdio, TOOLS } from "./sessions-server";
+import { BRIEF_LIMIT } from "../src/shared/control";
+import { EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, SessionsServer, serveStdio, TOOLS } from "./sessions-server";
 
-function setup(timeoutMs = 2000, scope: { ticketKey: string } | { featureId: number } = { ticketKey: "P-1" }, lang: "zh" | "en" = "zh") {
+function setup(timeoutMs = 2000, scope: { ticketKey: string } | { featureId: number; epic?: boolean } | { epicId: number } = { ticketKey: "P-1" }, lang: "zh" | "en" = "zh") {
   const dir = tempDir("butler-control-");
   const requestsDir = join(dir, "requests");
   const resultsDir = join(dir, "results");
@@ -182,5 +183,75 @@ describe("butler-sessions in English (design 2026-10-26 i18n)", () => {
       const bad = (await server.handle({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "nope", arguments: {} } })) as { result: { content: { text: string }[] } };
       expect(bad.result.content[0].text).toBe("No such tool: nope");
     }
+  });
+});
+
+const tools = async (server: SessionsServer) => ((await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string; description: string }[] } }).result.tools;
+const callTool = (server: SessionsServer, name: string, args: object = {}) => server.handle({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name, arguments: args } });
+
+describe("butler-sessions for an epic session (design 2026-11-01)", () => {
+  it("lists the epic tools in order, in both languages", async () => {
+    expect((await tools(setup(2000, { epicId: 3 }).server))).toEqual(EPIC_TOOLS);
+    expect(EPIC_TOOLS.map((t) => t.name)).toEqual(["list_features", "list_repos", "create_feature"]);
+    expect(EPIC_TOOLS_EN.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []])).toEqual(EPIC_TOOLS.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]));
+    const create = EPIC_TOOLS.find((t) => t.name === "create_feature")!;
+    expect(create.inputSchema.required).toEqual(["name", "brief"]);
+    for (const t of EPIC_TOOLS) expect(t.description).toMatch(/[\u4e00-\u9fff]/);
+    const en = await tools(setup(2000, { epicId: 3 }, "en").server);
+    expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
+    expect(en.map((t) => t.name)).toEqual(["list_features", "list_repos", "create_feature"]);
+  });
+
+  it("tells Claude that tickets belong to the feature's own session and the user opens it", () => {
+    const zh = EPIC_TOOLS.find((t) => t.name === "create_feature")!.description;
+    const en = EPIC_TOOLS_EN.find((t) => t.name === "create_feature")!.description;
+    expect(zh).toContain("ticket");
+    expect(zh).toContain("总控");
+    expect(en).toMatch(/ticket/i);
+    expect(en).toMatch(/user opens/i);
+  });
+
+  it("sends list_features, list_repos and create_feature for this epic", async () => {
+    const { server, answer } = setup(2000, { epicId: 3 });
+    const a = callTool(server, "list_features");
+    expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ v: 1, epicId: 3, from: "boss", op: "list_features" });
+    await a;
+    const b = callTool(server, "list_repos");
+    expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ v: 1, epicId: 3, from: "boss", op: "list_repos" });
+    await b;
+    const c = callTool(server, "create_feature", { name: "checkout", repos: ["fe"], brief: "做结账" });
+    expect(await answer({ v: 1, ok: true, value: { id: 5, name: "checkout" } })).toEqual({ v: 1, epicId: 3, from: "boss", op: "create_feature", name: "checkout", repos: ["fe"], brief: "做结账" });
+    expect(JSON.stringify(await c)).toContain("checkout");
+  });
+
+  it("rejects bad create_feature arguments without asking Butler, and says what to check when Butler is slow", async () => {
+    const { server, requestsDir } = setup(30, { epicId: 3 });
+    for (const args of [{}, { name: "a" }, { brief: "b" }, { name: "a", brief: "b", repos: "x" }, { name: "a", brief: "b", repos: [1] }, { name: 1, brief: "b" }, { name: "a", brief: "x".repeat(BRIEF_LIMIT + 1) }]) {
+      expect(await callTool(server, "create_feature", args), JSON.stringify(args).slice(0, 60)).toMatchObject({ result: { isError: true } });
+    }
+    expect(existsSync(requestsDir)).toBe(false);
+    expect(await callTool(server, "create_feature", { name: "a", brief: "b" })).toMatchObject({ result: { isError: true, content: [{ text: expect.stringContaining("list_features") }] } });
+    expect(await callTool(server, "start_session", {})).toMatchObject({ result: { isError: true } });
+  });
+});
+
+describe("epic_context for a feature coordinator in an epic", () => {
+  it("appears only when the feature belongs to an epic", async () => {
+    expect((await tools(setup(2000, { featureId: 7 }).server)).map((t) => t.name)).not.toContain("epic_context");
+    expect(await tools(setup(2000, { featureId: 7, epic: true }).server)).toEqual([...FEATURE_TOOLS, EPIC_CONTEXT_TOOL]);
+    const en = await tools(setup(2000, { featureId: 7, epic: true }, "en").server);
+    expect(en.at(-1)).toEqual(EPIC_CONTEXT_TOOL_EN);
+    expect(EPIC_CONTEXT_TOOL_EN.description).not.toBe(EPIC_CONTEXT_TOOL.description);
+    expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
+  });
+
+  it("sends epic_context, and refuses it without asking Butler when the feature has no epic", async () => {
+    const { server, answer } = setup(2000, { featureId: 7, epic: true });
+    const call = callTool(server, "epic_context");
+    expect(await answer({ v: 1, ok: true, value: { epic: "shop", features: [] } })).toEqual({ v: 1, featureId: 7, from: "boss", op: "epic_context" });
+    expect(JSON.stringify(await call)).toContain("shop");
+    const plain = setup(2000, { featureId: 7 });
+    expect(await callTool(plain.server, "epic_context")).toMatchObject({ result: { isError: true } });
+    expect(existsSync(plain.requestsDir)).toBe(false);
   });
 });

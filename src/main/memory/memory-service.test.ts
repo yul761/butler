@@ -5,6 +5,7 @@ import { createEmbeddedBackend } from "statecore-mcp/lib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FeatureHandoff, Handoff } from "../../shared/handoff";
 import type { Followup, FollowupStatus, HandoffTrigger } from "../../shared/types";
+import { EpicsRepo } from "../db/epics-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { FollowupsRepo } from "../db/followups-repo";
@@ -12,7 +13,10 @@ import { HandoffsRepo } from "../db/handoffs-repo";
 import { MemorySyncRepo } from "../db/memory-sync-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { chatReply, gatewayHarness, type GatewayHarness } from "../gateway/testing";
-import { featureScope } from "../../shared/memory";
+import { epicScope, featureScope } from "../../shared/memory";
+import type { EpicFeatureRow } from "../../shared/types";
+import { EPIC_HANDOFF_MAX_CHARS, EPIC_PLAN_MAX_CHARS } from "../epics/epic-info";
+import { setLang } from "../i18n";
 import { insertTicket, memDb, tempDir } from "../test-utils";
 import { handoffSummary, MemoryService, nightlyDistill } from "./memory-service";
 import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
@@ -50,6 +54,10 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   const sync = new MemorySyncRepo(db);
   const features = new FeaturesRepo(db);
   const featureHandoffs = new FeatureHandoffsRepo(db);
+  const epics = new EpicsRepo(db);
+  // epic 1；它下面各 feature 的情况由测试直接给。
+  epics.insert({ name: "E1", workspaceDir: "/e/E1", createdAt: 1 });
+  let epicRows: EpicFeatureRow[] = [];
   // feature 1、2、3；测试里主要用 3。
   for (const name of ["F1", "F2", "F3"]) features.insert({ name, workspaceDir: `/w/${name}`, createdAt: 1 });
   for (const key of ["PROJ-1", "PROJ-2"]) {
@@ -63,7 +71,7 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   let now = Date.now();
   const synced: string[] = [];
   const memory = new MemoryService({
-    dataDir, tickets, handoffs, followups, sync, features, featureHandoffs,
+    dataDir, tickets, handoffs, followups, sync, features, featureHandoffs, epics, epicRows: () => epicRows,
     enabled: () => enabled,
     now: () => now,
     onSynced: (key) => synced.push(key),
@@ -85,7 +93,7 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   const slots = (scope = "ticket:PROJ-1") => withScope({ dataDir, scope }, (s) => s.noteSlots());
   return {
     memory, dataDir, sync, logs, synced, features, addHandoff, addFollowup, setFollowup, addSummary, texts, items, slots,
-    setEnabled: (v: boolean) => (enabled = v),
+    setEnabled: (v: boolean) => (enabled = v), epics, setEpicRows: (r: EpicFeatureRow[]) => (epicRows = r),
   };
 }
 
@@ -184,6 +192,161 @@ describe("MemoryService.syncFeature (design 2026-10-28, 记忆)", () => {
     await t.memory.syncAll();
     expect((await handoffOf(t))?.content).toBe("feature 3");
     expect(await withScope({ dataDir: t.dataDir, scope: featureScope(2) }, (s) => s.activeHandoff())).toBeNull();
+  });
+});
+
+describe("MemoryService.syncEpic (design 2026-11-01, epic handoff)", () => {
+  const scope = epicScope(1);
+  const handoffOf = (t: ReturnType<typeof setup>) => withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
+  const row = (over: Partial<EpicFeatureRow> = {}): EpicFeatureRow => ({
+    id: 3, name: "支付", status: "active", archivedAt: null, summaryAt: 5, summary: "接口联调完了", blockers: [], decisions: [], openQuestions: [], ...over,
+  });
+
+  it("writes the rendered features as the handoff of the epic scope and leaves the planning notes alone", async () => {
+    const t = setup();
+    await withScope({ dataDir: t.dataDir, scope }, (s) => s.remember("先做支付，再做退款"));
+    t.setEpicRows([row()]);
+    await t.memory.syncEpic(1);
+    expect((await handoffOf(t))?.content).toContain("## 支付\n接口联调完了");
+    expect(await t.texts(scope)).toEqual(["先做支付，再做退款"]);
+    expect(t.logs).toEqual([]);
+    expect(t.synced).toEqual([scope]);
+  });
+
+  it("rewrites the handoff when the features change, and not when nothing changed", async () => {
+    const t = setup();
+    t.setEpicRows([row()]);
+    await t.memory.syncEpic(1);
+    await t.memory.syncEpic(1);
+    expect((await handoffOf(t))?.versionCount).toBe(1);
+    t.setEpicRows([]);
+    await t.memory.syncEpic(1);
+    expect(await handoffOf(t)).toMatchObject({ content: expect.not.stringContaining("支付"), versionCount: 2 });
+  });
+
+  it("never reconciles an epic scope: syncAll syncs epics through syncEpic and keeps their notes", async () => {
+    const t = setup();
+    await withScope({ dataDir: t.dataDir, scope }, (s) => s.remember("规划笔记"));
+    t.setEpicRows([row()]);
+    await t.memory.syncAll();
+    expect(await t.texts(scope)).toEqual(["规划笔记"]);
+    expect((await handoffOf(t))?.content).toContain("支付");
+  });
+
+  it("does nothing when memory is off or the epic does not exist", async () => {
+    const off = setup({ enabled: false });
+    off.setEpicRows([row()]);
+    await off.memory.syncEpic(1);
+    expect(await handoffOf(off)).toBeNull();
+    const t = setup();
+    t.setEpicRows([row()]);
+    await t.memory.syncEpic(99);
+    expect(await handoffOf(t)).toBeNull();
+  });
+
+  it("logs a failed sync and still resolves", async () => {
+    const t = setup();
+    t.setEpicRows([row()]);
+    wrapScopes((sc) => sc === scope, (s) => ({ ...s, handoff: () => Promise.reject(new Error("boom")) }));
+    await expect(t.memory.syncEpic(1)).resolves.toBeUndefined();
+    expect(t.logs.some((l) => l.includes("boom"))).toBe(true);
+  });
+
+  describe("the epic session's own handoff (butler-epic's handoff tool writes to the same scope)", () => {
+    /** 像 epic session 里挂的记忆 MCP 那样写一份交接。 */
+    const sessionWrites = (t: ReturnType<typeof setup>, h: { summary: string; nextSteps?: string[]; openQuestions?: string[] }) =>
+      withScope({ dataDir: t.dataDir, scope }, (s) => s.handoff({ nextSteps: [], openQuestions: [], ...h }));
+    const count = (text: string, part: string) => text.split(part).length - 1;
+
+    afterEach(() => setLang("zh"));
+
+    it("carries it through later syncs without nesting, and a newer one replaces it", async () => {
+      const t = setup();
+      t.setEpicRows([row()]);
+      await t.memory.syncEpic(1);
+      await sessionWrites(t, { summary: "规划：先做支付，再做退款", nextSteps: ["拆 ticket"], openQuestions: ["退款放哪个 feature"] });
+
+      await t.memory.syncEpic(1);
+      const carried = await handoffOf(t);
+      const content = carried?.content ?? "";
+      for (const part of ["规划：先做支付，再做退款", "- 拆 ticket", "- 退款放哪个 feature", "## 支付\n接口联调完了"]) expect(count(content, part), part).toBe(1);
+      expect(content.indexOf("规划：先做支付")).toBeLessThan(content.indexOf("## 支付"));
+
+      // 第二次同步：一字不差，不多写一个版本。
+      await t.memory.syncEpic(1);
+      expect(await handoffOf(t)).toEqual(carried);
+
+      // feature 变了：换的只是 feature 那部分。
+      t.setEpicRows([row({ summary: "支付上线了" })]);
+      await t.memory.syncEpic(1);
+      const moved = (await handoffOf(t))?.content ?? "";
+      expect(count(moved, "规划：先做支付，再做退款")).toBe(1);
+      expect(moved).toContain("支付上线了");
+      expect(moved).not.toContain("接口联调完了");
+      expect(moved.length).toBeLessThan(content.length + 10);
+
+      // 新的交接换掉带着的那份，之后带的是新的。
+      await sessionWrites(t, { summary: "规划：改成先做退款" });
+      await t.memory.syncEpic(1);
+      await t.memory.syncEpic(1);
+      const newer = (await handoffOf(t))?.content ?? "";
+      expect(count(newer, "规划：改成先做退款")).toBe(1);
+      expect(newer).not.toContain("规划：先做支付");
+      expect(newer).not.toContain("拆 ticket");
+      expect(newer).toContain("支付上线了");
+    });
+
+    it("keeps it inside the cap with a very long plan, and stops writing once it is cut", async () => {
+      const t = setup();
+      t.setEpicRows([row()]);
+      await sessionWrites(t, { summary: "长".repeat(20000) });
+      await t.memory.syncEpic(1);
+      const first = await handoffOf(t);
+      expect(first?.content.length).toBeLessThanOrEqual(EPIC_HANDOFF_MAX_CHARS);
+      expect(first?.content).toContain("长".repeat(EPIC_PLAN_MAX_CHARS - 1));
+      expect(first?.content).toContain("## 支付");
+      await t.memory.syncEpic(1);
+      expect(await handoffOf(t)).toEqual(first);
+      // 只有真的丢了字的那一次记日志。
+      expect(t.logs.filter((l) => l.includes("cut"))).toHaveLength(1);
+    });
+
+    it("survives the last feature leaving, and does not take Butler's empty text for a plan", async () => {
+      const t = setup();
+      t.setEpicRows([]);
+      await t.memory.syncEpic(1);
+      t.setEpicRows([row()]);
+      await t.memory.syncEpic(1);
+      const none = "这个 epic 下还没有 feature";
+      expect((await handoffOf(t))?.content).not.toContain(none);
+
+      await sessionWrites(t, { summary: "规划：先做支付" });
+      t.setEpicRows([]);
+      await t.memory.syncEpic(1);
+      expect((await handoffOf(t))?.content).toContain("规划：先做支付");
+      t.setEpicRows([row()]);
+      await t.memory.syncEpic(1);
+      const back = (await handoffOf(t))?.content ?? "";
+      expect(count(back, "规划：先做支付")).toBe(1);
+      expect(back).not.toContain(none);
+    });
+
+    it("does not take Butler's own text for a plan after the language changed", async () => {
+      const t = setup();
+      t.setEpicRows([row()]);
+      await t.memory.syncEpic(1);
+      setLang("en");
+      await t.memory.syncEpic(1);
+      const en = (await handoffOf(t))?.content ?? "";
+      expect(en).not.toContain("Butler 自动整理");
+      await sessionWrites(t, { summary: "plan: payments first" });
+      await t.memory.syncEpic(1);
+      setLang("zh");
+      await t.memory.syncEpic(1);
+      const zh = (await handoffOf(t))?.content ?? "";
+      expect(zh).not.toContain("compiled by Butler");
+      expect(count(zh, "plan: payments first")).toBe(1);
+    });
   });
 });
 

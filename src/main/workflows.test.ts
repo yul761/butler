@@ -39,7 +39,7 @@ describe("CI workflows (design 1.3, 11)", () => {
 
   it("tests on macOS and Windows with every check, the E2E suite included", () => {
     const test = ci.jobs.test;
-    expect(test.strategy?.matrix.os).toEqual(["macos-14", "windows-latest"]);
+    expect(test.strategy?.matrix.os).toEqual(["macos-15", "windows-latest"]);
     expect(test.strategy?.["fail-fast"]).toBe(false);
     for (const cmd of ["pnpm install --frozen-lockfile", "pnpm typecheck", "pnpm lint", "pnpm test", "pnpm build", "pnpm build:hook", "pnpm e2e:only"]) {
       expect(runs(test), cmd).toContain(cmd);
@@ -48,7 +48,7 @@ describe("CI workflows (design 1.3, 11)", () => {
   });
 
   it("builds unsigned installers on both platforms and only drafts a release", () => {
-    expect(release.jobs.build.strategy?.matrix.os).toEqual(["macos-14", "windows-latest"]);
+    expect(release.jobs.build.strategy?.matrix.os).toEqual(["macos-15", "windows-latest"]);
     // One platform's failure does not cancel the other's build; the release still waits for both.
     expect(release.jobs.build.strategy?.["fail-fast"]).toBe(false);
     expect(release.jobs.release.needs).toBe("build");

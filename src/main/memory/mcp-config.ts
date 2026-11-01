@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { featureScope, ticketScope, WORKSPACE_SCOPE } from "../../shared/memory";
+import { epicScope, featureScope, ticketScope, WORKSPACE_SCOPE } from "../../shared/memory";
 import { currentLang } from "../i18n";
 import { renameWithRetrySync } from "../util/fs-retry";
 import { ticketFileStem } from "../util/ticket-file";
@@ -11,6 +11,8 @@ export const MEMORY_SERVER = "butler-memory";
 export const WORKSPACE_SERVER = "butler-workspace";
 /** feature 的记忆：feature 下所有 ticket 的 session 和 feature 总控都挂（设计文档 2026-10-26）。 */
 export const FEATURE_SERVER = "butler-feature";
+/** epic 的记忆：epic session、epic 下 feature 的总控和这些 feature 下 ticket 的所有 session 都挂（设计文档 2026-11-01）。 */
+export const EPIC_SERVER = "butler-epic";
 /** 只挂给总控 session：开子 session、列出仓库和 session（设计文档 2026-10-23 第二步）。 */
 export const SESSIONS_SERVER = "butler-sessions";
 
@@ -27,12 +29,16 @@ export interface McpServerSpec {
   env: Record<string, string>;
 }
 
-/** ticket 的记忆（给了 ticketKey）、全局记忆，以及 feature 的记忆（给了 featureId）。feature 总控只有后两个。 */
+/**
+ * ticket 的记忆（给了 ticketKey）、全局记忆、feature 的记忆（给了 featureId）和 epic 的记忆（给了 epicId）。
+ * feature 总控没有 ticket 的记忆；epic session 只有全局记忆和 epic 的记忆。
+ */
 export function memoryServers(o: {
   launcher: MemoryMcpLauncher;
   statecoreDir: string;
   ticketKey?: string;
   featureId?: number | null;
+  epicId?: number | null;
 }): Record<string, McpServerSpec> {
   const server = (scope: string): McpServerSpec => ({
     type: "stdio",
@@ -45,17 +51,23 @@ export function memoryServers(o: {
     ...(o.ticketKey !== undefined && { [MEMORY_SERVER]: server(ticketScope(o.ticketKey)) }),
     [WORKSPACE_SERVER]: server(WORKSPACE_SCOPE),
     ...(o.featureId != null && { [FEATURE_SERVER]: server(featureScope(o.featureId)) }),
+    ...(o.epicId != null && { [EPIC_SERVER]: server(epicScope(o.epicId)) }),
   };
 }
 
-/** 总控的 butler-sessions server：同样用 Butler 自己的 Electron 运行；ticket（或 feature）和控制目录写死在配置里。 */
+/** 总控的 butler-sessions server：同样用 Butler 自己的 Electron 运行；ticket（feature、epic）和控制目录写死在配置里。 */
 export function sessionsServer(o: {
   launcher: MemoryMcpLauncher;
-  scope: { ticketKey: string } | { featureId: number };
+  /** epic: feature 总控的 feature 属于某个 epic（多出 epic_context 工具）。 */
+  scope: { ticketKey: string } | { featureId: number; epic?: boolean } | { epicId: number };
   requestsDir: string;
   resultsDir: string;
 }): Record<string, McpServerSpec> {
-  const target: Record<string, string> = "featureId" in o.scope ? { BUTLER_FEATURE: String(o.scope.featureId) } : { BUTLER_TICKET: o.scope.ticketKey };
+  const scope = o.scope;
+  const target: Record<string, string> =
+    "epicId" in scope ? { BUTLER_EPIC: String(scope.epicId) }
+    : "featureId" in scope ? { BUTLER_FEATURE: String(scope.featureId), ...(scope.epic && { BUTLER_FEATURE_EPIC: "1" }) }
+    : { BUTLER_TICKET: scope.ticketKey };
   // 工具描述跟着 Butler 的语言（设计文档 2026-10-26）。
   target.BUTLER_LANG = currentLang();
   return {
@@ -99,10 +111,28 @@ export function writeFeatureMcpConfig(o: { mcpDir: string; featureId: number; se
   return writeConfig(featureMcpFile(o.mcpDir, o.featureId), o.servers);
 }
 
+/** epic session 的配置：mcp/epics/<id>.json。 */
+export function epicMcpFile(mcpDir: string, epicId: number): string {
+  return join(mcpDir, "epics", `${epicId}.json`);
+}
+
+export function writeEpicMcpConfig(o: { mcpDir: string; epicId: number; servers: Record<string, McpServerSpec> }): string {
+  return writeConfig(epicMcpFile(o.mcpDir, o.epicId), o.servers);
+}
+
 /** feature 归档时删掉它总控的 --mcp-config 文件。 */
 export function removeFeatureMcpConfig(mcpDir: string, featureId: number): void {
   try {
     unlinkSync(featureMcpFile(mcpDir, featureId));
+  } catch {
+    // 本来就没有。
+  }
+}
+
+/** epic 归档时删掉 epic session 的 --mcp-config 文件。 */
+export function removeEpicMcpConfig(mcpDir: string, epicId: number): void {
+  try {
+    unlinkSync(epicMcpFile(mcpDir, epicId));
   } catch {
     // 本来就没有。
   }

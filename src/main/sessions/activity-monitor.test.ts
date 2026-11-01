@@ -36,7 +36,7 @@ const backgroundDone = (taskId: string) => ({
 const flush = () => new Promise((r) => setImmediate(r));
 const row = (id: string, over: Partial<Session> = {}): Session => ({
   id, ticketKey: "DMS-1", cwd: "/work", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
-  replacedBy: null, dismissed: false, createdAt: 1, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, ...over,
+  replacedBy: null, dismissed: false, createdAt: 1, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, ...over,
 });
 
 /** 假的依赖：session、ticket、feature 是内存表，transcript 和输出文件是真的临时文件。 */
@@ -429,6 +429,12 @@ describe("ActivityMonitor stuck detection scope", () => {
   it("does not check the feature coordinator", async () => {
     const h = harness();
     h.openSession("s1", { ticketKey: null, coordinator: true, featureId: 7 });
+    await judgedNever(h, "s1");
+  });
+
+  it("does not check an epic session", async () => {
+    const h = harness();
+    h.openSession("s1", { ticketKey: null, epicId: 3 });
     await judgedNever(h, "s1");
   });
 

@@ -8,6 +8,7 @@ import type {
   AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
+  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest,
 } from "../../shared/types";
 
 declare global {
@@ -62,6 +63,16 @@ export const api = {
   archivedFeatures: () => call<Feature[]>(IPC.featuresArchived),
   unarchiveFeature: (id: number) => call<void>(IPC.featuresUnarchive, id),
   openFeatureSession: (req: OpenFeatureSessionRequest) => call<OpenSessionResult>(IPC.featuresOpenSession, req),
+  moveFeature: (id: number, epicId: number | null) => call<void>(IPC.featuresMove, id, epicId),
+  listEpics: () => call<EpicView[]>(IPC.epicsList),
+  createEpic: (input: CreateEpicInput) => call<Epic>(IPC.epicsCreate, input),
+  renameEpic: (id: number, name: string) => call<Epic>(IPC.epicsRename, id, name),
+  addEpicRepo: (id: number, repoPath: string) => call<EpicRepo>(IPC.epicsAddRepo, id, repoPath),
+  removeEpicRepo: (epicRepoId: number) => call<void>(IPC.epicsRemoveRepo, epicRepoId),
+  archiveEpic: (id: number) => call<void>(IPC.epicsArchive, id),
+  archivedEpics: () => call<Epic[]>(IPC.epicsArchived),
+  unarchiveEpic: (id: number) => call<void>(IPC.epicsUnarchive, id),
+  openEpicSession: (req: OpenEpicSessionRequest) => call<OpenSessionResult>(IPC.epicsOpenSession, req),
   openFixSession: (req: OpenFixSessionRequest) => call<OpenSessionResult>(IPC.sessionOpenFix, req),
   scanRepos: (dir: string) => call<ScanResult>(IPC.reposScan, dir),
   unclaimed: () => call<UnclaimedSession[]>(IPC.sessionsUnclaimed),

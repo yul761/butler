@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { featureMcpFile, memoryServers, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
+import { epicMcpFile, featureMcpFile, memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
 
 const launcher = { command: "/Applications/Butler.app/Contents/MacOS/Butler", script: "/Applications/Butler.app/Contents/Resources/memory-mcp/statecore-mcp.cjs" };
 
@@ -127,5 +127,63 @@ describe("feature memory and coordinator config (design 2026-10-26)", () => {
     expect(existsSync(file)).toBe(true);
     removeFeatureMcpConfig(mcpDir, 7);
     expect(existsSync(file)).toBe(false);
+  });
+});
+
+describe("epic memory (design 2026-11-01)", () => {
+  const servers = (o: { ticketKey?: string; featureId?: number | null; epicId?: number | null }) => memoryServers({ launcher, statecoreDir: "/sc", ...o });
+
+  it("gives the epic session butler-epic and butler-workspace, and no ticket or feature memory", () => {
+    const epic = servers({ epicId: 4 });
+    expect(Object.keys(epic).sort()).toEqual(["butler-epic", "butler-workspace"]);
+    expect(epic["butler-epic"].env.STATECORE_SCOPE).toBe("epic:4");
+  });
+
+  it("adds butler-epic to the coordinator and the ticket sessions of a feature in an epic", () => {
+    expect(Object.keys(servers({ featureId: 7, epicId: 4 }))).toEqual(["butler-workspace", "butler-feature", "butler-epic"]);
+    const ticket = servers({ ticketKey: "DMS-1", featureId: 7, epicId: 4 });
+    expect(Object.keys(ticket)).toEqual(["butler-memory", "butler-workspace", "butler-feature", "butler-epic"]);
+    expect(ticket["butler-epic"].env.STATECORE_SCOPE).toBe("epic:4");
+  });
+
+  it("leaves features and tickets outside an epic with the servers they had", () => {
+    expect(servers({ featureId: 7, epicId: null })).toEqual(servers({ featureId: 7 }));
+    expect(servers({ ticketKey: "DMS-1", featureId: 7, epicId: null })).toEqual(servers({ ticketKey: "DMS-1", featureId: 7 }));
+    expect(servers({ ticketKey: "A-1", epicId: null })).toEqual(servers({ ticketKey: "A-1" }));
+    expect(Object.keys(servers({ ticketKey: "A-1", featureId: null, epicId: null }))).toEqual(["butler-memory", "butler-workspace"]);
+  });
+
+  it("writes the epic's config under mcp/epics", () => {
+    const mcpDir = tempDir();
+    const file = writeEpicMcpConfig({ mcpDir, epicId: 4, servers: servers({ epicId: 4 }) });
+    expect(file).toBe(epicMcpFile(mcpDir, 4));
+    expect(file).toBe(join(mcpDir, "epics", "4.json"));
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpServers: servers({ epicId: 4 }) });
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it("removes the epic's config, and does not mind when there is none", () => {
+    const mcpDir = tempDir();
+    const file = writeEpicMcpConfig({ mcpDir, epicId: 4, servers: servers({ epicId: 4 }) });
+    removeEpicMcpConfig(mcpDir, 4);
+    expect(existsSync(file)).toBe(false);
+    expect(() => removeEpicMcpConfig(mcpDir, 4)).not.toThrow();
+  });
+});
+
+describe("epic sessions server (design 2026-11-01)", () => {
+  it("points the epic session's sessions server at the epic", () => {
+    const s = sessionsServer({ launcher, scope: { epicId: 3 }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
+    expect(s.env.BUTLER_EPIC).toBe("3");
+    expect(s.env.BUTLER_FEATURE).toBeUndefined();
+    expect(s.env.BUTLER_TICKET).toBeUndefined();
+    expect(s.env.BUTLER_FEATURE_EPIC).toBeUndefined();
+  });
+
+  it("marks a feature coordinator that belongs to an epic", () => {
+    const inEpic = sessionsServer({ launcher, scope: { featureId: 7, epic: true }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
+    expect(inEpic.env).toMatchObject({ BUTLER_FEATURE: "7", BUTLER_FEATURE_EPIC: "1" });
+    const plain = sessionsServer({ launcher, scope: { featureId: 7 }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
+    expect(plain.env.BUTLER_FEATURE_EPIC).toBeUndefined();
   });
 });

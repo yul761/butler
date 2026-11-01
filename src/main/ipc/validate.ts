@@ -1,9 +1,11 @@
 import type { SensitiveTerm } from "../../shared/llm";
 import type {
-  AddRepoInput, CreateFeatureInput, CreateTicketInput, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
+  AddRepoInput, CreateEpicInput, CreateFeatureInput, CreateTicketInput, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
+import { EPIC_NAME_LIMIT } from "../epics/epic-service";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 import { M } from "../strings";
+import { TicketError } from "../tickets/ticket-service";
 
 /**
  * 渲染进程不可信：IPC 参数在主进程里按运行时类型检查，不合规就抛错（toIpcResult 包装成 { ok: false }）。
@@ -145,6 +147,31 @@ export function createFeatureArg(v: unknown): CreateFeatureInput {
   return { name: featureNameArg(o.name), repoPaths: repoPathsArg(o.repoPaths), workspaceDir: o.workspaceDir as string | undefined };
 }
 
+/** epic 的 id：正整数。 */
+export function epicIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) throw new Error("invalid epic id");
+  return v;
+}
+
+/** epic 名：1–100 字。带上 invalid_name，界面才能显示 epic 自己的提示。 */
+export function epicNameArg(v: unknown): string {
+  if (typeof v !== "string" || v.trim().length === 0 || v.length > EPIC_NAME_LIMIT) throw new TicketError("invalid_name", M().epicNameInvalid(EPIC_NAME_LIMIT));
+  return v;
+}
+
+/** 新建 epic（设计文档 2026-11-01）。 */
+export function createEpicArg(v: unknown): CreateEpicInput {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid epic");
+  if (o.workspaceDir !== undefined) dirArg(o.workspaceDir);
+  return { name: epicNameArg(o.name), repoPaths: repoPathsArg(o.repoPaths), workspaceDir: o.workspaceDir as string | undefined };
+}
+
+/** feature 移到哪个 epic：null 是移出。不接受 undefined：少传参数不能变成移出。 */
+export function moveTargetArg(v: unknown): number | null {
+  return v === null ? null : epicIdArg(v);
+}
+
 /** 新建 ticket：可以带 feature 和好几个仓库。 */
 export function createTicketArg(v: unknown): CreateTicketInput {
   const o = v as Record<string, unknown> | null;
@@ -173,6 +200,18 @@ export function openFeatureArg(v: unknown): OpenFeatureSessionRequest {
   if (!optString(o.prefill, 100_000)) throw new Error("invalid prefill");
   return {
     featureId: featureIdArg(o.featureId),
+    ...(o.sessionId !== undefined && { sessionId: sessionIdArg(o.sessionId) }),
+    ...(o.prefill !== undefined && { prefill: o.prefill }),
+  };
+}
+
+/** 打开 epic session。 */
+export function openEpicArg(v: unknown): OpenEpicSessionRequest {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid epic session request");
+  if (!optString(o.prefill, 100_000)) throw new Error("invalid prefill");
+  return {
+    epicId: epicIdArg(o.epicId),
     ...(o.sessionId !== undefined && { sessionId: sessionIdArg(o.sessionId) }),
     ...(o.prefill !== undefined && { prefill: o.prefill }),
   };

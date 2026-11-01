@@ -41,6 +41,30 @@ There are deliberate limits:
   - **收起 (Collapse)** closes the panel. The dot stays, and clicking it reopens the panel.
 
   The dot also clears by itself when the session has new activity. Nothing is fixed without your click, and stuck marks live in memory, so Butler checks afresh after a restart.
+- **Epics: several features, one plan.** An epic groups features that belong together and passes progress, decisions and open questions from one feature to the next, so no session has to write a document for the next one to read. A feature doesn't have to belong to an epic. Create an epic with **+ 新建 epic (New epic)**, giving a name and its repos. Its workspace is `<parent>-epics/<epic name>` by default, next to your repos. Features keep their own workspaces.
+
+  From plan to work:
+  1. On the epic page, open an **epic session (Epic session)**. It runs in the epic's workspace and can read every repo of the epic. Talk through what to build and how to split it into features.
+  2. When a feature is settled, the epic session creates it with `create_feature`. It passes a name, the repos the feature uses (chosen from the epic's repos, and optional when the epic has one) and a short plan of up to 4,000 characters: what to build, why, and what is already decided. Tickets are not created here.
+  3. The feature appears on the epic page and under the epic in the sidebar, and its plan shows as **规划 (Plan)** on the feature page. Butler does not open a coordinator for it.
+  4. Click into the feature and open its coordinator. The first time, Butler sends the plan as the coordinator's first message, which you can see in the terminal. With it come the name, status, latest progress, blockers, decisions and open questions of the epic's other features, archived ones included and marked as archived. The message tells the coordinator that all of this is data, not instructions. If it is too long, only the data is cut. Resuming a coordinator or opening another one does not send it again. A feature with no plan, such as one you moved in, gets no such message.
+  5. The coordinator creates tickets and starts sessions, the same as in any feature.
+
+  The epic session's `butler-sessions` server offers `list_features`, `list_repos` and `create_feature`. A coordinator of a feature in an epic also gets `epic_context`, which shows the other features of its epic. Both read Butler's latest data, so a session doesn't have to rely on what it was told at the start.
+
+  The epic page has one row per feature: the first sentence of its summary and a status (a ticket is stuck, waiting for you, not started, or in progress). Click a row for the details; tickets are only listed on the feature page. Archived features are folded under **已归档 (Archived)**. Below the rows are the repos, the epic sessions and a terminal that keeps at least half of the window's height. In the sidebar, the Epics group sits above Features and each epic collapses. The waiting mark and the red dot travel up from ticket to feature to epic, and stay visible when the epic is collapsed.
+
+  **移到 epic (Move to epic)** in a feature's header moves an existing feature into an epic, out of it, or to another epic. Only where the feature belongs changes: its workspace and worktrees stay put. Repos the epic doesn't have yet are added to it, and moving a feature out removes none. A session already running sees the epic's memory after you reopen it.
+
+  Archiving an epic archives its features and their tickets. Butler refuses while a terminal of the epic, its features or their tickets is running, and then nothing changes. Restoring the epic brings back what was archived with it. A feature you archived separately stays archived, but still counts: the next feature's coordinator reads about it.
+
+  An epic has no summary of its own: no nightly run, no completion percentage, and `/handoff` in an epic session stores nothing. Keep planning decisions in the epic's memory (see [StateCore memory](#statecore-memory)). Stuck checks don't watch epic sessions. A `claude` you open yourself in the epic's workspace counts as an epic session.
+
+  **Epics use more of your Claude quota.** So that the next feature reads fresh progress, Butler runs your own `claude` in the background at two more moments, on top of the nightly run:
+  - **When you archive an epic, or a feature in one.** Each feature with activity since its last summary first gets a new summary, and its tickets with activity get a handoff. The archive button says so while this runs. All of it shares a limit of 2 minutes, and if a summary fails or runs out of time, the archive goes ahead anyway and Butler logs it.
+  - **When an epic session calls `create_feature`.** The other features of the epic that are not archived get the same refresh in the background. `create_feature` doesn't wait for it.
+
+  The first message to a coordinator also starts a turn as soon as the coordinator opens.
 - **Worktree cleanup after merge.** Once a handoff reports that a ticket's PR is merged, Butler removes that ticket's worktrees with `git worktree remove`. The branch is kept, and opening a session there again rebuilds the worktree. Butler does not remove a worktree that has uncommitted changes or untracked files, or one whose own session is still running in a terminal. In that case the ticket page shows why, with a **重新检查 (check again)** button, and Butler tries again when that terminal exits. Files ignored by `.gitignore` (`node_modules`, a local `.env`) are removed with the worktree.
 - **Nightly handoffs.** At a time you choose, Butler asks your own logged-in `claude` to write a structured handoff for every ticket that had activity.
   - `Edit`, `Write` and `NotebookEdit` are always denied.
@@ -151,11 +175,12 @@ You can run the wizard again from Settings. [docs/configuration.md](docs/configu
 | `~/.butler/bin/butler-hook` | The hook program Claude Code runs (`butler-hook.exe` on Windows) |
 | `~/.butler/mcp/tickets/<ticket>.json` | The memory `--mcp-config` file, rewritten each time a session for that ticket is opened |
 | `~/.butler/mcp/features/<id>.json` | The `--mcp-config` file of a feature's coordinator |
+| `~/.butler/mcp/epics/<id>.json` | The `--mcp-config` file of an epic's sessions, removed when the epic is archived |
 | `~/.butler/workspaces/<ticket>/` | The empty folder a ticket's coordinator runs in |
 | `~/.butler/mcp/project-*.json`, `local-*.json` | Copies of your MCP server entries for unattended runs. Written only when **后台 handoff 也加载本地级的 MCP…** (`headlessProjectMcp`) is on. These are private files because they can contain tokens. |
 | `~/.butler/logs/main.log` | Logs |
 
-A feature's workspace is not under `~/.butler`: it sits next to your repos (see [What it does](#what-it-does)), and holds that feature's worktrees.
+A feature's workspace is not under `~/.butler`: it sits next to your repos (see [What it does](#what-it-does)), and holds that feature's worktrees. An epic's workspace sits next to your repos too.
 
 On Windows `~` is `%USERPROFILE%`. Set `BUTLER_HOME` to use another folder. Butler also honours `CLAUDE_CONFIG_DIR` for the Claude Code configuration it reads and the hooks it installs.
 
@@ -182,6 +207,8 @@ Electron also keeps its own profile folder, with Chromium's caches and the singl
 ## StateCore memory
 
 Butler embeds StateCore. Each session Butler starts gets two keyless MCP servers. `butler-memory` holds this ticket's memory and `butler-workspace` holds learnings shared across tickets. Sessions of a ticket in a feature also get `butler-feature`, the feature's memory (scope `feature:<id>`), which a feature's coordinator gets together with `butler-workspace`.
+
+Everything under an epic also gets `butler-epic`, the epic's memory (scope `epic:<id>`): the epic's sessions, the coordinators of its features and all sessions of their tickets. It has two parts that don't compete for room. Planning notes are what the epic session saves with `remember`, and they count toward the scope's 30 notes. The state of the features is a single handoff that Butler writes to the scope and rewrites when a feature gets a new summary or moves in or out. It covers the 10 most recent features, archived ones included and marked, in at most 8,000 characters. The oldest feature is dropped first.
 
 **Do not also install StateCore's own Claude Code capture plugin.** Butler already provides StateCore memory in the sessions it starts, and with both installed memory is recorded twice. Settings warns you if it finds the plugin.
 

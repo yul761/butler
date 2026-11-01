@@ -38,6 +38,8 @@ import { featureCommandFollowup, FeatureSummaryRunner } from "./handoff/feature-
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
+import { EpicsRepo } from "./db/epics-repo";
+import { EpicService } from "./epics/epic-service";
 import { FeaturesRepo } from "./db/features-repo";
 import { onLangChange, setLang } from "./i18n";
 import { resolveLang } from "../shared/i18n";
@@ -46,7 +48,7 @@ import { HandoffRunner } from "./handoff/runner";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { memoryServers, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
@@ -309,6 +311,8 @@ async function bootstrap(): Promise<void> {
   const sessions = new SessionsRepo(db);
   const features = new FeaturesRepo(db);
   const featureForCwd = (cwd: string): number | null => features.byWorkspace(cwd)?.id ?? null;
+  const epics = new EpicsRepo(db);
+  const epicForCwd = (cwd: string): number | null => epics.byWorkspace(cwd)?.id ?? null;
   const settings = new SettingsRepo(db);
   /** 当前语言：BUTLER_LANG > 设置 > 系统首选语言（设计文档 2026-10-26）。 */
   const applyLanguage = () => setLang(resolveLang(settings.get("language"), app.getPreferredSystemLanguages(), process.env.BUTLER_LANG));
@@ -324,6 +328,9 @@ async function bootstrap(): Promise<void> {
     followups,
     features,
     featureHandoffs,
+    epics,
+    // sessionService 在后面才建好：回调里才用到。
+    epicRows: (id) => sessionService.epicFeatureRows(id),
     sync: new MemorySyncRepo(db),
     enabled: () => memoryOn(settings),
     now: Date.now,
@@ -371,10 +378,10 @@ async function bootstrap(): Promise<void> {
    */
   /**
    * 记忆 server（记忆开着时）加上总控的 butler-sessions（设计文档 2026-10-23 第二步，和记忆开关无关）。
-   * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）；scope 是总控管的 ticket 或 feature，普通 session 为 null。
+   * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）、epic 的（设计文档 2026-11-01）；scope 是总控管的 ticket 或 feature，普通 session 为 null。
    */
   const launcher = (script: string) => ({ command: process.execPath, script });
-  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null }, scope: { ticketKey: string } | { featureId: number } | null) => {
+  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null; epicId?: number | null }, scope: { ticketKey: string } | { featureId: number; epic?: boolean } | { epicId: number } | null) => {
     let servers = {};
     if (memoryOn(settings)) {
       if (existsSync(memoryMcpScript)) servers = memoryServers({ launcher: launcher(memoryMcpScript), statecoreDir: paths.statecore, ...mem });
@@ -395,16 +402,22 @@ async function bootstrap(): Promise<void> {
     return servers;
   };
   /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。什么都不挂时返回 null。 */
-  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null }): string | null => {
-    const servers = mcpServers({ ticketKey, featureId: opts.featureId }, opts.coordinator ? { ticketKey } : null);
+  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }): string | null => {
+    const servers = mcpServers({ ticketKey, featureId: opts.featureId, epicId: opts.epicId }, opts.coordinator ? { ticketKey } : null);
     if (Object.keys(servers).length === 0) return null;
     return writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator });
   };
-  /** feature 总控：feature 记忆、全局记忆和 feature 模式的 butler-sessions。 */
-  const featureMcpConfig = (featureId: number): string | null => {
-    const servers = mcpServers({ featureId }, { featureId });
+  /** feature 总控：feature 记忆、全局记忆和 feature 模式的 butler-sessions；feature 属于 epic 时加 epic 记忆。 */
+  const featureMcpConfig = (featureId: number, epicId: number | null): string | null => {
+    const servers = mcpServers({ featureId, epicId }, { featureId, epic: epicId !== null });
     if (Object.keys(servers).length === 0) return null;
     return writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers });
+  };
+  /** epic session：epic 记忆、全局记忆和 epic 模式的 butler-sessions（list_features、list_repos、create_feature）。 */
+  const epicMcpConfig = (epicId: number): string | null => {
+    const servers = mcpServers({ epicId }, { epicId });
+    if (Object.keys(servers).length === 0) return null;
+    return writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers });
   };
   const activityMonitor = new ActivityMonitor({
     sessions, tickets, features, pty,
@@ -423,6 +436,8 @@ async function bootstrap(): Promise<void> {
     activity: (id) => activityMonitor.get(id),
     sessionName: (id) => sessionRegistryName(paths.claudeSessions, id),
     submit: submitTask,
+    // featureRunner 在后面才建好：回调里才用到。
+    epicRefresh: (id) => featureRunner.epicRefresh(id),
     ready: () => healthReady,
     transcriptExists: (id) => transcriptState(paths.claudeProjects, id) !== "absent",
     transcriptState: (id) => transcriptState(paths.claudeProjects, id),
@@ -434,7 +449,8 @@ async function bootstrap(): Promise<void> {
     mcpConfig: memoryMcpConfig,
     mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger }),
     featureMcpConfig,
-    features, featureHandoffs, handoffs,
+    epicMcpConfig,
+    features, epics, featureHandoffs, handoffs,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
     log: logger,
@@ -499,9 +515,14 @@ async function bootstrap(): Promise<void> {
     signal: headlessAbort.signal,
     log: logger,
   });
+  /** feature 有新汇总时，它所在的 epic 重新渲染 handoff（异步，失败只记日志）。 */
+  const syncEpicOfFeature = (featureId: number) => {
+    const epicId = features.get(featureId)?.epicId ?? null;
+    if (epicId !== null) void memory.syncEpic(epicId);
+  };
   /** feature 汇总入库（设计文档 2026-10-28）：存下有效的汇总后写进 feature 的记忆（异步，失败只记日志），界面刷新。 */
   const ingestFeature = (input: FeatureIngestInput) => {
-    const r = ingestFeatureHandoff({ features, tickets, featureHandoffs, now: Date.now }, input);
+    const r = ingestFeatureHandoff({ features, tickets, featureHandoffs, now: Date.now, onValidStored: syncEpicOfFeature }, input);
     if (r.stored && !r.degraded) void memory.syncFeature(input.featureId);
     if (r.stored) notify();
     return r;
@@ -636,7 +657,7 @@ async function bootstrap(): Promise<void> {
   const discoverOnce = async () => {
     try {
       const found = await scanClaudeProjects(paths.claudeProjects, Date.now() - UNCLAIMED_WINDOW_MS, discoveryHeads);
-      syncDiscovered(found, sessions, Date.now(), featureForCwd);
+      syncDiscovered(found, sessions, Date.now(), featureForCwd, epicForCwd);
       // 只有扫描真的找到了某个待补全 session 的 transcript，才记为本次运行已扫描过。
       for (const f of found) if (discoveryPending.delete(f.id)) discoveryRequested.add(f.id);
       notify();
@@ -684,7 +705,7 @@ async function bootstrap(): Promise<void> {
       const effect = applyHookEnvelope(env, {
         sessions, tickets, transcriptState: (id) => transcriptState(paths.claudeProjects, id),
         placement: (key, cwd) => ticketService.placement(key, cwd),
-        featureForCwd,
+        featureForCwd, epicForCwd,
       });
       // Stop 之后看这一轮有没有 /handoff 的输出（异步；失败只记日志，不影响 hook 处理）。
       const stop = stopFromEnvelope(env);
@@ -732,7 +753,23 @@ async function bootstrap(): Promise<void> {
     },
   };
 
-  const featureService = new FeatureService({ features, tickets, db, now: Date.now, onTicketArchived: (key) => removeTicketMcpConfigs(paths.mcp, key) });
+  // EpicService 要用 FeatureService 归档 / 恢复 feature，FeatureService 又要通知 EpicService 补仓库：回调里才用到 epicService，构造时还不需要。
+  const featureService = new FeatureService({
+    features, tickets, epics, db, now: Date.now,
+    onEpicChanged: (id) => void memory.syncEpic(id),
+    onTicketArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
+    onRepoAdded: (featureId, repoPath) => epicService.ensureFeatureRepo(featureId, repoPath),
+    refreshBeforeArchive: (ids) => featureRunner.refreshBeforeArchive(ids),
+    log: logger,
+  });
+  const epicService = new EpicService({
+    epics, features, featureService, db, now: Date.now,
+    onEpicChanged: (id) => void memory.syncEpic(id),
+    onArchived: (id, featureIds) => {
+      removeEpicMcpConfig(paths.mcp, id);
+      for (const f of featureIds) removeFeatureMcpConfig(paths.mcp, f);
+    },
+  });
   // 防休眠：只在内存里，启动时是关的。状态一变，托盘菜单、提示文字和界面都跟着更新。
   keepAwake = new KeepAwake({
     blocker: powerSaveBlocker,
@@ -751,7 +788,7 @@ async function bootstrap(): Promise<void> {
     onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,
-    tickets, ticketService, featureService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs,
+    tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs,
     keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     briefRefreshing: () => briefRefreshing,
@@ -779,6 +816,9 @@ async function bootstrap(): Promise<void> {
     resultsDir: paths.controlResults,
     handle: controlHandler({
       tickets, sessions, features, ticketService, sessionService, notify,
+      epics, featureService, epicRows: (id) => sessionService.epicFeatureRows(id),
+      syncEpic: (id) => void memory.syncEpic(id),
+      refreshEpic: (id, except) => featureRunner.refreshEpic(id, except),
       activity: (id) => activityMonitor.get(id),
       activityOutput: (id) => activityMonitor.output(id),
       submit: submitTask,
