@@ -23,6 +23,8 @@ export interface FeatureIngestDeps {
   tickets: TicketsRepo;
   featureHandoffs: FeatureHandoffsRepo;
   now: () => number;
+  /** 存下一份有效（非 degraded）汇总之后调用：让 feature 所在的 epic 重新渲染 handoff。 */
+  onValidStored?: (featureId: number) => void;
 }
 
 /** 写入一条 feature 汇总（只追加）。next_steps 的 ticket 规范成大写后在本 feature 里找，找不到当 null，文字保留。 */
@@ -43,5 +45,12 @@ export function ingestFeatureHandoff(d: FeatureIngestDeps, input: FeatureIngestI
     payload, rawText: input.rawText, sourceRef: input.sourceRef ?? null,
   });
   if (id === null) return { stored: false, reason: "duplicate" };
+  if (payload !== null) {
+    try {
+      d.onValidStored?.(input.featureId);
+    } catch {
+      // 通知失败不能影响汇总入库。
+    }
+  }
   return { stored: true, handoffId: id, degraded: payload === null };
 }

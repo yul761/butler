@@ -13,6 +13,7 @@ import {
   type OpenFixSessionRequest,
   type OpenSessionRequest,
   type OpenSessionResult,
+  type EpicFeatureRow,
   type Session,
   type SessionView,
   type Ticket,
@@ -23,6 +24,7 @@ import {
 import { launchEnv, type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
 import { claudeArgs, cmdShimSafe, sessionEnv } from "../claude/spawn";
 import type { EpicsRepo } from "../db/epics-repo";
+import { epicFeatureRows } from "../epics/epic-info";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
@@ -74,7 +76,7 @@ export interface SessionServiceDeps {
   /** epic（设计文档 2026-11-01）；不给就没有 epic session。 */
   epics?: EpicsRepo;
   /** feature 汇总（设计文档 2026-10-28）；不给 FeatureView 里 summary 为 null。 */
-  featureHandoffs?: Pick<FeatureHandoffsRepo, "latest">;
+  featureHandoffs?: Pick<FeatureHandoffsRepo, "latest" | "latestValid">;
   /** 取 ticket 的最新有效 handoff 里的 PR；不给就都是 []。 */
   handoffs?: Pick<HandoffsRepo, "knownPrs">;
   /** session 此刻的活动（ActivityMonitor）；不给 FeatureView 里 activity 是空的。 */
@@ -624,12 +626,44 @@ export class SessionService {
     });
   }
 
-  /** 未归档的 epic，带上它的 session。 */
+  /** epic 下各 feature 的一行情况。featureViews 的数据只算一次，由调用方传进来。 */
+  private epicRowsFrom(epicId: number, views: Map<number, FeatureView>): EpicFeatureRow[] {
+    if (!this.d.features || !this.d.featureHandoffs) return [];
+    return epicFeatureRows(epicId, {
+      features: this.d.features,
+      featureHandoffs: this.d.featureHandoffs,
+      live: (id) => {
+        const v = views.get(id);
+        if (!v) return undefined;
+        return {
+          stuck: Object.values(v.activity).some((a) => a.stuck === true),
+          waiting: v.waiting,
+          started: v.tickets.length > 0 || v.sessions.length + v.hiddenSessions.length > 0,
+          summary: v.summary,
+        };
+      },
+    });
+  }
+
+  /** 一个 epic 下各 feature 的情况（渲染 epic handoff 用）。 */
+  epicFeatureRows(epicId: number): EpicFeatureRow[] {
+    return this.epicRowsFrom(epicId, new Map(this.featureViews().map((v) => [v.id, v])));
+  }
+
+  /** 未归档的 epic，带上它的 session 和下面各 feature 的情况。 */
   epicViews(): EpicView[] {
     const heads = this.openHeads();
+    // 状态变化时每次都会算：feature 的视图只算一次，所有 epic 共用。
+    const views = new Map(this.featureViews().map((v) => [v.id, v]));
     return (this.d.epics?.list() ?? []).map((e) => {
       const { sessions, hiddenSessions } = this.split(this.d.sessions.listByEpic(e.id), heads);
-      return { ...e, sessions, hiddenSessions, waiting: sessions.some((s) => s.waitingForInput), stuck: false, features: [] };
+      const features = this.epicRowsFrom(e.id, views);
+      const own = [...views.values()].filter((v) => v.epicId === e.id);
+      return {
+        ...e, sessions, hiddenSessions, features,
+        waiting: sessions.some((s) => s.waitingForInput) || own.some((v) => v.waiting),
+        stuck: features.some((f) => f.status === "stuck"),
+      };
     });
   }
 

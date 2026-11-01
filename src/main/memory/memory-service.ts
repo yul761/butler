@@ -1,7 +1,11 @@
 import type { Handoff } from "../../shared/handoff";
 import {
-  featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, ticketScope, WORKSPACE_SCOPE, type ButlerNote, type MemoryView, type WhyEntry,
+  epicScope, featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, ticketScope, WORKSPACE_SCOPE, type ButlerNote, type MemoryView, type WhyEntry,
 } from "../../shared/memory";
+import type { EpicFeatureRow } from "../../shared/types";
+import { renderEpicHandoff } from "../epics/epic-info";
+import { currentLang } from "../i18n";
+import type { EpicsRepo } from "../db/epics-repo";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";
 import type { FollowupsRepo } from "../db/followups-repo";
@@ -22,6 +26,9 @@ export interface MemoryServiceDeps {
   handoffs: Pick<HandoffsRepo, "listByTicket">;
   followups: Pick<FollowupsRepo, "listByTicket">;
   features: Pick<FeaturesRepo, "get" | "list">;
+  epics: Pick<EpicsRepo, "get" | "list">;
+  /** epic 下各 feature 的情况（含已归档）：渲染 epic handoff 用。 */
+  epicRows: (epicId: number) => EpicFeatureRow[];
   featureHandoffs: Pick<FeatureHandoffsRepo, "listByFeature">;
   sync: MemorySyncRepo;
   /** 设置里的记忆开关（memoryEnabled）。 */
@@ -156,11 +163,32 @@ export class MemoryService {
     return p;
   }
 
-  /** 所有未归档的 ticket 和 feature（启动时补齐：老数据、上次退出时没写完的）。 */
+  /**
+   * 把 epic 下各 feature 的情况渲染成 epic scope 的一份 handoff（设计文档 2026-11-01）。排队、合并的规则同 syncFeature。
+   * 只写 handoff：不碰笔记，也不走 reconcile（那会删掉 epic session 自己写的规划笔记）。
+   */
+  syncEpic(epicId: number): Promise<void> {
+    const key = epicScope(epicId);
+    const waiting = this.pending.get(key);
+    if (waiting) return waiting;
+    const p = this.enqueue(
+      `memory sync ${key}`,
+      async () => {
+        this.pending.delete(key);
+        await this.syncEpicNow(epicId);
+      },
+      undefined,
+    );
+    this.pending.set(key, p);
+    return p;
+  }
+
+  /** 所有未归档的 ticket、feature 和 epic（启动时补齐：老数据、上次退出时没写完的）。 */
   async syncAll(): Promise<void> {
     await Promise.all([
       ...this.d.tickets.list().map((t) => this.syncTicket(t.key)),
       ...this.d.features.list().map((f) => this.syncFeature(f.id)),
+      ...this.d.epics.list().map((e) => this.syncEpic(e.id)),
     ]);
   }
 
@@ -235,6 +263,24 @@ export class MemoryService {
         latest.createdAt,
       );
       await this.reconcile(key, s, featureDecisionNotes(p.decisions));
+    });
+    try {
+      this.d.onSynced?.(key);
+    } catch (e) {
+      this.log("memory onSynced callback failed", e);
+    }
+  }
+
+  /**
+   * 渲染好的正文和 StateCore 里当前的一字不差时不再写（retryAfter 传 0：只比正文）。
+   * 一个 feature 都没有时也要写（移出最后一个 feature 后，旧内容不能留着）。
+   */
+  private async syncEpicNow(epicId: number): Promise<void> {
+    if (!this.d.enabled() || !this.d.epics.get(epicId)) return;
+    const key = epicScope(epicId);
+    const text = renderEpicHandoff(this.d.epicRows(epicId), currentLang());
+    await withScope({ dataDir: this.d.dataDir, scope: key }, async (s) => {
+      await s.handoff({ summary: text, nextSteps: [], openQuestions: [] }, 0);
     });
     try {
       this.d.onSynced?.(key);

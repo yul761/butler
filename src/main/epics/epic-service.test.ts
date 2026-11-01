@@ -193,6 +193,27 @@ describe("EpicService moveFeature", () => {
     expect(existsSync(dir)).toBe(true);
   });
 
+  it("tells both epics about a move, and a failing callback does not fail it", async () => {
+    const { epicService, featureService, features, epics, tickets } = setup();
+    const s = shop();
+    const e1 = await epicService.create({ name: "e1", repoPaths: [s.frontend] });
+    const e2 = await epicService.create({ name: "e2", repoPaths: [s.frontend] });
+    const f = await featureService.create({ name: "f", repoPaths: [s.frontend] });
+    const changed: number[] = [];
+    const svc = new EpicService({ epics, features, featureService: new FeatureService({ features, tickets, epics, now: () => 1 }), now: () => 1, onEpicChanged: (id) => void changed.push(id) });
+    svc.moveFeature(f.id, e1.id);
+    expect(changed).toEqual([e1.id]);
+    changed.length = 0;
+    svc.moveFeature(f.id, e2.id);
+    expect(changed).toEqual([e1.id, e2.id]);
+    changed.length = 0;
+    svc.moveFeature(f.id, null);
+    expect(changed).toEqual([e2.id]);
+    const boom = new EpicService({ epics, features, featureService, now: () => 1, onEpicChanged: () => { throw new Error("x"); } });
+    expect(() => boom.moveFeature(f.id, e1.id)).not.toThrow();
+    expect(features.get(f.id)?.epicId).toBe(e1.id);
+  });
+
   it("refuses an archived epic or a missing feature or epic", async () => {
     const { epicService, featureService } = setup();
     const s = shop();

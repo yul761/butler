@@ -328,6 +328,9 @@ async function bootstrap(): Promise<void> {
     followups,
     features,
     featureHandoffs,
+    epics,
+    // sessionService 在后面才建好：回调里才用到。
+    epicRows: (id) => sessionService.epicFeatureRows(id),
     sync: new MemorySyncRepo(db),
     enabled: () => memoryOn(settings),
     now: Date.now,
@@ -510,9 +513,14 @@ async function bootstrap(): Promise<void> {
     signal: headlessAbort.signal,
     log: logger,
   });
+  /** feature 有新汇总时，它所在的 epic 重新渲染 handoff（异步，失败只记日志）。 */
+  const syncEpicOfFeature = (featureId: number) => {
+    const epicId = features.get(featureId)?.epicId ?? null;
+    if (epicId !== null) void memory.syncEpic(epicId);
+  };
   /** feature 汇总入库（设计文档 2026-10-28）：存下有效的汇总后写进 feature 的记忆（异步，失败只记日志），界面刷新。 */
   const ingestFeature = (input: FeatureIngestInput) => {
-    const r = ingestFeatureHandoff({ features, tickets, featureHandoffs, now: Date.now }, input);
+    const r = ingestFeatureHandoff({ features, tickets, featureHandoffs, now: Date.now, onValidStored: syncEpicOfFeature }, input);
     if (r.stored && !r.degraded) void memory.syncFeature(input.featureId);
     if (r.stored) notify();
     return r;
@@ -746,10 +754,11 @@ async function bootstrap(): Promise<void> {
   // EpicService 要用 FeatureService 归档 / 恢复 feature，FeatureService 又要通知 EpicService 补仓库：回调里才用到 epicService，构造时还不需要。
   const featureService = new FeatureService({
     features, tickets, epics, db, now: Date.now,
+    onEpicChanged: (id) => void memory.syncEpic(id),
     onTicketArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
     onRepoAdded: (featureId, repoPath) => epicService.ensureFeatureRepo(featureId, repoPath),
   });
-  const epicService = new EpicService({ epics, features, featureService, db, now: Date.now });
+  const epicService = new EpicService({ epics, features, featureService, db, now: Date.now, onEpicChanged: (id) => void memory.syncEpic(id) });
   // 防休眠：只在内存里，启动时是关的。状态一变，托盘菜单、提示文字和界面都跟着更新。
   keepAwake = new KeepAwake({
     blocker: powerSaveBlocker,

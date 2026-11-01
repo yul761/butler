@@ -14,6 +14,8 @@ export interface FeatureServiceDeps {
   epics?: EpicsRepo;
   /** feature 加了仓库之后调用（让 epic 补上这个仓库）。 */
   onRepoAdded?: (featureId: number, repoPath: string) => void;
+  /** feature 改名、归档、恢复之后调用，参数是它所在的 epic（没有 epic 不调用）：epic 的 handoff 要跟着重新渲染。 */
+  onEpicChanged?: (epicId: number) => void;
   now: () => number;
   /** 归档 feature 时连带归档的每个 ticket：清掉它的 MCP 配置文件。 */
   onTicketArchived?: (ticketKey: string) => void;
@@ -85,7 +87,9 @@ export class FeatureService {
   rename(featureId: number, name: string): Feature {
     this.get(featureId);
     this.d.features.setName(featureId, FeatureService.checkName(name));
-    return this.get(featureId);
+    const f = this.get(featureId);
+    this.epicChanged(f.epicId);
+    return f;
   }
 
   /** feature 和它还没归档的 ticket 用同一个时间戳归档（at：由 epic 归档传入的统一时间戳）；有终端在跑时拒绝。 */
@@ -100,6 +104,7 @@ export class FeatureService {
       this.d.features.archive(featureId, now);
     });
     for (const k of keys) this.d.onTicketArchived?.(k);
+    this.epicChanged(f.epicId);
   }
 
   /** 恢复 feature，以及和它一起归档的 ticket（之前单独归档的保持归档）；它的 epic 已归档时只恢复 epic 本身，epic 下别的 feature 不动。 */
@@ -113,6 +118,16 @@ export class FeatureService {
       const epic = f.epicId === null ? null : this.d.epics?.get(f.epicId);
       if (epic && epic.archivedAt !== null) this.d.epics!.unarchive(epic.id);
     });
+    this.epicChanged(f.epicId);
+  }
+
+  private epicChanged(epicId: number | null): void {
+    if (epicId === null) return;
+    try {
+      this.d.onEpicChanged?.(epicId);
+    } catch {
+      // 通知失败不能让改名、归档失败。
+    }
   }
 
   private tx<T>(fn: () => T): T {

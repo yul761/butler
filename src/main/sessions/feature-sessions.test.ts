@@ -319,6 +319,34 @@ describe("epic sessions (design 2026-11-01)", () => {
     expect(service.hasEpicTerminal(epicId)).toBe(false);
   });
 
+  it("fills each epic with its features: status, latest valid summary, stuck and waiting", async () => {
+    const { service, sessions, features, featureHandoffs, activities, feature, epicId } = await epicSetup();
+    const sum = { summary: "联调完了", blockers: ["等后端"], next_steps: [], decisions: [{ key: "k", statement: "s" }], open_questions: ["q"] };
+    featureHandoffs.insert({ featureId: feature.id, sessionId: null, trigger: "manual", createdAt: 5, payload: sum, rawText: null });
+    featureHandoffs.insert({ featureId: feature.id, sessionId: null, trigger: "manual", createdAt: 6, payload: null, rawText: "bad" });
+    const gone = features.insert({ name: "gone", workspaceDir: tempDir("butler-gone-"), createdAt: 1 });
+    features.setEpic(gone, epicId);
+    features.archive(gone, 9);
+    features.setEpic(feature.id, epicId);
+    const row = () => service.epicViews()[0].features.find((f) => f.id === feature.id)!;
+    const fresh = features.insert({ name: "fresh", workspaceDir: tempDir("butler-fresh-"), createdAt: 1 });
+    features.setEpic(fresh, epicId);
+    expect(service.epicViews()[0].features.map((f) => [f.id, f.status])).toEqual([[feature.id, "active"], [fresh, "not_started"], [gone, "archived"]]);
+    expect(row()).toMatchObject({ status: "active", summary: "联调完了", summaryAt: 5, blockers: ["等后端"], openQuestions: ["q"] });
+    expect(service.epicViews()[0]).toMatchObject({ stuck: false, waiting: false });
+    expect(service.epicViews()[0].features[2]).toMatchObject({ status: "archived", summary: null });
+
+    const t = await service.open({ ticketKey: "DMS-1" });
+    if (!t.ok) throw new Error("did not open");
+    sessions.setWaiting(t.termId, true, 2000);
+    expect(row().status).toBe("waiting");
+    expect(service.epicViews()[0]).toMatchObject({ waiting: true, stuck: false });
+    activities.set(t.termId, stuckActivity(t.termId));
+    expect(row().status).toBe("stuck");
+    expect(service.epicViews()[0]).toMatchObject({ waiting: true, stuck: true });
+    expect(service.epicFeatureRows(epicId)).toEqual(service.epicViews()[0].features);
+  });
+
   it("lists epics with their sessions and terminals; progress comes later", async () => {
     const { service, sessions, epics, pty, epicId, frontend, backend } = await epicSetup();
     const archived = epics.insert({ name: "old", workspaceDir: tempDir("butler-epic-"), createdAt: 1 });

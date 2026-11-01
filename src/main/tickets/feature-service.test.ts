@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, realpathSync, renameSync, symlinkSync } from "node:fs";
 import { join, sep } from "node:path";
 import { describe, expect, it } from "vitest";
+import { EpicsRepo } from "../db/epics-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
@@ -173,5 +174,28 @@ describe("tickets in a feature", () => {
     const f = await featureService.create({ name: "x", repoPaths: [s.frontend] });
     featureService.archive(f.id, { terminalsOpen: false });
     expect(await code(ticketService.create({ key: "DMS-2", featureId: f.id }))).toBe("archived");
+  });
+});
+
+describe("FeatureService tells the epic about changes", () => {
+  it("on rename, archive and unarchive of a feature in an epic, and not for one outside any epic", async () => {
+    const db = memDb();
+    const features = new FeaturesRepo(db);
+    const tickets = new TicketsRepo(db);
+    const epicId = new EpicsRepo(db).insert({ name: "e", workspaceDir: "/e", createdAt: 1 });
+    const changed: number[] = [];
+    const svc = new FeatureService({ features, tickets, now: () => 5, onEpicChanged: (id) => void changed.push(id) });
+    const inside = features.insert({ name: "in", workspaceDir: "/w/in", createdAt: 1 });
+    const outside = features.insert({ name: "out", workspaceDir: "/w/out", createdAt: 1 });
+    features.setEpic(inside, epicId);
+    svc.rename(outside, "x");
+    svc.archive(outside, { terminalsOpen: false });
+    expect(changed).toEqual([]);
+    svc.rename(inside, "renamed");
+    svc.archive(inside, { terminalsOpen: false });
+    svc.unarchive(inside);
+    expect(changed).toEqual([epicId, epicId, epicId]);
+    const boom = new FeatureService({ features, tickets, now: () => 5, onEpicChanged: () => { throw new Error("x"); } });
+    expect(boom.rename(inside, "again").name).toBe("again");
   });
 });

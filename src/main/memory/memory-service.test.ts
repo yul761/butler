@@ -5,6 +5,7 @@ import { createEmbeddedBackend } from "statecore-mcp/lib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FeatureHandoff, Handoff } from "../../shared/handoff";
 import type { Followup, FollowupStatus, HandoffTrigger } from "../../shared/types";
+import { EpicsRepo } from "../db/epics-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { FollowupsRepo } from "../db/followups-repo";
@@ -12,7 +13,8 @@ import { HandoffsRepo } from "../db/handoffs-repo";
 import { MemorySyncRepo } from "../db/memory-sync-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { chatReply, gatewayHarness, type GatewayHarness } from "../gateway/testing";
-import { featureScope } from "../../shared/memory";
+import { epicScope, featureScope } from "../../shared/memory";
+import type { EpicFeatureRow } from "../../shared/types";
 import { insertTicket, memDb, tempDir } from "../test-utils";
 import { handoffSummary, MemoryService, nightlyDistill } from "./memory-service";
 import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
@@ -50,6 +52,10 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   const sync = new MemorySyncRepo(db);
   const features = new FeaturesRepo(db);
   const featureHandoffs = new FeatureHandoffsRepo(db);
+  const epics = new EpicsRepo(db);
+  // epic 1；它下面各 feature 的情况由测试直接给。
+  epics.insert({ name: "E1", workspaceDir: "/e/E1", createdAt: 1 });
+  let epicRows: EpicFeatureRow[] = [];
   // feature 1、2、3；测试里主要用 3。
   for (const name of ["F1", "F2", "F3"]) features.insert({ name, workspaceDir: `/w/${name}`, createdAt: 1 });
   for (const key of ["PROJ-1", "PROJ-2"]) {
@@ -63,7 +69,7 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   let now = Date.now();
   const synced: string[] = [];
   const memory = new MemoryService({
-    dataDir, tickets, handoffs, followups, sync, features, featureHandoffs,
+    dataDir, tickets, handoffs, followups, sync, features, featureHandoffs, epics, epicRows: () => epicRows,
     enabled: () => enabled,
     now: () => now,
     onSynced: (key) => synced.push(key),
@@ -85,7 +91,7 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   const slots = (scope = "ticket:PROJ-1") => withScope({ dataDir, scope }, (s) => s.noteSlots());
   return {
     memory, dataDir, sync, logs, synced, features, addHandoff, addFollowup, setFollowup, addSummary, texts, items, slots,
-    setEnabled: (v: boolean) => (enabled = v),
+    setEnabled: (v: boolean) => (enabled = v), epics, setEpicRows: (r: EpicFeatureRow[]) => (epicRows = r),
   };
 }
 
@@ -184,6 +190,64 @@ describe("MemoryService.syncFeature (design 2026-10-28, 记忆)", () => {
     await t.memory.syncAll();
     expect((await handoffOf(t))?.content).toBe("feature 3");
     expect(await withScope({ dataDir: t.dataDir, scope: featureScope(2) }, (s) => s.activeHandoff())).toBeNull();
+  });
+});
+
+describe("MemoryService.syncEpic (design 2026-11-01, epic handoff)", () => {
+  const scope = epicScope(1);
+  const handoffOf = (t: ReturnType<typeof setup>) => withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
+  const row = (over: Partial<EpicFeatureRow> = {}): EpicFeatureRow => ({
+    id: 3, name: "支付", status: "active", archivedAt: null, summaryAt: 5, summary: "接口联调完了", blockers: [], decisions: [], openQuestions: [], ...over,
+  });
+
+  it("writes the rendered features as the handoff of the epic scope and leaves the planning notes alone", async () => {
+    const t = setup();
+    await withScope({ dataDir: t.dataDir, scope }, (s) => s.remember("先做支付，再做退款"));
+    t.setEpicRows([row()]);
+    await t.memory.syncEpic(1);
+    expect((await handoffOf(t))?.content).toContain("## 支付 (进行中)\n接口联调完了");
+    expect(await t.texts(scope)).toEqual(["先做支付，再做退款"]);
+    expect(t.logs).toEqual([]);
+    expect(t.synced).toEqual([scope]);
+  });
+
+  it("rewrites the handoff when the features change, and not when nothing changed", async () => {
+    const t = setup();
+    t.setEpicRows([row()]);
+    await t.memory.syncEpic(1);
+    await t.memory.syncEpic(1);
+    expect((await handoffOf(t))?.versionCount).toBe(1);
+    t.setEpicRows([]);
+    await t.memory.syncEpic(1);
+    expect(await handoffOf(t)).toMatchObject({ content: expect.not.stringContaining("支付"), versionCount: 2 });
+  });
+
+  it("never reconciles an epic scope: syncAll syncs epics through syncEpic and keeps their notes", async () => {
+    const t = setup();
+    await withScope({ dataDir: t.dataDir, scope }, (s) => s.remember("规划笔记"));
+    t.setEpicRows([row()]);
+    await t.memory.syncAll();
+    expect(await t.texts(scope)).toEqual(["规划笔记"]);
+    expect((await handoffOf(t))?.content).toContain("支付");
+  });
+
+  it("does nothing when memory is off or the epic does not exist", async () => {
+    const off = setup({ enabled: false });
+    off.setEpicRows([row()]);
+    await off.memory.syncEpic(1);
+    expect(await handoffOf(off)).toBeNull();
+    const t = setup();
+    t.setEpicRows([row()]);
+    await t.memory.syncEpic(99);
+    expect(await handoffOf(t)).toBeNull();
+  });
+
+  it("logs a failed sync and still resolves", async () => {
+    const t = setup();
+    t.setEpicRows([row()]);
+    wrapScopes((sc) => sc === scope, (s) => ({ ...s, handoff: () => Promise.reject(new Error("boom")) }));
+    await expect(t.memory.syncEpic(1)).resolves.toBeUndefined();
+    expect(t.logs.some((l) => l.includes("boom"))).toBe(true);
   });
 });
 

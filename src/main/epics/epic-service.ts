@@ -12,6 +12,8 @@ export interface EpicServiceDeps {
   features: FeaturesRepo;
   /** 归档 / 恢复 epic 下的 feature 时走它，和单独归档 feature 的做法（连带 ticket）完全一致。 */
   featureService: FeatureService;
+  /** feature 移进或移出之后，对涉及的每个 epic 调用一次（移动时两边都调）：epic 的 handoff 要重新渲染。 */
+  onEpicChanged?: (epicId: number) => void;
   now: () => number;
   /** 给了就把多步写入放进一个事务。 */
   db?: Db;
@@ -125,6 +127,7 @@ export class EpicService {
     if (!f) throw new TicketError("not_found", M().featureNotFound);
     if (epicId === null) {
       this.d.features.setEpic(featureId, null);
+      this.changed(f.epicId);
       return;
     }
     const e = this.get(epicId);
@@ -133,6 +136,17 @@ export class EpicService {
       this.d.features.setEpic(featureId, epicId);
       for (const r of f.repos) this.addMissingRepo(e, r.repoPath);
     });
+    this.changed(f.epicId);
+    if (f.epicId !== epicId) this.changed(epicId);
+  }
+
+  private changed(epicId: number | null): void {
+    if (epicId === null) return;
+    try {
+      this.d.onEpicChanged?.(epicId);
+    } catch {
+      // 通知失败不能让移动失败。
+    }
   }
 
   /** feature 加了仓库之后调用：feature 属于某个 epic、而 epic 没有这个仓库时加进去。 */
