@@ -85,7 +85,7 @@ export function deriveActivity(s: TranscriptState, atPermissionPrompt: boolean):
 const fileSize = (file: string): Promise<number | null> => stat(file).then((s) => s.size, () => null);
 
 /** 给 Claude 看的一句话：现在在做什么。 */
-function describeActivity(a: SessionActivity): string {
+export function describeActivity(a: SessionActivity): string {
   const m = M();
   return `${[m.activityKinds[a.kind], a.detail].filter(Boolean).join(" ")}${a.background ? m.activityBackground : ""}`;
 }

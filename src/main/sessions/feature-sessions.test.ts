@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { SessionActivity } from "../../shared/activity";
+import { MAX_RUNNING_PER_FEATURE } from "../../shared/control";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { HandoffsRepo } from "../db/handoffs-repo";
@@ -10,6 +12,7 @@ import { TicketsRepo } from "../db/tickets-repo";
 import { applyHookEnvelope } from "../hooks/hook-events";
 import { FeatureService } from "../tickets/feature-service";
 import { TicketService } from "../tickets/ticket-service";
+import { setLang } from "../i18n";
 import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import { PtyManager } from "./pty-manager";
 import { SessionService } from "./session-service";
@@ -39,13 +42,24 @@ async function setup() {
   const pty = new PtyManager(factory, { data: () => undefined, exit: () => undefined });
   const mcpAsked: { key: string; coordinator: boolean; featureId: number | null }[] = [];
   const settingsAsked: string[][] = [];
+  const activities = new Map<string, SessionActivity>();
+  const names = new Map<string, string>();
+  const namesAsked: string[] = [];
+  const submitted: [string, string][] = [];
+  const claude: { path: string | null } = { path: "/bin/claude" };
+  const logs: string[] = [];
+  let submit: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout"> = async (termId, message) => (submitted.push([termId, message]), "sent");
   let n = 0;
   const service = new SessionService({
     tickets, sessions, settings, ticketService, pty, features, featureHandoffs, handoffs,
+    activity: (id) => activities.get(id) ?? null,
+    sessionName: async (id) => (namesAsked.push(id), names.get(id) ?? null),
+    submit: (termId, message) => submit(termId, message),
+    log: (m) => logs.push(m),
     ready: async () => undefined,
     transcriptExists: () => true,
     transcriptState: () => "present",
-    claude: () => ({ path: "/bin/claude", pathValue: "/login/bin" }),
+    claude: () => ({ path: claude.path, pathValue: "/login/bin" }),
     newId: () => `new-${++n}`,
     now: () => 1000,
     platform: "darwin",
@@ -54,7 +68,10 @@ async function setup() {
     featureMcpConfig: (id) => `/mcp/features/${id}.json`,
     mcpSettings: (dirs) => (settingsAsked.push(dirs), "/mcp/approve.json"),
   });
-  return { service, featureHandoffs, handoffs, sessions, tickets, features, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, settingsAsked };
+  return {
+    service, featureHandoffs, handoffs, sessions, tickets, features, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, settingsAsked,
+    activities, names, namesAsked, submitted, claude, logs, setSubmit: (f: typeof submit) => (submit = f),
+  };
 }
 
 describe("feature coordinator sessions (design 2026-10-26)", () => {
@@ -163,5 +180,215 @@ describe("feature coordinator sessions (design 2026-10-26)", () => {
     expect(service.featureViews()[0].hiddenSessions.map((s) => s.id)).toEqual(["new-1"]);
     service.unhide("new-1");
     expect(sessions.get("new-1")?.dismissed).toBe(false);
+  });
+});
+
+const stuckActivity = (sessionId: string, over: Partial<SessionActivity> = {}): SessionActivity => ({
+  sessionId, kind: "test", detail: "pnpm test", background: false, startedAt: 1, lastOutputAt: 2, stuck: true, reason: "测试停在等网络", action: "看看代理", lastOutput: ["waiting for 127.0.0.1", "retry 3"], ...over,
+});
+
+describe("fix sessions (design 2026-10-31)", () => {
+  /** DMS-1 下一个正在运行、卡住了的 session。 */
+  async function stuckSetup() {
+    const ctx = await setup();
+    const r = await ctx.service.open({ ticketKey: "DMS-1" });
+    if (!r.ok) throw new Error("did not open");
+    ctx.activities.set(r.termId, stuckActivity(r.termId));
+    return { ...ctx, stuckId: r.termId, req: { featureId: ctx.feature.id, stuckSessionId: r.termId } };
+  }
+
+  it("opens a non-coordinator feature-level session in the workspace, started like a coordinator", async () => {
+    const { service, spawned, sessions, feature, backend, req, stuckId } = await stuckSetup();
+    expect(await service.openFix(req)).toEqual({ ok: true, termId: "new-2", alreadyOpen: false });
+    expect(sessions.get("new-2")).toMatchObject({ ticketKey: null, featureId: feature.id, coordinator: false, fixesSession: stuckId, cwd: feature.workspaceDir, origin: "butler" });
+    const s = spawned[1];
+    expect(s.opts.cwd).toBe(feature.workspaceDir);
+    expect(s.args).toEqual(["--session-id", "new-2", "--mcp-config", `/mcp/features/${feature.id}.json`, "--settings", "/mcp/approve.json", "--add-dir", backend]);
+    expect(s.opts.env.BUTLER_TICKET).toBeUndefined();
+    expect(s.opts.env.BUTLER_SESSION).toBe("new-2");
+  });
+
+  it("sends the task with submit, not prefill, and does not wait for it", async () => {
+    const { service, pty, req, stuckId, submitted, names, activities, sessions, setSubmit } = await stuckSetup();
+    const prefill = vi.spyOn(pty, "prefill");
+    activities.set(stuckId, stuckActivity(stuckId, { background: true }));
+    names.set(stuckId, "swift-fox");
+    let finish: (r: "sent") => void = () => undefined;
+    setSubmit((termId, message) => (submitted.push([termId, message]), new Promise((r) => (finish = r))));
+    await expect(service.openFix(req)).resolves.toMatchObject({ ok: true, termId: "new-2" });
+    finish("sent");
+    expect(prefill).not.toHaveBeenCalled();
+    expect(submitted).toHaveLength(1);
+    const [termId, text] = submitted[0];
+    expect(termId).toBe("new-2");
+    for (const part of ["DMS-1", stuckId, "swift-fox", sessions.get(stuckId)!.cwd, "跑测试 pnpm test（后台）", "测试停在等网络", "waiting for 127.0.0.1", "retry 3"]) expect(text).toContain(part);
+  });
+
+  it("writes the task in the current language", async () => {
+    const { service, req, submitted } = await stuckSetup();
+    setLang("en");
+    try {
+      await service.openFix(req);
+    } finally {
+      setLang("zh");
+    }
+    expect(submitted[0][1]).toContain("Do not take over");
+  });
+
+  it("logs a task that did not arrive, and still returns the session", async () => {
+    const { service, req, logs, setSubmit } = await stuckSetup();
+    setSubmit(async () => "timeout");
+    expect(await service.openFix(req)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(logs.some((l) => l.includes("new-2") && l.includes("timeout"))).toBe(true));
+  });
+
+  it("logs a failed delivery", async () => {
+    const { service, req, logs, setSubmit } = await stuckSetup();
+    setSubmit(async () => {
+      throw new Error("boom");
+    });
+    expect(await service.openFix(req)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(logs.some((l) => l.includes("new-2"))).toBe(true));
+  });
+
+  it("is not limited by the running sessions of the feature", async () => {
+    const { service, feature, req } = await stuckSetup();
+    while (service.featureTerminalCount(feature.id) < MAX_RUNNING_PER_FEATURE) await service.openFeature({ featureId: feature.id });
+    expect(await service.openFix(req)).toMatchObject({ ok: true, alreadyOpen: false });
+    expect(service.featureTerminalCount(feature.id)).toBe(MAX_RUNNING_PER_FEATURE + 1);
+  });
+
+  it("returns the running fix session on a second click, without a second session or task", async () => {
+    const { service, spawned, submitted, req } = await stuckSetup();
+    await service.openFix(req);
+    expect(await service.openFix(req)).toEqual({ ok: true, termId: "new-2", alreadyOpen: true });
+    expect(spawned).toHaveLength(2);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it("opens one session when two clicks race", async () => {
+    const { service, spawned, submitted, req } = await stuckSetup();
+    const results = await Promise.all([service.openFix(req), service.openFix(req)]);
+    expect(results).toEqual(expect.arrayContaining([{ ok: true, termId: "new-2", alreadyOpen: false }, { ok: true, termId: "new-2", alreadyOpen: true }]));
+    expect(spawned).toHaveLength(2);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it("finds the running fix session after /clear in it", async () => {
+    const { service, spawned, sessions, feature, req, stuckId } = await stuckSetup();
+    await service.openFix(req);
+    sessions.insertIfAbsent({ id: "fix-2", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 2 });
+    sessions.setReplacedBy("new-2", "fix-2");
+    expect(sessions.get("fix-2")?.fixesSession).toBe(stuckId);
+    expect(await service.openFix(req)).toEqual({ ok: true, termId: "new-2", alreadyOpen: true });
+    expect(spawned).toHaveLength(2);
+  });
+
+  it("follows /clear in the stuck session: an old id reaches the new head, and the fix session still counts", async () => {
+    const { service, spawned, sessions, activities, req, stuckId } = await stuckSetup();
+    await service.openFix(req);
+    sessions.insertIfAbsent({ id: "stuck-2", ticketKey: "DMS-1", cwd: sessions.get(stuckId)!.cwd, origin: "butler", createdAt: 2 });
+    sessions.setReplacedBy(stuckId, "stuck-2");
+    activities.delete(stuckId);
+    activities.set("stuck-2", stuckActivity("stuck-2"));
+    expect(await service.openFix({ ...req, stuckSessionId: "stuck-2" })).toEqual({ ok: true, termId: "new-2", alreadyOpen: true });
+    expect(await service.openFix(req)).toEqual({ ok: true, termId: "new-2", alreadyOpen: true });
+    expect(spawned).toHaveLength(2);
+  });
+
+  it("opens a new fix session after the last one exited, and one per stuck session", async () => {
+    const { service, spawned, pty, activities, feature, req } = await stuckSetup();
+    await service.openFix(req);
+    const other = await service.open({ ticketKey: "DMS-2", force: true });
+    if (!other.ok) throw new Error("did not open");
+    activities.set(other.termId, stuckActivity(other.termId));
+    expect(await service.openFix({ featureId: feature.id, stuckSessionId: other.termId })).toMatchObject({ ok: true, alreadyOpen: false });
+    expect(spawned).toHaveLength(4);
+    spawned[1].pty.emitExit(0);
+    expect(pty.openIds()).not.toContain("new-2");
+    expect(await service.openFix(req)).toMatchObject({ ok: true, alreadyOpen: false });
+    expect(spawned).toHaveLength(5);
+  });
+
+  it("refuses when the monitor knows nothing about the session", async () => {
+    const { service, activities, spawned, submitted, req, stuckId } = await stuckSetup();
+    activities.delete(stuckId);
+    expect(await service.openFix(req)).toEqual({ ok: false, reason: "no_session" });
+    expect(spawned).toHaveLength(1);
+    expect(submitted).toEqual([]);
+  });
+
+  it("refuses an unknown session, a feature-level session, and a session of another feature's ticket", async () => {
+    const { service, sessions, features, activities, feature, req, stuckId } = await stuckSetup();
+    expect(await service.openFix({ ...req, stuckSessionId: "nope" })).toEqual({ ok: false, reason: "no_session" });
+    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, coordinator: true });
+    activities.set("c", stuckActivity("c"));
+    expect(await service.openFix({ ...req, stuckSessionId: "c" })).toEqual({ ok: false, reason: "no_session" });
+    const elsewhere = features.insert({ name: "x", workspaceDir: "/ws/x", createdAt: 1 });
+    expect(await service.openFix({ featureId: elsewhere, stuckSessionId: stuckId })).toEqual({ ok: false, reason: "no_session" });
+  });
+
+  it("refuses a missing or archived feature, and a missing claude", async () => {
+    const { service, features, feature, claude, req } = await stuckSetup();
+    expect(await service.openFix({ ...req, featureId: 999 })).toEqual({ ok: false, reason: "no_ticket" });
+    claude.path = null;
+    expect(await service.openFix(req)).toEqual({ ok: false, reason: "claude_missing" });
+    features.archive(feature.id, 5);
+    expect(await service.openFix(req)).toEqual({ ok: false, reason: "no_ticket" });
+  });
+
+  it("leaves no empty row when claude cannot start", async () => {
+    const { service, pty, sessions, req } = await stuckSetup();
+    vi.spyOn(pty, "open").mockImplementation(() => {
+      throw new Error("spawn failed");
+    });
+    await expect(service.openFix(req)).rejects.toThrow("spawn failed");
+    expect(sessions.get("new-2")).toBeNull();
+  });
+
+  it("tells the fix session the name of the running coordinator", async () => {
+    const { service, feature, names, submitted, sessions, req } = await stuckSetup();
+    await service.openFeature({ featureId: feature.id });
+    expect(sessions.get("new-2")?.coordinator).toBe(true);
+    names.set("new-2", "calm-owl");
+    await service.openFix(req);
+    expect(submitted[0][1]).toContain("calm-owl");
+  });
+
+  it("uses the coordinator's current head after /clear", async () => {
+    const { service, feature, names, submitted, sessions, req } = await stuckSetup();
+    await service.openFeature({ featureId: feature.id });
+    sessions.insertIfAbsent({ id: "c-2", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 2 });
+    sessions.setReplacedBy("new-2", "c-2");
+    names.set("c-2", "calm-owl");
+    await service.openFix(req);
+    expect(submitted[0][1]).toContain("calm-owl");
+  });
+
+  it("does not take a coordinator without a terminal or another fix session for the coordinator", async () => {
+    const { service, activities, names, namesAsked, submitted, sessions, feature, req, stuckId } = await stuckSetup();
+    sessions.insertIfAbsent({ id: "closed", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, coordinator: true });
+    names.set("closed", "closed-name");
+    await service.openFix(req);
+    names.set("new-2", "first-fix");
+    const other = await service.open({ ticketKey: "DMS-2", force: true });
+    if (!other.ok) throw new Error("did not open");
+    activities.set(other.termId, stuckActivity(other.termId));
+    await service.openFix({ featureId: feature.id, stuckSessionId: other.termId });
+    expect(namesAsked).toEqual([stuckId, other.termId]);
+    for (const [, text] of submitted) {
+      expect(text).not.toContain("closed-name");
+      expect(text).not.toContain("first-fix");
+    }
+  });
+
+  it("shows the fix session on the feature page, and lets it be resumed there as a fix session", async () => {
+    const { service, spawned, sessions, feature, pty, req, stuckId } = await stuckSetup();
+    await service.openFix(req);
+    expect(service.featureViews()[0].sessions.map((s) => [s.id, s.termId, s.fixesSession])).toEqual([["new-2", "new-2", stuckId]]);
+    spawned[1].pty.emitExit(0);
+    expect(pty.openIds()).not.toContain("new-2");
+    expect(await service.openFeature({ featureId: feature.id, sessionId: "new-2" })).toMatchObject({ ok: true, termId: "new-2", alreadyOpen: false });
+    expect(sessions.get("new-2")).toMatchObject({ coordinator: false, fixesSession: stuckId });
   });
 });

@@ -57,6 +57,7 @@ import { isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { ActivityMonitor, type StuckInfo } from "./sessions/activity-monitor";
+import { sessionRegistryName } from "./sessions/activity-sources";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
@@ -410,9 +411,13 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     log: logger,
   });
+  /** 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。 */
+  const submitTask = (termId: string, message: string) => pty.deliver(termId, message, { singleLine: process.platform === "win32" });
   const sessionService = new SessionService({
     tickets, sessions, settings, ticketService, pty,
     activity: (id) => activityMonitor.get(id),
+    sessionName: (id) => sessionRegistryName(paths.claudeSessions, id),
+    submit: submitTask,
     ready: () => healthReady,
     transcriptExists: (id) => transcriptState(paths.claudeProjects, id) !== "absent",
     transcriptState: (id) => transcriptState(paths.claudeProjects, id),
@@ -771,7 +776,7 @@ async function bootstrap(): Promise<void> {
       tickets, sessions, features, ticketService, sessionService, notify,
       activity: (id) => activityMonitor.get(id),
       activityOutput: (id) => activityMonitor.output(id),
-      submit: (termId, message) => pty.deliver(termId, message, { singleLine: process.platform === "win32" }),
+      submit: submitTask,
       ticketPattern: () => settings.get("ticketPattern"),
       log: logger,
     }),

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HookEnvelope } from "../../shared/hook-envelope";
+import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { insertTicket, memDb } from "../test-utils";
@@ -177,5 +178,56 @@ describe("hook sessions on multi-repo tickets", () => {
     applyHookEnvelope(env("SessionStart", "b", { ticket: "PROJ-1", butlerSession: "b" }, { cwd: "/ws/PROJ-1" }), deps);
     expect(sessions.get("a")).toMatchObject({ repoId, coordinator: false });
     expect(sessions.get("b")).toMatchObject({ repoId: null, coordinator: true });
+  });
+});
+
+describe("hook sessions in a fix session's terminal", () => {
+  function fixSetup() {
+    const db = memDb();
+    const tickets = new TicketsRepo(db);
+    const sessions = new SessionsRepo(db);
+    const featureId = new FeaturesRepo(db).insert({ name: "f", workspaceDir: "/ws", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, fixesSession: "stuck-1" });
+    return { sessions, featureId, deps: { sessions, tickets, featureForCwd: (cwd: string) => (cwd === "/ws" ? featureId : null) } };
+  }
+  const inFix = { butlerSession: "fix" };
+
+  it("keeps a fix session's new head a fix session across /clear", () => {
+    const { sessions, featureId, deps } = fixSetup();
+    applyHookEnvelope(env("SessionStart", "fix-2", inFix, { cwd: "/ws", source: "clear" }), deps);
+    expect(sessions.head("fix")).toMatchObject({ id: "fix-2", featureId, coordinator: false, fixesSession: "stuck-1" });
+    // 再 clear 一次，还是修复 session
+    applyHookEnvelope(env("SessionStart", "fix-3", inFix, { cwd: "/ws", source: "clear" }), deps);
+    expect(sessions.head("fix")).toMatchObject({ id: "fix-3", featureId, coordinator: false, fixesSession: "stuck-1" });
+    expect(sessions.listFeatureCoordinators(featureId)).toEqual([]);
+  });
+
+  it("does not make the new head a coordinator when Stop arrives before SessionStart", () => {
+    const { sessions, deps } = fixSetup();
+    applyHookEnvelope(env("Stop", "fix-2", inFix, { cwd: "/ws" }), deps);
+    expect(sessions.get("fix-2")).toMatchObject({ coordinator: false, fixesSession: "stuck-1" });
+  });
+
+  it("does not make a session the scan left outside any feature a coordinator", () => {
+    const { sessions, featureId, deps } = fixSetup();
+    sessions.insertIfAbsent({ id: "fix-2", ticketKey: null, cwd: "/elsewhere", origin: "discovered", createdAt: 2 });
+    applyHookEnvelope(env("Stop", "fix-2", inFix, { cwd: "/ws" }), deps);
+    expect(sessions.get("fix-2")).toMatchObject({ coordinator: false });
+    applyHookEnvelope(env("SessionStart", "fix-2", inFix, { cwd: "/ws", source: "clear" }), deps);
+    expect(sessions.get("fix-2")).toMatchObject({ coordinator: false, featureId, fixesSession: "stuck-1" });
+  });
+
+  it("does not hand fixesSession to a nested claude started in that terminal", () => {
+    const { sessions, deps } = fixSetup();
+    expect(applyHookEnvelope(env("SessionStart", "nested", inFix, { cwd: "/ws", source: "startup" }), deps)).toEqual({ kind: "nested", sessionId: "nested" });
+    expect(sessions.get("nested")).toMatchObject({ fixesSession: null, featureId: null, dismissed: true });
+    expect(sessions.head("fix")?.id).toBe("fix");
+  });
+
+  it("still makes a real coordinator's new head a coordinator", () => {
+    const { sessions, featureId, deps } = fixSetup();
+    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    applyHookEnvelope(env("SessionStart", "c-2", { butlerSession: "c" }, { cwd: "/ws", source: "clear" }), deps);
+    expect(sessions.get("c-2")).toMatchObject({ coordinator: true, featureId, fixesSession: null });
   });
 });

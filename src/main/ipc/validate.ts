@@ -1,6 +1,6 @@
 import type { SensitiveTerm } from "../../shared/llm";
 import type {
-  AddRepoInput, CreateFeatureInput, CreateTicketInput, OpenFeatureSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
+  AddRepoInput, CreateFeatureInput, CreateTicketInput, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 import { M } from "../strings";
@@ -157,6 +157,13 @@ export function createTicketArg(v: unknown): CreateTicketInput {
     repoPaths: o.repoPaths === undefined ? undefined : repoPathsArg(o.repoPaths),
     featureId: o.featureId === undefined ? undefined : featureIdArg(o.featureId),
   };
+}
+
+/** 为卡住的 session 开修复 session。 */
+export function openFixArg(v: unknown): OpenFixSessionRequest {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid fix session request");
+  return { featureId: featureIdArg(o.featureId), stuckSessionId: sessionIdArg(o.stuckSessionId) };
 }
 
 /** 打开 feature 总控。 */

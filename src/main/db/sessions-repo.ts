@@ -124,12 +124,17 @@ export class SessionsRepo {
     return rows.map(toSession);
   }
 
-  /** feature 总控 session（ticket_key 为空、feature_id 是这个 feature 的）。 */
+  /** feature 级 session（ticket_key 为空、feature_id 是这个 feature 的）：总控和修复 session。只有 feature 页的列表用它，要找总控用 listFeatureCoordinators。 */
   listByFeature(featureId: number): Session[] {
     const rows = this.db
       .prepare(`SELECT * FROM sessions WHERE feature_id = ? AND ticket_key IS NULL ORDER BY ${RECENCY} DESC, id`)
       .all(featureId) as unknown as SessionRow[];
     return rows.map(toSession);
+  }
+
+  /** feature 总控 session：不含修复 session。 */
+  listFeatureCoordinators(featureId: number): Session[] {
+    return this.listByFeature(featureId).filter((s) => s.fixesSession === null);
   }
 
   /** 记成这个 feature 的总控。 */
@@ -167,7 +172,10 @@ export class SessionsRepo {
       .run(waiting ? 1 : 0, at, id);
   }
 
-  /** /clear、compact 产生的新 session 接替旧的：同一个终端，仓库、总控、开启者和 feature 也照旧。 */
+  /**
+   * /clear、compact 产生的新 session 接替旧的：同一个终端，仓库、总控、开启者、feature 和修复目标也照旧。
+   * 修复 session 的新段不是总控：磁盘扫描可能先按目录把它记成了总控，这里清掉。
+   */
   setReplacedBy(id: string, newId: string): void {
     withTransaction(this.db, () => {
       this.db.prepare(`UPDATE sessions SET replaced_by = ? WHERE id = ?`).run(newId, id);
@@ -175,12 +183,14 @@ export class SessionsRepo {
         .prepare(
           `UPDATE sessions SET
              repo_id = COALESCE(repo_id, (SELECT o.repo_id FROM sessions o WHERE o.id = ?)),
-             coordinator = MAX(coordinator, (SELECT o.coordinator FROM sessions o WHERE o.id = ?)),
+             coordinator = CASE WHEN (SELECT o.fixes_session FROM sessions o WHERE o.id = ?) IS NULL
+               THEN MAX(coordinator, (SELECT o.coordinator FROM sessions o WHERE o.id = ?)) ELSE 0 END,
              spawned_by = COALESCE(spawned_by, (SELECT o.spawned_by FROM sessions o WHERE o.id = ?)),
-             feature_id = COALESCE(feature_id, (SELECT o.feature_id FROM sessions o WHERE o.id = ?))
+             feature_id = COALESCE(feature_id, (SELECT o.feature_id FROM sessions o WHERE o.id = ?)),
+             fixes_session = COALESCE(fixes_session, (SELECT o.fixes_session FROM sessions o WHERE o.id = ?))
            WHERE id = ? AND ticket_key IS (SELECT o.ticket_key FROM sessions o WHERE o.id = ?)`,
         )
-        .run(id, id, id, id, newId, id);
+        .run(id, id, id, id, id, id, newId, id);
     });
   }
 

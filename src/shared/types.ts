@@ -74,7 +74,7 @@ export interface Session {
   coordinator: boolean;
   /** 由哪个总控 session 开启（null：用户自己开的）。 */
   spawnedBy: string | null;
-  /** feature 总控 session 属于哪个 feature（这时 ticketKey 为 null、coordinator 为 true）。 */
+  /** feature 级 session（总控或修复 session）属于哪个 feature（这时 ticketKey 为 null；fixesSession 为 null 的才是总控）。 */
   featureId: number | null;
   /** 修复 session：为了解决哪个卡住的 session 开的（null：不是修复 session）。 */
   fixesSession: string | null;
@@ -93,7 +93,7 @@ export interface TicketView extends Ticket {
   waiting: boolean;
 }
 
-/** feature 页和侧边栏用：feature 加上它的 ticket 和 feature 总控 session（设计文档 2026-10-26）。 */
+/** feature 页和侧边栏用：feature 加上它的 ticket 和 feature 级 session（总控和修复 session，设计文档 2026-10-26）。 */
 export interface FeatureView extends Feature {
   tickets: TicketView[];
   sessions: SessionView[];
@@ -173,6 +173,12 @@ export interface OpenFeatureSessionRequest {
   featureId: number;
   sessionId?: string;
   prefill?: string;
+}
+
+/** 为卡住的 session 开修复 session。 */
+export interface OpenFixSessionRequest {
+  featureId: number;
+  stuckSessionId: string;
 }
 
 export type OpenSessionResult =

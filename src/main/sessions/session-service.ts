@@ -7,6 +7,7 @@ import {
   type Feature,
   type FeatureView,
   type OpenFeatureSessionRequest,
+  type OpenFixSessionRequest,
   type OpenSessionRequest,
   type OpenSessionResult,
   type Session,
@@ -24,9 +25,12 @@ import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
+import { currentLang } from "../i18n";
 import { currentBranch } from "../tickets/git";
 import { dirsOutsideWorkspace, isInside, TicketError, type TicketService } from "../tickets/ticket-service";
+import { describeActivity } from "./activity-monitor";
 import { suggestTicket, type TranscriptState, UNCLAIMED_WINDOW_MS } from "./discovery";
+import { fixTaskMessage } from "./fix-task";
 import type { PtyManager } from "./pty-manager";
 import { M } from "../strings";
 
@@ -67,6 +71,10 @@ export interface SessionServiceDeps {
   handoffs?: Pick<HandoffsRepo, "knownPrs">;
   /** session 此刻的活动（ActivityMonitor）；不给 FeatureView 里 activity 是空的。 */
   activity?: (sessionId: string) => SessionActivity | null;
+  /** session 的名字（SendMessage 用它寻址）；查不到时是 null。 */
+  sessionName?: (sessionId: string) => Promise<string | null>;
+  /** 把任务作为第一条消息交给新 session（修复 session 的任务）。 */
+  submit?: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout">;
   /** 目录是否存在（测试注入；默认读真实磁盘）。 */
   dirExists?: (dir: string) => boolean;
   /** 要打开这个 ticket 的 session 时调用：把它的记忆补同步一次（排进记忆的同步队列，不等它）。 */
@@ -308,9 +316,73 @@ export class SessionService {
         return { ok: true, termId: existing, alreadyOpen: true };
       }
     }
-    const { path: claudePath, pathValue } = this.d.claude();
-    if (!claudePath) return { ok: false, reason: "claude_missing" };
+    const claude = this.d.claude();
+    if (!claude.path) return { ok: false, reason: "claude_missing" };
+    const termId = this.startInFeature(feature, { path: claude.path, pathValue: claude.pathValue }, { head });
+    if (prefill) this.prefill(termId, prefill);
+    return { ok: true, termId, alreadyOpen: false };
+  }
 
+  /**
+   * 修复 session（设计文档 2026-10-31）：在 feature 工作区里开一个 feature 级的 session，把卡住 session 的情况和规则作为任务发给它。
+   * 不是总控，不受运行数量上限限制；同一个卡住的 session 已经有修复 session 在跑时返回那一个。
+   */
+  async openFix(req: OpenFixSessionRequest): Promise<OpenSessionResult> {
+    await this.d.ready();
+    const feature = this.d.features?.get(req.featureId);
+    if (!feature || feature.archivedAt !== null) return { ok: false, reason: "no_ticket" };
+    const stuck = this.d.sessions.head(req.stuckSessionId);
+    const ticket = stuck?.ticketKey ? this.d.tickets.get(stuck.ticketKey) : null;
+    if (!stuck || !ticket || ticket.featureId !== feature.id) return { ok: false, reason: "no_session" };
+    const running = this.runningFix(stuck.id);
+    if (running) return { ok: true, termId: running, alreadyOpen: true };
+    const activity = this.d.activity?.(stuck.id);
+    if (!activity) return { ok: false, reason: "no_session" };
+    const claude = this.d.claude();
+    if (!claude.path) return { ok: false, reason: "claude_missing" };
+
+    const coordinator = this.runningCoordinator(feature.id);
+    const [sessionName, coordinatorName] = await Promise.all([this.sessionName(stuck.id), coordinator ? this.sessionName(coordinator.id) : null]);
+    // 查名字时等了磁盘：另一次点击可能已经开好了。从这里到终端打开都是同步的，不会再开第二个。
+    const opened = this.runningFix(stuck.id);
+    if (opened) return { ok: true, termId: opened, alreadyOpen: true };
+
+    const termId = this.startInFeature(feature, { path: claude.path, pathValue: claude.pathValue }, { fixes: stuck.id });
+    const message = fixTaskMessage({
+      ticket: ticket.title ? `${ticket.key} ${ticket.title}` : ticket.key, sessionId: stuck.id, sessionName, coordinatorName, cwd: stuck.cwd,
+      activity: describeActivity(activity), reason: activity.reason ?? "", lastOutput: activity.lastOutput,
+    }, currentLang());
+    // 不等任务写完：等输入框就绪可能要十几秒（用户还要处理信任文件夹之类的对话框），界面先切到新终端。
+    this.d.submit?.(termId, message).then(
+      (res) => res === "sent" || this.d.log?.(`fix task for ${termId} not delivered (${res})`),
+      (e: unknown) => this.d.log?.(`fix task for ${termId} failed`, e),
+    );
+    return { ok: true, termId, alreadyOpen: false };
+  }
+
+  private async sessionName(sessionId: string): Promise<string | null> {
+    return (await this.d.sessionName?.(sessionId)) ?? null;
+  }
+
+  /** 这个卡住的 session 的修复 session 在哪个终端里跑。fixesSession 记的可能是它 /clear 之前的 id，沿链比较。 */
+  private runningFix(stuckId: string): string | null {
+    for (const [id, termId] of this.openHeads()) {
+      const fixes = this.d.sessions.get(id)?.fixesSession;
+      if (fixes && this.d.sessions.head(fixes)?.id === stuckId) return termId;
+    }
+    return null;
+  }
+
+  /** 这个 feature 有终端在跑的总控（最近活动的那个）。 */
+  private runningCoordinator(featureId: number): Session | null {
+    const heads = this.openHeads();
+    return this.d.sessions.listFeatureCoordinators(featureId).find((s) => s.coordinator && heads.has(s.id)) ?? null;
+  }
+
+  /** 在 feature 工作区里启动 claude，返回终端 id：恢复 head；没有 head 时新建一行，给了 fixes 就是修复 session，否则是总控。 */
+  private startInFeature(feature: Feature, claude: { path: string; pathValue: string }, from: { head?: Session | null; fixes?: string }): string {
+    const { path: claudePath, pathValue } = claude;
+    const head = from.head ?? null;
     const workspace = this.d.ticketService.featureWorkspaceDir(feature.id);
     const cwd = head?.cwd || workspace;
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
@@ -328,7 +400,7 @@ export class SessionService {
       args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
-        id: termId, ticketKey: null, cwd, origin: "butler", lastActivityAt: now, createdAt: now, coordinator: true, featureId: feature.id,
+        id: termId, ticketKey: null, cwd, origin: "butler", lastActivityAt: now, createdAt: now, coordinator: !from.fixes, featureId: feature.id, fixesSession: from.fixes ?? null,
       });
     }
     try {
@@ -338,8 +410,7 @@ export class SessionService {
       if (insertedRow) this.d.sessions.delete(termId);
       throw e;
     }
-    if (prefill) this.prefill(termId, prefill);
-    return { ok: true, termId, alreadyOpen: false };
+    return termId;
   }
 
   /** feature 总控要另外加的目录：feature 下未归档 ticket 的仓库工作目录里，不在工作区里面的（同样的存在、cmd.exe 检查）。 */
@@ -414,7 +485,7 @@ export class SessionService {
     return this.d.pty.openIds().filter((termId) => this.d.sessions.head(termId)?.ticketKey === ticketKey).length;
   }
 
-  /** feature 正在运行的终端数：feature 总控，加上它所有 ticket 的终端。 */
+  /** feature 正在运行的终端数：feature 级 session（总控和修复 session），加上它所有 ticket 的终端。 */
   featureTerminalCount(featureId: number): number {
     const keys = new Set(this.d.tickets.listByFeature(featureId).map((t) => t.key));
     return this.d.pty.openIds().filter((termId) => {
@@ -446,7 +517,7 @@ export class SessionService {
     return this.allTicketViews(this.openHeads()).filter((t) => t.featureId === null || !active.has(t.featureId));
   }
 
-  /** 未归档的 feature，带上它的 ticket 和 feature 总控 session。 */
+  /** 未归档的 feature，带上它的 ticket 和 feature 级 session（总控和修复 session）。 */
   featureViews(): FeatureView[] {
     const heads = this.openHeads();
     const tickets = this.allTicketViews(heads);
@@ -495,7 +566,7 @@ export class SessionService {
    */
   hide(sessionId: string): void {
     const s = this.d.sessions.head(sessionId);
-    // ticket 的 session，或者 feature 总控。
+    // ticket 的 session，或者 feature 级 session。
     if (!s || (!s.ticketKey && s.featureId === null)) throw new TicketError("not_found", M().sessionNotFound);
     if (this.openHeads().has(s.id)) throw new TicketError("sessions_open", M().sessionTerminalHide);
     this.d.sessions.dismiss(s.id);

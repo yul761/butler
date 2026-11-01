@@ -60,7 +60,7 @@ export class FeatureSummaryRunner {
       .list()
       .filter((f) => {
         const last = this.d.featureHandoffs.latestValid(f.id);
-        const coordinator = Math.max(0, ...this.d.sessions.listByFeature(f.id).map((s) => this.d.transcriptMtime(s.id) ?? 0));
+        const coordinator = Math.max(0, ...this.d.sessions.listFeatureCoordinators(f.id).map((s) => this.d.transcriptMtime(s.id) ?? 0));
         if (coordinator > (last?.createdAt ?? 0)) return true;
         const covered = last ? (last.coversUntil ?? last.createdAt) : 0;
         return this.d.tickets.listByFeature(f.id).some((t) => (this.d.handoffs.lastCapturedAt(t.key) ?? 0) > covered);
@@ -148,7 +148,7 @@ export class FeatureSummaryRunner {
    */
   private resumeTarget(featureId: number, sessionId?: string): { id: string; cwd: string } | null {
     if (sessionId !== undefined) return { id: sessionId, cwd: this.d.sessions.get(sessionId)?.cwd ?? "" };
-    return this.d.sessions.listByFeature(featureId).find((s) => !s.replacedBy && !s.dismissed && this.d.transcriptMtime(s.id) !== null) ?? null;
+    return this.d.sessions.listFeatureCoordinators(featureId).find((s) => !s.replacedBy && !s.dismissed && this.d.transcriptMtime(s.id) !== null) ?? null;
   }
 
   private ticketContexts(featureId: number): FeatureTicketContext[] {

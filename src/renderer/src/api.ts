@@ -7,7 +7,7 @@ import type { EditableSettingKey, EditableSettings } from "../../shared/settings
 import type {
   AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
-  JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, ScanResult,
+  JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
 } from "../../shared/types";
 
 declare global {
@@ -62,6 +62,7 @@ export const api = {
   archivedFeatures: () => call<Feature[]>(IPC.featuresArchived),
   unarchiveFeature: (id: number) => call<void>(IPC.featuresUnarchive, id),
   openFeatureSession: (req: OpenFeatureSessionRequest) => call<OpenSessionResult>(IPC.featuresOpenSession, req),
+  openFixSession: (req: OpenFixSessionRequest) => call<OpenSessionResult>(IPC.sessionOpenFix, req),
   scanRepos: (dir: string) => call<ScanResult>(IPC.reposScan, dir),
   unclaimed: () => call<UnclaimedSession[]>(IPC.sessionsUnclaimed),
   claim: (sessionId: string, ticketKey: string) => call<void>(IPC.sessionsClaim, sessionId, ticketKey),

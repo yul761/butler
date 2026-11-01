@@ -194,13 +194,13 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
     if (req.op === "session_activity") {
       const keys = new Set(own.map((t) => t.key));
-      return sessionActivity(req.session, (s) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id));
+      return sessionActivity(req.session, (s) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id && s.fixesSession === null));
     }
 
     if (req.op === "list_sessions") {
       const visible = <T extends { replacedBy: string | null; dismissed: boolean }>(rows: T[]) => rows.filter((s) => !s.replacedBy && !s.dismissed);
       return ok([
-        ...visible(d.sessions.listByFeature(f.id)).map((s) => ({ ...sessionRow(null, s), ticket: null })),
+        ...visible(d.sessions.listFeatureCoordinators(f.id)).map((s) => ({ ...sessionRow(null, s), ticket: null })),
         ...own.flatMap((t) => visible(d.sessions.listByTicket(t.key)).map((s) => ({ ...sessionRow(t, s), ticket: t.key }))),
       ]);
     }

@@ -206,6 +206,25 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(await handle({ ...base, op: "session_activity", session: c.termId })).toMatchObject({ ok: true });
   });
 
+  it("does not show a fix session to the coordinator: not in list_sessions, not readable", async () => {
+    const { handle, base, sessions, sessionService, feature, activities } = await setup();
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: "stuck-1" });
+    activities.set("fix", { sessionId: "fix", kind: "command", detail: null, background: false, startedAt: 1, lastOutputAt: 2, stuck: null, reason: null, action: null, lastOutput: [] });
+    const listed = await handle({ ...base, op: "list_sessions" });
+    expect((listed.ok ? (listed.value as { id: string }[]) : []).map((s) => s.id)).toEqual([c.termId]);
+    expect(await handle({ ...base, op: "session_activity", session: "fix" })).toEqual({ v: 1, ok: false, error: expect.stringContaining("fix") });
+  });
+
+  it("does not record a fix session as the spawner of a child session", async () => {
+    const { handle, base, sessions, feature } = await setup();
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: "stuck-1" });
+    const r = await handle({ ...base, from: "fix", op: "start_session", ticket: "DMS-1", task: "a" });
+    if (!r.ok) throw new Error("did not open");
+    expect(sessions.get((r.value as { sessionId: string }).sessionId)?.spawnedBy).toBeNull();
+  });
+
   it("refuses to read a session of another feature or of a ticket outside this feature", async () => {
     const { handle, base, sessionService, other, feature } = await setup();
     const theirs = await sessionService.openFeature({ featureId: other.id });

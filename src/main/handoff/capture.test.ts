@@ -324,6 +324,19 @@ describe("captureCommandHandoff in a feature coordinator", () => {
     expect(featureHandoffs.latest(3)?.sourceRef).toMatch(/^c1:[0-9a-f]{40}$/);
   });
 
+  it("does not take a fix session's /handoff as a feature summary or a ticket handoff", async () => {
+    const { deps, sessions, handoffs, featureHandoffs, featureInputs, afterCalls } = setup();
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/w/c", origin: "butler", createdAt: 1, featureId: 3, fixesSession: "stuck-1" });
+    for (const body of [featureBlock(summary), `${FENCE}butler-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}`]) {
+      const file = write([userHandoff, answer("a1", body)]);
+      expect(await captureCommandHandoff(deps, { sessionId: "fix", transcriptPath: file })).toBeNull();
+    }
+    expect(featureInputs).toEqual([]);
+    expect(afterCalls).toEqual([]);
+    expect(featureHandoffs.listByFeature(3)).toHaveLength(0);
+    expect(handoffs.listByTicket("PROJ-1")).toHaveLength(0);
+  });
+
   it("leaves a ticket session alone even if it outputs a feature block", async () => {
     const { deps, sessions, featureInputs, afterCalls } = setup();
     sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
