@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { syncDiscovered } from "../sessions/discovery";
 import { insertTicket, type LegacyTicket, memDb } from "../test-utils";
 import { migrate, NewerDatabaseError } from "./database";
+import { FeaturesRepo } from "./features-repo";
 import { MIGRATIONS } from "./migrations";
 import { SessionsRepo } from "./sessions-repo";
 import { SettingsRepo } from "./settings-repo";
@@ -247,5 +248,85 @@ describe("migration 7: language (design 2026-10-26 i18n)", () => {
 
   it("leaves a fresh install on auto", () => {
     expect(new SettingsRepo(memDb()).get("language")).toBe("auto");
+  });
+});
+
+describe("migration 9: fix sessions", () => {
+  const upTo8 = () => {
+    const db = new DatabaseSync(":memory:");
+    for (const sql of MIGRATIONS.slice(0, 8)) db.exec(sql);
+    db.exec("PRAGMA user_version = 8");
+    return db;
+  };
+
+  it("gives existing sessions no fixesSession", () => {
+    const db = upTo8();
+    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('old', NULL, '/w', 'butler', 1)`).run();
+    expect(migrate(db)).toBe(9);
+    expect(new SessionsRepo(db).get("old")?.fixesSession).toBeNull();
+  });
+
+  it("stores fixesSession on insert and defaults it to null", () => {
+    const repo = new SessionsRepo(memDb());
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "plain", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1 });
+    expect(repo.get("fix")?.fixesSession).toBe("stuck-1");
+    expect(repo.get("plain")?.fixesSession).toBeNull();
+  });
+
+  const featureDb = () => {
+    const db = memDb();
+    const featureId = new FeaturesRepo(db).insert({ name: "f", workspaceDir: "/ws", createdAt: 1 });
+    return { repo: new SessionsRepo(db), featureId };
+  };
+
+  it("hands fixesSession on to the session that replaces a fix session, which stays a non-coordinator", () => {
+    const { repo, featureId } = featureDb();
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "fix-2", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 2 });
+    repo.setReplacedBy("fix", "fix-2");
+    expect(repo.head("fix")).toMatchObject({ id: "fix-2", featureId, coordinator: false, fixesSession: "stuck-1" });
+  });
+
+  it("does not leave a coordinator mark on a fix session's new head that a disk scan recorded first", () => {
+    const { repo, featureId } = featureDb();
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, fixesSession: "stuck-1" });
+    syncDiscovered([{ id: "fix-2", cwd: "/ws", gitBranch: null, firstPrompt: null, lastActivityAt: 2 }], repo, 2, () => featureId);
+    expect(repo.get("fix-2")).toMatchObject({ coordinator: true, fixesSession: null });
+    repo.setReplacedBy("fix", "fix-2");
+    expect(repo.get("fix-2")).toMatchObject({ coordinator: false, fixesSession: "stuck-1" });
+  });
+
+  it("leaves an existing session its own role when /resume picks it", () => {
+    const { repo, featureId } = featureDb();
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    repo.setReplacedBy("fix", "c", "resume");
+    expect(repo.get("fix")?.replacedBy).toBe("c");
+    expect(repo.get("c")).toMatchObject({ coordinator: true, fixesSession: null, featureId });
+  });
+
+  it("does not hand a feature or a role to an existing session on /resume, but still its opener", () => {
+    const { repo, featureId } = featureDb();
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, spawnedBy: "boss", fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 1 });
+    repo.setReplacedBy("fix", "loose", "resume");
+    expect(repo.get("loose")).toMatchObject({ coordinator: false, fixesSession: null, featureId: null, spawnedBy: "boss" });
+  });
+
+  it("still carries the coordinator mark across /clear for a real coordinator", () => {
+    const { repo, featureId } = featureDb();
+    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    repo.insertIfAbsent({ id: "c-2", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 2 });
+    repo.setReplacedBy("c", "c-2");
+    expect(repo.get("c-2")).toMatchObject({ coordinator: true, featureId, fixesSession: null });
+  });
+
+  it("lists a feature's fix sessions with its sessions, but not among its coordinators", () => {
+    const { repo, featureId } = featureDb();
+    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 2, featureId, fixesSession: "stuck-1" });
+    expect(repo.listByFeature(featureId).map((s) => s.id)).toEqual(["fix", "c"]);
+    expect(repo.listFeatureCoordinators(featureId).map((s) => s.id)).toEqual(["c"]);
   });
 });

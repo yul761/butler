@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { FeatureView, OpenFeatureSessionRequest } from "../../../shared/types";
+import type { SessionActivity } from "../../../shared/activity";
+import type { FeatureView, OpenFeatureSessionRequest, TicketView } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
 import { prLabel, prPill, summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary-view";
@@ -9,8 +10,15 @@ import { S, STATUS_LABEL } from "../strings";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { RepoPicker } from "./RepoPicker";
 import { EndSessionButton } from "./EndSessionButton";
+import { StuckPanel } from "./StuckPanel";
 import { TerminalPane } from "./TerminalPane";
+import { activityText, useNow } from "./TicketActivity";
 import { useCollapsed } from "./useCollapsed";
+
+/** 点卡住通知时要看的 ticket。每次点都是新对象：面板已经开着时再点也要滚过去。 */
+export interface StuckReveal {
+  ticket: string;
+}
 
 interface Props {
   feature: FeatureView;
@@ -18,6 +26,9 @@ interface Props {
   onArchived: () => void;
   /** 新建的 ticket：重读列表后跳过去。 */
   onTicketCreated: (key: string) => void;
+  /** 这一次要滚到的面板；用完调 onRevealed 清空，之后重新挂载不再滚。 */
+  reveal: StuckReveal | null;
+  onRevealed: () => void;
 }
 
 const errorText = (e: unknown) => (e instanceof ButlerError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
@@ -30,7 +41,7 @@ function formatTime(ms: number): string {
  * feature 页（设计文档 2026-10-26、2026-10-28）：从上到下是名字和工作区、整体进度（feature 汇总）、
  * ticket 表（带 PR 状态），然后是仓库、feature 总控 session 和它们的终端。
  */
-export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated }: Props) {
+export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated, reveal, onRevealed }: Props) {
   const openTerms = feature.sessions.flatMap((s) => (s.termId ? [s.termId] : []));
   // 和 ticket 页一样：已退出但还没关闭的终端留着，方便看到 claude 的报错输出。
   const [panes, setPanes] = useState<string[]>(openTerms);
@@ -42,6 +53,11 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
   const [addingRepo, setAddingRepo] = useState<string[] | null>(null);
   const [newTicket, setNewTicket] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
+
+  // 子组件的 effect 先跑：TicketRow 已经滚过了，这里才清空。
+  useEffect(() => {
+    if (reveal) onRevealed();
+  }, [reveal]);
 
   const openKey = openTerms.join(",");
   useEffect(() => {
@@ -66,6 +82,26 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
     } catch (e) {
       setError(errorText(e));
     }
+  }
+
+  /** 为卡住的 session 开修复 session：成功后切到它的终端（已经开着也一样），失败显示在页面的错误区。 */
+  async function openFix(stuckSessionId: string) {
+    setError(null);
+    try {
+      const r = await api.openFixSession({ featureId: feature.id, stuckSessionId });
+      if (!r.ok) {
+        setError(S.openErrors[r.reason] ?? r.reason);
+        return;
+      }
+      setPanes((prev) => (prev.includes(r.termId) ? prev : [...prev, r.termId]));
+      setActive(r.termId);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
+  function dismissStuck(sessionId: string) {
+    api.dismissActivity(sessionId).catch((e: unknown) => setError(errorText(e)));
   }
 
   function closePane(id: string) {
@@ -108,6 +144,10 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
 
   // 整个 feature 不止一个 PR 时，PR 标签带上仓库名。
   const allPrs = Object.values(feature.ticketPrs).flat();
+  const now = useNow();
+  const anyStuck = Object.values(feature.activity).some((a) => a.stuck === true);
+  // 修复 session 的名字带上它修的那个 ticket（从卡住的 session 反查）。
+  const fixedTicket = (stuckId: string) => feature.tickets.find((t) => [...t.sessions, ...t.hiddenSessions].some((x) => x.id === stuckId))?.key ?? null;
 
   return (
     <div className="ticket-page feature-page">
@@ -135,6 +175,7 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
               {S.featureTickets}
               <span className="muted">{feature.tickets.length}</span>
               {ticketsCollapsed && feature.tickets.some((t) => t.waiting) && <span className="badge" title={S.waiting}>●</span>}
+              {ticketsCollapsed && anyStuck && <span className="stuck-mark" title={S.stuckDot}>●</span>}
             </button>
           </h3>
           {ticketsCollapsed ? null : feature.tickets.length === 0 ? (
@@ -142,26 +183,20 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
           ) : (
             <table className="ticket-table">
               <tbody>
-                {feature.tickets.map((t) => {
-                  const prs = feature.ticketPrs[t.key] ?? [];
-                  // 点一行进 ticket 页；号码是按钮，键盘也能用（点击冒泡到这一行）。
-                  return (
-                    <tr key={t.key} onClick={() => onOpenTicket(t.key)}>
-                      <td><button className="chip">{t.key}</button></td>
-                      <td className="title">{t.title ?? ""}</td>
-                      <td className="muted status">{STATUS_LABEL[t.effectiveStatus]}</td>
-                      <td>
-                        {prs.length === 0 && <span className="pill none">{S.noPr}</span>}
-                        {prs.map((pr) => (
-                          <span key={pr.url} className={`pill ${prPill(pr)}`} title={pr.url}>
-                            {prLabel(pr, allPrs)} {S.prPill[prPill(pr)]}
-                          </span>
-                        ))}
-                      </td>
-                      <td>{t.waiting && <span className="badge" title={S.waiting}>●</span>}</td>
-                    </tr>
-                  );
-                })}
+                {feature.tickets.map((t) => (
+                  <TicketRow
+                    key={t.key}
+                    ticket={t}
+                    activity={feature.activity[t.key]}
+                    prs={feature.ticketPrs[t.key] ?? []}
+                    allPrs={allPrs}
+                    now={now}
+                    onOpenTicket={onOpenTicket}
+                    onFix={openFix}
+                    onDismiss={dismissStuck}
+                    reveal={reveal?.ticket === t.key ? reveal : null}
+                  />
+                ))}
               </tbody>
             </table>
           )}
@@ -207,7 +242,7 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
               onClick={() => (s.termId ? setActive(s.termId) : void open({ featureId: feature.id, sessionId: s.id }))}
             >
               {s.waitingForInput && <span className="badge">●</span>}
-              <span className="place">{S.coordinator}</span>
+              <span className="place">{s.fixesSession ? S.fixSessionFor(fixedTicket(s.fixesSession)) : S.coordinator}</span>
               <span className="label">{sessionLabel(s, S.untitledSession)}</span>
               <span className="action">{s.termId ? S.switchTo : S.open}</span>
             </button>
@@ -325,5 +360,93 @@ function FeatureProgress({ feature, onOpenTicket }: { feature: FeatureView; onOp
         </div>
       )}
     </section>
+  );
+}
+
+interface TicketRowProps {
+  ticket: TicketView;
+  activity: SessionActivity | undefined;
+  prs: FeatureView["ticketPrs"][string];
+  allPrs: FeatureView["ticketPrs"][string];
+  now: number;
+  onOpenTicket: (key: string) => void;
+  onFix: (stuckSessionId: string) => Promise<void>;
+  onDismiss: (stuckSessionId: string) => void;
+  reveal: StuckReveal | null;
+}
+
+/**
+ * ticket 表的一行：状态列显示正在做什么（没有活动就是原来的状态）；卡住时加红点、淡红底色，
+ * 红点是按钮，展开紧跟在这一行下面的面板（不进 ticket 页）。
+ */
+function TicketRow({ ticket: t, activity, prs, allPrs, now, onOpenTicket, onFix, onDismiss, reveal }: TicketRowProps) {
+  // 这里的“收起”记号在存储里的意思是“面板展开了”：没有记号（默认）就是关着的。
+  const [open, toggle] = useCollapsed(`stuck-open:${t.key}`);
+  const live = activity && activity.kind !== "idle" ? activityText(activity, S, now) : null;
+  const stuck = activity?.stuck === true ? activity : null;
+  // 概览区放不下时面板可能在滚动范围外面。只在用户明确要看时滚过去（点红点、点通知）：
+  // 记着“展开”的面板在回到这一页或再次卡住时自己出现，不动用户正在看的位置。
+  const panelRow = useRef<HTMLTableRowElement>(null);
+  const [dotClicks, setDotClicks] = useState(0);
+  const showPanel = () => panelRow.current?.scrollIntoView({ block: "nearest" });
+  useEffect(() => {
+    if (dotClicks > 0) showPanel();
+  }, [dotClicks]);
+  useEffect(() => {
+    if (reveal) showPanel();
+  }, [reveal]);
+  // 点一行进 ticket 页；号码是按钮，键盘也能用（点击冒泡到这一行）。
+  return (
+    <>
+      <tr className={stuck ? "stuck" : undefined} onClick={() => onOpenTicket(t.key)}>
+        <td>
+          {stuck && (
+            <button
+              className="stuck-dot"
+              title={S.stuckDot}
+              aria-label={`${t.key} ${S.stuckDot}`}
+              aria-expanded={open}
+              onClick={(e) => (e.stopPropagation(), setDotClicks((n) => n + 1), toggle())}
+            >
+              ●
+            </button>
+          )}
+          <button className="chip">{t.key}</button>
+        </td>
+        <td className="title">{t.title ?? ""}</td>
+        <td className="muted status">
+          {live ? (
+            <span className="activity">
+              <span className="main">{live.main}</span>
+              {live.sub && <small title={live.sub}>{live.sub}</small>}
+            </span>
+          ) : (
+            STATUS_LABEL[t.effectiveStatus]
+          )}
+        </td>
+        <td>
+          {prs.length === 0 && <span className="pill none">{S.noPr}</span>}
+          {prs.map((pr) => (
+            <span key={pr.url} className={`pill ${prPill(pr)}`} title={pr.url}>
+              {prLabel(pr, allPrs)} {S.prPill[prPill(pr)]}
+            </span>
+          ))}
+        </td>
+        <td>{t.waiting && <span className="badge" title={S.waiting}>●</span>}</td>
+      </tr>
+      {stuck && open && (
+        <tr className="stuck-panel-row" ref={panelRow}>
+          <td colSpan={5}>
+            <StuckPanel
+              activity={stuck}
+              onFix={() => onFix(stuck.sessionId)}
+              onViewTerminal={() => onOpenTicket(t.key)}
+              onDismiss={() => onDismiss(stuck.sessionId)}
+              onCollapse={toggle}
+            />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

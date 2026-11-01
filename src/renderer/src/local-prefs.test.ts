@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isCollapsed, setCollapsed } from "./local-prefs";
+import { isCollapsed, onCollapsedChange, setCollapsed } from "./local-prefs";
 
 function fakeStorage(): Storage {
   const m = new Map<string, string>();
@@ -45,5 +45,24 @@ describe("collapsed sections", () => {
     vi.unstubAllGlobals();
     expect(isCollapsed("sidebar:f1")).toBe(false);
     expect(() => setCollapsed("sidebar:f1", true)).not.toThrow();
+  });
+
+  it("tells listeners what changed until they stop listening", () => {
+    const seen: [string, boolean][] = [];
+    const off = onCollapsedChange((id, on) => seen.push([id, on]));
+    setCollapsed("tickets:f1", true);
+    setCollapsed("stuck-open:DMS-1", false);
+    off();
+    setCollapsed("tickets:f1", false);
+    expect(seen).toEqual([["tickets:f1", true], ["stuck-open:DMS-1", false]]);
+  });
+
+  it("still tells listeners when the value cannot be stored", () => {
+    vi.unstubAllGlobals();
+    const seen: boolean[] = [];
+    const off = onCollapsedChange((_, on) => seen.push(on));
+    setCollapsed("sidebar:f1", true);
+    off();
+    expect(seen).toEqual([true]);
   });
 });

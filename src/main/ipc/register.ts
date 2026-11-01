@@ -21,6 +21,7 @@ import type { FeatureSummaryRunner } from "../handoff/feature-runner";
 import type { HealthService } from "../hooks/health";
 import { addDays, localDate } from "../schedule/calendar";
 import type { Scheduler } from "../schedule/scheduler";
+import type { ActivityMonitor } from "../sessions/activity-monitor";
 import type { PtyManager } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
 import { memoryOn } from "../settings/settings-values";
@@ -33,7 +34,7 @@ import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, openFeatureArg,
+  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, openFeatureArg, openFixArg,
   repoIdArg, sessionIdArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
 } from "./validate";
 import { M } from "../strings";
@@ -43,6 +44,7 @@ export interface IpcDeps {
   ticketService: TicketService;
   featureService: FeatureService;
   sessionService: SessionService;
+  activity: Pick<ActivityMonitor, "dismiss">;
   pty: PtyManager;
   health: HealthService;
   followups: FollowupsRepo;
@@ -198,6 +200,11 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
     return r;
   });
+  handle(IPC.sessionOpenFix, async (raw: unknown) => {
+    const r = await d.sessionService.openFix(openFixArg(raw));
+    d.notify();
+    return r;
+  });
   handle(IPC.sessionsUnclaimed, () => d.sessionService.unclaimed());
   handle(IPC.sessionsClaim, (id: string, key: string) => {
     d.sessionService.claim(id, key);
@@ -215,6 +222,8 @@ export function registerIpc(d: IpcDeps): void {
     d.sessionService.dismiss(id);
     d.notify();
   });
+
+  handle(IPC.activityDismiss, (raw: unknown) => d.activity.dismiss(sessionIdArg(raw)));
 
   handle(IPC.ptySnapshot, (id: string) => d.pty.snapshot(id));
   handle(IPC.ptyKill, (id: string) => d.pty.kill(id));

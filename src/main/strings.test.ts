@@ -29,6 +29,13 @@ describe("main-process messages in two languages (design 2026-10-26 i18n)", () =
     expect(() => normalizeBranchTemplate("x")).toThrow(new SettingError("The branch template must contain {key} or {key_lower}, for example feature/{key}"));
   });
 
+  it("words the stuck notification in both languages", () => {
+    expect(MAIN_STRINGS.zh.stuckTitle("DMS-1")).toContain("DMS-1");
+    expect(MAIN_STRINGS.en.stuckTitle("DMS-1")).toBe("DMS-1 may be stuck");
+    expect(MAIN_STRINGS.zh.stuckBody("hook 没动静")).toContain("hook 没动静");
+    expect(MAIN_STRINGS.en.stuckBody("The hook hangs.")).toContain("The hook hangs.");
+  });
+
   it("explains a blocked cleanup in English", async () => {
     const db = memDb();
     const tickets = new TicketsRepo(db);

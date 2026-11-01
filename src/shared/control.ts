@@ -12,6 +12,8 @@ export const MAX_RUNNING_PER_TICKET = 6;
 export const MAX_RUNNING_PER_FEATURE = 8;
 /** start_session 的任务最长多少字。 */
 export const TASK_LIMIT = 8000;
+/** session_activity 返回的命令输出最多这么多字节。 */
+export const ACTIVITY_OUTPUT_LIMIT = 4096;
 /** 请求 id：文件名，只用安全字符。 */
 export const CONTROL_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 
@@ -19,6 +21,7 @@ export const CONTROL_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 export type TicketControlRequest =
   | { v: 1; ticketKey: string; from: string | null; op: "list_repos" }
   | { v: 1; ticketKey: string; from: string | null; op: "list_sessions" }
+  | { v: 1; ticketKey: string; from: string | null; op: "session_activity"; session: string }
   | { v: 1; ticketKey: string; from: string | null; op: "start_session"; repo: string; task: string };
 
 /** create_ticket 最多一次挂几个仓库。 */
@@ -33,6 +36,7 @@ export type FeatureControlRequest =
   | { v: 1; featureId: number; from: string | null; op: "list_repos" }
   | { v: 1; featureId: number; from: string | null; op: "create_ticket"; ticket: string; title?: string; repos?: string[]; branch?: string }
   | { v: 1; featureId: number; from: string | null; op: "list_sessions" }
+  | { v: 1; featureId: number; from: string | null; op: "session_activity"; session: string }
   | { v: 1; featureId: number; from: string | null; op: "start_session"; ticket: string; repo?: string; task: string };
 
 export type ControlRequest = TicketControlRequest | FeatureControlRequest;
@@ -53,6 +57,7 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     if (o.op === "list_tickets") return { ...base, op: "list_tickets" };
     if (o.op === "list_repos") return { ...base, op: "list_repos" };
     if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
+    if (o.op === "session_activity") return okName(o.session, 200) ? { ...base, op: "session_activity", session: o.session } : null;
     if (o.op === "create_ticket") {
       if (!okName(o.ticket, 200)) return null;
       if (o.title !== undefined && (typeof o.title !== "string" || o.title.length > 500)) return null;
@@ -76,6 +81,7 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   const base = { v: 1 as const, ticketKey: o.ticketKey, from };
   if (o.op === "list_repos") return { ...base, op: "list_repos" };
   if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
+  if (o.op === "session_activity") return okName(o.session, 200) ? { ...base, op: "session_activity", session: o.session } : null;
   if (o.op === "start_session") {
     if (!okName(o.repo, 4096) || !okTask(o.task)) return null;
     return { ...base, op: "start_session", repo: o.repo, task: o.task };

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakePtyFactory } from "../test-utils";
-import { BUFFER_LIMIT, PtyManager, trimBuffer } from "./pty-manager";
+import { BUFFER_LIMIT, permissionPromptShowing, PtyManager, trimBuffer } from "./pty-manager";
 
 function setup() {
   const { factory, spawned } = fakePtyFactory();
@@ -219,6 +219,18 @@ describe("PtyManager", () => {
   });
 });
 
+describe("PtyManager.pid", () => {
+  it("gives the process id of an open terminal and null otherwise", () => {
+    const { factory, spawned } = fakePtyFactory();
+    const pty = new PtyManager(factory, { data: () => undefined, exit: () => undefined });
+    expect(pty.pid("t1")).toBeNull();
+    pty.open("t1", { file: "/bin/claude", args: [] }, { cwd: "/", env: {} });
+    expect(pty.pid("t1")).toBe(spawned[0].pty.pid);
+    spawned[0].pty.emitExit(0);
+    expect(pty.pid("t1")).toBeNull();
+  });
+});
+
 describe("trimBuffer", () => {
   it("keeps short buffers and cuts long ones at a line boundary", () => {
     expect(trimBuffer("abc")).toBe("abc");
@@ -228,5 +240,18 @@ describe("trimBuffer", () => {
     expect(t.startsWith("x") || t.startsWith("next")).toBe(true);
     const lines = `${"a".repeat(100)}\n`.repeat(Math.ceil(BUFFER_LIMIT / 101) + 50);
     expect(trimBuffer(lines).startsWith("a".repeat(100))).toBe(true);
+  });
+});
+
+describe("permissionPromptShowing", () => {
+  it("识别带 ANSI 的权限确认提示", () => {
+    expect(permissionPromptShowing("\x1b[1mDo you want to proceed?\x1b[0m\n❯ 1. Yes")).toBe(true);
+    expect(permissionPromptShowing("\x1b[2mDo you want to make this edit to a.ts?\x1b[0m")).toBe(true);
+    expect(permissionPromptShowing("Do you want to create foo.ts?")).toBe(true);
+    expect(permissionPromptShowing("\x1b[1mWould you like to proceed?\x1b[0m\n❯ 1. Yes, and auto-accept edits")).toBe(true);
+  });
+  it("普通输出不算，只看尾部", () => {
+    expect(permissionPromptShowing("building...\n")).toBe(false);
+    expect(permissionPromptShowing("Do you want to proceed?" + "x".repeat(5000))).toBe(false);
   });
 });

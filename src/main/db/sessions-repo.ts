@@ -17,6 +17,7 @@ interface SessionRow {
   coordinator: number;
   spawned_by: string | null;
   feature_id: number | null;
+  fixes_session: string | null;
 }
 
 function toSession(r: SessionRow): Session {
@@ -36,6 +37,7 @@ function toSession(r: SessionRow): Session {
     coordinator: r.coordinator === 1,
     spawnedBy: r.spawned_by,
     featureId: r.feature_id === null ? null : Number(r.feature_id),
+    fixesSession: r.fixes_session,
   };
 }
 
@@ -52,6 +54,7 @@ export interface NewSession {
   coordinator?: boolean;
   spawnedBy?: string | null;
   featureId?: number | null;
+  fixesSession?: string | null;
 }
 
 export interface SessionDetails {
@@ -75,12 +78,12 @@ export class SessionsRepo {
   insertIfAbsent(s: NewSession): boolean {
     const r = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
-        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null,
+        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null,
       );
     if (Number(r.changes) > 0) {
       this.forgotten.delete(s.id);
@@ -121,12 +124,17 @@ export class SessionsRepo {
     return rows.map(toSession);
   }
 
-  /** feature 总控 session（ticket_key 为空、feature_id 是这个 feature 的）。 */
+  /** feature 级 session（ticket_key 为空、feature_id 是这个 feature 的）：总控和修复 session。要选总控（汇总、handoff）用 listFeatureCoordinators。 */
   listByFeature(featureId: number): Session[] {
     const rows = this.db
       .prepare(`SELECT * FROM sessions WHERE feature_id = ? AND ticket_key IS NULL ORDER BY ${RECENCY} DESC, id`)
       .all(featureId) as unknown as SessionRow[];
     return rows.map(toSession);
+  }
+
+  /** feature 总控 session：不含修复 session。 */
+  listFeatureCoordinators(featureId: number): Session[] {
+    return this.listByFeature(featureId).filter((s) => s.fixesSession === null);
   }
 
   /** 记成这个 feature 的总控。 */
@@ -164,20 +172,27 @@ export class SessionsRepo {
       .run(waiting ? 1 : 0, at, id);
   }
 
-  /** /clear、compact 产生的新 session 接替旧的：同一个终端，仓库、总控、开启者和 feature 也照旧。 */
-  setReplacedBy(id: string, newId: string): void {
+  /**
+   * /clear、compact 产生的新 session 接替旧的：同一个终端，仓库、总控、开启者、feature 和修复目标也照旧。
+   * 修复 session 的新段不是总控：磁盘扫描可能先按目录把它记成了总控，这里清掉。
+   * /resume（source 是 "resume"）接上的是已有的 session，不是新段：总控、feature、修复目标都留它自己的。resume 出来的新 id 由 hook 插入时继承。
+   */
+  setReplacedBy(id: string, newId: string, source?: string | null): void {
+    const old = (column: string) => `(SELECT o.${column} FROM sessions o WHERE o.id = ?1)`;
+    const role = `,
+      coordinator = CASE WHEN ${old("fixes_session")} IS NULL THEN MAX(coordinator, ${old("coordinator")}) ELSE 0 END,
+      feature_id = COALESCE(feature_id, ${old("feature_id")}),
+      fixes_session = COALESCE(fixes_session, ${old("fixes_session")})`;
     withTransaction(this.db, () => {
-      this.db.prepare(`UPDATE sessions SET replaced_by = ? WHERE id = ?`).run(newId, id);
+      this.db.prepare(`UPDATE sessions SET replaced_by = ?2 WHERE id = ?1`).run(id, newId);
       this.db
         .prepare(
           `UPDATE sessions SET
-             repo_id = COALESCE(repo_id, (SELECT o.repo_id FROM sessions o WHERE o.id = ?)),
-             coordinator = MAX(coordinator, (SELECT o.coordinator FROM sessions o WHERE o.id = ?)),
-             spawned_by = COALESCE(spawned_by, (SELECT o.spawned_by FROM sessions o WHERE o.id = ?)),
-             feature_id = COALESCE(feature_id, (SELECT o.feature_id FROM sessions o WHERE o.id = ?))
-           WHERE id = ? AND ticket_key IS (SELECT o.ticket_key FROM sessions o WHERE o.id = ?)`,
+             repo_id = COALESCE(repo_id, ${old("repo_id")}),
+             spawned_by = COALESCE(spawned_by, ${old("spawned_by")})${source === "resume" ? "" : role}
+           WHERE id = ?2 AND ticket_key IS ${old("ticket_key")}`,
         )
-        .run(id, id, id, id, newId, id);
+        .run(id, newId);
     });
   }
 

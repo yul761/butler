@@ -1,6 +1,7 @@
 import { mkdirSync, renameSync } from "node:fs";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { SessionActivity } from "../../shared/activity";
 import { MAX_RUNNING_PER_FEATURE } from "../../shared/control";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
@@ -37,8 +38,11 @@ async function setup() {
   });
   const submitted: [string, string][] = [];
   let notified = 0;
+  const activities = new Map<string, SessionActivity>();
   const handle = controlHandler({
     tickets, sessions, features, ticketService, sessionService,
+    activity: (id) => activities.get(id) ?? null,
+    activityOutput: async () => "out",
     submit: async (termId, task) => (submitted.push([termId, task]), "sent" as const),
     notify: () => void notified++,
   });
@@ -54,7 +58,7 @@ async function setup() {
   await ticketService.create({ key: "DMS-2", featureId: feature.id, repoPaths: [frontend, backend], workMode: "worktree" });
   await ticketService.create({ key: "OTH-1", featureId: other.id, repoPaths: [frontend], workMode: "worktree" });
   const base = { v: 1 as const, featureId: feature.id, from: null };
-  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, notified: () => notified };
+  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified };
 }
 
 describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
@@ -184,5 +188,69 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(tickets.get("DMS-4")).toBeNull();
     expect(notified()).toBe(0);
     expect(await handle({ ...base, featureId: 999, op: "create_ticket", ticket: "DMS-4" })).toMatchObject({ ok: false });
+  });
+
+  it("lists an activity per session and reads one live, for the coordinator and for a ticket's session", async () => {
+    const { handle, base, sessionService, feature, activities } = await setup();
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    const child = await handle({ ...base, from: c.termId, op: "start_session", ticket: "DMS-1", task: "a" });
+    const id = child.ok ? (child.value as { sessionId: string }).sessionId : "";
+    activities.set(id, { sessionId: id, kind: "command", detail: "sleep 99", background: false, startedAt: 1, lastOutputAt: 2, stuck: true, reason: "r", action: "a", lastOutput: ["x"] });
+    const listed = await handle({ ...base, op: "list_sessions" });
+    const rows = (listed.ok ? listed.value : []) as { id: string; activity: { stuck: boolean | null } | null }[];
+    expect(rows.find((x) => x.id === id)!.activity).toMatchObject({ stuck: true });
+    expect(rows.find((x) => x.id === id)!.activity).not.toHaveProperty("lastOutput");
+    expect(rows.find((x) => x.id === c.termId)!.activity).toBeNull();
+    expect(await handle({ ...base, op: "session_activity", session: id })).toMatchObject({ ok: true, value: { kind: "command", stuck: true, output: "out" } });
+    expect(await handle({ ...base, op: "session_activity", session: c.termId })).toMatchObject({ ok: true });
+  });
+
+  it("lists a fix session with the session it fixes, and lets the coordinator read one in its own feature", async () => {
+    const { handle, base, sessions, sessionService, feature, other, activities } = await setup();
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    const child = await handle({ ...base, op: "start_session", ticket: "DMS-1", task: "a" });
+    if (!child.ok) throw new Error(child.error);
+    const stuck = (child.value as { sessionId: string }).sessionId;
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: stuck });
+    sessions.insertIfAbsent({ id: "their-fix", ticketKey: null, cwd: other.workspaceDir, origin: "butler", createdAt: 1, featureId: other.id, fixesSession: "stuck-2" });
+    activities.set("fix", { sessionId: "fix", kind: "command", detail: null, background: false, startedAt: 1, lastOutputAt: 2, stuck: null, reason: null, action: null, lastOutput: [] });
+    const rows = async () => {
+      const r = await handle({ ...base, op: "list_sessions" });
+      if (!r.ok) throw new Error(r.error);
+      return (r.value as { id: string; ticket: string | null; repo: string | null; fixes: string | null }[]).map((x) => [x.id, x.ticket, x.repo, x.fixes]);
+    };
+    const fixRow = (fixes: string) => ["fix", null, null, fixes];
+    const coordinatorRow = [c.termId, null, "总控", null];
+    expect(await rows()).toEqual(expect.arrayContaining([coordinatorRow, fixRow(stuck), [stuck, "DMS-1", "frontend", null]]));
+    expect(await rows()).toHaveLength(3);
+    // 卡住的 session /clear 之后，fixes 还能对上列表里的 id
+    sessions.insertIfAbsent({ id: "stuck-new", ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 2 });
+    sessions.setReplacedBy(stuck, "stuck-new");
+    expect(await rows()).toEqual(expect.arrayContaining([fixRow("stuck-new"), ["stuck-new", "DMS-1", "frontend", null]]));
+    expect(await handle({ ...base, op: "session_activity", session: "fix" })).toMatchObject({ ok: true, value: { sessionId: "fix", kind: "command", output: "out" } });
+    expect(await handle({ ...base, op: "session_activity", session: "their-fix" })).toEqual({ v: 1, ok: false, error: expect.stringContaining("their-fix") });
+  });
+
+  it("does not record a fix session as the spawner of a child session", async () => {
+    const { handle, base, sessions, feature } = await setup();
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: "stuck-1" });
+    const r = await handle({ ...base, from: "fix", op: "start_session", ticket: "DMS-1", task: "a" });
+    if (!r.ok) throw new Error("did not open");
+    expect(sessions.get((r.value as { sessionId: string }).sessionId)?.spawnedBy).toBeNull();
+  });
+
+  it("refuses to read a session of another feature or of a ticket outside this feature", async () => {
+    const { handle, base, sessionService, other, feature } = await setup();
+    const theirs = await sessionService.openFeature({ featureId: other.id });
+    const oth = await handle({ v: 1, featureId: other.id, from: null, op: "start_session", ticket: "OTH-1", task: "b" });
+    if (!theirs.ok || !oth.ok) throw new Error("did not open");
+    const ticketSession = (oth.value as { sessionId: string }).sessionId;
+    for (const session of [theirs.termId, ticketSession]) {
+      const r = await handle({ ...base, featureId: feature.id, op: "session_activity", session });
+      expect(r).toEqual({ v: 1, ok: false, error: expect.stringContaining(session) });
+    }
+    expect(await handle({ ...base, op: "session_activity", session: "nope" })).toMatchObject({ ok: false });
   });
 });

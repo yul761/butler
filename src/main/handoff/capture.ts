@@ -75,10 +75,13 @@ const sourceRefOf = (stop: StopEvent, found: FoundHandoff): string =>
  * Stop 之后看这一轮有没有 /handoff 的输出，有就入库（trigger=command）。
  * 归属以 Butler 的记录为准：session 是 feature 总控（featureId 不为空）时存成 feature 汇总，见 captureFeatureHandoff；
  * 否则归到 session 已挂的 ticket，没挂的话用代码块里写的 ticket（必须已存在）。
+ * 修复 session 不是总控，也不接手 ticket 的工作：它的 /handoff 不收，返回 null。
  * 不是 /handoff、或读不到文件时返回 null；是 /handoff 但等了几次都没有代码块时返回 no_block（调用方记日志）。
  */
 export async function captureCommandHandoff(d: CaptureDeps, stop: StopEvent): Promise<IngestResult | FeatureCaptureResult | null> {
-  const featureId = d.sessions.get(stop.sessionId)?.featureId ?? null;
+  const session = d.sessions.get(stop.sessionId);
+  if (session?.fixesSession) return null;
+  const featureId = session?.featureId ?? null;
   if (featureId !== null) return captureFeatureHandoff(d, stop, featureId);
   const r = await awaitCommandOutput(d, stop, findHandoffBlock);
   if (!r) return null;

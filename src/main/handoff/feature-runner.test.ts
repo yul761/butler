@@ -88,6 +88,11 @@ function setup() {
       key, title: `标题 ${key}`, repoPath: `${WS}/web-${key.toLowerCase()}`, workMode: "branch", worktreePath: null, branch: `feature/${key}`,
       status: "active", statusManual: null, createdAt: 1, archivedAt: null, featureId: fId, ...over,
     });
+  /** 修复 session：feature 下的行，但不是总控。 */
+  const addFix = (id: string, mtime: number, lastActivityAt = 1) => {
+    sessions.insertIfAbsent({ id, ticketKey: null, cwd: WS, origin: "butler", lastActivityAt, createdAt: 1, featureId, fixesSession: "stuck-1" });
+    mtimes[id] = mtime;
+  };
   /** 总控 session；mtime 为 null 表示没有 transcript。 */
   const addCoordinator = (id: string, mtime: number | null, lastActivityAt = 1, fId: number = featureId) => {
     sessions.insertIfAbsent({ id, ticketKey: null, cwd: WS, origin: "butler", lastActivityAt, createdAt: 1, coordinator: true, featureId: fId });
@@ -102,7 +107,7 @@ function setup() {
     return id;
   };
   return {
-    runner, features, tickets, sessions, featureHandoffs, featureId, calls, order, childRuns, addTicket, addCoordinator, ticketHandoff, addSummary,
+    runner, features, tickets, sessions, featureHandoffs, featureId, calls, order, childRuns, addTicket, addCoordinator, addFix, ticketHandoff, addSummary,
     setRespond: (fn: typeof respond) => {
       respond = fn;
     },
@@ -119,6 +124,16 @@ function setup() {
 }
 
 describe("FeatureSummaryRunner.candidates", () => {
+  it("does not count a fix session's transcript as coordinator activity", () => {
+    const { runner, featureId, addCoordinator, addFix, addSummary } = setup();
+    addSummary(100);
+    addCoordinator("c-1", 50);
+    addFix("fix-1", 200);
+    expect(runner.candidates()).toEqual([]);
+    addCoordinator("c-2", 200);
+    expect(runner.candidates()).toEqual([featureId]);
+  });
+
   it("picks a feature whose coordinator transcript changed after the latest valid summary", () => {
     const { runner, featureId, addCoordinator, addSummary } = setup();
     addSummary(100);
@@ -202,6 +217,23 @@ describe("FeatureSummaryRunner generation", () => {
     expect(calls[0].args).not.toContain("--resume");
     expect(calls[0].cwd).toBe(WS);
     expect(featureHandoffs.latest(featureId)).toMatchObject({ trigger: "manual", sessionId: null });
+  });
+
+  it("resumes the coordinator, not a more recent fix session", async () => {
+    const { runner, featureId, calls, featureHandoffs, addCoordinator, addFix } = setup();
+    addCoordinator("c-1", 30, 5);
+    addFix("fix-1", 40, 9);
+    expect(await runner.runManual(featureId)).toMatchObject({ status: "stored" });
+    expect(calls[0].args).toContain("c-1");
+    expect(calls[0].args).not.toContain("fix-1");
+    expect(featureHandoffs.latest(featureId)).toMatchObject({ sessionId: "c-1" });
+  });
+
+  it("does not resume a fix session when there is no coordinator", async () => {
+    const { runner, featureId, calls, addFix } = setup();
+    addFix("fix-1", 40);
+    expect(await runner.runManual(featureId)).toEqual({ featureId, status: "skipped", reason: "nothing_to_summarize" });
+    expect(calls).toHaveLength(0);
   });
 
   it("generates from the coordinator conversation alone when the feature has no tickets", async () => {

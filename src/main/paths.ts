@@ -22,6 +22,8 @@ export interface ButlerPaths {
   claudeConfigDir: string;
   claudeSettings: string;
   claudeProjects: string;
+  /** Claude Code 给每个运行中的 session 写的登记文件（<pid>.json）。 */
+  claudeSessions: string;
   claudeCommands: string;
   /** Claude Code 的全局配置（含本地级 MCP）：设了 CLAUDE_CONFIG_DIR 时在它下面，否则在 home 下。 */
   claudeJson: string;
@@ -62,6 +64,7 @@ export function resolvePaths(
     claudeConfigDir,
     claudeSettings: join(claudeConfigDir, "settings.json"),
     claudeProjects: join(claudeConfigDir, "projects"),
+    claudeSessions: join(claudeConfigDir, "sessions"),
     claudeCommands: join(claudeConfigDir, "commands"),
     claudeJson: configOverride ? join(configOverride, ".claude.json") : join(home, ".claude.json"),
   };

@@ -50,6 +50,14 @@ export function dialogShowing(buffer: string): boolean {
   return DIALOG_MARKERS.some((m) => tail.includes(m));
 }
 
+/** 权限确认提示（“Do you want to proceed?” 等）和退出计划模式的提示：session 在等人点，不算卡住。 */
+const PERMISSION_MARKERS = ["do you want to proceed", "do you want to make this edit", "do you want to create", "would you like to proceed"];
+
+export function permissionPromptShowing(buffer: string): boolean {
+  const tail = stripAnsi(buffer.slice(-DIALOG_TAIL * 4)).slice(-DIALOG_TAIL).toLowerCase();
+  return PERMISSION_MARKERS.some((m) => tail.includes(m));
+}
+
 export interface DeliverOptions {
   /** 输出安静多久算输入框就绪。 */
   idleMs?: number;
@@ -136,6 +144,11 @@ export class PtyManager {
 
   openIds(): string[] {
     return [...this.terms.keys()];
+  }
+
+  /** 打开的终端里那个进程的 pid；终端不在了返回 null。 */
+  pid(termId: string): number | null {
+    return this.terms.get(termId)?.proc.pid ?? null;
   }
 
   write(termId: string, data: string): void {

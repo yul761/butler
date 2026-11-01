@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, openFeatureArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -123,6 +123,13 @@ describe("feature IPC arguments (design 2026-10-26)", () => {
     });
     for (const bad of [{ key: "DMS-1", featureId: "2" }, { key: "DMS-1", repoPaths: [""] }, { key: "DMS-1", workMode: "copy" }, { key: "" }]) {
       expect(() => createTicketArg(bad), JSON.stringify(bad)).toThrow();
+    }
+  });
+
+  it("checks the fix session request", () => {
+    expect(openFixArg({ featureId: 1, stuckSessionId: "abc-1", extra: "x" })).toEqual({ featureId: 1, stuckSessionId: "abc-1" });
+    for (const bad of [null, {}, { featureId: 1 }, { stuckSessionId: "abc-1" }, { featureId: 1, stuckSessionId: "../x" }, { featureId: 0, stuckSessionId: "a" }]) {
+      expect(() => openFixArg(bad), JSON.stringify(bad)).toThrow();
     }
   });
 

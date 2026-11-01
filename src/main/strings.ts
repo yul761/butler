@@ -12,6 +12,14 @@ const enDuration = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${Math
 const ZH = {
   eveningTitle: "Butler 晚间小结",
   eveningBody: (n: number) => (n > 0 ? `${n} 个 ticket 今天有进展，点开查看。` : "今天没有新的 handoff。"),
+  stuckTitle: (ticket: string) => `${ticket} 可能卡住了`,
+  stuckBody: (reason: string) => `${reason}\n点开查看怎么处理。`,
+  /** 请 Claude 判断卡住时，用这些词告诉它 session 在做什么。 */
+  activityKinds: {
+    edit: "写代码", read: "看代码", push: "跑 git push（pre-push hook）", ci: "监控 CI", test: "跑测试", command: "运行命令",
+    agent: "子 agent 在跑", thinking: "思考中", approval: "等你批准", waiting: "等你回话", idle: "空闲",
+  },
+  activityBackground: "（后台）",
   confirmTitle: "Butler：发送前确认",
   confirmMessage: "要把下面的内容发给你的个人 LLM 服务商，用来生成“今日重点”吗？",
   confirmSend: "发送",
@@ -150,6 +158,7 @@ const ZH = {
   ctlTaskNote: "任务会在新 session 的输入框就绪后提交；如果它先弹出信任文件夹之类的确认，要等用户在 Butler 里处理。",
   ctlCoordinator: "总控",
   ctlFeatureGone: "找不到这个 feature（可能已经归档）",
+  ctlNoSuchSession: (id: string) => `找不到 session ${id}，或者它不属于你管的范围。用 list_sessions 看有哪些`,
   ctlNoSuchTicket: (ticket: string, keys: string) => `这个 feature 下没有 ticket ${ticket}。现有的：${keys}`,
   ctlTicketNoRepo: (key: string) => `ticket ${key} 还没有仓库`,
   ctlPickRepo: (key: string, names: string) => `ticket ${key} 有几个仓库，请用 repo 指定：${names}`,
@@ -166,6 +175,13 @@ export type MainStrings = typeof ZH;
 const EN: MainStrings = {
   eveningTitle: "Butler evening summary",
   eveningBody: (n: number) => (n === 1 ? "1 ticket made progress today. Click to see it." : n > 0 ? `${n} tickets made progress today. Click to see them.` : "No new handoffs today."),
+  stuckTitle: (ticket: string) => `${ticket} may be stuck`,
+  stuckBody: (reason: string) => `${reason}\nClick to see what to do.`,
+  activityKinds: {
+    edit: "writing code", read: "reading code", push: "running git push (pre-push hook)", ci: "watching CI", test: "running tests", command: "running a command",
+    agent: "running a subagent", thinking: "thinking", approval: "waiting for approval", waiting: "waiting for a reply", idle: "idle",
+  },
+  activityBackground: " (background)",
   confirmTitle: "Butler: confirm before sending",
   confirmMessage: "Send the content below to your personal LLM provider to write “Today's focus”?",
   confirmSend: "Send",
@@ -296,6 +312,7 @@ const EN: MainStrings = {
   ctlTaskNote: "The task is submitted once the new session's prompt is ready. If it first shows a confirmation such as trusting the folder, the user has to answer it in Butler.",
   ctlCoordinator: "coordinator",
   ctlFeatureGone: "That feature was not found (it may be archived)",
+  ctlNoSuchSession: (id: string) => `Session ${id} was not found, or it is not one you manage. Use list_sessions to see them`,
   ctlNoSuchTicket: (ticket: string, keys: string) => `This feature has no ticket ${ticket}. Its tickets: ${keys}`,
   ctlTicketNoRepo: (key: string) => `Ticket ${key} has no repo yet`,
   ctlPickRepo: (key: string, names: string) => `Ticket ${key} has several repos; name one with repo: ${names}`,

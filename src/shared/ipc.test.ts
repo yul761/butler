@@ -34,6 +34,11 @@ describe("IPC whitelist", () => {
     expect(EVENT_CHANNELS).toContain(IPC.appKeepAwakeChanged);
   });
 
+  it("exposes opening a fix session as invoke-only", () => {
+    expect(INVOKE_CHANNELS).toContain(IPC.sessionOpenFix);
+    expect(EVENT_CHANNELS).not.toContain(IPC.sessionOpenFix);
+  });
+
   it("exposes the feature summary run as invoke-only", () => {
     expect(INVOKE_CHANNELS).toContain(IPC.featuresSummaryRun);
     expect(EVENT_CHANNELS).not.toContain(IPC.featuresSummaryRun);

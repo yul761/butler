@@ -82,6 +82,19 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .ticket-table td { padding: 5px 6px; border-top: 1px solid var(--border); vertical-align: top; }
 .ticket-table .chip { padding: 0; border: none; white-space: nowrap; }
 .ticket-table .status { white-space: nowrap; }
+.ticket-table .activity { display: block; white-space: normal; }
+.ticket-table .activity .main { color: var(--text); font-weight: 500; }
+.ticket-table .activity small { display: block; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; }
+.ticket-table tr.stuck td { background: color-mix(in srgb, #dc2626 8%, transparent); }
+/* 卡住时最要紧的是“已 N 分钟没有新输出”，在这段文字的最后：折行显示，不截断。 */
+.ticket-table tr.stuck .activity small { color: var(--danger); white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.stuck-mark, .stuck-dot { color: #dc2626; margin: 0 4px; }
+.stuck-dot { border: none; background: none; padding: 0 2px; cursor: pointer; }
+.ticket-table tr.stuck-panel-row { cursor: default; }
+.ticket-table tr.stuck-panel-row:hover { background: none; }
+.stuck-panel { padding: 4px 6px 8px; }
+.stuck-panel p { margin: 4px 0; }
+.stuck-log { margin: 4px 0 8px; padding: 6px 8px; background: var(--panel); border-radius: 5px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; margin: 0 4px 2px 0; white-space: nowrap; }
 .pill.merged { background: var(--pill-merged-bg); color: var(--pill-merged); }
 .pill.approved { background: var(--pill-approved-bg); color: var(--pill-approved); }

@@ -55,12 +55,14 @@ export function applyHookEnvelope(
   // 没有 ticket 的 session：feature 总控终端里 /clear 之后的新段沿用 feature；在 feature 工作区里打开的 claude 也算 feature 总控。
   const featureId = ticketKey ? null : (prevHead?.featureId ?? (cwd ? (deps.featureForCwd?.(cwd) ?? null) : null));
   const ensure = (key: string | null = ticketKey, feature: number | null = featureId) => {
+    // 修复 session 终端里 /clear 之后的新段还是修复 session，不是总控。嵌套的 claude（ensure(null, null)）不算。
+    const fixes = feature !== null ? (prevHead?.fixesSession ?? null) : null;
     // handleExit 删掉的空 session：迟到的事件不能把它插回来。只有真正的 prompt，或者已有 transcript，才允许重建。
     if (sessions.wasForgotten(id) && event !== "UserPromptSubmit" && deps.transcriptState?.(id) !== "present") return;
     const place = key && cwd ? deps.placement?.(key, cwd) : undefined;
     const inserted = sessions.insertIfAbsent({
       id, ticketKey: key, cwd, origin: fromButler ? "butler" : "discovered", lastActivityAt: at, createdAt: at,
-      repoId: place?.repoId ?? null, coordinator: (place?.coordinator ?? false) || (!key && feature !== null), featureId: key ? null : feature,
+      repoId: place?.repoId ?? null, coordinator: (place?.coordinator ?? false) || (!key && feature !== null && !fixes), featureId: key ? null : feature, fixesSession: fixes,
     });
     if (inserted) return;
     sessions.fillDetails(id, { cwd, lastActivityAt: at });
@@ -69,7 +71,7 @@ export function applyHookEnvelope(
     if (fromButler && cur && cur.origin === "discovered" && !cur.dismissed) sessions.setOrigin(id, "butler");
     // 被忽略（dismissed）的 session，例如嵌套的 claude 进程，永远不挂 ticket。
     if (key && cur && !cur.ticketKey && !cur.dismissed) sessions.setTicket(id, key, cwd ? (deps.placement?.(key, cwd).repoId ?? null) : null);
-    if (!key && feature !== null && cur && !cur.ticketKey && cur.featureId === null && !cur.dismissed) sessions.setFeature(id, feature);
+    if (!key && feature !== null && !fixes && cur && !cur.ticketKey && cur.featureId === null && !cur.dismissed) sessions.setFeature(id, feature);
   };
 
   switch (event) {
@@ -86,7 +88,7 @@ export function applyHookEnvelope(
       let replaced: string | null = null;
       // 只有新行真的存在时才指过去（ensure 可能因 tombstone 跳过了插入）；否则前一个 head 会指向一个不存在的行。
       if (prevHead && prevHead.id !== id && sessions.get(id)) {
-        sessions.setReplacedBy(prevHead.id, id);
+        sessions.setReplacedBy(prevHead.id, id, source);
         replaced = prevHead.id;
       }
       return { kind: "session_started", sessionId: id, ticketKey, replaced };

@@ -57,8 +57,20 @@ export const TOOLS = [
   },
   {
     name: "list_sessions",
-    description: "列出这个 ticket 的 session：在哪个仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启。",
+    description: "列出这个 ticket 的 session：在哪个仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启，以及此刻的活动（activity，不含输出；输出用 session_activity）。",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "session_activity",
+    description:
+      "直接读一个 session 此刻在做什么：改文件、跑测试、等 CI、等用户确认……，是否在后台命令里、多久没有新输出、有没有卡住（stuck 为 null 表示不在检测范围），以及当前命令输出的末尾（最多 4KB）。" +
+      "子 session 在跑长命令时没法回复消息，用这个看它的真实状态，不要靠发消息问。session 用 list_sessions 里的 id。",
+    inputSchema: {
+      type: "object",
+      properties: { session: { type: "string", description: "session id（list_sessions 里的 id）" } },
+      required: ["session"],
+      additionalProperties: false,
+    },
   },
 ] as const;
 
@@ -111,8 +123,20 @@ export const FEATURE_TOOLS = [
   },
   {
     name: "list_sessions",
-    description: "列出这个 feature 的 session（feature 总控和每个 ticket 的）：属于哪个 ticket、哪个仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启。",
+    description: "列出这个 feature 的 session（feature 总控、修复 session 和每个 ticket 的）：属于哪个 ticket、哪个仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启，以及此刻的活动（activity，不含输出；输出用 session_activity）。修复 session 的 fixes 是它在解决的卡住 session 的 id，其他行是 null。",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "session_activity",
+    description:
+      "直接读一个 session 此刻在做什么：改文件、跑测试、等 CI、等用户确认……，是否在后台命令里、多久没有新输出、有没有卡住（stuck 为 null 表示不在检测范围），以及当前命令输出的末尾（最多 4KB）。" +
+      "子 session 在跑长命令时没法回复消息，用这个看它的真实状态，不要靠发消息问。session 用 list_sessions 里的 id。",
+    inputSchema: {
+      type: "object",
+      properties: { session: { type: "string", description: "session id（list_sessions 里的 id）" } },
+      required: ["session"],
+      additionalProperties: false,
+    },
   },
 ] as const;
 
@@ -137,7 +161,17 @@ export const TOOLS_EN = [
   },
   {
     ...TOOLS[2],
-    description: "List this ticket's sessions: repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it.",
+    description: "List this ticket's sessions: repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it, plus its current activity (without output; use session_activity for that).",
+  },
+  {
+    ...TOOLS[3],
+    description:
+      "Read directly what a session is doing right now: editing, testing, waiting for CI, waiting for the user, and so on; whether it is inside a background command, how long since its last output, whether it is stuck (stuck null means it is not checked), and the end of the current command's output (at most 4KB). " +
+      "A child session in a long command cannot answer messages, so use this to see its real state instead of asking. Use an id from list_sessions.",
+    inputSchema: {
+      ...TOOLS[3].inputSchema,
+      properties: { session: { type: "string", description: "the session id (id in list_sessions)" } },
+    },
   },
 ] as const;
 
@@ -183,7 +217,17 @@ export const FEATURE_TOOLS_EN = [
   },
   {
     ...FEATURE_TOOLS[4],
-    description: "List this feature's sessions (the feature coordinator's and every ticket's): ticket, repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it.",
+    description: "List this feature's sessions (the feature coordinator's, fix sessions, and every ticket's): ticket, repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it, plus its current activity (without output; use session_activity for that). On a fix session, fixes is the id of the stuck session it is resolving; on other rows it is null.",
+  },
+  {
+    ...FEATURE_TOOLS[5],
+    description:
+      "Read directly what a session is doing right now: editing, testing, waiting for CI, waiting for the user, and so on; whether it is inside a background command, how long since its last output, whether it is stuck (stuck null means it is not checked), and the end of the current command's output (at most 4KB). " +
+      "A child session in a long command cannot answer messages, so use this to see its real state instead of asking. Use an id from list_sessions.",
+    inputSchema: {
+      ...FEATURE_TOOLS[5].inputSchema,
+      properties: { session: { type: "string", description: "the session id (id in list_sessions)" } },
+    },
   },
 ] as const;
 
@@ -197,6 +241,7 @@ const TEXT = {
     needRepoTask: "start_session 需要 repo 和 task 两个字符串参数",
     needTicketTask: "start_session 需要 ticket 和 task 两个字符串参数",
     repoString: "repo 必须是字符串",
+    needSession: "session_activity 需要字符串参数 session",
     taskTooLong: `task 太长（最多 ${TASK_LIMIT} 字）`,
     noTool: (t: string) => `没有这个工具：${t}`,
   },
@@ -209,6 +254,7 @@ const TEXT = {
     needRepoTask: "start_session needs two string arguments, repo and task",
     needTicketTask: "start_session needs two string arguments, ticket and task",
     repoString: "repo must be a string",
+    needSession: "session_activity needs a string argument, session",
     taskTooLong: `task is too long (at most ${TASK_LIMIT} characters)`,
     noTool: (t: string) => `No such tool: ${t}`,
   },
@@ -292,6 +338,8 @@ export class SessionsServer {
         return { ...base, op: "list_repos" };
       case "list_sessions":
         return { ...base, op: "list_sessions" };
+      case "session_activity":
+        return typeof args.session === "string" ? { ...base, op: "session_activity", session: args.session } : toolError(this.text.needSession);
       case "start_session":
         if (typeof args.repo !== "string" || typeof args.task !== "string") return toolError(this.text.needRepoTask);
         if (args.task.length > TASK_LIMIT) return toolError(this.text.taskTooLong);
@@ -310,6 +358,8 @@ export class SessionsServer {
         return { ...base, op: "list_repos" };
       case "list_sessions":
         return { ...base, op: "list_sessions" };
+      case "session_activity":
+        return typeof args.session === "string" ? { ...base, op: "session_activity", session: args.session } : toolError(this.text.needSession);
       case "create_ticket": {
         if (typeof args.ticket !== "string") return toolError(this.text.needTicket);
         const { title, repos, branch } = args;

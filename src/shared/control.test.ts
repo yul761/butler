@@ -33,6 +33,10 @@ describe("sanitizeTask", () => {
 describe("parseControlRequest for a feature (design 2026-10-26)", () => {
   it("accepts feature requests", () => {
     expect(parseControlRequest({ v: 1, featureId: 7, from: "c", op: "list_tickets" })).toEqual({ v: 1, featureId: 7, from: "c", op: "list_tickets" });
+    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "session_activity", session: "abc" })).toEqual({ v: 1, featureId: 7, from: null, op: "session_activity", session: "abc" });
+    expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "session_activity", session: "abc" })).toEqual({ v: 1, ticketKey: "P-1", from: null, op: "session_activity", session: "abc" });
+    expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "session_activity" })).toBeNull();
+    expect(parseControlRequest({ v: 1, featureId: 7, op: "session_activity", session: 3 })).toBeNull();
     expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "list_sessions" })).toEqual({ v: 1, featureId: 7, from: null, op: "list_sessions" });
     expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "start_session", ticket: "DMS-1", task: "t" })).toEqual({
       v: 1, featureId: 7, from: null, op: "start_session", ticket: "DMS-1", task: "t",

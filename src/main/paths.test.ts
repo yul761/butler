@@ -12,6 +12,7 @@ describe("resolvePaths", () => {
     expect(p.hookBin).toBe(join("/home/u", ".butler", "bin", "butler-hook"));
     expect(p.claudeSettings).toBe(join("/home/u", ".claude", "settings.json"));
     expect(p.claudeProjects).toBe(join("/home/u", ".claude", "projects"));
+    expect(p.claudeSessions).toBe(join("/home/u", ".claude", "sessions"));
     expect(p.claudeCommands).toBe(join("/home/u", ".claude", "commands"));
   });
 
@@ -19,6 +20,7 @@ describe("resolvePaths", () => {
     const p = resolvePaths({ BUTLER_HOME: "/data/b", CLAUDE_CONFIG_DIR: "/data/c" }, "darwin", "/home/u");
     expect(p.home).toBe("/data/b");
     expect(p.claudeSettings).toBe(join("/data/c", "settings.json"));
+    expect(p.claudeSessions).toBe(join("/data/c", "sessions"));
   });
 
   it("uses .exe for the hook binary on Windows", () => {

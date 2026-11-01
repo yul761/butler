@@ -1,3 +1,4 @@
+import type { SessionActivity } from "./activity";
 import type { FeatureHandoff, Handoff, Pr } from "./handoff";
 export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
@@ -73,8 +74,10 @@ export interface Session {
   coordinator: boolean;
   /** 由哪个总控 session 开启（null：用户自己开的）。 */
   spawnedBy: string | null;
-  /** feature 总控 session 属于哪个 feature（这时 ticketKey 为 null、coordinator 为 true）。 */
+  /** feature 级 session（总控或修复 session）属于哪个 feature（这时 ticketKey 为 null；fixesSession 为 null 的才是总控）。 */
   featureId: number | null;
+  /** 修复 session：为了解决哪个卡住的 session 开的（null：不是修复 session）。 */
+  fixesSession: string | null;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */
@@ -90,7 +93,7 @@ export interface TicketView extends Ticket {
   waiting: boolean;
 }
 
-/** feature 页和侧边栏用：feature 加上它的 ticket 和 feature 总控 session（设计文档 2026-10-26）。 */
+/** feature 页和侧边栏用：feature 加上它的 ticket 和 feature 级 session（总控和修复 session，设计文档 2026-10-26）。 */
 export interface FeatureView extends Feature {
   tickets: TicketView[];
   sessions: SessionView[];
@@ -101,6 +104,8 @@ export interface FeatureView extends Feature {
   summary: FeatureHandoffRecord | null;
   /** 每个 ticket 的 PR：取最新一条有效 handoff（含 refresh）里的，没有 handoff 为 []。 */
   ticketPrs: Record<string, Pr[]>;
+  /** 键是 ticket 号：这个 ticket 运行中的 session 里最需要注意的那个；没有运行中的 session 就没有这个键。 */
+  activity: Record<string, SessionActivity>;
 }
 
 export interface UnclaimedSession extends Session {
@@ -168,6 +173,12 @@ export interface OpenFeatureSessionRequest {
   featureId: number;
   sessionId?: string;
   prefill?: string;
+}
+
+/** 为卡住的 session 开修复 session。 */
+export interface OpenFixSessionRequest {
+  featureId: number;
+  stuckSessionId: string;
 }
 
 export type OpenSessionResult =

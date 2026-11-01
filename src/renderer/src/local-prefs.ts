@@ -47,9 +47,18 @@ function collapsedIds(): string[] {
   }
 }
 
+const collapsedListeners = new Set<(id: string, on: boolean) => void>();
+
+/** 收起状态变了就通知：已经挂载的区块跟着变，不用重新挂载。返回取消监听的函数。 */
+export function onCollapsedChange(listener: (id: string, on: boolean) => void): () => void {
+  collapsedListeners.add(listener);
+  return () => void collapsedListeners.delete(listener);
+}
+
 export const isCollapsed = (id: string) => collapsedIds().includes(id);
 export function setCollapsed(id: string, on: boolean): void {
   const rest = collapsedIds().filter((x) => x !== id);
   const next = on ? [...rest, id] : rest;
   set(COLLAPSED_KEY, next.length > 0 ? JSON.stringify(next) : null);
+  for (const listener of collapsedListeners) listener(id, on);
 }

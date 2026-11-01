@@ -97,6 +97,7 @@ function FeatureGroup({ feature: f, route, onNavigate, ticketButton }: FeatureGr
           <span className="key">{f.name}</span>
           {collapsed && <span className="title">{f.tickets.length}</span>}
           {waiting && <span className="badge" title={S.waiting}>●</span>}
+          {Object.values(f.activity).some((a) => a.stuck === true) && <span className="stuck-mark" title={S.stuckDot}>●</span>}
         </button>
       </div>
       {shown.length > 0 && <div className="feature-tickets">{shown.map(ticketButton)}</div>}

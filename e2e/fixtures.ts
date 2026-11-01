@@ -1,8 +1,8 @@
 import { _electron as electron, test as base, expect, type ElectronApplication, type Page, type TestInfo } from "@playwright/test";
 import { execFileSync, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, parse, resolve } from "node:path";
+import { basename, dirname, join, parse, resolve } from "node:path";
 import { S } from "../src/renderer/src/strings";
 
 export const ROOT = resolve(__dirname, "..");
@@ -23,6 +23,8 @@ export interface Sandbox {
    * null 表示不设，让设置（和系统语言）决定。
    */
   lang: "zh" | "en" | null;
+  /** 这个测试额外传给 Butler 的环境变量（比如调短活动监视的间隔）。 */
+  env: Record<string, string>;
 }
 
 const isWin = process.platform === "win32";
@@ -87,7 +89,7 @@ function createSandbox(): Sandbox {
   }
   const repo = makeGitRepo(join(dir, "repo"));
   const apiRepo = makeGitRepo(join(dir, "api"));
-  return { dir, butlerHome, claudeConfigDir, claudePath, repo, apiRepo, fakeLog: join(dir, "fake-claude.log"), lang: "zh" };
+  return { dir, butlerHome, claudeConfigDir, claudePath, repo, apiRepo, fakeLog: join(dir, "fake-claude.log"), lang: "zh", env: {} };
 }
 
 /**
@@ -140,7 +142,7 @@ function sandboxEnv(s: Sandbox): Record<string, string> {
   // 窗口在后台打开，不抢焦点（用户反馈 2026-10-28：跑测试时正在别处打字被打断）。
   env.BUTLER_BACKGROUND_WINDOWS = "1";
   if (s.lang) env.BUTLER_LANG = s.lang;
-  return env;
+  return { ...env, ...s.env };
 }
 
 /**
@@ -206,6 +208,18 @@ async function closeApp(app: ElectronApplication, child: ChildProcess): Promise<
   if (running(child)) child.kill("SIGKILL");
 }
 
+/**
+ * 假 claude 写的 tasks 目录在真实的系统临时目录里（Butler 只看那里），不在沙盒里。
+ * 目录名是工作目录换成连字符（claude-<uid>/<工作目录>/...），带这个随机目录名的只可能是本测试的。
+ */
+function removeClaudeTmp(dir: string): void {
+  if (isWin) return;
+  const root = join(process.platform === "darwin" ? "/private/tmp" : "/tmp", `claude-${process.getuid!()}`);
+  const mark = basename(dir).replace(/[^A-Za-z0-9]/g, "-");
+  if (!existsSync(root)) return;
+  for (const name of readdirSync(root)) if (name.includes(mark)) rmSync(join(root, name), { recursive: true, force: true });
+}
+
 /** 杀掉命令行或可执行文件在沙盒目录里的所有进程（Butler、终端里的假 claude、hook）：带这个随机目录的只可能是本测试启动的。 */
 function sweep(dir: string): void {
   if (isWin) {
@@ -228,6 +242,7 @@ async function teardown(tracker: Tracker, info: TestInfo): Promise<void> {
   const passed = info.status === info.expectedStatus;
   for (const s of tracker.sandboxes) {
     sweep(s.dir);
+    removeClaudeTmp(s.dir);
     // Windows 上刚被杀的进程可能还占着文件：rmSync 遇到 EBUSY / EPERM 会重试。
     const rm = (p: string) => rmSync(p, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     if (passed) {

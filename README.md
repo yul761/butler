@@ -11,10 +11,11 @@ The UI comes in Chinese and English. It follows your system language at first (C
 
 ## What it does
 
-- **Tickets first.** Each ticket has its worktree or branch, its Claude Code sessions (embedded terminals), its PR state and its after-merge follow-ups. Sessions you started outside Butler in the last 7 days show up under **未认领 session (unclaimed sessions)**, so you can attach them to a ticket. A ticket can span several repos (say, a frontend and a backend): create it with or without a repo, then add more on the ticket page. Each repo has its own work mode and branch, and **编辑 (Edit)** changes them later. A new session asks which repo to work in. A running session, including one a coordinator started, has an × next to its button: click it twice to end that session. Its conversation is kept, and clicking the button opens it again. A session that is not running can be hidden with the same ×. It only leaves the list (its conversation is kept), and **已隐藏 (hidden)** brings it back. Sessions that Butler opens do not stop at Claude Code's question about which servers from a repo's `.mcp.json` to enable: Butler enables them, except the ones you turned off in that repo before. A **总控 (coordinator)** session runs in the ticket's workspace folder (`~/.butler/workspaces/<ticket>`) and sees every repo through `--add-dir`. All sessions of a ticket share its memory. The coordinator also gets a `butler-sessions` MCP server with three tools:
+- **Tickets first.** Each ticket has its worktree or branch, its Claude Code sessions (embedded terminals), its PR state and its after-merge follow-ups. Sessions you started outside Butler in the last 7 days show up under **未认领 session (unclaimed sessions)**, so you can attach them to a ticket. A ticket can span several repos (say, a frontend and a backend): create it with or without a repo, then add more on the ticket page. Each repo has its own work mode and branch, and **编辑 (Edit)** changes them later. A new session asks which repo to work in. A running session, including one a coordinator started, has an × next to its button: click it twice to end that session. Its conversation is kept, and clicking the button opens it again. A session that is not running can be hidden with the same ×. It only leaves the list (its conversation is kept), and **已隐藏 (hidden)** brings it back. Sessions that Butler opens do not stop at Claude Code's question about which servers from a repo's `.mcp.json` to enable: Butler enables them, except the ones you turned off in that repo before. A **总控 (coordinator)** session runs in the ticket's workspace folder (`~/.butler/workspaces/<ticket>`) and sees every repo through `--add-dir`. All sessions of a ticket share its memory. The coordinator also gets a `butler-sessions` MCP server with four tools:
 - `list_repos` lists the ticket's repos.
 - `start_session` opens a new session in one repo and sends it a task as its first message. The new session appears under the same ticket, where you can watch it, take over and answer its permission prompts.
 - `list_sessions` shows what each session is doing.
+- `session_activity` shows one session's activity plus its last command output (up to 4 KB).
 
 There are deliberate limits:
 - **Communication:** the coordinator cannot type into other sessions. Sessions coordinate through the shared ticket memory.
@@ -24,11 +25,22 @@ There are deliberate limits:
   - `list_repos`, which lists the feature's repos;
   - `create_ticket`, which creates a ticket in the feature (its id, an optional title, the repos it uses and an optional branch), with its worktrees in the workspace. The ticket shows up in Butler right away. So you can talk the feature through with the coordinator, let it create the tickets, and then let it start a session in each one;
   - `start_session`, which opens a session in a ticket (naming the repo only when the ticket has several) and sends it a task;
-  - `list_sessions`, which shows the sessions of the coordinator and of every ticket.
+  - `list_sessions`, which shows the sessions of the coordinator and of every ticket, with what each is doing;
+  - `session_activity`, which shows one session's activity plus its last command output (up to 4 KB).
 
   A feature runs at most 8 terminals at once. All its sessions also share a feature memory, `butler-feature`, for things like the API contract between frontend and backend. A `claude` you open yourself in the workspace folder counts as the feature's coordinator. Archiving a feature archives its tickets too; restoring it brings back the tickets archived with it.
 
   The feature page starts with **整体进度 (Overall progress)**: a summary across the feature's tickets, with what is in the way and what comes next, followed by a table of the tickets and their PRs. The summary is written by the nightly run for features with new activity, by `/handoff` in the coordinator, or when you click **立即更新 (Update now)**. It never shows a completion percentage. Overall progress and the ticket table both collapse with the triangle in front of their titles; collapsed, the progress shows only the start of the summary and how many things are in the way. However much is above it, the terminal keeps at least half of the window's height.
+
+  The ticket table's status column shows what each ticket's running session is doing right now, refreshed every 10 seconds: writing code (and which file), reading code, running `git push` with its pre-push hook, watching CI, running tests or another command (with how long it has been running), thinking, waiting for your approval, or waiting for your reply. A command still running after the turn ended is marked **后台 (Background)**. A ticket with no running session shows its usual status, and a ticket with several shows the session that needs you most. Tickets outside a feature don't have this column yet.
+
+  **Stuck sessions.** There is no fixed time limit, so a slow pre-push hook that is still working is left alone. Every 3 minutes Butler looks at each running session of a ticket in a feature. If the transcript, the command output and the CPU use of the session's child processes have not changed for two checks in a row, Butler asks your own `claude` once, with no tools, whether the session is really stuck. It sends the current activity, the last command output and the end of the terminal. If the answer is yes, you get one notification and a red dot on the ticket's row and on the feature in the sidebar. Click the dot, or the notification, to open a panel under the row with the likely cause, the last output and what to do:
+  - **开新 session 解决 (Open a new session to fix it)** opens a new session in the feature's workspace and hands it the details. The stuck session is left running, and the two share its worktree, so the new session's task says to tell the stuck session before changing a branch or stopping a process, to ask you before killing anything, and to tell the coordinator when the problem is solved.
+  - **看终端 (View terminal)** goes to the ticket page.
+  - **没事，忽略 (It's fine, ignore)** clears the dot. It comes back only if the session moves again and then gets stuck again.
+  - **收起 (Collapse)** closes the panel. The dot stays, and clicking it reopens the panel.
+
+  The dot also clears by itself when the session has new activity. Nothing is fixed without your click, and stuck marks live in memory, so Butler checks afresh after a restart.
 - **Worktree cleanup after merge.** Once a handoff reports that a ticket's PR is merged, Butler removes that ticket's worktrees with `git worktree remove`. The branch is kept, and opening a session there again rebuilds the worktree. Butler does not remove a worktree that has uncommitted changes or untracked files, or one whose own session is still running in a terminal. In that case the ticket page shows why, with a **重新检查 (check again)** button, and Butler tries again when that terminal exits. Files ignored by `.gitignore` (`node_modules`, a local `.env`) are removed with the worktree.
 - **Nightly handoffs.** At a time you choose, Butler asks your own logged-in `claude` to write a structured handoff for every ticket that had activity.
   - `Edit`, `Write` and `NotebookEdit` are always denied.
@@ -152,8 +164,12 @@ Apart from the hook install, Butler only reads Claude Code's files:
 - `settings.json`: hook status, plugin check, MCP approvals
 - `commands/handoff.md`: whether it is Butler's own
 - `~/.claude.json`: your MCP servers and approvals
-- the session transcripts under `~/.claude/projects`: unclaimed sessions and `/handoff` output
+- the session transcripts under `~/.claude/projects`: unclaimed sessions, `/handoff` output and the feature page's live status
+- the command output files Claude Code writes under `claude-<uid>/<project>/<session>/tasks/` in the system temp directory (on macOS `/private/tmp`): the live status and stuck checks
+- the session registry files in `~/.claude/sessions/`: a running session's name, so a fix session can message it
 - with **后台 handoff 也加载本地级的 MCP…** (`headlessProjectMcp`) on, a repository's `.mcp.json` and `.claude/settings.local.json`, to find the servers you approved
+
+The transcripts, output files and registry files are Claude Code's internal files, and an update can change them. If Butler can't read them, the live status falls back to the command and how long it has run.
 
 Your personal API key is encrypted with the OS keychain (macOS Keychain / Windows DPAPI). After you save it, the UI shows at most its last 4 characters. A key shorter than 12 characters is shown only as `••••`.
 
@@ -237,6 +253,7 @@ This program will not transfer any information to other networked systems unless
 - Unsigned builds (see above). macOS builds are Apple silicon only.
 - No auto-update.
 - macOS asks again for keychain access to the saved API key after every upgrade (builds are ad-hoc signed). With no key saved, there is no prompt.
+- **Live status limits.** A command piped into `| tail` prints nothing until it ends, so the status shows no output for it. On Windows, Butler doesn't check child-process CPU and may not find a command's output, so the status can show only the command and how long it has run.
 - **Windows, npm-installed Claude Code.** Butler starts the npm/pnpm `claude.cmd` shim's target directly, without `cmd.exe`. The target is either the native `claude.exe` or `node <script>`.
   - If Claude Code was installed with `--ignore-scripts`, or its native optional package is missing, `bin\claude.exe` is only a small placeholder file.
   - Sessions then fail to start, and npm's "native binary not installed" message never appears.

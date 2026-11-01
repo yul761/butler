@@ -184,4 +184,7 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_feature_handoffs_feature ON feature_handoffs (feature_id, created_at);
   `,
+  `
+  ALTER TABLE sessions ADD COLUMN fixes_session TEXT;
+  `,
 ];
