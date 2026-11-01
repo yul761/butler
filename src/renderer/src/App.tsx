@@ -53,16 +53,14 @@ export function App() {
   }, []);
   // 点击晚间小结的系统通知：回到简报。
   const [navNonce, setNavNonce] = useState(0);
-  const [featureNonce, setFeatureNonce] = useState(0);
   useEffect(
     () =>
       api.onNavigate((r) => {
         if (r.page === "feature") {
-          // 点卡住通知：展开 ticket 区和这个 ticket 的面板，再换 key 让 feature 页按新的记号重新挂载。
+          // 点卡住通知：展开 ticket 区和这个 ticket 的面板。已经开着的 feature 页听得到这两个改动，不用重新挂载，终端和当前标签都留着。
           setCollapsed(`tickets:${r.featureId}`, false);
           setCollapsed(`stuck-open:${r.stuckTicket}`, true);
           setRoute({ page: "feature", id: r.featureId });
-          setFeatureNonce((n) => n + 1);
           return;
         }
         setRoute({ page: "home", kind: r.kind });
@@ -176,7 +174,7 @@ export function App() {
             )}
             {route.page === "feature" && currentFeature && (
               <FeaturePage
-                key={`${currentFeature.id}:${featureNonce}`}
+                key={currentFeature.id}
                 feature={currentFeature}
                 onOpenTicket={(key) => setRoute({ page: "ticket", key })}
                 onArchived={() => setRoute({ page: "home" })}

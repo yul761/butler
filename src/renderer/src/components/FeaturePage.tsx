@@ -392,7 +392,7 @@ function TicketRow({ ticket: t, activity, prs, allPrs, now, onOpenTicket, onFix,
           {live ? (
             <span className="activity">
               <span className="main">{live.main}</span>
-              {live.sub && <small>{live.sub}</small>}
+              {live.sub && <small title={live.sub}>{live.sub}</small>}
             </span>
           ) : (
             STATUS_LABEL[t.effectiveStatus]
