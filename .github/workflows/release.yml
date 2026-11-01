@@ -14,7 +14,7 @@ jobs:
       # One platform's failure must not cancel the other's build (its logs help diagnose); the release job still needs both.
       fail-fast: false
       matrix:
-        os: [macos-14, windows-latest]
+        os: [macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
