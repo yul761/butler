@@ -1,5 +1,5 @@
 import { FeatureHandoffSchema } from "../../shared/handoff";
-import { effectiveStatus, type FeatureHandoffOutcome, type FeatureHandoffTrigger, type HandoffOutcome } from "../../shared/types";
+import { effectiveStatus, type FeatureHandoffOutcome, type FeatureHandoffTrigger, type HandoffOutcome, type Ticket } from "../../shared/types";
 import { headlessArgs, READ_ONLY_TOOLS } from "../claude/headless";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";
@@ -82,8 +82,8 @@ export class FeatureSummaryRunner {
 
   /**
    * 归档 epic 下的 feature 之前（设计文档 2026-11-01“交接要新鲜”）：给有新活动的生成汇总，并行，共用一个上限，永不 reject。
-   * 要在归档写入之前跑完：归档之后这个 feature 不再是 candidates，已归档的 ticket 也进不了汇总。
-   * 超时后不再发起新的；已经在跑的留在后台，存下来时 epic 的视图照样读得到。
+   * 要在归档写入之前跑完：归档之后这个 feature 不再是 candidates，有新活动也不会再生成汇总。
+   * 超时后不再发起新的；已经在跑的留在后台，读和 feature 一起归档的 ticket，存下来时 epic 的视图照样读得到。
    */
   async refreshBeforeArchive(featureIds: number[]): Promise<void> {
     let expired = false;
@@ -196,8 +196,8 @@ export class FeatureSummaryRunner {
     return this.d.sessions.listFeatureCoordinators(featureId).find((s) => !s.replacedBy && !s.dismissed && this.d.transcriptMtime(s.id) !== null) ?? null;
   }
 
-  private ticketContexts(featureId: number): FeatureTicketContext[] {
-    return this.d.tickets.listByFeature(featureId).map((t) => ({
+  private ticketContexts(tickets: Ticket[]): FeatureTicketContext[] {
+    return tickets.map((t) => ({
       key: t.key,
       title: t.title,
       status: effectiveStatus(t),
@@ -221,11 +221,13 @@ export class FeatureSummaryRunner {
     const feature = this.d.features.get(featureId);
     if (!feature) return failed(featureId, "no_feature", M().featureNotFound);
     const session = this.resumeTarget(featureId, sessionId);
+    // 归档时超时的汇总走到这里时 feature 可能已经归档：读和它一起归档的 ticket，否则这份最后的汇总里没有 ticket。
+    const tickets = this.d.tickets.listWithFeature(feature);
     // 没有总控对话、也没有任何有效的 ticket handoff：没东西可写，不花额度。
-    if (!session && !this.d.tickets.listByFeature(featureId).some((t) => this.d.handoffs.latestValid(t.key))) {
+    if (!session && !tickets.some((t) => this.d.handoffs.latestValid(t.key))) {
       return { featureId, status: "skipped", reason: "nothing_to_summarize" };
     }
-    const rows = this.ticketContexts(featureId);
+    const rows = this.ticketContexts(tickets);
     const dirs = this.d.dirs(featureId);
     const cwd = session?.cwd || dirs.cwd;
     const l = currentLang();

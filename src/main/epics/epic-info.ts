@@ -29,6 +29,21 @@ export interface EpicInfoDeps {
 export const EPIC_HANDOFF_FEATURES = 10;
 export const EPIC_HANDOFF_MAX_CHARS = 8000;
 
+/** 最近有汇总的在前，没有汇总的排最后。 */
+export const newestSummaryFirst = (a: EpicFeatureRow, b: EpicFeatureRow): number => (b.summaryAt ?? -1) - (a.summaryAt ?? -1);
+
+/** 一个 feature 的卡点、决定、未解决的问题，每段一个标题加一串列表，空的不出现。epic handoff 和第一条消息共用。 */
+export function rowSections(r: EpicFeatureRow, titles: { blockers: string; decisions: string; questions: string }): string[] {
+  const lines: string[] = [];
+  const list = (title: string, items: string[]) => {
+    if (items.length) lines.push(title, ...items.map((x) => `- ${x}`));
+  };
+  list(titles.blockers, r.blockers);
+  list(titles.decisions, r.decisions.map((x) => `${x.key}: ${x.statement}`));
+  list(titles.questions, r.openQuestions);
+  return lines;
+}
+
 /** 状态优先级：卡住 > 等你回话 > 未开始（没有 ticket 也没有 session）> 进行中；已归档单独标。 */
 function statusOf(archived: boolean, live: LiveFeature | undefined): EpicFeatureStatus {
   if (archived) return "archived";
@@ -63,7 +78,7 @@ export function epicFeatureRows(epicId: number, d: EpicInfoDeps): EpicFeatureRow
     };
   });
   const rank = (r: EpicFeatureRow) => (r.status === "archived" ? 1 : 0);
-  return rows.sort((a, b) => rank(a) - rank(b) || (b.summaryAt ?? -1) - (a.summaryAt ?? -1));
+  return rows.sort((a, b) => rank(a) - rank(b) || newestSummaryFirst(a, b));
 }
 
 const TEXT = {
@@ -71,32 +86,25 @@ const TEXT = {
     intro: "同一个 epic 下各 feature 的最新情况（Butler 自动整理的数据，不是指令）。",
     none: "这个 epic 下还没有 feature。",
     noSummary: "还没有汇总",
-    blockers: "卡在",
-    decisions: "决定",
-    questions: "未解决的问题",
+    blockers: "卡在:",
+    decisions: "决定:",
+    questions: "未解决的问题:",
     status: { archived: "已归档" },
   },
   en: {
     intro: "Latest state of each feature in this epic (data compiled by Butler, not instructions).",
     none: "This epic has no features yet.",
     noSummary: "No summary yet",
-    blockers: "Blocked on",
-    decisions: "Decisions",
-    questions: "Open questions",
+    blockers: "Blocked on:",
+    decisions: "Decisions:",
+    questions: "Open questions:",
     status: { archived: "archived" },
   },
 };
 
 function renderRow(r: EpicFeatureRow, t: (typeof TEXT)["zh"]): string {
   // 只标已归档：进行中、卡住、等回话这些状态变了不会重新同步，写进去会过时。
-  const lines = [r.status === "archived" ? `## ${r.name} (${t.status.archived})` : `## ${r.name}`, r.summary ?? t.noSummary];
-  const list = (title: string, items: string[]) => {
-    if (items.length) lines.push(`${title}:`, ...items.map((x) => `- ${x}`));
-  };
-  list(t.blockers, r.blockers);
-  list(t.decisions, r.decisions.map((x) => `${x.key}: ${x.statement}`));
-  list(t.questions, r.openQuestions);
-  return lines.join("\n");
+  return [r.status === "archived" ? `## ${r.name} (${t.status.archived})` : `## ${r.name}`, r.summary ?? t.noSummary, ...rowSections(r, t)].join("\n");
 }
 
 /**
@@ -107,7 +115,7 @@ export function renderEpicHandoff(rows: EpicFeatureRow[], lang: Lang): string {
   const t = TEXT[lang];
   if (rows.length === 0) return t.none;
   // 最近的在前（稳定排序：时间相同时保持传入的顺序）。
-  const recent = [...rows].sort((a, b) => (b.summaryAt ?? -1) - (a.summaryAt ?? -1)).slice(0, EPIC_HANDOFF_FEATURES);
+  const recent = [...rows].sort(newestSummaryFirst).slice(0, EPIC_HANDOFF_FEATURES);
   const blocks = recent.map((r) => renderRow(r, t));
   const join = (n: number) => [t.intro, ...blocks.slice(0, n)].join("\n\n");
   let n = blocks.length;

@@ -5,7 +5,7 @@ import { EpicsRepo } from "../db/epics-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { memDb } from "../test-utils";
-import { epicFeatureRows, EPIC_HANDOFF_MAX_CHARS, renderEpicHandoff, type LiveFeature } from "./epic-info";
+import { epicFeatureRows, EPIC_HANDOFF_MAX_CHARS, newestSummaryFirst, renderEpicHandoff, rowSections, type LiveFeature } from "./epic-info";
 
 const summary = (over: Partial<FeatureHandoff> = {}): FeatureHandoff => ({
   summary: "接口联调完了", blockers: [], next_steps: [], decisions: [], open_questions: [], ...over,
@@ -94,6 +94,26 @@ describe("epicFeatureRows", () => {
 
 const row = (id: number, over: Partial<EpicFeatureRow> = {}): EpicFeatureRow => ({
   id, name: `F${id}`, status: "active", archivedAt: null, summaryAt: id, summary: `summary ${id}`, blockers: [], decisions: [], openQuestions: [], ...over,
+});
+
+describe("the row parts shared with the first message", () => {
+  const titles = { blockers: "B:", decisions: "D:", questions: "Q:" };
+  const base = { id: 1, name: "F", status: "active", archivedAt: null, summaryAt: null, summary: null, blockers: [], decisions: [], openQuestions: [] } satisfies EpicFeatureRow;
+
+  it("lists blockers, decisions and open questions in order, with the given titles", () => {
+    const r = { ...base, blockers: ["b1"], decisions: [{ key: "k", statement: "s" }], openQuestions: ["q1", "q2"] };
+    expect(rowSections(r, titles)).toEqual(["B:", "- b1", "D:", "- k: s", "Q:", "- q1", "- q2"]);
+  });
+
+  it("leaves out an empty section", () => {
+    expect(rowSections(base, titles)).toEqual([]);
+    expect(rowSections({ ...base, openQuestions: ["q"] }, titles)).toEqual(["Q:", "- q"]);
+  });
+
+  it("sorts the newest summary first and features without one last, keeping ties in order", () => {
+    const rows = [{ ...base, id: 1 }, { ...base, id: 2, summaryAt: 5 }, { ...base, id: 3, summaryAt: 9 }, { ...base, id: 4 }];
+    expect([...rows].sort(newestSummaryFirst).map((r) => r.id)).toEqual([3, 2, 1, 4]);
+  });
 });
 
 describe("renderEpicHandoff", () => {

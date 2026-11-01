@@ -300,10 +300,11 @@ export class TicketService {
     return f.workspaceDir;
   }
 
-  /** feature 下未归档 ticket 的全部仓库工作目录（去重）。 */
+  /** feature 现在的 ticket（见 TicketsRepo.listWithFeature）的全部仓库工作目录（去重）。 */
   featureWorkDirs(featureId: number): string[] {
+    const f = this.d.features?.get(featureId);
     const dirs: string[] = [];
-    for (const t of this.d.tickets.listByFeature(featureId)) {
+    for (const t of f ? this.d.tickets.listWithFeature(f) : this.d.tickets.listByFeature(featureId)) {
       for (const r of t.repos) {
         const dir = this.workDir(r);
         if (!dirs.some((d) => samePath(d, dir))) dirs.push(dir);

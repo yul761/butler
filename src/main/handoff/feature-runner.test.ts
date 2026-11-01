@@ -50,13 +50,13 @@ function setup() {
   };
   let ticketCandidates: string[] = [];
   const childRuns: string[] = [];
-  let onChild: (key: string) => void = () => undefined;
+  let onChild: (key: string) => unknown = () => undefined;
   const ticketRunner = {
     candidates: () => ticketCandidates,
     runManual: async (key: string): Promise<HandoffOutcome> => {
       childRuns.push(key);
       order.push(`ticket:${key}`);
-      onChild(key);
+      await onChild(key);
       return { ticketKey: key, status: "stored", handoffId: 1, degraded: false };
     },
   };
@@ -68,7 +68,7 @@ function setup() {
     ticketRunner,
     // 和 TicketService.featureHeadlessDirs 一样：工作区外的仓库目录才加 --add-dir。
     dirs: (id) => {
-      const repoDirs = tickets.listByFeature(id).flatMap((t) => t.repos.map((r) => r.worktreePath ?? r.repoPath));
+      const repoDirs = tickets.listWithFeature(features.get(id)!).flatMap((t) => t.repos.map((r) => r.worktreePath ?? r.repoPath));
       return { cwd: features.get(id)!.workspaceDir, addDirs: repoDirs.filter((d) => !d.startsWith(`${WS}/`)), repoDirs };
     },
     run,
@@ -121,7 +121,7 @@ function setup() {
     setNow: (t: number) => {
       clock = t;
     },
-    onChild: (fn: (key: string) => void) => {
+    onChild: (fn: (key: string) => unknown) => {
       onChild = fn;
     },
   };
@@ -529,6 +529,57 @@ describe("archiving a feature with the real runner", () => {
     await svc.archive(featureId, closed);
     expect(calls).toHaveLength(0);
     expect(features.get(featureId)?.archivedAt).toBe(60_000);
+  });
+
+  describe("when the limit expires while the child tickets still run", () => {
+    afterEach(() => vi.useRealTimers());
+
+    /** 子 ticket 卡到限时之后：归档先生效，汇总这时才开始。 */
+    async function archiveDuringChildren(ctx: ReturnType<typeof archiveSetup>) {
+      vi.useFakeTimers();
+      let release: () => void = () => undefined;
+      ctx.setTicketCandidates(["A-1"]);
+      ctx.onChild(() => new Promise<void>((r) => (release = r)));
+      const p = ctx.svc.archive(ctx.featureId, closed);
+      await vi.advanceTimersByTimeAsync(ARCHIVE_SUMMARY_LIMIT_MS);
+      await p;
+      expect(ctx.features.get(ctx.featureId)?.archivedAt).toBe(60_000);
+      expect(ctx.tickets.get("A-1")?.archivedAt).toBe(60_000);
+      expect(ctx.calls).toHaveLength(0);
+      release();
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+
+    it("still writes the tickets archived with the feature into the late summary", async () => {
+      const ctx = archiveSetup();
+      ctx.addTicket("B-2", { repoPath: "/elsewhere/web" });
+      await archiveDuringChildren(ctx);
+      expect(ctx.calls).toHaveLength(1);
+      expect(ctx.calls[0].prompt).toContain("A-1");
+      expect(ctx.calls[0].prompt).toContain("B-2");
+      expect(ctx.calls[0].args.join(" ")).toContain("/elsewhere/web");
+      expect(ctx.featureHandoffs.latest(ctx.featureId)?.trigger).toBe("manual");
+    });
+
+    it("leaves out a ticket that was archived on its own before", async () => {
+      const ctx = archiveSetup();
+      ctx.addTicket("OLD-1", { archivedAt: 7, repoPath: "/elsewhere/old" });
+      await archiveDuringChildren(ctx);
+      expect(ctx.calls[0].prompt).toContain("A-1");
+      expect(ctx.calls[0].prompt).not.toContain("OLD-1");
+      expect(ctx.calls[0].args.join(" ")).not.toContain("/elsewhere/old");
+    });
+
+    it("does not lose a feature with no coordinator, whose only material is its tickets' handoffs", async () => {
+      const ctx = epicSetup();
+      ctx.addTicket("A-1");
+      ctx.ticketHandoff("A-1", 20);
+      const svc = new FeatureService({ features: ctx.features, tickets: ctx.tickets, now: () => 60_000, refreshBeforeArchive: (ids) => ctx.runner.refreshBeforeArchive(ids) });
+      await archiveDuringChildren({ ...ctx, svc });
+      expect(ctx.calls).toHaveLength(1);
+      expect(ctx.featureHandoffs.latest(ctx.featureId)).not.toBeNull();
+      expect(ctx.logs.join("\n")).not.toContain("nothing_to_summarize");
+    });
   });
 });
 
