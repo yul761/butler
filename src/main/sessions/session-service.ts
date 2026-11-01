@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import type { SessionActivity } from "../../shared/activity";
 import { sanitizePrefill } from "../../shared/text";
 import type { Pr } from "../../shared/handoff";
 import {
@@ -64,6 +65,8 @@ export interface SessionServiceDeps {
   featureHandoffs?: Pick<FeatureHandoffsRepo, "latest">;
   /** 取 ticket 的最新有效 handoff 里的 PR；不给就都是 []。 */
   handoffs?: Pick<HandoffsRepo, "knownPrs">;
+  /** session 此刻的活动（ActivityMonitor）；不给 FeatureView 里 activity 是空的。 */
+  activity?: (sessionId: string) => SessionActivity | null;
   /** 目录是否存在（测试注入；默认读真实磁盘）。 */
   dirExists?: (dir: string) => boolean;
   /** 要打开这个 ticket 的 session 时调用：把它的记忆补同步一次（排进记忆的同步队列，不等它）。 */
@@ -90,6 +93,12 @@ export interface OpenExtra {
 function samePath(a: string, b: string, platform: NodeJS.Platform): boolean {
   const norm = (p: string) => (platform === "win32" ? p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase() : p.replace(/\/+$/, ""));
   return norm(a) === norm(b);
+}
+
+/** 一行显示一个活动：卡住 > 等你批准 > 等你回话 > 最近有活动。 */
+function mostUrgent(activities: SessionActivity[]): SessionActivity | undefined {
+  const rank = (a: SessionActivity) => (a.stuck ? 0 : a.kind === "approval" ? 1 : a.kind === "waiting" ? 2 : 3);
+  return [...activities].sort((a, b) => rank(a) - rank(b) || (b.lastOutputAt ?? 0) - (a.lastOutputAt ?? 0))[0];
 }
 
 export class SessionService {
@@ -446,10 +455,15 @@ export class SessionService {
       // 按建立顺序（和 list_tickets 一样），不是单独 ticket 列表的最新在前。
       const own = tickets.filter((t) => t.featureId === f.id).sort((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
       const ticketPrs: Record<string, Pr[]> = {};
-      for (const t of own) ticketPrs[t.key] = this.d.handoffs?.knownPrs(t.key) ?? [];
+      const activity: Record<string, SessionActivity> = {};
+      for (const t of own) {
+        ticketPrs[t.key] = this.d.handoffs?.knownPrs(t.key) ?? [];
+        const a = mostUrgent(t.sessions.filter((s) => s.termId !== null).flatMap((s) => this.d.activity?.(s.id) ?? []));
+        if (a) activity[t.key] = a;
+      }
       return {
         ...f, tickets: own, sessions, hiddenSessions, waiting: sessions.some((s) => s.waitingForInput) || own.some((t) => t.waiting),
-        summary: this.d.featureHandoffs?.latest(f.id) ?? null, ticketPrs,
+        summary: this.d.featureHandoffs?.latest(f.id) ?? null, ticketPrs, activity,
       };
     });
   }

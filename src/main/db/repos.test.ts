@@ -249,3 +249,27 @@ describe("migration 7: language (design 2026-10-26 i18n)", () => {
     expect(new SettingsRepo(memDb()).get("language")).toBe("auto");
   });
 });
+
+describe("migration 9: fix sessions", () => {
+  const upTo8 = () => {
+    const db = new DatabaseSync(":memory:");
+    for (const sql of MIGRATIONS.slice(0, 8)) db.exec(sql);
+    db.exec("PRAGMA user_version = 8");
+    return db;
+  };
+
+  it("gives existing sessions no fixesSession", () => {
+    const db = upTo8();
+    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('old', NULL, '/w', 'butler', 1)`).run();
+    expect(migrate(db)).toBe(9);
+    expect(new SessionsRepo(db).get("old")?.fixesSession).toBeNull();
+  });
+
+  it("stores fixesSession on insert and defaults it to null", () => {
+    const repo = new SessionsRepo(memDb());
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "plain", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1 });
+    expect(repo.get("fix")?.fixesSession).toBe("stuck-1");
+    expect(repo.get("plain")?.fixesSession).toBeNull();
+  });
+});

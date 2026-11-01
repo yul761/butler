@@ -21,6 +21,7 @@ import type { FeatureSummaryRunner } from "../handoff/feature-runner";
 import type { HealthService } from "../hooks/health";
 import { addDays, localDate } from "../schedule/calendar";
 import type { Scheduler } from "../schedule/scheduler";
+import type { ActivityMonitor } from "../sessions/activity-monitor";
 import type { PtyManager } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
 import { memoryOn } from "../settings/settings-values";
@@ -43,6 +44,7 @@ export interface IpcDeps {
   ticketService: TicketService;
   featureService: FeatureService;
   sessionService: SessionService;
+  activity: Pick<ActivityMonitor, "dismiss">;
   pty: PtyManager;
   health: HealthService;
   followups: FollowupsRepo;
@@ -215,6 +217,8 @@ export function registerIpc(d: IpcDeps): void {
     d.sessionService.dismiss(id);
     d.notify();
   });
+
+  handle(IPC.activityDismiss, (raw: unknown) => d.activity.dismiss(sessionIdArg(raw)));
 
   handle(IPC.ptySnapshot, (id: string) => d.pty.snapshot(id));
   handle(IPC.ptyKill, (id: string) => d.pty.kill(id));

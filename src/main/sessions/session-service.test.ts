@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { SessionActivity } from "../../shared/activity";
+import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
 import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
@@ -547,5 +549,71 @@ describe("SessionService.hide / unhide", () => {
     const [view] = service.ticketViews();
     expect(view.sessions.map((s) => s.id)).toContain("old");
     expect(view.hiddenSessions).toEqual([]);
+  });
+});
+
+describe("FeatureView.activity", () => {
+  const activity = (sessionId: string, over: Partial<SessionActivity> = {}): SessionActivity => ({
+    sessionId, kind: "command", detail: null, background: false, startedAt: null, lastOutputAt: null, stuck: false, reason: null, action: null, lastOutput: [], ...over,
+  });
+
+  /** 一个 feature 下的 DMS-1，上面开着 terminals 里的这些终端；activities 是假的 ActivityMonitor.get。 */
+  function setupFeature(terminals: string[], activities: Record<string, SessionActivity>) {
+    const db = memDb();
+    const tickets = new TicketsRepo(db);
+    const sessions = new SessionsRepo(db);
+    const features = new FeaturesRepo(db);
+    const settings = new SettingsRepo(db);
+    const featureId = features.insert({ name: "f", workspaceDir: tempDir("butler-fv-"), createdAt: 1 });
+    tickets.insert({ key: "DMS-1", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null, featureId });
+    const { factory } = fakePtyFactory();
+    const pty = new PtyManager(factory, { data: () => undefined, exit: () => undefined });
+    for (const id of terminals) {
+      sessions.insertIfAbsent({ id, ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 1 });
+      pty.open(id, { file: "/bin/claude", args: [] }, { cwd: "/w", env: {} });
+    }
+    const service = new SessionService({
+      tickets, sessions, settings, features, pty,
+      ticketService: new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("butler-ws-") }),
+      ready: async () => undefined,
+      transcriptExists: () => true,
+      transcriptState: () => "present",
+      claude: () => ({ path: "/bin/claude", pathValue: "" }),
+      newId: () => "x",
+      now: () => 1000,
+      platform: "darwin",
+      baseEnv: {},
+      activity: (id) => activities[id] ?? null,
+    });
+    return { service, sessions };
+  }
+
+  it("is empty for a ticket without a live session", () => {
+    const { service, sessions } = setupFeature([], { gone: activity("gone") });
+    sessions.insertIfAbsent({ id: "gone", ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    expect(service.featureViews()[0].activity).toEqual({});
+  });
+
+  it("keys the activity by ticket", () => {
+    const a = activity("s1", { kind: "edit", detail: "a.ts" });
+    expect(setupFeature(["s1"], { s1: a }).service.featureViews()[0].activity).toEqual({ "DMS-1": a });
+  });
+
+  it("skips a session the monitor has not read yet", () => {
+    const a = activity("s2");
+    expect(setupFeature(["s1", "s2"], { s2: a }).service.featureViews()[0].activity["DMS-1"]).toEqual(a);
+  });
+
+  it.each<[string, Partial<SessionActivity>, Partial<SessionActivity>]>([
+    ["stuck over approval", { stuck: true }, { kind: "approval" }],
+    ["stuck over waiting", { stuck: true, lastOutputAt: 1 }, { kind: "waiting", lastOutputAt: 9 }],
+    ["approval over waiting", { kind: "approval" }, { kind: "waiting", lastOutputAt: 9 }],
+    ["waiting over recent activity", { kind: "waiting", lastOutputAt: 1 }, { kind: "edit", lastOutputAt: 9 }],
+    ["the most recent activity", { kind: "test", lastOutputAt: 9 }, { kind: "edit", lastOutputAt: 1 }],
+  ])("picks %s, in either order", (_name, winner, loser) => {
+    const w = activity("w", winner);
+    const l = activity("l", loser);
+    expect(setupFeature(["w", "l"], { w, l }).service.featureViews()[0].activity["DMS-1"]).toEqual(w);
+    expect(setupFeature(["l", "w"], { w, l }).service.featureViews()[0].activity["DMS-1"]).toEqual(w);
   });
 });

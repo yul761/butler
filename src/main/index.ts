@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Brief } from "../shared/brief";
-import { IPC } from "../shared/ipc";
+import { IPC, type AppNavigateRoute } from "../shared/ipc";
 import { APP_ID, shouldSetAppId } from "./app-id";
 import { BriefService } from "./brief/brief-service";
 import { narrateBrief } from "./brief/narrate";
@@ -56,10 +56,12 @@ import { ensureDirs, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
+import { ActivityMonitor, type StuckInfo } from "./sessions/activity-monitor";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
+import { judgeStuck } from "./sessions/stuck-judge";
 import { llmConfig, memoryOn, scheduleConfig, SettingError } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
@@ -88,6 +90,8 @@ const BACKGROUND_WINDOWS = process.env.BUTLER_BACKGROUND_WINDOWS === "1";
 let keepAwake: KeepAwake | null = null;
 /** 保留最近一条通知的引用，否则它可能在用户点击前被回收。 */
 let lastNotification: Notification | null = null;
+/** 卡住的通知：可能同时有好几个 session 卡住，都要留着，点击之前不能被回收。 */
+const stuckNotifications = new Set<Notification>();
 const quitState = createQuitState(() => app.quit());
 let logger: Logger = () => undefined;
 /** dev 控制台 tee：防止在 tee 里再次写日志造成递归，stderr 管道断开后停止 tee。 */
@@ -241,6 +245,21 @@ function showEveningNotification(brief: Brief): void {
   lastNotification = n;
 }
 
+/** 一次卡住一条通知（设计文档 2026-10-31）：点开这个 feature 页，展开这个 ticket 的面板。 */
+function showStuckNotification(info: StuckInfo): void {
+  if (headlessAbort.signal.aborted || !Notification.isSupported()) return;
+  const n = new Notification({ title: M().stuckTitle(info.ticketKey), body: M().stuckBody(info.reason) });
+  stuckNotifications.add(n);
+  n.on("close", () => stuckNotifications.delete(n));
+  n.on("click", () => {
+    stuckNotifications.delete(n);
+    showWindow();
+    const route: AppNavigateRoute = { page: "feature", featureId: info.featureId, stuckTicket: info.ticketKey };
+    safeSend(IPC.appNavigate, route);
+  });
+  n.show();
+}
+
 /**
  * 发送前确认（设计文档 7.6）：展示完整的出站内容，默认按钮和取消都是“不发送”。
  * 把主窗口带到前台并作为父窗口；没有主窗口时视为拒绝。最多等 CONFIRM_TIMEOUT_MS，超时视为拒绝；
@@ -382,8 +401,18 @@ async function bootstrap(): Promise<void> {
     if (Object.keys(servers).length === 0) return null;
     return writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers });
   };
+  const activityMonitor = new ActivityMonitor({
+    sessions, tickets, features, pty,
+    transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
+    judge: (input) => judgeStuck({ run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID, signal: headlessAbort.signal, log: logger }, input),
+    notify,
+    onStuck: showStuckNotification,
+    now: Date.now,
+    log: logger,
+  });
   const sessionService = new SessionService({
     tickets, sessions, settings, ticketService, pty,
+    activity: (id) => activityMonitor.get(id),
     ready: () => healthReady,
     transcriptExists: (id) => transcriptState(paths.claudeProjects, id) !== "absent",
     transcriptState: (id) => transcriptState(paths.claudeProjects, id),
@@ -712,7 +741,7 @@ async function bootstrap(): Promise<void> {
     onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,
-    tickets, ticketService, featureService, sessionService, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs,
+    tickets, ticketService, featureService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs,
     keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     briefRefreshing: () => briefRefreshing,
@@ -751,6 +780,7 @@ async function bootstrap(): Promise<void> {
   tray = createTray();
   inbox.start();
   controlInbox.start();
+  activityMonitor.start();
   void runDiscovery();
   // 启动时补齐记忆：老数据、上次退出时没写完的。
   void memory.syncAll();
@@ -770,6 +800,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(discoveryTimer);
     clearInterval(scheduleTimer);
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
+    activityMonitor.stop();
     memory.stop();
     inbox.stop();
     controlInbox.stop();

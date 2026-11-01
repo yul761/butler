@@ -55,6 +55,7 @@ export function App() {
   useEffect(
     () =>
       api.onNavigate((r) => {
+        if (r.page !== "home") return;
         setRoute({ page: "home", kind: r.kind });
         // 已经在简报页时也要切到通知对应的标签：换 key 让 BriefPage 重新挂载。
         setNavNonce((n) => n + 1);

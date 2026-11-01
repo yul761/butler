@@ -1,7 +1,7 @@
 import { extractUserText } from "./discovery";
 
 /** 命令文字最多保留多少个字符。 */
-const DETAIL_LIMIT = 40;
+export const DETAIL_LIMIT = 40;
 
 export interface RunningTool {
   id: string;

@@ -146,6 +146,11 @@ export class PtyManager {
     return [...this.terms.keys()];
   }
 
+  /** 打开的终端里那个进程的 pid；终端不在了返回 null。 */
+  pid(termId: string): number | null {
+    return this.terms.get(termId)?.proc.pid ?? null;
+  }
+
   write(termId: string, data: string): void {
     this.guard(termId, "write", () => this.terms.get(termId)?.proc.write(data));
   }

@@ -1,3 +1,5 @@
+import type { BriefKind } from "./brief";
+
 export const IPC = {
   ticketsList: "tickets:list",
   ticketsCreate: "tickets:create",
@@ -28,6 +30,7 @@ export const IPC = {
   sessionsDismiss: "sessions:dismiss",
   sessionsHide: "sessions:hide",
   sessionsUnhide: "sessions:unhide",
+  activityDismiss: "activity:dismiss",
   ptySnapshot: "pty:snapshot",
   ptyKill: "pty:kill",
   ptyWrite: "pty:write",
@@ -77,7 +80,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.ticketsUpdate, IPC.ticketsArchived, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
   IPC.featuresList, IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive,
   IPC.featuresSummaryRun, IPC.featuresArchived, IPC.featuresUnarchive, IPC.featuresOpenSession, IPC.reposScan, IPC.ticketsRecheckCleanup,
-  IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide,
+  IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.activityDismiss,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.briefsLatest, IPC.briefsRegenerate, IPC.briefsMark,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
@@ -90,5 +93,8 @@ export const INVOKE_CHANNELS: readonly string[] = [
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];
 /** 主进程 → 渲染进程。 */
 export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.memoryChanged, IPC.appNavigate, IPC.appKeepAwakeChanged];
+
+/** IPC.appNavigate 带的内容：点系统通知后去哪。 */
+export type AppNavigateRoute = { page: "home"; kind?: BriefKind } | { page: "feature"; featureId: number; stuckTicket: string };
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };

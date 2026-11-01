@@ -1,3 +1,4 @@
+import type { SessionActivity } from "./activity";
 import type { FeatureHandoff, Handoff, Pr } from "./handoff";
 export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
@@ -75,6 +76,8 @@ export interface Session {
   spawnedBy: string | null;
   /** feature 总控 session 属于哪个 feature（这时 ticketKey 为 null、coordinator 为 true）。 */
   featureId: number | null;
+  /** 修复 session：为了解决哪个卡住的 session 开的（null：不是修复 session）。 */
+  fixesSession: string | null;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */
@@ -101,6 +104,8 @@ export interface FeatureView extends Feature {
   summary: FeatureHandoffRecord | null;
   /** 每个 ticket 的 PR：取最新一条有效 handoff（含 refresh）里的，没有 handoff 为 []。 */
   ticketPrs: Record<string, Pr[]>;
+  /** 键是 ticket 号：这个 ticket 运行中的 session 里最需要注意的那个；没有运行中的 session 就没有这个键。 */
+  activity: Record<string, SessionActivity>;
 }
 
 export interface UnclaimedSession extends Session {

@@ -1,6 +1,6 @@
 import type { BriefKind, BriefView, ItemMark } from "../../shared/brief";
 import type { Lang } from "../../shared/i18n";
-import { IPC, type IpcResult } from "../../shared/ipc";
+import { IPC, type AppNavigateRoute, type IpcResult } from "../../shared/ipc";
 import type { MemoryView, WhyEntry } from "../../shared/memory";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
@@ -103,7 +103,8 @@ export const api = {
   keepAwake: () => call<boolean>(IPC.appKeepAwakeGet),
   setKeepAwake: (on: boolean) => call<boolean>(IPC.appKeepAwakeSet, on),
   memoryWhy: (ticketKey: string, factId: string) => call<WhyEntry[] | null>(IPC.memoryWhy, ticketKey, factId),
-  onNavigate: (cb: (route: { page: "home"; kind?: BriefKind }) => void) => window.butler.on(IPC.appNavigate, cb),
+  dismissActivity: (sessionId: string) => call<void>(IPC.activityDismiss, sessionId),
+  onNavigate: (cb: (route: AppNavigateRoute) => void) => window.butler.on(IPC.appNavigate, cb),
   onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),
   onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),
   onStateChanged: (cb: () => void) => window.butler.on(IPC.stateChanged, cb),

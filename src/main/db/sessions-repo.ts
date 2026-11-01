@@ -17,6 +17,7 @@ interface SessionRow {
   coordinator: number;
   spawned_by: string | null;
   feature_id: number | null;
+  fixes_session: string | null;
 }
 
 function toSession(r: SessionRow): Session {
@@ -36,6 +37,7 @@ function toSession(r: SessionRow): Session {
     coordinator: r.coordinator === 1,
     spawnedBy: r.spawned_by,
     featureId: r.feature_id === null ? null : Number(r.feature_id),
+    fixesSession: r.fixes_session,
   };
 }
 
@@ -52,6 +54,7 @@ export interface NewSession {
   coordinator?: boolean;
   spawnedBy?: string | null;
   featureId?: number | null;
+  fixesSession?: string | null;
 }
 
 export interface SessionDetails {
@@ -75,12 +78,12 @@ export class SessionsRepo {
   insertIfAbsent(s: NewSession): boolean {
     const r = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
-        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null,
+        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null,
       );
     if (Number(r.changes) > 0) {
       this.forgotten.delete(s.id);

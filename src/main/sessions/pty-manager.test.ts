@@ -219,6 +219,18 @@ describe("PtyManager", () => {
   });
 });
 
+describe("PtyManager.pid", () => {
+  it("gives the process id of an open terminal and null otherwise", () => {
+    const { factory, spawned } = fakePtyFactory();
+    const pty = new PtyManager(factory, { data: () => undefined, exit: () => undefined });
+    expect(pty.pid("t1")).toBeNull();
+    pty.open("t1", { file: "/bin/claude", args: [] }, { cwd: "/", env: {} });
+    expect(pty.pid("t1")).toBe(spawned[0].pty.pid);
+    spawned[0].pty.emitExit(0);
+    expect(pty.pid("t1")).toBeNull();
+  });
+});
+
 describe("trimBuffer", () => {
   it("keeps short buffers and cuts long ones at a line boundary", () => {
     expect(trimBuffer("abc")).toBe("abc");

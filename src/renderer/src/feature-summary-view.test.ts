@@ -15,7 +15,7 @@ const record = (over: Partial<FeatureHandoffRecord> = {}): FeatureHandoffRecord 
 });
 const feature = (id: number, name: string, summary: FeatureHandoffRecord | null = null): FeatureView => ({
   id, name, workspaceDir: "/w", repos: [], createdAt: 1, archivedAt: null,
-  tickets: [], sessions: [], hiddenSessions: [], waiting: false, summary, ticketPrs: {},
+  tickets: [], sessions: [], hiddenSessions: [], waiting: false, summary, ticketPrs: {}, activity: {},
 });
 const pr = (state: Pr["state"], review: Pr["review"], number = 1, url = "https://github.com/o/r/pull/1"): Pr => ({ number, url, state, review });
 
