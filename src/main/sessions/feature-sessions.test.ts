@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
@@ -252,14 +252,29 @@ describe("epic sessions (design 2026-11-01)", () => {
     expect(spawned).toEqual([]);
   });
 
-  it("returns an error, without throwing or leaving a row, when the workspace is gone", async () => {
+  it("recreates a missing workspace, for a new session and a resumed one, like a feature", async () => {
     const { service, spawned, sessions, workspaceDir, epicId } = await epicSetup();
     sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: workspaceDir, origin: "butler", createdAt: 1, epicId });
     rmSync(workspaceDir, { recursive: true });
+    expect(await service.openEpic({ epicId })).toEqual({ ok: true, termId: "new-1", alreadyOpen: false });
+    expect(existsSync(workspaceDir)).toBe(true);
+    expect(spawned[0].opts.cwd).toBe(workspaceDir);
+    rmSync(workspaceDir, { recursive: true });
+    expect(await service.openEpic({ epicId, sessionId: "old" })).toEqual({ ok: true, termId: "old", alreadyOpen: false });
+    expect(existsSync(workspaceDir)).toBe(true);
+  });
+
+  it("returns an error, without throwing or leaving a row, when the workspace cannot be created", async () => {
+    const { service, spawned, sessions, logs, workspaceDir, epicId } = await epicSetup();
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: workspaceDir, origin: "butler", createdAt: 1, epicId });
+    rmSync(workspaceDir, { recursive: true });
+    // 这个路径上是一个文件，mkdir 建不了目录。
+    writeFileSync(workspaceDir, "");
     await expect(service.openEpic({ epicId })).resolves.toEqual({ ok: false, reason: "no_repo" });
     await expect(service.openEpic({ epicId, sessionId: "old" })).resolves.toEqual({ ok: false, reason: "no_repo" });
     expect(spawned).toEqual([]);
     expect(sessions.listByEpic(epicId).map((s) => s.id)).toEqual(["old"]);
+    expect(logs.some((l) => l.includes(`epic ${epicId}`))).toBe(true);
   });
 
   it("leaves no empty row when claude cannot start", async () => {

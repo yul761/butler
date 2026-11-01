@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import type { SessionActivity } from "../../shared/activity";
 import { sanitizePrefill } from "../../shared/text";
 import type { Pr } from "../../shared/handoff";
@@ -438,9 +438,15 @@ export class SessionService {
     }, claude, from.head ?? null);
   }
 
-  /** 工作区是 Butler 建 epic 时建好的；不见了（用户删了、盘没挂上）就报错，不在原处建一个空目录。 */
+  /** 工作区不见了（用户删了）就重建，和 feature 一样；建不了时返回错误，不抛。 */
   private startInEpic(epic: Epic, claude: Claude, head: Session | null): string | OpenFailure {
-    if (!(this.d.dirExists ?? existsSync)(head?.cwd || epic.workspaceDir)) return { ok: false, reason: "no_repo" };
+    const cwd = head?.cwd || epic.workspaceDir;
+    try {
+      mkdirSync(cwd, { recursive: true });
+    } catch (e) {
+      this.d.log?.(`epic ${epic.id}: cannot create ${cwd}`, e);
+      return { ok: false, reason: "no_repo" };
+    }
     const repoPaths = epic.repos.map((r) => r.repoPath);
     return this.startInWorkspace({
       label: `epic ${epic.id}`,
