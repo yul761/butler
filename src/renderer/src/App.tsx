@@ -3,6 +3,7 @@ import type { BriefKind } from "../../shared/brief";
 import type { FeatureView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
+import { setCollapsed } from "./local-prefs";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
 import { BriefPage } from "./components/BriefPage";
@@ -52,10 +53,18 @@ export function App() {
   }, []);
   // 点击晚间小结的系统通知：回到简报。
   const [navNonce, setNavNonce] = useState(0);
+  const [featureNonce, setFeatureNonce] = useState(0);
   useEffect(
     () =>
       api.onNavigate((r) => {
-        if (r.page !== "home") return;
+        if (r.page === "feature") {
+          // 点卡住通知：展开 ticket 区和这个 ticket 的面板，再换 key 让 feature 页按新的记号重新挂载。
+          setCollapsed(`tickets:${r.featureId}`, false);
+          setCollapsed(`stuck-open:${r.stuckTicket}`, true);
+          setRoute({ page: "feature", id: r.featureId });
+          setFeatureNonce((n) => n + 1);
+          return;
+        }
         setRoute({ page: "home", kind: r.kind });
         // 已经在简报页时也要切到通知对应的标签：换 key 让 BriefPage 重新挂载。
         setNavNonce((n) => n + 1);
@@ -167,7 +176,7 @@ export function App() {
             )}
             {route.page === "feature" && currentFeature && (
               <FeaturePage
-                key={currentFeature.id}
+                key={`${currentFeature.id}:${featureNonce}`}
                 feature={currentFeature}
                 onOpenTicket={(key) => setRoute({ page: "ticket", key })}
                 onArchived={() => setRoute({ page: "home" })}
