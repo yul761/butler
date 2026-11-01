@@ -50,8 +50,8 @@ export class StuckTracker {
     // 隔得太久（应用休眠、暂停检测）：之前的“没变化”不能和现在连起来。
     if (e && now - e.lastAt > STUCK_CHECK_MS * 2) e = undefined;
     if (!e) {
-      // 没见过变化就算一次没变化。
-      this.entries.set(id, { last: sample, lastAt: now, quiet: 1, stuck: false, reason: null, action: null, dismissed: false, noJudgeUntil: this.entries.get(id)?.noJudgeUntil ?? 0 });
+      // 第一次观察只是基线，没有可比较的对象，不算没变化。
+      this.entries.set(id, { last: sample, lastAt: now, quiet: 0, stuck: false, reason: null, action: null, dismissed: false, noJudgeUntil: this.entries.get(id)?.noJudgeUntil ?? 0 });
       return false;
     }
     const changed = this.changed(e.last, sample);
