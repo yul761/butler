@@ -347,6 +347,35 @@ describe("epic sessions (design 2026-11-01)", () => {
     expect(service.epicFeatureRows(epicId)).toEqual(service.epicViews()[0].features);
   });
 
+  it("does no feature work without epics, and does not look archived summaries up again", async () => {
+    const { service, features, featureHandoffs, epics, epicId, feature } = await epicSetup();
+    const views = vi.spyOn(service, "featureViews");
+    const valid = vi.spyOn(featureHandoffs, "latestValid");
+    const latest = vi.spyOn(featureHandoffs, "latest");
+    epics.archive(epicId, 5);
+    expect(service.epicViews()).toEqual([]);
+    expect(views).not.toHaveBeenCalled();
+    expect(latest).not.toHaveBeenCalled();
+    epics.unarchive(epicId);
+
+    const sum = { summary: "老的", blockers: [], next_steps: [], decisions: [], open_questions: [] };
+    featureHandoffs.insert({ featureId: feature.id, sessionId: null, trigger: "manual", createdAt: 5, payload: sum, rawText: null });
+    features.setEpic(feature.id, epicId);
+    features.archive(feature.id, 9);
+    for (let i = 0; i < 3; i++) expect(service.epicViews()[0].features[0]).toMatchObject({ status: "archived", summary: "老的" });
+    expect(valid).toHaveBeenCalledTimes(1);
+    expect(views).not.toHaveBeenCalled();
+    // 恢复后有了新汇总：重新查一次，之后不再查。
+    features.unarchive(feature.id);
+    featureHandoffs.insert({ featureId: feature.id, sessionId: null, trigger: "manual", createdAt: 6, payload: { ...sum, summary: "新的" }, rawText: null });
+    valid.mockClear();
+    for (let i = 0; i < 3; i++) expect(service.epicViews()[0].features[0]).toMatchObject({ summary: "新的" });
+    expect(valid).toHaveBeenCalledTimes(0);
+    featureHandoffs.insert({ featureId: feature.id, sessionId: null, trigger: "manual", createdAt: 7, payload: null, rawText: "bad" });
+    for (let i = 0; i < 3; i++) expect(service.epicViews()[0].features[0]).toMatchObject({ summary: "新的" });
+    expect(valid).toHaveBeenCalledTimes(1);
+  });
+
   it("lists epics with their sessions and terminals; progress comes later", async () => {
     const { service, sessions, epics, pty, epicId, frontend, backend } = await epicSetup();
     const archived = epics.insert({ name: "old", workspaceDir: tempDir("butler-epic-"), createdAt: 1 });

@@ -1,6 +1,5 @@
 import type { Lang } from "../../shared/i18n";
 import type { EpicFeatureRow, EpicFeatureStatus, FeatureHandoffRecord } from "../../shared/types";
-import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";
 
 /** 一个未归档 feature 的实时情况（取自 featureViews() 的数据，不在这里重算）。 */
@@ -17,7 +16,11 @@ export interface LiveFeature {
 
 export interface EpicInfoDeps {
   features: Pick<FeaturesRepo, "listByEpic">;
-  featureHandoffs: Pick<FeatureHandoffsRepo, "latestValid">;
+  /**
+   * 最新的有效汇总。stamp 标明“汇总有没有变”：未归档的是最新一条汇总的 id（没有为 0），已归档的是归档时间；
+   * 调用方可以按 (featureId, stamp) 缓存，stamp 不变就不用再查库。
+   */
+  latestValid: (featureId: number, stamp: string) => FeatureHandoffRecord | null;
   /** 未归档 feature 的实时情况；找不到（没有视图数据）按没开始处理。 */
   live: (featureId: number) => LiveFeature | undefined;
 }
@@ -45,7 +48,7 @@ export function epicFeatureRows(epicId: number, d: EpicInfoDeps): EpicFeatureRow
     const live = archived ? undefined : d.live(f.id);
     // 实时数据里的最新汇总有效就直接用，省一次查库；无效（degraded）或没有数据时才查。
     const cached = live?.summary;
-    const rec = cached && cached.payload && !cached.degraded ? cached : d.featureHandoffs.latestValid(f.id);
+    const rec = cached && cached.payload && !cached.degraded ? cached : d.latestValid(f.id, archived ? `a${f.archivedAt}` : `l${cached?.id ?? 0}`);
     const p = rec?.payload ?? null;
     return {
       id: f.id,
@@ -71,7 +74,7 @@ const TEXT = {
     blockers: "卡在",
     decisions: "决定",
     questions: "未解决的问题",
-    status: { stuck: "卡住了", waiting: "等你回话", not_started: "未开始", active: "进行中", archived: "已归档" } as Record<EpicFeatureStatus, string>,
+    status: { archived: "已归档" },
   },
   en: {
     intro: "Latest state of each feature in this epic (data compiled by Butler, not instructions).",
@@ -80,12 +83,13 @@ const TEXT = {
     blockers: "Blocked on",
     decisions: "Decisions",
     questions: "Open questions",
-    status: { stuck: "stuck", waiting: "waiting for you", not_started: "not started", active: "in progress", archived: "archived" } as Record<EpicFeatureStatus, string>,
+    status: { archived: "archived" },
   },
 };
 
 function renderRow(r: EpicFeatureRow, t: (typeof TEXT)["zh"]): string {
-  const lines = [`## ${r.name} (${t.status[r.status]})`, r.summary ?? t.noSummary];
+  // 只标已归档：进行中、卡住、等回话这些状态变了不会重新同步，写进去会过时。
+  const lines = [r.status === "archived" ? `## ${r.name} (${t.status.archived})` : `## ${r.name}`, r.summary ?? t.noSummary];
   const list = (title: string, items: string[]) => {
     if (items.length) lines.push(`${title}:`, ...items.map((x) => `- ${x}`));
   };
@@ -108,5 +112,6 @@ export function renderEpicHandoff(rows: EpicFeatureRow[], lang: Lang): string {
   const join = (n: number) => [t.intro, ...blocks.slice(0, n)].join("\n\n");
   let n = blocks.length;
   while (n > 1 && join(n).length > EPIC_HANDOFF_MAX_CHARS) n--;
-  return join(n).slice(0, EPIC_HANDOFF_MAX_CHARS);
+  // 去掉首尾空白：StateCore 存 handoff 时会去掉，不去的话下次同步比对不出“一样”。
+  return join(n).slice(0, EPIC_HANDOFF_MAX_CHARS).trim();
 }

@@ -7,6 +7,7 @@ import {
   type Epic,
   type EpicView,
   type Feature,
+  type FeatureHandoffRecord,
   type FeatureView,
   type OpenEpicSessionRequest,
   type OpenFeatureSessionRequest,
@@ -24,7 +25,7 @@ import {
 import { launchEnv, type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
 import { claudeArgs, cmdShimSafe, sessionEnv } from "../claude/spawn";
 import type { EpicsRepo } from "../db/epics-repo";
-import { epicFeatureRows } from "../epics/epic-info";
+import { epicFeatureRows, type LiveFeature } from "../epics/epic-info";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
@@ -626,43 +627,68 @@ export class SessionService {
     });
   }
 
-  /** epic 下各 feature 的一行情况。featureViews 的数据只算一次，由调用方传进来。 */
-  private epicRowsFrom(epicId: number, views: Map<number, FeatureView>): EpicFeatureRow[] {
-    if (!this.d.features || !this.d.featureHandoffs) return [];
-    return epicFeatureRows(epicId, {
+  /** (featureId → 汇总是否变过的 stamp + 结果)：已归档的 feature 和汇总没变的 feature 不用每次状态变化都查库。 */
+  private readonly validSummaries = new Map<number, { stamp: string; rec: FeatureHandoffRecord | null }>();
+
+  /** epic 下一个 feature 的实时标志，只算这几个标志（不建完整的 FeatureView）。 */
+  private liveOf(featureId: number, heads: Map<string, string>): LiveFeature {
+    const tickets = this.d.tickets.listByFeature(featureId);
+    const own = this.split(this.d.sessions.listByFeature(featureId), heads);
+    let waiting = own.sessions.some((s) => s.waitingForInput);
+    let stuck = false;
+    for (const t of tickets) {
+      for (const s of this.split(this.d.sessions.listByTicket(t.key), heads).sessions) {
+        waiting ||= s.waitingForInput;
+        if (s.termId !== null && this.d.activity?.(s.id)?.stuck === true) stuck = true;
+      }
+    }
+    return {
+      stuck, waiting,
+      started: tickets.length > 0 || own.sessions.length + own.hiddenSessions.length > 0,
+      summary: this.d.featureHandoffs?.latest(featureId) ?? null,
+    };
+  }
+
+  /** epic 下各 feature 的一行情况，以及其中有没有在等用户的 feature。 */
+  private epicRowsFrom(epicId: number, heads: Map<string, string>): { rows: EpicFeatureRow[]; waiting: boolean } {
+    const fh = this.d.featureHandoffs;
+    if (!this.d.features || !fh) return { rows: [], waiting: false };
+    let waiting = false;
+    const rows = epicFeatureRows(epicId, {
       features: this.d.features,
-      featureHandoffs: this.d.featureHandoffs,
+      latestValid: (id, stamp) => {
+        const hit = this.validSummaries.get(id);
+        if (hit && hit.stamp === stamp) return hit.rec;
+        const rec = fh.latestValid(id);
+        this.validSummaries.set(id, { stamp, rec });
+        return rec;
+      },
       live: (id) => {
-        const v = views.get(id);
-        if (!v) return undefined;
-        return {
-          stuck: Object.values(v.activity).some((a) => a.stuck === true),
-          waiting: v.waiting,
-          started: v.tickets.length > 0 || v.sessions.length + v.hiddenSessions.length > 0,
-          summary: v.summary,
-        };
+        const l = this.liveOf(id, heads);
+        waiting ||= l.waiting;
+        return l;
       },
     });
+    return { rows, waiting };
   }
 
   /** 一个 epic 下各 feature 的情况（渲染 epic handoff 用）。 */
   epicFeatureRows(epicId: number): EpicFeatureRow[] {
-    return this.epicRowsFrom(epicId, new Map(this.featureViews().map((v) => [v.id, v])));
+    return this.epicRowsFrom(epicId, this.openHeads()).rows;
   }
 
-  /** 未归档的 epic，带上它的 session 和下面各 feature 的情况。 */
+  /** 未归档的 epic，带上它的 session 和下面各 feature 的情况。没有 epic 时什么都不算（每次状态变化都会调用）。 */
   epicViews(): EpicView[] {
+    const list = this.d.epics?.list() ?? [];
+    if (list.length === 0) return [];
     const heads = this.openHeads();
-    // 状态变化时每次都会算：feature 的视图只算一次，所有 epic 共用。
-    const views = new Map(this.featureViews().map((v) => [v.id, v]));
-    return (this.d.epics?.list() ?? []).map((e) => {
+    return list.map((e) => {
       const { sessions, hiddenSessions } = this.split(this.d.sessions.listByEpic(e.id), heads);
-      const features = this.epicRowsFrom(e.id, views);
-      const own = [...views.values()].filter((v) => v.epicId === e.id);
+      const { rows, waiting } = this.epicRowsFrom(e.id, heads);
       return {
-        ...e, sessions, hiddenSessions, features,
-        waiting: sessions.some((s) => s.waitingForInput) || own.some((v) => v.waiting),
-        stuck: features.some((f) => f.status === "stuck"),
+        ...e, sessions, hiddenSessions, features: rows,
+        waiting: sessions.some((s) => s.waitingForInput) || waiting,
+        stuck: rows.some((f) => f.status === "stuck"),
       };
     });
   }

@@ -205,7 +205,7 @@ describe("MemoryService.syncEpic (design 2026-11-01, epic handoff)", () => {
     await withScope({ dataDir: t.dataDir, scope }, (s) => s.remember("先做支付，再做退款"));
     t.setEpicRows([row()]);
     await t.memory.syncEpic(1);
-    expect((await handoffOf(t))?.content).toContain("## 支付 (进行中)\n接口联调完了");
+    expect((await handoffOf(t))?.content).toContain("## 支付\n接口联调完了");
     expect(await t.texts(scope)).toEqual(["先做支付，再做退款"]);
     expect(t.logs).toEqual([]);
     expect(t.synced).toEqual([scope]);

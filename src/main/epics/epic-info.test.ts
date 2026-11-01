@@ -26,7 +26,7 @@ function setup() {
   };
   const addSummary = (featureId: number, p: FeatureHandoff | null, createdAt: number) =>
     featureHandoffs.insert({ featureId, sessionId: null, trigger: "nightly", createdAt, payload: p, rawText: null });
-  const rows = () => epicFeatureRows(epicId, { features, featureHandoffs, live: (id) => live.get(id) });
+  const rows = () => epicFeatureRows(epicId, { features, latestValid: (id) => featureHandoffs.latestValid(id), live: (id) => live.get(id) });
   return { epicId, features, add, addSummary, rows };
 }
 
@@ -101,6 +101,10 @@ describe("renderEpicHandoff", () => {
     const r = row(1, { status: "archived", archivedAt: 5, blockers: ["等后端"], decisions: [{ key: "api", statement: "走 REST" }], openQuestions: ["拆 PR 吗"] });
     const zh = renderEpicHandoff([r], "zh");
     expect(zh).toContain("## F1 (已归档)");
+    // 状态变了不会重新同步：进行中、卡住、等回话不写进正文。
+    for (const status of ["active", "stuck", "waiting", "not_started"] as const) {
+      expect(renderEpicHandoff([row(2, { status })], "zh")).toContain("## F2\n");
+    }
     expect(zh).toContain("summary 1");
     expect(zh).toContain("- 等后端");
     expect(zh).toContain("- api: 走 REST");
@@ -113,18 +117,18 @@ describe("renderEpicHandoff", () => {
   it("keeps only the 10 most recent features", () => {
     const rows = Array.from({ length: 12 }, (_, i) => row(i + 1));
     const out = renderEpicHandoff(rows, "zh");
-    expect(out).toContain("## F12 ");
-    expect(out).toContain("## F3 ");
-    expect(out).not.toContain("## F2 ");
-    expect(out).not.toContain("## F1 ");
+    expect(out).toContain("## F12\n");
+    expect(out).toContain("## F3\n");
+    expect(out).not.toContain("## F2\n");
+    expect(out).not.toContain("## F1\n");
   });
 
   it("drops the oldest features first when the text is too long, and never exceeds the cap", () => {
     const rows = Array.from({ length: 10 }, (_, i) => row(i + 1, { summary: `${"x".repeat(1500)}#${i + 1}` }));
     const out = renderEpicHandoff(rows, "en");
     expect(out.length).toBeLessThanOrEqual(EPIC_HANDOFF_MAX_CHARS);
-    expect(out).toContain("## F10 ");
-    expect(out).not.toContain("## F1 ");
+    expect(out).toContain("## F10\n");
+    expect(out).not.toContain("## F1\n");
     expect(renderEpicHandoff([row(1, { summary: "y".repeat(20000) })], "en").length).toBe(EPIC_HANDOFF_MAX_CHARS);
   });
 });
