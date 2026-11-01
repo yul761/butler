@@ -243,6 +243,21 @@ describe("ActivityMonitor activity", () => {
     expect(h.monitor.get("s1")?.lastOutput).toEqual(["line 3", "line 4", "line 5", "line 6", "line 7", "line 8"]);
   });
 
+  it("returns the end of the output as text, at most 4096 bytes without cutting a character, and \"\" when unseen", async () => {
+    const h = harness();
+    mkdirSync(join(h.dir, "tasks"));
+    writeFileSync(join(h.dir, "tasks", "x.output"), `${"界".repeat(3000)}\nlast line`);
+    h.openSession("s1");
+    h.transcript("s1", { ...toolUse("t1", "Bash", { command: "pnpm build" }), timestamp: new Date().toISOString() });
+    expect(await h.monitor.output("s1")).toBe("");
+    await h.beat();
+    const out = await h.monitor.output("s1");
+    expect(Buffer.byteLength(out)).toBeLessThanOrEqual(4096);
+    expect(out.endsWith("last line")).toBe(true);
+    expect(out).not.toContain("\ufffd");
+    expect(await h.monitor.output("nope")).toBe("");
+  });
+
   it("does not take a background task's file for the foreground command's output", async () => {
     const h = harness();
     mkdirSync(join(h.dir, "tasks"));

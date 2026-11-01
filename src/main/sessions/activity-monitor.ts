@@ -176,6 +176,11 @@ export class ActivityMonitor {
     return this.tracked.get(sessionId)?.activity ?? null;
   }
 
+  /** 当前命令输出的末尾，最多 4096 字节（不切开 UTF-8 字符）；读不到返回 ""。 */
+  async output(sessionId: string): Promise<string> {
+    return this.tracked.get(sessionId)?.outputText ?? "";
+  }
+
   /** 用户点了“没事，忽略”：这一次不再提醒，直到 session 恢复活动后再次卡住。 */
   dismiss(sessionId: string): void {
     const t = this.tracked.get(sessionId);

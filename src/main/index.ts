@@ -769,6 +769,8 @@ async function bootstrap(): Promise<void> {
     resultsDir: paths.controlResults,
     handle: controlHandler({
       tickets, sessions, features, ticketService, sessionService, notify,
+      activity: (id) => activityMonitor.get(id),
+      activityOutput: (id) => activityMonitor.output(id),
       submit: (termId, message) => pty.deliver(termId, message, { singleLine: process.platform === "win32" }),
       ticketPattern: () => settings.get("ticketPattern"),
       log: logger,

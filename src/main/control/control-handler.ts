@@ -1,8 +1,9 @@
 import { basename } from "node:path";
+import type { SessionActivity } from "../../shared/activity";
 import {
-  MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, taskMessage, type ControlRequest, type ControlResult, type FeatureControlRequest,
+  ACTIVITY_OUTPUT_LIMIT, MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, taskMessage, type ControlRequest, type ControlResult, type FeatureControlRequest,
 } from "../../shared/control";
-import { effectiveStatus, type Feature, type FeatureRepo, type OpenSessionResult, type Ticket, type TicketRepo } from "../../shared/types";
+import { effectiveStatus, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
 import type { FeaturesRepo } from "../db/features-repo";
 import { currentLang } from "../i18n";
 import { M } from "../strings";
@@ -19,12 +20,25 @@ export interface ControlHandlerDeps {
   sessionService: Pick<SessionService, "open" | "openTerminalCount" | "isRunning"> & Partial<Pick<SessionService, "featureTerminalCount">>;
   /** feature 总控的请求（设计文档 2026-10-26）；不给就拒绝。 */
   features?: FeaturesRepo;
+  /** session 此刻的活动；监控还没看到它时为 null。 */
+  activity?: (sessionId: string) => SessionActivity | null;
+  /** session 当前命令输出的末尾（上限 4KB）。 */
+  activityOutput?: (sessionId: string) => Promise<string>;
   /** 把任务作为第一条消息交给新 session（等启动对话框过去、输入框就绪、粘贴、回车）。 */
   submit: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout">;
   notify: () => void;
   /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
   ticketPattern?: () => string;
   log?: (msg: string, err?: unknown) => void;
+}
+
+/** 文字的最后 maxBytes 字节，不切开 UTF-8 字符。 */
+function utf8Tail(text: string, maxBytes: number): string {
+  const buf = Buffer.from(text, "utf8");
+  if (buf.length <= maxBytes) return text;
+  let start = buf.length - maxBytes;
+  while (start < buf.length && (buf[start] & 0xc0) === 0x80) start++;
+  return buf.subarray(start).toString("utf8");
 }
 
 const ok = (value: unknown): ControlResult => ({ v: 1, ok: true, value });
@@ -99,7 +113,32 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     waitingForInput: s.waitingForInput,
     lastActivityAt: s.lastActivityAt ? new Date(s.lastActivityAt).toISOString() : null,
     startedByCoordinator: s.spawnedBy !== null,
+    activity: listedActivity(s.id),
   });
+
+  /** list_sessions 里的活动：不带 lastOutput（要看输出用 session_activity）；监控还没看到的是 null。 */
+  function listedActivity(id: string) {
+    const a = d.activity?.(id) ?? null;
+    if (!a) return null;
+    const rest: Partial<SessionActivity> = { ...a };
+    delete rest.lastOutput;
+    return rest;
+  }
+
+  /** session_activity：session 是 list_sessions 里的 id，/clear 之前的旧 id 也认。belongs 判断它是不是总控管的。 */
+  const sessionActivity = async (wanted: string, belongs: (s: Session) => boolean): Promise<ControlResult> => {
+    const h = d.sessions.head(wanted);
+    if (!h || !belongs(h)) return fail(M().ctlNoSuchSession(wanted));
+    const a = listedActivity(h.id);
+    if (!a) return ok({ sessionId: h.id, activity: null, output: "" });
+    let output = "";
+    try {
+      output = utf8Tail((await d.activityOutput?.(h.id)) ?? "", ACTIVITY_OUTPUT_LIMIT);
+    } catch (e) {
+      d.log?.(`control: output of ${h.id} failed`, e);
+    }
+    return ok({ ...a, output });
+  };
 
   /**
    * 总控在 feature 下建 ticket：和界面上“新建 ticket”一样走 TicketService.create（worktree 模式，放进 feature 工作区）。
@@ -161,6 +200,11 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
     if (req.op === "create_ticket") return createTicket(f, req);
 
+    if (req.op === "session_activity") {
+      const keys = new Set(own.map((t) => t.key));
+      return sessionActivity(req.session, (s) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id));
+    }
+
     if (req.op === "list_sessions") {
       const visible = <T extends { replacedBy: string | null; dismissed: boolean }>(rows: T[]) => rows.filter((s) => !s.replacedBy && !s.dismissed);
       return ok([
@@ -197,6 +241,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (req.op === "list_sessions") {
       return ok(d.sessions.listByTicket(t.key).filter((s) => !s.replacedBy && !s.dismissed).map((s) => sessionRow(t, s)));
     }
+
+    if (req.op === "session_activity") return sessionActivity(req.session, (s) => s.ticketKey === t.key);
 
     const repo = findRepo(t, req.repo);
     if (typeof repo === "string") return fail(repo);

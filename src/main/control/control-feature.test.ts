@@ -1,6 +1,7 @@
 import { mkdirSync, renameSync } from "node:fs";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { SessionActivity } from "../../shared/activity";
 import { MAX_RUNNING_PER_FEATURE } from "../../shared/control";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
@@ -37,8 +38,11 @@ async function setup() {
   });
   const submitted: [string, string][] = [];
   let notified = 0;
+  const activities = new Map<string, SessionActivity>();
   const handle = controlHandler({
     tickets, sessions, features, ticketService, sessionService,
+    activity: (id) => activities.get(id) ?? null,
+    activityOutput: async () => "out",
     submit: async (termId, task) => (submitted.push([termId, task]), "sent" as const),
     notify: () => void notified++,
   });
@@ -54,7 +58,7 @@ async function setup() {
   await ticketService.create({ key: "DMS-2", featureId: feature.id, repoPaths: [frontend, backend], workMode: "worktree" });
   await ticketService.create({ key: "OTH-1", featureId: other.id, repoPaths: [frontend], workMode: "worktree" });
   const base = { v: 1 as const, featureId: feature.id, from: null };
-  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, notified: () => notified };
+  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified };
 }
 
 describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
@@ -184,5 +188,34 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(tickets.get("DMS-4")).toBeNull();
     expect(notified()).toBe(0);
     expect(await handle({ ...base, featureId: 999, op: "create_ticket", ticket: "DMS-4" })).toMatchObject({ ok: false });
+  });
+
+  it("lists an activity per session and reads one live, for the coordinator and for a ticket's session", async () => {
+    const { handle, base, sessionService, feature, activities } = await setup();
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    const child = await handle({ ...base, from: c.termId, op: "start_session", ticket: "DMS-1", task: "a" });
+    const id = child.ok ? (child.value as { sessionId: string }).sessionId : "";
+    activities.set(id, { sessionId: id, kind: "command", detail: "sleep 99", background: false, startedAt: 1, lastOutputAt: 2, stuck: true, reason: "r", action: "a", lastOutput: ["x"] });
+    const listed = await handle({ ...base, op: "list_sessions" });
+    const rows = (listed.ok ? listed.value : []) as { id: string; activity: { stuck: boolean | null } | null }[];
+    expect(rows.find((x) => x.id === id)!.activity).toMatchObject({ stuck: true });
+    expect(rows.find((x) => x.id === id)!.activity).not.toHaveProperty("lastOutput");
+    expect(rows.find((x) => x.id === c.termId)!.activity).toBeNull();
+    expect(await handle({ ...base, op: "session_activity", session: id })).toMatchObject({ ok: true, value: { kind: "command", stuck: true, output: "out" } });
+    expect(await handle({ ...base, op: "session_activity", session: c.termId })).toMatchObject({ ok: true });
+  });
+
+  it("refuses to read a session of another feature or of a ticket outside this feature", async () => {
+    const { handle, base, sessionService, other, feature } = await setup();
+    const theirs = await sessionService.openFeature({ featureId: other.id });
+    const oth = await handle({ v: 1, featureId: other.id, from: null, op: "start_session", ticket: "OTH-1", task: "b" });
+    if (!theirs.ok || !oth.ok) throw new Error("did not open");
+    const ticketSession = (oth.value as { sessionId: string }).sessionId;
+    for (const session of [theirs.termId, ticketSession]) {
+      const r = await handle({ ...base, featureId: feature.id, op: "session_activity", session });
+      expect(r).toEqual({ v: 1, ok: false, error: expect.stringContaining(session) });
+    }
+    expect(await handle({ ...base, op: "session_activity", session: "nope" })).toMatchObject({ ok: false });
   });
 });

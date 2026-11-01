@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { SessionActivity } from "../../shared/activity";
 import { MAX_RUNNING_PER_TICKET } from "../../shared/control";
 import { SessionsRepo } from "../db/sessions-repo";
 import { SettingsRepo } from "../db/settings-repo";
@@ -32,8 +33,12 @@ async function setup() {
   });
   const submitted: [string, string][] = [];
   let notified = 0;
+  const activities = new Map<string, SessionActivity>();
+  const outputs = new Map<string, string>();
   const handle = controlHandler({
     tickets, sessions, ticketService, sessionService,
+    activity: (id) => activities.get(id) ?? null,
+    activityOutput: async (id) => outputs.get(id) ?? "",
     submit: async (termId, task) => (submitted.push([termId, task]), "sent" as const),
     notify: () => notified++,
   });
@@ -42,7 +47,7 @@ async function setup() {
   await ticketService.create({ key: "FULL-1" });
   await ticketService.addRepo({ ticketKey: "FULL-1", repoPath: web, workMode: "worktree" });
   await ticketService.addRepo({ ticketKey: "FULL-1", repoPath: api, workMode: "worktree" });
-  return { handle, sessionService, sessions, tickets, spawned, submitted, notified: () => notified, web, api };
+  return { handle, sessionService, sessions, tickets, spawned, submitted, notified: () => notified, web, api, activities, outputs, ticketService };
 }
 
 const base = { v: 1 as const, ticketKey: "FULL-1", from: null };
@@ -103,5 +108,68 @@ describe("controlHandler", () => {
     const dir = tickets.get("FULL-1")!.repos[0].worktreePath!;
     for (let i = 0; i < MAX_RUNNING_PER_TICKET; i++) expect((await handle({ ...base, op: "start_session", repo: dir, task: `t${i}` })).ok).toBe(true);
     expect(await handle({ ...base, op: "start_session", repo: dir, task: "one more" })).toMatchObject({ ok: false, error: expect.stringContaining(`${MAX_RUNNING_PER_TICKET}`) });
+  });
+
+  describe("live activity", () => {
+    const activity = (sessionId: string, over: Partial<SessionActivity> = {}): SessionActivity => ({
+      sessionId, kind: "test", detail: "pnpm test", background: false, startedAt: 5, lastOutputAt: 6, stuck: null, reason: null, action: null, lastOutput: ["a", "b"], ...over,
+    });
+
+    it("gives every listed session an activity without lastOutput, null for one the monitor has not seen", async () => {
+      const { handle, sessionService, activities } = await setup();
+      await sessionService.open({ ticketKey: "FULL-1", coordinator: true });
+      await sessionService.open({ ticketKey: "FULL-1", repoId: 1 });
+      activities.set("s-2", activity("s-2", { stuck: false }));
+      const r = await handle({ ...base, op: "list_sessions" });
+      const rows = (r.ok ? r.value : []) as { id: string; activity: object | null }[];
+      expect(rows.find((x) => x.id === "s-1")!.activity).toBeNull();
+      const a = rows.find((x) => x.id === "s-2")!.activity!;
+      expect(a).toMatchObject({ kind: "test", detail: "pnpm test", stuck: false });
+      expect(a).not.toHaveProperty("lastOutput");
+    });
+
+    it("returns the activity and the output of a session of this ticket, also by an id from before /clear", async () => {
+      const { handle, sessionService, sessions, activities, outputs } = await setup();
+      await sessionService.open({ ticketKey: "FULL-1", repoId: 1 });
+      activities.set("s-1", activity("s-1"));
+      outputs.set("s-1", "tail");
+      const shown: Partial<SessionActivity> = activity("s-1");
+      delete shown.lastOutput;
+      expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toEqual({ v: 1, ok: true, value: { ...shown, output: "tail" } });
+      // /clear：旧 id 指向新 id
+      await sessionService.open({ ticketKey: "FULL-1", repoId: 1 });
+      sessions.setReplacedBy("s-1", "s-2");
+      activities.set("s-2", activity("s-2", { kind: "ci" }));
+      expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toMatchObject({ ok: true, value: { sessionId: "s-2", kind: "ci" } });
+    });
+
+    it("caps the output at 4096 bytes without cutting a character", async () => {
+      const { handle, sessionService, activities, outputs } = await setup();
+      await sessionService.open({ ticketKey: "FULL-1", repoId: 1 });
+      activities.set("s-1", activity("s-1"));
+      outputs.set("s-1", "界".repeat(2000));
+      const r = await handle({ ...base, op: "session_activity", session: "s-1" });
+      const out = (r.ok ? (r.value as { output: string }).output : "");
+      expect(Buffer.byteLength(out)).toBeLessThanOrEqual(4096);
+      expect(out).not.toContain("\ufffd");
+      expect(out.length).toBeGreaterThan(1300);
+    });
+
+    it("answers a session the monitor has not seen with a null activity", async () => {
+      const { handle, sessionService } = await setup();
+      await sessionService.open({ ticketKey: "FULL-1", repoId: 1 });
+      expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toEqual({ v: 1, ok: true, value: { sessionId: "s-1", activity: null, output: "" } });
+    });
+
+    it("refuses a session of another ticket and an unknown one", async () => {
+      const { handle, sessionService, ticketService, web } = await setup();
+      await ticketService.create({ key: "OTH-1" });
+      await ticketService.addRepo({ ticketKey: "OTH-1", repoPath: web, workMode: "worktree" });
+      const r = await sessionService.open({ ticketKey: "OTH-1" });
+      if (!r.ok) throw new Error("did not open");
+      const refused = await handle({ ...base, op: "session_activity", session: r.termId });
+      expect(refused).toEqual({ v: 1, ok: false, error: expect.stringContaining(r.termId) });
+      expect(await handle({ ...base, op: "session_activity", session: "nope" })).toMatchObject({ ok: false });
+    });
   });
 });
