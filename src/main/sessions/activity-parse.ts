@@ -99,7 +99,8 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
         const tool = s.running.get(block.tool_use_id);
         s.running.delete(block.tool_use_id);
         if (taskId && tool) {
-          const m = /Output is being written to:\s*(.+?\.output)\.?\s*$/m.exec(resultText(block.content));
+          // 真实文本里路径后面还有同一行的句子：以 .output 结尾，后面是「.」加空白、行尾的「.」或行尾。
+          const m = /Output is being written to:\s*(.+?\.output)(?=\.(?:\s|$)|$)/m.exec(resultText(block.content));
           s.background.set(taskId, { taskId, toolUseId: tool.id, command: tool.command ?? "", outputFile: m ? m[1].trim() : null, startedAt: tool.startedAt });
         }
       }

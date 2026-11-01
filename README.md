@@ -165,7 +165,7 @@ Apart from the hook install, Butler only reads Claude Code's files:
 - `commands/handoff.md`: whether it is Butler's own
 - `~/.claude.json`: your MCP servers and approvals
 - the session transcripts under `~/.claude/projects`: unclaimed sessions, `/handoff` output and the feature page's live status
-- the command output files Claude Code writes under `/private/tmp/claude-<uid>/<project>/<session>/tasks/`: the live status and stuck checks
+- the command output files Claude Code writes under `claude-<uid>/<project>/<session>/tasks/` in the system temp directory (on macOS `/private/tmp`): the live status and stuck checks
 - the session registry files in `~/.claude/sessions/`: a running session's name, so a fix session can message it
 - with **后台 handoff 也加载本地级的 MCP…** (`headlessProjectMcp`) on, a repository's `.mcp.json` and `.claude/settings.local.json`, to find the servers you approved
 

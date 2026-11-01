@@ -238,7 +238,7 @@ function interactive() {
     if (bash) {
       const { toolId, taskId, output } = startBash(bash[2], { run_in_background: true });
       backgroundTask = taskId;
-      append({ type: "user", toolUseResult: { backgroundTaskId: taskId }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: `Command running in background with ID: ${taskId}. Output is being written to: ${output}` }] } });
+      append({ type: "user", toolUseResult: { backgroundTaskId: taskId }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: `Command running in background with ID: ${taskId}. Output is being written to: ${output}. You will be notified when it completes \u2014 do not poll that file or sleep while waiting.` }] } });
     }
     // 挂着 butler-sessions 的是 feature 总控。
     const coordinator = servers.includes("butler-sessions");

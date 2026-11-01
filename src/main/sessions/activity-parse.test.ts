@@ -46,13 +46,31 @@ describe("applyEntry", () => {
   it("turns a backgrounded Bash call into a background task and clears it on notification", () => {
     const s = newTranscriptState();
     applyEntry(s, toolUse("t1", "Bash", { command: "pnpm dev" }));
-    applyEntry(s, toolResult("t1", "Command running in background.\nOutput is being written to: /tmp/x/abc.output.", { toolUseResult: { backgroundTaskId: "abc" } }));
+    applyEntry(s, toolResult("t1", "Command running in background with ID: abc. Output is being written to: /tmp/x/abc.output. You will be notified when it completes — do not poll that file or sleep while waiting.", { toolUseResult: { backgroundTaskId: "abc" } }));
     expect(currentTool(s)).toBeNull();
     expect(backgroundTasks(s)).toEqual([
       { taskId: "abc", toolUseId: "t1", command: "pnpm dev", outputFile: "/tmp/x/abc.output", startedAt: Date.parse("2026-10-31T10:00:00.000Z") },
     ]);
     applyEntry(s, { type: "queue-operation", operation: "enqueue", content: "<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>\n</task-notification>" });
     expect(backgroundTasks(s)).toEqual([]);
+  });
+
+  it("reads the output file from the real tool_result text, including a path with a space", () => {
+    // 真实文本里路径后面还有同一行的句子
+    const real = "Command running in background with ID: b1r0793pr. Output is being written to: /private/tmp/claude-501/-Users-x-Code/44425d07-c421-4d49-a213-e41f12ddcad9/tasks/b1r0793pr.output. You will be notified when it completes \u2014 do not poll that file or sleep while waiting.";
+    const spaced = "Command running in background with ID: sp1. Output is being written to: /tmp/my dir/tasks/sp1.output. You will be notified.";
+    const eol = "Output is being written to: /tmp/x/eol.output.";
+    const bare = "Output is being written to: /tmp/x/bare.output";
+    const out = (id: string, text: string) => {
+      const s = newTranscriptState();
+      applyEntry(s, toolUse("t1", "Bash", { command: "x" }));
+      applyEntry(s, toolResult("t1", text, { toolUseResult: { backgroundTaskId: id } }));
+      return backgroundTasks(s)[0].outputFile;
+    };
+    expect(out("b1r0793pr", real)).toBe("/private/tmp/claude-501/-Users-x-Code/44425d07-c421-4d49-a213-e41f12ddcad9/tasks/b1r0793pr.output");
+    expect(out("sp1", spaced)).toBe("/tmp/my dir/tasks/sp1.output");
+    expect(out("eol", eol)).toBe("/tmp/x/eol.output");
+    expect(out("bare", bare)).toBe("/tmp/x/bare.output");
   });
 
   it("tracks turnOpen", () => {
@@ -101,7 +119,7 @@ describe("applyEntry across turns", () => {
     applyEntry(s, {
       type: "user",
       toolUseResult: { backgroundTaskId: "abc" },
-      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "Output is being written to: /tmp/x/abc.output" }, { type: "text", text: "go on" }] },
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "Command running in background with ID: abc. Output is being written to: /tmp/x/abc.output. You will be notified when it completes — do not poll that file or sleep while waiting." }, { type: "text", text: "go on" }] },
     });
     expect(backgroundTasks(s).map((b) => b.taskId)).toEqual(["abc"]);
   });
@@ -109,7 +127,7 @@ describe("applyEntry across turns", () => {
   it("clears a tool that never got a result when the turn ends, keeping background tasks", () => {
     const s = newTranscriptState();
     applyEntry(s, toolUse("t1", "Bash", { command: "pnpm dev" }));
-    applyEntry(s, toolResult("t1", "Output is being written to: /tmp/x/abc.output", { toolUseResult: { backgroundTaskId: "abc" } }));
+    applyEntry(s, toolResult("t1", "Command running in background with ID: abc. Output is being written to: /tmp/x/abc.output. You will be notified when it completes — do not poll that file or sleep while waiting.", { toolUseResult: { backgroundTaskId: "abc" } }));
     applyEntry(s, toolUse("t2", "Bash", { command: "sleep 99" }));
     applyEntry(s, { type: "assistant", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "stopped" }] } });
     expect(currentTool(s)).toBeNull();
@@ -150,7 +168,7 @@ describe("applyEntry across turns", () => {
     it("leaves background tasks alone", () => {
       const s = newTranscriptState();
       applyEntry(s, toolUse("t1", "Bash", { command: "pnpm dev" }));
-      applyEntry(s, toolResult("t1", "Output is being written to: /tmp/x/abc.output", { toolUseResult: { backgroundTaskId: "abc" } }));
+      applyEntry(s, toolResult("t1", "Command running in background with ID: abc. Output is being written to: /tmp/x/abc.output. You will be notified when it completes — do not poll that file or sleep while waiting.", { toolUseResult: { backgroundTaskId: "abc" } }));
       applyEntry(s, say("[Request interrupted by user]"));
       expect(s.turnOpen).toBe(false);
       expect(backgroundTasks(s).map((b) => b.taskId)).toEqual(["abc"]);

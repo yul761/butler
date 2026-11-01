@@ -25,7 +25,7 @@ const backgroundStarted = (toolId: string, taskId: string, file: string) => ({
   type: "user",
   timestamp: AT,
   toolUseResult: { backgroundTaskId: taskId },
-  message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: `Started. Output is being written to: ${file}` }] },
+  message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: `Command running in background with ID: b1. Output is being written to: ${file}. You will be notified when it completes \u2014 do not poll that file or sleep while waiting.` }] },
 });
 const backgroundDone = (taskId: string) => ({
   type: "queue-operation",
@@ -231,6 +231,17 @@ describe("ActivityMonitor activity", () => {
     h.transcript("s1", backgroundDone("b1"));
     await h.beat();
     expect(h.monitor.get("s1")).toMatchObject({ kind: "waiting", background: false, lastOutput: [] });
+  });
+
+  it("falls back to <tasksDir>/<taskId>.output when the tool result has no path", async () => {
+    const h = harness();
+    mkdirSync(join(h.dir, "tasks"));
+    writeFileSync(join(h.dir, "tasks", "b1.output"), "from tasks dir\n");
+    h.openSession("s1");
+    const noPath = { type: "user", timestamp: AT, toolUseResult: { backgroundTaskId: "b1" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "Command running in background with ID: b1." }] } };
+    h.transcript("s1", toolUse("t1", "Bash", { command: "git push origin x", run_in_background: true }), noPath, endTurn());
+    await h.beat();
+    expect(h.monitor.get("s1")).toMatchObject({ background: true, lastOutput: ["from tasks dir"] });
   });
 
   it("keeps the last 6 lines of a foreground command's output file", async () => {
