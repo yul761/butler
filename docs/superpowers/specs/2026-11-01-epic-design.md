@@ -34,6 +34,10 @@
   - 规划笔记：epic session 用 `remember` 写，占 scope 的 30 条笔记额度，Butler 不往这里同步任何东西。
   - 各 feature 的情况：Butler 把它们渲染成 `epic:<id>` scope 里的**一份 handoff**，内容是最近的 10 个 feature（含已归档，标明）的进度、决定、未解决的问题，总长有上限，超出时先丢最旧的 feature。这样 `recall` 时任何层的 session 都能读到，不占笔记额度。
   - 任何一个 feature 有新汇总、移进或移出时，重新渲染相关 epic 的这份 handoff；移出的 feature 随之消失。
+  - epic session 自己用 `handoff` 写的规划不能被覆盖：渲染时带上它，放在最前面，最多 6000 字符，保证最新的 feature 放得下。
+- **“过期”的判断只给交接用**：归档和 `create_feature` 时，只在 ticket 的 session 里工作、没跑 `/handoff` 也算有新活动。晚间批量沿用原来的规则，否则某个 ticket 的 handoff 一直失败时，feature 每晚都会重新生成。
+- **第一条消息最多等 60 秒**：`create_feature` 触发的后台汇总还在跑时，第一条消息等它跑完再组内容，这样不会发出旧进度。没有后台汇总时不等。
+- 结束 session（×）时清掉它的等待标记，否则标记会一路显示到 feature 和 epic。
 
 ## 非目标
 
