@@ -248,6 +248,7 @@ describe("permissionPromptShowing", () => {
     expect(permissionPromptShowing("\x1b[1mDo you want to proceed?\x1b[0m\n❯ 1. Yes")).toBe(true);
     expect(permissionPromptShowing("\x1b[2mDo you want to make this edit to a.ts?\x1b[0m")).toBe(true);
     expect(permissionPromptShowing("Do you want to create foo.ts?")).toBe(true);
+    expect(permissionPromptShowing("\x1b[1mWould you like to proceed?\x1b[0m\n❯ 1. Yes, and auto-accept edits")).toBe(true);
   });
   it("普通输出不算，只看尾部", () => {
     expect(permissionPromptShowing("building...\n")).toBe(false);

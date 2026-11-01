@@ -1,9 +1,9 @@
-import { appendFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
 import { backgroundTasks, currentTool } from "./activity-parse";
-import { foregroundOutputFile, readOutputTail, sessionRegistryName, TranscriptTail, tasksDirFor, utf8Tail } from "./activity-sources";
+import { foregroundOutputFile, readOutputTail, sessionRegistryName, subagentOutputSizes, TranscriptTail, tasksDirFor, utf8Tail } from "./activity-sources";
 
 const use = (id: string, command = "ls") =>
   JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: "Bash", input: { command } }] } });
@@ -154,6 +154,62 @@ describe("foregroundOutputFile", () => {
     writeFileSync(join(d, "a"), "x");
     utimesSync(join(d, "a"), 1, 1);
     expect(await foregroundOutputFile(d, Date.now(), new Set())).toBeNull();
+  });
+});
+
+describe("subagentOutputSizes", () => {
+  const setup = () => {
+    const root = tempDir();
+    const tasks = join(root, "tasks");
+    mkdirSync(tasks);
+    const link = (name: string, body: string, ageMs = 0) => {
+      const target = join(root, `agent-${name}.jsonl`);
+      writeFileSync(target, body);
+      const at = (Date.now() - ageMs) / 1000;
+      utimesSync(target, at, at);
+      symlinkSync(target, join(tasks, `${name}.output`));
+      return join(tasks, `${name}.output`);
+    };
+    return { root, tasks, link };
+  };
+
+  it("follows each link to its target's size", async () => {
+    const { tasks, link } = setup();
+    const a = link("a", "abc");
+    const b = link("b", "abcde");
+    expect(await subagentOutputSizes(tasks, Date.now() - 1000)).toEqual(new Map([[a, 3], [b, 5]]));
+  });
+
+  it("goes by the target's time, so an old link whose target was just written counts", async () => {
+    const { root, tasks, link } = setup();
+    link("old", "abc", 60_000);
+    expect(await subagentOutputSizes(tasks, Date.now() - 1000)).toEqual(new Map());
+    appendFileSync(join(root, "agent-old.jsonl"), "d");
+    expect(await subagentOutputSizes(tasks, Date.now() - 1000)).toEqual(new Map([[join(tasks, "old.output"), 4]]));
+  });
+
+  it("allows the same 2 seconds of clock difference as the foreground output", async () => {
+    const { tasks, link } = setup();
+    const a = link("a", "abc", 1000);
+    expect(await subagentOutputSizes(tasks, Date.now())).toEqual(new Map([[a, 3]]));
+  });
+
+  it("gives null for a dangling link", async () => {
+    const { root, tasks } = setup();
+    symlinkSync(join(root, "gone"), join(tasks, "gone.output"));
+    expect(await subagentOutputSizes(tasks, 0)).toEqual(new Map([[join(tasks, "gone.output"), null]]));
+  });
+
+  it("skips regular files and links to directories", async () => {
+    const { root, tasks } = setup();
+    writeFileSync(join(tasks, "plain.output"), "abc");
+    mkdirSync(join(root, "d"));
+    symlinkSync(join(root, "d"), join(tasks, "dir.output"));
+    expect(await subagentOutputSizes(tasks, 0)).toEqual(new Map());
+  });
+
+  it("returns null when the directory cannot be read", async () => {
+    expect(await subagentOutputSizes(join(tempDir(), "no"), 0)).toBeNull();
   });
 });
 

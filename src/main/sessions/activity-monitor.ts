@@ -6,7 +6,7 @@ import type { ActivityKind, SessionActivity } from "../../shared/activity";
 import type { Feature, Session, Ticket } from "../../shared/types";
 import { M } from "../strings";
 import { backgroundTasks, classifyCommand, currentTool, DETAIL_LIMIT, newTranscriptState, type BackgroundTask, type RunningTool, type TranscriptState } from "./activity-parse";
-import { foregroundOutputFile, readOutputTail, tasksDirFor, TranscriptTail, utf8Tail } from "./activity-sources";
+import { foregroundOutputFile, readOutputTail, subagentOutputSizes, tasksDirFor, TranscriptTail, utf8Tail } from "./activity-sources";
 import { childCpuMs } from "./proc-tree";
 import { permissionPromptShowing, stripAnsi, type PtySnapshot } from "./pty-manager";
 import type { StuckInput } from "./stuck-judge";
@@ -23,6 +23,8 @@ const JUDGE_TERMINAL_BYTES = 2048;
 const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
 const AGENT_TOOLS = new Set(["Agent", "Task"]);
+/** 这些工具的结果要等用户回答，跑着的时候 session 是在等人。 */
+const USER_WAIT_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
 
 export interface ActivityIntervals {
   tickMs: number;
@@ -73,7 +75,7 @@ export interface ActivityDeps {
 }
 
 export interface DerivedActivity extends Pick<SessionActivity, "kind" | "detail" | "background" | "startedAt"> {
-  /** 这一轮没结束或者有后台命令在跑，也没在等人确认：才参与卡住检测。 */
+  /** 这一轮没结束或者有后台命令在跑，也没在等人确认或回答：才参与卡住检测。 */
   eligible: boolean;
 }
 
@@ -81,6 +83,7 @@ function toolActivity(t: RunningTool): { kind: ActivityKind; detail: string | nu
   if (EDIT_TOOLS.has(t.name)) return { kind: "edit", detail: t.file ? basename(t.file) : null };
   if (READ_TOOLS.has(t.name)) return { kind: "read", detail: null };
   if (AGENT_TOOLS.has(t.name)) return { kind: "agent", detail: null };
+  if (USER_WAIT_TOOLS.has(t.name)) return { kind: "approval", detail: null };
   if (t.name === "Bash") return classifyCommand(t.command ?? "");
   return { kind: "command", detail: t.name.slice(0, DETAIL_LIMIT) };
 }
@@ -93,11 +96,12 @@ function sortedBackground(s: TranscriptState): BackgroundTask[] {
 /** transcript 状态加上终端有没有停在权限确认上，得出 session 此刻在做什么。 */
 export function deriveActivity(s: TranscriptState, atPermissionPrompt: boolean): DerivedActivity {
   const task = sortedBackground(s).at(-1);
-  const eligible = !atPermissionPrompt && (s.turnOpen || !!task);
+  const tool = currentTool(s);
+  const running = tool && { ...toolActivity(tool), background: false, startedAt: tool.startedAt };
+  const eligible = !atPermissionPrompt && running?.kind !== "approval" && (s.turnOpen || !!task);
   const noTool = { detail: null, background: false, startedAt: null, eligible };
   if (atPermissionPrompt) return { kind: "approval", ...noTool };
-  const tool = currentTool(s);
-  if (tool) return { ...toolActivity(tool), background: false, startedAt: tool.startedAt, eligible };
+  if (running) return { ...running, eligible };
   if (task) return { ...classifyCommand(task.command), background: true, startedAt: task.startedAt, eligible };
   return { kind: s.turnOpen ? "thinking" : "waiting", ...noTool };
 }
@@ -283,6 +287,8 @@ export class ActivityMonitor {
   /**
    * 前台 Bash 显示它自己的输出文件；其他情况显示最新后台任务的。
    * 大小把所有后台任务都算上：显示的是最新的，但旧的那个在涨也说明没有卡住。
+   * 子 agent 在跑时再算上它的 transcript：只读的子 agent 在主 transcript、命令输出和子进程 CPU 上都看不出动静。
+   * 这部分只算大小，不显示。
    */
   private async readOutput(t: Tracked, s: TranscriptState): Promise<{ size: number; lines: string[]; text: string }> {
     const dir = t.file ? (this.d.tasksDir ?? tasksDirFor)(t.file, t.id) : null;
@@ -294,8 +300,12 @@ export class ActivityMonitor {
     const sizes = new Map<string, number>();
     if (shown) sizes.set(shown, tail?.size ?? t.fileSizes.get(shown) ?? 0);
     for (const f of files) if (f !== shown) sizes.set(f, (await fileSize(f)) ?? t.fileSizes.get(f) ?? 0);
-    // 前台命令还在跑却找不到它的输出文件：tasks 目录一时读不了，上次的大小继续算。
-    if (tool?.name === "Bash" && !shown) for (const [f, n] of t.fileSizes) if (!sizes.has(f)) sizes.set(f, n);
+    const agent = tool && AGENT_TOOLS.has(tool.name) ? tool : null;
+    const subagents = agent && dir ? await subagentOutputSizes(dir, agent.startedAt) : null;
+    if (subagents) for (const [f, n] of subagents) sizes.set(f, n ?? t.fileSizes.get(f) ?? 0);
+    // 前台命令或子 agent 还在跑却读不到 tasks 目录：一时读不了，上次的大小继续算。
+    const unread = tool?.name === "Bash" ? !shown : !!agent && !subagents;
+    if (unread) for (const [f, n] of t.fileSizes) if (!sizes.has(f)) sizes.set(f, n);
     t.fileSizes = sizes;
     const size = [...sizes.values()].reduce((sum, n) => sum + n, 0);
     return { size, lines: tail?.lines ?? [], text: tail ? utf8Tail(tail.text, JUDGE_OUTPUT_BYTES) : "" };

@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Feature, Session, Ticket } from "../../shared/types";
@@ -122,6 +122,24 @@ function harness(over: Partial<ActivityDeps> = {}) {
   };
 }
 
+/** 真实布局：子 agent 的 transcript 在别处，tasks 目录里只有指向它的符号链接。返回链接的目标。 */
+function subagentFile(h: ReturnType<typeof harness>, name: string): string {
+  const tasks = join(h.dir, "tasks");
+  const real = join(h.dir, "subagents");
+  mkdirSync(tasks, { recursive: true });
+  mkdirSync(real, { recursive: true });
+  const target = join(real, `agent-${name}.jsonl`);
+  writeFileSync(target, "{}\n");
+  symlinkSync(target, join(tasks, `${name}.output`));
+  return target;
+}
+
+/** 一个在跑的 Agent 工具；开始时间用现在，这样链接目标算在它开始之后写的。 */
+function agentRunning(h: ReturnType<typeof harness>, id: string, tool = "Agent"): void {
+  h.openSession(id);
+  h.transcript(id, { ...toolUse(`${id}-a`, tool, { prompt: "read the code" }), timestamp: new Date().toISOString() });
+}
+
 const stateOf = (...entries: unknown[]) => {
   const s = newTranscriptState();
   for (const e of entries) applyEntry(s, e);
@@ -171,6 +189,15 @@ describe("deriveActivity", () => {
 
   it("reports approval over a running tool, and an approval is not eligible", () => {
     expect(deriveActivity(stateOf(toolUse("t", "Bash", { command: "rm x" })), true)).toMatchObject({ kind: "approval", detail: null, startedAt: null, eligible: false });
+  });
+
+  it.each(["AskUserQuestion", "ExitPlanMode"])("treats %s as waiting on you, keeping when it started", (name) => {
+    expect(deriveActivity(stateOf(toolUse("t", name, { question: "x" })), false)).toMatchObject({ kind: "approval", detail: null, background: false, startedAt: AT_MS, eligible: false });
+  });
+
+  it("keeps a question ineligible while a background command runs", () => {
+    const s = stateOf(toolUse("t1", "Bash", { command: "pnpm test", run_in_background: true }), backgroundStarted("t1", "a", "/x/a.output"), toolUse("t2", "AskUserQuestion"));
+    expect(deriveActivity(s, false)).toMatchObject({ kind: "approval", background: false, eligible: false });
   });
 
   it("shows the newest background command once the turn ended, and counts it as eligible", () => {
@@ -489,6 +516,137 @@ describe("ActivityMonitor stuck detection", () => {
     await h.checks(5);
     expect(h.judgeCalls).toEqual([]);
     expect(h.monitor.get("s1")?.kind).toBe("approval");
+  });
+
+  it.each(["AskUserQuestion", "ExitPlanMode"])("does not check a session waiting in %s, nor spend a ps on it", async (name) => {
+    const h = harness();
+    h.openSession("s1");
+    h.transcript("s1", toolUse("t1", name));
+    await h.checks(5);
+    expect(h.judgeCalls).toEqual([]);
+    expect(h.cpuPids).toEqual([]);
+    expect(h.monitor.get("s1")).toMatchObject({ kind: "approval", stuck: false });
+  });
+
+  it("starts from a new baseline once the question is answered", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.transcript("s1", toolUse("t1", "AskUserQuestion"));
+    await h.checks(5);
+    h.transcript("s1", toolResult("t1"), toolUse("t2", "Bash", { command: "pnpm lint" }));
+    await h.checks(2);
+    expect(h.judgeCalls).toEqual([]);
+    await h.checks(1);
+    expect(h.judgeCalls).toHaveLength(1);
+  });
+
+  it("does not check a session showing the plan prompt", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.busy("s1");
+    h.screens.set("s1", "Ready to code?\n\x1b[1mWould you like to proceed?\x1b[0m\n❯ 1. Yes, and auto-accept edits");
+    await h.checks(5);
+    expect(h.judgeCalls).toEqual([]);
+    expect(h.monitor.get("s1")?.kind).toBe("approval");
+  });
+
+  describe("a running subagent", () => {
+    it.each(["Agent", "Task"])("does not turn suspicious while %s writes its transcript, and does once it stops", async (tool) => {
+      const h = harness();
+      const target = subagentFile(h, "a");
+      agentRunning(h, "s1", tool);
+      for (let i = 0; i < 6; i++) {
+        appendFileSync(target, "more\n");
+        await h.checks(1);
+      }
+      expect(h.judgeCalls).toEqual([]);
+      await h.checks(1);
+      expect(h.judgeCalls).toEqual([]);
+      await h.checks(1);
+      expect(h.judgeCalls).toHaveLength(1);
+    });
+
+    it("counts its growth as output", async () => {
+      const h = harness();
+      const target = subagentFile(h, "a");
+      agentRunning(h, "s1");
+      await h.beat();
+      const first = h.monitor.get("s1")!.lastOutputAt;
+      await h.beat();
+      expect(h.monitor.get("s1")?.lastOutputAt).toBe(first);
+      appendFileSync(target, "more\n");
+      await h.beat();
+      expect(h.monitor.get("s1")!.lastOutputAt).toBeGreaterThan(first!);
+    });
+
+    it("clears the mark as soon as a stalled subagent writes again", async () => {
+      const h = harness();
+      const target = subagentFile(h, "a");
+      agentRunning(h, "s1");
+      await h.checks(3);
+      h.judgeResults[0]({ stuck: true, reason: "r", action: "a" });
+      await flush();
+      appendFileSync(target, "more\n");
+      await h.beat();
+      expect(h.monitor.get("s1")).toMatchObject({ stuck: false, reason: null, action: null });
+    });
+
+    it("counts each of several subagents, and skips a dangling link", async () => {
+      const h = harness();
+      const a = subagentFile(h, "a");
+      const b = subagentFile(h, "b");
+      symlinkSync(join(h.dir, "subagents", "agent-gone.jsonl"), join(h.dir, "tasks", "gone.output"));
+      agentRunning(h, "s1");
+      appendFileSync(a, "a is done\n");
+      for (let i = 0; i < 6; i++) {
+        appendFileSync(b, "more\n");
+        await h.checks(1);
+      }
+      expect(h.judgeCalls).toEqual([]);
+      await h.checks(2);
+      expect(h.judgeCalls).toHaveLength(1);
+      expect(h.logs).toEqual([]);
+    });
+
+    it("does not change what the activity shows", async () => {
+      const h = harness();
+      const target = subagentFile(h, "a");
+      appendFileSync(target, "secret transcript line\n");
+      agentRunning(h, "s1");
+      await h.checks(3);
+      expect(h.monitor.get("s1")).toMatchObject({ kind: "agent", detail: null, background: false, lastOutput: [] });
+      expect(await h.monitor.output("s1")).toBe("");
+      expect(h.judgeCalls[0].lastOutput).toBe("");
+    });
+
+    it("keeps showing a background command's output next to it", async () => {
+      const h = harness();
+      const target = subagentFile(h, "a");
+      const out = join(h.dir, "bg.output");
+      writeFileSync(out, "from the command\n");
+      h.openSession("s1");
+      h.transcript("s1", toolUse("t1", "Bash", { command: "git push", run_in_background: true }), backgroundStarted("t1", "b1", out));
+      h.transcript("s1", { ...toolUse("t2", "Agent"), timestamp: new Date().toISOString() });
+      for (let i = 0; i < 4; i++) {
+        appendFileSync(target, "more\n");
+        await h.checks(1);
+      }
+      expect(h.monitor.get("s1")).toMatchObject({ kind: "agent", lastOutput: ["from the command"] });
+      expect(h.judgeCalls).toEqual([]);
+    });
+
+    it("does not count the links while another tool runs", async () => {
+      const h = harness();
+      const target = subagentFile(h, "a");
+      h.openSession("s1");
+      h.transcript("s1", { ...toolUse("t1", "Bash", { command: "pnpm lint" }), timestamp: new Date().toISOString() });
+      for (let i = 0; i < 3; i++) {
+        appendFileSync(target, "more\n");
+        await h.checks(1);
+      }
+      expect(h.judgeCalls).toHaveLength(1);
+      expect(h.monitor.get("s1")?.lastOutput).toEqual([]);
+    });
   });
 
   it("checks a session whose turn ended while a background command runs, until the command finishes", async () => {
@@ -974,6 +1132,26 @@ describe("ActivityMonitor stuck detection", () => {
         return () => {
           mkdirSync(tasks);
           writeFileSync(join(tasks, "x.output"), body);
+        };
+      });
+    });
+
+    it("of a subagent's transcript is not growth", async () => {
+      const h = harness();
+      const target = subagentFile(h, "a");
+      agentRunning(h, "s1");
+      await stuckThenBlip(h, gone(target));
+    });
+
+    it("of the tasks directory is not growth for a subagent", async () => {
+      const h = harness();
+      const target = subagentFile(h, "a");
+      agentRunning(h, "s1");
+      await stuckThenBlip(h, () => {
+        rmSync(join(h.dir, "tasks"), { recursive: true });
+        return () => {
+          mkdirSync(join(h.dir, "tasks"));
+          symlinkSync(target, join(h.dir, "tasks", "a.output"));
         };
       });
     });

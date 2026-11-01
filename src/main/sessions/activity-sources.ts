@@ -1,9 +1,12 @@
-import { lstat, open, readdir, readFile } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { lstat, open, readdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { applyEntry, newTranscriptState, type TranscriptState } from "./activity-parse";
 import { stripAnsi } from "./pty-manager";
 
 const MB = 1024 * 1024;
+/** transcript 的时间和文件修改时间之间留的余量。 */
+const MTIME_SLACK_MS = 2000;
 
 /**
  * 增量读取 transcript：每次从上次的偏移继续，只处理完整的行。
@@ -100,13 +103,39 @@ export async function foregroundOutputFile(tasksDir: string, sinceMs: number, ex
     if (exclude.has(name) || exclude.has(file)) continue;
     try {
       const st = await lstat(file);
-      if (st.isSymbolicLink() || !st.isFile() || st.mtimeMs < sinceMs - 2000) continue;
+      if (st.isSymbolicLink() || !st.isFile() || st.mtimeMs < sinceMs - MTIME_SLACK_MS) continue;
       if (!best || st.mtimeMs > best.mtimeMs) best = { file, mtimeMs: st.mtimeMs };
     } catch {
       // 文件刚被删掉
     }
   }
   return best?.file ?? null;
+}
+
+/**
+ * 子 agent 的 transcript 不在 tasks 目录里，这里只有指向它的符号链接。返回目标修改时间 >= sinceMs - 2s 的链接的目标大小，
+ * 按目标的时间算：恢复运行的旧子 agent 也要算上。键是链接的路径；悬空的链接值是 null，要不要沿用上次的大小由调用方决定。
+ * 目录读不了返回 null。
+ */
+export async function subagentOutputSizes(tasksDir: string, sinceMs: number): Promise<Map<string, number | null> | null> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(tasksDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const sizes = new Map<string, number | null>();
+  for (const entry of entries) {
+    if (!entry.isSymbolicLink()) continue;
+    const link = join(tasksDir, entry.name);
+    try {
+      const st = await stat(link);
+      if (st.isFile() && st.mtimeMs >= sinceMs - MTIME_SLACK_MS) sizes.set(link, st.size);
+    } catch {
+      sizes.set(link, null);
+    }
+  }
+  return sizes;
 }
 
 const OUTPUT_LINES = 6;
