@@ -216,8 +216,9 @@ describe("subagentOutputSizes", () => {
 describe("tasksDirFor", () => {
   const f = "/home/u/.claude/projects/-Users-me-proj/abc.jsonl";
   it("builds the path per platform", () => {
-    expect(tasksDirFor(f, "sid", { platform: "darwin", uid: 501 })).toBe("/private/tmp/claude-501/-Users-me-proj/sid/tasks");
-    expect(tasksDirFor(f, "sid", { platform: "linux", uid: 1000 })).toBe("/tmp/claude-1000/-Users-me-proj/sid/tasks");
+    // 测试本身也跑在 Windows CI 上，分隔符跟着当前系统走。
+    expect(tasksDirFor(f, "sid", { platform: "darwin", uid: 501 })).toBe(join("/private/tmp", "claude-501", "-Users-me-proj", "sid", "tasks"));
+    expect(tasksDirFor(f, "sid", { platform: "linux", uid: 1000 })).toBe(join("/tmp", "claude-1000", "-Users-me-proj", "sid", "tasks"));
     expect(tasksDirFor(f, "sid", { platform: "win32", uid: 1 })).toBeNull();
   });
 });
