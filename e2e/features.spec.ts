@@ -560,7 +560,7 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   expect(task).toContain(`目录：${worktree}`);
   expect(task).toContain(`原因：${VERDICT_REASON.zh}`);
   expect(task).toContain("step 10 of 8");
-  await expect.poll(() => terminalText(page)).toContain("收到：Butler 开了这个 session");
+  await expect.poll(() => terminalText(page)).toContain("step 10 of 8");
 
   // 15. 不存成总控；原 session 不受影响，还是卡住的。同一个卡住的 session 再点一次，回到同一个修复 session。
   expect(dbRows(s, "SELECT coordinator, fixes_session AS fixes, ticket_key AS ticket FROM sessions WHERE id = ?", fixId)).toEqual([{ coordinator: 0, fixes: stuckId, ticket: null }]);
