@@ -123,7 +123,7 @@ Butler 运行时，每 10 秒更新一次有运行中终端的 session。列表�
 
 这个 session 不是总控：feature 汇总、晚间 handoff、`/handoff` 判断总控 session 时都不能选到它。
 
-**名字问题**：`SendMessage` 用 session 名字寻址，Butler 现在不传 `--name`。打算给 Butler 开的 session 都传一个确定的名字，这样任务里能直接写收件人。
+**名字问题**：`SendMessage` 用 session 名字寻址。Claude Code 为每个运行中的 session 写一份登记文件 `~/.claude/sessions/<pid>.json`，里面有 `sessionId`、`name`、`status`，实测 `name` 和 `ListAgents` 显示的一致。Butler 开任务时按 `sessionId` 查出名字写进任务；查不到时让新 session 自己用 `ListAgents` 按目录找。
 
 ## 给总控的接口
 
@@ -134,14 +134,18 @@ Butler 运行时，每 10 秒更新一次有运行中终端的 session。列表�
 
 ## 开工前要验证
 
-这些我没有实测，计划的第一步先验证。验证不通过时的退路写在后面。
+2026-10-31 在 macOS、Claude Code 2.1.316 上已确认：
 
-1. `--name` 的值就是 `SendMessage` 的地址，而且 `ListAgents` 里看得到。不行：在任务里让新 session 自己用 `ListAgents` 按目录找。
-2. 前台命令的输出是否总是写进 `tasks/`，怎么对应到具体的 `tool_use`。不行：只读后台命令的输出，前台命令只显示命令和时长。
-3. 读取 session 子进程树的 CPU：macOS 用 `ps`，Windows 要另外的做法。不行：Windows 上只比较 transcript 和输出文件。
-4. Windows 上的 `tasks` 目录位置。
-5. 怎么知道 session 在等权限确认。候选是 `Notification` hook，要加进 `HOOK_EVENTS`，要确认已安装用户的升级路径。不能判断时会把等批准误判成可疑，不过 Claude 判断这一步能看到，所以不算致命。
-6. 后台命令的完成通知怎么出现在 transcript 里，能不能可靠地对应到任务 id；用户杀掉后台 shell 时是否也有记录。不行：输出文件和进程都没动静时，交给 Claude 判断这一步看进程是否还在。
+- 前台命令运行中也写 `tasks/<id>.output`，但 transcript 里没有这个 id，只能取 `tool_use` 开始后修改过的最新普通文件（子 agent 的是符号链接，要跳过）。
+- 后台命令的 `tool_result` 带 `toolUseResult.backgroundTaskId`，文字里有输出文件路径；完成时 transcript 里有一条 `queue-operation`，内容是 `<task-notification>`，带 `task-id`、`tool-use-id`、`status`。
+
+还没验证，退路写在后面：
+
+1. 读取 session 子进程树的 CPU：macOS 和 Linux 用 `ps`。Windows 这一版不做：只比较 transcript 和输出文件。
+2. Windows 上的 `tasks` 目录位置。这一版不猜，读不到就只显示命令和时长。
+3. 用户手动杀掉后台 shell 时是否也有完成记录。没有的话，这个命令一直显示为后台在跑，卡住判断这一步看子进程是否还在。
+
+权限确认的判断不用新 hook：看终端最后一段有没有 Claude Code 的确认提示，和启动对话框 `dialogShowing` 的做法一样。这是文字匹配，版本升级可能失效；失效时会进入可疑判断，这时 Claude 能看到终端内容，所以不算致命。
 
 ## 测试
 
@@ -151,4 +155,4 @@ Butler 运行时，每 10 秒更新一次有运行中终端的 session。列表�
 
 ## 发布
 
-走 feature branch 和 PR，不用 review，直接合并。版本号之后决定，发布要用户明确同意。
+走 feature branch 和 PR，不用 review，直接合并。版本 1.4.0，用户同意这次打包好后直接发布。
