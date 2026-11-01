@@ -7,7 +7,7 @@ import { setCollapsed } from "./local-prefs";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
 import { BriefPage } from "./components/BriefPage";
-import { FeaturePage } from "./components/FeaturePage";
+import { FeaturePage, type StuckReveal } from "./components/FeaturePage";
 import { NewFeatureDialog } from "./components/NewFeatureDialog";
 import { NewTicketDialog } from "./components/NewTicketDialog";
 import { SettingsPage } from "./components/SettingsPage";
@@ -53,6 +53,7 @@ export function App() {
   }, []);
   // 点击晚间小结的系统通知：回到简报。
   const [navNonce, setNavNonce] = useState(0);
+  const [stuckReveal, setStuckReveal] = useState<StuckReveal | null>(null);
   useEffect(
     () =>
       api.onNavigate((r) => {
@@ -61,6 +62,7 @@ export function App() {
           setCollapsed(`tickets:${r.featureId}`, false);
           setCollapsed(`stuck-open:${r.stuckTicket}`, true);
           setRoute({ page: "feature", id: r.featureId });
+          setStuckReveal({ ticket: r.stuckTicket });
           return;
         }
         setRoute({ page: "home", kind: r.kind });
@@ -179,6 +181,8 @@ export function App() {
                 onOpenTicket={(key) => setRoute({ page: "ticket", key })}
                 onArchived={() => setRoute({ page: "home" })}
                 onTicketCreated={goTicket}
+                reveal={stuckReveal}
+                onRevealed={() => setStuckReveal(null)}
               />
             )}
             {route.page === "unclaimed" && <UnclaimedPage tickets={allTickets} />}

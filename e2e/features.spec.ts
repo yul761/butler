@@ -386,6 +386,9 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   const onFeaturePage = () => expect(page.getByRole("heading", { name: "checkout", exact: true })).toBeVisible();
   const onTicketPage = (key: string) => expect(page.getByRole("heading", { name: key, exact: true })).toBeVisible();
   const row = (key: string) => page.locator(".feature-page .ticket-table tr").filter({ hasText: key });
+  const overview = page.locator(".feature-page .feature-overview");
+  const overviewScroll = () => overview.evaluate((e) => e.scrollTop);
+  const scrollOverviewToTop = () => overview.evaluate((e) => void (e.scrollTop = 0));
 
   // 1. 总控开着，并且有一份汇总：概览区的内容比较多，修复 session 的任务里也要写上总控的名字。
   await featurePage();
@@ -457,8 +460,17 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await expect(panel).toHaveCount(0);
   await onFeaturePage();
   await dot.click();
-  await expect(panel).toBeVisible();
+  await expect(fix).toBeInViewport();
   expect(await panel.innerText()).toBe(content);
+
+  // 面板里的“收起”：红点可能已经滚出视野，不用先滚回去。收起后这一行又看得到，面板记成关着。
+  await panel.getByRole("button", { name: S.collapse, exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await onFeaturePage();
+  await expect(dot).toBeInViewport();
+  await expect(dot).toHaveAttribute("aria-expanded", "false");
+  await dot.click();
+  await expect(fix).toBeInViewport();
 
   // 7. 面板开着：终端区至少占窗口一半高，窗口缩到最小也一样，这时概览区自己滚动，面板的按钮还够得着。
   await expectTerminalsKeepHalf(page);
@@ -481,6 +493,8 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await expect(page.locator(".sidebar .feature-group .stuck-mark")).toBeVisible();
   await featurePage();
   await expect(panel).toBeVisible();
+  // 面板是记住的状态，不是这次点开的：回到这一页不滚动。
+  expect(await overviewScroll()).toBe(0);
   await panel.getByRole("button", { name: S.stuckViewTerminal, exact: true }).click();
   await onTicketPage("DMS-1");
   await featurePage();
@@ -494,12 +508,14 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   expect(judgePrompts()).toHaveLength(1);
   expect(await notifications(app)).toHaveLength(1);
 
-  // 11. 命令又有输出之后再卡住：再判断一次、再提醒一次，面板显示新的输出。
+  // 11. 命令又有输出之后再卡住：再判断一次、再提醒一次，面板显示新的输出。面板记着开，这次是自己出现的，不滚动。
+  await scrollOverviewToTop();
   appendFileSync(outputFile, "step 9 of 8\n");
   await expect(dot).toBeVisible();
   await expect.poll(() => notifications(app)).toHaveLength(2);
   expect(judgePrompts()).toHaveLength(2);
   await expect(panel.locator(".stuck-log")).toContainText("step 9 of 8");
+  expect(await overviewScroll()).toBe(0);
 
   // 12. 还卡着的时候有了新输出：红点自己消失，不用等下一次判断。之后再卡住一次，给后面的步骤用。
   appendFileSync(outputFile, "step 10 of 8\n");
@@ -548,6 +564,13 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   const activeTitle = (await active.getAttribute("title"))!;
   const screen = await terminalText(page);
   await page.evaluate(() => document.querySelector(".feature-page")!.setAttribute("data-e2e-mounted", "1"));
+  // 面板已经开着但滚出了视野：点通知也要滚过去，再点一次也一样。
+  for (let i = 0; i < 2; i++) {
+    await scrollOverviewToTop();
+    await expect(fix).not.toBeInViewport();
+    await clickNotification(app, 2);
+    await expect(fix).toBeInViewport();
+  }
   await dot.click();
   await expect(panel).toHaveCount(0);
   await page.locator(".feature-page .feature-tickets .section-toggle").click();
@@ -568,6 +591,11 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await clickNotification(app, 1);
   await onFeaturePage();
   await expect(fix).toBeInViewport();
+  // 通知只滚这一次：再回到这一页不滚动。
+  await ticketPage("DMS-2");
+  await featurePage();
+  await expect(panel).toBeVisible();
+  expect(await overviewScroll()).toBe(0);
 
   // 18. 修复 session 比总控新，但 feature 汇总还是 fork 总控：它不会被选成总控。
   const progress = page.locator(".feature-page .feature-progress");

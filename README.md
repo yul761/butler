@@ -38,6 +38,7 @@ There are deliberate limits:
   - **开新 session 解决 (Open a new session to fix it)** opens a new session in the feature's workspace and hands it the details. The stuck session is left running, and the two share its worktree, so the new session's task says to tell the stuck session before changing a branch or stopping a process, to ask you before killing anything, and to tell the coordinator when the problem is solved.
   - **看终端 (View terminal)** goes to the ticket page.
   - **没事，忽略 (It's fine, ignore)** clears the dot. It comes back only if the session moves again and then gets stuck again.
+  - **收起 (Collapse)** closes the panel. The dot stays, and clicking it reopens the panel.
 
   The dot also clears by itself when the session has new activity. Nothing is fixed without your click, and stuck marks live in memory, so Butler checks afresh after a restart.
 - **Worktree cleanup after merge.** Once a handoff reports that a ticket's PR is merged, Butler removes that ticket's worktrees with `git worktree remove`. The branch is kept, and opening a session there again rebuilds the worktree. Butler does not remove a worktree that has uncommitted changes or untracked files, or one whose own session is still running in a terminal. In that case the ticket page shows why, with a **重新检查 (check again)** button, and Butler tries again when that terminal exits. Files ignored by `.gitignore` (`node_modules`, a local `.env`) are removed with the worktree.
