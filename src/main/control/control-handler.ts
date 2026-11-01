@@ -194,7 +194,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
     if (req.op === "session_activity") {
       const keys = new Set(own.map((t) => t.key));
-      return sessionActivity(req.session, (s) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id && s.fixesSession === null));
+      return sessionActivity(req.session, (s) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id));
     }
 
     if (req.op === "list_sessions") {

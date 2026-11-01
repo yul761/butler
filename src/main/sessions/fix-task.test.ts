@@ -3,7 +3,7 @@ import { sanitizeTask, TASK_LIMIT } from "../../shared/control";
 import { fixTaskMessage } from "./fix-task";
 
 const input = {
-  ticket: "DMS-1 购物车", sessionId: "abc-123", sessionName: "swift-fox", coordinatorName: "calm-owl", cwd: "/ws/frontend",
+  ticket: "DMS-1 购物车", sessionId: "abc-123", sessionName: "swift-fox", coordinatorName: "calm-owl", coordinatorDir: "/ws/shop", cwd: "/ws/frontend",
   activity: "跑测试 pnpm test", reason: "测试停在等网络", lastOutput: ["waiting for 127.0.0.1", "retry 3"],
 };
 
@@ -32,12 +32,27 @@ describe("fixTaskMessage", () => {
   });
 
   it("has no coordinator to tell when none is running", () => {
-    const zh = fixTaskMessage({ ...input, coordinatorName: null }, "zh");
+    const none = { ...input, coordinatorName: null, coordinatorDir: null };
+    const zh = fixTaskMessage(none, "zh");
     expect(zh).toContain("没有运行中的总控 session，跳过这一步");
     expect(zh).not.toContain("告诉总控");
-    const en = fixTaskMessage({ ...input, coordinatorName: null }, "en");
+    expect(zh).not.toContain("ListAgents");
+    const en = fixTaskMessage(none, "en");
     expect(en).toContain("No coordinator session is running, so skip this step");
     expect(en).not.toContain("tell the coordinator");
+    expect(en).not.toContain("ListAgents");
+  });
+
+  it("tells the session to find a running coordinator with ListAgents by the workspace when its name is unknown", () => {
+    const unnamed = { ...input, coordinatorName: null };
+    const zh = fixTaskMessage(unnamed, "zh");
+    expect(zh).toContain("解决后告诉总控 session 问题已解决");
+    expect(zh).toContain("用 ListAgents 按目录 /ws/shop 找到它");
+    expect(zh).not.toContain("跳过这一步");
+    const en = fixTaskMessage(unnamed, "en");
+    expect(en).toContain("When it is solved, tell the coordinator session that the problem is solved");
+    expect(en).toContain("use ListAgents to find it by its directory, /ws/shop");
+    expect(en).not.toContain("skip this step");
   });
 
   it("tells the session to find the stuck session with ListAgents by directory when its name is unknown", () => {

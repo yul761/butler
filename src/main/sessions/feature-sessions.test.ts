@@ -355,6 +355,24 @@ describe("fix sessions (design 2026-10-31)", () => {
     expect(submitted[0][1]).toContain("calm-owl");
   });
 
+  it("tells the fix session to look for a running coordinator whose name is unknown, by the feature workspace", async () => {
+    const { service, feature, names, submitted, req, stuckId } = await stuckSetup();
+    await service.openFeature({ featureId: feature.id });
+    names.set(stuckId, "swift-fox");
+    await service.openFix(req);
+    expect(submitted[0][1]).toContain(`用 ListAgents 按目录 ${feature.workspaceDir} 找到它`);
+    expect(submitted[0][1]).not.toContain("没有运行中的总控");
+  });
+
+  it("says no coordinator is running when none is, even if a closed one exists", async () => {
+    const { service, feature, names, sessions, submitted, req, stuckId } = await stuckSetup();
+    sessions.insertIfAbsent({ id: "closed", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, coordinator: true });
+    names.set(stuckId, "swift-fox");
+    await service.openFix(req);
+    expect(submitted[0][1]).toContain("没有运行中的总控 session，跳过这一步");
+    expect(submitted[0][1]).not.toContain("ListAgents");
+  });
+
   it("uses the coordinator's current head after /clear", async () => {
     const { service, feature, names, submitted, sessions, req } = await stuckSetup();
     await service.openFeature({ featureId: feature.id });

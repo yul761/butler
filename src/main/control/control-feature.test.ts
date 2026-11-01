@@ -206,15 +206,17 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(await handle({ ...base, op: "session_activity", session: c.termId })).toMatchObject({ ok: true });
   });
 
-  it("does not show a fix session to the coordinator: not in list_sessions, not readable", async () => {
-    const { handle, base, sessions, sessionService, feature, activities } = await setup();
+  it("keeps a fix session out of list_sessions, but lets the coordinator read one in its own feature", async () => {
+    const { handle, base, sessions, sessionService, feature, other, activities } = await setup();
     const c = await sessionService.openFeature({ featureId: feature.id });
     if (!c.ok) throw new Error("no coordinator");
     sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: "stuck-1" });
+    sessions.insertIfAbsent({ id: "their-fix", ticketKey: null, cwd: other.workspaceDir, origin: "butler", createdAt: 1, featureId: other.id, fixesSession: "stuck-2" });
     activities.set("fix", { sessionId: "fix", kind: "command", detail: null, background: false, startedAt: 1, lastOutputAt: 2, stuck: null, reason: null, action: null, lastOutput: [] });
     const listed = await handle({ ...base, op: "list_sessions" });
     expect((listed.ok ? (listed.value as { id: string }[]) : []).map((s) => s.id)).toEqual([c.termId]);
-    expect(await handle({ ...base, op: "session_activity", session: "fix" })).toEqual({ v: 1, ok: false, error: expect.stringContaining("fix") });
+    expect(await handle({ ...base, op: "session_activity", session: "fix" })).toMatchObject({ ok: true, value: { sessionId: "fix", kind: "command", output: "out" } });
+    expect(await handle({ ...base, op: "session_activity", session: "their-fix" })).toEqual({ v: 1, ok: false, error: expect.stringContaining("their-fix") });
   });
 
   it("does not record a fix session as the spawner of a child session", async () => {

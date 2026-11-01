@@ -349,7 +349,8 @@ export class SessionService {
 
     const termId = this.startInFeature(feature, { path: claude.path, pathValue: claude.pathValue }, { fixes: stuck.id });
     const message = fixTaskMessage({
-      ticket: ticket.title ? `${ticket.key} ${ticket.title}` : ticket.key, sessionId: stuck.id, sessionName, coordinatorName, cwd: stuck.cwd,
+      ticket: ticket.title ? `${ticket.key} ${ticket.title}` : ticket.key, sessionId: stuck.id, sessionName, coordinatorName,
+      coordinatorDir: coordinator ? feature.workspaceDir : null, cwd: stuck.cwd,
       activity: describeActivity(activity), reason: activity.reason ?? "", lastOutput: activity.lastOutput,
     }, currentLang());
     // 不等任务写完：等输入框就绪可能要十几秒（用户还要处理信任文件夹之类的对话框），界面先切到新终端。
