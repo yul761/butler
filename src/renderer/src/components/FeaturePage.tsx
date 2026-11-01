@@ -20,7 +20,6 @@ interface Props {
   /** 可以移进去的 epic（未归档的）。 */
   epics: EpicView[];
   onOpenTicket: (key: string) => void;
-  onArchived: () => void;
   /** 新建的 ticket：重读列表后跳过去。 */
   onTicketCreated: (key: string) => void;
   /** 这一次要滚到的面板；用完调 onRevealed 清空，之后重新挂载不再滚。 */
@@ -38,7 +37,7 @@ function formatTime(ms: number): string {
  * feature 页（设计文档 2026-10-26、2026-10-28）：从上到下是名字和工作区、整体进度（feature 汇总）、
  * ticket 表（带 PR 状态），然后是仓库、feature 总控 session 和它们的终端。
  */
-export function FeaturePage({ feature, epics, onOpenTicket, onArchived, onTicketCreated, reveal, onRevealed }: Props) {
+export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, reveal, onRevealed }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newTicket, setNewTicket] = useState(false);
   const showError = (e: unknown) => setError(errorText(e));
@@ -90,7 +89,8 @@ export function FeaturePage({ feature, epics, onOpenTicket, onArchived, onTicket
         workspaceDir={feature.workspaceDir}
         onRename={(name) => api.renameFeature(feature.id, name)}
         archiveLabel={S.archiveFeature}
-        onArchive={() => api.archiveFeature(feature.id).then(onArchived)}
+        archivingLabel={feature.epicId === null ? S.archiving : S.archivingSummaries}
+        onArchive={() => api.archiveFeature(feature.id)}
         onError={showError}
       >
         {(epics.length > 0 || feature.epicId !== null) && (

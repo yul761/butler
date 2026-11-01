@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import type { BriefKind } from "../../shared/brief";
 import type { EpicView, FeatureView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
 import { setCollapsed } from "./local-prefs";
+import { routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
 import { BriefPage } from "./components/BriefPage";
@@ -124,6 +125,12 @@ export function App() {
   /** 所有未归档的 ticket，含 feature 下的（简报、认领、ticket 页都按 ticket 号找）。 */
   const allTickets = [...tickets, ...features.flatMap((f) => f.tickets)];
 
+  // 归档可能要等两分钟：等完时用户在看别的页面就留在那里；在看的页面跟着归档了（feature、ticket 跟着 epic）就回简报，不留空白。
+  // 只在列表变了时检查，不看 route：跳转时列表可能还没刷新（刷新被新的一次顶掉时），这时对象并没有消失。layout effect：空白不画出来。
+  useLayoutEffect(() => {
+    if (routeGone(route, allTickets, features, epics)) setRoute({ page: "home" });
+  }, [tickets, features, epics]);
+
   const openTicket = (key: string, req?: OpenSessionRequest) => {
     // 简报里的 ticket 可能已经归档：不跳到空白页，也不留下悬空的打开请求。
     if (!allTickets.some((t) => t.key === key)) {
@@ -147,8 +154,6 @@ export function App() {
   const goTicket = (key: string) => void refresh().then(() => setRoute({ page: "ticket", key }));
   const goFeature = (id: number) => void refresh().then(() => setRoute({ page: "feature", id }));
   const goEpic = (id: number) => void refresh().then(() => setRoute({ page: "epic", id }));
-  /** 归档可能要等两分钟（先生成汇总）：等完时用户已经去了别的页面，就留在那里。 */
-  const leavePage = (page: "feature" | "epic", id: number) => setRoute((r) => (r.page === page && r.id === id ? { page: "home" } : r));
 
   return (
     <div className="app">
@@ -191,7 +196,6 @@ export function App() {
                 feature={currentFeature}
                 epics={epics}
                 onOpenTicket={(key) => setRoute({ page: "ticket", key })}
-                onArchived={() => leavePage("feature", currentFeature.id)}
                 onTicketCreated={goTicket}
                 reveal={stuckReveal}
                 onRevealed={() => setStuckReveal(null)}
@@ -202,7 +206,6 @@ export function App() {
                 key={currentEpic.id}
                 epic={currentEpic}
                 onOpenFeature={(id) => setRoute({ page: "feature", id })}
-                onArchived={() => leavePage("epic", currentEpic.id)}
                 onFeatureCreated={goFeature}
               />
             )}

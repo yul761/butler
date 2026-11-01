@@ -77,7 +77,8 @@ interface HeaderProps {
   workspaceDir: string;
   onRename: (name: string) => Promise<unknown>;
   archiveLabel: string;
-  /** 可能要等两分钟（先生成汇总）：等待期间按钮显示进行中。 */
+  archivingLabel: string;
+  /** 可能要等两分钟（先生成汇总）：等待期间按钮显示进行中。成功后页面由 App 换掉。 */
   onArchive: () => Promise<unknown>;
   onError: (e: unknown) => void;
   /** 改名和归档之间的控件。 */
@@ -85,9 +86,16 @@ interface HeaderProps {
 }
 
 /** 页面标题栏：名字、工作区、改名、归档。 */
-export function WorkspaceHeader({ name, nameLabel, workspaceDir, onRename, archiveLabel, onArchive, onError, children }: HeaderProps) {
+export function WorkspaceHeader({ name, nameLabel, workspaceDir, onRename, archiveLabel, archivingLabel, onArchive, onError, children }: HeaderProps) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [archiving, setArchiving] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   async function rename(e: FormEvent) {
     e.preventDefault();
@@ -104,9 +112,10 @@ export function WorkspaceHeader({ name, nameLabel, workspaceDir, onRename, archi
     try {
       await onArchive();
     } catch (err) {
-      onError(err);
-    } finally {
       setArchiving(false);
+      // 等汇总时用户可能已经离开这一页：页面的错误区也不在了，改用顶部的错误条，不然归档失败没有任何提示。
+      if (mounted.current) onError(err);
+      else reportError(err);
     }
   }
 
@@ -124,7 +133,7 @@ export function WorkspaceHeader({ name, nameLabel, workspaceDir, onRename, archi
       <span className="muted" title={workspaceDir}>{S.labelled(S.featureWorkspace, workspaceDir)}</span>
       {renaming === null && <button onClick={() => setRenaming(name)}>{S.rename}</button>}
       {children}
-      <button disabled={archiving} onClick={() => void archive()}>{archiving ? S.archiving : archiveLabel}</button>
+      <button disabled={archiving} onClick={() => void archive()}>{archiving ? archivingLabel : archiveLabel}</button>
     </header>
   );
 }

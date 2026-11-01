@@ -10,7 +10,6 @@ import { SessionArea, useSessionPanes, WorkspaceHeader } from "./WorkspaceParts"
 interface Props {
   epic: EpicView;
   onOpenFeature: (id: number) => void;
-  onArchived: () => void;
   /** 新建的 feature：重读列表后跳过去。 */
   onFeatureCreated: (id: number) => void;
 }
@@ -19,7 +18,7 @@ interface Props {
  * epic 页（设计文档 2026-11-01，草图 A）：从上到下是名字和工作区、一行一个 feature（一句进度和状态，不列 ticket），
  * 然后是仓库、epic session 和它们的终端，布局和 feature 页一样。
  */
-export function EpicPage({ epic, onOpenFeature, onArchived, onFeatureCreated }: Props) {
+export function EpicPage({ epic, onOpenFeature, onFeatureCreated }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newFeature, setNewFeature] = useState(false);
   const errorText = (e: unknown) => epicErrorText(e, S);
@@ -42,7 +41,8 @@ export function EpicPage({ epic, onOpenFeature, onArchived, onFeatureCreated }: 
         workspaceDir={epic.workspaceDir}
         onRename={(name) => api.renameEpic(epic.id, name)}
         archiveLabel={S.archiveEpic}
-        onArchive={() => api.archiveEpic(epic.id).then(onArchived)}
+        archivingLabel={live.length > 0 ? S.archivingSummaries : S.archiving}
+        onArchive={() => api.archiveEpic(epic.id)}
         onError={showError}
       />
 

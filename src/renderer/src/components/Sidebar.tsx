@@ -88,12 +88,48 @@ interface FeatureGroupProps {
   ticketButton: (t: TicketView) => React.ReactNode;
 }
 
+interface GroupRowProps {
+  name: string;
+  /** 下面有多少项：没有就不用三角，收起时显示这个数。 */
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  active: boolean;
+  onOpen: () => void;
+  waiting: boolean;
+  stuck: boolean;
+}
+
+/** 侧栏里 epic 和 feature 的一行：前面的三角收起/展开下面的内容，点名字进它的页面；等待标记和红点看的是它下面的全部。 */
+function GroupRow({ name, count, collapsed, onToggle, active, onOpen, waiting, stuck }: GroupRowProps) {
+  return (
+    <div className="feature-row">
+      <button
+        className="twisty"
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? S.expand : S.collapse}
+        title={collapsed ? S.expand : S.collapse}
+        disabled={count === 0}
+        onClick={onToggle}
+      >
+        {collapsed ? "▸" : "▾"}
+      </button>
+      <button className={cls("ticket feature", active)} onClick={onOpen}>
+        <span className="key">{name}</span>
+        {collapsed && <span className="title">{count}</span>}
+        {waiting && <span className="badge" title={S.waiting}>●</span>}
+        {stuck && <span className="stuck-mark" title={S.stuckDot}>●</span>}
+      </button>
+    </div>
+  );
+}
+
 interface EpicGroupProps extends Omit<FeatureGroupProps, "feature"> {
   epic: EpicView;
   features: FeatureView[];
 }
 
-/** 侧栏里的一个 epic：前面的三角收起/展开下面的 feature，点名字进 epic 页。红点和等待标记看的是整个 epic，收起时也看得到。 */
+/** 侧栏里的一个 epic，下面列它的 feature。 */
 function EpicGroup({ epic: e, features, route, onNavigate, ticketButton }: EpicGroupProps) {
   const [collapsed, toggle] = useCollapsed(`sidebar-epic:${e.id}`);
   // 收起时正在看的那个 feature（或它下面的 ticket）还留着，不然不知道自己在哪。
@@ -101,24 +137,11 @@ function EpicGroup({ epic: e, features, route, onNavigate, ticketButton }: EpicG
   const shown = collapsed ? features.filter(isHere) : features;
   return (
     <div className="feature-group epic-group">
-      <div className="feature-row">
-        <button
-          className="twisty"
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? S.expand : S.collapse}
-          title={collapsed ? S.expand : S.collapse}
-          disabled={features.length === 0}
-          onClick={toggle}
-        >
-          {collapsed ? "▸" : "▾"}
-        </button>
-        <button className={cls("ticket feature", route.page === "epic" && route.id === e.id)} onClick={() => onNavigate({ page: "epic", id: e.id })}>
-          <span className="key">{e.name}</span>
-          {collapsed && <span className="title">{features.length}</span>}
-          {e.waiting && <span className="badge" title={S.waiting}>●</span>}
-          {e.stuck && <span className="stuck-mark" title={S.stuckDot}>●</span>}
-        </button>
-      </div>
+      <GroupRow
+        name={e.name} count={features.length} collapsed={collapsed} onToggle={toggle}
+        active={route.page === "epic" && route.id === e.id} onOpen={() => onNavigate({ page: "epic", id: e.id })}
+        waiting={e.waiting} stuck={e.stuck}
+      />
       {shown.length > 0 && (
         <div className="feature-tickets">
           {shown.map((f) => <FeatureGroup key={f.id} feature={f} route={route} onNavigate={onNavigate} ticketButton={ticketButton} />)}
@@ -128,31 +151,18 @@ function EpicGroup({ epic: e, features, route, onNavigate, ticketButton }: EpicG
   );
 }
 
-/** 侧栏里的一个 feature：前面的三角收起/展开它下面的 ticket，点名字进 feature 页。 */
+/** 侧栏里的一个 feature，下面列它的 ticket。 */
 function FeatureGroup({ feature: f, route, onNavigate, ticketButton }: FeatureGroupProps) {
   const [collapsed, toggle] = useCollapsed(`sidebar:${f.id}`);
   // 收起时正在看的那个 ticket 还留着，不然不知道自己在哪。
   const shown = collapsed ? f.tickets.filter((t) => route.page === "ticket" && route.key === t.key) : f.tickets;
   return (
     <div className="feature-group">
-      <div className="feature-row">
-        <button
-          className="twisty"
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? S.expand : S.collapse}
-          title={collapsed ? S.expand : S.collapse}
-          disabled={f.tickets.length === 0}
-          onClick={toggle}
-        >
-          {collapsed ? "▸" : "▾"}
-        </button>
-        <button className={cls("ticket feature", route.page === "feature" && route.id === f.id)} onClick={() => onNavigate({ page: "feature", id: f.id })}>
-          <span className="key">{f.name}</span>
-          {collapsed && <span className="title">{f.tickets.length}</span>}
-          {f.waiting && <span className="badge" title={S.waiting}>●</span>}
-          {Object.values(f.activity).some((a) => a.stuck === true) && <span className="stuck-mark" title={S.stuckDot}>●</span>}
-        </button>
-      </div>
+      <GroupRow
+        name={f.name} count={f.tickets.length} collapsed={collapsed} onToggle={toggle}
+        active={route.page === "feature" && route.id === f.id} onOpen={() => onNavigate({ page: "feature", id: f.id })}
+        waiting={f.waiting} stuck={Object.values(f.activity).some((a) => a.stuck === true)}
+      />
       {shown.length > 0 && <div className="feature-tickets">{shown.map(ticketButton)}</div>}
     </div>
   );

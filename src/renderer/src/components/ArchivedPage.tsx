@@ -32,28 +32,11 @@ export function ArchivedPage({ onRestored, onFeatureRestored, onEpicRestored }: 
     return api.onStateChanged(() => void load());
   }, [load]);
 
-  async function restore(key: string) {
+  /** 恢复成功后交给 App 重读列表并打开它。 */
+  async function restore(unarchive: () => Promise<void>, opened: () => void) {
     try {
-      await api.unarchive(key);
-      onRestored(key);
-    } catch (e) {
-      reportError(e);
-    }
-  }
-
-  async function restoreFeature(id: number) {
-    try {
-      await api.unarchiveFeature(id);
-      onFeatureRestored(id);
-    } catch (e) {
-      reportError(e);
-    }
-  }
-
-  async function restoreEpic(id: number) {
-    try {
-      await api.unarchiveEpic(id);
-      onEpicRestored(id);
+      await unarchive();
+      opened();
     } catch (e) {
       reportError(e);
     }
@@ -78,52 +61,46 @@ export function ArchivedPage({ onRestored, onFeatureRestored, onEpicRestored }: 
                 <td><div>{t.key}</div><div className="muted">{t.title ?? ""}</div></td>
                 <td>{t.repos.map((r) => <div key={r.id}>{repoWhere(r)}</div>)}</td>
                 <td className="muted">{t.archivedAt ? new Date(t.archivedAt).toLocaleString() : ""}</td>
-                <td className="actions"><button onClick={() => void restore(t.key)}>{S.unarchive}</button></td>
+                <td className="actions"><button onClick={() => void restore(() => api.unarchive(t.key), () => onRestored(t.key))}>{S.unarchive}</button></td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
-      {features.length > 0 && (
-        <>
-          <h3>{S.archivedFeatures}</h3>
-          <table className="table">
-            <thead>
-              <tr><th>{S.colFeature}</th><th>{S.featureRepos}</th><th>{S.colArchivedAt}</th><th /></tr>
-            </thead>
-            <tbody>
-              {features.map((f) => (
-                <tr key={f.id}>
-                  <td><div>{f.name}</div><div className="muted">{f.workspaceDir}</div></td>
-                  <td>{f.repos.map((r) => lastSegment(r.repoPath)).join(", ")}</td>
-                  <td className="muted">{f.archivedAt ? new Date(f.archivedAt).toLocaleString() : ""}</td>
-                  <td className="actions"><button onClick={() => void restoreFeature(f.id)}>{S.unarchive}</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
-      {epics.length > 0 && (
-        <>
-          <h3>{S.archivedEpics}</h3>
-          <table className="table">
-            <thead>
-              <tr><th>{S.colEpic}</th><th>{S.featureRepos}</th><th>{S.colArchivedAt}</th><th /></tr>
-            </thead>
-            <tbody>
-              {epics.map((e) => (
-                <tr key={e.id}>
-                  <td><div>{e.name}</div><div className="muted">{e.workspaceDir}</div></td>
-                  <td>{e.repos.map((r) => lastSegment(r.repoPath)).join(", ")}</td>
-                  <td className="muted">{e.archivedAt ? new Date(e.archivedAt).toLocaleString() : ""}</td>
-                  <td className="actions"><button onClick={() => void restoreEpic(e.id)}>{S.unarchive}</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
+      <ArchivedTable title={S.archivedFeatures} nameColumn={S.colFeature} rows={features} onRestore={(id) => void restore(() => api.unarchiveFeature(id), () => onFeatureRestored(id))} />
+      <ArchivedTable title={S.archivedEpics} nameColumn={S.colEpic} rows={epics} onRestore={(id) => void restore(() => api.unarchiveEpic(id), () => onEpicRestored(id))} />
     </div>
+  );
+}
+
+interface ArchivedTableProps {
+  title: string;
+  nameColumn: string;
+  rows: Pick<Epic | Feature, "id" | "name" | "workspaceDir" | "repos" | "archivedAt">[];
+  onRestore: (id: number) => void;
+}
+
+/** 已归档的 feature 或 epic：两者显示的内容一样，没有就不显示。 */
+function ArchivedTable({ title, nameColumn, rows, onRestore }: ArchivedTableProps) {
+  if (rows.length === 0) return null;
+  return (
+    <>
+      <h3>{title}</h3>
+      <table className="table">
+        <thead>
+          <tr><th>{nameColumn}</th><th>{S.featureRepos}</th><th>{S.colArchivedAt}</th><th /></tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id}>
+              <td><div>{r.name}</div><div className="muted">{r.workspaceDir}</div></td>
+              <td>{r.repos.map((x) => lastSegment(x.repoPath)).join(", ")}</td>
+              <td className="muted">{r.archivedAt ? new Date(r.archivedAt).toLocaleString() : ""}</td>
+              <td className="actions"><button onClick={() => onRestore(r.id)}>{S.unarchive}</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
   );
 }

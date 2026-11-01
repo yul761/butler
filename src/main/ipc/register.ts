@@ -226,7 +226,7 @@ export function registerIpc(d: IpcDeps): void {
     const id = epicIdArg(raw);
     // 下面的 feature 要先生成汇总，最多等两分钟。终端查两次（等之前、等之后），所以传函数。
     await d.epicService.archive(id, {
-      terminalsOpen: () => d.sessionService.epicTerminalCount(id) > 0,
+      terminalsOpen: () => d.sessionService.hasEpicTerminal(id),
       featureTerminalsOpen: (featureId) => d.sessionService.hasFeatureTerminal(featureId),
     });
     d.notify();
