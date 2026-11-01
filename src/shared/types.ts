@@ -36,6 +36,28 @@ export interface Feature {
   repos: FeatureRepo[];
   createdAt: number;
   archivedAt: number | null;
+  /** 属于哪个 epic（null：不属于任何 epic）。 */
+  epicId: number | null;
+  /** epic session 建 feature 时给的规划（null：没有）。 */
+  brief: string | null;
+  /** 规划发给总控的时间（null：还没发过）。 */
+  briefSentAt: number | null;
+}
+
+export interface EpicRepo {
+  id: number;
+  epicId: number;
+  repoPath: string;
+}
+
+/** epic：一组 feature 加一个规划用的工作区目录。 */
+export interface Epic {
+  id: number;
+  name: string;
+  workspaceDir: string;
+  createdAt: number;
+  archivedAt: number | null;
+  repos: EpicRepo[];
 }
 
 /** 选目录的结果：仓库本身、上一层目录（列出下一层的仓库），或者都不是。 */
@@ -78,6 +100,8 @@ export interface Session {
   featureId: number | null;
   /** 修复 session：为了解决哪个卡住的 session 开的（null：不是修复 session）。 */
   fixesSession: string | null;
+  /** epic session 属于哪个 epic（这时 ticketKey 和 featureId 都是 null）。 */
+  epicId: number | null;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */

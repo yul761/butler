@@ -187,4 +187,24 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE sessions ADD COLUMN fixes_session TEXT;
   `,
+  `
+  CREATE TABLE epics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    workspace_dir TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    archived_at INTEGER
+  );
+  CREATE TABLE epic_repos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    epic_id INTEGER NOT NULL REFERENCES epics(id),
+    repo_path TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE (epic_id, repo_path)
+  );
+  ALTER TABLE features ADD COLUMN epic_id INTEGER REFERENCES epics(id);
+  ALTER TABLE features ADD COLUMN brief TEXT;
+  ALTER TABLE features ADD COLUMN brief_sent_at INTEGER;
+  ALTER TABLE sessions ADD COLUMN epic_id INTEGER REFERENCES epics(id);
+  `,
 ];

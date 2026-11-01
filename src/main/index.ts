@@ -38,6 +38,8 @@ import { featureCommandFollowup, FeatureSummaryRunner } from "./handoff/feature-
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
+import { EpicsRepo } from "./db/epics-repo";
+import { EpicService } from "./epics/epic-service";
 import { FeaturesRepo } from "./db/features-repo";
 import { onLangChange, setLang } from "./i18n";
 import { resolveLang } from "../shared/i18n";
@@ -732,7 +734,13 @@ async function bootstrap(): Promise<void> {
     },
   };
 
-  const featureService = new FeatureService({ features, tickets, db, now: Date.now, onTicketArchived: (key) => removeTicketMcpConfigs(paths.mcp, key) });
+  const epics = new EpicsRepo(db);
+  const epicService = new EpicService({ epics, features, db, now: Date.now });
+  const featureService = new FeatureService({
+    features, tickets, epics, db, now: Date.now,
+    onTicketArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
+    onRepoAdded: (featureId, repoPath) => epicService.ensureFeatureRepo(featureId, repoPath),
+  });
   // 防休眠：只在内存里，启动时是关的。状态一变，托盘菜单、提示文字和界面都跟着更新。
   keepAwake = new KeepAwake({
     blocker: powerSaveBlocker,

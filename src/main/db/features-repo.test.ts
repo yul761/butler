@@ -13,7 +13,7 @@ const columns = (db: DatabaseSync, table: string) =>
 describe("migration 6", () => {
   it("adds features, feature_repos and the new columns", () => {
     const db = memDb();
-    expect(columns(db, "features")).toEqual(["id", "name", "workspace_dir", "created_at", "archived_at"]);
+    expect(columns(db, "features")).toEqual(["id", "name", "workspace_dir", "created_at", "archived_at", "epic_id", "brief", "brief_sent_at"]);
     expect(columns(db, "feature_repos")).toEqual(["id", "feature_id", "repo_path", "created_at"]);
     expect(columns(db, "tickets")).toContain("feature_id");
     expect(columns(db, "sessions")).toContain("feature_id");

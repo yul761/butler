@@ -1,18 +1,19 @@
-import { mkdirSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { CreateFeatureInput, Feature, FeatureRepo } from "../../shared/types";
 import { withTransaction, type Db } from "../db/database";
+import type { EpicsRepo } from "../db/epics-repo";
 import type { FeaturesRepo } from "../db/features-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
-import { featureDirName } from "../util/ticket-file";
-import { repoRoot } from "./git";
+import { checkNameLimit, defaultWorkspaceDir, gitRootOf, resolveWorkspaceDir, uniqueRoots } from "./workspace";
 import { samePath, TicketError } from "./ticket-service";
 import { M } from "../strings";
 
 export interface FeatureServiceDeps {
   features: FeaturesRepo;
   tickets: TicketsRepo;
+  /** 恢复 feature 时，它所在的 epic 如果已归档，一并恢复。 */
+  epics?: EpicsRepo;
+  /** feature 加了仓库之后调用（让 epic 补上这个仓库）。 */
+  onRepoAdded?: (featureId: number, repoPath: string) => void;
   now: () => number;
   /** 归档 feature 时连带归档的每个 ticket：清掉它的 MCP 配置文件。 */
   onTicketArchived?: (ticketKey: string) => void;
@@ -44,48 +45,17 @@ export class FeatureService {
 
   /** 工作区默认放在仓库上一层的旁边：~/Code/shop/frontend → ~/Code/shop-features/<名字>。 */
   defaultWorkspace(repoPaths: string[], name: string): string {
-    const parent = dirname(repoPaths[0]);
-    return join(dirname(parent), `${basename(parent)}-features`, featureDirName(name));
-  }
-
-  /**
-   * 工作区目录：展开 ~，必须是绝对路径；建好之后存真实路径（claude 和 hook 报上来的 cwd 是真实路径，经过 symlink 的写法对不上）。
-   */
-  private workspacePath(dir: string): string {
-    const expanded = dir === "~" || dir.startsWith("~/") || dir.startsWith("~\\") ? join(this.d.homeDir ?? homedir(), dir.slice(1)) : dir;
-    if (!isAbsolute(expanded)) throw new TicketError("invalid_workspace", M().workspaceNotAbsolute(dir));
-    const abs = resolve(expanded);
-    try {
-      mkdirSync(abs, { recursive: true });
-      return realpathSync.native(abs);
-    } catch (e) {
-      throw new TicketError("invalid_workspace", M().workspaceCannotCreate(abs, (e as Error).message));
-    }
+    return defaultWorkspaceDir(repoPaths, name, "features");
   }
 
   private static checkName(name: string): string {
-    const n = name.trim();
-    if (!n || n.length > FEATURE_NAME_LIMIT) throw new TicketError("invalid_name", M().featureNameInvalid(FEATURE_NAME_LIMIT));
-    return n;
-  }
-
-  private static async root(path: string): Promise<string> {
-    try {
-      return await repoRoot(path);
-    } catch {
-      throw new TicketError("not_git_repo", M().notGitRepo(path));
-    }
+    return checkNameLimit(name, FEATURE_NAME_LIMIT, M().featureNameInvalid(FEATURE_NAME_LIMIT));
   }
 
   async create(input: CreateFeatureInput): Promise<Feature> {
     const name = FeatureService.checkName(input.name);
-    if (input.repoPaths.length === 0) throw new TicketError("not_git_repo", M().pickAtLeastOneRepo);
-    const roots: string[] = [];
-    for (const p of input.repoPaths) {
-      const root = await FeatureService.root(p);
-      if (!roots.some((r) => samePath(r, root))) roots.push(root);
-    }
-    const workspaceDir = this.workspacePath(input.workspaceDir?.trim() || this.defaultWorkspace(roots, name));
+    const roots = await uniqueRoots(input.repoPaths);
+    const workspaceDir = resolveWorkspaceDir(input.workspaceDir?.trim() || this.defaultWorkspace(roots, name), this.d.homeDir);
     if (this.d.features.byWorkspace(workspaceDir)) throw new TicketError("workspace_taken", M().workspaceTaken(workspaceDir));
     const now = this.d.now();
     const id = this.tx(() => {
@@ -98,9 +68,11 @@ export class FeatureService {
 
   async addRepo(featureId: number, repoPath: string): Promise<FeatureRepo> {
     const f = this.get(featureId);
-    const root = await FeatureService.root(repoPath);
+    const root = await gitRootOf(repoPath);
     if (f.repos.some((r) => samePath(r.repoPath, root))) throw new TicketError("repo_exists", M().featureHasRepo(root));
-    return this.d.features.getRepo(this.d.features.addRepo(featureId, root, this.d.now()))!;
+    const added = this.d.features.getRepo(this.d.features.addRepo(featureId, root, this.d.now()))!;
+    this.d.onRepoAdded?.(featureId, root);
+    return added;
   }
 
   /** 只影响以后建 ticket 时的选项；已有 ticket 的仓库、磁盘上的东西都不动。 */
@@ -130,7 +102,7 @@ export class FeatureService {
     for (const k of keys) this.d.onTicketArchived?.(k);
   }
 
-  /** 恢复 feature，以及和它一起归档的 ticket（之前单独归档的保持归档）。 */
+  /** 恢复 feature，以及和它一起归档的 ticket（之前单独归档的保持归档）；它的 epic 已归档时只恢复 epic 本身，epic 下别的 feature 不动。 */
   unarchive(featureId: number): void {
     const f = this.get(featureId);
     if (f.archivedAt === null) return;
@@ -138,6 +110,8 @@ export class FeatureService {
     this.tx(() => {
       for (const k of keys) this.d.tickets.unarchive(k);
       this.d.features.unarchive(featureId);
+      const epic = f.epicId === null ? null : this.d.epics?.get(f.epicId);
+      if (epic && epic.archivedAt !== null) this.d.epics!.unarchive(epic.id);
     });
   }
 

@@ -18,6 +18,7 @@ interface SessionRow {
   spawned_by: string | null;
   feature_id: number | null;
   fixes_session: string | null;
+  epic_id: number | null;
 }
 
 function toSession(r: SessionRow): Session {
@@ -38,6 +39,7 @@ function toSession(r: SessionRow): Session {
     spawnedBy: r.spawned_by,
     featureId: r.feature_id === null ? null : Number(r.feature_id),
     fixesSession: r.fixes_session,
+    epicId: r.epic_id === null ? null : Number(r.epic_id),
   };
 }
 
@@ -55,6 +57,7 @@ export interface NewSession {
   spawnedBy?: string | null;
   featureId?: number | null;
   fixesSession?: string | null;
+  epicId?: number | null;
 }
 
 export interface SessionDetails {
@@ -78,12 +81,12 @@ export class SessionsRepo {
   insertIfAbsent(s: NewSession): boolean {
     const r = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session, epic_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
-        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null,
+        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null, s.epicId ?? null,
       );
     if (Number(r.changes) > 0) {
       this.forgotten.delete(s.id);
@@ -142,11 +145,24 @@ export class SessionsRepo {
     this.db.prepare(`UPDATE sessions SET feature_id = ?, coordinator = 1 WHERE id = ?`).run(featureId, id);
   }
 
+  /** epic session（ticket_key 和 feature_id 都为空、epic_id 是这个 epic 的）。 */
+  listByEpic(epicId: number): Session[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM sessions WHERE epic_id = ? AND ticket_key IS NULL AND feature_id IS NULL ORDER BY ${RECENCY} DESC, id`)
+      .all(epicId) as unknown as SessionRow[];
+    return rows.map(toSession);
+  }
+
+  /** 记成这个 epic 的 session。 */
+  setEpic(id: string, epicId: number): void {
+    this.db.prepare(`UPDATE sessions SET epic_id = ? WHERE id = ?`).run(epicId, id);
+  }
+
   listUnclaimed(sinceMs: number): Session[] {
     const rows = this.db
       .prepare(
         `SELECT * FROM sessions
-         WHERE ticket_key IS NULL AND feature_id IS NULL AND dismissed = 0 AND replaced_by IS NULL AND ${RECENCY} >= ?
+         WHERE ticket_key IS NULL AND feature_id IS NULL AND epic_id IS NULL AND dismissed = 0 AND replaced_by IS NULL AND ${RECENCY} >= ?
          ORDER BY ${RECENCY} DESC, id`,
       )
       .all(sinceMs) as unknown as SessionRow[];
@@ -182,6 +198,7 @@ export class SessionsRepo {
     const role = `,
       coordinator = CASE WHEN ${old("fixes_session")} IS NULL THEN MAX(coordinator, ${old("coordinator")}) ELSE 0 END,
       feature_id = COALESCE(feature_id, ${old("feature_id")}),
+      epic_id = COALESCE(epic_id, ${old("epic_id")}),
       fixes_session = COALESCE(fixes_session, ${old("fixes_session")})`;
     withTransaction(this.db, () => {
       this.db.prepare(`UPDATE sessions SET replaced_by = ?2 WHERE id = ?1`).run(id, newId);
