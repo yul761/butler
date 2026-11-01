@@ -199,9 +199,11 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
     if (req.op === "list_sessions") {
       const visible = <T extends { replacedBy: string | null; dismissed: boolean }>(rows: T[]) => rows.filter((s) => !s.replacedBy && !s.dismissed);
+      // 修复 session 在修哪个 session：沿链走到现在的 id，和列表里的 id 对得上。其他行是 null。
+      const fixes = (s: Session) => (s.fixesSession ? (d.sessions.head(s.fixesSession)?.id ?? s.fixesSession) : null);
       return ok([
-        ...visible(d.sessions.listFeatureCoordinators(f.id)).map((s) => ({ ...sessionRow(null, s), ticket: null })),
-        ...own.flatMap((t) => visible(d.sessions.listByTicket(t.key)).map((s) => ({ ...sessionRow(t, s), ticket: t.key }))),
+        ...visible(d.sessions.listByFeature(f.id)).map((s) => ({ ...sessionRow(null, s), ticket: null, fixes: fixes(s) })),
+        ...own.flatMap((t) => visible(d.sessions.listByTicket(t.key)).map((s) => ({ ...sessionRow(t, s), ticket: t.key, fixes: null }))),
       ]);
     }
 

@@ -206,15 +206,29 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(await handle({ ...base, op: "session_activity", session: c.termId })).toMatchObject({ ok: true });
   });
 
-  it("keeps a fix session out of list_sessions, but lets the coordinator read one in its own feature", async () => {
+  it("lists a fix session with the session it fixes, and lets the coordinator read one in its own feature", async () => {
     const { handle, base, sessions, sessionService, feature, other, activities } = await setup();
     const c = await sessionService.openFeature({ featureId: feature.id });
     if (!c.ok) throw new Error("no coordinator");
-    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: "stuck-1" });
+    const child = await handle({ ...base, op: "start_session", ticket: "DMS-1", task: "a" });
+    if (!child.ok) throw new Error(child.error);
+    const stuck = (child.value as { sessionId: string }).sessionId;
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: stuck });
     sessions.insertIfAbsent({ id: "their-fix", ticketKey: null, cwd: other.workspaceDir, origin: "butler", createdAt: 1, featureId: other.id, fixesSession: "stuck-2" });
     activities.set("fix", { sessionId: "fix", kind: "command", detail: null, background: false, startedAt: 1, lastOutputAt: 2, stuck: null, reason: null, action: null, lastOutput: [] });
-    const listed = await handle({ ...base, op: "list_sessions" });
-    expect((listed.ok ? (listed.value as { id: string }[]) : []).map((s) => s.id)).toEqual([c.termId]);
+    const rows = async () => {
+      const r = await handle({ ...base, op: "list_sessions" });
+      if (!r.ok) throw new Error(r.error);
+      return (r.value as { id: string; ticket: string | null; repo: string | null; fixes: string | null }[]).map((x) => [x.id, x.ticket, x.repo, x.fixes]);
+    };
+    const fixRow = (fixes: string) => ["fix", null, null, fixes];
+    const coordinatorRow = [c.termId, null, "总控", null];
+    expect(await rows()).toEqual(expect.arrayContaining([coordinatorRow, fixRow(stuck), [stuck, "DMS-1", "frontend", null]]));
+    expect(await rows()).toHaveLength(3);
+    // 卡住的 session /clear 之后，fixes 还能对上列表里的 id
+    sessions.insertIfAbsent({ id: "stuck-new", ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 2 });
+    sessions.setReplacedBy(stuck, "stuck-new");
+    expect(await rows()).toEqual(expect.arrayContaining([fixRow("stuck-new"), ["stuck-new", "DMS-1", "frontend", null]]));
     expect(await handle({ ...base, op: "session_activity", session: "fix" })).toMatchObject({ ok: true, value: { sessionId: "fix", kind: "command", output: "out" } });
     expect(await handle({ ...base, op: "session_activity", session: "their-fix" })).toEqual({ v: 1, ok: false, error: expect.stringContaining("their-fix") });
   });

@@ -124,7 +124,7 @@ export class SessionsRepo {
     return rows.map(toSession);
   }
 
-  /** feature 级 session（ticket_key 为空、feature_id 是这个 feature 的）：总控和修复 session。只有 feature 页的列表用它，要找总控用 listFeatureCoordinators。 */
+  /** feature 级 session（ticket_key 为空、feature_id 是这个 feature 的）：总控和修复 session。要选总控（汇总、handoff）用 listFeatureCoordinators。 */
   listByFeature(featureId: number): Session[] {
     const rows = this.db
       .prepare(`SELECT * FROM sessions WHERE feature_id = ? AND ticket_key IS NULL ORDER BY ${RECENCY} DESC, id`)

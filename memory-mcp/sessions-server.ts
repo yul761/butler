@@ -123,7 +123,7 @@ export const FEATURE_TOOLS = [
   },
   {
     name: "list_sessions",
-    description: "列出这个 feature 的 session（feature 总控和每个 ticket 的）：属于哪个 ticket、哪个仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启，以及此刻的活动（activity，不含输出；输出用 session_activity）。",
+    description: "列出这个 feature 的 session（feature 总控、修复 session 和每个 ticket 的）：属于哪个 ticket、哪个仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启，以及此刻的活动（activity，不含输出；输出用 session_activity）。修复 session 的 fixes 是它在解决的卡住 session 的 id，其他行是 null。",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -217,7 +217,7 @@ export const FEATURE_TOOLS_EN = [
   },
   {
     ...FEATURE_TOOLS[4],
-    description: "List this feature's sessions (the feature coordinator's and every ticket's): ticket, repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it, plus its current activity (without output; use session_activity for that).",
+    description: "List this feature's sessions (the feature coordinator's, fix sessions, and every ticket's): ticket, repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it, plus its current activity (without output; use session_activity for that). On a fix session, fixes is the id of the stuck session it is resolving; on other rows it is null.",
   },
   {
     ...FEATURE_TOOLS[5],
