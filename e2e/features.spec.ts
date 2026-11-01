@@ -193,7 +193,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await typeLine(page, "/handoff");
-  await expect.poll(() => terminalText(page)).toContain("butler-handoff");
+  await expect.poll(() => terminalText(page)).toContain("next_steps");
 
   // 2. DMS-2：session 里有新的对话（之后算“有活动”），还没有 handoff。
   await ticketPage("DMS-2");
