@@ -1,4 +1,4 @@
-import type { Epic, EpicRepo } from "../../shared/types";
+import type { CreateEpicInput, Epic, EpicRepo } from "../../shared/types";
 import { withTransaction, type Db } from "../db/database";
 import type { EpicsRepo } from "../db/epics-repo";
 import type { FeaturesRepo } from "../db/features-repo";
@@ -14,6 +14,8 @@ export interface EpicServiceDeps {
   featureService: FeatureService;
   /** feature 移进或移出之后，对涉及的每个 epic 调用一次（移动时两边都调）：epic 的 handoff 要重新渲染。 */
   onEpicChanged?: (epicId: number) => void;
+  /** 归档生效之后调用：featureIds 是这次跟着归档的 feature，它们和 epic 留下的 MCP 配置文件要清掉。 */
+  onArchived?: (epicId: number, featureIds: number[]) => void;
   now: () => number;
   /** 给了就把多步写入放进一个事务。 */
   db?: Db;
@@ -23,12 +25,6 @@ export interface EpicServiceDeps {
 
 /** epic 名最长多少字。 */
 export const EPIC_NAME_LIMIT = 100;
-
-export interface CreateEpicInput {
-  name: string;
-  repoPaths: string[];
-  workspaceDir?: string;
-}
 
 export interface EpicArchiveOptions {
   terminalsOpen: () => boolean;
@@ -118,6 +114,7 @@ export class EpicService {
           for (const f of live) this.d.featureService.archiveNow(f.id, now);
           this.d.epics.archive(epicId, now);
         });
+        this.d.onArchived?.(epicId, live.map((f) => f.id));
       })
       .finally(() => this.archiving.delete(epicId));
     this.archiving.set(epicId, p);

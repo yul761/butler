@@ -129,6 +129,15 @@ export function removeFeatureMcpConfig(mcpDir: string, featureId: number): void 
   }
 }
 
+/** epic 归档时删掉 epic session 的 --mcp-config 文件。 */
+export function removeEpicMcpConfig(mcpDir: string, epicId: number): void {
+  try {
+    unlinkSync(epicMcpFile(mcpDir, epicId));
+  } catch {
+    // 本来就没有。
+  }
+}
+
 function writeConfig(file: string, servers: Record<string, McpServerSpec>): string {
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;

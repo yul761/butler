@@ -140,14 +140,29 @@ describe("EpicService archive summarizes first", () => {
     const features = new FeaturesRepo(db);
     const tickets = new TicketsRepo(db);
     const featureService = new FeatureService({ features, tickets, epics, db, now: () => 2000, refreshBeforeArchive: refresh, log: () => undefined });
-    const epicService = new EpicService({ epics, features, featureService, db, now: () => 2000 });
+    const archivedCalls: [number, number[]][] = [];
+    const epicService = new EpicService({ epics, features, featureService, db, now: () => 2000, onArchived: (id, ids) => archivedCalls.push([id, [...ids].sort()]) });
     const epicId = epics.insert({ name: "e", workspaceDir: "/e", createdAt: 1 });
     const f1 = features.insert({ name: "f1", workspaceDir: "/f1", createdAt: 1, epicId });
     const f2 = features.insert({ name: "f2", workspaceDir: "/f2", createdAt: 1, epicId });
     const done = features.insert({ name: "done", workspaceDir: "/done", createdAt: 1, epicId });
     features.archive(done, 500);
-    return { epicService, epics, features, epicId, f1, f2, done };
+    return { epicService, epics, features, epicId, f1, f2, done, archivedCalls };
   }
+
+  it("reports the epic and exactly the features it archived, once it has archived them", async () => {
+    const t = archiveSetup(async () => undefined);
+    await t.epicService.archive(t.epicId, NONE);
+    expect(t.archivedCalls).toEqual([[t.epicId, [t.f1, t.f2].sort()]]);
+    await t.epicService.archive(t.epicId, NONE);
+    expect(t.archivedCalls).toHaveLength(1);
+  });
+
+  it("reports nothing when the archive is refused", async () => {
+    const t = archiveSetup(async () => undefined);
+    await code(() => t.epicService.archive(t.epicId, { terminalsOpen: () => true, featureTerminalsOpen: () => false }));
+    expect(t.archivedCalls).toEqual([]);
+  });
 
   it("asks once for all unarchived features, then archives them together", async () => {
     const asked: number[][] = [];

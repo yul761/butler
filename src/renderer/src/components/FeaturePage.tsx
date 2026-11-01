@@ -1,19 +1,14 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SessionActivity } from "../../../shared/activity";
-import type { FeatureView, OpenFeatureSessionRequest, TicketView } from "../../../shared/types";
+import type { EpicView, FeatureView, TicketView } from "../../../shared/types";
 import { api, ButlerError } from "../api";
-import { reportError } from "../errors";
 import { prLabel, prPill, summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary-view";
-import { lastSegment } from "../repos";
-import { sessionLabel } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
 import { NewTicketDialog } from "./NewTicketDialog";
-import { RepoPicker } from "./RepoPicker";
-import { EndSessionButton } from "./EndSessionButton";
 import { StuckPanel } from "./StuckPanel";
-import { TerminalPane } from "./TerminalPane";
 import { activityText, useNow } from "./TicketActivity";
 import { useCollapsed } from "./useCollapsed";
+import { SessionArea, useSessionPanes, WorkspaceHeader } from "./WorkspaceParts";
 
 /** 点卡住通知时要看的 ticket。每次点都是新对象：面板已经开着时再点也要滚过去。 */
 export interface StuckReveal {
@@ -22,6 +17,8 @@ export interface StuckReveal {
 
 interface Props {
   feature: FeatureView;
+  /** 可以移进去的 epic（未归档的）。 */
+  epics: EpicView[];
   onOpenTicket: (key: string) => void;
   onArchived: () => void;
   /** 新建的 ticket：重读列表后跳过去。 */
@@ -41,48 +38,21 @@ function formatTime(ms: number): string {
  * feature 页（设计文档 2026-10-26、2026-10-28）：从上到下是名字和工作区、整体进度（feature 汇总）、
  * ticket 表（带 PR 状态），然后是仓库、feature 总控 session 和它们的终端。
  */
-export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated, reveal, onRevealed }: Props) {
-  const openTerms = feature.sessions.flatMap((s) => (s.termId ? [s.termId] : []));
-  // 和 ticket 页一样：已退出但还没关闭的终端留着，方便看到 claude 的报错输出。
-  const [panes, setPanes] = useState<string[]>(openTerms);
-  const panesRef = useRef(panes);
-  panesRef.current = panes;
-  const [active, setActive] = useState<string | null>(openTerms[0] ?? null);
+export function FeaturePage({ feature, epics, onOpenTicket, onArchived, onTicketCreated, reveal, onRevealed }: Props) {
   const [error, setError] = useState<string | null>(null);
-  const [renaming, setRenaming] = useState<string | null>(null);
-  const [addingRepo, setAddingRepo] = useState<string[] | null>(null);
   const [newTicket, setNewTicket] = useState(false);
-  const [showHidden, setShowHidden] = useState(false);
+  const showError = (e: unknown) => setError(errorText(e));
+  const panes = useSessionPanes(feature.sessions, {
+    openSession: (sessionId) => api.openFeatureSession({ featureId: feature.id, sessionId }),
+    openFailure: (reason) => S.openErrors[reason] ?? reason,
+    errorText,
+    setError,
+  });
 
   // 子组件的 effect 先跑：TicketRow 已经滚过了，这里才清空。
   useEffect(() => {
     if (reveal) onRevealed();
   }, [reveal]);
-
-  const openKey = openTerms.join(",");
-  useEffect(() => {
-    const ids = openKey ? openKey.split(",") : [];
-    setPanes((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
-  }, [openKey]);
-
-  async function open(req: OpenFeatureSessionRequest) {
-    setError(null);
-    try {
-      const r = await api.openFeatureSession(req);
-      if (!r.ok) {
-        setError(S.openErrors[r.reason] ?? r.reason);
-        return;
-      }
-      const replaced = req.sessionId && req.sessionId !== r.termId ? req.sessionId : null;
-      setPanes((prev) => {
-        if (prev.includes(r.termId)) return replaced ? prev.filter((p) => p !== replaced) : prev;
-        return replaced && prev.includes(replaced) ? prev.map((p) => (p === replaced ? r.termId : p)) : [...prev, r.termId];
-      });
-      setActive(r.termId);
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
 
   /** 为卡住的 session 开修复 session：成功后切到它的终端（已经开着也一样），失败显示在页面的错误区。 */
   async function openFix(stuckSessionId: string) {
@@ -93,51 +63,14 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
         setError(S.openErrors[r.reason] ?? r.reason);
         return;
       }
-      setPanes((prev) => (prev.includes(r.termId) ? prev : [...prev, r.termId]));
-      setActive(r.termId);
+      panes.show(r.termId);
     } catch (e) {
       setError(errorText(e));
     }
   }
 
   function dismissStuck(sessionId: string) {
-    api.dismissActivity(sessionId).catch((e: unknown) => setError(errorText(e)));
-  }
-
-  function closePane(id: string) {
-    const rest = panesRef.current.filter((p) => p !== id);
-    panesRef.current = rest;
-    setPanes(rest);
-    setActive((cur) => (cur === id ? (rest[0] ?? null) : cur));
-  }
-
-  async function rename(e: FormEvent) {
-    e.preventDefault();
-    try {
-      await api.renameFeature(feature.id, renaming ?? "");
-      setRenaming(null);
-    } catch (err) {
-      setError(errorText(err));
-    }
-  }
-
-  async function addRepos(e: FormEvent) {
-    e.preventDefault();
-    try {
-      for (const p of addingRepo ?? []) await api.addFeatureRepo(feature.id, p);
-      setAddingRepo(null);
-    } catch (err) {
-      setError(errorText(err));
-    }
-  }
-
-  async function archive() {
-    try {
-      await api.archiveFeature(feature.id);
-      onArchived();
-    } catch (err) {
-      setError(errorText(err));
-    }
+    api.dismissActivity(sessionId).catch(showError);
   }
 
   const [ticketsCollapsed, toggleTickets] = useCollapsed(`tickets:${feature.id}`);
@@ -151,20 +84,28 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
 
   return (
     <div className="ticket-page feature-page">
-      <header className="ticket-header">
-        {renaming === null ? (
-          <h2>{feature.name}</h2>
-        ) : (
-          <form className="row" onSubmit={rename}>
-            <input aria-label={S.featureName} value={renaming} onChange={(e) => setRenaming(e.target.value)} autoFocus />
-            <button type="submit" className="primary">{S.save}</button>
-            <button type="button" onClick={() => setRenaming(null)}>{S.cancel}</button>
-          </form>
+      <WorkspaceHeader
+        name={feature.name}
+        nameLabel={S.featureName}
+        workspaceDir={feature.workspaceDir}
+        onRename={(name) => api.renameFeature(feature.id, name)}
+        archiveLabel={S.archiveFeature}
+        onArchive={() => api.archiveFeature(feature.id).then(onArchived)}
+        onError={showError}
+      >
+        {(epics.length > 0 || feature.epicId !== null) && (
+          <label className="move-to-epic" title={S.moveToEpicHint}>
+            {S.moveToEpic}
+            <select
+              value={feature.epicId ?? ""}
+              onChange={(e) => api.moveFeature(feature.id, e.target.value === "" ? null : Number(e.target.value)).catch(showError)}
+            >
+              <option value="">{S.noEpic}</option>
+              {epics.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          </label>
         )}
-        <span className="muted" title={feature.workspaceDir}>{S.labelled(S.featureWorkspace, feature.workspaceDir)}</span>
-        {renaming === null && <button onClick={() => setRenaming(feature.name)}>{S.rename}</button>}
-        <button onClick={() => void archive()}>{S.archiveFeature}</button>
-      </header>
+      </WorkspaceHeader>
 
       <div className="feature-overview">
         <FeatureProgress feature={feature} onOpenTicket={onOpenTicket} />
@@ -212,70 +153,21 @@ export function FeaturePage({ feature, onOpenTicket, onArchived, onTicketCreated
         />
       )}
 
-      <div className="repos-bar" title={S.featureReposHint}>
-        <span className="label">{S.featureRepos}</span>
-        {feature.repos.map((r) => (
-          <span key={r.id} className="repo" title={r.repoPath}>
-            <span className="name">{lastSegment(r.repoPath)}</span>
-            <button onClick={() => api.removeFeatureRepo(r.id).catch((e: unknown) => setError(errorText(e)))}>{S.removeRepo}</button>
-          </span>
-        ))}
-        <button onClick={() => setAddingRepo([])}>+ {S.addRepo}</button>
-      </div>
-      {addingRepo && (
-        <form className="notice" onSubmit={addRepos}>
-          <RepoPicker label={S.repo} onChange={setAddingRepo} required autoFocus />
-          <div className="actions">
-            <button type="submit" className="primary" disabled={addingRepo.length === 0}>{S.add}</button>
-            <button type="button" onClick={() => setAddingRepo(null)}>{S.cancel}</button>
-          </div>
-        </form>
-      )}
-
-      <div className="sessions-bar">
-        {feature.sessions.length === 0 && <span className="muted">{S.noFeatureSessions}</span>}
-        {feature.sessions.map((s) => (
-          <span key={s.id} className="session-wrap">
-            <button
-              className={s.termId && s.termId === active ? "session active" : "session"}
-              title={`${s.firstPrompt ?? S.untitledSession}\n${s.id}`}
-              onClick={() => (s.termId ? setActive(s.termId) : void open({ featureId: feature.id, sessionId: s.id }))}
-            >
-              {s.waitingForInput && <span className="badge">●</span>}
-              <span className="place">{s.fixesSession ? S.fixSessionFor(fixedTicket(s.fixesSession)) : S.coordinator}</span>
-              <span className="label">{sessionLabel(s, S.untitledSession)}</span>
-              <span className="action">{s.termId ? S.switchTo : S.open}</span>
-            </button>
-            {s.termId ? (
-              <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => closePane(s.termId!)} />
-            ) : (
-              <button className="session-hide" title={S.hideSession} aria-label={S.hideSessionNamed(sessionLabel(s, S.untitledSession))} onClick={() => api.hideSession(s.id).catch(reportError)}>
-                ×
-              </button>
-            )}
-          </span>
-        ))}
-        {feature.hiddenSessions.length > 0 && (
-          <button className="session more" onClick={() => setShowHidden(!showHidden)}>{S.hiddenSessions(feature.hiddenSessions.length)}</button>
-        )}
-        <button className="primary" title={S.featureCoordinatorHint} onClick={() => void open({ featureId: feature.id })}>+ {S.newCoordinator}</button>
-      </div>
-      {showHidden && feature.hiddenSessions.length > 0 && (
-        <div className="notice hidden-sessions">
-          <p className="muted">{S.hiddenSessionsHint}</p>
-          {feature.hiddenSessions.map((s) => (
-            <div key={s.id} className="row">
-              <span className="label">{sessionLabel(s, S.untitledSession)}</span>
-              <button onClick={() => api.unhideSession(s.id).catch(reportError)}>{S.unhideSession}</button>
-            </div>
-          ))}
-        </div>
-      )}
-      {error && <p className="error">{error}</p>}
-
-      <div className="terminals">
-        {panes.map((id) => <TerminalPane key={id} termId={id} visible={id === active} onClose={() => closePane(id)} onResume={() => void open({ featureId: feature.id, sessionId: id })} />)}
-      </div>
+      <SessionArea
+        repos={feature.repos}
+        reposHint={S.featureReposHint}
+        onAddRepo={(path) => api.addFeatureRepo(feature.id, path)}
+        onRemoveRepo={(id) => api.removeFeatureRepo(id)}
+        sessions={feature.sessions}
+        hiddenSessions={feature.hiddenSessions}
+        panes={panes}
+        placeOf={(s) => (s.fixesSession ? S.fixSessionFor(fixedTicket(s.fixesSession)) : S.coordinator)}
+        noSessions={S.noFeatureSessions}
+        newSession={S.newCoordinator}
+        newSessionHint={S.featureCoordinatorHint}
+        error={error}
+        onError={showError}
+      />
     </div>
   );
 }
@@ -359,7 +251,22 @@ function FeatureProgress({ feature, onOpenTicket }: { feature: FeatureView; onOp
           {message && <span className={message.bad ? "error" : "muted"}>{message.text}</span>}
         </div>
       )}
+      {!collapsed && feature.brief && <FeatureBrief featureId={feature.id} brief={feature.brief} />}
     </section>
+  );
+}
+
+/** epic session 建 feature 时写的规划。收起也按 feature 记。规划是数据，只当文字显示。 */
+function FeatureBrief({ featureId, brief }: { featureId: number; brief: string }) {
+  const [collapsed, toggle] = useCollapsed(`brief:${featureId}`);
+  return (
+    <div className="feature-brief">
+      <button className="section-toggle" aria-expanded={!collapsed} onClick={toggle}>
+        <span className="twisty">{collapsed ? "▸" : "▾"}</span>
+        {S.featureBrief}
+      </button>
+      {!collapsed && <p>{brief}</p>}
+    </div>
   );
 }
 

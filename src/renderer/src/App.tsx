@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { BriefKind } from "../../shared/brief";
-import type { FeatureView, OpenSessionRequest, TicketView } from "../../shared/types";
+import type { EpicView, FeatureView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
 import { setCollapsed } from "./local-prefs";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
 import { BriefPage } from "./components/BriefPage";
+import { EpicPage } from "./components/EpicPage";
 import { FeaturePage, type StuckReveal } from "./components/FeaturePage";
+import { NewEpicDialog } from "./components/NewEpicDialog";
 import { NewFeatureDialog } from "./components/NewFeatureDialog";
 import { NewTicketDialog } from "./components/NewTicketDialog";
 import { SettingsPage } from "./components/SettingsPage";
@@ -25,6 +27,7 @@ export type Route =
   | { page: "home"; kind?: BriefKind }
   | { page: "ticket"; key: string }
   | { page: "feature"; id: number }
+  | { page: "epic"; id: number }
   | { page: "unclaimed" }
   | { page: "archived" }
   | { page: "settings" }
@@ -35,7 +38,9 @@ export function App() {
   /** 单独的 ticket；feature 下的 ticket 在 features[].tickets 里。 */
   const [tickets, setTickets] = useState<TicketView[]>([]);
   const [features, setFeatures] = useState<FeatureView[]>([]);
+  const [epics, setEpics] = useState<EpicView[]>([]);
   const [showNewFeature, setShowNewFeature] = useState(false);
+  const [showNewEpic, setShowNewEpic] = useState(false);
   const [unclaimedCount, setUnclaimedCount] = useState(0);
   const [keepAwake, setKeepAwake] = useState(false);
   const [showNew, setShowNew] = useState(false);
@@ -78,10 +83,11 @@ export function App() {
   const refresh = useCallback(async (): Promise<boolean> => {
     const seq = ++refreshSeq.current;
     try {
-      const [t, f, u] = await Promise.all([api.listTickets(), api.listFeatures(), api.unclaimed()]);
+      const [t, f, e, u] = await Promise.all([api.listTickets(), api.listFeatures(), api.listEpics(), api.unclaimed()]);
       if (seq !== refreshSeq.current) return true;
       setTickets(t);
       setFeatures(f);
+      setEpics(e);
       setUnclaimedCount(u.length);
       return true;
     } catch (e) {
@@ -136,14 +142,19 @@ export function App() {
 
   const current = route.page === "ticket" ? (allTickets.find((t) => t.key === route.key) ?? null) : null;
   const currentFeature = route.page === "feature" ? (features.find((f) => f.id === route.id) ?? null) : null;
+  const currentEpic = route.page === "epic" ? (epics.find((e) => e.id === route.id) ?? null) : null;
   const featureOf = (t: TicketView) => (t.featureId === null ? null : (features.find((f) => f.id === t.featureId) ?? null));
   const goTicket = (key: string) => void refresh().then(() => setRoute({ page: "ticket", key }));
+  const goFeature = (id: number) => void refresh().then(() => setRoute({ page: "feature", id }));
+  const goEpic = (id: number) => void refresh().then(() => setRoute({ page: "epic", id }));
+  /** 归档可能要等两分钟（先生成汇总）：等完时用户已经去了别的页面，就留在那里。 */
+  const leavePage = (page: "feature" | "epic", id: number) => setRoute((r) => (r.page === page && r.id === id ? { page: "home" } : r));
 
   return (
     <div className="app">
       <Sidebar
-        tickets={tickets} features={features} unclaimedCount={unclaimedCount} route={route} onNavigate={setRoute}
-        onNew={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)}
+        tickets={tickets} features={features} epics={epics} unclaimedCount={unclaimedCount} route={route} onNavigate={setRoute}
+        onNew={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)} onNewEpic={() => setShowNewEpic(true)}
         keepAwake={keepAwake} onKeepAwake={(on) => api.setKeepAwake(on).then(setKeepAwake, reportError)}
       />
       <main className="main">
@@ -178,15 +189,25 @@ export function App() {
               <FeaturePage
                 key={currentFeature.id}
                 feature={currentFeature}
+                epics={epics}
                 onOpenTicket={(key) => setRoute({ page: "ticket", key })}
-                onArchived={() => setRoute({ page: "home" })}
+                onArchived={() => leavePage("feature", currentFeature.id)}
                 onTicketCreated={goTicket}
                 reveal={stuckReveal}
                 onRevealed={() => setStuckReveal(null)}
               />
             )}
+            {route.page === "epic" && currentEpic && (
+              <EpicPage
+                key={currentEpic.id}
+                epic={currentEpic}
+                onOpenFeature={(id) => setRoute({ page: "feature", id })}
+                onArchived={() => leavePage("epic", currentEpic.id)}
+                onFeatureCreated={goFeature}
+              />
+            )}
             {route.page === "unclaimed" && <UnclaimedPage tickets={allTickets} />}
-            {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={(id) => void refresh().then(() => setRoute({ page: "feature", id }))} />}
+            {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} onEpicRestored={goEpic} />}
             {route.page === "settings" && <SettingsPage onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "audit" && <AuditPage />}
           </>
@@ -197,7 +218,16 @@ export function App() {
           onClose={() => setShowNewFeature(false)}
           onCreated={(id) => {
             setShowNewFeature(false);
-            void refresh().then(() => setRoute({ page: "feature", id }));
+            goFeature(id);
+          }}
+        />
+      )}
+      {showNewEpic && (
+        <NewEpicDialog
+          onClose={() => setShowNewEpic(false)}
+          onCreated={(id) => {
+            setShowNewEpic(false);
+            goEpic(id);
           }}
         />
       )}

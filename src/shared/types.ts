@@ -185,6 +185,14 @@ export interface CreateFeatureInput {
   workspaceDir?: string;
 }
 
+export interface CreateEpicInput {
+  name: string;
+  /** 仓库根目录（或仓库里的目录）；至少一个。 */
+  repoPaths: string[];
+  /** 省略：<仓库的上一层>-epics/<名字>。 */
+  workspaceDir?: string;
+}
+
 export interface AddRepoInput {
   ticketKey: string;
   repoPath: string;

@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { epicMcpFile, featureMcpFile, memoryServers, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
+import { epicMcpFile, featureMcpFile, memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
 
 const launcher = { command: "/Applications/Butler.app/Contents/MacOS/Butler", script: "/Applications/Butler.app/Contents/Resources/memory-mcp/statecore-mcp.cjs" };
 
@@ -160,6 +160,14 @@ describe("epic memory (design 2026-11-01)", () => {
     expect(file).toBe(join(mcpDir, "epics", "4.json"));
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpServers: servers({ epicId: 4 }) });
     if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it("removes the epic's config, and does not mind when there is none", () => {
+    const mcpDir = tempDir();
+    const file = writeEpicMcpConfig({ mcpDir, epicId: 4, servers: servers({ epicId: 4 }) });
+    removeEpicMcpConfig(mcpDir, 4);
+    expect(existsSync(file)).toBe(false);
+    expect(() => removeEpicMcpConfig(mcpDir, 4)).not.toThrow();
   });
 });
 

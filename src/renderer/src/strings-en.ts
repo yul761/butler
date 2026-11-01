@@ -1,6 +1,6 @@
 import type { BriefItem, BriefRule, BriefSection } from "../../shared/brief";
 import type { PrivacyLevel } from "../../shared/llm";
-import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
+import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
 import type { UiStrings } from "./strings";
 
 /** "1 ticket", "2 tickets". */
@@ -25,6 +25,35 @@ export const EN: UiStrings = {
   newTicket: "New ticket",
   newFeature: "New feature",
   features: "Features",
+  newEpic: "New epic",
+  epics: "Epics",
+  epicName: "Epic name",
+  epicWorkspaceDefault: "Empty: next to the repos' parent folder, <parent>-epics/<name>",
+  epicReposHint: "Epic sessions can read these repos, and features created in one pick from them. Removing a repo only affects what comes later; features keep theirs.",
+  epicSession: "Epic session",
+  newEpicSession: "Epic session",
+  epicSessionHint: "An epic session runs in the epic's workspace and can read every repo. Plan the next feature here, then have it create the feature.",
+  noEpicSessions: "No epic session yet.",
+  noEpicFeatures: "No features yet. Plan one in an epic session, or click “New feature”.",
+  epicNoSummary: "No summary yet",
+  epicStatus: { stuck: "A ticket is stuck", waiting: "Waiting for you", not_started: "Not started", active: "In progress", archived: "Archived" } as Record<EpicFeatureStatus, string>,
+  archiveEpic: "Archive epic (with its features)",
+  archiving: "Archiving. Updating summaries first, up to 2 minutes…",
+  archivedEpics: "Archived epics",
+  colEpic: "Epic",
+  moveToEpic: "Move to epic",
+  moveToEpicHint: "Only changes where the feature belongs; the workspace and worktrees stay put. Sessions already open see the epic's memory after they are reopened.",
+  noEpic: "No epic",
+  featureBrief: "Plan",
+  epicOpenErrors: {
+    no_ticket: "This epic does not exist or has been archived.",
+    no_repo: "The epic's workspace folder could not be created. Check the path and permissions.",
+  } as Record<string, string>,
+  epicErrors: {
+    invalid_name: "The epic name can't be empty and is at most 100 characters.",
+    workspace_taken: "Another epic already uses this workspace folder.",
+    sessions_open: "This epic or one of its features still has a terminal running. Quit claude in the terminal before archiving.",
+  } as Record<string, string>,
   featureName: "Feature name",
   workspaceDir: "Workspace folder (optional)",
   workspaceDefault: "Empty: next to the repos' parent folder, <parent>-features/<name>",

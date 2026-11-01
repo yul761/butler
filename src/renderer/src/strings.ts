@@ -2,7 +2,7 @@ import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
 import type { BriefItem, BriefRule, BriefSection } from "../../shared/brief";
-import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
+import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "已合并·待收尾",
@@ -26,6 +26,37 @@ const ZH = {
   newTicket: "新建 ticket",
   newFeature: "新建 feature",
   features: "Feature",
+  // epic（设计文档 2026-11-01）
+  newEpic: "新建 epic",
+  epics: "Epic",
+  epicName: "epic 名字",
+  epicWorkspaceDefault: "留空：放在仓库上一层的旁边，<上一层>-epics/<名字>",
+  epicReposHint: "epic session 能读这些仓库，在 epic session 里建 feature 时也从这里选。移除只影响以后，feature 里已有的仓库不动。",
+  epicSession: "Epic session",
+  newEpicSession: "epic session",
+  epicSessionHint: "epic session 在 epic 的工作区里运行，能读所有仓库。在这里规划下一个 feature，定下来后让它建好。",
+  noEpicSessions: "还没有 epic session。",
+  noEpicFeatures: "还没有 feature。在 epic session 里规划，或者点“新建 feature”。",
+  epicNoSummary: "还没有汇总",
+  epicStatus: { stuck: "有 ticket 卡住", waiting: "等你回话", not_started: "未开始", active: "进行中", archived: "已归档" } as Record<EpicFeatureStatus, string>,
+  archiveEpic: "归档 epic（连同下面的 feature）",
+  archiving: "归档中，先更新汇总，最多两分钟…",
+  archivedEpics: "已归档的 epic",
+  colEpic: "Epic",
+  moveToEpic: "移到 epic",
+  moveToEpicHint: "只改归属，工作区和 worktree 都不动。已经开着的 session 要重新打开才读得到 epic 的记忆。",
+  noEpic: "不属于 epic",
+  featureBrief: "规划",
+  /** 这几种情况 openErrors、createErrors 里写的是 ticket 或 feature，epic 用自己的说法。 */
+  epicOpenErrors: {
+    no_ticket: "这个 epic 不存在或者已经归档。",
+    no_repo: "建不了这个 epic 的工作区目录，请检查路径和权限。",
+  } as Record<string, string>,
+  epicErrors: {
+    invalid_name: "epic 名字不能为空，最长 100 字。",
+    workspace_taken: "另一个 epic 已经在用这个工作区目录。",
+    sessions_open: "这个 epic 或它下面的 feature 还有终端在运行，先在终端里退出 claude 再归档。",
+  } as Record<string, string>,
   featureName: "feature 名字",
   workspaceDir: "工作区目录（可选）",
   workspaceDefault: "留空：放在仓库上一层的旁边，<上一层>-features/<名字>",

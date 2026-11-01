@@ -1,19 +1,27 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Feature, Ticket } from "../../../shared/types";
+import type { Epic, Feature, Ticket } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
 import { lastSegment, repoWhere } from "../repos";
 import { S } from "../strings";
 
-/** 已归档的 ticket 和 feature：恢复后回到侧栏，并打开它。 */
-export function ArchivedPage({ onRestored, onFeatureRestored }: { onRestored: (key: string) => void; onFeatureRestored: (id: number) => void }) {
+interface Props {
+  onRestored: (key: string) => void;
+  onFeatureRestored: (id: number) => void;
+  onEpicRestored: (id: number) => void;
+}
+
+/** 已归档的 ticket、feature 和 epic：恢复后回到侧栏，并打开它。 */
+export function ArchivedPage({ onRestored, onFeatureRestored, onEpicRestored }: Props) {
   const [items, setItems] = useState<Ticket[] | null>(null);
   const [features, setFeatures] = useState<Feature[]>([]);
+  const [epics, setEpics] = useState<Epic[]>([]);
   const load = useCallback(async () => {
     try {
-      const [t, f] = await Promise.all([api.archivedTickets(), api.archivedFeatures()]);
+      const [t, f, e] = await Promise.all([api.archivedTickets(), api.archivedFeatures(), api.archivedEpics()]);
       setItems(t);
       setFeatures(f);
+      setEpics(e);
     } catch (e) {
       reportError(e);
     }
@@ -37,6 +45,15 @@ export function ArchivedPage({ onRestored, onFeatureRestored }: { onRestored: (k
     try {
       await api.unarchiveFeature(id);
       onFeatureRestored(id);
+    } catch (e) {
+      reportError(e);
+    }
+  }
+
+  async function restoreEpic(id: number) {
+    try {
+      await api.unarchiveEpic(id);
+      onEpicRestored(id);
     } catch (e) {
       reportError(e);
     }
@@ -81,6 +98,26 @@ export function ArchivedPage({ onRestored, onFeatureRestored }: { onRestored: (k
                   <td>{f.repos.map((r) => lastSegment(r.repoPath)).join(", ")}</td>
                   <td className="muted">{f.archivedAt ? new Date(f.archivedAt).toLocaleString() : ""}</td>
                   <td className="actions"><button onClick={() => void restoreFeature(f.id)}>{S.unarchive}</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      {epics.length > 0 && (
+        <>
+          <h3>{S.archivedEpics}</h3>
+          <table className="table">
+            <thead>
+              <tr><th>{S.colEpic}</th><th>{S.featureRepos}</th><th>{S.colArchivedAt}</th><th /></tr>
+            </thead>
+            <tbody>
+              {epics.map((e) => (
+                <tr key={e.id}>
+                  <td><div>{e.name}</div><div className="muted">{e.workspaceDir}</div></td>
+                  <td>{e.repos.map((r) => lastSegment(r.repoPath)).join(", ")}</td>
+                  <td className="muted">{e.archivedAt ? new Date(e.archivedAt).toLocaleString() : ""}</td>
+                  <td className="actions"><button onClick={() => void restoreEpic(e.id)}>{S.unarchive}</button></td>
                 </tr>
               ))}
             </tbody>

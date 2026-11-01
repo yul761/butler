@@ -48,7 +48,7 @@ import { HandoffRunner } from "./handoff/runner";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { memoryServers, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
@@ -760,7 +760,14 @@ async function bootstrap(): Promise<void> {
     refreshBeforeArchive: (ids) => featureRunner.refreshBeforeArchive(ids),
     log: logger,
   });
-  const epicService = new EpicService({ epics, features, featureService, db, now: Date.now, onEpicChanged: (id) => void memory.syncEpic(id) });
+  const epicService = new EpicService({
+    epics, features, featureService, db, now: Date.now,
+    onEpicChanged: (id) => void memory.syncEpic(id),
+    onArchived: (id, featureIds) => {
+      removeEpicMcpConfig(paths.mcp, id);
+      for (const f of featureIds) removeFeatureMcpConfig(paths.mcp, f);
+    },
+  });
   // 防休眠：只在内存里，启动时是关的。状态一变，托盘菜单、提示文字和界面都跟着更新。
   keepAwake = new KeepAwake({
     blocker: powerSaveBlocker,
@@ -779,7 +786,7 @@ async function bootstrap(): Promise<void> {
     onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,
-    tickets, ticketService, featureService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs,
+    tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs,
     keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     briefRefreshing: () => briefRefreshing,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, moveTargetArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -138,5 +138,44 @@ describe("feature IPC arguments (design 2026-10-26)", () => {
     expect(() => openFeatureArg({ featureId: 1, sessionId: "../x" })).toThrow();
     expect(dirArg("/c/shop")).toBe("/c/shop");
     for (const bad of ["", 5, "x".repeat(4097)]) expect(() => dirArg(bad)).toThrow();
+  });
+});
+
+describe("epic IPC arguments (design 2026-11-01)", () => {
+  it("accepts an epic with a bounded name and 1–20 repo paths", () => {
+    expect(createEpicArg({ name: "结账改版", repoPaths: ["/c/shop/frontend"] })).toEqual({ name: "结账改版", repoPaths: ["/c/shop/frontend"], workspaceDir: undefined });
+    expect(createEpicArg({ name: "x", repoPaths: ["/a"], workspaceDir: "/w", extra: 1 })).toEqual({ name: "x", repoPaths: ["/a"], workspaceDir: "/w" });
+    for (const bad of [
+      null, "x", { name: "", repoPaths: ["/a"] }, { name: "x".repeat(101), repoPaths: ["/a"] }, { name: 3, repoPaths: ["/a"] }, { name: "x" }, { name: "x", repoPaths: [] },
+      { name: "x", repoPaths: Array(21).fill("/a") }, { name: "x", repoPaths: [""] }, { name: "x", repoPaths: "/a" }, { name: "x", repoPaths: ["/a"], workspaceDir: 5 },
+    ]) {
+      expect(() => createEpicArg(bad), JSON.stringify(bad)?.slice(0, 80)).toThrow();
+    }
+  });
+
+  it("accepts only positive integers as an epic id", () => {
+    expect(epicIdArg(3)).toBe(3);
+    for (const bad of [0, -1, 1.5, "3", null, undefined]) expect(() => epicIdArg(bad)).toThrow();
+  });
+
+  it("reports a blank or overlong name as invalid_name, which the page words for an epic", () => {
+    expect(epicNameArg("结账改版")).toBe("结账改版");
+    for (const bad of ["", "   ", "x".repeat(101), 5, null]) {
+      expect(() => epicNameArg(bad), String(bad).slice(0, 20)).toThrow(expect.objectContaining({ code: "invalid_name" }));
+    }
+  });
+
+  it("checks the epic session request", () => {
+    expect(openEpicArg({ epicId: 1, sessionId: "abc-1", prefill: "hi", extra: 1 })).toEqual({ epicId: 1, sessionId: "abc-1", prefill: "hi" });
+    expect(openEpicArg({ epicId: 1 })).toEqual({ epicId: 1 });
+    for (const bad of [null, {}, { epicId: 0 }, { epicId: 1, sessionId: "../x" }, { epicId: 1, prefill: 3 }, { epicId: 1, prefill: "x".repeat(100_001) }]) {
+      expect(() => openEpicArg(bad), JSON.stringify(bad)?.slice(0, 80)).toThrow();
+    }
+  });
+
+  it("moves a feature into an epic or out with null, but a missing target is not a move out", () => {
+    expect(moveTargetArg(4)).toBe(4);
+    expect(moveTargetArg(null)).toBeNull();
+    for (const bad of [undefined, 0, -1, 1.5, "4", ""]) expect(() => moveTargetArg(bad), String(bad)).toThrow();
   });
 });
