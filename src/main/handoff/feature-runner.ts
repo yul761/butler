@@ -45,6 +45,9 @@ type Exec = { ok: true; value: unknown; rawText: string } | { ok: false; outcome
 
 const failed = (featureId: number, reason: string, message: string): FeatureHandoffOutcome => ({ featureId, status: "failed", reason, message });
 
+/** 归档前生成汇总最多等这么久：epic 归档时所有 feature 共用这一个上限。 */
+export const ARCHIVE_SUMMARY_LIMIT_MS = 2 * 60_000;
+
 /** feature 汇总（设计文档 2026-10-28）：晚间批量、手动"立即更新"，以及总控 /handoff 之后给子 ticket 补跑。 */
 export class FeatureSummaryRunner {
   private readonly inflight = new Map<number, Promise<FeatureHandoffOutcome>>();
@@ -56,16 +59,58 @@ export class FeatureSummaryRunner {
    * 或者下面有 ticket 在汇总覆盖到的时间之后捕获了新的 handoff（不算 refresh 和 degraded）。
    */
   candidates(): number[] {
-    return this.d.features
-      .list()
-      .filter((f) => {
-        const last = this.d.featureHandoffs.latestValid(f.id);
-        const coordinator = Math.max(0, ...this.d.sessions.listFeatureCoordinators(f.id).map((s) => this.d.transcriptMtime(s.id) ?? 0));
-        if (coordinator > (last?.createdAt ?? 0)) return true;
-        const covered = last ? (last.coversUntil ?? last.createdAt) : 0;
-        return this.d.tickets.listByFeature(f.id).some((t) => (this.d.handoffs.lastCapturedAt(t.key) ?? 0) > covered);
-      })
-      .map((f) => f.id);
+    return this.d.features.list().map((f) => f.id).filter((id) => this.staleFeature(id));
+  }
+
+  /** 最新有效汇总之后有没有新活动（规则见 candidates）。 */
+  staleFeature(id: number): boolean {
+    const last = this.d.featureHandoffs.latestValid(id);
+    const coordinator = Math.max(0, ...this.d.sessions.listFeatureCoordinators(id).map((s) => this.d.transcriptMtime(s.id) ?? 0));
+    if (coordinator > (last?.createdAt ?? 0)) return true;
+    const covered = last ? (last.coversUntil ?? last.createdAt) : 0;
+    return this.d.tickets.listByFeature(id).some((t) => (this.d.handoffs.lastCapturedAt(t.key) ?? 0) > covered);
+  }
+
+  /**
+   * epic session 建 feature 时（设计文档 2026-11-01“交接要新鲜”）：后台给 epic 下未归档、有新活动的 feature 各生成一份汇总。
+   * 调用方不等它；失败只记日志。exceptFeatureId：刚建的 feature，不用看。
+   */
+  refreshEpic(epicId: number, exceptFeatureId?: number): void {
+    const run = async () => this.summarizeStale(this.d.features.listByEpic(epicId).map((f) => f.id).filter((id) => id !== exceptFeatureId));
+    run().catch((e: unknown) => this.d.log?.(`refreshing the summaries of epic ${epicId} failed`, e));
+  }
+
+  /**
+   * 归档 epic 下的 feature 之前（设计文档 2026-11-01“交接要新鲜”）：给有新活动的生成汇总，并行，共用一个上限，永不 reject。
+   * 要在归档写入之前跑完：归档之后这个 feature 不再是 candidates，已归档的 ticket 也进不了汇总。
+   * 超时后不再发起新的；已经在跑的留在后台，存下来时 epic 的视图照样读得到。
+   */
+  async refreshBeforeArchive(featureIds: number[]): Promise<void> {
+    let expired = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        expired = true;
+        this.d.log?.(`feature summaries before archive timed out, archiving anyway: ${featureIds.join(", ")}`);
+        resolve();
+      }, ARCHIVE_SUMMARY_LIMIT_MS);
+    });
+    await Promise.race([this.summarizeStale(featureIds, () => expired), limit]);
+    clearTimeout(timer);
+  }
+
+  /** 这些 feature 里有新活动的各跑一次“立即更新”；出错只记日志，永不 reject。stopped 之后不再发起新的。 */
+  private async summarizeStale(featureIds: number[], stopped: () => boolean = () => false): Promise<void> {
+    await runPool(featureIds, HANDOFF_CONCURRENCY, async (id) => {
+      if (stopped()) return;
+      try {
+        if (!this.staleFeature(id)) return;
+        const o = await this.runManual(id);
+        if (o.status !== "stored") this.d.log?.(`feature summary ${id}: ${o.status}: ${o.status === "failed" ? o.message : o.reason}`);
+      } catch (e) {
+        this.d.log?.(`feature summary ${id} failed`, e);
+      }
+    });
   }
 
   /** feature 之间串行；被限流后剩下的不再发起，留给早间补跑。 */

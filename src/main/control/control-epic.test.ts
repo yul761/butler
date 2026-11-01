@@ -33,18 +33,25 @@ async function setup() {
   const solo = await epicService.create({ name: "solo", repoPaths: [frontend] });
   let notified = 0;
   let rows: EpicFeatureRow[] = [];
+  const logs: string[] = [];
+  const events: string[] = [];
+  let refreshEpic: (epicId: number, except?: number) => void = (epicId, except) => void events.push(`refresh:${epicId}:${except}`);
   const handle = controlHandler({
     tickets, sessions, features, epics, featureService,
     ticketService: undefined as never, sessionService: undefined as never,
     epicRows: () => rows,
     submit: async () => "sent" as const,
     notify: () => void notified++,
+    syncEpic: (id) => void events.push(`sync:${id}:${features.list().length}`),
+    refreshEpic: (id, except) => refreshEpic(id, except),
+    log: (m) => logs.push(m),
   });
   const base = { v: 1 as const, epicId: epic.id, from: null };
   const row = (o: Partial<EpicFeatureRow>): EpicFeatureRow => ({
     id: 0, name: "f", status: "active", archivedAt: null, summaryAt: 5, summary: "s", blockers: [], decisions: [], openQuestions: [], ...o,
   });
-  return { handle, base, epic, solo, features, epics, featureService, epicService, frontend, backend, elsewhere, notified: () => notified, setRows: (r: EpicFeatureRow[]) => (rows = r), row };
+  return { handle, base, epic, solo, features, epics, featureService, epicService, frontend, backend, elsewhere, notified: () => notified, setRows: (r: EpicFeatureRow[]) => (rows = r), row,
+    logs, events, setRefreshEpic: (f: typeof refreshEpic) => (refreshEpic = f) };
 }
 
 const err = (r: ControlResult) => (r.ok ? "" : r.error);
@@ -61,6 +68,25 @@ describe("create_feature from an epic session (design 2026-11-01)", () => {
     expect(notified()).toBe(1);
   });
 
+  it("re-renders the epic handoff once the feature exists, and refreshes the others without the new one", async () => {
+    const { handle, base, epic, features, events } = await setup();
+    const r = await handle({ ...base, op: "create_feature", name: "checkout", repos: ["frontend"], brief: "b" });
+    const id = (r as { value: { id: number } }).value.id;
+    expect(features.list()).toHaveLength(1);
+    expect(events).toEqual([`sync:${epic.id}:1`, `refresh:${epic.id}:${id}`]);
+  });
+
+  it("does not let a failing refresh fail create_feature, and refreshes nothing when it is refused", async () => {
+    const { handle, base, events, logs, setRefreshEpic } = await setup();
+    expect((await handle({ ...base, op: "create_feature", name: "a/b", repos: ["frontend"], brief: "b" })).ok).toBe(false);
+    expect(events).toEqual([]);
+    setRefreshEpic(() => {
+      throw new Error("boom");
+    });
+    expect(await handle({ ...base, op: "create_feature", name: "checkout", repos: ["frontend"], brief: "b" })).toMatchObject({ ok: true });
+    expect(logs.join("\n")).toContain("checkout");
+  });
+
   it("lets repos be left out when the epic has one repo, and requires them when it has several", async () => {
     const { handle, base, solo } = await setup();
     const many = await handle({ ...base, op: "create_feature", name: "x", brief: "b" });
@@ -74,7 +100,7 @@ describe("create_feature from an epic session (design 2026-11-01)", () => {
     const { handle, base, features, featureService, elsewhere } = await setup();
     await featureService.create({ name: "taken", repoPaths: [elsewhere] });
     const archived = await featureService.create({ name: "old", repoPaths: [elsewhere] });
-    featureService.archive(archived.id, { terminalsOpen: false });
+    await featureService.archive(archived.id, { terminalsOpen: () => false });
     const before = features.list({ includeArchived: true }).length;
     const bad: Record<string, unknown>[] = [
       { name: "taken", brief: "b" }, { name: " TAKEN ", brief: "b" }, { name: "old", brief: "b" },
@@ -93,7 +119,7 @@ describe("create_feature from an epic session (design 2026-11-01)", () => {
 
   it("refuses everything for an archived or unknown epic", async () => {
     const { handle, base, epic, epicService } = await setup();
-    epicService.archive(epic.id, { terminalsOpen: false, featureTerminalsOpen: () => false });
+    await epicService.archive(epic.id, { terminalsOpen: () => false, featureTerminalsOpen: () => false });
     const ops: Partial<EpicControlRequest>[] = [{ op: "list_features" }, { op: "list_repos" }, { op: "create_feature", name: "x", repos: ["frontend"], brief: "b" }];
     for (const op of ops) {
       expect(await handle({ ...base, ...op } as EpicControlRequest)).toMatchObject({ ok: false });
@@ -133,7 +159,7 @@ describe("epic_context from a feature coordinator", () => {
     const lone = await featureService.create({ name: "lone", repoPaths: [elsewhere] });
     expect(await handle({ v: 1, featureId: lone.id, from: null, op: "epic_context" })).toMatchObject({ ok: false });
     features.setEpic(lone.id, epic.id);
-    epicService.archive(epic.id, { terminalsOpen: false, featureTerminalsOpen: () => false });
+    await epicService.archive(epic.id, { terminalsOpen: () => false, featureTerminalsOpen: () => false });
     features.unarchive(lone.id);
     expect(await handle({ v: 1, featureId: lone.id, from: null, op: "epic_context" })).toMatchObject({ ok: false });
   });

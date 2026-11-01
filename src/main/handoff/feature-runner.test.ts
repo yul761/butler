@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FeatureHandoff, Handoff } from "../../shared/handoff";
 import type { HandoffOutcome } from "../../shared/types";
 import type { HeadlessOutcome, HeadlessRequest, HeadlessRun } from "../claude/headless";
+import { EpicsRepo } from "../db/epics-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { FollowupsRepo } from "../db/followups-repo";
@@ -10,8 +11,9 @@ import { SessionsRepo } from "../db/sessions-repo";
 import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { insertTicket, type LegacyTicket, memDb } from "../test-utils";
+import { FeatureService } from "../tickets/feature-service";
 import { ingestFeatureHandoff } from "./feature-ingest";
-import { featureCommandFollowup, FeatureSummaryRunner } from "./feature-runner";
+import { ARCHIVE_SUMMARY_LIMIT_MS, featureCommandFollowup, FeatureSummaryRunner } from "./feature-runner";
 import { ingestHandoff, type IngestInput } from "./ingest";
 import { emptyHandoff, FEATURE_HANDOFF_JSON_SCHEMA } from "./schema";
 
@@ -59,6 +61,7 @@ function setup() {
     },
   };
   const featureId = features.insert({ name: "登录改版", workspaceDir: WS, createdAt: 2 });
+  const logs: string[] = [];
   const runner = new FeatureSummaryRunner({
     features, tickets, sessions, handoffs, featureHandoffs, settings,
     ingest: (i) => ingestFeatureHandoff({ features, tickets, featureHandoffs, now: () => clock }, i),
@@ -75,6 +78,7 @@ function setup() {
     transcriptMtime: (id) => mtimes[id] ?? null,
     now: () => clock,
     newRunId: () => "run-1",
+    log: (m) => logs.push(m),
   });
   let fid = 0;
   const ticketIngest = (input: IngestInput, at: number) => {
@@ -107,7 +111,7 @@ function setup() {
     return id;
   };
   return {
-    runner, features, tickets, sessions, featureHandoffs, featureId, calls, order, childRuns, addTicket, addCoordinator, addFix, ticketHandoff, addSummary,
+    runner, db, logs, features, tickets, sessions, featureHandoffs, featureId, calls, order, childRuns, addTicket, addCoordinator, addFix, ticketHandoff, addSummary,
     setRespond: (fn: typeof respond) => {
       respond = fn;
     },
@@ -320,6 +324,211 @@ describe("FeatureSummaryRunner.runManual", () => {
     const [a, b] = await Promise.all([runner.runManual(featureId), runner.runManual(featureId)]);
     expect(a).toEqual(b);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("FeatureSummaryRunner.staleFeature", () => {
+  it("uses the same rule as candidates", () => {
+    const { runner, featureId, features, addCoordinator, addSummary, addTicket, ticketHandoff } = setup();
+    const quiet = features.insert({ name: "没动静", workspaceDir: "/ws/quiet", createdAt: 2 });
+    expect(runner.staleFeature(featureId)).toBe(false);
+    addCoordinator("c-1", 100);
+    expect(runner.staleFeature(featureId)).toBe(true);
+    addSummary(200);
+    expect(runner.staleFeature(featureId)).toBe(false);
+    addTicket("A-1");
+    ticketHandoff("A-1", 300);
+    expect(runner.staleFeature(featureId)).toBe(true);
+    expect(runner.staleFeature(quiet)).toBe(false);
+    expect(runner.candidates()).toEqual([featureId]);
+  });
+});
+
+/** 同一个 epic 下几个 feature。 */
+function epicSetup() {
+  const ctx = setup();
+  const epicId = new EpicsRepo(ctx.db).insert({ name: "e", workspaceDir: "/e", createdAt: 1 });
+  ctx.features.setEpic(ctx.featureId, epicId);
+  const add = (name: string) => ctx.features.insert({ name, workspaceDir: `/ws/${name}`, createdAt: 2, epicId });
+  return { ...ctx, epicId, add };
+}
+
+describe("FeatureSummaryRunner.refreshEpic", () => {
+  it("runs the stale features of the epic in the background, and returns at once", async () => {
+    const { runner, epicId, featureId, features, add, addCoordinator, addSummary, setRespond, featureHandoffs, calls } = epicSetup();
+    const stale = add("过期");
+    const fresh = add("没变");
+    const other = features.insert({ name: "别的 epic", workspaceDir: "/ws/other", createdAt: 2 });
+    addCoordinator("c-1", 30, 1, featureId);
+    addCoordinator("c-2", 30, 1, stale);
+    addCoordinator("c-3", 30, 1, fresh);
+    addSummary(40, null, fresh);
+    addCoordinator("c-4", 30, 1, other);
+    let finish: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (finish = r));
+    setRespond(async () => {
+      await gate;
+      return ok(summary());
+    });
+    expect(runner.refreshEpic(epicId)).toBeUndefined();
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(featureHandoffs.latest(stale)).toBeNull();
+    finish();
+    await vi.waitFor(() => expect(featureHandoffs.latest(stale)?.trigger).toBe("manual"));
+    await vi.waitFor(() => expect(featureHandoffs.latest(featureId)).not.toBeNull());
+    expect(featureHandoffs.latest(fresh)?.trigger).toBe("nightly");
+    expect(featureHandoffs.latest(other)).toBeNull();
+    expect(runner.candidates()).toEqual([other]);
+  });
+
+  it("skips the feature it was told to, and archived features", async () => {
+    const { runner, epicId, featureId, features, add, addCoordinator, calls } = epicSetup();
+    const gone = add("归档了");
+    addCoordinator("c-1", 30, 1, featureId);
+    addCoordinator("c-2", 30, 1, gone);
+    features.archive(gone, 5);
+    runner.refreshEpic(epicId, featureId);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls).toHaveLength(0);
+  });
+
+  it("logs a failed run and does not stop the others", async () => {
+    const { runner, epicId, featureId, add, addCoordinator, setRespond, logs, featureHandoffs } = epicSetup();
+    const second = add("第二个");
+    addCoordinator("c-1", 30, 1, featureId);
+    addCoordinator("c-2", 30, 1, second);
+    setRespond(async (_req, n) => (n === 1 ? { ok: false, reason: "failed", message: "boom" } as never : ok(summary())));
+    runner.refreshEpic(epicId);
+    await vi.waitFor(() => expect(logs.join("\n")).toContain("failed"));
+    await vi.waitFor(() => expect(featureHandoffs.latest(featureId) ?? featureHandoffs.latest(second)).not.toBeNull());
+  });
+
+  it("logs instead of throwing when the features cannot be read", async () => {
+    const { runner, epicId, features, logs } = epicSetup();
+    vi.spyOn(features, "listByEpic").mockImplementation(() => {
+      throw new Error("db gone");
+    });
+    expect(() => runner.refreshEpic(epicId)).not.toThrow();
+    await vi.waitFor(() => expect(logs.join("\n")).toContain(`epic ${epicId}`));
+  });
+});
+
+describe("FeatureSummaryRunner.refreshBeforeArchive", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("waits for the stale features and leaves the fresh ones alone", async () => {
+    const { runner, featureId, add, addCoordinator, addSummary, featureHandoffs, calls } = epicSetup();
+    const fresh = add("没变");
+    addCoordinator("c-1", 30, 1, featureId);
+    addCoordinator("c-2", 30, 1, fresh);
+    addSummary(40, null, fresh);
+    await runner.refreshBeforeArchive([featureId, fresh]);
+    expect(calls).toHaveLength(1);
+    expect(featureHandoffs.latest(featureId)?.trigger).toBe("manual");
+  });
+
+  it("logs a failure and resolves", async () => {
+    const { runner, featureId, addCoordinator, setRespond, logs } = epicSetup();
+    addCoordinator("c-1", 30, 1, featureId);
+    setRespond(() => Promise.reject(new Error("boom")));
+    await runner.refreshBeforeArchive([featureId]);
+    expect(logs.join("\n")).toContain(`feature summary ${featureId}: failed`);
+  });
+
+  it("gives up after the shared limit, starts nothing more, and lets the running ones finish in the background", async () => {
+    vi.useFakeTimers();
+    const { runner, featureId, add, addCoordinator, setRespond, featureHandoffs, calls, logs } = epicSetup();
+    const second = add("第二个");
+    const third = add("第三个");
+    addCoordinator("c-1", 30, 1, featureId);
+    addCoordinator("c-2", 30, 1, second);
+    addCoordinator("c-3", 30, 1, third);
+    const release: (() => void)[] = [];
+    setRespond(async () => {
+      await new Promise<void>((r) => release.push(r));
+      return ok(summary());
+    });
+    let done = false;
+    const p = runner.refreshBeforeArchive([featureId, second, third]).then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(ARCHIVE_SUMMARY_LIMIT_MS - 1);
+    expect(done).toBe(false);
+    expect(calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await p;
+    expect(logs.join("\n")).toContain("timed out");
+    for (const r of release) r();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(featureHandoffs.latest(featureId)).not.toBeNull();
+    expect(featureHandoffs.latest(third)).toBeNull();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("leaves no timer behind", async () => {
+    vi.useFakeTimers();
+    const { runner, featureId, addCoordinator } = epicSetup();
+    addCoordinator("c-1", 30, 1, featureId);
+    const p = runner.refreshBeforeArchive([featureId]);
+    await vi.advanceTimersByTimeAsync(100);
+    await p;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("archiving a feature with the real runner", () => {
+  /** epic 下的 feature，有活动的总控和一个 ticket；runner 接到 FeatureService 上，和 index.ts 一样。 */
+  function archiveSetup() {
+    const ctx = epicSetup();
+    ctx.addCoordinator("c-1", 30);
+    ctx.addTicket("A-1");
+    const svc = new FeatureService({ features: ctx.features, tickets: ctx.tickets, now: () => 60_000, refreshBeforeArchive: (ids) => ctx.runner.refreshBeforeArchive(ids), log: (m) => ctx.logs.push(m) });
+    return { ...ctx, svc };
+  }
+  const closed = { terminalsOpen: () => false };
+
+  it("summarizes with the tickets still in the prompt, then archives", async () => {
+    const { svc, features, tickets, featureId, featureHandoffs, setRespond } = archiveSetup();
+    const prompts: string[] = [];
+    setRespond(async (req) => {
+      prompts.push(req.prompt);
+      expect(features.get(featureId)?.archivedAt).toBeNull();
+      return ok(summary());
+    });
+    await svc.archive(featureId, closed);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("A-1");
+    expect(featureHandoffs.latest(featureId)?.trigger).toBe("manual");
+    expect(features.get(featureId)?.archivedAt).toBe(60_000);
+    expect(tickets.listByFeature(featureId)).toEqual([]);
+  });
+
+  it("archives anyway when the summary fails, and logs it", async () => {
+    const { svc, features, featureId, setRespond, logs } = archiveSetup();
+    setRespond(() => Promise.reject(new Error("boom")));
+    await svc.archive(featureId, closed);
+    expect(features.get(featureId)?.archivedAt).toBe(60_000);
+    expect(logs.join("\n")).toContain(`feature summary ${featureId}: failed`);
+  });
+
+  it("runs one summary for two clicks", async () => {
+    const { svc, featureId, calls } = archiveSetup();
+    await Promise.all([svc.archive(featureId, closed), svc.archive(featureId, closed)]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("spends nothing when nothing changed since the last summary", async () => {
+    const { svc, features, featureId, addSummary, calls } = archiveSetup();
+    addSummary(40);
+    await svc.archive(featureId, closed);
+    expect(calls).toHaveLength(0);
+    expect(features.get(featureId)?.archivedAt).toBe(60_000);
+  });
+
+  it("spends nothing on a feature outside any epic", async () => {
+    const { svc, features, featureId, calls } = archiveSetup();
+    features.setEpic(featureId, null);
+    await svc.archive(featureId, closed);
+    expect(calls).toHaveLength(0);
+    expect(features.get(featureId)?.archivedAt).toBe(60_000);
   });
 });
 

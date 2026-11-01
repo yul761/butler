@@ -19,6 +19,9 @@ export interface FeatureServiceDeps {
   now: () => number;
   /** 归档 feature 时连带归档的每个 ticket：清掉它的 MCP 配置文件。 */
   onTicketArchived?: (ticketKey: string) => void;
+  /** 归档 epic 下的 feature 之前调用（FeatureSummaryRunner.refreshBeforeArchive）：有新活动的先生成汇总。 */
+  refreshBeforeArchive?: (featureIds: number[]) => Promise<void>;
+  log?: (msg: string, err?: unknown) => void;
   /** 给了就把归档 / 恢复放进一个事务。 */
   db?: Db;
   /** 展开工作区路径里的 ~（测试注入；默认是用户目录）。 */
@@ -33,6 +36,9 @@ export const FEATURE_NAME_LIMIT = 100;
  * worktree 放在工作区里。
  */
 export class FeatureService {
+  /** 正在归档（等汇总）的 feature：连点时共用同一次。 */
+  private readonly archiving = new Map<number, Promise<void>>();
+
   constructor(private readonly d: FeatureServiceDeps) {}
 
   get(id: number): Feature {
@@ -93,16 +99,49 @@ export class FeatureService {
     return f;
   }
 
-  /** feature 和它还没归档的 ticket 用同一个时间戳归档（at：由 epic 归档传入的统一时间戳）；有终端在跑时拒绝。 */
-  archive(featureId: number, opts: { terminalsOpen: boolean; at?: number }): void {
+  /**
+   * 归档 feature：属于 epic 时先生成汇总（失败、超时照样归档），再和它还没归档的 ticket 一起归档；有终端在跑时拒绝。
+   * 汇总可能要等两分钟，terminalsOpen 是函数：等完再看一次，这期间可能开了终端。
+   */
+  async archive(featureId: number, opts: { terminalsOpen: () => boolean }): Promise<void> {
+    if (!this.canArchive(featureId, opts.terminalsOpen)) return;
+    const running = this.archiving.get(featureId);
+    if (running) return running;
+    const p = this.refreshBeforeArchive([this.get(featureId)])
+      .then(() => {
+        if (this.canArchive(featureId, opts.terminalsOpen)) this.archiveNow(featureId, this.d.now());
+      })
+      .finally(() => this.archiving.delete(featureId));
+    this.archiving.set(featureId, p);
+    return p;
+  }
+
+  /** 已归档（可能是等汇总时跟着 epic 归档的）返回 false；有终端在跑时拒绝。 */
+  private canArchive(featureId: number, terminalsOpen: () => boolean): boolean {
+    if (this.get(featureId).archivedAt !== null) return false;
+    if (terminalsOpen()) throw new TicketError("sessions_open", M().featureTerminalsArchive);
+    return true;
+  }
+
+  /** 给这些 feature 里属于 epic 的生成汇总（见 FeatureSummaryRunner.refreshBeforeArchive），永不 reject：不能卡住归档。 */
+  async refreshBeforeArchive(features: Feature[]): Promise<void> {
+    const ids = features.filter((f) => f.epicId !== null).map((f) => f.id);
+    if (ids.length === 0) return;
+    try {
+      await this.d.refreshBeforeArchive?.(ids);
+    } catch (e) {
+      this.d.log?.(`feature summaries before archive failed: ${ids.join(", ")}`, e);
+    }
+  }
+
+  /** 立刻归档，不跑汇总，不查终端：feature 和它还没归档的 ticket 用同一个时间戳 at。epic 归档时在自己的事务里调用。 */
+  archiveNow(featureId: number, at: number): void {
     const f = this.get(featureId);
     if (f.archivedAt !== null) return;
-    if (opts.terminalsOpen) throw new TicketError("sessions_open", M().featureTerminalsArchive);
-    const now = opts.at ?? this.d.now();
     const keys = this.d.tickets.listByFeature(featureId).map((t) => t.key);
     this.tx(() => {
-      for (const k of keys) this.d.tickets.archive(k, now);
-      this.d.features.archive(featureId, now);
+      for (const k of keys) this.d.tickets.archive(k, at);
+      this.d.features.archive(featureId, at);
     });
     for (const k of keys) this.d.onTicketArchived?.(k);
     this.epicChanged(f.epicId);

@@ -28,6 +28,10 @@ export interface ControlHandlerDeps {
   featureService?: Pick<FeatureService, "create">;
   /** epic 下每个 feature 的情况（含已归档），直接读库，不经过 epic 记忆。 */
   epicRows?: (epicId: number) => EpicFeatureRow[];
+  /** 重新渲染 epic 的 handoff（排进记忆的同步队列，不等它）。 */
+  syncEpic?: (epicId: number) => void;
+  /** 后台给 epic 下有新活动的 feature 生成汇总（FeatureSummaryRunner.refreshEpic），不等它。 */
+  refreshEpic?: (epicId: number, exceptFeatureId?: number) => void;
   /** session 此刻的活动；监控还没看到它时为 null。 */
   activity?: (sessionId: string) => SessionActivity | null;
   /** session 当前命令输出的末尾（上限 4KB）。 */
@@ -224,7 +228,13 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       return fail((err as Error).message);
     }
     d.notify();
-    // 第 6 步在这里加：后台刷新 epic 的汇总（新 feature 出现在 epic 的 handoff 里）。失败只记日志，不影响返回。
+    // 新 feature 要出现在 epic 的 handoff 里；其他 feature 趁这时更新汇总，下一个 feature 才读得到新鲜的进度。都不等，失败只记日志，不影响返回。
+    try {
+      d.syncEpic?.(e.id);
+      d.refreshEpic?.(e.id, f.id);
+    } catch (err) {
+      d.log?.(`control: refreshing epic ${e.id} after create_feature ${featureName} failed`, err);
+    }
     return ok({ id: f.id, name: f.name, repos: f.repos.map(name), note: M().ctlFeatureCreated });
   };
 

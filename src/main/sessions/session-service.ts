@@ -25,6 +25,7 @@ import {
 import { launchEnv, type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
 import { claudeArgs, cmdShimSafe, sessionEnv } from "../claude/spawn";
 import type { EpicsRepo } from "../db/epics-repo";
+import { epicBriefMessage } from "../epics/epic-brief";
 import { epicFeatureRows, type LiveFeature } from "../epics/epic-info";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";
@@ -84,7 +85,7 @@ export interface SessionServiceDeps {
   activity?: (sessionId: string) => SessionActivity | null;
   /** session 的名字（SendMessage 用它寻址）；查不到时是 null。 */
   sessionName?: (sessionId: string) => Promise<string | null>;
-  /** 把任务作为第一条消息交给新 session（修复 session 的任务）。 */
+  /** 把任务作为第一条消息交给新 session（修复 session 的任务、feature 的规划）。 */
   submit?: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout">;
   /** 目录是否存在（测试注入；默认读真实磁盘）。 */
   dirExists?: (dir: string) => boolean;
@@ -137,6 +138,9 @@ function mostUrgent(activities: SessionActivity[]): SessionActivity | undefined 
 }
 
 export class SessionService {
+  /** 规划正在投递的 feature：投递要等输入框就绪，这期间 briefSentAt 还是空的，再开一个总控不能再发一遍。 */
+  private readonly briefsSending = new Set<number>();
+
   constructor(private readonly d: SessionServiceDeps) {}
 
   /** 打开的终端以启动时的 session id 为 termId；/clear 后要沿链比较当前 head。 */
@@ -332,7 +336,33 @@ export class SessionService {
     await this.d.ready();
     const feature = this.d.features?.get(req.featureId);
     if (!feature || feature.archivedAt !== null) return { ok: false, reason: "no_ticket" };
-    return this.resumeOrStart(req, (head) => head.featureId === feature.id, (claude, head) => this.startInFeature(feature, claude, { head }));
+    return this.resumeOrStart(req, (head) => head.featureId === feature.id, (claude, head) => {
+      const termId = this.startInFeature(feature, claude, { head });
+      if (!head) void this.sendBrief(feature, termId);
+      return termId;
+    });
+  }
+
+  /**
+   * 第一次开总控时把规划和其他 feature 的情况发过去（设计文档 2026-11-01“规划到开工的流程”）。只有新开的总控走到这里：
+   * 恢复的、运行中的总控和修复 session 都不走。投递成功才记 briefSentAt，失败时下一个新总控重发。不等投递，出错只记日志，session 已经开了。
+   */
+  private async sendBrief(feature: Feature, termId: string): Promise<void> {
+    const { id, brief, epicId } = feature;
+    if (!this.d.submit || !brief?.trim() || feature.briefSentAt !== null || epicId === null || this.briefsSending.has(id)) return;
+    this.briefsSending.add(id);
+    try {
+      const epic = this.d.epics?.get(epicId);
+      if (!epic || epic.archivedAt !== null) return;
+      const others = this.epicFeatureRows(epic.id).filter((r) => r.id !== id);
+      const res = await this.d.submit(termId, epicBriefMessage({ feature: feature.name, epic: epic.name, brief, others }, currentLang()));
+      if (res === "sent") this.d.features?.setBriefSentAt(id, this.d.now());
+      else this.d.log?.(`brief of feature ${id} not delivered (${res})`);
+    } catch (e) {
+      this.d.log?.(`brief of feature ${id} failed`, e);
+    } finally {
+      this.briefsSending.delete(id);
+    }
   }
 
   /**

@@ -177,9 +177,10 @@ export function registerIpc(d: IpcDeps): void {
     d.featureService.removeRepo(repoIdArg(featureRepoId));
     d.notify();
   });
-  handle(IPC.featuresArchive, (raw: unknown) => {
+  handle(IPC.featuresArchive, async (raw: unknown) => {
     const id = featureIdArg(raw);
-    d.featureService.archive(id, { terminalsOpen: d.sessionService.hasFeatureTerminal(id) });
+    // epic 下的 feature 要先生成汇总，最多等两分钟。
+    await d.featureService.archive(id, { terminalsOpen: () => d.sessionService.hasFeatureTerminal(id) });
     d.onFeatureArchived?.(id);
     d.notify();
   });

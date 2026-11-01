@@ -757,6 +757,8 @@ async function bootstrap(): Promise<void> {
     onEpicChanged: (id) => void memory.syncEpic(id),
     onTicketArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
     onRepoAdded: (featureId, repoPath) => epicService.ensureFeatureRepo(featureId, repoPath),
+    refreshBeforeArchive: (ids) => featureRunner.refreshBeforeArchive(ids),
+    log: logger,
   });
   const epicService = new EpicService({ epics, features, featureService, db, now: Date.now, onEpicChanged: (id) => void memory.syncEpic(id) });
   // 防休眠：只在内存里，启动时是关的。状态一变，托盘菜单、提示文字和界面都跟着更新。
@@ -806,6 +808,8 @@ async function bootstrap(): Promise<void> {
     handle: controlHandler({
       tickets, sessions, features, ticketService, sessionService, notify,
       epics, featureService, epicRows: (id) => sessionService.epicFeatureRows(id),
+      syncEpic: (id) => void memory.syncEpic(id),
+      refreshEpic: (id, except) => featureRunner.refreshEpic(id, except),
       activity: (id) => activityMonitor.get(id),
       activityOutput: (id) => activityMonitor.output(id),
       submit: submitTask,
