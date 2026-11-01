@@ -9,7 +9,7 @@ import { foregroundOutputFile, readOutputTail, tasksDirFor, TranscriptTail } fro
 import { childCpuMs } from "./proc-tree";
 import { permissionPromptShowing, stripAnsi, type PtySnapshot } from "./pty-manager";
 import type { StuckInput } from "./stuck-judge";
-import { STUCK_CHECK_MS, StuckTracker, type StuckVerdict } from "./stuck-tracker";
+import { cpuQuiet, STUCK_CHECK_MS, StuckTracker, type StuckVerdict } from "./stuck-tracker";
 
 /** 活动刷新的间隔。 */
 export const ACTIVITY_TICK_MS = 10_000;
@@ -118,6 +118,8 @@ interface Tracked {
   eligible: boolean;
   lastSampleAt: number;
   childCpuMs: number | null;
+  /** 上一次采样以来子进程几乎没用 CPU；读不到为 null。 */
+  childCpuQuiet: boolean | null;
   /** 第一次读完之前是 null。 */
   activity: SessionActivity | null;
 }
@@ -230,7 +232,7 @@ export class ActivityMonitor {
   private track(id: string, termId: string): Tracked {
     const t: Tracked = {
       id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, outputText: "", lastOutputAt: null,
-      eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, activity: null,
+      eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null,
     };
     this.tracked.set(id, t);
     return t;
@@ -278,10 +280,16 @@ export class ActivityMonitor {
     const moved = this.tracker.state(t.id).stuck && (grew || !t.eligible);
     if (!moved && now - t.lastSampleAt < STUCK_CHECK_MS) return;
     t.lastSampleAt = now;
-    if (t.eligible) t.childCpuMs = await this.childCpu(t.termId);
+    if (t.eligible) {
+      const cpu = await this.childCpu(t.termId);
+      t.childCpuQuiet = cpuQuiet(t.childCpuMs, cpu);
+      t.childCpuMs = cpu;
+    }
     if (this.stopped) return;
     const sample = { transcriptSize: t.transcriptSize, outputSize: t.outputSize, childCpuMs: t.childCpuMs, eligible: t.eligible };
-    if (this.tracker.observe(t.id, sample, now) && !this.judging.has(t.id)) this.wanted.add(t.id);
+    const suspicious = this.tracker.observe(t.id, sample, now);
+    if (suspicious && !this.judging.has(t.id)) this.wanted.add(t.id);
+    if (!suspicious) this.wanted.delete(t.id);
   }
 
   private async childCpu(termId: string): Promise<number | null> {
@@ -339,7 +347,7 @@ export class ActivityMonitor {
       minutes: Math.round((now - (t.lastOutputAt ?? now)) / 60_000),
       lastOutput: t.outputText,
       terminalTail: utf8Tail(stripAnsi(this.d.pty.snapshot(t.termId).data), JUDGE_TERMINAL_BYTES),
-      children: t.childCpuMs === null ? null : t.childCpuMs > 0,
+      childCpuQuiet: t.childCpuQuiet,
     };
   }
 }

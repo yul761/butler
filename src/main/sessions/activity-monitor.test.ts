@@ -100,6 +100,11 @@ function harness() {
       await monitor.tick(clock);
     }
   };
+  /** 电脑睡了一觉：隔这么久才有下一次 tick。 */
+  const sleep = async (ms: number) => {
+    clock += ms;
+    await monitor.tick(clock);
+  };
   /** 再过一个活动刷新周期（不到检查间隔）。 */
   const beat = async () => {
     clock += ACTIVITY_TICK_MS;
@@ -107,7 +112,7 @@ function harness() {
   };
 
   return {
-    dir, deps, monitor, heads, open, screens, tickets, features, judgeCalls, judgeResults, stuckInfos, cpuPids, logs, transcript, openSession, checks, beat,
+    dir, deps, monitor, heads, open, screens, tickets, features, judgeCalls, judgeResults, stuckInfos, cpuPids, logs, transcript, openSession, checks, beat, sleep,
     notifications: () => notifications,
     setCpu: (v: number | null) => (cpu = v),
     /** 一个在跑的前台命令：这一轮没结束，满足检测条件。 */
@@ -517,7 +522,7 @@ describe("ActivityMonitor stuck detection", () => {
     const input = h.judgeCalls[0];
     expect(input.cwd).toBe("/repo/x");
     expect(input.activity).toBe("running tests pnpm test (background)");
-    expect(input.children).toBe(true);
+    expect(input.childCpuQuiet).toBe(true);
     expect(input.minutes).toBe(6);
     expect(Buffer.byteLength(input.lastOutput, "utf8")).toBeLessThanOrEqual(4096);
     expect(input.lastOutput.endsWith("last line")).toBe(true);
@@ -536,20 +541,46 @@ describe("ActivityMonitor stuck detection", () => {
     expect(h.judgeCalls[0].activity).toBe("运行命令 pnpm lint");
   });
 
-  it("tells the judge when child processes are unknown or idle", async () => {
+  it("tells the judge the child CPU was quiet since the last check, whatever the total is", async () => {
+    for (const total of [0, 5_000_000]) {
+      const h = harness();
+      h.openSession("s1");
+      h.busy("s1");
+      h.setCpu(total);
+      await h.checks(3);
+      expect(h.judgeCalls[0].childCpuQuiet).toBe(true);
+    }
+  });
+
+  it("measures the child CPU from the last check, not from the baseline", async () => {
     const h = harness();
     h.openSession("s1");
     h.busy("s1");
-    h.setCpu(null);
-    await h.checks(3);
-    expect(h.judgeCalls[0].children).toBeNull();
+    // 每次都低于 2 秒：累计超过 2 秒也算安静
+    for (const cpu of [1000, 2500, 4000]) {
+      h.setCpu(cpu);
+      await h.checks(1);
+    }
+    expect(h.judgeCalls[0].childCpuQuiet).toBe(true);
+  });
 
-    const quiet = harness();
-    quiet.openSession("s1");
-    quiet.busy("s1");
-    quiet.setCpu(0);
-    await quiet.checks(3);
-    expect(quiet.judgeCalls[0].children).toBe(false);
+  it("tells the judge the child CPU is unknown when ps fails now or failed at the last check", async () => {
+    const now = harness();
+    now.openSession("s1");
+    now.busy("s1");
+    now.setCpu(null);
+    await now.checks(3);
+    expect(now.judgeCalls[0].childCpuQuiet).toBeNull();
+
+    const before = harness();
+    before.openSession("s1");
+    before.busy("s1");
+    await before.checks(1);
+    before.setCpu(null);
+    await before.checks(1);
+    before.setCpu(100);
+    await before.checks(1);
+    expect(before.judgeCalls[0].childCpuQuiet).toBeNull();
   });
 
   it("runs at most 2 judges at once, and the next one when a slot frees", async () => {
@@ -603,6 +634,23 @@ describe("ActivityMonitor stuck detection", () => {
     expect(h.judgeCalls).toHaveLength(2);
   });
 
+  it("drops a queued session when a later check is no longer suspicious", async () => {
+    const h = harness();
+    for (const id of ["a", "b", "c"]) {
+      h.openSession(id);
+      h.busy(id);
+    }
+    await h.checks(3);
+    expect(h.judgeCalls).toHaveLength(2);
+    // 只有 CPU 动了：transcript 和输出都没长，c 还排着队
+    h.setCpu(100_000);
+    await h.checks(1);
+    h.judgeResults[0](null);
+    await flush();
+    await h.beat();
+    expect(h.judgeCalls).toHaveLength(2);
+  });
+
   it("marks a session stuck and fires onStuck once", async () => {
     const h = harness();
     h.openSession("s1");
@@ -633,6 +681,66 @@ describe("ActivityMonitor stuck detection", () => {
     expect(h.judgeCalls).toHaveLength(1);
     await h.checks(1);
     expect(h.judgeCalls).toHaveLength(2);
+  });
+
+  it("keeps the 10 quiet minutes when a permission prompt came and went", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.busy("s1");
+    await h.checks(4);
+    // 判断慢：结论到的时候已经快到下一次检查了，静默期才盖得住之后的三次采样
+    for (let i = 0; i < 17; i++) await h.beat();
+    h.judgeResults[0]({ stuck: false, reason: "", action: "" });
+    await flush();
+    h.screens.set("s1", "Do you want to proceed?");
+    await h.beat();
+    h.screens.set("s1", "running");
+    await h.checks(3);
+    expect(h.judgeCalls).toHaveLength(1);
+    await h.checks(1);
+    expect(h.judgeCalls).toHaveLength(2);
+  });
+
+  it("does not notify twice for a stuck session that survives sleep", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.busy("s1");
+    await h.checks(3);
+    h.judgeResults[0]({ stuck: true, reason: "the hook hangs", action: "kill it" });
+    await flush();
+
+    await h.sleep(STUCK_CHECK_MS * 4);
+    expect(h.monitor.get("s1")).toMatchObject({ stuck: true, reason: "the hook hangs", action: "kill it" });
+    await h.checks(4);
+    expect(h.judgeCalls).toHaveLength(1);
+    expect(h.stuckInfos).toHaveLength(1);
+  });
+
+  it("stays dismissed across sleep", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.busy("s1");
+    await h.checks(3);
+    h.judgeResults[0]({ stuck: true, reason: "r", action: "a" });
+    await flush();
+    h.monitor.dismiss("s1");
+
+    await h.sleep(STUCK_CHECK_MS * 4);
+    await h.checks(4);
+    expect(h.judgeCalls).toHaveLength(1);
+    expect(h.monitor.get("s1")?.stuck).toBe(false);
+  });
+
+  it("clears the mark when the session moved during sleep", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.busy("s1");
+    await h.checks(3);
+    h.judgeResults[0]({ stuck: true, reason: "r", action: "a" });
+    await flush();
+    h.transcript("s1", toolResult("s1-t"));
+    await h.sleep(STUCK_CHECK_MS * 4);
+    expect(h.monitor.get("s1")).toMatchObject({ stuck: false, reason: null, action: null });
   });
 
   it("retries at the next check when the judge fails or throws", async () => {
@@ -805,7 +913,7 @@ describe("ActivityMonitor stuck detection", () => {
     h.busy("s1");
     await h.checks(3);
     expect(h.cpuPids).toEqual([]);
-    expect(h.judgeCalls[0].children).toBeNull();
+    expect(h.judgeCalls[0].childCpuQuiet).toBeNull();
   });
 });
 

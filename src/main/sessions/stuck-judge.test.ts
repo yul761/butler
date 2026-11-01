@@ -4,7 +4,7 @@ import type { HeadlessExecDeps } from "../handoff/headless-exec";
 import { setLang } from "../i18n";
 import { judgeStuck } from "./stuck-judge";
 
-const input = { cwd: "/repo", activity: "运行 pnpm test", minutes: 7, lastOutput: "Waiting for lock", terminalTail: "$ pnpm test", children: true };
+const input = { cwd: "/repo", activity: "运行 pnpm test", minutes: 7, lastOutput: "Waiting for lock", terminalTail: "$ pnpm test", childCpuQuiet: true };
 
 function deps(out: HeadlessOutcome, seen: HeadlessRequest[] = []): HeadlessExecDeps {
   return {
@@ -35,6 +35,33 @@ describe("judgeStuck", () => {
     expect(seen[0].cwd).toBe("/repo");
     expect(seen[0].args).not.toContain("--allowedTools");
     expect(seen[0].args).toContain("--json-schema");
+  });
+
+  const promptFor = async (childCpuQuiet: boolean | null) => {
+    const seen: HeadlessRequest[] = [];
+    await judgeStuck(deps(ok({ stuck: false, reason: "", action: "" }), seen), { ...input, childCpuQuiet });
+    return seen[0].prompt;
+  };
+
+  it("只说子进程最近几分钟的 CPU，不说有没有子进程", async () => {
+    expect(await promptFor(true)).toContain("子进程最近几分钟几乎没有用 CPU");
+    expect(await promptFor(null)).toContain("子进程的 CPU 使用情况未知");
+    expect(await promptFor(false)).toContain("子进程最近几分钟用过 CPU");
+    for (const v of [true, false, null]) expect(await promptFor(v)).not.toContain("子进程在跑");
+  });
+
+  it("says the same in English", async () => {
+    setLang("en");
+    expect(await promptFor(true)).toContain("Child processes barely used CPU in the last few minutes");
+    expect(await promptFor(null)).toContain("Child process CPU usage is unknown");
+    expect(await promptFor(false)).toContain("Child processes used CPU in the last few minutes");
+    for (const v of [true, false, null]) expect(await promptFor(v)).not.toContain("Child processes running");
+  });
+
+  it("读不到 CPU 时开头也不声称子进程没动静", async () => {
+    expect(await promptFor(null)).not.toContain("子进程 CPU 活动");
+    setLang("en");
+    expect(await promptFor(null)).not.toContain("child-process CPU activity");
   });
 
   it("headless 失败或输出不合规时返回 null", async () => {

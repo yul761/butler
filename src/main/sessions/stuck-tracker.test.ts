@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CPU_CHANGE_MS, STUCK_CHECK_MS, STUCK_REJUDGE_MS, StuckTracker, type StuckSample } from "./stuck-tracker";
+import { cpuQuiet, CPU_CHANGE_MS, STUCK_CHECK_MS, STUCK_REJUDGE_MS, StuckTracker, type StuckSample } from "./stuck-tracker";
 
 const C = STUCK_CHECK_MS;
 const S = (o: Partial<StuckSample> = {}): StuckSample => ({ transcriptSize: 100, outputSize: 50, childCpuMs: 1000, eligible: true, ...o });
@@ -11,6 +11,21 @@ function primed(sample = S()): StuckTracker {
   expect(t.observe("a", sample, C)).toBe(false);
   return t;
 }
+
+describe("cpuQuiet", () => {
+  it("两次读数相差不到 CPU_CHANGE_MS 算安静，两个方向都一样", () => {
+    expect(cpuQuiet(1000, 1000 + CPU_CHANGE_MS - 1)).toBe(true);
+    expect(cpuQuiet(1000, 1000 + CPU_CHANGE_MS)).toBe(false);
+    // 用过 CPU 的子进程退出时，累计值会变小
+    expect(cpuQuiet(1000 + CPU_CHANGE_MS, 1000)).toBe(false);
+  });
+
+  it("任何一次读不到都返回 null", () => {
+    expect(cpuQuiet(null, 1000)).toBeNull();
+    expect(cpuQuiet(1000, null)).toBeNull();
+    expect(cpuQuiet(null, null)).toBeNull();
+  });
+});
 
 describe("StuckTracker", () => {
   it("基线之后连续两次没变化，第二次返回 true", () => {
@@ -54,6 +69,99 @@ describe("StuckTracker", () => {
     expect(t.observe("a", S(), late)).toBe(false); // 重新建立基线
     expect(t.observe("a", S(), late + C)).toBe(false);
     expect(t.observe("a", S(), late + C * 2)).toBe(true);
+  });
+
+  it("eligible 为 false 不影响 judged(stuck:false) 的静默期", () => {
+    const t = primed();
+    t.observe("a", S(), C * 2);
+    t.judged("a", verdict(false), C * 2);
+    t.observe("a", S({ eligible: false }), C * 2 + 1);
+    expect(t.observe("a", S(), C * 2 + 2)).toBe(false); // 基线
+    expect(t.observe("a", S(), C * 3)).toBe(false);
+    // 够可疑了，但还在静默期里
+    expect(t.observe("a", S(), C * 4)).toBe(false);
+    expect(C * 4).toBeLessThan(C * 2 + STUCK_REJUDGE_MS);
+    expect(t.observe("a", S(), C * 2 + STUCK_REJUDGE_MS)).toBe(true);
+  });
+
+  it("间隔太久不影响 judged(stuck:false) 的静默期", () => {
+    const t = primed();
+    t.observe("a", S(), C * 2);
+    t.judged("a", verdict(false), C * 2);
+    const late = C * 4 + 1;
+    expect(t.observe("a", S(), late)).toBe(false);
+    expect(t.observe("a", S(), late + 1)).toBe(false);
+    expect(t.observe("a", S(), late + 2)).toBe(false);
+    expect(t.observe("a", S(), C * 2 + STUCK_REJUDGE_MS)).toBe(true);
+  });
+
+  it("只有 forget 清掉静默期", () => {
+    const t = primed();
+    t.observe("a", S(), C * 2);
+    t.judged("a", verdict(false), C * 2);
+    t.forget("a");
+    t.observe("a", S(), C * 2 + 1);
+    t.observe("a", S(), C * 2 + 2);
+    expect(t.observe("a", S(), C * 2 + 3)).toBe(true);
+  });
+
+  it("eligible 为 false 时清掉卡住和忽略的标记，也不留下可以被标记的记录", () => {
+    const t = primed();
+    t.observe("a", S(), C * 2);
+    t.judged("a", verdict(true), C * 2);
+    t.observe("a", S({ eligible: false }), C * 3);
+    expect(t.state("a")).toEqual({ stuck: false, reason: null, action: null });
+    // 判断结果迟到：还没有新的基线，不算数
+    expect(t.judged("a", verdict(true), C * 3)).toBe("none");
+    expect(t.state("a").stuck).toBe(false);
+  });
+
+  it("没有记录时 eligible 为 false 什么都不做", () => {
+    const t = new StuckTracker();
+    expect(t.observe("a", S({ eligible: false }), 0)).toBe(false);
+    expect(t.state("a")).toEqual({ stuck: false, reason: null, action: null });
+  });
+
+  it("间隔太久只重新计数：卡住的标记留着，不会再通知一次", () => {
+    const t = primed();
+    t.observe("a", S(), C * 2);
+    t.judged("a", { stuck: true, reason: "等输入", action: "回车" }, C * 2);
+    const late = C * 4 + 1;
+    expect(t.observe("a", S(), late)).toBe(false);
+    expect(t.state("a")).toEqual({ stuck: true, reason: "等输入", action: "回车" });
+    expect(t.observe("a", S(), late + C)).toBe(false);
+    expect(t.observe("a", S(), late + C * 2)).toBe(false);
+    expect(t.judged("a", verdict(true), late + C * 2)).toBe("none");
+  });
+
+  it("间隔太久时忽略的标记也留着", () => {
+    const t = primed();
+    t.observe("a", S(), C * 2);
+    t.judged("a", verdict(true), C * 2);
+    t.dismiss("a");
+    const late = C * 4 + 1;
+    expect(t.observe("a", S(), late)).toBe(false);
+    expect(t.observe("a", S(), late + C)).toBe(false);
+    expect(t.observe("a", S(), late + C * 2)).toBe(false);
+    expect(t.state("a").stuck).toBe(false);
+  });
+
+  it("间隔太久之后真的有变化，照样清掉卡住和忽略的标记", () => {
+    const stuck = primed();
+    stuck.observe("a", S(), C * 2);
+    stuck.judged("a", verdict(true), C * 2);
+    stuck.observe("a", S({ outputSize: 99 }), C * 4 + 1);
+    expect(stuck.state("a").stuck).toBe(false);
+
+    const dismissed = primed();
+    dismissed.observe("a", S(), C * 2);
+    dismissed.judged("a", verdict(true), C * 2);
+    dismissed.dismiss("a");
+    const late = C * 4 + 1;
+    dismissed.observe("a", S({ outputSize: 99 }), late);
+    expect(dismissed.observe("a", S({ outputSize: 99 }), late + C)).toBe(false);
+    expect(dismissed.observe("a", S({ outputSize: 99 }), late + C * 2)).toBe(true);
+    expect(dismissed.judged("a", verdict(true), late + C * 2)).toBe("newly_stuck");
   });
 
   it("不同 id 互不影响，forget 后重新开始", () => {
