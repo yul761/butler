@@ -12,7 +12,9 @@ import type * as Git from "../tickets/git";
 export const HOLD_MAX_MS = 2 * 60 * 60 * 1000;
 /** HoldWatcher 多久查一轮占位中的 PR。 */
 export const HOLD_CHECK_MS = 30_000;
-/** hook 最多等 5 秒；fetch 和 gh 各给 2 秒，留出 merge-tree 的时间。 */
+/** hook 最多等 5 秒（GATE_WAIT_MS）：4 秒还没判完就放行，并且什么都不记（hook 那边可能已经放行，命令已经在跑）。 */
+export const GATE_DEADLINE_MS = 4000;
+/** fetch 和 gh 各给 2 秒。 */
 const FETCH_TIMEOUT_MS = 2000;
 const PR_TIMEOUT_MS = 2000;
 
@@ -36,6 +38,14 @@ export interface MergeGateDeps {
   whoOf(ticketKey: string | null, branch: string): string;
   /** post 阶段之后让 HoldWatcher（Task 7）尽快检查一轮。 */
   checkSoon(): void;
+  /** 一次裁决最多用多久，默认 GATE_DEADLINE_MS（测试用）。 */
+  deadlineMs?: number;
+}
+
+/** 一次请求的计时：超过期限后不再写占位、等待者和事件。 */
+interface Clock {
+  start: number;
+  timedOut: boolean;
 }
 
 /** 一次要审核的合并：把 branch 合进 target。 */
@@ -57,8 +67,37 @@ export class MergeGate {
   constructor(private readonly d: MergeGateDeps) {}
 
   async handle(req: GateRequest): Promise<GateResult> {
+    const clock: Clock = { start: this.d.now(), timedOut: false };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<GateResult>((done) => {
+      timer = setTimeout(() => {
+        clock.timedOut = true;
+        this.d.log(`merge gate: checking ${req.action.kind} took too long, allowing it`);
+        done(ALLOW);
+      }, this.deadlineMs);
+      timer.unref?.();
+    });
     try {
-      return req.phase === "post" ? await this.after(req) : await this.before(req);
+      return await Promise.race([this.decide(req, clock), deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private get deadlineMs(): number {
+    return this.d.deadlineMs ?? GATE_DEADLINE_MS;
+  }
+
+  /** 已经超过期限：hook 可能早就放行了，这时再记“等待”就是假的。 */
+  private late(clock: Clock): boolean {
+    if (!clock.timedOut && this.d.now() - clock.start <= this.deadlineMs) return false;
+    this.d.log("merge gate: decided after the deadline, allowing without recording anything");
+    return true;
+  }
+
+  private async decide(req: GateRequest, clock: Clock): Promise<GateResult> {
+    try {
+      return req.phase === "post" ? await this.after(req) : await this.before(req, clock);
     } catch (e) {
       this.d.log(`merge gate: checking ${req.action.kind} failed, allowing it`, e);
       return ALLOW;
@@ -83,14 +122,14 @@ export class MergeGate {
     return others.find((o) => o.branch === cur) ?? null;
   }
 
-  private async before(req: GateRequest): Promise<GateResult> {
+  private async before(req: GateRequest, clock: Clock): Promise<GateResult> {
     const a = req.action;
     const dir = resolve(req.cwd, a.dir ?? ".");
     const repo = await this.d.git.mainRepoRoot(dir);
-    if (a.kind === "switch") return this.checkSwitch(req, a, repo);
+    if (a.kind === "switch") return this.checkSwitch(req, a, repo, clock);
     const m = await this.mergeOf(a, dir, repo);
     if (!m || !(await this.mergeTreeOk(repo))) return ALLOW;
-    return this.checkMerge(req, m);
+    return this.checkMerge(req, m, clock);
   }
 
   /** 命令执行完：本地合并、直接 push 的占位立刻定下来；PR 的占位交给 HoldWatcher。 */
@@ -122,6 +161,8 @@ export class MergeGate {
     const cur = await this.d.git.currentBranch(dir);
     const target = a.kind === "local_merge" ? cur : a.target === "HEAD" ? cur : a.target;
     const branch = a.kind === "local_merge" ? a.source : cur;
+    // 推目标分支自己（在 main 上 git push origin main）：合进它的那些合并已经审核过了，再审只会重复记录、把冲突算到 main 头上。
+    if (branch === target) return null;
     if (!(await this.isMergeTarget(repo, target))) return null;
     return { repo, branch, target, kind: "local", prUrl: null };
   }
@@ -135,7 +176,7 @@ export class MergeGate {
     return prs.some((p) => p !== null && p.state === "OPEN" && p.base === target);
   }
 
-  private async checkMerge(req: GateRequest, m: Merge): Promise<GateResult> {
+  private async checkMerge(req: GateRequest, m: Merge, clock: Clock): Promise<GateResult> {
     const { repo, branch, target } = m;
     const g = this.d.git;
     const own = this.ticketOf(repo, branch);
@@ -148,6 +189,7 @@ export class MergeGate {
     // 先看和最新的目标分支本身合不合得进去：合不进去通常是另一边已经先合了。
     const behind = await g.mergeConflicts(repo, upstream, branch);
     if (behind.length > 0) {
+      if (this.late(clock)) return ALLOW;
       const prev = this.d.repo.lastProceedAgainst(repo, branch);
       this.record({ repoPath: repo, kind: "rebase", ticketKey: own, branch, otherTicket: prev?.ticketKey ?? null, otherBranch: prev?.branch ?? null, files: behind });
       return deny(M().gateRebase(prev ? this.d.whoOf(prev.ticketKey, prev.branch) : null, behind));
@@ -159,12 +201,16 @@ export class MergeGate {
     for (const h of this.d.repo.activeHolds()) {
       if (h.repoPath === repo && h.target === target && h.branch !== branch && !others.has(h.branch)) others.set(h.branch, h.ticketKey);
     }
-    const conflicts: { branch: string; ticket: string | null; files: string[] }[] = [];
-    for (const [other, ticket] of others) {
-      if (await g.isAncestor(repo, other, upstream)) continue; // 已经合进去了
-      const files = await g.mergeConflicts(repo, branch, other);
-      if (files.length > 0) conflicts.push({ branch: other, ticket, files });
-    }
+    // 并行：ticket 多时逐个跑会超过 hook 的等待时间。
+    const checked = await Promise.all(
+      [...others].map(async ([other, ticket]) => {
+        if (await g.isAncestor(repo, other, upstream)) return null; // 已经合进去了
+        const files = await g.mergeConflicts(repo, branch, other);
+        return files.length > 0 ? { branch: other, ticket, files } : null;
+      }),
+    );
+    const conflicts = checked.filter((c) => c !== null);
+    if (this.late(clock)) return ALLOW;
 
     // 冲突的那一边已经拿到合并许可、还没合完：这次不放行，等它合完。
     for (const c of conflicts) {
@@ -187,14 +233,14 @@ export class MergeGate {
   }
 
   /** 只在本 session 的 ticket 在这个仓库用 branch 方式（共用目录）时审核。 */
-  private async checkSwitch(req: GateRequest, a: Extract<GateAction, { kind: "switch" }>, repo: string): Promise<GateResult> {
+  private async checkSwitch(req: GateRequest, a: Extract<GateAction, { kind: "switch" }>, repo: string, clock: Clock): Promise<GateResult> {
     if (!req.ticket) return ALLOW;
     const mine = this.d.tickets.listRepos(req.ticket).find((r) => samePath(r.repoPath, repo));
     if (!mine || mine.workMode !== "branch") return ALLOW;
     // `git checkout <文件>` 也会被认成切换：不新建、又没有这个 branch 的，当作不是切换。
     if (!a.create && !(await this.d.git.branchExists(repo, a.branch))) return ALLOW;
     const busy = await this.dirBusy(mine);
-    if (!busy) return ALLOW;
+    if (!busy || this.late(clock)) return ALLOW;
     this.record({ repoPath: repo, kind: "dir_busy", ticketKey: req.ticket, branch: mine.branch, otherTicket: busy.ticket, otherBranch: busy.branch, files: [] });
     return deny(M().gateDirBusy(this.d.whoOf(busy.ticket, busy.branch), busy.branch));
   }

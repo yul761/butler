@@ -36,7 +36,7 @@ function ticket(key: string, repoPath: string, branch: string, workMode: WorkMod
   return { key, title: null, repos: [r], status: "active", statusManual: null, createdAt: 0, archivedAt: null, featureId: null };
 }
 
-function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (pr: string | null) => PrInfo | null; terminals?: Record<string, number>; git?: Partial<MergeGateDeps["git"]> } = {}) {
+function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (pr: string | null) => PrInfo | null; terminals?: Record<string, number>; git?: Partial<MergeGateDeps["git"]>; now?: () => number; deadlineMs?: number } = {}) {
   const repoPath = o.repo ?? makeScenarioRepo();
   const tickets = o.tickets ? o.tickets(repoPath) : ["DMS-1", "DMS-2", "DMS-3"].map((k) => ticket(k, repoPath, k.toLowerCase()));
   const db = memDb();
@@ -52,7 +52,7 @@ function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (p
   };
   const gate = new MergeGate({
     tickets: { list: () => tickets, listRepos: (key: string) => tickets.find((t) => t.key === key)?.repos ?? [] },
-    repo, openTerminals, git: gitDeps, prInfo, notify: (e) => events.push(e), now: () => 1000, log: (m) => logs.push(m),
+    repo, openTerminals, git: gitDeps, prInfo, notify: (e) => events.push(e), now: o.now ?? (() => 1000), log: (m) => logs.push(m), deadlineMs: o.deadlineMs,
     whoOf: (t, b) => (t ? `${t}（支付）` : b), checkSoon,
   });
   const ask = (action: GateAction, extra: Partial<Pick<GateRequest, "session" | "ticket" | "cwd" | "phase">> = {}) =>
@@ -209,6 +209,21 @@ describe("MergeGate: pushes", () => {
     expect(t.events.at(-1)).toMatchObject({ kind: "wait", ticketKey: "DMS-2", branch: "dms-2" });
   });
 
+  it("leaves alone a push of the target branch itself (its merges were already checked), and the later rebase still names the first ticket", async () => {
+    const t = setup();
+    run(t.repoPath, "update-ref", "refs/remotes/origin/main", "main");
+    await t.merge("dms-1");
+    run(t.repoPath, "merge", "-q", "dms-1");
+    await t.merge("dms-1", { phase: "post" });
+    // 本地 main 已经含 dms-1，origin/main 还没有：这次 push 才把它推上去。
+    expect(await t.ask({ kind: "push", dir: null, target: "main" })).toEqual({ v: 1, decision: "allow" });
+    expect(await t.ask({ kind: "push", dir: null, target: "HEAD" })).toEqual({ v: 1, decision: "allow" });
+    run(t.repoPath, "update-ref", "refs/remotes/origin/main", "main");
+    expect(t.events.map((e) => e.kind)).toEqual(["proceed_conflict"]);
+    expect(t.repo.activeHold(t.repoPath, "main")).toBeNull();
+    expect(await t.merge("dms-2")).toEqual({ v: 1, decision: "deny", reason: M().gateRebase("DMS-1（支付）", ["app.txt"]) });
+  });
+
   it("checks a push to a branch that a ticket's PR targets", async () => {
     const t = setup({ pr: (pr) => (pr === "dms-1" ? { number: 1, url: "https://x/pull/1", head: "dms-1", base: "develop", state: "OPEN", autoMerge: false } : null) });
     run(t.repoPath, "branch", "develop", "main");
@@ -295,5 +310,46 @@ describe("MergeGate: switching branches in a shared directory", () => {
     expect(await t.gate.dirBusy(mine)).toEqual({ ticket: "DMS-4", branch: "dms-4" });
     run(t.repoPath, "checkout", "-q", "main");
     expect(await t.gate.dirBusy(mine)).toBeNull();
+  });
+});
+
+describe("MergeGate: deadline", () => {
+  const rows = (t: ReturnType<typeof setup>) => ({
+    holds: t.db.prepare(`SELECT COUNT(*) AS n FROM merge_holds`).get() as { n: number },
+    waiters: t.db.prepare(`SELECT COUNT(*) AS n FROM merge_waiters`).get() as { n: number },
+    events: t.db.prepare(`SELECT COUNT(*) AS n FROM merge_events`).get() as { n: number },
+  });
+  const none = { holds: { n: 0 }, waiters: { n: 0 }, events: { n: 0 } };
+
+  it("allows and writes nothing once the checks ran past the deadline", async () => {
+    let clock = 1000;
+    const t = setup({ now: () => clock, git: { mergeConflicts: async (r, a, b) => { clock += 5000; return git.mergeConflicts(r, a, b); } } });
+    expect(await t.merge("dms-1")).toEqual({ v: 1, decision: "allow" });
+    expect(rows(t)).toEqual(none);
+    expect(t.events).toEqual([]);
+  });
+
+  it("does not record a wait the hook stopped waiting for", async () => {
+    let clock = 1000;
+    let slow = false;
+    const t = setup({ now: () => clock, git: { mergeConflicts: async (r, a, b) => { if (slow) clock += 5000; return git.mergeConflicts(r, a, b); } } });
+    await t.merge("dms-2");
+    const before = rows(t);
+    slow = true;
+    expect(await t.merge("dms-1")).toEqual({ v: 1, decision: "allow" });
+    expect(rows(t)).toEqual(before);
+  });
+
+  it("answers allow when a step hangs, and writes nothing when it finishes later", async () => {
+    let release!: () => void;
+    const gateOpen = new Promise<void>((r) => (release = r));
+    const t = setup({ deadlineMs: 50, git: { mergeConflicts: async (r, a, b) => { await gateOpen; return git.mergeConflicts(r, a, b); } } });
+    const started = Date.now();
+    expect(await t.merge("dms-1")).toEqual({ v: 1, decision: "allow" });
+    expect(Date.now() - started).toBeLessThan(2000);
+    release();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(rows(t)).toEqual(none);
+    expect(t.events).toEqual([]);
   });
 });
