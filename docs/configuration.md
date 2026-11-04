@@ -163,24 +163,26 @@ When several tickets change the same repo, the merge coordinator keeps their mer
 
 **What it reviews.** Only two kinds of command, run by a session that Butler opened (an epic, a feature coordinator or any ticket session, whichever epic or feature it belongs to):
 
-- A merge into a target branch: `gh pr merge` (including `--auto`; the target is the PR's base branch), `git merge` on the target branch, and `git push` to the target branch. Pushing your own branch is not reviewed.
+- A merge into a target branch: `gh pr merge` (including `--auto`; the target is the PR's base branch), `git merge` on the target branch, and `git push` to the target branch. For a push with an explicit `src:dst` refspec, the branch checked is `src`; otherwise it is the current branch. Pushing your own branch is not reviewed.
 - A branch switch (`git checkout`, `git switch`) in a shared folder, that is, a repo folder in "branch" work mode that another ticket with an open session is using. Switching inside your own worktree is not reviewed.
 
 Writing code, committing, testing and pushing your own branch never reach the coordinator. A command it can't recognize is let through.
 
-**Only in sessions Butler opens.** The review is a `PreToolUse` hook for the Bash tool in the `--settings` file Butler writes for each session. Your global `settings.json` is not changed, so a `claude` you start yourself is not affected.
+**Only in sessions Butler opens.** The review is a `PreToolUse` hook for the Bash tool in the `--settings` file Butler writes for each session, with `PostToolUse` and `PostToolUseFailure` hooks that tell Butler when the command has ended. Your global `settings.json` is not changed, so a `claude` you start yourself is not affected. The hooks run the `butler-hook` program that **安装 / 修复 (Install / repair)** copies to `~/.butler/bin`. When that copy differs from the one in the app (after an upgrade), Butler replaces it at startup; if it can't, merges are not checked and the log says why.
 
 **How it decides.**
 
 - First come, first served. A merge that conflicts with another ticket's branch that is still being written is allowed, and Butler remembers that the other ticket will have to rebase.
 - If the branch no longer merges into the latest target branch, the session is told to rebase first, with which ticket's changes it conflicts with and in which files. It is reminded to keep both sides' intent.
-- If it conflicts with a branch whose merge was already allowed and has not finished, it is told to wait. The merge hold follows the real merge: a local `git merge` or push holds until the command ends, and `gh pr merge` holds until Butler sees the PR merged (checked with `gh pr view`, only for held PRs) or closed. If `gh` can't check, the hold expires after 2 hours.
-- When the merge ends, the waiting session gets the message that it **can merge now** (after rebasing), once it is waiting for input.
+- If it conflicts with a branch whose merge was already allowed and has not finished, it is told to wait. A session whose own merge was already allowed can try again without waiting. The merge hold follows the real merge:
+  - A local `git merge` or push holds until the command ends, whether it succeeds or fails. If Butler never hears that it ended, for example because you rejected the permission prompt, the hold expires after 10 minutes.
+  - `gh pr merge` holds until Butler sees the PR merged (checked with `gh pr view`, only for held PRs) or closed. If the PR is still open 30 seconds after the merge was allowed and auto-merge is off, Butler takes it that the merge failed or `--auto` was cancelled, and releases the hold. If `gh` can't check, the hold expires after 2 hours. A `gh pr merge` of a branch that still holds a local merge (say, after a rejected push) turns that hold into a PR hold.
+- When the held merge lands, the waiting session gets the message that it **can merge now** (after rebasing). If it doesn't land (the merge failed, the PR was closed or the hold expired), the session is told it can try the merge again. The message is typed into the session once it is waiting for input and you haven't typed in its terminal for 30 seconds. If the session's terminal is closed, the message is kept for up to 24 hours and delivered when you open the session again.
 - A branch switch in a shared folder is refused while the folder is in use, naming the ticket and branch. When you click to switch a branch yourself, Butler only warns you; you can still confirm.
 
 **Fail-open.** If Butler isn't running, doesn't answer within 5 seconds, or the hook itself fails, the command goes ahead. The coordinator is a safety net and is never a reason a session can't merge.
 
-**What you see.** Each conflict it finds (a refusal, or an allowance with a later rebase) sends a system notification and adds an entry to the **home page** (the repo, which tickets, the order it chose). Clicking the notification opens the ticket. Merges with no conflict are only logged. The entries, holds and pending rebases survive a restart.
+**What you see.** Each conflict it finds (a refusal, or an allowance with a later rebase) sends a system notification and adds an entry to the **home page** (the repo, which tickets, the order it chose). Clicking the notification opens the ticket. A merge with no conflict sends no notification and adds no entry; Butler only holds it until it lands. The entries, holds and pending rebases survive a restart.
 
 **Requirements.** git 2.38 or newer (for `git merge-tree --write-tree`). `gh` is optional and used only for PR merges.
 
