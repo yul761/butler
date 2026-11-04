@@ -35,19 +35,23 @@ async function setup() {
   let notified = 0;
   const activities = new Map<string, SessionActivity>();
   const outputs = new Map<string, string>();
+  const killed: string[] = [];
   const handle = controlHandler({
     tickets, sessions, ticketService, sessionService,
     activity: (id) => activities.get(id) ?? null,
     activityOutput: async (id) => outputs.get(id) ?? "",
     submit: async (termId, task) => (submitted.push([termId, task]), "sent" as const),
     notify: () => notified++,
+    kill: (termId) => void killed.push(termId),
+    screenNeedsUser: () => false,
+    lastReply: () => null,
   });
   const web = makeRepo();
   const api = makeRepo();
   await ticketService.create({ key: "FULL-1" });
   await ticketService.addRepo({ ticketKey: "FULL-1", repoPath: web, workMode: "worktree" });
   await ticketService.addRepo({ ticketKey: "FULL-1", repoPath: api, workMode: "worktree" });
-  return { handle, sessionService, sessions, tickets, spawned, submitted, notified: () => notified, web, api, activities, outputs, ticketService };
+  return { handle, sessionService, sessions, tickets, spawned, submitted, notified: () => notified, web, api, activities, outputs, ticketService, killed };
 }
 
 const base = { v: 1 as const, ticketKey: "FULL-1", from: null };
@@ -135,7 +139,7 @@ describe("controlHandler", () => {
       outputs.set("s-1", "tail");
       const shown: Partial<SessionActivity> = activity("s-1");
       delete shown.lastOutput;
-      expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toEqual({ v: 1, ok: true, value: { ...shown, output: "tail" } });
+      expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toEqual({ v: 1, ok: true, value: { ...shown, output: "tail", last_reply: null } });
       // /clear：旧 id 指向新 id
       await sessionService.open({ ticketKey: "FULL-1", repoId: 1 });
       sessions.setReplacedBy("s-1", "s-2");
@@ -148,7 +152,7 @@ describe("controlHandler", () => {
       await sessionService.open({ ticketKey: "FULL-1", repoId: 1 });
       expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toEqual({
         v: 1, ok: true,
-        value: { sessionId: "s-1", kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, output: "" },
+        value: { sessionId: "s-1", kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, output: "", last_reply: null },
       });
     });
 
@@ -161,6 +165,32 @@ describe("controlHandler", () => {
       const refused = await handle({ ...base, op: "session_activity", session: r.termId });
       expect(refused).toEqual({ v: 1, ok: false, error: expect.stringContaining(r.termId) });
       expect(await handle({ ...base, op: "session_activity", session: "nope" })).toMatchObject({ ok: false });
+    });
+  });
+
+  describe("end_session (task 11)", () => {
+    const waiting = (sessionId: string): SessionActivity => ({
+      sessionId, kind: "waiting", detail: null, background: false, startedAt: null, lastOutputAt: 1, stuck: null, reason: null, action: null, lastOutput: [],
+    });
+
+    it("lets the ticket's coordinator end one of its sessions, but not itself or another ticket's", async () => {
+      const { handle, sessionService, sessions, activities, killed, ticketService, web } = await setup();
+      await sessionService.open({ ticketKey: "FULL-1", coordinator: true });
+      await handle({ ...base, from: "s-1", op: "start_session", repo: web, task: "做前端" });
+      await ticketService.create({ key: "OTH-1" });
+      await ticketService.addRepo({ ticketKey: "OTH-1", repoPath: web, workMode: "worktree" });
+      const theirs = await sessionService.open({ ticketKey: "OTH-1" });
+      if (!theirs.ok) throw new Error("did not open");
+      for (const id of ["s-1", "s-2", theirs.termId]) {
+        sessions.setWaiting(id, true, 5);
+        activities.set(id, waiting(id));
+      }
+      const end = (session: string) => handle({ ...base, from: "s-1", op: "end_session", session, reason: "做完了" });
+      expect(await end("s-1")).toMatchObject({ ok: false, error: expect.stringContaining("找不到 session s-1") });
+      expect(await end(theirs.termId)).toMatchObject({ ok: false, error: expect.stringContaining(`找不到 session ${theirs.termId}`) });
+      expect(killed).toEqual([]);
+      expect(await end("s-2")).toEqual({ v: 1, ok: true, value: { ended: true } });
+      expect(killed).toEqual(["s-2"]);
     });
   });
 });

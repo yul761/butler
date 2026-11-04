@@ -627,6 +627,11 @@ export class SessionService {
     return this.openHeads().has(sessionId);
   }
 
+  /** 跑着这个 session（head 的 id）的终端；/clear 之后终端还是启动时的那个 id。没有终端在跑时为 null。 */
+  termIdOf(sessionId: string): string | null {
+    return this.openHeads().get(sessionId) ?? null;
+  }
+
   /** 这个 ticket 正在运行的终端数（总控开子 session 的上限用）。 */
   openTerminalCount(ticketKey: string): number {
     return this.d.pty.openIds().filter((termId) => this.d.sessions.head(termId)?.ticketKey === ticketKey).length;

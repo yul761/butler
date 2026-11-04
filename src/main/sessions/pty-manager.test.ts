@@ -254,6 +254,28 @@ describe("PtyManager.pid", () => {
   });
 });
 
+describe("PtyManager.screenNeedsUser", () => {
+  it("is true while a permission prompt or a startup dialog is on the live screen, false otherwise", () => {
+    const { mgr, spawned } = setup();
+    expect(mgr.screenNeedsUser("t1")).toBe(false);
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("收到：做完了\r\n> ");
+    expect(mgr.screenNeedsUser("t1")).toBe(false);
+    spawned[0].pty.emit("Bash command\r\n\x1b[1mDo you want to proceed?\x1b[0m\r\n ❯ 1. Yes");
+    expect(mgr.screenNeedsUser("t1")).toBe(true);
+    // 回答之后提示被后面的输出推出了屏幕末尾
+    spawned[0].pty.emit(`\x1b[2J${"─".repeat(1200)}\r\n> `);
+    expect(mgr.screenNeedsUser("t1")).toBe(false);
+
+    mgr.open("t2", spec, opts);
+    spawned[1].pty.emit("\x1b[1m Do you trust the files in this folder?\x1b[0m\r\n ❯ 1. Yes, proceed");
+    expect(mgr.screenNeedsUser("t2")).toBe(true);
+    // 退出之后不再看缓冲：终端已经不在了
+    spawned[1].pty.emitExit(0);
+    expect(mgr.screenNeedsUser("t2")).toBe(false);
+  });
+});
+
 describe("trimBuffer", () => {
   it("keeps short buffers and cuts long ones at a line boundary", () => {
     expect(trimBuffer("abc")).toBe("abc");

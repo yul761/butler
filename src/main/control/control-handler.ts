@@ -20,7 +20,7 @@ export interface ControlHandlerDeps {
   tickets: TicketsRepo;
   sessions: SessionsRepo;
   ticketService: Pick<TicketService, "workDir" | "create">;
-  sessionService: Pick<SessionService, "open" | "openTerminalCount" | "isRunning"> & Partial<Pick<SessionService, "featureTerminalCount">>;
+  sessionService: Pick<SessionService, "open" | "openTerminalCount" | "isRunning" | "termIdOf"> & Partial<Pick<SessionService, "featureTerminalCount">>;
   /** feature 总控的请求（设计文档 2026-10-26）；不给就拒绝。 */
   features?: FeaturesRepo;
   /** epic session 的请求（设计文档 2026-11-01）和 feature 总控的 epic_context；不给就拒绝。 */
@@ -36,6 +36,12 @@ export interface ControlHandlerDeps {
   activity?: (sessionId: string) => SessionActivity | null;
   /** session 当前命令输出的末尾（上限 4KB）。 */
   activityOutput?: (sessionId: string) => Promise<string>;
+  /** end_session：关掉终端，和用户在界面上点 × 一样（pty.kill；session 留在列表里，之后能恢复）。 */
+  kill: (termId: string) => void;
+  /** 屏幕上有权限确认或启动对话框（PtyManager.screenNeedsUser）：这时不能结束。 */
+  screenNeedsUser: (termId: string) => boolean;
+  /** session 最后一条 assistant 文字回复的结尾（最多 500 字符）；读不到为 null。 */
+  lastReply?: (sessionId: string) => string | null;
   /** 把任务作为第一条消息交给新 session（等启动对话框过去、输入框就绪、粘贴、回车）。 */
   submit: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout">;
   notify: () => void;
@@ -108,6 +114,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     });
   };
 
+  const lastReply = (id: string) => d.lastReply?.(id) ?? null;
+
   const sessionRow = (t: Ticket | null, s: { id: string; coordinator: boolean; repoId: number | null; firstPrompt: string | null; waitingForInput: boolean; lastActivityAt: number | null; spawnedBy: string | null }) => ({
     id: s.id,
     repo: s.coordinator ? M().ctlCoordinator : t ? repoNameOf(t, s.repoId) : null,
@@ -117,6 +125,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     lastActivityAt: s.lastActivityAt ? new Date(s.lastActivityAt).toISOString() : null,
     startedByCoordinator: s.spawnedBy !== null,
     activity: listedActivity(s.id),
+    last_reply: lastReply(s.id),
   });
 
   /** list_sessions 里的活动：不带 lastOutput（要看输出用 session_activity）；监控还没看到的是 null。 */
@@ -134,14 +143,46 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (!h || !belongs(h)) return fail(M().ctlNoSuchSession(wanted));
     const a = listedActivity(h.id);
     // 监控还没看到：键和有活动时一样，值都是 null
-    if (!a) return ok({ sessionId: h.id, kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, output: "" });
+    if (!a) return ok({ sessionId: h.id, kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, output: "", last_reply: lastReply(h.id) });
     let output = "";
     try {
       output = (await d.activityOutput?.(h.id)) ?? "";
     } catch (e) {
       d.log?.(`control: output of ${h.id} failed`, e);
     }
-    return ok({ ...a, output });
+    return ok({ ...a, output, last_reply: lastReply(h.id) });
+  };
+
+  /**
+   * end_session：总控结束它管的、已经停下来在等输入的 session，和用户点 × 一样只关终端（记录都在，之后能恢复）。
+   * 用户是不是还要回话由总控看 last_reply 判断；这里只拒绝看得准的：终端没开、正在干活、屏幕上有等用户回答的确认。
+   * 不能结束自己（from 是 /clear 之前的 id 也认）。
+   */
+  const endSession = (req: { from: string | null; session: string; reason: string }, belongs: (s: Session) => boolean): ControlResult => {
+    const h = d.sessions.head(req.session);
+    const self = req.from ? (d.sessions.head(req.from)?.id ?? req.from) : null;
+    if (!h || !belongs(h) || h.id === self) return fail(M().ctlNoSuchSession(req.session));
+    const termId = d.sessionService.termIdOf(h.id);
+    if (!termId) return fail(M().ctlSessionNotRunning(h.id));
+    // 监控还没看到（刚开的终端）也当作在忙：看不准就不关。
+    const kind = d.activity?.(h.id)?.kind ?? null;
+    if ((kind !== "idle" && kind !== "waiting") || !h.waitingForInput) return fail(M().ctlSessionBusy(h.id, kind ?? "unknown"));
+    if (d.screenNeedsUser(termId)) return fail(M().ctlSessionNeedsUser(h.id));
+    d.kill(termId);
+    d.log?.(`end_session ${h.id} by ${req.from ?? "?"}: ${req.reason.replace(/\s+/g, " ").trim()}`);
+    return ok({ ended: true });
+  };
+
+  /** list_sessions 的可见行：/clear 之前的旧行和用户隐藏的不列。 */
+  const visible = <T extends { replacedBy: string | null; dismissed: boolean }>(rows: T[]) => rows.filter((s) => !s.replacedBy && !s.dismissed);
+
+  /** 一个 feature 的 session：feature 级的（总控、修复）和它每个 ticket 的。修复 session 的 fixes 沿链走到现在的 id，和列表里的 id 对得上。 */
+  const featureSessionRows = (f: Feature, own: Ticket[]) => {
+    const fixes = (s: Session) => (s.fixesSession ? (d.sessions.head(s.fixesSession)?.id ?? s.fixesSession) : null);
+    return [
+      ...visible(d.sessions.listByFeature(f.id)).map((s) => ({ ...sessionRow(null, s), ticket: null, fixes: fixes(s) })),
+      ...own.flatMap((t) => visible(d.sessions.listByTicket(t.key)).map((s) => ({ ...sessionRow(t, s), ticket: t.key, fixes: null }))),
+    ];
   };
 
   /**
@@ -244,7 +285,15 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (!e || e.archivedAt !== null) return fail(M().ctlEpicGone);
     if (req.op === "list_repos") return ok(e.repos.map((r) => ({ name: name(r), path: r.repoPath })));
     if (req.op === "list_features") return ok((d.epicRows?.(e.id) ?? []).map(rowOut));
-    return createFeature(e, req);
+    if (req.op === "create_feature") return createFeature(e, req);
+    // 下面这些只看未归档的 feature：feature 级的 session（总控、修复）和这些 feature 下 ticket 的 session。
+    const own = (d.features?.listByEpic(e.id) ?? []).map((f) => ({ f, tickets: d.tickets.listByFeature(f.id) }));
+    if (req.op === "list_sessions") return ok(own.flatMap(({ f, tickets }) => featureSessionRows(f, tickets).map((r) => ({ ...r, feature: f.name }))));
+    const featureIds = new Set(own.map(({ f }) => f.id));
+    const keys = new Set(own.flatMap(({ tickets }) => tickets.map((t) => t.key)));
+    const belongs = (s: Session) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId !== null && featureIds.has(s.featureId));
+    if (req.op === "session_activity") return sessionActivity(req.session, belongs);
+    return endSession(req, belongs);
   };
 
   /** feature 总控查同一 epic 下别的 feature：不含自己。 */
@@ -280,14 +329,12 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       return sessionActivity(req.session, (s) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id));
     }
 
-    if (req.op === "list_sessions") {
-      const visible = <T extends { replacedBy: string | null; dismissed: boolean }>(rows: T[]) => rows.filter((s) => !s.replacedBy && !s.dismissed);
-      // 修复 session 在修哪个 session：沿链走到现在的 id，和列表里的 id 对得上。其他行是 null。
-      const fixes = (s: Session) => (s.fixesSession ? (d.sessions.head(s.fixesSession)?.id ?? s.fixesSession) : null);
-      return ok([
-        ...visible(d.sessions.listByFeature(f.id)).map((s) => ({ ...sessionRow(null, s), ticket: null, fixes: fixes(s) })),
-        ...own.flatMap((t) => visible(d.sessions.listByTicket(t.key)).map((s) => ({ ...sessionRow(t, s), ticket: t.key, fixes: null }))),
-      ]);
+    if (req.op === "list_sessions") return ok(featureSessionRows(f, own));
+
+    if (req.op === "end_session") {
+      // ticket 的 session 和这个 feature 的修复 session；feature 的总控不归总控关。
+      const keys = new Set(own.map((t) => t.key));
+      return endSession(req, (s) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id && s.fixesSession !== null));
     }
 
     const t = own.find((x) => x.key === req.ticket.trim().toUpperCase());
@@ -316,11 +363,10 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       return ok(t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), workMode: r.workMode, branch: r.branch })));
     }
 
-    if (req.op === "list_sessions") {
-      return ok(d.sessions.listByTicket(t.key).filter((s) => !s.replacedBy && !s.dismissed).map((s) => sessionRow(t, s)));
-    }
+    if (req.op === "list_sessions") return ok(visible(d.sessions.listByTicket(t.key)).map((s) => sessionRow(t, s)));
 
     if (req.op === "session_activity") return sessionActivity(req.session, (s) => s.ticketKey === t.key);
+    if (req.op === "end_session") return endSession(req, (s) => s.ticketKey === t.key);
 
     const repo = findRepo(t, req.repo);
     if (typeof repo === "string") return fail(repo);

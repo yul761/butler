@@ -441,7 +441,7 @@ async function bootstrap(): Promise<void> {
     if (Object.keys(servers).length === 0) return null;
     return writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers });
   };
-  /** epic session：epic 记忆、全局记忆和 epic 模式的 butler-sessions（list_features、list_repos、create_feature）。 */
+  /** epic session：epic 记忆、全局记忆和 epic 模式的 butler-sessions（list_features、list_repos、create_feature，以及各 feature 的 session）。 */
   const epicMcpConfig = (epicId: number): string | null => {
     const servers = mcpServers({ epicId }, { epicId });
     if (Object.keys(servers).length === 0) return null;
@@ -898,6 +898,10 @@ async function bootstrap(): Promise<void> {
       refreshEpic: (id, except) => featureRunner.refreshEpic(id, except),
       activity: (id) => activityMonitor.get(id),
       activityOutput: (id) => activityMonitor.output(id),
+      lastReply: (id) => activityMonitor.lastReply(id),
+      // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。
+      kill: (termId) => pty.kill(termId),
+      screenNeedsUser: (termId) => pty.screenNeedsUser(termId),
       submit: submitTask,
       ticketPattern: () => settings.get("ticketPattern"),
       log: logger,

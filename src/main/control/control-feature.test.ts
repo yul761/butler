@@ -25,8 +25,10 @@ async function setup() {
   const { factory, spawned } = fakePtyFactory();
   const pty = new PtyManager(factory, { data: () => undefined, exit: () => undefined });
   let n = 0;
+  const activities = new Map<string, SessionActivity>();
   const sessionService = new SessionService({
     tickets, sessions, settings, ticketService, pty, features,
+    activity: (id) => activities.get(id) ?? null,
     ready: async () => undefined,
     transcriptExists: () => false,
     transcriptState: () => "absent",
@@ -38,13 +40,20 @@ async function setup() {
   });
   const submitted: [string, string][] = [];
   let notified = 0;
-  const activities = new Map<string, SessionActivity>();
+  const killed: string[] = [];
+  const needsUser = new Set<string>();
+  const replies = new Map<string, string>();
+  const logs: string[] = [];
   const handle = controlHandler({
     tickets, sessions, features, ticketService, sessionService,
     activity: (id) => activities.get(id) ?? null,
     activityOutput: async () => "out",
     submit: async (termId, task) => (submitted.push([termId, task]), "sent" as const),
     notify: () => void notified++,
+    kill: (termId) => void killed.push(termId),
+    screenNeedsUser: (termId) => needsUser.has(termId),
+    lastReply: (id) => replies.get(id) ?? null,
+    log: (m) => void logs.push(m),
   });
   const parent = join(tempDir("butler-code-"), "shop");
   mkdirSync(parent);
@@ -58,7 +67,7 @@ async function setup() {
   await ticketService.create({ key: "DMS-2", featureId: feature.id, repoPaths: [frontend, backend], workMode: "worktree" });
   await ticketService.create({ key: "OTH-1", featureId: other.id, repoPaths: [frontend], workMode: "worktree" });
   const base = { v: 1 as const, featureId: feature.id, from: null };
-  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified };
+  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs };
 }
 
 describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
@@ -252,5 +261,115 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
       expect(r).toEqual({ v: 1, ok: false, error: expect.stringContaining(session) });
     }
     expect(await handle({ ...base, op: "session_activity", session: "nope" })).toMatchObject({ ok: false });
+  });
+});
+
+describe("end_session from a feature coordinator (task 11)", () => {
+  const idle = (id: string, kind: SessionActivity["kind"] = "waiting"): SessionActivity => ({
+    sessionId: id, kind, detail: null, background: false, startedAt: null, lastOutputAt: 1, stuck: null, reason: null, action: null, lastOutput: [],
+  });
+
+  /** feature 总控开着，DMS-1 有一个停下来在等输入的子 session。 */
+  async function withChild() {
+    const t = await setup();
+    const c = await t.sessionService.openFeature({ featureId: t.feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    const r = await t.handle({ ...t.base, from: c.termId, op: "start_session", ticket: "DMS-1", task: "a" });
+    if (!r.ok) throw new Error(r.error);
+    const child = (r.value as { sessionId: string }).sessionId;
+    t.sessions.setWaiting(child, true, 5);
+    t.activities.set(child, idle(child));
+    const end = (session: string, from: string | null = c.termId) => t.handle({ ...t.base, from, op: "end_session", session, reason: "PR 已合并" });
+    return { ...t, coordinator: c.termId, child, end };
+  }
+
+  it("ends a ticket session that stopped and waits for input, the same as the user clicking ×", async () => {
+    const { end, child, killed, logs, sessions, coordinator } = await withChild();
+    expect(await end(child)).toEqual({ v: 1, ok: true, value: { ended: true } });
+    expect(killed).toEqual([child]);
+    expect(logs).toContain(`end_session ${child} by ${coordinator}: PR 已合并`);
+    // 记录都在：session 没删、没隐藏
+    expect(sessions.get(child)).toMatchObject({ dismissed: false, replacedBy: null });
+  });
+
+  it("also ends an idle session", async () => {
+    const { end, child, killed, activities } = await withChild();
+    activities.set(child, idle(child, "idle"));
+    expect(await end(child)).toMatchObject({ ok: true });
+    expect(killed).toEqual([child]);
+  });
+
+  it("refuses a session that is working, or not waiting for input, or not seen yet", async () => {
+    const { end, child, killed, activities, sessions } = await withChild();
+    activities.set(child, idle(child, "test"));
+    expect(await end(child)).toEqual({ v: 1, ok: false, error: `session ${child} 正在干活（test），不能结束` });
+    activities.set(child, idle(child));
+    sessions.setWaiting(child, false, 6);
+    expect(await end(child)).toMatchObject({ ok: false, error: expect.stringContaining("正在干活") });
+    sessions.setWaiting(child, true, 7);
+    activities.delete(child);
+    expect(await end(child)).toMatchObject({ ok: false, error: expect.stringContaining("正在干活") });
+    expect(killed).toEqual([]);
+  });
+
+  it("refuses a session with a permission prompt or a startup dialog on screen", async () => {
+    const { end, child, killed, needsUser } = await withChild();
+    needsUser.add(child);
+    expect(await end(child)).toEqual({ v: 1, ok: false, error: `session ${child} 的屏幕上有一个等用户回答的确认，不能结束` });
+    expect(killed).toEqual([]);
+  });
+
+  it("refuses a session whose terminal is not open", async () => {
+    const { end, killed, sessions } = await withChild();
+    sessions.insertIfAbsent({ id: "old", ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.setWaiting("old", true, 5);
+    expect(await end("old")).toEqual({ v: 1, ok: false, error: "session old 已经结束了" });
+    expect(killed).toEqual([]);
+  });
+
+  it("refuses itself, the feature's coordinators and sessions of another feature", async () => {
+    const { end, handle, coordinator, killed, other, sessionService, activities, sessions } = await withChild();
+    const theirs = await handle({ v: 1, featureId: other.id, from: null, op: "start_session", ticket: "OTH-1", task: "b" });
+    const theirCoordinator = await sessionService.openFeature({ featureId: other.id });
+    if (!theirs.ok || !theirCoordinator.ok) throw new Error("did not open");
+    const theirChild = (theirs.value as { sessionId: string }).sessionId;
+    for (const id of [coordinator, theirChild, theirCoordinator.termId]) {
+      sessions.setWaiting(id, true, 5);
+      activities.set(id, idle(id));
+      expect(await end(id), id).toEqual({ v: 1, ok: false, error: expect.stringContaining(`找不到 session ${id}`) });
+    }
+    expect(await end("nope")).toMatchObject({ ok: false });
+    expect(killed).toEqual([]);
+  });
+
+  it("ends a fix session of this feature", async () => {
+    const { end, child, feature, sessionService, sessions, activities, killed } = await withChild();
+    const fix = await sessionService.openFix({ featureId: feature.id, stuckSessionId: child });
+    if (!fix.ok) throw new Error(`no fix: ${fix.reason}`);
+    expect(sessions.get(fix.termId)).toMatchObject({ featureId: feature.id, fixesSession: child });
+    sessions.setWaiting(fix.termId, true, 5);
+    activities.set(fix.termId, idle(fix.termId));
+    expect(await end(fix.termId)).toMatchObject({ ok: true });
+    expect(killed).toEqual([fix.termId]);
+  });
+
+  it("ends a session by an id from before /clear, killing the terminal that runs it", async () => {
+    const { end, child, killed, sessions, activities } = await withChild();
+    sessions.insertIfAbsent({ id: "after-clear", ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 2 });
+    sessions.setReplacedBy(child, "after-clear");
+    sessions.setWaiting("after-clear", true, 5);
+    activities.set("after-clear", idle("after-clear"));
+    expect(await end(child)).toMatchObject({ ok: true });
+    expect(killed).toEqual([child]);
+  });
+
+  it("gives every listed session and session_activity the end of its last reply", async () => {
+    const { handle, base, child, coordinator, replies } = await withChild();
+    replies.set(child, "PR 已经合并了。");
+    const r = await handle({ ...base, op: "list_sessions" });
+    const rows = (r.ok ? r.value : []) as { id: string; last_reply: string | null }[];
+    expect(rows.find((x) => x.id === child)!.last_reply).toBe("PR 已经合并了。");
+    expect(rows.find((x) => x.id === coordinator)!.last_reply).toBeNull();
+    expect(await handle({ ...base, op: "session_activity", session: child })).toMatchObject({ ok: true, value: { last_reply: "PR 已经合并了。" } });
   });
 });

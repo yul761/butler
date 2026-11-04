@@ -207,3 +207,28 @@ describe("applyEntry across turns", () => {
     expect(s.turnOpen).toBe(true);
   });
 });
+
+describe("lastReply (task 11: end_session)", () => {
+  const say = (content: unknown, extra: Record<string, unknown> = {}) => ({ type: "assistant", message: { role: "assistant", stop_reason: "end_turn", content }, ...extra });
+
+  it("is null until the assistant writes text, then the latest text reply", () => {
+    const s = newTranscriptState();
+    expect(s.lastReply).toBeNull();
+    applyEntry(s, toolUse("t1", "Bash", { command: "ls" }));
+    expect(s.lastReply).toBeNull();
+    applyEntry(s, say([{ type: "text", text: "第一段" }, { type: "tool_use", id: "t2", name: "Read", input: {} }, { type: "text", text: "第二段" }]));
+    expect(s.lastReply).toBe("第一段\n第二段");
+    applyEntry(s, say([{ type: "text", text: "PR 已经合并了，要我关掉吗？" }]));
+    expect(s.lastReply).toBe("PR 已经合并了，要我关掉吗？");
+  });
+
+  it("keeps the last text over tool-only and blank entries, and ignores sub-agents", () => {
+    const s = newTranscriptState();
+    applyEntry(s, say([{ type: "text", text: "做完了" }]));
+    applyEntry(s, toolUse("t3", "Bash", { command: "ls" }));
+    applyEntry(s, say([{ type: "text", text: "  " }]));
+    applyEntry(s, say([{ type: "text", text: "子 agent 的话" }], { isSidechain: true }));
+    applyEntry(s, say([{ type: "thinking", thinking: "想一想" }]));
+    expect(s.lastReply).toBe("做完了");
+  });
+});

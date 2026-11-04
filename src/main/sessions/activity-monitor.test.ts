@@ -320,6 +320,21 @@ describe("ActivityMonitor activity", () => {
     expect(h.logs).toEqual([]);
   });
 
+  it("gives the end of a running session's last reply, at most 500 characters, and null when unseen", async () => {
+    const h = harness();
+    h.openSession("s1");
+    await h.beat();
+    expect(h.monitor.lastReply("s1")).toBeNull();
+    const long = `${"前".repeat(600)}要我关掉吗？`;
+    h.transcript("s1", { type: "assistant", timestamp: AT, message: { stop_reason: "end_turn", content: [{ type: "text", text: long }] } });
+    await h.beat();
+    expect(h.monitor.lastReply("s1")).toBe(long.slice(-500));
+    expect(h.monitor.lastReply("nope")).toBeNull();
+    h.open.delete("s1");
+    await h.beat();
+    expect(h.monitor.lastReply("s1")).toBeNull();
+  });
+
   it("copes with no transcript file being found", async () => {
     const h = harness();
     h.deps.transcriptFile = () => null;

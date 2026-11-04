@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { ACTIVITY_OUTPUT_LIMIT } from "../../shared/control";
+import { ACTIVITY_OUTPUT_LIMIT, LAST_REPLY_LIMIT } from "../../shared/control";
 import type { ActivityKind, SessionActivity } from "../../shared/activity";
 import type { Feature, Session, Ticket } from "../../shared/types";
 import { M } from "../strings";
@@ -142,6 +142,7 @@ interface Tracked {
   childCpuQuiet: boolean | null;
   /** 第一次读完之前是 null。 */
   activity: SessionActivity | null;
+  lastReply: string | null;
 }
 
 /**
@@ -204,6 +205,14 @@ export class ActivityMonitor {
     return utf8Tail(this.tracked.get(sessionId)?.outputText ?? "", ACTIVITY_OUTPUT_LIMIT);
   }
 
+  /** 最后一条 assistant 文字回复的结尾，最多 500 字符；没有终端在跑、还没读到时为 null。 */
+  lastReply(sessionId: string): string | null {
+    const r = this.tracked.get(sessionId)?.lastReply;
+    if (!r) return null;
+    const chars = [...r];
+    return chars.length <= LAST_REPLY_LIMIT ? r : chars.slice(-LAST_REPLY_LIMIT).join("");
+  }
+
   /** 用户点了“没事，忽略”：这一次不再提醒，直到 session 恢复活动后再次卡住。 */
   dismiss(sessionId: string): void {
     const t = this.tracked.get(sessionId);
@@ -252,6 +261,7 @@ export class ActivityMonitor {
     t.outputSize = output.size;
     t.outputText = output.text;
     t.eligible = eligible;
+    t.lastReply = state.lastReply;
     if (grew) t.lastOutputAt = now;
     await this.sample(t, grew, now);
     const next: SessionActivity = { sessionId: t.id, ...derived, lastOutputAt: t.lastOutputAt, ...this.verdict(t), lastOutput: output.lines };
@@ -263,7 +273,7 @@ export class ActivityMonitor {
   private track(id: string, termId: string): Tracked {
     const t: Tracked = {
       id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, fileSizes: new Map(), outputText: "", lastOutputAt: null,
-      eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null,
+      eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null,
     };
     this.tracked.set(id, t);
     return t;

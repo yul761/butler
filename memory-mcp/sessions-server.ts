@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
-import { BRIEF_LIMIT, CONTROL_VERSION, MAX_CREATE_REPOS, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult } from "../src/shared/control";
+import { BRIEF_LIMIT, CONTROL_VERSION, MAX_CREATE_REPOS, REASON_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult } from "../src/shared/control";
 import type { Lang } from "../src/shared/i18n";
 
 /**
@@ -34,6 +34,37 @@ interface JsonRpcMessage {
 const SERVER_NAME = "butler-sessions";
 const DEFAULT_PROTOCOL = "2025-06-18";
 
+/** 三套工具都有的 end_session（ticket 总控、feature 总控、epic session 结束它们下面已经做完的 session）。 */
+export const END_SESSION_TOOL = {
+  name: "end_session",
+  description:
+    "结束一个已经停下来、在等输入的 session（和用户在界面上点 × 一样，记录都在，之后能恢复）。只在确认它的工作已经做完时用，比如它的 PR 已经合并、handoff 说做完了。" +
+    "先用 session_activity 看它的 last_reply：如果它最后在问问题、等用户做决定或等用户输入什么，不要关，留给用户。拿不准就不关。正在干活的 session Butler 会拒绝。reason 写清楚为什么可以关。",
+  inputSchema: {
+    type: "object",
+    properties: {
+      session: { type: "string", description: "session id（list_sessions 里的 id）" },
+      reason: { type: "string", description: `为什么可以关，最长 ${REASON_LIMIT} 字符` },
+    },
+    required: ["session", "reason"],
+    additionalProperties: false,
+  },
+} as const;
+
+export const END_SESSION_TOOL_EN = {
+  ...END_SESSION_TOOL,
+  description:
+    "End a session that has stopped and is waiting for input (the same as the user clicking × in Butler: its history is kept and it can be resumed later). Use it only when you are sure its work is done, for example its PR is merged or its handoff says it is finished. " +
+    "First check its last_reply with session_activity: if it ended by asking a question, waiting for the user to decide, or waiting for the user to type something, do not end it; leave it to the user. When in doubt, do not end it. Butler refuses sessions that are working. In reason, say clearly why it can be ended.",
+  inputSchema: {
+    ...END_SESSION_TOOL.inputSchema,
+    properties: {
+      session: { type: "string", description: "the session id (id in list_sessions)" },
+      reason: { type: "string", description: `why it can be ended, at most ${REASON_LIMIT} characters` },
+    },
+  },
+} as const;
+
 export const TOOLS = [
   {
     name: "list_repos",
@@ -57,13 +88,13 @@ export const TOOLS = [
   },
   {
     name: "list_sessions",
-    description: "列出这个 ticket 的 session：在哪个仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启，以及此刻的活动（activity，不含输出；输出用 session_activity）。",
+    description: "列出这个 ticket 的 session：在哪个仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启、此刻的活动（activity，不含输出；输出用 session_activity），以及最后一条回复的结尾（last_reply）。",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "session_activity",
     description:
-      "直接读一个 session 此刻在做什么：改文件、跑测试、等 CI、等用户确认……，是否在后台命令里、多久没有新输出、有没有卡住（stuck 为 null 表示不在检测范围），以及当前命令输出的末尾（最多 4KB）。" +
+      "直接读一个 session 此刻在做什么：改文件、跑测试、等 CI、等用户确认……，是否在后台命令里、多久没有新输出、有没有卡住（stuck 为 null 表示不在检测范围）、当前命令输出的末尾（最多 4KB），以及最后一条回复的结尾（last_reply）。" +
       "子 session 在跑长命令时没法回复消息，用这个看它的真实状态，不要靠发消息问。session 用 list_sessions 里的 id。",
     inputSchema: {
       type: "object",
@@ -72,6 +103,7 @@ export const TOOLS = [
       additionalProperties: false,
     },
   },
+  END_SESSION_TOOL,
 ] as const;
 
 /** feature 总控的工具（设计文档 2026-10-26）。 */
@@ -123,13 +155,13 @@ export const FEATURE_TOOLS = [
   },
   {
     name: "list_sessions",
-    description: "列出这个 feature 的 session（feature 总控、修复 session 和每个 ticket 的）：属于哪个 ticket、哪个仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启，以及此刻的活动（activity，不含输出；输出用 session_activity）。修复 session 的 fixes 是它在解决的卡住 session 的 id，其他行是 null。",
+    description: "列出这个 feature 的 session（feature 总控、修复 session 和每个 ticket 的）：属于哪个 ticket、哪个仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启、此刻的活动（activity，不含输出；输出用 session_activity），以及最后一条回复的结尾（last_reply）。修复 session 的 fixes 是它在解决的卡住 session 的 id，其他行是 null。",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "session_activity",
     description:
-      "直接读一个 session 此刻在做什么：改文件、跑测试、等 CI、等用户确认……，是否在后台命令里、多久没有新输出、有没有卡住（stuck 为 null 表示不在检测范围），以及当前命令输出的末尾（最多 4KB）。" +
+      "直接读一个 session 此刻在做什么：改文件、跑测试、等 CI、等用户确认……，是否在后台命令里、多久没有新输出、有没有卡住（stuck 为 null 表示不在检测范围）、当前命令输出的末尾（最多 4KB），以及最后一条回复的结尾（last_reply）。" +
       "子 session 在跑长命令时没法回复消息，用这个看它的真实状态，不要靠发消息问。session 用 list_sessions 里的 id。",
     inputSchema: {
       type: "object",
@@ -138,6 +170,7 @@ export const FEATURE_TOOLS = [
       additionalProperties: false,
     },
   },
+  END_SESSION_TOOL,
 ] as const;
 
 /** 英文版：工具名、参数和 schema 一样，只有描述不同。 */
@@ -161,18 +194,19 @@ export const TOOLS_EN = [
   },
   {
     ...TOOLS[2],
-    description: "List this ticket's sessions: repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it, plus its current activity (without output; use session_activity for that).",
+    description: "List this ticket's sessions: repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it, plus its current activity (without output; use session_activity for that) and the end of its last reply (last_reply).",
   },
   {
     ...TOOLS[3],
     description:
-      "Read directly what a session is doing right now: editing, testing, waiting for CI, waiting for the user, and so on; whether it is inside a background command, how long since its last output, whether it is stuck (stuck null means it is not checked), and the end of the current command's output (at most 4KB). " +
+      "Read directly what a session is doing right now: editing, testing, waiting for CI, waiting for the user, and so on; whether it is inside a background command, how long since its last output, whether it is stuck (stuck null means it is not checked), the end of the current command's output (at most 4KB), and the end of its last reply (last_reply). " +
       "A child session in a long command cannot answer messages, so use this to see its real state instead of asking. Use an id from list_sessions.",
     inputSchema: {
       ...TOOLS[3].inputSchema,
       properties: { session: { type: "string", description: "the session id (id in list_sessions)" } },
     },
   },
+  END_SESSION_TOOL_EN,
 ] as const;
 
 export const FEATURE_TOOLS_EN = [
@@ -217,18 +251,19 @@ export const FEATURE_TOOLS_EN = [
   },
   {
     ...FEATURE_TOOLS[4],
-    description: "List this feature's sessions (the feature coordinator's, fix sessions, and every ticket's): ticket, repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it, plus its current activity (without output; use session_activity for that). On a fix session, fixes is the id of the stuck session it is resolving; on other rows it is null.",
+    description: "List this feature's sessions (the feature coordinator's, fix sessions, and every ticket's): ticket, repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it, plus its current activity (without output; use session_activity for that) and the end of its last reply (last_reply). On a fix session, fixes is the id of the stuck session it is resolving; on other rows it is null.",
   },
   {
     ...FEATURE_TOOLS[5],
     description:
-      "Read directly what a session is doing right now: editing, testing, waiting for CI, waiting for the user, and so on; whether it is inside a background command, how long since its last output, whether it is stuck (stuck null means it is not checked), and the end of the current command's output (at most 4KB). " +
+      "Read directly what a session is doing right now: editing, testing, waiting for CI, waiting for the user, and so on; whether it is inside a background command, how long since its last output, whether it is stuck (stuck null means it is not checked), the end of the current command's output (at most 4KB), and the end of its last reply (last_reply). " +
       "A child session in a long command cannot answer messages, so use this to see its real state instead of asking. Use an id from list_sessions.",
     inputSchema: {
       ...FEATURE_TOOLS[5].inputSchema,
       properties: { session: { type: "string", description: "the session id (id in list_sessions)" } },
     },
   },
+  END_SESSION_TOOL_EN,
 ] as const;
 
 const EMPTY_SCHEMA = { type: "object", properties: {}, additionalProperties: false } as const;
@@ -265,6 +300,15 @@ export const EPIC_TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "list_sessions",
+    description:
+      "列出这个 epic 下各个未归档 feature 的 session（feature 总控、修复 session 和每个 ticket 的）：属于哪个 feature（feature）、哪个 ticket（ticket，feature 级的为 null）、哪个仓库、第一句话、" +
+      "是否在运行、是否在等用户输入、最近活动时间、是否由总控开启、此刻的活动（activity，不含输出；输出用 session_activity），以及最后一条回复的结尾（last_reply）。",
+    inputSchema: EMPTY_SCHEMA,
+  },
+  FEATURE_TOOLS[5],
+  END_SESSION_TOOL,
 ] as const;
 
 export const EPIC_TOOLS_EN = [
@@ -294,6 +338,14 @@ export const EPIC_TOOLS_EN = [
       },
     },
   },
+  {
+    ...EPIC_TOOLS[3],
+    description:
+      "List the sessions of this epic's active features (each feature's coordinator, fix sessions, and every ticket's): the feature (feature), the ticket (ticket, null for feature-level ones), repo, first message, " +
+      "whether it is running, whether it waits for the user, last activity, whether the coordinator started it, its current activity (without output; use session_activity for that) and the end of its last reply (last_reply).",
+  },
+  FEATURE_TOOLS_EN[5],
+  END_SESSION_TOOL_EN,
 ] as const;
 
 /** feature 总控的 epic_context：只在 feature 属于 epic 时出现（启动时 BUTLER_FEATURE_EPIC=1）。 */
@@ -327,6 +379,7 @@ const TEXT = {
     needTicketTask: "start_session 需要 ticket 和 task 两个字符串参数",
     repoString: "repo 必须是字符串",
     needSession: "session_activity 需要字符串参数 session",
+    needEnd: `end_session 需要字符串参数 session 和 reason（reason 不能为空，最多 ${REASON_LIMIT} 字符）`,
     taskTooLong: `task 太长（最多 ${TASK_LIMIT} 字）`,
     noTool: (t: string) => `没有这个工具：${t}`,
   },
@@ -344,6 +397,7 @@ const TEXT = {
     needTicketTask: "start_session needs two string arguments, ticket and task",
     repoString: "repo must be a string",
     needSession: "session_activity needs a string argument, session",
+    needEnd: `end_session needs string arguments, session and reason (reason must not be empty and is at most ${REASON_LIMIT} characters)`,
     taskTooLong: `task is too long (at most ${TASK_LIMIT} characters)`,
     noTool: (t: string) => `No such tool: ${t}`,
   },
@@ -445,6 +499,8 @@ export class SessionsServer {
         return { ...base, op: "list_sessions" };
       case "session_activity":
         return typeof args.session === "string" ? { ...base, op: "session_activity", session: args.session } : toolError(this.text.needSession);
+      case "end_session":
+        return this.endRequest(base, args);
       case "start_session":
         if (typeof args.repo !== "string" || typeof args.task !== "string") return toolError(this.text.needRepoTask);
         if (args.task.length > TASK_LIMIT) return toolError(this.text.taskTooLong);
@@ -468,6 +524,12 @@ export class SessionsServer {
         if (brief.length > BRIEF_LIMIT) return toolError(this.text.briefTooLong);
         return { ...base, op: "create_feature", name, brief, ...(Array.isArray(repos) && { repos: repos as string[] }) };
       }
+      case "list_sessions":
+        return { ...base, op: "list_sessions" };
+      case "session_activity":
+        return typeof args.session === "string" ? { ...base, op: "session_activity", session: args.session } : toolError(this.text.needSession);
+      case "end_session":
+        return this.endRequest(base, args);
       default:
         return toolError(this.text.noTool(String(tool)));
     }
@@ -487,6 +549,8 @@ export class SessionsServer {
         return { ...base, op: "list_sessions" };
       case "session_activity":
         return typeof args.session === "string" ? { ...base, op: "session_activity", session: args.session } : toolError(this.text.needSession);
+      case "end_session":
+        return this.endRequest(base, args);
       case "create_ticket": {
         if (typeof args.ticket !== "string") return toolError(this.text.needTicket);
         const { title, repos, branch } = args;
@@ -509,6 +573,13 @@ export class SessionsServer {
       default:
         return toolError(this.text.noTool(String(tool)));
     }
+  }
+
+  /** end_session：session 和 reason 都要，reason 不能是空白、不能超长（Butler 也会再查一遍）。 */
+  private endRequest<B extends { v: 1; from: string | null } & ({ ticketKey: string } | { featureId: number } | { epicId: number })>(base: B, args: Record<string, unknown>): ControlRequest | ToolError {
+    const { session, reason } = args;
+    if (typeof session !== "string" || !session || typeof reason !== "string" || !reason.trim() || reason.length > REASON_LIMIT) return toolError(this.text.needEnd);
+    return { ...base, op: "end_session", session, reason } as ControlRequest;
   }
 
   /** 写请求文件（临时文件 + rename），等同名的结果文件。超时返回 null，并撤回还没被处理的请求。 */

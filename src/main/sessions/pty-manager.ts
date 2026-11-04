@@ -178,6 +178,12 @@ export class PtyManager {
     return this.terms.get(termId)?.proc.pid ?? null;
   }
 
+  /** 屏幕上有权限确认或启动对话框（信任文件夹、MCP）：在等用户回答，总控不能替用户结束它。终端不在了返回 false。 */
+  screenNeedsUser(termId: string): boolean {
+    const t = this.terms.get(termId);
+    return !!t && (permissionPromptShowing(t.buffer) || dialogShowing(t.buffer));
+  }
+
   write(termId: string, data: string): void {
     this.guard(termId, "write", () => this.terms.get(termId)?.proc.write(data));
   }

@@ -38,6 +38,32 @@ async function newFeatureTicket(page: Page, key: string, repo: string): Promise<
   await expect(page.getByRole("heading", { name: key, exact: true })).toBeVisible();
 }
 
+type McpServerConfig = { command: string; args: string[]; env: Record<string, string> };
+type ToolReply = { content: { text: string }[]; isError?: boolean };
+
+/** 按 mcp 配置启动 butler-sessions，像 claude 一样经 stdio 调用工具（from 是总控自己的 session id）。 */
+async function sessionsServer(server: McpServerConfig, from: string): Promise<{ call: (name: string, args?: object) => Promise<ToolReply>; close: () => void }> {
+  const child = spawn(server.command, server.args, {
+    env: { ...server.env, BUTLER_SESSION: from, PATH: process.env.PATH ?? "" },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  const replies = createInterface({ input: child.stdout });
+  let next = 0;
+  const send = (method: string, params: object) => new Promise<{ result: ToolReply }>((resolve) => {
+    const id = ++next;
+    const onLine = (l: string) => {
+      const msg = JSON.parse(l) as { id: number; result: ToolReply };
+      if (msg.id !== id) return;
+      replies.off("line", onLine);
+      resolve(msg);
+    };
+    replies.on("line", onLine);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+  });
+  await send("initialize", { protocolVersion: "2025-06-18", capabilities: {} });
+  return { call: async (name, args = {}) => (await send("tools/call", { name, arguments: args })).result, close: () => child.kill() };
+}
+
 const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** 在当前显示的终端里输入一行并回车。 */
@@ -51,9 +77,12 @@ async function typeLine(page: Page, line: string): Promise<void> {
  * 设计文档 2026-10-26（feature）：选上一层目录建 feature（勾两个仓库）→ 在 feature 下建前端、后端两个 ticket，worktree 出现在工作区里
  * → feature 总控在工作区里打开 → 按 mcp 配置启动 butler-sessions，start_session 给前端 ticket 开子 session
  * → 子 session 退出后 handoff 报告 PR 已合并 → 前端 ticket 的 worktree 被自动清理。
+ * end_session（计划 11 任务 11）：总控结束一个停下来在等输入的子 session，终端退出、session 还在列表里；正在跑命令的 session 被拒绝。
  */
 test("a feature over a parent directory: tickets' worktrees in its workspace, a coordinator, cleanup after merge", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
+  // end_session 要看活动：刷新调快，不用等 10 秒。
+  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
   const workspace = join(s.dir, "shop-features", "checkout");
   const feWorktree = join(workspace, "frontend-dms-1");
   const beWorktree = join(workspace, "backend-dms-2");
@@ -88,35 +117,23 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
   const coordinatorId = /interactive new (\S+) mcp=butler-workspace,butler-feature,butler-sessions/.exec(fakeLog())![1];
 
   // 4. 按配置启动 butler-sessions，像 claude 一样经 stdio 调用：给 DMS-1（只有一个仓库，不用指定 repo）开子 session。
-  const config = JSON.parse(readFileSync(join(s.butlerHome, "mcp", "features", "1.json"), "utf8")) as {
-    mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
-  };
+  const config = JSON.parse(readFileSync(join(s.butlerHome, "mcp", "features", "1.json"), "utf8")) as { mcpServers: Record<string, McpServerConfig> };
   const server = config.mcpServers["butler-sessions"];
   expect(server.env.BUTLER_FEATURE).toBe("1");
-  const child = spawn(server.command, server.args, {
-    env: { ...server.env, BUTLER_SESSION: coordinatorId, PATH: process.env.PATH ?? "" },
-    stdio: ["pipe", "pipe", "inherit"],
-  });
+  const mcp = await sessionsServer(server, coordinatorId);
   let started: { sessionId: string; ticket: string; repo: string };
   try {
-    const replies = createInterface({ input: child.stdout });
-    const next = () => new Promise<{ id: number; result: { content: { text: string }[]; isError?: boolean } }>((r) => replies.once("line", (l) => r(JSON.parse(l))));
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } })}\n`);
-    await next();
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "list_tickets", arguments: {} } })}\n`);
-    const listed = JSON.parse((await next()).result.content[0].text) as { key: string }[];
+    const listed = JSON.parse((await mcp.call("list_tickets")).content[0].text) as { key: string }[];
     expect(listed.map((t) => t.key)).toEqual(["DMS-1", "DMS-2"]);
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "start_session", arguments: { ticket: "DMS-1", task: "build-the-cart" } } })}\n`);
-    const reply = await next();
-    expect(reply.result.isError).toBeUndefined();
-    started = JSON.parse(reply.result.content[0].text) as typeof started;
+    const reply = await mcp.call("start_session", { ticket: "DMS-1", task: "build-the-cart" });
+    expect(reply.isError).toBeUndefined();
+    started = JSON.parse(reply.content[0].text) as typeof started;
     // 总控直接建 ticket：DMS-3 用 backend，马上出现在侧栏的 feature 下面。
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "create_ticket", arguments: { ticket: "dms-3", title: "Refunds", repos: ["backend"] } } })}\n`);
-    const created = await next();
-    expect(created.result.isError).toBeUndefined();
-    expect(JSON.parse(created.result.content[0].text)).toMatchObject({ key: "DMS-3", repos: [{ name: "backend", dir: join(workspace, "backend-dms-3") }] });
+    const created = await mcp.call("create_ticket", { ticket: "dms-3", title: "Refunds", repos: ["backend"] });
+    expect(created.isError).toBeUndefined();
+    expect(JSON.parse(created.content[0].text)).toMatchObject({ key: "DMS-3", repos: [{ name: "backend", dir: join(workspace, "backend-dms-3") }] });
   } finally {
-    child.kill();
+    mcp.close();
   }
   expect(started).toMatchObject({ ticket: "DMS-1", repo: "frontend" });
   await expect(page.locator(".sidebar .feature-group .feature-tickets .ticket .key")).toHaveText(["DMS-1", "DMS-2", "DMS-3"]);
@@ -140,11 +157,49 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
   await expect(page.locator(".terminal-wrap")).toHaveCount(0);
   await expect(childWrap.getByRole("button", { name: /^隐藏 / })).toBeVisible();
 
-  // 6. handoff：假 claude 报告 PR 已合并 → worktree 被删掉（分支保留），仓库一行标着“已清理”。总控还开着也不拦。
-  await page.getByRole("button", { name: S.runHandoff, exact: true }).click();
-  await expect(page.locator(".repos-bar").getByText(S.worktreeRemoved, { exact: true })).toBeVisible();
-  expect(existsSync(feWorktree)).toBe(false);
-  expect(existsSync(beWorktree)).toBe(true);
+  // 5b. end_session：总控再给 DMS-1 开一个子 session，等它回完话停下来等输入，然后结束它 → 终端退出，session 还在列表里，可以再打开。
+  // 下面 6. 的 handoff 清理 worktree 要求 DMS-1 没有终端在跑：也确认了终端真的关了。
+  const boss = await sessionsServer(server, coordinatorId);
+  try {
+    const second = JSON.parse((await boss.call("start_session", { ticket: "DMS-1", task: "second-task" })).content[0].text) as { sessionId: string };
+    const rowOf = async (id: string) => {
+      const rows = JSON.parse((await boss.call("list_sessions")).content[0].text) as { id: string; waitingForInput: boolean; activity: { kind: string } | null; last_reply: string | null }[];
+      const r = rows.find((x) => x.id === id);
+      return r && { waiting: r.waitingForInput, kind: r.activity?.kind ?? null, lastReply: r.last_reply };
+    };
+    await expect.poll(() => rowOf(second.sessionId), { timeout: 30_000 }).toMatchObject({ waiting: true, kind: "waiting", lastReply: expect.stringContaining("second-task") });
+    const ended = await boss.call("end_session", { session: second.sessionId, reason: "second-task 已经做完" });
+    expect(ended.isError).toBeUndefined();
+    expect(JSON.parse(ended.content[0].text)).toEqual({ ended: true });
+    const children = page.locator(".sessions-bar .session-wrap").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
+    await expect(children).toHaveCount(2);
+    await expect(children.locator(".session .action")).toHaveText([S.open, S.open]);
+    // 已经结束的再结束一次：Butler 说它已经结束了。
+    await expect.poll(async () => (await boss.call("end_session", { session: second.sessionId, reason: "again" })).content[0].text).toContain("已经结束");
+
+    // 6. handoff：假 claude 报告 PR 已合并 → worktree 被删掉（分支保留），仓库一行标着“已清理”。总控还开着也不拦。
+    await page.getByRole("button", { name: S.runHandoff, exact: true }).click();
+    await expect(page.locator(".repos-bar").getByText(S.worktreeRemoved, { exact: true })).toBeVisible();
+    expect(existsSync(feWorktree)).toBe(false);
+    expect(existsSync(beWorktree)).toBe(true);
+
+    // 6b. 正在跑命令的 session：end_session 被拒绝（正在干活），终端还在。
+    const busy = JSON.parse((await boss.call("start_session", { ticket: "DMS-2", task: "busy-task" })).content[0].text) as { sessionId: string };
+    await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-2" }).click();
+    const busyWrap = page.locator(".sessions-bar .session-wrap").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
+    await busyWrap.locator(".session").click();
+    await expect.poll(() => terminalText(page)).toContain("收到：总控 session 交给你的任务：");
+    await typeLine(page, `/fake-bash ${LONG_COMMAND}`);
+    await expect.poll(() => rowOf(busy.sessionId), { timeout: 30_000 }).toMatchObject({ kind: "test" });
+    const refused = await boss.call("end_session", { session: busy.sessionId, reason: "想关掉" });
+    expect(refused).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("正在干活（test）") }] });
+    await page.waitForTimeout(500);
+    await expect(page.locator(".terminal-wrap:visible")).toHaveCount(1);
+    await expect(page.locator(".terminal-wrap:visible .exited")).toHaveCount(0);
+    await expect(busyWrap.locator(".session .action")).not.toHaveText(S.open);
+  } finally {
+    boss.close();
+  }
 
   // 7. feature 总控说过话、退出之后可以从列表里隐藏，也能在 feature 页上恢复。
   await page.locator(".sidebar .ticket.feature").click();
