@@ -143,6 +143,8 @@ export class HoldWatcher {
   /** 发一条“X 已经合完”：session 关了就不再发；在忙就等它的 Stop（sessionIdle）。 */
   private async notice(n: Notice): Promise<void> {
     if (this.delivering.has(n.waiterId)) return;
+    // 名单是这一轮开始时取的：前面某条 deliver 慢的时候，Stop（sessionIdle）可能已经把这条发掉了。从数据库重查一次再发。
+    if (!this.d.repo.pendingNotices().some((p) => p.waiterId === n.waiterId)) return;
     if (!this.d.isOpen(n.sessionId)) {
       this.d.repo.markNotified(n.waiterId, this.d.now());
       this.d.log(`merge gate: session ${n.sessionId} is no longer open; not telling it that ${n.otherBranch} has merged`);

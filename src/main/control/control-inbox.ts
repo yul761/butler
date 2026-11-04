@@ -12,7 +12,8 @@ export interface ControlInboxOptions<Req = ControlRequest, Res = ControlResult> 
   parse?: (raw: unknown) => Req | null;
   /** 解析失败（或 handle 抛错）时写给对方的结果。默认是总控的“请求格式不对”。 */
   badResult?: () => Res;
-  handle: (req: Req) => Promise<Res>;
+  /** meta.ageMs：请求文件写下到现在过了多久（含排队等前面请求的时间）。合并闸门用它扣掉 hook 已经等掉的时间。 */
+  handle: (req: Req, meta: { ageMs: number }) => Promise<Res>;
   intervalMs?: number;
   /** 没人取走的结果文件（总控等超时了）、写了一半的临时文件保留多久。 */
   staleMs?: number;
@@ -109,7 +110,7 @@ export class ControlInbox<Req = ControlRequest, Res = ControlResult> {
     let result: Res;
     try {
       const req = (this.o.parse ?? (parseControlRequest as (raw: unknown) => Req | null))(JSON.parse(raw));
-      result = req ? await this.o.handle(req) : bad();
+      result = req ? await this.o.handle(req, { ageMs: Math.max(0, age) }) : bad();
     } catch (e) {
       this.o.log?.(`control inbox: ${name} failed`, e);
       result = this.o.badResult ? this.o.badResult() : ({ v: 1, ok: false, error: e instanceof Error ? e.message : String(e) } as Res);

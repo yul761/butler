@@ -55,9 +55,9 @@ function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (p
     repo, openTerminals, git: gitDeps, prInfo, notify: (e) => events.push(e), now: o.now ?? (() => 1000), log: (m) => logs.push(m), deadlineMs: o.deadlineMs,
     whoOf: (t, b) => (t ? `${t}（支付）` : b), checkSoon,
   });
-  const ask = (action: GateAction, extra: Partial<Pick<GateRequest, "session" | "ticket" | "cwd" | "phase">> = {}) =>
-    gate.handle({ v: 1, phase: "pre", action, cwd: repoPath, session: "s-req", ticket: null, ...extra } as GateRequest);
-  const merge = (source: string, extra: Parameters<typeof ask>[1] = {}) => ask({ kind: "local_merge", dir: null, source }, extra);
+  const ask = (action: GateAction, extra: Partial<Pick<GateRequest, "session" | "ticket" | "cwd" | "phase">> = {}, meta?: { ageMs?: number }) =>
+    gate.handle({ v: 1, phase: "pre", action, cwd: repoPath, session: "s-req", ticket: null, ...extra } as GateRequest, meta);
+  const merge = (source: string, extra: Parameters<typeof ask>[1] = {}, meta?: { ageMs?: number }) => ask({ kind: "local_merge", dir: null, source }, extra, meta);
   const outcomes = () => db.prepare(`SELECT branch, outcome FROM merge_holds ORDER BY id`).all() as { branch: string; outcome: string | null }[];
   return { repoPath, gate, repo, db, events, logs, openTerminals, checkSoon, prInfo, gitDeps, ask, merge, outcomes };
 }
@@ -338,6 +338,43 @@ describe("MergeGate: deadline", () => {
     slow = true;
     expect(await t.merge("dms-1")).toEqual({ v: 1, decision: "allow" });
     expect(rows(t)).toEqual(before);
+  });
+
+  it("allows at once and writes nothing when the request already waited past the deadline in the queue", async () => {
+    const t = setup();
+    await t.merge("dms-2");
+    const before = rows(t);
+    const events = t.events.length;
+    const checks = vi.mocked(t.gitDeps.mergeConflicts).mock.calls.length;
+    expect(await t.merge("dms-1", {}, { ageMs: 4000 })).toEqual({ v: 1, decision: "allow" });
+    expect(vi.mocked(t.gitDeps.mergeConflicts).mock.calls.length).toBe(checks);
+    expect(rows(t)).toEqual(before);
+    expect(t.events).toHaveLength(events);
+    expect(t.logs.some((l) => l.includes("waited 4000 ms"))).toBe(true);
+  });
+
+  it("counts the time spent in the queue toward the deadline", async () => {
+    let clock = 1000;
+    // 每次裁决的第一次 merge-tree 用掉 600 毫秒。
+    let first = true;
+    const step = { git: { mergeConflicts: async (r: string, a: string, b: string) => { if (first) clock += 600; first = false; return git.mergeConflicts(r, a, b); } } };
+    // 排队 3.5 秒 + 一步 600 毫秒 > 4 秒：算晚了，放行、不记。
+    const late = setup({ now: () => clock, ...step });
+    expect(await late.merge("dms-3", {}, { ageMs: 3500 })).toEqual({ v: 1, decision: "allow" });
+    expect(rows(late)).toEqual(none);
+    // 排队 3 秒 + 600 毫秒还在期限内：照常占位。
+    const inTime = setup({ now: () => clock, ...step });
+    first = true;
+    await inTime.merge("dms-3", {}, { ageMs: 3000 });
+    expect(rows(inTime).holds).toEqual({ n: 1 });
+  });
+
+  it("still releases a hold on a post request that waited in the queue", async () => {
+    const t = setup();
+    await t.merge("dms-3");
+    run(t.repoPath, "merge", "-q", "dms-3");
+    expect(await t.merge("dms-3", { phase: "post" }, { ageMs: 10_000 })).toEqual({ v: 1, decision: "allow" });
+    expect(t.outcomes()).toEqual([{ branch: "dms-3", outcome: "merged" }]);
   });
 
   it("answers allow when a step hangs, and writes nothing when it finishes later", async () => {

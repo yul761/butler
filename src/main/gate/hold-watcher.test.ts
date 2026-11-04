@@ -208,6 +208,33 @@ describe("HoldWatcher: rounds", () => {
     expect(t.deliver).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers each notice once when a Stop arrives while another notice is slow to deliver", async () => {
+    const db = memDb();
+    const repo = new MergeGateRepo(db);
+    const id = repo.addHold({ repoPath: REPO, branch: "dms-1", target: "main", kind: "pr", prUrl: PR_URL, sessionId: "s-hold", ticketKey: "DMS-1", createdAt: 0 });
+    repo.addWaiter({ holdId: id, sessionId: "s-slow", ticketKey: "DMS-2", branch: "dms-2", createdAt: 0 });
+    repo.addWaiter({ holdId: id, sessionId: "s-fast", ticketKey: "DMS-3", branch: "dms-3", createdAt: 0 });
+    const waiting: Record<string, boolean> = { "s-slow": true, "s-fast": false };
+    let finishSlow: (r: "sent") => void = () => undefined;
+    const deliver = vi.fn((sessionId: string) =>
+      sessionId === "s-slow" ? new Promise<"sent">((done) => (finishSlow = done)) : Promise.resolve("sent" as const),
+    );
+    const watcher = new HoldWatcher({
+      repo, prInfo: async () => pr("MERGED"), git: { isAncestor: async () => false, fetchQuiet: async () => true, upstreamRef: async (_r, b) => `origin/${b}` },
+      isOpen: () => true, isWaiting: (s) => waiting[s] ?? false, deliver, whoOf: who, now: () => 0, log: () => undefined,
+    });
+    // 这一轮先卡在 s-slow 上，名单里还有忙着的 s-fast。
+    const round = watcher.check();
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledWith("s-slow", expect.any(String)));
+    // s-fast 停下来了：Stop 把它的通知发掉。
+    waiting["s-fast"] = true;
+    await watcher.sessionIdle("s-fast");
+    finishSlow("sent");
+    await round;
+    expect(deliver.mock.calls.map((c) => c[0]).sort()).toEqual(["s-fast", "s-slow"]);
+    expect(repo.pendingNotices()).toEqual([]);
+  });
+
   it("keeps going when one hold's check throws", async () => {
     const db = memDb();
     seed(db);

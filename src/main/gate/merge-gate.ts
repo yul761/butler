@@ -66,15 +66,24 @@ export class MergeGate {
 
   constructor(private readonly d: MergeGateDeps) {}
 
-  async handle(req: GateRequest): Promise<GateResult> {
-    const clock: Clock = { start: this.d.now(), timedOut: false };
+  /**
+   * meta.ageMs：请求文件写下到现在过了多久（收件箱一次处理一个，排队的时间 hook 也在等）。期限从写下请求时算起：
+   * 已经过了期限就直接放行、什么都不记。post 阶段不扣：它只释放占位，晚一点做也是对的，跳过反而会让失败的合并一直占着。
+   */
+  async handle(req: GateRequest, meta: { ageMs?: number } = {}): Promise<GateResult> {
+    const age = req.phase === "pre" ? Math.max(0, meta.ageMs ?? 0) : 0;
+    if (age >= this.deadlineMs) {
+      this.d.log(`merge gate: ${req.action.kind} request waited ${age} ms before it was read; the hook has given up, allowing it`);
+      return ALLOW;
+    }
+    const clock: Clock = { start: this.d.now() - age, timedOut: false };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<GateResult>((done) => {
       timer = setTimeout(() => {
         clock.timedOut = true;
         this.d.log(`merge gate: checking ${req.action.kind} took too long, allowing it`);
         done(ALLOW);
-      }, this.deadlineMs);
+      }, this.deadlineMs - age);
       timer.unref?.();
     });
     try {

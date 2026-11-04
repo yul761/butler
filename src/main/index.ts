@@ -758,13 +758,13 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     log: logger,
   });
-  // hook 最多等 5 秒：轮询要快；超过 10 秒的请求那边早就放行了。handle 抛错也放行。
+  // hook 最多等 5 秒：轮询要快；超过 10 秒的请求那边早就放行了。handle 抛错也放行。排队的时间算进裁决期限（meta.ageMs）。
   const gateInbox = new ControlInbox<GateRequest, GateResult>({
     requestsDir: paths.gateRequests,
     resultsDir: paths.gateResults,
     parse: parseGateRequest,
     badResult: () => ({ v: 1, decision: "allow" }),
-    handle: (req) => mergeGate.handle(req),
+    handle: (req, meta) => mergeGate.handle(req, meta),
     intervalMs: 200,
     maxRequestAgeMs: 10_000,
     log: logger,
