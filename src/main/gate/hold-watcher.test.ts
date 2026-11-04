@@ -4,7 +4,7 @@ import { MergeGateRepo } from "../db/merge-gate-repo";
 import { M } from "../strings";
 import { memDb } from "../test-utils";
 import type { PrInfo } from "../tickets/gh";
-import { HoldWatcher, LOCAL_HOLD_MAX_MS, NOTICE_KEEP_MS, type HoldWatcherDeps } from "./hold-watcher";
+import { HoldWatcher, LOCAL_HOLD_MAX_MS, NOTICE_KEEP_MS, USER_TYPING_QUIET_MS, type HoldWatcherDeps } from "./hold-watcher";
 import { HOLD_MAX_MS } from "./merge-gate";
 
 const REPO = "/r/app";
@@ -32,7 +32,7 @@ interface Opts {
 function setup(o: Opts = {}) {
   const db = o.db ?? memDb();
   if (!o.db) seed(db);
-  const state = { now: 0, open: o.open ?? true, waiting: o.waiting ?? true };
+  const state = { now: 0, open: o.open ?? true, waiting: o.waiting ?? true, typedAt: 0 };
   const repo = new MergeGateRepo(db);
   const prInfo = vi.fn(async () => (o.pr ? o.pr() : null));
   const git = {
@@ -46,6 +46,7 @@ function setup(o: Opts = {}) {
     repo, prInfo, git,
     isOpen: () => state.open,
     isWaiting: () => state.waiting,
+    lastUserInput: () => state.typedAt,
     deliver,
     whoOf: who,
     now: () => state.now,
@@ -148,6 +149,22 @@ describe("HoldWatcher: PR holds", () => {
     res = "sent";
     await t.watcher.check();
     expect(t.deliver).toHaveBeenCalledTimes(2);
+    expect(t.repo.pendingNotices()).toEqual([]);
+  });
+
+  it("does not paste into a terminal the user typed in within the last 30 s, and tries again later", async () => {
+    expect(USER_TYPING_QUIET_MS).toBe(30_000);
+    const t = setup({ pr: () => pr("MERGED") });
+    t.state.now = 100_000;
+    t.state.typedAt = 100_000 - USER_TYPING_QUIET_MS + 1;
+    await t.watcher.check();
+    expect(t.outcome()).toBe("merged");
+    await t.watcher.sessionIdle("s-wait");
+    expect(t.deliver).not.toHaveBeenCalled();
+    expect(t.repo.pendingNotices()).toHaveLength(1);
+    t.state.now = t.state.typedAt + USER_TYPING_QUIET_MS;
+    await t.watcher.check();
+    expect(t.deliver).toHaveBeenCalledTimes(1);
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
@@ -263,7 +280,7 @@ describe("HoldWatcher: rounds", () => {
     );
     const watcher = new HoldWatcher({
       repo, prInfo: async () => pr("MERGED"), git: { isAncestor: async () => false, fetchQuiet: async () => true, upstreamRef: async (_r, b) => `origin/${b}` },
-      isOpen: () => true, isWaiting: (s) => waiting[s] ?? false, deliver, whoOf: who, now: () => 0, log: () => undefined,
+      isOpen: () => true, isWaiting: (s) => waiting[s] ?? false, lastUserInput: () => 0, deliver, whoOf: who, now: () => 0, log: () => undefined,
     });
     // 这一轮先卡在 s-slow 上，名单里还有忙着的 s-fast。
     const round = watcher.check();

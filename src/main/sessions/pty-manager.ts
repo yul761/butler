@@ -32,6 +32,8 @@ interface Term {
   exited: boolean;
   /** claude 的 SessionStart hook 到了（信任文件夹之类的启动对话框已经过去）。 */
   started: boolean;
+  /** 用户上一次往这个终端写东西（渲染进程的按键，经 write）的时间；0 = 还没有。deliver、prefill 自己的写入不算。 */
+  lastUserInputAt: number;
 }
 
 /** 终端输出去掉 ANSI 控制序列后的纯文本（只用来认对话框）。 */
@@ -144,7 +146,7 @@ export class PtyManager {
     if (this.terms.has(termId)) throw new Error(`terminal ${termId} already open`);
     this.exited.delete(termId);
     const proc = this.factory(spec.file, spec.args, { cwd: opts.cwd, env: opts.env, cols: opts.cols ?? 120, rows: opts.rows ?? 32 });
-    const term: Term = { proc, buffer: "", cutModes: new Map(), lastOutputAt: 0, exited: false, started: false };
+    const term: Term = { proc, buffer: "", cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0 };
     this.terms.set(termId, term);
     proc.onData((data) => {
       // ConPTY 在进程退出后还可能吐出尾部数据；退出后一律丢弃，否则渲染进程会以为终端被重新打开而清掉退出提示。
@@ -184,8 +186,16 @@ export class PtyManager {
     return !!t && (permissionPromptShowing(t.buffer) || dialogShowing(t.buffer));
   }
 
+  /** 用户的输入（渲染进程的按键）。 */
   write(termId: string, data: string): void {
-    this.guard(termId, "write", () => this.terms.get(termId)?.proc.write(data));
+    const t = this.terms.get(termId);
+    if (t) t.lastUserInputAt = this.now();
+    this.guard(termId, "write", () => t?.proc.write(data));
+  }
+
+  /** 用户上一次在这个终端里输入的时间；没输入过、终端不在了返回 0。往里贴通知前看它，免得把用户打了一半的话一起提交。 */
+  lastUserInputAt(termId: string): number {
+    return this.terms.get(termId)?.lastUserInputAt ?? 0;
   }
 
   resize(termId: string, cols: number, rows: number): void {

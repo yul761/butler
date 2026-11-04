@@ -744,11 +744,17 @@ async function bootstrap(): Promise<void> {
       const t = gateTerm(id);
       return t !== null && sessions.head(t)?.waitingForInput === true;
     },
+    lastUserInput: (id) => {
+      const t = gateTerm(id);
+      return t ? pty.lastUserInputAt(t) : 0;
+    },
     // 最多等 1 分钟：session 是停着的，输入框应该很快就绪；等不到下一轮再发。
     deliver: async (id, text) => {
       const t = gateTerm(id);
       return t ? pty.deliver(t, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000 }) : "exited";
     },
+    // BUTLER_GATE_TYPING_QUIET_MS 只给 e2e 用（它刚在终端里打过字，不想多等 30 秒）。
+    typingQuietMs: Number(process.env.BUTLER_GATE_TYPING_QUIET_MS) || undefined,
     whoOf, now: Date.now, log: logger,
   });
   const mergeGate = new MergeGate({

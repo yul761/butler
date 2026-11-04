@@ -44,7 +44,8 @@ test("merge coordinator: a conflicting merge waits for the holder, is told when 
   // /fake-run 用 Git Bash 执行带 Windows 路径的命令、gate 的引号解析和 Git Bash 的不一样：Windows 上还没验证过。
   test.skip(process.platform === "win32", "not verified on Windows yet: /fake-run passes Windows paths through Git Bash and the gate's command parser");
   const s = makeSandbox();
-  s.env = { BUTLER_GATE_CHECK_MS: "500" };
+  // 刚在 DMS-1 的终端里打过字：通知默认要等用户 30 秒没打字才贴，这里调短。
+  s.env = { BUTLER_GATE_CHECK_MS: "500", BUTLER_GATE_TYPING_QUIET_MS: "1000" };
   const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
   const gateDir = join(s.butlerHome, "gate");
   const requests = join(gateDir, "requests");

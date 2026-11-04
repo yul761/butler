@@ -133,6 +133,28 @@ describe("PtyManager", () => {
     expect(await p2).toBe(false);
   });
 
+  it("remembers when the user last wrote to a terminal; Butler's own deliveries and prefills don't count", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    expect(mgr.lastUserInputAt("t1")).toBe(0);
+    expect(mgr.lastUserInputAt("nope")).toBe(0);
+    await vi.advanceTimersByTimeAsync(5000);
+    mgr.write("t1", "半句");
+    const typed = Date.now();
+    expect(mgr.lastUserInputAt("t1")).toBe(typed);
+    spawned[0].pty.emit("ready");
+    const p = mgr.deliver("t1", "通知", { startWaitMs: 0 });
+    await vi.advanceTimersByTimeAsync(7000);
+    expect(await p).toBe("sent");
+    const f = mgr.prefill("t1", "x", 800, 1000);
+    await vi.advanceTimersByTimeAsync(1200);
+    await f;
+    expect(mgr.lastUserInputAt("t1")).toBe(typed);
+    spawned[0].pty.emitExit(0);
+    mgr.open("t1", spec, opts);
+    expect(mgr.lastUserInputAt("t1")).toBe(0);
+  });
+
   it("deliver waits for SessionStart and a quiet prompt, pastes once, then presses Enter after the echo settles", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);
