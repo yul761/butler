@@ -17,9 +17,15 @@ describe("classifyGateCommand", () => {
     expect(classifyGateCommand("pnpm test && git merge x")).toEqual({ kind: "local_merge", dir: null, source: "x" });
   });
   it("recognises git push with a remote branch", () => {
-    expect(classifyGateCommand("git push origin HEAD:main")).toEqual({ kind: "push", dir: null, target: "main" });
+    expect(classifyGateCommand("git push origin HEAD:main")).toEqual({ kind: "push", dir: null, target: "main", source: "HEAD" });
     expect(classifyGateCommand("git push origin main")).toEqual({ kind: "push", dir: null, target: "main" });
     expect(classifyGateCommand("git push -u origin dms-1")).toEqual({ kind: "push", dir: null, target: "dms-1" });
+  });
+  it("takes the source of an explicit src:dst refspec", () => {
+    expect(classifyGateCommand("git push origin feat:main")).toEqual({ kind: "push", dir: null, target: "main", source: "feat" });
+    expect(classifyGateCommand("git push origin +refs/heads/feat/x:refs/heads/main")).toEqual({ kind: "push", dir: null, target: "main", source: "feat/x" });
+    // 删除远端分支（:main）没有来源。
+    expect(classifyGateCommand("git push origin :main")).toEqual({ kind: "push", dir: null, target: "main" });
   });
   it("recognises branch switches", () => {
     expect(classifyGateCommand("git checkout -b dms-3")).toEqual({ kind: "switch", dir: null, branch: "dms-3", create: true });
@@ -30,7 +36,7 @@ describe("classifyGateCommand", () => {
     expect(classifyGateCommand("cd /w && git status; git merge a || git merge b")).toEqual({ kind: "local_merge", dir: "/w", source: "a" });
   });
   it("treats backslash-newline as whitespace", () => {
-    expect(classifyGateCommand("git push origin \\\n HEAD:main")).toEqual({ kind: "push", dir: null, target: "main" });
+    expect(classifyGateCommand("git push origin \\\n HEAD:main")).toEqual({ kind: "push", dir: null, target: "main", source: "HEAD" });
     expect(classifyGateCommand("git merge \\\n feat/x")).toEqual({ kind: "local_merge", dir: null, source: "feat/x" });
     expect(classifyGateCommand("gh pr merge \\\n 12")).toEqual({ kind: "pr_merge", dir: null, pr: "12" });
     expect(classifyGateCommand("git -C d \\\n merge x")).toEqual({ kind: "local_merge", dir: "d", source: "x" });

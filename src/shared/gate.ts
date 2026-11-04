@@ -36,7 +36,8 @@ function parseAction(raw: unknown): GateAction | null {
     case "local_merge":
       return okStr(a.source) ? { kind: "local_merge", dir, source: a.source } : null;
     case "push":
-      return okStr(a.target) ? { kind: "push", dir, target: a.target } : null;
+      if (!okStr(a.target) || (a.source !== undefined && !okStr(a.source))) return null;
+      return a.source === undefined ? { kind: "push", dir, target: a.target } : { kind: "push", dir, target: a.target, source: a.source };
     case "switch":
       return okStr(a.branch) && typeof a.create === "boolean" ? { kind: "switch", dir, branch: a.branch, create: a.create } : null;
     default:

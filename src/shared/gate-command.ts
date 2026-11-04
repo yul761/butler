@@ -4,7 +4,8 @@
 export type GateAction =
   | { kind: "pr_merge"; dir: string | null; pr: string | null }
   | { kind: "local_merge"; dir: string | null; source: string }
-  | { kind: "push"; dir: string | null; target: string }
+  /** source：refspec 写了 `src:` 时推的是哪个分支（可能是 HEAD）；没写就是当前分支。 */
+  | { kind: "push"; dir: string | null; target: string; source?: string }
   | { kind: "switch"; dir: string | null; branch: string; create: boolean };
 
 /** 分词并按 && || ; | & 换行切段。引号里的内容留在同一个词里，不当分隔符。 */
@@ -95,9 +96,13 @@ function classifySegment(tokens: string[], dir: string | null): GateAction | nul
     const pos = positionals(args, ["--repo", "-o", "--push-option", "--receive-pack", "--exec"]);
     const refspec = pos[1]; // pos[0] 是 remote；没写远端分支就是推自己的 branch
     if (!refspec) return null;
-    const dst = refspec.includes(":") ? refspec.slice(refspec.lastIndexOf(":") + 1) : refspec;
-    const target = dst.replace(/^\+/, "").replace(/^refs\/heads\//, "");
-    return target ? { kind: "push", dir, target } : null;
+    const colon = refspec.lastIndexOf(":");
+    const dst = colon >= 0 ? refspec.slice(colon + 1) : refspec;
+    const branchName = (r: string) => r.replace(/^\+/, "").replace(/^refs\/heads\//, "");
+    const target = branchName(dst);
+    if (!target) return null;
+    const source = colon >= 0 ? branchName(refspec.slice(0, colon)) : "";
+    return source ? { kind: "push", dir, target, source } : { kind: "push", dir, target };
   }
   if (sub === "checkout" || sub === "switch") {
     if (args.includes("--")) return null; // 还原文件，不是切分支

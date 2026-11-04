@@ -148,7 +148,7 @@ export class MergeGate {
     if (a.kind !== "pr_merge") {
       const dir = resolve(req.cwd, a.dir ?? ".");
       const repo = await this.d.git.mainRepoRoot(dir);
-      const branch = a.kind === "local_merge" ? a.source : await this.d.git.currentBranch(dir);
+      const branch = a.kind === "local_merge" ? a.source : this.pushSource(a, await this.d.git.currentBranch(dir));
       const hold = this.d.repo.activeHold(repo, branch);
       if (hold?.kind === "local") {
         // push 改的是远端，成功后 origin/<target> 已经跟着更新；本地合并看本地的目标分支。
@@ -169,11 +169,16 @@ export class MergeGate {
     }
     const cur = await this.d.git.currentBranch(dir);
     const target = a.kind === "local_merge" ? cur : a.target === "HEAD" ? cur : a.target;
-    const branch = a.kind === "local_merge" ? a.source : cur;
+    const branch = a.kind === "local_merge" ? a.source : this.pushSource(a, cur);
     // 推目标分支自己（在 main 上 git push origin main）：合进它的那些合并已经审核过了，再审只会重复记录、把冲突算到 main 头上。
     if (branch === target) return null;
     if (!(await this.isMergeTarget(repo, target))) return null;
     return { repo, branch, target, kind: "local", prUrl: null };
+  }
+
+  /** push 推的是哪个分支：写了 `src:` 就是 src（HEAD 是当前分支），否则是当前分支。 */
+  private pushSource(a: Extract<GateAction, { kind: "push" }>, cur: string): string {
+    return a.source && a.source !== "HEAD" ? a.source : cur;
   }
 
   /** 默认分支，或者某个进行中 ticket 的 PR 指向的分支。某个 ticket 自己的 branch 不算（那是在更新它，不是合并进目标）。 */

@@ -15,8 +15,13 @@ describe("parseGateRequest", () => {
       { kind: "pr_merge", dir: null, pr: null },
       { kind: "local_merge", dir: null, source: "feat" },
       { kind: "push", dir: "/x", target: "main" },
+      { kind: "push", dir: null, target: "main", source: "feat" },
       { kind: "switch", dir: null, branch: "b", create: true },
     ]) expect(parseGateRequest({ ...base, action })).toMatchObject({ action });
+  });
+
+  it("leaves out a push source that was not given", () => {
+    expect(parseGateRequest(base)?.action).not.toHaveProperty("source");
   });
 
   it("accepts Windows and UNC absolute cwd", () => {
@@ -30,6 +35,8 @@ describe("parseGateRequest", () => {
     expect(parseGateRequest({ ...base, phase: "mid" })).toBeNull();
     expect(parseGateRequest({ ...base, action: { kind: "rebase", dir: null } })).toBeNull();
     expect(parseGateRequest({ ...base, action: { kind: "push", dir: null } })).toBeNull();
+    expect(parseGateRequest({ ...base, action: { kind: "push", dir: null, target: "main", source: 5 } })).toBeNull();
+    expect(parseGateRequest({ ...base, action: { kind: "push", dir: null, target: "main", source: "" } })).toBeNull();
     expect(parseGateRequest({ ...base, action: { kind: "switch", dir: null, branch: "b", create: "yes" } })).toBeNull();
     expect(parseGateRequest({ ...base, cwd: "repo" })).toBeNull();
     expect(parseGateRequest({ ...base, cwd: "" })).toBeNull();

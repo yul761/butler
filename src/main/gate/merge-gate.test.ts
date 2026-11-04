@@ -236,6 +236,28 @@ describe("MergeGate: pushes", () => {
     expect(await t.merge("dms-2")).toEqual({ v: 1, decision: "deny", reason: M().gateRebase("DMS-1（支付）", ["app.txt"]) });
   });
 
+  it("checks the source of an explicit src:dst push, not the current branch", async () => {
+    const t = setup();
+    await t.merge("dms-1");
+    // 在 main 上 git push origin dms-2:main：合进 main 的是 dms-2。
+    const r = await t.ask({ kind: "push", dir: null, target: "main", source: "dms-2" }, { session: "s2" });
+    expect(r.decision).toBe("deny");
+    expect(t.events.at(-1)).toMatchObject({ kind: "wait", ticketKey: "DMS-2", branch: "dms-2", otherBranch: "dms-1" });
+    // HEAD:main 是当前分支。
+    run(t.repoPath, "checkout", "-q", "dms-3");
+    expect(await t.ask({ kind: "push", dir: null, target: "main", source: "HEAD" })).toEqual({ v: 1, decision: "allow" });
+    expect(t.repo.activeHold(t.repoPath, "dms-3")).toMatchObject({ kind: "local", target: "main" });
+  });
+
+  it("releases the hold of an explicit src:dst push after it ran", async () => {
+    const t = setup();
+    expect(await t.ask({ kind: "push", dir: null, target: "main", source: "dms-3" })).toEqual({ v: 1, decision: "allow" });
+    expect(t.repo.activeHold(t.repoPath, "dms-3")).not.toBeNull();
+    run(t.repoPath, "update-ref", "refs/remotes/origin/main", "dms-3");
+    await t.ask({ kind: "push", dir: null, target: "main", source: "dms-3" }, { phase: "post" });
+    expect(t.outcomes()).toEqual([{ branch: "dms-3", outcome: "merged" }]);
+  });
+
   it("checks a push to a branch that a ticket's PR targets", async () => {
     const t = setup({ pr: (pr) => (pr === "dms-1" ? { number: 1, url: "https://x/pull/1", head: "dms-1", base: "develop", state: "OPEN", autoMerge: false } : null) });
     run(t.repoPath, "branch", "develop", "main");
