@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -42,6 +42,25 @@ describe("butler-hook entry (design 4.3: never block Claude Code)", () => {
     writeFileSync(home, "x");
     const r = spawnSync(process.execPath, [bundle], { input: "{}", env: { ...process.env, BUTLER_HOME: home }, timeout: 10_000 });
     expect(r.status).toBe(0);
+  });
+});
+
+describe("butler-hook entry gate mode", () => {
+  it("exits 0 with empty stdout for an unreviewable command", () => {
+    const home = tempDir();
+    const input = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" }, cwd: "/tmp" });
+    const r = spawnSync(process.execPath, [bundle, "gate"], { input, env: { ...process.env, BUTLER_HOME: home }, timeout: 10_000, encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(existsSync(join(home, "inbox"))).toBe(false);
+  });
+
+  it("exits 0 with empty stdout when Butler is not running", () => {
+    const home = tempDir();
+    const input = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git merge feat" }, cwd: "/tmp" });
+    const r = spawnSync(process.execPath, [bundle, "gate"], { input, env: { ...process.env, BUTLER_HOME: home }, timeout: 10_000, encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe("");
   });
 });
 

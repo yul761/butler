@@ -42,7 +42,7 @@ export function writeEnvelope(dir: string, envelope: HookEnvelope, rename: (from
   return file;
 }
 
-function readStdin(timeoutMs = 2000): Promise<string> {
+export function readStdin(timeoutMs = 2000): Promise<string> {
   return new Promise((resolve) => {
     let data = "";
     const timer = setTimeout(() => resolve(data), timeoutMs);
