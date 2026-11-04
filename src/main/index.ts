@@ -367,10 +367,11 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   const ticketService = new TicketService({ tickets, features, settings, now: Date.now, workspacesDir: paths.workspaces });
-  const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath() });
+  const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath(), log: logger });
   const notify = () => safeSend(IPC.stateChanged);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
-  const healthReady: Promise<void> = health.refresh().then(
+  // 同时把升级后还是旧版本的 butler-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
+  const healthReady: Promise<void> = Promise.all([health.refresh(), health.syncHookBinary()]).then(
     () => {
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       notify();
@@ -477,7 +478,8 @@ async function bootstrap(): Promise<void> {
     platform: process.platform,
     baseEnv: process.env,
     mcpConfig: memoryMcpConfig,
-    mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, gateCommand: existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
+    // 装着的 butler-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
+    mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, gateCommand: health.hookBinCurrent() && existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
     featureMcpConfig,
     epicMcpConfig,
     features, epics, featureHandoffs, handoffs,
