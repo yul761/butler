@@ -378,14 +378,55 @@
 - [ ] **Step 4: 跑 e2e 确认通过**，再跑全套 `pnpm e2e:only`，21 + 1 个全过。
 - [ ] **Step 5: Commit** — `git commit -m "test: merge coordinator end to end"`
 
-### Task 11: 文档、版本、发布
+### Task 11: 上层 session 结束下层 session（`end_session`）
+
+用户 2026-11-04 在对话里确认的小功能，和合并总控一起发：ticket 的 PR 都合了，session 还开着，用户不想一个个 ticket 点进去关，要让上层 session（epic、feature 总控、多仓库 ticket 的总控）能关掉下层的 session。
 
 **Files:**
-- Modify: `docs/configuration.md`（新一节：合并总控做什么、只在 Butler 打开的 session 里、失败时放行、需要 git ≥ 2.38、可选 `gh`）、`README.md`（功能列表加一行）
+- Modify: `src/shared/control.ts`（三种请求各加 `end_session`；epic 再加 `list_sessions`、`session_activity`）、`src/shared/control.test.ts`
+- Modify: `src/main/control/control-handler.ts`、`src/main/control/control-handler.test.ts`、`src/main/control/control-feature.test.ts`、`src/main/control/control-epic.test.ts`
+- Modify: `memory-mcp/sessions-server.ts`（工具定义，中英两套说明）、`memory-mcp/sessions-server.test.ts`
+- Modify: `src/main/strings.ts`（拒绝原因的文案，ZH / EN）
+- Modify: `src/main/index.ts`（controlHandler 的新依赖）
+
+**Interfaces:**
+- Produces:
+  ```ts
+  // control.ts：TicketControlRequest / FeatureControlRequest / EpicControlRequest 各加
+  { op: "end_session"; session: string; reason: string }          // reason 1..500 字符，必填
+  // EpicControlRequest 另加
+  { op: "list_sessions" } | { op: "session_activity"; session: string }
+  // controlHandler 的新依赖
+  kill(termId: string): void;                                       // pty.kill
+  isOpen(termId: string): boolean;                                  // pty.isOpen
+  screenNeedsUser(termId: string): boolean;                         // 屏幕上有权限确认或启动对话框：permissionPromptShowing(buffer) || dialogShowing(buffer)（pty-manager.ts）
+  lastReply(sessionId: string): string | null;                      // 这个 session 最后一条 assistant 文字回复的结尾，最多 500 字符；读不到为 null
+  ```
+- 规则：
+  - 能关的范围：ticket 总控 → 本 ticket 的 session（不含自己）；feature 总控 → 本 feature 下所有 ticket 的 session 和修复 session（不含自己）；epic session → 它下面所有未归档 feature 的 feature 级 session（总控、修复）和这些 feature 下 ticket 的 session（不含自己）。范围外、不存在 → 错误 `ctlNoSuchSession`（沿用）。
+  - Butler 硬性拒绝（返回错误，不关）：
+    - 终端没开着（已经结束）→ `ctlSessionNotRunning`；
+    - 正在干活：活动的 kind 不是 `idle` / `waiting`，或者 session 没有在等输入（`waitingForInput` 为 false）→ `ctlSessionBusy(kind)`；
+    - `screenNeedsUser` 为真 → `ctlSessionNeedsUser`。
+  - 通过后 `kill(termId)`，记日志 `end_session <id> by <from>: <reason>`，返回 `{ ended: true }`。和界面上点 × 是同一个动作，session 留在列表里，之后能恢复。
+  - `list_sessions`、`session_activity` 的每个 session 多一个字段 `last_reply`（`lastReply` 的结果）。epic 的 `list_sessions` 每行另带 `feature`（feature 名）和 `ticket`（没有为 null）。
+  - 工具说明（中文；英文同义）：`结束一个已经停下来、在等输入的 session（和用户在界面上点 × 一样，记录都在，之后能恢复）。只在确认它的工作已经做完时用，比如它的 PR 已经合并、handoff 说做完了。先用 session_activity 看它的 last_reply：如果它最后在问问题、等用户做决定或等用户输入什么，不要关，留给用户。拿不准就不关。正在干活的 session Butler 会拒绝。reason 写清楚为什么可以关。`
+  - 主进程文案：`ctlSessionNotRunning: (id) => \`session ${id} 已经结束了\``、`ctlSessionBusy: (id, kind) => \`session ${id} 正在干活（${kind}），不能结束\``、`ctlSessionNeedsUser: (id) => \`session ${id} 的屏幕上有一个等用户回答的确认，不能结束\``；EN 同义。
+- [ ] **Step 1: 写测试** — `control.test.ts`：三种请求的 `end_session` 解析（缺 reason、reason 超过 500、session 不是字符串 → null），epic 的 `list_sessions` / `session_activity`。handler 测试（沿用现有的 fake）：feature 总控关本 feature 下一个在等输入、活动为 idle 的 ticket session → `kill` 被调用一次、返回 `{ ended: true }`；同一个 session 活动为 `test` → 错误 `ctlSessionBusy`、没有 kill；`waitingForInput` 为 false → busy；`screenNeedsUser` 为真 → `ctlSessionNeedsUser`；终端没开着 → `ctlSessionNotRunning`；关自己 → `ctlNoSuchSession`；关别的 feature 的 session → `ctlNoSuchSession`；epic 关它下面 feature 的总控 → 成功；epic 关不属于它的 feature 的 session → `ctlNoSuchSession`；ticket 总控关本 ticket 的子 session → 成功。`list_sessions` 行里有 `last_reply`。sessions-server 测试：三套工具列表里都有 `end_session`，epic 那套有 `list_sessions` 和 `session_activity`，`reason` 必填。
+- [ ] **Step 2: 跑测试确认失败** — `pnpm vitest run src/shared/control.test.ts src/main/control memory-mcp/sessions-server.test.ts`。
+- [ ] **Step 3: 实现**；`lastReply` 从 session 的 transcript 读（看 `src/main/sessions/activity-sources.ts`、`activity-parse.ts` 现有的 transcript 读取，复用，不另写一套解析），`index.ts` 接上依赖。
+- [ ] **Step 4: 跑测试确认通过**；`pnpm typecheck`、`pnpm test` 通过。
+- [ ] **Step 5: e2e** — 在 `e2e/features.spec.ts` 现有的 feature 总控测试里（它已经按 mcp 配置启动 butler-sessions 并调用工具）加一步：子 session 停在等输入时调 `end_session` → 成功，子 session 的终端退出，feature 页上这个 session 还在（可以恢复）；对一个正在跑 `/fake-bash` 的 session 调 → 返回 busy 错误，终端还在。
+- [ ] **Step 6: Commit** — `git commit -m "feat: coordinators and epics can end sessions that are done"`
+
+### Task 12: 文档、版本、发布
+
+**Files:**
+- Modify: `docs/configuration.md`（新一节：合并总控做什么、只在 Butler 打开的 session 里、失败时放行、需要 git ≥ 2.38、可选 `gh`；总控工具列表里加 `end_session`）、`README.md`（功能列表加一行）
 - Modify: `package.json`（`"version": "1.6.0"`）
 - Modify: memory `next-update-ideas.md`（记下 1.6.0 发了什么）
 
 - [ ] **Step 1:** 写文档。`src/main/docs.test.ts` 如果检查文档里提到的设置项，跟着更新。
 - [ ] **Step 2:** `pnpm typecheck && pnpm test && npx eslint <改过的文件>`，全过（全仓 `pnpm lint` 会扫到 `.claude/worktrees`，那是本地目录，不算）。
 - [ ] **Step 3:** `pnpm build && pnpm build:hook && pnpm e2e:only` 全过。
-- [ ] **Step 4:** Commit，push `feature/BTL-151`，开 PR（标题 `1.6.0: merge coordinator, collapsible epic features, terminal scroll fix`，正文列三项改动和测试结果，结尾带 Claude Code 署名），CI 过后直接合并。
+- [ ] **Step 4:** Commit，push `feature/BTL-151`，开 PR（标题 `1.6.0: merge coordinator, end_session for coordinators, collapsible epic features, terminal scroll fix`，正文列三项改动和测试结果，结尾带 Claude Code 署名），CI 过后直接合并。
