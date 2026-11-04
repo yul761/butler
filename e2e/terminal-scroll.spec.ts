@@ -15,6 +15,8 @@ async function typeLine(page: Page, line: string): Promise<void> {
  * （以前要缩一下概览、让终端改尺寸才能滚）。
  */
 test("the coordinator terminal still scrolls after its output outgrows the replay buffer and the page is reopened", async ({ makeSandbox, launch }) => {
+  // Windows 上 ConPTY 把终端的 SGR 鼠标上报变成控制台输入事件，假 claude 从 stdin 读不到；回放补模式的逻辑有单元测试。
+  test.skip(process.platform === "win32", "ConPTY turns SGR mouse reports into console input events, so the fake claude never reads them from stdin; the replay logic is covered by unit tests");
   const s = makeSandbox();
   const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
   const { page } = await launch(s);
