@@ -1,6 +1,8 @@
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolvePaths } from "./paths";
+import { tempDir } from "./test-utils";
+import { ensureDirs, resolvePaths } from "./paths";
 
 describe("resolvePaths", () => {
   it("defaults to ~/.butler and ~/.claude", () => {
@@ -42,5 +44,20 @@ describe("resolvePaths", () => {
     expect(resolvePaths({ BUTLER_HOME: "~/bh" }, "darwin", "/home/u").home).toBe(join("/home/u", "bh"));
     expect(resolvePaths({ BUTLER_HOME: "~" }, "darwin", "/home/u").home).toBe("/home/u");
     expect(resolvePaths({ CLAUDE_CONFIG_DIR: "~\\cc" }, "win32", "/home/u").claudeConfigDir).toBe(join("/home/u", "cc"));
+  });
+
+  it("puts the merge gate's requests, results and alive file under gate/", () => {
+    const p = resolvePaths({}, "darwin", "/home/u");
+    expect(p.gateRequests).toBe(join("/home/u", ".butler", "gate", "requests"));
+    expect(p.gateResults).toBe(join("/home/u", ".butler", "gate", "results"));
+    expect(p.gateAlive).toBe(join("/home/u", ".butler", "gate", "alive.json"));
+  });
+
+  it("ensureDirs creates both gate directories", async () => {
+    const home = tempDir("butler-paths-");
+    const p = resolvePaths({ BUTLER_HOME: home }, "darwin", "/home/u");
+    await ensureDirs(p);
+    expect(existsSync(p.gateRequests)).toBe(true);
+    expect(existsSync(p.gateResults)).toBe(true);
   });
 });

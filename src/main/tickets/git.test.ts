@@ -5,7 +5,7 @@ import { makeRepo, tempDir } from "../test-utils";
 import { applyGitResolution, resetGitBinary, setGitBinary } from "../util/git-path";
 import { execFileSync } from "node:child_process";
 import { renameSync, symlinkSync } from "node:fs";
-import { git, GIT_SUMMARY_LIMIT, GitError, gitEnv, gitErrorSummary, scanRepos } from "./git";
+import { defaultBranch, fetchQuiet, git, GIT_SUMMARY_LIMIT, GitError, gitEnv, gitErrorSummary, isAncestor, mainRepoRoot, mergeConflicts, scanRepos, upstreamRef } from "./git";
 
 describe("git helpers", () => {
   it("only switches git messages to English and keeps the user's locale for everything else", () => {
@@ -92,5 +92,80 @@ describe("scanRepos", () => {
     execFileSync("git", ["init", "-q", join(parent, "empty")]);
     expect(await scanRepos(parent)).toEqual({ kind: "parent", repos: [join(parent, "empty")] });
     expect(await scanRepos(join(parent, "docs"))).toEqual({ kind: "none" });
+  });
+});
+
+describe("merge coordinator helpers", () => {
+  const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
+  const commitFile = (repo: string, file: string, text: string, msg: string) => {
+    writeFileSync(join(repo, file), text);
+    run(repo, "add", ".");
+    run(repo, "commit", "-m", msg);
+  };
+
+  it("mergeConflicts lists the file both branches changed, and [] when they touch different files", async () => {
+    const repo = makeRepo();
+    run(repo, "checkout", "-b", "a");
+    commitFile(repo, "README.md", "from a\n", "a");
+    run(repo, "checkout", "main");
+    run(repo, "checkout", "-b", "b");
+    commitFile(repo, "README.md", "from b\n", "b");
+    run(repo, "checkout", "main");
+    run(repo, "checkout", "-b", "c");
+    commitFile(repo, "other.txt", "c\n", "c");
+    expect(await mergeConflicts(repo, "a", "b")).toEqual(["README.md"]);
+    expect(await mergeConflicts(repo, "a", "c")).toEqual([]);
+  });
+
+  it("mainRepoRoot returns the main repository from inside a worktree", async () => {
+    const repo = makeRepo();
+    const wt = join(tempDir(), "wt");
+    run(repo, "worktree", "add", "-b", "wtb", wt);
+    expect(await mainRepoRoot(wt)).toBe(repo);
+    expect(await mainRepoRoot(repo)).toBe(repo);
+  });
+
+  it("isAncestor is false before the merge and true after", async () => {
+    const repo = makeRepo();
+    run(repo, "checkout", "-b", "feat");
+    commitFile(repo, "f.txt", "f\n", "f");
+    run(repo, "checkout", "main");
+    expect(await isAncestor(repo, "feat", "main")).toBe(false);
+    run(repo, "merge", "feat");
+    expect(await isAncestor(repo, "feat", "main")).toBe(true);
+  });
+
+  it("fetchQuiet returns false without throwing when there is no origin", async () => {
+    expect(await fetchQuiet(makeRepo(), "main", 5000)).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("fetchQuiet gives up after the timeout", async () => {
+    const dir = tempDir();
+    const fake = join(dir, "git");
+    writeFileSync(fake, "#!/bin/sh\nsleep 5\n");
+    chmodSync(fake, 0o755);
+    setGitBinary(fake);
+    try {
+      const t = Date.now();
+      expect(await fetchQuiet(dir, "main", 200)).toBe(false);
+      expect(Date.now() - t).toBeLessThan(3000);
+    } finally {
+      resetGitBinary();
+    }
+  });
+
+  it("defaultBranch follows origin/HEAD and falls back to main", async () => {
+    const repo = makeRepo();
+    expect(await defaultBranch(repo)).toBe("main");
+    run(repo, "update-ref", "refs/remotes/origin/develop", "HEAD");
+    run(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop");
+    expect(await defaultBranch(repo)).toBe("develop");
+  });
+
+  it("upstreamRef prefers origin/<branch> when it exists", async () => {
+    const repo = makeRepo();
+    expect(await upstreamRef(repo, "main")).toBe("main");
+    run(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+    expect(await upstreamRef(repo, "main")).toBe("origin/main");
   });
 });

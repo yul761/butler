@@ -1,10 +1,13 @@
 import { app, BrowserWindow, dialog, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, Tray, type MessageBoxOptions } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Brief } from "../shared/brief";
+import { sanitizeTask } from "../shared/control";
+import { parseGateRequest, type GateRequest, type GateResult } from "../shared/gate";
+import type { MergeEvent } from "../shared/types";
 import { IPC, type AppNavigateRoute } from "../shared/ipc";
 import { APP_ID, shouldSetAppId } from "./app-id";
 import { BriefService } from "./brief/brief-service";
@@ -21,11 +24,15 @@ import { HandoffsRepo } from "./db/handoffs-repo";
 import { JobsRepo } from "./db/jobs-repo";
 import { MarksRepo } from "./db/marks-repo";
 import { MemorySyncRepo } from "./db/memory-sync-repo";
+import { MergeGateRepo } from "./db/merge-gate-repo";
 import { SecretsRepo } from "./db/secrets-repo";
 import { SessionsRepo } from "./db/sessions-repo";
 import { SettingsRepo } from "./db/settings-repo";
 import { TermsRepo } from "./db/terms-repo";
 import { TicketsRepo } from "./db/tickets-repo";
+import { HoldWatcher } from "./gate/hold-watcher";
+import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
+import { makeWhoOf } from "./gate/who";
 import { auditCutoff, stalePendingCost } from "./gateway/budget";
 import { PrivacyGateway } from "./gateway/gateway";
 import { KeyStore } from "./gateway/key-store";
@@ -45,6 +52,7 @@ import { onLangChange, setLang } from "./i18n";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
 import { HandoffRunner } from "./handoff/runner";
+import { hookCommand } from "./hooks/installer";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
@@ -71,6 +79,8 @@ import { M } from "./strings";
 import { pathKey } from "./util/env";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
+import { prInfo } from "./tickets/gh";
+import * as git from "./tickets/git";
 import { canSend } from "./safe-send";
 import { createQuitState } from "./quit-state";
 import { KeepAwake } from "./keep-awake";
@@ -95,6 +105,8 @@ let keepAwake: KeepAwake | null = null;
 let lastNotification: Notification | null = null;
 /** 卡住的通知：可能同时有好几个 session 卡住，都要留着，点击之前不能被回收。 */
 const stuckNotifications = new Set<Notification>();
+/** 合并协调的通知：几次冲突可能接连发生，点击之前都要留着。 */
+const gateNotifications = new Set<Notification>();
 const quitState = createQuitState(() => app.quit());
 let logger: Logger = () => undefined;
 /** dev 控制台 tee：防止在 tee 里再次写日志造成递归，stderr 管道断开后停止 tee。 */
@@ -267,6 +279,22 @@ function showStuckNotification(info: StuckInfo): void {
   n.show();
 }
 
+/** 合并总控判出冲突（设计文档 2026-11-04“告诉用户”）：一条一个通知，点开对应的 ticket 页；没有 ticket 时开首页。 */
+function showGateNotification(e: MergeEvent, whoOf: (ticketKey: string | null, branch: string) => string): void {
+  if (headlessAbort.signal.aborted || !Notification.isSupported()) return;
+  const other = e.otherBranch !== null ? whoOf(e.otherTicket, e.otherBranch) : e.otherTicket;
+  const n = new Notification({ title: M().gateNotifyTitle(basename(e.repoPath)), body: M().gateNotifyBody(e, whoOf(e.ticketKey, e.branch), other) });
+  gateNotifications.add(n);
+  n.on("close", () => gateNotifications.delete(n));
+  n.on("click", () => {
+    gateNotifications.delete(n);
+    showWindow();
+    const route: AppNavigateRoute = e.ticketKey ? { page: "ticket", key: e.ticketKey } : { page: "home" };
+    safeSend(IPC.appNavigate, route);
+  });
+  n.show();
+}
+
 /**
  * 发送前确认（设计文档 7.6）：展示完整的出站内容，默认按钮和取消都是“不发送”。
  * 把主窗口带到前台并作为父窗口；没有主窗口时视为拒绝。最多等 CONFIRM_TIMEOUT_MS，超时视为拒绝；
@@ -339,10 +367,11 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   const ticketService = new TicketService({ tickets, features, settings, now: Date.now, workspacesDir: paths.workspaces });
-  const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath() });
+  const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath(), log: logger });
   const notify = () => safeSend(IPC.stateChanged);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
-  const healthReady: Promise<void> = health.refresh().then(
+  // 同时把升级后还是旧版本的 butler-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
+  const healthReady: Promise<void> = Promise.all([health.refresh(), health.syncHookBinary()]).then(
     () => {
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       notify();
@@ -413,7 +442,7 @@ async function bootstrap(): Promise<void> {
     if (Object.keys(servers).length === 0) return null;
     return writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers });
   };
-  /** epic session：epic 记忆、全局记忆和 epic 模式的 butler-sessions（list_features、list_repos、create_feature）。 */
+  /** epic session：epic 记忆、全局记忆和 epic 模式的 butler-sessions（list_features、list_repos、create_feature，以及各 feature 的 session）。 */
   const epicMcpConfig = (epicId: number): string | null => {
     const servers = mcpServers({ epicId }, { epicId });
     if (Object.keys(servers).length === 0) return null;
@@ -438,6 +467,8 @@ async function bootstrap(): Promise<void> {
     submit: submitTask,
     // featureRunner 在后面才建好：回调里才用到。
     epicRefresh: (id) => featureRunner.epicRefresh(id),
+    // mergeGate 也在后面才建好。
+    dirBusy: (repo): Promise<{ ticket: string; branch: string } | null> => mergeGate.dirBusy(repo),
     ready: () => healthReady,
     transcriptExists: (id) => transcriptState(paths.claudeProjects, id) !== "absent",
     transcriptState: (id) => transcriptState(paths.claudeProjects, id),
@@ -447,7 +478,8 @@ async function bootstrap(): Promise<void> {
     platform: process.platform,
     baseEnv: process.env,
     mcpConfig: memoryMcpConfig,
-    mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger }),
+    // 装着的 butler-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
+    mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, gateCommand: health.hookBinCurrent() && existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
     featureMcpConfig,
     epicMcpConfig,
     features, epics, featureHandoffs, handoffs,
@@ -697,6 +729,57 @@ async function bootstrap(): Promise<void> {
     }, HOOK_DISCOVERY_DEBOUNCE_MS);
   };
 
+  // 合并总控（设计文档 2026-11-04）。等待者记的是 BUTLER_SESSION（打开终端时的 id = termId）；Butler 重开过的终端用链上最新的 id，按 head 找回来。
+  const gateRepo = new MergeGateRepo(db);
+  const whoOf = makeWhoOf({ tickets, features, epics });
+  const gateTerm = (sessionId: string): string | null => {
+    if (pty.isOpen(sessionId)) return sessionId;
+    const head = sessions.head(sessionId)?.id;
+    return head ? (pty.openIds().find((t) => sessions.head(t)?.id === head) ?? null) : null;
+  };
+  const holdWatcher = new HoldWatcher({
+    repo: gateRepo, prInfo, git,
+    isOpen: (id) => gateTerm(id) !== null,
+    isWaiting: (id) => {
+      const t = gateTerm(id);
+      return t !== null && sessions.head(t)?.waitingForInput === true;
+    },
+    lastUserInput: (id) => {
+      const t = gateTerm(id);
+      return t ? pty.lastUserInputAt(t) : 0;
+    },
+    // 最多等 1 分钟：session 是停着的，输入框应该很快就绪；等不到下一轮再发。
+    deliver: async (id, text) => {
+      const t = gateTerm(id);
+      return t ? pty.deliver(t, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000 }) : "exited";
+    },
+    // BUTLER_GATE_TYPING_QUIET_MS 只给 e2e 用（它刚在终端里打过字，不想多等 30 秒）。
+    typingQuietMs: Number(process.env.BUTLER_GATE_TYPING_QUIET_MS) || undefined,
+    whoOf, now: Date.now, log: logger,
+  });
+  const mergeGate = new MergeGate({
+    tickets, repo: gateRepo, git, prInfo, whoOf,
+    openTerminals: (key) => sessionService.openTerminalCount(key),
+    notify: (e) => {
+      showGateNotification(e, whoOf);
+      notify();
+    },
+    checkSoon: () => holdWatcher.soon(),
+    now: Date.now,
+    log: logger,
+  });
+  // hook 最多等 5 秒：轮询要快；超过 10 秒的请求那边早就放行了。handle 抛错也放行。排队的时间算进裁决期限（meta.ageMs）。
+  const gateInbox = new ControlInbox<GateRequest, GateResult>({
+    requestsDir: paths.gateRequests,
+    resultsDir: paths.gateResults,
+    parse: parseGateRequest,
+    badResult: () => ({ v: 1, decision: "allow" }),
+    handle: (req, meta) => mergeGate.handle(req, meta),
+    intervalMs: 200,
+    maxRequestAgeMs: 10_000,
+    log: logger,
+  });
+
   const inbox = new HookInbox({
     dir: paths.inbox,
     badDir: paths.inboxBad,
@@ -730,6 +813,8 @@ async function bootstrap(): Promise<void> {
       if (effect.kind === "ignored") return;
       // 总控开的子 session 等这个信号才交任务（信任文件夹之类的启动对话框已经过去）。
       if (effect.kind === "session_started") pty.markStarted(effect.sessionId);
+      // claude 停下来等输入了：有“对方已经合完”的通知就趁现在发（设计文档 2026-11-04：不打断忙着的 session）。
+      if (effect.kind === "waiting" && effect.waiting) void holdWatcher.sessionIdle(env.butlerSession ?? effect.sessionId);
       notify();
       // 还没归属 ticket、又缺 cwd / 分支 / 首条提示的 session：触发一次发现（每个 session 每次运行最多一次）。
       if (effect.kind !== "nested") {
@@ -788,7 +873,7 @@ async function bootstrap(): Promise<void> {
     onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,
-    tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs,
+    tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs, gateRepo,
     keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     briefRefreshing: () => briefRefreshing,
@@ -821,6 +906,10 @@ async function bootstrap(): Promise<void> {
       refreshEpic: (id, except) => featureRunner.refreshEpic(id, except),
       activity: (id) => activityMonitor.get(id),
       activityOutput: (id) => activityMonitor.output(id),
+      lastReply: (id) => activityMonitor.lastReply(id),
+      // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。
+      kill: (termId) => pty.kill(termId),
+      screenNeedsUser: (termId) => pty.screenNeedsUser(termId),
       submit: submitTask,
       ticketPattern: () => settings.get("ticketPattern"),
       log: logger,
@@ -832,6 +921,14 @@ async function bootstrap(): Promise<void> {
   tray = createTray();
   inbox.start();
   controlInbox.start();
+  gateInbox.start();
+  // hook 看到 alive.json（并且 pid 还活着）才来问；写不了就当 Butler 没开着，hook 一律放行。
+  try {
+    writeFileSync(paths.gateAlive, JSON.stringify({ pid: process.pid }), { mode: 0o600 });
+  } catch (e) {
+    logger("merge gate: could not write alive.json; merges are not checked", e);
+  }
+  holdWatcher.start(Number(process.env.BUTLER_GATE_CHECK_MS) || HOLD_CHECK_MS);
   activityMonitor.start();
   void runDiscovery();
   // 启动时补齐记忆：老数据、上次退出时没写完的。
@@ -856,6 +953,14 @@ async function bootstrap(): Promise<void> {
     memory.stop();
     inbox.stop();
     controlInbox.stop();
+    // 先删 alive.json：之后的 hook 不再等一个要退出的 Butler。
+    try {
+      rmSync(paths.gateAlive, { force: true });
+    } catch (e) {
+      logger("merge gate: could not remove alive.json", e);
+    }
+    gateInbox.stop();
+    holdWatcher.stop();
     pty.killAll();
     keepAwakeSwitch.set(false);
     tray?.destroy();

@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
-import { BRIEF_LIMIT } from "../src/shared/control";
-import { EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, SessionsServer, serveStdio, TOOLS } from "./sessions-server";
+import { BRIEF_LIMIT, REASON_LIMIT } from "../src/shared/control";
+import { EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, SessionsServer, serveStdio, TOOLS, TOOLS_EN } from "./sessions-server";
 
 function setup(timeoutMs = 2000, scope: { ticketKey: string } | { featureId: number; epic?: boolean } | { epicId: number } = { ticketKey: "P-1" }, lang: "zh" | "en" = "zh") {
   const dir = tempDir("butler-control-");
@@ -38,7 +38,7 @@ describe("butler-sessions MCP server", () => {
     expect(await server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
     expect(await server.handle({ jsonrpc: "2.0", id: 2, method: "ping" })).toEqual({ jsonrpc: "2.0", id: 2, result: {} });
     const list = (await server.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-    expect(list.result.tools.map((t) => t.name)).toEqual(["list_repos", "start_session", "list_sessions", "session_activity"]);
+    expect(list.result.tools.map((t) => t.name)).toEqual(["list_repos", "start_session", "list_sessions", "session_activity", "end_session"]);
     expect(await server.handle({ jsonrpc: "2.0", id: 4, method: "resources/list" })).toMatchObject({ id: 4, error: { code: -32601 } });
   });
 
@@ -95,7 +95,7 @@ describe("butler-sessions MCP server", () => {
     expect(msgs).toHaveLength(2);
     expect(msgs).toContainEqual({ jsonrpc: "2.0", id: 1, result: {} });
     expect(msgs).toContainEqual({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
-    expect(TOOLS.length).toBe(4);
+    expect(TOOLS.length).toBe(5);
   });
 });
 
@@ -103,7 +103,7 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
   it("lists the feature tools", async () => {
     const { server } = setup(2000, { featureId: 7 });
     const list = (await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-    expect(list.result.tools.map((t) => t.name)).toEqual(["list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions", "session_activity"]);
+    expect(list.result.tools.map((t) => t.name)).toEqual(["list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions", "session_activity", "end_session"]);
     expect(list.result.tools).toEqual(FEATURE_TOOLS);
     // 英文版只换描述：名字、顺序、必填参数一样。
     const shape = (tools: readonly { name: string; inputSchema: object }[]) => tools.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]);
@@ -111,7 +111,7 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
     expect(FEATURE_TOOLS.find((t) => t.name === "create_ticket")!.inputSchema.required).toEqual(["ticket"]);
     const start = FEATURE_TOOLS.find((t) => t.name === "start_session")!;
     expect(start.inputSchema.required).toEqual(["ticket", "task"]);
-    expect(shape(FEATURE_TOOLS).at(-1)).toEqual(["session_activity", ["session"]]);
+    expect(shape(FEATURE_TOOLS).find(([n]) => n === "session_activity")).toEqual(["session_activity", ["session"]]);
     expect(FEATURE_TOOLS.at(-1)!.description).not.toBe(FEATURE_TOOLS_EN.at(-1)!.description);
   });
 
@@ -125,7 +125,7 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
       expect(bad.result.isError).toBe(true);
     }
     const en = (await setup(2000, { ticketKey: "P-1" }, "en").server.handle({ jsonrpc: "2.0", id: 4, method: "tools/list" })) as { result: { tools: { name: string; description: string }[] } };
-    expect(en.result.tools.at(-1)).toMatchObject({ name: "session_activity", description: expect.stringMatching(/^[\x20-\x7e]+$/) });
+    expect(en.result.tools.find((t) => t.name === "session_activity")).toMatchObject({ description: expect.stringMatching(/^[\x20-\x7e]+$/) });
   });
 
   it("sends start_session for a ticket of this feature, with or without a repo", async () => {
@@ -189,17 +189,19 @@ describe("butler-sessions in English (design 2026-10-26 i18n)", () => {
 const tools = async (server: SessionsServer) => ((await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string; description: string }[] } }).result.tools;
 const callTool = (server: SessionsServer, name: string, args: object = {}) => server.handle({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name, arguments: args } });
 
+const EPIC_NAMES = ["list_features", "list_repos", "create_feature", "list_sessions", "session_activity", "end_session"];
+
 describe("butler-sessions for an epic session (design 2026-11-01)", () => {
   it("lists the epic tools in order, in both languages", async () => {
     expect((await tools(setup(2000, { epicId: 3 }).server))).toEqual(EPIC_TOOLS);
-    expect(EPIC_TOOLS.map((t) => t.name)).toEqual(["list_features", "list_repos", "create_feature"]);
+    expect(EPIC_TOOLS.map((t) => t.name)).toEqual(EPIC_NAMES);
     expect(EPIC_TOOLS_EN.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []])).toEqual(EPIC_TOOLS.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]));
     const create = EPIC_TOOLS.find((t) => t.name === "create_feature")!;
     expect(create.inputSchema.required).toEqual(["name", "brief"]);
     for (const t of EPIC_TOOLS) expect(t.description).toMatch(/[\u4e00-\u9fff]/);
     const en = await tools(setup(2000, { epicId: 3 }, "en").server);
     expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
-    expect(en.map((t) => t.name)).toEqual(["list_features", "list_repos", "create_feature"]);
+    expect(en.map((t) => t.name)).toEqual(EPIC_NAMES);
   });
 
   it("tells Claude that tickets belong to the feature's own session and the user opens it", () => {
@@ -253,5 +255,55 @@ describe("epic_context for a feature coordinator in an epic", () => {
     const plain = setup(2000, { featureId: 7 });
     expect(await callTool(plain.server, "epic_context")).toMatchObject({ result: { isError: true } });
     expect(existsSync(plain.requestsDir)).toBe(false);
+  });
+});
+
+describe("end_session (task 11)", () => {
+  const scopes = [{ ticketKey: "P-1" }, { featureId: 7 }, { epicId: 3 }];
+  const lists = [[TOOLS, TOOLS_EN], [FEATURE_TOOLS, FEATURE_TOOLS_EN], [EPIC_TOOLS, EPIC_TOOLS_EN]] as const;
+
+  it("is in all three tool lists in both languages, with session and reason required", () => {
+    for (const [zh, en] of lists) {
+      for (const list of [zh, en]) {
+        const t = (list as readonly { name: string; description: string; inputSchema: object }[]).find((x) => x.name === "end_session")!;
+        expect(t.inputSchema).toMatchObject({ required: ["session", "reason"], properties: { session: { type: "string" }, reason: { type: "string" } } });
+      }
+      const zhEnd = (zh as readonly { name: string; description: string }[]).find((x) => x.name === "end_session")!.description;
+      const enEnd = (en as readonly { name: string; description: string }[]).find((x) => x.name === "end_session")!.description;
+      expect(zhEnd).toContain("last_reply");
+      expect(zhEnd).toContain("拿不准就不关");
+      expect(enEnd).toContain("last_reply");
+      expect(/[\u4e00-\u9fff]/.test(enEnd)).toBe(false);
+    }
+  });
+
+  it("gives an epic session list_sessions and session_activity", async () => {
+    const { server, answer } = setup(2000, { epicId: 3 });
+    const a = callTool(server, "list_sessions");
+    expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ v: 1, epicId: 3, from: "boss", op: "list_sessions" });
+    await a;
+    const b = callTool(server, "session_activity", { session: "fc" });
+    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, epicId: 3, from: "boss", op: "session_activity", session: "fc" });
+    await b;
+    expect(await callTool(server, "session_activity", {})).toMatchObject({ result: { isError: true } });
+  });
+
+  it("sends end_session with the session and the reason, in every scope", async () => {
+    for (const scope of scopes) {
+      const { server, answer } = setup(2000, scope);
+      const call = callTool(server, "end_session", { session: "c1", reason: "PR 已合并" });
+      expect(await answer({ v: 1, ok: true, value: { ended: true } })).toEqual({ v: 1, ...scope, from: "boss", op: "end_session", session: "c1", reason: "PR 已合并" });
+      expect(JSON.stringify(await call)).toContain("ended");
+    }
+  });
+
+  it("rejects end_session without a session or a reason, or with a reason over the limit, without asking Butler", async () => {
+    for (const scope of scopes) {
+      const { server, requestsDir } = setup(30, scope);
+      for (const args of [{}, { session: "c1" }, { reason: "done" }, { session: "c1", reason: "  " }, { session: 1, reason: "done" }, { session: "c1", reason: "x".repeat(REASON_LIMIT + 1) }]) {
+        expect(await callTool(server, "end_session", args), JSON.stringify(args).slice(0, 60)).toMatchObject({ result: { isError: true } });
+      }
+      expect(existsSync(requestsDir)).toBe(false);
+    }
   });
 });

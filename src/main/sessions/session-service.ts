@@ -89,6 +89,8 @@ export interface SessionServiceDeps {
   submit?: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout">;
   /** 这个 epic 正在后台生成的汇总（FeatureSummaryRunner.epicRefresh），永不 reject；没有在跑时是 undefined。 */
   epicRefresh?: (epicId: number) => Promise<void> | undefined;
+  /** 这个仓库目录此刻是否被别的 ticket 占着（MergeGate.dirBusy）；只用来在切分支提示里提醒，不拦。 */
+  dirBusy?: (repo: TicketRepo) => Promise<{ ticket: string; branch: string } | null>;
   /** 目录是否存在（测试注入；默认读真实磁盘）。 */
   dirExists?: (dir: string) => boolean;
   /** 要打开这个 ticket 的 session 时调用：把它的记忆补同步一次（排进记忆的同步队列，不等它）。 */
@@ -274,7 +276,16 @@ export class SessionService {
 
   private async branchMismatch(repo: TicketRepo): Promise<OpenFailure | null> {
     const check = await this.d.ticketService.checkBranch(repo);
-    return check.ok ? null : { ok: false, reason: "branch_mismatch", repoId: repo.id, current: check.current, expected: check.expected, dirty: check.dirty };
+    if (check.ok) return null;
+    const failure: OpenFailure = { ok: false, reason: "branch_mismatch", repoId: repo.id, current: check.current, expected: check.expected, dirty: check.dirty };
+    // 只是提醒：查占用失败不能让打开 session 跟着失败。
+    try {
+      const busyBy = await this.d.dirBusy?.(repo);
+      if (busyBy) failure.busyBy = busyBy;
+    } catch (e) {
+      this.d.log?.(`dirBusy for repo ${repo.id} failed`, e);
+    }
+    return failure;
   }
 
   /** 总控能看到的目录：每个仓库现在的工作目录（不存在的跳过；要经过 cmd.exe 又没法安全传递的也跳过）。 */
@@ -614,6 +625,11 @@ export class SessionService {
   /** 这个 session（或者它 /clear 之前的那个）有没有终端在跑。 */
   isRunning(sessionId: string): boolean {
     return this.openHeads().has(sessionId);
+  }
+
+  /** 跑着这个 session（head 的 id）的终端；/clear 之后终端还是启动时的那个 id。没有终端在跑时为 null。 */
+  termIdOf(sessionId: string): string | null {
+    return this.openHeads().get(sessionId) ?? null;
   }
 
   /** 这个 ticket 正在运行的终端数（总控开子 session 的上限用）。 */

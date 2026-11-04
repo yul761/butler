@@ -60,6 +60,8 @@ export function App() {
   // 点击晚间小结的系统通知：回到简报。
   const [navNonce, setNavNonce] = useState(0);
   const [stuckReveal, setStuckReveal] = useState<StuckReveal | null>(null);
+  /** 通知点击时看最新的 ticket 列表（监听只注册一次，闭包里的列表是旧的）。 */
+  const allTicketsRef = useRef<TicketView[]>([]);
   useEffect(
     () =>
       api.onNavigate((r) => {
@@ -71,7 +73,12 @@ export function App() {
           setStuckReveal({ ticket: r.stuckTicket });
           return;
         }
-        setRoute({ page: "home", kind: r.kind });
+        // 点合并协调的通知：打开那个 ticket；它已经不在了（归档了）就回简报。
+        if (r.page === "ticket" && allTicketsRef.current.some((t) => t.key === r.key)) {
+          setRoute({ page: "ticket", key: r.key });
+          return;
+        }
+        setRoute({ page: "home", kind: r.page === "home" ? r.kind : undefined });
         // 已经在简报页时也要切到通知对应的标签：换 key 让 BriefPage 重新挂载。
         setNavNonce((n) => n + 1);
       }),
@@ -124,6 +131,7 @@ export function App() {
 
   /** 所有未归档的 ticket，含 feature 下的（简报、认领、ticket 页都按 ticket 号找）。 */
   const allTickets = [...tickets, ...features.flatMap((f) => f.tickets)];
+  allTicketsRef.current = allTickets;
 
   // 归档可能要等两分钟：等完时用户在看别的页面就留在那里；在看的页面跟着归档了（feature、ticket 跟着 epic）就回简报，不留空白。
   // 只在列表变了时检查，不看 route：跳转时列表可能还没刷新（刷新被新的一次顶掉时），这时对象并没有消失。layout effect：空白不画出来。

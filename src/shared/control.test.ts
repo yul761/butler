@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BRIEF_LIMIT, MAX_CREATE_REPOS, parseControlRequest, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
+import { BRIEF_LIMIT, MAX_CREATE_REPOS, parseControlRequest, REASON_LIMIT, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
 
 describe("parseControlRequest", () => {
   it("accepts the three operations", () => {
@@ -96,5 +96,34 @@ describe("parseControlRequest for an epic (design 2026-11-01)", () => {
 
   it("accepts epic_context from a feature coordinator", () => {
     expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "epic_context" })).toEqual({ v: 1, featureId: 7, from: null, op: "epic_context" });
+  });
+});
+
+describe("parseControlRequest for end_session (task 11)", () => {
+  const scopes = [{ ticketKey: "P-1" }, { featureId: 7 }, { epicId: 3 }];
+
+  it("accepts end_session in all three scopes, with a reason up to the limit", () => {
+    for (const scope of scopes) {
+      expect(parseControlRequest({ v: 1, ...scope, from: "c", op: "end_session", session: "s1", reason: "PR 已合并" })).toEqual({ v: 1, ...scope, from: "c", op: "end_session", session: "s1", reason: "PR 已合并" });
+      expect(parseControlRequest({ v: 1, ...scope, op: "end_session", session: "s1", reason: "x".repeat(REASON_LIMIT) })).toMatchObject({ reason: "x".repeat(REASON_LIMIT) });
+    }
+  });
+
+  it("rejects end_session without a reason, with a reason over the limit, or with a session that is not a string", () => {
+    for (const scope of scopes) {
+      for (const bad of [
+        { session: "s1" }, { session: "s1", reason: "" }, { session: "s1", reason: "   " }, { session: "s1", reason: "x".repeat(REASON_LIMIT + 1) },
+        { session: 5, reason: "done" }, { reason: "done" }, { session: "", reason: "done" }, { session: "s1", reason: 1 },
+      ]) {
+        expect(parseControlRequest({ v: 1, ...scope, op: "end_session", ...bad }), JSON.stringify({ scope, bad }).slice(0, 80)).toBeNull();
+      }
+    }
+  });
+
+  it("accepts list_sessions and session_activity from an epic session", () => {
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "list_sessions" })).toEqual({ v: 1, epicId: 3, from: null, op: "list_sessions" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "session_activity", session: "s1" })).toEqual({ v: 1, epicId: 3, from: null, op: "session_activity", session: "s1" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "session_activity" })).toBeNull();
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "session_activity", session: 1 })).toBeNull();
   });
 });

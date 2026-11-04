@@ -249,7 +249,7 @@ export interface OpenFixSessionRequest {
 
 export type OpenSessionResult =
   | { ok: true; termId: string; alreadyOpen: boolean }
-  | { ok: false; reason: "branch_mismatch"; repoId: number; current: string; expected: string; dirty: boolean }
+  | { ok: false; reason: "branch_mismatch"; repoId: number; current: string; expected: string; dirty: boolean; busyBy?: { ticket: string; branch: string } }
   /** 要恢复的 session 是在别的目录里启动的（ticket 后来改过工作方式），那个目录现在不在 ticket 的分支上（"HEAD" 表示游离）。 */
   | { ok: false; reason: "old_workdir"; cwd: string; current: string; expected: string }
   | { ok: false; reason: "claude_missing" | "no_ticket" | "no_session" | "ticket_busy" | "no_repo" | "pick_repo" };
@@ -377,4 +377,17 @@ export interface JobStateView {
 export interface AutostartState {
   supported: boolean;
   enabled: boolean;
+}
+
+/** 合并总控的一条记录（首页的“合并协调”也用）：wait 等占位、proceed_conflict 带着冲突继续、rebase 让后来者先 rebase、dir_busy 目录被占。 */
+export interface MergeEvent {
+  id: number;
+  repoPath: string;
+  kind: "wait" | "proceed_conflict" | "rebase" | "dir_busy";
+  ticketKey: string | null;
+  branch: string;
+  otherTicket: string | null;
+  otherBranch: string | null;
+  files: string[];
+  createdAt: number;
 }

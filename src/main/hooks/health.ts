@@ -1,4 +1,6 @@
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import type { HandoffCommandStatus, HealthReport, HookStatus } from "../../shared/types";
 import { handoffCommandPath, handoffCommandStatus, installHandoffCommand, uninstallHandoffCommand } from "../handoff/command";
 import { probeClaude } from "../claude/capabilities";
@@ -22,10 +24,29 @@ export interface HealthDeps {
   memoryMcpScript?: string;
   readPath?: () => Promise<string>;
   run?: ExecText;
+  log?: (msg: string, err?: unknown) => void;
+}
+
+async function sha256(file: string): Promise<string> {
+  const h = createHash("sha256");
+  for await (const chunk of createReadStream(file)) h.update(chunk as Buffer);
+  return h.digest("hex");
+}
+
+/** 两个文件内容一样：先比大小（不一样就不用算 hash），再比 sha256。 */
+async function sameContent(a: string, b: string): Promise<boolean> {
+  const [sa, sb] = await Promise.all([stat(a), stat(b)]);
+  if (sa.size !== sb.size) return false;
+  const [ha, hb] = await Promise.all([sha256(a), sha256(b)]);
+  return ha === hb;
 }
 
 export class HealthService {
   private state: { path: string | null; pathValue: string } = { path: null, pathValue: "" };
+  /** 装着的 butler-hook 和随 app 分发的一样（认得 gate）。只有这时才给 session 挂合并总控的 gate hook。 */
+  private binCurrent = false;
+  /** 进行中的 syncHookBinary：安装要等它做完，两边写的是同一个临时文件。 */
+  private binSync: Promise<boolean> = Promise.resolve(false);
 
   constructor(private readonly d: HealthDeps) {}
 
@@ -36,6 +57,42 @@ export class HealthService {
   /** 最近一次 refresh 得到的 claude 路径和登录 shell 的 PATH。 */
   claude(): { path: string | null; pathValue: string } {
     return this.state;
+  }
+
+  hookBinCurrent(): boolean {
+    return this.binCurrent;
+  }
+
+  /**
+   * 启动时：装着的 butler-hook 和随 app 分发的不一样（升级后还是旧版本，不认 gate，会把每条 Bash 命令当成普通 hook 事件）就换成新的。
+   * 用户没装过的不替他装。永不抛错：换不了就不开 gate（最终审查 1）。返回 gate 能不能开。
+   */
+  syncHookBinary(): Promise<boolean> {
+    this.binSync = this.binSync.then(() => this.syncOnce());
+    return this.binSync;
+  }
+
+  private async syncOnce(): Promise<boolean> {
+    const dest = this.d.paths.hookBin;
+    this.binCurrent = false;
+    if (!existsSync(dest)) return false;
+    try {
+      if (await sameContent(this.d.bundledHookBin, dest)) {
+        this.binCurrent = true;
+        return true;
+      }
+    } catch (e) {
+      this.d.log?.(`hook binary: could not compare ${dest} with the bundled one; merges are not checked`, e);
+      return false;
+    }
+    this.d.log?.(`hook binary: ${dest} is out of date; replacing it with the bundled one`);
+    try {
+      await installHookBinary(this.d.bundledHookBin, dest);
+      this.binCurrent = true;
+    } catch (e) {
+      this.d.log?.(`hook binary: could not replace ${dest}; merges are not checked`, e);
+    }
+    return this.binCurrent;
   }
 
   async refresh(): Promise<HealthReport> {
@@ -78,7 +135,9 @@ export class HealthService {
   }
 
   async installHooks(): Promise<HealthReport> {
+    await this.binSync;
     await installHookBinary(this.d.bundledHookBin, this.d.paths.hookBin);
+    this.binCurrent = true;
     await installHooks(this.d.paths.claudeSettings, this.d.paths.hookBin, this.d.platform);
     try {
       // 用户自己的 handoff.md 会得到 conflict（不覆盖，不抛错）；写入失败也不能让整个安装白做、健康页不刷新。

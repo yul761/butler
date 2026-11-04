@@ -476,7 +476,7 @@ test("a stuck ticket marks its feature and epic", async ({ makeSandbox, launch }
   await completeWizard(page, s);
   makeGitRepo(join(shop, "frontend"));
   makeGitRepo(join(shop, "backend"));
-  const { epicRow, featureRow, sidebarFeatures, row, goToEpic, collapseEpic } = places(page);
+  const { epicRow, featureRow, sidebarFeatures, row, goToEpic, goToFeature, collapseEpic } = places(page);
 
   await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "checkout-revamp", shop);
   await create(page, page.locator(".epic-page .epic-features").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "logs", shop);
@@ -493,6 +493,19 @@ test("a stuck ticket marks its feature and epic", async ({ makeSandbox, launch }
   await expect(row("logs").locator(".badge")).toHaveCount(0);
   await shot(page, "epic-stuck.png");
   await shot(page, "epic-stuck-dark.png", "dark");
+  // 收起 feature 列表：行和“新建 feature”都收掉，标题上留着数量和红点；离开再回来还是收起的，再点展开。
+  const featuresToggle = page.locator(".epic-features .section-toggle");
+  await featuresToggle.click();
+  await expect(featuresToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".epic-features .ticket-table")).toHaveCount(0);
+  await expect(page.locator(".epic-features").getByRole("button", { name: `+ ${S.newFeature}`, exact: true })).toHaveCount(0);
+  await expect(featuresToggle.locator(".stuck-mark")).toBeVisible();
+  await goToFeature("logs");
+  await goToEpic();
+  await expect(page.locator(".epic-features .ticket-table")).toHaveCount(0);
+  await featuresToggle.click();
+  await expect(row("logs").locator(".stuck-mark")).toBeVisible();
+  await expect(featuresToggle.locator(".stuck-mark")).toHaveCount(0);
 
   // 折叠 epic：看的是 epic 页，下面的 feature 收起，红点还在。
   await collapseEpic();

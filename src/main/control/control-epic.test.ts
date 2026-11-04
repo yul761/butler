@@ -2,6 +2,7 @@ import { mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BRIEF_LIMIT, SUMMARY_LIMIT, type ControlResult, type EpicControlRequest } from "../../shared/control";
+import type { SessionActivity } from "../../shared/activity";
 import type { EpicFeatureRow } from "../../shared/types";
 import { EpicsRepo } from "../db/epics-repo";
 import { FeaturesRepo } from "../db/features-repo";
@@ -36,9 +37,19 @@ async function setup() {
   const logs: string[] = [];
   const events: string[] = [];
   let refreshEpic: (epicId: number, except?: number) => void = (epicId, except) => void events.push(`refresh:${epicId}:${except}`);
+  /** 开着终端的 session（终端 id 就是 session id）。 */
+  const open = new Set<string>();
+  const activities = new Map<string, SessionActivity>();
+  const replies = new Map<string, string>();
+  const killed: string[] = [];
   const handle = controlHandler({
     tickets, sessions, features, epics, featureService,
-    ticketService: undefined as never, sessionService: undefined as never,
+    ticketService: undefined as never,
+    sessionService: { isRunning: (id: string) => open.has(id), termIdOf: (id: string) => (open.has(id) ? id : null) } as never,
+    activity: (id) => activities.get(id) ?? null,
+    kill: (termId) => void killed.push(termId),
+    screenNeedsUser: () => false,
+    lastReply: (id) => replies.get(id) ?? null,
     epicRows: () => rows,
     submit: async () => "sent" as const,
     notify: () => void notified++,
@@ -51,7 +62,7 @@ async function setup() {
     id: 0, name: "f", status: "active", archivedAt: null, summaryAt: 5, summary: "s", blockers: [], decisions: [], openQuestions: [], ...o,
   });
   return { handle, base, epic, solo, features, epics, featureService, epicService, frontend, backend, elsewhere, notified: () => notified, setRows: (r: EpicFeatureRow[]) => (rows = r), row,
-    logs, events, setRefreshEpic: (f: typeof refreshEpic) => (refreshEpic = f) };
+    logs, events, setRefreshEpic: (f: typeof refreshEpic) => (refreshEpic = f), tickets, sessions, open, activities, replies, killed };
 }
 
 const err = (r: ControlResult) => (r.ok ? "" : r.error);
@@ -162,5 +173,73 @@ describe("epic_context from a feature coordinator", () => {
     await epicService.archive(epic.id, { terminalsOpen: () => false, featureTerminalsOpen: () => false });
     features.unarchive(lone.id);
     expect(await handle({ v: 1, featureId: lone.id, from: null, op: "epic_context" })).toMatchObject({ ok: false });
+  });
+});
+
+describe("sessions of an epic's features (task 11)", () => {
+  /**
+   * epic「shop」下有 checkout（总控 fc，ticket EP-1 的 session t1）和已归档的 old（总控 oc）；epic 外有 lone（总控 lc）。
+   * epic 自己的 session 是 es。全部开着终端、停下来在等输入。
+   */
+  async function withSessions() {
+    const t = await setup();
+    const checkout = await t.featureService.create({ name: "checkout", repoPaths: [t.elsewhere], epicId: t.epic.id });
+    const old = await t.featureService.create({ name: "old", repoPaths: [t.elsewhere], epicId: t.epic.id });
+    const lone = await t.featureService.create({ name: "lone", repoPaths: [t.elsewhere] });
+    t.tickets.insert({ key: "EP-1", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null, featureId: checkout.id });
+    const add = (id: string, o: { ticketKey?: string; featureId?: number; coordinator?: boolean; epicId?: number }) => {
+      t.sessions.insertIfAbsent({ id, ticketKey: o.ticketKey ?? null, cwd: "/w", origin: "butler", createdAt: 1, featureId: o.featureId ?? null, coordinator: o.coordinator, epicId: o.epicId ?? null });
+      t.sessions.setWaiting(id, true, 5);
+      t.open.add(id);
+      t.activities.set(id, { sessionId: id, kind: "waiting", detail: null, background: false, startedAt: null, lastOutputAt: 1, stuck: null, reason: null, action: null, lastOutput: [] });
+    };
+    add("fc", { featureId: checkout.id });
+    add("t1", { ticketKey: "EP-1" });
+    add("oc", { featureId: old.id });
+    add("lc", { featureId: lone.id });
+    add("es", { epicId: t.epic.id });
+    await t.featureService.archive(old.id, { terminalsOpen: () => false });
+    const end = (session: string) => t.handle({ ...t.base, from: "es", op: "end_session", session, reason: "feature 做完了" });
+    return { ...t, checkout, end };
+  }
+
+  it("lists the sessions of the epic's active features with their feature, ticket and last reply", async () => {
+    const { handle, base, replies } = await withSessions();
+    replies.set("t1", "PR 合并了");
+    const r = await handle({ ...base, op: "list_sessions" });
+    if (!r.ok) throw new Error(r.error);
+    const rows = r.value as { id: string; feature: string; ticket: string | null; running: boolean; last_reply: string | null }[];
+    expect(rows.map((x) => [x.id, x.feature, x.ticket, x.running, x.last_reply])).toEqual([
+      ["fc", "checkout", null, true, null],
+      ["t1", "checkout", "EP-1", true, "PR 合并了"],
+    ]);
+  });
+
+  it("reads the activity of a session in its features only", async () => {
+    const { handle, base } = await withSessions();
+    expect(await handle({ ...base, op: "session_activity", session: "t1" })).toMatchObject({ ok: true, value: { sessionId: "t1", kind: "waiting", last_reply: null } });
+    for (const id of ["lc", "oc", "es"]) {
+      expect(await handle({ ...base, op: "session_activity", session: id }), id).toMatchObject({ ok: false, error: expect.stringContaining(id) });
+    }
+  });
+
+  it("ends the coordinator or a ticket session of one of its features, and nothing outside them", async () => {
+    const { end, killed } = await withSessions();
+    for (const id of ["lc", "oc", "es"]) {
+      expect(await end(id), id).toMatchObject({ ok: false, error: expect.stringContaining(`找不到 session ${id}`) });
+    }
+    expect(killed).toEqual([]);
+    expect(await end("fc")).toEqual({ v: 1, ok: true, value: { ended: true } });
+    expect(await end("t1")).toEqual({ v: 1, ok: true, value: { ended: true } });
+    expect(killed).toEqual(["fc", "t1"]);
+  });
+
+  it("refuses everything for an archived epic", async () => {
+    const { handle, base, epic, epicService, killed } = await withSessions();
+    await epicService.archive(epic.id, { terminalsOpen: () => false, featureTerminalsOpen: () => false });
+    for (const op of [{ op: "list_sessions" }, { op: "session_activity", session: "fc" }, { op: "end_session", session: "fc", reason: "r" }]) {
+      expect(await handle({ ...base, ...op } as EpicControlRequest)).toMatchObject({ ok: false });
+    }
+    expect(killed).toEqual([]);
   });
 });

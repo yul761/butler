@@ -19,6 +19,10 @@ export interface ButlerPaths {
   /** 总控开子 session 的请求和结果（sessions MCP server ↔ Butler，走文件）。 */
   controlRequests: string;
   controlResults: string;
+  /** 合并总控的闸门：hook 写请求、Butler 写结果；alive.json 是 Butler 在线的标记（{ pid }）。 */
+  gateRequests: string;
+  gateResults: string;
+  gateAlive: string;
   claudeConfigDir: string;
   claudeSettings: string;
   claudeProjects: string;
@@ -61,6 +65,9 @@ export function resolvePaths(
     workspaces: join(butlerHome, "workspaces"),
     controlRequests: join(butlerHome, "control", "requests"),
     controlResults: join(butlerHome, "control", "results"),
+    gateRequests: join(butlerHome, "gate", "requests"),
+    gateResults: join(butlerHome, "gate", "results"),
+    gateAlive: join(butlerHome, "gate", "alive.json"),
     claudeConfigDir,
     claudeSettings: join(claudeConfigDir, "settings.json"),
     claudeProjects: join(claudeConfigDir, "projects"),
@@ -71,7 +78,7 @@ export function resolvePaths(
 }
 
 export async function ensureDirs(p: ButlerPaths): Promise<void> {
-  for (const dir of [p.home, p.inbox, p.inboxBad, p.bin, p.logs, p.mcp, p.statecore, p.workspaces, p.controlRequests, p.controlResults]) {
+  for (const dir of [p.home, p.inbox, p.inboxBad, p.bin, p.logs, p.mcp, p.statecore, p.workspaces, p.controlRequests, p.controlResults, p.gateRequests, p.gateResults]) {
     await mkdir(dir, { recursive: true });
   }
 }

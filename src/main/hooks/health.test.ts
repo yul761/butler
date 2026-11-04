@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SettingsRepo } from "../db/settings-repo";
@@ -81,5 +81,83 @@ describe("HealthService", () => {
     writeFileSync(paths.claudeSettings, JSON.stringify({ enabledPlugins: { "statecore@market": true } }));
     settings.set("memoryEnabled", "0");
     expect((await health.refresh()).memory).toEqual({ enabled: false, dataDir: paths.statecore, mcpBundle: true, statecorePlugin: true });
+  });
+
+  describe("syncHookBinary（最终审查 1：升级后旧的 butler-hook 不认 gate）", () => {
+    const setup = () => {
+      const home = tempDir();
+      const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+      const bundled = join(home, "bundled-hook");
+      writeFileSync(bundled, "#!/bin/sh\necho new\n");
+      const logs: string[] = [];
+      const health = new HealthService({
+        paths, platform: "darwin", env: {}, settings: new SettingsRepo(memDb()), bundledHookBin: bundled,
+        readPath: async () => "/usr/bin", run: async () => "", log: (m) => logs.push(m),
+      });
+      return { paths, bundled, health, logs };
+    };
+
+    it("replaces a stale installed binary with the bundled one and turns the gate on", async () => {
+      const { paths, health, logs } = setup();
+      mkdirSync(join(paths.home, "bin"), { recursive: true });
+      writeFileSync(paths.hookBin, "#!/bin/sh\necho an older version\n");
+      expect(health.hookBinCurrent()).toBe(false);
+      expect(await health.syncHookBinary()).toBe(true);
+      expect(readFileSync(paths.hookBin, "utf8")).toBe("#!/bin/sh\necho new\n");
+      // Windows 没有可执行位。
+      if (process.platform !== "win32") expect(statSync(paths.hookBin).mode & 0o111).not.toBe(0);
+      expect(health.hookBinCurrent()).toBe(true);
+      expect(logs.some((m) => m.includes("out of date"))).toBe(true);
+    });
+
+    it("also replaces a binary of the same size but different content", async () => {
+      const { paths, health } = setup();
+      mkdirSync(join(paths.home, "bin"), { recursive: true });
+      writeFileSync(paths.hookBin, "#!/bin/sh\necho old\n"); // 和 new 一样长
+      expect(await health.syncHookBinary()).toBe(true);
+      expect(readFileSync(paths.hookBin, "utf8")).toBe("#!/bin/sh\necho new\n");
+    });
+
+    it("leaves an identical binary alone", async () => {
+      const { paths, health } = setup();
+      mkdirSync(join(paths.home, "bin"), { recursive: true });
+      writeFileSync(paths.hookBin, "#!/bin/sh\necho new\n");
+      utimesSync(paths.hookBin, 1_000_000, 1_000_000);
+      expect(await health.syncHookBinary()).toBe(true);
+      expect(statSync(paths.hookBin).mtimeMs).toBe(1_000_000_000);
+      expect(health.hookBinCurrent()).toBe(true);
+    });
+
+    it("keeps the gate off and does not throw when the copy fails", async () => {
+      const { paths, health, logs } = setup();
+      mkdirSync(join(paths.home, "bin"), { recursive: true });
+      writeFileSync(paths.hookBin, "#!/bin/sh\necho old\n");
+      mkdirSync(`${paths.hookBin}.tmp`); // 临时文件的位置是个目录：写不进去
+      expect(await health.syncHookBinary()).toBe(false);
+      expect(health.hookBinCurrent()).toBe(false);
+      expect(readFileSync(paths.hookBin, "utf8")).toBe("#!/bin/sh\necho old\n");
+      expect(logs.some((m) => m.includes("could not replace"))).toBe(true);
+    });
+
+    it("does not install a binary the user never installed", async () => {
+      const { paths, health } = setup();
+      expect(await health.syncHookBinary()).toBe(false);
+      expect(existsSync(paths.hookBin)).toBe(false);
+    });
+
+    it("keeps the gate off when the bundled binary is missing", async () => {
+      const { paths, bundled, health } = setup();
+      mkdirSync(join(paths.home, "bin"), { recursive: true });
+      writeFileSync(paths.hookBin, "#!/bin/sh\necho old\n");
+      rmSync(bundled);
+      expect(await health.syncHookBinary()).toBe(false);
+      expect(readFileSync(paths.hookBin, "utf8")).toBe("#!/bin/sh\necho old\n");
+    });
+
+    it("installHooks turns the gate on", async () => {
+      const { health } = setup();
+      await health.installHooks();
+      expect(health.hookBinCurrent()).toBe(true);
+    });
   });
 });

@@ -1,4 +1,5 @@
 import type { Lang } from "../shared/i18n";
+import type { MergeEvent } from "../shared/types";
 import { formatDuration } from "../shared/text";
 import { currentLang } from "./i18n";
 
@@ -174,6 +175,9 @@ const ZH = {
   ctlNoSuchEpicRepo: (wanted: string, names: string) => `这个 epic 没有仓库 ${wanted}。现有的仓库：${names}`,
   ctlFeatureCreated: "feature 已建好，没有打开总控。用户点进这个 feature 打开总控后，brief 会作为第一条消息发给它；ticket 由它自己建。",
   ctlNoSuchSession: (id: string) => `找不到 session ${id}，或者它不属于你管的范围。用 list_sessions 看有哪些`,
+  ctlSessionNotRunning: (id: string) => `session ${id} 已经结束了`,
+  ctlSessionBusy: (id: string, kind: string) => `session ${id} 正在干活（${kind}），不能结束`,
+  ctlSessionNeedsUser: (id: string) => `session ${id} 的屏幕上有一个等用户回答的确认，不能结束`,
   ctlNoSuchTicket: (ticket: string, keys: string) => `这个 feature 下没有 ticket ${ticket}。现有的：${keys}`,
   ctlTicketNoRepo: (key: string) => `ticket ${key} 还没有仓库`,
   ctlPickRepo: (key: string, names: string) => `ticket ${key} 有几个仓库，请用 repo 指定：${names}`,
@@ -183,6 +187,24 @@ const ZH = {
   ctlNoSuchFeatureRepo: (wanted: string, names: string) => `这个 feature 没有仓库 ${wanted}。现有的仓库：${names}`,
   ctlInvalidKey: (key: string, pattern: string) => `ticket 号格式不对：${key}。要完整符合 Butler 设置里的格式 ${pattern}（例如 PROJ-123）；有 Jira 号就用 Jira 号`,
   ctlTicketCreated: "ticket 已经建好，出现在 Butler 里这个 feature 下面。用 start_session 在它的仓库里开 session、交代任务。",
+  /** 合并总控（设计文档 2026-11-04）：不放行时给 session 的原因，和之后的通知。who 是“ticket 号（feature 名）”这类写法。 */
+  gateWait: (who: string, files: string[]) => `先别合并：${who} 已经拿到合并许可、还没合完，它和你改了同样的地方（${files.join("、")}）。继续做别的事，不要再试合并；它合完后 Butler 会在这里告诉你，到时先 rebase 再合。`,
+  gateRebase: (who: string | null, files: string[]) => `先别合并：你的分支和最新的目标分支有冲突（${files.join("、")}）${who ? `，冲突来自 ${who} 已经合进去的改动` : ""}。先 rebase 到最新的目标分支、解决冲突再合。解决冲突时两边的意图都要保留，不要直接用你的版本覆盖掉对方的。`,
+  gateDirBusy: (who: string, branch: string) => `先别切换：这个目录正被 ${who} 用着（branch ${branch}），切过去会打乱它的工作。继续做不需要切 branch 的事，或者请用户把你的 ticket 改成 worktree 方式。`,
+  /** 文案里的“谁”：ticket 号后面括上它所在的 epic、feature。 */
+  gateWho: (key: string, within: string[]) => (within.length > 0 ? `${key}（${within.join(" / ")}）` : key),
+  gateMergedNotice: (who: string) => `Butler：${who} 已经合完。现在可以 rebase 到最新的目标分支后再合并。`,
+  gateNotMerged: (who: string) => `Butler：${who} 的合并没有完成。你现在可以再试一次合并（如果还有冲突，Butler 会再告诉你）。`,
+  gateNotifyTitle: (repo: string) => `${repo}：合并协调`,
+  gateNotifyBody: (e: MergeEvent, who: string, other: string | null) => {
+    const o = other ?? "";
+    switch (e.kind) {
+      case "wait": return `${who} 等 ${o} 合完再合`;
+      case "proceed_conflict": return `${who} 先合，${o} 之后要 rebase`;
+      case "rebase": return `${who} 要先 rebase 再合`;
+      case "dir_busy": return `${who} 想切 branch，目录正被 ${o} 用着`;
+    }
+  },
 };
 
 export type MainStrings = typeof ZH;
@@ -343,6 +365,9 @@ const EN: MainStrings = {
   ctlNoSuchEpicRepo: (wanted: string, names: string) => `This epic has no repo ${wanted}. Its repos: ${names}`,
   ctlFeatureCreated: "The feature is created and no coordinator is open. When the user opens this feature's coordinator, the brief is sent to it as the first message; it creates its own tickets.",
   ctlNoSuchSession: (id: string) => `Session ${id} was not found, or it is not one you manage. Use list_sessions to see them`,
+  ctlSessionNotRunning: (id: string) => `Session ${id} has already ended`,
+  ctlSessionBusy: (id: string, kind: string) => `Session ${id} is working (${kind}) and cannot be ended`,
+  ctlSessionNeedsUser: (id: string) => `Session ${id} has a prompt on screen waiting for the user to answer, so it cannot be ended`,
   ctlNoSuchTicket: (ticket: string, keys: string) => `This feature has no ticket ${ticket}. Its tickets: ${keys}`,
   ctlTicketNoRepo: (key: string) => `Ticket ${key} has no repo yet`,
   ctlPickRepo: (key: string, names: string) => `Ticket ${key} has several repos; name one with repo: ${names}`,
@@ -352,6 +377,22 @@ const EN: MainStrings = {
   ctlNoSuchFeatureRepo: (wanted: string, names: string) => `This feature has no repo ${wanted}. Its repos: ${names}`,
   ctlInvalidKey: (key: string, pattern: string) => `The ticket id is not in the expected format: ${key}. It must fully match the pattern in Butler's settings, ${pattern} (for example PROJ-123); use the Jira id if there is one`,
   ctlTicketCreated: "The ticket is created and appears under this feature in Butler. Use start_session to open a session in its repo and hand it a task.",
+  gateWait: (who: string, files: string[]) => `Don't merge yet: ${who} already has permission to merge and hasn't finished, and it changed the same places you did (${files.join(", ")}). Keep working on other things and don't try to merge again; Butler will tell you here once it has merged, and then rebase before you merge.`,
+  gateRebase: (who: string | null, files: string[]) => `Don't merge yet: your branch conflicts with the latest target branch (${files.join(", ")})${who ? `; the conflict comes from changes ${who} already merged` : ""}. Rebase onto the latest target branch and resolve the conflicts before you merge. Keep the intent of both sides when you resolve them; don't just overwrite the other side's changes with your version.`,
+  gateDirBusy: (who: string, branch: string) => `Don't switch yet: ${who} is using this directory (branch ${branch}), and switching would disrupt its work. Keep working on things that don't need a branch switch, or ask the user to change your ticket to the worktree mode.`,
+  gateWho: (key: string, within: string[]) => (within.length > 0 ? `${key} (${within.join(" / ")})` : key),
+  gateMergedNotice: (who: string) => `Butler: ${who} has finished merging. You can now rebase onto the latest target branch and then merge.`,
+  gateNotMerged: (who: string) => `Butler: ${who} did not finish merging. You can try the merge again now (if there is still a conflict, Butler will tell you).`,
+  gateNotifyTitle: (repo: string) => `${repo}: merge coordination`,
+  gateNotifyBody: (e: MergeEvent, who: string, other: string | null) => {
+    const o = other ?? "";
+    switch (e.kind) {
+      case "wait": return `${who} waits for ${o} to finish merging`;
+      case "proceed_conflict": return `${who} merges first; ${o} will need to rebase`;
+      case "rebase": return `${who} needs to rebase before merging`;
+      case "dir_busy": return `${who} wants to switch branches, but ${o} is using the directory`;
+    }
+  },
 };
 
 export const MAIN_STRINGS: Record<Lang, MainStrings> = { zh: ZH, en: EN };

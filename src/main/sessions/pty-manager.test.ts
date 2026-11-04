@@ -63,6 +63,29 @@ describe("PtyManager", () => {
     expect(snap.endsWith("bcd")).toBe(true);
   });
 
+  it("keeps the terminal modes that scrolled out of the replay buffer", () => {
+    // claude（全屏界面）只在启动和改尺寸时打开备用屏幕和鼠标上报：缓冲截掉开头后，回放要把这些模式补上，不然滚轮到不了 claude。
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("\x1b[?1049h\x1b[?1000h\x1b[?1002;1006h\x1b[?2004h\x1b[?25l\n");
+    spawned[0].pty.emit("\x1b[?2004l\n");
+    spawned[0].pty.emit(`${"x".repeat(100)}\n`.repeat(Math.ceil(BUFFER_LIMIT / 101) + 10));
+    spawned[0].pty.emit("tail");
+    const snap = mgr.snapshot("t1").data;
+    expect(snap.startsWith("\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004l\x1b[?25l")).toBe(true);
+    expect(snap.endsWith("tail")).toBe(true);
+    // 还在缓冲里的模式不重复补；退出后的记录也带着。
+    spawned[0].pty.emitExit(0);
+    expect(mgr.snapshot("t1").data).toBe(snap);
+  });
+
+  it("adds no mode prefix while nothing has been cut", () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("\x1b[?1049hhello");
+    expect(mgr.snapshot("t1").data).toBe("\x1b[?1049hhello");
+  });
+
   it("refuses to open the same terminal twice", () => {
     const { mgr } = setup();
     mgr.open("t1", spec, opts);
@@ -108,6 +131,28 @@ describe("PtyManager", () => {
     const p2 = mgr.prefill("t2", "x", 800, 1000);
     await vi.advanceTimersByTimeAsync(1200);
     expect(await p2).toBe(false);
+  });
+
+  it("remembers when the user last wrote to a terminal; Butler's own deliveries and prefills don't count", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    expect(mgr.lastUserInputAt("t1")).toBe(0);
+    expect(mgr.lastUserInputAt("nope")).toBe(0);
+    await vi.advanceTimersByTimeAsync(5000);
+    mgr.write("t1", "半句");
+    const typed = Date.now();
+    expect(mgr.lastUserInputAt("t1")).toBe(typed);
+    spawned[0].pty.emit("ready");
+    const p = mgr.deliver("t1", "通知", { startWaitMs: 0 });
+    await vi.advanceTimersByTimeAsync(7000);
+    expect(await p).toBe("sent");
+    const f = mgr.prefill("t1", "x", 800, 1000);
+    await vi.advanceTimersByTimeAsync(1200);
+    await f;
+    expect(mgr.lastUserInputAt("t1")).toBe(typed);
+    spawned[0].pty.emitExit(0);
+    mgr.open("t1", spec, opts);
+    expect(mgr.lastUserInputAt("t1")).toBe(0);
   });
 
   it("deliver waits for SessionStart and a quiet prompt, pastes once, then presses Enter after the echo settles", async () => {
@@ -228,6 +273,28 @@ describe("PtyManager.pid", () => {
     expect(pty.pid("t1")).toBe(spawned[0].pty.pid);
     spawned[0].pty.emitExit(0);
     expect(pty.pid("t1")).toBeNull();
+  });
+});
+
+describe("PtyManager.screenNeedsUser", () => {
+  it("is true while a permission prompt or a startup dialog is on the live screen, false otherwise", () => {
+    const { mgr, spawned } = setup();
+    expect(mgr.screenNeedsUser("t1")).toBe(false);
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("收到：做完了\r\n> ");
+    expect(mgr.screenNeedsUser("t1")).toBe(false);
+    spawned[0].pty.emit("Bash command\r\n\x1b[1mDo you want to proceed?\x1b[0m\r\n ❯ 1. Yes");
+    expect(mgr.screenNeedsUser("t1")).toBe(true);
+    // 回答之后提示被后面的输出推出了屏幕末尾
+    spawned[0].pty.emit(`\x1b[2J${"─".repeat(1200)}\r\n> `);
+    expect(mgr.screenNeedsUser("t1")).toBe(false);
+
+    mgr.open("t2", spec, opts);
+    spawned[1].pty.emit("\x1b[1m Do you trust the files in this folder?\x1b[0m\r\n ❯ 1. Yes, proceed");
+    expect(mgr.screenNeedsUser("t2")).toBe(true);
+    // 退出之后不再看缓冲：终端已经不在了
+    spawned[1].pty.emitExit(0);
+    expect(mgr.screenNeedsUser("t2")).toBe(false);
   });
 });
 

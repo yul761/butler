@@ -2,7 +2,7 @@ import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { ITEM_MARKS, type BriefKind, type BriefView, type ItemMark } from "../../shared/brief";
 import { IPC } from "../../shared/ipc";
 import {
-  FOLLOWUP_STATUSES, type AutostartState, type FollowupStatus, type JobStateView, type McpProbe, type OpenSessionRequest, type TicketStatus,
+  FOLLOWUP_STATUSES, type AutostartState, type FollowupStatus, type JobStateView, type McpProbe, type MergeEvent, type OpenSessionRequest, type TicketStatus,
 } from "../../shared/types";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { BriefService } from "../brief/brief-service";
@@ -12,6 +12,7 @@ import type { MemoryService } from "../memory/memory-service";
 import { JOB_MORNING, JOB_NIGHTLY, type JobsRepo } from "../db/jobs-repo";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
+import type { MergeGateRepo } from "../db/merge-gate-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import type { TermsRepo } from "../db/terms-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
@@ -53,6 +54,7 @@ export interface IpcDeps {
   handoffs: HandoffsRepo;
   settings: SettingsRepo;
   briefService: BriefService;
+  gateRepo: Pick<MergeGateRepo, "recentEvents">;
   runner: HandoffRunner;
   featureRunner: Pick<FeatureSummaryRunner, "runManual">;
   scheduler: Scheduler;
@@ -299,6 +301,8 @@ export function registerIpc(d: IpcDeps): void {
     refreshing: d.briefRefreshing(),
     narrating: d.briefNarrating(),
   }));
+  // 首页的“合并协调”：最近 7 天、最多 20 条。
+  handle(IPC.mergeEvents, (): MergeEvent[] => d.gateRepo.recentEvents(d.now() - 7 * 24 * 3600 * 1000, 20));
   handle(IPC.briefsRegenerate, async (): Promise<JobStateView | null> => {
     if (d.aborted()) return null;
     await d.scheduler.runMorningNow();

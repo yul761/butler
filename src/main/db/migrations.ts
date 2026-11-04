@@ -207,4 +207,41 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE features ADD COLUMN brief_sent_at INTEGER;
   ALTER TABLE sessions ADD COLUMN epic_id INTEGER REFERENCES epics(id);
   `,
+  `
+  CREATE TABLE merge_holds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_path TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    target TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('pr', 'local')),
+    pr_url TEXT,
+    session_id TEXT,
+    ticket_key TEXT,
+    created_at INTEGER NOT NULL,
+    released_at INTEGER,
+    outcome TEXT CHECK (outcome IN ('merged', 'cancelled', 'expired'))
+  );
+  CREATE INDEX idx_merge_holds_repo ON merge_holds (repo_path, branch);
+  CREATE TABLE merge_waiters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hold_id INTEGER NOT NULL REFERENCES merge_holds(id),
+    session_id TEXT,
+    ticket_key TEXT,
+    branch TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    notified_at INTEGER
+  );
+  CREATE TABLE merge_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_path TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('wait', 'proceed_conflict', 'rebase', 'dir_busy')),
+    ticket_key TEXT,
+    branch TEXT NOT NULL,
+    other_ticket TEXT,
+    other_branch TEXT,
+    files TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_merge_events_created ON merge_events (created_at);
+  `,
 ];

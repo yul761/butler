@@ -56,6 +56,7 @@ export const IPC = {
   briefsLatest: "briefs:latest",
   briefsRegenerate: "briefs:regenerate",
   briefsMark: "briefs:mark",
+  mergeEvents: "merge:events",
   followupsList: "followups:list",
   followupsSetStatus: "followups:setStatus",
   handoffsList: "handoffs:list",
@@ -95,6 +96,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionOpenFix, IPC.activityDismiss,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.briefsLatest, IPC.briefsRegenerate, IPC.briefsMark,
+  IPC.mergeEvents,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,
@@ -107,6 +109,6 @@ export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];
 export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.memoryChanged, IPC.appNavigate, IPC.appKeepAwakeChanged];
 
 /** IPC.appNavigate 带的内容：点系统通知后去哪。 */
-export type AppNavigateRoute = { page: "home"; kind?: BriefKind } | { page: "feature"; featureId: number; stuckTicket: string };
+export type AppNavigateRoute = { page: "home"; kind?: BriefKind } | { page: "feature"; featureId: number; stuckTicket: string } | { page: "ticket"; key: string };
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };

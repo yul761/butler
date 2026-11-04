@@ -2,11 +2,15 @@
 // E2E 用的假 claude（计划 5 任务 8）。只实现 Butler 用到的部分，绝不联网：
 //   --version / --help（列出 Butler 检查的全部参数）；
 //   交互模式（在 PTY 里）：打印就绪行和挂载的 MCP server 名；每读到一行输入就写 transcript、
-//     按 CLAUDE_CONFIG_DIR/settings.json 执行 hook（macOS 用 /bin/sh，Windows 用 Git Bash，和 Claude Code 一样）；
+//     按 CLAUDE_CONFIG_DIR/settings.json 和 --settings 文件执行 hook（macOS 用 /bin/sh，Windows 用 Git Bash，和 Claude Code 一样）；
 //     输入 /handoff 时按 Claude Code 的格式写命令消息，回一个 handoff 代码块（feature 总控里是 butler-feature-handoff，
 //     /handoff <问题> 把它写进 open_questions）；
 //     输入 /fake-bash <命令> 时像 Bash 工具在跑：写一条没有结果的 tool_use 和 tasks/<id>.output，这一轮不结束；
 //     输入 /fake-bg <命令> 时像后台命令：tool_result 带任务 id 和输出文件，这一轮结束；/fake-bg-done 写它的完成通知；
+//     输入 /fake-flood <行数> 时打印这么多行（每行约 100 字节，用来撑满回放缓冲）；
+//     输入 /fake-fullscreen 时像 claude 的全屏界面：打开备用屏幕和鼠标上报（只发这一次），之后收到滚轮就记日志；
+//     输入 /fake-run <命令> 时像 Bash 工具：先跑 PreToolUse（也读 --settings 里的 hook，合并总控的 gate 在那里），拒绝就打印 denied: <理由>，
+//     否则在 cwd 里执行、打印输出、再跑 PostToolUse；日志记 gate deny <理由> / gate allow <命令>，这一轮照常结束；
 //     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 butler-sessions，调用它，结果写进运行记录；
 //     启动时写一份 sessions/<pid>.json 登记文件，Butler 从这里查 session 的名字；
 //   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果、feature 汇总或卡住判断；stream-json 的 MCP 探测只回 init。
@@ -96,23 +100,49 @@ const STUCK_VERDICT = {
 /** /fake-bash 和 /fake-bg 写进输出文件的内容：比面板的 6 行多。 */
 const COMMAND_OUTPUT = Array.from({ length: 8 }, (_, i) => `step ${i + 1} of 8`);
 
-/** 和 Claude Code 一样执行 settings.json 里这个事件的 command hook：stdin 是 JSON，超时 15 秒。 */
-function runHooks(event, payload) {
-  let settings;
+/** hook 和 /fake-run 的命令都用这个 shell 跑（macOS 用 /bin/sh，Windows 用 Git Bash，和 Claude Code 一样）。 */
+const SHELL = process.platform === "win32" ? process.env.CLAUDE_CODE_GIT_BASH_PATH || "C:\\Program Files\\Git\\bin\\bash.exe" : "/bin/sh";
+
+/** 一个 settings 文件里这个事件的 hook 组；读不了就没有。 */
+function hookGroups(file, event) {
   try {
-    settings = JSON.parse(fs.readFileSync(path.join(configDir, "settings.json"), "utf8").replace(/^\uFEFF/, ""));
+    const settings = JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+    return (settings.hooks && settings.hooks[event]) || [];
   } catch {
-    return;
+    return [];
   }
-  const groups = (settings.hooks && settings.hooks[event]) || [];
-  const shell = process.platform === "win32" ? process.env.CLAUDE_CODE_GIT_BASH_PATH || "C:\\Program Files\\Git\\bin\\bash.exe" : "/bin/sh";
-  for (const group of groups) {
+}
+
+/**
+ * 和 Claude Code 一样执行这个事件的 command hook：CLAUDE_CONFIG_DIR/settings.json 里的，加上 --settings 文件里的（合并总控的 gate hook 只在那里）。
+ * stdin 是 JSON，超时 15 秒。返回每个 hook 的 stdout。
+ */
+function runHooks(event, payload) {
+  const files = [path.join(configDir, "settings.json"), ...(flag("--settings") ? [flag("--settings")] : [])];
+  const outputs = [];
+  for (const group of files.flatMap((f) => hookGroups(f, event))) {
+    if (group.matcher && payload.tool_name && !new RegExp(`^(${group.matcher})$`).test(payload.tool_name)) continue;
     for (const h of group.hooks || []) {
       if (h.type !== "command") continue;
-      const r = spawnSync(shell, ["-c", h.command], { input: JSON.stringify({ ...payload, hook_event_name: event }), env: process.env, timeout: 15_000, windowsHide: true });
+      const r = spawnSync(SHELL, ["-c", h.command], { input: JSON.stringify({ ...payload, hook_event_name: event }), env: process.env, encoding: "utf8", timeout: 15_000, windowsHide: true });
       log(`hook ${event} exit=${r.status}${r.error ? ` error=${r.error.message}` : ""}`);
+      outputs.push(r.stdout || "");
     }
   }
+  return outputs;
+}
+
+/** PreToolUse hook 的输出里有拒绝就返回理由（Claude Code 的 hookSpecificOutput.permissionDecision），否则 null。 */
+function denyReason(outputs) {
+  for (const o of outputs) {
+    try {
+      const h = JSON.parse(o).hookSpecificOutput;
+      if (h && h.permissionDecision === "deny") return String(h.permissionDecisionReason || "");
+    } catch {
+      // 不是 JSON：不算拒绝。
+    }
+  }
+  return null;
 }
 
 function headless() {
@@ -233,6 +263,24 @@ function interactive() {
       runHooks("SessionEnd", { session_id: sessionId, cwd, reason: "exit", transcript_path: transcript });
       process.exit(0);
     }
+    const flood = /^\/fake-flood (\d+)$/.exec(line);
+    if (flood) {
+      // 一屏放不下的输出：e2e 用它检查终端能不能往回滚。
+      for (let i = 1; i <= Number(flood[1]); i++) out(`flood line ${i} ${"-".repeat(80)}\n`);
+      out("> ");
+      return;
+    }
+    if (line === "/fake-fullscreen") {
+      out("\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+      // SGR 鼠标上报里的滚轮：按钮 64 往上、65 往下。
+      process.stdin.on("data", (d) => {
+        // eslint-disable-next-line no-control-regex
+        const wheel = /\x1b\[<(64|65);\d+;\d+M/.exec(d.toString());
+        if (wheel) log(`mouse wheel ${wheel[1] === "64" ? "up" : "down"}`);
+      });
+      out("> ");
+      return;
+    }
     if (line === "/fake-bg-done") {
       // 后台命令结束：Claude Code 写的是这条通知，不是用户消息。
       append({ type: "queue-operation", operation: "enqueue", content: `<task-notification><task-id>${backgroundTask}</task-id><status>completed</status></task-notification>` });
@@ -273,6 +321,26 @@ function interactive() {
       runHooks("Stop", { session_id: sessionId, cwd, stop_hook_active: false, transcript_path: transcript });
       out("> ");
     };
+    const run = /^\/fake-run (.+)$/.exec(line);
+    if (run) {
+      // 像 Bash 工具：PreToolUse 拒绝就不执行；否则在 cwd 里执行，再跑 PostToolUse。e2e 按日志里的 gate deny / gate allow 判断。
+      const toolInput = { command: run[1] };
+      const base = { session_id: sessionId, cwd, tool_name: "Bash", tool_input: toolInput, transcript_path: transcript };
+      log(`fake-run ${run[1]}`);
+      const reason = denyReason(runHooks("PreToolUse", base));
+      if (reason !== null) {
+        log(`gate deny ${reason}`);
+        out(`denied: ${reason}\n`);
+        endTurn("命令被拒绝");
+        return;
+      }
+      const r = spawnSync(SHELL, ["-c", run[1]], { cwd, env: process.env, encoding: "utf8", timeout: 15_000, windowsHide: true });
+      out(`${r.stdout || ""}${r.stderr || ""}`);
+      runHooks("PostToolUse", { ...base, tool_response: { stdout: r.stdout || "", stderr: r.stderr || "", interrupted: false } });
+      log(`gate allow ${run[1]}`);
+      endTurn(`命令结束（exit ${r.status}）`);
+      return;
+    }
     if (tool) {
       // 工具在等 Butler 回话，这一轮结束不了；结果记下来给 e2e 读，终端里的文字会被折行。
       callMcpTool(mcp, tool[1], tool[2] ? JSON.parse(tool[2]) : {}).then(
