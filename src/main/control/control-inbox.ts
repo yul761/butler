@@ -5,10 +5,14 @@ import { CONTROL_ID_RE, parseControlRequest, type ControlRequest, type ControlRe
 import { renameWithRetry } from "../util/fs-retry";
 import { M } from "../strings";
 
-export interface ControlInboxOptions {
+export interface ControlInboxOptions<Req = ControlRequest, Res = ControlResult> {
   requestsDir: string;
   resultsDir: string;
-  handle: (req: ControlRequest) => Promise<ControlResult>;
+  /** 把文件内容解析成请求，不合规返回 null。默认按总控请求解析。 */
+  parse?: (raw: unknown) => Req | null;
+  /** 解析失败（或 handle 抛错）时写给对方的结果。默认是总控的“请求格式不对”。 */
+  badResult?: () => Res;
+  handle: (req: Req) => Promise<Res>;
   intervalMs?: number;
   /** 没人取走的结果文件（总控等超时了）、写了一半的临时文件保留多久。 */
   staleMs?: number;
@@ -18,14 +22,14 @@ export interface ControlInboxOptions {
   log?: (msg: string, err?: unknown) => void;
 }
 
-/** 总控请求的收件箱：fs.watch 加定时轮询，一次处理一个，结果写成同名文件（临时文件 + rename）。 */
-export class ControlInbox {
+/** 请求收件箱（总控、合并闸门共用）：fs.watch 加定时轮询，一次处理一个，结果写成同名文件（临时文件 + rename）。 */
+export class ControlInbox<Req = ControlRequest, Res = ControlResult> {
   private watcher: FSWatcher | null = null;
   private timer: NodeJS.Timeout | null = null;
   private inflight: Promise<number> | null = null;
   private again = false;
 
-  constructor(private readonly o: ControlInboxOptions) {}
+  constructor(private readonly o: ControlInboxOptions<Req, Res>) {}
 
   start(): void {
     void this.sweepStale();
@@ -101,13 +105,14 @@ export class ControlInbox {
       this.o.log?.(`control inbox: dropped ${name} (${Math.round(age / 1000)} s old; nobody is waiting for it any more)`);
       return 0;
     }
-    let result: ControlResult;
+    const bad = (): Res => (this.o.badResult ?? (() => ({ v: 1, ok: false, error: M().badRequest }) as Res))();
+    let result: Res;
     try {
-      const req = parseControlRequest(JSON.parse(raw));
-      result = req ? await this.o.handle(req) : { v: 1, ok: false, error: M().badRequest };
+      const req = (this.o.parse ?? (parseControlRequest as (raw: unknown) => Req | null))(JSON.parse(raw));
+      result = req ? await this.o.handle(req) : bad();
     } catch (e) {
       this.o.log?.(`control inbox: ${name} failed`, e);
-      result = { v: 1, ok: false, error: e instanceof Error ? e.message : String(e) };
+      result = this.o.badResult ? this.o.badResult() : ({ v: 1, ok: false, error: e instanceof Error ? e.message : String(e) } as Res);
     }
     const out = join(this.o.resultsDir, name);
     const tmp = join(this.o.resultsDir, `${id}.tmp`);

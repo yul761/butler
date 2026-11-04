@@ -81,4 +81,24 @@ describe("ControlInbox", () => {
     expect(existsSync(fresh)).toBe(true);
     expect(existsSync(tmp)).toBe(false);
   });
+
+  it("hands the result of a custom parse to handle, and writes badResult() when parsing fails", async () => {
+    const { requestsDir, resultsDir, put, result } = setup();
+    const got: { n: number }[] = [];
+    const inbox = new ControlInbox<{ n: number }, { ok: boolean }>({
+      requestsDir, resultsDir,
+      parse: (raw) => (typeof (raw as { n?: unknown })?.n === "number" ? { n: (raw as { n: number }).n } : null),
+      badResult: () => ({ ok: false }),
+      handle: async (req) => {
+        got.push(req);
+        return { ok: true };
+      },
+    });
+    put(id(1), { n: 7 });
+    put(id(2), { n: "x" });
+    expect(await inbox.drain()).toBe(2);
+    expect(got).toEqual([{ n: 7 }]);
+    expect(result(id(1))).toEqual({ ok: true });
+    expect(result(id(2))).toEqual({ ok: false });
+  });
 });
