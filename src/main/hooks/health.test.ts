@@ -104,7 +104,8 @@ describe("HealthService", () => {
       expect(health.hookBinCurrent()).toBe(false);
       expect(await health.syncHookBinary()).toBe(true);
       expect(readFileSync(paths.hookBin, "utf8")).toBe("#!/bin/sh\necho new\n");
-      expect(statSync(paths.hookBin).mode & 0o111).not.toBe(0);
+      // Windows 没有可执行位。
+      if (process.platform !== "win32") expect(statSync(paths.hookBin).mode & 0o111).not.toBe(0);
       expect(health.hookBinCurrent()).toBe(true);
       expect(logs.some((m) => m.includes("out of date"))).toBe(true);
     });

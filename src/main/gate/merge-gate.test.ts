@@ -420,14 +420,16 @@ describe("MergeGate: deadline", () => {
     // 每次裁决的第一次 merge-tree 用掉 600 毫秒。
     let first = true;
     const step = { git: { mergeConflicts: async (r: string, a: string, b: string) => { if (first) clock += 600; first = false; return git.mergeConflicts(r, a, b); } } };
-    // 排队 3.5 秒 + 一步 600 毫秒 > 4 秒：算晚了，放行、不记。
-    const late = setup({ now: () => clock, ...step });
-    expect(await late.merge("dms-3", {}, { ageMs: 3500 })).toEqual({ v: 1, decision: "allow" });
+    // 期限放大到 60 秒，真实计时器不会抢先触发，结果只由假时钟决定。
+    const deadlineMs = 60_000;
+    // 排队 deadline-500 + 一步 600 毫秒 > deadline：算晚了，放行、不记。
+    const late = setup({ now: () => clock, deadlineMs, ...step });
+    expect(await late.merge("dms-3", {}, { ageMs: deadlineMs - 500 })).toEqual({ v: 1, decision: "allow" });
     expect(rows(late)).toEqual(none);
-    // 排队 3 秒 + 600 毫秒还在期限内：照常占位。
-    const inTime = setup({ now: () => clock, ...step });
+    // 排队 deadline-1000 + 600 毫秒还在期限内：照常占位。
+    const inTime = setup({ now: () => clock, deadlineMs, ...step });
     first = true;
-    await inTime.merge("dms-3", {}, { ageMs: 3000 });
+    await inTime.merge("dms-3", {}, { ageMs: deadlineMs - 1000 });
     expect(rows(inTime).holds).toEqual({ n: 1 });
   });
 
