@@ -257,7 +257,8 @@ export function projectMcpApprovalSettings(dirs: string[], p: ProjectMcpPaths & 
     // 合并总控的 gate hook 只写进这份 session 专用的 settings，不碰用户全局的 settings.json
     if (p.gateCommand) {
       const group = [{ matcher: "Bash", hooks: [{ type: "command", command: `${p.gateCommand} gate`, timeout: 10 }] }];
-      content.hooks = { PreToolUse: group, PostToolUse: group };
+      // 命令失败时只有 PostToolUseFailure，没有 PostToolUse：两个都要，不然失败的合并一直占着。
+      content.hooks = { PreToolUse: group, PostToolUse: group, PostToolUseFailure: group };
     }
     const file = join(p.mcpDir, `approve-${createHash("sha1").update(JSON.stringify(content)).digest("hex").slice(0, 12)}.json`);
     writePrivate(file, content);

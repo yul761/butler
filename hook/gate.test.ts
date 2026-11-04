@@ -90,6 +90,16 @@ describe("runGate", () => {
     expect(existsSync(join(s.home, "gate", "requests", "abcd1234-req.json.tmp"))).toBe(false);
   });
 
+  it("treats PostToolUseFailure (the command failed) as post too", async () => {
+    const s = setup();
+    const t0 = s.now();
+    expect(await runGate(s.input("git push origin feat:main", "PostToolUseFailure"), s.env, s.deps)).toBe("");
+    expect(s.now()).toBe(t0);
+    const names = s.requests();
+    expect(names).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(s.home, "gate", "requests", names[0]), "utf8")).phase).toBe("post");
+  });
+
   it("ignores non-Bash tools, other events and non-JSON stdin", async () => {
     const s = setup();
     expect(await runGate(s.input("git merge feat", "PreToolUse", "Edit"), s.env, s.deps)).toBe("");

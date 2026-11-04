@@ -4,6 +4,11 @@ import type { prInfo } from "../tickets/gh";
 import type * as Git from "../tickets/git";
 import { HOLD_MAX_MS } from "./merge-gate";
 
+/**
+ * 本地合并、直接 push 的占位最多留多久。正常在 post 阶段就定下来了；没收到 post（权限提示被拒、按了 Esc、hook 超时）时
+ * 命令其实没跑，不能让冲突的一方等 2 小时（最终审查 2）。
+ */
+export const LOCAL_HOLD_MAX_MS = 10 * 60_000;
 /** 拿到许可 30 秒后 PR 还开着、又没开自动合并：合并命令失败了，或者 --auto 被取消了。 */
 const PR_GRACE_MS = 30_000;
 /** gh 和 fetch 各给 2 秒：一轮检查不能拖太久。 */
@@ -32,7 +37,7 @@ export interface HoldWatcherDeps {
 
 /**
  * 占位跟着真正的合并走（设计文档 2026-11-04“占位跟着真正的合并走”“回复和之后的事”）：定期查占位中的合并，
- * 真的合完就释放、告诉等着的 session 可以合了；PR 关了、自动合并取消了就释放，不发通知；查不了的最多留 2 小时。
+ * 真的合完就释放、告诉等着的 session 可以合了；PR 关了、自动合并取消了就释放；查不了的 PR 最多留 2 小时，本地合并、直接 push 最多留 10 分钟。
  * 所有状态都在数据库里，Butler 重启后照样接上。
  */
 export class HoldWatcher {
@@ -133,7 +138,7 @@ export class HoldWatcher {
       const upstream = await g.upstreamRef(h.repoPath, h.target);
       if (upstream !== h.target && (await g.isAncestor(h.repoPath, h.branch, upstream))) return "merged";
     }
-    return age > HOLD_MAX_MS ? "expired" : null;
+    return age > (h.kind === "local" ? LOCAL_HOLD_MAX_MS : HOLD_MAX_MS) ? "expired" : null;
   }
 
   private async sendNotices(): Promise<void> {

@@ -139,6 +139,18 @@ describe("MergeGate: merges", () => {
     expect(t.events.at(-1)).toMatchObject({ kind: "wait", ticketKey: null, branch: "hotfix" });
   });
 
+  it("turns the branch's local hold (e.g. left by a rejected push) into a PR hold when its PR is merged, keeping the waiters", async () => {
+    const t = setup({ pr: () => ({ number: 8, url: "https://x/pull/8", head: "dms-1", base: "main", state: "OPEN", autoMerge: false }), now: () => 5000 });
+    await t.merge("dms-1", { session: "s1" });
+    await t.merge("dms-2", { session: "s2" });
+    const local = t.repo.activeHold(t.repoPath, "dms-1")!;
+    expect(local.kind).toBe("local");
+    expect(await t.ask({ kind: "pr_merge", dir: null, pr: "8" }, { session: "s-coord" })).toEqual({ v: 1, decision: "allow" });
+    expect(t.repo.activeHolds()).toHaveLength(1);
+    expect(t.repo.activeHold(t.repoPath, "dms-1")).toMatchObject({ id: local.id, kind: "pr", prUrl: "https://x/pull/8", target: "main", sessionId: "s-coord", ticketKey: "DMS-1", createdAt: 5000 });
+    expect(t.repo.waitersOf(local.id).map((w) => w.sessionId)).toEqual(["s2"]);
+  });
+
   it("allows a PR merge it can't look up, and records nothing", async () => {
     const t = setup({ pr: () => null });
     expect(await t.ask({ kind: "pr_merge", dir: null, pr: "9" })).toEqual({ v: 1, decision: "allow" });

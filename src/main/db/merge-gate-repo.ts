@@ -65,6 +65,13 @@ export class MergeGateRepo {
     return r ? toHold(r) : null;
   }
 
+  /** 本地占位换成 PR 占位（同一行，等待者跟着留下）：直接 push 没成、改走 PR 合并时用。时间从这次合并算起。 */
+  toPrHold(id: number, h: { prUrl: string | null; sessionId: string | null; ticketKey: string | null; createdAt: number }): void {
+    this.db
+      .prepare(`UPDATE merge_holds SET kind = 'pr', pr_url = ?, session_id = ?, ticket_key = COALESCE(?, ticket_key), created_at = ? WHERE id = ? AND released_at IS NULL`)
+      .run(h.prUrl, h.sessionId, h.ticketKey, h.createdAt, id);
+  }
+
   releaseHold(id: number, outcome: "merged" | "cancelled" | "expired", at: number): void {
     this.db.prepare(`UPDATE merge_holds SET released_at = ?, outcome = ? WHERE id = ?`).run(at, outcome, id);
   }

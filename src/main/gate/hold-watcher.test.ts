@@ -4,7 +4,7 @@ import { MergeGateRepo } from "../db/merge-gate-repo";
 import { M } from "../strings";
 import { memDb } from "../test-utils";
 import type { PrInfo } from "../tickets/gh";
-import { HoldWatcher, type HoldWatcherDeps } from "./hold-watcher";
+import { HoldWatcher, LOCAL_HOLD_MAX_MS, type HoldWatcherDeps } from "./hold-watcher";
 import { HOLD_MAX_MS } from "./merge-gate";
 
 const REPO = "/r/app";
@@ -174,14 +174,23 @@ describe("HoldWatcher: local holds", () => {
     expect(t.deliver).toHaveBeenCalledTimes(1);
   });
 
-  it("expires a local hold after 2 h", async () => {
+  it("expires a local hold after 10 min (no post arrived: the command was rejected or interrupted)", async () => {
+    expect(LOCAL_HOLD_MAX_MS).toBe(10 * 60_000);
     const db = memDb();
     seed(db, "local");
     const t = setup({ db, ancestor: () => false });
-    t.state.now = HOLD_MAX_MS + 1;
+    t.state.now = LOCAL_HOLD_MAX_MS + 1;
     await t.watcher.check();
     expect(t.outcome()).toBe("expired");
-    expect(t.deliver).not.toHaveBeenCalled();
+  });
+
+  it("keeps a local hold up to 10 min", async () => {
+    const db = memDb();
+    seed(db, "local");
+    const t = setup({ db, ancestor: () => false });
+    t.state.now = LOCAL_HOLD_MAX_MS;
+    await t.watcher.check();
+    expect(t.outcome()).toBeNull();
   });
 });
 

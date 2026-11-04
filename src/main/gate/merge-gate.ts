@@ -235,8 +235,12 @@ export class MergeGate {
     for (const c of conflicts) {
       this.record({ repoPath: repo, kind: "proceed_conflict", ticketKey: own, branch, otherTicket: c.ticket, otherBranch: c.branch, files: c.files });
     }
-    if (!this.d.repo.activeHold(repo, branch)) {
+    const mine = this.d.repo.activeHold(repo, branch);
+    if (!mine) {
       this.d.repo.addHold({ repoPath: repo, branch, target, kind: m.kind, prUrl: m.prUrl, sessionId: req.session, ticketKey: own, createdAt: this.d.now() });
+    } else if (mine.kind === "local" && m.kind === "pr" && mine.target === target) {
+      // 之前的直接 push 没成（占位还留着），现在改合 PR：换成 PR 占位，交给 HoldWatcher 看 PR。squash 合并后 branch 不会是目标的祖先，本地占位等不到合完。
+      this.d.repo.toPrHold(mine.id, { prUrl: m.prUrl, sessionId: req.session, ticketKey: own, createdAt: this.d.now() });
     }
     return ALLOW;
   }

@@ -460,14 +460,14 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     expect(readdirSync(s.mcpDir)).toHaveLength(1);
   });
 
-  it("with a gate command it adds the PreToolUse/PostToolUse Bash hooks; without one there is no hooks key", () => {
+  it("with a gate command it adds the PreToolUse/PostToolUse/PostToolUseFailure Bash hooks; without one there is no hooks key", () => {
     const s = setup();
     const plain = projectMcpApprovalSettings([s.repo], s.p);
     expect(Object.keys(read(plain!))).not.toContain("hooks");
     const file = projectMcpApprovalSettings([s.repo], { ...s.p, gateCommand: '"/b/butler-hook"' });
     const group = [{ matcher: "Bash", hooks: [{ type: "command", command: '"/b/butler-hook" gate', timeout: 10 }] }];
     expect(file).not.toBe(plain);
-    expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [], hooks: { PreToolUse: group, PostToolUse: group } });
+    expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [], hooks: { PreToolUse: group, PostToolUse: group, PostToolUseFailure: group } });
   });
 
   it("missing or corrupt ~/.claude.json still enables the servers; an unwritable mcp dir gives null and a log line", () => {

@@ -51,7 +51,9 @@ function readJson(file: string): unknown {
 export async function runGate(raw: string, env: NodeJS.ProcessEnv, deps: GateDeps): Promise<string> {
   try {
     const p = JSON.parse(raw) as { hook_event_name?: unknown; tool_name?: unknown; tool_input?: { command?: unknown }; cwd?: unknown };
-    const phase = p.hook_event_name === "PreToolUse" ? "pre" : p.hook_event_name === "PostToolUse" ? "post" : null;
+    // 命令失败（push 被拒、合并冲突）时 Claude Code 发的是 PostToolUseFailure，不是 PostToolUse：一样当 post，释放占位。
+    const ev = p.hook_event_name;
+    const phase = ev === "PreToolUse" ? "pre" : ev === "PostToolUse" || ev === "PostToolUseFailure" ? "post" : null;
     const command = p.tool_input?.command;
     if (!phase || p.tool_name !== "Bash" || typeof command !== "string" || typeof p.cwd !== "string") return "";
     // 先本地分类：绝大多数命令不碰文件系统。
