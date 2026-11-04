@@ -4,7 +4,7 @@
 export type GateAction =
   | { kind: "pr_merge"; dir: string | null; pr: string | null }
   | { kind: "local_merge"; dir: string | null; source: string }
-  /** source：refspec 写了 `src:` 时推的是哪个分支（可能是 HEAD）；没写就是当前分支。 */
+  /** source：推的是哪个本地分支（可能是 HEAD，即当前分支）。没写 `src:` 时和 target 同名。 */
   | { kind: "push"; dir: string | null; target: string; source?: string }
   | { kind: "switch"; dir: string | null; branch: string; create: boolean };
 
@@ -29,7 +29,8 @@ function splitSegments(command: string): string[][] {
     const c = command[i];
     if (quote) {
       if (c === quote) quote = null;
-      else if (c === "\\" && quote === '"' && i + 1 < command.length) cur += command[++i];
+      // 双引号里的反斜杠只转义 $ ` " \ 和换行，别的照原样留着（bash 的规则）：`cd "C:\Users\me"` 的路径不能被吃掉。
+      else if (c === "\\" && quote === '"' && i + 1 < command.length && '$`"\\\n'.includes(command[i + 1])) cur += command[++i];
       else cur += c;
       continue;
     }
@@ -42,7 +43,7 @@ function splitSegments(command: string): string[][] {
     } else if (c === "\\" && i + 1 < command.length) {
       cur += command[++i];
       has = true;
-    } else if (c === " " || c === "\t") endToken();
+    } else if (c === " " || c === "\t" || c === "\r") endToken(); // \r：Windows 换行留下的
     else if (c === "\n" || c === ";" || c === "|" || c === "&") endSegment();
     else {
       cur += c;
@@ -101,8 +102,10 @@ function classifySegment(tokens: string[], dir: string | null): GateAction | nul
     const branchName = (r: string) => r.replace(/^\+/, "").replace(/^refs\/heads\//, "");
     const target = branchName(dst);
     if (!target) return null;
-    const source = colon >= 0 ? branchName(refspec.slice(0, colon)) : "";
-    return source ? { kind: "push", dir, target, source } : { kind: "push", dir, target };
+    // 没写 `src:` 时推的是同名的本地分支（在 dms-2 上 git push origin main 推的是本地 main），不是当前分支。
+    const source = colon >= 0 ? branchName(refspec.slice(0, colon)) : target;
+    // `:main` 是删除远端分支，不是合并。
+    return source ? { kind: "push", dir, target, source } : null;
   }
   if (sub === "checkout" || sub === "switch") {
     if (args.includes("--")) return null; // 还原文件，不是切分支

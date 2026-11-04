@@ -18,14 +18,25 @@ describe("classifyGateCommand", () => {
   });
   it("recognises git push with a remote branch", () => {
     expect(classifyGateCommand("git push origin HEAD:main")).toEqual({ kind: "push", dir: null, target: "main", source: "HEAD" });
-    expect(classifyGateCommand("git push origin main")).toEqual({ kind: "push", dir: null, target: "main" });
-    expect(classifyGateCommand("git push -u origin dms-1")).toEqual({ kind: "push", dir: null, target: "dms-1" });
+    // 没写 `src:`：推的是同名的本地分支，不管当前在哪个分支上。
+    expect(classifyGateCommand("git push origin main")).toEqual({ kind: "push", dir: null, target: "main", source: "main" });
+    expect(classifyGateCommand("git push -u origin dms-1")).toEqual({ kind: "push", dir: null, target: "dms-1", source: "dms-1" });
+    expect(classifyGateCommand("git push origin HEAD")).toEqual({ kind: "push", dir: null, target: "HEAD", source: "HEAD" });
   });
   it("takes the source of an explicit src:dst refspec", () => {
     expect(classifyGateCommand("git push origin feat:main")).toEqual({ kind: "push", dir: null, target: "main", source: "feat" });
     expect(classifyGateCommand("git push origin +refs/heads/feat/x:refs/heads/main")).toEqual({ kind: "push", dir: null, target: "main", source: "feat/x" });
-    // 删除远端分支（:main）没有来源。
-    expect(classifyGateCommand("git push origin :main")).toEqual({ kind: "push", dir: null, target: "main" });
+    // 删除远端分支（:main）不是合并。
+    expect(classifyGateCommand("git push origin :main")).toBeNull();
+  });
+  it("keeps Windows backslashes in double-quoted paths, as bash does", () => {
+    expect(classifyGateCommand('cd "C:\\Users\\me\\repo" && git merge feat/x')).toEqual({ kind: "local_merge", dir: "C:\\Users\\me\\repo", source: "feat/x" });
+    expect(classifyGateCommand('git -C "D:\\work\\api" push origin HEAD:main')).toEqual({ kind: "push", dir: "D:\\work\\api", target: "main", source: "HEAD" });
+    expect(classifyGateCommand("cd 'C:\\Users\\me' && gh pr merge 3")).toEqual({ kind: "pr_merge", dir: "C:\\Users\\me", pr: "3" });
+    // 双引号里 \" \\ \$ 仍是转义。
+    expect(classifyGateCommand('cd "a\\"b\\\\c\\$d" && git merge x')).toEqual({ kind: "local_merge", dir: 'a"b\\c$d', source: "x" });
+    expect(classifyGateCommand("cd /c/Users/me/repo && git merge x")).toEqual({ kind: "local_merge", dir: "/c/Users/me/repo", source: "x" });
+    expect(classifyGateCommand("cd C:/w/api\r\ngit merge x\r\n")).toEqual({ kind: "local_merge", dir: "C:/w/api", source: "x" });
   });
   it("recognises branch switches", () => {
     expect(classifyGateCommand("git checkout -b dms-3")).toEqual({ kind: "switch", dir: null, branch: "dms-3", create: true });

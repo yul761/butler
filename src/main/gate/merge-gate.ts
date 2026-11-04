@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { posix, resolve, win32 } from "node:path";
 import type { GateRequest, GateResult } from "../../shared/gate";
 import type { GateAction } from "../../shared/gate-command";
 import type { MergeEvent, TicketRepo } from "../../shared/types";
@@ -24,6 +25,17 @@ const deny = (reason: string): GateResult => ({ v: 1, decision: "deny", reason }
 /** Windows 的路径不分大小写。 */
 const norm = (p: string) => (process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p));
 const samePath = (a: string, b: string) => norm(a) === norm(b);
+
+/**
+ * 命令里写的目录（`cd`、`git -C`）换成主进程用的绝对路径。session 的命令是 bash 写法：`~` 是家目录；
+ * Windows 上 Claude Code 跑的是 Git Bash，`/c/Users/me` 就是 `C:/Users/me`。认不出的路径找不到仓库，只会放行。
+ */
+export function commandDir(cwd: string, dir: string | null, platform: NodeJS.Platform = process.platform, home: string = homedir()): string {
+  let d = dir ?? ".";
+  if (d === "~" || d.startsWith("~/")) d = home + d.slice(1);
+  if (platform !== "win32") return posix.resolve(cwd, d);
+  return win32.resolve(cwd, d.replace(/^\/([a-zA-Z])(\/|$)/, (_, drive: string) => `${drive.toUpperCase()}:/`));
+}
 
 export interface MergeGateDeps {
   tickets: Pick<TicketsRepo, "list" | "listRepos">;
@@ -135,7 +147,7 @@ export class MergeGate {
 
   private async before(req: GateRequest, clock: Clock): Promise<GateResult> {
     const a = req.action;
-    const dir = resolve(req.cwd, a.dir ?? ".");
+    const dir = commandDir(req.cwd, a.dir);
     const repo = await this.d.git.mainRepoRoot(dir);
     if (a.kind === "switch") return this.checkSwitch(req, a, repo, clock);
     const m = await this.mergeOf(a, dir, repo);
@@ -148,7 +160,7 @@ export class MergeGate {
     const a = req.action;
     if (a.kind === "switch") return ALLOW;
     if (a.kind !== "pr_merge") {
-      const dir = resolve(req.cwd, a.dir ?? ".");
+      const dir = commandDir(req.cwd, a.dir);
       const repo = await this.d.git.mainRepoRoot(dir);
       const branch = a.kind === "local_merge" ? a.source : this.pushSource(a, await this.d.git.currentBranch(dir));
       const hold = this.d.repo.activeHold(repo, branch);
@@ -178,7 +190,7 @@ export class MergeGate {
     return { repo, branch, ref: branch, target, kind: "local", prUrl: null };
   }
 
-  /** push 推的是哪个分支：写了 `src:` 就是 src（HEAD 是当前分支），否则是当前分支。 */
+  /** push 推的是哪个分支：source（HEAD 是当前分支）。旧版 hook 没写 `src:` 时不带 source，那时按当前分支算。 */
   private pushSource(a: Extract<GateAction, { kind: "push" }>, cur: string): string {
     return a.source && a.source !== "HEAD" ? a.source : cur;
   }

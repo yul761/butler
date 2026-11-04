@@ -10,7 +10,7 @@ import { M } from "../strings";
 import { makeRepo, memDb } from "../test-utils";
 import * as git from "../tickets/git";
 import type { PrInfo } from "../tickets/gh";
-import { MergeGate, type MergeGateDeps } from "./merge-gate";
+import { commandDir, MergeGate, type MergeGateDeps } from "./merge-gate";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
 const commitFile = (repo: string, file: string, text: string, msg: string) => {
@@ -240,11 +240,11 @@ describe("MergeGate: pushes", () => {
     expect(t.gitDeps.mergeConflicts).not.toHaveBeenCalled();
   });
 
-  it("checks a push straight to the default branch, from the current branch", async () => {
+  it("checks a push of the current branch straight to the default branch (HEAD:main)", async () => {
     const t = setup();
     await t.merge("dms-1");
     run(t.repoPath, "checkout", "-q", "dms-2");
-    const r = await t.ask({ kind: "push", dir: null, target: "main" });
+    const r = await t.ask({ kind: "push", dir: null, target: "main", source: "HEAD" });
     expect(r.decision).toBe("deny");
     expect(t.events.at(-1)).toMatchObject({ kind: "wait", ticketKey: "DMS-2", branch: "dms-2" });
   });
@@ -262,6 +262,16 @@ describe("MergeGate: pushes", () => {
     expect(t.events.map((e) => e.kind)).toEqual(["proceed_conflict"]);
     expect(t.repo.activeHold(t.repoPath, "main")).toBeNull();
     expect(await t.merge("dms-2")).toEqual({ v: 1, decision: "deny", reason: M().gateRebase("DMS-1（支付）", ["app.txt"]) });
+  });
+
+  it("reads `git push origin main` from another branch as a push of the local main, not of the current branch", async () => {
+    const t = setup();
+    await t.merge("dms-1");
+    run(t.repoPath, "checkout", "-q", "dms-2");
+    // dms-2 和占着 main 的 dms-1 冲突，但这次推的是本地 main，不是 dms-2。
+    expect(await t.ask({ kind: "push", dir: null, target: "main", source: "main" })).toEqual({ v: 1, decision: "allow" });
+    expect(t.events.map((e) => e.kind)).toEqual(["proceed_conflict"]);
+    expect(t.repo.activeHold(t.repoPath, "dms-2")).toBeNull();
   });
 
   it("checks the source of an explicit src:dst push, not the current branch", async () => {
@@ -290,7 +300,7 @@ describe("MergeGate: pushes", () => {
     const t = setup({ pr: (pr) => (pr === "dms-1" ? { number: 1, url: "https://x/pull/1", head: "dms-1", base: "develop", state: "OPEN", autoMerge: false } : null) });
     run(t.repoPath, "branch", "develop", "main");
     run(t.repoPath, "checkout", "-q", "dms-3");
-    expect(await t.ask({ kind: "push", dir: null, target: "develop" })).toEqual({ v: 1, decision: "allow" });
+    expect(await t.ask({ kind: "push", dir: null, target: "develop", source: "HEAD" })).toEqual({ v: 1, decision: "allow" });
     expect(t.gitDeps.mergeConflicts).toHaveBeenCalled();
     expect(t.repo.activeHold(t.repoPath, "dms-3")).toMatchObject({ kind: "local", target: "develop" });
   });
@@ -452,5 +462,22 @@ describe("MergeGate: deadline", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(rows(t)).toEqual(none);
     expect(t.events).toEqual([]);
+  });
+});
+
+describe("commandDir", () => {
+  it("resolves relative directories and ~ like bash", () => {
+    expect(commandDir("/w/repo", null, "darwin", "/Users/me")).toBe("/w/repo");
+    expect(commandDir("/w/repo", "../api", "darwin", "/Users/me")).toBe("/w/api");
+    expect(commandDir("/w/repo", "~/Code/api", "darwin", "/Users/me")).toBe("/Users/me/Code/api");
+    expect(commandDir("/w/repo", "~", "darwin", "/Users/me")).toBe("/Users/me");
+  });
+  it("reads Windows paths, including Git Bash's /c/... drive form", () => {
+    expect(commandDir("C:\\w\\repo", "/c/Users/me/api", "win32", "C:\\Users\\me")).toBe("C:\\Users\\me\\api");
+    expect(commandDir("C:\\w\\repo", "/d", "win32", "C:\\Users\\me")).toBe("D:\\");
+    expect(commandDir("C:\\w\\repo", "C:\\Users\\me\\api", "win32", "C:\\Users\\me")).toBe("C:\\Users\\me\\api");
+    expect(commandDir("C:\\w\\repo", "C:/Users/me/api", "win32", "C:\\Users\\me")).toBe("C:\\Users\\me\\api");
+    expect(commandDir("C:\\w\\repo", "..\\api", "win32", "C:\\Users\\me")).toBe("C:\\w\\api");
+    expect(commandDir("C:\\w\\repo", "~/api", "win32", "C:\\Users\\me")).toBe("C:\\Users\\me\\api");
   });
 });
