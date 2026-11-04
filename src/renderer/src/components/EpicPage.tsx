@@ -30,6 +30,8 @@ export function EpicPage({ epic, onOpenFeature, onFeatureCreated }: Props) {
     setError,
   });
 
+  // feature 列表可以收起（每个 epic 各记各的），收起时标题上还留着数量和等待、卡住的记号，和 feature 页的 ticket 表一样。
+  const [featuresCollapsed, toggleFeatures] = useCollapsed(`epic-features:${epic.id}`);
   const live = epic.features.filter((f) => f.status !== "archived");
   const archived = epic.features.filter((f) => f.status === "archived");
 
@@ -48,8 +50,16 @@ export function EpicPage({ epic, onOpenFeature, onFeatureCreated }: Props) {
 
       <div className="feature-overview">
         <section className="epic-features">
-          <h3>{S.features}<span className="muted">{live.length}</span></h3>
-          {live.length === 0 ? (
+          <h3>
+            <button className="section-toggle" aria-expanded={!featuresCollapsed} onClick={toggleFeatures}>
+              <span className="twisty">{featuresCollapsed ? "▸" : "▾"}</span>
+              {S.features}
+              <span className="muted">{live.length}</span>
+              {featuresCollapsed && live.some((f) => f.status === "waiting") && <span className="badge" title={S.waiting}>●</span>}
+              {featuresCollapsed && live.some((f) => f.status === "stuck") && <span className="stuck-mark" title={S.stuckDot}>●</span>}
+            </button>
+          </h3>
+          {featuresCollapsed ? null : live.length === 0 ? (
             <p className="muted">{S.noEpicFeatures}</p>
           ) : (
             <table className="ticket-table">
@@ -58,7 +68,7 @@ export function EpicPage({ epic, onOpenFeature, onFeatureCreated }: Props) {
               </tbody>
             </table>
           )}
-          <button onClick={() => setNewFeature(true)}>+ {S.newFeature}</button>
+          {!featuresCollapsed && <button onClick={() => setNewFeature(true)}>+ {S.newFeature}</button>}
         </section>
         {archived.length > 0 && <ArchivedFeatures epicId={epic.id} rows={archived} />}
       </div>
