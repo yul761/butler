@@ -35,6 +35,9 @@ function splitSegments(command: string): string[][] {
     if (c === "'" || c === '"') {
       quote = c;
       has = true;
+    } else if (c === "\\" && command[i + 1] === "\n") {
+      i++; // 续行符：当空白处理，不是词
+      endToken();
     } else if (c === "\\" && i + 1 < command.length) {
       cur += command[++i];
       has = true;

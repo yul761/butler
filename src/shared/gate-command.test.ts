@@ -29,6 +29,12 @@ describe("classifyGateCommand", () => {
   it("returns the first reviewed segment and applies cd to later segments", () => {
     expect(classifyGateCommand("cd /w && git status; git merge a || git merge b")).toEqual({ kind: "local_merge", dir: "/w", source: "a" });
   });
+  it("treats backslash-newline as whitespace", () => {
+    expect(classifyGateCommand("git push origin \\\n HEAD:main")).toEqual({ kind: "push", dir: null, target: "main" });
+    expect(classifyGateCommand("git merge \\\n feat/x")).toEqual({ kind: "local_merge", dir: null, source: "feat/x" });
+    expect(classifyGateCommand("gh pr merge \\\n 12")).toEqual({ kind: "pr_merge", dir: null, pr: "12" });
+    expect(classifyGateCommand("git -C d \\\n merge x")).toEqual({ kind: "local_merge", dir: "d", source: "x" });
+  });
   it("ignores everything else", () => {
     for (const c of [
       "git status", "git push", "git merge --abort", "git merge --continue",
