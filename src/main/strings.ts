@@ -194,6 +194,7 @@ const ZH = {
   /** 文案里的“谁”：ticket 号后面括上它所在的 epic、feature。 */
   gateWho: (key: string, within: string[]) => (within.length > 0 ? `${key}（${within.join(" / ")}）` : key),
   gateMergedNotice: (who: string) => `Butler：${who} 已经合完。现在可以 rebase 到最新的目标分支后再合并。`,
+  gateNotMerged: (who: string) => `Butler：${who} 的合并没有完成。你现在可以再试一次合并（如果还有冲突，Butler 会再告诉你）。`,
   gateNotifyTitle: (repo: string) => `${repo}：合并协调`,
   gateNotifyBody: (e: MergeEvent, who: string, other: string | null) => {
     const o = other ?? "";
@@ -381,6 +382,7 @@ const EN: MainStrings = {
   gateDirBusy: (who: string, branch: string) => `Don't switch yet: ${who} is using this directory (branch ${branch}), and switching would disrupt its work. Keep working on things that don't need a branch switch, or ask the user to change your ticket to the worktree mode.`,
   gateWho: (key: string, within: string[]) => (within.length > 0 ? `${key} (${within.join(" / ")})` : key),
   gateMergedNotice: (who: string) => `Butler: ${who} has finished merging. You can now rebase onto the latest target branch and then merge.`,
+  gateNotMerged: (who: string) => `Butler: ${who} did not finish merging. You can try the merge again now (if there is still a conflict, Butler will tell you).`,
   gateNotifyTitle: (repo: string) => `${repo}: merge coordination`,
   gateNotifyBody: (e: MergeEvent, who: string, other: string | null) => {
     const o = other ?? "";

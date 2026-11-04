@@ -4,7 +4,7 @@ import { MergeGateRepo } from "../db/merge-gate-repo";
 import { M } from "../strings";
 import { memDb } from "../test-utils";
 import type { PrInfo } from "../tickets/gh";
-import { HoldWatcher, LOCAL_HOLD_MAX_MS, type HoldWatcherDeps } from "./hold-watcher";
+import { HoldWatcher, LOCAL_HOLD_MAX_MS, NOTICE_KEEP_MS, type HoldWatcherDeps } from "./hold-watcher";
 import { HOLD_MAX_MS } from "./merge-gate";
 
 const REPO = "/r/app";
@@ -59,13 +59,15 @@ function setup(o: Opts = {}) {
 afterEach(() => vi.useRealTimers());
 
 describe("HoldWatcher: PR holds", () => {
-  it("cancels an open PR without auto-merge 31 s after the hold, and tells nobody", async () => {
+  it("cancels an open PR without auto-merge 31 s after the hold, and tells the waiter it can try again", async () => {
     const t = setup({ pr: () => pr("OPEN") });
     t.state.now = 31_000;
     await t.watcher.check();
     expect(t.prInfo).toHaveBeenCalledWith(REPO, PR_URL, 2000);
     expect(t.outcome()).toBe("cancelled");
-    expect(t.deliver).not.toHaveBeenCalled();
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"));
+    expect(t.repo.pendingNotices()).toEqual([]);
   });
 
   it("leaves an open PR without auto-merge alone for the first 30 s (the merge command may still be running)", async () => {
@@ -107,16 +109,45 @@ describe("HoldWatcher: PR holds", () => {
     expect(t.deliver).toHaveBeenCalledTimes(1);
   });
 
-  it("marks a waiter whose session has closed as notified without sending anything", async () => {
+  it("keeps the notice of a waiter whose terminal is closed, and delivers it once a terminal for it is open and idle again", async () => {
     const t = setup({ pr: () => pr("MERGED"), open: false });
+    t.state.now = 1000;
     await t.watcher.check();
     expect(t.deliver).not.toHaveBeenCalled();
+    expect(t.repo.pendingNotices()).toHaveLength(1);
+    // 用户几小时后重新打开了这个 session（Butler 可能也重启过）。
+    t.state.now = 5 * 60 * 60_000;
+    t.state.open = true;
+    await t.watcher.check();
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"));
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
-  it("marks the waiter as notified when its terminal exits during delivery", async () => {
-    const t = setup({ pr: () => pr("MERGED"), deliver: async () => "exited" });
+  it("drops a notice nobody could receive for more than 24 h", async () => {
+    expect(NOTICE_KEEP_MS).toBe(24 * 60 * 60_000);
+    const t = setup({ pr: () => pr("MERGED"), open: false });
+    t.state.now = 1000;
     await t.watcher.check();
+    t.state.now = 1000 + NOTICE_KEEP_MS;
+    await t.watcher.check();
+    expect(t.repo.pendingNotices()).toHaveLength(1);
+    t.state.now = 1000 + NOTICE_KEEP_MS + 1;
+    await t.watcher.check();
+    expect(t.repo.pendingNotices()).toEqual([]);
+    t.state.open = true;
+    await t.watcher.check();
+    expect(t.deliver).not.toHaveBeenCalled();
+  });
+
+  it("keeps the notice when the terminal exits during delivery", async () => {
+    let res: "exited" | "sent" = "exited";
+    const t = setup({ pr: () => pr("MERGED"), deliver: async () => res });
+    await t.watcher.check();
+    expect(t.repo.pendingNotices()).toHaveLength(1);
+    res = "sent";
+    await t.watcher.check();
+    expect(t.deliver).toHaveBeenCalledTimes(2);
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
@@ -131,11 +162,11 @@ describe("HoldWatcher: PR holds", () => {
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
-  it("cancels a closed PR and tells nobody", async () => {
+  it("cancels a closed PR and tells the waiter it can try again", async () => {
     const t = setup({ pr: () => pr("CLOSED") });
     await t.watcher.check();
     expect(t.outcome()).toBe("cancelled");
-    expect(t.deliver).not.toHaveBeenCalled();
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"));
   });
 
   it("expires a hold 2 h + 1 ms old when gh cannot answer and the branch is not in the target", async () => {
@@ -145,7 +176,8 @@ describe("HoldWatcher: PR holds", () => {
     expect(t.git.fetchQuiet).toHaveBeenCalledWith(REPO, "main", 2000);
     expect(t.git.isAncestor).toHaveBeenCalledWith(REPO, "dms-1", "origin/main");
     expect(t.outcome()).toBe("expired");
-    expect(t.deliver).not.toHaveBeenCalled();
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"));
   });
 
   it("keeps a hold younger than 2 h when gh cannot answer", async () => {
@@ -182,6 +214,7 @@ describe("HoldWatcher: local holds", () => {
     t.state.now = LOCAL_HOLD_MAX_MS + 1;
     await t.watcher.check();
     expect(t.outcome()).toBe("expired");
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"));
   });
 
   it("keeps a local hold up to 10 min", async () => {

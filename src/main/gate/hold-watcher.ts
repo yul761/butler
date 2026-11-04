@@ -14,6 +14,8 @@ const PR_GRACE_MS = 30_000;
 /** gh 和 fetch 各给 2 秒：一轮检查不能拖太久。 */
 const PR_TIMEOUT_MS = 2000;
 const FETCH_TIMEOUT_MS = 2000;
+/** 等待者的终端关着时，通知最多留多久（等它重新打开）；过了就丢掉（最终审查 3）。 */
+export const NOTICE_KEEP_MS = 24 * 60 * 60_000;
 /** soon() 等这么久再查：合并多次调用，也给 GitHub 一点时间。 */
 const SOON_MS = 1000;
 
@@ -37,7 +39,7 @@ export interface HoldWatcherDeps {
 
 /**
  * 占位跟着真正的合并走（设计文档 2026-11-04“占位跟着真正的合并走”“回复和之后的事”）：定期查占位中的合并，
- * 真的合完就释放、告诉等着的 session 可以合了；PR 关了、自动合并取消了就释放；查不了的 PR 最多留 2 小时，本地合并、直接 push 最多留 10 分钟。
+ * 真的合完就释放、告诉等着的 session 可以合了；PR 关了、自动合并取消了就释放，告诉等着的 session 可以再试；查不了的 PR 最多留 2 小时，本地合并、直接 push 最多留 10 分钟。
  * 所有状态都在数据库里，Butler 重启后照样接上。
  */
 export class HoldWatcher {
@@ -145,25 +147,29 @@ export class HoldWatcher {
     for (const n of this.d.repo.pendingNotices()) await this.notice(n);
   }
 
-  /** 发一条“X 已经合完”：session 关了就不再发；在忙就等它的 Stop（sessionIdle）。 */
+  /**
+   * 发一条“X 已经合完”或“X 没有合完，可以再试”：gateWait 让等着的 session 别再试、等 Butler 告诉它，所以合没合成都要说。
+   * 终端关着就留着，重新打开（按 head 找回来）、停着等输入时再发，最多留 24 小时；在忙就等它的 Stop（sessionIdle）。
+   */
   private async notice(n: Notice): Promise<void> {
     if (this.delivering.has(n.waiterId)) return;
     // 名单是这一轮开始时取的：前面某条 deliver 慢的时候，Stop（sessionIdle）可能已经把这条发掉了。从数据库重查一次再发。
     if (!this.d.repo.pendingNotices().some((p) => p.waiterId === n.waiterId)) return;
-    if (!this.d.isOpen(n.sessionId)) {
+    if (this.d.now() - n.releasedAt > NOTICE_KEEP_MS) {
       this.d.repo.markNotified(n.waiterId, this.d.now());
-      this.d.log(`merge gate: session ${n.sessionId} is no longer open; not telling it that ${n.otherBranch} has merged`);
+      this.d.log(`merge gate: session ${n.sessionId} was not reachable for 24 h; dropping the notice about ${n.otherBranch}`);
       return;
     }
-    if (!this.d.isWaiting(n.sessionId)) return;
+    if (!this.d.isOpen(n.sessionId) || !this.d.isWaiting(n.sessionId)) return;
     this.delivering.add(n.waiterId);
     try {
-      const res = await this.d.deliver(n.sessionId, M().gateMergedNotice(this.d.whoOf(n.otherTicket, n.otherBranch)));
-      // exited：终端在发的时候关了，和“已经不开着”一样不再发。timeout：下一轮再试。
-      if (res === "timeout") this.d.log(`merge gate: telling session ${n.sessionId} that ${n.otherBranch} has merged timed out; trying again later`);
-      else this.d.repo.markNotified(n.waiterId, this.d.now());
+      const who = this.d.whoOf(n.otherTicket, n.otherBranch);
+      const res = await this.d.deliver(n.sessionId, n.outcome === "merged" ? M().gateMergedNotice(who) : M().gateNotMerged(who));
+      // exited：终端在发的时候关了，和关着一样留到重新打开。timeout：下一轮再试。
+      if (res === "sent") this.d.repo.markNotified(n.waiterId, this.d.now());
+      else this.d.log(`merge gate: telling session ${n.sessionId} about ${n.otherBranch} (${n.outcome}) ${res === "timeout" ? "timed out" : "found its terminal closed"}; trying again later`);
     } catch (e) {
-      this.d.log(`merge gate: telling session ${n.sessionId} that ${n.otherBranch} has merged failed`, e);
+      this.d.log(`merge gate: telling session ${n.sessionId} about ${n.otherBranch} (${n.outcome}) failed`, e);
     } finally {
       this.delivering.delete(n.waiterId);
     }

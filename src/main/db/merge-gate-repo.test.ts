@@ -28,22 +28,29 @@ describe("MergeGateRepo", () => {
     expect(repo.waitersOf(id).map((x) => x.sessionId)).toEqual(["s2", "s3"]);
   });
 
-  it("pendingNotices only returns merged holds whose waiters were not notified yet", () => {
+  it("pendingNotices returns released holds (any outcome) whose waiters were not notified yet, with the outcome", () => {
     const repo = new MergeGateRepo(memDb());
     const merged = repo.addHold(hold());
     const cancelled = repo.addHold(hold({ branch: "feat-c" }));
     const open = repo.addHold(hold({ branch: "feat-d" }));
-    for (const holdId of [merged, cancelled, open]) {
+    const expired = repo.addHold(hold({ branch: "feat-f" }));
+    for (const holdId of [merged, cancelled, open, expired]) {
       repo.addWaiter({ holdId, sessionId: "s2", ticketKey: "BTL-2", branch: "feat-b", createdAt: 150 });
       repo.addWaiter({ holdId, sessionId: "s3", ticketKey: null, branch: "feat-e", createdAt: 150 });
     }
     repo.releaseHold(merged, "merged", 200);
-    repo.releaseHold(cancelled, "cancelled", 200);
+    repo.releaseHold(cancelled, "cancelled", 210);
+    repo.releaseHold(expired, "expired", 220);
     const notices = repo.pendingNotices();
-    expect(notices).toHaveLength(2);
+    expect(notices.map((n) => [n.sessionId, n.otherBranch, n.outcome, n.releasedAt])).toEqual([
+      ["s2", "feat-a", "merged", 200], ["s3", "feat-a", "merged", 200],
+      ["s2", "feat-c", "cancelled", 210], ["s3", "feat-c", "cancelled", 210],
+      ["s2", "feat-f", "expired", 220], ["s3", "feat-f", "expired", 220],
+    ]);
     expect(notices[0]).toMatchObject({ sessionId: "s2", otherTicket: "BTL-1", otherBranch: "feat-a" });
     repo.markNotified(notices[0].waiterId, 300);
-    expect(repo.pendingNotices().map((n) => n.sessionId)).toEqual(["s3"]);
+    expect(repo.pendingNotices()).toHaveLength(5);
+    expect(repo.pendingNotices()[0].sessionId).toBe("s3");
   });
 
   it("returns recent events newest first with files restored, and finds the last proceed_conflict against a branch", () => {
