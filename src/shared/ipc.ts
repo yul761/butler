@@ -107,6 +107,6 @@ export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];
 export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.memoryChanged, IPC.appNavigate, IPC.appKeepAwakeChanged];
 
 /** IPC.appNavigate 带的内容：点系统通知后去哪。 */
-export type AppNavigateRoute = { page: "home"; kind?: BriefKind } | { page: "feature"; featureId: number; stuckTicket: string };
+export type AppNavigateRoute = { page: "home"; kind?: BriefKind } | { page: "feature"; featureId: number; stuckTicket: string } | { page: "ticket"; key: string };
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };

@@ -188,6 +188,8 @@ const ZH = {
   gateWait: (who: string, files: string[]) => `先别合并：${who} 已经拿到合并许可、还没合完，它和你改了同样的地方（${files.join("、")}）。继续做别的事，不要再试合并；它合完后 Butler 会在这里告诉你，到时先 rebase 再合。`,
   gateRebase: (who: string | null, files: string[]) => `先别合并：你的分支和最新的目标分支有冲突（${files.join("、")}）${who ? `，冲突来自 ${who} 已经合进去的改动` : ""}。先 rebase 到最新的目标分支、解决冲突再合。解决冲突时两边的意图都要保留，不要直接用你的版本覆盖掉对方的。`,
   gateDirBusy: (who: string, branch: string) => `先别切换：这个目录正被 ${who} 用着（branch ${branch}），切过去会打乱它的工作。继续做不需要切 branch 的事，或者请用户把你的 ticket 改成 worktree 方式。`,
+  /** 文案里的“谁”：ticket 号后面括上它所在的 epic、feature。 */
+  gateWho: (key: string, within: string[]) => (within.length > 0 ? `${key}（${within.join(" / ")}）` : key),
   gateMergedNotice: (who: string) => `Butler：${who} 已经合完。现在可以 rebase 到最新的目标分支后再合并。`,
   gateNotifyTitle: (repo: string) => `${repo}：合并协调`,
   gateNotifyBody: (e: MergeEvent, who: string, other: string | null) => {
@@ -371,6 +373,7 @@ const EN: MainStrings = {
   gateWait: (who: string, files: string[]) => `Don't merge yet: ${who} already has permission to merge and hasn't finished, and it changed the same places you did (${files.join(", ")}). Keep working on other things and don't try to merge again; Butler will tell you here once it has merged, and then rebase before you merge.`,
   gateRebase: (who: string | null, files: string[]) => `Don't merge yet: your branch conflicts with the latest target branch (${files.join(", ")})${who ? `; the conflict comes from changes ${who} already merged` : ""}. Rebase onto the latest target branch and resolve the conflicts before you merge. Keep the intent of both sides when you resolve them; don't just overwrite the other side's changes with your version.`,
   gateDirBusy: (who: string, branch: string) => `Don't switch yet: ${who} is using this directory (branch ${branch}), and switching would disrupt its work. Keep working on things that don't need a branch switch, or ask the user to change your ticket to the worktree mode.`,
+  gateWho: (key: string, within: string[]) => (within.length > 0 ? `${key} (${within.join(" / ")})` : key),
   gateMergedNotice: (who: string) => `Butler: ${who} has finished merging. You can now rebase onto the latest target branch and then merge.`,
   gateNotifyTitle: (repo: string) => `${repo}: merge coordination`,
   gateNotifyBody: (e: MergeEvent, who: string, other: string | null) => {
