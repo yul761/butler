@@ -63,6 +63,29 @@ describe("PtyManager", () => {
     expect(snap.endsWith("bcd")).toBe(true);
   });
 
+  it("keeps the terminal modes that scrolled out of the replay buffer", () => {
+    // claude（全屏界面）只在启动和改尺寸时打开备用屏幕和鼠标上报：缓冲截掉开头后，回放要把这些模式补上，不然滚轮到不了 claude。
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("\x1b[?1049h\x1b[?1000h\x1b[?1002;1006h\x1b[?2004h\x1b[?25l\n");
+    spawned[0].pty.emit("\x1b[?2004l\n");
+    spawned[0].pty.emit(`${"x".repeat(100)}\n`.repeat(Math.ceil(BUFFER_LIMIT / 101) + 10));
+    spawned[0].pty.emit("tail");
+    const snap = mgr.snapshot("t1").data;
+    expect(snap.startsWith("\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004l\x1b[?25l")).toBe(true);
+    expect(snap.endsWith("tail")).toBe(true);
+    // 还在缓冲里的模式不重复补；退出后的记录也带着。
+    spawned[0].pty.emitExit(0);
+    expect(mgr.snapshot("t1").data).toBe(snap);
+  });
+
+  it("adds no mode prefix while nothing has been cut", () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("\x1b[?1049hhello");
+    expect(mgr.snapshot("t1").data).toBe("\x1b[?1049hhello");
+  });
+
   it("refuses to open the same terminal twice", () => {
     const { mgr } = setup();
     mgr.open("t1", spec, opts);

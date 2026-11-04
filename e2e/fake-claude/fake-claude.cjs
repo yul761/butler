@@ -7,6 +7,8 @@
 //     /handoff <问题> 把它写进 open_questions）；
 //     输入 /fake-bash <命令> 时像 Bash 工具在跑：写一条没有结果的 tool_use 和 tasks/<id>.output，这一轮不结束；
 //     输入 /fake-bg <命令> 时像后台命令：tool_result 带任务 id 和输出文件，这一轮结束；/fake-bg-done 写它的完成通知；
+//     输入 /fake-flood <行数> 时打印这么多行（每行约 100 字节，用来撑满回放缓冲）；
+//     输入 /fake-fullscreen 时像 claude 的全屏界面：打开备用屏幕和鼠标上报（只发这一次），之后收到滚轮就记日志；
 //     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 butler-sessions，调用它，结果写进运行记录；
 //     启动时写一份 sessions/<pid>.json 登记文件，Butler 从这里查 session 的名字；
 //   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果、feature 汇总或卡住判断；stream-json 的 MCP 探测只回 init。
@@ -232,6 +234,24 @@ function interactive() {
     if (line === "exit") {
       runHooks("SessionEnd", { session_id: sessionId, cwd, reason: "exit", transcript_path: transcript });
       process.exit(0);
+    }
+    const flood = /^\/fake-flood (\d+)$/.exec(line);
+    if (flood) {
+      // 一屏放不下的输出：e2e 用它检查终端能不能往回滚。
+      for (let i = 1; i <= Number(flood[1]); i++) out(`flood line ${i} ${"-".repeat(80)}\n`);
+      out("> ");
+      return;
+    }
+    if (line === "/fake-fullscreen") {
+      out("\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+      // SGR 鼠标上报里的滚轮：按钮 64 往上、65 往下。
+      process.stdin.on("data", (d) => {
+        // eslint-disable-next-line no-control-regex
+        const wheel = /\x1b\[<(64|65);\d+;\d+M/.exec(d.toString());
+        if (wheel) log(`mouse wheel ${wheel[1] === "64" ? "up" : "down"}`);
+      });
+      out("> ");
+      return;
     }
     if (line === "/fake-bg-done") {
       // 后台命令结束：Claude Code 写的是这条通知，不是用户消息。

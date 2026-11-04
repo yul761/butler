@@ -26,6 +26,8 @@ export const BUFFER_LIMIT = 256 * 1024;
 interface Term {
   proc: PtyProcess;
   buffer: string;
+  /** 已经截出缓冲的那部分输出留下的终端模式，回放时补在缓冲前面（见 modePrefix）。 */
+  cutModes: Map<number, boolean>;
   lastOutputAt: number;
   exited: boolean;
   /** claude 的 SessionStart hook 到了（信任文件夹之类的启动对话框已经过去）。 */
@@ -91,13 +93,36 @@ export function trimBuffer(s: string): string {
   return nl >= 0 && nl < 4096 ? cut.slice(nl + 1) : cut;
 }
 
+/**
+ * DEC 私有模式（ESC [ ? n h / l）：备用屏幕、鼠标上报、bracketed paste、光标显示等。claude 的全屏界面只在启动和改尺寸时
+ * 发这些序列；回放缓冲截掉开头后它们就没了，切回页面新建的终端不上报鼠标，滚轮到不了 claude（要改一下尺寸才恢复）。
+ * 截掉的部分按顺序记下每个模式最后的开关，回放时先补上。
+ */
+export function recordModes(modes: Map<number, boolean>, text: string): void {
+  // eslint-disable-next-line no-control-regex
+  for (const m of text.matchAll(/\x1b\[\?([\d;]+)([hl])/g)) {
+    for (const n of m[1].split(";")) {
+      if (n !== "") modes.set(Number(n), m[2] === "h");
+    }
+  }
+}
+
+export function modePrefix(modes: Map<number, boolean>): string {
+  return [...modes].map(([n, on]) => `\x1b[?${n}${on ? "h" : "l"}`).join("");
+}
+
 export interface PtySnapshot {
   data: string;
   exitCode: number | null;
 }
 
+function replay(t: Term): string {
+  return modePrefix(t.cutModes) + t.buffer;
+}
+
 export class PtyManager {
   private readonly terms = new Map<string, Term>();
+  /** 已退出终端的回放内容（模式已经补在前面）。 */
   private readonly exited = new Map<string, { buffer: string; exitCode: number }>();
 
   constructor(
@@ -119,20 +144,22 @@ export class PtyManager {
     if (this.terms.has(termId)) throw new Error(`terminal ${termId} already open`);
     this.exited.delete(termId);
     const proc = this.factory(spec.file, spec.args, { cwd: opts.cwd, env: opts.env, cols: opts.cols ?? 120, rows: opts.rows ?? 32 });
-    const term: Term = { proc, buffer: "", lastOutputAt: 0, exited: false, started: false };
+    const term: Term = { proc, buffer: "", cutModes: new Map(), lastOutputAt: 0, exited: false, started: false };
     this.terms.set(termId, term);
     proc.onData((data) => {
       // ConPTY 在进程退出后还可能吐出尾部数据；退出后一律丢弃，否则渲染进程会以为终端被重新打开而清掉退出提示。
       if (term.exited) return;
       term.lastOutputAt = this.now();
-      term.buffer = trimBuffer(term.buffer + data);
+      const full = term.buffer + data;
+      term.buffer = trimBuffer(full);
+      if (term.buffer.length < full.length) recordModes(term.cutModes, full.slice(0, full.length - term.buffer.length));
       this.events.data(termId, data);
     });
     proc.onExit(({ exitCode }) => {
       term.exited = true;
       this.terms.delete(termId);
       this.exited.delete(termId);
-      this.exited.set(termId, { buffer: term.buffer, exitCode });
+      this.exited.set(termId, { buffer: replay(term), exitCode });
       while (this.exited.size > EXITED_LIMIT) this.exited.delete(this.exited.keys().next().value as string);
       this.events.exit(termId, exitCode);
     });
@@ -169,7 +196,7 @@ export class PtyManager {
 
   snapshot(termId: string): PtySnapshot {
     const live = this.terms.get(termId);
-    if (live) return { data: live.buffer, exitCode: null };
+    if (live) return { data: replay(live), exitCode: null };
     const done = this.exited.get(termId);
     if (done) return { data: done.buffer, exitCode: done.exitCode };
     return { data: "", exitCode: null };
