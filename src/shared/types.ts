@@ -378,3 +378,16 @@ export interface AutostartState {
   supported: boolean;
   enabled: boolean;
 }
+
+/** 合并总控的一条记录（首页的“合并协调”也用）：wait 等占位、proceed_conflict 带着冲突继续、rebase 让后来者先 rebase、dir_busy 目录被占。 */
+export interface MergeEvent {
+  id: number;
+  repoPath: string;
+  kind: "wait" | "proceed_conflict" | "rebase" | "dir_busy";
+  ticketKey: string | null;
+  branch: string;
+  otherTicket: string | null;
+  otherBranch: string | null;
+  files: string[];
+  createdAt: number;
+}

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { readdir, realpath } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { ScanResult } from "../../shared/types";
 import { GIT_SAFE_ARGS, gitBinary } from "../util/git-path";
 
@@ -188,4 +188,70 @@ export function gitErrorSummary(e: GitError): string {
   const lines = e.stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const line = lines.find((l) => /^(fatal|error):/i.test(l)) ?? lines[0] ?? e.message;
   return line.replace(/^(fatal|error):\s*/i, "").slice(0, GIT_SUMMARY_LIMIT);
+}
+
+/** 不抛错的 git：连退出码一起返回（merge-tree 有冲突时退出码是 1，输出在 stdout 里）。超时会杀掉子进程。 */
+function gitRaw(cwd: string, args: string[], timeoutMs?: number): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((done) => {
+    let bin: string;
+    try {
+      bin = gitBinary();
+    } catch (e) {
+      done({ code: null, stdout: "", stderr: (e as Error).message });
+      return;
+    }
+    execFile(
+      bin,
+      [...GIT_SAFE_ARGS, ...args],
+      { cwd, env: { ...gitEnv(process.env), GIT_TERMINAL_PROMPT: "0" }, windowsHide: true, maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs },
+      (err, stdout, stderr) => {
+        const code = err ? (typeof (err as { code?: unknown }).code === "number" ? (err as { code: number }).code : null) : 0;
+        done({ code, stdout: String(stdout), stderr: String(stderr) });
+      },
+    );
+  });
+}
+
+/** 主仓库目录：在 worktree 里也一样（--git-common-dir 的上一层）。 */
+export async function mainRepoRoot(dir: string): Promise<string> {
+  // 老版本 git 返回相对 dir 的路径，resolve 统一成绝对路径。
+  return dirname(resolve(dir, await git(dir, ["rev-parse", "--git-common-dir"])));
+}
+
+/** `git merge-tree --write-tree` 要 git >= 2.38；调用方在 false 时记一次日志。 */
+export async function mergeTreeSupported(repo: string): Promise<boolean> {
+  const r = await gitRaw(repo, ["--version"]);
+  const m = /(\d+)\.(\d+)/.exec(r.stdout);
+  return !!m && (Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 38));
+}
+
+/**
+ * ours 和 theirs 合并会冲突的文件（不动工作区）。无冲突返回 []；git 太老或命令失败也返回 []（放行，不能因此挡住合并）。
+ * 输出格式：第一行 tree OID，接着是冲突文件名，空行之后是提示信息。
+ */
+export async function mergeConflicts(repo: string, ours: string, theirs: string): Promise<string[]> {
+  const r = await gitRaw(repo, ["merge-tree", "--write-tree", "--name-only", ours, theirs]);
+  if (r.code !== 1) return [];
+  const files: string[] = [];
+  for (const line of r.stdout.split("\n").slice(1)) {
+    if (line === "") break;
+    if (!files.includes(line)) files.push(line);
+  }
+  return files;
+}
+
+/** a 是不是 b 的祖先（a 已经合进 b）。命令失败按 false。 */
+export async function isAncestor(repo: string, a: string, b: string): Promise<boolean> {
+  return (await gitRaw(repo, ["merge-base", "--is-ancestor", a, b])).code === 0;
+}
+
+/** 拉一下远端分支：失败或超时返回 false，从不抛错。 */
+export async function fetchQuiet(repo: string, remoteBranch: string, timeoutMs: number): Promise<boolean> {
+  return (await gitRaw(repo, ["fetch", "--quiet", "origin", remoteBranch], timeoutMs)).code === 0;
+}
+
+/** 有 origin/<branch> 就用它，否则用本地 <branch>。 */
+export async function upstreamRef(repo: string, branch: string): Promise<string> {
+  const r = await gitRaw(repo, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]);
+  return r.code === 0 ? `origin/${branch}` : branch;
 }
