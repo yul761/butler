@@ -296,6 +296,13 @@ export const EN: UiStrings = {
   noticeDegraded: (keys: string[]) => `Incomplete handoffs: ${keys.join(", ")}`,
   noticeTracker: (keys: string[]) => `No tracker data for: ${keys.join(", ")} (the tracker MCP is unavailable or not configured)`,
   eveningBlockers: "Blocked: ",
+  mergeEventsTitle: "Merge coordination",
+  mergeEvent: {
+    wait: (who: string, other: string) => `${who} waits for ${other} to finish merging`,
+    proceed_conflict: (who: string, other: string) => `${who} merges first; ${other} will need to rebase`,
+    rebase: (who: string) => `${who} needs to rebase before merging`,
+    dir_busy: (who: string, other: string) => `${who} wants to switch branches, but ${other} is using the directory`,
+  },
   eveningNext: "First thing tomorrow: ",
   eveningDegraded: "Incomplete handoff",
   eveningNothingDone: "Nothing recorded as done.",

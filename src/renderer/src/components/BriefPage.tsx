@@ -1,11 +1,12 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Brief, BriefItem, BriefKind, BriefView } from "../../../shared/brief";
-import type { FeatureView, OpenSessionRequest, TicketView } from "../../../shared/types";
+import type { FeatureView, MergeEvent, OpenSessionRequest, TicketView } from "../../../shared/types";
 import { api } from "../api";
 import { groupItems, itemActions, itemTitle, narrativeLines, narrativeNote, openRequest, type ItemAction } from "../brief-view";
 import { reportError } from "../errors";
 import { featureHeadline, featureOfTicket, groupByFeature } from "../feature-summary-view";
 import { jobResultMessage } from "../job-view";
+import { mergeEventText } from "../merge-events-view";
 import { setWizardSkipped, wizardSkipped } from "../local-prefs";
 import { S } from "../strings";
 
@@ -76,6 +77,13 @@ export function BriefPage({ initialKind, tickets, features, onOpenTicket, onUncl
     }
   }
 
+  const [mergeEvents, setMergeEvents] = useState<MergeEvent[]>([]);
+  useEffect(() => {
+    const loadEvents = () => api.mergeEvents().then(setMergeEvents, reportError);
+    void loadEvents();
+    return api.onStateChanged(() => void loadEvents());
+  }, []);
+
   const view = loaded?.kind === kind ? loaded.view : null;
   const brief = view?.brief ?? null;
   return (
@@ -109,7 +117,35 @@ export function BriefPage({ initialKind, tickets, features, onOpenTicket, onUncl
       ) : (
         <EveningBody brief={brief} tickets={tickets} features={features} onOpenTicket={(key) => onOpenTicket(key)} />
       )}
+      <MergeEvents events={mergeEvents} tickets={tickets} onOpenTicket={(key) => onOpenTicket(key)} />
     </div>
+  );
+}
+
+/** 最近的合并协调事件，一行一条；没有事件时整节不显示。已归档或不存在的 ticket 只显示文字。 */
+function MergeEvents({ events, tickets, onOpenTicket }: { events: MergeEvent[]; tickets: TicketView[]; onOpenTicket: (key: string) => void }) {
+  if (events.length === 0) return null;
+  const live = new Set(tickets.map((t) => t.key));
+  return (
+    <section className="brief-section merge-events">
+      <h3>{S.mergeEventsTitle}</h3>
+      {events.map((e) => {
+        const { repo, parts } = mergeEventText(e, S);
+        return (
+          <div key={e.id} className="merge-event">
+            <span className="muted">{new Date(e.createdAt).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+            <span className="muted">{repo}</span>
+            <span className="text">
+              {parts.map((p, n) =>
+                typeof p === "string" ? <Fragment key={n}>{p}</Fragment> : live.has(p.ticket) ? (
+                  <button key={n} className="chip" onClick={() => onOpenTicket(p.ticket)}>{p.ticket}</button>
+                ) : <Fragment key={n}>{p.ticket}</Fragment>,
+              )}
+            </span>
+          </div>
+        );
+      })}
+    </section>
   );
 }
 

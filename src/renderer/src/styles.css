@@ -178,6 +178,9 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .brief-item .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .brief-item .actions { display: flex; gap: 4px; flex-shrink: 0; }
 .chip { font-weight: 600; background: transparent; }
+.merge-event { display: flex; gap: 10px; align-items: baseline; padding: 4px 0; }
+.merge-event .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.merge-event .chip { padding: 0 2px; border: none; color: var(--accent); }
 .notice-line { color: var(--muted); margin: 4px 0; }
 .narrative { padding: 10px 12px; background: var(--panel); border-radius: 8px; }
 .day-list { margin: 4px 0 10px; padding-left: 20px; }

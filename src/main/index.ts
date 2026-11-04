@@ -865,7 +865,7 @@ async function bootstrap(): Promise<void> {
     onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,
-    tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs,
+    tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs, gateRepo,
     keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     briefRefreshing: () => briefRefreshing,

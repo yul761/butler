@@ -301,6 +301,13 @@ const ZH = {
   noticeDegraded: (keys: string[]) => `handoff 不完整：${keys.join("、")}`,
   noticeTracker: (keys: string[]) => `没有读到 tracker 信息：${keys.join("、")}（tracker MCP 不可用或没有配置）`,
   eveningBlockers: "阻塞：",
+  mergeEventsTitle: "合并协调",
+  mergeEvent: {
+    wait: (who: string, other: string) => `${who} 等 ${other} 合完再合`,
+    proceed_conflict: (who: string, other: string) => `${who} 先合，${other} 之后要 rebase`,
+    rebase: (who: string) => `${who} 要先 rebase 再合`,
+    dir_busy: (who: string, other: string) => `${who} 想切 branch，目录正被 ${other} 用着`,
+  },
   eveningNext: "明天第一步：",
   eveningDegraded: "handoff 不完整",
   eveningNothingDone: "没有记录完成的事。",
