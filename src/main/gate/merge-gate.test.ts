@@ -151,6 +151,18 @@ describe("MergeGate: merges", () => {
     expect(t.repo.waitersOf(local.id).map((w) => w.sessionId)).toEqual(["s2"]);
   });
 
+  it("lets a branch that already holds the merge try again without waiting for anyone or recording it twice", async () => {
+    const t = setup();
+    await t.merge("dms-1", { session: "s1" });
+    expect(t.events.map((e) => e.kind)).toEqual(["proceed_conflict"]);
+    // dms-2 也占着（比如它先拿到许可后 dms-1 才改到同一行）：dms-1 再试不能反过来等 dms-2。
+    t.repo.addHold({ repoPath: t.repoPath, branch: "dms-2", target: "main", kind: "local", prUrl: null, sessionId: "s2", ticketKey: "DMS-2", createdAt: 1000 });
+    expect(await t.merge("dms-1", { session: "s1" })).toEqual({ v: 1, decision: "allow" });
+    expect(t.events.map((e) => e.kind)).toEqual(["proceed_conflict"]);
+    expect(t.repo.waitersOf(t.repo.activeHold(t.repoPath, "dms-2")!.id)).toEqual([]);
+    expect(t.repo.activeHolds()).toHaveLength(2);
+  });
+
   it("checks a PR's head as GitHub has it (origin/<head>), e.g. after \"Update branch\" on GitHub", async () => {
     const t = setup({ pr: () => ({ number: 9, url: "https://x/pull/9", head: "dms-2", base: "main", state: "OPEN", autoMerge: false }) });
     run(t.repoPath, "merge", "-q", "dms-1");

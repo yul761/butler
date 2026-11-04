@@ -212,6 +212,15 @@ export class MergeGate {
       return deny(M().gateRebase(prev ? this.d.whoOf(prev.ticketKey, prev.branch) : null, behind));
     }
 
+    // 已经拿到这次合并的许可（比如上次合并没成、再试一次）：不用再等别人，也不再重复记录、通知。之前的直接 push 没成、
+    // 现在改合 PR 的，把本地占位换成 PR 占位，交给 HoldWatcher 看 PR（squash 合并后 branch 不会是目标的祖先，本地占位等不到合完）。
+    const mine = this.d.repo.activeHold(repo, branch);
+    if (mine && mine.target === target) {
+      if (this.late(clock)) return ALLOW;
+      if (mine.kind === "local" && m.kind === "pr") this.d.repo.toPrHold(mine.id, { prUrl: m.prUrl, sessionId: req.session, ticketKey: own, createdAt: this.d.now() });
+      return ALLOW;
+    }
+
     // 再和同仓库里其他还在进行中的 branch 逐个比：ticket 的 branch，加上正占着同一目标的 branch（不属于 ticket 的也算）。
     const others = new Map<string, string | null>();
     for (const t of this.ticketBranches(repo)) if (t.branch !== branch && !others.has(t.branch)) others.set(t.branch, t.ticket);
@@ -243,13 +252,8 @@ export class MergeGate {
     for (const c of conflicts) {
       this.record({ repoPath: repo, kind: "proceed_conflict", ticketKey: own, branch, otherTicket: c.ticket, otherBranch: c.branch, files: c.files });
     }
-    const mine = this.d.repo.activeHold(repo, branch);
-    if (!mine) {
-      this.d.repo.addHold({ repoPath: repo, branch, target, kind: m.kind, prUrl: m.prUrl, sessionId: req.session, ticketKey: own, createdAt: this.d.now() });
-    } else if (mine.kind === "local" && m.kind === "pr" && mine.target === target) {
-      // 之前的直接 push 没成（占位还留着），现在改合 PR：换成 PR 占位，交给 HoldWatcher 看 PR。squash 合并后 branch 不会是目标的祖先，本地占位等不到合完。
-      this.d.repo.toPrHold(mine.id, { prUrl: m.prUrl, sessionId: req.session, ticketKey: own, createdAt: this.d.now() });
-    }
+    // 已经占着别的目标的不再加一个（一个 branch 同时只占一处）。
+    if (!mine) this.d.repo.addHold({ repoPath: repo, branch, target, kind: m.kind, prUrl: m.prUrl, sessionId: req.session, ticketKey: own, createdAt: this.d.now() });
     return ALLOW;
   }
 
