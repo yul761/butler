@@ -45,6 +45,7 @@ import { onLangChange, setLang } from "./i18n";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
 import { HandoffRunner } from "./handoff/runner";
+import { hookCommand } from "./hooks/installer";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
@@ -447,7 +448,7 @@ async function bootstrap(): Promise<void> {
     platform: process.platform,
     baseEnv: process.env,
     mcpConfig: memoryMcpConfig,
-    mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger }),
+    mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, gateCommand: existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
     featureMcpConfig,
     epicMcpConfig,
     features, epics, featureHandoffs, handoffs,
