@@ -151,6 +151,22 @@ describe("MergeGate: merges", () => {
     expect(t.repo.waitersOf(local.id).map((w) => w.sessionId)).toEqual(["s2"]);
   });
 
+  it("checks a PR's head as GitHub has it (origin/<head>), e.g. after \"Update branch\" on GitHub", async () => {
+    const t = setup({ pr: () => ({ number: 9, url: "https://x/pull/9", head: "dms-2", base: "main", state: "OPEN", autoMerge: false }) });
+    run(t.repoPath, "merge", "-q", "dms-1");
+    // GitHub 上的 dms-2 已经合过最新的 main、解决了冲突；本地的 dms-2 还是旧的。
+    run(t.repoPath, "checkout", "-q", "-b", "updated", "dms-2");
+    run(t.repoPath, "merge", "-q", "-s", "ours", "main", "-m", "update branch");
+    run(t.repoPath, "update-ref", "refs/remotes/origin/dms-2", "updated");
+    run(t.repoPath, "checkout", "-q", "main");
+    expect(await t.ask({ kind: "pr_merge", dir: null, pr: "9" })).toEqual({ v: 1, decision: "allow" });
+    expect(t.repo.activeHold(t.repoPath, "dms-2")).toMatchObject({ kind: "pr", prUrl: "https://x/pull/9" });
+    // 没有 origin/<head> 就用本地的：本地的 dms-2 和 main 冲突。
+    const u = setup({ pr: () => ({ number: 9, url: "https://x/pull/9", head: "dms-2", base: "main", state: "OPEN", autoMerge: false }) });
+    run(u.repoPath, "merge", "-q", "dms-1");
+    expect((await u.ask({ kind: "pr_merge", dir: null, pr: "9" })).decision).toBe("deny");
+  });
+
   it("allows a PR merge it can't look up, and records nothing", async () => {
     const t = setup({ pr: () => null });
     expect(await t.ask({ kind: "pr_merge", dir: null, pr: "9" })).toEqual({ v: 1, decision: "allow" });

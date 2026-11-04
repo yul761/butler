@@ -52,6 +52,8 @@ interface Clock {
 interface Merge {
   repo: string;
   branch: string;
+  /** 拿来算冲突的提交：PR 用 GitHub 上的 head（origin/<head>），其余就是 branch。 */
+  ref: string;
   target: string;
   kind: "pr" | "local";
   prUrl: string | null;
@@ -165,7 +167,7 @@ export class MergeGate {
   private async mergeOf(a: Exclude<GateAction, { kind: "switch" }>, dir: string, repo: string): Promise<Merge | null> {
     if (a.kind === "pr_merge") {
       const pr = await this.d.prInfo(dir, a.pr, PR_TIMEOUT_MS);
-      return pr ? { repo, branch: pr.head, target: pr.base, kind: "pr", prUrl: pr.url } : null;
+      return pr ? { repo, branch: pr.head, ref: pr.head, target: pr.base, kind: "pr", prUrl: pr.url } : null;
     }
     const cur = await this.d.git.currentBranch(dir);
     const target = a.kind === "local_merge" ? cur : a.target === "HEAD" ? cur : a.target;
@@ -173,7 +175,7 @@ export class MergeGate {
     // 推目标分支自己（在 main 上 git push origin main）：合进它的那些合并已经审核过了，再审只会重复记录、把冲突算到 main 头上。
     if (branch === target) return null;
     if (!(await this.isMergeTarget(repo, target))) return null;
-    return { repo, branch, target, kind: "local", prUrl: null };
+    return { repo, branch, ref: branch, target, kind: "local", prUrl: null };
   }
 
   /** push 推的是哪个分支：写了 `src:` 就是 src（HEAD 是当前分支），否则是当前分支。 */
@@ -194,14 +196,15 @@ export class MergeGate {
     const { repo, branch, target } = m;
     const g = this.d.git;
     const own = this.ticketOf(repo, branch);
-    // fetch 失败（没网）就用本地已有的，不因此拦人。
-    await g.fetchQuiet(repo, target, FETCH_TIMEOUT_MS);
+    // fetch 失败（没网）就用本地已有的，不因此拦人。PR 合并的是 GitHub 上的 head（可能在网页上 "Update branch" 过），也拉一下。
+    await Promise.all([g.fetchQuiet(repo, target, FETCH_TIMEOUT_MS), m.kind === "pr" ? g.fetchQuiet(repo, branch, FETCH_TIMEOUT_MS) : null]);
     const upstream = await g.upstreamRef(repo, target);
+    const ref = m.kind === "pr" ? await g.upstreamRef(repo, m.ref) : m.ref;
     // 已经在最新的目标分支里了（比如在 main 上 git merge origin/main）：带不进新东西，不用审核也不占位。
-    if (await g.isAncestor(repo, branch, upstream)) return ALLOW;
+    if (await g.isAncestor(repo, ref, upstream)) return ALLOW;
 
     // 先看和最新的目标分支本身合不合得进去：合不进去通常是另一边已经先合了。
-    const behind = await g.mergeConflicts(repo, upstream, branch);
+    const behind = await g.mergeConflicts(repo, upstream, ref);
     if (behind.length > 0) {
       if (this.late(clock)) return ALLOW;
       const prev = this.d.repo.lastProceedAgainst(repo, branch);
@@ -219,7 +222,7 @@ export class MergeGate {
     const checked = await Promise.all(
       [...others].map(async ([other, ticket]) => {
         if (await g.isAncestor(repo, other, upstream)) return null; // 已经合进去了
-        const files = await g.mergeConflicts(repo, branch, other);
+        const files = await g.mergeConflicts(repo, ref, other);
         return files.length > 0 ? { branch: other, ticket, files } : null;
       }),
     );
