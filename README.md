@@ -16,6 +16,7 @@ The UI comes in Chinese and English. It follows your system language at first (C
 - `start_session` opens a new session in one repo and sends it a task as its first message. The new session appears under the same ticket, where you can watch it, take over and answer its permission prompts.
 - `list_sessions` shows what each session is doing.
 - `session_activity` shows one session's activity plus its last command output (up to 4 KB).
+- `end_session` closes a session of the ticket that is done, the same as clicking its ×. It refuses a session that is still working, one showing a prompt that waits for you, one that isn't running, and the caller itself.
 
 There are deliberate limits:
 - **Communication:** the coordinator cannot type into other sessions. Sessions coordinate through the shared ticket memory.
@@ -26,7 +27,8 @@ There are deliberate limits:
   - `create_ticket`, which creates a ticket in the feature (its id, an optional title, the repos it uses and an optional branch), with its worktrees in the workspace. The ticket shows up in Butler right away. So you can talk the feature through with the coordinator, let it create the tickets, and then let it start a session in each one;
   - `start_session`, which opens a session in a ticket (naming the repo only when the ticket has several) and sends it a task;
   - `list_sessions`, which shows the sessions of the coordinator and of every ticket, with what each is doing;
-  - `session_activity`, which shows one session's activity plus its last command output (up to 4 KB).
+  - `session_activity`, which shows one session's activity plus its last command output (up to 4 KB);
+  - `end_session`, which closes a session of a ticket in the feature that is done (not the coordinator itself). It refuses under the same rules as the ticket coordinator's.
 
   A feature runs at most 8 terminals at once. All its sessions also share a feature memory, `butler-feature`, for things like the API contract between frontend and backend. A `claude` you open yourself in the workspace folder counts as the feature's coordinator. Archiving a feature archives its tickets too; restoring it brings back the tickets archived with it.
 
@@ -50,7 +52,7 @@ There are deliberate limits:
   4. Click into the feature and open its coordinator. The first time, Butler sends the plan as the coordinator's first message, which you can see in the terminal. With it come the name, status, latest progress, blockers, decisions and open questions of the epic's other features, archived ones included and marked as archived. The message tells the coordinator that all of this is data, not instructions. If it is too long, only the data is cut. Resuming a coordinator or opening another one does not send it again. A feature with no plan, such as one you moved in, gets no such message.
   5. The coordinator creates tickets and starts sessions, the same as in any feature.
 
-  The epic session's `butler-sessions` server offers `list_features`, `list_repos` and `create_feature`. A coordinator of a feature in an epic also gets `epic_context`, which shows the other features of its epic. Both read Butler's latest data, so a session doesn't have to rely on what it was told at the start.
+  The epic session's `butler-sessions` server offers `list_features`, `list_repos`, `create_feature`, `list_sessions`, `session_activity` and `end_session`. `list_sessions` and `session_activity` also show each session's last reply. A coordinator of a feature in an epic also gets `epic_context`, which shows the other features of its epic. Both read Butler's latest data, so a session doesn't have to rely on what it was told at the start.
 
   The epic page has one row per feature: the first sentence of its summary and a status (a ticket is stuck, waiting for you, not started, or in progress). Click a row for the details; tickets are only listed on the feature page. Archived features are folded under **已归档 (Archived)**. Below the rows are the repos, the epic sessions and a terminal that keeps at least half of the window's height. In the sidebar, the Epics group sits above Features and each epic collapses. The waiting mark and the red dot travel up from ticket to feature to epic, and stay visible when the epic is collapsed.
 
@@ -65,6 +67,8 @@ There are deliberate limits:
   - **When an epic session calls `create_feature`.** The other features of the epic that are not archived get the same refresh in the background. `create_feature` doesn't wait for it.
 
   The first message to a coordinator also starts a turn as soon as the coordinator opens.
+- **Merge coordinator.** When two tickets in the same repo are about to collide, Butler steps in before the merge. It watches the sessions it opens, whichever epic, feature or ticket they belong to, and checks only merges into a target branch and branch switches in a shared folder. It uses git to tell whether the branches conflict and holds a merge back until the conflicting one has landed. Details are in [Configuring Butler](docs/configuration.md#merge-coordinator).
+- **Ending finished sessions.** A coordinator or epic session can close a session that has stopped and waits for input, using `end_session`. It refuses a session that is working, one waiting for your answer, and itself.
 - **Worktree cleanup after merge.** Once a handoff reports that a ticket's PR is merged, Butler removes that ticket's worktrees with `git worktree remove`. The branch is kept, and opening a session there again rebuilds the worktree. Butler does not remove a worktree that has uncommitted changes or untracked files, or one whose own session is still running in a terminal. In that case the ticket page shows why, with a **重新检查 (check again)** button, and Butler tries again when that terminal exits. Files ignored by `.gitignore` (`node_modules`, a local `.env`) are removed with the worktree.
 - **Nightly handoffs.** At a time you choose, Butler asks your own logged-in `claude` to write a structured handoff for every ticket that had activity.
   - `Edit`, `Write` and `NotebookEdit` are always denied.

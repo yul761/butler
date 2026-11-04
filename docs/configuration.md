@@ -12,6 +12,8 @@ The Settings page has these sections, in order:
 4. **调度与 handoff (Schedule and handoffs)**
 5. **隐私与个人 API (Privacy and personal API)**
 
+The merge coordinator and the `end_session` tool for coordinators are described under [Merge coordinator](#merge-coordinator) and in the [README](../README.md); neither has a setting.
+
 The audit log has its own page, **审计 (Audit)**, in the sidebar.
 
 ## 环境检查 (Environment check)
@@ -154,6 +156,35 @@ Placeholders are written as `{{name}}`. Unknown placeholders are left as they ar
 | `{{example}}` | a worked example |
 
 Keep `{{schema}}` and the output instructions. Butler also passes the JSON schema to `claude --json-schema` and validates the result. If the output fails validation, Butler retries once with the errors, and if it still fails it stores an incomplete handoff, marked **不完整 (incomplete)**. The tracker status field is called `jira` in the schema whatever tracker you use.
+
+## Merge coordinator
+
+When several tickets change the same repo, the merge coordinator keeps their merges from colliding. It is part of Butler and has no setting. It does not ask a model: git itself decides whether two branches conflict.
+
+**What it reviews.** Only two kinds of command, run by a session that Butler opened (an epic, a feature coordinator or any ticket session, whichever epic or feature it belongs to):
+
+- A merge into a target branch: `gh pr merge` (including `--auto`; the target is the PR's base branch), `git merge` on the target branch, and `git push` to the target branch. Pushing your own branch is not reviewed.
+- A branch switch (`git checkout`, `git switch`) in a shared folder, that is, a repo folder in "branch" work mode that another ticket with an open session is using. Switching inside your own worktree is not reviewed.
+
+Writing code, committing, testing and pushing your own branch never reach the coordinator. A command it can't recognize is let through.
+
+**Only in sessions Butler opens.** The review is a `PreToolUse` hook for the Bash tool in the `--settings` file Butler writes for each session. Your global `settings.json` is not changed, so a `claude` you start yourself is not affected.
+
+**How it decides.**
+
+- First come, first served. A merge that conflicts with another ticket's branch that is still being written is allowed, and Butler remembers that the other ticket will have to rebase.
+- If the branch no longer merges into the latest target branch, the session is told to rebase first, with which ticket's changes it conflicts with and in which files. It is reminded to keep both sides' intent.
+- If it conflicts with a branch whose merge was already allowed and has not finished, it is told to wait. The merge hold follows the real merge: a local `git merge` or push holds until the command ends, and `gh pr merge` holds until Butler sees the PR merged (checked with `gh pr view`, only for held PRs) or closed. If `gh` can't check, the hold expires after 2 hours.
+- When the merge ends, the waiting session gets the message that it **can merge now** (after rebasing), once it is waiting for input.
+- A branch switch in a shared folder is refused while the folder is in use, naming the ticket and branch. When you click to switch a branch yourself, Butler only warns you; you can still confirm.
+
+**Fail-open.** If Butler isn't running, doesn't answer within 5 seconds, or the hook itself fails, the command goes ahead. The coordinator is a safety net and is never a reason a session can't merge.
+
+**What you see.** Each conflict it finds (a refusal, or an allowance with a later rebase) sends a system notification and adds an entry to the **home page** (the repo, which tickets, the order it chose). Clicking the notification opens the ticket. Merges with no conflict are only logged. The entries, holds and pending rebases survive a restart.
+
+**Requirements.** git 2.38 or newer (for `git merge-tree --write-tree`). `gh` is optional and used only for PR merges.
+
+**What it doesn't do.** It only judges conflicts that git can see. Whether the merged code compiles or behaves correctly, such as one side renaming a field the other still uses, is left to CI. It doesn't rebase or resolve conflicts for you, and it ignores git you run in your own terminal.
 
 ## 隐私与个人 API (Privacy and personal API)
 
