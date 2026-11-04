@@ -5,7 +5,7 @@ import { makeRepo, tempDir } from "../test-utils";
 import { applyGitResolution, resetGitBinary, setGitBinary } from "../util/git-path";
 import { execFileSync } from "node:child_process";
 import { renameSync, symlinkSync } from "node:fs";
-import { fetchQuiet, git, GIT_SUMMARY_LIMIT, GitError, gitEnv, gitErrorSummary, isAncestor, mainRepoRoot, mergeConflicts, scanRepos, upstreamRef } from "./git";
+import { defaultBranch, fetchQuiet, git, GIT_SUMMARY_LIMIT, GitError, gitEnv, gitErrorSummary, isAncestor, mainRepoRoot, mergeConflicts, scanRepos, upstreamRef } from "./git";
 
 describe("git helpers", () => {
   it("only switches git messages to English and keeps the user's locale for everything else", () => {
@@ -152,6 +152,14 @@ describe("merge coordinator helpers", () => {
     } finally {
       resetGitBinary();
     }
+  });
+
+  it("defaultBranch follows origin/HEAD and falls back to main", async () => {
+    const repo = makeRepo();
+    expect(await defaultBranch(repo)).toBe("main");
+    run(repo, "update-ref", "refs/remotes/origin/develop", "HEAD");
+    run(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop");
+    expect(await defaultBranch(repo)).toBe("develop");
   });
 
   it("upstreamRef prefers origin/<branch> when it exists", async () => {

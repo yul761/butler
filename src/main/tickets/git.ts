@@ -255,3 +255,10 @@ export async function upstreamRef(repo: string, branch: string): Promise<string>
   const r = await gitRaw(repo, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]);
   return r.code === 0 ? `origin/${branch}` : branch;
 }
+
+/** 默认分支：origin/HEAD 指向的分支；没有 origin/HEAD 时当作 main。 */
+export async function defaultBranch(repo: string): Promise<string> {
+  const r = await gitRaw(repo, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+  const ref = r.code === 0 ? r.stdout.trim() : "";
+  return ref.startsWith("refs/remotes/origin/") ? ref.slice("refs/remotes/origin/".length) : "main";
+}
