@@ -206,6 +206,7 @@ const ZH = {
   resume: "续接",
   exited: (code: number) => `claude 已退出（退出码 ${code}）`,
   branchMismatch: (current: string, expected: string) => `仓库当前在 ${current} 上，这个 ticket 的分支是 ${expected}。`,
+  branchBusy: (ticket: string, branch: string) => `这个目录正被 ${ticket} 用着（branch ${branch}），切过去会影响它。`,
   dirtyWarning: "工作区有未提交的改动，不会自动切换分支。",
   switchAndOpen: "切换分支并打开",
   openAnyway: "仍在当前分支打开",

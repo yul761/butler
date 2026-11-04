@@ -202,6 +202,7 @@ export const EN: UiStrings = {
   resume: "Resume",
   exited: (code: number) => `claude exited (exit code ${code})`,
   branchMismatch: (current: string, expected: string) => `The repo is on ${current}; this ticket's branch is ${expected}.`,
+  branchBusy: (ticket: string, branch: string) => `${ticket} is using this folder (branch ${branch}); switching will affect it.`,
   dirtyWarning: "The working tree has uncommitted changes, so Butler won't switch branches.",
   switchAndOpen: "Switch branch and open",
   openAnyway: "Open on the current branch",

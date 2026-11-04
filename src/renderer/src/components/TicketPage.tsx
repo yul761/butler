@@ -23,6 +23,7 @@ interface Mismatch {
   current: string;
   expected: string;
   dirty: boolean;
+  busyBy?: { ticket: string; branch: string };
 }
 
 interface OldWorkdir {
@@ -91,7 +92,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         });
         setActive(r.termId);
       } else if (r.reason === "branch_mismatch") {
-        setMismatch({ req, repoId: r.repoId, current: r.current, expected: r.expected, dirty: r.dirty });
+        setMismatch({ req, repoId: r.repoId, current: r.current, expected: r.expected, dirty: r.dirty, busyBy: r.busyBy });
       } else if (r.reason === "old_workdir") {
         setOldWorkdir({ req, cwd: r.cwd, current: r.current, expected: r.expected });
       } else {
@@ -260,6 +261,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
       {mismatch && (
         <div className="notice">
           <p>{S.branchMismatch(mismatch.current, mismatch.expected)}</p>
+          {mismatch.busyBy && <p className="error">{S.branchBusy(mismatch.busyBy.ticket, mismatch.busyBy.branch)}</p>}
           {mismatch.dirty && <p className="error">{S.dirtyWarning}</p>}
           <div className="actions">
             <button disabled={mismatch.dirty} onClick={() => void switchAndOpen(mismatch)}>{S.switchAndOpen}</button>

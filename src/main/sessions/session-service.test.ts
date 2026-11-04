@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
+import type { TicketRepo } from "../../shared/types";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
 import { SettingsRepo } from "../db/settings-repo";
@@ -25,6 +26,7 @@ async function setup(opts: {
   mcpConfig?: (ticketKey: string, opts: { coordinator: boolean }) => string | null;
   mcpSettings?: (dirs: string[]) => string | null;
   syncMemory?: (ticketKey: string) => void;
+  dirBusy?: (repo: TicketRepo) => Promise<{ ticket: string; branch: string } | null>;
   platform?: NodeJS.Platform;
   launchFs?: { read: (f: string) => string; exists: (p: string) => boolean };
   pathValue?: string;
@@ -53,6 +55,7 @@ async function setup(opts: {
     mcpConfig: opts.mcpConfig,
     mcpSettings: opts.mcpSettings,
     syncMemory: opts.syncMemory,
+    dirBusy: opts.dirBusy,
     launchFs: opts.launchFs,
     log: (m) => logs.push(m),
   });
@@ -289,6 +292,25 @@ describe("SessionService.open", () => {
     release();
     expect(await p).toMatchObject({ ok: true });
     expect(spawned).toHaveLength(1);
+  });
+
+  it("adds busyBy to a branch mismatch when another ticket uses the folder", async () => {
+    const busy = await setup({ workMode: "branch", dirBusy: async () => ({ ticket: "PROJ-2", branch: "feature/PROJ-2" }) });
+    expect(await busy.service.open({ ticketKey: "PROJ-1" })).toMatchObject({
+      reason: "branch_mismatch", busyBy: { ticket: "PROJ-2", branch: "feature/PROJ-2" },
+    });
+    const free = await setup({ workMode: "branch", dirBusy: async () => null });
+    expect(await free.service.open({ ticketKey: "PROJ-1" })).not.toHaveProperty("busyBy");
+    const none = await setup({ workMode: "branch" });
+    expect(await none.service.open({ ticketKey: "PROJ-1" })).not.toHaveProperty("busyBy");
+  });
+
+  it("still reports the mismatch when dirBusy throws", async () => {
+    const { service, logs } = await setup({ workMode: "branch", dirBusy: async () => { throw new Error("boom"); } });
+    const r = await service.open({ ticketKey: "PROJ-1" });
+    expect(r).toMatchObject({ reason: "branch_mismatch" });
+    expect(r).not.toHaveProperty("busyBy");
+    expect(logs.some((l) => l.includes("dirBusy"))).toBe(true);
   });
 
   it("reports missing claude, unknown ticket and unknown session", async () => {

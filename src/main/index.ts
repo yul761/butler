@@ -466,6 +466,8 @@ async function bootstrap(): Promise<void> {
     submit: submitTask,
     // featureRunner 在后面才建好：回调里才用到。
     epicRefresh: (id) => featureRunner.epicRefresh(id),
+    // mergeGate 也在后面才建好。
+    dirBusy: (repo): Promise<{ ticket: string; branch: string } | null> => mergeGate.dirBusy(repo),
     ready: () => healthReady,
     transcriptExists: (id) => transcriptState(paths.claudeProjects, id) !== "absent",
     transcriptState: (id) => transcriptState(paths.claudeProjects, id),
