@@ -11,6 +11,16 @@ describe("session guide", () => {
     expect(GUIDE_SECTIONS.length).toBeGreaterThan(0);
   });
 
+  it("所有 session 都有子代理的模型准则，只有总控有 start_session 的", () => {
+    expect(sessionGuide("zh", "ticket")).toContain('model: "opus"');
+    expect(sessionGuide("zh", "coordinator")).toContain('model: "opus"');
+    expect(sessionGuide("en", "ticket")).toContain('model: "opus"');
+    expect(sessionGuide("zh", "coordinator")).toContain("start_session");
+    expect(sessionGuide("en", "coordinator")).toContain("start_session");
+    expect(sessionGuide("zh", "ticket")).not.toContain("start_session");
+    expect(sessionGuide("en", "ticket")).not.toContain("start_session");
+  });
+
   it("写到 mcp 目录，内容没变就不重写", () => {
     const dir = tempDir("guide");
     const file = writeSessionGuide(dir, "zh", "ticket");
