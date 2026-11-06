@@ -244,4 +244,29 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_merge_events_created ON merge_events (created_at);
   `,
+  // 每轮 token 用量 + transcript 增量读取位置
+  `
+  CREATE TABLE session_usage (
+    message_id TEXT PRIMARY KEY,
+    session_id TEXT,
+    agent_id TEXT,
+    source TEXT NOT NULL CHECK (source IN ('session', 'subagent', 'headless')),
+    job TEXT,
+    at INTEGER NOT NULL,
+    model TEXT,
+    input INTEGER NOT NULL,
+    cache_write_5m INTEGER NOT NULL,
+    cache_write_1h INTEGER NOT NULL,
+    cache_read INTEGER NOT NULL,
+    output INTEGER NOT NULL,
+    context INTEGER NOT NULL
+  );
+  CREATE INDEX idx_session_usage_session ON session_usage (session_id, at);
+  CREATE INDEX idx_session_usage_at ON session_usage (at);
+  CREATE TABLE usage_cursors (
+    file TEXT PRIMARY KEY,
+    offset INTEGER NOT NULL,
+    size INTEGER NOT NULL
+  );
+  `,
 ];
