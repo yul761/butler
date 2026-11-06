@@ -1,4 +1,4 @@
-import { DEFAULT_HANDOFF_PROMPT, DEFAULT_REFRESH_PROMPT, defaultHandoffPrompt, defaultRefreshPrompt } from "../handoff/templates";
+import { DEFAULT_HANDOFF_PROMPT, DEFAULT_REFRESH_PROMPT, defaultHandoffPrompt, defaultRefreshPrompt, PREVIOUS_HANDOFF_PROMPTS } from "../handoff/templates";
 import { currentLang } from "../i18n";
 import type { Lang } from "../../shared/i18n";
 import type { Db } from "./database";
@@ -46,6 +46,8 @@ export type SettingKey = keyof typeof SETTING_DEFAULTS;
 type PromptKey = "handoffPrompt" | "refreshPrompt";
 const PROMPT_DEFAULTS: Record<PromptKey, (l: Lang) => string> = { handoffPrompt: defaultHandoffPrompt, refreshPrompt: defaultRefreshPrompt };
 const LANGS: Lang[] = ["zh", "en"];
+/** 以前版本的默认值：存的是它们也当作没改过。 */
+const PREVIOUS_PROMPT_DEFAULTS: Record<PromptKey, readonly string[]> = { handoffPrompt: PREVIOUS_HANDOFF_PROMPTS, refreshPrompt: [] };
 
 export class SettingsRepo {
   constructor(private readonly db: Db) {}
@@ -54,9 +56,10 @@ export class SettingsRepo {
     const row = this.db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as { value: string } | undefined;
     const lang = PROMPT_DEFAULTS[key as PromptKey];
     if (lang) {
-      // 提示词跟着语言走（设计文档 2026-10-26）：没存过，或者存的就是某种语言的默认值（没改过），都给当前语言的默认值。
+      // 提示词跟着语言走（设计文档 2026-10-26）：没存过，或者存的就是某种语言的默认值（没改过，包括以前版本的默认值），都给当前语言的默认值。
       const v = row?.value;
-      return v === undefined || LANGS.some((l) => lang(l) === v) ? lang(currentLang()) : v;
+      const unchanged = v === undefined || LANGS.some((l) => lang(l) === v) || PREVIOUS_PROMPT_DEFAULTS[key as PromptKey].includes(v);
+      return unchanged ? lang(currentLang()) : (v as string);
     }
     return row?.value ?? SETTING_DEFAULTS[key];
   }

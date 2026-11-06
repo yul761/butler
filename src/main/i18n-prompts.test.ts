@@ -5,7 +5,7 @@ import { taskMessage } from "../shared/control";
 import { SettingsRepo } from "./db/settings-repo";
 import { handoffCommandPath, handoffCommandStatus, installHandoffCommand } from "./handoff/command";
 import { buildPrompt, retryPrompt } from "./handoff/prompt";
-import { DEFAULT_HANDOFF_PROMPT, defaultHandoffPrompt, defaultRefreshPrompt } from "./handoff/templates";
+import { DEFAULT_HANDOFF_PROMPT, defaultHandoffPrompt, defaultRefreshPrompt, handoffCommandBody } from "./handoff/templates";
 import { setLang } from "./i18n";
 import { followupNote, handoffSummaryFor } from "./memory/notes";
 import { memDb, tempDir } from "./test-utils";
@@ -26,6 +26,22 @@ describe("prompts follow the language (design 2026-10-26 i18n)", () => {
     expect(settings.get("handoffPrompt")).toBe("my own prompt {{ticket}}");
     setLang("zh");
     expect(settings.get("refreshPrompt")).toBe(defaultRefreshPrompt("zh"));
+  });
+
+  it("no longer mentions the brief, and still treats a saved copy of the old default as the default", () => {
+    const settings = new SettingsRepo(memDb());
+    for (const lang of ["zh", "en"] as const) {
+      setLang(lang);
+      expect(defaultHandoffPrompt(lang)).not.toMatch(/简报|brief/i);
+      expect(handoffCommandBody(lang)).not.toMatch(/简报|brief/i);
+      // 旧版本的默认 prompt 原样存下来过（点过保存但没改）：照样当成默认，跟着语言和新文字走。
+      const old = lang === "zh"
+        ? DEFAULT_HANDOFF_PROMPT.replace("供之后的 session 和记忆使用。", "供明天早上的简报使用。")
+        : defaultHandoffPrompt("en").replace("for later sessions and memory.", "for tomorrow morning's brief.");
+      expect(old).not.toBe(defaultHandoffPrompt(lang));
+      settings.set("handoffPrompt", old);
+      expect(settings.get("handoffPrompt")).toBe(defaultHandoffPrompt(lang));
+    }
   });
 
   it("builds an English handoff prompt with no Chinese in it", () => {

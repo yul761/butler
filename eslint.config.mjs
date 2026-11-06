@@ -58,11 +58,11 @@ const STATECORE_ENTRY_FILES = ["src/main/memory/statecore.ts", "memory-mcp/entry
 const STATECORE_TEST_FILES = ["src/main/memory/**/*.test.ts"];
 
 /**
- * gateway 的内部模块：直接发请求的 provider、测试用假服务器 testing，以及假名化 / 扫描 / 投影 / 提示词。
+ * gateway 的内部模块：直接发请求的 provider 和测试用假服务器 testing。
  * gateway 外面只能经 PrivacyGateway（gateway.ts）和 key-store、safe-storage、status、types、budget、statecore-env 这几个公开模块。
  * 测试文件不受这一条限制（其余出口规则照旧）。
  */
-const GATEWAY_INTERNALS = ["provider", "testing", "pseudonym", "scanner", "projection", "narrative"];
+const GATEWAY_INTERNALS = ["provider", "testing"];
 const GATEWAY_INTERNAL_MESSAGE = "gateway 的内部模块只能在 src/main/gateway/ 里用，外面请经 PrivacyGateway（设计文档 7.1）。";
 const GATEWAY_INTERNAL_RE = `(^|/)gateway/(${GATEWAY_INTERNALS.join("|")})(\\.[cm]?[jt]sx?)?$`;
 const GATEWAY_INTERNAL_SEL = `/(^|\\/)gateway\\/(${GATEWAY_INTERNALS.join("|")})(\\.[cm]?[jt]sx?)?$/`;

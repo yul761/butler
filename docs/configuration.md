@@ -45,11 +45,10 @@ These buttons, and the same step in the first-run wizard, are the only way Butle
 
 ### Ticket pattern
 
-Butler uses the pattern in three places:
+Butler uses the pattern in two places:
 
 - to check the id when you create a ticket
 - to suggest a ticket for unclaimed sessions
-- at the 元数据 (metadata) and 脱敏文本 (redacted) privacy levels, to catch a ticket id that slipped through without a placeholder
 
 Ticket ids are upper-cased before they are checked, so write the pattern for upper case. When Butler looks for ids inside text, it matches case-insensitively, and the id must not directly follow a letter or digit, or be directly followed by a digit.
 

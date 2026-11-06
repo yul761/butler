@@ -158,9 +158,9 @@ describe("egress lint rule: every source extension", () => {
   }
 });
 
-/** gateway 的内部模块（直接发请求的 provider、假服务器 testing、假名化 / 扫描 / 投影 / 提示词）只能在 gateway 里用。 */
+/** gateway 的内部模块（直接发请求的 provider、假服务器 testing）只能在 gateway 里用。 */
 describe("egress lint rule: gateway internals stay inside the gateway", () => {
-  const INTERNAL = ["provider", "testing", "pseudonym", "scanner", "projection", "narrative"];
+  const INTERNAL = ["provider", "testing"];
   const PUBLIC = ["gateway", "key-store", "safe-storage", "status", "types", "budget", "statecore-env"];
   const forms = (m: string) => [
     `import { x } from "../gateway/${m}"; export default x;`,

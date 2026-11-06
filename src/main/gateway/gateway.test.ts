@@ -10,6 +10,7 @@ afterEach(async () => {
 });
 
 const FAKE_KEY = "sk-test-FAKE0000";
+const row = (ts: number) => ({ ts, provider: "x", model: "m", level: "full" as const, status: "pending" as const, payloadSent: null });
 const msgs = [
   { role: "system" as const, content: "你是记忆蒸馏器" },
   { role: "user" as const, content: "原始事件：PROJ-12 改好了登录" },
@@ -172,6 +173,39 @@ describe("PrivacyGateway (shared send path)", () => {
     h.provider.handle(() => ({ status: 503, body: { error: "overloaded" } }));
     await expect(chat(h)).rejects.toThrow(StatecoreCallError);
     expect(h.audit.list()[0]).toMatchObject({ status: "failed", tokensOut: null, costUsd: null });
+  });
+
+  it("refuses without a price, before anything is sent", async () => {
+    h = await gatewayHarness({ level: "full" });
+    h.settings.set("llmPrices", "");
+    await expect(chat(h)).rejects.toThrow(StatecoreCallError);
+    expect(h.provider.requests).toHaveLength(0);
+    expect(h.audit.list()).toMatchObject([{ source: "statecore", status: "budget", payloadSent: null }]);
+    expect(h.audit.list()[0].error).toContain("价格");
+  });
+
+  it("counts only this month's spend against the budget: last month does not count", async () => {
+    h = await gatewayHarness({ level: "full" });
+    // 预算 5 美元；上个月花了 100 也照样能发。
+    const last = h.audit.insert(row(new Date(2026, 8, 30).getTime()));
+    h.audit.finish(last, { status: "sent", costUsd: 100 });
+    expect(await chat(h)).toBe("OK");
+    // 本月初已经花了 4.999：这次的预估（输出上限 8192 token）放不下。
+    const early = h.audit.insert(row(new Date(2026, 9, 2).getTime()));
+    h.audit.finish(early, { status: "sent", costUsd: 4.999 });
+    await expect(chat(h)).rejects.toThrow(/预算/);
+    expect(h.provider.requests).toHaveLength(1);
+    expect(h.audit.list()[0]).toMatchObject({ status: "budget", payloadSent: null });
+  });
+
+  it("does not prune this month's spending even when the retention period is shorter", async () => {
+    h = await gatewayHarness({ level: "full" });
+    h.settings.set("auditRetentionDays", "7");
+    const early = h.audit.insert(row(new Date(2026, 9, 2).getTime()));
+    h.audit.finish(early, { status: "sent", costUsd: 4.999 });
+    await expect(chat(h)).rejects.toThrow(/预算/);
+    expect(h.provider.requests).toHaveLength(0);
+    expect(h.audit.list().map((e) => e.id)).toContain(early);
   });
 
   it("prunes audit rows past the retention period", async () => {
