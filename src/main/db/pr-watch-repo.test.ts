@@ -53,4 +53,13 @@ describe("PrWatchRepo", () => {
     repo.remove(a);
     expect(repo.get(a)).toBeNull();
   });
+
+  it("is dropped with its repo instead of blocking removeRepo", () => {
+    const db = memDb();
+    const id = addRepo(db, "BTL-1");
+    const repo = new PrWatchRepo(db);
+    repo.upsert(row(id));
+    expect(() => new TicketsRepo(db).removeRepo(id)).not.toThrow();
+    expect(repo.get(id)).toBeNull();
+  });
 });

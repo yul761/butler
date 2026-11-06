@@ -272,7 +272,7 @@ export const MIGRATIONS: string[] = [
   // 被监视的 PR：每个 ticket 仓库一行，投递去重键跨重启保留
   `
   CREATE TABLE pr_watch (
-    repo_id INTEGER PRIMARY KEY REFERENCES ticket_repos(id),
+    repo_id INTEGER PRIMARY KEY REFERENCES ticket_repos(id) ON DELETE CASCADE,
     ticket_key TEXT NOT NULL,
     repo_path TEXT NOT NULL,
     branch TEXT NOT NULL,
