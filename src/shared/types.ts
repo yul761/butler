@@ -391,3 +391,18 @@ export interface MergeEvent {
   files: string[];
   createdAt: number;
 }
+
+export type UsageKind = "ticket" | "coordinator" | "subagent" | "headless";
+
+export interface UsageSummary {
+  sinceMs: number;
+  /** 五项 token 之和。 */
+  totalTokens: number;
+  /** 下面三个都是 0..1，按 USAGE_WEIGHTS 折算后的占比；没有数据时为 0。 */
+  cacheReadShare: number;
+  /** context >= 200_000 的轮次占比。 */
+  over200kShare: number;
+  byKind: Record<UsageKind, number>;
+  /** 模型 -> 折算占比；model 为 null 的记在 "unknown"。 */
+  byModel: Record<string, number>;
+}
