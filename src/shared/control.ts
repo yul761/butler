@@ -180,6 +180,9 @@ export function sanitizeTask(text: string): string {
     .slice(0, TASK_LIMIT);
 }
 
+/** taskMessage 的固定开头；界面上显示会话名时要认得它。 */
+export const TASK_PREFIX = { zh: "总控 session 交给你的任务：", en: "Task from the coordinator session:" } as const;
+
 /**
  * 交给子 session 的第一条消息：固定的开头加上任务。任务本身可能以 ! 或 / 开头（claude 的 bash 模式、斜杠命令，不经过权限确认），
  * 有了开头它永远只是一段普通的提示。
@@ -187,7 +190,10 @@ export function sanitizeTask(text: string): string {
 export function taskMessage(task: string, lang: Lang, memory: "feature" | "ticket"): string {
   const en = lang === "en";
   // 背景和约定放在记忆里；feature 总控开的 session 读 feature 记忆，ticket 总控开的读 ticket 记忆。
-  const where = memory === "feature" ? (en ? "feature memory (butler-feature)" : "feature 记忆（butler-feature）") : en ? "ticket memory (butler-memory)" : "ticket 记忆（butler-memory）";
+  const featureMemory = en ? "feature memory (butler-feature)" : "feature 记忆（butler-feature）";
+  const ticketMemory = en ? "ticket memory (butler-memory)" : "ticket 记忆（butler-memory）";
+  const where = memory === "feature" ? featureMemory : ticketMemory;
   const hint = en ? `Read the background and agreements from the ${where} with recall before you start.` : `开始之前先用 recall 读一下 ${where}里的背景和约定。`;
-  return `${en ? "Task from the coordinator session:" : "总控 session 交给你的任务："}\n${hint}\n\n${task}`;
+  // 记忆那句放在任务后面，这样会话按钮上显示的是任务本身。
+  return `${TASK_PREFIX[en ? "en" : "zh"]}\n${task}\n\n${hint}`;
 }

@@ -1,10 +1,13 @@
+import { TASK_PREFIX } from "../../shared/control";
 import type { SessionView } from "../../shared/types";
 
 const LABEL_LIMIT = 24;
 
 /** 按钮上显示的名字：这段对话的第一句话（单行、截断），还没说话时用 fallback。 */
 export function sessionLabel(s: SessionView, fallback: string): string {
-  const text = (s.firstPrompt ?? "").replace(/\s+/g, " ").trim();
+  let text = (s.firstPrompt ?? "").replace(/\s+/g, " ").trim();
+  // 总控开的 session：去掉固定开头，显示任务本身。
+  for (const p of Object.values(TASK_PREFIX)) if (text.startsWith(p)) text = text.slice(p.length).trim();
   if (!text) return fallback;
   return text.length > LABEL_LIMIT ? `${text.slice(0, LABEL_LIMIT)}…` : text;
 }

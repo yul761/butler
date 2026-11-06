@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { taskMessage } from "../../shared/control";
 import type { SessionView } from "../../shared/types";
 import { initialPane, sessionLabel, splitSessions } from "./sessions";
 
@@ -11,6 +12,13 @@ describe("sessionLabel", () => {
   it("uses the first prompt, collapsed to one line and truncated", () => {
     expect(sessionLabel(s("a", { firstPrompt: "修复登录页\n的 token 过期" }), "新对话")).toBe("修复登录页 的 token 过期");
     expect(sessionLabel(s("a", { firstPrompt: "x".repeat(40) }), "新对话")).toBe(`${"x".repeat(24)}…`);
+  });
+
+  it("shows the task itself for a session the coordinator started, in both languages", () => {
+    for (const lang of ["zh", "en"] as const) {
+      const firstPrompt = taskMessage("build the settings page with tabs", lang, "feature");
+      expect(sessionLabel(s("a", { firstPrompt }), "新对话")).toBe("build the settings page …");
+    }
   });
 
   it("falls back when there is no prompt yet", () => {
