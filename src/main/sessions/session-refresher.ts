@@ -68,7 +68,7 @@ export interface SessionRefresherDeps {
   contextOf(sessionId: string): number | null;
   /** 设置 refreshThresholdTokens，0 = 关。 */
   threshold(): number;
-  /** ticket session 和 feature 总控的 /handoff 是 Butler 自己的命令（handoffCommandStatus === "installed"）。 */
+  /** ticket session 和 feature 总控的 /handoff 是 Butler 自己的命令（handoffCommandUsable：当前版本或旧版本都算）。 */
   handoffCommandReady(): Promise<boolean>;
   /** Task 1 合并后恒为 true；留着这个开关是为了按顺序上线。 */
   epicPlanReady(): boolean;

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { SettingsRepo } from "../db/settings-repo";
 import { resolvePaths } from "../paths";
 import { memDb, tempDir } from "../test-utils";
+import { HANDOFF_COMMAND_MD } from "../handoff/templates";
 import { HealthService } from "./health";
 
 describe("HealthService", () => {
@@ -158,6 +159,49 @@ describe("HealthService", () => {
       const { health } = setup();
       await health.installHooks();
       expect(health.hookBinCurrent()).toBe(true);
+    });
+  });
+
+  describe("syncHandoffCommand（C1：升级后旧版本的 /handoff 读成 stale，换新全部失败）", () => {
+    const setup = () => {
+      const home = tempDir();
+      const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+      mkdirSync(paths.claudeCommands, { recursive: true });
+      const logs: string[] = [];
+      const health = new HealthService({
+        paths, platform: "darwin", env: {}, settings: new SettingsRepo(memDb()), bundledHookBin: "/none",
+        readPath: async () => "/usr/bin", run: async () => "", log: (m) => logs.push(m),
+      });
+      return { file: join(paths.claudeCommands, "handoff.md"), health, logs };
+    };
+    const V161 = readFileSync(join(__dirname, "..", "handoff", "__fixtures__", "handoff-command-1.6.1.zh.md"), "utf8");
+
+    it("upgrades the command 1.6.1 installed and then reports installed", async () => {
+      const { file, health, logs } = setup();
+      writeFileSync(file, V161);
+      expect((await health.refresh()).handoffCommand).toBe("stale");
+      await health.syncHandoffCommand();
+      expect(readFileSync(file, "utf8")).toBe(HANDOFF_COMMAND_MD);
+      expect((await health.refresh()).handoffCommand).toBe("installed");
+      expect(logs.some((m) => m.includes("out of date"))).toBe(true);
+    });
+
+    it("leaves a user's own command and a missing one alone", async () => {
+      const { file, health } = setup();
+      await health.syncHandoffCommand();
+      expect(existsSync(file)).toBe(false);
+      writeFileSync(file, "mine");
+      await health.syncHandoffCommand();
+      expect(readFileSync(file, "utf8")).toBe("mine");
+    });
+
+    it("only logs when the upgrade fails", async () => {
+      const { file, health, logs } = setup();
+      writeFileSync(file, V161);
+      mkdirSync(`${file}.butler-tmp`); // 临时文件的位置是个目录：写不进去
+      await expect(health.syncHandoffCommand()).resolves.toBeUndefined();
+      expect(readFileSync(file, "utf8")).toBe(V161);
+      expect(logs.some((m) => m.includes("could not upgrade"))).toBe(true);
     });
   });
 });

@@ -44,7 +44,7 @@ import { autostartState } from "./autostart";
 import { electronSecretBox } from "./gateway/safe-storage";
 import { llmStatus } from "./gateway/status";
 import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
-import { handoffCommandPath, handoffCommandStatus } from "./handoff/command";
+import { handoffCommandPath, handoffCommandUsable } from "./handoff/command";
 import { ingestFeatureHandoff, type FeatureIngestInput } from "./handoff/feature-ingest";
 import { featureCommandFollowup, FeatureSummaryRunner } from "./handoff/feature-runner";
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
@@ -306,7 +306,8 @@ async function bootstrap(): Promise<void> {
   const notify = () => safeSend(IPC.stateChanged);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
   // 同时把升级后还是旧版本的 butler-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
-  const healthReady: Promise<void> = Promise.all([health.refresh(), health.syncHookBinary()]).then(
+  // Butler 旧版本装的 /handoff 也先换成当前版本再探测（C1），健康页报告的是换完的状态。syncHandoffCommand 不抛错。
+  const healthReady: Promise<void> = Promise.all([health.syncHandoffCommand().then(() => health.refresh()), health.syncHookBinary()]).then(
     () => {
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       applyGhResolution(resolveGh(health.claude().pathValue, process.platform), (m) => logger(m));
@@ -756,12 +757,12 @@ async function bootstrap(): Promise<void> {
     kindOf: (s) => refreshKindOf(s, gateTerm(s.id) !== null),
     contextOf,
     threshold: () => refreshThreshold(settings),
-    // 和 HealthService 装命令的是同一个文件；读不了当作不是 Butler 的（不换新）。
-    handoffCommandReady: async () =>
-      (await handoffCommandStatus(handoffCommandPath(paths.claudeCommands)).catch((e: unknown) => {
+    // 和 HealthService 装命令的是同一个文件；Butler 的旧版本也算（C1）。读不了当作不是 Butler 的（不换新）。
+    handoffCommandReady: () =>
+      handoffCommandUsable(handoffCommandPath(paths.claudeCommands)).catch((e: unknown) => {
         logger("refresh: reading the /handoff command file failed", e);
-        return "conflict" as const;
-      })) === "installed",
+        return false;
+      }),
     // epic 的规划已经单独存放（Task 1），epic 总控也可以换新。
     epicPlanReady: () => true,
     memoryEnabled: () => memoryOn(settings),

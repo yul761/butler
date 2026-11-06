@@ -2,11 +2,13 @@ import { chmodSync, existsSync, lstatSync, readFileSync, statSync, symlinkSync, 
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { handoffCommandPath, handoffCommandStatus, installHandoffCommand, uninstallHandoffCommand } from "./command";
+import { handoffCommandPath, handoffCommandStatus, handoffCommandUsable, installHandoffCommand, uninstallHandoffCommand } from "./command";
 import { setLang } from "../i18n";
 import { commandBodyHash, featureCoordinatorSection, HANDOFF_COMMAND_MARKER, HANDOFF_COMMAND_MD, handoffCommandBody, renderHandoffCommand } from "./templates";
 
 const OLD = renderHandoffCommand("---\ndescription: old\n---\n旧版正文\n");
+/** 1.6.1 装的 /handoff（git show 7c7a2ce:src/main/handoff/templates.ts 渲染出来的，一字不差）。 */
+const V161 = readFileSync(join(__dirname, "__fixtures__", "handoff-command-1.6.1.zh.md"), "utf8");
 
 describe("/handoff command file", () => {
   it("installs into a missing commands dir, reports installed, and uninstalls", async () => {
@@ -25,6 +27,26 @@ describe("/handoff command file", () => {
     expect(await handoffCommandStatus(file)).toBe("stale");
     expect(await installHandoffCommand(file)).toBe("installed");
     expect(readFileSync(file, "utf8")).toBe(HANDOFF_COMMAND_MD);
+  });
+
+  it("upgrades the command 1.6.1 installed", async () => {
+    const file = handoffCommandPath(tempDir());
+    writeFileSync(file, V161);
+    expect(await handoffCommandStatus(file)).toBe("stale");
+    expect(await installHandoffCommand(file)).toBe("installed");
+    expect(readFileSync(file, "utf8")).toBe(HANDOFF_COMMAND_MD);
+  });
+
+  it("counts Butler's own command as usable for a refresh even when stale (C1)", async () => {
+    const dir = tempDir();
+    const file = handoffCommandPath(dir);
+    expect(await handoffCommandUsable(file)).toBe(false); // missing
+    writeFileSync(file, V161);
+    expect(await handoffCommandUsable(file)).toBe(true); // stale：照样是 Butler 的命令
+    writeFileSync(file, HANDOFF_COMMAND_MD);
+    expect(await handoffCommandUsable(file)).toBe(true);
+    writeFileSync(file, "我自己的 handoff 命令");
+    expect(await handoffCommandUsable(file)).toBe(false);
   });
 
   it("never touches a user's own handoff.md", async () => {
