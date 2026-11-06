@@ -963,13 +963,12 @@ describe("nightlyDistill: the model reaches StateCore only through the gateway (
     expect(w.h.provider.requests).toHaveLength(sent);
   });
 
-  it("never distills while confirm-before-send is on, and never asks for a confirmation (P4-R5)", async () => {
+  it("never distills while confirm-before-send is on (P4-R5)", async () => {
     const w = await wired("full");
     w.h.settings.set("llmConfirm", "1");
     await seedEvent(w.t.dataDir, "ticket:PROJ-1");
     expect(await w.run()).toEqual({ scopes: 0, ran: 0, failed: 0 });
     expect(w.h.provider.requests).toEqual([]);
-    expect(w.h.confirms).toEqual([]);
     expect(w.h.audit.list()).toEqual([]);
   });
 

@@ -30,7 +30,7 @@ export function needsOnboarding(settings: Pick<EditableSettings, "onboardingDone
   return settings !== null && settings.onboardingDone !== "1";
 }
 
-/** 是否显示向导：null = 还没读到设置（先不渲染任何页面，避免新用户看到简报闪一下）。 */
+/** 是否显示向导：null = 还没读到设置（先不渲染任何页面，避免新用户看到首页闪一下）。 */
 export type OnboardingState = boolean | null;
 export type OnboardingEvent =
   | { type: "loaded"; settings: Pick<EditableSettings, "onboardingDone"> }

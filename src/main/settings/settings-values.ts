@@ -16,12 +16,6 @@ export interface ScheduleConfig {
   workingDays: ReadonlySet<number>;
 }
 
-export interface Thresholds {
-  blockedDays: number;
-  reviewWaitDays: number;
-  staleDays: number;
-}
-
 export function parseTime(v: string): { h: number; m: number } | null {
   const m = /^(\d{1,2}):(\d{2})$/.exec(v.trim());
   if (!m) return null;
@@ -57,11 +51,6 @@ export function parseToolList(v: string): string[] {
 
 /** tracker 工具只能是 MCP 工具名（mcp__server 或 mcp__server__tool）：Bash、带参数的规则、以 - 开头的 flag 一律不是。 */
 export const TRACKER_TOOL_RE = /^mcp__[A-Za-z0-9_-]+(__[A-Za-z0-9_-]+)?$/;
-
-export function parseDays(v: string, fallback: number): number {
-  const t = v.trim();
-  return /^\d{1,3}$/.test(t) ? Number(t) : fallback;
-}
 
 /** 开关类设置：只接受 0 / 1。 */
 export function normalizeFlag(value: string): string {
@@ -308,11 +297,6 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     }
     case "headlessProjectMcp":
       return normalizeFlag(value);
-    case "blockedDays":
-    case "reviewWaitDays":
-    case "staleDays":
-      if (!/^\d{1,3}$/.test(value.trim())) throw new SettingError(M().days);
-      return String(Number(value.trim()));
     case "handoffPrompt":
     case "refreshPrompt":
       if (!value.trim()) throw new SettingError(M().promptEmpty);
@@ -380,14 +364,6 @@ export function scheduleConfig(s: SettingsRepo): ScheduleConfig {
   return {
     nightly: parseTime(s.get("nightlyTime")) ?? { h: 16, m: 0 },
     workingDays: days.size > 0 ? days : parseWorkingDays(SETTING_DEFAULTS.workingDays),
-  };
-}
-
-export function thresholds(s: SettingsRepo): Thresholds {
-  return {
-    blockedDays: parseDays(s.get("blockedDays"), 2),
-    reviewWaitDays: parseDays(s.get("reviewWaitDays"), 2),
-    staleDays: parseDays(s.get("staleDays"), 5),
   };
 }
 

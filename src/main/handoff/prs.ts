@@ -24,10 +24,3 @@ export function combinedPr(prs: Pr[]): { state: Pr["state"]; review: Pr["review"
   if (live.length > 0) return { state: "merged", review: null };
   return { state: "closed", review: null };
 }
-
-/** 简报条目用的 key 后缀：只有一个 PR 时是 PR 号（和以前一样，已有的标记不失效），几个 PR 时带上仓库路径。 */
-export function prKey(pr: Pr, all: Pr[]): string {
-  if (all.length <= 1) return String(pr.number);
-  const m = /github\.com\/([^/]+\/[^/]+)\/pull\//.exec(pr.url);
-  return `${m ? m[1] : pr.url}#${pr.number}`;
-}

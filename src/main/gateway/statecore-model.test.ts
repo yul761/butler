@@ -46,7 +46,6 @@ describe("PrivacyGateway.statecoreModel (plan 4 R1)", () => {
     expect(row.costUsd).toBeCloseTo((1000 * 1 + 500 * 2) / 1_000_000, 10);
     expect(row.payloadSent).toContain("https://intranet.corp/x");
     expect(JSON.stringify(row)).not.toContain(FAKE_KEY);
-    expect(h.confirms).toEqual([]);
   });
 
   it("refuses every call once the level is no longer full or confirm is on (Review Focus 4)", async () => {
@@ -59,7 +58,6 @@ describe("PrivacyGateway.statecoreModel (plan 4 R1)", () => {
     await expect(model.chat(msgs)).rejects.toThrow();
     expect(h.provider.requests).toHaveLength(0);
     expect(h.audit.list()).toEqual([]);
-    expect(h.confirms).toEqual([]);
   });
 
   it("stops at the monthly budget without sending", async () => {

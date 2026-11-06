@@ -1,7 +1,6 @@
 import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
-import type { BriefItem, BriefRule, BriefSection } from "../../shared/brief";
 import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
@@ -165,7 +164,7 @@ const ZH = {
   loadFailed: (m: string) => `读取失败：${m}`,
   retry: "重试",
   jobOk: "已完成。",
-  jobPartial: "部分 ticket 没有完成（失败或被限流），早间简报前会补跑。",
+  jobPartial: "部分 ticket 没有完成（失败或被限流），第二天早上会补跑。",
   jobFailed: (m: string) => `运行失败：${m}`,
   archive: "归档",
   edit: "编辑",
@@ -203,7 +202,6 @@ const ZH = {
   restoreArchived: (key: string) => `恢复 ${key}`,
   statusAuto: (current: string) => `自动（当前：${current}）`,
   noSessions: "还没有 session。点“新 session”开始。",
-  noTickets: "还没有 ticket。点左侧“新建 ticket”。",
   resume: "续接",
   exited: (code: number) => `claude 已退出（退出码 ${code}）`,
   branchMismatch: (current: string, expected: string) => `仓库当前在 ${current} 上，这个 ticket 的分支是 ${expected}。`,
@@ -265,43 +263,10 @@ const ZH = {
   butlerHome: "Butler 数据目录",
   claudeSettings: "Claude Code 设置文件",
   loading: "加载中…",
-  morningBrief: "早间简报",
-  eveningBrief: "晚间小结",
-  briefRefreshing: "刷新中…",
+  // 下面两条只剩还没改写的 e2e 在用（简报页已经去掉），e2e 改写时一起删。
   regenerate: "重新生成",
-  noBrief: "还没有简报。点“重新生成”马上生成一份。",
-  noEvening: "还没有晚间小结。晚间 handoff 跑完后会自动生成。",
-  briefEmpty: "今天没有需要处理的事项。",
-  todayFocus: "今日重点",
-  previousDay: (date: string) => `上个工作日（${date}）`,
-  previousDayEmpty: "上个工作日没有记录。",
-  briefSections: { first: "🔴 先做", today: "🟡 今天", watch: "⚪ 留意" } as Record<BriefSection, string>,
-  briefRule: {
-    pr_approved: (i: BriefItem) => `PR #${i.pr?.number ?? "?"} 已经 approve，可以合并了`,
-    pr_changes_requested: (i: BriefItem) => `PR #${i.pr?.number ?? "?"} 被要求修改`,
-    followup_after_merge: (i: BriefItem) => `合并后任务：${i.text ?? ""}`,
-    followup_due: (i: BriefItem) => (i.days ? `已逾期 ${i.days} 天：${i.text ?? ""}` : `今天到期：${i.text ?? ""}`),
-    next_step: (i: BriefItem) => `下一步：${i.text ?? ""}`,
-    blocked_long: (i: BriefItem) => `已经阻塞 ${i.days ?? 0} 天${i.text ? `：${i.text}` : ""}`,
-    review_waiting: (i: BriefItem) => `PR 等 review 已经 ${i.days ?? 0} 天`,
-    stale: (i: BriefItem) => `${i.days ?? 0} 天没有活动`,
-    unclaimed: (i: BriefItem) => `${i.count ?? 0} 个未认领的 session`,
-  } as Record<BriefRule, (i: BriefItem) => string>,
-  /** “打开”时预填到 claude 输入框的一行话（主进程还会再去掉换行）。 */
-  briefPrefill: {
-    pr_approved: (i: BriefItem) => `PR #${i.pr?.number ?? ""} 已经 approve 了，检查一下 CI 然后合并（来自 ${i.ticketKey}）`,
-    pr_changes_requested: (i: BriefItem) => `处理 PR #${i.pr?.number ?? ""} 的 review 意见（来自 ${i.ticketKey}）`,
-    followup_after_merge: (i: BriefItem) => `继续 follow-up：${i.text ?? ""}（来自 ${i.ticketKey}）`,
-    followup_due: (i: BriefItem) => `继续 follow-up：${i.text ?? ""}（来自 ${i.ticketKey}）`,
-    next_step: (i: BriefItem) => `继续：${i.text ?? ""}（来自 ${i.ticketKey}）`,
-    blocked_long: (i: BriefItem) => `看看 ${i.ticketKey} 的阻塞现在解决了没有`,
-    review_waiting: (i: BriefItem) => `${i.ticketKey} 的 PR 等 review 好几天了，看下要不要催一下`,
-    stale: (i: BriefItem) => `回顾一下 ${i.ticketKey} 的进度，接下来做什么`,
-  } as Partial<Record<BriefRule, (i: BriefItem) => string>>,
+  briefSections: { first: "🔴 先做", today: "🟡 今天", watch: "⚪ 留意" },
   itemActions: { open: "打开", done: "完成", snooze: "推迟到明天", ignore: "忽略", claim: "去认领" } as Record<string, string>,
-  noticeDegraded: (keys: string[]) => `handoff 不完整：${keys.join("、")}`,
-  noticeTracker: (keys: string[]) => `没有读到 tracker 信息：${keys.join("、")}（tracker MCP 不可用或没有配置）`,
-  eveningBlockers: "阻塞：",
   mergeEventsTitle: "合并协调",
   mergeEvent: {
     wait: (who: string, other: string) => `${who} 等 ${other} 合完再合`,
@@ -309,9 +274,6 @@ const ZH = {
     rebase: (who: string) => `${who} 要先 rebase 再合`,
     dir_busy: (who: string, other: string) => `${who} 想切 branch，目录正被 ${other} 用着`,
   },
-  eveningNext: "明天第一步：",
-  eveningDegraded: "handoff 不完整",
-  eveningNothingDone: "没有记录完成的事。",
   followupsTab: (n: number) => `Follow-ups（${n}）`,
   historyTab: (n: number) => `Handoff 历史（${n}）`,
   runHandoff: "立即 handoff",
@@ -344,10 +306,6 @@ const ZH = {
   nightlyTime: "晚间 handoff 时间",
   workingDays: "工作日（只在这些天跑晚间 handoff）",
   weekdayNames: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"],
-  thresholds: "简报阈值（天）",
-  blockedDays: "阻塞超过",
-  reviewWaitDays: "等 review 超过",
-  staleDays: "无活动超过",
   trackerTools: "tracker MCP 工具（handoff 只能调用这些，一行一个）",
   trackerHint: "例如 mcp__atlassian__getJiraIssue。只选读取类的工具：handoff 是只读的。",
   trackerHintSources: "后台 handoff 只读你的用户级 Claude Code 设置，所以默认不加载仓库 .mcp.json 和本地级的 MCP。tracker 配在那里时，打开下面的开关。",
@@ -431,10 +389,6 @@ const ZH = {
   auditNothingSent: "（没有发出任何内容）",
   auditResponse: "响应",
   loadMore: "更早的记录",
-  narrativePending: "正在生成今日重点…",
-  narrativeBlocked: "今日重点没有发送：出站内容里有敏感信息（详见审计页）。",
-  narrativeBudget: "今日重点没有生成：本月预算已用完，或当前模型在价格表里没有价格。",
-  narrativeFailed: "今日重点生成失败（详见审计页）。",
   auditBodyMaybeSent: "可能已发出的内容",
   auditMaybeSentNote: "这次调用没有成功完成，下面的内容可能已经发给了服务商。",
   auditDeclined: "你在确认框里选择了不发送（或确认超时）",
@@ -494,7 +448,7 @@ const ZH = {
   wizardPrivacyTitle: "隐私档位与个人 API（可选）",
   wizardPrivacyHelp: "个人 API 用来润色早间简报的“今日重点”（完整档位下还用来蒸馏记忆），默认只发占位符和状态。不想用就选“关闭”或者什么都不填。",
   wizardDoneTitle: "准备好了",
-  wizardDoneHelp: "点左侧“新建 ticket”开始。每晚 Butler 会为有活动的 ticket 生成 handoff，早上打开就能看到简报。这些设置之后都能在设置页修改，也可以从设置页重新运行这个向导。",
+  wizardDoneHelp: "点左侧“新建 ticket”开始。每晚 Butler 会为有活动的 ticket 生成 handoff。这些设置之后都能在设置页修改，也可以从设置页重新运行这个向导。",
 };
 
 export type UiStrings = typeof ZH;

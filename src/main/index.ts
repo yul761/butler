@@ -1,28 +1,22 @@
-import { app, BrowserWindow, dialog, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, Tray, type MessageBoxOptions } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, Tray } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { Brief } from "../shared/brief";
 import { sanitizeTask } from "../shared/control";
 import { parseGateRequest, type GateRequest, type GateResult } from "../shared/gate";
-import type { MergeEvent } from "../shared/types";
-import { IPC, type AppNavigateRoute } from "../shared/ipc";
+import { IPC } from "../shared/ipc";
 import { APP_ID, shouldSetAppId } from "./app-id";
-import { BriefService } from "./brief/brief-service";
-import { narrateBrief } from "./brief/narrate";
 import { runHeadless } from "./claude/headless";
 import { probeMcpTools } from "./claude/mcp-probe";
 import { projectMcpApprovalSettings, projectMcpConfigs } from "./claude/project-mcp";
 import { headlessEnv } from "./claude/spawn";
 import { AuditRepo } from "./db/audit-repo";
-import { BriefsRepo } from "./db/briefs-repo";
 import { NewerDatabaseError, openDatabase } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
 import { HandoffsRepo } from "./db/handoffs-repo";
 import { JobsRepo } from "./db/jobs-repo";
-import { MarksRepo } from "./db/marks-repo";
 import { MemorySyncRepo } from "./db/memory-sync-repo";
 import { MergeGateRepo } from "./db/merge-gate-repo";
 import { PrWatchRepo } from "./db/pr-watch-repo";
@@ -76,7 +70,7 @@ import { ensureDirs, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
-import { ActivityMonitor, activityIntervals, type StuckInfo } from "./sessions/activity-monitor";
+import { ActivityMonitor, activityIntervals } from "./sessions/activity-monitor";
 import { sessionRegistryName } from "./sessions/activity-sources";
 import { DeliveryGuard } from "./sessions/delivery-guard";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
@@ -102,10 +96,8 @@ import { CSP_VIOLATION_LOG_PREFIX, isCspViolationMessage } from "./csp-log";
 const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
 /** hook 发现没有 ticket 的 session 后，稍等片刻再扫描磁盘（合并连续事件）。 */
 const HOOK_DISCOVERY_DEBOUNCE_MS = 3000;
-/** 系统空闲超过这么多秒就不算“正在用电脑”（用于 tick 触发早间简报）。 */
+/** 系统空闲超过这么多秒就不算“正在用电脑”（用于 tick 触发早间任务）。 */
 const ACTIVE_IDLE_SECONDS = 120;
-/** 发送前确认最多等这么久，超时视为拒绝：早间任务串行执行，对话框一直开着会挡住后面的任务。 */
-const CONFIRM_TIMEOUT_MS = 5 * 60 * 1000;
 
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -113,12 +105,6 @@ let tray: Tray | null = null;
 const BACKGROUND_WINDOWS = process.env.BUTLER_BACKGROUND_WINDOWS === "1";
 /** 防休眠开关（托盘菜单和侧边栏都能开关）；bootstrap 里建好。 */
 let keepAwake: KeepAwake | null = null;
-/** 保留最近一条通知的引用，否则它可能在用户点击前被回收。 */
-let lastNotification: Notification | null = null;
-/** 卡住的通知：可能同时有好几个 session 卡住，都要留着，点击之前不能被回收。 */
-const stuckNotifications = new Set<Notification>();
-/** 合并协调的通知：几次冲突可能接连发生，点击之前都要留着。 */
-const gateNotifications = new Set<Notification>();
 const quitState = createQuitState(() => app.quit());
 let logger: Logger = () => undefined;
 /** dev 控制台 tee：防止在 tee 里再次写日志造成递归，stderr 管道断开后停止 tee。 */
@@ -262,82 +248,6 @@ function trayMenu(): Menu {
 
 function trayTooltip(): string {
   return keepAwake?.isOn() ? M().trayTooltipKeepAwake : "Butler";
-}
-
-function showEveningNotification(brief: Brief): void {
-  if (!Notification.isSupported()) return;
-  lastNotification?.close();
-  const n = new Notification({ title: M().eveningTitle, body: M().eveningBody(brief.evening.length) });
-  n.on("click", () => {
-    showWindow();
-    safeSend(IPC.appNavigate, { page: "home", kind: "evening" });
-  });
-  n.show();
-  lastNotification = n;
-}
-
-/** 一次卡住一条通知（设计文档 2026-10-31）：点开这个 feature 页，展开这个 ticket 的面板。 */
-function showStuckNotification(info: StuckInfo): void {
-  if (headlessAbort.signal.aborted || !Notification.isSupported()) return;
-  const n = new Notification({ title: M().stuckTitle(info.ticketKey ?? ""), body: M().stuckBody(info.reason) });
-  stuckNotifications.add(n);
-  n.on("close", () => stuckNotifications.delete(n));
-  n.on("click", () => {
-    stuckNotifications.delete(n);
-    showWindow();
-    // 没有 feature 或没有 ticket 的（独立 ticket、总控、epic）先开首页；这个函数之后会整个删掉
-    const route: AppNavigateRoute = info.featureId !== null && info.ticketKey !== null ? { page: "feature", featureId: info.featureId, stuckTicket: info.ticketKey } : { page: "home" };
-    safeSend(IPC.appNavigate, route);
-  });
-  n.show();
-}
-
-/** 合并总控判出冲突（设计文档 2026-11-04“告诉用户”）：一条一个通知，点开对应的 ticket 页；没有 ticket 时开首页。 */
-function showGateNotification(e: MergeEvent, whoOf: (ticketKey: string | null, branch: string) => string): void {
-  if (headlessAbort.signal.aborted || !Notification.isSupported()) return;
-  const other = e.otherBranch !== null ? whoOf(e.otherTicket, e.otherBranch) : e.otherTicket;
-  const n = new Notification({ title: M().gateNotifyTitle(basename(e.repoPath)), body: M().gateNotifyBody(e, whoOf(e.ticketKey, e.branch), other) });
-  gateNotifications.add(n);
-  n.on("close", () => gateNotifications.delete(n));
-  n.on("click", () => {
-    gateNotifications.delete(n);
-    showWindow();
-    const route: AppNavigateRoute = e.ticketKey ? { page: "ticket", key: e.ticketKey } : { page: "home" };
-    safeSend(IPC.appNavigate, route);
-  });
-  n.show();
-}
-
-/**
- * 发送前确认（设计文档 7.6）：展示完整的出站内容，默认按钮和取消都是“不发送”。
- * 把主窗口带到前台并作为父窗口；没有主窗口时视为拒绝。最多等 CONFIRM_TIMEOUT_MS，超时视为拒绝；
- * app 正在退出时立即返回 false，对话框打开中开始退出也会被关掉，不会挡住退出。
- */
-async function confirmSend(outbound: string, quit: AbortSignal): Promise<boolean> {
-  if (quitState.quitting || quit.aborted) return false;
-  const signal = AbortSignal.any([AbortSignal.timeout(CONFIRM_TIMEOUT_MS), quit]);
-  const options: MessageBoxOptions = {
-    type: "question",
-    buttons: [M().confirmSend, M().confirmCancel],
-    defaultId: 1,
-    cancelId: 1,
-    noLink: true,
-    title: M().confirmTitle,
-    message: M().confirmMessage,
-    detail: outbound,
-    signal,
-  };
-  // 没有主窗口时（窗口还没建好、或正在退出）直接视为拒绝：macOS 上无父窗口的对话框不响应 abort，
-  // 超时和退出都关不掉它（Electron 44 实测），会一直挡着。
-  const w = win && !win.isDestroyed() ? win : null;
-  if (!w) {
-    logger("confirm-before-send: no main window, treated as declined");
-    return false;
-  }
-  showWindow();
-  const r = await dialog.showMessageBox(w, options);
-  // 被超时或退出关掉的对话框一律当作拒绝。
-  return r.response === 0 && !signal.aborted;
 }
 
 async function bootstrap(): Promise<void> {
@@ -493,7 +403,8 @@ async function bootstrap(): Promise<void> {
     transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
     judge: (input) => judgeStuck({ run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID, signal: headlessAbort.signal, onUsage: recordHeadlessUsage, log: logger }, input),
     notify,
-    onStuck: showStuckNotification,
+    // 卡住不再弹系统通知（之后在「现在」页里显示）：只刷新界面。
+    onStuck: () => notify(),
     now: Date.now,
     intervals: activityIntervals(process.env),
     log: logger,
@@ -623,12 +534,6 @@ async function bootstrap(): Promise<void> {
    * 输出了 ticket 代码块或没有代码块）就由 Butler 从那个 session fork 出来自己生成汇总。见 featureCommandFollowup。
    */
   const afterFeatureCommand = featureCommandFollowup(featureRunner, { notify, log: logger });
-  const briefs = new BriefsRepo(db);
-  const briefService = new BriefService({
-    tickets, sessions, handoffs, followups, marks: new MarksRepo(db), briefs, settings,
-    now: Date.now, unclaimedCount: () => sessionService.unclaimed().length,
-  });
-
   const audit = new AuditRepo(db);
   // 审计的启动收尾，先于一切读写审计的代码：上次退出时没发完的请求记为 failed（请求体保留，可能已经发出），
   // 再按保留期清理一次（不删本月的记录，预算要用；之后 gateway 每次调用前也会清理）。
@@ -642,13 +547,9 @@ async function bootstrap(): Promise<void> {
   const terms = new TermsRepo(db);
   const keys = new KeyStore({ secrets: new SecretsRepo(db), box: electronSecretBox, now: Date.now, log: logger });
   const gateway = new PrivacyGateway({
-    settings, audit, terms, keys, now: Date.now,
-    confirm: (outbound) => confirmSend(outbound, headlessAbort.signal),
+    settings, audit, keys, now: Date.now,
     log: logger,
   });
-  let briefNarrating = false;
-
-  let briefRefreshing = false;
   // 同时只跑一次蒸馏；退出时 headlessAbort 让 gateway 拒绝 / 中止调用，蒸馏在下一个 scope 之前停下。
   const distiller = new BackgroundRunner({
     name: "memory distill",
@@ -659,52 +560,19 @@ async function bootstrap(): Promise<void> {
   const dailyDeps: DailyJobDeps = {
     runner,
     features: featureRunner,
-    briefs: briefService,
-    jobs,
-    now: Date.now,
     isWorkingDay: () => isWorkingDay(localDate(Date.now()), scheduleConfig(settings).workingDays),
     hasTrackerTools: () => trackerTools(settings).length > 0,
-    setRefreshing: (v) => {
-      briefRefreshing = v;
-      notify();
-    },
     aborted: () => headlessAbort.signal.aborted,
     log: logger,
-    narrate: async (brief) => {
-      briefNarrating = true;
-      notify();
-      try {
-        await narrateBrief(
-          {
-            narrate: (src, signal) => gateway.narrate(src, signal),
-            briefs,
-            source: (b) => briefService.narrativeSource(b),
-            off: () => gateway.isOff(),
-            signal: headlessAbort.signal,
-            log: logger,
-          },
-          brief,
-        );
-      } finally {
-        briefNarrating = false;
-        notify();
-      }
-    },
     // full 档位的记忆蒸馏：在后台跑，不挡调度链；每次运行都重新向 gateway 要模型（改档位不用重启），模型只经 withScope 交给嵌入式 StateCore。
     distill: () => distiller.start(),
-    onEvening: (brief) => {
-      // 退出开始后不再弹通知。
-      if (headlessAbort.signal.aborted) return;
-      notify();
-      showEveningNotification(brief);
-    },
   };
   const scheduler = new Scheduler({
     jobs,
     config: () => scheduleConfig(settings),
     now: Date.now,
     userActive: () => powerMonitor.getSystemIdleTime() < ACTIVE_IDLE_SECONDS,
-    nightly: (slot) => nightlyJob(dailyDeps, slot),
+    nightly: () => nightlyJob(dailyDeps),
     morning: () => morningJob(dailyDeps),
     onChange: notify,
     log: logger,
@@ -862,10 +730,7 @@ async function bootstrap(): Promise<void> {
   const mergeGate = new MergeGate({
     tickets, repo: gateRepo, git, prInfo, whoOf,
     openTerminals: (key) => sessionService.openTerminalCount(key),
-    notify: (e) => {
-      showGateNotification(e, whoOf);
-      notify();
-    },
+    notify: () => notify(),
     checkSoon: () => holdWatcher.soon(),
     now: Date.now,
     log: logger,
@@ -984,13 +849,11 @@ async function bootstrap(): Promise<void> {
     onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,
-    tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs, gateRepo,
+    tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, runner, featureRunner, scheduler, jobs, gateRepo,
     keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     usage: usageRepo, sessions,
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
-    briefRefreshing: () => briefRefreshing,
-    briefNarrating: () => briefNarrating,
     rederive: (key) => {
       rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now }, key);
       // followup 完成 / 忽略 / 恢复：StateCore 里对应的条目跟着 forget / 重写。

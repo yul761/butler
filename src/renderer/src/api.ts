@@ -1,6 +1,5 @@
-import type { BriefKind, BriefView, ItemMark } from "../../shared/brief";
 import type { Lang } from "../../shared/i18n";
-import { IPC, type AppNavigateRoute, type IpcResult } from "../../shared/ipc";
+import { IPC, type IpcResult } from "../../shared/ipc";
 import type { MemoryView, WhyEntry } from "../../shared/memory";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
@@ -88,11 +87,8 @@ export const api = {
   installHooks: () => call<HealthReport>(IPC.healthInstallHooks),
   uninstallHooks: () => call<HealthReport>(IPC.healthUninstallHooks),
   pickDirectory: () => call<string | null>(IPC.dialogPickDir),
-  briefLatest: (kind: BriefKind) => call<BriefView>(IPC.briefsLatest, kind),
   mergeEvents: () => call<MergeEvent[]>(IPC.mergeEvents),
   prWatchList: () => call<WatchedPr[]>(IPC.prWatchList),
-  regenerateBrief: () => call<JobStateView | null>(IPC.briefsRegenerate),
-  markBriefItem: (key: string, mark: ItemMark) => call<void>(IPC.briefsMark, key, mark),
   followups: (ticketKey: string) => call<Followup[]>(IPC.followupsList, ticketKey),
   setFollowupStatus: (id: string, status: FollowupStatus) => call<void>(IPC.followupsSetStatus, id, status),
   handoffs: (ticketKey: string) => call<HandoffRecord[]>(IPC.handoffsList, ticketKey),
@@ -119,7 +115,6 @@ export const api = {
   memoryWhy: (ticketKey: string, factId: string) => call<WhyEntry[] | null>(IPC.memoryWhy, ticketKey, factId),
   usageSummary: () => call<UsageSummary>(IPC.usageSummary),
   dismissActivity: (sessionId: string) => call<void>(IPC.activityDismiss, sessionId),
-  onNavigate: (cb: (route: AppNavigateRoute) => void) => window.butler.on(IPC.appNavigate, cb),
   onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),
   onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),
   onStateChanged: (cb: () => void) => window.butler.on(IPC.stateChanged, cb),

@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { taskMessage } from "../shared/control";
 import { SettingsRepo } from "./db/settings-repo";
-import { narrativeMessages } from "./gateway/narrative";
 import { handoffCommandPath, handoffCommandStatus, installHandoffCommand } from "./handoff/command";
 import { buildPrompt, retryPrompt } from "./handoff/prompt";
 import { DEFAULT_HANDOFF_PROMPT, defaultHandoffPrompt, defaultRefreshPrompt } from "./handoff/templates";
@@ -50,13 +49,10 @@ describe("prompts follow the language (design 2026-10-26 i18n)", () => {
     expect(hasChinese(readFileSync(file, "utf8"))).toBe(false);
   });
 
-  it("writes the coordinator's task, today's focus prompt and memory notes in English", () => {
+  it("writes the coordinator's task and memory notes in English", () => {
     expect(taskMessage("build it", "en")).toBe("Task from the coordinator session:\nbuild it");
     expect(taskMessage("build it", "zh")).toBe("总控 session 交给你的任务：\nbuild it");
     setLang("en");
-    const system = narrativeMessages({} as never)[0].content;
-    expect(hasChinese(system)).toBe(false);
-    expect(system).toContain("in English");
     const f = { id: "f1", ticketKey: "A-1", kind: "config" as const, description: "raise the TTL", trigger: "after_merge" as const, dueDate: null, status: "open" as const, snoozedUntil: null, source: "session" as const, createdAt: 1, doneAt: null };
     expect(followupNote(f).body).toBe("raise the TTL (config, after merge)");
     expect(handoffSummaryFor({ status: "done", done_today: ["a", "b"] })).toBe("Status: done. Done: a; b");

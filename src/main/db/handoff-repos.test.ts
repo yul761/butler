@@ -3,16 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { EMPTY_BRIEF_CONTENT } from "../../shared/brief";
 import type { Followup } from "../../shared/types";
 import { emptyHandoff } from "../handoff/schema";
 import { insertTicket, type LegacyTicket, memDb } from "../test-utils";
-import { BriefsRepo } from "./briefs-repo";
 import { migrate, withTransaction } from "./database";
 import { FollowupsRepo } from "./followups-repo";
 import { HandoffsRepo } from "./handoffs-repo";
 import { JOB_NIGHTLY, JobsRepo } from "./jobs-repo";
-import { MarksRepo } from "./marks-repo";
 import { MIGRATIONS } from "./migrations";
 import { SessionsRepo } from "./sessions-repo";
 import { SettingsRepo } from "./settings-repo";
@@ -97,7 +94,7 @@ describe("HandoffsRepo", () => {
 });
 
 describe("FollowupsRepo", () => {
-  it("inserts, updates, changes status and hides archived tickets", () => {
+  it("inserts, updates, changes status and lists by ticket", () => {
     const { db, tickets } = setup();
     insertTicket(tickets, ticket("OLD-1"));
     const repo = new FollowupsRepo(db);
@@ -113,39 +110,10 @@ describe("FollowupsRepo", () => {
     repo.setStatus("f1", "snoozed", 60, "2026-10-22");
     expect(repo.get("f1")).toMatchObject({ status: "snoozed", doneAt: null, snoozedUntil: "2026-10-22" });
     expect(repo.listByTicket("PROJ-1").map((f) => f.id)).toEqual(["f1", "f2"]);
-    tickets.archive("OLD-1", 5);
-    expect(repo.listActiveTickets().map((f) => f.id)).toEqual(["f1", "f2"]);
   });
 });
 
-describe("BriefsRepo / MarksRepo / JobsRepo / SettingsRepo", () => {
-  it("writes the narrative back onto an existing brief", () => {
-    const briefs = new BriefsRepo(memDb());
-    const b = briefs.insert({ kind: "morning", date: "2026-10-21", createdAt: 1, content: EMPTY_BRIEF_CONTENT, narrative: null, narrativeStatus: "off" });
-    briefs.setNarrative(b.id, "先合并 PR。", "ok");
-    expect(briefs.latest("morning")).toMatchObject({ id: b.id, narrative: "先合并 PR。", narrativeStatus: "ok" });
-    briefs.setNarrative(b.id, null, "blocked");
-    expect(briefs.latest("morning")).toMatchObject({ narrative: null, narrativeStatus: "blocked" });
-  });
-
-  it("round-trips a brief and returns the latest of a kind", () => {
-    const { db } = setup();
-    const repo = new BriefsRepo(db);
-    const content = { items: [], previousDay: { date: "2026-10-20", entries: [{ ticketKey: "PROJ-1", done: ["x"] }] }, evening: [], notices: { degraded: [], trackerUnavailable: ["PROJ-1"] } };
-    repo.insert({ kind: "morning", date: "2026-10-20", createdAt: 1, content, narrative: null, narrativeStatus: "off" });
-    const second = repo.insert({ kind: "morning", date: "2026-10-21", createdAt: 2, content, narrative: null, narrativeStatus: "off" });
-    expect(repo.latest("morning")).toEqual(second);
-    expect(second).toMatchObject({ kind: "morning", date: "2026-10-21", narrative: null, narrativeStatus: "off", notices: { trackerUnavailable: ["PROJ-1"] } });
-    expect(repo.latest("evening")).toBeNull();
-  });
-
-  it("upserts item marks", () => {
-    const repo = new MarksRepo(memDb());
-    repo.set("next:PROJ-1:3", "snoozed", "2026-10-22", 1);
-    repo.set("next:PROJ-1:3", "done", null, 2);
-    expect(repo.all().get("next:PROJ-1:3")).toEqual({ mark: "done", untilDate: null });
-  });
-
+describe("JobsRepo / SettingsRepo", () => {
   it("records jobs", () => {
     const repo = new JobsRepo(memDb());
     expect(repo.get(JOB_NIGHTLY)).toEqual({ lastRunAt: null, lastStatus: null, lastError: null });
@@ -161,14 +129,6 @@ describe("BriefsRepo / MarksRepo / JobsRepo / SettingsRepo", () => {
     repo.set("nightlyTime", "18:30");
     repo.reset("nightlyTime");
     expect(repo.get("nightlyTime")).toBe("16:00");
-  });
-
-  it("fills in missing notice lists from an older or partial brief row", () => {
-    const db = memDb();
-    db.prepare(`INSERT INTO briefs (kind, date, created_at, items) VALUES ('morning', '2026-10-21', 1, ?)`).run(
-      JSON.stringify({ items: [], notices: { degraded: ["A-1"] } }),
-    );
-    expect(new BriefsRepo(db).latest("morning")?.notices).toEqual({ degraded: ["A-1"], trackerUnavailable: [] });
   });
 });
 

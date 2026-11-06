@@ -36,7 +36,7 @@ interface OldWorkdir {
 interface Props {
   ticket: TicketView;
   onArchived: () => void;
-  /** 从简报点“打开”进来时要执行的打开请求。 */
+  /** 从别的页面跳进来时要执行的打开请求。 */
   initialOpen?: OpenSessionRequest | null;
   onInitialOpenDone?: () => void;
   /** ticket 属于的 feature（设计文档 2026-10-26）。 */
@@ -70,7 +70,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
     setPanes((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
   }, [openKey]);
 
-  // 从简报点“打开”：恢复 session 并预填提示，只执行一次。
+  // 从别的页面跳进来时的打开请求：恢复 session 并预填提示，只执行一次。
   useEffect(() => {
     if (!initialOpen) return;
     onInitialOpenDone?.();

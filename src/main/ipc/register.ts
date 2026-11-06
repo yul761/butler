@@ -1,15 +1,13 @@
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
-import { ITEM_MARKS, type BriefKind, type BriefView, type ItemMark } from "../../shared/brief";
 import { IPC } from "../../shared/ipc";
 import {
   FOLLOWUP_STATUSES, type AutostartState, type FollowupStatus, type JobStateView, type McpProbe, type MergeEvent, type OpenSessionRequest, type TicketStatus, type WatchedPr,
 } from "../../shared/types";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
-import type { BriefService } from "../brief/brief-service";
 import type { EpicService } from "../epics/epic-service";
 import type { AuditRepo } from "../db/audit-repo";
 import type { MemoryService } from "../memory/memory-service";
-import { JOB_MORNING, JOB_NIGHTLY, type JobsRepo } from "../db/jobs-repo";
+import { JOB_NIGHTLY, type JobsRepo } from "../db/jobs-repo";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { MergeGateRepo } from "../db/merge-gate-repo";
@@ -58,7 +56,6 @@ export interface IpcDeps {
   followups: FollowupsRepo;
   handoffs: HandoffsRepo;
   settings: SettingsRepo;
-  briefService: BriefService;
   gateRepo: Pick<MergeGateRepo, "recentEvents">;
   /** PrWatcher 跟着的 PR 和 CI。 */
   prWatchList: () => WatchedPr[];
@@ -74,10 +71,6 @@ export interface IpcDeps {
   /** 防休眠开关（只在内存里，启动时是关的）。 */
   keepAwake: { isOn(): boolean; set(on: boolean): void };
   llmStatus: () => LlmStatus;
-  /** 早间刷新进行中。 */
-  briefRefreshing: () => boolean;
-  /** 正在生成“今日重点”。 */
-  briefNarrating: () => boolean;
   /** followup 状态变化后重新推导 ticket 状态。 */
   rederive: (ticketKey: string) => void;
   detectTrackerTools: () => Promise<McpProbe>;
@@ -307,29 +300,9 @@ export function registerIpc(d: IpcDeps): void {
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
 
-  handle(IPC.briefsLatest, (kind: BriefKind): BriefView => ({
-    brief: d.briefService.latest(kind === "evening" ? "evening" : "morning"),
-    refreshing: d.briefRefreshing(),
-    narrating: d.briefNarrating(),
-  }));
-  // 首页的“合并协调”：最近 7 天、最多 20 条。
+  // 「现在」页的“最近合并”：最近 7 天、最多 20 条。
   handle(IPC.mergeEvents, (): MergeEvent[] => d.gateRepo.recentEvents(d.now() - 7 * 24 * 3600 * 1000, 20));
   handle(IPC.prWatchList, (): WatchedPr[] => d.prWatchList());
-  handle(IPC.briefsRegenerate, async (): Promise<JobStateView | null> => {
-    if (d.aborted()) return null;
-    await d.scheduler.runMorningNow();
-    d.notify();
-    // 调度器把失败记在 jobs 表里而不是抛出：把结果交给界面显示。
-    return d.jobs.get(JOB_MORNING);
-  });
-  handle(IPC.briefsMark, (key: string, mark: ItemMark) => {
-    if (!(ITEM_MARKS as readonly string[]).includes(mark)) throw new Error(`unknown mark: ${String(mark)}`);
-    const k = String(key);
-    // followup 条目的状态在 followups 表里，不进 item_marks。
-    if (k.startsWith("followup:")) setFollowupStatus(k.slice("followup:".length), mark);
-    else d.briefService.mark(k, mark);
-    d.notify();
-  });
 
   handle(IPC.followupsList, (ticketKey: string) => d.followups.listByTicket(ticketKey));
   handle(IPC.followupsSetStatus, (id: string, status: FollowupStatus) => {

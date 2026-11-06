@@ -1,15 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_BRIEF_CONTENT, type Brief, type BriefKind } from "../../shared/brief";
-import { JOB_EVENING, JOB_MORNING, JOB_NIGHTLY, JobsRepo } from "../db/jobs-repo";
+import { JOB_MORNING, JOB_NIGHTLY, JobsRepo } from "../db/jobs-repo";
 import { memDb } from "../test-utils";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./daily-jobs";
 import { Scheduler } from "./scheduler";
-
-const brief = (kind: BriefKind, withContent = true): Brief => ({
-  id: 1, kind, date: "2026-10-21", createdAt: 1, ...EMPTY_BRIEF_CONTENT,
-  evening: kind === "evening" && withContent ? [{ ticketKey: "A-1", done: ["x"], blockers: [], next: null, degraded: false }] : [],
-  narrative: null, narrativeStatus: "off",
-});
 
 function deps(over: Partial<DailyJobDeps> = {}) {
   const calls: string[] = [];
@@ -25,33 +18,18 @@ function deps(over: Partial<DailyJobDeps> = {}) {
         return { status: "ok", outcomes: [{ ticketKey: "A-1", status: "stored", handoffId: 1, degraded: false }] };
       },
     },
-    briefs: {
-      generateMorning: () => {
-        calls.push("morning");
-        return brief("morning");
-      },
-      generateEvening: () => {
-        calls.push("evening");
-        return brief("evening");
-      },
-    },
-    jobs,
-    now: () => 123,
     isWorkingDay: () => true,
     hasTrackerTools: () => true,
-    setRefreshing: (v) => calls.push(`refreshing=${v}`),
-    onEvening: (b) => calls.push(`notify:${b.kind}`),
     ...over,
   };
   return { d, calls, jobs };
 }
 
 describe("daily jobs", () => {
-  it("nightly: batch, then the evening summary and a notification", async () => {
-    const { d, calls, jobs } = deps();
+  it("nightly: just the handoff batch, no evening summary or notification", async () => {
+    const { d, calls } = deps();
     expect(await nightlyJob(d)).toBe("partial");
-    expect(calls).toEqual(["runNightly", "evening", "notify:evening"]);
-    expect(jobs.get(JOB_EVENING)).toMatchObject({ lastRunAt: 123, lastStatus: "ok" });
+    expect(calls).toEqual(["runNightly"]);
   });
 
   describe("feature summaries", () => {
@@ -69,12 +47,12 @@ describe("daily jobs", () => {
       },
     });
 
-    it("runs after the ticket batch and before the evening summary", async () => {
+    it("runs after the ticket batch", async () => {
       const { d, calls } = deps();
       d.runner = okTickets(calls);
       d.features = featureRunner(calls);
       expect(await nightlyJob(d)).toBe("ok");
-      expect(calls).toEqual(["runNightly", "features", "evening", "notify:evening"]);
+      expect(calls).toEqual(["runNightly", "features"]);
     });
 
     it("is skipped when the ticket batch was rate limited, and the job is partial", async () => {
@@ -85,7 +63,7 @@ describe("daily jobs", () => {
       ]);
       d.features = featureRunner(calls);
       expect(await nightlyJob(d)).toBe("partial");
-      expect(calls).toEqual(["runNightly", "evening", "notify:evening"]);
+      expect(calls).toEqual(["runNightly"]);
     });
 
     it("a partial feature batch makes the job partial", async () => {
@@ -93,22 +71,23 @@ describe("daily jobs", () => {
       d.runner = okTickets(calls);
       d.features = featureRunner(calls, "partial");
       expect(await nightlyJob(d)).toBe("partial");
-      expect(calls).toEqual(["runNightly", "features", "evening", "notify:evening"]);
+      expect(calls).toEqual(["runNightly", "features"]);
     });
 
     it("a partial ticket batch (not rate limited) still runs the features and stays partial", async () => {
       const { d, calls } = deps();
       d.features = featureRunner(calls);
       expect(await nightlyJob(d)).toBe("partial");
-      expect(calls).toEqual(["runNightly", "features", "evening", "notify:evening"]);
+      expect(calls).toEqual(["runNightly", "features"]);
     });
 
-    it("a feature batch that rejects or throws only logs: the evening brief, its record and notification still happen, and the job is partial", async () => {
+    it("a feature batch that rejects or throws only logs: distillation still starts, and the job is partial", async () => {
       for (const fail of ["reject", "throw"] as const) {
-        const { d, calls, jobs } = deps();
+        const { d, calls } = deps();
         const logs: [string, unknown][] = [];
         d.runner = okTickets(calls);
         d.log = (msg, err) => void logs.push([msg, err]);
+        d.distill = () => calls.push("distill");
         const boom = new Error("db locked");
         d.features = {
           runNightly: () => {
@@ -118,32 +97,26 @@ describe("daily jobs", () => {
           },
         };
         expect(await nightlyJob(d)).toBe("partial");
-        expect(calls).toEqual(["runNightly", "features", "evening", "notify:evening"]);
-        expect(jobs.get(JOB_EVENING)).toMatchObject({ lastRunAt: 123, lastStatus: "ok" });
+        await Promise.resolve();
+        expect(calls).toEqual(["runNightly", "features", "distill"]);
         expect(logs).toEqual([["nightly feature summaries failed", boom]]);
       }
     });
 
-    it("a feature batch failure without a log function still lets the evening brief run", async () => {
+    it("a feature batch failure without a log function is still only partial", async () => {
       const { d, calls } = deps();
       d.runner = okTickets(calls);
       d.features = { runNightly: () => Promise.reject(new Error("x")) };
       expect(await nightlyJob(d)).toBe("partial");
-      expect(calls).toEqual(["runNightly", "evening", "notify:evening"]);
+      expect(calls).toEqual(["runNightly"]);
     });
 
     it("without features the job is unchanged", async () => {
       const { d, calls } = deps();
       d.runner = okTickets(calls);
       expect(await nightlyJob(d)).toBe("ok");
-      expect(calls).toEqual(["runNightly", "evening", "notify:evening"]);
+      expect(calls).toEqual(["runNightly"]);
     });
-  });
-
-  it("nightly: no notification once the app is quitting", async () => {
-    const { d, calls } = deps({ aborted: () => true });
-    await nightlyJob(d);
-    expect(calls).toEqual(["runNightly", "evening"]);
   });
 
   it("nightly: distills memory last, and its failure does not fail the job", async () => {
@@ -162,7 +135,7 @@ describe("daily jobs", () => {
       },
     };
     expect(await nightlyJob(d)).toBe("ok");
-    expect(calls).toEqual(["runNightly", "evening", "notify:evening", "distill"]);
+    expect(calls).toEqual(["runNightly", "distill"]);
   });
 
   it("nightly: a distill step that throws synchronously does not fail the job either", async () => {
@@ -173,14 +146,14 @@ describe("daily jobs", () => {
       },
     });
     expect(await nightlyJob(d)).toBe("partial");
-    expect(calls).toEqual(["runNightly", "evening", "notify:evening", "distill"]);
+    expect(calls).toEqual(["runNightly", "distill"]);
   });
 
-  it("nightly: records its result without waiting for distillation, and a slow distill does not delay the catch-up morning brief (I1)", async () => {
+  it("nightly: records its result without waiting for distillation, and a slow distill does not delay the catch-up morning job (I1)", async () => {
     let finishDistill: () => void = () => undefined;
     const distilling = new Promise<void>((resolve) => (finishDistill = resolve));
     let distillDone = false;
-    const { d, calls } = deps({
+    const { d, calls, jobs } = deps({
       distill: () => {
         calls.push("distill");
         return distilling.then(() => {
@@ -188,22 +161,22 @@ describe("daily jobs", () => {
         });
       },
     });
-    // 2026-10-21（周三）09:00 解锁：上次晚间任务是周一，补跑周二的，然后出早间简报。
+    // 2026-10-21（周三）09:00 解锁：上次晚间任务是周一，补跑周二的，然后跑早间任务。
     const at = (day: number, h: number, m = 0) => new Date(2026, 9, day, h, m).getTime();
-    d.jobs.record(JOB_NIGHTLY, at(19, 16, 5), "ok", null);
+    jobs.record(JOB_NIGHTLY, at(19, 16, 5), "ok", null);
     const scheduler = new Scheduler({
-      jobs: d.jobs,
+      jobs,
       config: () => ({ nightly: { h: 16, m: 0 }, workingDays: new Set([1, 2, 3, 4, 5]) }),
       now: () => at(21, 9),
       userActive: () => false,
-      nightly: (slot) => nightlyJob(d, slot),
+      nightly: () => nightlyJob(d),
       morning: async () => void calls.push("morning"),
     });
     await scheduler.check("unlock");
-    expect(calls).toEqual(["runNightly", "evening", "distill", "morning"]);
+    expect(calls).toEqual(["runNightly", "distill", "morning"]);
     expect(distillDone).toBe(false);
-    expect(d.jobs.get(JOB_NIGHTLY)).toMatchObject({ lastRunAt: at(21, 9), lastStatus: "partial" });
-    expect(d.jobs.get(JOB_MORNING)).toMatchObject({ lastRunAt: at(21, 9), lastStatus: "ok" });
+    expect(jobs.get(JOB_NIGHTLY)).toMatchObject({ lastRunAt: at(21, 9), lastStatus: "partial" });
+    expect(jobs.get(JOB_MORNING)).toMatchObject({ lastRunAt: at(21, 9), lastStatus: "ok" });
     expect(scheduler.isRunning(JOB_NIGHTLY)).toBe(false);
     finishDistill();
     await distilling;
@@ -217,22 +190,22 @@ describe("daily jobs", () => {
     expect(calls).not.toContain("distill");
   });
 
-  it("morning: a quick brief from current data first, then refresh and regenerate on working days", async () => {
+  it("morning: refreshes tracker state on working days when tracker tools are configured", async () => {
     const { d, calls } = deps();
     await morningJob(d);
-    expect(calls).toEqual(["morning", "refreshing=true", "refresh", "morning", "refreshing=false"]);
+    expect(calls).toEqual(["refresh"]);
   });
 
-  it("morning: no refresh without tracker tools (PR state comes from the watcher), but the brief is still narrated", async () => {
-    const r = deps({ hasTrackerTools: () => false, narrate: async () => void r.calls.push("narrate") });
-    await morningJob(r.d);
-    expect(r.calls).toEqual(["morning", "narrate"]);
-  });
-
-  it("morning: no refresh on days off, and the flag is cleared even if refresh fails", async () => {
+  it("morning: nothing to do without tracker tools (PR state comes from the watcher) or on days off", async () => {
+    const noTools = deps({ hasTrackerTools: () => false });
+    await morningJob(noTools.d);
+    expect(noTools.calls).toEqual([]);
     const off = deps({ isWorkingDay: () => false });
     await morningJob(off.d);
-    expect(off.calls).toEqual(["morning"]);
+    expect(off.calls).toEqual([]);
+  });
+
+  it("morning: a failing refresh is handed to the scheduler", async () => {
     const failing = deps();
     failing.d.runner = {
       ...failing.d.runner,
@@ -241,10 +214,9 @@ describe("daily jobs", () => {
       },
     };
     await expect(morningJob(failing.d)).rejects.toThrow("boom");
-    expect(failing.calls).toEqual(["morning", "refreshing=true", "refreshing=false"]);
   });
 
-  it("turns a synchronous throw from the runner into a rejection and still clears the flag", async () => {
+  it("turns a synchronous throw from the runner into a rejection", async () => {
     const boom = () => {
       throw new Error("sync boom");
     };
@@ -255,64 +227,6 @@ describe("daily jobs", () => {
     const morning = deps();
     morning.d.runner = { runNightly: boom, refreshForBrief: boom };
     await expect(morningJob(morning.d)).rejects.toThrow("sync boom");
-    expect(morning.calls).toEqual(["morning", "refreshing=true", "refreshing=false"]);
-  });
-
-  it("nightly: no notification for an empty brief or for catching up an earlier day's slot", async () => {
-    const at = (d: number, h: number) => new Date(2026, 9, d, h).getTime();
-    const empty = deps({ now: () => at(20, 16) });
-    empty.d.briefs = { ...empty.d.briefs, generateEvening: () => brief("evening", false) };
-    await nightlyJob(empty.d, at(20, 16));
-    expect(empty.calls).toEqual(["runNightly"]);
-    const late = deps({ now: () => at(21, 8) });
-    await nightlyJob(late.d, at(20, 16));
-    expect(late.calls).toEqual(["runNightly", "evening"]);
-    const today = deps({ now: () => at(20, 16) });
-    await nightlyJob(today.d, at(20, 16));
-    expect(today.calls).toEqual(["runNightly", "evening", "notify:evening"]);
-    const manual = deps({ now: () => at(17, 11) });
-    await nightlyJob(manual.d, null);
-    expect(manual.calls).toEqual(["runNightly", "evening", "notify:evening"]);
-  });
-
-  it("nightly: a run that starts before midnight still notifies for its own day", async () => {
-    const at = (d: number, h: number, m = 0) => new Date(2026, 9, d, h, m).getTime();
-    const times = [at(20, 23, 50), at(21, 0, 5)];
-    const late = deps({ now: () => (times.length > 1 ? times.shift()! : times[0]) });
-    await nightlyJob(late.d, at(20, 16));
-    expect(late.calls).toEqual(["runNightly", "evening", "notify:evening"]);
-  });
-
-  it("morning: narrates the final brief once, after the refresh", async () => {
-    const r = deps();
-    let id = 0;
-    const narrated: number[] = [];
-    r.d.briefs = {
-      ...r.d.briefs,
-      generateMorning: () => {
-        r.calls.push("morning");
-        return { ...brief("morning"), id: ++id };
-      },
-    };
-    r.d.narrate = async (b) => {
-      r.calls.push("narrate");
-      narrated.push(b.id);
-    };
-    await morningJob(r.d);
-    expect(r.calls).toEqual(["morning", "refreshing=true", "refresh", "morning", "refreshing=false", "narrate"]);
-    expect(narrated).toEqual([2]);
-  });
-
-  it("morning: still narrates the first brief when the refresh fails, and does not narrate once the app is quitting", async () => {
-    const failing = deps();
-    failing.d.runner = { ...failing.d.runner, refreshForBrief: async () => Promise.reject(new Error("boom")) };
-    failing.d.narrate = async () => void failing.calls.push("narrate");
-    await expect(morningJob(failing.d)).rejects.toThrow("boom");
-    expect(failing.calls).toEqual(["morning", "refreshing=true", "refreshing=false", "narrate"]);
-    const quitting = deps({ aborted: () => true });
-    quitting.d.narrate = async () => void quitting.calls.push("narrate");
-    await morningJob(quitting.d);
-    expect(quitting.calls).not.toContain("narrate");
   });
 });
 

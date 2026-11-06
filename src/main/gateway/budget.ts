@@ -1,7 +1,9 @@
 import type { AuditSource } from "../../shared/llm";
 import { priceFor, type PriceRule } from "../settings/settings-values";
-import { NARRATIVE_MAX_TOKENS } from "./narrative";
 import { M } from "../strings";
+
+/** 以前“今日重点”（source = narrative）一次调用的输出上限：这个功能已经去掉，只用来给它遗留的审计记录估花费。 */
+export const NARRATIVE_MAX_TOKENS = 800;
 
 /** StateCore 每次蒸馏调用的输出上限（它要求模型输出结构化 JSON）；发送前的预算检查按这个上限估算。gateway.ts 也导出它。 */
 export const STATECORE_MAX_TOKENS = 8192;

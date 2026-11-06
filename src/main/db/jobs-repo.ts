@@ -2,9 +2,9 @@ import type { JobStateView } from "../../shared/types";
 import type { Db } from "./database";
 
 export const JOB_NIGHTLY = "nightly_handoff";
-export const JOB_EVENING = "evening_brief";
+/** 早间任务（现在只刷新 tracker 状态）；名字是 jobs 表里已有的行，不改。 */
 export const JOB_MORNING = "morning_brief";
-export type JobName = typeof JOB_NIGHTLY | typeof JOB_EVENING | typeof JOB_MORNING;
+export type JobName = typeof JOB_NIGHTLY | typeof JOB_MORNING;
 
 export type JobState = JobStateView;
 

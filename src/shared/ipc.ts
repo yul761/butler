@@ -1,4 +1,3 @@
-import type { BriefKind } from "./brief";
 
 export const IPC = {
   ticketsList: "tickets:list",
@@ -54,9 +53,6 @@ export const IPC = {
   healthInstallHooks: "health:installHooks",
   healthUninstallHooks: "health:uninstallHooks",
   dialogPickDir: "dialog:pickDir",
-  briefsLatest: "briefs:latest",
-  briefsRegenerate: "briefs:regenerate",
-  briefsMark: "briefs:mark",
   mergeEvents: "merge:events",
   /** PrWatcher 跟着的 PR 和 CI（未归档 ticket 的）：计划 14 的界面用。 */
   prWatchList: "prwatch:list",
@@ -78,7 +74,6 @@ export const IPC = {
   memoryView: "memory:view",
   memoryWhy: "memory:why",
   memoryChanged: "memory:changed",
-  appNavigate: "app:navigate",
   appAutostartGet: "app:autostartGet",
   appLanguage: "app:language",
   appAutostartSet: "app:autostartSet",
@@ -98,7 +93,6 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.epicsList, IPC.epicsCreate, IPC.epicsRename, IPC.epicsAddRepo, IPC.epicsRemoveRepo, IPC.epicsArchive, IPC.epicsArchived, IPC.epicsUnarchive, IPC.epicsOpenSession,
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
-  IPC.briefsLatest, IPC.briefsRegenerate, IPC.briefsMark,
   IPC.mergeEvents, IPC.prWatchList,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
@@ -109,9 +103,6 @@ export const INVOKE_CHANNELS: readonly string[] = [
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];
 /** 主进程 → 渲染进程。 */
-export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.memoryChanged, IPC.appNavigate, IPC.appKeepAwakeChanged];
-
-/** IPC.appNavigate 带的内容：点系统通知后去哪。 */
-export type AppNavigateRoute = { page: "home"; kind?: BriefKind } | { page: "feature"; featureId: number; stuckTicket: string } | { page: "ticket"; key: string };
+export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.memoryChanged, IPC.appKeepAwakeChanged];
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };

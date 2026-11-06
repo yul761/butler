@@ -7,7 +7,6 @@ import { hasDay, mergeTools, toggleDay, WEEK_ORDER } from "../settings-form";
 import { S } from "../strings";
 import { TrackerToolPicker } from "./TrackerToolPicker";
 
-const THRESHOLDS = ["blockedDays", "reviewWaitDays", "staleDays"] as const;
 const PROMPTS = ["handoffPrompt", "refreshPrompt"] as const;
 
 export function ScheduleSettings() {
@@ -130,18 +129,6 @@ export function ScheduleSettings() {
             <label key={day} className="inline">
               <input type="checkbox" checked={hasDay(current.workingDays, day)} disabled={daysBusy} onChange={() => void toggleWorkingDay(day)} />
               {S.weekdayNames[day]}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <div className="field">
-        {S.thresholds}
-        <div className="row">
-          {THRESHOLDS.map((k) => (
-            <label key={k} className="inline">
-              {S[k]}
-              <input type="number" min={0} max={999} value={value(k)} onChange={(e) => edit(k, e.target.value)} onBlur={() => saveIfEdited(k)} />
             </label>
           ))}
         </div>

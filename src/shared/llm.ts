@@ -15,7 +15,7 @@ export interface SensitiveTerm {
 export const AUDIT_STATUSES = ["pending", "sent", "failed", "blocked", "budget", "declined"] as const;
 export type AuditStatus = (typeof AUDIT_STATUSES)[number];
 
-/** narrative：早间简报的“今日重点”；statecore：full 档位下 StateCore 记忆的蒸馏（计划 4 R1）。 */
+/** narrative：以前早间简报的“今日重点”（已去掉，只剩历史审计记录）；statecore：full 档位下 StateCore 记忆的蒸馏（计划 4 R1）。 */
 export const AUDIT_SOURCES = ["narrative", "statecore"] as const;
 export type AuditSource = (typeof AUDIT_SOURCES)[number];
 

@@ -17,7 +17,7 @@ import { M } from "../strings";
 export const HANDOFF_CONCURRENCY = 2;
 
 export interface BatchResult {
-  /** 有失败或被限流跳过的 ticket 时是 partial：早间简报前会再补跑一次。 */
+  /** 有失败或被限流跳过的 ticket 时是 partial：早间任务前会再补跑一次。 */
   status: "ok" | "partial";
   outcomes: HandoffOutcome[];
 }
