@@ -187,8 +187,10 @@ export const TASK_PREFIX = { zh: "总控 session 交给你的任务：", en: "Ta
  * 交给子 session 的第一条消息：固定的开头加上任务。任务本身可能以 ! 或 / 开头（claude 的 bash 模式、斜杠命令，不经过权限确认），
  * 有了开头它永远只是一段普通的提示。
  */
-export function taskMessage(task: string, lang: Lang, memory: "feature" | "ticket"): string {
+export function taskMessage(task: string, lang: Lang, memory: "feature" | "ticket" | null): string {
   const en = lang === "en";
+  // 记忆关着（null）：没有可以 recall 的东西，不提（R36）。
+  if (memory === null) return `${TASK_PREFIX[en ? "en" : "zh"]}\n${task}`;
   // 背景和约定放在记忆里；feature 总控开的 session 读 feature 记忆，ticket 总控开的读 ticket 记忆。
   const featureMemory = en ? "feature memory (butler-feature)" : "feature 记忆（butler-feature）";
   const ticketMemory = en ? "ticket memory (butler-memory)" : "ticket 记忆（butler-memory）";

@@ -50,6 +50,8 @@ export interface ControlHandlerDeps {
   screenNeedsUser: (termId: string) => boolean;
   /** session 最后一条 assistant 文字回复的结尾（最多 500 字符）；读不到为 null。 */
   lastReply?: (sessionId: string) => string | null;
+  /** 设置里的记忆开关（memoryOn）：关着时交任务不提 recall。不给当作开着。 */
+  memoryEnabled?: () => boolean;
   /** 把任务作为第一条消息交给新 session（等启动对话框过去、输入框就绪、粘贴、回车）。 */
   submit: (termId: string, message: string) => Promise<DeliverResult>;
   notify: () => void;
@@ -114,7 +116,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (!r.ok) return fail(openError(r, repo));
     d.notify();
     // 不等任务写完：等输入框就绪可能要十几秒（用户还要处理信任文件夹之类的对话框），总控先拿到 session id。
-    d.submit(r.termId, taskMessage(task, currentLang(), memory)).then(
+    // 记忆关着时不让它去 recall（R36）：没有东西可读。
+    d.submit(r.termId, taskMessage(task, currentLang(), d.memoryEnabled?.() === false ? null : memory)).then(
       (res) => res === "sent" || d.log?.(`control: task for ${r.termId} not delivered (${res})`),
       (e: unknown) => d.log?.(`control: task for ${r.termId} failed`, e),
     );

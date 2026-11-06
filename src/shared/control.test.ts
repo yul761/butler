@@ -30,6 +30,15 @@ describe("sanitizeTask", () => {
   });
 });
 
+describe("taskMessage", () => {
+  it("adds the recall hint after the task only when there is memory to read (R36)", () => {
+    expect(taskMessage("写接口", "zh", "ticket")).toBe("总控 session 交给你的任务：\n写接口\n\n开始之前先用 recall 读一下 ticket 记忆（butler-memory）里的背景和约定。");
+    expect(taskMessage("写接口", "zh", "feature")).toContain("butler-feature");
+    expect(taskMessage("写接口", "zh", null)).toBe("总控 session 交给你的任务：\n写接口");
+    expect(taskMessage("write the API", "en", null)).not.toContain("recall");
+  });
+});
+
 describe("start_session model", () => {
   it("parses start_session with a model, for a ticket and for a feature", () => {
     expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "t", model: "sonnet" })).toMatchObject({ model: "sonnet" });

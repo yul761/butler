@@ -1045,6 +1045,7 @@ async function bootstrap(): Promise<void> {
       kill: (termId) => pty.kill(termId),
       screenNeedsUser: (termId) => pty.screenNeedsUser(termId),
       submit: submitTask,
+      memoryEnabled: () => memoryOn(settings),
       ticketPattern: () => settings.get("ticketPattern"),
       log: logger,
     }),

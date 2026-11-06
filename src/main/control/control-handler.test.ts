@@ -13,7 +13,7 @@ import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import { TicketService } from "../tickets/ticket-service";
 import { controlHandler } from "./control-handler";
 
-async function setup() {
+async function setup(o: { memoryEnabled?: () => boolean } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -53,6 +53,7 @@ async function setup() {
     kill: (termId) => void killed.push(termId),
     screenNeedsUser: () => false,
     lastReply: () => null,
+    memoryEnabled: o.memoryEnabled,
   });
   const web = makeRepo();
   const api = makeRepo();
@@ -65,6 +66,17 @@ async function setup() {
 const base = { v: 1 as const, ticketKey: "FULL-1", from: null };
 
 describe("controlHandler", () => {
+  it("hands the task without the recall hint while memory is off (R36)", async () => {
+    let on = false;
+    const { handle, sessionService, submitted, api } = await setup({ memoryEnabled: () => on });
+    await sessionService.open({ ticketKey: "FULL-1", coordinator: true });
+    await handle({ ...base, from: "s-1", op: "start_session", repo: api.split(/[\\/]/).pop()!, task: "写接口" });
+    expect(submitted).toEqual([["s-2", "总控 session 交给你的任务：\n写接口"]]);
+    on = true;
+    await handle({ ...base, from: "s-1", op: "start_session", repo: api.split(/[\\/]/).pop()!, task: "写接口" });
+    expect(submitted[1][1]).toContain("recall");
+  });
+
   it("lists the ticket's repos by name and working directory", async () => {
     const { handle, tickets } = await setup();
     const [w, a] = tickets.get("FULL-1")!.repos;
