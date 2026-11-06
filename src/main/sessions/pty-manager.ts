@@ -76,6 +76,18 @@ export function nextDraftLength(current: number, data: string): number {
 }
 
 /**
+ * 终端自己发出的报告（xterm 回答程序的查询、上报焦点和鼠标）：焦点 \x1b[I / \x1b[O、光标位置 CPR、设备属性 DA、
+ * 模式查询的回复 DECRPM、kitty 键盘标志、OSC 回复、SGR 和 X10 鼠标上报。它们经渲染进程的 onData 写进来，但不是用户在操作（R37）。
+ */
+// eslint-disable-next-line no-control-regex
+const TERMINAL_REPORT_RE = /\x1b\[[IO]|\x1b\[\d+;\d+R|\x1b\[[?>]?[\d;]*c|\x1b\[\?[\d;]*\$y|\x1b\[\?\d+u|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[M[\s\S]{3}/g;
+
+/** 去掉终端自己发的报告之后还剩东西：才是用户的输入（方向键、Esc、Tab、Ctrl+C、打字都算）。 */
+export function isUserInput(data: string): boolean {
+  return data.replace(TERMINAL_REPORT_RE, "") !== "";
+}
+
+/**
  * claude 启动时可能先问的问题：信任这个文件夹、启用项目里的 MCP server。这时候粘贴、回车等于替用户选了默认的“是”。
  * 屏幕最后一段里出现这些字样就当对话框还在。
  */
@@ -227,11 +239,11 @@ export class PtyManager {
     return !!t && (permissionPromptShowing(t.buffer) || dialogShowing(t.buffer));
   }
 
-  /** 用户的输入（渲染进程的按键）。 */
+  /** 用户的输入（渲染进程的按键）。终端自己发的报告（焦点、鼠标、查询的回复）照样写进去，但不算用户输入过（R37）。 */
   write(termId: string, data: string): void {
     const t = this.terms.get(termId);
     if (t) {
-      t.lastUserInputAt = this.now();
+      if (isUserInput(data)) t.lastUserInputAt = this.now();
       t.draftLen = nextDraftLength(t.draftLen, data);
     }
     this.guard(termId, "write", () => t?.proc.write(data));

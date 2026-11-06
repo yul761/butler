@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { JUDGE_REASON_CHARS, sanitizeJudgeReason, stripModelTags } from "./judge-text";
+import { JUDGE_REASON_CHARS, sanitizeJudgeReason, stripModelTags, stripToolMarkup } from "./judge-text";
 
 /** 真机检查（840ca90）里 Haiku 实际给出的理由。 */
 const LIVE = "询问用户是否把改动拆成两个 PR，需要用户做决定</reason>\n</invoke>\n";
@@ -28,5 +28,26 @@ describe("sanitizeJudgeReason", () => {
     expect([...emoji]).toHaveLength(80);
     expect(emoji.endsWith("😀")).toBe(true);
     expect(sanitizeJudgeReason("")).toBe("");
+  });
+});
+
+describe("stripToolMarkup (R37: durable history keeps code-like angle brackets)", () => {
+  /** 带命名空间的工具标签（模型的工具调用格式用的那种）。 */
+  const NS = ["ant", "ml"].join("");
+  it("keeps generics and component names", () => {
+    expect(stripToolMarkup("handler 返回 Promise<void>，表单换成 <Button> 组件")).toBe("handler 返回 Promise<void>，表单换成 <Button> 组件");
+    expect(stripToolMarkup("Map<string, number> 和 List<T>")).toBe("Map<string, number> 和 List<T>");
+  });
+
+  it("removes known opening tool tags and cuts at the first closing one", () => {
+    expect(stripToolMarkup("询问用户是否拆 PR</reason>\n</invoke>\n")).toBe("询问用户是否拆 PR");
+    expect(stripToolMarkup('<parameter name="what">用 Map<K, V> 缓存</parameter>多余')).toBe("用 Map<K, V> 缓存");
+    expect(stripToolMarkup(`<${NS}:invoke name="x">做完了</${NS}:invoke>后面`)).toBe("做完了");
+    expect(stripToolMarkup("<function_calls>a</function_calls>b")).toBe("a");
+    expect(stripToolMarkup("下单和支付联调完成。\n退款还没开始。</summary>\n</invoke>")).toBe("下单和支付联调完成。\n退款还没开始。");
+  });
+
+  it("does not cut at a closing tag that is not tool markup", () => {
+    expect(stripToolMarkup("把 </Button> 的写法统一")).toBe("把 </Button> 的写法统一");
   });
 });

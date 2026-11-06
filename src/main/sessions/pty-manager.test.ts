@@ -155,6 +155,30 @@ describe("PtyManager", () => {
     expect(mgr.lastUserInputAt("t1")).toBe(0);
   });
 
+  it("terminal-generated reports do not count as user input; keys and text do (R37)", async () => {
+    const { mgr } = setup();
+    mgr.open("t1", spec, opts);
+    await vi.advanceTimersByTimeAsync(5000);
+    // 鼠标滚轮（SGR 和 X10）、焦点、光标位置、DA、DECRPM、kitty 键盘标志、OSC 回复：都是终端自己发的。
+    const reports = [
+      "\x1b[<64;10;5M", "\x1b[M`!!", "\x1b[I", "\x1b[O", "\x1b[12;40R", "\x1b[?62;22c", "\x1b[>0;276;0c", "\x1b[?2004;1$y", "\x1b[?1u",
+      "\x1b]11;rgb:0000/0000/0000\x1b\\", "\x1b]10;rgb:ffff/ffff/ffff\x07", "\x1b[I\x1b[<65;3;4M\x1b[O",
+    ];
+    for (const report of reports) {
+      mgr.write("t1", report);
+      expect(mgr.lastUserInputAt("t1"), JSON.stringify(report)).toBe(0);
+    }
+    for (const key of ["\x1b[A", "\x1b", "\t", "\x03", "a"]) {
+      await vi.advanceTimersByTimeAsync(10);
+      mgr.write("t1", key);
+      expect(mgr.lastUserInputAt("t1"), JSON.stringify(key)).toBe(Date.now());
+    }
+    // 一段里既有报告又有字：算用户输入。
+    await vi.advanceTimersByTimeAsync(10);
+    mgr.write("t1", "\x1b[Ia");
+    expect(mgr.lastUserInputAt("t1")).toBe(Date.now());
+  });
+
   it("deliver waits for SessionStart and a quiet prompt, pastes once, then presses Enter after the echo settles", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);

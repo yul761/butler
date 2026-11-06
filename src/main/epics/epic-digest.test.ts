@@ -229,6 +229,19 @@ describe("EpicDigestRunner.weekly", () => {
     expect(e.payload.decisions).toEqual([{ what: "金额用整数分", why: "避免浮点误差" }]);
   });
 
+  it("keeps code-like angle brackets in durable history and strips only tool markup (R37)", async () => {
+    const t = setup();
+    t.addSummary(t.checkout, t.now() - DAY);
+    t.answer(ok({
+      summary: "handler 改成返回 Promise<void>，表单换成 <Button> 组件。",
+      decisions: [{ what: '<parameter name="what">用 Map<string, number> 缓存</parameter>\n</invoke>多余', why: "<reason>查找要 O(1)</reason>" }],
+    }));
+    await t.runner.weekly();
+    const [e] = t.history.list(t.shop, 1);
+    expect(e.payload.summary).toBe("handler 改成返回 Promise<void>，表单换成 <Button> 组件。");
+    expect(e.payload.decisions).toEqual([{ what: "用 Map<string, number> 缓存", why: "查找要 O(1)" }]);
+  });
+
   it("caps each decision's what and why, so one entry cannot fill the whole history budget", async () => {
     const t = setup();
     t.addSummary(t.checkout, t.now() - DAY);
