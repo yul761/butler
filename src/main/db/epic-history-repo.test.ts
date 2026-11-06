@@ -50,6 +50,17 @@ describe("EpicHistoryRepo", () => {
     expect(repo.lastCoveredUntil(null)).toBeNull();
   });
 
+  it("lastCoveredUntilOfFeature is the latest covers_until of that feature's own entries", () => {
+    const { db, repo, e1, f } = setup();
+    const other = new FeaturesRepo(db).insert({ name: "G", workspaceDir: "/w/G", createdAt: 1 });
+    expect(repo.lastCoveredUntilOfFeature(f)).toBeNull();
+    repo.add(entry({ featureId: f, trigger: "feature_archived", coversUntil: 30 }));
+    repo.add(entry({ featureId: f, trigger: "feature_archived", coversUntil: 20 }));
+    repo.add(entry({ epicId: e1, featureId: other, trigger: "feature_archived", coversUntil: 90 }));
+    repo.add(entry({ epicId: e1, coversUntil: 99 }));
+    expect(repo.lastCoveredUntilOfFeature(f)).toBe(30);
+  });
+
   it("lastWeeklyAt only counts weekly entries", () => {
     const { repo, e1, f } = setup();
     expect(repo.lastWeeklyAt(e1)).toBeNull();

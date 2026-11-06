@@ -3,7 +3,7 @@ import { sanitizeTask, SUMMARY_LIMIT, TASK_LIMIT } from "../../shared/control";
 import type { EpicFeatureRow, EpicFeatureStatus } from "../../shared/types";
 import type { EpicHistoryEntry } from "../db/epic-history-repo";
 import { epicBriefMessage } from "./epic-brief";
-import { EPIC_HISTORY_BRIEF_CHARS } from "./epic-digest";
+import { EPIC_HISTORY_BRIEF_CHARS } from "./epic-history-view";
 
 const row = (o: Partial<EpicFeatureRow> = {}): EpicFeatureRow => ({
   id: 1, name: "购物车", status: "active", archivedAt: null, summaryAt: 5, summary: "购物车做完了", blockers: [],
@@ -136,6 +136,24 @@ describe("epicBriefMessage", () => {
       expect(section.length).toBeLessThanOrEqual(EPIC_HISTORY_BRIEF_CHARS + "以往的决定：\n\n\n".length);
       expect(section).toContain("第3次");
       expect(section).not.toContain("第1次");
+    });
+
+    it("sizes the history against what is left of the task limit, and never pushes the other features out", () => {
+      const history = [3, 2, 1].map((n) => entry(n, `第${n}次${"字".repeat(900)}`));
+      const others = Array.from({ length: 12 }, (_, i) => row({ id: i + 10, name: `兄弟${i}`, summaryAt: 100 - i, summary: "进".repeat(SUMMARY_LIMIT) }));
+      // brief 已经占掉大半：剩下的位置历史最多拿一半，其他 feature 的标题和最新的那个都还在。
+      const text = epicBriefMessage({ ...input, brief: "甲".repeat(TASK_LIMIT - 2500), history, others }, "zh");
+      expect(text.length).toBeLessThanOrEqual(TASK_LIMIT);
+      expect(text).toContain("其他 feature：\n## 兄弟0");
+      const section = text.slice(text.indexOf("以往的决定："), text.indexOf("其他 feature："));
+      expect(section.length).toBeLessThan(1300);
+      expect(section).toContain("第3次");
+      // 规划占满时不写这一节，其他 feature 的标题照样在。
+      const full = epicBriefMessage({ ...input, brief: "甲".repeat(TASK_LIMIT), history, others }, "zh");
+      expect(full).not.toContain("以往的决定");
+      // 位置够时历史拿满 EPIC_HISTORY_BRIEF_CHARS（这里放得下两条）。
+      const roomy = epicBriefMessage({ ...input, history }, "zh");
+      expect(roomy).toContain("第2次");
     });
   });
 });

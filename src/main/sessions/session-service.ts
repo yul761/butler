@@ -28,7 +28,7 @@ import { claudeArgs, cmdShimSafe, sessionEnv, storedModel, type SessionModel } f
 import type { EpicHistoryRepo } from "../db/epic-history-repo";
 import type { EpicsRepo } from "../db/epics-repo";
 import { epicBriefMessage } from "../epics/epic-brief";
-import { EPIC_HISTORY_READ_ENTRIES } from "../epics/epic-digest";
+import { EPIC_HISTORY_READ_ENTRIES } from "../epics/epic-history-view";
 import { epicFeatureRows, type LiveFeature } from "../epics/epic-info";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";

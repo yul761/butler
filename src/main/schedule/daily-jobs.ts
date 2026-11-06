@@ -14,10 +14,11 @@ export interface DailyJobDeps {
    * 不等它结束，失败不影响晚间任务。
    */
   distill?: () => unknown;
-  /** epic 的每周整理（计划 16 任务 6）：只在这一周的第一个工作日跑；不等它，失败只记日志。没有时不跑。 */
+  /**
+   * epic 的每周整理（计划 16 任务 6）：工作日的每次晚间任务之后都调用，满 7 天、有新活动的 epic 才真的整理（见 EpicDigestRunner.weekly），
+   * 错过了一周的第一个工作日也不会漏掉这一周。不等它，失败只记日志。没有时不跑。
+   */
   epicDigest?: Pick<EpicDigestRunner, "weekly">;
-  /** 今天是不是这一周的第一个工作日（calendar 的 isFirstWorkingDayOfWeek）。没有时当作不是。 */
-  isFirstWorkingDayOfWeek?: () => boolean;
   /** 退出已开始：不再发起新工作。 */
   aborted?: () => boolean;
   /** 写日志（feature 批次出错时用）；没有时不记。 */
@@ -33,7 +34,7 @@ function safeLog(d: DailyJobDeps, msg: string, err?: unknown): void {
   }
 }
 
-/** 晚间：批量 handoff → feature 汇总 → 记忆蒸馏（full 档位）→ 每周第一个工作日的 epic 整理。 */
+/** 晚间：批量 handoff → feature 汇总 → 记忆蒸馏（full 档位）→ epic 的每周整理（工作日）。 */
 export async function nightlyJob(d: DailyJobDeps): Promise<"ok" | "partial"> {
   // runner 的方法不是 async，可能同步抛错：包一层，让它变成 rejection 由调度器记录。
   const batch = await Promise.resolve().then(() => d.runner.runNightly());
@@ -66,12 +67,12 @@ export async function nightlyJob(d: DailyJobDeps): Promise<"ok" | "partial"> {
       .then(() => distill())
       .catch(() => undefined);
   }
-  // epic 的每周整理也不 await：要跑好几次 Sonnet，不能挡住调度链。同一周不会整理两次由它自己保证（见 EpicDigestRunner.weekly）。
-  // 判断今天是不是第一个工作日也放进去：读设置出错同样只记日志。
+  // epic 的每周整理也不 await：要跑好几次 Sonnet，不能挡住调度链。一周内不会整理两次由它自己保证（见 EpicDigestRunner.weekly）。
+  // 判断今天是不是工作日也放进去：读设置出错同样只记日志。
   if (d.epicDigest && !d.aborted?.()) {
     const digest = d.epicDigest;
     void Promise.resolve()
-      .then(() => (d.isFirstWorkingDayOfWeek?.() ? digest.weekly() : undefined))
+      .then(() => (d.isWorkingDay() ? digest.weekly() : undefined))
       .catch((e: unknown) => safeLog(d, "weekly epic digest failed", e));
   }
   return status;

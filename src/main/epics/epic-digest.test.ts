@@ -3,7 +3,7 @@ import type { FeatureHandoff, Handoff } from "../../shared/handoff";
 import { NOTE_BODY_LIMIT } from "../../shared/memory";
 import type { HandoffTrigger } from "../../shared/types";
 import type { HeadlessOutcome, HeadlessRequest } from "../claude/headless";
-import { EpicHistoryRepo, type EpicHistoryEntry } from "../db/epic-history-repo";
+import { EpicHistoryRepo } from "../db/epic-history-repo";
 import { EpicsRepo } from "../db/epics-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
@@ -11,7 +11,7 @@ import { HandoffsRepo } from "../db/handoffs-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { setLang } from "../i18n";
 import { memDb } from "../test-utils";
-import { EPIC_DIGEST_INPUT_CHARS, EPIC_DIGEST_SUMMARY_CHARS, EPIC_HISTORY_BRIEF_CHARS, EpicDigestRunner, renderHistory } from "./epic-digest";
+import { EPIC_DIGEST_DECISION_CHARS, EPIC_DIGEST_INPUT_CHARS, EPIC_DIGEST_SUMMARY_CHARS, EpicDigestRunner } from "./epic-digest";
 
 const DAY = 86_400_000;
 
@@ -116,6 +116,22 @@ describe("EpicDigestRunner.weekly", () => {
     expect(t.history.list(t.shop, 10)[0]).toMatchObject({ coversFrom: start, coversUntil: start + 7 * DAY });
   });
 
+  it("catches up a week whose first working day was missed: any later nightly run digests once the last one is a week old", async () => {
+    const t = setup();
+    const start = t.now();
+    // 上一次每周整理是 8 天前（上周一）；这周一晚上没跑，周二的晚间任务补上。
+    t.history.add({ epicId: t.shop, featureId: null, trigger: "weekly", createdAt: start - 8 * DAY, coversFrom: 10, coversUntil: start - 8 * DAY, payload: { summary: "s", decisions: [] } });
+    t.addSummary(t.checkout, start - DAY, summary({ summary: "周末的进展" }));
+    await t.runner.weekly();
+    expect(t.requests).toHaveLength(1);
+    expect(t.requests[0].prompt).toContain("周末的进展");
+    // 第二天的晚间任务：才过一天，即使有新活动也不整理。
+    t.setNow(start + DAY);
+    t.addSummary(t.refund, start + 1000);
+    await t.runner.weekly();
+    expect(t.requests).toHaveLength(1);
+  });
+
   it("skips archived epics", async () => {
     const t = setup();
     t.addSummary(t.checkout, t.now() - DAY);
@@ -202,6 +218,16 @@ describe("EpicDigestRunner.weekly", () => {
     expect(e.payload.summary).toHaveLength(EPIC_DIGEST_SUMMARY_CHARS);
     expect(e.payload.decisions).toHaveLength(10);
   });
+
+  it("caps each decision's what and why, so one entry cannot fill the whole history budget", async () => {
+    const t = setup();
+    t.addSummary(t.checkout, t.now() - DAY);
+    t.answer(ok({ summary: "s", decisions: [{ what: ` ${"决".repeat(5000)}`, why: "因".repeat(5000) }] }));
+    await t.runner.weekly();
+    const [d] = t.history.list(t.shop, 1)[0].payload.decisions;
+    expect(d.what).toBe("决".repeat(EPIC_DIGEST_DECISION_CHARS));
+    expect(d.why).toBe("因".repeat(EPIC_DIGEST_DECISION_CHARS));
+  });
 });
 
 describe("EpicDigestRunner.forFeatureArchived", () => {
@@ -240,6 +266,25 @@ describe("EpicDigestRunner.forFeatureArchived", () => {
     expect(t.notes).toEqual([]);
   });
 
+  it("a feature outside any epic is not digested twice: a repeated or later archive only covers what is new", async () => {
+    const t = setup();
+    const first = t.now();
+    t.addSummary(t.lone, first - DAY, summary({ summary: "第一次归档前" }));
+    await t.runner.forFeatureArchived(t.lone);
+    // 重复调用、恢复后马上又归档：没有新东西，不再写一条整个 feature 的记录。
+    t.setNow(first + 1000);
+    await t.runner.forFeatureArchived(t.lone);
+    expect(t.requests).toHaveLength(1);
+    // 恢复后又做了些事再归档：只整理上次之后的。
+    t.setNow(first + 2 * DAY);
+    t.addSummary(t.lone, first + DAY, summary({ summary: "恢复之后的进展" }));
+    await t.runner.forFeatureArchived(t.lone);
+    expect(t.requests).toHaveLength(2);
+    expect(t.requests[1].prompt).toContain("恢复之后的进展");
+    expect(t.requests[1].prompt).not.toContain("第一次归档前");
+    expect(t.history.list(null, 10).map((e) => e.coversFrom)).toEqual([first, 10]);
+  });
+
   it("ignores a feature that does not exist", async () => {
     const t = setup();
     await expect(t.runner.forFeatureArchived(999)).resolves.toBeUndefined();
@@ -264,37 +309,12 @@ describe("the rolling note", () => {
     expect(last.text.startsWith(`决定3甲${"长".repeat(100)}；决定3乙；决定2甲`)).toBe(true);
     expect(last.text).not.toContain("决定0");
   });
-});
 
-describe("renderHistory", () => {
-  const entry = (n: number, over: Partial<EpicHistoryEntry> = {}): EpicHistoryEntry => ({
-    id: n, epicId: 1, featureId: null, trigger: "weekly", createdAt: new Date(2026, 10, n).getTime(), coversFrom: 0, coversUntil: 0,
-    payload: { summary: `第${n}次整理`, decisions: [{ what: `决定${n}`, why: `原因${n}` }] }, ...over,
-  });
-
-  it("renders newest first with the decisions and their reasons, in both languages", () => {
-    const zh = renderHistory([entry(2), entry(1, { trigger: "feature_archived" })], "zh", EPIC_HISTORY_BRIEF_CHARS);
-    expect(zh.indexOf("第2次整理")).toBeLessThan(zh.indexOf("第1次整理"));
-    expect(zh).toContain("2026-11-02");
-    expect(zh).toContain("决定2");
-    expect(zh).toContain("原因2");
-    expect(zh).toContain("feature 归档");
-    const en = renderHistory([entry(1)], "en", EPIC_HISTORY_BRIEF_CHARS);
-    expect(en).toContain("Decisions");
-    expect(en).toContain("weekly");
-    expect(renderHistory([], "zh", EPIC_HISTORY_BRIEF_CHARS)).toBe("");
-  });
-
-  it("renderHistory drops the oldest entries to fit", () => {
-    const entries = [3, 2, 1].map((n) => entry(n, { payload: { summary: `第${n}次${"字".repeat(400)}`, decisions: [] } }));
-    const text = renderHistory(entries, "zh", 1000);
-    expect(text.length).toBeLessThanOrEqual(1000);
-    expect(text).toContain("第3次");
-    expect(text).toContain("第2次");
-    expect(text).not.toContain("第1次");
-    // 最新的一条本身就放不下时，截掉它的结尾。
-    const one = renderHistory([entry(9, { payload: { summary: "长".repeat(5000), decisions: [] } })], "zh", 1000);
-    expect(one.length).toBe(1000);
-    expect(one).toContain("2026-11-09");
+  it("keeps fullwidth punctuation inside a decision", async () => {
+    const t = setup();
+    t.addSummary(t.checkout, t.now() - 1);
+    t.answer(ok({ summary: "s", decisions: [{ what: "金额用分存（不用元），四舍五入", why: "w" }, { what: "退款：原路返回", why: "w" }] }));
+    await t.runner.forFeatureArchived(t.checkout);
+    expect(t.notes.at(-1)?.text).toBe("金额用分存（不用元），四舍五入；退款：原路返回");
   });
 });

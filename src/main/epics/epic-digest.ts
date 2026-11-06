@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Lang } from "../../shared/i18n";
-import { noteBody, NOTE_BODY_LIMIT, truncateUnits } from "../../shared/memory";
+import { NOTE_BODY_LIMIT, plainNoteBody, truncateUnits } from "../../shared/memory";
 import type { Feature } from "../../shared/types";
 import { headlessArgs } from "../claude/headless";
 import type { EpicHistoryEntry, EpicHistoryRepo, EpicHistoryTrigger } from "../db/epic-history-repo";
@@ -15,20 +15,18 @@ import { currentLang } from "../i18n";
 import type { MemoryService } from "../memory/memory-service";
 import { daysBetween, localDate } from "../schedule/calendar";
 
-/** 拼进新 feature 总控第一条消息的"以往的决定"最多这么多字（超出时去掉最旧的）。 */
-export const EPIC_HISTORY_BRIEF_CHARS = 3000;
-/** 渲染"以往的决定"时最多读这么多条记录（之后按字数截掉最旧的）：第一条消息和 epic_context 都用它。 */
-export const EPIC_HISTORY_READ_ENTRIES = 20;
 /** 一次整理交给 Sonnet 的数据最多这么多字：超出时去掉最旧的记录。 */
 export const EPIC_DIGEST_INPUT_CHARS = 30_000;
 /** 整理结果的 summary 最多这么多字，decisions 最多这么多条（超出的截掉）。 */
 export const EPIC_DIGEST_SUMMARY_CHARS = 600;
 export const EPIC_DIGEST_MAX_DECISIONS = 10;
+/** 每条决定的 what、why 各自最多这么多字：一条记录不能占满"以往的决定"的整个预算。 */
+export const EPIC_DIGEST_DECISION_CHARS = 360;
 /** 滚动 note 取最近几条记录的决定。 */
 const NOTE_ENTRIES = 3;
 /** 一次整理最多等三分钟。 */
 const DIGEST_TIMEOUT_MS = 180_000;
-/** 每周整理：上一次每周整理不到这么多天时不再跑（同一周里手动跑晚间任务、重启后补跑都不会整理第二次）。 */
+/** 每周整理：上一次每周整理不到这么多天时不再跑（手动跑晚间任务、重启后补跑、每天的晚间任务都不会在一周内整理第二次）。 */
 const WEEK_DAYS = 7;
 /** 每个 feature 往回看多少条汇总。 */
 const SUMMARY_SCAN = 200;
@@ -84,46 +82,8 @@ const TEXT = {
   },
 };
 
-const HISTORY_TEXT = {
-  zh: {
-    trigger: { weekly: "每周整理", feature_archived: "feature 归档时整理" } satisfies Record<EpicHistoryTrigger, string>,
-    heading: (date: string, trigger: string) => `### ${date}（${trigger}）`,
-    decisions: "决定：",
-    decision: (what: string, why: string) => (why.trim() ? `- ${what}（原因：${why}）` : `- ${what}`),
-    noteJoin: "；",
-  },
-  en: {
-    trigger: { weekly: "weekly digest", feature_archived: "digest when a feature was archived" } satisfies Record<EpicHistoryTrigger, string>,
-    heading: (date: string, trigger: string) => `### ${date} (${trigger})`,
-    decisions: "Decisions:",
-    decision: (what: string, why: string) => (why.trim() ? `- ${what} (why: ${why})` : `- ${what}`),
-    noteJoin: "; ",
-  },
-};
-
-function renderEntry(e: EpicHistoryEntry, lang: Lang): string {
-  const t = HISTORY_TEXT[lang];
-  const lines = [t.heading(localDate(e.createdAt), t.trigger[e.trigger])];
-  if (e.payload.summary.trim()) lines.push(e.payload.summary.trim());
-  if (e.payload.decisions.length > 0) lines.push(t.decisions, ...e.payload.decisions.map((d) => t.decision(d.what.trim(), d.why.trim())));
-  return lines.join("\n");
-}
-
-/** 渲染"以往的决定"：最新的在前，超过 maxChars 时去掉最旧的。最新的一条本身就放不下时截掉它的结尾。没有记录时是空串。 */
-export function renderHistory(entries: EpicHistoryEntry[], lang: Lang, maxChars: number): string {
-  const sorted = [...entries].sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
-  let out = "";
-  for (const e of sorted) {
-    const block = renderEntry(e, lang);
-    const next = out ? `${out}\n\n${block}` : block;
-    if (next.length > maxChars) {
-      if (!out) out = truncateUnits(block, maxChars);
-      break;
-    }
-    out = next;
-  }
-  return out;
-}
+/** 滚动 note 里各条决定之间的分隔。 */
+const NOTE_JOIN: Record<Lang, string> = { zh: "；", en: "; " };
 
 /** 一条要交给 Sonnet 的记录：at 用来排先后、超出上限时去掉最旧的。 */
 interface DigestItem {
@@ -165,8 +125,9 @@ export class EpicDigestRunner {
   }
 
   /**
-   * 每周整理：每个未归档、上次整理之后（lastCoveredUntil；没有就从 epic 建立时算）有新活动的 epic 跑一次。
-   * 上一次每周整理不到一周的 epic 跳过，所以同一周里不会跑两次（重启、手动跑晚间任务都一样）。限流时停下，剩下的下周再说。
+   * 每周整理（每个工作日的晚间任务都会调用）：每个未归档、上次整理之后（lastCoveredUntil；没有就从 epic 建立时算）有新活动、
+   * 并且上一次每周整理已经满 7 天（或从没有过）的 epic 跑一次。所以错过了周一晚上，周二的晚间任务照样补上；一周内不会跑两次
+   * （重启、手动跑晚间任务都一样）。限流时停下，剩下的下一次晚间任务再说。
    */
   weekly(): Promise<void> {
     return this.enqueue("weekly epic digest", async () => {
@@ -186,7 +147,8 @@ export class EpicDigestRunner {
 
   /**
    * feature 归档时：对它所在的 epic 马上整理一次（从上次整理到现在；不管这周是否已经每周整理过）。
-   * 不属于 epic 的 feature 只整理它自己（从它建立时算），记录的 epicId 为 null，不写 note。
+   * 不属于 epic 的 feature 只整理它自己（从它上一条记录的 covers_until 算，没有就从它建立时算），记录的 epicId 为 null，不写 note；
+   * 所以重复调用、恢复后再归档都不会再写一条整个 feature 的记录。
    * epic 一起归档它的所有 feature 时逐个调用：第一个整理完之后没有新东西，后面的就不再跑。
    */
   forFeatureArchived(featureId: number): Promise<void> {
@@ -200,7 +162,7 @@ export class EpicDigestRunner {
             features: this.d.features.listByEpic(epic.id, { includeArchived: true }),
             from: this.d.history.lastCoveredUntil(epic.id) ?? epic.createdAt,
           }
-        : { epicId: null, name: f.name, features: [f], from: f.createdAt };
+        : { epicId: null, name: f.name, features: [f], from: this.d.history.lastCoveredUntilOfFeature(f.id) ?? f.createdAt };
       await this.digest(target, "feature_archived", f.id);
     });
   }
@@ -233,10 +195,13 @@ export class EpicDigestRunner {
     return "done";
   }
 
-  /** 滚动 note 的正文：最近 NOTE_ENTRIES 条记录里决定的 what，新的在前，截到 NOTE_BODY_LIMIT。 */
+  /**
+   * 滚动 note 的正文：最近 NOTE_ENTRIES 条记录里决定的 what，新的在前，截到 NOTE_BODY_LIMIT。
+   * 每条和 setEpicDigestNote 一样过 plainNoteBody（不过 NFKC），决定里的全角标点照原样留着。
+   */
   private noteText(epicId: number, lang: Lang): string {
-    const whats = this.d.history.list(epicId, NOTE_ENTRIES).flatMap((e) => e.payload.decisions.map((x) => noteBody(x.what)).filter(Boolean));
-    return truncateUnits(whats.join(HISTORY_TEXT[lang].noteJoin), NOTE_BODY_LIMIT);
+    const whats = this.d.history.list(epicId, NOTE_ENTRIES).flatMap((e) => e.payload.decisions.map((x) => plainNoteBody(x.what)).filter(Boolean));
+    return truncateUnits(whats.join(NOTE_JOIN[lang]), NOTE_BODY_LIMIT);
   }
 
   /** (from, until] 之间的数据：每个 feature 最新的一份有效汇总，和它的 ticket 的完整 handoff 里的决定、学到的东西。 */
@@ -296,11 +261,13 @@ function prompt(target: DigestTarget, items: DigestItem[], until: number, lang: 
   ].join("\n\n");
 }
 
-/** 截到上限，去掉空的决定；summary 和 decisions 都是空的算没有答案。 */
+const cut = (text: string, limit: number): string => truncateUnits(text.trim(), limit).trim();
+
+/** 截到上限（summary、条数、每条的 what 和 why），去掉空的决定；summary 和 decisions 都是空的算没有答案。 */
 function fit(v: z.infer<typeof DigestSchema>): EpicHistoryEntry["payload"] | null {
-  const summary = truncateUnits(v.summary.trim(), EPIC_DIGEST_SUMMARY_CHARS).trim();
+  const summary = cut(v.summary, EPIC_DIGEST_SUMMARY_CHARS);
   const decisions = v.decisions
-    .map((x) => ({ what: x.what.trim(), why: x.why.trim() }))
+    .map((x) => ({ what: cut(x.what, EPIC_DIGEST_DECISION_CHARS), why: cut(x.why, EPIC_DIGEST_DECISION_CHARS) }))
     .filter((x) => x.what)
     .slice(0, EPIC_DIGEST_MAX_DECISIONS);
   return summary || decisions.length > 0 ? { summary, decisions } : null;

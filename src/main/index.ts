@@ -52,7 +52,8 @@ import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
 import { EpicHistoryRepo } from "./db/epic-history-repo";
 import { EpicsRepo } from "./db/epics-repo";
-import { EPIC_HISTORY_READ_ENTRIES, EpicDigestRunner } from "./epics/epic-digest";
+import { EpicDigestRunner } from "./epics/epic-digest";
+import { EPIC_HISTORY_READ_ENTRIES } from "./epics/epic-history-view";
 import { EpicService } from "./epics/epic-service";
 import { FeaturesRepo } from "./db/features-repo";
 import { currentLang, onLangChange, setLang } from "./i18n";
@@ -71,7 +72,7 @@ import { ControlInbox } from "./control/control-inbox";
 import { HookInbox } from "./hooks/inbox";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, resolvePaths } from "./paths";
-import { isFirstWorkingDayOfWeek, isWorkingDay, localDate } from "./schedule/calendar";
+import { isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { ActivityMonitor, activityIntervals } from "./sessions/activity-monitor";
@@ -603,7 +604,7 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   /**
-   * epic 的长期记忆（计划 16 任务 6）：每周第一个工作日跟着晚间任务、feature 归档时整理一次。用 Sonnet，不 fork session，
+   * epic 的长期记忆（计划 16 任务 6）：每个 epic 每周跟着工作日的晚间任务整理一次，feature 归档时也整理一次。用 Sonnet，不 fork session，
    * 和卡住判断共用 headless 设置（用量记进 session_usage，退出时取消）。
    */
   const epicDigest = new EpicDigestRunner({
@@ -611,7 +612,10 @@ async function bootstrap(): Promise<void> {
     history: epicHistory, epics, features, featureHandoffs, handoffs, tickets, memory,
     cwd: () => paths.home,
   });
-  /** feature 归档之后（不等它）：对它所在的 epic 整理一次；不属于 epic 的 feature 只整理它自己。没归档成（已经归档过的不算）就不整理。 */
+  /**
+   * feature 归档之后（不等它）：对它所在的 epic 整理一次；不属于 epic 的 feature 只整理它自己。
+   * 归档被拒（有终端在跑）的走不到这里；这次没归档成的（例如等汇总期间又被恢复）不整理。重复调用由 runner 跳过：没有新东西就不跑。
+   */
   const digestArchivedFeature = (featureId: number) => {
     if (features.get(featureId)?.archivedAt != null) void epicDigest.forFeatureArchived(featureId);
   };
@@ -625,7 +629,6 @@ async function bootstrap(): Promise<void> {
     // full 档位的记忆蒸馏：在后台跑，不挡调度链；每次运行都重新向 gateway 要模型（改档位不用重启），模型只经 withScope 交给嵌入式 StateCore。
     distill: () => distiller.start(),
     epicDigest,
-    isFirstWorkingDayOfWeek: () => isFirstWorkingDayOfWeek(localDate(Date.now()), scheduleConfig(settings).workingDays),
   };
   const scheduler = new Scheduler({
     jobs,

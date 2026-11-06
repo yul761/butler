@@ -7,7 +7,7 @@ import {
 import { effectiveStatus, type Epic, type EpicFeatureRow, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
 import type { EpicHistoryEntry } from "../db/epic-history-repo";
 import type { EpicsRepo } from "../db/epics-repo";
-import { EPIC_HISTORY_BRIEF_CHARS, renderHistory } from "../epics/epic-digest";
+import { EPIC_HISTORY_BRIEF_CHARS, renderHistory } from "../epics/epic-history-view";
 import type { FeaturesRepo } from "../db/features-repo";
 import { currentLang } from "../i18n";
 import { M } from "../strings";

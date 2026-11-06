@@ -1,7 +1,7 @@
 import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
 import type { Handoff } from "../../shared/handoff";
 import {
-  epicScope, featureScope, MAX_NOTE_VARIANT, NOTE_BODY_LIMIT, noteBody, noteId, noteText, parseNote, ticketScope, truncateUnits, WORKSPACE_SCOPE,
+  epicScope, featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, plainNoteBody, ticketScope, WORKSPACE_SCOPE,
   type ButlerNote, type MemoryItem, type MemoryView, type WhyEntry,
 } from "../../shared/memory";
 import type { EpicFeatureRow } from "../../shared/types";
@@ -193,7 +193,7 @@ export class MemoryService {
   /**
    * 写或覆盖 epic scope 里 id 为 epic-digest 的那一条 note（epic 历史的滚动 note，计划 16 任务 6）。
    * 只比对这一条：epic session 自己写的笔记（哪怕碰巧用了 Butler 的前缀格式）一律不动；syncEpic 只写 handoff，也不会动这一条。
-   * 正文压掉多余空白、截到 NOTE_BODY_LIMIT；不过 NFKC（会把全角的“；”变成半角）。正文为空时 forget 它。
+   * 正文过 plainNoteBody（压掉多余空白、截到 NOTE_BODY_LIMIT；不过 NFKC，全角的“；”不会变成半角）。正文为空时 forget 它。
    * 记忆关着时什么都不做。排进写入队列，永不 reject。
    */
   setEpicDigestNote(epicId: number, text: string): Promise<void> {
@@ -202,7 +202,7 @@ export class MemoryService {
       `memory epic digest note ${key}`,
       async () => {
         if (!this.d.enabled()) return;
-        const body = truncateUnits(text.replace(/\s+/g, " ").trim(), NOTE_BODY_LIMIT).trim();
+        const body = plainNoteBody(text);
         const note: ButlerNote = { ...EPIC_DIGEST_NOTE, body };
         const only = noteKey(note);
         await withScope({ dataDir: this.d.dataDir, scope: key }, (s) => this.reconcile(key, s, body ? [note] : [], (k) => k === only));

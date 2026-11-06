@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addDays, atTime, daysBetween, dayStart, isFirstWorkingDayOfWeek, isWorkingDay, localDate, previousWorkingDay, weekday } from "./calendar";
+import { addDays, atTime, daysBetween, dayStart, isWorkingDay, localDate, previousWorkingDay, weekday } from "./calendar";
 
 describe("calendar", () => {
   it("formats and parses local dates", () => {
@@ -19,25 +19,6 @@ describe("calendar", () => {
     expect(previousWorkingDay("2026-10-21", new Set())).toBe("2026-10-20");
     expect(isWorkingDay("2026-10-17", weekdays)).toBe(false);
     expect(isWorkingDay("2026-10-16", weekdays)).toBe(true);
-  });
-
-  it("finds the first working day of the week: the one right after the days off", () => {
-    const weekdays = new Set([1, 2, 3, 4, 5]);
-    // 2026-10-19 是周一。
-    expect(isFirstWorkingDayOfWeek("2026-10-19", weekdays)).toBe(true);
-    for (const d of ["2026-10-20", "2026-10-23", "2026-10-24", "2026-10-25"]) expect(isFirstWorkingDayOfWeek(d, weekdays), d).toBe(false);
-    // 周日到周四上班：周日是第一个工作日。
-    expect(isFirstWorkingDayOfWeek("2026-10-18", new Set([0, 1, 2, 3, 4]))).toBe(true);
-    expect(isFirstWorkingDayOfWeek("2026-10-19", new Set([0, 1, 2, 3, 4]))).toBe(false);
-    // 不连续的工作日：从周一往后数第一个接在休息日后面的。
-    expect(isFirstWorkingDayOfWeek("2026-10-19", new Set([1, 3, 5]))).toBe(true);
-    expect(isFirstWorkingDayOfWeek("2026-10-21", new Set([1, 3, 5]))).toBe(false);
-    // 周二到周六上班：周二。
-    expect(isFirstWorkingDayOfWeek("2026-10-20", new Set([2, 3, 4, 5, 6]))).toBe(true);
-    // 天天上班：周一；没有工作日：永远不是。
-    expect(isFirstWorkingDayOfWeek("2026-10-19", new Set([0, 1, 2, 3, 4, 5, 6]))).toBe(true);
-    expect(isFirstWorkingDayOfWeek("2026-10-18", new Set([0, 1, 2, 3, 4, 5, 6]))).toBe(false);
-    expect(isFirstWorkingDayOfWeek("2026-10-19", new Set())).toBe(false);
   });
 
   it("counts whole local days, unaffected by daylight-saving changes", () => {

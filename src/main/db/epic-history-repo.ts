@@ -76,6 +76,12 @@ export class EpicHistoryRepo {
     return r?.at ?? null;
   }
 
+  /** 这个 feature 自己的记录（归档时整理的）已经整理到的时刻；没有为 null。不属于 epic 的 feature 再归档时据此不重复整理。 */
+  lastCoveredUntilOfFeature(featureId: number): number | null {
+    const r = this.db.prepare(`SELECT MAX(covers_until) AS at FROM epic_history WHERE feature_id = ?`).get(featureId) as { at: number | null } | undefined;
+    return r?.at ?? null;
+  }
+
   /** 这个 epic 最近一次每周整理的时间；没有为 null。每周整理据此不在同一周里跑两次。 */
   lastWeeklyAt(epicId: number | null): number | null {
     const r = this.db.prepare(`SELECT MAX(created_at) AS at FROM epic_history WHERE epic_id IS ? AND trigger = 'weekly'`).get(epicId) as
