@@ -4,7 +4,9 @@ import {
   epicScope, featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, ticketScope, WORKSPACE_SCOPE, type ButlerNote, type MemoryView, type WhyEntry,
 } from "../../shared/memory";
 import type { EpicFeatureRow } from "../../shared/types";
-import { carriedEpicPlan, carriedEpicProgress, EPIC_PROGRESS_MAX_CHARS, fitEpicPlan, renderedByButler, renderEpicHandoff } from "../epics/epic-info";
+import {
+  carriedEpicPlan, carriedEpicProgress, EPIC_PROGRESS_MAX_CHARS, fitEpicPlan, fitEpicProgress, renderedByButler, renderEpicHandoff,
+} from "../epics/epic-info";
 import { currentLang } from "../i18n";
 import type { EpicsRepo } from "../db/epics-repo";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
@@ -404,8 +406,9 @@ export class MemoryService {
 
   /**
    * epic scope 里 epic session 写的进度（计划 16 R29：epic 总控换新时，等它用 butler-epic 的 handoff 写完进度）。
-   * 当前生效的 handoff 是 Butler 渲染的就取里面的进度那一段，不是的就是 epic session 自己写的整份（见 carriedEpicProgress）。
-   * Butler 重新渲染时进度原样带着走，所以只有 epic session 写了新的进度才会变。
+   * 当前生效的 handoff 是 Butler 渲染的就取里面的进度那一段；不是的就是 epic session 自己写的整份，按 Butler 渲染时的截法
+   * 去分隔符、截到 EPIC_PROGRESS_MAX_CHARS（fitEpicProgress）。这样 Butler 之后重新渲染、把它带进进度那一段，读出来还是一样的，
+   * 只有 epic session 写了新的进度才会变。
    * 还没有 handoff、没有进度、记忆关着、读失败（记日志）时为 null；永不 reject。和 view 一样只读，不进写入队列。
    */
   async epicProgress(epicId: number): Promise<string | null> {
@@ -413,7 +416,8 @@ export class MemoryService {
     try {
       return await withScope({ dataDir: this.d.dataDir, scope: epicScope(epicId) }, async (s) => {
         const active = await s.activeHandoff();
-        return active ? carriedEpicProgress(active.content) : null;
+        if (!active) return null;
+        return renderedByButler(active.content) ? carriedEpicProgress(active.content) : fitEpicProgress(active.content) || null;
       });
     } catch (e) {
       this.log(`memory epicProgress ${epicId} failed`, e);

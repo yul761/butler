@@ -192,6 +192,14 @@ export function fitEpicPlan(plan: string): string {
 }
 
 /**
+ * epic session 自己写的整份交接放进进度那一段之后的样子（同 section 的截法）：Butler 渲染之后 carriedEpicProgress 读回来的就是它。
+ * 不去标签：原文开头恰好是标签那一行时，渲染后读回来的也还带着（withoutLabel 只去 Butler 加的那一个）。
+ */
+export function fitEpicProgress(progress: string): string {
+  return clip(withoutTags(progress), EPIC_PROGRESS_MAX_CHARS);
+}
+
+/**
  * 分隔符包起来的一段；空白的没有这一段。正文里的分隔符都去掉，这样第一个结束符一定是这一段的结尾，
  * carriedEpicPlan / carriedEpicProgress 读回来的和写进去的一字不差，不嵌套、不变长。超长时截断尾部，截断后就不再超长。
  */

@@ -526,6 +526,22 @@ describe("MemoryService.epicProgress (plan 16 R29: refreshing an epic session)",
     expect(t.logs).toEqual([]);
   });
 
+  it("reads a long raw handoff the way Butler will carry it, so Butler's re-render does not change it (review)", async () => {
+    const t = setup();
+    t.setEpicRows([row]);
+    await t.memory.syncEpic(1);
+    const raw = `<epic-session-progress>${"做到第二步，".repeat(450)}</epic-session-progress>`;
+    expect(raw.length).toBeGreaterThan(2500);
+    await sessionWrites(t, raw);
+    const snapshot = await t.memory.epicProgress(1);
+    expect(snapshot?.length).toBe(EPIC_PROGRESS_MAX_CHARS);
+    expect(snapshot).not.toContain("<epic-session-progress>");
+    await t.memory.syncEpic(1);
+    const active = await withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
+    expect(active?.content).not.toBe(raw.trim());
+    expect(await t.memory.epicProgress(1)).toBe(snapshot);
+  });
+
   it("is null when memory is off, and logs a failed read without rejecting", async () => {
     const off = setup({ enabled: false });
     await sessionWrites(off, "进度");

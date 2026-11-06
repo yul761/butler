@@ -461,6 +461,60 @@ describe("SessionRefresher (plan 16)", () => {
     expect(e.r.precheck("e1", "auto")).toBe("failed");
   });
 
+  it("only counts a handoff stored after Butler typed /handoff (review: the user's own /handoff during the checks)", async () => {
+    const t = setup();
+    t.addTerm("s1");
+    t.state.onCommandCheck = () => t.r.handoffStored("s1");
+    expect(await t.r.refresh("s1", "manual")).toBe("done");
+    expect(t.texts()).toEqual(["/handoff", "/clear", M().refreshResume("ticket", "DMS-1")]);
+    // /clear 等的是输入之后 30 秒收进来的那一份，不是检查期间收进来的。
+    expect(t.typed[1].at - t.typed[0].at).toBeGreaterThanOrEqual(30_000);
+
+    // 之后再也没收进来：失败，不输入 /clear。
+    const t2 = setup();
+    t2.addTerm("s1", { reactions: { "/handoff": undefined } });
+    t2.state.onCommandCheck = () => t2.r.handoffStored("s1");
+    expect(await t2.r.refresh("s1", "manual")).toBe("failed");
+    expect(t2.texts()).toEqual(["/handoff"]);
+  });
+
+  it("stops before the next typing step when memory is turned off midway (review)", async () => {
+    const t = setup();
+    const term = t.addTerm("s1");
+    term.reactions["/handoff"] = { ms: 30_000, run: () => { t.r.handoffStored("s1"); t.state.memory = false; } };
+    expect(await t.r.refresh("s1", "manual")).toBe("failed");
+    expect(t.texts()).toEqual(["/handoff"]);
+    expect(t.logs.some((l) => l.includes("memory_off"))).toBe(true);
+
+    // 读命令文件期间关掉：什么都没输入，memory_off。
+    const t2 = setup();
+    t2.addTerm("s1");
+    t2.state.onCommandCheck = () => (t2.state.memory = false);
+    expect(await t2.r.refresh("s1", "coordinator")).toBe("memory_off");
+    expect(t2.typed).toEqual([]);
+  });
+
+  it("does not refresh a ticket session without a ticket key (review)", async () => {
+    const t = setup();
+    t.addTerm("s1", { session: { ticketKey: null } });
+    expect(t.r.precheck("s1", "manual")).toBe("failed");
+    expect(await t.r.refresh("s1", "manual")).toBe("failed");
+    t.r.autoCheck();
+    await t.settle();
+    expect(t.typed).toEqual([]);
+  });
+
+  it("an auto refresh stops when a background task starts while the command file is read (review)", async () => {
+    const t = setup();
+    const term = t.addTerm("s1");
+    t.state.onCommandCheck = () => (term.background = true);
+    expect(await t.r.refresh("s1", "auto")).toBe("busy");
+    expect(t.typed).toEqual([]);
+    expect(t.r.isRefreshing("s1")).toBe(false);
+    // 手动不看后台任务。
+    expect(await t.r.refresh("s1", "manual")).toBe("done");
+  });
+
   it("refuses a second refresh of the same session while one is running", async () => {
     const t = setup();
     t.addTerm("s1");

@@ -2,7 +2,7 @@ import type { SessionActivity } from "../../shared/activity";
 import { sanitizeTask } from "../../shared/control";
 import type { Session } from "../../shared/types";
 import { M } from "../strings";
-import type { DeliveryGuard } from "./delivery-guard";
+import type { DeliveryCheck, DeliveryGuard } from "./delivery-guard";
 
 /** 等 handoff 收进来最多 10 分钟，等 /clear 之后的新 id 最多 60 秒，失败之后 30 分钟内不再自动试（计划 16）。 */
 export const REFRESH_HANDOFF_MS = 600_000, REFRESH_CLEAR_MS = 60_000, REFRESH_COOLDOWN_MS = 1_800_000;
@@ -64,7 +64,9 @@ interface Run {
   step: RefreshStep;
   epicId: number | null;
   ticket: string;
-  /** ticket / feature：capture 存下了这个 session 的 /handoff。 */
+  /** ticket / feature：Butler 输入 /handoff 的时间；之前收进来的 handoff（用户自己的 /handoff）不算。 */
+  handoffTypedAt: number | null;
+  /** ticket / feature：Butler 输入 /handoff 之后，capture 存下了这个 session 的 /handoff。 */
   stored: boolean;
 }
 
@@ -124,10 +126,10 @@ export class SessionRefresher {
     return this.runOf(sessionId)?.step ?? null;
   }
 
-  /** capture 存下了这个 session 的 /handoff。 */
+  /** capture 存下了这个 session 的 /handoff。Butler 还没输入 /handoff 时收进来的（用户自己的）不算。 */
   handoffStored(sessionId: string): void {
     for (const run of this.runs) {
-      if (run.step === "handoff" && run.kind !== "epic" && this.sameChain(sessionId, run.headId)) run.stored = true;
+      if (run.step === "handoff" && run.kind !== "epic" && run.handoffTypedAt !== null && this.sameChain(sessionId, run.headId)) run.stored = true;
     }
   }
 
@@ -136,17 +138,27 @@ export class SessionRefresher {
     if (!this.d.memoryEnabled()) return { result: "memory_off" };
     const head = this.d.head(sessionId);
     const kind = head ? this.d.kindOf(head) : null;
-    if (!head || !kind || (kind === "epic" && head.epicId === null)) return { result: "failed" };
+    // 缺了接着做的话要用的 ticket 号、epic id 的，不换新。
+    if (!head || !kind || (kind === "epic" && head.epicId === null) || (kind === "ticket" && !head.ticketKey)) return { result: "failed" };
     // epic 规划单独存放之前，换新会让 epic session 写一份进度 handoff，把记忆里的规划冲掉：手动也不行。
     if (kind === "epic" && !this.d.epicPlanReady()) return { result: "failed" };
     if (this.isRefreshing(head.id)) return { result: "already" };
     if (trigger !== "manual" && this.cooling(head.id)) return { result: "cooldown" };
-    const gate = this.guardFor(trigger).check(head.id);
+    const gate = this.canStart(head.id, trigger);
     if (!gate.ok) return { result: "busy" };
-    if (trigger === "auto" && this.d.activity(gate.headId)?.background === true) return { result: "busy" };
     return {
-      run: { headId: gate.headId, termId: gate.termId, kind, trigger, step: "handoff", epicId: head.epicId, ticket: head.ticketKey ?? "", stored: false },
+      run: {
+        headId: gate.headId, termId: gate.termId, kind, trigger, step: "handoff", epicId: head.epicId, ticket: head.ticketKey ?? "",
+        handoffTypedAt: null, stored: false,
+      },
     };
+  }
+
+  /** 开始时和第一步输入之前（中间等过异步）都看这一道：guard 通过；自动触发还要求没有后台任务在跑。 */
+  private canStart(sessionId: string, trigger: RefreshTrigger): DeliveryCheck {
+    const gate = this.guardFor(trigger).check(sessionId);
+    if (gate.ok && trigger === "auto" && this.d.activity(gate.headId)?.background === true) return { ok: false, block: "busy" };
+    return gate;
   }
 
   /** 同步做完开始前的检查；通过就登记成正在换新（之后的异步检查期间也不会再起一次）。 */
@@ -186,9 +198,13 @@ export class SessionRefresher {
       // 用户改过 /handoff 的命令文件：不知道它会输出什么，收不进来就只会白等 10 分钟。冷却期间不再试，也不再记日志。
       return this.fail(run, "/handoff is not Butler's own command (the command file was changed), so the session was not refreshed");
     }
-    // 中间等过异步：重新看一眼。这时还什么都没输入，不通过就当作忙，不冷却。
-    const gate = this.guardFor(run.trigger).check(run.headId);
+    // 中间等过异步：重新看一眼。这时还什么都没输入，不通过就当作忙（记忆刚关掉就是 memory_off），不冷却。
+    if (!this.d.memoryEnabled()) return "memory_off";
+    const gate = this.canStart(run.headId, run.trigger);
     if (!gate.ok || gate.termId !== run.termId) return "busy";
+    // 从这一刻起收进来的 handoff 才算这次换新的（审查：用户自己的 /handoff 恰好在前面的检查期间收进来，不能让 /clear 跟着就输入）。
+    run.stored = false;
+    run.handoffTypedAt = this.d.now();
     const typedHandoff = await this.type(run, run.kind === "epic" ? M().refreshEpicHandoff : HANDOFF_COMMAND);
     if (typedHandoff) return this.fail(run, `typing the handoff request: ${typedHandoff}`);
     const handedOff =
@@ -224,11 +240,12 @@ export class SessionRefresher {
 
   /**
    * 等到能往里输入：session 又停下来了（写 handoff、/clear 时它本来就会忙一阵）就返回 null，最多等 REFRESH_CLEAR_MS。
-   * 用户在打字、留了草稿、屏幕上有要用户回答的东西、终端关了或换了，马上返回原因，不等。
+   * 用户在打字、留了草稿、屏幕上有要用户回答的东西、终端关了或换了、记忆被关掉了，马上返回原因，不等。
    */
   private async untilQuiet(run: Run): Promise<string | null> {
     const end = this.d.now() + REFRESH_CLEAR_MS;
     for (;;) {
+      if (!this.d.memoryEnabled()) return "memory_off";
       const gate = this.guardFor(run.trigger).check(run.headId);
       if (gate.ok) return gate.termId === run.termId ? null : "the terminal changed";
       if (gate.block !== "busy") return gate.block;

@@ -7,7 +7,7 @@ import { FeaturesRepo } from "../db/features-repo";
 import { memDb } from "../test-utils";
 import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
 import {
-  carriedEpicPlan, carriedEpicProgress, epicFeatureRows, EPIC_HANDOFF_MAX_CHARS, EPIC_PROGRESS_MAX_CHARS, newestSummaryFirst, renderedByButler, renderEpicHandoff, rowSections,
+  carriedEpicPlan, carriedEpicProgress, epicFeatureRows, EPIC_HANDOFF_MAX_CHARS, EPIC_PROGRESS_MAX_CHARS, fitEpicProgress, newestSummaryFirst, renderedByButler, renderEpicHandoff, rowSections,
   type LiveFeature,
 } from "./epic-info";
 
@@ -244,6 +244,23 @@ describe("the epic session's progress inside the rendered text (plan 16)", () =>
     // epic session 自己的进度恰好以标签开头：只去掉 Butler 加的那一个，读回来一字不差。
     const echoed = "epic 总控的进度\n做到第二步";
     expect(carriedEpicProgress(renderEpicHandoff([row(1)], "zh", null, echoed))).toBe(echoed);
+  });
+
+  it("fitEpicProgress is what Butler's render carries back, for long, tag-quoting and label-leading progress (review)", () => {
+    const cases = [
+      "  做到第二步  ",
+      `${"很长的进度，".repeat(500)}`,
+      "<epic-session-progress>抄来的</epic-session-progress>\n<epic-session-handoff>规划</epic-session-handoff>做到第二步",
+      "epic 总控的进度\n做到第二步",
+    ];
+    for (const raw of cases) {
+      for (const lang of ["zh", "en"] as const) {
+        expect(carriedEpicProgress(renderEpicHandoff([row(1)], lang, "先做支付", carriedEpicProgress(raw)))).toBe(fitEpicProgress(raw));
+      }
+    }
+    expect(fitEpicProgress(cases[1]).length).toBe(EPIC_PROGRESS_MAX_CHARS);
+    // 再截一次不变。
+    expect(fitEpicProgress(fitEpicProgress(cases[1]))).toBe(fitEpicProgress(cases[1]));
   });
 
   it("takes a handoff that is not Butler's as the progress, whole, and tells it apart from Butler's own", () => {
