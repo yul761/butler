@@ -99,6 +99,15 @@ describe("prPill", () => {
     expect(prPill(pr({ review: null }), S)).toEqual({ text: "PR #212 待 review", tone: "pending" });
   });
 
+  it("says the PR status is unavailable when gh could not read a branch with no PR seen yet (I6)", () => {
+    expect(prPill(pr({ state: null, number: null, url: null, ci: "unknown" }), S)).toEqual({ text: "PR 状态不可用", tone: "none" });
+    setUiLang("en");
+    expect(prPill(pr({ state: null, number: null, url: null, ci: "unknown" }), S)).toEqual({ text: "PR status unavailable", tone: "none" });
+    setUiLang("zh");
+    // 见过 PR 的：gh 这一次没查成，照旧显示上次的状态。
+    expect(prPill(pr({ ci: "unknown" }), S)).toEqual({ text: "PR #212 待 review", tone: "pending" });
+  });
+
   it("shows nothing for a branch with no PR or a closed one", () => {
     expect(prPill(pr({ state: null, number: null, url: null }), S)).toBeNull();
     expect(prPill(pr({ state: "closed" }), S)).toBeNull();

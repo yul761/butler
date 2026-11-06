@@ -288,6 +288,7 @@ export const EN: UiStrings = {
   nowWaitCi: "Waiting for CI",
   nowCiFailed: "CI failed",
   nowCiRunning: "CI running",
+  nowPrUnavailable: "PR status unavailable",
   nowWaitReview: "Waiting for review",
   nowChangesRequested: "Changes requested",
   nowApproved: "Approved",

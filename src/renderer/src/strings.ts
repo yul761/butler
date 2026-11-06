@@ -292,6 +292,7 @@ const ZH = {
   nowWaitCi: "等 CI",
   nowCiFailed: "CI 失败",
   nowCiRunning: "CI 跑中",
+  nowPrUnavailable: "PR 状态不可用",
   nowWaitReview: "等 review",
   nowChangesRequested: "要修改",
   nowApproved: "已批准",

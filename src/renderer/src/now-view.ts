@@ -52,8 +52,10 @@ export function rowText(r: NowRow, S: UiStrings, now: number): { main: string; s
   return { main: S.nowStopped, sub: null, tone: "muted" };
 }
 
-/** PR 标签：CI 失败用“要改”的颜色，CI 在跑用“待 review”的颜色，其余按 PR 的状态和 review。没有 PR 或已关闭的不显示。 */
-export function prPill(p: WatchedPr, S: UiStrings): { text: string; tone: "merged" | "approved" | "changes" | "pending" } | null {
+/** PR 标签：CI 失败用“要改”的颜色，CI 在跑用“待 review”的颜色，其余按 PR 的状态和 review。没有 PR 或已关闭的不显示；gh 读不了、又没见过 PR 的显示灰色的“PR 状态不可用”。 */
+export function prPill(p: WatchedPr, S: UiStrings): { text: string; tone: "merged" | "approved" | "changes" | "pending" | "none" } | null {
+  // gh 没装、没登录、没网，又从没见过这个分支的 PR：不知道有没有 PR，说一声（设计文档：显示"PR 状态不可用"，不报错）。
+  if (p.number === null && p.ci === "unknown") return { text: S.nowPrUnavailable, tone: "none" };
   if (p.state === null || p.state === "closed") return null;
   const text = (state: string) => S.nowPr(p.number, state);
   if (p.state === "merged") return { text: text(S.prPill.merged), tone: "merged" };
