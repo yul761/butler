@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionActivity } from "../../shared/activity";
+import type { Session } from "../../shared/types";
 import type { Db } from "../db/database";
 import { MergeGateRepo } from "../db/merge-gate-repo";
 import { M } from "../strings";
+import { DeliveryGuard } from "../sessions/delivery-guard";
 import { memDb } from "../test-utils";
 import type { PrInfo } from "../tickets/gh";
 import { HoldWatcher, LOCAL_HOLD_MAX_MS, NOTICE_KEEP_MS, USER_TYPING_QUIET_MS, type HoldWatcherDeps } from "./hold-watcher";
@@ -32,7 +35,7 @@ interface Opts {
 function setup(o: Opts = {}) {
   const db = o.db ?? memDb();
   if (!o.db) seed(db);
-  const state = { now: 0, open: o.open ?? true, waiting: o.waiting ?? true, typedAt: 0 };
+  const state = { now: 0, open: o.open ?? true, waiting: o.waiting ?? true, typedAt: 0, draft: false };
   const repo = new MergeGateRepo(db);
   const prInfo = vi.fn(async () => (o.pr ? o.pr() : null));
   const git = {
@@ -42,11 +45,18 @@ function setup(o: Opts = {}) {
   };
   const deliver = vi.fn(o.deliver ?? (async () => "sent" as const));
   const logs: string[] = [];
+  // 真的 DeliveryGuard：终端开着 = open，停着等输入 = waiting，typedAt 是用户上次打字的时间。
+  const guard = new DeliveryGuard({
+    termOf: (id) => (state.open ? id : null),
+    head: (id) => ({ id, waitingForInput: state.waiting }) as Session,
+    activity: () => ({ kind: "waiting" }) as SessionActivity,
+    pty: { lastUserInputAt: () => state.typedAt, screenNeedsUser: () => false, hasDraft: () => state.draft },
+    now: () => state.now,
+  });
   const deps: HoldWatcherDeps = {
     repo, prInfo, git,
     isOpen: () => state.open,
-    isWaiting: () => state.waiting,
-    lastUserInput: () => state.typedAt,
+    guard,
     deliver,
     whoOf: who,
     now: () => state.now,
@@ -168,6 +178,20 @@ describe("HoldWatcher: PR holds", () => {
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
+  it("does not paste over an unsent draft however long ago it was typed, and delivers once it is gone", async () => {
+    const t = setup({ pr: () => pr("MERGED") });
+    t.state.now = 10 * USER_TYPING_QUIET_MS;
+    t.state.draft = true;
+    await t.watcher.check();
+    expect(t.outcome()).toBe("merged");
+    expect(t.deliver).not.toHaveBeenCalled();
+    expect(t.repo.pendingNotices()).toHaveLength(1);
+    t.state.draft = false;
+    await t.watcher.sessionIdle("s-wait");
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+    expect(t.repo.pendingNotices()).toEqual([]);
+  });
+
   it("tries again next round when delivery timed out", async () => {
     let res: "sent" | "timeout" = "timeout";
     const t = setup({ pr: () => pr("MERGED"), deliver: async () => res });
@@ -280,7 +304,9 @@ describe("HoldWatcher: rounds", () => {
     );
     const watcher = new HoldWatcher({
       repo, prInfo: async () => pr("MERGED"), git: { isAncestor: async () => false, fetchQuiet: async () => true, upstreamRef: async (_r, b) => `origin/${b}` },
-      isOpen: () => true, isWaiting: (s) => waiting[s] ?? false, lastUserInput: () => 0, deliver, whoOf: who, now: () => 0, log: () => undefined,
+      isOpen: () => true,
+      guard: { check: (s) => (waiting[s] ? { ok: true, termId: s, headId: s } : { ok: false, block: "busy" }) },
+      deliver, whoOf: who, now: () => 0, log: () => undefined,
     });
     // 这一轮先卡在 s-slow 上，名单里还有忙着的 s-fast。
     const round = watcher.check();

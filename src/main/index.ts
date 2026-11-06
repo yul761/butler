@@ -72,6 +72,7 @@ import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./s
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { ActivityMonitor, activityIntervals, type StuckInfo } from "./sessions/activity-monitor";
 import { sessionRegistryName } from "./sessions/activity-sources";
+import { DeliveryGuard } from "./sessions/delivery-guard";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
@@ -767,24 +768,25 @@ async function bootstrap(): Promise<void> {
     const head = sessions.head(sessionId)?.id;
     return head ? (pty.openIds().find((t) => sessions.head(t)?.id === head) ?? null) : null;
   };
+  // 所有自动输入共用的一道检查（计划 13）：停着等输入、屏幕上没有要回答的、用户没在打字、没有草稿才贴。
+  const deliveryGuard = new DeliveryGuard({
+    termOf: gateTerm,
+    head: (id) => sessions.head(id),
+    activity: (id) => activityMonitor.get(id),
+    pty,
+    // BUTLER_GATE_TYPING_QUIET_MS 只给 e2e 用（它刚在终端里打过字，不想多等 30 秒）。
+    typingQuietMs: Number(process.env.BUTLER_GATE_TYPING_QUIET_MS) || undefined,
+    now: Date.now,
+  });
   const holdWatcher = new HoldWatcher({
     repo: gateRepo, prInfo, git,
     isOpen: (id) => gateTerm(id) !== null,
-    isWaiting: (id) => {
-      const t = gateTerm(id);
-      return t !== null && sessions.head(t)?.waitingForInput === true;
-    },
-    lastUserInput: (id) => {
-      const t = gateTerm(id);
-      return t ? pty.lastUserInputAt(t) : 0;
-    },
+    guard: deliveryGuard,
     // 最多等 1 分钟：session 是停着的，输入框应该很快就绪；等不到下一轮再发。
     deliver: async (id, text) => {
       const t = gateTerm(id);
       return t ? pty.deliver(t, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000 }) : "exited";
     },
-    // BUTLER_GATE_TYPING_QUIET_MS 只给 e2e 用（它刚在终端里打过字，不想多等 30 秒）。
-    typingQuietMs: Number(process.env.BUTLER_GATE_TYPING_QUIET_MS) || undefined,
     whoOf, now: Date.now, log: logger,
   });
   const mergeGate = new MergeGate({

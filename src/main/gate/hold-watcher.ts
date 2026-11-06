@@ -1,4 +1,5 @@
 import type { MergeGateRepo, MergeHold } from "../db/merge-gate-repo";
+import type { DeliveryGuard } from "../sessions/delivery-guard";
 import { M } from "../strings";
 import type { prInfo } from "../tickets/gh";
 import type * as Git from "../tickets/git";
@@ -16,8 +17,8 @@ const PR_TIMEOUT_MS = 2000;
 const FETCH_TIMEOUT_MS = 2000;
 /** 等待者的终端关着时，通知最多留多久（等它重新打开）；过了就丢掉（最终审查 3）。 */
 export const NOTICE_KEEP_MS = 24 * 60 * 60_000;
-/** 用户这么久之内在终端里打过字就先不贴通知：贴进去再回车会把用户打了一半的话一起提交（最终审查 4）。 */
-export const USER_TYPING_QUIET_MS = 30_000;
+/** 打过字之后多久之内不贴通知：现在由 DeliveryGuard 判断，这里接着导出给原来的用法。 */
+export { USER_TYPING_QUIET_MS } from "../sessions/delivery-guard";
 /** soon() 等这么久再查：合并多次调用，也给 GitHub 一点时间。 */
 const SOON_MS = 1000;
 
@@ -28,14 +29,10 @@ export interface HoldWatcherDeps {
   repo: MergeGateRepo;
   prInfo: typeof prInfo;
   git: Pick<typeof Git, "isAncestor" | "fetchQuiet" | "upstreamRef">;
-  /** sessionId 是等待者的 BUTLER_SESSION（打开终端时的 id）。 */
+  /** sessionId 是等待者的 BUTLER_SESSION（打开终端时的 id）。关着就把通知留着，等它重新打开。 */
   isOpen(sessionId: string): boolean;
-  /** 这个终端里的 claude 停着等输入（不在忙）。 */
-  isWaiting(sessionId: string): boolean;
-  /** 用户上一次在这个 session 的终端里输入的时间（0 = 没有）。 */
-  lastUserInput(sessionId: string): number;
-  /** 打过字之后多久之内不贴通知，默认 USER_TYPING_QUIET_MS（e2e 用环境变量调短）。 */
-  typingQuietMs?: number;
+  /** 现在能不能往这个 session 的终端里贴：停着等输入、用户没在打字、没有草稿……（所有自动输入共用一个）。 */
+  guard: Pick<DeliveryGuard, "check">;
   deliver(sessionId: string, text: string): Promise<"sent" | "exited" | "timeout">;
   /** 和 MergeGate 用同一个函数。 */
   whoOf(ticketKey: string | null, branch: string): string;
@@ -166,10 +163,8 @@ export class HoldWatcher {
       this.d.log(`merge gate: session ${n.sessionId} was not reachable for 24 h; dropping the notice about ${n.otherBranch}`);
       return;
     }
-    if (!this.d.isOpen(n.sessionId) || !this.d.isWaiting(n.sessionId)) return;
-    // 用户可能正在这个终端里打字：下一轮（或下一次 Stop）再发。
-    const typed = this.d.lastUserInput(n.sessionId);
-    if (typed > 0 && this.d.now() - typed < (this.d.typingQuietMs ?? USER_TYPING_QUIET_MS)) return;
+    // 关着、在忙、用户在打字或者有草稿：下一轮（或下一次 Stop）再发。
+    if (!this.d.isOpen(n.sessionId) || !this.d.guard.check(n.sessionId).ok) return;
     this.delivering.add(n.waiterId);
     try {
       const who = this.d.whoOf(n.otherTicket, n.otherBranch);
