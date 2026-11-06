@@ -9,14 +9,15 @@ export interface SpawnSpec {
 }
 
 /**
- * addDirs：总控 session 能看到的额外目录（每个一个 --add-dir）。settingsPath：Butler 写的 --settings 文件（自动启用仓库 .mcp.json 的 server）。
+ * guidePath：Butler 的 session 说明文件。addDirs：总控 session 能看到的额外目录（每个一个 --add-dir）。settingsPath：Butler 写的 --settings 文件（自动启用仓库 .mcp.json 的 server）。
  * 只有路径，prompt 永远不进 argv。
  */
-export function claudeArgs(req: { mode: "new" | "resume"; sessionId: string; mcpConfigPath?: string; settingsPath?: string; addDirs?: string[] }): string[] {
+export function claudeArgs(req: { mode: "new" | "resume"; sessionId: string; mcpConfigPath?: string; settingsPath?: string; addDirs?: string[]; guidePath?: string }): string[] {
   const args = req.mode === "new" ? ["--session-id", req.sessionId] : ["--resume", req.sessionId];
   if (req.mcpConfigPath) args.push("--mcp-config", req.mcpConfigPath);
   if (req.settingsPath) args.push("--settings", req.settingsPath);
   for (const dir of req.addDirs ?? []) args.push("--add-dir", dir);
+  if (req.guidePath) args.push("--append-system-prompt-file", req.guidePath);
   return args;
 }
 

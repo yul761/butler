@@ -52,7 +52,8 @@ import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
 import { EpicsRepo } from "./db/epics-repo";
 import { EpicService } from "./epics/epic-service";
 import { FeaturesRepo } from "./db/features-repo";
-import { onLangChange, setLang } from "./i18n";
+import { currentLang, onLangChange, setLang } from "./i18n";
+import { writeSessionGuide } from "./claude/session-guide";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
 import { HandoffRunner } from "./handoff/runner";
@@ -509,6 +510,7 @@ async function bootstrap(): Promise<void> {
     mcpConfig: memoryMcpConfig,
     // 装着的 butler-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
     mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, gateCommand: health.hookBinCurrent() && existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
+    guidePath: (kind) => writeSessionGuide(paths.mcp, currentLang(), kind),
     featureMcpConfig,
     epicMcpConfig,
     features, epics, featureHandoffs, handoffs,

@@ -23,6 +23,7 @@ import {
   type UnclaimedSession,
 } from "../../shared/types";
 import { launchEnv, type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
+import type { GuideKind } from "../claude/session-guide";
 import { claudeArgs, cmdShimSafe, sessionEnv } from "../claude/spawn";
 import type { EpicsRepo } from "../db/epics-repo";
 import { epicBriefMessage } from "../epics/epic-brief";
@@ -73,6 +74,8 @@ export interface SessionServiceDeps {
    * 返回 null 时不加 --settings。
    */
   mcpSettings?: (dirs: string[]) => string | null;
+  /** Butler 的 session 说明文件（--append-system-prompt-file）；不给或返回 null 时不加。 */
+  guidePath?: (kind: GuideKind) => string | null;
   /** feature（设计文档 2026-10-26）；不给就没有 feature 总控。 */
   features?: FeaturesRepo;
   /** epic（设计文档 2026-11-01）；不给就没有 epic session。 */
@@ -121,6 +124,7 @@ interface WorkspaceTarget {
   /** 要 claude 看到的目录；工作区里面的、不存在的不加 --add-dir。 */
   dirs: string[];
   mcpConfig: () => string | null;
+  guideKind: GuideKind;
   /** 新建 session 时这一行的角色。 */
   row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "epicId">;
 }
@@ -205,6 +209,7 @@ export class SessionService {
     const epicId = ticket.featureId === null ? null : (this.d.features?.get(ticket.featureId)?.epicId ?? null);
     const mcpConfigPath = this.configPath(ticket.key, () => this.d.mcpConfig?.(ticket.key, { coordinator, featureId: ticket.featureId, epicId }) ?? null, claudePath, launch.viaCmd);
     const settingsPath = this.configPath(ticket.key, () => this.d.mcpSettings?.([cwd, ...ticket.repos.map((r) => r.repoPath)]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
+    const guidePath = this.configPath(ticket.key, () => this.d.guidePath?.(coordinator ? "coordinator" : "ticket") ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs = coordinator ? this.addDirsFor(ticket, claudePath, launch.viaCmd) : [];
     let termId: string;
     let args: string[];
@@ -212,10 +217,10 @@ export class SessionService {
     if (head) {
       // claude --resume 只能在 session 当初的项目目录里找到它；没发过消息的 session 没有记录，用同一个 id 重新开
       termId = head.id;
-      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs });
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath });
     } else {
       termId = this.d.newId();
-      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs });
+      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
         id: termId, ticketKey: ticket.key, cwd, origin: "butler", lastActivityAt: now, createdAt: now,
@@ -502,6 +507,7 @@ export class SessionService {
       // feature 下未归档 ticket 的仓库工作目录。
       dirs: this.d.tickets.listByFeature(feature.id).flatMap((t) => t.repos.map((r) => this.d.ticketService.workDir(r))),
       mcpConfig: () => this.d.featureMcpConfig?.(feature.id, feature.epicId) ?? null,
+      guideKind: from.fixes ? "ticket" : "coordinator",
       row: { coordinator: !from.fixes, featureId: feature.id, fixesSession: from.fixes ?? null },
     }, claude, from.head ?? null);
   }
@@ -522,6 +528,7 @@ export class SessionService {
       repoPaths,
       dirs: repoPaths,
       mcpConfig: () => this.d.epicMcpConfig?.(epic.id) ?? null,
+      guideKind: "coordinator",
       row: { epicId: epic.id },
     }, claude, head);
   }
@@ -533,16 +540,17 @@ export class SessionService {
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
     const mcpConfigPath = this.configPath(target.label, target.mcpConfig, claudePath, launch.viaCmd);
     const settingsPath = this.configPath(target.label, () => this.d.mcpSettings?.([cwd, ...target.repoPaths]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
+    const guidePath = this.configPath(target.label, () => this.d.guidePath?.(target.guideKind) ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs = this.workspaceAddDirs(target, claudePath, launch.viaCmd);
     let termId: string;
     let args: string[];
     let insertedRow = false;
     if (head) {
       termId = head.id;
-      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs });
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath });
     } else {
       termId = this.d.newId();
-      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs });
+      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
         id: termId, ticketKey: null, cwd, origin: "butler", lastActivityAt: now, createdAt: now, ...target.row,

@@ -5,6 +5,10 @@ import { inboxDir } from "../../../hook/butler-hook";
 import { claudeArgs, cmdShimSafe, headlessEnv, sessionEnv } from "./spawn";
 
 describe("claude spawn helpers", () => {
+  it("adds the guide file after the other flags", () => {
+    expect(claudeArgs({ mode: "new", sessionId: "u1", settingsPath: "/s.json", guidePath: "/g.md" })).toEqual(["--session-id", "u1", "--settings", "/s.json", "--append-system-prompt-file", "/g.md"]);
+  });
+
   it("builds new and resume args", () => {
     expect(claudeArgs({ mode: "new", sessionId: "u1" })).toEqual(["--session-id", "u1"]);
     expect(claudeArgs({ mode: "resume", sessionId: "u1", mcpConfigPath: "/m.json" })).toEqual(["--resume", "u1", "--mcp-config", "/m.json"]);
