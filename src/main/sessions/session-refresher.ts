@@ -8,7 +8,7 @@ import type { DeliveryGuard } from "./delivery-guard";
 export const REFRESH_HANDOFF_MS = 600_000, REFRESH_CLEAR_MS = 60_000, REFRESH_COOLDOWN_MS = 1_800_000;
 /** 等待时多久看一次：handoff 收进来没有、新 id 接上没有、session 停下来没有。 */
 const POLL_MS = 1_000;
-/** epic 的 handoff 版本要打开 StateCore 读，5 秒查一次。 */
+/** epic 的进度要打开 StateCore 读，5 秒查一次。 */
 const EPIC_POLL_MS = 5_000;
 const HANDOFF_COMMAND = "/handoff";
 const CLEAR_COMMAND = "/clear";
@@ -18,9 +18,10 @@ export type RefreshTrigger = "auto" | "coordinator" | "manual";
 export type RefreshStep = "handoff" | "clear" | "resume";
 /**
  * done：三步都输入了。busy：现在不能往终端里输入（什么都没输入，不冷却）。already：这个 session 正在换新。
- * cooldown：30 分钟内失败过（手动触发不看这一条）。failed：不能换新的 session，或者中途停下了（之后不再输入任何东西，进入冷却）。
+ * cooldown：30 分钟内失败过（手动触发不看这一条）。memory_off：记忆关着，换新以后接不上，什么都不输入。
+ * failed：不能换新的 session，或者中途停下了（之后不再输入任何东西，进入冷却）。
  */
-export type RefreshResult = "done" | "busy" | "already" | "cooldown" | "failed";
+export type RefreshResult = "done" | "busy" | "already" | "cooldown" | "memory_off" | "failed";
 
 export interface SessionRefresherDeps {
   /** 自动换新用：含「需要你」。和递 CI 结果用的不是同一个实例，不带 refreshing（R25），否则换新会挡住自己的下一步。 */
@@ -39,7 +40,10 @@ export interface SessionRefresherDeps {
   handoffCommandReady(): Promise<boolean>;
   /** Task 1 合并后恒为 true；留着这个开关是为了按顺序上线。 */
   epicPlanReady(): boolean;
-  epicHandoffVersion(epicId: number): Promise<string | null>;
+  /** 设置里的记忆开关（memoryEnabled）：关着时 session 换新以后没有 handoff 可以 recall。 */
+  memoryEnabled(): boolean;
+  /** epic session 写的进度（MemoryService.epicProgress）：Butler 重新渲染时不变，只有 epic session 写了新的才变（R29）。 */
+  epicProgress(epicId: number): Promise<string | null>;
   deliver(termId: string, text: string): Promise<"sent" | "exited" | "timeout">;
   /** 开着终端的 Butler session 的 head，自动检查用。 */
   sessions(): Session[];
@@ -80,7 +84,7 @@ export class SessionRefresher {
 
   /** 每个活动 tick 之后调：找满足条件的 session，一次最多启动一个；已经有一个在换新时什么都不做。上下文最长的先换。 */
   autoCheck(): void {
-    if (this.runs.size > 0) return;
+    if (this.runs.size > 0 || !this.d.memoryEnabled()) return;
     const limit = this.d.threshold();
     if (!(limit > 0)) return;
     const candidates = this.d
@@ -101,6 +105,16 @@ export class SessionRefresher {
     return typeof run === "string" ? run : this.execute(run);
   }
 
+  /**
+   * 同步回答现在能不能开始换新（R31：总控的 refresh_session 要马上回答）：null 表示可以。
+   * 看 session 种类、记忆开关、epic 规划、是否正在换新、冷却（手动不看）和 guard（按触发方式选）。
+   * /handoff 命令文件是不是 Butler 的要读文件，留在 refresh() 里异步看。
+   */
+  precheck(sessionId: string, trigger: RefreshTrigger): RefreshResult | null {
+    const r = this.check(sessionId, trigger);
+    return "result" in r ? r.result : null;
+  }
+
   /** 链上任何一个 id 都认。 */
   isRefreshing(sessionId: string): boolean {
     return this.runOf(sessionId) !== null;
@@ -117,29 +131,34 @@ export class SessionRefresher {
     }
   }
 
-  /** 同步做完开始前的检查；通过就登记成正在换新（之后的异步检查期间也不会再起一次）。 */
-  private begin(sessionId: string, trigger: RefreshTrigger): RefreshResult | Run {
+  /** 开始前的同步检查（precheck 和 begin 共用）；通过时给出要登记的这次换新，不登记。 */
+  private check(sessionId: string, trigger: RefreshTrigger): { result: RefreshResult } | { run: Run } {
+    if (!this.d.memoryEnabled()) return { result: "memory_off" };
     const head = this.d.head(sessionId);
     const kind = head ? this.d.kindOf(head) : null;
-    if (!head || !kind || (kind === "epic" && head.epicId === null)) {
-      if (trigger !== "auto") this.d.log(`refresh ${sessionId}: not a session Butler can refresh`);
-      return "failed";
-    }
+    if (!head || !kind || (kind === "epic" && head.epicId === null)) return { result: "failed" };
     // epic 规划单独存放之前，换新会让 epic session 写一份进度 handoff，把记忆里的规划冲掉：手动也不行。
-    if (kind === "epic" && !this.d.epicPlanReady()) {
-      if (trigger !== "auto") this.d.log(`refresh ${head.id}: epic sessions cannot be refreshed before the epic plan is stored apart`);
-      return "failed";
-    }
-    if (this.isRefreshing(head.id)) return "already";
-    if (trigger !== "manual" && this.cooling(head.id)) return "cooldown";
+    if (kind === "epic" && !this.d.epicPlanReady()) return { result: "failed" };
+    if (this.isRefreshing(head.id)) return { result: "already" };
+    if (trigger !== "manual" && this.cooling(head.id)) return { result: "cooldown" };
     const gate = this.guardFor(trigger).check(head.id);
-    if (!gate.ok) return "busy";
-    if (trigger === "auto" && this.d.activity(gate.headId)?.background === true) return "busy";
-    const run: Run = {
-      headId: gate.headId, termId: gate.termId, kind, trigger, step: "handoff", epicId: head.epicId, ticket: head.ticketKey ?? "", stored: false,
+    if (!gate.ok) return { result: "busy" };
+    if (trigger === "auto" && this.d.activity(gate.headId)?.background === true) return { result: "busy" };
+    return {
+      run: { headId: gate.headId, termId: gate.termId, kind, trigger, step: "handoff", epicId: head.epicId, ticket: head.ticketKey ?? "", stored: false },
     };
+  }
+
+  /** 同步做完开始前的检查；通过就登记成正在换新（之后的异步检查期间也不会再起一次）。 */
+  private begin(sessionId: string, trigger: RefreshTrigger): RefreshResult | Run {
+    const r = this.check(sessionId, trigger);
+    if ("result" in r) {
+      if (r.result === "failed" && trigger !== "auto") this.d.log(`refresh ${sessionId}: not a session Butler can refresh now (or epic plans are not stored apart yet)`);
+      return r.result;
+    }
+    const run = r.run;
     this.runs.add(run);
-    this.d.log(`refresh ${run.headId} (${kind}, ${trigger}): started`);
+    this.d.log(`refresh ${run.headId} (${run.kind}, ${trigger}): started`);
     this.changed();
     return run;
   }
@@ -159,9 +178,10 @@ export class SessionRefresher {
   }
 
   private async steps(run: Run): Promise<RefreshResult> {
-    // 第一步：ticket 和 feature 总控输入 /handoff，等 capture 收进来；epic session 用 butler-epic 的 handoff 写进度，等版本变。
+    // 第一步：ticket 和 feature 总控输入 /handoff，等 capture 收进来；epic session 用 butler-epic 的 handoff 写进度，等进度变。
+    // epic 比的是进度不是 handoff 的版本：Butler 自己重新渲染（feature 有变化）也会写新版本，但进度原样带着（R29）。
     let before: string | null = null;
-    if (run.kind === "epic") before = await this.d.epicHandoffVersion(run.epicId!);
+    if (run.kind === "epic") before = await this.d.epicProgress(run.epicId!);
     else if (!(await this.d.handoffCommandReady())) {
       // 用户改过 /handoff 的命令文件：不知道它会输出什么，收不进来就只会白等 10 分钟。冷却期间不再试，也不再记日志。
       return this.fail(run, "/handoff is not Butler's own command (the command file was changed), so the session was not refreshed");
@@ -174,8 +194,8 @@ export class SessionRefresher {
     const handedOff =
       run.kind === "epic"
         ? await this.until(async () => {
-            const v = await this.d.epicHandoffVersion(run.epicId!);
-            return v !== null && v !== before;
+            const progress = await this.d.epicProgress(run.epicId!);
+            return progress !== null && progress !== before;
           }, REFRESH_HANDOFF_MS, EPIC_POLL_MS)
         : await this.until(() => run.stored, REFRESH_HANDOFF_MS, POLL_MS);
     if (!handedOff) return this.fail(run, `the handoff was not stored within ${REFRESH_HANDOFF_MS / 60_000} minutes`);

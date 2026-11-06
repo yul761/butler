@@ -487,33 +487,52 @@ describe("MemoryService.syncEpic (design 2026-11-01, epic handoff)", () => {
   });
 });
 
-describe("MemoryService.epicHandoffVersion (plan 16: refreshing an epic session)", () => {
+describe("MemoryService.epicProgress (plan 16 R29: refreshing an epic session)", () => {
   const scope = epicScope(1);
-  const active = (t: ReturnType<typeof setup>) => withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
+  const sessionWrites = (t: ReturnType<typeof setup>, summary: string) =>
+    withScope({ dataDir: t.dataDir, scope }, (s) => s.handoff({ summary, nextSteps: [], openQuestions: [] }));
+  const row: EpicFeatureRow = {
+    id: 3, name: "支付", status: "active", archivedAt: null, summaryAt: 5, summary: "接口联调完了", blockers: [], decisions: [], openQuestions: [],
+  };
 
-  it("is null before the epic scope has a handoff, then the id of the active one, and changes when the epic session writes", async () => {
+  it("is null without a handoff and without progress", async () => {
     const t = setup();
-    expect(await t.memory.epicHandoffVersion(1)).toBeNull();
+    expect(await t.memory.epicProgress(1)).toBeNull();
+    t.setEpicRows([row]);
+    t.epics.setPlan(1, "先做支付", 5);
     await t.memory.syncEpic(1);
-    const first = await t.memory.epicHandoffVersion(1);
-    expect(first).toBe((await active(t))?.id);
-    expect(first).not.toBeNull();
-    // 没有新写入时不变。
-    expect(await t.memory.epicHandoffVersion(1)).toBe(first);
-    await withScope({ dataDir: t.dataDir, scope }, (s) => s.handoff({ summary: "做到第二步", nextSteps: [], openQuestions: [] }));
-    const second = await t.memory.epicHandoffVersion(1);
-    expect(second).toBe((await active(t))?.id);
-    expect(second).not.toBe(first);
+    expect(await t.memory.epicProgress(1)).toBeNull();
+  });
+
+  it("takes the epic session's own handoff whole, and keeps the same progress when Butler renders it again", async () => {
+    const t = setup();
+    t.setEpicRows([row]);
+    t.epics.setPlan(1, "先做支付", 5);
+    await t.memory.syncEpic(1);
+    await sessionWrites(t, "  做到第二步  ");
+    expect(await t.memory.epicProgress(1)).toBe("做到第二步");
+    // Butler 自己重新渲染（feature 有变化）：handoff 换了版本，进度不变。
+    await t.memory.syncEpic(1);
+    t.setEpicRows([{ ...row, summary: "前端也联调完了" }]);
+    await t.memory.syncEpic(1);
+    const active = await withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
+    expect(active?.content).toContain("前端也联调完了");
+    expect(await t.memory.epicProgress(1)).toBe("做到第二步");
+    // epic session 写了新的进度：变了。
+    await sessionWrites(t, "做到第三步");
+    expect(await t.memory.epicProgress(1)).toBe("做到第三步");
+    await t.memory.syncEpic(1);
+    expect(await t.memory.epicProgress(1)).toBe("做到第三步");
     expect(t.logs).toEqual([]);
   });
 
   it("is null when memory is off, and logs a failed read without rejecting", async () => {
     const off = setup({ enabled: false });
-    await withScope({ dataDir: off.dataDir, scope }, (s) => s.handoff({ summary: "进度", nextSteps: [], openQuestions: [] }));
-    expect(await off.memory.epicHandoffVersion(1)).toBeNull();
+    await sessionWrites(off, "进度");
+    expect(await off.memory.epicProgress(1)).toBeNull();
     const t = setup();
     wrapScopes((sc) => sc === scope, (s) => ({ ...s, activeHandoff: () => Promise.reject(new Error("boom")) }));
-    await expect(t.memory.epicHandoffVersion(1)).resolves.toBeNull();
+    await expect(t.memory.epicProgress(1)).resolves.toBeNull();
     expect(t.logs.some((l) => l.includes("boom"))).toBe(true);
   });
 });

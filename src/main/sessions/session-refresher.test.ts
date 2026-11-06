@@ -36,8 +36,10 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
     threshold: o.threshold ?? 150_000,
     commandReady: o.commandReady ?? true,
     epicPlanReady: o.epicPlanReady ?? true,
-    epicVersion: "v1" as string | null,
-    epicVersionReads: 0,
+    memory: true,
+    /** epic scope 里 epic session 写的进度（epicProgress）。 */
+    epicProgress: "做到第一步" as string | null,
+    epicProgressReads: 0,
     /** 读 /handoff 命令文件时发生的事（这期间用户可能开始打字）。 */
     onCommandCheck: null as (() => void) | null,
   };
@@ -77,9 +79,10 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
       return state.commandReady;
     },
     epicPlanReady: () => state.epicPlanReady,
-    epicHandoffVersion: async () => {
-      state.epicVersionReads++;
-      return state.epicVersion;
+    memoryEnabled: () => state.memory,
+    epicProgress: async () => {
+      state.epicProgressReads++;
+      return state.epicProgress;
     },
     deliver: async (termId, text) => {
       typed.push({ termId, text, at: state.now });
@@ -166,26 +169,43 @@ describe("SessionRefresher (plan 16)", () => {
     expect(M().refreshEpicHandoff).toContain("set_epic_plan");
   });
 
-  it("waits for the epic handoff version to change for an epic session", async () => {
+  it("waits for the epic session's progress to change for an epic session", async () => {
     const t = setup();
     t.addTerm("e1", {
       kind: "epic", session: { epicId: 7 },
-      reactions: { [M().refreshEpicHandoff]: { ms: 42_000, run: () => (t.state.epicVersion = "v2") } },
+      reactions: { [M().refreshEpicHandoff]: { ms: 42_000, run: () => (t.state.epicProgress = "做到第二步") } },
     });
     const started = t.state.now;
     expect(await t.r.refresh("e1", "manual")).toBe("done");
     expect(t.texts()).toEqual([M().refreshEpicHandoff, "/clear", M().refreshResume("epic", "")]);
     expect(t.typed[1].at - started).toBeGreaterThanOrEqual(42_000);
     // 每 5 秒查一次，不是每一次 sleep 都查。
-    expect(t.state.epicVersionReads).toBeLessThanOrEqual(1 + Math.ceil(42_000 / 5_000) + 1);
+    expect(t.state.epicProgressReads).toBeLessThanOrEqual(1 + Math.ceil(42_000 / 5_000) + 1);
   });
 
-  it("does not count an epic version that stays null", async () => {
-    const t = setup();
-    t.state.epicVersion = null;
-    t.addTerm("e1", { kind: "epic", session: { epicId: 7 } });
-    expect(await t.r.refresh("e1", "manual")).toBe("failed");
-    expect(t.texts()).toEqual([M().refreshEpicHandoff]);
+  it("does not count epic progress that stays the same or becomes null (R29: Butler's own re-render keeps the progress)", async () => {
+    const same = setup();
+    same.addTerm("e1", { kind: "epic", session: { epicId: 7 } });
+    expect(await same.r.refresh("e1", "manual")).toBe("failed");
+    expect(same.texts()).toEqual([M().refreshEpicHandoff]);
+    expect(same.logs.some((l) => l.includes("not stored"))).toBe(true);
+
+    const gone = setup();
+    gone.addTerm("e1", {
+      kind: "epic", session: { epicId: 7 },
+      reactions: { [M().refreshEpicHandoff]: { ms: 10_000, run: () => (gone.state.epicProgress = null) } },
+    });
+    expect(await gone.r.refresh("e1", "manual")).toBe("failed");
+    expect(gone.texts()).toEqual([M().refreshEpicHandoff]);
+
+    // 之前没有进度：第一次写进度就算写完了。
+    const first = setup();
+    first.state.epicProgress = null;
+    first.addTerm("e1", {
+      kind: "epic", session: { epicId: 7 },
+      reactions: { [M().refreshEpicHandoff]: { ms: 10_000, run: () => (first.state.epicProgress = "做到第一步") } },
+    });
+    expect(await first.r.refresh("e1", "manual")).toBe("done");
   });
 
   it("aborts when the guard fails between steps", async () => {
@@ -318,7 +338,7 @@ describe("SessionRefresher (plan 16)", () => {
     t.addTerm("f1", { kind: "feature", session: { featureId: 3 } });
     t.addTerm("e1", {
       kind: "epic", session: { epicId: 7 }, context: 160_000,
-      reactions: { [M().refreshEpicHandoff]: { ms: 10_000, run: () => (t.state.epicVersion = "v2") } },
+      reactions: { [M().refreshEpicHandoff]: { ms: 10_000, run: () => (t.state.epicProgress = "做到第二步") } },
     });
     for (let i = 0; i < 4; i++) {
       t.r.autoCheck();
@@ -380,6 +400,65 @@ describe("SessionRefresher (plan 16)", () => {
     expect(t.r.isRefreshing("s1")).toBe(false);
     term.block = null;
     expect(await t.r.refresh("s1", "coordinator")).toBe("done");
+  });
+
+  it("types nothing for any kind or trigger while memory is off (R30)", async () => {
+    const t = setup();
+    t.state.memory = false;
+    t.addTerm("s1");
+    t.addTerm("f1", { kind: "feature", session: { featureId: 3 } });
+    t.addTerm("e1", { kind: "epic", session: { epicId: 7 } });
+    t.r.autoCheck();
+    await t.settle();
+    for (const id of ["s1", "f1", "e1"]) {
+      for (const trigger of ["auto", "coordinator", "manual"] as const) {
+        expect(t.r.precheck(id, trigger)).toBe("memory_off");
+        expect(await t.r.refresh(id, trigger)).toBe("memory_off");
+      }
+    }
+    expect(t.typed).toEqual([]);
+    expect(t.state.epicProgressReads).toBe(0);
+    t.state.memory = true;
+    expect(await t.r.refresh("s1", "manual")).toBe("done");
+  });
+
+  it("precheck answers at once without starting anything (R31)", async () => {
+    const t = setup();
+    const term = t.addTerm("s1");
+    t.addTerm("fix", { kind: null });
+    expect(t.r.precheck("s1", "auto")).toBeNull();
+    expect(t.r.precheck("s1", "coordinator")).toBeNull();
+    expect(t.r.isRefreshing("s1")).toBe(false);
+    expect(t.r.precheck("fix", "manual")).toBe("failed");
+    expect(t.r.precheck("nobody", "manual")).toBe("failed");
+    // 草稿：哪种触发都挡；「需要你」和后台任务只挡自动。
+    term.block = "draft";
+    expect(t.r.precheck("s1", "manual")).toBe("busy");
+    term.block = null;
+    term.needsYou = true;
+    expect(t.r.precheck("s1", "auto")).toBe("busy");
+    expect(t.r.precheck("s1", "coordinator")).toBeNull();
+    term.needsYou = false;
+    term.background = true;
+    expect(t.r.precheck("s1", "auto")).toBe("busy");
+    expect(t.r.precheck("s1", "manual")).toBeNull();
+    term.background = false;
+    // 正在换新：already（新 id 也认）。
+    const p = t.r.refresh("s1", "manual");
+    expect(t.r.precheck("s1", "coordinator")).toBe("already");
+    expect(await p).toBe("done");
+    expect(t.r.precheck(term.chain[1], "manual")).toBeNull();
+    // 失败过：总控和自动是 cooldown，手动不看。
+    term.deliverResult = { "/handoff": "exited" };
+    expect(await t.r.refresh("s1", "manual")).toBe("failed");
+    expect(t.r.precheck("s1", "coordinator")).toBe("cooldown");
+    expect(t.r.precheck("s1", "auto")).toBe("cooldown");
+    expect(t.r.precheck("s1", "manual")).toBeNull();
+    // epic 规划单独存放之前：哪种触发都 failed。
+    const e = setup({ epicPlanReady: false });
+    e.addTerm("e1", { kind: "epic", session: { epicId: 7 } });
+    expect(e.r.precheck("e1", "manual")).toBe("failed");
+    expect(e.r.precheck("e1", "auto")).toBe("failed");
   });
 
   it("refuses a second refresh of the same session while one is running", async () => {

@@ -403,15 +403,20 @@ export class MemoryService {
   }
 
   /**
-   * epic scope 当前生效的 handoff 的 id（计划 16：epic 总控换新时，等它用 butler-epic 的 handoff 写完进度）。
-   * 还没有 handoff、记忆关着、读失败（记日志）时为 null；永不 reject。和 view 一样只读，不进写入队列。
+   * epic scope 里 epic session 写的进度（计划 16 R29：epic 总控换新时，等它用 butler-epic 的 handoff 写完进度）。
+   * 当前生效的 handoff 是 Butler 渲染的就取里面的进度那一段，不是的就是 epic session 自己写的整份（见 carriedEpicProgress）。
+   * Butler 重新渲染时进度原样带着走，所以只有 epic session 写了新的进度才会变。
+   * 还没有 handoff、没有进度、记忆关着、读失败（记日志）时为 null；永不 reject。和 view 一样只读，不进写入队列。
    */
-  async epicHandoffVersion(epicId: number): Promise<string | null> {
+  async epicProgress(epicId: number): Promise<string | null> {
     if (!this.d.enabled()) return null;
     try {
-      return await withScope({ dataDir: this.d.dataDir, scope: epicScope(epicId) }, async (s) => (await s.activeHandoff())?.id ?? null);
+      return await withScope({ dataDir: this.d.dataDir, scope: epicScope(epicId) }, async (s) => {
+        const active = await s.activeHandoff();
+        return active ? carriedEpicProgress(active.content) : null;
+      });
     } catch (e) {
-      this.log(`memory epicHandoffVersion ${epicId} failed`, e);
+      this.log(`memory epicProgress ${epicId} failed`, e);
       return null;
     }
   }
