@@ -356,29 +356,6 @@ const VERDICT_REASON = { zh: "测试进程在等一个不会来的信号", en: "
 const VERDICT_ACTION = { zh: "确认测试进程没有在动，再决定要不要杀掉重跑", en: "Check that the test process is idle, then decide whether to kill and rerun it" };
 const STUCK_CHECK_MS = 1000;
 
-/** main 进程里记下的通知。 */
-type Captured = { notifications: Electron.Notification[] };
-
-/** 接过系统通知：不在桌面上弹出来，测试自己“点”。必须在 session 卡住之前调用。 */
-async function captureNotifications(app: ElectronApplication): Promise<void> {
-  await app.evaluate(({ Notification }) => {
-    const shown: Electron.Notification[] = [];
-    (globalThis as unknown as Captured).notifications = shown;
-    Notification.isSupported = () => true;
-    Notification.prototype.show = function show(this: Electron.Notification) {
-      shown.push(this);
-    };
-  });
-}
-
-const notifications = (app: ElectronApplication) =>
-  app.evaluate(() => (globalThis as unknown as Captured).notifications.map((n) => ({ title: n.title, body: n.body })));
-
-const clickNotification = (app: ElectronApplication, index: number) =>
-  app.evaluate((_, i) => void (globalThis as unknown as Captured).notifications[i].emit("click"), index);
-
-const hideWindow = (app: ElectronApplication) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
-const windowVisible = (app: ElectronApplication) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible());
 const resizeWindow = (app: ElectronApplication, width: number, height: number) =>
   app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height), { width, height });
 
@@ -404,9 +381,9 @@ function dbRows<T>(s: Sandbox, sql: string, ...params: string[]): T[] {
 
 /**
  * 设计文档 2026-10-31（ticket 实时状态）：假 claude 写 transcript 和真实位置的 tasks/<id>.output → feature 页显示活动
- * → 本地检查（真的 ps、真的 pty pid）判定可疑，真的 headless 判断 stuck: true → 红点、通知 → 面板展开、缩回、再打开内容还在，
- * 终端区至少占一半高，终端能输入 → 忽略 → 恢复活动红点消失、再次卡住 → 开修复 session，收到四条规则，不算总控
- * → 点通知展开面板，feature 页不重新挂载，当前终端不变 → 重启后换成英文再卡住一次。
+ * → 本地检查（真的 ps、真的 pty pid）判定可疑，真的 headless 判断 stuck: true → 红点 → 面板展开、缩回、再打开内容还在，
+ * 终端区至少占一半高，终端能输入 →「现在」页的需要你里有它 → 忽略 → 恢复活动红点消失、再次卡住 → 开修复 session，收到四条规则，不算总控
+ * → 从「现在」页点它回到卡住的终端 → 重启后换成英文再卡住一次。
  * 设了 BUTLER_E2E_SHOTS_DIR 时截图存到那里，文件名 live-status-*.png（CI 不设）。
  */
 test("live status and stuck handling on the feature page", async ({ makeSandbox, launch }) => {
@@ -430,7 +407,6 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   // 渲染进程的异常会让整页变白：一个都不能有。
   const pageErrors: string[] = [];
   page.on("pageerror", (e) => pageErrors.push(e.message));
-  await captureNotifications(app);
   await completeWizard(page, s);
   await createCheckoutFeature(page, s);
   await newFeatureTicket(page, "DMS-1", "frontend");
@@ -472,16 +448,12 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await expect(row("DMS-2").locator(".status")).not.toHaveText("");
   await expect(row("DMS-2").locator(".status .activity")).toHaveCount(0);
 
-  // 4. 两次检查没变化 → 真的 headless 判断 stuck: true → 红点、淡红底色和一条通知。点红点之前面板是关着的。
+  // 4. 两次检查没变化 → 真的 headless 判断 stuck: true → 红点和淡红底色（不再弹系统通知）。点红点之前面板是关着的。
   const dot = row("DMS-1").getByRole("button", { name: `DMS-1 ${S.stuckDot}`, exact: true });
   const panel = page.locator(".stuck-panel");
   await expect(dot).toBeVisible();
   await expect(row("DMS-1")).toHaveClass(/stuck/);
   await expect(panel).toHaveCount(0);
-  await expect.poll(() => notifications(app)).toHaveLength(1);
-  const [shown] = await notifications(app);
-  expect(shown.title).toContain("DMS-1");
-  expect(shown.body).toContain(VERDICT_REASON.zh);
 
   // 判断用的 prompt 证明这些都是真的读到的：transcript、tasks 目录的输出文件、ps 读到的子进程 CPU（读不到时写的是“未知”）。
   expect(judgePrompts()).toHaveLength(1);
@@ -553,10 +525,18 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await expect.poll(() => terminalText(page)).toContain("收到：hello with the panel open");
   await expect(panel).toBeVisible();
 
-  // 9. 点这一行的其他位置和“看终端”都进 ticket 页。在别的页面上，侧栏的 feature 行也有红点。回来时面板还开着。
+  // 9. 点这一行的其他位置和“看终端”都进 ticket 页。在别的页面上，侧栏的 feature 行也有红点。
+  //    「现在」页的需要你里有这一行（写着卡住和理由），侧栏的“现在”后面是 1。回来时面板还开着。
   await row("DMS-1").locator(".status").click();
   await onTicketPage("DMS-1");
   await expect(page.locator(".sidebar .feature-group .stuck-mark")).toBeVisible();
+  await page.getByRole("button", { name: S.home, exact: true }).click();
+  const need = page.locator(".now-needs .now-need");
+  await expect(need).toHaveCount(1);
+  await expect(need.locator(".now-key")).toHaveText("DMS-1");
+  await expect(need.locator(".name")).toHaveText("checkout");
+  await expect(need.locator(".why")).toHaveText(S.nowStuckWith(VERDICT_REASON.zh));
+  await expect(page.locator(".sidebar .nav.home .needs-you-badge")).toHaveText("1");
   await featurePage();
   await expect(panel).toBeVisible();
   // 面板是记住的状态，不是这次点开的：回到这一页不滚动。
@@ -572,13 +552,11 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await page.waitForTimeout(4 * STUCK_CHECK_MS);
   await expect(dot).toHaveCount(0);
   expect(judgePrompts()).toHaveLength(1);
-  expect(await notifications(app)).toHaveLength(1);
 
-  // 11. 命令又有输出之后再卡住：再判断一次、再提醒一次，面板显示新的输出。面板记着开，这次是自己出现的，不滚动。
+  // 11. 命令又有输出之后再卡住：再判断一次，面板显示新的输出。面板记着开，这次是自己出现的，不滚动。
   await scrollOverviewToTop();
   appendFileSync(outputFile, "step 9 of 8\n");
   await expect(dot).toBeVisible();
-  await expect.poll(() => notifications(app)).toHaveLength(2);
   expect(judgePrompts()).toHaveLength(2);
   await expect(panel.locator(".stuck-log")).toContainText("step 9 of 8");
   expect(await overviewScroll()).toBe(0);
@@ -587,7 +565,7 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   appendFileSync(outputFile, "step 10 of 8\n");
   await expect(dot).toHaveCount(0);
   await expect(dot).toBeVisible();
-  await expect.poll(() => notifications(app)).toHaveLength(3);
+  expect(judgePrompts()).toHaveLength(3);
 
   // 13. “开新 session 解决”（session:openFix）：feature 页上多一个“修复 DMS-1”的 session，切到它的终端。
   await fix.click();
@@ -623,65 +601,34 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await fix.click();
   await expect(page.locator(".feature-page .sessions-bar .session")).toHaveCount(2);
 
-  // 16. 点通知（feature 页已经开着，ticket 区收起、面板关着）：窗口回来，展开 ticket 区和面板，页面不重新挂载，当前终端不变。
-  //     切到排在后面的那个终端：页面重新挂载的话，当前终端会回到第一个。
-  await page.locator(".feature-page .sessions-bar .session").last().click();
-  const active = page.locator(".feature-page .sessions-bar .session.active");
-  const activeTitle = (await active.getAttribute("title"))!;
-  const screen = await terminalText(page);
-  await page.evaluate(() => document.querySelector(".feature-page")!.setAttribute("data-e2e-mounted", "1"));
-  // 面板已经开着但滚出了视野：点通知也要滚过去，再点一次也一样。
-  for (let i = 0; i < 2; i++) {
-    await scrollOverviewToTop();
-    await expect(fix).not.toBeInViewport();
-    await clickNotification(app, 2);
-    await expect(fix).toBeInViewport();
-  }
-  await dot.click();
-  await expect(panel).toHaveCount(0);
-  await page.locator(".feature-page .feature-tickets .section-toggle").click();
-  await expect(page.locator(".feature-page .ticket-table")).toHaveCount(0);
-  await expect(page.locator(".feature-page .feature-tickets .stuck-mark")).toBeVisible();
-  await hideWindow(app);
-  await clickNotification(app, 0);
-  await expect.poll(() => windowVisible(app)).toBe(true);
-  await expect(fix).toBeInViewport();
-  await expect(page.locator(".feature-page[data-e2e-mounted]")).toHaveCount(1);
-  await expect(active).toHaveAttribute("title", activeTitle);
-  expect(await terminalText(page)).toBe(screen);
+  // 16. 在别的页面上从「现在」页点需要你里的 DMS-1：进 DMS-1 的 ticket 页，当前终端是卡住的那个 session。
+  await ticketPage("DMS-2");
+  await page.getByRole("button", { name: S.home, exact: true }).click();
+  await page.locator(".now-needs .now-need").filter({ has: page.locator(".now-key", { hasText: /^DMS-1$/ }) }).click();
+  await onTicketPage("DMS-1");
+  await expect(page.locator(".sessions-bar .session.active")).toHaveAttribute("title", new RegExp(`\\n${stuckId}$`));
+  // 卡住的 session 的终端：命令还在跑。
+  await expect.poll(() => terminalText(page)).toContain("running");
 
-  // 17. 在别的页面上点通知：打开这个 feature 页，展开面板。
-  await dot.click();
-  await expect(panel).toHaveCount(0);
-  await ticketPage("DMS-2");
-  await clickNotification(app, 1);
-  await onFeaturePage();
-  await expect(fix).toBeInViewport();
-  // 通知只滚这一次：再回到这一页不滚动。
-  await ticketPage("DMS-2");
+  // 17. 修复 session 比总控新，但 feature 汇总还是 fork 总控：它不会被选成总控。
   await featurePage();
-  await expect(panel).toBeVisible();
-  expect(await overviewScroll()).toBe(0);
-
-  // 18. 修复 session 比总控新，但 feature 汇总还是 fork 总控：它不会被选成总控。
   const progress = page.locator(".feature-page .feature-progress");
   await progress.getByRole("button", { name: S.runFeatureSummary, exact: true }).click();
   await expect(progress.getByText(S.featureSummaryStored, { exact: true })).toBeVisible();
   expect(fakeLog()).toContain(`--resume ${coordinatorId} --fork-session`);
   expect(fakeLog()).not.toContain(`--resume ${fixId}`);
 
-  // 19. 卡住的 session 还在被监视时退出：监视先停，数据库才关，日志里没有错误。
+  // 18. 卡住的 session 还在被监视时退出：监视先停，数据库才关，日志里没有错误。
   expect(pageErrors).toEqual([]);
   await app.close();
   const log = () => readFileSync(join(s.butlerHome, "logs", "main.log"), "utf8");
   expect(log()).not.toMatch(/activity tick failed|activity of session|stuck judge/);
 
-  // 20. 重启后是英文：卡住状态不留，DMS-2 新跑的命令重新判断，判断结果和界面都是英文。
+  // 19. 重启后是英文：卡住状态不留，DMS-2 新跑的命令重新判断，判断结果和界面都是英文。
   s.lang = "en";
   const E = STRINGS.en;
   const english = await launch(s);
   const en = english.page;
-  await captureNotifications(english.app);
   await en.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-2" }).click();
   await en.getByRole("button", { name: `+ ${E.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(en)).toContain("fake claude ready");
@@ -698,6 +645,11 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await expect(enPanel.getByRole("button", { name: E.stuckFix, exact: true })).toBeVisible();
   await shot(en, "live-status-en.png", "light");
   await shot(en, "live-status-en-dark.png", "dark");
+  // 英文的「现在」页：需要你里是 DMS-2，写着卡住和英文的理由。
+  await en.getByRole("button", { name: E.home, exact: true }).click();
+  await expect(en.locator(".now-needs h3")).toHaveText(`${E.nowNeedsYou}1`);
+  await expect(en.locator(".now-needs .now-need .now-key")).toHaveText(["DMS-2"]);
+  await expect(en.locator(".now-needs .now-need .why")).toHaveText(E.nowStuckWith(VERDICT_REASON.en));
 });
 
 /**

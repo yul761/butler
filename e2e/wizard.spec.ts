@@ -3,11 +3,11 @@ import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
 import { completeWizard, expect, test } from "./fixtures";
 
-test("first run: the wizard finds claude, installs hooks into the given config dir and lands on the brief", async ({ makeSandbox, launch }) => {
+test("first run: the wizard finds claude, installs hooks into the given config dir and lands on the Now page", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
-  await expect(page.getByRole("button", { name: S.regenerate, exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: S.nowTitle, exact: true })).toBeVisible();
   const settings = readFileSync(join(s.claudeConfigDir, "settings.json"), "utf8");
   expect(settings).toContain("butler-hook");
   expect(readFileSync(join(s.claudeConfigDir, "commands", "handoff.md"), "utf8")).toContain("butler-handoff");
@@ -29,13 +29,13 @@ test("the wizard does not let the user continue without a working claude", async
 });
 
 // 计划 4 遗留（Ruling P5-PF7）：onboardingDone 写进了数据库，启动时只读一次。
-test("after the wizard is finished, a relaunch goes straight to the brief", async ({ makeSandbox, launch }) => {
+test("after the wizard is finished, a relaunch goes straight to the Now page", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const first = await launch(s);
   await completeWizard(first.page, s);
   await first.app.close();
   const { page } = await launch(s);
-  await expect(page.getByRole("button", { name: S.regenerate, exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: S.nowTitle, exact: true })).toBeVisible();
   await expect(page.getByTestId("wizard")).toHaveCount(0);
 });
 
@@ -51,5 +51,5 @@ test("Settings → rerun shows the wizard again at once, with the saved claude p
   await expect(page.getByPlaceholder(S.generalPlaceholders.claudePath, { exact: true })).toHaveValue(s.claudePath);
   await page.getByRole("button", { name: S.wizardSkip, exact: true }).click();
   await expect(page.getByTestId("wizard")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: S.regenerate, exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: S.nowTitle, exact: true })).toBeVisible();
 });

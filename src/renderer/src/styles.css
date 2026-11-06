@@ -184,10 +184,12 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .now-needs h3 { display: flex; gap: 6px; align-items: baseline; margin: 0 0 4px; font-size: 13px; color: var(--danger); }
 .now-needs h3 .count { font-weight: normal; }
 .now-need { display: flex; gap: 10px; align-items: baseline; width: 100%; padding: 3px 0; border: none; border-radius: 0; background: transparent; text-align: left; }
+/* 淡红底上 --muted 和 --accent 不到 4.5:1（浅色主题）：这一块的文字都用 --text，“打开”用 --danger。 */
+.now-need .now-key { color: var(--text); }
 .now-need .name { color: var(--text); white-space: nowrap; }
 .now-need .why { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
-.now-need .muted { white-space: nowrap; }
-.now-need .go { color: var(--accent); white-space: nowrap; }
+.now-need .since { color: var(--text); white-space: nowrap; }
+.now-need .go { color: var(--danger); white-space: nowrap; }
 .now-need:hover .go { text-decoration: underline; }
 .now-epic { margin: 2px 0 8px; }
 .now-epic > h3, .now-feature > h4 { margin: 0; padding: 4px; border-radius: 6px; }

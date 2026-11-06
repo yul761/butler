@@ -263,10 +263,7 @@ const ZH = {
   butlerHome: "Butler 数据目录",
   claudeSettings: "Claude Code 设置文件",
   loading: "加载中…",
-  // 下面两条只剩还没改写的 e2e 在用（简报页已经去掉），e2e 改写时一起删。
-  regenerate: "重新生成",
-  briefSections: { first: "🔴 先做", today: "🟡 今天", watch: "⚪ 留意" },
-  itemActions: { open: "打开", done: "完成", snooze: "推迟到明天", ignore: "忽略", claim: "去认领" } as Record<string, string>,
+  itemActions: { done: "完成", snooze: "推迟到明天", ignore: "忽略" } as Record<string, string>,
   // 「现在」页（计划 14）。
   nowTitle: "现在",
   nowRunning: (n: number) => `${n} 个 session 在跑`,
@@ -299,7 +296,6 @@ const ZH = {
   nowUsageKind: { ticket: "ticket session", coordinator: "总控", subagent: "子 agent", headless: "后台任务" } as Record<UsageKind, string>,
   nowUsageByKind: "按类型",
   nowUsageByModel: "按模型（按价格折算）",
-  mergeEventsTitle: "合并协调",
   mergeEvent: {
     wait: (who: string, other: string) => `${who} 等 ${other} 合完再合`,
     proceed_conflict: (who: string, other: string) => `${who} 先合，${other} 之后要 rebase`,

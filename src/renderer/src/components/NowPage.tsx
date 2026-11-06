@@ -74,7 +74,7 @@ function NeedsYou({ view, now, onOpen }: { view: NowView; now: number; onOpen: (
             <span className="now-key">{place.label}</span>
             {place.name && <span className="name">{place.name}</span>}
             <span className="why">{needsYouText(r, S)}</span>
-            <span className="muted">{since(r, now)}</span>
+            <span className="since">{since(r, now)}</span>
             <span className="go">{S.nowOpen}</span>
           </button>
         );

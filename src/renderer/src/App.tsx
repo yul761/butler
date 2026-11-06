@@ -60,17 +60,21 @@ export function App() {
   }, []);
   /** 每次 refresh 的序号：只有最新一次的结果写进状态（hook 事件密集时，慢的旧响应不会盖掉新的）。 */
   const refreshSeq = useRef(0);
-  /** 重读 ticket 列表；失败时报错并返回 false。 */
+  /** 重读 ticket 列表和「现在」页；列表失败时报错并返回 false。 */
   const refresh = useCallback(async (): Promise<boolean> => {
     const seq = ++refreshSeq.current;
+    // 「现在」页单独取、单独报错：它失败了侧栏和列表照样刷新。
+    void api.nowView().then(
+      (n) => seq === refreshSeq.current && setNowView(n),
+      (e) => seq === refreshSeq.current && reportError(e),
+    );
     try {
-      const [t, f, e, u, n] = await Promise.all([api.listTickets(), api.listFeatures(), api.listEpics(), api.unclaimed(), api.nowView()]);
+      const [t, f, e, u] = await Promise.all([api.listTickets(), api.listFeatures(), api.listEpics(), api.unclaimed()]);
       if (seq !== refreshSeq.current) return true;
       setTickets(t);
       setFeatures(f);
       setEpics(e);
       setUnclaimedCount(u.length);
-      setNowView(n);
       return true;
     } catch (e) {
       if (seq === refreshSeq.current) reportError(e);

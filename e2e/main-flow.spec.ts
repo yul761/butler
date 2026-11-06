@@ -6,11 +6,11 @@ import { completeWizard, expect, terminalText, test } from "./fixtures";
 
 /**
  * 设计文档 11 节的主流程（计划 5 任务 9）：真实的主进程、preload、React 界面、node-pty、butler-hook（经 shell 执行）、
- * HookInbox、HandoffRunner、StateCore 和简报引擎；只有 claude 是假的。个人 LLM 是关的：简报只断言确定性的部分。
- * 定位都用精确匹配或 role（Ruling P5-PF4）：S.memoryHandoff 是 S.memoryHint 的子串，S.home、S.regenerate、
+ * HookInbox、HandoffRunner、StateCore 和「现在」页；只有 claude 是假的。
+ * 定位都用精确匹配或 role（Ruling P5-PF4）：S.memoryHandoff 是 S.memoryHint 的子串，S.home、
  * S.runHandoff、S.newSession、S.newTicket 也都出现在别的提示文字里。
  */
-test("new ticket → session → hook → handoff → memory → morning brief → open with prefill", async ({ makeSandbox, launch }) => {
+test("new ticket → session → hook → handoff → memory → Now page → back to the same terminal", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const { page, console: messages } = await launch(s);
   const mainLog = join(s.butlerHome, "logs", "main.log");
@@ -61,16 +61,27 @@ test("new ticket → session → hook → handoff → memory → morning brief �
     await expect(chain.locator("li.why-current")).toContainText("用 PostgreSQL");
     await expect(chain.locator("li.why-current")).toContainText(S.whyState.current);
 
-    // 6. 早间简报：“先做”里有这条合并后任务；点“打开”回到同一个终端并预填提示（不回车）。
+    // 6. 「现在」页：这个 session 回完话停着，是“空闲”里的一行（空闲默认收起）；点它回到 ticket 页的同一个终端。
+    const sessionTitle = await page.locator(".sessions-bar .session.active").getAttribute("title");
+    const screen = await terminalText(page);
     await page.getByRole("button", { name: S.home, exact: true }).click();
-    await page.getByRole("button", { name: S.regenerate, exact: true }).click();
-    const first = page.locator(".brief-section").filter({ has: page.getByRole("heading", { name: S.briefSections.first, exact: true }) });
-    const item = first.locator(".brief-item").filter({ hasText: "合并后任务：改 staging 配置" });
-    await expect(item).toBeVisible();
-    await item.getByRole("button", { name: S.itemActions.open, exact: true }).click();
-    await expect.poll(() => terminalText(page)).toContain("继续 follow-up：改 staging 配置（来自 E2E-1）");
+    await expect(page.getByRole("heading", { name: S.nowTitle, exact: true })).toBeVisible();
+    await expect(page.locator(".now-needs")).toHaveCount(0);
+    const idle = page.locator(".now-idle");
+    const idleToggle = idle.locator(":scope > .section-toggle");
+    await expect(idleToggle).toContainText(S.nowIdle(1));
+    await expect(idleToggle).toHaveAttribute("aria-expanded", "false");
+    await idleToggle.click();
+    const row = idle.locator(".now-row").filter({ has: page.locator(".now-key", { hasText: /^E2E-1$/ }) });
+    await expect(row.locator(".main")).toHaveText(S.nowStopped);
+    await row.click();
+    await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
     await expect(page.locator(".terminal-wrap")).toHaveCount(1);
-    expect(await terminalText(page)).not.toContain("收到：继续");
+    await expect(page.locator(".sessions-bar .session.active")).toHaveAttribute("title", sessionTitle!);
+    // 终端重新挂上之后回放之前的输出：还是这个 session 的就绪行和刚才的回复。
+    const ready = /fake claude ready \([0-9a-f]+\)/.exec(screen)![0];
+    await expect.poll(() => terminalText(page)).toContain(ready);
+    expect(await terminalText(page)).toContain("收到：hello");
 
     // 7. CSP 没有拦下任何东西（任务 6 的运行时检查，xterm 在其中）：渲染进程的控制台，以及主进程的日志——
     //    附上 console 监听之前（页面加载时）的违规只在日志里。日志第一次写入时才创建，没有这个文件就是什么都没记。

@@ -41,10 +41,11 @@ export function Sidebar({ tickets, features, epics, unclaimedCount, needsYouCoun
   );
   return (
     <nav className="sidebar">
-      <button className={cls("nav home", route.page === "home")} onClick={() => onNavigate({ page: "home" })}>
+      {/* 可访问名固定是“现在”：红点里的数字只是装饰（读屏看 title），不算进按钮的名字。 */}
+      <button className={cls("nav home", route.page === "home")} aria-label={S.home} onClick={() => onNavigate({ page: "home" })}>
         {S.home}
         {needsYouCount > 0 && (
-          <span className="needs-you-badge" title={S.nowNeedsYouBadge(needsYouCount)}>
+          <span className="needs-you-badge" aria-hidden="true" title={S.nowNeedsYouBadge(needsYouCount)}>
             {needsYouCount}
           </span>
         )}

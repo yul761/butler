@@ -413,7 +413,7 @@ test("an epic from planning to archive: features from the epic session, the plan
   await archiveEpic.click();
   await expect(page.locator(".sidebar .epic-group")).toHaveCount(0);
   await expect(page.locator(".epic-page")).toHaveCount(0);
-  await expect(side.locator("button.nav.active")).toHaveText(S.home);
+  await expect(side.locator("button.nav.active")).toHaveAccessibleName(S.home);
   for (const f of configs) expect(existsSync(f), f).toBe(false);
   expect(archivedAt().every((r) => r.at !== null)).toBe(true);
 
@@ -624,7 +624,7 @@ test("archiving waits for fresh summaries, and the user can walk away meanwhile"
   const { sidebarTicket, row, goToEpic, archiveEpic } = places(page);
   const featureLink = (name: string) => side.locator(".ticket.feature").filter({ hasText: name });
   const onPage = (name: string) => expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
-  const onHome = () => expect(side.locator("button.nav.active")).toHaveText(S.home);
+  const onHome = () => expect(side.locator("button.nav.active")).toHaveAccessibleName(S.home);
   const epicGone = () => expect(side.locator(".epic-group")).toHaveCount(0);
   const waitingButton = page.locator(".ticket-header button:disabled");
 

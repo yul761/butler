@@ -259,10 +259,7 @@ export const EN: UiStrings = {
   butlerHome: "Butler data folder",
   claudeSettings: "Claude Code settings file",
   loading: "Loading…",
-  // 下面两条只剩还没改写的 e2e 在用（简报页已经去掉），e2e 改写时一起删。
-  regenerate: "Regenerate",
-  briefSections: { first: "🔴 Do first", today: "🟡 Today", watch: "⚪ Watch" },
-  itemActions: { open: "Open", done: "Done", snooze: "Snooze until tomorrow", ignore: "Ignore", claim: "Claim" } as Record<string, string>,
+  itemActions: { done: "Done", snooze: "Snooze until tomorrow", ignore: "Ignore" } as Record<string, string>,
   // The Now page (plan 14).
   nowTitle: "Now",
   nowRunning: (count: number) => `${n(count, "session")} running`,
@@ -295,7 +292,6 @@ export const EN: UiStrings = {
   nowUsageKind: { ticket: "ticket sessions", coordinator: "coordinators", subagent: "subagents", headless: "background jobs" } as Record<UsageKind, string>,
   nowUsageByKind: "By kind",
   nowUsageByModel: "By model (price-weighted)",
-  mergeEventsTitle: "Merge coordination",
   mergeEvent: {
     wait: (who: string, other: string) => `${who} waits for ${other} to finish merging`,
     proceed_conflict: (who: string, other: string) => `${who} merges first; ${other} will need to rebase`,
