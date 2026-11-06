@@ -335,6 +335,30 @@ describe("ActivityMonitor activity", () => {
     expect(h.monitor.lastReply("s1")).toBeNull();
   });
 
+  it("gives the whole last reply with its message id", async () => {
+    const h = harness();
+    h.openSession("s1");
+    await h.beat();
+    expect(h.monitor.lastReplyOf("s1")).toBeNull();
+    const long = `${"前".repeat(600)}要我关掉吗？`;
+    h.transcript("s1", { type: "assistant", timestamp: AT, message: { id: "msg_1", stop_reason: "end_turn", content: [{ type: "text", text: long }] } });
+    await h.beat();
+    expect(h.monitor.lastReplyOf("s1")).toEqual({ id: "msg_1", text: long });
+    expect(h.monitor.lastReplyOf("nope")).toBeNull();
+    h.open.delete("s1");
+    await h.beat();
+    expect(h.monitor.lastReplyOf("s1")).toBeNull();
+  });
+
+  it("has no last reply to judge when the reply has no message id", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.transcript("s1", { type: "assistant", timestamp: AT, message: { stop_reason: "end_turn", content: [{ type: "text", text: "要我关掉吗？" }] } });
+    await h.beat();
+    expect(h.monitor.lastReply("s1")).toBe("要我关掉吗？");
+    expect(h.monitor.lastReplyOf("s1")).toBeNull();
+  });
+
   it("copes with no transcript file being found", async () => {
     const h = harness();
     h.deps.transcriptFile = () => null;

@@ -26,10 +26,12 @@ export interface TranscriptState {
   turnOpen: boolean;
   /** 最后一条带文字的 assistant 回复（总控结束 session 前看它是不是在问用户）；还没有时为 null。 */
   lastReply: string | null;
+  /** lastReply 所在那条 assistant 记录的 message.id（“需要你”按它只判断一次）；没有 id 时为 null。 */
+  lastReplyId: string | null;
 }
 
 export function newTranscriptState(): TranscriptState {
-  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null };
+  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null, lastReplyId: null };
 }
 
 /** 用户按 Esc 打断时 Claude Code 写的文字（也有 for tool use 的说法）；它后面不会再有结束这一轮的记录。 */
@@ -83,7 +85,10 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
     const text = message.content
       .flatMap((b) => (isObj(b) && b.type === "text" && typeof b.text === "string" && b.text.trim() ? [b.text.trim()] : []))
       .join("\n");
-    if (text) s.lastReply = text;
+    if (text) {
+      s.lastReply = text;
+      s.lastReplyId = typeof message.id === "string" && message.id ? message.id : null;
+    }
     for (const block of message.content) {
       if (!isObj(block) || block.type !== "tool_use" || typeof block.id !== "string") continue;
       const input = isObj(block.input) ? block.input : {};

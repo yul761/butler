@@ -1,0 +1,238 @@
+import { afterEach, describe, expect, it } from "vitest";
+import type { ActivityKind } from "../../shared/activity";
+import type { HeadlessOutcome, HeadlessRequest } from "../claude/headless";
+import { jobOf, type HeadlessExecDeps } from "../handoff/headless-exec";
+import { setLang } from "../i18n";
+import { fallbackNeedsYou, judgeNeedsYou, NEEDS_YOU_REPLY_CHARS, NeedsYouTracker, type NeedsYouVerdict } from "./needs-you";
+
+function deps(out: HeadlessOutcome, seen: HeadlessRequest[] = [], labels: string[] = []): HeadlessExecDeps {
+  return {
+    run: async (req) => (seen.push(req), out),
+    ready: async () => undefined,
+    claude: () => ({ path: "/bin/claude", pathValue: "/bin" }),
+    baseEnv: {},
+    sessions: { recordHeadless: () => undefined } as unknown as HeadlessExecDeps["sessions"],
+    now: () => 0,
+    newRunId: () => "r",
+    onUsage: (u) => labels.push(u.label),
+  };
+}
+const usage = { input: 1, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 1 };
+const ok = (structured: unknown): HeadlessOutcome => ({
+  ok: true,
+  result: { sessionId: null, isError: false, subtype: null, resultText: "", structured, permissionDenials: [], apiErrorStatus: null, costUsd: null, usage, model: null },
+});
+
+afterEach(() => setLang("zh"));
+
+describe("judgeNeedsYou", () => {
+  it("asks Haiku with no tools, about the end of the reply only, and maps the answer", async () => {
+    const seen: HeadlessRequest[] = [];
+    const labels: string[] = [];
+    const reply = `${"早".repeat(100)}${"中".repeat(NEEDS_YOU_REPLY_CHARS - 1)}要拆成两个 PR 吗？`;
+    const v = await judgeNeedsYou(deps(ok({ needs_user: true, reason: "问要不要拆 PR" }), seen, labels), reply, "/repo");
+    expect(v).toEqual({ needsYou: true, reason: "问要不要拆 PR" });
+    const args = seen[0].args;
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "haiku"]);
+    expect(args).not.toContain("--allowedTools");
+    expect(args).toContain("--json-schema");
+    expect(seen[0].cwd).toBe("/repo");
+    expect(seen[0].prompt).toContain("单纯汇报进度或结果");
+    expect(seen[0].prompt).toContain("要拆成两个 PR 吗？");
+    expect(seen[0].prompt).not.toContain("早");
+    expect(seen[0].prompt).not.toContain("中".repeat(NEEDS_YOU_REPLY_CHARS));
+    expect(labels).toEqual(["needs-you judge"]);
+    expect(jobOf("needs-you judge")).toBe("needs-you judge");
+  });
+
+  it("writes the prompt in English when the app is in English", async () => {
+    setLang("en");
+    const seen: HeadlessRequest[] = [];
+    await judgeNeedsYou(deps(ok({ needs_user: false, reason: "" }), seen), "Pushed.", "/repo");
+    expect(seen[0].prompt).not.toMatch(/[一-鿿]/);
+    expect(seen[0].prompt).toContain("needs_user");
+    expect(seen[0].prompt).toContain("Pushed.");
+  });
+
+  it("returns null when the run fails or the answer is malformed", async () => {
+    expect(await judgeNeedsYou(deps({ ok: false, reason: "timeout", message: "x", result: null }), "？", "/r")).toBeNull();
+    expect(await judgeNeedsYou(deps(ok({ needs_user: "yes" })), "？", "/r")).toBeNull();
+    expect(await judgeNeedsYou(deps(ok(null)), "？", "/r")).toBeNull();
+  });
+});
+
+describe("fallbackNeedsYou", () => {
+  it("falls back to a trailing question mark when the judge fails", () => {
+    expect(fallbackNeedsYou("要拆成两个 PR 吗？").needsYou).toBe(true);
+    expect(fallbackNeedsYou("推上去了。").needsYou).toBe(false);
+  });
+
+  it("takes the last sentence as the reason, ignoring trailing blanks, at most 80 characters", () => {
+    expect(fallbackNeedsYou("推上去了。要拆成两个 PR 吗？  \n")).toEqual({ needsYou: true, reason: "要拆成两个 PR 吗？" });
+    expect(fallbackNeedsYou("Pushed. Should I merge it?")).toEqual({ needsYou: true, reason: "Should I merge it?" });
+    expect(fallbackNeedsYou("测试都过了\n\n要合并吗??")).toEqual({ needsYou: true, reason: "要合并吗??" });
+    expect(fallbackNeedsYou("Done.")).toEqual({ needsYou: false, reason: "" });
+    const long = `${"长".repeat(100)}吗？`;
+    expect([...fallbackNeedsYou(long).reason]).toHaveLength(80);
+    expect(fallbackNeedsYou(long).reason.endsWith("吗？")).toBe(true);
+  });
+});
+
+interface Head {
+  id: string;
+  cwd: string;
+  waiting: boolean;
+  kind: ActivityKind | null;
+  reply: { id: string; text: string } | null;
+}
+
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
+/** 假 judge：每次调用都挂起，测试手动给结果。 */
+function harness(heads: Head[]) {
+  const calls: { reply: string; cwd: string; done: (v: NeedsYouVerdict | null) => void }[] = [];
+  let notified = 0;
+  const tracker = new NeedsYouTracker({
+    judge: (reply, cwd) => {
+      const d = deferred<NeedsYouVerdict | null>();
+      calls.push({ reply, cwd, done: d.resolve });
+      return d.promise;
+    },
+    sessions: () => heads,
+    notify: () => notified++,
+  });
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+  return { tracker, calls, heads, notified: () => notified, settle };
+}
+
+const stopped = (id: string, replyId: string, text: string): Head => ({ id, cwd: `/repo/${id}`, waiting: true, kind: "waiting", reply: { id: replyId, text } });
+
+describe("NeedsYouTracker", () => {
+  it("judges each reply id once", async () => {
+    const h = harness([stopped("s1", "m1", "要拆成两个 PR 吗？")]);
+    h.tracker.update();
+    h.tracker.update();
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]).toMatchObject({ reply: "要拆成两个 PR 吗？", cwd: "/repo/s1" });
+    h.calls[0].done({ needsYou: true, reason: "问要不要拆 PR" });
+    await h.settle();
+    h.tracker.update();
+    expect(h.calls).toHaveLength(1);
+    expect(h.tracker.reasonOf("s1")).toBe("问要不要拆 PR");
+    expect(h.notified()).toBe(1);
+    // 新的回复：重新判断，旧结论不再算数
+    h.heads[0] = stopped("s1", "m2", "推上去了。");
+    expect(h.tracker.reasonOf("s1")).toBeNull();
+    h.tracker.update();
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it("a plain status report is not needs-you", async () => {
+    const h = harness([stopped("s1", "m1", "推上去了，CI 在跑。")]);
+    h.tracker.update();
+    h.calls[0].done({ needsYou: false, reason: "" });
+    await h.settle();
+    expect(h.tracker.reasonOf("s1")).toBeNull();
+    expect(h.notified()).toBe(0);
+  });
+
+  it("falls back to a trailing question mark when the judge fails, and does not judge that reply again", async () => {
+    const h = harness([stopped("s1", "m1", "推上去了。要拆成两个 PR 吗？"), stopped("s2", "m2", "推上去了。")]);
+    h.tracker.update();
+    h.calls[0].done(null);
+    h.calls[1].done(null);
+    await h.settle();
+    expect(h.tracker.reasonOf("s1")).toBe("要拆成两个 PR 吗？");
+    expect(h.tracker.reasonOf("s2")).toBeNull();
+    h.tracker.update();
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it("treats a judge that throws like a failed one", async () => {
+    const logs: string[] = [];
+    const heads = [stopped("s1", "m1", "要合并吗？")];
+    const tracker = new NeedsYouTracker({ judge: () => Promise.reject(new Error("boom")), sessions: () => heads, notify: () => undefined, log: (m) => logs.push(m) });
+    tracker.update();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(tracker.reasonOf("s1")).toBe("要合并吗？");
+    expect(logs).toHaveLength(1);
+  });
+
+  it("clears once the session is busy again", async () => {
+    const h = harness([stopped("s1", "m1", "要拆成两个 PR 吗？")]);
+    h.tracker.update();
+    h.calls[0].done({ needsYou: true, reason: "问要不要拆 PR" });
+    await h.settle();
+    expect(h.tracker.reasonOf("s1")).toBe("问要不要拆 PR");
+    h.heads[0] = { ...h.heads[0], waiting: false };
+    expect(h.tracker.reasonOf("s1")).toBeNull();
+    h.heads[0] = { ...h.heads[0], waiting: true, kind: "thinking" };
+    expect(h.tracker.reasonOf("s1")).toBeNull();
+    h.tracker.update();
+    expect(h.calls).toHaveLength(1);
+    // 同一条回复又停下来：沿用判断过的结论
+    h.heads[0] = stopped("s1", "m1", "要拆成两个 PR 吗？");
+    h.tracker.update();
+    expect(h.calls).toHaveLength(1);
+    expect(h.tracker.reasonOf("s1")).toBe("问要不要拆 PR");
+    // 终端关了
+    h.heads.length = 0;
+    expect(h.tracker.reasonOf("s1")).toBeNull();
+  });
+
+  it("only judges sessions that stopped with a reply", () => {
+    const h = harness([
+      { ...stopped("s1", "m1", "？"), waiting: false },
+      { ...stopped("s2", "m2", "？"), kind: "approval" },
+      { ...stopped("s3", "m3", "？"), reply: null },
+      { ...stopped("s4", "m4", "？"), kind: null },
+    ]);
+    h.tracker.update();
+    expect(h.calls).toHaveLength(0);
+    expect(h.tracker.reasonOf("s3")).toBeNull();
+  });
+
+  it("gives the judge at most the last NEEDS_YOU_REPLY_CHARS characters", () => {
+    const text = `${"早".repeat(10)}${"晚".repeat(NEEDS_YOU_REPLY_CHARS)}`;
+    const h = harness([stopped("s1", "m1", text)]);
+    h.tracker.update();
+    expect(h.calls[0].reply).toBe("晚".repeat(NEEDS_YOU_REPLY_CHARS));
+  });
+
+  it("runs at most two judges at a time", async () => {
+    const h = harness([stopped("s1", "m1", "一？"), stopped("s2", "m2", "二？"), stopped("s3", "m3", "三？")]);
+    h.tracker.update();
+    expect(h.calls).toHaveLength(2);
+    h.tracker.update();
+    expect(h.calls).toHaveLength(2);
+    h.calls[0].done({ needsYou: true, reason: "一" });
+    await h.settle();
+    // 空出名额就接着判断，不等下一次 update
+    expect(h.calls).toHaveLength(3);
+    expect(h.calls[2].reply).toBe("三？");
+    h.calls[1].done({ needsYou: false, reason: "" });
+    h.calls[2].done({ needsYou: true, reason: "三" });
+    await h.settle();
+    expect(h.tracker.reasonOf("s3")).toBe("三");
+  });
+
+  it("drops a late verdict for a reply that has been replaced or a session that is gone", async () => {
+    const h = harness([stopped("s1", "m1", "一？"), stopped("s2", "m2", "二？")]);
+    h.tracker.update();
+    h.heads[0] = stopped("s1", "m1b", "做完了。");
+    h.heads.splice(1, 1);
+    h.tracker.update();
+    h.calls[0].done({ needsYou: true, reason: "旧的" });
+    h.calls[1].done({ needsYou: true, reason: "走了" });
+    await h.settle();
+    expect(h.tracker.reasonOf("s1")).toBeNull();
+    expect(h.notified()).toBe(0);
+    // 新回复 m1b 在旧判断结束后排上
+    expect(h.calls).toHaveLength(3);
+    expect(h.calls[2].reply).toBe("做完了。");
+  });
+});

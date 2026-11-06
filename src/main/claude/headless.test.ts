@@ -47,6 +47,14 @@ describe("headlessArgs", () => {
     expect(PROBE_ARGS.slice(PROBE_ARGS.indexOf("--setting-sources"), PROBE_ARGS.indexOf("--setting-sources") + 2)).toEqual(["--setting-sources", "user"]);
   });
 
+  it("passes --model to headless args", () => {
+    const args = headlessArgs({ schema: "{}", allowedTools: [], model: "haiku" });
+    expect(args).toContain("--model");
+    expect(args.slice(0, 3)).toEqual(["-p", "--model", "haiku"]);
+    expect(headlessArgs({ schema: "{}", allowedTools: ["Read"], model: "haiku" }).slice(-2)).toEqual(["--allowedTools", "Read"]);
+    expect(headlessArgs({ schema: "{}", allowedTools: [] })).not.toContain("--model");
+  });
+
   it("omits the resume flags for a fresh run", () => {
     const args = headlessArgs({ schema: "{}", allowedTools: ["Read"] });
     expect(args).not.toContain("--resume");

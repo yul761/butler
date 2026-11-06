@@ -145,6 +145,7 @@ interface Tracked {
   /** 第一次读完之前是 null。 */
   activity: SessionActivity | null;
   lastReply: string | null;
+  lastReplyId: string | null;
 }
 
 /**
@@ -235,6 +236,12 @@ export class ActivityMonitor {
     return chars.length <= LAST_REPLY_LIMIT ? r : chars.slice(-LAST_REPLY_LIMIT).join("");
   }
 
+  /** 最后一条 assistant 文字回复的全文和它的 message.id（“需要你”的判断用，调用方自己截）；没有回复或者回复没有 id 时为 null。 */
+  lastReplyOf(sessionId: string): { id: string; text: string } | null {
+    const t = this.tracked.get(sessionId);
+    return t?.lastReply && t.lastReplyId ? { id: t.lastReplyId, text: t.lastReply } : null;
+  }
+
   /** 用户点了“没事，忽略”：这一次不再提醒，直到 session 恢复活动后再次卡住。 */
   dismiss(sessionId: string): void {
     const t = this.tracked.get(sessionId);
@@ -296,6 +303,7 @@ export class ActivityMonitor {
     t.outputText = output.text;
     t.eligible = eligible;
     t.lastReply = state.lastReply;
+    t.lastReplyId = state.lastReplyId;
     if (grew) t.lastOutputAt = now;
     await this.sample(t, grew, now);
     const next: SessionActivity = { sessionId: t.id, ...derived, lastOutputAt: t.lastOutputAt, ...this.verdict(t), lastOutput: output.lines };
@@ -307,7 +315,7 @@ export class ActivityMonitor {
   private track(id: string, termId: string): Tracked {
     const t: Tracked = {
       id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, fileSizes: new Map(), outputText: "", lastOutputAt: null,
-      eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null,
+      eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null, lastReplyId: null,
     };
     this.tracked.set(id, t);
     return t;

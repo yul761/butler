@@ -61,9 +61,10 @@ export type HeadlessRun = (req: HeadlessRequest) => Promise<HeadlessOutcome>;
  * `--permission-mode dontAsk`：白名单以外的工具一律拒绝，不受用户默认权限模式影响。
  * `--setting-sources user`：不继承仓库里的 allow 规则。
  * `--allowedTools` 放最后：它是可变参数，会吃掉后面的所有值。
+ * `--model`：不传就用用户的默认模型；小判断传 haiku。
  */
-export function headlessArgs(o: { schema: string; resumeSessionId?: string; allowedTools: string[]; mcpConfigs?: string[]; addDirs?: string[] }): string[] {
-  const args = ["-p", "--output-format", "json", "--json-schema", o.schema, "--no-session-persistence", "--permission-mode", "dontAsk", ...SETTING_SOURCES_ARGS];
+export function headlessArgs(o: { schema: string; resumeSessionId?: string; allowedTools: string[]; mcpConfigs?: string[]; addDirs?: string[]; model?: string }): string[] {
+  const args = ["-p", ...(o.model ? ["--model", o.model] : []), "--output-format", "json", "--json-schema", o.schema, "--no-session-persistence", "--permission-mode", "dontAsk", ...SETTING_SOURCES_ARGS];
   if (o.resumeSessionId) args.push("--resume", o.resumeSessionId, "--fork-session");
   // 多仓库 ticket：每个仓库一个 --add-dir（只读工具也要能看到它们）。
   for (const dir of o.addDirs ?? []) args.push("--add-dir", dir);
