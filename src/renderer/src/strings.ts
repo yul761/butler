@@ -104,6 +104,7 @@ const ZH = {
   activity: {
     edit: "写代码",
     read: "看代码",
+    rebase: "rebase 中",
     push: "跑 git push（pre-push hook）",
     ci: "监控 CI",
     test: "跑测试",

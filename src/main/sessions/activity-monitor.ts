@@ -47,8 +47,9 @@ export function activityIntervals(env: NodeJS.ProcessEnv): ActivityIntervals {
 
 export interface StuckInfo {
   sessionId: string;
-  ticketKey: string;
-  featureId: number;
+  ticketKey: string | null;
+  featureId: number | null;
+  epicId: number | null;
   reason: string;
 }
 
@@ -115,10 +116,11 @@ export function describeActivity(a: SessionActivity): string {
   return `${[m.activityKinds[a.kind], a.detail].filter(Boolean).join(" ")}${a.background ? m.activityBackground : ""}`;
 }
 
-/** 卡住检测的范围：有红点可放的行，也就是未归档 feature 下未归档 ticket 的普通 session。 */
+/** 卡住检测的范围：Butler 开的、不是修复 session 的所有 session（ticket、总控、epic），已归档的 ticket 和 feature 除外。 */
 interface StuckScope {
-  ticketKey: string;
-  featureId: number;
+  ticketKey: string | null;
+  featureId: number | null;
+  epicId: number | null;
 }
 
 interface Tracked {
@@ -312,11 +314,15 @@ export class ActivityMonitor {
   }
 
   private scope(head: Session): StuckScope | null {
-    if (!head.ticketKey || head.coordinator || head.fixesSession) return null;
-    const ticket = this.d.tickets.get(head.ticketKey);
-    if (!ticket || ticket.archivedAt !== null || ticket.featureId === null) return null;
-    const feature = this.d.features.get(ticket.featureId);
-    return feature && feature.archivedAt === null ? { ticketKey: head.ticketKey, featureId: ticket.featureId } : null;
+    if (head.origin !== "butler" || head.fixesSession !== null) return null;
+    const ticket = head.ticketKey ? this.d.tickets.get(head.ticketKey) : null;
+    if (head.ticketKey && (!ticket || ticket.archivedAt !== null)) return null;
+    const featureId = ticket?.featureId ?? head.featureId;
+    if (featureId !== null) {
+      const feature = this.d.features.get(featureId);
+      if (!feature || feature.archivedAt !== null) return null;
+    }
+    return { ticketKey: head.ticketKey, featureId, epicId: head.epicId };
   }
 
   private async readTranscript(t: Tracked): Promise<{ state: TranscriptState; size: number }> {

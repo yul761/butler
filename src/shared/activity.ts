@@ -1,5 +1,5 @@
 /** 一个 session 此刻在做什么。 */
-export type ActivityKind = "edit" | "read" | "push" | "ci" | "test" | "command" | "agent" | "thinking" | "approval" | "waiting" | "idle";
+export type ActivityKind = "edit" | "read" | "push" | "rebase" | "ci" | "test" | "command" | "agent" | "thinking" | "approval" | "waiting" | "idle";
 
 export interface SessionActivity {
   sessionId: string;

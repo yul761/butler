@@ -35,13 +35,16 @@ export function newTranscriptState(): TranscriptState {
 /** 用户按 Esc 打断时 Claude Code 写的文字（也有 for tool use 的说法）；它后面不会再有结束这一轮的记录。 */
 const INTERRUPT_PREFIX = "[Request interrupted by user";
 
+const REBASE_RE = /\bgit\s+(?:rebase|pull\b.*--rebase)\b/;
 const PUSH_RE = /\bgit\s+push\b/;
 const CI_RE = /\bgh\s+run\s+watch\b|\bgh\s+pr\s+checks\b.*--watch/;
 const TEST_RE = /\b(?:(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?test|vitest|jest|pytest|go\s+test|cargo\s+test|playwright\s+test|mocha)\b/;
 
-/** 把 shell 命令归类：push、等 CI、跑测试，其余算普通命令。 */
-export function classifyCommand(command: string): { kind: "push" | "ci" | "test" | "command"; detail: string } {
+/** 把 shell 命令归类：rebase、push、等 CI、跑测试，其余算普通命令。 */
+export function classifyCommand(command: string): { kind: "rebase" | "push" | "ci" | "test" | "command"; detail: string } {
   const detail = command.trim().slice(0, DETAIL_LIMIT);
+  // git pull --rebase 不是 push，rebase 要先判
+  if (REBASE_RE.test(command)) return { kind: "rebase", detail };
   if (PUSH_RE.test(command)) return { kind: "push", detail };
   if (CI_RE.test(command)) return { kind: "ci", detail };
   if (TEST_RE.test(command)) return { kind: "test", detail };

@@ -23,6 +23,12 @@ describe("classifyCommand", () => {
     }
     expect(classifyCommand("ls -la").kind).toBe("command");
   });
+
+  it("classifies git rebase and git pull --rebase as rebase, not push", () => {
+    expect(classifyCommand("git rebase origin/main").kind).toBe("rebase");
+    expect(classifyCommand("git pull --rebase").kind).toBe("rebase");
+    expect(classifyCommand("git pull --rebase && git push").kind).toBe("rebase");
+  });
   it("truncates detail to 40 characters", () => {
     expect(classifyCommand("echo " + "a".repeat(100)).detail).toHaveLength(40);
   });

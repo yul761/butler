@@ -29,7 +29,7 @@ const ZH = {
   stuckBody: (reason: string) => `${reason}\n点开查看怎么处理。`,
   /** 请 Claude 判断卡住时，用这些词告诉它 session 在做什么。 */
   activityKinds: {
-    edit: "写代码", read: "看代码", push: "跑 git push（pre-push hook）", ci: "监控 CI", test: "跑测试", command: "运行命令",
+    edit: "写代码", read: "看代码", rebase: "rebase 中", push: "跑 git push（pre-push hook）", ci: "监控 CI", test: "跑测试", command: "运行命令",
     agent: "子 agent 在跑", thinking: "思考中", approval: "等你批准", waiting: "等你回话", idle: "空闲",
   },
   activityBackground: "（后台）",
@@ -232,7 +232,7 @@ const EN: MainStrings = {
   stuckTitle: (ticket: string) => `${ticket} may be stuck`,
   stuckBody: (reason: string) => `${reason}\nClick to see what to do.`,
   activityKinds: {
-    edit: "writing code", read: "reading code", push: "running git push (pre-push hook)", ci: "watching CI", test: "running tests", command: "running a command",
+    edit: "writing code", read: "reading code", rebase: "rebasing", push: "running git push (pre-push hook)", ci: "watching CI", test: "running tests", command: "running a command",
     agent: "running a subagent", thinking: "thinking", approval: "waiting for approval", waiting: "waiting for a reply", idle: "idle",
   },
   activityBackground: " (background)",

@@ -100,6 +100,7 @@ export const EN: UiStrings = {
   activity: {
     edit: "Writing code",
     read: "Reading code",
+    rebase: "Rebasing",
     push: "Running git push (pre-push hook)",
     ci: "Watching CI",
     test: "Running tests",

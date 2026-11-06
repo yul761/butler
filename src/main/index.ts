@@ -279,13 +279,14 @@ function showEveningNotification(brief: Brief): void {
 /** 一次卡住一条通知（设计文档 2026-10-31）：点开这个 feature 页，展开这个 ticket 的面板。 */
 function showStuckNotification(info: StuckInfo): void {
   if (headlessAbort.signal.aborted || !Notification.isSupported()) return;
-  const n = new Notification({ title: M().stuckTitle(info.ticketKey), body: M().stuckBody(info.reason) });
+  const n = new Notification({ title: M().stuckTitle(info.ticketKey ?? ""), body: M().stuckBody(info.reason) });
   stuckNotifications.add(n);
   n.on("close", () => stuckNotifications.delete(n));
   n.on("click", () => {
     stuckNotifications.delete(n);
     showWindow();
-    const route: AppNavigateRoute = { page: "feature", featureId: info.featureId, stuckTicket: info.ticketKey };
+    // 没有 feature 或没有 ticket 的（独立 ticket、总控、epic）先开首页；这个函数之后会整个删掉
+    const route: AppNavigateRoute = info.featureId !== null && info.ticketKey !== null ? { page: "feature", featureId: info.featureId, stuckTicket: info.ticketKey } : { page: "home" };
     safeSend(IPC.appNavigate, route);
   });
   n.show();
