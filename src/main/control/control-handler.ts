@@ -5,7 +5,9 @@ import {
   type ControlRequest, type ControlResult, type EpicControlRequest, type FeatureControlRequest, type StartModel,
 } from "../../shared/control";
 import { effectiveStatus, type Epic, type EpicFeatureRow, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
+import type { EpicHistoryEntry } from "../db/epic-history-repo";
 import type { EpicsRepo } from "../db/epics-repo";
+import { EPIC_HISTORY_BRIEF_CHARS, renderHistory } from "../epics/epic-digest";
 import type { FeaturesRepo } from "../db/features-repo";
 import { currentLang } from "../i18n";
 import { M } from "../strings";
@@ -29,6 +31,8 @@ export interface ControlHandlerDeps {
   featureService?: Pick<FeatureService, "create">;
   /** epic 下每个 feature 的情况（含已归档），直接读库，不经过 epic 记忆。 */
   epicRows?: (epicId: number) => EpicFeatureRow[];
+  /** epic 的长期记忆（epic_history，最新的在前）：epic_context 的 history。不给时是空的。 */
+  epicHistory?: (epicId: number) => EpicHistoryEntry[];
   /** 重新渲染 epic 的 handoff（排进记忆的同步队列，不等它）。 */
   syncEpic?: (epicId: number) => void;
   /** 后台给 epic 下有新活动的 feature 生成汇总（FeatureSummaryRunner.refreshEpic），不等它。这时打开总控，规划会等它（SessionService.sendBrief）。 */
@@ -332,12 +336,13 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     return endSession(req, belongs);
   };
 
-  /** feature 总控查同一 epic 下别的 feature：不含自己。 */
+  /** feature 总控查同一 epic 下别的 feature（不含自己），和 epic 的"以往的决定"（和第一条消息里的同一个上限）。 */
   const epicContext = (f: Feature): ControlResult => {
     const e = f.epicId === null ? null : d.epics?.get(f.epicId);
     if (!e) return fail(M().ctlNoEpic);
     if (e.archivedAt !== null) return fail(M().ctlEpicGone);
-    return ok({ epic: e.name, features: (d.epicRows?.(e.id) ?? []).filter((r) => r.id !== f.id).map(rowOut) });
+    const history = renderHistory(d.epicHistory?.(e.id) ?? [], currentLang(), EPIC_HISTORY_BRIEF_CHARS);
+    return ok({ epic: e.name, features: (d.epicRows?.(e.id) ?? []).filter((r) => r.id !== f.id).map(rowOut), history });
   };
 
   /** feature 总控（设计文档 2026-10-26）：feature 和 ticket 都在这里重新核对，ticket 必须属于这个 feature 且未归档。 */

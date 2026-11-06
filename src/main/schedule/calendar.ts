@@ -51,3 +51,19 @@ export function previousWorkingDay(date: string, workingDays: ReadonlySet<number
 export function daysBetween(fromMs: number, toMs: number): number {
   return Math.round((dayStart(localDate(toMs)) - dayStart(localDate(fromMs))) / 86_400_000);
 }
+
+/**
+ * 这一周的第一个工作日：从周一往后数，第一个前一天不上班的工作日（周一到周五 → 周一；周日到周四 → 周日）。
+ * 天天上班时没有这样的一天，算周一；没有配置工作日时永远不是。
+ */
+export function isFirstWorkingDayOfWeek(date: string, workingDays: ReadonlySet<number>): boolean {
+  if (workingDays.size === 0) return false;
+  let first = 1;
+  for (const day of [1, 2, 3, 4, 5, 6, 0]) {
+    if (workingDays.has(day) && !workingDays.has((day + 6) % 7)) {
+      first = day;
+      break;
+    }
+  }
+  return weekday(date) === first && workingDays.has(first);
+}

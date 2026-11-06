@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, SUMMARY_LIMIT, type ControlResult, type EpicControlRequest } from "../../shared/control";
 import type { SessionActivity } from "../../shared/activity";
 import type { EpicFeatureRow } from "../../shared/types";
+import type { EpicHistoryEntry } from "../db/epic-history-repo";
 import { EpicsRepo } from "../db/epics-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
@@ -34,6 +35,7 @@ async function setup() {
   const solo = await epicService.create({ name: "solo", repoPaths: [frontend] });
   let notified = 0;
   let rows: EpicFeatureRow[] = [];
+  let history: EpicHistoryEntry[] = [];
   const logs: string[] = [];
   const events: string[] = [];
   let refreshEpic: (epicId: number, except?: number) => void = (epicId, except) => void events.push(`refresh:${epicId}:${except}`);
@@ -53,6 +55,7 @@ async function setup() {
     screenNeedsUser: () => false,
     lastReply: (id) => replies.get(id) ?? null,
     epicRows: () => rows,
+    epicHistory: () => history,
     submit: async () => "sent" as const,
     notify: () => void notified++,
     syncEpic: (id) => void events.push(`sync:${id}:${features.list().length}`),
@@ -64,6 +67,7 @@ async function setup() {
     id: 0, name: "f", status: "active", archivedAt: null, summaryAt: 5, summary: "s", blockers: [], decisions: [], openQuestions: [], ...o,
   });
   return { handle, base, epic, solo, features, epics, featureService, epicService, frontend, backend, elsewhere, notified: () => notified, setRows: (r: EpicFeatureRow[]) => (rows = r), row,
+    setHistory: (h: EpicHistoryEntry[]) => (history = h),
     logs, events, setRefreshEpic: (f: typeof refreshEpic) => (refreshEpic = f), tickets, sessions, open, activities, replies, killed, refreshed };
 }
 
@@ -192,6 +196,21 @@ describe("epic_context from a feature coordinator", () => {
     const v = (r as { value: { features: EpicFeatureRow[] } }).value;
     expect(v.features).toHaveLength(1);
     expect(v.features[0].summary).toHaveLength(SUMMARY_LIMIT);
+  });
+
+  it("returns the epic's past decisions as history, and an empty history without any", async () => {
+    const { handle, epic, features, featureService, elsewhere, setHistory } = await setup();
+    const mine = await featureService.create({ name: "mine", repoPaths: [elsewhere] });
+    features.setEpic(mine.id, epic.id);
+    const empty = await handle({ v: 1, featureId: mine.id, from: null, op: "epic_context" });
+    expect(empty).toMatchObject({ ok: true, value: { history: "" } });
+    setHistory([{
+      id: 1, epicId: epic.id, featureId: null, trigger: "weekly", createdAt: new Date(2026, 10, 2).getTime(), coversFrom: 0, coversUntil: 0,
+      payload: { summary: "结账上线", decisions: [{ what: "金额用分存", why: "避免浮点误差" }] },
+    }]);
+    const r = await handle({ v: 1, featureId: mine.id, from: null, op: "epic_context" });
+    const history = (r as { value: { history: string } }).value.history;
+    for (const s of ["2026-11-02", "结账上线", "金额用分存", "避免浮点误差"]) expect(history).toContain(s);
   });
 
   it("errors for a feature outside any epic, and for an archived epic", async () => {

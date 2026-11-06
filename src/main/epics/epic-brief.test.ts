@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeTask, SUMMARY_LIMIT, TASK_LIMIT } from "../../shared/control";
 import type { EpicFeatureRow, EpicFeatureStatus } from "../../shared/types";
+import type { EpicHistoryEntry } from "../db/epic-history-repo";
 import { epicBriefMessage } from "./epic-brief";
+import { EPIC_HISTORY_BRIEF_CHARS } from "./epic-digest";
 
 const row = (o: Partial<EpicFeatureRow> = {}): EpicFeatureRow => ({
   id: 1, name: "购物车", status: "active", archivedAt: null, summaryAt: 5, summary: "购物车做完了", blockers: [],
@@ -103,5 +105,37 @@ describe("epicBriefMessage", () => {
       expect(none).not.toContain("整体规划");
       expect(epicBriefMessage({ ...input, plan: "  " }, lang)).toBe(none);
     }
+  });
+  describe("past decisions (plan 16 task 6)", () => {
+    const entry = (n: number, summary: string): EpicHistoryEntry => ({
+      id: n, epicId: 1, featureId: null, trigger: "weekly", createdAt: new Date(2026, 10, n).getTime(), coversFrom: 0, coversUntil: 0,
+      payload: { summary, decisions: [{ what: `决定${n}`, why: `原因${n}` }] },
+    });
+
+    it("the first message of a new feature includes past decisions", () => {
+      for (const [lang, heading] of [["zh", "以往的决定："], ["en", "Past decisions:"]] as const) {
+        const text = epicBriefMessage({ ...input, history: [entry(2, "退款上线"), entry(1, "结账上线")] }, lang);
+        const at = text.indexOf(heading);
+        expect(at, lang).toBeGreaterThan(text.indexOf(LABEL[lang]));
+        expect(text.indexOf("退款上线")).toBeGreaterThan(at);
+        expect(text.indexOf("退款上线")).toBeLessThan(text.indexOf("结账上线"));
+        expect(text).toContain("决定2");
+        expect(text).toContain("原因2");
+        // 在 epic 的整体规划之后、其他 feature 之前。
+        expect(at).toBeGreaterThan(text.indexOf(input.plan!));
+        expect(at).toBeLessThan(text.indexOf("购物车做完了"));
+      }
+    });
+
+    it("leaves the section out without history, and keeps it within its limit", () => {
+      expect(epicBriefMessage({ ...input, history: [] }, "zh")).toBe(epicBriefMessage(input, "zh"));
+      expect(epicBriefMessage(input, "zh")).not.toContain("以往的决定");
+      const long = [3, 2, 1].map((n) => entry(n, `第${n}次${"字".repeat(1400)}`));
+      const text = epicBriefMessage({ ...input, history: long }, "zh");
+      const section = text.slice(text.indexOf("以往的决定："), text.indexOf("其他 feature："));
+      expect(section.length).toBeLessThanOrEqual(EPIC_HISTORY_BRIEF_CHARS + "以往的决定：\n\n\n".length);
+      expect(section).toContain("第3次");
+      expect(section).not.toContain("第1次");
+    });
   });
 });

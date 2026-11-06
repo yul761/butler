@@ -50,7 +50,9 @@ import { featureCommandFollowup, FeatureSummaryRunner } from "./handoff/feature-
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
+import { EpicHistoryRepo } from "./db/epic-history-repo";
 import { EpicsRepo } from "./db/epics-repo";
+import { EPIC_HISTORY_READ_ENTRIES, EpicDigestRunner } from "./epics/epic-digest";
 import { EpicService } from "./epics/epic-service";
 import { FeaturesRepo } from "./db/features-repo";
 import { currentLang, onLangChange, setLang } from "./i18n";
@@ -69,7 +71,7 @@ import { ControlInbox } from "./control/control-inbox";
 import { HookInbox } from "./hooks/inbox";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, resolvePaths } from "./paths";
-import { isWorkingDay, localDate } from "./schedule/calendar";
+import { isFirstWorkingDayOfWeek, isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { ActivityMonitor, activityIntervals } from "./sessions/activity-monitor";
@@ -280,6 +282,7 @@ async function bootstrap(): Promise<void> {
   const followups = new FollowupsRepo(db);
   const jobs = new JobsRepo(db);
   const featureHandoffs = new FeatureHandoffsRepo(db);
+  const epicHistory = new EpicHistoryRepo(db);
   const memory = new MemoryService({
     dataDir: paths.statecore,
     tickets,
@@ -468,7 +471,7 @@ async function bootstrap(): Promise<void> {
     guidePath: (kind) => writeSessionGuide(paths.mcp, currentLang(), kind),
     featureMcpConfig,
     epicMcpConfig,
-    features, epics, featureHandoffs, handoffs,
+    features, epics, featureHandoffs, handoffs, epicHistory,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
     log: logger,
@@ -599,6 +602,19 @@ async function bootstrap(): Promise<void> {
     signal: headlessAbort.signal,
     log: logger,
   });
+  /**
+   * epic 的长期记忆（计划 16 任务 6）：每周第一个工作日跟着晚间任务、feature 归档时整理一次。用 Sonnet，不 fork session，
+   * 和卡住判断共用 headless 设置（用量记进 session_usage，退出时取消）。
+   */
+  const epicDigest = new EpicDigestRunner({
+    ...judgeDeps,
+    history: epicHistory, epics, features, featureHandoffs, handoffs, tickets, memory,
+    cwd: () => paths.home,
+  });
+  /** feature 归档之后（不等它）：对它所在的 epic 整理一次；不属于 epic 的 feature 只整理它自己。没归档成（已经归档过的不算）就不整理。 */
+  const digestArchivedFeature = (featureId: number) => {
+    if (features.get(featureId)?.archivedAt != null) void epicDigest.forFeatureArchived(featureId);
+  };
   const dailyDeps: DailyJobDeps = {
     runner,
     features: featureRunner,
@@ -608,6 +624,8 @@ async function bootstrap(): Promise<void> {
     log: logger,
     // full 档位的记忆蒸馏：在后台跑，不挡调度链；每次运行都重新向 gateway 要模型（改档位不用重启），模型只经 withScope 交给嵌入式 StateCore。
     distill: () => distiller.start(),
+    epicDigest,
+    isFirstWorkingDayOfWeek: () => isFirstWorkingDayOfWeek(localDate(Date.now()), scheduleConfig(settings).workingDays),
   };
   const scheduler = new Scheduler({
     jobs,
@@ -926,6 +944,8 @@ async function bootstrap(): Promise<void> {
     onArchived: (id, featureIds) => {
       removeEpicMcpConfig(paths.mcp, id);
       for (const f of featureIds) removeFeatureMcpConfig(paths.mcp, f);
+      // 一起归档的 feature 逐个排队整理：第一个整理完之后没有新东西，后面的不再跑。
+      for (const f of featureIds) digestArchivedFeature(f);
     },
   });
   // 防休眠：只在内存里，启动时是关的。状态一变，托盘菜单、提示文字和界面都跟着更新。
@@ -943,7 +963,10 @@ async function bootstrap(): Promise<void> {
     keepAwake: keepAwakeSwitch,
     onArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
     languageChanged: applyLanguage,
-    onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
+    onFeatureArchived: (id) => {
+      removeFeatureMcpConfig(paths.mcp, id);
+      digestArchivedFeature(id);
+    },
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,
     tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, runner, featureRunner, scheduler, jobs, gateRepo,
@@ -996,6 +1019,7 @@ async function bootstrap(): Promise<void> {
     handle: controlHandler({
       tickets, sessions, features, ticketService, sessionService, notify,
       epics, featureService, epicRows: (id) => sessionService.epicFeatureRows(id),
+      epicHistory: (id) => epicHistory.list(id, EPIC_HISTORY_READ_ENTRIES),
       syncEpic: (id) => void memory.syncEpic(id),
       refreshEpic: (id, except) => featureRunner.refreshEpic(id, except),
       activity: (id) => activityMonitor.get(id),

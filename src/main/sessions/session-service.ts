@@ -25,8 +25,10 @@ import {
 import { launchEnv, type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
 import type { GuideKind } from "../claude/session-guide";
 import { claudeArgs, cmdShimSafe, sessionEnv, storedModel, type SessionModel } from "../claude/spawn";
+import type { EpicHistoryRepo } from "../db/epic-history-repo";
 import type { EpicsRepo } from "../db/epics-repo";
 import { epicBriefMessage } from "../epics/epic-brief";
+import { EPIC_HISTORY_READ_ENTRIES } from "../epics/epic-digest";
 import { epicFeatureRows, type LiveFeature } from "../epics/epic-info";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";
@@ -80,6 +82,8 @@ export interface SessionServiceDeps {
   features?: FeaturesRepo;
   /** epic（设计文档 2026-11-01）；不给就没有 epic session。 */
   epics?: EpicsRepo;
+  /** epic 的长期记忆（计划 16 任务 6）：feature 第一条消息里的"以往的决定"；不给就没有这一节。 */
+  epicHistory?: Pick<EpicHistoryRepo, "list">;
   /** feature 汇总（设计文档 2026-10-28）；不给 FeatureView 里 summary 为 null。 */
   featureHandoffs?: Pick<FeatureHandoffsRepo, "latest" | "latestValid">;
   /** 取 ticket 的最新有效 handoff 里的 PR；不给就都是 []。 */
@@ -385,7 +389,8 @@ export class SessionService {
       const epic = this.d.epics?.get(current.epicId);
       if (!epic || epic.archivedAt !== null) return;
       const others = this.epicFeatureRows(epic.id).filter((r) => r.id !== id);
-      const res = await this.d.submit(termId, epicBriefMessage({ feature: current.name, epic: epic.name, brief, plan: epic.plan, others }, currentLang()));
+      const history = this.d.epicHistory?.list(epic.id, EPIC_HISTORY_READ_ENTRIES) ?? [];
+      const res = await this.d.submit(termId, epicBriefMessage({ feature: current.name, epic: epic.name, brief, plan: epic.plan, others, history }, currentLang()));
       if (res === "sent") this.d.features?.setBriefSentAt(id, this.d.now());
       else this.d.log?.(`brief of feature ${id} not delivered (${res})`);
     } catch (e) {

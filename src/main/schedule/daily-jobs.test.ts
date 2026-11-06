@@ -138,6 +138,46 @@ describe("daily jobs", () => {
     expect(calls).toEqual(["runNightly", "distill"]);
   });
 
+  describe("weekly epic digest (plan 16 task 6)", () => {
+    it("runs the weekly digest only on the first working day of the week", async () => {
+      for (const first of [true, false]) {
+        const { d, calls } = deps({ isFirstWorkingDayOfWeek: () => first });
+        d.epicDigest = { weekly: async () => void calls.push("weekly") };
+        await nightlyJob(d);
+        expect(calls, String(first)).toEqual(first ? ["runNightly", "weekly"] : ["runNightly"]);
+      }
+    });
+
+    it("does not wait for it, and a failure only logs", async () => {
+      for (const fail of ["reject", "throw"] as const) {
+        const { d, calls } = deps({ isFirstWorkingDayOfWeek: () => true });
+        const logs: [string, unknown][] = [];
+        d.log = (msg, err) => void logs.push([msg, err]);
+        const boom = new Error("boom");
+        let finish: () => void = () => undefined;
+        d.epicDigest = {
+          weekly: () => {
+            calls.push("weekly");
+            if (fail === "throw") throw boom;
+            return new Promise<void>((_, reject) => (finish = () => reject(boom)));
+          },
+        };
+        expect(await nightlyJob(d)).toBe("partial");
+        expect(calls).toEqual(["runNightly", "weekly"]);
+        finish();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(logs).toEqual([["weekly epic digest failed", boom]]);
+      }
+    });
+
+    it("is not started once quitting has begun", async () => {
+      const { d, calls } = deps({ isFirstWorkingDayOfWeek: () => true, aborted: () => true });
+      d.epicDigest = { weekly: async () => void calls.push("weekly") };
+      await nightlyJob(d);
+      expect(calls).toEqual(["runNightly"]);
+    });
+  });
+
   it("nightly: a distill step that throws synchronously does not fail the job either", async () => {
     const { d, calls } = deps({
       distill: () => {

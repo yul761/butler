@@ -13,7 +13,7 @@ import { HandoffsRepo } from "../db/handoffs-repo";
 import { MemorySyncRepo } from "../db/memory-sync-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { chatReply, gatewayHarness, type GatewayHarness } from "../gateway/testing";
-import { epicScope, featureScope } from "../../shared/memory";
+import { epicScope, featureScope, NOTE_BODY_LIMIT } from "../../shared/memory";
 import type { EpicFeatureRow } from "../../shared/types";
 import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
 import { carriedEpicPlan, carriedEpicProgress, EPIC_HANDOFF_MAX_CHARS, EPIC_PROGRESS_MAX_CHARS, renderEpicHandoff } from "../epics/epic-info";
@@ -484,6 +484,61 @@ describe("MemoryService.syncEpic (design 2026-11-01, epic handoff)", () => {
       expect(zh).not.toContain("compiled by Butler");
       expect(count(zh, "progress: step two")).toBe(1);
     });
+  });
+});
+
+describe("MemoryService.setEpicDigestNote (plan 16 task 6: the rolling note of the epic history)", () => {
+  const scope = epicScope(1);
+  const handoffOf = (t: ReturnType<typeof setup>) => withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
+  const row: EpicFeatureRow = { id: 3, name: "支付", status: "active", archivedAt: null, summaryAt: 5, summary: "接口联调完了", blockers: [], decisions: [], openQuestions: [] };
+
+  it("writes one note with a stable id, overwrites it, and leaves the epic session's notes alone", async () => {
+    const t = setup();
+    // epic session 自己写的笔记，包括碰巧用了 Butler 前缀格式的，都不动。
+    await withScope({ dataDir: t.dataDir, scope }, async (s) => {
+      await s.remember("先做支付，再做退款");
+      await s.remember("[decision:plan] 第一期只做国内支付渠道");
+    });
+    const mine = ["[decision:plan] 第一期只做国内支付渠道", "先做支付，再做退款"];
+    await t.memory.setEpicDigestNote(1, "金额用分存；退款走原路");
+    expect((await t.texts(scope)).sort()).toEqual(["[decision:epic-digest] 金额用分存；退款走原路", ...mine]);
+    await t.memory.setEpicDigestNote(1, "接口走 REST；金额用分存");
+    expect((await t.texts(scope)).sort()).toEqual(["[decision:epic-digest] 接口走 REST；金额用分存", ...mine]);
+    expect(t.logs).toEqual([]);
+  });
+
+  it("cuts the body to the note limit", async () => {
+    const t = setup();
+    await t.memory.setEpicDigestNote(1, "长".repeat(NOTE_BODY_LIMIT + 50));
+    const [text] = await t.texts(scope);
+    expect(text).toBe(`[decision:epic-digest] ${"长".repeat(NOTE_BODY_LIMIT)}`);
+  });
+
+  it("survives the next syncEpic, and does not disturb the epic handoff", async () => {
+    const t = setup();
+    t.setEpicRows([row]);
+    await t.memory.syncEpic(1);
+    const before = await handoffOf(t);
+    await t.memory.setEpicDigestNote(1, "金额用分存");
+    expect(await handoffOf(t)).toEqual(before);
+    t.setEpicRows([{ ...row, summary: "上线了" }]);
+    await t.memory.syncEpic(1);
+    await t.memory.syncAll();
+    expect(await t.texts(scope)).toEqual(["[decision:epic-digest] 金额用分存"]);
+    expect((await handoffOf(t))?.content).toContain("上线了");
+  });
+
+  it("forgets the note when there is nothing left to say", async () => {
+    const t = setup();
+    await t.memory.setEpicDigestNote(1, "金额用分存");
+    await t.memory.setEpicDigestNote(1, "  ");
+    expect(await t.texts(scope)).toEqual([]);
+  });
+
+  it("does nothing when memory is off", async () => {
+    const t = setup({ enabled: false });
+    await t.memory.setEpicDigestNote(1, "金额用分存");
+    expect(await t.texts(scope)).toEqual([]);
   });
 });
 

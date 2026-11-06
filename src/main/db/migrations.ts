@@ -293,4 +293,18 @@ export const MIGRATIONS: string[] = [
   // 升级前的 epic 两个都是 NULL：规划还在 epic 记忆的 handoff 里，第一次同步时迁过来（MemoryService.syncEpicNow）。
   `ALTER TABLE epics ADD COLUMN plan TEXT;
   ALTER TABLE epics ADD COLUMN plan_at INTEGER;`,
+  // epic 的长期记忆（计划 16 任务 6）：每周和 feature 归档时整理一次，全文追加在这里。不属于 epic 的 feature 归档时 epic_id 为 NULL。
+  `
+  CREATE TABLE epic_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    epic_id INTEGER REFERENCES epics(id),
+    feature_id INTEGER REFERENCES features(id),
+    trigger TEXT NOT NULL CHECK (trigger IN ('weekly', 'feature_archived')),
+    created_at INTEGER NOT NULL,
+    covers_from INTEGER NOT NULL,
+    covers_until INTEGER NOT NULL,
+    payload TEXT NOT NULL
+  );
+  CREATE INDEX idx_epic_history_epic ON epic_history (epic_id, created_at);
+  `,
 ];

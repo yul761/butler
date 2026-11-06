@@ -1,7 +1,8 @@
 import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
 import type { Handoff } from "../../shared/handoff";
 import {
-  epicScope, featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, ticketScope, WORKSPACE_SCOPE, type ButlerNote, type MemoryView, type WhyEntry,
+  epicScope, featureScope, MAX_NOTE_VARIANT, NOTE_BODY_LIMIT, noteBody, noteId, noteText, parseNote, ticketScope, truncateUnits, WORKSPACE_SCOPE,
+  type ButlerNote, type MemoryItem, type MemoryView, type WhyEntry,
 } from "../../shared/memory";
 import type { EpicFeatureRow } from "../../shared/types";
 import {
@@ -61,6 +62,9 @@ export function handoffSummary(p: Handoff): string {
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 const noteKey = (n: { kind: string; id: string }): string => `${n.kind}:${n.id}`;
+
+/** epic scope 里唯一一条由 Butler 维护的 note：epic 历史的滚动 note（计划 16 任务 6）。 */
+const EPIC_DIGEST_NOTE: Pick<ButlerNote, "kind" | "id"> = { kind: "decision", id: "epic-digest" };
 
 /**
  * 写入的先后（PF2）：位置不够时先写的才写得进去。未完成的 followup 优先，然后是决策；各自新的在前。
@@ -184,6 +188,32 @@ export class MemoryService {
     );
     this.pending.set(key, p);
     return p;
+  }
+
+  /**
+   * 写或覆盖 epic scope 里 id 为 epic-digest 的那一条 note（epic 历史的滚动 note，计划 16 任务 6）。
+   * 只比对这一条：epic session 自己写的笔记（哪怕碰巧用了 Butler 的前缀格式）一律不动；syncEpic 只写 handoff，也不会动这一条。
+   * 正文压掉多余空白、截到 NOTE_BODY_LIMIT；不过 NFKC（会把全角的“；”变成半角）。正文为空时 forget 它。
+   * 记忆关着时什么都不做。排进写入队列，永不 reject。
+   */
+  setEpicDigestNote(epicId: number, text: string): Promise<void> {
+    const key = epicScope(epicId);
+    return this.enqueue(
+      `memory epic digest note ${key}`,
+      async () => {
+        if (!this.d.enabled()) return;
+        const body = truncateUnits(text.replace(/\s+/g, " ").trim(), NOTE_BODY_LIMIT).trim();
+        const note: ButlerNote = { ...EPIC_DIGEST_NOTE, body };
+        const only = noteKey(note);
+        await withScope({ dataDir: this.d.dataDir, scope: key }, (s) => this.reconcile(key, s, body ? [note] : [], (k) => k === only));
+        try {
+          this.d.onSynced?.(key);
+        } catch (e) {
+          this.log("memory onSynced callback failed", e);
+        }
+      },
+      undefined,
+    );
   }
 
   /**
@@ -321,9 +351,17 @@ export class MemoryService {
     }
   }
 
-  private async reconcile(key: string, s: ScopeHandle, desired: ButlerNote[]): Promise<void> {
+  /** only：只比对 key（kind:id）满足它的 Butler 条目，别的一律当作看不见（epic scope 用它只管 epic-digest 那一条）。 */
+  private async reconcile(key: string, s: ScopeHandle, desired: ButlerNote[], only?: (noteKey: string) => boolean): Promise<void> {
+    const mine = (items: MemoryItem[]): MemoryItem[] =>
+      only
+        ? items.filter((i) => {
+            const p = parseNote(i.text);
+            return p !== null && only(noteKey(p));
+          })
+        : items;
     const slots = slotGuard(s);
-    const before = await s.facts();
+    const before = mine(await s.facts());
     const plan = planReconcile(before, desired);
     // 先 forget 再 remember（设计文档 13.1）：新文本是旧文本的修订时，StateCore 把它们串成一条 why 链。
     // statecore-mcp 1.1 起 forget 会释放位置（没登记的条目也一样），不再需要先登记再 forget。
@@ -331,7 +369,7 @@ export class MemoryService {
     // 按现状重新比对一次再写（claude 里的 MCP 可能同时在写）。
     const after = await s.facts();
     const wanted = new Map(desired.map((n) => [noteKey(n), n]));
-    const queue = byPriority(planReconcile(after, desired).write).map((note) => ({ note, from: 1 }));
+    const queue = byPriority(planReconcile(mine(after), desired).write).map((note) => ({ note, from: 1 }));
     const visible = new Set(after.map((i) => i.text));
     // 每次重写都用更长的区分词，几轮之内必然分开；预算只是防止意外的死循环。
     let budget = desired.length * MAX_NOTE_VARIANT;
