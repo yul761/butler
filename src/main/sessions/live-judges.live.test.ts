@@ -68,7 +68,7 @@ describe.skipIf(process.env.BUTLER_LIVE_CLAUDE !== "1")("headless judges against
     const featureId = features.insert({ name: "结账", workspaceDir: "/w/checkout", createdAt: now - 3 * 86_400_000, epicId });
     tickets.insert({ key: "SHOP-1", title: null, status: "active", statusManual: null, createdAt: now - 3 * 86_400_000, archivedAt: null, featureId });
     const summary: FeatureHandoff = {
-      summary: "结账流程的下单和支付已经联调完成，退款接口还没开始。", blockers: [], next_steps: ["开始退款接口"],
+      summary: "结账流程的下单和支付已经联调完成，退款接口还没开始。", blockers: [], next_steps: [{ ticket: "SHOP-1", text: "开始退款接口" }],
       decisions: [{ key: "money", statement: "金额一律用整数分存储" }], open_questions: [],
     };
     featureHandoffs.insert({ featureId, sessionId: null, trigger: "nightly", createdAt: now - 2 * 86_400_000, payload: summary, rawText: null });
