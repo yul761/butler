@@ -218,3 +218,12 @@ export class NeedsYouTracker {
     this.pump();
   }
 }
+
+/**
+ * 递 CI 结果、合并通知那道 guard 的「需要你」（I1）：真判断出需要你挡；停在一条还没判断完的回复上也挡——Stop 的那一刻新回复的
+ * 判断还在排队，这时贴进去，可能正好贴在一个问了用户问题的 session 里。判断说不需要之后，下一次 flush（PrWatcher 每轮的 roundDone、
+ * HoldWatcher 的定时检查）再递。
+ */
+export function deliveryNeedsYou(t: Pick<NeedsYouTracker, "reasonOf" | "undecided">, sessionId: string): boolean {
+  return t.reasonOf(sessionId) !== null || t.undecided(sessionId);
+}

@@ -84,7 +84,7 @@ import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
 import { judgeStuck } from "./sessions/stuck-judge";
-import { judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
+import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
 import { llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
@@ -723,10 +723,11 @@ async function bootstrap(): Promise<void> {
     typingQuietMs: Number(process.env.BUTLER_GATE_TYPING_QUIET_MS) || undefined,
     now: Date.now,
   };
-  // 合并通知和 CI 结果用的：在等用户回答的 session 不往里贴东西（计划 14），正在换新的也不贴（计划 16）。refresher 在下面才建好：回调里才用到。
+  // 合并通知和 CI 结果用的：在等用户回答的 session 不往里贴东西（计划 14），「需要你」还没判断完的也先不贴（I1），
+  // 正在换新的也不贴（计划 16）。refresher 在下面才建好：回调里才用到。
   const deliveryGuard = new DeliveryGuard({
     ...guardDeps,
-    needsYou: (id) => needsYou.reasonOf(id) !== null,
+    needsYou: (id) => deliveryNeedsYou(needsYou, id),
     refreshing: (id) => refresher.isRefreshing(id),
   });
   /** Stop 到的时候先重读这个 session 的活动（guard 看的是上一次刷新的）。活动按 head 的 id 跟踪；Stop 带来的可能是链上的旧 id。 */

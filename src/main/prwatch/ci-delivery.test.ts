@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DeliveryGuard } from "../sessions/delivery-guard";
+import { DeliveryGuard } from "../sessions/delivery-guard";
+import { deliveryNeedsYou, NeedsYouTracker, type NeedsYouVerdict } from "../sessions/needs-you";
 import type { PrWatchRow } from "../db/pr-watch-repo";
+import type { Session } from "../../shared/types";
 import { CiDelivery, deliveryKey } from "./ci-delivery";
 
 const row = (o: Partial<PrWatchRow> = {}): PrWatchRow => ({
@@ -112,6 +114,45 @@ describe("CiDelivery", () => {
     await Promise.resolve();
     release();
     await Promise.all([p1, p2]);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("CiDelivery with the real guard and needs-you tracker (I1)", () => {
+  it("a Stop whose new reply is not judged yet does not get the CI result; the flush after a 'not needed' verdict does", async () => {
+    const head = {
+      id: "h1", ticketKey: "BTL-1", cwd: "/r", origin: "butler", gitBranch: "b", firstPrompt: null, lastActivityAt: null, waitingForInput: true,
+      replacedBy: null, dismissed: false, createdAt: 0, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null,
+      epicId: null, model: null,
+    } as Session;
+    const pending: ((v: NeedsYouVerdict | null) => void)[] = [];
+    const tracker = new NeedsYouTracker({
+      judge: () => new Promise((r) => pending.push(r)),
+      sessions: () => [{ id: "h1", cwd: "/r", waiting: true, kind: "waiting", reply: { id: "m2", text: "要我把改动拆成两个 PR 吗？" } }],
+      notify: () => undefined,
+    });
+    const guard = new DeliveryGuard({
+      termOf: () => "t1", head: () => head,
+      activity: () => ({ sessionId: "h1", kind: "waiting", detail: null, background: false, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, lastOutput: [] }),
+      pty: { lastUserInputAt: () => 0, screenNeedsUser: () => false, hasDraft: () => false },
+      needsYou: (id) => deliveryNeedsYou(tracker, id),
+      now: () => 1_000_000,
+    });
+    const rows = new Map<number, PrWatchRow>([[1, row()]]);
+    const deliver = vi.fn(async () => "sent" as const);
+    const d = new CiDelivery({
+      repo: { all: () => [...rows.values()], get: (id: number) => rows.get(id) ?? null, setDelivered: (id: number, key: string) => { rows.get(id)!.deliveredKey = key; } },
+      guard, sessionFor: () => "h1", deliver, now: () => 1, log: () => {},
+    });
+    // Stop：新回复排进判断，结论还没出。
+    tracker.update();
+    await d.flush();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(rows.get(1)!.deliveredKey).toBeNull();
+    // 判断说不需要你：下一次 flush（PrWatcher 的 roundDone）递出去。
+    pending[0]({ needsYou: false, reason: "" });
+    await new Promise((r) => setTimeout(r, 0));
+    await d.flush();
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 });
