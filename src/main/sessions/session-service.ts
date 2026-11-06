@@ -24,7 +24,7 @@ import {
 } from "../../shared/types";
 import { launchEnv, type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
 import type { GuideKind } from "../claude/session-guide";
-import { claudeArgs, cmdShimSafe, sessionEnv } from "../claude/spawn";
+import { claudeArgs, cmdShimSafe, sessionEnv, type SessionModel } from "../claude/spawn";
 import type { EpicsRepo } from "../db/epics-repo";
 import { epicBriefMessage } from "../epics/epic-brief";
 import { epicFeatureRows, type LiveFeature } from "../epics/epic-info";
@@ -126,7 +126,12 @@ interface WorkspaceTarget {
   mcpConfig: () => string | null;
   guideKind: GuideKind;
   /** 新建 session 时这一行的角色。 */
-  row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "epicId">;
+  row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "epicId"> & { model?: SessionModel | null };
+}
+
+/** 记下的模型只认 opus / sonnet，别的值（老数据、手改）当没记。 */
+function storedModel(s: Session): SessionModel | null {
+  return s.model === "opus" || s.model === "sonnet" ? s.model : null;
 }
 
 type Claude = { path: string; pathValue: string };
@@ -134,6 +139,8 @@ type Claude = { path: string; pathValue: string };
 /** 不是渲染进程能传的打开参数：总控开子 session 时用。 */
 export interface OpenExtra {
   spawnedBy?: string;
+  /** 新开的 session 用哪个模型（不给：用 Claude Code 自己的默认）。 */
+  model?: SessionModel;
 }
 
 /** 同一个目录：Windows 的路径不分大小写，也不分 / 和 \\。 */
@@ -217,13 +224,13 @@ export class SessionService {
     if (head) {
       // claude --resume 只能在 session 当初的项目目录里找到它；没发过消息的 session 没有记录，用同一个 id 重新开
       termId = head.id;
-      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath });
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath, model: storedModel(head) });
     } else {
       termId = this.d.newId();
-      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath });
+      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath, model: extra.model });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
-        id: termId, ticketKey: ticket.key, cwd, origin: "butler", lastActivityAt: now, createdAt: now,
+        id: termId, model: extra.model ?? null, ticketKey: ticket.key, cwd, origin: "butler", lastActivityAt: now, createdAt: now,
         repoId: repo?.id ?? null, coordinator, spawnedBy: extra.spawnedBy ?? null,
       });
     }
@@ -508,7 +515,7 @@ export class SessionService {
       dirs: this.d.tickets.listByFeature(feature.id).flatMap((t) => t.repos.map((r) => this.d.ticketService.workDir(r))),
       mcpConfig: () => this.d.featureMcpConfig?.(feature.id, feature.epicId) ?? null,
       guideKind: from.fixes ? "ticket" : "coordinator",
-      row: { coordinator: !from.fixes, featureId: feature.id, fixesSession: from.fixes ?? null },
+      row: { coordinator: !from.fixes, featureId: feature.id, fixesSession: from.fixes ?? null, model: from.fixes ? "sonnet" : null },
     }, claude, from.head ?? null);
   }
 
@@ -547,10 +554,10 @@ export class SessionService {
     let insertedRow = false;
     if (head) {
       termId = head.id;
-      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath });
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath, model: storedModel(head) });
     } else {
       termId = this.d.newId();
-      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath });
+      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath, model: target.row.model });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
         id: termId, ticketKey: null, cwd, origin: "butler", lastActivityAt: now, createdAt: now, ...target.row,

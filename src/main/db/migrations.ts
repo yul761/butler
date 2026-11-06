@@ -287,4 +287,6 @@ export const MIGRATIONS: string[] = [
     delivered_key TEXT
   );
   `,
+  // session 开出来时用的模型（opus / sonnet；null：没指定，用 Claude Code 自己的默认），恢复时沿用
+  `ALTER TABLE sessions ADD COLUMN model TEXT;`,
 ];

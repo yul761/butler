@@ -19,6 +19,7 @@ interface SessionRow {
   feature_id: number | null;
   fixes_session: string | null;
   epic_id: number | null;
+  model: string | null;
 }
 
 function toSession(r: SessionRow): Session {
@@ -40,6 +41,7 @@ function toSession(r: SessionRow): Session {
     featureId: r.feature_id === null ? null : Number(r.feature_id),
     fixesSession: r.fixes_session,
     epicId: r.epic_id === null ? null : Number(r.epic_id),
+    model: r.model,
   };
 }
 
@@ -58,6 +60,7 @@ export interface NewSession {
   featureId?: number | null;
   fixesSession?: string | null;
   epicId?: number | null;
+  model?: string | null;
 }
 
 export interface SessionDetails {
@@ -81,12 +84,12 @@ export class SessionsRepo {
   insertIfAbsent(s: NewSession): boolean {
     const r = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session, epic_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session, epic_id, model)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
-        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null, s.epicId ?? null,
+        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null, s.epicId ?? null, s.model ?? null,
       );
     if (Number(r.changes) > 0) {
       this.forgotten.delete(s.id);
@@ -207,7 +210,8 @@ export class SessionsRepo {
         .prepare(
           `UPDATE sessions SET
              repo_id = COALESCE(repo_id, ${old("repo_id")}),
-             spawned_by = COALESCE(spawned_by, ${old("spawned_by")})${source === "resume" ? "" : role}
+             spawned_by = COALESCE(spawned_by, ${old("spawned_by")}),
+             model = COALESCE(model, ${old("model")})${source === "resume" ? "" : role}
            WHERE id = ?2 AND ticket_key IS ${old("ticket_key")}`,
         )
         .run(id, newId);

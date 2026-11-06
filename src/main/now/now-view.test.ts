@@ -22,6 +22,7 @@ function session(id: string, over: Partial<SessionView> = {}): SessionView {
     featureId: null,
     fixesSession: null,
     epicId: null,
+    model: null,
     termId: id,
     ...over,
   };

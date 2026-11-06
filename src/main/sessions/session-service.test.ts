@@ -112,6 +112,26 @@ describe("SessionService and cleaned-up worktrees (design 2026-10-26)", () => {
 });
 
 describe("SessionService.open", () => {
+  it("records the model of a new session and resumes with it", async () => {
+    const { service, spawned, sessions } = await setup();
+    await service.open({ ticketKey: "PROJ-1" }, { model: "sonnet" });
+    expect(sessions.get("new-1")?.model).toBe("sonnet");
+    expect(spawned[0].args).toEqual(["--session-id", "new-1", "--model", "sonnet"]);
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1, model: "opus" });
+    await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
+    expect(spawned[1].args).toEqual(["--resume", "old", "--model", "opus"]);
+  });
+
+  it("does not pass --model for sessions without one or with an unknown one", async () => {
+    const { service, spawned, sessions } = await setup();
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "odd", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 2, model: "gpt" });
+    await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
+    await service.open({ ticketKey: "PROJ-1", sessionId: "odd" });
+    await service.open({ ticketKey: "PROJ-1", force: true });
+    for (const s of spawned) expect(s.args).not.toContain("--model");
+  });
+
   it("mounts the ticket's memory MCP config on new and resumed sessions (design 4.2)", async () => {
     const asked: string[] = [];
     const { service, spawned, sessions } = await setup({ mcpConfig: (key) => (asked.push(key), "/b/mcp/PROJ-1.json") });

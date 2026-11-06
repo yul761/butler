@@ -708,7 +708,8 @@ describe("fix sessions (design 2026-10-31)", () => {
     expect(sessions.get("new-2")).toMatchObject({ ticketKey: null, featureId: feature.id, coordinator: false, fixesSession: stuckId, cwd: feature.workspaceDir, origin: "butler" });
     const s = spawned[1];
     expect(s.opts.cwd).toBe(feature.workspaceDir);
-    expect(s.args).toEqual(["--session-id", "new-2", "--mcp-config", `/mcp/features/${feature.id}.json`, "--settings", "/mcp/approve.json", "--add-dir", backend]);
+    expect(s.args).toEqual(["--session-id", "new-2", "--mcp-config", `/mcp/features/${feature.id}.json`, "--settings", "/mcp/approve.json", "--add-dir", backend, "--model", "sonnet"]);
+    expect(sessions.get("new-2")?.model).toBe("sonnet");
     expect(s.opts.env.BUTLER_TICKET).toBeUndefined();
     expect(s.opts.env.BUTLER_SESSION).toBe("new-2");
   });

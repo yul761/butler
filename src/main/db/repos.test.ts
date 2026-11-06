@@ -92,6 +92,25 @@ describe("SessionsRepo", () => {
     expect(repo.head("a")).not.toBeNull();
   });
 
+  it("stores the model of a new session", () => {
+    const repo = setup();
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1, model: "sonnet" });
+    repo.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1 });
+    expect(repo.get("a")?.model).toBe("sonnet");
+    expect(repo.get("b")?.model).toBeNull();
+  });
+
+  it("copies the model to the session that replaces it, without overwriting one the new row already has", () => {
+    const repo = setup();
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1, model: "opus" });
+    repo.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 2 });
+    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 3, model: "sonnet" });
+    repo.setReplacedBy("a", "b", "clear");
+    repo.setReplacedBy("b", "c", "clear");
+    expect(repo.get("b")?.model).toBe("opus");
+    expect(repo.get("c")?.model).toBe("sonnet");
+  });
+
   it("setOrigin and delete (clearing pointers to the deleted row)", () => {
     const repo = setup();
     repo.insertIfAbsent({ id: "a", ticketKey: "PROJ-1", cwd: "/x", origin: "discovered", createdAt: 1 });

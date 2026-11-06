@@ -118,6 +118,8 @@ export interface Session {
   fixesSession: string | null;
   /** epic session 属于哪个 epic（这时 ticketKey 和 featureId 都是 null）。 */
   epicId: number | null;
+  /** 开出来时用的模型（opus / sonnet）；null：没指定，恢复时也不传 --model。 */
+  model: string | null;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */
