@@ -5,7 +5,7 @@ import { setLang } from "../i18n";
 import { M } from "../strings";
 import type { DeliveryBlock, DeliveryCheck } from "./delivery-guard";
 import {
-  REFRESH_CLEAR_MS, REFRESH_COOLDOWN_MS, REFRESH_HANDOFF_MS, refreshKindOf, SessionRefresher, startRefresh, type RefreshKind, type RefreshResult, type SessionRefresherDeps,
+  autoRefreshNeedsYou, REFRESH_CLEAR_MS, REFRESH_COOLDOWN_MS, REFRESH_HANDOFF_MS, refreshKindOf, SessionRefresher, startRefresh, type RefreshKind, type RefreshResult, type SessionRefresherDeps,
 } from "./session-refresher";
 
 const base = (o: Partial<Session> = {}): Session => ({
@@ -647,5 +647,23 @@ describe("startRefresh (plan 16)", () => {
     expect(startRefresh({ precheck: () => null, refresh: () => Promise.reject(new Error("boom")) }, "s2", "coordinator", (m) => void logs.push(m))).toBeNull();
     await new Promise((res) => setImmediate(res));
     expect(logs).toEqual(["refresh s2 (coordinator) failed"]);
+  });
+});
+
+describe("autoRefreshNeedsYou (R33)", () => {
+  it.each([
+    // reason, undecided, refreshing → 挡不挡
+    [null, false, false, false],
+    [null, false, true, false],
+    // 判断还没出结论：不开始新的自动换新，但正在进行的换新照样往下走。
+    [null, true, false, true],
+    [null, true, true, false],
+    // 真判断出需要你：开始前和换新中都挡。
+    ["要拆成两个 PR 吗？", false, false, true],
+    ["要拆成两个 PR 吗？", false, true, true],
+    ["要拆成两个 PR 吗？", true, false, true],
+    ["要拆成两个 PR 吗？", true, true, true],
+  ])("reason=%s undecided=%s refreshing=%s → %s", (reason, undecided, refreshing, expected) => {
+    expect(autoRefreshNeedsYou({ reason, undecided, refreshing })).toBe(expected);
   });
 });

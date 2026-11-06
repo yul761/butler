@@ -99,10 +99,17 @@ async function withLogs(s: Sandbox, body: () => Promise<void>): Promise<void> {
   }
 }
 
-test("a long session is refreshed automatically and resumes from memory", async ({ makeSandbox, launch }) => {
+/**
+ * 自动换新：judgeDelayMs 是「需要你」判断要花的时间。R33：/handoff 那条回复停下来以后判断还没出结论，
+ * 换新不能因此停在 /clear 之前（判断真说需要你才停）。
+ */
+for (const { title, judgeDelayMs } of [
+  { title: "a long session is refreshed automatically and resumes from memory", judgeDelayMs: 0 },
+  { title: "an automatic refresh waits out a slow needs-you judge instead of stopping", judgeDelayMs: 3000 },
+]) test(title, async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   // 换新之前的每条回复都说上下文有 5000，超过阈值 1000；/clear 之后回到 500，不会再换一次。
-  s.env = { ...FAST, FAKE_CLAUDE_CONTEXT_TOKENS: "5000" };
+  s.env = { ...FAST, FAKE_CLAUDE_CONTEXT_TOKENS: "5000", FAKE_CLAUDE_JUDGE_DELAY_MS: String(judgeDelayMs) };
   const { page } = await launch(s);
   await withLogs(s, async () => {
     await completeWizard(page, s);

@@ -47,6 +47,14 @@ export function startRefresh(
   return null;
 }
 
+/**
+ * 自动换新那道 guard 的「需要你」（R33）：真判断出需要你就挡；判断还没出结论时，没在换新就挡（不开始新的自动换新），
+ * 正在换新就不挡（/handoff 那条回复停下来以后判断要几秒，不能因此停在 /clear 之前）。
+ */
+export function autoRefreshNeedsYou(v: { reason: string | null; undecided: boolean; refreshing: boolean }): boolean {
+  return v.reason !== null || (v.undecided && !v.refreshing);
+}
+
 export interface SessionRefresherDeps {
   /** 自动换新用：含「需要你」。和递 CI 结果用的不是同一个实例，不带 refreshing（R25），否则换新会挡住自己的下一步。 */
   guard: Pick<DeliveryGuard, "check">;

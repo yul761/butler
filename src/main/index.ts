@@ -78,7 +78,7 @@ import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { ActivityMonitor, activityIntervals } from "./sessions/activity-monitor";
 import { sessionRegistryName } from "./sessions/activity-sources";
 import { DeliveryGuard, type DeliveryGuardDeps } from "./sessions/delivery-guard";
-import { refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
+import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
@@ -744,8 +744,12 @@ async function bootstrap(): Promise<void> {
   };
   // 上下文换新（计划 16）。它自己的两道 guard 不带 refreshing（R25），否则换新会挡住自己的下一步。
   // 自动换新还要等「需要你」的判断出结论：刚停下来问了问题的 session，结论出来之前不能当作不需要你。
+  // 已经在换新的不等（R33）：/handoff 的回复还没判断完时照样往下走，真判断出需要你才停。
   const refresher = new SessionRefresher({
-    guard: new DeliveryGuard({ ...guardDeps, needsYou: (id) => needsYou.reasonOf(id) !== null || needsYou.undecided(id) }),
+    guard: new DeliveryGuard({
+      ...guardDeps,
+      needsYou: (id): boolean => autoRefreshNeedsYou({ reason: needsYou.reasonOf(id), undecided: needsYou.undecided(id), refreshing: refresher.isRefreshing(id) }),
+    }),
     guardIgnoringNeedsYou: new DeliveryGuard(guardDeps),
     head: (id) => sessions.head(id),
     activity: (id) => activityMonitor.get(id),
