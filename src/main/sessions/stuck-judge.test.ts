@@ -37,6 +37,11 @@ describe("judgeStuck", () => {
     expect(seen[0].args).toContain("--json-schema");
   });
 
+  it("cleans stray tags and extra whitespace out of reason and action", async () => {
+    const v = await judgeStuck(deps(ok({ stuck: true, reason: "在等\n  锁</reason>\n</invoke>", action: "结束进程</action>多余" })), input);
+    expect(v).toEqual({ stuck: true, reason: "在等 锁", action: "结束进程" });
+  });
+
   it("runs on haiku", async () => {
     const seen: HeadlessRequest[] = [];
     await judgeStuck(deps(ok({ stuck: false, reason: "r", action: "" }), seen), input);

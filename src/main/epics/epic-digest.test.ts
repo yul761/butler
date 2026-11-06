@@ -219,6 +219,16 @@ describe("EpicDigestRunner.weekly", () => {
     expect(e.payload.decisions).toHaveLength(10);
   });
 
+  it("strips stray tags out of the summary and each decision", async () => {
+    const t = setup();
+    t.addSummary(t.checkout, t.now() - DAY);
+    t.answer(ok({ summary: "下单和支付联调完成。\n退款还没开始。</summary>\n</invoke>", decisions: [{ what: "金额用整数分</what>", why: "避免浮点误差</why>\n</invoke>" }] }));
+    await t.runner.weekly();
+    const [e] = t.history.list(t.shop, 1);
+    expect(e.payload.summary).toBe("下单和支付联调完成。\n退款还没开始。");
+    expect(e.payload.decisions).toEqual([{ what: "金额用整数分", why: "避免浮点误差" }]);
+  });
+
   it("caps each decision's what and why, so one entry cannot fill the whole history budget", async () => {
     const t = setup();
     t.addSummary(t.checkout, t.now() - DAY);

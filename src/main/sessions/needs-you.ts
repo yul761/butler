@@ -4,6 +4,7 @@ import { headlessArgs } from "../claude/headless";
 import { execHeadlessJson, type HeadlessExecDeps } from "../handoff/headless-exec";
 import { toCliJsonSchema, validate } from "../handoff/schema";
 import { currentLang } from "../i18n";
+import { sanitizeJudgeReason } from "../util/judge-text";
 
 /** 给判断看的最后一条回复最多多少个字符（取结尾）。 */
 export const NEEDS_YOU_REPLY_CHARS = 1500;
@@ -55,7 +56,8 @@ export async function judgeNeedsYou(d: HeadlessExecDeps, reply: string, cwd: str
   const r = await execHeadlessJson(d, { label: "needs-you judge", args, prompt: prompt(tail(reply, NEEDS_YOU_REPLY_CHARS)), cwd });
   if (!r.ok) return null;
   const v = validate(AnswerSchema, r.value);
-  return v.ok ? { needsYou: v.value.needs_user, reason: v.value.reason } : null;
+  // 理由会显示在「现在」页上：去掉混进来的标签，压成一行，最多 80 字（R34）。
+  return v.ok ? { needsYou: v.value.needs_user, reason: sanitizeJudgeReason(v.value.reason) } : null;
 }
 
 /** 回复末尾包着问句的东西：空白、Markdown 的强调和代码标记、右括号、右引号。 */

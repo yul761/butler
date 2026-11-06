@@ -54,6 +54,13 @@ describe("judgeNeedsYou", () => {
     expect(seen[0].prompt).toContain("Pushed.");
   });
 
+  it("cleans stray tags out of the reason (live finding: Haiku ended one with </reason></invoke>)", async () => {
+    const v = await judgeNeedsYou(deps(ok({ needs_user: true, reason: "询问用户是否把改动拆成两个 PR，需要用户做决定</reason>\n</invoke>\n" })), "要拆吗？", "/r");
+    expect(v).toEqual({ needsYou: true, reason: "询问用户是否把改动拆成两个 PR，需要用户做决定" });
+    const long = await judgeNeedsYou(deps(ok({ needs_user: true, reason: `  ${"问".repeat(100)}  ` })), "要拆吗？", "/r");
+    expect([...long!.reason]).toHaveLength(80);
+  });
+
   it("returns null when the run fails or the answer is malformed", async () => {
     expect(await judgeNeedsYou(deps({ ok: false, reason: "timeout", message: "x", result: null }), "？", "/r")).toBeNull();
     expect(await judgeNeedsYou(deps(ok({ needs_user: "yes" })), "？", "/r")).toBeNull();

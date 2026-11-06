@@ -14,6 +14,7 @@ import { toCliJsonSchema, validate } from "../handoff/schema";
 import { currentLang } from "../i18n";
 import type { MemoryService } from "../memory/memory-service";
 import { daysBetween, localDate } from "../schedule/calendar";
+import { stripModelTags } from "../util/judge-text";
 
 /** 一次整理交给 Sonnet 的数据最多这么多字：超出时去掉最旧的记录。 */
 export const EPIC_DIGEST_INPUT_CHARS = 30_000;
@@ -261,7 +262,8 @@ function prompt(target: DigestTarget, items: DigestItem[], until: number, lang: 
   ].join("\n\n");
 }
 
-const cut = (text: string, limit: number): string => truncateUnits(text.trim(), limit).trim();
+/** 先去掉模型混进来的标签和它后面的内容（R34），再截到上限。 */
+const cut = (text: string, limit: number): string => truncateUnits(stripModelTags(text).trim(), limit).trim();
 
 /** 截到上限（summary、条数、每条的 what 和 why），去掉空的决定；summary 和 decisions 都是空的算没有答案。 */
 function fit(v: z.infer<typeof DigestSchema>): EpicHistoryEntry["payload"] | null {
