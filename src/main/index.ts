@@ -29,7 +29,7 @@ import { TicketsRepo } from "./db/tickets-repo";
 import { UsageRepo } from "./db/usage-repo";
 import { jobOf } from "./handoff/headless-exec";
 import type { UsageCounts } from "./usage/usage-parse";
-import { UsageScanner } from "./usage/usage-scanner";
+import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
 import { CiDelivery } from "./prwatch/ci-delivery";
@@ -1056,7 +1056,7 @@ async function bootstrap(): Promise<void> {
     if (!headlessAbort.signal.aborted) prWatcher.start();
   });
   activityMonitor.start();
-  usageScanner.start();
+  usageScanner.start(usageScanMs(process.env));
   void runDiscovery();
   // 启动时补齐记忆：老数据、上次退出时没写完的。
   void memory.syncAll();

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { UsageRepo } from "../db/usage-repo";
 import { memDb, tempDir } from "../test-utils";
-import { subagentsDir, UsageScanner } from "./usage-scanner";
+import { subagentsDir, USAGE_SCAN_MS, UsageScanner, usageScanMs } from "./usage-scanner";
 
 const line = (id: string, extra = "") =>
   JSON.stringify({
@@ -125,5 +125,24 @@ describe("UsageScanner", () => {
     mkdirSync(join(dir, "dir.jsonl"));
     await expect(scanner.scanAll()).resolves.toBeUndefined();
     expect(repo.since(0)).toHaveLength(0);
+  });
+});
+
+describe("usageScanMs", () => {
+  it("stays at 30 seconds by default", () => {
+    expect(usageScanMs({})).toBe(30_000);
+    expect(USAGE_SCAN_MS).toBe(30_000);
+  });
+
+  it("honours BUTLER_USAGE_SCAN_MS only under the e2e flag", () => {
+    expect(usageScanMs({ BUTLER_USAGE_SCAN_MS: "200" })).toBe(USAGE_SCAN_MS);
+    expect(usageScanMs({ BUTLER_USAGE_SCAN_MS: "200", BUTLER_BACKGROUND_WINDOWS: "0" })).toBe(USAGE_SCAN_MS);
+    expect(usageScanMs({ BUTLER_USAGE_SCAN_MS: "200", BUTLER_BACKGROUND_WINDOWS: "1" })).toBe(200);
+  });
+
+  it("keeps the default for a value that is not a positive whole number", () => {
+    for (const bad of ["", "0", "-5", "1.5", "soon"]) {
+      expect(usageScanMs({ BUTLER_USAGE_SCAN_MS: bad, BUTLER_BACKGROUND_WINDOWS: "1" })).toBe(USAGE_SCAN_MS);
+    }
   });
 });
