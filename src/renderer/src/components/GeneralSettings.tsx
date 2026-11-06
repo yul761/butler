@@ -118,6 +118,26 @@ export function GeneralSettings({ report, onHealth, onRerunWizard }: { report: H
         <dd className={m.mcpBundle ? "ok" : "error"}>{m.mcpBundle ? S.memoryMcpReady : S.memoryMcpMissing}</dd>
       </dl>
       <p className="muted">{S.memoryExplain}</p>
+      {/* 换新要靠记忆接上，所以放在记忆这一节（计划 16）。 */}
+      <div className="field">
+        {S.refreshThreshold}
+        <input
+          className="mono"
+          type="number"
+          min={0}
+          step={10000}
+          value={value("refreshThresholdTokens")}
+          onChange={(e) => setDraft((d) => ({ ...d, refreshThresholdTokens: e.target.value }))}
+          onBlur={() => {
+            if (draft.refreshThresholdTokens !== undefined && draft.refreshThresholdTokens !== current.refreshThresholdTokens) void save("refreshThresholdTokens");
+            else clearDraft("refreshThresholdTokens");
+          }}
+        />
+        <p className="muted">{S.refreshThresholdHelp}</p>
+        <div className="actions">
+          <button onClick={() => void reset("refreshThresholdTokens")}>{S.resetDefault}</button>
+        </div>
+      </div>
       {m.statecorePlugin && <p className="error">{S.statecorePluginWarning}</p>}
       <div className="actions">
         <button onClick={() => api.setSetting("onboardingDone", "0").then(onRerunWizard, reportError)}>{S.rerunWizard}</button>

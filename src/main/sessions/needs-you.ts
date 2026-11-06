@@ -154,6 +154,18 @@ export class NeedsYouTracker {
     return s ? this.reasonFor(s) : null;
   }
 
+  /**
+   * 停在一条回复上、还没有结论（没排上、排着队或者正在判断）。自动换新等它判断完再说（计划 16）：
+   * 刚停下来问了用户问题的 session，结论出来之前 reasonOf 是 null，不能当作不需要你。
+   */
+  undecided(sessionId: string): boolean {
+    const s = this.d.sessions().find((x) => x.id === sessionId);
+    const reply = s ? stoppedReply(s) : null;
+    if (!reply) return false;
+    const e = this.entries.get(sessionId);
+    return !e || e.replyId !== reply.id || (e.verdict === null && !e.answered);
+  }
+
   /** 所有需要你的 session 和理由：只列一遍 session（「现在」页每次取一整份，不用每行都调 reasonOf）。 */
   reasons(): Map<string, string> {
     const out = new Map<string, string>();

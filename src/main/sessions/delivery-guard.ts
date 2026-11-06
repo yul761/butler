@@ -17,6 +17,11 @@ export interface DeliveryGuardDeps {
   pty: Pick<PtyManager, "lastUserInputAt" | "screenNeedsUser" | "hasDraft">;
   /** 计划 14 接上「需要你」；没接时恒为 false。 */
   needsYou?: (headId: string) => boolean;
+  /**
+   * Butler 正在给这个 session 换新（计划 16）：当作忙，什么都不递。只给递 CI 结果、合并通知用的 guard；
+   * 换新自己用的 guard 不带它（R25），否则换新会挡住自己的下一步。
+   */
+  refreshing?: (headId: string) => boolean;
   /** 打过字之后多久之内不自动输入，默认 USER_TYPING_QUIET_MS（e2e 用环境变量调短）。 */
   typingQuietMs?: number;
   now(): number;
@@ -35,7 +40,7 @@ export class DeliveryGuard {
     const termId = this.d.termOf(sessionId);
     if (termId === null) return { ok: false, block: "closed" };
     const head = this.d.head(termId);
-    if (!head || !this.quiet(head)) return { ok: false, block: "busy" };
+    if (!head || !this.quiet(head) || this.d.refreshing?.(head.id)) return { ok: false, block: "busy" };
     if (this.d.pty.screenNeedsUser(termId)) return { ok: false, block: "screen" };
     if (this.d.needsYou?.(head.id)) return { ok: false, block: "needs_you" };
     const typed = this.d.pty.lastUserInputAt(termId);

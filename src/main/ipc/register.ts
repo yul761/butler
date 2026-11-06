@@ -1,7 +1,7 @@
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc";
 import {
-  FOLLOWUP_STATUSES, type AutostartState, type FollowupStatus, type JobStateView, type McpProbe, type MergeEvent, type NowView, type OpenSessionRequest, type TicketStatus, type WatchedPr,
+  FOLLOWUP_STATUSES, type AutostartState, type FollowupStatus, type JobStateView, type McpProbe, type MergeEvent, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr,
 } from "../../shared/types";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EpicService } from "../epics/epic-service";
@@ -61,6 +61,8 @@ export interface IpcDeps {
   prWatchList: () => WatchedPr[];
   /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
   nowView: (merges: MergeEvent[]) => NowView;
+  /** 界面上的“换新”按钮（计划 16）：马上回答，换新在后台跑。 */
+  refreshSession: (sessionId: string) => RefreshSessionResult;
   runner: HandoffRunner;
   featureRunner: Pick<FeatureSummaryRunner, "runManual">;
   scheduler: Scheduler;
@@ -270,6 +272,11 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.sessionsUnhide, (raw: unknown) => {
     d.sessionService.unhide(sessionIdArg(raw));
     d.notify();
+  });
+  handle(IPC.sessionsRefresh, (raw: unknown): RefreshSessionResult => {
+    const r = d.refreshSession(sessionIdArg(raw));
+    d.notify();
+    return r;
   });
   handle(IPC.sessionsDismiss, (id: string) => {
     d.sessionService.dismiss(id);

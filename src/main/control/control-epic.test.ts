@@ -42,8 +42,10 @@ async function setup() {
   const activities = new Map<string, SessionActivity>();
   const replies = new Map<string, string>();
   const killed: string[] = [];
+  const refreshed: string[] = [];
   const handle = controlHandler({
     tickets, sessions, features, epics, featureService,
+    refresher: { precheck: () => null, refresh: async (id) => (refreshed.push(id), "done" as const) },
     ticketService: undefined as never,
     sessionService: { isRunning: (id: string) => open.has(id), termIdOf: (id: string) => (open.has(id) ? id : null) } as never,
     activity: (id) => activities.get(id) ?? null,
@@ -62,7 +64,7 @@ async function setup() {
     id: 0, name: "f", status: "active", archivedAt: null, summaryAt: 5, summary: "s", blockers: [], decisions: [], openQuestions: [], ...o,
   });
   return { handle, base, epic, solo, features, epics, featureService, epicService, frontend, backend, elsewhere, notified: () => notified, setRows: (r: EpicFeatureRow[]) => (rows = r), row,
-    logs, events, setRefreshEpic: (f: typeof refreshEpic) => (refreshEpic = f), tickets, sessions, open, activities, replies, killed };
+    logs, events, setRefreshEpic: (f: typeof refreshEpic) => (refreshEpic = f), tickets, sessions, open, activities, replies, killed, refreshed };
 }
 
 const err = (r: ControlResult) => (r.ok ? "" : r.error);
@@ -259,6 +261,18 @@ describe("sessions of an epic's features (task 11)", () => {
     expect(await end("fc")).toEqual({ v: 1, ok: true, value: { ended: true } });
     expect(await end("t1")).toEqual({ v: 1, ok: true, value: { ended: true } });
     expect(killed).toEqual(["fc", "t1"]);
+  });
+
+  it("refreshes the coordinator or a ticket session of one of its features, and nothing outside them (plan 16)", async () => {
+    const { handle, base, refreshed } = await withSessions();
+    const refresh = (session: string) => handle({ ...base, from: "es", op: "refresh_session", session });
+    for (const id of ["lc", "oc", "es"]) {
+      expect(await refresh(id), id).toMatchObject({ ok: false, error: expect.stringContaining(`找不到 session ${id}`) });
+    }
+    expect(refreshed).toEqual([]);
+    expect(await refresh("fc")).toEqual({ v: 1, ok: true, value: { started: true } });
+    expect(await refresh("t1")).toEqual({ v: 1, ok: true, value: { started: true } });
+    expect(refreshed).toEqual(["fc", "t1"]);
   });
 
   it("refuses everything for an archived epic", async () => {

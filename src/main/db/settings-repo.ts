@@ -37,6 +37,8 @@ export const SETTING_DEFAULTS = {
   onboardingDone: "0",
   /** StateCore 记忆（设计文档第 8 节）：1 开 0 关。关闭时不写入、不给 claude 挂记忆 MCP。 */
   memoryEnabled: "1",
+  /** 上下文（最近一轮的 token 数）超过这么多时自动换新 session（计划 16）；0 = 关。手动和总控触发不看它。 */
+  refreshThresholdTokens: "150000",
   /** 界面和提示词的语言：auto | zh | en（设计文档 2026-10-26）。迁移 7 给老用户写 zh。 */
   language: "auto",
 } as const;

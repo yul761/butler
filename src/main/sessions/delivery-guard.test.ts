@@ -23,6 +23,7 @@ function setup() {
     typedAt: 0,
     draft: false,
     needsYou: undefined as ((headId: string) => boolean) | undefined,
+    refreshing: undefined as ((headId: string) => boolean) | undefined,
   };
   const deps = (): DeliveryGuardDeps => ({
     termOf: () => state.term,
@@ -34,6 +35,7 @@ function setup() {
       hasDraft: () => state.draft,
     },
     needsYou: state.needsYou,
+    refreshing: state.refreshing,
     now: () => state.now,
   });
   const check = () => new DeliveryGuard(deps()).check("s-old");
@@ -113,6 +115,16 @@ describe("DeliveryGuard", () => {
     t.state.needsYou = (id) => (asked.push(id), true);
     expect(t.check()).toEqual({ ok: false, block: "needs_you" });
     expect(asked).toEqual(["s-head"]);
+  });
+
+  it("refreshing sessions are busy for every delivery (plan 16)", () => {
+    const t = setup();
+    const asked: string[] = [];
+    t.state.refreshing = (id) => (asked.push(id), true);
+    expect(t.check()).toEqual({ ok: false, block: "busy" });
+    expect(asked).toEqual(["s-head"]);
+    t.state.refreshing = () => false;
+    expect(t.check()).toMatchObject({ ok: true });
   });
 
   it("passes and returns the terminal when everything is quiet", () => {

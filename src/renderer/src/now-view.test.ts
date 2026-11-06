@@ -19,7 +19,7 @@ const pr = (over: Partial<WatchedPr> = {}): WatchedPr => ({
 
 const row = (over: Partial<NowRow> = {}): NowRow => ({
   sessionId: "s1", ticketKey: "BTL-1", title: "通知中心", repo: null, coordinator: false, activity: act(), mergeQueued: false,
-  needsYou: null, prs: [], idle: false, since: NOW - 3 * MIN, target: { page: "ticket", key: "BTL-1", sessionId: "s1" }, ...over,
+  needsYou: null, refreshing: null, prs: [], idle: false, since: NOW - 3 * MIN, target: { page: "ticket", key: "BTL-1", sessionId: "s1" }, ...over,
 });
 
 const usage = (over: Partial<UsageSummary> = {}): UsageSummary => ({
@@ -47,6 +47,15 @@ describe("rowText", () => {
     expect(bare([pr({ review: "pending" })])).toEqual({ main: "等 review", sub: null, tone: "muted" });
     expect(bare([pr({ review: "changes_requested" })])).toEqual({ main: "要修改", sub: null, tone: "muted" });
     expect(bare([pr({ review: "approved" })])).toEqual({ main: "已批准", sub: null, tone: "muted" });
+  });
+
+  it("a refreshing row reads 换新中 / Refreshing (plan 16)", () => {
+    for (const step of ["handoff", "clear", "resume"] as const) {
+      expect(rowText(row({ refreshing: step, activity: act({ kind: "thinking" }) }), S, NOW)).toEqual({ main: "换新中", sub: null, tone: "warn" });
+      expect(rowText(row({ refreshing: step, mergeQueued: true, activity: act({ kind: "test", stuck: true }) }), S, NOW).main).toBe("换新中");
+    }
+    setUiLang("en");
+    expect(rowText(row({ refreshing: "clear" }), S, NOW).main).toBe("Refreshing");
   });
 
   it("merge queue beats the plain activity", () => {

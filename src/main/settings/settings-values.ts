@@ -345,6 +345,11 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "memoryEnabled":
     case "onboardingDone":
       return normalizeFlag(value);
+    case "refreshThresholdTokens": {
+      const t = value.trim();
+      if (!REFRESH_THRESHOLD_RE.test(t)) throw new SettingError(M().refreshThreshold);
+      return String(Number(t));
+    }
     case "language": {
       const t = value.trim();
       if (!(LANG_SETTINGS as readonly string[]).includes(t)) throw new SettingError(M().language);
@@ -370,6 +375,15 @@ export function scheduleConfig(s: SettingsRepo): ScheduleConfig {
 /** 记忆开关（memoryEnabled）：只有明确存成 "0" 才算关（默认开）。所有读这个开关的地方都用它。 */
 export function memoryOn(s: Pick<SettingsRepo, "get">): boolean {
   return s.get("memoryEnabled") !== "0";
+}
+
+/** 换新阈值：0 或者最多 7 位的整数 token 数（大于任何模型的上下文）。 */
+const REFRESH_THRESHOLD_RE = /^\d{1,7}$/;
+
+/** 自动换新的阈值（refreshThresholdTokens，计划 16）：0 = 关；存的值不合法时用默认的 150000。 */
+export function refreshThreshold(s: Pick<SettingsRepo, "get">): number {
+  const t = s.get("refreshThresholdTokens").trim();
+  return REFRESH_THRESHOLD_RE.test(t) ? Number(t) : Number(SETTING_DEFAULTS.refreshThresholdTokens);
 }
 
 export function trackerTools(s: SettingsRepo): string[] {

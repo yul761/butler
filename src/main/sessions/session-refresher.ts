@@ -1,6 +1,6 @@
 import type { SessionActivity } from "../../shared/activity";
 import { sanitizeTask } from "../../shared/control";
-import type { Session } from "../../shared/types";
+import type { RefreshRefusal, RefreshStep, Session } from "../../shared/types";
 import { M } from "../strings";
 import type { DeliveryCheck, DeliveryGuard } from "./delivery-guard";
 
@@ -15,13 +15,37 @@ const CLEAR_COMMAND = "/clear";
 
 export type RefreshKind = "ticket" | "feature" | "epic";
 export type RefreshTrigger = "auto" | "coordinator" | "manual";
-export type RefreshStep = "handoff" | "clear" | "resume";
+export type { RefreshStep };
 /**
  * done：三步都输入了。busy：现在不能往终端里输入（什么都没输入，不冷却）。already：这个 session 正在换新。
  * cooldown：30 分钟内失败过（手动触发不看这一条）。memory_off：记忆关着，换新以后接不上，什么都不输入。
  * failed：不能换新的 session，或者中途停下了（之后不再输入任何东西，进入冷却）。
  */
-export type RefreshResult = "done" | "busy" | "already" | "cooldown" | "memory_off" | "failed";
+export type RefreshResult = "done" | RefreshRefusal;
+
+/**
+ * 能换新的 session 是哪一种（SessionRefresherDeps.kindOf）：ticket session 和 ticket 总控是 ticket，feature 总控是 feature，
+ * epic session 是 epic。修复 session、不是 Butler 开的、没开着终端的、什么都不属于的返回 null。
+ */
+export function refreshKindOf(s: Session, terminalOpen: boolean): RefreshKind | null {
+  if (!terminalOpen || s.origin !== "butler" || s.fixesSession !== null) return null;
+  if (s.epicId !== null) return "epic";
+  if (s.ticketKey) return "ticket";
+  return s.featureId !== null ? "feature" : null;
+}
+
+/**
+ * 总控的 refresh_session 和界面上的按钮：能开始就在后台开始（不等它跑完），返回 null；不能就马上返回原因，什么都不做。
+ * precheck 和 refresh 之间没有 await，refresh 里同步的检查看到的是同一个状态。
+ */
+export function startRefresh(
+  r: Pick<SessionRefresher, "precheck" | "refresh">, sessionId: string, trigger: RefreshTrigger, log: (msg: string, err?: unknown) => void,
+): RefreshRefusal | null {
+  const refused = r.precheck(sessionId, trigger);
+  if (refused !== null) return refused;
+  r.refresh(sessionId, trigger).catch((e: unknown) => log(`refresh ${sessionId} (${trigger}) failed`, e));
+  return null;
+}
 
 export interface SessionRefresherDeps {
   /** 自动换新用：含「需要你」。和递 CI 结果用的不是同一个实例，不带 refreshing（R25），否则换新会挡住自己的下一步。 */
@@ -51,6 +75,11 @@ export interface SessionRefresherDeps {
   notify(): void;
   now(): number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * 现在就重读这个 session 的活动（index.ts 的 refreshActivityOf）。等着输入下一步时每次看 guard 之前先读一次（R28）：
+   * guard 看的是上一次刷新的活动，/clear 之后还没有 Stop，不读就一直当它在忙。不给就只靠活动监控自己的 tick。
+   */
+  refreshActivity?: (sessionId: string) => Promise<void>;
   log(msg: string, err?: unknown): void;
 }
 
@@ -112,7 +141,7 @@ export class SessionRefresher {
    * 看 session 种类、记忆开关、epic 规划、是否正在换新、冷却（手动不看）和 guard（按触发方式选）。
    * /handoff 命令文件是不是 Butler 的要读文件，留在 refresh() 里异步看。
    */
-  precheck(sessionId: string, trigger: RefreshTrigger): RefreshResult | null {
+  precheck(sessionId: string, trigger: RefreshTrigger): RefreshRefusal | null {
     const r = this.check(sessionId, trigger);
     return "result" in r ? r.result : null;
   }
@@ -134,7 +163,7 @@ export class SessionRefresher {
   }
 
   /** 开始前的同步检查（precheck 和 begin 共用）；通过时给出要登记的这次换新，不登记。 */
-  private check(sessionId: string, trigger: RefreshTrigger): { result: RefreshResult } | { run: Run } {
+  private check(sessionId: string, trigger: RefreshTrigger): { result: RefreshRefusal } | { run: Run } {
     if (!this.d.memoryEnabled()) return { result: "memory_off" };
     const head = this.d.head(sessionId);
     const kind = head ? this.d.kindOf(head) : null;
@@ -246,11 +275,21 @@ export class SessionRefresher {
     const end = this.d.now() + REFRESH_CLEAR_MS;
     for (;;) {
       if (!this.d.memoryEnabled()) return "memory_off";
+      await this.rereadActivity(run);
       const gate = this.guardFor(run.trigger).check(run.headId);
       if (gate.ok) return gate.termId === run.termId ? null : "the terminal changed";
       if (gate.block !== "busy") return gate.block;
       if (this.d.now() >= end) return `still busy after ${REFRESH_CLEAR_MS / 1000} seconds`;
       await this.sleep(POLL_MS);
+    }
+  }
+
+  /** 重读活动；读失败只记日志，照样看 guard（读不到就还是上一次的活动）。 */
+  private async rereadActivity(run: Run): Promise<void> {
+    try {
+      await this.d.refreshActivity?.(run.headId);
+    } catch (e) {
+      this.d.log(`refresh ${run.headId}: re-reading the activity failed`, e);
     }
   }
 

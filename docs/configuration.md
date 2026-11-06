@@ -71,6 +71,7 @@ Butler also checks the pattern and the branch template together. Changing either
 | Setting | Key | Default | Accepted values and notes |
 |---------|-----|---------|---------------------------|
 | 把 handoff 的进度、决策、follow-up 和经验写进 StateCore… (write progress, decisions, follow-ups and learnings to StateCore, and mount memory in Butler's sessions) | `memoryEnabled` | `1` (on) | `1` or `0`. When off, Butler writes nothing to StateCore and starts sessions without the memory MCP servers. Existing memory is kept. When you turn it back on, Butler catches up on the tickets it missed. |
+| 上下文超过多少 token 时自动换新（0 = 关） (refresh automatically when the context passes this many tokens) | `refreshThresholdTokens` | `150000` | `0` turns automatic refresh off, otherwise a whole number of tokens (at most 7 digits). When a Butler session has stopped, is not waiting on you and its last turn's context is at least this long, Butler types `/handoff`, waits for the handoff to be stored, types `/clear`, then asks it to recall where it was and wait for you. Needs memory on. The ↻ button next to a running session and a coordinator's `refresh_session` do the same on demand and do not depend on this setting. |
 
 This section also shows:
 

@@ -439,6 +439,16 @@ export type NowTarget =
   | { page: "epic"; id: number; sessionId: string | null };
 
 /** 「现在」页的一行：一个开着终端的 Butler session，或者一个没有开着的 session、但有开着的 PR 的 ticket。 */
+/** 换新（计划 16）正在做的那一步：写 handoff、/clear、发接着做的话。 */
+export type RefreshStep = "handoff" | "clear" | "resume";
+/**
+ * 换新开始不了的原因（SessionRefresher.precheck）：busy 现在不能往终端里输入；already 正在换新；cooldown 30 分钟内失败过；
+ * memory_off 记忆关着；failed 这个 session 不能换新。
+ */
+export type RefreshRefusal = "busy" | "already" | "cooldown" | "memory_off" | "failed";
+/** 界面上的“换新”按钮（IPC sessions:refresh）：开始了，或者为什么开始不了。 */
+export type RefreshSessionResult = { ok: true } | { ok: false; reason: RefreshRefusal };
+
 export interface NowRow {
   /** 没有开着的 session、只有 PR 的行为 null。 */
   sessionId: string | null;
@@ -450,8 +460,10 @@ export interface NowRow {
   activity: SessionActivity | null;
   /** 这个 session 在合并总控的等待名单里。 */
   mergeQueued: boolean;
-  /** 需要你的理由：卡住时是卡住的 reason；停在确认上时是固定文案；不需要为 null。 */
+  /** 需要你的理由：卡住时是卡住的 reason；停在确认上时是固定文案；不需要为 null。正在换新时为 null。 */
   needsYou: string | null;
+  /** Butler 正在给这个 session 换新（计划 16）：做到哪一步；不在换新为 null。 */
+  refreshing: RefreshStep | null;
   prs: WatchedPr[];
   /** 停着、不需要你、没有开着的 PR / CI：默认折起来。 */
   idle: boolean;

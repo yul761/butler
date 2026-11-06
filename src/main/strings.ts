@@ -1,5 +1,6 @@
 import type { Lang } from "../shared/i18n";
 import { formatDuration } from "../shared/text";
+import type { RefreshRefusal } from "../shared/types";
 import { currentLang } from "./i18n";
 
 /**
@@ -121,6 +122,7 @@ const ZH = {
   modelName: "模型名不能有空格，最长 200 字，例如 deepseek-chat",
   budget: "预算是美元金额，例如 1 或 2.50",
   retention: "保留天数是 1–3650 的整数",
+  refreshThreshold: "换新阈值是 0（关）或者一个整数 token 数，最多 7 位",
   claudePathAbsolute: "claude 路径必须是绝对路径，例如 /usr/local/bin/claude；留空则自动查找",
   language: "语言只能是 auto、zh 或 en",
   settingNotEditable: (key: string) => `这个设置不能在这里修改：${key}`,
@@ -179,6 +181,20 @@ const ZH = {
   ctlSessionNotRunning: (id: string) => `session ${id} 已经结束了`,
   ctlSessionBusy: (id: string, kind: string) => `session ${id} 正在干活（${kind}），不能结束`,
   ctlSessionNeedsUser: (id: string) => `session ${id} 的屏幕上有一个等用户回答的确认，不能结束`,
+  ctlRefreshRefused: (id: string, why: RefreshRefusal) => {
+    switch (why) {
+      case "busy":
+        return `session ${id} 现在不能换新：它没有停下来，或者屏幕上有等用户回答的确认、用户刚打过字、输入框里有没发出去的草稿。等它停下来再试`;
+      case "already":
+        return `session ${id} 正在换新`;
+      case "cooldown":
+        return `session ${id} 30 分钟内换新失败过，过一会儿再试`;
+      case "memory_off":
+        return `记忆关着：session ${id} 换新以后接不上，所以不换新`;
+      case "failed":
+        return `session ${id} 不能换新：只有开着终端的 ticket session、ticket 总控、feature 总控和 epic session 能换新，修复 session 不能`;
+    }
+  },
   ctlNoSuchTicket: (ticket: string, keys: string) => `这个 feature 下没有 ticket ${ticket}。现有的：${keys}`,
   ctlTicketNoRepo: (key: string) => `ticket ${key} 还没有仓库`,
   ctlPickRepo: (key: string, names: string) => `ticket ${key} 有几个仓库，请用 repo 指定：${names}`,
@@ -306,6 +322,7 @@ const EN: MainStrings = {
   modelName: "The model name can't contain spaces and is at most 200 characters, for example deepseek-chat",
   budget: "The budget is an amount in USD, for example 1 or 2.50",
   retention: "Days to keep must be a whole number from 1 to 3650",
+  refreshThreshold: "The refresh threshold must be 0 (off) or a whole number of tokens, at most 7 digits",
   claudePathAbsolute: "The claude path must be absolute, for example /usr/local/bin/claude; leave it empty to find it automatically",
   language: "The language can only be auto, zh or en",
   settingNotEditable: (key: string) => `This setting can't be changed here: ${key}`,
@@ -360,6 +377,20 @@ const EN: MainStrings = {
   ctlSessionNotRunning: (id: string) => `Session ${id} has already ended`,
   ctlSessionBusy: (id: string, kind: string) => `Session ${id} is working (${kind}) and cannot be ended`,
   ctlSessionNeedsUser: (id: string) => `Session ${id} has a prompt on screen waiting for the user to answer, so it cannot be ended`,
+  ctlRefreshRefused: (id: string, why: RefreshRefusal) => {
+    switch (why) {
+      case "busy":
+        return `Session ${id} cannot be refreshed now: it has not stopped, or it has a prompt on screen waiting for the user, the user just typed, or there is an unsent draft in its input box. Try again once it stops`;
+      case "already":
+        return `Session ${id} is already being refreshed`;
+      case "cooldown":
+        return `A refresh of session ${id} failed in the last 30 minutes; try again later`;
+      case "memory_off":
+        return `Memory is off: session ${id} could not pick up again after a refresh, so it is not refreshed`;
+      case "failed":
+        return `Session ${id} cannot be refreshed: only ticket sessions, ticket coordinators, feature coordinators and epic sessions with an open terminal can, not fix sessions`;
+    }
+  },
   ctlNoSuchTicket: (ticket: string, keys: string) => `This feature has no ticket ${ticket}. Its tickets: ${keys}`,
   ctlTicketNoRepo: (key: string) => `Ticket ${key} has no repo yet`,
   ctlPickRepo: (key: string, names: string) => `Ticket ${key} has several repos; name one with repo: ${names}`,

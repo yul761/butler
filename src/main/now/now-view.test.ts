@@ -91,6 +91,7 @@ function input(over: Partial<NowInput> = {}): NowInput {
     needsYouReason: () => null,
     prs: () => [],
     mergeQueued: () => false,
+    refreshing: () => null,
     merges: [],
     approvalText: "等你确认",
     ...over,
@@ -155,6 +156,7 @@ describe("buildNowView", () => {
       activity: null,
       mergeQueued: false,
       needsYou: null,
+      refreshing: null,
       prs: prs["A-1"],
       idle: false,
       since: null,
@@ -214,6 +216,34 @@ describe("buildNowView", () => {
     // 每行最多问一次；确认和卡住已经有理由，不用再问。
     expect(asked.sort()).toEqual(["s-asks", "s-ok"]);
     expect(v.epics[0].counts).toEqual({ active: 4, needsYou: 3, stuck: 1 });
+  });
+
+  it("a refreshing row has its step, is not needs-you and is not idle (plan 16)", () => {
+    const t = ticket("A-1", null, [
+      session("s-asks", { ticketKey: "A-1", repoId: 1 }),
+      session("s-approve", { ticketKey: "A-1", repoId: 1 }),
+      session("s-quiet", { ticketKey: "A-1", repoId: 1 }),
+    ]);
+    const acts: Record<string, SessionActivity> = {
+      "s-asks": act("s-asks", { kind: "waiting" }),
+      "s-approve": act("s-approve", { kind: "approval" }),
+      "s-quiet": act("s-quiet", { kind: "waiting" }),
+    };
+    const asked: string[] = [];
+    const v = buildNowView(input({
+      tickets: [t],
+      activity: (id) => acts[id] ?? null,
+      needsYouReason: (id) => (asked.push(id), "问你：要不要拆 PR"),
+      refreshing: (id) => (id === "s-quiet" ? "clear" : id === "s-asks" || id === "s-approve" ? "handoff" : null),
+    }));
+    const rows = v.epics[0].features[0].rows;
+    expect(rows.map((r) => [r.sessionId, r.refreshing, r.needsYou, r.idle])).toEqual([
+      ["s-asks", "handoff", null, false],
+      ["s-approve", "handoff", null, false],
+      ["s-quiet", "clear", null, false],
+    ]);
+    expect(asked).toEqual([]);
+    expect(v.needsYou).toEqual([]);
   });
 
   it("marks quiet rows idle and counts per group", () => {

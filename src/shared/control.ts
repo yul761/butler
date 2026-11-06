@@ -35,7 +35,9 @@ export type TicketControlRequest =
   | { v: 1; ticketKey: string; from: string | null; op: "session_activity"; session: string }
   | { v: 1; ticketKey: string; from: string | null; op: "start_session"; repo: string; task: string; model?: StartModel }
   /** 结束一个停下来在等输入的 session（和用户点 × 一样，之后能恢复）。 */
-  | { v: 1; ticketKey: string; from: string | null; op: "end_session"; session: string; reason: string };
+  | { v: 1; ticketKey: string; from: string | null; op: "end_session"; session: string; reason: string }
+  /** 让 Butler 给一个停下来的 session 换新上下文（计划 16）：handoff → /clear → 从记忆里接上。 */
+  | { v: 1; ticketKey: string; from: string | null; op: "refresh_session"; session: string };
 
 /** epic session 建 feature 时 brief 最多这么多字符，超出直接拒绝。 */
 export const BRIEF_LIMIT = 4000;
@@ -63,7 +65,8 @@ export type FeatureControlRequest =
   | { v: 1; featureId: number; from: string | null; op: "start_session"; ticket: string; repo?: string; task: string; model?: StartModel }
   /** feature 属于 epic 时：epic 名字和同一 epic 下其他 feature 的情况。 */
   | { v: 1; featureId: number; from: string | null; op: "epic_context" }
-  | { v: 1; featureId: number; from: string | null; op: "end_session"; session: string; reason: string };
+  | { v: 1; featureId: number; from: string | null; op: "end_session"; session: string; reason: string }
+  | { v: 1; featureId: number; from: string | null; op: "refresh_session"; session: string };
 
 /** epic session 的请求（设计文档 2026-11-01）：create_feature 在 epic 下建 feature，epic 只有一个仓库时 repos 可以省略。 */
 export type EpicControlRequest =
@@ -75,7 +78,8 @@ export type EpicControlRequest =
   /** epic 下各 feature 的 session：feature 级的（总控、修复）和 ticket 的。 */
   | { v: 1; epicId: number; from: string | null; op: "list_sessions" }
   | { v: 1; epicId: number; from: string | null; op: "session_activity"; session: string }
-  | { v: 1; epicId: number; from: string | null; op: "end_session"; session: string; reason: string };
+  | { v: 1; epicId: number; from: string | null; op: "end_session"; session: string; reason: string }
+  | { v: 1; epicId: number; from: string | null; op: "refresh_session"; session: string };
 
 export type ControlRequest = TicketControlRequest | FeatureControlRequest | EpicControlRequest;
 
@@ -85,14 +89,17 @@ const okTask = (t: unknown): t is string => typeof t === "string" && t.trim().le
 const okName = (x: unknown, max: number): x is string => typeof x === "string" && x.length > 0 && x.length <= max;
 const okReason = (r: unknown): r is string => typeof r === "string" && r.trim().length > 0 && r.length <= REASON_LIMIT;
 
-/** 三种请求共用的 session_activity、end_session（list_sessions 各自处理）。 */
-function sessionOp<B extends object>(base: B, o: Record<string, unknown>): (B & { op: "session_activity"; session: string }) | (B & { op: "end_session"; session: string; reason: string }) | null {
+/** 三种请求共用的 session_activity、end_session、refresh_session（list_sessions 各自处理）。 */
+function sessionOp<B extends object>(
+  base: B, o: Record<string, unknown>,
+): (B & { op: "session_activity"; session: string }) | (B & { op: "refresh_session"; session: string }) | (B & { op: "end_session"; session: string; reason: string }) | null {
   if (!okName(o.session, 200)) return null;
   if (o.op === "session_activity") return { ...base, op: "session_activity", session: o.session };
+  if (o.op === "refresh_session") return { ...base, op: "refresh_session", session: o.session };
   if (o.op === "end_session" && okReason(o.reason)) return { ...base, op: "end_session", session: o.session, reason: o.reason };
   return null;
 }
-const isSessionOp = (op: unknown) => op === "session_activity" || op === "end_session";
+const isSessionOp = (op: unknown) => op === "session_activity" || op === "end_session" || op === "refresh_session";
 
 /** 主进程按运行时类型检查请求（文件谁都能写）：不合规返回 null。ticketKey 和 featureId 必须正好有一个。 */
 export function parseControlRequest(raw: unknown): ControlRequest | null {

@@ -7,6 +7,7 @@ import { sessionLabel, splitSessions } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
 import { RepoDialog } from "./RepoDialog";
 import { EndSessionButton } from "./EndSessionButton";
+import { RefreshSessionButton } from "./RefreshSessionButton";
 import { TerminalPane } from "./TerminalPane";
 import { TicketOverview } from "./TicketOverview";
 import { TitleDialog } from "./TitleDialog";
@@ -220,7 +221,10 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
             </button>
             {/* 正在运行的终端不能隐藏，只能结束（×点两次）；结束之后才能隐藏。 */}
             {s.termId ? (
-              <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => closePane(s.termId!)} />
+              <>
+                <RefreshSessionButton sessionId={s.id} label={sessionLabel(s, S.untitledSession)} />
+                <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => closePane(s.termId!)} />
+              </>
             ) : (
               <button className="session-hide" title={S.hideSession} aria-label={S.hideSessionNamed(sessionLabel(s, S.untitledSession))} onClick={() => api.hideSession(s.id).catch(reportError)}>
                 ×

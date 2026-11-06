@@ -141,6 +141,25 @@ describe("NeedsYouTracker", () => {
     expect(h.calls).toHaveLength(2);
   });
 
+  it("undecided: stopped on a reply that is not judged yet (plan 16: auto refresh waits for the verdict)", async () => {
+    const h = harness([stopped("s1", "m1", "推上去了。"), { id: "s2", cwd: "/r", waiting: false, kind: "edit", reply: { id: "x", text: "改着" } }]);
+    // 还没 update 过、排着队、正在判断：都算没定。
+    expect(h.tracker.undecided("s1")).toBe(true);
+    h.tracker.update();
+    expect(h.tracker.undecided("s1")).toBe(true);
+    h.calls[0].done({ needsYou: false, reason: "" });
+    await h.settle();
+    expect(h.tracker.undecided("s1")).toBe(false);
+    // 忙着的、没有回复的、不认识的：不算。
+    expect(h.tracker.undecided("s2")).toBe(false);
+    h.heads.push({ id: "s3", cwd: "/r", waiting: true, kind: "waiting", reply: null });
+    expect(h.tracker.undecided("s3")).toBe(false);
+    expect(h.tracker.undecided("nope")).toBe(false);
+    // 新回复又停下：重新算没定。
+    h.heads[0] = stopped("s1", "m2", "要拆吗？");
+    expect(h.tracker.undecided("s1")).toBe(true);
+  });
+
   it("a plain status report is not needs-you", async () => {
     const h = harness([stopped("s1", "m1", "推上去了，CI 在跑。")]);
     h.tracker.update();

@@ -4,7 +4,7 @@ import { SettingsRepo } from "../db/settings-repo";
 import { memDb } from "../test-utils";
 import {
   isLoopbackHost, llmConfig, normalizeBaseUrl, checkBranchTemplateFits, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTerms, normalizeTicketPattern, parsePriceTable, parseTime, parseToolList,
-  parseWorkingDays, priceFor, scheduleConfig, SettingError, TERMS_LIMIT, trackerTools,
+  parseWorkingDays, priceFor, refreshThreshold, scheduleConfig, SettingError, TERMS_LIMIT, trackerTools,
 } from "./settings-values";
 
 describe("settings values", () => {
@@ -216,5 +216,29 @@ describe("language setting (design 2026-10-26 i18n)", () => {
   it("accepts auto, zh and en only", () => {
     for (const ok of ["auto", "zh", "en"]) expect(normalizeSetting("language", ` ${ok} `)).toBe(ok);
     for (const bad of ["fr", "", "ZH-cn"]) expect(() => normalizeSetting("language", bad), bad).toThrow(SettingError);
+  });
+});
+
+describe("refresh threshold (plan 16)", () => {
+  it("reads refreshThresholdTokens with a default of 150000", () => {
+    const s = new SettingsRepo(memDb());
+    expect(refreshThreshold(s)).toBe(150_000);
+    s.set("refreshThresholdTokens", "20000");
+    expect(refreshThreshold(s)).toBe(20_000);
+    // 0 = 关掉自动换新。
+    s.set("refreshThresholdTokens", "0");
+    expect(refreshThreshold(s)).toBe(0);
+    // 存的值坏了：用默认。
+    for (const bad of ["", "abc", "-5", "1.5", "1e9"]) {
+      s.set("refreshThresholdTokens", bad);
+      expect(refreshThreshold(s), bad).toBe(150_000);
+    }
+  });
+
+  it("accepts a whole number of tokens and rejects anything else", () => {
+    expect(normalizeSetting("refreshThresholdTokens", " 20000 ")).toBe("20000");
+    expect(normalizeSetting("refreshThresholdTokens", "0")).toBe("0");
+    expect(normalizeSetting("refreshThresholdTokens", "007")).toBe("7");
+    for (const bad of ["", "abc", "-5", "1.5", "1e9", "12345678901"]) expect(() => normalizeSetting("refreshThresholdTokens", bad), bad).toThrow(SettingError);
   });
 });

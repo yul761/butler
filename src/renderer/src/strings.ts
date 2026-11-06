@@ -1,7 +1,7 @@
 import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
-import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus, UsageKind } from "../../shared/types";
+import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "已合并·待收尾",
@@ -155,6 +155,15 @@ const ZH = {
   endSession: "结束这个 session（对话记录会保留，之后可以再打开）",
   endSessionConfirm: "确认结束？",
   endSessionNamed: (name: string) => `结束 ${name}`,
+  refreshSession: "换新上下文：先让它写 handoff，再清空，再从记忆里接上（它要先停下来）",
+  refreshSessionNamed: (name: string) => `给 ${name} 换新上下文`,
+  refreshRefused: {
+    busy: "在忙，稍后再试",
+    already: "正在换新",
+    cooldown: "刚失败过，稍后再试",
+    memory_off: "记忆关着，不能换新",
+    failed: "这个 session 不能换新",
+  } as Record<RefreshRefusal, string>,
   hiddenSessions: (n: number) => `已隐藏 (${n})`,
   hiddenSessionsHint: "这些 session 只是不在列表里显示，对话记录还在。恢复后可以继续用。",
   unhideSession: "恢复",
@@ -278,6 +287,7 @@ const ZH = {
   nowStuckWith: (reason: string) => `卡住：${reason}`,
   nowStuckNoReason: "卡住了",
   nowMergeQueued: "合并排队",
+  nowRefreshing: "换新中",
   nowStopped: "已停下",
   nowWaitCi: "等 CI",
   nowCiFailed: "CI 失败",
@@ -447,6 +457,8 @@ const ZH = {
   memoryMcp: "给 claude 的记忆 MCP",
   memoryMcpReady: "就绪",
   memoryMcpMissing: "没有找到（开发模式请先运行 pnpm build:memory-mcp）：session 不会挂记忆",
+  refreshThreshold: "上下文超过多少 token 时自动换新（0 = 关）",
+  refreshThresholdHelp: "换新：session 停下来以后，Butler 让它写 handoff、清空上下文，再从记忆里接上。需要开着记忆；手动的“换新”按钮不受这个设置影响。",
   memoryExplain: "StateCore 只在本机。claude 里挂的记忆进程拿不到任何模型 key；只有隐私档位为“完整”时，Butler 才会在每次晚间 handoff 之后，把 claude 记下的原始片段连同已有的记忆经个人 API 蒸馏（不扫描，记在审计页）。",
   statecorePluginWarning: "检测到你另外装了 StateCore 的 Claude Code 捕获插件。Butler 已经覆盖了它的功能，同时开着会重复记录，建议在 Claude Code 里卸掉它。",
   rerunWizard: "重新运行首次启动向导",

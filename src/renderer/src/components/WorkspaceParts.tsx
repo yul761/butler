@@ -6,6 +6,7 @@ import { lastSegment } from "../repos";
 import { initialPane, sessionLabel } from "../sessions";
 import { S } from "../strings";
 import { EndSessionButton } from "./EndSessionButton";
+import { RefreshSessionButton } from "./RefreshSessionButton";
 import { RepoPicker } from "./RepoPicker";
 import { TerminalPane } from "./TerminalPane";
 
@@ -209,7 +210,10 @@ export function SessionArea({ repos, reposHint, onAddRepo, onRemoveRepo, session
               <span className="action">{s.termId ? S.switchTo : S.open}</span>
             </button>
             {s.termId ? (
-              <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => panes.close(s.termId!)} />
+              <>
+                <RefreshSessionButton sessionId={s.id} label={sessionLabel(s, S.untitledSession)} />
+                <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => panes.close(s.termId!)} />
+              </>
             ) : (
               <button className="session-hide" title={S.hideSession} aria-label={S.hideSessionNamed(sessionLabel(s, S.untitledSession))} onClick={() => api.hideSession(s.id).catch(reportError)}>
                 ×

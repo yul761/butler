@@ -12,6 +12,7 @@ import { M } from "../strings";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import type { SessionService } from "../sessions/session-service";
+import { startRefresh, type SessionRefresher } from "../sessions/session-refresher";
 import { FEATURE_NAME_LIMIT, type FeatureService } from "../tickets/feature-service";
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { samePath, TicketError, type TicketService } from "../tickets/ticket-service";
@@ -38,6 +39,8 @@ export interface ControlHandlerDeps {
   activityOutput?: (sessionId: string) => Promise<string>;
   /** end_session：关掉终端，和用户在界面上点 × 一样（pty.kill；session 留在列表里，之后能恢复）。 */
   kill: (termId: string) => void;
+  /** refresh_session（计划 16）：先同步 precheck，能开始就在后台换新，不等它跑完。不给就拒绝。 */
+  refresher?: Pick<SessionRefresher, "precheck" | "refresh">;
   /** 屏幕上有权限确认或启动对话框（PtyManager.screenNeedsUser）：这时不能结束。 */
   screenNeedsUser: (termId: string) => boolean;
   /** session 最后一条 assistant 文字回复的结尾（最多 500 字符）；读不到为 null。 */
@@ -175,6 +178,21 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     return ok({ ended: true });
   };
 
+  /**
+   * refresh_session（计划 16）：范围和 end_session 一样，不能对自己（from 是 /clear 之前的 id 也认）。
+   * 能不能开始由换新自己马上回答（precheck）；开始了就先返回 { started: true }，换新在后台跑，结果只记日志。
+   */
+  const refreshSession = (req: { from: string | null; session: string }, belongs: (s: Session) => boolean): ControlResult => {
+    const h = d.sessions.head(req.session);
+    const self = req.from ? (d.sessions.head(req.from)?.id ?? req.from) : null;
+    if (!h || !belongs(h) || h.id === self) return fail(M().ctlNoSuchSession(req.session));
+    if (!d.refresher) return fail(M().ctlRefreshRefused(h.id, "failed"));
+    const refused = startRefresh(d.refresher, h.id, "coordinator", (m, e) => d.log?.(m, e));
+    if (refused) return fail(M().ctlRefreshRefused(h.id, refused));
+    d.log?.(`refresh_session ${h.id} by ${req.from ?? "?"}: started`);
+    return ok({ started: true });
+  };
+
   /** list_sessions 的可见行：/clear 之前的旧行和用户隐藏的不列。 */
   const visible = <T extends { replacedBy: string | null; dismissed: boolean }>(rows: T[]) => rows.filter((s) => !s.replacedBy && !s.dismissed);
 
@@ -310,6 +328,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     const keys = new Set(own.flatMap(({ tickets }) => tickets.map((t) => t.key)));
     const belongs = (s: Session) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId !== null && featureIds.has(s.featureId));
     if (req.op === "session_activity") return sessionActivity(req.session, belongs);
+    if (req.op === "refresh_session") return refreshSession(req, belongs);
     return endSession(req, belongs);
   };
 
@@ -348,10 +367,11 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
     if (req.op === "list_sessions") return ok(featureSessionRows(f, own));
 
-    if (req.op === "end_session") {
-      // ticket 的 session 和这个 feature 的修复 session；feature 的总控不归总控关。
+    if (req.op === "end_session" || req.op === "refresh_session") {
+      // ticket 的 session 和这个 feature 的修复 session；feature 的总控不归总控关，也不归它换新（修复 session 换新会被拒绝）。
       const keys = new Set(own.map((t) => t.key));
-      return endSession(req, (s) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id && s.fixesSession !== null));
+      const belongs = (s: Session) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id && s.fixesSession !== null);
+      return req.op === "end_session" ? endSession(req, belongs) : refreshSession(req, belongs);
     }
 
     const t = own.find((x) => x.key === req.ticket.trim().toUpperCase());
@@ -384,6 +404,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
     if (req.op === "session_activity") return sessionActivity(req.session, (s) => s.ticketKey === t.key);
     if (req.op === "end_session") return endSession(req, (s) => s.ticketKey === t.key);
+    if (req.op === "refresh_session") return refreshSession(req, (s) => s.ticketKey === t.key);
 
     const repo = findRepo(t, req.repo);
     if (typeof repo === "string") return fail(repo);

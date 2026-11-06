@@ -1,5 +1,5 @@
 import type { PrivacyLevel } from "../../shared/llm";
-import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus, UsageKind } from "../../shared/types";
+import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 
 /** "1 ticket", "2 tickets". */
@@ -151,6 +151,15 @@ export const EN: UiStrings = {
   endSession: "End this session (the conversation is kept and can be opened again)",
   endSessionConfirm: "End it?",
   endSessionNamed: (name: string) => `End ${name}`,
+  refreshSession: "Refresh the context: it writes a handoff, the context is cleared, then it picks up again from memory (it has to stop first)",
+  refreshSessionNamed: (name: string) => `Refresh the context of ${name}`,
+  refreshRefused: {
+    busy: "Busy, try again later",
+    already: "Already refreshing",
+    cooldown: "Failed recently, try again later",
+    memory_off: "Memory is off, cannot refresh",
+    failed: "This session cannot be refreshed",
+  } as Record<RefreshRefusal, string>,
   hiddenSessions: (n: number) => `Hidden (${n})`,
   hiddenSessionsHint: "These sessions are only left out of the list; their conversations are still there. Restore one to use it again.",
   unhideSession: "Restore",
@@ -274,6 +283,7 @@ export const EN: UiStrings = {
   nowStuckWith: (reason: string) => `Stuck: ${reason}`,
   nowStuckNoReason: "stuck",
   nowMergeQueued: "Queued to merge",
+  nowRefreshing: "Refreshing",
   nowStopped: "Stopped",
   nowWaitCi: "Waiting for CI",
   nowCiFailed: "CI failed",
@@ -443,6 +453,8 @@ export const EN: UiStrings = {
   memoryMcp: "Memory MCP for claude",
   memoryMcpReady: "Ready",
   memoryMcpMissing: "Not found (in development, run pnpm build:memory-mcp first): sessions start without memory",
+  refreshThreshold: "Refresh automatically when the context passes this many tokens (0 = off)",
+  refreshThresholdHelp: "Refresh: once the session stops, Butler has it write a handoff, clears the context, then has it pick up again from memory. Needs memory on; the manual Refresh button does not depend on this setting.",
   memoryExplain: "StateCore stays on this computer. The memory processes started inside claude get no model key. Only at the full privacy level does Butler, after every nightly handoff, distill the raw excerpts claude saved, together with the existing memory, through the personal API (not scanned; logged on the audit page).",
   statecorePluginWarning: "StateCore's own Claude Code capture plugin is installed. Butler already does its job, and with both on, memory is recorded twice. Uninstall the plugin in Claude Code.",
   rerunWizard: "Run the first-run wizard again",

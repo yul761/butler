@@ -65,6 +65,28 @@ export const END_SESSION_TOOL_EN = {
   },
 } as const;
 
+/** 三套工具都有的 refresh_session（计划 16）：Butler 给一个停下来的子 session 换新上下文。 */
+export const REFRESH_SESSION_TOOL = {
+  name: "refresh_session",
+  description: "让 Butler 给一个停下来的子 session 换新上下文：先写 handoff，再清空，再从记忆里接上。只能对你管的、已经停下来的 session 用。",
+  inputSchema: {
+    type: "object",
+    properties: { session: { type: "string", description: "session id（list_sessions 里的 id）" } },
+    required: ["session"],
+    additionalProperties: false,
+  },
+} as const;
+
+export const REFRESH_SESSION_TOOL_EN = {
+  ...REFRESH_SESSION_TOOL,
+  description:
+    "Have Butler give a stopped child session a fresh context: it writes a handoff first, then the context is cleared, then it picks up again from memory. Only for sessions you manage that have stopped.",
+  inputSchema: {
+    ...REFRESH_SESSION_TOOL.inputSchema,
+    properties: { session: { type: "string", description: "the session id (id in list_sessions)" } },
+  },
+} as const;
+
 /** start_session 的 model 参数（两种总控共用）。 */
 const MODEL_PROP = {
   type: "string",
@@ -120,6 +142,7 @@ export const TOOLS = [
     },
   },
   END_SESSION_TOOL,
+  REFRESH_SESSION_TOOL,
 ] as const;
 
 /** feature 总控的工具（设计文档 2026-10-26）。 */
@@ -188,6 +211,7 @@ export const FEATURE_TOOLS = [
     },
   },
   END_SESSION_TOOL,
+  REFRESH_SESSION_TOOL,
 ] as const;
 
 /** 英文版：工具名、参数和 schema 一样，只有描述不同。 */
@@ -225,6 +249,7 @@ export const TOOLS_EN = [
     },
   },
   END_SESSION_TOOL_EN,
+  REFRESH_SESSION_TOOL_EN,
 ] as const;
 
 export const FEATURE_TOOLS_EN = [
@@ -283,6 +308,7 @@ export const FEATURE_TOOLS_EN = [
     },
   },
   END_SESSION_TOOL_EN,
+  REFRESH_SESSION_TOOL_EN,
 ] as const;
 
 const EMPTY_SCHEMA = { type: "object", properties: {}, additionalProperties: false } as const;
@@ -343,6 +369,7 @@ export const EPIC_TOOLS = [
       additionalProperties: false,
     },
   },
+  REFRESH_SESSION_TOOL,
 ] as const;
 
 export const EPIC_TOOLS_EN = [
@@ -393,6 +420,7 @@ export const EPIC_TOOLS_EN = [
       },
     },
   },
+  REFRESH_SESSION_TOOL_EN,
 ] as const;
 
 /** feature 总控的 epic_context：只在 feature 属于 epic 时出现（启动时 BUTLER_FEATURE_EPIC=1）。 */
@@ -428,6 +456,7 @@ const TEXT = {
     badModel: "model 只能是 opus 或 sonnet",
     needSession: "session_activity 需要字符串参数 session",
     needEnd: `end_session 需要字符串参数 session 和 reason（reason 不能为空，最多 ${REASON_LIMIT} 字符）`,
+    needRefresh: "refresh_session 需要字符串参数 session",
     taskTooLong: `task 太长（最多 ${TASK_LIMIT} 字）`,
     needPlan: `set_epic_plan 需要字符串参数 plan（不能为空，最多 ${EPIC_PLAN_MAX_CHARS} 字符）`,
     noTool: (t: string) => `没有这个工具：${t}`,
@@ -448,6 +477,7 @@ const TEXT = {
     badModel: "model must be opus or sonnet",
     needSession: "session_activity needs a string argument, session",
     needEnd: `end_session needs string arguments, session and reason (reason must not be empty and is at most ${REASON_LIMIT} characters)`,
+    needRefresh: "refresh_session needs a string argument, session",
     taskTooLong: `task is too long (at most ${TASK_LIMIT} characters)`,
     needPlan: `set_epic_plan needs a string argument, plan (not empty, at most ${EPIC_PLAN_MAX_CHARS} characters)`,
     noTool: (t: string) => `No such tool: ${t}`,
@@ -552,6 +582,8 @@ export class SessionsServer {
         return typeof args.session === "string" ? { ...base, op: "session_activity", session: args.session } : toolError(this.text.needSession);
       case "end_session":
         return this.endRequest(base, args);
+      case "refresh_session":
+        return typeof args.session === "string" && args.session ? ({ ...base, op: "refresh_session", session: args.session } as ControlRequest) : toolError(this.text.needRefresh);
       case "start_session":
         if (typeof args.repo !== "string" || typeof args.task !== "string") return toolError(this.text.needRepoTask);
         if (args.task.length > TASK_LIMIT) return toolError(this.text.taskTooLong);
@@ -587,6 +619,8 @@ export class SessionsServer {
         return typeof args.session === "string" ? { ...base, op: "session_activity", session: args.session } : toolError(this.text.needSession);
       case "end_session":
         return this.endRequest(base, args);
+      case "refresh_session":
+        return typeof args.session === "string" && args.session ? ({ ...base, op: "refresh_session", session: args.session } as ControlRequest) : toolError(this.text.needRefresh);
       default:
         return toolError(this.text.noTool(String(tool)));
     }
@@ -608,6 +642,8 @@ export class SessionsServer {
         return typeof args.session === "string" ? { ...base, op: "session_activity", session: args.session } : toolError(this.text.needSession);
       case "end_session":
         return this.endRequest(base, args);
+      case "refresh_session":
+        return typeof args.session === "string" && args.session ? ({ ...base, op: "refresh_session", session: args.session } as ControlRequest) : toolError(this.text.needRefresh);
       case "create_ticket": {
         if (typeof args.ticket !== "string") return toolError(this.text.needTicket);
         const { title, repos, branch } = args;

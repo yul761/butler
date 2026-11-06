@@ -34,10 +34,12 @@ function prText(prs: WatchedPr[], S: UiStrings): { main: string; tone: RowTone }
 }
 
 /**
- * 一行的文字：需要你 → 卡住 → 合并排队 → 正在做的事 → PR 和 CI → 已停下。
+ * 一行的文字：换新中 → 需要你 → 卡住 → 合并排队 → 正在做的事 → PR 和 CI → 已停下。
  * sub 是活动的细节（文件、命令、多久没有输出）；停着的不写（时长在最右边一列）。
+ * 换新中的 session 在跑的是 Butler 输入的 /handoff、/clear，活动和卡住都不看。
  */
 export function rowText(r: NowRow, S: UiStrings, now: number): { main: string; sub: string | null; tone: RowTone } {
+  if (r.refreshing !== null) return { main: S.nowRefreshing, sub: null, tone: "warn" };
   const a = r.activity;
   const live = a && !stoppedKind(a) ? activityText(a, S, now) : null;
   const sub = live?.sub ?? null;

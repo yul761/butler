@@ -1,5 +1,5 @@
 import type { SessionActivity } from "../../shared/activity";
-import type { EpicView, FeatureView, MergeEvent, NowCounts, NowEpic, NowFeature, NowRow, NowTarget, NowView, SessionView, TicketView, WatchedPr } from "../../shared/types";
+import type { EpicView, FeatureView, MergeEvent, NowCounts, NowEpic, NowFeature, NowRow, NowTarget, NowView, RefreshStep, SessionView, TicketView, WatchedPr } from "../../shared/types";
 
 export interface NowInput {
   tickets: TicketView[];
@@ -9,6 +9,8 @@ export interface NowInput {
   needsYouReason: (sessionId: string) => string | null;
   prs: (ticketKey: string) => WatchedPr[];
   mergeQueued: (sessionId: string) => boolean;
+  /** Butler 正在给这个 session 换新时做到哪一步（SessionRefresher.stepOf）；不在换新为 null。 */
+  refreshing: (sessionId: string) => RefreshStep | null;
   merges: MergeEvent[];
   /** 停在确认（权限、AskUserQuestion、ExitPlanMode）上时的理由文案，比如"等你确认"。 */
   approvalText: string;
@@ -35,14 +37,21 @@ interface RowBase {
   target: NowTarget;
 }
 
-/** 一个开着的 session 的行：needsYouReason 只在确认和卡住都不是时才问（每行最多一次）。 */
+/**
+ * 一个开着的 session 的行：needsYouReason 只在确认和卡住都不是时才问（每行最多一次）。
+ * 正在换新的不算需要你（屏幕上的东西是 Butler 自己输入的），也不折起来。
+ */
 function sessionRow(i: NowInput, s: SessionView, base: RowBase): NowRow {
   const activity = i.activity(s.id);
   const mergeQueued = i.mergeQueued(s.id);
+  const refreshing = i.refreshing(s.id);
   const needsYou =
-    activity?.kind === "approval" ? i.approvalText : activity?.stuck === true ? (activity.reason ?? "") : i.needsYouReason(s.id);
-  const idle = needsYou === null && !mergeQueued && stopped(activity) && !base.prs.some(prBusy);
-  return { ...base, sessionId: s.id, activity, mergeQueued, needsYou, idle, since: activity?.startedAt ?? s.lastActivityAt };
+    refreshing !== null ? null
+    : activity?.kind === "approval" ? i.approvalText
+    : activity?.stuck === true ? (activity.reason ?? "")
+    : i.needsYouReason(s.id);
+  const idle = refreshing === null && needsYou === null && !mergeQueued && stopped(activity) && !base.prs.some(prBusy);
+  return { ...base, sessionId: s.id, activity, mergeQueued, needsYou, refreshing, idle, since: activity?.startedAt ?? s.lastActivityAt };
 }
 
 /** 一个 ticket 的行：总控在前；开了几个仓库的 session 就标上仓库名；每个 PR 只挂在一行上。没有开着的 session 但有开着的 PR 时出一行只有 PR 的。 */
@@ -52,7 +61,7 @@ function ticketRows(i: NowInput, t: TicketView): NowRow[] {
   const target = (sessionId: string | null): NowTarget => ({ page: "ticket", key: t.key, sessionId });
   if (sessions.length === 0) {
     if (!prs.some((p) => p.state === "open")) return [];
-    return [{ sessionId: null, ticketKey: t.key, title: t.title, repo: null, coordinator: false, activity: null, mergeQueued: false, needsYou: null, prs, idle: false, since: null, target: target(null) }];
+    return [{ sessionId: null, ticketKey: t.key, title: t.title, repo: null, coordinator: false, activity: null, mergeQueued: false, needsYou: null, refreshing: null, prs, idle: false, since: null, target: target(null) }];
   }
   const repoIds = new Set(sessions.filter((s) => !s.coordinator && s.repoId !== null).map((s) => s.repoId));
   const named = repoIds.size > 1;

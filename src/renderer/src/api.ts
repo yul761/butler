@@ -7,7 +7,7 @@ import type {
   AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
-  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, MergeEvent, NowView, UsageSummary, WatchedPr,
+  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult,
 } from "../../shared/types";
 
 declare global {
@@ -79,6 +79,7 @@ export const api = {
   dismiss: (sessionId: string) => call<void>(IPC.sessionsDismiss, sessionId),
   hideSession: (sessionId: string) => call<void>(IPC.sessionsHide, sessionId),
   unhideSession: (sessionId: string) => call<void>(IPC.sessionsUnhide, sessionId),
+  refreshSession: (sessionId: string) => call<RefreshSessionResult>(IPC.sessionsRefresh, sessionId),
   ptySnapshot: (termId: string) => call<{ data: string; exitCode: number | null }>(IPC.ptySnapshot, termId),
   ptyKill: (termId: string) => call<void>(IPC.ptyKill, termId),
   ptyWrite: (termId: string, data: string) => window.butler.send(IPC.ptyWrite, termId, data),

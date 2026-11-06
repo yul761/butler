@@ -17,6 +17,7 @@ export const EDITABLE_SETTINGS = [
   "branchTemplate",
   "ticketPattern",
   "memoryEnabled",
+  "refreshThresholdTokens",
   "onboardingDone",
   "language",
 ] as const;

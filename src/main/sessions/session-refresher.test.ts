@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
-import type { Session } from "../../shared/types";
+import type { RefreshRefusal, Session } from "../../shared/types";
 import { setLang } from "../i18n";
 import { M } from "../strings";
 import type { DeliveryBlock, DeliveryCheck } from "./delivery-guard";
 import {
-  REFRESH_CLEAR_MS, REFRESH_COOLDOWN_MS, REFRESH_HANDOFF_MS, SessionRefresher, type RefreshKind, type SessionRefresherDeps,
+  REFRESH_CLEAR_MS, REFRESH_COOLDOWN_MS, REFRESH_HANDOFF_MS, refreshKindOf, SessionRefresher, startRefresh, type RefreshKind, type RefreshResult, type SessionRefresherDeps,
 } from "./session-refresher";
 
 const base = (o: Partial<Session> = {}): Session => ({
@@ -42,6 +42,9 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
     epicProgressReads: 0,
     /** 读 /handoff 命令文件时发生的事（这期间用户可能开始打字）。 */
     onCommandCheck: null as (() => void) | null,
+    /** refreshActivity 读过的 id 和读的时候发生的事（R28：/clear 之后的新 head 要先读一次活动）。 */
+    activityRefreshes: [] as string[],
+    onRefreshActivity: null as ((id: string) => void) | null,
   };
   const terms: Term[] = [];
   const typed: Array<{ termId: string; text: string; at: number }> = [];
@@ -101,6 +104,10 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
         events.splice(events.indexOf(e), 1);
         e.run();
       }
+    },
+    refreshActivity: async (id) => {
+      state.activityRefreshes.push(id);
+      state.onRefreshActivity?.(id);
     },
     log: (m) => void logs.push(m),
   };
@@ -544,5 +551,60 @@ describe("SessionRefresher (plan 16)", () => {
     term.deliverResult = {};
     expect(await t.r.refresh("s1", "coordinator")).toBe("cooldown");
     expect(await t.r.refresh("s1", "manual")).toBe("done");
+  });
+
+  it("re-reads the head's activity before each check while waiting to type (R28)", async () => {
+    const t = setup();
+    const term = t.addTerm("s1", {
+      reactions: {
+        // /clear 之后新 head 的活动还没读到：guard 看到的是忙。读过一次活动才知道它停在空的输入框上。
+        "/clear": { ms: 2_000, run: () => { term.chain.push("s1-b"); term.block = "busy"; } },
+      },
+    });
+    t.state.onRefreshActivity = () => {
+      if (term.chain.length === 2) term.block = null;
+    };
+    expect(await t.r.refresh("s1", "manual")).toBe("done");
+    expect(t.texts()).toEqual(["/handoff", "/clear", M().refreshResume("ticket", "DMS-1")]);
+    // 接着做的话没有等满一步的时限：读过活动马上就输入了。
+    expect(t.typed[2].at - t.typed[1].at).toBeLessThan(REFRESH_CLEAR_MS);
+    expect(t.state.activityRefreshes.length).toBeGreaterThanOrEqual(2);
+    expect(t.state.activityRefreshes.every((id) => id === "s1")).toBe(true);
+  });
+});
+
+describe("refreshKindOf (plan 16)", () => {
+  it("names ticket sessions, ticket coordinators, feature coordinators and epic sessions, and nothing else", () => {
+    const open = (s: Session) => refreshKindOf(s, true);
+    expect(open(base({ ticketKey: "DMS-1" }))).toBe("ticket");
+    expect(open(base({ ticketKey: "DMS-1", coordinator: true }))).toBe("ticket");
+    expect(open(base({ featureId: 3, coordinator: true }))).toBe("feature");
+    expect(open(base({ epicId: 2 }))).toBe("epic");
+    // 修复 session、不是 Butler 开的、没开终端的、什么都不属于的：不换新。
+    expect(open(base({ featureId: 3, fixesSession: "s-stuck" }))).toBeNull();
+    expect(open(base({ ticketKey: "DMS-1", origin: "discovered" }))).toBeNull();
+    expect(refreshKindOf(base({ ticketKey: "DMS-1" }), false)).toBeNull();
+    expect(open(base())).toBeNull();
+  });
+});
+
+describe("startRefresh (plan 16)", () => {
+  it("answers a refusal at once, or starts the refresh without waiting for it", async () => {
+    const started: string[] = [];
+    let refusal: RefreshRefusal | null = "busy";
+    const r = {
+      precheck: () => refusal,
+      refresh: (id: string) => (started.push(id), new Promise<RefreshResult>(() => undefined)),
+    };
+    expect(startRefresh(r, "s1", "manual", () => undefined)).toBe("busy");
+    expect(started).toEqual([]);
+    refusal = null;
+    expect(startRefresh(r, "s1", "manual", () => undefined)).toBeNull();
+    expect(started).toEqual(["s1"]);
+    // refresh 本身出了错（不应该发生）：记日志，不往外抛。
+    const logs: string[] = [];
+    expect(startRefresh({ precheck: () => null, refresh: () => Promise.reject(new Error("boom")) }, "s2", "coordinator", (m) => void logs.push(m))).toBeNull();
+    await new Promise((res) => setImmediate(res));
+    expect(logs).toEqual(["refresh s2 (coordinator) failed"]);
   });
 });

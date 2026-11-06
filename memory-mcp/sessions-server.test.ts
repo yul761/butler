@@ -38,7 +38,7 @@ describe("butler-sessions MCP server", () => {
     expect(await server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
     expect(await server.handle({ jsonrpc: "2.0", id: 2, method: "ping" })).toEqual({ jsonrpc: "2.0", id: 2, result: {} });
     const list = (await server.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-    expect(list.result.tools.map((t) => t.name)).toEqual(["list_repos", "start_session", "list_sessions", "session_activity", "end_session"]);
+    expect(list.result.tools.map((t) => t.name)).toEqual(["list_repos", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session"]);
     expect(await server.handle({ jsonrpc: "2.0", id: 4, method: "resources/list" })).toMatchObject({ id: 4, error: { code: -32601 } });
   });
 
@@ -118,7 +118,7 @@ describe("butler-sessions MCP server", () => {
     expect(msgs).toHaveLength(2);
     expect(msgs).toContainEqual({ jsonrpc: "2.0", id: 1, result: {} });
     expect(msgs).toContainEqual({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
-    expect(TOOLS.length).toBe(5);
+    expect(TOOLS.length).toBe(6);
   });
 });
 
@@ -126,7 +126,7 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
   it("lists the feature tools", async () => {
     const { server } = setup(2000, { featureId: 7 });
     const list = (await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-    expect(list.result.tools.map((t) => t.name)).toEqual(["list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions", "session_activity", "end_session"]);
+    expect(list.result.tools.map((t) => t.name)).toEqual(["list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session"]);
     expect(list.result.tools).toEqual(FEATURE_TOOLS);
     // 英文版只换描述：名字、顺序、必填参数一样。
     const shape = (tools: readonly { name: string; inputSchema: object }[]) => tools.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]);
@@ -212,7 +212,7 @@ describe("butler-sessions in English (design 2026-10-26 i18n)", () => {
 const tools = async (server: SessionsServer) => ((await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string; description: string }[] } }).result.tools;
 const callTool = (server: SessionsServer, name: string, args: object = {}) => server.handle({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name, arguments: args } });
 
-const EPIC_NAMES = ["list_features", "list_repos", "create_feature", "list_sessions", "session_activity", "end_session", "set_epic_plan"];
+const EPIC_NAMES = ["list_features", "list_repos", "create_feature", "list_sessions", "session_activity", "end_session", "set_epic_plan", "refresh_session"];
 
 describe("butler-sessions for an epic session (design 2026-11-01)", () => {
   it("lists the epic tools in order, in both languages", async () => {
@@ -351,6 +351,40 @@ describe("end_session (task 11)", () => {
       const { server, requestsDir } = setup(30, scope);
       for (const args of [{}, { session: "c1" }, { reason: "done" }, { session: "c1", reason: "  " }, { session: 1, reason: "done" }, { session: "c1", reason: "x".repeat(REASON_LIMIT + 1) }]) {
         expect(await callTool(server, "end_session", args), JSON.stringify(args).slice(0, 60)).toMatchObject({ result: { isError: true } });
+      }
+      expect(existsSync(requestsDir)).toBe(false);
+    }
+  });
+});
+
+describe("refresh_session (plan 16)", () => {
+  const scopes = [{ ticketKey: "P-1" }, { featureId: 7 }, { epicId: 3 }];
+  const lists = [[TOOLS, TOOLS_EN], [FEATURE_TOOLS, FEATURE_TOOLS_EN], [EPIC_TOOLS, EPIC_TOOLS_EN]] as const;
+
+  it("is in all three tool lists in both languages, with session required", () => {
+    for (const [zh, en] of lists) {
+      const find = (list: readonly object[]) => (list as readonly { name: string; description: string; inputSchema: object }[]).find((x) => x.name === "refresh_session")!;
+      for (const list of [zh, en]) expect(find(list).inputSchema).toMatchObject({ required: ["session"], properties: { session: { type: "string" } } });
+      expect(find(zh).description).toBe("让 Butler 给一个停下来的子 session 换新上下文：先写 handoff，再清空，再从记忆里接上。只能对你管的、已经停下来的 session 用。");
+      expect(find(en).description).toContain("handoff");
+      expect(/[\u4e00-\u9fff]/.test(find(en).description)).toBe(false);
+    }
+  });
+
+  it("sends refresh_session with the session, in every scope", async () => {
+    for (const scope of scopes) {
+      const { server, answer } = setup(2000, scope);
+      const call = callTool(server, "refresh_session", { session: "c1" });
+      expect(await answer({ v: 1, ok: true, value: { started: true } })).toEqual({ v: 1, ...scope, from: "boss", op: "refresh_session", session: "c1" });
+      expect(JSON.stringify(await call)).toContain("started");
+    }
+  });
+
+  it("rejects refresh_session without a session string, without asking Butler", async () => {
+    for (const scope of scopes) {
+      const { server, requestsDir } = setup(30, scope);
+      for (const args of [{}, { session: "" }, { session: 1 }]) {
+        expect(await callTool(server, "refresh_session", args), JSON.stringify(args)).toMatchObject({ result: { isError: true } });
       }
       expect(existsSync(requestsDir)).toBe(false);
     }

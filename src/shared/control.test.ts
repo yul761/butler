@@ -140,6 +140,15 @@ describe("parseControlRequest for end_session (task 11)", () => {
     }
   });
 
+  it("accepts refresh_session in all three scopes, and rejects one without a session string (plan 16)", () => {
+    for (const scope of scopes) {
+      expect(parseControlRequest({ v: 1, ...scope, from: "c", op: "refresh_session", session: "s1" })).toEqual({ v: 1, ...scope, from: "c", op: "refresh_session", session: "s1" });
+      for (const bad of [{}, { session: "" }, { session: 5 }, { session: "x".repeat(201) }]) {
+        expect(parseControlRequest({ v: 1, ...scope, op: "refresh_session", ...bad }), JSON.stringify({ scope, bad }).slice(0, 80)).toBeNull();
+      }
+    }
+  });
+
   it("accepts list_sessions and session_activity from an epic session", () => {
     expect(parseControlRequest({ v: 1, epicId: 3, op: "list_sessions" })).toEqual({ v: 1, epicId: 3, from: null, op: "list_sessions" });
     expect(parseControlRequest({ v: 1, epicId: 3, op: "session_activity", session: "s1" })).toEqual({ v: 1, epicId: 3, from: null, op: "session_activity", session: "s1" });
