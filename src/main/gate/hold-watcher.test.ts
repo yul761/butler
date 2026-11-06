@@ -31,6 +31,7 @@ interface Opts {
   waiting?: boolean;
   deliver?: () => Promise<"sent" | "exited" | "timeout">;
   refreshActivity?: HoldWatcherDeps["refreshActivity"];
+  cachedByUrl?: HoldWatcherDeps["cachedByUrl"];
 }
 
 function setup(o: Opts = {}) {
@@ -59,6 +60,7 @@ function setup(o: Opts = {}) {
     isOpen: () => state.open,
     guard,
     refreshActivity: o.refreshActivity,
+    cachedByUrl: o.cachedByUrl,
     deliver,
     whoOf: who,
     now: () => state.now,
@@ -264,6 +266,44 @@ describe("HoldWatcher: PR holds", () => {
     await t.watcher.check();
     expect(t.outcome()).toBe("merged");
     expect(t.deliver).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("HoldWatcher: PR state cached by the PR watcher", () => {
+  type Cached = ReturnType<NonNullable<HoldWatcherDeps["cachedByUrl"]>>;
+  const cached = (state: "open" | "merged" | "closed", ci: "passing" | "unknown" = "passing") => vi.fn<(url: string) => Cached>(() => ({ state, ci }));
+
+  it("releases as merged from a cached MERGED reading without asking gh", async () => {
+    const cachedByUrl = cached("merged");
+    const t = setup({ pr: () => pr("OPEN"), cachedByUrl });
+    await t.watcher.check();
+    expect(cachedByUrl).toHaveBeenCalledWith(PR_URL);
+    expect(t.prInfo).not.toHaveBeenCalled();
+    expect(t.outcome()).toBe("merged");
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"));
+  });
+
+  it("cancels from a cached CLOSED reading without asking gh", async () => {
+    const t = setup({ pr: () => pr("OPEN"), cachedByUrl: cached("closed") });
+    await t.watcher.check();
+    expect(t.prInfo).not.toHaveBeenCalled();
+    expect(t.outcome()).toBe("cancelled");
+  });
+
+  it("asks gh when the cached reading failed (ci unknown): its state is only the last good one", async () => {
+    const t = setup({ pr: () => pr("OPEN", true), cachedByUrl: cached("merged", "unknown") });
+    await t.watcher.check();
+    expect(t.prInfo).toHaveBeenCalledWith(REPO, PR_URL, 2000);
+    expect(t.outcome()).toBeNull();
+  });
+
+  it("asks gh for an open PR (the cache does not know about auto-merge) and when nothing is cached", async () => {
+    for (const cachedByUrl of [cached("open"), vi.fn<(url: string) => Cached>(() => null)]) {
+      const t = setup({ pr: () => pr("MERGED"), cachedByUrl });
+      await t.watcher.check();
+      expect(t.prInfo).toHaveBeenCalledTimes(1);
+      expect(t.outcome()).toBe("merged");
+    }
   });
 });
 

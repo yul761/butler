@@ -354,4 +354,26 @@ describe("PrWatcher", () => {
     s.advance(1);
     expect(s.w.cachedByUrl("https://x/pull/8")).toBeNull();
   });
+
+  it("calls roundDone after every round, also when nothing was due or the round failed", async () => {
+    const s = setup();
+    const roundDone = vi.fn<() => void>();
+    const w = new PrWatcher({ ...s.deps, roundDone });
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "passing", checks: [] }));
+    await w.check();
+    expect(roundDone).toHaveBeenCalledTimes(1);
+    // 这次没有到期的仓库。
+    await w.check();
+    expect(roundDone).toHaveBeenCalledTimes(2);
+    const broken = new PrWatcher({ ...s.deps, targets: () => { throw new Error("db closed"); }, roundDone });
+    await broken.check();
+    expect(roundDone).toHaveBeenCalledTimes(3);
+  });
+
+  it("a roundDone that throws only logs", async () => {
+    const s = setup();
+    const w = new PrWatcher({ ...s.deps, roundDone: () => { throw new Error("boom"); } });
+    await expect(w.check()).resolves.toBeUndefined();
+    expect(s.deps.log).toHaveBeenCalledWith("pr watch: roundDone failed", expect.any(Error));
+  });
 });

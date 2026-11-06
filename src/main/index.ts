@@ -25,6 +25,7 @@ import { JobsRepo } from "./db/jobs-repo";
 import { MarksRepo } from "./db/marks-repo";
 import { MemorySyncRepo } from "./db/memory-sync-repo";
 import { MergeGateRepo } from "./db/merge-gate-repo";
+import { PrWatchRepo } from "./db/pr-watch-repo";
 import { SecretsRepo } from "./db/secrets-repo";
 import { SessionsRepo } from "./db/sessions-repo";
 import { SettingsRepo } from "./db/settings-repo";
@@ -36,6 +37,10 @@ import type { UsageCounts } from "./usage/usage-parse";
 import { UsageScanner } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
+import { CiDelivery } from "./prwatch/ci-delivery";
+import { prHandoff } from "./prwatch/pr-handoff";
+import { watchTargets } from "./prwatch/pr-targets";
+import { PrWatcher } from "./prwatch/pr-watcher";
 import { makeWhoOf } from "./gate/who";
 import { auditCutoff, stalePendingCost } from "./gateway/budget";
 import { PrivacyGateway } from "./gateway/gateway";
@@ -79,13 +84,13 @@ import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
 import { judgeStuck } from "./sessions/stuck-judge";
-import { llmConfig, memoryOn, scheduleConfig, SettingError } from "./settings/settings-values";
+import { llmConfig, memoryOn, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
 import { pathKey } from "./util/env";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
-import { prInfo } from "./tickets/gh";
+import { branchRuns, failedLog, prInfo, prStatus } from "./tickets/gh";
 import * as git from "./tickets/git";
 import { canSend } from "./safe-send";
 import { createQuitState } from "./quit-state";
@@ -653,6 +658,7 @@ async function bootstrap(): Promise<void> {
     jobs,
     now: Date.now,
     isWorkingDay: () => isWorkingDay(localDate(Date.now()), scheduleConfig(settings).workingDays),
+    hasTrackerTools: () => trackerTools(settings).length > 0,
     setRefreshing: (v) => {
       briefRefreshing = v;
       notify();
@@ -780,21 +786,73 @@ async function bootstrap(): Promise<void> {
     typingQuietMs: Number(process.env.BUTLER_GATE_TYPING_QUIET_MS) || undefined,
     now: Date.now,
   });
+  /** Stop 到的时候先重读这个 session 的活动（guard 看的是上一次刷新的）。活动按 head 的 id 跟踪；Stop 带来的可能是链上的旧 id。 */
+  const refreshActivityOf = async (id: string): Promise<void> => {
+    const head = sessions.head(id)?.id;
+    if (head) await activityMonitor.refreshSession(head);
+  };
+  // PR 和 CI 的监视（计划 13）。
+  const prWatchRepo = new PrWatchRepo(db);
   const holdWatcher = new HoldWatcher({
     repo: gateRepo, prInfo, git,
     isOpen: (id) => gateTerm(id) !== null,
     guard: deliveryGuard,
-    // 活动按 head 的 id 跟踪；Stop 带来的可能是链上的旧 id。
-    refreshActivity: async (id) => {
-      const head = sessions.head(id)?.id;
-      if (head) await activityMonitor.refreshSession(head);
-    },
+    refreshActivity: refreshActivityOf,
+    // PrWatcher 刚查过的 PR 不用再问 gh。prWatcher 在后面才建好：回调里才用到。
+    cachedByUrl: (url) => prWatcher.cachedByUrl(url),
     // 最多等 1 分钟：session 是停着的，输入框应该很快就绪；等不到下一轮再发。
     deliver: async (id, text) => {
       const t = gateTerm(id);
       return t ? pty.deliver(t, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000 }) : "exited";
     },
     whoOf, now: Date.now, log: logger,
+  });
+  // CI 的结论递给这个仓库自己的 session（不算总控）：和合并通知走同一道 guard，最多等 1 分钟。
+  const ciDelivery = new CiDelivery({
+    repo: prWatchRepo,
+    guard: deliveryGuard,
+    sessionFor: (key, repoId) => {
+      for (const t of pty.openIds()) {
+        const h = sessions.head(t);
+        if (h && h.ticketKey === key && h.repoId === repoId && !h.coordinator) return h.id;
+      }
+      return null;
+    },
+    deliver: (termId, text) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000 }),
+    now: Date.now,
+    log: logger,
+  });
+  /** 递还没递出去的 CI 结论（永不 reject）。 */
+  const flushCi = (): Promise<void> => ciDelivery.flush().catch((e: unknown) => logger("ci delivery: flush failed", e));
+  const prWatcher = new PrWatcher({
+    repo: prWatchRepo,
+    targets: () =>
+      watchTargets(tickets.list(), {
+        workDir: (r) => ticketService.workDir(r),
+        sessionOpen: (key, repoId) => sessionService.hasRepoTerminal(key, repoId),
+        watched: (repoId) => prWatchRepo.get(repoId),
+        handoffHasOpenPr: (key) => handoffs.latestValid(key)?.payload?.prs.some((p) => p.state === "open") ?? false,
+      }),
+    gh: { prStatus, branchRuns, failedLog },
+    // PR 的状态或 review 变了：在最新的 handoff 上换掉 prs，存成一条 refresh。ticket 状态、PR 标签、合并后清理 worktree 都照旧走 ingest。
+    onPrChanged: (key) => {
+      const base = handoffs.latestValid(key);
+      if (!base?.payload) return;
+      const next = prHandoff(key, prWatchRepo.byTicket(key), { id: base.id, prs: base.payload.prs });
+      if (!next) return;
+      // 和早间刷新一样：done_today、followups、decisions、learnings 清空，免得重复计算、重复写进记忆。
+      ingest({
+        ticketKey: key, sessionId: null, trigger: "refresh",
+        payload: { ...base.payload, done_today: [], followups: [], decisions: [], learnings: [], prs: next.prs },
+        rawText: null, sourceRef: next.sourceRef,
+      });
+    },
+    onCiSettled: (row) => void ciDelivery.settled(row).catch((e: unknown) => logger("ci delivery: handing over a CI result failed", e)),
+    notify,
+    // 每轮之后再递一遍：session 停着但当时用户在打字、有草稿的，安静下来之后在这里递出去。
+    roundDone: () => void flushCi(),
+    now: Date.now,
+    log: logger,
   });
   const mergeGate = new MergeGate({
     tickets, repo: gateRepo, git, prInfo, whoOf,
@@ -853,7 +911,16 @@ async function bootstrap(): Promise<void> {
       // 总控开的子 session 等这个信号才交任务（信任文件夹之类的启动对话框已经过去）。
       if (effect.kind === "session_started") pty.markStarted(effect.sessionId);
       // claude 停下来等输入了：有“对方已经合完”的通知就趁现在发（设计文档 2026-11-04：不打断忙着的 session）。
-      if (effect.kind === "waiting" && effect.waiting) void holdWatcher.sessionIdle(env.butlerSession ?? effect.sessionId);
+      // 同一个时机也递还没递出去的 CI 结论（先重读活动），并且马上查一次这个仓库的 PR 和 CI（刚停下的 session 常常刚 push）。
+      if (effect.kind === "waiting" && effect.waiting) {
+        const stopped = env.butlerSession ?? effect.sessionId;
+        void holdWatcher.sessionIdle(stopped);
+        void refreshActivityOf(stopped)
+          .catch((e: unknown) => logger(`ci delivery: re-reading the activity of ${stopped} failed`, e))
+          .then(flushCi);
+        const repoId = sessions.head(stopped)?.repoId;
+        if (repoId != null) prWatcher.soon(repoId);
+      }
       notify();
       // 还没归属 ticket、又缺 cwd / 分支 / 首条提示的 session：触发一次发现（每个 session 每次运行最多一次）。
       if (effect.kind !== "nested") {
@@ -916,6 +983,7 @@ async function bootstrap(): Promise<void> {
     keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     usage: usageRepo, sessions,
+    prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
     briefRefreshing: () => briefRefreshing,
     briefNarrating: () => briefNarrating,
     rederive: (key) => {
@@ -969,6 +1037,7 @@ async function bootstrap(): Promise<void> {
     logger("merge gate: could not write alive.json; merges are not checked", e);
   }
   holdWatcher.start(Number(process.env.BUTLER_GATE_CHECK_MS) || HOLD_CHECK_MS);
+  prWatcher.start();
   activityMonitor.start();
   usageScanner.start();
   void runDiscovery();
@@ -1003,6 +1072,7 @@ async function bootstrap(): Promise<void> {
     }
     gateInbox.stop();
     holdWatcher.stop();
+    prWatcher.stop();
     pty.killAll();
     keepAwakeSwitch.set(false);
     tray?.destroy();

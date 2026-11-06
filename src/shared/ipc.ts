@@ -58,6 +58,8 @@ export const IPC = {
   briefsRegenerate: "briefs:regenerate",
   briefsMark: "briefs:mark",
   mergeEvents: "merge:events",
+  /** PrWatcher 跟着的 PR 和 CI（未归档 ticket 的）：计划 14 的界面用。 */
+  prWatchList: "prwatch:list",
   followupsList: "followups:list",
   followupsSetStatus: "followups:setStatus",
   handoffsList: "handoffs:list",
@@ -97,7 +99,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.briefsLatest, IPC.briefsRegenerate, IPC.briefsMark,
-  IPC.mergeEvents,
+  IPC.mergeEvents, IPC.prWatchList,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,

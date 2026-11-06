@@ -40,6 +40,8 @@ export interface PrWatcherDeps {
   /** CI 有了新的结论（Task 6 接上）。 */
   onCiSettled(row: PrWatchRow): void;
   notify(): void;
+  /** 每一轮结束后（不管查没查、成没成）：主进程用它再递一遍还没递出去的 CI 结论（session 刚安静下来）。 */
+  roundDone?(): void;
   now(): number;
   log(msg: string, err?: unknown): void;
 }
@@ -161,6 +163,11 @@ export class PrWatcher {
       if (results.some((r) => r?.changed)) this.d.notify();
     } catch (e) {
       this.d.log("pr watch: checking PRs failed", e);
+    }
+    try {
+      this.d.roundDone?.();
+    } catch (e) {
+      this.d.log("pr watch: roundDone failed", e);
     }
   }
 

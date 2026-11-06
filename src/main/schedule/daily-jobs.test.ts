@@ -38,6 +38,7 @@ function deps(over: Partial<DailyJobDeps> = {}) {
     jobs,
     now: () => 123,
     isWorkingDay: () => true,
+    hasTrackerTools: () => true,
     setRefreshing: (v) => calls.push(`refreshing=${v}`),
     onEvening: (b) => calls.push(`notify:${b.kind}`),
     ...over,
@@ -220,6 +221,12 @@ describe("daily jobs", () => {
     const { d, calls } = deps();
     await morningJob(d);
     expect(calls).toEqual(["morning", "refreshing=true", "refresh", "morning", "refreshing=false"]);
+  });
+
+  it("morning: no refresh without tracker tools (PR state comes from the watcher), but the brief is still narrated", async () => {
+    const r = deps({ hasTrackerTools: () => false, narrate: async () => void r.calls.push("narrate") });
+    await morningJob(r.d);
+    expect(r.calls).toEqual(["morning", "narrate"]);
   });
 
   it("morning: no refresh on days off, and the flag is cleared even if refresh fails", async () => {

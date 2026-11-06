@@ -1,4 +1,5 @@
 import type { MergeGateRepo, MergeHold } from "../db/merge-gate-repo";
+import type { PrWatchRow } from "../db/pr-watch-repo";
 import type { DeliveryGuard } from "../sessions/delivery-guard";
 import { M } from "../strings";
 import type { prInfo } from "../tickets/gh";
@@ -35,6 +36,8 @@ export interface HoldWatcherDeps {
   guard: Pick<DeliveryGuard, "check">;
   /** Stop 到的时候先重读这个 session 的活动：guard 看的活动是上一次刷新的，那时它多半还在忙。 */
   refreshActivity?: (sessionId: string) => Promise<void>;
+  /** PrWatcher 刚查过的这个 PR（cachedByUrl）：已合并、已关闭就不用再问 gh。没有时每次都问 gh。 */
+  cachedByUrl?: (url: string) => Pick<PrWatchRow, "state" | "ci"> | null;
   deliver(sessionId: string, text: string): Promise<"sent" | "exited" | "timeout">;
   /** 和 MergeGate 用同一个函数。 */
   whoOf(ticketKey: string | null, branch: string): string;
@@ -133,6 +136,12 @@ export class HoldWatcher {
     const age = this.d.now() - h.createdAt;
     const g = this.d.git;
     if (h.kind === "pr") {
+      // ci 是 unknown 的那次 gh 没查成，state 只是上一次的：不能当作新的。开着的 PR 还要看自动合并，缓存里没有，照样问 gh。
+      const cached = h.prUrl ? this.d.cachedByUrl?.(h.prUrl) : null;
+      if (cached && cached.ci !== "unknown") {
+        if (cached.state === "merged") return "merged";
+        if (cached.state === "closed") return "cancelled";
+      }
       const pr = h.prUrl ? await this.d.prInfo(h.repoPath, h.prUrl, PR_TIMEOUT_MS) : null;
       if (pr) {
         if (pr.state === "MERGED") return "merged";

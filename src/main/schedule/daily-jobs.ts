@@ -13,6 +13,8 @@ export interface DailyJobDeps {
   jobs: JobsRepo;
   now: () => number;
   isWorkingDay: () => boolean;
+  /** 配了 tracker 工具（和 HandoffRunner 的 allowedTools 用同一个 trackerTools）。PR 状态由 PrWatcher 跟着，早间刷新只为 tracker 而跑。 */
+  hasTrackerTools: () => boolean;
   /** 早间刷新进行中（界面显示“刷新中”）。 */
   setRefreshing: (v: boolean) => void;
   /** 晚间小结生成后：弹系统通知。 */
@@ -76,13 +78,14 @@ export async function nightlyJob(d: DailyJobDeps, slot?: number | null): Promise
 }
 
 /**
- * 早间：先用现有数据出一版（界面马上有内容），工作日再刷新 PR / tracker 状态后原地更新；
+ * 早间：先用现有数据出一版（界面马上有内容），工作日、配了 tracker 工具时再刷新 tracker 状态后原地更新
+ * （PR 状态 PrWatcher 一直跟着，没配 tracker 工具就不用再跑一次 claude）；
  * 最后对最终的那一版补“今日重点”。刷新失败也会给第一版补上，然后照常把错误交给调度器。
  */
 export async function morningJob(d: DailyJobDeps): Promise<void> {
   let brief = d.briefs.generateMorning();
   try {
-    if (d.isWorkingDay()) {
+    if (d.isWorkingDay() && d.hasTrackerTools()) {
       d.setRefreshing(true);
       try {
         const r = await Promise.resolve().then(() => d.runner.refreshForBrief());

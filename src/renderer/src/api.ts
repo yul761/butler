@@ -8,7 +8,7 @@ import type {
   AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
-  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, MergeEvent, UsageSummary,
+  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, MergeEvent, UsageSummary, WatchedPr,
 } from "../../shared/types";
 
 declare global {
@@ -90,6 +90,7 @@ export const api = {
   pickDirectory: () => call<string | null>(IPC.dialogPickDir),
   briefLatest: (kind: BriefKind) => call<BriefView>(IPC.briefsLatest, kind),
   mergeEvents: () => call<MergeEvent[]>(IPC.mergeEvents),
+  prWatchList: () => call<WatchedPr[]>(IPC.prWatchList),
   regenerateBrief: () => call<JobStateView | null>(IPC.briefsRegenerate),
   markBriefItem: (key: string, mark: ItemMark) => call<void>(IPC.briefsMark, key, mark),
   followups: (ticketKey: string) => call<Followup[]>(IPC.followupsList, ticketKey),
