@@ -403,6 +403,20 @@ export class MemoryService {
   }
 
   /**
+   * epic scope 当前生效的 handoff 的 id（计划 16：epic 总控换新时，等它用 butler-epic 的 handoff 写完进度）。
+   * 还没有 handoff、记忆关着、读失败（记日志）时为 null；永不 reject。和 view 一样只读，不进写入队列。
+   */
+  async epicHandoffVersion(epicId: number): Promise<string | null> {
+    if (!this.d.enabled()) return null;
+    try {
+      return await withScope({ dataDir: this.d.dataDir, scope: epicScope(epicId) }, async (s) => (await s.activeHandoff())?.id ?? null);
+    } catch (e) {
+      this.log(`memory epicHandoffVersion ${epicId} failed`, e);
+      return null;
+    }
+  }
+
+  /**
    * full 档位：把 claude 里 consolidate 进来的原始事件蒸馏成记忆（计划 4 R1：模型只能是 PrivacyGateway.statecoreModel() 的结果）。
    * model 为 null（不是 full 档位等）或记忆关闭时什么都不做。永不 reject；一个 scope 失败不影响其他 scope。
    * 每个 scope 单独排进同步队列（审查 M1）：和写入不并发，但这期间 handoff 触发的同步可以插在两个 scope 之间，不用等整轮蒸馏。

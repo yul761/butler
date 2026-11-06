@@ -487,6 +487,37 @@ describe("MemoryService.syncEpic (design 2026-11-01, epic handoff)", () => {
   });
 });
 
+describe("MemoryService.epicHandoffVersion (plan 16: refreshing an epic session)", () => {
+  const scope = epicScope(1);
+  const active = (t: ReturnType<typeof setup>) => withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
+
+  it("is null before the epic scope has a handoff, then the id of the active one, and changes when the epic session writes", async () => {
+    const t = setup();
+    expect(await t.memory.epicHandoffVersion(1)).toBeNull();
+    await t.memory.syncEpic(1);
+    const first = await t.memory.epicHandoffVersion(1);
+    expect(first).toBe((await active(t))?.id);
+    expect(first).not.toBeNull();
+    // 没有新写入时不变。
+    expect(await t.memory.epicHandoffVersion(1)).toBe(first);
+    await withScope({ dataDir: t.dataDir, scope }, (s) => s.handoff({ summary: "做到第二步", nextSteps: [], openQuestions: [] }));
+    const second = await t.memory.epicHandoffVersion(1);
+    expect(second).toBe((await active(t))?.id);
+    expect(second).not.toBe(first);
+    expect(t.logs).toEqual([]);
+  });
+
+  it("is null when memory is off, and logs a failed read without rejecting", async () => {
+    const off = setup({ enabled: false });
+    await withScope({ dataDir: off.dataDir, scope }, (s) => s.handoff({ summary: "进度", nextSteps: [], openQuestions: [] }));
+    expect(await off.memory.epicHandoffVersion(1)).toBeNull();
+    const t = setup();
+    wrapScopes((sc) => sc === scope, (s) => ({ ...s, activeHandoff: () => Promise.reject(new Error("boom")) }));
+    await expect(t.memory.epicHandoffVersion(1)).resolves.toBeNull();
+    expect(t.logs.some((l) => l.includes("boom"))).toBe(true);
+  });
+});
+
 describe("handoffSummary", () => {
   it("states the status and what was done", () => {
     expect(handoffSummary(payload({ status: "in_review", done_today: ["写完接口", " ", "补测试"] }))).toBe("状态：in_review。完成：写完接口；补测试");
