@@ -24,7 +24,7 @@ import {
 } from "../../shared/types";
 import { launchEnv, type LaunchDeps, resolveLaunch, withArgs } from "../claude/launch";
 import type { GuideKind } from "../claude/session-guide";
-import { claudeArgs, cmdShimSafe, sessionEnv, type SessionModel } from "../claude/spawn";
+import { claudeArgs, cmdShimSafe, sessionEnv, storedModel, type SessionModel } from "../claude/spawn";
 import type { EpicsRepo } from "../db/epics-repo";
 import { epicBriefMessage } from "../epics/epic-brief";
 import { epicFeatureRows, type LiveFeature } from "../epics/epic-info";
@@ -127,11 +127,6 @@ interface WorkspaceTarget {
   guideKind: GuideKind;
   /** 新建 session 时这一行的角色。 */
   row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "epicId"> & { model?: SessionModel | null };
-}
-
-/** 记下的模型只认 opus / sonnet，别的值（老数据、手改）当没记。 */
-function storedModel(s: Session): SessionModel | null {
-  return s.model === "opus" || s.model === "sonnet" ? s.model : null;
 }
 
 type Claude = { path: string; pathValue: string };

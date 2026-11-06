@@ -68,7 +68,7 @@ function setup(opts: { run?: HeadlessRun; signal?: AbortSignal; projectMcp?: (cw
   const setRespond = (fn: typeof respond) => {
     respond = fn;
   };
-  return { runner, tickets, sessions, handoffs, settings, calls, addTicket, ingest, setRespond };
+  return { runner, tickets, sessions, handoffs, settings, calls, mtimes, addTicket, ingest, setRespond };
 }
 
 describe("HandoffRunner", () => {
@@ -203,6 +203,41 @@ describe("HandoffRunner", () => {
     expect(calls[0].args).not.toContain("--resume");
     expect(calls[0].cwd).toBe("/w/A-1");
     expect((await runner.runNightly()).outcomes).toEqual([]);
+  });
+
+  it("forks with the model of the session chain", async () => {
+    const { runner, addTicket, sessions, calls, mtimes } = setup();
+    addTicket("A-1", NOW + 10);
+    // s-A-1（sonnet）被 /clear 成 s-A-2：模型沿链复制，fork 的是链头。
+    sessions.insertIfAbsent({ id: "s-A-2", ticketKey: "A-1", cwd: "/w/A-1", origin: "butler", lastActivityAt: 2, createdAt: 2, model: "sonnet" });
+    sessions.setReplacedBy("s-A-1", "s-A-2");
+    mtimes["s-A-2"] = NOW + 10;
+    await runner.runManual("A-1");
+    const args = calls[0].args;
+    expect(args).toContain("s-A-2");
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "sonnet"]);
+  });
+
+  it("forks without --model when the session has none or an unknown one", async () => {
+    const { runner, addTicket, sessions, calls, mtimes } = setup();
+    addTicket("A-1", NOW + 10);
+    await runner.runManual("A-1");
+    expect(calls[0].args).not.toContain("--model");
+    sessions.insertIfAbsent({ id: "s-A-2", ticketKey: "A-1", cwd: "/w/A-1", origin: "butler", lastActivityAt: 2, createdAt: 2, model: "gpt-9" });
+    mtimes["s-A-2"] = NOW + 10;
+    sessions.setReplacedBy("s-A-1", "s-A-2");
+    await runner.runManual("A-1");
+    expect(calls[1].args).not.toContain("--model");
+  });
+
+  it("runs the tracker refresh on sonnet", async () => {
+    const { runner, addTicket, calls, setRespond, ingest } = setup();
+    addTicket("A-1");
+    ingest({ ticketKey: "A-1", sessionId: "s-A-1", trigger: "nightly", rawText: null, payload: valid({ prs: [{ number: 9, url: "u", state: "open", review: "pending" }] }) });
+    setRespond(async () => ok({ status: "merged_pending_followup", pr: { number: 9, url: "u", state: "merged", review: "approved" }, jira: null }));
+    await runner.refreshForBrief();
+    const args = calls[0].args;
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "sonnet"]);
   });
 
   it("leaves the resumed session undismissed when claude reports the resumed id", async () => {

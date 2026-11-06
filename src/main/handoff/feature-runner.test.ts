@@ -111,7 +111,7 @@ function setup() {
     return id;
   };
   return {
-    runner, db, logs, features, tickets, sessions, featureHandoffs, featureId, calls, order, childRuns, addTicket, addCoordinator, addFix, ticketHandoff, addSummary,
+    runner, db, logs, features, tickets, sessions, featureHandoffs, featureId, calls, order, childRuns, mtimes, addTicket, addCoordinator, addFix, ticketHandoff, addSummary,
     setRespond: (fn: typeof respond) => {
       respond = fn;
     },
@@ -211,6 +211,21 @@ describe("FeatureSummaryRunner generation", () => {
     for (const s of ["登录改版", "A-1", "B-2", "#455 open", "和前端联调登录接口"]) expect(req.prompt).toContain(s);
     expect(sessions.get("fork-1")).toMatchObject({ dismissed: true });
     expect(featureHandoffs.latest(featureId)).toMatchObject({ trigger: "nightly", sessionId: "c-new", degraded: false, payload: summary() });
+  });
+
+  it("forks the coordinator with its own model, and without --model when it has none", async () => {
+    const { runner, calls, sessions, addCoordinator, ticketHandoff, addTicket, mtimes } = setup();
+    addTicket("A-1");
+    ticketHandoff("A-1", 10, {});
+    addCoordinator("c-1", 20, 1);
+    await runner.runNightly();
+    expect(calls[0].args).not.toContain("--model");
+    sessions.insertIfAbsent({ id: "c-2", ticketKey: null, cwd: WS, origin: "butler", lastActivityAt: 9, createdAt: 1, coordinator: true, featureId: sessions.get("c-1")!.featureId!, model: "opus" });
+    mtimes["c-2"] = 1e12;
+    await runner.runNightly();
+    const args = calls[1].args;
+    expect(args).toContain("c-2");
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "opus"]);
   });
 
   it("runs fresh in the workspace when there is no coordinator session", async () => {

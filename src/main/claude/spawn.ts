@@ -11,6 +11,11 @@ export interface SpawnSpec {
 /** session 的模型：只有这两个别名，不写具体版本号。 */
 export type SessionModel = "opus" | "sonnet";
 
+/** 记下的模型只认 opus / sonnet，别的值（老数据、手改）当没记。 */
+export function storedModel(s: { model: string | null }): SessionModel | null {
+  return s.model === "opus" || s.model === "sonnet" ? s.model : null;
+}
+
 /** 子代理默认用 sonnet，省 token；用户环境里已有的值优先。 */
 export const SUBAGENT_MODEL_DEFAULT = "sonnet";
 /** Claude Code 自己的 auto-compact 窗口（token）；用户环境里已有的值优先。 */

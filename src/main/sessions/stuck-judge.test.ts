@@ -37,6 +37,13 @@ describe("judgeStuck", () => {
     expect(seen[0].args).toContain("--json-schema");
   });
 
+  it("runs on haiku", async () => {
+    const seen: HeadlessRequest[] = [];
+    await judgeStuck(deps(ok({ stuck: false, reason: "r", action: "" }), seen), input);
+    const args = seen[0].args;
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "haiku"]);
+  });
+
   const promptFor = async (childCpuQuiet: boolean | null) => {
     const seen: HeadlessRequest[] = [];
     await judgeStuck(deps(ok({ stuck: false, reason: "", action: "" }), seen), { ...input, childCpuQuiet });
