@@ -226,8 +226,7 @@ describe("HoldWatcher: PR holds", () => {
   });
 
   it("re-checks right before the paste and keeps the notice when the user started typing meanwhile (I2)", async () => {
-    let t!: ReturnType<typeof setup>;
-    t = setup({
+    const t: ReturnType<typeof setup> = setup({
       pr: () => pr("MERGED"),
       // deliver 等输入框就绪的时候用户开始打字：粘贴前的复查不通过。
       deliver: async (_id, _text, recheck) => {
