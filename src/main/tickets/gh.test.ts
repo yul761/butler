@@ -2,11 +2,12 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { branchRuns, checksOf, ciOf, failedLog, prInfo, prStatus } from "./gh";
+import { applyGhResolution, branchRuns, checksOf, ciOf, failedLog, ghBinary, prInfo, prStatus, resetGhBinary, setGhBinary } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
   process.env.PATH = savedPath;
+  resetGhBinary();
 });
 
 /** PATH 最前面放一个假的 gh。 */
@@ -131,5 +132,41 @@ describe.skipIf(process.platform === "win32")("prStatus / branchRuns / failedLog
     expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe("run view 42 --log-failed");
     fakeGh("exit 1");
     expect(await failedLog(dir, 42, 2, 5000)).toBeNull();
+  });
+});
+
+describe("gh binary (resolved like git: a GUI app's PATH often lacks Homebrew)", () => {
+  it("defaults to plain gh, takes a found path, and keeps the best one it has when a later lookup finds nothing (warning once)", () => {
+    const logs: string[] = [];
+    expect(ghBinary()).toBe("gh");
+    applyGhResolution(null, (m) => logs.push(m));
+    applyGhResolution(null, (m) => logs.push(m));
+    expect(ghBinary()).toBe("gh");
+    expect(logs).toEqual(["gh not found on PATH: falling back to plain gh"]);
+    applyGhResolution("/opt/homebrew/bin/gh", (m) => logs.push(m));
+    expect(ghBinary()).toBe("/opt/homebrew/bin/gh");
+    applyGhResolution(null, (m) => logs.push(m));
+    expect(ghBinary()).toBe("/opt/homebrew/bin/gh");
+    setGhBinary("/usr/local/bin/gh");
+    expect(ghBinary()).toBe("/usr/local/bin/gh");
+  });
+
+  it.skipIf(process.platform === "win32")("prInfo, prStatus, branchRuns and failedLog run the resolved gh, not the one on PATH", async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "my-gh"), `#!/bin/sh
+echo "$1" >> "$(dirname "$0")/calls.txt"
+exit 1
+`);
+    chmodSync(join(dir, "my-gh"), 0o755);
+    // PATH 上的 gh 一调用就留痕：用了它就说明没走解析出来的路径。
+    const onPath = fakeGh(`echo used > "$(dirname "$0")/wrong.txt"
+exit 1`);
+    setGhBinary(join(dir, "my-gh"));
+    await prInfo(dir, null, 5000);
+    await prStatus(dir, "b", 5000);
+    await branchRuns(dir, "b", 5000);
+    await failedLog(dir, 1, 60, 5000);
+    expect(readFileSync(join(dir, "calls.txt"), "utf8").trim().split("\n")).toEqual(["pr", "pr", "run", "run"]);
+    expect(() => readFileSync(join(onPath, "wrong.txt"))).toThrow();
   });
 });

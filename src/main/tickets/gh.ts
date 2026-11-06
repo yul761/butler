@@ -1,5 +1,37 @@
 import { execFile } from "node:child_process";
 
+/** 执行的 gh：启动时和登录 shell 的 PATH 读到之后各解析一次（resolveGh）；没找到就用裸 "gh"。 */
+let binary = "gh";
+let resolved = false;
+let warned = false;
+
+export function setGhBinary(p: string): void {
+  binary = p;
+  resolved = true;
+}
+
+/** 测试用：回到“还没解析过”的初始状态。 */
+export function resetGhBinary(): void {
+  binary = "gh";
+  resolved = false;
+  warned = false;
+}
+
+/** 记录一次解析结果：找到了就（重新）采用；没找到时不降级已有的结果，一直没找到就用裸 "gh"，整个进程只警告一次。 */
+export function applyGhResolution(found: string | null, log: (msg: string) => void): void {
+  if (found) {
+    setGhBinary(found);
+    return;
+  }
+  if (resolved || warned) return;
+  warned = true;
+  log("gh not found on PATH: falling back to plain gh");
+}
+
+export function ghBinary(): string {
+  return binary;
+}
+
 export interface PrInfo {
   number: number;
   url: string;
@@ -13,7 +45,7 @@ export interface PrInfo {
 export function prInfo(cwd: string, pr: string | null, timeoutMs: number): Promise<PrInfo | null> {
   return new Promise((done) => {
     const args = ["pr", "view", ...(pr === null ? [] : [pr]), "--json", "number,url,headRefName,baseRefName,state,autoMergeRequest"];
-    execFile("gh", args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+    execFile(ghBinary(), args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout) => {
       if (err) return done(null);
       try {
         const j = JSON.parse(String(stdout)) as Record<string, unknown>;
@@ -100,7 +132,7 @@ export function ciOf(checks: CiCheck[]): CiState {
 /** 跑 gh，成功返回 stdout，任何失败返回 null，从不抛错。 */
 function runGh(cwd: string, args: string[], timeoutMs: number, maxBuffer: number): Promise<string | null> {
   return new Promise((done) => {
-    execFile("gh", args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer }, (err, stdout) => done(err ? null : String(stdout)));
+    execFile(ghBinary(), args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer }, (err, stdout) => done(err ? null : String(stdout)));
   });
 }
 

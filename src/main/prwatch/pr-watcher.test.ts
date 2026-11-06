@@ -376,4 +376,15 @@ describe("PrWatcher", () => {
     await expect(w.check()).resolves.toBeUndefined();
     expect(s.deps.log).toHaveBeenCalledWith("pr watch: roundDone failed", expect.any(Error));
   });
+
+  it("stop before start does nothing, and start after it still works", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "passing", checks: [] }));
+    expect(() => s.w.stop()).not.toThrow();
+    s.w.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(1);
+    s.w.stop();
+  });
 });

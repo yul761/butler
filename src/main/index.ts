@@ -88,9 +88,10 @@ import { llmConfig, memoryOn, scheduleConfig, SettingError, trackerTools } from 
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
 import { pathKey } from "./util/env";
+import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
-import { branchRuns, failedLog, prInfo, prStatus } from "./tickets/gh";
+import { applyGhResolution, branchRuns, failedLog, prInfo, prStatus } from "./tickets/gh";
 import * as git from "./tickets/git";
 import { canSend } from "./safe-send";
 import { createQuitState } from "./quit-state";
@@ -343,8 +344,10 @@ async function bootstrap(): Promise<void> {
   await ensureDirs(paths);
   logger = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : teeToConsole);
   if (!app.isPackaged) process.stderr.on("error", () => { teeBroken = true; });
-  // 先用 Butler 自己的 PATH 定下 git 的绝对路径；登录 shell 的 PATH 读到之后再更新一次。
-  applyGitResolution(resolveGit(process.env[pathKey(process.env)] ?? "", process.platform), process.platform, (m) => logger(m));
+  // 先用 Butler 自己的 PATH 定下 git 和 gh 的绝对路径；登录 shell 的 PATH 读到之后再更新一次。
+  const ownPath = process.env[pathKey(process.env)] ?? "";
+  applyGitResolution(resolveGit(ownPath, process.platform), process.platform, (m) => logger(m));
+  applyGhResolution(resolveGh(ownPath, process.platform), (m) => logger(m));
   const db = openDatabase(paths.db);
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -385,6 +388,7 @@ async function bootstrap(): Promise<void> {
   const healthReady: Promise<void> = Promise.all([health.refresh(), health.syncHookBinary()]).then(
     () => {
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
+      applyGhResolution(resolveGh(health.claude().pathValue, process.platform), (m) => logger(m));
       notify();
     },
     (e: unknown) => {
@@ -1037,7 +1041,10 @@ async function bootstrap(): Promise<void> {
     logger("merge gate: could not write alive.json; merges are not checked", e);
   }
   holdWatcher.start(Number(process.env.BUTLER_GATE_CHECK_MS) || HOLD_CHECK_MS);
-  prWatcher.start();
+  // 等 git 和 gh 的路径按登录 shell 的 PATH 解析好再查：第一轮就可能看到合并、触发 worktree 清理。已经开始退出就不再启动。
+  void healthReady.then(() => {
+    if (!headlessAbort.signal.aborted) prWatcher.start();
+  });
   activityMonitor.start();
   usageScanner.start();
   void runDiscovery();

@@ -28,8 +28,21 @@ describe("watchTargets", () => {
   it("keeps watching an open PR after the session closed, and drops merged, closed and PR-less branches", () => {
     const state = { 1: "open", 2: "merged", 3: "closed", 4: null } as const;
     const t = [{ key: "BTL-1", repos: [repo(1), repo(2), repo(3), repo(4)] }];
-    const out = watchTargets(t, deps({ watched: (id) => ({ state: state[id as keyof typeof state] }), handoffHasOpenPr: () => true }));
+    const watched = (id: number) => ({ state: state[id as keyof typeof state], number: id === 4 ? null : id, ci: "passing" as const });
+    const out = watchTargets(t, deps({ watched, handoffHasOpenPr: () => true }));
     expect(out.map((x) => x.repoId)).toEqual([1]);
+  });
+
+  it("a first check that failed (no PR known, ci unknown) still falls back to the handoff; a branch checked and found without a PR does not", () => {
+    const t = [{ key: "BTL-1", repos: [repo(1), repo(2), repo(3)] }];
+    const rows = {
+      1: { state: null, number: null, ci: "unknown" },
+      2: { state: null, number: null, ci: "none" },
+      3: { state: null, number: null, ci: "failing" },
+    } as const;
+    const watched = (id: number) => rows[id as keyof typeof rows];
+    expect(watchTargets(t, deps({ watched, handoffHasOpenPr: () => true })).map((x) => x.repoId)).toEqual([1]);
+    expect(watchTargets(t, deps({ watched, handoffHasOpenPr: () => false }))).toEqual([]);
   });
 
   it("checks a repo never checked before when the ticket's last handoff has an open PR", () => {
@@ -39,7 +52,7 @@ describe("watchTargets", () => {
   });
 
   it("a merged PR is not checked again even while its session is open", () => {
-    const out = watchTargets([{ key: "BTL-1", repos: [repo(1)] }], deps({ sessionOpen: () => true, watched: () => ({ state: "merged" }) }));
+    const out = watchTargets([{ key: "BTL-1", repos: [repo(1)] }], deps({ sessionOpen: () => true, watched: () => ({ state: "merged", number: 1, ci: "passing" }) }));
     expect(out).toEqual([]);
   });
 });
