@@ -65,6 +65,13 @@ describe("butler-sessions MCP server", () => {
     expect(existsSync(bad.requestsDir) ? readdirSync(bad.requestsDir).filter((n) => n.endsWith(".json")) : []).toHaveLength(0);
   });
 
+  it("start_session descriptions tell the coordinator to put only the task in task, the rest in memory", () => {
+    const zh = [TOOLS, FEATURE_TOOLS].map((t) => t.find((x) => x.name === "start_session")!.description);
+    const en = [TOOLS_EN, FEATURE_TOOLS_EN].map((t) => t.find((x) => x.name === "start_session")!.description);
+    for (const d of zh) expect(d).toContain("task 里只写要做什么，背景、接口约定写进记忆，子 session 会自己读。");
+    for (const d of en) expect(d).toContain("Put only what to do in task");
+  });
+
   it("lists model in both start_session schemas, in both languages", () => {
     for (const tools of [TOOLS, TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN]) {
       const start = tools.find((t) => t.name === "start_session")!;

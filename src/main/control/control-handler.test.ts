@@ -86,7 +86,7 @@ describe("controlHandler", () => {
     expect(r).toEqual({ v: 1, ok: true, value: { sessionId: "s-2", repo: expect.any(String), dir: apiRepo.worktreePath, note: expect.any(String) } });
     expect(spawned[1].opts.cwd).toBe(apiRepo.worktreePath);
     expect(sessions.get("s-2")).toMatchObject({ ticketKey: "FULL-1", repoId: apiRepo.id, spawnedBy: "s-1", coordinator: false });
-    expect(submitted).toEqual([["s-2", "总控 session 交给你的任务：\n写接口[201~\n加测试"]]);
+    expect(submitted).toEqual([["s-2", "总控 session 交给你的任务：\n开始之前先用 recall 读一下 ticket 记忆（butler-memory）里的背景和约定。\n\n写接口[201~\n加测试"]]);
     expect(notified()).toBe(1);
 
     const listed = await handle({ ...base, op: "list_sessions" });

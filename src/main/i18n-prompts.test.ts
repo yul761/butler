@@ -66,8 +66,10 @@ describe("prompts follow the language (design 2026-10-26 i18n)", () => {
   });
 
   it("writes the coordinator's task and memory notes in English", () => {
-    expect(taskMessage("build it", "en")).toBe("Task from the coordinator session:\nbuild it");
-    expect(taskMessage("build it", "zh")).toBe("总控 session 交给你的任务：\nbuild it");
+    expect(taskMessage("build it", "en", "feature")).toBe("Task from the coordinator session:\nRead the background and agreements from the feature memory (butler-feature) with recall before you start.\n\nbuild it");
+    expect(taskMessage("build it", "en", "ticket")).toContain("(butler-memory)");
+    expect(taskMessage("build it", "zh", "feature")).toBe("总控 session 交给你的任务：\n开始之前先用 recall 读一下 feature 记忆（butler-feature）里的背景和约定。\n\nbuild it");
+    expect(taskMessage("build it", "zh", "ticket")).toContain("ticket 记忆（butler-memory）");
     setLang("en");
     const f = { id: "f1", ticketKey: "A-1", kind: "config" as const, description: "raise the TTL", trigger: "after_merge" as const, dueDate: null, status: "open" as const, snoozedUntil: null, source: "session" as const, createdAt: 1, doneAt: null };
     expect(followupNote(f).body).toBe("raise the TTL (config, after merge)");

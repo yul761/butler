@@ -112,7 +112,7 @@ export const TOOLS = [
     name: "start_session",
     description:
       "在这个 ticket 的某个仓库里新开一个 Claude Code session，把 task 当作第一条消息发给它。新 session 会出现在 Butler 的同一个 ticket 下面，" +
-      "用户可以看到、接手，权限确认仍由用户处理。各个 session 共享这个 ticket 的记忆：要交代的背景和约定先写进记忆。返回新 session 的 id。",
+      "用户可以看到、接手，权限确认仍由用户处理。各个 session 共享这个 ticket 的记忆：要交代的背景和约定先写进记忆。task 里只写要做什么，背景、接口约定写进记忆，子 session 会自己读。返回新 session 的 id。",
     inputSchema: {
       type: "object",
       properties: {
@@ -180,7 +180,7 @@ export const FEATURE_TOOLS = [
     description:
       "为这个 feature 下的某个 ticket 新开一个 Claude Code session，在那个 ticket 的仓库（worktree）里工作，把 task 当作第一条消息发给它。" +
       "新 session 出现在 Butler 里那个 ticket 下面，用户可以看到、接手，权限确认仍由用户处理。" +
-      "前后端之间的接口约定、共同的背景先写进 feature 记忆（butler-feature），每个 ticket 的 session 都能读到。返回新 session 的 id。",
+      "前后端之间的接口约定、共同的背景先写进 feature 记忆（butler-feature），每个 ticket 的 session 都能读到。task 里只写要做什么，背景、接口约定写进记忆，子 session 会自己读。返回新 session 的 id。",
     inputSchema: {
       type: "object",
       properties: {
@@ -224,7 +224,7 @@ export const TOOLS_EN = [
     ...TOOLS[1],
     description:
       "Open a new Claude Code session in one of this ticket's repos and send it task as its first message. The new session appears under the same ticket in Butler, " +
-      "where the user can watch it and take over; the user still answers its permission prompts. All sessions share this ticket's memory: write the background and agreements to memory first. Returns the new session's id.",
+      "where the user can watch it and take over; the user still answers its permission prompts. All sessions share this ticket's memory: write the background and agreements to memory first. Put only what to do in task; background and interface agreements go in memory, and the child session reads them itself. Returns the new session's id.",
     inputSchema: {
       ...TOOLS[1].inputSchema,
       properties: {
@@ -282,7 +282,7 @@ export const FEATURE_TOOLS_EN = [
     description:
       "Open a new Claude Code session for one of this feature's tickets, working in that ticket's repo (worktree), and send it task as its first message. " +
       "The new session appears under that ticket in Butler, where the user can watch it and take over; the user still answers its permission prompts. " +
-      "Write the API contract between frontend and backend and any shared background to the feature memory (butler-feature) first; every ticket's sessions can read it. Returns the new session's id.",
+      "Write the API contract between frontend and backend and any shared background to the feature memory (butler-feature) first; every ticket's sessions can read it. Put only what to do in task; background and interface agreements go in memory, and the child session reads them itself. Returns the new session's id.",
     inputSchema: {
       ...FEATURE_TOOLS[3].inputSchema,
       properties: {

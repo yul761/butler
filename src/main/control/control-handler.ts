@@ -99,7 +99,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   };
 
   /** 在 ticket 的这个仓库里开子 session，把任务交给它。上限已经由调用方检查过。 */
-  const start = async (t: Ticket, repo: TicketRepo, rawTask: string, spawnedBy: string | null, model: StartModel | undefined, extra: object = {}): Promise<ControlResult> => {
+  const start = async (t: Ticket, repo: TicketRepo, rawTask: string, spawnedBy: string | null, model: StartModel | undefined, memory: "feature" | "ticket", extra: object = {}): Promise<ControlResult> => {
     const task = sanitizeTask(rawTask);
     if (!task) return fail(M().ctlEmptyTask);
     if (d.sessionService.openTerminalCount(t.key) >= MAX_RUNNING_PER_TICKET) {
@@ -109,7 +109,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (!r.ok) return fail(openError(r, repo));
     d.notify();
     // 不等任务写完：等输入框就绪可能要十几秒（用户还要处理信任文件夹之类的对话框），总控先拿到 session id。
-    d.submit(r.termId, taskMessage(task, currentLang())).then(
+    d.submit(r.termId, taskMessage(task, currentLang(), memory)).then(
       (res) => res === "sent" || d.log?.(`control: task for ${r.termId} not delivered (${res})`),
       (e: unknown) => d.log?.(`control: task for ${r.termId} failed`, e),
     );
@@ -387,7 +387,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     // from 必须是这个 feature 的总控，才记成子 session 的开启者。
     const h = req.from ? d.sessions.head(req.from) : null;
     const spawnedBy = h && h.featureId === f.id && h.coordinator ? req.from : null;
-    return start(t, repo, req.task, spawnedBy, req.model, { ticket: t.key });
+    return start(t, repo, req.task, spawnedBy, req.model, "feature", { ticket: t.key });
   };
 
   return async (req) => {
@@ -408,6 +408,6 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
     const repo = findRepo(t, req.repo);
     if (typeof repo === "string") return fail(repo);
-    return start(t, repo, req.task, spawner(t, req.from), req.model);
+    return start(t, repo, req.task, spawner(t, req.from), req.model, "ticket");
   };
 }
