@@ -14,7 +14,7 @@ export interface DeliveryGuardDeps {
   head(sessionId: string): Session | null;
   /** 按 head 的 id 查。 */
   activity(sessionId: string): SessionActivity | null;
-  pty: Pick<PtyManager, "lastUserInputAt" | "screenNeedsUser" | "hasDraft">;
+  pty: Pick<PtyManager, "lastUserInputAt" | "screenNeedsUser" | "hasDraft" | "autoInputInFlight">;
   /** 计划 14 接上「需要你」；没接时恒为 false。 */
   needsYou?: (headId: string) => boolean;
   /**
@@ -30,8 +30,9 @@ export interface DeliveryGuardDeps {
 export type DeliveryCheck = { ok: true; termId: string; headId: string } | { ok: false; block: DeliveryBlock };
 
 /**
- * 所有自动输入（合并总控的通知、PR/CI 结果）都先过这一道：终端开着、session 停着等输入、屏幕上没有要用户回答的东西、
- * 不在「需要你」里、用户最近没打字、输入框里没有没发出去的草稿，才能往里贴。
+ * 所有自动输入（合并总控的通知、PR/CI 结果、换新）都先过这一道：终端开着、session 停着等输入、没有别的自动输入正在往里递、
+ * 屏幕上没有要用户回答的东西、不在「需要你」里、用户最近没打字、输入框里没有没发出去的草稿，才能往里贴。
+ * 过了之后 deliver 还要等输入框就绪（最多 1 分钟）：粘贴前用 recheckAfter 再看一遍（I2）。
  */
 export class DeliveryGuard {
   constructor(private readonly d: DeliveryGuardDeps) {}
@@ -40,7 +41,8 @@ export class DeliveryGuard {
     const termId = this.d.termOf(sessionId);
     if (termId === null) return { ok: false, block: "closed" };
     const head = this.d.head(termId);
-    if (!head || !this.quiet(head) || this.d.refreshing?.(head.id)) return { ok: false, block: "busy" };
+    // 别的自动输入正在往这个终端里递（I2）：等它递完，两段不能贴在同一个输入框里，也不能贴在它那一轮的回复中间。
+    if (!head || !this.quiet(head) || this.d.refreshing?.(head.id) || this.d.pty.autoInputInFlight(termId)) return { ok: false, block: "busy" };
     if (this.d.pty.screenNeedsUser(termId)) return { ok: false, block: "screen" };
     if (this.d.needsYou?.(head.id)) return { ok: false, block: "needs_you" };
     const typed = this.d.pty.lastUserInputAt(termId);
@@ -48,6 +50,18 @@ export class DeliveryGuard {
     // 草稿不看时间：用户打了一半去干别的，过多久回车都会把通知和草稿一起提交。
     if (this.d.pty.hasDraft(termId)) return { ok: false, block: "draft" };
     return { ok: true, termId, headId: head.id };
+  }
+
+  /**
+   * 给 deliver 的 recheck（I2）：check 通过、马上调 deliver 时取。粘贴前 guard 还通过、还是同一个终端、
+   * check 之后用户没往这个终端里输入过（哪怕已经过了打字的安静期），才贴。
+   */
+  recheckAfter(sessionId: string, passed: { termId: string }): () => boolean {
+    const checkedAt = this.d.now();
+    return () => {
+      const g = this.check(sessionId);
+      return g.ok && g.termId === passed.termId && this.d.pty.lastUserInputAt(passed.termId) <= checkedAt;
+    };
   }
 
   /**

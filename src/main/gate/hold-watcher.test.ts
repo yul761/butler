@@ -29,7 +29,7 @@ interface Opts {
   ancestor?: (a: string, b: string) => boolean;
   open?: boolean;
   waiting?: boolean;
-  deliver?: () => Promise<"sent" | "exited" | "timeout">;
+  deliver?: (id: string, text: string, recheck: () => boolean) => Promise<"sent" | "exited" | "timeout" | "blocked">;
   refreshActivity?: HoldWatcherDeps["refreshActivity"];
   cachedByUrl?: HoldWatcherDeps["cachedByUrl"];
 }
@@ -37,7 +37,7 @@ interface Opts {
 function setup(o: Opts = {}) {
   const db = o.db ?? memDb();
   if (!o.db) seed(db);
-  const state = { now: 0, open: o.open ?? true, waiting: o.waiting ?? true, typedAt: 0, draft: false, activity: "waiting" as SessionActivity["kind"] };
+  const state = { now: 0, open: o.open ?? true, waiting: o.waiting ?? true, typedAt: 0, draft: false, inFlight: false, activity: "waiting" as SessionActivity["kind"] };
   const repo = new MergeGateRepo(db);
   const prInfo = vi.fn(async () => (o.pr ? o.pr() : null));
   const git = {
@@ -52,7 +52,7 @@ function setup(o: Opts = {}) {
     termOf: (id) => (state.open ? id : null),
     head: (id) => ({ id, waitingForInput: state.waiting }) as Session,
     activity: () => ({ kind: state.activity, background: false }) as SessionActivity,
-    pty: { lastUserInputAt: () => state.typedAt, screenNeedsUser: () => false, hasDraft: () => state.draft },
+    pty: { lastUserInputAt: () => state.typedAt, screenNeedsUser: () => false, hasDraft: () => state.draft, autoInputInFlight: () => state.inFlight },
     now: () => state.now,
   });
   const deps: HoldWatcherDeps = {
@@ -81,7 +81,7 @@ describe("HoldWatcher: PR holds", () => {
     expect(t.prInfo).toHaveBeenCalledWith(REPO, PR_URL, 2000);
     expect(t.outcome()).toBe("cancelled");
     expect(t.deliver).toHaveBeenCalledTimes(1);
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"), expect.any(Function));
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
@@ -105,7 +105,7 @@ describe("HoldWatcher: PR holds", () => {
     await t.watcher.check();
     expect(t.outcome()).toBe("merged");
     expect(t.deliver).toHaveBeenCalledTimes(1);
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"), expect.any(Function));
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
@@ -164,7 +164,7 @@ describe("HoldWatcher: PR holds", () => {
     t.state.open = true;
     await t.watcher.check();
     expect(t.deliver).toHaveBeenCalledTimes(1);
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"), expect.any(Function));
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
@@ -225,6 +225,33 @@ describe("HoldWatcher: PR holds", () => {
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
+  it("re-checks right before the paste and keeps the notice when the user started typing meanwhile (I2)", async () => {
+    let t!: ReturnType<typeof setup>;
+    t = setup({
+      pr: () => pr("MERGED"),
+      // deliver 等输入框就绪的时候用户开始打字：粘贴前的复查不通过。
+      deliver: async (_id, _text, recheck) => {
+        t.state.typedAt = t.state.now + 1;
+        return recheck() ? "sent" : "blocked";
+      },
+    });
+    t.state.now = 100_000;
+    await t.watcher.check();
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+    expect(t.repo.pendingNotices()).toHaveLength(1);
+    expect(t.logs.some((m) => m.includes("held back"))).toBe(true);
+  });
+
+  it("does not start a notice while another automatic input is in flight on the terminal (I2)", async () => {
+    const t = setup({ pr: () => pr("MERGED") });
+    t.state.inFlight = true;
+    await t.watcher.check();
+    expect(t.deliver).not.toHaveBeenCalled();
+    t.state.inFlight = false;
+    await t.watcher.check();
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+  });
+
   it("tries again next round when delivery timed out", async () => {
     let res: "sent" | "timeout" = "timeout";
     const t = setup({ pr: () => pr("MERGED"), deliver: async () => res });
@@ -240,7 +267,7 @@ describe("HoldWatcher: PR holds", () => {
     const t = setup({ pr: () => pr("CLOSED") });
     await t.watcher.check();
     expect(t.outcome()).toBe("cancelled");
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"), expect.any(Function));
   });
 
   it("expires a hold 2 h + 1 ms old when gh cannot answer and the branch is not in the target", async () => {
@@ -251,7 +278,7 @@ describe("HoldWatcher: PR holds", () => {
     expect(t.git.isAncestor).toHaveBeenCalledWith(REPO, "dms-1", "origin/main");
     expect(t.outcome()).toBe("expired");
     expect(t.deliver).toHaveBeenCalledTimes(1);
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"), expect.any(Function));
   });
 
   it("keeps a hold younger than 2 h when gh cannot answer", async () => {
@@ -280,7 +307,7 @@ describe("HoldWatcher: PR state cached by the PR watcher", () => {
     expect(cachedByUrl).toHaveBeenCalledWith(PR_URL);
     expect(t.prInfo).not.toHaveBeenCalled();
     expect(t.outcome()).toBe("merged");
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"), expect.any(Function));
   });
 
   it("cancels from a cached CLOSED reading without asking gh", async () => {
@@ -326,7 +353,7 @@ describe("HoldWatcher: local holds", () => {
     t.state.now = LOCAL_HOLD_MAX_MS + 1;
     await t.watcher.check();
     expect(t.outcome()).toBe("expired");
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"), expect.any(Function));
   });
 
   it("keeps a local hold up to 10 min", async () => {
@@ -347,7 +374,7 @@ describe("HoldWatcher: rounds", () => {
     const t = setup({ db, pr: () => pr("MERGED") });
     await t.watcher.check();
     expect(t.outcome()).toBe("merged");
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"), expect.any(Function));
   });
 
   it("runs one round for two overlapping check calls", async () => {
@@ -376,12 +403,12 @@ describe("HoldWatcher: rounds", () => {
     const watcher = new HoldWatcher({
       repo, prInfo: async () => pr("MERGED"), git: { isAncestor: async () => false, fetchQuiet: async () => true, upstreamRef: async (_r, b) => `origin/${b}` },
       isOpen: () => true,
-      guard: { check: (s) => (waiting[s] ? { ok: true, termId: s, headId: s } : { ok: false, block: "busy" }) },
+      guard: { check: (s) => (waiting[s] ? { ok: true, termId: s, headId: s } : { ok: false, block: "busy" }), recheckAfter: () => () => true },
       deliver, whoOf: who, now: () => 0, log: () => undefined,
     });
     // 这一轮先卡在 s-slow 上，名单里还有忙着的 s-fast。
     const round = watcher.check();
-    await vi.waitFor(() => expect(deliver).toHaveBeenCalledWith("s-slow", expect.any(String)));
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledWith("s-slow", expect.any(String), expect.any(Function)));
     // s-fast 停下来了：Stop 把它的通知发掉。
     waiting["s-fast"] = true;
     await watcher.sessionIdle("s-fast");

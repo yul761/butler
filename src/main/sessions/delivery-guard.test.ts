@@ -22,6 +22,7 @@ function setup() {
     screen: false,
     typedAt: 0,
     draft: false,
+    inFlight: false,
     needsYou: undefined as ((headId: string) => boolean) | undefined,
     refreshing: undefined as ((headId: string) => boolean) | undefined,
   };
@@ -33,13 +34,14 @@ function setup() {
       lastUserInputAt: () => state.typedAt,
       screenNeedsUser: () => state.screen,
       hasDraft: () => state.draft,
+      autoInputInFlight: () => state.inFlight,
     },
     needsYou: state.needsYou,
     refreshing: state.refreshing,
     now: () => state.now,
   });
   const check = () => new DeliveryGuard(deps()).check("s-old");
-  return { state, check };
+  return { state, check, deps, guard: () => new DeliveryGuard(deps()) };
 }
 
 describe("DeliveryGuard", () => {
@@ -71,7 +73,7 @@ describe("DeliveryGuard", () => {
     const guard = (typingQuietMs: number) =>
       new DeliveryGuard({
         termOf: () => "t-1", head: () => session(), activity: () => activity("idle"),
-        pty: { lastUserInputAt: () => t.state.typedAt, screenNeedsUser: () => false, hasDraft: () => false },
+        pty: { lastUserInputAt: () => t.state.typedAt, screenNeedsUser: () => false, hasDraft: () => false, autoInputInFlight: () => false },
         typingQuietMs, now: () => t.state.now,
       });
     expect(guard(1000).check("s-old")).toMatchObject({ ok: true });
@@ -125,6 +127,46 @@ describe("DeliveryGuard", () => {
     expect(asked).toEqual(["s-head"]);
     t.state.refreshing = () => false;
     expect(t.check()).toMatchObject({ ok: true });
+  });
+
+  it("is busy while another automatic input is in flight on the terminal (I2)", () => {
+    const t = setup();
+    t.state.inFlight = true;
+    expect(t.check()).toEqual({ ok: false, block: "busy" });
+  });
+
+  describe("recheckAfter (I2: the last look right before the paste)", () => {
+    it("passes while the guard still passes on the same terminal and the user has not typed since", () => {
+      const t = setup();
+      const g = t.guard();
+      const passed = g.check("s-old");
+      expect(passed.ok).toBe(true);
+      const recheck = g.recheckAfter("s-old", passed as { termId: string });
+      expect(recheck()).toBe(true);
+    });
+
+    it("fails when the user typed anything after the check, even outside the typing window", () => {
+      const t = setup();
+      const g = new DeliveryGuard({ ...t.deps(), typingQuietMs: 1 });
+      const recheck = g.recheckAfter("s-old", { termId: "t-1" });
+      t.state.now += 10;
+      t.state.typedAt = t.state.now - 5; // 打字窗口 1 ms 早过了，但这是 check 之后的输入
+      expect(recheck()).toBe(false);
+    });
+
+    it("fails when the guard no longer passes or the session moved to another terminal", () => {
+      const t = setup();
+      const g = t.guard();
+      const recheck = g.recheckAfter("s-old", { termId: "t-1" });
+      t.state.head = session({ waitingForInput: false });
+      expect(recheck()).toBe(false);
+      t.state.head = session();
+      t.state.term = "t-2";
+      expect(recheck()).toBe(false);
+      t.state.term = "t-1";
+      t.state.inFlight = true;
+      expect(recheck()).toBe(false);
+    });
   });
 
   it("passes and returns the terminal when everything is quiet", () => {

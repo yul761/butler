@@ -28,6 +28,12 @@ interface Term {
   reactions: Record<string, { ms: number; run: () => void } | undefined>;
   /** 输入这些文字时 deliver 的结果（默认 sent）。 */
   deliverResult: Record<string, "sent" | "exited" | "timeout" | undefined>;
+  /** 用户上一次往这个终端输入的时间（0：没输入过）。 */
+  typedAt: number;
+  /** 终端打开的时间（R36）。 */
+  openedAt: number;
+  /** 粘贴前的复查（I2）不通过：deliver 返回 blocked，什么都没写。 */
+  recheckFails: boolean;
 }
 
 function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: boolean } = {}) {
@@ -47,6 +53,8 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
     onRefreshActivity: null as ((id: string) => void) | null,
     /** 读库（head、记忆开关）的次数：stop 之后不能再读。 */
     reads: 0,
+    /** suppressNeedsYou 收到的 id（R35）。 */
+    suppressed: [] as string[],
   };
   const terms: Term[] = [];
   const typed: Array<{ termId: string; text: string; at: number }> = [];
@@ -65,9 +73,19 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
     return { ok: true, termId: t.chain[0], headId: t.chain[t.chain.length - 1] };
   };
 
+  // 粘贴前的复查（I2）：guard 还通过、还是同一个终端、check 之后用户没输入过；recheckFails 时不通过。
+  const recheckAfter = (respectNeedsYou: boolean) => (id: string, passed: { termId: string }) => {
+    const at = state.now;
+    return () => {
+      const g = check(respectNeedsYou)(id);
+      const t = termOf(id);
+      return g.ok && g.termId === passed.termId && !!t && !t.recheckFails && t.typedAt <= at;
+    };
+  };
+
   const deps: SessionRefresherDeps = {
-    guard: { check: check(true) },
-    guardIgnoringNeedsYou: { check: check(false) },
+    guard: { check: check(true), recheckAfter: recheckAfter(true) },
+    guardIgnoringNeedsYou: { check: check(false), recheckAfter: recheckAfter(false) },
     head: (id) => {
       state.reads++;
       const t = termOf(id);
@@ -90,14 +108,18 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
       state.epicProgressReads++;
       return state.epicProgress;
     },
-    deliver: async (termId, text) => {
-      typed.push({ termId, text, at: state.now });
+    deliver: async (termId, text, recheck) => {
       const t = terms.find((x) => x.chain[0] === termId);
+      if (recheck && !recheck()) return "blocked";
+      typed.push({ termId, text, at: state.now });
       const reaction = t?.reactions[text];
       if (reaction) later(reaction.ms, reaction.run);
       return t?.deliverResult[text] ?? "sent";
     },
     sessions: () => terms.map(headOf),
+    lastUserInputAt: (termId) => terms.find((x) => x.chain[0] === termId)?.typedAt ?? 0,
+    openedAt: (termId) => terms.find((x) => x.chain[0] === termId)?.openedAt ?? 0,
+    suppressNeedsYou: (id) => void state.suppressed.push(id),
     notify: () => void notified++,
     now: () => state.now,
     // 假时钟：睡多久时间就走多久，到点的事件依次发生。
@@ -120,7 +142,7 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
   const addTerm = (id: string, over: Partial<Term> = {}): Term => {
     const t: Term = {
       chain: [id], session: { ticketKey: "DMS-1" }, kind: "ticket", context: 200_000, block: null, needsYou: false, background: false,
-      reactions: {}, deliverResult: {}, ...over,
+      reactions: {}, deliverResult: {}, typedAt: 0, openedAt: 1, recheckFails: false, ...over,
     };
     t.reactions = {
       "/handoff": { ms: 30_000, run: () => r.handoffStored(t.chain[t.chain.length - 1]) },
@@ -158,6 +180,75 @@ describe("SessionRefresher (plan 16)", () => {
     expect(t.r.isRefreshing("s1")).toBe(false);
     expect(t.r.stepOf("s1")).toBeNull();
     expect(t.notified()).toBeGreaterThan(0);
+  });
+
+  it("passes a recheck to every deliver and stops when it says no right before the paste (I2)", async () => {
+    const t = setup();
+    t.addTerm("s1", { recheckFails: true });
+    expect(await t.r.refresh("s1", "manual")).toBe("failed");
+    expect(t.texts()).toEqual([]);
+    expect(t.r.isRefreshing("s1")).toBe(false);
+    expect(t.logs.some((l) => l.includes("blocked"))).toBe(true);
+
+    // 第二步的复查不通过：/handoff 输入了，/clear 没有。
+    const t2 = setup();
+    const term2 = t2.addTerm("s1", {
+      reactions: { "/handoff": { ms: 30_000, run: () => { t2.r.handoffStored("s1"); term2.recheckFails = true; } } },
+    });
+    expect(await t2.r.refresh("s1", "manual")).toBe("failed");
+    expect(t2.texts()).toEqual(["/handoff"]);
+  });
+
+  it("stops before /clear when the user typed anything after Butler typed /handoff, however long ago (I3)", async () => {
+    const t = setup();
+    const term = t.addTerm("s1", {
+      // 用户在等 handoff 的时候打了一下字（之后又安静了很久，guard 的 30 秒早过了）。
+      reactions: { "/handoff": { ms: 300_000, run: () => t.r.handoffStored("s1") } },
+    });
+    t.later(10_000, () => (term.typedAt = t.state.now));
+    expect(await t.r.refresh("s1", "manual")).toBe("failed");
+    expect(t.texts()).toEqual(["/handoff"]);
+    expect(t.logs.some((l) => l.includes("the user typed"))).toBe(true);
+  });
+
+  it("stops before the resume message when the user typed after /handoff (I3)", async () => {
+    const t = setup();
+    const term = t.addTerm("s1", {
+      reactions: {
+        "/clear": { ms: 2_000, run: () => { term.chain.push("s1-new"); term.context = null; term.typedAt = t.state.now; } },
+      },
+    });
+    expect(await t.r.refresh("s1", "manual")).toBe("failed");
+    expect(t.texts()).toEqual(["/handoff", "/clear"]);
+    expect(t.state.suppressed).toEqual([]);
+  });
+
+  it("input before Butler typed /handoff does not stop the refresh (I3)", async () => {
+    const t = setup();
+    t.addTerm("s1", { typedAt: t.state.now - 60_000 });
+    expect(await t.r.refresh("s1", "manual")).toBe("done");
+  });
+
+  it("tells the needs-you tracker to skip the reply to the resume message (R35)", async () => {
+    const t = setup();
+    t.addTerm("s1");
+    expect(await t.r.refresh("s1", "manual")).toBe("done");
+    expect(t.state.suppressed).toEqual(["s1"]);
+  });
+
+  it("does not start an automatic refresh within 60 s of the terminal being opened or resumed; manual still works (R36)", async () => {
+    const t = setup();
+    t.addTerm("s1", { openedAt: t.state.now - 59_999 });
+    t.r.autoCheck();
+    await t.settle();
+    expect(t.texts()).toEqual([]);
+    expect(t.r.precheck("s1", "auto")).toBe("busy");
+    expect(t.r.precheck("s1", "coordinator")).toBeNull();
+    expect(t.r.precheck("s1", "manual")).toBeNull();
+    t.state.now += 1;
+    t.r.autoCheck();
+    await t.settle();
+    expect(t.texts()).toEqual(["/handoff", "/clear", M().refreshResume("ticket", "DMS-1")]);
   });
 
   it("the resume sentence recalls progress and then waits for the user, in both languages", () => {

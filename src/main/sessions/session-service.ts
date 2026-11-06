@@ -42,7 +42,7 @@ import { dirsOutsideWorkspace, isInside, TicketError, type TicketService } from 
 import { describeActivity } from "./activity-monitor";
 import { suggestTicket, type TranscriptState, UNCLAIMED_WINDOW_MS } from "./discovery";
 import { fixTaskMessage } from "./fix-task";
-import type { PtyManager } from "./pty-manager";
+import type { DeliverResult, PtyManager } from "./pty-manager";
 import { M } from "../strings";
 
 export interface SessionServiceDeps {
@@ -93,7 +93,7 @@ export interface SessionServiceDeps {
   /** session 的名字（SendMessage 用它寻址）；查不到时是 null。 */
   sessionName?: (sessionId: string) => Promise<string | null>;
   /** 把任务作为第一条消息交给新 session（修复 session 的任务、feature 的规划）。 */
-  submit?: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout">;
+  submit?: (termId: string, message: string) => Promise<DeliverResult>;
   /** 这个 epic 正在后台生成的汇总（FeatureSummaryRunner.epicRefresh），永不 reject；没有在跑时是 undefined。 */
   epicRefresh?: (epicId: number) => Promise<void> | undefined;
   /** 这个仓库目录此刻是否被别的 ticket 占着（MergeGate.dirBusy）；只用来在切分支提示里提醒，不拦。 */

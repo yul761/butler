@@ -10,17 +10,17 @@ const row = (o: Partial<PrWatchRow> = {}): PrWatchRow => ({
   ci: "failing", headSha: "abcdef1234567", checkedAt: 1, failed: [], deliveredKey: null, ...o,
 });
 
-function setup(opts: { session?: string | null; guard?: ReturnType<DeliveryGuard["check"]>; deliver?: () => Promise<"sent" | "exited" | "timeout"> } = {}) {
+function setup(opts: { session?: string | null; guard?: ReturnType<DeliveryGuard["check"]>; deliver?: (term: string, text: string, recheck: () => boolean) => Promise<"sent" | "exited" | "timeout" | "blocked"> } = {}) {
   const rows = new Map<number, PrWatchRow>();
   const repo = {
     all: () => [...rows.values()],
     get: (id: number) => rows.get(id) ?? null,
     setDelivered: (id: number, key: string) => { const r = rows.get(id); if (r) r.deliveredKey = key; },
   };
-  const state = { guard: opts.guard ?? ({ ok: true, termId: "t1", headId: "h1" } as ReturnType<DeliveryGuard["check"]>), session: opts.session === undefined ? "h1" : opts.session };
+  const state = { guard: opts.guard ?? ({ ok: true, termId: "t1", headId: "h1" } as ReturnType<DeliveryGuard["check"]>), session: opts.session === undefined ? "h1" : opts.session, recheck: true };
   const deliver = vi.fn(opts.deliver ?? (async () => "sent" as const));
   const d = new CiDelivery({
-    repo: repo as never, guard: { check: () => state.guard }, sessionFor: () => state.session, deliver, now: () => 1, log: () => {},
+    repo: repo as never, guard: { check: () => state.guard, recheckAfter: () => () => state.recheck }, sessionFor: () => state.session, deliver, now: () => 1, log: () => {},
   });
   return { rows, state, deliver, d };
 }
@@ -72,6 +72,20 @@ describe("CiDelivery", () => {
     state.guard = { ok: true, termId: "t1", headId: "h1" };
     await d.flush();
     expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes a recheck to deliver and keeps the result when it is held back right before the paste (I2)", async () => {
+    const { rows, state, deliver, d } = setup({ deliver: async (_t, _x, recheck) => (recheck() ? "sent" : "blocked") });
+    const r = row();
+    rows.set(1, r);
+    state.recheck = false;
+    await d.settled(r);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(rows.get(1)!.deliveredKey).toBeNull();
+    state.recheck = true;
+    await d.flush();
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(rows.get(1)!.deliveredKey).toBe(deliveryKey(r));
   });
 
   it("does not deliver twice for the same key", async () => {
@@ -134,7 +148,7 @@ describe("CiDelivery with the real guard and needs-you tracker (I1)", () => {
     const guard = new DeliveryGuard({
       termOf: () => "t1", head: () => head,
       activity: () => ({ sessionId: "h1", kind: "waiting", detail: null, background: false, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, lastOutput: [] }),
-      pty: { lastUserInputAt: () => 0, screenNeedsUser: () => false, hasDraft: () => false },
+      pty: { lastUserInputAt: () => 0, screenNeedsUser: () => false, hasDraft: () => false, autoInputInFlight: () => false },
       needsYou: (id) => deliveryNeedsYou(tracker, id),
       now: () => 1_000_000,
     });

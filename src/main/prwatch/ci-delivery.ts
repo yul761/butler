@@ -1,5 +1,6 @@
 import type { PrWatchRepo, PrWatchRow } from "../db/pr-watch-repo";
 import type { DeliveryGuard } from "../sessions/delivery-guard";
+import type { DeliverResult } from "../sessions/pty-manager";
 import { sanitizeTask } from "../../shared/control";
 import { M } from "../strings";
 import { CI_LOG_LINES } from "./pr-watcher";
@@ -9,10 +10,11 @@ const LOG_CHARS_TOTAL = 5000;
 
 export interface CiDeliveryDeps {
   repo: Pick<PrWatchRepo, "all" | "get" | "setDelivered">;
-  guard: Pick<DeliveryGuard, "check">;
+  guard: Pick<DeliveryGuard, "check" | "recheckAfter">;
   /** 这个 ticket 这个仓库自己的 session（不算总控），终端开着的那个的 head id；没有为 null。 */
   sessionFor(ticketKey: string, repoId: number): string | null;
-  deliver(termId: string, text: string): Promise<"sent" | "exited" | "timeout">;
+  /** recheck 在粘贴前调用（I2）：不通过就什么都不写，返回 blocked。 */
+  deliver(termId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
   now(): number;
   log(msg: string, err?: unknown): void;
 }
@@ -51,7 +53,8 @@ export class CiDelivery {
     if (!gate.ok) return;
     this.busy.add(sessionId);
     try {
-      const result = await this.d.deliver(gate.termId, sanitizeTask(notice(row)));
+      // 粘贴前再看一遍（I2）：等输入框就绪的这段时间里用户可能开始输入、换新可能开始了。blocked 和 timeout 一样留到下一次 flush。
+      const result = await this.d.deliver(gate.termId, sanitizeTask(notice(row)), this.d.guard.recheckAfter(sessionId, gate));
       // 只有真的递出去才记；递的过程中如果结论变了，标记的还是递出去的那一条。
       if (result === "sent") this.d.repo.setDelivered(repoId, key);
       else this.d.log(`ci delivery ${row.ticketKey}#${repoId}: ${result}`);

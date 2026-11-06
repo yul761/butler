@@ -769,8 +769,14 @@ async function bootstrap(): Promise<void> {
     memoryEnabled: () => memoryOn(settings),
     epicProgress: (id) => memory.epicProgress(id),
     // 和递 CI 结果一样最多等 1 分钟：session 是停着的，输入框应该很快就绪。斜杠命令粘贴进去照样会执行（R26 用真的 claude 验证过）。
-    deliver: (termId, text) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000 }),
+    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
     sessions: openButlerHeads,
+    lastUserInputAt: (termId) => pty.lastUserInputAt(termId),
+    openedAt: (termId) => pty.openedAt(termId),
+    // BUTLER_REFRESH_OPEN_QUIET_MS 只给 e2e 用（后台窗口模式下才算数）：它刚打开终端就要看自动换新，不想多等 1 分钟。
+    openQuietMs: process.env.BUTLER_BACKGROUND_WINDOWS === "1" ? Number(process.env.BUTLER_REFRESH_OPEN_QUIET_MS) || undefined : undefined,
+    // 「需要你」按 head 跟踪：/clear 之后终端里跑的是新 id。
+    suppressNeedsYou: (termId) => needsYou.suppressNext(sessions.head(termId)?.id ?? termId),
     notify,
     now: Date.now,
     // /clear 之后没有 Stop：每一步输入之前先重读活动（R28）。
@@ -787,9 +793,9 @@ async function bootstrap(): Promise<void> {
     // PrWatcher 刚查过的 PR 不用再问 gh。prWatcher 在后面才建好：回调里才用到。
     cachedByUrl: (url) => prWatcher.cachedByUrl(url),
     // 最多等 1 分钟：session 是停着的，输入框应该很快就绪；等不到下一轮再发。
-    deliver: async (id, text) => {
+    deliver: async (id, text, recheck) => {
       const t = gateTerm(id);
-      return t ? pty.deliver(t, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000 }) : "exited";
+      return t ? pty.deliver(t, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }) : "exited";
     },
     whoOf, now: Date.now, log: logger,
   });
@@ -804,7 +810,7 @@ async function bootstrap(): Promise<void> {
       }
       return null;
     },
-    deliver: (termId, text) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000 }),
+    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
     now: Date.now,
     log: logger,
   });

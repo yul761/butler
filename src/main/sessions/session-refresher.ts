@@ -3,9 +3,12 @@ import { sanitizeTask } from "../../shared/control";
 import type { RefreshRefusal, RefreshStep, Session } from "../../shared/types";
 import { M } from "../strings";
 import type { DeliveryCheck, DeliveryGuard } from "./delivery-guard";
+import type { DeliverResult } from "./pty-manager";
 
 /** 等 handoff 收进来最多 10 分钟，等 /clear 之后的新 id 最多 60 秒，失败之后 30 分钟内不再自动试（计划 16）。 */
 export const REFRESH_HANDOFF_MS = 600_000, REFRESH_CLEAR_MS = 60_000, REFRESH_COOLDOWN_MS = 1_800_000;
+/** 终端打开（新开或恢复）之后这么久之内不自动换新（R36）：用户刚打开它，多半马上要用。手动和总控触发不看。 */
+export const REFRESH_OPEN_QUIET_MS = 60_000;
 /** 等待时多久看一次：handoff 收进来没有、新 id 接上没有、session 停下来没有。 */
 const POLL_MS = 1_000;
 /** epic 的进度要打开 StateCore 读，5 秒查一次。 */
@@ -57,9 +60,9 @@ export function autoRefreshNeedsYou(v: { reason: string | null; undecided: boole
 
 export interface SessionRefresherDeps {
   /** 自动换新用：含「需要你」。和递 CI 结果用的不是同一个实例，不带 refreshing（R25），否则换新会挡住自己的下一步。 */
-  guard: Pick<DeliveryGuard, "check">;
+  guard: Pick<DeliveryGuard, "check" | "recheckAfter">;
   /** 手动和总控触发用：不看「需要你」，其余条件（草稿、30 秒打字、屏幕确认）照样要满足。同样不带 refreshing。 */
-  guardIgnoringNeedsYou: Pick<DeliveryGuard, "check">;
+  guardIgnoringNeedsYou: Pick<DeliveryGuard, "check" | "recheckAfter">;
   head(sessionId: string): Session | null;
   /** 按 head 的 id 查。自动换新要求没有后台任务在跑（guard 把只剩后台任务的 session 当作停着，见计划 13 R9）。 */
   activity(sessionId: string): SessionActivity | null;
@@ -76,9 +79,18 @@ export interface SessionRefresherDeps {
   memoryEnabled(): boolean;
   /** epic session 写的进度（MemoryService.epicProgress）：Butler 重新渲染时不变，只有 epic session 写了新的才变（R29）。 */
   epicProgress(epicId: number): Promise<string | null>;
-  deliver(termId: string, text: string): Promise<"sent" | "exited" | "timeout">;
+  /** recheck 在粘贴前调用（I2）：不通过就什么都不写，返回 blocked。 */
+  deliver(termId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
   /** 开着终端的 Butler session 的 head，自动检查用。 */
   sessions(): Session[];
+  /** 用户上一次往这个终端里输入的时间（PtyManager.lastUserInputAt）：Butler 输入 /handoff 之后用户动过，就不再清空（I3）。 */
+  lastUserInputAt(termId: string): number;
+  /** 终端打开的时间（PtyManager.openedAt），0 = 不知道。刚打开的终端不自动换新（R36）。不给就不看。 */
+  openedAt?: (termId: string) => number;
+  /** 刚打开多久之内不自动换新，默认 REFRESH_OPEN_QUIET_MS（e2e 调短）。 */
+  openQuietMs?: number;
+  /** 接着做的话输入以后：它的回复不进「需要你」（R35，NeedsYouTracker.suppressNext）。参数是终端的 id，按链找 head。 */
+  suppressNeedsYou?: (sessionId: string) => void;
   /** 换新开始、换了一步、结束时调用（「现在」页显示"换新中"）。 */
   notify(): void;
   now(): number;
@@ -205,10 +217,15 @@ export class SessionRefresher {
     };
   }
 
-  /** 开始时和第一步输入之前（中间等过异步）都看这一道：guard 通过；自动触发还要求没有后台任务在跑。 */
+  /**
+   * 开始时和第一步输入之前（中间等过异步）都看这一道：guard 通过；自动触发还要求没有后台任务在跑、终端不是刚打开的（R36）。
+   */
   private canStart(sessionId: string, trigger: RefreshTrigger): DeliveryCheck {
     const gate = this.guardFor(trigger).check(sessionId);
-    if (gate.ok && trigger === "auto" && this.d.activity(gate.headId)?.background === true) return { ok: false, block: "busy" };
+    if (!gate.ok || trigger !== "auto") return gate;
+    if (this.d.activity(gate.headId)?.background === true) return { ok: false, block: "busy" };
+    const opened = this.d.openedAt?.(gate.termId) ?? 0;
+    if (opened > 0 && this.d.now() - opened < (this.d.openQuietMs ?? REFRESH_OPEN_QUIET_MS)) return { ok: false, block: "busy" };
     return gate;
   }
 
@@ -260,7 +277,7 @@ export class SessionRefresher {
     // 从这一刻起收进来的 handoff 才算这次换新的（审查：用户自己的 /handoff 恰好在前面的检查期间收进来，不能让 /clear 跟着就输入）。
     run.stored = false;
     run.handoffTypedAt = this.d.now();
-    const typedHandoff = await this.type(run, run.kind === "epic" ? M().refreshEpicHandoff : HANDOFF_COMMAND);
+    const typedHandoff = await this.type(run, run.kind === "epic" ? M().refreshEpicHandoff : HANDOFF_COMMAND, this.guardFor(run.trigger).recheckAfter(run.headId, gate));
     if (typedHandoff) return this.fail(run, `typing the handoff request: ${typedHandoff}`);
     const handedOff =
       run.kind === "epic"
@@ -274,10 +291,10 @@ export class SessionRefresher {
     // 第二步：/clear，等 SessionStart（source=clear）把新 id 接上 replaced_by。
     this.setStep(run, "clear");
     const beforeClear = await this.untilQuiet(run);
-    if (beforeClear) return this.fail(run, `before /clear: ${beforeClear}`);
+    if (typeof beforeClear === "string") return this.fail(run, `before /clear: ${beforeClear}`);
     this.alive();
     const oldHead = this.d.head(run.termId)?.id ?? run.headId;
-    const typedClear = await this.type(run, CLEAR_COMMAND);
+    const typedClear = await this.type(run, CLEAR_COMMAND, beforeClear);
     if (typedClear) return this.fail(run, `typing /clear: ${typedClear}`);
     const cleared = await this.until(() => {
       const h = this.d.head(run.termId);
@@ -288,25 +305,35 @@ export class SessionRefresher {
     // 第三步：只让它调回进度、说一两句做到哪了，然后等用户。
     this.setStep(run, "resume");
     const beforeResume = await this.untilQuiet(run);
-    if (beforeResume) return this.fail(run, `before the resume message: ${beforeResume}`);
-    const typedResume = await this.type(run, M().refreshResume(run.kind, run.ticket));
+    if (typeof beforeResume === "string") return this.fail(run, `before the resume message: ${beforeResume}`);
+    const typedResume = await this.type(run, M().refreshResume(run.kind, run.ticket), beforeResume);
     if (typedResume) return this.fail(run, `typing the resume message: ${typedResume}`);
+    // 它对接着做的话的回复只是说做到哪了：不进「需要你」（R35）。
+    try {
+      this.d.suppressNeedsYou?.(run.termId);
+    } catch (e) {
+      this.d.log(`refresh ${run.headId}: skipping the needs-you check of the resume reply failed`, e);
+    }
     return "done";
   }
 
   /**
-   * 等到能往里输入：session 又停下来了（写 handoff、/clear 时它本来就会忙一阵）就返回 null，最多等 REFRESH_CLEAR_MS。
-   * 用户在打字、留了草稿、屏幕上有要用户回答的东西、终端关了或换了、记忆被关掉了，马上返回原因，不等。
+   * 等到能往里输入：session 又停下来了（写 handoff、/clear 时它本来就会忙一阵）就返回粘贴前的复查（I2），最多等 REFRESH_CLEAR_MS。
+   * 用户在打字、留了草稿、屏幕上有要用户回答的东西、终端关了或换了、记忆被关掉了、Butler 输入 /handoff 之后用户往终端里输入过（I3），
+   * 马上返回原因，不等。
    */
-  private async untilQuiet(run: Run): Promise<string | null> {
+  private async untilQuiet(run: Run): Promise<string | (() => boolean)> {
     const end = this.d.now() + REFRESH_CLEAR_MS;
     for (;;) {
       this.alive();
       if (!this.d.memoryEnabled()) return "memory_off";
+      // 用户在 Butler 输入 /handoff 之后动过这个终端（哪怕早过了 30 秒的打字安静期）：他可能在接着用它，不能替他清空。
+      if (this.d.lastUserInputAt(run.termId) > (run.handoffTypedAt ?? Infinity)) return "the user typed in the terminal after /handoff";
       await this.rereadActivity(run);
       this.alive();
-      const gate = this.guardFor(run.trigger).check(run.headId);
-      if (gate.ok) return gate.termId === run.termId ? null : "the terminal changed";
+      const guard = this.guardFor(run.trigger);
+      const gate = guard.check(run.headId);
+      if (gate.ok) return gate.termId === run.termId ? guard.recheckAfter(run.headId, gate) : "the terminal changed";
       if (gate.block !== "busy") return gate.block;
       if (this.d.now() >= end) return `still busy after ${REFRESH_CLEAR_MS / 1000} seconds`;
       await this.sleep(POLL_MS);
@@ -336,12 +363,12 @@ export class SessionRefresher {
     }
   }
 
-  /** 输入一段文字；成功返回 null，否则返回原因。 */
-  private async type(run: Run, text: string): Promise<string | null> {
+  /** 输入一段文字；成功返回 null，否则返回原因（blocked：粘贴前的复查没通过，什么都没写）。 */
+  private async type(run: Run, text: string, recheck: () => boolean): Promise<string | null> {
     this.alive();
-    let r: "sent" | "exited" | "timeout";
+    let r: DeliverResult;
     try {
-      r = await this.d.deliver(run.termId, sanitizeTask(text));
+      r = await this.d.deliver(run.termId, sanitizeTask(text), recheck);
     } catch (e) {
       this.alive();
       this.d.log(`refresh ${run.headId}: deliver failed`, e);
@@ -376,7 +403,7 @@ export class SessionRefresher {
     }
   }
 
-  private guardFor(trigger: RefreshTrigger): Pick<DeliveryGuard, "check"> {
+  private guardFor(trigger: RefreshTrigger): Pick<DeliveryGuard, "check" | "recheckAfter"> {
     return trigger === "auto" ? this.d.guard : this.d.guardIgnoringNeedsYou;
   }
 

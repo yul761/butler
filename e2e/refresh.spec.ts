@@ -10,8 +10,8 @@ import { completeWizard, expect, terminalText, test, type Sandbox } from "./fixt
  * 活动 tick、用量扫描和"刚打过字"的间隔都调短；终端里早已滚走的输入按假 claude 记下的 prompt 行核对。
  */
 
-/** 用量扫描、活动 tick、打字之后不自动输入的间隔（e2e 专用的环境变量，只在后台窗口模式下算数）。 */
-const FAST = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_USAGE_SCAN_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000" };
+/** 用量扫描、活动 tick、打字之后不自动输入、刚打开的终端不自动换新的间隔（e2e 专用的环境变量，只在后台窗口模式下算数）。 */
+const FAST = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_USAGE_SCAN_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000", BUTLER_REFRESH_OPEN_QUIET_MS: "1000" };
 /** 换新的最后一步输入的那句话的开头（src/main/strings.ts 的 refreshResume）。 */
 const RESUME = "上下文已由 Butler 换新。先用 recall 调出";
 /** 假 claude 的 /handoff 输出（fake-claude.cjs 的 COMMAND_HANDOFF）里做完的事。 */

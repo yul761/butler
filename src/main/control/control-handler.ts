@@ -13,6 +13,7 @@ import { currentLang } from "../i18n";
 import { M } from "../strings";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
+import type { DeliverResult } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
 import { startRefresh, type SessionRefresher } from "../sessions/session-refresher";
 import { FEATURE_NAME_LIMIT, type FeatureService } from "../tickets/feature-service";
@@ -50,7 +51,7 @@ export interface ControlHandlerDeps {
   /** session 最后一条 assistant 文字回复的结尾（最多 500 字符）；读不到为 null。 */
   lastReply?: (sessionId: string) => string | null;
   /** 把任务作为第一条消息交给新 session（等启动对话框过去、输入框就绪、粘贴、回车）。 */
-  submit: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout">;
+  submit: (termId: string, message: string) => Promise<DeliverResult>;
   notify: () => void;
   /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
   ticketPattern?: () => string;
