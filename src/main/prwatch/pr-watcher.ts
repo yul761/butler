@@ -149,7 +149,7 @@ export class PrWatcher {
       const forced = this.dueNow;
       this.dueNow = new Set();
       const now = this.d.now();
-      const due = capped(this.d.targets()).filter((t) => forced.has(t.repoId) || now >= nextCheckAt(this.d.repo.get(t.repoId), t.sessionOpen));
+      const due = capped(this.d.targets()).filter((t) => forced.has(t.repoId) || now >= nextCheckAt(this.rowOf(t), t.sessionOpen));
       const results = await Promise.all(due.map((t) => this.checkOne(t)));
       // 一个 ticket 的所有仓库都写完了再告诉 onPrChanged，而且只告诉一次。
       const prChanged = new Set(due.filter((_, i) => results[i]?.prChanged).map((t) => t.ticketKey));
@@ -171,10 +171,19 @@ export class PrWatcher {
     }
   }
 
+  /**
+   * 这个仓库在 pr_watch 里的行。ticket 的分支改过（TicketsRepo.updateRepo）时行还是旧分支的：当作没查过（I4），
+   * 不沿用旧分支的 PR、CI，也不因为旧分支的 PR 合并了就不再查。
+   */
+  private rowOf(t: PrTarget): PrWatchRow | null {
+    const row = this.d.repo.get(t.repoId);
+    return row && row.branch === t.branch ? row : null;
+  }
+
   /** 查一个仓库、写进 pr_watch；出错记日志、返回 null。 */
   private async checkOne(t: PrTarget): Promise<{ prChanged: boolean; changed: boolean } | null> {
     try {
-      const prev = this.d.repo.get(t.repoId);
+      const prev = this.rowOf(t);
       const next = await this.read(t, prev);
       this.d.repo.upsert(next);
       if (settled(prev, next)) {

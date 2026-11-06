@@ -109,6 +109,24 @@ describe("PrWatcher", () => {
     expect(s.deps.onPrChanged).toHaveBeenCalledTimes(1);
   });
 
+  it("starts the row over when the repo's branch changed (I4)", async () => {
+    const s = setup([target({ branch: "new" })]);
+    // 旧分支 b 的行：PR #7 已经合并。
+    s.repo.upsert({ ...row({ state: "merged", ci: "passing" }) });
+    s.gh.branchRuns.mockResolvedValueOnce({ headSha: "n1", checks: [check("ci", "pending")], ci: "pending" });
+    await s.w.check();
+    // gh pr view 没查到：新分支还没有 PR，按分支的 run 读，不沿用旧分支的 PR。
+    expect(s.gh.branchRuns).toHaveBeenCalledWith("/w", "new", PR_GH_TIMEOUT_MS);
+    expect(s.repo.get(1)).toMatchObject({ branch: "new", number: null, url: null, state: null, headSha: "n1", ci: "pending" });
+  });
+
+  it("does not carry the old branch's PR into the new branch's row when gh fails (I4)", async () => {
+    const s = setup([target({ branch: "new" })]);
+    s.repo.upsert({ ...row({ state: "open", ci: "failing", failed: [check("test", "failing", 9)] }) });
+    await s.w.check();
+    expect(s.repo.get(1)).toMatchObject({ branch: "new", number: null, url: null, state: null, review: null, headSha: null, ci: "unknown", failed: [] });
+  });
+
   it("treats a throwing gh call like a failed one", async () => {
     const s = setup();
     s.gh.prStatus.mockRejectedValue(new Error("boom"));

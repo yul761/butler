@@ -7,7 +7,7 @@ export interface WatchTargetDeps {
   /** 这个仓库自己的 session 有没有终端开着（SessionService.hasRepoTerminal）。 */
   sessionOpen(ticketKey: string, repoId: number): boolean;
   /** 这个仓库在 pr_watch 里的行；还没查过为 null。 */
-  watched(repoId: number): Pick<WatchedPr, "state" | "number" | "ci"> | null;
+  watched(repoId: number): (Pick<WatchedPr, "state" | "number" | "ci"> & { branch: string }) | null;
   /** 这个 ticket 最新的有效 handoff 里有没有开着的 PR。 */
   handoffHasOpenPr(ticketKey: string): boolean;
 }
@@ -22,7 +22,9 @@ export function watchTargets(tickets: Pick<Ticket, "key" | "repos">[], d: WatchT
   const out: PrTarget[] = [];
   for (const t of tickets) {
     for (const r of t.repos) {
-      const row = d.watched(r.id);
+      // ticket 的分支改过（TicketsRepo.updateRepo）：行是旧分支的，当作还没查过（I4）。
+      const stored = d.watched(r.id);
+      const row = stored && stored.branch === r.branch ? stored : null;
       if (row?.state === "merged" || row?.state === "closed") continue;
       const sessionOpen = d.sessionOpen(t.key, r.id);
       const neverRead = row === null || (row.number === null && row.ci === "unknown");
