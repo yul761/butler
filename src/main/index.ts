@@ -267,7 +267,7 @@ async function bootstrap(): Promise<void> {
   // 先用 Butler 自己的 PATH 定下 git 和 gh 的绝对路径；登录 shell 的 PATH 读到之后再更新一次。
   const ownPath = process.env[pathKey(process.env)] ?? "";
   applyGitResolution(resolveGit(ownPath, process.platform), process.platform, (m) => logger(m));
-  applyGhResolution(resolveGh(ownPath, process.platform), (m) => logger(m));
+  applyGhResolution(resolveGh(ownPath, process.platform), process.platform, (m) => logger(m));
   const db = openDatabase(paths.db);
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -310,7 +310,7 @@ async function bootstrap(): Promise<void> {
   const healthReady: Promise<void> = Promise.all([health.syncHandoffCommand().then(() => health.refresh()), health.syncHookBinary()]).then(
     () => {
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
-      applyGhResolution(resolveGh(health.claude().pathValue, process.platform), (m) => logger(m));
+      applyGhResolution(resolveGh(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       notify();
     },
     (e: unknown) => {

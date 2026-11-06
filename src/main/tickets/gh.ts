@@ -1,7 +1,10 @@
 import { execFile } from "node:child_process";
 
-/** 执行的 gh：启动时和登录 shell 的 PATH 读到之后各解析一次（resolveGh）；没找到就用裸 "gh"。 */
-let binary = "gh";
+/**
+ * 执行的 gh：启动时和登录 shell 的 PATH 读到之后各解析一次（resolveGh）；没找到就用裸 "gh"。
+ * null：没找到 gh 且在 Windows 上，不执行（裸 "gh" 会先在仓库目录里找 gh.exe，I5，和 git-path 一样）。
+ */
+let binary: string | null = "gh";
 let resolved = false;
 let warned = false;
 
@@ -17,18 +20,24 @@ export function resetGhBinary(): void {
   warned = false;
 }
 
-/** 记录一次解析结果：找到了就（重新）采用；没找到时不降级已有的结果，一直没找到就用裸 "gh"，整个进程只警告一次。 */
-export function applyGhResolution(found: string | null, log: (msg: string) => void): void {
+/**
+ * 记录一次解析结果：找到了就（重新）采用；没找到时不降级已有的结果。一直没找到：Windows 上不执行 gh（PR、CI 读成 unknown），
+ * 其他平台用裸 "gh"；整个进程只警告一次。
+ */
+export function applyGhResolution(found: string | null, platform: NodeJS.Platform, log: (msg: string) => void): void {
   if (found) {
     setGhBinary(found);
     return;
   }
-  if (resolved || warned) return;
+  if (resolved) return;
+  binary = platform === "win32" ? null : "gh";
+  if (warned) return;
   warned = true;
-  log("gh not found on PATH: falling back to plain gh");
+  log(platform === "win32" ? "gh not found on PATH: PR and CI checks are disabled" : "gh not found on PATH: falling back to plain gh");
 }
 
-export function ghBinary(): string {
+/** null：不能执行 gh（Windows 上没找到）。 */
+export function ghBinary(): string | null {
   return binary;
 }
 
@@ -43,9 +52,11 @@ export interface PrInfo {
 
 /** gh pr view [pr]：pr 为 null 时看 cwd 当前分支的 PR。gh 没装、没登录、超时、输出不对都返回 null，从不抛错。 */
 export function prInfo(cwd: string, pr: string | null, timeoutMs: number): Promise<PrInfo | null> {
+  const bin = ghBinary();
+  if (bin === null) return Promise.resolve(null);
   return new Promise((done) => {
     const args = ["pr", "view", ...(pr === null ? [] : [pr]), "--json", "number,url,headRefName,baseRefName,state,autoMergeRequest"];
-    execFile(ghBinary(), args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+    execFile(bin, args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout) => {
       if (err) return done(null);
       try {
         const j = JSON.parse(String(stdout)) as Record<string, unknown>;
@@ -129,10 +140,12 @@ export function ciOf(checks: CiCheck[]): CiState {
   return checks.length > 0 ? "passing" : "none";
 }
 
-/** 跑 gh，成功返回 stdout，任何失败返回 null，从不抛错。 */
+/** 跑 gh，成功返回 stdout，任何失败返回 null，从不抛错。不能执行 gh（Windows 上没找到）时不启动进程，直接 null。 */
 function runGh(cwd: string, args: string[], timeoutMs: number, maxBuffer: number): Promise<string | null> {
+  const bin = ghBinary();
+  if (bin === null) return Promise.resolve(null);
   return new Promise((done) => {
-    execFile(ghBinary(), args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer }, (err, stdout) => done(err ? null : String(stdout)));
+    execFile(bin, args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer }, (err, stdout) => done(err ? null : String(stdout)));
   });
 }
 

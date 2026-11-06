@@ -1,4 +1,4 @@
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
@@ -139,16 +139,34 @@ describe("gh binary (resolved like git: a GUI app's PATH often lacks Homebrew)",
   it("defaults to plain gh, takes a found path, and keeps the best one it has when a later lookup finds nothing (warning once)", () => {
     const logs: string[] = [];
     expect(ghBinary()).toBe("gh");
-    applyGhResolution(null, (m) => logs.push(m));
-    applyGhResolution(null, (m) => logs.push(m));
+    applyGhResolution(null, "darwin", (m) => logs.push(m));
+    applyGhResolution(null, "darwin", (m) => logs.push(m));
     expect(ghBinary()).toBe("gh");
     expect(logs).toEqual(["gh not found on PATH: falling back to plain gh"]);
-    applyGhResolution("/opt/homebrew/bin/gh", (m) => logs.push(m));
+    applyGhResolution("/opt/homebrew/bin/gh", "darwin", (m) => logs.push(m));
     expect(ghBinary()).toBe("/opt/homebrew/bin/gh");
-    applyGhResolution(null, (m) => logs.push(m));
+    applyGhResolution(null, "darwin", (m) => logs.push(m));
     expect(ghBinary()).toBe("/opt/homebrew/bin/gh");
     setGhBinary("/usr/local/bin/gh");
     expect(ghBinary()).toBe("/usr/local/bin/gh");
+  });
+
+  it("on Windows, with no gh found, runs nothing: a bare gh would pick up a gh.exe in the repo (I5)", async () => {
+    const logs: string[] = [];
+    // PATH 上有一个 gh：真去执行就会留下记录。
+    const dir = fakeGh(`echo "$1" >> "$(dirname "$0")/calls.txt"\nexit 1`);
+    applyGhResolution(null, "win32", (m) => logs.push(m));
+    applyGhResolution(null, "win32", (m) => logs.push(m));
+    expect(ghBinary()).toBeNull();
+    expect(logs).toEqual(["gh not found on PATH: PR and CI checks are disabled"]);
+    expect(await prInfo(dir, null, 5000)).toBeNull();
+    expect(await prStatus(dir, "b", 5000)).toBeNull();
+    expect(await branchRuns(dir, "b", 5000)).toBeNull();
+    expect(await failedLog(dir, 1, 10, 5000)).toBeNull();
+    expect(existsSync(join(dir, "calls.txt"))).toBe(false);
+    // 之后找到了就用它。
+    applyGhResolution("C:\\Program Files\\GitHub CLI\\gh.exe", "win32", (m) => logs.push(m));
+    expect(ghBinary()).toBe("C:\\Program Files\\GitHub CLI\\gh.exe");
   });
 
   it.skipIf(process.platform === "win32")("prInfo, prStatus, branchRuns and failedLog run the resolved gh, not the one on PATH", async () => {
