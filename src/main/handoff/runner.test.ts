@@ -22,7 +22,7 @@ const valid = (over: Partial<Handoff> = {}): Handoff => ({ ...emptyHandoff("X"),
 
 const ok = (structured: unknown, sessionId = "fork-1"): HeadlessOutcome => ({
   ok: true,
-  result: { sessionId, isError: false, subtype: "success", resultText: JSON.stringify(structured), structured, permissionDenials: [], apiErrorStatus: null, costUsd: 0 },
+  result: { sessionId, isError: false, subtype: "success", resultText: JSON.stringify(structured), structured, permissionDenials: [], apiErrorStatus: null, costUsd: 0, usage: null, model: null },
 });
 
 function setup(opts: { run?: HeadlessRun; signal?: AbortSignal; projectMcp?: (cwd: string) => string[]; addDirs?: string[] } = {}) {

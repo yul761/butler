@@ -19,7 +19,7 @@ function deps(out: HeadlessOutcome, seen: HeadlessRequest[] = []): HeadlessExecD
 }
 const ok = (structured: unknown): HeadlessOutcome => ({
   ok: true,
-  result: { sessionId: null, isError: false, subtype: null, resultText: "", structured, permissionDenials: [], apiErrorStatus: null, costUsd: null },
+  result: { sessionId: null, isError: false, subtype: null, resultText: "", structured, permissionDenials: [], apiErrorStatus: null, costUsd: null, usage: null, model: null },
 });
 
 afterEach(() => setLang("zh"));

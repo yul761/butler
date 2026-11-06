@@ -59,7 +59,18 @@ describe("parseClaudeJson", () => {
     expect(parseClaudeJson(`${JSON.stringify(OBSERVED)}\n`)).toEqual({
       sessionId: "a861b9bd-25a8-481b-a01a-3fca83dd069f", isError: false, subtype: "success", resultText: '{"word":"hello","count":3}',
       structured: { word: "hello", count: 3 }, permissionDenials: [], apiErrorStatus: null, costUsd: 0.23302,
+      usage: null, model: null,
     });
+  });
+
+  it("parses usage and model from the result object", () => {
+    const r = parseClaudeJson(JSON.stringify({
+      ...OBSERVED,
+      usage: { input_tokens: 2, cache_creation_input_tokens: 30, cache_read_input_tokens: 11, output_tokens: 6, cache_creation: { ephemeral_5m_input_tokens: 10, ephemeral_1h_input_tokens: 20 } },
+      modelUsage: { "claude-sonnet-5-5": {} },
+    }));
+    expect(r?.usage).toEqual({ input: 2, cacheWrite5m: 10, cacheWrite1h: 20, cacheRead: 11, output: 6 });
+    expect(r?.model).toBe("claude-sonnet-5-5");
   });
 
   it("lists denied tools, accepts a message array, rejects garbage", () => {

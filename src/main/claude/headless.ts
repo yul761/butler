@@ -2,6 +2,7 @@ import { execFile, type ChildProcess } from "node:child_process";
 import { pathKey } from "../util/env";
 import { childLaunch, isCmdShim, spawnClaude } from "./launch";
 import { M } from "../strings";
+import { usageCounts, type UsageCounts } from "../usage/usage-parse";
 
 export const HEADLESS_TIMEOUT_MS = 5 * 60 * 1000;
 const STDOUT_LIMIT = 20 * 1024 * 1024;
@@ -41,6 +42,9 @@ export interface ClaudeResult {
   permissionDenials: string[];
   apiErrorStatus: number | null;
   costUsd: number | null;
+  usage: UsageCounts | null;
+  /** modelUsage 里的第一个键；没有为 null。 */
+  model: string | null;
 }
 
 export type HeadlessFailure = "timeout" | "spawn_failed" | "exit_nonzero" | "bad_output" | "rate_limited" | "claude_error" | "aborted";
@@ -70,6 +74,9 @@ export function headlessArgs(o: { schema: string; resumeSessionId?: string; allo
   if (o.allowedTools.length) args.push("--allowedTools", ...o.allowedTools);
   return args;
 }
+
+/** 对象的第一个键；不是对象或为空时返回 null。 */
+const firstKey = (v: unknown): string | null => (v && typeof v === "object" && !Array.isArray(v) ? (Object.keys(v)[0] ?? null) : null);
 
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 
@@ -105,6 +112,8 @@ export function parseClaudeJson(stdout: string): ClaudeResult | null {
     permissionDenials: denials,
     apiErrorStatus: typeof o.api_error_status === "number" ? o.api_error_status : null,
     costUsd: typeof o.total_cost_usd === "number" ? o.total_cost_usd : null,
+    usage: usageCounts(o.usage),
+    model: firstKey(o.modelUsage),
   };
 }
 
