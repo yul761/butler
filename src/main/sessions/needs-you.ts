@@ -58,19 +58,26 @@ export async function judgeNeedsYou(d: HeadlessExecDeps, reply: string, cwd: str
   return v.ok ? { needsYou: v.value.needs_user, reason: v.value.reason } : null;
 }
 
-/** 最后一句（连同句末的标点），最多 80 字，取结尾。 */
+/** 回复末尾包着问句的东西：空白、Markdown 的强调和代码标记、右括号、右引号。 */
+const TRAILING_WRAPPERS_RE = /[\s*_`)）」』"”']+$/;
+
+/** 去掉末尾的包装：“**要拆吗？**”的结尾其实是问号。 */
+const unwrapEnd = (text: string): string => text.replace(TRAILING_WRAPPERS_RE, "");
+
+/** 最后一句（连同句末的标点，不带末尾的包装），最多 80 字，取结尾。 */
 function lastSentence(text: string): string {
-  const t = text.trimEnd();
+  const t = unwrapEnd(text);
   // 先把句末的标点放到一边，再找它前面的最后一个句子边界：中文句末标点、换行，或者后面跟空白的英文标点。
   const body = t.slice(0, t.length - (/[。！？.!?]*$/.exec(t)?.[0].length ?? 0));
   let start = 0;
   for (const m of body.matchAll(/[。！？\n]|[.!?](?=\s)/g)) start = m.index + 1;
-  return tail(t.slice(start).trim(), FALLBACK_REASON_CHARS);
+  // 句首的强调和代码标记也去掉，免得理由里留半截 Markdown。
+  return tail(t.slice(start).replace(/^[\s*_`]+/, ""), FALLBACK_REASON_CHARS);
 }
 
 /** 判断失败时的退路。 */
 export function fallbackNeedsYou(reply: string): NeedsYouVerdict {
-  return /[?？]$/.test(reply.trimEnd()) ? { needsYou: true, reason: lastSentence(reply) } : { needsYou: false, reason: "" };
+  return /[?？]$/.test(unwrapEnd(reply)) ? { needsYou: true, reason: lastSentence(reply) } : { needsYou: false, reason: "" };
 }
 
 export interface NeedsYouHead {
@@ -93,6 +100,8 @@ interface Entry {
   replyId: string;
   /** null：还在排队或者在判断。 */
   verdict: NeedsYouVerdict | null;
+  /** 停在这条回复上之后又忙起来过（用户回答了）：之后哪怕又停在同一条回复上，也不再算需要你。 */
+  answered: boolean;
 }
 
 interface Job {
@@ -125,8 +134,15 @@ export class NeedsYouTracker {
     for (const id of this.queue.keys()) if (!live.has(id)) this.queue.delete(id);
     for (const s of heads) {
       const reply = stoppedReply(s);
-      if (!reply || this.entries.get(s.id)?.replyId === reply.id) continue;
-      this.entries.set(s.id, { replyId: reply.id, verdict: null });
+      const e = this.entries.get(s.id);
+      if (!reply) {
+        // 只有先停在这条回复上、现在又忙起来，才算回答过。没停过的回复不算：transcript 已经写完、“停着”还没跟上时，
+        // 最后那条回复看起来也是忙着的，记成回答过就永远判断不到它了。
+        if (e && s.reply && e.replyId === s.reply.id) this.markAnswered(s.id, e);
+        continue;
+      }
+      if (e?.replyId === reply.id) continue;
+      this.entries.set(s.id, { replyId: reply.id, verdict: null, answered: false });
       this.queue.set(s.id, { sessionId: s.id, replyId: reply.id, text: tail(reply.text, NEEDS_YOU_REPLY_CHARS), cwd: s.cwd });
     }
     this.pump();
@@ -137,9 +153,15 @@ export class NeedsYouTracker {
     const s = this.d.sessions().find((x) => x.id === sessionId);
     const reply = s ? stoppedReply(s) : null;
     const e = this.entries.get(sessionId);
-    if (!reply || e?.replyId !== reply.id || !e.verdict?.needsYou) return null;
+    if (!reply || e?.replyId !== reply.id || e.answered || !e.verdict?.needsYou) return null;
     // 模型说需要却没给理由：用最后一句代替，界面上不能是空的。
     return e.verdict.reason.trim() || lastSentence(reply.text);
+  }
+
+  /** 回答过的回复不用再判断：还在排队的撤掉。 */
+  private markAnswered(sessionId: string, e: Entry): void {
+    e.answered = true;
+    if (this.queue.get(sessionId)?.replyId === e.replyId) this.queue.delete(sessionId);
   }
 
   /** 有名额就开始排着的判断；判断要几秒到几十秒，不等它。 */
@@ -165,7 +187,7 @@ export class NeedsYouTracker {
     // 判断期间有了新回复或者终端关了：这个结论已经无关。
     if (e?.replyId === job.replyId) {
       e.verdict = verdict ?? fallbackNeedsYou(job.text);
-      if (e.verdict.needsYou) this.d.notify();
+      if (e.verdict.needsYou && !e.answered) this.d.notify();
     }
     this.pump();
   }

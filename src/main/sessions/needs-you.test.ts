@@ -67,6 +67,16 @@ describe("fallbackNeedsYou", () => {
     expect(fallbackNeedsYou("推上去了。").needsYou).toBe(false);
   });
 
+  it("looks past trailing Markdown, brackets and quotes for the question mark", () => {
+    expect(fallbackNeedsYou("**要拆吗？**")).toEqual({ needsYou: true, reason: "要拆吗？" });
+    expect(fallbackNeedsYou("做完了。**").needsYou).toBe(false);
+    expect(fallbackNeedsYou("测试过了。`要合并吗?`\n")).toEqual({ needsYou: true, reason: "要合并吗?" });
+    expect(fallbackNeedsYou("（要不要先 rebase？）").needsYou).toBe(true);
+    expect(fallbackNeedsYou("他问「要合并吗？」").needsYou).toBe(true);
+    expect(fallbackNeedsYou('Should I "merge it?"').needsYou).toBe(true);
+    expect(fallbackNeedsYou("Done (see #12)").needsYou).toBe(false);
+  });
+
   it("takes the last sentence as the reason, ignoring trailing blanks, at most 80 characters", () => {
     expect(fallbackNeedsYou("推上去了。要拆成两个 PR 吗？  \n")).toEqual({ needsYou: true, reason: "要拆成两个 PR 吗？" });
     expect(fallbackNeedsYou("Pushed. Should I merge it?")).toEqual({ needsYou: true, reason: "Should I merge it?" });
@@ -174,14 +184,58 @@ describe("NeedsYouTracker", () => {
     expect(h.tracker.reasonOf("s1")).toBeNull();
     h.tracker.update();
     expect(h.calls).toHaveLength(1);
-    // 同一条回复又停下来：沿用判断过的结论
-    h.heads[0] = stopped("s1", "m1", "要拆成两个 PR 吗？");
-    h.tracker.update();
-    expect(h.calls).toHaveLength(1);
-    expect(h.tracker.reasonOf("s1")).toBe("问要不要拆 PR");
     // 终端关了
     h.heads.length = 0;
     expect(h.tracker.reasonOf("s1")).toBeNull();
+  });
+
+  it("does not bring back a question the user already answered when the next turn ends with no text", async () => {
+    const h = harness([stopped("s1", "m1", "要拆成两个 PR 吗？")]);
+    h.tracker.update();
+    h.calls[0].done({ needsYou: true, reason: "问要不要拆 PR" });
+    await h.settle();
+    expect(h.tracker.reasonOf("s1")).toBe("问要不要拆 PR");
+    // 用户回答了：忙起来，最后一条回复还是 m1
+    h.heads[0] = { ...h.heads[0], waiting: false, kind: "edit" };
+    h.tracker.update();
+    // 这一轮没写文字就停了：还是 m1
+    h.heads[0] = stopped("s1", "m1", "要拆成两个 PR 吗？");
+    h.tracker.update();
+    expect(h.tracker.reasonOf("s1")).toBeNull();
+    expect(h.calls).toHaveLength(1);
+    expect(h.notified()).toBe(1);
+  });
+
+  it("drops a queued judge for a reply answered before its turn came, and stays quiet if one was already running", async () => {
+    const h = harness([stopped("s1", "m1", "一？"), stopped("s2", "m2", "二？"), stopped("s3", "m3", "三？")]);
+    h.tracker.update();
+    expect(h.calls).toHaveLength(2);
+    h.heads[0] = { ...h.heads[0], waiting: false };
+    h.heads[2] = { ...h.heads[2], waiting: false };
+    h.tracker.update();
+    h.calls[0].done({ needsYou: true, reason: "一" });
+    h.calls[1].done({ needsYou: true, reason: "二" });
+    await h.settle();
+    expect(h.calls).toHaveLength(2);
+    expect(h.notified()).toBe(1);
+    h.heads[0] = stopped("s1", "m1", "一？");
+    h.heads[2] = stopped("s3", "m3", "三？");
+    h.tracker.update();
+    expect(h.calls).toHaveLength(2);
+    expect(h.tracker.reasonOf("s1")).toBeNull();
+    expect(h.tracker.reasonOf("s2")).toBe("二");
+    expect(h.tracker.reasonOf("s3")).toBeNull();
+  });
+
+  it("still judges a final reply first seen while the session was not yet marked stopped", async () => {
+    const h = harness([{ ...stopped("s1", "m1", "要合并吗？"), waiting: false }]);
+    h.tracker.update();
+    h.heads[0] = stopped("s1", "m1", "要合并吗？");
+    h.tracker.update();
+    expect(h.calls).toHaveLength(1);
+    h.calls[0].done({ needsYou: true, reason: "问要不要合并" });
+    await h.settle();
+    expect(h.tracker.reasonOf("s1")).toBe("问要不要合并");
   });
 
   it("only judges sessions that stopped with a reply", () => {
