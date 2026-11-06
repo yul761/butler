@@ -90,6 +90,16 @@ describe("controlHandler", () => {
     );
   });
 
+  it("passes the model to the new session and echoes it", async () => {
+    const { handle, sessionService, sessions, spawned, tickets } = await setup();
+    await sessionService.open({ ticketKey: "FULL-1", coordinator: true });
+    const repo = tickets.get("FULL-1")!.repos[1];
+    const r = await handle({ ...base, from: "s-1", op: "start_session", repo: repo.worktreePath!, task: "补测试", model: "sonnet" });
+    expect(r).toMatchObject({ ok: true, value: { sessionId: "s-2", model: "sonnet" } });
+    expect(sessions.get("s-2")).toMatchObject({ model: "sonnet" });
+    expect(spawned[1].args).toEqual(expect.arrayContaining(["--model", "sonnet"]));
+  });
+
   it("accepts the repo's working directory, and does not trust a spawner that is not this ticket's coordinator", async () => {
     const { handle, sessions, tickets } = await setup();
     const web = tickets.get("FULL-1")!.repos[0];

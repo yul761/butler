@@ -20,12 +20,20 @@ export const LAST_REPLY_LIMIT = 500;
 /** 请求 id：文件名，只用安全字符。 */
 export const CONTROL_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 
+/** start_session 能选的模型：只有这两个别名。 */
+export type StartModel = "opus" | "sonnet";
+const START_MODELS: readonly unknown[] = ["opus", "sonnet"];
+/** model 省略（undefined）或是 opus / sonnet 才算合法；别的值整个请求当作坏请求。 */
+function okModel(v: unknown): boolean {
+  return v === undefined || START_MODELS.includes(v);
+}
+
 /** ticket 总控的请求（设计文档 2026-10-23）。 */
 export type TicketControlRequest =
   | { v: 1; ticketKey: string; from: string | null; op: "list_repos" }
   | { v: 1; ticketKey: string; from: string | null; op: "list_sessions" }
   | { v: 1; ticketKey: string; from: string | null; op: "session_activity"; session: string }
-  | { v: 1; ticketKey: string; from: string | null; op: "start_session"; repo: string; task: string }
+  | { v: 1; ticketKey: string; from: string | null; op: "start_session"; repo: string; task: string; model?: StartModel }
   /** 结束一个停下来在等输入的 session（和用户点 × 一样，之后能恢复）。 */
   | { v: 1; ticketKey: string; from: string | null; op: "end_session"; session: string; reason: string };
 
@@ -47,7 +55,7 @@ export type FeatureControlRequest =
   | { v: 1; featureId: number; from: string | null; op: "create_ticket"; ticket: string; title?: string; repos?: string[]; branch?: string }
   | { v: 1; featureId: number; from: string | null; op: "list_sessions" }
   | { v: 1; featureId: number; from: string | null; op: "session_activity"; session: string }
-  | { v: 1; featureId: number; from: string | null; op: "start_session"; ticket: string; repo?: string; task: string }
+  | { v: 1; featureId: number; from: string | null; op: "start_session"; ticket: string; repo?: string; task: string; model?: StartModel }
   /** feature 属于 epic 时：epic 名字和同一 epic 下其他 feature 的情况。 */
   | { v: 1; featureId: number; from: string | null; op: "epic_context" }
   | { v: 1; featureId: number; from: string | null; op: "end_session"; session: string; reason: string };
@@ -121,7 +129,11 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     if (o.op === "start_session") {
       if (!okName(o.ticket, 200) || !okTask(o.task)) return null;
       if (o.repo !== undefined && !okName(o.repo, 4096)) return null;
-      return { ...base, op: "start_session", ticket: o.ticket, ...(o.repo !== undefined && { repo: o.repo as string }), task: o.task };
+      if (!okModel(o.model)) return null;
+      return {
+        ...base, op: "start_session", ticket: o.ticket, ...(o.repo !== undefined && { repo: o.repo as string }), task: o.task,
+        ...(o.model !== undefined && { model: o.model as StartModel }),
+      };
     }
     return null;
   }
@@ -131,8 +143,8 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
   if (isSessionOp(o.op)) return sessionOp(base, o);
   if (o.op === "start_session") {
-    if (!okName(o.repo, 4096) || !okTask(o.task)) return null;
-    return { ...base, op: "start_session", repo: o.repo, task: o.task };
+    if (!okName(o.repo, 4096) || !okTask(o.task) || !okModel(o.model)) return null;
+    return { ...base, op: "start_session", repo: o.repo, task: o.task, ...(o.model !== undefined && { model: o.model as StartModel }) };
   }
   return null;
 }

@@ -2,7 +2,7 @@ import { basename } from "node:path";
 import type { SessionActivity } from "../../shared/activity";
 import {
   BRIEF_LIMIT, MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, SUMMARY_LIMIT, taskMessage,
-  type ControlRequest, type ControlResult, type EpicControlRequest, type FeatureControlRequest,
+  type ControlRequest, type ControlResult, type EpicControlRequest, type FeatureControlRequest, type StartModel,
 } from "../../shared/control";
 import { effectiveStatus, type Epic, type EpicFeatureRow, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
 import type { EpicsRepo } from "../db/epics-repo";
@@ -94,13 +94,13 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   };
 
   /** 在 ticket 的这个仓库里开子 session，把任务交给它。上限已经由调用方检查过。 */
-  const start = async (t: Ticket, repo: TicketRepo, rawTask: string, spawnedBy: string | null, extra: object = {}): Promise<ControlResult> => {
+  const start = async (t: Ticket, repo: TicketRepo, rawTask: string, spawnedBy: string | null, model: StartModel | undefined, extra: object = {}): Promise<ControlResult> => {
     const task = sanitizeTask(rawTask);
     if (!task) return fail(M().ctlEmptyTask);
     if (d.sessionService.openTerminalCount(t.key) >= MAX_RUNNING_PER_TICKET) {
       return fail(M().ctlTicketLimit(MAX_RUNNING_PER_TICKET));
     }
-    const r = await d.sessionService.open({ ticketKey: t.key, repoId: repo.id }, { spawnedBy: spawnedBy ?? undefined });
+    const r = await d.sessionService.open({ ticketKey: t.key, repoId: repo.id }, { spawnedBy: spawnedBy ?? undefined, model });
     if (!r.ok) return fail(openError(r, repo));
     d.notify();
     // 不等任务写完：等输入框就绪可能要十几秒（用户还要处理信任文件夹之类的对话框），总控先拿到 session id。
@@ -109,7 +109,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       (e: unknown) => d.log?.(`control: task for ${r.termId} failed`, e),
     );
     return ok({
-      sessionId: r.termId, ...extra, repo: name(repo), dir: d.ticketService.workDir(repo),
+      sessionId: r.termId, ...(model && { model }), ...extra, repo: name(repo), dir: d.ticketService.workDir(repo),
       note: M().ctlTaskNote,
     });
   };
@@ -350,7 +350,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     // from 必须是这个 feature 的总控，才记成子 session 的开启者。
     const h = req.from ? d.sessions.head(req.from) : null;
     const spawnedBy = h && h.featureId === f.id && h.coordinator ? req.from : null;
-    return start(t, repo, req.task, spawnedBy, { ticket: t.key });
+    return start(t, repo, req.task, spawnedBy, req.model, { ticket: t.key });
   };
 
   return async (req) => {
@@ -370,6 +370,6 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
     const repo = findRepo(t, req.repo);
     if (typeof repo === "string") return fail(repo);
-    return start(t, repo, req.task, spawner(t, req.from));
+    return start(t, repo, req.task, spawner(t, req.from), req.model);
   };
 }

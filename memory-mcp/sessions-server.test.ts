@@ -52,6 +52,29 @@ describe("butler-sessions MCP server", () => {
     expect(JSON.parse(r.result.content[0].text)).toEqual({ sessionId: "child-1", repo: "api" });
   });
 
+  it("sends the model of start_session, and refuses an unknown one without sending anything", async () => {
+    const { server, answer } = setup();
+    const call = server.handle({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t", model: "sonnet" } } });
+    expect(await answer({ v: 1, ok: true, value: {} })).toMatchObject({ op: "start_session", model: "sonnet" });
+    await call;
+    const bad = setup(200);
+    expect(await bad.server.handle({ jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t", model: "gpt-4" } } })).toMatchObject({ result: { isError: true } });
+    const badFeature = setup(200, { featureId: 7 });
+    expect(await badFeature.server.handle({ jsonrpc: "2.0", id: 23, method: "tools/call", params: { name: "start_session", arguments: { ticket: "A-1", task: "t", model: 3 } } })).toMatchObject({ result: { isError: true } });
+    // 没发出任何请求：目录要么没建，要么是空的。
+    expect(existsSync(bad.requestsDir) ? readdirSync(bad.requestsDir).filter((n) => n.endsWith(".json")) : []).toHaveLength(0);
+  });
+
+  it("lists model in both start_session schemas, in both languages", () => {
+    for (const tools of [TOOLS, TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN]) {
+      const start = tools.find((t) => t.name === "start_session")!;
+      const model = (start.inputSchema.properties as Record<string, { enum?: readonly string[]; description: string }>).model;
+      expect(model.enum).toEqual(["opus", "sonnet"]);
+      expect(model.description).toMatch(/opus/);
+      expect("required" in start.inputSchema && start.inputSchema.required).not.toContain("model");
+    }
+  });
+
   it("reports Butler's errors, bad arguments and a silent Butler as tool errors", async () => {
     const { server, answer } = setup(200);
     const failing = server.handle({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "list_repos" } });

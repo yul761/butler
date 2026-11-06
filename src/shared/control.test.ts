@@ -30,6 +30,21 @@ describe("sanitizeTask", () => {
   });
 });
 
+describe("start_session model", () => {
+  it("parses start_session with a model, for a ticket and for a feature", () => {
+    expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "t", model: "sonnet" })).toMatchObject({ model: "sonnet" });
+    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "start_session", ticket: "DMS-1", task: "t", model: "opus" })).toMatchObject({ model: "opus" });
+    expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "t" })).not.toHaveProperty("model");
+  });
+
+  it("rejects an unknown model", () => {
+    for (const model of ["gpt-4", "haiku", "", 3, null]) {
+      expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "start_session", repo: "api", task: "t", model })).toBeNull();
+      expect(parseControlRequest({ v: 1, featureId: 7, op: "start_session", ticket: "DMS-1", task: "t", model })).toBeNull();
+    }
+  });
+});
+
 describe("parseControlRequest for a feature (design 2026-10-26)", () => {
   it("accepts feature requests", () => {
     expect(parseControlRequest({ v: 1, featureId: 7, from: "c", op: "list_tickets" })).toEqual({ v: 1, featureId: 7, from: "c", op: "list_tickets" });

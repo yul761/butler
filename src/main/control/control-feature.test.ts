@@ -99,6 +99,14 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(submitted[0][0]).toBe("s-1");
   });
 
+  it("passes the model to the new session in a feature", async () => {
+    const { handle, base, spawned, sessions } = await setup();
+    const r = await handle({ ...base, op: "start_session", ticket: "dms-1", task: "补测试", model: "opus" });
+    expect(r).toMatchObject({ ok: true, value: { sessionId: "s-1", model: "opus" } });
+    expect(sessions.get("s-1")).toMatchObject({ model: "opus" });
+    expect(spawned[0].args).toEqual(expect.arrayContaining(["--model", "opus"]));
+  });
+
   it("asks for the repo when the ticket has several, and accepts it by name", async () => {
     const { handle, base } = await setup();
     const r = await handle({ ...base, op: "start_session", ticket: "DMS-2", task: "x" });

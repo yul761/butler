@@ -65,6 +65,21 @@ export const END_SESSION_TOOL_EN = {
   },
 } as const;
 
+/** start_session 的 model 参数（两种总控共用）。 */
+const MODEL_PROP = {
+  type: "string",
+  enum: ["opus", "sonnet"],
+  description:
+    "这个 session 用哪个模型。sonnet：范围小、目标明确的活，比如修 CI、处理 rebase 冲突、补测试、按已经定好的方案实现。" +
+    "opus：需要判断的活，比如查原因不明的 bug、做架构设计、跨模块改动、代码审查。拿不准就用 opus。省略时用默认模型。",
+} as const;
+const MODEL_PROP_EN = {
+  ...MODEL_PROP,
+  description:
+    "Which model this session uses. sonnet: small, well-defined work, such as fixing CI, resolving rebase conflicts, adding tests, or implementing an approach that is already settled. " +
+    "opus: work that needs judgment, such as chasing a bug with an unknown cause, architecture design, changes across modules, or code review. When unsure, use opus. Omit it to use the default model.",
+} as const;
+
 export const TOOLS = [
   {
     name: "list_repos",
@@ -81,6 +96,7 @@ export const TOOLS = [
       properties: {
         repo: { type: "string", description: "仓库名（list_repos 里的 name）或工作目录" },
         task: { type: "string", description: `交给新 session 的任务，最长 ${TASK_LIMIT} 字` },
+        model: MODEL_PROP,
       },
       required: ["repo", "task"],
       additionalProperties: false,
@@ -148,6 +164,7 @@ export const FEATURE_TOOLS = [
         ticket: { type: "string", description: "ticket 号（list_tickets 里的 key）" },
         repo: { type: "string", description: "仓库名或工作目录；ticket 只有一个仓库时可以省略" },
         task: { type: "string", description: `交给新 session 的任务，最长 ${TASK_LIMIT} 字` },
+        model: MODEL_PROP,
       },
       required: ["ticket", "task"],
       additionalProperties: false,
@@ -189,6 +206,7 @@ export const TOOLS_EN = [
       properties: {
         repo: { type: "string", description: "repo name (name in list_repos) or working folder" },
         task: { type: "string", description: `the task for the new session, at most ${TASK_LIMIT} characters` },
+        model: MODEL_PROP_EN,
       },
     },
   },
@@ -246,6 +264,7 @@ export const FEATURE_TOOLS_EN = [
         ticket: { type: "string", description: "the ticket id (key in list_tickets)" },
         repo: { type: "string", description: "repo name or working folder; may be left out when the ticket has one repo" },
         task: { type: "string", description: `the task for the new session, at most ${TASK_LIMIT} characters` },
+        model: MODEL_PROP_EN,
       },
     },
   },
@@ -378,6 +397,7 @@ const TEXT = {
     needRepoTask: "start_session 需要 repo 和 task 两个字符串参数",
     needTicketTask: "start_session 需要 ticket 和 task 两个字符串参数",
     repoString: "repo 必须是字符串",
+    badModel: "model 只能是 opus 或 sonnet",
     needSession: "session_activity 需要字符串参数 session",
     needEnd: `end_session 需要字符串参数 session 和 reason（reason 不能为空，最多 ${REASON_LIMIT} 字符）`,
     taskTooLong: `task 太长（最多 ${TASK_LIMIT} 字）`,
@@ -396,6 +416,7 @@ const TEXT = {
     needRepoTask: "start_session needs two string arguments, repo and task",
     needTicketTask: "start_session needs two string arguments, ticket and task",
     repoString: "repo must be a string",
+    badModel: "model must be opus or sonnet",
     needSession: "session_activity needs a string argument, session",
     needEnd: `end_session needs string arguments, session and reason (reason must not be empty and is at most ${REASON_LIMIT} characters)`,
     taskTooLong: `task is too long (at most ${TASK_LIMIT} characters)`,
@@ -504,7 +525,8 @@ export class SessionsServer {
       case "start_session":
         if (typeof args.repo !== "string" || typeof args.task !== "string") return toolError(this.text.needRepoTask);
         if (args.task.length > TASK_LIMIT) return toolError(this.text.taskTooLong);
-        return { ...base, op: "start_session", repo: args.repo, task: args.task };
+        if (args.model !== undefined && args.model !== "opus" && args.model !== "sonnet") return toolError(this.text.badModel);
+        return { ...base, op: "start_session", repo: args.repo, task: args.task, ...(args.model !== undefined && { model: args.model }) };
       default:
         return toolError(this.text.noTool(String(tool)));
     }
@@ -569,7 +591,11 @@ export class SessionsServer {
         if (typeof args.ticket !== "string" || typeof args.task !== "string") return toolError(this.text.needTicketTask);
         if (args.repo !== undefined && typeof args.repo !== "string") return toolError(this.text.repoString);
         if (args.task.length > TASK_LIMIT) return toolError(this.text.taskTooLong);
-        return { ...base, op: "start_session", ticket: args.ticket, ...(typeof args.repo === "string" && { repo: args.repo }), task: args.task };
+        if (args.model !== undefined && args.model !== "opus" && args.model !== "sonnet") return toolError(this.text.badModel);
+        return {
+          ...base, op: "start_session", ticket: args.ticket, ...(typeof args.repo === "string" && { repo: args.repo }), task: args.task,
+          ...(args.model !== undefined && { model: args.model }),
+        };
       default:
         return toolError(this.text.noTool(String(tool)));
     }

@@ -44,6 +44,16 @@ describe("ControlInbox", () => {
     expect(seen.map((r) => r.op)).toEqual(["list_repos", "list_sessions"]);
   });
 
+  it("answers a start_session with an unknown model as a bad request and never hands it to the handler", async () => {
+    const { inbox, put, result, seen } = setup();
+    put(id(1), { v: 1, ticketKey: "P-1", op: "start_session", repo: "api", task: "x", model: "gpt-4" });
+    put(id(2), { v: 1, featureId: 7, op: "start_session", ticket: "A-1", task: "x", model: "gpt-4" });
+    await inbox.drain();
+    expect(result(id(1))).toEqual({ v: 1, ok: false, error: "请求格式不对" });
+    expect(result(id(2))).toEqual({ v: 1, ok: false, error: "请求格式不对" });
+    expect(seen).toEqual([]);
+  });
+
   it("drops files whose name is not a request id, and ignores unfinished temp files", async () => {
     const { inbox, put, requestsDir, resultsDir } = setup();
     put("short", { v: 1, ticketKey: "P-1", op: "list_repos" });
