@@ -385,7 +385,7 @@ export class SessionService {
       const epic = this.d.epics?.get(current.epicId);
       if (!epic || epic.archivedAt !== null) return;
       const others = this.epicFeatureRows(epic.id).filter((r) => r.id !== id);
-      const res = await this.d.submit(termId, epicBriefMessage({ feature: current.name, epic: epic.name, brief, others }, currentLang()));
+      const res = await this.d.submit(termId, epicBriefMessage({ feature: current.name, epic: epic.name, brief, plan: epic.plan, others }, currentLang()));
       if (res === "sent") this.d.features?.setBriefSentAt(id, this.d.now());
       else this.d.log?.(`brief of feature ${id} not delivered (${res})`);
     } catch (e) {

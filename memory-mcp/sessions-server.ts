@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
-import { BRIEF_LIMIT, CONTROL_VERSION, MAX_CREATE_REPOS, REASON_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult } from "../src/shared/control";
+import { BRIEF_LIMIT, CONTROL_VERSION, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, REASON_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult } from "../src/shared/control";
 import type { Lang } from "../src/shared/i18n";
 
 /**
@@ -305,7 +305,7 @@ export const EPIC_TOOLS = [
     name: "create_feature",
     description:
       "在这个 epic 下新建一个 feature：建好工作区并挂到这个 epic，马上出现在 Butler 的 epic 页和侧边栏里。不会打开 feature 的总控。" +
-      "先和用户把规划讨论清楚、定下要拆成哪些 feature 再建；brief 写这个 feature 要做什么、为什么做、已经定下的决定，用户看得到，也会在用户第一次打开这个 feature 的总控时作为第一条消息发给它。" +
+      "先和用户把规划讨论清楚、定下要拆成哪些 feature 再建（定下来的整体规划用 set_epic_plan 存下）；brief 写这个 feature 要做什么、为什么做、已经定下的决定，用户看得到，也会在用户第一次打开这个 feature 的总控时作为第一条消息发给它。" +
       "ticket 不在这里建：ticket 归 feature 自己的总控 session 管，由用户点进这个 feature 打开总控后让它去建。" +
       `名字不能和已有的 feature（含已归档）重复，不能带 / 或 \\。epic 只有一个仓库时 repos 可以省略。返回新 feature 的 id 和名字。`,
     inputSchema: {
@@ -328,6 +328,21 @@ export const EPIC_TOOLS = [
   },
   FEATURE_TOOLS[5],
   END_SESSION_TOOL,
+  {
+    name: "set_epic_plan",
+    description:
+      "保存这个 epic 的整体规划：要拆成哪些 feature、先后顺序、为什么这么拆、已经定下的决定。和用户把规划定下来、或者规划有改动时调用，每次传完整的一份，替换之前的规划。" +
+      "规划存在 Butler 里：epic 的记忆（butler-epic 的 recall）和之后新开的 feature 总控收到的第一条消息里都带着它。" +
+      "不要把规划写进 butler-epic 的 handoff：handoff 只写进度（做到哪了、没解决的问题、下一步），Butler 把它和规划分开放。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        plan: { type: "string", description: `完整的整体规划，最长 ${EPIC_PLAN_MAX_CHARS} 字符` },
+      },
+      required: ["plan"],
+      additionalProperties: false,
+    },
+  },
 ] as const;
 
 export const EPIC_TOOLS_EN = [
@@ -345,7 +360,7 @@ export const EPIC_TOOLS_EN = [
     ...EPIC_TOOLS[2],
     description:
       "Create a feature in this epic: sets up its workspace and attaches it to this epic; it appears on Butler's epic page and in the sidebar right away. No feature coordinator is opened. " +
-      "First settle the plan with the user and decide which features to split into, then create them; brief says what the feature is for, why, and the decisions already made. The user can read it, and it is sent as the first message the first time the user opens this feature's coordinator. " +
+      "First settle the plan with the user and decide which features to split into (save the agreed overall plan with set_epic_plan), then create them; brief says what the feature is for, why, and the decisions already made. The user can read it, and it is sent as the first message the first time the user opens this feature's coordinator. " +
       "Do not create tickets here: tickets belong to the feature's own coordinator session, and the user opens it by going into the feature, then it creates them. " +
       "The name must not duplicate an existing feature (archived ones count) or contain / or \\. repos may be left out when the epic has one repo. Returns the new feature's id and name.",
     inputSchema: {
@@ -365,6 +380,19 @@ export const EPIC_TOOLS_EN = [
   },
   FEATURE_TOOLS_EN[5],
   END_SESSION_TOOL_EN,
+  {
+    ...EPIC_TOOLS[6],
+    description:
+      "Save this epic's overall plan: which features to split into, in what order, why, and the decisions already made. Call it when you and the user settle the plan, or when the plan changes, and pass the whole plan each time; it replaces the previous one. " +
+      "Butler keeps the plan: the epic's memory (butler-epic's recall) and the first message of every feature coordinator opened afterwards include it. " +
+      "Do not put the plan in butler-epic's handoff: the handoff is for progress only (where things stand, open questions, next steps), and Butler keeps it apart from the plan.",
+    inputSchema: {
+      ...EPIC_TOOLS[6].inputSchema,
+      properties: {
+        plan: { type: "string", description: `the whole overall plan, at most ${EPIC_PLAN_MAX_CHARS} characters` },
+      },
+    },
+  },
 ] as const;
 
 /** feature 总控的 epic_context：只在 feature 属于 epic 时出现（启动时 BUTLER_FEATURE_EPIC=1）。 */
@@ -401,6 +429,7 @@ const TEXT = {
     needSession: "session_activity 需要字符串参数 session",
     needEnd: `end_session 需要字符串参数 session 和 reason（reason 不能为空，最多 ${REASON_LIMIT} 字符）`,
     taskTooLong: `task 太长（最多 ${TASK_LIMIT} 字）`,
+    needPlan: `set_epic_plan 需要字符串参数 plan（不能为空，最多 ${EPIC_PLAN_MAX_CHARS} 字符）`,
     noTool: (t: string) => `没有这个工具：${t}`,
   },
   en: {
@@ -420,6 +449,7 @@ const TEXT = {
     needSession: "session_activity needs a string argument, session",
     needEnd: `end_session needs string arguments, session and reason (reason must not be empty and is at most ${REASON_LIMIT} characters)`,
     taskTooLong: `task is too long (at most ${TASK_LIMIT} characters)`,
+    needPlan: `set_epic_plan needs a string argument, plan (not empty, at most ${EPIC_PLAN_MAX_CHARS} characters)`,
     noTool: (t: string) => `No such tool: ${t}`,
   },
 };
@@ -545,6 +575,11 @@ export class SessionsServer {
         if (!(repos === undefined || (Array.isArray(repos) && repos.length <= MAX_CREATE_REPOS && repos.every((r) => typeof r === "string")))) return toolError(this.text.badFeatureArgs);
         if (brief.length > BRIEF_LIMIT) return toolError(this.text.briefTooLong);
         return { ...base, op: "create_feature", name, brief, ...(Array.isArray(repos) && { repos: repos as string[] }) };
+      }
+      case "set_epic_plan": {
+        const { plan } = args;
+        if (typeof plan !== "string" || !plan.trim() || plan.length > EPIC_PLAN_MAX_CHARS) return toolError(this.text.needPlan);
+        return { ...base, op: "set_epic_plan", plan };
       }
       case "list_sessions":
         return { ...base, op: "list_sessions" };

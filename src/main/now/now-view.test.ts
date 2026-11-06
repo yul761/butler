@@ -71,7 +71,7 @@ function feature(id: number, epicId: number | null, tickets: TicketView[], sessi
 }
 
 function epic(id: number, sessions: SessionView[] = []): EpicView {
-  return { id, name: `epic ${id}`, workspaceDir: "/w", createdAt: 0, archivedAt: null, repos: [], sessions, hiddenSessions: [], waiting: false, stuck: false, features: [] };
+  return { id, name: `epic ${id}`, workspaceDir: "/w", createdAt: 0, archivedAt: null, repos: [], plan: null, planAt: 0, sessions, hiddenSessions: [], waiting: false, stuck: false, features: [] };
 }
 
 function act(sessionId: string, over: Partial<SessionActivity> = {}): SessionActivity {

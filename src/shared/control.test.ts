@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BRIEF_LIMIT, MAX_CREATE_REPOS, parseControlRequest, REASON_LIMIT, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, parseControlRequest, REASON_LIMIT, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
 
 describe("parseControlRequest", () => {
   it("accepts the three operations", () => {
@@ -94,6 +94,8 @@ describe("parseControlRequest for an epic (design 2026-11-01)", () => {
     expect(parseControlRequest({ v: 1, epicId: 3, op: "list_repos" })).toEqual({ v: 1, epicId: 3, from: null, op: "list_repos" });
     expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "checkout", brief: "做结账" })).toEqual({ v: 1, epicId: 3, from: null, op: "create_feature", name: "checkout", brief: "做结账" });
     expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "c", repos: ["a"], brief: "b" })).toMatchObject({ repos: ["a"] });
+    expect(parseControlRequest({ v: 1, epicId: 3, from: "e", op: "set_epic_plan", plan: "先做支付" })).toEqual({ v: 1, epicId: 3, from: "e", op: "set_epic_plan", plan: "先做支付" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "set_epic_plan", plan: "x".repeat(EPIC_PLAN_MAX_CHARS) })).toMatchObject({ op: "set_epic_plan" });
   });
 
   it("rejects malformed epic requests, and an epicId next to a feature or ticket", () => {
@@ -104,6 +106,9 @@ describe("parseControlRequest for an epic (design 2026-11-01)", () => {
       { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "x".repeat(BRIEF_LIMIT + 1) },
       { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", repos: "a" },
       { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", repos: Array(MAX_CREATE_REPOS + 1).fill("a") },
+      { v: 1, epicId: 3, op: "set_epic_plan" }, { v: 1, epicId: 3, op: "set_epic_plan", plan: 5 }, { v: 1, epicId: 3, op: "set_epic_plan", plan: "  " },
+      { v: 1, epicId: 3, op: "set_epic_plan", plan: "x".repeat(EPIC_PLAN_MAX_CHARS + 1) },
+      { v: 1, featureId: 3, op: "set_epic_plan", plan: "p" }, { v: 1, ticketKey: "P-1", op: "set_epic_plan", plan: "p" },
     ]) {
       expect(parseControlRequest(bad)).toBeNull();
     }

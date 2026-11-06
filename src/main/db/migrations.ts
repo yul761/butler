@@ -289,4 +289,8 @@ export const MIGRATIONS: string[] = [
   `,
   // session 开出来时用的模型（opus / sonnet；null：没指定，用 Claude Code 自己的默认），恢复时沿用
   `ALTER TABLE sessions ADD COLUMN model TEXT;`,
+  // epic 的规划单独存放（计划 16）：plan 是 epic session 用 set_epic_plan 写的规划；plan_at 是规划这一栏最后一次定下的时间。
+  // 升级前的 epic 两个都是 NULL：规划还在 epic 记忆的 handoff 里，第一次同步时迁过来（MemoryService.syncEpicNow）。
+  `ALTER TABLE epics ADD COLUMN plan TEXT;
+  ALTER TABLE epics ADD COLUMN plan_at INTEGER;`,
 ];

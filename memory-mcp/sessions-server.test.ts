@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
-import { BRIEF_LIMIT, REASON_LIMIT } from "../src/shared/control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, REASON_LIMIT } from "../src/shared/control";
 import { EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, SessionsServer, serveStdio, TOOLS, TOOLS_EN } from "./sessions-server";
 
 function setup(timeoutMs = 2000, scope: { ticketKey: string } | { featureId: number; epic?: boolean } | { epicId: number } = { ticketKey: "P-1" }, lang: "zh" | "en" = "zh") {
@@ -212,7 +212,7 @@ describe("butler-sessions in English (design 2026-10-26 i18n)", () => {
 const tools = async (server: SessionsServer) => ((await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string; description: string }[] } }).result.tools;
 const callTool = (server: SessionsServer, name: string, args: object = {}) => server.handle({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name, arguments: args } });
 
-const EPIC_NAMES = ["list_features", "list_repos", "create_feature", "list_sessions", "session_activity", "end_session"];
+const EPIC_NAMES = ["list_features", "list_repos", "create_feature", "list_sessions", "session_activity", "end_session", "set_epic_plan"];
 
 describe("butler-sessions for an epic session (design 2026-11-01)", () => {
   it("lists the epic tools in order, in both languages", async () => {
@@ -257,6 +257,32 @@ describe("butler-sessions for an epic session (design 2026-11-01)", () => {
     expect(existsSync(requestsDir)).toBe(false);
     expect(await callTool(server, "create_feature", { name: "a", brief: "b" })).toMatchObject({ result: { isError: true, content: [{ text: expect.stringContaining("list_features") }] } });
     expect(await callTool(server, "start_session", {})).toMatchObject({ result: { isError: true } });
+  });
+
+  it("sends set_epic_plan for this epic, and rejects a missing, empty or too long plan without asking Butler", async () => {
+    const { server, answer } = setup(2000, { epicId: 3 });
+    const call = callTool(server, "set_epic_plan", { plan: "先做支付" });
+    expect(await answer({ v: 1, ok: true, value: { note: "ok" } })).toEqual({ v: 1, epicId: 3, from: "boss", op: "set_epic_plan", plan: "先做支付" });
+    expect(await call).toMatchObject({ result: { content: [{ text: expect.stringContaining("ok") }] } });
+    const quiet = setup(30, { epicId: 3 });
+    for (const args of [{}, { plan: 5 }, { plan: "  " }, { plan: "x".repeat(EPIC_PLAN_MAX_CHARS + 1) }]) {
+      expect(await callTool(quiet.server, "set_epic_plan", args), JSON.stringify(args).slice(0, 40)).toMatchObject({ result: { isError: true } });
+    }
+    expect(existsSync(quiet.requestsDir)).toBe(false);
+    // 只有 epic session 有这个工具。
+    expect(await callTool(setup(30, { featureId: 7, epic: true }).server, "set_epic_plan", { plan: "p" })).toMatchObject({ result: { isError: true } });
+  });
+
+  it("tells the epic session to keep the plan with set_epic_plan and the handoff for progress only", () => {
+    const zh = EPIC_TOOLS.find((t) => t.name === "set_epic_plan")!;
+    const en = EPIC_TOOLS_EN.find((t) => t.name === "set_epic_plan")!;
+    expect(zh.inputSchema.required).toEqual(["plan"]);
+    expect(zh.description).toContain("handoff");
+    expect(zh.description).toContain("进度");
+    expect(en.description).toContain("handoff");
+    expect(en.description).toMatch(/progress/i);
+    expect(EPIC_TOOLS.find((t) => t.name === "create_feature")!.description).toContain("set_epic_plan");
+    expect(EPIC_TOOLS_EN.find((t) => t.name === "create_feature")!.description).toContain("set_epic_plan");
   });
 });
 

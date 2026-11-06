@@ -456,6 +456,17 @@ describe("the first message of a feature in an epic (design 2026-11-01)", () => 
   }
   const delivered = () => new Promise((r) => setTimeout(r, 0));
 
+  it("the first message of a new feature takes the plan from the epic row", async () => {
+    const { service, epics, submitted, epicId, fid } = await briefSetup();
+    epics.setPlan(epicId, "整体规划：先结账，再退款", 5);
+    await service.openFeature({ featureId: fid });
+    await delivered();
+    const message = submitted[0][1];
+    expect(message).toContain("整体规划：先结账，再退款");
+    expect(message).toContain("先做微信支付");
+    expect(message.indexOf("整体规划")).toBeLessThan(message.indexOf("其他 feature："));
+  });
+
   it("sends the plan and the other features to the first new coordinator, and records it once", async () => {
     const { service, features, submitted, fid } = await briefSetup();
     const r = await service.openFeature({ featureId: fid });

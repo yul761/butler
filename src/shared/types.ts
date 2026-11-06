@@ -58,6 +58,13 @@ export interface Epic {
   createdAt: number;
   archivedAt: number | null;
   repos: EpicRepo[];
+  /** epic session 用 set_epic_plan 写的整体规划；还没有为 null。 */
+  plan: string | null;
+  /**
+   * 规划这一栏最后一次定下的时间：建 epic、set_epic_plan、老数据迁移。
+   * null：升级前建的 epic，规划还在 epic 记忆的 handoff 里没迁过来（见 MemoryService.syncEpicNow）。
+   */
+  planAt: number | null;
 }
 
 export type EpicFeatureStatus = "stuck" | "waiting" | "not_started" | "active" | "archived";

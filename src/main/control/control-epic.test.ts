@@ -1,7 +1,7 @@
 import { mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BRIEF_LIMIT, SUMMARY_LIMIT, type ControlResult, type EpicControlRequest } from "../../shared/control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, SUMMARY_LIMIT, type ControlResult, type EpicControlRequest } from "../../shared/control";
 import type { SessionActivity } from "../../shared/activity";
 import type { EpicFeatureRow } from "../../shared/types";
 import { EpicsRepo } from "../db/epics-repo";
@@ -149,6 +149,33 @@ describe("create_feature from an epic session (design 2026-11-01)", () => {
     expect(v.map((x) => [x.id, x.status])).toEqual([[1, "active"], [2, "archived"]]);
     expect(v[0].summary).toHaveLength(SUMMARY_LIMIT);
     expect(v[1].summary).toBeNull();
+  });
+});
+
+describe("set_epic_plan from an epic session (plan 16)", () => {
+  it("set_epic_plan stores the plan and resyncs", async () => {
+    const { handle, base, epics, epic, events } = await setup();
+    const r = await handle({ ...base, op: "set_epic_plan", plan: "  先做支付，再做退款\n" });
+    expect(r).toMatchObject({ ok: true, value: { note: expect.any(String) } });
+    expect(epics.get(epic.id)).toMatchObject({ plan: "先做支付，再做退款", planAt: expect.any(Number) });
+    expect(events).toEqual([`sync:${epic.id}:0`]);
+    // 改了规划：整份换掉，再同步一次。
+    await handle({ ...base, op: "set_epic_plan", plan: "改成先做退款" });
+    expect(epics.get(epic.id)?.plan).toBe("改成先做退款");
+    expect(events).toEqual([`sync:${epic.id}:0`, `sync:${epic.id}:0`]);
+  });
+
+  it("refuses an empty or too long plan, and an archived epic, and stores nothing", async () => {
+    const { handle, base, epics, epic, solo, epicService, events } = await setup();
+    for (const plan of ["   ", "x".repeat(EPIC_PLAN_MAX_CHARS + 1)]) {
+      const r = await handle({ ...base, op: "set_epic_plan", plan });
+      expect(err(r)).toContain(String(EPIC_PLAN_MAX_CHARS));
+    }
+    expect(epics.get(epic.id)?.plan).toBeNull();
+    await epicService.archive(solo.id, { terminalsOpen: () => false, featureTerminalsOpen: () => false });
+    expect(await handle({ ...base, epicId: solo.id, op: "set_epic_plan", plan: "p" })).toMatchObject({ ok: false });
+    expect(epics.get(solo.id)?.plan).toBeNull();
+    expect(events).toEqual([]);
   });
 });
 

@@ -1,9 +1,10 @@
+import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
 import type { Handoff } from "../../shared/handoff";
 import {
   epicScope, featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, ticketScope, WORKSPACE_SCOPE, type ButlerNote, type MemoryView, type WhyEntry,
 } from "../../shared/memory";
 import type { EpicFeatureRow } from "../../shared/types";
-import { carriedEpicPlan, EPIC_PLAN_MAX_CHARS, renderEpicHandoff } from "../epics/epic-info";
+import { carriedEpicPlan, carriedEpicProgress, EPIC_PROGRESS_MAX_CHARS, fitEpicPlan, renderedByButler, renderEpicHandoff } from "../epics/epic-info";
 import { currentLang } from "../i18n";
 import type { EpicsRepo } from "../db/epics-repo";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
@@ -26,7 +27,7 @@ export interface MemoryServiceDeps {
   handoffs: Pick<HandoffsRepo, "listByTicket">;
   followups: Pick<FollowupsRepo, "listByTicket">;
   features: Pick<FeaturesRepo, "get" | "list">;
-  epics: Pick<EpicsRepo, "get" | "list">;
+  epics: Pick<EpicsRepo, "get" | "list" | "migratePlan">;
   /** epic 下各 feature 的情况（含已归档）：渲染 epic handoff 用。 */
   epicRows: (epicId: number) => EpicFeatureRow[];
   featureHandoffs: Pick<FeatureHandoffsRepo, "listByFeature">;
@@ -274,17 +275,39 @@ export class MemoryService {
   /**
    * 渲染好的正文和 StateCore 里当前的一字不差时不再写（retryAfter 传 0：只比正文）。
    * 一个 feature 都没有时也要写（移出最后一个 feature 后，旧内容不能留着）。
-   * 当前生效的 handoff 里有 epic session 自己的交接时带上它（见 carriedEpicPlan），否则规划就被这次同步冲掉了。
+   * 规划来自 epics.plan（set_epic_plan 写的）。当前生效的 handoff 里有 epic session 的进度时带上它（见 carriedEpicProgress），
+   * 否则进度就被这次同步冲掉了。
+   * 升级前的老 epic（planAt 为 null）第一次同步时，先把记忆里的规划迁进 epics.plan（见 carriedEpicPlan）：
+   * 那时 epic session 自己写的整份交接就是规划，不再当作进度。迁过之后渲染出来的和老版本的一字不差。
    */
   private async syncEpicNow(epicId: number): Promise<void> {
     if (!this.d.enabled() || !this.d.epics.get(epicId)) return;
     const key = epicScope(epicId);
     const rows = this.d.epicRows(epicId);
     await withScope({ dataDir: this.d.dataDir, scope: key }, async (s) => {
-      const active = await s.activeHandoff();
-      const plan = active && carriedEpicPlan(active.content);
-      if (plan && plan.length > EPIC_PLAN_MAX_CHARS) this.log(`memory ${key}: the epic session's handoff was cut from ${plan.length} to ${EPIC_PLAN_MAX_CHARS} characters`);
-      await s.handoff({ summary: renderEpicHandoff(rows, currentLang(), plan), nextSteps: [], openQuestions: [] }, 0);
+      const content = (await s.activeHandoff())?.content ?? "";
+      // 读完 StateCore 再读 epic：中间可能来过一次 set_epic_plan。
+      const epic = this.d.epics.get(epicId);
+      if (!epic) return;
+      let plan = epic.plan;
+      let progress = carriedEpicProgress(content);
+      // 迁进来的是 handoff 里放得下的那一份：老版本同步时也是截成这样带着走的。
+      const migrating = epic.planAt === null;
+      const old = migrating ? carriedEpicPlan(content) : null;
+      const migrated = old === null ? null : fitEpicPlan(old) || null;
+      if (migrating) {
+        if (old !== null && migrated !== null && old.length > EPIC_PLAN_MAX_CHARS) {
+          this.log(`memory ${key}: the epic plan was cut from ${old.length} to ${migrated.length} characters when it moved out of memory`);
+        }
+        plan ??= migrated;
+        if (!renderedByButler(content)) progress = null;
+      }
+      if (progress && progress.length > EPIC_PROGRESS_MAX_CHARS) {
+        this.log(`memory ${key}: the epic session's progress was cut from ${progress.length} to ${EPIC_PROGRESS_MAX_CHARS} characters`);
+      }
+      await s.handoff({ summary: renderEpicHandoff(rows, currentLang(), plan, progress), nextSteps: [], openQuestions: [] }, 0);
+      // 写进 StateCore 之后才记下迁过：写失败的话下次同步还按老数据认，epic session 的整份交接不会既当规划又当进度。
+      if (migrating) this.d.epics.migratePlan(epicId, migrated, this.d.now());
     });
     try {
       this.d.onSynced?.(key);

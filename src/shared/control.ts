@@ -39,6 +39,11 @@ export type TicketControlRequest =
 
 /** epic session 建 feature 时 brief 最多这么多字符，超出直接拒绝。 */
 export const BRIEF_LIMIT = 4000;
+/**
+ * epic 的整体规划（set_epic_plan）最多这么多字符，超出直接拒绝。epic 记忆的 handoff 里规划也最多占这么多：
+ * 规划优先，但总要给最新的 feature 留位置，否则 ticket 的 session recall 时什么进度都读不到。
+ */
+export const EPIC_PLAN_MAX_CHARS = 6000;
 /** list_features、epic_context 里每个 feature 的 summary 最多这么多字符（超出截断）。 */
 export const SUMMARY_LIMIT = 1000;
 
@@ -65,6 +70,8 @@ export type EpicControlRequest =
   | { v: 1; epicId: number; from: string | null; op: "list_features" }
   | { v: 1; epicId: number; from: string | null; op: "list_repos" }
   | { v: 1; epicId: number; from: string | null; op: "create_feature"; name: string; repos?: string[]; brief: string }
+  /** 规划定下来或者改了：整份换掉 epics.plan，再重新渲染 epic 的 handoff。 */
+  | { v: 1; epicId: number; from: string | null; op: "set_epic_plan"; plan: string }
   /** epic 下各 feature 的 session：feature 级的（总控、修复）和 ticket 的。 */
   | { v: 1; epicId: number; from: string | null; op: "list_sessions" }
   | { v: 1; epicId: number; from: string | null; op: "session_activity"; session: string }
@@ -103,6 +110,10 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
       if (!okName(o.name, 500) || typeof o.brief !== "string" || o.brief.length > BRIEF_LIMIT) return null;
       if (o.repos !== undefined && (!Array.isArray(o.repos) || o.repos.length > MAX_CREATE_REPOS || !o.repos.every((r) => okName(r, 4096)))) return null;
       return { ...base, op: "create_feature", name: o.name, brief: o.brief, ...(o.repos !== undefined && { repos: o.repos as string[] }) };
+    }
+    if (o.op === "set_epic_plan") {
+      if (typeof o.plan !== "string" || !o.plan.trim() || o.plan.length > EPIC_PLAN_MAX_CHARS) return null;
+      return { ...base, op: "set_epic_plan", plan: o.plan };
     }
     return null;
   }

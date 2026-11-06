@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import type { SessionActivity } from "../../shared/activity";
 import {
-  BRIEF_LIMIT, MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, SUMMARY_LIMIT, taskMessage,
+  BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, SUMMARY_LIMIT, taskMessage,
   type ControlRequest, type ControlResult, type EpicControlRequest, type FeatureControlRequest, type StartModel,
 } from "../../shared/control";
 import { effectiveStatus, type Epic, type EpicFeatureRow, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
@@ -24,7 +24,7 @@ export interface ControlHandlerDeps {
   /** feature 总控的请求（设计文档 2026-10-26）；不给就拒绝。 */
   features?: FeaturesRepo;
   /** epic session 的请求（设计文档 2026-11-01）和 feature 总控的 epic_context；不给就拒绝。 */
-  epics?: Pick<EpicsRepo, "get">;
+  epics?: Pick<EpicsRepo, "get" | "setPlan">;
   featureService?: Pick<FeatureService, "create">;
   /** epic 下每个 feature 的情况（含已归档），直接读库，不经过 epic 记忆。 */
   epicRows?: (epicId: number) => EpicFeatureRow[];
@@ -47,6 +47,8 @@ export interface ControlHandlerDeps {
   notify: () => void;
   /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
   ticketPattern?: () => string;
+  /** set_epic_plan 记下的时间（不给用 Date.now）。 */
+  now?: () => number;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -279,6 +281,20 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     return ok({ id: f.id, name: f.name, repos: f.repos.map(name), note: M().ctlFeatureCreated });
   };
 
+  /** epic session 定下或改了规划（计划 16）：整份换掉 epics.plan，再重新渲染 epic 的 handoff（不等它）。 */
+  const setEpicPlan = (e: Epic, raw: string): ControlResult => {
+    const plan = raw.trim();
+    if (!plan || raw.length > EPIC_PLAN_MAX_CHARS) return fail(M().ctlPlanInvalid(EPIC_PLAN_MAX_CHARS));
+    // e 就是从 d.epics 读出来的，这里一定有。
+    d.epics?.setPlan(e.id, plan, (d.now ?? Date.now)());
+    try {
+      d.syncEpic?.(e.id);
+    } catch (err) {
+      d.log?.(`control: syncing epic ${e.id} after set_epic_plan failed`, err);
+    }
+    return ok({ note: M().ctlPlanSaved });
+  };
+
   /** epic session（设计文档 2026-11-01）：epic 在这里重新核对，已归档的全部拒绝。 */
   const epicRequest = async (req: EpicControlRequest): Promise<ControlResult> => {
     const e = d.epics?.get(req.epicId);
@@ -286,6 +302,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (req.op === "list_repos") return ok(e.repos.map((r) => ({ name: name(r), path: r.repoPath })));
     if (req.op === "list_features") return ok((d.epicRows?.(e.id) ?? []).map(rowOut));
     if (req.op === "create_feature") return createFeature(e, req);
+    if (req.op === "set_epic_plan") return setEpicPlan(e, req.plan);
     // 下面这些只看未归档的 feature：feature 级的 session（总控、修复）和这些 feature 下 ticket 的 session。
     const own = (d.features?.listByEpic(e.id) ?? []).map((f) => ({ f, tickets: d.tickets.listByFeature(f.id) }));
     if (req.op === "list_sessions") return ok(own.flatMap(({ f, tickets }) => featureSessionRows(f, tickets).map((r) => ({ ...r, feature: f.name }))));
