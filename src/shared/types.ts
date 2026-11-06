@@ -438,7 +438,6 @@ export type NowTarget =
   | { page: "feature"; id: number; sessionId: string | null }
   | { page: "epic"; id: number; sessionId: string | null };
 
-/** 「现在」页的一行：一个开着终端的 Butler session，或者一个没有开着的 session、但有开着的 PR 的 ticket。 */
 /** 换新（计划 16）正在做的那一步：写 handoff、/clear、发接着做的话。 */
 export type RefreshStep = "handoff" | "clear" | "resume";
 /**
@@ -449,6 +448,7 @@ export type RefreshRefusal = "busy" | "already" | "cooldown" | "memory_off" | "f
 /** 界面上的“换新”按钮（IPC sessions:refresh）：开始了，或者为什么开始不了。 */
 export type RefreshSessionResult = { ok: true } | { ok: false; reason: RefreshRefusal };
 
+/** 「现在」页的一行：一个开着终端的 Butler session，或者一个没有开着的 session、但有开着的 PR 的 ticket。 */
 export interface NowRow {
   /** 没有开着的 session、只有 PR 的行为 null。 */
   sessionId: string | null;

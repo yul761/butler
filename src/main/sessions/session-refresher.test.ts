@@ -45,6 +45,8 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
     /** refreshActivity 读过的 id 和读的时候发生的事（R28：/clear 之后的新 head 要先读一次活动）。 */
     activityRefreshes: [] as string[],
     onRefreshActivity: null as ((id: string) => void) | null,
+    /** 读库（head、记忆开关）的次数：stop 之后不能再读。 */
+    reads: 0,
   };
   const terms: Term[] = [];
   const typed: Array<{ termId: string; text: string; at: number }> = [];
@@ -67,6 +69,7 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
     guard: { check: check(true) },
     guardIgnoringNeedsYou: { check: check(false) },
     head: (id) => {
+      state.reads++;
       const t = termOf(id);
       return t ? headOf(t) : null;
     },
@@ -82,7 +85,7 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
       return state.commandReady;
     },
     epicPlanReady: () => state.epicPlanReady,
-    memoryEnabled: () => state.memory,
+    memoryEnabled: () => (state.reads++, state.memory),
     epicProgress: async () => {
       state.epicProgressReads++;
       return state.epicProgress;
@@ -570,6 +573,44 @@ describe("SessionRefresher (plan 16)", () => {
     expect(t.typed[2].at - t.typed[1].at).toBeLessThan(REFRESH_CLEAR_MS);
     expect(t.state.activityRefreshes.length).toBeGreaterThanOrEqual(2);
     expect(t.state.activityRefreshes.every((id) => id === "s1")).toBe(true);
+  });
+});
+
+describe("SessionRefresher.stop (plan 16 review)", () => {
+  it("a stop during a quiet-wait ends the run without typing, reading or logging", async () => {
+    const t = setup();
+    let readsAtStop = -1;
+    const term = t.addTerm("s1", {
+      reactions: {
+        // handoff 收进来之后一直忙：换新停在 /clear 之前的等待里，这时 Butler 退出。
+        "/handoff": { ms: 30_000, run: () => { t.r.handoffStored("s1"); term.block = "busy"; t.later(5_000, () => { t.r.stop(); readsAtStop = t.state.reads; }); } },
+      },
+    });
+    const before = t.logs.length;
+    expect(await t.r.refresh("s1", "manual")).toBe("failed");
+    expect(t.texts()).toEqual(["/handoff"]);
+    expect(t.state.reads).toBe(readsAtStop);
+    // 只有开始时的那一行，没有失败、没有 unexpected error。
+    expect(t.logs.slice(before).filter((m) => !m.endsWith(": started"))).toEqual([]);
+    expect(t.r.isRefreshing("s1")).toBe(false);
+    // 停了以后什么都不再开始。
+    term.block = null;
+    expect(t.r.precheck("s1", "manual")).toBe("busy");
+    expect(await t.r.refresh("s1", "manual")).toBe("busy");
+    t.r.autoCheck();
+    await t.settle();
+    expect(t.texts()).toEqual(["/handoff"]);
+  });
+
+  it("a stop while waiting for epic progress stops reading StateCore", async () => {
+    const t = setup();
+    t.addTerm("e1", { kind: "epic", session: { epicId: 4 }, reactions: { [M().refreshEpicHandoff]: { ms: 12_000, run: () => t.r.stop() } } });
+    expect(await t.r.refresh("e1", "manual")).toBe("failed");
+    const reads = t.state.epicProgressReads;
+    expect(t.texts()).toEqual([M().refreshEpicHandoff]);
+    expect(t.logs.some((m) => m.includes("unexpected error"))).toBe(false);
+    // 停下之后没有再读：最多是停的那一刻正在读的那一次。
+    expect(reads).toBe(4);
   });
 });
 

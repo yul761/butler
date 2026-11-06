@@ -222,7 +222,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
             {/* 正在运行的终端不能隐藏，只能结束（×点两次）；结束之后才能隐藏。 */}
             {s.termId ? (
               <>
-                <RefreshSessionButton sessionId={s.id} label={sessionLabel(s, S.untitledSession)} />
+                {/* 修复 session 不换新（计划 16）。 */}
+                {s.fixesSession === null && <RefreshSessionButton sessionId={s.id} label={sessionLabel(s, S.untitledSession)} />}
                 <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => closePane(s.termId!)} />
               </>
             ) : (

@@ -237,13 +237,14 @@ describe("buildNowView", () => {
       refreshing: (id) => (id === "s-quiet" ? "clear" : id === "s-asks" || id === "s-approve" ? "handoff" : null),
     }));
     const rows = v.epics[0].features[0].rows;
+    // 停在确认上的照样需要你（Butler 的 /handoff 要用户批准权限），别的理由在换新时都不算。
     expect(rows.map((r) => [r.sessionId, r.refreshing, r.needsYou, r.idle])).toEqual([
       ["s-asks", "handoff", null, false],
-      ["s-approve", "handoff", null, false],
+      ["s-approve", "handoff", "等你确认", false],
       ["s-quiet", "clear", null, false],
     ]);
     expect(asked).toEqual([]);
-    expect(v.needsYou).toEqual([]);
+    expect(v.needsYou.map((r) => r.sessionId)).toEqual(["s-approve"]);
   });
 
   it("marks quiet rows idle and counts per group", () => {

@@ -83,6 +83,9 @@ export interface SessionRefresherDeps {
   log(msg: string, err?: unknown): void;
 }
 
+/** stop() 之后，正在进行的换新在下一个检查点用它悄悄退出（execute 接住，不记日志）。 */
+class RefresherStopped extends Error {}
+
 /** 一次正在进行的换新。 */
 interface Run {
   /** 开始时的 head id；之后 /clear、压缩换了 id 也按链认。 */
@@ -108,6 +111,8 @@ export class SessionRefresher {
   /** 失败过的 session（按链认）和失败的时间。 */
   private readonly failedAt = new Map<string, number>();
   private readonly sleep: (ms: number) => Promise<void>;
+  /** Butler 要退出了（stop）：不再开始换新，正在进行的在下一个检查点停下，不再输入、不再读库。 */
+  private stopped = false;
 
   constructor(private readonly d: SessionRefresherDeps) {
     this.sleep = d.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -115,7 +120,7 @@ export class SessionRefresher {
 
   /** 每个活动 tick 之后调：找满足条件的 session，一次最多启动一个；已经有一个在换新时什么都不做。上下文最长的先换。 */
   autoCheck(): void {
-    if (this.runs.size > 0 || !this.d.memoryEnabled()) return;
+    if (this.stopped || this.runs.size > 0 || !this.d.memoryEnabled()) return;
     const limit = this.d.threshold();
     if (!(limit > 0)) return;
     const candidates = this.d
@@ -146,6 +151,14 @@ export class SessionRefresher {
     return "result" in r ? r.result : null;
   }
 
+  /**
+   * 退出前调用（index.ts 的 before-quit）：之后什么都不再开始；正在等的换新在下一个检查点（每次等待醒来、每次输入前后）
+   * 悄悄结束：不输入、不读库、不记失败也不冷却。数据库在 will-quit 里关掉，那之后不能再碰它。
+   */
+  stop(): void {
+    this.stopped = true;
+  }
+
   /** 链上任何一个 id 都认。 */
   isRefreshing(sessionId: string): boolean {
     return this.runOf(sessionId) !== null;
@@ -164,6 +177,7 @@ export class SessionRefresher {
 
   /** 开始前的同步检查（precheck 和 begin 共用）；通过时给出要登记的这次换新，不登记。 */
   private check(sessionId: string, trigger: RefreshTrigger): { result: RefreshRefusal } | { run: Run } {
+    if (this.stopped) return { result: "busy" };
     if (!this.d.memoryEnabled()) return { result: "memory_off" };
     const head = this.d.head(sessionId);
     const kind = head ? this.d.kindOf(head) : null;
@@ -211,10 +225,11 @@ export class SessionRefresher {
       if (result === "done") this.d.log(`refresh ${run.headId}: done`);
       return result;
     } catch (e) {
+      if (e instanceof RefresherStopped) return "failed";
       return this.fail(run, "unexpected error", e);
     } finally {
       this.runs.delete(run);
-      this.changed();
+      if (!this.stopped) this.changed();
     }
   }
 
@@ -222,12 +237,15 @@ export class SessionRefresher {
     // 第一步：ticket 和 feature 总控输入 /handoff，等 capture 收进来；epic session 用 butler-epic 的 handoff 写进度，等进度变。
     // epic 比的是进度不是 handoff 的版本：Butler 自己重新渲染（feature 有变化）也会写新版本，但进度原样带着（R29）。
     let before: string | null = null;
+    this.alive();
     if (run.kind === "epic") before = await this.d.epicProgress(run.epicId!);
     else if (!(await this.d.handoffCommandReady())) {
+      this.alive();
       // 用户改过 /handoff 的命令文件：不知道它会输出什么，收不进来就只会白等 10 分钟。冷却期间不再试，也不再记日志。
       return this.fail(run, "/handoff is not Butler's own command (the command file was changed), so the session was not refreshed");
     }
     // 中间等过异步：重新看一眼。这时还什么都没输入，不通过就当作忙（记忆刚关掉就是 memory_off），不冷却。
+    this.alive();
     if (!this.d.memoryEnabled()) return "memory_off";
     const gate = this.canStart(run.headId, run.trigger);
     if (!gate.ok || gate.termId !== run.termId) return "busy";
@@ -249,6 +267,7 @@ export class SessionRefresher {
     this.setStep(run, "clear");
     const beforeClear = await this.untilQuiet(run);
     if (beforeClear) return this.fail(run, `before /clear: ${beforeClear}`);
+    this.alive();
     const oldHead = this.d.head(run.termId)?.id ?? run.headId;
     const typedClear = await this.type(run, CLEAR_COMMAND);
     if (typedClear) return this.fail(run, `typing /clear: ${typedClear}`);
@@ -274,8 +293,10 @@ export class SessionRefresher {
   private async untilQuiet(run: Run): Promise<string | null> {
     const end = this.d.now() + REFRESH_CLEAR_MS;
     for (;;) {
+      this.alive();
       if (!this.d.memoryEnabled()) return "memory_off";
       await this.rereadActivity(run);
+      this.alive();
       const gate = this.guardFor(run.trigger).check(run.headId);
       if (gate.ok) return gate.termId === run.termId ? null : "the terminal changed";
       if (gate.block !== "busy") return gate.block;
@@ -297,7 +318,11 @@ export class SessionRefresher {
   private async until(cond: () => boolean | Promise<boolean>, ms: number, every: number): Promise<boolean> {
     const end = this.d.now() + ms;
     for (;;) {
-      if (await cond()) return true;
+      this.alive();
+      const met = await cond();
+      // epic 的进度要读 StateCore：读的期间 stop 了，结果不算。
+      this.alive();
+      if (met) return true;
       if (this.d.now() >= end) return false;
       await this.sleep(every);
     }
@@ -305,13 +330,23 @@ export class SessionRefresher {
 
   /** 输入一段文字；成功返回 null，否则返回原因。 */
   private async type(run: Run, text: string): Promise<string | null> {
+    this.alive();
+    let r: "sent" | "exited" | "timeout";
     try {
-      const r = await this.d.deliver(run.termId, sanitizeTask(text));
-      return r === "sent" ? null : r;
+      r = await this.d.deliver(run.termId, sanitizeTask(text));
     } catch (e) {
+      this.alive();
       this.d.log(`refresh ${run.headId}: deliver failed`, e);
       return "deliver failed";
     }
+    // 退出时终端被一起关掉，deliver 返回 exited：那不算失败。
+    this.alive();
+    return r === "sent" ? null : r;
+  }
+
+  /** stop() 之后在检查点退出。 */
+  private alive(): void {
+    if (this.stopped) throw new RefresherStopped();
   }
 
   private fail(run: Run, reason: string, err?: unknown): "failed" {

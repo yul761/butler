@@ -211,7 +211,8 @@ export function SessionArea({ repos, reposHint, onAddRepo, onRemoveRepo, session
             </button>
             {s.termId ? (
               <>
-                <RefreshSessionButton sessionId={s.id} label={sessionLabel(s, S.untitledSession)} />
+                {/* 修复 session 不换新（计划 16）。 */}
+                {s.fixesSession === null && <RefreshSessionButton sessionId={s.id} label={sessionLabel(s, S.untitledSession)} />}
                 <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => panes.close(s.termId!)} />
               </>
             ) : (

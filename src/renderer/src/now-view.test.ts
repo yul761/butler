@@ -54,6 +54,8 @@ describe("rowText", () => {
       expect(rowText(row({ refreshing: step, activity: act({ kind: "thinking" }) }), S, NOW)).toEqual({ main: "换新中", sub: null, tone: "warn" });
       expect(rowText(row({ refreshing: step, mergeQueued: true, activity: act({ kind: "test", stuck: true }) }), S, NOW).main).toBe("换新中");
     }
+    // Butler 的 /handoff 停在权限确认上：显示确认，不显示换新中。
+    expect(rowText(row({ refreshing: "handoff", needsYou: "等你确认", activity: act({ kind: "approval" }) }), S, NOW)).toMatchObject({ main: "等你：等你确认", tone: "danger" });
     setUiLang("en");
     expect(rowText(row({ refreshing: "clear" }), S, NOW).main).toBe("Refreshing");
   });

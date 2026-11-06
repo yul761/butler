@@ -896,7 +896,11 @@ async function bootstrap(): Promise<void> {
     },
   });
 
-  shutdownSessions = () => pty.killAll();
+  // before-quit 里先停换新再关终端：终端关掉时正在等的换新不再输入、不再读库（will-quit 里数据库就关了），也不当作失败。
+  shutdownSessions = () => {
+    refresher.stop();
+    pty.killAll();
+  };
 
   const autostart = {
     get: () => autostartState({ packaged: app.isPackaged, platform: process.platform, openAtLogin: () => app.getLoginItemSettings().openAtLogin }),
@@ -1047,6 +1051,8 @@ async function bootstrap(): Promise<void> {
   const scheduleTimer = setInterval(() => void checkSchedule("tick"), TICK_MS);
 
   app.on("will-quit", () => {
+    // 正常情况下 before-quit 已经停过；没经过 before-quit 的退出也要在关数据库之前停下。
+    refresher.stop();
     clearInterval(discoveryTimer);
     clearInterval(refreshTimer);
     clearInterval(scheduleTimer);

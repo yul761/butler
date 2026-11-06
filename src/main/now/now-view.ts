@@ -39,15 +39,16 @@ interface RowBase {
 
 /**
  * 一个开着的 session 的行：needsYouReason 只在确认和卡住都不是时才问（每行最多一次）。
- * 正在换新的不算需要你（屏幕上的东西是 Butler 自己输入的），也不折起来。
+ * 正在换新的不折起来，也不算需要你（回复、卡住都是 Butler 输入的 /handoff 带来的），只有停在确认上的照样算：
+ * Butler 的 /handoff 也可能要用户批准权限，不显示出来换新就一直卡着。
  */
 function sessionRow(i: NowInput, s: SessionView, base: RowBase): NowRow {
   const activity = i.activity(s.id);
   const mergeQueued = i.mergeQueued(s.id);
   const refreshing = i.refreshing(s.id);
   const needsYou =
-    refreshing !== null ? null
-    : activity?.kind === "approval" ? i.approvalText
+    activity?.kind === "approval" ? i.approvalText
+    : refreshing !== null ? null
     : activity?.stuck === true ? (activity.reason ?? "")
     : i.needsYouReason(s.id);
   const idle = refreshing === null && needsYou === null && !mergeQueued && stopped(activity) && !base.prs.some(prBusy);
