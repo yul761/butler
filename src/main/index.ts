@@ -30,6 +30,10 @@ import { SessionsRepo } from "./db/sessions-repo";
 import { SettingsRepo } from "./db/settings-repo";
 import { TermsRepo } from "./db/terms-repo";
 import { TicketsRepo } from "./db/tickets-repo";
+import { UsageRepo } from "./db/usage-repo";
+import { jobOf } from "./handoff/headless-exec";
+import type { UsageCounts } from "./usage/usage-parse";
+import { UsageScanner } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
 import { makeWhoOf } from "./gate/who";
@@ -380,6 +384,27 @@ async function bootstrap(): Promise<void> {
       logger("initial health refresh failed", e);
     },
   );
+  const usageRepo = new UsageRepo(db);
+  /** 某个 session（取 head）最近一轮的上下文大小；计划 16 的上下文提醒会用。 */
+  const contextOf = (sessionId: string): number | null => usageRepo.latestContext(sessions.head(sessionId)?.id ?? sessionId);
+  void contextOf; // 暂时还没有使用方
+  /** headless 运行（handoff、feature 汇总、卡住判断）的用量入库。 */
+  const recordHeadlessUsage = ({ runId, label, at, model, usage }: { runId: string; label: string; at: number; model: string | null; usage: UsageCounts }) => {
+    try {
+      usageRepo.record([{
+        messageId: `headless:${runId}`, sessionId: null, agentId: null, source: "headless", job: jobOf(label), at, model, ...usage,
+        context: usage.input + usage.cacheWrite5m + usage.cacheWrite1h + usage.cacheRead,
+      }]);
+    } catch (e) {
+      logger("recording headless usage failed", e);
+    }
+  };
+  const usageScanner = new UsageScanner({
+    repo: usageRepo,
+    sessionIds: () => pty.openIds().map((t) => sessions.head(t)).filter((s) => s?.origin === "butler").map((s) => s!.id),
+    transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
+    log: logger,
+  });
   /** will-quit 关数据库之前置位：之后才到的终端退出事件（killAll 是异步的）不再碰数据库。没处理的空 session 下次启动时清掉。 */
   let closing = false;
   const pty = new PtyManager(nodePtyFactory, {
@@ -388,12 +413,15 @@ async function bootstrap(): Promise<void> {
       safeSend(IPC.ptyExit, id, code);
       if (closing) return;
       // 合并后因为这个终端还在跑而没清理的 worktree：终端一退出就再试（设计文档 2026-10-26）。
-      const exitedTicket = sessions.head(id)?.ticketKey ?? null;
+      const exitedHead = sessions.head(id);
+      const exitedTicket = exitedHead?.ticketKey ?? null;
       try {
         sessionService.handleExit(id);
       } catch (e) {
         logger("handleExit failed", e);
       }
+      // 退出前最后一段 transcript 也要记上。
+      if (exitedHead) void usageScanner.scanSession(exitedHead.id);
       if (exitedTicket) cleanupMerged(exitedTicket);
       notify();
     },
@@ -451,7 +479,7 @@ async function bootstrap(): Promise<void> {
   const activityMonitor = new ActivityMonitor({
     sessions, tickets, features, pty,
     transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
-    judge: (input) => judgeStuck({ run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID, signal: headlessAbort.signal, log: logger }, input),
+    judge: (input) => judgeStuck({ run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID, signal: headlessAbort.signal, onUsage: recordHeadlessUsage, log: logger }, input),
     notify,
     onStuck: showStuckNotification,
     now: Date.now,
@@ -545,6 +573,7 @@ async function bootstrap(): Promise<void> {
     newRunId: randomUUID,
     projectMcp,
     signal: headlessAbort.signal,
+    onUsage: recordHeadlessUsage,
     log: logger,
   });
   /** feature 有新汇总时，它所在的 epic 重新渲染 handoff（异步，失败只记日志）。 */
@@ -573,6 +602,7 @@ async function bootstrap(): Promise<void> {
     newRunId: randomUUID,
     projectMcp,
     signal: headlessAbort.signal,
+    onUsage: recordHeadlessUsage,
     log: logger,
   });
   /**
@@ -876,6 +906,7 @@ async function bootstrap(): Promise<void> {
     tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs, gateRepo,
     keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
+    usage: usageRepo, sessions,
     briefRefreshing: () => briefRefreshing,
     briefNarrating: () => briefNarrating,
     rederive: (key) => {
@@ -930,6 +961,7 @@ async function bootstrap(): Promise<void> {
   }
   holdWatcher.start(Number(process.env.BUTLER_GATE_CHECK_MS) || HOLD_CHECK_MS);
   activityMonitor.start();
+  usageScanner.start();
   void runDiscovery();
   // 启动时补齐记忆：老数据、上次退出时没写完的。
   void memory.syncAll();
@@ -950,6 +982,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(scheduleTimer);
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     activityMonitor.stop();
+    usageScanner.stop();
     memory.stop();
     inbox.stop();
     controlInbox.stop();

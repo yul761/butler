@@ -8,7 +8,7 @@ import type {
   AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
-  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, MergeEvent,
+  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, MergeEvent, UsageSummary,
 } from "../../shared/types";
 
 declare global {
@@ -116,6 +116,7 @@ export const api = {
   keepAwake: () => call<boolean>(IPC.appKeepAwakeGet),
   setKeepAwake: (on: boolean) => call<boolean>(IPC.appKeepAwakeSet, on),
   memoryWhy: (ticketKey: string, factId: string) => call<WhyEntry[] | null>(IPC.memoryWhy, ticketKey, factId),
+  usageSummary: () => call<UsageSummary>(IPC.usageSummary),
   dismissActivity: (sessionId: string) => call<void>(IPC.activityDismiss, sessionId),
   onNavigate: (cb: (route: AppNavigateRoute) => void) => window.butler.on(IPC.appNavigate, cb),
   onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),

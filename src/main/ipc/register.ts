@@ -14,6 +14,9 @@ import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { MergeGateRepo } from "../db/merge-gate-repo";
 import type { SettingsRepo } from "../db/settings-repo";
+import type { SessionsRepo } from "../db/sessions-repo";
+import type { UsageRepo } from "../db/usage-repo";
+import { summarizeUsage, USAGE_WINDOW_MS } from "../usage/usage-summary";
 import type { TermsRepo } from "../db/terms-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import type { KeyStore } from "../gateway/key-store";
@@ -48,6 +51,8 @@ export interface IpcDeps {
   epicService: EpicService;
   sessionService: SessionService;
   activity: Pick<ActivityMonitor, "dismiss">;
+  usage: Pick<UsageRepo, "since">;
+  sessions: Pick<SessionsRepo, "get">;
   pty: PtyManager;
   health: HealthService;
   followups: FollowupsRepo;
@@ -274,6 +279,10 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
   });
 
+  handle(IPC.usageSummary, () => {
+    const since = Date.now() - USAGE_WINDOW_MS;
+    return summarizeUsage(d.usage.since(since), (id) => (id && d.sessions.get(id)?.coordinator ? "coordinator" : "ticket"), since);
+  });
   handle(IPC.activityDismiss, (raw: unknown) => d.activity.dismiss(sessionIdArg(raw)));
 
   handle(IPC.ptySnapshot, (id: string) => d.pty.snapshot(id));
