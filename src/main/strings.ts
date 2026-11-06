@@ -10,6 +10,18 @@ import { currentLang } from "./i18n";
 /** 英文的时长；中文用 shared/text 的 formatDuration。 */
 const enDuration = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${Math.round(ms / 1000)} s`);
 
+/** 失败检查的日志块：名字加用围栏包起来的日志；围栏比日志里最长的反引号串还长，日志里的 ``` 关不掉它；没有日志的检查只写名字。 */
+function ciLogBlocks(failed: Array<{ name: string; log?: string }>): string {
+  return failed
+    .map(({ name, log }) => {
+      if (!log) return name;
+      const longest = Math.max(0, ...(log.match(/`+/g) ?? []).map((m) => m.length));
+      const fence = "`".repeat(Math.max(3, longest + 1));
+      return `${name}\n${fence}\n${log}\n${fence}`;
+    })
+    .join("\n\n");
+}
+
 const ZH = {
   eveningTitle: "Butler 晚间小结",
   eveningBody: (n: number) => (n > 0 ? `${n} 个 ticket 今天有进展，点开查看。` : "今天没有新的 handoff。"),
@@ -205,6 +217,11 @@ const ZH = {
       case "dir_busy": return `${who} 想切 branch，目录正被 ${o} 用着`;
     }
   },
+  ciWherePr: (n: number) => `PR #${n}`,
+  ciWhereBranch: (b: string) => `分支 ${b}`,
+  ciPassedNotice: (where: string, sha7: string) => `Butler：${where} 的 CI 全部通过（${sha7}）。可以继续下一步。`,
+  ciFailedNotice: (where: string, sha7: string, failed: Array<{ name: string; log?: string }>) =>
+    `Butler：${where} 的 CI 失败（${sha7}）。失败的检查：${failed.map((f) => f.name).join("、")}。\n\n${ciLogBlocks(failed)}\n\n请修复后再 push。push 以后结束这一轮，Butler 会再告诉你结果。`,
 };
 
 export type MainStrings = typeof ZH;
@@ -393,6 +410,11 @@ const EN: MainStrings = {
       case "dir_busy": return `${who} wants to switch branches, but ${o} is using the directory`;
     }
   },
+  ciWherePr: (n: number) => `PR #${n}`,
+  ciWhereBranch: (b: string) => `branch ${b}`,
+  ciPassedNotice: (where: string, sha7: string) => `Butler: CI passed on ${where} (${sha7}). You can move on to the next step.`,
+  ciFailedNotice: (where: string, sha7: string, failed: Array<{ name: string; log?: string }>) =>
+    `Butler: CI failed on ${where} (${sha7}). Failed checks: ${failed.map((f) => f.name).join(", ")}.\n\n${ciLogBlocks(failed)}\n\nFix it, then push. End this turn after pushing and Butler will tell you the result.`,
 };
 
 export const MAIN_STRINGS: Record<Lang, MainStrings> = { zh: ZH, en: EN };
