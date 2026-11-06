@@ -339,6 +339,11 @@ describe("nextDraftLength", () => {
   it("escape sequences are not a draft", () => {
     expect(nextDraftLength(0, "\x1b[<64;10;5M\x1b[A\x1b[I\x1bOA")).toBe(0);
   });
+  it("multi-line paste stays a draft; a lone newline is a draft; carriage return still clears", () => {
+    expect(nextDraftLength(0, "\x1b[200~a\nb\n\x1b[201~")).toBe(4);
+    expect(nextDraftLength(0, "\n")).toBe(1);
+    expect(nextDraftLength(4, "\r")).toBe(0);
+  });
   it("pasted text counts", () => {
     expect(nextDraftLength(0, "\x1b[200~abc\x1b[201~")).toBe(3);
   });

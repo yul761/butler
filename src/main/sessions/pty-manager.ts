@@ -47,18 +47,28 @@ export function stripAnsi(s: string): string {
 /**
  * 输入框草稿长度的下一个值：current 是之前的长度，data 是这次写进终端的字节。
  * 鼠标上报、焦点事件、方向键等 ESC 序列不算；bracketed paste 的标记去掉但内容计入；
- * 回车、Ctrl+C、Ctrl+U 清零，退格减 1，其他控制字符忽略，可见字符加 1。
+ * 回车（\\r）、Ctrl+C、Ctrl+U 清零，单独的 \\n 算换行加 1，退格减 1，其他控制字符忽略，可见字符加 1。
  */
 export function nextDraftLength(current: number, data: string): number {
   let n = current;
-  // CSI 参数含 <（SGR 鼠标上报），SS3 带一个字符（\x1bOA），所以不直接用 stripAnsi；其余形状同它。
+  // bracketed paste 里的内容整段计入（换行也算一个，粘贴的多行文本留在输入框里）；其余部分逐字符处理。
   // eslint-disable-next-line no-control-regex
-  const text = data.replace(/\x1b\[20[01]~/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bO.|\x1b[@-Z\\-_]/g, "");
-  for (const ch of text) {
-    if (ch === "\r" || ch === "\n" || ch === "\x03" || ch === "\x15") n = 0;
-    else if (ch === "\x7f" || ch === "\b") n = Math.max(0, n - 1);
-    else if (ch < " ") continue;
-    else n += 1;
+  const parts = data.split(/\x1b\[200~([\s\S]*?)(?:\x1b\[201~|$)/);
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 1) {
+      n += [...parts[i]].length;
+      continue;
+    }
+    // CSI 参数含 <（SGR 鼠标上报），SS3 带一个字符（\x1bOA），所以不直接用 stripAnsi；其余形状同它。
+    // eslint-disable-next-line no-control-regex
+    const text = parts[i].replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bO.|\x1b[@-Z\\-_]/g, "");
+    for (const ch of text) {
+      if (ch === "\r" || ch === "\x03" || ch === "\x15") n = 0;
+      else if (ch === "\x7f" || ch === "\b") n = Math.max(0, n - 1);
+      else if (ch === "\n") n += 1; // Ctrl+J：在输入框里换行，不提交
+      else if (ch < " ") continue;
+      else n += 1;
+    }
   }
   return n;
 }
