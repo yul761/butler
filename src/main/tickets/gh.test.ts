@@ -67,6 +67,17 @@ describe("checksOf / ciOf", () => {
     expect(checksOf(null)).toEqual([]);
   });
 
+  it("a finished check with an unrecognised conclusion counts as passing", () => {
+    // 不然 CI 永远停在 pending：结论永远出不来，仓库一直按 1 分钟查。
+    const checks = checksOf([
+      { __typename: "CheckRun", name: "stale", status: "COMPLETED", conclusion: "STALE" },
+      { __typename: "CheckRun", name: "blank", status: "COMPLETED", conclusion: "" },
+      { __typename: "CheckRun", name: "future", status: "completed", conclusion: "something_new" },
+      { __typename: "CheckRun", name: "bad", status: "completed", conclusion: "timed_out" },
+    ]);
+    expect(checks.map((c) => c.state)).toEqual(["passing", "passing", "passing", "failing"]);
+  });
+
   it("ciOf prefers failing over pending", () => {
     const c = (state: "pending" | "passing" | "failing") => ({ name: "x", state, runId: null });
     expect(ciOf([c("passing"), c("pending"), c("failing")])).toBe("failing");

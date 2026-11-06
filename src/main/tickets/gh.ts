@@ -51,20 +51,20 @@ export interface BranchRuns {
   ci: CiState;
 }
 
-const PASSING = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 const FAILING = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
 
 function str(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
-/** status/conclusion 换算成检查状态；真实输出里 pr view 是大写、run list 是小写，统一转大写比较。 */
+/**
+ * status/conclusion 换算成检查状态；真实输出里 pr view 是大写、run list 是小写，统一转大写比较。
+ * 已结束的检查只有失败类结论算失败，其余（SUCCESS、NEUTRAL、SKIPPED，以及 STALE、空、以后新加的）都算通过：
+ * 不能算 pending，不然 CI 永远出不了结论。
+ */
 function runState(status: unknown, conclusion: unknown): CiCheck["state"] {
   if (str(status).toUpperCase() !== "COMPLETED") return "pending";
-  const c = str(conclusion).toUpperCase();
-  if (PASSING.has(c)) return "passing";
-  if (FAILING.has(c)) return "failing";
-  return "pending";
+  return FAILING.has(str(conclusion).toUpperCase()) ? "failing" : "passing";
 }
 
 function runIdOf(url: unknown): number | null {
