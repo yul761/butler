@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakePtyFactory } from "../test-utils";
-import { BUFFER_LIMIT, permissionPromptShowing, PtyManager, trimBuffer } from "./pty-manager";
+import { BUFFER_LIMIT, nextDraftLength, permissionPromptShowing, PtyManager, trimBuffer } from "./pty-manager";
 
 function setup() {
   const { factory, spawned } = fakePtyFactory();
@@ -320,5 +320,47 @@ describe("permissionPromptShowing", () => {
   it("普通输出不算，只看尾部", () => {
     expect(permissionPromptShowing("building...\n")).toBe(false);
     expect(permissionPromptShowing("Do you want to proceed?" + "x".repeat(5000))).toBe(false);
+  });
+});
+
+describe("nextDraftLength", () => {
+  it("typed text without enter is a draft", () => {
+    expect(nextDraftLength(0, "hel")).toBe(3);
+  });
+  it("enter clears the draft", () => {
+    expect(nextDraftLength(3, "lo\r")).toBe(0);
+  });
+  it("backspace and ctrl-u shrink or clear it", () => {
+    expect(nextDraftLength(2, "\x7f")).toBe(1);
+    expect(nextDraftLength(0, "\x7f")).toBe(0);
+    expect(nextDraftLength(5, "\x15")).toBe(0);
+    expect(nextDraftLength(5, "\x03")).toBe(0);
+  });
+  it("escape sequences are not a draft", () => {
+    expect(nextDraftLength(0, "\x1b[<64;10;5M\x1b[A\x1b[I\x1bOA")).toBe(0);
+  });
+  it("pasted text counts", () => {
+    expect(nextDraftLength(0, "\x1b[200~abc\x1b[201~")).toBe(3);
+  });
+});
+
+describe("PtyManager.hasDraft", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("follows write and prefill, and is false for unknown terminals", async () => {
+    const { mgr, spawned } = setup();
+    expect(mgr.hasDraft("nope")).toBe(false);
+    mgr.open("t1", spec, opts);
+    expect(mgr.hasDraft("t1")).toBe(false);
+    mgr.write("t1", "ab");
+    expect(mgr.hasDraft("t1")).toBe(true);
+    mgr.write("t1", "\r");
+    expect(mgr.hasDraft("t1")).toBe(false);
+    spawned[0].pty.emit("ready");
+    const p = mgr.prefill("t1", "继续", 800, 5000);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await p).toBe(true);
+    expect(mgr.hasDraft("t1")).toBe(true);
   });
 });

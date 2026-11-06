@@ -34,12 +34,33 @@ interface Term {
   started: boolean;
   /** 用户上一次往这个终端写东西（渲染进程的按键，经 write）的时间；0 = 还没有。deliver、prefill 自己的写入不算。 */
   lastUserInputAt: number;
+  /** 输入框里还没发出去的可见字符数（见 nextDraftLength）；0 = 没有草稿。 */
+  draftLen: number;
 }
 
 /** 终端输出去掉 ANSI 控制序列后的纯文本（只用来认对话框）。 */
 export function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
   return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g, "");
+}
+
+/**
+ * 输入框草稿长度的下一个值：current 是之前的长度，data 是这次写进终端的字节。
+ * 鼠标上报、焦点事件、方向键等 ESC 序列不算；bracketed paste 的标记去掉但内容计入；
+ * 回车、Ctrl+C、Ctrl+U 清零，退格减 1，其他控制字符忽略，可见字符加 1。
+ */
+export function nextDraftLength(current: number, data: string): number {
+  let n = current;
+  // CSI 参数含 <（SGR 鼠标上报），SS3 带一个字符（\x1bOA），所以不直接用 stripAnsi；其余形状同它。
+  // eslint-disable-next-line no-control-regex
+  const text = data.replace(/\x1b\[20[01]~/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bO.|\x1b[@-Z\\-_]/g, "");
+  for (const ch of text) {
+    if (ch === "\r" || ch === "\n" || ch === "\x03" || ch === "\x15") n = 0;
+    else if (ch === "\x7f" || ch === "\b") n = Math.max(0, n - 1);
+    else if (ch < " ") continue;
+    else n += 1;
+  }
+  return n;
 }
 
 /**
@@ -146,7 +167,7 @@ export class PtyManager {
     if (this.terms.has(termId)) throw new Error(`terminal ${termId} already open`);
     this.exited.delete(termId);
     const proc = this.factory(spec.file, spec.args, { cwd: opts.cwd, env: opts.env, cols: opts.cols ?? 120, rows: opts.rows ?? 32 });
-    const term: Term = { proc, buffer: "", cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0 };
+    const term: Term = { proc, buffer: "", cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draftLen: 0 };
     this.terms.set(termId, term);
     proc.onData((data) => {
       // ConPTY 在进程退出后还可能吐出尾部数据；退出后一律丢弃，否则渲染进程会以为终端被重新打开而清掉退出提示。
@@ -189,8 +210,16 @@ export class PtyManager {
   /** 用户的输入（渲染进程的按键）。 */
   write(termId: string, data: string): void {
     const t = this.terms.get(termId);
-    if (t) t.lastUserInputAt = this.now();
+    if (t) {
+      t.lastUserInputAt = this.now();
+      t.draftLen = nextDraftLength(t.draftLen, data);
+    }
     this.guard(termId, "write", () => t?.proc.write(data));
+  }
+
+  /** 用户最后一次回车之后有没有打过可见字符（还没发出去）。Butler 的 prefill 也算草稿；deliver 不算。终端不在了返回 false。 */
+  hasDraft(termId: string): boolean {
+    return (this.terms.get(termId)?.draftLen ?? 0) > 0;
   }
 
   /** 用户上一次在这个终端里输入的时间；没输入过、终端不在了返回 0。往里贴通知前看它，免得把用户打了一半的话一起提交。 */
@@ -270,6 +299,7 @@ export class PtyManager {
       const now = this.now();
       if (t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs) {
         this.guard(termId, "prefill write", () => t.proc.write(text));
+        t.draftLen = nextDraftLength(t.draftLen, text);
         return true;
       }
       if (now - start >= timeoutMs) return false;
