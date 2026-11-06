@@ -2,11 +2,38 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { inboxDir } from "../../../hook/butler-hook";
-import { claudeArgs, cmdShimSafe, headlessEnv, sessionEnv } from "./spawn";
+import { AUTO_COMPACT_WINDOW_DEFAULT, SUBAGENT_MODEL_DEFAULT, claudeArgs, cmdShimSafe, headlessEnv, sessionEnv } from "./spawn";
 
 describe("claude spawn helpers", () => {
   it("adds the guide file after the other flags", () => {
     expect(claudeArgs({ mode: "new", sessionId: "u1", settingsPath: "/s.json", guidePath: "/g.md" })).toEqual(["--session-id", "u1", "--settings", "/s.json", "--append-system-prompt-file", "/g.md"]);
+  });
+
+  it("adds --model last when given, and not for null or undefined", () => {
+    expect(claudeArgs({ mode: "new", sessionId: "s", model: "sonnet" })).toEqual(expect.arrayContaining(["--model", "sonnet"]));
+    expect(claudeArgs({ mode: "new", sessionId: "s", guidePath: "/g.md", model: "opus" }).slice(-2)).toEqual(["--model", "opus"]);
+    expect(claudeArgs({ mode: "resume", sessionId: "s", model: null })).toEqual(["--resume", "s"]);
+    expect(claudeArgs({ mode: "new", sessionId: "s" })).not.toContain("--model");
+  });
+
+  it("sets the subagent model and compact window by default", () => {
+    const e = sessionEnv({}, { pathValue: "", sessionId: "s" });
+    expect(e.CLAUDE_CODE_SUBAGENT_MODEL).toBe(SUBAGENT_MODEL_DEFAULT);
+    expect(e.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe(AUTO_COMPACT_WINDOW_DEFAULT);
+    expect(e.CLAUDE_CODE_SUBAGENT_MODEL).toBe("sonnet");
+    expect(e.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("250000");
+  });
+
+  it("keeps the user's own subagent model and compact window", () => {
+    const e = sessionEnv({ CLAUDE_CODE_SUBAGENT_MODEL: "opus", CLAUDE_CODE_AUTO_COMPACT_WINDOW: "400000" }, { pathValue: "", sessionId: "s" });
+    expect(e.CLAUDE_CODE_SUBAGENT_MODEL).toBe("opus");
+    expect(e.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("400000");
+  });
+
+  it("headlessEnv does not add them", () => {
+    const e = headlessEnv({}, { pathValue: "", runId: "r" });
+    expect(e.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
+    expect(e.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
   });
 
   it("builds new and resume args", () => {
@@ -20,7 +47,7 @@ describe("claude spawn helpers", () => {
       { Path: "C:\\old", HOME: "/h", ELECTRON_RUN_AS_NODE: "1", CLAUDECODE: "1", EMPTY: undefined },
       { pathValue: "C:\\new", ticketKey: "PROJ-1", sessionId: "u1" },
     );
-    expect(env).toEqual({ Path: "C:\\new", HOME: "/h", TERM: "xterm-256color", COLORTERM: "truecolor", BUTLER_TICKET: "PROJ-1", BUTLER_SESSION: "u1" });
+    expect(env).toEqual({ Path: "C:\\new", HOME: "/h", TERM: "xterm-256color", COLORTERM: "truecolor", BUTLER_TICKET: "PROJ-1", BUTLER_SESSION: "u1", CLAUDE_CODE_SUBAGENT_MODEL: "sonnet", CLAUDE_CODE_AUTO_COMPACT_WINDOW: "250000" });
   });
 
   it("drops the parent Claude Code session's markers but keeps user configuration", () => {
@@ -41,7 +68,7 @@ describe("claude spawn helpers", () => {
       },
       { pathValue: "", ticketKey: "T-1", sessionId: "u" },
     );
-    expect(Object.keys(env).filter((k) => k.startsWith("CLAUDE"))).toEqual(["CLAUDE_CODE_USE_BEDROCK"]);
+    expect(Object.keys(env).filter((k) => k.startsWith("CLAUDE") && k !== "CLAUDE_CODE_SUBAGENT_MODEL" && k !== "CLAUDE_CODE_AUTO_COMPACT_WINDOW")).toEqual(["CLAUDE_CODE_USE_BEDROCK"]);
     expect(env.ANTHROPIC_MODEL).toBe("m");
   });
 
