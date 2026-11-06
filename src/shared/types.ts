@@ -422,3 +422,64 @@ export interface WatchedPr {
   headSha: string | null;
   checkedAt: number;
 }
+
+/** 「现在」页一行点开去哪：ticket 页、feature 页或 epic 页，sessionId 是要切到的终端（null：页面自己选）。 */
+export type NowTarget =
+  | { page: "ticket"; key: string; sessionId: string | null }
+  | { page: "feature"; id: number; sessionId: string | null }
+  | { page: "epic"; id: number; sessionId: string | null };
+
+/** 「现在」页的一行：一个开着终端的 Butler session，或者一个没有开着的 session、但有开着的 PR 的 ticket。 */
+export interface NowRow {
+  /** 没有开着的 session、只有 PR 的行为 null。 */
+  sessionId: string | null;
+  ticketKey: string | null;
+  title: string | null;
+  /** 一个 ticket 开了几个仓库的 session 时才填（仓库目录名）。 */
+  repo: string | null;
+  coordinator: boolean;
+  activity: SessionActivity | null;
+  /** 这个 session 在合并总控的等待名单里。 */
+  mergeQueued: boolean;
+  /** 需要你的理由：卡住时是卡住的 reason；停在确认上时是固定文案；不需要为 null。 */
+  needsYou: string | null;
+  prs: WatchedPr[];
+  /** 停着、不需要你、没有开着的 PR / CI：默认折起来。 */
+  idle: boolean;
+  /** 这个状态从什么时候开始（activity.startedAt，没有就用 session 的 lastActivityAt）。 */
+  since: number | null;
+  target: NowTarget;
+}
+
+/** 一组的汇总：进行中（不空闲）的行数、需要你的行数、卡住的行数。 */
+export interface NowCounts {
+  active: number;
+  needsYou: number;
+  stuck: number;
+}
+
+/** id 为 null：不属于任何 feature 的 ticket（name 为空串，界面上显示自己的文案）。 */
+export interface NowFeature {
+  id: number | null;
+  name: string;
+  rows: NowRow[];
+  counts: NowCounts;
+}
+
+/** id 为 null：「无 epic」这一组（name 为空串，界面上显示自己的文案）。rows 是 epic 总控的行。 */
+export interface NowEpic {
+  id: number | null;
+  name: string;
+  rows: NowRow[];
+  features: NowFeature[];
+  counts: NowCounts;
+}
+
+export interface NowView {
+  /** 全部需要你的行，按 since 从早到晚。 */
+  needsYou: NowRow[];
+  epics: NowEpic[];
+  /** 开着终端的 Butler session 数。 */
+  running: number;
+  merges: MergeEvent[];
+}
