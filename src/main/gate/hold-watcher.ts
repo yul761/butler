@@ -33,6 +33,8 @@ export interface HoldWatcherDeps {
   isOpen(sessionId: string): boolean;
   /** 现在能不能往这个 session 的终端里贴：停着等输入、用户没在打字、没有草稿……（所有自动输入共用一个）。 */
   guard: Pick<DeliveryGuard, "check">;
+  /** Stop 到的时候先重读这个 session 的活动：guard 看的活动是上一次刷新的，那时它多半还在忙。 */
+  refreshActivity?: (sessionId: string) => Promise<void>;
   deliver(sessionId: string, text: string): Promise<"sent" | "exited" | "timeout">;
   /** 和 MergeGate 用同一个函数。 */
   whoOf(ticketKey: string | null, branch: string): string;
@@ -67,6 +69,12 @@ export class HoldWatcher {
    * 不只发给 sessionId：Butler 重开过的终端用的是链上最新的 id，和等待者记下的 BUTLER_SESSION 可能对不上。
    */
   async sessionIdle(sessionId: string): Promise<void> {
+    try {
+      await this.d.refreshActivity?.(sessionId);
+    } catch (e) {
+      // 读不到就用上一次的活动：最坏是等下一轮检查再发。
+      this.d.log(`merge gate: re-reading the activity of ${sessionId} failed`, e);
+    }
     try {
       await this.sendNotices();
     } catch (e) {

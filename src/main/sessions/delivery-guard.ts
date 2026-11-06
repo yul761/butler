@@ -35,9 +35,7 @@ export class DeliveryGuard {
     const termId = this.d.termOf(sessionId);
     if (termId === null) return { ok: false, block: "closed" };
     const head = this.d.head(termId);
-    // 活动还没读到（终端刚打开、还没轮到）也算忙：不知道它在干什么就不打断。
-    const kind = head ? this.d.activity(head.id)?.kind : undefined;
-    if (!head || head.waitingForInput !== true || (kind !== "waiting" && kind !== "idle")) return { ok: false, block: "busy" };
+    if (!head || !this.quiet(head)) return { ok: false, block: "busy" };
     if (this.d.pty.screenNeedsUser(termId)) return { ok: false, block: "screen" };
     if (this.d.needsYou?.(head.id)) return { ok: false, block: "needs_you" };
     const typed = this.d.pty.lastUserInputAt(termId);
@@ -45,5 +43,15 @@ export class DeliveryGuard {
     // 草稿不看时间：用户打了一半去干别的，过多久回车都会把通知和草稿一起提交。
     if (this.d.pty.hasDraft(termId)) return { ok: false, block: "draft" };
     return { ok: true, termId, headId: head.id };
+  }
+
+  /**
+   * 停着等输入，并且活动是 waiting / idle；只剩后台任务在跑（这一轮已经结束，活动显示的是后台命令）也算停着。
+   * 活动还没读到（终端刚打开、还没轮到）算忙：不知道它在干什么就不打断。
+   */
+  private quiet(head: Session): boolean {
+    if (head.waitingForInput !== true) return false;
+    const a = this.d.activity(head.id);
+    return a !== null && (a.background || a.kind === "waiting" || a.kind === "idle");
   }
 }

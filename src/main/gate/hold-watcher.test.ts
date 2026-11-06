@@ -30,12 +30,13 @@ interface Opts {
   open?: boolean;
   waiting?: boolean;
   deliver?: () => Promise<"sent" | "exited" | "timeout">;
+  refreshActivity?: HoldWatcherDeps["refreshActivity"];
 }
 
 function setup(o: Opts = {}) {
   const db = o.db ?? memDb();
   if (!o.db) seed(db);
-  const state = { now: 0, open: o.open ?? true, waiting: o.waiting ?? true, typedAt: 0, draft: false };
+  const state = { now: 0, open: o.open ?? true, waiting: o.waiting ?? true, typedAt: 0, draft: false, activity: "waiting" as SessionActivity["kind"] };
   const repo = new MergeGateRepo(db);
   const prInfo = vi.fn(async () => (o.pr ? o.pr() : null));
   const git = {
@@ -49,7 +50,7 @@ function setup(o: Opts = {}) {
   const guard = new DeliveryGuard({
     termOf: (id) => (state.open ? id : null),
     head: (id) => ({ id, waitingForInput: state.waiting }) as Session,
-    activity: () => ({ kind: "waiting" }) as SessionActivity,
+    activity: () => ({ kind: state.activity, background: false }) as SessionActivity,
     pty: { lastUserInputAt: () => state.typedAt, screenNeedsUser: () => false, hasDraft: () => state.draft },
     now: () => state.now,
   });
@@ -57,6 +58,7 @@ function setup(o: Opts = {}) {
     repo, prInfo, git,
     isOpen: () => state.open,
     guard,
+    refreshActivity: o.refreshActivity,
     deliver,
     whoOf: who,
     now: () => state.now,
@@ -117,6 +119,35 @@ describe("HoldWatcher: PR holds", () => {
     expect(t.deliver).toHaveBeenCalledTimes(1);
     await t.watcher.check();
     await t.watcher.sessionIdle("s-wait");
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads the activity on Stop, so a session last seen thinking is told right away", async () => {
+    const refreshed: string[] = [];
+    const t = setup({
+      pr: () => pr("MERGED"),
+      refreshActivity: async (id) => {
+        refreshed.push(id);
+        t.state.activity = "waiting";
+      },
+    });
+    // 上一次活动刷新时它还在想：这一轮的检查不发。
+    t.state.activity = "thinking";
+    await t.watcher.check();
+    expect(t.deliver).not.toHaveBeenCalled();
+    // Stop 到了：先重读活动，再发。
+    await t.watcher.sessionIdle("s-wait");
+    expect(refreshed).toEqual(["s-wait"]);
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+    expect(t.repo.pendingNotices()).toEqual([]);
+  });
+
+  it("still goes through the notices on Stop when re-reading the activity fails", async () => {
+    const t = setup({ pr: () => pr("MERGED"), waiting: false, refreshActivity: async () => Promise.reject(new Error("disk")) });
+    await t.watcher.check();
+    t.state.waiting = true;
+    await t.watcher.sessionIdle("s-wait");
+    expect(t.logs.some((l) => l.includes("s-wait"))).toBe(true);
     expect(t.deliver).toHaveBeenCalledTimes(1);
   });
 

@@ -8,8 +8,8 @@ const session = (o: Partial<Session> = {}): Session => ({
   waitingForInput: true, replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null,
   featureId: null, fixesSession: null, epicId: null, ...o,
 });
-const activity = (kind: SessionActivity["kind"]): SessionActivity => ({
-  sessionId: "s-head", kind, detail: null, background: false, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, lastOutput: [],
+const activity = (kind: SessionActivity["kind"], background = false): SessionActivity => ({
+  sessionId: "s-head", kind, detail: null, background, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, lastOutput: [],
 });
 
 /** 一切都安静：s-old 是链上的旧 id，它的终端 t-1 跑着 head s-head，停着等输入。 */
@@ -95,6 +95,15 @@ describe("DeliveryGuard", () => {
     expect(t.check()).toEqual({ ok: false, block: "busy" });
     t.state.activity = activity("waiting");
     t.state.head = null;
+    expect(t.check()).toEqual({ ok: false, block: "busy" });
+  });
+
+  it("counts a session waiting for input with only a background task running as quiet", () => {
+    const t = setup();
+    t.state.activity = activity("push", true);
+    expect(t.check()).toEqual({ ok: true, termId: "t-1", headId: "s-head" });
+    // 后台任务在跑、但这一轮还没结束：仍然是忙。
+    t.state.head = session({ waitingForInput: false });
     expect(t.check()).toEqual({ ok: false, block: "busy" });
   });
 

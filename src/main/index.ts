@@ -782,6 +782,11 @@ async function bootstrap(): Promise<void> {
     repo: gateRepo, prInfo, git,
     isOpen: (id) => gateTerm(id) !== null,
     guard: deliveryGuard,
+    // 活动按 head 的 id 跟踪；Stop 带来的可能是链上的旧 id。
+    refreshActivity: async (id) => {
+      const head = sessions.head(id)?.id;
+      if (head) await activityMonitor.refreshSession(head);
+    },
     // 最多等 1 分钟：session 是停着的，输入框应该很快就绪；等不到下一轮再发。
     deliver: async (id, text) => {
       const t = gateTerm(id);

@@ -379,6 +379,46 @@ describe("ActivityMonitor activity", () => {
     expect(h.notifications()).toBe(1);
   });
 
+  it("refreshSession re-reads one session now and notifies when its activity changed", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.openSession("s2");
+    h.busy("s1");
+    h.busy("s2");
+    await h.beat();
+    expect(h.notifications()).toBe(1);
+    h.transcript("s1", toolResult("s1-t"), endTurn());
+    h.transcript("s2", toolResult("s2-t"), endTurn());
+    await h.monitor.refreshSession("s1");
+    expect(h.monitor.get("s1")?.kind).toBe("waiting");
+    // 只读了 s1。
+    expect(h.monitor.get("s2")?.kind).toBe("command");
+    expect(h.notifications()).toBe(2);
+    await h.monitor.refreshSession("s1");
+    expect(h.notifications()).toBe(2);
+  });
+
+  it("refreshSession does nothing for a session it does not track", async () => {
+    const h = harness();
+    h.openSession("s1");
+    await h.monitor.refreshSession("s1");
+    expect(h.monitor.get("s1")).toBeNull();
+    expect(h.notifications()).toBe(0);
+  });
+
+  it("refreshSession and a tick at the same time read the new part of the transcript once", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.transcript("s1", toolUse("t1", "Edit", { file_path: "/a/foo.ts" }));
+    await h.beat();
+    h.transcript("s1", toolResult("t1"));
+    await Promise.all([h.monitor.refreshSession("s1"), h.beat()]);
+    // 同一段读了两遍的话读到的位置会多走一段，接下来这条长的就从半中间读起、整条丢掉。
+    h.transcript("s1", toolUse("t2", "Edit", { file_path: `/a/${"x".repeat(2000)}.ts` }));
+    await h.beat();
+    expect(h.monitor.get("s1")).toMatchObject({ kind: "edit", detail: `${"x".repeat(2000)}.ts` });
+  });
+
   it("forgets a session whose terminal exited", async () => {
     const h = harness();
     h.openSession("s1");

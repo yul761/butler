@@ -157,6 +157,8 @@ export class ActivityMonitor {
   /** 可疑、等着空出名额去判断的 session。 */
   private readonly wanted = new Set<string>();
   private readonly judging = new Set<string>();
+  /** 每个 session 正在做的那次更新：tick 和 refreshSession 撞上时排队，同一段 transcript 不能读两遍（读到的位置会多走）。 */
+  private readonly updating = new Map<string, Promise<boolean>>();
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
   private stopped = false;
@@ -200,6 +202,24 @@ export class ActivityMonitor {
     return this.tracked.get(sessionId)?.activity ?? null;
   }
 
+  /**
+   * 现在就重读这一个 session（和 tick 走同一条更新路径），活动变了就 notify。Stop 到的时候用：get() 是上一次 tick 的结果，
+   * 那时它多半还在想或者在跑工具。没在跟踪（还没 tick 到、终端关了、/clear 换了 head）就什么也不做，留给下一次 tick。
+   */
+  async refreshSession(sessionId: string): Promise<void> {
+    const t = this.tracked.get(sessionId);
+    if (!t || this.stopped) return;
+    const head = this.d.sessions.head(t.termId);
+    if (head?.id !== sessionId || !this.d.pty.openIds().includes(t.termId)) return;
+    try {
+      // 排队期间 tick 可能已经把它忘了（终端退出）：那就不再读，免得又把它加回来。
+      const changed = await this.serialUpdate(sessionId, () => (this.tracked.has(sessionId) ? this.update(head, t.termId, this.d.now()) : Promise.resolve(false)));
+      if (changed && !this.stopped) this.d.notify();
+    } catch (e) {
+      this.d.log?.(`activity of session ${sessionId} failed`, e);
+    }
+  }
+
   /** 当前命令输出的末尾，最多 4096 字节（不切开 UTF-8 字符）；读不到返回 ""。 */
   async output(sessionId: string): Promise<string> {
     return utf8Tail(this.tracked.get(sessionId)?.outputText ?? "", ACTIVITY_OUTPUT_LIMIT);
@@ -240,12 +260,24 @@ export class ActivityMonitor {
       // 读文件的时候可能开始退出了，数据库随后就关
       if (this.stopped) return false;
       try {
-        if (await this.update(head, termId, now)) changed = true;
+        if (await this.serialUpdate(head.id, () => this.update(head, termId, now))) changed = true;
       } catch (e) {
         this.d.log?.(`activity of session ${head.id} failed`, e);
       }
     }
     return changed;
+  }
+
+  /** 同一个 session 的更新一个接一个做。 */
+  private serialUpdate(id: string, run: () => Promise<boolean>): Promise<boolean> {
+    const prev = this.updating.get(id);
+    const next = prev ? prev.then(run, run) : run();
+    this.updating.set(id, next);
+    const clear = () => {
+      if (this.updating.get(id) === next) this.updating.delete(id);
+    };
+    next.then(clear, clear);
+    return next;
   }
 
   private async update(head: Session, termId: string, now: number): Promise<boolean> {
