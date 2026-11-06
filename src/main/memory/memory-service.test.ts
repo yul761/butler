@@ -16,7 +16,7 @@ import { chatReply, gatewayHarness, type GatewayHarness } from "../gateway/testi
 import { epicScope, featureScope } from "../../shared/memory";
 import type { EpicFeatureRow } from "../../shared/types";
 import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
-import { EPIC_HANDOFF_MAX_CHARS, EPIC_PROGRESS_MAX_CHARS, renderEpicHandoff } from "../epics/epic-info";
+import { carriedEpicPlan, carriedEpicProgress, EPIC_HANDOFF_MAX_CHARS, EPIC_PROGRESS_MAX_CHARS, renderEpicHandoff } from "../epics/epic-info";
 import { setLang } from "../i18n";
 import { insertTicket, memDb, tempDir } from "../test-utils";
 import { handoffSummary, MemoryService, nightlyDistill } from "./memory-service";
@@ -236,6 +236,16 @@ describe("MemoryService.syncEpic (design 2026-11-01, epic handoff)", () => {
     expect((await handoffOf(t))?.content).toContain("支付");
   });
 
+  it("syncAll queues the epics first, so a legacy epic migrates before its session can write a progress handoff", async () => {
+    const t = setup();
+    t.legacyEpic();
+    t.setEpicRows([row()]);
+    t.addSummary(summary(), 3);
+    await t.memory.syncAll();
+    expect(t.synced[0]).toBe(scope);
+    expect(t.synced).toEqual(expect.arrayContaining(["PROJ-1", "PROJ-2", featureScope(3)]));
+  });
+
   it("does nothing when memory is off or the epic does not exist", async () => {
     const off = setup({ enabled: false });
     off.setEpicRows([row()]);
@@ -414,6 +424,28 @@ describe("MemoryService.syncEpic (design 2026-11-01, epic handoff)", () => {
       await t.memory.syncEpic(1);
       expect(await handoffOf(t)).toEqual(first);
       expect(t.logs.filter((l) => l.includes("cut"))).toHaveLength(1);
+    });
+
+    it("round-trips a full plan, a full progress and several features through StateCore intact", async () => {
+      const t = setup();
+      const rows = Array.from({ length: 6 }, (_, i) => row({ id: i + 1, name: `F${i + 1}`, summaryAt: i + 1, summary: `${"进".repeat(800)}#${i + 1}` }));
+      t.setEpicRows(rows);
+      const plan = `${"规".repeat(EPIC_PLAN_MAX_CHARS - 1)}尾`;
+      const progress = `${"度".repeat(EPIC_PROGRESS_MAX_CHARS - 1)}尾`;
+      expect(plan).toHaveLength(EPIC_PLAN_MAX_CHARS);
+      expect(progress).toHaveLength(EPIC_PROGRESS_MAX_CHARS);
+      t.epics.setPlan(1, plan, 5);
+      await sessionWrites(t, { summary: progress });
+      await t.memory.syncEpic(1);
+      const first = await handoffOf(t);
+      const content = first?.content ?? "";
+      expect(carriedEpicPlan(content)).toBe(plan);
+      expect(carriedEpicProgress(content)).toBe(progress);
+      expect(content).toContain("## F6\n");
+      expect(t.logs.filter((l) => l.includes("cut"))).toEqual([]);
+      // 再同步一次：读回来的和写进去的一字不差，不多写一个版本。
+      await t.memory.syncEpic(1);
+      expect(await handoffOf(t)).toEqual(first);
     });
 
     it("survives the last feature leaving, and does not take Butler's empty text for progress", async () => {

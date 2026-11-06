@@ -231,6 +231,21 @@ describe("the epic session's own handoff inside the rendered text", () => {
 });
 
 describe("the epic session's progress inside the rendered text (plan 16)", () => {
+  it("labels the progress section in the language asked, keeps the label out of the progress, and leaves the plan section as it was", () => {
+    const zh = renderEpicHandoff([row(1)], "zh", "先做支付", "做到第二步");
+    const en = renderEpicHandoff([row(1)], "en", "先做支付", "做到第二步");
+    expect(zh).toContain("epic 总控的进度");
+    expect(en).toContain("Epic coordinator progress");
+    for (const out of [zh, en]) expect(carriedEpicProgress(out)).toBe("做到第二步");
+    // 规划那一段和计划 16 之前一字不差，标签只在进度那一段里。
+    const before = renderEpicHandoff([row(1)], "zh", "先做支付");
+    expect(zh.startsWith(before.slice(0, before.indexOf("## F1")).trimEnd())).toBe(true);
+    expect(before).not.toContain("epic 总控的进度");
+    // epic session 自己的进度恰好以标签开头：只去掉 Butler 加的那一个，读回来一字不差。
+    const echoed = "epic 总控的进度\n做到第二步";
+    expect(carriedEpicProgress(renderEpicHandoff([row(1)], "zh", null, echoed))).toBe(echoed);
+  });
+
   it("takes a handoff that is not Butler's as the progress, whole, and tells it apart from Butler's own", () => {
     expect(carriedEpicProgress("  做到第二步\nNext steps:\n- 拆 ticket\n")).toBe("做到第二步\nNext steps:\n- 拆 ticket");
     expect(renderedByButler("做到第二步")).toBe(false);
@@ -268,6 +283,10 @@ describe("the epic session's progress inside the rendered text (plan 16)", () =>
     let out = once;
     for (let i = 0; i < 3; i++) out = renderEpicHandoff([row(1)], "zh", carriedEpicPlan(out), carriedEpicProgress(out));
     expect(out).toBe(once);
+    // 换语言：标签跟着换，进度本身不变，也不会把标签带进进度里。
+    const en = renderEpicHandoff([row(1)], "en", carriedEpicPlan(once), carriedEpicProgress(once));
+    expect(carriedEpicProgress(en)).toBe(carriedEpicProgress(once));
+    expect(renderEpicHandoff([row(1)], "zh", carriedEpicPlan(en), carriedEpicProgress(en))).toBe(once);
     // feature 里写着像进度那段的开头，也不会被认成进度。
     const tag = renderEpicHandoff([], "zh", null, "x").split("\n")[2];
     expect(carriedEpicProgress(renderEpicHandoff([row(1, { summary: tag })], "zh"))).toBeNull();

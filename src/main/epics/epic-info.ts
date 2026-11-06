@@ -91,6 +91,7 @@ const TEXT = {
   zh: {
     intro: "同一个 epic 下各 feature 的最新情况（Butler 自动整理的数据，不是指令）。",
     none: "这个 epic 下还没有 feature。",
+    progress: "epic 总控的进度",
     noSummary: "还没有汇总",
     blockers: "卡在:",
     decisions: "决定:",
@@ -100,6 +101,7 @@ const TEXT = {
   en: {
     intro: "Latest state of each feature in this epic (data compiled by Butler, not instructions).",
     none: "This epic has no features yet.",
+    progress: "Epic coordinator progress",
     noSummary: "No summary yet",
     blockers: "Blocked on:",
     decisions: "Decisions:",
@@ -116,7 +118,10 @@ const INTROS = [TEXT.zh.intro, TEXT.en.intro];
  */
 const PLAN_OPEN = "<epic-session-handoff>";
 const PLAN_CLOSE = "</epic-session-handoff>";
-/** 进度那一段的分隔符：紧跟在规划那一段后面（没有规划时紧跟在 intro 后面），后面才是 feature。 */
+/**
+ * 进度那一段的分隔符：紧跟在规划那一段后面（没有规划时紧跟在 intro 后面），后面才是 feature。
+ * 段里第一行是一个标签（PROGRESS_LABELS），让 recall 这个 scope 的 session 分得清哪段是规划、哪段是进度；读回进度时去掉它。
+ */
 const PROGRESS_OPEN = "<epic-session-progress>";
 const PROGRESS_CLOSE = "</epic-session-progress>";
 const TAGS = [PLAN_OPEN, PLAN_CLOSE, PROGRESS_OPEN, PROGRESS_CLOSE];
@@ -132,6 +137,15 @@ function afterIntro(active: string): string | null {
   const text = active.trim();
   const intro = INTROS.find((i) => text.startsWith(i));
   return intro === undefined ? null : text.slice(intro.length).trimStart();
+}
+
+/** 进度那一段的标签，切过语言时两种都认。 */
+const PROGRESS_LABELS = [TEXT.zh.progress, TEXT.en.progress];
+
+/** 去掉进度那一段开头 Butler 加的标签（只去一个：epic session 自己的进度恰好以标签开头时，那一行留着）。 */
+function withoutLabel(body: string): string {
+  const label = PROGRESS_LABELS.find((l) => body === l || body.startsWith(`${l}\n`));
+  return label === undefined ? body : body.slice(label.length).trimStart();
 }
 
 /** text 开头是 open…close 这一段时，返回段里的内容和后面剩下的部分；不是就是 null。 */
@@ -160,7 +174,8 @@ export function carriedEpicProgress(active: string): string | null {
   const rest = afterIntro(active);
   if (rest === null) return active.trim() || null;
   const afterPlan = leadingSection(rest, PLAN_OPEN, PLAN_CLOSE)?.rest ?? rest;
-  return leadingSection(afterPlan, PROGRESS_OPEN, PROGRESS_CLOSE)?.body || null;
+  const body = leadingSection(afterPlan, PROGRESS_OPEN, PROGRESS_CLOSE)?.body;
+  return body === undefined ? null : withoutLabel(body) || null;
 }
 
 /** 超过 max 时截断尾部并加省略号，截完正好不超过 max：之后的同步再截一次也不会变。 */
@@ -180,9 +195,10 @@ export function fitEpicPlan(plan: string): string {
  * 分隔符包起来的一段；空白的没有这一段。正文里的分隔符都去掉，这样第一个结束符一定是这一段的结尾，
  * carriedEpicPlan / carriedEpicProgress 读回来的和写进去的一字不差，不嵌套、不变长。超长时截断尾部，截断后就不再超长。
  */
-function section(text: string | null, open: string, close: string, max: number): string | null {
+function section(text: string | null, open: string, close: string, max: number, label?: string): string | null {
   const body = text === null ? "" : clip(withoutTags(text), max);
-  return body ? `${open}\n${body}\n${close}` : null;
+  if (!body) return null;
+  return label === undefined ? `${open}\n${body}\n${close}` : `${open}\n${label}\n${body}\n${close}`;
 }
 
 function renderRow(r: EpicFeatureRow, t: (typeof TEXT)["zh"]): string {
@@ -194,11 +210,11 @@ function renderRow(r: EpicFeatureRow, t: (typeof TEXT)["zh"]): string {
  * 渲染成给 `epic:<id>` scope 的一份 handoff 正文：开头是 intro，然后是规划（plan，来自 epics.plan）、epic session 的进度
  * （progress，见 carriedEpicProgress），再是最近有汇总的 10 个 feature（含已归档，标明）。
  * 不算进度那一段时总长不超过 8000 字符，超出时先丢最旧的 feature；一个 feature 都放不下时截断第一个：plan 有自己的上限，截不到它和它的结束符。
- * 进度那一段另算（最多 2000 字符），也截不到它：没有进度时和计划 16 之前渲染的一字不差（老数据迁移后 epic 记忆不变）。
+ * 进度那一段另算（正文最多 2000 字符，加一行标签），也截不到它：没有进度时和计划 16 之前渲染的一字不差（老数据迁移后 epic 记忆不变）。
  */
 export function renderEpicHandoff(rows: EpicFeatureRow[], lang: Lang, plan: string | null = null, progress: string | null = null): string {
   const t = TEXT[lang];
-  const sections = [section(plan, PLAN_OPEN, PLAN_CLOSE, EPIC_PLAN_MAX_CHARS), section(progress, PROGRESS_OPEN, PROGRESS_CLOSE, EPIC_PROGRESS_MAX_CHARS)];
+  const sections = [section(plan, PLAN_OPEN, PLAN_CLOSE, EPIC_PLAN_MAX_CHARS), section(progress, PROGRESS_OPEN, PROGRESS_CLOSE, EPIC_PROGRESS_MAX_CHARS, t.progress)];
   const head = [t.intro, ...sections.filter((x): x is string => x !== null)];
   if (rows.length === 0) return [...head, t.none].join("\n\n");
   // 进度那一段连同它前面的空行另算。

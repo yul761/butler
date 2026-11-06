@@ -184,12 +184,15 @@ export class MemoryService {
     return p;
   }
 
-  /** 所有未归档的 ticket、feature 和 epic（启动时补齐：老数据、上次退出时没写完的）。 */
+  /**
+   * 所有未归档的 ticket、feature 和 epic（启动时补齐：老数据、上次退出时没写完的）。
+   * epic 排在最前面：升级前的老 epic 要在它的 epic session 写进度之前迁好规划（见 syncEpicNow），否则那份进度会被当成规划迁走。
+   */
   async syncAll(): Promise<void> {
     await Promise.all([
+      ...this.d.epics.list().map((e) => this.syncEpic(e.id)),
       ...this.d.tickets.list().map((t) => this.syncTicket(t.key)),
       ...this.d.features.list().map((f) => this.syncFeature(f.id)),
-      ...this.d.epics.list().map((e) => this.syncEpic(e.id)),
     ]);
   }
 
