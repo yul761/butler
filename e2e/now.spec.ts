@@ -99,7 +99,9 @@ test("a session that asks a question shows up under 需要你 and opens its term
   const badge = page.locator(".sidebar .nav.home .needs-you-badge");
   await expect(badge).toHaveText("1");
   await expect(badge).toHaveAttribute("title", S.nowNeedsYouBadge(1));
-  await expect(page.locator(".sidebar .nav.home")).toHaveAccessibleName(S.home);
+  const home = page.locator(".sidebar .nav.home");
+  await expect(home).toHaveAccessibleName(S.home);
+  await expect(home).toHaveAccessibleDescription(S.nowNeedsYouBadge(1));
   // 分组里也有这一行，标着“等你”。
   await expect(page.locator(".now-row.danger .main")).toHaveText(S.nowWaitingFor(ASK_REPLY));
 
@@ -117,6 +119,7 @@ test("a session that asks a question shows up under 需要你 and opens its term
   await expect(page.locator(".now-top")).toBeVisible();
   await expect(needs).toHaveCount(0);
   await expect(badge).toHaveCount(0);
+  await expect(home).not.toHaveAttribute("aria-describedby");
 });
 
 test("groups collapse and stay collapsed after a refresh", async ({ makeSandbox, launch }) => {

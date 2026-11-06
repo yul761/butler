@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState, type ReactNode } from "react";
 import type { MergeEvent, NowEpic, NowFeature, NowRow, NowTarget, NowView, UsageSummary } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
+import { setWizardSkipped, wizardSkipped } from "../local-prefs";
 import { mergeEventText } from "../merge-events-view";
 import { groupSummary, needsYouText, prPill, rowKey, rowPlace, rowText, usageDetails, usageLine } from "../now-view";
 import { S } from "../strings";
@@ -19,18 +20,22 @@ interface Props {
   onOpenTicket: (key: string) => void;
   /** 还没归档的 ticket：只有它们在“最近合并”里能点。 */
   liveTickets: Set<string>;
+  /** 跳过了向导的人点“继续设置”：重新打开向导。 */
+  onResumeSetup: () => void;
 }
 
 /**
  * 首页「现在」（设计文档 2026-11-06）：最上面是需要你的，下面按 epic → feature → 行排，每一层都能收起；
  * 最下面是最近合并和一行用量。只显示和跳转，数据由主进程的 buildNowView 拼好。
  */
-export function NowPage({ view, onOpen, onOpenTicket, liveTickets }: Props) {
+export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup }: Props) {
   const now = useNow();
   const usage = useUsage();
-  if (!view) return <div className="page now-page"><p className="muted">{S.loading}</p></div>;
+  const setup = <SetupSkipped onResumeSetup={onResumeSetup} />;
+  if (!view) return <div className="page now-page">{setup}<p className="muted">{S.loading}</p></div>;
   return (
     <div className="page now-page">
+      {setup}
       <header className="now-top">
         <h2>{S.nowTitle}</h2>
         <span className="muted">{S.nowRunning(view.running)}</span>
@@ -40,6 +45,28 @@ export function NowPage({ view, onOpen, onOpenTicket, liveTickets }: Props) {
       {view.epics.map((e) => <EpicBlock key={e.id ?? "none"} epic={e} now={now} onOpen={onOpen} />)}
       <RecentMerges merges={view.merges} onOpenTicket={onOpenTicket} liveTickets={liveTickets} />
       {usage && <UsageLine usage={usage} />}
+    </div>
+  );
+}
+
+/** 向导点了“稍后再说”：提醒还没设置完（和原来简报页上的一样）。“不再提示”清掉本地的跳过记号，以后都不再出现。 */
+function SetupSkipped({ onResumeSetup }: { onResumeSetup: () => void }) {
+  const [skipped, setSkipped] = useState(wizardSkipped);
+  if (!skipped) return null;
+  return (
+    <div className="notice setup-skipped">
+      <p>{S.setupSkipped}</p>
+      <div className="actions">
+        <button className="primary" onClick={onResumeSetup}>{S.resumeSetup}</button>
+        <button
+          onClick={() => {
+            setWizardSkipped(false);
+            setSkipped(false);
+          }}
+        >
+          {S.dismissForever}
+        </button>
+      </div>
     </div>
   );
 }

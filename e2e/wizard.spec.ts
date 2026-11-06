@@ -26,6 +26,21 @@ test("the wizard does not let the user continue without a working claude", async
   // 可以跳过整个向导。
   await page.getByRole("button", { name: S.wizardSkip, exact: true }).click();
   await expect(page.getByTestId("wizard")).toHaveCount(0);
+
+  // 跳过之后「现在」页顶上提醒还没设置完：“继续设置”回到向导。
+  const banner = page.locator(".now-page .setup-skipped");
+  await expect(banner.getByText(S.setupSkipped, { exact: true })).toBeVisible();
+  await banner.getByRole("button", { name: S.resumeSetup, exact: true }).click();
+  await expect(page.getByTestId("wizard")).toBeVisible();
+  await page.getByRole("button", { name: S.wizardSkip, exact: true }).click();
+  await expect(page.getByRole("heading", { name: S.nowTitle, exact: true })).toBeVisible();
+  // 跳过了第二次，提醒还在；“不再提示”之后消失，刷新、重启都不再出现。
+  await expect(banner).toBeVisible();
+  await banner.getByRole("button", { name: S.dismissForever, exact: true }).click();
+  await expect(banner).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: S.nowTitle, exact: true })).toBeVisible();
+  await expect(banner).toHaveCount(0);
 });
 
 // 计划 4 遗留（Ruling P5-PF7）：onboardingDone 写进了数据库，启动时只读一次。
@@ -37,6 +52,8 @@ test("after the wizard is finished, a relaunch goes straight to the Now page", a
   const { page } = await launch(s);
   await expect(page.getByRole("heading", { name: S.nowTitle, exact: true })).toBeVisible();
   await expect(page.getByTestId("wizard")).toHaveCount(0);
+  // 向导是走完的，不是跳过的：没有“还没设置完”的提醒。
+  await expect(page.locator(".setup-skipped")).toHaveCount(0);
 });
 
 // 计划 4 遗留（Ruling P5-PF7）：设置页的“重新运行”直接改 App 的向导状态，不用重启。

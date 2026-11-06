@@ -224,6 +224,8 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .now-usage-details ul { margin: 0; padding-left: 16px; }
 /* 侧栏「现在」后面的红点和数字：需要你的条数。 */
 .sidebar .nav.home { display: flex; align-items: center; gap: 6px; }
+/* 只给读屏的文字：看不见，但在可访问性树里。 */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .needs-you-badge { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
 .day-list { margin: 4px 0 10px; padding-left: 20px; }
 textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; width: 100%; resize: vertical; }

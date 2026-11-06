@@ -170,7 +170,7 @@ export function App() {
           />
         ) : (
           <>
-            {route.page === "home" && <NowPage view={nowView} onOpen={openTarget} onOpenTicket={(key) => openTicket(key)} liveTickets={new Set(allTickets.map((t) => t.key))} />}
+            {route.page === "home" && <NowPage view={nowView} onOpen={openTarget} onOpenTicket={(key) => openTicket(key)} liveTickets={new Set(allTickets.map((t) => t.key))} onResumeSetup={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "ticket" && current && (
               <TicketPage
                 key={current.key}

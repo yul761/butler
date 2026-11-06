@@ -24,6 +24,9 @@ interface Props {
   onKeepAwake: (on: boolean) => void;
 }
 
+/** 侧栏“现在”按钮的描述（需要你的个数）的元素 id。 */
+const NEEDS_YOU_DESC_ID = "sidebar-needs-you-count";
+
 const cls = (base: string, active: boolean) => (active ? `${base} active` : base);
 
 export function Sidebar({ tickets, features, epics, unclaimedCount, needsYouCount, route, onNavigate, onNew, onNewFeature, onNewEpic, keepAwake, onKeepAwake }: Props) {
@@ -41,13 +44,21 @@ export function Sidebar({ tickets, features, epics, unclaimedCount, needsYouCoun
   );
   return (
     <nav className="sidebar">
-      {/* 可访问名固定是“现在”：红点里的数字只是装饰（读屏看 title），不算进按钮的名字。 */}
-      <button className={cls("nav home", route.page === "home")} aria-label={S.home} onClick={() => onNavigate({ page: "home" })}>
+      {/* 可访问名固定是“现在”：红点里的数字不算进名字，读屏从 aria-describedby 指向的隐藏文字（“1 个需要你”）读到个数。 */}
+      <button
+        className={cls("nav home", route.page === "home")}
+        aria-label={S.home}
+        aria-describedby={needsYouCount > 0 ? NEEDS_YOU_DESC_ID : undefined}
+        onClick={() => onNavigate({ page: "home" })}
+      >
         {S.home}
         {needsYouCount > 0 && (
-          <span className="needs-you-badge" aria-hidden="true" title={S.nowNeedsYouBadge(needsYouCount)}>
-            {needsYouCount}
-          </span>
+          <>
+            <span className="needs-you-badge" aria-hidden="true" title={S.nowNeedsYouBadge(needsYouCount)}>
+              {needsYouCount}
+            </span>
+            <span id={NEEDS_YOU_DESC_ID} className="sr-only">{S.nowNeedsYouBadge(needsYouCount)}</span>
+          </>
         )}
       </button>
       <button className="new-ticket" onClick={onNew}>+ {S.newTicket}</button>
