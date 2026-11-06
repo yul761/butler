@@ -406,3 +406,19 @@ export interface UsageSummary {
   /** 模型 -> 折算占比；model 为 null 的记在 "unknown"。 */
   byModel: Record<string, number>;
 }
+
+/** 后台监视的一个分支的 PR / CI 状态（渲染进程也用）。 */
+export interface WatchedPr {
+  ticketKey: string;
+  repoId: number;
+  repoPath: string;
+  branch: string;
+  number: number | null;
+  url: string | null;
+  /** 没有 PR 时为 null。 */
+  state: "open" | "merged" | "closed" | null;
+  review: "pending" | "changes_requested" | "approved" | null;
+  ci: "pending" | "passing" | "failing" | "none" | "unknown";
+  headSha: string | null;
+  checkedAt: number;
+}

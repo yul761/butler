@@ -269,4 +269,22 @@ export const MIGRATIONS: string[] = [
     size INTEGER NOT NULL
   );
   `,
+  // 被监视的 PR：每个 ticket 仓库一行，投递去重键跨重启保留
+  `
+  CREATE TABLE pr_watch (
+    repo_id INTEGER PRIMARY KEY REFERENCES ticket_repos(id),
+    ticket_key TEXT NOT NULL,
+    repo_path TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    number INTEGER,
+    url TEXT,
+    state TEXT,
+    review TEXT,
+    ci TEXT NOT NULL,
+    head_sha TEXT,
+    failed TEXT NOT NULL DEFAULT '[]',
+    checked_at INTEGER NOT NULL,
+    delivered_key TEXT
+  );
+  `,
 ];
