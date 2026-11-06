@@ -326,4 +326,46 @@ describe("NeedsYouTracker", () => {
     expect(h.calls).toHaveLength(3);
     expect(h.calls[2].reply).toBe("做完了。");
   });
+
+  describe("suppressNext (R35: the reply to Butler's own resume message)", () => {
+    it("records the next new reply as not needs-you without calling the judge", async () => {
+      // /clear 之后的新 head 还没有回复；Butler 输入接着做的话。
+      const h = harness([{ id: "s1", cwd: "/repo/s1", waiting: false, kind: "thinking", reply: null }]);
+      h.tracker.suppressNext("s1");
+      h.tracker.update();
+      // 它回了话（结尾还是个问句）：不判断，也不算需要你，也不算没判断完。
+      h.heads[0] = stopped("s1", "m1", "做到第二步了。接下来要我做什么？");
+      h.tracker.update();
+      expect(h.calls).toHaveLength(0);
+      expect(h.tracker.reasonOf("s1")).toBeNull();
+      expect(h.tracker.undecided("s1")).toBe(false);
+      // 只跳过这一条：之后的新回复照常判断。
+      h.heads[0] = stopped("s1", "m2", "要拆成两个 PR 吗？");
+      h.tracker.update();
+      expect(h.calls).toHaveLength(1);
+    });
+
+    it("does not skip the reply the session was already stopped on", () => {
+      const h = harness([stopped("s1", "m0", "旧的回复？")]);
+      h.tracker.update();
+      expect(h.calls).toHaveLength(1);
+      h.tracker.suppressNext("s1");
+      h.tracker.update();
+      expect(h.calls).toHaveLength(1);
+      h.heads[0] = stopped("s1", "m1", "接上了。");
+      h.tracker.update();
+      expect(h.calls).toHaveLength(1);
+      expect(h.tracker.undecided("s1")).toBe(false);
+    });
+
+    it("forgets the skip when the session goes away", () => {
+      const h = harness([{ id: "s1", cwd: "/repo/s1", waiting: false, kind: "thinking", reply: null }]);
+      h.tracker.suppressNext("s1");
+      h.heads.splice(0, 1);
+      h.tracker.update();
+      h.heads.push(stopped("s1", "m1", "要拆吗？"));
+      h.tracker.update();
+      expect(h.calls).toHaveLength(1);
+    });
+  });
 });
