@@ -17,6 +17,8 @@ interface Props {
   onOpenTicket: (key: string) => void;
   /** 新建的 ticket：重读列表后跳过去。 */
   onTicketCreated: (key: string) => void;
+  /** 打开时先切到这个 session 的终端（从「现在」页点进来时）。 */
+  focusSession?: string | null;
 }
 
 const errorText = (e: unknown) => (e instanceof ButlerError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
@@ -29,7 +31,7 @@ function formatTime(ms: number): string {
  * feature 页（设计文档 2026-10-26、2026-10-28）：从上到下是名字和工作区、整体进度（feature 汇总）、
  * ticket 表（带 PR 状态），然后是仓库、feature 总控 session 和它们的终端。
  */
-export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated }: Props) {
+export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, focusSession }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newTicket, setNewTicket] = useState(false);
   const showError = (e: unknown) => setError(errorText(e));
@@ -38,6 +40,7 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated }: P
     openFailure: (reason) => S.openErrors[reason] ?? reason,
     errorText,
     setError,
+    initialActive: focusSession,
   });
 
   /** 为卡住的 session 开修复 session：成功后切到它的终端（已经开着也一样），失败显示在页面的错误区。 */

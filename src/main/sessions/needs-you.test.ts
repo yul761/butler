@@ -172,6 +172,24 @@ describe("NeedsYouTracker", () => {
     expect(logs).toHaveLength(1);
   });
 
+  it("reasons() gives every needs-you session in one pass over the sessions", async () => {
+    const heads = [stopped("s1", "m1", "要拆成两个 PR 吗？"), stopped("s2", "m2", "推上去了。"), { ...stopped("s3", "m3", "要合并吗？"), waiting: false }];
+    let listed = 0;
+    const tracker = new NeedsYouTracker({
+      judge: (reply) => Promise.resolve({ needsYou: reply.endsWith("？"), reason: reply.endsWith("？") ? "问要不要拆 PR" : "" }),
+      sessions: () => {
+        listed++;
+        return heads;
+      },
+      notify: () => undefined,
+    });
+    tracker.update();
+    await new Promise((r) => setTimeout(r, 0));
+    listed = 0;
+    expect(tracker.reasons()).toEqual(new Map([["s1", "问要不要拆 PR"]]));
+    expect(listed).toBe(1);
+  });
+
   it("clears once the session is busy again", async () => {
     const h = harness([stopped("s1", "m1", "要拆成两个 PR 吗？")]);
     h.tracker.update();

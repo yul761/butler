@@ -28,6 +28,8 @@ const ZH = {
     agent: "子 agent 在跑", thinking: "思考中", approval: "等你批准", waiting: "等你回话", idle: "空闲",
   },
   activityBackground: "（后台）",
+  /** 「现在」页：停在确认（权限、AskUserQuestion、ExitPlanMode）上的 session 需要你的理由。 */
+  nowApproval: "在终端里确认",
   /** 审计里上次运行退出时还没发完的请求。 */
   auditStalePending: "Butler 在发送过程中退出，无法确认是否已发出",
   trayOpen: "打开 Butler",
@@ -207,6 +209,7 @@ const EN: MainStrings = {
     agent: "running a subagent", thinking: "thinking", approval: "waiting for approval", waiting: "waiting for a reply", idle: "idle",
   },
   activityBackground: " (background)",
+  nowApproval: "confirm in the terminal",
   auditStalePending: "Butler quit while sending; it can't tell whether this was sent",
   trayOpen: "Open Butler",
   trayKeepAwake: "Keep awake",

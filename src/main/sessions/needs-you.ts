@@ -151,8 +151,22 @@ export class NeedsYouTracker {
   /** 需要你时返回理由，否则 null。session 不再停着（或活动不是 waiting）时立刻返回 null。 */
   reasonOf(sessionId: string): string | null {
     const s = this.d.sessions().find((x) => x.id === sessionId);
-    const reply = s ? stoppedReply(s) : null;
-    const e = this.entries.get(sessionId);
+    return s ? this.reasonFor(s) : null;
+  }
+
+  /** 所有需要你的 session 和理由：只列一遍 session（「现在」页每次取一整份，不用每行都调 reasonOf）。 */
+  reasons(): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const s of this.d.sessions()) {
+      const r = this.reasonFor(s);
+      if (r !== null) out.set(s.id, r);
+    }
+    return out;
+  }
+
+  private reasonFor(s: NeedsYouHead): string | null {
+    const reply = stoppedReply(s);
+    const e = this.entries.get(s.id);
     if (!reply || e?.replyId !== reply.id || e.answered || !e.verdict?.needsYou) return null;
     // 模型说需要却没给理由：用最后一句代替，界面上不能是空的。
     return e.verdict.reason.trim() || lastSentence(reply.text);

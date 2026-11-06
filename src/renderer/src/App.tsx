@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
-import type { EpicView, FeatureView, OpenSessionRequest, TicketView } from "../../shared/types";
+import type { EpicView, FeatureView, NowTarget, NowView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
 import { routeGone } from "./route-view";
@@ -10,6 +10,7 @@ import { FeaturePage } from "./components/FeaturePage";
 import { NewEpicDialog } from "./components/NewEpicDialog";
 import { NewFeatureDialog } from "./components/NewFeatureDialog";
 import { NewTicketDialog } from "./components/NewTicketDialog";
+import { NowPage } from "./components/NowPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
 import { TicketPage } from "./components/TicketPage";
@@ -24,8 +25,9 @@ const STATE_DEBOUNCE_MS = 80;
 export type Route =
   | { page: "home" }
   | { page: "ticket"; key: string }
-  | { page: "feature"; id: number }
-  | { page: "epic"; id: number }
+  /** focusSession：从「现在」页点进来时先切到的那个 session 的终端。 */
+  | { page: "feature"; id: number; focusSession?: string | null }
+  | { page: "epic"; id: number; focusSession?: string | null }
   | { page: "unclaimed" }
   | { page: "archived" }
   | { page: "settings" }
@@ -37,6 +39,8 @@ export function App() {
   const [tickets, setTickets] = useState<TicketView[]>([]);
   const [features, setFeatures] = useState<FeatureView[]>([]);
   const [epics, setEpics] = useState<EpicView[]>([]);
+  /** 首页「现在」的数据：和列表一起刷新。 */
+  const [nowView, setNowView] = useState<NowView | null>(null);
   const [showNewFeature, setShowNewFeature] = useState(false);
   const [showNewEpic, setShowNewEpic] = useState(false);
   const [unclaimedCount, setUnclaimedCount] = useState(0);
@@ -60,12 +64,13 @@ export function App() {
   const refresh = useCallback(async (): Promise<boolean> => {
     const seq = ++refreshSeq.current;
     try {
-      const [t, f, e, u] = await Promise.all([api.listTickets(), api.listFeatures(), api.listEpics(), api.unclaimed()]);
+      const [t, f, e, u, n] = await Promise.all([api.listTickets(), api.listFeatures(), api.listEpics(), api.unclaimed(), api.nowView()]);
       if (seq !== refreshSeq.current) return true;
       setTickets(t);
       setFeatures(f);
       setEpics(e);
       setUnclaimedCount(u.length);
+      setNowView(n);
       return true;
     } catch (e) {
       if (seq === refreshSeq.current) reportError(e);
@@ -107,8 +112,7 @@ export function App() {
     if (routeGone(route, allTickets, features, epics)) setRoute({ page: "home" });
   }, [tickets, features, epics]);
 
-  // 下一个任务的「现在」页用它跳到 ticket（暂时没有调用方）。
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  /** 跳到 ticket 页；req 是到了那里要打开（已经开着就切过去）的 session。 */
   const openTicket = (key: string, req?: OpenSessionRequest) => {
     // 要去的 ticket 可能已经归档：不跳到空白页，也不留下悬空的打开请求。
     if (!allTickets.some((t) => t.key === key)) {
@@ -117,6 +121,12 @@ export function App() {
     }
     setPendingOpen(req ?? null);
     setRoute({ page: "ticket", key });
+  };
+
+  /** 「现在」页的一行点开：ticket 走 openTicket（切到那个终端）；feature、epic 页打开时先看那个 session 的终端。 */
+  const openTarget = (t: NowTarget) => {
+    if (t.page === "ticket") openTicket(t.key, t.sessionId ? { ticketKey: t.key, sessionId: t.sessionId } : undefined);
+    else setRoute({ page: t.page, id: t.id, focusSession: t.sessionId });
   };
 
   // 恢复归档：先重读列表再跳过去，否则 ticket 页找不到它。
@@ -136,7 +146,7 @@ export function App() {
   return (
     <div className="app">
       <Sidebar
-        tickets={tickets} features={features} epics={epics} unclaimedCount={unclaimedCount} route={route} onNavigate={setRoute}
+        tickets={tickets} features={features} epics={epics} unclaimedCount={unclaimedCount} needsYouCount={nowView?.needsYou.length ?? 0} route={route} onNavigate={setRoute}
         onNew={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)} onNewEpic={() => setShowNewEpic(true)}
         keepAwake={keepAwake} onKeepAwake={(on) => api.setKeepAwake(on).then(setKeepAwake, reportError)}
       />
@@ -156,7 +166,7 @@ export function App() {
           />
         ) : (
           <>
-            {/* 首页（home）暂时是空的：下一个任务在这里放「现在」页。 */}
+            {route.page === "home" && <NowPage view={nowView} onOpen={openTarget} onOpenTicket={(key) => openTicket(key)} liveTickets={new Set(allTickets.map((t) => t.key))} />}
             {route.page === "ticket" && current && (
               <TicketPage
                 key={current.key}
@@ -175,6 +185,7 @@ export function App() {
                 epics={epics}
                 onOpenTicket={(key) => setRoute({ page: "ticket", key })}
                 onTicketCreated={goTicket}
+                focusSession={route.focusSession}
               />
             )}
             {route.page === "epic" && currentEpic && (
@@ -183,6 +194,7 @@ export function App() {
                 epic={currentEpic}
                 onOpenFeature={(id) => setRoute({ page: "feature", id })}
                 onFeatureCreated={goFeature}
+                focusSession={route.focusSession}
               />
             )}
             {route.page === "unclaimed" && <UnclaimedPage tickets={allTickets} />}

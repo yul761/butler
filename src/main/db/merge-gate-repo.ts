@@ -95,6 +95,17 @@ export class MergeGateRepo {
     this.db.prepare(`UPDATE merge_waiters SET notified_at = ? WHERE id = ?`).run(at, waiterId);
   }
 
+  /** 还在排队的等待者的 session id：占位还没释放、还没通知过（「现在」页的“合并排队”）。记的是 BUTLER_SESSION，调用方按 head 对。 */
+  waitingSessionIds(): Set<string> {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT w.session_id FROM merge_waiters w JOIN merge_holds h ON h.id = w.hold_id
+         WHERE h.released_at IS NULL AND w.notified_at IS NULL AND w.session_id IS NOT NULL`,
+      )
+      .all() as unknown as { session_id: string }[];
+    return new Set(rows.map((r) => r.session_id));
+  }
+
   /** 占位已释放（合完、取消、过期都算）、等待者还没通知的，带上怎么释放的和释放时间（没有 session 的等待者没法通知，不返回）。 */
   pendingNotices(): { waiterId: number; sessionId: string; otherTicket: string | null; otherBranch: string; outcome: "merged" | "cancelled" | "expired"; releasedAt: number }[] {
     const rows = this.db

@@ -1,7 +1,7 @@
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc";
 import {
-  FOLLOWUP_STATUSES, type AutostartState, type FollowupStatus, type JobStateView, type McpProbe, type MergeEvent, type OpenSessionRequest, type TicketStatus, type WatchedPr,
+  FOLLOWUP_STATUSES, type AutostartState, type FollowupStatus, type JobStateView, type McpProbe, type MergeEvent, type NowView, type OpenSessionRequest, type TicketStatus, type WatchedPr,
 } from "../../shared/types";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EpicService } from "../epics/epic-service";
@@ -59,6 +59,8 @@ export interface IpcDeps {
   gateRepo: Pick<MergeGateRepo, "recentEvents">;
   /** PrWatcher 跟着的 PR 和 CI。 */
   prWatchList: () => WatchedPr[];
+  /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
+  nowView: (merges: MergeEvent[]) => NowView;
   runner: HandoffRunner;
   featureRunner: Pick<FeatureSummaryRunner, "runManual">;
   scheduler: Scheduler;
@@ -301,8 +303,10 @@ export function registerIpc(d: IpcDeps): void {
   });
 
   // 「现在」页的“最近合并”：最近 7 天、最多 20 条。
-  handle(IPC.mergeEvents, (): MergeEvent[] => d.gateRepo.recentEvents(d.now() - 7 * 24 * 3600 * 1000, 20));
+  const recentMerges = (): MergeEvent[] => d.gateRepo.recentEvents(d.now() - 7 * 24 * 3600 * 1000, 20);
+  handle(IPC.mergeEvents, recentMerges);
   handle(IPC.prWatchList, (): WatchedPr[] => d.prWatchList());
+  handle(IPC.nowView, (): NowView => d.nowView(recentMerges()));
 
   handle(IPC.followupsList, (ticketKey: string) => d.followups.listByTicket(ticketKey));
   handle(IPC.followupsSetStatus, (id: string, status: FollowupStatus) => {

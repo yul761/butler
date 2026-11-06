@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionView } from "../../shared/types";
-import { sessionLabel, splitSessions } from "./sessions";
+import { initialPane, sessionLabel, splitSessions } from "./sessions";
 
 const s = (id: string, over: Partial<SessionView> = {}): SessionView => ({
   id, ticketKey: "T-1", cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null,
@@ -32,5 +32,22 @@ describe("splitSessions", () => {
     const { shown, hidden } = splitSessions(list, 3);
     expect(shown.map((x) => x.id)).toEqual(["a", "d", "e"]);
     expect(hidden.map((x) => x.id)).toEqual(["b", "c", "f"]);
+  });
+});
+
+describe("initialPane", () => {
+  it("opens the coordinator terminal it names", () => {
+    // 「现在」页点的是第二个总控：页面切到它的终端，不是第一个终端。/clear 过的 session 的终端号还是启动时的 id。
+    const list = [s("c1", { termId: "c1", coordinator: true }), s("c2", { termId: "t-c2", coordinator: true })];
+    expect(initialPane(list, "c2")).toBe("t-c2");
+  });
+
+  it("falls back to the first open terminal when nothing is named or the named one is not open", () => {
+    const list = [s("a"), s("b", { termId: "b" }), s("c", { termId: "c" })];
+    expect(initialPane(list, null)).toBe("b");
+    expect(initialPane(list, undefined)).toBe("b");
+    expect(initialPane(list, "a")).toBe("b");
+    expect(initialPane(list, "gone")).toBe("b");
+    expect(initialPane([s("a")], "a")).toBeNull();
   });
 });

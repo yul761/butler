@@ -1,5 +1,5 @@
 import type { PrivacyLevel } from "../../shared/llm";
-import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
+import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 
 /** "1 ticket", "2 tickets". */
@@ -15,7 +15,7 @@ export const EN_STATUS: Record<TicketStatus, string> = {
 };
 
 export const EN: UiStrings = {
-  home: "Brief",
+  home: "Now",
   language: "语言 / Language",
   languageOptions: { auto: "Follow the system", zh: "中文", en: "English" } as Record<string, string>,
   languageHint: "Switches the interface, Butler's messages and the default prompts sent to claude. Prompts you edited yourself are kept, and content generated earlier is not translated. Afterwards, Settings → Environment check shows the /handoff command as needing an update: click “Install / repair” so /handoff in your sessions also uses the new language.",
@@ -263,6 +263,38 @@ export const EN: UiStrings = {
   regenerate: "Regenerate",
   briefSections: { first: "🔴 Do first", today: "🟡 Today", watch: "⚪ Watch" },
   itemActions: { open: "Open", done: "Done", snooze: "Snooze until tomorrow", ignore: "Ignore", claim: "Claim" } as Record<string, string>,
+  // The Now page (plan 14).
+  nowTitle: "Now",
+  nowRunning: (count: number) => `${n(count, "session")} running`,
+  nowNeedsYou: "Needs you",
+  nowNeedsYouBadge: (count: number) => `${count} ${count === 1 ? "needs" : "need"} you`,
+  nowOpen: "Open →",
+  nowEmpty: "Nothing is in progress right now.",
+  nowNoEpic: "Not in any epic",
+  nowNoFeature: "Not in any feature",
+  nowWaitingFor: (reason: string) => `Waiting on you: ${reason}`,
+  nowStuck: "Stuck",
+  nowStuckWith: (reason: string) => `Stuck: ${reason}`,
+  nowStuckNoReason: "stuck",
+  nowMergeQueued: "Queued to merge",
+  nowStopped: "Stopped",
+  nowWaitCi: "Waiting for CI",
+  nowCiFailed: "CI failed",
+  nowCiRunning: "CI running",
+  nowWaitReview: "Waiting for review",
+  nowChangesRequested: "Changes requested",
+  nowApproved: "Approved",
+  nowPr: (num: number | null, state: string) => `PR${num === null ? "" : ` #${num}`} ${state}`,
+  nowActive: (count: number) => `${count} active`,
+  nowNeedsYouCount: (count: number) => `${count} ${count === 1 ? "needs" : "need"} you`,
+  nowStuckCount: (count: number) => `${count} stuck`,
+  nowNoneActive: "nothing active",
+  nowIdle: (count: number) => `Idle ${count}`,
+  nowRecentMerges: "Recent merges",
+  nowUsage: (tokens: string, cacheRead: string, over200k: string) => `Last 7 days: ${tokens} tokens · cache reads ${cacheRead} · turns over 200k context ${over200k}`,
+  nowUsageKind: { ticket: "ticket sessions", coordinator: "coordinators", subagent: "subagents", headless: "background jobs" } as Record<UsageKind, string>,
+  nowUsageByKind: "By kind",
+  nowUsageByModel: "By model (price-weighted)",
   mergeEventsTitle: "Merge coordination",
   mergeEvent: {
     wait: (who: string, other: string) => `${who} waits for ${other} to finish merging`,

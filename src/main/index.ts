@@ -78,6 +78,8 @@ import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
 import { judgeStuck } from "./sessions/stuck-judge";
+import { judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
+import { buildNowView } from "./now/now-view";
 import { llmConfig, memoryOn, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
@@ -86,6 +88,7 @@ import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
 import { applyGhResolution, branchRuns, failedLog, prInfo, prStatus } from "./tickets/gh";
+import type { HeadlessExecDeps } from "./handoff/headless-exec";
 import * as git from "./tickets/git";
 import { canSend } from "./safe-send";
 import { createQuitState } from "./quit-state";
@@ -398,11 +401,38 @@ async function bootstrap(): Promise<void> {
     if (Object.keys(servers).length === 0) return null;
     return writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers });
   };
+  /** 卡住判断和「需要你」判断共用的 headless 设置。 */
+  const judgeDeps: HeadlessExecDeps = {
+    run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID,
+    signal: headlessAbort.signal, onUsage: recordHeadlessUsage, log: logger,
+  };
+  /** 开着终端的 Butler session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
+  const needsYouHeads = (): NeedsYouHead[] => {
+    const heads = new Map<string, NeedsYouHead>();
+    for (const termId of pty.openIds()) {
+      const h = sessions.head(termId);
+      if (!h || h.origin !== "butler" || heads.has(h.id)) continue;
+      heads.set(h.id, { id: h.id, cwd: h.cwd, waiting: h.waitingForInput, kind: activityMonitor.get(h.id)?.kind ?? null, reply: activityMonitor.lastReplyOf(h.id) });
+    }
+    return [...heads.values()];
+  };
+  // 「需要你」（计划 14）：停下来的 session 是不是在等用户。判断最多等 1 分钟（默认的 5 分钟会一直占着名额）。
+  // 判断完只发 stateChanged（不经过下面 activityMonitor 的 notify），所以 update → notify 不会再回到 update。
+  const needsYou = new NeedsYouTracker({
+    judge: (reply, cwd) => judgeNeedsYou({ ...judgeDeps, timeoutMs: 60_000 }, reply, cwd),
+    sessions: needsYouHeads,
+    notify,
+    log: logger,
+  });
   const activityMonitor = new ActivityMonitor({
     sessions, tickets, features, pty,
     transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
-    judge: (input) => judgeStuck({ run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID, signal: headlessAbort.signal, onUsage: recordHeadlessUsage, log: logger }, input),
-    notify,
+    judge: (input) => judgeStuck(judgeDeps, input),
+    // 活动变了：先看停下来的 session 有没有新回复要判断，再刷新界面。
+    notify: () => {
+      needsYou.update();
+      notify();
+    },
     // 卡住不再弹系统通知（之后在「现在」页里显示）：只刷新界面。
     onStuck: () => notify(),
     now: Date.now,
@@ -657,6 +687,8 @@ async function bootstrap(): Promise<void> {
     pty,
     // BUTLER_GATE_TYPING_QUIET_MS 只给 e2e 用（它刚在终端里打过字，不想多等 30 秒）。
     typingQuietMs: Number(process.env.BUTLER_GATE_TYPING_QUIET_MS) || undefined,
+    // 在等用户回答的 session 不往里贴东西（计划 14）。
+    needsYou: (id) => needsYou.reasonOf(id) !== null,
     now: Date.now,
   });
   /** Stop 到的时候先重读这个 session 的活动（guard 看的是上一次刷新的）。活动按 head 的 id 跟踪；Stop 带来的可能是链上的旧 id。 */
@@ -785,9 +817,13 @@ async function bootstrap(): Promise<void> {
       if (effect.kind === "waiting" && effect.waiting) {
         const stopped = env.butlerSession ?? effect.sessionId;
         void holdWatcher.sessionIdle(stopped);
+        // 活动没变时 activityMonitor 不会 notify：停下来以后的「需要你」判断在这里补一次。
         void refreshActivityOf(stopped)
           .catch((e: unknown) => logger(`ci delivery: re-reading the activity of ${stopped} failed`, e))
-          .then(flushCi);
+          .then(() => {
+            needsYou.update();
+            return flushCi();
+          });
         const repoId = sessions.head(stopped)?.repoId;
         if (repoId != null) prWatcher.soon(repoId);
       }
@@ -854,6 +890,22 @@ async function bootstrap(): Promise<void> {
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     usage: usageRepo, sessions,
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
+    nowView: (merges) => {
+      // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
+      const queued = new Set([...gateRepo.waitingSessionIds()].map((id) => sessions.head(id)?.id ?? id));
+      const reasons = needsYou.reasons();
+      return buildNowView({
+        tickets: sessionService.ticketViews(),
+        features: sessionService.featureViews(),
+        epics: sessionService.epicViews(),
+        activity: (id) => activityMonitor.get(id),
+        needsYouReason: (id) => reasons.get(id) ?? null,
+        prs: (key) => prWatcher.statusOf(key),
+        mergeQueued: (id) => queued.has(id),
+        merges,
+        approvalText: M().nowApproval,
+      });
+    },
     rederive: (key) => {
       rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now }, key);
       // followup 完成 / 忽略 / 恢复：StateCore 里对应的条目跟着 forget / 重写。

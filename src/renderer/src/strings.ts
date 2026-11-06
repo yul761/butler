@@ -1,7 +1,7 @@
 import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
-import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus } from "../../shared/types";
+import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "已合并·待收尾",
@@ -15,7 +15,7 @@ const ZH_STATUS: Record<TicketStatus, string> = {
 export const STATUS_ORDER: TicketStatus[] = ["merged_pending_followup", "active", "blocked", "in_review", "done"];
 
 const ZH = {
-  home: "简报",
+  home: "现在",
   language: "语言 / Language",
   languageOptions: { auto: "跟随系统", zh: "中文", en: "English" } as Record<string, string>,
   languageHint: "界面、Butler 的提示和发给 claude 的默认提示词都会切换；你自己改过的提示词不变，以前生成的内容不会翻译。切换之后，设置 → 环境检查里的 /handoff 命令会显示需要更新：点“安装 / 修复”，session 里的 /handoff 也会换成新语言。",
@@ -267,6 +267,38 @@ const ZH = {
   regenerate: "重新生成",
   briefSections: { first: "🔴 先做", today: "🟡 今天", watch: "⚪ 留意" },
   itemActions: { open: "打开", done: "完成", snooze: "推迟到明天", ignore: "忽略", claim: "去认领" } as Record<string, string>,
+  // 「现在」页（计划 14）。
+  nowTitle: "现在",
+  nowRunning: (n: number) => `${n} 个 session 在跑`,
+  nowNeedsYou: "需要你",
+  nowNeedsYouBadge: (n: number) => `${n} 个需要你`,
+  nowOpen: "打开 →",
+  nowEmpty: "现在没有进行中的工作。",
+  nowNoEpic: "不属于任何 epic",
+  nowNoFeature: "不属于任何 feature",
+  nowWaitingFor: (reason: string) => `等你：${reason}`,
+  nowStuck: "卡住",
+  nowStuckWith: (reason: string) => `卡住：${reason}`,
+  nowStuckNoReason: "卡住了",
+  nowMergeQueued: "合并排队",
+  nowStopped: "已停下",
+  nowWaitCi: "等 CI",
+  nowCiFailed: "CI 失败",
+  nowCiRunning: "CI 跑中",
+  nowWaitReview: "等 review",
+  nowChangesRequested: "要修改",
+  nowApproved: "已批准",
+  nowPr: (n: number | null, state: string) => `PR${n === null ? "" : ` #${n}`} ${state}`,
+  nowActive: (n: number) => `${n} 个进行中`,
+  nowNeedsYouCount: (n: number) => `${n} 需要你`,
+  nowStuckCount: (n: number) => `${n} 卡住`,
+  nowNoneActive: "无进行中",
+  nowIdle: (n: number) => `空闲 ${n}`,
+  nowRecentMerges: "最近合并",
+  nowUsage: (tokens: string, cacheRead: string, over200k: string) => `近 7 天：${tokens} token · 缓存读取占 ${cacheRead} · 上下文超过 20 万的轮次占 ${over200k}`,
+  nowUsageKind: { ticket: "ticket session", coordinator: "总控", subagent: "子 agent", headless: "后台任务" } as Record<UsageKind, string>,
+  nowUsageByKind: "按类型",
+  nowUsageByModel: "按模型（按价格折算）",
   mergeEventsTitle: "合并协调",
   mergeEvent: {
     wait: (who: string, other: string) => `${who} 等 ${other} 合完再合`,

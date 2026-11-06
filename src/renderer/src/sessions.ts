@@ -27,3 +27,9 @@ export function splitSessions(sessions: SessionView[], limit: number): { shown: 
   }
   return { shown, hidden };
 }
+
+/** 页面打开时看哪个终端：指名的 session 开着就是它的终端（「现在」页点进来的那个），否则是第一个开着的终端。 */
+export function initialPane(sessions: SessionView[], focus: string | null | undefined): string | null {
+  const named = focus ? sessions.find((s) => s.id === focus)?.termId : null;
+  return named ?? sessions.find((s) => s.termId !== null)?.termId ?? null;
+}

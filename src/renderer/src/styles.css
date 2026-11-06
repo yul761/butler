@@ -175,6 +175,54 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .merge-event .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .merge-event .chip { padding: 0 2px; border: none; color: var(--accent); }
 .notice-line { color: var(--muted); margin: 4px 0; }
+/* 首页「现在」（计划 14）：颜色只用上面的变量（浅色、深色主题都看得清），底色用 color-mix 从变量调淡。 */
+.now-page { max-width: 960px; }
+.now-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+.now-top h2 { margin: 0; font-size: 16px; }
+.now-top .muted { font-size: 12px; }
+.now-needs { background: color-mix(in srgb, var(--danger) 9%, var(--bg)); border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; }
+.now-needs h3 { display: flex; gap: 6px; align-items: baseline; margin: 0 0 4px; font-size: 13px; color: var(--danger); }
+.now-needs h3 .count { font-weight: normal; }
+.now-need { display: flex; gap: 10px; align-items: baseline; width: 100%; padding: 3px 0; border: none; border-radius: 0; background: transparent; text-align: left; }
+.now-need .name { color: var(--text); white-space: nowrap; }
+.now-need .why { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
+.now-need .muted { white-space: nowrap; }
+.now-need .go { color: var(--accent); white-space: nowrap; }
+.now-need:hover .go { text-decoration: underline; }
+.now-epic { margin: 2px 0 8px; }
+.now-epic > h3, .now-feature > h4 { margin: 0; padding: 4px; border-radius: 6px; }
+.now-epic > h3:hover, .now-feature > h4:hover { background: var(--panel); }
+.now-epic > h3 { font-size: 14px; }
+.now-feature { margin-left: 16px; }
+.now-feature > h4 { font-size: 13px; }
+.now-summary { margin-left: 4px; color: var(--muted); font-size: 12px; font-weight: normal; }
+.now-rows { margin-left: 22px; }
+.now-row { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto 72px; gap: 8px; align-items: center; width: 100%; padding: 4px 6px; border: none; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; text-align: left; font-size: 12.5px; }
+.now-row:hover { background: var(--panel); }
+.now-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; }
+.now-key small { margin-left: 6px; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+.now-what { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.now-what .main { color: var(--text); overflow-wrap: anywhere; }
+.now-what small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11.5px; }
+.now-dot { flex-shrink: 0; align-self: center; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.now-row.ok .now-dot { background: var(--ok); }
+.now-row.warn .now-dot { background: var(--pill-pending); }
+.now-row.danger .now-dot { background: var(--danger); }
+.now-row.danger .main { color: var(--danger); }
+.now-row.muted .main { color: var(--muted); }
+.now-prs { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.now-prs .pill { margin: 0; }
+.now-since { color: var(--muted); text-align: right; white-space: nowrap; }
+.now-idle > .section-toggle { padding: 4px 6px; color: var(--muted); font-size: 12px; }
+.now-merges, .now-usage { margin-top: 14px; }
+.now-merges h3 { margin: 0 0 4px; font-size: 13px; }
+.now-usage > .section-toggle { color: var(--muted); font-size: 12px; text-align: left; }
+.now-usage-details { display: flex; flex-wrap: wrap; gap: 8px 32px; margin: 4px 0 0 20px; font-size: 12px; }
+.now-usage-details h4 { margin: 4px 0; color: var(--muted); font-size: 12px; }
+.now-usage-details ul { margin: 0; padding-left: 16px; }
+/* 侧栏「现在」后面的红点和数字：需要你的条数。 */
+.sidebar .nav.home { display: flex; align-items: center; gap: 6px; }
+.needs-you-badge { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
 .day-list { margin: 4px 0 10px; padding-left: 20px; }
 textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; width: 100%; resize: vertical; }
 .mono { font-family: Menlo, Consolas, "Cascadia Mono", monospace; font-size: 12px; }
