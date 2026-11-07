@@ -1,11 +1,11 @@
 # Butler
 
 A desktop "work butler" for people who run several [Claude Code](https://docs.claude.com/en/docs/claude-code) sessions at once, one per ticket.
-macOS (Apple silicon) and Windows (x64). MIT licensed.
+macOS (Apple silicon) and Windows (x64). MIT licensed. Website: [butler.statecore.io](https://butler.statecore.io).
 
 **Local-first.** Butler keeps its data in local SQLite files. Data leaves your machine only through your own `claude` and, if you configure one, a personal LLM API. That API is called only at the full privacy level, for memory distillation, and every call it receives is logged on an audit page.
 
-> 中文简介：Butler 用一个桌面应用管理“每个 ticket 一个 Claude Code session”的工作方式：每晚自动为有进展的 ticket 生成交接（handoff），点一下就回到对应的 session；记忆由本地的 StateCore 管理。界面有中文和英文两种，默认跟系统语言，可以在设置里改。
+> 中文简介：Butler 是一个桌面应用，给同时开好几个 Claude Code session 的人用。每个 ticket 一个 session；几个 ticket 可以归成一个 feature，几个 feature 可以归成一个 epic。在 epic session 里商量好怎么拆，它会建出 feature 并附上计划；feature 的总控 session 再替你建 ticket、开 session、派任务。session 之间不直接对话，而是靠本地 StateCore 里分层的共享记忆互通：一个 session 记下的进展和决定，同一个 ticket、feature 或 epic 里的其他 session 能读到。「现在」页按 epic、feature、ticket 列出每个 session 在做什么，需要你处理的排在最前面。每晚还会为有进展的 ticket 生成交接（handoff）。界面有中文和英文两种，默认跟系统语言，可以在设置里改。网站：[butler.statecore.io](https://butler.statecore.io)。
 
 The UI comes in Chinese and English. It follows your system language at first (Chinese for any Chinese locale, English otherwise); change it under **设置 → 常规 → 语言 / Language (Settings → General → Language)** or on the first-run wizard. The language also switches the default prompts Butler sends to `claude`, so handoffs and memory notes are written in that language; prompts you edited yourself are kept. Installs upgraded from 1.2.0 or earlier stay in Chinese until you change it. After switching, click **安装 / 修复 (Install / repair)** in the environment check once so the `/handoff` command is rewritten in the new language. This README quotes UI labels as they appear in the Chinese UI, with the English label, for example **设置 (Settings)**.
 
