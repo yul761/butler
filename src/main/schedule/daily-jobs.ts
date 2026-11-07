@@ -1,7 +1,4 @@
-import type { Brief } from "../../shared/brief";
-import type { BriefService } from "../brief/brief-service";
-import { localDate } from "./calendar";
-import { JOB_EVENING, type JobsRepo } from "../db/jobs-repo";
+import type { EpicDigestRunner } from "../epics/epic-digest";
 import type { FeatureSummaryRunner } from "../handoff/feature-runner";
 import type { HandoffRunner } from "../handoff/runner";
 
@@ -9,31 +6,36 @@ export interface DailyJobDeps {
   runner: Pick<HandoffRunner, "runNightly" | "refreshForBrief">;
   /** feature 汇总（设计文档 2026-10-28）：ticket 批次跑完之后逐个跑 feature。没有时不跑。 */
   features?: Pick<FeatureSummaryRunner, "runNightly">;
-  briefs: Pick<BriefService, "generateMorning" | "generateEvening">;
-  jobs: JobsRepo;
-  now: () => number;
   isWorkingDay: () => boolean;
-  /** 早间刷新进行中（界面显示“刷新中”）。 */
-  setRefreshing: (v: boolean) => void;
-  /** 晚间小结生成后：弹系统通知。 */
-  onEvening: (brief: Brief) => void;
-  /** 早间：最终的简报入库之后补“今日重点”（narrateBrief，永远不抛错）。没有配置时不传。 */
-  narrate?: (brief: Brief) => Promise<unknown>;
+  /** 配了 tracker 工具（和 HandoffRunner 的 allowedTools 用同一个 trackerTools）。PR 状态由 PrWatcher 跟着，早间刷新只为 tracker 而跑。 */
+  hasTrackerTools: () => boolean;
   /**
-   * 晚间小结之后：在后台开始 full 档位的 StateCore 蒸馏（主进程里是 BackgroundRunner.start → nightlyDistill，计划 4 R1）。
+   * 批次跑完之后：在后台开始 full 档位的 StateCore 蒸馏（主进程里是 BackgroundRunner.start → nightlyDistill，计划 4 R1）。
    * 不等它结束，失败不影响晚间任务。
    */
   distill?: () => unknown;
-  /** 退出已开始：不再通知、不再发起新工作。 */
+  /**
+   * epic 的每周整理（计划 16 任务 6）：工作日的每次晚间任务之后都调用，满 7 天、有新活动的 epic 才真的整理（见 EpicDigestRunner.weekly），
+   * 错过了一周的第一个工作日也不会漏掉这一周。不等它，失败只记日志。没有时不跑。
+   */
+  epicDigest?: Pick<EpicDigestRunner, "weekly">;
+  /** 退出已开始：不再发起新工作。 */
   aborted?: () => boolean;
   /** 写日志（feature 批次出错时用）；没有时不记。 */
   log?: (msg: string, err?: unknown) => void;
 }
 
-/** 晚间：批量 handoff → feature 汇总 → 晚间小结 → 系统通知 → 记忆蒸馏（full 档位）。 */
-export async function nightlyJob(d: DailyJobDeps, slot?: number | null): Promise<"ok" | "partial"> {
-  // 用开始时间判断“是不是今天的时刻”：批量跑过午夜也照常通知。
-  const startedAt = d.now();
+/** 写日志失败不能让晚间任务出错。 */
+function safeLog(d: DailyJobDeps, msg: string, err?: unknown): void {
+  try {
+    d.log?.(msg, err);
+  } catch {
+    // 忽略。
+  }
+}
+
+/** 晚间：批量 handoff → feature 汇总 → 记忆蒸馏（full 档位）→ epic 的每周整理（工作日）。 */
+export async function nightlyJob(d: DailyJobDeps): Promise<"ok" | "partial"> {
   // runner 的方法不是 async，可能同步抛错：包一层，让它变成 rejection 由调度器记录。
   const batch = await Promise.resolve().then(() => d.runner.runNightly());
   let status = batch.status;
@@ -44,7 +46,7 @@ export async function nightlyJob(d: DailyJobDeps, slot?: number | null): Promise
     const limited = batch.outcomes.some((o) => o.status === "skipped" && o.reason === "rate_limited");
     if (limited) status = "partial";
     else {
-      // feature 批次出错（包括同步抛错）不能挡住晚间小结：记一笔，批次记为 partial，照常往下走。
+      // feature 批次出错（包括同步抛错）不能挡住记忆蒸馏：记一笔，批次记为 partial，照常往下走。
       try {
         if ((await Promise.resolve().then(() => features.runNightly())).status === "partial") status = "partial";
       } catch (e) {
@@ -52,48 +54,37 @@ export async function nightlyJob(d: DailyJobDeps, slot?: number | null): Promise
         try {
           d.log?.("nightly feature summaries failed", e);
         } catch {
-          // 写日志失败也不能挡住晚间小结。
+          // 写日志失败也不能挡住记忆蒸馏。
         }
       }
     }
   }
-  const brief = d.briefs.generateEvening();
-  d.jobs.record(JOB_EVENING, d.now(), "ok", null);
-  // 只在有内容、且跑的是今天的晚间时刻时通知；补跑以前日期的时刻不弹，早间简报里会看到。
-  const forToday = slot === undefined || slot === null || localDate(slot) === localDate(startedAt);
-  if (brief.evening.length > 0 && forToday && !d.aborted?.()) d.onEvening(brief);
   // 最后一步，不 await（审查 I1）：蒸馏可能要很多次 LLM 调用，不能挡住调度的串行链——
-  // 晚间任务的结果要先记下，补跑时紧接着的早间简报不用等整轮蒸馏。但“今日重点”和蒸馏共用 gateway 的串行链：
-  // 早间的 narrate 可能要排在一个正在进行的 StateCore 调用后面，最多等这一个调用（上限 180 秒），不会等整轮（最终审查 10，接受）。
-  // 失败（包括同步抛错）只到这里为止。
+  // 晚间任务的结果要先记下，补跑时紧接着的早间任务不用等整轮蒸馏。失败（包括同步抛错）只到这里为止。
   if (d.distill && !d.aborted?.()) {
     const distill = d.distill;
     void Promise.resolve()
       .then(() => distill())
       .catch(() => undefined);
   }
+  // epic 的每周整理也不 await：要跑好几次 Sonnet，不能挡住调度链。一周内不会整理两次由它自己保证（见 EpicDigestRunner.weekly）。
+  // 判断今天是不是工作日也放进去：读设置出错同样只记日志。
+  if (d.epicDigest && !d.aborted?.()) {
+    const digest = d.epicDigest;
+    void Promise.resolve()
+      .then(() => (d.isWorkingDay() ? digest.weekly() : undefined))
+      .catch((e: unknown) => safeLog(d, "weekly epic digest failed", e));
+  }
   return status;
 }
 
 /**
- * 早间：先用现有数据出一版（界面马上有内容），工作日再刷新 PR / tracker 状态后原地更新；
- * 最后对最终的那一版补“今日重点”。刷新失败也会给第一版补上，然后照常把错误交给调度器。
+ * 早间：工作日、配了 tracker 工具时刷新一次 tracker 状态（PR 状态 PrWatcher 一直跟着，没配 tracker 工具就不用再跑一次 claude）。
+ * 刷新失败照常把错误交给调度器。
  */
 export async function morningJob(d: DailyJobDeps): Promise<void> {
-  let brief = d.briefs.generateMorning();
-  try {
-    if (d.isWorkingDay()) {
-      d.setRefreshing(true);
-      try {
-        const r = await Promise.resolve().then(() => d.runner.refreshForBrief());
-        if (r.outcomes.length > 0) brief = d.briefs.generateMorning();
-      } finally {
-        d.setRefreshing(false);
-      }
-    }
-  } finally {
-    if (d.narrate && !d.aborted?.()) await d.narrate(brief);
-  }
+  if (!d.isWorkingDay() || !d.hasTrackerTools()) return;
+  await Promise.resolve().then(() => d.runner.refreshForBrief());
 }
 
 /**

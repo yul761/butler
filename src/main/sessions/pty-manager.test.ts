@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakePtyFactory } from "../test-utils";
-import { BUFFER_LIMIT, permissionPromptShowing, PtyManager, trimBuffer } from "./pty-manager";
+import { BUFFER_LIMIT, nextDraftLength, permissionPromptShowing, PtyManager, trimBuffer } from "./pty-manager";
 
 function setup() {
   const { factory, spawned } = fakePtyFactory();
@@ -155,6 +155,30 @@ describe("PtyManager", () => {
     expect(mgr.lastUserInputAt("t1")).toBe(0);
   });
 
+  it("terminal-generated reports do not count as user input; keys and text do (R37)", async () => {
+    const { mgr } = setup();
+    mgr.open("t1", spec, opts);
+    await vi.advanceTimersByTimeAsync(5000);
+    // 鼠标滚轮（SGR 和 X10）、焦点、光标位置、DA、DECRPM、kitty 键盘标志、OSC 回复：都是终端自己发的。
+    const reports = [
+      "\x1b[<64;10;5M", "\x1b[M`!!", "\x1b[I", "\x1b[O", "\x1b[12;40R", "\x1b[?62;22c", "\x1b[>0;276;0c", "\x1b[?2004;1$y", "\x1b[?1u",
+      "\x1b]11;rgb:0000/0000/0000\x1b\\", "\x1b]10;rgb:ffff/ffff/ffff\x07", "\x1b[I\x1b[<65;3;4M\x1b[O",
+    ];
+    for (const report of reports) {
+      mgr.write("t1", report);
+      expect(mgr.lastUserInputAt("t1"), JSON.stringify(report)).toBe(0);
+    }
+    for (const key of ["\x1b[A", "\x1b", "\t", "\x03", "a"]) {
+      await vi.advanceTimersByTimeAsync(10);
+      mgr.write("t1", key);
+      expect(mgr.lastUserInputAt("t1"), JSON.stringify(key)).toBe(Date.now());
+    }
+    // 一段里既有报告又有字：算用户输入。
+    await vi.advanceTimersByTimeAsync(10);
+    mgr.write("t1", "\x1b[Ia");
+    expect(mgr.lastUserInputAt("t1")).toBe(Date.now());
+  });
+
   it("deliver waits for SessionStart and a quiet prompt, pastes once, then presses Enter after the echo settles", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);
@@ -212,6 +236,76 @@ describe("PtyManager", () => {
     await vi.advanceTimersByTimeAsync(6000);
     expect(await p2).toBe("timeout");
     expect(spawned[1].pty.written).toEqual([]);
+  });
+
+  it("marks a terminal as having an automatic input in flight only while one deliver runs (I2)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    expect(mgr.autoInputInFlight("t1")).toBe(false);
+    const p = mgr.deliver("t1", "通知", { startWaitMs: 0 });
+    expect(mgr.autoInputInFlight("t1")).toBe(true);
+    expect(mgr.autoInputInFlight("t2")).toBe(false);
+    spawned[0].pty.emit("ready");
+    await vi.advanceTimersByTimeAsync(7000);
+    expect(await p).toBe("sent");
+    expect(mgr.autoInputInFlight("t1")).toBe(false);
+    // 超时、终端退出也放开。
+    const q = mgr.deliver("t1", "x", { startWaitMs: 0, timeoutMs: 500, idleMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await q).toBe("timeout");
+    expect(mgr.autoInputInFlight("t1")).toBe(false);
+  });
+
+  it("deliver re-checks right before the paste and writes nothing when the re-check fails (I2)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    let allowed = true;
+    let seenInFlight: boolean | null = null;
+    const recheck = vi.fn(() => {
+      // 复查时自己这一次不算「在递」：否则 guard 永远是 busy。
+      seenInFlight = mgr.autoInputInFlight("t1");
+      return allowed;
+    });
+    const p = mgr.deliver("t1", "通知", { startWaitMs: 0, recheck });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(recheck).not.toHaveBeenCalled(); // 输入框还没就绪：还没到粘贴的时候
+    allowed = false;
+    spawned[0].pty.emit("ready");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await p).toBe("blocked");
+    expect(recheck).toHaveBeenCalledTimes(1);
+    expect(seenInFlight).toBe(false);
+    expect(spawned[0].pty.written).toEqual([]);
+    expect(mgr.autoInputInFlight("t1")).toBe(false);
+
+    allowed = true;
+    const ok = mgr.deliver("t1", "通知", { startWaitMs: 0, recheck });
+    await vi.advanceTimersByTimeAsync(7000);
+    expect(await ok).toBe("sent");
+    expect(spawned[0].pty.written).toEqual(["\x1b[200~通知\x1b[201~", "\r"]);
+  });
+
+  it("a second deliver on the same terminal sees the first one in flight in its re-check (I2)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("ready");
+    const first = mgr.deliver("t1", "一", { startWaitMs: 0, recheck: () => !mgr.autoInputInFlight("t1") });
+    const second = mgr.deliver("t1", "二", { startWaitMs: 0, recheck: () => !mgr.autoInputInFlight("t1") });
+    await vi.advanceTimersByTimeAsync(7000);
+    // 两个都等到了输入框就绪；先复查的那个看到另一个还在递，不贴。
+    const results = await Promise.all([first, second]);
+    expect(results.filter((r) => r === "blocked")).toHaveLength(1);
+    expect(results.filter((r) => r === "sent")).toHaveLength(1);
+  });
+
+  it("remembers when a terminal was opened; 0 when it is not open (R36)", async () => {
+    const { mgr, spawned } = setup();
+    expect(mgr.openedAt("t1")).toBe(0);
+    await vi.advanceTimersByTimeAsync(5000);
+    mgr.open("t1", spec, opts);
+    expect(mgr.openedAt("t1")).toBe(Date.now());
+    spawned[0].pty.emitExit(0);
+    expect(mgr.openedAt("t1")).toBe(0);
   });
 
   it("killAll kills every terminal", () => {
@@ -320,5 +414,52 @@ describe("permissionPromptShowing", () => {
   it("普通输出不算，只看尾部", () => {
     expect(permissionPromptShowing("building...\n")).toBe(false);
     expect(permissionPromptShowing("Do you want to proceed?" + "x".repeat(5000))).toBe(false);
+  });
+});
+
+describe("nextDraftLength", () => {
+  it("typed text without enter is a draft", () => {
+    expect(nextDraftLength(0, "hel")).toBe(3);
+  });
+  it("enter clears the draft", () => {
+    expect(nextDraftLength(3, "lo\r")).toBe(0);
+  });
+  it("backspace and ctrl-u shrink or clear it", () => {
+    expect(nextDraftLength(2, "\x7f")).toBe(1);
+    expect(nextDraftLength(0, "\x7f")).toBe(0);
+    expect(nextDraftLength(5, "\x15")).toBe(0);
+    expect(nextDraftLength(5, "\x03")).toBe(0);
+  });
+  it("escape sequences are not a draft", () => {
+    expect(nextDraftLength(0, "\x1b[<64;10;5M\x1b[A\x1b[I\x1bOA")).toBe(0);
+  });
+  it("multi-line paste stays a draft; a lone newline is a draft; carriage return still clears", () => {
+    expect(nextDraftLength(0, "\x1b[200~a\nb\n\x1b[201~")).toBe(4);
+    expect(nextDraftLength(0, "\n")).toBe(1);
+    expect(nextDraftLength(4, "\r")).toBe(0);
+  });
+  it("pasted text counts", () => {
+    expect(nextDraftLength(0, "\x1b[200~abc\x1b[201~")).toBe(3);
+  });
+});
+
+describe("PtyManager.hasDraft", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("follows write and prefill, and is false for unknown terminals", async () => {
+    const { mgr, spawned } = setup();
+    expect(mgr.hasDraft("nope")).toBe(false);
+    mgr.open("t1", spec, opts);
+    expect(mgr.hasDraft("t1")).toBe(false);
+    mgr.write("t1", "ab");
+    expect(mgr.hasDraft("t1")).toBe(true);
+    mgr.write("t1", "\r");
+    expect(mgr.hasDraft("t1")).toBe(false);
+    spawned[0].pty.emit("ready");
+    const p = mgr.prefill("t1", "继续", 800, 5000);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await p).toBe(true);
+    expect(mgr.hasDraft("t1")).toBe(true);
   });
 });

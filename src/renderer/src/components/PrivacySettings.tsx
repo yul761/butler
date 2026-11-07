@@ -3,7 +3,7 @@ import { PRIVACY_LEVELS, type LlmStatus, type PrivacyLevel } from "../../../shar
 import type { EditableSettingKey, EditableSettings } from "../../../shared/settings";
 import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
-import { formatUsd, llmWarnings, parseTermsText, termsText } from "../privacy-form";
+import { formatUsd, llmWarnings } from "../privacy-form";
 import { S } from "../strings";
 
 const TEXT_FIELDS = ["llmBaseUrl", "llmModel", "llmMonthlyBudgetUsd", "auditRetentionDays"] as const;
@@ -12,23 +12,17 @@ export function PrivacySettings() {
   const [values, setValues] = useState<EditableSettings | null>(null);
   const [status, setStatus] = useState<LlmStatus | null>(null);
   const [draft, setDraft] = useState<Partial<EditableSettings>>({});
-  /** 已保存的人名数量（不是文本框里正在编辑的），用于 redacted 档位的提示。 */
-  const [savedPeopleCount, setSavedPeopleCount] = useState(0);
-  const [terms, setTerms] = useState<{ people: string; others: string } | null>(null);
   /** key 输入框不受控：key 只在提交的瞬间从 DOM 读出，不放进 React state。 */
   const keyRef = useRef<HTMLInputElement>(null);
   const [hasKeyInput, setHasKeyInput] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [termsMessage, setTermsMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [v, s, t] = await Promise.all([api.settings(), api.llmStatus(), api.terms()]);
+      // 敏感词表只给已经去掉的“今日重点”用：数据和 IPC 留着，界面上不再显示。
+      const [v, s] = await Promise.all([api.settings(), api.llmStatus()]);
       setValues(v);
       setStatus(s);
-      setSavedPeopleCount(t.filter((x) => x.category === "person").length);
-      // 敏感词只在第一次加载时填进文本框：之后的刷新不覆盖用户正在编辑的内容。
-      setTerms((cur) => cur ?? { people: termsText(t, "person"), others: termsText(t, "term") });
     } catch (e) {
       reportError(e);
     }
@@ -39,10 +33,9 @@ export function PrivacySettings() {
     return api.onStateChanged(() => void load());
   }, [load]);
 
-  if (!values || !status || !terms) return <p className="muted">{S.loading}</p>;
+  if (!values || !status) return <p className="muted">{S.loading}</p>;
   const current = values;
   const currentStatus = status;
-  const currentTerms = terms;
   const level = current.llmLevel as PrivacyLevel;
   const value = (k: EditableSettingKey): string => draft[k] ?? current[k];
   const edit = (k: EditableSettingKey, v: string) => setDraft((d) => ({ ...d, [k]: v }));
@@ -98,24 +91,11 @@ export function PrivacySettings() {
     }
   }
 
-  async function saveTerms() {
-    setError(null);
-    setTermsMessage(null);
-    try {
-      const saved = await api.saveTerms(parseTermsText(currentTerms.people, currentTerms.others));
-      setSavedPeopleCount(saved.filter((x) => x.category === "person").length);
-      setTerms({ people: termsText(saved, "person"), others: termsText(saved, "term") });
-      setTermsMessage(S.termsSaved);
-    } catch (e) {
-      writeFailed(e);
-    }
-  }
-
   return (
     <section className="settings-section">
       <h2>{S.privacy}</h2>
       <p className="muted">{S.privacyIntro}</p>
-      {llmWarnings(currentStatus, level, savedPeopleCount).map((w) => (
+      {llmWarnings(currentStatus, level).map((w) => (
         <p key={w} className="notice-line">{w}</p>
       ))}
       {error && <p className="error">{error}</p>}
@@ -160,26 +140,6 @@ export function PrivacySettings() {
         <input type="checkbox" checked={current.llmConfirm === "1"} onChange={(e) => void save("llmConfirm", e.target.checked ? "1" : "0")} />
         {S.llmConfirm}
       </label>
-
-      <div className="field">
-        {S.sensitiveTerms}
-        <div className="row">
-          <label className="field">
-            {S.termsPeople}
-            <textarea rows={5} value={currentTerms.people} onChange={(e) => setTerms({ ...currentTerms, people: e.target.value })} />
-            <span className="muted">{S.privacyPeopleWarning}</span>
-          </label>
-          <label className="field">
-            {S.termsOthers}
-            <textarea rows={5} value={currentTerms.others} onChange={(e) => setTerms({ ...currentTerms, others: e.target.value })} />
-          </label>
-        </div>
-        <p className="muted">{S.termsHint}</p>
-        <div className="actions">
-          <button onClick={() => void saveTerms()}>{S.save}</button>
-          {termsMessage && <span className="muted">{termsMessage}</span>}
-        </div>
-      </div>
     </section>
   );
 }

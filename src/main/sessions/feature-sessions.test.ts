@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
 import { MAX_RUNNING_PER_FEATURE } from "../../shared/control";
+import { EpicHistoryRepo } from "../db/epic-history-repo";
 import { EpicsRepo } from "../db/epics-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
@@ -27,6 +28,7 @@ async function setup() {
   const epics = new EpicsRepo(db);
   const featureHandoffs = new FeatureHandoffsRepo(db);
   const handoffs = new HandoffsRepo(db);
+  const epicHistory = new EpicHistoryRepo(db);
   const settings = new SettingsRepo(db);
   const ticketService = new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("butler-ws-") });
   const featureService = new FeatureService({ features, tickets, now: () => 1 });
@@ -56,7 +58,7 @@ async function setup() {
   let epicRefresh: (epicId: number) => Promise<void> | undefined = () => undefined;
   let n = 0;
   const service = new SessionService({
-    tickets, sessions, settings, ticketService, pty, features, epics, featureHandoffs, handoffs,
+    tickets, sessions, settings, ticketService, pty, features, epics, featureHandoffs, handoffs, epicHistory,
     epicRefresh: (id) => epicRefresh(id),
     activity: (id) => activities.get(id) ?? null,
     sessionName: async (id) => (namesAsked.push(id), names.get(id) ?? null),
@@ -76,7 +78,7 @@ async function setup() {
     mcpSettings: (dirs) => (settingsAsked.push(dirs), "/mcp/approve.json"),
   });
   return {
-    service, featureService, ticketService, featureHandoffs, handoffs, sessions, tickets, features, epics, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, featureMcpAsked, epicMcpAsked, settingsAsked,
+    service, featureService, ticketService, featureHandoffs, handoffs, epicHistory, sessions, tickets, features, epics, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, featureMcpAsked, epicMcpAsked, settingsAsked,
     activities, names, namesAsked, submitted, claude, logs, setSubmit: (f: typeof submit) => (submit = f),
     setEpicRefresh: (f: typeof epicRefresh) => (epicRefresh = f),
   };
@@ -456,6 +458,31 @@ describe("the first message of a feature in an epic (design 2026-11-01)", () => 
   }
   const delivered = () => new Promise((r) => setTimeout(r, 0));
 
+  it("the first message of a new feature takes the plan from the epic row", async () => {
+    const { service, epics, submitted, epicId, fid } = await briefSetup();
+    epics.setPlan(epicId, "整体规划：先结账，再退款", 5);
+    await service.openFeature({ featureId: fid });
+    await delivered();
+    const message = submitted[0][1];
+    expect(message).toContain("整体规划：先结账，再退款");
+    expect(message).toContain("先做微信支付");
+    expect(message.indexOf("整体规划")).toBeLessThan(message.indexOf("其他 feature："));
+  });
+
+  it("the first message of a new feature includes the epic's past decisions", async () => {
+    const { service, epicHistory, submitted, epicId, fid } = await briefSetup();
+    epicHistory.add({
+      epicId, featureId: null, trigger: "weekly", createdAt: 700, coversFrom: 0, coversUntil: 700,
+      payload: { summary: "购物车上线", decisions: [{ what: "金额用分存", why: "避免浮点误差" }] },
+    });
+    await service.openFeature({ featureId: fid });
+    await delivered();
+    const message = submitted[0][1];
+    expect(message).toContain("以往的决定：");
+    expect(message).toContain("金额用分存");
+    expect(message).toContain("避免浮点误差");
+  });
+
   it("sends the plan and the other features to the first new coordinator, and records it once", async () => {
     const { service, features, submitted, fid } = await briefSetup();
     const r = await service.openFeature({ featureId: fid });
@@ -708,7 +735,8 @@ describe("fix sessions (design 2026-10-31)", () => {
     expect(sessions.get("new-2")).toMatchObject({ ticketKey: null, featureId: feature.id, coordinator: false, fixesSession: stuckId, cwd: feature.workspaceDir, origin: "butler" });
     const s = spawned[1];
     expect(s.opts.cwd).toBe(feature.workspaceDir);
-    expect(s.args).toEqual(["--session-id", "new-2", "--mcp-config", `/mcp/features/${feature.id}.json`, "--settings", "/mcp/approve.json", "--add-dir", backend]);
+    expect(s.args).toEqual(["--session-id", "new-2", "--mcp-config", `/mcp/features/${feature.id}.json`, "--settings", "/mcp/approve.json", "--add-dir", backend, "--model", "sonnet"]);
+    expect(sessions.get("new-2")?.model).toBe("sonnet");
     expect(s.opts.env.BUTLER_TICKET).toBeUndefined();
     expect(s.opts.env.BUTLER_SESSION).toBe("new-2");
   });

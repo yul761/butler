@@ -11,7 +11,7 @@ export function blockedText(hits: ScanHit[] | null): string {
   return (hits ?? []).map((h) => S.withSample(S.scanRule[h.rule] ?? h.rule, h.sample)).join(S.listSep);
 }
 
-/** 列表里每一行的摘要：（来源）· 档位 · 状态 · token · 费用。“今日重点”不写来源。 */
+/** 列表里每一行的摘要：（来源）· 档位 · 状态 · token · 费用。旧版本“今日重点”（narrative）的记录不写来源。 */
 export function auditSummary(e: AuditEntry): string {
   const parts = [S.privacyLevels[e.level], auditStatusLabel(e.status)];
   if (e.source === "statecore") parts.unshift(S.auditStatecore);

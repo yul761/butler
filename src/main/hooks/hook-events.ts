@@ -98,6 +98,8 @@ export function applyHookEnvelope(
       if (prevHead && prevHead.id !== id && sessions.get(id)) {
         sessions.setReplacedBy(prevHead.id, id, source);
         replaced = prevHead.id;
+        // /clear 之后 claude 停在空的输入框上，后面不会再有 Stop：新 head 现在就算在等输入（计划 16 R28，换新的最后一步要等它停着）。
+        if (source === "clear") sessions.setWaiting(id, true, at);
       }
       return { kind: "session_started", sessionId: id, ticketKey, replaced };
     }

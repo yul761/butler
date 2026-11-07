@@ -1,4 +1,3 @@
-import type { BriefKind } from "./brief";
 
 export const IPC = {
   ticketsList: "tickets:list",
@@ -40,8 +39,11 @@ export const IPC = {
   sessionsDismiss: "sessions:dismiss",
   sessionsHide: "sessions:hide",
   sessionsUnhide: "sessions:unhide",
+  /** 界面上的“换新”按钮（计划 16）：能开始就在后台换新，马上返回。 */
+  sessionsRefresh: "sessions:refresh",
   sessionOpenFix: "sessions:openFix",
   activityDismiss: "activity:dismiss",
+  usageSummary: "usage:summary",
   ptySnapshot: "pty:snapshot",
   ptyKill: "pty:kill",
   ptyWrite: "pty:write",
@@ -53,10 +55,11 @@ export const IPC = {
   healthInstallHooks: "health:installHooks",
   healthUninstallHooks: "health:uninstallHooks",
   dialogPickDir: "dialog:pickDir",
-  briefsLatest: "briefs:latest",
-  briefsRegenerate: "briefs:regenerate",
-  briefsMark: "briefs:mark",
   mergeEvents: "merge:events",
+  /** PrWatcher 跟着的 PR 和 CI（未归档 ticket 的）：计划 14 的界面用。 */
+  prWatchList: "prwatch:list",
+  /** 「现在」页的整份数据（计划 14）。 */
+  nowView: "now:view",
   followupsList: "followups:list",
   followupsSetStatus: "followups:setStatus",
   handoffsList: "handoffs:list",
@@ -75,7 +78,6 @@ export const IPC = {
   memoryView: "memory:view",
   memoryWhy: "memory:why",
   memoryChanged: "memory:changed",
-  appNavigate: "app:navigate",
   appAutostartGet: "app:autostartGet",
   appLanguage: "app:language",
   appAutostartSet: "app:autostartSet",
@@ -93,10 +95,9 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.featuresList, IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive,
   IPC.featuresSummaryRun, IPC.featuresArchived, IPC.featuresUnarchive, IPC.featuresOpenSession, IPC.featuresMove, IPC.reposScan, IPC.ticketsRecheckCleanup,
   IPC.epicsList, IPC.epicsCreate, IPC.epicsRename, IPC.epicsAddRepo, IPC.epicsRemoveRepo, IPC.epicsArchive, IPC.epicsArchived, IPC.epicsUnarchive, IPC.epicsOpenSession,
-  IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionOpenFix, IPC.activityDismiss,
+  IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
-  IPC.briefsLatest, IPC.briefsRegenerate, IPC.briefsMark,
-  IPC.mergeEvents,
+  IPC.mergeEvents, IPC.prWatchList, IPC.nowView,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,
@@ -106,9 +107,6 @@ export const INVOKE_CHANNELS: readonly string[] = [
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];
 /** 主进程 → 渲染进程。 */
-export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.memoryChanged, IPC.appNavigate, IPC.appKeepAwakeChanged];
-
-/** IPC.appNavigate 带的内容：点系统通知后去哪。 */
-export type AppNavigateRoute = { page: "home"; kind?: BriefKind } | { page: "feature"; featureId: number; stuckTicket: string } | { page: "ticket"; key: string };
+export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.memoryChanged, IPC.appKeepAwakeChanged];
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };

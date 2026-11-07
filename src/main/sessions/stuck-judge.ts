@@ -3,6 +3,7 @@ import { headlessArgs } from "../claude/headless";
 import { execHeadlessJson, type HeadlessExecDeps } from "../handoff/headless-exec";
 import { toCliJsonSchema, validate } from "../handoff/schema";
 import { currentLang } from "../i18n";
+import { sanitizeJudgeReason } from "../util/judge-text";
 import type { StuckVerdict } from "./stuck-tracker";
 
 const VerdictSchema = z.object({ stuck: z.boolean(), reason: z.string(), action: z.string() });
@@ -52,9 +53,10 @@ function prompt(i: StuckInput): string {
 
 /** 请 headless Claude 判断一个可疑的 session 是否卡住。不给任何工具；失败返回 null。 */
 export async function judgeStuck(d: HeadlessExecDeps, input: StuckInput): Promise<StuckVerdict | null> {
-  const args = headlessArgs({ schema: STUCK_JSON_SCHEMA, allowedTools: [] });
+  const args = headlessArgs({ schema: STUCK_JSON_SCHEMA, allowedTools: [], model: "haiku" });
   const r = await execHeadlessJson(d, { label: "stuck judge", args, prompt: prompt(input), cwd: input.cwd });
   if (!r.ok) return null;
   const v = validate(VerdictSchema, r.value);
-  return v.ok ? v.value : null;
+  // 原因和建议显示在界面上：和「需要你」的理由一样清掉混进来的标签（R34）。
+  return v.ok ? { stuck: v.value.stuck, reason: sanitizeJudgeReason(v.value.reason), action: sanitizeJudgeReason(v.value.action) } : null;
 }

@@ -95,6 +95,21 @@ export class HealthService {
     return this.binCurrent;
   }
 
+  /**
+   * 启动时：装着的 /handoff 是 Butler 的旧版本（hash 对得上，stale）就换成当前版本（C1，和 syncHookBinary 一样）。
+   * 用户自己的（conflict）、没装的不碰。永不抛错：换不了只记日志。
+   */
+  async syncHandoffCommand(): Promise<void> {
+    const file = this.commandFile();
+    try {
+      if ((await handoffCommandStatus(file)) !== "stale") return;
+      this.d.log?.(`handoff command: ${file} is out of date; replacing it with the current version`);
+      await installHandoffCommand(file);
+    } catch (e) {
+      this.d.log?.(`handoff command: could not upgrade ${file}`, e);
+    }
+  }
+
   async refresh(): Promise<HealthReport> {
     const pathValue = await (this.d.readPath ?? (() => readLoginShellPath(this.d.platform, this.d.env)))();
     const path = locateClaude({ override: this.d.settings.get("claudePath"), pathValue, platform: this.d.platform });

@@ -4,9 +4,6 @@ export const EDITABLE_SETTINGS = [
   "workingDays",
   "trackerTools",
   "headlessProjectMcp",
-  "blockedDays",
-  "reviewWaitDays",
-  "staleDays",
   "handoffPrompt",
   "refreshPrompt",
   "llmLevel",
@@ -20,6 +17,7 @@ export const EDITABLE_SETTINGS = [
   "branchTemplate",
   "ticketPattern",
   "memoryEnabled",
+  "refreshThresholdTokens",
   "onboardingDone",
   "language",
 ] as const;

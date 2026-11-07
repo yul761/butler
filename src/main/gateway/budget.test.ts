@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart, sentWithoutUsage, stalePendingCost, STATECORE_MAX_TOKENS } from "./budget";
-import { NARRATIVE_MAX_TOKENS } from "./narrative";
+import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart, NARRATIVE_MAX_TOKENS, sentWithoutUsage, stalePendingCost, STATECORE_MAX_TOKENS } from "./budget";
 
 const price = { pattern: "*", inputPerMTok: 2, outputPerMTok: 8 };
 

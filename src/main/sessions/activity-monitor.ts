@@ -47,8 +47,9 @@ export function activityIntervals(env: NodeJS.ProcessEnv): ActivityIntervals {
 
 export interface StuckInfo {
   sessionId: string;
-  ticketKey: string;
-  featureId: number;
+  ticketKey: string | null;
+  featureId: number | null;
+  epicId: number | null;
   reason: string;
 }
 
@@ -115,10 +116,11 @@ export function describeActivity(a: SessionActivity): string {
   return `${[m.activityKinds[a.kind], a.detail].filter(Boolean).join(" ")}${a.background ? m.activityBackground : ""}`;
 }
 
-/** 卡住检测的范围：有红点可放的行，也就是未归档 feature 下未归档 ticket 的普通 session。 */
+/** 卡住检测的范围：Butler 开的、不是修复 session 的所有 session（ticket、总控、epic），已归档的 ticket 和 feature 除外。 */
 interface StuckScope {
-  ticketKey: string;
-  featureId: number;
+  ticketKey: string | null;
+  featureId: number | null;
+  epicId: number | null;
 }
 
 interface Tracked {
@@ -143,6 +145,7 @@ interface Tracked {
   /** 第一次读完之前是 null。 */
   activity: SessionActivity | null;
   lastReply: string | null;
+  lastReplyId: string | null;
 }
 
 /**
@@ -157,6 +160,8 @@ export class ActivityMonitor {
   /** 可疑、等着空出名额去判断的 session。 */
   private readonly wanted = new Set<string>();
   private readonly judging = new Set<string>();
+  /** 每个 session 正在做的那次更新：tick 和 refreshSession 撞上时排队，同一段 transcript 不能读两遍（读到的位置会多走）。 */
+  private readonly updating = new Map<string, Promise<boolean>>();
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
   private stopped = false;
@@ -200,6 +205,24 @@ export class ActivityMonitor {
     return this.tracked.get(sessionId)?.activity ?? null;
   }
 
+  /**
+   * 现在就重读这一个 session（和 tick 走同一条更新路径），活动变了就 notify。Stop 到的时候用：get() 是上一次 tick 的结果，
+   * 那时它多半还在想或者在跑工具。没在跟踪（还没 tick 到、终端关了、/clear 换了 head）就什么也不做，留给下一次 tick。
+   */
+  async refreshSession(sessionId: string): Promise<void> {
+    const t = this.tracked.get(sessionId);
+    if (!t || this.stopped) return;
+    const head = this.d.sessions.head(t.termId);
+    if (head?.id !== sessionId || !this.d.pty.openIds().includes(t.termId)) return;
+    try {
+      // 排队期间 tick 可能已经把它忘了（终端退出）：那就不再读，免得又把它加回来。
+      const changed = await this.serialUpdate(sessionId, () => (this.tracked.has(sessionId) ? this.update(head, t.termId, this.d.now()) : Promise.resolve(false)));
+      if (changed && !this.stopped) this.d.notify();
+    } catch (e) {
+      this.d.log?.(`activity of session ${sessionId} failed`, e);
+    }
+  }
+
   /** 当前命令输出的末尾，最多 4096 字节（不切开 UTF-8 字符）；读不到返回 ""。 */
   async output(sessionId: string): Promise<string> {
     return utf8Tail(this.tracked.get(sessionId)?.outputText ?? "", ACTIVITY_OUTPUT_LIMIT);
@@ -211,6 +234,12 @@ export class ActivityMonitor {
     if (!r) return null;
     const chars = [...r];
     return chars.length <= LAST_REPLY_LIMIT ? r : chars.slice(-LAST_REPLY_LIMIT).join("");
+  }
+
+  /** 最后一条 assistant 文字回复的全文和它的 message.id（“需要你”的判断用，调用方自己截）；没有回复或者回复没有 id 时为 null。 */
+  lastReplyOf(sessionId: string): { id: string; text: string } | null {
+    const t = this.tracked.get(sessionId);
+    return t?.lastReply && t.lastReplyId ? { id: t.lastReplyId, text: t.lastReply } : null;
   }
 
   /** 用户点了“没事，忽略”：这一次不再提醒，直到 session 恢复活动后再次卡住。 */
@@ -240,12 +269,24 @@ export class ActivityMonitor {
       // 读文件的时候可能开始退出了，数据库随后就关
       if (this.stopped) return false;
       try {
-        if (await this.update(head, termId, now)) changed = true;
+        if (await this.serialUpdate(head.id, () => this.update(head, termId, now))) changed = true;
       } catch (e) {
         this.d.log?.(`activity of session ${head.id} failed`, e);
       }
     }
     return changed;
+  }
+
+  /** 同一个 session 的更新一个接一个做。 */
+  private serialUpdate(id: string, run: () => Promise<boolean>): Promise<boolean> {
+    const prev = this.updating.get(id);
+    const next = prev ? prev.then(run, run) : run();
+    this.updating.set(id, next);
+    const clear = () => {
+      if (this.updating.get(id) === next) this.updating.delete(id);
+    };
+    next.then(clear, clear);
+    return next;
   }
 
   private async update(head: Session, termId: string, now: number): Promise<boolean> {
@@ -262,6 +303,7 @@ export class ActivityMonitor {
     t.outputText = output.text;
     t.eligible = eligible;
     t.lastReply = state.lastReply;
+    t.lastReplyId = state.lastReplyId;
     if (grew) t.lastOutputAt = now;
     await this.sample(t, grew, now);
     const next: SessionActivity = { sessionId: t.id, ...derived, lastOutputAt: t.lastOutputAt, ...this.verdict(t), lastOutput: output.lines };
@@ -273,18 +315,22 @@ export class ActivityMonitor {
   private track(id: string, termId: string): Tracked {
     const t: Tracked = {
       id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, fileSizes: new Map(), outputText: "", lastOutputAt: null,
-      eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null,
+      eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null, lastReplyId: null,
     };
     this.tracked.set(id, t);
     return t;
   }
 
   private scope(head: Session): StuckScope | null {
-    if (!head.ticketKey || head.coordinator || head.fixesSession) return null;
-    const ticket = this.d.tickets.get(head.ticketKey);
-    if (!ticket || ticket.archivedAt !== null || ticket.featureId === null) return null;
-    const feature = this.d.features.get(ticket.featureId);
-    return feature && feature.archivedAt === null ? { ticketKey: head.ticketKey, featureId: ticket.featureId } : null;
+    if (head.origin !== "butler" || head.fixesSession !== null) return null;
+    const ticket = head.ticketKey ? this.d.tickets.get(head.ticketKey) : null;
+    if (head.ticketKey && (!ticket || ticket.archivedAt !== null)) return null;
+    const featureId = ticket?.featureId ?? head.featureId;
+    if (featureId !== null) {
+      const feature = this.d.features.get(featureId);
+      if (!feature || feature.archivedAt !== null) return null;
+    }
+    return { ticketKey: head.ticketKey, featureId, epicId: head.epicId };
   }
 
   private async readTranscript(t: Tracked): Promise<{ state: TranscriptState; size: number }> {

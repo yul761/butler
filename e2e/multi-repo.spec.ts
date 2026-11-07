@@ -78,7 +78,7 @@ test("a ticket over two repos: a session per repo and a coordinator that sees bo
     await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace cwd=${worktree} adddirs=\n`);
     const childButton = page.locator(".sessions-bar .session").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
     await expect(childButton).toBeVisible();
-    await expect(childButton).toHaveAttribute("title", /^总控 session 交给你的任务：[\n ]boss-says-build-the-ui\n/);
+    await expect(childButton).toHaveAttribute("title", /^总控 session 交给你的任务：[\n ]+boss-says-build-the-ui[\n ]+开始之前先用 recall 读一下 ticket 记忆（butler-memory）里的背景和约定。/);
     await expect(childButton.locator(".place")).toHaveText("repo");
     await childButton.click();
     // 任务带着固定的开头、作为一条消息提交（多行粘贴没有被逐行回车；Windows 上压成一行）。

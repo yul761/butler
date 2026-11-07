@@ -1,4 +1,4 @@
-import { DEFAULT_HANDOFF_PROMPT, DEFAULT_REFRESH_PROMPT, defaultHandoffPrompt, defaultRefreshPrompt } from "../handoff/templates";
+import { DEFAULT_HANDOFF_PROMPT, DEFAULT_REFRESH_PROMPT, defaultHandoffPrompt, defaultRefreshPrompt, PREVIOUS_HANDOFF_PROMPTS } from "../handoff/templates";
 import { currentLang } from "../i18n";
 import type { Lang } from "../../shared/i18n";
 import type { Db } from "./database";
@@ -15,9 +15,6 @@ export const SETTING_DEFAULTS = {
   trackerTools: "",
   /** 后台 handoff / 刷新 / 探测也挂上仓库 .mcp.json（已批准的）和本地级的 MCP：1 开 0 关。 */
   headlessProjectMcp: "0",
-  blockedDays: "2",
-  reviewWaitDays: "2",
-  staleDays: "5",
   handoffPrompt: DEFAULT_HANDOFF_PROMPT,
   refreshPrompt: DEFAULT_REFRESH_PROMPT,
   /** 个人 API 的隐私档位：off | metadata | redacted | full（设计文档 7.3，默认 metadata）。 */
@@ -40,6 +37,8 @@ export const SETTING_DEFAULTS = {
   onboardingDone: "0",
   /** StateCore 记忆（设计文档第 8 节）：1 开 0 关。关闭时不写入、不给 claude 挂记忆 MCP。 */
   memoryEnabled: "1",
+  /** 上下文（最近一轮的 token 数）超过这么多时自动换新 session（计划 16）；0 = 关。手动和总控触发不看它。 */
+  refreshThresholdTokens: "150000",
   /** 界面和提示词的语言：auto | zh | en（设计文档 2026-10-26）。迁移 7 给老用户写 zh。 */
   language: "auto",
 } as const;
@@ -49,6 +48,8 @@ export type SettingKey = keyof typeof SETTING_DEFAULTS;
 type PromptKey = "handoffPrompt" | "refreshPrompt";
 const PROMPT_DEFAULTS: Record<PromptKey, (l: Lang) => string> = { handoffPrompt: defaultHandoffPrompt, refreshPrompt: defaultRefreshPrompt };
 const LANGS: Lang[] = ["zh", "en"];
+/** 以前版本的默认值：存的是它们也当作没改过。 */
+const PREVIOUS_PROMPT_DEFAULTS: Record<PromptKey, readonly string[]> = { handoffPrompt: PREVIOUS_HANDOFF_PROMPTS, refreshPrompt: [] };
 
 export class SettingsRepo {
   constructor(private readonly db: Db) {}
@@ -57,9 +58,10 @@ export class SettingsRepo {
     const row = this.db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as { value: string } | undefined;
     const lang = PROMPT_DEFAULTS[key as PromptKey];
     if (lang) {
-      // 提示词跟着语言走（设计文档 2026-10-26）：没存过，或者存的就是某种语言的默认值（没改过），都给当前语言的默认值。
+      // 提示词跟着语言走（设计文档 2026-10-26）：没存过，或者存的就是某种语言的默认值（没改过，包括以前版本的默认值），都给当前语言的默认值。
       const v = row?.value;
-      return v === undefined || LANGS.some((l) => lang(l) === v) ? lang(currentLang()) : v;
+      const unchanged = v === undefined || LANGS.some((l) => lang(l) === v) || PREVIOUS_PROMPT_DEFAULTS[key as PromptKey].includes(v);
+      return unchanged ? lang(currentLang()) : (v as string);
     }
     return row?.value ?? SETTING_DEFAULTS[key];
   }

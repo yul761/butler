@@ -36,7 +36,7 @@ const backgroundDone = (taskId: string) => ({
 const flush = () => new Promise((r) => setImmediate(r));
 const row = (id: string, over: Partial<Session> = {}): Session => ({
   id, ticketKey: "DMS-1", cwd: "/work", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
-  replacedBy: null, dismissed: false, createdAt: 1, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, ...over,
+  replacedBy: null, dismissed: false, createdAt: 1, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, ...over,
 });
 
 /** 假的依赖：session、ticket、feature 是内存表，transcript 和输出文件是真的临时文件。 */
@@ -335,6 +335,30 @@ describe("ActivityMonitor activity", () => {
     expect(h.monitor.lastReply("s1")).toBeNull();
   });
 
+  it("gives the whole last reply with its message id", async () => {
+    const h = harness();
+    h.openSession("s1");
+    await h.beat();
+    expect(h.monitor.lastReplyOf("s1")).toBeNull();
+    const long = `${"前".repeat(600)}要我关掉吗？`;
+    h.transcript("s1", { type: "assistant", timestamp: AT, message: { id: "msg_1", stop_reason: "end_turn", content: [{ type: "text", text: long }] } });
+    await h.beat();
+    expect(h.monitor.lastReplyOf("s1")).toEqual({ id: "msg_1", text: long });
+    expect(h.monitor.lastReplyOf("nope")).toBeNull();
+    h.open.delete("s1");
+    await h.beat();
+    expect(h.monitor.lastReplyOf("s1")).toBeNull();
+  });
+
+  it("has no last reply to judge when the reply has no message id", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.transcript("s1", { type: "assistant", timestamp: AT, message: { stop_reason: "end_turn", content: [{ type: "text", text: "要我关掉吗？" }] } });
+    await h.beat();
+    expect(h.monitor.lastReply("s1")).toBe("要我关掉吗？");
+    expect(h.monitor.lastReplyOf("s1")).toBeNull();
+  });
+
   it("copes with no transcript file being found", async () => {
     const h = harness();
     h.deps.transcriptFile = () => null;
@@ -377,6 +401,46 @@ describe("ActivityMonitor activity", () => {
     h.openSession("s2");
     await h.beat();
     expect(h.notifications()).toBe(1);
+  });
+
+  it("refreshSession re-reads one session now and notifies when its activity changed", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.openSession("s2");
+    h.busy("s1");
+    h.busy("s2");
+    await h.beat();
+    expect(h.notifications()).toBe(1);
+    h.transcript("s1", toolResult("s1-t"), endTurn());
+    h.transcript("s2", toolResult("s2-t"), endTurn());
+    await h.monitor.refreshSession("s1");
+    expect(h.monitor.get("s1")?.kind).toBe("waiting");
+    // 只读了 s1。
+    expect(h.monitor.get("s2")?.kind).toBe("command");
+    expect(h.notifications()).toBe(2);
+    await h.monitor.refreshSession("s1");
+    expect(h.notifications()).toBe(2);
+  });
+
+  it("refreshSession does nothing for a session it does not track", async () => {
+    const h = harness();
+    h.openSession("s1");
+    await h.monitor.refreshSession("s1");
+    expect(h.monitor.get("s1")).toBeNull();
+    expect(h.notifications()).toBe(0);
+  });
+
+  it("refreshSession and a tick at the same time read the new part of the transcript once", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.transcript("s1", toolUse("t1", "Edit", { file_path: "/a/foo.ts" }));
+    await h.beat();
+    h.transcript("s1", toolResult("t1"));
+    await Promise.all([h.monitor.refreshSession("s1"), h.beat()]);
+    // 同一段读了两遍的话读到的位置会多走一段，接下来这条长的就从半中间读起、整条丢掉。
+    h.transcript("s1", toolUse("t2", "Edit", { file_path: `/a/${"x".repeat(2000)}.ts` }));
+    await h.beat();
+    expect(h.monitor.get("s1")).toMatchObject({ kind: "edit", detail: `${"x".repeat(2000)}.ts` });
   });
 
   it("forgets a session whose terminal exited", async () => {
@@ -429,33 +493,52 @@ describe("ActivityMonitor stuck detection scope", () => {
     expect(h.monitor.get(id)).toMatchObject({ kind: "command", stuck: null, reason: null, action: null });
   };
 
-  it("does not check a standalone ticket's session", async () => {
+  const judgedOnce = async (h: ReturnType<typeof harness>, id: string) => {
+    h.busy(id);
+    await h.checks(3);
+    expect(h.judgeCalls.length).toBeGreaterThan(0);
+    expect(h.monitor.get(id)?.stuck).not.toBeNull();
+  };
+
+  it("checks a standalone ticket's session", async () => {
     const h = harness();
     h.openSession("s1", { ticketKey: "SOLO-1" });
-    await judgedNever(h, "s1");
+    await judgedOnce(h, "s1");
   });
 
-  it("does not check a session without a ticket", async () => {
+  it("checks a session without a ticket", async () => {
     const h = harness();
     h.openSession("s1", { ticketKey: null });
-    await judgedNever(h, "s1");
+    await judgedOnce(h, "s1");
   });
 
-  it("does not check the feature coordinator", async () => {
+  it("checks the feature coordinator and reports its feature", async () => {
     const h = harness();
     h.openSession("s1", { ticketKey: null, coordinator: true, featureId: 7 });
-    await judgedNever(h, "s1");
+    await judgedOnce(h, "s1");
+    h.judgeResults[0]({ stuck: true, reason: "the hook hangs", action: "kill it" });
+    await flush();
+    expect(h.stuckInfos).toEqual([{ sessionId: "s1", ticketKey: null, featureId: 7, epicId: null, reason: "the hook hangs" }]);
   });
 
-  it("does not check an epic session", async () => {
+  it("checks an epic session and reports its epic", async () => {
     const h = harness();
     h.openSession("s1", { ticketKey: null, epicId: 3 });
-    await judgedNever(h, "s1");
+    await judgedOnce(h, "s1");
+    h.judgeResults[0]({ stuck: true, reason: "the hook hangs", action: "kill it" });
+    await flush();
+    expect(h.stuckInfos).toEqual([{ sessionId: "s1", ticketKey: null, featureId: null, epicId: 3, reason: "the hook hangs" }]);
   });
 
-  it("does not check a ticket coordinator", async () => {
+  it("checks a ticket coordinator", async () => {
     const h = harness();
     h.openSession("s1", { coordinator: true, repoId: null });
+    await judgedOnce(h, "s1");
+  });
+
+  it("does not check a session that Butler did not start", async () => {
+    const h = harness();
+    h.openSession("s1", { origin: "discovered" });
     await judgedNever(h, "s1");
   });
 
@@ -479,9 +562,16 @@ describe("ActivityMonitor stuck detection scope", () => {
     await judgedNever(h, "s1");
   });
 
+  it("does not check a coordinator of an archived feature", async () => {
+    const h = harness();
+    h.features.set(7, { archivedAt: 5 });
+    h.openSession("s1", { ticketKey: null, coordinator: true, featureId: 7 });
+    await judgedNever(h, "s1");
+  });
+
   it("does not spend a ps on a session outside the scope", async () => {
     const h = harness();
-    h.openSession("s1", { ticketKey: "SOLO-1" });
+    h.openSession("s1", { fixesSession: "stuck-one" });
     h.busy("s1");
     await h.checks(3);
     expect(h.cpuPids).toEqual([]);
@@ -867,7 +957,7 @@ describe("ActivityMonitor stuck detection", () => {
     h.judgeResults[0]({ stuck: true, reason: "the hook hangs", action: "kill it" });
     await flush();
     expect(h.monitor.get("s1")).toMatchObject({ kind: "command", stuck: true, reason: "the hook hangs", action: "kill it" });
-    expect(h.stuckInfos).toEqual([{ sessionId: "s1", ticketKey: "DMS-1", featureId: 7, reason: "the hook hangs" }]);
+    expect(h.stuckInfos).toEqual([{ sessionId: "s1", ticketKey: "DMS-1", featureId: 7, epicId: null, reason: "the hook hangs" }]);
     expect(h.notifications()).toBe(before + 1);
 
     await h.checks(4);

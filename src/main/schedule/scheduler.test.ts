@@ -19,7 +19,7 @@ describe("lastNightlySlot", () => {
 });
 
 describe("isNightlyDue / isMorningDue", () => {
-  it("runs the nightly batch once per slot, never on first launch, and retries a partial run before the morning brief", () => {
+  it("runs the nightly batch once per slot, never on first launch, and retries a partial run before the morning job", () => {
     expect(isNightlyDue(at(20, 16, 1), cfg, { lastRunAt: at(19, 16, 5), lastStatus: "ok" }, false)).toBe(true);
     expect(isNightlyDue(at(20, 17), cfg, { lastRunAt: at(20, 16, 1), lastStatus: "ok" }, false)).toBe(false);
     expect(isNightlyDue(at(20, 17), cfg, { lastRunAt: null, lastStatus: null }, true)).toBe(false);
@@ -32,7 +32,7 @@ describe("isNightlyDue / isMorningDue", () => {
     expect(isNightlyDue(at(20, 17), cfg, { lastRunAt: at(25, 16), lastStatus: "ok" }, false)).toBe(true);
   });
 
-  it("runs the morning brief once per day after 5:00, on events, or on a tick while the user is active", () => {
+  it("runs the morning job once per day after 5:00, on events, or on a tick while the user is active", () => {
     const yesterday = { lastRunAt: at(20, 9) };
     expect(isMorningDue(at(21, 9), yesterday, "unlock", false)).toBe(true);
     expect(isMorningDue(at(21, 9), { lastRunAt: at(21, 8) }, "unlock", false)).toBe(false);
@@ -44,7 +44,7 @@ describe("isNightlyDue / isMorningDue", () => {
 });
 
 describe("isNightlyDue on non-working days", () => {
-  it("does not catch up or retry on a weekend, but catches up on Monday before the morning brief", () => {
+  it("does not catch up or retry on a weekend, but catches up on Monday before the morning job", () => {
     // 周五 16:00 错过，周六解锁：不跑。
     expect(isNightlyDue(at(17, 10), cfg, { lastRunAt: at(15, 16, 1), lastStatus: "ok" }, true)).toBe(false);
     expect(isNightlyDue(at(17, 10), cfg, { lastRunAt: at(16, 16, 1), lastStatus: "partial" }, true)).toBe(false);
@@ -52,7 +52,7 @@ describe("isNightlyDue on non-working days", () => {
     expect(isNightlyDue(at(19, 9), cfg, { lastRunAt: at(15, 16, 1), lastStatus: "ok" }, true)).toBe(true);
   });
 
-  it("a Saturday unlock leaves the nightly job alone and Monday's unlock runs it before the morning brief", async () => {
+  it("a Saturday unlock leaves the nightly job alone and Monday's unlock runs it before the morning job", async () => {
     const log: string[] = [];
     const jobs = new JobsRepo(memDb());
     jobs.record(JOB_NIGHTLY, at(15, 16, 1), "ok", null);
@@ -98,7 +98,7 @@ describe("Scheduler", () => {
     };
   }
 
-  it("seeds on first launch, runs the morning brief, then the nightly batch at 16:00", async () => {
+  it("seeds on first launch, runs the morning job, then the nightly batch at 16:00", async () => {
     const s = setup(at(20, 9));
     await s.scheduler.check("startup");
     expect(s.log).toEqual(["morning@2026-10-20"]);
@@ -111,7 +111,7 @@ describe("Scheduler", () => {
     expect(s.jobs.get(JOB_NIGHTLY)).toMatchObject({ lastRunAt: at(20, 16), lastStatus: "ok" });
   });
 
-  it("catches up a missed nightly run before the morning brief after the laptop slept", async () => {
+  it("catches up a missed nightly run before the morning job after the laptop slept", async () => {
     const s = setup(at(19, 9));
     await s.scheduler.check("startup");
     s.setNow(at(21, 8, 30));
@@ -121,7 +121,7 @@ describe("Scheduler", () => {
     expect(s.log).toHaveLength(3);
   });
 
-  it("retries a partial nightly batch once before the next morning brief", async () => {
+  it("retries a partial nightly batch once before the next morning job", async () => {
     const s = setup(at(20, 9));
     await s.scheduler.check("startup");
     s.setNightlyStatus("partial");
@@ -159,23 +159,8 @@ describe("Scheduler", () => {
     expect(jobs.get(JOB_NIGHTLY)).toMatchObject({ lastRunAt: at(20, 17), lastStatus: "failed", lastError: "claude 不见了" });
   });
 
-  it("passes a null slot (meaning today) for a manual run, so a weekend run still notifies", async () => {
-    const slots: (number | null)[] = [];
-    const scheduler = new Scheduler({
-      jobs: new JobsRepo(memDb()), config: () => cfg, now: () => at(17, 11), userActive: () => true,
-      nightly: async (slot) => {
-        slots.push(slot);
-        return "ok";
-      },
-      morning: async () => undefined,
-    });
-    await scheduler.runNightlyNow();
-    expect(slots).toEqual([null]);
-  });
-
-  it("two manual runs of the same job share one run (nightly and morning)", async () => {
+  it("two manual runs share one run", async () => {
     let nightly = 0;
-    let morning = 0;
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const scheduler = new Scheduler({
@@ -185,20 +170,14 @@ describe("Scheduler", () => {
         await gate;
         return "ok";
       },
-      morning: async () => {
-        morning++;
-        await gate;
-      },
+      morning: async () => undefined,
     });
     const a = scheduler.runNightlyNow();
     const b = scheduler.runNightlyNow();
-    const c = scheduler.runMorningNow();
-    const d = scheduler.runMorningNow();
     expect(b).toBe(a);
-    expect(d).toBe(c);
     release();
-    await Promise.all([a, b, c, d]);
-    expect([nightly, morning]).toEqual([1, 1]);
+    await Promise.all([a, b]);
+    expect(nightly).toBe(1);
     // 跑完以后可以再手动跑一次。
     await scheduler.runNightlyNow();
     expect(nightly).toBe(2);
@@ -238,8 +217,9 @@ describe("Scheduler", () => {
       nightly: boom as unknown as () => Promise<"ok">,
       morning: boom as unknown as () => Promise<void>,
     });
+    // 第一次 check：晚间任务只记 seed，早间任务到期，同步抛错。
+    await scheduler.check("startup");
     await scheduler.runNightlyNow();
-    await scheduler.runMorningNow();
     expect(jobs.get(JOB_NIGHTLY)).toMatchObject({ lastStatus: "failed", lastError: "sync boom" });
     expect(jobs.get(JOB_MORNING)).toMatchObject({ lastStatus: "failed", lastError: "sync boom" });
     expect(scheduler.isRunning(JOB_NIGHTLY)).toBe(false);
@@ -257,62 +237,61 @@ describe("Scheduler", () => {
     expect(s.log.filter((l) => l.startsWith("nightly"))).toEqual(["nightly@2026-10-20"]);
   });
 
-  it("a manual morning brief queued behind a scheduled one is not run again", async () => {
-    let now = at(21, 9);
-    let morning = 0;
+  it("a manual nightly run queued behind a scheduled one is not run again", async () => {
+    let now = at(20, 15);
+    let nightly = 0;
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const jobs = new JobsRepo(memDb());
     jobs.record(JOB_NIGHTLY, at(19, 16, 1), "ok", null);
-    jobs.record(JOB_MORNING, at(20, 9), "ok", null);
     const scheduler = new Scheduler({
       jobs, config: () => cfg, now: () => now, userActive: () => true,
       nightly: async () => {
-        await gate;
+        nightly++;
         return "ok";
       },
-      morning: async () => {
-        morning++;
-      },
+      // 第一次 check 的早间任务卡在 gate 上，后面排着第二次 check 和手动运行。
+      morning: () => gate,
     });
-    // 解锁：先补跑昨天的晚间批量（卡在 gate 上），之后才是早间简报。
-    const scheduled = scheduler.check("unlock");
+    const first = scheduler.check("tick");
     await Promise.resolve();
-    expect(scheduler.isRunning(JOB_NIGHTLY)).toBe(true);
-    // 用户这时点了“重新生成”。
-    const manual = scheduler.runMorningNow();
-    now = at(21, 9, 1);
+    expect(scheduler.isRunning(JOB_MORNING)).toBe(true);
+    const second = scheduler.check("tick");
+    // 用户这时点了“立即运行晚间 handoff”。
+    const manual = scheduler.runNightlyNow();
+    // 轮到第二次 check 时已经过了 16:00：调度先跑了晚间任务，手动的那次就不再跑。
+    now = at(20, 16, 30);
     release();
-    await Promise.all([scheduled, manual]);
-    expect(morning).toBe(1);
+    await Promise.all([first, second, manual]);
+    expect(nightly).toBe(1);
   });
 
   describe("manual run queued behind other work", () => {
-    function setup(lastMorning: { at: number; status: "ok" | "failed" | "partial" }, nowAt: () => number) {
-      let morning = 0;
+    function setup(lastNightly: { at: number; status: "ok" | "failed" | "partial" }, nowAt: () => number) {
+      let nightly = 0;
       const jobs = new JobsRepo(memDb());
-      jobs.record(JOB_NIGHTLY, at(20, 16, 1), "ok", null);
-      jobs.record(JOB_MORNING, lastMorning.at, lastMorning.status, null);
+      jobs.record(JOB_NIGHTLY, lastNightly.at, lastNightly.status, null);
       const scheduler = new Scheduler({
         jobs, config: () => cfg, now: nowAt, userActive: () => true,
-        nightly: async () => "ok",
-        morning: async () => {
-          morning++;
+        nightly: async () => {
+          nightly++;
+          return "ok";
         },
+        morning: async () => undefined,
       });
-      return { scheduler, count: () => morning };
+      return { scheduler, count: () => nightly };
     }
 
     it("runs when lastRunAt is in the future (clock corrected backwards)", async () => {
       const t = setup({ at: at(22, 9), status: "ok" }, () => at(21, 9));
-      await t.scheduler.runMorningNow();
+      await t.scheduler.runNightlyNow();
       expect(t.count()).toBe(1);
     });
 
     it("runs when the scheduled run that started after the click failed", async () => {
       const clock = { now: at(21, 9) };
       const t = setup({ at: at(21, 9, 1), status: "failed" }, () => clock.now);
-      const p = t.scheduler.runMorningNow();
+      const p = t.scheduler.runNightlyNow();
       clock.now = at(21, 9, 2);
       await p;
       expect(t.count()).toBe(1);
@@ -321,7 +300,7 @@ describe("Scheduler", () => {
     it("runs on a later click after a scheduled run finished and the clock advanced", async () => {
       const clock = { now: at(21, 9, 5) };
       const t = setup({ at: at(21, 9), status: "ok" }, () => clock.now);
-      await t.scheduler.runMorningNow();
+      await t.scheduler.runNightlyNow();
       expect(t.count()).toBe(1);
     });
   });

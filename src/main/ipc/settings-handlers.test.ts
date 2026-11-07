@@ -15,12 +15,21 @@ function setup() {
 describe("settings IPC handlers", () => {
   it("saves a normalized value, notifies, and rejects keys that are not editable", () => {
     const { h, settings, notify } = setup();
-    h.set("staleDays", " 7 ");
-    expect(settings.get("staleDays")).toBe("7");
+    h.set("nightlyTime", " 7:05 ");
+    expect(settings.get("nightlyTime")).toBe("07:05");
     expect(notify).toHaveBeenCalledTimes(1);
     expect(() => h.set("notASetting", "x")).toThrow(SettingError);
     expect(() => h.reset(42)).toThrow(SettingError);
-    expect(h.get().staleDays).toBe("7");
+    expect(h.get().nightlyTime).toBe("07:05");
+  });
+
+  it("no longer offers the brief thresholds (the brief is gone)", () => {
+    const { h, notify } = setup();
+    for (const key of ["blockedDays", "reviewWaitDays", "staleDays"]) {
+      expect(() => h.set(key, "3"), key).toThrow(SettingError);
+      expect(h.get(), key).not.toHaveProperty(key);
+    }
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("checks the branch template against the ticket pattern on reset too, as it does on save (final review 8)", () => {
@@ -55,7 +64,7 @@ describe("settings IPC handlers", () => {
     expect(toggled).toEqual([]);
     h.set("memoryEnabled", "0");
     h.set("memoryEnabled", "0");
-    h.set("staleDays", "3");
+    h.set("nightlyTime", "18:00");
     expect(toggled).toEqual([false]);
     h.reset("memoryEnabled");
     expect(toggled).toEqual([false, true]);

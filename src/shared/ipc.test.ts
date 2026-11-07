@@ -43,4 +43,9 @@ describe("IPC whitelist", () => {
     expect(INVOKE_CHANNELS).toContain(IPC.featuresSummaryRun);
     expect(EVENT_CHANNELS).not.toContain(IPC.featuresSummaryRun);
   });
+
+  it("exposes the usage summary as invoke-only", () => {
+    expect(INVOKE_CHANNELS).toContain(IPC.usageSummary);
+    expect(EVENT_CHANNELS).not.toContain(IPC.usageSummary);
+  });
 });

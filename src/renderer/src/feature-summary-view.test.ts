@@ -1,22 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { Pr } from "../../shared/handoff";
-import type { FeatureHandoffRecord, FeatureView, TicketView } from "../../shared/types";
-import { featureHeadline, firstSentence, groupByFeature, prLabel, prPill, summaryOutcomeIsError, summaryOutcomeMessage } from "./feature-summary-view";
+import { firstSentence, prLabel, prPill, summaryOutcomeIsError, summaryOutcomeMessage } from "./feature-summary-view";
 import { STRINGS, setUiLang } from "./strings";
 
-const ticket = (key: string, featureId: number | null): TicketView => ({
-  key, title: null, repos: [], status: "active", statusManual: null, createdAt: 1, archivedAt: null, featureId,
-  effectiveStatus: "active", sessions: [], hiddenSessions: [], waiting: false,
-});
-const record = (over: Partial<FeatureHandoffRecord> = {}): FeatureHandoffRecord => ({
-  id: 1, featureId: 1, sessionId: null, trigger: "nightly", createdAt: 1, coversUntil: null, degraded: false, rawText: null, sourceRef: null,
-  payload: { summary: "后端已合并。前端在等 review", blockers: [], next_steps: [], decisions: [], open_questions: [] },
-  ...over,
-});
-const feature = (id: number, name: string, summary: FeatureHandoffRecord | null = null): FeatureView => ({
-  id, name, workspaceDir: "/w", repos: [], createdAt: 1, archivedAt: null, epicId: null, brief: null, briefSentAt: null,
-  tickets: [], sessions: [], hiddenSessions: [], waiting: false, summary, ticketPrs: {}, activity: {},
-});
 const pr = (state: Pr["state"], review: Pr["review"], number = 1, url = "https://github.com/o/r/pull/1"): Pr => ({ number, url, state, review });
 
 afterEach(() => setUiLang("zh"));
@@ -42,38 +28,6 @@ describe("firstSentence", () => {
     expect(Array.from(firstSentence(long)).length).toBe(80);
     expect(firstSentence(long).endsWith("…")).toBe(true);
     expect(firstSentence("短句")).toBe("短句");
-  });
-});
-
-describe("groupByFeature", () => {
-  const tickets = [ticket("A-1", 1), ticket("B-1", 2), ticket("A-2", 1), ticket("S-1", null)];
-  const features = [feature(1, "alpha"), feature(2, "beta")];
-
-  it("groups interleaved entries by feature in order of first appearance and keeps the order inside a group", () => {
-    const entries = [{ ticketKey: "A-1" }, { ticketKey: "B-1" }, { ticketKey: "A-2" }];
-    const groups = groupByFeature(entries, tickets, features);
-    expect(groups.map((g) => g.feature?.name)).toEqual(["alpha", "beta"]);
-    expect(groups[0].entries.map((e) => e.ticketKey)).toEqual(["A-1", "A-2"]);
-    expect(groups[1].entries.map((e) => e.ticketKey)).toEqual(["B-1"]);
-  });
-
-  it("puts standalone, archived and unknown tickets in the feature: null group", () => {
-    const groups = groupByFeature([{ ticketKey: "S-1" }, { ticketKey: "A-1" }, { ticketKey: "GONE-1" }], tickets, features);
-    expect(groups.map((g) => g.feature?.name ?? null)).toEqual([null, "alpha"]);
-    expect(groups[0].entries.map((e) => e.ticketKey)).toEqual(["S-1", "GONE-1"]);
-  });
-
-  it("returns nothing for no entries, and one null group for an old brief without features", () => {
-    expect(groupByFeature([], tickets, features)).toEqual([]);
-    expect(groupByFeature([{ ticketKey: "S-1" }], tickets, [])).toEqual([{ feature: null, entries: [{ ticketKey: "S-1" }] }]);
-  });
-});
-
-describe("featureHeadline", () => {
-  it("is the first sentence of a valid summary, null otherwise", () => {
-    expect(featureHeadline(feature(1, "a", record()))).toBe("后端已合并。");
-    expect(featureHeadline(feature(1, "a"))).toBeNull();
-    expect(featureHeadline(feature(1, "a", record({ degraded: true, payload: null, rawText: "x" })))).toBeNull();
   });
 });
 

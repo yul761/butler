@@ -34,12 +34,57 @@ interface Term {
   started: boolean;
   /** 用户上一次往这个终端写东西（渲染进程的按键，经 write）的时间；0 = 还没有。deliver、prefill 自己的写入不算。 */
   lastUserInputAt: number;
+  /** 输入框里还没发出去的可见字符数（见 nextDraftLength）；0 = 没有草稿。 */
+  draftLen: number;
+  /** 终端打开（新开或恢复）的时间（R36：刚打开的终端不自动换新）。 */
+  openedAt: number;
 }
 
 /** 终端输出去掉 ANSI 控制序列后的纯文本（只用来认对话框）。 */
 export function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
   return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g, "");
+}
+
+/**
+ * 输入框草稿长度的下一个值：current 是之前的长度，data 是这次写进终端的字节。
+ * 鼠标上报、焦点事件、方向键等 ESC 序列不算；bracketed paste 的标记去掉但内容计入；
+ * 回车（\\r）、Ctrl+C、Ctrl+U 清零，单独的 \\n 算换行加 1，退格减 1，其他控制字符忽略，可见字符加 1。
+ */
+export function nextDraftLength(current: number, data: string): number {
+  let n = current;
+  // bracketed paste 里的内容整段计入（换行也算一个，粘贴的多行文本留在输入框里）；其余部分逐字符处理。
+  // eslint-disable-next-line no-control-regex
+  const parts = data.split(/\x1b\[200~([\s\S]*?)(?:\x1b\[201~|$)/);
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 1) {
+      n += [...parts[i]].length;
+      continue;
+    }
+    // CSI 参数含 <（SGR 鼠标上报），SS3 带一个字符（\x1bOA），所以不直接用 stripAnsi；其余形状同它。
+    // eslint-disable-next-line no-control-regex
+    const text = parts[i].replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bO.|\x1b[@-Z\\-_]/g, "");
+    for (const ch of text) {
+      if (ch === "\r" || ch === "\x03" || ch === "\x15") n = 0;
+      else if (ch === "\x7f" || ch === "\b") n = Math.max(0, n - 1);
+      else if (ch === "\n") n += 1; // Ctrl+J：在输入框里换行，不提交
+      else if (ch < " ") continue;
+      else n += 1;
+    }
+  }
+  return n;
+}
+
+/**
+ * 终端自己发出的报告（xterm 回答程序的查询、上报焦点和鼠标）：焦点 \x1b[I / \x1b[O、光标位置 CPR、设备属性 DA、
+ * 模式查询的回复 DECRPM、kitty 键盘标志、OSC 回复、SGR 和 X10 鼠标上报。它们经渲染进程的 onData 写进来，但不是用户在操作（R37）。
+ */
+// eslint-disable-next-line no-control-regex
+const TERMINAL_REPORT_RE = /\x1b\[[IO]|\x1b\[\d+;\d+R|\x1b\[[?>]?[\d;]*c|\x1b\[\?[\d;]*\$y|\x1b\[\?\d+u|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[M[\s\S]{3}/g;
+
+/** 去掉终端自己发的报告之后还剩东西：才是用户的输入（方向键、Esc、Tab、Ctrl+C、打字都算）。 */
+export function isUserInput(data: string): boolean {
+  return data.replace(TERMINAL_REPORT_RE, "") !== "";
 }
 
 /**
@@ -77,9 +122,15 @@ export interface DeliverOptions {
    * 任务会被拆成好几条消息提交（CI 上实际出现过）。
    */
   singleLine?: boolean;
+  /**
+   * 粘贴前的最后一道复查（I2）：输入框就绪、马上要粘贴时调用（同步，中间不会插进别的事）。返回 false 就什么都不写，
+   * deliver 返回 blocked。调用期间这一次 deliver 自己不算「在递」（autoInputInFlight），别的 deliver 还算。
+   */
+  recheck?: () => boolean;
 }
 
-export type DeliverResult = "sent" | "exited" | "timeout";
+/** blocked：recheck 在粘贴前说不行（用户刚输入过、别的自动输入在递、session 又忙了……），什么都没写。 */
+export type DeliverResult = "sent" | "exited" | "timeout" | "blocked";
 
 /** 最多保留多少个已退出终端的记录（用于快速失败的 claude 也能看到退出码）。 */
 export const EXITED_LIMIT = 20;
@@ -126,6 +177,8 @@ export class PtyManager {
   private readonly terms = new Map<string, Term>();
   /** 已退出终端的回放内容（模式已经补在前面）。 */
   private readonly exited = new Map<string, { buffer: string; exitCode: number }>();
+  /** 每个终端正在进行的 deliver 有几个（I2）：DeliveryGuard 看到有就当作忙，别的自动输入不往里贴。 */
+  private readonly inFlight = new Map<string, number>();
 
   constructor(
     private readonly factory: PtyFactory,
@@ -146,7 +199,7 @@ export class PtyManager {
     if (this.terms.has(termId)) throw new Error(`terminal ${termId} already open`);
     this.exited.delete(termId);
     const proc = this.factory(spec.file, spec.args, { cwd: opts.cwd, env: opts.env, cols: opts.cols ?? 120, rows: opts.rows ?? 32 });
-    const term: Term = { proc, buffer: "", cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0 };
+    const term: Term = { proc, buffer: "", cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draftLen: 0, openedAt: this.now() };
     this.terms.set(termId, term);
     proc.onData((data) => {
       // ConPTY 在进程退出后还可能吐出尾部数据；退出后一律丢弃，否则渲染进程会以为终端被重新打开而清掉退出提示。
@@ -186,16 +239,40 @@ export class PtyManager {
     return !!t && (permissionPromptShowing(t.buffer) || dialogShowing(t.buffer));
   }
 
-  /** 用户的输入（渲染进程的按键）。 */
+  /** 用户的输入（渲染进程的按键）。终端自己发的报告（焦点、鼠标、查询的回复）照样写进去，但不算用户输入过（R37）。 */
   write(termId: string, data: string): void {
     const t = this.terms.get(termId);
-    if (t) t.lastUserInputAt = this.now();
+    if (t) {
+      if (isUserInput(data)) t.lastUserInputAt = this.now();
+      t.draftLen = nextDraftLength(t.draftLen, data);
+    }
     this.guard(termId, "write", () => t?.proc.write(data));
+  }
+
+  /** 用户最后一次回车之后有没有打过可见字符（还没发出去）。Butler 的 prefill 也算草稿；deliver 不算。终端不在了返回 false。 */
+  hasDraft(termId: string): boolean {
+    return (this.terms.get(termId)?.draftLen ?? 0) > 0;
   }
 
   /** 用户上一次在这个终端里输入的时间；没输入过、终端不在了返回 0。往里贴通知前看它，免得把用户打了一半的话一起提交。 */
   lastUserInputAt(termId: string): number {
     return this.terms.get(termId)?.lastUserInputAt ?? 0;
+  }
+
+  /** 终端打开（新开或恢复）的时间；终端不在了返回 0。 */
+  openedAt(termId: string): number {
+    return this.terms.get(termId)?.openedAt ?? 0;
+  }
+
+  /** 这个终端里有 Butler 的 deliver 正在进行（在等输入框就绪、在粘贴、在等回车）。 */
+  autoInputInFlight(termId: string): boolean {
+    return (this.inFlight.get(termId) ?? 0) > 0;
+  }
+
+  private hold(termId: string, delta: 1 | -1): void {
+    const n = (this.inFlight.get(termId) ?? 0) + delta;
+    if (n > 0) this.inFlight.set(termId, n);
+    else this.inFlight.delete(termId);
   }
 
   resize(termId: string, cols: number, rows: number): void {
@@ -228,8 +305,32 @@ export class PtyManager {
    * 把任务作为第一条消息交给刚启动的 claude（总控开子 session）：等 SessionStart（或者等满 startWaitMs）、输出安静、
    * 屏幕上没有信任文件夹 / MCP 之类的启动对话框，才把文本当作一次粘贴（bracketed paste）写进去；回显安静之后回车。
    * 对话框一直在（用户还没处理）就一直等到 timeoutMs，绝不替用户回答。text 里不能有 ESC（调用方先 sanitizeTask）。
+   * 从开始到返回，这个终端都算有自动输入在递（autoInputInFlight，I2）。
    */
   async deliver(termId: string, text: string, o: DeliverOptions = {}): Promise<DeliverResult> {
+    // 同步记上：调用方过完 guard 马上调 deliver，中间没有 await，别的调用方的 guard 从这一刻起就看到它。
+    this.hold(termId, 1);
+    try {
+      return await this.deliverOnce(termId, text, o);
+    } finally {
+      this.hold(termId, -1);
+    }
+  }
+
+  /** 复查时自己这一次不算在递。 */
+  private recheckPasses(termId: string, recheck: () => boolean): boolean {
+    this.hold(termId, -1);
+    try {
+      return recheck();
+    } catch (e) {
+      this.log(`pty ${termId}: deliver recheck failed`, e);
+      return false;
+    } finally {
+      this.hold(termId, 1);
+    }
+  }
+
+  private async deliverOnce(termId: string, text: string, o: DeliverOptions): Promise<DeliverResult> {
     const idleMs = o.idleMs ?? 800;
     const start = this.now();
     for (;;) {
@@ -239,6 +340,7 @@ export class PtyManager {
       const started = t.started || now - start >= (o.startWaitMs ?? 60_000);
       const idle = t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs;
       if (started && idle && !dialogShowing(t.buffer)) {
+        if (o.recheck && !this.recheckPasses(termId, o.recheck)) return "blocked";
         // 粘贴里的换行按终端的惯例写成 \r（xterm 的粘贴也是这样）：Windows 的 ConPTY 会吞掉输入里的 \n。
         const body = o.singleLine ? text.replace(/\s*\r?\n\s*/g, " ") : text.replace(/\r?\n/g, "\r");
         this.guard(termId, "deliver paste", () => t.proc.write(`\x1b[200~${body}\x1b[201~`));
@@ -270,6 +372,7 @@ export class PtyManager {
       const now = this.now();
       if (t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs) {
         this.guard(termId, "prefill write", () => t.proc.write(text));
+        t.draftLen = nextDraftLength(t.draftLen, text);
         return true;
       }
       if (now - start >= timeoutMs) return false;

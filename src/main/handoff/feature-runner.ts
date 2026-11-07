@@ -1,5 +1,6 @@
 import { FeatureHandoffSchema } from "../../shared/handoff";
 import { effectiveStatus, type FeatureHandoffOutcome, type FeatureHandoffTrigger, type HandoffOutcome, type Ticket } from "../../shared/types";
+import { storedModel } from "../claude/spawn";
 import { headlessArgs, READ_ONLY_TOOLS } from "../claude/headless";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";
@@ -270,6 +271,8 @@ export class FeatureSummaryRunner {
     const args = headlessArgs({
       schema: FEATURE_HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: [...READ_ONLY_TOOLS, ...trackerTools(this.d.settings)],
       mcpConfigs: this.mcpConfigs(mcpCwd), addDirs: dirs.addDirs.filter((d) => d !== cwd),
+      // fork 换模型会让 prompt 缓存整个失效：沿用被 fork 的总控自己的模型。
+      model: (session && storedModel(this.d.sessions.get(session.id) ?? { model: null })) ?? undefined,
     });
 
     let attempt = await this.exec(featureId, args, prompt, cwd, session?.id);

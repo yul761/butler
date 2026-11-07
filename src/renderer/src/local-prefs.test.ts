@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isCollapsed, onCollapsedChange, setCollapsed } from "./local-prefs";
+import { isCollapsed, onCollapsedChange, setCollapsed, setWizardSkipped, wizardSkipped } from "./local-prefs";
 
 function fakeStorage(): Storage {
   const m = new Map<string, string>();
@@ -64,5 +64,25 @@ describe("collapsed sections", () => {
     setCollapsed("sidebar:f1", true);
     off();
     expect(seen).toEqual([true]);
+  });
+});
+
+describe("skipped wizard (the Now page's setup reminder)", () => {
+  beforeEach(() => vi.stubGlobal("localStorage", fakeStorage()));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("is off until the wizard is skipped, and \"don't show again\" clears it for good", () => {
+    expect(wizardSkipped()).toBe(false);
+    setWizardSkipped(true);
+    expect(wizardSkipped()).toBe(true);
+    setWizardSkipped(false);
+    expect(wizardSkipped()).toBe(false);
+    expect(localStorage.getItem("butler.wizardSkipped")).toBeNull();
+  });
+
+  it("treats missing storage as not skipped", () => {
+    vi.unstubAllGlobals();
+    expect(wizardSkipped()).toBe(false);
+    expect(() => setWizardSkipped(true)).not.toThrow();
   });
 });

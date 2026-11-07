@@ -16,12 +16,6 @@ export interface ScheduleConfig {
   workingDays: ReadonlySet<number>;
 }
 
-export interface Thresholds {
-  blockedDays: number;
-  reviewWaitDays: number;
-  staleDays: number;
-}
-
 export function parseTime(v: string): { h: number; m: number } | null {
   const m = /^(\d{1,2}):(\d{2})$/.exec(v.trim());
   if (!m) return null;
@@ -57,11 +51,6 @@ export function parseToolList(v: string): string[] {
 
 /** tracker 工具只能是 MCP 工具名（mcp__server 或 mcp__server__tool）：Bash、带参数的规则、以 - 开头的 flag 一律不是。 */
 export const TRACKER_TOOL_RE = /^mcp__[A-Za-z0-9_-]+(__[A-Za-z0-9_-]+)?$/;
-
-export function parseDays(v: string, fallback: number): number {
-  const t = v.trim();
-  return /^\d{1,3}$/.test(t) ? Number(t) : fallback;
-}
 
 /** 开关类设置：只接受 0 / 1。 */
 export function normalizeFlag(value: string): string {
@@ -308,11 +297,6 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     }
     case "headlessProjectMcp":
       return normalizeFlag(value);
-    case "blockedDays":
-    case "reviewWaitDays":
-    case "staleDays":
-      if (!/^\d{1,3}$/.test(value.trim())) throw new SettingError(M().days);
-      return String(Number(value.trim()));
     case "handoffPrompt":
     case "refreshPrompt":
       if (!value.trim()) throw new SettingError(M().promptEmpty);
@@ -361,6 +345,11 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "memoryEnabled":
     case "onboardingDone":
       return normalizeFlag(value);
+    case "refreshThresholdTokens": {
+      const t = value.trim();
+      if (!REFRESH_THRESHOLD_RE.test(t)) throw new SettingError(M().refreshThreshold);
+      return String(Number(t));
+    }
     case "language": {
       const t = value.trim();
       if (!(LANG_SETTINGS as readonly string[]).includes(t)) throw new SettingError(M().language);
@@ -383,17 +372,18 @@ export function scheduleConfig(s: SettingsRepo): ScheduleConfig {
   };
 }
 
-export function thresholds(s: SettingsRepo): Thresholds {
-  return {
-    blockedDays: parseDays(s.get("blockedDays"), 2),
-    reviewWaitDays: parseDays(s.get("reviewWaitDays"), 2),
-    staleDays: parseDays(s.get("staleDays"), 5),
-  };
-}
-
 /** 记忆开关（memoryEnabled）：只有明确存成 "0" 才算关（默认开）。所有读这个开关的地方都用它。 */
 export function memoryOn(s: Pick<SettingsRepo, "get">): boolean {
   return s.get("memoryEnabled") !== "0";
+}
+
+/** 换新阈值：0 或者最多 7 位的整数 token 数（大于任何模型的上下文）。 */
+const REFRESH_THRESHOLD_RE = /^\d{1,7}$/;
+
+/** 自动换新的阈值（refreshThresholdTokens，计划 16）：0 = 关；存的值不合法时用默认的 150000。 */
+export function refreshThreshold(s: Pick<SettingsRepo, "get">): number {
+  const t = s.get("refreshThresholdTokens").trim();
+  return REFRESH_THRESHOLD_RE.test(t) ? Number(t) : Number(SETTING_DEFAULTS.refreshThresholdTokens);
 }
 
 export function trackerTools(s: SettingsRepo): string[] {

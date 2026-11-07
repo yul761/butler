@@ -53,6 +53,20 @@ describe("MergeGateRepo", () => {
     expect(repo.pendingNotices()[0].sessionId).toBe("s3");
   });
 
+  it("waitingSessionIds lists the sessions still waiting on an active hold and not yet told", () => {
+    const repo = new MergeGateRepo(memDb());
+    const open = repo.addHold(hold());
+    const released = repo.addHold(hold({ branch: "feat-c" }));
+    repo.addWaiter({ holdId: open, sessionId: "s2", ticketKey: "BTL-2", branch: "feat-b", createdAt: 150 });
+    repo.addWaiter({ holdId: open, sessionId: "s3", ticketKey: "BTL-3", branch: "feat-e", createdAt: 150 });
+    repo.addWaiter({ holdId: open, sessionId: null, ticketKey: null, branch: "feat-g", createdAt: 150 });
+    repo.addWaiter({ holdId: released, sessionId: "s4", ticketKey: "BTL-4", branch: "feat-h", createdAt: 150 });
+    repo.releaseHold(released, "merged", 200);
+    const s3 = repo.waitersOf(open).find((w) => w.sessionId === "s3")!;
+    repo.markNotified(s3.id, 210);
+    expect(repo.waitingSessionIds()).toEqual(new Set(["s2"]));
+  });
+
   it("returns recent events newest first with files restored, and finds the last proceed_conflict against a branch", () => {
     const repo = new MergeGateRepo(memDb());
     const base = { repoPath: "/r", ticketKey: "BTL-2", branch: "feat-b", otherTicket: "BTL-1", otherBranch: "feat-a" };

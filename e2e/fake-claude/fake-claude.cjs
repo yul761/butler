@@ -13,7 +13,13 @@
 //     否则在 cwd 里执行、打印输出、再跑 PostToolUse；日志记 gate deny <理由> / gate allow <命令>，这一轮照常结束；
 //     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 butler-sessions，调用它，结果写进运行记录；
 //     启动时写一份 sessions/<pid>.json 登记文件，Butler 从这里查 session 的名字；
+//     输入 /fake-ask 时回一句以“？”结尾的问话（ASK_REPLY）并结束这一轮：「现在」页的需要你走问号退路认出它；
+//     输入 /clear 时像 Claude Code：换一个新的 session id 和新的 transcript，跑 SessionStart（source=clear），停在空的输入框上（没有 Stop）；
+//     每条 assistant 记录都带 usage：上下文是 FAKE_CLAUDE_CONTEXT_TOKENS（e2e 用它撑过换新的阈值），/clear 之后从头算，回到 CLEARED_CONTEXT；
+//     其余输入回“收到：<输入>”并结束这一轮；每条输入都在运行记录里记一行 prompt <JSON 字符串>；
 //   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果、feature 汇总或卡住判断；stream-json 的 MCP 探测只回 init。
+//     需要你的判断（schema 里有 needs_user）总是失败退出：和真实 e2e 环境里 Haiku 判断失败一样，Butler 走问号退路；
+//     FAKE_CLAUDE_JUDGE_DELAY_MS 设了就等这么久才失败（像真的 Haiku 要判断几秒）。
 //     FAKE_CLAUDE_SUMMARY_GATE 指向的文件存在时，feature 汇总等到文件被删掉才回答：e2e 用它控制归档前要等多久。
 "use strict";
 const fs = require("node:fs");
@@ -21,6 +27,7 @@ const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
 const { spawn, spawnSync } = require("node:child_process");
+const { randomUUID } = require("node:crypto");
 
 const args = process.argv.slice(2);
 const has = (name) => args.includes(name);
@@ -97,8 +104,13 @@ const STUCK_VERDICT = {
   zh: { stuck: true, reason: "测试进程在等一个不会来的信号", action: "确认测试进程没有在动，再决定要不要杀掉重跑" },
   en: { stuck: true, reason: "The test process is waiting for a signal that will not come", action: "Check that the test process is idle, then decide whether to kill and rerun it" },
 };
+/** /fake-ask 的回复：停下来问用户。 */
+const ASK_REPLY = "要把它拆成两个 PR 吗？";
 /** /fake-bash 和 /fake-bg 写进输出文件的内容：比面板的 6 行多。 */
 const COMMAND_OUTPUT = Array.from({ length: 8 }, (_, i) => `step ${i + 1} of 8`);
+
+/** 没设 FAKE_CLAUDE_CONTEXT_TOKENS 时、以及 /clear 之后回复的上下文：比 e2e 里设的换新阈值小。 */
+const CLEARED_CONTEXT = 500;
 
 /** hook 和 /fake-run 的命令都用这个 shell 跑（macOS 用 /bin/sh，Windows 用 Git Bash，和 Claude Code 一样）。 */
 const SHELL = process.platform === "win32" ? process.env.CLAUDE_CODE_GIT_BASH_PATH || "C:\\Program Files\\Git\\bin\\bash.exe" : "/bin/sh";
@@ -162,6 +174,15 @@ function headless() {
       // 按 handoff 处理。
     }
     const props = schema.properties || {};
+    if (props.needs_user) {
+      // 不假装 Haiku：判断失败，Butler 按回复是不是以问号结尾来定。FAKE_CLAUDE_JUDGE_DELAY_MS 让它像真的 Haiku 一样过一会儿才失败。
+      setTimeout(() => {
+        log("needs-you judge failed");
+        process.stderr.write("fake claude does not judge needs-you\n");
+        process.exitCode = 1;
+      }, Number(process.env.FAKE_CLAUDE_JUDGE_DELAY_MS) || 0);
+      return;
+    }
     // prompt 的第一行有中文就当中文，否则英文（Butler 按界面语言出 prompt）。
     const lang = /[\u4e00-\u9fff]/.test(input.split("\n")[0]) ? "zh" : "en";
     const judge = !!props.stuck;
@@ -197,13 +218,19 @@ function callMcpTool(configPath, tool, input) {
 }
 
 function interactive() {
-  const sessionId = flag("--session-id") || flag("--resume") || "unknown";
+  // /clear 会换掉 session id，transcript 和命令输出目录跟着换。
+  let sessionId = flag("--session-id") || flag("--resume") || "unknown";
   const cwd = process.cwd();
   const project = cwd.replace(/[^A-Za-z0-9]/g, "-");
-  const transcript = path.join(configDir, "projects", project, `${sessionId}.jsonl`);
+  const transcriptOf = (id) => path.join(configDir, "projects", project, `${id}.jsonl`);
+  let transcript = transcriptOf(sessionId);
   // Claude Code 放命令输出的地方：真实的系统临时目录，不跟 TMPDIR 走（Windows 上位置还没验证，用 TMPDIR）。
   const claudeTmp = process.platform === "win32" ? os.tmpdir() : path.join(process.platform === "darwin" ? "/private/tmp" : "/tmp", `claude-${process.getuid()}`);
-  const tasksDir = path.join(claudeTmp, project, sessionId, "tasks");
+  const tasksDirOf = (id) => path.join(claudeTmp, project, id, "tasks");
+  let tasksDir = tasksDirOf(sessionId);
+  /** 这一段对话的上下文大小，写进每条 assistant 记录的 usage（Butler 的 UsageScanner 读它）。 */
+  let contextTokens = Number(process.env.FAKE_CLAUDE_CONTEXT_TOKENS) || CLEARED_CONTEXT;
+  const usage = () => ({ input_tokens: contextTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 20 });
   const out = (s) => process.stdout.write(s.replace(/\n/g, "\r\n"));
   const append = (entry) => {
     fs.mkdirSync(path.dirname(transcript), { recursive: true });
@@ -218,21 +245,28 @@ function interactive() {
       servers = [`unreadable ${mcp}: ${e.message}`];
     }
   }
-  // 和 Claude Code 一样登记运行中的 session。
-  fs.mkdirSync(path.join(configDir, "sessions"), { recursive: true });
-  fs.writeFileSync(path.join(configDir, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId, cwd, name: `fake-${sessionId.slice(0, 8)}`, status: "idle" }));
+  // 和 Claude Code 一样登记运行中的 session（/clear 之后改成新的 id，名字不变）。
+  const name = `fake-${sessionId.slice(0, 8)}`;
+  const register = () => {
+    fs.mkdirSync(path.join(configDir, "sessions"), { recursive: true });
+    fs.writeFileSync(path.join(configDir, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId, cwd, name, status: "idle" }));
+  };
+  register();
   log(`interactive ${has("--resume") ? "resume" : "new"} ${sessionId} mcp=${servers.join(",")} cwd=${cwd} adddirs=${flags("--add-dir").join("|")}`);
   runHooks("SessionStart", { session_id: sessionId, cwd, source: has("--resume") ? "resume" : "startup", transcript_path: transcript });
   out(`fake claude ready (${sessionId.slice(0, 8)})\n`);
   if (mcp) out(`mcp: ${servers.join(", ")}\n`);
   out("> ");
+  /** assistant 记录的 message.id：和 Claude Code 一样每条回复一个（「需要你」按它每条只判断一次）。 */
+  let messages = 0;
+  const messageId = () => `msg-${process.pid}-${++messages}`;
   /** 写一条 Bash 的 tool_use 和它的输出文件。 */
   const startBash = (command, input) => {
     const toolId = `toolu-${Date.now()}`;
     const taskId = `task-${Date.now()}`;
     const output = path.join(tasksDir, `${taskId}.output`);
     fs.mkdirSync(tasksDir, { recursive: true });
-    append({ type: "assistant", uuid: `a-${Date.now()}`, message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: toolId, name: "Bash", input: { command, ...input } }] } });
+    append({ type: "assistant", uuid: `a-${Date.now()}`, message: { id: messageId(), role: "assistant", stop_reason: "tool_use", usage: usage(), content: [{ type: "tool_use", id: toolId, name: "Bash", input: { command, ...input } }] } });
     fs.writeFileSync(output, `${COMMAND_OUTPUT.join("\n")}\n`);
     log(`task output ${output}`);
     return { toolId, taskId, output };
@@ -259,6 +293,8 @@ function interactive() {
       out("> ");
       return;
     }
+    // 每条收到的输入都记一笔（JSON 字符串）：e2e 按顺序核对 Butler 往终端里输入了什么，屏幕上的早已滚走。
+    log(`prompt ${JSON.stringify(line)}`);
     if (line === "exit") {
       runHooks("SessionEnd", { session_id: sessionId, cwd, reason: "exit", transcript_path: transcript });
       process.exit(0);
@@ -279,6 +315,19 @@ function interactive() {
         if (wheel) log(`mouse wheel ${wheel[1] === "64" ? "up" : "down"}`);
       });
       out("> ");
+      return;
+    }
+    if (line === "/clear") {
+      // Claude Code 的 /clear：新的 session id 和 transcript，SessionStart 的 source 是 clear；BUTLER_SESSION 不变，Butler 按它把新 id 接到这个终端上。
+      // 不算一次提问（没有 UserPromptSubmit），之后停在空的输入框上，也没有 Stop。上下文从头算。
+      sessionId = randomUUID();
+      transcript = transcriptOf(sessionId);
+      tasksDir = tasksDirOf(sessionId);
+      contextTokens = CLEARED_CONTEXT;
+      register();
+      log(`clear ${sessionId}`);
+      runHooks("SessionStart", { session_id: sessionId, cwd, source: "clear", transcript_path: transcript });
+      out(`fake claude cleared (${sessionId.slice(0, 8)})\n> `);
       return;
     }
     if (line === "/fake-bg-done") {
@@ -316,7 +365,7 @@ function interactive() {
       append({ type: "user", toolUseResult: { backgroundTaskId: taskId }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: `Command running in background with ID: ${taskId}. Output is being written to: ${output}. You will be notified when it completes \u2014 do not poll that file or sleep while waiting.` }] } });
     }
     const endTurn = (reply) => {
-      append({ type: "assistant", uuid: `a-${Date.now()}`, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: reply }] } });
+      append({ type: "assistant", uuid: `a-${Date.now()}`, message: { id: messageId(), role: "assistant", stop_reason: "end_turn", usage: usage(), content: [{ type: "text", text: reply }] } });
       out(`${reply}\n`);
       runHooks("Stop", { session_id: sessionId, cwd, stop_hook_active: false, transcript_path: transcript });
       out("> ");
@@ -356,11 +405,13 @@ function interactive() {
     const coordinator = servers.includes("butler-sessions");
     const question = /^\/handoff\s+(.+)$/.exec(line);
     const featureHandoff = { ...COMMAND_FEATURE_HANDOFF, open_questions: question ? [question[1]] : [] };
-    endTurn(!command
-      ? `收到：${line}`
-      : coordinator
-        ? `handoff：\n\n\`\`\`butler-feature-handoff\n${JSON.stringify(featureHandoff, null, 2)}\n\`\`\``
-        : `handoff：\n\n\`\`\`butler-handoff\n${JSON.stringify(COMMAND_HANDOFF, null, 2)}\n\`\`\``);
+    endTurn(line === "/fake-ask"
+      ? ASK_REPLY
+      : !command
+        ? `收到：${line}`
+        : coordinator
+          ? `handoff：\n\n\`\`\`butler-feature-handoff\n${JSON.stringify(featureHandoff, null, 2)}\n\`\`\``
+          : `handoff：\n\n\`\`\`butler-handoff\n${JSON.stringify(COMMAND_HANDOFF, null, 2)}\n\`\`\``);
   });
   rl.on("close", () => process.exit(0));
 }

@@ -1,9 +1,10 @@
 import { mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BRIEF_LIMIT, SUMMARY_LIMIT, type ControlResult, type EpicControlRequest } from "../../shared/control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, SUMMARY_LIMIT, type ControlResult, type EpicControlRequest } from "../../shared/control";
 import type { SessionActivity } from "../../shared/activity";
 import type { EpicFeatureRow } from "../../shared/types";
+import type { EpicHistoryEntry } from "../db/epic-history-repo";
 import { EpicsRepo } from "../db/epics-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
@@ -34,6 +35,7 @@ async function setup() {
   const solo = await epicService.create({ name: "solo", repoPaths: [frontend] });
   let notified = 0;
   let rows: EpicFeatureRow[] = [];
+  let history: EpicHistoryEntry[] = [];
   const logs: string[] = [];
   const events: string[] = [];
   let refreshEpic: (epicId: number, except?: number) => void = (epicId, except) => void events.push(`refresh:${epicId}:${except}`);
@@ -42,8 +44,10 @@ async function setup() {
   const activities = new Map<string, SessionActivity>();
   const replies = new Map<string, string>();
   const killed: string[] = [];
+  const refreshed: string[] = [];
   const handle = controlHandler({
     tickets, sessions, features, epics, featureService,
+    refresher: { precheck: () => null, refresh: async (id) => (refreshed.push(id), "done" as const) },
     ticketService: undefined as never,
     sessionService: { isRunning: (id: string) => open.has(id), termIdOf: (id: string) => (open.has(id) ? id : null) } as never,
     activity: (id) => activities.get(id) ?? null,
@@ -51,6 +55,7 @@ async function setup() {
     screenNeedsUser: () => false,
     lastReply: (id) => replies.get(id) ?? null,
     epicRows: () => rows,
+    epicHistory: () => history,
     submit: async () => "sent" as const,
     notify: () => void notified++,
     syncEpic: (id) => void events.push(`sync:${id}:${features.list().length}`),
@@ -62,7 +67,8 @@ async function setup() {
     id: 0, name: "f", status: "active", archivedAt: null, summaryAt: 5, summary: "s", blockers: [], decisions: [], openQuestions: [], ...o,
   });
   return { handle, base, epic, solo, features, epics, featureService, epicService, frontend, backend, elsewhere, notified: () => notified, setRows: (r: EpicFeatureRow[]) => (rows = r), row,
-    logs, events, setRefreshEpic: (f: typeof refreshEpic) => (refreshEpic = f), tickets, sessions, open, activities, replies, killed };
+    setHistory: (h: EpicHistoryEntry[]) => (history = h),
+    logs, events, setRefreshEpic: (f: typeof refreshEpic) => (refreshEpic = f), tickets, sessions, open, activities, replies, killed, refreshed };
 }
 
 const err = (r: ControlResult) => (r.ok ? "" : r.error);
@@ -152,6 +158,33 @@ describe("create_feature from an epic session (design 2026-11-01)", () => {
   });
 });
 
+describe("set_epic_plan from an epic session (plan 16)", () => {
+  it("set_epic_plan stores the plan and resyncs", async () => {
+    const { handle, base, epics, epic, events } = await setup();
+    const r = await handle({ ...base, op: "set_epic_plan", plan: "  先做支付，再做退款\n" });
+    expect(r).toMatchObject({ ok: true, value: { note: expect.any(String) } });
+    expect(epics.get(epic.id)).toMatchObject({ plan: "先做支付，再做退款", planAt: expect.any(Number) });
+    expect(events).toEqual([`sync:${epic.id}:0`]);
+    // 改了规划：整份换掉，再同步一次。
+    await handle({ ...base, op: "set_epic_plan", plan: "改成先做退款" });
+    expect(epics.get(epic.id)?.plan).toBe("改成先做退款");
+    expect(events).toEqual([`sync:${epic.id}:0`, `sync:${epic.id}:0`]);
+  });
+
+  it("refuses an empty or too long plan, and an archived epic, and stores nothing", async () => {
+    const { handle, base, epics, epic, solo, epicService, events } = await setup();
+    for (const plan of ["   ", "x".repeat(EPIC_PLAN_MAX_CHARS + 1)]) {
+      const r = await handle({ ...base, op: "set_epic_plan", plan });
+      expect(err(r)).toContain(String(EPIC_PLAN_MAX_CHARS));
+    }
+    expect(epics.get(epic.id)?.plan).toBeNull();
+    await epicService.archive(solo.id, { terminalsOpen: () => false, featureTerminalsOpen: () => false });
+    expect(await handle({ ...base, epicId: solo.id, op: "set_epic_plan", plan: "p" })).toMatchObject({ ok: false });
+    expect(epics.get(solo.id)?.plan).toBeNull();
+    expect(events).toEqual([]);
+  });
+});
+
 describe("epic_context from a feature coordinator", () => {
   it("returns the epic name and the other features, not the caller", async () => {
     const { handle, epic, features, featureService, elsewhere, setRows, row } = await setup();
@@ -163,6 +196,21 @@ describe("epic_context from a feature coordinator", () => {
     const v = (r as { value: { features: EpicFeatureRow[] } }).value;
     expect(v.features).toHaveLength(1);
     expect(v.features[0].summary).toHaveLength(SUMMARY_LIMIT);
+  });
+
+  it("returns the epic's past decisions as history, and an empty history without any", async () => {
+    const { handle, epic, features, featureService, elsewhere, setHistory } = await setup();
+    const mine = await featureService.create({ name: "mine", repoPaths: [elsewhere] });
+    features.setEpic(mine.id, epic.id);
+    const empty = await handle({ v: 1, featureId: mine.id, from: null, op: "epic_context" });
+    expect(empty).toMatchObject({ ok: true, value: { history: "" } });
+    setHistory([{
+      id: 1, epicId: epic.id, featureId: null, trigger: "weekly", createdAt: new Date(2026, 10, 2).getTime(), coversFrom: 0, coversUntil: 0,
+      payload: { summary: "结账上线", decisions: [{ what: "金额用分存", why: "避免浮点误差" }] },
+    }]);
+    const r = await handle({ v: 1, featureId: mine.id, from: null, op: "epic_context" });
+    const history = (r as { value: { history: string } }).value.history;
+    for (const s of ["2026-11-02", "结账上线", "金额用分存", "避免浮点误差"]) expect(history).toContain(s);
   });
 
   it("errors for a feature outside any epic, and for an archived epic", async () => {
@@ -232,6 +280,18 @@ describe("sessions of an epic's features (task 11)", () => {
     expect(await end("fc")).toEqual({ v: 1, ok: true, value: { ended: true } });
     expect(await end("t1")).toEqual({ v: 1, ok: true, value: { ended: true } });
     expect(killed).toEqual(["fc", "t1"]);
+  });
+
+  it("refreshes the coordinator or a ticket session of one of its features, and nothing outside them (plan 16)", async () => {
+    const { handle, base, refreshed } = await withSessions();
+    const refresh = (session: string) => handle({ ...base, from: "es", op: "refresh_session", session });
+    for (const id of ["lc", "oc", "es"]) {
+      expect(await refresh(id), id).toMatchObject({ ok: false, error: expect.stringContaining(`找不到 session ${id}`) });
+    }
+    expect(refreshed).toEqual([]);
+    expect(await refresh("fc")).toEqual({ v: 1, ok: true, value: { started: true } });
+    expect(await refresh("t1")).toEqual({ v: 1, ok: true, value: { started: true } });
+    expect(refreshed).toEqual(["fc", "t1"]);
   });
 
   it("refuses everything for an archived epic", async () => {

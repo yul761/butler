@@ -101,7 +101,7 @@ export const handoffSchemaDoc = (l: Lang): string => (l === "en" ? HANDOFF_SCHEM
 export const handoffExample = (l: Lang): string => (l === "en" ? HANDOFF_EXAMPLE_EN : HANDOFF_EXAMPLE);
 
 /** 晚间批量和“立即 handoff”用的默认 prompt（设置里可改）。占位符由 src/main/handoff/prompt.ts 填充。 */
-export const DEFAULT_HANDOFF_PROMPT = `你在为 Butler 生成 ticket {{ticket}}（{{title}}，分支 {{branch}}）的 handoff：总结这个 session 到目前为止的进度，供明天早上的简报使用。
+export const DEFAULT_HANDOFF_PROMPT = `你在为 Butler 生成 ticket {{ticket}}（{{title}}，分支 {{branch}}）的 handoff：总结这个 session 到目前为止的进度，供之后的 session 和记忆使用。
 
 要求：
 1. 用 tracker MCP 工具读取 ticket {{ticket}} 的描述、评论和子任务。可用的工具：{{tracker_tools}}。工具不可用或读取失败时 jira 填 null，不要编造。
@@ -134,7 +134,7 @@ export const DEFAULT_REFRESH_PROMPT = `只查询 ticket {{ticket}}（分支 {{br
 {{schema}}
 `;
 
-export const DEFAULT_HANDOFF_PROMPT_EN = `You are writing Butler's handoff for ticket {{ticket}} ({{title}}, branch {{branch}}): summarize this session's progress so far for tomorrow morning's brief.
+export const DEFAULT_HANDOFF_PROMPT_EN = `You are writing Butler's handoff for ticket {{ticket}} ({{title}}, branch {{branch}}): summarize this session's progress so far for later sessions and memory.
 
 Requirements:
 1. Read ticket {{ticket}}'s description, comments and subtasks with the tracker MCP tools. Available tools: {{tracker_tools}}. If the tools are unavailable or fail, set jira to null; never make it up.
@@ -168,6 +168,14 @@ Output only one JSON object with the three fields status, prs and jira, meaning 
 `;
 
 export const defaultHandoffPrompt = (l: Lang): string => (l === "en" ? DEFAULT_HANDOFF_PROMPT_EN : DEFAULT_HANDOFF_PROMPT);
+/**
+ * 以前版本的默认 handoff prompt（第一句还写着“供明天早上的简报使用”）。用户点过保存但没改过的话，存的就是它：
+ * 设置里照样当成默认值，换成当前的默认 prompt。
+ */
+export const PREVIOUS_HANDOFF_PROMPTS: readonly string[] = [
+  DEFAULT_HANDOFF_PROMPT.replace("供之后的 session 和记忆使用。", "供明天早上的简报使用。"),
+  DEFAULT_HANDOFF_PROMPT_EN.replace("for later sessions and memory.", "for tomorrow morning's brief."),
+];
 export const defaultRefreshPrompt = (l: Lang): string => (l === "en" ? DEFAULT_REFRESH_PROMPT_EN : DEFAULT_REFRESH_PROMPT);
 
 /**
@@ -244,7 +252,7 @@ export const featureCoordinatorSection = (l: Lang): string => (l === "en" ? FEAT
 export const HANDOFF_COMMAND_BODY = `---
 description: 生成 Butler handoff（当前 ticket 的进度摘要；在 feature 总控里是 feature 汇总）
 ---
-${FEATURE_COORDINATOR_SECTION}请为当前 session 对应的 ticket 生成一份 handoff，供 Butler 的早间简报使用。
+${FEATURE_COORDINATOR_SECTION}请为当前 session 对应的 ticket 生成一份 handoff，供之后的 session 和记忆使用。
 
 - 依据这个 session 的完整对话；如果可以，再用 tracker MCP 工具和 \`gh pr view\` 确认 ticket 与 PR 的最新状态。
 - 只读：不要修改文件，不要提交或推送。
@@ -269,7 +277,7 @@ export const HANDOFF_COMMAND_MD = renderHandoffCommand(HANDOFF_COMMAND_BODY);
 export const HANDOFF_COMMAND_BODY_EN = `---
 description: Write a Butler handoff (a progress summary of the current ticket; in a feature coordinator, of the feature)
 ---
-${FEATURE_COORDINATOR_SECTION_EN}Write a handoff for the ticket of this session, for Butler's morning brief.
+${FEATURE_COORDINATOR_SECTION_EN}Write a handoff for the ticket of this session, for later sessions and memory.
 
 - Base it on this session's whole conversation; if you can, confirm the latest state of the ticket and its PRs with the tracker MCP tools and \`gh pr view\`.
 - Read only: don't change files, don't commit or push.

@@ -26,22 +26,27 @@ export interface TranscriptState {
   turnOpen: boolean;
   /** 最后一条带文字的 assistant 回复（总控结束 session 前看它是不是在问用户）；还没有时为 null。 */
   lastReply: string | null;
+  /** lastReply 所在那条 assistant 记录的 message.id（“需要你”按它只判断一次）；没有 id 时为 null。 */
+  lastReplyId: string | null;
 }
 
 export function newTranscriptState(): TranscriptState {
-  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null };
+  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null, lastReplyId: null };
 }
 
 /** 用户按 Esc 打断时 Claude Code 写的文字（也有 for tool use 的说法）；它后面不会再有结束这一轮的记录。 */
 const INTERRUPT_PREFIX = "[Request interrupted by user";
 
+const REBASE_RE = /\bgit\s+(?:rebase|pull\b.*--rebase)\b/;
 const PUSH_RE = /\bgit\s+push\b/;
 const CI_RE = /\bgh\s+run\s+watch\b|\bgh\s+pr\s+checks\b.*--watch/;
 const TEST_RE = /\b(?:(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?test|vitest|jest|pytest|go\s+test|cargo\s+test|playwright\s+test|mocha)\b/;
 
-/** 把 shell 命令归类：push、等 CI、跑测试，其余算普通命令。 */
-export function classifyCommand(command: string): { kind: "push" | "ci" | "test" | "command"; detail: string } {
+/** 把 shell 命令归类：rebase、push、等 CI、跑测试，其余算普通命令。 */
+export function classifyCommand(command: string): { kind: "rebase" | "push" | "ci" | "test" | "command"; detail: string } {
   const detail = command.trim().slice(0, DETAIL_LIMIT);
+  // git pull --rebase 不是 push，rebase 要先判
+  if (REBASE_RE.test(command)) return { kind: "rebase", detail };
   if (PUSH_RE.test(command)) return { kind: "push", detail };
   if (CI_RE.test(command)) return { kind: "ci", detail };
   if (TEST_RE.test(command)) return { kind: "test", detail };
@@ -80,7 +85,10 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
     const text = message.content
       .flatMap((b) => (isObj(b) && b.type === "text" && typeof b.text === "string" && b.text.trim() ? [b.text.trim()] : []))
       .join("\n");
-    if (text) s.lastReply = text;
+    if (text) {
+      s.lastReply = text;
+      s.lastReplyId = typeof message.id === "string" && message.id ? message.id : null;
+    }
     for (const block of message.content) {
       if (!isObj(block) || block.type !== "tool_use" || typeof block.id !== "string") continue;
       const input = isObj(block.input) ? block.input : {};

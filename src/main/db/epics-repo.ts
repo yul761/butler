@@ -8,6 +8,8 @@ interface EpicRow {
   workspace_dir: string;
   created_at: number;
   archived_at: number | null;
+  plan: string | null;
+  plan_at: number | null;
 }
 
 interface EpicRepoRow {
@@ -32,12 +34,30 @@ export class EpicsRepo {
       createdAt: r.created_at,
       archivedAt: r.archived_at,
       repos: repos.map(toRepo),
+      plan: r.plan,
+      planAt: r.plan_at,
     };
   }
 
+  /** 新建的 epic 规划只存在这里，没有要迁移的老数据：plan_at 记成建的时间。 */
   insert(e: { name: string; workspaceDir: string; createdAt: number }): number {
-    const res = this.db.prepare(`INSERT INTO epics (name, workspace_dir, created_at) VALUES (?, ?, ?)`).run(e.name, e.workspaceDir, e.createdAt);
+    const res = this.db
+      .prepare(`INSERT INTO epics (name, workspace_dir, created_at, plan_at) VALUES (?, ?, ?, ?)`)
+      .run(e.name, e.workspaceDir, e.createdAt, e.createdAt);
     return Number(res.lastInsertRowid);
+  }
+
+  /** set_epic_plan：整份换掉。 */
+  setPlan(id: number, plan: string, at: number): void {
+    this.db.prepare(`UPDATE epics SET plan = ?, plan_at = ? WHERE id = ?`).run(plan, at, id);
+  }
+
+  /**
+   * 升级前的 epic（plan_at 为 NULL）第一次同步时调用：把 epic 记忆里认出的规划写进来，没有就是 null，都记下已经迁过。
+   * 只对还没迁过的生效：迁过一次、或者已经 set_epic_plan 过的，什么都不改。
+   */
+  migratePlan(id: number, plan: string | null, at: number): void {
+    this.db.prepare(`UPDATE epics SET plan = ?, plan_at = ? WHERE id = ? AND plan_at IS NULL AND plan IS NULL`).run(plan, at, id);
   }
 
   get(id: number): Epic | null {

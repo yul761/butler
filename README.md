@@ -3,11 +3,11 @@
 A desktop "work butler" for people who run several [Claude Code](https://docs.claude.com/en/docs/claude-code) sessions at once, one per ticket.
 macOS (Apple silicon) and Windows (x64). MIT licensed.
 
-**Local-first.** Butler keeps its data in local SQLite files. Data leaves your machine only through your own `claude` and, if you configure one, a personal LLM API. That API receives only what your privacy level allows, and every call it receives is logged on an audit page.
+**Local-first.** Butler keeps its data in local SQLite files. Data leaves your machine only through your own `claude` and, if you configure one, a personal LLM API. That API is called only at the full privacy level, for memory distillation, and every call it receives is logged on an audit page.
 
-> 中文简介：Butler 用一个桌面应用管理“每个 ticket 一个 Claude Code session”的工作方式：每晚自动为有进展的 ticket 生成交接（handoff），早上一打开就是简报，点一下就回到对应的 session；记忆由本地的 StateCore 管理。界面有中文和英文两种，默认跟系统语言，可以在设置里改。
+> 中文简介：Butler 用一个桌面应用管理“每个 ticket 一个 Claude Code session”的工作方式：每晚自动为有进展的 ticket 生成交接（handoff），点一下就回到对应的 session；记忆由本地的 StateCore 管理。界面有中文和英文两种，默认跟系统语言，可以在设置里改。
 
-The UI comes in Chinese and English. It follows your system language at first (Chinese for any Chinese locale, English otherwise); change it under **设置 → 常规 → 语言 / Language (Settings → General → Language)** or on the first-run wizard. The language also switches the default prompts Butler sends to `claude`, so handoffs, the morning brief's focus and memory notes are written in that language; prompts you edited yourself are kept. Installs upgraded from 1.2.0 or earlier stay in Chinese until you change it. After switching, click **安装 / 修复 (Install / repair)** in the environment check once so the `/handoff` command is rewritten in the new language. This README quotes UI labels as they appear in the Chinese UI, with the English label, for example **设置 (Settings)**.
+The UI comes in Chinese and English. It follows your system language at first (Chinese for any Chinese locale, English otherwise); change it under **设置 → 常规 → 语言 / Language (Settings → General → Language)** or on the first-run wizard. The language also switches the default prompts Butler sends to `claude`, so handoffs and memory notes are written in that language; prompts you edited yourself are kept. Installs upgraded from 1.2.0 or earlier stay in Chinese until you change it. After switching, click **安装 / 修复 (Install / repair)** in the environment check once so the `/handoff` command is rewritten in the new language. This README quotes UI labels as they appear in the Chinese UI, with the English label, for example **设置 (Settings)**.
 
 ## What it does
 
@@ -36,7 +36,7 @@ There are deliberate limits:
 
   The ticket table's status column shows what each ticket's running session is doing right now, refreshed every 10 seconds: writing code (and which file), reading code, running `git push` with its pre-push hook, watching CI, running tests or another command (with how long it has been running), thinking, waiting for your approval, or waiting for your reply. A command still running after the turn ended is marked **后台 (Background)**. A ticket with no running session shows its usual status, and a ticket with several shows the session that needs you most. Tickets outside a feature don't have this column yet.
 
-  **Stuck sessions.** There is no fixed time limit, so a slow pre-push hook that is still working is left alone. Every 3 minutes Butler looks at each running session of a ticket in a feature. If the transcript, the command output and the CPU use of the session's child processes have not changed for two checks in a row, Butler asks your own `claude` once, with no tools, whether the session is really stuck. It sends the current activity, the last command output and the end of the terminal. If the answer is yes, you get one notification and a red dot on the ticket's row and on the feature in the sidebar. Click the dot, or the notification, to open a panel under the row with the likely cause, the last output and what to do:
+  **Stuck sessions.** There is no fixed time limit, so a slow pre-push hook that is still working is left alone. Every 3 minutes Butler looks at each running session of a ticket in a feature. If the transcript, the command output and the CPU use of the session's child processes have not changed for two checks in a row, Butler asks your own `claude` once, with no tools, whether the session is really stuck. It sends the current activity, the last command output and the end of the terminal. If the answer is yes, a red dot appears on the ticket's row and on the feature in the sidebar. There is no system notification. Click the dot to open a panel under the row with the likely cause, the last output and what to do:
   - **开新 session 解决 (Open a new session to fix it)** opens a new session in the feature's workspace and hands it the details. The stuck session is left running, and the two share its worktree, so the new session's task says to tell the stuck session before changing a branch or stopping a process, to ask you before killing anything, and to tell the coordinator when the problem is solved.
   - **看终端 (View terminal)** goes to the ticket page.
   - **没事，忽略 (It's fine, ignore)** clears the dot. It comes back only if the session moves again and then gets stuck again.
@@ -77,23 +77,10 @@ There are deliberate limits:
   - These runs are not strictly read-only. If your settings allow, say, `Bash(npm:*)` or a write-capable MCP tool, the runs can use it too.
 
   Inside a session you can also type `/handoff`. In a feature's coordinator, `/handoff` writes the feature's summary instead of a ticket handoff, and Butler then runs handoffs in the background for the feature's tickets that had activity since their last one.
-- **Morning brief.** It has three sections, then what you did on the previous working day:
-  - **🔴 先做 (do first):** approved PRs, requested changes, after-merge follow-ups and due items
-  - **🟡 今天 (today)**
-  - **⚪ 留意 (watch)**
-
-  **打开 (Open)** on an item resumes the right session with a prompt already typed in.
+- **Home page.** The **现在 (Now)** page lists every session Butler opened, grouped by epic, feature and ticket, with what each one is doing, its PR and CI, and how long it has been at it. Sessions waiting on you (a question, a confirmation, or stuck) are pinned at the top under **需要你 (Needs you)**, and the sidebar entry shows how many there are. Click a row to open its terminal.
 - **Keep awake.** When sessions should keep running while you're away with the lid open, tick **防止休眠 (Keep awake)** at the bottom of the sidebar or in the tray menu. While it's on, the computer doesn't sleep when idle and the screen stays on. It turns off when you untick it, when the computer goes to sleep (closing the lid), and when Butler quits, and Butler always starts with it off. Closing the lid still puts a Mac to sleep; on Windows that depends on your lid setting.
 - **Memory.** Progress, decisions, open follow-ups and cross-ticket learnings go into a local [StateCore](https://github.com/yul761/StateCore) store. Every session Butler starts can `recall` them. The ticket page has a **记忆 (Memory)** tab that shows each entry's history.
-- **Optional personal LLM summary.** **今日重点 (today's focus)** is a short paragraph from an OpenAI-compatible API that you pay for. It goes through a privacy gateway with:
-  - a choice of privacy level, and field allow-listing for that level
-  - placeholders below the full level
-  - a scanner for secret-, URL-, domain-, IP-, email- and path-shaped text
-  - an audit page
-  - a monthly budget
-  - optional confirm-before-send
-
-  Nothing is sent until you configure a provider, and the default level sends metadata only. At the full level, Butler also uses the API for memory distillation. That path sends more and is not scanned; see [Privacy model](#privacy-model).
+- **Optional personal LLM API.** At the 完整 (full) privacy level, Butler uses an OpenAI-compatible API that you pay for to distil StateCore memory after each nightly run. Every call goes through a privacy gateway with an audit page and a monthly budget. Nothing is sent until you configure a provider and choose the full level; see [Privacy model](#privacy-model).
 
 ## What Butler does not touch
 
@@ -173,7 +160,7 @@ You can run the wizard again from Settings. [docs/configuration.md](docs/configu
 
 | Path | What |
 |------|------|
-| `~/.butler/app.db` | Tickets, sessions, handoffs, follow-ups, briefs, settings, the sensitive-terms list, the LLM audit log, and the encrypted API key (SQLite) |
+| `~/.butler/app.db` | Tickets, sessions, handoffs, follow-ups, settings, the LLM audit log, and the encrypted API key (SQLite). Rows left by older versions (morning briefs, the sensitive-terms list) stay but are no longer used. |
 | `~/.butler/statecore/statecore.db` | StateCore memory |
 | `~/.butler/inbox/` | Hook reports waiting to be processed (`inbox/bad/` keeps unreadable ones) |
 | `~/.butler/bin/butler-hook` | The hook program Claude Code runs (`butler-hook.exe` on Windows) |
@@ -204,7 +191,7 @@ Your personal API key is encrypted with the OS keychain (macOS Keychain / Window
 
 Butler uses the keychain only when you save a key, and later when it needs that key to show its last 4 characters or to call your API. If you never save a key, Butler never touches the keychain.
 
-On macOS, a dialog may ask whether Butler may use "butler Safe Storage" in your keychain (Electron names the item after the app's internal name, `butler`). Click **Always Allow**. The builds are ad-hoc signed, not signed with a Developer ID, so macOS treats every new version as a different app and asks again once after each upgrade. This can happen right at startup if a scheduled brief or handoff needs the key. Butler's window does not respond until you answer. If you click **Deny**, Butler can't read the saved key, and Settings shows it as unreadable; enter it again.
+On macOS, a dialog may ask whether Butler may use "butler Safe Storage" in your keychain (Electron names the item after the app's internal name, `butler`). Click **Always Allow**. The builds are ad-hoc signed, not signed with a Developer ID, so macOS treats every new version as a different app and asks again once after each upgrade. This can happen right at startup if a scheduled memory distillation needs the key. Butler's window does not respond until you answer. If you click **Deny**, Butler can't read the saved key, and Settings shows it as unreadable; enter it again.
 
 Electron also keeps its own profile folder, with Chromium's caches and the single-instance lock: `~/Library/Application Support/butler` on macOS and `%APPDATA%\butler` on Windows. When `BUTLER_HOME` is set, Butler uses `<BUTLER_HOME>/electron` instead. On Windows this folder also holds the DPAPI-protected encryption key for the saved API key, so if you delete it, enter the API key again.
 
@@ -228,33 +215,9 @@ Everything under an epic also gets `butler-epic`, the epic's memory (scope `epic
 
 ## Privacy model
 
-Company work goes only through your company's `claude`. What the optional personal API receives depends on the **隐私档位 (privacy level)**:
+Company work goes only through your company's `claude`. The optional personal API is used for one thing only: StateCore memory distillation at the **完整 (full)** **隐私档位 (privacy level)**. It sends real ticket ids, raw conversation excerpts and existing memory, unscanned (see [StateCore memory](#statecore-memory)). At **关闭 (off)**, **仅元数据 (metadata, the default)** and **脱敏文本 (redacted)**, the personal API is never called.
 
-- **关闭 (off):** nothing.
-- **仅元数据 (metadata, the default):** for 今日重点 (today's focus), placeholders, status and PR enums, follow-up kinds and triggers, counts and day numbers. No free text.
-- **脱敏文本 (redacted):** adds short next steps, blockers and follow-up descriptions. Before sending, Butler replaces the following with placeholders that are new for every request:
-  - ticket ids, including Jira subtask ids
-  - repo and worktree folder names
-  - branch names
-  - the owner and repo names in PR links
-  - ticket titles
-  - the entries in your sensitive-terms list
-
-  A colleague's name that isn't in that list is sent as is.
-- **完整 (full):** real ticket ids and text, with no placeholders, so the names in your sensitive-terms list go out verbatim. This level also turns on StateCore distillation, which sends memory contents unscanned (see [StateCore memory](#statecore-memory)).
-
-At the metadata, redacted and full levels, the 今日重点 request is scanned before it is sent. It is blocked if it contains:
-
-- something that looks like a secret or token
-- a URL
-- an IP address
-- an email address
-- a file path
-- a domain name. This means a public top-level domain from a fixed list, or an internal suffix such as `.corp` or `.internal`. Bare host names like `jenkins01`, and domains under other TLDs, are not caught.
-
-Below the full level, a request is also blocked if it still contains a ticket id or an original value that should have been replaced. The scanner does not recognise names.
-
-The **审计 (Audit)** page lists every call that was sent, blocked by the scanner, over budget or declined at the confirmation. Some refusals are only written to the log, for example a distillation call refused because the level changed, or a saved key that can no longer be decrypted.
+The **审计 (Audit)** page lists every call that was sent or refused over budget. Some refusals are only written to the log, for example a distillation call refused because the level changed, or a saved key that can no longer be decrypted.
 
 ## Code signing policy
 

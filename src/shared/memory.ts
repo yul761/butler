@@ -117,6 +117,14 @@ export function noteBody(raw: string): string {
   return truncateUnits(text, NOTE_BODY_LIMIT).trim();
 }
 
+/**
+ * 不过 NFKC 的正文：所有空白压成一个空格，首尾去空白，最多 NOTE_BODY_LIMIT 个 UTF-16 单位（不切开代理对）。
+ * 给要保留全角标点（“；”“（”）的正文用：NFKC 会把它们变成半角。比对时 sameBody 照样按 NFKC 宽松比较。
+ */
+export function plainNoteBody(raw: string): string {
+  return truncateUnits(raw.replace(/\s+/g, " ").trim(), NOTE_BODY_LIMIT).trim();
+}
+
 /** FNV-1a（32 位）：渲染进程也会用到这个文件，不能用 node:crypto。 */
 function fnv1a(s: string): number {
   let h = 0x811c9dc5;

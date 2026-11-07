@@ -1,5 +1,6 @@
 import { HandoffSchema, RefreshSchema, upgradeLegacyPr, type Handoff } from "../../shared/handoff";
 import { effectiveStatus, type HandoffOutcome, type Session, type Ticket } from "../../shared/types";
+import { storedModel } from "../claude/spawn";
 import { headlessArgs, READ_ONLY_TOOLS } from "../claude/headless";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
@@ -17,7 +18,7 @@ import { M } from "../strings";
 export const HANDOFF_CONCURRENCY = 2;
 
 export interface BatchResult {
-  /** 有失败或被限流跳过的 ticket 时是 partial：早间简报前会再补跑一次。 */
+  /** 有失败或被限流跳过的 ticket 时是 partial：早间任务前会再补跑一次。 */
   status: "ok" | "partial";
   outcomes: HandoffOutcome[];
 }
@@ -141,6 +142,8 @@ export class HandoffRunner {
     const addDirs = dirs.repoDirs.filter((d) => d !== cwd);
     const args = headlessArgs({
       schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(mcpCwd), addDirs,
+      // fork 换模型会让 prompt 缓存整个失效：沿用被 fork 的 session 自己的模型。
+      model: session ? storedModel(session) ?? undefined : undefined,
     });
 
     let attempt = await this.exec(key, args, prompt, cwd, session?.id);
@@ -163,7 +166,7 @@ export class HandoffRunner {
     const ctx = this.context(t);
     const prompt = buildPrompt(this.d.settings.get("refreshPrompt"), ctx);
     const { cwd, addDirs } = this.d.dirs(t);
-    const args = headlessArgs({ schema: REFRESH_JSON_SCHEMA, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd), addDirs });
+    const args = headlessArgs({ schema: REFRESH_JSON_SCHEMA, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd), addDirs, model: "sonnet" });
     const attempt = await this.exec(key, args, prompt, cwd);
     if (!attempt.ok) return attempt.outcome;
     const checked = validate(RefreshSchema, upgradeLegacyPr(attempt.value));

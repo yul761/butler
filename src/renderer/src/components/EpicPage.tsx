@@ -12,13 +12,15 @@ interface Props {
   onOpenFeature: (id: number) => void;
   /** 新建的 feature：重读列表后跳过去。 */
   onFeatureCreated: (id: number) => void;
+  /** 打开时先切到这个 session 的终端（从「现在」页点进来时）。 */
+  focusSession?: string | null;
 }
 
 /**
  * epic 页（设计文档 2026-11-01，草图 A）：从上到下是名字和工作区、一行一个 feature（一句进度和状态，不列 ticket），
  * 然后是仓库、epic session 和它们的终端，布局和 feature 页一样。
  */
-export function EpicPage({ epic, onOpenFeature, onFeatureCreated }: Props) {
+export function EpicPage({ epic, onOpenFeature, onFeatureCreated, focusSession }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newFeature, setNewFeature] = useState(false);
   const errorText = (e: unknown) => epicErrorText(e, S);
@@ -28,6 +30,7 @@ export function EpicPage({ epic, onOpenFeature, onFeatureCreated }: Props) {
     openFailure: (reason) => epicOpenError(reason, S),
     errorText,
     setError,
+    initialActive: focusSession,
   });
 
   // feature 列表可以收起（每个 epic 各记各的），收起时标题上还留着数量和等待、卡住的记号，和 feature 页的 ticket 表一样。

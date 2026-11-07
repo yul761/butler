@@ -1,30 +1,36 @@
 import type { Lang } from "../shared/i18n";
-import type { MergeEvent } from "../shared/types";
 import { formatDuration } from "../shared/text";
+import type { RefreshRefusal } from "../shared/types";
 import { currentLang } from "./i18n";
 
 /**
- * 主进程里给用户看的文案（系统通知、托盘、对话框、审计记录、抛给界面的错误）。渲染进程的文案在 src/renderer/src/strings.ts。
+ * 主进程里给用户看的文案（托盘、对话框、审计记录、抛给界面的错误）。渲染进程的文案在 src/renderer/src/strings.ts。
  * 两种语言（设计文档 2026-10-26）：英文表的类型就是中文表的类型。用 M() 取当前语言的表：在用到的那一刻取，切换语言后马上生效。
  */
 /** 英文的时长；中文用 shared/text 的 formatDuration。 */
 const enDuration = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${Math.round(ms / 1000)} s`);
 
+/** 失败检查的日志块：名字加用围栏包起来的日志；围栏比日志里最长的反引号串还长，日志里的 ``` 关不掉它；没有日志的检查只写名字。 */
+function ciLogBlocks(failed: Array<{ name: string; log?: string }>): string {
+  return failed
+    .map(({ name, log }) => {
+      if (!log) return name;
+      const longest = Math.max(0, ...(log.match(/`+/g) ?? []).map((m) => m.length));
+      const fence = "`".repeat(Math.max(3, longest + 1));
+      return `${name}\n${fence}\n${log}\n${fence}`;
+    })
+    .join("\n\n");
+}
+
 const ZH = {
-  eveningTitle: "Butler 晚间小结",
-  eveningBody: (n: number) => (n > 0 ? `${n} 个 ticket 今天有进展，点开查看。` : "今天没有新的 handoff。"),
-  stuckTitle: (ticket: string) => `${ticket} 可能卡住了`,
-  stuckBody: (reason: string) => `${reason}\n点开查看怎么处理。`,
   /** 请 Claude 判断卡住时，用这些词告诉它 session 在做什么。 */
   activityKinds: {
-    edit: "写代码", read: "看代码", push: "跑 git push（pre-push hook）", ci: "监控 CI", test: "跑测试", command: "运行命令",
+    edit: "写代码", read: "看代码", rebase: "rebase 中", push: "跑 git push（pre-push hook）", ci: "监控 CI", test: "跑测试", command: "运行命令",
     agent: "子 agent 在跑", thinking: "思考中", approval: "等你批准", waiting: "等你回话", idle: "空闲",
   },
   activityBackground: "（后台）",
-  confirmTitle: "Butler：发送前确认",
-  confirmMessage: "要把下面的内容发给你的个人 LLM 服务商，用来生成“今日重点”吗？",
-  confirmSend: "发送",
-  confirmCancel: "不发送",
+  /** 「现在」页：停在确认（权限、AskUserQuestion、ExitPlanMode）上的 session 需要你的理由。 */
+  nowApproval: "在终端里确认",
   /** 审计里上次运行退出时还没发完的请求。 */
   auditStalePending: "Butler 在发送过程中退出，无法确认是否已发出",
   trayOpen: "打开 Butler",
@@ -110,13 +116,13 @@ const ZH = {
   timeFormat: "时间格式应为 HH:MM，例如 16:00",
   workingDays: "工作日只能是 0–6（0 是周日）",
   trackerTool: (bad: string) => `tracker 工具只能是 MCP 工具名（mcp__server__tool），不接受：${bad}`,
-  days: "天数必须是 0–999 的整数",
   promptEmpty: "prompt 模板不能为空",
   promptTooLong: "prompt 模板太长（上限 20000 字）",
   privacyLevel: "隐私档位只能是 off、metadata、redacted、full",
   modelName: "模型名不能有空格，最长 200 字，例如 deepseek-chat",
   budget: "预算是美元金额，例如 1 或 2.50",
   retention: "保留天数是 1–3650 的整数",
+  refreshThreshold: "换新阈值是 0（关）或者一个整数 token 数，最多 7 位",
   claudePathAbsolute: "claude 路径必须是绝对路径，例如 /usr/local/bin/claude；留空则自动查找",
   language: "语言只能是 auto、zh 或 en",
   settingNotEditable: (key: string) => `这个设置不能在这里修改：${key}`,
@@ -130,22 +136,17 @@ const ZH = {
   badBaseUrl: "base URL 无效",
   noApiKey: "没有可用的 API key",
   auditWriteFailed: "审计记录写入失败",
-  confirmFailed: "发送前确认出错",
-  badResponseShape: "响应不符合格式",
-  noUsableSentence: "响应里没有可用的句子",
   noPrice: (model: string) => `价格表里没有模型 ${model} 的价格，不会调用`,
   overBudget: (spent: string, estimate: string, budget: string) => `本月已花 $${spent}，这次预计 $${estimate}，会超过预算 $${budget}`,
   responseTooLong: (limit: number) => `响应超过 ${limit} 个字符`,
   unsafeBaseUrl: "base URL 不安全：必须是 https（本机可用 http），且不能带查询、片段或用户信息",
   responseNotJson: "响应不是 JSON",
   responseNoContent: "响应里没有 choices[0].message.content",
-  placeholderFailed: "无法生成不重复的占位符（随机数源有问题）",
   // 其他
   hooksNotObject: "settings.json 的 hooks 不是对象，Butler 不会修改它",
   hooksEventNotArray: (event: string) => `settings.json 的 hooks.${event} 不是数组，Butler 不会修改它`,
   notJsonObject: (file: string) => `${file} 不是合法的 JSON 对象，Butler 不会修改它`,
   newerDatabase: (found: number, known: number) => `这份数据是更新版本的 Butler 创建的（数据版本 ${found}，这个 Butler 只认识到 ${known}）。请安装最新版本的 Butler 再打开。`,
-  followupNoMark: (key: string) => `followup 条目不能用 mark：请通过 followups 标记 (${key})`,
   badRequest: "请求格式不对",
   /** 错误原因之间的分隔。 */
   causeSep: "：",
@@ -174,10 +175,26 @@ const ZH = {
   ctlPickEpicRepos: (names: string) => `这个 epic 有几个仓库，请用 repos 指定要用的：${names}`,
   ctlNoSuchEpicRepo: (wanted: string, names: string) => `这个 epic 没有仓库 ${wanted}。现有的仓库：${names}`,
   ctlFeatureCreated: "feature 已建好，没有打开总控。用户点进这个 feature 打开总控后，brief 会作为第一条消息发给它；ticket 由它自己建。",
+  ctlPlanInvalid: (limit: number) => `plan 不能为空，最长 ${limit} 字符`,
+  ctlPlanSaved: "规划已保存，替换了之前的规划。epic 的记忆里显示的是这一份，之后新开的 feature 总控收到的第一条消息里也带着它。butler-epic 的 handoff 只写进度。",
   ctlNoSuchSession: (id: string) => `找不到 session ${id}，或者它不属于你管的范围。用 list_sessions 看有哪些`,
   ctlSessionNotRunning: (id: string) => `session ${id} 已经结束了`,
   ctlSessionBusy: (id: string, kind: string) => `session ${id} 正在干活（${kind}），不能结束`,
   ctlSessionNeedsUser: (id: string) => `session ${id} 的屏幕上有一个等用户回答的确认，不能结束`,
+  ctlRefreshRefused: (id: string, why: RefreshRefusal) => {
+    switch (why) {
+      case "busy":
+        return `session ${id} 现在不能换新：它没有停下来，或者屏幕上有等用户回答的确认、用户刚打过字、输入框里有没发出去的草稿。等它停下来再试`;
+      case "already":
+        return `session ${id} 正在换新`;
+      case "cooldown":
+        return `session ${id} 30 分钟内换新失败过，过一会儿再试`;
+      case "memory_off":
+        return `记忆关着：session ${id} 换新以后接不上，所以不换新`;
+      case "failed":
+        return `session ${id} 不能换新：只有开着终端的 ticket session、ticket 总控、feature 总控和 epic session 能换新，修复 session 不能`;
+    }
+  },
   ctlNoSuchTicket: (ticket: string, keys: string) => `这个 feature 下没有 ticket ${ticket}。现有的：${keys}`,
   ctlTicketNoRepo: (key: string) => `ticket ${key} 还没有仓库`,
   ctlPickRepo: (key: string, names: string) => `ticket ${key} 有几个仓库，请用 repo 指定：${names}`,
@@ -195,34 +212,29 @@ const ZH = {
   gateWho: (key: string, within: string[]) => (within.length > 0 ? `${key}（${within.join(" / ")}）` : key),
   gateMergedNotice: (who: string) => `Butler：${who} 已经合完。现在可以 rebase 到最新的目标分支后再合并。`,
   gateNotMerged: (who: string) => `Butler：${who} 的合并没有完成。你现在可以再试一次合并（如果还有冲突，Butler 会再告诉你）。`,
-  gateNotifyTitle: (repo: string) => `${repo}：合并协调`,
-  gateNotifyBody: (e: MergeEvent, who: string, other: string | null) => {
-    const o = other ?? "";
-    switch (e.kind) {
-      case "wait": return `${who} 等 ${o} 合完再合`;
-      case "proceed_conflict": return `${who} 先合，${o} 之后要 rebase`;
-      case "rebase": return `${who} 要先 rebase 再合`;
-      case "dir_busy": return `${who} 想切 branch，目录正被 ${o} 用着`;
-    }
-  },
+  ciWherePr: (n: number) => `PR #${n}`,
+  ciWhereBranch: (b: string) => `分支 ${b}`,
+  ciPassedNotice: (where: string, sha7: string) => `Butler：${where} 的 CI 全部通过（${sha7}）。可以继续下一步。`,
+  ciFailedNotice: (where: string, sha7: string, failed: Array<{ name: string; log?: string }>) =>
+    `Butler：${where} 的 CI 失败（${sha7}）。失败的检查：${failed.map((f) => f.name).join("、")}。\n\n${ciLogBlocks(failed)}\n\n请修复后再 push。push 以后结束这一轮，Butler 会再告诉你结果。`,
+  /** 上下文换新（计划 16）：epic session 的第一步（ticket 和 feature 总控输入的是 /handoff）。 */
+  refreshEpicHandoff: "Butler 要清空这个 session 的上下文。请先用 butler-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
+  /** 换新的最后一步：只调回进度，然后等用户。ticket 是 ticket 号；feature 总控和 epic session 不用它（说"这个 feature / epic"）。 */
+  refreshResume: (kind: "ticket" | "feature" | "epic", ticket: string) =>
+    kind === "ticket"
+      ? `上下文已由 Butler 换新。先用 recall 调出 ${ticket} 最新的 handoff，用一两句话说明做到哪了，然后等用户的下一条指令，不要自己开始新的工作。`
+      : `上下文已由 Butler 换新。先用 butler-${kind} 的 recall 调出这个 ${kind} 最新的 handoff，用一两句话说明做到哪了，然后等用户的下一条指令，不要自己开始新的工作。`,
 };
 
 export type MainStrings = typeof ZH;
 
 const EN: MainStrings = {
-  eveningTitle: "Butler evening summary",
-  eveningBody: (n: number) => (n === 1 ? "1 ticket made progress today. Click to see it." : n > 0 ? `${n} tickets made progress today. Click to see them.` : "No new handoffs today."),
-  stuckTitle: (ticket: string) => `${ticket} may be stuck`,
-  stuckBody: (reason: string) => `${reason}\nClick to see what to do.`,
   activityKinds: {
-    edit: "writing code", read: "reading code", push: "running git push (pre-push hook)", ci: "watching CI", test: "running tests", command: "running a command",
+    edit: "writing code", read: "reading code", rebase: "rebasing", push: "running git push (pre-push hook)", ci: "watching CI", test: "running tests", command: "running a command",
     agent: "running a subagent", thinking: "thinking", approval: "waiting for approval", waiting: "waiting for a reply", idle: "idle",
   },
   activityBackground: " (background)",
-  confirmTitle: "Butler: confirm before sending",
-  confirmMessage: "Send the content below to your personal LLM provider to write “Today's focus”?",
-  confirmSend: "Send",
-  confirmCancel: "Don't send",
+  nowApproval: "confirm in the terminal",
   auditStalePending: "Butler quit while sending; it can't tell whether this was sent",
   trayOpen: "Open Butler",
   trayKeepAwake: "Keep awake",
@@ -304,13 +316,13 @@ const EN: MainStrings = {
   timeFormat: "The time must be HH:MM, for example 16:00",
   workingDays: "Working days can only be 0–6 (0 is Sunday)",
   trackerTool: (bad: string) => `A tracker tool must be an MCP tool name (mcp__server__tool); not accepted: ${bad}`,
-  days: "Days must be a whole number from 0 to 999",
   promptEmpty: "The prompt template can't be empty",
   promptTooLong: "The prompt template is too long (at most 20000 characters)",
   privacyLevel: "The privacy level can only be off, metadata, redacted or full",
   modelName: "The model name can't contain spaces and is at most 200 characters, for example deepseek-chat",
   budget: "The budget is an amount in USD, for example 1 or 2.50",
   retention: "Days to keep must be a whole number from 1 to 3650",
+  refreshThreshold: "The refresh threshold must be 0 (off) or a whole number of tokens, at most 7 digits",
   claudePathAbsolute: "The claude path must be absolute, for example /usr/local/bin/claude; leave it empty to find it automatically",
   language: "The language can only be auto, zh or en",
   settingNotEditable: (key: string) => `This setting can't be changed here: ${key}`,
@@ -323,21 +335,16 @@ const EN: MainStrings = {
   badBaseUrl: "Invalid base URL",
   noApiKey: "No usable API key",
   auditWriteFailed: "Could not write the audit record",
-  confirmFailed: "The confirmation dialog failed",
-  badResponseShape: "The response is not in the expected format",
-  noUsableSentence: "The response has no usable sentence",
   noPrice: (model: string) => `The price table has no price for model ${model}; it won't be called`,
   overBudget: (spent: string, estimate: string, budget: string) => `$${spent} spent this month; this call is estimated at $${estimate} and would exceed the budget of $${budget}`,
   responseTooLong: (limit: number) => `The response is longer than ${limit} characters`,
   unsafeBaseUrl: "Unsafe base URL: it must use https (http for a local service) and can't have a query, fragment or user info",
   responseNotJson: "The response is not JSON",
   responseNoContent: "The response has no choices[0].message.content",
-  placeholderFailed: "Could not create unique placeholders (the random source is broken)",
   hooksNotObject: "hooks in settings.json is not an object; Butler won't change it",
   hooksEventNotArray: (event: string) => `hooks.${event} in settings.json is not an array; Butler won't change it`,
   notJsonObject: (file: string) => `${file} is not a valid JSON object; Butler won't change it`,
   newerDatabase: (found: number, known: number) => `This data was created by a newer Butler (data version ${found}; this Butler knows up to ${known}). Install the latest Butler to open it.`,
-  followupNoMark: (key: string) => `Follow-up items can't be marked here; mark them through follow-ups (${key})`,
   badRequest: "Malformed request",
   causeSep: ": ",
   httpError: (status: number, text: string) => `HTTP ${status}: ${text}`,
@@ -364,10 +371,26 @@ const EN: MainStrings = {
   ctlPickEpicRepos: (names: string) => `This epic has several repos; name the ones to use in repos: ${names}`,
   ctlNoSuchEpicRepo: (wanted: string, names: string) => `This epic has no repo ${wanted}. Its repos: ${names}`,
   ctlFeatureCreated: "The feature is created and no coordinator is open. When the user opens this feature's coordinator, the brief is sent to it as the first message; it creates its own tickets.",
+  ctlPlanInvalid: (limit: number) => `plan can't be empty and is at most ${limit} characters`,
+  ctlPlanSaved: "The plan is saved and replaces the previous one. The epic's memory shows this one, and the first message of every feature coordinator opened from now on includes it. Use butler-epic's handoff for progress only.",
   ctlNoSuchSession: (id: string) => `Session ${id} was not found, or it is not one you manage. Use list_sessions to see them`,
   ctlSessionNotRunning: (id: string) => `Session ${id} has already ended`,
   ctlSessionBusy: (id: string, kind: string) => `Session ${id} is working (${kind}) and cannot be ended`,
   ctlSessionNeedsUser: (id: string) => `Session ${id} has a prompt on screen waiting for the user to answer, so it cannot be ended`,
+  ctlRefreshRefused: (id: string, why: RefreshRefusal) => {
+    switch (why) {
+      case "busy":
+        return `Session ${id} cannot be refreshed now: it has not stopped, or it has a prompt on screen waiting for the user, the user just typed, or there is an unsent draft in its input box. Try again once it stops`;
+      case "already":
+        return `Session ${id} is already being refreshed`;
+      case "cooldown":
+        return `A refresh of session ${id} failed in the last 30 minutes; try again later`;
+      case "memory_off":
+        return `Memory is off: session ${id} could not pick up again after a refresh, so it is not refreshed`;
+      case "failed":
+        return `Session ${id} cannot be refreshed: only ticket sessions, ticket coordinators, feature coordinators and epic sessions with an open terminal can, not fix sessions`;
+    }
+  },
   ctlNoSuchTicket: (ticket: string, keys: string) => `This feature has no ticket ${ticket}. Its tickets: ${keys}`,
   ctlTicketNoRepo: (key: string) => `Ticket ${key} has no repo yet`,
   ctlPickRepo: (key: string, names: string) => `Ticket ${key} has several repos; name one with repo: ${names}`,
@@ -383,16 +406,16 @@ const EN: MainStrings = {
   gateWho: (key: string, within: string[]) => (within.length > 0 ? `${key} (${within.join(" / ")})` : key),
   gateMergedNotice: (who: string) => `Butler: ${who} has finished merging. You can now rebase onto the latest target branch and then merge.`,
   gateNotMerged: (who: string) => `Butler: ${who} did not finish merging. You can try the merge again now (if there is still a conflict, Butler will tell you).`,
-  gateNotifyTitle: (repo: string) => `${repo}: merge coordination`,
-  gateNotifyBody: (e: MergeEvent, who: string, other: string | null) => {
-    const o = other ?? "";
-    switch (e.kind) {
-      case "wait": return `${who} waits for ${o} to finish merging`;
-      case "proceed_conflict": return `${who} merges first; ${o} will need to rebase`;
-      case "rebase": return `${who} needs to rebase before merging`;
-      case "dir_busy": return `${who} wants to switch branches, but ${o} is using the directory`;
-    }
-  },
+  ciWherePr: (n: number) => `PR #${n}`,
+  ciWhereBranch: (b: string) => `branch ${b}`,
+  ciPassedNotice: (where: string, sha7: string) => `Butler: CI passed on ${where} (${sha7}). You can move on to the next step.`,
+  ciFailedNotice: (where: string, sha7: string, failed: Array<{ name: string; log?: string }>) =>
+    `Butler: CI failed on ${where} (${sha7}). Failed checks: ${failed.map((f) => f.name).join(", ")}.\n\n${ciLogBlocks(failed)}\n\nFix it, then push. End this turn after pushing and Butler will tell you the result.`,
+  refreshEpicHandoff: "Butler is about to clear this session's context. First use butler-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
+  refreshResume: (kind: "ticket" | "feature" | "epic", ticket: string) =>
+    kind === "ticket"
+      ? `Butler has refreshed the context. First use recall to load the latest handoff of ${ticket}, say in a sentence or two where things stand, then wait for the user's next instruction; don't start any new work on your own.`
+      : `Butler has refreshed the context. First use butler-${kind}'s recall to load the latest handoff of this ${kind}, say in a sentence or two where things stand, then wait for the user's next instruction; don't start any new work on your own.`,
 };
 
 export const MAIN_STRINGS: Record<Lang, MainStrings> = { zh: ZH, en: EN };

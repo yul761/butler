@@ -1,17 +1,21 @@
 import { basename } from "node:path";
 import type { SessionActivity } from "../../shared/activity";
 import {
-  BRIEF_LIMIT, MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, SUMMARY_LIMIT, taskMessage,
-  type ControlRequest, type ControlResult, type EpicControlRequest, type FeatureControlRequest,
+  BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, SUMMARY_LIMIT, taskMessage,
+  type ControlRequest, type ControlResult, type EpicControlRequest, type FeatureControlRequest, type StartModel,
 } from "../../shared/control";
 import { effectiveStatus, type Epic, type EpicFeatureRow, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
+import type { EpicHistoryEntry } from "../db/epic-history-repo";
 import type { EpicsRepo } from "../db/epics-repo";
+import { EPIC_HISTORY_BRIEF_CHARS, renderHistory } from "../epics/epic-history-view";
 import type { FeaturesRepo } from "../db/features-repo";
 import { currentLang } from "../i18n";
 import { M } from "../strings";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
+import type { DeliverResult } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
+import { startRefresh, type SessionRefresher } from "../sessions/session-refresher";
 import { FEATURE_NAME_LIMIT, type FeatureService } from "../tickets/feature-service";
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { samePath, TicketError, type TicketService } from "../tickets/ticket-service";
@@ -24,10 +28,12 @@ export interface ControlHandlerDeps {
   /** feature 总控的请求（设计文档 2026-10-26）；不给就拒绝。 */
   features?: FeaturesRepo;
   /** epic session 的请求（设计文档 2026-11-01）和 feature 总控的 epic_context；不给就拒绝。 */
-  epics?: Pick<EpicsRepo, "get">;
+  epics?: Pick<EpicsRepo, "get" | "setPlan">;
   featureService?: Pick<FeatureService, "create">;
   /** epic 下每个 feature 的情况（含已归档），直接读库，不经过 epic 记忆。 */
   epicRows?: (epicId: number) => EpicFeatureRow[];
+  /** epic 的长期记忆（epic_history，最新的在前）：epic_context 的 history。不给时是空的。 */
+  epicHistory?: (epicId: number) => EpicHistoryEntry[];
   /** 重新渲染 epic 的 handoff（排进记忆的同步队列，不等它）。 */
   syncEpic?: (epicId: number) => void;
   /** 后台给 epic 下有新活动的 feature 生成汇总（FeatureSummaryRunner.refreshEpic），不等它。这时打开总控，规划会等它（SessionService.sendBrief）。 */
@@ -38,15 +44,21 @@ export interface ControlHandlerDeps {
   activityOutput?: (sessionId: string) => Promise<string>;
   /** end_session：关掉终端，和用户在界面上点 × 一样（pty.kill；session 留在列表里，之后能恢复）。 */
   kill: (termId: string) => void;
+  /** refresh_session（计划 16）：先同步 precheck，能开始就在后台换新，不等它跑完。不给就拒绝。 */
+  refresher?: Pick<SessionRefresher, "precheck" | "refresh">;
   /** 屏幕上有权限确认或启动对话框（PtyManager.screenNeedsUser）：这时不能结束。 */
   screenNeedsUser: (termId: string) => boolean;
   /** session 最后一条 assistant 文字回复的结尾（最多 500 字符）；读不到为 null。 */
   lastReply?: (sessionId: string) => string | null;
+  /** 设置里的记忆开关（memoryOn）：关着时交任务不提 recall。不给当作开着。 */
+  memoryEnabled?: () => boolean;
   /** 把任务作为第一条消息交给新 session（等启动对话框过去、输入框就绪、粘贴、回车）。 */
-  submit: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout">;
+  submit: (termId: string, message: string) => Promise<DeliverResult>;
   notify: () => void;
   /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
   ticketPattern?: () => string;
+  /** set_epic_plan 记下的时间（不给用 Date.now）。 */
+  now?: () => number;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -94,22 +106,23 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   };
 
   /** 在 ticket 的这个仓库里开子 session，把任务交给它。上限已经由调用方检查过。 */
-  const start = async (t: Ticket, repo: TicketRepo, rawTask: string, spawnedBy: string | null, extra: object = {}): Promise<ControlResult> => {
+  const start = async (t: Ticket, repo: TicketRepo, rawTask: string, spawnedBy: string | null, model: StartModel | undefined, memory: "feature" | "ticket", extra: object = {}): Promise<ControlResult> => {
     const task = sanitizeTask(rawTask);
     if (!task) return fail(M().ctlEmptyTask);
     if (d.sessionService.openTerminalCount(t.key) >= MAX_RUNNING_PER_TICKET) {
       return fail(M().ctlTicketLimit(MAX_RUNNING_PER_TICKET));
     }
-    const r = await d.sessionService.open({ ticketKey: t.key, repoId: repo.id }, { spawnedBy: spawnedBy ?? undefined });
+    const r = await d.sessionService.open({ ticketKey: t.key, repoId: repo.id }, { spawnedBy: spawnedBy ?? undefined, model });
     if (!r.ok) return fail(openError(r, repo));
     d.notify();
     // 不等任务写完：等输入框就绪可能要十几秒（用户还要处理信任文件夹之类的对话框），总控先拿到 session id。
-    d.submit(r.termId, taskMessage(task, currentLang())).then(
+    // 记忆关着时不让它去 recall（R36）：没有东西可读。
+    d.submit(r.termId, taskMessage(task, currentLang(), d.memoryEnabled?.() === false ? null : memory)).then(
       (res) => res === "sent" || d.log?.(`control: task for ${r.termId} not delivered (${res})`),
       (e: unknown) => d.log?.(`control: task for ${r.termId} failed`, e),
     );
     return ok({
-      sessionId: r.termId, ...extra, repo: name(repo), dir: d.ticketService.workDir(repo),
+      sessionId: r.termId, ...(model && { model }), ...extra, repo: name(repo), dir: d.ticketService.workDir(repo),
       note: M().ctlTaskNote,
     });
   };
@@ -171,6 +184,21 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     d.kill(termId);
     d.log?.(`end_session ${h.id} by ${req.from ?? "?"}: ${req.reason.replace(/\s+/g, " ").trim()}`);
     return ok({ ended: true });
+  };
+
+  /**
+   * refresh_session（计划 16）：范围和 end_session 一样，不能对自己（from 是 /clear 之前的 id 也认）。
+   * 能不能开始由换新自己马上回答（precheck）；开始了就先返回 { started: true }，换新在后台跑，结果只记日志。
+   */
+  const refreshSession = (req: { from: string | null; session: string }, belongs: (s: Session) => boolean): ControlResult => {
+    const h = d.sessions.head(req.session);
+    const self = req.from ? (d.sessions.head(req.from)?.id ?? req.from) : null;
+    if (!h || !belongs(h) || h.id === self) return fail(M().ctlNoSuchSession(req.session));
+    if (!d.refresher) return fail(M().ctlRefreshRefused(h.id, "failed"));
+    const refused = startRefresh(d.refresher, h.id, "coordinator", (m, e) => d.log?.(m, e));
+    if (refused) return fail(M().ctlRefreshRefused(h.id, refused));
+    d.log?.(`refresh_session ${h.id} by ${req.from ?? "?"}: started`);
+    return ok({ started: true });
   };
 
   /** list_sessions 的可见行：/clear 之前的旧行和用户隐藏的不列。 */
@@ -279,6 +307,20 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     return ok({ id: f.id, name: f.name, repos: f.repos.map(name), note: M().ctlFeatureCreated });
   };
 
+  /** epic session 定下或改了规划（计划 16）：整份换掉 epics.plan，再重新渲染 epic 的 handoff（不等它）。 */
+  const setEpicPlan = (e: Epic, raw: string): ControlResult => {
+    const plan = raw.trim();
+    if (!plan || raw.length > EPIC_PLAN_MAX_CHARS) return fail(M().ctlPlanInvalid(EPIC_PLAN_MAX_CHARS));
+    // e 就是从 d.epics 读出来的，这里一定有。
+    d.epics?.setPlan(e.id, plan, (d.now ?? Date.now)());
+    try {
+      d.syncEpic?.(e.id);
+    } catch (err) {
+      d.log?.(`control: syncing epic ${e.id} after set_epic_plan failed`, err);
+    }
+    return ok({ note: M().ctlPlanSaved });
+  };
+
   /** epic session（设计文档 2026-11-01）：epic 在这里重新核对，已归档的全部拒绝。 */
   const epicRequest = async (req: EpicControlRequest): Promise<ControlResult> => {
     const e = d.epics?.get(req.epicId);
@@ -286,6 +328,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (req.op === "list_repos") return ok(e.repos.map((r) => ({ name: name(r), path: r.repoPath })));
     if (req.op === "list_features") return ok((d.epicRows?.(e.id) ?? []).map(rowOut));
     if (req.op === "create_feature") return createFeature(e, req);
+    if (req.op === "set_epic_plan") return setEpicPlan(e, req.plan);
     // 下面这些只看未归档的 feature：feature 级的 session（总控、修复）和这些 feature 下 ticket 的 session。
     const own = (d.features?.listByEpic(e.id) ?? []).map((f) => ({ f, tickets: d.tickets.listByFeature(f.id) }));
     if (req.op === "list_sessions") return ok(own.flatMap(({ f, tickets }) => featureSessionRows(f, tickets).map((r) => ({ ...r, feature: f.name }))));
@@ -293,15 +336,17 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     const keys = new Set(own.flatMap(({ tickets }) => tickets.map((t) => t.key)));
     const belongs = (s: Session) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId !== null && featureIds.has(s.featureId));
     if (req.op === "session_activity") return sessionActivity(req.session, belongs);
+    if (req.op === "refresh_session") return refreshSession(req, belongs);
     return endSession(req, belongs);
   };
 
-  /** feature 总控查同一 epic 下别的 feature：不含自己。 */
+  /** feature 总控查同一 epic 下别的 feature（不含自己），和 epic 的"以往的决定"（和第一条消息里的同一个上限）。 */
   const epicContext = (f: Feature): ControlResult => {
     const e = f.epicId === null ? null : d.epics?.get(f.epicId);
     if (!e) return fail(M().ctlNoEpic);
     if (e.archivedAt !== null) return fail(M().ctlEpicGone);
-    return ok({ epic: e.name, features: (d.epicRows?.(e.id) ?? []).filter((r) => r.id !== f.id).map(rowOut) });
+    const history = renderHistory(d.epicHistory?.(e.id) ?? [], currentLang(), EPIC_HISTORY_BRIEF_CHARS);
+    return ok({ epic: e.name, features: (d.epicRows?.(e.id) ?? []).filter((r) => r.id !== f.id).map(rowOut), history });
   };
 
   /** feature 总控（设计文档 2026-10-26）：feature 和 ticket 都在这里重新核对，ticket 必须属于这个 feature 且未归档。 */
@@ -331,10 +376,11 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
     if (req.op === "list_sessions") return ok(featureSessionRows(f, own));
 
-    if (req.op === "end_session") {
-      // ticket 的 session 和这个 feature 的修复 session；feature 的总控不归总控关。
+    if (req.op === "end_session" || req.op === "refresh_session") {
+      // ticket 的 session 和这个 feature 的修复 session；feature 的总控不归总控关，也不归它换新（修复 session 换新会被拒绝）。
       const keys = new Set(own.map((t) => t.key));
-      return endSession(req, (s) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id && s.fixesSession !== null));
+      const belongs = (s: Session) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id && s.fixesSession !== null);
+      return req.op === "end_session" ? endSession(req, belongs) : refreshSession(req, belongs);
     }
 
     const t = own.find((x) => x.key === req.ticket.trim().toUpperCase());
@@ -350,7 +396,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     // from 必须是这个 feature 的总控，才记成子 session 的开启者。
     const h = req.from ? d.sessions.head(req.from) : null;
     const spawnedBy = h && h.featureId === f.id && h.coordinator ? req.from : null;
-    return start(t, repo, req.task, spawnedBy, { ticket: t.key });
+    return start(t, repo, req.task, spawnedBy, req.model, "feature", { ticket: t.key });
   };
 
   return async (req) => {
@@ -367,9 +413,10 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
     if (req.op === "session_activity") return sessionActivity(req.session, (s) => s.ticketKey === t.key);
     if (req.op === "end_session") return endSession(req, (s) => s.ticketKey === t.key);
+    if (req.op === "refresh_session") return refreshSession(req, (s) => s.ticketKey === t.key);
 
     const repo = findRepo(t, req.repo);
     if (typeof repo === "string") return fail(repo);
-    return start(t, repo, req.task, spawner(t, req.from));
+    return start(t, repo, req.task, spawner(t, req.from), req.model, "ticket");
   };
 }

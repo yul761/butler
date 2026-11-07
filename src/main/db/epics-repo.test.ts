@@ -13,7 +13,7 @@ const columns = (db: DatabaseSync, table: string) =>
 describe("migration 10", () => {
   it("adds epics, epic_repos and the new columns", () => {
     const db = memDb();
-    expect(columns(db, "epics")).toEqual(["id", "name", "workspace_dir", "created_at", "archived_at"]);
+    expect(columns(db, "epics")).toEqual(expect.arrayContaining(["id", "name", "workspace_dir", "created_at", "archived_at"]));
     expect(columns(db, "epic_repos")).toEqual(["id", "epic_id", "repo_path", "created_at"]);
     expect(columns(db, "features")).toEqual(expect.arrayContaining(["epic_id", "brief", "brief_sent_at"]));
     expect(columns(db, "sessions")).toContain("epic_id");
@@ -28,6 +28,47 @@ describe("migration 10", () => {
     expect(migrate(db)).toBe(MIGRATIONS.length);
     expect(new FeaturesRepo(db).get(1)).toMatchObject({ epicId: null, brief: null, briefSentAt: null });
     expect(new SessionsRepo(db).get("s1")?.epicId).toBeNull();
+  });
+});
+
+describe("the epic plan column (plan 16)", () => {
+  it("leaves old epics without a plan and not yet migrated; new epics start migrated", () => {
+    const db = new DatabaseSync(":memory:");
+    for (const sql of MIGRATIONS.slice(0, MIGRATIONS.length - 1)) db.exec(sql);
+    db.exec(`PRAGMA user_version = ${MIGRATIONS.length - 1}`);
+    db.prepare(`INSERT INTO epics (name, workspace_dir, created_at) VALUES ('old', '/e/old', 1)`).run();
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+    expect(columns(db, "epics")).toEqual(expect.arrayContaining(["plan", "plan_at"]));
+    const repo = new EpicsRepo(db);
+    expect(repo.get(1)).toMatchObject({ plan: null, planAt: null });
+    const fresh = repo.insert({ name: "new", workspaceDir: "/e/new", createdAt: 7 });
+    expect(repo.get(fresh)).toMatchObject({ plan: null, planAt: 7 });
+  });
+
+  it("stores a plan with its time, and a later one replaces it", () => {
+    const repo = new EpicsRepo(memDb());
+    const e = repo.insert({ name: "e", workspaceDir: "/e", createdAt: 1 });
+    repo.setPlan(e, "先做支付", 5);
+    expect(repo.get(e)).toMatchObject({ plan: "先做支付", planAt: 5 });
+    repo.setPlan(e, "改成先做退款", 6);
+    expect(repo.get(e)).toMatchObject({ plan: "改成先做退款", planAt: 6 });
+  });
+
+  it("migrates an old epic once, and never over a plan that is already set", () => {
+    const db = memDb();
+    const repo = new EpicsRepo(db);
+    const a = repo.insert({ name: "a", workspaceDir: "/a", createdAt: 1 });
+    const b = repo.insert({ name: "b", workspaceDir: "/b", createdAt: 1 });
+    db.prepare(`UPDATE epics SET plan_at = NULL`).run();
+    repo.migratePlan(a, "老规划", 5);
+    expect(repo.get(a)).toMatchObject({ plan: "老规划", planAt: 5 });
+    repo.migratePlan(a, "又一份", 6);
+    expect(repo.get(a)).toMatchObject({ plan: "老规划", planAt: 5 });
+    // 记忆里没有规划：也记下迁过了，之后 epic session 写的交接都当进度。
+    repo.migratePlan(b, null, 5);
+    expect(repo.get(b)).toMatchObject({ plan: null, planAt: 5 });
+    repo.migratePlan(b, "后来的", 6);
+    expect(repo.get(b)).toMatchObject({ plan: null, planAt: 5 });
   });
 });
 

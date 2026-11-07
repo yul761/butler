@@ -10,11 +10,6 @@ import { activityText, useNow } from "./TicketActivity";
 import { useCollapsed } from "./useCollapsed";
 import { SessionArea, useSessionPanes, WorkspaceHeader } from "./WorkspaceParts";
 
-/** 点卡住通知时要看的 ticket。每次点都是新对象：面板已经开着时再点也要滚过去。 */
-export interface StuckReveal {
-  ticket: string;
-}
-
 interface Props {
   feature: FeatureView;
   /** 可以移进去的 epic（未归档的）。 */
@@ -22,9 +17,8 @@ interface Props {
   onOpenTicket: (key: string) => void;
   /** 新建的 ticket：重读列表后跳过去。 */
   onTicketCreated: (key: string) => void;
-  /** 这一次要滚到的面板；用完调 onRevealed 清空，之后重新挂载不再滚。 */
-  reveal: StuckReveal | null;
-  onRevealed: () => void;
+  /** 打开时先切到这个 session 的终端（从「现在」页点进来时）。 */
+  focusSession?: string | null;
 }
 
 const errorText = (e: unknown) => (e instanceof ButlerError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
@@ -37,7 +31,7 @@ function formatTime(ms: number): string {
  * feature 页（设计文档 2026-10-26、2026-10-28）：从上到下是名字和工作区、整体进度（feature 汇总）、
  * ticket 表（带 PR 状态），然后是仓库、feature 总控 session 和它们的终端。
  */
-export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, reveal, onRevealed }: Props) {
+export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, focusSession }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newTicket, setNewTicket] = useState(false);
   const showError = (e: unknown) => setError(errorText(e));
@@ -46,12 +40,8 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, rev
     openFailure: (reason) => S.openErrors[reason] ?? reason,
     errorText,
     setError,
+    initialActive: focusSession,
   });
-
-  // 子组件的 effect 先跑：TicketRow 已经滚过了，这里才清空。
-  useEffect(() => {
-    if (reveal) onRevealed();
-  }, [reveal]);
 
   /** 为卡住的 session 开修复 session：成功后切到它的终端（已经开着也一样），失败显示在页面的错误区。 */
   async function openFix(stuckSessionId: string) {
@@ -135,7 +125,6 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, rev
                     onOpenTicket={onOpenTicket}
                     onFix={openFix}
                     onDismiss={dismissStuck}
-                    reveal={reveal?.ticket === t.key ? reveal : null}
                   />
                 ))}
               </tbody>
@@ -279,19 +268,18 @@ interface TicketRowProps {
   onOpenTicket: (key: string) => void;
   onFix: (stuckSessionId: string) => Promise<void>;
   onDismiss: (stuckSessionId: string) => void;
-  reveal: StuckReveal | null;
 }
 
 /**
  * ticket 表的一行：状态列显示正在做什么（没有活动就是原来的状态）；卡住时加红点、淡红底色，
  * 红点是按钮，展开紧跟在这一行下面的面板（不进 ticket 页）。
  */
-function TicketRow({ ticket: t, activity, prs, allPrs, now, onOpenTicket, onFix, onDismiss, reveal }: TicketRowProps) {
+function TicketRow({ ticket: t, activity, prs, allPrs, now, onOpenTicket, onFix, onDismiss }: TicketRowProps) {
   // 这里的“收起”记号在存储里的意思是“面板展开了”：没有记号（默认）就是关着的。
   const [open, toggle] = useCollapsed(`stuck-open:${t.key}`);
   const live = activity && activity.kind !== "idle" ? activityText(activity, S, now) : null;
   const stuck = activity?.stuck === true ? activity : null;
-  // 概览区放不下时面板可能在滚动范围外面。只在用户明确要看时滚过去（点红点、点通知）：
+  // 概览区放不下时面板可能在滚动范围外面。只在用户明确要看时滚过去（点红点）：
   // 记着“展开”的面板在回到这一页或再次卡住时自己出现，不动用户正在看的位置。
   const panelRow = useRef<HTMLTableRowElement>(null);
   const [dotClicks, setDotClicks] = useState(0);
@@ -306,9 +294,6 @@ function TicketRow({ ticket: t, activity, prs, allPrs, now, onOpenTicket, onFix,
   useEffect(() => {
     if (dotClicks > 0) showPanel();
   }, [dotClicks]);
-  useEffect(() => {
-    if (reveal) showPanel();
-  }, [reveal]);
   // 点一行进 ticket 页；号码是按钮，键盘也能用（点击冒泡到这一行）。
   return (
     <>

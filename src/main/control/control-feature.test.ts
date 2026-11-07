@@ -44,8 +44,10 @@ async function setup() {
   const needsUser = new Set<string>();
   const replies = new Map<string, string>();
   const logs: string[] = [];
+  const refreshed: string[] = [];
   const handle = controlHandler({
     tickets, sessions, features, ticketService, sessionService,
+    refresher: { precheck: () => null, refresh: async (id) => (refreshed.push(id), "done" as const) },
     activity: (id) => activities.get(id) ?? null,
     activityOutput: async () => "out",
     submit: async (termId, task) => (submitted.push([termId, task]), "sent" as const),
@@ -67,7 +69,7 @@ async function setup() {
   await ticketService.create({ key: "DMS-2", featureId: feature.id, repoPaths: [frontend, backend], workMode: "worktree" });
   await ticketService.create({ key: "OTH-1", featureId: other.id, repoPaths: [frontend], workMode: "worktree" });
   const base = { v: 1 as const, featureId: feature.id, from: null };
-  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs };
+  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs, refreshed };
 }
 
 describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
@@ -97,6 +99,14 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(sessions.get("s-1")).toMatchObject({ ticketKey: "DMS-1", featureId: null });
     await new Promise((res) => setTimeout(res, 0));
     expect(submitted[0][0]).toBe("s-1");
+  });
+
+  it("passes the model to the new session in a feature", async () => {
+    const { handle, base, spawned, sessions } = await setup();
+    const r = await handle({ ...base, op: "start_session", ticket: "dms-1", task: "补测试", model: "opus" });
+    expect(r).toMatchObject({ ok: true, value: { sessionId: "s-1", model: "opus" } });
+    expect(sessions.get("s-1")).toMatchObject({ model: "opus" });
+    expect(spawned[0].args).toEqual(expect.arrayContaining(["--model", "opus"]));
   });
 
   it("asks for the repo when the ticket has several, and accepts it by name", async () => {
@@ -371,5 +381,26 @@ describe("end_session from a feature coordinator (task 11)", () => {
     expect(rows.find((x) => x.id === child)!.last_reply).toBe("PR 已经合并了。");
     expect(rows.find((x) => x.id === coordinator)!.last_reply).toBeNull();
     expect(await handle({ ...base, op: "session_activity", session: child })).toMatchObject({ ok: true, value: { last_reply: "PR 已经合并了。" } });
+  });
+});
+
+describe("refresh_session from a feature coordinator (plan 16)", () => {
+  it("refreshes a ticket session of this feature, and not itself or another feature's sessions", async () => {
+    const t = await setup();
+    const c = await t.sessionService.openFeature({ featureId: t.feature.id });
+    const theirCoordinator = await t.sessionService.openFeature({ featureId: t.other.id });
+    if (!c.ok || !theirCoordinator.ok) throw new Error("no coordinator");
+    const mine = await t.handle({ ...t.base, from: c.termId, op: "start_session", ticket: "DMS-1", task: "a" });
+    const theirs = await t.handle({ v: 1, featureId: t.other.id, from: null, op: "start_session", ticket: "OTH-1", task: "b" });
+    if (!mine.ok || !theirs.ok) throw new Error("did not open");
+    const child = (mine.value as { sessionId: string }).sessionId;
+    const theirChild = (theirs.value as { sessionId: string }).sessionId;
+    const refresh = (session: string) => t.handle({ ...t.base, from: c.termId, op: "refresh_session", session });
+    for (const id of [c.termId, theirChild, theirCoordinator.termId]) {
+      expect(await refresh(id), id).toMatchObject({ ok: false, error: expect.stringContaining(`找不到 session ${id}`) });
+    }
+    expect(t.refreshed).toEqual([]);
+    expect(await refresh(child)).toEqual({ v: 1, ok: true, value: { started: true } });
+    expect(t.refreshed).toEqual([child]);
   });
 });

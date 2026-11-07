@@ -2,11 +2,13 @@ import { chmodSync, existsSync, lstatSync, readFileSync, statSync, symlinkSync, 
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { handoffCommandPath, handoffCommandStatus, installHandoffCommand, uninstallHandoffCommand } from "./command";
+import { handoffCommandPath, handoffCommandStatus, handoffCommandUsable, installHandoffCommand, uninstallHandoffCommand } from "./command";
 import { setLang } from "../i18n";
 import { commandBodyHash, featureCoordinatorSection, HANDOFF_COMMAND_MARKER, HANDOFF_COMMAND_MD, handoffCommandBody, renderHandoffCommand } from "./templates";
 
 const OLD = renderHandoffCommand("---\ndescription: old\n---\n旧版正文\n");
+/** 1.6.1 装的 /handoff（git show 7c7a2ce:src/main/handoff/templates.ts 渲染出来的，一字不差）。 */
+const V161 = readFileSync(join(__dirname, "__fixtures__", "handoff-command-1.6.1.zh.md"), "utf8");
 
 describe("/handoff command file", () => {
   it("installs into a missing commands dir, reports installed, and uninstalls", async () => {
@@ -25,6 +27,26 @@ describe("/handoff command file", () => {
     expect(await handoffCommandStatus(file)).toBe("stale");
     expect(await installHandoffCommand(file)).toBe("installed");
     expect(readFileSync(file, "utf8")).toBe(HANDOFF_COMMAND_MD);
+  });
+
+  it("upgrades the command 1.6.1 installed", async () => {
+    const file = handoffCommandPath(tempDir());
+    writeFileSync(file, V161);
+    expect(await handoffCommandStatus(file)).toBe("stale");
+    expect(await installHandoffCommand(file)).toBe("installed");
+    expect(readFileSync(file, "utf8")).toBe(HANDOFF_COMMAND_MD);
+  });
+
+  it("counts Butler's own command as usable for a refresh even when stale (C1)", async () => {
+    const dir = tempDir();
+    const file = handoffCommandPath(dir);
+    expect(await handoffCommandUsable(file)).toBe(false); // missing
+    writeFileSync(file, V161);
+    expect(await handoffCommandUsable(file)).toBe(true); // stale：照样是 Butler 的命令
+    writeFileSync(file, HANDOFF_COMMAND_MD);
+    expect(await handoffCommandUsable(file)).toBe(true);
+    writeFileSync(file, "我自己的 handoff 命令");
+    expect(await handoffCommandUsable(file)).toBe(false);
   });
 
   it("never touches a user's own handoff.md", async () => {
@@ -104,11 +126,12 @@ describe("/handoff command file", () => {
 describe("/handoff command for feature coordinators", () => {
   afterEach(() => setLang("zh"));
 
-  /** 加 feature 总控那一段之前的正文（计划 8 之前）：去掉那一段、换回原来的 description，hash 必须和当时的一致。 */
+  /** 加 feature 总控那一段之前的正文（计划 8 之前）：去掉那一段、换回原来的 description 和用途那句（计划 14 之前写的是简报），hash 必须和当时的一致。 */
   const PREVIOUS = {
     zh: {
       hash: "e1b25b8d150d6a4496b2c2361e31cbe2b17d7c233d7430e8d724b1346aa4e8e8",
       description: ["生成 Butler handoff（当前 ticket 的进度摘要；在 feature 总控里是 feature 汇总）", "生成 Butler handoff（当前 ticket 的进度摘要）"],
+      purpose: ["供之后的 session 和记忆使用。", "供 Butler 的早间简报使用。"],
     },
     en: {
       hash: "d942faeb2ca90337a20ae215bef582b6206c62eb252be0c4ad8d06eb4b6c46f8",
@@ -116,6 +139,7 @@ describe("/handoff command for feature coordinators", () => {
         "Write a Butler handoff (a progress summary of the current ticket; in a feature coordinator, of the feature)",
         "Write a Butler handoff (a progress summary of the current ticket)",
       ],
+      purpose: ["for later sessions and memory.", "for Butler's morning brief."],
     },
   } as const;
 
@@ -125,7 +149,8 @@ describe("/handoff command for feature coordinators", () => {
       const [now, before] = PREVIOUS[l].description;
       const current = handoffCommandBody(l);
       expect(current).toContain(featureCoordinatorSection(l));
-      const previous = current.replace(featureCoordinatorSection(l), "").replace(now, before);
+      const [purposeNow, purposeBefore] = PREVIOUS[l].purpose;
+      const previous = current.replace(featureCoordinatorSection(l), "").replace(now, before).replace(purposeNow, purposeBefore);
       expect(commandBodyHash(previous)).toBe(PREVIOUS[l].hash);
       const file = handoffCommandPath(tempDir());
       writeFileSync(file, renderHandoffCommand(previous));

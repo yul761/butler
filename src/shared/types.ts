@@ -58,6 +58,13 @@ export interface Epic {
   createdAt: number;
   archivedAt: number | null;
   repos: EpicRepo[];
+  /** epic session 用 set_epic_plan 写的整体规划；还没有为 null。 */
+  plan: string | null;
+  /**
+   * 规划这一栏最后一次定下的时间：建 epic、set_epic_plan、老数据迁移。
+   * null：升级前建的 epic，规划还在 epic 记忆的 handoff 里没迁过来（见 MemoryService.syncEpicNow）。
+   */
+  planAt: number | null;
 }
 
 export type EpicFeatureStatus = "stuck" | "waiting" | "not_started" | "active" | "archived";
@@ -118,6 +125,8 @@ export interface Session {
   fixesSession: string | null;
   /** epic session 属于哪个 epic（这时 ticketKey 和 featureId 都是 null）。 */
   epicId: number | null;
+  /** 开出来时用的模型（opus / sonnet）；null：没指定，恢复时也不传 --model。 */
+  model: string | null;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */
@@ -390,4 +399,108 @@ export interface MergeEvent {
   otherBranch: string | null;
   files: string[];
   createdAt: number;
+}
+
+export type UsageKind = "ticket" | "coordinator" | "subagent" | "headless";
+
+export interface UsageSummary {
+  sinceMs: number;
+  /** 五项 token 之和。 */
+  totalTokens: number;
+  /** 下面三个都是 0..1，按 USAGE_WEIGHTS 折算后的占比；没有数据时为 0。 */
+  cacheReadShare: number;
+  /** context >= 200_000 的轮次占比。 */
+  over200kShare: number;
+  byKind: Record<UsageKind, number>;
+  /** 模型 -> 折算占比；model 为 null 的记在 "unknown"。 */
+  byModel: Record<string, number>;
+}
+
+/** 后台监视的一个分支的 PR / CI 状态（渲染进程也用）。 */
+export interface WatchedPr {
+  ticketKey: string;
+  repoId: number;
+  repoPath: string;
+  branch: string;
+  number: number | null;
+  url: string | null;
+  /** 没有 PR 时为 null。 */
+  state: "open" | "merged" | "closed" | null;
+  review: "pending" | "changes_requested" | "approved" | null;
+  ci: "pending" | "passing" | "failing" | "none" | "unknown";
+  headSha: string | null;
+  checkedAt: number;
+}
+
+/** 「现在」页一行点开去哪：ticket 页、feature 页或 epic 页，sessionId 是要切到的终端（null：页面自己选）。 */
+export type NowTarget =
+  | { page: "ticket"; key: string; sessionId: string | null }
+  | { page: "feature"; id: number; sessionId: string | null }
+  | { page: "epic"; id: number; sessionId: string | null };
+
+/** 换新（计划 16）正在做的那一步：写 handoff、/clear、发接着做的话。 */
+export type RefreshStep = "handoff" | "clear" | "resume";
+/**
+ * 换新开始不了的原因（SessionRefresher.precheck）：busy 现在不能往终端里输入；already 正在换新；cooldown 30 分钟内失败过；
+ * memory_off 记忆关着；failed 这个 session 不能换新。
+ */
+export type RefreshRefusal = "busy" | "already" | "cooldown" | "memory_off" | "failed";
+/** 界面上的“换新”按钮（IPC sessions:refresh）：开始了，或者为什么开始不了。 */
+export type RefreshSessionResult = { ok: true } | { ok: false; reason: RefreshRefusal };
+
+/** 「现在」页的一行：一个开着终端的 Butler session，或者一个没有开着的 session、但有开着的 PR 的 ticket。 */
+export interface NowRow {
+  /** 没有开着的 session、只有 PR 的行为 null。 */
+  sessionId: string | null;
+  ticketKey: string | null;
+  title: string | null;
+  /** 一个 ticket 开了几个仓库的 session 时才填（仓库目录名）。 */
+  repo: string | null;
+  coordinator: boolean;
+  activity: SessionActivity | null;
+  /** 这个 session 在合并总控的等待名单里。 */
+  mergeQueued: boolean;
+  /** 需要你的理由：卡住时是卡住的 reason；停在确认上时是固定文案；不需要为 null。正在换新时为 null。 */
+  needsYou: string | null;
+  /** Butler 正在给这个 session 换新（计划 16）：做到哪一步；不在换新为 null。 */
+  refreshing: RefreshStep | null;
+  prs: WatchedPr[];
+  /** 停着、不需要你、没有开着的 PR / CI：默认折起来。 */
+  idle: boolean;
+  /** 这个状态从什么时候开始（activity.startedAt，没有就用 session 的 lastActivityAt）。 */
+  since: number | null;
+  target: NowTarget;
+}
+
+/** 一组的汇总：进行中（不空闲）的行数、需要你的行数、卡住的行数。 */
+export interface NowCounts {
+  active: number;
+  needsYou: number;
+  stuck: number;
+}
+
+/** id 为 null：不属于任何 feature 的 ticket（name 为空串，界面上显示自己的文案）。 */
+export interface NowFeature {
+  id: number | null;
+  name: string;
+  rows: NowRow[];
+  counts: NowCounts;
+}
+
+/** id 为 null：「无 epic」这一组（name 为空串，界面上显示自己的文案）。rows 是 epic 总控的行。 */
+export interface NowEpic {
+  id: number | null;
+  name: string;
+  rows: NowRow[];
+  features: NowFeature[];
+  counts: NowCounts;
+}
+
+export interface NowView {
+  /** 全部需要你的行，按 since 从早到晚。 */
+  needsYou: NowRow[];
+  epics: NowEpic[];
+  /** 开着终端的 Butler session 数。 */
+  running: number;
+  merges: MergeEvent[];
 }

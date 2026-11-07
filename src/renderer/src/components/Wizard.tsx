@@ -49,7 +49,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     saveWizardStep(step);
   }, [step]);
 
-  /** skipped：点的是“稍后再说”，简报页会提醒还没设置完。 */
+  /** skipped：点的是“稍后再说”（记在本地；「现在」页顶上据此提醒还没设置完）。 */
   async function finish(skipped: boolean) {
     try {
       await api.setSetting("onboardingDone", "1");

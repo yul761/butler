@@ -1,37 +1,41 @@
-import { app, BrowserWindow, dialog, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, Tray, type MessageBoxOptions } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, Tray } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { Brief } from "../shared/brief";
 import { sanitizeTask } from "../shared/control";
 import { parseGateRequest, type GateRequest, type GateResult } from "../shared/gate";
-import type { MergeEvent } from "../shared/types";
-import { IPC, type AppNavigateRoute } from "../shared/ipc";
+import { IPC } from "../shared/ipc";
+import type { Session } from "../shared/types";
 import { APP_ID, shouldSetAppId } from "./app-id";
-import { BriefService } from "./brief/brief-service";
-import { narrateBrief } from "./brief/narrate";
 import { runHeadless } from "./claude/headless";
 import { probeMcpTools } from "./claude/mcp-probe";
 import { projectMcpApprovalSettings, projectMcpConfigs } from "./claude/project-mcp";
 import { headlessEnv } from "./claude/spawn";
 import { AuditRepo } from "./db/audit-repo";
-import { BriefsRepo } from "./db/briefs-repo";
 import { NewerDatabaseError, openDatabase } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
 import { HandoffsRepo } from "./db/handoffs-repo";
 import { JobsRepo } from "./db/jobs-repo";
-import { MarksRepo } from "./db/marks-repo";
 import { MemorySyncRepo } from "./db/memory-sync-repo";
 import { MergeGateRepo } from "./db/merge-gate-repo";
+import { PrWatchRepo } from "./db/pr-watch-repo";
 import { SecretsRepo } from "./db/secrets-repo";
 import { SessionsRepo } from "./db/sessions-repo";
 import { SettingsRepo } from "./db/settings-repo";
 import { TermsRepo } from "./db/terms-repo";
 import { TicketsRepo } from "./db/tickets-repo";
+import { UsageRepo } from "./db/usage-repo";
+import { jobOf } from "./handoff/headless-exec";
+import type { UsageCounts } from "./usage/usage-parse";
+import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
+import { CiDelivery } from "./prwatch/ci-delivery";
+import { prHandoff } from "./prwatch/pr-handoff";
+import { watchTargets } from "./prwatch/pr-targets";
+import { PrWatcher } from "./prwatch/pr-watcher";
 import { makeWhoOf } from "./gate/who";
 import { auditCutoff, stalePendingCost } from "./gateway/budget";
 import { PrivacyGateway } from "./gateway/gateway";
@@ -40,15 +44,20 @@ import { autostartState } from "./autostart";
 import { electronSecretBox } from "./gateway/safe-storage";
 import { llmStatus } from "./gateway/status";
 import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
+import { handoffCommandPath, handoffCommandUsable } from "./handoff/command";
 import { ingestFeatureHandoff, type FeatureIngestInput } from "./handoff/feature-ingest";
 import { featureCommandFollowup, FeatureSummaryRunner } from "./handoff/feature-runner";
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
+import { EpicHistoryRepo } from "./db/epic-history-repo";
 import { EpicsRepo } from "./db/epics-repo";
+import { EpicDigestRunner } from "./epics/epic-digest";
+import { EPIC_HISTORY_READ_ENTRIES } from "./epics/epic-history-view";
 import { EpicService } from "./epics/epic-service";
 import { FeaturesRepo } from "./db/features-repo";
-import { onLangChange, setLang } from "./i18n";
+import { currentLang, onLangChange, setLang } from "./i18n";
+import { writeSessionGuide } from "./claude/session-guide";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
 import { HandoffRunner } from "./handoff/runner";
@@ -66,20 +75,26 @@ import { ensureDirs, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
-import { ActivityMonitor, activityIntervals, type StuckInfo } from "./sessions/activity-monitor";
+import { ActivityMonitor, activityIntervals } from "./sessions/activity-monitor";
 import { sessionRegistryName } from "./sessions/activity-sources";
+import { DeliveryGuard, type DeliveryGuardDeps } from "./sessions/delivery-guard";
+import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
 import { judgeStuck } from "./sessions/stuck-judge";
-import { llmConfig, memoryOn, scheduleConfig, SettingError } from "./settings/settings-values";
+import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
+import { buildNowView } from "./now/now-view";
+import { llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
 import { pathKey } from "./util/env";
+import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
-import { prInfo } from "./tickets/gh";
+import { applyGhResolution, branchRuns, failedLog, prInfo, prStatus } from "./tickets/gh";
+import type { HeadlessExecDeps } from "./handoff/headless-exec";
 import * as git from "./tickets/git";
 import { canSend } from "./safe-send";
 import { createQuitState } from "./quit-state";
@@ -90,10 +105,8 @@ import { CSP_VIOLATION_LOG_PREFIX, isCspViolationMessage } from "./csp-log";
 const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
 /** hook 发现没有 ticket 的 session 后，稍等片刻再扫描磁盘（合并连续事件）。 */
 const HOOK_DISCOVERY_DEBOUNCE_MS = 3000;
-/** 系统空闲超过这么多秒就不算“正在用电脑”（用于 tick 触发早间简报）。 */
+/** 系统空闲超过这么多秒就不算“正在用电脑”（用于 tick 触发早间任务）。 */
 const ACTIVE_IDLE_SECONDS = 120;
-/** 发送前确认最多等这么久，超时视为拒绝：早间任务串行执行，对话框一直开着会挡住后面的任务。 */
-const CONFIRM_TIMEOUT_MS = 5 * 60 * 1000;
 
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -101,12 +114,6 @@ let tray: Tray | null = null;
 const BACKGROUND_WINDOWS = process.env.BUTLER_BACKGROUND_WINDOWS === "1";
 /** 防休眠开关（托盘菜单和侧边栏都能开关）；bootstrap 里建好。 */
 let keepAwake: KeepAwake | null = null;
-/** 保留最近一条通知的引用，否则它可能在用户点击前被回收。 */
-let lastNotification: Notification | null = null;
-/** 卡住的通知：可能同时有好几个 session 卡住，都要留着，点击之前不能被回收。 */
-const stuckNotifications = new Set<Notification>();
-/** 合并协调的通知：几次冲突可能接连发生，点击之前都要留着。 */
-const gateNotifications = new Set<Notification>();
 const quitState = createQuitState(() => app.quit());
 let logger: Logger = () => undefined;
 /** dev 控制台 tee：防止在 tee 里再次写日志造成递归，stderr 管道断开后停止 tee。 */
@@ -252,88 +259,15 @@ function trayTooltip(): string {
   return keepAwake?.isOn() ? M().trayTooltipKeepAwake : "Butler";
 }
 
-function showEveningNotification(brief: Brief): void {
-  if (!Notification.isSupported()) return;
-  lastNotification?.close();
-  const n = new Notification({ title: M().eveningTitle, body: M().eveningBody(brief.evening.length) });
-  n.on("click", () => {
-    showWindow();
-    safeSend(IPC.appNavigate, { page: "home", kind: "evening" });
-  });
-  n.show();
-  lastNotification = n;
-}
-
-/** 一次卡住一条通知（设计文档 2026-10-31）：点开这个 feature 页，展开这个 ticket 的面板。 */
-function showStuckNotification(info: StuckInfo): void {
-  if (headlessAbort.signal.aborted || !Notification.isSupported()) return;
-  const n = new Notification({ title: M().stuckTitle(info.ticketKey), body: M().stuckBody(info.reason) });
-  stuckNotifications.add(n);
-  n.on("close", () => stuckNotifications.delete(n));
-  n.on("click", () => {
-    stuckNotifications.delete(n);
-    showWindow();
-    const route: AppNavigateRoute = { page: "feature", featureId: info.featureId, stuckTicket: info.ticketKey };
-    safeSend(IPC.appNavigate, route);
-  });
-  n.show();
-}
-
-/** 合并总控判出冲突（设计文档 2026-11-04“告诉用户”）：一条一个通知，点开对应的 ticket 页；没有 ticket 时开首页。 */
-function showGateNotification(e: MergeEvent, whoOf: (ticketKey: string | null, branch: string) => string): void {
-  if (headlessAbort.signal.aborted || !Notification.isSupported()) return;
-  const other = e.otherBranch !== null ? whoOf(e.otherTicket, e.otherBranch) : e.otherTicket;
-  const n = new Notification({ title: M().gateNotifyTitle(basename(e.repoPath)), body: M().gateNotifyBody(e, whoOf(e.ticketKey, e.branch), other) });
-  gateNotifications.add(n);
-  n.on("close", () => gateNotifications.delete(n));
-  n.on("click", () => {
-    gateNotifications.delete(n);
-    showWindow();
-    const route: AppNavigateRoute = e.ticketKey ? { page: "ticket", key: e.ticketKey } : { page: "home" };
-    safeSend(IPC.appNavigate, route);
-  });
-  n.show();
-}
-
-/**
- * 发送前确认（设计文档 7.6）：展示完整的出站内容，默认按钮和取消都是“不发送”。
- * 把主窗口带到前台并作为父窗口；没有主窗口时视为拒绝。最多等 CONFIRM_TIMEOUT_MS，超时视为拒绝；
- * app 正在退出时立即返回 false，对话框打开中开始退出也会被关掉，不会挡住退出。
- */
-async function confirmSend(outbound: string, quit: AbortSignal): Promise<boolean> {
-  if (quitState.quitting || quit.aborted) return false;
-  const signal = AbortSignal.any([AbortSignal.timeout(CONFIRM_TIMEOUT_MS), quit]);
-  const options: MessageBoxOptions = {
-    type: "question",
-    buttons: [M().confirmSend, M().confirmCancel],
-    defaultId: 1,
-    cancelId: 1,
-    noLink: true,
-    title: M().confirmTitle,
-    message: M().confirmMessage,
-    detail: outbound,
-    signal,
-  };
-  // 没有主窗口时（窗口还没建好、或正在退出）直接视为拒绝：macOS 上无父窗口的对话框不响应 abort，
-  // 超时和退出都关不掉它（Electron 44 实测），会一直挡着。
-  const w = win && !win.isDestroyed() ? win : null;
-  if (!w) {
-    logger("confirm-before-send: no main window, treated as declined");
-    return false;
-  }
-  showWindow();
-  const r = await dialog.showMessageBox(w, options);
-  // 被超时或退出关掉的对话框一律当作拒绝。
-  return r.response === 0 && !signal.aborted;
-}
-
 async function bootstrap(): Promise<void> {
   const paths = resolvePaths();
   await ensureDirs(paths);
   logger = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : teeToConsole);
   if (!app.isPackaged) process.stderr.on("error", () => { teeBroken = true; });
-  // 先用 Butler 自己的 PATH 定下 git 的绝对路径；登录 shell 的 PATH 读到之后再更新一次。
-  applyGitResolution(resolveGit(process.env[pathKey(process.env)] ?? "", process.platform), process.platform, (m) => logger(m));
+  // 先用 Butler 自己的 PATH 定下 git 和 gh 的绝对路径；登录 shell 的 PATH 读到之后再更新一次。
+  const ownPath = process.env[pathKey(process.env)] ?? "";
+  applyGitResolution(resolveGit(ownPath, process.platform), process.platform, (m) => logger(m));
+  applyGhResolution(resolveGh(ownPath, process.platform), process.platform, (m) => logger(m));
   const db = openDatabase(paths.db);
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -349,6 +283,7 @@ async function bootstrap(): Promise<void> {
   const followups = new FollowupsRepo(db);
   const jobs = new JobsRepo(db);
   const featureHandoffs = new FeatureHandoffsRepo(db);
+  const epicHistory = new EpicHistoryRepo(db);
   const memory = new MemoryService({
     dataDir: paths.statecore,
     tickets,
@@ -371,15 +306,37 @@ async function bootstrap(): Promise<void> {
   const notify = () => safeSend(IPC.stateChanged);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
   // 同时把升级后还是旧版本的 butler-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
-  const healthReady: Promise<void> = Promise.all([health.refresh(), health.syncHookBinary()]).then(
+  // Butler 旧版本装的 /handoff 也先换成当前版本再探测（C1），健康页报告的是换完的状态。syncHandoffCommand 不抛错。
+  const healthReady: Promise<void> = Promise.all([health.syncHandoffCommand().then(() => health.refresh()), health.syncHookBinary()]).then(
     () => {
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
+      applyGhResolution(resolveGh(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       notify();
     },
     (e: unknown) => {
       logger("initial health refresh failed", e);
     },
   );
+  const usageRepo = new UsageRepo(db);
+  /** 某个 session（取 head）最近一轮的上下文大小：计划 16 的自动换新看它。 */
+  const contextOf = (sessionId: string): number | null => usageRepo.latestContext(sessions.head(sessionId)?.id ?? sessionId);
+  /** headless 运行（handoff、feature 汇总、卡住判断）的用量入库。 */
+  const recordHeadlessUsage = ({ runId, label, at, model, usage }: { runId: string; label: string; at: number; model: string | null; usage: UsageCounts }) => {
+    try {
+      usageRepo.record([{
+        messageId: `headless:${runId}`, sessionId: null, agentId: null, source: "headless", job: jobOf(label), at, model, ...usage,
+        context: usage.input + usage.cacheWrite5m + usage.cacheWrite1h + usage.cacheRead,
+      }]);
+    } catch (e) {
+      logger("recording headless usage failed", e);
+    }
+  };
+  const usageScanner = new UsageScanner({
+    repo: usageRepo,
+    sessionIds: () => pty.openIds().map((t) => sessions.head(t)).filter((s) => s?.origin === "butler").map((s) => s!.id),
+    transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
+    log: logger,
+  });
   /** will-quit 关数据库之前置位：之后才到的终端退出事件（killAll 是异步的）不再碰数据库。没处理的空 session 下次启动时清掉。 */
   let closing = false;
   const pty = new PtyManager(nodePtyFactory, {
@@ -388,12 +345,15 @@ async function bootstrap(): Promise<void> {
       safeSend(IPC.ptyExit, id, code);
       if (closing) return;
       // 合并后因为这个终端还在跑而没清理的 worktree：终端一退出就再试（设计文档 2026-10-26）。
-      const exitedTicket = sessions.head(id)?.ticketKey ?? null;
+      const exitedHead = sessions.head(id);
+      const exitedTicket = exitedHead?.ticketKey ?? null;
       try {
         sessionService.handleExit(id);
       } catch (e) {
         logger("handleExit failed", e);
       }
+      // 退出前最后一段 transcript 也要记上。
+      if (exitedHead) void usageScanner.scanSession(exitedHead.id);
       if (exitedTicket) cleanupMerged(exitedTicket);
       notify();
     },
@@ -448,12 +408,42 @@ async function bootstrap(): Promise<void> {
     if (Object.keys(servers).length === 0) return null;
     return writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers });
   };
+  /** 卡住判断和「需要你」判断共用的 headless 设置。 */
+  const judgeDeps: HeadlessExecDeps = {
+    run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID,
+    signal: headlessAbort.signal, onUsage: recordHeadlessUsage, log: logger,
+  };
+  /** 开着终端的 Butler session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
+  const needsYouHeads = (): NeedsYouHead[] => {
+    const heads = new Map<string, NeedsYouHead>();
+    for (const termId of pty.openIds()) {
+      const h = sessions.head(termId);
+      if (!h || h.origin !== "butler" || heads.has(h.id)) continue;
+      heads.set(h.id, { id: h.id, cwd: h.cwd, waiting: h.waitingForInput, kind: activityMonitor.get(h.id)?.kind ?? null, reply: activityMonitor.lastReplyOf(h.id) });
+    }
+    return [...heads.values()];
+  };
+  // 「需要你」（计划 14）：停下来的 session 是不是在等用户。判断最多等 1 分钟（默认的 5 分钟会一直占着名额）。
+  // 判断完只发 stateChanged（不经过下面 activityMonitor 的 notify），所以 update → notify 不会再回到 update。
+  const needsYou = new NeedsYouTracker({
+    judge: (reply, cwd) => judgeNeedsYou({ ...judgeDeps, timeoutMs: 60_000 }, reply, cwd),
+    sessions: needsYouHeads,
+    notify,
+    log: logger,
+  });
   const activityMonitor = new ActivityMonitor({
     sessions, tickets, features, pty,
     transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
-    judge: (input) => judgeStuck({ run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID, signal: headlessAbort.signal, log: logger }, input),
-    notify,
-    onStuck: showStuckNotification,
+    judge: (input) => judgeStuck(judgeDeps, input),
+    // 活动变了：先看停下来的 session 有没有新回复要判断、有没有该自动换新的，再刷新界面。
+    // 换新自己的 notify 只发 stateChanged（不回到这里），所以 autoCheck → notify 不会再回到 autoCheck。
+    notify: () => {
+      needsYou.update();
+      refresher.autoCheck();
+      notify();
+    },
+    // 卡住不再弹系统通知（之后在「现在」页里显示）：只刷新界面。
+    onStuck: () => notify(),
     now: Date.now,
     intervals: activityIntervals(process.env),
     log: logger,
@@ -480,9 +470,10 @@ async function bootstrap(): Promise<void> {
     mcpConfig: memoryMcpConfig,
     // 装着的 butler-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
     mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, gateCommand: health.hookBinCurrent() && existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
+    guidePath: (kind) => writeSessionGuide(paths.mcp, currentLang(), kind),
     featureMcpConfig,
     epicMcpConfig,
-    features, epics, featureHandoffs, handoffs,
+    features, epics, featureHandoffs, handoffs, epicHistory,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
     log: logger,
@@ -545,6 +536,7 @@ async function bootstrap(): Promise<void> {
     newRunId: randomUUID,
     projectMcp,
     signal: headlessAbort.signal,
+    onUsage: recordHeadlessUsage,
     log: logger,
   });
   /** feature 有新汇总时，它所在的 epic 重新渲染 handoff（异步，失败只记日志）。 */
@@ -573,19 +565,22 @@ async function bootstrap(): Promise<void> {
     newRunId: randomUUID,
     projectMcp,
     signal: headlessAbort.signal,
+    onUsage: recordHeadlessUsage,
     log: logger,
   });
   /**
    * 总控里的 /handoff 之后（后台）：存下了汇总就给子 ticket 跑 handoff；没存下（用户自己开的总控没有 Butler 的 MCP，
    * 输出了 ticket 代码块或没有代码块）就由 Butler 从那个 session fork 出来自己生成汇总。见 featureCommandFollowup。
    */
-  const afterFeatureCommand = featureCommandFollowup(featureRunner, { notify, log: logger });
-  const briefs = new BriefsRepo(db);
-  const briefService = new BriefService({
-    tickets, sessions, handoffs, followups, marks: new MarksRepo(db), briefs, settings,
-    now: Date.now, unclaimedCount: () => sessionService.unclaimed().length,
-  });
-
+  const featureFollowup = featureCommandFollowup(featureRunner, { notify, log: logger });
+  /** 换新时 feature 总控的 /handoff 只收总控自己的汇总，不往下带动 ticket，也不 fork 总控（计划 16）。refresher 在后面才建好。 */
+  const afterFeatureCommand = (featureId: number, handoffId: number | null, sessionId: string): void => {
+    if (refresher.isRefreshing(sessionId)) {
+      logger(`/handoff in feature ${featureId} coordinator session ${sessionId} during a refresh: no ticket handoffs, no fallback summary`);
+      return;
+    }
+    featureFollowup(featureId, handoffId, sessionId);
+  };
   const audit = new AuditRepo(db);
   // 审计的启动收尾，先于一切读写审计的代码：上次退出时没发完的请求记为 failed（请求体保留，可能已经发出），
   // 再按保留期清理一次（不删本月的记录，预算要用；之后 gateway 每次调用前也会清理）。
@@ -599,13 +594,9 @@ async function bootstrap(): Promise<void> {
   const terms = new TermsRepo(db);
   const keys = new KeyStore({ secrets: new SecretsRepo(db), box: electronSecretBox, now: Date.now, log: logger });
   const gateway = new PrivacyGateway({
-    settings, audit, terms, keys, now: Date.now,
-    confirm: (outbound) => confirmSend(outbound, headlessAbort.signal),
+    settings, audit, keys, now: Date.now,
     log: logger,
   });
-  let briefNarrating = false;
-
-  let briefRefreshing = false;
   // 同时只跑一次蒸馏；退出时 headlessAbort 让 gateway 拒绝 / 中止调用，蒸馏在下一个 scope 之前停下。
   const distiller = new BackgroundRunner({
     name: "memory distill",
@@ -613,54 +604,39 @@ async function bootstrap(): Promise<void> {
     signal: headlessAbort.signal,
     log: logger,
   });
+  /**
+   * epic 的长期记忆（计划 16 任务 6）：每个 epic 每周跟着工作日的晚间任务整理一次，feature 归档时也整理一次。用 Sonnet，不 fork session，
+   * 和卡住判断共用 headless 设置（用量记进 session_usage，退出时取消）。
+   */
+  const epicDigest = new EpicDigestRunner({
+    ...judgeDeps,
+    history: epicHistory, epics, features, featureHandoffs, handoffs, tickets, memory,
+    cwd: () => paths.home,
+  });
+  /**
+   * feature 归档之后（不等它）：对它所在的 epic 整理一次；不属于 epic 的 feature 只整理它自己。
+   * 归档被拒（有终端在跑）的走不到这里；这次没归档成的（例如等汇总期间又被恢复）不整理。重复调用由 runner 跳过：没有新东西就不跑。
+   */
+  const digestArchivedFeature = (featureId: number) => {
+    if (features.get(featureId)?.archivedAt != null) void epicDigest.forFeatureArchived(featureId);
+  };
   const dailyDeps: DailyJobDeps = {
     runner,
     features: featureRunner,
-    briefs: briefService,
-    jobs,
-    now: Date.now,
     isWorkingDay: () => isWorkingDay(localDate(Date.now()), scheduleConfig(settings).workingDays),
-    setRefreshing: (v) => {
-      briefRefreshing = v;
-      notify();
-    },
+    hasTrackerTools: () => trackerTools(settings).length > 0,
     aborted: () => headlessAbort.signal.aborted,
     log: logger,
-    narrate: async (brief) => {
-      briefNarrating = true;
-      notify();
-      try {
-        await narrateBrief(
-          {
-            narrate: (src, signal) => gateway.narrate(src, signal),
-            briefs,
-            source: (b) => briefService.narrativeSource(b),
-            off: () => gateway.isOff(),
-            signal: headlessAbort.signal,
-            log: logger,
-          },
-          brief,
-        );
-      } finally {
-        briefNarrating = false;
-        notify();
-      }
-    },
     // full 档位的记忆蒸馏：在后台跑，不挡调度链；每次运行都重新向 gateway 要模型（改档位不用重启），模型只经 withScope 交给嵌入式 StateCore。
     distill: () => distiller.start(),
-    onEvening: (brief) => {
-      // 退出开始后不再弹通知。
-      if (headlessAbort.signal.aborted) return;
-      notify();
-      showEveningNotification(brief);
-    },
+    epicDigest,
   };
   const scheduler = new Scheduler({
     jobs,
     config: () => scheduleConfig(settings),
     now: Date.now,
     userActive: () => powerMonitor.getSystemIdleTime() < ACTIVE_IDLE_SECONDS,
-    nightly: (slot) => nightlyJob(dailyDeps, slot),
+    nightly: () => nightlyJob(dailyDeps),
     morning: () => morningJob(dailyDeps),
     onChange: notify,
     log: logger,
@@ -737,33 +713,143 @@ async function bootstrap(): Promise<void> {
     const head = sessions.head(sessionId)?.id;
     return head ? (pty.openIds().find((t) => sessions.head(t)?.id === head) ?? null) : null;
   };
+  // 所有自动输入共用的一道检查（计划 13）：停着等输入、屏幕上没有要回答的、用户没在打字、没有草稿才贴。
+  const guardDeps: DeliveryGuardDeps = {
+    termOf: gateTerm,
+    head: (id) => sessions.head(id),
+    activity: (id) => activityMonitor.get(id),
+    pty,
+    // BUTLER_GATE_TYPING_QUIET_MS 只给 e2e 用（它刚在终端里打过字，不想多等 30 秒）。
+    typingQuietMs: Number(process.env.BUTLER_GATE_TYPING_QUIET_MS) || undefined,
+    now: Date.now,
+  };
+  // 合并通知和 CI 结果用的：在等用户回答的 session 不往里贴东西（计划 14），「需要你」还没判断完的也先不贴（I1），
+  // 正在换新的也不贴（计划 16）。refresher 在下面才建好：回调里才用到。
+  const deliveryGuard = new DeliveryGuard({
+    ...guardDeps,
+    needsYou: (id) => deliveryNeedsYou(needsYou, id),
+    refreshing: (id) => refresher.isRefreshing(id),
+  });
+  /** Stop 到的时候先重读这个 session 的活动（guard 看的是上一次刷新的）。活动按 head 的 id 跟踪；Stop 带来的可能是链上的旧 id。 */
+  const refreshActivityOf = async (id: string): Promise<void> => {
+    const head = sessions.head(id)?.id;
+    if (head) await activityMonitor.refreshSession(head);
+  };
+  /** 开着终端的 Butler session 的 head（同一个 head 只算一次）。 */
+  const openButlerHeads = (): Session[] => {
+    const heads = new Map<string, Session>();
+    for (const termId of pty.openIds()) {
+      const h = sessions.head(termId);
+      if (h && h.origin === "butler") heads.set(h.id, h);
+    }
+    return [...heads.values()];
+  };
+  // 上下文换新（计划 16）。它自己的两道 guard 不带 refreshing（R25），否则换新会挡住自己的下一步。
+  // 自动换新还要等「需要你」的判断出结论：刚停下来问了问题的 session，结论出来之前不能当作不需要你。
+  // 已经在换新的不等（R33）：/handoff 的回复还没判断完时照样往下走，真判断出需要你才停。
+  const refresher = new SessionRefresher({
+    guard: new DeliveryGuard({
+      ...guardDeps,
+      needsYou: (id): boolean => autoRefreshNeedsYou({ reason: needsYou.reasonOf(id), undecided: needsYou.undecided(id), refreshing: refresher.isRefreshing(id) }),
+    }),
+    guardIgnoringNeedsYou: new DeliveryGuard(guardDeps),
+    head: (id) => sessions.head(id),
+    activity: (id) => activityMonitor.get(id),
+    kindOf: (s) => refreshKindOf(s, gateTerm(s.id) !== null),
+    contextOf,
+    threshold: () => refreshThreshold(settings),
+    // 和 HealthService 装命令的是同一个文件；Butler 的旧版本也算（C1）。读不了当作不是 Butler 的（不换新）。
+    handoffCommandReady: () =>
+      handoffCommandUsable(handoffCommandPath(paths.claudeCommands)).catch((e: unknown) => {
+        logger("refresh: reading the /handoff command file failed", e);
+        return false;
+      }),
+    // epic 的规划已经单独存放（Task 1），epic 总控也可以换新。
+    epicPlanReady: () => true,
+    memoryEnabled: () => memoryOn(settings),
+    epicProgress: (id) => memory.epicProgress(id),
+    // 和递 CI 结果一样最多等 1 分钟：session 是停着的，输入框应该很快就绪。斜杠命令粘贴进去照样会执行（R26 用真的 claude 验证过）。
+    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
+    sessions: openButlerHeads,
+    lastUserInputAt: (termId) => pty.lastUserInputAt(termId),
+    openedAt: (termId) => pty.openedAt(termId),
+    // BUTLER_REFRESH_OPEN_QUIET_MS 只给 e2e 用（后台窗口模式下才算数）：它刚打开终端就要看自动换新，不想多等 1 分钟。
+    openQuietMs: process.env.BUTLER_BACKGROUND_WINDOWS === "1" ? Number(process.env.BUTLER_REFRESH_OPEN_QUIET_MS) || undefined : undefined,
+    // 「需要你」按 head 跟踪：/clear 之后终端里跑的是新 id。
+    suppressNeedsYou: (termId) => needsYou.suppressNext(sessions.head(termId)?.id ?? termId),
+    notify,
+    now: Date.now,
+    // /clear 之后没有 Stop：每一步输入之前先重读活动（R28）。
+    refreshActivity: refreshActivityOf,
+    log: logger,
+  });
+  // PR 和 CI 的监视（计划 13）。
+  const prWatchRepo = new PrWatchRepo(db);
   const holdWatcher = new HoldWatcher({
     repo: gateRepo, prInfo, git,
     isOpen: (id) => gateTerm(id) !== null,
-    isWaiting: (id) => {
-      const t = gateTerm(id);
-      return t !== null && sessions.head(t)?.waitingForInput === true;
-    },
-    lastUserInput: (id) => {
-      const t = gateTerm(id);
-      return t ? pty.lastUserInputAt(t) : 0;
-    },
+    guard: deliveryGuard,
+    refreshActivity: refreshActivityOf,
+    // PrWatcher 刚查过的 PR 不用再问 gh。prWatcher 在后面才建好：回调里才用到。
+    cachedByUrl: (url) => prWatcher.cachedByUrl(url),
     // 最多等 1 分钟：session 是停着的，输入框应该很快就绪；等不到下一轮再发。
-    deliver: async (id, text) => {
+    deliver: async (id, text, recheck) => {
       const t = gateTerm(id);
-      return t ? pty.deliver(t, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000 }) : "exited";
+      return t ? pty.deliver(t, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }) : "exited";
     },
-    // BUTLER_GATE_TYPING_QUIET_MS 只给 e2e 用（它刚在终端里打过字，不想多等 30 秒）。
-    typingQuietMs: Number(process.env.BUTLER_GATE_TYPING_QUIET_MS) || undefined,
     whoOf, now: Date.now, log: logger,
+  });
+  // CI 的结论递给这个仓库自己的 session（不算总控）：和合并通知走同一道 guard，最多等 1 分钟。
+  const ciDelivery = new CiDelivery({
+    repo: prWatchRepo,
+    guard: deliveryGuard,
+    sessionFor: (key, repoId) => {
+      for (const t of pty.openIds()) {
+        const h = sessions.head(t);
+        if (h && h.ticketKey === key && h.repoId === repoId && !h.coordinator) return h.id;
+      }
+      return null;
+    },
+    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
+    now: Date.now,
+    log: logger,
+  });
+  /** 递还没递出去的 CI 结论（永不 reject）。 */
+  const flushCi = (): Promise<void> => ciDelivery.flush().catch((e: unknown) => logger("ci delivery: flush failed", e));
+  const prWatcher = new PrWatcher({
+    repo: prWatchRepo,
+    targets: () =>
+      watchTargets(tickets.list(), {
+        workDir: (r) => ticketService.workDir(r),
+        sessionOpen: (key, repoId) => sessionService.hasRepoTerminal(key, repoId),
+        watched: (repoId) => prWatchRepo.get(repoId),
+        handoffHasOpenPr: (key) => handoffs.latestValid(key)?.payload?.prs.some((p) => p.state === "open") ?? false,
+      }),
+    gh: { prStatus, branchRuns, failedLog },
+    // PR 的状态或 review 变了：在最新的 handoff 上换掉 prs，存成一条 refresh。ticket 状态、PR 标签、合并后清理 worktree 都照旧走 ingest。
+    onPrChanged: (key) => {
+      const base = handoffs.latestValid(key);
+      if (!base?.payload) return;
+      const next = prHandoff(key, prWatchRepo.byTicket(key), { id: base.id, prs: base.payload.prs });
+      if (!next) return;
+      // 和早间刷新一样：done_today、followups、decisions、learnings 清空，免得重复计算、重复写进记忆。
+      ingest({
+        ticketKey: key, sessionId: null, trigger: "refresh",
+        payload: { ...base.payload, done_today: [], followups: [], decisions: [], learnings: [], prs: next.prs },
+        rawText: null, sourceRef: next.sourceRef,
+      });
+    },
+    onCiSettled: (row) => void ciDelivery.settled(row).catch((e: unknown) => logger("ci delivery: handing over a CI result failed", e)),
+    notify,
+    // 每轮之后再递一遍：session 停着但当时用户在打字、有草稿的，安静下来之后在这里递出去。
+    roundDone: () => void flushCi(),
+    now: Date.now,
+    log: logger,
   });
   const mergeGate = new MergeGate({
     tickets, repo: gateRepo, git, prInfo, whoOf,
     openTerminals: (key) => sessionService.openTerminalCount(key),
-    notify: (e) => {
-      showGateNotification(e, whoOf);
-      notify();
-    },
+    notify: () => notify(),
     checkSoon: () => holdWatcher.soon(),
     now: Date.now,
     log: logger,
@@ -795,6 +881,9 @@ async function bootstrap(): Promise<void> {
       if (stop) {
         void captureCommandHandoff({ sessions, tickets, ingest, ingestFeature, afterFeatureCommand }, stop).then(
           (r) => {
+            // 换新在等这个 session 的 /handoff 收进来（ticket 的和 feature 总控的都算）。校验没过（degraded）的没写进记忆，
+            // 清空以后接不上，不算：换新等到超时停下，什么都不再输入。
+            if (r?.stored && !r.degraded) refresher.handoffStored(stop.sessionId);
             if (r?.stored) notify();
             // feature 总控（设计文档 2026-10-28）：没存下时记一笔；子 ticket 的 handoff 照样在后台跑（afterFeatureCommand）。
             else if (r && "featureId" in r) {
@@ -814,7 +903,20 @@ async function bootstrap(): Promise<void> {
       // 总控开的子 session 等这个信号才交任务（信任文件夹之类的启动对话框已经过去）。
       if (effect.kind === "session_started") pty.markStarted(effect.sessionId);
       // claude 停下来等输入了：有“对方已经合完”的通知就趁现在发（设计文档 2026-11-04：不打断忙着的 session）。
-      if (effect.kind === "waiting" && effect.waiting) void holdWatcher.sessionIdle(env.butlerSession ?? effect.sessionId);
+      // 同一个时机也递还没递出去的 CI 结论（先重读活动），并且马上查一次这个仓库的 PR 和 CI（刚停下的 session 常常刚 push）。
+      if (effect.kind === "waiting" && effect.waiting) {
+        const stopped = env.butlerSession ?? effect.sessionId;
+        void holdWatcher.sessionIdle(stopped);
+        // 活动没变时 activityMonitor 不会 notify：停下来以后的「需要你」判断在这里补一次。
+        void refreshActivityOf(stopped)
+          .catch((e: unknown) => logger(`ci delivery: re-reading the activity of ${stopped} failed`, e))
+          .then(() => {
+            needsYou.update();
+            return flushCi();
+          });
+        const repoId = sessions.head(stopped)?.repoId;
+        if (repoId != null) prWatcher.soon(repoId);
+      }
       notify();
       // 还没归属 ticket、又缺 cwd / 分支 / 首条提示的 session：触发一次发现（每个 session 每次运行最多一次）。
       if (effect.kind !== "nested") {
@@ -827,7 +929,11 @@ async function bootstrap(): Promise<void> {
     },
   });
 
-  shutdownSessions = () => pty.killAll();
+  // before-quit 里先停换新再关终端：终端关掉时正在等的换新不再输入、不再读库（will-quit 里数据库就关了），也不当作失败。
+  shutdownSessions = () => {
+    refresher.stop();
+    pty.killAll();
+  };
 
   const autostart = {
     get: () => autostartState({ packaged: app.isPackaged, platform: process.platform, openAtLogin: () => app.getLoginItemSettings().openAtLogin }),
@@ -853,6 +959,8 @@ async function bootstrap(): Promise<void> {
     onArchived: (id, featureIds) => {
       removeEpicMcpConfig(paths.mcp, id);
       for (const f of featureIds) removeFeatureMcpConfig(paths.mcp, f);
+      // 一起归档的 feature 逐个排队整理：第一个整理完之后没有新东西，后面的不再跑。
+      for (const f of featureIds) digestArchivedFeature(f);
     },
   });
   // 防休眠：只在内存里，启动时是关的。状态一变，托盘菜单、提示文字和界面都跟着更新。
@@ -870,14 +978,38 @@ async function bootstrap(): Promise<void> {
     keepAwake: keepAwakeSwitch,
     onArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
     languageChanged: applyLanguage,
-    onFeatureArchived: (id) => removeFeatureMcpConfig(paths.mcp, id),
+    onFeatureArchived: (id) => {
+      removeFeatureMcpConfig(paths.mcp, id);
+      digestArchivedFeature(id);
+    },
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,
-    tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, briefService, runner, featureRunner, scheduler, jobs, gateRepo,
+    tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, runner, featureRunner, scheduler, jobs, gateRepo,
     keys, terms, audit, memory,
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
-    briefRefreshing: () => briefRefreshing,
-    briefNarrating: () => briefNarrating,
+    usage: usageRepo, sessions,
+    refreshSession: (id) => {
+      const refused = startRefresh(refresher, id, "manual", logger);
+      return refused ? { ok: false, reason: refused } : { ok: true };
+    },
+    prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
+    nowView: (merges) => {
+      // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
+      const queued = new Set([...gateRepo.waitingSessionIds()].map((id) => sessions.head(id)?.id ?? id));
+      const reasons = needsYou.reasons();
+      return buildNowView({
+        tickets: sessionService.ticketViews(),
+        features: sessionService.featureViews(),
+        epics: sessionService.epicViews(),
+        activity: (id) => activityMonitor.get(id),
+        needsYouReason: (id) => reasons.get(id) ?? null,
+        prs: (key) => prWatcher.statusOf(key),
+        mergeQueued: (id) => queued.has(id),
+        refreshing: (id) => refresher.stepOf(id),
+        merges,
+        approvalText: M().nowApproval,
+      });
+    },
     rederive: (key) => {
       rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now }, key);
       // followup 完成 / 忽略 / 恢复：StateCore 里对应的条目跟着 forget / 重写。
@@ -902,15 +1034,18 @@ async function bootstrap(): Promise<void> {
     handle: controlHandler({
       tickets, sessions, features, ticketService, sessionService, notify,
       epics, featureService, epicRows: (id) => sessionService.epicFeatureRows(id),
+      epicHistory: (id) => epicHistory.list(id, EPIC_HISTORY_READ_ENTRIES),
       syncEpic: (id) => void memory.syncEpic(id),
       refreshEpic: (id, except) => featureRunner.refreshEpic(id, except),
       activity: (id) => activityMonitor.get(id),
       activityOutput: (id) => activityMonitor.output(id),
+      refresher,
       lastReply: (id) => activityMonitor.lastReply(id),
       // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。
       kill: (termId) => pty.kill(termId),
       screenNeedsUser: (termId) => pty.screenNeedsUser(termId),
       submit: submitTask,
+      memoryEnabled: () => memoryOn(settings),
       ticketPattern: () => settings.get("ticketPattern"),
       log: logger,
     }),
@@ -929,11 +1064,21 @@ async function bootstrap(): Promise<void> {
     logger("merge gate: could not write alive.json; merges are not checked", e);
   }
   holdWatcher.start(Number(process.env.BUTLER_GATE_CHECK_MS) || HOLD_CHECK_MS);
+  // 等 git 和 gh 的路径按登录 shell 的 PATH 解析好再查：第一轮就可能看到合并、触发 worktree 清理。已经开始退出就不再启动。
+  void healthReady.then(() => {
+    if (!headlessAbort.signal.aborted) prWatcher.start();
+  });
   activityMonitor.start();
+  usageScanner.start(usageScanMs(process.env));
   void runDiscovery();
   // 启动时补齐记忆：老数据、上次退出时没写完的。
   void memory.syncAll();
   const discoveryTimer = setInterval(() => void runDiscovery(), DISCOVERY_INTERVAL_MS);
+  // 自动换新也按活动的节奏再看一遍：活动没变时 activityMonitor 不 notify，而停着的 session 要等「需要你」判断完、
+  // 用户 30 秒没打字之后才能换新，那时活动往往已经不变了。
+  const refreshTimer = setInterval(() => {
+    if (!headlessAbort.signal.aborted) refresher.autoCheck();
+  }, activityIntervals(process.env).tickMs);
 
   // 调度：启动（health 探测完成后）、唤醒、解锁时检查到期任务；每分钟 tick，覆盖 16:00 和整晚没锁屏的情况。
   void healthReady.then(() => checkSchedule("startup"));
@@ -946,10 +1091,14 @@ async function bootstrap(): Promise<void> {
   const scheduleTimer = setInterval(() => void checkSchedule("tick"), TICK_MS);
 
   app.on("will-quit", () => {
+    // 正常情况下 before-quit 已经停过；没经过 before-quit 的退出也要在关数据库之前停下。
+    refresher.stop();
     clearInterval(discoveryTimer);
+    clearInterval(refreshTimer);
     clearInterval(scheduleTimer);
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     activityMonitor.stop();
+    usageScanner.stop();
     memory.stop();
     inbox.stop();
     controlInbox.stop();
@@ -961,6 +1110,7 @@ async function bootstrap(): Promise<void> {
     }
     gateInbox.stop();
     holdWatcher.stop();
+    prWatcher.stop();
     pty.killAll();
     keepAwakeSwitch.set(false);
     tray?.destroy();

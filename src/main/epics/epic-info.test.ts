@@ -5,7 +5,11 @@ import { EpicsRepo } from "../db/epics-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { memDb } from "../test-utils";
-import { carriedEpicPlan, epicFeatureRows, EPIC_HANDOFF_MAX_CHARS, EPIC_PLAN_MAX_CHARS, newestSummaryFirst, renderEpicHandoff, rowSections, type LiveFeature } from "./epic-info";
+import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
+import {
+  carriedEpicPlan, carriedEpicProgress, epicFeatureRows, EPIC_HANDOFF_MAX_CHARS, EPIC_PROGRESS_MAX_CHARS, fitEpicProgress, newestSummaryFirst, renderedByButler, renderEpicHandoff, rowSections,
+  type LiveFeature,
+} from "./epic-info";
 
 const summary = (over: Partial<FeatureHandoff> = {}): FeatureHandoff => ({
   summary: "接口联调完了", blockers: [], next_steps: [], decisions: [], open_questions: [], ...over,
@@ -225,3 +229,97 @@ describe("the epic session's own handoff inside the rendered text", () => {
     expect(out.length).toBeLessThanOrEqual(EPIC_HANDOFF_MAX_CHARS);
   });
 });
+
+describe("the epic session's progress inside the rendered text (plan 16)", () => {
+  it("labels the progress section in the language asked, keeps the label out of the progress, and leaves the plan section as it was", () => {
+    const zh = renderEpicHandoff([row(1)], "zh", "先做支付", "做到第二步");
+    const en = renderEpicHandoff([row(1)], "en", "先做支付", "做到第二步");
+    expect(zh).toContain("epic 总控的进度");
+    expect(en).toContain("Epic coordinator progress");
+    for (const out of [zh, en]) expect(carriedEpicProgress(out)).toBe("做到第二步");
+    // 规划那一段和计划 16 之前一字不差，标签只在进度那一段里。
+    const before = renderEpicHandoff([row(1)], "zh", "先做支付");
+    expect(zh.startsWith(before.slice(0, before.indexOf("## F1")).trimEnd())).toBe(true);
+    expect(before).not.toContain("epic 总控的进度");
+    // epic session 自己的进度恰好以标签开头：只去掉 Butler 加的那一个，读回来一字不差。
+    const echoed = "epic 总控的进度\n做到第二步";
+    expect(carriedEpicProgress(renderEpicHandoff([row(1)], "zh", null, echoed))).toBe(echoed);
+  });
+
+  it("fitEpicProgress is what Butler's render carries back, for long, tag-quoting and label-leading progress (review)", () => {
+    const cases = [
+      "  做到第二步  ",
+      `${"很长的进度，".repeat(500)}`,
+      "<epic-session-progress>抄来的</epic-session-progress>\n<epic-session-handoff>规划</epic-session-handoff>做到第二步",
+      "epic 总控的进度\n做到第二步",
+    ];
+    for (const raw of cases) {
+      for (const lang of ["zh", "en"] as const) {
+        expect(carriedEpicProgress(renderEpicHandoff([row(1)], lang, "先做支付", carriedEpicProgress(raw)))).toBe(fitEpicProgress(raw));
+      }
+    }
+    expect(fitEpicProgress(cases[1]).length).toBe(EPIC_PROGRESS_MAX_CHARS);
+    // 再截一次不变。
+    expect(fitEpicProgress(fitEpicProgress(cases[1]))).toBe(fitEpicProgress(cases[1]));
+  });
+
+  it("takes a handoff that is not Butler's as the progress, whole, and tells it apart from Butler's own", () => {
+    expect(carriedEpicProgress("  做到第二步\nNext steps:\n- 拆 ticket\n")).toBe("做到第二步\nNext steps:\n- 拆 ticket");
+    expect(renderedByButler("做到第二步")).toBe(false);
+    for (const lang of ["zh", "en"] as const) {
+      expect(renderedByButler(renderEpicHandoff([row(1)], lang))).toBe(true);
+      expect(carriedEpicProgress(renderEpicHandoff([row(1)], lang))).toBeNull();
+      expect(carriedEpicProgress(renderEpicHandoff([], lang, "先做支付"))).toBeNull();
+    }
+    expect(carriedEpicProgress("   ")).toBeNull();
+  });
+
+  it("puts the progress after the plan and before the features, and reads both back apart", () => {
+    for (const lang of ["zh", "en"] as const) {
+      const out = renderEpicHandoff([row(1)], lang, "先做支付", "做到第二步");
+      expect(out.indexOf("先做支付")).toBeLessThan(out.indexOf("做到第二步"));
+      expect(out.indexOf("做到第二步")).toBeLessThan(out.indexOf("## F1\n"));
+      expect(carriedEpicPlan(out)).toBe("先做支付");
+      expect(carriedEpicProgress(out)).toBe("做到第二步");
+      const noPlan = renderEpicHandoff([row(1)], lang, null, "做到第二步");
+      expect(carriedEpicPlan(noPlan)).toBeNull();
+      expect(carriedEpicProgress(noPlan)).toBe("做到第二步");
+    }
+  });
+
+  it("renders exactly the old text without progress", () => {
+    expect(renderEpicHandoff([row(1)], "zh", "先做支付", null)).toBe(renderEpicHandoff([row(1)], "zh", "先做支付"));
+    expect(renderEpicHandoff([row(1)], "zh", "先做支付", "  ")).toBe(renderEpicHandoff([row(1)], "zh", "先做支付"));
+  });
+
+  it("does not grow or nest when carried again and again, even when it quotes the rendered text", () => {
+    const quoted = `我抄了一份：\n${renderEpicHandoff([row(1)], "zh", "规划", "旧进度")}\n后面还有字`;
+    const once = renderEpicHandoff([row(1)], "zh", "规划", carriedEpicProgress(quoted));
+    expect(carriedEpicProgress(once)).toContain("后面还有字");
+    expect(carriedEpicPlan(once)).toBe("规划");
+    let out = once;
+    for (let i = 0; i < 3; i++) out = renderEpicHandoff([row(1)], "zh", carriedEpicPlan(out), carriedEpicProgress(out));
+    expect(out).toBe(once);
+    // 换语言：标签跟着换，进度本身不变，也不会把标签带进进度里。
+    const en = renderEpicHandoff([row(1)], "en", carriedEpicPlan(once), carriedEpicProgress(once));
+    expect(carriedEpicProgress(en)).toBe(carriedEpicProgress(once));
+    expect(renderEpicHandoff([row(1)], "zh", carriedEpicPlan(en), carriedEpicProgress(en))).toBe(once);
+    // feature 里写着像进度那段的开头，也不会被认成进度。
+    const tag = renderEpicHandoff([], "zh", null, "x").split("\n")[2];
+    expect(carriedEpicProgress(renderEpicHandoff([row(1, { summary: tag })], "zh"))).toBeNull();
+  });
+
+  it("cuts a long progress to its own limit, keeps the full plan and the newest feature, and stops shrinking", () => {
+    const rows = Array.from({ length: 10 }, (_, i) => row(i + 1, { summary: `${"x".repeat(1500)}#${i + 1}` }));
+    const out = renderEpicHandoff(rows, "en", "p".repeat(EPIC_PLAN_MAX_CHARS), "g".repeat(20000));
+    const progress = carriedEpicProgress(out)!;
+    expect(progress.length).toBeLessThanOrEqual(EPIC_PROGRESS_MAX_CHARS);
+    expect(progress.startsWith("ggg")).toBe(true);
+    expect(carriedEpicPlan(out)).toBe("p".repeat(EPIC_PLAN_MAX_CHARS));
+    expect(out).toContain("## F10\n");
+    // 进度另算：不挤掉规划，也不挤掉最新的 feature；总长不超过上限加上进度那一段。
+    expect(out.length).toBeLessThanOrEqual(EPIC_HANDOFF_MAX_CHARS + EPIC_PROGRESS_MAX_CHARS + 100);
+    expect(renderEpicHandoff(rows, "en", carriedEpicPlan(out), progress)).toBe(out);
+  });
+});
+

@@ -29,12 +29,12 @@ export function isMorningDue(now: number, job: Pick<JobState, "lastRunAt">, trig
 
 /**
  * 最近一个晚间时刻之后还没跑过 → 到期（错过的会在下一次唤醒/解锁/启动时补跑）。
- * 上次限流或失败 → 在早间简报之前再补一次。第一次启动（从没记录）不补历史。
+ * 上次限流或失败 → 在早间任务之前再补一次。第一次启动（从没记录）不补历史。
  * 补跑和重试只发生在今天是工作日的时候。
  */
 export function isNightlyDue(now: number, cfg: ScheduleConfig, job: Pick<JobState, "lastRunAt" | "lastStatus">, morningDue: boolean): boolean {
   if (job.lastRunAt === null) return false;
-  // 非工作日不跑晚间任务（包括补跑和重试）：周五错过的，周一解锁/启动时在早间简报前补。
+  // 非工作日不跑晚间任务（包括补跑和重试）：周五错过的，周一解锁/启动时在早间任务前补。
   if (!cfg.workingDays.has(weekday(localDate(now)))) return false;
   // 上次运行时间在一天以后：时钟被往回校正过，当作到期，免得整段时间都不跑。
   if (job.lastRunAt - now > 86_400_000) return true;
@@ -48,8 +48,7 @@ export interface SchedulerDeps {
   config: () => ScheduleConfig;
   now: () => number;
   userActive: () => boolean;
-  /** slot：这次补跑 / 执行对应的晚间时刻；手动运行或没有工作日时为 null（表示今天）。 */
-  nightly: (slot: number | null) => Promise<"ok" | "partial">;
+  nightly: () => Promise<"ok" | "partial">;
   morning: () => Promise<void>;
   onChange?: () => void;
   log?: (msg: string, err?: unknown) => void;
@@ -77,19 +76,15 @@ export class Scheduler {
   }
 
   runNightlyNow(): Promise<void> {
-    return this.manual(JOB_NIGHTLY, () => this.runNightly(true));
-  }
-
-  runMorningNow(): Promise<void> {
-    return this.manual(JOB_MORNING, () => this.runMorning());
+    return this.manual(JOB_NIGHTLY, () => this.runNightly());
   }
 
   /**
    * 同名任务正在跑或已排队：返回已有的 promise，不再排第二个（连点按钮不会重复运行）。
    * 轮到它时，如果排队期间调度已经跑过同一个任务（开始时间晚于按按钮的时刻），这次就不再跑：
-   * 早间简报会花个人 API 的额度，解锁和“重新生成”撞在一起时只跑一次。
+   * 解锁补跑和手动运行撞在一起时只跑一次。
    */
-  private manual(name: typeof JOB_NIGHTLY | typeof JOB_MORNING, fn: () => Promise<void>): Promise<void> {
+  private manual(name: typeof JOB_NIGHTLY, fn: () => Promise<void>): Promise<void> {
     const existing = this.queuedManual.get(name) ?? this.inflight.get(name);
     if (existing) return existing;
     const requestedAt = this.d.now();
@@ -101,7 +96,7 @@ export class Scheduler {
   }
 
   /** seed 记录不算“跑过”（第一次启动时只是记一下时间）。 */
-  private ranSince(name: typeof JOB_NIGHTLY | typeof JOB_MORNING, at: number): boolean {
+  private ranSince(name: typeof JOB_NIGHTLY, at: number): boolean {
     const j = this.d.jobs.get(name);
     // 只有“按按钮之后、现在之前开始、并且成功”的调度运行才算：时钟被往回校正（lastRunAt 在未来）
     // 或调度那次失败 / 部分完成时，手动请求照常运行。
@@ -118,18 +113,16 @@ export class Scheduler {
     const now = this.d.now();
     if (this.d.jobs.get(JOB_NIGHTLY).lastRunAt === null) this.d.jobs.record(JOB_NIGHTLY, now, "seeded", null);
     const morningDue = isMorningDue(now, this.d.jobs.get(JOB_MORNING), trigger, this.d.userActive());
-    // 错过的晚间 handoff 先跑，早间简报才有最新数据。
+    // 错过的晚间 handoff 先跑，早间的 tracker 刷新接着最新一份 handoff。
     if (isNightlyDue(now, this.d.config(), this.d.jobs.get(JOB_NIGHTLY), morningDue)) await this.runNightly();
     if (morningDue) await this.runMorning();
   }
 
-  /** manual：手动运行的“时刻”就是今天（null），周末或上午手动运行也会照常通知。 */
-  private async runNightly(manual = false): Promise<void> {
+  private async runNightly(): Promise<void> {
     const startedAt = this.d.now();
-    const slot = manual ? null : lastNightlySlot(startedAt, this.d.config());
     await this.track(
       JOB_NIGHTLY,
-      async () => this.d.jobs.record(JOB_NIGHTLY, startedAt, await Promise.resolve().then(() => this.d.nightly(slot)), null),
+      async () => this.d.jobs.record(JOB_NIGHTLY, startedAt, await Promise.resolve().then(() => this.d.nightly()), null),
       (e) => this.d.jobs.record(JOB_NIGHTLY, startedAt, "failed", message(e)),
     );
   }

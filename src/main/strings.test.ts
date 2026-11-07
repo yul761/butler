@@ -29,13 +29,6 @@ describe("main-process messages in two languages (design 2026-10-26 i18n)", () =
     expect(() => normalizeBranchTemplate("x")).toThrow(new SettingError("The branch template must contain {key} or {key_lower}, for example feature/{key}"));
   });
 
-  it("words the stuck notification in both languages", () => {
-    expect(MAIN_STRINGS.zh.stuckTitle("DMS-1")).toContain("DMS-1");
-    expect(MAIN_STRINGS.en.stuckTitle("DMS-1")).toBe("DMS-1 may be stuck");
-    expect(MAIN_STRINGS.zh.stuckBody("hook 没动静")).toContain("hook 没动静");
-    expect(MAIN_STRINGS.en.stuckBody("The hook hangs.")).toContain("The hook hangs.");
-  });
-
   it("explains a blocked cleanup in English", async () => {
     const db = memDb();
     const tickets = new TicketsRepo(db);
@@ -47,9 +40,7 @@ describe("main-process messages in two languages (design 2026-10-26 i18n)", () =
     expect(out.reason).toBe("the worktree has uncommitted changes or untracked files");
   });
 
-  it("uses singular and plural, and ASCII punctuation, in English", () => {
-    expect(MAIN_STRINGS.en.eveningBody(1)).toBe("1 ticket made progress today. Click to see it.");
-    expect(MAIN_STRINGS.en.eveningBody(2)).toBe("2 tickets made progress today. Click to see them.");
+  it("uses ASCII punctuation in English", () => {
     expect(MAIN_STRINGS.en.causeSep).toBe(": ");
     expect(MAIN_STRINGS.zh.causeSep).toBe("：");
     expect(MAIN_STRINGS.en.httpError(500, "boom")).toBe("HTTP 500: boom");

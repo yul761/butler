@@ -3,19 +3,17 @@ import type { EditableSettingKey } from "../../shared/settings";
 import { SettingsRepo } from "../db/settings-repo";
 import { memDb } from "../test-utils";
 import {
-  isLoopbackHost, llmConfig, normalizeBaseUrl, checkBranchTemplateFits, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTerms, normalizeTicketPattern, parseDays, parsePriceTable, parseTime, parseToolList,
-  parseWorkingDays, priceFor, scheduleConfig, SettingError, TERMS_LIMIT, thresholds, trackerTools,
+  isLoopbackHost, llmConfig, normalizeBaseUrl, checkBranchTemplateFits, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTerms, normalizeTicketPattern, parsePriceTable, parseTime, parseToolList,
+  parseWorkingDays, priceFor, refreshThreshold, scheduleConfig, SettingError, TERMS_LIMIT, trackerTools,
 } from "./settings-values";
 
 describe("settings values", () => {
-  it("parses times, working days, day counts and tool lists", () => {
+  it("parses times, working days and tool lists", () => {
     expect(parseTime("16:00")).toEqual({ h: 16, m: 0 });
     expect(parseTime("7:05")).toEqual({ h: 7, m: 5 });
     expect(parseTime("24:00")).toBeNull();
     expect(parseTime("16")).toBeNull();
     expect([...parseWorkingDays("1, 2,5,9,x")]).toEqual([1, 2, 5]);
-    expect(parseDays("3", 2)).toBe(3);
-    expect(parseDays("-1", 2)).toBe(2);
     expect(parseToolList("mcp__jira__get_issue, Bash(git status)\nmcp__jira__search mcp__jira__get_issue")).toEqual([
       "mcp__jira__get_issue", "Bash(git status)", "mcp__jira__search",
     ]);
@@ -26,13 +24,11 @@ describe("settings values", () => {
     expect(normalizeSetting("workingDays", "5,1,1,0")).toBe("0,1,5");
     expect(normalizeSetting("workingDays", "")).toBe("");
     expect(normalizeSetting("trackerTools", "mcp__a__x, mcp__b\n\nmcp__a__x")).toBe("mcp__a__x\nmcp__b");
-    expect(normalizeSetting("staleDays", " 7 ")).toBe("7");
     expect(normalizeSetting("headlessProjectMcp", "1")).toBe("1");
     expect(normalizeSetting("headlessProjectMcp", " 0 ")).toBe("0");
     expect(() => normalizeSetting("headlessProjectMcp", "yes")).toThrow(SettingError);
     expect(() => normalizeSetting("nightlyTime", "25:00")).toThrow(SettingError);
     expect(() => normalizeSetting("workingDays", "1,7")).toThrow(SettingError);
-    expect(() => normalizeSetting("blockedDays", "two")).toThrow(SettingError);
     expect(() => normalizeSetting("handoffPrompt", "   ")).toThrow(SettingError);
     try {
       normalizeSetting("nightlyTime", "x");
@@ -55,10 +51,9 @@ describe("settings values", () => {
     expect(trackerTools(s)).toEqual(["mcp__jira__get_issue"]);
   });
 
-  it("reads the schedule, thresholds and tracker tools from settings", () => {
+  it("reads the schedule and tracker tools from settings", () => {
     const s = new SettingsRepo(memDb());
     expect(scheduleConfig(s)).toEqual({ nightly: { h: 16, m: 0 }, workingDays: new Set([1, 2, 3, 4, 5]) });
-    expect(thresholds(s)).toEqual({ blockedDays: 2, reviewWaitDays: 2, staleDays: 5 });
     expect(trackerTools(s)).toEqual([]);
     for (const bad of ["garbage", "", "9,8"]) {
       s.set("workingDays", bad);
@@ -221,5 +216,29 @@ describe("language setting (design 2026-10-26 i18n)", () => {
   it("accepts auto, zh and en only", () => {
     for (const ok of ["auto", "zh", "en"]) expect(normalizeSetting("language", ` ${ok} `)).toBe(ok);
     for (const bad of ["fr", "", "ZH-cn"]) expect(() => normalizeSetting("language", bad), bad).toThrow(SettingError);
+  });
+});
+
+describe("refresh threshold (plan 16)", () => {
+  it("reads refreshThresholdTokens with a default of 150000", () => {
+    const s = new SettingsRepo(memDb());
+    expect(refreshThreshold(s)).toBe(150_000);
+    s.set("refreshThresholdTokens", "20000");
+    expect(refreshThreshold(s)).toBe(20_000);
+    // 0 = 关掉自动换新。
+    s.set("refreshThresholdTokens", "0");
+    expect(refreshThreshold(s)).toBe(0);
+    // 存的值坏了：用默认。
+    for (const bad of ["", "abc", "-5", "1.5", "1e9"]) {
+      s.set("refreshThresholdTokens", bad);
+      expect(refreshThreshold(s), bad).toBe(150_000);
+    }
+  });
+
+  it("accepts a whole number of tokens and rejects anything else", () => {
+    expect(normalizeSetting("refreshThresholdTokens", " 20000 ")).toBe("20000");
+    expect(normalizeSetting("refreshThresholdTokens", "0")).toBe("0");
+    expect(normalizeSetting("refreshThresholdTokens", "007")).toBe("7");
+    for (const bad of ["", "abc", "-5", "1.5", "1e9", "12345678901"]) expect(() => normalizeSetting("refreshThresholdTokens", bad), bad).toThrow(SettingError);
   });
 });

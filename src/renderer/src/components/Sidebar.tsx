@@ -12,6 +12,8 @@ interface Props {
   /** 未归档的 epic；它们下面的 feature 只列在 epic 下面。 */
   epics: EpicView[];
   unclaimedCount: number;
+  /** 「现在」页里需要你的条数：大于 0 时入口后面显示红点和数字。 */
+  needsYouCount: number;
   route: Route;
   onNavigate: (r: Route) => void;
   onNew: () => void;
@@ -22,9 +24,12 @@ interface Props {
   onKeepAwake: (on: boolean) => void;
 }
 
+/** 侧栏“现在”按钮的描述（需要你的个数）的元素 id。 */
+const NEEDS_YOU_DESC_ID = "sidebar-needs-you-count";
+
 const cls = (base: string, active: boolean) => (active ? `${base} active` : base);
 
-export function Sidebar({ tickets, features, epics, unclaimedCount, route, onNavigate, onNew, onNewFeature, onNewEpic, keepAwake, onKeepAwake }: Props) {
+export function Sidebar({ tickets, features, epics, unclaimedCount, needsYouCount, route, onNavigate, onNew, onNewFeature, onNewEpic, keepAwake, onKeepAwake }: Props) {
   const looseFeatures = featuresOutsideEpics(features, epics);
   const ticketButton = (t: TicketView) => (
     <button
@@ -39,7 +44,23 @@ export function Sidebar({ tickets, features, epics, unclaimedCount, route, onNav
   );
   return (
     <nav className="sidebar">
-      <button className={cls("nav", route.page === "home")} onClick={() => onNavigate({ page: "home" })}>{S.home}</button>
+      {/* 可访问名固定是“现在”：红点里的数字不算进名字，读屏从 aria-describedby 指向的隐藏文字（“1 个需要你”）读到个数。 */}
+      <button
+        className={cls("nav home", route.page === "home")}
+        aria-label={S.home}
+        aria-describedby={needsYouCount > 0 ? NEEDS_YOU_DESC_ID : undefined}
+        onClick={() => onNavigate({ page: "home" })}
+      >
+        {S.home}
+        {needsYouCount > 0 && (
+          <>
+            <span className="needs-you-badge" aria-hidden="true" title={S.nowNeedsYouBadge(needsYouCount)}>
+              {needsYouCount}
+            </span>
+            <span id={NEEDS_YOU_DESC_ID} className="sr-only">{S.nowNeedsYouBadge(needsYouCount)}</span>
+          </>
+        )}
+      </button>
       <button className="new-ticket" onClick={onNew}>+ {S.newTicket}</button>
       <button className="new-ticket" onClick={onNewFeature}>+ {S.newFeature}</button>
       <button className="new-ticket" onClick={onNewEpic}>+ {S.newEpic}</button>

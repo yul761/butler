@@ -60,14 +60,6 @@ export class FollowupsRepo {
     return rows.map(toFollowup);
   }
 
-  /** 所有未归档 ticket 的 followups（简报用）。 */
-  listActiveTickets(): Followup[] {
-    const rows = this.db
-      .prepare(`SELECT f.* FROM followups f JOIN tickets t ON t.key = f.ticket_key WHERE t.archived_at IS NULL ORDER BY f.created_at, f.id`)
-      .all() as unknown as FollowupRow[];
-    return rows.map(toFollowup);
-  }
-
   update(id: string, p: FollowupPatch): void {
     const cur = this.get(id);
     if (!cur) return;

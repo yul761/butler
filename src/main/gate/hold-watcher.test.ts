@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionActivity } from "../../shared/activity";
+import type { Session } from "../../shared/types";
 import type { Db } from "../db/database";
 import { MergeGateRepo } from "../db/merge-gate-repo";
 import { M } from "../strings";
+import { DeliveryGuard } from "../sessions/delivery-guard";
 import { memDb } from "../test-utils";
 import type { PrInfo } from "../tickets/gh";
 import { HoldWatcher, LOCAL_HOLD_MAX_MS, NOTICE_KEEP_MS, USER_TYPING_QUIET_MS, type HoldWatcherDeps } from "./hold-watcher";
@@ -26,13 +29,15 @@ interface Opts {
   ancestor?: (a: string, b: string) => boolean;
   open?: boolean;
   waiting?: boolean;
-  deliver?: () => Promise<"sent" | "exited" | "timeout">;
+  deliver?: (id: string, text: string, recheck: () => boolean) => Promise<"sent" | "exited" | "timeout" | "blocked">;
+  refreshActivity?: HoldWatcherDeps["refreshActivity"];
+  cachedByUrl?: HoldWatcherDeps["cachedByUrl"];
 }
 
 function setup(o: Opts = {}) {
   const db = o.db ?? memDb();
   if (!o.db) seed(db);
-  const state = { now: 0, open: o.open ?? true, waiting: o.waiting ?? true, typedAt: 0 };
+  const state = { now: 0, open: o.open ?? true, waiting: o.waiting ?? true, typedAt: 0, draft: false, inFlight: false, activity: "waiting" as SessionActivity["kind"] };
   const repo = new MergeGateRepo(db);
   const prInfo = vi.fn(async () => (o.pr ? o.pr() : null));
   const git = {
@@ -42,11 +47,20 @@ function setup(o: Opts = {}) {
   };
   const deliver = vi.fn(o.deliver ?? (async () => "sent" as const));
   const logs: string[] = [];
+  // 真的 DeliveryGuard：终端开着 = open，停着等输入 = waiting，typedAt 是用户上次打字的时间。
+  const guard = new DeliveryGuard({
+    termOf: (id) => (state.open ? id : null),
+    head: (id) => ({ id, waitingForInput: state.waiting }) as Session,
+    activity: () => ({ kind: state.activity, background: false }) as SessionActivity,
+    pty: { lastUserInputAt: () => state.typedAt, screenNeedsUser: () => false, hasDraft: () => state.draft, autoInputInFlight: () => state.inFlight },
+    now: () => state.now,
+  });
   const deps: HoldWatcherDeps = {
     repo, prInfo, git,
     isOpen: () => state.open,
-    isWaiting: () => state.waiting,
-    lastUserInput: () => state.typedAt,
+    guard,
+    refreshActivity: o.refreshActivity,
+    cachedByUrl: o.cachedByUrl,
     deliver,
     whoOf: who,
     now: () => state.now,
@@ -67,7 +81,7 @@ describe("HoldWatcher: PR holds", () => {
     expect(t.prInfo).toHaveBeenCalledWith(REPO, PR_URL, 2000);
     expect(t.outcome()).toBe("cancelled");
     expect(t.deliver).toHaveBeenCalledTimes(1);
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"), expect.any(Function));
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
@@ -91,7 +105,7 @@ describe("HoldWatcher: PR holds", () => {
     await t.watcher.check();
     expect(t.outcome()).toBe("merged");
     expect(t.deliver).toHaveBeenCalledTimes(1);
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"), expect.any(Function));
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
@@ -110,6 +124,35 @@ describe("HoldWatcher: PR holds", () => {
     expect(t.deliver).toHaveBeenCalledTimes(1);
   });
 
+  it("re-reads the activity on Stop, so a session last seen thinking is told right away", async () => {
+    const refreshed: string[] = [];
+    const t = setup({
+      pr: () => pr("MERGED"),
+      refreshActivity: async (id) => {
+        refreshed.push(id);
+        t.state.activity = "waiting";
+      },
+    });
+    // 上一次活动刷新时它还在想：这一轮的检查不发。
+    t.state.activity = "thinking";
+    await t.watcher.check();
+    expect(t.deliver).not.toHaveBeenCalled();
+    // Stop 到了：先重读活动，再发。
+    await t.watcher.sessionIdle("s-wait");
+    expect(refreshed).toEqual(["s-wait"]);
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+    expect(t.repo.pendingNotices()).toEqual([]);
+  });
+
+  it("still goes through the notices on Stop when re-reading the activity fails", async () => {
+    const t = setup({ pr: () => pr("MERGED"), waiting: false, refreshActivity: async () => Promise.reject(new Error("disk")) });
+    await t.watcher.check();
+    t.state.waiting = true;
+    await t.watcher.sessionIdle("s-wait");
+    expect(t.logs.some((l) => l.includes("s-wait"))).toBe(true);
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the notice of a waiter whose terminal is closed, and delivers it once a terminal for it is open and idle again", async () => {
     const t = setup({ pr: () => pr("MERGED"), open: false });
     t.state.now = 1000;
@@ -121,7 +164,7 @@ describe("HoldWatcher: PR holds", () => {
     t.state.open = true;
     await t.watcher.check();
     expect(t.deliver).toHaveBeenCalledTimes(1);
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"), expect.any(Function));
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
@@ -168,6 +211,46 @@ describe("HoldWatcher: PR holds", () => {
     expect(t.repo.pendingNotices()).toEqual([]);
   });
 
+  it("does not paste over an unsent draft however long ago it was typed, and delivers once it is gone", async () => {
+    const t = setup({ pr: () => pr("MERGED") });
+    t.state.now = 10 * USER_TYPING_QUIET_MS;
+    t.state.draft = true;
+    await t.watcher.check();
+    expect(t.outcome()).toBe("merged");
+    expect(t.deliver).not.toHaveBeenCalled();
+    expect(t.repo.pendingNotices()).toHaveLength(1);
+    t.state.draft = false;
+    await t.watcher.sessionIdle("s-wait");
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+    expect(t.repo.pendingNotices()).toEqual([]);
+  });
+
+  it("re-checks right before the paste and keeps the notice when the user started typing meanwhile (I2)", async () => {
+    const t: ReturnType<typeof setup> = setup({
+      pr: () => pr("MERGED"),
+      // deliver 等输入框就绪的时候用户开始打字：粘贴前的复查不通过。
+      deliver: async (_id, _text, recheck) => {
+        t.state.typedAt = t.state.now + 1;
+        return recheck() ? "sent" : "blocked";
+      },
+    });
+    t.state.now = 100_000;
+    await t.watcher.check();
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+    expect(t.repo.pendingNotices()).toHaveLength(1);
+    expect(t.logs.some((m) => m.includes("held back"))).toBe(true);
+  });
+
+  it("does not start a notice while another automatic input is in flight on the terminal (I2)", async () => {
+    const t = setup({ pr: () => pr("MERGED") });
+    t.state.inFlight = true;
+    await t.watcher.check();
+    expect(t.deliver).not.toHaveBeenCalled();
+    t.state.inFlight = false;
+    await t.watcher.check();
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+  });
+
   it("tries again next round when delivery timed out", async () => {
     let res: "sent" | "timeout" = "timeout";
     const t = setup({ pr: () => pr("MERGED"), deliver: async () => res });
@@ -183,7 +266,7 @@ describe("HoldWatcher: PR holds", () => {
     const t = setup({ pr: () => pr("CLOSED") });
     await t.watcher.check();
     expect(t.outcome()).toBe("cancelled");
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"), expect.any(Function));
   });
 
   it("expires a hold 2 h + 1 ms old when gh cannot answer and the branch is not in the target", async () => {
@@ -194,7 +277,7 @@ describe("HoldWatcher: PR holds", () => {
     expect(t.git.isAncestor).toHaveBeenCalledWith(REPO, "dms-1", "origin/main");
     expect(t.outcome()).toBe("expired");
     expect(t.deliver).toHaveBeenCalledTimes(1);
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"), expect.any(Function));
   });
 
   it("keeps a hold younger than 2 h when gh cannot answer", async () => {
@@ -209,6 +292,44 @@ describe("HoldWatcher: PR holds", () => {
     await t.watcher.check();
     expect(t.outcome()).toBe("merged");
     expect(t.deliver).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("HoldWatcher: PR state cached by the PR watcher", () => {
+  type Cached = ReturnType<NonNullable<HoldWatcherDeps["cachedByUrl"]>>;
+  const cached = (state: "open" | "merged" | "closed", ci: "passing" | "unknown" = "passing") => vi.fn<(url: string) => Cached>(() => ({ state, ci }));
+
+  it("releases as merged from a cached MERGED reading without asking gh", async () => {
+    const cachedByUrl = cached("merged");
+    const t = setup({ pr: () => pr("OPEN"), cachedByUrl });
+    await t.watcher.check();
+    expect(cachedByUrl).toHaveBeenCalledWith(PR_URL);
+    expect(t.prInfo).not.toHaveBeenCalled();
+    expect(t.outcome()).toBe("merged");
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"), expect.any(Function));
+  });
+
+  it("cancels from a cached CLOSED reading without asking gh", async () => {
+    const t = setup({ pr: () => pr("OPEN"), cachedByUrl: cached("closed") });
+    await t.watcher.check();
+    expect(t.prInfo).not.toHaveBeenCalled();
+    expect(t.outcome()).toBe("cancelled");
+  });
+
+  it("asks gh when the cached reading failed (ci unknown): its state is only the last good one", async () => {
+    const t = setup({ pr: () => pr("OPEN", true), cachedByUrl: cached("merged", "unknown") });
+    await t.watcher.check();
+    expect(t.prInfo).toHaveBeenCalledWith(REPO, PR_URL, 2000);
+    expect(t.outcome()).toBeNull();
+  });
+
+  it("asks gh for an open PR (the cache does not know about auto-merge) and when nothing is cached", async () => {
+    for (const cachedByUrl of [cached("open"), vi.fn<(url: string) => Cached>(() => null)]) {
+      const t = setup({ pr: () => pr("MERGED"), cachedByUrl });
+      await t.watcher.check();
+      expect(t.prInfo).toHaveBeenCalledTimes(1);
+      expect(t.outcome()).toBe("merged");
+    }
   });
 });
 
@@ -231,7 +352,7 @@ describe("HoldWatcher: local holds", () => {
     t.state.now = LOCAL_HOLD_MAX_MS + 1;
     await t.watcher.check();
     expect(t.outcome()).toBe("expired");
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateNotMerged("DMS-1（支付）"), expect.any(Function));
   });
 
   it("keeps a local hold up to 10 min", async () => {
@@ -252,7 +373,7 @@ describe("HoldWatcher: rounds", () => {
     const t = setup({ db, pr: () => pr("MERGED") });
     await t.watcher.check();
     expect(t.outcome()).toBe("merged");
-    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"));
+    expect(t.deliver).toHaveBeenCalledWith("s-wait", M().gateMergedNotice("DMS-1（支付）"), expect.any(Function));
   });
 
   it("runs one round for two overlapping check calls", async () => {
@@ -280,11 +401,13 @@ describe("HoldWatcher: rounds", () => {
     );
     const watcher = new HoldWatcher({
       repo, prInfo: async () => pr("MERGED"), git: { isAncestor: async () => false, fetchQuiet: async () => true, upstreamRef: async (_r, b) => `origin/${b}` },
-      isOpen: () => true, isWaiting: (s) => waiting[s] ?? false, lastUserInput: () => 0, deliver, whoOf: who, now: () => 0, log: () => undefined,
+      isOpen: () => true,
+      guard: { check: (s) => (waiting[s] ? { ok: true, termId: s, headId: s } : { ok: false, block: "busy" }), recheckAfter: () => () => true },
+      deliver, whoOf: who, now: () => 0, log: () => undefined,
     });
     // 这一轮先卡在 s-slow 上，名单里还有忙着的 s-fast。
     const round = watcher.check();
-    await vi.waitFor(() => expect(deliver).toHaveBeenCalledWith("s-slow", expect.any(String)));
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledWith("s-slow", expect.any(String), expect.any(Function)));
     // s-fast 停下来了：Stop 把它的通知发掉。
     waiting["s-fast"] = true;
     await watcher.sessionIdle("s-fast");

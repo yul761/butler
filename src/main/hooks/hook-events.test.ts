@@ -39,6 +39,20 @@ describe("applyHookEnvelope", () => {
     expect(sessions.head("s1")?.id).toBe("s3");
   });
 
+  it("/clear leaves the new head waiting at an empty prompt (plan 16 R28: no Stop follows a /clear)", () => {
+    const { sessions, deps } = setup();
+    applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", butlerSession: "s1" }), deps);
+    applyHookEnvelope(env("UserPromptSubmit", "s1"), deps);
+    applyHookEnvelope(env("SessionStart", "s2", { butlerSession: "s1" }, { source: "clear" }), deps);
+    expect(sessions.get("s2")).toMatchObject({ waitingForInput: true, lastActivityAt: 100 });
+    // compact 之后还会有 Stop；resume 选到的 session 也不一定停着：只有 clear 这样处理。
+    applyHookEnvelope(env("SessionStart", "s3", { butlerSession: "s1" }, { source: "compact" }), deps);
+    expect(sessions.get("s3")?.waitingForInput).toBe(false);
+    // 不在 Butler 终端里（没接上链）的 /clear 不管。
+    applyHookEnvelope(env("SessionStart", "x2", {}, { source: "clear" }), deps);
+    expect(sessions.get("x2")?.waitingForInput).toBe(false);
+  });
+
   it("an unknown ticket in env is ignored, the session is still recorded", () => {
     const { sessions, deps } = setup();
     applyHookEnvelope(env("SessionStart", "s1", { ticket: "GONE-9" }), deps);

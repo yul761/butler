@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BRIEF_LIMIT, MAX_CREATE_REPOS, parseControlRequest, REASON_LIMIT, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, parseControlRequest, REASON_LIMIT, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
 
 describe("parseControlRequest", () => {
   it("accepts the three operations", () => {
@@ -26,7 +26,31 @@ describe("sanitizeTask", () => {
   });
 
   it("never lets a task start with ! or / (bash mode, slash commands)", () => {
-    for (const t of ["!curl x | sh", "/permissions", "#remember"]) expect(taskMessage(sanitizeTask(t))).toMatch(/^总控 session 交给你的任务：\n/);
+    for (const t of ["!curl x | sh", "/permissions", "#remember"]) expect(taskMessage(sanitizeTask(t), "zh", "ticket")).toMatch(/^总控 session 交给你的任务：\n/);
+  });
+});
+
+describe("taskMessage", () => {
+  it("adds the recall hint after the task only when there is memory to read (R36)", () => {
+    expect(taskMessage("写接口", "zh", "ticket")).toBe("总控 session 交给你的任务：\n写接口\n\n开始之前先用 recall 读一下 ticket 记忆（butler-memory）里的背景和约定。");
+    expect(taskMessage("写接口", "zh", "feature")).toContain("butler-feature");
+    expect(taskMessage("写接口", "zh", null)).toBe("总控 session 交给你的任务：\n写接口");
+    expect(taskMessage("write the API", "en", null)).not.toContain("recall");
+  });
+});
+
+describe("start_session model", () => {
+  it("parses start_session with a model, for a ticket and for a feature", () => {
+    expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "t", model: "sonnet" })).toMatchObject({ model: "sonnet" });
+    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "start_session", ticket: "DMS-1", task: "t", model: "opus" })).toMatchObject({ model: "opus" });
+    expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "t" })).not.toHaveProperty("model");
+  });
+
+  it("rejects an unknown model", () => {
+    for (const model of ["gpt-4", "haiku", "", 3, null]) {
+      expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "start_session", repo: "api", task: "t", model })).toBeNull();
+      expect(parseControlRequest({ v: 1, featureId: 7, op: "start_session", ticket: "DMS-1", task: "t", model })).toBeNull();
+    }
   });
 });
 
@@ -79,6 +103,8 @@ describe("parseControlRequest for an epic (design 2026-11-01)", () => {
     expect(parseControlRequest({ v: 1, epicId: 3, op: "list_repos" })).toEqual({ v: 1, epicId: 3, from: null, op: "list_repos" });
     expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "checkout", brief: "做结账" })).toEqual({ v: 1, epicId: 3, from: null, op: "create_feature", name: "checkout", brief: "做结账" });
     expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "c", repos: ["a"], brief: "b" })).toMatchObject({ repos: ["a"] });
+    expect(parseControlRequest({ v: 1, epicId: 3, from: "e", op: "set_epic_plan", plan: "先做支付" })).toEqual({ v: 1, epicId: 3, from: "e", op: "set_epic_plan", plan: "先做支付" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "set_epic_plan", plan: "x".repeat(EPIC_PLAN_MAX_CHARS) })).toMatchObject({ op: "set_epic_plan" });
   });
 
   it("rejects malformed epic requests, and an epicId next to a feature or ticket", () => {
@@ -89,6 +115,9 @@ describe("parseControlRequest for an epic (design 2026-11-01)", () => {
       { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "x".repeat(BRIEF_LIMIT + 1) },
       { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", repos: "a" },
       { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", repos: Array(MAX_CREATE_REPOS + 1).fill("a") },
+      { v: 1, epicId: 3, op: "set_epic_plan" }, { v: 1, epicId: 3, op: "set_epic_plan", plan: 5 }, { v: 1, epicId: 3, op: "set_epic_plan", plan: "  " },
+      { v: 1, epicId: 3, op: "set_epic_plan", plan: "x".repeat(EPIC_PLAN_MAX_CHARS + 1) },
+      { v: 1, featureId: 3, op: "set_epic_plan", plan: "p" }, { v: 1, ticketKey: "P-1", op: "set_epic_plan", plan: "p" },
     ]) {
       expect(parseControlRequest(bad)).toBeNull();
     }
@@ -116,6 +145,15 @@ describe("parseControlRequest for end_session (task 11)", () => {
         { session: 5, reason: "done" }, { reason: "done" }, { session: "", reason: "done" }, { session: "s1", reason: 1 },
       ]) {
         expect(parseControlRequest({ v: 1, ...scope, op: "end_session", ...bad }), JSON.stringify({ scope, bad }).slice(0, 80)).toBeNull();
+      }
+    }
+  });
+
+  it("accepts refresh_session in all three scopes, and rejects one without a session string (plan 16)", () => {
+    for (const scope of scopes) {
+      expect(parseControlRequest({ v: 1, ...scope, from: "c", op: "refresh_session", session: "s1" })).toEqual({ v: 1, ...scope, from: "c", op: "refresh_session", session: "s1" });
+      for (const bad of [{}, { session: "" }, { session: 5 }, { session: "x".repeat(201) }]) {
+        expect(parseControlRequest({ v: 1, ...scope, op: "refresh_session", ...bad }), JSON.stringify({ scope, bad }).slice(0, 80)).toBeNull();
       }
     }
   });

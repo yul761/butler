@@ -7,6 +7,7 @@ import { sessionLabel, splitSessions } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
 import { RepoDialog } from "./RepoDialog";
 import { EndSessionButton } from "./EndSessionButton";
+import { RefreshSessionButton } from "./RefreshSessionButton";
 import { TerminalPane } from "./TerminalPane";
 import { TicketOverview } from "./TicketOverview";
 import { TitleDialog } from "./TitleDialog";
@@ -36,7 +37,7 @@ interface OldWorkdir {
 interface Props {
   ticket: TicketView;
   onArchived: () => void;
-  /** 从简报点“打开”进来时要执行的打开请求。 */
+  /** 从别的页面跳进来时要执行的打开请求。 */
   initialOpen?: OpenSessionRequest | null;
   onInitialOpenDone?: () => void;
   /** ticket 属于的 feature（设计文档 2026-10-26）。 */
@@ -70,7 +71,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
     setPanes((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
   }, [openKey]);
 
-  // 从简报点“打开”：恢复 session 并预填提示，只执行一次。
+  // 从别的页面跳进来时的打开请求：恢复 session 并预填提示，只执行一次。
   useEffect(() => {
     if (!initialOpen) return;
     onInitialOpenDone?.();
@@ -220,7 +221,11 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
             </button>
             {/* 正在运行的终端不能隐藏，只能结束（×点两次）；结束之后才能隐藏。 */}
             {s.termId ? (
-              <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => closePane(s.termId!)} />
+              <>
+                {/* 修复 session 不换新（计划 16）。 */}
+                {s.fixesSession === null && <RefreshSessionButton sessionId={s.id} label={sessionLabel(s, S.untitledSession)} />}
+                <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => closePane(s.termId!)} />
+              </>
             ) : (
               <button className="session-hide" title={S.hideSession} aria-label={S.hideSessionNamed(sessionLabel(s, S.untitledSession))} onClick={() => api.hideSession(s.id).catch(reportError)}>
                 ×

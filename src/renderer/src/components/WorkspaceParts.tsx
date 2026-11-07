@@ -3,9 +3,10 @@ import type { OpenSessionResult, SessionView } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
 import { lastSegment } from "../repos";
-import { sessionLabel } from "../sessions";
+import { initialPane, sessionLabel } from "../sessions";
 import { S } from "../strings";
 import { EndSessionButton } from "./EndSessionButton";
+import { RefreshSessionButton } from "./RefreshSessionButton";
 import { RepoPicker } from "./RepoPicker";
 import { TerminalPane } from "./TerminalPane";
 
@@ -18,17 +19,19 @@ interface SessionPanesOptions {
   openFailure: (reason: string) => string;
   errorText: (e: unknown) => string;
   setError: (message: string | null) => void;
+  /** 页面打开时先看这个 session 的终端（「现在」页点进来的那个）；不给或者它没开着就看第一个。 */
+  initialActive?: string | null;
 }
 
 export type SessionPanes = ReturnType<typeof useSessionPanes>;
 
 /** 这一页开着哪些终端、正在看哪一个。已退出但还没关闭的终端留着，方便看到 claude 的报错输出（和 ticket 页一样）。 */
-export function useSessionPanes(sessions: SessionView[], { openSession, openFailure, errorText, setError }: SessionPanesOptions) {
+export function useSessionPanes(sessions: SessionView[], { openSession, openFailure, errorText, setError, initialActive }: SessionPanesOptions) {
   const openTerms = sessions.flatMap((s) => (s.termId ? [s.termId] : []));
   const [panes, setPanes] = useState<string[]>(openTerms);
   const panesRef = useRef(panes);
   panesRef.current = panes;
-  const [active, setActive] = useState<string | null>(openTerms[0] ?? null);
+  const [active, setActive] = useState<string | null>(() => initialPane(sessions, initialActive));
 
   const openKey = openTerms.join(",");
   useEffect(() => {
@@ -207,7 +210,11 @@ export function SessionArea({ repos, reposHint, onAddRepo, onRemoveRepo, session
               <span className="action">{s.termId ? S.switchTo : S.open}</span>
             </button>
             {s.termId ? (
-              <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => panes.close(s.termId!)} />
+              <>
+                {/* 修复 session 不换新（计划 16）。 */}
+                {s.fixesSession === null && <RefreshSessionButton sessionId={s.id} label={sessionLabel(s, S.untitledSession)} />}
+                <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => panes.close(s.termId!)} />
+              </>
             ) : (
               <button className="session-hide" title={S.hideSession} aria-label={S.hideSessionNamed(sessionLabel(s, S.untitledSession))} onClick={() => api.hideSession(s.id).catch(reportError)}>
                 ×

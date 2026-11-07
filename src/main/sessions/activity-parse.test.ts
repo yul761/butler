@@ -23,6 +23,12 @@ describe("classifyCommand", () => {
     }
     expect(classifyCommand("ls -la").kind).toBe("command");
   });
+
+  it("classifies git rebase and git pull --rebase as rebase, not push", () => {
+    expect(classifyCommand("git rebase origin/main").kind).toBe("rebase");
+    expect(classifyCommand("git pull --rebase").kind).toBe("rebase");
+    expect(classifyCommand("git pull --rebase && git push").kind).toBe("rebase");
+  });
   it("truncates detail to 40 characters", () => {
     expect(classifyCommand("echo " + "a".repeat(100)).detail).toHaveLength(40);
   });
@@ -230,5 +236,17 @@ describe("lastReply (task 11: end_session)", () => {
     applyEntry(s, say([{ type: "text", text: "子 agent 的话" }], { isSidechain: true }));
     applyEntry(s, say([{ type: "thinking", thinking: "想一想" }]));
     expect(s.lastReply).toBe("做完了");
+  });
+
+  it("keeps the message id of the entry the last reply came from, null when it has none", () => {
+    const s = newTranscriptState();
+    expect(s.lastReplyId).toBeNull();
+    applyEntry(s, { type: "assistant", message: { id: "msg_1", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "要合并吗？" }] } });
+    expect(s.lastReplyId).toBe("msg_1");
+    applyEntry(s, { type: "assistant", message: { id: "msg_2", role: "assistant", stop_reason: null, content: [{ type: "tool_use", id: "t9", name: "Read", input: {} }] } });
+    expect(s.lastReplyId).toBe("msg_1");
+    applyEntry(s, say([{ type: "text", text: "没有 id" }]));
+    expect(s.lastReply).toBe("没有 id");
+    expect(s.lastReplyId).toBeNull();
   });
 });

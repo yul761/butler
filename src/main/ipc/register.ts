@@ -1,19 +1,20 @@
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
-import { ITEM_MARKS, type BriefKind, type BriefView, type ItemMark } from "../../shared/brief";
 import { IPC } from "../../shared/ipc";
 import {
-  FOLLOWUP_STATUSES, type AutostartState, type FollowupStatus, type JobStateView, type McpProbe, type MergeEvent, type OpenSessionRequest, type TicketStatus,
+  FOLLOWUP_STATUSES, type AutostartState, type FollowupStatus, type JobStateView, type McpProbe, type MergeEvent, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr,
 } from "../../shared/types";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
-import type { BriefService } from "../brief/brief-service";
 import type { EpicService } from "../epics/epic-service";
 import type { AuditRepo } from "../db/audit-repo";
 import type { MemoryService } from "../memory/memory-service";
-import { JOB_MORNING, JOB_NIGHTLY, type JobsRepo } from "../db/jobs-repo";
+import { JOB_NIGHTLY, type JobsRepo } from "../db/jobs-repo";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { MergeGateRepo } from "../db/merge-gate-repo";
 import type { SettingsRepo } from "../db/settings-repo";
+import type { SessionsRepo } from "../db/sessions-repo";
+import type { UsageRepo } from "../db/usage-repo";
+import { summarizeUsage, USAGE_WINDOW_MS } from "../usage/usage-summary";
 import type { TermsRepo } from "../db/terms-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import type { KeyStore } from "../gateway/key-store";
@@ -48,13 +49,20 @@ export interface IpcDeps {
   epicService: EpicService;
   sessionService: SessionService;
   activity: Pick<ActivityMonitor, "dismiss">;
+  usage: Pick<UsageRepo, "since">;
+  sessions: Pick<SessionsRepo, "get">;
   pty: PtyManager;
   health: HealthService;
   followups: FollowupsRepo;
   handoffs: HandoffsRepo;
   settings: SettingsRepo;
-  briefService: BriefService;
   gateRepo: Pick<MergeGateRepo, "recentEvents">;
+  /** PrWatcher 跟着的 PR 和 CI。 */
+  prWatchList: () => WatchedPr[];
+  /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
+  nowView: (merges: MergeEvent[]) => NowView;
+  /** 界面上的“换新”按钮（计划 16）：马上回答，换新在后台跑。 */
+  refreshSession: (sessionId: string) => RefreshSessionResult;
   runner: HandoffRunner;
   featureRunner: Pick<FeatureSummaryRunner, "runManual">;
   scheduler: Scheduler;
@@ -67,10 +75,6 @@ export interface IpcDeps {
   /** 防休眠开关（只在内存里，启动时是关的）。 */
   keepAwake: { isOn(): boolean; set(on: boolean): void };
   llmStatus: () => LlmStatus;
-  /** 早间刷新进行中。 */
-  briefRefreshing: () => boolean;
-  /** 正在生成“今日重点”。 */
-  briefNarrating: () => boolean;
   /** followup 状态变化后重新推导 ticket 状态。 */
   rederive: (ticketKey: string) => void;
   detectTrackerTools: () => Promise<McpProbe>;
@@ -269,11 +273,20 @@ export function registerIpc(d: IpcDeps): void {
     d.sessionService.unhide(sessionIdArg(raw));
     d.notify();
   });
+  handle(IPC.sessionsRefresh, (raw: unknown): RefreshSessionResult => {
+    const r = d.refreshSession(sessionIdArg(raw));
+    d.notify();
+    return r;
+  });
   handle(IPC.sessionsDismiss, (id: string) => {
     d.sessionService.dismiss(id);
     d.notify();
   });
 
+  handle(IPC.usageSummary, () => {
+    const since = Date.now() - USAGE_WINDOW_MS;
+    return summarizeUsage(d.usage.since(since), (id) => (id && d.sessions.get(id)?.coordinator ? "coordinator" : "ticket"), since);
+  });
   handle(IPC.activityDismiss, (raw: unknown) => d.activity.dismiss(sessionIdArg(raw)));
 
   handle(IPC.ptySnapshot, (id: string) => d.pty.snapshot(id));
@@ -296,28 +309,11 @@ export function registerIpc(d: IpcDeps): void {
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
 
-  handle(IPC.briefsLatest, (kind: BriefKind): BriefView => ({
-    brief: d.briefService.latest(kind === "evening" ? "evening" : "morning"),
-    refreshing: d.briefRefreshing(),
-    narrating: d.briefNarrating(),
-  }));
-  // 首页的“合并协调”：最近 7 天、最多 20 条。
-  handle(IPC.mergeEvents, (): MergeEvent[] => d.gateRepo.recentEvents(d.now() - 7 * 24 * 3600 * 1000, 20));
-  handle(IPC.briefsRegenerate, async (): Promise<JobStateView | null> => {
-    if (d.aborted()) return null;
-    await d.scheduler.runMorningNow();
-    d.notify();
-    // 调度器把失败记在 jobs 表里而不是抛出：把结果交给界面显示。
-    return d.jobs.get(JOB_MORNING);
-  });
-  handle(IPC.briefsMark, (key: string, mark: ItemMark) => {
-    if (!(ITEM_MARKS as readonly string[]).includes(mark)) throw new Error(`unknown mark: ${String(mark)}`);
-    const k = String(key);
-    // followup 条目的状态在 followups 表里，不进 item_marks。
-    if (k.startsWith("followup:")) setFollowupStatus(k.slice("followup:".length), mark);
-    else d.briefService.mark(k, mark);
-    d.notify();
-  });
+  // 「现在」页的“最近合并”：最近 7 天、最多 20 条。
+  const recentMerges = (): MergeEvent[] => d.gateRepo.recentEvents(d.now() - 7 * 24 * 3600 * 1000, 20);
+  handle(IPC.mergeEvents, recentMerges);
+  handle(IPC.prWatchList, (): WatchedPr[] => d.prWatchList());
+  handle(IPC.nowView, (): NowView => d.nowView(recentMerges()));
 
   handle(IPC.followupsList, (ticketKey: string) => d.followups.listByTicket(ticketKey));
   handle(IPC.followupsSetStatus, (id: string, status: FollowupStatus) => {

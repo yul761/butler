@@ -37,7 +37,7 @@ const squash = (t: string) => t.replace(/\s+/g, "");
 
 /**
  * 设计文档 2026-11-04（合并总控）：两个 ticket 在同一个仓库里改了同一行 → DMS-2 占着合并 → DMS-1 合并被 gate 拦下（等 DMS-2）
- * → 首页“合并协调”有这条 → DMS-2 真的合进 main 后，停着的 DMS-1 收到“已经合完” → 再合是 rebase 提醒
+ * → 「现在」页的“最近合并”有这条 → DMS-2 真的合进 main 后，停着的 DMS-1 收到“已经合完” → 再合是 rebase 提醒
  * → 不审核的命令不发请求 → Butler 不在时立即放行。
  */
 test("merge coordinator: a conflicting merge waits for the holder, is told when it merges, then is asked to rebase", async ({ makeSandbox, launch }) => {
@@ -99,10 +99,14 @@ test("merge coordinator: a conflicting merge waits for the holder, is told when 
   await expect.poll(() => terminalText(page)).toContain("denied:");
   expect(git(backend, "rev-parse", "main")).toBe(mainBefore);
 
-  // 5. 首页的“合并协调”一节有这一行。
+  // 5. 「现在」页的“最近合并”（默认收起）展开后有这一行。
   await page.getByRole("button", { name: S.home, exact: true }).click();
-  const section = page.locator("section.merge-events");
-  await expect(section.getByRole("heading", { name: S.mergeEventsTitle, exact: true })).toBeVisible();
+  const section = page.locator("section.now-merges");
+  const toggle = section.locator(".section-toggle");
+  await expect(toggle).toContainText(S.nowRecentMerges);
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(section.locator(".merge-event")).toHaveCount(0);
+  await toggle.click();
   await expect(section.locator(".merge-event").filter({ hasText: "DMS-1" }).filter({ hasText: "DMS-2" })).toHaveCount(1);
 
   // 6. DMS-2 真的合进 main：停着等输入的 DMS-1 收到“已经合完”。

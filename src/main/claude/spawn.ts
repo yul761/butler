@@ -8,15 +8,31 @@ export interface SpawnSpec {
   args: string[];
 }
 
+/** session 的模型：只有这两个别名，不写具体版本号。 */
+export type SessionModel = "opus" | "sonnet";
+
+/** 记下的模型只认 opus / sonnet，别的值（老数据、手改）当没记。 */
+export function storedModel(s: { model: string | null }): SessionModel | null {
+  return s.model === "opus" || s.model === "sonnet" ? s.model : null;
+}
+
+/** 子代理默认用 sonnet，省 token；用户环境里已有的值优先。 */
+export const SUBAGENT_MODEL_DEFAULT = "sonnet";
+/** Claude Code 自己的 auto-compact 窗口（token）；用户环境里已有的值优先。 */
+export const AUTO_COMPACT_WINDOW_DEFAULT = "250000";
+
 /**
- * addDirs：总控 session 能看到的额外目录（每个一个 --add-dir）。settingsPath：Butler 写的 --settings 文件（自动启用仓库 .mcp.json 的 server）。
+ * model：不传（或 null）就用 Claude Code 自己的默认。
+ * guidePath：Butler 的 session 说明文件。addDirs：总控 session 能看到的额外目录（每个一个 --add-dir）。settingsPath：Butler 写的 --settings 文件（自动启用仓库 .mcp.json 的 server）。
  * 只有路径，prompt 永远不进 argv。
  */
-export function claudeArgs(req: { mode: "new" | "resume"; sessionId: string; mcpConfigPath?: string; settingsPath?: string; addDirs?: string[] }): string[] {
+export function claudeArgs(req: { mode: "new" | "resume"; sessionId: string; mcpConfigPath?: string; settingsPath?: string; addDirs?: string[]; guidePath?: string; model?: SessionModel | null }): string[] {
   const args = req.mode === "new" ? ["--session-id", req.sessionId] : ["--resume", req.sessionId];
   if (req.mcpConfigPath) args.push("--mcp-config", req.mcpConfigPath);
   if (req.settingsPath) args.push("--settings", req.settingsPath);
   for (const dir of req.addDirs ?? []) args.push("--add-dir", dir);
+  if (req.guidePath) args.push("--append-system-prompt-file", req.guidePath);
+  if (req.model) args.push("--model", req.model);
   return args;
 }
 
@@ -73,6 +89,9 @@ export function sessionEnv(
   out.COLORTERM = "truecolor";
   if (x.ticketKey !== undefined) out.BUTLER_TICKET = x.ticketKey;
   out.BUTLER_SESSION = x.sessionId;
+  // 用户自己的环境里有就不动。
+  out.CLAUDE_CODE_SUBAGENT_MODEL ??= SUBAGENT_MODEL_DEFAULT;
+  out.CLAUDE_CODE_AUTO_COMPACT_WINDOW ??= AUTO_COMPACT_WINDOW_DEFAULT;
   return out;
 }
 
