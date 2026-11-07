@@ -38,7 +38,7 @@ function ticket(key: string, repoPath: string, branch: string, workMode: WorkMod
 
 /**
  * 测试默认的裁决期限。生产的 4 秒（GATE_DEADLINE_MS）是真实计时器：慢的 Windows runner 上，一次裁决里真实的 git
- * 子进程就可能跑满 4 秒，计时器先触发，裁决变成"放行、不记"，任何一个用例都可能偶尔挂（main CI 42407535184）。
+ * 子进程就可能跑满 4 秒，计时器先触发，裁决变成"放行、不记"，任何一个用例都可能偶尔挂（PR #20 的 CI 42407535184）。
  * 不测期限的用例用 60 秒，结果只由裁决逻辑决定；测期限的用例用假时钟跨过它，或者自己传 deadlineMs。
  */
 const TEST_DEADLINE_MS = 60_000;
