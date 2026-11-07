@@ -36,6 +36,13 @@ function ticket(key: string, repoPath: string, branch: string, workMode: WorkMod
   return { key, title: null, repos: [r], status: "active", statusManual: null, createdAt: 0, archivedAt: null, featureId: null };
 }
 
+/**
+ * 测试默认的裁决期限。生产的 4 秒（GATE_DEADLINE_MS）是真实计时器：慢的 Windows runner 上，一次裁决里真实的 git
+ * 子进程就可能跑满 4 秒，计时器先触发，裁决变成"放行、不记"，任何一个用例都可能偶尔挂（PR #20 的 CI 42407535184）。
+ * 不测期限的用例用 60 秒，结果只由裁决逻辑决定；测期限的用例用假时钟跨过它，或者自己传 deadlineMs。
+ */
+const TEST_DEADLINE_MS = 60_000;
+
 function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (pr: string | null) => PrInfo | null; terminals?: Record<string, number>; git?: Partial<MergeGateDeps["git"]>; now?: () => number; deadlineMs?: number } = {}) {
   const repoPath = o.repo ?? makeScenarioRepo();
   const tickets = o.tickets ? o.tickets(repoPath) : ["DMS-1", "DMS-2", "DMS-3"].map((k) => ticket(k, repoPath, k.toLowerCase()));
@@ -52,7 +59,7 @@ function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (p
   };
   const gate = new MergeGate({
     tickets: { list: () => tickets, listRepos: (key: string) => tickets.find((t) => t.key === key)?.repos ?? [] },
-    repo, openTerminals, git: gitDeps, prInfo, notify: (e) => events.push(e), now: o.now ?? (() => 1000), log: (m) => logs.push(m), deadlineMs: o.deadlineMs,
+    repo, openTerminals, git: gitDeps, prInfo, notify: (e) => events.push(e), now: o.now ?? (() => 1000), log: (m) => logs.push(m), deadlineMs: o.deadlineMs ?? TEST_DEADLINE_MS,
     whoOf: (t, b) => (t ? `${t}（支付）` : b), checkSoon,
   });
   const ask = (action: GateAction, extra: Partial<Pick<GateRequest, "session" | "ticket" | "cwd" | "phase">> = {}, meta?: { ageMs?: number }) =>
@@ -395,7 +402,7 @@ describe("MergeGate: deadline", () => {
 
   it("allows and writes nothing once the checks ran past the deadline", async () => {
     let clock = 1000;
-    const t = setup({ now: () => clock, git: { mergeConflicts: async (r, a, b) => { clock += 5000; return git.mergeConflicts(r, a, b); } } });
+    const t = setup({ now: () => clock, git: { mergeConflicts: async (r, a, b) => { clock += TEST_DEADLINE_MS + 1000; return git.mergeConflicts(r, a, b); } } });
     expect(await t.merge("dms-1")).toEqual({ v: 1, decision: "allow" });
     expect(rows(t)).toEqual(none);
     expect(t.events).toEqual([]);
@@ -404,7 +411,7 @@ describe("MergeGate: deadline", () => {
   it("does not record a wait the hook stopped waiting for", async () => {
     let clock = 1000;
     let slow = false;
-    const t = setup({ now: () => clock, git: { mergeConflicts: async (r, a, b) => { if (slow) clock += 5000; return git.mergeConflicts(r, a, b); } } });
+    const t = setup({ now: () => clock, git: { mergeConflicts: async (r, a, b) => { if (slow) clock += TEST_DEADLINE_MS + 1000; return git.mergeConflicts(r, a, b); } } });
     await t.merge("dms-2");
     const before = rows(t);
     slow = true;
@@ -418,36 +425,41 @@ describe("MergeGate: deadline", () => {
     const before = rows(t);
     const events = t.events.length;
     const checks = vi.mocked(t.gitDeps.mergeConflicts).mock.calls.length;
-    expect(await t.merge("dms-1", {}, { ageMs: 4000 })).toEqual({ v: 1, decision: "allow" });
+    expect(await t.merge("dms-1", {}, { ageMs: TEST_DEADLINE_MS })).toEqual({ v: 1, decision: "allow" });
     expect(vi.mocked(t.gitDeps.mergeConflicts).mock.calls.length).toBe(checks);
     expect(rows(t)).toEqual(before);
     expect(t.events).toHaveLength(events);
-    expect(t.logs.some((l) => l.includes("waited 4000 ms"))).toBe(true);
+    expect(t.logs.some((l) => l.includes(`waited ${TEST_DEADLINE_MS} ms`))).toBe(true);
   });
 
   it("counts the time spent in the queue toward the deadline", async () => {
     let clock = 1000;
-    // 每次裁决的第一次 merge-tree 用掉 600 毫秒。
+    // 每次裁决的第一次 merge-tree 在假时钟上用掉 30 秒。
     let first = true;
-    const step = { git: { mergeConflicts: async (r: string, a: string, b: string) => { if (first) clock += 600; first = false; return git.mergeConflicts(r, a, b); } } };
-    // 期限放大到 60 秒，真实计时器不会抢先触发，结果只由假时钟决定。
-    const deadlineMs = 60_000;
-    // 排队 deadline-500 + 一步 600 毫秒 > deadline：算晚了，放行、不记。
+    const step = { git: { mergeConflicts: async (r: string, a: string, b: string) => { if (first) clock += 30_000; first = false; return git.mergeConflicts(r, a, b); } } };
+    // 真实计时器的时长是 deadline - ageMs，下面两种排队时间都给它留了至少 20 秒，
+    // 慢的 Windows runner 上真实的 git 也跑不到，结果只由假时钟决定。
+    const deadlineMs = TEST_DEADLINE_MS;
+    const timedOut = (t: ReturnType<typeof setup>) => t.logs.some((l) => l.includes("took too long"));
+    // 排队 deadline-20s + 一步 30s > deadline：算晚了，放行、不记。
     const late = setup({ now: () => clock, deadlineMs, ...step });
-    expect(await late.merge("dms-3", {}, { ageMs: deadlineMs - 500 })).toEqual({ v: 1, decision: "allow" });
+    expect(await late.merge("dms-3", {}, { ageMs: deadlineMs - 20_000 })).toEqual({ v: 1, decision: "allow" });
     expect(rows(late)).toEqual(none);
-    // 排队 deadline-1000 + 600 毫秒还在期限内：照常占位。
+    expect(late.logs.some((l) => l.includes("decided after the deadline"))).toBe(true);
+    expect(timedOut(late)).toBe(false);
+    // 排队 deadline-40s + 一步 30s 还在期限内：照常占位。
     const inTime = setup({ now: () => clock, deadlineMs, ...step });
     first = true;
-    await inTime.merge("dms-3", {}, { ageMs: deadlineMs - 1000 });
+    await inTime.merge("dms-3", {}, { ageMs: deadlineMs - 40_000 });
     expect(rows(inTime).holds).toEqual({ n: 1 });
+    expect(timedOut(inTime)).toBe(false);
   });
 
   it("still releases a hold on a post request that waited in the queue", async () => {
     const t = setup();
     await t.merge("dms-3");
     run(t.repoPath, "merge", "-q", "dms-3");
-    expect(await t.merge("dms-3", { phase: "post" }, { ageMs: 10_000 })).toEqual({ v: 1, decision: "allow" });
+    expect(await t.merge("dms-3", { phase: "post" }, { ageMs: TEST_DEADLINE_MS + 10_000 })).toEqual({ v: 1, decision: "allow" });
     expect(t.outcomes()).toEqual([{ branch: "dms-3", outcome: "merged" }]);
   });
 
