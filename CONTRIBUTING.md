@@ -1,5 +1,7 @@
 # Contributing to Butler
 
+**English** | [简体中文](CONTRIBUTING.zh-CN.md)
+
 Thanks for helping. Butler is a personal productivity tool that handles other people's work data. A few rules below are non-negotiable: privacy, no network access outside the gateway, and no real `claude` or LLM calls in tests.
 
 ## Toolchain
@@ -71,7 +73,8 @@ The design document is in `docs/superpowers/specs/` and the implementation plans
 - **Tests never call a real LLM provider or the real `claude`, and never read or write the real `~/.butler` or `~/.claude`.** Use the in-process fake provider (`src/main/gateway/testing.ts`), the fake `claude` helpers (`src/main/test-utils.ts`, `e2e/fake-claude`) and temporary folders.
 - **Never change the user's Claude Code configuration** from code or tests, beyond the explicit hook install the user clicks. That means no `claude mcp add`, no `claude config set` and so on. Memory MCP servers are passed per session with `--mcp-config`.
 - **Database migrations are append-only** (`src/main/db/migrations.ts`).
-- **User-facing text** lives in `src/renderer/src/strings.ts` (UI) and `src/main/strings.ts` (main process). The UI is Chinese. In English docs, quote UI labels exactly as they appear there and add an English gloss.
+- **User-facing text** lives in `src/renderer/src/strings.ts` (Chinese UI), `src/renderer/src/strings-en.ts` (English UI) and `src/main/strings.ts` (main process, both languages). Add every new string in both languages.
+- **Docs come in pairs.** `README.md`, `CONTRIBUTING.md` and `docs/configuration.md` are in English, and each has a Chinese twin with `.zh-CN.md` at the end of its name. Change both in the same pull request and keep their headings in the same order. Quote the English UI labels in the English docs and the Chinese ones in the Chinese docs, exactly as the string tables have them.
 - Pin dependency versions exactly.
 
 ## Pull requests

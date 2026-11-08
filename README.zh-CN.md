@@ -81,7 +81,7 @@ Butler 只支持 Claude Code。
   - **epic session 调用 `create_feature` 时。** epic 里其他未归档的 feature 会在后台做同样的刷新。`create_feature` 不等它完成。
 
   发给总控的第一条消息也会在总控一打开时就开始一轮对话。
-- **合并总控。** 同一个仓库里的两个 ticket 快要撞车时，Butler 会在合并前介入。它盯着自己开的 session，不管属于哪个 epic、feature 或 ticket，只检查合并进目标分支，以及在共用文件夹里切分支这两类操作。它用 git 判断分支是否冲突，冲突的那个先合进去之前，会先拦下这次合并。详见[配置 Butler](docs/configuration.md#merge-coordinator)。
+- **合并总控。** 同一个仓库里的两个 ticket 快要撞车时，Butler 会在合并前介入。它盯着自己开的 session，不管属于哪个 epic、feature 或 ticket，只检查合并进目标分支，以及在共用文件夹里切分支这两类操作。它用 git 判断分支是否冲突，冲突的那个先合进去之前，会先拦下这次合并。详见[配置 Butler](docs/configuration.zh-CN.md#合并总控)。
 - **关掉已完成的 session。** 总控或 epic session 可以用 `end_session` 关掉一个已经停下、在等输入的 session。正在工作的、在等你回答的，以及它自己，它都会拒绝。
 - **合并后清理 worktree。** 一旦 handoff 报告某个 ticket 的 PR 已合并，Butler 就用 `git worktree remove` 删掉这个 ticket 的 worktree。分支保留，在那里再开 session 时会重建 worktree。有未提交改动或未跟踪文件的 worktree，或者自己的 session 还在终端里运行的，Butler 不会删。这时 ticket 页会说明原因，并给一个 **重新检查** 按钮，那个终端退出时 Butler 也会再试一次。被 `.gitignore` 忽略的文件（`node_modules`、本地的 `.env`）会随 worktree 一起删掉。
 - **晚间 handoff。** 在你选定的时间，Butler 让你自己登录好的 `claude` 为每个有动静的 ticket 写一份结构化的 handoff。
@@ -104,7 +104,7 @@ Butler 只支持 Claude Code。
 
 ## 系统要求
 
-- Apple silicon 的 macOS，或 Windows 10/11 x64。Intel Mac 可以[从源码构建](CONTRIBUTING.md)。
+- Apple silicon 的 macOS，或 Windows 10/11 x64。Intel Mac 可以[从源码构建](CONTRIBUTING.zh-CN.md)。
 - 已安装并登录 Claude Code。终端里 `claude --version` 必须能运行。
 - `PATH` 上有 Git。Windows 上请安装 **Git for Windows**：Claude Code 通过 Git Bash 运行 hook，而 Butler 在 `PATH` 上找不到 `git.exe` 时完全不会运行 git。
 - 可选：在 Claude Code 里配置好一个 tracker MCP server（Jira、Linear、GitLab……），handoff 就能读到 ticket 状态。
@@ -168,7 +168,7 @@ NSIS 安装包目前没有签名（见[代码签名政策](#代码签名政策)�
 3. **tracker 的 MCP 工具。** Butler 列出你的 Claude Code 暴露的 MCP 工具，由你挑出 handoff 可以调用的只读工具。
 4. **隐私档位与个人 API（可选）。**
 
-向导可以在设置里重新运行。[docs/configuration.md](docs/configuration.md) 介绍了每一项设置，包括怎么让 Butler 适配别的公司的 tracker 和习惯。
+向导可以在设置里重新运行。[docs/configuration.zh-CN.md](docs/configuration.zh-CN.md) 介绍了每一项设置，包括怎么让 Butler 适配别的公司的 tracker 和习惯。
 
 ## 数据存放位置
 
@@ -225,7 +225,7 @@ epic 下的所有东西还有 `butler-epic`，即 epic 的记忆（scope 为 `ep
   - 这个 scope 里被 forget 的笔记原文，免得模型把它们又带回来
 
   在 `workspace` scope 里，每条经验都标着它来自哪个 ticket。**这些内容都不做假名化，也不做扫描。** 每次发出的调用都以 **StateCore 记忆蒸馏** 记在审计页上，并计入你的每月预算。
-- **每个 ticket 最多 30 条有效笔记。** StateCore 每个 scope（每个 ticket 一个 scope）最多保留 30 条笔记。从 statecore-mcp 1.1 起，完成的跟进和被替换的决定会让出位置，蒸馏也不会把 Butler 的笔记挤出去。但如果同时有超过 30 条未完成的跟进和决定（Butler 自己最多保留 24 条），或者 Claude 自己写了很多笔记，一个 ticket 仍然可能写满。见 [docs/configuration.md](docs/configuration.md#how-memory-works)。
+- **每个 ticket 最多 30 条有效笔记。** StateCore 每个 scope（每个 ticket 一个 scope）最多保留 30 条笔记。从 statecore-mcp 1.1 起，完成的跟进和被替换的决定会让出位置，蒸馏也不会把 Butler 的笔记挤出去。但如果同时有超过 30 条未完成的跟进和决定（Butler 自己最多保留 24 条），或者 Claude 自己写了很多笔记，一个 ticket 仍然可能写满。见 [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md#记忆是怎么工作的)。
 
 ## 隐私模型
 
@@ -275,7 +275,7 @@ epic 下的所有东西还有 `butler-epic`，即 epic 的记忆（scope 为 `ep
 
 ## 开发
 
-见 [CONTRIBUTING.md](CONTRIBUTING.md)（英文）。
+见 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。
 
 ## 许可证
 
