@@ -30,11 +30,18 @@ describe("open-source docs (design 12)", () => {
     for (const key of EDITABLE_SETTINGS) expect(doc, key).toContain(`\`${key}\``);
   });
 
-  it("explains how to open the unsigned build and what not to install alongside", () => {
-    const readme = read("README.md");
-    for (const s of ["Gatekeeper", "SmartScreen", "xattr -dr com.apple.quarantine", "~/.butler", "StateCore", "docs/configuration.md", "CONTRIBUTING.md"]) {
-      expect(readme, s).toContain(s);
+  it("explains how to open the unsigned build and what not to install alongside, in both READMEs", () => {
+    for (const doc of ["README.md", "README.zh-CN.md"]) {
+      const readme = read(doc);
+      for (const s of ["Gatekeeper", "SmartScreen", "xattr -dr com.apple.quarantine", "~/.butler", "StateCore", "docs/configuration.md", "CONTRIBUTING.md"]) {
+        expect(readme, `${doc}: ${s}`).toContain(s);
+      }
     }
+  });
+
+  it("keeps the English and Chinese READMEs one click apart", () => {
+    expect(read("README.md")).toContain("](README.zh-CN.md)");
+    expect(read("README.zh-CN.md")).toContain("](README.md)");
   });
 
   it("is MIT licensed", () => {
@@ -54,7 +61,7 @@ describe("open-source docs (design 12)", () => {
   });
 
   it("only links to files and headings that exist", () => {
-    const docs = ["README.md", "CONTRIBUTING.md", "docs/configuration.md"];
+    const docs = ["README.md", "README.zh-CN.md", "CONTRIBUTING.md", "docs/configuration.md"];
     for (const doc of docs) {
       for (const [, target] of read(doc).matchAll(/\]\(([^)\s]+)\)/g)) {
         if (/^[a-z]+:/i.test(target)) continue;
