@@ -1,22 +1,24 @@
 # Configuring Butler
 
-Butler has no config files. Everything is set on the **设置 (Settings)** page and stored in `~/.butler/app.db`. This page lists every setting, what it does and which values it accepts. It also explains how to adapt Butler to another company's tracker and conventions.
+**English** | [简体中文](configuration.zh-CN.md)
 
-The UI is in Chinese. Labels are quoted exactly as they appear in the app, followed by an English gloss. The names in `code` are the internal keys, which help when you read logs or the database.
+Butler has no config files. Everything is set on the **Settings** page and stored in `~/.butler/app.db`. This page lists every setting, what it does and which values it accepts. It also explains how to adapt Butler to another company's tracker and conventions.
+
+The UI comes in English and Chinese (see `language` below). This page quotes the labels of the English UI; the [Chinese version](configuration.zh-CN.md) quotes the Chinese ones. The names in `code` are the internal keys, which help when you read logs or the database.
 
 The Settings page has these sections, in order:
 
-1. **环境检查 (Environment check)**
-2. **常规 (General)**
-3. **记忆（StateCore）(Memory)**
-4. **调度与 handoff (Schedule and handoffs)**
-5. **隐私与个人 API (Privacy and personal API)**
+1. **Environment check**
+2. **General**
+3. **Memory (StateCore)**
+4. **Schedule and handoffs**
+5. **Privacy and personal API**
 
 The merge coordinator and the `end_session` tool for coordinators are described under [Merge coordinator](#merge-coordinator) and in the [README](../README.md); neither has a setting.
 
-The audit log has its own page, **审计 (Audit)**, in the sidebar.
+The audit log has its own page, **Audit**, in the sidebar.
 
-## 环境检查 (Environment check)
+## Environment check
 
 This section shows:
 
@@ -26,22 +28,22 @@ This section shows:
 
 The section has three buttons:
 
-- **重新检测 (Check again)**
-- **安装 / 修复 (Install / repair).** Copies `butler-hook` to `~/.butler/bin`, merges the four hooks into `settings.json` and writes `commands/handoff.md`. The first time, it saves a backup copy as `settings.json.butler-backup`. If `settings.json` is not valid JSON, Butler refuses to touch it. It never overwrites a `handoff.md` that it didn't write.
-- **卸载 (Uninstall).** Removes only Butler's own hook entries and its own `handoff.md`.
+- **Check again**
+- **Install / repair.** Copies `butler-hook` to `~/.butler/bin`, merges the four hooks into `settings.json` and writes `commands/handoff.md`. The first time, it saves a backup copy as `settings.json.butler-backup`. If `settings.json` is not valid JSON, Butler refuses to touch it. It never overwrites a `handoff.md` that it didn't write.
+- **Uninstall.** Removes only Butler's own hook entries and its own `handoff.md`.
 
 These buttons, and the same step in the first-run wizard, are the only way Butler ever writes to your Claude Code configuration.
 
-## 常规 (General)
+## General
 
 | Setting | Key | Default | Accepted values and notes |
 |---------|-----|---------|---------------------------|
-| claude 路径 (claude path) | `claudePath` | empty | Empty means Butler searches your login shell's `PATH`. Otherwise, the absolute path to your company's `claude`, as printed by `which claude` (or `where claude` on Windows). Saving it runs the environment check again. |
-| 分支名模板 (branch template) | `branchTemplate` | `feature/{key}` | Used when Butler creates a ticket's branch and you leave the branch name empty. `{key}` is replaced with the ticket id, `{key_lower}` with the ticket id in lower case, and `{title}` with the ticket's title turned into lower-case letters, digits and `-` (at most 50 characters). When the title has no such characters, `{title}` and the `-` or `/` next to it are left out. The template must contain `{key}` or `{key_lower}`, be at most 100 characters, and use only letters, digits and `. _ / -`. It can't start with `-` or `/`, can't contain `..`, `//` or `/.`, and can't end with `/`, `.` or `.lock`. Examples: `users/alice/{key}`, `{key}`, `{key_lower}-{title}` (gives `dms-1234-add-payment-api`). |
-| ticket 号正则 (ticket pattern) | `ticketPattern` | `[A-Z][A-Z0-9]+-\d+` | A JavaScript regular expression for ticket ids. See [Ticket pattern](#ticket-pattern) below. |
-| 语言 / Language | `language` | `auto` | `auto`, `zh` or `en`. `auto` follows the system's preferred language: Chinese for any `zh` locale, English for everything else. The interface, Butler's messages and the default prompts sent to `claude` (handoffs, refreshes, memory notes) all switch; prompts you edited yourself are kept as they are. Content generated earlier is not translated. Installs upgraded from 1.2.0 or earlier start on `zh`. After a switch, **环境检查 (Environment check)** shows the `/handoff` command as needing an update; click **安装 / 修复 (Install / repair)** so `/handoff` in your sessions uses the new language too. The environment variable `BUTLER_LANG=zh` or `BUTLER_LANG=en` overrides the setting. |
-| 开机时自动启动 Butler (start at login) | — | off | Only available in an installed Butler, not in development mode. |
-| 重新运行首次启动向导 (rerun the first-run wizard) | `onboardingDone` | `0` for new installs | A button, not a field. The wizard sets this to `1` when you finish or skip it, and the button sets it back to `0`. Existing installs that already have tickets were migrated to `1`. |
+| claude path | `claudePath` | empty | Empty means Butler searches your login shell's `PATH`. Otherwise, the absolute path to your company's `claude`, as printed by `which claude` (or `where claude` on Windows). Saving it runs the environment check again. |
+| Branch template | `branchTemplate` | `feature/{key}` | Used when Butler creates a ticket's branch and you leave the branch name empty. `{key}` is replaced with the ticket id, `{key_lower}` with the ticket id in lower case, and `{title}` with the ticket's title turned into lower-case letters, digits and `-` (at most 50 characters). When the title has no such characters, `{title}` and the `-` or `/` next to it are left out. The template must contain `{key}` or `{key_lower}`, be at most 100 characters, and use only letters, digits and `. _ / -`. It can't start with `-` or `/`, can't contain `..`, `//` or `/.`, and can't end with `/`, `.` or `.lock`. Examples: `users/alice/{key}`, `{key}`, `{key_lower}-{title}` (gives `dms-1234-add-payment-api`). |
+| Ticket id pattern | `ticketPattern` | `[A-Z][A-Z0-9]+-\d+` | A JavaScript regular expression for ticket ids. See [Ticket pattern](#ticket-pattern) below. |
+| 语言 / Language | `language` | `auto` | `auto`, `zh` or `en`. `auto` follows the system's preferred language: Chinese for any `zh` locale, English for everything else. The interface, Butler's messages and the default prompts sent to `claude` (handoffs, refreshes, memory notes) all switch; prompts you edited yourself are kept as they are. Content generated earlier is not translated. Installs upgraded from 1.2.0 or earlier start on `zh`. After a switch, **Environment check** shows the `/handoff` command as needing an update; click **Install / repair** so `/handoff` in your sessions uses the new language too. The environment variable `BUTLER_LANG=zh` or `BUTLER_LANG=en` overrides the setting. |
+| Start Butler at login | — | off | Only available in an installed Butler, not in development mode. |
+| Run the first-run wizard again | `onboardingDone` | `0` for new installs | A button, not a field. The wizard sets this to `1` when you finish or skip it, and the button sets it back to `0`. Existing installs that already have tickets were migrated to `1`. |
 
 ### Ticket pattern
 
@@ -66,19 +68,19 @@ Before saving, Butler rejects a pattern that:
 
 Butler also checks the pattern and the branch template together. Changing either one is refused if a sample id that the pattern accepts (for example `-1`, `#1` or `..-1`) would produce an invalid branch name.
 
-## 记忆（StateCore）(Memory)
+## Memory (StateCore)
 
 | Setting | Key | Default | Accepted values and notes |
 |---------|-----|---------|---------------------------|
-| 把 handoff 的进度、决策、follow-up 和经验写进 StateCore… (write progress, decisions, follow-ups and learnings to StateCore, and mount memory in Butler's sessions) | `memoryEnabled` | `1` (on) | `1` or `0`. When off, Butler writes nothing to StateCore and starts sessions without the memory MCP servers. Existing memory is kept. When you turn it back on, Butler catches up on the tickets it missed. |
-| 上下文超过多少 token 时自动换新（0 = 关） (refresh automatically when the context passes this many tokens) | `refreshThresholdTokens` | `150000` | `0` turns automatic refresh off, otherwise a whole number of tokens (at most 7 digits). When a Butler session has stopped, is not waiting on you and its last turn's context is at least this long, Butler types `/handoff`, waits for the handoff to be stored, types `/clear`, then asks it to recall where it was and wait for you. Needs memory on. The ↻ button next to a running session and a coordinator's `refresh_session` do the same on demand and do not depend on this setting. |
+| Write handoff progress, decisions, follow-ups and learnings to StateCore, and give the sessions Butler opens their memory | `memoryEnabled` | `1` (on) | `1` or `0`. When off, Butler writes nothing to StateCore and starts sessions without the memory MCP servers. Existing memory is kept. When you turn it back on, Butler catches up on the tickets it missed. |
+| Refresh automatically when the context passes this many tokens (0 = off) | `refreshThresholdTokens` | `150000` | `0` turns automatic refresh off, otherwise a whole number of tokens (at most 7 digits). When a Butler session has stopped, is not waiting on you and its last turn's context is at least this long, Butler types `/handoff`, waits for the handoff to be stored, types `/clear`, then asks it to recall where it was and wait for you. Needs memory on. The ↻ button next to a running session and a coordinator's `refresh_session` do the same on demand and do not depend on this setting. |
 
 This section also shows:
 
 - the StateCore data folder (`~/.butler/statecore`)
 - whether the memory MCP bundle was found
 - a warning if StateCore's own Claude Code capture plugin is installed. Don't run that plugin alongside Butler: memory would be recorded twice.
-- the **重新运行首次启动向导 (rerun the first-run wizard)** button
+- the **Run the first-run wizard again** button
 
 ### How memory works
 
@@ -91,8 +93,8 @@ This section also shows:
 
   Butler also syncs a ticket at startup and when you open a session for it. It syncs again when you complete, ignore or reopen one of the ticket's follow-ups.
 - **The 30-note cap.** StateCore keeps at most 30 live notes per scope. Since statecore-mcp 1.1, a forgotten note (a finished follow-up, a replaced decision) frees its slot, and notes the distillation extracts never push out notes written by Butler or by Claude's `remember`. Before each write, Butler counts the free slots. If none is left, it skips the write rather than let StateCore evict the oldest entry, so Butler never evicts its own notes. When slots are short, open follow-ups go first, then decisions. The skipped entries are still in Butler's own database and on the ticket page, and are written as soon as a slot frees up. In the `workspace` scope, StateCore evicts the oldest learnings once it holds 30 notes.
-- **The 记忆 (Memory) tab** on a ticket page shows the latest handoff, decisions, open follow-ups and other notes. Click **来历 (history)** on an entry to see its version chain. The tab refreshes after each Butler sync. It does not update live while Claude writes to memory inside a session.
-- **Distillation.** This happens only at the 完整 (full) privacy level with **发送前确认 (confirm before send)** off. It runs in the background after every nightly handoff run, including catch-up runs and **立即运行晚间 handoff (run the nightly handoff now)**. For each scope with pending events, StateCore makes one or more calls to your personal API and turns the events into notes. Together the calls send:
+- **The Memory tab** on a ticket page shows the latest handoff, decisions, open follow-ups and other notes. Click **History** on an entry to see its version chain. The tab refreshes after each Butler sync. It does not update live while Claude writes to memory inside a session.
+- **Distillation.** This happens only at the **Full** privacy level with **Confirm before sending** off. It runs in the background after every nightly handoff run, including catch-up runs and **Run the nightly handoff now**. For each scope with pending events, StateCore makes one or more calls to your personal API and turns the events into notes. Together the calls send:
   - the scope name, which for a ticket is the real ticket id (`ticket:<KEY>`)
   - the scope's recent raw events, including what Claude stored with `remember(consolidate: true)`
   - the scope's existing memory as JSON: Butler's follow-up and decision notes, Claude's own notes, and the previous summary with its next steps
@@ -100,24 +102,24 @@ This section also shows:
 
   In the `workspace` scope, each learning is tagged with the id of the ticket it came from.
 
-  **None of this is pseudonymized or scanned.** Each call is checked against the monthly budget and refused if it would exceed it. Every sent or over-budget call is audited, and shows as **StateCore 记忆蒸馏 (StateCore distillation)** on the Audit page. A call refused for any other reason, such as the level changing or no usable key, is only written to the log.
+  **None of this is pseudonymized or scanned.** Each call is checked against the monthly budget and refused if it would exceed it. Every sent or over-budget call is audited, and shows as **StateCore memory distillation** on the Audit page. A call refused for any other reason, such as the level changing or no usable key, is only written to the log.
 
   A run that could not process every event is reported as partial and its ticket is resynced; a run that distilled nothing leaves the events for the next night. The calls are made by Butler's main process, inside the privacy gateway, and no StateCore process ever receives the API key.
 
-## 调度与 handoff (Schedule and handoffs)
+## Schedule and handoffs
 
 | Setting | Key | Default | Accepted values and notes |
 |---------|-----|---------|---------------------------|
-| 晚间 handoff 时间 (nightly handoff time) | `nightlyTime` | `16:00` | `HH:MM`, local time. If Butler was closed, asleep or locked at that time, the run catches up at the next launch, wake or unlock, before the morning refresh. |
-| 工作日 (working days) | `workingDays` | `1,2,3,4,5` (Mon–Fri) | Checkboxes in the UI. The stored value is a comma-separated list of `0`–`6`, where `0` is Sunday. Nightly handoffs and morning refreshes run only on these days. |
-| tracker MCP 工具 (tracker MCP tools) | `trackerTools` | empty | One MCP tool name per line, in the form `mcp__<server>__<tool>`. `mcp__<server>` alone allows every tool of that server, so avoid it unless the server is read-only. Anything else, such as `Bash(...)` rules or flags, is rejected. Handoffs and refreshes may call these tools, plus `Read`, `Grep`, `Glob`, `gh pr view`, `gh pr checks`, `git log` and `git status`, plus anything your user-level or managed (policy) Claude Code settings allow (see below). |
-| 后台 handoff 也加载本地级的 MCP… (unattended runs also load local-scope and approved project MCP servers) | `headlessProjectMcp` | `0` (off) | `1` or `0`. See [Plugging in your tracker](#plugging-in-your-tracker). |
-| handoff prompt 模板 (handoff prompt) | `handoffPrompt` | built in | The instructions sent to `claude` for a handoff. It can't be empty and is limited to 20,000 characters. See [Adapting the prompts](#adapting-the-prompts). |
-| 早间刷新 prompt 模板 (morning refresh prompt) | `refreshPrompt` | built in | The quick morning check of PR and tracker status. It doesn't summarise the conversation. Same limits as above. |
+| Nightly handoff time | `nightlyTime` | `16:00` | `HH:MM`, local time. If Butler was closed, asleep or locked at that time, the run catches up at the next launch, wake or unlock, before the morning refresh. |
+| Working days | `workingDays` | `1,2,3,4,5` (Mon–Fri) | Checkboxes in the UI. The stored value is a comma-separated list of `0`–`6`, where `0` is Sunday. Nightly handoffs and morning refreshes run only on these days. |
+| Tracker MCP tools | `trackerTools` | empty | One MCP tool name per line, in the form `mcp__<server>__<tool>`. `mcp__<server>` alone allows every tool of that server, so avoid it unless the server is read-only. Anything else, such as `Bash(...)` rules or flags, is rejected. Handoffs and refreshes may call these tools, plus `Read`, `Grep`, `Glob`, `gh pr view`, `gh pr checks`, `git log` and `git status`, plus anything your user-level or managed (policy) Claude Code settings allow (see below). |
+| Background handoffs also load local-scope MCP servers… | `headlessProjectMcp` | `0` (off) | `1` or `0`. See [Plugging in your tracker](#plugging-in-your-tracker). |
+| Handoff prompt template | `handoffPrompt` | built in | The instructions sent to `claude` for a handoff. It can't be empty and is limited to 20,000 characters. See [Adapting the prompts](#adapting-the-prompts). |
+| Morning refresh prompt template | `refreshPrompt` | built in | The quick morning check of PR and tracker status. It doesn't summarise the conversation. Same limits as above. |
 
-The section also has **立即运行晚间 handoff (run the nightly handoff now)**.
+The section also has **Run the nightly handoff now**.
 
-After the tickets, the nightly run also writes a summary for every feature whose coordinator session or tickets had new activity since its last summary. It forks the coordinator session when there is one and uses the same read-only flags as a handoff. If the ticket run was rate limited, no feature summaries are written that night and the morning catch-up does them. A feature's page also has **立即更新 (Update now)**, which first runs handoffs for the feature's tickets that had activity and then writes the summary. `/handoff` in a coordinator writes the summary from the conversation itself.
+After the tickets, the nightly run also writes a summary for every feature whose coordinator session or tickets had new activity since its last summary. It forks the coordinator session when there is one and uses the same read-only flags as a handoff. If the ticket run was rate limited, no feature summaries are written that night and the morning catch-up does them. A feature's page also has **Update now**, which first runs handoffs for the feature's tickets that had activity and then writes the summary. `/handoff` in a coordinator writes the summary from the conversation itself.
 
 Handoffs and refreshes start `claude` with these flags:
 
@@ -132,7 +134,7 @@ The allowed tools are the list above plus the allow rules in your user-level `se
 Butler never talks to your tracker itself. Handoffs read it through the MCP servers configured in your company's Claude Code. Pick **read-only** tools only:
 
 1. Configure the tracker's MCP server in Claude Code as you normally would. User scope is simplest.
-2. In Settings, click **从 Claude Code 检测 (Detect from Claude Code)**. Butler lists every MCP tool your Claude Code exposes. Tools whose names look like reads (get, list, search, read, view, fetch, query, find, …) are pre-ticked. Untick anything that writes, then click **加入选中的工具并保存 (add the selected tools and save)**.
+2. In Settings, click **Detect from Claude Code**. Butler lists every MCP tool your Claude Code exposes. Tools whose names look like reads (get, list, search, read, view, fetch, query, find, …) are pre-ticked. Untick anything that writes, then click **Add the ticked tools and save**.
 3. Tool names are `mcp__<server>__<tool>`, where `<server>` is the name you gave the server in Claude Code. For the Atlassian (Jira) server named `atlassian`, this could be `mcp__atlassian__getJiraIssue`. For other trackers (Linear, GitLab, …), use the names that the detection shows.
 4. If the tracker's MCP server is configured in local scope or in a repository's `.mcp.json`, turn on `headlessProjectMcp`. Unattended runs read only your user-level settings, so they don't see those servers by default. With the setting on, Butler reads the repository's `.mcp.json` and `.claude/settings.local.json`, plus your `~/.claude.json` and `settings.json`, to find the servers you approved. It then copies your local-scope servers into private files under `~/.butler/mcp/`, along with the repository servers you have already approved in Claude Code. Those files can contain tokens. Disabled or unapproved servers are never loaded.
 
@@ -154,7 +156,7 @@ Placeholders are written as `{{name}}`. Unknown placeholders are left as they ar
 | `{{schema}}` | the field description |
 | `{{example}}` | a worked example |
 
-Keep `{{schema}}` and the output instructions. Butler also passes the JSON schema to `claude --json-schema` and validates the result. If the output fails validation, Butler retries once with the errors, and if it still fails it stores an incomplete handoff, marked **不完整 (incomplete)**. The tracker status field is called `jira` in the schema whatever tracker you use.
+Keep `{{schema}}` and the output instructions. Butler also passes the JSON schema to `claude --json-schema` and validates the result. If the output fails validation, Butler retries once with the errors, and if it still fails it stores an incomplete handoff, marked **Incomplete**. The tracker status field is called `jira` in the schema whatever tracker you use.
 
 ## Merge coordinator
 
@@ -167,7 +169,7 @@ When several tickets change the same repo, the merge coordinator keeps their mer
 
 Writing code, committing, testing and pushing your own branch never reach the coordinator. A command it can't recognize is let through.
 
-**Only in sessions Butler opens.** The review is a `PreToolUse` hook for the Bash tool in the `--settings` file Butler writes for each session, with `PostToolUse` and `PostToolUseFailure` hooks that tell Butler when the command has ended. Your global `settings.json` is not changed, so a `claude` you start yourself is not affected. The hooks run the `butler-hook` program that **安装 / 修复 (Install / repair)** copies to `~/.butler/bin`. When that copy differs from the one in the app (after an upgrade), Butler replaces it at startup; if it can't, merges are not checked and the log says why.
+**Only in sessions Butler opens.** The review is a `PreToolUse` hook for the Bash tool in the `--settings` file Butler writes for each session, with `PostToolUse` and `PostToolUseFailure` hooks that tell Butler when the command has ended. Your global `settings.json` is not changed, so a `claude` you start yourself is not affected. The hooks run the `butler-hook` program that **Install / repair** copies to `~/.butler/bin`. When that copy differs from the one in the app (after an upgrade), Butler replaces it at startup; if it can't, merges are not checked and the log says why.
 
 **How it decides.**
 
@@ -181,26 +183,26 @@ Writing code, committing, testing and pushing your own branch never reach the co
 
 **Fail-open.** If Butler isn't running, doesn't answer within 5 seconds, or the hook itself fails, the command goes ahead. The coordinator is a safety net and is never a reason a session can't merge.
 
-**What you see.** Each conflict it finds (a refusal, or an allowance with a later rebase) adds an entry to the recent merges on the **home page** (the repo, which tickets, the order it chose). There are no system notifications. A merge with no conflict adds no entry; Butler only holds it until it lands. The entries, holds and pending rebases survive a restart.
+**What you see.** Each conflict it finds (a refusal, or an allowance with a later rebase) adds an entry to **Recent merges** on the **Now** page (the repo, which tickets, the order it chose). There are no system notifications. A merge with no conflict adds no entry; Butler only holds it until it lands. The entries, holds and pending rebases survive a restart.
 
 **Requirements.** git 2.38 or newer (for `git merge-tree --write-tree`). `gh` is optional and used only for PR merges.
 
 **What it doesn't do.** It only judges conflicts that git can see. Whether the merged code compiles or behaves correctly, such as one side renaming a field the other still uses, is left to CI. It doesn't rebase or resolve conflicts for you, and it ignores git you run in your own terminal.
 
-## 隐私与个人 API (Privacy and personal API)
+## Privacy and personal API
 
-The personal API is optional. It is used only at the 完整 (full) level, to distil StateCore memory. Everything else works without it.
+The personal API is optional. It is used only at the **Full** level, to distil StateCore memory. Everything else works without it.
 
 | Setting | Key | Default | Accepted values and notes |
 |---------|-----|---------|---------------------------|
-| 隐私档位 (privacy level) | `llmLevel` | `metadata` | **`off` 关闭**, **`metadata` 仅元数据** and **`redacted` 脱敏文本**: the personal API is not called. **`full` 完整**: enables StateCore distillation, which sends memory contents unscanned (see [How memory works](#how-memory-works)). |
-| 服务地址 (base URL of an OpenAI-compatible API) | `llmBaseUrl` | empty | For example `https://api.openai.com/v1`, `https://api.deepseek.com/v1`, `https://openrouter.ai/api/v1`, or `http://localhost:11434/v1` for Ollama. It must be `https://`, except for `localhost`, `127.0.0.1` and `[::1]`. It can't include a user name, password, `?query` or `#fragment`. A trailing `/chat/completions` is removed. Empty means not configured, which works the same as `off`. |
-| 模型 (model) | `llmModel` | empty | No spaces, at most 200 characters, for example `deepseek-chat`. |
+| Privacy level | `llmLevel` | `metadata` | **`off` Off**, **`metadata` Metadata only** and **`redacted` Redacted text**: the personal API is not called. **`full` Full**: enables StateCore distillation, which sends memory contents unscanned (see [How memory works](#how-memory-works)). |
+| Service URL (base URL of an OpenAI-compatible API) | `llmBaseUrl` | empty | For example `https://api.openai.com/v1`, `https://api.deepseek.com/v1`, `https://openrouter.ai/api/v1`, or `http://localhost:11434/v1` for Ollama. It must be `https://`, except for `localhost`, `127.0.0.1` and `[::1]`. It can't include a user name, password, `?query` or `#fragment`. A trailing `/chat/completions` is removed. Empty means not configured, which works the same as `off`. |
+| Model | `llmModel` | empty | No spaces, at most 200 characters, for example `deepseek-chat`. |
 | API key | — | — | Encrypted with the OS keychain (macOS Keychain / Windows DPAPI) and stored in `app.db`. After saving, at most the last 4 characters are shown, and a key shorter than 12 characters is shown only as `••••`. If OS encryption is unavailable, Butler refuses to save the key. Not needed for a local server. |
-| 每月预算（美元）(monthly budget, USD) | `llmMonthlyBudgetUsd` | `1` | Up to two decimals. Before each call, Butler estimates the cost (input plus the maximum output). If this month's spend plus the estimate would exceed the budget, the call is refused and logged. With a budget of `0`, only a model priced at zero can be called. |
-| 价格表（美元 / 百万 token）(price table, USD per million tokens) | `llmPrices` | `* 15 75` | One rule per line: `model-pattern input-price output-price`. `*` is a wildcard and matching ignores case. The first matching rule wins. Empty lines and lines starting with `#` are ignored. The default is deliberately expensive, so set your provider's real prices, for example `deepseek-chat 0.27 1.1`, or `* 0 0` for a local model. A model with no matching rule is never called. |
-| 每次发送前弹窗确认 (confirm before every send) | `llmConfirm` | `0` (off) | `1` or `0`. While it is on, StateCore distillation does not run. |
-| 审计保留天数 (audit retention, days) | `auditRetentionDays` | `90` | 1 to 3650. The current month is always kept, because the budget check needs it. |
+| Monthly budget (USD) | `llmMonthlyBudgetUsd` | `1` | Up to two decimals. Before each call, Butler estimates the cost (input plus the maximum output). If this month's spend plus the estimate would exceed the budget, the call is refused and logged. With a budget of `0`, only a model priced at zero can be called. |
+| Price table (USD per million tokens) | `llmPrices` | `* 15 75` | One rule per line: `model-pattern input-price output-price`. `*` is a wildcard and matching ignores case. The first matching rule wins. Empty lines and lines starting with `#` are ignored. The default is deliberately expensive, so set your provider's real prices, for example `deepseek-chat 0.27 1.1`, or `* 0 0` for a local model. A model with no matching rule is never called. |
+| Confirm before sending | `llmConfirm` | `0` (off) | `1` or `0`. While it is on, StateCore distillation does not run. |
+| Keep audit records (days) | `auditRetentionDays` | `90` | 1 to 3650. The current month is always kept, because the budget check needs it. |
 
 A saved key that can no longer be decrypted, for example after the keychain was reset, is only written to the log. It is not audited.
 
