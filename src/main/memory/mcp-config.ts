@@ -13,7 +13,10 @@ export const WORKSPACE_SERVER = "butler-workspace";
 export const FEATURE_SERVER = "butler-feature";
 /** epic 的记忆：epic session、epic 下 feature 的总控和这些 feature 下 ticket 的所有 session 都挂（设计文档 2026-11-01）。 */
 export const EPIC_SERVER = "butler-epic";
-/** 只挂给总控 session：开子 session、列出仓库和 session（设计文档 2026-10-23 第二步）。 */
+/**
+ * 总控 session：开子 session、列出仓库和 session（设计文档 2026-10-23 第二步）。
+ * 普通 ticket session 也挂，但作用域是 member，只有 ask_user 和 report（BTL-190 第 2+3 点）。
+ */
 export const SESSIONS_SERVER = "butler-sessions";
 
 /** 怎么启动打包好的 StateCore MCP：command 是 Butler 自己的 Electron（process.execPath），script 是 bundle。 */
@@ -55,11 +58,11 @@ export function memoryServers(o: {
   };
 }
 
-/** 总控的 butler-sessions server：同样用 Butler 自己的 Electron 运行；ticket（feature、epic）和控制目录写死在配置里。 */
+/** butler-sessions server：同样用 Butler 自己的 Electron 运行；ticket（feature、epic）和控制目录写死在配置里。 */
 export function sessionsServer(o: {
   launcher: MemoryMcpLauncher;
-  /** epic: feature 总控的 feature 属于某个 epic（多出 epic_context 工具）。 */
-  scope: { ticketKey: string } | { featureId: number; epic?: boolean } | { epicId: number };
+  /** epic: feature 总控的 feature 属于某个 epic（多出 epic_context 工具）。member: 普通 ticket session（只有 ask_user、report）。 */
+  scope: { ticketKey: string; member?: boolean } | { featureId: number; epic?: boolean } | { epicId: number };
   requestsDir: string;
   resultsDir: string;
 }): Record<string, McpServerSpec> {
@@ -67,7 +70,7 @@ export function sessionsServer(o: {
   const target: Record<string, string> =
     "epicId" in scope ? { BUTLER_EPIC: String(scope.epicId) }
     : "featureId" in scope ? { BUTLER_FEATURE: String(scope.featureId), ...(scope.epic && { BUTLER_FEATURE_EPIC: "1" }) }
-    : { BUTLER_TICKET: scope.ticketKey };
+    : { BUTLER_TICKET: scope.ticketKey, ...(scope.member && { BUTLER_MEMBER: "1" }) };
   // 工具描述跟着 Butler 的语言（设计文档 2026-10-26）。
   target.BUTLER_LANG = currentLang();
   return {
@@ -96,7 +99,7 @@ export function ticketMcpFile(mcpDir: string, ticketKey: string, coordinator = f
 
 /**
  * 写（覆盖）这个 ticket 的 --mcp-config 文件：随机名的临时文件（0600、wx）再 rename，返回文件路径。
- * 总控的配置（多一个 butler-sessions）分开存，普通 session 的配置里永远没有它。
+ * 总控的配置（butler-sessions 带总控的工具）分开存；普通 session 的配置里 butler-sessions 只是 member（BTL-190 第 2+3 点）。
  */
 export function writeTicketMcpConfig(o: { mcpDir: string; ticketKey: string; servers: Record<string, McpServerSpec>; coordinator?: boolean }): string {
   return writeConfig(ticketMcpFile(o.mcpDir, o.ticketKey, o.coordinator), o.servers);

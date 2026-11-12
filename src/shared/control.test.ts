@@ -165,3 +165,38 @@ describe("parseControlRequest for end_session (task 11)", () => {
     expect(parseControlRequest({ v: 1, epicId: 3, op: "session_activity", session: 1 })).toBeNull();
   });
 });
+
+describe("parseControlRequest for ask_user and report (BTL-190 2+3)", () => {
+  const scopes = [{ ticketKey: "BTL-1" }, { featureId: 3 }, { epicId: 2 }];
+
+  it("accepts ask_user in all three scopes, dropping empty options and blank context", () => {
+    for (const s of scopes) {
+      expect(parseControlRequest({ v: 1, ...s, from: "s1", op: "ask_user", question: "Which?", options: ["A", "B"], context: "why" }))
+        .toEqual({ v: 1, ...s, from: "s1", op: "ask_user", question: "Which?", options: ["A", "B"], context: "why" });
+      expect(parseControlRequest({ v: 1, ...s, from: "s1", op: "ask_user", question: "Which?", options: [], context: "  " }))
+        .toEqual({ v: 1, ...s, from: "s1", op: "ask_user", question: "Which?" });
+    }
+  });
+
+  it("rejects ask_user without a question, with too many or bad options, or an over-long context", () => {
+    const base = { v: 1, ticketKey: "BTL-1", from: "s1", op: "ask_user" };
+    expect(parseControlRequest({ ...base, question: " " })).toBeNull();
+    expect(parseControlRequest({ ...base, question: "x".repeat(1001) })).toBeNull();
+    expect(parseControlRequest({ ...base, question: "q", options: ["1", "2", "3", "4", "5", "6", "7"] })).toBeNull();
+    expect(parseControlRequest({ ...base, question: "q", options: ["ok", ""] })).toBeNull();
+    expect(parseControlRequest({ ...base, question: "q", options: "A" })).toBeNull();
+    expect(parseControlRequest({ ...base, question: "q", context: "x".repeat(4001) })).toBeNull();
+  });
+
+  it("accepts report with a kind, defaulting to progress, and rejects unknown kinds or empty text", () => {
+    for (const s of scopes) {
+      expect(parseControlRequest({ v: 1, ...s, from: null, op: "report", text: "done it", kind: "done" }))
+        .toEqual({ v: 1, ...s, from: null, op: "report", text: "done it", kind: "done" });
+      expect(parseControlRequest({ v: 1, ...s, from: null, op: "report", text: "half way" }))
+        .toEqual({ v: 1, ...s, from: null, op: "report", text: "half way", kind: "progress" });
+    }
+    expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: null, op: "report", text: "x", kind: "finished" })).toBeNull();
+    expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: null, op: "report", text: "" })).toBeNull();
+    expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: null, op: "report", text: "x".repeat(4001) })).toBeNull();
+  });
+});

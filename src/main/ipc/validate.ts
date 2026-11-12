@@ -1,6 +1,7 @@
 import type { SensitiveTerm } from "../../shared/llm";
+import { CONTEXT_LIMIT } from "../../shared/control";
 import type {
-  AddRepoInput, CreateEpicInput, CreateFeatureInput, CreateTicketInput, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
+  AddRepoInput, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
 import { EPIC_NAME_LIMIT } from "../epics/epic-service";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
@@ -117,6 +118,28 @@ export function sessionIdArg(v: unknown): string {
 export function sessionIdsArg(v: unknown): string[] {
   if (!Array.isArray(v) || v.length > 500) throw new Error("invalid session ids");
   return v.map(sessionIdArg);
+}
+
+/** 「待你决定」条目的 id：正整数。 */
+export function inboxIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) throw new Error("invalid inbox item id");
+  return v;
+}
+
+/** 卡片上的回答：非空，最多 CONTEXT_LIMIT 字（送进 session 时还会按 sanitizeTask 清理）。 */
+export function inboxAnswerArg(v: unknown): string {
+  if (typeof v !== "string" || v.trim().length === 0 || v.length > CONTEXT_LIMIT) throw new Error("invalid answer");
+  return v;
+}
+
+/** 收件箱的范围：一个 feature、一个 epic，或者全部。 */
+export function inboxScopeArg(v: unknown): InboxScope {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid inbox scope");
+  if (o.all === true) return { all: true };
+  if (o.featureId !== undefined) return { featureId: featureIdArg(o.featureId) };
+  if (o.epicId !== undefined) return { epicId: epicIdArg(o.epicId) };
+  throw new Error("invalid inbox scope");
 }
 
 /** 目录：1–4096 字的字符串（存在与否由调用方检查）。 */

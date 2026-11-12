@@ -260,3 +260,25 @@ label.inline { display: inline-flex; gap: 6px; align-items: center; }
 /* 语言选择（设计文档 2026-10-26）。 */
 .language-picker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 12px; }
 .language-picker .muted { flex-basis: 100%; }
+/* 「待你决定」和汇报（BTL-190 第 2+3 点）：feature 页、epic 页终端上面的两栏，各自滚动；「现在」页「需要你」里的卡片。 */
+.inbox-panes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; max-height: 40vh; padding: 6px 16px 10px; border-bottom: 1px solid var(--border); }
+.inbox-pane { min-height: 0; overflow-y: auto; }
+.inbox-pane h3 { display: flex; gap: 8px; align-items: baseline; margin: 6px 0 4px; font-size: 12px; color: var(--muted); }
+.inbox-decisions h3 { color: var(--danger); }
+.inbox-reports ul { list-style: none; margin: 0; padding: 0; }
+.inbox-report { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.inbox-report p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.inbox-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 12px; }
+.inbox-head .who { font-weight: 600; }
+.inbox-kind { border-radius: 4px; padding: 0 6px; background: var(--pill-pending-bg); color: var(--pill-pending); }
+.inbox-kind.done { background: var(--pill-approved-bg); color: var(--pill-approved); }
+.inbox-kind.blocked { background: var(--pill-changes-bg); color: var(--pill-changes); }
+.inbox-card { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; margin-bottom: 8px; background: var(--bg); border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); border-radius: 8px; }
+.inbox-question { margin: 0; font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+.inbox-context { margin: 0; max-height: 8em; overflow-y: auto; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.inbox-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.inbox-answer { display: flex; gap: 6px; align-items: flex-end; }
+.inbox-queued { margin: 0; color: var(--ok); }
+.inbox-card .actions { display: flex; gap: 6px; }
+.now-decisions { display: flex; flex-direction: column; margin: 4px 0 6px; }
+@media (max-width: 720px) { .inbox-panes { grid-template-columns: minmax(0, 1fr); } }

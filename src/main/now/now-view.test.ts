@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
-import type { EpicView, FeatureView, MergeEvent, SessionView, TicketRepo, TicketView, WatchedPr } from "../../shared/types";
+import type { EpicView, FeatureView, InboxItemView, MergeEvent, SessionView, TicketRepo, TicketView, WatchedPr } from "../../shared/types";
 import { buildNowView, type NowInput } from "./now-view";
 
 function session(id: string, over: Partial<SessionView> = {}): SessionView {
@@ -94,7 +94,16 @@ function input(over: Partial<NowInput> = {}): NowInput {
     refreshing: () => null,
     merges: [],
     approvalText: "等你确认",
+    decisions: [],
     ...over,
+  };
+}
+
+let decisionId = 0;
+function decision(sessionId: string, over: Partial<InboxItemView> = {}): InboxItemView {
+  return {
+    id: ++decisionId, kind: "decision", sessionId, role: "ticket", ticketKey: null, featureId: null, epicId: null, repo: null, text: `q of ${sessionId}`,
+    options: [], context: null, reportKind: null, answer: null, createdAt: decisionId, open: true, target: { page: "ticket", key: "A-1", sessionId }, ...over,
   };
 }
 
@@ -157,6 +166,7 @@ describe("buildNowView", () => {
       mergeQueued: false,
       needsYou: null,
       refreshing: null,
+      decisions: 0,
       prs: prs["A-1"],
       idle: false,
       since: null,
@@ -297,5 +307,64 @@ describe("buildNowView", () => {
     }));
 
     expect(v.epics.map((e) => [e.id, e.features.map((f) => f.id)])).toEqual([[1, [10]]]);
+  });
+});
+
+describe("buildNowView with ask_user decisions (BTL-190 2+3)", () => {
+  it("a session with a pending decision shows the card instead of its Haiku or stuck reason, and is not folded away", () => {
+    const asked: string[] = [];
+    const t = ticket("A-1", null, [session("s1", { ticketKey: "A-1" }), session("s2", { ticketKey: "A-1" })]);
+    const d = decision("s1", { ticketKey: "A-1" });
+    const v = buildNowView(input({
+      tickets: [t], decisions: [d],
+      activity: (id) => act(id, { kind: "waiting", stuck: id === "s1", reason: "stuck" }),
+      needsYouReason: (id) => (asked.push(id), "haiku"),
+    }));
+    const rows = v.epics[0].features[0].rows;
+    expect(rows.find((r) => r.sessionId === "s1")).toMatchObject({ needsYou: null, decisions: 1, idle: false });
+    expect(rows.find((r) => r.sessionId === "s2")).toMatchObject({ needsYou: "haiku", decisions: 0 });
+    expect(asked).toEqual(["s2"]);
+    expect(ids(v.needsYou)).toEqual(["s2"]);
+    expect(v.decisions).toEqual([d]);
+    // 每条未决的条目算一件需要你。
+    expect(v.epics[0].counts.needsYou).toBe(2);
+  });
+
+  it("approval still wins over a pending decision", () => {
+    const t = ticket("A-1", null, [session("s1", { ticketKey: "A-1" })]);
+    const v = buildNowView(input({ tickets: [t], decisions: [decision("s1")], activity: (id) => act(id, { kind: "approval" }) }));
+    expect(v.needsYou[0]).toMatchObject({ sessionId: "s1", needsYou: "等你确认", decisions: 1 });
+  });
+
+  it("drops a coordinator's Haiku row when a session in its scope has a pending decision, but keeps it when stuck", () => {
+    const boss = session("boss", { ticketKey: "A-1", coordinator: true });
+    const child = session("c", { ticketKey: "A-1" });
+    const fc = session("fc", { featureId: 10 });
+    const ep = session("ep", { epicId: 1 });
+    const other = session("o", { ticketKey: "B-1" });
+    const a1 = ticket("A-1", 10, [boss, child]);
+    const b1 = ticket("B-1", 20, [other]);
+    const base = {
+      tickets: [a1, b1], features: [feature(10, 1, [a1], [fc]), feature(20, null, [b1])], epics: [epic(1, [ep])],
+      activity: (id: string) => act(id, { kind: "waiting" }), needsYouReason: () => "haiku",
+    };
+    const v = buildNowView(input({ ...base, decisions: [decision("c", { ticketKey: "A-1", featureId: 10, epicId: 1 })] }));
+    expect(ids(v.needsYou).sort()).toEqual(["o"]);
+    // 子 session 没有未决条目时总控照常。
+    expect(ids(buildNowView(input(base)).needsYou).sort()).toEqual(["boss", "c", "ep", "fc", "o"]);
+    // 总控自己提的不算子 session 的：它的卡片在，Haiku 行不在（因为它自己有未决条目）。
+    const own = buildNowView(input({ ...base, decisions: [decision("fc", { featureId: 10, epicId: 1, role: "feature_coordinator" })] }));
+    expect(ids(own.needsYou).sort()).toEqual(["boss", "c", "o"]);
+    // 卡住照样显示。
+    const stuck = buildNowView(input({ ...base, activity: (id) => act(id, { kind: "waiting", stuck: id === "fc", reason: "卡住" }), decisions: [decision("c", { ticketKey: "A-1", featureId: 10, epicId: 1 })] }));
+    expect(ids(stuck.needsYou).sort()).toEqual(["fc", "o"]);
+  });
+
+  it("lists decisions of sessions whose terminal is closed, oldest first", () => {
+    const late = decision("gone", { createdAt: 50 });
+    const early = decision("gone2", { createdAt: 10, open: false });
+    const v = buildNowView(input({ decisions: [late, early] }));
+    expect(v.decisions.map((d) => d.sessionId)).toEqual(["gone2", "gone"]);
+    expect(v.epics).toEqual([]);
   });
 });

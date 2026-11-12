@@ -23,6 +23,20 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : lang === "zh"
         ? "用 start_session 开子 session 时按任务选 model：范围小、目标明确的用 sonnet，需要判断的用 opus，拿不准就用 opus。"
         : "When you open a child session with start_session, pick the model by task: sonnet for small, well-defined work, opus for work that needs judgment, and opus when unsure.",
+  // 「待你决定」和汇报（BTL-190 第 2+3 点）：所有 session 都有 ask_user 和 report。
+  (lang) =>
+    lang === "zh"
+      ? "需要用户回答一个具体的问题、做一个决定时，调用 butler-sessions 的 ask_user（问题、可选的几个选项、背景），然后结束这一轮，等回答送进来；" +
+        "不要拿它问\"要我继续吗\"\"还有别的吗\"这类话，做完就直接停下。做完一块、或者卡住了，用 report 汇报一句（kind 是 done 或 blocked），管你的总控会收到；中间的进展用 progress。"
+      : "When you need the user to answer a specific question or make a decision, call ask_user from butler-sessions (question, optional options, context), then end your turn and wait for the answer to arrive. " +
+        "Do not use it for \"shall I continue?\" or \"anything else?\"; when you are done, just stop. When you finish a piece of work or get blocked, send one line with report (kind done or blocked) and your coordinator will get it; use progress for updates along the way.",
+  // 总控：子 session 的问题和汇报 Butler 已经处理了。
+  (lang, kind) =>
+    kind !== "coordinator"
+      ? null
+      : lang === "zh"
+        ? "子 session 用 ask_user 提的问题会直接摆在用户面前，不用你再转述一遍；它们 done / blocked 的汇报会在你停下来时自动送到。"
+        : "Questions your child sessions raise with ask_user go straight to the user, so do not ask them again; their done and blocked reports are delivered to you automatically when you stop.",
   // 换新：所有 session 都可能被换新。
   (lang) =>
     lang === "zh"

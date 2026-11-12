@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
-import type { NowRow, NowView, UsageSummary, WatchedPr } from "../../shared/types";
-import { groupSummary, needsYouText, prPill, rowPlace, rowText, usageDetails, usageLine } from "./now-view";
+import type { InboxItemView, NowRow, NowView, UsageSummary, WatchedPr } from "../../shared/types";
+import { groupSummary, inboxWho, needsYouText, needsYouTotal, prPill, rowPlace, rowText, usageDetails, usageLine } from "./now-view";
 import { S, setUiLang } from "./strings";
 
 const NOW = 1_000_000_000_000;
@@ -19,7 +19,7 @@ const pr = (over: Partial<WatchedPr> = {}): WatchedPr => ({
 
 const row = (over: Partial<NowRow> = {}): NowRow => ({
   sessionId: "s1", ticketKey: "BTL-1", title: "通知中心", repo: null, coordinator: false, activity: act(), mergeQueued: false,
-  needsYou: null, refreshing: null, prs: [], idle: false, since: NOW - 3 * MIN, target: { page: "ticket", key: "BTL-1", sessionId: "s1" }, ...over,
+  needsYou: null, refreshing: null, decisions: 0, prs: [], idle: false, since: NOW - 3 * MIN, target: { page: "ticket", key: "BTL-1", sessionId: "s1" }, ...over,
 });
 
 const usage = (over: Partial<UsageSummary> = {}): UsageSummary => ({
@@ -33,6 +33,14 @@ describe("rowText", () => {
   it("needs-you rows read 等你 with the reason", () => {
     const r = rowText(row({ needsYou: "问要不要拆 PR", activity: act({ kind: "waiting" }) }), S, NOW);
     expect(r).toMatchObject({ main: "等你：问要不要拆 PR", tone: "danger" });
+  });
+
+  it("a row with a pending ask_user reads 等你决定 (BTL-190 2+3)", () => {
+    expect(rowText(row({ decisions: 2, activity: act({ kind: "waiting" }) }), S, NOW)).toMatchObject({ main: "等你决定", tone: "danger" });
+    // 停在确认上的照样先说确认。
+    expect(rowText(row({ decisions: 1, needsYou: "等你确认", activity: act({ kind: "approval" }) }), S, NOW).main).toBe("等你：等你确认");
+    setUiLang("en");
+    expect(rowText(row({ decisions: 1, activity: act({ kind: "waiting" }) }), S, NOW).main).toBe("Waiting for your decision");
   });
 
   it("stuck rows read 卡住 with the reason, or 卡住了 when there is none", () => {
@@ -151,7 +159,7 @@ describe("rowPlace", () => {
     const loose = row({ sessionId: "s9", ticketKey: "BTL-9", title: "独立的 ticket" });
     const counts = { active: 1, needsYou: 0, stuck: 0 };
     const view: NowView = {
-      needsYou: [], running: 4, merges: [],
+      needsYou: [], decisions: [], running: 4, merges: [],
       epics: [
         { id: 3, name: "结账改版", rows: [epicRow], counts, features: [{ id: 7, name: "支付重构", rows: [coord, ticket], counts }] },
         { id: null, name: "", rows: [], counts, features: [{ id: null, name: "", rows: [loose], counts }] },
@@ -161,5 +169,26 @@ describe("rowPlace", () => {
     expect(rowPlace(view, coord, S)).toEqual({ label: "总控", name: "支付重构" });
     expect(rowPlace(view, epicRow, S)).toEqual({ label: "总控", name: "结账改版" });
     expect(rowPlace(view, loose, S)).toEqual({ label: "BTL-9", name: "独立的 ticket" });
+  });
+});
+
+describe("inbox helpers (BTL-190 2+3)", () => {
+  const item = (over: Partial<InboxItemView> = {}): InboxItemView => ({
+    id: 1, kind: "decision", sessionId: "s1", role: "ticket", ticketKey: "BTL-1", featureId: 2, epicId: null, repo: null, text: "用哪个？",
+    options: [], context: null, reportKind: null, answer: null, createdAt: NOW, open: true, target: { page: "ticket", key: "BTL-1", sessionId: "s1" }, ...over,
+  });
+
+  it("names who asked or reported", () => {
+    expect(inboxWho(item(), S)).toBe("BTL-1");
+    expect(inboxWho(item({ repo: "api" }), S)).toBe("BTL-1（api）");
+    expect(inboxWho(item({ role: "ticket_coordinator" }), S)).toBe("BTL-1 总控");
+    expect(inboxWho(item({ role: "feature_coordinator", ticketKey: null }), S)).toBe("feature 总控");
+    setUiLang("en");
+    expect(inboxWho(item({ role: "epic", ticketKey: null }), S)).toBe("Epic session");
+  });
+
+  it("counts every pending decision as one more thing that needs you", () => {
+    expect(needsYouTotal(null)).toBe(0);
+    expect(needsYouTotal({ needsYou: [row()], decisions: [item(), item({ id: 2 })], epics: [], running: 1, merges: [] })).toBe(3);
   });
 });

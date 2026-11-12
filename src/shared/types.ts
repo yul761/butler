@@ -1,4 +1,5 @@
 import type { SessionActivity } from "./activity";
+import type { ReportKind } from "./control";
 import type { FeatureHandoff, Handoff, Pr } from "./handoff";
 export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
@@ -464,6 +465,8 @@ export interface NowRow {
   needsYou: string | null;
   /** Butler 正在给这个 session 换新（计划 16）：做到哪一步；不在换新为 null。 */
   refreshing: RefreshStep | null;
+  /** 这个 session 未决的「待你决定」有几条（BTL-190 第 2+3 点）；有的话 needsYou 为 null，卡片在 NowView.decisions 里。 */
+  decisions: number;
   prs: WatchedPr[];
   /** 停着、不需要你、没有开着的 PR / CI：默认折起来。 */
   idle: boolean;
@@ -496,9 +499,50 @@ export interface NowEpic {
   counts: NowCounts;
 }
 
+/** 「待你决定」一条的状态（BTL-190 第 2+3 点）。 */
+export type InboxStatus = "pending" | "answered" | "dismissed" | "superseded";
+/** 提问 / 汇报的是哪种 session：ticket 的 session、ticket 总控、feature 总控、修复 session、epic session。 */
+export type InboxRole = "ticket" | "ticket_coordinator" | "feature_coordinator" | "fix" | "epic";
+
+/** 界面上的一条「待你决定」或汇报。 */
+export interface InboxItemView {
+  id: number;
+  kind: "decision" | "report";
+  /** 提问 / 汇报的 session 现在的 head（换新过的话是新的 id）。 */
+  sessionId: string;
+  role: InboxRole;
+  ticketKey: string | null;
+  featureId: number | null;
+  epicId: number | null;
+  /** ticket 开了几个仓库时才填（仓库目录名）。 */
+  repo: string | null;
+  /** decision 是问题，report 是汇报正文。 */
+  text: string;
+  options: string[];
+  context: string | null;
+  reportKind: ReportKind | null;
+  /** decision：用户已经答了、还没送进终端（等它停下来）时是答案；没答为 null。 */
+  answer: string | null;
+  createdAt: number;
+  /** 这个 session 的终端开着。 */
+  open: boolean;
+  target: NowTarget;
+}
+
+/** feature 页、epic 页上面的两栏：未决的「待你决定」（从早到晚）和最近的汇报（从新到旧）。 */
+export interface InboxView {
+  decisions: InboxItemView[];
+  reports: InboxItemView[];
+}
+
+/** 收件箱看哪一块：一个 feature（含它的 ticket）、一个 epic（含它的 feature 和 ticket），或者全部。 */
+export type InboxScope = { featureId: number } | { epicId: number } | { all: true };
+
 export interface NowView {
-  /** 全部需要你的行，按 since 从早到晚。 */
+  /** 全部需要你的行，按 since 从早到晚。有未决「待你决定」的 session 不在这里（它的卡片在 decisions 里）。 */
   needsYou: NowRow[];
+  /** 全部未决的「待你决定」（BTL-190 第 2+3 点），从早到晚；终端关着的 session 的也在。 */
+  decisions: InboxItemView[];
   epics: NowEpic[];
   /** 开着终端的 Butler session 数。 */
   running: number;

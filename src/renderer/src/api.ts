@@ -7,7 +7,7 @@ import type {
   AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
-  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult,
+  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView,
 } from "../../shared/types";
 
 declare global {
@@ -93,6 +93,9 @@ export const api = {
   mergeEvents: () => call<MergeEvent[]>(IPC.mergeEvents),
   prWatchList: () => call<WatchedPr[]>(IPC.prWatchList),
   nowView: () => call<NowView>(IPC.nowView),
+  inbox: (scope: InboxScope) => call<InboxView>(IPC.inboxList, scope),
+  answerInbox: (id: number, text: string) => call<boolean>(IPC.inboxAnswer, id, text),
+  dismissInbox: (id: number) => call<boolean>(IPC.inboxDismiss, id),
   followups: (ticketKey: string) => call<Followup[]>(IPC.followupsList, ticketKey),
   setFollowupStatus: (id: string, status: FollowupStatus) => call<void>(IPC.followupsSetStatus, id, status),
   handoffs: (ticketKey: string) => call<HandoffRecord[]>(IPC.handoffsList, ticketKey),

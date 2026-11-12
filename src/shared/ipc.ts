@@ -64,6 +64,12 @@ export const IPC = {
   prWatchList: "prwatch:list",
   /** 「现在」页的整份数据（计划 14）。 */
   nowView: "now:view",
+  /** 「待你决定」和汇报（BTL-190 第 2+3 点）：一个 feature、一个 epic 或者全部的未决条目和最近的汇报。 */
+  inboxList: "inbox:list",
+  /** 在卡片上回答一条「待你决定」：记下答案，等提问的 session 停下来送进去。 */
+  inboxAnswer: "inbox:answer",
+  /** 「不用了」：结束一条「待你决定」，什么都不送。 */
+  inboxDismiss: "inbox:dismiss",
   followupsList: "followups:list",
   followupsSetStatus: "followups:setStatus",
   handoffsList: "handoffs:list",
@@ -101,7 +107,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.epicsList, IPC.epicsCreate, IPC.epicsRename, IPC.epicsAddRepo, IPC.epicsRemoveRepo, IPC.epicsArchive, IPC.epicsArchived, IPC.epicsUnarchive, IPC.epicsOpenSession,
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
-  IPC.mergeEvents, IPC.prWatchList, IPC.nowView,
+  IPC.mergeEvents, IPC.prWatchList, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,

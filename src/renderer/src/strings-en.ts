@@ -1,5 +1,6 @@
 import type { PrivacyLevel } from "../../shared/llm";
-import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { ReportKind } from "../../shared/control";
+import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 
 /** "1 ticket", "2 tickets". */
@@ -302,6 +303,24 @@ export const EN: UiStrings = {
   nowPr: (num: number | null, state: string) => `PR${num === null ? "" : ` #${num}`} ${state}`,
   nowActive: (count: number) => `${count} active`,
   nowNeedsYouCount: (count: number) => `${count} ${count === 1 ? "needs" : "need"} you`,
+  nowWaitingDecision: "Waiting for your decision",
+  inboxReports: "Reports",
+  inboxDecisions: "Decisions for you",
+  inboxNoReports: "No reports yet.",
+  inboxNoDecisions: "Nothing to decide.",
+  inboxReportKinds: { progress: "Progress", done: "Done", blocked: "Blocked" } as Record<ReportKind, string>,
+  inboxWho: (role: InboxRole, ticketKey: string | null, repo: string | null) =>
+    role === "ticket" ? `${ticketKey ?? ""}${repo ? ` (${repo})` : ""}`
+    : role === "ticket_coordinator" ? `${ticketKey ?? ""} coordinator`
+    : role === "feature_coordinator" ? "Feature coordinator"
+    : role === "fix" ? "Fix session"
+    : "Epic session",
+  inboxAnswerPlaceholder: "Type an answer (⌘/Ctrl+Enter to send)",
+  inboxSend: "Answer",
+  inboxGoTerminal: "Go to terminal",
+  inboxDismiss: "Not needed",
+  inboxQueued: (answer: string) => `Answered "${answer}"; it will be sent when the session stops.`,
+  inboxTerminalClosed: "Terminal closed",
   nowStuckCount: (count: number) => `${count} stuck`,
   nowNoneActive: "nothing active",
   nowIdle: (count: number) => `Idle ${count}`,

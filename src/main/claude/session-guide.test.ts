@@ -29,7 +29,19 @@ describe("session guide", () => {
     }
   });
 
-  it("写到 mcp 目录，内容没变就不重写", () => {
+  it("所有 session 都知道 ask_user 和 report，只有总控被告知不要转述子 session 的问题（BTL-190 第 2+3 点）", () => {
+    for (const kind of ["ticket", "coordinator"] as const) {
+      expect(sessionGuide("zh", kind)).toContain("ask_user");
+      expect(sessionGuide("zh", kind)).toContain("结束这一轮");
+      expect(sessionGuide("zh", kind)).toContain("要我继续吗");
+      expect(sessionGuide("en", kind)).toContain("report (kind done or blocked)");
+    }
+    expect(sessionGuide("zh", "coordinator")).toContain("不用你再转述");
+    expect(sessionGuide("en", "coordinator")).toContain("do not ask them again");
+    expect(sessionGuide("zh", "ticket")).not.toContain("不用你再转述");
+  });
+
+    it("写到 mcp 目录，内容没变就不重写", () => {
     const dir = tempDir("guide");
     const file = writeSessionGuide(dir, "zh", "ticket");
     expect(file).toBe(join(dir, "guide-ticket-zh.md"));

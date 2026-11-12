@@ -75,7 +75,7 @@ test("a ticket over two repos: a session per repo and a coordinator that sees bo
     expect(started.repo).toBe("repo");
 
     // 子 session 出现在同一个 ticket 下，开在 repo 的 worktree 里，任务作为第一条消息提交。
-    await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace cwd=${worktree} adddirs=\n`);
+    await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-sessions cwd=${worktree} adddirs=\n`);
     const childButton = page.locator(".sessions-bar .session").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
     await expect(childButton).toBeVisible();
     await expect(childButton).toHaveAttribute("title", /^总控 session 交给你的任务：[\n ]+boss-says-build-the-ui[\n ]+开始之前先用 recall 读一下 ticket 记忆（butler-memory）里的背景和约定。/);

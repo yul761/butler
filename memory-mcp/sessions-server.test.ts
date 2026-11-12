@@ -4,9 +4,11 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
 import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, REASON_LIMIT } from "../src/shared/control";
-import { EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, SessionsServer, serveStdio, TOOLS, TOOLS_EN } from "./sessions-server";
+import {
+  EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, SessionsServer, serveStdio, TOOLS, TOOLS_EN,
+} from "./sessions-server";
 
-function setup(timeoutMs = 2000, scope: { ticketKey: string } | { featureId: number; epic?: boolean } | { epicId: number } = { ticketKey: "P-1" }, lang: "zh" | "en" = "zh") {
+function setup(timeoutMs = 2000, scope: { ticketKey: string; member?: boolean } | { featureId: number; epic?: boolean } | { epicId: number } = { ticketKey: "P-1" }, lang: "zh" | "en" = "zh") {
   const dir = tempDir("butler-control-");
   const requestsDir = join(dir, "requests");
   const resultsDir = join(dir, "results");
@@ -38,7 +40,7 @@ describe("butler-sessions MCP server", () => {
     expect(await server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
     expect(await server.handle({ jsonrpc: "2.0", id: 2, method: "ping" })).toEqual({ jsonrpc: "2.0", id: 2, result: {} });
     const list = (await server.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-    expect(list.result.tools.map((t) => t.name)).toEqual(["list_repos", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session"]);
+    expect(list.result.tools.map((t) => t.name)).toEqual(["list_repos", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session", "ask_user", "report"]);
     expect(await server.handle({ jsonrpc: "2.0", id: 4, method: "resources/list" })).toMatchObject({ id: 4, error: { code: -32601 } });
   });
 
@@ -133,8 +135,8 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
   it("lists the feature tools", async () => {
     const { server } = setup(2000, { featureId: 7 });
     const list = (await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-    expect(list.result.tools.map((t) => t.name)).toEqual(["list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session"]);
-    expect(list.result.tools).toEqual(FEATURE_TOOLS);
+    expect(list.result.tools.map((t) => t.name)).toEqual(["list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session", "ask_user", "report"]);
+    expect(list.result.tools).toEqual([...FEATURE_TOOLS, ...INBOX_TOOLS]);
     // 英文版只换描述：名字、顺序、必填参数一样。
     const shape = (tools: readonly { name: string; inputSchema: object }[]) => tools.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]);
     expect(shape(FEATURE_TOOLS_EN)).toEqual(shape(FEATURE_TOOLS));
@@ -223,7 +225,7 @@ const EPIC_NAMES = ["list_features", "list_repos", "create_feature", "list_sessi
 
 describe("butler-sessions for an epic session (design 2026-11-01)", () => {
   it("lists the epic tools in order, in both languages", async () => {
-    expect((await tools(setup(2000, { epicId: 3 }).server))).toEqual(EPIC_TOOLS);
+    expect((await tools(setup(2000, { epicId: 3 }).server))).toEqual([...EPIC_TOOLS, ...INBOX_TOOLS]);
     expect(EPIC_TOOLS.map((t) => t.name)).toEqual(EPIC_NAMES);
     expect(EPIC_TOOLS_EN.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []])).toEqual(EPIC_TOOLS.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]));
     const create = EPIC_TOOLS.find((t) => t.name === "create_feature")!;
@@ -231,7 +233,7 @@ describe("butler-sessions for an epic session (design 2026-11-01)", () => {
     for (const t of EPIC_TOOLS) expect(t.description).toMatch(/[\u4e00-\u9fff]/);
     const en = await tools(setup(2000, { epicId: 3 }, "en").server);
     expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
-    expect(en.map((t) => t.name)).toEqual(EPIC_NAMES);
+    expect(en.map((t) => t.name)).toEqual([...EPIC_NAMES, "ask_user", "report"]);
   });
 
   it("tells Claude that tickets belong to the feature's own session and the user opens it", () => {
@@ -296,9 +298,9 @@ describe("butler-sessions for an epic session (design 2026-11-01)", () => {
 describe("epic_context for a feature coordinator in an epic", () => {
   it("appears only when the feature belongs to an epic", async () => {
     expect((await tools(setup(2000, { featureId: 7 }).server)).map((t) => t.name)).not.toContain("epic_context");
-    expect(await tools(setup(2000, { featureId: 7, epic: true }).server)).toEqual([...FEATURE_TOOLS, EPIC_CONTEXT_TOOL]);
+    expect(await tools(setup(2000, { featureId: 7, epic: true }).server)).toEqual([...FEATURE_TOOLS, EPIC_CONTEXT_TOOL, ...INBOX_TOOLS]);
     const en = await tools(setup(2000, { featureId: 7, epic: true }, "en").server);
-    expect(en.at(-1)).toEqual(EPIC_CONTEXT_TOOL_EN);
+    expect(en.at(-3)).toEqual(EPIC_CONTEXT_TOOL_EN);
     expect(EPIC_CONTEXT_TOOL_EN.description).not.toBe(EPIC_CONTEXT_TOOL.description);
     expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
   });
@@ -395,5 +397,55 @@ describe("refresh_session (plan 16)", () => {
       }
       expect(existsSync(requestsDir)).toBe(false);
     }
+  });
+});
+
+describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
+  it("a member (normal ticket session) only has ask_user and report, in both languages", async () => {
+    expect(await tools(setup(2000, { ticketKey: "P-1", member: true }).server)).toEqual([...INBOX_TOOLS]);
+    const en = await tools(setup(2000, { ticketKey: "P-1", member: true }, "en").server);
+    expect(en).toEqual([...INBOX_TOOLS_EN]);
+    expect(/[一-鿿]/.test(JSON.stringify(en))).toBe(false);
+    // 英文版名字和必填参数一样；描述告诉模型「要我继续吗」这类不要用 ask_user。
+    expect(INBOX_TOOLS_EN.map((t) => [t.name, t.inputSchema.required])).toEqual(INBOX_TOOLS.map((t) => [t.name, t.inputSchema.required]));
+    expect(INBOX_TOOLS[0].description).toContain("要我继续吗");
+    expect(INBOX_TOOLS_EN[0].description).toContain("shall I continue?");
+  });
+
+  it("a member cannot call coordinator tools; nothing is sent", async () => {
+    const { server, requestsDir } = setup(200, { ticketKey: "P-1", member: true });
+    const r = (await callTool(server, "start_session", { repo: "api", task: "t" })) as { result: { isError?: boolean; content: { text: string }[] } };
+    expect(r.result.isError).toBe(true);
+    expect(r.result.content[0].text).toContain("start_session");
+    expect(existsSync(requestsDir) ? readdirSync(requestsDir) : []).toEqual([]);
+  });
+
+  it("sends ask_user and report in each scope, dropping empty options and blank context, defaulting kind to progress", async () => {
+    for (const scope of [{ ticketKey: "P-1", member: true }, { featureId: 7 }, { epicId: 3 }] as const) {
+      const { server, answer } = setup(2000, scope);
+      const ids = "ticketKey" in scope ? { ticketKey: "P-1" } : scope;
+      const ask = callTool(server, "ask_user", { question: "Which?", options: [], context: " " });
+      expect(await answer({ v: 1, ok: true, value: { id: 1 } })).toEqual({ v: 1, ...ids, from: "boss", op: "ask_user", question: "Which?" });
+      await ask;
+      const ask2 = callTool(server, "ask_user", { question: "Which?", options: ["A", "B"], context: "why" });
+      expect(await answer({ v: 1, ok: true, value: { id: 2 } })).toEqual({ v: 1, ...ids, from: "boss", op: "ask_user", question: "Which?", options: ["A", "B"], context: "why" });
+      await ask2;
+      const rep = callTool(server, "report", { text: "half" });
+      expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, ...ids, from: "boss", op: "report", text: "half", kind: "progress" });
+      await rep;
+    }
+  });
+
+  it("refuses bad ask_user and report arguments without asking Butler", async () => {
+    const { server, requestsDir } = setup(200);
+    for (const [name, args] of [
+      ["ask_user", {}], ["ask_user", { question: " " }], ["ask_user", { question: "q", options: ["1", "2", "3", "4", "5", "6", "7"] }],
+      ["ask_user", { question: "q", options: [""] }], ["ask_user", { question: "q", context: 3 }],
+      ["report", {}], ["report", { text: "x", kind: "finished" }], ["report", { text: "x".repeat(4001) }],
+    ] as const) {
+      const r = (await callTool(server, name, args)) as { result: { isError?: boolean } };
+      expect(r.result.isError).toBe(true);
+    }
+    expect(existsSync(requestsDir) ? readdirSync(requestsDir) : []).toEqual([]);
   });
 });

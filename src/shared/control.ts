@@ -28,8 +28,28 @@ function okModel(v: unknown): boolean {
   return v === undefined || START_MODELS.includes(v);
 }
 
+/** report 的种类（BTL-190 第 2+3 点）：progress 只存不送；done、blocked 还送进所属总控的终端。 */
+export type ReportKind = "progress" | "done" | "blocked";
+export const REPORT_KINDS: readonly ReportKind[] = ["progress", "done", "blocked"];
+/** ask_user 的问题最多这么多字符；context 最多 CONTEXT_LIMIT；选项最多 OPTIONS_MAX 个、每个最多 OPTION_LIMIT。 */
+export const QUESTION_LIMIT = 1000;
+export const CONTEXT_LIMIT = 4000;
+export const OPTIONS_MAX = 6;
+export const OPTION_LIMIT = 200;
+/** report 的正文最多这么多字符。 */
+export const REPORT_LIMIT = 4000;
+
+/**
+ * 所有 Butler session 都有的两个请求（BTL-190 第 2+3 点）：ask_user 记一条「待你决定」，report 交一条汇报。
+ * 三种作用域的请求都带它们；普通 ticket session 的 butler-sessions 只有这两个工具（member 作用域）。
+ */
+export type InboxControlOp =
+  | { op: "ask_user"; question: string; options?: string[]; context?: string }
+  | { op: "report"; text: string; kind: ReportKind };
+
 /** ticket 总控的请求（设计文档 2026-10-23）。 */
 export type TicketControlRequest =
+  | ({ v: 1; ticketKey: string; from: string | null } & InboxControlOp)
   | { v: 1; ticketKey: string; from: string | null; op: "list_repos" }
   | { v: 1; ticketKey: string; from: string | null; op: "list_sessions" }
   | { v: 1; ticketKey: string; from: string | null; op: "session_activity"; session: string }
@@ -57,6 +77,7 @@ export const MAX_CREATE_REPOS = 20;
  * create_ticket：在 feature 下建 ticket（worktree 放进 feature 工作区）；feature 只有一个仓库时 repos 可以省略。
  */
 export type FeatureControlRequest =
+  | ({ v: 1; featureId: number; from: string | null } & InboxControlOp)
   | { v: 1; featureId: number; from: string | null; op: "list_tickets" }
   | { v: 1; featureId: number; from: string | null; op: "list_repos" }
   | { v: 1; featureId: number; from: string | null; op: "create_ticket"; ticket: string; title?: string; repos?: string[]; branch?: string }
@@ -70,6 +91,7 @@ export type FeatureControlRequest =
 
 /** epic session 的请求（设计文档 2026-11-01）：create_feature 在 epic 下建 feature，epic 只有一个仓库时 repos 可以省略。 */
 export type EpicControlRequest =
+  | ({ v: 1; epicId: number; from: string | null } & InboxControlOp)
   | { v: 1; epicId: number; from: string | null; op: "list_features" }
   | { v: 1; epicId: number; from: string | null; op: "list_repos" }
   | { v: 1; epicId: number; from: string | null; op: "create_feature"; name: string; repos?: string[]; brief: string }
@@ -99,6 +121,32 @@ function sessionOp<B extends object>(
   if (o.op === "end_session" && okReason(o.reason)) return { ...base, op: "end_session", session: o.session, reason: o.reason };
   return null;
 }
+/** 三种请求共用的 ask_user、report；不合规返回 null。 */
+function inboxOp<B extends object>(base: B, o: Record<string, unknown>): (B & InboxControlOp) | null {
+  if (o.op === "ask_user") {
+    if (typeof o.question !== "string" || !o.question.trim() || o.question.length > QUESTION_LIMIT) return null;
+    if (o.context !== undefined && (typeof o.context !== "string" || o.context.length > CONTEXT_LIMIT)) return null;
+    if (o.options !== undefined) {
+      if (!Array.isArray(o.options) || o.options.length > OPTIONS_MAX) return null;
+      if (!o.options.every((x) => typeof x === "string" && x.trim().length > 0 && x.length <= OPTION_LIMIT)) return null;
+    }
+    const options = o.options as string[] | undefined;
+    const context = typeof o.context === "string" && o.context.trim() ? o.context : undefined;
+    return {
+      ...base, op: "ask_user", question: o.question,
+      ...(options !== undefined && options.length > 0 && { options }),
+      ...(context !== undefined && { context }),
+    };
+  }
+  if (o.op === "report") {
+    if (typeof o.text !== "string" || !o.text.trim() || o.text.length > REPORT_LIMIT) return null;
+    if (o.kind !== undefined && !REPORT_KINDS.includes(o.kind as ReportKind)) return null;
+    return { ...base, op: "report", text: o.text, kind: (o.kind as ReportKind | undefined) ?? "progress" };
+  }
+  return null;
+}
+const isInboxOp = (op: unknown) => op === "ask_user" || op === "report";
+
 const isSessionOp = (op: unknown) => op === "session_activity" || op === "end_session" || op === "refresh_session";
 
 /** 主进程按运行时类型检查请求（文件谁都能写）：不合规返回 null。ticketKey 和 featureId 必须正好有一个。 */
@@ -109,6 +157,7 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   if ("epicId" in o) {
     if ("ticketKey" in o || "featureId" in o || !Number.isSafeInteger(o.epicId) || (o.epicId as number) <= 0) return null;
     const base = { v: 1 as const, epicId: o.epicId as number, from };
+    if (isInboxOp(o.op)) return inboxOp(base, o);
     if (o.op === "list_features") return { ...base, op: "list_features" };
     if (o.op === "list_repos") return { ...base, op: "list_repos" };
     if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
@@ -127,6 +176,7 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   if ("featureId" in o) {
     if ("ticketKey" in o || !Number.isSafeInteger(o.featureId) || (o.featureId as number) <= 0) return null;
     const base = { v: 1 as const, featureId: o.featureId as number, from };
+    if (isInboxOp(o.op)) return inboxOp(base, o);
     if (o.op === "list_tickets") return { ...base, op: "list_tickets" };
     if (o.op === "list_repos") return { ...base, op: "list_repos" };
     if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
@@ -157,6 +207,7 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   }
   if (!okName(o.ticketKey, 200)) return null;
   const base = { v: 1 as const, ticketKey: o.ticketKey, from };
+  if (isInboxOp(o.op)) return inboxOp(base, o);
   if (o.op === "list_repos") return { ...base, op: "list_repos" };
   if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
   if (isSessionOp(o.op)) return sessionOp(base, o);

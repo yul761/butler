@@ -2,17 +2,21 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
-import { BRIEF_LIMIT, CONTROL_VERSION, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, REASON_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult } from "../src/shared/control";
+import {
+  BRIEF_LIMIT, CONTEXT_LIMIT, CONTROL_VERSION, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, OPTION_LIMIT, OPTIONS_MAX, QUESTION_LIMIT, REASON_LIMIT, REPORT_KINDS,
+  REPORT_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult, type ReportKind,
+} from "../src/shared/control";
 import type { Lang } from "../src/shared/i18n";
 
 /**
- * butler-sessions：只挂给总控 session 的 MCP server（设计文档 2026-10-23 第二步）。stdio 上按行收发 JSON-RPC 2.0；
+ * butler-sessions：挂给总控 session 的 MCP server（设计文档 2026-10-23 第二步）。stdio 上按行收发 JSON-RPC 2.0；
  * 工具调用写成请求文件交给 Butler，等结果文件。不开端口，也不调用任何模型。
+ * 所有 Butler session 都有 ask_user 和 report（BTL-190 第 2+3 点）：普通 ticket session 也挂这个 server，作用域是 member，只有这两个工具。
  */
 
 export interface SessionsServerOptions {
   /** 这个总控管哪个 ticket（或哪个 feature，设计文档 2026-10-26）：来自 Butler 写的 mcp 配置，不来自模型。 */
-  scope: { ticketKey: string } | { featureId: number; epic?: boolean } | { epicId: number };
+  scope: { ticketKey: string; member?: boolean } | { featureId: number; epic?: boolean } | { epicId: number };
   /** 工具描述和错误用哪种语言（Butler 写进 mcp 配置的 BUTLER_LANG；设计文档 2026-10-26）。默认中文。 */
   lang?: Lang;
   /** 总控自己的 session id（claude 传下来的 BUTLER_SESSION），子 session 记成由它开启。 */
@@ -86,6 +90,88 @@ export const REFRESH_SESSION_TOOL_EN = {
     properties: { session: { type: "string", description: "the session id (id in list_sessions)" } },
   },
 } as const;
+
+/** 所有 Butler session 都有的 ask_user（BTL-190 第 2+3 点）：记一条「待你决定」，回答由 Butler 作为一条消息发回来。 */
+export const ASK_USER_TOOL = {
+  name: "ask_user",
+  description:
+    "把一件需要用户拍板的事记成一条「待你决定」：Butler 在界面上把它显示成一张卡片（问题、背景、选项），用户回答以后 Butler 把回答作为一条消息发给你。" +
+    "调用以后就结束这一轮：不要接着干活，也不要在回复里再问一遍，等回答到了再继续。" +
+    "只用于真的要用户决定的事，比如几个方案选哪个、要不要做有风险或不可撤销的操作、缺了只有用户知道的信息。" +
+    "「要我继续吗」「还有别的吗」「下一步做什么」这类不要用它：直接停下，等用户的下一条指令。",
+  inputSchema: {
+    type: "object",
+    properties: {
+      question: { type: "string", description: `要用户决定什么，一两句话说清楚，最长 ${QUESTION_LIMIT} 字符` },
+      options: {
+        type: "array",
+        items: { type: "string" },
+        maxItems: OPTIONS_MAX,
+        description: `可选：给用户点的选项，最多 ${OPTIONS_MAX} 个，每个最长 ${OPTION_LIMIT} 字符。用户也可以不选、自己打字回答。`,
+      },
+      context: { type: "string", description: `可选：背景，为什么要问、各个选项的利弊，最长 ${CONTEXT_LIMIT} 字符` },
+    },
+    required: ["question"],
+    additionalProperties: false,
+  },
+} as const;
+
+export const ASK_USER_TOOL_EN = {
+  ...ASK_USER_TOOL,
+  description:
+    "Record something the user has to decide as a \"needs your decision\" item: Butler shows it as a card (question, context, options), and when the user answers, Butler sends you the answer as a message. " +
+    "After calling it, end your turn: do not keep working and do not ask the question again in your reply; continue when the answer arrives. " +
+    "Use it only for real decisions, such as which of several approaches to take, whether to do something risky or irreversible, or information only the user has. " +
+    "Do not use it for \"shall I continue?\", \"anything else?\" or \"what next?\": just stop and wait for the user's next instruction.",
+  inputSchema: {
+    ...ASK_USER_TOOL.inputSchema,
+    properties: {
+      question: { type: "string", description: `what the user has to decide, in a sentence or two, at most ${QUESTION_LIMIT} characters` },
+      options: {
+        ...ASK_USER_TOOL.inputSchema.properties.options,
+        description: `optional: choices for the user to click, at most ${OPTIONS_MAX}, each at most ${OPTION_LIMIT} characters. The user can also type an answer instead.`,
+      },
+      context: { type: "string", description: `optional: background, why you ask and the trade-offs of each option, at most ${CONTEXT_LIMIT} characters` },
+    },
+  },
+} as const;
+
+/** 所有 Butler session 都有的 report（BTL-190 第 2+3 点）：汇报存进「汇报」栏；done / blocked 还送进管它的总控。 */
+export const REPORT_TOOL = {
+  name: "report",
+  description:
+    "把进展交给总控和用户：存进 Butler 的「汇报」栏。kind 是 done 或 blocked 时，Butler 还会在管你的总控停下来时把它送进总控的终端，总控不用来问。" +
+    "交给你的事做完了用 done；卡住了、要总控或别的 session 帮忙用 blocked；中途的进展用 progress（只存不送，默认）。" +
+    "要用户拍板的事用 ask_user，不要用 report。",
+  inputSchema: {
+    type: "object",
+    properties: {
+      text: { type: "string", description: `汇报内容：做了什么、结果、还剩什么，最长 ${REPORT_LIMIT} 字符` },
+      kind: { type: "string", enum: [...REPORT_KINDS], description: "progress（默认）、done 或 blocked" },
+    },
+    required: ["text"],
+    additionalProperties: false,
+  },
+} as const;
+
+export const REPORT_TOOL_EN = {
+  ...REPORT_TOOL,
+  description:
+    "Hand your progress to your coordinator and the user: it is stored in Butler's \"Reports\" pane. When kind is done or blocked, Butler also delivers it into the terminal of the coordinator that manages you once it stops, so it does not have to ask. " +
+    "Use done when the work you were given is finished; blocked when you are stuck and need the coordinator or another session; progress for progress along the way (stored only, the default). " +
+    "For things the user has to decide, use ask_user, not report.",
+  inputSchema: {
+    ...REPORT_TOOL.inputSchema,
+    properties: {
+      text: { type: "string", description: `the report: what you did, the result, what is left, at most ${REPORT_LIMIT} characters` },
+      kind: { ...REPORT_TOOL.inputSchema.properties.kind, description: "progress (default), done or blocked" },
+    },
+  },
+} as const;
+
+/** 每套工具后面都跟着这两个。 */
+export const INBOX_TOOLS = [ASK_USER_TOOL, REPORT_TOOL] as const;
+export const INBOX_TOOLS_EN = [ASK_USER_TOOL_EN, REPORT_TOOL_EN] as const;
 
 /** start_session 的 model 参数（两种总控共用）。 */
 const MODEL_PROP = {
@@ -461,6 +547,8 @@ const TEXT = {
     needRefresh: "refresh_session 需要字符串参数 session",
     taskTooLong: `task 太长（最多 ${TASK_LIMIT} 字）`,
     needPlan: `set_epic_plan 需要字符串参数 plan（不能为空，最多 ${EPIC_PLAN_MAX_CHARS} 字符）`,
+    needQuestion: `ask_user 需要字符串参数 question（不能为空，最多 ${QUESTION_LIMIT} 字符）；options 最多 ${OPTIONS_MAX} 个非空字符串、每个最多 ${OPTION_LIMIT} 字符；context 最多 ${CONTEXT_LIMIT} 字符`,
+    needReport: `report 需要字符串参数 text（不能为空，最多 ${REPORT_LIMIT} 字符）；kind 只能是 progress、done 或 blocked`,
     noTool: (t: string) => `没有这个工具：${t}`,
   },
   en: {
@@ -482,6 +570,8 @@ const TEXT = {
     needRefresh: "refresh_session needs a string argument, session",
     taskTooLong: `task is too long (at most ${TASK_LIMIT} characters)`,
     needPlan: `set_epic_plan needs a string argument, plan (not empty, at most ${EPIC_PLAN_MAX_CHARS} characters)`,
+    needQuestion: `ask_user needs a string argument, question (not empty, at most ${QUESTION_LIMIT} characters); options is at most ${OPTIONS_MAX} non-empty strings of at most ${OPTION_LIMIT} characters; context is at most ${CONTEXT_LIMIT} characters`,
+    needReport: `report needs a string argument, text (not empty, at most ${REPORT_LIMIT} characters); kind must be progress, done or blocked`,
     noTool: (t: string) => `No such tool: ${t}`,
   },
 };
@@ -540,21 +630,30 @@ export class SessionsServer {
 
   private tools(): readonly object[] {
     const scope = this.o.scope;
-    if ("epicId" in scope) return this.en ? EPIC_TOOLS_EN : EPIC_TOOLS;
+    const inbox = this.en ? INBOX_TOOLS_EN : INBOX_TOOLS;
+    if ("epicId" in scope) return [...(this.en ? EPIC_TOOLS_EN : EPIC_TOOLS), ...inbox];
     if ("featureId" in scope) {
       const base = this.en ? FEATURE_TOOLS_EN : FEATURE_TOOLS;
-      return scope.epic ? [...base, this.en ? EPIC_CONTEXT_TOOL_EN : EPIC_CONTEXT_TOOL] : base;
+      return [...base, ...(scope.epic ? [this.en ? EPIC_CONTEXT_TOOL_EN : EPIC_CONTEXT_TOOL] : []), ...inbox];
     }
-    return this.en ? TOOLS_EN : TOOLS;
+    // 普通 ticket session（member）只有 ask_user 和 report。
+    if (scope.member) return inbox;
+    return [...(this.en ? TOOLS_EN : TOOLS), ...inbox];
   }
 
   private async call(params: Record<string, unknown>): Promise<object> {
     const args = (params.arguments ?? {}) as Record<string, unknown>;
     const scope = this.o.scope;
+    const base =
+      "epicId" in scope ? { v: CONTROL_VERSION, epicId: scope.epicId, from: this.o.from } as const
+      : "featureId" in scope ? { v: CONTROL_VERSION, featureId: scope.featureId, from: this.o.from } as const
+      : { v: CONTROL_VERSION, ticketKey: scope.ticketKey, from: this.o.from } as const;
     const req =
-      "epicId" in scope ? this.epicRequest(scope.epicId, params.name, args)
-      : "featureId" in scope ? this.featureRequest(scope.featureId, params.name, args, scope.epic === true)
-      : this.ticketRequest(scope.ticketKey, params.name, args);
+      this.inboxRequest(base, params.name, args)
+      ?? ("epicId" in scope ? this.epicRequest(scope.epicId, params.name, args)
+        : "featureId" in scope ? this.featureRequest(scope.featureId, params.name, args, scope.epic === true)
+        : scope.member ? toolError(this.text.noTool(String(params.name)))
+        : this.ticketRequest(scope.ticketKey, params.name, args));
     if ("content" in req) return req;
     // 建 ticket、建 feature 要建 worktree / 工作区（大仓库在 Windows 上可能要一会儿）：多等一些。
     const result = await this.send(req, req.op === "create_ticket" || req.op === "create_feature" ? CREATE_WAIT_FACTOR : 1);
@@ -672,6 +771,31 @@ export class SessionsServer {
       default:
         return toolError(this.text.noTool(String(tool)));
     }
+  }
+
+  /** ask_user、report（三种作用域都有）；不是这两个工具返回 null。Butler 也会再查一遍。 */
+  private inboxRequest(
+    base: { v: 1; from: string | null } & ({ ticketKey: string } | { featureId: number } | { epicId: number }), tool: unknown, args: Record<string, unknown>,
+  ): ControlRequest | ToolError | null {
+    if (tool === "ask_user") {
+      const { question, options, context } = args;
+      const okOptions = options === undefined
+        || (Array.isArray(options) && options.length <= OPTIONS_MAX && options.every((x) => typeof x === "string" && x.trim() && x.length <= OPTION_LIMIT));
+      if (typeof question !== "string" || !question.trim() || question.length > QUESTION_LIMIT || !okOptions) return toolError(this.text.needQuestion);
+      if (context !== undefined && (typeof context !== "string" || context.length > CONTEXT_LIMIT)) return toolError(this.text.needQuestion);
+      return {
+        ...base, op: "ask_user", question,
+        ...(Array.isArray(options) && options.length > 0 && { options: options as string[] }),
+        ...(typeof context === "string" && context.trim() && { context }),
+      } as ControlRequest;
+    }
+    if (tool === "report") {
+      const { text, kind } = args;
+      if (typeof text !== "string" || !text.trim() || text.length > REPORT_LIMIT) return toolError(this.text.needReport);
+      if (kind !== undefined && !REPORT_KINDS.includes(kind as ReportKind)) return toolError(this.text.needReport);
+      return { ...base, op: "report", text, kind: (kind as ReportKind | undefined) ?? "progress" } as ControlRequest;
+    }
+    return null;
   }
 
   /** end_session：session 和 reason 都要，reason 不能是空白、不能超长（Butler 也会再查一遍）。 */

@@ -1,5 +1,5 @@
 import type { SessionActivity } from "../../shared/activity";
-import type { NowCounts, NowRow, NowView, UsageKind, UsageSummary, WatchedPr } from "../../shared/types";
+import type { InboxItemView, NowCounts, NowRow, NowView, UsageKind, UsageSummary, WatchedPr } from "../../shared/types";
 import { activityText } from "./components/TicketActivity";
 import type { UiStrings } from "./strings";
 
@@ -34,7 +34,7 @@ function prText(prs: WatchedPr[], S: UiStrings): { main: string; tone: RowTone }
 }
 
 /**
- * 一行的文字：需要你 → 换新中 → 卡住 → 合并排队 → 正在做的事 → PR 和 CI → 已停下。
+ * 一行的文字：需要你 → 等你决定 → 换新中 → 卡住 → 合并排队 → 正在做的事 → PR 和 CI → 已停下。
  * sub 是活动的细节（文件、命令、多久没有输出）；停着的不写（时长在最右边一列）。
  * 换新中的 session 在跑的是 Butler 输入的 /handoff、/clear，活动和卡住都不看；只有停在确认上（needsYou 不为 null）的照样显示出来。
  */
@@ -43,6 +43,8 @@ export function rowText(r: NowRow, S: UiStrings, now: number): { main: string; s
   const live = a && !stoppedKind(a) ? activityText(a, S, now) : null;
   const sub = live?.sub ?? null;
   if (r.needsYou !== null) return { main: isStuck(r) || r.needsYou === "" ? needsYouText(r, S) : S.nowWaitingFor(r.needsYou), sub, tone: "danger" };
+  // 用 ask_user 提了问题（BTL-190 第 2+3 点）：问题本身在「需要你」的卡片上，这里只说在等你决定。
+  if (r.decisions > 0) return { main: S.nowWaitingDecision, sub, tone: "danger" };
   if (r.refreshing !== null) return { main: r.refreshing === "close" ? S.nowClosing : S.nowRefreshing, sub: null, tone: "warn" };
   if (isStuck(r)) return { main: S.nowStuck, sub, tone: "danger" };
   if (r.mergeQueued) return { main: S.nowMergeQueued, sub, tone: "warn" };
@@ -116,3 +118,9 @@ export function rowPlace(view: NowView, r: NowRow, S: UiStrings): { label: strin
   }
   return { label, name: r.title ?? "" };
 }
+
+/** 侧栏上「需要你」的数：需要你的行加上未决的「待你决定」（每条一件）。 */
+export const needsYouTotal = (v: NowView | null): number => (v ? v.needsYou.length + v.decisions.length : 0);
+
+/** 「待你决定」、汇报是谁发的：ticket 号（多仓库时带仓库名）、某某总控、修复 session、epic session。 */
+export const inboxWho = (i: InboxItemView, S: UiStrings): string => S.inboxWho(i.role, i.ticketKey, i.repo);

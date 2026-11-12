@@ -268,6 +268,8 @@ export class SessionsRepo {
     withTransaction(this.db, () => {
       for (const id of ids) {
         this.db.prepare(`DELETE FROM merge_waiters WHERE session_id = ? AND notified_at IS NULL`).run(id);
+        // 这个 session 的「待你决定」和汇报（BTL-190 第 2+3 点）一起删掉。
+        this.db.prepare(`DELETE FROM inbox_items WHERE session_id = ?`).run(id);
         this.delete(id);
       }
     });

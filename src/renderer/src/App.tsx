@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState }
 import type { EpicView, FeatureView, NowTarget, NowView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
+import { needsYouTotal } from "./now-view";
 import { routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
@@ -150,7 +151,7 @@ export function App() {
   return (
     <div className="app">
       <Sidebar
-        tickets={tickets} features={features} epics={epics} unclaimedCount={unclaimedCount} needsYouCount={nowView?.needsYou.length ?? 0} route={route} onNavigate={setRoute}
+        tickets={tickets} features={features} epics={epics} unclaimedCount={unclaimedCount} needsYouCount={needsYouTotal(nowView)} route={route} onNavigate={setRoute}
         onNew={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)} onNewEpic={() => setShowNewEpic(true)}
         keepAwake={keepAwake} onKeepAwake={(on) => api.setKeepAwake(on).then(setKeepAwake, reportError)}
       />
@@ -190,6 +191,7 @@ export function App() {
                 onOpenTicket={(key) => setRoute({ page: "ticket", key })}
                 onTicketCreated={goTicket}
                 focusSession={route.focusSession}
+                onOpenTarget={openTarget}
               />
             )}
             {route.page === "epic" && currentEpic && (
@@ -199,6 +201,7 @@ export function App() {
                 onOpenFeature={(id) => setRoute({ page: "feature", id })}
                 onFeatureCreated={goFeature}
                 focusSession={route.focusSession}
+                onOpenTarget={openTarget}
               />
             )}
             {route.page === "unclaimed" && <UnclaimedPage tickets={allTickets} />}

@@ -1,7 +1,8 @@
 import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
-import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { ReportKind } from "../../shared/control";
+import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "已合并·待收尾",
@@ -306,6 +307,25 @@ const ZH = {
   nowPr: (n: number | null, state: string) => `PR${n === null ? "" : ` #${n}`} ${state}`,
   nowActive: (n: number) => `${n} 个进行中`,
   nowNeedsYouCount: (n: number) => `${n} 需要你`,
+  nowWaitingDecision: "等你决定",
+  // 「待你决定」和汇报（BTL-190 第 2+3 点）。
+  inboxReports: "汇报",
+  inboxDecisions: "待你决定",
+  inboxNoReports: "还没有汇报。",
+  inboxNoDecisions: "没有要你决定的。",
+  inboxReportKinds: { progress: "进展", done: "完成", blocked: "卡住" } as Record<ReportKind, string>,
+  inboxWho: (role: InboxRole, ticketKey: string | null, repo: string | null) =>
+    role === "ticket" ? `${ticketKey ?? ""}${repo ? `（${repo}）` : ""}`
+    : role === "ticket_coordinator" ? `${ticketKey ?? ""} 总控`
+    : role === "feature_coordinator" ? "feature 总控"
+    : role === "fix" ? "修复 session"
+    : "epic session",
+  inboxAnswerPlaceholder: "输入回答（⌘/Ctrl+Enter 发送）",
+  inboxSend: "回答",
+  inboxGoTerminal: "去终端",
+  inboxDismiss: "不用了",
+  inboxQueued: (answer: string) => `已回答「${answer}」，等它停下来再送进去。`,
+  inboxTerminalClosed: "终端关着",
   nowStuckCount: (n: number) => `${n} 卡住`,
   nowNoneActive: "无进行中",
   nowIdle: (n: number) => `空闲 ${n}`,

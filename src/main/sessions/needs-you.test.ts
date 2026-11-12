@@ -3,7 +3,7 @@ import type { ActivityKind } from "../../shared/activity";
 import type { HeadlessOutcome, HeadlessRequest } from "../claude/headless";
 import { jobOf, type HeadlessExecDeps } from "../handoff/headless-exec";
 import { setLang } from "../i18n";
-import { fallbackNeedsYou, judgeNeedsYou, NEEDS_YOU_REPLY_CHARS, NeedsYouTracker, type NeedsYouVerdict } from "./needs-you";
+import { judgeNeedsYou, lastSentence, NEEDS_YOU_REPLY_CHARS, NeedsYouTracker, type NeedsYouVerdict } from "./needs-you";
 
 function deps(out: HeadlessOutcome, seen: HeadlessRequest[] = [], labels: string[] = []): HeadlessExecDeps {
   return {
@@ -68,30 +68,30 @@ describe("judgeNeedsYou", () => {
   });
 });
 
-describe("fallbackNeedsYou", () => {
-  it("falls back to a trailing question mark when the judge fails", () => {
-    expect(fallbackNeedsYou("要拆成两个 PR 吗？").needsYou).toBe(true);
-    expect(fallbackNeedsYou("推上去了。").needsYou).toBe(false);
+describe("lastSentence (the reason when the judge says needs-you without one)", () => {
+  it("looks past trailing Markdown, brackets and quotes", () => {
+    expect(lastSentence("**要拆吗？**")).toBe("要拆吗？");
+    expect(lastSentence("测试过了。`要合并吗?`\n")).toBe("要合并吗?");
   });
 
-  it("looks past trailing Markdown, brackets and quotes for the question mark", () => {
-    expect(fallbackNeedsYou("**要拆吗？**")).toEqual({ needsYou: true, reason: "要拆吗？" });
-    expect(fallbackNeedsYou("做完了。**").needsYou).toBe(false);
-    expect(fallbackNeedsYou("测试过了。`要合并吗?`\n")).toEqual({ needsYou: true, reason: "要合并吗?" });
-    expect(fallbackNeedsYou("（要不要先 rebase？）").needsYou).toBe(true);
-    expect(fallbackNeedsYou("他问「要合并吗？」").needsYou).toBe(true);
-    expect(fallbackNeedsYou('Should I "merge it?"').needsYou).toBe(true);
-    expect(fallbackNeedsYou("Done (see #12)").needsYou).toBe(false);
-  });
-
-  it("takes the last sentence as the reason, ignoring trailing blanks, at most 80 characters", () => {
-    expect(fallbackNeedsYou("推上去了。要拆成两个 PR 吗？  \n")).toEqual({ needsYou: true, reason: "要拆成两个 PR 吗？" });
-    expect(fallbackNeedsYou("Pushed. Should I merge it?")).toEqual({ needsYou: true, reason: "Should I merge it?" });
-    expect(fallbackNeedsYou("测试都过了\n\n要合并吗??")).toEqual({ needsYou: true, reason: "要合并吗??" });
-    expect(fallbackNeedsYou("Done.")).toEqual({ needsYou: false, reason: "" });
+  it("takes the last sentence, ignoring trailing blanks, at most 80 characters", () => {
+    expect(lastSentence("推上去了。要拆成两个 PR 吗？  \n")).toBe("要拆成两个 PR 吗？");
+    expect(lastSentence("Pushed. Should I merge it?")).toBe("Should I merge it?");
+    expect(lastSentence("测试都过了\n\n要合并吗??")).toBe("要合并吗??");
     const long = `${"长".repeat(100)}吗？`;
-    expect([...fallbackNeedsYou(long).reason]).toHaveLength(80);
-    expect(fallbackNeedsYou(long).reason.endsWith("吗？")).toBe(true);
+    expect([...lastSentence(long)]).toHaveLength(80);
+    expect(lastSentence(long).endsWith("吗？")).toBe(true);
+  });
+});
+
+describe("the stricter needs-you prompt (BTL-190 2+3)", () => {
+  it("tells Haiku that open-ended offers only wait for the next instruction, in both languages", async () => {
+    const seen: HeadlessRequest[] = [];
+    await judgeNeedsYou(deps(ok({ needs_user: false, reason: "" }), seen), "做完了，要我继续吗？", "/r");
+    for (const q of ["要我继续吗", "还有别的吗", "下一步做什么", "拿不准就答 false"]) expect(seen[0].prompt).toContain(q);
+    setLang("en");
+    await judgeNeedsYou(deps(ok({ needs_user: false, reason: "" }), seen), "Done. Shall I continue?", "/r");
+    for (const q of ["shall I continue?", "anything else?", "what should I do next?", "When unsure, answer false."]) expect(seen[1].prompt).toContain(q);
   });
 });
 
@@ -176,14 +176,16 @@ describe("NeedsYouTracker", () => {
     expect(h.notified()).toBe(0);
   });
 
-  it("falls back to a trailing question mark when the judge fails, and does not judge that reply again", async () => {
+  it("a failed judge means not needs-you, even with a trailing question mark, and that reply is not judged again (BTL-190 2+3)", async () => {
     const h = harness([stopped("s1", "m1", "推上去了。要拆成两个 PR 吗？"), stopped("s2", "m2", "推上去了。")]);
     h.tracker.update();
     h.calls[0].done(null);
     h.calls[1].done(null);
     await h.settle();
-    expect(h.tracker.reasonOf("s1")).toBe("要拆成两个 PR 吗？");
+    expect(h.tracker.reasonOf("s1")).toBeNull();
+    expect(h.tracker.undecided("s1")).toBe(false);
     expect(h.tracker.reasonOf("s2")).toBeNull();
+    expect(h.notified()).toBe(0);
     h.tracker.update();
     expect(h.calls).toHaveLength(2);
   });
@@ -194,7 +196,8 @@ describe("NeedsYouTracker", () => {
     const tracker = new NeedsYouTracker({ judge: () => Promise.reject(new Error("boom")), sessions: () => heads, notify: () => undefined, log: (m) => logs.push(m) });
     tracker.update();
     await new Promise((r) => setTimeout(r, 0));
-    expect(tracker.reasonOf("s1")).toBe("要合并吗？");
+    expect(tracker.reasonOf("s1")).toBeNull();
+    expect(tracker.undecided("s1")).toBe(false);
     expect(logs).toHaveLength(1);
   });
 

@@ -1,5 +1,5 @@
 import type { SessionActivity } from "../../shared/activity";
-import type { EpicView, FeatureView, MergeEvent, NowCounts, NowEpic, NowFeature, NowRow, NowTarget, NowView, RefreshStep, SessionView, TicketView, WatchedPr } from "../../shared/types";
+import type { EpicView, FeatureView, InboxItemView, MergeEvent, NowCounts, NowEpic, NowFeature, NowRow, NowTarget, NowView, RefreshStep, SessionView, TicketView, WatchedPr } from "../../shared/types";
 
 export interface NowInput {
   tickets: TicketView[];
@@ -14,6 +14,8 @@ export interface NowInput {
   merges: MergeEvent[];
   /** 停在确认（权限、AskUserQuestion、ExitPlanMode）上时的理由文案，比如"等你确认"。 */
   approvalText: string;
+  /** 全部未决的「待你决定」（BTL-190 第 2+3 点），从早到晚；sessionId 是提问的 session 现在的 head。 */
+  decisions: InboxItemView[];
 }
 
 /** 算进「现在」页的 session：Butler 开的、终端开着。 */
@@ -37,22 +39,34 @@ interface RowBase {
   target: NowTarget;
 }
 
+/** 总控所管的范围：这个 ticket、这个 feature 或这个 epic 里别的 session 提的「待你决定」，它的 Haiku 行就不出现（多半在转述同一件事）。 */
+type Scope = { ticketKey: string } | { featureId: number } | { epicId: number } | null;
+
+function childDecision(i: NowInput, s: SessionView, scope: Scope): boolean {
+  if (scope === null) return false;
+  return i.decisions.some((d) => d.sessionId !== s.id && ("ticketKey" in scope ? d.ticketKey === scope.ticketKey : "featureId" in scope ? d.featureId === scope.featureId : d.epicId === scope.epicId));
+}
+
 /**
- * 一个开着的 session 的行：needsYouReason 只在确认和卡住都不是时才问（每行最多一次）。
- * 正在换新的不折起来，也不算需要你（回复、卡住都是 Butler 输入的 /handoff 带来的），只有停在确认上的照样算：
+ * 一个开着的 session 的行，「需要你」按优先级（BTL-190 第 2+3 点）：确认 → 未决的 ask_user → 真的卡住 → Haiku 的判断。
+ * - 有未决 ask_user 的：needsYou 为 null，decisions 记条数，卡片在 NowView.decisions 里（每条一张，说的就是那个问题）；行不折起来。
+ * - 总控所管范围里有子 session 的未决条目时，总控的 Haiku 判断不算（needsYouReason 不问）。
+ * needsYouReason 每行最多问一次。正在换新的不折起来，也不算需要你（回复、卡住都是 Butler 输入的 /handoff 带来的），只有停在确认上的照样算：
  * Butler 的 /handoff 也可能要用户批准权限，不显示出来换新就一直卡着。
  */
-function sessionRow(i: NowInput, s: SessionView, base: RowBase): NowRow {
+function sessionRow(i: NowInput, s: SessionView, base: RowBase, scope: Scope = null): NowRow {
   const activity = i.activity(s.id);
   const mergeQueued = i.mergeQueued(s.id);
   const refreshing = i.refreshing(s.id);
+  const decisions = i.decisions.filter((d) => d.sessionId === s.id).length;
   const needsYou =
     activity?.kind === "approval" ? i.approvalText
-    : refreshing !== null ? null
+    : refreshing !== null || decisions > 0 ? null
     : activity?.stuck === true ? (activity.reason ?? "")
+    : childDecision(i, s, scope) ? null
     : i.needsYouReason(s.id);
-  const idle = refreshing === null && needsYou === null && !mergeQueued && stopped(activity) && !base.prs.some(prBusy);
-  return { ...base, sessionId: s.id, activity, mergeQueued, needsYou, refreshing, idle, since: activity?.startedAt ?? s.lastActivityAt };
+  const idle = refreshing === null && needsYou === null && decisions === 0 && !mergeQueued && stopped(activity) && !base.prs.some(prBusy);
+  return { ...base, sessionId: s.id, activity, mergeQueued, needsYou, refreshing, decisions, idle, since: activity?.startedAt ?? s.lastActivityAt };
 }
 
 /** 一个 ticket 的行：总控在前；开了几个仓库的 session 就标上仓库名；每个 PR 只挂在一行上。没有开着的 session 但有开着的 PR 时出一行只有 PR 的。 */
@@ -62,7 +76,7 @@ function ticketRows(i: NowInput, t: TicketView): NowRow[] {
   const target = (sessionId: string | null): NowTarget => ({ page: "ticket", key: t.key, sessionId });
   if (sessions.length === 0) {
     if (!prs.some((p) => p.state === "open")) return [];
-    return [{ sessionId: null, ticketKey: t.key, title: t.title, repo: null, coordinator: false, activity: null, mergeQueued: false, needsYou: null, refreshing: null, prs, idle: false, since: null, target: target(null) }];
+    return [{ sessionId: null, ticketKey: t.key, title: t.title, repo: null, coordinator: false, activity: null, mergeQueued: false, needsYou: null, refreshing: null, decisions: 0, prs, idle: false, since: null, target: target(null) }];
   }
   const repoIds = new Set(sessions.filter((s) => !s.coordinator && s.repoId !== null).map((s) => s.repoId));
   const named = repoIds.size > 1;
@@ -78,7 +92,7 @@ function ticketRows(i: NowInput, t: TicketView): NowRow[] {
       coordinator: s.coordinator,
       prs: prs.filter((p) => owner.get(p) === s),
       target: target(s.id),
-    });
+    }, s.coordinator ? { ticketKey: t.key } : null);
   });
 }
 
@@ -87,14 +101,15 @@ function featureSessionRows(i: NowInput, f: FeatureView): NowRow[] {
   const sessions = f.sessions.filter(live);
   const coordinator = (s: SessionView): boolean => s.fixesSession === null;
   return [...sessions.filter(coordinator), ...sessions.filter((s) => !coordinator(s))].map((s) =>
-    sessionRow(i, s, { ticketKey: null, title: null, repo: null, coordinator: coordinator(s), prs: [], target: { page: "feature", id: f.id, sessionId: s.id } }),
+    sessionRow(i, s, { ticketKey: null, title: null, repo: null, coordinator: coordinator(s), prs: [], target: { page: "feature", id: f.id, sessionId: s.id } }, coordinator(s) ? { featureId: f.id } : null),
   );
 }
 
 function countRows(rows: NowRow[]): NowCounts {
   return {
     active: rows.filter((r) => !r.idle).length,
-    needsYou: rows.filter((r) => r.needsYou !== null).length,
+    // 每条未决的「待你决定」算一件。
+    needsYou: rows.reduce((n, r) => n + (r.needsYou !== null ? 1 : 0) + r.decisions, 0),
     stuck: rows.filter((r) => r.activity?.stuck === true).length,
   };
 }
@@ -135,7 +150,7 @@ export function buildNowView(i: NowInput): NowView {
   const epics: NowEpic[] = [];
   for (const e of i.epics) {
     const rows = e.sessions.filter(live).map((s) =>
-      sessionRow(i, s, { ticketKey: null, title: null, repo: null, coordinator: true, prs: [], target: { page: "epic", id: e.id, sessionId: s.id } }),
+      sessionRow(i, s, { ticketKey: null, title: null, repo: null, coordinator: true, prs: [], target: { page: "epic", id: e.id, sessionId: s.id } }, { epicId: e.id }),
     );
     const g = nowEpic(e.id, e.name, rows, i.features.filter((f) => f.epicId === e.id).map(featureOf));
     if (g) epics.push(g);
@@ -147,5 +162,6 @@ export function buildNowView(i: NowInput): NowView {
 
   const all = epics.flatMap((e) => [...e.rows, ...e.features.flatMap((f) => f.rows)]);
   const needsYou = all.filter((r) => r.needsYou !== null).sort(bySince);
-  return { needsYou, epics, running: all.filter((r) => r.sessionId !== null).length, merges: i.merges };
+  const decisions = [...i.decisions].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id);
+  return { needsYou, decisions, epics, running: all.filter((r) => r.sessionId !== null).length, merges: i.merges };
 }

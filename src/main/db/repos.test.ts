@@ -353,10 +353,12 @@ describe("migration 9: fix sessions", () => {
 
 describe("hidden-session cleanup (BTL-190 item 8)", () => {
   /** 升级之前（上一个版本）的数据库。 */
+  // dismissed_at 那一条迁移之前的数据库（后面还有别的迁移时也成立）。
   const previous = () => {
     const db = new DatabaseSync(":memory:");
-    for (const sql of MIGRATIONS.slice(0, MIGRATIONS.length - 1)) db.exec(sql);
-    db.exec(`PRAGMA user_version = ${MIGRATIONS.length - 1}`);
+    const at = MIGRATIONS.findIndex((m) => m.includes("ADD COLUMN dismissed_at"));
+    for (const sql of MIGRATIONS.slice(0, at)) db.exec(sql);
+    db.exec(`PRAGMA user_version = ${at}`);
     return db;
   };
   const add = (repo: SessionsRepo, id: string, o: { lastActivityAt?: number; createdAt?: number } = {}) =>

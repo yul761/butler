@@ -238,9 +238,13 @@ function interactive() {
   };
   const mcp = flag("--mcp-config");
   let servers = [];
+  // butler-sessions 是 feature 模式（BUTLER_FEATURE）的才是 feature 总控：普通 ticket session 也挂 butler-sessions（只有 ask_user、report）。
+  let featureCoordinator = false;
   if (mcp) {
     try {
-      servers = Object.keys(JSON.parse(fs.readFileSync(mcp, "utf8")).mcpServers || {});
+      const all = JSON.parse(fs.readFileSync(mcp, "utf8")).mcpServers || {};
+      servers = Object.keys(all);
+      featureCoordinator = Boolean(all["butler-sessions"]?.env?.BUTLER_FEATURE);
     } catch (e) {
       servers = [`unreadable ${mcp}: ${e.message}`];
     }
@@ -401,8 +405,7 @@ function interactive() {
       );
       return;
     }
-    // 挂着 butler-sessions 的是 feature 总控。
-    const coordinator = servers.includes("butler-sessions");
+    const coordinator = featureCoordinator;
     const question = /^\/handoff\s+(.+)$/.exec(line);
     const featureHandoff = { ...COMMAND_FEATURE_HANDOFF, open_questions: question ? [question[1]] : [] };
     endTurn(line === "/fake-ask"

@@ -2,7 +2,7 @@ import { basename } from "node:path";
 import type { SessionActivity } from "../../shared/activity";
 import {
   BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_RUNNING_PER_FEATURE, MAX_RUNNING_PER_TICKET, sanitizeTask, SUMMARY_LIMIT, taskMessage,
-  type ControlRequest, type ControlResult, type EpicControlRequest, type FeatureControlRequest, type StartModel,
+  type ControlRequest, type ControlResult, type EpicControlRequest, type FeatureControlRequest, type InboxControlOp, type StartModel,
 } from "../../shared/control";
 import { effectiveStatus, type Epic, type EpicFeatureRow, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
 import type { EpicHistoryEntry } from "../db/epic-history-repo";
@@ -13,6 +13,7 @@ import { currentLang } from "../i18n";
 import { M } from "../strings";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
+import type { InboxService } from "../inbox/inbox-service";
 import type { DeliverResult } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
 import { startRefresh, type SessionRefresher } from "../sessions/session-refresher";
@@ -55,12 +56,17 @@ export interface ControlHandlerDeps {
   /** 把任务作为第一条消息交给新 session（等启动对话框过去、输入框就绪、粘贴、回车）。 */
   submit: (termId: string, message: string) => Promise<DeliverResult>;
   notify: () => void;
+  /** ask_user、report（BTL-190 第 2+3 点）；不给就拒绝。 */
+  inbox?: Pick<InboxService, "ask" | "report">;
   /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
   ticketPattern?: () => string;
   /** set_epic_plan 记下的时间（不给用 Date.now）。 */
   now?: () => number;
   log?: (msg: string, err?: unknown) => void;
 }
+
+/** 除了 ask_user、report 以外的请求（那两个先单独处理）。 */
+type NonInbox<T> = Exclude<T, { op: InboxControlOp["op"] }>;
 
 const ok = (value: unknown): ControlResult => ({ v: 1, ok: true, value });
 const fail = (error: string): ControlResult => ({ v: 1, ok: false, error });
@@ -322,7 +328,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   };
 
   /** epic session（设计文档 2026-11-01）：epic 在这里重新核对，已归档的全部拒绝。 */
-  const epicRequest = async (req: EpicControlRequest): Promise<ControlResult> => {
+  const epicRequest = async (req: NonInbox<EpicControlRequest>): Promise<ControlResult> => {
     const e = d.epics?.get(req.epicId);
     if (!e || e.archivedAt !== null) return fail(M().ctlEpicGone);
     if (req.op === "list_repos") return ok(e.repos.map((r) => ({ name: name(r), path: r.repoPath })));
@@ -350,7 +356,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   };
 
   /** feature 总控（设计文档 2026-10-26）：feature 和 ticket 都在这里重新核对，ticket 必须属于这个 feature 且未归档。 */
-  const featureRequest = async (req: FeatureControlRequest): Promise<ControlResult> => {
+  const featureRequest = async (req: NonInbox<FeatureControlRequest>): Promise<ControlResult> => {
     const f = d.features?.get(req.featureId);
     if (!f || f.archivedAt !== null) return fail(M().ctlFeatureGone);
     if (req.op === "epic_context") return epicContext(f);
@@ -399,7 +405,28 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     return start(t, repo, req.task, spawnedBy, req.model, "feature", { ticket: t.key });
   };
 
+  /**
+   * ask_user、report（BTL-190 第 2+3 点）：调用的 session 必须认得出来（from），而且属于请求的作用域（ticket、feature、epic），
+   * 免得别的进程冒充一个 session 提问。
+   */
+  const inboxRequest = (req: ControlRequest & InboxControlOp): ControlResult => {
+    if (!d.inbox) return fail(M().ctlInboxOff);
+    const h = req.from ? d.sessions.head(req.from) : null;
+    if (!h) return fail(M().ctlInboxNoSession);
+    const mine = "epicId" in req ? h.epicId === req.epicId && h.featureId === null && h.ticketKey === null
+      : "featureId" in req ? h.featureId === req.featureId && h.ticketKey === null
+      : h.ticketKey === req.ticketKey;
+    if (!mine) return fail(M().ctlInboxNotYours);
+    if (req.op === "ask_user") {
+      const id = d.inbox.ask(h, { question: req.question, options: req.options, context: req.context });
+      return ok({ id, note: M().ctlAskNote });
+    }
+    const r = d.inbox.report(h, req.text, req.kind);
+    return ok({ id: r.id, note: r.queued ? M().ctlReportQueued : M().ctlReportStored });
+  };
+
   return async (req) => {
+    if (req.op === "ask_user" || req.op === "report") return inboxRequest(req);
     if ("epicId" in req) return epicRequest(req);
     if ("featureId" in req) return featureRequest(req);
     const t = d.tickets.get(req.ticketKey);

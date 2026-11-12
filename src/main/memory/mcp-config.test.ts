@@ -34,7 +34,7 @@ describe("ticket MCP config (design 4.2, 8.4)", () => {
     expect(readdirSync(join(mcpDir, "tickets"))).toEqual(["PROJ-1.json"]);
   });
 
-  it("keeps the coordinator's config (with butler-sessions) in its own file, so plain sessions never get that server", () => {
+  it("keeps the coordinator's config (with the coordinator's butler-sessions) in its own file", () => {
     const mcpDir = join(tempDir(), "mcp");
     const sessions = sessionsServer({ launcher, scope: { ticketKey: "PROJ-1" }, requestsDir: "/b/control/requests", resultsDir: "/b/control/results" });
     expect(sessions).toEqual({
@@ -49,6 +49,7 @@ describe("ticket MCP config (design 4.2, 8.4)", () => {
     // 叫 PROJ-1-coordinator 的 ticket 也不会和 PROJ-1 的总控配置撞上。
     expect(ticketMcpFile(mcpDir, "PROJ-1-coordinator")).not.toBe(boss);
     expect(readFileSync(plain, "utf8")).not.toContain("butler-sessions");
+    expect(readFileSync(boss, "utf8")).not.toContain("BUTLER_MEMBER");
     removeTicketMcpConfigs(mcpDir, "PROJ-1");
     expect(existsSync(plain) || existsSync(boss)).toBe(false);
     removeTicketMcpConfigs(mcpDir, "PROJ-1");
@@ -117,6 +118,12 @@ describe("feature memory and coordinator config (design 2026-10-26)", () => {
     expect(s.env.BUTLER_TICKET).toBeUndefined();
     const t = sessionsServer({ launcher, scope: { ticketKey: "A-1" }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
     expect(t.env.BUTLER_TICKET).toBe("A-1");
+    expect(t.env.BUTLER_MEMBER).toBeUndefined();
+  });
+
+  it("gives a normal ticket session a member sessions server: only ask_user and report (BTL-190 2+3)", () => {
+    const m = sessionsServer({ launcher, scope: { ticketKey: "A-1", member: true }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
+    expect(m.env).toMatchObject({ BUTLER_TICKET: "A-1", BUTLER_MEMBER: "1", BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" });
   });
 
   it("writes and removes the feature's config under mcp/features", () => {

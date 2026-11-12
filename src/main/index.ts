@@ -70,6 +70,8 @@ import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
 import { HookInbox } from "./hooks/inbox";
+import { InboxRepo } from "./db/inbox-repo";
+import { InboxService } from "./inbox/inbox-service";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
@@ -364,15 +366,12 @@ async function bootstrap(): Promise<void> {
   let memoryMcpMissingLogged = false;
   let sessionsMcpMissingLogged = false;
   /**
-   * 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）：记忆开着时挂记忆 server；
-   * 总控 session 另外挂 butler-sessions（设计文档 2026-10-23 第二步），和记忆开关无关。什么都不挂时返回 null。
-   */
-  /**
-   * 记忆 server（记忆开着时）加上总控的 butler-sessions（设计文档 2026-10-23 第二步，和记忆开关无关）。
-   * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）、epic 的（设计文档 2026-11-01）；scope 是总控管的 ticket 或 feature，普通 session 为 null。
+   * 记忆 server（记忆开着时）加上 butler-sessions（设计文档 2026-10-23 第二步，和记忆开关无关）。
+   * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）、epic 的（设计文档 2026-11-01）；scope 是总控管的 ticket 或 feature，
+   * 普通 ticket session 是 member（只有 ask_user、report，BTL-190 第 2+3 点）。
    */
   const launcher = (script: string) => ({ command: process.execPath, script });
-  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null; epicId?: number | null }, scope: { ticketKey: string } | { featureId: number; epic?: boolean } | { epicId: number } | null) => {
+  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null; epicId?: number | null }, scope: { ticketKey: string; member?: boolean } | { featureId: number; epic?: boolean } | { epicId: number }) => {
     let servers = {};
     if (memoryOn(settings)) {
       if (existsSync(memoryMcpScript)) servers = memoryServers({ launcher: launcher(memoryMcpScript), statecoreDir: paths.statecore, ...mem });
@@ -381,20 +380,18 @@ async function bootstrap(): Promise<void> {
         memoryMcpMissingLogged = true;
       }
     }
-    if (scope) {
-      const script = bundledSessionsMcpPath();
-      if (existsSync(script)) {
-        servers = { ...servers, ...sessionsServer({ launcher: launcher(script), scope, requestsDir: paths.controlRequests, resultsDir: paths.controlResults }) };
-      } else if (!sessionsMcpMissingLogged) {
-        logger(`sessions MCP bundle missing at ${script}; the coordinator cannot start sessions (run pnpm build:memory-mcp)`);
-        sessionsMcpMissingLogged = true;
-      }
+    const script = bundledSessionsMcpPath();
+    if (existsSync(script)) {
+      servers = { ...servers, ...sessionsServer({ launcher: launcher(script), scope, requestsDir: paths.controlRequests, resultsDir: paths.controlResults }) };
+    } else if (!sessionsMcpMissingLogged) {
+      logger(`sessions MCP bundle missing at ${script}; sessions have no butler-sessions tools (run pnpm build:memory-mcp)`);
+      sessionsMcpMissingLogged = true;
     }
     return servers;
   };
   /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。什么都不挂时返回 null。 */
   const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }): string | null => {
-    const servers = mcpServers({ ticketKey, featureId: opts.featureId, epicId: opts.epicId }, opts.coordinator ? { ticketKey } : null);
+    const servers = mcpServers({ ticketKey, featureId: opts.featureId, epicId: opts.epicId }, opts.coordinator ? { ticketKey } : { ticketKey, member: true });
     if (Object.keys(servers).length === 0) return null;
     return writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator });
   };
@@ -729,7 +726,8 @@ async function bootstrap(): Promise<void> {
   // 正在换新的也不贴（计划 16）。refresher 在下面才建好：回调里才用到。
   const deliveryGuard = new DeliveryGuard({
     ...guardDeps,
-    needsYou: (id) => deliveryNeedsYou(needsYou, id),
+    // 有未决 ask_user 的也算在等用户（BTL-190 第 2+3 点）。inboxService 在下面才建好：回调里才用到。
+    needsYou: (id): boolean => deliveryNeedsYou(needsYou, id) || inboxService.hasPendingDecision(id),
     refreshing: (id) => refresher.isRefreshing(id),
   });
   /** Stop 到的时候先重读这个 session 的活动（guard 看的是上一次刷新的）。活动按 head 的 id 跟踪；Stop 带来的可能是链上的旧 id。 */
@@ -752,7 +750,8 @@ async function bootstrap(): Promise<void> {
   const refresher = new SessionRefresher({
     guard: new DeliveryGuard({
       ...guardDeps,
-      needsYou: (id): boolean => autoRefreshNeedsYou({ reason: needsYou.reasonOf(id), undecided: needsYou.undecided(id), refreshing: refresher.isRefreshing(id) }),
+      needsYou: (id): boolean =>
+        autoRefreshNeedsYou({ reason: needsYou.reasonOf(id), undecided: needsYou.undecided(id), refreshing: refresher.isRefreshing(id) }) || inboxService.hasPendingDecision(id),
     }),
     guardIgnoringNeedsYou: new DeliveryGuard(guardDeps),
     head: (id) => sessions.head(id),
@@ -793,6 +792,21 @@ async function bootstrap(): Promise<void> {
     },
     log: logger,
   });
+  // 「待你决定」和汇报（BTL-190 第 2+3 点）。递回答不看「需要你」（未决的 ask_user 本身就算），别的检查照常；递汇报和 CI 结果同一道 guard。
+  const inboxService: InboxService = new InboxService({
+    repo: new InboxRepo(db),
+    head: (id) => sessions.head(id),
+    ticket: (key) => tickets.get(key),
+    epicOfFeature: (id) => features.get(id)?.epicId ?? null,
+    termOf: gateTerm,
+    openHeads: openButlerHeads,
+    answerGuard: new DeliveryGuard({ ...guardDeps, refreshing: (id) => refresher.isRefreshing(id) }),
+    reportGuard: deliveryGuard,
+    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
+    notify,
+    now: Date.now,
+    log: logger,
+  });
   // 清理 session（BTL-190 第 8 点）：闲置自动关闭、隐藏 14 天后删除、「清理闲置」和「全部删除」。
   const sessionCleanup = new SessionCleanup({
     idleMinutes: () => idleCloseMinutes(settings),
@@ -805,7 +819,7 @@ async function bootstrap(): Promise<void> {
     openedAt: (termId) => pty.openedAt(termId),
     ticketsOfFeature: (id) => tickets.listByFeature(id).map((t) => t.key),
     featuresOfEpic: (id) => features.listByEpic(id).map((f) => f.id),
-    // askUserPending：ask_user（BTL-190 第 2+3 点）做好以后在这里接上。
+    askUserPending: (id) => inboxService.hasPendingDecision(id),
     refresher,
     hiddenBefore: (before) => sessions.listHiddenBefore(before),
     head: (id) => sessions.head(id),
@@ -937,7 +951,11 @@ async function bootstrap(): Promise<void> {
       if (effect.kind === "session_started") pty.markStarted(effect.sessionId);
       // claude 收下了一条输入（UserPromptSubmit）：deliver 回车以后等的就是它（BTL-190 第 9 点）。终端按 BUTLER_SESSION 记，
       // /clear 以后 hook 里的 session id 已经换了。
-      if (effect.kind === "waiting" && !effect.waiting) pty.markSubmitted(env.butlerSession ?? effect.sessionId);
+      // 同一个时机：用户在终端里回答了，这个 session 未决的「待你决定」都算答过（BTL-190 第 2+3 点）。
+      if (effect.kind === "waiting" && !effect.waiting) {
+        pty.markSubmitted(env.butlerSession ?? effect.sessionId);
+        inboxService.promptSubmitted(env.butlerSession ?? effect.sessionId);
+      }
       // claude 停下来等输入了：有“对方已经合完”的通知就趁现在发（设计文档 2026-11-04：不打断忙着的 session）。
       // 同一个时机也递还没递出去的 CI 结论（先重读活动），并且马上查一次这个仓库的 PR 和 CI（刚停下的 session 常常刚 push）。
       if (effect.kind === "waiting" && effect.waiting) {
@@ -948,6 +966,8 @@ async function bootstrap(): Promise<void> {
           .catch((e: unknown) => logger(`ci delivery: re-reading the activity of ${stopped} failed`, e))
           .then(() => {
             needsYou.update();
+            // 卡片上答好的回答、该送给总控的汇报也趁现在送（永不 reject）。
+            void inboxService.flush();
             return flushCi();
           });
         const repoId = sessions.head(stopped)?.repoId;
@@ -1030,6 +1050,7 @@ async function bootstrap(): Promise<void> {
     },
     closeIdleSessions: (ids) => sessionCleanup.closeIdleNow(ids),
     deleteHiddenSessions: (ids) => sessionCleanup.deleteHidden(ids),
+    inbox: inboxService,
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
     nowView: (merges) => {
       // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
@@ -1046,6 +1067,7 @@ async function bootstrap(): Promise<void> {
         refreshing: (id) => refresher.stepOf(id),
         merges,
         approvalText: M().nowApproval,
+        decisions: inboxService.pendingDecisionViews(),
       });
     },
     rederive: (key) => {
@@ -1079,6 +1101,7 @@ async function bootstrap(): Promise<void> {
       activityOutput: (id) => activityMonitor.output(id),
       refresher,
       lastReply: (id) => activityMonitor.lastReply(id),
+      inbox: inboxService,
       // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。
       kill: (termId) => pty.kill(termId),
       screenNeedsUser: (termId) => pty.screenNeedsUser(termId),
@@ -1119,6 +1142,8 @@ async function bootstrap(): Promise<void> {
     if (headlessAbort.signal.aborted) return;
     refresher.autoCheck();
     sessionCleanup.tick();
+    // 等着送的回答和汇报：Stop 那一刻没送成（用户在打字、有草稿）的，按这个节奏再试。
+    void inboxService.flush();
   }, activityIntervals(process.env).tickMs);
 
   // 调度：启动（health 探测完成后）、唤醒、解锁时检查到期任务；每分钟 tick，覆盖 16:00 和整晚没锁屏的情况。

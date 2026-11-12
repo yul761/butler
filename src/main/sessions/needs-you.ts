@@ -8,8 +8,8 @@ import { sanitizeJudgeReason } from "../util/judge-text";
 
 /** 给判断看的最后一条回复最多多少个字符（取结尾）。 */
 export const NEEDS_YOU_REPLY_CHARS = 1500;
-/** 退路的理由（最后一句）最多多少个字符。 */
-const FALLBACK_REASON_CHARS = 80;
+/** 模型没给理由时用的最后一句最多多少个字符。 */
+const REASON_FALLBACK_CHARS = 80;
 /** 同时最多几个判断。 */
 const MAX_JUDGES = 2;
 
@@ -31,8 +31,10 @@ function prompt(reply: string): string {
   if (currentLang() === "en") {
     return [
       "Below is the last message a coding Claude session showed the user when it stopped.",
-      "Decide: is it waiting for the user to answer a question, make a decision, or go do something before it can continue?",
-      'Merely reporting progress or results, saying "done", or saying "waiting for CI" does not count.',
+      "Decide: is it really waiting for the user to answer a specific question or make a decision (for example, which of several approaches to take, whether to do something risky, or information only the user has), or for the user to go do something specific, before it can continue?",
+      'None of these count: reporting progress or results, saying "done", "waiting for CI" or "waiting for another session", ' +
+        'and open-ended offers such as "shall I continue?", "anything else?" or "what should I do next?" (that is just waiting for the next instruction).',
+      "When unsure, answer false.",
       "Answer as JSON: needs_user (boolean), reason (one sentence in English on what it is waiting for from the user, at most 15 words; leave empty if not needed).",
       "",
       "Message:",
@@ -41,8 +43,10 @@ function prompt(reply: string): string {
   }
   return [
     "下面是一个写代码的 Claude session 停下来时给用户看的最后一条消息。",
-    "判断：它是不是在等用户回答问题、做决定、或者去做某件事之后才能继续？",
-    '单纯汇报进度或结果、说"做完了"、说"在等 CI"，都不算。',
+    "判断：它是不是真的在等用户回答一个具体的问题、做一个决定（比如几个方案选哪个、要不要做有风险的操作、缺了只有用户知道的信息），或者等用户去做某件具体的事，才能继续？",
+    '下面这些都不算：单纯汇报进度或结果、说"做完了"、说"在等 CI"或"在等别的 session"，' +
+      '以及"要我继续吗""还有别的吗""下一步做什么"这类泛泛的问法（那只是在等下一条命令）。',
+    "拿不准就答 false。",
     "用 JSON 回答：needs_user（布尔），reason（一句话，说它在等用户什么，不超过 30 个字；不需要就留空）。",
     "",
     "消息：",
@@ -60,27 +64,25 @@ export async function judgeNeedsYou(d: HeadlessExecDeps, reply: string, cwd: str
   return v.ok ? { needsYou: v.value.needs_user, reason: sanitizeJudgeReason(v.value.reason) } : null;
 }
 
-/** 回复末尾包着问句的东西：空白、Markdown 的强调和代码标记、右括号、右引号。 */
+/** 回复末尾的包装：空白、Markdown 的强调和代码标记、右括号、右引号。 */
 const TRAILING_WRAPPERS_RE = /[\s*_`)）」』"”']+$/;
 
 /** 去掉末尾的包装：“**要拆吗？**”的结尾其实是问号。 */
 const unwrapEnd = (text: string): string => text.replace(TRAILING_WRAPPERS_RE, "");
 
-/** 最后一句（连同句末的标点，不带末尾的包装），最多 80 字，取结尾。 */
-function lastSentence(text: string): string {
+/** 最后一句（连同句末的标点，不带末尾的包装），最多 80 字，取结尾。模型说需要你却没给理由时用它。 */
+export function lastSentence(text: string): string {
   const t = unwrapEnd(text);
   // 先把句末的标点放到一边，再找它前面的最后一个句子边界：中文句末标点、换行，或者后面跟空白的英文标点。
   const body = t.slice(0, t.length - (/[。！？.!?]*$/.exec(t)?.[0].length ?? 0));
   let start = 0;
   for (const m of body.matchAll(/[。！？\n]|[.!?](?=\s)/g)) start = m.index + 1;
   // 句首的强调和代码标记也去掉，免得理由里留半截 Markdown。
-  return tail(t.slice(start).replace(/^[\s*_`]+/, ""), FALLBACK_REASON_CHARS);
+  return tail(t.slice(start).replace(/^[\s*_`]+/, ""), REASON_FALLBACK_CHARS);
 }
 
-/** 判断失败时的退路。 */
-export function fallbackNeedsYou(reply: string): NeedsYouVerdict {
-  return /[?？]$/.test(unwrapEnd(reply)) ? { needsYou: true, reason: lastSentence(reply) } : { needsYou: false, reason: "" };
-}
+/** 判断失败（BTL-190 第 2+3 点）：不算需要你，不再看问号。 */
+const NOT_NEEDED: NeedsYouVerdict = { needsYou: false, reason: "" };
 
 export interface NeedsYouHead {
   id: string;
@@ -117,7 +119,8 @@ interface Job {
 const stoppedReply = (s: NeedsYouHead): { id: string; text: string } | null => (s.waiting && s.kind === "waiting" ? s.reply : null);
 
 /**
- * “需要你”：每个 session 只记最后一条回复的结论，按 message.id 每条只判断一次（失败也记下退路的结论，不再重判）。
+ * “需要你”：每个 session 只记最后一条回复的结论，按 message.id 每条只判断一次（失败记成不需要，不再重判）。
+ * 它只是 session 没用 ask_user 时的退路（BTL-190 第 2+3 点）：有未决 ask_user 的 session 和总控的去重在「现在」页上做。
  * 全部只存内存。
  */
 export class NeedsYouTracker {
@@ -214,7 +217,7 @@ export class NeedsYouTracker {
     const e = this.entries.get(job.sessionId);
     // 判断期间有了新回复或者终端关了：这个结论已经无关。
     if (e?.replyId === job.replyId) {
-      e.verdict = verdict ?? fallbackNeedsYou(job.text);
+      e.verdict = verdict ?? NOT_NEEDED;
       if (e.verdict.needsYou && !e.answered) this.d.notify();
     }
     this.pump();

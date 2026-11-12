@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, moveTargetArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, moveTargetArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -180,5 +180,18 @@ describe("epic IPC arguments (design 2026-11-01)", () => {
     expect(moveTargetArg(4)).toBe(4);
     expect(moveTargetArg(null)).toBeNull();
     for (const bad of [undefined, 0, -1, 1.5, "4", ""]) expect(() => moveTargetArg(bad), String(bad)).toThrow();
+  });
+});
+
+describe("inbox IPC arguments (BTL-190 2+3)", () => {
+  it("accepts a positive item id, a non-blank bounded answer and one of three scopes", () => {
+    expect(inboxIdArg(5)).toBe(5);
+    for (const bad of [0, -1, 1.5, "5", null]) expect(() => inboxIdArg(bad)).toThrow();
+    expect(inboxAnswerArg("用 A")).toBe("用 A");
+    for (const bad of ["", "   ", 3, null, "x".repeat(4001)]) expect(() => inboxAnswerArg(bad)).toThrow();
+    expect(inboxScopeArg({ featureId: 2 })).toEqual({ featureId: 2 });
+    expect(inboxScopeArg({ epicId: 3 })).toEqual({ epicId: 3 });
+    expect(inboxScopeArg({ all: true })).toEqual({ all: true });
+    for (const bad of [null, {}, { all: 1 }, { featureId: 0 }, { epicId: "3" }, "all"]) expect(() => inboxScopeArg(bad), JSON.stringify(bad)).toThrow();
   });
 });
