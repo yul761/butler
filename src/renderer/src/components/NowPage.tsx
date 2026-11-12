@@ -4,8 +4,10 @@ import { api } from "../api";
 import { reportError } from "../errors";
 import { setWizardSkipped, wizardSkipped } from "../local-prefs";
 import { mergeEventText } from "../merge-events-view";
-import { groupSummary, needsYouText, prPill, rowKey, rowPlace, rowText, usageDetails, usageLine } from "../now-view";
+import { groupSummary, needsYouText, needsYouTotal, prPill, rowKey, rowLabel, rowPlace, rowText, usageDetails, usageLine } from "../now-view";
 import { S } from "../strings";
+import { DecisionCard } from "./InboxPanes";
+import { LiveWindow } from "./LiveWindow";
 import { formatDuration, useNow } from "./TicketActivity";
 import { useCollapsed } from "./useCollapsed";
 
@@ -25,7 +27,7 @@ interface Props {
 }
 
 /**
- * 首页「现在」（设计文档 2026-11-06）：最上面是需要你的，下面按 epic → feature → 行排，每一层都能收起；
+ * 首页「现在」（设计文档 2026-11-06）：最上面是实况窗口（BTL-190 第 7 点），然后是需要你的，下面按 epic → feature → 行排，每一层都能收起；
  * 最下面是最近合并和一行用量。只显示和跳转，数据由主进程的 buildNowView 拼好。
  */
 export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup }: Props) {
@@ -40,8 +42,15 @@ export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup
         <h2>{S.nowTitle}</h2>
         <span className="muted">{S.nowRunning(view.running)}</span>
       </header>
-      {view.needsYou.length > 0 && <NeedsYou view={view} now={now} onOpen={onOpen} />}
-      {view.epics.length === 0 && <p className="muted">{S.nowEmpty}</p>}
+      {/* 实况（BTL-190 第 7 点）：没人在干活时它说“现在没有正在进行的工作”，下面的列表可能是空的。 */}
+      <LiveWindow view={view} onOpen={onOpen} />
+      {needsYouTotal(view) > 0 && <NeedsYou view={view} now={now} onOpen={onOpen} />}
+      {view.butler && (
+        <section className="now-epic now-butler">
+          <h3><span className="name">{S.butlerNav}</span></h3>
+          <div className="now-rows"><Row row={view.butler} now={now} onOpen={onOpen} /></div>
+        </section>
+      )}
       {view.epics.map((e) => <EpicBlock key={e.id ?? "none"} epic={e} now={now} onOpen={onOpen} />)}
       <RecentMerges merges={view.merges} onOpenTicket={onOpenTicket} liveTickets={liveTickets} />
       {usage && <UsageLine usage={usage} />}
@@ -89,11 +98,19 @@ function useUsage(): UsageSummary | null {
 
 const since = (r: NowRow, now: number): string => (r.since === null ? "" : formatDuration(now - r.since, S));
 
-/** 「需要你」：每条一行，ticket 号（或总控）、所在的 feature、理由、时长、打开。 */
+/**
+ * 「需要你」：先是 ask_user 提的「待你决定」，每条一张能直接回答的卡片（BTL-190 第 2+3 点）；
+ * 然后每条一行，ticket 号（或总控）、所在的 feature、理由、时长、打开。
+ */
 function NeedsYou({ view, now, onOpen }: { view: NowView; now: number; onOpen: (t: NowTarget) => void }) {
   return (
     <section className="now-needs">
-      <h3>{S.nowNeedsYou}<span className="count">{view.needsYou.length}</span></h3>
+      <h3>{S.nowNeedsYou}<span className="count">{needsYouTotal(view)}</span></h3>
+      {view.decisions.length > 0 && (
+        <div className="now-decisions">
+          {view.decisions.map((d) => <DecisionCard key={d.id} item={d} onGo={() => onOpen(d.target)} />)}
+        </div>
+      )}
       {view.needsYou.map((r) => {
         const place = rowPlace(view, r, S);
         return (
@@ -184,7 +201,7 @@ function Row({ row: r, now, onOpen }: { row: NowRow; now: number; onOpen: (t: No
     const pill = prPill(p, S);
     return pill ? [{ ...pill, url: p.url }] : [];
   });
-  const label = r.ticketKey ?? (r.coordinator ? S.coordinator : S.fixSessionFor(null));
+  const label = rowLabel(r, S);
   return (
     <button className={`now-row ${t.tone}`} title={r.title ?? undefined} onClick={() => onOpen(r.target)}>
       <span className="now-key">

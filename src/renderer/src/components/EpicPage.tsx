@@ -1,8 +1,9 @@
 import { useState } from "react";
-import type { EpicFeatureRow, EpicView } from "../../../shared/types";
+import type { EpicFeatureRow, EpicView, InboxItemView, NowTarget } from "../../../shared/types";
 import { api } from "../api";
 import { S } from "../strings";
 import { epicErrorText, epicOpenError, epicRowText } from "./epic-row";
+import { InboxPanes } from "./InboxPanes";
 import { NewFeatureDialog } from "./NewFeatureDialog";
 import { useCollapsed } from "./useCollapsed";
 import { SessionArea, useSessionPanes, WorkspaceHeader } from "./WorkspaceParts";
@@ -14,13 +15,15 @@ interface Props {
   onFeatureCreated: (id: number) => void;
   /** 打开时先切到这个 session 的终端（从「现在」页点进来时）。 */
   focusSession?: string | null;
+  /** 「待你决定」卡片上的「去终端」：问题不是 epic session 提的时跳到提问的 session 的页面。 */
+  onOpenTarget: (t: NowTarget) => void;
 }
 
 /**
  * epic 页（设计文档 2026-11-01，草图 A）：从上到下是名字和工作区、一行一个 feature（一句进度和状态，不列 ticket），
  * 然后是仓库、epic session 和它们的终端，布局和 feature 页一样。
  */
-export function EpicPage({ epic, onOpenFeature, onFeatureCreated, focusSession }: Props) {
+export function EpicPage({ epic, onOpenFeature, onFeatureCreated, focusSession, onOpenTarget }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newFeature, setNewFeature] = useState(false);
   const errorText = (e: unknown) => epicErrorText(e, S);
@@ -32,6 +35,15 @@ export function EpicPage({ epic, onOpenFeature, onFeatureCreated, focusSession }
     setError,
     initialActive: focusSession,
   });
+
+  /** 「去终端」：epic session 就地切过去，终端关着就打开；feature、ticket 的 session 跳到它的页面。 */
+  function goTo(item: InboxItemView) {
+    const t = item.target;
+    if (t.page !== "epic" || t.id !== epic.id) return onOpenTarget(t);
+    const termId = epic.sessions.find((s) => s.id === item.sessionId)?.termId;
+    if (termId) panes.show(termId);
+    else void panes.open(item.sessionId);
+  }
 
   // feature 列表可以收起（每个 epic 各记各的），收起时标题上还留着数量和等待、卡住的记号，和 feature 页的 ticket 表一样。
   const [featuresCollapsed, toggleFeatures] = useCollapsed(`epic-features:${epic.id}`);
@@ -82,6 +94,8 @@ export function EpicPage({ epic, onOpenFeature, onFeatureCreated, focusSession }
           onCreated={(id) => (setNewFeature(false), onFeatureCreated(id))}
         />
       )}
+
+      <InboxPanes scope={{ epicId: epic.id }} onGo={goTo} />
 
       <SessionArea
         repos={epic.repos}

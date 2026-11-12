@@ -1,10 +1,12 @@
 import { mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, SUMMARY_LIMIT, type ControlResult, type EpicControlRequest } from "../../shared/control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_RUNNING_FEATURES_PER_EPIC, MAX_RUNNING_PER_FEATURE, SUMMARY_LIMIT, type ControlResult, type EpicControlRequest } from "../../shared/control";
 import type { SessionActivity } from "../../shared/activity";
 import type { EpicFeatureRow } from "../../shared/types";
 import type { EpicHistoryEntry } from "../db/epic-history-repo";
+import type { DeliveryCheck } from "../sessions/delivery-guard";
+import type { DeliverResult } from "../sessions/pty-manager";
 import { EpicsRepo } from "../db/epics-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
@@ -45,11 +47,36 @@ async function setup() {
   const replies = new Map<string, string>();
   const killed: string[] = [];
   const refreshed: string[] = [];
+  /** start_feature（BTL-190 第 4 点）：openFeature 的调用、每个 feature 跑着的总控（session id）、feature 开着的终端数。 */
+  const opened: { featureId: number; sessionId?: string; start?: { instructions?: string | null } }[] = [];
+  const runningOf = new Map<number, string>();
+  const terminalsOf = new Map<number, number>();
+  let openResult: (() => { ok: false; reason: "claude_missing" }) | null = null;
+  let guardCheck: (id: string) => DeliveryCheck = (id) => ({ ok: true, termId: id, headId: id });
+  const delivered: [string, string][] = [];
+  let deliverResult: DeliverResult = "sent";
   const handle = controlHandler({
     tickets, sessions, features, epics, featureService,
     refresher: { precheck: () => null, refresh: async (id) => (refreshed.push(id), "done" as const) },
     ticketService: undefined as never,
-    sessionService: { isRunning: (id: string) => open.has(id), termIdOf: (id: string) => (open.has(id) ? id : null) } as never,
+    sessionService: {
+      isRunning: (id: string) => open.has(id), termIdOf: (id: string) => (open.has(id) ? id : null),
+      openFeature: async (req: { featureId: number; sessionId?: string }, extra: { start?: { instructions?: string | null } } = {}) => {
+        if (openResult) return openResult();
+        opened.push({ ...req, ...extra });
+        const termId = req.sessionId ?? `new-${opened.length}`;
+        open.add(termId);
+        runningOf.set(req.featureId, termId);
+        return { ok: true, termId, alreadyOpen: false };
+      },
+      runningCoordinator: (featureId: number) => {
+        const id = runningOf.get(featureId);
+        return id && open.has(id) ? sessions.get(id) ?? ({ id } as never) : null;
+      },
+      featureTerminalCount: (featureId: number) => terminalsOf.get(featureId) ?? 0,
+    } as never,
+    guard: { check: (id) => guardCheck(id), recheckAfter: () => () => true },
+    deliver: async (termId, text) => (delivered.push([termId, text]), deliverResult),
     activity: (id) => activities.get(id) ?? null,
     kill: (termId) => void killed.push(termId),
     screenNeedsUser: () => false,
@@ -68,7 +95,9 @@ async function setup() {
   });
   return { handle, base, epic, solo, features, epics, featureService, epicService, frontend, backend, elsewhere, notified: () => notified, setRows: (r: EpicFeatureRow[]) => (rows = r), row,
     setHistory: (h: EpicHistoryEntry[]) => (history = h),
-    logs, events, setRefreshEpic: (f: typeof refreshEpic) => (refreshEpic = f), tickets, sessions, open, activities, replies, killed, refreshed };
+    logs, events, setRefreshEpic: (f: typeof refreshEpic) => (refreshEpic = f), tickets, sessions, open, activities, replies, killed, refreshed,
+    opened, runningOf, terminalsOf, delivered,
+    setOpenResult: (f: typeof openResult) => (openResult = f), setGuard: (f: typeof guardCheck) => (guardCheck = f), setDeliver: (r: DeliverResult) => (deliverResult = r) };
 }
 
 const err = (r: ControlResult) => (r.ok ? "" : r.error);
@@ -301,5 +330,166 @@ describe("sessions of an epic's features (task 11)", () => {
       expect(await handle({ ...base, ...op } as EpicControlRequest)).toMatchObject({ ok: false });
     }
     expect(killed).toEqual([]);
+  });
+});
+
+describe("start_feature from an epic session (BTL-190 4)", () => {
+  /** epic「shop」下有 checkout、cart（有 brief）和 bare（没有 brief），已归档的 old；epic 外有 lone。 */
+  async function withFeatures() {
+    const t = await setup();
+    const make = (name: string, o: { brief?: string; epicId?: number | null } = {}) =>
+      t.featureService.create({ name, repoPaths: [t.elsewhere], epicId: o.epicId === undefined ? t.epic.id : o.epicId ?? undefined, ...(o.brief !== undefined && { brief: o.brief }) });
+    const checkout = await make("checkout", { brief: "做结账" });
+    const cart = await make("cart", { brief: "做购物车" });
+    const bare = await make("bare");
+    const old = await make("old", { brief: "b" });
+    await t.featureService.archive(old.id, { terminalsOpen: () => false });
+    const lone = await make("lone", { brief: "b", epicId: null });
+    const start = (feature: string, instructions?: string) =>
+      t.handle({ ...t.base, from: "es", op: "start_feature", feature, ...(instructions !== undefined && { instructions }) });
+    /** 让 feature 有一个跑着的总控。 */
+    const running = (featureId: number, id: string) => {
+      t.sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, featureId, coordinator: true });
+      t.open.add(id);
+      t.runningOf.set(featureId, id);
+    };
+    return { ...t, checkout, cart, bare, old, lone, start, running, make };
+  }
+
+  it("opens a new coordinator by name or id and hands it the plan and the instructions", async () => {
+    const { start, checkout, cart, opened, notified } = await withFeatures();
+    const r = await start(" CHECKOUT ", "先做 API");
+    expect(r).toMatchObject({ ok: true, value: { feature: "checkout", id: checkout.id, sessionId: "new-1", started: "opened" } });
+    expect(opened).toEqual([{ featureId: checkout.id, start: { instructions: "先做 API" } }]);
+    expect(notified()).toBe(1);
+    expect(await start(String(cart.id))).toMatchObject({ ok: true, value: { feature: "cart", started: "opened" } });
+    expect(opened[1]).toEqual({ featureId: cart.id, start: { instructions: null } });
+  });
+
+  it("resumes the latest visible coordinator instead of opening a new one", async () => {
+    const { start, checkout, sessions, opened } = await withFeatures();
+    const add = (id: string, at: number, o: { fixesSession?: string } = {}) =>
+      sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: at, featureId: checkout.id, coordinator: !o.fixesSession, fixesSession: o.fixesSession ?? null });
+    add("c-old", 1);
+    add("c-new", 2);
+    add("c-hidden", 3);
+    sessions.dismiss("c-hidden");
+    add("fix-1", 4, { fixesSession: "t1" });
+    const r = await start("checkout");
+    expect(r).toMatchObject({ ok: true, value: { sessionId: "c-new", started: "resumed" } });
+    expect(opened).toEqual([{ featureId: checkout.id, sessionId: "c-new", start: { instructions: null } }]);
+  });
+
+  it("refuses an unknown, archived or other epic's feature, listing the epic's features", async () => {
+    const { start, opened } = await withFeatures();
+    for (const name of ["nope", "old", "lone", "999"]) {
+      const r = await start(name);
+      expect(r.ok, name).toBe(false);
+      expect(err(r), name).toContain("checkout");
+      expect(err(r), name).toContain("cart");
+    }
+    expect(opened).toEqual([]);
+  });
+
+  it("refuses a feature with no brief unless the epic says what to do", async () => {
+    const { start, bare, opened } = await withFeatures();
+    const r = await start("bare");
+    expect(r.ok).toBe(false);
+    expect(err(r)).toContain("instructions");
+    expect(opened).toEqual([]);
+    expect(await start("bare", "先读代码，规划好再建 ticket")).toMatchObject({ ok: true, value: { started: "opened" } });
+    expect(opened).toEqual([{ featureId: bare.id, start: { instructions: "先读代码，规划好再建 ticket" } }]);
+  });
+
+  it(`runs at most ${MAX_RUNNING_FEATURES_PER_EPIC} feature coordinators per epic`, async () => {
+    const { start, make, running, checkout, cart, opened, open } = await withFeatures();
+    const more = [await make("a", { brief: "b" }), await make("b", { brief: "b" }), await make("c", { brief: "b" })];
+    running(checkout.id, "fc");
+    running(more[0].id, "ac");
+    running(more[1].id, "bc");
+    // 已经开着的那个不算新开：照样通过。
+    expect(await start("checkout")).toMatchObject({ ok: true, value: { started: "already_running" } });
+    expect((await start("c")).ok).toBe(true);
+    const r = await start("cart");
+    expect(r.ok).toBe(false);
+    expect(err(r)).toContain(String(MAX_RUNNING_FEATURES_PER_EPIC));
+    expect(err(r)).toContain("checkout");
+    expect(opened.map((o) => o.featureId)).toEqual([more[2].id]);
+    // 关掉一个总控就又能开。
+    open.delete("fc");
+    expect(await start("cart")).toMatchObject({ ok: true, value: { feature: "cart", started: "opened" } });
+    expect(opened.map((o) => o.featureId)).toEqual([more[2].id, cart.id]);
+  });
+
+  it(`refuses when the feature already has ${MAX_RUNNING_PER_FEATURE} terminals open`, async () => {
+    const { start, checkout, terminalsOf, opened } = await withFeatures();
+    terminalsOf.set(checkout.id, MAX_RUNNING_PER_FEATURE);
+    const r = await start("checkout");
+    expect(r.ok).toBe(false);
+    expect(err(r)).toContain(String(MAX_RUNNING_PER_FEATURE));
+    expect(opened).toEqual([]);
+  });
+
+  it("does not open a second coordinator: says it is running, or hands it the instructions", async () => {
+    const { start, checkout, running, opened, delivered } = await withFeatures();
+    running(checkout.id, "fc");
+    expect(await start("checkout")).toMatchObject({ ok: true, value: { feature: "checkout", sessionId: "fc", started: "already_running" } });
+    expect(delivered).toEqual([]);
+    expect(await start("checkout", "顺便把退款也做了")).toMatchObject({ ok: true, value: { sessionId: "fc", started: "sent" } });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0][0]).toBe("fc");
+    expect(delivered[0][1]).toContain("顺便把退款也做了");
+    expect(opened).toEqual([]);
+  });
+
+  it("refuses to hand instructions to a coordinator that cannot take them now, saying why", async () => {
+    const { start, checkout, running, setGuard, delivered } = await withFeatures();
+    running(checkout.id, "fc");
+    setGuard(() => ({ ok: false, block: "busy" }));
+    const r = await start("checkout", "顺便把退款也做了");
+    expect(r.ok).toBe(false);
+    expect(err(r)).toContain("checkout");
+    expect(delivered).toEqual([]);
+  });
+
+  it("logs instructions that were not delivered", async () => {
+    const { start, checkout, running, setDeliver, logs } = await withFeatures();
+    running(checkout.id, "fc");
+    setDeliver("timeout");
+    await start("checkout", "顺便把退款也做了");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(logs.join("\n")).toContain("timeout");
+  });
+
+  it("starts a feature once when asked twice at the same time", async () => {
+    const { start, opened } = await withFeatures();
+    const [a, b] = await Promise.all([start("checkout"), start("checkout")]);
+    expect(opened).toHaveLength(1);
+    expect([a, b].filter((r) => r.ok && (r.value as { started: string }).started === "opened")).toHaveLength(1);
+    expect([a, b].some((r) => r.ok && (r.value as { started: string }).started === "starting")).toBe(true);
+  });
+
+  it("says why when the coordinator cannot be opened", async () => {
+    const { start, setOpenResult } = await withFeatures();
+    setOpenResult(() => ({ ok: false, reason: "claude_missing" }));
+    expect((await start("checkout")).ok).toBe(false);
+  });
+
+  it("create_feature with start opens the new feature's coordinator right away", async () => {
+    const { handle, base, opened, features } = await setup();
+    const r = await handle({ ...base, from: "es", op: "create_feature", name: "checkout", repos: ["frontend"], brief: "做结账", start: true });
+    expect(r).toMatchObject({ ok: true, value: { name: "checkout", started: "opened", sessionId: "new-1" } });
+    const id = (r as { value: { id: number } }).value.id;
+    expect(opened).toEqual([{ featureId: id, start: { instructions: null } }]);
+    expect(features.get(id)?.brief).toBe("做结账");
+  });
+
+  it("create_feature with start still creates the feature when the coordinator cannot be opened", async () => {
+    const { handle, base, setOpenResult, features } = await setup();
+    setOpenResult(() => ({ ok: false, reason: "claude_missing" }));
+    const r = await handle({ ...base, from: "es", op: "create_feature", name: "checkout", repos: ["frontend"], brief: "做结账", start: true });
+    expect(r).toMatchObject({ ok: true, value: { name: "checkout", started: false } });
+    expect(features.list().map((f) => f.name)).toEqual(["checkout"]);
   });
 });

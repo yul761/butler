@@ -350,6 +350,17 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!REFRESH_THRESHOLD_RE.test(t)) throw new SettingError(M().refreshThreshold);
       return String(Number(t));
     }
+    case "butlerPatrolTime": {
+      if (!value.trim()) return "";
+      const t = parseTime(value);
+      if (!t) throw new SettingError(M().timeFormat);
+      return `${String(t.h).padStart(2, "0")}:${String(t.m).padStart(2, "0")}`;
+    }
+    case "idleCloseMinutes": {
+      const t = value.trim();
+      if (!IDLE_CLOSE_RE.test(t) || (Number(t) !== 0 && Number(t) < MIN_IDLE_CLOSE_MINUTES)) throw new SettingError(M().idleCloseMinutes);
+      return String(Number(t));
+    }
     case "language": {
       const t = value.trim();
       if (!(LANG_SETTINGS as readonly string[]).includes(t)) throw new SettingError(M().language);
@@ -384,6 +395,23 @@ const REFRESH_THRESHOLD_RE = /^\d{1,7}$/;
 export function refreshThreshold(s: Pick<SettingsRepo, "get">): number {
   const t = s.get("refreshThresholdTokens").trim();
   return REFRESH_THRESHOLD_RE.test(t) ? Number(t) : Number(SETTING_DEFAULTS.refreshThresholdTokens);
+}
+
+/** 闲置关闭的分钟数：0 或者最多 5 位的整数（最长两个多月）。 */
+const IDLE_CLOSE_RE = /^\d{1,5}$/;
+/** 闲置关闭最短的时间：再短的话 session 刚回答完就被关了。 */
+const MIN_IDLE_CLOSE_MINUTES = 10;
+
+/** 闲置多少分钟自动关闭（idleCloseMinutes，BTL-190 第 8 点）：0 = 关；存的值不合法时用默认的 180。 */
+export function idleCloseMinutes(s: Pick<SettingsRepo, "get">): number {
+  const t = s.get("idleCloseMinutes").trim();
+  const n = Number(t);
+  return IDLE_CLOSE_RE.test(t) && (n === 0 || n >= MIN_IDLE_CLOSE_MINUTES) ? n : Number(SETTING_DEFAULTS.idleCloseMinutes);
+}
+
+/** Butler 总控每天巡检的时刻（butlerPatrolTime，BTL-190 第 5 点）：关着或者存的值不合法时为 null（不猜一个时间）。 */
+export function butlerPatrolTime(s: Pick<SettingsRepo, "get">): { h: number; m: number } | null {
+  return parseTime(s.get("butlerPatrolTime"));
 }
 
 export function trackerTools(s: SettingsRepo): string[] {

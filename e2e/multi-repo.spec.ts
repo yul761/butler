@@ -51,14 +51,16 @@ test("a ticket over two repos: a session per repo and a coordinator that sees bo
   await expect.poll(fakeLog).toContain(`cwd=${workspace} adddirs=${worktree}|${s.apiRepo}\n`);
   await expect(page.locator(".sessions-bar .session .place")).toHaveText([S.coordinator, "api"]);
 
-  // 5. 总控的 mcp 配置里有 butler-sessions（普通 session 的没有）；按配置启动它，调用 start_session。
-  await expect.poll(fakeLog).toMatch(/mcp=[^\n]*butler-sessions[^\n]*cwd=/);
+  // 5. 总控的 mcp 配置里有 butler-sessions；按配置启动它，调用 start_session。普通 session 也挂 butler-sessions
+  //    （BTL-190 第 2+3 点：只有 ask_user、report），所以总控按工作区目录认。
+  const coordinatorLine = new RegExp(`interactive new (\\S+) mcp=\\S*butler-sessions\\S* cwd=${workspace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} `);
+  await expect.poll(fakeLog).toMatch(coordinatorLine);
   const config = JSON.parse(readFileSync(join(s.butlerHome, "mcp", "tickets", "coordinator", "FULL-1.json"), "utf8")) as {
     mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
   };
   const server = config.mcpServers["butler-sessions"];
   // claude 会把自己的环境变量（包括 Butler 给的 BUTLER_SESSION）传给 MCP server：这里按总控的 session id 补上。
-  const coordinatorId = /interactive new (\S+) mcp=[^\n]*butler-sessions/.exec(fakeLog())![1];
+  const coordinatorId = coordinatorLine.exec(fakeLog())![1];
   const child = spawn(server.command, server.args, {
     env: { ...server.env, BUTLER_SESSION: coordinatorId, PATH: process.env.PATH ?? "" },
     stdio: ["pipe", "pipe", "inherit"],
@@ -75,7 +77,7 @@ test("a ticket over two repos: a session per repo and a coordinator that sees bo
     expect(started.repo).toBe("repo");
 
     // 子 session 出现在同一个 ticket 下，开在 repo 的 worktree 里，任务作为第一条消息提交。
-    await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace cwd=${worktree} adddirs=\n`);
+    await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-sessions cwd=${worktree} adddirs=\n`);
     const childButton = page.locator(".sessions-bar .session").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
     await expect(childButton).toBeVisible();
     await expect(childButton).toHaveAttribute("title", /^总控 session 交给你的任务：[\n ]+boss-says-build-the-ui[\n ]+开始之前先用 recall 读一下 ticket 记忆（butler-memory）里的背景和约定。/);

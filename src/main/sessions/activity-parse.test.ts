@@ -61,6 +61,82 @@ describe("applyEntry", () => {
     expect(backgroundTasks(s)).toEqual([]);
   });
 
+  describe("a background task also ends", () => {
+    /** 两个后台任务 a、b 在跑。 */
+    const twoTasks = () => {
+      const s = newTranscriptState();
+      for (const id of ["a", "b"]) {
+        applyEntry(s, toolUse(`bg-${id}`, "Bash", { command: `run ${id}`, run_in_background: true }));
+        applyEntry(s, toolResult(`bg-${id}`, `Command running in background with ID: ${id}.`, { toolUseResult: { backgroundTaskId: id } }));
+      }
+      return s;
+    };
+    const ids = (s: ReturnType<typeof newTranscriptState>) => backgroundTasks(s).map((t) => t.taskId);
+    // 真实 transcript 里 TaskStop 的结果：toolUseResult 带 task_id，内容是同样的 JSON 文本
+    const stopped = (useId: string, taskId: string) =>
+      toolResult(useId, JSON.stringify({ message: `Successfully stopped task: ${taskId} (run ${taskId})`, task_id: taskId }), {
+        toolUseResult: { message: `Successfully stopped task: ${taskId} (run ${taskId})`, task_id: taskId, task_type: "local_bash", command: `run ${taskId}` },
+      });
+
+    it("when TaskStop stops it (toolUseResult.task_id)", () => {
+      const s = twoTasks();
+      applyEntry(s, toolUse("stop", "TaskStop", { task_id: "a" }));
+      applyEntry(s, stopped("stop", "a"));
+      expect(ids(s)).toEqual(["b"]);
+    });
+
+    it("when TaskStop's result has no task_id: the tool_use input's task_id counts, even for an error result", () => {
+      const s = twoTasks();
+      applyEntry(s, toolUse("stop", "TaskStop", { task_id: "b" }));
+      applyEntry(s, toolResult("stop", "No task found with ID: b", { toolUseResult: "Error: No task found with ID: b" }));
+      expect(ids(s)).toEqual(["a"]);
+    });
+
+    it("when KillShell kills it (shell_id in the result or the input)", () => {
+      const s = twoTasks();
+      applyEntry(s, toolUse("k1", "KillShell", { shell_id: "a" }));
+      applyEntry(s, toolResult("k1", "Successfully killed shell: a (run a)", { toolUseResult: { message: "Successfully killed shell: a (run a)", shell_id: "a" } }));
+      expect(ids(s)).toEqual(["b"]);
+      applyEntry(s, toolUse("k2", "KillShell", { shell_id: "b" }));
+      applyEntry(s, toolResult("k2", "ok"));
+      expect(ids(s)).toEqual([]);
+    });
+
+    it("when the stop's tool_use fell outside the replayed tail but its result says it stopped the task", () => {
+      const s = twoTasks();
+      applyEntry(s, stopped("unseen", "a"));
+      expect(ids(s)).toEqual(["b"]);
+    });
+
+    it("but not when another tool's result merely carries a task_id (TaskOutput)", () => {
+      const s = twoTasks();
+      applyEntry(s, toolUse("out", "TaskOutput", { task_id: "a" }));
+      applyEntry(s, toolResult("out", "still running", { toolUseResult: { retrieval_status: "not_ready", task: { task_id: "a", status: "running" } } }));
+      expect(ids(s)).toEqual(["a", "b"]);
+    });
+
+    it("on a <task-notification> in a user entry", () => {
+      const s = twoTasks();
+      applyEntry(s, { type: "user", message: { role: "user", content: "<task-notification>\n<task-id>a</task-id>\n<status>killed</status>\n</task-notification>" } });
+      expect(ids(s)).toEqual(["b"]);
+      applyEntry(s, { type: "user", message: { role: "user", content: [{ type: "text", text: "<task-notification>\n<task-id>b</task-id>\n<status>completed</status>\n</task-notification>" }] } });
+      expect(ids(s)).toEqual([]);
+    });
+
+    it("on a <task-notification> in a queued_command attachment", () => {
+      const s = twoTasks();
+      applyEntry(s, { type: "attachment", attachment: { type: "queued_command", commandMode: "task-notification", prompt: "<task-notification>\n<task-id>b</task-id>\n<status>completed</status>\n</task-notification>" } });
+      expect(ids(s)).toEqual(["a"]);
+    });
+
+    it("but not when a user message or a tool result only quotes a notification", () => {
+      const s = twoTasks();
+      applyEntry(s, { type: "user", message: { role: "user", content: "why did <task-notification><task-id>a</task-id></task-notification> show up?" } });
+      applyEntry(s, toolResult("read", "line: <task-notification>\n<task-id>b</task-id>\n</task-notification>"));
+      expect(ids(s)).toEqual(["a", "b"]);
+    });
+  });
+
   it("reads the output file from the real tool_result text, including a path with a space", () => {
     // 真实文本里路径后面还有同一行的句子
     const real = "Command running in background with ID: b1r0793pr. Output is being written to: /private/tmp/claude-501/-Users-x-Code/44425d07-c421-4d49-a213-e41f12ddcad9/tasks/b1r0793pr.output. You will be notified when it completes \u2014 do not poll that file or sleep while waiting.";
@@ -248,5 +324,57 @@ describe("lastReply (task 11: end_session)", () => {
     applyEntry(s, say([{ type: "text", text: "没有 id" }]));
     expect(s.lastReply).toBe("没有 id");
     expect(s.lastReplyId).toBeNull();
+  });
+});
+
+describe("events (BTL-190 7: the live window)", () => {
+  const T0 = "2026-11-12T10:00:00.000Z";
+  const at = (s: string) => Date.parse(s);
+  const user = (content: unknown, timestamp = T0) => ({ type: "user", timestamp, message: { role: "user", content } });
+  const reply = (stop: string | null, content: unknown[], timestamp = T0) => ({ type: "assistant", timestamp, message: { role: "assistant", stop_reason: stop, content } });
+
+  it("records every tool_use with its name, input and time, in order", () => {
+    const s = newTranscriptState();
+    applyEntry(s, reply("tool_use", [
+      { type: "tool_use", id: "t1", name: "Read", input: { file_path: "/a/b.ts" } },
+      { type: "tool_use", id: "t2", name: "mcp__butler-memory__remember", input: { text: "接口改成 v2" } },
+    ], "2026-11-12T10:00:05.000Z"));
+    expect(s.events.filter((e) => e.type === "tool")).toEqual([
+      { type: "tool", at: at("2026-11-12T10:00:05.000Z"), name: "Read", input: { file_path: "/a/b.ts" } },
+      { type: "tool", at: at("2026-11-12T10:00:05.000Z"), name: "mcp__butler-memory__remember", input: { text: "接口改成 v2" } },
+    ]);
+  });
+
+  it("records turn-start and turn-end only when the turn actually opens or closes", () => {
+    const s = newTranscriptState();
+    applyEntry(s, user("fix it", "2026-11-12T10:00:01.000Z"));
+    applyEntry(s, reply("tool_use", [{ type: "text", text: "looking" }]));
+    applyEntry(s, toolResult("t1", "ok"));
+    applyEntry(s, reply("end_turn", [{ type: "text", text: "done" }], "2026-11-12T10:00:09.000Z"));
+    applyEntry(s, { type: "system", subtype: "turn_duration", timestamp: T0 });
+    expect(s.events).toEqual([
+      { type: "turn-start", at: at("2026-11-12T10:00:01.000Z") },
+      { type: "turn-end", at: at("2026-11-12T10:00:09.000Z") },
+    ]);
+  });
+
+  it("a restart without a user message (task notification) and an interrupt count as turn-start and turn-end", () => {
+    const s = newTranscriptState();
+    applyEntry(s, reply("tool_use", [{ type: "text", text: "back" }]));
+    applyEntry(s, user("[Request interrupted by user]"));
+    applyEntry(s, user("go on"));
+    applyEntry(s, { type: "system", subtype: "stop_hook_summary", timestamp: T0 });
+    expect(s.events.map((e) => e.type)).toEqual(["turn-start", "turn-end", "turn-start", "turn-end"]);
+  });
+
+  it("ignores sub-agent tool calls and keeps at most the latest 100 pending events", () => {
+    const s = newTranscriptState();
+    applyEntry(s, { ...reply("tool_use", [{ type: "tool_use", id: "sc", name: "Read", input: {} }]), isSidechain: true });
+    expect(s.events).toEqual([]);
+    for (let i = 0; i < 150; i++) applyEntry(s, reply("tool_use", [{ type: "tool_use", id: `t${i}`, name: `Tool${i}`, input: {} }]));
+    expect(s.events).toHaveLength(100);
+    expect(s.events.at(-1)).toMatchObject({ name: "Tool149" });
+    // 第一条 assistant 打开了这一轮：turn-start 和最早的工具被挤掉了。
+    expect(s.events[0]).toMatchObject({ name: "Tool50" });
   });
 });

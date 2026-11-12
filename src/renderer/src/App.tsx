@@ -2,9 +2,11 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState }
 import type { EpicView, FeatureView, NowTarget, NowView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
+import { needsYouTotal } from "./now-view";
 import { routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
+import { ButlerPage } from "./components/ButlerPage";
 import { EpicPage } from "./components/EpicPage";
 import { FeaturePage } from "./components/FeaturePage";
 import { NewEpicDialog } from "./components/NewEpicDialog";
@@ -28,6 +30,8 @@ export type Route =
   /** focusSession：从「现在」页点进来时先切到的那个 session 的终端。 */
   | { page: "feature"; id: number; focusSession?: string | null }
   | { page: "epic"; id: number; focusSession?: string | null }
+  /** Butler 总控（BTL-190 第 5 点）。 */
+  | { page: "butler"; focusSession?: string | null }
   | { page: "unclaimed" }
   | { page: "archived" }
   | { page: "settings" }
@@ -130,6 +134,7 @@ export function App() {
   /** 「现在」页的一行点开：ticket 走 openTicket（切到那个终端）；feature、epic 页打开时先看那个 session 的终端。 */
   const openTarget = (t: NowTarget) => {
     if (t.page === "ticket") openTicket(t.key, t.sessionId ? { ticketKey: t.key, sessionId: t.sessionId } : undefined);
+    else if (t.page === "butler") setRoute({ page: "butler", focusSession: t.sessionId });
     else setRoute({ page: t.page, id: t.id, focusSession: t.sessionId });
   };
 
@@ -150,7 +155,7 @@ export function App() {
   return (
     <div className="app">
       <Sidebar
-        tickets={tickets} features={features} epics={epics} unclaimedCount={unclaimedCount} needsYouCount={nowView?.needsYou.length ?? 0} route={route} onNavigate={setRoute}
+        tickets={tickets} features={features} epics={epics} unclaimedCount={unclaimedCount} needsYouCount={needsYouTotal(nowView)} route={route} onNavigate={setRoute}
         onNew={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)} onNewEpic={() => setShowNewEpic(true)}
         keepAwake={keepAwake} onKeepAwake={(on) => api.setKeepAwake(on).then(setKeepAwake, reportError)}
       />
@@ -190,6 +195,7 @@ export function App() {
                 onOpenTicket={(key) => setRoute({ page: "ticket", key })}
                 onTicketCreated={goTicket}
                 focusSession={route.focusSession}
+                onOpenTarget={openTarget}
               />
             )}
             {route.page === "epic" && currentEpic && (
@@ -199,8 +205,10 @@ export function App() {
                 onOpenFeature={(id) => setRoute({ page: "feature", id })}
                 onFeatureCreated={goFeature}
                 focusSession={route.focusSession}
+                onOpenTarget={openTarget}
               />
             )}
+            {route.page === "butler" && <ButlerPage key={route.focusSession ?? ""} focusSession={route.focusSession} onOpenTarget={openTarget} />}
             {route.page === "unclaimed" && <UnclaimedPage tickets={allTickets} />}
             {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} onEpicRestored={goEpic} />}
             {route.page === "settings" && <SettingsPage onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}

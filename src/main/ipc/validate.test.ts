@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, moveTargetArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, moveTargetArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -95,6 +95,9 @@ describe("session id argument", () => {
   it("accepts ids made of letters, digits and dashes only", () => {
     expect(sessionIdArg("1125e68e-5407-4868-9ca8-5a306155f393")).toBe("1125e68e-5407-4868-9ca8-5a306155f393");
     for (const bad of ["", "../x", "a b", 3, null, "x".repeat(101)]) expect(() => sessionIdArg(bad)).toThrow();
+    expect(sessionIdsArg(["s1", "1125e68e-5407-4868-9ca8-5a306155f393"])).toEqual(["s1", "1125e68e-5407-4868-9ca8-5a306155f393"]);
+    expect(sessionIdsArg([])).toEqual([]);
+    for (const bad of ["s1", null, ["s1", "../x"], Array.from({ length: 501 }, (_, i) => `s${i}`)]) expect(() => sessionIdsArg(bad)).toThrow();
   });
 });
 
@@ -173,9 +176,30 @@ describe("epic IPC arguments (design 2026-11-01)", () => {
     }
   });
 
+  it("checks the Butler 总控 session request (BTL-190 5)", () => {
+    expect(openButlerArg({ sessionId: "abc-1", prefill: "hi", extra: 1 })).toEqual({ sessionId: "abc-1", prefill: "hi" });
+    expect(openButlerArg({})).toEqual({});
+    for (const bad of [null, 3, { sessionId: "../x" }, { prefill: 3 }, { prefill: "x".repeat(100_001) }]) {
+      expect(() => openButlerArg(bad), JSON.stringify(bad)?.slice(0, 80)).toThrow();
+    }
+  });
+
   it("moves a feature into an epic or out with null, but a missing target is not a move out", () => {
     expect(moveTargetArg(4)).toBe(4);
     expect(moveTargetArg(null)).toBeNull();
     for (const bad of [undefined, 0, -1, 1.5, "4", ""]) expect(() => moveTargetArg(bad), String(bad)).toThrow();
+  });
+});
+
+describe("inbox IPC arguments (BTL-190 2+3)", () => {
+  it("accepts a positive item id, a non-blank bounded answer and one of three scopes", () => {
+    expect(inboxIdArg(5)).toBe(5);
+    for (const bad of [0, -1, 1.5, "5", null]) expect(() => inboxIdArg(bad)).toThrow();
+    expect(inboxAnswerArg("用 A")).toBe("用 A");
+    for (const bad of ["", "   ", 3, null, "x".repeat(4001)]) expect(() => inboxAnswerArg(bad)).toThrow();
+    expect(inboxScopeArg({ featureId: 2 })).toEqual({ featureId: 2 });
+    expect(inboxScopeArg({ epicId: 3 })).toEqual({ epicId: 3 });
+    expect(inboxScopeArg({ all: true })).toEqual({ all: true });
+    for (const bad of [null, {}, { all: 1 }, { featureId: 0 }, { epicId: "3" }, "all"]) expect(() => inboxScopeArg(bad), JSON.stringify(bad)).toThrow();
   });
 });

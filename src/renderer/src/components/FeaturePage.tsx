@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { SessionActivity } from "../../../shared/activity";
-import type { EpicView, FeatureView, TicketView } from "../../../shared/types";
+import type { EpicView, FeatureView, InboxItemView, NowTarget, TicketView } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import { prLabel, prPill, summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary-view";
 import { S, STATUS_LABEL } from "../strings";
+import { InboxPanes } from "./InboxPanes";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { StuckPanel } from "./StuckPanel";
 import { activityText, useNow } from "./TicketActivity";
@@ -19,6 +20,8 @@ interface Props {
   onTicketCreated: (key: string) => void;
   /** 打开时先切到这个 session 的终端（从「现在」页点进来时）。 */
   focusSession?: string | null;
+  /** 「待你决定」卡片上的「去终端」：问题不是这个页面上的 session 提的（ticket 的 session）时跳过去。 */
+  onOpenTarget: (t: NowTarget) => void;
 }
 
 const errorText = (e: unknown) => (e instanceof ButlerError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
@@ -31,7 +34,7 @@ function formatTime(ms: number): string {
  * feature 页（设计文档 2026-10-26、2026-10-28）：从上到下是名字和工作区、整体进度（feature 汇总）、
  * ticket 表（带 PR 状态），然后是仓库、feature 总控 session 和它们的终端。
  */
-export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, focusSession }: Props) {
+export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, focusSession, onOpenTarget }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newTicket, setNewTicket] = useState(false);
   const showError = (e: unknown) => setError(errorText(e));
@@ -56,6 +59,15 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
     } catch (e) {
       setError(errorText(e));
     }
+  }
+
+  /** 「去终端」：这个页面上的 session（总控、修复 session）就地切过去，终端关着就打开；别的跳到它的页面。 */
+  function goTo(item: InboxItemView) {
+    const t = item.target;
+    if (t.page !== "feature" || t.id !== feature.id) return onOpenTarget(t);
+    const termId = feature.sessions.find((s) => s.id === item.sessionId)?.termId;
+    if (termId) panes.show(termId);
+    else void panes.open(item.sessionId);
   }
 
   function dismissStuck(sessionId: string) {
@@ -141,6 +153,8 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
           onCreated={(key) => (setNewTicket(false), onTicketCreated(key))}
         />
       )}
+
+      <InboxPanes scope={{ featureId: feature.id }} onGo={goTo} />
 
       <SessionArea
         repos={feature.repos}

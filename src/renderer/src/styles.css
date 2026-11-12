@@ -12,6 +12,12 @@
   --pill-approved-bg: #d6f0e3; --pill-approved: #1d7a4c;
   --pill-changes-bg: #fde2dd; --pill-changes: #b03a24;
   --pill-pending-bg: #fff1c9; --pill-pending: #8a6200;
+  /* 实况窗口（BTL-190 第 7 点）：写记忆蓝、读记忆绿、等你黄（边框），虚线和点阵底纹。 */
+  --live-write: #1d4ed8;
+  --live-read: #166534;
+  --live-need: #d4a017;
+  --live-wire: #b9b9b3;
+  --live-grain: #e4e4e0;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -28,6 +34,11 @@
     --pill-approved-bg: #1d3a2b; --pill-approved: #7ee0a8;
     --pill-changes-bg: #4a2620; --pill-changes: #f5a593;
     --pill-pending-bg: #433818; --pill-pending: #f0cf6e;
+    --live-write: #7fb0ff;
+    --live-read: #5fdc8f;
+    --live-need: #e2b84a;
+    --live-wire: #55554f;
+    --live-grain: #2e2e2b;
   }
 }
 * { box-sizing: border-box; }
@@ -140,6 +151,7 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .session-hide { padding: 0 6px; color: var(--muted); border-left: none; border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .session-hide:hover { color: var(--text); }
 .session-hide.armed { color: var(--danger); white-space: nowrap; }
+.hidden-sessions button.armed { color: var(--danger); }
 .hidden-sessions .row { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
 .repos-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 16px; border-bottom: 1px solid var(--border); }
 .repos-bar .label { font-weight: 600; }
@@ -195,6 +207,7 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .now-epic > h3, .now-feature > h4 { margin: 0; padding: 4px; border-radius: 6px; }
 .now-epic > h3:hover, .now-feature > h4:hover { background: var(--panel); }
 .now-epic > h3 { font-size: 14px; }
+.now-butler > h3:hover { background: none; }
 .now-feature { margin-left: 16px; }
 .now-feature > h4 { font-size: 13px; }
 .now-summary { margin-left: 4px; color: var(--muted); font-size: 12px; font-weight: normal; }
@@ -222,6 +235,79 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .now-usage-details { display: flex; flex-wrap: wrap; gap: 8px 32px; margin: 4px 0 0 20px; font-size: 12px; }
 .now-usage-details h4 { margin: 4px 0; color: var(--muted); font-size: 12px; }
 .now-usage-details ul { margin: 0; padding-left: 16px; }
+/*
+ * 实况窗口（BTL-190 第 7 点）：点阵底上，核心卡片在中间一列，session 卡片在左右两列，SVG 虚线连起来（路径由 LiveWindow 量出来）。
+ * 动画只用 CSS：药丸上的点闪、在干活的线上虚线往核心流、记忆读写的光点沿线走一趟、核心收到记忆时亮一圈。
+ * 容器不够宽（live-stage 是查询容器）时卡片排成网格、核心在最上面，不画线。减少动态效果时都不动。
+ */
+.live { margin-bottom: 14px; padding: 8px 14px 16px; border: 1px solid var(--border); border-radius: 10px; background-color: var(--panel); background-image: radial-gradient(var(--live-grain) 1px, transparent 1.2px); background-size: 14px 14px; }
+.live-title { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; font-size: 12px; font-weight: 600; color: var(--text); }
+.live-title::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.live-empty .live-title::before { background: var(--muted); }
+.live-empty-text { margin: 0 0 2px; color: var(--text); }
+.live-stage { container-type: inline-size; }
+.live-grid { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 230px) minmax(0, 1fr); gap: 14px 56px; align-items: center; }
+.live-wires { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.live-wire { fill: none; stroke: var(--live-wire); stroke-width: 1.3; stroke-dasharray: 4 5; }
+.live-wire.work { animation: live-flow 1.4s linear infinite; }
+.live-spark { fill: none; stroke: currentColor; stroke-width: 7; stroke-linecap: round; stroke-dasharray: 0.1 99.9; opacity: 0; filter: drop-shadow(0 0 3px currentColor); animation: live-travel 1.6s ease-in-out forwards; }
+.live-spark.memory-write { color: var(--live-write); }
+/* 读记忆：同一条线（从卡片到核心）倒着走。 */
+.live-spark.memory-read { color: var(--live-read); animation-direction: reverse; }
+.live-core { position: relative; z-index: 1; grid-column: 2; grid-row: 1 / span var(--rows); display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 12px; background: var(--bg); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 10%, transparent), 0 6px 18px color-mix(in srgb, var(--text) 8%, transparent); }
+.live-core-pulse { position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; animation: live-pulse 1.2s ease-out forwards; }
+.live-core-name { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; color: var(--accent); }
+.live-core-count { display: flex; align-items: baseline; gap: 6px; }
+.live-core-count strong { font-size: 28px; line-height: 1; font-variant-numeric: tabular-nums; }
+.live-core-count span { color: var(--text); }
+.live-core-memory h4 { margin: 0 0 3px; font-size: 11px; font-weight: 600; color: var(--muted); }
+.live-mem { display: flex; gap: 5px; align-items: baseline; margin: 0; font-size: 11.5px; line-height: 1.45; min-width: 0; }
+.live-mem .who { flex-shrink: 0; color: var(--text); font-family: ui-monospace, Menlo, Consolas, monospace; }
+.live-mem .verb { flex-shrink: 0; font-weight: 600; }
+.live-mem .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.live-mem.memory-write .verb, .live-line.memory-write { color: var(--live-write); }
+.live-mem.memory-read .verb, .live-line.memory-read { color: var(--live-read); }
+.live-mem.none { color: var(--muted); }
+.live-more { font-size: 11.5px; color: var(--muted); }
+.live-card { position: relative; z-index: 1; grid-column: var(--col); grid-row: var(--row); display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px 10px 9px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); text-align: left; box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 6%, transparent); transition: border-color 0.3s, box-shadow 0.3s; }
+.live-card:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.live-card.need { border-color: var(--live-need); box-shadow: 0 0 0 3px color-mix(in srgb, var(--live-need) 22%, transparent); }
+.live-badge { position: absolute; top: -10px; left: 10px; padding: 0 7px; border: 1px solid var(--live-need); border-radius: 9px; background: var(--pill-pending-bg); color: var(--pill-pending); font-size: 11px; font-weight: 600; line-height: 17px; white-space: nowrap; }
+.live-card-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.live-key { flex-shrink: 0; font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 600; color: var(--text); }
+.live-where { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11.5px; }
+.live-pill { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; margin-left: auto; padding: 0 7px; border-radius: 9px; font-size: 11px; line-height: 18px; white-space: nowrap; }
+.live-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+/* 淡绿底上 --pill-approved 不到 4.5:1（浅色主题）：字用 --text，闪的点用 --ok。 */
+.live-pill.work { background: var(--pill-approved-bg); color: var(--text); }
+.live-pill.work::before { background: var(--ok); animation: live-blink 1.1s ease-in-out infinite; }
+.live-pill.need { background: var(--pill-pending-bg); color: var(--pill-pending); }
+.live-pill.stuck { background: var(--pill-changes-bg); color: var(--pill-changes); }
+.live-lines { display: flex; flex-direction: column; gap: 1px; min-height: calc(3 * 1.45em); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.45; }
+.live-line { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.live-line::before { content: "› "; color: var(--muted); }
+.live-line .verb { margin-right: 5px; font-weight: 600; }
+.live-line.none { color: var(--muted); }
+.live-line.none::before { content: ""; }
+@keyframes live-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+@keyframes live-flow { to { stroke-dashoffset: -9; } }
+@keyframes live-travel { 0% { stroke-dashoffset: 0; opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } 100% { stroke-dashoffset: -99.9; opacity: 0; } }
+@keyframes live-pulse { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); } to { box-shadow: 0 0 0 14px transparent; } }
+@container (max-width: 600px) {
+  .live-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 12px; }
+  .live-wires { display: none; }
+  .live-core { grid-column: 1 / -1; grid-row: auto; order: -1; }
+  .live-card { grid-column: auto; grid-row: auto; }
+}
+@container (max-width: 360px) {
+  .live-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-wire.work, .live-pill.work::before, .live-core-pulse { animation: none; }
+  .live-card { transition: none; }
+  /* 不走光点：整条线亮一会儿就收走（LiveWindow 的 SPARK_MS）。 */
+  .live-spark { animation: none; opacity: 0.85; stroke-width: 2.5; stroke-dasharray: none; filter: none; }
+}
 /* 侧栏「现在」后面的红点和数字：需要你的条数。 */
 .sidebar .nav.home { display: flex; align-items: center; gap: 6px; }
 /* 只给读屏的文字：看不见，但在可访问性树里。 */
@@ -259,3 +345,27 @@ label.inline { display: inline-flex; gap: 6px; align-items: center; }
 /* 语言选择（设计文档 2026-10-26）。 */
 .language-picker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 12px; }
 .language-picker .muted { flex-basis: 100%; }
+/* 「待你决定」和汇报（BTL-190 第 2+3 点）：feature 页、epic 页终端上面的两栏，各自滚动；「现在」页「需要你」里的卡片。 */
+.inbox-panes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; max-height: 40vh; padding: 6px 16px 10px; border-bottom: 1px solid var(--border); }
+.inbox-pane { min-height: 0; overflow-y: auto; }
+.inbox-pane h3 { display: flex; gap: 8px; align-items: baseline; margin: 6px 0 4px; font-size: 12px; color: var(--muted); }
+.inbox-decisions h3 { color: var(--danger); }
+.inbox-reports ul { list-style: none; margin: 0; padding: 0; }
+.inbox-report { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.inbox-report p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.inbox-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 12px; }
+.inbox-head .who { font-weight: 600; }
+.inbox-kind { border-radius: 4px; padding: 0 6px; background: var(--pill-pending-bg); color: var(--pill-pending); }
+.inbox-kind.done { background: var(--pill-approved-bg); color: var(--pill-approved); }
+.inbox-kind.blocked { background: var(--pill-changes-bg); color: var(--pill-changes); }
+.inbox-card { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; margin-bottom: 8px; background: var(--bg); border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); border-radius: 8px; }
+.inbox-question { margin: 0; font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+.inbox-context { margin: 0; max-height: 8em; overflow-y: auto; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.inbox-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.inbox-answer { display: flex; gap: 6px; align-items: flex-end; }
+.inbox-queued { margin: 0; color: var(--ok); }
+.inbox-card .actions { display: flex; gap: 6px; }
+.now-decisions { display: flex; flex-direction: column; margin: 4px 0 6px; }
+@media (max-width: 720px) { .inbox-panes { grid-template-columns: minmax(0, 1fr); } }
+/* Butler 总控页（BTL-190 第 5 点）。 */
+.butler-intro { margin: 0; padding: 0 16px 8px; }

@@ -1,4 +1,5 @@
-import type { SessionActivity } from "./activity";
+import type { ActivityEvent, SessionActivity } from "./activity";
+import type { ReportKind } from "./control";
 import type { FeatureHandoff, Handoff, Pr } from "./handoff";
 export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
@@ -127,6 +128,8 @@ export interface Session {
   epicId: number | null;
   /** 开出来时用的模型（opus / sonnet）；null：没指定，恢复时也不传 --model。 */
   model: string | null;
+  /** Butler 总控（BTL-190 第 5 点）：全局只有一个，ticket、feature、epic 都是 null。 */
+  butler: boolean;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */
@@ -166,6 +169,13 @@ export interface EpicView extends Epic {
   /** 下面有 feature 卡住了。 */
   stuck: boolean;
   features: EpicFeatureRow[];
+}
+
+/** Butler 总控页（BTL-190 第 5 点）：它的 session 和工作目录。 */
+export interface ButlerView {
+  workspaceDir: string;
+  sessions: SessionView[];
+  hiddenSessions: SessionView[];
 }
 
 export interface UnclaimedSession extends Session {
@@ -246,6 +256,12 @@ export interface OpenFeatureSessionRequest {
 /** 打开 epic session：新开，或者恢复 sessionId。 */
 export interface OpenEpicSessionRequest {
   epicId: number;
+  sessionId?: string;
+  prefill?: string;
+}
+
+/** 打开 Butler 总控（BTL-190 第 5 点）：新开，或者恢复 sessionId；已经有一个在跑时都返回那一个。 */
+export interface OpenButlerSessionRequest {
   sessionId?: string;
   prefill?: string;
 }
@@ -432,19 +448,20 @@ export interface WatchedPr {
   checkedAt: number;
 }
 
-/** 「现在」页一行点开去哪：ticket 页、feature 页或 epic 页，sessionId 是要切到的终端（null：页面自己选）。 */
+/** 「现在」页一行点开去哪：ticket 页、feature 页、epic 页或 Butler 总控页，sessionId 是要切到的终端（null：页面自己选）。 */
 export type NowTarget =
   | { page: "ticket"; key: string; sessionId: string | null }
   | { page: "feature"; id: number; sessionId: string | null }
-  | { page: "epic"; id: number; sessionId: string | null };
+  | { page: "epic"; id: number; sessionId: string | null }
+  | { page: "butler"; sessionId: string | null };
 
-/** 换新（计划 16）正在做的那一步：写 handoff、/clear、发接着做的话。 */
-export type RefreshStep = "handoff" | "clear" | "resume";
+/** 换新（计划 16）正在做的那一步：写 handoff、/clear、发接着做的话。close：闲置关闭（BTL-190 第 8 点），写 handoff 之后结束终端。 */
+export type RefreshStep = "handoff" | "clear" | "resume" | "close";
 /**
  * 换新开始不了的原因（SessionRefresher.precheck）：busy 现在不能往终端里输入；already 正在换新；cooldown 30 分钟内失败过；
- * memory_off 记忆关着；failed 这个 session 不能换新。
+ * memory_off 记忆关着；failed 这个 session 不能换新；awaiting_user 有未决的 ask_user（只拒绝总控触发的换新，BTL-190 第 2+3 点）。
  */
-export type RefreshRefusal = "busy" | "already" | "cooldown" | "memory_off" | "failed";
+export type RefreshRefusal = "busy" | "already" | "cooldown" | "memory_off" | "failed" | "awaiting_user";
 /** 界面上的“换新”按钮（IPC sessions:refresh）：开始了，或者为什么开始不了。 */
 export type RefreshSessionResult = { ok: true } | { ok: false; reason: RefreshRefusal };
 
@@ -457,22 +474,30 @@ export interface NowRow {
   /** 一个 ticket 开了几个仓库的 session 时才填（仓库目录名）。 */
   repo: string | null;
   coordinator: boolean;
+  /** 实况卡片上写的地方（BTL-190 第 7 点）：ticket 的 session 是仓库目录名，feature、epic 的 session 是 feature、epic 的名字；不知道为 null。 */
+  where: string | null;
   activity: SessionActivity | null;
+  /** 正在干活：思考中、跑工具、后台命令（shared/activity 的 isWorking）。停着、等确认的不算。 */
+  working: boolean;
+  /** 最近 3 次工具调用（实况卡片上的几行），从早到晚。 */
+  recent: ActivityEvent[];
   /** 这个 session 在合并总控的等待名单里。 */
   mergeQueued: boolean;
   /** 需要你的理由：卡住时是卡住的 reason；停在确认上时是固定文案；不需要为 null。正在换新时为 null。 */
   needsYou: string | null;
   /** Butler 正在给这个 session 换新（计划 16）：做到哪一步；不在换新为 null。 */
   refreshing: RefreshStep | null;
+  /** 这个 session 还没答的「待你决定」有几条（BTL-190 第 2+3 点；卡片上答了、等着送的不算）。有未决的条目时 needsYou 为 null，卡片在 NowView.decisions 里。 */
+  decisions: number;
   prs: WatchedPr[];
-  /** 停着、不需要你、没有开着的 PR / CI：默认折起来。 */
+  /** 停着、不需要你、不在换新也不在合并排队：默认折起来。开着的 PR 不算（BTL-190 第 7 点），只显示在行上。只有 PR 的行不算空闲。 */
   idle: boolean;
   /** 这个状态从什么时候开始（activity.startedAt，没有就用 session 的 lastActivityAt）。 */
   since: number | null;
   target: NowTarget;
 }
 
-/** 一组的汇总：进行中（不空闲）的行数、需要你的行数、卡住的行数。 */
+/** 一组的汇总：在干活的行数（NowRow.working）、需要你的件数、卡住的行数。 */
 export interface NowCounts {
   active: number;
   needsYou: number;
@@ -496,11 +521,56 @@ export interface NowEpic {
   counts: NowCounts;
 }
 
+/** 「待你决定」一条的状态（BTL-190 第 2+3 点）。 */
+export type InboxStatus = "pending" | "answered" | "dismissed" | "superseded";
+/** 提问 / 汇报的是哪种 session：ticket 的 session、ticket 总控、feature 总控、修复 session、epic session、Butler 总控（BTL-190 第 5 点）。 */
+export type InboxRole = "ticket" | "ticket_coordinator" | "feature_coordinator" | "fix" | "epic" | "butler";
+
+/** 界面上的一条「待你决定」或汇报。 */
+export interface InboxItemView {
+  id: number;
+  kind: "decision" | "report";
+  /** 提问 / 汇报的 session 现在的 head（换新过的话是新的 id）。 */
+  sessionId: string;
+  role: InboxRole;
+  ticketKey: string | null;
+  featureId: number | null;
+  epicId: number | null;
+  /** ticket 开了几个仓库时才填（仓库目录名）。 */
+  repo: string | null;
+  /** decision 是问题，report 是汇报正文。 */
+  text: string;
+  options: string[];
+  context: string | null;
+  reportKind: ReportKind | null;
+  /** decision：用户已经答了、还没送进终端（等它停下来）时是答案；没答为 null。 */
+  answer: string | null;
+  createdAt: number;
+  /** 这个 session 的终端开着。 */
+  open: boolean;
+  target: NowTarget;
+}
+
+/** feature 页、epic 页上面的两栏：未决的「待你决定」（从早到晚）和最近的汇报（从新到旧）。 */
+export interface InboxView {
+  decisions: InboxItemView[];
+  reports: InboxItemView[];
+}
+
+/** 收件箱看哪一块：一个 feature（含它的 ticket）、一个 epic（含它的 feature 和 ticket），或者全部。 */
+export type InboxScope = { featureId: number } | { epicId: number } | { all: true };
+
 export interface NowView {
-  /** 全部需要你的行，按 since 从早到晚。 */
+  /** 全部需要你的行，按 since 从早到晚。有未决「待你决定」的 session 不在这里（它的卡片在 decisions 里）。 */
   needsYou: NowRow[];
+  /** 全部未决的「待你决定」（BTL-190 第 2+3 点），从早到晚；终端关着的 session 的也在。 */
+  decisions: InboxItemView[];
   epics: NowEpic[];
-  /** 开着终端的 Butler session 数。 */
+  /** 开着终端的 Butler 总控（BTL-190 第 5 点）的一行；没开为 null。它的「需要你」也在 needsYou 里，在干活也算进 running。 */
+  butler: NowRow | null;
+  /** 正在干活的 session 数（NowRow.working）。 */
   running: number;
+  /** 最近的记忆读写（实况窗口的核心卡片，BTL-190 第 7 点），从早到晚。 */
+  memory: ActivityEvent[];
   merges: MergeEvent[];
 }

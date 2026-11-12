@@ -139,7 +139,7 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
   await expect(page.locator(".sidebar .feature-group .feature-tickets .ticket .key")).toHaveText(["DMS-1", "DMS-2", "DMS-3"]);
   expect(existsSync(join(workspace, "backend-dms-3"))).toBe(true);
   // 子 session 是 DMS-1 的普通 session：在它的 worktree 里，挂 ticket 记忆和 feature 记忆，没有 butler-sessions。
-  await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-feature cwd=${feWorktree} adddirs=\n`);
+  await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-feature,butler-sessions cwd=${feWorktree} adddirs=\n`);
 
   // 5. 在 DMS-1 里看到子 session，等任务提交后用按钮旁的 × 结束它（点两次；这个仓库自己的终端在跑时不会清理）。
   await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
@@ -231,7 +231,8 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   const beWorktree = join(workspace, "backend-dms-2");
   const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
   const sessionIn = (cwd: string) => new RegExp(`interactive new (\\S+) mcp=\\S* cwd=${escapeRe(cwd)} `).exec(fakeLog())?.[1];
-  const headlessLines = () => fakeLog().split("\n").filter((l) => / headless .*--json-schema/.test(l));
+  // 只数 handoff 的 fork：需要你的判断（--model haiku）不算，transcript 有 fs.watch 以后它跑得早，什么时候跑不固定。
+  const headlessLines = () => fakeLog().split("\n").filter((l) => / headless .*--json-schema/.test(l) && !/ --model haiku /.test(l));
   const shots = process.env.BUTLER_E2E_SHOTS_DIR;
   const { app, page } = await launch(s);
   await completeWizard(page, s);
@@ -298,7 +299,8 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   expect(headlessLines()).toHaveLength(1);
   expect(headlessLines()[0]).toContain(`--resume ${dms2Session} --fork-session`);
   expect(headlessLines()[0]).toContain(`cwd=${beWorktree}`);
-  expect(fakeLog()).not.toMatch(new RegExp(` headless .*cwd=${escapeRe(feWorktree)}`));
+  // DMS-1 没有跑 handoff。Haiku 判断「需要你」也是 headless、也在它的目录里跑，不算（headlessLines 已经去掉了）。
+  expect(headlessLines().filter((l) => l.includes(`cwd=${feWorktree}`))).toEqual([]);
 
   // 5. “立即更新”：子 ticket 都没有新活动，直接 fork 总控生成汇总；来源变成“手动更新”。
   await progress.getByRole("button", { name: S.runFeatureSummary, exact: true }).click();
@@ -599,7 +601,8 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   expect(dbRows(s, "SELECT coordinator, fixes_session AS fixes, ticket_key AS ticket FROM sessions WHERE id = ?", fixId)).toEqual([{ coordinator: 0, fixes: stuckId, ticket: null }]);
   await expect(dot).toBeVisible();
   await fix.click();
-  await expect(page.locator(".feature-page .sessions-bar .session")).toHaveCount(2);
+  // 数 session（.session-wrap）：session 栏里的「清理闲置」「已隐藏」按钮也带 .session 样式。
+  await expect(page.locator(".feature-page .sessions-bar .session-wrap")).toHaveCount(2);
 
   // 16. 在别的页面上从「现在」页点需要你里的 DMS-1：进 DMS-1 的 ticket 页，当前终端是卡住的那个 session。
   await ticketPage("DMS-2");

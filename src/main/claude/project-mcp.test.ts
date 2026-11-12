@@ -470,6 +470,13 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [], hooks: { PreToolUse: group, PostToolUse: group, PostToolUseFailure: group } });
   });
 
+  it("writes the given tools as permissions.allow; without any there is no permissions key", () => {
+    const s = setup();
+    expect(Object.keys(read(projectMcpApprovalSettings([s.repo], { ...s.p, allowTools: [] })!))).not.toContain("permissions");
+    const file = projectMcpApprovalSettings([s.repo], { ...s.p, allowTools: ["mcp__x__a", "mcp__x__b"] });
+    expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [], permissions: { allow: ["mcp__x__a", "mcp__x__b"] } });
+  });
+
   it("missing or corrupt ~/.claude.json still enables the servers; an unwritable mcp dir gives null and a log line", () => {
     const s = setup();
     expect(projectMcpApprovalSettings([s.repo], s.p)).not.toBeNull();

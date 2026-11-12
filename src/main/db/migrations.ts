@@ -307,4 +307,35 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_epic_history_epic ON epic_history (epic_id, created_at);
   `,
+  // session 隐藏的时间（BTL-190 第 8 点）：隐藏超过 14 天的 session 行自动删掉。升级前就隐藏着的从升级这一刻算起，
+  // 不会一升级就被删。
+  `ALTER TABLE sessions ADD COLUMN dismissed_at INTEGER;
+  UPDATE sessions SET dismissed_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE dismissed = 1;`,
+  // 「待你决定」和汇报（BTL-190 第 2+3 点）。kind = decision：ask_user 记下的问题，status 是 pending / answered / dismissed /
+  // superseded；answer 有值而 status 还是 pending 表示用户答了、还没送进终端。kind = report：report 交的汇报，report_kind 是
+  // progress / done / blocked；status pending 表示还要送给总控，answered 表示送到了，dismissed 表示不用送（progress、没有总控、太旧）。
+  // session_id 是提问 / 汇报时的 session（不加外键：session 换新以后沿着 replaced_by 找到当前那个；删 session 时一起删掉）。
+  `
+  CREATE TABLE inbox_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (kind IN ('decision', 'report')),
+    session_id TEXT NOT NULL,
+    ticket_key TEXT,
+    feature_id INTEGER,
+    epic_id INTEGER,
+    text TEXT NOT NULL,
+    options TEXT,
+    context TEXT,
+    report_kind TEXT CHECK (report_kind IS NULL OR report_kind IN ('progress', 'done', 'blocked')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'answered', 'dismissed', 'superseded')),
+    answer TEXT,
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER
+  );
+  CREATE INDEX idx_inbox_items_status ON inbox_items (kind, status);
+  CREATE INDEX idx_inbox_items_session ON inbox_items (session_id);
+  `,
+  // Butler 总控（BTL-190 第 5 点）：全局只有一个的 session，ticket、feature、epic 都是空的。单独一列标出来，
+  // 免得被当成没归属的 session（认领页）或者 epic session。
+  `ALTER TABLE sessions ADD COLUMN butler INTEGER NOT NULL DEFAULT 0;`,
 ];

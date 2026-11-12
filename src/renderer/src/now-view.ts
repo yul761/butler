@@ -1,5 +1,5 @@
-import type { SessionActivity } from "../../shared/activity";
-import type { NowCounts, NowRow, NowView, UsageKind, UsageSummary, WatchedPr } from "../../shared/types";
+import type { ActivityEvent, SessionActivity } from "../../shared/activity";
+import type { InboxItemView, NowCounts, NowRow, NowView, UsageKind, UsageSummary, WatchedPr } from "../../shared/types";
 import { activityText } from "./components/TicketActivity";
 import type { UiStrings } from "./strings";
 
@@ -34,7 +34,7 @@ function prText(prs: WatchedPr[], S: UiStrings): { main: string; tone: RowTone }
 }
 
 /**
- * 一行的文字：需要你 → 换新中 → 卡住 → 合并排队 → 正在做的事 → PR 和 CI → 已停下。
+ * 一行的文字：需要你 → 等你决定 → 换新中 → 卡住 → 合并排队 → 正在做的事 → PR 和 CI → 已停下。
  * sub 是活动的细节（文件、命令、多久没有输出）；停着的不写（时长在最右边一列）。
  * 换新中的 session 在跑的是 Butler 输入的 /handoff、/clear，活动和卡住都不看；只有停在确认上（needsYou 不为 null）的照样显示出来。
  */
@@ -43,7 +43,9 @@ export function rowText(r: NowRow, S: UiStrings, now: number): { main: string; s
   const live = a && !stoppedKind(a) ? activityText(a, S, now) : null;
   const sub = live?.sub ?? null;
   if (r.needsYou !== null) return { main: isStuck(r) || r.needsYou === "" ? needsYouText(r, S) : S.nowWaitingFor(r.needsYou), sub, tone: "danger" };
-  if (r.refreshing !== null) return { main: S.nowRefreshing, sub: null, tone: "warn" };
+  // 用 ask_user 提了问题（BTL-190 第 2+3 点）：问题本身在「需要你」的卡片上，这里只说在等你决定。
+  if (r.decisions > 0) return { main: S.nowWaitingDecision, sub, tone: "danger" };
+  if (r.refreshing !== null) return { main: r.refreshing === "close" ? S.nowClosing : S.nowRefreshing, sub: null, tone: "warn" };
   if (isStuck(r)) return { main: S.nowStuck, sub, tone: "danger" };
   if (r.mergeQueued) return { main: S.nowMergeQueued, sub, tone: "warn" };
   if (live) return { main: live.main, sub, tone: "ok" };
@@ -104,9 +106,13 @@ export function usageDetails(u: UsageSummary, S: UiStrings): { byKind: string[];
   };
 }
 
+/** 一行是谁：ticket 号，总控写“总控”，修复 session 写“修复”。 */
+export const rowLabel = (r: NowRow, S: UiStrings): string =>
+  r.target.page === "butler" ? S.butlerNav : r.ticketKey ?? (r.coordinator ? S.coordinator : S.fixSessionFor(null));
+
 /** 「需要你」里一条的前半段：ticket 号（总控、修复 session 写它是什么）和它所在的 feature 或 epic；不属于 feature 的 ticket 写它的标题。 */
 export function rowPlace(view: NowView, r: NowRow, S: UiStrings): { label: string; name: string } {
-  const label = r.ticketKey ?? (r.coordinator ? S.coordinator : S.fixSessionFor(null));
+  const label = rowLabel(r, S);
   const key = rowKey(r);
   for (const e of view.epics) {
     if (e.rows.some((x) => rowKey(x) === key)) return { label, name: e.name };
@@ -116,3 +122,84 @@ export function rowPlace(view: NowView, r: NowRow, S: UiStrings): { label: strin
   }
   return { label, name: r.title ?? "" };
 }
+
+/** 侧栏上「需要你」的数：需要你的行加上未决的「待你决定」（每条一件）。 */
+export const needsYouTotal = (v: NowView | null): number => (v ? v.needsYou.length + v.decisions.filter((d) => d.answer === null).length : 0);
+
+/** 「待你决定」、汇报是谁发的：ticket 号（多仓库时带仓库名）、某某总控、修复 session、epic session。 */
+export const inboxWho = (i: InboxItemView, S: UiStrings): string => S.inboxWho(i.role, i.ticketKey, i.repo);
+
+/** 全部行，按页面上的顺序：Butler 总控在最前，然后每个 epic 先是它自己的行，再是各 feature 的。 */
+export const allRows = (v: NowView): NowRow[] => [...(v.butler ? [v.butler] : []), ...v.epics.flatMap((e) => [...e.rows, ...e.features.flatMap((f) => f.rows)])];
+
+/** 实况窗口（BTL-190 第 7 点）里一张卡片要你做几件事：需要你的理由算一件，每条未决的「待你决定」算一件。 */
+export const liveNeeds = (r: NowRow): number => (r.needsYou !== null ? 1 : 0) + r.decisions;
+
+/** 实况窗口里的 session：正在干活的，和停下来在等你的（确认、待你决定、需要你）。停下的、只有 PR 的行不在里面，按页面上的顺序。 */
+export const liveRows = (v: NowView): NowRow[] => allRows(v).filter((r) => r.sessionId !== null && (r.working || liveNeeds(r) > 0));
+
+/** 卡片上的状态药丸：卡住（红）→ 等你（黄：确认、待你决定、需要你）→ 在干活（闪）。 */
+export function livePill(r: NowRow, S: UiStrings): { text: string; tone: "work" | "need" | "stuck" } {
+  const a = r.activity;
+  if (isStuck(r)) return { text: S.nowStuck, tone: "stuck" };
+  if (a?.kind === "approval") return { text: S.activity.approval, tone: "need" };
+  if (r.decisions > 0) return { text: S.nowWaitingDecision, tone: "need" };
+  if (r.needsYou !== null) return { text: S.liveWaiting, tone: "need" };
+  const main = a ? S.activity[a.kind] : S.activity.thinking;
+  return { text: a?.background ? S.activityBackground(main) : main, tone: "work" };
+}
+
+const isLine = (e: ActivityEvent): boolean => e.kind === "tool" || e.kind === "memory-write" || e.kind === "memory-read";
+export const eventKey = (e: ActivityEvent): string => `${e.sessionId}|${e.at}|${e.kind}|${e.label}`;
+
+/**
+ * 上次取到的几行（NowView 里的）和之后推过来的（activity:event）合在一起：只要工具调用和记忆读写、keep 选中的，
+ * 同一条只留一次，从早到晚，最后 limit 条。
+ */
+export function mergeEvents(fetched: ActivityEvent[], pushed: ActivityEvent[], limit: number, keep: (e: ActivityEvent) => boolean): ActivityEvent[] {
+  const seen = new Map<string, ActivityEvent>();
+  for (const e of [...fetched, ...pushed]) if (isLine(e) && keep(e)) seen.set(eventKey(e), e);
+  return [...seen.values()].sort((a, b) => a.at - b.at).slice(-limit);
+}
+
+/** 核心卡片上的一条记忆读写：谁（不在实况里的 session 为空串）、写入还是读取、写了什么。 */
+export function liveMemoryLine(e: ActivityEvent, rows: NowRow[], S: UiStrings): { who: string; verb: string; label: string } {
+  const r = rows.find((x) => x.sessionId === e.sessionId);
+  return { who: r ? rowLabel(r, S) : "", verb: e.kind === "memory-write" ? S.liveWrote : S.liveRead, label: e.label };
+}
+
+/** 一个框（相对实况窗口的左上角，像素）。 */
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const clamp = (v: number, lo: number, hi: number): number => (lo > hi ? (lo + hi) / 2 : Math.min(hi, Math.max(lo, v)));
+const px = (v: number): string => String(Math.round(v * 10) / 10);
+
+/**
+ * 卡片连到核心的虚线（SVG path，从卡片到核心）：卡片在核心左边、右边时从卡片朝着核心的那条边的中间出发，
+ * 落在核心的侧边上（高度贴着卡片，离核心的上下角至少 14px）；在核心上面、下面时竖着连。中间用一段三次贝塞尔弯过去。
+ */
+export function wirePath(card: Box, core: Box): string {
+  const edge = 14;
+  const cy = card.y + card.h / 2;
+  const cx = card.x + card.w / 2;
+  let from: [number, number];
+  let to: [number, number];
+  if (card.x + card.w <= core.x || card.x >= core.x + core.w) {
+    const left = card.x + card.w <= core.x;
+    from = [left ? card.x + card.w : card.x, cy];
+    to = [left ? core.x : core.x + core.w, clamp(cy, core.y + edge, core.y + core.h - edge)];
+    const mx = (from[0] + to[0]) / 2;
+    return `M${px(from[0])} ${px(from[1])} C${px(mx)} ${px(from[1])} ${px(mx)} ${px(to[1])} ${px(to[0])} ${px(to[1])}`;
+  }
+  const above = cy < core.y + core.h / 2;
+  from = [cx, above ? card.y + card.h : card.y];
+  to = [clamp(cx, core.x + edge, core.x + core.w - edge), above ? core.y : core.y + core.h];
+  const my = (from[1] + to[1]) / 2;
+  return `M${px(from[0])} ${px(from[1])} C${px(from[0])} ${px(my)} ${px(to[0])} ${px(my)} ${px(to[0])} ${px(to[1])}`;
+}
+

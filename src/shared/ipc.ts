@@ -31,6 +31,9 @@ export const IPC = {
   epicsArchived: "epics:archived",
   epicsUnarchive: "epics:unarchive",
   epicsOpenSession: "epics:openSession",
+  /** Butler 总控（BTL-190 第 5 点）。 */
+  butlerView: "butler:view",
+  butlerOpenSession: "butler:openSession",
   reposScan: "repos:scan",
   ticketsRecheckCleanup: "tickets:recheckCleanup",
   sessionsOpen: "sessions:open",
@@ -41,6 +44,10 @@ export const IPC = {
   sessionsUnhide: "sessions:unhide",
   /** 界面上的“换新”按钮（计划 16）：能开始就在后台换新，马上返回。 */
   sessionsRefresh: "sessions:refresh",
+  /** 「清理闲置」按钮（BTL-190 第 8 点）：把这些 session 里闲置的关掉（在后台写 handoff、结束终端），马上返回开始关的个数。 */
+  sessionsCloseIdle: "sessions:closeIdle",
+  /** 隐藏列表里的「全部删除」（BTL-190 第 8 点）：删掉这些隐藏的 session 行，返回删掉的个数。transcript 不动。 */
+  sessionsDeleteHidden: "sessions:deleteHidden",
   sessionOpenFix: "sessions:openFix",
   activityDismiss: "activity:dismiss",
   usageSummary: "usage:summary",
@@ -51,6 +58,8 @@ export const IPC = {
   ptyData: "pty:data",
   ptyExit: "pty:exit",
   stateChanged: "state:changed",
+  /** 实况窗口（BTL-190 第 7 点）：session 新的一次工具调用、记忆读写、回合开始 / 结束（ActivityEvent）。 */
+  activityEvent: "activity:event",
   healthGet: "health:get",
   healthInstallHooks: "health:installHooks",
   healthUninstallHooks: "health:uninstallHooks",
@@ -60,6 +69,12 @@ export const IPC = {
   prWatchList: "prwatch:list",
   /** 「现在」页的整份数据（计划 14）。 */
   nowView: "now:view",
+  /** 「待你决定」和汇报（BTL-190 第 2+3 点）：一个 feature、一个 epic 或者全部的未决条目和最近的汇报。 */
+  inboxList: "inbox:list",
+  /** 在卡片上回答一条「待你决定」：记下答案，等提问的 session 停下来送进去。 */
+  inboxAnswer: "inbox:answer",
+  /** 「不用了」：结束一条「待你决定」，什么都不送。 */
+  inboxDismiss: "inbox:dismiss",
   followupsList: "followups:list",
   followupsSetStatus: "followups:setStatus",
   handoffsList: "handoffs:list",
@@ -95,9 +110,10 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.featuresList, IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive,
   IPC.featuresSummaryRun, IPC.featuresArchived, IPC.featuresUnarchive, IPC.featuresOpenSession, IPC.featuresMove, IPC.reposScan, IPC.ticketsRecheckCleanup,
   IPC.epicsList, IPC.epicsCreate, IPC.epicsRename, IPC.epicsAddRepo, IPC.epicsRemoveRepo, IPC.epicsArchive, IPC.epicsArchived, IPC.epicsUnarchive, IPC.epicsOpenSession,
-  IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
+  IPC.butlerView, IPC.butlerOpenSession,
+  IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
-  IPC.mergeEvents, IPC.prWatchList, IPC.nowView,
+  IPC.mergeEvents, IPC.prWatchList, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,
@@ -107,6 +123,6 @@ export const INVOKE_CHANNELS: readonly string[] = [
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];
 /** 主进程 → 渲染进程。 */
-export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.memoryChanged, IPC.appKeepAwakeChanged];
+export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.activityEvent, IPC.memoryChanged, IPC.appKeepAwakeChanged];
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };

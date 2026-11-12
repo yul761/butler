@@ -65,20 +65,25 @@ import { hookCommand } from "./hooks/installer";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
 import { HookInbox } from "./hooks/inbox";
+import { InboxRepo } from "./db/inbox-repo";
+import { InboxService } from "./inbox/inbox-service";
 import { registerIpc } from "./ipc/register";
-import { ensureDirs, resolvePaths } from "./paths";
+import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
+import { ButlerPatrol } from "./schedule/butler-patrol";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { ActivityMonitor, activityIntervals } from "./sessions/activity-monitor";
 import { sessionRegistryName } from "./sessions/activity-sources";
 import { DeliveryGuard, type DeliveryGuardDeps } from "./sessions/delivery-guard";
+import { writeRefreshTail } from "./sessions/refresh-tail";
 import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
+import { SessionCleanup } from "./sessions/session-cleanup";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
@@ -86,7 +91,7 @@ import { SessionService } from "./sessions/session-service";
 import { judgeStuck } from "./sessions/stuck-judge";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
-import { llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
+import { idleCloseMinutes, llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
 import { pathKey } from "./util/env";
@@ -362,15 +367,12 @@ async function bootstrap(): Promise<void> {
   let memoryMcpMissingLogged = false;
   let sessionsMcpMissingLogged = false;
   /**
-   * 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）：记忆开着时挂记忆 server；
-   * 总控 session 另外挂 butler-sessions（设计文档 2026-10-23 第二步），和记忆开关无关。什么都不挂时返回 null。
-   */
-  /**
-   * 记忆 server（记忆开着时）加上总控的 butler-sessions（设计文档 2026-10-23 第二步，和记忆开关无关）。
-   * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）、epic 的（设计文档 2026-11-01）；scope 是总控管的 ticket 或 feature，普通 session 为 null。
+   * 记忆 server（记忆开着时）加上 butler-sessions（设计文档 2026-10-23 第二步，和记忆开关无关）。
+   * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）、epic 的（设计文档 2026-11-01）；scope 是总控管的 ticket 或 feature，
+   * 普通 ticket session 是 member（只有 ask_user、report，BTL-190 第 2+3 点）。
    */
   const launcher = (script: string) => ({ command: process.execPath, script });
-  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null; epicId?: number | null }, scope: { ticketKey: string } | { featureId: number; epic?: boolean } | { epicId: number } | null) => {
+  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null; epicId?: number | null }, scope: { ticketKey: string; member?: boolean } | { featureId: number; epic?: boolean } | { epicId: number } | { butler: true }) => {
     let servers = {};
     if (memoryOn(settings)) {
       if (existsSync(memoryMcpScript)) servers = memoryServers({ launcher: launcher(memoryMcpScript), statecoreDir: paths.statecore, ...mem });
@@ -379,20 +381,18 @@ async function bootstrap(): Promise<void> {
         memoryMcpMissingLogged = true;
       }
     }
-    if (scope) {
-      const script = bundledSessionsMcpPath();
-      if (existsSync(script)) {
-        servers = { ...servers, ...sessionsServer({ launcher: launcher(script), scope, requestsDir: paths.controlRequests, resultsDir: paths.controlResults }) };
-      } else if (!sessionsMcpMissingLogged) {
-        logger(`sessions MCP bundle missing at ${script}; the coordinator cannot start sessions (run pnpm build:memory-mcp)`);
-        sessionsMcpMissingLogged = true;
-      }
+    const script = bundledSessionsMcpPath();
+    if (existsSync(script)) {
+      servers = { ...servers, ...sessionsServer({ launcher: launcher(script), scope, requestsDir: paths.controlRequests, resultsDir: paths.controlResults }) };
+    } else if (!sessionsMcpMissingLogged) {
+      logger(`sessions MCP bundle missing at ${script}; sessions have no butler-sessions tools (run pnpm build:memory-mcp)`);
+      sessionsMcpMissingLogged = true;
     }
     return servers;
   };
   /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。什么都不挂时返回 null。 */
   const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }): string | null => {
-    const servers = mcpServers({ ticketKey, featureId: opts.featureId, epicId: opts.epicId }, opts.coordinator ? { ticketKey } : null);
+    const servers = mcpServers({ ticketKey, featureId: opts.featureId, epicId: opts.epicId }, opts.coordinator ? { ticketKey } : { ticketKey, member: true });
     if (Object.keys(servers).length === 0) return null;
     return writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator });
   };
@@ -407,6 +407,12 @@ async function bootstrap(): Promise<void> {
     const servers = mcpServers({ epicId }, { epicId });
     if (Object.keys(servers).length === 0) return null;
     return writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers });
+  };
+  /** Butler 总控（BTL-190 第 5 点）：只有全局记忆（butler-workspace）和 Butler 模式的 butler-sessions。 */
+  const butlerMcpConfig = (): string | null => {
+    const servers = mcpServers({}, { butler: true });
+    if (Object.keys(servers).length === 0) return null;
+    return writeButlerMcpConfig({ mcpDir: paths.mcp, servers });
   };
   /** 卡住判断和「需要你」判断共用的 headless 设置。 */
   const judgeDeps: HeadlessExecDeps = {
@@ -446,6 +452,8 @@ async function bootstrap(): Promise<void> {
     onStuck: () => notify(),
     now: Date.now,
     intervals: activityIntervals(process.env),
+    // 实况窗口（BTL-190 第 7 点）：新的工具调用、记忆读写直接推给界面。
+    onEvent: (e) => safeSend(IPC.activityEvent, e),
     log: logger,
   });
   /** 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。 */
@@ -469,10 +477,12 @@ async function bootstrap(): Promise<void> {
     baseEnv: process.env,
     mcpConfig: memoryMcpConfig,
     // 装着的 butler-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
-    mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, gateCommand: health.hookBinCurrent() && existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
+    mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, allowTools: SESSIONS_AUTO_ALLOW, gateCommand: health.hookBinCurrent() && existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
     guidePath: (kind) => writeSessionGuide(paths.mcp, currentLang(), kind),
     featureMcpConfig,
     epicMcpConfig,
+    butlerWorkspace: paths.butlerWorkspace,
+    butlerMcpConfig,
     features, epics, featureHandoffs, handoffs, epicHistory,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
@@ -641,8 +651,15 @@ async function bootstrap(): Promise<void> {
     onChange: notify,
     log: logger,
   });
-  /** 退出开始后不再发起新的调度任务。 */
-  const checkSchedule = (trigger: ScheduleTrigger) => (headlessAbort.signal.aborted ? Promise.resolve() : scheduler.check(trigger));
+  /**
+   * 退出开始后不再发起新的调度任务。Butler 总控的每日巡检（BTL-190 第 5 点）用同样的触发时机，但不排进 Scheduler 的链：
+   * 它可能要等 session 停下来，不能挡住晚间 handoff。butlerPatrol 在下面才建好：调用时才用到。
+   */
+  const checkSchedule = (trigger: ScheduleTrigger) => {
+    if (headlessAbort.signal.aborted) return Promise.resolve();
+    void butlerPatrol.check();
+    return scheduler.check(trigger);
+  };
 
   const detectTrackerTools = async () => {
     await healthReady;
@@ -727,7 +744,8 @@ async function bootstrap(): Promise<void> {
   // 正在换新的也不贴（计划 16）。refresher 在下面才建好：回调里才用到。
   const deliveryGuard = new DeliveryGuard({
     ...guardDeps,
-    needsYou: (id) => deliveryNeedsYou(needsYou, id),
+    // 有未决 ask_user 的也算在等用户（BTL-190 第 2+3 点）。inboxService 在下面才建好：回调里才用到。
+    needsYou: (id): boolean => deliveryNeedsYou(needsYou, id) || inboxService.hasPendingDecision(id),
     refreshing: (id) => refresher.isRefreshing(id),
   });
   /** Stop 到的时候先重读这个 session 的活动（guard 看的是上一次刷新的）。活动按 head 的 id 跟踪；Stop 带来的可能是链上的旧 id。 */
@@ -750,7 +768,8 @@ async function bootstrap(): Promise<void> {
   const refresher = new SessionRefresher({
     guard: new DeliveryGuard({
       ...guardDeps,
-      needsYou: (id): boolean => autoRefreshNeedsYou({ reason: needsYou.reasonOf(id), undecided: needsYou.undecided(id), refreshing: refresher.isRefreshing(id) }),
+      needsYou: (id): boolean =>
+        autoRefreshNeedsYou({ reason: needsYou.reasonOf(id), undecided: needsYou.undecided(id), refreshing: refresher.isRefreshing(id) }) || inboxService.hasPendingDecision(id),
     }),
     guardIgnoringNeedsYou: new DeliveryGuard(guardDeps),
     head: (id) => sessions.head(id),
@@ -775,12 +794,83 @@ async function bootstrap(): Promise<void> {
     openedAt: (termId) => pty.openedAt(termId),
     // BUTLER_REFRESH_OPEN_QUIET_MS 只给 e2e 用（后台窗口模式下才算数）：它刚打开终端就要看自动换新，不想多等 1 分钟。
     openQuietMs: process.env.BUTLER_BACKGROUND_WINDOWS === "1" ? Number(process.env.BUTLER_REFRESH_OPEN_QUIET_MS) || undefined : undefined,
-    // 「需要你」按 head 跟踪：/clear 之后终端里跑的是新 id。
-    suppressNeedsYou: (termId) => needsYou.suppressNext(sessions.head(termId)?.id ?? termId),
+    // handoff 收进来时 ingest 已经把记忆同步排进队列（syncTicket / syncFeature）：/clear 之前等它写完（BTL-190 第 6 点）。
+    memoryIdle: () => memory.idle(),
+    // 换新前的对话尾巴：读旧 head 的 transcript，按终端的 id 存（同一个终端下一次换新覆盖它）。
+    writeTail: (oldHeadId, termId, kind) =>
+      writeRefreshTail({ transcript: findTranscript(paths.claudeProjects, oldHeadId), out: refreshTailPath(paths, termId), sessionId: oldHeadId, kind }),
     notify,
     now: Date.now,
     // /clear 之后没有 Stop：每一步输入之前先重读活动（R28）。
     refreshActivity: refreshActivityOf,
+    // 闲置关闭（BTL-190 第 8 点）：和 end_session 一样只关终端（之后能恢复）。不隐藏：总控的 list_sessions、夜里的 handoff
+    // 和 feature 汇总都跳过隐藏的 session。
+    endTerminal: (termId) => pty.kill(termId),
+    needsYouUndecided: (id) => needsYou.undecided(id),
+    // 总控不能给在等用户拍板的 session 换新（BTL-190 第 2+3 点）。
+    pendingDecision: (id) => inboxService.hasPendingDecision(id),
+    log: logger,
+  });
+  // 「待你决定」和汇报（BTL-190 第 2+3 点）。递回答不看「需要你」（未决的 ask_user 本身就算），别的检查照常；递汇报和 CI 结果同一道 guard。
+  const inboxService: InboxService = new InboxService({
+    repo: new InboxRepo(db),
+    head: (id) => sessions.head(id),
+    ticket: (key) => tickets.get(key),
+    epicOfFeature: (id) => features.get(id)?.epicId ?? null,
+    epicName: (id) => epics.get(id)?.name ?? null,
+    termOf: gateTerm,
+    openHeads: openButlerHeads,
+    answerGuard: new DeliveryGuard({ ...guardDeps, refreshing: (id) => refresher.isRefreshing(id) }),
+    reportGuard: deliveryGuard,
+    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
+    // 换新输入的 /handoff 和接着做的话也会触发 UserPromptSubmit：那不是用户在终端里回答。
+    refreshing: (id) => refresher.isRefreshing(id),
+    notify,
+    now: Date.now,
+    log: logger,
+  });
+  // Butler 总控的每日巡检（BTL-190 第 5 点）：到点打开（或接着用）Butler 总控，发巡检消息；开着的先过 guard，忙就等下一次 check。
+  const butlerPatrol = new ButlerPatrol({
+    time: () => settings.get("butlerPatrolTime"),
+    jobs,
+    now: Date.now,
+    running: () => sessionService.runningButler(),
+    latest: () => sessionService.latestButler(),
+    open: (req) => sessionService.openButler(req),
+    guard: deliveryGuard,
+    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
+    submit: submitTask,
+    message: () => M().butlerPatrolMessage,
+    onChange: notify,
+    log: logger,
+  });
+  // 清理 session（BTL-190 第 8 点）：闲置自动关闭、隐藏 14 天后删除、「清理闲置」和「全部删除」。
+  const sessionCleanup = new SessionCleanup({
+    idleMinutes: () => idleCloseMinutes(settings),
+    terminals: () => pty.openIds().flatMap((termId) => {
+      const head = sessions.head(termId);
+      return head && head.origin === "butler" ? [{ termId, head }] : [];
+    }),
+    activity: (id) => activityMonitor.get(id),
+    lastUserInputAt: (termId) => pty.lastUserInputAt(termId),
+    openedAt: (termId) => pty.openedAt(termId),
+    ticketsOfFeature: (id) => tickets.listByFeature(id).map((t) => t.key),
+    featuresOfEpic: (id) => features.listByEpic(id).map((f) => f.id),
+    askUserPending: (id) => inboxService.hasPendingDecision(id),
+    // 合并排队（等待者记的是 BUTLER_SESSION，换成 head 再对）、ticket 的 PR 的 CI 还在跑：通知只递给开着的终端。
+    waitingOnButler: (headId) => {
+      if ([...gateRepo.waitingSessionIds()].some((id) => (sessions.head(id)?.id ?? id) === headId)) return true;
+      const key = sessions.head(headId)?.ticketKey;
+      return key != null && prWatcher.statusOf(key).some((p) => p.ci === "pending");
+    },
+    refresher,
+    hiddenBefore: (before) => sessions.listHiddenBefore(before),
+    head: (id) => sessions.head(id),
+    terminalOpen: (id) => gateTerm(id) !== null,
+    deleteChain: (id) => sessions.deleteChain(id),
+    removeTail: (id) => rmSync(refreshTailPath(paths, id), { force: true }),
+    notify,
+    now: Date.now,
     log: logger,
   });
   // PR 和 CI 的监视（计划 13）。
@@ -902,9 +992,19 @@ async function bootstrap(): Promise<void> {
       if (effect.kind === "ignored") return;
       // 总控开的子 session 等这个信号才交任务（信任文件夹之类的启动对话框已经过去）。
       if (effect.kind === "session_started") pty.markStarted(effect.sessionId);
+      // claude 收下了一条输入（UserPromptSubmit）：deliver 回车以后等的就是它（BTL-190 第 9 点）。终端按 BUTLER_SESSION 记，
+      // /clear 以后 hook 里的 session id 已经换了。
+      // 同一个时机：用户在终端里回答了，这个 session 卡片上还没答的「待你决定」都算答过（换新、Butler 刚递回答时不算，BTL-190 第 2+3 点）。
+      if (effect.kind === "waiting" && !effect.waiting) {
+        pty.markSubmitted(env.butlerSession ?? effect.sessionId);
+        inboxService.promptSubmitted(env.butlerSession ?? effect.sessionId);
+        // 马上重读活动：实况窗口里它立刻算在干活（BTL-190 第 7 点）。
+        void activityMonitor.promptSubmitted(env.butlerSession ?? effect.sessionId).catch((e: unknown) => logger("re-reading the activity on prompt submit failed", e));
+      }
       // claude 停下来等输入了：有“对方已经合完”的通知就趁现在发（设计文档 2026-11-04：不打断忙着的 session）。
       // 同一个时机也递还没递出去的 CI 结论（先重读活动），并且马上查一次这个仓库的 PR 和 CI（刚停下的 session 常常刚 push）。
-      if (effect.kind === "waiting" && effect.waiting) {
+      // 终端重新打开（--resume）的 session 停在输入框等着（hook-events 记成 waiting）：和停下来一样，马上递卡片上答好的回答等。
+      if ((effect.kind === "waiting" && effect.waiting) || (effect.kind === "session_started" && effect.resumed === true)) {
         const stopped = env.butlerSession ?? effect.sessionId;
         void holdWatcher.sessionIdle(stopped);
         // 活动没变时 activityMonitor 不会 notify：停下来以后的「需要你」判断在这里补一次。
@@ -912,6 +1012,10 @@ async function bootstrap(): Promise<void> {
           .catch((e: unknown) => logger(`ci delivery: re-reading the activity of ${stopped} failed`, e))
           .then(() => {
             needsYou.update();
+            // 卡片上答好的回答、该送给总控的汇报也趁现在送（永不 reject）。
+            void inboxService.flush();
+            // 在等 Butler 总控停下来的巡检也趁现在送（BTL-190 第 5 点，永不 reject）。
+            if (!headlessAbort.signal.aborted) void butlerPatrol.check();
             return flushCi();
           });
         const repoId = sessions.head(stopped)?.repoId;
@@ -948,7 +1052,10 @@ async function bootstrap(): Promise<void> {
   const featureService = new FeatureService({
     features, tickets, epics, db, now: Date.now,
     onEpicChanged: (id) => void memory.syncEpic(id),
-    onTicketArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
+    onTicketArchived: (key) => {
+      removeTicketMcpConfigs(paths.mcp, key);
+      inboxService.dismissScope({ ticketKey: key });
+    },
     onRepoAdded: (featureId, repoPath) => epicService.ensureFeatureRepo(featureId, repoPath),
     refreshBeforeArchive: (ids) => featureRunner.refreshBeforeArchive(ids),
     log: logger,
@@ -959,6 +1066,9 @@ async function bootstrap(): Promise<void> {
     onArchived: (id, featureIds) => {
       removeEpicMcpConfig(paths.mcp, id);
       for (const f of featureIds) removeFeatureMcpConfig(paths.mcp, f);
+      // 归档了的 epic 和它下面的 feature：还未决的「待你决定」和汇报都收起来（BTL-190 第 2+3 点）。
+      inboxService.dismissScope({ epicId: id });
+      for (const f of featureIds) inboxService.dismissScope({ featureId: f });
       // 一起归档的 feature 逐个排队整理：第一个整理完之后没有新东西，后面的不再跑。
       for (const f of featureIds) digestArchivedFeature(f);
     },
@@ -976,10 +1086,14 @@ async function bootstrap(): Promise<void> {
   const keepAwakeSwitch = keepAwake;
   registerIpc({
     keepAwake: keepAwakeSwitch,
-    onArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
+    onArchived: (key) => {
+      removeTicketMcpConfigs(paths.mcp, key);
+      inboxService.dismissScope({ ticketKey: key });
+    },
     languageChanged: applyLanguage,
     onFeatureArchived: (id) => {
       removeFeatureMcpConfig(paths.mcp, id);
+      inboxService.dismissScope({ featureId: id });
       digestArchivedFeature(id);
     },
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
@@ -992,6 +1106,9 @@ async function bootstrap(): Promise<void> {
       const refused = startRefresh(refresher, id, "manual", logger);
       return refused ? { ok: false, reason: refused } : { ok: true };
     },
+    closeIdleSessions: (ids) => sessionCleanup.closeIdleNow(ids),
+    deleteHiddenSessions: (ids) => sessionCleanup.deleteHidden(ids),
+    inbox: inboxService,
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
     nowView: (merges) => {
       // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
@@ -1001,6 +1118,7 @@ async function bootstrap(): Promise<void> {
         tickets: sessionService.ticketViews(),
         features: sessionService.featureViews(),
         epics: sessionService.epicViews(),
+        butler: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id) } : null))(sessionService.runningButler()),
         activity: (id) => activityMonitor.get(id),
         needsYouReason: (id) => reasons.get(id) ?? null,
         prs: (key) => prWatcher.statusOf(key),
@@ -1008,6 +1126,9 @@ async function bootstrap(): Promise<void> {
         refreshing: (id) => refresher.stepOf(id),
         merges,
         approvalText: M().nowApproval,
+        decisions: inboxService.pendingDecisionViews(),
+        recent: (id) => activityMonitor.recent(id),
+        memory: activityMonitor.memoryLog(),
       });
     },
     rederive: (key) => {
@@ -1041,10 +1162,23 @@ async function bootstrap(): Promise<void> {
       activityOutput: (id) => activityMonitor.output(id),
       refresher,
       lastReply: (id) => activityMonitor.lastReply(id),
+      inbox: inboxService,
+      // Butler 总控（BTL-190 第 5 点）的只读数据。
+      butler: {
+        epicViews: () => sessionService.epicViews(),
+        featureRows: () => sessionService.featureRowsAll(),
+        prs: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
+        openHeads: openButlerHeads,
+        needsYou: (id) => needsYou.reasons().get(id) ?? null,
+        inbox: inboxService,
+      },
       // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。
       kill: (termId) => pty.kill(termId),
       screenNeedsUser: (termId) => pty.screenNeedsUser(termId),
       submit: submitTask,
+      // start_feature 给已经在跑的 feature 总控补充说明（BTL-190 第 4 点）：和递汇报同一道 guard。
+      guard: deliveryGuard,
+      deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
       memoryEnabled: () => memoryOn(settings),
       ticketPattern: () => settings.get("ticketPattern"),
       log: logger,
@@ -1076,13 +1210,22 @@ async function bootstrap(): Promise<void> {
   const discoveryTimer = setInterval(() => void runDiscovery(), DISCOVERY_INTERVAL_MS);
   // 自动换新也按活动的节奏再看一遍：活动没变时 activityMonitor 不 notify，而停着的 session 要等「需要你」判断完、
   // 用户 30 秒没打字之后才能换新，那时活动往往已经不变了。
+  // 闲置关闭和删除过期的隐藏 session 也跟着这个节奏（BTL-190 第 8 点）。
   const refreshTimer = setInterval(() => {
-    if (!headlessAbort.signal.aborted) refresher.autoCheck();
+    if (headlessAbort.signal.aborted) return;
+    refresher.autoCheck();
+    sessionCleanup.tick();
+    // 等着送的回答和汇报：Stop 那一刻没送成（用户在打字、有草稿）的，按这个节奏再试。
+    void inboxService.flush();
   }, activityIntervals(process.env).tickMs);
 
   // 调度：启动（health 探测完成后）、唤醒、解锁时检查到期任务；每分钟 tick，覆盖 16:00 和整晚没锁屏的情况。
   void healthReady.then(() => checkSchedule("startup"));
-  powerMonitor.on("resume", () => void checkSchedule("resume"));
+  powerMonitor.on("resume", () => {
+    // 睡着的时间不算闲置（BTL-190 第 8 点）：不然一开盖子所有 session 一起被关。
+    sessionCleanup.resumed();
+    void checkSchedule("resume");
+  });
   powerMonitor.on("unlock-screen", () => void checkSchedule("unlock"));
   // macOS / Linux 关机：和 Windows 的 session-end 一样，不再拦着关窗口。
   powerMonitor.on("shutdown", () => quitState.requestQuit());

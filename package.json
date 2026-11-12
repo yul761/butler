@@ -1,6 +1,6 @@
 {
   "name": "butler",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "private": true,
   "description": "A work butler for Claude Code ticket sessions",
   "author": "Yuchen Lin",
@@ -35,6 +35,7 @@
     ]
   },
   "dependencies": {
+    "@xterm/headless": "6.0.0",
     "cross-spawn": "7.0.6",
     "node-pty": "1.1.0",
     "statecore-mcp": "1.1.0",

@@ -7,6 +7,7 @@ import { sessionLabel, splitSessions } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
 import { RepoDialog } from "./RepoDialog";
 import { EndSessionButton } from "./EndSessionButton";
+import { CloseIdleButton, DeleteHiddenButton } from "./SessionCleanupButtons";
 import { RefreshSessionButton } from "./RefreshSessionButton";
 import { TerminalPane } from "./TerminalPane";
 import { TicketOverview } from "./TicketOverview";
@@ -241,6 +242,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         {ticket.hiddenSessions.length > 0 && (
           <button className="session more" onClick={() => setShowHidden(!showHidden)}>{S.hiddenSessions(ticket.hiddenSessions.length)}</button>
         )}
+        <CloseIdleButton sessionIds={ticket.sessions.filter((s) => s.termId !== null).map((s) => s.id)} />
         {ticket.repos.length > 1 && (
           <select aria-label={S.pickRepo} value={pickedRepo?.id} onChange={(e) => setNewRepoId(Number(e.target.value))}>
             {ticket.repos.map((r) => <option key={r.id} value={r.id}>{repoName(r)}</option>)}
@@ -260,6 +262,9 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
               <button onClick={() => api.unhideSession(s.id).catch(reportError)}>{S.unhideSession}</button>
             </div>
           ))}
+          <div className="actions">
+            <DeleteHiddenButton sessionIds={ticket.hiddenSessions.map((s) => s.id)} />
+          </div>
         </div>
       )}
       {error && <p className="error">{error}</p>}

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "./test-utils";
-import { ensureDirs, resolvePaths } from "./paths";
+import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
 
 describe("resolvePaths", () => {
   it("defaults to ~/.butler and ~/.claude", () => {
@@ -16,6 +16,15 @@ describe("resolvePaths", () => {
     expect(p.claudeProjects).toBe(join("/home/u", ".claude", "projects"));
     expect(p.claudeSessions).toBe(join("/home/u", ".claude", "sessions"));
     expect(p.claudeCommands).toBe(join("/home/u", ".claude", "commands"));
+    expect(p.refresh).toBe(join("/home/u", ".butler", "refresh"));
+    // Butler 总控（BTL-190 第 5 点）的工作目录：和 ticket 的工作区放在一起，名字以 _ 开头，不会和 ticket 号撞上。
+    expect(p.butlerWorkspace).toBe(join("/home/u", ".butler", "workspaces", "_butler"));
+  });
+
+  it("puts a session's refresh tail at refresh/<session id>.md and keeps odd ids inside that directory", () => {
+    const p = resolvePaths({}, "darwin", "/home/u");
+    expect(refreshTailPath(p, "0b6c-4e2f_9")).toBe(join("/home/u", ".butler", "refresh", "0b6c-4e2f_9.md"));
+    expect(refreshTailPath(p, "../x/y")).toBe(join("/home/u", ".butler", "refresh", "___x_y.md"));
   });
 
   it("honours BUTLER_HOME and CLAUDE_CONFIG_DIR", () => {

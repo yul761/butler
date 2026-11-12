@@ -1,3 +1,4 @@
+import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
 import { IPC, type IpcResult } from "../../shared/ipc";
 import type { MemoryView, WhyEntry } from "../../shared/memory";
@@ -7,7 +8,7 @@ import type {
   AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
-  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult,
+  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, OpenButlerSessionRequest, ButlerView, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView,
 } from "../../shared/types";
 
 declare global {
@@ -72,6 +73,8 @@ export const api = {
   archivedEpics: () => call<Epic[]>(IPC.epicsArchived),
   unarchiveEpic: (id: number) => call<void>(IPC.epicsUnarchive, id),
   openEpicSession: (req: OpenEpicSessionRequest) => call<OpenSessionResult>(IPC.epicsOpenSession, req),
+  butlerView: () => call<ButlerView>(IPC.butlerView),
+  openButlerSession: (req: OpenButlerSessionRequest) => call<OpenSessionResult>(IPC.butlerOpenSession, req),
   openFixSession: (req: OpenFixSessionRequest) => call<OpenSessionResult>(IPC.sessionOpenFix, req),
   scanRepos: (dir: string) => call<ScanResult>(IPC.reposScan, dir),
   unclaimed: () => call<UnclaimedSession[]>(IPC.sessionsUnclaimed),
@@ -80,6 +83,8 @@ export const api = {
   hideSession: (sessionId: string) => call<void>(IPC.sessionsHide, sessionId),
   unhideSession: (sessionId: string) => call<void>(IPC.sessionsUnhide, sessionId),
   refreshSession: (sessionId: string) => call<RefreshSessionResult>(IPC.sessionsRefresh, sessionId),
+  closeIdleSessions: (sessionIds: string[]) => call<number>(IPC.sessionsCloseIdle, sessionIds),
+  deleteHiddenSessions: (sessionIds: string[]) => call<number>(IPC.sessionsDeleteHidden, sessionIds),
   ptySnapshot: (termId: string) => call<{ data: string; exitCode: number | null }>(IPC.ptySnapshot, termId),
   ptyKill: (termId: string) => call<void>(IPC.ptyKill, termId),
   ptyWrite: (termId: string, data: string) => window.butler.send(IPC.ptyWrite, termId, data),
@@ -91,6 +96,9 @@ export const api = {
   mergeEvents: () => call<MergeEvent[]>(IPC.mergeEvents),
   prWatchList: () => call<WatchedPr[]>(IPC.prWatchList),
   nowView: () => call<NowView>(IPC.nowView),
+  inbox: (scope: InboxScope) => call<InboxView>(IPC.inboxList, scope),
+  answerInbox: (id: number, text: string) => call<boolean>(IPC.inboxAnswer, id, text),
+  dismissInbox: (id: number) => call<boolean>(IPC.inboxDismiss, id),
   followups: (ticketKey: string) => call<Followup[]>(IPC.followupsList, ticketKey),
   setFollowupStatus: (id: string, status: FollowupStatus) => call<void>(IPC.followupsSetStatus, id, status),
   handoffs: (ticketKey: string) => call<HandoffRecord[]>(IPC.handoffsList, ticketKey),
@@ -121,6 +129,8 @@ export const api = {
   onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),
   onStateChanged: (cb: () => void) => window.butler.on(IPC.stateChanged, cb),
   onKeepAwakeChanged: (cb: (on: boolean) => void) => window.butler.on(IPC.appKeepAwakeChanged, cb),
+  /** 实况窗口（BTL-190 第 7 点）：开着的 session 新的一次工具调用、记忆读写、回合开始 / 结束。 */
+  onActivityEvent: (cb: (e: ActivityEvent) => void) => window.butler.on(IPC.activityEvent, cb),
   /** 记忆写进了 StateCore（ticketKey），或记忆开关变了（null：所有 ticket）。 */
   onMemoryChanged: (cb: (ticketKey: string | null) => void) => window.butler.on(IPC.memoryChanged, cb),
 };

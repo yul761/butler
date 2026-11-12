@@ -7,18 +7,22 @@
 //     /handoff <问题> 把它写进 open_questions）；
 //     输入 /fake-bash <命令> 时像 Bash 工具在跑：写一条没有结果的 tool_use 和 tasks/<id>.output，这一轮不结束；
 //     输入 /fake-bg <命令> 时像后台命令：tool_result 带任务 id 和输出文件，这一轮结束；/fake-bg-done 写它的完成通知；
+//       和 Claude Code 一样，命令在跑的时候有一个后台 shell 子进程（不真的执行命令，等到完成通知或假 claude 退出）：
+//       Butler 进程树里找不到它的 shell 就当后台任务已经结束（BTL-190 第 1 点）；
 //     输入 /fake-flood <行数> 时打印这么多行（每行约 100 字节，用来撑满回放缓冲）；
 //     输入 /fake-fullscreen 时像 claude 的全屏界面：打开备用屏幕和鼠标上报（只发这一次），之后收到滚轮就记日志；
 //     输入 /fake-run <命令> 时像 Bash 工具：先跑 PreToolUse（也读 --settings 里的 hook，合并总控的 gate 在那里），拒绝就打印 denied: <理由>，
 //     否则在 cwd 里执行、打印输出、再跑 PostToolUse；日志记 gate deny <理由> / gate allow <命令>，这一轮照常结束；
+//     输入 /fake-tool <工具名> [JSON 参数] 时写一条 tool_use 和它的结果，这一轮不结束（实况窗口：工具调用、记忆读写的行和光点）；
+//     输入 /fake-later <毫秒> <一行> 时过这么久再把那一行当成输入（e2e 在别的页面上等它带来的变化）；
 //     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 butler-sessions，调用它，结果写进运行记录；
 //     启动时写一份 sessions/<pid>.json 登记文件，Butler 从这里查 session 的名字；
-//     输入 /fake-ask 时回一句以“？”结尾的问话（ASK_REPLY）并结束这一轮：「现在」页的需要你走问号退路认出它；
+//     输入 /fake-ask 时回一句以“？”结尾的问话（ASK_REPLY）并结束这一轮：需要你的判断认出它；
 //     输入 /clear 时像 Claude Code：换一个新的 session id 和新的 transcript，跑 SessionStart（source=clear），停在空的输入框上（没有 Stop）；
 //     每条 assistant 记录都带 usage：上下文是 FAKE_CLAUDE_CONTEXT_TOKENS（e2e 用它撑过换新的阈值），/clear 之后从头算，回到 CLEARED_CONTEXT；
 //     其余输入回“收到：<输入>”并结束这一轮；每条输入都在运行记录里记一行 prompt <JSON 字符串>；
 //   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果、feature 汇总或卡住判断；stream-json 的 MCP 探测只回 init。
-//     需要你的判断（schema 里有 needs_user）总是失败退出：和真实 e2e 环境里 Haiku 判断失败一样，Butler 走问号退路；
+//     需要你的判断（schema 里有 needs_user）：回复是 /fake-ask 的问话就说需要你（理由是那句问话），别的都失败退出（Butler 当作不需要你）；
 //     FAKE_CLAUDE_JUDGE_DELAY_MS 设了就等这么久才失败（像真的 Haiku 要判断几秒）。
 //     FAKE_CLAUDE_SUMMARY_GATE 指向的文件存在时，feature 汇总等到文件被删掉才回答：e2e 用它控制归档前要等多久。
 "use strict";
@@ -174,8 +178,15 @@ function headless() {
       // 按 handoff 处理。
     }
     const props = schema.properties || {};
+    if (props.needs_user && input.includes(ASK_REPLY)) {
+      // /fake-ask 的回复：说需要你，理由就是那句问话（判断失败时 Butler 不再看问号，BTL-190 第 2+3 点）。
+      const verdict = { needs_user: true, reason: ASK_REPLY };
+      log("needs-you judge: needed");
+      process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `judge-${Date.now()}`, result: JSON.stringify(verdict), structured_output: verdict, permission_denials: [], total_cost_usd: 0 })}\n`);
+      return;
+    }
     if (props.needs_user) {
-      // 不假装 Haiku：判断失败，Butler 按回复是不是以问号结尾来定。FAKE_CLAUDE_JUDGE_DELAY_MS 让它像真的 Haiku 一样过一会儿才失败。
+      // 别的回复不假装 Haiku：判断失败，Butler 当作不需要你。FAKE_CLAUDE_JUDGE_DELAY_MS 让它像真的 Haiku 一样过一会儿才失败。
       setTimeout(() => {
         log("needs-you judge failed");
         process.stderr.write("fake claude does not judge needs-you\n");
@@ -238,9 +249,13 @@ function interactive() {
   };
   const mcp = flag("--mcp-config");
   let servers = [];
+  // butler-sessions 是 feature 模式（BUTLER_FEATURE）的才是 feature 总控：普通 ticket session 也挂 butler-sessions（只有 ask_user、report）。
+  let featureCoordinator = false;
   if (mcp) {
     try {
-      servers = Object.keys(JSON.parse(fs.readFileSync(mcp, "utf8")).mcpServers || {});
+      const all = JSON.parse(fs.readFileSync(mcp, "utf8")).mcpServers || {};
+      servers = Object.keys(all);
+      featureCoordinator = Boolean(all["butler-sessions"]?.env?.BUTLER_FEATURE);
     } catch (e) {
       servers = [`unreadable ${mcp}: ${e.message}`];
     }
@@ -273,6 +288,20 @@ function interactive() {
   };
   /** 正在跑的后台命令的任务 id。 */
   let backgroundTask = null;
+  /** 后台命令的 shell 子进程（Windows 上 Butler 不看进程树，不开）。 */
+  let backgroundShell = null;
+  const stopBackgroundShell = () => {
+    if (backgroundShell) backgroundShell.kill();
+    backgroundShell = null;
+  };
+  process.on("exit", stopBackgroundShell);
+  /** 像 Claude Code 跑后台命令的 shell：命令行里带着命令，自己等着；假 claude 没了（被杀、没走到 exit 事件）它一秒内也退出。 */
+  const startBackgroundShell = (command) => {
+    stopBackgroundShell();
+    if (process.platform === "win32") return;
+    backgroundShell = spawn(SHELL, ["-c", 'while kill -0 "$PPID" 2>/dev/null; do sleep 1; done', command], { stdio: "ignore" });
+    backgroundShell.on("error", (e) => log(`background shell error ${e.message}`));
+  };
   const rl = readline.createInterface({ input: process.stdin });
   // bracketed paste（总控交任务时 Butler 这样写入）：粘贴里的几行合成一条消息。PTY 按行交付，粘贴结束标记所在的那一行
   // 只有等到 Butler 随后的回车才会到，所以读到结束标记就提交。
@@ -298,6 +327,12 @@ function interactive() {
     if (line === "exit") {
       runHooks("SessionEnd", { session_id: sessionId, cwd, reason: "exit", transcript_path: transcript });
       process.exit(0);
+    }
+    const later = /^\/fake-later (\d+) (.+)$/.exec(line);
+    if (later) {
+      setTimeout(() => rl.emit("line", later[2]), Number(later[1]));
+      out("> ");
+      return;
     }
     const flood = /^\/fake-flood (\d+)$/.exec(line);
     if (flood) {
@@ -332,6 +367,7 @@ function interactive() {
     }
     if (line === "/fake-bg-done") {
       // 后台命令结束：Claude Code 写的是这条通知，不是用户消息。
+      stopBackgroundShell();
       append({ type: "queue-operation", operation: "enqueue", content: `<task-notification><task-id>${backgroundTask}</task-id><status>completed</status></task-notification>` });
       out("> ");
       return;
@@ -359,9 +395,19 @@ function interactive() {
       out("running\n");
       return;
     }
+    const fakeTool = /^\/fake-tool (\S+)(?: (.+))?$/.exec(line);
+    if (fakeTool) {
+      // 工具调用完了、模型还在想：这一轮不结束，也不跑 Stop。
+      const toolId = `toolu-${Date.now()}-${messages}`;
+      append({ type: "assistant", uuid: `a-${Date.now()}`, message: { id: messageId(), role: "assistant", stop_reason: "tool_use", usage: usage(), content: [{ type: "tool_use", id: toolId, name: fakeTool[1], input: fakeTool[2] ? JSON.parse(fakeTool[2]) : {} }] } });
+      append({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: "ok" }] } });
+      out(`tool ${fakeTool[1]}\n`);
+      return;
+    }
     if (bash) {
       const { toolId, taskId, output } = startBash(bash[2], { run_in_background: true });
       backgroundTask = taskId;
+      startBackgroundShell(bash[2]);
       append({ type: "user", toolUseResult: { backgroundTaskId: taskId }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: `Command running in background with ID: ${taskId}. Output is being written to: ${output}. You will be notified when it completes \u2014 do not poll that file or sleep while waiting.` }] } });
     }
     const endTurn = (reply) => {
@@ -401,8 +447,7 @@ function interactive() {
       );
       return;
     }
-    // 挂着 butler-sessions 的是 feature 总控。
-    const coordinator = servers.includes("butler-sessions");
+    const coordinator = featureCoordinator;
     const question = /^\/handoff\s+(.+)$/.exec(line);
     const featureHandoff = { ...COMMAND_FEATURE_HANDOFF, open_questions: question ? [question[1]] : [] };
     endTurn(line === "/fake-ask"

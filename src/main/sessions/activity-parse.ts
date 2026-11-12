@@ -9,6 +9,8 @@ export interface RunningTool {
   command: string | null;
   file: string | null;
   startedAt: number;
+  /** TaskStop / KillShell 要停的后台任务 id（tool_use 输入里的 task_id / shell_id）；别的工具没有这一项。 */
+  stopsTask?: string;
 }
 
 export interface BackgroundTask {
@@ -19,6 +21,17 @@ export interface BackgroundTask {
   startedAt: number;
 }
 
+/**
+ * transcript 里发生的一件事（实况窗口用，BTL-190 第 7 点）：一次 tool_use（名字和原始参数），或者这一轮开始、结束。
+ * 攒在 TranscriptState.events 里，由读的一方取走。
+ */
+export type TranscriptEvent =
+  | { type: "tool"; at: number; name: string; input: Record<string, unknown> }
+  | { type: "turn-start" | "turn-end"; at: number };
+
+/** events 最多攒多少条：第一次读 4MB 的尾部时不会无限涨，取走的一方只关心最近的。 */
+export const MAX_PENDING_EVENTS = 100;
+
 export interface TranscriptState {
   running: Map<string, RunningTool>;
   background: Map<string, BackgroundTask>;
@@ -28,10 +41,23 @@ export interface TranscriptState {
   lastReply: string | null;
   /** lastReply 所在那条 assistant 记录的 message.id（“需要你”按它只判断一次）；没有 id 时为 null。 */
   lastReplyId: string | null;
+  /** 还没被取走的事件，从旧到新，最多 MAX_PENDING_EVENTS 条。 */
+  events: TranscriptEvent[];
 }
 
 export function newTranscriptState(): TranscriptState {
-  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null, lastReplyId: null };
+  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null, lastReplyId: null, events: [] };
+}
+
+function pushEvent(s: TranscriptState, e: TranscriptEvent): void {
+  s.events.push(e);
+  if (s.events.length > MAX_PENDING_EVENTS) s.events.splice(0, s.events.length - MAX_PENDING_EVENTS);
+}
+
+/** 改 turnOpen；真的从关到开、从开到关时记一条 turn-start / turn-end。 */
+function setTurn(s: TranscriptState, open: boolean, at: number): void {
+  if (s.turnOpen !== open) pushEvent(s, { type: open ? "turn-start" : "turn-end", at });
+  s.turnOpen = open;
 }
 
 /** 用户按 Esc 打断时 Claude Code 写的文字（也有 for tool use 的说法）；它后面不会再有结束这一轮的记录。 */
@@ -61,6 +87,38 @@ function entryTime(e: Obj): number {
   return Number.isFinite(t) ? t : Date.now();
 }
 
+/** 停后台任务的工具：TaskStop，旧名 KillShell、KillBash。它们停掉的任务不会再有 task-notification。 */
+const STOP_TOOLS = new Set(["TaskStop", "KillShell", "KillBash"]);
+/** 停成功时 toolUseResult.message 的开头（tool_use 不在重放的尾部里时靠它认）。 */
+const STOPPED_RE = /^Successfully (?:stopped task|killed shell)/;
+const NOTIFICATION_TAG = "<task-notification>";
+
+const idOf = (o: Obj): string | null => {
+  const v = typeof o.task_id === "string" ? o.task_id : typeof o.shell_id === "string" ? o.shell_id : null;
+  return v?.trim() || null;
+};
+
+/** 这条 tool_result 停掉的后台任务 id：先看结果里的 task_id / shell_id，再看 tool_use 输入里的。不是停任务的工具返回 null。 */
+function stoppedTask(tool: RunningTool | undefined, result: unknown): string | null {
+  const r = isObj(result) ? result : null;
+  if (tool) return STOP_TOOLS.has(tool.name) ? ((r && idOf(r)) ?? tool.stopsTask ?? null) : null;
+  // 没看到 tool_use（在重放的 4MB 之前）：只认明确说停成功了的结果
+  return r && typeof r.message === "string" && STOPPED_RE.test(r.message) ? idOf(r) : null;
+}
+
+/** 以 <task-notification> 开头的文字里所有的 task-id；只是提到它的文字（用户引用、读文件的结果）不算。 */
+function notifiedTasks(text: string): string[] {
+  if (!text.trimStart().startsWith(NOTIFICATION_TAG)) return [];
+  return [...text.matchAll(/<task-id>([^<]+)<\/task-id>/g)].map((m) => m[1].trim());
+}
+
+/** 用户条目、queued_command 附件里的文字：字符串，或者 text 块拼起来（tool_result 块不算）。 */
+function plainText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((x) => (isObj(x) && x.type === "text" && typeof x.text === "string" ? x.text : "")).join("\n");
+}
+
 function resultText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -73,13 +131,13 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
   const message = isObj(entry.message) ? entry.message : null;
 
   if (entry.type === "assistant" && message) {
-    // 后台任务靠 notification 清，没拿到结果的前台工具（被打断）在轮次结束时清掉
+    // 后台任务靠通知或 TaskStop 清，没拿到结果的前台工具（被打断）在轮次结束时清掉
     if (message.stop_reason === "end_turn") {
-      s.turnOpen = false;
+      setTurn(s, false, entryTime(entry));
       s.running.clear();
     } else {
       // 后台任务完成会让 Claude 在没有用户消息的情况下重新开始一轮
-      s.turnOpen = true;
+      setTurn(s, true, entryTime(entry));
     }
     if (!Array.isArray(message.content)) return;
     const text = message.content
@@ -93,13 +151,12 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
       if (!isObj(block) || block.type !== "tool_use" || typeof block.id !== "string") continue;
       const input = isObj(block.input) ? block.input : {};
       const file = typeof input.file_path === "string" ? input.file_path : typeof input.notebook_path === "string" ? input.notebook_path : null;
-      s.running.set(block.id, {
-        id: block.id,
-        name: typeof block.name === "string" ? block.name : "",
-        command: typeof input.command === "string" ? input.command : null,
-        file,
-        startedAt: entryTime(entry),
-      });
+      const name = typeof block.name === "string" ? block.name : "";
+      const tool: RunningTool = { id: block.id, name, command: typeof input.command === "string" ? input.command : null, file, startedAt: entryTime(entry) };
+      const stops = STOP_TOOLS.has(name) ? idOf(input) : null;
+      if (stops) tool.stopsTask = stops;
+      s.running.set(block.id, tool);
+      pushEvent(s, { type: "tool", at: tool.startedAt, name, input });
     }
     return;
   }
@@ -112,6 +169,9 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
         if (!isObj(block) || block.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
         const tool = s.running.get(block.tool_use_id);
         s.running.delete(block.tool_use_id);
+        // TaskStop / KillShell 停掉的任务不会再有通知，只能在这里清
+        const stopped = stoppedTask(tool, entry.toolUseResult);
+        if (stopped) s.background.delete(stopped);
         if (taskId && tool) {
           // 真实文本里路径后面还有同一行的句子：以 .output 结尾，后面是「.」加空白、行尾的「.」或行尾。
           const m = /Output is being written to:\s*(.+?\.output)(?=\.(?:\s|$)|$)/m.exec(resultText(block.content));
@@ -119,24 +179,33 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
         }
       }
     }
+    // 任务结束的通知有时直接作为用户条目写进来（不经过 queue-operation）
+    if (message) for (const id of notifiedTasks(plainText(message.content))) s.background.delete(id);
     const text = extractUserText(entry);
     if (text !== null) {
       // 新的用户消息或者打断：上一轮没拿到结果的前台工具不会再有结果了
       s.running.clear();
-      s.turnOpen = !text.startsWith(INTERRUPT_PREFIX);
+      setTurn(s, !text.startsWith(INTERRUPT_PREFIX), entryTime(entry));
     }
     return;
   }
 
   if (entry.type === "system") {
     if (entry.subtype === "turn_duration" || entry.subtype === "stop_hook_summary") {
-      s.turnOpen = false;
+      setTurn(s, false, entryTime(entry));
       s.running.clear();
     }
     return;
   }
 
-  if (entry.type === "queue-operation" && entry.operation === "enqueue" && typeof entry.content === "string" && entry.content.includes("<task-notification>")) {
+  if (entry.type === "attachment") {
+    // 排队的通知（queued_command 附件，prompt 就是 <task-notification>…）
+    const a = isObj(entry.attachment) ? entry.attachment : null;
+    if (a?.type === "queued_command") for (const id of notifiedTasks(plainText(a.prompt))) s.background.delete(id);
+    return;
+  }
+
+  if (entry.type === "queue-operation" && entry.operation === "enqueue" && typeof entry.content === "string" && entry.content.includes(NOTIFICATION_TAG)) {
     const m = /<task-id>([^<]+)<\/task-id>/.exec(entry.content);
     if (m) s.background.delete(m[1].trim());
   }

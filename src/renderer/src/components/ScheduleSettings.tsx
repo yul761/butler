@@ -122,6 +122,18 @@ export function ScheduleSettings() {
         <input type="time" value={value("nightlyTime")} onChange={(e) => edit("nightlyTime", e.target.value)} onBlur={() => saveIfEdited("nightlyTime")} />
       </label>
 
+      {/* Butler 总控的每日巡检（BTL-190 第 5 点）：空 = 关。 */}
+      <div className="field">
+        {S.butlerPatrolTime}
+        <input type="time" aria-label={S.butlerPatrolTime} value={value("butlerPatrolTime")} onChange={(e) => edit("butlerPatrolTime", e.target.value)} onBlur={() => saveIfEdited("butlerPatrolTime")} />
+        <p className="muted">{S.butlerPatrolHelp}</p>
+        {current.butlerPatrolTime !== "" && (
+          <div className="actions">
+            <button onClick={() => void save("butlerPatrolTime", "")}>{S.butlerPatrolOff}</button>
+          </div>
+        )}
+      </div>
+
       <div className="field">
         {S.workingDays}
         <div className="row">

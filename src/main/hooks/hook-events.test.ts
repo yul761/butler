@@ -45,12 +45,32 @@ describe("applyHookEnvelope", () => {
     applyHookEnvelope(env("UserPromptSubmit", "s1"), deps);
     applyHookEnvelope(env("SessionStart", "s2", { butlerSession: "s1" }, { source: "clear" }), deps);
     expect(sessions.get("s2")).toMatchObject({ waitingForInput: true, lastActivityAt: 100 });
-    // compact 之后还会有 Stop；resume 选到的 session 也不一定停着：只有 clear 这样处理。
+    // compact 之后还会有 Stop：不这样处理（resume 见下一条测试）。
     applyHookEnvelope(env("SessionStart", "s3", { butlerSession: "s1" }, { source: "compact" }), deps);
     expect(sessions.get("s3")?.waitingForInput).toBe(false);
     // 不在 Butler 终端里（没接上链）的 /clear 不管。
     applyHookEnvelope(env("SessionStart", "x2", {}, { source: "clear" }), deps);
     expect(sessions.get("x2")?.waitingForInput).toBe(false);
+  });
+
+  it("a resumed session in a Butler terminal is waiting at the prompt, and the effect says it was resumed (BTL-190 2+3)", () => {
+    const { sessions, deps } = setup();
+    applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", butlerSession: "s1" }), deps);
+    applyHookEnvelope(env("UserPromptSubmit", "s1"), deps);
+    applyHookEnvelope(env("SessionEnd", "s1"), deps);
+    // 重新打开终端：claude --resume 同一个 id。
+    const eff = applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", butlerSession: "s1", receivedAt: 300 }, { source: "resume" }), deps);
+    expect(eff).toEqual({ kind: "session_started", sessionId: "s1", ticketKey: "PROJ-1", replaced: null, resumed: true });
+    expect(sessions.get("s1")).toMatchObject({ waitingForInput: true, lastActivityAt: 300 });
+    // 终端里 /resume 选到另一个 id：接上链，新 head 也停着。
+    applyHookEnvelope(env("UserPromptSubmit", "s1", { butlerSession: "s1" }), deps);
+    const eff2 = applyHookEnvelope(env("SessionStart", "s2", { butlerSession: "s1" }, { source: "resume" }), deps);
+    expect(eff2).toMatchObject({ replaced: "s1", resumed: true });
+    expect(sessions.get("s2")?.waitingForInput).toBe(true);
+    // 不在 Butler 终端里的 resume 不管。
+    const eff3 = applyHookEnvelope(env("SessionStart", "x1", {}, { source: "resume" }), deps);
+    expect(eff3).toEqual({ kind: "session_started", sessionId: "x1", ticketKey: null, replaced: null });
+    expect(sessions.get("x1")?.waitingForInput).toBe(false);
   });
 
   it("an unknown ticket in env is ignored, the session is still recorded", () => {
@@ -243,7 +263,7 @@ describe("hook sessions in a fix session's terminal", () => {
     const { sessions, featureId, deps } = fixSetup();
     sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
     const eff = applyHookEnvelope(env("SessionStart", "c", inFix, { cwd: "/ws", source: "resume" }), deps);
-    expect(eff).toEqual({ kind: "session_started", sessionId: "c", ticketKey: null, replaced: "fix" });
+    expect(eff).toEqual({ kind: "session_started", sessionId: "c", ticketKey: null, replaced: "fix", resumed: true });
     expect(sessions.head("fix")?.id).toBe("c");
     expect(sessions.get("c")).toMatchObject({ coordinator: true, fixesSession: null, featureId });
     expect(sessions.listFeatureCoordinators(featureId).map((s) => s.id)).toEqual(["c"]);

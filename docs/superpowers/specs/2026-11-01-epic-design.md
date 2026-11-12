@@ -10,7 +10,7 @@
 - 在 **epic 的 session** 里做规划，同一 epic 下的 feature 有渠道互通信息和进度，从一个 feature 换到下一个时不用手动写文档。
 - 新 feature 开工前最需要知道的是：上一个 feature 的**进度、做过的决定、还没解决的问题**。
 - **epic session 直接建好 feature**，但 ticket 和之后的开发流程都在 feature 的 session 里做。原话：如果建 feature 和 ticket 都在 epic 层做，feature 层的 session 就多余了。
-- 建好 feature 后**不自动开总控**，用户自己点进去开。
+- 建好 feature 后**不自动开总控**：用户自己点进去开，或者用户同意开工后由 epic session 用 `start_feature` 打开（BTL-190 第 4 点）。
 - **现有的 feature 要能移动到 epic 里**。
 - **epic 页（草图 A）**：一行一个 feature，只显示一句进度和有没有卡住，不显示 ticket。要看细节就点进 feature。草图在 `.superpowers/brainstorm/23461-1793560938/content/epic-page.html`。
 - 下方是 epic session 的终端，至少占窗口一半高。
@@ -41,7 +41,7 @@
 
 ## 非目标
 
-- epic session 建 ticket 或开 ticket 的 session。
+- epic session 建 ticket 或开 ticket 的 session。（它可以用 `start_feature` 打开 feature 总控，ticket 仍由总控建，BTL-190 第 4 点。）
 - epic 自己的进度汇总、百分比、晚间 handoff。
 - 卡住检测扩展到 epic session。
 - epic 嵌套，或者一个 feature 属于多个 epic。
@@ -51,8 +51,8 @@
 
 1. 用户建 epic（名字、仓库），打开 epic session 讨论。
 2. 定下来后，epic session 调用 `create_feature`，传名字、选用的仓库和一份简短规划（`brief`）：要做什么、为什么做、已经定下的决定。
-3. Butler 建好 feature，它出现在 epic 页和侧边栏。不开总控。
-4. 用户点进 feature，开总控。
+3. Butler 建好 feature，它出现在 epic 页和侧边栏。不开总控（`create_feature` 带 `start: true` 时建完马上像第 4 步那样打开）。
+4. 用户点进 feature，开总控；或者用户同意开工后，epic session 用 `start_feature` 打开（BTL-190 第 4 点）。epic 打开的总控收到的第一条消息里，说明换成不用等用户确认、直接按规划建 ticket、开子 session，epic 给的 `instructions` 放在数据标签前面。
 5. **这个 feature 第一次开总控时**，Butler 把规划和其他 feature 的情况作为第一条消息发给它（走现有的 `submit` 投递，用户在终端里看得到）。内容是规划，加上同一 epic 下每个 feature 的名字、状态（含已归档）、最新的进度、决定、未解决的问题。没有 `brief` 的 feature（比如移进来的）不发。之后再开总控不重复发，需要时用下面的工具查。
 6. 总控自己建 ticket、开子 session，流程和现在一样。
 
@@ -64,7 +64,8 @@
 
 - `list_features`：epic 下每个 feature 的 id、名字、状态（含已归档）、最新的 `summary`、`blockers`、`decisions`、`open_questions`、汇总时间。
 - `list_repos`：epic 的仓库。
-- `create_feature({ name, repos?, brief })`：建 feature 并挂到这个 epic。epic 只有一个仓库时 `repos` 可以省略。名字重复、仓库不属于 epic 时返回错误。
+- `create_feature({ name, repos?, brief, start? })`：建 feature 并挂到这个 epic。epic 只有一个仓库时 `repos` 可以省略。名字重复、仓库不属于 epic 时返回错误。`start: true` 时建完马上 `start_feature`。
+- `start_feature({ feature, instructions? })`（BTL-190 第 4 点）：打开 feature 的总控并让它开工。一个 epic 同时最多 4 个 feature 总控在跑。细节见 `2026-11-12-btl-190-design.md` 第 4 点。
 
 **feature 总控**（只在 feature 属于 epic 时才有）：
 

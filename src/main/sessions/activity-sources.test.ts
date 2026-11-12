@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
@@ -40,6 +40,27 @@ describe("TranscriptTail", () => {
     writeFileSync(f, use("c") + "\n");
     const s = (await tail.read()).state;
     expect([...s.running.keys()]).toEqual(["c"]);
+  });
+
+  it("rebuilds and counts a restart when the file is replaced by a new one, even one that is not shorter (BTL-190 7)", async () => {
+    const dir = tempDir();
+    const f = join(dir, "t.jsonl");
+    writeFileSync(f, use("a") + "\n");
+    const tail = new TranscriptTail(f);
+    await tail.read();
+    expect(tail.restarts).toBe(0);
+    // 轮转：换成另一个文件（新的 inode），比原来的长，按偏移继续读会从半中间读起。
+    const next = join(dir, "next.jsonl");
+    writeFileSync(next, use("b") + "\n" + use("c") + "\n");
+    rmSync(f);
+    renameSync(next, f);
+    const s = (await tail.read()).state;
+    expect([...s.running.keys()]).toEqual(["b", "c"]);
+    expect(tail.restarts).toBe(1);
+    // 截短也算一次重来。
+    writeFileSync(f, use("d") + "\n");
+    expect([...(await tail.read()).state.running.keys()]).toEqual(["d"]);
+    expect(tail.restarts).toBe(2);
   });
 
   it("starts from the tail of a big file and drops the first partial line", async () => {

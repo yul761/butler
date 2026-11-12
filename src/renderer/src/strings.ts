@@ -1,7 +1,8 @@
 import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
-import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { ReportKind } from "../../shared/control";
+import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "已合并·待收尾",
@@ -35,6 +36,19 @@ const ZH = {
   newEpicSession: "epic session",
   epicSessionHint: "epic session 在 epic 的工作区里运行，能读所有仓库。在这里规划下一个 feature，定下来后让它建好。",
   noEpicSessions: "还没有 epic session。",
+  // Butler 总控（BTL-190 第 5 点）
+  butlerNav: "Butler 总控",
+  butlerTitle: "Butler 总控",
+  butlerIntro: "全局的总控：能看所有 epic、feature、ticket、PR 和 session，能给 epic session 和 feature 总控发消息，不能建、删、结束任何东西。epic session 的完成和卡住汇报会送到这里。",
+  butlerWorkspace: "工作目录",
+  butlerSession: "Butler 总控",
+  newButlerSession: "Butler 总控",
+  butlerSessionHint: "同时只有一个 Butler 总控在运行：已经开着时点这里会切到它。",
+  noButlerSessions: "还没有 Butler 总控的对话。",
+  butlerOpenErrors: {
+    no_ticket: "Butler 总控不可用。",
+    no_repo: "建不了 Butler 总控的工作目录（~/.butler/workspaces/_butler），请检查权限。",
+  } as Record<string, string>,
   noEpicFeatures: "还没有 feature。在 epic session 里规划，或者点“新建 feature”。",
   epicNoSummary: "还没有汇总",
   epicStatus: { stuck: "有 ticket 卡住", waiting: "等你回话", not_started: "未开始", active: "进行中", archived: "已归档" } as Record<EpicFeatureStatus, string>,
@@ -162,11 +176,18 @@ const ZH = {
     already: "正在换新",
     cooldown: "刚失败过，稍后再试",
     memory_off: "记忆关着，不能换新",
+    awaiting_user: "在等你决定，先回答它",
     failed: "这个 session 不能换新",
   } as Record<RefreshRefusal, string>,
   hiddenSessions: (n: number) => `已隐藏 (${n})`,
-  hiddenSessionsHint: "这些 session 只是不在列表里显示，对话记录还在。恢复后可以继续用。",
+  hiddenSessionsHint: "这些 session 只是不在列表里显示，对话记录还在。恢复后可以继续用。隐藏超过 14 天的会从 Butler 里删掉（对话记录照样留着）。",
   unhideSession: "恢复",
+  closeIdle: "清理闲置",
+  closeIdleHint: "把这里停下来 5 分钟以上、没有要你决定的事的 session 关掉：先让它写 handoff，再结束终端。以后可以恢复。",
+  closeIdleStarted: (n: number) => (n === 0 ? "没有闲置的" : `正在关闭 ${n} 个`),
+  deleteHidden: "全部删除",
+  deleteHiddenHint: "把这些隐藏的 session 从 Butler 里删掉。对话记录（transcript）不会删除。",
+  deleteHiddenConfirm: (n: number) => `确认删除 ${n} 个？`,
   close: "关闭",
   listSep: "；",
   ticketMissing: (key: string) => `找不到 ticket ${key}（可能已经归档）。`,
@@ -275,11 +296,10 @@ const ZH = {
   itemActions: { done: "完成", snooze: "推迟到明天", ignore: "忽略" } as Record<string, string>,
   // 「现在」页（计划 14）。
   nowTitle: "现在",
-  nowRunning: (n: number) => `${n} 个 session 在跑`,
+  nowRunning: (n: number) => `${n} 个 session 在干活`,
   nowNeedsYou: "需要你",
   nowNeedsYouBadge: (n: number) => `${n} 个需要你`,
   nowOpen: "打开 →",
-  nowEmpty: "现在没有进行中的工作。",
   nowNoEpic: "不属于任何 epic",
   nowNoFeature: "不属于任何 feature",
   nowWaitingFor: (reason: string) => `等你：${reason}`,
@@ -288,6 +308,7 @@ const ZH = {
   nowStuckNoReason: "卡住了",
   nowMergeQueued: "合并排队",
   nowRefreshing: "换新中",
+  nowClosing: "闲置，正在关闭",
   nowStopped: "已停下",
   nowWaitCi: "等 CI",
   nowCiFailed: "CI 失败",
@@ -297,10 +318,42 @@ const ZH = {
   nowChangesRequested: "要修改",
   nowApproved: "已批准",
   nowPr: (n: number | null, state: string) => `PR${n === null ? "" : ` #${n}`} ${state}`,
-  nowActive: (n: number) => `${n} 个进行中`,
+  nowActive: (n: number) => `${n} 个在干活`,
   nowNeedsYouCount: (n: number) => `${n} 需要你`,
+  nowWaitingDecision: "等你决定",
+  // 「待你决定」和汇报（BTL-190 第 2+3 点）。
+  inboxReports: "汇报",
+  inboxDecisions: "待你决定",
+  inboxNoReports: "还没有汇报。",
+  inboxNoDecisions: "没有要你决定的。",
+  inboxReportKinds: { progress: "进展", done: "完成", blocked: "卡住" } as Record<ReportKind, string>,
+  inboxWho: (role: InboxRole, ticketKey: string | null, repo: string | null) =>
+    role === "ticket" ? `${ticketKey ?? ""}${repo ? `（${repo}）` : ""}`
+    : role === "ticket_coordinator" ? `${ticketKey ?? ""} 总控`
+    : role === "feature_coordinator" ? "feature 总控"
+    : role === "fix" ? "修复 session"
+    : role === "butler" ? "Butler 总控"
+    : "epic session",
+  inboxAnswerPlaceholder: "输入回答（⌘/Ctrl+Enter 发送）",
+  inboxSend: "回答",
+  inboxGoTerminal: "去终端",
+  inboxDismiss: "不用了",
+  inboxQueued: (answer: string) => `已回答「${answer}」，等它停下来再送进去。`,
+  inboxTerminalClosed: "终端关着",
   nowStuckCount: (n: number) => `${n} 卡住`,
-  nowNoneActive: "无进行中",
+  nowNoneActive: "没人在干活",
+  // 实况窗口（BTL-190 第 7 点）
+  liveTitle: "实况",
+  liveEmpty: "现在没有正在进行的工作",
+  liveWorking: "在干活",
+  liveNeedsYou: (n: number) => `需要你 · ${n}`,
+  liveWaiting: "等你",
+  liveNoTools: "还没有工具调用",
+  liveMemory: "最近的记忆",
+  liveNoMemory: "还没有记忆读写",
+  liveWrote: "写入",
+  liveRead: "读取",
+  liveMore: (n: number) => `还有 ${n} 个没摆出来，见下面的列表`,
   nowIdle: (n: number) => `空闲 ${n}`,
   nowRecentMerges: "最近合并",
   nowUsage: (tokens: string, cacheRead: string, over200k: string) => `近 7 天：${tokens} token · 缓存读取占 ${cacheRead} · 上下文超过 20 万的轮次占 ${over200k}`,
@@ -343,6 +396,9 @@ const ZH = {
   schedule: "调度与 handoff",
   scheduleNote: "后台总结会继承你在 ~/.claude 里允许的命令",
   nightlyTime: "晚间 handoff 时间",
+  butlerPatrolTime: "每天几点让 Butler 总控巡检一次",
+  butlerPatrolOff: "关闭",
+  butlerPatrolHelp: "到点时 Butler 打开（或者接着用）Butler 总控，让它看一遍 PR、CI 和待你决定的事，用「待你决定」列出要你亲自做的事。它正忙就等它停下来；电脑睡过了点，醒来以后当天补一次。留空 = 关（默认）。",
   workingDays: "工作日（只在这些天跑晚间 handoff）",
   weekdayNames: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"],
   trackerTools: "tracker MCP 工具（handoff 只能调用这些，一行一个）",
@@ -460,6 +516,8 @@ const ZH = {
   memoryMcpMissing: "没有找到（开发模式请先运行 pnpm build:memory-mcp）：session 不会挂记忆",
   refreshThreshold: "上下文超过多少 token 时自动换新（0 = 关）",
   refreshThresholdHelp: "换新：session 停下来以后，Butler 让它写 handoff、清空上下文，再从记忆里接上。需要开着记忆；手动的“换新”按钮不受这个设置影响。",
+  idleCloseMinutes: "session 闲置多少分钟后自动关闭（0 = 关）",
+  idleCloseMinutesHelp: "开着终端、停下超过这个时间（电脑睡着的时间不算），而且没有要你决定的事、没有后台任务、没在等合并或 CI、它管的子 session 也都停着的 session，Butler 会先让它写 handoff，再结束终端，以后可以恢复。最短 10 分钟。你隐藏的 session 超过 14 天会被删掉（对话记录留着）。session 栏的“清理闲置”不受这个设置影响。",
   memoryExplain: "StateCore 只在本机。claude 里挂的记忆进程拿不到任何模型 key；只有隐私档位为“完整”时，Butler 才会在每次晚间 handoff 之后，把 claude 记下的原始片段连同已有的记忆经个人 API 蒸馏（不扫描，记在审计页）。",
   statecorePluginWarning: "检测到你另外装了 StateCore 的 Claude Code 捕获插件。Butler 已经覆盖了它的功能，同时开着会重复记录，建议在 Claude Code 里卸掉它。",
   rerunWizard: "重新运行首次启动向导",

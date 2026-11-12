@@ -10,6 +10,7 @@ import { SettingsRepo } from "../db/settings-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { TicketService } from "../tickets/ticket-service";
 import { cleanupTicketWorktrees } from "../tickets/worktree-cleanup";
+import type { GuideKind } from "../claude/session-guide";
 import { NPM_EXE_SHIM, NPM_SHIM, PNPM_NODE_PATH, PNPM_NODE_PATH_SHIM } from "../claude/__fixtures__/shims";
 import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import type { TranscriptState } from "./discovery";
@@ -25,7 +26,7 @@ async function setup(opts: {
   factory?: PtyFactory;
   mcpConfig?: (ticketKey: string, opts: { coordinator: boolean }) => string | null;
   mcpSettings?: (dirs: string[]) => string | null;
-  guidePath?: (kind: "ticket" | "coordinator") => string | null;
+  guidePath?: (kind: GuideKind) => string | null;
   syncMemory?: (ticketKey: string) => void;
   dirBusy?: (repo: TicketRepo) => Promise<{ ticket: string; branch: string } | null>;
   platform?: NodeJS.Platform;

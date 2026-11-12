@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, parseControlRequest, REASON_LIMIT, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, MESSAGE_LIMIT, parseControlRequest, REASON_LIMIT, sanitizeTask, START_INSTRUCTIONS_LIMIT, taskMessage, TASK_LIMIT } from "./control";
 
 describe("parseControlRequest", () => {
   it("accepts the three operations", () => {
@@ -163,5 +163,100 @@ describe("parseControlRequest for end_session (task 11)", () => {
     expect(parseControlRequest({ v: 1, epicId: 3, op: "session_activity", session: "s1" })).toEqual({ v: 1, epicId: 3, from: null, op: "session_activity", session: "s1" });
     expect(parseControlRequest({ v: 1, epicId: 3, op: "session_activity" })).toBeNull();
     expect(parseControlRequest({ v: 1, epicId: 3, op: "session_activity", session: 1 })).toBeNull();
+  });
+});
+
+describe("parseControlRequest for ask_user and report (BTL-190 2+3)", () => {
+  const scopes = [{ ticketKey: "BTL-1" }, { featureId: 3 }, { epicId: 2 }];
+
+  it("accepts ask_user in all three scopes, dropping empty options and blank context", () => {
+    for (const s of scopes) {
+      expect(parseControlRequest({ v: 1, ...s, from: "s1", op: "ask_user", question: "Which?", options: ["A", "B"], context: "why" }))
+        .toEqual({ v: 1, ...s, from: "s1", op: "ask_user", question: "Which?", options: ["A", "B"], context: "why" });
+      expect(parseControlRequest({ v: 1, ...s, from: "s1", op: "ask_user", question: "Which?", options: [], context: "  " }))
+        .toEqual({ v: 1, ...s, from: "s1", op: "ask_user", question: "Which?" });
+    }
+  });
+
+  it("rejects ask_user without a question, with too many or bad options, or an over-long context", () => {
+    const base = { v: 1, ticketKey: "BTL-1", from: "s1", op: "ask_user" };
+    expect(parseControlRequest({ ...base, question: " " })).toBeNull();
+    expect(parseControlRequest({ ...base, question: "x".repeat(1001) })).toBeNull();
+    expect(parseControlRequest({ ...base, question: "q", options: ["1", "2", "3", "4", "5", "6", "7"] })).toBeNull();
+    expect(parseControlRequest({ ...base, question: "q", options: ["ok", ""] })).toBeNull();
+    expect(parseControlRequest({ ...base, question: "q", options: "A" })).toBeNull();
+    expect(parseControlRequest({ ...base, question: "q", context: "x".repeat(4001) })).toBeNull();
+  });
+
+  it("accepts report with a kind, defaulting to progress, and rejects unknown kinds or empty text", () => {
+    for (const s of scopes) {
+      expect(parseControlRequest({ v: 1, ...s, from: null, op: "report", text: "done it", kind: "done" }))
+        .toEqual({ v: 1, ...s, from: null, op: "report", text: "done it", kind: "done" });
+      expect(parseControlRequest({ v: 1, ...s, from: null, op: "report", text: "half way" }))
+        .toEqual({ v: 1, ...s, from: null, op: "report", text: "half way", kind: "progress" });
+    }
+    expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: null, op: "report", text: "x", kind: "finished" })).toBeNull();
+    expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: null, op: "report", text: "" })).toBeNull();
+    expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: null, op: "report", text: "x".repeat(4001) })).toBeNull();
+  });
+});
+
+describe("parseControlRequest for start_feature (BTL-190 4)", () => {
+  it("accepts start_feature with or without instructions, and create_feature with start", () => {
+    expect(parseControlRequest({ v: 1, epicId: 3, from: "e", op: "start_feature", feature: "checkout" })).toEqual({ v: 1, epicId: 3, from: "e", op: "start_feature", feature: "checkout" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "start_feature", feature: "5", instructions: "先做 API" }))
+      .toEqual({ v: 1, epicId: 3, from: null, op: "start_feature", feature: "5", instructions: "先做 API" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: "x".repeat(START_INSTRUCTIONS_LIMIT) })).toMatchObject({ op: "start_feature" });
+    // 空白的 instructions 当作没给。
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: "  " })).toEqual({ v: 1, epicId: 3, from: null, op: "start_feature", feature: "c" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", start: true })).toMatchObject({ op: "create_feature", start: true });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", start: false })).not.toHaveProperty("start");
+  });
+
+  it("rejects a malformed start_feature, a non-boolean start, and start_feature outside an epic", () => {
+    for (const bad of [
+      { v: 1, epicId: 3, op: "start_feature" }, { v: 1, epicId: 3, op: "start_feature", feature: "" }, { v: 1, epicId: 3, op: "start_feature", feature: 5 },
+      { v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: 1 },
+      { v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: "x".repeat(START_INSTRUCTIONS_LIMIT + 1) },
+      { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", start: "yes" },
+      { v: 1, featureId: 3, op: "start_feature", feature: "c" }, { v: 1, ticketKey: "P-1", op: "start_feature", feature: "c" },
+    ]) {
+      expect(parseControlRequest(bad), JSON.stringify(bad).slice(0, 80)).toBeNull();
+    }
+  });
+});
+
+describe("parseControlRequest for the Butler 总控 (BTL-190 5)", () => {
+  const base = { v: 1, butler: true } as const;
+
+  it("accepts the read-only ops, session ops, send_message and the inbox ops", () => {
+    for (const op of ["list_epics", "list_features", "list_prs", "list_sessions", "list_inbox"]) {
+      expect(parseControlRequest({ ...base, from: "b", op })).toEqual({ v: 1, butler: true, from: "b", op });
+    }
+    expect(parseControlRequest({ ...base, op: "list_tickets" })).toEqual({ v: 1, butler: true, from: null, op: "list_tickets" });
+    expect(parseControlRequest({ ...base, op: "list_tickets", feature: "checkout", epic: "7" }))
+      .toEqual({ v: 1, butler: true, from: null, op: "list_tickets", feature: "checkout", epic: "7" });
+    expect(parseControlRequest({ ...base, op: "session_activity", session: "s1" })).toEqual({ v: 1, butler: true, from: null, op: "session_activity", session: "s1" });
+    expect(parseControlRequest({ ...base, op: "refresh_session", session: "s1" })).toEqual({ v: 1, butler: true, from: null, op: "refresh_session", session: "s1" });
+    expect(parseControlRequest({ ...base, op: "send_message", session: "s1", text: "先合 A" }))
+      .toEqual({ v: 1, butler: true, from: null, op: "send_message", session: "s1", text: "先合 A" });
+    expect(parseControlRequest({ ...base, op: "send_message", session: "s1", text: "x".repeat(MESSAGE_LIMIT) })).toMatchObject({ op: "send_message" });
+    expect(parseControlRequest({ ...base, op: "ask_user", question: "合吗？" })).toEqual({ v: 1, butler: true, from: null, op: "ask_user", question: "合吗？" });
+    expect(parseControlRequest({ ...base, op: "report", text: "巡检完了" })).toEqual({ v: 1, butler: true, from: null, op: "report", text: "巡检完了", kind: "progress" });
+  });
+
+  it("rejects anything that creates, deletes or ends, malformed fields, and butler next to another scope", () => {
+    for (const bad of [
+      { ...base, op: "create_feature", name: "c", brief: "b" }, { ...base, op: "create_ticket", ticket: "P-1" }, { ...base, op: "start_session", repo: "r", task: "t" },
+      { ...base, op: "start_feature", feature: "c" }, { ...base, op: "end_session", session: "s", reason: "r" }, { ...base, op: "set_epic_plan", plan: "p" },
+      { ...base, op: "send_message", session: "s1" }, { ...base, op: "send_message", session: "s1", text: "  " },
+      { ...base, op: "send_message", session: "s1", text: "x".repeat(MESSAGE_LIMIT + 1) }, { ...base, op: "send_message", text: "t" },
+      { ...base, op: "session_activity" }, { ...base, op: "list_tickets", feature: 3 }, { ...base, op: "list_tickets", epic: "" },
+      { v: 1, butler: "yes", op: "list_epics" }, { v: 1, butler: false, op: "list_epics" },
+      { ...base, epicId: 3, op: "list_epics" }, { ...base, featureId: 3, op: "list_epics" }, { ...base, ticketKey: "P-1", op: "list_epics" },
+      { v: 1, epicId: 3, op: "list_epics" }, { v: 1, featureId: 3, op: "list_prs" }, { v: 1, ticketKey: "P-1", op: "send_message", session: "s", text: "t" },
+    ]) {
+      expect(parseControlRequest(bad), JSON.stringify(bad).slice(0, 80)).toBeNull();
+    }
   });
 });
