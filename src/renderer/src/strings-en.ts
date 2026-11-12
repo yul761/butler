@@ -34,6 +34,18 @@ export const EN: UiStrings = {
   newEpicSession: "Epic session",
   epicSessionHint: "An epic session runs in the epic's workspace and can read every repo. Plan the next feature here, then have it create the feature.",
   noEpicSessions: "No epic session yet.",
+  butlerNav: "Butler control",
+  butlerTitle: "Butler control",
+  butlerIntro: "The global control session: it can see every epic, feature, ticket, PR and session, and message epic sessions and feature coordinators. It cannot create, delete or end anything. Done and blocked reports from epic sessions come here.",
+  butlerWorkspace: "Working directory",
+  butlerSession: "Butler control",
+  newButlerSession: "Butler control",
+  butlerSessionHint: "Only one Butler control session runs at a time: if one is open, this switches to it.",
+  noButlerSessions: "No Butler control conversation yet.",
+  butlerOpenErrors: {
+    no_ticket: "Butler control is not available.",
+    no_repo: "Cannot create the Butler control working directory (~/.butler/workspaces/_butler). Check the permissions.",
+  } as Record<string, string>,
   noEpicFeatures: "No features yet. Plan one in an epic session, or click “New feature”.",
   epicNoSummary: "No summary yet",
   epicStatus: { stuck: "A ticket is stuck", waiting: "Waiting for you", not_started: "Not started", active: "In progress", archived: "Archived" } as Record<EpicFeatureStatus, string>,
@@ -314,6 +326,7 @@ export const EN: UiStrings = {
     : role === "ticket_coordinator" ? `${ticketKey ?? ""} coordinator`
     : role === "feature_coordinator" ? "Feature coordinator"
     : role === "fix" ? "Fix session"
+    : role === "butler" ? "Butler control"
     : "Epic session",
   inboxAnswerPlaceholder: "Type an answer (⌘/Ctrl+Enter to send)",
   inboxSend: "Answer",
@@ -365,6 +378,9 @@ export const EN: UiStrings = {
   schedule: "Schedule and handoffs",
   scheduleNote: "Background summaries inherit the commands you allowed in ~/.claude",
   nightlyTime: "Nightly handoff time",
+  butlerPatrolTime: "Daily Butler control patrol at",
+  butlerPatrolOff: "Turn off",
+  butlerPatrolHelp: "At this time Butler opens (or reuses) Butler control and has it go over PRs, CI and pending decisions, then list what you need to do yourself under Decisions for you. If it is busy, Butler waits until it stops; if the computer was asleep at that time, the patrol runs once after it wakes, the same day. Empty = off (the default).",
   workingDays: "Working days (the nightly handoff runs only on these)",
   weekdayNames: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
   trackerTools: "Tracker MCP tools (handoffs may call only these; one per line)",

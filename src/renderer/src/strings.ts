@@ -36,6 +36,19 @@ const ZH = {
   newEpicSession: "epic session",
   epicSessionHint: "epic session 在 epic 的工作区里运行，能读所有仓库。在这里规划下一个 feature，定下来后让它建好。",
   noEpicSessions: "还没有 epic session。",
+  // Butler 总控（BTL-190 第 5 点）
+  butlerNav: "Butler 总控",
+  butlerTitle: "Butler 总控",
+  butlerIntro: "全局的总控：能看所有 epic、feature、ticket、PR 和 session，能给 epic session 和 feature 总控发消息，不能建、删、结束任何东西。epic session 的完成和卡住汇报会送到这里。",
+  butlerWorkspace: "工作目录",
+  butlerSession: "Butler 总控",
+  newButlerSession: "Butler 总控",
+  butlerSessionHint: "同时只有一个 Butler 总控在运行：已经开着时点这里会切到它。",
+  noButlerSessions: "还没有 Butler 总控的对话。",
+  butlerOpenErrors: {
+    no_ticket: "Butler 总控不可用。",
+    no_repo: "建不了 Butler 总控的工作目录（~/.butler/workspaces/_butler），请检查权限。",
+  } as Record<string, string>,
   noEpicFeatures: "还没有 feature。在 epic session 里规划，或者点“新建 feature”。",
   epicNoSummary: "还没有汇总",
   epicStatus: { stuck: "有 ticket 卡住", waiting: "等你回话", not_started: "未开始", active: "进行中", archived: "已归档" } as Record<EpicFeatureStatus, string>,
@@ -319,6 +332,7 @@ const ZH = {
     : role === "ticket_coordinator" ? `${ticketKey ?? ""} 总控`
     : role === "feature_coordinator" ? "feature 总控"
     : role === "fix" ? "修复 session"
+    : role === "butler" ? "Butler 总控"
     : "epic session",
   inboxAnswerPlaceholder: "输入回答（⌘/Ctrl+Enter 发送）",
   inboxSend: "回答",
@@ -370,6 +384,9 @@ const ZH = {
   schedule: "调度与 handoff",
   scheduleNote: "后台总结会继承你在 ~/.claude 里允许的命令",
   nightlyTime: "晚间 handoff 时间",
+  butlerPatrolTime: "每天几点让 Butler 总控巡检一次",
+  butlerPatrolOff: "关闭",
+  butlerPatrolHelp: "到点时 Butler 打开（或者接着用）Butler 总控，让它看一遍 PR、CI 和待你决定的事，用「待你决定」列出要你亲自做的事。它正忙就等它停下来；电脑睡过了点，醒来以后当天补一次。留空 = 关（默认）。",
   workingDays: "工作日（只在这些天跑晚间 handoff）",
   weekdayNames: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"],
   trackerTools: "tracker MCP 工具（handoff 只能调用这些，一行一个）",

@@ -350,6 +350,12 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!REFRESH_THRESHOLD_RE.test(t)) throw new SettingError(M().refreshThreshold);
       return String(Number(t));
     }
+    case "butlerPatrolTime": {
+      if (!value.trim()) return "";
+      const t = parseTime(value);
+      if (!t) throw new SettingError(M().timeFormat);
+      return `${String(t.h).padStart(2, "0")}:${String(t.m).padStart(2, "0")}`;
+    }
     case "idleCloseMinutes": {
       const t = value.trim();
       if (!IDLE_CLOSE_RE.test(t) || (Number(t) !== 0 && Number(t) < MIN_IDLE_CLOSE_MINUTES)) throw new SettingError(M().idleCloseMinutes);
@@ -401,6 +407,11 @@ export function idleCloseMinutes(s: Pick<SettingsRepo, "get">): number {
   const t = s.get("idleCloseMinutes").trim();
   const n = Number(t);
   return IDLE_CLOSE_RE.test(t) && (n === 0 || n >= MIN_IDLE_CLOSE_MINUTES) ? n : Number(SETTING_DEFAULTS.idleCloseMinutes);
+}
+
+/** Butler 总控每天巡检的时刻（butlerPatrolTime，BTL-190 第 5 点）：关着或者存的值不合法时为 null（不猜一个时间）。 */
+export function butlerPatrolTime(s: Pick<SettingsRepo, "get">): { h: number; m: number } | null {
+  return parseTime(s.get("butlerPatrolTime"));
 }
 
 export function trackerTools(s: SettingsRepo): string[] {

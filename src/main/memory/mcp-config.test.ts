@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { epicMcpFile, featureMcpFile, memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
+import { butlerMcpFile, epicMcpFile, featureMcpFile, memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
 
 const launcher = { command: "/Applications/Butler.app/Contents/MacOS/Butler", script: "/Applications/Butler.app/Contents/Resources/memory-mcp/statecore-mcp.cjs" };
 
@@ -192,5 +192,25 @@ describe("epic sessions server (design 2026-11-01)", () => {
     expect(inEpic.env).toMatchObject({ BUTLER_FEATURE: "7", BUTLER_FEATURE_EPIC: "1" });
     const plain = sessionsServer({ launcher, scope: { featureId: 7 }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
     expect(plain.env.BUTLER_FEATURE_EPIC).toBeUndefined();
+  });
+});
+
+describe("Butler 总控 config (BTL-190 5)", () => {
+  it("gives it only butler-workspace for memory, and a sessions server with the butler scope", () => {
+    expect(Object.keys(memoryServers({ launcher, statecoreDir: "/sc" }))).toEqual(["butler-workspace"]);
+    const s = sessionsServer({ launcher, scope: { butler: true }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
+    expect(s.env.BUTLER_SCOPE).toBe("butler");
+    for (const k of ["BUTLER_EPIC", "BUTLER_FEATURE", "BUTLER_TICKET", "BUTLER_MEMBER"]) expect(s.env[k]).toBeUndefined();
+    expect(s.env).toMatchObject({ BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" });
+  });
+
+  it("writes its config to mcp/butler.json", () => {
+    const mcpDir = tempDir();
+    const servers = memoryServers({ launcher, statecoreDir: "/sc" });
+    const file = writeButlerMcpConfig({ mcpDir, servers });
+    expect(file).toBe(butlerMcpFile(mcpDir));
+    expect(file).toBe(join(mcpDir, "butler.json"));
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpServers: servers });
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 });

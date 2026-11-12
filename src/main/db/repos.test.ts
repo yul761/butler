@@ -445,3 +445,47 @@ describe("hidden-session cleanup (BTL-190 item 8)", () => {
     expect(repo.deleteChain("nope")).toEqual([]);
   });
 });
+
+describe("Butler 总控 sessions (BTL-190 item 5)", () => {
+  const butlerRow = (repo: SessionsRepo, id: string, over: Partial<Parameters<SessionsRepo["insertIfAbsent"]>[0]> = {}) =>
+    repo.insertIfAbsent({ id, ticketKey: null, cwd: "/b/_butler", origin: "butler", createdAt: 1, lastActivityAt: 10, butler: true, ...over });
+
+  it("stores the butler flag, defaults it to false, and lists the butler sessions newest first", () => {
+    const repo = new SessionsRepo(memDb());
+    butlerRow(repo, "old", { lastActivityAt: 10 });
+    butlerRow(repo, "new", { lastActivityAt: 20 });
+    repo.insertIfAbsent({ id: "plain", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1 });
+    expect(repo.get("old")?.butler).toBe(true);
+    expect(repo.get("plain")?.butler).toBe(false);
+    expect(repo.listButler().map((s) => s.id)).toEqual(["new", "old"]);
+  });
+
+  it("does not list a butler session as unclaimed", () => {
+    const repo = new SessionsRepo(memDb());
+    butlerRow(repo, "b");
+    repo.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 1, lastActivityAt: 10 });
+    expect(repo.listUnclaimed(0).map((s) => s.id)).toEqual(["loose"]);
+  });
+
+  it("hands the role on to the /clear successor, but not on /resume", () => {
+    const repo = new SessionsRepo(memDb());
+    butlerRow(repo, "a");
+    repo.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/b/_butler", origin: "butler", createdAt: 2 });
+    repo.setReplacedBy("a", "b", "clear");
+    expect(repo.get("b")?.butler).toBe(true);
+    expect(repo.head("a")?.id).toBe("b");
+    butlerRow(repo, "c");
+    repo.insertIfAbsent({ id: "d", ticketKey: null, cwd: "/b/_butler", origin: "butler", createdAt: 2 });
+    repo.setReplacedBy("c", "d", "resume");
+    expect(repo.get("d")?.butler).toBe(false);
+  });
+
+  it("gives sessions from before the migration no butler flag", () => {
+    const db = new DatabaseSync(":memory:");
+    for (const sql of MIGRATIONS.slice(0, MIGRATIONS.length - 1)) db.exec(sql);
+    db.exec(`PRAGMA user_version = ${MIGRATIONS.length - 1}`);
+    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('old', NULL, '/w', 'butler', 1)`).run();
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+    expect(new SessionsRepo(db).get("old")?.butler).toBe(false);
+  });
+});

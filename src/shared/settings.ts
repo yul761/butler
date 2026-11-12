@@ -19,6 +19,7 @@ export const EDITABLE_SETTINGS = [
   "memoryEnabled",
   "refreshThresholdTokens",
   "idleCloseMinutes",
+  "butlerPatrolTime",
   "onboardingDone",
   "language",
 ] as const;

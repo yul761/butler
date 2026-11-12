@@ -31,6 +31,9 @@ export const IPC = {
   epicsArchived: "epics:archived",
   epicsUnarchive: "epics:unarchive",
   epicsOpenSession: "epics:openSession",
+  /** Butler 总控（BTL-190 第 5 点）。 */
+  butlerView: "butler:view",
+  butlerOpenSession: "butler:openSession",
   reposScan: "repos:scan",
   ticketsRecheckCleanup: "tickets:recheckCleanup",
   sessionsOpen: "sessions:open",
@@ -105,6 +108,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.featuresList, IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive,
   IPC.featuresSummaryRun, IPC.featuresArchived, IPC.featuresUnarchive, IPC.featuresOpenSession, IPC.featuresMove, IPC.reposScan, IPC.ticketsRecheckCleanup,
   IPC.epicsList, IPC.epicsCreate, IPC.epicsRename, IPC.epicsAddRepo, IPC.epicsRemoveRepo, IPC.epicsArchive, IPC.epicsArchived, IPC.epicsUnarchive, IPC.epicsOpenSession,
+  IPC.butlerView, IPC.butlerOpenSession,
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,

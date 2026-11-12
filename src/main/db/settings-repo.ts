@@ -44,6 +44,8 @@ export const SETTING_DEFAULTS = {
    * 「清理闲置」按钮不看它。
    */
   idleCloseMinutes: "180",
+  /** 每天几点让 Butler 总控巡检一次（BTL-190 第 5 点），HH:MM；空 = 关（默认）。 */
+  butlerPatrolTime: "",
   /** 界面和提示词的语言：auto | zh | en（设计文档 2026-10-26）。迁移 7 给老用户写 zh。 */
   language: "auto",
 } as const;

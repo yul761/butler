@@ -335,4 +335,7 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX idx_inbox_items_status ON inbox_items (kind, status);
   CREATE INDEX idx_inbox_items_session ON inbox_items (session_id);
   `,
+  // Butler 总控（BTL-190 第 5 点）：全局只有一个的 session，ticket、feature、epic 都是空的。单独一列标出来，
+  // 免得被当成没归属的 session（认领页）或者 epic session。
+  `ALTER TABLE sessions ADD COLUMN butler INTEGER NOT NULL DEFAULT 0;`,
 ];

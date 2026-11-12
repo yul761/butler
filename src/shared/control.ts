@@ -111,7 +111,27 @@ export type EpicControlRequest =
   | { v: 1; epicId: number; from: string | null; op: "end_session"; session: string; reason: string }
   | { v: 1; epicId: number; from: string | null; op: "refresh_session"; session: string };
 
-export type ControlRequest = TicketControlRequest | FeatureControlRequest | EpicControlRequest;
+/** Butler 总控 send_message 的正文最多这么多字符，超出直接拒绝。 */
+export const MESSAGE_LIMIT = 4000;
+
+/**
+ * Butler 总控的请求（BTL-190 第 5 点）：全局只有一个，看得到所有 epic、feature、ticket、PR 和 session，但什么都不建、不删、不结束，
+ * 也不开 ticket 的 session。send_message 只能发给 epic session 或 feature 总控（经过 DeliveryGuard）。
+ * list_tickets 的 feature / epic 是名字或 id（list_features、list_epics 里的），可以都不给。
+ */
+export type ButlerControlRequest =
+  | ({ v: 1; butler: true; from: string | null } & InboxControlOp)
+  | { v: 1; butler: true; from: string | null; op: "list_epics" }
+  | { v: 1; butler: true; from: string | null; op: "list_features" }
+  | { v: 1; butler: true; from: string | null; op: "list_tickets"; feature?: string; epic?: string }
+  | { v: 1; butler: true; from: string | null; op: "list_prs" }
+  | { v: 1; butler: true; from: string | null; op: "list_sessions" }
+  | { v: 1; butler: true; from: string | null; op: "session_activity"; session: string }
+  | { v: 1; butler: true; from: string | null; op: "list_inbox" }
+  | { v: 1; butler: true; from: string | null; op: "send_message"; session: string; text: string }
+  | { v: 1; butler: true; from: string | null; op: "refresh_session"; session: string };
+
+export type ControlRequest = TicketControlRequest | FeatureControlRequest | EpicControlRequest | ButlerControlRequest;
 
 export type ControlResult = { v: 1; ok: true; value: unknown } | { v: 1; ok: false; error: string };
 
@@ -162,6 +182,7 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   const o = raw as Record<string, unknown> | null;
   if (!o || typeof o !== "object" || o.v !== CONTROL_VERSION) return null;
   const from = typeof o.from === "string" && o.from.length > 0 && o.from.length <= 100 ? o.from : null;
+  if ("butler" in o) return parseButlerRequest(o, from);
   if ("epicId" in o) {
     if ("ticketKey" in o || "featureId" in o || !Number.isSafeInteger(o.epicId) || (o.epicId as number) <= 0) return null;
     const base = { v: 1 as const, epicId: o.epicId as number, from };
@@ -229,6 +250,30 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   if (o.op === "start_session") {
     if (!okName(o.repo, 4096) || !okTask(o.task) || !okModel(o.model)) return null;
     return { ...base, op: "start_session", repo: o.repo, task: o.task, ...(o.model !== undefined && { model: o.model as StartModel }) };
+  }
+  return null;
+}
+
+/** Butler 总控的请求：butler 必须是 true，而且不能和别的作用域一起出现。 */
+function parseButlerRequest(o: Record<string, unknown>, from: string | null): ButlerControlRequest | null {
+  if (o.butler !== true || "ticketKey" in o || "featureId" in o || "epicId" in o) return null;
+  const base = { v: 1 as const, butler: true as const, from };
+  if (isInboxOp(o.op)) return inboxOp(base, o);
+  if (o.op === "list_epics" || o.op === "list_features" || o.op === "list_prs" || o.op === "list_sessions" || o.op === "list_inbox") {
+    return { ...base, op: o.op };
+  }
+  if (o.op === "list_tickets") {
+    if (o.feature !== undefined && !okName(o.feature, 500)) return null;
+    if (o.epic !== undefined && !okName(o.epic, 500)) return null;
+    return { ...base, op: "list_tickets", ...(o.feature !== undefined && { feature: o.feature as string }), ...(o.epic !== undefined && { epic: o.epic as string }) };
+  }
+  if (o.op === "session_activity" || o.op === "refresh_session") {
+    if (!okName(o.session, 200)) return null;
+    return { ...base, op: o.op, session: o.session };
+  }
+  if (o.op === "send_message") {
+    if (!okName(o.session, 200) || typeof o.text !== "string" || !o.text.trim() || o.text.length > MESSAGE_LIMIT) return null;
+    return { ...base, op: "send_message", session: o.session, text: o.text };
   }
   return null;
 }

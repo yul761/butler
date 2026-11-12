@@ -39,11 +39,11 @@ export function useInbox(scope: InboxScope): InboxView | null {
 
 /**
  * feature 页、epic 页终端上面的两栏（BTL-190 第 2+3 点）：左边是汇报（从新到旧），右边是「待你决定」的卡片。两栏都空时整块不显示。
- * onGo：卡片上的「去终端」。
+ * onGo：卡片上的「去终端」。alwaysShow：都空也显示（Butler 总控页，BTL-190 第 5 点）。
  */
-export function InboxPanes({ scope, onGo }: { scope: InboxScope; onGo: (item: InboxItemView) => void }) {
+export function InboxPanes({ scope, onGo, alwaysShow }: { scope: InboxScope; onGo: (item: InboxItemView) => void; alwaysShow?: boolean }) {
   const view = useInbox(scope);
-  if (!view || (view.decisions.length === 0 && view.reports.length === 0)) return null;
+  if (!view || (!alwaysShow && view.decisions.length === 0 && view.reports.length === 0)) return null;
   return (
     <div className="inbox-panes">
       <section className="inbox-pane inbox-reports">

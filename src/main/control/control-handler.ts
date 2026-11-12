@@ -14,6 +14,7 @@ import { currentLang } from "../i18n";
 import { M } from "../strings";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
+import { butlerControl, type ButlerControlDeps } from "./butler-control";
 import type { InboxService } from "../inbox/inbox-service";
 import type { DeliveryGuard } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
@@ -66,6 +67,8 @@ export interface ControlHandlerDeps {
   notify: () => void;
   /** ask_user、report（BTL-190 第 2+3 点）；不给就拒绝。 */
   inbox?: Pick<InboxService, "ask" | "report">;
+  /** Butler 总控的请求（BTL-190 第 5 点）；不给就拒绝。 */
+  butler?: ButlerControlDeps;
   /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
   ticketPattern?: () => string;
   /** set_epic_plan 记下的时间（不给用 Date.now）。 */
@@ -500,7 +503,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (!d.inbox) return fail(M().ctlInboxOff);
     const h = req.from ? d.sessions.head(req.from) : null;
     if (!h) return fail(M().ctlInboxNoSession);
-    const mine = "epicId" in req ? h.epicId === req.epicId && h.featureId === null && h.ticketKey === null
+    const mine = "butler" in req ? h.butler && h.ticketKey === null
+      : "epicId" in req ? h.epicId === req.epicId && h.featureId === null && h.ticketKey === null
       : "featureId" in req ? h.featureId === req.featureId && h.ticketKey === null
       : h.ticketKey === req.ticketKey;
     if (!mine) return fail(M().ctlInboxNotYours);
@@ -512,8 +516,12 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     return ok({ id: r.id, note: r.queued ? M().ctlReportQueued : M().ctlReportStored });
   };
 
+  // Butler 总控（BTL-190 第 5 点）。
+  const butlerRequest = butlerControl(d, { sessionActivity, refreshSession, listedActivity, lastReply });
+
   return async (req) => {
     if (req.op === "ask_user" || req.op === "report") return inboxRequest(req);
+    if ("butler" in req) return butlerRequest(req);
     if ("epicId" in req) return epicRequest(req);
     if ("featureId" in req) return featureRequest(req);
     const t = d.tickets.get(req.ticketKey);

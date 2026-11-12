@@ -183,6 +183,7 @@ describe("inbox helpers (BTL-190 2+3)", () => {
     expect(inboxWho(item({ repo: "api" }), S)).toBe("BTL-1（api）");
     expect(inboxWho(item({ role: "ticket_coordinator" }), S)).toBe("BTL-1 总控");
     expect(inboxWho(item({ role: "feature_coordinator", ticketKey: null }), S)).toBe("feature 总控");
+    expect(inboxWho(item({ role: "butler", ticketKey: null }), S)).toBe("Butler 总控");
     setUiLang("en");
     expect(inboxWho(item({ role: "epic", ticketKey: null }), S)).toBe("Epic session");
   });

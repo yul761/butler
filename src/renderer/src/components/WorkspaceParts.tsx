@@ -143,10 +143,11 @@ export function WorkspaceHeader({ name, nameLabel, workspaceDir, onRename, archi
 }
 
 interface AreaProps {
-  repos: { id: number; repoPath: string }[];
-  reposHint: string;
-  onAddRepo: (path: string) => Promise<unknown>;
-  onRemoveRepo: (id: number) => Promise<unknown>;
+  /** 仓库条；Butler 总控没有仓库，不给就不显示。 */
+  repos?: { id: number; repoPath: string }[];
+  reposHint?: string;
+  onAddRepo?: (path: string) => Promise<unknown>;
+  onRemoveRepo?: (id: number) => Promise<unknown>;
   sessions: SessionView[];
   hiddenSessions: SessionView[];
   panes: SessionPanes;
@@ -167,7 +168,7 @@ export function SessionArea({ repos, reposHint, onAddRepo, onRemoveRepo, session
   async function addRepos(e: FormEvent) {
     e.preventDefault();
     try {
-      for (const p of addingRepo ?? []) await onAddRepo(p);
+      for (const p of addingRepo ?? []) await onAddRepo?.(p);
       setAddingRepo(null);
     } catch (err) {
       onError(err);
@@ -176,16 +177,18 @@ export function SessionArea({ repos, reposHint, onAddRepo, onRemoveRepo, session
 
   return (
     <>
-      <div className="repos-bar" title={reposHint}>
-        <span className="label">{S.featureRepos}</span>
-        {repos.map((r) => (
-          <span key={r.id} className="repo" title={r.repoPath}>
-            <span className="name">{lastSegment(r.repoPath)}</span>
-            <button onClick={() => onRemoveRepo(r.id).catch(onError)}>{S.removeRepo}</button>
-          </span>
-        ))}
-        <button onClick={() => setAddingRepo([])}>+ {S.addRepo}</button>
-      </div>
+      {repos && onRemoveRepo && (
+        <div className="repos-bar" title={reposHint}>
+          <span className="label">{S.featureRepos}</span>
+          {repos.map((r) => (
+            <span key={r.id} className="repo" title={r.repoPath}>
+              <span className="name">{lastSegment(r.repoPath)}</span>
+              <button onClick={() => onRemoveRepo(r.id).catch(onError)}>{S.removeRepo}</button>
+            </span>
+          ))}
+          <button onClick={() => setAddingRepo([])}>+ {S.addRepo}</button>
+        </div>
+      )}
       {addingRepo && (
         <form className="notice" onSubmit={addRepos}>
           <RepoPicker label={S.repo} onChange={setAddingRepo} required autoFocus />

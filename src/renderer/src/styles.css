@@ -282,3 +282,5 @@ label.inline { display: inline-flex; gap: 6px; align-items: center; }
 .inbox-card .actions { display: flex; gap: 6px; }
 .now-decisions { display: flex; flex-direction: column; margin: 4px 0 6px; }
 @media (max-width: 720px) { .inbox-panes { grid-template-columns: minmax(0, 1fr); } }
+/* Butler 总控页（BTL-190 第 5 点）。 */
+.butler-intro { margin: 0; padding: 0 16px 8px; }

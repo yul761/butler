@@ -64,6 +64,26 @@ describe("session guide", () => {
     }
   });
 
+  it("Butler 总控知道自己只看不建，跨 epic 协调用 send_message，epic 的汇报会送到它这里（BTL-190 第 5 点）", () => {
+    const zh = sessionGuide("zh", "butler");
+    expect(zh).toContain("Butler 总控");
+    expect(zh).toContain("send_message");
+    expect(zh).toContain("不能建");
+    expect(zh).toContain("epic session");
+    expect(zh).toContain("ask_user");
+    expect(zh).toContain("再让你从记忆里接上");
+    // 它不 push，也不开子 session。
+    expect(zh).not.toContain("不要循环查 CI");
+    expect(zh).not.toContain("start_session");
+    expect(zh).not.toContain("start_feature");
+    const en = sessionGuide("en", "butler");
+    expect(en).toContain("Butler control");
+    expect(en).toContain("send_message");
+    expect(en).toContain("cannot create");
+    expect(/[\u4e00-\u9fff]/.test(en)).toBe(false);
+    for (const kind of ["ticket", "coordinator", "epic"] as const) expect(sessionGuide("zh", kind)).not.toContain("Butler 总控");
+  });
+
   it("写到 mcp 目录，内容没变就不重写", () => {
     const dir = tempDir("guide");
     const file = writeSessionGuide(dir, "zh", "ticket");

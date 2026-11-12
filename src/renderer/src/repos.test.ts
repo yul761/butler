@@ -7,7 +7,7 @@ const repo = (id: number, path: string, extra: Partial<TicketRepo> = {}): Ticket
 });
 const session = (extra: Partial<SessionView>): SessionView => ({
   id: "s", ticketKey: "P-1", cwd: "/x", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
-  replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, termId: null, ...extra,
+  replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: false, termId: null, ...extra,
 });
 
 describe("repo labels", () => {

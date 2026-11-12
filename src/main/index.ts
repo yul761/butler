@@ -65,7 +65,7 @@ import { hookCommand } from "./hooks/installer";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
@@ -76,6 +76,7 @@ import { registerIpc } from "./ipc/register";
 import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
+import { ButlerPatrol } from "./schedule/butler-patrol";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { ActivityMonitor, activityIntervals } from "./sessions/activity-monitor";
 import { sessionRegistryName } from "./sessions/activity-sources";
@@ -371,7 +372,7 @@ async function bootstrap(): Promise<void> {
    * 普通 ticket session 是 member（只有 ask_user、report，BTL-190 第 2+3 点）。
    */
   const launcher = (script: string) => ({ command: process.execPath, script });
-  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null; epicId?: number | null }, scope: { ticketKey: string; member?: boolean } | { featureId: number; epic?: boolean } | { epicId: number }) => {
+  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null; epicId?: number | null }, scope: { ticketKey: string; member?: boolean } | { featureId: number; epic?: boolean } | { epicId: number } | { butler: true }) => {
     let servers = {};
     if (memoryOn(settings)) {
       if (existsSync(memoryMcpScript)) servers = memoryServers({ launcher: launcher(memoryMcpScript), statecoreDir: paths.statecore, ...mem });
@@ -406,6 +407,12 @@ async function bootstrap(): Promise<void> {
     const servers = mcpServers({ epicId }, { epicId });
     if (Object.keys(servers).length === 0) return null;
     return writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers });
+  };
+  /** Butler 总控（BTL-190 第 5 点）：只有全局记忆（butler-workspace）和 Butler 模式的 butler-sessions。 */
+  const butlerMcpConfig = (): string | null => {
+    const servers = mcpServers({}, { butler: true });
+    if (Object.keys(servers).length === 0) return null;
+    return writeButlerMcpConfig({ mcpDir: paths.mcp, servers });
   };
   /** 卡住判断和「需要你」判断共用的 headless 设置。 */
   const judgeDeps: HeadlessExecDeps = {
@@ -472,6 +479,8 @@ async function bootstrap(): Promise<void> {
     guidePath: (kind) => writeSessionGuide(paths.mcp, currentLang(), kind),
     featureMcpConfig,
     epicMcpConfig,
+    butlerWorkspace: paths.butlerWorkspace,
+    butlerMcpConfig,
     features, epics, featureHandoffs, handoffs, epicHistory,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
@@ -640,8 +649,15 @@ async function bootstrap(): Promise<void> {
     onChange: notify,
     log: logger,
   });
-  /** 退出开始后不再发起新的调度任务。 */
-  const checkSchedule = (trigger: ScheduleTrigger) => (headlessAbort.signal.aborted ? Promise.resolve() : scheduler.check(trigger));
+  /**
+   * 退出开始后不再发起新的调度任务。Butler 总控的每日巡检（BTL-190 第 5 点）用同样的触发时机，但不排进 Scheduler 的链：
+   * 它可能要等 session 停下来，不能挡住晚间 handoff。butlerPatrol 在下面才建好：调用时才用到。
+   */
+  const checkSchedule = (trigger: ScheduleTrigger) => {
+    if (headlessAbort.signal.aborted) return Promise.resolve();
+    void butlerPatrol.check();
+    return scheduler.check(trigger);
+  };
 
   const detectTrackerTools = async () => {
     await healthReady;
@@ -797,6 +813,7 @@ async function bootstrap(): Promise<void> {
     head: (id) => sessions.head(id),
     ticket: (key) => tickets.get(key),
     epicOfFeature: (id) => features.get(id)?.epicId ?? null,
+    epicName: (id) => epics.get(id)?.name ?? null,
     termOf: gateTerm,
     openHeads: openButlerHeads,
     answerGuard: new DeliveryGuard({ ...guardDeps, refreshing: (id) => refresher.isRefreshing(id) }),
@@ -804,6 +821,21 @@ async function bootstrap(): Promise<void> {
     deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
     notify,
     now: Date.now,
+    log: logger,
+  });
+  // Butler 总控的每日巡检（BTL-190 第 5 点）：到点打开（或接着用）Butler 总控，发巡检消息；开着的先过 guard，忙就等下一次 check。
+  const butlerPatrol = new ButlerPatrol({
+    time: () => settings.get("butlerPatrolTime"),
+    jobs,
+    now: Date.now,
+    running: () => sessionService.runningButler(),
+    latest: () => sessionService.latestButler(),
+    open: (req) => sessionService.openButler(req),
+    guard: deliveryGuard,
+    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
+    submit: submitTask,
+    message: () => M().butlerPatrolMessage,
+    onChange: notify,
     log: logger,
   });
   // 清理 session（BTL-190 第 8 点）：闲置自动关闭、隐藏 14 天后删除、「清理闲置」和「全部删除」。
@@ -973,6 +1005,8 @@ async function bootstrap(): Promise<void> {
             needsYou.update();
             // 卡片上答好的回答、该送给总控的汇报也趁现在送（永不 reject）。
             void inboxService.flush();
+            // 在等 Butler 总控停下来的巡检也趁现在送（BTL-190 第 5 点，永不 reject）。
+            if (!headlessAbort.signal.aborted) void butlerPatrol.check();
             return flushCi();
           });
         const repoId = sessions.head(stopped)?.repoId;
@@ -1107,6 +1141,15 @@ async function bootstrap(): Promise<void> {
       refresher,
       lastReply: (id) => activityMonitor.lastReply(id),
       inbox: inboxService,
+      // Butler 总控（BTL-190 第 5 点）的只读数据。
+      butler: {
+        epicViews: () => sessionService.epicViews(),
+        featureRows: () => sessionService.featureRowsAll(),
+        prs: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
+        openHeads: openButlerHeads,
+        needsYou: (id) => needsYou.reasons().get(id) ?? null,
+        inbox: inboxService,
+      },
       // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。
       kill: (termId) => pty.kill(termId),
       screenNeedsUser: (termId) => pty.screenNeedsUser(termId),

@@ -7,7 +7,7 @@ import type {
   AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
-  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView,
+  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, OpenButlerSessionRequest, ButlerView, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView,
 } from "../../shared/types";
 
 declare global {
@@ -72,6 +72,8 @@ export const api = {
   archivedEpics: () => call<Epic[]>(IPC.epicsArchived),
   unarchiveEpic: (id: number) => call<void>(IPC.epicsUnarchive, id),
   openEpicSession: (req: OpenEpicSessionRequest) => call<OpenSessionResult>(IPC.epicsOpenSession, req),
+  butlerView: () => call<ButlerView>(IPC.butlerView),
+  openButlerSession: (req: OpenButlerSessionRequest) => call<OpenSessionResult>(IPC.butlerOpenSession, req),
   openFixSession: (req: OpenFixSessionRequest) => call<OpenSessionResult>(IPC.sessionOpenFix, req),
   scanRepos: (dir: string) => call<ScanResult>(IPC.reposScan, dir),
   unclaimed: () => call<UnclaimedSession[]>(IPC.sessionsUnclaimed),

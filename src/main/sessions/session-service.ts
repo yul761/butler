@@ -10,6 +10,8 @@ import {
   type FeatureHandoffRecord,
   type FeatureView,
   type OpenEpicSessionRequest,
+  type OpenButlerSessionRequest,
+  type ButlerView,
   type OpenFeatureSessionRequest,
   type OpenFixSessionRequest,
   type OpenSessionRequest,
@@ -71,6 +73,10 @@ export interface SessionServiceDeps {
   featureMcpConfig?: (featureId: number, epicId: number | null) => string | null;
   /** epic session 的 --mcp-config 文件。 */
   epicMcpConfig?: (epicId: number) => string | null;
+  /** Butler 总控的工作目录（BTL-190 第 5 点）；不给就没有 Butler 总控。 */
+  butlerWorkspace?: string;
+  /** Butler 总控的 --mcp-config 文件。 */
+  butlerMcpConfig?: () => string | null;
   /**
    * 交互 session 的 --settings 文件：直接启用仓库 .mcp.json 里的 server，不停在选择对话框上（用户在 dirs 里禁用过的照旧禁用）。
    * 返回 null 时不加 --settings。
@@ -130,7 +136,7 @@ interface WorkspaceTarget {
   mcpConfig: () => string | null;
   guideKind: GuideKind;
   /** 新建 session 时这一行的角色。 */
-  row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "epicId"> & { model?: SessionModel | null };
+  row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "epicId" | "butler"> & { model?: SessionModel | null };
 }
 
 type Claude = { path: string; pathValue: string };
@@ -441,6 +447,59 @@ export class SessionService {
     const epic = this.d.epics?.get(req.epicId);
     if (!epic || epic.archivedAt !== null) return { ok: false, reason: "no_ticket" };
     return this.resumeOrStart(req, (head) => head.epicId === epic.id, (claude, head) => this.startInEpic(epic, claude, head));
+  }
+
+  /**
+   * Butler 总控（BTL-190 第 5 点）：全局只有一个在跑。已经开着时不管要的是哪个对话都返回它（要换对话先在终端里退出）。
+   * 在 ~/.butler/workspaces/_butler 里打开，不加 --add-dir，不设 BUTLER_TICKET。
+   */
+  async openButler(req: OpenButlerSessionRequest): Promise<OpenSessionResult> {
+    await this.d.ready();
+    const workspace = this.d.butlerWorkspace;
+    if (!workspace) return { ok: false, reason: "no_ticket" };
+    const running = this.runningButler();
+    if (running) {
+      const termId = this.openHeads().get(running.id);
+      if (termId) {
+        if (req.prefill) this.prefill(termId, sanitizePrefill(req.prefill), 0);
+        return { ok: true, termId, alreadyOpen: true };
+      }
+    }
+    return this.resumeOrStart(req, (head) => head.butler && head.ticketKey === null, (claude, head) => {
+      const cwd = head?.cwd || workspace;
+      try {
+        mkdirSync(cwd, { recursive: true });
+      } catch (e) {
+        this.d.log?.(`butler: cannot create ${cwd}`, e);
+        return { ok: false, reason: "no_repo" };
+      }
+      return this.startInWorkspace({
+        label: "butler", workspace, repoPaths: [], dirs: [],
+        mcpConfig: () => this.d.butlerMcpConfig?.() ?? null,
+        guideKind: "butler",
+        row: { butler: true },
+      }, claude, head);
+    });
+  }
+
+  /** 正在运行的 Butler 总控的 head；没有在跑的是 null。 */
+  runningButler(): Session | null {
+    for (const [id] of this.openHeads()) {
+      const head = this.d.sessions.get(id);
+      if (head?.butler && head.ticketKey === null) return head;
+    }
+    return null;
+  }
+
+  /** 最近用过、没隐藏的 Butler 总控 session（巡检要开时恢复它）；没有是 null。 */
+  latestButler(): Session | null {
+    return this.d.sessions.listButler().find((s) => !s.replacedBy && !s.dismissed) ?? null;
+  }
+
+  /** Butler 总控页：它的 session（分显示的和隐藏的）和工作目录。 */
+  butlerView(): ButlerView {
+    const { sessions, hiddenSessions } = this.split(this.d.sessions.listButler(), this.openHeads());
+    return { workspaceDir: this.d.butlerWorkspace ?? "", sessions, hiddenSessions };
   }
 
   /** 恢复 sessionId 这个 session（属于这里、终端还开着时直接用那个终端），或者新开一个。start 返回终端 id。 */
@@ -757,13 +816,13 @@ export class SessionService {
     };
   }
 
-  /** epic 下各 feature 的一行情况，以及其中有没有在等用户的 feature。 */
-  private epicRowsFrom(epicId: number, heads: Map<string, string>): { rows: EpicFeatureRow[]; waiting: boolean } {
+  /** epic 下各 feature 的一行情况，以及其中有没有在等用户的 feature。source 换掉"epic 下有哪些 feature"（Butler 总控要全部的）。 */
+  private epicRowsFrom(epicId: number, heads: Map<string, string>, source?: Pick<FeaturesRepo, "listByEpic">): { rows: EpicFeatureRow[]; waiting: boolean } {
     const fh = this.d.featureHandoffs;
     if (!this.d.features || !fh) return { rows: [], waiting: false };
     let waiting = false;
     const rows = epicFeatureRows(epicId, {
-      features: this.d.features,
+      features: source ?? this.d.features,
       latestValid: (id, base) => {
         // 已归档的 feature 归档之后还可能有汇总入库（晚到的运行）：stamp 再带上最新一条汇总的 id（按索引取一行，很便宜）。
         const stamp = base.startsWith("a") ? `${base}:${fh.latest(id)?.id ?? 0}` : base;
@@ -780,6 +839,15 @@ export class SessionService {
       },
     });
     return { rows, waiting };
+  }
+
+  /** 所有未归档 feature 的一行情况（属于 epic 的和不属于的），带上 epicId：Butler 总控的 list_features。 */
+  featureRowsAll(): (EpicFeatureRow & { epicId: number | null })[] {
+    const list = this.d.features?.list() ?? [];
+    if (list.length === 0) return [];
+    const epicOf = new Map(list.map((f) => [f.id, f.epicId]));
+    const { rows } = this.epicRowsFrom(0, this.openHeads(), { listByEpic: () => list });
+    return rows.map((r) => ({ ...r, epicId: epicOf.get(r.id) ?? null }));
   }
 
   /** 一个 epic 下各 feature 的情况（渲染 epic handoff 用）。 */
@@ -830,15 +898,15 @@ export class SessionService {
    */
   hide(sessionId: string): void {
     const s = this.d.sessions.head(sessionId);
-    // ticket 的 session、feature 级 session，或者 epic session。
-    if (!s || (!s.ticketKey && s.featureId === null && s.epicId === null)) throw new TicketError("not_found", M().sessionNotFound);
+    // ticket 的 session、feature 级 session、epic session，或者 Butler 总控。
+    if (!s || (!s.ticketKey && s.featureId === null && s.epicId === null && !s.butler)) throw new TicketError("not_found", M().sessionNotFound);
     if (this.openHeads().has(s.id)) throw new TicketError("sessions_open", M().sessionTerminalHide);
     this.d.sessions.dismiss(s.id, this.d.now());
   }
 
   unhide(sessionId: string): void {
     const s = this.d.sessions.get(sessionId);
-    if (!s || (!s.ticketKey && s.featureId === null && s.epicId === null)) throw new TicketError("not_found", M().sessionNotFound);
+    if (!s || (!s.ticketKey && s.featureId === null && s.epicId === null && !s.butler)) throw new TicketError("not_found", M().sessionNotFound);
     this.d.sessions.undismiss(s.id);
   }
 }

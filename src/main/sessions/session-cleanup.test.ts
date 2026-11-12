@@ -12,7 +12,7 @@ const NOW = 10_000_000_000;
 const base = (o: Partial<Session> = {}): Session => ({
   id: "x", ticketKey: null, cwd: "/r", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null,
   waitingForInput: true, replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null,
-  featureId: null, fixesSession: null, epicId: null, model: null, ...o,
+  featureId: null, fixesSession: null, epicId: null, model: null, butler: false, ...o,
 });
 
 const act = (o: Partial<SessionActivity> = {}): SessionActivity => ({

@@ -128,6 +128,8 @@ export interface Session {
   epicId: number | null;
   /** 开出来时用的模型（opus / sonnet）；null：没指定，恢复时也不传 --model。 */
   model: string | null;
+  /** Butler 总控（BTL-190 第 5 点）：全局只有一个，ticket、feature、epic 都是 null。 */
+  butler: boolean;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */
@@ -167,6 +169,13 @@ export interface EpicView extends Epic {
   /** 下面有 feature 卡住了。 */
   stuck: boolean;
   features: EpicFeatureRow[];
+}
+
+/** Butler 总控页（BTL-190 第 5 点）：它的 session 和工作目录。 */
+export interface ButlerView {
+  workspaceDir: string;
+  sessions: SessionView[];
+  hiddenSessions: SessionView[];
 }
 
 export interface UnclaimedSession extends Session {
@@ -247,6 +256,12 @@ export interface OpenFeatureSessionRequest {
 /** 打开 epic session：新开，或者恢复 sessionId。 */
 export interface OpenEpicSessionRequest {
   epicId: number;
+  sessionId?: string;
+  prefill?: string;
+}
+
+/** 打开 Butler 总控（BTL-190 第 5 点）：新开，或者恢复 sessionId；已经有一个在跑时都返回那一个。 */
+export interface OpenButlerSessionRequest {
   sessionId?: string;
   prefill?: string;
 }
@@ -433,11 +448,12 @@ export interface WatchedPr {
   checkedAt: number;
 }
 
-/** 「现在」页一行点开去哪：ticket 页、feature 页或 epic 页，sessionId 是要切到的终端（null：页面自己选）。 */
+/** 「现在」页一行点开去哪：ticket 页、feature 页、epic 页或 Butler 总控页，sessionId 是要切到的终端（null：页面自己选）。 */
 export type NowTarget =
   | { page: "ticket"; key: string; sessionId: string | null }
   | { page: "feature"; id: number; sessionId: string | null }
-  | { page: "epic"; id: number; sessionId: string | null };
+  | { page: "epic"; id: number; sessionId: string | null }
+  | { page: "butler"; sessionId: string | null };
 
 /** 换新（计划 16）正在做的那一步：写 handoff、/clear、发接着做的话。close：闲置关闭（BTL-190 第 8 点），写 handoff 之后结束终端。 */
 export type RefreshStep = "handoff" | "clear" | "resume" | "close";
@@ -501,8 +517,8 @@ export interface NowEpic {
 
 /** 「待你决定」一条的状态（BTL-190 第 2+3 点）。 */
 export type InboxStatus = "pending" | "answered" | "dismissed" | "superseded";
-/** 提问 / 汇报的是哪种 session：ticket 的 session、ticket 总控、feature 总控、修复 session、epic session。 */
-export type InboxRole = "ticket" | "ticket_coordinator" | "feature_coordinator" | "fix" | "epic";
+/** 提问 / 汇报的是哪种 session：ticket 的 session、ticket 总控、feature 总控、修复 session、epic session、Butler 总控（BTL-190 第 5 点）。 */
+export type InboxRole = "ticket" | "ticket_coordinator" | "feature_coordinator" | "fix" | "epic" | "butler";
 
 /** 界面上的一条「待你决定」或汇报。 */
 export interface InboxItemView {

@@ -17,6 +17,8 @@ describe("resolvePaths", () => {
     expect(p.claudeSessions).toBe(join("/home/u", ".claude", "sessions"));
     expect(p.claudeCommands).toBe(join("/home/u", ".claude", "commands"));
     expect(p.refresh).toBe(join("/home/u", ".butler", "refresh"));
+    // Butler 总控（BTL-190 第 5 点）的工作目录：和 ticket 的工作区放在一起，名字以 _ 开头，不会和 ticket 号撞上。
+    expect(p.butlerWorkspace).toBe(join("/home/u", ".butler", "workspaces", "_butler"));
   });
 
   it("puts a session's refresh tail at refresh/<session id>.md and keeps odd ids inside that directory", () => {

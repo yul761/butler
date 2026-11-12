@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, parseControlRequest, REASON_LIMIT, sanitizeTask, START_INSTRUCTIONS_LIMIT, taskMessage, TASK_LIMIT } from "./control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, MESSAGE_LIMIT, parseControlRequest, REASON_LIMIT, sanitizeTask, START_INSTRUCTIONS_LIMIT, taskMessage, TASK_LIMIT } from "./control";
 
 describe("parseControlRequest", () => {
   it("accepts the three operations", () => {
@@ -220,6 +220,41 @@ describe("parseControlRequest for start_feature (BTL-190 4)", () => {
       { v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: "x".repeat(START_INSTRUCTIONS_LIMIT + 1) },
       { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", start: "yes" },
       { v: 1, featureId: 3, op: "start_feature", feature: "c" }, { v: 1, ticketKey: "P-1", op: "start_feature", feature: "c" },
+    ]) {
+      expect(parseControlRequest(bad), JSON.stringify(bad).slice(0, 80)).toBeNull();
+    }
+  });
+});
+
+describe("parseControlRequest for the Butler 总控 (BTL-190 5)", () => {
+  const base = { v: 1, butler: true } as const;
+
+  it("accepts the read-only ops, session ops, send_message and the inbox ops", () => {
+    for (const op of ["list_epics", "list_features", "list_prs", "list_sessions", "list_inbox"]) {
+      expect(parseControlRequest({ ...base, from: "b", op })).toEqual({ v: 1, butler: true, from: "b", op });
+    }
+    expect(parseControlRequest({ ...base, op: "list_tickets" })).toEqual({ v: 1, butler: true, from: null, op: "list_tickets" });
+    expect(parseControlRequest({ ...base, op: "list_tickets", feature: "checkout", epic: "7" }))
+      .toEqual({ v: 1, butler: true, from: null, op: "list_tickets", feature: "checkout", epic: "7" });
+    expect(parseControlRequest({ ...base, op: "session_activity", session: "s1" })).toEqual({ v: 1, butler: true, from: null, op: "session_activity", session: "s1" });
+    expect(parseControlRequest({ ...base, op: "refresh_session", session: "s1" })).toEqual({ v: 1, butler: true, from: null, op: "refresh_session", session: "s1" });
+    expect(parseControlRequest({ ...base, op: "send_message", session: "s1", text: "先合 A" }))
+      .toEqual({ v: 1, butler: true, from: null, op: "send_message", session: "s1", text: "先合 A" });
+    expect(parseControlRequest({ ...base, op: "send_message", session: "s1", text: "x".repeat(MESSAGE_LIMIT) })).toMatchObject({ op: "send_message" });
+    expect(parseControlRequest({ ...base, op: "ask_user", question: "合吗？" })).toEqual({ v: 1, butler: true, from: null, op: "ask_user", question: "合吗？" });
+    expect(parseControlRequest({ ...base, op: "report", text: "巡检完了" })).toEqual({ v: 1, butler: true, from: null, op: "report", text: "巡检完了", kind: "progress" });
+  });
+
+  it("rejects anything that creates, deletes or ends, malformed fields, and butler next to another scope", () => {
+    for (const bad of [
+      { ...base, op: "create_feature", name: "c", brief: "b" }, { ...base, op: "create_ticket", ticket: "P-1" }, { ...base, op: "start_session", repo: "r", task: "t" },
+      { ...base, op: "start_feature", feature: "c" }, { ...base, op: "end_session", session: "s", reason: "r" }, { ...base, op: "set_epic_plan", plan: "p" },
+      { ...base, op: "send_message", session: "s1" }, { ...base, op: "send_message", session: "s1", text: "  " },
+      { ...base, op: "send_message", session: "s1", text: "x".repeat(MESSAGE_LIMIT + 1) }, { ...base, op: "send_message", text: "t" },
+      { ...base, op: "session_activity" }, { ...base, op: "list_tickets", feature: 3 }, { ...base, op: "list_tickets", epic: "" },
+      { v: 1, butler: "yes", op: "list_epics" }, { v: 1, butler: false, op: "list_epics" },
+      { ...base, epicId: 3, op: "list_epics" }, { ...base, featureId: 3, op: "list_epics" }, { ...base, ticketKey: "P-1", op: "list_epics" },
+      { v: 1, epicId: 3, op: "list_epics" }, { v: 1, featureId: 3, op: "list_prs" }, { v: 1, ticketKey: "P-1", op: "send_message", session: "s", text: "t" },
     ]) {
       expect(parseControlRequest(bad), JSON.stringify(bad).slice(0, 80)).toBeNull();
     }

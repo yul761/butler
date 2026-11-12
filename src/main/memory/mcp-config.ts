@@ -61,14 +61,18 @@ export function memoryServers(o: {
 /** butler-sessions server：同样用 Butler 自己的 Electron 运行；ticket（feature、epic）和控制目录写死在配置里。 */
 export function sessionsServer(o: {
   launcher: MemoryMcpLauncher;
-  /** epic: feature 总控的 feature 属于某个 epic（多出 epic_context 工具）。member: 普通 ticket session（只有 ask_user、report）。 */
-  scope: { ticketKey: string; member?: boolean } | { featureId: number; epic?: boolean } | { epicId: number };
+  /**
+   * epic: feature 总控的 feature 属于某个 epic（多出 epic_context 工具）。member: 普通 ticket session（只有 ask_user、report）。
+   * butler: Butler 总控（BTL-190 第 5 点），全局一个。
+   */
+  scope: { ticketKey: string; member?: boolean } | { featureId: number; epic?: boolean } | { epicId: number } | { butler: true };
   requestsDir: string;
   resultsDir: string;
 }): Record<string, McpServerSpec> {
   const scope = o.scope;
   const target: Record<string, string> =
-    "epicId" in scope ? { BUTLER_EPIC: String(scope.epicId) }
+    "butler" in scope ? { BUTLER_SCOPE: "butler" }
+    : "epicId" in scope ? { BUTLER_EPIC: String(scope.epicId) }
     : "featureId" in scope ? { BUTLER_FEATURE: String(scope.featureId), ...(scope.epic && { BUTLER_FEATURE_EPIC: "1" }) }
     : { BUTLER_TICKET: scope.ticketKey, ...(scope.member && { BUTLER_MEMBER: "1" }) };
   // 工具描述跟着 Butler 的语言（设计文档 2026-10-26）。
@@ -121,6 +125,15 @@ export function epicMcpFile(mcpDir: string, epicId: number): string {
 
 export function writeEpicMcpConfig(o: { mcpDir: string; epicId: number; servers: Record<string, McpServerSpec> }): string {
   return writeConfig(epicMcpFile(o.mcpDir, o.epicId), o.servers);
+}
+
+/** Butler 总控的配置（BTL-190 第 5 点）：全局只有一个，mcp/butler.json。 */
+export function butlerMcpFile(mcpDir: string): string {
+  return join(mcpDir, "butler.json");
+}
+
+export function writeButlerMcpConfig(o: { mcpDir: string; servers: Record<string, McpServerSpec> }): string {
+  return writeConfig(butlerMcpFile(o.mcpDir), o.servers);
 }
 
 /** feature 归档时删掉它总控的 --mcp-config 文件。 */

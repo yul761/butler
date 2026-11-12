@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, moveTargetArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, moveTargetArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -173,6 +173,14 @@ describe("epic IPC arguments (design 2026-11-01)", () => {
     expect(openEpicArg({ epicId: 1 })).toEqual({ epicId: 1 });
     for (const bad of [null, {}, { epicId: 0 }, { epicId: 1, sessionId: "../x" }, { epicId: 1, prefill: 3 }, { epicId: 1, prefill: "x".repeat(100_001) }]) {
       expect(() => openEpicArg(bad), JSON.stringify(bad)?.slice(0, 80)).toThrow();
+    }
+  });
+
+  it("checks the Butler 总控 session request (BTL-190 5)", () => {
+    expect(openButlerArg({ sessionId: "abc-1", prefill: "hi", extra: 1 })).toEqual({ sessionId: "abc-1", prefill: "hi" });
+    expect(openButlerArg({})).toEqual({});
+    for (const bad of [null, 3, { sessionId: "../x" }, { prefill: 3 }, { prefill: "x".repeat(100_001) }]) {
+      expect(() => openButlerArg(bad), JSON.stringify(bad)?.slice(0, 80)).toThrow();
     }
   });
 

@@ -23,6 +23,8 @@ export interface InboxServiceDeps {
   termOf(sessionId: string): string | null;
   /** 开着终端的 Butler session 的 head。 */
   openHeads(): Session[];
+  /** epic 的名字（送给 Butler 总控的汇报里写是哪个 epic，BTL-190 第 5 点）；不给或者找不到就不写。 */
+  epicName?(epicId: number): string | null;
   /** 递回答用的：不看「需要你」（未决的 ask_user 本身就算需要你），别的照常（忙、屏幕上有对话框、用户在打字、有草稿、在换新）。 */
   answerGuard: Pick<DeliveryGuard, "check" | "recheckAfter">;
   /** 递汇报用的：和 CI 结果同一道 guard（总控在等用户回答时不往里贴）。 */
@@ -34,9 +36,11 @@ export interface InboxServiceDeps {
 }
 
 /** 提问 / 汇报的是哪种 session。 */
-export function roleOf(s: Pick<Session, "ticketKey" | "coordinator" | "featureId" | "fixesSession" | "epicId">): InboxRole {
+export function roleOf(s: Pick<Session, "ticketKey" | "coordinator" | "featureId" | "fixesSession" | "epicId"> & { butler?: boolean }): InboxRole {
   if (s.ticketKey !== null) return s.coordinator ? "ticket_coordinator" : "ticket";
   if (s.featureId !== null) return s.fixesSession !== null ? "fix" : "feature_coordinator";
+  // Butler 总控（BTL-190 第 5 点）：ticket、feature、epic 都是空的。
+  if (s.butler) return "butler";
   return "epic";
 }
 
@@ -83,11 +87,21 @@ export class InboxService {
 
   /** report：存下来。返回会不会送给总控（done / blocked，而且这个 session 上面有总控）。 */
   report(s: Session, text: string, kind: ReportKind): { id: number; queued: boolean } {
-    const queued = kind !== "progress" && roleOf(s) !== "epic";
+    const queued = kind !== "progress" && this.hasCoordinator(s);
     const id = this.d.repo.addReport({ ...this.owner(s), text, kind, status: queued ? "pending" : "dismissed", createdAt: this.d.now() });
     this.d.notify();
     if (queued) void this.flushReports();
     return { id, queued };
+  }
+
+  /**
+   * 这个 session 上面有没有能收汇报的总控：epic session 只有 Butler 总控开着时才有（BTL-190 第 5 点，没开就只存），Butler 总控自己没有。
+   */
+  private hasCoordinator(s: Session): boolean {
+    const role = roleOf(s);
+    if (role === "butler") return false;
+    if (role === "epic") return this.d.openHeads().some((h) => h.butler);
+    return true;
   }
 
   /** 用户在卡片上回答（选项或者打的字）：记下答案，能送就马上送。条目已经不是未决的返回 false。 */
@@ -182,6 +196,8 @@ export class InboxService {
       target = pick((h) => h.ticketKey === null && h.featureId === item.featureId && h.fixesSession === null);
     }
     if (target === null && role !== "epic" && item.epicId !== null) target = pick((h) => h.ticketKey === null && h.featureId === null && h.epicId === item.epicId);
+    // epic session → Butler 总控（BTL-190 第 5 点）。
+    if (target === null && role === "epic") target = pick((h) => h.butler);
     return target;
   }
 
@@ -235,7 +251,7 @@ export class InboxService {
   /** 给总控看的「谁」：ticket 号（ticket 有几个仓库时加仓库名）、总控、修复 session。 */
   private whoOf(s: Session): string {
     const role = roleOf(s);
-    return M().inboxWho(role, s.ticketKey, role === "ticket" ? this.repoOf(s) : null);
+    return M().inboxWho(role, s.ticketKey, role === "ticket" ? this.repoOf(s) : null, role === "epic" && s.epicId !== null ? this.d.epicName?.(s.epicId) : null);
   }
 
   /** ticket 有不止一个仓库时，这个 session 的仓库目录名。 */
@@ -251,10 +267,11 @@ export class InboxService {
   itemView(item: InboxItem): InboxItemView {
     const s = this.d.head(item.sessionId);
     const sessionId = s?.id ?? item.sessionId;
-    const role: InboxRole = s ? roleOf(s) : item.ticketKey !== null ? "ticket" : item.featureId !== null ? "feature_coordinator" : "epic";
+    const role: InboxRole = s ? roleOf(s) : item.ticketKey !== null ? "ticket" : item.featureId !== null ? "feature_coordinator" : item.epicId !== null ? "epic" : "butler";
     const target: NowTarget =
       item.ticketKey !== null ? { page: "ticket", key: item.ticketKey, sessionId }
       : s?.featureId != null || (s === null && item.featureId !== null) ? { page: "feature", id: (s?.featureId ?? item.featureId) as number, sessionId }
+      : role === "butler" ? { page: "butler", sessionId }
       : { page: "epic", id: item.epicId ?? 0, sessionId };
     return {
       id: item.id, kind: item.kind, sessionId, role, ticketKey: item.ticketKey, featureId: item.featureId, epicId: item.epicId,

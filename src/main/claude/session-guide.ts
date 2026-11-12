@@ -3,13 +3,19 @@ import { join } from "node:path";
 import { MAX_RUNNING_FEATURES_PER_EPIC } from "../../shared/control";
 import type { Lang } from "../../shared/i18n";
 
-/** ticket：ticket session 和修复 session；coordinator：ticket 总控、feature 总控；epic：epic session（BTL-190 第 4 点起单独一种，它开的是 feature 总控）。 */
-export type GuideKind = "ticket" | "coordinator" | "epic";
+/**
+ * ticket：ticket session 和修复 session；coordinator：ticket 总控、feature 总控；epic：epic session（BTL-190 第 4 点起单独一种，它开的是 feature 总控）；
+ * butler：Butler 总控（BTL-190 第 5 点），只看不建。
+ */
+export type GuideKind = "ticket" | "coordinator" | "epic" | "butler";
 
 /** 每段一个函数，按语言返回一段文字（返回 null 表示这个 kind 不需要）；后续计划往里加段落。 */
 export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | null> = [
-  (lang) =>
-    lang === "zh"
+  // Butler 总控不 push，没有自己的 PR。
+  (lang, kind) =>
+    kind === "butler"
+      ? null
+      : lang === "zh"
       ? "Butler 会在后台盯着你的 PR 和 CI。push 之后不要循环查 CI（不要 gh run watch、gh pr checks --watch、sleep 轮询），直接结束这一轮；CI 跑完后 Butler 会把结果发给你。"
       : "Butler watches your PR and CI in the background. After you push, do not poll CI (no gh run watch, gh pr checks --watch, or sleep loops); just end your turn. Butler will send you the result when CI finishes.",
   // 子代理的模型：所有 session 都有。
@@ -24,16 +30,18 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : lang === "zh"
         ? "用 start_session 开子 session 时按任务选 model：范围小、目标明确的用 sonnet，需要判断的用 opus，拿不准就用 opus。"
         : "When you open a child session with start_session, pick the model by task: sonnet for small, well-defined work, opus for work that needs judgment, and opus when unsure.",
-  // 「待你决定」和汇报（BTL-190 第 2+3 点）：所有 session 都有 ask_user 和 report。
-  (lang) =>
-    lang === "zh"
+  // 「待你决定」和汇报（BTL-190 第 2+3 点）：所有 session 都有 ask_user 和 report；Butler 总控的写在它自己那一段里。
+  (lang, kind) =>
+    kind === "butler"
+      ? null
+      : lang === "zh"
       ? "需要用户回答一个具体的问题、做一个决定时，调用 butler-sessions 的 ask_user（问题、可选的几个选项、背景），然后结束这一轮，等回答送进来；" +
         "不要拿它问\"要我继续吗\"\"还有别的吗\"这类话，做完就直接停下。做完一块、或者卡住了，用 report 汇报一句（kind 是 done 或 blocked），管你的总控会收到；中间的进展用 progress。"
       : "When you need the user to answer a specific question or make a decision, call ask_user from butler-sessions (question, optional options, context), then end your turn and wait for the answer to arrive. " +
         "Do not use it for \"shall I continue?\" or \"anything else?\"; when you are done, just stop. When you finish a piece of work or get blocked, send one line with report (kind done or blocked) and your coordinator will get it; use progress for updates along the way.",
   // 总控和 epic session：子 session 的问题和汇报 Butler 已经处理了。
   (lang, kind) =>
-    kind === "ticket"
+    kind === "ticket" || kind === "butler"
       ? null
       : lang === "zh"
         ? "子 session 用 ask_user 提的问题会直接摆在用户面前，不用你再转述一遍；它们 done / blocked 的汇报会在你停下来时自动送到。"
@@ -47,6 +55,19 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
           `用户还没同意开工时不要调用。一个 epic 同时最多 ${MAX_RUNNING_FEATURES_PER_EPIC} 个 feature 的总控在跑，按规划的先后顺序开；总控已经在跑时不会再开一个，要补充说明就带上 instructions。`
         : "Once the plan is settled and the user agrees to start, open a feature's coordinator with start_feature: it gets the plan and goes on to create tickets and start child sessions. Passing start: true to create_feature is the same as calling start_feature right after creating. " +
           `Do not call it before the user agrees to start. At most ${MAX_RUNNING_FEATURES_PER_EPIC} feature coordinators of an epic run at once, so open them in the order the plan sets; a coordinator that is already running is not opened again, and you can pass instructions to add to what it is doing.`,
+  // Butler 总控（BTL-190 第 5 点）：看全部，不建不删；跨 epic 协调用 send_message。
+  (lang, kind) =>
+    kind !== "butler"
+      ? null
+      : lang === "zh"
+        ? "你是 Butler 总控：全局只有一个，看得到所有 epic、feature、ticket、PR 和 session（list_epics、list_features、list_tickets、list_prs、list_sessions、session_activity、list_inbox）。" +
+          "你不能建、删、结束任何东西，也不能开 session；要哪个 epic、feature 做什么，用 send_message 发给它的 epic session 或 feature 总控，它们正忙时稍后再试。" +
+          "各 epic session done / blocked 的汇报会在你停下来时自动送到。list_inbox 里的「待你决定」已经摆在用户面前，不要再问一遍；需要用户自己做的事（合 PR、回答问题、处理红了的 CI）用 ask_user 列出来，然后结束这一轮。" +
+          "report 只存下来，不会送给任何人。"
+        : "You are Butler control: there is only one, and it sees every epic, feature, ticket, PR and session (list_epics, list_features, list_tickets, list_prs, list_sessions, session_activity, list_inbox). " +
+          "You cannot create, delete or end anything, and you cannot open sessions; when an epic or feature needs to do something, tell its epic session or feature coordinator with send_message, and try again later if it is busy. " +
+          "Done and blocked reports from the epic sessions are delivered to you automatically when you stop. Pending decisions in list_inbox are already in front of the user, so do not ask them again; list what the user has to do themselves (merge PRs, answer questions, deal with failing CI) with ask_user, then end your turn. " +
+          "report is only stored and is not sent to anyone.",
   // 换新：所有 session 都可能被换新。
   (lang) =>
     lang === "zh"

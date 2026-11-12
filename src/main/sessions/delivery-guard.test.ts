@@ -6,7 +6,7 @@ import { DeliveryGuard, USER_TYPING_QUIET_MS, type DeliveryGuardDeps } from "./d
 const session = (o: Partial<Session> = {}): Session => ({
   id: "s-head", ticketKey: "DMS-1", cwd: "/r/app", origin: "butler", gitBranch: "dms-1", firstPrompt: null, lastActivityAt: null,
   waitingForInput: true, replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null,
-  featureId: null, fixesSession: null, epicId: null, model: null, ...o,
+  featureId: null, fixesSession: null, epicId: null, model: null, butler: false, ...o,
 });
 const activity = (kind: SessionActivity["kind"], background = false): SessionActivity => ({
   sessionId: "s-head", kind, detail: null, background, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, lastOutput: [],

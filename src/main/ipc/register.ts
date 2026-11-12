@@ -39,7 +39,7 @@ import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
   addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, moveTargetArg,
-  openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
+  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
 } from "./validate";
 import { M } from "../strings";
 
@@ -251,6 +251,13 @@ export function registerIpc(d: IpcDeps): void {
   });
   handle(IPC.epicsOpenSession, async (raw: unknown) => {
     const r = await d.sessionService.openEpic(openEpicArg(raw));
+    d.notify();
+    return r;
+  });
+
+  handle(IPC.butlerView, () => d.sessionService.butlerView());
+  handle(IPC.butlerOpenSession, async (raw: unknown) => {
+    const r = await d.sessionService.openButler(openButlerArg(raw));
     d.notify();
     return r;
   });

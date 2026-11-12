@@ -1,7 +1,7 @@
 import type { SensitiveTerm } from "../../shared/llm";
 import { CONTEXT_LIMIT } from "../../shared/control";
 import type {
-  AddRepoInput, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
+  AddRepoInput, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
 import { EPIC_NAME_LIMIT } from "../epics/epic-service";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
@@ -229,6 +229,17 @@ export function openFeatureArg(v: unknown): OpenFeatureSessionRequest {
   if (!optString(o.prefill, 100_000)) throw new Error("invalid prefill");
   return {
     featureId: featureIdArg(o.featureId),
+    ...(o.sessionId !== undefined && { sessionId: sessionIdArg(o.sessionId) }),
+    ...(o.prefill !== undefined && { prefill: o.prefill }),
+  };
+}
+
+/** 打开 Butler 总控（BTL-190 第 5 点）。 */
+export function openButlerArg(v: unknown): OpenButlerSessionRequest {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid butler session request");
+  if (!optString(o.prefill, 100_000)) throw new Error("invalid prefill");
+  return {
     ...(o.sessionId !== undefined && { sessionId: sessionIdArg(o.sessionId) }),
     ...(o.prefill !== undefined && { prefill: o.prefill }),
   };

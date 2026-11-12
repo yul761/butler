@@ -21,6 +21,7 @@ interface SessionRow {
   fixes_session: string | null;
   epic_id: number | null;
   model: string | null;
+  butler: number;
 }
 
 function toSession(r: SessionRow): Session {
@@ -43,6 +44,7 @@ function toSession(r: SessionRow): Session {
     fixesSession: r.fixes_session,
     epicId: r.epic_id === null ? null : Number(r.epic_id),
     model: r.model,
+    butler: r.butler === 1,
   };
 }
 
@@ -62,6 +64,8 @@ export interface NewSession {
   fixesSession?: string | null;
   epicId?: number | null;
   model?: string | null;
+  /** Butler 总控（BTL-190 第 5 点）。 */
+  butler?: boolean;
 }
 
 export interface SessionDetails {
@@ -85,12 +89,12 @@ export class SessionsRepo {
   insertIfAbsent(s: NewSession): boolean {
     const r = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session, epic_id, model)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session, epic_id, model, butler)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
-        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null, s.epicId ?? null, s.model ?? null,
+        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null, s.epicId ?? null, s.model ?? null, s.butler ? 1 : 0,
       );
     if (Number(r.changes) > 0) {
       this.forgotten.delete(s.id);
@@ -157,6 +161,14 @@ export class SessionsRepo {
     return rows.map(toSession);
   }
 
+  /** Butler 总控的 session（BTL-190 第 5 点），最近活动的在前。 */
+  listButler(): Session[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM sessions WHERE butler = 1 AND ticket_key IS NULL ORDER BY ${RECENCY} DESC, id`)
+      .all() as unknown as SessionRow[];
+    return rows.map(toSession);
+  }
+
   /** 记成这个 epic 的 session；null：它不是 epic session（嵌套的 claude）。 */
   setEpic(id: string, epicId: number | null): void {
     this.db.prepare(`UPDATE sessions SET epic_id = ? WHERE id = ?`).run(epicId, id);
@@ -166,7 +178,7 @@ export class SessionsRepo {
     const rows = this.db
       .prepare(
         `SELECT * FROM sessions
-         WHERE ticket_key IS NULL AND feature_id IS NULL AND epic_id IS NULL AND dismissed = 0 AND replaced_by IS NULL AND ${RECENCY} >= ?
+         WHERE ticket_key IS NULL AND feature_id IS NULL AND epic_id IS NULL AND butler = 0 AND dismissed = 0 AND replaced_by IS NULL AND ${RECENCY} >= ?
          ORDER BY ${RECENCY} DESC, id`,
       )
       .all(sinceMs) as unknown as SessionRow[];
@@ -204,7 +216,8 @@ export class SessionsRepo {
       coordinator = CASE WHEN ${old("fixes_session")} IS NULL AND ${old("epic_id")} IS NULL THEN MAX(coordinator, ${old("coordinator")}) ELSE 0 END,
       feature_id = CASE WHEN ${old("epic_id")} IS NULL THEN COALESCE(feature_id, ${old("feature_id")}) END,
       epic_id = CASE WHEN ${old("feature_id")} IS NULL THEN COALESCE(epic_id, ${old("epic_id")}) END,
-      fixes_session = COALESCE(fixes_session, ${old("fixes_session")})`;
+      fixes_session = COALESCE(fixes_session, ${old("fixes_session")}),
+      butler = MAX(butler, ${old("butler")})`;
     withTransaction(this.db, () => {
       this.db.prepare(`UPDATE sessions SET replaced_by = ?2 WHERE id = ?1`).run(id, newId);
       this.db

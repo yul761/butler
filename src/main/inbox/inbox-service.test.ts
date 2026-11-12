@@ -8,14 +8,14 @@ import { InboxService, REPORT_DELIVERY_MAX_AGE_MS, roleOf } from "./inbox-servic
 
 const session = (id: string, o: Partial<Session> = {}): Session => ({
   id, ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: true, replacedBy: null,
-  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, ...o,
+  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: false, ...o,
 });
 
 const ticket = (key: string, featureId: number | null, repos: { id: number; repoPath: string }[] = [{ id: 1, repoPath: "/r/api" }]): Ticket =>
   ({ key, featureId, repos, title: null } as unknown as Ticket);
 
 /** 链：chains 里 old → new 的映射，head 沿着走到底。 */
-function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<number, number>; open?: string[] }) {
+function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<number, number>; open?: string[]; epicNames?: Record<number, string> }) {
   const repo = new InboxRepo(memDb());
   const sessions = new Map(o.sessions.map((s) => [s.id, s]));
   const replaced = new Map<string, string>();
@@ -42,6 +42,7 @@ function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<num
     repo, head, ticket: (k) => tickets.get(k) ?? null, epicOfFeature: (id) => o.epicOf?.[id] ?? null,
     termOf: (id) => (state.open.has(head(id)?.id ?? id) ? `term-${head(id)?.id ?? id}` : null),
     openHeads: () => [...state.open].map((id) => sessions.get(id)!).filter(Boolean),
+    epicName: (id) => o.epicNames?.[id] ?? null,
     answerGuard: gate("answerGate"), reportGuard: gate("reportGate"), deliver, notify, now: () => state.now, log: () => {},
   });
   const replace = (from: string, to: Session) => {
@@ -267,5 +268,60 @@ describe("InboxService views", () => {
     expect(roleOf(session("x", { featureId: 1 }))).toBe("feature_coordinator");
     expect(roleOf(session("x", { featureId: 1, fixesSession: "y" }))).toBe("fix");
     expect(roleOf(session("x", { epicId: 1 }))).toBe("epic");
+  });
+});
+
+describe("InboxService and the Butler 总控 (BTL-190 5)", () => {
+  it("sends an epic session's done / blocked reports to the open Butler 总控, and only stores them when it is not open", async () => {
+    const ep = session("ep", { epicId: 2 });
+    const bt = session("bt", { butler: true });
+    const { inbox, repo, deliver, state } = setup({ sessions: [ep, bt], open: ["ep"], epicNames: { 2: "支付" } });
+    // 总控没开：只存。
+    const stored = inbox.report(ep, "epic blocked", "blocked");
+    expect(stored.queued).toBe(false);
+    expect(repo.get(stored.id)?.status).toBe("dismissed");
+    state.open.add("bt");
+    const sent = inbox.report(ep, "epic done", "done");
+    expect(sent.queued).toBe(true);
+    await settle();
+    expect(deliver.mock.calls.at(-1)?.[0]).toBe("term-bt");
+    expect(deliver.mock.calls.at(-1)?.[1]).toContain("【epic session（支付） · 完成】epic done");
+    expect(repo.get(sent.id)?.status).toBe("answered");
+    // progress 照样只存。
+    expect(inbox.report(ep, "half", "progress").queued).toBe(false);
+  });
+
+  it("does not send other sessions' reports to the Butler 总控, and its own reports are only stored", async () => {
+    const fc = session("fc", { featureId: 3 });
+    const child = session("c1", { ticketKey: "BTL-1" });
+    const bt = session("bt", { butler: true });
+    const { inbox, repo, deliver } = setup({ sessions: [fc, child, bt], tickets: [ticket("BTL-1", 3)], open: ["bt"] });
+    // feature 不属于 epic、没有总控开着：等着，不送给 Butler 总控。
+    const r = inbox.report(fc, "feature done", "done");
+    await inbox.flush();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(repo.get(r.id)?.status).toBe("pending");
+    expect(inbox.report(bt, "巡检完了", "done")).toMatchObject({ queued: false });
+    await inbox.flush();
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("shows the Butler 总控's own questions with role butler and a target on its page", () => {
+    const bt = session("bt", { butler: true });
+    const { inbox, repo } = setup({ sessions: [bt] });
+    const id = inbox.ask(bt, { question: "先合哪个？" });
+    expect(repo.get(id)).toMatchObject({ ticketKey: null, featureId: null, epicId: null });
+    expect(inbox.pendingDecisionViews()[0]).toMatchObject({ role: "butler", open: true, target: { page: "butler", sessionId: "bt" } });
+    expect(inbox.view({ all: true }).decisions.map((x) => x.text)).toEqual(["先合哪个？"]);
+    expect(inbox.view({ epicId: 2 }).decisions).toEqual([]);
+    expect(roleOf(bt)).toBe("butler");
+  });
+
+  it("an item whose session is gone still points at the Butler 总控 page when it has no ticket, feature or epic", () => {
+    const bt = session("bt", { butler: true });
+    const { inbox, sessions } = setup({ sessions: [bt] });
+    inbox.ask(bt, { question: "q" });
+    sessions.delete("bt");
+    expect(inbox.pendingDecisionViews()[0]).toMatchObject({ role: "butler", target: { page: "butler", sessionId: "bt" } });
   });
 });

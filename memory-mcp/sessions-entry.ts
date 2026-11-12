@@ -12,17 +12,20 @@ const epicId = /^[1-9]\d{0,15}$/.test(env.BUTLER_EPIC ?? "") ? Number(env.BUTLER
 const featureInEpic = env.BUTLER_FEATURE_EPIC === "1";
 // 普通 ticket session（BTL-190 第 2+3 点）：BUTLER_MEMBER=1，只有 ask_user 和 report。
 const member = env.BUTLER_MEMBER === "1";
+// Butler 总控（BTL-190 第 5 点）：BUTLER_SCOPE=butler，全局一个，没有 ticket、feature、epic。
+const butler = env.BUTLER_SCOPE === "butler";
 const requestsDir = env.BUTLER_CONTROL_REQUESTS ?? "";
 const resultsDir = env.BUTLER_CONTROL_RESULTS ?? "";
 const from = env.BUTLER_SESSION && !env.BUTLER_SESSION.startsWith(HEADLESS_SESSION_PREFIX) ? env.BUTLER_SESSION : null;
 sanitizeEnv(env);
 
-if ((!ticketKey && featureId === null && epicId === null) || !requestsDir || !resultsDir) {
-  process.stderr.write("butler-sessions: BUTLER_TICKET, BUTLER_FEATURE or BUTLER_EPIC, BUTLER_CONTROL_REQUESTS and BUTLER_CONTROL_RESULTS are required\n");
+if ((!butler && !ticketKey && featureId === null && epicId === null) || !requestsDir || !resultsDir) {
+  process.stderr.write("butler-sessions: BUTLER_SCOPE=butler, BUTLER_TICKET, BUTLER_FEATURE or BUTLER_EPIC, BUTLER_CONTROL_REQUESTS and BUTLER_CONTROL_RESULTS are required\n");
   process.exit(2);
 }
 const lang = env.BUTLER_LANG === "en" ? "en" : "zh";
-const server = new SessionsServer({ scope: epicId !== null ? { epicId } : featureId !== null ? { featureId, epic: featureInEpic } : { ticketKey, member }, lang, from, requestsDir, resultsDir });
+const scope = butler ? { butler: true as const } : epicId !== null ? { epicId } : featureId !== null ? { featureId, epic: featureInEpic } : { ticketKey, member };
+const server = new SessionsServer({ scope, lang, from, requestsDir, resultsDir });
 serveStdio(server, process.stdin, process.stdout);
 // claude 退出时关掉 stdin：撤回没人再等的请求，跟着退出，不留下孤儿进程。
 process.stdin.on("end", () => {

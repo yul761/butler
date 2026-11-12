@@ -4,7 +4,7 @@ import { SettingsRepo } from "../db/settings-repo";
 import { memDb } from "../test-utils";
 import {
   isLoopbackHost, llmConfig, normalizeBaseUrl, checkBranchTemplateFits, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTerms, normalizeTicketPattern, parsePriceTable, parseTime, parseToolList,
-  parseWorkingDays, priceFor, idleCloseMinutes, refreshThreshold, scheduleConfig, SettingError, TERMS_LIMIT, trackerTools,
+  parseWorkingDays, priceFor, butlerPatrolTime, idleCloseMinutes, refreshThreshold, scheduleConfig, SettingError, TERMS_LIMIT, trackerTools,
 } from "./settings-values";
 
 describe("settings values", () => {
@@ -239,6 +239,21 @@ describe("idle close minutes (BTL-190)", () => {
     expect(normalizeSetting("idleCloseMinutes", "0090")).toBe("90");
     for (const bad of ["", "abc", "-5", "1.5", "1e3", "123456", "1", "9"]) expect(() => normalizeSetting("idleCloseMinutes", bad), bad).toThrow(SettingError);
     expect(normalizeSetting("idleCloseMinutes", "10")).toBe("10");
+  });
+});
+
+describe("Butler 总控 daily patrol time (BTL-190 5)", () => {
+  it("is off by default; empty means off and a time is stored as HH:MM", () => {
+    const s = new SettingsRepo(memDb());
+    expect(butlerPatrolTime(s)).toBeNull();
+    expect(normalizeSetting("butlerPatrolTime", "  ")).toBe("");
+    expect(normalizeSetting("butlerPatrolTime", "9:05")).toBe("09:05");
+    for (const bad of ["25:00", "9", "x"]) expect(() => normalizeSetting("butlerPatrolTime", bad), bad).toThrow(SettingError);
+    s.set("butlerPatrolTime", "09:30");
+    expect(butlerPatrolTime(s)).toEqual({ h: 9, m: 30 });
+    // 存坏了当作关，不猜一个时间。
+    s.set("butlerPatrolTime", "garbage");
+    expect(butlerPatrolTime(s)).toBeNull();
   });
 });
 

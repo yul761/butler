@@ -47,6 +47,8 @@ async function setup() {
   const mcpAsked: { key: string; coordinator: boolean; featureId: number | null; epicId: number | null }[] = [];
   const featureMcpAsked: [number, number | null][] = [];
   const epicMcpAsked: number[] = [];
+  const guidesAsked: string[] = [];
+  const butlerWorkspace = join(tempDir("butler-home-"), "workspaces", "_butler");
   const settingsAsked: string[][] = [];
   const activities = new Map<string, SessionActivity>();
   const names = new Map<string, string>();
@@ -76,10 +78,13 @@ async function setup() {
     featureMcpConfig: (id, epicId) => (featureMcpAsked.push([id, epicId]), `/mcp/features/${id}.json`),
     epicMcpConfig: (id) => (epicMcpAsked.push(id), `/mcp/epics/${id}.json`),
     mcpSettings: (dirs) => (settingsAsked.push(dirs), "/mcp/approve.json"),
+    butlerWorkspace,
+    butlerMcpConfig: () => "/mcp/butler.json",
+    guidePath: (kind) => (guidesAsked.push(kind), null),
   });
   return {
     service, featureService, ticketService, featureHandoffs, handoffs, epicHistory, sessions, tickets, features, epics, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, featureMcpAsked, epicMcpAsked, settingsAsked,
-    activities, names, namesAsked, submitted, claude, logs, setSubmit: (f: typeof submit) => (submit = f),
+    guidesAsked, butlerWorkspace, activities, names, namesAsked, submitted, claude, logs, setSubmit: (f: typeof submit) => (submit = f),
     setEpicRefresh: (f: typeof epicRefresh) => (epicRefresh = f),
   };
 }
@@ -1027,5 +1032,86 @@ describe("a coordinator the epic starts (BTL-190 4)", () => {
     sessions.insertIfAbsent({ id: "after-clear", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 2, featureId: fid, coordinator: true });
     sessions.setReplacedBy(r.termId, "after-clear");
     expect(service.runningCoordinator(fid)?.id).toBe("after-clear");
+  });
+});
+
+describe("the Butler 总控 session (BTL-190 5)", () => {
+  it("opens in its own workspace (created on demand), with its MCP config and guide, as no ticket, feature or epic session", async () => {
+    const { service, spawned, sessions, settingsAsked, guidesAsked, butlerWorkspace, feature } = await setup();
+    expect(existsSync(butlerWorkspace)).toBe(false);
+    expect(await service.openButler({})).toEqual({ ok: true, termId: "new-1", alreadyOpen: false });
+    expect(existsSync(butlerWorkspace)).toBe(true);
+    const s = spawned[0];
+    expect(s.opts.cwd).toBe(butlerWorkspace);
+    expect(s.args).toEqual(["--session-id", "new-1", "--mcp-config", "/mcp/butler.json", "--settings", "/mcp/approve.json"]);
+    expect(settingsAsked).toEqual([[butlerWorkspace]]);
+    expect(guidesAsked).toEqual(["butler"]);
+    expect(s.opts.env.BUTLER_TICKET).toBeUndefined();
+    expect(sessions.get("new-1")).toMatchObject({ ticketKey: null, featureId: null, epicId: null, coordinator: false, butler: true, cwd: butlerWorkspace });
+    expect(service.unclaimed()).toEqual([]);
+    expect(service.featureViews()[0].sessions).toEqual([]);
+    expect(service.featureTerminalCount(feature.id)).toBe(0);
+    expect(service.runningButler()?.id).toBe("new-1");
+  });
+
+  it("runs only one: opening again, or another conversation, returns the running one", async () => {
+    const { service, spawned, sessions, butlerWorkspace } = await setup();
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: butlerWorkspace, origin: "butler", createdAt: 1, butler: true });
+    await service.openButler({});
+    expect(await service.openButler({})).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
+    expect(await service.openButler({ sessionId: "old" })).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
+    expect(spawned).toHaveLength(1);
+  });
+
+  it("resumes its own session and refuses anyone else's", async () => {
+    const { service, spawned, sessions, feature, butlerWorkspace, claude } = await setup();
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: butlerWorkspace, origin: "butler", createdAt: 1, butler: true });
+    sessions.insertIfAbsent({ id: "coord", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, coordinator: true });
+    for (const sessionId of ["coord", "nope"]) expect(await service.openButler({ sessionId }), sessionId).toEqual({ ok: false, reason: "no_session" });
+    claude.path = null;
+    expect(await service.openButler({ sessionId: "old" })).toEqual({ ok: false, reason: "claude_missing" });
+    claude.path = "/bin/claude";
+    expect(await service.openButler({ sessionId: "old" })).toEqual({ ok: true, termId: "old", alreadyOpen: false });
+    expect(spawned[0].args.slice(0, 2)).toEqual(["--resume", "old"]);
+  });
+
+  it("follows /clear: the new head stays the Butler 总控 on the same terminal", async () => {
+    const { service, sessions, tickets, epics, butlerWorkspace, spawned } = await setup();
+    await service.openButler({});
+    applyHookEnvelope(
+      { v: 1, receivedAt: 100, ticket: null, butlerSession: "new-1", payload: { hook_event_name: "SessionStart", session_id: "b-2", cwd: butlerWorkspace, source: "clear" } },
+      { sessions, tickets, epicForCwd: (cwd) => epics.byWorkspace(cwd)?.id ?? null },
+    );
+    expect(sessions.head("new-1")).toMatchObject({ id: "b-2", butler: true, epicId: null, featureId: null });
+    expect(service.runningButler()?.id).toBe("b-2");
+    expect(await service.openButler({})).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
+    expect(spawned).toHaveLength(1);
+  });
+
+  it("lists its sessions for the page, hides finished ones and picks the latest shown one", async () => {
+    const { service, sessions, butlerWorkspace, spawned } = await setup();
+    sessions.insertIfAbsent({ id: "a", ticketKey: null, cwd: butlerWorkspace, origin: "butler", createdAt: 1, lastActivityAt: 10, butler: true });
+    sessions.insertIfAbsent({ id: "b", ticketKey: null, cwd: butlerWorkspace, origin: "butler", createdAt: 2, lastActivityAt: 20, butler: true });
+    expect(service.latestButler()?.id).toBe("b");
+    service.hide("b");
+    expect(service.latestButler()?.id).toBe("a");
+    expect(service.butlerView()).toMatchObject({ workspaceDir: butlerWorkspace, sessions: [{ id: "a", termId: null }], hiddenSessions: [{ id: "b" }] });
+    service.unhide("b");
+    await service.openButler({ sessionId: "a" });
+    expect(service.butlerView().sessions.map((s) => [s.id, s.termId])).toEqual([["b", null], ["a", "a"]]);
+    expect(() => service.hide("a")).toThrow(expect.objectContaining({ code: "sessions_open" }));
+    spawned[0].pty.emitExit(0);
+    expect(service.runningButler()).toBeNull();
+  });
+
+  it("gives one row per unarchived feature, in an epic or not", async () => {
+    const { service, featureService, features, epics, feature, frontend } = await setup();
+    const epicId = epics.insert({ name: "launch", workspaceDir: tempDir("butler-epic-"), createdAt: 1 });
+    await featureService.create({ name: "refunds", repoPaths: [frontend], epicId });
+    const gone = await featureService.create({ name: "old", repoPaths: [frontend] });
+    features.archive(gone.id, 5);
+    const rows = service.featureRowsAll();
+    expect(rows.map((r) => [r.name, r.epicId]).sort()).toEqual([["checkout", null], ["refunds", epicId]]);
+    expect(rows.find((r) => r.id === feature.id)).toMatchObject({ status: expect.any(String), summary: null });
   });
 });
