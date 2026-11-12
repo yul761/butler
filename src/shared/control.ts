@@ -10,6 +10,8 @@ export const CONTROL_VERSION = 1;
 export const MAX_RUNNING_PER_TICKET = 6;
 /** 一个 feature 同时最多这么多个运行中的终端（feature 总控 + 它所有 ticket 的终端；设计文档 2026-10-26）。 */
 export const MAX_RUNNING_PER_FEATURE = 8;
+/** 一个 epic 下同时最多这么多个 feature 的总控在跑（BTL-190 第 4 点）。到上限时 start_feature 返回错误。 */
+export const MAX_RUNNING_FEATURES_PER_EPIC = 4;
 /** start_session 的任务最长多少字。 */
 export const TASK_LIMIT = 8000;
 /** session_activity 返回的命令输出最多这么多字节。 */
@@ -68,6 +70,8 @@ export const BRIEF_LIMIT = 4000;
 export const EPIC_PLAN_MAX_CHARS = 6000;
 /** list_features、epic_context 里每个 feature 的 summary 最多这么多字符（超出截断）。 */
 export const SUMMARY_LIMIT = 1000;
+/** start_feature 的 instructions 最多这么多字符，超出直接拒绝。 */
+export const START_INSTRUCTIONS_LIMIT = 2000;
 
 /** create_ticket 最多一次挂几个仓库。 */
 export const MAX_CREATE_REPOS = 20;
@@ -89,12 +93,16 @@ export type FeatureControlRequest =
   | { v: 1; featureId: number; from: string | null; op: "end_session"; session: string; reason: string }
   | { v: 1; featureId: number; from: string | null; op: "refresh_session"; session: string };
 
-/** epic session 的请求（设计文档 2026-11-01）：create_feature 在 epic 下建 feature，epic 只有一个仓库时 repos 可以省略。 */
+/**
+ * epic session 的请求（设计文档 2026-11-01）：create_feature 在 epic 下建 feature，epic 只有一个仓库时 repos 可以省略。
+ * start_feature（BTL-190 第 4 点）：打开 feature 的总控，让它按规划开工；feature 是名字或 id（list_features 里的）。create_feature 带 start 时建完直接开工。
+ */
 export type EpicControlRequest =
   | ({ v: 1; epicId: number; from: string | null } & InboxControlOp)
   | { v: 1; epicId: number; from: string | null; op: "list_features" }
   | { v: 1; epicId: number; from: string | null; op: "list_repos" }
-  | { v: 1; epicId: number; from: string | null; op: "create_feature"; name: string; repos?: string[]; brief: string }
+  | { v: 1; epicId: number; from: string | null; op: "create_feature"; name: string; repos?: string[]; brief: string; start?: true }
+  | { v: 1; epicId: number; from: string | null; op: "start_feature"; feature: string; instructions?: string }
   /** 规划定下来或者改了：整份换掉 epics.plan，再重新渲染 epic 的 handoff。 */
   | { v: 1; epicId: number; from: string | null; op: "set_epic_plan"; plan: string }
   /** epic 下各 feature 的 session：feature 级的（总控、修复）和 ticket 的。 */
@@ -165,7 +173,14 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     if (o.op === "create_feature") {
       if (!okName(o.name, 500) || typeof o.brief !== "string" || o.brief.length > BRIEF_LIMIT) return null;
       if (o.repos !== undefined && (!Array.isArray(o.repos) || o.repos.length > MAX_CREATE_REPOS || !o.repos.every((r) => okName(r, 4096)))) return null;
-      return { ...base, op: "create_feature", name: o.name, brief: o.brief, ...(o.repos !== undefined && { repos: o.repos as string[] }) };
+      if (o.start !== undefined && typeof o.start !== "boolean") return null;
+      return { ...base, op: "create_feature", name: o.name, brief: o.brief, ...(o.repos !== undefined && { repos: o.repos as string[] }), ...(o.start === true && { start: true as const }) };
+    }
+    if (o.op === "start_feature") {
+      if (!okName(o.feature, 500)) return null;
+      if (o.instructions !== undefined && (typeof o.instructions !== "string" || o.instructions.length > START_INSTRUCTIONS_LIMIT)) return null;
+      const instructions = typeof o.instructions === "string" && o.instructions.trim() ? o.instructions : undefined;
+      return { ...base, op: "start_feature", feature: o.feature, ...(instructions !== undefined && { instructions }) };
     }
     if (o.op === "set_epic_plan") {
       if (typeof o.plan !== "string" || !o.plan.trim() || o.plan.length > EPIC_PLAN_MAX_CHARS) return null;

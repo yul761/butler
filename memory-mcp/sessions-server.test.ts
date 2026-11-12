@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
-import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, REASON_LIMIT } from "../src/shared/control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_RUNNING_FEATURES_PER_EPIC, REASON_LIMIT, START_INSTRUCTIONS_LIMIT } from "../src/shared/control";
 import {
   EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, SessionsServer, serveStdio, TOOLS, TOOLS_EN,
 } from "./sessions-server";
@@ -221,7 +221,7 @@ describe("butler-sessions in English (design 2026-10-26 i18n)", () => {
 const tools = async (server: SessionsServer) => ((await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string; description: string }[] } }).result.tools;
 const callTool = (server: SessionsServer, name: string, args: object = {}) => server.handle({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name, arguments: args } });
 
-const EPIC_NAMES = ["list_features", "list_repos", "create_feature", "list_sessions", "session_activity", "end_session", "set_epic_plan", "refresh_session"];
+const EPIC_NAMES = ["list_features", "list_repos", "create_feature", "start_feature", "list_sessions", "session_activity", "end_session", "set_epic_plan", "refresh_session"];
 
 describe("butler-sessions for an epic session (design 2026-11-01)", () => {
   it("lists the epic tools in order, in both languages", async () => {
@@ -236,13 +236,59 @@ describe("butler-sessions for an epic session (design 2026-11-01)", () => {
     expect(en.map((t) => t.name)).toEqual([...EPIC_NAMES, "ask_user", "report"]);
   });
 
-  it("tells Claude that tickets belong to the feature's own session and the user opens it", () => {
+  it("tells Claude that tickets belong to the feature's own session, opened by the user or with start_feature", () => {
     const zh = EPIC_TOOLS.find((t) => t.name === "create_feature")!.description;
     const en = EPIC_TOOLS_EN.find((t) => t.name === "create_feature")!.description;
     expect(zh).toContain("ticket");
     expect(zh).toContain("总控");
+    expect(zh).toContain("start_feature");
     expect(en).toMatch(/ticket/i);
     expect(en).toMatch(/user opens/i);
+    expect(en).toContain("start_feature");
+  });
+
+  it("describes start_feature and create_feature's start in both languages (BTL-190 4)", () => {
+    for (const list of [EPIC_TOOLS, EPIC_TOOLS_EN]) {
+      const start = list.find((t) => t.name === "start_feature")!;
+      expect(start.inputSchema.required).toEqual(["feature"]);
+      expect(Object.keys(start.inputSchema.properties)).toEqual(["feature", "instructions"]);
+      expect(start.description).toContain(String(MAX_RUNNING_FEATURES_PER_EPIC));
+      expect(start.description).toContain("list_features");
+      const create = list.find((t) => t.name === "create_feature")!;
+      expect(create.inputSchema.properties).toHaveProperty("start", expect.objectContaining({ type: "boolean" }));
+    }
+    expect(EPIC_TOOLS.find((t) => t.name === "start_feature")!.description).toContain("instructions");
+    expect(EPIC_TOOLS_EN.find((t) => t.name === "start_feature")!.description).toContain("instructions");
+  });
+
+  it("sends start_feature for this epic, taking the feature by name or id, and create_feature with start", async () => {
+    const { server, answer } = setup(2000, { epicId: 3 });
+    const a = callTool(server, "start_feature", { feature: "checkout" });
+    expect(await answer({ v: 1, ok: true, value: { sessionId: "fc" } })).toEqual({ v: 1, epicId: 3, from: "boss", op: "start_feature", feature: "checkout" });
+    expect(JSON.stringify(await a)).toContain("fc");
+    const b = callTool(server, "start_feature", { feature: 5, instructions: "先做 API" });
+    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, epicId: 3, from: "boss", op: "start_feature", feature: "5", instructions: "先做 API" });
+    await b;
+    const c = callTool(server, "create_feature", { name: "checkout", brief: "做结账", start: true });
+    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, epicId: 3, from: "boss", op: "create_feature", name: "checkout", brief: "做结账", start: true });
+    await c;
+    const d = callTool(server, "create_feature", { name: "checkout", brief: "做结账", start: false });
+    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, epicId: 3, from: "boss", op: "create_feature", name: "checkout", brief: "做结账" });
+    await d;
+  });
+
+  it("rejects bad start_feature arguments without asking Butler, and says what to check when Butler is slow", async () => {
+    const { server, requestsDir } = setup(30, { epicId: 3 });
+    for (const args of [{}, { feature: "" }, { feature: "  " }, { feature: true }, { feature: 1.5 }, { feature: "c", instructions: 3 }, { feature: "c", instructions: "x".repeat(START_INSTRUCTIONS_LIMIT + 1) }]) {
+      expect(await callTool(server, "start_feature", args), JSON.stringify(args).slice(0, 60)).toMatchObject({ result: { isError: true } });
+    }
+    expect(await callTool(server, "create_feature", { name: "a", brief: "b", start: "yes" })).toMatchObject({ result: { isError: true } });
+    expect(existsSync(requestsDir)).toBe(false);
+    expect(await callTool(server, "start_feature", { feature: "c" })).toMatchObject({ result: { isError: true, content: [{ text: expect.stringContaining("list_sessions") }] } });
+    // 只有 epic session 有这个工具。
+    expect(await callTool(setup(30, { featureId: 7, epic: true }).server, "start_feature", { feature: "c" })).toMatchObject({ result: { isError: true } });
+    const en = setup(30, { epicId: 3 }, "en");
+    expect(JSON.stringify(await callTool(en.server, "start_feature", {}))).not.toMatch(/[\u4e00-\u9fff]/);
   });
 
   it("sends list_features, list_repos and create_feature for this epic", async () => {

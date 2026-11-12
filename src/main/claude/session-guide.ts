@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { MAX_RUNNING_FEATURES_PER_EPIC } from "../../shared/control";
 import type { Lang } from "../../shared/i18n";
 
-/** ticket：ticket session 和修复 session；coordinator：ticket 总控、feature 总控、epic session。 */
-export type GuideKind = "ticket" | "coordinator";
+/** ticket：ticket session 和修复 session；coordinator：ticket 总控、feature 总控；epic：epic session（BTL-190 第 4 点起单独一种，它开的是 feature 总控）。 */
+export type GuideKind = "ticket" | "coordinator" | "epic";
 
 /** 每段一个函数，按语言返回一段文字（返回 null 表示这个 kind 不需要）；后续计划往里加段落。 */
 export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | null> = [
@@ -30,13 +31,22 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
         "不要拿它问\"要我继续吗\"\"还有别的吗\"这类话，做完就直接停下。做完一块、或者卡住了，用 report 汇报一句（kind 是 done 或 blocked），管你的总控会收到；中间的进展用 progress。"
       : "When you need the user to answer a specific question or make a decision, call ask_user from butler-sessions (question, optional options, context), then end your turn and wait for the answer to arrive. " +
         "Do not use it for \"shall I continue?\" or \"anything else?\"; when you are done, just stop. When you finish a piece of work or get blocked, send one line with report (kind done or blocked) and your coordinator will get it; use progress for updates along the way.",
-  // 总控：子 session 的问题和汇报 Butler 已经处理了。
+  // 总控和 epic session：子 session 的问题和汇报 Butler 已经处理了。
   (lang, kind) =>
-    kind !== "coordinator"
+    kind === "ticket"
       ? null
       : lang === "zh"
         ? "子 session 用 ask_user 提的问题会直接摆在用户面前，不用你再转述一遍；它们 done / blocked 的汇报会在你停下来时自动送到。"
         : "Questions your child sessions raise with ask_user go straight to the user, so do not ask them again; their done and blocked reports are delivered to you automatically when you stop.",
+  // epic session 用 start_feature 让 feature 开工（BTL-190 第 4 点）。
+  (lang, kind) =>
+    kind !== "epic"
+      ? null
+      : lang === "zh"
+        ? "规划定下来、用户同意开工后，用 start_feature 打开 feature 的总控，它会收到规划并直接建 ticket、开子 session；建 feature 时带 start: true 等于建完马上 start_feature。" +
+          `用户还没同意开工时不要调用。一个 epic 同时最多 ${MAX_RUNNING_FEATURES_PER_EPIC} 个 feature 的总控在跑，按规划的先后顺序开；总控已经在跑时不会再开一个，要补充说明就带上 instructions。`
+        : "Once the plan is settled and the user agrees to start, open a feature's coordinator with start_feature: it gets the plan and goes on to create tickets and start child sessions. Passing start: true to create_feature is the same as calling start_feature right after creating. " +
+          `Do not call it before the user agrees to start. At most ${MAX_RUNNING_FEATURES_PER_EPIC} feature coordinators of an epic run at once, so open them in the order the plan sets; a coordinator that is already running is not opened again, and you can pass instructions to add to what it is doing.`,
   // 换新：所有 session 都可能被换新。
   (lang) =>
     lang === "zh"

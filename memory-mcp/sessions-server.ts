@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { join } from "node:path";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
 import {
-  BRIEF_LIMIT, CONTEXT_LIMIT, CONTROL_VERSION, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, OPTION_LIMIT, OPTIONS_MAX, QUESTION_LIMIT, REASON_LIMIT, REPORT_KINDS,
-  REPORT_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult, type ReportKind,
+  BRIEF_LIMIT, CONTEXT_LIMIT, CONTROL_VERSION, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, MAX_RUNNING_FEATURES_PER_EPIC, MAX_RUNNING_PER_FEATURE, OPTION_LIMIT, OPTIONS_MAX,
+  QUESTION_LIMIT, REASON_LIMIT, REPORT_KINDS, REPORT_LIMIT, START_INSTRUCTIONS_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult, type ReportKind,
 } from "../src/shared/control";
 import type { Lang } from "../src/shared/i18n";
 
@@ -416,9 +416,9 @@ export const EPIC_TOOLS = [
   {
     name: "create_feature",
     description:
-      "在这个 epic 下新建一个 feature：建好工作区并挂到这个 epic，马上出现在 Butler 的 epic 页和侧边栏里。不会打开 feature 的总控。" +
-      "先和用户把规划讨论清楚、定下要拆成哪些 feature 再建（定下来的整体规划用 set_epic_plan 存下）；brief 写这个 feature 要做什么、为什么做、已经定下的决定，用户看得到，也会在用户第一次打开这个 feature 的总控时作为第一条消息发给它。" +
-      "ticket 不在这里建：ticket 归 feature 自己的总控 session 管，由用户点进这个 feature 打开总控后让它去建。" +
+      "在这个 epic 下新建一个 feature：建好工作区并挂到这个 epic，马上出现在 Butler 的 epic 页和侧边栏里。默认不打开 feature 的总控。" +
+      "先和用户把规划讨论清楚、定下要拆成哪些 feature 再建（定下来的整体规划用 set_epic_plan 存下）；brief 写这个 feature 要做什么、为什么做、已经定下的决定，用户看得到，也会在这个 feature 的总控第一次打开时作为第一条消息发给它。" +
+      "ticket 不在这里建：ticket 归 feature 自己的总控 session 管。总控由用户点进这个 feature 打开，或者用户同意开工后由你用 start_feature 打开（start 传 true 等于建完马上 start_feature）。" +
       `名字不能和已有的 feature（含已归档）重复，不能带 / 或 \\。epic 只有一个仓库时 repos 可以省略。返回新 feature 的 id 和名字。`,
     inputSchema: {
       type: "object",
@@ -426,8 +426,27 @@ export const EPIC_TOOLS = [
         name: { type: "string", description: "feature 名字" },
         repos: { type: "array", items: { type: "string" }, maxItems: MAX_CREATE_REPOS, description: "这个 feature 用到的仓库名（list_repos 里的 name）；epic 只有一个仓库时可以省略" },
         brief: { type: "string", description: `简短规划：要做什么、为什么做、已经定下的决定，最长 ${BRIEF_LIMIT} 字符` },
+        start: { type: "boolean", description: "传 true：建完马上打开总控开工（和 start_feature 一样），只在用户已经同意开工时用；默认 false" },
       },
       required: ["name", "brief"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "start_feature",
+    description:
+      "打开这个 epic 下一个 feature 的总控，让它按规划开工：第一条消息是它的 brief、epic 的整体规划和其他 feature 的情况，并告诉它不用等用户确认，直接建 ticket、开子 session。" +
+      "只在用户已经同意开工后调用。feature 用 list_features 里的名字或 id。" +
+      `一个 epic 同时最多 ${MAX_RUNNING_FEATURES_PER_EPIC} 个 feature 的总控在运行，到上限时返回错误；每个 feature 最多 ${MAX_RUNNING_PER_FEATURE} 个终端照旧。` +
+      "总控已经在运行时不会再开一个：没给 instructions 就什么都不发，给了就把 instructions 发给它（它正在干活时返回错误，稍后再试）。" +
+      "feature 没有 brief 时必须给 instructions。之后它做完或卡住时的汇报会自动送到你这里，不用盯着它。返回总控的 session id 和 started（opened、resumed、sent、already_running 或 starting）。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        feature: { type: "string", description: "feature 的名字或 id（list_features 里的）" },
+        instructions: { type: "string", description: `可选：给总控的补充说明，比如先做哪一块、要注意什么，最长 ${START_INSTRUCTIONS_LIMIT} 字符` },
+      },
+      required: ["feature"],
       additionalProperties: false,
     },
   },
@@ -472,9 +491,9 @@ export const EPIC_TOOLS_EN = [
   {
     ...EPIC_TOOLS[2],
     description:
-      "Create a feature in this epic: sets up its workspace and attaches it to this epic; it appears on Butler's epic page and in the sidebar right away. No feature coordinator is opened. " +
-      "First settle the plan with the user and decide which features to split into (save the agreed overall plan with set_epic_plan), then create them; brief says what the feature is for, why, and the decisions already made. The user can read it, and it is sent as the first message the first time the user opens this feature's coordinator. " +
-      "Do not create tickets here: tickets belong to the feature's own coordinator session, and the user opens it by going into the feature, then it creates them. " +
+      "Create a feature in this epic: sets up its workspace and attaches it to this epic; it appears on Butler's epic page and in the sidebar right away. By default no feature coordinator is opened. " +
+      "First settle the plan with the user and decide which features to split into (save the agreed overall plan with set_epic_plan), then create them; brief says what the feature is for, why, and the decisions already made. The user can read it, and it is sent as the first message the first time this feature's coordinator opens. " +
+      "Do not create tickets here: tickets belong to the feature's own coordinator session, which creates them. The user opens it by going into the feature, or, once the user agrees to start, you open it with start_feature (start: true is the same as calling start_feature right after creating). " +
       "The name must not duplicate an existing feature (archived ones count) or contain / or \\. repos may be left out when the epic has one repo. Returns the new feature's id and name.",
     inputSchema: {
       ...EPIC_TOOLS[2].inputSchema,
@@ -482,11 +501,28 @@ export const EPIC_TOOLS_EN = [
         name: { type: "string", description: "the feature name" },
         repos: { type: "array", items: { type: "string" }, maxItems: MAX_CREATE_REPOS, description: "the repos this feature uses (name in list_repos); may be left out when the epic has one repo" },
         brief: { type: "string", description: `a short plan: what to build, why, and the decisions already made, at most ${BRIEF_LIMIT} characters` },
+        start: { type: "boolean", description: "true: open the coordinator and start work right after creating (same as start_feature); only once the user has agreed to start. Defaults to false" },
       },
     },
   },
   {
     ...EPIC_TOOLS[3],
+    description:
+      "Open the coordinator of a feature in this epic and have it start work on the plan: its first message is the feature's brief, the epic's overall plan and how the other features stand, and tells it to create tickets and start child sessions without waiting for the user to confirm. " +
+      "Only call it once the user has agreed to start. feature is a name or id from list_features. " +
+      `At most ${MAX_RUNNING_FEATURES_PER_EPIC} feature coordinators of an epic run at once; past that it returns an error. Each feature still has at most ${MAX_RUNNING_PER_FEATURE} terminals. ` +
+      "If the coordinator is already running, no second one is opened: without instructions nothing is sent; with instructions they are sent to it (if it is busy you get an error; try again later). " +
+      "instructions are required when the feature has no brief. Its reports reach you automatically when it finishes or gets blocked, so there is no need to watch it. Returns the coordinator's session id and started (opened, resumed, sent, already_running or starting).",
+    inputSchema: {
+      ...EPIC_TOOLS[3].inputSchema,
+      properties: {
+        feature: { type: "string", description: "the feature's name or id (from list_features)" },
+        instructions: { type: "string", description: `optional notes for the coordinator, such as what to do first or what to watch out for, at most ${START_INSTRUCTIONS_LIMIT} characters` },
+      },
+    },
+  },
+  {
+    ...EPIC_TOOLS[4],
     description:
       "List the sessions of this epic's active features (each feature's coordinator, fix sessions, and every ticket's): the feature (feature), the ticket (ticket, null for feature-level ones), repo, first message, " +
       "whether it is running, whether it waits for the user, last activity, whether the coordinator started it, its current activity (without output; use session_activity for that) and the end of its last reply (last_reply).",
@@ -494,13 +530,13 @@ export const EPIC_TOOLS_EN = [
   FEATURE_TOOLS_EN[5],
   END_SESSION_TOOL_EN,
   {
-    ...EPIC_TOOLS[6],
+    ...EPIC_TOOLS[7],
     description:
       "Save this epic's overall plan: which features to split into, in what order, why, and the decisions already made. Call it when you and the user settle the plan, or when the plan changes, and pass the whole plan each time; it replaces the previous one. " +
       "Butler keeps the plan: the epic's memory (butler-epic's recall) and the first message of every feature coordinator opened afterwards include it. " +
       "Do not put the plan in butler-epic's handoff: the handoff is for progress only (where things stand, open questions, next steps), and Butler keeps it apart from the plan.",
     inputSchema: {
-      ...EPIC_TOOLS[6].inputSchema,
+      ...EPIC_TOOLS[7].inputSchema,
       properties: {
         plan: { type: "string", description: `the whole overall plan, at most ${EPIC_PLAN_MAX_CHARS} characters` },
       },
@@ -547,6 +583,8 @@ const TEXT = {
     needRefresh: "refresh_session 需要字符串参数 session",
     taskTooLong: `task 太长（最多 ${TASK_LIMIT} 字）`,
     needPlan: `set_epic_plan 需要字符串参数 plan（不能为空，最多 ${EPIC_PLAN_MAX_CHARS} 字符）`,
+    needStartFeature: `start_feature 需要参数 feature（feature 的名字或 id）；instructions 必须是字符串，最多 ${START_INSTRUCTIONS_LIMIT} 字符`,
+    badStart: "start 必须是 true 或 false",
     needQuestion: `ask_user 需要字符串参数 question（不能为空，最多 ${QUESTION_LIMIT} 字符）；options 最多 ${OPTIONS_MAX} 个非空字符串、每个最多 ${OPTION_LIMIT} 字符；context 最多 ${CONTEXT_LIMIT} 字符`,
     needReport: `report 需要字符串参数 text（不能为空，最多 ${REPORT_LIMIT} 字符）；kind 只能是 progress、done 或 blocked`,
     noTool: (t: string) => `没有这个工具：${t}`,
@@ -570,6 +608,8 @@ const TEXT = {
     needRefresh: "refresh_session needs a string argument, session",
     taskTooLong: `task is too long (at most ${TASK_LIMIT} characters)`,
     needPlan: `set_epic_plan needs a string argument, plan (not empty, at most ${EPIC_PLAN_MAX_CHARS} characters)`,
+    needStartFeature: `start_feature needs an argument, feature (the feature's name or id); instructions must be a string of at most ${START_INSTRUCTIONS_LIMIT} characters`,
+    badStart: "start must be true or false",
     needQuestion: `ask_user needs a string argument, question (not empty, at most ${QUESTION_LIMIT} characters); options is at most ${OPTIONS_MAX} non-empty strings of at most ${OPTION_LIMIT} characters; context is at most ${CONTEXT_LIMIT} characters`,
     needReport: `report needs a string argument, text (not empty, at most ${REPORT_LIMIT} characters); kind must be progress, done or blocked`,
     noTool: (t: string) => `No such tool: ${t}`,
@@ -659,7 +699,7 @@ export class SessionsServer {
     const result = await this.send(req, req.op === "create_ticket" || req.op === "create_feature" ? CREATE_WAIT_FACTOR : 1);
     if (!result) {
       return toolError(
-        req.op === "start_session"
+        req.op === "start_session" || req.op === "start_feature"
           ? this.text.noReplyStart
           : req.op === "create_ticket"
             ? this.text.noReplyCreate
@@ -707,7 +747,16 @@ export class SessionsServer {
         if (typeof name !== "string" || typeof brief !== "string") return toolError(this.text.needFeature);
         if (!(repos === undefined || (Array.isArray(repos) && repos.length <= MAX_CREATE_REPOS && repos.every((r) => typeof r === "string")))) return toolError(this.text.badFeatureArgs);
         if (brief.length > BRIEF_LIMIT) return toolError(this.text.briefTooLong);
-        return { ...base, op: "create_feature", name, brief, ...(Array.isArray(repos) && { repos: repos as string[] }) };
+        if (args.start !== undefined && typeof args.start !== "boolean") return toolError(this.text.badStart);
+        return { ...base, op: "create_feature", name, brief, ...(Array.isArray(repos) && { repos: repos as string[] }), ...(args.start === true && { start: true as const }) };
+      }
+      case "start_feature": {
+        // list_features 给的 id 是数字：转成字符串，Butler 那边按 id 或名字找。
+        const feature = typeof args.feature === "number" && Number.isSafeInteger(args.feature) && args.feature > 0 ? String(args.feature) : args.feature;
+        const { instructions } = args;
+        if (typeof feature !== "string" || !feature.trim() || feature.length > 500) return toolError(this.text.needStartFeature);
+        if (instructions !== undefined && (typeof instructions !== "string" || instructions.length > START_INSTRUCTIONS_LIMIT)) return toolError(this.text.needStartFeature);
+        return { ...base, op: "start_feature", feature, ...(typeof instructions === "string" && instructions.trim() && { instructions }) };
       }
       case "set_epic_plan": {
         const { plan } = args;

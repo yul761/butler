@@ -25,7 +25,7 @@ async function setup(opts: {
   factory?: PtyFactory;
   mcpConfig?: (ticketKey: string, opts: { coordinator: boolean }) => string | null;
   mcpSettings?: (dirs: string[]) => string | null;
-  guidePath?: (kind: "ticket" | "coordinator") => string | null;
+  guidePath?: (kind: "ticket" | "coordinator" | "epic") => string | null;
   syncMemory?: (ticketKey: string) => void;
   dirBusy?: (repo: TicketRepo) => Promise<{ ticket: string; branch: string } | null>;
   platform?: NodeJS.Platform;

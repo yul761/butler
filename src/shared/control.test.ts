@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, parseControlRequest, REASON_LIMIT, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, parseControlRequest, REASON_LIMIT, sanitizeTask, START_INSTRUCTIONS_LIMIT, taskMessage, TASK_LIMIT } from "./control";
 
 describe("parseControlRequest", () => {
   it("accepts the three operations", () => {
@@ -198,5 +198,30 @@ describe("parseControlRequest for ask_user and report (BTL-190 2+3)", () => {
     expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: null, op: "report", text: "x", kind: "finished" })).toBeNull();
     expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: null, op: "report", text: "" })).toBeNull();
     expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: null, op: "report", text: "x".repeat(4001) })).toBeNull();
+  });
+});
+
+describe("parseControlRequest for start_feature (BTL-190 4)", () => {
+  it("accepts start_feature with or without instructions, and create_feature with start", () => {
+    expect(parseControlRequest({ v: 1, epicId: 3, from: "e", op: "start_feature", feature: "checkout" })).toEqual({ v: 1, epicId: 3, from: "e", op: "start_feature", feature: "checkout" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "start_feature", feature: "5", instructions: "先做 API" }))
+      .toEqual({ v: 1, epicId: 3, from: null, op: "start_feature", feature: "5", instructions: "先做 API" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: "x".repeat(START_INSTRUCTIONS_LIMIT) })).toMatchObject({ op: "start_feature" });
+    // 空白的 instructions 当作没给。
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: "  " })).toEqual({ v: 1, epicId: 3, from: null, op: "start_feature", feature: "c" });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", start: true })).toMatchObject({ op: "create_feature", start: true });
+    expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", start: false })).not.toHaveProperty("start");
+  });
+
+  it("rejects a malformed start_feature, a non-boolean start, and start_feature outside an epic", () => {
+    for (const bad of [
+      { v: 1, epicId: 3, op: "start_feature" }, { v: 1, epicId: 3, op: "start_feature", feature: "" }, { v: 1, epicId: 3, op: "start_feature", feature: 5 },
+      { v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: 1 },
+      { v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: "x".repeat(START_INSTRUCTIONS_LIMIT + 1) },
+      { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", start: "yes" },
+      { v: 1, featureId: 3, op: "start_feature", feature: "c" }, { v: 1, ticketKey: "P-1", op: "start_feature", feature: "c" },
+    ]) {
+      expect(parseControlRequest(bad), JSON.stringify(bad).slice(0, 80)).toBeNull();
+    }
   });
 });

@@ -41,7 +41,30 @@ describe("session guide", () => {
     expect(sessionGuide("zh", "ticket")).not.toContain("不用你再转述");
   });
 
-    it("写到 mcp 目录，内容没变就不重写", () => {
+  it("epic session 知道 start_feature 怎么用，别的 session 不知道（BTL-190 第 4 点）", () => {
+    for (const lang of ["zh", "en"] as const) {
+      const epic = sessionGuide(lang, "epic");
+      expect(epic).toContain("start_feature");
+      expect(epic).toContain("4");
+      expect(sessionGuide(lang, "coordinator")).not.toContain("start_feature");
+      expect(sessionGuide(lang, "ticket")).not.toContain("start_feature");
+    }
+    expect(sessionGuide("zh", "epic")).toContain("用户同意开工");
+    expect(sessionGuide("en", "epic")).toContain("user agrees to start");
+  });
+
+  it("epic session 和总控一样有子 session 汇报那一段，但没有 start_session 的模型准则", () => {
+    for (const lang of ["zh", "en"] as const) {
+      const epic = sessionGuide(lang, "epic");
+      expect(epic).toContain(lang === "zh" ? "不用你再转述" : "do not ask them again");
+      expect(epic).toContain("ask_user");
+      expect(epic).toContain('model: "opus"');
+      expect(epic).toContain(lang === "zh" ? "再让你从记忆里接上" : "refresh a session whose context grows too long");
+      expect(epic).not.toContain("start_session");
+    }
+  });
+
+  it("写到 mcp 目录，内容没变就不重写", () => {
     const dir = tempDir("guide");
     const file = writeSessionGuide(dir, "zh", "ticket");
     expect(file).toBe(join(dir, "guide-ticket-zh.md"));

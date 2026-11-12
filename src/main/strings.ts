@@ -1,6 +1,7 @@
 import type { Lang } from "../shared/i18n";
 import { formatDuration } from "../shared/text";
 import type { RefreshRefusal } from "../shared/types";
+import type { DeliveryBlock } from "./sessions/delivery-guard";
 import { currentLang } from "./i18n";
 
 /**
@@ -175,7 +176,28 @@ const ZH = {
   ctlEpicNoRepos: "这个 epic 还没有仓库",
   ctlPickEpicRepos: (names: string) => `这个 epic 有几个仓库，请用 repos 指定要用的：${names}`,
   ctlNoSuchEpicRepo: (wanted: string, names: string) => `这个 epic 没有仓库 ${wanted}。现有的仓库：${names}`,
-  ctlFeatureCreated: "feature 已建好，没有打开总控。用户点进这个 feature 打开总控后，brief 会作为第一条消息发给它；ticket 由它自己建。",
+  ctlFeatureCreated: "feature 已建好，没有打开总控。用户点进这个 feature 打开总控后，brief 会作为第一条消息发给它；ticket 由它自己建。用户同意开工后，可以用 start_feature 替用户打开总控。",
+  // start_feature（BTL-190 第 4 点）
+  ctlFeatureCreatedStarted: "feature 已建好，总控已经打开：brief 和开工的说明会在它的输入框就绪后作为第一条消息发给它，它会自己建 ticket、开子 session。做完或卡住时它的汇报会送到你这里。",
+  ctlFeatureCreatedNotStarted: (reason: string) => `feature 已建好，但总控没有打开：${reason}。之后可以用 start_feature 再试。`,
+  ctlNoSuchEpicFeature: (wanted: string, names: string) => `这个 epic 没有（未归档的）feature ${wanted}。现有的 feature：${names}`,
+  ctlNoFeatures: "（没有 feature）",
+  ctlStartNoBrief: (name: string) => `feature ${name} 没有 brief，总控不知道要做什么。用 instructions 写清楚要它做什么再试`,
+  ctlEpicFeatureLimit: (n: number, names: string) => `这个 epic 已经有 ${n} 个 feature 的总控在运行（${names}），先等其中一些做完，或者请用户关掉一个`,
+  ctlFeatureStarted: "总控已经打开：规划和开工的说明会在它的输入框就绪后作为第一条消息发给它；如果它先弹出信任文件夹之类的确认，要等用户在 Butler 里处理。做完或卡住时它的汇报会送到你这里。",
+  ctlStartAlreadyRunning: "这个 feature 的总控已经在运行，没有再开一个，也没有发任何东西。要给它补充说明，带上 instructions 再调一次。",
+  ctlStartSent: "这个 feature 的总控已经在运行，没有再开一个；instructions 会在它的输入框就绪后发给它。",
+  ctlStartStarting: "这个 feature 的总控正在打开，不用再调一次。",
+  ctlStartUnavailable: "这里不能打开 feature 总控",
+  ctlStartBlocked: (name: string, why: string) => `feature ${name} 的总控已经在运行，但现在不能往里发：${why}。稍后再试，或者先不发`,
+  ctlStartBlock: {
+    closed: "它的终端刚关掉",
+    busy: "它正在干活",
+    screen: "它的屏幕上有等用户回答的确认",
+    needs_you: "它在等用户回答问题",
+    typing: "用户正在它的终端里打字",
+    draft: "它的输入框里有用户没发出去的草稿",
+  } satisfies Record<DeliveryBlock, string>,
   ctlPlanInvalid: (limit: number) => `plan 不能为空，最长 ${limit} 字符`,
   ctlPlanSaved: "规划已保存，替换了之前的规划。epic 的记忆里显示的是这一份，之后新开的 feature 总控收到的第一条消息里也带着它。butler-epic 的 handoff 只写进度。",
   ctlNoSuchSession: (id: string) => `找不到 session ${id}，或者它不属于你管的范围。用 list_sessions 看有哪些`,
@@ -410,7 +432,27 @@ const EN: MainStrings = {
   ctlEpicNoRepos: "This epic has no repos yet",
   ctlPickEpicRepos: (names: string) => `This epic has several repos; name the ones to use in repos: ${names}`,
   ctlNoSuchEpicRepo: (wanted: string, names: string) => `This epic has no repo ${wanted}. Its repos: ${names}`,
-  ctlFeatureCreated: "The feature is created and no coordinator is open. When the user opens this feature's coordinator, the brief is sent to it as the first message; it creates its own tickets.",
+  ctlFeatureCreated: "The feature is created and no coordinator is open. When the user opens this feature's coordinator, the brief is sent to it as the first message; it creates its own tickets. Once the user agrees to start, you can open the coordinator for them with start_feature.",
+  ctlFeatureCreatedStarted: "The feature is created and its coordinator is open: the brief and the go-ahead are sent to it as the first message once its input is ready, and it creates its own tickets and child sessions. Its reports reach you when it finishes or gets blocked.",
+  ctlFeatureCreatedNotStarted: (reason: string) => `The feature is created, but its coordinator did not open: ${reason}. You can try again later with start_feature.`,
+  ctlNoSuchEpicFeature: (wanted: string, names: string) => `This epic has no (unarchived) feature ${wanted}. Its features: ${names}`,
+  ctlNoFeatures: "(no features)",
+  ctlStartNoBrief: (name: string) => `Feature ${name} has no brief, so its coordinator would not know what to do. Say what it should do in instructions and try again`,
+  ctlEpicFeatureLimit: (n: number, names: string) => `This epic already has ${n} feature coordinators running (${names}). Wait for some of them to finish, or ask the user to close one`,
+  ctlFeatureStarted: "The coordinator is open: the plan and the go-ahead are sent to it as the first message once its input is ready; if it first shows a prompt such as trusting the folder, the user has to handle it in Butler. Its reports reach you when it finishes or gets blocked.",
+  ctlStartAlreadyRunning: "This feature's coordinator is already running. No second one was opened and nothing was sent. To add to what it is doing, call again with instructions.",
+  ctlStartSent: "This feature's coordinator is already running, so no second one was opened; the instructions are sent to it once its input is ready.",
+  ctlStartStarting: "This feature's coordinator is opening now; no need to call again.",
+  ctlStartUnavailable: "Feature coordinators cannot be opened from here",
+  ctlStartBlocked: (name: string, why: string) => `The coordinator of feature ${name} is running, but nothing can be sent to it now: ${why}. Try again later, or leave it be`,
+  ctlStartBlock: {
+    closed: "its terminal just closed",
+    busy: "it is working",
+    screen: "its screen shows a prompt waiting for the user",
+    needs_you: "it is waiting for the user to answer a question",
+    typing: "the user is typing in its terminal",
+    draft: "its input holds a draft the user has not sent",
+  },
   ctlPlanInvalid: (limit: number) => `plan can't be empty and is at most ${limit} characters`,
   ctlPlanSaved: "The plan is saved and replaces the previous one. The epic's memory shows this one, and the first message of every feature coordinator opened from now on includes it. Use butler-epic's handoff for progress only.",
   ctlNoSuchSession: (id: string) => `Session ${id} was not found, or it is not one you manage. Use list_sessions to see them`,

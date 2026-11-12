@@ -943,3 +943,89 @@ describe("fix sessions (design 2026-10-31)", () => {
     expect(sessions.get("new-2")).toMatchObject({ coordinator: false, fixesSession: stuckId });
   });
 });
+
+describe("a coordinator the epic starts (BTL-190 4)", () => {
+  async function startSetup() {
+    const ctx = await setup();
+    const epicId = ctx.epics.insert({ name: "商城", workspaceDir: "/e", createdAt: 1 });
+    const fid = (await ctx.featureService.create({ name: "结账", repoPaths: [ctx.frontend], epicId, brief: "先做微信支付" })).id;
+    ctx.features.insert({ name: "购物车", workspaceDir: "/w/cart", createdAt: 1, epicId });
+    setLang("zh");
+    return { ...ctx, epicId, fid };
+  }
+  const delivered = () => new Promise((r) => setTimeout(r, 0));
+
+  it("a new coordinator gets the whole plan in its start form, with the instructions, and it is recorded", async () => {
+    const { service, features, submitted, fid } = await startSetup();
+    const r = await service.openFeature({ featureId: fid }, { start: { instructions: "先做 API" } });
+    await delivered();
+    expect(r).toMatchObject({ ok: true, termId: "new-1", alreadyOpen: false });
+    expect(submitted).toHaveLength(1);
+    const [termId, message] = submitted[0];
+    expect(termId).toBe("new-1");
+    expect(message).toContain("不用等用户确认");
+    expect(message).toContain("先做 API");
+    expect(message).toContain("先做微信支付");
+    expect(message).toContain("其他 feature：");
+    expect(features.get(fid)?.briefSentAt).toBe(1000);
+  });
+
+  it("a new coordinator after the plan went out gets the short start message", async () => {
+    const { service, features, submitted, fid } = await startSetup();
+    features.setBriefSentAt(fid, 5);
+    await service.openFeature({ featureId: fid }, { start: {} });
+    await delivered();
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0][1]).toContain("不用等用户确认");
+    expect(submitted[0][1]).toContain("先做微信支付");
+    expect(submitted[0][1]).not.toContain("其他 feature：");
+    expect(features.get(fid)?.briefSentAt).toBe(5);
+  });
+
+  it("a resumed coordinator gets the start message too; the whole plan when it never got it", async () => {
+    const { service, sessions, features, submitted, spawned, fid } = await startSetup();
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, featureId: fid, coordinator: true });
+    await service.openFeature({ featureId: fid, sessionId: "old" }, { start: { instructions: "接着做退款" } });
+    await delivered();
+    expect(spawned[0].args.slice(0, 2)).toEqual(["--resume", "old"]);
+    expect(submitted.map(([id]) => id)).toEqual(["old"]);
+    expect(submitted[0][1]).toContain("其他 feature：");
+    expect(submitted[0][1]).toContain("接着做退款");
+    expect(features.get(fid)?.briefSentAt).toBe(1000);
+
+    spawned[0].pty.emitExit(0);
+    await service.openFeature({ featureId: fid, sessionId: "old" }, { start: {} });
+    await delivered();
+    expect(submitted).toHaveLength(2);
+    expect(submitted[1][1]).not.toContain("其他 feature：");
+    expect(submitted[1][1]).toContain("先做微信支付");
+  });
+
+  it("the user's own open of a resumed coordinator still sends nothing", async () => {
+    const { service, sessions, submitted, fid } = await startSetup();
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, featureId: fid, coordinator: true });
+    await service.openFeature({ featureId: fid, sessionId: "old" });
+    await delivered();
+    expect(submitted).toEqual([]);
+  });
+
+  it("does not record a start message that was not delivered, and logs it", async () => {
+    const { service, features, logs, setSubmit, fid } = await startSetup();
+    setSubmit(async () => "timeout");
+    await service.openFeature({ featureId: fid }, { start: {} });
+    await delivered();
+    expect(features.get(fid)?.briefSentAt).toBeNull();
+    expect(logs.join("\n")).toContain(`feature ${fid}`);
+  });
+
+  it("names the running coordinator of a feature, across /clear", async () => {
+    const { service, sessions, fid } = await startSetup();
+    expect(service.runningCoordinator(fid)).toBeNull();
+    const r = await service.openFeature({ featureId: fid });
+    if (!r.ok) throw new Error("did not open");
+    expect(service.runningCoordinator(fid)?.id).toBe(r.termId);
+    sessions.insertIfAbsent({ id: "after-clear", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 2, featureId: fid, coordinator: true });
+    sessions.setReplacedBy(r.termId, "after-clear");
+    expect(service.runningCoordinator(fid)?.id).toBe("after-clear");
+  });
+});

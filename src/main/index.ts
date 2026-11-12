@@ -1111,6 +1111,9 @@ async function bootstrap(): Promise<void> {
       kill: (termId) => pty.kill(termId),
       screenNeedsUser: (termId) => pty.screenNeedsUser(termId),
       submit: submitTask,
+      // start_feature 给已经在跑的 feature 总控补充说明（BTL-190 第 4 点）：和递汇报同一道 guard。
+      guard: deliveryGuard,
+      deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
       memoryEnabled: () => memoryOn(settings),
       ticketPattern: () => settings.get("ticketPattern"),
       log: logger,
