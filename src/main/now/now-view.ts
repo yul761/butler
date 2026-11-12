@@ -5,6 +5,8 @@ export interface NowInput {
   tickets: TicketView[];
   features: FeatureView[];
   epics: EpicView[];
+  /** 开着的 Butler 总控的 head（SessionService.runningButler 加上终端 id）；没开为 null。 */
+  butler: SessionView | null;
   activity: (sessionId: string) => SessionActivity | null;
   needsYouReason: (sessionId: string) => string | null;
   prs: (ticketKey: string) => WatchedPr[];
@@ -176,8 +178,12 @@ export function buildNowView(i: NowInput): NowView {
   const none = nowEpic(null, "", [], [...loose, standalone]);
   if (none) epics.push(none);
 
-  const all = epics.flatMap((e) => [...e.rows, ...e.features.flatMap((f) => f.rows)]);
+  // Butler 总控：不属于任何 epic，单独一行。它的 Haiku 判断不因为子 session 有待决条目就不算：它被判成需要你时，送给它的报告和巡检都在等。
+  const butler = i.butler && live(i.butler)
+    ? sessionRow(i, i.butler, { ticketKey: null, title: null, repo: null, where: null, coordinator: true, prs: [], target: { page: "butler", sessionId: i.butler.id } })
+    : null;
+  const all = [...(butler ? [butler] : []), ...epics.flatMap((e) => [...e.rows, ...e.features.flatMap((f) => f.rows)])];
   const needsYou = all.filter((r) => r.needsYou !== null).sort(bySince);
   const decisions = [...i.decisions].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id);
-  return { needsYou, decisions, epics, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges };
+  return { needsYou, decisions, epics, butler, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges };
 }

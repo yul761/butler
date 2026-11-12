@@ -107,7 +107,8 @@ export function usageDetails(u: UsageSummary, S: UiStrings): { byKind: string[];
 }
 
 /** 一行是谁：ticket 号，总控写“总控”，修复 session 写“修复”。 */
-export const rowLabel = (r: NowRow, S: UiStrings): string => r.ticketKey ?? (r.coordinator ? S.coordinator : S.fixSessionFor(null));
+export const rowLabel = (r: NowRow, S: UiStrings): string =>
+  r.target.page === "butler" ? S.butlerNav : r.ticketKey ?? (r.coordinator ? S.coordinator : S.fixSessionFor(null));
 
 /** 「需要你」里一条的前半段：ticket 号（总控、修复 session 写它是什么）和它所在的 feature 或 epic；不属于 feature 的 ticket 写它的标题。 */
 export function rowPlace(view: NowView, r: NowRow, S: UiStrings): { label: string; name: string } {
@@ -128,8 +129,8 @@ export const needsYouTotal = (v: NowView | null): number => (v ? v.needsYou.leng
 /** 「待你决定」、汇报是谁发的：ticket 号（多仓库时带仓库名）、某某总控、修复 session、epic session。 */
 export const inboxWho = (i: InboxItemView, S: UiStrings): string => S.inboxWho(i.role, i.ticketKey, i.repo);
 
-/** 全部行，按页面上的顺序：每个 epic 先是它自己的行，再是各 feature 的。 */
-export const allRows = (v: NowView): NowRow[] => v.epics.flatMap((e) => [...e.rows, ...e.features.flatMap((f) => f.rows)]);
+/** 全部行，按页面上的顺序：Butler 总控在最前，然后每个 epic 先是它自己的行，再是各 feature 的。 */
+export const allRows = (v: NowView): NowRow[] => [...(v.butler ? [v.butler] : []), ...v.epics.flatMap((e) => [...e.rows, ...e.features.flatMap((f) => f.rows)])];
 
 /** 实况窗口（BTL-190 第 7 点）里一张卡片要你做几件事：需要你的理由算一件，每条未决的「待你决定」算一件。 */
 export const liveNeeds = (r: NowRow): number => (r.needsYou !== null ? 1 : 0) + r.decisions;

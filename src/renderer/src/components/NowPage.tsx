@@ -45,6 +45,12 @@ export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup
       {/* 实况（BTL-190 第 7 点）：没人在干活时它说“现在没有正在进行的工作”，下面的列表可能是空的。 */}
       <LiveWindow view={view} onOpen={onOpen} />
       {needsYouTotal(view) > 0 && <NeedsYou view={view} now={now} onOpen={onOpen} />}
+      {view.butler && (
+        <section className="now-epic now-butler">
+          <h3><span className="name">{S.butlerNav}</span></h3>
+          <div className="now-rows"><Row row={view.butler} now={now} onOpen={onOpen} /></div>
+        </section>
+      )}
       {view.epics.map((e) => <EpicBlock key={e.id ?? "none"} epic={e} now={now} onOpen={onOpen} />)}
       <RecentMerges merges={view.merges} onOpenTicket={onOpenTicket} liveTickets={liveTickets} />
       {usage && <UsageLine usage={usage} />}

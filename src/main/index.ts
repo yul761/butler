@@ -1118,6 +1118,7 @@ async function bootstrap(): Promise<void> {
         tickets: sessionService.ticketViews(),
         features: sessionService.featureViews(),
         epics: sessionService.epicViews(),
+        butler: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id) } : null))(sessionService.runningButler()),
         activity: (id) => activityMonitor.get(id),
         needsYouReason: (id) => reasons.get(id) ?? null,
         prs: (key) => prWatcher.statusOf(key),

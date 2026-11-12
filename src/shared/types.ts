@@ -566,6 +566,8 @@ export interface NowView {
   /** 全部未决的「待你决定」（BTL-190 第 2+3 点），从早到晚；终端关着的 session 的也在。 */
   decisions: InboxItemView[];
   epics: NowEpic[];
+  /** 开着终端的 Butler 总控（BTL-190 第 5 点）的一行；没开为 null。它的「需要你」也在 needsYou 里，在干活也算进 running。 */
+  butler: NowRow | null;
   /** 正在干活的 session 数（NowRow.working）。 */
   running: number;
   /** 最近的记忆读写（实况窗口的核心卡片，BTL-190 第 7 点），从早到晚。 */

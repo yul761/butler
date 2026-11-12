@@ -88,6 +88,7 @@ function input(over: Partial<NowInput> = {}): NowInput {
     tickets: [],
     features: [],
     epics: [],
+    butler: null,
     activity: () => null,
     needsYouReason: () => null,
     prs: () => [],
@@ -132,6 +133,17 @@ describe("buildNowView", () => {
     // 都没有活动记录：开着，但没在干活。
     expect(v.running).toBe(0);
     expect(v.merges).toBe(merges);
+  });
+
+  it("gives the open Butler 总控 its own row: its needs-you is listed and its work counts as running (BTL-190 5)", () => {
+    const b = session("s-b", { butler: true });
+    const v = buildNowView(input({ butler: b, needsYouReason: (id) => (id === "s-b" ? "在问你先合哪个" : null) }));
+    expect(v.butler).toMatchObject({ sessionId: "s-b", coordinator: true, needsYou: "在问你先合哪个", target: { page: "butler", sessionId: "s-b" } });
+    expect(ids(v.needsYou)).toEqual(["s-b"]);
+    const busy = buildNowView(input({ butler: b, activity: (id) => (id === "s-b" ? act("s-b") : null) }));
+    expect(busy.running).toBe(1);
+    expect(buildNowView(input({ butler: { ...b, termId: null } })).butler).toBeNull();
+    expect(buildNowView(input()).butler).toBeNull();
   });
 
   it("puts coordinators first in their group", () => {

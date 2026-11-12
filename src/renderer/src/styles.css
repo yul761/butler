@@ -207,6 +207,7 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .now-epic > h3, .now-feature > h4 { margin: 0; padding: 4px; border-radius: 6px; }
 .now-epic > h3:hover, .now-feature > h4:hover { background: var(--panel); }
 .now-epic > h3 { font-size: 14px; }
+.now-butler > h3:hover { background: none; }
 .now-feature { margin-left: 16px; }
 .now-feature > h4 { font-size: 13px; }
 .now-summary { margin-left: 4px; color: var(--muted); font-size: 12px; font-weight: normal; }
