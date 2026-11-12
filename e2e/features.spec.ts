@@ -600,7 +600,8 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   expect(dbRows(s, "SELECT coordinator, fixes_session AS fixes, ticket_key AS ticket FROM sessions WHERE id = ?", fixId)).toEqual([{ coordinator: 0, fixes: stuckId, ticket: null }]);
   await expect(dot).toBeVisible();
   await fix.click();
-  await expect(page.locator(".feature-page .sessions-bar .session")).toHaveCount(2);
+  // 数 session（.session-wrap）：session 栏里的「清理闲置」「已隐藏」按钮也带 .session 样式。
+  await expect(page.locator(".feature-page .sessions-bar .session-wrap")).toHaveCount(2);
 
   // 16. 在别的页面上从「现在」页点需要你里的 DMS-1：进 DMS-1 的 ticket 页，当前终端是卡住的那个 session。
   await ticketPage("DMS-2");
