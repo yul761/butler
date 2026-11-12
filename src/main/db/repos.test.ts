@@ -4,6 +4,7 @@ import { syncDiscovered } from "../sessions/discovery";
 import { insertTicket, type LegacyTicket, memDb } from "../test-utils";
 import { migrate, NewerDatabaseError } from "./database";
 import { FeaturesRepo } from "./features-repo";
+import { MergeGateRepo } from "./merge-gate-repo";
 import { MIGRATIONS } from "./migrations";
 import { SessionsRepo } from "./sessions-repo";
 import { SettingsRepo } from "./settings-repo";
@@ -347,5 +348,98 @@ describe("migration 9: fix sessions", () => {
     repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 2, featureId, fixesSession: "stuck-1" });
     expect(repo.listByFeature(featureId).map((s) => s.id)).toEqual(["fix", "c"]);
     expect(repo.listFeatureCoordinators(featureId).map((s) => s.id)).toEqual(["c"]);
+  });
+});
+
+describe("hidden-session cleanup (BTL-190 item 8)", () => {
+  /** 升级之前（上一个版本）的数据库。 */
+  const previous = () => {
+    const db = new DatabaseSync(":memory:");
+    for (const sql of MIGRATIONS.slice(0, MIGRATIONS.length - 1)) db.exec(sql);
+    db.exec(`PRAGMA user_version = ${MIGRATIONS.length - 1}`);
+    return db;
+  };
+  const add = (repo: SessionsRepo, id: string, o: { lastActivityAt?: number; createdAt?: number } = {}) =>
+    repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: o.createdAt ?? 1, lastActivityAt: o.lastActivityAt ?? null });
+
+  it("upgrades an existing database: sessions already hidden count from the upgrade, not from the epoch", () => {
+    const db = previous();
+    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at, dismissed) VALUES ('old-hidden', NULL, '/w', 'butler', 1, 1)`).run();
+    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at, dismissed) VALUES ('old-shown', NULL, '/w', 'butler', 1, 0)`).run();
+    const before = Date.now();
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+    const at = (id: string) => (db.prepare(`SELECT dismissed_at FROM sessions WHERE id = ?`).get(id) as { dismissed_at: number | null }).dismissed_at;
+    // 秒级精度：不早于升级前的那一秒。
+    expect(at("old-hidden")).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
+    expect(at("old-hidden")).toBeLessThanOrEqual(Date.now());
+    expect(at("old-shown")).toBeNull();
+    const repo = new SessionsRepo(db);
+    // 刚升级：不是删除的候选（14 天以前隐藏的才是）。
+    expect(repo.listHiddenBefore(before - 1000).map((s) => s.id)).toEqual([]);
+    expect(repo.listHiddenBefore(Date.now() + 1000).map((s) => s.id)).toEqual(["old-hidden"]);
+    // 旧行照常读出来。
+    expect(repo.get("old-hidden")).toMatchObject({ dismissed: true });
+  });
+
+  it("dismiss records when, keeps the first time on a repeat, and undismiss clears it", () => {
+    const db = memDb();
+    const repo = new SessionsRepo(db);
+    add(repo, "s1");
+    const at = () => (db.prepare(`SELECT dismissed_at FROM sessions WHERE id = 's1'`).get() as { dismissed_at: number | null }).dismissed_at;
+    repo.dismiss("s1", 100);
+    expect(at()).toBe(100);
+    repo.dismiss("s1", 200);
+    expect(at()).toBe(100);
+    repo.undismiss("s1");
+    expect(at()).toBeNull();
+    repo.dismiss("s1", 300);
+    expect(at()).toBe(300);
+  });
+
+  it("lists hidden heads hidden and last active before the cutoff", () => {
+    const repo = new SessionsRepo(memDb());
+    add(repo, "old", { lastActivityAt: 50 });
+    repo.dismiss("old", 100);
+    // 隐藏得早，但之后还有活动（比如在 Butler 外面 --resume 过）：不删。
+    add(repo, "active-later", { lastActivityAt: 5_000 });
+    repo.dismiss("active-later", 100);
+    add(repo, "recent", { lastActivityAt: 50 });
+    repo.dismiss("recent", 5_000);
+    add(repo, "shown", { lastActivityAt: 50 });
+    // 被 /clear 替换过的旧段不算（按 head 删整条链）。
+    add(repo, "seg-a", { lastActivityAt: 50 });
+    add(repo, "seg-b", { lastActivityAt: 60 });
+    repo.setReplacedBy("seg-a", "seg-b", "clear");
+    repo.dismiss("seg-a", 100);
+    repo.dismiss("seg-b", 100);
+    expect(repo.listHiddenBefore(1_000).map((s) => s.id)).toEqual(["old", "seg-b"]);
+  });
+
+  it("deletes a whole chain so an older segment does not come back, with its pending merge waiters", () => {
+    const db = memDb();
+    const repo = new SessionsRepo(db);
+    const gate = new MergeGateRepo(db);
+    for (const id of ["a", "b", "c", "other"]) add(repo, id);
+    repo.setReplacedBy("a", "b", "clear");
+    repo.setReplacedBy("b", "c", "clear");
+    repo.dismiss("c", 1);
+    const hold = gate.addHold({ repoPath: "/r", branch: "x", target: "main", kind: "pr", prUrl: null, sessionId: "z", ticketKey: null, createdAt: 1 });
+    gate.addWaiter({ holdId: hold, sessionId: "a", ticketKey: null, branch: "a", createdAt: 1 });
+    gate.addWaiter({ holdId: hold, sessionId: "c", ticketKey: null, branch: "c", createdAt: 1 });
+    gate.addWaiter({ holdId: hold, sessionId: "other", ticketKey: null, branch: "o", createdAt: 1 });
+    gate.addWaiter({ holdId: hold, sessionId: "b", ticketKey: null, branch: "b", createdAt: 1 });
+    const notified = gate.waitersOf(hold).find((w) => w.sessionId === "b")!.id;
+    gate.markNotified(notified, 2);
+
+    expect(repo.chainOf("c").sort()).toEqual(["a", "b", "c"]);
+    expect(repo.deleteChain("c").sort()).toEqual(["a", "b", "c"]);
+    for (const id of ["a", "b", "c"]) {
+      expect(repo.get(id)).toBeNull();
+      expect(repo.wasForgotten(id)).toBe(true);
+    }
+    expect(repo.get("other")).not.toBeNull();
+    // 没通知到的等待者跟着删；通知过的是历史，留着；别的 session 的不动。
+    expect(gate.waitersOf(hold).map((w) => w.sessionId).sort()).toEqual(["b", "other"]);
+    expect(repo.deleteChain("nope")).toEqual([]);
   });
 });

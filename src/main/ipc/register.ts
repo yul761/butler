@@ -38,7 +38,7 @@ import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
   addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, moveTargetArg,
-  openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
+  openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
 } from "./validate";
 import { M } from "../strings";
 
@@ -63,6 +63,10 @@ export interface IpcDeps {
   nowView: (merges: MergeEvent[]) => NowView;
   /** 界面上的“换新”按钮（计划 16）：马上回答，换新在后台跑。 */
   refreshSession: (sessionId: string) => RefreshSessionResult;
+  /** 「清理闲置」按钮（BTL-190 第 8 点）：把这些 session 里闲置的关掉，返回开始关的个数（关闭在后台跑）。 */
+  closeIdleSessions: (sessionIds: string[]) => number;
+  /** 隐藏列表里的「全部删除」（BTL-190 第 8 点）：返回删掉的个数。 */
+  deleteHiddenSessions: (sessionIds: string[]) => number;
   runner: HandoffRunner;
   featureRunner: Pick<FeatureSummaryRunner, "runManual">;
   scheduler: Scheduler;
@@ -277,6 +281,16 @@ export function registerIpc(d: IpcDeps): void {
     const r = d.refreshSession(sessionIdArg(raw));
     d.notify();
     return r;
+  });
+  handle(IPC.sessionsCloseIdle, (raw: unknown): number => {
+    const n = d.closeIdleSessions(sessionIdsArg(raw));
+    d.notify();
+    return n;
+  });
+  handle(IPC.sessionsDeleteHidden, (raw: unknown): number => {
+    const n = d.deleteHiddenSessions(sessionIdsArg(raw));
+    d.notify();
+    return n;
   });
   handle(IPC.sessionsDismiss, (id: string) => {
     d.sessionService.dismiss(id);

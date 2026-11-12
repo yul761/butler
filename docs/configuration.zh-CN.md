@@ -74,6 +74,7 @@ Butler 还会把正则和分支名模板放在一起检查。如果正则接受�
 |------|----|--------|----------------|
 | 把 handoff 的进度、决策、follow-up 和经验写进 StateCore，并在 Butler 打开的 session 里挂上记忆 | `memoryEnabled` | `1`（开） | `1` 或 `0`。关掉后，Butler 不往 StateCore 写任何东西，启动 session 时也不挂记忆 MCP server。已有的记忆会保留。重新打开后，Butler 会把漏掉的 ticket 补上。 |
 | 上下文超过多少 token 时自动换新（0 = 关） | `refreshThresholdTokens` | `150000` | `0` 表示关掉自动换新，否则填一个 token 整数（最多 7 位）。当 Butler 的某个 session 已经停下、没在等你，而且上一轮的上下文至少有这么长时，Butler 会输入 `/handoff`，等 handoff 存好后输入 `/clear`，再让它回忆做到哪了并等你的指令。需要打开记忆。运行中的 session 旁边的 ↻ 按钮，以及总控的 `refresh_session`，可以随时手动换新，不受这项设置影响。 |
+| session 闲置多少分钟后自动关闭（0 = 关） | `idleCloseMinutes` | `180` | `0` 表示关掉自动关闭，否则填一个分钟整数（最多 5 位）。当 Butler 的某个 session 开着终端、停下超过这个时间，没有要你决定的事、没有后台任务、不在换新中，如果是总控、它管的子 session 也都没在干活时，Butler 会先让它写 handoff（`/handoff`，epic session 用 handoff 工具），等记忆写完，再像 `end_session` 一样结束终端并隐藏这个 session，以后可以恢复。隐藏超过 14 天的 session 会从 Butler 里删掉，transcript 留在磁盘上。session 栏的 **清理闲置** 会立刻对那里停下至少 5 分钟的 session 做同样的事，不受这项设置影响。 |
 
 这一节还显示：
 

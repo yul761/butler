@@ -140,6 +140,7 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .session-hide { padding: 0 6px; color: var(--muted); border-left: none; border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .session-hide:hover { color: var(--text); }
 .session-hide.armed { color: var(--danger); white-space: nowrap; }
+.hidden-sessions button.armed { color: var(--danger); }
 .hidden-sessions .row { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
 .repos-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 16px; border-bottom: 1px solid var(--border); }
 .repos-bar .label { font-weight: 600; }

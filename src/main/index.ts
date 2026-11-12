@@ -80,6 +80,7 @@ import { sessionRegistryName } from "./sessions/activity-sources";
 import { DeliveryGuard, type DeliveryGuardDeps } from "./sessions/delivery-guard";
 import { writeRefreshTail } from "./sessions/refresh-tail";
 import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
+import { SessionCleanup } from "./sessions/session-cleanup";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
@@ -87,7 +88,7 @@ import { SessionService } from "./sessions/session-service";
 import { judgeStuck } from "./sessions/stuck-judge";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
-import { llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
+import { idleCloseMinutes, llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
 import { pathKey } from "./util/env";
@@ -785,6 +786,34 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     // /clear 之后没有 Stop：每一步输入之前先重读活动（R28）。
     refreshActivity: refreshActivityOf,
+    // 闲置关闭（BTL-190 第 8 点）：和 end_session 一样只关终端（之后能恢复），并且隐藏起来。
+    endTerminal: (termId, headId) => {
+      pty.kill(termId);
+      sessions.dismiss(headId, Date.now());
+    },
+    log: logger,
+  });
+  // 清理 session（BTL-190 第 8 点）：闲置自动关闭、隐藏 14 天后删除、「清理闲置」和「全部删除」。
+  const sessionCleanup = new SessionCleanup({
+    idleMinutes: () => idleCloseMinutes(settings),
+    terminals: () => pty.openIds().flatMap((termId) => {
+      const head = sessions.head(termId);
+      return head && head.origin === "butler" ? [{ termId, head }] : [];
+    }),
+    activity: (id) => activityMonitor.get(id),
+    lastUserInputAt: (termId) => pty.lastUserInputAt(termId),
+    openedAt: (termId) => pty.openedAt(termId),
+    ticketsOfFeature: (id) => tickets.listByFeature(id).map((t) => t.key),
+    featuresOfEpic: (id) => features.listByEpic(id).map((f) => f.id),
+    // askUserPending：ask_user（BTL-190 第 2+3 点）做好以后在这里接上。
+    refresher,
+    hiddenBefore: (before) => sessions.listHiddenBefore(before),
+    head: (id) => sessions.head(id),
+    terminalOpen: (id) => gateTerm(id) !== null,
+    deleteChain: (id) => sessions.deleteChain(id),
+    removeTail: (id) => rmSync(refreshTailPath(paths, id), { force: true }),
+    notify,
+    now: Date.now,
     log: logger,
   });
   // PR 和 CI 的监视（计划 13）。
@@ -906,6 +935,9 @@ async function bootstrap(): Promise<void> {
       if (effect.kind === "ignored") return;
       // 总控开的子 session 等这个信号才交任务（信任文件夹之类的启动对话框已经过去）。
       if (effect.kind === "session_started") pty.markStarted(effect.sessionId);
+      // claude 收下了一条输入（UserPromptSubmit）：deliver 回车以后等的就是它（BTL-190 第 9 点）。终端按 BUTLER_SESSION 记，
+      // /clear 以后 hook 里的 session id 已经换了。
+      if (effect.kind === "waiting" && !effect.waiting) pty.markSubmitted(env.butlerSession ?? effect.sessionId);
       // claude 停下来等输入了：有“对方已经合完”的通知就趁现在发（设计文档 2026-11-04：不打断忙着的 session）。
       // 同一个时机也递还没递出去的 CI 结论（先重读活动），并且马上查一次这个仓库的 PR 和 CI（刚停下的 session 常常刚 push）。
       if (effect.kind === "waiting" && effect.waiting) {
@@ -996,6 +1028,8 @@ async function bootstrap(): Promise<void> {
       const refused = startRefresh(refresher, id, "manual", logger);
       return refused ? { ok: false, reason: refused } : { ok: true };
     },
+    closeIdleSessions: (ids) => sessionCleanup.closeIdleNow(ids),
+    deleteHiddenSessions: (ids) => sessionCleanup.deleteHidden(ids),
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
     nowView: (merges) => {
       // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
@@ -1080,8 +1114,11 @@ async function bootstrap(): Promise<void> {
   const discoveryTimer = setInterval(() => void runDiscovery(), DISCOVERY_INTERVAL_MS);
   // 自动换新也按活动的节奏再看一遍：活动没变时 activityMonitor 不 notify，而停着的 session 要等「需要你」判断完、
   // 用户 30 秒没打字之后才能换新，那时活动往往已经不变了。
+  // 闲置关闭和删除过期的隐藏 session 也跟着这个节奏（BTL-190 第 8 点）。
   const refreshTimer = setInterval(() => {
-    if (!headlessAbort.signal.aborted) refresher.autoCheck();
+    if (headlessAbort.signal.aborted) return;
+    refresher.autoCheck();
+    sessionCleanup.tick();
   }, activityIntervals(process.env).tickMs);
 
   // 调度：启动（health 探测完成后）、唤醒、解锁时检查到期任务；每分钟 tick，覆盖 16:00 和整晚没锁屏的情况。

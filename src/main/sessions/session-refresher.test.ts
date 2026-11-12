@@ -37,7 +37,7 @@ interface Term {
   recheckFails: boolean;
 }
 
-function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: boolean } = {}) {
+function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: boolean; noEndTerminal?: boolean } = {}) {
   const state = {
     now: 1_000_000,
     threshold: o.threshold ?? 150_000,
@@ -65,6 +65,8 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
   const terms: Term[] = [];
   const typed: Array<{ termId: string; text: string; at: number }> = [];
   const logs: string[] = [];
+  /** 闲置关闭结束的终端（endTerminal 收到的参数）。 */
+  const ended: Array<{ termId: string; headId: string; at: number }> = [];
   let notified = 0;
   const events: Array<{ at: number; run: () => void }> = [];
   const later = (ms: number, run: () => void) => events.push({ at: state.now + ms, run });
@@ -148,6 +150,7 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
       state.onRefreshActivity?.(id);
     },
     log: (m) => void logs.push(m),
+    endTerminal: o.noEndTerminal ? undefined : (termId, headId) => void ended.push({ termId, headId, at: state.now }),
   };
   const r = new SessionRefresher(deps);
 
@@ -173,7 +176,7 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
     await new Promise((res) => setImmediate(res));
   };
   const texts = () => typed.map((x) => x.text);
-  return { r, state, terms, typed, texts, logs, addTerm, settle, later, notified: () => notified };
+  return { r, state, terms, typed, texts, logs, ended, addTerm, settle, later, notified: () => notified };
 }
 
 /** 测试里 writeTail 默认写到的尾巴文件。 */
@@ -753,6 +756,136 @@ describe("SessionRefresher (plan 16)", () => {
     expect(t.typed[2].at - t.typed[1].at).toBeLessThan(REFRESH_CLEAR_MS);
     expect(t.state.activityRefreshes.length).toBeGreaterThanOrEqual(2);
     expect(t.state.activityRefreshes.every((id) => id === "s1")).toBe(true);
+  });
+});
+
+describe("SessionRefresher.close (BTL-190 item 8)", () => {
+  it("types /handoff, waits for it and the memory sync, then ends the terminal without /clear", async () => {
+    const t = setup();
+    const term = t.addTerm("s1");
+    term.chain.push("s1-b"); // 之前换新过一次：终端还是 s1，head 是 s1-b。
+    const steps: Array<string | null> = [];
+    t.state.onCommandCheck = () => steps.push(t.r.stepOf("s1-b"));
+    t.state.memoryIdle = () => (steps.push(t.r.stepOf("s1")), Promise.resolve());
+    const started = t.state.now;
+    expect(await t.r.close("s1-b", "auto")).toBe("done");
+    expect(t.texts()).toEqual(["/handoff"]);
+    expect(t.typed[0].termId).toBe("s1");
+    expect(t.state.memoryWaits).toHaveLength(1);
+    expect(t.state.memoryWaits[0] - started).toBeGreaterThanOrEqual(30_000);
+    expect(t.ended).toEqual([{ termId: "s1", headId: "s1-b", at: expect.any(Number) }]);
+    expect(t.ended[0].at).toBeGreaterThanOrEqual(t.state.memoryWaits[0]);
+    // 关闭不写尾巴（没有 /clear，以后 --resume 恢复的是整段对话）。
+    expect(t.state.tails).toEqual([]);
+    // 从头到尾都报 close：「现在」页显示"闲置，正在关闭"。
+    expect(steps).toEqual(["close", "close"]);
+    expect(t.r.isRefreshing("s1")).toBe(false);
+    expect(t.r.stepOf("s1")).toBeNull();
+  });
+
+  it("asks an epic session to write its progress with the idle-close wording", async () => {
+    const t = setup();
+    t.addTerm("e1", {
+      kind: "epic", session: { epicId: 7 },
+      reactions: { [M().idleCloseEpicHandoff]: { ms: 12_000, run: () => (t.state.epicProgress = "做到第二步") } },
+    });
+    expect(await t.r.close("e1", "manual")).toBe("done");
+    expect(t.texts()).toEqual([M().idleCloseEpicHandoff]);
+    expect(t.ended.map((e) => e.termId)).toEqual(["e1"]);
+    expect(M().idleCloseEpicHandoff).not.toBe(M().refreshEpicHandoff);
+    setLang("en");
+    expect(M().idleCloseEpicHandoff).toMatch(/handoff/);
+  });
+
+  it("with memory off ends the terminal without typing anything", async () => {
+    const t = setup();
+    t.addTerm("s1");
+    t.state.memory = false;
+    expect(t.r.precheckClose("s1", "auto")).toBeNull();
+    expect(await t.r.close("s1", "auto")).toBe("done");
+    expect(t.texts()).toEqual([]);
+    expect(t.state.memoryWaits).toEqual([]);
+    expect(t.ended.map((e) => e.termId)).toEqual(["s1"]);
+  });
+
+  it("does not close when the user typed after /handoff", async () => {
+    const t = setup();
+    const term = t.addTerm("s1");
+    t.later(10_000, () => (term.typedAt = t.state.now));
+    expect(await t.r.close("s1", "auto")).toBe("failed");
+    expect(t.texts()).toEqual(["/handoff"]);
+    expect(t.ended).toEqual([]);
+    expect(t.logs.some((l) => l.includes("close s1") && l.includes("typed"))).toBe(true);
+  });
+
+  it("does not close when the recheck right before ending fails", async () => {
+    const t = setup();
+    const term = t.addTerm("s1");
+    t.later(31_000, () => (term.recheckFails = true));
+    expect(await t.r.close("s1", "manual")).toBe("failed");
+    expect(t.ended).toEqual([]);
+  });
+
+  it("gives up when the handoff never comes in, and leaves the terminal open", async () => {
+    const t = setup();
+    t.addTerm("s1", { reactions: { "/handoff": undefined } });
+    expect(await t.r.close("s1", "manual")).toBe("failed");
+    expect(t.texts()).toEqual(["/handoff"]);
+    expect(t.state.memoryWaits).toEqual([]);
+    expect(t.ended).toEqual([]);
+  });
+
+  it("respects needs-you for both triggers; background tasks and a just-opened terminal block a manual close too", async () => {
+    const t = setup();
+    const term = t.addTerm("s1", { needsYou: true });
+    expect(t.r.precheckClose("s1", "auto")).toBe("busy");
+    expect(t.r.precheckClose("s1", "manual")).toBe("busy");
+    // 换新的手动触发不看需要你；关闭要看。
+    expect(t.r.precheck("s1", "manual")).toBeNull();
+    term.needsYou = false;
+    term.background = true;
+    expect(t.r.precheckClose("s1", "manual")).toBe("busy");
+    term.background = false;
+    term.openedAt = t.state.now - 10_000;
+    expect(t.r.precheckClose("s1", "manual")).toBe("busy");
+    term.openedAt = 1;
+    term.block = "draft";
+    expect(await t.r.close("s1", "manual")).toBe("busy");
+    term.block = null;
+    expect(t.r.precheckClose("s1", "manual")).toBeNull();
+    expect(t.texts()).toEqual([]);
+  });
+
+  it("cannot close without a way to end the terminal, or a session Butler cannot refresh", async () => {
+    const t = setup({ noEndTerminal: true });
+    t.addTerm("s1");
+    expect(await t.r.close("s1", "manual")).toBe("failed");
+    const u = setup();
+    u.addTerm("f1", { kind: null });
+    expect(u.r.precheckClose("f1", "manual")).toBe("failed");
+    expect(t.texts()).toEqual([]);
+  });
+
+  it("an auto close waits out the cooldown after a failure; a manual one does not", async () => {
+    const t = setup();
+    const term = t.addTerm("s1", { deliverResult: { "/handoff": "exited" } });
+    expect(await t.r.close("s1", "auto")).toBe("failed");
+    term.deliverResult = {};
+    expect(t.r.precheckClose("s1", "auto")).toBe("cooldown");
+    // 失败的关闭和换新共用冷却。
+    expect(t.r.precheck("s1", "auto")).toBe("cooldown");
+    expect(await t.r.close("s1", "manual")).toBe("done");
+  });
+
+  it("refuses a second close or a refresh while a close is running", async () => {
+    const t = setup();
+    t.addTerm("s1");
+    const running = t.r.close("s1", "auto");
+    expect(t.r.isRefreshing("s1")).toBe(true);
+    expect(await t.r.close("s1", "manual")).toBe("already");
+    expect(await t.r.refresh("s1", "manual")).toBe("already");
+    expect(await running).toBe("done");
+    expect(t.ended).toHaveLength(1);
   });
 });
 

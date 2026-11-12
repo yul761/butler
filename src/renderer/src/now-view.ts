@@ -43,7 +43,7 @@ export function rowText(r: NowRow, S: UiStrings, now: number): { main: string; s
   const live = a && !stoppedKind(a) ? activityText(a, S, now) : null;
   const sub = live?.sub ?? null;
   if (r.needsYou !== null) return { main: isStuck(r) || r.needsYou === "" ? needsYouText(r, S) : S.nowWaitingFor(r.needsYou), sub, tone: "danger" };
-  if (r.refreshing !== null) return { main: S.nowRefreshing, sub: null, tone: "warn" };
+  if (r.refreshing !== null) return { main: r.refreshing === "close" ? S.nowClosing : S.nowRefreshing, sub: null, tone: "warn" };
   if (isStuck(r)) return { main: S.nowStuck, sub, tone: "danger" };
   if (r.mergeQueued) return { main: S.nowMergeQueued, sub, tone: "warn" };
   if (live) return { main: live.main, sub, tone: "ok" };

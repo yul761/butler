@@ -801,7 +801,7 @@ export class SessionService {
   }
 
   dismiss(sessionId: string): void {
-    this.d.sessions.dismiss(sessionId);
+    this.d.sessions.dismiss(sessionId, this.d.now());
   }
 
   /**
@@ -813,7 +813,7 @@ export class SessionService {
     // ticket 的 session、feature 级 session，或者 epic session。
     if (!s || (!s.ticketKey && s.featureId === null && s.epicId === null)) throw new TicketError("not_found", M().sessionNotFound);
     if (this.openHeads().has(s.id)) throw new TicketError("sessions_open", M().sessionTerminalHide);
-    this.d.sessions.dismiss(s.id);
+    this.d.sessions.dismiss(s.id, this.d.now());
   }
 
   unhide(sessionId: string): void {

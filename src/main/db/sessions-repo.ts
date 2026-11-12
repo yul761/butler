@@ -12,6 +12,7 @@ interface SessionRow {
   waiting_for_input: number;
   replaced_by: string | null;
   dismissed: number;
+  dismissed_at: number | null;
   created_at: number;
   repo_id: number | null;
   coordinator: number;
@@ -218,12 +219,59 @@ export class SessionsRepo {
     });
   }
 
-  dismiss(id: string): void {
-    this.db.prepare(`UPDATE sessions SET dismissed = 1 WHERE id = ?`).run(id);
+  /** 隐藏；at 是隐藏的时间（隐藏超过 14 天的自动删掉，BTL-190 第 8 点）。已经隐藏着的不改时间。 */
+  dismiss(id: string, at: number = Date.now()): void {
+    this.db.prepare(`UPDATE sessions SET dismissed = 1, dismissed_at = COALESCE(dismissed_at, ?) WHERE id = ?`).run(at, id);
   }
 
   undismiss(id: string): void {
-    this.db.prepare(`UPDATE sessions SET dismissed = 0 WHERE id = ?`).run(id);
+    this.db.prepare(`UPDATE sessions SET dismissed = 0, dismissed_at = NULL WHERE id = ?`).run(id);
+  }
+
+  /**
+   * 隐藏着、隐藏和最后一次活动都早于 before 的 head（没被 /clear 替换的行）：自动删除的候选（BTL-190 第 8 点）。
+   * 终端是不是开着由调用方看。
+   */
+  listHiddenBefore(before: number): Session[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM sessions
+         WHERE dismissed = 1 AND replaced_by IS NULL AND COALESCE(dismissed_at, 0) < ?1 AND ${RECENCY} < ?1
+         ORDER BY id`,
+      )
+      .all(before) as unknown as SessionRow[];
+    return rows.map(toSession);
+  }
+
+  /** 这个 head 的整条链：head 自己和所有沿 replaced_by 走到它的旧 id（/clear、compact 之前的段）。 */
+  chainOf(headId: string): string[] {
+    const rows = this.db
+      .prepare(
+        `WITH RECURSIVE chain(id) AS (
+           SELECT id FROM sessions WHERE id = ?
+           UNION SELECT s.id FROM sessions s JOIN chain c ON s.replaced_by = c.id
+         )
+         SELECT id FROM chain`,
+      )
+      .all(headId) as unknown as { id: string }[];
+    return rows.map((r) => r.id);
+  }
+
+  /**
+   * 删掉一整条链（BTL-190 第 8 点）：只删 head 的话，前一段的 replaced_by 被清掉，会作为一个没隐藏的 session 重新出现在列表里。
+   * 合并总控里还没通知到这些 id 的等待者一起删掉：session 不在了，没有地方递。返回删掉的 id（不存在的 head 返回 []）。
+   * transcript、handoff、用量这些只记着 session id 的历史不动。
+   */
+  deleteChain(headId: string): string[] {
+    const ids = this.chainOf(headId);
+    if (ids.length === 0) return [];
+    withTransaction(this.db, () => {
+      for (const id of ids) {
+        this.db.prepare(`DELETE FROM merge_waiters WHERE session_id = ? AND notified_at IS NULL`).run(id);
+        this.delete(id);
+      }
+    });
+    return ids;
   }
 
   setOrigin(id: string, origin: SessionOrigin): void {

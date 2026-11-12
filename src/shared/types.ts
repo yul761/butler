@@ -438,8 +438,8 @@ export type NowTarget =
   | { page: "feature"; id: number; sessionId: string | null }
   | { page: "epic"; id: number; sessionId: string | null };
 
-/** 换新（计划 16）正在做的那一步：写 handoff、/clear、发接着做的话。 */
-export type RefreshStep = "handoff" | "clear" | "resume";
+/** 换新（计划 16）正在做的那一步：写 handoff、/clear、发接着做的话。close：闲置关闭（BTL-190 第 8 点），写 handoff 之后结束终端。 */
+export type RefreshStep = "handoff" | "clear" | "resume" | "close";
 /**
  * 换新开始不了的原因（SessionRefresher.precheck）：busy 现在不能往终端里输入；already 正在换新；cooldown 30 分钟内失败过；
  * memory_off 记忆关着；failed 这个 session 不能换新。

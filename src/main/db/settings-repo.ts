@@ -39,6 +39,11 @@ export const SETTING_DEFAULTS = {
   memoryEnabled: "1",
   /** 上下文（最近一轮的 token 数）超过这么多时自动换新 session（计划 16）；0 = 关。手动和总控触发不看它。 */
   refreshThresholdTokens: "150000",
+  /**
+   * Butler 的 session 停下超过这么多分钟、没有要你决定的事，就写 handoff、结束终端并隐藏（BTL-190 第 8 点）；0 = 关。
+   * 「清理闲置」按钮不看它。
+   */
+  idleCloseMinutes: "180",
   /** 界面和提示词的语言：auto | zh | en（设计文档 2026-10-26）。迁移 7 给老用户写 zh。 */
   language: "auto",
 } as const;

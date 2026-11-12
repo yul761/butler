@@ -350,6 +350,11 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!REFRESH_THRESHOLD_RE.test(t)) throw new SettingError(M().refreshThreshold);
       return String(Number(t));
     }
+    case "idleCloseMinutes": {
+      const t = value.trim();
+      if (!IDLE_CLOSE_RE.test(t)) throw new SettingError(M().idleCloseMinutes);
+      return String(Number(t));
+    }
     case "language": {
       const t = value.trim();
       if (!(LANG_SETTINGS as readonly string[]).includes(t)) throw new SettingError(M().language);
@@ -384,6 +389,15 @@ const REFRESH_THRESHOLD_RE = /^\d{1,7}$/;
 export function refreshThreshold(s: Pick<SettingsRepo, "get">): number {
   const t = s.get("refreshThresholdTokens").trim();
   return REFRESH_THRESHOLD_RE.test(t) ? Number(t) : Number(SETTING_DEFAULTS.refreshThresholdTokens);
+}
+
+/** 闲置关闭的分钟数：0 或者最多 5 位的整数（最长两个多月）。 */
+const IDLE_CLOSE_RE = /^\d{1,5}$/;
+
+/** 闲置多少分钟自动关闭（idleCloseMinutes，BTL-190 第 8 点）：0 = 关；存的值不合法时用默认的 180。 */
+export function idleCloseMinutes(s: Pick<SettingsRepo, "get">): number {
+  const t = s.get("idleCloseMinutes").trim();
+  return IDLE_CLOSE_RE.test(t) ? Number(t) : Number(SETTING_DEFAULTS.idleCloseMinutes);
 }
 
 export function trackerTools(s: SettingsRepo): string[] {

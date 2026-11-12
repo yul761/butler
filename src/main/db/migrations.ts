@@ -307,4 +307,8 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_epic_history_epic ON epic_history (epic_id, created_at);
   `,
+  // session 隐藏的时间（BTL-190 第 8 点）：隐藏超过 14 天的 session 行自动删掉。升级前就隐藏着的从升级这一刻算起，
+  // 不会一升级就被删。
+  `ALTER TABLE sessions ADD COLUMN dismissed_at INTEGER;
+  UPDATE sessions SET dismissed_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE dismissed = 1;`,
 ];

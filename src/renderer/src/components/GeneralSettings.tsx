@@ -138,6 +138,26 @@ export function GeneralSettings({ report, onHealth, onRerunWizard }: { report: H
           <button onClick={() => void reset("refreshThresholdTokens")}>{S.resetDefault}</button>
         </div>
       </div>
+      {/* 闲置关闭先写 handoff（BTL-190 第 8 点），和换新放在一起。 */}
+      <div className="field">
+        {S.idleCloseMinutes}
+        <input
+          className="mono"
+          type="number"
+          min={0}
+          step={30}
+          value={value("idleCloseMinutes")}
+          onChange={(e) => setDraft((d) => ({ ...d, idleCloseMinutes: e.target.value }))}
+          onBlur={() => {
+            if (draft.idleCloseMinutes !== undefined && draft.idleCloseMinutes !== current.idleCloseMinutes) void save("idleCloseMinutes");
+            else clearDraft("idleCloseMinutes");
+          }}
+        />
+        <p className="muted">{S.idleCloseMinutesHelp}</p>
+        <div className="actions">
+          <button onClick={() => void reset("idleCloseMinutes")}>{S.resetDefault}</button>
+        </div>
+      </div>
       {m.statecorePlugin && <p className="error">{S.statecorePluginWarning}</p>}
       <div className="actions">
         <button onClick={() => api.setSetting("onboardingDone", "0").then(onRerunWizard, reportError)}>{S.rerunWizard}</button>

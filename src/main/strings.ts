@@ -123,6 +123,7 @@ const ZH = {
   budget: "预算是美元金额，例如 1 或 2.50",
   retention: "保留天数是 1–3650 的整数",
   refreshThreshold: "换新阈值是 0（关）或者一个整数 token 数，最多 7 位",
+  idleCloseMinutes: "闲置关闭的时间是 0（关）或者一个整数分钟数，最多 5 位",
   claudePathAbsolute: "claude 路径必须是绝对路径，例如 /usr/local/bin/claude；留空则自动查找",
   language: "语言只能是 auto、zh 或 en",
   settingNotEditable: (key: string) => `这个设置不能在这里修改：${key}`,
@@ -219,6 +220,8 @@ const ZH = {
     `Butler：${where} 的 CI 失败（${sha7}）。失败的检查：${failed.map((f) => f.name).join("、")}。\n\n${ciLogBlocks(failed)}\n\n请修复后再 push。push 以后结束这一轮，Butler 会再告诉你结果。`,
   /** 上下文换新（计划 16）：epic session 的第一步（ticket 和 feature 总控输入的是 /handoff）。 */
   refreshEpicHandoff: "Butler 要清空这个 session 的上下文。请先用 butler-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
+  /** 闲置关闭（BTL-190 第 8 点）前让 epic session 写进度。一行：Windows 上按单行粘贴。 */
+  idleCloseEpicHandoff: "这个 session 闲置很久了，Butler 要把它关掉（以后可以恢复）。请先用 butler-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
   /**
    * 换新的最后一步（BTL-190 第 6 点）：调回 handoff、读换新前的对话尾巴，然后接着做；换新前在等的就说一句在等什么、继续等。
    * ticket 是 ticket 号；feature 总控和 epic session 不用它（说"这个 feature / epic"）。tailPath 是尾巴文件，没写成（null）就不提。
@@ -338,6 +341,7 @@ const EN: MainStrings = {
   budget: "The budget is an amount in USD, for example 1 or 2.50",
   retention: "Days to keep must be a whole number from 1 to 3650",
   refreshThreshold: "The refresh threshold must be 0 (off) or a whole number of tokens, at most 7 digits",
+  idleCloseMinutes: "The idle close time must be 0 (off) or a whole number of minutes, at most 5 digits",
   claudePathAbsolute: "The claude path must be absolute, for example /usr/local/bin/claude; leave it empty to find it automatically",
   language: "The language can only be auto, zh or en",
   settingNotEditable: (key: string) => `This setting can't be changed here: ${key}`,
@@ -427,6 +431,7 @@ const EN: MainStrings = {
   ciFailedNotice: (where: string, sha7: string, failed: Array<{ name: string; log?: string }>) =>
     `Butler: CI failed on ${where} (${sha7}). Failed checks: ${failed.map((f) => f.name).join(", ")}.\n\n${ciLogBlocks(failed)}\n\nFix it, then push. End this turn after pushing and Butler will tell you the result.`,
   refreshEpicHandoff: "Butler is about to clear this session's context. First use butler-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
+  idleCloseEpicHandoff: "This session has been idle for a long time, so Butler is about to close it (it can be resumed later). First use butler-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
   refreshResume: (kind: "ticket" | "feature" | "epic", ticket: string, tailPath: string | null) => {
     const recall = kind === "ticket" ? `First use recall to load the latest handoff of ${ticket}` : `First use butler-${kind}'s recall to load the latest handoff of this ${kind}`;
     const tail = tailPath ? ` and read ${tailPath} for the conversation right before the refresh` : "";

@@ -4,7 +4,7 @@ import { SettingsRepo } from "../db/settings-repo";
 import { memDb } from "../test-utils";
 import {
   isLoopbackHost, llmConfig, normalizeBaseUrl, checkBranchTemplateFits, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTerms, normalizeTicketPattern, parsePriceTable, parseTime, parseToolList,
-  parseWorkingDays, priceFor, refreshThreshold, scheduleConfig, SettingError, TERMS_LIMIT, trackerTools,
+  parseWorkingDays, priceFor, idleCloseMinutes, refreshThreshold, scheduleConfig, SettingError, TERMS_LIMIT, trackerTools,
 } from "./settings-values";
 
 describe("settings values", () => {
@@ -216,6 +216,28 @@ describe("language setting (design 2026-10-26 i18n)", () => {
   it("accepts auto, zh and en only", () => {
     for (const ok of ["auto", "zh", "en"]) expect(normalizeSetting("language", ` ${ok} `)).toBe(ok);
     for (const bad of ["fr", "", "ZH-cn"]) expect(() => normalizeSetting("language", bad), bad).toThrow(SettingError);
+  });
+});
+
+describe("idle close minutes (BTL-190)", () => {
+  it("reads idleCloseMinutes with a default of 180, 0 = off, and a broken value falls back to the default", () => {
+    const s = new SettingsRepo(memDb());
+    expect(idleCloseMinutes(s)).toBe(180);
+    s.set("idleCloseMinutes", "45");
+    expect(idleCloseMinutes(s)).toBe(45);
+    s.set("idleCloseMinutes", "0");
+    expect(idleCloseMinutes(s)).toBe(0);
+    for (const bad of ["", "abc", "-5", "1.5", "1e3", "123456"]) {
+      s.set("idleCloseMinutes", bad);
+      expect(idleCloseMinutes(s), bad).toBe(180);
+    }
+  });
+
+  it("accepts a whole number of minutes and rejects anything else", () => {
+    expect(normalizeSetting("idleCloseMinutes", " 60 ")).toBe("60");
+    expect(normalizeSetting("idleCloseMinutes", "0")).toBe("0");
+    expect(normalizeSetting("idleCloseMinutes", "0090")).toBe("90");
+    for (const bad of ["", "abc", "-5", "1.5", "1e3", "123456"]) expect(() => normalizeSetting("idleCloseMinutes", bad), bad).toThrow(SettingError);
   });
 });
 

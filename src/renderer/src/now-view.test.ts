@@ -60,6 +60,12 @@ describe("rowText", () => {
     expect(rowText(row({ refreshing: "clear" }), S, NOW).main).toBe("Refreshing");
   });
 
+  it("a session being closed for idling reads 闲置，正在关闭 / Idle, closing (BTL-190)", () => {
+    expect(rowText(row({ refreshing: "close", activity: act({ kind: "thinking" }) }), S, NOW)).toEqual({ main: "闲置，正在关闭", sub: null, tone: "warn" });
+    setUiLang("en");
+    expect(rowText(row({ refreshing: "close" }), S, NOW).main).toBe("Idle, closing");
+  });
+
   it("merge queue beats the plain activity", () => {
     expect(rowText(row({ mergeQueued: true, activity: act({ kind: "rebase", detail: null }) }), S, NOW)).toMatchObject({ main: "合并排队", tone: "warn" });
     expect(rowText(row({ mergeQueued: true, needsYou: "问要不要拆 PR" }), S, NOW).main).toBe("等你：问要不要拆 PR");

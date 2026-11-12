@@ -20,6 +20,12 @@ const CLEAR_COMMAND = "/clear";
 
 export type RefreshKind = "ticket" | "feature" | "epic";
 export type RefreshTrigger = "auto" | "coordinator" | "manual";
+/**
+ * refresh：换新（handoff → /clear → 接着做）。close：闲置关闭（BTL-190 第 8 点）：同样先写 handoff、等记忆写完，然后结束终端
+ * （和 end_session 一样，之后能恢复）并隐藏，不 /clear。close 只有 auto（按 idleCloseMinutes 自动）和 manual（「清理闲置」按钮）两种触发。
+ */
+export type RefreshMode = "refresh" | "close";
+export type CloseTrigger = Extract<RefreshTrigger, "auto" | "manual">;
 export type { RefreshStep };
 /**
  * done：三步都输入了。busy：现在不能往终端里输入（什么都没输入，不冷却）。already：这个 session 正在换新。
@@ -101,6 +107,11 @@ export interface SessionRefresherDeps {
    * 返回文件路径；没写成返回 null（接着做的话就不提它）。termId 决定文件名：同一个终端下一次换新覆盖它。不给就不写。
    */
   writeTail?: (oldHeadId: string, termId: string, kind: RefreshKind) => Promise<string | null>;
+  /**
+   * 闲置关闭的最后一步（BTL-190 第 8 点）：结束这个终端（和 end_session 一样只关终端，之后能恢复），并把 head 隐藏起来。
+   * 不给就不能闲置关闭（close 一律 failed）。
+   */
+  endTerminal?: (termId: string, headId: string) => void;
   /** 换新开始、换了一步、结束时调用（「现在」页显示"换新中"）。 */
   notify(): void;
   now(): number;
@@ -123,6 +134,7 @@ interface Run {
   termId: string;
   kind: RefreshKind;
   trigger: RefreshTrigger;
+  mode: RefreshMode;
   step: RefreshStep;
   epicId: number | null;
   ticket: string;
@@ -159,7 +171,7 @@ export class SessionRefresher {
       .filter((c): c is { s: Session; context: number } => c.context !== null && c.context >= limit)
       .sort((a, b) => b.context - a.context);
     for (const { s } of candidates) {
-      const run = this.begin(s.id, "auto");
+      const run = this.begin(s.id, "auto", "refresh");
       if (typeof run === "string") continue;
       void this.execute(run);
       return;
@@ -167,8 +179,25 @@ export class SessionRefresher {
   }
 
   async refresh(sessionId: string, trigger: RefreshTrigger): Promise<RefreshResult> {
-    const run = this.begin(sessionId, trigger);
+    const run = this.begin(sessionId, trigger, "refresh");
     return typeof run === "string" ? run : this.execute(run);
+  }
+
+  /**
+   * 闲置关闭（BTL-190 第 8 点）：先走换新的 handoff 那一步（ticket 和 feature 用 /handoff，epic 用 handoff 工具），等收进来、
+   * 等记忆写完，再等 session 停下来、确认用户没动过，然后结束终端并隐藏。记忆关着时没有 handoff 可写，直接结束。
+   * 两种触发都看「需要你」、后台任务和刚打开的终端；手动（「清理闲置」）不看 30 分钟的冷却。闲置多久、总控的子 session
+   * 是不是在干活由调用方（IdleCloser）看。正在换新或关闭的算 already。
+   */
+  async close(sessionId: string, trigger: CloseTrigger): Promise<RefreshResult> {
+    const run = this.begin(sessionId, trigger, "close");
+    return typeof run === "string" ? run : this.execute(run);
+  }
+
+  /** close 的同步检查（同 precheck）：null 表示现在可以开始关闭。 */
+  precheckClose(sessionId: string, trigger: CloseTrigger): RefreshRefusal | null {
+    const r = this.check(sessionId, trigger, "close");
+    return "result" in r ? r.result : null;
   }
 
   /**
@@ -177,7 +206,7 @@ export class SessionRefresher {
    * /handoff 命令文件是不是 Butler 的要读文件，留在 refresh() 里异步看。
    */
   precheck(sessionId: string, trigger: RefreshTrigger): RefreshRefusal | null {
-    const r = this.check(sessionId, trigger);
+    const r = this.check(sessionId, trigger, "refresh");
     return "result" in r ? r.result : null;
   }
 
@@ -194,8 +223,10 @@ export class SessionRefresher {
     return this.runOf(sessionId) !== null;
   }
 
+  /** 闲置关闭从头到尾都报 close（「现在」页显示"正在关闭"，不是"换新中"）。 */
   stepOf(sessionId: string): RefreshStep | null {
-    return this.runOf(sessionId)?.step ?? null;
+    const run = this.runOf(sessionId);
+    return run ? (run.mode === "close" ? "close" : run.step) : null;
   }
 
   /** capture 存下了这个 session 的 /handoff。Butler 还没输入 /handoff 时收进来的（用户自己的）不算。 */
@@ -206,9 +237,11 @@ export class SessionRefresher {
   }
 
   /** 开始前的同步检查（precheck 和 begin 共用）；通过时给出要登记的这次换新，不登记。 */
-  private check(sessionId: string, trigger: RefreshTrigger): { result: RefreshRefusal } | { run: Run } {
+  private check(sessionId: string, trigger: RefreshTrigger, mode: RefreshMode): { result: RefreshRefusal } | { run: Run } {
     if (this.stopped) return { result: "busy" };
-    if (!this.d.memoryEnabled()) return { result: "memory_off" };
+    // 关闭不靠记忆接上（以后 --resume 恢复的是整段对话）：记忆关着就不写 handoff，直接结束。
+    if (mode === "refresh" && !this.d.memoryEnabled()) return { result: "memory_off" };
+    if (mode === "close" && !this.d.endTerminal) return { result: "failed" };
     const head = this.d.head(sessionId);
     const kind = head ? this.d.kindOf(head) : null;
     // 缺了接着做的话要用的 ticket 号、epic id 的，不换新。
@@ -217,22 +250,22 @@ export class SessionRefresher {
     if (kind === "epic" && !this.d.epicPlanReady()) return { result: "failed" };
     if (this.isRefreshing(head.id)) return { result: "already" };
     if (trigger !== "manual" && this.cooling(head.id)) return { result: "cooldown" };
-    const gate = this.canStart(head.id, trigger);
+    const gate = this.canStart(head.id, trigger, mode);
     if (!gate.ok) return { result: "busy" };
     return {
       run: {
-        headId: gate.headId, termId: gate.termId, kind, trigger, step: "handoff", epicId: head.epicId, ticket: head.ticketKey ?? "",
+        headId: gate.headId, termId: gate.termId, kind, trigger, mode, step: "handoff", epicId: head.epicId, ticket: head.ticketKey ?? "",
         handoffTypedAt: null, stored: false,
       },
     };
   }
 
   /**
-   * 开始时和第一步输入之前（中间等过异步）都看这一道：guard 通过；自动触发还要求没有后台任务在跑、终端不是刚打开的（R36）。
+   * 开始时和第一步输入之前（中间等过异步）都看这一道：guard 通过；自动触发和闲置关闭还要求没有后台任务在跑、终端不是刚打开的（R36）。
    */
-  private canStart(sessionId: string, trigger: RefreshTrigger): DeliveryCheck {
-    const gate = this.guardFor(trigger).check(sessionId);
-    if (!gate.ok || trigger !== "auto") return gate;
+  private canStart(sessionId: string, trigger: RefreshTrigger, mode: RefreshMode): DeliveryCheck {
+    const gate = this.guardFor(trigger, mode).check(sessionId);
+    if (!gate.ok || (trigger !== "auto" && mode !== "close")) return gate;
     if (this.d.activity(gate.headId)?.background === true) return { ok: false, block: "busy" };
     const opened = this.d.openedAt?.(gate.termId) ?? 0;
     if (opened > 0 && this.d.now() - opened < (this.d.openQuietMs ?? REFRESH_OPEN_QUIET_MS)) return { ok: false, block: "busy" };
@@ -240,15 +273,15 @@ export class SessionRefresher {
   }
 
   /** 同步做完开始前的检查；通过就登记成正在换新（之后的异步检查期间也不会再起一次）。 */
-  private begin(sessionId: string, trigger: RefreshTrigger): RefreshResult | Run {
-    const r = this.check(sessionId, trigger);
+  private begin(sessionId: string, trigger: RefreshTrigger, mode: RefreshMode): RefreshResult | Run {
+    const r = this.check(sessionId, trigger, mode);
     if ("result" in r) {
-      if (r.result === "failed" && trigger !== "auto") this.d.log(`refresh ${sessionId}: not a session Butler can refresh now (or epic plans are not stored apart yet)`);
+      if (r.result === "failed" && trigger !== "auto") this.d.log(`${mode} ${sessionId}: not a session Butler can ${mode} now (or epic plans are not stored apart yet)`);
       return r.result;
     }
     const run = r.run;
     this.runs.add(run);
-    this.d.log(`refresh ${run.headId} (${run.kind}, ${trigger}): started`);
+    this.d.log(`${mode} ${run.headId} (${run.kind}, ${trigger}): started`);
     this.changed();
     return run;
   }
@@ -256,8 +289,8 @@ export class SessionRefresher {
   /** 永不 reject。 */
   private async execute(run: Run): Promise<RefreshResult> {
     try {
-      const result = await this.steps(run);
-      if (result === "done") this.d.log(`refresh ${run.headId}: done`);
+      const result = run.mode === "close" ? await this.closeSteps(run) : await this.steps(run);
+      if (result === "done") this.d.log(`${run.mode} ${run.headId}: done`);
       return result;
     } catch (e) {
       if (e instanceof RefresherStopped) return "failed";
@@ -269,34 +302,8 @@ export class SessionRefresher {
   }
 
   private async steps(run: Run): Promise<RefreshResult> {
-    // 第一步：ticket 和 feature 总控输入 /handoff，等 capture 收进来；epic session 用 butler-epic 的 handoff 写进度，等进度变。
-    // epic 比的是进度不是 handoff 的版本：Butler 自己重新渲染（feature 有变化）也会写新版本，但进度原样带着（R29）。
-    let before: string | null = null;
-    this.alive();
-    if (run.kind === "epic") before = await this.d.epicProgress(run.epicId!);
-    else if (!(await this.d.handoffCommandReady())) {
-      this.alive();
-      // 用户改过 /handoff 的命令文件：不知道它会输出什么，收不进来就只会白等 10 分钟。冷却期间不再试，也不再记日志。
-      return this.fail(run, "/handoff is not Butler's own command (the command file was changed), so the session was not refreshed");
-    }
-    // 中间等过异步：重新看一眼。这时还什么都没输入，不通过就当作忙（记忆刚关掉就是 memory_off），不冷却。
-    this.alive();
-    if (!this.d.memoryEnabled()) return "memory_off";
-    const gate = this.canStart(run.headId, run.trigger);
-    if (!gate.ok || gate.termId !== run.termId) return "busy";
-    // 从这一刻起收进来的 handoff 才算这次换新的（审查：用户自己的 /handoff 恰好在前面的检查期间收进来，不能让 /clear 跟着就输入）。
-    run.stored = false;
-    run.handoffTypedAt = this.d.now();
-    const typedHandoff = await this.type(run, run.kind === "epic" ? M().refreshEpicHandoff : HANDOFF_COMMAND, this.guardFor(run.trigger).recheckAfter(run.headId, gate));
-    if (typedHandoff) return this.fail(run, `typing the handoff request: ${typedHandoff}`);
-    const handedOff =
-      run.kind === "epic"
-        ? await this.until(async () => {
-            const progress = await this.d.epicProgress(run.epicId!);
-            return progress !== null && progress !== before;
-          }, REFRESH_HANDOFF_MS, EPIC_POLL_MS)
-        : await this.until(() => run.stored, REFRESH_HANDOFF_MS, POLL_MS);
-    if (!handedOff) return this.fail(run, `the handoff was not stored within ${REFRESH_HANDOFF_MS / 60_000} minutes`);
+    const handedOff = await this.handoffStep(run);
+    if (handedOff !== null) return handedOff;
 
     // 第二步：/clear，等 SessionStart（source=clear）把新 id 接上 replaced_by。
     this.setStep(run, "clear");
@@ -325,6 +332,71 @@ export class SessionRefresher {
     return "done";
   }
 
+  /**
+   * 闲置关闭（BTL-190 第 8 点）：handoff 那一步和换新一样；收进来以后等记忆写完，再等 session 停下来，粘贴前同样的复查通过
+   * （用户没在打字、没有草稿、没动过终端、不需要你）才结束终端。记忆关着时不写 handoff，复查通过就直接结束。
+   */
+  private async closeSteps(run: Run): Promise<RefreshResult> {
+    this.alive();
+    if (this.d.memoryEnabled()) {
+      const handedOff = await this.handoffStep(run);
+      if (handedOff !== null) return handedOff;
+      this.setStep(run, "close");
+      await this.waitForMemory(run);
+    } else {
+      this.setStep(run, "close");
+      // 没有 handoff 可写：从现在起用户动过终端就不关。
+      run.handoffTypedAt = this.d.now();
+    }
+    const beforeClose = await this.untilQuiet(run);
+    if (typeof beforeClose === "string") return this.fail(run, `before closing: ${beforeClose}`);
+    this.alive();
+    if (!beforeClose()) return this.fail(run, "before closing: the session is no longer idle");
+    const head = this.d.head(run.termId)?.id ?? run.headId;
+    try {
+      this.d.endTerminal!(run.termId, head);
+    } catch (e) {
+      return this.fail(run, "ending the terminal failed", e);
+    }
+    return "done";
+  }
+
+  /**
+   * 换新和闲置关闭共用的第一步：ticket 和 feature 总控输入 /handoff，等 capture 收进来；epic session 用 butler-epic 的 handoff 写进度，等进度变。
+   * epic 比的是进度不是 handoff 的版本：Butler 自己重新渲染（feature 有变化）也会写新版本，但进度原样带着（R29）。
+   * 收进来了返回 null；否则返回这次的结果（busy / memory_off：什么都没输入；failed：已经记过失败）。
+   */
+  private async handoffStep(run: Run): Promise<RefreshResult | null> {
+    let before: string | null = null;
+    this.alive();
+    if (run.kind === "epic") before = await this.d.epicProgress(run.epicId!);
+    else if (!(await this.d.handoffCommandReady())) {
+      this.alive();
+      // 用户改过 /handoff 的命令文件：不知道它会输出什么，收不进来就只会白等 10 分钟。冷却期间不再试，也不再记日志。
+      return this.fail(run, `/handoff is not Butler's own command (the command file was changed), so the session was not ${run.mode === "close" ? "closed" : "refreshed"}`);
+    }
+    // 中间等过异步：重新看一眼。这时还什么都没输入，不通过就当作忙（记忆刚关掉就是 memory_off），不冷却。
+    this.alive();
+    if (!this.d.memoryEnabled()) return "memory_off";
+    const gate = this.canStart(run.headId, run.trigger, run.mode);
+    if (!gate.ok || gate.termId !== run.termId) return "busy";
+    // 从这一刻起收进来的 handoff 才算这次换新的（审查：用户自己的 /handoff 恰好在前面的检查期间收进来，不能让 /clear 跟着就输入）。
+    run.stored = false;
+    run.handoffTypedAt = this.d.now();
+    const epicHandoff = run.mode === "close" ? M().idleCloseEpicHandoff : M().refreshEpicHandoff;
+    const typedHandoff = await this.type(run, run.kind === "epic" ? epicHandoff : HANDOFF_COMMAND, this.guardFor(run.trigger, run.mode).recheckAfter(run.headId, gate));
+    if (typedHandoff) return this.fail(run, `typing the handoff request: ${typedHandoff}`);
+    const handedOff =
+      run.kind === "epic"
+        ? await this.until(async () => {
+            const progress = await this.d.epicProgress(run.epicId!);
+            return progress !== null && progress !== before;
+          }, REFRESH_HANDOFF_MS, EPIC_POLL_MS)
+        : await this.until(() => run.stored, REFRESH_HANDOFF_MS, POLL_MS);
+    if (!handedOff) return this.fail(run, `the handoff was not stored within ${REFRESH_HANDOFF_MS / 60_000} minutes`);
+    return null;
+  }
+
   /** 等记忆的写入队列空下来，最多 REFRESH_MEMORY_MS；超时或出错只记日志，照样往下走（handoff 已经在库里，同步迟早会写进去）。 */
   private async waitForMemory(run: Run): Promise<void> {
     if (!this.d.memoryIdle) return;
@@ -334,13 +406,13 @@ export class SessionRefresher {
       try {
         await memoryIdle();
       } catch (e) {
-        this.d.log(`refresh ${run.headId}: waiting for the memory sync failed`, e);
+        this.d.log(`${run.mode} ${run.headId}: waiting for the memory sync failed`, e);
       } finally {
         settled = true;
       }
     })();
     const idle = await this.until(() => settled, REFRESH_MEMORY_MS, POLL_MS);
-    if (!idle) this.d.log(`refresh ${run.headId}: the memory sync did not finish within ${REFRESH_MEMORY_MS / 1000} seconds; clearing anyway`);
+    if (!idle) this.d.log(`${run.mode} ${run.headId}: the memory sync did not finish within ${REFRESH_MEMORY_MS / 1000} seconds; going on anyway`);
   }
 
   /** 写对话尾巴；写不成（没有 transcript、出错）返回 null，换新照样继续，接着做的话里不提它。 */
@@ -353,10 +425,10 @@ export class SessionRefresher {
       path = await this.d.writeTail(oldHead, run.termId, run.kind);
     } catch (e) {
       path = null;
-      this.d.log(`refresh ${run.headId}: writing the conversation tail failed`, e);
+      this.d.log(`${run.mode} ${run.headId}: writing the conversation tail failed`, e);
     }
     this.alive();
-    if (path === null) this.d.log(`refresh ${run.headId}: no conversation tail was written; the resume message leaves it out`);
+    if (path === null) this.d.log(`${run.mode} ${run.headId}: no conversation tail was written; the resume message leaves it out`);
     return path;
   }
 
@@ -369,12 +441,13 @@ export class SessionRefresher {
     const end = this.d.now() + REFRESH_CLEAR_MS;
     for (;;) {
       this.alive();
-      if (!this.d.memoryEnabled()) return "memory_off";
+      // 关闭不靠记忆接上：中途关掉记忆照样关。
+      if (run.mode === "refresh" && !this.d.memoryEnabled()) return "memory_off";
       // 用户在 Butler 输入 /handoff 之后动过这个终端（哪怕早过了 30 秒的打字安静期）：他可能在接着用它，不能替他清空。
       if (this.d.lastUserInputAt(run.termId) > (run.handoffTypedAt ?? Infinity)) return "the user typed in the terminal after /handoff";
       await this.rereadActivity(run);
       this.alive();
-      const guard = this.guardFor(run.trigger);
+      const guard = this.guardFor(run.trigger, run.mode);
       const gate = guard.check(run.headId);
       if (gate.ok) return gate.termId === run.termId ? guard.recheckAfter(run.headId, gate) : "the terminal changed";
       if (gate.block !== "busy") return gate.block;
@@ -388,7 +461,7 @@ export class SessionRefresher {
     try {
       await this.d.refreshActivity?.(run.headId);
     } catch (e) {
-      this.d.log(`refresh ${run.headId}: re-reading the activity failed`, e);
+      this.d.log(`${run.mode} ${run.headId}: re-reading the activity failed`, e);
     }
   }
 
@@ -414,7 +487,7 @@ export class SessionRefresher {
       r = await this.d.deliver(run.termId, sanitizeTask(text), recheck);
     } catch (e) {
       this.alive();
-      this.d.log(`refresh ${run.headId}: deliver failed`, e);
+      this.d.log(`${run.mode} ${run.headId}: deliver failed`, e);
       return "deliver failed";
     }
     // 退出时终端被一起关掉，deliver 返回 exited：那不算失败。
@@ -429,7 +502,7 @@ export class SessionRefresher {
 
   private fail(run: Run, reason: string, err?: unknown): "failed" {
     this.failedAt.set(run.headId, this.d.now());
-    this.d.log(`refresh ${run.headId} (${run.kind}, step ${run.step}): ${reason}; stopped, nothing more is typed`, err);
+    this.d.log(`${run.mode} ${run.headId} (${run.kind}, step ${run.step}): ${reason}; stopped, nothing more is typed`, err);
     return "failed";
   }
 
@@ -446,8 +519,9 @@ export class SessionRefresher {
     }
   }
 
-  private guardFor(trigger: RefreshTrigger): Pick<DeliveryGuard, "check" | "recheckAfter"> {
-    return trigger === "auto" ? this.d.guard : this.d.guardIgnoringNeedsYou;
+  /** 自动换新和闲置关闭（两种触发都是）看「需要你」：在等用户回答的 session 不能关掉。 */
+  private guardFor(trigger: RefreshTrigger, mode: RefreshMode): Pick<DeliveryGuard, "check" | "recheckAfter"> {
+    return trigger === "auto" || mode === "close" ? this.d.guard : this.d.guardIgnoringNeedsYou;
   }
 
   private runOf(sessionId: string): Run | null {

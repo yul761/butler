@@ -41,6 +41,10 @@ export const IPC = {
   sessionsUnhide: "sessions:unhide",
   /** 界面上的“换新”按钮（计划 16）：能开始就在后台换新，马上返回。 */
   sessionsRefresh: "sessions:refresh",
+  /** 「清理闲置」按钮（BTL-190 第 8 点）：把这些 session 里闲置的关掉（在后台写 handoff、结束终端），马上返回开始关的个数。 */
+  sessionsCloseIdle: "sessions:closeIdle",
+  /** 隐藏列表里的「全部删除」（BTL-190 第 8 点）：删掉这些隐藏的 session 行，返回删掉的个数。transcript 不动。 */
+  sessionsDeleteHidden: "sessions:deleteHidden",
   sessionOpenFix: "sessions:openFix",
   activityDismiss: "activity:dismiss",
   usageSummary: "usage:summary",
@@ -95,7 +99,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.featuresList, IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive,
   IPC.featuresSummaryRun, IPC.featuresArchived, IPC.featuresUnarchive, IPC.featuresOpenSession, IPC.featuresMove, IPC.reposScan, IPC.ticketsRecheckCleanup,
   IPC.epicsList, IPC.epicsCreate, IPC.epicsRename, IPC.epicsAddRepo, IPC.epicsRemoveRepo, IPC.epicsArchive, IPC.epicsArchived, IPC.epicsUnarchive, IPC.epicsOpenSession,
-  IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
+  IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.nowView,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,

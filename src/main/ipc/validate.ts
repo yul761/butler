@@ -113,6 +113,12 @@ export function sessionIdArg(v: unknown): string {
   return v;
 }
 
+/** 一组 session id（「清理闲置」「全部删除」）：最多 500 个，每个都按 sessionIdArg 检查。 */
+export function sessionIdsArg(v: unknown): string[] {
+  if (!Array.isArray(v) || v.length > 500) throw new Error("invalid session ids");
+  return v.map(sessionIdArg);
+}
+
 /** 目录：1–4096 字的字符串（存在与否由调用方检查）。 */
 export function dirArg(v: unknown): string {
   if (typeof v !== "string" || v.length === 0 || v.length > 4096) throw new Error("invalid directory");

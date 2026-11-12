@@ -6,6 +6,7 @@ import { lastSegment } from "../repos";
 import { initialPane, sessionLabel } from "../sessions";
 import { S } from "../strings";
 import { EndSessionButton } from "./EndSessionButton";
+import { CloseIdleButton, DeleteHiddenButton } from "./SessionCleanupButtons";
 import { RefreshSessionButton } from "./RefreshSessionButton";
 import { RepoPicker } from "./RepoPicker";
 import { TerminalPane } from "./TerminalPane";
@@ -225,6 +226,7 @@ export function SessionArea({ repos, reposHint, onAddRepo, onRemoveRepo, session
         {hiddenSessions.length > 0 && (
           <button className="session more" onClick={() => setShowHidden(!showHidden)}>{S.hiddenSessions(hiddenSessions.length)}</button>
         )}
+        <CloseIdleButton sessionIds={sessions.filter((s) => s.termId !== null).map((s) => s.id)} />
         <button className="primary" title={newSessionHint} onClick={() => void panes.open()}>+ {newSession}</button>
       </div>
       {showHidden && hiddenSessions.length > 0 && (
@@ -236,6 +238,9 @@ export function SessionArea({ repos, reposHint, onAddRepo, onRemoveRepo, session
               <button onClick={() => api.unhideSession(s.id).catch(reportError)}>{S.unhideSession}</button>
             </div>
           ))}
+          <div className="actions">
+            <DeleteHiddenButton sessionIds={hiddenSessions.map((s) => s.id)} />
+          </div>
         </div>
       )}
       {error && <p className="error">{error}</p>}
