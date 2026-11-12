@@ -299,7 +299,8 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   expect(headlessLines()).toHaveLength(1);
   expect(headlessLines()[0]).toContain(`--resume ${dms2Session} --fork-session`);
   expect(headlessLines()[0]).toContain(`cwd=${beWorktree}`);
-  expect(fakeLog()).not.toMatch(new RegExp(` headless .*cwd=${escapeRe(feWorktree)}`));
+  // DMS-1 没有跑 handoff。Haiku 判断「需要你」也是 headless、也在它的目录里跑，不算（headlessLines 已经去掉了）。
+  expect(headlessLines().filter((l) => l.includes(`cwd=${feWorktree}`))).toEqual([]);
 
   // 5. “立即更新”：子 ticket 都没有新活动，直接 fork 总控生成汇总；来源变成“手动更新”。
   await progress.getByRole("button", { name: S.runFeatureSummary, exact: true }).click();
