@@ -5,7 +5,7 @@
 一个桌面版的"工作管家"，给同时开好几个 [Claude Code](https://docs.claude.com/en/docs/claude-code) session 的人用，一个 ticket 一个 session。
 支持 macOS（Apple silicon）和 Windows（x64）。MIT 协议。网站：[butler.statecore.io](https://butler.statecore.io)。
 
-几个 ticket 可以归成一个 feature，几个 feature 可以归成一个 epic。在 epic session 里商量好怎么拆，它会建出 feature 并附上计划；feature 的总控 session 再替你建 ticket、在每个 ticket 里开 session、派任务。session 之间不直接对话，而是靠本地 StateCore 里分层的共享记忆互通：一个 session 记下的进展和决定，同一个 ticket、feature 或 epic 里的其他 session 都能读到。**现在** 页按 epic、feature、ticket 列出每个 session 在做什么，需要你处理的排在最前面。每晚 Butler 还会为有进展的 ticket 写一份交接（handoff）。
+几个 ticket 可以归成一个 feature，几个 feature 可以归成一个 epic。在 epic session 里商量好怎么拆，它会建出 feature 并附上计划；feature 的总控 session 再替你建 ticket、在每个 ticket 里开 session、派任务。session 之间不直接对话，而是靠本地 StateCore 里分层的共享记忆互通：一个 session 记下的进展和决定，同一个 ticket、feature 或 epic 里的其他 session 都能读到。**现在** 页按 epic、feature、ticket 列出每个 session 在做什么，需要你处理的排在最前面。session 有要你拍板的事，会用 `ask_user` 提出来，用 `report` 汇报进展；它们显示在 epic、feature 和 Butler 总控页面的两栏里。每晚 Butler 还会为有进展的 ticket 写一份交接（handoff）。
 
 **本地优先。** Butler 的数据都存在本地的 SQLite 文件里。数据只会经由两条路离开你的电脑：你自己的 `claude`，以及你配置了的话，一个个人 LLM API。这个 API 只在"完整"隐私档位下用于记忆蒸馏，它收到的每一次调用都记在审计页上。
 
@@ -17,7 +17,7 @@
 
 - **管的是工作，不只是 session。** session 属于 ticket，ticket 属于 feature，feature 属于 epic。在 epic session 里定下的计划，会连同前面几个 feature 的进展、决定和待解决的问题，一起交给下一个 feature 的总控。
 - **记忆比 session 活得久。** 每个 session 都能 `recall` 同一个 ticket、feature 或 epic 里之前的 session 记下的东西，所以不用写文档留给下一个 session 读。上下文太长的 session 会先写交接、清空，再从记忆里接着干。
-- **你始终在回路里。** **现在** 页把等你的 session 排在最前面。停住不动的 session 会被标出来，附上可能的原因，你不点就不会去修。
+- **你始终在回路里。** **现在** 页把等你的 session 排在最前面，而且只有真要你拍板的事才算"需要你"。session 把这些问题放进 **待你决定** 列表，而不是埋在终端里。停住不动的 session 会被标出来，附上可能的原因，你不点就不会去修。
 - **少撞车。** 同一个仓库里，一个合并会和另一个 ticket 的分支冲突时，合并总控会先拦下它。
 - **交接自动写好。** 每天晚上，以及你输入 `/handoff` 时，Butler 会让你自己的 `claude` 为每个 ticket 写一份结构化的交接，为每个 feature 写一份进度汇总。
 
@@ -31,6 +31,8 @@ Butler 只支持 Claude Code。
 - `list_sessions` 显示每个 session 在做什么。
 - `session_activity` 显示某个 session 的动态和它最后一条命令的输出（最多 4 KB）。
 - `end_session` 关掉这个 ticket 里一个已经完成的 session，效果和点它的 × 一样。正在工作的、正显示等你回应的提示的、没在运行的 session，以及调用者自己，它都会拒绝。
+
+Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕，所以不会在信任对话框或权限确认上按回车；交完之后还会确认任务真的提交了。Butler 开的其他 session（包括 ticket 的 session）也有同一个 `butler-sessions` server，但只有 `ask_user` 和 `report` 两个工具（见下面的 **待你决定和汇报**）。
 
 有几条刻意设下的限制：
 - **通信：** 总控不能往别的 session 里打字。session 之间靠共享的 ticket 记忆协作。
@@ -48,7 +50,7 @@ Butler 只支持 Claude Code。
 
   feature 页最上面是 **整体进度**：跨 feature 里所有 ticket 的汇总，写着卡在哪里、下一步做什么，下面是 ticket 和它们 PR 的表格。汇总由晚间任务为有新动静的 feature 生成，或者在总控里输入 `/handoff`，或者点 **立即更新**。它从不显示完成百分比。整体进度和 ticket 表格都可以点标题前的三角形折叠；折叠后整体进度只显示汇总的开头，以及有几件事卡着。不管上面内容有多少，终端至少占窗口一半的高度。
 
-  ticket 表格的状态列显示每个 ticket 正在运行的 session 此刻在做什么，每 10 秒刷新一次：写代码（以及哪个文件）、读代码、运行带 pre-push hook 的 `git push`、盯 CI、跑测试或其他命令（以及跑了多久）、思考、等你批准，或者等你回话。一轮对话结束后还在跑的命令标为 **后台**。没有运行中 session 的 ticket 显示它平常的状态；有好几个的，显示最需要你的那个。不在 feature 里的 ticket 暂时还没有这一列。
+  ticket 表格的状态列显示每个 ticket 正在运行的 session 此刻在做什么，每 10 秒刷新一次：写代码（以及哪个文件）、读代码、运行带 pre-push hook 的 `git push`、盯 CI、跑测试或其他命令（以及跑了多久）、思考、等你批准，或者等你回话。一轮对话结束后还在跑的命令标为 **后台**；已经被停掉的、或终端重新打开之前就开始的后台命令，不会再显示成在跑。没有运行中 session 的 ticket 显示它平常的状态；有好几个的，显示最需要你的那个。不在 feature 里的 ticket 暂时还没有这一列。
 
   **卡住的 session。** 没有固定的超时，所以一个还在干活的慢 pre-push hook 不会被打扰。Butler 每 3 分钟看一次 feature 里每个 ticket 的运行中 session。如果 transcript、命令输出和 session 子进程的 CPU 占用连续两次都没变化，Butler 会用你自己的 `claude`（不带任何工具）问一次：这个 session 是不是真卡住了。它会发送当前动态、最后一条命令的输出和终端末尾的内容。如果答案是"是"，ticket 那一行和侧栏里的 feature 上会出现一个红点。不会弹系统通知。点红点会在这一行下面展开一个面板，写着可能的原因、最后的输出和该怎么办：
   - **开新 session 解决** 在 feature 的工作区里开一个新 session，把详情交给它。卡住的 session 保持运行，两者共用它的 worktree，所以新 session 的任务里写明：切分支或停进程前先告诉卡住的 session，杀任何东西前先问你，问题解决后告诉总控。
@@ -62,11 +64,13 @@ Butler 只支持 Claude Code。
   从规划到开工：
   1. 在 epic 页上打开一个 **epic session**。它运行在 epic 的工作区里，能读 epic 的所有仓库。在里面讨论要做什么、怎么拆成几个 feature。
   2. 某个 feature 定下来后，epic session 用 `create_feature` 建出它。它会传入名字、feature 用到的仓库（从 epic 的仓库里选；epic 只有一个仓库时可以不填）以及一份不超过 4,000 字符的简短规划：做什么、为什么、已经定了什么。这一步不建 ticket。
-  3. feature 出现在 epic 页和侧栏的 epic 下面，它的规划在 feature 页上显示为 **规划**。Butler 不会替它打开总控。
+  3. feature 出现在 epic 页和侧栏的 epic 下面，它的规划在 feature 页上显示为 **规划**。除非 epic session 让它开工（见下面的 **从 epic 一路开工**），Butler 不会替它打开总控。
   4. 点进 feature，打开它的总控。第一次打开时，Butler 会把规划作为总控的第一条消息发过去，你在终端里能看到。随规划一起发的还有 epic 里其他 feature 的名字、状态、最新进展、阻塞、决定和待解决的问题，已归档的也包括在内并标明已归档。消息里会告诉总控：这些都是数据，不是指令。内容太长时只截断数据部分。恢复总控或再开一个总控时不会再发。没有规划的 feature（比如你移进来的）不会收到这条消息。
   5. 总控建 ticket、开 session，和其他 feature 一样。
 
-  epic session 的 `butler-sessions` server 提供 `list_features`、`list_repos`、`create_feature`、`list_sessions`、`session_activity` 和 `end_session`。`list_sessions` 和 `session_activity` 还会显示每个 session 的最后一条回复。`end_session` 关掉 epic 里某个未归档 feature 已经完成的 session：它的总控、修复 session，或它某个 ticket 的 session。它从不关 epic session 自己，拒绝的规则和 ticket 总控的一样。属于某个 epic 的 feature，其总控还有 `epic_context`，用来查看 epic 里的其他 feature。这两个工具读的都是 Butler 的最新数据，所以 session 不必依赖开始时被告知的内容。
+  epic session 的 `butler-sessions` server 提供 `list_features`、`list_repos`、`create_feature`、`start_feature`、`list_sessions`、`session_activity` 和 `end_session`，另有 `ask_user` 和 `report`。`list_sessions` 和 `session_activity` 还会显示每个 session 的最后一条回复。`end_session` 关掉 epic 里某个未归档 feature 已经完成的 session：它的总控、修复 session，或它某个 ticket 的 session。它从不关 epic session 自己，拒绝的规则和 ticket 总控的一样。属于某个 epic 的 feature，其总控还有 `epic_context`，用来查看 epic 里的其他 feature。这两个工具读的都是 Butler 的最新数据，所以 session 不必依赖开始时被告知的内容。
+
+  **从 epic 一路开工。** 你同意开工之后，epic session 可以直接打开某个 feature 的总控并让它开工，不用你点进 feature。它调用 `start_feature`，或者调用带 `start` 的 `create_feature`。总控的第一条消息带着规划和 epic 里其他 feature 的数据，并告诉它不用等你确认，按规划建 ticket、在每个 ticket 里开 session；需要你决定的事用 `ask_user`，做完或卡住了用 `report` 汇报。如果这个 feature 的总控已经开着，`start_feature` 不会再开第二个：给了额外的 `instructions` 就在总控空下来时转给它，没给就只说明总控正在运行。feature 没有规划时，epic session 必须给 `instructions`。一个 epic 同时最多 4 个 feature 总控在跑，每个 feature 照旧最多 8 个终端。`create_feature` 建好了 feature 但总控开不了（比如已到上限）时，feature 照样建好，epic session 会被告知原因。
 
   epic 页每个 feature 一行：汇总的第一句话和一个状态（有 ticket 卡住、等你回话、未开始或进行中）。点一行看详情；ticket 只在 feature 页上列出。归档的 feature 折叠在 **已归档** 下。行下面是仓库、epic session，以及一个至少占窗口一半高度的终端。侧栏里 Epic 分组在 Feature 上面，每个 epic 都能折叠。等待标记和红点会从 ticket 传到 feature 再传到 epic，epic 折叠时也看得见。
 
@@ -81,8 +85,24 @@ Butler 只支持 Claude Code。
   - **epic session 调用 `create_feature` 时。** epic 里其他未归档的 feature 会在后台做同样的刷新。`create_feature` 不等它完成。
 
   发给总控的第一条消息也会在总控一打开时就开始一轮对话。
+- **待你决定和汇报。** Butler 开的每个 session 都有两个工具，`ask_user` 和 `report`，所以你不用再在终端里翻找正在等你的那个问题。
+  - `ask_user` 记下一件要你拍板的事，可以带选项和背景，然后这一轮结束。
+  - `report` 把进展交给 session 上面的总控和你。类型是 `progress`（进展）、`done`（完成）或 `blocked`（卡住）。`done` 和 `blocked` 的汇报会在最近一个开着的总控停下来、你也没在打字时，输入到它的终端里：ticket 的 session 先找它的 ticket 总控，再找 feature 总控，再找 epic session；epic 里 feature 的总控找 epic session；epic 的 `done`、`blocked` 汇报在 Butler 总控开着时送给它。`progress` 只存不送。上面没有谁能收到时，汇报只存下来，并告诉 session。
+  - epic 页和 feature 页在终端上面有两栏。**汇报** 按时间倒序列出 session 的汇报，标明是谁、什么时候。**待你决定** 每个问题一张卡片，有背景、选项、回答框、**去终端** 和 **不用了**。没有内容时两栏收起。**现在** 页的 **需要你** 下面也显示同样的卡片。
+  - 在卡片上选一个选项或打字回答，或者直接在终端里回答都行。卡片上的回答要等 session 停下来才送，送的时候是"你问的『…』，用户的回答：…"，卡片上会写明在等它停下。如果你先在终端里回答了，卡片自己关掉。点 **不用了** 不会送任何东西。
+  - **需要你** 现在只算真要你拍板的事：屏幕上的权限确认、提问或退出计划模式的确认，未决的 `ask_user`，真的卡住的 session，以及确实在请你决定的回复。"要我继续吗？""还有别的吗？"这类回复不算，总控也不会为子 session 已经提过的事再出现一行。侧栏的数字是这些行加上未决的待你决定。
+  - 这两个工具在 Butler 给 session 写的设置里是放行的，第一次用不会弹权限确认；同一个 server 的其他工具照样要确认。
+- **Butler 总控。** 一个在所有 epic 之上的全局 session，从侧栏的 **Butler 总控** 打开。它的工作目录是 `~/.butler/workspaces/_butler`，用的是 workspace 记忆。同一时间只有一个：已经开着时，点按钮会切到它，想换另一段对话要先在终端里退出。它的页面在终端上面有同样的两栏，显示全部内容。
+  - **它能看**所有 epic、feature 和 ticket，每个 PR 的 review 和 CI 状态，每个开着的 session 在做什么、是不是需要你，以及未决的待你决定和最近的汇报（`list_epics`、`list_features`、`list_tickets`、`list_prs`、`list_sessions`、`session_activity`、`list_inbox`）。
+  - **它能做的**只有说话：`send_message` 给开着的 epic session 或 feature 总控带一句话，等它停下来、你也没在打字时送进去。`refresh_session` 给某个 session 换新。`ask_user` 和 `report` 和别的 session 一样；它自己的汇报只存着。
+  - **它不能**建、删或结束任何东西，也不能开 session。这些留给 epic 和 feature 总控。
+  - 只读的工具在 Butler 给它写的设置里是放行的，巡检时不会每个工具都停下来等确认；`send_message` 和 `refresh_session` 照样要确认。
+  - **每天巡检。** 设置 **每天几点让 Butler 总控巡检一次**（`butlerPatrolTime`，默认关），到点时 Butler 打开（或接着用）Butler 总控，让它看一遍 PR、CI 和待你决定的事，需要的话提醒 epic 和 feature 总控，并用 `ask_user` 列出要你亲自做的事。Butler 总控正忙就等它停下来。因为电脑睡眠或 Butler 没开而错过的巡检，当天下一次醒来、解锁或启动时补一次。它每天最多开一次 session。详见[配置 Butler](docs/configuration.zh-CN.md#调度与-handoff)。
+  - Butler 总控不会被自动换新，也不会因为闲置被自动关闭。
 - **合并总控。** 同一个仓库里的两个 ticket 快要撞车时，Butler 会在合并前介入。它盯着自己开的 session，不管属于哪个 epic、feature 或 ticket，只检查合并进目标分支，以及在共用文件夹里切分支这两类操作。它用 git 判断分支是否冲突，冲突的那个先合进去之前，会先拦下这次合并。详见[配置 Butler](docs/configuration.zh-CN.md#合并总控)。
 - **关掉已完成的 session。** 总控或 epic session 可以用 `end_session` 关掉一个已经停下、在等输入的 session。正在工作的、在等你回答的，以及它自己，它都会拒绝。
+- **清理 session。** 开着不用的终端每个要占几百 MB。session 闲置超过 `idleCloseMinutes`（默认 180 分钟，`0` 关掉，最短 10）后，Butler 会让它先写 handoff，再结束终端。session 仍留在列表里，可以恢复。有要你决定的事、有后台任务、在等合并或 CI 结果，或者（总控）它管的子 session 还在干活时都不会关。电脑睡着的时间不算闲置。隐藏超过 14 天的 session 会从 Butler 里删掉，对话记录文件留着。session 栏的 **清理闲置** 会立刻关掉闲置 5 分钟以上的 session，**已隐藏** 列表里有 **全部删除**。详见[配置 Butler](docs/configuration.zh-CN.md#记忆statecore)。
+- **换新不丢对话。** session 换新时（↻ 按钮、总控的 `refresh_session`，或者上下文太长时自动换新），Butler 先让它写 handoff，等记忆真的存好，同时把最近几轮对话存到 `~/.butler/refresh/<session>.md`，不调用模型。`/clear` 之后 session 会 recall 那份 handoff、读这个文件，然后接着做换新前在做的事；如果当时在等什么，就说一句在等什么并继续等。不会再停住等你的下一条指令。
 - **合并后清理 worktree。** 一旦 handoff 报告某个 ticket 的 PR 已合并，Butler 就用 `git worktree remove` 删掉这个 ticket 的 worktree。分支保留，在那里再开 session 时会重建 worktree。有未提交改动或未跟踪文件的 worktree，或者自己的 session 还在终端里运行的，Butler 不会删。这时 ticket 页会说明原因，并给一个 **重新检查** 按钮，那个终端退出时 Butler 也会再试一次。被 `.gitignore` 忽略的文件（`node_modules`、本地的 `.env`）会随 worktree 一起删掉。
 - **晚间 handoff。** 在你选定的时间，Butler 让你自己登录好的 `claude` 为每个有动静的 ticket 写一份结构化的 handoff。
   - `Edit`、`Write` 和 `NotebookEdit` 一律禁止。
@@ -91,7 +111,7 @@ Butler 只支持 Claude Code。
   - 这些运行并不是严格只读的。如果你的设置允许了比如 `Bash(npm:*)` 或一个能写的 MCP 工具，它们也能用。
 
   在 session 里你也可以输入 `/handoff`。在 feature 的总控里，`/handoff` 写的是 feature 的汇总而不是 ticket handoff，之后 Butler 会在后台为自上次 handoff 以来有动静的 ticket 补写 handoff。
-- **首页。** **现在** 页列出 Butler 开的每个 session，按 epic、feature 和 ticket 分组，显示每个在做什么、它的 PR 和 CI，以及已经做了多久。等你的 session（一个问题、一个确认，或卡住了）置顶在 **需要你** 下面，侧栏入口会显示有几个。点一行打开它的终端。最下面一行显示最近 7 天的 token 用量：总量、缓存读取的占比，以及上下文达到 20 万 token 以上的轮次占比。它统计 Butler 开的 session、它们的子 agent，以及 Butler 在后台启动的 `claude` 运行（handoff、feature 汇总、卡住检测），数据读自你本机上 Claude Code 的 transcript。点这一行能看到按类别（**ticket session**、**总控**、**子 agent**、**后台任务**）和按模型的拆分。占比按相对价格加权，只用于比较；Butler 不会换算成钱。
+- **首页。** **现在** 页列出 Butler 开的每个 session，按 epic、feature 和 ticket 分组，显示每个在做什么、它的 PR 和 CI，以及已经做了多久。等你的 session（一个确认、一件待你决定的事、一条请你决定的回复，或真的卡住了）置顶在 **需要你** 下面，侧栏入口会显示有几个。点一行打开它的终端。页面最上面的 **实况** 把正在干活的 session 画成 Butler 卡片四周的小终端卡片：每张卡片有 ticket 号、仓库、状态药丸和最近 3 次工具调用，session 写记忆时一个蓝色光点沿虚线流向 Butler，读记忆时一个绿色光点从 Butler 流回 session。在等你的卡片边框变黄并写着 **需要你**。最多画 8 张卡片，没人在干活时会这样写。页面和分组里的"在干活"数字只算真在干活的 session（思考中、跑工具、后台命令）；停下来但开着 PR 的 session 算空闲。动画遵循系统的"减少动态效果"设置。最下面一行显示最近 7 天的 token 用量：总量、缓存读取的占比，以及上下文达到 20 万 token 以上的轮次占比。它统计 Butler 开的 session、它们的子 agent，以及 Butler 在后台启动的 `claude` 运行（handoff、feature 汇总、卡住检测），数据读自你本机上 Claude Code 的 transcript。点这一行能看到按类别（**ticket session**、**总控**、**子 agent**、**后台任务**）和按模型的拆分。占比按相对价格加权，只用于比较；Butler 不会换算成钱。
 - **防止休眠。** 想在你离开、盖子开着的时候让 session 继续跑，就勾上侧栏底部或托盘菜单里的 **防止休眠**。开着时电脑空闲也不会睡眠，屏幕保持亮着。取消勾选、电脑睡眠（合上盖子）或 Butler 退出时它会关掉，Butler 每次启动时它都是关的。合上盖子照样会让 Mac 睡眠；Windows 上取决于你的合盖设置。
 - **记忆。** 进展、决定、未完成的跟进和跨 ticket 的经验都存进本地的 [StateCore](https://github.com/yul761/StateCore)。Butler 开的每个 session 都能 `recall` 它们。ticket 页有个 **记忆** 标签页，能看到每条记录的历史。
 - **可选的个人 LLM API。** 在"完整"隐私档位下，Butler 会在每次晚间任务之后，用一个你自己付费的、兼容 OpenAI 的 API 来蒸馏 StateCore 记忆。每次调用都经过隐私网关，有审计页和每月预算。在你配置服务商并选择"完整"档位之前，什么都不会发出去；见[隐私模型](#隐私模型)。
@@ -182,6 +202,9 @@ NSIS 安装包目前没有签名（见[代码签名政策](#代码签名政策)�
 | `~/.butler/mcp/features/<id>.json` | feature 总控的 `--mcp-config` 文件 |
 | `~/.butler/mcp/epics/<id>.json` | epic session 的 `--mcp-config` 文件，epic 归档时删除 |
 | `~/.butler/workspaces/<ticket>/` | ticket 总控运行所在的空文件夹 |
+| `~/.butler/workspaces/_butler/` | Butler 总控的工作目录 |
+| `~/.butler/mcp/butler.json` | Butler 总控的 `--mcp-config` 文件 |
+| `~/.butler/refresh/<session>.md` | 换新前存下的最近几轮对话，换新后读回；随 session 一起删除 |
 | `~/.butler/mcp/project-*.json`、`local-*.json` | 给无人值守运行用的 MCP server 配置副本。只有开启 **后台 handoff 也加载本地级的 MCP…**（`headlessProjectMcp`）时才会写。因为可能含有 token，这些是私有文件。 |
 | `~/.butler/logs/main.log` | 日志 |
 
