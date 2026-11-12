@@ -180,7 +180,16 @@ describe("epic memory (design 2026-11-01)", () => {
 
 describe("sessions tools allowed without a prompt (BTL-190 2+3)", () => {
   it("are only ask_user and report of the sessions server", () => {
-    expect(SESSIONS_AUTO_ALLOW).toEqual(["mcp__butler-sessions__ask_user", "mcp__butler-sessions__report"]);
+    expect(SESSIONS_AUTO_ALLOW).toEqual([
+      "mcp__butler-sessions__ask_user", "mcp__butler-sessions__report",
+      "mcp__butler-sessions__list_epics", "mcp__butler-sessions__list_features", "mcp__butler-sessions__list_tickets",
+      "mcp__butler-sessions__list_prs", "mcp__butler-sessions__list_sessions", "mcp__butler-sessions__session_activity",
+      "mcp__butler-sessions__list_inbox",
+    ]);
+    // 会动别的终端或建东西的不在里面。
+    for (const t of ["start_session", "end_session", "send_message", "refresh_session", "create_ticket", "create_feature", "start_feature"]) {
+      expect(SESSIONS_AUTO_ALLOW).not.toContain(`mcp__butler-sessions__${t}`);
+    }
   });
 });
 
