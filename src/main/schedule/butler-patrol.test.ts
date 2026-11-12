@@ -136,6 +136,23 @@ describe("ButlerPatrol (BTL-190 5)", () => {
     expect(opened).toHaveLength(1);
   });
 
+  it("does not paste into a Butler 总控 that something else opened meanwhile; it goes through the guard next time", async () => {
+    const { patrol, jobs, st, opened, submitted, delivered } = setup();
+    st.openResult = { ok: true, termId: "t-b-1", alreadyOpen: true } as OpenSessionResult;
+    await patrol.check();
+    expect(opened).toHaveLength(1);
+    expect(submitted).toEqual([]);
+    expect(jobs.get(JOB_PATROL).lastRunAt).toBeNull();
+    st.running = butler("b-1");
+    st.block = "typing";
+    await patrol.check();
+    expect(delivered).toEqual([]);
+    st.block = null;
+    await patrol.check();
+    expect(delivered).toEqual([["t-b-1", "巡检一下"]]);
+    expect(jobs.get(JOB_PATROL).lastStatus).toBe("ok");
+  });
+
   it("gives up for the day when the session it opened is closed before the patrol landed, or cannot be opened", async () => {
     const closed = setup();
     closed.st.submitResult = "exited";

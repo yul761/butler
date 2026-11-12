@@ -214,6 +214,15 @@ describe("captureCommandHandoff in an epic session", () => {
   });
 });
 
+describe("captureCommandHandoff in the Butler 总控", () => {
+  it("stores nothing, even a block naming an existing ticket", async () => {
+    const { deps, sessions, handoffs } = setup();
+    sessions.insertIfAbsent({ id: "b1", ticketKey: null, cwd: "/b", origin: "butler", createdAt: 1, butler: true });
+    expect(await captureCommandHandoff(deps, { sessionId: "b1", transcriptPath: transcript(emptyHandoff("PROJ-1")) })).toBeNull();
+    expect(handoffs.listByTicket("PROJ-1")).toEqual([]);
+  });
+});
+
 describe("captureCommandHandoff in a feature coordinator", () => {
   const userHandoff = { type: "user", message: { role: "user", content: "/handoff" } };
   const write = (entries: object[]) => {

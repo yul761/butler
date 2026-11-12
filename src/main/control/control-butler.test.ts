@@ -199,6 +199,18 @@ describe("Butler 总控 send_message and refresh_session (BTL-190 5)", () => {
     expect(delivered).toEqual([]);
   });
 
+  it("refuses send_message and refresh_session from a Butler 总控 whose terminal is closed", async () => {
+    const { call, delivered, refreshed, open } = setup();
+    open.delete("bt");
+    expect((await call({ op: "send_message", session: "ep", text: "t" })).ok).toBe(false);
+    expect((await call({ op: "refresh_session", session: "ep" })).ok).toBe(false);
+    expect((await call({ op: "refresh_session", session: "ep", from: "fc" })).ok).toBe(false);
+    expect((await call({ op: "refresh_session", session: "ep", from: null })).ok).toBe(false);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(delivered).toEqual([]);
+    expect(refreshed).toEqual([]);
+  });
+
   it("refreshes any stopped session but itself", async () => {
     const { call, refreshed } = setup();
     expect(value(await call({ op: "refresh_session", session: "ep" }))).toEqual({ started: true });

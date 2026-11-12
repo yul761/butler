@@ -35,7 +35,7 @@ const fail = (error: string): ControlResult => ({ v: 1, ok: false, error });
 
 /**
  * Butler 总控的请求（BTL-190 第 5 点）：全部只读，加上 send_message 和 refresh_session。不建、不删、不结束，也不开 session。
- * 请求文件谁都能写：往终端里写东西的 send_message 要求 from 是 Butler 总控自己。
+ * 请求文件谁都能写：往终端里写东西的 send_message 和换新别人的 refresh_session 要求 from 是开着终端的 Butler 总控自己。
  */
 export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (req: Exclude<ButlerControlRequest, { op: InboxControlOp["op"] }>) => Promise<ControlResult> {
   const name = (r: { repoPath: string }) => basename(r.repoPath);
@@ -72,6 +72,8 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
       return { ticket: null, feature: named(f), epic: epicOf(f ? f.epicId : s.epicId), repo: null };
     };
     const self = req.from ? (d.sessions.head(req.from) ?? null) : null;
+    /** 往别的 session 里写东西、换新别的 session 的请求：from 必须是开着终端的 Butler 总控（请求文件谁都能写）。 */
+    const fromOpenButler = !!self?.butler && !!d.sessionService.termIdOf(self.id);
 
     switch (req.op) {
       case "list_epics":
@@ -128,10 +130,11 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
       case "list_inbox":
         return ok(b.inbox.view({ all: true }));
       case "refresh_session":
+        if (!fromOpenButler) return fail(M().ctlInboxNotYours);
         return h.refreshSession(req, () => true);
       case "send_message": {
-        // 只有 Butler 总控自己能往别的终端里写。
-        if (!self?.butler) return fail(M().ctlInboxNotYours);
+        // 只有开着的 Butler 总控自己能往别的终端里写。
+        if (!fromOpenButler) return fail(M().ctlInboxNotYours);
         const target = d.sessions.head(req.session);
         if (!target || target.id === self.id) return fail(M().ctlNoSuchSession(req.session));
         const role = roleOf(target);

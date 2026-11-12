@@ -77,6 +77,11 @@ export class ButlerPatrol {
     const latest = this.d.latest();
     const r = await this.d.open(latest ? { sessionId: latest.id } : {});
     if (!r.ok) return this.record("failed", r.reason);
+    // 刚好别处（用户点开、epic 报告）先开了它：那个终端可能正有人在用，不直接贴，下一次 check 走 guard 再送。
+    if (r.alreadyOpen) {
+      this.openedFor = null;
+      return;
+    }
     this.d.onChange?.();
     const res = await this.d.submit(r.termId, this.d.message());
     if (res === "sent") return this.record("ok", null);
