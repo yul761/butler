@@ -71,13 +71,14 @@ import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
 import { HookInbox } from "./hooks/inbox";
 import { registerIpc } from "./ipc/register";
-import { ensureDirs, resolvePaths } from "./paths";
+import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { ActivityMonitor, activityIntervals } from "./sessions/activity-monitor";
 import { sessionRegistryName } from "./sessions/activity-sources";
 import { DeliveryGuard, type DeliveryGuardDeps } from "./sessions/delivery-guard";
+import { writeRefreshTail } from "./sessions/refresh-tail";
 import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
@@ -775,8 +776,11 @@ async function bootstrap(): Promise<void> {
     openedAt: (termId) => pty.openedAt(termId),
     // BUTLER_REFRESH_OPEN_QUIET_MS 只给 e2e 用（后台窗口模式下才算数）：它刚打开终端就要看自动换新，不想多等 1 分钟。
     openQuietMs: process.env.BUTLER_BACKGROUND_WINDOWS === "1" ? Number(process.env.BUTLER_REFRESH_OPEN_QUIET_MS) || undefined : undefined,
-    // 「需要你」按 head 跟踪：/clear 之后终端里跑的是新 id。
-    suppressNeedsYou: (termId) => needsYou.suppressNext(sessions.head(termId)?.id ?? termId),
+    // handoff 收进来时 ingest 已经把记忆同步排进队列（syncTicket / syncFeature）：/clear 之前等它写完（BTL-190 第 6 点）。
+    memoryIdle: () => memory.idle(),
+    // 换新前的对话尾巴：读旧 head 的 transcript，按终端的 id 存（同一个终端下一次换新覆盖它）。
+    writeTail: (oldHeadId, termId, kind) =>
+      writeRefreshTail({ transcript: findTranscript(paths.claudeProjects, oldHeadId), out: refreshTailPath(paths, termId), sessionId: oldHeadId, kind }),
     notify,
     now: Date.now,
     // /clear 之后没有 Stop：每一步输入之前先重读活动（R28）。

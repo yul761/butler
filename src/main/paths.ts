@@ -16,6 +16,8 @@ export interface ButlerPaths {
   statecore: string;
   /** 总控 session 的工作区目录（每个 ticket 一个空目录）。 */
   workspaces: string;
+  /** 换新前的对话尾巴（BTL-190 第 6 点）：每个 session 一个 <session id>.md，见 refreshTailPath。 */
+  refresh: string;
   /** 总控开子 session 的请求和结果（sessions MCP server ↔ Butler，走文件）。 */
   controlRequests: string;
   controlResults: string;
@@ -63,6 +65,7 @@ export function resolvePaths(
     mcp: join(butlerHome, "mcp"),
     statecore: join(butlerHome, "statecore"),
     workspaces: join(butlerHome, "workspaces"),
+    refresh: join(butlerHome, "refresh"),
     controlRequests: join(butlerHome, "control", "requests"),
     controlResults: join(butlerHome, "control", "results"),
     gateRequests: join(butlerHome, "gate", "requests"),
@@ -77,8 +80,16 @@ export function resolvePaths(
   };
 }
 
+/**
+ * 这个 session 换新前的对话尾巴文件（BTL-190 第 6 点）。路径只由 session id 决定：下一次换新覆盖它，删 session 时按 id 找到它一起删。
+ * id 里只留字母、数字、- 和 _（Claude Code 的 session id 是 UUID，本来就是这样），免得拼出别的目录。
+ */
+export function refreshTailPath(p: Pick<ButlerPaths, "refresh">, sessionId: string): string {
+  return join(p.refresh, `${sessionId.replace(/[^A-Za-z0-9_-]/g, "_")}.md`);
+}
+
 export async function ensureDirs(p: ButlerPaths): Promise<void> {
-  for (const dir of [p.home, p.inbox, p.inboxBad, p.bin, p.logs, p.mcp, p.statecore, p.workspaces, p.controlRequests, p.controlResults, p.gateRequests, p.gateResults]) {
+  for (const dir of [p.home, p.inbox, p.inboxBad, p.bin, p.logs, p.mcp, p.statecore, p.workspaces, p.refresh, p.controlRequests, p.controlResults, p.gateRequests, p.gateResults]) {
     await mkdir(dir, { recursive: true });
   }
 }

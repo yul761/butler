@@ -125,19 +125,8 @@ export class NeedsYouTracker {
   /** 等名额的判断，键是 session id：同一个 session 有了新回复就顶掉排着的旧的。 */
   private readonly queue = new Map<string, Job>();
   private running = 0;
-  /** suppressNext 记下的 session 和当时它最后一条回复的 id（没有为 null）：之后第一条不同的回复不判断，直接记成不需要你。 */
-  private readonly skips = new Map<string, string | null>();
 
   constructor(private readonly d: NeedsYouDeps) {}
-
-  /**
-   * 这个 session（head 的 id）的下一条新回复不判断，直接记成不需要你（R35）：Butler 换新后输入的「接着做」那句话，
-   * 它的回复只是说做到哪了、等用户的指令，不是在问用户。只跳过一条；session 不在了就作废。
-   */
-  suppressNext(sessionId: string): void {
-    const s = this.d.sessions().find((x) => x.id === sessionId);
-    this.skips.set(sessionId, s?.reply?.id ?? this.entries.get(sessionId)?.replyId ?? null);
-  }
 
   /** 每个活动 tick 之后调：停着、活动是 waiting、回复 id 没判断过的，排队判断（最多 2 个同时）。 */
   update(): void {
@@ -145,7 +134,6 @@ export class NeedsYouTracker {
     const live = new Set(heads.map((s) => s.id));
     for (const id of this.entries.keys()) if (!live.has(id)) this.entries.delete(id);
     for (const id of this.queue.keys()) if (!live.has(id)) this.queue.delete(id);
-    for (const id of this.skips.keys()) if (!live.has(id)) this.skips.delete(id);
     for (const s of heads) {
       const reply = stoppedReply(s);
       const e = this.entries.get(s.id);
@@ -156,12 +144,6 @@ export class NeedsYouTracker {
         continue;
       }
       if (e?.replyId === reply.id) continue;
-      if (this.skips.has(s.id) && this.skips.get(s.id) !== reply.id) {
-        this.skips.delete(s.id);
-        this.queue.delete(s.id);
-        this.entries.set(s.id, { replyId: reply.id, verdict: { needsYou: false, reason: "" }, answered: false });
-        continue;
-      }
       this.entries.set(s.id, { replyId: reply.id, verdict: null, answered: false });
       this.queue.set(s.id, { sessionId: s.id, replyId: reply.id, text: tail(reply.text, NEEDS_YOU_REPLY_CHARS), cwd: s.cwd });
     }

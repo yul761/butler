@@ -9,6 +9,8 @@ import type { DeliverResult } from "./pty-manager";
 export const REFRESH_HANDOFF_MS = 600_000, REFRESH_CLEAR_MS = 60_000, REFRESH_COOLDOWN_MS = 1_800_000;
 /** 终端打开（新开或恢复）之后这么久之内不自动换新（R36）：用户刚打开它，多半马上要用。手动和总控触发不看。 */
 export const REFRESH_OPEN_QUIET_MS = 60_000;
+/** handoff 收进来以后等记忆写完最多 60 秒（BTL-190 第 6 点），超时记日志照样 /clear。 */
+export const REFRESH_MEMORY_MS = 60_000;
 /** 等待时多久看一次：handoff 收进来没有、新 id 接上没有、session 停下来没有。 */
 const POLL_MS = 1_000;
 /** epic 的进度要打开 StateCore 读，5 秒查一次。 */
@@ -89,8 +91,16 @@ export interface SessionRefresherDeps {
   openedAt?: (termId: string) => number;
   /** 刚打开多久之内不自动换新，默认 REFRESH_OPEN_QUIET_MS（e2e 调短）。 */
   openQuietMs?: number;
-  /** 接着做的话输入以后：它的回复不进「需要你」（R35，NeedsYouTracker.suppressNext）。参数是终端的 id，按链找 head。 */
-  suppressNeedsYou?: (sessionId: string) => void;
+  /**
+   * handoff 收进来以后、/clear 之前：等记忆的写入队列空下来（MemoryService.idle），免得清空后 recall 到的还是上一份 handoff。
+   * 最多等 REFRESH_MEMORY_MS。不给就不等。
+   */
+  memoryIdle?: () => Promise<void>;
+  /**
+   * /clear 之前：Butler 自己读旧 transcript（oldHeadId 的），把 handoff 请求之前的最近对话写进这个 session 的尾巴文件（BTL-190 第 6 点），
+   * 返回文件路径；没写成返回 null（接着做的话就不提它）。termId 决定文件名：同一个终端下一次换新覆盖它。不给就不写。
+   */
+  writeTail?: (oldHeadId: string, termId: string, kind: RefreshKind) => Promise<string | null>;
   /** 换新开始、换了一步、结束时调用（「现在」页显示"换新中"）。 */
   notify(): void;
   now(): number;
@@ -123,7 +133,7 @@ interface Run {
 }
 
 /**
- * 给上下文太长的 session 换新（计划 16）：写 handoff → 等收进来 → /clear → 等新 id 接上 → 发接着做的话。
+ * 给上下文太长的 session 换新（计划 16）：写 handoff → 等收进来 → 等记忆写完、存下对话尾巴（BTL-190）→ /clear → 等新 id 接上 → 发接着做的话。
  * 每一步输入之前都要 session 重新停下来、用户没在打字、没有草稿；任何一步失败都停在原地，什么都不再输入，30 分钟内不再自动试。
  */
 export class SessionRefresher {
@@ -290,6 +300,9 @@ export class SessionRefresher {
 
     // 第二步：/clear，等 SessionStart（source=clear）把新 id 接上 replaced_by。
     this.setStep(run, "clear");
+    // 清空之前：等记忆写完（recall 要拿到刚收进来的这份），再把换新前的最近对话存下来（清空之后旧 transcript 还在，但新 session 不知道它）。
+    await this.waitForMemory(run);
+    const tailPath = await this.saveTail(run);
     const beforeClear = await this.untilQuiet(run);
     if (typeof beforeClear === "string") return this.fail(run, `before /clear: ${beforeClear}`);
     this.alive();
@@ -302,19 +315,49 @@ export class SessionRefresher {
     }, REFRESH_CLEAR_MS, POLL_MS);
     if (!cleared) return this.fail(run, `no new session id within ${REFRESH_CLEAR_MS / 1000} seconds after /clear`);
 
-    // 第三步：只让它调回进度、说一两句做到哪了，然后等用户。
+    // 第三步：调回 handoff、读对话尾巴，接着做换新前在做的事（BTL-190 第 6 点）。它的回复照常判断「需要你」：
+    // 接着干完以后真要问用户的那一条不能吞掉。
     this.setStep(run, "resume");
     const beforeResume = await this.untilQuiet(run);
     if (typeof beforeResume === "string") return this.fail(run, `before the resume message: ${beforeResume}`);
-    const typedResume = await this.type(run, M().refreshResume(run.kind, run.ticket), beforeResume);
+    const typedResume = await this.type(run, M().refreshResume(run.kind, run.ticket, tailPath), beforeResume);
     if (typedResume) return this.fail(run, `typing the resume message: ${typedResume}`);
-    // 它对接着做的话的回复只是说做到哪了：不进「需要你」（R35）。
-    try {
-      this.d.suppressNeedsYou?.(run.termId);
-    } catch (e) {
-      this.d.log(`refresh ${run.headId}: skipping the needs-you check of the resume reply failed`, e);
-    }
     return "done";
+  }
+
+  /** 等记忆的写入队列空下来，最多 REFRESH_MEMORY_MS；超时或出错只记日志，照样往下走（handoff 已经在库里，同步迟早会写进去）。 */
+  private async waitForMemory(run: Run): Promise<void> {
+    if (!this.d.memoryIdle) return;
+    const memoryIdle = this.d.memoryIdle;
+    let settled = false;
+    void (async () => {
+      try {
+        await memoryIdle();
+      } catch (e) {
+        this.d.log(`refresh ${run.headId}: waiting for the memory sync failed`, e);
+      } finally {
+        settled = true;
+      }
+    })();
+    const idle = await this.until(() => settled, REFRESH_MEMORY_MS, POLL_MS);
+    if (!idle) this.d.log(`refresh ${run.headId}: the memory sync did not finish within ${REFRESH_MEMORY_MS / 1000} seconds; clearing anyway`);
+  }
+
+  /** 写对话尾巴；写不成（没有 transcript、出错）返回 null，换新照样继续，接着做的话里不提它。 */
+  private async saveTail(run: Run): Promise<string | null> {
+    if (!this.d.writeTail) return null;
+    this.alive();
+    const oldHead = this.d.head(run.termId)?.id ?? run.headId;
+    let path: string | null;
+    try {
+      path = await this.d.writeTail(oldHead, run.termId, run.kind);
+    } catch (e) {
+      path = null;
+      this.d.log(`refresh ${run.headId}: writing the conversation tail failed`, e);
+    }
+    this.alive();
+    if (path === null) this.d.log(`refresh ${run.headId}: no conversation tail was written; the resume message leaves it out`);
+    return path;
   }
 
   /**

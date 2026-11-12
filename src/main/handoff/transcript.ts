@@ -14,12 +14,14 @@ interface Entry {
   message?: { content?: unknown };
 }
 
-const isToolResultOnly = (content: unknown): boolean =>
+/** 只有 tool_result 的 user 条目（工具的输出，不是用户说的话）。 */
+export const isToolResultOnly = (content: unknown): boolean =>
   Array.isArray(content) &&
   content.length > 0 &&
   content.every((b) => !!b && typeof b === "object" && (b as { type?: unknown }).type === "tool_result");
 
-function textOf(content: unknown): string {
+/** 条目里的文字（字符串，或者 text 块拼起来）。 */
+export function textOf(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
@@ -32,7 +34,7 @@ const COMMAND_NAME = /<command-name>\s*\/handoff\s*<\/command-name>/;
 const TYPED_COMMAND = /^\s*\/handoff(\s|$)/;
 
 /** 这条 user 消息是不是 /handoff 的调用（命令消息，或直接键入的 /handoff）。 */
-const isHandoffInvocation = (content: unknown): boolean => {
+export const isHandoffInvocation = (content: unknown): boolean => {
   const t = textOf(content);
   return COMMAND_NAME.test(t) || TYPED_COMMAND.test(t);
 };

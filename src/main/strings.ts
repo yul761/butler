@@ -219,11 +219,26 @@ const ZH = {
     `Butler：${where} 的 CI 失败（${sha7}）。失败的检查：${failed.map((f) => f.name).join("、")}。\n\n${ciLogBlocks(failed)}\n\n请修复后再 push。push 以后结束这一轮，Butler 会再告诉你结果。`,
   /** 上下文换新（计划 16）：epic session 的第一步（ticket 和 feature 总控输入的是 /handoff）。 */
   refreshEpicHandoff: "Butler 要清空这个 session 的上下文。请先用 butler-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
-  /** 换新的最后一步：只调回进度，然后等用户。ticket 是 ticket 号；feature 总控和 epic session 不用它（说"这个 feature / epic"）。 */
-  refreshResume: (kind: "ticket" | "feature" | "epic", ticket: string) =>
-    kind === "ticket"
-      ? `上下文已由 Butler 换新。先用 recall 调出 ${ticket} 最新的 handoff，用一两句话说明做到哪了，然后等用户的下一条指令，不要自己开始新的工作。`
-      : `上下文已由 Butler 换新。先用 butler-${kind} 的 recall 调出这个 ${kind} 最新的 handoff，用一两句话说明做到哪了，然后等用户的下一条指令，不要自己开始新的工作。`,
+  /**
+   * 换新的最后一步（BTL-190 第 6 点）：调回 handoff、读换新前的对话尾巴，然后接着做；换新前在等的就说一句在等什么、继续等。
+   * ticket 是 ticket 号；feature 总控和 epic session 不用它（说"这个 feature / epic"）。tailPath 是尾巴文件，没写成（null）就不提。
+   * 整句只有一行：Windows 上按单行粘贴，sanitizeTask 也不会动路径。
+   */
+  refreshResume: (kind: "ticket" | "feature" | "epic", ticket: string, tailPath: string | null) => {
+    const recall = kind === "ticket" ? `先用 recall 调出 ${ticket} 最新的 handoff` : `先用 butler-${kind} 的 recall 调出这个 ${kind} 最新的 handoff`;
+    const tail = tailPath ? `，再读一下 ${tailPath} 里换新前的最近对话` : "";
+    return `上下文已由 Butler 换新。${recall}${tail}，然后接着做换新前正在做的事。如果换新前是在等用户、等 CI 或者等子 session，就用一句话说明在等什么，然后继续等。`;
+  },
+  /** 换新前的对话尾巴文件（BTL-190 第 6 点）：Butler 自己从旧 transcript 里摘的，不调用模型。 */
+  refreshTail: {
+    title: "换新前的最近对话",
+    intro: (sessionId: string, turns: number) =>
+      `Butler 清空上下文之前，从 session ${sessionId} 的对话记录里摘出的最近 ${turns} 轮对话（不含写 handoff 那一步），最早的在前。工具调用每次只记一行。以 handoff 和仓库里的实际情况为准。`,
+    user: "用户",
+    assistant: "Claude",
+    tool: "工具",
+    cut: "（前面太长，已截掉）",
+  },
 };
 
 export type MainStrings = typeof ZH;
@@ -412,10 +427,20 @@ const EN: MainStrings = {
   ciFailedNotice: (where: string, sha7: string, failed: Array<{ name: string; log?: string }>) =>
     `Butler: CI failed on ${where} (${sha7}). Failed checks: ${failed.map((f) => f.name).join(", ")}.\n\n${ciLogBlocks(failed)}\n\nFix it, then push. End this turn after pushing and Butler will tell you the result.`,
   refreshEpicHandoff: "Butler is about to clear this session's context. First use butler-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
-  refreshResume: (kind: "ticket" | "feature" | "epic", ticket: string) =>
-    kind === "ticket"
-      ? `Butler has refreshed the context. First use recall to load the latest handoff of ${ticket}, say in a sentence or two where things stand, then wait for the user's next instruction; don't start any new work on your own.`
-      : `Butler has refreshed the context. First use butler-${kind}'s recall to load the latest handoff of this ${kind}, say in a sentence or two where things stand, then wait for the user's next instruction; don't start any new work on your own.`,
+  refreshResume: (kind: "ticket" | "feature" | "epic", ticket: string, tailPath: string | null) => {
+    const recall = kind === "ticket" ? `First use recall to load the latest handoff of ${ticket}` : `First use butler-${kind}'s recall to load the latest handoff of this ${kind}`;
+    const tail = tailPath ? ` and read ${tailPath} for the conversation right before the refresh` : "";
+    return `Butler has refreshed the context. ${recall}${tail}, then carry on with whatever you were doing before the refresh. If you were waiting for the user, for CI or for child sessions, say in one sentence what you're waiting for and keep waiting.`;
+  },
+  refreshTail: {
+    title: "The conversation right before the refresh",
+    intro: (sessionId: string, turns: number) =>
+      `Before clearing the context, Butler took the last ${turns} exchange(s) from the transcript of session ${sessionId} (leaving out the handoff step), oldest first. Each tool call is one line. The handoff and the actual state of the repository take precedence.`,
+    user: "User",
+    assistant: "Claude",
+    tool: "Tool",
+    cut: "(the earlier part was too long and was cut)",
+  },
 };
 
 export const MAIN_STRINGS: Record<Lang, MainStrings> = { zh: ZH, en: EN };
