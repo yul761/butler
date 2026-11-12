@@ -63,6 +63,8 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
     /** writeTail 收到的参数和当时已经输入过几段文字；tailResult 决定它返回什么（默认按终端 id 拼路径）。 */
     tails: [] as Array<{ oldHeadId: string; termId: string; kind: RefreshKind; typedBefore: number; at: number }>,
     tailResult: (async (termId: string) => tailOf(termId)) as (termId: string) => Promise<string | null>,
+    /** 有未决 ask_user 的 session（head id，pendingDecision）。 */
+    pendingDecision: new Set<string>(),
   };
   const terms: Term[] = [];
   const typed: Array<{ termId: string; text: string; at: number }> = [];
@@ -153,6 +155,10 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
     },
     log: (m) => void logs.push(m),
     needsYouUndecided: () => state.undecided,
+    pendingDecision: (id) => {
+      const t = termOf(id);
+      return state.pendingDecision.has(t ? t.chain[t.chain.length - 1] : id);
+    },
     endTerminal: o.noEndTerminal ? undefined : (termId, headId) => void ended.push({ termId, headId, at: state.now }),
   };
   const r = new SessionRefresher(deps);
@@ -328,6 +334,20 @@ describe("SessionRefresher (plan 16)", () => {
     t.r.autoCheck();
     await t.settle();
     expect(t.texts()).toEqual(["/handoff", "/clear", M().refreshResume("ticket", "DMS-1", tailOf("s1"))]);
+  });
+
+  it("a coordinator cannot refresh a session whose ask_user is still waiting for the user; the user can (BTL-190 2+3)", async () => {
+    const t = setup();
+    const term = t.addTerm("s1");
+    t.state.pendingDecision.add("s1");
+    expect(t.r.precheck("s1", "coordinator")).toBe("awaiting_user");
+    expect(await t.r.refresh("s1", "coordinator")).toBe("awaiting_user");
+    expect(t.texts()).toEqual([]);
+    // 按链认：/clear 之前的 id 也算。
+    term.chain.push("s1-b");
+    t.state.pendingDecision = new Set(["s1-b"]);
+    expect(t.r.precheck("s1", "coordinator")).toBe("awaiting_user");
+    expect(await t.r.refresh("s1", "manual")).toBe("done");
   });
 
   it("the resume sentence recalls the handoff, reads the tail and carries on, in both languages (BTL-190)", () => {

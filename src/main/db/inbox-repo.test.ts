@@ -58,6 +58,33 @@ describe("InboxRepo (BTL-190 2+3)", () => {
     expect(repo.pendingDecisions({ featureId: 3 }).map((d) => d.id)).toEqual([a]);
   });
 
+  it("resolve with the delivered answer only ends the item while that is still its answer", () => {
+    const repo = new InboxRepo(memDb());
+    const id = repo.addDecision({ ...owner("s1"), question: "q", options: [], context: null, createdAt: 1 });
+    repo.setAnswer(id, "first");
+    repo.setAnswer(id, "second");
+    expect(repo.resolve(id, "answered", 5, "first")).toBe(false);
+    expect(repo.get(id)).toMatchObject({ status: "pending", answer: "second" });
+    expect(repo.resolve(id, "answered", 6, "second")).toBe(true);
+    expect(repo.get(id)).toMatchObject({ status: "answered", resolvedAt: 6 });
+  });
+
+  it("dismissPending ends the pending decisions and reports of a ticket, feature or epic and counts them", () => {
+    const repo = new InboxRepo(memDb());
+    const a = repo.addDecision({ ...owner("s1", { ticketKey: "X-1", featureId: 3, epicId: 2 }), question: "a", options: [], context: null, createdAt: 1 });
+    const r = repo.addReport({ ...owner("s1", { ticketKey: "X-1", featureId: 3, epicId: 2 }), text: "r", kind: "done", status: "pending", createdAt: 2 });
+    const b = repo.addDecision({ ...owner("s2", { ticketKey: "X-2", featureId: 3, epicId: 2 }), question: "b", options: [], context: null, createdAt: 3 });
+    const c = repo.addDecision({ ...owner("s3", { epicId: 2 }), question: "c", options: [], context: null, createdAt: 4 });
+    repo.resolve(b, "answered", 5);
+    expect(repo.dismissPending({ ticketKey: "X-1" }, 9)).toBe(2);
+    expect(repo.get(a)).toMatchObject({ status: "dismissed", resolvedAt: 9 });
+    expect(repo.get(r)?.status).toBe("dismissed");
+    expect(repo.dismissPending({ featureId: 3 }, 10)).toBe(0);
+    expect(repo.get(b)).toMatchObject({ status: "answered", resolvedAt: 5 });
+    expect(repo.dismissPending({ epicId: 2 }, 11)).toBe(1);
+    expect(repo.get(c)?.status).toBe("dismissed");
+  });
+
   it("deleting a session chain removes its items (and only its items)", () => {
     const db = memDb();
     const sessions = new SessionsRepo(db);

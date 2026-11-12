@@ -496,7 +496,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   };
 
   /**
-   * ask_user、report（BTL-190 第 2+3 点）：调用的 session 必须认得出来（from），而且属于请求的作用域（ticket、feature、epic），
+   * ask_user、report（BTL-190 第 2+3 点）：调用的 session 必须认得出来（from），而且属于请求的作用域（ticket、feature、epic、Butler 总控），
    * 免得别的进程冒充一个 session 提问。
    */
   const inboxRequest = (req: ControlRequest & InboxControlOp): ControlResult => {
@@ -508,12 +508,23 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       : "featureId" in req ? h.featureId === req.featureId && h.ticketKey === null
       : h.ticketKey === req.ticketKey;
     if (!mine) return fail(M().ctlInboxNotYours);
+    // 归档了的 ticket、feature、epic 不再收：归档时 Butler 已经把它们未决的条目收起来，新的没人会看。
+    if ("epicId" in req) {
+      const e = d.epics?.get(req.epicId);
+      if (!e || e.archivedAt !== null) return fail(M().ctlEpicGone);
+    } else if ("featureId" in req) {
+      const f = d.features?.get(req.featureId);
+      if (!f || f.archivedAt !== null) return fail(M().ctlFeatureGone);
+    } else if ("ticketKey" in req) {
+      const t = d.tickets.get(req.ticketKey);
+      if (!t || t.archivedAt !== null) return fail(M().ctlTicketGone(req.ticketKey));
+    }
     if (req.op === "ask_user") {
       const id = d.inbox.ask(h, { question: req.question, options: req.options, context: req.context });
       return ok({ id, note: M().ctlAskNote });
     }
     const r = d.inbox.report(h, req.text, req.kind);
-    return ok({ id: r.id, note: r.queued ? M().ctlReportQueued : M().ctlReportStored });
+    return ok({ id: r.id, note: r.noCoordinator ? M().ctlReportNoCoordinator : r.queued ? M().ctlReportQueued : M().ctlReportStored });
   };
 
   // Butler 总控（BTL-190 第 5 点）。
@@ -526,6 +537,12 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if ("featureId" in req) return featureRequest(req);
     const t = d.tickets.get(req.ticketKey);
     if (!t || t.archivedAt !== null) return fail(M().ctlTicketGone(req.ticketKey));
+    // 这些请求本该只有这个 ticket 的总控发（BTL-190 第 2+3 点，加固）。先只记一笔、照常处理：没有 BUTLER_SESSION 的调用 from 是 null，
+    // 总控终端里 /resume 到别的 session 以后 head 也不再是总控，直接拒绝会误伤。
+    const caller = req.from ? d.sessions.head(req.from) : null;
+    if (!(caller && caller.ticketKey === t.key && caller.coordinator)) {
+      d.log?.(`control: ${req.op} on ticket ${t.key} from ${req.from ?? "(no session)"}, which is not its coordinator; handled anyway`);
+    }
 
     if (req.op === "list_repos") {
       return ok(t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), workMode: r.workMode, branch: r.branch })));

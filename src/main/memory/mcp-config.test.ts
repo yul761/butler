@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { butlerMcpFile, epicMcpFile, featureMcpFile, memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
+import { butlerMcpFile, epicMcpFile, featureMcpFile, memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
 
 const launcher = { command: "/Applications/Butler.app/Contents/MacOS/Butler", script: "/Applications/Butler.app/Contents/Resources/memory-mcp/statecore-mcp.cjs" };
 
@@ -175,6 +175,12 @@ describe("epic memory (design 2026-11-01)", () => {
     removeEpicMcpConfig(mcpDir, 4);
     expect(existsSync(file)).toBe(false);
     expect(() => removeEpicMcpConfig(mcpDir, 4)).not.toThrow();
+  });
+});
+
+describe("sessions tools allowed without a prompt (BTL-190 2+3)", () => {
+  it("are only ask_user and report of the sessions server", () => {
+    expect(SESSIONS_AUTO_ALLOW).toEqual(["mcp__butler-sessions__ask_user", "mcp__butler-sessions__report"]);
   });
 });
 

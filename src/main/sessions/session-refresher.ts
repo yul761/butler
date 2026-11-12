@@ -31,6 +31,7 @@ export type { RefreshStep };
  * done：三步都输入了。busy：现在不能往终端里输入（什么都没输入，不冷却）。already：这个 session 正在换新。
  * cooldown：30 分钟内失败过（手动触发不看这一条）。memory_off：记忆关着，换新以后接不上，什么都不输入。
  * failed：不能换新的 session，或者中途停下了（之后不再输入任何东西，进入冷却）。
+ * awaiting_user：总控要换新的 session 有一条「待你决定」还在等用户（什么都不输入，不冷却）。
  */
 export type RefreshResult = "done" | RefreshRefusal;
 
@@ -117,6 +118,11 @@ export interface SessionRefresherDeps {
    * 决定的事。guard 在关闭期间（和换新一样）不把「没判断完」当作需要你，所以这里单独等。不给就不等。
    */
   needsYouUndecided?: (headId: string) => boolean;
+  /**
+   * 这个 session（链上任何一个 id）有未决的 ask_user（InboxService.hasPendingDecision，BTL-190 第 2+3 点）。总控不能给在等用户拍板的
+   * session 换新（awaiting_user）；用户自己点换新不挡，自动换新和闲置关闭由 guard 的「需要你」挡。不给就不看。
+   */
+  pendingDecision?: (sessionId: string) => boolean;
   /** 换新开始、换了一步、结束时调用（「现在」页显示"换新中"）。 */
   notify(): void;
   now(): number;
@@ -256,6 +262,7 @@ export class SessionRefresher {
     if (kind === "epic" && !this.d.epicPlanReady()) return { result: "failed" };
     if (this.isRefreshing(head.id)) return { result: "already" };
     if (trigger !== "manual" && this.cooling(head.id)) return { result: "cooldown" };
+    if (trigger === "coordinator" && this.d.pendingDecision?.(head.id)) return { result: "awaiting_user" };
     const gate = this.canStart(head.id, trigger, mode);
     if (!gate.ok) return { result: "busy" };
     return {

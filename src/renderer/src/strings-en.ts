@@ -171,6 +171,7 @@ export const EN: UiStrings = {
     already: "Already refreshing",
     cooldown: "Failed recently, try again later",
     memory_off: "Memory is off, cannot refresh",
+    awaiting_user: "Waiting for your decision; answer it first",
     failed: "This session cannot be refreshed",
   } as Record<RefreshRefusal, string>,
   hiddenSessions: (n: number) => `Hidden (${n})`,

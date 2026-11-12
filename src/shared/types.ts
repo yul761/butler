@@ -459,9 +459,9 @@ export type NowTarget =
 export type RefreshStep = "handoff" | "clear" | "resume" | "close";
 /**
  * 换新开始不了的原因（SessionRefresher.precheck）：busy 现在不能往终端里输入；already 正在换新；cooldown 30 分钟内失败过；
- * memory_off 记忆关着；failed 这个 session 不能换新。
+ * memory_off 记忆关着；failed 这个 session 不能换新；awaiting_user 有未决的 ask_user（只拒绝总控触发的换新，BTL-190 第 2+3 点）。
  */
-export type RefreshRefusal = "busy" | "already" | "cooldown" | "memory_off" | "failed";
+export type RefreshRefusal = "busy" | "already" | "cooldown" | "memory_off" | "failed" | "awaiting_user";
 /** 界面上的“换新”按钮（IPC sessions:refresh）：开始了，或者为什么开始不了。 */
 export type RefreshSessionResult = { ok: true } | { ok: false; reason: RefreshRefusal };
 
@@ -481,7 +481,7 @@ export interface NowRow {
   needsYou: string | null;
   /** Butler 正在给这个 session 换新（计划 16）：做到哪一步；不在换新为 null。 */
   refreshing: RefreshStep | null;
-  /** 这个 session 未决的「待你决定」有几条（BTL-190 第 2+3 点）；有的话 needsYou 为 null，卡片在 NowView.decisions 里。 */
+  /** 这个 session 还没答的「待你决定」有几条（BTL-190 第 2+3 点；卡片上答了、等着送的不算）。有未决的条目时 needsYou 为 null，卡片在 NowView.decisions 里。 */
   decisions: number;
   prs: WatchedPr[];
   /** 停着、不需要你、没有开着的 PR / CI：默认折起来。 */

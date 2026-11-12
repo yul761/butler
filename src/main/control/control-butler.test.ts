@@ -73,7 +73,7 @@ function setup(o: { butlerDeps?: boolean } = {}) {
     activity: (id) => activities.get(id) ?? null,
     activityOutput: async () => "out",
     lastReply: (id) => (id === "ep" ? "等你定" : null),
-    inbox: { ask: (s) => (asked.push(s.id), 7), report: () => ({ id: 8, queued: false }) },
+    inbox: { ask: (s) => (asked.push(s.id), 7), report: () => ({ id: 8, queued: false, noCoordinator: false }) },
     kill: () => {},
     screenNeedsUser: () => false,
     submit: async () => "sent" as const,

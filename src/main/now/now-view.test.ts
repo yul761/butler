@@ -331,6 +331,16 @@ describe("buildNowView with ask_user decisions (BTL-190 2+3)", () => {
     expect(v.epics[0].counts.needsYou).toBe(2);
   });
 
+  it("an answered decision waiting to be delivered is not counted and the row no longer waits for you, but the row stays unfolded", () => {
+    const t = ticket("A-1", null, [session("s1", { ticketKey: "A-1" })]);
+    const answered = decision("s1", { ticketKey: "A-1", answer: "A" });
+    const v = buildNowView(input({ tickets: [t], decisions: [answered], activity: (id) => act(id, { kind: "waiting" }), needsYouReason: () => "haiku" }));
+    expect(v.epics[0].features[0].rows[0]).toMatchObject({ sessionId: "s1", needsYou: null, decisions: 0, idle: false });
+    expect(v.epics[0].counts.needsYou).toBe(0);
+    // 卡片照样在（显示「已回答，等它停下来再送」）。
+    expect(v.decisions).toEqual([answered]);
+  });
+
   it("approval still wins over a pending decision", () => {
     const t = ticket("A-1", null, [session("s1", { ticketKey: "A-1" })]);
     const v = buildNowView(input({ tickets: [t], decisions: [decision("s1")], activity: (id) => act(id, { kind: "approval" }) }));

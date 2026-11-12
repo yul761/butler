@@ -56,6 +56,9 @@ const toItem = (r: Row): InboxItem => ({
 /** 收件箱看哪一块：一个 feature、一个 epic（含它下面的 feature 和 ticket），或者全部。 */
 export type InboxFilter = { featureId: number } | { epicId: number } | null;
 
+/** 归档的是哪一块：一个 ticket、一个 feature 或一个 epic（feature、epic 含下面 ticket 的条目）。 */
+export type InboxArchiveScope = { ticketKey: string } | { featureId: number } | { epicId: number };
+
 function where(f: InboxFilter): { sql: string; args: number[] } {
   if (f === null) return { sql: "", args: [] };
   if ("featureId" in f) return { sql: " AND feature_id = ?", args: [f.featureId] };
@@ -122,8 +125,22 @@ export class InboxRepo {
     return Number(this.db.prepare(`UPDATE inbox_items SET answer = ? WHERE id = ? AND status = 'pending'`).run(answer, id).changes) > 0;
   }
 
-  /** 结束一条（answered / dismissed / superseded）。只改还未决的；返回改没改。 */
-  resolve(id: number, status: Exclude<InboxStatus, "pending">, at: number): boolean {
+  /**
+   * 结束一条（answered / dismissed / superseded）。只改还未决的；返回改没改。
+   * 给了 answer（送进去的那份回答）时，只有答案还是它才结束：投递途中用户在卡片上改了答案，新答案留着下次送。
+   */
+  resolve(id: number, status: Exclude<InboxStatus, "pending">, at: number, answer?: string): boolean {
+    if (answer !== undefined) {
+      return Number(this.db.prepare(`UPDATE inbox_items SET status = ?, resolved_at = ? WHERE id = ? AND status = 'pending' AND answer = ?`).run(status, at, id, answer).changes) > 0;
+    }
     return Number(this.db.prepare(`UPDATE inbox_items SET status = ?, resolved_at = ? WHERE id = ? AND status = 'pending'`).run(status, at, id).changes) > 0;
+  }
+
+  /** ticket、feature、epic 归档时：这个范围里还未决的「待你决定」和汇报都记成 dismissed。返回结束了几条。 */
+  dismissPending(scope: InboxArchiveScope, at: number): number {
+    const w = "ticketKey" in scope ? { sql: "ticket_key = ?", arg: scope.ticketKey as string | number }
+      : "featureId" in scope ? { sql: "feature_id = ?", arg: scope.featureId }
+      : { sql: "epic_id = ?", arg: scope.epicId };
+    return Number(this.db.prepare(`UPDATE inbox_items SET status = 'dismissed', resolved_at = ? WHERE status = 'pending' AND ${w.sql}`).run(at, w.arg).changes);
   }
 }

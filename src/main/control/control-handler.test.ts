@@ -38,6 +38,7 @@ async function setup(o: { memoryEnabled?: () => boolean } = {}) {
   const activities = new Map<string, SessionActivity>();
   const outputs = new Map<string, string>();
   const killed: string[] = [];
+  const logs: string[] = [];
   /** 假的换新：precheck 返回 refusal；refresh 永远不结束（证明 refresh_session 不等它）。 */
   const refresh = { refusal: null as RefreshRefusal | null, prechecked: [] as [string, RefreshTrigger][], started: [] as [string, RefreshTrigger][] };
   const handle = controlHandler({
@@ -54,13 +55,14 @@ async function setup(o: { memoryEnabled?: () => boolean } = {}) {
     screenNeedsUser: () => false,
     lastReply: () => null,
     memoryEnabled: o.memoryEnabled,
+    log: (msg) => void logs.push(msg),
   });
   const web = makeRepo();
   const api = makeRepo();
   await ticketService.create({ key: "FULL-1" });
   await ticketService.addRepo({ ticketKey: "FULL-1", repoPath: web, workMode: "worktree" });
   await ticketService.addRepo({ ticketKey: "FULL-1", repoPath: api, workMode: "worktree" });
-  return { handle, sessionService, sessions, tickets, spawned, submitted, notified: () => notified, web, api, activities, outputs, ticketService, killed, refresh };
+  return { handle, sessionService, sessions, tickets, spawned, submitted, notified: () => notified, web, api, activities, outputs, ticketService, killed, refresh, logs };
 }
 
 const base = { v: 1 as const, ticketKey: "FULL-1", from: null };
@@ -126,6 +128,19 @@ describe("controlHandler", () => {
     const r = await handle({ ...base, from: "someone-else", op: "start_session", repo: join(web.worktreePath!, "."), task: "做前端" });
     expect(r.ok).toBe(true);
     expect(sessions.get("s-1")).toMatchObject({ repoId: web.id, spawnedBy: null });
+  });
+
+  it("logs (but still runs) a ticket request whose caller is not this ticket's coordinator (BTL-190 2+3)", async () => {
+    const { handle, sessionService, logs } = await setup();
+    await sessionService.open({ ticketKey: "FULL-1", coordinator: true });
+    expect((await handle({ ...base, from: "s-1", op: "list_sessions" })).ok).toBe(true);
+    expect(logs).toEqual([]);
+    expect((await handle({ ...base, from: "someone-else", op: "list_sessions" })).ok).toBe(true);
+    expect((await handle({ ...base, op: "list_repos" })).ok).toBe(true);
+    expect(logs).toEqual([
+      expect.stringMatching(/list_sessions.*FULL-1.*someone-else/),
+      expect.stringMatching(/list_repos.*FULL-1/),
+    ]);
   });
 
   it("refuses unknown or archived tickets, unknown repos and empty tasks", async () => {

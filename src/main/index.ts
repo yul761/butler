@@ -65,7 +65,7 @@ import { hookCommand } from "./hooks/installer";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, sessionsServer, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
@@ -475,7 +475,7 @@ async function bootstrap(): Promise<void> {
     baseEnv: process.env,
     mcpConfig: memoryMcpConfig,
     // 装着的 butler-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
-    mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, gateCommand: health.hookBinCurrent() && existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
+    mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, allowTools: SESSIONS_AUTO_ALLOW, gateCommand: health.hookBinCurrent() && existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
     guidePath: (kind) => writeSessionGuide(paths.mcp, currentLang(), kind),
     featureMcpConfig,
     epicMcpConfig,
@@ -805,6 +805,8 @@ async function bootstrap(): Promise<void> {
     // 和 feature 汇总都跳过隐藏的 session。
     endTerminal: (termId) => pty.kill(termId),
     needsYouUndecided: (id) => needsYou.undecided(id),
+    // 总控不能给在等用户拍板的 session 换新（BTL-190 第 2+3 点）。
+    pendingDecision: (id) => inboxService.hasPendingDecision(id),
     log: logger,
   });
   // 「待你决定」和汇报（BTL-190 第 2+3 点）。递回答不看「需要你」（未决的 ask_user 本身就算），别的检查照常；递汇报和 CI 结果同一道 guard。
@@ -819,6 +821,8 @@ async function bootstrap(): Promise<void> {
     answerGuard: new DeliveryGuard({ ...guardDeps, refreshing: (id) => refresher.isRefreshing(id) }),
     reportGuard: deliveryGuard,
     deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
+    // 换新输入的 /handoff 和接着做的话也会触发 UserPromptSubmit：那不是用户在终端里回答。
+    refreshing: (id) => refresher.isRefreshing(id),
     notify,
     now: Date.now,
     log: logger,
@@ -988,14 +992,15 @@ async function bootstrap(): Promise<void> {
       if (effect.kind === "session_started") pty.markStarted(effect.sessionId);
       // claude 收下了一条输入（UserPromptSubmit）：deliver 回车以后等的就是它（BTL-190 第 9 点）。终端按 BUTLER_SESSION 记，
       // /clear 以后 hook 里的 session id 已经换了。
-      // 同一个时机：用户在终端里回答了，这个 session 未决的「待你决定」都算答过（BTL-190 第 2+3 点）。
+      // 同一个时机：用户在终端里回答了，这个 session 卡片上还没答的「待你决定」都算答过（换新、Butler 刚递回答时不算，BTL-190 第 2+3 点）。
       if (effect.kind === "waiting" && !effect.waiting) {
         pty.markSubmitted(env.butlerSession ?? effect.sessionId);
         inboxService.promptSubmitted(env.butlerSession ?? effect.sessionId);
       }
       // claude 停下来等输入了：有“对方已经合完”的通知就趁现在发（设计文档 2026-11-04：不打断忙着的 session）。
       // 同一个时机也递还没递出去的 CI 结论（先重读活动），并且马上查一次这个仓库的 PR 和 CI（刚停下的 session 常常刚 push）。
-      if (effect.kind === "waiting" && effect.waiting) {
+      // 终端重新打开（--resume）的 session 停在输入框等着（hook-events 记成 waiting）：和停下来一样，马上递卡片上答好的回答等。
+      if ((effect.kind === "waiting" && effect.waiting) || (effect.kind === "session_started" && effect.resumed === true)) {
         const stopped = env.butlerSession ?? effect.sessionId;
         void holdWatcher.sessionIdle(stopped);
         // 活动没变时 activityMonitor 不会 notify：停下来以后的「需要你」判断在这里补一次。
@@ -1043,7 +1048,10 @@ async function bootstrap(): Promise<void> {
   const featureService = new FeatureService({
     features, tickets, epics, db, now: Date.now,
     onEpicChanged: (id) => void memory.syncEpic(id),
-    onTicketArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
+    onTicketArchived: (key) => {
+      removeTicketMcpConfigs(paths.mcp, key);
+      inboxService.dismissScope({ ticketKey: key });
+    },
     onRepoAdded: (featureId, repoPath) => epicService.ensureFeatureRepo(featureId, repoPath),
     refreshBeforeArchive: (ids) => featureRunner.refreshBeforeArchive(ids),
     log: logger,
@@ -1054,6 +1062,9 @@ async function bootstrap(): Promise<void> {
     onArchived: (id, featureIds) => {
       removeEpicMcpConfig(paths.mcp, id);
       for (const f of featureIds) removeFeatureMcpConfig(paths.mcp, f);
+      // 归档了的 epic 和它下面的 feature：还未决的「待你决定」和汇报都收起来（BTL-190 第 2+3 点）。
+      inboxService.dismissScope({ epicId: id });
+      for (const f of featureIds) inboxService.dismissScope({ featureId: f });
       // 一起归档的 feature 逐个排队整理：第一个整理完之后没有新东西，后面的不再跑。
       for (const f of featureIds) digestArchivedFeature(f);
     },
@@ -1071,10 +1082,14 @@ async function bootstrap(): Promise<void> {
   const keepAwakeSwitch = keepAwake;
   registerIpc({
     keepAwake: keepAwakeSwitch,
-    onArchived: (key) => removeTicketMcpConfigs(paths.mcp, key),
+    onArchived: (key) => {
+      removeTicketMcpConfigs(paths.mcp, key);
+      inboxService.dismissScope({ ticketKey: key });
+    },
     languageChanged: applyLanguage,
     onFeatureArchived: (id) => {
       removeFeatureMcpConfig(paths.mcp, id);
+      inboxService.dismissScope({ featureId: id });
       digestArchivedFeature(id);
     },
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),

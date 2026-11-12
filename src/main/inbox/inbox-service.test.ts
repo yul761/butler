@@ -4,7 +4,8 @@ import { InboxRepo } from "../db/inbox-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import { memDb } from "../test-utils";
-import { InboxService, REPORT_DELIVERY_MAX_AGE_MS, roleOf } from "./inbox-service";
+import { TASK_LIMIT } from "../../shared/control";
+import { ANSWERING_TTL_MS, InboxService, REPORT_DELIVERY_MAX_AGE_MS, roleOf } from "./inbox-service";
 
 const session = (id: string, o: Partial<Session> = {}): Session => ({
   id, ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: true, replacedBy: null,
@@ -26,6 +27,8 @@ function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<num
     answerGate: null as DeliveryCheck | null,
     reportGate: null as DeliveryCheck | null,
     result: "sent" as DeliverResult,
+    /** 正在换新的 session（head id）。 */
+    refreshing: new Set<string>(),
   };
   const head = (id: string): Session | null => {
     let cur = id;
@@ -43,6 +46,7 @@ function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<num
     termOf: (id) => (state.open.has(head(id)?.id ?? id) ? `term-${head(id)?.id ?? id}` : null),
     openHeads: () => [...state.open].map((id) => sessions.get(id)!).filter(Boolean),
     epicName: (id) => o.epicNames?.[id] ?? null,
+    refreshing: (id) => state.refreshing.has(head(id)?.id ?? id),
     answerGuard: gate("answerGate"), reportGuard: gate("reportGate"), deliver, notify, now: () => state.now, log: () => {},
   });
   const replace = (from: string, to: Session) => {
@@ -134,21 +138,127 @@ describe("InboxService ask_user (BTL-190 2+3)", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("a UserPromptSubmit in the asking session (any id on its chain) answers all its pending items, but not other sessions'", () => {
+  it("a UserPromptSubmit in the asking session (any id on its chain) answers its unanswered items, but not other sessions'", async () => {
     const s = session("s1");
     const t = session("t1");
-    const { inbox, repo, replace } = setup({ sessions: [s, t] });
+    const { inbox, repo, replace, state, deliver } = setup({ sessions: [s, t] });
     const a = inbox.ask(s, { question: "a" });
     const b = inbox.ask(s, { question: "b" });
+    state.answerGate = { ok: false, block: "typing" };
     inbox.answer(b, "queued");
     const c = inbox.ask(t, { question: "c" });
     replace("s1", session("s2"));
     inbox.promptSubmitted("s1");
     expect(repo.get(a)?.status).toBe("answered");
-    expect(repo.get(b)).toMatchObject({ status: "answered", answer: "queued" });
+    // 卡片上答好、还没送进去的留着：下次停下来照常送。
+    expect(repo.get(b)).toMatchObject({ status: "pending", answer: "queued" });
     expect(repo.get(c)?.status).toBe("pending");
-    expect(inbox.hasPendingDecision("s2")).toBe(false);
     expect(inbox.hasPendingDecision("t1")).toBe(true);
+    state.answerGate = null;
+    await inbox.flush();
+    expect(deliver.mock.calls.at(-1)?.[1]).toContain("『b』，用户的回答：queued");
+    expect(repo.get(b)?.status).toBe("answered");
+    expect(inbox.hasPendingDecision("s2")).toBe(false);
+  });
+
+  it("ignores the UserPromptSubmit of Butler's own /handoff and resume message while the session is being refreshed", () => {
+    const s = session("s1");
+    const { inbox, repo, state, replace } = setup({ sessions: [s] });
+    const a = inbox.ask(s, { question: "a" });
+    state.refreshing.add("s1");
+    inbox.promptSubmitted("s1");
+    // /clear 之后 head 换了：按链认。
+    replace("s1", session("s2"));
+    state.refreshing = new Set(["s2"]);
+    inbox.promptSubmitted("s1");
+    inbox.promptSubmitted("s2");
+    expect(repo.get(a)?.status).toBe("pending");
+    state.refreshing.clear();
+    inbox.promptSubmitted("s2");
+    expect(repo.get(a)?.status).toBe("answered");
+  });
+
+  it("a late UserPromptSubmit of a delivered answer does not end the session's other items; one past the window does", async () => {
+    const s = session("s1");
+    const { inbox, repo, state } = setup({ sessions: [s] });
+    const a = inbox.ask(s, { question: "a" });
+    const b = inbox.ask(s, { question: "b" });
+    // deliver 没等到 UserPromptSubmit 就返回了 sent（hook 还没到）。
+    inbox.answer(a, "ok");
+    await settle();
+    expect(repo.get(a)?.status).toBe("answered");
+    state.now += 5_000;
+    inbox.promptSubmitted("s1");
+    expect(repo.get(b)?.status).toBe("pending");
+    // 只认一次：再来的是用户自己在终端里回答。
+    inbox.promptSubmitted("s1");
+    expect(repo.get(b)?.status).toBe("answered");
+
+    const c = inbox.ask(s, { question: "c" });
+    const d = inbox.ask(s, { question: "d" });
+    inbox.answer(c, "ok");
+    await settle();
+    state.now += ANSWERING_TTL_MS + 1;
+    inbox.promptSubmitted("s1");
+    expect(repo.get(d)?.status).toBe("answered");
+  });
+
+  it("a delivery that typed nothing leaves no window behind", async () => {
+    const s = session("s1");
+    const { inbox, repo, state } = setup({ sessions: [s] });
+    const a = inbox.ask(s, { question: "a" });
+    const b = inbox.ask(s, { question: "b" });
+    state.result = "blocked";
+    inbox.answer(a, "ok");
+    await settle();
+    inbox.promptSubmitted("s1");
+    expect(repo.get(b)?.status).toBe("answered");
+    expect(repo.get(a)).toMatchObject({ status: "pending", answer: "ok" });
+  });
+
+  it("an answer changed on the card while it is being delivered stays pending with the new answer and is sent next", async () => {
+    const s = session("s1");
+    const { inbox, repo, deliver } = setup({ sessions: [s] });
+    const a = inbox.ask(s, { question: "a" });
+    deliver.mockImplementationOnce(async () => {
+      expect(inbox.answer(a, "second")).toBe(true);
+      return "sent";
+    });
+    inbox.answer(a, "first");
+    await settle();
+    expect(repo.get(a)).toMatchObject({ status: "pending", answer: "second" });
+    await inbox.flush();
+    expect(deliver.mock.calls.at(-1)?.[1]).toContain("用户的回答：second");
+    expect(repo.get(a)?.status).toBe("answered");
+  });
+
+  it("splits answers that do not fit in one message, and cuts a single answer that is too long by itself", async () => {
+    const s = session("s1");
+    const { inbox, repo, deliver, state } = setup({ sessions: [s] });
+    const ids = ["q1", "q2", "q3"].map((q) => inbox.ask(s, { question: q }));
+    state.answerGate = { ok: false, block: "busy" };
+    for (const id of ids) inbox.answer(id, "x".repeat(3000));
+    state.answerGate = null;
+    await inbox.flush();
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const first = deliver.mock.calls[0][1];
+    expect(first).toContain("『q1』");
+    expect(first).toContain("『q2』");
+    expect(first).not.toContain("『q3』");
+    expect(ids.map((id) => repo.get(id)?.status)).toEqual(["answered", "answered", "pending"]);
+    await inbox.flush();
+    expect(deliver.mock.calls[1][1]).toContain("『q3』");
+    expect(repo.get(ids[2])?.status).toBe("answered");
+
+    const long = inbox.ask(s, { question: "long" });
+    inbox.answer(long, `${"y".repeat(9000)}END`);
+    await settle();
+    const text = deliver.mock.calls[2][1];
+    expect(text.length).toBeLessThanOrEqual(TASK_LIMIT);
+    expect(text).toContain("『long』");
+    expect(text).not.toContain("END");
+    expect(text).toContain("回答太长");
+    expect(repo.get(long)?.status).toBe("answered");
   });
 
   it("the UserPromptSubmit caused by Butler delivering an answer only resolves the delivered items", async () => {
@@ -238,6 +348,57 @@ describe("InboxService report (BTL-190 2+3)", () => {
   });
 });
 
+describe("InboxService report without a coordinator above (BTL-190 2+3)", () => {
+  it("only queues done / blocked when a coordinator could manage the session", () => {
+    const bossAlone = session("b1", { ticketKey: "BTL-1", coordinator: true });
+    const bossInFeature = session("b2", { ticketKey: "BTL-2", coordinator: true });
+    const lone = session("t1", { ticketKey: "BTL-1" });
+    const fcAlone = session("fc1", { featureId: 3 });
+    const fcInEpic = session("fc2", { featureId: 4 });
+    const fix = session("fx", { featureId: 3, fixesSession: "t1" });
+    const { inbox, repo } = setup({
+      sessions: [bossAlone, bossInFeature, lone, fcAlone, fcInEpic, fix], tickets: [ticket("BTL-1", null), ticket("BTL-2", 3)], epicOf: { 4: 2 }, open: [],
+    });
+    const r1 = inbox.report(bossAlone, "done", "done");
+    expect(r1).toMatchObject({ queued: false, noCoordinator: true });
+    expect(repo.get(r1.id)?.status).toBe("dismissed");
+    expect(inbox.report(fcAlone, "done", "blocked")).toMatchObject({ queued: false, noCoordinator: true });
+    expect(inbox.report(bossInFeature, "done", "done")).toMatchObject({ queued: true, noCoordinator: false });
+    expect(inbox.report(lone, "done", "done")).toMatchObject({ queued: true, noCoordinator: false });
+    expect(inbox.report(fcInEpic, "done", "done")).toMatchObject({ queued: true, noCoordinator: false });
+    expect(inbox.report(fix, "done", "done")).toMatchObject({ queued: true, noCoordinator: false });
+    // progress 本来就只存，不算「上面没有总控」。
+    expect(inbox.report(bossAlone, "half", "progress")).toMatchObject({ queued: false, noCoordinator: false });
+  });
+});
+
+describe("InboxService archiving (BTL-190 2+3)", () => {
+  it("dismisses the pending decisions and reports of an archived ticket, feature or epic", () => {
+    const t1 = session("t1", { ticketKey: "BTL-1" });
+    const t2 = session("t2", { ticketKey: "BTL-2" });
+    const fc = session("fc", { featureId: 4 });
+    const ep = session("ep", { epicId: 2 });
+    const { inbox, repo, notify } = setup({ sessions: [t1, t2, fc, ep], tickets: [ticket("BTL-1", 3), ticket("BTL-2", 4)], epicOf: { 4: 2 }, open: [] });
+    const a = inbox.ask(t1, { question: "a" });
+    const ra = inbox.report(t1, "r", "done").id;
+    const b = inbox.ask(t2, { question: "b" });
+    const c = inbox.ask(fc, { question: "c" });
+    const d = inbox.ask(ep, { question: "d" });
+    notify.mockClear();
+    inbox.dismissScope({ ticketKey: "BTL-1" });
+    expect([repo.get(a)?.status, repo.get(ra)?.status, repo.get(b)?.status]).toEqual(["dismissed", "dismissed", "pending"]);
+    expect(notify).toHaveBeenCalledTimes(1);
+    inbox.dismissScope({ featureId: 4 });
+    expect([repo.get(b)?.status, repo.get(c)?.status, repo.get(d)?.status]).toEqual(["dismissed", "dismissed", "pending"]);
+    inbox.dismissScope({ epicId: 2 });
+    expect(repo.get(d)?.status).toBe("dismissed");
+    // 没有要结束的不 notify。
+    notify.mockClear();
+    inbox.dismissScope({ epicId: 2 });
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
+
 describe("InboxService views", () => {
   it("tells the UI who asked, where to jump and whether the terminal is open; filters by feature and epic", () => {
     const child = session("c1", { ticketKey: "BTL-1", repoId: 2 });
@@ -296,11 +457,12 @@ describe("InboxService and the Butler 总控 (BTL-190 5)", () => {
     const child = session("c1", { ticketKey: "BTL-1" });
     const bt = session("bt", { butler: true });
     const { inbox, repo, deliver } = setup({ sessions: [fc, child, bt], tickets: [ticket("BTL-1", 3)], open: ["bt"] });
-    // feature 不属于 epic、没有总控开着：等着，不送给 Butler 总控。
+    // feature 不属于 epic：上面没有总控，只存，也不送给 Butler 总控。
     const r = inbox.report(fc, "feature done", "done");
+    expect(r).toMatchObject({ queued: false, noCoordinator: true });
     await inbox.flush();
     expect(deliver).not.toHaveBeenCalled();
-    expect(repo.get(r.id)?.status).toBe("pending");
+    expect(repo.get(r.id)?.status).toBe("dismissed");
     expect(inbox.report(bt, "巡检完了", "done")).toMatchObject({ queued: false });
     await inbox.flush();
     expect(deliver).not.toHaveBeenCalled();

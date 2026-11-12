@@ -49,7 +49,8 @@ function childDecision(i: NowInput, s: SessionView, scope: Scope): boolean {
 
 /**
  * 一个开着的 session 的行，「需要你」按优先级（BTL-190 第 2+3 点）：确认 → 未决的 ask_user → 真的卡住 → Haiku 的判断。
- * - 有未决 ask_user 的：needsYou 为 null，decisions 记条数，卡片在 NowView.decisions 里（每条一张，说的就是那个问题）；行不折起来。
+ * - 有未决 ask_user 的：needsYou 为 null，decisions 记还没答的条数，卡片在 NowView.decisions 里（每条一张，说的就是那个问题）；行不折起来。
+ *   已经在卡片上答了、还没送进去的不算进 decisions（不再等你），但 needsYou 照样为 null、行照样不折起来。
  * - 总控所管范围里有子 session 的未决条目时，总控的 Haiku 判断不算（needsYouReason 不问）。
  * needsYouReason 每行最多问一次。正在换新的不折起来，也不算需要你（回复、卡住都是 Butler 输入的 /handoff 带来的），只有停在确认上的照样算：
  * Butler 的 /handoff 也可能要用户批准权限，不显示出来换新就一直卡着。
@@ -58,14 +59,17 @@ function sessionRow(i: NowInput, s: SessionView, base: RowBase, scope: Scope = n
   const activity = i.activity(s.id);
   const mergeQueued = i.mergeQueued(s.id);
   const refreshing = i.refreshing(s.id);
-  const decisions = i.decisions.filter((d) => d.sessionId === s.id).length;
+  const mine = i.decisions.filter((d) => d.sessionId === s.id);
+  // 还没答的才算需要你；卡片上答好、等它停下来再送的不算，但行照样不折起来，也不再问 Haiku。
+  const pending = mine.length;
+  const decisions = mine.filter((d) => d.answer === null).length;
   const needsYou =
     activity?.kind === "approval" ? i.approvalText
-    : refreshing !== null || decisions > 0 ? null
+    : refreshing !== null || pending > 0 ? null
     : activity?.stuck === true ? (activity.reason ?? "")
     : childDecision(i, s, scope) ? null
     : i.needsYouReason(s.id);
-  const idle = refreshing === null && needsYou === null && decisions === 0 && !mergeQueued && stopped(activity) && !base.prs.some(prBusy);
+  const idle = refreshing === null && needsYou === null && pending === 0 && !mergeQueued && stopped(activity) && !base.prs.some(prBusy);
   return { ...base, sessionId: s.id, activity, mergeQueued, needsYou, refreshing, decisions, idle, since: activity?.startedAt ?? s.lastActivityAt };
 }
 

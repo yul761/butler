@@ -18,6 +18,11 @@ export const EPIC_SERVER = "butler-epic";
  * 普通 ticket session 也挂，但作用域是 member，只有 ask_user 和 report（BTL-190 第 2+3 点）。
  */
 export const SESSIONS_SERVER = "butler-sessions";
+/**
+ * 交互 session 不用确认就能调用的 sessions 工具（BTL-190 第 2+3 点）：ask_user 和 report 只是把问题、汇报交给 Butler，
+ * 第一次用就弹权限确认的话 session 会卡在那里等人。只放这两个，start_session、end_session 之类照样要确认。
+ */
+export const SESSIONS_AUTO_ALLOW: readonly string[] = [`mcp__${SESSIONS_SERVER}__ask_user`, `mcp__${SESSIONS_SERVER}__report`];
 
 /** 怎么启动打包好的 StateCore MCP：command 是 Butler 自己的 Electron（process.execPath），script 是 bundle。 */
 export interface MemoryMcpLauncher {

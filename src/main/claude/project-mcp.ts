@@ -247,13 +247,15 @@ export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
  * 用户在这些目录（session 的目录、仓库主目录）里禁用过的 server 一并写进 disabledMcpjsonServers：禁用优先于全部启用。
  * 文件名按内容取 hash，内容一样就是同一个文件。写不了记日志返回 null（照旧弹出对话框）。
  */
-export function projectMcpApprovalSettings(dirs: string[], p: ProjectMcpPaths & { gateCommand?: string }): string | null {
+/** allowTools：不用确认就能调用的工具（写进 permissions.allow），空的或者不给就不写。 */
+export function projectMcpApprovalSettings(dirs: string[], p: ProjectMcpPaths & { gateCommand?: string; allowTools?: readonly string[] }): string | null {
   try {
     sweepStaleTmp(p.mcpDir);
     const claudeJson = readJson(p.claudeJson, p.log, { repo: false });
     const disabled = new Set<string>();
     for (const dir of new Set(dirs)) for (const n of approvals(dir, claudeJson, p).disabled) disabled.add(n);
     const content: Record<string, unknown> = { enableAllProjectMcpServers: true, disabledMcpjsonServers: [...disabled].sort() };
+    if (p.allowTools && p.allowTools.length > 0) content.permissions = { allow: [...p.allowTools] };
     // 合并总控的 gate hook 只写进这份 session 专用的 settings，不碰用户全局的 settings.json
     if (p.gateCommand) {
       const group = [{ matcher: "Bash", hooks: [{ type: "command", command: `${p.gateCommand} gate`, timeout: 10 }] }];

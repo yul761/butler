@@ -191,5 +191,7 @@ describe("inbox helpers (BTL-190 2+3)", () => {
   it("counts every pending decision as one more thing that needs you", () => {
     expect(needsYouTotal(null)).toBe(0);
     expect(needsYouTotal({ needsYou: [row()], decisions: [item(), item({ id: 2 })], epics: [], running: 1, merges: [] })).toBe(3);
+    // 已经在卡片上答了、等着送进去的不算。
+    expect(needsYouTotal({ needsYou: [], decisions: [item(), item({ id: 2, answer: "A" })], epics: [], running: 1, merges: [] })).toBe(1);
   });
 });

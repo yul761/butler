@@ -176,6 +176,7 @@ const ZH = {
     already: "正在换新",
     cooldown: "刚失败过，稍后再试",
     memory_off: "记忆关着，不能换新",
+    awaiting_user: "在等你决定，先回答它",
     failed: "这个 session 不能换新",
   } as Record<RefreshRefusal, string>,
   hiddenSessions: (n: number) => `已隐藏 (${n})`,

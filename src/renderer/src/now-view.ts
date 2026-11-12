@@ -120,7 +120,7 @@ export function rowPlace(view: NowView, r: NowRow, S: UiStrings): { label: strin
 }
 
 /** 侧栏上「需要你」的数：需要你的行加上未决的「待你决定」（每条一件）。 */
-export const needsYouTotal = (v: NowView | null): number => (v ? v.needsYou.length + v.decisions.length : 0);
+export const needsYouTotal = (v: NowView | null): number => (v ? v.needsYou.length + v.decisions.filter((d) => d.answer === null).length : 0);
 
 /** 「待你决定」、汇报是谁发的：ticket 号（多仓库时带仓库名）、某某总控、修复 session、epic session。 */
 export const inboxWho = (i: InboxItemView, S: UiStrings): string => S.inboxWho(i.role, i.ticketKey, i.repo);
