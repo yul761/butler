@@ -98,6 +98,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
   - **它不能**建、删或结束任何东西，也不能开 session。这些留给 epic 和 feature 总控。
   - 只读的工具在 Butler 给它写的设置里是放行的，巡检时不会每个工具都停下来等确认；`send_message` 和 `refresh_session` 照样要确认。
   - **每天巡检。** 设置 **每天几点让 Butler 总控巡检一次**（`butlerPatrolTime`，默认关），到点时 Butler 打开（或接着用）Butler 总控，让它看一遍 PR、CI 和待你决定的事，需要的话提醒 epic 和 feature 总控，并用 `ask_user` 列出要你亲自做的事。Butler 总控正忙就等它停下来。因为电脑睡眠或 Butler 没开而错过的巡检，当天下一次醒来、解锁或启动时补一次。它每天最多开一次 session。详见[配置 Butler](docs/configuration.zh-CN.md#调度与-handoff)。
+  - Butler 总控开着时，在 **现在** 页最上面单独占一行，也有自己的实况卡片。它停下来等你回话时算在「需要你」里：这时 epic 的汇报和巡检都等着送给它。
   - Butler 总控不会被自动换新，也不会因为闲置被自动关闭。
 - **合并总控。** 同一个仓库里的两个 ticket 快要撞车时，Butler 会在合并前介入。它盯着自己开的 session，不管属于哪个 epic、feature 或 ticket，只检查合并进目标分支，以及在共用文件夹里切分支这两类操作。它用 git 判断分支是否冲突，冲突的那个先合进去之前，会先拦下这次合并。详见[配置 Butler](docs/configuration.zh-CN.md#合并总控)。
 - **关掉已完成的 session。** 总控或 epic session 可以用 `end_session` 关掉一个已经停下、在等输入的 session。正在工作的、在等你回答的，以及它自己，它都会拒绝。
