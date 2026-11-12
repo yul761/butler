@@ -7,6 +7,8 @@
 //     /handoff <问题> 把它写进 open_questions）；
 //     输入 /fake-bash <命令> 时像 Bash 工具在跑：写一条没有结果的 tool_use 和 tasks/<id>.output，这一轮不结束；
 //     输入 /fake-bg <命令> 时像后台命令：tool_result 带任务 id 和输出文件，这一轮结束；/fake-bg-done 写它的完成通知；
+//       和 Claude Code 一样，命令在跑的时候有一个后台 shell 子进程（不真的执行命令，等到完成通知或假 claude 退出）：
+//       Butler 进程树里找不到它的 shell 就当后台任务已经结束（BTL-190 第 1 点）；
 //     输入 /fake-flood <行数> 时打印这么多行（每行约 100 字节，用来撑满回放缓冲）；
 //     输入 /fake-fullscreen 时像 claude 的全屏界面：打开备用屏幕和鼠标上报（只发这一次），之后收到滚轮就记日志；
 //     输入 /fake-run <命令> 时像 Bash 工具：先跑 PreToolUse（也读 --settings 里的 hook，合并总控的 gate 在那里），拒绝就打印 denied: <理由>，
@@ -286,6 +288,20 @@ function interactive() {
   };
   /** 正在跑的后台命令的任务 id。 */
   let backgroundTask = null;
+  /** 后台命令的 shell 子进程（Windows 上 Butler 不看进程树，不开）。 */
+  let backgroundShell = null;
+  const stopBackgroundShell = () => {
+    if (backgroundShell) backgroundShell.kill();
+    backgroundShell = null;
+  };
+  process.on("exit", stopBackgroundShell);
+  /** 像 Claude Code 跑后台命令的 shell：命令行里带着命令，自己等着；假 claude 没了（被杀、没走到 exit 事件）它一秒内也退出。 */
+  const startBackgroundShell = (command) => {
+    stopBackgroundShell();
+    if (process.platform === "win32") return;
+    backgroundShell = spawn(SHELL, ["-c", 'while kill -0 "$PPID" 2>/dev/null; do sleep 1; done', command], { stdio: "ignore" });
+    backgroundShell.on("error", (e) => log(`background shell error ${e.message}`));
+  };
   const rl = readline.createInterface({ input: process.stdin });
   // bracketed paste（总控交任务时 Butler 这样写入）：粘贴里的几行合成一条消息。PTY 按行交付，粘贴结束标记所在的那一行
   // 只有等到 Butler 随后的回车才会到，所以读到结束标记就提交。
@@ -351,6 +367,7 @@ function interactive() {
     }
     if (line === "/fake-bg-done") {
       // 后台命令结束：Claude Code 写的是这条通知，不是用户消息。
+      stopBackgroundShell();
       append({ type: "queue-operation", operation: "enqueue", content: `<task-notification><task-id>${backgroundTask}</task-id><status>completed</status></task-notification>` });
       out("> ");
       return;
@@ -390,6 +407,7 @@ function interactive() {
     if (bash) {
       const { toolId, taskId, output } = startBash(bash[2], { run_in_background: true });
       backgroundTask = taskId;
+      startBackgroundShell(bash[2]);
       append({ type: "user", toolUseResult: { backgroundTaskId: taskId }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: `Command running in background with ID: ${taskId}. Output is being written to: ${output}. You will be notified when it completes \u2014 do not poll that file or sleep while waiting.` }] } });
     }
     const endTurn = (reply) => {
