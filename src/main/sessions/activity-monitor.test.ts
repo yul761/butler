@@ -56,9 +56,14 @@ function harness(over: Partial<ActivityDeps> = {}) {
   const judgeResults: ((v: StuckVerdict | null) => void)[] = [];
   const stuckInfos: unknown[] = [];
   const cpuPids: number[] = [];
+  /** 每次读进程树时问的后台命令。 */
+  const procCommands: string[][] = [];
   const logs: string[] = [];
   let notifications = 0;
   let cpu: number | null = 100;
+  /** 进程树里还有没有后台命令的 shell；默认读不到（照旧算在跑）。 */
+  let shell: boolean | null = null;
+  let openedAt = 0;
   let clock = 1_000_000;
 
   const deps: ActivityDeps = {
@@ -69,6 +74,7 @@ function harness(over: Partial<ActivityDeps> = {}) {
       openIds: () => [...open],
       snapshot: (id) => ({ data: screens.get(id) ?? "", exitCode: null }),
       pid: (id) => (open.has(id) ? 4000 : null),
+      openedAt: () => openedAt,
     },
     transcriptFile: (id) => join(dir, `${id}.jsonl`),
     tasksDir: () => join(dir, "tasks"),
@@ -79,9 +85,10 @@ function harness(over: Partial<ActivityDeps> = {}) {
     notify: () => notifications++,
     onStuck: (info) => stuckInfos.push(info),
     now: () => clock,
-    childCpu: async (pid) => {
+    procTree: async (pid, commands) => {
       cpuPids.push(pid);
-      return cpu;
+      procCommands.push(commands);
+      return { cpuMs: cpu, liveShell: commands.length ? shell : null };
     },
     log: (m, e) => logs.push(`${m} ${e instanceof Error ? e.message : ""}`),
     ...over,
@@ -114,9 +121,11 @@ function harness(over: Partial<ActivityDeps> = {}) {
   };
 
   return {
-    dir, deps, monitor, heads, open, screens, tickets, features, judgeCalls, judgeResults, stuckInfos, cpuPids, logs, transcript, openSession, checks, beat, sleep,
+    dir, deps, monitor, heads, open, screens, tickets, features, judgeCalls, judgeResults, stuckInfos, cpuPids, procCommands, logs, transcript, openSession, checks, beat, sleep,
     notifications: () => notifications,
     setCpu: (v: number | null) => (cpu = v),
+    setShell: (v: boolean | null) => (shell = v),
+    setOpenedAt: (v: number) => (openedAt = v),
     /** 一个在跑的前台命令：这一轮没结束，满足检测条件。 */
     busy: (id: string) => transcript(id, toolUse(`${id}-t`, "Bash", { command: "pnpm lint" })),
   };
@@ -779,6 +788,82 @@ describe("ActivityMonitor stuck detection", () => {
     h.transcript("s1", backgroundDone("b1"));
     await h.checks(5);
     expect(h.judgeCalls).toEqual([]);
+  });
+
+  describe("a background task that must have ended (BTL-190)", () => {
+    const pushInBackground = (h: ReturnType<typeof harness>, startedAt = AT) =>
+      h.transcript("s1", { ...toolUse("t1", "Bash", { command: "git push", run_in_background: true }), timestamp: startedAt }, backgroundStarted("t1", "b1", join(h.dir, "bg.output")), endTurn());
+
+    it("is dropped when it started before this terminal opened (replayed by --resume)", async () => {
+      const h = harness();
+      h.setOpenedAt(AT_MS + 60_000);
+      h.openSession("s1");
+      pushInBackground(h);
+      await h.beat();
+      expect(h.monitor.get("s1")).toMatchObject({ kind: "waiting", background: false, startedAt: null });
+      await h.checks(5);
+      expect(h.judgeCalls).toEqual([]);
+      // 打开之后才开始的照常算
+      h.transcript("s1", { ...toolUse("t2", "Bash", { command: "gh run watch 1", run_in_background: true }), timestamp: new Date(AT_MS + 120_000).toISOString() }, backgroundStarted("t2", "b2", join(h.dir, "b2.output")), endTurn());
+      await h.beat();
+      expect(h.monitor.get("s1")).toMatchObject({ kind: "ci", background: true });
+    });
+
+    it("is not shown and not stuck-eligible once the process tree has no shell for it", async () => {
+      const h = harness();
+      h.setShell(false);
+      h.openSession("s1");
+      pushInBackground(h);
+      await h.beat();
+      expect(h.procCommands[0]).toEqual(["git push"]);
+      expect(h.monitor.get("s1")).toMatchObject({ kind: "waiting", background: false });
+      await h.checks(5);
+      expect(h.judgeCalls).toEqual([]);
+      // 死掉的任务不再每次检查都去读进程树
+      expect(h.procCommands).toHaveLength(1);
+    });
+
+    it("still counts while its shell is alive, and when the process tree can't be read", async () => {
+      for (const alive of [true, null]) {
+        const h = harness();
+        h.setShell(alive);
+        h.openSession("s1");
+        pushInBackground(h);
+        await h.beat();
+        expect(h.monitor.get("s1")).toMatchObject({ kind: "push", background: true });
+        await h.checks(3);
+        expect(h.judgeCalls).toHaveLength(1);
+      }
+    });
+
+    it("is checked again at the next stuck check, sharing one process-tree read with it", async () => {
+      const h = harness();
+      h.setShell(true);
+      h.openSession("s1");
+      pushInBackground(h);
+      await h.checks(1);
+      const reads = h.cpuPids.length;
+      expect(reads).toBe(1);
+      h.setShell(false);
+      await h.beat();
+      expect(h.cpuPids).toHaveLength(reads);
+      expect(h.monitor.get("s1")).toMatchObject({ background: true });
+      await h.checks(1);
+      expect(h.cpuPids).toHaveLength(reads + 1);
+      expect(h.monitor.get("s1")).toMatchObject({ kind: "waiting", background: false });
+    });
+
+    it("a new background task after a dead one is shown again until the tree says otherwise", async () => {
+      const h = harness();
+      h.setShell(false);
+      h.openSession("s1");
+      pushInBackground(h);
+      await h.beat();
+      expect(h.monitor.get("s1")).toMatchObject({ background: false });
+      h.transcript("s1", toolUse("t2", "Bash", { command: "pnpm test", run_in_background: true }), backgroundStarted("t2", "b2", join(h.dir, "b2.output")), endTurn());
+      await h.beat();
+      expect(h.monitor.get("s1")).toMatchObject({ kind: "test", background: true });
+    });
   });
 
   it("counts a growing output file, on any background task, as a change", async () => {
@@ -1451,9 +1536,9 @@ describe("ActivityMonitor lifecycle", () => {
     const h = harness();
     let release: () => void = () => undefined;
     let calls = 0;
-    h.deps.childCpu = () => {
+    h.deps.procTree = () => {
       calls++;
-      return new Promise((r) => (release = () => r(0)));
+      return new Promise((r) => (release = () => r({ cpuMs: 0, liveShell: null })));
     };
     h.openSession("s1");
     h.busy("s1");
@@ -1502,7 +1587,7 @@ describe("ActivityMonitor lifecycle", () => {
   it("does not touch the database after stop while a tick is reading files", async () => {
     const h = harness();
     let release: (() => void) | null = null;
-    h.deps.childCpu = () => new Promise((r) => (release = () => r(0)));
+    h.deps.procTree = () => new Promise((r) => (release = () => r({ cpuMs: 0, liveShell: null })));
     h.openSession("s1");
     h.openSession("s2");
     h.busy("s1");

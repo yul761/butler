@@ -7,7 +7,7 @@ import type { Feature, Session, Ticket } from "../../shared/types";
 import { M } from "../strings";
 import { backgroundTasks, classifyCommand, currentTool, DETAIL_LIMIT, newTranscriptState, type BackgroundTask, type RunningTool, type TranscriptState } from "./activity-parse";
 import { foregroundOutputFile, readOutputTail, subagentOutputSizes, tasksDirFor, TranscriptTail, utf8Tail } from "./activity-sources";
-import { childCpuMs } from "./proc-tree";
+import { sampleProcTree, type ProcSample } from "./proc-tree";
 import { permissionPromptShowing, stripAnsi, type PtySnapshot } from "./pty-manager";
 import type { StuckInput } from "./stuck-judge";
 import { cpuQuiet, STUCK_CHECK_MS, StuckTracker, type StuckVerdict } from "./stuck-tracker";
@@ -57,7 +57,8 @@ export interface ActivityDeps {
   sessions: { head(id: string): Session | null };
   tickets: { get(key: string): Ticket | null };
   features: { get(id: number): Feature | null };
-  pty: { openIds(): string[]; snapshot(termId: string): PtySnapshot; pid(termId: string): number | null };
+  /** openedAt：终端打开（新开或恢复）的时间，比它早开始的后台任务一定已经结束了。 */
+  pty: { openIds(): string[]; snapshot(termId: string): PtySnapshot; pid(termId: string): number | null; openedAt(termId: string): number };
   /** session 的 transcript 文件；还没有时返回 null。 */
   transcriptFile: (sessionId: string) => string | null;
   judge: (input: StuckInput) => Promise<StuckVerdict | null>;
@@ -68,8 +69,8 @@ export interface ActivityDeps {
   now: () => number;
   /** 默认 10 秒和 3 分钟。 */
   intervals?: ActivityIntervals;
-  /** 测试注入；默认用 proc-tree 读真实进程树。 */
-  childCpu?: (rootPid: number) => Promise<number | null>;
+  /** 测试注入；默认用 proc-tree 读真实进程树（子进程 CPU，以及 commands 这些后台命令的 shell 还在不在）。 */
+  procTree?: (rootPid: number, commands: string[]) => Promise<ProcSample>;
   /** 测试注入；默认是 Claude 放命令输出的目录。 */
   tasksDir?: (transcriptFile: string, sessionId: string) => string | null;
   log?: (msg: string, err?: unknown) => void;
@@ -146,7 +147,17 @@ interface Tracked {
   activity: SessionActivity | null;
   lastReply: string | null;
   lastReplyId: string | null;
+  /** 上一次看到的后台任务 id（排好序拼起来）：变了就重新问进程树。 */
+  shellKey: string;
+  /** 这些后台任务的命令（问进程树时用来认 shell）。 */
+  shellCommands: string[];
+  /** 进程树里还有没有这些后台任务的 shell；还没问过、读不到为 null（照旧算在跑）。 */
+  shellAlive: boolean | null;
+  shellCheckedAt: number;
 }
+
+/** 这一次更新里最多读一次进程树：后台任务的检查和卡住采样共用。 */
+type Probe = () => Promise<ProcSample>;
 
 /**
  * 每 10 秒看一遍有终端的 session：读 transcript 和命令输出得出活动，每 3 分钟采一次样判断是否卡住。
@@ -294,7 +305,9 @@ export class ActivityMonitor {
     t.termId = termId;
     t.cwd = head.cwd;
     t.scope = this.scope(head);
-    const { state, size } = await this.readTranscript(t);
+    const { state: full, size } = await this.readTranscript(t);
+    const probe = this.probe(t, now);
+    const state = await this.liveBackground(t, full, now, probe);
     const { eligible, ...derived } = deriveActivity(state, permissionPromptShowing(this.d.pty.snapshot(termId).data));
     const output = await this.readOutput(t, state);
     const grew = size !== t.transcriptSize || output.size !== t.outputSize;
@@ -305,7 +318,7 @@ export class ActivityMonitor {
     t.lastReply = state.lastReply;
     t.lastReplyId = state.lastReplyId;
     if (grew) t.lastOutputAt = now;
-    await this.sample(t, grew, now);
+    await this.sample(t, grew, now, probe);
     const next: SessionActivity = { sessionId: t.id, ...derived, lastOutputAt: t.lastOutputAt, ...this.verdict(t), lastOutput: output.lines };
     const changed = !isDeepStrictEqual(next, t.activity);
     t.activity = next;
@@ -316,6 +329,7 @@ export class ActivityMonitor {
     const t: Tracked = {
       id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, fileSizes: new Map(), outputText: "", lastOutputAt: null,
       eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null, lastReplyId: null,
+      shellKey: "", shellCommands: [], shellAlive: null, shellCheckedAt: Number.NEGATIVE_INFINITY,
     };
     this.tracked.set(id, t);
     return t;
@@ -338,6 +352,45 @@ export class ActivityMonitor {
     if (!t.file) return { state: newTranscriptState(), size: 0 };
     t.tail ??= new TranscriptTail(t.file);
     return t.tail.read();
+  }
+
+  /**
+   * 去掉一定已经结束的后台任务，返回只剩活着的任务的状态（不改 TranscriptTail 里的那份）：
+   * - 开始得比这个终端打开还早的：后台 shell 活不过它的 claude 进程，是 --resume 重放出来的旧任务；
+   * - 进程树里已经没有它们的 shell 的（TaskStop 之外别的方式结束、没写通知）。进程树和卡住检查一样每 3 分钟看一次，
+   *   看到没有了就不再看，直到后台任务变了；读不到就照旧算在跑。
+   */
+  private async liveBackground(t: Tracked, s: TranscriptState, now: number, probe: Probe): Promise<TranscriptState> {
+    const openedAt = this.d.pty.openedAt(t.termId);
+    let tasks = backgroundTasks(s).filter((task) => task.startedAt >= openedAt);
+    const key = tasks.map((task) => task.taskId).sort().join(" ");
+    if (key !== t.shellKey) {
+      t.shellKey = key;
+      t.shellCommands = tasks.map((task) => task.command);
+      t.shellAlive = null;
+    }
+    if (tasks.length && t.shellAlive !== false && now - t.shellCheckedAt >= this.stuckCheckMs) await probe();
+    if (t.shellAlive === false) tasks = [];
+    if (tasks.length === s.background.size) return s;
+    return { ...s, background: new Map(tasks.map((task) => [task.taskId, task])) };
+  }
+
+  /** 进程树读数，同一次更新里只读一次；读到后台任务的结论就记下来（已经知道没有了的不再问：前台命令的 shell 会让它们看起来又活了）。 */
+  private probe(t: Tracked, now: number): Probe {
+    let pending: Promise<ProcSample> | null = null;
+    return () => {
+      pending ??= (async () => {
+        const commands = t.shellAlive === false ? [] : t.shellCommands;
+        const pid = this.d.pty.pid(t.termId);
+        const sample: ProcSample = pid === null ? { cpuMs: null, liveShell: null } : await (this.d.procTree ?? sampleProcTree)(pid, commands);
+        if (commands.length) {
+          t.shellAlive = sample.liveShell;
+          t.shellCheckedAt = now;
+        }
+        return sample;
+      })();
+      return pending;
+    };
   }
 
   /**
@@ -368,7 +421,7 @@ export class ActivityMonitor {
   }
 
   /** 卡住检测采样：平时每 3 分钟一次；已经卡住时一有动静马上采，红点不用等到下一次检查才消失。 */
-  private async sample(t: Tracked, grew: boolean, now: number): Promise<void> {
+  private async sample(t: Tracked, grew: boolean, now: number, probe: Probe): Promise<void> {
     if (!t.scope) {
       this.tracker.forget(t.id);
       this.wanted.delete(t.id);
@@ -379,7 +432,7 @@ export class ActivityMonitor {
     if (!moved && now - t.lastSampleAt < this.stuckCheckMs) return;
     t.lastSampleAt = now;
     if (t.eligible) {
-      const cpu = await this.childCpu(t.termId);
+      const cpu = (await probe()).cpuMs;
       t.childCpuQuiet = cpuQuiet(t.childCpuMs, cpu);
       t.childCpuMs = cpu;
     }
@@ -388,12 +441,6 @@ export class ActivityMonitor {
     const suspicious = this.tracker.observe(t.id, sample, now);
     if (suspicious && !this.judging.has(t.id)) this.wanted.add(t.id);
     if (!suspicious) this.wanted.delete(t.id);
-  }
-
-  private async childCpu(termId: string): Promise<number | null> {
-    const pid = this.d.pty.pid(termId);
-    if (pid === null) return null;
-    return this.d.childCpu ? this.d.childCpu(pid) : childCpuMs(pid);
   }
 
   private verdict(t: Tracked): Pick<SessionActivity, "stuck" | "reason" | "action"> {
