@@ -6,6 +6,8 @@ import { setLang } from "../i18n";
 import { tempDir } from "../test-utils";
 import { ACTIVITY_TICK_MS, ActivityMonitor, activityIntervals, type ActivityDeps, deriveActivity } from "./activity-monitor";
 import { applyEntry, newTranscriptState } from "./activity-parse";
+import { stripAnsi } from "./pty-manager";
+import { permissionOnScreen } from "./screen";
 import type { StuckInput } from "./stuck-judge";
 import { STUCK_CHECK_MS, type StuckVerdict } from "./stuck-tracker";
 
@@ -75,6 +77,7 @@ function harness(over: Partial<ActivityDeps> = {}) {
       snapshot: (id) => ({ data: screens.get(id) ?? "", exitCode: null }),
       pid: (id) => (open.has(id) ? 4000 : null),
       openedAt: () => openedAt,
+      permissionShowing: (id) => permissionOnScreen(stripAnsi(screens.get(id) ?? "").split("\n")),
     },
     transcriptFile: (id) => join(dir, `${id}.jsonl`),
     tasksDir: () => join(dir, "tasks"),

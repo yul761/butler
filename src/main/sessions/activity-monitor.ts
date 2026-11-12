@@ -8,7 +8,7 @@ import { M } from "../strings";
 import { backgroundTasks, classifyCommand, currentTool, DETAIL_LIMIT, newTranscriptState, type BackgroundTask, type RunningTool, type TranscriptState } from "./activity-parse";
 import { foregroundOutputFile, readOutputTail, subagentOutputSizes, tasksDirFor, TranscriptTail, utf8Tail } from "./activity-sources";
 import { sampleProcTree, type ProcSample } from "./proc-tree";
-import { permissionPromptShowing, stripAnsi, type PtySnapshot } from "./pty-manager";
+import { stripAnsi, type PtySnapshot } from "./pty-manager";
 import type { StuckInput } from "./stuck-judge";
 import { cpuQuiet, STUCK_CHECK_MS, StuckTracker, type StuckVerdict } from "./stuck-tracker";
 
@@ -58,7 +58,14 @@ export interface ActivityDeps {
   tickets: { get(key: string): Ticket | null };
   features: { get(id: number): Feature | null };
   /** openedAt：终端打开（新开或恢复）的时间，比它早开始的后台任务一定已经结束了。 */
-  pty: { openIds(): string[]; snapshot(termId: string): PtySnapshot; pid(termId: string): number | null; openedAt(termId: string): number };
+  pty: {
+    openIds(): string[];
+    snapshot(termId: string): PtySnapshot;
+    pid(termId: string): number | null;
+    openedAt(termId: string): number;
+    /** 当前屏幕上有权限确认（PtyManager.permissionShowing，看屏幕而不是输出流的末尾）。 */
+    permissionShowing(termId: string): boolean;
+  };
   /** session 的 transcript 文件；还没有时返回 null。 */
   transcriptFile: (sessionId: string) => string | null;
   judge: (input: StuckInput) => Promise<StuckVerdict | null>;
@@ -308,7 +315,7 @@ export class ActivityMonitor {
     const { state: full, size } = await this.readTranscript(t);
     const probe = this.probe(t, now);
     const state = await this.liveBackground(t, full, now, probe);
-    const { eligible, ...derived } = deriveActivity(state, permissionPromptShowing(this.d.pty.snapshot(termId).data));
+    const { eligible, ...derived } = deriveActivity(state, this.d.pty.permissionShowing(termId));
     const output = await this.readOutput(t, state);
     const grew = size !== t.transcriptSize || output.size !== t.outputSize;
     t.transcriptSize = size;

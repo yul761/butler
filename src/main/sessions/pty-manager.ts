@@ -1,4 +1,5 @@
 import type { SpawnSpec } from "../claude/spawn";
+import { dialogOnScreen, pasteInInputBox, permissionOnScreen, TermScreen } from "./screen";
 
 export interface PtyProcess {
   readonly pid: number;
@@ -38,6 +39,10 @@ interface Term {
   draftLen: number;
   /** 终端打开（新开或恢复）的时间（R36：刚打开的终端不自动换新）。 */
   openedAt: number;
+  /** 当前这一屏（BTL-190 第 9 点）：对话框、权限确认、输入框都看它，不看输出流的末尾。 */
+  screen: TermScreen;
+  /** 上一次 UserPromptSubmit 到的时间（markSubmitted）；0 = 还没有。deliver 回车以后等它确认送到。 */
+  submittedAt: number;
 }
 
 /** 终端输出去掉 ANSI 控制序列后的纯文本（只用来认对话框）。 */
@@ -87,26 +92,6 @@ export function isUserInput(data: string): boolean {
   return data.replace(TERMINAL_REPORT_RE, "") !== "";
 }
 
-/**
- * claude 启动时可能先问的问题：信任这个文件夹、启用项目里的 MCP server。这时候粘贴、回车等于替用户选了默认的“是”。
- * 屏幕最后一段里出现这些字样就当对话框还在。
- */
-const DIALOG_MARKERS = ["do you trust", "trust the files", "trust this folder", "yes, proceed", "yes, i trust", "new mcp server", "mcp servers found", "use this and all future"];
-const DIALOG_TAIL = 1000;
-
-export function dialogShowing(buffer: string): boolean {
-  const tail = stripAnsi(buffer.slice(-DIALOG_TAIL * 4)).slice(-DIALOG_TAIL).toLowerCase();
-  return DIALOG_MARKERS.some((m) => tail.includes(m));
-}
-
-/** 权限确认提示（“Do you want to proceed?” 等）和退出计划模式的提示：session 在等人点，不算卡住。 */
-const PERMISSION_MARKERS = ["do you want to proceed", "do you want to make this edit", "do you want to create", "would you like to proceed"];
-
-export function permissionPromptShowing(buffer: string): boolean {
-  const tail = stripAnsi(buffer.slice(-DIALOG_TAIL * 4)).slice(-DIALOG_TAIL).toLowerCase();
-  return PERMISSION_MARKERS.some((m) => tail.includes(m));
-}
-
 export interface DeliverOptions {
   /** 输出安静多久算输入框就绪。 */
   idleMs?: number;
@@ -122,6 +107,11 @@ export interface DeliverOptions {
    * 任务会被拆成好几条消息提交（CI 上实际出现过）。
    */
   singleLine?: boolean;
+  /**
+   * 回车以后等 UserPromptSubmit 确认送到多久（只在这个终端的 hook 通着时等，即 SessionStart 到过）；没等到而输入框里还留着
+   * 这次粘贴，就再按一次回车、再等这么久。
+   */
+  confirmMs?: number;
   /**
    * 粘贴前的最后一道复查（I2）：输入框就绪、马上要粘贴时调用（同步，中间不会插进别的事）。返回 false 就什么都不写，
    * deliver 返回 blocked。调用期间这一次 deliver 自己不算「在递」（autoInputInFlight），别的 deliver 还算。
@@ -199,7 +189,11 @@ export class PtyManager {
     if (this.terms.has(termId)) throw new Error(`terminal ${termId} already open`);
     this.exited.delete(termId);
     const proc = this.factory(spec.file, spec.args, { cwd: opts.cwd, env: opts.env, cols: opts.cols ?? 120, rows: opts.rows ?? 32 });
-    const term: Term = { proc, buffer: "", cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draftLen: 0, openedAt: this.now() };
+    const cols = opts.cols ?? 120, rows = opts.rows ?? 32;
+    const term: Term = {
+      proc, buffer: "", cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draftLen: 0, openedAt: this.now(),
+      screen: new TermScreen(cols, rows), submittedAt: 0,
+    };
     this.terms.set(termId, term);
     proc.onData((data) => {
       // ConPTY 在进程退出后还可能吐出尾部数据；退出后一律丢弃，否则渲染进程会以为终端被重新打开而清掉退出提示。
@@ -208,10 +202,12 @@ export class PtyManager {
       const full = term.buffer + data;
       term.buffer = trimBuffer(full);
       if (term.buffer.length < full.length) recordModes(term.cutModes, full.slice(0, full.length - term.buffer.length));
+      this.guard(termId, "screen write", () => term.screen.write(data));
       this.events.data(termId, data);
     });
     proc.onExit(({ exitCode }) => {
       term.exited = true;
+      this.guard(termId, "screen dispose", () => term.screen.dispose());
       this.terms.delete(termId);
       this.exited.delete(termId);
       this.exited.set(termId, { buffer: replay(term), exitCode });
@@ -235,8 +231,30 @@ export class PtyManager {
 
   /** 屏幕上有权限确认或启动对话框（信任文件夹、MCP）：在等用户回答，总控不能替用户结束它。终端不在了返回 false。 */
   screenNeedsUser(termId: string): boolean {
+    const lines = this.screenLines(termId);
+    return permissionOnScreen(lines) || dialogOnScreen(lines);
+  }
+
+  /** 屏幕上有权限确认（或退出计划模式的提示）：session 在等人点，不算卡住。终端不在了返回 false。 */
+  permissionShowing(termId: string): boolean {
+    return permissionOnScreen(this.screenLines(termId));
+  }
+
+  /** 当前这一屏的文字；终端不在了返回空数组。 */
+  screenLines(termId: string): string[] {
     const t = this.terms.get(termId);
-    return !!t && (permissionPromptShowing(t.buffer) || dialogShowing(t.buffer));
+    if (!t) return [];
+    try {
+      return t.screen.lines();
+    } catch (e) {
+      this.log(`pty ${termId}: reading the screen failed`, e);
+      return [];
+    }
+  }
+
+  /** 等这个终端已有的输出都画到屏幕上（测试和需要马上看屏幕的地方用）。 */
+  async screenSettled(termId: string): Promise<void> {
+    await this.terms.get(termId)?.screen.flush();
   }
 
   /** 用户的输入（渲染进程的按键）。终端自己发的报告（焦点、鼠标、查询的回复）照样写进去，但不算用户输入过（R37）。 */
@@ -276,7 +294,11 @@ export class PtyManager {
   }
 
   resize(termId: string, cols: number, rows: number): void {
-    if (cols > 0 && rows > 0) this.guard(termId, "resize", () => this.terms.get(termId)?.proc.resize(cols, rows));
+    if (cols > 0 && rows > 0) {
+      this.guard(termId, "resize", () => this.terms.get(termId)?.proc.resize(cols, rows));
+      // claude 按 pty 的尺寸画界面：屏幕模型的尺寸不跟上，光标定位就全错了。
+      this.guard(termId, "screen resize", () => this.terms.get(termId)?.screen.resize(cols, rows));
+    }
   }
 
   kill(termId: string): void {
@@ -299,6 +321,12 @@ export class PtyManager {
   markStarted(termId: string): void {
     const t = this.terms.get(termId);
     if (t) t.started = true;
+  }
+
+  /** 这个终端的 claude 收下了一条输入（UserPromptSubmit hook）：deliver 回车以后等的就是它。 */
+  markSubmitted(termId: string): void {
+    const t = this.terms.get(termId);
+    if (t) t.submittedAt = this.now();
   }
 
   /**
@@ -339,7 +367,7 @@ export class PtyManager {
       const now = this.now();
       const started = t.started || now - start >= (o.startWaitMs ?? 60_000);
       const idle = t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs;
-      if (started && idle && !dialogShowing(t.buffer)) {
+      if (started && idle && !dialogOnScreen(this.screenLines(termId))) {
         if (o.recheck && !this.recheckPasses(termId, o.recheck)) return "blocked";
         // 粘贴里的换行按终端的惯例写成 \r（xterm 的粘贴也是这样）：Windows 的 ConPTY 会吞掉输入里的 \n。
         const body = o.singleLine ? text.replace(/\s*\r?\n\s*/g, " ") : text.replace(/\r?\n/g, "\r");
@@ -357,10 +385,49 @@ export class PtyManager {
       const now = this.now();
       if ((now - Math.max(t.lastOutputAt, pasted) >= (o.settleMs ?? 300)) || now - pasted >= (o.settleCapMs ?? 5000)) {
         this.guard(termId, "deliver enter", () => t.proc.write("\r"));
-        return "sent";
+        break;
       }
       await new Promise((r) => setTimeout(r, 50));
     }
+    // 「/clear」这类内置命令不触发 UserPromptSubmit，等也等不到。
+    return this.confirm(termId, text, pasted, text.startsWith("/") ? 0 : (o.confirmMs ?? 10_000));
+  }
+
+  /**
+   * 回车以后确认 claude 收下了（BTL-190 第 9 点）：等 UserPromptSubmit。没等到、输入框里还留着这次粘贴，就再按一次回车再等；
+   * 还是没等到只记日志。不重贴：东西已经写进去了，重贴可能发两遍。hook 不通（SessionStart 从没到过）就不等，没有可等的信号。
+   * 回车已经写进去了，所以这里一律返回 sent（终端中途退出也是）：返回 exited 调用方会当没送到、重开以后再送一遍。
+   */
+  private async confirm(termId: string, text: string, pasted: number, confirmMs: number): Promise<DeliverResult> {
+    const t0 = this.terms.get(termId);
+    if (!t0 || t0.exited || !t0.started || confirmMs <= 0) return "sent";
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const entered = this.now();
+      for (;;) {
+        const t = this.terms.get(termId);
+        if (t && t.submittedAt >= entered) return "sent";
+        if (!t || t.exited) return "sent";
+        if (this.now() - entered >= confirmMs) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const t = this.terms.get(termId);
+      if (!t || t.exited) return "sent";
+      if (attempt > 0 || !this.safeToPressEnterAgain(termId, t, text, pasted)) break;
+      this.log(`pty ${termId}: the delivered text is still in the input box ${confirmMs / 1000} seconds after Enter; pressing Enter again`);
+      this.guard(termId, "deliver enter again", () => t.proc.write("\r"));
+    }
+    this.log(`pty ${termId}: no UserPromptSubmit within ${confirmMs / 1000} seconds of delivering a message; it may not have been submitted`);
+    return "sent";
+  }
+
+  /**
+   * 补按回车之前：用户从粘贴以后没碰过这个终端（不然输入框里可能是他的草稿），屏幕上没有对话框和权限确认（回车会替他选默认项），
+   * 输入框画着、里面还是这次粘贴。
+   */
+  private safeToPressEnterAgain(termId: string, t: Term, text: string, pasted: number): boolean {
+    if (t.lastUserInputAt >= pasted) return false;
+    const lines = this.screenLines(termId);
+    return !dialogOnScreen(lines) && !permissionOnScreen(lines) && pasteInInputBox(lines, text);
   }
 
   /** 等 claude 的界面输出停下来（输入框就绪）后把文本写进去，不回车。 */
