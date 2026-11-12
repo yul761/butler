@@ -35,6 +35,8 @@ function setup(o: { minutes?: number } = {}) {
     /** precheckClose 的回答（按 head id；不在里面的是 null）。 */
     refusals: {} as Record<string, RefreshRefusal>,
     askUser: new Set<string>(),
+    /** 在等 Butler 递合并或 CI 通知的 head。 */
+    waiting: new Set<string>(),
     hidden: [] as Session[],
     /** 其他链上的 id → head。 */
     heads: {} as Record<string, Session>,
@@ -60,6 +62,7 @@ function setup(o: { minutes?: number } = {}) {
     ticketsOfFeature: (f) => state.tickets[f] ?? [],
     featuresOfEpic: (e) => state.features[e] ?? [],
     askUserPending: (id) => state.askUser.has(id),
+    waitingOnButler: (id) => state.waiting.has(id),
     refresher: {
       precheckClose: (id, trigger) => {
         prechecks.push({ id, trigger });
@@ -122,6 +125,26 @@ describe("SessionCleanup idle close (BTL-190 item 8)", () => {
     t.closes.length = 0;
     t.c.tick();
     expect(t.closes.map((x) => x.id)).toEqual(["old", "recent"]);
+  });
+
+  it("leaves a session waiting on a merge-queue or CI notice open: the notice only reaches an open terminal", () => {
+    const t = setup();
+    t.add("queued");
+    t.add("free");
+    t.state.waiting.add("queued");
+    t.c.tick();
+    expect(t.closes.map((x) => x.id)).toEqual(["free"]);
+  });
+
+  it("does not count time asleep as idle: after waking, the idle clock starts again", () => {
+    const t = setup();
+    t.add("old");
+    t.c.resumed();
+    t.c.tick();
+    expect(t.closes).toEqual([]);
+    t.state.now += 180 * MIN;
+    t.c.tick();
+    expect(t.closes.map((x) => x.id)).toEqual(["old"]);
   });
 
   it("does nothing automatically at 0", () => {

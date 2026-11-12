@@ -785,11 +785,10 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     // /clear 之后没有 Stop：每一步输入之前先重读活动（R28）。
     refreshActivity: refreshActivityOf,
-    // 闲置关闭（BTL-190 第 8 点）：和 end_session 一样只关终端（之后能恢复），并且隐藏起来。
-    endTerminal: (termId, headId) => {
-      pty.kill(termId);
-      sessions.dismiss(headId, Date.now());
-    },
+    // 闲置关闭（BTL-190 第 8 点）：和 end_session 一样只关终端（之后能恢复）。不隐藏：总控的 list_sessions、夜里的 handoff
+    // 和 feature 汇总都跳过隐藏的 session。
+    endTerminal: (termId) => pty.kill(termId),
+    needsYouUndecided: (id) => needsYou.undecided(id),
     log: logger,
   });
   // 「待你决定」和汇报（BTL-190 第 2+3 点）。递回答不看「需要你」（未决的 ask_user 本身就算），别的检查照常；递汇报和 CI 结果同一道 guard。
@@ -820,6 +819,12 @@ async function bootstrap(): Promise<void> {
     ticketsOfFeature: (id) => tickets.listByFeature(id).map((t) => t.key),
     featuresOfEpic: (id) => features.listByEpic(id).map((f) => f.id),
     askUserPending: (id) => inboxService.hasPendingDecision(id),
+    // 合并排队（等待者记的是 BUTLER_SESSION，换成 head 再对）、ticket 的 PR 的 CI 还在跑：通知只递给开着的终端。
+    waitingOnButler: (headId) => {
+      if ([...gateRepo.waitingSessionIds()].some((id) => (sessions.head(id)?.id ?? id) === headId)) return true;
+      const key = sessions.head(headId)?.ticketKey;
+      return key != null && prWatcher.statusOf(key).some((p) => p.ci === "pending");
+    },
     refresher,
     hiddenBefore: (before) => sessions.listHiddenBefore(before),
     head: (id) => sessions.head(id),
@@ -1148,7 +1153,11 @@ async function bootstrap(): Promise<void> {
 
   // 调度：启动（health 探测完成后）、唤醒、解锁时检查到期任务；每分钟 tick，覆盖 16:00 和整晚没锁屏的情况。
   void healthReady.then(() => checkSchedule("startup"));
-  powerMonitor.on("resume", () => void checkSchedule("resume"));
+  powerMonitor.on("resume", () => {
+    // 睡着的时间不算闲置（BTL-190 第 8 点）：不然一开盖子所有 session 一起被关。
+    sessionCleanup.resumed();
+    void checkSchedule("resume");
+  });
   powerMonitor.on("unlock-screen", () => void checkSchedule("unlock"));
   // macOS / Linux 关机：和 Windows 的 session-end 一样，不再拦着关窗口。
   powerMonitor.on("shutdown", () => quitState.requestQuit());

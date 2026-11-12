@@ -237,7 +237,8 @@ describe("idle close minutes (BTL-190)", () => {
     expect(normalizeSetting("idleCloseMinutes", " 60 ")).toBe("60");
     expect(normalizeSetting("idleCloseMinutes", "0")).toBe("0");
     expect(normalizeSetting("idleCloseMinutes", "0090")).toBe("90");
-    for (const bad of ["", "abc", "-5", "1.5", "1e3", "123456"]) expect(() => normalizeSetting("idleCloseMinutes", bad), bad).toThrow(SettingError);
+    for (const bad of ["", "abc", "-5", "1.5", "1e3", "123456", "1", "9"]) expect(() => normalizeSetting("idleCloseMinutes", bad), bad).toThrow(SettingError);
+    expect(normalizeSetting("idleCloseMinutes", "10")).toBe("10");
   });
 });
 

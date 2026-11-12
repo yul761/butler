@@ -44,6 +44,8 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
     commandReady: o.commandReady ?? true,
     epicPlanReady: o.epicPlanReady ?? true,
     memory: true,
+    /** 「需要你」还没判断完（needsYouUndecided）。 */
+    undecided: false,
     /** epic scope 里 epic session 写的进度（epicProgress）。 */
     epicProgress: "做到第一步" as string | null,
     epicProgressReads: 0,
@@ -150,6 +152,7 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
       state.onRefreshActivity?.(id);
     },
     log: (m) => void logs.push(m),
+    needsYouUndecided: () => state.undecided,
     endTerminal: o.noEndTerminal ? undefined : (termId, headId) => void ended.push({ termId, headId, at: state.now }),
   };
   const r = new SessionRefresher(deps);
@@ -797,15 +800,52 @@ describe("SessionRefresher.close (BTL-190 item 8)", () => {
     expect(M().idleCloseEpicHandoff).toMatch(/handoff/);
   });
 
-  it("with memory off ends the terminal without typing anything", async () => {
+  it("with memory off still has a ticket session write /handoff (the daily brief needs it), without waiting for memory", async () => {
     const t = setup();
     t.addTerm("s1");
     t.state.memory = false;
     expect(t.r.precheckClose("s1", "auto")).toBeNull();
     expect(await t.r.close("s1", "auto")).toBe("done");
-    expect(t.texts()).toEqual([]);
+    expect(t.texts()).toEqual(["/handoff"]);
     expect(t.state.memoryWaits).toEqual([]);
     expect(t.ended.map((e) => e.termId)).toEqual(["s1"]);
+  });
+
+  it("with memory off ends an epic session without typing anything (its handoff tool lives in memory)", async () => {
+    const t = setup();
+    t.addTerm("e1", { kind: "epic", session: { epicId: 7 } });
+    t.state.memory = false;
+    expect(await t.r.close("e1", "auto")).toBe("done");
+    expect(t.texts()).toEqual([]);
+    expect(t.ended.map((e) => e.termId)).toEqual(["e1"]);
+  });
+
+  it("waits for a background task the handoff turn started, and for the needs-you verdict on the reply, before ending", async () => {
+    const t = setup();
+    const term = t.addTerm("s1");
+    // /handoff 收进来的时候（30 秒）它起了一个后台命令，40 秒时跑完；「需要你」到 50 秒才判断完。
+    t.later(29_000, () => {
+      term.background = true;
+      t.state.undecided = true;
+    });
+    t.later(40_000, () => (term.background = false));
+    t.later(50_000, () => (t.state.undecided = false));
+    const started = t.state.now;
+    expect(await t.r.close("s1", "auto")).toBe("done");
+    expect(t.ended).toHaveLength(1);
+    expect(t.ended[0].at - started).toBeGreaterThanOrEqual(50_000);
+  });
+
+  it("does not end the terminal when the verdict on the handoff reply is that it needs you", async () => {
+    const t = setup();
+    const term = t.addTerm("s1");
+    t.later(29_000, () => (t.state.undecided = true));
+    t.later(35_000, () => {
+      t.state.undecided = false;
+      term.needsYou = true;
+    });
+    expect(await t.r.close("s1", "auto")).toBe("failed");
+    expect(t.ended).toEqual([]);
   });
 
   it("does not close when the user typed after /handoff", async () => {

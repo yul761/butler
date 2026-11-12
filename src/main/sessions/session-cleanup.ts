@@ -37,6 +37,11 @@ export interface SessionCleanupDeps {
    * 做好以后在 index.ts 里接上，有未决的 ask_user 的 session 不关。
    */
   askUserPending?: (headId: string) => boolean;
+  /**
+   * 这个 session 在等 Butler 递消息：合并总控排着队（还没通知到的等待者）、它的 PR 的 CI 还在跑。这些通知只递给开着的终端，
+   * 关了就收不到（审查）。和「现在」页的 idle 口径一样。不给就当作没有。
+   */
+  waitingOnButler?: (headId: string) => boolean;
   refresher: Pick<SessionRefresher, "precheckClose" | "close">;
   /** 隐藏着、隐藏和最后一次活动都早于 before 的 head（SessionsRepo.listHiddenBefore）。 */
   hiddenBefore(before: number): Session[];
@@ -62,15 +67,22 @@ export function working(a: SessionActivity | null): boolean {
 /**
  * 清理 session（BTL-190 第 8 点）：
  * - 闲置自动关闭：开着终端、停下超过 idleCloseMinutes、换新的 guard 通过（不需要你、没在打字、没有草稿）、没有后台任务、
- *   没有未决的 ask_user、不在换新中，总控的话它管的子 session 都没在干活，就交给 SessionRefresher.close：写 handoff、等记忆写完、
- *   结束终端并隐藏。
+ *   没有未决的 ask_user、没在等 Butler 递合并或 CI 的通知、不在换新中，总控的话它管的子 session 都没在干活，
+ *   就交给 SessionRefresher.close：写 handoff、等记忆写完、结束终端（不隐藏，以后能恢复）。睡眠的时间不算闲置。
  * - 隐藏超过 14 天的 session 行连同整条链、合并总控里没递出去的等待者和尾巴文件一起删掉。transcript 不动。
  * - 手动：「清理闲置」（closeIdle）和隐藏列表里的「全部删除」（deleteHidden）。
  */
 export class SessionCleanup {
   private lastPurgeAt = 0;
+  /** 电脑上一次从睡眠醒来的时间（resumed）：睡着的时间不算闲置，免得一开盖子所有 session 一起被关。 */
+  private wokeAt = 0;
 
   constructor(private readonly d: SessionCleanupDeps) {}
+
+  /** 电脑从睡眠醒来（powerMonitor 的 resume）：闲置从现在重新算。 */
+  resumed(): void {
+    this.wokeAt = this.d.now();
+  }
 
   /** 每个活动 tick 调一次：按设置关闭闲置的 session；每小时删一次过期的隐藏 session。 */
   tick(): void {
@@ -100,7 +112,7 @@ export class SessionCleanup {
       const h = t.head;
       if (out.includes(h.id) || (only && !only.has(h.id))) continue;
       if (now - this.idleSince(t) < idleMs) continue;
-      if (this.d.askUserPending?.(h.id)) continue;
+      if (this.d.askUserPending?.(h.id) || this.d.waitingOnButler?.(h.id)) continue;
       if (this.childrenWorking(h, terms)) continue;
       // 种类（修复 session、非 Butler 的不关）、guard、后台任务、刚打开、正在换新、冷却都由换新那边同步回答。
       if (this.d.refresher.precheckClose(h.id, trigger) !== null) continue;
@@ -169,10 +181,10 @@ export class SessionCleanup {
     return ids.length > 0;
   }
 
-  /** 最后一次有动静的时间：停下的时间、transcript 最后的输出、用户在终端里输入、终端打开，取最晚的。 */
+  /** 最后一次有动静的时间：停下的时间、transcript 最后的输出、用户在终端里输入、终端打开、电脑醒来，取最晚的。 */
   private idleSince(t: OpenTerminal): number {
     const a = this.d.activity(t.head.id);
-    return Math.max(t.head.lastActivityAt ?? 0, a?.lastOutputAt ?? 0, this.d.lastUserInputAt(t.termId), this.d.openedAt(t.termId));
+    return Math.max(t.head.lastActivityAt ?? 0, a?.lastOutputAt ?? 0, this.d.lastUserInputAt(t.termId), this.d.openedAt(t.termId), this.wokeAt);
   }
 
   private idleSinceOf(headId: string): number {

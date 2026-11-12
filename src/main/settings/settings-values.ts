@@ -352,7 +352,7 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     }
     case "idleCloseMinutes": {
       const t = value.trim();
-      if (!IDLE_CLOSE_RE.test(t)) throw new SettingError(M().idleCloseMinutes);
+      if (!IDLE_CLOSE_RE.test(t) || (Number(t) !== 0 && Number(t) < MIN_IDLE_CLOSE_MINUTES)) throw new SettingError(M().idleCloseMinutes);
       return String(Number(t));
     }
     case "language": {
@@ -393,11 +393,14 @@ export function refreshThreshold(s: Pick<SettingsRepo, "get">): number {
 
 /** 闲置关闭的分钟数：0 或者最多 5 位的整数（最长两个多月）。 */
 const IDLE_CLOSE_RE = /^\d{1,5}$/;
+/** 闲置关闭最短的时间：再短的话 session 刚回答完就被关了。 */
+const MIN_IDLE_CLOSE_MINUTES = 10;
 
 /** 闲置多少分钟自动关闭（idleCloseMinutes，BTL-190 第 8 点）：0 = 关；存的值不合法时用默认的 180。 */
 export function idleCloseMinutes(s: Pick<SettingsRepo, "get">): number {
   const t = s.get("idleCloseMinutes").trim();
-  return IDLE_CLOSE_RE.test(t) ? Number(t) : Number(SETTING_DEFAULTS.idleCloseMinutes);
+  const n = Number(t);
+  return IDLE_CLOSE_RE.test(t) && (n === 0 || n >= MIN_IDLE_CLOSE_MINUTES) ? n : Number(SETTING_DEFAULTS.idleCloseMinutes);
 }
 
 export function trackerTools(s: SettingsRepo): string[] {

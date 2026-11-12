@@ -22,7 +22,7 @@ export type RefreshKind = "ticket" | "feature" | "epic";
 export type RefreshTrigger = "auto" | "coordinator" | "manual";
 /**
  * refresh：换新（handoff → /clear → 接着做）。close：闲置关闭（BTL-190 第 8 点）：同样先写 handoff、等记忆写完，然后结束终端
- * （和 end_session 一样，之后能恢复）并隐藏，不 /clear。close 只有 auto（按 idleCloseMinutes 自动）和 manual（「清理闲置」按钮）两种触发。
+ * （和 end_session 一样，之后能恢复），不隐藏，不 /clear。close 只有 auto（按 idleCloseMinutes 自动）和 manual（「清理闲置」按钮）两种触发。
  */
 export type RefreshMode = "refresh" | "close";
 export type CloseTrigger = Extract<RefreshTrigger, "auto" | "manual">;
@@ -108,10 +108,15 @@ export interface SessionRefresherDeps {
    */
   writeTail?: (oldHeadId: string, termId: string, kind: RefreshKind) => Promise<string | null>;
   /**
-   * 闲置关闭的最后一步（BTL-190 第 8 点）：结束这个终端（和 end_session 一样只关终端，之后能恢复），并把 head 隐藏起来。
-   * 不给就不能闲置关闭（close 一律 failed）。
+   * 闲置关闭的最后一步（BTL-190 第 8 点）：结束这个终端（和 end_session 一样只关终端，之后能恢复）。不隐藏：隐藏的 session
+   * 总控的 list_sessions、夜里的 handoff 和 feature 汇总都看不到了。不给就不能闲置关闭（close 一律 failed）。
    */
   endTerminal?: (termId: string, headId: string) => void;
+  /**
+   * 「需要你」还没判断完（NeedsYouTracker.undecided）。闲置关闭在结束终端之前等它出结论：/handoff 的回复里可能还有要用户
+   * 决定的事。guard 在关闭期间（和换新一样）不把「没判断完」当作需要你，所以这里单独等。不给就不等。
+   */
+  needsYouUndecided?: (headId: string) => boolean;
   /** 换新开始、换了一步、结束时调用（「现在」页显示"换新中"）。 */
   notify(): void;
   now(): number;
@@ -185,7 +190,8 @@ export class SessionRefresher {
 
   /**
    * 闲置关闭（BTL-190 第 8 点）：先走换新的 handoff 那一步（ticket 和 feature 用 /handoff，epic 用 handoff 工具），等收进来、
-   * 等记忆写完，再等 session 停下来、确认用户没动过，然后结束终端并隐藏。记忆关着时没有 handoff 可写，直接结束。
+   * 等记忆写完，再等 session 停下来、确认用户没动过，然后结束终端。记忆关着时 ticket 和 feature 照样写 /handoff（存在 Butler
+   * 自己的库里，每日简报要用），只是不等记忆；epic 的 handoff 工具在记忆里，记忆关着就直接结束。
    * 两种触发都看「需要你」、后台任务和刚打开的终端；手动（「清理闲置」）不看 30 分钟的冷却。闲置多久、总控的子 session
    * 是不是在干活由调用方（IdleCloser）看。正在换新或关闭的算 already。
    */
@@ -333,16 +339,18 @@ export class SessionRefresher {
   }
 
   /**
-   * 闲置关闭（BTL-190 第 8 点）：handoff 那一步和换新一样；收进来以后等记忆写完，再等 session 停下来，粘贴前同样的复查通过
-   * （用户没在打字、没有草稿、没动过终端、不需要你）才结束终端。记忆关着时不写 handoff，复查通过就直接结束。
+   * 闲置关闭（BTL-190 第 8 点）：handoff 那一步和换新一样；收进来以后等记忆写完，再等 session 停下来、没有后台任务、
+   * 「需要你」判断完，粘贴前同样的复查通过（用户没在打字、没有草稿、没动过终端、不需要你）才结束终端。
+   * 记忆关着时 ticket 和 feature 照样写 /handoff，不等记忆；epic 不写 handoff，复查通过就直接结束。
    */
   private async closeSteps(run: Run): Promise<RefreshResult> {
     this.alive();
-    if (this.d.memoryEnabled()) {
+    const memory = this.d.memoryEnabled();
+    if (memory || run.kind !== "epic") {
       const handedOff = await this.handoffStep(run);
       if (handedOff !== null) return handedOff;
       this.setStep(run, "close");
-      await this.waitForMemory(run);
+      if (memory) await this.waitForMemory(run);
     } else {
       this.setStep(run, "close");
       // 没有 handoff 可写：从现在起用户动过终端就不关。
@@ -377,7 +385,7 @@ export class SessionRefresher {
     }
     // 中间等过异步：重新看一眼。这时还什么都没输入，不通过就当作忙（记忆刚关掉就是 memory_off），不冷却。
     this.alive();
-    if (!this.d.memoryEnabled()) return "memory_off";
+    if (run.mode === "refresh" && !this.d.memoryEnabled()) return "memory_off";
     const gate = this.canStart(run.headId, run.trigger, run.mode);
     if (!gate.ok || gate.termId !== run.termId) return "busy";
     // 从这一刻起收进来的 handoff 才算这次换新的（审查：用户自己的 /handoff 恰好在前面的检查期间收进来，不能让 /clear 跟着就输入）。
@@ -449,8 +457,11 @@ export class SessionRefresher {
       this.alive();
       const guard = this.guardFor(run.trigger, run.mode);
       const gate = guard.check(run.headId);
-      if (gate.ok) return gate.termId === run.termId ? guard.recheckAfter(run.headId, gate) : "the terminal changed";
-      if (gate.block !== "busy") return gate.block;
+      // 闲置关闭：结束终端会连后台命令一起杀掉（guard 把只剩后台任务的 session 当作停着），「需要你」没判断完的回复里
+      // 可能还有要用户决定的事。都算忙，等。
+      const closeWaits = run.mode === "close" && (this.d.activity(run.headId)?.background === true || this.d.needsYouUndecided?.(run.headId) === true);
+      if (gate.ok && !closeWaits) return gate.termId === run.termId ? guard.recheckAfter(run.headId, gate) : "the terminal changed";
+      if (!gate.ok && gate.block !== "busy") return gate.block;
       if (this.d.now() >= end) return `still busy after ${REFRESH_CLEAR_MS / 1000} seconds`;
       await this.sleep(POLL_MS);
     }
