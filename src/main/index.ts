@@ -452,6 +452,8 @@ async function bootstrap(): Promise<void> {
     onStuck: () => notify(),
     now: Date.now,
     intervals: activityIntervals(process.env),
+    // 实况窗口（BTL-190 第 7 点）：新的工具调用、记忆读写直接推给界面。
+    onEvent: (e) => safeSend(IPC.activityEvent, e),
     log: logger,
   });
   /** 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。 */
@@ -996,6 +998,8 @@ async function bootstrap(): Promise<void> {
       if (effect.kind === "waiting" && !effect.waiting) {
         pty.markSubmitted(env.butlerSession ?? effect.sessionId);
         inboxService.promptSubmitted(env.butlerSession ?? effect.sessionId);
+        // 马上重读活动：实况窗口里它立刻算在干活（BTL-190 第 7 点）。
+        void activityMonitor.promptSubmitted(env.butlerSession ?? effect.sessionId).catch((e: unknown) => logger("re-reading the activity on prompt submit failed", e));
       }
       // claude 停下来等输入了：有“对方已经合完”的通知就趁现在发（设计文档 2026-11-04：不打断忙着的 session）。
       // 同一个时机也递还没递出去的 CI 结论（先重读活动），并且马上查一次这个仓库的 PR 和 CI（刚停下的 session 常常刚 push）。
@@ -1122,6 +1126,8 @@ async function bootstrap(): Promise<void> {
         merges,
         approvalText: M().nowApproval,
         decisions: inboxService.pendingDecisionViews(),
+        recent: (id) => activityMonitor.recent(id),
+        memory: activityMonitor.memoryLog(),
       });
     },
     rederive: (key) => {

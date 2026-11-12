@@ -326,3 +326,55 @@ describe("lastReply (task 11: end_session)", () => {
     expect(s.lastReplyId).toBeNull();
   });
 });
+
+describe("events (BTL-190 7: the live window)", () => {
+  const T0 = "2026-11-12T10:00:00.000Z";
+  const at = (s: string) => Date.parse(s);
+  const user = (content: unknown, timestamp = T0) => ({ type: "user", timestamp, message: { role: "user", content } });
+  const reply = (stop: string | null, content: unknown[], timestamp = T0) => ({ type: "assistant", timestamp, message: { role: "assistant", stop_reason: stop, content } });
+
+  it("records every tool_use with its name, input and time, in order", () => {
+    const s = newTranscriptState();
+    applyEntry(s, reply("tool_use", [
+      { type: "tool_use", id: "t1", name: "Read", input: { file_path: "/a/b.ts" } },
+      { type: "tool_use", id: "t2", name: "mcp__butler-memory__remember", input: { text: "接口改成 v2" } },
+    ], "2026-11-12T10:00:05.000Z"));
+    expect(s.events.filter((e) => e.type === "tool")).toEqual([
+      { type: "tool", at: at("2026-11-12T10:00:05.000Z"), name: "Read", input: { file_path: "/a/b.ts" } },
+      { type: "tool", at: at("2026-11-12T10:00:05.000Z"), name: "mcp__butler-memory__remember", input: { text: "接口改成 v2" } },
+    ]);
+  });
+
+  it("records turn-start and turn-end only when the turn actually opens or closes", () => {
+    const s = newTranscriptState();
+    applyEntry(s, user("fix it", "2026-11-12T10:00:01.000Z"));
+    applyEntry(s, reply("tool_use", [{ type: "text", text: "looking" }]));
+    applyEntry(s, toolResult("t1", "ok"));
+    applyEntry(s, reply("end_turn", [{ type: "text", text: "done" }], "2026-11-12T10:00:09.000Z"));
+    applyEntry(s, { type: "system", subtype: "turn_duration", timestamp: T0 });
+    expect(s.events).toEqual([
+      { type: "turn-start", at: at("2026-11-12T10:00:01.000Z") },
+      { type: "turn-end", at: at("2026-11-12T10:00:09.000Z") },
+    ]);
+  });
+
+  it("a restart without a user message (task notification) and an interrupt count as turn-start and turn-end", () => {
+    const s = newTranscriptState();
+    applyEntry(s, reply("tool_use", [{ type: "text", text: "back" }]));
+    applyEntry(s, user("[Request interrupted by user]"));
+    applyEntry(s, user("go on"));
+    applyEntry(s, { type: "system", subtype: "stop_hook_summary", timestamp: T0 });
+    expect(s.events.map((e) => e.type)).toEqual(["turn-start", "turn-end", "turn-start", "turn-end"]);
+  });
+
+  it("ignores sub-agent tool calls and keeps at most the latest 100 pending events", () => {
+    const s = newTranscriptState();
+    applyEntry(s, { ...reply("tool_use", [{ type: "tool_use", id: "sc", name: "Read", input: {} }]), isSidechain: true });
+    expect(s.events).toEqual([]);
+    for (let i = 0; i < 150; i++) applyEntry(s, reply("tool_use", [{ type: "tool_use", id: `t${i}`, name: `Tool${i}`, input: {} }]));
+    expect(s.events).toHaveLength(100);
+    expect(s.events.at(-1)).toMatchObject({ name: "Tool149" });
+    // 第一条 assistant 打开了这一轮：turn-start 和最早的工具被挤掉了。
+    expect(s.events[0]).toMatchObject({ name: "Tool50" });
+  });
+});

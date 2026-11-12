@@ -1,10 +1,12 @@
 import { appendFileSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ActivityEvent } from "../../shared/activity";
 import type { Feature, Session, Ticket } from "../../shared/types";
 import { setLang } from "../i18n";
 import { tempDir } from "../test-utils";
 import { ACTIVITY_TICK_MS, ActivityMonitor, activityIntervals, type ActivityDeps, deriveActivity } from "./activity-monitor";
+import type { WatchFn } from "./transcript-watch";
 import { applyEntry, newTranscriptState } from "./activity-parse";
 import { stripAnsi } from "./pty-manager";
 import { permissionOnScreen } from "./screen";
@@ -94,6 +96,8 @@ function harness(over: Partial<ActivityDeps> = {}) {
       return { cpuMs: cpu, liveShell: commands.length ? shell : null };
     },
     log: (m, e) => logs.push(`${m} ${e instanceof Error ? e.message : ""}`),
+    // 默认不挂真的 fs.watch：只靠测试自己调 tick（实况窗口的测试注入假的 watch）。
+    watch: null,
     ...over,
   };
   const monitor = new ActivityMonitor(deps);
@@ -1603,5 +1607,207 @@ describe("ActivityMonitor lifecycle", () => {
     release!();
     await running;
     expect(h.logs).toEqual([]);
+  });
+});
+
+describe("the live window's signals (BTL-190 7)", () => {
+  /** 开始跟踪以前写的记录（时间是 1970 年，比假时钟早）。 */
+  const OLD = new Date(0).toISOString();
+  const NEW = AT;
+  const use = (id: string, name: string, input: Record<string, unknown> = {}, timestamp = NEW) => ({ ...toolUse(id, name, input), timestamp });
+  const say = (text: string, timestamp = NEW) => ({ type: "user", timestamp, message: { role: "user", content: text } });
+  const done = (timestamp = NEW) => ({ ...endTurn(), timestamp });
+
+  /** 假的 fs.watch：记下每个文件的监视器，测试里手动触发。 */
+  function fakeWatch() {
+    const live = new Map<string, { emit: (type: "change" | "rename") => void }>();
+    let opened = 0;
+    const watch: WatchFn = (file, onEvent) => {
+      opened++;
+      const w = { emit: onEvent };
+      live.set(file, w);
+      return { close: () => void (live.get(file) === w && live.delete(file)) };
+    };
+    return { watch, live, opened: () => opened };
+  }
+
+  it("pushes one event per new tool_use, telling memory writes and reads apart, and keeps the last 3 per session", async () => {
+    const events: ActivityEvent[] = [];
+    const h = harness({ onEvent: (e) => events.push(e) });
+    h.openSession("s1");
+    h.transcript("s1", say("go"), use("t1", "Read", { file_path: "/r/a.ts" }), toolResult("t1"));
+    await h.beat();
+    h.transcript("s1",
+      use("t2", "mcp__butler-memory__remember", { text: "接口改成 v2" }), toolResult("t2"),
+      use("t3", "mcp__butler-feature__recall", { query: "checkout" }), toolResult("t3"),
+      use("t4", "Bash", { command: "pnpm test" }),
+    );
+    await h.beat();
+    expect(events.map((e) => [e.sessionId, e.kind, e.label])).toEqual([
+      ["s1", "turn-start", ""],
+      ["s1", "tool", "Read a.ts"],
+      ["s1", "memory-write", "接口改成 v2"],
+      ["s1", "memory-read", "checkout"],
+      ["s1", "tool", "Bash pnpm test"],
+    ]);
+    expect(events[1].at).toBe(AT_MS);
+    expect(h.monitor.recent("s1").map((e) => e.label)).toEqual(["接口改成 v2", "checkout", "Bash pnpm test"]);
+    expect(h.monitor.memoryLog().map((e) => [e.kind, e.label])).toEqual([["memory-write", "接口改成 v2"], ["memory-read", "checkout"]]);
+    expect(h.monitor.recent("nobody")).toEqual([]);
+  });
+
+  it("pushes turn-end when the turn finishes", async () => {
+    const events: ActivityEvent[] = [];
+    const h = harness({ onEvent: (e) => events.push(e) });
+    h.openSession("s1");
+    h.transcript("s1", say("go"));
+    await h.beat();
+    h.transcript("s1", done());
+    await h.beat();
+    expect(events.map((e) => e.kind)).toEqual(["turn-start", "turn-end"]);
+  });
+
+  it("does not push what was written before it started watching (a --resume replay), but still shows it as the recent lines", async () => {
+    const events: ActivityEvent[] = [];
+    const h = harness({ onEvent: (e) => events.push(e) });
+    h.openSession("s1");
+    h.transcript("s1", say("old", OLD), use("t1", "mcp__butler-memory__remember", { text: "旧的" }, OLD), toolResult("t1"), done(OLD));
+    await h.beat();
+    expect(events).toEqual([]);
+    expect(h.monitor.recent("s1").map((e) => e.label)).toEqual(["旧的"]);
+    // 记忆的那一条照样进核心卡片（按时间排）。
+    expect(h.monitor.memoryLog().map((e) => e.label)).toEqual(["旧的"]);
+  });
+
+  it("starts over after the transcript is truncated: the re-read old lines are not pushed again", async () => {
+    const events: ActivityEvent[] = [];
+    const h = harness({ onEvent: (e) => events.push(e) });
+    h.openSession("s1");
+    h.transcript("s1", say("go"), use("t1", "Read", { file_path: "/r/a.ts" }));
+    await h.beat();
+    expect(events).toHaveLength(2);
+    // 截短重写：开头那几条还是同样的旧记录（时间早于截短那一刻）。
+    writeFileSync(join(h.dir, "s1.jsonl"), `${JSON.stringify(use("t1", "Read", { file_path: "/r/a.ts" }, OLD))}\n`);
+    await h.beat();
+    expect(events).toHaveLength(2);
+    expect(h.monitor.recent("s1").map((e) => e.label)).toEqual(["Read a.ts"]);
+  });
+
+  it("counts as changed when only the recent lines changed", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.transcript("s1", say("go"), use("t1", "Read", { file_path: "/r/a.ts" }));
+    await h.beat();
+    const before = h.notifications();
+    // 同一个工具、同一个时间又来一次：活动一模一样，最近几行变了。
+    h.transcript("s1", toolResult("t1"), use("t2", "Read", { file_path: "/r/a.ts" }));
+    await h.beat();
+    expect(h.notifications()).toBe(before + 1);
+  });
+
+  it("re-reads a session soon after its transcript changes, without waiting for the tick", async () => {
+    const w = fakeWatch();
+    const events: ActivityEvent[] = [];
+    const h = harness({ watch: w.watch, watchDebounceMs: 5, onEvent: (e) => events.push(e) });
+    h.openSession("s1");
+    h.transcript("s1", say("go"));
+    await h.beat();
+    const file = join(h.dir, "s1.jsonl");
+    expect([...w.live.keys()]).toEqual([file]);
+    h.transcript("s1", use("t1", "Edit", { file_path: "/r/b.ts" }));
+    // macOS 上一次写会来好几个事件：只重读一次。
+    for (let i = 0; i < 4; i++) w.live.get(file)!.emit("change");
+    await vi.waitFor(() => expect(h.monitor.get("s1")?.kind).toBe("edit"));
+    expect(events.map((e) => e.label)).toEqual(["", "Edit b.ts"]);
+    // 一次 tick 也没跑过：activity 是 fs.watch 带来的。
+    expect(h.notifications()).toBe(2);
+  });
+
+  it("watches the new file after the transcript is replaced, and stops watching when the terminal closes", async () => {
+    const w = fakeWatch();
+    const h = harness({ watch: w.watch, watchDebounceMs: 5 });
+    h.openSession("s1");
+    h.transcript("s1", say("go"));
+    await h.beat();
+    const file = join(h.dir, "s1.jsonl");
+    w.live.get(file)!.emit("rename");
+    expect(w.live.size).toBe(0);
+    // 重读的时候重新挂上。
+    await vi.waitFor(() => expect(w.live.size).toBe(1));
+    expect(w.opened()).toBe(2);
+    h.open.delete("s1");
+    await h.beat();
+    expect(w.live.size).toBe(0);
+  });
+
+  it("stop() closes every watcher", async () => {
+    const w = fakeWatch();
+    const h = harness({ watch: w.watch });
+    h.openSession("s1");
+    h.openSession("s2");
+    h.transcript("s1", say("go"));
+    h.transcript("s2", say("go"));
+    await h.beat();
+    expect(w.live.size).toBe(2);
+    h.monitor.stop();
+    expect(w.live.size).toBe(0);
+  });
+
+  it("promptSubmitted re-reads at once and counts a stopped session as thinking until its transcript moves", async () => {
+    const h = harness();
+    h.openSession("s1");
+    // 上一轮是很早以前的事。
+    h.transcript("s1", say("go", OLD), done(OLD));
+    await h.beat();
+    expect(h.monitor.get("s1")?.kind).toBe("waiting");
+    const before = h.notifications();
+    // hook 带来的可能是链上的旧 id。
+    h.heads.set("old", row("s1"));
+    await h.monitor.promptSubmitted("old");
+    expect(h.monitor.get("s1")).toMatchObject({ kind: "thinking", startedAt: 1_000_000 + ACTIVITY_TICK_MS });
+    expect(h.notifications()).toBe(before + 1);
+    // transcript 动了：以它为准（这一轮很快就结束了）。
+    h.transcript("s1", say("next"), done());
+    await h.beat();
+    expect(h.monitor.get("s1")?.kind).toBe("waiting");
+  });
+
+  it("promptSubmitted gives up after 30 seconds if the transcript never moves", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.transcript("s1", say("go", OLD), done(OLD));
+    await h.beat();
+    await h.monitor.promptSubmitted("s1");
+    expect(h.monitor.get("s1")?.kind).toBe("thinking");
+    for (let i = 0; i < 3; i++) await h.beat();
+    expect(h.monitor.get("s1")?.kind).toBe("thinking");
+    await h.beat();
+    expect(h.monitor.get("s1")?.kind).toBe("waiting");
+  });
+
+  it("promptSubmitted does not hold a session whose transcript already shows the turn of that prompt (read before the hook arrived)", async () => {
+    const h = harness();
+    h.openSession("s1");
+    // 回得很快：tick 读到的时候这一轮已经结束了（记录的时间比 hook 到的时候晚）。
+    h.transcript("s1", say("hello"), done());
+    await h.beat();
+    await h.monitor.promptSubmitted("s1");
+    expect(h.monitor.get("s1")?.kind).toBe("waiting");
+  });
+
+  it("promptSubmitted starts tracking a terminal the tick has not reached yet, and ignores sessions without one", async () => {
+    const w = fakeWatch();
+    const h = harness({ watch: w.watch });
+    h.openSession("s1");
+    h.transcript("s1", say("go"));
+    await h.monitor.promptSubmitted("s1");
+    expect(h.monitor.get("s1")?.kind).toBe("thinking");
+    expect(h.notifications()).toBe(1);
+    expect(w.live.size).toBe(1);
+    await h.monitor.promptSubmitted("nobody");
+    h.heads.set("closed", row("closed"));
+    await h.monitor.promptSubmitted("closed");
+    expect(h.monitor.get("closed")).toBeNull();
+    expect(h.notifications()).toBe(1);
   });
 });

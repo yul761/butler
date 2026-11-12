@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionActivity } from "../../shared/activity";
+import type { ActivityEvent, SessionActivity } from "../../shared/activity";
 import type { EpicView, FeatureView, InboxItemView, MergeEvent, SessionView, TicketRepo, TicketView, WatchedPr } from "../../shared/types";
 import { buildNowView, type NowInput } from "./now-view";
 
@@ -96,6 +96,8 @@ function input(over: Partial<NowInput> = {}): NowInput {
     merges: [],
     approvalText: "等你确认",
     decisions: [],
+    recent: () => [],
+    memory: [],
     ...over,
   };
 }
@@ -127,7 +129,8 @@ describe("buildNowView", () => {
     expect(none.features.map((f) => [f.id, ids(f.rows)])).toEqual([[20, ["s-b1"]], [null, ["s-c1"]]]);
     const row = e1.features[0].rows[0];
     expect(row).toMatchObject({ ticketKey: "A-1", title: "title A-1", coordinator: false, repo: null, target: { page: "ticket", key: "A-1", sessionId: "s-a1" } });
-    expect(v.running).toBe(3);
+    // 都没有活动记录：开着，但没在干活。
+    expect(v.running).toBe(0);
     expect(v.merges).toBe(merges);
   });
 
@@ -162,8 +165,11 @@ describe("buildNowView", () => {
       ticketKey: "A-1",
       title: "title A-1",
       repo: null,
+      where: null,
       coordinator: false,
       activity: null,
+      working: false,
+      recent: [],
       mergeQueued: false,
       needsYou: null,
       refreshing: null,
@@ -226,7 +232,8 @@ describe("buildNowView", () => {
     ]);
     // 每行最多问一次；确认和卡住已经有理由，不用再问。
     expect(asked.sort()).toEqual(["s-asks", "s-ok"]);
-    expect(v.epics[0].counts).toEqual({ active: 4, needsYou: 3, stuck: 1 });
+    // 在干活的：s-ok（改文件）和 s-stuck（跑测试，卡住了也还在跑）；停在确认上、等回复的不算。
+    expect(v.epics[0].counts).toEqual({ active: 2, needsYou: 3, stuck: 1 });
   });
 
   it("a refreshing row has its step, is not needs-you and is not idle (plan 16)", () => {
@@ -290,13 +297,16 @@ describe("buildNowView", () => {
       ["s-quiet", true],
       ["s-nolog", true],
       ["s-queued", false],
-      ["s-pr", false],
+      // 停着、PR 还开着：照样折起来（BTL-190 第 7 点），PR 显示在行上。
+      ["s-pr", true],
       ["s-merged", true],
     ]);
+    expect(rows.find((r) => r.sessionId === "s-pr")?.prs).toHaveLength(1);
     expect(rows.find((r) => r.sessionId === "s-queued")?.mergeQueued).toBe(true);
     expect(rows.find((r) => r.sessionId === "s-quiet")?.since).toBe(1000);
-    expect(v.epics[0].features[0].counts).toEqual({ active: 3, needsYou: 0, stuck: 0 });
-    expect(v.epics[0].counts).toEqual({ active: 3, needsYou: 0, stuck: 0 });
+    // 只有 s-busy 在干活：合并排队的、PR 开着的都不算。
+    expect(v.epics[0].features[0].counts).toEqual({ active: 1, needsYou: 0, stuck: 0 });
+    expect(v.epics[0].counts).toEqual({ active: 1, needsYou: 0, stuck: 0 });
   });
 
   it("drops empty epics and features", () => {
@@ -377,5 +387,54 @@ describe("buildNowView with ask_user decisions (BTL-190 2+3)", () => {
     const v = buildNowView(input({ decisions: [late, early] }));
     expect(v.decisions.map((d) => d.sessionId)).toEqual(["gone2", "gone"]);
     expect(v.epics).toEqual([]);
+  });
+
+  it("counts only sessions that are working (thinking, running a tool, a background command) as running (BTL-190 7)", () => {
+    const kinds = ["thinking", "edit", "command", "test", "agent", "waiting", "idle", "approval"] as const;
+    const t = ticket("A-1", null, [...kinds.map((k) => session(`s-${k}`, { ticketKey: "A-1" })), session("s-bg", { ticketKey: "A-1" }), session("s-none", { ticketKey: "A-1" })]);
+    const acts: Record<string, SessionActivity> = Object.fromEntries(kinds.map((k) => [`s-${k}`, act(`s-${k}`, { kind: k })]));
+    // 回合结束了，后台命令还在跑：kind 是那个命令，background 为 true。
+    acts["s-bg"] = act("s-bg", { kind: "command", background: true });
+    const v = buildNowView(input({ tickets: [t], activity: (id) => acts[id] ?? null }));
+
+    const rows = v.epics[0].features[0].rows;
+    expect(rows.filter((r) => r.working).map((r) => r.sessionId)).toEqual(["s-thinking", "s-edit", "s-command", "s-test", "s-agent", "s-bg"]);
+    expect(v.running).toBe(6);
+    expect(v.epics[0].counts.active).toBe(6);
+  });
+
+  it("a stopped session with an open PR or pending CI is not counted as in progress (BTL-190 7)", () => {
+    const t = ticket("A-1", null, [session("s1", { ticketKey: "A-1", repoId: 1 })]);
+    const v = buildNowView(input({
+      tickets: [t],
+      activity: () => act("s1", { kind: "waiting", startedAt: null }),
+      prs: () => [pr("A-1", 1, { ci: "pending" })],
+    }));
+    const [row] = v.epics[0].features[0].rows;
+    expect(row).toMatchObject({ working: false, idle: true });
+    expect(row.prs).toHaveLength(1);
+    expect(v.running).toBe(0);
+    expect(v.epics[0].counts.active).toBe(0);
+  });
+
+  it("gives each session row its recent tool lines and where it works, and passes the memory log through (BTL-190 7)", () => {
+    const ev = (sessionId: string, label: string, kind: ActivityEvent["kind"] = "tool"): ActivityEvent => ({ sessionId, at: 1, kind, label });
+    const t = ticket("A-1", 10, [session("s1", { ticketKey: "A-1", repoId: 1 }), session("s-tc", { ticketKey: "A-1", coordinator: true })], [repo(1, "A-1", "/src/app")]);
+    const f = feature(10, 1, [t], [session("s-fc", { featureId: 10, coordinator: true })]);
+    const memory = [ev("s1", "接口改成 v2", "memory-write")];
+    const recent: Record<string, ActivityEvent[]> = { s1: [ev("s1", "Read a.ts"), ev("s1", "Bash pnpm test")] };
+    const v = buildNowView(input({ features: [f], epics: [epic(1, [session("s-ep", { epicId: 1 })])], recent: (id) => recent[id] ?? [], memory }));
+
+    const rows = [...v.epics[0].rows, ...v.epics[0].features[0].rows];
+    expect(rows.map((r) => [r.sessionId, r.where, r.repo])).toEqual([
+      ["s-ep", "epic 1", null],
+      ["s-fc", "feature 10", null],
+      ["s-tc", null, null],
+      // 只有一个仓库：行上不写仓库名，实况卡片上照样写。
+      ["s1", "app", null],
+    ]);
+    expect(rows.find((r) => r.sessionId === "s1")?.recent.map((e) => e.label)).toEqual(["Read a.ts", "Bash pnpm test"]);
+    expect(rows.find((r) => r.sessionId === "s-fc")?.recent).toEqual([]);
+    expect(v.memory).toBe(memory);
   });
 });

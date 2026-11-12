@@ -1,4 +1,4 @@
-import type { SessionActivity } from "./activity";
+import type { ActivityEvent, SessionActivity } from "./activity";
 import type { ReportKind } from "./control";
 import type { FeatureHandoff, Handoff, Pr } from "./handoff";
 export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
@@ -474,7 +474,13 @@ export interface NowRow {
   /** 一个 ticket 开了几个仓库的 session 时才填（仓库目录名）。 */
   repo: string | null;
   coordinator: boolean;
+  /** 实况卡片上写的地方（BTL-190 第 7 点）：ticket 的 session 是仓库目录名，feature、epic 的 session 是 feature、epic 的名字；不知道为 null。 */
+  where: string | null;
   activity: SessionActivity | null;
+  /** 正在干活：思考中、跑工具、后台命令（shared/activity 的 isWorking）。停着、等确认的不算。 */
+  working: boolean;
+  /** 最近 3 次工具调用（实况卡片上的几行），从早到晚。 */
+  recent: ActivityEvent[];
   /** 这个 session 在合并总控的等待名单里。 */
   mergeQueued: boolean;
   /** 需要你的理由：卡住时是卡住的 reason；停在确认上时是固定文案；不需要为 null。正在换新时为 null。 */
@@ -484,14 +490,14 @@ export interface NowRow {
   /** 这个 session 还没答的「待你决定」有几条（BTL-190 第 2+3 点；卡片上答了、等着送的不算）。有未决的条目时 needsYou 为 null，卡片在 NowView.decisions 里。 */
   decisions: number;
   prs: WatchedPr[];
-  /** 停着、不需要你、没有开着的 PR / CI：默认折起来。 */
+  /** 停着、不需要你、不在换新也不在合并排队：默认折起来。开着的 PR 不算（BTL-190 第 7 点），只显示在行上。只有 PR 的行不算空闲。 */
   idle: boolean;
   /** 这个状态从什么时候开始（activity.startedAt，没有就用 session 的 lastActivityAt）。 */
   since: number | null;
   target: NowTarget;
 }
 
-/** 一组的汇总：进行中（不空闲）的行数、需要你的行数、卡住的行数。 */
+/** 一组的汇总：在干活的行数（NowRow.working）、需要你的件数、卡住的行数。 */
 export interface NowCounts {
   active: number;
   needsYou: number;
@@ -560,7 +566,9 @@ export interface NowView {
   /** 全部未决的「待你决定」（BTL-190 第 2+3 点），从早到晚；终端关着的 session 的也在。 */
   decisions: InboxItemView[];
   epics: NowEpic[];
-  /** 开着终端的 Butler session 数。 */
+  /** 正在干活的 session 数（NowRow.working）。 */
   running: number;
+  /** 最近的记忆读写（实况窗口的核心卡片，BTL-190 第 7 点），从早到晚。 */
+  memory: ActivityEvent[];
   merges: MergeEvent[];
 }

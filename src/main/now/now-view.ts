@@ -1,4 +1,4 @@
-import type { SessionActivity } from "../../shared/activity";
+import { isWorking, type ActivityEvent, type SessionActivity } from "../../shared/activity";
 import type { EpicView, FeatureView, InboxItemView, MergeEvent, NowCounts, NowEpic, NowFeature, NowRow, NowTarget, NowView, RefreshStep, SessionView, TicketView, WatchedPr } from "../../shared/types";
 
 export interface NowInput {
@@ -16,6 +16,10 @@ export interface NowInput {
   approvalText: string;
   /** 全部未决的「待你决定」（BTL-190 第 2+3 点），从早到晚；sessionId 是提问的 session 现在的 head。 */
   decisions: InboxItemView[];
+  /** 这个 session 最近几次工具调用（实况窗口的卡片，BTL-190 第 7 点），从早到晚。 */
+  recent: (sessionId: string) => ActivityEvent[];
+  /** 最近的记忆读写（实况窗口的核心卡片），从早到晚。 */
+  memory: ActivityEvent[];
 }
 
 /** 算进「现在」页的 session：Butler 开的、终端开着。 */
@@ -23,9 +27,6 @@ const live = (s: SessionView): boolean => s.termId !== null && s.origin === "but
 
 /** 停着：没有活动记录，或者回合结束在等下一条指令。 */
 const stopped = (a: SessionActivity | null): boolean => a === null || a.kind === "waiting" || a.kind === "idle";
-
-/** PR 还在进行：开着，或者 CI 在跑。 */
-const prBusy = (p: WatchedPr): boolean => p.state === "open" || p.ci === "pending";
 
 /** 仓库目录名；Windows 路径也按反斜杠切。 */
 const repoName = (path: string): string => path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
@@ -35,6 +36,8 @@ interface RowBase {
   title: string | null;
   repo: string | null;
   coordinator: boolean;
+  /** 实况卡片上写的地方：仓库目录名，feature、epic 的 session 写 feature、epic 的名字。 */
+  where: string | null;
   prs: WatchedPr[];
   target: NowTarget;
 }
@@ -52,6 +55,7 @@ function childDecision(i: NowInput, s: SessionView, scope: Scope): boolean {
  * - 有未决 ask_user 的：needsYou 为 null，decisions 记还没答的条数，卡片在 NowView.decisions 里（每条一张，说的就是那个问题）；行不折起来。
  *   已经在卡片上答了、还没送进去的不算进 decisions（不再等你），但 needsYou 照样为 null、行照样不折起来。
  * - 总控所管范围里有子 session 的未决条目时，总控的 Haiku 判断不算（needsYouReason 不问）。
+ * 已停的 session 不因为有 PR 开着就不算空闲（BTL-190 第 7 点）：PR 和 CI 只显示在行上。
  * needsYouReason 每行最多问一次。正在换新的不折起来，也不算需要你（回复、卡住都是 Butler 输入的 /handoff 带来的），只有停在确认上的照样算：
  * Butler 的 /handoff 也可能要用户批准权限，不显示出来换新就一直卡着。
  */
@@ -69,8 +73,11 @@ function sessionRow(i: NowInput, s: SessionView, base: RowBase, scope: Scope = n
     : activity?.stuck === true ? (activity.reason ?? "")
     : childDecision(i, s, scope) ? null
     : i.needsYouReason(s.id);
-  const idle = refreshing === null && needsYou === null && pending === 0 && !mergeQueued && stopped(activity) && !base.prs.some(prBusy);
-  return { ...base, sessionId: s.id, activity, mergeQueued, needsYou, refreshing, decisions, idle, since: activity?.startedAt ?? s.lastActivityAt };
+  const idle = refreshing === null && needsYou === null && pending === 0 && !mergeQueued && stopped(activity);
+  return {
+    ...base, sessionId: s.id, activity, working: isWorking(activity), recent: i.recent(s.id), mergeQueued, needsYou, refreshing, decisions, idle,
+    since: activity?.startedAt ?? s.lastActivityAt,
+  };
 }
 
 /** 一个 ticket 的行：总控在前；开了几个仓库的 session 就标上仓库名；每个 PR 只挂在一行上。没有开着的 session 但有开着的 PR 时出一行只有 PR 的。 */
@@ -80,7 +87,10 @@ function ticketRows(i: NowInput, t: TicketView): NowRow[] {
   const target = (sessionId: string | null): NowTarget => ({ page: "ticket", key: t.key, sessionId });
   if (sessions.length === 0) {
     if (!prs.some((p) => p.state === "open")) return [];
-    return [{ sessionId: null, ticketKey: t.key, title: t.title, repo: null, coordinator: false, activity: null, mergeQueued: false, needsYou: null, refreshing: null, decisions: 0, prs, idle: false, since: null, target: target(null) }];
+    return [{
+      sessionId: null, ticketKey: t.key, title: t.title, repo: null, where: null, coordinator: false, activity: null, working: false, recent: [], mergeQueued: false,
+      needsYou: null, refreshing: null, decisions: 0, prs, idle: false, since: null, target: target(null),
+    }];
   }
   const repoIds = new Set(sessions.filter((s) => !s.coordinator && s.repoId !== null).map((s) => s.repoId));
   const named = repoIds.size > 1;
@@ -88,11 +98,12 @@ function ticketRows(i: NowInput, t: TicketView): NowRow[] {
   const owner = new Map<WatchedPr, SessionView>();
   for (const p of prs) owner.set(p, sessions.find((s) => !s.coordinator && s.repoId === p.repoId) ?? sessions[0]);
   return sessions.map((s) => {
-    const path = named && !s.coordinator ? t.repos.find((r) => r.id === s.repoId)?.repoPath : undefined;
+    const path = s.coordinator ? undefined : t.repos.find((r) => r.id === s.repoId)?.repoPath;
     return sessionRow(i, s, {
       ticketKey: t.key,
       title: t.title,
-      repo: path ? repoName(path) : null,
+      repo: named && path ? repoName(path) : null,
+      where: path ? repoName(path) : null,
       coordinator: s.coordinator,
       prs: prs.filter((p) => owner.get(p) === s),
       target: target(s.id),
@@ -105,13 +116,14 @@ function featureSessionRows(i: NowInput, f: FeatureView): NowRow[] {
   const sessions = f.sessions.filter(live);
   const coordinator = (s: SessionView): boolean => s.fixesSession === null;
   return [...sessions.filter(coordinator), ...sessions.filter((s) => !coordinator(s))].map((s) =>
-    sessionRow(i, s, { ticketKey: null, title: null, repo: null, coordinator: coordinator(s), prs: [], target: { page: "feature", id: f.id, sessionId: s.id } }, coordinator(s) ? { featureId: f.id } : null),
+    sessionRow(i, s, { ticketKey: null, title: null, repo: null, where: f.name, coordinator: coordinator(s), prs: [], target: { page: "feature", id: f.id, sessionId: s.id } }, coordinator(s) ? { featureId: f.id } : null),
   );
 }
 
+/** active 只数正在干活的（思考中、跑工具、后台命令；BTL-190 第 7 点），停着等 PR、等你的不算。 */
 function countRows(rows: NowRow[]): NowCounts {
   return {
-    active: rows.filter((r) => !r.idle).length,
+    active: rows.filter((r) => r.working).length,
     // 每条未决的「待你决定」算一件。
     needsYou: rows.reduce((n, r) => n + (r.needsYou !== null ? 1 : 0) + r.decisions, 0),
     stuck: rows.filter((r) => r.activity?.stuck === true).length,
@@ -154,7 +166,7 @@ export function buildNowView(i: NowInput): NowView {
   const epics: NowEpic[] = [];
   for (const e of i.epics) {
     const rows = e.sessions.filter(live).map((s) =>
-      sessionRow(i, s, { ticketKey: null, title: null, repo: null, coordinator: true, prs: [], target: { page: "epic", id: e.id, sessionId: s.id } }, { epicId: e.id }),
+      sessionRow(i, s, { ticketKey: null, title: null, repo: null, where: e.name, coordinator: true, prs: [], target: { page: "epic", id: e.id, sessionId: s.id } }, { epicId: e.id }),
     );
     const g = nowEpic(e.id, e.name, rows, i.features.filter((f) => f.epicId === e.id).map(featureOf));
     if (g) epics.push(g);
@@ -167,5 +179,5 @@ export function buildNowView(i: NowInput): NowView {
   const all = epics.flatMap((e) => [...e.rows, ...e.features.flatMap((f) => f.rows)]);
   const needsYou = all.filter((r) => r.needsYou !== null).sort(bySince);
   const decisions = [...i.decisions].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id);
-  return { needsYou, decisions, epics, running: all.filter((r) => r.sessionId !== null).length, merges: i.merges };
+  return { needsYou, decisions, epics, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges };
 }

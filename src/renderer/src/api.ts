@@ -1,3 +1,4 @@
+import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
 import { IPC, type IpcResult } from "../../shared/ipc";
 import type { MemoryView, WhyEntry } from "../../shared/memory";
@@ -128,6 +129,8 @@ export const api = {
   onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),
   onStateChanged: (cb: () => void) => window.butler.on(IPC.stateChanged, cb),
   onKeepAwakeChanged: (cb: (on: boolean) => void) => window.butler.on(IPC.appKeepAwakeChanged, cb),
+  /** 实况窗口（BTL-190 第 7 点）：开着的 session 新的一次工具调用、记忆读写、回合开始 / 结束。 */
+  onActivityEvent: (cb: (e: ActivityEvent) => void) => window.butler.on(IPC.activityEvent, cb),
   /** 记忆写进了 StateCore（ticketKey），或记忆开关变了（null：所有 ticket）。 */
   onMemoryChanged: (cb: (ticketKey: string | null) => void) => window.butler.on(IPC.memoryChanged, cb),
 };

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { SessionActivity } from "../../shared/activity";
+import type { ActivityEvent, SessionActivity } from "../../shared/activity";
 import type { InboxItemView, NowRow, NowView, UsageSummary, WatchedPr } from "../../shared/types";
-import { groupSummary, inboxWho, needsYouText, needsYouTotal, prPill, rowPlace, rowText, usageDetails, usageLine } from "./now-view";
+import {
+  groupSummary, inboxWho, liveMemoryLine, liveNeeds, livePill, liveRows, mergeEvents, needsYouText, needsYouTotal, prPill, rowLabel, wirePath, rowPlace, rowText, usageDetails, usageLine,
+} from "./now-view";
 import { S, setUiLang } from "./strings";
 
 const NOW = 1_000_000_000_000;
@@ -18,7 +20,7 @@ const pr = (over: Partial<WatchedPr> = {}): WatchedPr => ({
 });
 
 const row = (over: Partial<NowRow> = {}): NowRow => ({
-  sessionId: "s1", ticketKey: "BTL-1", title: "通知中心", repo: null, coordinator: false, activity: act(), mergeQueued: false,
+  sessionId: "s1", ticketKey: "BTL-1", title: "通知中心", repo: null, where: "app", coordinator: false, activity: act(), working: true, recent: [], mergeQueued: false,
   needsYou: null, refreshing: null, decisions: 0, prs: [], idle: false, since: NOW - 3 * MIN, target: { page: "ticket", key: "BTL-1", sessionId: "s1" }, ...over,
 });
 
@@ -130,9 +132,9 @@ describe("prPill", () => {
 
 describe("groupSummary", () => {
   it("groupSummary skips zero counts", () => {
-    expect(groupSummary({ active: 3, needsYou: 1, stuck: 0 }, S)).toBe("3 个进行中 · 1 需要你");
-    expect(groupSummary({ active: 2, needsYou: 0, stuck: 1 }, S)).toBe("2 个进行中 · 1 卡住");
-    expect(groupSummary({ active: 0, needsYou: 0, stuck: 0 }, S)).toBe("无进行中");
+    expect(groupSummary({ active: 3, needsYou: 1, stuck: 0 }, S)).toBe("3 个在干活 · 1 需要你");
+    expect(groupSummary({ active: 2, needsYou: 0, stuck: 1 }, S)).toBe("2 个在干活 · 1 卡住");
+    expect(groupSummary({ active: 0, needsYou: 0, stuck: 0 }, S)).toBe("没人在干活");
   });
 });
 
@@ -159,7 +161,7 @@ describe("rowPlace", () => {
     const loose = row({ sessionId: "s9", ticketKey: "BTL-9", title: "独立的 ticket" });
     const counts = { active: 1, needsYou: 0, stuck: 0 };
     const view: NowView = {
-      needsYou: [], decisions: [], running: 4, merges: [],
+      needsYou: [], decisions: [], running: 4, merges: [], memory: [],
       epics: [
         { id: 3, name: "结账改版", rows: [epicRow], counts, features: [{ id: 7, name: "支付重构", rows: [coord, ticket], counts }] },
         { id: null, name: "", rows: [], counts, features: [{ id: null, name: "", rows: [loose], counts }] },
@@ -190,8 +192,73 @@ describe("inbox helpers (BTL-190 2+3)", () => {
 
   it("counts every pending decision as one more thing that needs you", () => {
     expect(needsYouTotal(null)).toBe(0);
-    expect(needsYouTotal({ needsYou: [row()], decisions: [item(), item({ id: 2 })], epics: [], running: 1, merges: [] })).toBe(3);
+    expect(needsYouTotal({ needsYou: [row()], decisions: [item(), item({ id: 2 })], epics: [], running: 1, merges: [], memory: [] })).toBe(3);
     // 已经在卡片上答了、等着送进去的不算。
-    expect(needsYouTotal({ needsYou: [], decisions: [item(), item({ id: 2, answer: "A" })], epics: [], running: 1, merges: [] })).toBe(1);
+    expect(needsYouTotal({ needsYou: [], decisions: [item(), item({ id: 2, answer: "A" })], epics: [], running: 1, merges: [], memory: [] })).toBe(1);
   });
 });
+
+describe("the live window (BTL-190 7)", () => {
+  const ev = (at: number, label: string, over: Partial<ActivityEvent> = {}): ActivityEvent => ({ sessionId: "s1", at, kind: "tool", label, ...over });
+  const counts = { active: 0, needsYou: 0, stuck: 0 };
+  const view = (rows: NowRow[], featureRows: NowRow[] = []): NowView => ({
+    needsYou: [], decisions: [], running: 0, merges: [], memory: [],
+    epics: [{ id: 1, name: "e", rows, counts, features: [{ id: 2, name: "f", rows: featureRows, counts }] }],
+  });
+
+  it("shows sessions that are working or waiting for you, and leaves out stopped ones and PR-only rows", () => {
+    const working = row({ sessionId: "w" });
+    const stopped = row({ sessionId: "s", working: false, activity: act({ kind: "waiting" }) });
+    const approval = row({ sessionId: "a", working: false, activity: act({ kind: "approval" }), needsYou: "等你确认" });
+    const decided = row({ sessionId: "d", working: false, activity: act({ kind: "waiting" }), decisions: 2 });
+    const prOnly = row({ sessionId: null, working: false, activity: null });
+    expect(liveRows(view([working], [stopped, approval, decided, prOnly])).map((r) => r.sessionId)).toEqual(["w", "a", "d"]);
+    expect(liveRows(view([], [stopped]))).toEqual([]);
+  });
+
+  it("counts what a card needs from you: the needs-you reason and every pending decision", () => {
+    expect(liveNeeds(row())).toBe(0);
+    expect(liveNeeds(row({ needsYou: "等你确认", decisions: 2 }))).toBe(3);
+    expect(liveNeeds(row({ needsYou: "" }))).toBe(1);
+  });
+
+  it("gives the pill a short state: blinking while working, yellow while waiting for you, red when stuck", () => {
+    expect(livePill(row(), S)).toEqual({ text: "写代码", tone: "work" });
+    expect(livePill(row({ activity: act({ kind: "command", background: true }) }), S)).toEqual({ text: "后台 · 运行命令", tone: "work" });
+    expect(livePill(row({ working: false, activity: act({ kind: "approval" }), needsYou: "等你确认" }), S)).toEqual({ text: "等你批准", tone: "need" });
+    expect(livePill(row({ working: false, activity: act({ kind: "waiting" }), decisions: 1 }), S)).toEqual({ text: "等你决定", tone: "need" });
+    expect(livePill(row({ working: false, activity: act({ kind: "waiting" }), needsYou: "要拆 PR 吗？" }), S)).toEqual({ text: "等你", tone: "need" });
+    expect(livePill(row({ activity: act({ kind: "test", stuck: true }), needsYou: "测试没有输出" }), S)).toEqual({ text: "卡住", tone: "stuck" });
+    setUiLang("en");
+    expect(livePill(row({ working: false, activity: act({ kind: "waiting" }), needsYou: "?" }), S).text).toBe("Waiting for you");
+  });
+
+  it("merges the lines from the last fetch with the pushed events: no duplicates, oldest first, the last few", () => {
+    const fetched = [ev(1, "Read a.ts"), ev(2, "Edit b.ts")];
+    const pushed = [ev(2, "Edit b.ts"), ev(3, "Bash pnpm test"), ev(4, "x", { kind: "turn-end", label: "" }), ev(5, "其它 session", { sessionId: "s2" })];
+    expect(mergeEvents(fetched, pushed, 3, (e) => e.sessionId === "s1").map((e) => e.label)).toEqual(["Read a.ts", "Edit b.ts", "Bash pnpm test"]);
+    expect(mergeEvents(fetched, pushed, 2, (e) => e.sessionId === "s1").map((e) => e.label)).toEqual(["Edit b.ts", "Bash pnpm test"]);
+    // 同一个时间、同一个工具的两次调用是两条。
+    expect(mergeEvents([ev(1, "Read a.ts")], [ev(1, "Read b.ts")], 3, () => true)).toHaveLength(2);
+  });
+
+  it("names the card and the memory line by who did it", () => {
+    expect(rowLabel(row(), S)).toBe("BTL-1");
+    expect(rowLabel(row({ ticketKey: null, coordinator: true }), S)).toBe("总控");
+    expect(rowLabel(row({ ticketKey: null, coordinator: false }), S)).toBe("修复");
+    const rows = [row()];
+    expect(liveMemoryLine(ev(1, "接口改成 v2", { kind: "memory-write" }), rows, S)).toEqual({ who: "BTL-1", verb: "写入", label: "接口改成 v2" });
+    expect(liveMemoryLine(ev(1, "checkout", { kind: "memory-read", sessionId: "gone" }), rows, S)).toEqual({ who: "", verb: "读取", label: "checkout" });
+  });
+
+  it("draws the wire from the side of the card that faces the core to the core's edge", () => {
+    const core = { x: 300, y: 100, w: 200, h: 200 };
+    // 左边的卡片：从右边的中间出发，落在核心左边，高度贴着卡片。
+    expect(wirePath({ x: 0, y: 150, w: 240, h: 60 }, core)).toBe("M240 180 C270 180 270 180 300 180");
+    // 右边、比核心还高的卡片：落点压到离核心上角 14px。
+    expect(wirePath({ x: 560, y: 0, w: 240, h: 40 }, core)).toBe("M560 20 C530 20 530 114 500 114");
+    // 窄窗口里叠在核心下面：竖着连到核心的底边。
+    expect(wirePath({ x: 320, y: 340, w: 100, h: 60 }, core)).toBe("M370 340 C370 320 370 320 370 300");
+  });
+});
+

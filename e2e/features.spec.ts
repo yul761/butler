@@ -231,7 +231,8 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   const beWorktree = join(workspace, "backend-dms-2");
   const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
   const sessionIn = (cwd: string) => new RegExp(`interactive new (\\S+) mcp=\\S* cwd=${escapeRe(cwd)} `).exec(fakeLog())?.[1];
-  const headlessLines = () => fakeLog().split("\n").filter((l) => / headless .*--json-schema/.test(l));
+  // 只数 handoff 的 fork：需要你的判断（--model haiku）不算，transcript 有 fs.watch 以后它跑得早，什么时候跑不固定。
+  const headlessLines = () => fakeLog().split("\n").filter((l) => / headless .*--json-schema/.test(l) && !/ --model haiku /.test(l));
   const shots = process.env.BUTLER_E2E_SHOTS_DIR;
   const { app, page } = await launch(s);
   await completeWizard(page, s);

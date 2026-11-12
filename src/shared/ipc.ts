@@ -58,6 +58,8 @@ export const IPC = {
   ptyData: "pty:data",
   ptyExit: "pty:exit",
   stateChanged: "state:changed",
+  /** 实况窗口（BTL-190 第 7 点）：session 新的一次工具调用、记忆读写、回合开始 / 结束（ActivityEvent）。 */
+  activityEvent: "activity:event",
   healthGet: "health:get",
   healthInstallHooks: "health:installHooks",
   healthUninstallHooks: "health:uninstallHooks",
@@ -121,6 +123,6 @@ export const INVOKE_CHANNELS: readonly string[] = [
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];
 /** 主进程 → 渲染进程。 */
-export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.memoryChanged, IPC.appKeepAwakeChanged];
+export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.activityEvent, IPC.memoryChanged, IPC.appKeepAwakeChanged];
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };

@@ -21,6 +21,17 @@ export interface BackgroundTask {
   startedAt: number;
 }
 
+/**
+ * transcript 里发生的一件事（实况窗口用，BTL-190 第 7 点）：一次 tool_use（名字和原始参数），或者这一轮开始、结束。
+ * 攒在 TranscriptState.events 里，由读的一方取走。
+ */
+export type TranscriptEvent =
+  | { type: "tool"; at: number; name: string; input: Record<string, unknown> }
+  | { type: "turn-start" | "turn-end"; at: number };
+
+/** events 最多攒多少条：第一次读 4MB 的尾部时不会无限涨，取走的一方只关心最近的。 */
+export const MAX_PENDING_EVENTS = 100;
+
 export interface TranscriptState {
   running: Map<string, RunningTool>;
   background: Map<string, BackgroundTask>;
@@ -30,10 +41,23 @@ export interface TranscriptState {
   lastReply: string | null;
   /** lastReply 所在那条 assistant 记录的 message.id（“需要你”按它只判断一次）；没有 id 时为 null。 */
   lastReplyId: string | null;
+  /** 还没被取走的事件，从旧到新，最多 MAX_PENDING_EVENTS 条。 */
+  events: TranscriptEvent[];
 }
 
 export function newTranscriptState(): TranscriptState {
-  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null, lastReplyId: null };
+  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null, lastReplyId: null, events: [] };
+}
+
+function pushEvent(s: TranscriptState, e: TranscriptEvent): void {
+  s.events.push(e);
+  if (s.events.length > MAX_PENDING_EVENTS) s.events.splice(0, s.events.length - MAX_PENDING_EVENTS);
+}
+
+/** 改 turnOpen；真的从关到开、从开到关时记一条 turn-start / turn-end。 */
+function setTurn(s: TranscriptState, open: boolean, at: number): void {
+  if (s.turnOpen !== open) pushEvent(s, { type: open ? "turn-start" : "turn-end", at });
+  s.turnOpen = open;
 }
 
 /** 用户按 Esc 打断时 Claude Code 写的文字（也有 for tool use 的说法）；它后面不会再有结束这一轮的记录。 */
@@ -109,11 +133,11 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
   if (entry.type === "assistant" && message) {
     // 后台任务靠通知或 TaskStop 清，没拿到结果的前台工具（被打断）在轮次结束时清掉
     if (message.stop_reason === "end_turn") {
-      s.turnOpen = false;
+      setTurn(s, false, entryTime(entry));
       s.running.clear();
     } else {
       // 后台任务完成会让 Claude 在没有用户消息的情况下重新开始一轮
-      s.turnOpen = true;
+      setTurn(s, true, entryTime(entry));
     }
     if (!Array.isArray(message.content)) return;
     const text = message.content
@@ -132,6 +156,7 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
       const stops = STOP_TOOLS.has(name) ? idOf(input) : null;
       if (stops) tool.stopsTask = stops;
       s.running.set(block.id, tool);
+      pushEvent(s, { type: "tool", at: tool.startedAt, name, input });
     }
     return;
   }
@@ -160,14 +185,14 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
     if (text !== null) {
       // 新的用户消息或者打断：上一轮没拿到结果的前台工具不会再有结果了
       s.running.clear();
-      s.turnOpen = !text.startsWith(INTERRUPT_PREFIX);
+      setTurn(s, !text.startsWith(INTERRUPT_PREFIX), entryTime(entry));
     }
     return;
   }
 
   if (entry.type === "system") {
     if (entry.subtype === "turn_duration" || entry.subtype === "stop_hook_summary") {
-      s.turnOpen = false;
+      setTurn(s, false, entryTime(entry));
       s.running.clear();
     }
     return;

@@ -5,8 +5,8 @@ import { S } from "../src/renderer/src/strings";
 import { completeWizard, expect, makeGitRepo, ROOT, terminalText, test, type Sandbox } from "./fixtures";
 
 /**
- * 首页「现在」（计划 14 任务 6）。假 claude 的 /fake-ask 回一句以“？”结尾的问话；e2e 里需要你的判断（headless）总是失败，
- * Butler 走问号退路，所以这句问话就是“需要你”。活动 tick 调短，停下来之后很快就能看到。
+ * 首页「现在」（计划 14 任务 6）。假 claude 的 /fake-ask 回一句以“？”结尾的问话；假 claude 的需要你判断（headless）认出这句、
+ * 说需要你（别的回复都判断失败，算不需要你），所以这句问话就是“需要你”。活动 tick 调短，停下来之后很快就能看到。
  */
 
 /** 假 claude 对 /fake-ask 的回复（fake-claude.cjs 的 ASK_REPLY）。 */
@@ -215,6 +215,8 @@ test("the Now page is readable in light and dark", async ({ makeSandbox, launch 
   await checkoutFeature(page, s, ["DMS-1", "DMS-2", "DMS-3"]);
   // DMS-3 在跑测试，DMS-2 回了“收到”停下（空闲），DMS-1 问了一句话（需要你）。
   await openSession(page);
+  await typeLine(page, '/fake-tool Read {"file_path":"/w/src/cart.ts"}');
+  await expect.poll(() => terminalText(page)).toContain("tool Read");
   await typeLine(page, "/fake-bash pnpm test");
   await ticketPage(page, "DMS-2");
   await openSession(page);
@@ -232,6 +234,8 @@ test("the Now page is readable in light and dark", async ({ makeSandbox, launch 
   await idle.locator(":scope > .section-toggle").click();
   await expect(idle.locator(".now-row .now-key")).toHaveText(["DMS-2"]);
   await expect(page.locator(".now-feature .now-row.ok .main")).toHaveText(S.activity.test);
+  await expect(page.locator(".live-card")).toHaveCount(2);
+  await expect(page.locator(".live-card.work .live-line")).toHaveText(["Read cart.ts", "Bash pnpm test"]);
   // 鼠标移开，不让悬停的底色混进来。
   await page.mouse.move(0, 0);
 
@@ -256,6 +260,20 @@ test("the Now page is readable in light and dark", async ({ makeSandbox, launch 
     idleRow: page.locator(".now-idle .now-row .main"),
     usage: page.locator(".now-usage > .section-toggle"),
     badge: page.locator(".sidebar .needs-you-badge"),
+    // 实况窗口（BTL-190 第 7 点）：在跑测试的 DMS-3 和问了话的 DMS-1。
+    liveTitle: page.locator(".live-title"),
+    liveCoreName: page.locator(".live-core-name"),
+    liveCoreCount: page.locator(".live-core-count strong"),
+    liveCoreWorking: page.locator(".live-core-count span"),
+    liveMemoryHeading: page.locator(".live-core-memory h4"),
+    liveNoMemory: page.locator(".live-mem.none"),
+    liveKey: page.locator(".live-card .live-key").first(),
+    liveWhere: page.locator(".live-card .live-where").first(),
+    livePillWork: page.locator(".live-pill.work"),
+    livePillNeed: page.locator(".live-pill.need"),
+    liveBadge: page.locator(".live-badge"),
+    liveLine: page.locator(".live-card.work .live-line").last(),
+    liveNoTools: page.locator(".live-card.need .live-line.none"),
   };
   for (const scheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
@@ -270,4 +288,85 @@ test("the Now page is readable in light and dark", async ({ makeSandbox, launch 
     await page.screenshot({ path: join(shots, `now-${scheme}.png`) });
     expect(low, `${scheme}: text below 4.5:1`).toEqual([]);
   }
+});
+
+/**
+ * 实况窗口（BTL-190 第 7 点）：没人干活时说一句；在干活的、在等你的 session 各一张卡片，停下的不在；
+ * 工具调用一推过来就出现在卡片上，写记忆、读记忆沿着虚线走一个光点；窄窗口里排成网格、核心在最上面。
+ * 截图存到 test-results/now-page/live-*.png（设了 BUTLER_E2E_SHOTS_DIR 就存到那里）。
+ */
+test("the live window shows working sessions, their tool calls and memory sparks", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  // tick 调得很长：回到「现在」页以后卡片上的新行只能是 fs.watch 带来的。
+  s.env = { BUTLER_ACTIVITY_TICK_MS: "60000" };
+  const shots = process.env.BUTLER_E2E_SHOTS_DIR ?? join(ROOT, "test-results", "now-page");
+  mkdirSync(shots, { recursive: true });
+  const { app, page } = await launch(s);
+  await completeWizard(page, s);
+  await expect(page.locator(".live-empty-text")).toHaveText(S.liveEmpty);
+
+  await checkoutFeature(page, s, ["DMS-1", "DMS-2", "DMS-3"]);
+  // DMS-3 问了一句话（等你），DMS-2 回了“收到”停下，DMS-1 在干活：读了记忆、看了两处代码。
+  await openSession(page);
+  await typeLine(page, "/fake-ask");
+  await expect.poll(() => terminalText(page)).toContain(ASK_REPLY);
+  await ticketPage(page, "DMS-2");
+  await openSession(page);
+  await typeLine(page, "hello");
+  await expect.poll(() => terminalText(page)).toContain("收到：hello");
+  await ticketPage(page, "DMS-1");
+  await openSession(page);
+  await typeLine(page, '/fake-tool mcp__butler-feature__recall {"query":"结账金额"}');
+  await typeLine(page, '/fake-tool Read {"file_path":"/w/src/cart.ts"}');
+  await typeLine(page, '/fake-tool Grep {"pattern":"totalCents"}');
+  await expect.poll(() => terminalText(page)).toContain("tool Grep");
+  // 回到「现在」页以后才来的：写一条记忆，再读一次。
+  await typeLine(page, '/fake-later 3000 /fake-tool mcp__butler-feature__remember {"text":"金额一律用分"}');
+  await typeLine(page, '/fake-later 7000 /fake-tool mcp__butler-feature__facts {"query":"金额"}');
+
+  await homeButton(page).click();
+  const cards = page.locator(".live-card");
+  // 要你做事的排在前面。
+  await expect(cards.locator(".live-key")).toHaveText(["DMS-3", "DMS-1"]);
+  const asking = cards.filter({ hasText: "DMS-3" });
+  const working = cards.filter({ hasText: "DMS-1" });
+  await expect(asking).toHaveClass(/\bneed\b/);
+  await expect(asking.locator(".live-badge")).toHaveText(S.liveNeedsYou(1));
+  await expect(asking.locator(".live-pill")).toHaveText(S.liveWaiting);
+  await expect(working.locator(".live-pill.work")).toHaveText(S.activity.thinking);
+  await expect(working.locator(".live-where")).toHaveText("frontend");
+  await expect(working.locator(".live-line")).toHaveText([`${S.liveRead}结账金额`, "Read cart.ts", "Grep totalCents"]);
+  await expect(page.locator(".live-core-count strong")).toHaveText("1");
+  await expect(page.locator(".now-top .muted")).toHaveText(S.nowRunning(1));
+  await expect(page.locator(".live-mem.memory-read .label")).toHaveText(["结账金额"]);
+  // 每张卡片一条虚线，在干活的那条在流动。
+  await expect(page.locator(".live-wire")).toHaveCount(2);
+  await expect(page.locator(".live-wire.work")).toHaveCount(1);
+  await page.mouse.move(0, 0);
+
+  // 写记忆：蓝色光点从卡片流向核心，卡片上多一行，核心卡片上记下来。
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(page.locator(".live-spark.memory-write")).toHaveCount(1, { timeout: 10_000 });
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: join(shots, "live-light.png") });
+  await expect(working.locator(".live-line")).toHaveText(["Read cart.ts", "Grep totalCents", `${S.liveWrote}金额一律用分`]);
+  await expect(page.locator(".live-mem .label")).toHaveText(["结账金额", "金额一律用分"]);
+  await expect(page.locator(".live-spark")).toHaveCount(0, { timeout: 5000 });
+
+  // 读记忆：绿色光点从核心流向卡片（深色主题下截图）。
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator(".live-spark.memory-read")).toHaveCount(1, { timeout: 10_000 });
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: join(shots, "live-dark.png") });
+
+  // 窄窗口：核心在最上面，卡片排成网格，不画线。
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(760, 820));
+  await expect(page.locator(".live-wires")).toBeHidden();
+  await expect.poll(async () => {
+    const core = await page.locator(".live-core").boundingBox();
+    const first = await cards.first().boundingBox();
+    return core !== null && first !== null && core.y + core.height < first.y;
+  }).toBe(true);
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.screenshot({ path: join(shots, "live-narrow.png") });
 });

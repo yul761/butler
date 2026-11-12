@@ -11,14 +11,16 @@
 //     输入 /fake-fullscreen 时像 claude 的全屏界面：打开备用屏幕和鼠标上报（只发这一次），之后收到滚轮就记日志；
 //     输入 /fake-run <命令> 时像 Bash 工具：先跑 PreToolUse（也读 --settings 里的 hook，合并总控的 gate 在那里），拒绝就打印 denied: <理由>，
 //     否则在 cwd 里执行、打印输出、再跑 PostToolUse；日志记 gate deny <理由> / gate allow <命令>，这一轮照常结束；
+//     输入 /fake-tool <工具名> [JSON 参数] 时写一条 tool_use 和它的结果，这一轮不结束（实况窗口：工具调用、记忆读写的行和光点）；
+//     输入 /fake-later <毫秒> <一行> 时过这么久再把那一行当成输入（e2e 在别的页面上等它带来的变化）；
 //     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 butler-sessions，调用它，结果写进运行记录；
 //     启动时写一份 sessions/<pid>.json 登记文件，Butler 从这里查 session 的名字；
-//     输入 /fake-ask 时回一句以“？”结尾的问话（ASK_REPLY）并结束这一轮：「现在」页的需要你走问号退路认出它；
+//     输入 /fake-ask 时回一句以“？”结尾的问话（ASK_REPLY）并结束这一轮：需要你的判断认出它；
 //     输入 /clear 时像 Claude Code：换一个新的 session id 和新的 transcript，跑 SessionStart（source=clear），停在空的输入框上（没有 Stop）；
 //     每条 assistant 记录都带 usage：上下文是 FAKE_CLAUDE_CONTEXT_TOKENS（e2e 用它撑过换新的阈值），/clear 之后从头算，回到 CLEARED_CONTEXT；
 //     其余输入回“收到：<输入>”并结束这一轮；每条输入都在运行记录里记一行 prompt <JSON 字符串>；
 //   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果、feature 汇总或卡住判断；stream-json 的 MCP 探测只回 init。
-//     需要你的判断（schema 里有 needs_user）总是失败退出：和真实 e2e 环境里 Haiku 判断失败一样，Butler 走问号退路；
+//     需要你的判断（schema 里有 needs_user）：回复是 /fake-ask 的问话就说需要你（理由是那句问话），别的都失败退出（Butler 当作不需要你）；
 //     FAKE_CLAUDE_JUDGE_DELAY_MS 设了就等这么久才失败（像真的 Haiku 要判断几秒）。
 //     FAKE_CLAUDE_SUMMARY_GATE 指向的文件存在时，feature 汇总等到文件被删掉才回答：e2e 用它控制归档前要等多久。
 "use strict";
@@ -174,8 +176,15 @@ function headless() {
       // 按 handoff 处理。
     }
     const props = schema.properties || {};
+    if (props.needs_user && input.includes(ASK_REPLY)) {
+      // /fake-ask 的回复：说需要你，理由就是那句问话（判断失败时 Butler 不再看问号，BTL-190 第 2+3 点）。
+      const verdict = { needs_user: true, reason: ASK_REPLY };
+      log("needs-you judge: needed");
+      process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `judge-${Date.now()}`, result: JSON.stringify(verdict), structured_output: verdict, permission_denials: [], total_cost_usd: 0 })}\n`);
+      return;
+    }
     if (props.needs_user) {
-      // 不假装 Haiku：判断失败，Butler 按回复是不是以问号结尾来定。FAKE_CLAUDE_JUDGE_DELAY_MS 让它像真的 Haiku 一样过一会儿才失败。
+      // 别的回复不假装 Haiku：判断失败，Butler 当作不需要你。FAKE_CLAUDE_JUDGE_DELAY_MS 让它像真的 Haiku 一样过一会儿才失败。
       setTimeout(() => {
         log("needs-you judge failed");
         process.stderr.write("fake claude does not judge needs-you\n");
@@ -303,6 +312,12 @@ function interactive() {
       runHooks("SessionEnd", { session_id: sessionId, cwd, reason: "exit", transcript_path: transcript });
       process.exit(0);
     }
+    const later = /^\/fake-later (\d+) (.+)$/.exec(line);
+    if (later) {
+      setTimeout(() => rl.emit("line", later[2]), Number(later[1]));
+      out("> ");
+      return;
+    }
     const flood = /^\/fake-flood (\d+)$/.exec(line);
     if (flood) {
       // 一屏放不下的输出：e2e 用它检查终端能不能往回滚。
@@ -361,6 +376,15 @@ function interactive() {
       // 前台命令在跑：没有结果，这一轮不结束，也不打印新的提示符。
       startBash(bash[2], {});
       out("running\n");
+      return;
+    }
+    const fakeTool = /^\/fake-tool (\S+)(?: (.+))?$/.exec(line);
+    if (fakeTool) {
+      // 工具调用完了、模型还在想：这一轮不结束，也不跑 Stop。
+      const toolId = `toolu-${Date.now()}-${messages}`;
+      append({ type: "assistant", uuid: `a-${Date.now()}`, message: { id: messageId(), role: "assistant", stop_reason: "tool_use", usage: usage(), content: [{ type: "tool_use", id: toolId, name: fakeTool[1], input: fakeTool[2] ? JSON.parse(fakeTool[2]) : {} }] } });
+      append({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: "ok" }] } });
+      out(`tool ${fakeTool[1]}\n`);
       return;
     }
     if (bash) {

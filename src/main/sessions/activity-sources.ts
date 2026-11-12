@@ -10,7 +10,7 @@ const MTIME_SLACK_MS = 2000;
 
 /**
  * 增量读取 transcript：每次从上次的偏移继续，只处理完整的行。
- * 文件变短就从头重建；第一次读时文件太大只读尾部，丢掉开头的半行。
+ * 文件变短、或者换成了另一个文件（轮转，inode 变了）就从头重建；第一次读时文件太大只读尾部，丢掉开头的半行。
  */
 export class TranscriptTail {
   private offset = 0;
@@ -19,6 +19,10 @@ export class TranscriptTail {
   private state: TranscriptState = newTranscriptState();
   /** 上一次读成功时的文件大小：一时读不了不能当成文件变了。 */
   private lastSize = 0;
+  /** 上一次读到的文件的 inode；还没读过为 null。 */
+  private ino: number | null = null;
+  /** 从头重建过几次（截短或轮转）：调用方据此知道重读出来的旧事件不是新的。 */
+  restarts = 0;
 
   constructor(
     private readonly file: string,
@@ -29,8 +33,11 @@ export class TranscriptTail {
     try {
       const fh = await open(this.file, "r");
       try {
-        const size = (await fh.stat()).size;
-        if (size < this.offset) this.reset();
+        const st = await fh.stat();
+        const size = st.size;
+        const rotated = this.ino !== null && st.ino !== this.ino;
+        this.ino = st.ino;
+        if (size < this.offset || rotated) this.reset();
         if (size - this.offset > this.maxInitialBytes) {
           // 第一次读，或一次涨了太多：只看尾部，状态可能不全，但内存有界
           this.offset = size - this.maxInitialBytes;
@@ -53,6 +60,7 @@ export class TranscriptTail {
   }
 
   private reset(): void {
+    this.restarts++;
     this.offset = 0;
     this.skipping = false;
     this.state = newTranscriptState();

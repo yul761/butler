@@ -2,18 +2,30 @@ import { stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { ACTIVITY_OUTPUT_LIMIT, LAST_REPLY_LIMIT } from "../../shared/control";
-import type { ActivityKind, SessionActivity } from "../../shared/activity";
+import type { ActivityEvent, ActivityKind, SessionActivity } from "../../shared/activity";
 import type { Feature, Session, Ticket } from "../../shared/types";
 import { M } from "../strings";
 import { backgroundTasks, classifyCommand, currentTool, DETAIL_LIMIT, newTranscriptState, type BackgroundTask, type RunningTool, type TranscriptState } from "./activity-parse";
 import { foregroundOutputFile, readOutputTail, subagentOutputSizes, tasksDirFor, TranscriptTail, utf8Tail } from "./activity-sources";
+import { liveEvent } from "./live-events";
 import { sampleProcTree, type ProcSample } from "./proc-tree";
 import { stripAnsi, type PtySnapshot } from "./pty-manager";
 import type { StuckInput } from "./stuck-judge";
 import { cpuQuiet, STUCK_CHECK_MS, StuckTracker, type StuckVerdict } from "./stuck-tracker";
+import { DebouncedWatch, type WatchFn } from "./transcript-watch";
 
-/** 活动刷新的间隔。 */
+/** 活动刷新的间隔：transcript 有 fs.watch 盯着（BTL-190 第 7 点），这个 tick 是退路。 */
 export const ACTIVITY_TICK_MS = 10_000;
+/** transcript 变了以后多久重读（去抖）。 */
+export const WATCH_DEBOUNCE_MS = 300;
+/** 每个 session 留最近几条工具调用（实况窗口的小终端）。 */
+export const RECENT_TOOLS = 3;
+/** 全部 session 一共留最近几条记忆读写（实况窗口的核心卡片）。 */
+export const RECENT_MEMORY = 8;
+/** UserPromptSubmit 以后、transcript 还没动之前，最多把停着的 session 当成在想多久。 */
+const PROMPT_HOLD_MS = 30_000;
+/** 开始跟踪时往前留的余量：比这早的记录是重放出来的旧事，不推给界面。 */
+const EVENT_SLACK_MS = 2000;
 /** 同时最多请几个 headless Claude 判断。 */
 const MAX_JUDGES = 2;
 /** 给 Claude 判断时，最后输出和终端末尾各最多带多少字节。 */
@@ -71,6 +83,15 @@ export interface ActivityDeps {
   judge: (input: StuckInput) => Promise<StuckVerdict | null>;
   /** 活动变化时调用；内容没变不调。 */
   notify: () => void;
+  /**
+   * 实况窗口的信号（BTL-190 第 7 点）：每个新的 tool_use、轮次开始和结束各一条。开始跟踪以前的记录（--resume 重放、Butler 启动前写的）、
+   * 文件截短或轮转后重读出来的不推。
+   */
+  onEvent?: (e: ActivityEvent) => void;
+  /** 盯 transcript 的 fs.watch；测试注入假的，null 不盯（只靠 tick）。默认用真的 fs.watch。 */
+  watch?: WatchFn | null;
+  /** 默认 300ms。 */
+  watchDebounceMs?: number;
   /** 一次卡住只调一次。 */
   onStuck: (info: StuckInfo) => void;
   now: () => number;
@@ -161,6 +182,20 @@ interface Tracked {
   /** 进程树里还有没有这些后台任务的 shell；还没问过、读不到为 null（照旧算在跑）。 */
   shellAlive: boolean | null;
   shellCheckedAt: number;
+  /** 盯着 transcript 的 fs.watch；还没找到文件时为 null。 */
+  watch: DebouncedWatch | null;
+  /** 最近的工具调用（含记忆读写），从旧到新，最多 RECENT_TOOLS 条。 */
+  recent: ActivityEvent[];
+  /** 比这早的记录不推给界面：开始跟踪的时间，文件截短或轮转以后是那一刻。 */
+  eventsSince: number;
+  /** TranscriptTail 从头重建过的次数：变了说明这次读到的是重读出来的旧记录。 */
+  restarts: number;
+  /** UserPromptSubmit 到的时间：transcript 动之前先当它在想；没有为 null。 */
+  promptAt: number | null;
+  /** 那时读到的 transcript 大小。 */
+  promptSize: number;
+  /** transcript 里最近一次轮次开始的时间；还没有为 null。 */
+  turnStartAt: number | null;
 }
 
 /** 这一次更新里最多读一次进程树：后台任务的检查和卡住采样共用。 */
@@ -180,6 +215,8 @@ export class ActivityMonitor {
   private readonly judging = new Set<string>();
   /** 每个 session 正在做的那次更新：tick 和 refreshSession 撞上时排队，同一段 transcript 不能读两遍（读到的位置会多走）。 */
   private readonly updating = new Map<string, Promise<boolean>>();
+  /** 全部 session 最近的记忆读写，从旧到新。 */
+  private memory: ActivityEvent[] = [];
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
   private stopped = false;
@@ -201,6 +238,7 @@ export class ActivityMonitor {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    for (const t of this.tracked.values()) t.watch?.close();
   }
 
   async tick(now: number): Promise<void> {
@@ -241,6 +279,43 @@ export class ActivityMonitor {
     }
   }
 
+  /**
+   * 收到 UserPromptSubmit（BTL-190 第 7 点）：马上重读。claude 可能还没把这条输入写进 transcript，
+   * 这时先把停着的它当成在想，直到 transcript 动了（最多 30 秒）。id 可以是链上的旧 id。
+   * 刚开的终端还没 tick 到：现在就开始跟踪（第一句话一发出去就算在干活，fs.watch 也马上挂上）。
+   */
+  async promptSubmitted(id: string): Promise<void> {
+    const head = this.d.sessions.head(id);
+    if (!head || this.stopped) return;
+    let started = false;
+    if (!this.tracked.has(head.id)) {
+      const termId = this.d.pty.openIds().find((term) => this.d.sessions.head(term)?.id === head.id);
+      if (termId === undefined) return;
+      try {
+        started = await this.serialUpdate(head.id, () => this.update(head, termId, this.d.now()));
+      } catch (e) {
+        this.d.log?.(`activity of session ${head.id} failed`, e);
+        return;
+      }
+    }
+    const t = this.tracked.get(head.id);
+    if (!t || this.stopped) return;
+    t.promptAt = this.d.now();
+    t.promptSize = t.transcriptSize;
+    await this.refreshSession(head.id);
+    if (started && !this.stopped) this.d.notify();
+  }
+
+  /** 这个 session 最近的工具调用（含记忆读写），从旧到新，最多 3 条；没在跟踪为空。 */
+  recent(sessionId: string): ActivityEvent[] {
+    return [...(this.tracked.get(sessionId)?.recent ?? [])];
+  }
+
+  /** 全部 session 最近的记忆读写，从旧到新，最多 8 条。 */
+  memoryLog(): ActivityEvent[] {
+    return [...this.memory];
+  }
+
   /** 当前命令输出的末尾，最多 4096 字节（不切开 UTF-8 字符）；读不到返回 ""。 */
   async output(sessionId: string): Promise<string> {
     return utf8Tail(this.tracked.get(sessionId)?.outputText ?? "", ACTIVITY_OUTPUT_LIMIT);
@@ -276,8 +351,9 @@ export class ActivityMonitor {
       if (head) live.set(head.id, { head, termId });
     }
     let changed = false;
-    for (const id of this.tracked.keys()) {
+    for (const [id, t] of this.tracked) {
       if (live.has(id)) continue;
+      t.watch?.close();
       this.tracked.delete(id);
       this.tracker.forget(id);
       this.wanted.delete(id);
@@ -313,9 +389,12 @@ export class ActivityMonitor {
     t.cwd = head.cwd;
     t.scope = this.scope(head);
     const { state: full, size } = await this.readTranscript(t);
+    this.watchTranscript(t);
+    const recentChanged = this.takeEvents(t, full, now);
     const probe = this.probe(t, now);
     const state = await this.liveBackground(t, full, now, probe);
-    const { eligible, ...derived } = deriveActivity(state, this.d.pty.permissionShowing(termId));
+    const { eligible, ...found } = deriveActivity(state, this.d.pty.permissionShowing(termId));
+    const derived = this.holdPrompt(t, found, size, now);
     const output = await this.readOutput(t, state);
     const grew = size !== t.transcriptSize || output.size !== t.outputSize;
     t.transcriptSize = size;
@@ -327,9 +406,62 @@ export class ActivityMonitor {
     if (grew) t.lastOutputAt = now;
     await this.sample(t, grew, now, probe);
     const next: SessionActivity = { sessionId: t.id, ...derived, lastOutputAt: t.lastOutputAt, ...this.verdict(t), lastOutput: output.lines };
-    const changed = !isDeepStrictEqual(next, t.activity);
+    const changed = recentChanged || !isDeepStrictEqual(next, t.activity);
     t.activity = next;
     return changed;
+  }
+
+  /** 找到 transcript 以后挂上 fs.watch（已经挂着就什么也不做；文件被换掉后在这里重新挂）。 */
+  private watchTranscript(t: Tracked): void {
+    if (!t.file || this.d.watch === null || this.stopped) return;
+    const id = t.id;
+    t.watch ??= new DebouncedWatch(t.file, {
+      delayMs: this.d.watchDebounceMs ?? WATCH_DEBOUNCE_MS,
+      onChange: () => void this.refreshSession(id),
+      watch: this.d.watch,
+      log: this.d.log,
+    });
+    t.watch.ensure();
+  }
+
+  /**
+   * 取走这次读到的事件：工具调用记进 recent，记忆读写也记进全局的 memory，新的推给界面。
+   * 文件截短或轮转以后重读出来的是旧事：recent 清空重来，只推那以后的。返回 recent 有没有变。
+   */
+  private takeEvents(t: Tracked, state: TranscriptState, now: number): boolean {
+    const pending = state.events.splice(0);
+    const restarts = t.tail?.restarts ?? 0;
+    let changed = false;
+    if (restarts !== t.restarts) {
+      t.restarts = restarts;
+      t.eventsSince = now;
+      changed = t.recent.length > 0;
+      t.recent = [];
+    }
+    for (const raw of pending) {
+      const e = liveEvent(t.id, raw);
+      if (e.kind === "turn-start") t.turnStartAt = e.at;
+      if (e.kind !== "turn-start" && e.kind !== "turn-end") {
+        t.recent = [...t.recent, e].slice(-RECENT_TOOLS);
+        changed = true;
+      }
+      if (e.kind === "memory-write" || e.kind === "memory-read") {
+        this.memory = [...this.memory, e].sort((a, b) => a.at - b.at).slice(-RECENT_MEMORY);
+      }
+      if (e.at >= t.eventsSince && !this.stopped) this.d.onEvent?.(e);
+    }
+    return changed;
+  }
+
+  /**
+   * UserPromptSubmit 到了、transcript 还没动：停着的先当在想。transcript 动了、已经记着这条输入开始的轮次
+   * （hook 到之前就读到了，回得快的这一轮可能已经结束），或者过了 30 秒，就以 transcript 为准。
+   */
+  private holdPrompt(t: Tracked, a: Omit<DerivedActivity, "eligible">, size: number, now: number): Omit<DerivedActivity, "eligible"> {
+    const recorded = t.promptAt !== null && t.turnStartAt !== null && t.turnStartAt >= t.promptAt - EVENT_SLACK_MS;
+    if (t.promptAt !== null && (recorded || size !== t.promptSize || now - t.promptAt > PROMPT_HOLD_MS)) t.promptAt = null;
+    if (t.promptAt === null || a.kind !== "waiting") return a;
+    return { ...a, kind: "thinking", startedAt: t.promptAt };
   }
 
   private track(id: string, termId: string): Tracked {
@@ -337,6 +469,7 @@ export class ActivityMonitor {
       id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, fileSizes: new Map(), outputText: "", lastOutputAt: null,
       eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null, lastReplyId: null,
       shellKey: "", shellCommands: [], shellAlive: null, shellCheckedAt: Number.NEGATIVE_INFINITY,
+      watch: null, recent: [], eventsSince: this.d.now() - EVENT_SLACK_MS, restarts: 0, promptAt: null, promptSize: 0, turnStartAt: null,
     };
     this.tracked.set(id, t);
     return t;
