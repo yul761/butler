@@ -600,6 +600,37 @@ describe("PrWatcher stages", () => {
     expect(s.deps.notify).toHaveBeenCalledTimes(2);
   });
 
+  it("calls onMerged once when the PR goes from open to merged, not again on the next round", async () => {
+    const onMerged = vi.fn<(t: PrTarget, n: number) => void>();
+    const s = withStages();
+    const w = new PrWatcher({ ...s.deps, gh: { ...s.gh, reviewComments: s.reviewComments, reviewAuthors: s.reviewAuthors }, git: { firstCommitAt: s.firstCommitAt }, stages: s.stages, onMerged });
+    s.gh.prStatus.mockResolvedValue(pr({ state: "OPEN" }));
+    await w.check();
+    expect(onMerged).not.toHaveBeenCalled();
+    s.advance(PR_SLOW_MS);
+    s.gh.prStatus.mockResolvedValue(pr({ state: "MERGED", mergedAt: 9 }));
+    await w.check();
+    expect(onMerged).toHaveBeenCalledTimes(1);
+    expect(onMerged).toHaveBeenCalledWith(expect.objectContaining({ repoPath: "/r" }), 7);
+    s.repo.rows.set(1, { ...s.repo.rows.get(1)!, state: "open" });
+    s.advance(PR_SLOW_MS);
+    await w.check();
+    expect(onMerged).toHaveBeenCalledTimes(1);
+  });
+
+  it("without stages, calls onMerged when the state changes to merged", async () => {
+    const onMerged = vi.fn<(t: PrTarget, n: number) => void>();
+    const s = setup();
+    const w = new PrWatcher({ ...s.deps, onMerged });
+    s.gh.prStatus.mockResolvedValue(pr({ state: "OPEN" }));
+    await w.check();
+    s.advance(PR_SLOW_MS);
+    s.gh.prStatus.mockResolvedValue(pr({ state: "MERGED" }));
+    await w.check();
+    expect(onMerged).toHaveBeenCalledTimes(1);
+    expect(onMerged).toHaveBeenCalledWith(expect.objectContaining({ branch: "b" }), 7);
+  });
+
   it("records nothing and calls nothing without both stages and git", async () => {
     const s = setup();
     const stages = { has: vi.fn(() => false), add: vi.fn(() => true) };

@@ -44,6 +44,8 @@ export interface PrWatcherDeps {
   git?: { firstCommitAt: typeof firstCommitAt };
   /** PR 进度的事件；没给就不记。 */
   stages?: Pick<PrStageRepo, "has" | "add">;
+  /** Butler 跟踪的 PR 合并了（只告诉一次）：复盘规矩的分析排队用。 */
+  onMerged?(t: PrTarget, prNumber: number): void;
   /** PR 的状态或 review 变了：把这个 ticket 所有仓库的 PR 写成一条 refresh handoff。 */
   onPrChanged(ticketKey: string): void;
   /** CI 有了新的结论（Task 6 接上）。 */
@@ -198,6 +200,8 @@ export class PrWatcher {
       const { row: next, pr } = await this.read(t, prev);
       this.d.repo.upsert(next);
       const staged = await this.record(t, prev, next, pr);
+      // 没有 stages（或 git）时 record 不记事件：改看状态从非 merged 变成 merged。
+      if (!(this.d.stages && this.d.git) && prev?.state !== "merged" && next.state === "merged" && next.number !== null) this.merged(t, next.number);
       if (settled(prev, next)) {
         const row = this.d.repo.get(t.repoId);
         if (row) {
@@ -252,13 +256,26 @@ export class PrWatcher {
         firstCommit = await this.d.git.firstCommitAt(t.cwd, t.branch);
       }
       let added = false;
+      let mergedNow = false;
       for (const o of prObservations(t, from, next, pr, inline, firstCommit, this.d.now(), bots)) {
-        if (stages.add(o.event, o.dedupeKey)) added = true;
+        if (stages.add(o.event, o.dedupeKey)) {
+          added = true;
+          if (o.event.kind === "merged") mergedNow = true;
+        }
       }
+      if (mergedNow && next.number !== null) this.merged(t, next.number);
       return added;
     } catch (e) {
       this.d.log(`pr watch: recording the stages of ${t.branch} in ${t.repoPath} failed`, e);
       return false;
+    }
+  }
+
+  private merged(t: PrTarget, number: number): void {
+    try {
+      this.d.onMerged?.(t, number);
+    } catch (e) {
+      this.d.log(`pr watch: onMerged for ${t.branch} in ${t.repoPath} failed`, e);
     }
   }
 

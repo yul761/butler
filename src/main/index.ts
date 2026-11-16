@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, Tray } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -102,7 +102,10 @@ import { pathKey } from "./util/env";
 import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
-import { applyGhResolution, branchRuns, failedLog, prInfo, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
+import { applyGhResolution, branchRuns, compareFiles, failedLog, ghBinary, mergedPrs, prInfo, prLessonData, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
+import { LessonsRepo } from "./db/lessons-repo";
+import { RepoIdentity } from "./lessons/repo-identity";
+import { LessonRunner } from "./lessons/lesson-runner";
 import type { HeadlessExecDeps } from "./handoff/headless-exec";
 import * as git from "./tickets/git";
 import { canSend } from "./safe-send";
@@ -425,6 +428,35 @@ async function bootstrap(): Promise<void> {
     run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID,
     signal: headlessAbort.signal, onUsage: recordHeadlessUsage, log: logger,
   };
+  // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
+  const lessonsRepo = new LessonsRepo(db);
+  const repoIdentity = new RepoIdentity();
+  const lessonRunner = new LessonRunner({
+    repo: lessonsRepo, identity: repoIdentity, jobs,
+    gh: { mergedPrs, prLessonData, compareFiles, available: () => ghBinary() !== null },
+    headless: { ...judgeDeps },
+    ticketForBranch: (slug, branch) => tickets.reposByBranch(branch).find((r) => repoIdentity.slugOf(r.repoPath) === slug)?.ticketKey ?? null,
+    butlerContext: (key) => {
+      const ps = handoffs.listByTicket(key, 20).flatMap((h) => (h.payload ? [h.payload] : []));
+      const seen = new Set<string>();
+      const transcripts: string[][] = [];
+      for (const s of sessions.listByTicket(key)) {
+        for (const id of sessions.chainOf(s.id)) {
+          if (seen.has(id)) continue;
+          seen.add(id);
+          const file = findTranscript(paths.claudeProjects, id);
+          if (!file) continue;
+          try {
+            transcripts.push(readFileSync(file, "utf8").split("\n").filter(Boolean));
+          } catch {
+            // 读不了的记录跳过。
+          }
+        }
+      }
+      return { decisions: ps.flatMap((p) => p.decisions.map((d) => d.statement)), learnings: ps.flatMap((p) => p.learnings), transcripts };
+    },
+    lang: () => currentLang(), now: Date.now, notify: () => notify(), log: logger,
+  });
   /** 开着终端的 Butler session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
   const needsYouHeads = (): NeedsYouHead[] => {
     const heads = new Map<string, NeedsYouHead>();
@@ -669,6 +701,7 @@ async function bootstrap(): Promise<void> {
   const checkSchedule = (trigger: ScheduleTrigger) => {
     if (headlessAbort.signal.aborted) return Promise.resolve();
     void butlerPatrol.check();
+    void lessonRunner.daily().catch((e: unknown) => logger("lessons: daily pull failed", e));
     return scheduler.check(trigger);
   };
 
@@ -930,6 +963,7 @@ async function bootstrap(): Promise<void> {
     gh: { prStatus, branchRuns, failedLog, reviewComments, reviewAuthors },
     git: { firstCommitAt: git.firstCommitAt },
     stages: prStages,
+    onMerged: (t, n) => lessonRunner.merged(t.repoPath, n),
     // PR 的状态或 review 变了：在最新的 handoff 上换掉 prs，存成一条 refresh。ticket 状态、PR 标签、合并后清理 worktree 都照旧走 ingest。
     onPrChanged: (key) => {
       const base = handoffs.latestValid(key);
@@ -1239,6 +1273,9 @@ async function bootstrap(): Promise<void> {
   // 等 git 和 gh 的路径按登录 shell 的 PATH 解析好再查：第一轮就可能看到合并、触发 worktree 清理。已经开始退出就不再启动。
   void healthReady.then(() => {
     if (!headlessAbort.signal.aborted) prWatcher.start();
+  });
+  void healthReady.then(() => {
+    if (!headlessAbort.signal.aborted) lessonRunner.start();
   });
   activityMonitor.start();
   usageScanner.start(usageScanMs(process.env));
