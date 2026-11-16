@@ -263,11 +263,20 @@ export async function defaultBranch(repo: string): Promise<string> {
   return ref.startsWith("refs/remotes/origin/") ? ref.slice("refs/remotes/origin/".length) : "main";
 }
 
-/** 分支上比 origin/<默认分支> 新的第一个 commit 的作者时间（毫秒）；没有或出错返回 null。 */
-export async function firstCommitAt(cwd: string, branch: string): Promise<number | null> {
+/**
+ * 分支上比 origin/<默认分支> 新的 commit 里最早的作者时间（毫秒）；没有或出错返回 null。
+ * afterMs：只看提交时间晚于它的 commit（这个分支上一个 PR 结束之后的，下一个 PR 的开始）。用提交时间筛、作者时间取：rebase 不改作者时间。
+ */
+export async function firstCommitAt(cwd: string, branch: string, afterMs: number | null = null): Promise<number | null> {
   const base = await defaultBranch(cwd);
-  const r = await gitRaw(cwd, ["log", "--reverse", "--format=%at", `origin/${base}..${branch}`]);
+  const r = await gitRaw(cwd, ["log", "--format=%at %ct", `origin/${base}..${branch}`]);
   if (r.code !== 0) return null;
-  const sec = Number(r.stdout.split("\n")[0].trim());
-  return Number.isFinite(sec) && sec > 0 ? sec * 1000 : null;
+  let first: number | null = null;
+  for (const line of r.stdout.split("\n")) {
+    const [at, ct] = line.trim().split(" ").map(Number);
+    if (!Number.isFinite(at) || at <= 0 || !Number.isFinite(ct)) continue;
+    if (afterMs !== null && ct * 1000 <= afterMs) continue;
+    if (first === null || at * 1000 < first) first = at * 1000;
+  }
+  return first;
 }

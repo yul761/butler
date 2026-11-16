@@ -73,9 +73,12 @@ describe("TicketPrsRepo", () => {
     expect(prs.needingRead().map((p) => p.id)).toEqual([open.id, readOpen.id, neverRead.id]);
   });
 
-  it("pendingMerged, setMergedHandled, setDelivered and update round-trip", () => {
+  it("pendingMerged (read rows only), setMergedHandled, setDelivered and update round-trip", () => {
     const { prs } = setup();
     const p = prs.link(link({ state: "merged" })).pr;
+    // 还没读过的不算：读到合并时间之前不知道是不是早就合并了。
+    expect(prs.pendingMerged()).toEqual([]);
+    prs.update(p.id, { checkedAt: 9 });
     expect(prs.pendingMerged().map((x) => x.id)).toEqual([p.id]);
     prs.setMergedHandled(p.id, 50);
     prs.setDelivered(p.id, "sha:failing");

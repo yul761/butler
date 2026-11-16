@@ -1,6 +1,6 @@
 // PR 进度：把 ticket 的每个仓库推导成一行（六步进度条和时间线）。
 import type { PrStageRepo } from "../db/pr-stage-repo";
-import type { PrWatchRow } from "../db/pr-watch-repo";
+import type { TicketPr } from "../db/ticket-prs-repo";
 import type { PrStagesScope, PrStagesView } from "../../shared/pr-stages";
 import type { Ticket } from "../../shared/types";
 import { derivePrStages } from "./pr-stages";
@@ -12,7 +12,8 @@ export interface PrStagesServiceDeps {
     get(id: number): { id: number; epicId: number | null } | null;
   };
   stages: Pick<PrStageRepo, "forRepo" | "upperDesign">;
-  prWatch: { get(repoId: number): PrWatchRow | null };
+  /** 这个 ticket 的 PR 行，最新的在前。 */
+  prs: { byTicket(ticketKey: string): TicketPr[] };
   /** 这个 ticket 的 report：at、text、发 report 的 session 的 repoId。 */
   reports(ticketKey: string): { at: number; text: string; repoId: number | null }[];
   /** hook 程序是当前版本，能看到 skill 调用；否则设计和自我 review 显示“未知”。 */
@@ -43,12 +44,12 @@ export class PrStagesService {
   private rowsOf(t: Ticket, skillTracking: boolean): PrStagesView[] {
     const upper = t.featureId === null ? [] : this.d.stages.upperDesign(t.featureId, this.d.features.get(t.featureId)?.epicId ?? null);
     const reports = this.d.reports(t.key);
+    const prs = this.d.prs.byTicket(t.key);
     return [...t.repos]
       .sort((a, b) => a.id - b.id)
       .map((r) => {
-        // ticket 的分支改过时 pr_watch 里还是旧分支的行：当作没有（和 PrWatcher.rowOf 一样）。
-        const row = this.d.prWatch.get(r.id);
-        const pr = row && row.branch === r.branch ? row : null;
+        // 这个仓库现在分支上最新的 PR；旧分支的不算。
+        const pr = prs.find((p) => p.repoId === r.id && p.headBranch === r.branch) ?? null;
         return derivePrStages({
           ticketKey: t.key, featureId: t.featureId, repoId: r.id, repoName: baseName(r.repoPath), branch: r.branch,
           ticketCreatedAt: t.createdAt,

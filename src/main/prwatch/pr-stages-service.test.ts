@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StageEvent } from "../db/pr-stage-repo";
-import type { PrWatchRow } from "../db/pr-watch-repo";
+import type { TicketPr } from "../db/ticket-prs-repo";
 import type { Ticket, TicketRepo } from "../../shared/types";
 import { PrStagesService, type PrStagesServiceDeps } from "./pr-stages-service";
 
@@ -18,7 +18,7 @@ function make(o: {
   tickets?: Ticket[]; features?: { id: number; epicId: number | null }[];
   reports?: PrStagesServiceDeps["reports"]; skillTracking?: boolean;
   forRepo?: PrStagesServiceDeps["stages"]["forRepo"]; upperDesign?: PrStagesServiceDeps["stages"]["upperDesign"];
-  pr?: (repoId: number) => PrWatchRow | null;
+  prs?: (ticketKey: string) => TicketPr[];
 } = {}) {
   const tickets = o.tickets ?? [];
   const features = o.features ?? [];
@@ -26,7 +26,7 @@ function make(o: {
     tickets: { get: (k) => tickets.find((t) => t.key === k) ?? null, byFeature: (id) => tickets.filter((t) => t.featureId === id) },
     features: { byEpic: (id) => features.filter((f) => f.epicId === id), get: (id) => features.find((f) => f.id === id) ?? null },
     stages: { forRepo: o.forRepo ?? (() => []), upperDesign: o.upperDesign ?? (() => []) },
-    prWatch: { get: o.pr ?? (() => null) },
+    prs: { byTicket: o.prs ?? (() => []) },
     reports: o.reports ?? (() => []),
     skillTracking: () => o.skillTracking ?? true,
   });
@@ -93,14 +93,17 @@ describe("PrStagesService", () => {
     expect(sr(true).state).toBe("skipped");
   });
 
-  it("ignores a pr_watch row from the repo's old branch", () => {
-    const stale: PrWatchRow = {
-      ticketKey: "A-1", repoId: 5, repoPath: "/code/r5", branch: "old", number: 3, url: "https://x/pull/3", state: "closed", review: null, ci: "passing", headSha: "a", checkedAt: 1, failed: [], deliveredKey: null,
-    };
+  it("uses the newest PR row of the repo's current branch and ignores the old branch's", () => {
+    const row = (o: Partial<TicketPr>): TicketPr => ({
+      id: 1, ticketKey: "A-1", url: "https://x/pull/3", slug: "o/r", repoId: 5, number: 3, headBranch: "old", state: "closed", review: null, ci: "passing",
+      readError: false, headSha: "a", failed: [], openedAt: 1, mergedAt: null, closedAt: 2, source: "branch", linkedAt: 1, checkedAt: 1, deliveredKey: null, mergedHandledAt: null, ...o,
+    });
     const t = [ticket("A-1", [repo(5, "A-1", "new")])];
-    const v = make({ tickets: t, pr: () => stale }).view({ ticketKey: "A-1" })[0];
+    const v = make({ tickets: t, prs: () => [row({})] }).view({ ticketKey: "A-1" })[0];
     expect([v.prNumber, v.prUrl, v.closed]).toEqual([null, null, false]);
-    const same = make({ tickets: t, pr: () => ({ ...stale, branch: "new", state: "open" }) }).view({ ticketKey: "A-1" })[0];
+    // byTicket 最新的在前：同一个分支上先合并的 #2、现在开着的 #3。
+    const rows = [row({ headBranch: "new", state: "open" }), row({ id: 2, number: 2, url: "https://x/pull/2", headBranch: "new", state: "merged" }), row({ id: 3, repoId: 6, number: 9, headBranch: "new" })];
+    const same = make({ tickets: t, prs: () => rows }).view({ ticketKey: "A-1" })[0];
     expect([same.prNumber, same.closed]).toEqual([3, false]);
   });
 });

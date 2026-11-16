@@ -21,7 +21,8 @@ import { JobsRepo } from "./db/jobs-repo";
 import { MemorySyncRepo } from "./db/memory-sync-repo";
 import { MergeGateRepo } from "./db/merge-gate-repo";
 import { PrStageRepo } from "./db/pr-stage-repo";
-import { PrWatchRepo } from "./db/pr-watch-repo";
+import { BranchWatchRepo } from "./db/branch-watch-repo";
+import { TicketPrsRepo } from "./db/ticket-prs-repo";
 import { SecretsRepo } from "./db/secrets-repo";
 import { SessionsRepo } from "./db/sessions-repo";
 import { SettingsRepo } from "./db/settings-repo";
@@ -35,7 +36,6 @@ import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
 import { CiDelivery } from "./prwatch/ci-delivery";
 import { prHandoff } from "./prwatch/pr-handoff";
-import { watchTargets } from "./prwatch/pr-targets";
 import { PrWatcher } from "./prwatch/pr-watcher";
 import { makeWhoOf } from "./gate/who";
 import { auditCutoff, stalePendingCost } from "./gateway/budget";
@@ -103,7 +103,7 @@ import { pathKey } from "./util/env";
 import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
-import { applyGhResolution, branchRuns, compareFiles, failedLog, ghBinary, mergedPrs, prInfo, prLessonData, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
+import { applyGhResolution, branchRuns, compareFiles, failedLog, ghBinary, mergedPrs, prInfo, prLessonData, prsForBranch, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
 import { LessonsRepo } from "./db/lessons-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
 import { readTailLines, TRANSCRIPT_TAIL_BYTES } from "./lessons/tail";
@@ -940,7 +940,8 @@ async function bootstrap(): Promise<void> {
     waitingOnButler: (headId) => {
       if ([...gateRepo.waitingSessionIds()].some((id) => (sessions.head(id)?.id ?? id) === headId)) return true;
       const key = sessions.head(headId)?.ticketKey;
-      return key != null && prWatcher.statusOf(key).some((p) => p.ci === "pending");
+      // 合并、关闭了的 PR 留着最后一次读到的 CI：只算开着的 PR 和还没有 PR 的分支。
+      return key != null && prWatcher.statusOf(key).some((p) => (p.state === "open" || p.state === null) && p.ci === "pending");
     },
     refresher,
     hiddenBefore: (before) => sessions.listHiddenBefore(before),
@@ -953,7 +954,8 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   // PR 和 CI 的监视（计划 13）。
-  const prWatchRepo = new PrWatchRepo(db);
+  const ticketPrs = new TicketPrsRepo(db);
+  const branchWatch = new BranchWatchRepo(db);
   const holdWatcher = new HoldWatcher({
     repo: gateRepo, prInfo, git,
     isOpen: (id) => gateTerm(id) !== null,
@@ -970,7 +972,9 @@ async function bootstrap(): Promise<void> {
   });
   // CI 的结论递给这个仓库自己的 session（不算总控）：和合并通知走同一道 guard，最多等 1 分钟。
   const ciDelivery = new CiDelivery({
-    repo: prWatchRepo,
+    prs: ticketPrs,
+    branches: branchWatch,
+    currentBranch: (repoId) => tickets.getRepo(repoId)?.branch ?? null,
     guard: deliveryGuard,
     sessionFor: (key, repoId) => {
       for (const t of pty.openIds()) {
@@ -986,32 +990,32 @@ async function bootstrap(): Promise<void> {
   /** 递还没递出去的 CI 结论（永不 reject）。 */
   const flushCi = (): Promise<void> => ciDelivery.flush().catch((e: unknown) => logger("ci delivery: flush failed", e));
   const prWatcher = new PrWatcher({
-    repo: prWatchRepo,
-    targets: () =>
-      watchTargets(tickets.list(), {
-        workDir: (r) => ticketService.workDir(r),
-        sessionOpen: (key, repoId) => sessionService.hasRepoTerminal(key, repoId),
-        watched: (repoId) => prWatchRepo.get(repoId),
-        handoffHasOpenPr: (key) => handoffs.latestValid(key)?.payload?.prs.some((p) => p.state === "open") ?? false,
-      }),
-    gh: { prStatus, branchRuns, failedLog, reviewComments, reviewAuthors },
+    prs: ticketPrs,
+    branches: branchWatch,
+    tickets: () => tickets.list(),
+    repoOf: (repoId) => tickets.getRepo(repoId),
+    ghWorkDir: (r) => ticketService.ghWorkDir(r),
+    sessionOpen: (key, repoId) => sessionService.hasOpenTerminal(key, repoId ?? undefined),
+    home: homedir(),
+    slugOf: (path) => repoIdentity.slugOf(path),
+    gh: { prStatus, prsForBranch, branchRuns, failedLog, reviewComments, reviewAuthors },
     git: { firstCommitAt: git.firstCommitAt },
     stages: prStages,
-    onMerged: (t, n) => lessonRunner.merged(t.repoPath, n),
+    onMerged: (pr, repoPath) => lessonRunner.merged({ repoPath, slug: pr.slug }, pr.number),
     // PR 的状态或 review 变了：在最新的 handoff 上换掉 prs，存成一条 refresh。ticket 状态、PR 标签、合并后清理 worktree 都照旧走 ingest。
     onPrChanged: (key) => {
       const base = handoffs.latestValid(key);
       if (!base?.payload) return;
-      const next = prHandoff(key, prWatchRepo.byTicket(key), { id: base.id, prs: base.payload.prs });
+      const next = prHandoff(key, ticketPrs.byTicket(key), { id: base.id, createdAt: base.createdAt, status: base.payload.status, prs: base.payload.prs });
       if (!next) return;
       // 和早间刷新一样：done_today、followups、decisions、learnings 清空，免得重复计算、重复写进记忆。
       ingest({
         ticketKey: key, sessionId: null, trigger: "refresh",
-        payload: { ...base.payload, done_today: [], followups: [], decisions: [], learnings: [], prs: next.prs },
+        payload: { ...base.payload, status: next.status, done_today: [], followups: [], decisions: [], learnings: [], prs: next.prs },
         rawText: null, sourceRef: next.sourceRef,
       });
     },
-    onCiSettled: (row) => void ciDelivery.settled(row).catch((e: unknown) => logger("ci delivery: handing over a CI result failed", e)),
+    onCiSettled: (item) => void ciDelivery.settled(item).catch((e: unknown) => logger("ci delivery: handing over a CI result failed", e)),
     notify,
     // 每轮之后再递一遍：session 停着但当时用户在打字、有草稿的，安静下来之后在这里递出去。
     roundDone: () => void flushCi(),
@@ -1056,8 +1060,11 @@ async function bootstrap(): Promise<void> {
         if (!headlessAbort.signal.aborted) void butlerPatrol.check();
         return flushCi();
       });
-    const repoId = sessions.head(stopped)?.repoId;
-    if (repoId != null) prWatcher.soon(repoId);
+    // 这个 ticket 的 PR 都马上查一次；feature 总控查它所有 ticket 的；别的按仓库。
+    const head = sessions.head(stopped);
+    if (head?.ticketKey) prWatcher.soonTicket(head.ticketKey);
+    else if (head?.coordinator && head.featureId != null) for (const t of tickets.listByFeature(head.featureId)) prWatcher.soonTicket(t.key);
+    else if (head?.repoId != null) prWatcher.soon(head.repoId);
   };
 
   const inbox = new HookInbox({
@@ -1211,7 +1218,7 @@ async function bootstrap(): Promise<void> {
         get: (id) => features.get(id),
       },
       stages: prStages,
-      prWatch: prWatchRepo,
+      prs: ticketPrs,
       reports: (key) => inboxRepo.reportsForTicket(key),
       // 和 gateCommand 同一个条件：hook 程序不是当前版本就看不到 skill 调用。
       skillTracking: () => health.hookBinCurrent() && existsSync(paths.hookBin),

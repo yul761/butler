@@ -202,7 +202,7 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
         return ok(b.prs().map((p) => {
           const t = d.tickets.get(p.ticketKey);
           return {
-            ticket: p.ticketKey, repo: name(p), branch: p.branch, number: p.number, url: p.url, state: p.state, review: p.review, ci: p.ci,
+            ticket: p.ticketKey, repo: p.repoPath === null ? null : basename(p.repoPath), branch: p.branch, number: p.number, url: p.url, state: p.state, review: p.review, ci: p.ci,
             checkedAt: p.checkedAt ? new Date(p.checkedAt).toISOString() : null, ...(t ? ticketOwners(t) : { feature: null, epic: null }),
           };
         }));

@@ -66,8 +66,9 @@ function setup(o: { butlerDeps?: boolean } = {}) {
     { id: docs, epicId: null, name: "docs", status: "not_started", archivedAt: null, summaryAt: null, summary: null, blockers: [], decisions: [], openQuestions: [] },
   ];
   const prs: WatchedPr[] = [
-    { ticketKey: "BTL-1", repoId: 1, repoPath: "/r/btl-1", branch: "b-BTL-1", number: 12, url: "https://x/12", state: "open", review: "approved", ci: "failing", headSha: "abc", checkedAt: 0 },
-    { ticketKey: "BTL-3", repoId: 3, repoPath: "/r/btl-3", branch: "b-BTL-3", number: null, url: null, state: null, review: null, ci: "none", headSha: null, checkedAt: 0 },
+    { ticketKey: "BTL-1", prId: 1, repoId: 1, repoPath: "/r/btl-1", branch: "b-BTL-1", number: 12, url: "https://x/12", state: "open", review: "approved", ci: "failing", headSha: "abc", checkedAt: 0, readError: false },
+    { ticketKey: "BTL-3", prId: null, repoId: 3, repoPath: "/r/btl-3", branch: "b-BTL-3", number: null, url: null, state: null, review: null, ci: "none", headSha: null, checkedAt: 0, readError: false },
+    { ticketKey: "BTL-3", prId: 2, repoId: null, repoPath: null, branch: "", number: 4, url: "https://x/4", state: "open", review: null, ci: "unknown", headSha: null, checkedAt: 0, readError: false },
   ];
   const inboxView: InboxView = { decisions: [], reports: [] };
   const asked: string[] = [];
@@ -158,6 +159,8 @@ describe("Butler 总控 read-only tools (BTL-190 5)", () => {
       feature: { id: checkout, name: "checkout" }, epic: { id: shop, name: "shop" },
     });
     expect(list[1]).toMatchObject({ ticket: "BTL-3", number: null, feature: null, epic: null });
+    // 不是 ticket 仓库的 PR：没有仓库名。
+    expect(list[2]).toMatchObject({ ticket: "BTL-3", repo: null, number: 4 });
   });
 
   it("list_sessions lists every open session but itself, with its role, owners, needs-you and decisions", async () => {

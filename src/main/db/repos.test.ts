@@ -489,3 +489,42 @@ describe("Butler 总控 sessions (BTL-190 item 5)", () => {
     expect(new SessionsRepo(db).get("old")?.butler).toBe(false);
   });
 });
+
+describe("migration 23: pr_watch → ticket_prs / branch_watch", () => {
+  it("migration 23 from a v20 database", () => {
+    const db = new DatabaseSync(":memory:");
+    for (const sql of MIGRATIONS.slice(0, 20)) db.exec(sql);
+    db.exec("PRAGMA user_version = 20");
+    db.prepare(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES ('BTL-1', '', 'branch', '', 1)`).run();
+    const repo = (path: string, branch: string) =>
+      Number(db.prepare(`INSERT INTO ticket_repos (ticket_key, repo_path, work_mode, branch, created_at) VALUES ('BTL-1', ?, 'branch', ?, 1)`).run(path, branch).lastInsertRowid);
+    const plain = repo("/r/web", "btl-1");
+    const app = repo("/r/app", "btl-1-app");
+    const watch = db.prepare(
+      `INSERT INTO pr_watch (repo_id, ticket_key, repo_path, branch, number, url, state, review, ci, head_sha, failed, checked_at, delivered_key)
+       VALUES (?, 'BTL-1', ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
+    );
+    // 没查到 PR、ci 还是 unknown（旧的 neverRead）。
+    watch.run(plain, "/r/web", "btl-1", null, null, null, null, "unknown", null, 500, null);
+    // #25 已合并，但没有 merged 事件。
+    watch.run(app, "/r/app", "btl-1-app", 25, "https://github.com/Acme/App/pull/25/", "merged", "approved", "passing", "s1", 900, "s1:passing");
+    db.prepare(
+      `INSERT INTO pr_stage_events (dedupe_key, ticket_key, repo_id, branch, kind, at, data) VALUES (?, 'BTL-1', ?, 'btl-1-app', 'ci', 800, '{"result":"passing","sha":"s1"}')`,
+    ).run(`${app}:ci:btl-1-app:s1:passing:800`, app);
+
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+
+    expect(db.prepare(`SELECT repo_id, ticket_key, branch, ci, read_error, checked_at FROM branch_watch`).all()).toEqual([
+      { repo_id: plain, ticket_key: "BTL-1", branch: "btl-1", ci: "unknown", read_error: 0, checked_at: 500 },
+    ]);
+    const prs = db.prepare(`SELECT * FROM ticket_prs`).all() as Record<string, unknown>[];
+    expect(prs).toHaveLength(1);
+    expect(prs[0]).toMatchObject({
+      ticket_key: "BTL-1", url: "https://github.com/acme/app/pull/25", slug: "acme/app", repo_id: app, number: 25, head_branch: "btl-1-app",
+      state: "merged", review: "approved", ci: "passing", read_error: 0, head_sha: "s1", source: "branch", linked_at: 900,
+      checked_at: 0, delivered_key: "s1:passing", merged_handled_at: 900, merged_at: null,
+    });
+    expect(db.prepare(`SELECT pr_id FROM pr_stage_events WHERE kind = 'ci'`).get()).toEqual({ pr_id: prs[0].id });
+    expect(db.prepare(`SELECT name FROM sqlite_master WHERE name = 'pr_watch'`).get()).toBeUndefined();
+  });
+});

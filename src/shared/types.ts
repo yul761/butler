@@ -432,11 +432,18 @@ export interface UsageSummary {
   byModel: Record<string, number>;
 }
 
-/** 后台监视的一个分支的 PR / CI 状态（渲染进程也用）。 */
+/**
+ * 后台监视的一个 PR（ticket_prs 的一行）或一个还没有 PR 的分支（branch_watch 的一行）的状态（渲染进程也用）。
+ * PR 行的 prId、number、url、state 都有；分支行的都是 null。
+ */
 export interface WatchedPr {
   ticketKey: string;
-  repoId: number;
-  repoPath: string;
+  /** ticket_prs 的 id；分支行为 null。 */
+  prId: number | null;
+  /** PR 所在的 ticket 仓库；不是 ticket 仓库的 PR 为 null。 */
+  repoId: number | null;
+  repoPath: string | null;
+  /** PR 的 head 分支（还不知道时为空字符串），或分支行的分支。 */
   branch: string;
   number: number | null;
   url: string | null;
@@ -446,6 +453,8 @@ export interface WatchedPr {
   ci: "pending" | "passing" | "failing" | "none" | "unknown";
   headSha: string | null;
   checkedAt: number;
+  /** 上一次 gh 读取失败：ci、state 是再上一次的。 */
+  readError: boolean;
 }
 
 /** 「现在」页一行点开去哪：ticket 页、feature 页、epic 页或 Butler 总控页，sessionId 是要切到的终端（null：页面自己选）。 */

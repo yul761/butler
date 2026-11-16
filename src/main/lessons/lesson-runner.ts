@@ -78,12 +78,18 @@ export class LessonRunner {
     return { ok: true, enqueued };
   }
 
-  /** PR 监视看到 Butler 跟踪的 PR 合并时调用。 */
-  merged(repoPath: string, prNumber: number): void {
-    const slug = this.d.identity.slugOf(repoPath);
-    if (slug === null) return;
-    this.d.repo.upsertRepo(slug, repoPath, this.d.now());
-    this.d.repo.enqueue(slug, [prNumber], "merged", this.d.now());
+  /**
+   * PR 监视看到 Butler 跟踪的 PR 合并时调用。repoPath 是这个 PR 所在的 ticket 仓库（不是 ticket 仓库的 PR 为 null）。
+   * 认得出仓库的按仓库登记、排队；否则用 PR 的 slug，但只排已经登记过的仓库（没有本地仓库没法分析）。
+   */
+  merged(t: { repoPath: string | null; slug: string }, prNumber: number): void {
+    const slug = t.repoPath === null ? null : this.d.identity.slugOf(t.repoPath);
+    if (t.repoPath !== null && slug !== null) {
+      this.d.repo.upsertRepo(slug, t.repoPath, this.d.now());
+      this.d.repo.enqueue(slug, [prNumber], "merged", this.d.now());
+    } else if (this.d.repo.repo(t.slug)) {
+      this.d.repo.enqueue(t.slug, [prNumber], "merged", this.d.now());
+    } else return;
     this.pump();
   }
 

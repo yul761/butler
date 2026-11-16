@@ -143,10 +143,10 @@ export class TicketPrsRepo {
     ).map(toPr);
   }
 
-  /** 已合并但 onMerged 还没处理完的。 */
+  /** 已合并但 onMerged 还没处理完的。只算读过的：链接时说已合并、还没读过的，等读到 GitHub 的合并时间再判断是不是早就合并了。 */
   pendingMerged(): TicketPr[] {
     return (
-      this.db.prepare(`SELECT * FROM ticket_prs WHERE state = 'merged' AND merged_handled_at IS NULL ORDER BY id`).all() as unknown as Row[]
+      this.db.prepare(`SELECT * FROM ticket_prs WHERE state = 'merged' AND merged_handled_at IS NULL AND checked_at > 0 ORDER BY id`).all() as unknown as Row[]
     ).map(toPr);
   }
 

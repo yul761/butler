@@ -126,12 +126,12 @@ describe("LessonRunner queue", () => {
     await s.runner.idle();
     expect(s.statusOf(1)).toMatchObject({ status: "queued", not_before: T0 + RATE_LIMIT_PAUSE_MS });
     expect(s.run).toHaveBeenCalledTimes(1);
-    s.runner.merged("/w", 2);
+    s.runner.merged({ repoPath: "/w", slug: "acme/web" }, 2);
     await s.runner.idle();
     expect(s.run).toHaveBeenCalledTimes(1);
     expect(s.statusOf(2).status).toBe("queued");
     s.advance(RATE_LIMIT_PAUSE_MS);
-    s.runner.merged("/w", 3);
+    s.runner.merged({ repoPath: "/w", slug: "acme/web" }, 3);
     await s.runner.idle();
     for (const n of [1, 2, 3]) expect(s.statusOf(n).status).toBe("done");
   });
@@ -191,7 +191,7 @@ describe("LessonRunner queue", () => {
   it("does not take anything before start()", async () => {
     const s = setup();
     s.repo.enqueue("acme/web", [1], "merged", T0);
-    s.runner.merged("/w", 2);
+    s.runner.merged({ repoPath: "/w", slug: "acme/web" }, 2);
     await s.runner.daily();
     await s.runner.idle();
     expect(s.run).not.toHaveBeenCalled();
@@ -342,7 +342,7 @@ describe("LessonRunner daily", () => {
 describe("LessonRunner merged", () => {
   it("ignores a path with no slug", async () => {
     const s = setup({ identity: () => null });
-    s.runner.merged("/zzz", 5);
+    s.runner.merged({ repoPath: "/zzz", slug: "acme/zzz" }, 5);
     await s.runner.idle();
     expect(s.db.prepare(`SELECT COUNT(*) AS n FROM lesson_queue`).get()).toEqual({ n: 0 });
   });
@@ -350,8 +350,18 @@ describe("LessonRunner merged", () => {
   it("registers the repo and enqueues with origin merged, even if history was never analyzed", () => {
     const s = setup({ identity: () => "acme/new" });
     s.hold();
-    s.runner.merged("/n", 5);
+    s.runner.merged({ repoPath: "/n", slug: "acme/new" }, 5);
     expect(s.repo.repo("acme/new")?.localPath).toBe("/n");
     expect(s.db.prepare(`SELECT repo_slug, pr_number, origin FROM lesson_queue`).all()).toEqual([{ repo_slug: "acme/new", pr_number: 5, origin: "merged" }]);
+  });
+
+  it("merged with no repoPath uses the slug's lessons repo, and skips unknown slugs", () => {
+    const s = setup({ identity: () => { throw new Error("no path to resolve"); } });
+    s.hold();
+    s.runner.merged({ repoPath: null, slug: "acme/web" }, 7);
+    s.runner.merged({ repoPath: null, slug: "acme/other" }, 8);
+    expect(s.db.prepare(`SELECT repo_slug, pr_number, origin FROM lesson_queue`).all()).toEqual([{ repo_slug: "acme/web", pr_number: 7, origin: "merged" }]);
+    expect(s.repo.repo("acme/web")?.localPath).toBe("/w");
+    expect(s.repo.repo("acme/other")).toBeNull();
   });
 });

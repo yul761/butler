@@ -80,7 +80,7 @@ function act(sessionId: string, over: Partial<SessionActivity> = {}): SessionAct
 }
 
 function pr(ticketKey: string, repoId: number, over: Partial<WatchedPr> = {}): WatchedPr {
-  return { ticketKey, repoId, repoPath: "/r", branch: "b", number: 1, url: null, state: "open", review: "pending", ci: "passing", headSha: null, checkedAt: 0, ...over };
+  return { ticketKey, prId: 1, repoId, repoPath: "/r", branch: "b", number: 1, url: null, state: "open", review: "pending", ci: "passing", headSha: null, checkedAt: 0, readError: false, ...over };
 }
 
 function input(over: Partial<NowInput> = {}): NowInput {

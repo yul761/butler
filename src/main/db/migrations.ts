@@ -425,4 +425,32 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE pr_stage_events ADD COLUMN pr_id INTEGER REFERENCES ticket_prs(id) ON DELETE CASCADE;
   CREATE INDEX idx_pr_stage_events_pr ON pr_stage_events (pr_id);
   `,
+  // pr_watch 的行搬进 ticket_prs（有 PR 的）和 branch_watch（只有分支的），事件补上 pr_id，然后删掉 pr_watch。
+  // 已合并、已关闭但没有对应事件的行 checked_at 记 0：再读一次拿到 GitHub 的时间；已合并的记作 onMerged 处理过，不再排复盘。
+  `
+  WITH w AS (
+    SELECT *, lower(rtrim(trim(url), '/')) AS u FROM pr_watch
+    WHERE number IS NOT NULL AND url IS NOT NULL AND state IS NOT NULL AND instr(lower(url), '/pull/') > 0
+  ), p AS (
+    SELECT *, substr(u, instr(u, '://') + 3) AS rest FROM w
+  ), q AS (
+    SELECT *, substr(rest, 1, instr(rest, '/pull/') - 1) AS path,
+      (SELECT MIN(at) FROM pr_stage_events e WHERE e.repo_id = p.repo_id AND e.branch = p.branch AND e.kind = 'pr_opened') AS opened,
+      (SELECT MIN(at) FROM pr_stage_events e WHERE e.repo_id = p.repo_id AND e.branch = p.branch AND e.kind = 'merged') AS merged,
+      (SELECT MIN(at) FROM pr_stage_events e WHERE e.repo_id = p.repo_id AND e.branch = p.branch AND e.kind = 'closed') AS closed
+    FROM p
+  )
+  INSERT OR IGNORE INTO ticket_prs (ticket_key, url, slug, repo_id, number, head_branch, state, review, ci, read_error, head_sha, failed,
+    opened_at, merged_at, closed_at, source, linked_at, checked_at, delivered_key, merged_handled_at)
+  SELECT ticket_key, u, CASE WHEN path LIKE 'github.com/%' THEN substr(path, 12) ELSE path END, repo_id, number, branch, state,
+    review, ci, 0, head_sha, failed, opened, merged, closed, 'branch', checked_at,
+    CASE WHEN (state = 'merged' AND merged IS NULL) OR (state = 'closed' AND closed IS NULL) THEN 0 ELSE checked_at END,
+    delivered_key, CASE WHEN state = 'merged' THEN checked_at END
+  FROM q;
+  INSERT INTO branch_watch (repo_id, ticket_key, branch, ci, head_sha, failed, read_error, checked_at, delivered_key)
+    SELECT repo_id, ticket_key, branch, ci, head_sha, failed, 0, checked_at, delivered_key FROM pr_watch WHERE number IS NULL;
+  UPDATE pr_stage_events SET pr_id = (SELECT t.id FROM ticket_prs t WHERE t.repo_id = pr_stage_events.repo_id AND t.head_branch = pr_stage_events.branch)
+    WHERE pr_id IS NULL AND kind IN ('pr_opened','push','ci','review','comment','merged','closed');
+  DROP TABLE pr_watch;
+  `,
 ];

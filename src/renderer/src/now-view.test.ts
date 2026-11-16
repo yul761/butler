@@ -15,8 +15,8 @@ const act = (over: Partial<SessionActivity> = {}): SessionActivity => ({
 });
 
 const pr = (over: Partial<WatchedPr> = {}): WatchedPr => ({
-  ticketKey: "BTL-1", repoId: 1, repoPath: "/r", branch: "b", number: 212, url: "https://github.com/o/r/pull/212",
-  state: "open", review: "pending", ci: "passing", headSha: null, checkedAt: NOW, ...over,
+  ticketKey: "BTL-1", prId: 1, repoId: 1, repoPath: "/r", branch: "b", number: 212, url: "https://github.com/o/r/pull/212",
+  state: "open", review: "pending", ci: "passing", headSha: null, checkedAt: NOW, readError: false, ...over,
 });
 
 const row = (over: Partial<NowRow> = {}): NowRow => ({
@@ -54,6 +54,9 @@ describe("rowText", () => {
     const bare = (prs: WatchedPr[]) => rowText(row({ sessionId: null, activity: null, since: null, prs }), S, NOW);
     expect(bare([pr({ ci: "failing" })])).toEqual({ main: "CI 失败", sub: null, tone: "danger" });
     expect(bare([pr({ ci: "pending" })])).toEqual({ main: "等 CI", sub: null, tone: "warn" });
+    expect(bare([pr({ state: null, number: null, url: null, prId: null, review: null, ci: "pending" })])).toEqual({ main: "等 CI", sub: null, tone: "warn" });
+    // 合并了的 PR 留着最后一次读到的 CI：不算还在等。
+    expect(bare([pr({ state: "merged", ci: "pending" })])).toEqual({ main: "已停下", sub: null, tone: "muted" });
     expect(bare([pr({ review: "pending" })])).toEqual({ main: "等 review", sub: null, tone: "muted" });
     expect(bare([pr({ review: "changes_requested" })])).toEqual({ main: "要修改", sub: null, tone: "muted" });
     expect(bare([pr({ review: "approved" })])).toEqual({ main: "已批准", sub: null, tone: "muted" });
@@ -115,13 +118,15 @@ describe("prPill", () => {
     expect(prPill(pr({ review: null }), S)).toEqual({ text: "PR #212 待 review", tone: "pending" });
   });
 
-  it("says the PR status is unavailable when gh could not read a branch with no PR seen yet (I6)", () => {
-    expect(prPill(pr({ state: null, number: null, url: null, ci: "unknown" }), S)).toEqual({ text: "PR 状态不可用", tone: "none" });
+  it("says the PR status is unavailable when the last gh read failed (I6)", () => {
+    expect(prPill(pr({ state: null, number: null, url: null, prId: null, ci: "unknown", readError: true }), S)).toEqual({ text: "PR 状态不可用", tone: "none" });
+    expect(prPill(pr({ readError: true }), S)).toEqual({ text: "PR 状态不可用", tone: "none" });
     setUiLang("en");
-    expect(prPill(pr({ state: null, number: null, url: null, ci: "unknown" }), S)).toEqual({ text: "PR status unavailable", tone: "none" });
+    expect(prPill(pr({ readError: true }), S)).toEqual({ text: "PR status unavailable", tone: "none" });
     setUiLang("zh");
-    // 见过 PR 的：gh 这一次没查成，照旧显示上次的状态。
+    // 读成功了、只是还不知道 CI：照常显示。
     expect(prPill(pr({ ci: "unknown" }), S)).toEqual({ text: "PR #212 待 review", tone: "pending" });
+    expect(prPill(pr({ state: null, number: null, url: null, prId: null, ci: "unknown" }), S)).toBeNull();
   });
 
   it("shows nothing for a branch with no PR or a closed one", () => {
