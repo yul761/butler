@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Lesson, LessonRepoView, LessonsState } from "../../shared/lessons";
-import { lessonsFor, lessonsTree } from "./lessons-view";
+import { lessonsFor, lessonsTree, pruneLessonsUi } from "./lessons-view";
 
 const repo = (slug: string): LessonRepoView => ({ slug, localPath: `/x/${slug}`, lastAnalyzedAt: null, analyzedCount: 0, queued: 0, failed: 0, backfilled: false, overflow: 0 });
 const lesson = (id: number, scope: Lesson["scope"], status: Lesson["status"], hits = 1, lastSeenAt = 1): Lesson => ({
@@ -48,5 +48,25 @@ describe("lessonsFor", () => {
   });
   it("returns a product's own lessons, with disabled last", () => {
     expect(lessonsFor(s, { kind: "product", id: 1 }).confirmed.map((l) => l.id)).toEqual([4]);
+  });
+});
+
+describe("pruneLessonsUi", () => {
+  const s = state({
+    products: [{ id: 5, name: "p", slugs: [] }],
+    lessons: [lesson(1, { kind: "repo", slug: "o/a" }, "confirmed"), lesson(2, { kind: "repo", slug: "o/a" }, "confirmed")],
+  });
+  const ui = { editing: { id: 1 }, merging: { keepId: 1, dropId: 2 }, checked: [1, 2, 9], confirmingDelete: "lesson-1" as string | null };
+  it("keeps everything that still exists", () => {
+    expect(pruneLessonsUi(s, { ...ui, checked: [1, 2] })).toEqual({ ...ui, checked: [1, 2] });
+  });
+  it("drops state pointing at gone lessons and products", () => {
+    const gone = state({ lessons: [lesson(2, { kind: "repo", slug: "o/a" }, "confirmed")] });
+    const r = pruneLessonsUi(gone, ui);
+    expect(r).toEqual({ editing: null, merging: null, checked: [2], confirmingDelete: null });
+  });
+  it("disarms a product delete when the product is gone", () => {
+    expect(pruneLessonsUi(s, { ...ui, confirmingDelete: "product-5" }).confirmingDelete).toBe("product-5");
+    expect(pruneLessonsUi(state(), { ...ui, confirmingDelete: "product-5" }).confirmingDelete).toBeNull();
   });
 });

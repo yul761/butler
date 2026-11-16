@@ -20,3 +20,26 @@ export function lessonsFor(s: LessonsState, sel: LessonsSelection): { pending: L
   const off = mine.filter((l) => l.status === "disabled");
   return { pending: mine.filter((l) => l.status === "pending"), confirmed: [...live, ...off] };
 }
+
+/** 页面上的临时界面状态：只留下在 state 里还存在的对象。 */
+export interface LessonsUi {
+  editing: { id: number } | null;
+  merging: { keepId: number; dropId: number } | null;
+  checked: number[];
+  /** `lesson-<id>` 或 `product-<id>`：已经点过一次删除、等第二次确认的那个。 */
+  confirmingDelete: string | null;
+}
+
+export function pruneLessonsUi<T extends LessonsUi>(s: LessonsState, ui: T): T {
+  const ids = new Set(s.lessons.map((l) => l.id));
+  const productKeys = new Set(s.products.map((p) => `product-${p.id}`));
+  const armed = ui.confirmingDelete;
+  const armedAlive = armed === null || (armed.startsWith("product-") ? productKeys.has(armed) : ids.has(Number(armed.slice("lesson-".length))));
+  return {
+    ...ui,
+    editing: ui.editing && ids.has(ui.editing.id) ? ui.editing : null,
+    merging: ui.merging && ids.has(ui.merging.keepId) && ids.has(ui.merging.dropId) ? ui.merging : null,
+    checked: ui.checked.filter((id) => ids.has(id)),
+    confirmingDelete: armedAlive ? armed : null,
+  };
+}

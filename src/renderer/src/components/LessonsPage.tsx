@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Lesson, LessonAction, LessonRepoView, LessonsState } from "../../../shared/lessons";
 import { api } from "../api";
 import { reportError } from "../errors";
-import { lessonsFor, lessonsTree, type LessonsSelection } from "../lessons-view";
+import { lessonsFor, lessonsTree, pruneLessonsUi, type LessonsSelection } from "../lessons-view";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 
@@ -22,10 +22,30 @@ export function LessonsPage() {
   const [newName, setNewName] = useState("");
   const [newSlugs, setNewSlugs] = useState<string[]>([]);
 
+  /** 换选中项：编辑、合并、勾选、待确认的删除都不带过去。 */
+  const select = (next: LessonsSelection) => {
+    setSel(next);
+    setEditing(null);
+    setMerging(null);
+    setChecked([]);
+    setConfirmingDelete(null);
+  };
+
+  // 数据刷新后，指向已经不存在的规矩或产品的界面状态要丢掉（产品 id 会被 SQLite 复用）。
+  useEffect(() => {
+    if (!state) return;
+    const next = pruneLessonsUi(state, { editing, merging, checked, confirmingDelete });
+    if (next.editing !== editing) setEditing(next.editing);
+    if (next.merging !== merging) setMerging(next.merging);
+    if (next.checked.length !== checked.length) setChecked(next.checked);
+    if (next.confirmingDelete !== confirmingDelete) setConfirmingDelete(next.confirmingDelete);
+  }, [state]);
+
   /** 发一个操作；失败时把原因记在 key 下。成功后什么都不补：等 stateChanged。 */
   const act = async (key: string, a: LessonAction): Promise<boolean> => {
     try {
       const r = await api.lessonsAct(a);
+      if (r.ok) setConfirmingDelete(null);
       setErrors((e) => {
         const next = { ...e };
         if (r.ok) delete next[key];
@@ -65,7 +85,7 @@ export function LessonsPage() {
     return (
       <li key={suffix} className={`lessons-repo${sel?.kind === "repo" && sel.slug === r.slug ? " selected" : ""}`}>
         <div className="lessons-row">
-          <button className="lessons-select" data-testid={`lessons-repo-${suffix}`} onClick={() => setSel({ kind: "repo", slug: r.slug })}>{r.slug}</button>
+          <button className="lessons-select" data-testid={`lessons-repo-${suffix}`} onClick={() => select({ kind: "repo", slug: r.slug })}>{r.slug}</button>
           <span className="muted">{r.lastAnalyzedAt === null ? S.lessonsNever : S.lessonsLastAnalyzed(formatTime(r.lastAnalyzedAt))}</span>
           <span className="muted">{S.lessonsCounts(r.analyzedCount, r.queued, r.failed)}</span>
           <button
@@ -96,7 +116,7 @@ export function LessonsPage() {
     return (
       <div key={key} className="lessons-product">
         <div className="lessons-row">
-          <button className={`lessons-select lessons-product-name${sel?.kind === "product" && sel.id === p.id ? " selected" : ""}`} data-testid={`lessons-product-${p.id}`} onClick={() => setSel({ kind: "product", id: p.id })}>
+          <button className={`lessons-select lessons-product-name${sel?.kind === "product" && sel.id === p.id ? " selected" : ""}`} data-testid={`lessons-product-${p.id}`} onClick={() => select({ kind: "product", id: p.id })}>
             {p.name}
           </button>
           <select
@@ -262,10 +282,13 @@ export function LessonsPage() {
           {s.suggestions.map((sg, i) => (
             <div key={sg.slugs.join(",")} className="lessons-suggest" data-testid={`lessons-suggest-${i}`}>
               <span>{S.lessonsSuggest(sg.slugs, sg.together)}</span>
-              <button data-testid={`lessons-make-product-${i}`} onClick={() => void act(`suggest-${i}`, { op: "createProduct", name: sg.slugs[0].split("/").pop() ?? sg.slugs[0], slugs: sg.slugs })}>
+              <button data-testid={`lessons-make-product-${i}`} onClick={() => {
+                  setNewName(sg.slugs[0].split("/").pop() ?? sg.slugs[0]);
+                  setNewSlugs(sg.slugs);
+                }}
+              >
                 {S.lessonsMakeProduct}
               </button>
-              {err(`suggest-${i}`)}
             </div>
           ))}
           <div className="lessons-new-product">
