@@ -21,7 +21,7 @@ function setup(o: { butlerDeps?: boolean } = {}) {
   const shop = epics.insert({ name: "shop", workspaceDir: "/e/shop", createdAt: 1 });
   const old = epics.insert({ name: "old", workspaceDir: "/e/old", createdAt: 1 });
   epics.archive(old, 2);
-  const checkout = features.insert({ name: "checkout", workspaceDir: "/f/checkout", createdAt: 1, epicId: shop });
+  const checkout = features.insert({ name: "checkout", workspaceDir: "/f/checkout", createdAt: 1, epicId: shop, brief: "做结账" });
   const docs = features.insert({ name: "docs", workspaceDir: "/f/docs", createdAt: 2 });
   const gone = features.insert({ name: "gone", workspaceDir: "/f/gone", createdAt: 3, epicId: shop });
   features.archive(gone, 4);
@@ -41,7 +41,9 @@ function setup(o: { butlerDeps?: boolean } = {}) {
   add("fc", { featureId: checkout, coordinator: true });
   add("fx", { featureId: checkout, fixesSession: "c1" });
   add("c1", { ticketKey: "BTL-1", repoId: 1 });
-  add("closed-ep", { epicId: shop });
+  add("closed-ep", { epicId: shop, lastActivityAt: 5 });
+  /** docs 的总控：终端关着（闲置时自动关掉了）。 */
+  add("dc", { featureId: docs, coordinator: true, lastActivityAt: 5 });
   /** 开着终端的 session（终端 id 就是 session id）。 */
   const open = new Set(["bt", "ep", "fc", "fx", "c1"]);
   const activities = new Map<string, SessionActivity>();
@@ -49,6 +51,15 @@ function setup(o: { butlerDeps?: boolean } = {}) {
   let guardCheck: (id: string) => DeliveryCheck = (id) => ({ ok: true, termId: id, headId: id });
   const delivered: [string, string][] = [];
   const refreshed: string[] = [];
+  const opened: object[] = [];
+  const submitted: [string, string][] = [];
+  /** 打开（恢复或新开）的终端 id：恢复的用 session id，新开的用 new-<n>。 */
+  const openAs = (sessionId: string | undefined) => {
+    const id = sessionId ?? `new-${opened.length}`;
+    if (!sessionId) add(id, {});
+    open.add(id);
+    return { ok: true as const, termId: id };
+  };
   const view = (id: string): SessionView => ({ ...sessions.get(id)!, termId: open.has(id) ? id : null });
   const rows: (EpicFeatureRow & { epicId: number | null })[] = [
     { id: checkout, epicId: shop, name: "checkout", status: "waiting", archivedAt: null, summaryAt: 5, summary: "x".repeat(2000), blockers: ["等 API"], decisions: [], openQuestions: [] },
@@ -65,7 +76,10 @@ function setup(o: { butlerDeps?: boolean } = {}) {
     ticketService: { workDir: (r: { worktreePath: string | null; repoPath: string }) => r.worktreePath ?? r.repoPath } as never,
     sessionService: {
       isRunning: (id: string) => open.has(id), termIdOf: (id: string) => (open.has(id) ? id : null),
-      runningCoordinator: (featureId: number) => (featureId === checkout && open.has("fc") ? sessions.get("fc") : null),
+      runningCoordinator: (featureId: number) => sessions.listFeatureCoordinators(featureId).find((x) => x.coordinator && open.has(x.id)) ?? null,
+      featureTerminalCount: (featureId: number) => sessions.listByFeature(featureId).filter((x) => open.has(x.id)).length,
+      openFeature: async (req: { featureId: number; sessionId?: string }) => (opened.push({ feature: req.featureId, session: req.sessionId ?? null }), openAs(req.sessionId)),
+      openEpic: async (req: { epicId: number; sessionId?: string }) => (opened.push({ epic: req.epicId, session: req.sessionId ?? null }), openAs(req.sessionId)),
     } as never,
     refresher: { precheck: () => null, refresh: async (id) => (refreshed.push(id), "done" as const) },
     guard: { check: (id) => guardCheck(id), recheckAfter: () => () => true },
@@ -76,7 +90,7 @@ function setup(o: { butlerDeps?: boolean } = {}) {
     inbox: { ask: (s) => (asked.push(s.id), 7), report: () => ({ id: 8, queued: false, noCoordinator: false }) },
     kill: () => {},
     screenNeedsUser: () => false,
-    submit: async () => "sent" as const,
+    submit: async (termId, text) => (submitted.push([termId, text]), "sent" as const),
     notify: () => {},
     ...(o.butlerDeps !== false && {
       butler: {
@@ -91,7 +105,7 @@ function setup(o: { butlerDeps?: boolean } = {}) {
   });
   const base = { v: 1 as const, butler: true as const, from: "bt" };
   const call = (req: Record<string, unknown>) => handle({ ...base, ...req } as ButlerControlRequest);
-  return { handle, call, base, shop, checkout, docs, open, activities, needs, delivered, refreshed, inboxView, asked, setGuard: (f: typeof guardCheck) => (guardCheck = f) };
+  return { handle, call, base, shop, checkout, docs, sessions, features, open, activities, needs, delivered, refreshed, opened, submitted, inboxView, asked, setGuard: (f: typeof guardCheck) => (guardCheck = f) };
 }
 
 const value = <T,>(r: ControlResult) => {
@@ -103,15 +117,15 @@ const err = (r: ControlResult) => (r.ok ? "" : r.error);
 describe("Butler 总控 read-only tools (BTL-190 5)", () => {
   it("list_epics lists the epics that are not archived, with their features and whether the epic session runs", async () => {
     const { call, shop } = setup();
-    expect(value(await call({ op: "list_epics" }))).toEqual([{ id: shop, name: "shop", features: 1, sessionRunning: true, waiting: true, stuck: false }]);
+    expect(value(await call({ op: "list_epics" }))).toEqual([{ id: shop, name: "shop", features: 1, sessionRunning: true, session: "ep", waiting: true, stuck: false }]);
   });
 
   it("list_features lists every feature with its epic, status, coordinator and a capped summary", async () => {
     const { call, shop, checkout, docs } = setup();
     const list = value<Record<string, unknown>[]>(await call({ op: "list_features" }));
-    expect(list.map((f) => [f.id, f.name, f.epic, f.status, f.coordinatorRunning])).toEqual([
-      [checkout, "checkout", { id: shop, name: "shop" }, "waiting", true],
-      [docs, "docs", null, "not_started", false],
+    expect(list.map((f) => [f.id, f.name, f.epic, f.status, f.coordinatorRunning, f.coordinatorSession])).toEqual([
+      [checkout, "checkout", { id: shop, name: "shop" }, "waiting", true, "fc"],
+      [docs, "docs", null, "not_started", false, null],
     ]);
     expect((list[0].summary as string).length).toBe(1000);
     expect(list[0].blockers).toEqual(["等 API"]);
@@ -180,16 +194,64 @@ describe("Butler 总控 send_message and refresh_session (BTL-190 5)", () => {
     expect(delivered).toEqual([["ep", "Butler 总控发来的消息：\n先合 checkout"], ["fc", "Butler 总控发来的消息：\n接口改了"]]);
   });
 
-  it("refuses ticket and fix sessions, closed sessions, itself, unknown ones and a blocked guard", async () => {
+  it("refuses ticket and fix sessions, itself, unknown ones and a blocked guard", async () => {
     const { call, delivered, setGuard } = setup();
     expect(err(await call({ op: "send_message", session: "c1", text: "t" }))).toContain("epic session");
     expect(err(await call({ op: "send_message", session: "fx", text: "t" }))).toContain("epic session");
     expect(err(await call({ op: "send_message", session: "bt", text: "t" }))).toContain("bt");
     expect(err(await call({ op: "send_message", session: "nope", text: "t" }))).toContain("nope");
-    expect(err(await call({ op: "send_message", session: "closed-ep", text: "t" }))).toContain("closed-ep");
+    expect(err(await call({ op: "send_message", feature: "nope", text: "t" }))).toContain("checkout");
+    expect(err(await call({ op: "send_message", epic: "old", text: "t" }))).toContain("shop");
     setGuard(() => ({ ok: false, block: "busy" }));
     expect(err(await call({ op: "send_message", session: "ep", text: "t" }))).toContain("它正在干活");
     expect(delivered).toEqual([]);
+  });
+
+  it("takes a feature or an epic by name or id and sends to its running session", async () => {
+    const { call, delivered, opened, shop } = setup();
+    expect(value(await call({ op: "send_message", feature: "Checkout", text: "a" }))).toMatchObject({ sent: true, sessionId: "fc" });
+    expect(value(await call({ op: "send_message", epic: String(shop), text: "b" }))).toMatchObject({ sent: true, sessionId: "ep" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(delivered.map(([id]) => id)).toEqual(["fc", "ep"]);
+    expect(opened).toEqual([]);
+  });
+
+  it("resumes the latest coordinator of a feature whose terminal was closed, then hands it the message", async () => {
+    const { call, opened, submitted, delivered, docs } = setup();
+    expect(value(await call({ op: "send_message", feature: "docs", text: "看一下 PR" }))).toMatchObject({ sent: true, sessionId: "dc", opened: "resumed" });
+    expect(opened).toEqual([{ feature: docs, session: "dc" }]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(submitted).toEqual([["dc", "Butler 总控发来的消息：\n看一下 PR"]]);
+    expect(delivered).toEqual([]);
+    // 给的是关着的 session：一样恢复它。
+    const again = setup();
+    expect(value(await again.call({ op: "send_message", session: "dc", text: "x" }))).toMatchObject({ sessionId: "dc", opened: "resumed" });
+  });
+
+  it("resumes the epic session that was used last when none is running", async () => {
+    const { call, open, opened, submitted, shop } = setup();
+    open.delete("ep");
+    expect(value(await call({ op: "send_message", epic: "shop", text: "巡检" }))).toMatchObject({ sent: true, opened: "resumed" });
+    expect(opened).toEqual([{ epic: shop, session: "ep" }]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(submitted.map(([id]) => id)).toEqual(["ep"]);
+    // 给的是关着的 session、同一个 epic 另一个 session 在跑：发给在跑的，不再开。
+    open.add("ep");
+    expect(value(await call({ op: "send_message", session: "closed-ep", text: "t" }))).toMatchObject({ sessionId: "ep" });
+    expect(opened).toHaveLength(1);
+  });
+
+  it("opens a new coordinator when the feature never had one, unless its epic still has to start it", async () => {
+    const { call, sessions, opened, submitted, docs, checkout } = setup();
+    for (const s of sessions.listFeatureCoordinators(docs)) sessions.delete(s.id);
+    expect(value(await call({ op: "send_message", feature: "docs", text: "开始吧" }))).toMatchObject({ sent: true, opened: "opened" });
+    expect(opened).toEqual([{ feature: docs, session: null }]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(submitted).toHaveLength(1);
+    // checkout 属于 epic、规划还没发过、没有总控：这要 epic session 用 start_feature 开工。
+    for (const s of sessions.listFeatureCoordinators(checkout)) sessions.delete(s.id);
+    expect(err(await call({ op: "send_message", feature: "checkout", text: "t" }))).toContain("start_feature");
+    expect(opened).toHaveLength(1);
   });
 
   it("only takes send_message from the Butler 总控 session itself", async () => {

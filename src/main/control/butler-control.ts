@@ -1,6 +1,6 @@
 import { basename } from "node:path";
-import { type ButlerControlRequest, type ControlResult, type InboxControlOp, sanitizeTask, SUMMARY_LIMIT } from "../../shared/control";
-import { effectiveStatus, type EpicFeatureRow, type EpicView, type Feature, type Session, type Ticket, type WatchedPr } from "../../shared/types";
+import { type ButlerControlRequest, type ControlResult, type InboxControlOp, MAX_RUNNING_PER_FEATURE, sanitizeTask, SUMMARY_LIMIT } from "../../shared/control";
+import { effectiveStatus, type Epic, type EpicFeatureRow, type EpicView, type Feature, type OpenSessionResult, type Session, type Ticket, type WatchedPr } from "../../shared/types";
 import { roleOf, type InboxService } from "../inbox/inbox-service";
 import { M } from "../strings";
 import type { ControlHandlerDeps } from "./control-handler";
@@ -34,7 +34,8 @@ const ok = (value: unknown): ControlResult => ({ v: 1, ok: true, value });
 const fail = (error: string): ControlResult => ({ v: 1, ok: false, error });
 
 /**
- * Butler 总控的请求（BTL-190 第 5 点）：全部只读，加上 send_message 和 refresh_session。不建、不删、不结束，也不开 session。
+ * Butler 总控的请求（BTL-190 第 5 点）：全部只读，加上 send_message 和 refresh_session。不建、不删、不结束。
+ * 只有 send_message 会开 session：目标 feature 总控或 epic session 的终端关着（比如闲置时自动关掉了）时，接着它最近的那个再把消息交进去。
  * 请求文件谁都能写：往终端里写东西的 send_message 和换新别人的 refresh_session 要求 from 是开着终端的 Butler 总控自己。
  */
 export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (req: Exclude<ButlerControlRequest, { op: InboxControlOp["op"] }>) => Promise<ControlResult> {
@@ -46,6 +47,9 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
     const byId = /^\d+$/.test(w) ? list.find((x) => x.id === Number(w)) : undefined;
     return byId ?? list.find((x) => x.name.trim().toLowerCase() === w.toLowerCase());
   };
+
+  /** 正在给这个 feature、epic 开 session（send_message 打开关着的终端）：同时来的第二条不再开第二个。 */
+  const opening = new Set<string>();
 
   return async (req) => {
     const b = d.butler;
@@ -75,16 +79,105 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
     /** 往别的 session 里写东西、换新别的 session 的请求：from 必须是开着终端的 Butler 总控（请求文件谁都能写）。 */
     const fromOpenButler = !!self?.butler && !!d.sessionService.termIdOf(self.id);
 
+    type Target = { kind: "feature"; feature: Feature; session: Session | null } | { kind: "epic"; epic: Epic; session: Session | null };
+    /** send_message 的目标：给的 session 换成它的 feature 或 epic（ticket 和修复 session 不行）；feature、epic 按名字或 id 找，已归档的不算。 */
+    const resolveTarget = (r: { session?: string; feature?: string; epic?: string }): Target | { error: string } => {
+      const live = features.filter((f) => f.archivedAt === null);
+      if (r.feature !== undefined) {
+        const f = pick(live, r.feature);
+        return f ? { kind: "feature", feature: f, session: null } : { error: M().ctlNoSuchFeatureAll(r.feature, live.map((x) => x.name).join(", ") || M().ctlNoFeatures) };
+      }
+      if (r.epic !== undefined) {
+        const e = pick(epics, r.epic);
+        const full = e ? d.epics?.get(e.id) : undefined;
+        return full ? { kind: "epic", epic: full, session: null } : { error: M().ctlNoSuchEpic(r.epic, epics.map((x) => x.name).join(", ") || M().ctlNoEpics) };
+      }
+      const wanted = r.session ?? "";
+      const t = d.sessions.head(wanted);
+      if (!t || t.id === self?.id || t.dismissed) return { error: M().ctlNoSuchSession(wanted) };
+      const role = roleOf(t);
+      if (role === "epic" && t.epicId !== null && epicById.has(t.epicId)) {
+        const full = d.epics?.get(t.epicId);
+        if (full) return { kind: "epic", epic: full, session: t };
+      }
+      const f = role === "feature_coordinator" && t.featureId !== null ? featureById.get(t.featureId) : undefined;
+      if (f && f.archivedAt === null) return { kind: "feature", feature: f, session: t };
+      return { error: M().ctlSendWrongTarget(t.id) };
+    };
+    /** epic 正在跑的 epic session（链上最新的那个）。 */
+    const runningEpicSession = (epicId: number): Session | null =>
+      d.sessions.listByEpic(epicId).find((x) => x.replacedBy === null && !!d.sessionService.termIdOf(x.id)) ?? null;
+    /** 终端开着：过 guard，过了交给 deliver（不等它送到：deliver 要等输入框就绪，最多一分钟）。 */
+    const sendNow = (sessionId: string, text: string): ControlResult => {
+      if (!d.guard || !d.deliver) return fail(M().ctlSendBlocked(sessionId, M().ctlStartBlock.closed));
+      const g = d.guard.check(sessionId);
+      if (!g.ok) return fail(M().ctlSendBlocked(sessionId, M().ctlStartBlock[g.block]));
+      d.deliver(g.termId, text, d.guard.recheckAfter(sessionId, g)).then(
+        (res) => res === "sent" || d.log?.(`control: butler message for ${sessionId} not delivered (${res})`),
+        (err: unknown) => d.log?.(`control: butler message for ${sessionId} failed`, err),
+      );
+      return ok({ sent: true, sessionId: g.headId, note: M().ctlSendNote });
+    };
+    /**
+     * 终端关着（闲置时自动关掉了、Butler 重启过）：和用户点开一样接着最近的那个（给的 session 没隐藏就接着它），
+     * 消息当作它的第一条输入（submit 等输入框就绪）。feature 从没开过总控时新开一个；但属于 epic、规划还没发过的，要 epic session 用 start_feature 开工。
+     */
+    const openAndSend = async (target: Target, text: string): Promise<ControlResult> => {
+      const svc = d.sessionService;
+      const key = target.kind === "feature" ? `f${target.feature.id}` : `e${target.epic.id}`;
+      if (opening.has(key)) return fail(M().ctlSendOpening);
+      let resume: Session | undefined;
+      let open: () => Promise<OpenSessionResult>;
+      if (target.kind === "feature") {
+        const f = target.feature;
+        if (!svc.openFeature) return fail(M().ctlStartUnavailable);
+        const given = target.session && target.session.coordinator && target.session.replacedBy === null ? target.session : undefined;
+        resume = given ?? d.sessions.listFeatureCoordinators(f.id).find((x) => x.coordinator && x.replacedBy === null && !x.dismissed);
+        if (!resume && f.epicId !== null && f.brief?.trim() && f.briefSentAt === null) {
+          return fail(M().ctlSendNotStarted(f.name, epicOf(f.epicId)?.name ?? String(f.epicId)));
+        }
+        if ((svc.featureTerminalCount?.(f.id) ?? 0) >= MAX_RUNNING_PER_FEATURE) return fail(M().ctlFeatureLimit(MAX_RUNNING_PER_FEATURE));
+        const openFeature = svc.openFeature.bind(svc);
+        open = () => openFeature({ featureId: f.id, ...(resume && { sessionId: resume.id }) });
+      } else {
+        const e = target.epic;
+        if (!svc.openEpic) return fail(M().ctlStartUnavailable);
+        resume = target.session && target.session.replacedBy === null ? target.session : d.sessions.listByEpic(e.id).find((x) => x.replacedBy === null && !x.dismissed);
+        const openEpic = svc.openEpic.bind(svc);
+        open = () => openEpic({ epicId: e.id, ...(resume && { sessionId: resume.id }) });
+      }
+      opening.add(key);
+      let r: OpenSessionResult;
+      try {
+        r = await open();
+      } catch (err) {
+        d.log?.(`control: butler message: opening ${key} failed`, err);
+        return fail((err as Error).message);
+      } finally {
+        opening.delete(key);
+      }
+      if (!r.ok) return fail(r.reason === "claude_missing" ? M().ctlClaudeMissing : M().ctlOpenFailed(r.reason));
+      d.notify();
+      // 查过没在跑、打开时却已经开着（和用户同时点开）：和在跑一样过 guard。
+      const headId = d.sessions.head(r.termId)?.id ?? r.termId;
+      if (r.alreadyOpen) return sendNow(headId, text);
+      d.submit(r.termId, text).then(
+        (res) => res === "sent" || d.log?.(`control: butler message for ${headId} not delivered (${res})`),
+        (err: unknown) => d.log?.(`control: butler message for ${headId} failed`, err),
+      );
+      return ok({ sent: true, sessionId: headId, opened: resume ? "resumed" : "opened", note: M().ctlSendOpenedNote });
+    };
+
     switch (req.op) {
       case "list_epics":
         return ok(b.epicViews().map((e) => ({
           id: e.id, name: e.name, features: e.features.filter((r) => r.archivedAt === null).length,
-          sessionRunning: e.sessions.some((s) => s.termId !== null), waiting: e.waiting, stuck: e.stuck,
+          sessionRunning: e.sessions.some((s) => s.termId !== null), session: e.sessions.find((s) => s.termId !== null)?.id ?? null, waiting: e.waiting, stuck: e.stuck,
         })));
       case "list_features":
         return ok(b.featureRows().map((r) => ({
           id: r.id, name: r.name, epic: epicOf(r.epicId), status: r.status,
-          coordinatorRunning: !!d.sessionService.runningCoordinator?.(r.id),
+          coordinatorRunning: !!d.sessionService.runningCoordinator?.(r.id), coordinatorSession: d.sessionService.runningCoordinator?.(r.id)?.id ?? null,
           summary: r.summary === null ? null : r.summary.slice(0, SUMMARY_LIMIT), summaryAt: r.summaryAt === null ? null : new Date(r.summaryAt).toISOString(),
           blockers: r.blockers,
         })));
@@ -135,22 +228,12 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
       case "send_message": {
         // 只有开着的 Butler 总控自己能往别的终端里写。
         if (!fromOpenButler) return fail(M().ctlInboxNotYours);
-        const target = d.sessions.head(req.session);
-        if (!target || target.id === self.id) return fail(M().ctlNoSuchSession(req.session));
-        const role = roleOf(target);
-        const live = role === "epic" ? target.epicId !== null && epicById.has(target.epicId) : role === "feature_coordinator" && featureById.has(target.featureId ?? -1);
-        if (!live) return fail(M().ctlSendWrongTarget(target.id));
-        if (!d.sessionService.termIdOf(target.id)) return fail(M().ctlSessionNotRunning(target.id));
-        if (!d.guard || !d.deliver) return fail(M().ctlSendBlocked(target.id, M().ctlStartBlock.closed));
-        const g = d.guard.check(target.id);
-        if (!g.ok) return fail(M().ctlSendBlocked(target.id, M().ctlStartBlock[g.block]));
+        const target = resolveTarget(req);
+        if ("error" in target) return fail(target.error);
         const text = sanitizeTask(`${M().butlerMessagePrefix}\n${req.text}`);
-        // 不等它送到：deliver 要等输入框就绪，最多一分钟。
-        d.deliver(g.termId, text, d.guard.recheckAfter(target.id, g)).then(
-          (res) => res === "sent" || d.log?.(`control: butler message for ${target.id} not delivered (${res})`),
-          (err: unknown) => d.log?.(`control: butler message for ${target.id} failed`, err),
-        );
-        return ok({ sent: true, sessionId: target.id, note: M().ctlSendNote });
+        const running = target.kind === "feature" ? d.sessionService.runningCoordinator?.(target.feature.id) ?? null : runningEpicSession(target.epic.id);
+        if (running) return sendNow(running.id, text);
+        return openAndSend(target, text);
       }
     }
   };
