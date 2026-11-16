@@ -547,6 +547,7 @@ const ZH = {
   wizardDoneHelp: "点左侧“新建 ticket”开始。每晚 Butler 会为有活动的 ticket 生成 handoff。这些设置之后都能在设置页修改，也可以从设置页重新运行这个向导。",
   prStagesTab: "PR 进度",
   prStage: { design: "设计", dev: "开发", self_review: "自我 review", ci: "CI", peer_review: "peer review", merge: "合并" } as Record<PrStageId, string>,
+  prClosed: "已关闭",
   prStageSkipped: "跳过",
   prStageUnknown: "未知",
   prStageActive: "进行中",

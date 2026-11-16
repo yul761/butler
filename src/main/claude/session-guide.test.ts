@@ -23,7 +23,8 @@ describe("session guide", () => {
 
   it("只有 ticket session 被告知自我 review 之后用 report 说明结果（PR 进度时间线）", () => {
     expect(sessionGuide("zh", "ticket")).toContain("自我 review");
-    expect(sessionGuide("zh", "ticket")).toContain("report");
+    expect(sessionGuide("zh", "ticket")).toContain("进度时间线");
+    expect(sessionGuide("en", "ticket")).toContain("progress timeline");
     expect(sessionGuide("en", "ticket")).toContain("self-review");
     for (const kind of ["coordinator", "epic", "butler"] as const) {
       expect(sessionGuide("zh", kind)).not.toContain("自我 review");

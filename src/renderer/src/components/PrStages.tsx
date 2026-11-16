@@ -25,6 +25,7 @@ function RepoStages({ row, showName }: { row: PrStagesView; showName: boolean })
         {showName && <span className="pr-repo-name">{row.repoName}</span>}
         {row.stages.map((c) => <Cell key={c.id} cell={c} named />)}
         {row.prUrl && <span className="pr-link muted" title={row.prUrl}>{row.prNumber === null ? "PR" : `#${row.prNumber}`}</span>}
+        {row.closed && <span className={row.prUrl ? "pr-closed" : "pr-closed pr-link"}>{S.prClosed}</span>}
       </div>
       {row.timeline.length > 0 && (
         <>
@@ -73,6 +74,7 @@ function StagesTable({ rows, onOpenTicket }: { rows: PrStagesView[]; onOpenTicke
             <td className="pr-row-name">
               {onOpenTicket ? <button className="chip" onClick={(ev) => (ev.stopPropagation(), onOpenTicket(r.ticketKey))}>{r.ticketKey}</button> : r.ticketKey}
               {(perTicket.get(r.ticketKey) ?? 0) > 1 && <span className="muted"> {r.repoName}</span>}
+              {r.closed && <span className="pr-closed">{S.prClosed}</span>}
             </td>
             {r.stages.map((c) => <td key={c.id}><Cell cell={c} named={false} /></td>)}
           </tr>

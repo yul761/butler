@@ -19,7 +19,7 @@ test("a skill call in a session moves the design step to active; tab and timelin
   const tab = pageTab(page, S.prStagesTab);
   await expect(tab).toHaveAttribute("aria-selected", "true");
   const design = page.locator(".pr-stages .pr-cell").filter({ hasText: S.prStage.design });
-  await expect(design).not.toHaveClass(/active/);
+  await expect(design).toHaveClass(/pr-todo/);
 
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
@@ -42,7 +42,12 @@ test("a skill call in a session moves the design step to active; tab and timelin
   await expect(page.getByRole("button", { name: S.prTimelineShow, exact: true })).toBeVisible();
   await expect(page.locator(".pr-timeline")).toHaveCount(0);
 
-  // 点 tab 收起整个面板。
+  // 点 tab 收起整个面板；刷新后仍然是收起的。
   await tab.click();
+  await expect(page.locator(".pr-stages")).toHaveCount(0);
+  await page.reload();
+  await page.locator(".sidebar .ticket .key").getByText("E2E-1", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
+  await expect(pageTab(page, S.prStagesTab)).toHaveAttribute("aria-selected", "false");
   await expect(page.locator(".pr-stages")).toHaveCount(0);
 });

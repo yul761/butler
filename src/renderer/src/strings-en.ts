@@ -540,6 +540,7 @@ export const EN: UiStrings = {
   wizardDoneHelp: "Click “New ticket” on the left to start. Every night Butler writes a handoff for each ticket with activity. You can change all of this in Settings later, and rerun this wizard from there.",
   prStagesTab: "PR progress",
   prStage: { design: "Design", dev: "Develop", self_review: "Self-review", ci: "CI", peer_review: "Peer review", merge: "Merge" } as Record<PrStageId, string>,
+  prClosed: "Closed",
   prStageSkipped: "Skipped",
   prStageUnknown: "Unknown",
   prStageActive: "In progress",

@@ -421,7 +421,7 @@ function interactive() {
     const skill = /^\/fake-skill (\S+)$/.exec(line);
     if (skill) {
       // 像 Skill 工具：PostToolUse 带 tool_use_id（Butler 按它去重）。
-      runHooks("PostToolUse", { session_id: sessionId, cwd, tool_name: "Skill", tool_input: { skill: skill[1] }, tool_use_id: `toolu_fake_${++skillCalls}`, transcript_path: transcript });
+      runHooks("PostToolUse", { session_id: sessionId, cwd, tool_name: "Skill", tool_input: { skill: skill[1] }, tool_use_id: `toolu_fake_${process.pid}_${++skillCalls}`, transcript_path: transcript });
       log(`fake-skill ${skill[1]}`);
       out(`skill ${skill[1]}\n`);
       endTurn("收到");
