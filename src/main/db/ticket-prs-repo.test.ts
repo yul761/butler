@@ -42,6 +42,18 @@ describe("TicketPrsRepo", () => {
     expect(prs.byUrl("https://github.com/a/b/pull/1").map((p) => p.ticketKey)).toEqual(["T-1", "T-2"]);
   });
 
+  it("normalises urls with prUrlKey inside the repo", () => {
+    const { prs } = setup();
+    const a = prs.link(link({ url: "https://github.com/A/B/pull/3/", number: 3 }));
+    const b = prs.link(link({ url: "https://github.com/a/b/pull/3", number: 3 }));
+    expect(a.created).toBe(true);
+    expect(b.created).toBe(false);
+    expect(b.pr.id).toBe(a.pr.id);
+    expect(prs.byTicket("T-1")).toHaveLength(1);
+    expect(prs.byUrl("https://github.com/A/B/pull/3/")).toHaveLength(1);
+    expect(prs.byUrl("https://github.com/a/b/pull/3")).toHaveLength(1);
+  });
+
   it("byTicket is newest first", () => {
     const { prs } = setup();
     prs.link(link({ openedAt: 100 }));

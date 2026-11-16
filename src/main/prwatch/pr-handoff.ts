@@ -3,10 +3,9 @@ import { prUrlKey } from "../../shared/pr-url";
 import type { WatchedPr } from "../../shared/types";
 
 /** 同一个 PR：按链接认（去掉末尾斜杠、不分大小写）。 */
-const prKey = prUrlKey;
 
 const sameSet = (a: Pr[], b: Pr[]): boolean => {
-  const sig = (prs: Pr[]) => prs.map((p) => `${prKey(p.url)}|${p.number}|${p.state}|${p.review}`).sort().join("\n");
+  const sig = (prs: Pr[]) => prs.map((p) => `${prUrlKey(p.url)}|${p.number}|${p.state}|${p.review}`).sort().join("\n");
   return sig(a) === sig(b);
 };
 
@@ -25,8 +24,8 @@ export function prHandoff(ticketKey: string, rows: WatchedPr[], base: { id: numb
     watched.push({ number: r.number, url: r.url, state: r.state, review: r.review });
   }
   if (watched.length === 0) return null;
-  const seen = new Set(watched.map((p) => prKey(p.url)));
-  const prs = [...watched, ...base.prs.filter((p) => !seen.has(prKey(p.url)))];
+  const seen = new Set(watched.map((p) => prUrlKey(p.url)));
+  const prs = [...watched, ...base.prs.filter((p) => !seen.has(prUrlKey(p.url)))];
   if (sameSet(prs, base.prs)) return null;
   const signature = watched.map((p) => `${p.number}:${p.state}:${p.review ?? ""}`).join(",");
   return { prs, sourceRef: `prwatch:${ticketKey}:${signature}@${base.id}` };

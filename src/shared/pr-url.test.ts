@@ -12,7 +12,7 @@ describe("prUrlParts", () => {
     expect(prUrlParts("https://github.com/Acme/App/pull/12")).toEqual({ host: "github.com", slug: "acme/app", number: 12 });
   });
   it("keeps the host in the slug for enterprise hosts", () => {
-    expect(prUrlParts("https://ghe.acme.io/team/app/pull/3/files")?.slug).toBe("ghe.acme.io/team/app");
+    expect(prUrlParts("https://ghe.acme.io/team/app/pull/3/files")).toEqual({ host: "ghe.acme.io", slug: "ghe.acme.io/team/app", number: 3 });
   });
   it("rejects non-PR urls", () => {
     expect(prUrlParts("https://github.com/a/b/issues/3")).toBeNull();

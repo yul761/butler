@@ -1,3 +1,4 @@
+import { prUrlKey } from "../../shared/pr-url";
 import type { WatchedPr } from "../../shared/types";
 import type { CiCheck } from "../tickets/gh";
 import type { Db } from "./database";
@@ -94,7 +95,8 @@ export class TicketPrsRepo {
    * 链接一个 PR。已存在时只补空的 repo_id / head_branch / opened_at / merged_at / closed_at；
    * 从没读过（checked_at = 0）的行才采用新报告的 state。created 表示这是新行。
    */
-  link(l: NewPrLink): { pr: TicketPr; created: boolean } {
+  link(input: NewPrLink): { pr: TicketPr; created: boolean } {
+    const l = { ...input, url: prUrlKey(input.url) };
     const existed = this.db.prepare(`SELECT 1 FROM ticket_prs WHERE ticket_key = ? AND url = ?`).get(l.ticketKey, l.url) !== undefined;
     this.db
       .prepare(
@@ -131,7 +133,7 @@ export class TicketPrsRepo {
   }
 
   byUrl(url: string): TicketPr[] {
-    return (this.db.prepare(`SELECT * FROM ticket_prs WHERE url = ? ORDER BY id`).all(url) as unknown as Row[]).map(toPr);
+    return (this.db.prepare(`SELECT * FROM ticket_prs WHERE url = ? ORDER BY id`).all(prUrlKey(url)) as unknown as Row[]).map(toPr);
   }
 
   /** 要读的：还开着的，和从没读过的。 */
