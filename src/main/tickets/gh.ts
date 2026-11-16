@@ -7,10 +7,13 @@ import { execFile } from "node:child_process";
 let binary: string | null = "gh";
 let resolved = false;
 let warned = false;
+/** 这个 gh 不认 prStatus 新增的 --json 字段（报过 Unknown JSON field）：之后直接用最初的字段，不再每轮多调一次。换 gh 时重置。 */
+let oldPrFields = false;
 
 export function setGhBinary(p: string): void {
   binary = p;
   resolved = true;
+  oldPrFields = false;
 }
 
 /** 测试用：回到“还没解析过”的初始状态。 */
@@ -18,6 +21,7 @@ export function resetGhBinary(): void {
   binary = "gh";
   resolved = false;
   warned = false;
+  oldPrFields = false;
 }
 
 /**
@@ -168,10 +172,16 @@ export function ciOf(checks: CiCheck[]): CiState {
 
 /** 跑 gh，成功返回 stdout，任何失败返回 null，从不抛错。不能执行 gh（Windows 上没找到）时不启动进程，直接 null。 */
 function runGh(cwd: string, args: string[], timeoutMs: number, maxBuffer: number): Promise<string | null> {
+  return runGhDetail(cwd, args, timeoutMs, maxBuffer).then((r) => r.stdout);
+}
+
+/** 同 runGh，另外带回 stderr（失败时用来分辨原因）。 */
+function runGhDetail(cwd: string, args: string[], timeoutMs: number, maxBuffer: number): Promise<{ stdout: string | null; stderr: string }> {
   const bin = ghBinary();
-  if (bin === null) return Promise.resolve(null);
+  if (bin === null) return Promise.resolve({ stdout: null, stderr: "" });
   return new Promise((done) => {
-    execFile(bin, args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer }, (err, stdout) => done(err ? null : String(stdout)));
+    execFile(bin, args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer }, (err, stdout, stderr) =>
+      done({ stdout: err ? null : String(stdout), stderr: String(stderr ?? "") }));
   });
 }
 
@@ -251,11 +261,15 @@ const REVIEWS = { REVIEW_REQUIRED: "pending", CHANGES_REQUESTED: "changes_reques
 const PR_FIELDS_MIN = "number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup";
 const PR_FIELDS = `${PR_FIELDS_MIN},author,reviews,comments,commits,createdAt,mergedAt,closedAt`;
 
-/** gh pr view <branch>：没有 PR、gh 不可用、输出不对都返回 null。旧版 gh 不认新增的字段时，退回最初的字段再试一次（reviews、comments 为空）。 */
+/** gh pr view <branch>：没有 PR、gh 不可用、输出不对都返回 null。旧版 gh 不认新增的字段时，退回最初的字段（reviews、comments 为空），并记住，之后直接用最初的字段。 */
 export async function prStatus(cwd: string, branch: string, timeoutMs: number): Promise<PrStatus | null> {
-  const view = (fields: string) => runGh(cwd, ["pr", "view", branch, "--json", fields], timeoutMs, 8 * 1024 * 1024);
-  const text = await view(PR_FIELDS);
-  return parsePr(text !== null ? text : await view(PR_FIELDS_MIN));
+  const view = (fields: string) => runGhDetail(cwd, ["pr", "view", branch, "--json", fields], timeoutMs, 8 * 1024 * 1024);
+  if (oldPrFields) return parsePr((await view(PR_FIELDS_MIN)).stdout);
+  const full = await view(PR_FIELDS);
+  // 只在 gh 明说不认字段时退回；没有 PR、超时等失败不重试（不然没有 PR 的分支每轮都多调一次）。
+  if (full.stdout !== null || !/Unknown JSON field/i.test(full.stderr)) return parsePr(full.stdout);
+  oldPrFields = true;
+  return parsePr((await view(PR_FIELDS_MIN)).stdout);
 }
 
 function parsePr(text: string | null): PrStatus | null {

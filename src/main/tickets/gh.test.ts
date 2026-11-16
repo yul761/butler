@@ -147,6 +147,15 @@ describe.skipIf(process.platform === "win32")("prStatus / branchRuns / failedLog
     const s = await prStatus(dir, "feat", 5000);
     expect(s).toMatchObject({ number: 5, headSha: "abc", ci: "passing", reviews: [], comments: [], firstCommitAt: null, author: "", createdAt: null, mergedAt: null, closedAt: null });
     expect(readFileSync(join(dir, "args.txt"), "utf8").trim().split("\n")[1]).toBe("pr view feat --json number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup");
+    // 记住了：下一轮直接用最初的字段，只调一次。
+    await prStatus(dir, "feat", 5000);
+    expect(readFileSync(join(dir, "args.txt"), "utf8").trim().split("\n").slice(2)).toEqual(["pr view feat --json number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup"]);
+  });
+
+  it("prStatus does not retry when the branch simply has no PR", async () => {
+    const dir = fakeGh(`echo "$@" >> "$(dirname "$0")/args.txt"\necho 'no pull requests found for branch "b"' >&2; exit 1`);
+    expect(await prStatus(dir, "b", 5000)).toBeNull();
+    expect(readFileSync(join(dir, "args.txt"), "utf8").trim().split("\n")).toHaveLength(1);
   });
 
   it("reviewAuthors maps review node ids to bot-ness and collects bot logins; null on failure", async () => {
@@ -270,7 +279,7 @@ exit 1`);
     await prStatus(dir, "b", 5000);
     await branchRuns(dir, "b", 5000);
     await failedLog(dir, 1, 60, 5000);
-    expect(readFileSync(join(dir, "calls.txt"), "utf8").trim().split("\n")).toEqual(["pr", "pr", "pr", "run", "run"]);
+    expect(readFileSync(join(dir, "calls.txt"), "utf8").trim().split("\n")).toEqual(["pr", "pr", "run", "run"]);
     expect(() => readFileSync(join(onPath, "wrong.txt"))).toThrow();
   });
 });
