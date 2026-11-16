@@ -68,13 +68,23 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
     if (!hasFirstCommit && hasPr) startDev(at);
   };
 
+  /** 开发阶段结束（开了 PR、CI 开始或已合并）：进行中的开发和自我 review 算完成，没做的自我 review 算跳过/未知。 */
+  const finishDev = (at: number) => {
+    if (cell("dev").state === "active") set("dev", "done", at);
+    const sr = cell("self_review").state;
+    if (sr === "active") set("self_review", "done", at);
+    else if (sr === "todo") set("self_review", untracked, at);
+  };
+  /** 在 CI 之前的某一步还在进行（同一时间只能有一步进行中）。 */
+  const beforeReviewActive = () =>
+    PR_STAGES.slice(0, PR_STAGES.indexOf("peer_review")).some((id) => cell(id).state === "active");
+
   /** ci pending 的效果；ci 结果之前没看到 pending 时也先走一遍。 */
   const ciPending = (at: number): boolean => {
     if (hasPr && (cur === "dev" || cur === "self_review")) {
-      set("dev", "done", at);
-      const sr = cell("self_review").state;
-      if (sr === "active") set("self_review", "done", at);
-      else if (sr === "todo") set("self_review", untracked, at);
+      finishDev(at);
+    } else if (cur === "ci" && cell("ci").state === "todo") {
+      // 开了 PR 之后第一次看到 CI。
     } else if ((cur === "peer_review" || cur === "merge") && cell(cur).state !== "failed") {
       // 同一轮回到 CI：后面"进行中"的步骤退回 todo，免得同时有两步在进行。
       for (const id of ["peer_review", "merge"] as const) if (cell(id).state === "active") set(id, "todo", at);
@@ -111,7 +121,14 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
         log(at, "dev", "first_commit");
         return;
       case "pr_opened":
-        if (!closed) implyDev(at);
+        if (!closed) {
+          implyDev(at);
+          // 开了 PR，开发和自我 review 结束；进入 CI 但不标"进行中"，没有 CI 的仓库不会卡着一步。
+          if (cur === "dev" || cur === "self_review") {
+            finishDev(at);
+            cur = "ci";
+          }
+        }
         log(at, cur, "pr_opened");
         return;
       case "ci": {
@@ -120,7 +137,10 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
         if (!closed) {
           implyDev(at);
           if (result === "pending") ciPending(at);
-          else if (cur === "ci" || ciPending(at)) {
+          else if (cur !== "ci" && cell("ci").state === "active") {
+            // CI 还在跑时进度已经往后走了（比如有人要求修改）：结果只写到 CI 这一格，不动当前步骤。
+            set("ci", result === "failing" ? "failed" : "done", at);
+          } else if (cur === "ci" || ciPending(at)) {
             if (result === "failing") set("ci", "failed", at);
             else {
               set("ci", "done", at);
@@ -160,14 +180,18 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
           if (state === "CHANGES_REQUESTED") {
             if (!closed) {
               set("peer_review", "failed", at);
+              if (cell("merge").state === "active") set("merge", "todo", at);
               cur = "peer_review";
             }
             log(at, "peer_review", "human_changes", login);
           } else if (state === "APPROVED") {
             if (!closed) {
               set("peer_review", "done", at);
-              set("merge", "active", at);
-              cur = "merge";
+              // 前面还有一步在进行（通常是 CI 在跑）：只记批准，等 CI 通过再进入合并。
+              if (!beforeReviewActive()) {
+                set("merge", "active", at);
+                cur = "merge";
+              }
             }
             log(at, "peer_review", "human_approved", login);
           } else if (state === "COMMENTED") {
@@ -180,14 +204,14 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
       case "merged":
         if (!closed) {
           implyDev(at);
+          finishDev(at);
           if (cell("peer_review").state !== "done") set("peer_review", "skipped", at);
           set("merge", "done", at);
           for (const id of PR_STAGES) {
             const s = cell(id).state;
-            // hook 不是当前版本时，设计和自我 review 显示"未知"，不显示"跳过"。
-            if (s === "todo") set(id, id === "design" || id === "self_review" ? untracked : "skipped", at);
-            // 已经合并了，开发和自我 review 不会还在进行；CI 没出结果就合并，不知道结果。
-            else if (s === "active" && (id === "dev" || id === "self_review")) set(id, "done", at);
+            // 剩下的 todo 都是跳过。设计还是 todo 只可能是有 skill 记录（没有时一开始就是"未知"）、开发一直没开始。
+            if (s === "todo") set(id, "skipped", at);
+            // CI 没出结果就合并，不知道结果。
             else if (s === "active" && id === "ci") set(id, "unknown", at);
           }
           cur = "merge";
