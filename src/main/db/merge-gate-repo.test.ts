@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { memDb } from "../test-utils";
 import { MergeGateRepo, type MergeHold } from "./merge-gate-repo";
 
-const hold = (o: Partial<Omit<MergeHold, "id">> = {}): Omit<MergeHold, "id"> => ({
+const hold = (o: Partial<Omit<MergeHold, "id" | "releasedAt" | "outcome">> = {}): Omit<MergeHold, "id" | "releasedAt" | "outcome"> => ({
   repoPath: "/r", branch: "feat-a", target: "main", kind: "pr", prUrl: "https://x/pull/1", sessionId: "s1", ticketKey: "BTL-1", createdAt: 100, ...o,
 });
 
@@ -80,5 +80,16 @@ describe("MergeGateRepo", () => {
     expect(repo.recentEvents(0, 1)).toHaveLength(1);
     expect(repo.lastProceedAgainst("/r", "feat-a")?.createdAt).toBe(200);
     expect(repo.lastProceedAgainst("/r", "nope")).toBeNull();
+  });
+
+  it("prHolds returns released and active PR holds", () => {
+    const repo = new MergeGateRepo(memDb());
+    const active = repo.addHold(hold());
+    const released = repo.addHold(hold({ branch: "feat-b", prUrl: "https://x/pull/2" }));
+    repo.addHold(hold({ branch: "feat-c", kind: "local", prUrl: null }));
+    repo.releaseHold(released, "merged", 300);
+    expect(repo.prHolds().map((h) => [h.id, h.outcome, h.releasedAt])).toEqual([[active, null, null], [released, "merged", 300]]);
+    expect(repo.hold(released)).toMatchObject({ branch: "feat-b", outcome: "merged", releasedAt: 300 });
+    expect(repo.hold(999)).toBeNull();
   });
 });

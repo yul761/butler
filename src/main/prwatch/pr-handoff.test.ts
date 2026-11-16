@@ -26,6 +26,11 @@ describe("prHandoff", () => {
     expect(prHandoff("BTL-1", rows, base(1, []))?.prs).toEqual([pr({ review: "approved" })]);
   });
 
+  it("drops an empty-URL base entry that a watched row with the same number covers", () => {
+    const out = prHandoff("BTL-1", [row({ review: "approved" })], base(1, [pr({ url: "" }), pr({ number: 5, url: "" })]));
+    expect(out?.prs.map((p) => [p.number, p.url])).toEqual([[7, "https://github.com/o/app/pull/7"], [5, ""]]);
+  });
+
   it("appends linked PRs from other branches", () => {
     // 同一个分支上先合并的 #5、另一个 ticket 仓库之外的 PR（repoId 为 null）都算这个 ticket 的。
     const rows = [

@@ -53,6 +53,17 @@ describe("ingestHandoff", () => {
     expect(handoffs.knownPrs("NONE-1")).toEqual([]);
   });
 
+  it("ingesting a handoff links its PRs in the same transaction", () => {
+    const { deps, handoffs } = setup();
+    const linked: [string, unknown[]][] = [];
+    const pr = { number: 7, url: "https://github.com/a/x/pull/7", state: "open" as const, review: null };
+    ingestHandoff({ ...deps, linkPrs: (k, prs) => void linked.push([k, prs]) }, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ prs: [pr] }) });
+    expect(linked).toEqual([["PROJ-1", [pr]]]);
+    const boom = { ...deps, linkPrs: () => { throw new Error("link failed"); } };
+    expect(() => ingestHandoff(boom, { ticketKey: "PROJ-1", sessionId: "s2", trigger: "command", rawText: null, payload: payload({ prs: [pr] }) })).toThrow("link failed");
+    expect(handoffs.listByTicket("PROJ-1")).toHaveLength(1);
+  });
+
   it("stores the handoff under the right ticket, creates followups and derives the status", () => {
     const { deps, tickets, handoffs, followups } = setup();
     const r = ingestHandoff(deps, {

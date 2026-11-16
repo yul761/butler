@@ -11,6 +11,9 @@ export interface MergeHold {
   sessionId: string | null;
   ticketKey: string | null;
   createdAt: number;
+  /** 释放时间和方式；还在占着时都是 null。 */
+  releasedAt: number | null;
+  outcome: "merged" | "cancelled" | "expired" | null;
 }
 
 interface HoldRow {
@@ -23,6 +26,8 @@ interface HoldRow {
   session_id: string | null;
   ticket_key: string | null;
   created_at: number;
+  released_at: number | null;
+  outcome: "merged" | "cancelled" | "expired" | null;
 }
 
 interface EventRow {
@@ -39,6 +44,7 @@ interface EventRow {
 
 const toHold = (r: HoldRow): MergeHold => ({
   id: Number(r.id), repoPath: r.repo_path, branch: r.branch, target: r.target, kind: r.kind, prUrl: r.pr_url, sessionId: r.session_id, ticketKey: r.ticket_key, createdAt: r.created_at,
+  releasedAt: r.released_at === null ? null : Number(r.released_at), outcome: r.outcome,
 });
 
 const toEvent = (r: EventRow): MergeEvent => ({
@@ -49,7 +55,7 @@ const toEvent = (r: EventRow): MergeEvent => ({
 export class MergeGateRepo {
   constructor(private readonly db: Db) {}
 
-  addHold(h: Omit<MergeHold, "id">): number {
+  addHold(h: Omit<MergeHold, "id" | "releasedAt" | "outcome">): number {
     const r = this.db
       .prepare(`INSERT INTO merge_holds (repo_path, branch, target, kind, pr_url, session_id, ticket_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(h.repoPath, h.branch, h.target, h.kind, h.prUrl, h.sessionId, h.ticketKey, h.createdAt);
@@ -58,6 +64,16 @@ export class MergeGateRepo {
 
   activeHolds(): MergeHold[] {
     return (this.db.prepare(`SELECT * FROM merge_holds WHERE released_at IS NULL ORDER BY id`).all() as unknown as HoldRow[]).map(toHold);
+  }
+
+  hold(id: number): MergeHold | null {
+    const r = this.db.prepare(`SELECT * FROM merge_holds WHERE id = ?`).get(id) as unknown as HoldRow | undefined;
+    return r ? toHold(r) : null;
+  }
+
+  /** 所有带 PR 链接的占位，不论是否已释放（把它们的 PR 链接进 ticket_prs 用）。 */
+  prHolds(): MergeHold[] {
+    return (this.db.prepare(`SELECT * FROM merge_holds WHERE kind = 'pr' AND pr_url IS NOT NULL ORDER BY id`).all() as unknown as HoldRow[]).map(toHold);
   }
 
   activeHold(repoPath: string, branch: string): MergeHold | null {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Pr } from "./handoff";
-import { rememberMergedPrs } from "./pr-memory";
+import { dedupeHandoffPrs, rememberMergedPrs } from "./pr-memory";
 
 const pr = (number: number, state: Pr["state"], url = `https://github.com/acme/ui/pull/${number}`): Pr => ({ number, url, state, review: null });
 
@@ -26,5 +26,25 @@ describe("rememberMergedPrs", () => {
 
   it("falls back to the PR number when there is no link", () => {
     expect(rememberMergedPrs([pr(9, "open", "")], [[pr(9, "merged", "")]])).toEqual([pr(9, "merged", "")]);
+  });
+});
+
+describe("dedupeHandoffPrs", () => {
+  it("dedupes an empty-URL entry into the URL entry with the same number", () => {
+    const url = pr(3, "open");
+    expect(dedupeHandoffPrs([pr(3, "open", ""), url])).toEqual([url]);
+    expect(dedupeHandoffPrs([url, pr(3, "open", "  ")])).toEqual([url]);
+  });
+
+  it("keeps empty-URL entries of different numbers apart and the first of URL duplicates", () => {
+    const a = pr(3, "open", "https://github.com/a/x/pull/3");
+    expect(dedupeHandoffPrs([pr(3, "open", ""), pr(5, "open", ""), pr(5, "merged", "")])).toEqual([pr(3, "open", ""), pr(5, "open", "")]);
+    expect(dedupeHandoffPrs([a, { ...a, url: "https://GitHub.com/a/x/pull/3/", state: "merged" }])).toEqual([a]);
+  });
+
+  it("rememberMergedPrs no longer returns both #3 and https://…/pull/3", () => {
+    const out = rememberMergedPrs([pr(3, "open")], [[pr(3, "merged", "")]]);
+    expect(out.map((p) => p.number)).toEqual([3]);
+    expect(rememberMergedPrs([pr(3, "open", ""), pr(3, "open")], []).map((p) => p.url)).toEqual(["https://github.com/acme/ui/pull/3"]);
   });
 });

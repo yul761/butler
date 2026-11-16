@@ -8,6 +8,24 @@ function prId(p: Pr): string {
 }
 
 /**
+ * 同一个 handoff 里同一个 PR 可能一次写成链接、一次写成只有号（url 为空）：有同号且带链接的条目时，空链接的丢掉；
+ * 链接相同的留第一个。没有链接又没有同号带链接条目的，按号去重。
+ */
+export function dedupeHandoffPrs(prs: Pr[]): Pr[] {
+  const withUrl = new Set(prs.filter((p) => prUrlKey(p.url) !== "").map((p) => p.number));
+  const seen = new Set<string>();
+  const out: Pr[] = [];
+  for (const p of prs) {
+    if (prUrlKey(p.url) === "" && withUrl.has(p.number)) continue;
+    const id = prId(p);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(p);
+  }
+  return out;
+}
+
+/**
  * PR 合并之后不会再变。之后的 handoff（晚间、早间刷新、worktree 清理之后）常常不再提它，或者把它报成别的状态，
  * 结果 ticket 显示“还没有 PR”。这里把以前记下的“已合并”补回来：
  * - latest 里有、以前合并过的：按已合并算；
@@ -17,9 +35,10 @@ function prId(p: Pr): string {
  */
 export function rememberMergedPrs(latest: Pr[], older: Pr[][]): Pr[] {
   const merged = new Map<string, Pr>();
-  for (const prs of older) for (const p of prs) if (p.state === "merged" && !merged.has(prId(p))) merged.set(prId(p), p);
+  for (const prs of older) for (const p of dedupeHandoffPrs(prs)) if (p.state === "merged" && !merged.has(prId(p))) merged.set(prId(p), p);
+  latest = dedupeHandoffPrs(latest);
   const out = latest.map((p) => (p.state !== "merged" && merged.has(prId(p)) ? { ...p, state: "merged" as const } : p));
   const seen = new Set(out.map(prId));
   for (const [id, p] of merged) if (!seen.has(id)) out.push(p);
-  return out;
+  return dedupeHandoffPrs(out);
 }

@@ -36,6 +36,7 @@ import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
 import { CiDelivery } from "./prwatch/ci-delivery";
 import { prHandoff } from "./prwatch/pr-handoff";
+import { PrLinker } from "./prwatch/pr-links";
 import { PrWatcher } from "./prwatch/pr-watcher";
 import { makeWhoOf } from "./gate/who";
 import { auditCutoff, stalePendingCost } from "./gateway/budget";
@@ -596,7 +597,10 @@ async function bootstrap(): Promise<void> {
     );
   }
   const ingest = (input: IngestInput) => {
-    const r = ingestHandoff({ db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}` }, input);
+    const r = ingestHandoff(
+      { db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}`, linkPrs: (k, prs) => void prLinker.linkHandoffPrs(k, prs) },
+      input,
+    );
     // 设计文档 5.4：入库后同步写入 StateCore（异步，失败只记日志）。
     if (r.stored && !r.degraded) {
       void memory.syncTicket(input.ticketKey);
@@ -956,6 +960,7 @@ async function bootstrap(): Promise<void> {
   // PR 和 CI 的监视（计划 13）。
   const ticketPrs = new TicketPrsRepo(db);
   const branchWatch = new BranchWatchRepo(db);
+  const prLinker = new PrLinker({ prs: ticketPrs, tickets, slugOf: (path) => repoIdentity.slugOf(path), now: Date.now });
   const holdWatcher = new HoldWatcher({
     repo: gateRepo, prInfo, git,
     isOpen: (id) => gateTerm(id) !== null,
@@ -1027,6 +1032,11 @@ async function bootstrap(): Promise<void> {
     openTerminals: (key) => sessionService.openTerminalCount(key),
     notify: () => notify(),
     checkSoon: () => holdWatcher.soon(),
+    // 新链接的行 checked_at 为 0，下一轮就会读，不用再催。
+    onPrHold: (id) => {
+      const hold = gateRepo.hold(id);
+      if (hold) prLinker.linkHold(hold, (s) => sessions.get(s)?.ticketKey ?? null);
+    },
     now: Date.now,
     log: logger,
   });

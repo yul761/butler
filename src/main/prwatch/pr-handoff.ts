@@ -1,4 +1,5 @@
 import type { Handoff, Pr } from "../../shared/handoff";
+import { dedupeHandoffPrs } from "../../shared/pr-memory";
 import { prUrlKey } from "../../shared/pr-url";
 import type { TicketPr } from "../db/ticket-prs-repo";
 
@@ -23,7 +24,7 @@ export function prHandoff(
   const watched: Pr[] = rows.filter((r) => r.checkedAt > 0).map((r) => ({ number: r.number, url: r.url, state: r.state, review: r.review }));
   if (watched.length === 0) return null;
   const seen = new Set(watched.map((p) => prUrlKey(p.url)));
-  const prs = [...watched, ...base.prs.filter((p) => !seen.has(prUrlKey(p.url)))];
+  const prs = dedupeHandoffPrs([...watched, ...base.prs.filter((p) => !seen.has(prUrlKey(p.url)))]);
   if (sameSet(prs, base.prs)) return null;
   const signature = watched.map((p) => `${p.number}:${p.state}:${p.review ?? ""}`).join(",");
   return { prs, status: base.status, sourceRef: `prwatch:${ticketKey}:${signature}@${base.id}` };

@@ -1,4 +1,4 @@
-import type { Handoff } from "../../shared/handoff";
+import type { Handoff, Pr } from "../../shared/handoff";
 import type { HandoffTrigger, TicketStatus } from "../../shared/types";
 import { rememberMergedPrs } from "../../shared/pr-memory";
 import { withTransaction, type Db } from "../db/database";
@@ -15,6 +15,8 @@ export interface IngestDeps {
   followups: FollowupsRepo;
   now: () => number;
   newFollowupId: () => string;
+  /** 存下来的 PR 列表链接到 ticket_prs。在事务里调用：抛错会让这条 handoff 一起回滚。 */
+  linkPrs?: (ticketKey: string, prs: Pr[]) => void;
 }
 
 export interface IngestInput {
@@ -55,6 +57,7 @@ export function ingestHandoff(d: IngestDeps, input: IngestInput): IngestResult {
     });
     if (id === null) return { stored: false, reason: "duplicate" };
     if (!payload) return { stored: true, handoffId: id, degraded: true, status: null };
+    d.linkPrs?.(input.ticketKey, payload.prs);
 
     const plan = planFollowupMerge(d.followups.listByTicket(input.ticketKey), payload.followups, {
       ticketKey: input.ticketKey, now, newId: d.newFollowupId, source: "session",
