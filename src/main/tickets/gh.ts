@@ -78,6 +78,23 @@ export interface CiCheck {
   /** 失败日志的末尾，PrWatcher 填（Task 5）。 */
   log?: string;
 }
+export interface PrReview {
+  id: string;
+  author: string;
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING";
+  body: string;
+  submittedAt: number;
+}
+export interface PrComment {
+  id: string;
+  author: string;
+  body: string;
+  createdAt: number;
+  url: string | null;
+  path: string | null;
+  line: number | null;
+  reviewId: string | null;
+}
 export interface PrStatus {
   number: number;
   url: string;
@@ -87,6 +104,11 @@ export interface PrStatus {
   headSha: string;
   checks: CiCheck[];
   ci: CiState;
+  author: string;
+  reviews: PrReview[];
+  comments: PrComment[];
+  /** PR 里最早一个 commit 的作者时间（毫秒）；旧版 gh 没有这个字段时为 null。 */
+  firstCommitAt: number | null;
 }
 export interface BranchRuns {
   headSha: string;
@@ -158,11 +180,69 @@ function parseJson(text: string | null): unknown {
   }
 }
 
+const REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"]);
+const BOT_LOGINS = ["github-actions", "dependabot", "renovate"];
+
+function obj(v: unknown): Record<string, unknown> | null {
+  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
+}
+
+function loginOf(v: unknown): string {
+  return str(obj(v)?.login);
+}
+
+function timeOf(v: unknown): number | null {
+  if (typeof v !== "string") return null;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? null : t;
+}
+
+function reviewsOf(v: unknown): PrReview[] {
+  if (!Array.isArray(v)) return [];
+  const out: PrReview[] = [];
+  for (const item of v) {
+    const r = obj(item);
+    if (!r || typeof r.id !== "string" || r.id === "" || !REVIEW_STATES.has(str(r.state))) continue;
+    const submittedAt = timeOf(r.submittedAt);
+    if (submittedAt === null) continue;
+    out.push({ id: r.id, author: loginOf(r.author), state: r.state as PrReview["state"], body: str(r.body), submittedAt });
+  }
+  return out;
+}
+
+function commentsOf(v: unknown): PrComment[] {
+  if (!Array.isArray(v)) return [];
+  const out: PrComment[] = [];
+  for (const item of v) {
+    const r = obj(item);
+    if (!r || typeof r.id !== "string" || r.id === "") continue;
+    const createdAt = timeOf(r.createdAt);
+    if (createdAt === null) continue;
+    out.push({ id: r.id, author: loginOf(r.author), body: str(r.body), createdAt, url: typeof r.url === "string" ? r.url : null, path: null, line: null, reviewId: null });
+  }
+  return out;
+}
+
+function firstCommitOf(v: unknown): number | null {
+  if (!Array.isArray(v)) return null;
+  const times = v.map((c) => timeOf(obj(c)?.authoredDate)).filter((t): t is number => t !== null);
+  return times.length > 0 ? Math.min(...times) : null;
+}
+
+/** 纯函数：login 归类。PR 作者 → author；含 copilot → copilot；[bot] 结尾或在 BOT_LOGINS 里 → bot；其余 human。 */
+export function reviewerKind(login: string, prAuthor: string): "copilot" | "human" | "author" | "bot" {
+  if (login === prAuthor) return "author";
+  const l = login.toLowerCase();
+  if (l.includes("copilot")) return "copilot";
+  if (l.endsWith("[bot]") || BOT_LOGINS.includes(l)) return "bot";
+  return "human";
+}
+
 const REVIEWS = { REVIEW_REQUIRED: "pending", CHANGES_REQUESTED: "changes_requested", APPROVED: "approved" } as const;
 
 /** gh pr view <branch>：没有 PR、gh 不可用、输出不对都返回 null。 */
 export async function prStatus(cwd: string, branch: string, timeoutMs: number): Promise<PrStatus | null> {
-  const j = parseJson(await runGh(cwd, ["pr", "view", branch, "--json", "number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup"], timeoutMs, 4 * 1024 * 1024));
+  const j = parseJson(await runGh(cwd, ["pr", "view", branch, "--json", "number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup,author,reviews,comments,commits"], timeoutMs, 8 * 1024 * 1024));
   if (typeof j !== "object" || j === null) return null;
   const r = j as Record<string, unknown>;
   if (typeof r.number !== "number" || typeof r.url !== "string" || typeof r.headRefOid !== "string") return null;
@@ -177,7 +257,61 @@ export async function prStatus(cwd: string, branch: string, timeoutMs: number): 
     headSha: r.headRefOid,
     checks,
     ci: ciOf(checks),
+    author: loginOf(r.author),
+    reviews: reviewsOf(r.reviews),
+    comments: commentsOf(r.comments),
+    firstCommitAt: firstCommitOf(r.commits),
   };
+}
+
+/** gh api --paginate 把每页的数组首尾相接输出（[..][..]）：按括号深度切开，字符串里的括号不算，合并成一个数组。出错返回 null。 */
+function parsePages(text: string | null): unknown[] | null {
+  if (text === null) return null;
+  const all: unknown[] = [];
+  let depth = 0;
+  let start = 0;
+  let pages = 0;
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (c === "\\") i++;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') inStr = true;
+    else if (c === "[") {
+      if (depth++ === 0) start = i;
+    } else if (c === "]" && --depth === 0) {
+      const page = parseJson(text.slice(start, i + 1));
+      if (!Array.isArray(page)) return null;
+      all.push(...page);
+      pages++;
+    }
+  }
+  return depth === 0 && pages > 0 ? all : null;
+}
+
+/** 行内 review 评论：gh api repos/{owner}/{repo}/pulls/N/comments --paginate。失败返回 null。 */
+export async function reviewComments(cwd: string, number: number, timeoutMs: number): Promise<PrComment[] | null> {
+  const j = parsePages(await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/comments`, "--paginate"], timeoutMs, 8 * 1024 * 1024));
+  if (j === null) return null;
+  const out: PrComment[] = [];
+  for (const item of j) {
+    const r = obj(item);
+    if (!r || typeof r.id !== "number") continue;
+    const createdAt = timeOf(r.created_at);
+    if (createdAt === null) continue;
+    out.push({
+      id: String(r.id),
+      author: loginOf(r.user),
+      body: str(r.body),
+      createdAt,
+      url: typeof r.html_url === "string" ? r.html_url : null,
+      path: typeof r.path === "string" ? r.path : null,
+      line: typeof r.line === "number" ? r.line : null,
+      reviewId: typeof r.pull_request_review_id === "number" ? String(r.pull_request_review_id) : null,
+    });
+  }
+  return out;
 }
 
 /** gh run list --branch：只看最新的 headSha（列表按时间倒序，第一条即最新）。没有 run 返回 null。 */

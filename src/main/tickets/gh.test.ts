@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, branchRuns, checksOf, ciOf, failedLog, ghBinary, prInfo, prStatus, resetGhBinary, setGhBinary } from "./gh";
+import { applyGhResolution, branchRuns, checksOf, ciOf, failedLog, ghBinary, prInfo, prStatus, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -96,8 +96,9 @@ describe.skipIf(process.platform === "win32")("prStatus / branchRuns / failedLog
     expect(await prStatus(dir, "feat", 5000)).toEqual({
       number: 5, url: "u", state: "OPEN", isDraft: true, review: "pending", headSha: "abc",
       checks: [{ name: "t", state: "passing", runId: 9 }], ci: "passing",
+      author: "", reviews: [], comments: [], firstCommitAt: null,
     });
-    expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe("pr view feat --json number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup");
+    expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe("pr view feat --json number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup,author,reviews,comments,commits");
   });
 
   it("prStatus maps empty reviewDecision to null and returns null when there is no PR", async () => {
@@ -109,6 +110,54 @@ describe.skipIf(process.platform === "win32")("prStatus / branchRuns / failedLog
     expect(await prStatus(dir, "b", 5000)).toBeNull();
     fakeGh("echo not json");
     expect(await prStatus(dir, "b", 5000)).toBeNull();
+  });
+
+  it("prStatus parses author, reviews, comments and the first commit time", async () => {
+    const json = {
+      number: 5, url: "u", state: "OPEN", isDraft: false, reviewDecision: "", headRefOid: "abc", statusCheckRollup: [],
+      author: { login: "me" },
+      reviews: [
+        { id: "R1", author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", body: "nit", submittedAt: "2026-01-02T00:00:00Z" },
+        { id: "R2", author: { login: "alice" }, state: "APPROVED", body: "", submittedAt: "2026-01-03T00:00:00Z" },
+        { id: "R3", author: { login: "bad" }, state: "WEIRD", body: "", submittedAt: "2026-01-03T00:00:00Z" },
+      ],
+      comments: [{ id: "C1", author: { login: "alice" }, body: "hi", createdAt: "2026-01-02T12:00:00Z", url: "https://x/c1" }, { body: "no id" }],
+      commits: [{ authoredDate: "2026-01-05T00:00:00Z" }, { authoredDate: "2026-01-01T00:00:00Z" }],
+    };
+    const dir = fakeGh(`cat <<'JSON'\n${JSON.stringify(json)}\nJSON`);
+    const s = await prStatus(dir, "feat", 5000);
+    expect(s?.author).toBe("me");
+    expect(s?.reviews).toEqual([
+      { id: "R1", author: "copilot-pull-request-reviewer", state: "COMMENTED", body: "nit", submittedAt: Date.parse("2026-01-02T00:00:00Z") },
+      { id: "R2", author: "alice", state: "APPROVED", body: "", submittedAt: Date.parse("2026-01-03T00:00:00Z") },
+    ]);
+    expect(s?.comments).toEqual([
+      { id: "C1", author: "alice", body: "hi", createdAt: Date.parse("2026-01-02T12:00:00Z"), url: "https://x/c1", path: null, line: null, reviewId: null },
+    ]);
+    expect(s?.firstCommitAt).toBe(Date.parse("2026-01-01T00:00:00Z"));
+  });
+
+  it("reviewComments maps REST review comments and returns null on failure", async () => {
+    const rest = [
+      { id: 11, user: { login: "copilot-pull-request-reviewer[bot]" }, body: "b1", created_at: "2026-01-02T00:00:00Z", html_url: "https://x/r1", path: "a.ts", line: 3, pull_request_review_id: 77 },
+      { id: 12, user: { login: "alice" }, body: "b2", created_at: "2026-01-03T00:00:00Z", html_url: "https://x/r2", path: "b.ts", line: null, pull_request_review_id: null },
+    ];
+    const dir = fakeGh(`echo "$@" > "$(dirname "$0")/args.txt"\ncat <<'JSON'\n${JSON.stringify(rest)}\nJSON`);
+    expect(await reviewComments(dir, 5, 5000)).toEqual([
+      { id: "11", author: "copilot-pull-request-reviewer[bot]", body: "b1", createdAt: Date.parse("2026-01-02T00:00:00Z"), url: "https://x/r1", path: "a.ts", line: 3, reviewId: "77" },
+      { id: "12", author: "alice", body: "b2", createdAt: Date.parse("2026-01-03T00:00:00Z"), url: "https://x/r2", path: "b.ts", line: null, reviewId: null },
+    ]);
+    expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe("api repos/{owner}/{repo}/pulls/5/comments --paginate");
+    fakeGh("exit 1");
+    expect(await reviewComments(dir, 5, 5000)).toBeNull();
+    fakeGh("echo not json");
+    expect(await reviewComments(dir, 5, 5000)).toBeNull();
+  });
+
+  it("reviewComments joins paginated output, even when a body contains brackets", async () => {
+    const c = (id: number, body: string) => ({ id, user: { login: "a" }, body, created_at: "2026-01-02T00:00:00Z" });
+    const dir = fakeGh(`cat <<'JSON'\n${JSON.stringify([c(1, 'x ] [ "y"')])}\n${JSON.stringify([c(2, "z")])}\nJSON`);
+    expect((await reviewComments(dir, 5, 5000))?.map((x) => [x.id, x.body])).toEqual([["1", 'x ] [ "y"'], ["2", "z"]]);
   });
 
   it("branchRuns keeps only the newest head sha", async () => {
@@ -186,5 +235,16 @@ exit 1`);
     await failedLog(dir, 1, 60, 5000);
     expect(readFileSync(join(dir, "calls.txt"), "utf8").trim().split("\n")).toEqual(["pr", "pr", "run", "run"]);
     expect(() => readFileSync(join(onPath, "wrong.txt"))).toThrow();
+  });
+});
+
+describe("reviewerKind", () => {
+  it("classifies logins", () => {
+    expect(reviewerKind("copilot-pull-request-reviewer", "me")).toBe("copilot");
+    expect(reviewerKind("Copilot", "me")).toBe("copilot");
+    expect(reviewerKind("me", "me")).toBe("author");
+    expect(reviewerKind("github-actions[bot]", "me")).toBe("bot");
+    expect(reviewerKind("dependabot", "me")).toBe("bot");
+    expect(reviewerKind("alice", "me")).toBe("human");
   });
 });
