@@ -1,8 +1,9 @@
 import type { Pr } from "../../shared/handoff";
+import { prUrlKey } from "../../shared/pr-url";
 import type { WatchedPr } from "../../shared/types";
 
 /** 同一个 PR：按链接认（去掉末尾斜杠、不分大小写）。 */
-const prKey = (url: string): string => url.trim().replace(/\/+$/, "").toLowerCase();
+const prKey = prUrlKey;
 
 const sameSet = (a: Pr[], b: Pr[]): boolean => {
   const sig = (prs: Pr[]) => prs.map((p) => `${prKey(p.url)}|${p.number}|${p.state}|${p.review}`).sort().join("\n");

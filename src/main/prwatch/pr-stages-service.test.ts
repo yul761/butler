@@ -11,7 +11,7 @@ const ticket = (key: string, repos: TicketRepo[], featureId: number | null = nul
   key, title: null, repos, status: "active", statusManual: null, createdAt: 100, archivedAt: null, featureId,
 });
 const ev = (o: Partial<StageEvent> = {}): StageEvent => ({
-  id: 1, ticketKey: "A-1", repoId: null, branch: null, featureId: null, epicId: null, sessionId: null, kind: "first_commit", at: 200, data: {}, ...o,
+  id: 1, ticketKey: "A-1", repoId: null, prId: null, branch: null, featureId: null, epicId: null, sessionId: null, kind: "first_commit", at: 200, data: {}, ...o,
 });
 
 function make(o: {

@@ -390,4 +390,39 @@ export const MIGRATIONS: string[] = [
     UNIQUE (repo_slug, pr_number));
   CREATE INDEX lesson_queue_status ON lesson_queue(status, enqueued_at);
   `,
+  // PR 进度按 PR 记（ticket_prs），不再按 ticket 仓库记；branch_watch 只记分支的 CI。pr_stage_events 加 pr_id。
+  `
+  CREATE TABLE ticket_prs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_key TEXT NOT NULL REFERENCES tickets(key),
+    url TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    repo_id INTEGER REFERENCES ticket_repos(id) ON DELETE SET NULL,
+    number INTEGER NOT NULL,
+    head_branch TEXT,
+    state TEXT NOT NULL CHECK (state IN ('open','merged','closed')),
+    review TEXT,
+    ci TEXT NOT NULL DEFAULT 'unknown',
+    read_error INTEGER NOT NULL DEFAULT 0,
+    head_sha TEXT,
+    failed TEXT NOT NULL DEFAULT '[]',
+    opened_at INTEGER, merged_at INTEGER, closed_at INTEGER,
+    source TEXT NOT NULL CHECK (source IN ('branch','handoff','merge_gate','backfill')),
+    linked_at INTEGER NOT NULL,
+    checked_at INTEGER NOT NULL DEFAULT 0,
+    delivered_key TEXT,
+    merged_handled_at INTEGER,
+    UNIQUE (ticket_key, url)
+  );
+  CREATE INDEX idx_ticket_prs_url ON ticket_prs (url);
+  CREATE INDEX idx_ticket_prs_state ON ticket_prs (state);
+  CREATE TABLE branch_watch (
+    repo_id INTEGER PRIMARY KEY REFERENCES ticket_repos(id) ON DELETE CASCADE,
+    ticket_key TEXT NOT NULL, branch TEXT NOT NULL,
+    ci TEXT NOT NULL DEFAULT 'unknown', head_sha TEXT, failed TEXT NOT NULL DEFAULT '[]',
+    read_error INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, delivered_key TEXT
+  );
+  ALTER TABLE pr_stage_events ADD COLUMN pr_id INTEGER REFERENCES ticket_prs(id) ON DELETE CASCADE;
+  CREATE INDEX idx_pr_stage_events_pr ON pr_stage_events (pr_id);
+  `,
 ];

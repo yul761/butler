@@ -1,8 +1,9 @@
 import type { Pr } from "./handoff";
+import { prUrlKey } from "./pr-url";
 
 /** 同一个 PR：按链接认（去掉末尾斜杠、不分大小写）；没有链接时按 PR 号。 */
 function prId(p: Pr): string {
-  const url = p.url.trim().replace(/\/+$/, "").toLowerCase();
+  const url = prUrlKey(p.url);
   return url || `#${p.number}`;
 }
 

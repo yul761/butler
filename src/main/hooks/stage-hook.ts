@@ -55,7 +55,7 @@ export function stageEventFromHook(env: HookEnvelope, sessions: Pick<SessionsRep
   const toolUseId = str(p.tool_use_id);
   const key = str(p.hook_event_name) === "PostToolUse" && toolUseId ? `skill:${sessionId}:${toolUseId}` : `skill:${sessionId}:${env.receivedAt}:${name}`;
   return {
-    event: { ...owner, branch: null, sessionId, kind: "skill", at: env.receivedAt, data: { name, category } },
+    event: { ...owner, prId: null, branch: null, sessionId, kind: "skill", at: env.receivedAt, data: { name, category } },
     dedupeKey: key,
   };
 }

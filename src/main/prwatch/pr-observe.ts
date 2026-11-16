@@ -29,7 +29,7 @@ export function prObservations(
   const out: Observation[] = [];
   const add = (kind: StageEvent["kind"], at: number, key: string, data: Record<string, unknown>) =>
     out.push({
-      event: { ticketKey: t.ticketKey, repoId: t.repoId, branch: t.branch, featureId: null, epicId: null, sessionId: null, kind, at, data },
+      event: { ticketKey: t.ticketKey, repoId: t.repoId, prId: null, branch: t.branch, featureId: null, epicId: null, sessionId: null, kind, at, data },
       dedupeKey: key,
     });
 

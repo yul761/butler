@@ -15,10 +15,10 @@ const add = (repo: LessonsRepo, text = "t", slug = "acme/web") =>
   repo.addLesson({ scope: { kind: "repo", slug }, text, why: "w", at: 10, source: src });
 
 describe("migration 21", () => {
-  it("user_version equals MIGRATIONS.length (21)", () => {
+  it("user_version equals MIGRATIONS.length (22)", () => {
     const { db } = setup();
-    expect(MIGRATIONS.length).toBe(21);
-    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(21);
+    expect(MIGRATIONS.length).toBe(22);
+    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(22);
   });
 
   it("lessons needs exactly one of repo_slug / product_id", () => {

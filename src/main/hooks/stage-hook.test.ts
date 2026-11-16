@@ -26,7 +26,7 @@ describe("stageEventFromHook", () => {
   it("records a design skill of a ticket session with its ticket and repo", () => {
     const o = stageEventFromHook(skill("superpowers:brainstorming"), repo(sess({ ticketKey: "BTL-1", repoId: 7 })));
     expect(o).toEqual({
-      event: { ticketKey: "BTL-1", repoId: 7, branch: null, featureId: null, epicId: null, sessionId: "s1", kind: "skill", at: 500, data: { name: "superpowers:brainstorming", category: "design" } },
+      event: { ticketKey: "BTL-1", repoId: 7, prId: null, branch: null, featureId: null, epicId: null, sessionId: "s1", kind: "skill", at: 500, data: { name: "superpowers:brainstorming", category: "design" } },
       dedupeKey: "skill:s1:500:superpowers:brainstorming",
     });
   });

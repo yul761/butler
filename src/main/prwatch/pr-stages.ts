@@ -50,7 +50,7 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
   // 升级前就合并的 PR 不再被监视，没有 merged 事件：当作在已知的最晚事件的时间合并（没有事件就用 ticket 创建时间），确定、不会排到别的事件前面。
   if (i.pr?.state === "merged" && !events.some((e) => e.kind === "merged")) {
     const at = events.reduce((m, e) => Math.max(m, e.at), i.ticketCreatedAt);
-    events.push({ id: Number.MAX_SAFE_INTEGER, ticketKey: i.ticketKey, repoId: i.repoId, branch: i.branch, featureId: i.featureId, epicId: null, sessionId: null, kind: "merged", at, data: { number: i.pr.number } });
+    events.push({ id: Number.MAX_SAFE_INTEGER, ticketKey: i.ticketKey, repoId: i.repoId, prId: null, branch: i.branch, featureId: i.featureId, epicId: null, sessionId: null, kind: "merged", at, data: { number: i.pr.number } });
   }
   const hasFirstCommit = events.some((e) => e.kind === "first_commit");
   const hasPr = i.pr?.number != null || events.some((e) => e.kind === "pr_opened");
