@@ -1,5 +1,7 @@
+import type { Locator } from "@playwright/test";
+import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, pageTab, terminalText, test } from "./fixtures";
+import { completeWizard, create, expect, makeGitRepo, newTicket, openTab, pageTab, terminalText, test } from "./fixtures";
 
 /**
  * PR 进度（设计文档 2026-11-15 第 1 部分）：假 claude 里输入 /fake-skill，走真实的路径：
@@ -16,8 +18,10 @@ test("a skill call in a session moves the design step to active; tab and timelin
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
 
+  // tab 默认收起，先展开。
   const tab = pageTab(page, S.prStagesTab);
-  await expect(tab).toHaveAttribute("aria-selected", "true");
+  await expect(tab).toHaveAttribute("aria-selected", "false");
+  await openTab(page, S.prStagesTab);
   const design = page.locator(".pr-stages .pr-cell").filter({ hasText: S.prStage.design });
   await expect(design).toHaveClass(/pr-todo/);
 
@@ -50,4 +54,33 @@ test("a skill call in a session moves the design step to active; tab and timelin
   await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
   await expect(pageTab(page, S.prStagesTab)).toHaveAttribute("aria-selected", "false");
   await expect(page.locator(".pr-stages")).toHaveCount(0);
+});
+
+test("an expanded feature in the epic's stages tab opens its ticket (mouse and keyboard)", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const shop = join(s.dir, "shop");
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  makeGitRepo(join(shop, "frontend"));
+  makeGitRepo(join(shop, "backend"));
+
+  await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "shop-epic", shop);
+  await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "pay", shop);
+  await newTicket(page, "EP-1", "frontend", "backend");
+
+  const openFromEpic = async (activate: (chip: Locator) => Promise<void>) => {
+    await page.locator(".sidebar .epic-group > .feature-row .ticket").click();
+    await expect(page.getByRole("heading", { name: "shop-epic", exact: true })).toBeVisible();
+    const tab = pageTab(page, S.prStagesTab);
+    if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
+    await page.locator(".pr-epic").getByRole("button", { name: "pay", exact: true }).click();
+    await activate(page.locator(".pr-table").getByRole("button", { name: "EP-1", exact: true }));
+    await expect(page.getByRole("heading", { name: "EP-1", exact: true })).toBeVisible();
+  };
+  await openFromEpic((chip) => chip.click());
+  await openFromEpic((chip) => chip.locator("xpath=ancestor::tr").locator("td").last().click());
+  await openFromEpic(async (chip) => {
+    await chip.focus();
+    await page.keyboard.press("Enter");
+  });
 });

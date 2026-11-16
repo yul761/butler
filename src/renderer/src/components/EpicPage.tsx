@@ -13,6 +13,8 @@ import { SessionArea, useSessionPanes, WorkspaceHeader } from "./WorkspaceParts"
 interface Props {
   epic: EpicView;
   onOpenFeature: (id: number) => void;
+  /** PR 进度表里点 ticket：打开它的页面。 */
+  onOpenTicket: (key: string) => void;
   /** 新建的 feature：重读列表后跳过去。 */
   onFeatureCreated: (id: number) => void;
   /** 打开时先切到这个 session 的终端（从「现在」页点进来时）。 */
@@ -25,7 +27,7 @@ interface Props {
  * epic 页（设计文档 2026-11-01，草图 A）：从上到下是名字和工作区，一排 tab（feature 列表：一行一个 feature，一句进度和状态，
  * 不列 ticket；汇报；待你决定），然后是仓库、epic session 和它们的终端，布局和 feature 页一样。
  */
-export function EpicPage({ epic, onOpenFeature, onFeatureCreated, focusSession, onOpenTarget }: Props) {
+export function EpicPage({ epic, onOpenFeature, onOpenTicket, onFeatureCreated, focusSession, onOpenTarget }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newFeature, setNewFeature] = useState(false);
   const errorText = (e: unknown) => epicErrorText(e, S);
@@ -97,7 +99,7 @@ export function EpicPage({ epic, onOpenFeature, onFeatureCreated, focusSession, 
               </>
             ),
           },
-          { id: "stages", label: S.prStagesTab, content: <EpicPrStages epicId={epic.id} features={live.map((f) => ({ id: f.id, name: f.name }))} /> },
+          { id: "stages", label: S.prStagesTab, content: <EpicPrStages epicId={epic.id} features={live.map((f) => ({ id: f.id, name: f.name }))} onOpenTicket={onOpenTicket} /> },
           ...inboxTabs(inbox, goTo),
         ]}
       />

@@ -204,13 +204,13 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         </div>
       )}
 
-      <TicketOverview ticketKey={ticket.key} />
-
       <PageTabs
         page={`ticket:${ticket.key}`}
         defaultTab="stages"
         tabs={[{ id: "stages", label: S.prStagesTab, content: <TicketPrStages ticketKey={ticket.key} /> }]}
       />
+
+      <TicketOverview ticketKey={ticket.key} />
 
       <div className="sessions-bar">
         {ticket.sessions.length === 0 && <span className="muted">{S.noSessions}</span>}
