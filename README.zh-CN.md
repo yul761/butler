@@ -5,7 +5,7 @@
 一个桌面版的"工作管家"，给同时开好几个 [Claude Code](https://docs.claude.com/en/docs/claude-code) session 的人用，一个 ticket 一个 session。
 支持 macOS（Apple silicon）和 Windows（x64）。MIT 协议。网站：[butler.statecore.io](https://butler.statecore.io)。
 
-几个 ticket 可以归成一个 feature，几个 feature 可以归成一个 epic。在 epic session 里商量好怎么拆，它会建出 feature 并附上计划；feature 的总控 session 再替你建 ticket、在每个 ticket 里开 session、派任务。session 之间不直接对话，而是靠本地 StateCore 里分层的共享记忆互通：一个 session 记下的进展和决定，同一个 ticket、feature 或 epic 里的其他 session 都能读到。**现在** 页按 epic、feature、ticket 列出每个 session 在做什么，需要你处理的排在最前面。session 有要你拍板的事，会用 `ask_user` 提出来，用 `report` 汇报进展；它们显示在 epic、feature 和 Butler 总控页面的两栏里。每晚 Butler 还会为有进展的 ticket 写一份交接（handoff）。
+几个 ticket 可以归成一个 feature，几个 feature 可以归成一个 epic。在 epic session 里商量好怎么拆，它会建出 feature 并附上计划；feature 的总控 session 再替你建 ticket、在每个 ticket 里开 session、派任务。session 之间不直接对话，而是靠本地 StateCore 里分层的共享记忆互通：一个 session 记下的进展和决定，同一个 ticket、feature 或 epic 里的其他 session 都能读到。**现在** 页按 epic、feature、ticket 列出每个 session 在做什么，需要你处理的排在最前面。session 有要你拍板的事，会用 `ask_user` 提出来，用 `report` 汇报进展；它们显示在 epic、feature 和 Butler 总控页面的 tab 里。每晚 Butler 还会为有进展的 ticket 写一份交接（handoff）。
 
 **本地优先。** Butler 的数据都存在本地的 SQLite 文件里。数据只会经由两条路离开你的电脑：你自己的 `claude`，以及你配置了的话，一个个人 LLM API。这个 API 只在"完整"隐私档位下用于记忆蒸馏，它收到的每一次调用都记在审计页上。
 
@@ -48,7 +48,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
 
   一个 feature 最多同时运行 8 个终端。它的所有 session 还共享一份 feature 记忆 `butler-feature`，用来记前后端之间的 API 约定这类东西。你自己在工作区文件夹里开的 `claude` 也算这个 feature 的总控。归档 feature 时它的 ticket 一起归档；恢复时一起归档的 ticket 也会恢复。
 
-  feature 页最上面是 **整体进度**：跨 feature 里所有 ticket 的汇总，写着卡在哪里、下一步做什么，下面是 ticket 和它们 PR 的表格。汇总由晚间任务为有新动静的 feature 生成，或者在总控里输入 `/handoff`，或者点 **立即更新**。它从不显示完成百分比。整体进度和 ticket 表格都可以点标题前的三角形折叠；折叠后整体进度只显示汇总的开头，以及有几件事卡着。不管上面内容有多少，终端至少占窗口一半的高度。
+  feature 页最上面是 **整体进度**：跨 feature 里所有 ticket 的汇总，写着卡在哪里、下一步做什么。ticket 和它们 PR 的表格在旁边的 **Ticket** tab 里。汇总由晚间任务为有新动静的 feature 生成，或者在总控里输入 `/handoff`，或者点 **立即更新**。它从不显示完成百分比。终端上面的部分是一排 tab（**整体进度**、**Ticket**、**汇报**、**待你决定**），同一时间只显示一个。内容多的 tab 在自己的框里滚动。再点一下当前的 tab 就收起，把空间留给 session。每个页面记着上次停在哪个 tab。tab 上会显示有几件事卡着、等你回话和卡住的圆点以及数量，**待你决定** 有内容时会标红。不管上面内容有多少，终端至少占窗口一半的高度。
 
   ticket 表格的状态列显示每个 ticket 正在运行的 session 此刻在做什么，每 10 秒刷新一次：写代码（以及哪个文件）、读代码、运行带 pre-push hook 的 `git push`、盯 CI、跑测试或其他命令（以及跑了多久）、思考、等你批准，或者等你回话。一轮对话结束后还在跑的命令标为 **后台**；已经被停掉的、或终端重新打开之前就开始的后台命令，不会再显示成在跑。没有运行中 session 的 ticket 显示它平常的状态；有好几个的，显示最需要你的那个。不在 feature 里的 ticket 暂时还没有这一列。
 
@@ -72,7 +72,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
 
   **从 epic 一路开工。** 你同意开工之后，epic session 可以直接打开某个 feature 的总控并让它开工，不用你点进 feature。它调用 `start_feature`，或者调用带 `start` 的 `create_feature`。总控的第一条消息带着规划和 epic 里其他 feature 的数据，并告诉它不用等你确认，按规划建 ticket、在每个 ticket 里开 session；需要你决定的事用 `ask_user`，做完或卡住了用 `report` 汇报。如果这个 feature 的总控已经开着，`start_feature` 不会再开第二个：给了额外的 `instructions` 就在总控空下来时转给它，没给就只说明总控正在运行。feature 没有规划时，epic session 必须给 `instructions`。一个 epic 同时最多 4 个 feature 总控在跑，每个 feature 照旧最多 8 个终端。`create_feature` 建好了 feature 但总控开不了（比如已到上限）时，feature 照样建好，epic session 会被告知原因。
 
-  epic 页每个 feature 一行：汇总的第一句话和一个状态（有 ticket 卡住、等你回话、未开始或进行中）。点一行看详情；ticket 只在 feature 页上列出。归档的 feature 折叠在 **已归档** 下。行下面是仓库、epic session，以及一个至少占窗口一半高度的终端。侧栏里 Epic 分组在 Feature 上面，每个 epic 都能折叠。等待标记和红点会从 ticket 传到 feature 再传到 epic，epic 折叠时也看得见。
+  epic 页终端上面有 **Feature**、**汇报**、**待你决定** 三个 tab。**Feature** 里每个 feature 一行：汇总的第一句话和一个状态（有 ticket 卡住、等你回话、未开始或进行中）。点一行看详情；ticket 只在 feature 页上列出。归档的 feature 折叠在 **已归档** 下。tab 下面是仓库、epic session，以及一个至少占窗口一半高度的终端。侧栏里 Epic 分组在 Feature 上面，每个 epic 都能折叠。等待标记和红点会从 ticket 传到 feature 再传到 epic，epic 折叠时也看得见。
 
   feature 页头部的 **移到 epic** 可以把已有的 feature 移进某个 epic、移出来，或移到另一个 epic。只改归属：工作区和 worktree 都不动。epic 还没有的仓库会加到 epic 上，移出 feature 时不会删 epic 的仓库。已经在运行的 session 要重新打开后才能看到 epic 的记忆。
 
@@ -88,11 +88,11 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
 - **待你决定和汇报。** Butler 开的每个 session 都有两个工具，`ask_user` 和 `report`，所以你不用再在终端里翻找正在等你的那个问题。
   - `ask_user` 记下一件要你拍板的事，可以带选项和背景，然后这一轮结束。
   - `report` 把进展交给 session 上面的总控和你。类型是 `progress`（进展）、`done`（完成）或 `blocked`（卡住）。`done` 和 `blocked` 的汇报会在最近一个开着的总控停下来、你也没在打字时，输入到它的终端里：ticket 的 session 先找它的 ticket 总控，再找 feature 总控，再找 epic session；epic 里 feature 的总控找 epic session；epic 的 `done`、`blocked` 汇报在 Butler 总控开着时送给它。`progress` 只存不送。上面没有谁能收到时，汇报只存下来，并告诉 session。
-  - epic 页和 feature 页在终端上面有两栏。**汇报** 按时间倒序列出 session 的汇报，标明是谁、什么时候。**待你决定** 每个问题一张卡片，有背景、选项、回答框、**去终端** 和 **不用了**。没有内容时两栏收起。**现在** 页的 **需要你** 下面也显示同样的卡片。
+  - epic 页和 feature 页在终端上面有对应的两个 tab。**汇报** 按时间倒序列出 session 的汇报，标明是谁、什么时候。**待你决定** 每个问题一张卡片，有背景、选项、回答框、**去终端** 和 **不用了**。**现在** 页的 **需要你** 下面也显示同样的卡片。
   - 在卡片上选一个选项或打字回答，或者直接在终端里回答都行。卡片上的回答要等 session 停下来才送，送的时候是"你问的『…』，用户的回答：…"，卡片上会写明在等它停下。如果你先在终端里回答了，卡片自己关掉。点 **不用了** 不会送任何东西。
   - **需要你** 现在只算真要你拍板的事：屏幕上的权限确认、提问或退出计划模式的确认，未决的 `ask_user`，真的卡住的 session，以及确实在请你决定的回复。"要我继续吗？""还有别的吗？"这类回复不算，总控也不会为子 session 已经提过的事再出现一行。侧栏的数字是这些行加上未决的待你决定。
   - 这两个工具在 Butler 给 session 写的设置里是放行的，第一次用不会弹权限确认；同一个 server 的其他工具照样要确认。
-- **Butler 总控。** 一个在所有 epic 之上的全局 session，从侧栏的 **Butler 总控** 打开。它的工作目录是 `~/.butler/workspaces/_butler`，用的是 workspace 记忆。同一时间只有一个：已经开着时，点按钮会切到它，想换另一段对话要先在终端里退出。它的页面在终端上面有同样的两栏，显示全部内容。
+- **Butler 总控。** 一个在所有 epic 之上的全局 session，从侧栏的 **Butler 总控** 打开。它的工作目录是 `~/.butler/workspaces/_butler`，用的是 workspace 记忆。同一时间只有一个：已经开着时，点按钮会切到它，想换另一段对话要先在终端里退出。它的页面在终端上面有同样的两个 tab，显示全部内容，默认停在 **待你决定**。
   - **它能看**所有 epic、feature 和 ticket，每个 PR 的 review 和 CI 状态，每个开着的 session 在做什么、是不是需要你，以及未决的待你决定和最近的汇报（`list_epics`、`list_features`、`list_tickets`、`list_prs`、`list_sessions`、`session_activity`、`list_inbox`）。
   - **它能做的**只有说话：`send_message` 给开着的 epic session 或 feature 总控带一句话，等它停下来、你也没在打字时送进去。`refresh_session` 给某个 session 换新。`ask_user` 和 `report` 和别的 session 一样；它自己的汇报只存着。
   - **它不能**建、删或结束任何东西，也不能开 session。这些留给 epic 和 feature 总控。

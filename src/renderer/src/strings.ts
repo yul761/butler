@@ -326,6 +326,7 @@ const ZH = {
   inboxDecisions: "待你决定",
   inboxNoReports: "还没有汇报。",
   inboxNoDecisions: "没有要你决定的。",
+  tabCollapseHint: "再点一下收起",
   inboxReportKinds: { progress: "进展", done: "完成", blocked: "卡住" } as Record<ReportKind, string>,
   inboxWho: (role: InboxRole, ticketKey: string | null, repo: string | null) =>
     role === "ticket" ? `${ticketKey ?? ""}${repo ? `（${repo}）` : ""}`

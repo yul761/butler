@@ -62,3 +62,11 @@ export function setCollapsed(id: string, on: boolean): void {
   set(COLLAPSED_KEY, next.length > 0 ? JSON.stringify(next) : null);
   for (const listener of collapsedListeners) listener(id, on);
 }
+
+/**
+ * 页面上半部分的 tab（feature、epic、Butler 总控页）：每个页面记着停在哪个 tab，空字符串是全部收起。
+ * 没有记录时返回 null，用页面自己的默认 tab。
+ */
+const tabKey = (page: string) => `butler.tab:${page}`;
+export const savedTab = (page: string): string | null => get(tabKey(page));
+export const saveTab = (page: string, tab: string) => set(tabKey(page), tab);

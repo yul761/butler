@@ -4,7 +4,8 @@ import { api } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
 import { epicErrorText } from "./epic-row";
-import { InboxPanes } from "./InboxPanes";
+import { inboxTabs, useInbox } from "./InboxPanes";
+import { PageTabs } from "./PageTabs";
 import { SessionArea, useSessionPanes } from "./WorkspaceParts";
 
 /** hook 事件一来一串：合并成一次重读（和 App 的刷新一样）。 */
@@ -43,7 +44,7 @@ interface Props {
 }
 
 /**
- * Butler 总控页（BTL-190 第 5 点）：上面是所有范围的「汇报 / 待你决定」两栏，下面是 Butler 总控的 session 和终端。
+ * Butler 总控页（BTL-190 第 5 点）：上面是所有范围的「汇报 / 待你决定」两个 tab，下面是 Butler 总控的 session 和终端。
  * 没有仓库条：Butler 总控在自己的工作目录里，只读不改代码。
  */
 export function ButlerPage({ focusSession, onOpenTarget }: Props) {
@@ -56,6 +57,7 @@ export function ButlerPage({ focusSession, onOpenTarget }: Props) {
 function ButlerArea({ view, focusSession, onOpenTarget }: Props & { view: ButlerView }) {
   const [error, setError] = useState<string | null>(null);
   const errorText = (e: unknown) => epicErrorText(e, S);
+  const inbox = useInbox({ all: true });
   const panes = useSessionPanes(view.sessions, {
     openSession: (sessionId) => api.openButlerSession({ sessionId }),
     openFailure: (reason) => S.butlerOpenErrors[reason] ?? S.openErrors[reason] ?? reason,
@@ -81,7 +83,8 @@ function ButlerArea({ view, focusSession, onOpenTarget }: Props & { view: Butler
       </header>
       <p className="muted butler-intro">{S.butlerIntro}</p>
 
-      <InboxPanes scope={{ all: true }} onGo={goTo} alwaysShow />
+      {/* 这一页就是来回答问题的：默认停在「待你决定」。 */}
+      <PageTabs page="butler" defaultTab="decisions" tabs={inboxTabs(inbox, goTo)} />
 
       <SessionArea
         sessions={view.sessions}

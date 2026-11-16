@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { S, STRINGS } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, openTab, pageTab, terminalText, test, type Sandbox } from "./fixtures";
 
 /** 在沙盒里建 shop/frontend、shop/backend 两个仓库，选上一层目录建 feature「checkout」（两个仓库默认都勾上）。 */
 async function createCheckoutFeature(page: Page, s: Sandbox): Promise<void> {
@@ -260,21 +260,28 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   const dms2Session = sessionIn(beWorktree)!;
   expect(dms2Session).toBeTruthy();
 
-  // 还没有汇总；ticket 表里 DMS-1 已有 PR（只有一个 PR，标签不带仓库名），DMS-2 还没有。
+  // 还没有汇总（默认停在「整体进度」tab）；ticket tab 里 DMS-1 已有 PR（只有一个 PR，标签不带仓库名），DMS-2 还没有。
   await featurePage();
   const progress = page.locator(".feature-page .feature-progress");
   const row = (key: string) => page.locator(".feature-page .ticket-table tr").filter({ hasText: key });
+  await expect(pageTab(page, S.featureProgress)).toHaveAttribute("aria-selected", "true");
   await expect(progress.getByText(S.featureSummaryNone, { exact: true })).toBeVisible();
+  await openTab(page, S.featureTickets);
+  await expect(progress).toHaveCount(0);
   await expect(row("DMS-1").locator(".pill")).toHaveText([`#12 ${S.prPill.approved}`]);
   await expect(row("DMS-2").locator(".pill")).toHaveText([S.noPr]);
-  // ticket 表能收起，离开再回来还是收起的；再展开。
-  const ticketsToggle = page.locator(".feature-page .feature-tickets .section-toggle");
-  await ticketsToggle.click();
-  await expect(page.locator(".feature-page .ticket-table")).toHaveCount(0);
+  // 停在哪个 tab 记着：离开再回来还是 ticket 表。再点一下当前 tab 收起，离开再回来还是收起的；再展开。
   await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
   await featurePage();
-  await expect(page.locator(".feature-page .ticket-table")).toHaveCount(0);
-  await ticketsToggle.click();
+  await expect(row("DMS-1")).toBeVisible();
+  await pageTab(page, S.featureTickets).click();
+  await expect(page.locator(".feature-page .page-tabs-panel")).toHaveCount(0);
+  await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
+  await featurePage();
+  await expect(page.locator(".feature-page .page-tabs-panel")).toHaveCount(0);
+  // 收起时「新建 ticket」还在 tab 条上。
+  await expect(page.locator(".feature-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newTicket}`, exact: true })).toBeVisible();
+  await openTab(page, S.featureTickets);
   await expect(row("DMS-1")).toBeVisible();
 
   // 3. 总控里 /handoff：输出 butler-feature-handoff，存成 feature 汇总。
@@ -283,6 +290,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   const coordinatorId = sessionIn(workspace)!;
   expect(coordinatorId).toBeTruthy();
   await typeLine(page, "/handoff");
+  await openTab(page, S.featureProgress);
   const summary = progress.locator(".feature-summary");
   await expect(summary.locator("p").first()).toHaveText("结账页前端（DMS-1）已提 PR 等合并；后端下单接口（DMS-2）还在写，两边还没联调。");
   await expect(summary.locator(".blocker")).toHaveText([S.labelled(S.featureBlocked, "DMS-2 等支付网关的测试账号")]);
@@ -294,6 +302,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
 
   // 4. /handoff 之后后台给有活动的 DMS-2 跑了 handoff（fork 它的 session）：PR 已合并。DMS-1 没有新活动，不跑。
   //    整个 feature 有两个 PR 了，标签带上仓库名。
+  await openTab(page, S.featureTickets);
   await expect(row("DMS-2").locator(".pill")).toHaveText([`backend#7 ${S.prPill.merged}`]);
   await expect(row("DMS-1").locator(".pill")).toHaveText([`frontend#12 ${S.prPill.approved}`]);
   expect(headlessLines()).toHaveLength(1);
@@ -303,6 +312,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   expect(headlessLines().filter((l) => l.includes(`cwd=${feWorktree}`))).toEqual([]);
 
   // 5. “立即更新”：子 ticket 都没有新活动，直接 fork 总控生成汇总；来源变成“手动更新”。
+  await openTab(page, S.featureProgress);
   await progress.getByRole("button", { name: S.runFeatureSummary, exact: true }).click();
   await expect(progress.getByText(S.featureSummaryStored, { exact: true })).toBeVisible();
   await expect(summary.locator("p").first()).toHaveText("后端下单接口（DMS-2）已合并；前端结账页（DMS-1）的 PR 已 approve，合并后就能联调。");
@@ -312,23 +322,50 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   expect(headlessLines()).toHaveLength(2);
   expect(headlessLines()[1]).toContain(`--resume ${coordinatorId} --fork-session`);
 
-  // 整体进度能收起：只留一行开头和卡住的条数，离开再回来还是收起的；终端至少占窗口一半高。再展开。
-  const progressToggle = progress.locator(".section-toggle");
-  await progressToggle.click();
+  // 「整体进度」tab 上标着卡住的条数，不用打开也看得到。再点一下收起，离开再回来还是收起的；终端至少占窗口一半高。再展开。
+  const progressTab = pageTab(page, S.featureProgress);
+  await expect(progressTab.locator(".blocker")).toHaveText(S.featureBlockedCount(1));
+  await progressTab.click();
   await expect(summary).toHaveCount(0);
-  await expect(progress.locator(".preview")).toHaveText("后端下单接口（DMS-2）已合并；前端结账页（DMS-1）的 PR 已 approve，合并后就能联调。");
-  await expect(progress.locator("h3 .blocker")).toHaveText(S.featureBlockedCount(1));
   await ticketPage("DMS-1");
   await featurePage();
   await expect(summary).toHaveCount(0);
   const heights = await page.evaluate(() => ({ terminals: document.querySelector(".feature-page .terminals")!.getBoundingClientRect().height, window: window.innerHeight }));
   expect(heights.terminals).toBeGreaterThanOrEqual(heights.window / 2 - 1);
-  await progressToggle.click();
+  await openTab(page, S.featureProgress);
   await expect(summary.locator("p").first()).toBeVisible();
   if (shots) {
     mkdirSync(shots, { recursive: true });
     await page.screenshot({ path: join(shots, "feature-page-zh.png") });
   }
+
+  // 汇报和「待你决定」又多又长（以前它们在两栏里不缩，把整体进度挤没了、还盖住终端）：现在各是一个 tab，
+  // 内容在自己的框里滚动，tab 条一直看得到，终端至少占窗口一半高。汇报已处理过（dismissed），不会送进总控。
+  const long = "很长的一段汇报，".repeat(40);
+  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const [{ id: featureId }] = db.prepare("SELECT id FROM features WHERE name = 'checkout'").all() as { id: number }[];
+  const insert = db.prepare("INSERT INTO inbox_items (kind, session_id, feature_id, text, context, report_kind, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+  for (let n = 0; n < 12; n++) insert.run("report", coordinatorId, featureId, `${n} ${long}`, null, "done", "dismissed", Date.now() - n);
+  insert.run("decision", coordinatorId, featureId, `要不要先联调？${long}`, long, null, "pending", Date.now());
+  db.close();
+  await ticketPage("DMS-1");
+  await featurePage();
+  await expect(pageTab(page, S.inboxDecisions)).toHaveClass(/attention/);
+  const panel = page.locator(".feature-page .page-tabs-panel");
+  for (const name of [S.inboxReports, S.inboxDecisions]) {
+    await openTab(page, name);
+    await expect(panel).toContainText(long.slice(0, 20));
+    await expect(pageTab(page, S.featureProgress)).toBeInViewport();
+    expect(await panel.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
+    await expectTerminalsKeepHalf(page);
+    if (shots) await page.screenshot({ path: join(shots, `feature-page-long-${name === S.inboxReports ? "reports" : "decisions"}.png`) });
+  }
+  await openTab(page, S.featureProgress);
+  await expect(summary.locator("p").first()).toBeVisible();
+  await expectTerminalsKeepHalf(page);
+  const cleanup = new DatabaseSync(join(s.butlerHome, "app.db"));
+  cleanup.prepare("DELETE FROM inbox_items WHERE feature_id = ?").run(featureId);
+  cleanup.close();
 
   // 6. 切到英文（同 language.spec：不设 BUTLER_LANG 重启，在设置里选 English，窗口重新加载）后再更新一次。
   await app.close();
@@ -340,14 +377,15 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await expect(en.locator(".sidebar button.nav").filter({ hasText: new RegExp(`^${E.settings}$`) })).toBeVisible();
   await en.locator(".sidebar .ticket.feature").click();
   const enProgress = en.locator(".feature-page .feature-progress");
-  await expect(enProgress.locator(".section-toggle")).toContainText(E.featureProgress);
+  await openTab(en, E.featureProgress);
   await enProgress.getByRole("button", { name: E.runFeatureSummary, exact: true }).click();
   await expect(enProgress.getByText(E.featureSummaryStored, { exact: true })).toBeVisible();
   await expect(enProgress.locator(".feature-summary p").first()).toContainText("The backend order API (DMS-2) is merged");
   await expect(enProgress.locator(".blocker")).toHaveText([E.labelled(E.featureBlocked, "DMS-1 is waiting for the design review of the payment form")]);
   await expect(enProgress.locator(".summary-meta .muted").first()).toContainText(E.featureSummaryTrigger.manual);
-  await expect(en.locator(".feature-page .ticket-table tr").filter({ hasText: "DMS-2" }).locator(".pill")).toHaveText([`backend#7 ${E.prPill.merged}`]);
   if (shots) await en.screenshot({ path: join(shots, "feature-page-en.png") });
+  await openTab(en, E.featureTickets);
+  await expect(en.locator(".feature-page .ticket-table tr").filter({ hasText: "DMS-2" }).locator(".pill")).toHaveText([`backend#7 ${E.prPill.merged}`]);
 });
 
 /** 假 claude 跑的命令：够长，状态列放不下；第一个词让它归类成“跑测试”。 */
@@ -419,7 +457,8 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   const onFeaturePage = () => expect(page.getByRole("heading", { name: "checkout", exact: true })).toBeVisible();
   const onTicketPage = (key: string) => expect(page.getByRole("heading", { name: key, exact: true })).toBeVisible();
   const row = (key: string) => page.locator(".feature-page .ticket-table tr").filter({ hasText: key });
-  const overview = page.locator(".feature-page .feature-overview");
+  // ticket 表所在的 tab 内容框：内容多时它自己滚动。
+  const overview = page.locator(".feature-page .page-tabs-panel");
   const overviewScroll = () => overview.evaluate((e) => e.scrollTop);
   const scrollOverviewToTop = () => overview.evaluate((e) => void (e.scrollTop = 0));
 
@@ -444,6 +483,7 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
 
   // 3. 状态列显示这个 session 此刻在干什么；没有运行中 session 的 DMS-2 还是原来的 ticket 状态。
   await featurePage();
+  await openTab(page, S.featureTickets);
   const activity = row("DMS-1").locator(".status .activity");
   await expect(activity.locator(".main")).toHaveText(S.activity.test);
   await expect(activity.locator("small")).toContainText(LONG_COMMAND.slice(0, 40));
@@ -514,7 +554,7 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await expect(panel).toBeVisible();
   const heights = await page.evaluate(() => ({
     panel: document.querySelector(".stuck-panel")!.getBoundingClientRect().height,
-    overview: document.querySelector(".feature-overview")!.clientHeight,
+    overview: document.querySelector(".page-tabs-panel")!.clientHeight,
   }));
   expect(heights.panel, JSON.stringify(heights)).toBeGreaterThan(heights.overview);
   await expect(fix).toBeInViewport({ ratio: 1 });
@@ -615,6 +655,7 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
 
   // 17. 修复 session 比总控新，但 feature 汇总还是 fork 总控：它不会被选成总控。
   await featurePage();
+  await openTab(page, S.featureProgress);
   const progress = page.locator(".feature-page .feature-progress");
   await progress.getByRole("button", { name: S.runFeatureSummary, exact: true }).click();
   await expect(progress.getByText(S.featureSummaryStored, { exact: true })).toBeVisible();
@@ -637,6 +678,7 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await expect.poll(() => terminalText(en)).toContain("fake claude ready");
   await typeLine(en, "/fake-bash git push origin feature/checkout");
   await en.locator(".sidebar .ticket.feature").click();
+  await openTab(en, E.featureTickets);
   const enRow = en.locator(".feature-page .ticket-table tr").filter({ hasText: "DMS-2" });
   await expect(enRow.locator(".activity .main")).toHaveText(E.activity.push);
   await expect(enRow.getByRole("button", { name: `DMS-2 ${E.stuckDot}`, exact: true })).toBeVisible();
@@ -672,6 +714,7 @@ test("live status: a background command stays on the row after its turn ends", a
   await expect.poll(() => terminalText(page)).toContain("收到：/fake-bg git push");
 
   await page.locator(".sidebar .ticket.feature").click();
+  await openTab(page, S.featureTickets);
   const row = page.locator(".feature-page .ticket-table tr").filter({ hasText: "DMS-1" });
   await expect(row.locator(".activity .main")).toHaveText(S.activityBackground(S.activity.push));
   // 没有卡住的行也带完整文字的提示：这一列放不下时靠它看全。

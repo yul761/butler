@@ -4,8 +4,9 @@ import type { EpicView, FeatureView, InboxItemView, NowTarget, TicketView } from
 import { api, ButlerError } from "../api";
 import { prLabel, prPill, summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary-view";
 import { S, STATUS_LABEL } from "../strings";
-import { InboxPanes } from "./InboxPanes";
+import { inboxTabs, useInbox } from "./InboxPanes";
 import { NewTicketDialog } from "./NewTicketDialog";
+import { PageTabs } from "./PageTabs";
 import { StuckPanel } from "./StuckPanel";
 import { activityText, useNow } from "./TicketActivity";
 import { useCollapsed } from "./useCollapsed";
@@ -31,8 +32,8 @@ function formatTime(ms: number): string {
 }
 
 /**
- * feature 页（设计文档 2026-10-26、2026-10-28）：从上到下是名字和工作区、整体进度（feature 汇总）、
- * ticket 表（带 PR 状态），然后是仓库、feature 总控 session 和它们的终端。
+ * feature 页（设计文档 2026-10-26、2026-10-28）：从上到下是名字和工作区，一排 tab（整体进度、ticket 表、汇报、待你决定，
+ * 一次只显示一块，各自滚动，不互相挤），然后是仓库、feature 总控 session 和它们的终端。
  */
 export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, focusSession, onOpenTarget }: Props) {
   const [error, setError] = useState<string | null>(null);
@@ -74,14 +75,14 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
     api.dismissActivity(sessionId).catch(showError);
   }
 
-  const [ticketsCollapsed, toggleTickets] = useCollapsed(`tickets:${feature.id}`);
-
   // 整个 feature 不止一个 PR 时，PR 标签带上仓库名。
   const allPrs = Object.values(feature.ticketPrs).flat();
   const now = useNow();
   const anyStuck = Object.values(feature.activity).some((a) => a.stuck === true);
   // 修复 session 的名字带上它修的那个 ticket（从卡住的 session 反查）。
   const fixedTicket = (stuckId: string) => feature.tickets.find((t) => [...t.sessions, ...t.hiddenSessions].some((x) => x.id === stuckId))?.key ?? null;
+  const inbox = useInbox({ featureId: feature.id });
+  const blockers = feature.summary?.payload?.blockers.length ?? 0;
 
   return (
     <div className="ticket-page feature-page">
@@ -109,42 +110,55 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
         )}
       </WorkspaceHeader>
 
-      <div className="feature-overview">
-        <FeatureProgress feature={feature} onOpenTicket={onOpenTicket} />
-        <section className="feature-tickets">
-          <h3>
-            <button className="section-toggle" aria-expanded={!ticketsCollapsed} onClick={toggleTickets}>
-              <span className="twisty">{ticketsCollapsed ? "▸" : "▾"}</span>
-              {S.featureTickets}
-              <span className="muted">{feature.tickets.length}</span>
-              {ticketsCollapsed && feature.tickets.some((t) => t.waiting) && <span className="badge" title={S.waiting}>●</span>}
-              {ticketsCollapsed && anyStuck && <span className="stuck-mark" title={S.stuckDot}>●</span>}
-            </button>
-          </h3>
-          {ticketsCollapsed ? null : feature.tickets.length === 0 ? (
-            <p className="muted">{S.noFeatureTickets}</p>
-          ) : (
-            <table className="ticket-table">
-              <tbody>
-                {feature.tickets.map((t) => (
-                  <TicketRow
-                    key={t.key}
-                    ticket={t}
-                    activity={feature.activity[t.key]}
-                    prs={feature.ticketPrs[t.key] ?? []}
-                    allPrs={allPrs}
-                    now={now}
-                    onOpenTicket={onOpenTicket}
-                    onFix={openFix}
-                    onDismiss={dismissStuck}
-                  />
-                ))}
-              </tbody>
-            </table>
-          )}
-          {!ticketsCollapsed && <button onClick={() => setNewTicket(true)}>+ {S.newTicket}</button>}
-        </section>
-      </div>
+      <PageTabs
+        page={`feature:${feature.id}`}
+        defaultTab="progress"
+        actions={<button onClick={() => setNewTicket(true)}>+ {S.newTicket}</button>}
+        tabs={[
+          {
+            id: "progress",
+            label: <>{S.featureProgress}{blockers > 0 && <span className="blocker">{S.featureBlockedCount(blockers)}</span>}</>,
+            content: <FeatureProgress feature={feature} onOpenTicket={onOpenTicket} />,
+          },
+          {
+            id: "tickets",
+            label: (
+              <>
+                {S.featureTickets}
+                <span className="muted">{feature.tickets.length}</span>
+                {feature.tickets.some((t) => t.waiting) && <span className="badge" title={S.waiting}>●</span>}
+                {anyStuck && <span className="stuck-mark" title={S.stuckDot}>●</span>}
+              </>
+            ),
+            content: (
+              <section className="feature-tickets">
+                {feature.tickets.length === 0 ? (
+                  <p className="muted">{S.noFeatureTickets}</p>
+                ) : (
+                  <table className="ticket-table">
+                    <tbody>
+                      {feature.tickets.map((t) => (
+                        <TicketRow
+                          key={t.key}
+                          ticket={t}
+                          activity={feature.activity[t.key]}
+                          prs={feature.ticketPrs[t.key] ?? []}
+                          allPrs={allPrs}
+                          now={now}
+                          onOpenTicket={onOpenTicket}
+                          onFix={openFix}
+                          onDismiss={dismissStuck}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </section>
+            ),
+          },
+          ...inboxTabs(inbox, goTo),
+        ]}
+      />
       {newTicket && (
         <NewTicketDialog
           feature={feature}
@@ -153,8 +167,6 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
           onCreated={(key) => (setNewTicket(false), onTicketCreated(key))}
         />
       )}
-
-      <InboxPanes scope={{ featureId: feature.id }} onGo={goTo} />
 
       <SessionArea
         repos={feature.repos}
@@ -177,12 +189,11 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
 
 /**
  * 整体进度（设计文档 2026-10-28）：最新一份 feature 汇总的那段话、卡住的地方、下一步，
- * 以及生成时间、来源和“立即更新”按钮。只显示最新一份，不做历史。可以收起（每个 feature 各记各的），收起时只留一行开头。
+ * 以及生成时间、来源和“立即更新”按钮。只显示最新一份，不做历史。收起由上面的 tab 管。
  */
 function FeatureProgress({ feature, onOpenTicket }: { feature: FeatureView; onOpenTicket: (key: string) => void }) {
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<{ text: string; bad: boolean } | null>(null);
-  const [collapsed, toggle] = useCollapsed(`progress:${feature.id}`);
   const summary = feature.summary;
   // 汇总里的 ticket 后来可能归档了：只有还在这个 feature 下的才能点。
   const keys = new Set(feature.tickets.map((t) => t.key));
@@ -200,21 +211,9 @@ function FeatureProgress({ feature, onOpenTicket }: { feature: FeatureView; onOp
     }
   }
 
-  // 收起时标题后面只留一行：汇总的开头，卡住时再加卡住的条数。
-  const preview = summary?.payload?.summary ?? "";
-  const blockers = summary?.payload?.blockers.length ?? 0;
-
   return (
     <section className="feature-progress">
-      <h3>
-        <button className="section-toggle" aria-expanded={!collapsed} onClick={toggle}>
-          <span className="twisty">{collapsed ? "▸" : "▾"}</span>
-          {S.featureProgress}
-        </button>
-        {collapsed && blockers > 0 && <span className="blocker">{S.featureBlockedCount(blockers)}</span>}
-        {collapsed && preview && <span className="preview muted" title={preview}>{preview}</span>}
-      </h3>
-      {collapsed ? null : !summary ? (
+      {!summary ? (
         <p className="muted">{S.featureSummaryNone}</p>
       ) : summary.payload ? (
         <div className="feature-summary">
@@ -247,14 +246,12 @@ function FeatureProgress({ feature, onOpenTicket }: { feature: FeatureView; onOp
           <pre className="raw">{summary.rawText ?? ""}</pre>
         </div>
       )}
-      {!collapsed && (
-        <div className="summary-meta">
-          {summary && <span className="muted">{formatTime(summary.createdAt)} · {S.featureSummaryTrigger[summary.trigger]}</span>}
-          <button disabled={running} onClick={() => void runNow()}>{running ? S.featureSummaryRunning : S.runFeatureSummary}</button>
-          {message && <span className={message.bad ? "error" : "muted"}>{message.text}</span>}
-        </div>
-      )}
-      {!collapsed && feature.brief && <FeatureBrief featureId={feature.id} brief={feature.brief} />}
+      <div className="summary-meta">
+        {summary && <span className="muted">{formatTime(summary.createdAt)} · {S.featureSummaryTrigger[summary.trigger]}</span>}
+        <button disabled={running} onClick={() => void runNow()}>{running ? S.featureSummaryRunning : S.runFeatureSummary}</button>
+        {message && <span className={message.bad ? "error" : "muted"}>{message.text}</span>}
+      </div>
+      {feature.brief && <FeatureBrief featureId={feature.id} brief={feature.brief} />}
     </section>
   );
 }
@@ -293,15 +290,15 @@ function TicketRow({ ticket: t, activity, prs, allPrs, now, onOpenTicket, onFix,
   const [open, toggle] = useCollapsed(`stuck-open:${t.key}`);
   const live = activity && activity.kind !== "idle" ? activityText(activity, S, now) : null;
   const stuck = activity?.stuck === true ? activity : null;
-  // 概览区放不下时面板可能在滚动范围外面。只在用户明确要看时滚过去（点红点）：
+  // tab 的框放不下时面板可能在滚动范围外面。只在用户明确要看时滚过去（点红点）：
   // 记着“展开”的面板在回到这一页或再次卡住时自己出现，不动用户正在看的位置。
   const panelRow = useRef<HTMLTableRowElement>(null);
   const [dotClicks, setDotClicks] = useState(0);
-  // 面板整个放得下就整个显示（nearest）；比概览区还高时 nearest 不会带出底部，按钮在最下面，改成对齐底边。
+  // 面板整个放得下就整个显示（nearest）；比 tab 的框还高时 nearest 不会带出底部，按钮在最下面，改成对齐底边。
   const showPanel = () => {
     const row = panelRow.current;
     if (!row) return;
-    const port = row.closest(".feature-overview");
+    const port = row.closest(".page-tabs-panel");
     const tall = port !== null && row.getBoundingClientRect().height > port.clientHeight;
     row.scrollIntoView({ block: tall ? "end" : "nearest" });
   };

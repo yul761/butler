@@ -4,6 +4,7 @@ import { api } from "../api";
 import { reportError } from "../errors";
 import { inboxWho } from "../now-view";
 import { S } from "../strings";
+import type { PageTab } from "./PageTabs";
 
 /** hook 事件一来一串：合并成一次重读（和 App 的刷新一样）。 */
 const STATE_DEBOUNCE_MS = 80;
@@ -38,35 +39,50 @@ export function useInbox(scope: InboxScope): InboxView | null {
 }
 
 /**
- * feature 页、epic 页终端上面的两栏（BTL-190 第 2+3 点）：左边是汇报（从新到旧），右边是「待你决定」的卡片。两栏都空时整块不显示。
- * onGo：卡片上的「去终端」。alwaysShow：都空也显示（Butler 总控页，BTL-190 第 5 点）。
+ * 「汇报」和「待你决定」两个 tab（BTL-190 第 2+3 点）：feature 页、epic 页、Butler 总控页终端上面的 tab 里各占一个。
+ * 汇报从新到旧；「待你决定」有东西时 tab 标红。还没取到数据时数量先不显示。onGo：卡片上的「去终端」。
  */
-export function InboxPanes({ scope, onGo, alwaysShow }: { scope: InboxScope; onGo: (item: InboxItemView) => void; alwaysShow?: boolean }) {
-  const view = useInbox(scope);
-  if (!view || (!alwaysShow && view.decisions.length === 0 && view.reports.length === 0)) return null;
+export function inboxTabs(view: InboxView | null, onGo: (item: InboxItemView) => void): PageTab[] {
+  const reports = view?.reports ?? [];
+  const decisions = view?.decisions ?? [];
+  return [
+    {
+      id: "reports",
+      label: <>{S.inboxReports}{view && <span className="muted">{reports.length}</span>}</>,
+      content: <InboxReports reports={reports} />,
+    },
+    {
+      id: "decisions",
+      label: <>{S.inboxDecisions}{view && <span className="count">{decisions.length}</span>}</>,
+      className: decisions.length > 0 ? "attention" : undefined,
+      content: <InboxDecisions decisions={decisions} onGo={onGo} />,
+    },
+  ];
+}
+
+function InboxReports({ reports }: { reports: InboxItemView[] }) {
+  if (reports.length === 0) return <p className="muted inbox-reports">{S.inboxNoReports}</p>;
   return (
-    <div className="inbox-panes">
-      <section className="inbox-pane inbox-reports">
-        <h3>{S.inboxReports}<span className="muted">{view.reports.length}</span></h3>
-        {view.reports.length === 0 ? <p className="muted">{S.inboxNoReports}</p> : (
-          <ul>
-            {view.reports.map((r) => (
-              <li key={r.id} className={`inbox-report ${r.reportKind ?? "progress"}`}>
-                <div className="inbox-head">
-                  <span className="who">{inboxWho(r, S)}</span>
-                  <span className={`inbox-kind ${r.reportKind ?? "progress"}`}>{S.inboxReportKinds[r.reportKind ?? "progress"]}</span>
-                  <span className="muted">{timeOf(r.createdAt)}</span>
-                </div>
-                <p>{r.text}</p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-      <section className="inbox-pane inbox-decisions">
-        <h3>{S.inboxDecisions}<span className="muted">{view.decisions.length}</span></h3>
-        {view.decisions.length === 0 ? <p className="muted">{S.inboxNoDecisions}</p> : view.decisions.map((d) => <DecisionCard key={d.id} item={d} onGo={() => onGo(d)} />)}
-      </section>
+    <ul className="inbox-reports">
+      {reports.map((r) => (
+        <li key={r.id} className={`inbox-report ${r.reportKind ?? "progress"}`}>
+          <div className="inbox-head">
+            <span className="who">{inboxWho(r, S)}</span>
+            <span className={`inbox-kind ${r.reportKind ?? "progress"}`}>{S.inboxReportKinds[r.reportKind ?? "progress"]}</span>
+            <span className="muted">{timeOf(r.createdAt)}</span>
+          </div>
+          <p>{r.text}</p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function InboxDecisions({ decisions, onGo }: { decisions: InboxItemView[]; onGo: (item: InboxItemView) => void }) {
+  if (decisions.length === 0) return <p className="muted inbox-decisions">{S.inboxNoDecisions}</p>;
+  return (
+    <div className="inbox-decisions">
+      {decisions.map((d) => <DecisionCard key={d.id} item={d} onGo={() => onGo(d)} />)}
     </div>
   );
 }
