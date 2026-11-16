@@ -167,12 +167,15 @@ describe("merge coordinator helpers", () => {
     run(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
     run(repo, "checkout", "-b", "feat");
     expect(await firstCommitAt(repo, "feat")).toBeNull();
-    const before = Date.now();
-    commitFile(repo, "a.txt", "1", "one");
-    commitFile(repo, "b.txt", "2", "two");
-    const t = await firstCommitAt(repo, "feat");
-    expect(t).not.toBeNull();
-    expect(Math.abs((t as number) - before)).toBeLessThan(3000);
+    const at = (sec: number) => ({ GIT_AUTHOR_DATE: `@${sec} +0000`, GIT_COMMITTER_DATE: `@${sec} +0000` });
+    const commitAt = (file: string, sec: number) => {
+      writeFileSync(join(repo, file), file);
+      run(repo, "add", ".");
+      execFileSync("git", ["commit", "-m", file], { cwd: repo, stdio: "ignore", env: { ...process.env, ...at(sec) } });
+    };
+    commitAt("a.txt", 1_700_000_000);
+    commitAt("b.txt", 1_700_000_100);
+    expect(await firstCommitAt(repo, "feat")).toBe(1_700_000_000_000);
   });
 
   it("upstreamRef prefers origin/<branch> when it exists", async () => {

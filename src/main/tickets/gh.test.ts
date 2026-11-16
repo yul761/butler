@@ -142,22 +142,24 @@ describe.skipIf(process.platform === "win32")("prStatus / branchRuns / failedLog
       { id: 11, user: { login: "copilot-pull-request-reviewer[bot]" }, body: "b1", created_at: "2026-01-02T00:00:00Z", html_url: "https://x/r1", path: "a.ts", line: 3, pull_request_review_id: 77 },
       { id: 12, user: { login: "alice" }, body: "b2", created_at: "2026-01-03T00:00:00Z", html_url: "https://x/r2", path: "b.ts", line: null, pull_request_review_id: null },
     ];
-    const dir = fakeGh(`echo "$@" > "$(dirname "$0")/args.txt"\ncat <<'JSON'\n${JSON.stringify(rest)}\nJSON`);
+    const dir = fakeGh(`echo "$@" > "$(dirname "$0")/args.txt"\ncat <<'JSON'\n${rest.map((x) => JSON.stringify(x)).join("\n")}\nJSON`);
     expect(await reviewComments(dir, 5, 5000)).toEqual([
       { id: "11", author: "copilot-pull-request-reviewer[bot]", body: "b1", createdAt: Date.parse("2026-01-02T00:00:00Z"), url: "https://x/r1", path: "a.ts", line: 3, reviewId: "77" },
       { id: "12", author: "alice", body: "b2", createdAt: Date.parse("2026-01-03T00:00:00Z"), url: "https://x/r2", path: "b.ts", line: null, reviewId: null },
     ]);
-    expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe("api repos/{owner}/{repo}/pulls/5/comments --paginate");
+    expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe("api repos/{owner}/{repo}/pulls/5/comments --paginate --jq .[]");
     fakeGh("exit 1");
     expect(await reviewComments(dir, 5, 5000)).toBeNull();
     fakeGh("echo not json");
     expect(await reviewComments(dir, 5, 5000)).toBeNull();
   });
 
-  it("reviewComments joins paginated output, even when a body contains brackets", async () => {
+  it("reviewComments reads one object per line, even when a body has brackets, quotes and newlines, and returns null if any line is bad", async () => {
     const c = (id: number, body: string) => ({ id, user: { login: "a" }, body, created_at: "2026-01-02T00:00:00Z" });
-    const dir = fakeGh(`cat <<'JSON'\n${JSON.stringify([c(1, 'x ] [ "y"')])}\n${JSON.stringify([c(2, "z")])}\nJSON`);
-    expect((await reviewComments(dir, 5, 5000))?.map((x) => [x.id, x.body])).toEqual([["1", 'x ] [ "y"'], ["2", "z"]]);
+    const dir = fakeGh(`cat <<'JSON'\n${JSON.stringify(c(1, 'x ] [ "y"\nz'))}\n\n${JSON.stringify(c(2, "z"))}\nJSON`);
+    expect((await reviewComments(dir, 5, 5000))?.map((x) => [x.id, x.body])).toEqual([["1", 'x ] [ "y"\nz'], ["2", "z"]]);
+    fakeGh(`cat <<'JSON'\n${JSON.stringify(c(1, "a"))}\n{broken\nJSON`);
+    expect(await reviewComments(dir, 5, 5000)).toBeNull();
   });
 
   it("branchRuns keeps only the newest head sha", async () => {

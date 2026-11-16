@@ -264,35 +264,24 @@ export async function prStatus(cwd: string, branch: string, timeoutMs: number): 
   };
 }
 
-/** gh api --paginate 把每页的数组首尾相接输出（[..][..]）：按括号深度切开，字符串里的括号不算，合并成一个数组。出错返回 null。 */
-function parsePages(text: string | null): unknown[] | null {
+/** --jq '.[]' 的输出：每行一个紧凑 JSON 对象。空行跳过；任何一行解析失败整体返回 null（丢一个对象会被当成没有数据）。 */
+function parseLines(text: string | null): unknown[] | null {
   if (text === null) return null;
-  const all: unknown[] = [];
-  let depth = 0;
-  let start = 0;
-  let pages = 0;
-  let inStr = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inStr) {
-      if (c === "\\") i++;
-      else if (c === '"') inStr = false;
-    } else if (c === '"') inStr = true;
-    else if (c === "[") {
-      if (depth++ === 0) start = i;
-    } else if (c === "]" && --depth === 0) {
-      const page = parseJson(text.slice(start, i + 1));
-      if (!Array.isArray(page)) return null;
-      all.push(...page);
-      pages++;
+  const out: unknown[] = [];
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      return null;
     }
   }
-  return depth === 0 && pages > 0 ? all : null;
+  return out;
 }
 
 /** 行内 review 评论：gh api repos/{owner}/{repo}/pulls/N/comments --paginate。失败返回 null。 */
 export async function reviewComments(cwd: string, number: number, timeoutMs: number): Promise<PrComment[] | null> {
-  const j = parsePages(await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/comments`, "--paginate"], timeoutMs, 8 * 1024 * 1024));
+  const j = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/comments`, "--paginate", "--jq", ".[]"], timeoutMs, 8 * 1024 * 1024));
   if (j === null) return null;
   const out: PrComment[] = [];
   for (const item of j) {
