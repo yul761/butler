@@ -192,11 +192,11 @@ function runGhDetail(cwd: string, args: string[], timeoutMs: number, maxBuffer: 
   });
 }
 
-/** slug（github.com 上是 owner/repo，其他主机是 host/owner/repo）→ gh 的环境变量，让 {owner}/{repo} 从它解析而不是从 cwd。没有 slug 返回 undefined。 */
+/** slug（github.com 上是 owner/repo，其他主机是 host/owner/repo）→ gh 的环境变量（两段的 slug 固定 GH_HOST=github.com，不受环境里的 GH_HOST 影响），让 {owner}/{repo} 从它解析而不是从 cwd。没有 slug 返回 undefined。 */
 function repoEnv(repo: string | null | undefined): NodeJS.ProcessEnv | undefined {
   if (!repo) return undefined;
   const parts = repo.split("/");
-  return parts.length === 3 ? { GH_REPO: repo, GH_HOST: parts[0] } : { GH_REPO: repo };
+  return parts.length === 3 ? { GH_REPO: repo, GH_HOST: parts[0] } : { GH_REPO: repo, GH_HOST: "github.com" };
 }
 
 function parseJson(text: string | null): unknown {
@@ -209,9 +209,9 @@ function parseJson(text: string | null): unknown {
 }
 
 const REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"]);
-/** gh pr view 给的 author 不带 [bot] 后缀，GitHub App 要靠名字认；authoritative 的判断是 REST 的 user.type（reviewAuthors）。 */
 /** AI 审查者：和 Copilot 一样当作 reviewer 处理（记 copilot_review、取行内评论）。比较时去掉 [bot] 后缀。 */
 const AI_REVIEWERS = ["chatgpt-codex-connector", "copilot-pull-request-reviewer"];
+/** gh pr view 给的 author 不带 [bot] 后缀，GitHub App 要靠名字认；authoritative 的判断是 REST 的 user.type（reviewAuthors）。 */
 const BOT_LOGINS = [
   "github-actions", "dependabot", "renovate", "coderabbitai", "gemini-code-assist", "sourcery-ai",
   "codecov", "sonarcloud", "vercel", "netlify", "github-advanced-security", "cursor",

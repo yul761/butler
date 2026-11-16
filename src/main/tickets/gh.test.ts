@@ -326,10 +326,16 @@ exit 0`);
     expect(env).toContain("GH_HOST=ghe.acme.io");
   });
 
-  it("a github.com slug sets GH_REPO only", async () => {
+  it("failedLog with a repo passes GH_REPO to gh", async () => {
+    const dir = fakeGh(`echo "GH_REPO=$GH_REPO" > "$(dirname "$0")/env.txt"`);
+    await failedLog(dir, 1, 10, 5000, "o/r");
+    expect(readFileSync(join(dir, "env.txt"), "utf8").trim()).toBe("GH_REPO=o/r");
+  });
+
+  it("a github.com slug sets GH_HOST=github.com", async () => {
     const dir = fakeGh(`echo "GH_REPO=$GH_REPO GH_HOST=$GH_HOST" > "$(dirname "$0")/env.txt"`);
     await reviewAuthors(dir, 5, 5000, "o/r");
-    expect(readFileSync(join(dir, "env.txt"), "utf8").trim()).toBe("GH_REPO=o/r GH_HOST=");
+    expect(readFileSync(join(dir, "env.txt"), "utf8").trim()).toBe("GH_REPO=o/r GH_HOST=github.com");
   });
 });
 
