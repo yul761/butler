@@ -466,8 +466,10 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     expect(Object.keys(read(plain!))).not.toContain("hooks");
     const file = projectMcpApprovalSettings([s.repo], { ...s.p, gateCommand: '"/b/butler-hook"' });
     const group = [{ matcher: "Bash", hooks: [{ type: "command", command: '"/b/butler-hook" gate', timeout: 10 }] }];
+    // Skill 调用只记（PR 进度），走写信封的那条路：命令不带 gate，只在 PostToolUse。
+    const skill = { matcher: "Skill", hooks: [{ type: "command", command: '"/b/butler-hook"', timeout: 10 }] };
     expect(file).not.toBe(plain);
-    expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [], hooks: { PreToolUse: group, PostToolUse: group, PostToolUseFailure: group } });
+    expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [], hooks: { PreToolUse: group, PostToolUse: [...group, skill], PostToolUseFailure: group } });
   });
 
   it("writes the given tools as permissions.allow; without any there is no permissions key", () => {

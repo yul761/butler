@@ -260,7 +260,9 @@ export function projectMcpApprovalSettings(dirs: string[], p: ProjectMcpPaths & 
     if (p.gateCommand) {
       const group = [{ matcher: "Bash", hooks: [{ type: "command", command: `${p.gateCommand} gate`, timeout: 10 }] }];
       // 命令失败时只有 PostToolUseFailure，没有 PostToolUse：两个都要，不然失败的合并一直占着。
-      content.hooks = { PreToolUse: group, PostToolUse: group, PostToolUseFailure: group };
+      // Skill 调用另记一组（PR 进度的设计 / 自我 review）：命令不带 gate，走写信封的那条路。
+      const skill = { matcher: "Skill", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
+      content.hooks = { PreToolUse: group, PostToolUse: [...group, skill], PostToolUseFailure: group };
     }
     const file = join(p.mcpDir, `approve-${createHash("sha1").update(JSON.stringify(content)).digest("hex").slice(0, 12)}.json`);
     writePrivate(file, content);

@@ -71,6 +71,7 @@ import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
 import { HookInbox } from "./hooks/inbox";
+import { stageEventFromHook } from "./hooks/stage-hook";
 import { InboxRepo } from "./db/inbox-repo";
 import { InboxService } from "./inbox/inbox-service";
 import { registerIpc } from "./ipc/register";
@@ -995,6 +996,9 @@ async function bootstrap(): Promise<void> {
         );
       }
       if (effect.kind === "ignored") return;
+      // 设计 / 自我 review 的 skill 调用记进 PR 进度（session 行这时已经建好）。
+      const stageObs = stageEventFromHook(env, sessions);
+      if (stageObs && prStages.add(stageObs.event, stageObs.dedupeKey)) notify();
       // 总控开的子 session 等这个信号才交任务（信任文件夹之类的启动对话框已经过去）。
       if (effect.kind === "session_started") pty.markStarted(effect.sessionId);
       // claude 收下了一条输入（UserPromptSubmit）：deliver 回车以后等的就是它（BTL-190 第 9 点）。终端按 BUTLER_SESSION 记，
