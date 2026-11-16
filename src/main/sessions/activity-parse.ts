@@ -148,7 +148,8 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
     const text = message.content
       .flatMap((b) => (isObj(b) && b.type === "text" && typeof b.text === "string" && b.text.trim() ? [b.text.trim()] : []))
       .join("\n");
-    if (text) {
+    // Claude Code 合成的报错（限额、API 出错）不是 claude 说的话，不当作最后一条回复，“需要你”不会拿它去判断
+    if (text && !s.apiError) {
       s.lastReply = text;
       s.lastReplyId = typeof message.id === "string" && message.id ? message.id : null;
     }

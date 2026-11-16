@@ -309,6 +309,19 @@ describe("applyEntry across turns", () => {
       expect(ended(s)[0]).not.toHaveProperty("hookless");
     });
 
+    it("does not keep the synthetic error text as the last reply (needs-you must not judge it)", () => {
+      const s = newTranscriptState();
+      applyEntry(s, say("go"));
+      applyEntry(s, { type: "assistant", message: { role: "assistant", id: "m1", stop_reason: "end_turn", content: [{ type: "text", text: "real answer" }] } });
+      applyEntry(s, { ...apiError, message: { ...apiError.message, id: "m2" } });
+      applyEntry(s, { type: "system", subtype: "turn_duration" });
+      expect(s.lastReply).toBe("real answer");
+      expect(s.lastReplyId).toBe("m1");
+      const fresh = newTranscriptState();
+      applyEntry(fresh, apiError);
+      expect(fresh.lastReply).toBeNull();
+    });
+
     it("a normal turn after an API error is not marked", () => {
       const s = newTranscriptState();
       applyEntry(s, apiError);
