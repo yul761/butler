@@ -116,9 +116,13 @@ export const MESSAGE_LIMIT = 4000;
 
 /**
  * Butler 总控的请求（BTL-190 第 5 点）：全局只有一个，看得到所有 epic、feature、ticket、PR 和 session，但什么都不建、不删、不结束，
- * 也不开 ticket 的 session。send_message 只能发给 epic session 或 feature 总控（经过 DeliveryGuard）。
+ * 也不开 ticket 的 session。send_message 只能发给 epic session 或 feature 总控（经过 DeliveryGuard）：session、feature、epic 给且只给一个，
+ * feature、epic 是名字或 id。目标的终端关着时 Butler 接着它最近的那个 session（feature 从没开过总控时新开一个）再把消息交进去。
  * list_tickets 的 feature / epic 是名字或 id（list_features、list_epics 里的），可以都不给。
  */
+/** send_message 发给谁：一个 session，或者一个 feature（它的总控）、一个 epic（它的 epic session）。 */
+export type ButlerMessageTarget = { session: string; feature?: undefined; epic?: undefined } | { feature: string; session?: undefined; epic?: undefined } | { epic: string; session?: undefined; feature?: undefined };
+
 export type ButlerControlRequest =
   | ({ v: 1; butler: true; from: string | null } & InboxControlOp)
   | { v: 1; butler: true; from: string | null; op: "list_epics" }
@@ -128,7 +132,7 @@ export type ButlerControlRequest =
   | { v: 1; butler: true; from: string | null; op: "list_sessions" }
   | { v: 1; butler: true; from: string | null; op: "session_activity"; session: string }
   | { v: 1; butler: true; from: string | null; op: "list_inbox" }
-  | { v: 1; butler: true; from: string | null; op: "send_message"; session: string; text: string }
+  | ({ v: 1; butler: true; from: string | null; op: "send_message"; text: string } & ButlerMessageTarget)
   | { v: 1; butler: true; from: string | null; op: "refresh_session"; session: string };
 
 export type ControlRequest = TicketControlRequest | FeatureControlRequest | EpicControlRequest | ButlerControlRequest;
@@ -272,8 +276,12 @@ function parseButlerRequest(o: Record<string, unknown>, from: string | null): Bu
     return { ...base, op: o.op, session: o.session };
   }
   if (o.op === "send_message") {
-    if (!okName(o.session, 200) || typeof o.text !== "string" || !o.text.trim() || o.text.length > MESSAGE_LIMIT) return null;
-    return { ...base, op: "send_message", session: o.session, text: o.text };
+    if (typeof o.text !== "string" || !o.text.trim() || o.text.length > MESSAGE_LIMIT) return null;
+    const given = (["session", "feature", "epic"] as const).filter((k) => o[k] !== undefined);
+    if (given.length !== 1) return null;
+    const key = given[0];
+    if (!okName(o[key], key === "session" ? 200 : 500)) return null;
+    return { ...base, op: "send_message", text: o.text, [key]: o[key] } as ButlerControlRequest;
   }
   return null;
 }
