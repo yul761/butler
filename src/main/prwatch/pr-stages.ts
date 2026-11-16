@@ -40,6 +40,8 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
   let merged = false;
   const frozen = () => closed || merged;
   let devStarted = false;
+  /** 每个人的 review（按 id）当前的状态，只记 APPROVED / CHANGES_REQUESTED / COMMENTED；DISMISSED 要看它撤销的是哪个。 */
+  const reviewState = new Map<string, string>();
 
   const events = i.events.filter((e) => Number.isFinite(e.at));
   // 升级前就合并的 PR 不再被监视，没有 merged 事件：当作在已知的最晚事件的时间合并（没有事件就用 ticket 创建时间），确定、不会排到别的事件前面。
@@ -116,6 +118,8 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
           if (!frozen() && cur === "design") set("design", "active", at);
           log(at, "design", "design_skill", name);
         } else if (category === "review") {
+          // 还没有第一个 commit 就用了 review skill：先判断设计、进入开发，再进自我 review（之后的 first_commit 不会重启开发）。
+          if (!frozen() && cur === "design") startDev(at);
           if (!frozen() && (cur === "dev" || cur === "self_review")) {
             // 进入自我 review：开发这一步算完成，同一时间只有一步进行中。
             if (cell("dev").state === "active") set("dev", "done", at);
@@ -187,7 +191,27 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
           log(at, "peer_review", "copilot_review", String(count));
         } else if (who === "human") {
           const login = str(d.author);
-          if (state === "CHANGES_REQUESTED") {
+          const rid = idOf(d.id);
+          const earlier = rid === null ? undefined : reviewState.get(rid);
+          if (rid !== null && state !== "PENDING") reviewState.set(rid, state);
+          const standing = (s: string) => [...reviewState.values()].some((v) => v === s);
+          if (state === "DISMISSED") {
+            if (!frozen() && earlier === "APPROVED" && !standing("APPROVED") && cell("peer_review").state === "done") {
+              // 最后一个批准被撤销：批准不算数了。当前就在这一步（或合并刚开始）回到进行中，否则等前面的步骤走完。
+              if (cur === "peer_review" || cell("merge").state === "active") {
+                if (cell("merge").state === "active") set("merge", "todo", at);
+                set("peer_review", "active", at);
+                cur = "peer_review";
+              } else set("peer_review", "todo", at);
+            } else if (!frozen() && earlier === "CHANGES_REQUESTED" && !standing("CHANGES_REQUESTED") && cell("peer_review").state === "failed") {
+              if (beforeReviewOpen()) set("peer_review", "todo", at);
+              else {
+                set("peer_review", "active", at);
+                cur = "peer_review";
+              }
+            }
+            log(at, "peer_review", "human_dismissed", login);
+          } else if (state === "CHANGES_REQUESTED") {
             if (!frozen()) {
               set("peer_review", "failed", at);
               if (cell("merge").state === "active") set("merge", "todo", at);
@@ -208,7 +232,7 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
             log(at, "peer_review", "human_commented", login);
           }
         }
-        // DISMISSED、author、bot：忽略。
+        // author、bot：忽略。
         return;
       }
       case "merged":
@@ -251,7 +275,7 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
   }
 
   return {
-    ticketKey: i.ticketKey, featureId: i.featureId, repoId: i.repoId, repoName: i.repoName, branch: i.branch,
+    ticketKey: i.ticketKey, featureId: i.featureId, repoId: i.repoId, repoName: i.repoName,
     prNumber: i.pr?.number ?? null, prUrl: i.pr?.url ?? null, closed: closed || i.pr?.state === "closed",
     stages: PR_STAGES.map((id) => cell(id)), timeline,
   };

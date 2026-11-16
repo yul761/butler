@@ -14,6 +14,9 @@ const ci = (at: number, result: "pending" | "passing" | "failing") => ev("ci", a
 const human = (at: number, state: string, author = "alice") =>
   ev("review", at, { id: at, author, who: "human", state, body: "" });
 
+const humanId = (at: number, state: string, id: string, author = "alice") =>
+  ev("review", at, { id, author, who: "human", state, body: "" });
+
 const input = (o: Partial<DeriveInput> = {}): DeriveInput => ({
   ticketKey: "BTL-1", featureId: null, repoId: 1, repoName: "repo", branch: "b", ticketCreatedAt: 100,
   events: [], upperDesign: [], reports: [], pr: { number: 7, url: "https://x/pull/7", state: "open" },
@@ -24,6 +27,7 @@ const states = (v: PrStagesView) => Object.fromEntries(v.stages.map((s) => [s.id
 /** 每个用例最后都检查：同一时间最多一步"进行中"。 */
 const derive = (i: DeriveInput): PrStagesView => {
   const v = derivePrStages(i);
+  expect(v).not.toHaveProperty("branch");
   expect(v.stages.filter((s) => s.state === "active").map((s) => s.id).length, JSON.stringify(states(v))).toBeLessThanOrEqual(1);
   return v;
 };
@@ -309,5 +313,69 @@ describe("derivePrStages", () => {
     const v2 = derive(input({ events: [...events, ev("push", 170, { sha: "s170" })] }));
     expect(cell(v2, "dev").state).toBe("active");
     expect(cell(v2, "dev").round).toBe(2);
+  });
+
+  describe("dismissed reviews", () => {
+    const base = [ev("first_commit", 120), ci(140, "pending"), ci(150, "passing")];
+
+    it("approve → dismiss: the bar goes back to peer review and merge is no longer active", () => {
+      const v = derive(input({ events: [...base, humanId(160, "APPROVED", "r1"), humanId(170, "DISMISSED", "r1")] }));
+      expect(cell(v, "peer_review").state).toBe("active");
+      expect(cell(v, "merge").state).toBe("todo");
+      expect(v.timeline.at(-1)).toMatchObject({ kind: "human_dismissed", detail: "alice", stage: "peer_review" });
+    });
+
+    it("approved by two people, one dismissed: peer review stays done and merge stays active", () => {
+      const v = derive(input({ events: [...base, humanId(160, "APPROVED", "r1"), humanId(165, "APPROVED", "r2", "bob"), humanId(170, "DISMISSED", "r1")] }));
+      expect(cell(v, "peer_review").state).toBe("done");
+      expect(cell(v, "merge").state).toBe("active");
+    });
+
+    it("an approval given while CI runs and then dismissed goes back to todo, CI stays the active step", () => {
+      const v = derive(input({ events: [ev("first_commit", 120), ci(140, "pending"), humanId(145, "APPROVED", "r1"), humanId(147, "DISMISSED", "r1")] }));
+      expect(cell(v, "peer_review").state).toBe("todo");
+      expect(cell(v, "ci").state).toBe("active");
+    });
+
+    it("changes requested → dismissed: peer review is active again", () => {
+      const v = derive(input({ events: [...base, humanId(160, "CHANGES_REQUESTED", "r1"), humanId(170, "DISMISSED", "r1")] }));
+      expect(cell(v, "peer_review").state).toBe("active");
+      expect(cell(v, "merge").state).toBe("todo");
+    });
+
+    it("changes requested during CI → dismissed: peer review back to todo while CI is still going", () => {
+      const v = derive(input({ events: [ev("first_commit", 120), ci(140, "pending"), humanId(145, "CHANGES_REQUESTED", "r1"), humanId(147, "DISMISSED", "r1")] }));
+      expect(cell(v, "peer_review").state).toBe("todo");
+      expect(cell(v, "ci").state).toBe("active");
+    });
+
+    it("a dismissed review with no earlier state for its id is only a timeline row", () => {
+      const v = derive(input({ events: [...base, humanId(170, "DISMISSED", "r9")] }));
+      expect(cell(v, "peer_review").state).toBe("active");
+      expect(v.timeline.at(-1)?.kind).toBe("human_dismissed");
+    });
+
+    it("merged and then dismissed: the states do not change", () => {
+      const events = [...base, humanId(160, "APPROVED", "r1"), ev("merged", 165, { number: 7 })];
+      const before = states(derive(input({ events })));
+      const v = derive(input({ events: [...events, humanId(170, "DISMISSED", "r1")] }));
+      expect(states(v)).toEqual(before);
+      expect(v.timeline.at(-1)?.kind).toBe("human_dismissed");
+    });
+  });
+
+  it("a review skill before the first commit judges design, starts dev and moves to self review; the first commit later does not restart dev", () => {
+    const v = derive(input({ pr: null, events: [reviewSkill(110), ev("first_commit", 120)] }));
+    expect(cell(v, "design").state).toBe("skipped");
+    expect(cell(v, "dev").state).toBe("done");
+    expect(cell(v, "self_review").state).toBe("active");
+    const after = derive(input({ events: [reviewSkill(110), ev("first_commit", 120), ev("pr_opened", 130)] }));
+    expect(cell(after, "self_review").state).toBe("done");
+  });
+
+  it("a review skill before the first commit with design in progress marks design done", () => {
+    const v = derive(input({ pr: null, events: [design(105), reviewSkill(110)] }));
+    expect(cell(v, "design").state).toBe("done");
+    expect(cell(v, "self_review").state).toBe("active");
   });
 });

@@ -567,6 +567,7 @@ export const EN: UiStrings = {
     human_approved: (d) => (d ? `${d} approved` : "Approved"),
     human_changes: (d) => (d ? `${d} requested changes` : "Changes requested"),
     human_commented: (d) => (d ? `${d} commented` : "Commented"),
+    human_dismissed: (d) => (d ? `${d}'s review was dismissed` : "A review was dismissed"),
     merged: () => "✓",
     closed: () => "PR closed",
     report: (d) => (d ? `Report: ${d}` : "Report"),

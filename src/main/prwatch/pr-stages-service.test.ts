@@ -56,7 +56,6 @@ describe("PrStagesService", () => {
     make({ tickets: [ticket("A-1", [repo(5, "A-1", "old")])], forRepo }).view({ ticketKey: "A-1" });
     make({ tickets: [ticket("A-1", [repo(5, "A-1", "feat")])], forRepo }).view({ ticketKey: "A-1" });
     expect(calls).toEqual([["A-1", 5, "old"], ["A-1", 5, "feat"]]);
-    expect(make({ tickets: [ticket("A-1", [repo(5, "A-1", "feat")])] }).view({ ticketKey: "A-1" })[0].branch).toBe("feat");
   });
 
   it("keeps only reports of this repo or with no repo", () => {
@@ -84,6 +83,14 @@ describe("PrStagesService", () => {
     const t = [ticket("A-1", [repo(1, "A-1")])];
     expect(make({ tickets: t, forRepo: () => events, skillTracking: true }).view({ ticketKey: "A-1" })[0].stages[0].state).toBe("skipped");
     expect(make({ tickets: t, forRepo: () => events, skillTracking: false }).view({ ticketKey: "A-1" })[0].stages[0].state).toBe("unknown");
+  });
+
+  it("self review: unknown without skill tracking; skipped with tracking and no review skill once a PR opens", () => {
+    const events = [ev({ kind: "first_commit" }), ev({ id: 2, kind: "pr_opened", at: 210, data: { number: 3 } })];
+    const t = [ticket("A-1", [repo(1, "A-1")])];
+    const sr = (skillTracking: boolean) => make({ tickets: t, forRepo: () => events, skillTracking }).view({ ticketKey: "A-1" })[0].stages[2];
+    expect(sr(false).state).toBe("unknown");
+    expect(sr(true).state).toBe("skipped");
   });
 
   it("ignores a pr_watch row from the repo's old branch", () => {

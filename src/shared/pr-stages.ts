@@ -34,6 +34,7 @@ export type PrTimelineKind =
   | "human_approved"
   | "human_changes"
   | "human_commented"
+  | "human_dismissed"
   | "merged"
   | "closed"
   | "report";
@@ -53,7 +54,6 @@ export interface PrStagesView {
   featureId: number | null;
   repoId: number;
   repoName: string;
-  branch: string;
   prNumber: number | null;
   prUrl: string | null;
   closed: boolean;

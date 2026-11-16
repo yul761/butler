@@ -7,7 +7,7 @@ const IDS: PrStageId[] = ["design", "dev", "self_review", "ci", "peer_review", "
 
 function row(featureId: number | null, states: Partial<Record<PrStageId, PrStageState>>, closed = false): PrStagesView {
   const stages: PrStageCell[] = IDS.map((id) => ({ id, state: states[id] ?? "todo", round: 1, at: null }));
-  return { ticketKey: "T-1", featureId, repoId: 1, repoName: "r", branch: "b", prNumber: null, prUrl: null, closed, stages, timeline: [] };
+  return { ticketKey: "T-1", featureId, repoId: 1, repoName: "r", prNumber: null, prUrl: null, closed, stages, timeline: [] };
 }
 
 describe("epicPrSummary", () => {

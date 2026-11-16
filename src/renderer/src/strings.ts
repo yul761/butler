@@ -574,6 +574,7 @@ const ZH = {
     human_approved: (d) => (d ? `${d} 批准` : "有人批准"),
     human_changes: (d) => (d ? `${d} 要求修改` : "有人要求修改"),
     human_commented: (d) => (d ? `${d} 留了评论` : "有人留了评论"),
+    human_dismissed: (d) => (d ? `${d} 的 review 被撤销` : "有 review 被撤销"),
     merged: () => "✓",
     closed: () => "PR 关闭",
     report: (d) => (d ? `汇报：${d}` : "汇报"),
