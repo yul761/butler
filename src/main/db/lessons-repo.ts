@@ -57,6 +57,11 @@ const toLesson = (r: LessonRow, sources: LessonSource[]): Lesson => ({
 export class LessonsRepo {
   constructor(private readonly db: Db) {}
 
+  /** 把多次写入包在一个事务里；已经在事务中时 withTransaction 会用 SAVEPOINT，嵌套不会抛错。 */
+  transaction<T>(fn: () => T): T {
+    return withTransaction(this.db, fn);
+  }
+
   // ---- 仓库 ----
   upsertRepo(slug: string, localPath: string, now: number): void {
     this.db
