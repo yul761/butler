@@ -11,7 +11,7 @@ const next = (o: Partial<Omit<PrWatchRow, "deliveredKey">> = {}): Omit<PrWatchRo
 const prev = (o: Partial<PrWatchRow> = {}): PrWatchRow => ({ ...next(), deliveredKey: null, ...o });
 const comment = (id: string, o: Partial<PrComment> = {}): PrComment => ({ id, author: "bob", body: "hi", createdAt: 50, url: null, path: null, line: null, reviewId: null, ...o });
 const pr = (o: Partial<PrStatus> = {}): PrStatus => ({
-  number: 7, url: "u", state: "OPEN", isDraft: false, review: null, headSha: "a1", checks: [], ci: "pending", author: "me",
+  number: 7, url: "u", state: "OPEN", isDraft: false, review: null, headSha: "a1", checks: [], ci: "pending", author: "me", createdAt: null, mergedAt: null, closedAt: null,
   reviews: [
     { id: "r1", author: "copilot-pull-request-reviewer", state: "COMMENTED", body: "x", submittedAt: 10 },
     { id: "r2", author: "alice", state: "APPROVED", body: "ok", submittedAt: 20 },
@@ -41,6 +41,20 @@ describe("prObservations", () => {
     const o = prObservations(t, prev({ ci: "passing" }), next({ headSha: "b2", ci: "pending" }), null, [], null, 1000);
     expect(keys(o)).toEqual(["3:push:b2", "3:ci:b2:pending"]);
     expect(o[0].event.at).toBe(o[1].event.at);
+  });
+
+  it("uses GitHub's times for opened, merged and closed, and now when they are missing", () => {
+    const o = prObservations(t, null, next({ state: "merged" }), pr({ createdAt: 11, mergedAt: 22 }), [], null, 1000);
+    expect(o.find((x) => x.event.kind === "pr_opened")?.event.at).toBe(11);
+    expect(o.find((x) => x.event.kind === "merged")?.event.at).toBe(22);
+    expect(o.find((x) => x.event.kind === "ci")?.event.at).toBe(1000);
+    expect(prObservations(t, prev(), next({ state: "merged" }), pr(), [], null, 1000).find((x) => x.event.kind === "merged")?.event.at).toBe(1000);
+    expect(prObservations(t, prev(), next({ state: "closed" }), pr({ closedAt: 33 }), [], null, 1000).find((x) => x.event.kind === "closed")?.event.at).toBe(33);
+  });
+
+  it("records the CI of a PR that appears on the sha CI already ran on", () => {
+    const o = prObservations(t, prev({ number: null, state: null, ci: "passing" }), next({ ci: "passing" }), pr({ ci: "passing" }), [], null, 1000);
+    expect(keys(o).filter((k) => k !== "3:review:r1" && k !== "3:review:r2" && k !== "3:comment:c1")).toEqual(["3:opened:7", "3:ci:a1:passing"]);
   });
 
   it("records no CI without a PR", () => {

@@ -109,6 +109,10 @@ export interface PrStatus {
   comments: PrComment[];
   /** PR 里最早一个 commit 的作者时间（毫秒）；旧版 gh 没有这个字段时为 null。 */
   firstCommitAt: number | null;
+  /** PR 的创建、合并、关闭时间（毫秒）；没有为 null。 */
+  createdAt: number | null;
+  mergedAt: number | null;
+  closedAt: number | null;
 }
 export interface BranchRuns {
   headSha: string;
@@ -242,7 +246,7 @@ const REVIEWS = { REVIEW_REQUIRED: "pending", CHANGES_REQUESTED: "changes_reques
 
 /** gh pr view <branch>：没有 PR、gh 不可用、输出不对都返回 null。 */
 export async function prStatus(cwd: string, branch: string, timeoutMs: number): Promise<PrStatus | null> {
-  const j = parseJson(await runGh(cwd, ["pr", "view", branch, "--json", "number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup,author,reviews,comments,commits"], timeoutMs, 8 * 1024 * 1024));
+  const j = parseJson(await runGh(cwd, ["pr", "view", branch, "--json", "number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt"], timeoutMs, 8 * 1024 * 1024));
   if (typeof j !== "object" || j === null) return null;
   const r = j as Record<string, unknown>;
   if (typeof r.number !== "number" || typeof r.url !== "string" || typeof r.headRefOid !== "string") return null;
@@ -261,6 +265,9 @@ export async function prStatus(cwd: string, branch: string, timeoutMs: number): 
     reviews: reviewsOf(r.reviews),
     comments: commentsOf(r.comments),
     firstCommitAt: firstCommitOf(r.commits),
+    createdAt: timeOf(r.createdAt),
+    mergedAt: timeOf(r.mergedAt),
+    closedAt: timeOf(r.closedAt),
   };
 }
 
@@ -279,10 +286,20 @@ function parseLines(text: string | null): unknown[] | null {
   return out;
 }
 
-/** 行内 review 评论：gh api repos/{owner}/{repo}/pulls/N/comments --paginate。失败返回 null。 */
+/**
+ * 行内 review 评论：gh api repos/{owner}/{repo}/pulls/N/comments --paginate。失败返回 null。
+ * REST 的 pull_request_review_id 是数字，而 gh pr view 给的 review id 是 GraphQL 的 node id（PRR_…）：再取一次 reviews 列表，把评论的 reviewId 换成 node id。
+ */
 export async function reviewComments(cwd: string, number: number, timeoutMs: number): Promise<PrComment[] | null> {
   const j = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/comments`, "--paginate", "--jq", ".[]"], timeoutMs, 8 * 1024 * 1024));
   if (j === null) return null;
+  const reviews = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--paginate", "--jq", ".[] | {id, node_id}"], timeoutMs, 8 * 1024 * 1024));
+  if (reviews === null) return null;
+  const nodeOf = new Map<number, string>();
+  for (const item of reviews) {
+    const r = obj(item);
+    if (r && typeof r.id === "number" && typeof r.node_id === "string" && r.node_id !== "") nodeOf.set(r.id, r.node_id);
+  }
   const out: PrComment[] = [];
   for (const item of j) {
     const r = obj(item);
@@ -297,7 +314,7 @@ export async function reviewComments(cwd: string, number: number, timeoutMs: num
       url: typeof r.html_url === "string" ? r.html_url : null,
       path: typeof r.path === "string" ? r.path : null,
       line: typeof r.line === "number" ? r.line : null,
-      reviewId: typeof r.pull_request_review_id === "number" ? String(r.pull_request_review_id) : null,
+      reviewId: typeof r.pull_request_review_id === "number" ? (nodeOf.get(r.pull_request_review_id) ?? null) : null,
     });
   }
   return out;

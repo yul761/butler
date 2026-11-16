@@ -9,6 +9,7 @@ export interface Observation { event: Omit<StageEvent, "id">; dedupeKey: string 
 /**
  * prev/next 是 pr_watch 行（next 是这一轮写进去的），pr 是这一轮的 prStatus（没有 PR 或 gh 失败为 null），
  * inline 是这一轮拉到的行内评论（没拉为 []），firstCommit 是 git 或 pr 算出来的第一个 commit 的时间。
+ * pr_opened、merged、closed 用 GitHub 给的时间（没有就用 now）；CI 和 push 是这一轮看到的，用 now。
  * 顺序有意义：同一轮的事件 at 都是 now，derivePrStages 按 at、id 排，所以 push 要在新 sha 的 ci 之前。
  */
 export function prObservations(
@@ -23,12 +24,12 @@ export function prObservations(
     });
 
   if (firstCommit !== null) add("first_commit", firstCommit, `first_commit:${t.branch}`, {});
-  if (prev?.number == null && next.number != null) add("pr_opened", now, `opened:${next.number}`, { number: next.number });
+  if (prev?.number == null && next.number != null) add("pr_opened", pr?.createdAt ?? now, `opened:${next.number}`, { number: next.number });
   const sha = next.headSha;
   const pushed = prev?.headSha != null && sha !== null && prev.headSha !== sha;
   if (pushed && sha !== null) add("push", now, `push:${sha}`, { sha });
   if (next.number != null && (next.ci === "pending" || next.ci === "passing" || next.ci === "failing")) {
-    if (!prev || prev.ci !== next.ci || prev.headSha !== sha) add("ci", now, `ci:${sha ?? ""}:${next.ci}`, { result: next.ci, sha });
+    if (!prev || prev.number == null || prev.ci !== next.ci || prev.headSha !== sha) add("ci", now, `ci:${sha ?? ""}:${next.ci}`, { result: next.ci, sha });
   }
   if (pr) {
     for (const r of pr.reviews) {
@@ -42,8 +43,8 @@ export function prObservations(
     }
   }
   if (next.number != null && prev?.state !== next.state) {
-    if (next.state === "merged") add("merged", now, `merged:${next.number}`, { number: next.number });
-    else if (next.state === "closed") add("closed", now, `closed:${next.number}`, { number: next.number });
+    if (next.state === "merged") add("merged", pr?.mergedAt ?? now, `merged:${next.number}`, { number: next.number });
+    else if (next.state === "closed") add("closed", pr?.closedAt ?? now, `closed:${next.number}`, { number: next.number });
   }
   return out;
 }

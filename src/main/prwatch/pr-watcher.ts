@@ -1,6 +1,6 @@
 import type { PrWatchRepo, PrWatchRow } from "../db/pr-watch-repo";
 import type { PrStageRepo } from "../db/pr-stage-repo";
-import type { CiCheck, PrComment, PrStatus, branchRuns, failedLog, prStatus, reviewComments } from "../tickets/gh";
+import { reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prStatus, type reviewComments } from "../tickets/gh";
 import type { firstCommitAt } from "../tickets/git";
 import type { WatchedPr } from "../../shared/types";
 import { prObservations } from "./pr-observe";
@@ -19,6 +19,8 @@ export const CI_LOG_LINES = 60;
 const FAILED_LOGS_MAX = 3;
 /** 同时跑的 gh 最多这么多个。 */
 const GH_PARALLEL = 4;
+/** 一个 Copilot review 的行内评论最多试这么多次。 */
+const INLINE_TRIES_MAX = 3;
 /** soon() 等这么久再查：合并多次调用。 */
 const SOON_MS = 1000;
 /** cachedByUrl 只认这么久之内查过的。 */
@@ -100,6 +102,10 @@ export class PrWatcher {
   private dueNow = new Set<number>();
   private ghActive = 0;
   private readonly ghWaiting: (() => void)[] = [];
+  /** Copilot review 的行内评论拉失败的次数，键 `${repoId}:${reviewId}`；拉到了就删掉。只在内存里。 */
+  private readonly inlineTries = new Map<string, number>();
+  /** 上次问 git 第一个 commit 时分支的 headSha，键 `${repoId}:${branch}`；headSha 没变就不再问。 */
+  private readonly firstCommitTried = new Map<string, string | null>();
 
   constructor(private readonly d: PrWatcherDeps) {}
 
@@ -217,24 +223,34 @@ export class PrWatcher {
     const stages = this.d.stages;
     if (!stages || !this.d.git) return false;
     try {
-      let seen = pr;
       let inline: PrComment[] = [];
-      // 有没记过的 review 才拉行内评论（Copilot 的 review 要数它的行内评论）；这个 review 记下之后就不再拉了。
-      const fresh = pr?.reviews.filter((r) => !stages.has(`${t.repoId}:review:${r.id}`)) ?? [];
+      // 第一次看到这个 PR（升级前就有的行、或分支上先有 CI 后开 PR）：当作 PR 刚出现，补上 pr_opened 和当前的 CI。
+      const first = pr !== null && !stages.has(`${t.repoId}:opened:${pr.number}`);
+      const from = first && prev ? { ...prev, number: null, state: null } : prev;
+      // Copilot 的 review 要数行内评论：新的（或之前没拉到、不到 3 次的）才拉。所有 review 照常马上记，行内评论晚到也会被数上。
+      const wanted = (pr?.reviews ?? []).filter((r) => {
+        if (r.state === "PENDING" || reviewerKind(r.author, pr?.author ?? "") !== "copilot") return false;
+        const tries = this.inlineTries.get(`${t.repoId}:${r.id}`);
+        return tries === undefined ? !stages.has(`${t.repoId}:review:${r.id}`) : tries < INLINE_TRIES_MAX;
+      });
       const fetcher = this.d.gh.reviewComments;
-      if (pr && fresh.length > 0 && fetcher) {
+      if (pr && wanted.length > 0 && fetcher) {
         const got = await this.gh(() => fetcher(t.cwd, pr.number, PR_GH_TIMEOUT_MS));
+        for (const r of wanted) {
+          const key = `${t.repoId}:${r.id}`;
+          if (got) this.inlineTries.delete(key);
+          else this.inlineTries.set(key, (this.inlineTries.get(key) ?? 0) + 1);
+        }
         if (got) inline = got;
-        // 拉失败：这一轮先不记这些 review，下一轮再试，免得行内评论数记成 0。
-        else seen = { ...pr, reviews: pr.reviews.filter((r) => !fresh.includes(r)) };
       }
       let firstCommit = pr?.firstCommitAt ?? null;
-      if (!pr && !stages.has(`${t.repoId}:first_commit:${t.branch}`)) {
-        const git = this.d.git;
-        firstCommit = await git.firstCommitAt(t.cwd, t.branch);
+      const fcKey = `${t.repoId}:${t.branch}`;
+      if (!pr && !stages.has(`${t.repoId}:first_commit:${t.branch}`) && (!this.firstCommitTried.has(fcKey) || this.firstCommitTried.get(fcKey) !== next.headSha)) {
+        this.firstCommitTried.set(fcKey, next.headSha);
+        firstCommit = await this.d.git.firstCommitAt(t.cwd, t.branch);
       }
       let added = false;
-      for (const o of prObservations(t, prev, next, seen, inline, firstCommit, this.d.now())) {
+      for (const o of prObservations(t, from, next, pr, inline, firstCommit, this.d.now())) {
         if (stages.add(o.event, o.dedupeKey)) added = true;
       }
       return added;
