@@ -39,12 +39,15 @@ export class LessonRunner {
   private pausedUntil = 0;
   private pauseTimer: NodeJS.Timeout | null = null;
   private dailyRunning = false;
+  /** start() 之前不取队列：resetRunning 之前取走的行会被它改回 queued，造成重复分析。 */
+  private started = false;
 
   constructor(private readonly d: LessonRunnerDeps) {}
 
   /** 启动时调一次：running 的回到 queued，然后开跑。 */
   start(): void {
     this.d.repo.resetRunning();
+    this.started = true;
     this.pump();
   }
 
@@ -119,6 +122,7 @@ export class LessonRunner {
   }
 
   private pump(): void {
+    if (!this.started) return;
     while (this.active.size < LESSON_CONCURRENCY) {
       if (this.d.headless.signal?.aborted) return;
       const now = this.d.now();
@@ -240,6 +244,10 @@ export class LessonRunner {
       applyAnalysis(repo, item.slug, item.prNumber, v.value, this.d.now());
       repo.finish(item.id, "done", this.d.now());
     });
-    this.d.notify();
+    try {
+      this.d.notify();
+    } catch (e) {
+      this.d.log?.("lessons: notify failed", e);
+    }
   }
 }

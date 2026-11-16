@@ -618,6 +618,26 @@ describe("PrWatcher stages", () => {
     expect(onMerged).toHaveBeenCalledTimes(1);
   });
 
+  it("still calls onMerged when a stages.add after the merged event throws", async () => {
+    const onMerged = vi.fn<(t: PrTarget, n: number) => void>();
+    const s = withStages();
+    const w = new PrWatcher({ ...s.deps, gh: { ...s.gh, reviewComments: s.reviewComments, reviewAuthors: s.reviewAuthors }, git: { firstCommitAt: s.firstCommitAt }, stages: s.stages, onMerged });
+    s.gh.prStatus.mockResolvedValue(pr({ state: "OPEN" }));
+    await w.check();
+    s.advance(PR_SLOW_MS);
+    const real = s.stages.add.getMockImplementation()!;
+    let afterMerged = false;
+    s.stages.add.mockImplementation((e, k) => {
+      if (afterMerged) throw new Error("db");
+      const r = real(e, k);
+      if (e.kind === "merged") afterMerged = true;
+      return r;
+    });
+    s.gh.prStatus.mockResolvedValue(pr({ state: "MERGED", mergedAt: 9, reviews: [review] }));
+    await w.check();
+    expect(onMerged).toHaveBeenCalledTimes(1);
+  });
+
   it("without stages, calls onMerged when the state changes to merged", async () => {
     const onMerged = vi.fn<(t: PrTarget, n: number) => void>();
     const s = setup();

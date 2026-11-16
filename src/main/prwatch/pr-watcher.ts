@@ -256,14 +256,12 @@ export class PrWatcher {
         firstCommit = await this.d.git.firstCommitAt(t.cwd, t.branch);
       }
       let added = false;
-      let mergedNow = false;
       for (const o of prObservations(t, from, next, pr, inline, firstCommit, this.d.now(), bots)) {
         if (stages.add(o.event, o.dedupeKey)) {
           added = true;
-          if (o.event.kind === "merged") mergedNow = true;
+          if (o.event.kind === "merged" && next.number !== null) this.merged(t, next.number);
         }
       }
-      if (mergedNow && next.number !== null) this.merged(t, next.number);
       return added;
     } catch (e) {
       this.d.log(`pr watch: recording the stages of ${t.branch} in ${t.repoPath} failed`, e);

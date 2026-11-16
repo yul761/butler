@@ -182,11 +182,35 @@ describe("LessonRunner queue", () => {
     const s = setup();
     s.repo.enqueue("acme/web", [1], "merged", T0);
     s.db.prepare(`UPDATE lesson_queue SET status = 'running'`).run();
-    new LessonRunner(s.deps).start();
-    await flush();
-    await s.runner.idle();
-    await new Promise((r) => setTimeout(r, 20));
+    const r = new LessonRunner(s.deps);
+    r.start();
+    await r.idle();
     expect(s.statusOf(1).status).toBe("done");
+  });
+
+  it("does not take anything before start()", async () => {
+    const s = setup();
+    s.repo.enqueue("acme/web", [1], "merged", T0);
+    s.runner.merged("/w", 2);
+    await s.runner.daily();
+    await s.runner.idle();
+    expect(s.run).not.toHaveBeenCalled();
+    expect(s.statusOf(1).status).toBe("queued");
+    s.runner.start();
+    await s.runner.idle();
+    expect(s.statusOf(1).status).toBe("done");
+  });
+
+  it("a throwing notify does not turn a done item into failed", async () => {
+    const s = setup();
+    s.deps.notify = vi.fn(() => {
+      throw new Error("ui gone");
+    });
+    const r = new LessonRunner(s.deps);
+    s.repo.enqueue("acme/web", [1], "merged", T0);
+    r.start();
+    await r.idle();
+    expect(s.statusOf(1)).toMatchObject({ status: "done", error: null });
   });
 
   it("writes a new rule as pending and notifies", async () => {
