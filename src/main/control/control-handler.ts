@@ -28,7 +28,7 @@ export interface ControlHandlerDeps {
   tickets: TicketsRepo;
   sessions: SessionsRepo;
   ticketService: Pick<TicketService, "workDir" | "create">;
-  sessionService: Pick<SessionService, "open" | "openTerminalCount" | "isRunning" | "termIdOf"> & Partial<Pick<SessionService, "featureTerminalCount" | "openFeature" | "runningCoordinator">>;
+  sessionService: Pick<SessionService, "open" | "openTerminalCount" | "isRunning" | "termIdOf"> & Partial<Pick<SessionService, "featureTerminalCount" | "openFeature" | "openEpic" | "runningCoordinator">>;
   /** feature 总控的请求（设计文档 2026-10-26）；不给就拒绝。 */
   features?: FeaturesRepo;
   /** epic session 的请求（设计文档 2026-11-01）和 feature 总控的 epic_context；不给就拒绝。 */

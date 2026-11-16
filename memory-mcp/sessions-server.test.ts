@@ -503,7 +503,7 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
   it("lists only read tools, send_message and refresh_session, plus ask_user and report, in both languages", async () => {
     expect(await tools(setup(2000, { butler: true }).server)).toEqual([...BUTLER_TOOLS, ...INBOX_TOOLS]);
     expect(BUTLER_TOOLS.map((t) => t.name)).toEqual(NAMES);
-    // 不建、不删、不结束，也不开 session。
+    // 不建、不删、不结束；没有开 session 的工具（send_message 会接着关掉的终端）。
     for (const t of ["create_feature", "create_ticket", "start_session", "start_feature", "end_session", "set_epic_plan"]) expect(NAMES).not.toContain(t);
     for (const t of BUTLER_TOOLS) expect(t.description).toMatch(/[\u4e00-\u9fff]/);
     expect(BUTLER_TOOLS_EN.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]))
@@ -514,7 +514,8 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
     // send_message 说清楚只能发给 epic session 和 feature 总控。
     const send = BUTLER_TOOLS.find((t) => t.name === "send_message")!;
     expect(send.description).toContain("feature 总控");
-    expect(send.inputSchema).toMatchObject({ required: ["session", "text"] });
+    expect(send.inputSchema).toMatchObject({ required: ["text"] });
+    expect(Object.keys(send.inputSchema.properties)).toEqual(["session", "feature", "epic", "text"]);
   });
 
   it("sends each tool as a butler request, turning list_tickets ids into strings", async () => {
@@ -537,6 +538,13 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
     const d = callTool(server, "send_message", { session: "e1", text: "先合 checkout" });
     expect(await answer({ v: 1, ok: true, value: { sent: true } })).toEqual({ ...base, op: "send_message", session: "e1", text: "先合 checkout" });
     expect(JSON.stringify(await d)).toContain("sent");
+    // feature、epic 的 id 是数字：转成字符串。
+    const d2 = callTool(server, "send_message", { feature: 4, text: "看 PR" });
+    expect(await answer({ v: 1, ok: true, value: { sent: true } })).toEqual({ ...base, op: "send_message", feature: "4", text: "看 PR" });
+    await d2;
+    const d3 = callTool(server, "send_message", { epic: "shop", text: "巡检" });
+    expect(await answer({ v: 1, ok: true, value: { sent: true } })).toEqual({ ...base, op: "send_message", epic: "shop", text: "巡检" });
+    await d3;
     const e = callTool(server, "refresh_session", { session: "e1" });
     expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "refresh_session", session: "e1" });
     await e;
@@ -549,7 +557,8 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
     const { server, requestsDir } = setup(30, { butler: true });
     for (const [name, args] of [
       ["send_message", {}], ["send_message", { session: "e1" }], ["send_message", { session: "e1", text: " " }], ["send_message", { text: "t" }],
-      ["send_message", { session: "e1", text: "x".repeat(MESSAGE_LIMIT + 1) }], ["session_activity", {}], ["refresh_session", { session: "" }],
+      ["send_message", { session: "e1", text: "x".repeat(MESSAGE_LIMIT + 1) }], ["send_message", { session: "e1", feature: "f", text: "t" }],
+      ["send_message", { feature: "", text: "t" }], ["send_message", { epic: 1.5, text: "t" }], ["session_activity", {}], ["refresh_session", { session: "" }],
       ["list_tickets", { feature: true }], ["list_tickets", { epic: "" }], ["list_tickets", { feature: 1.5 }],
       ["start_session", { repo: "r", task: "t" }], ["create_feature", { name: "a", brief: "b" }], ["end_session", { session: "s", reason: "r" }],
     ] as const) {

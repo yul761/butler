@@ -288,6 +288,9 @@ const ZH = {
   ctlSendWrongTarget: (id: string) => `只能给 epic session 或 feature 总控发消息，${id} 不是（或者它的 epic、feature 已经归档）。ticket 和修复 session 的事告诉管它们的总控`,
   ctlSendBlocked: (id: string, why: string) => `现在不能往 ${id} 里发：${why}。稍后再试`,
   ctlSendNote: "消息已经交给 Butler，等它的输入框就绪就发进去。它的回复不会自动转给你，要看结果用 session_activity。",
+  ctlSendOpenedNote: "它的终端原来关着：Butler 已经接着它最近的对话打开（或者新开了一个），等输入框就绪就把消息发进去。它的回复不会自动转给你，要看结果用 session_activity。",
+  ctlSendOpening: "Butler 正在打开它的终端，等一会儿再发。",
+  ctlSendNotStarted: (feature: string, epic: string) => `feature ${feature} 还没开工：它的规划要由 epic ${epic} 的 epic session 用 start_feature 发出去。把要它做的事发给那个 epic session。`,
   butlerMessagePrefix: "Butler 总控发来的消息：",
   butlerPatrolMessage:
     "【每日巡检】请做一次巡检：1. list_prs 看所有 PR 的 review 和 CI，列出 CI 失败、要修改、可以合并的；2. list_inbox 看待你决定和最近的汇报；" +
@@ -547,6 +550,9 @@ const EN: MainStrings = {
   ctlSendWrongTarget: (id: string) => `Messages can only go to an epic session or a feature coordinator, and ${id} is neither (or its epic or feature is archived). For ticket and fix sessions, tell the coordinator that manages them`,
   ctlSendBlocked: (id: string, why: string) => `Nothing can be sent to ${id} now: ${why}. Try again later`,
   ctlSendNote: "Butler has the message and will send it once the input box is ready. Its reply does not come back to you automatically; use session_activity to see what it did.",
+  ctlSendOpenedNote: "Its terminal was closed, so Butler reopened its latest conversation (or opened a new one) and will send the message once the input box is ready. Its reply does not come back to you automatically; use session_activity to see what it did.",
+  ctlSendOpening: "Butler is opening its terminal. Send again in a moment.",
+  ctlSendNotStarted: (feature: string, epic: string) => `Feature ${feature} has not started yet: its plan goes out when the epic session of ${epic} calls start_feature. Send what it should do to that epic session.`,
   butlerMessagePrefix: "Message from Butler control:",
   butlerPatrolMessage:
     "[Daily patrol] Please do a patrol: 1. list_prs to check review and CI on every PR, and list those with failing CI, requested changes, or ready to merge; 2. list_inbox for pending decisions and recent reports; " +
