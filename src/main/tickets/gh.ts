@@ -258,6 +258,10 @@ export function reviewerKind(login: string, prAuthor: string): "copilot" | "huma
 
 const REVIEWS = { REVIEW_REQUIRED: "pending", CHANGES_REQUESTED: "changes_requested", APPROVED: "approved" } as const;
 
+// 退回用的最小字段里有 headRefOid，它是 gh v2.18.0（2022-10-18，cli/cli bb252020）才加的；
+// 新增的 author、comments、createdAt、closedAt、mergedAt、reviews、statusCheckRollup 在 v1.9.0（2021-04）的 PullRequestFields 里就有，
+// commits 最晚 v1.10.0（2021-05）也有。所以认 headRefOid 的 gh 一定认全部字段，"Unknown JSON field" 退回只会发生在连最小字段也不认的旧 gh 上（结果仍是 null）；
+// 不需要用 REST 补 reviews、comments。
 const PR_FIELDS_MIN = "number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup";
 const PR_FIELDS = `${PR_FIELDS_MIN},author,reviews,comments,commits,createdAt,mergedAt,closedAt`;
 
