@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, moveTargetArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, moveTargetArg, prStagesScopeArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -201,5 +201,12 @@ describe("inbox IPC arguments (BTL-190 2+3)", () => {
     expect(inboxScopeArg({ epicId: 3 })).toEqual({ epicId: 3 });
     expect(inboxScopeArg({ all: true })).toEqual({ all: true });
     for (const bad of [null, {}, { all: 1 }, { featureId: 0 }, { epicId: "3" }, "all"]) expect(() => inboxScopeArg(bad), JSON.stringify(bad)).toThrow();
+  });
+
+  it("validates a PR stages scope", () => {
+    expect(prStagesScopeArg({ ticketKey: "A-1" })).toEqual({ ticketKey: "A-1" });
+    expect(prStagesScopeArg({ featureId: 1 })).toEqual({ featureId: 1 });
+    expect(prStagesScopeArg({ epicId: 2 })).toEqual({ epicId: 2 });
+    for (const bad of [{}, null, "A-1", { featureId: "x" }, { epicId: 0 }, { ticketKey: "" }]) expect(() => prStagesScopeArg(bad), JSON.stringify(bad)).toThrow();
   });
 });

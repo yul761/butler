@@ -105,6 +105,19 @@ export class InboxRepo {
     ).map(toItem);
   }
 
+  /** 这个 ticket 的 report，从早到晚；repoId 是发 report 的 session 的仓库（总控、查不到 session 的为 null）。 */
+  reportsForTicket(ticketKey: string): { at: number; text: string; repoId: number | null }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT i.created_at AS at, i.text AS text, s.repo_id AS repo_id
+         FROM inbox_items i LEFT JOIN sessions s ON s.id = i.session_id
+         WHERE i.kind = 'report' AND i.ticket_key = ?
+         ORDER BY i.created_at, i.id`,
+      )
+      .all(ticketKey) as unknown as { at: number; text: string; repo_id: number | null }[];
+    return rows.map((r) => ({ at: Number(r.at), text: r.text, repoId: r.repo_id === null ? null : Number(r.repo_id) }));
+  }
+
   /** 还要送给总控的汇报，从早到晚。 */
   pendingReports(): InboxItem[] {
     return (this.db.prepare(`SELECT * FROM inbox_items WHERE kind = 'report' AND status = 'pending' ORDER BY created_at, id`).all() as unknown as Row[]).map(toItem);

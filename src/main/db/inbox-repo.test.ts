@@ -4,6 +4,7 @@ import { migrate } from "./database";
 import { InboxRepo } from "./inbox-repo";
 import { MIGRATIONS } from "./migrations";
 import { SessionsRepo } from "./sessions-repo";
+import { TicketsRepo } from "./tickets-repo";
 
 const owner = (sessionId: string, o: { ticketKey?: string | null; featureId?: number | null; epicId?: number | null } = {}) => ({
   sessionId, ticketKey: o.ticketKey ?? null, featureId: o.featureId ?? null, epicId: o.epicId ?? null,
@@ -97,5 +98,26 @@ describe("InboxRepo (BTL-190 2+3)", () => {
     sessions.deleteChain("b");
     expect(repo.pendingDecisions().map((d) => d.id)).toEqual([keep]);
     expect(repo.recentReports(null, 10)).toEqual([]);
+  });
+
+  it("reportsForTicket returns only that ticket's reports, with the sending session's repo (null when unknown)", () => {
+    const db = memDb();
+    const tickets = new TicketsRepo(db);
+    const sessions = new SessionsRepo(db);
+    const repo = new InboxRepo(db);
+    tickets.insert({ key: "T-1", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null });
+    const r1 = tickets.addRepo({ ticketKey: "T-1", repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "fix", ticketKey: "T-1", cwd: "/w", origin: "butler", createdAt: 1, lastActivityAt: null, repoId: r1 });
+    sessions.insertIfAbsent({ id: "coord", ticketKey: "T-1", cwd: "/w", origin: "butler", createdAt: 1, lastActivityAt: null });
+    repo.addReport({ ...owner("coord", { ticketKey: "T-1" }), text: "coordinator", kind: "done", status: "pending", createdAt: 3 });
+    repo.addReport({ ...owner("fix", { ticketKey: "T-1" }), text: "fixer", kind: "done", status: "pending", createdAt: 2 });
+    repo.addReport({ ...owner("gone", { ticketKey: "T-1" }), text: "no session row", kind: "done", status: "dismissed", createdAt: 4 });
+    repo.addReport({ ...owner("fix", { ticketKey: "T-2" }), text: "other ticket", kind: "done", status: "pending", createdAt: 5 });
+    repo.addDecision({ ...owner("fix", { ticketKey: "T-1" }), question: "q", options: [], context: null, createdAt: 6 });
+    expect(repo.reportsForTicket("T-1")).toEqual([
+      { at: 2, text: "fixer", repoId: r1 },
+      { at: 3, text: "coordinator", repoId: null },
+      { at: 4, text: "no session row", repoId: null },
+    ]);
   });
 });

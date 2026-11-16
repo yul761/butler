@@ -73,6 +73,7 @@ import { ControlInbox } from "./control/control-inbox";
 import { HookInbox } from "./hooks/inbox";
 import { stageEventFromHook } from "./hooks/stage-hook";
 import { InboxRepo } from "./db/inbox-repo";
+import { PrStagesService } from "./prwatch/pr-stages-service";
 import { InboxService } from "./inbox/inbox-service";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
@@ -816,8 +817,9 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   // 「待你决定」和汇报（BTL-190 第 2+3 点）。递回答不看「需要你」（未决的 ask_user 本身就算），别的检查照常；递汇报和 CI 结果同一道 guard。
+  const inboxRepo = new InboxRepo(db);
   const inboxService: InboxService = new InboxService({
-    repo: new InboxRepo(db),
+    repo: inboxRepo,
     head: (id) => sessions.head(id),
     ticket: (key) => tickets.get(key),
     epicOfFeature: (id) => features.get(id)?.epicId ?? null,
@@ -1118,6 +1120,18 @@ async function bootstrap(): Promise<void> {
     closeIdleSessions: (ids) => sessionCleanup.closeIdleNow(ids),
     deleteHiddenSessions: (ids) => sessionCleanup.deleteHidden(ids),
     inbox: inboxService,
+    prStages: new PrStagesService({
+      tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id) },
+      features: {
+        byEpic: (epicId) => features.list().filter((f) => f.epicId === epicId),
+        get: (id) => features.get(id),
+      },
+      stages: prStages,
+      prWatch: prWatchRepo,
+      reports: (key) => inboxRepo.reportsForTicket(key),
+      // 和 gateCommand 同一个条件：hook 程序不是当前版本就看不到 skill 调用。
+      skillTracking: () => health.hookBinCurrent() && existsSync(paths.hookBin),
+    }),
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
     nowView: (merges) => {
       // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
