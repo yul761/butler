@@ -106,6 +106,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
 - **换新不丢对话。** session 换新时（↻ 按钮、总控的 `refresh_session`，或者上下文太长时自动换新），Butler 先让它写 handoff，等记忆真的存好，同时把最近几轮对话存到 `~/.butler/refresh/<session>.md`，不调用模型。`/clear` 之后 session 会 recall 那份 handoff、读这个文件，然后接着做换新前在做的事；如果当时在等什么，就说一句在等什么并继续等。不会再停住等你的下一条指令。
 - **PR 进度。** ticket 页、feature 页和 epic 页都有一个 **PR 进度** tab。ticket 的每个仓库一条，分六步：设计、开发、自我 review、CI、peer review、合并。做完的是绿色，当前这一步是蓝色，失败或被打回的是红色，还没到的是灰色。每一步都由 Butler 自己判断：这个 ticket 的 session 调用了设计类 skill（比如 brainstorming、writing-plans）时设计开始，分支上出现第一个 commit 时结束，没调用过就显示 **跳过**（设计在 feature 或 epic 层完成的算已完成）；开发从第一个 commit 开始；session 调用了 review 类 skill（比如 code-review、simplify）时自我 review 开始，下一次 push 或开了 PR 时结束，没调用过就显示 **跳过**；开了 PR 以后开始 CI，CI 失败会回到开发；CI 通过后开始 peer review，有一个人（不是 PR 作者、不是 bot、也不是 Copilot）批准时结束，有人要求修改就回到开发，下一轮记作第 2 轮，没有人批准就合并了显示 **跳过**；PR 合并时合并这一步结束，关闭但没合并会标成 **已关闭**。Butler 看的是 PR 拉回来的 review 列表，不是 `reviewDecision`，所以没开“必须 review”的仓库也能判断。hook 程序不是当前版本时，设计和自我 review 显示 **未知**，不显示 **跳过**。升级前就开始的 session 和更早的 ticket，即使做过设计或 review，也可能显示 **跳过**，因为那些 session 没有被记录：skill 记录只对升级后启动的 session 生效（Skill hook 在 session 启动时才加进它的设置）。人的批准后来被撤销（dismiss）的，不再算 peer review。步骤下面是时间线：skill 调用、第一个 commit、CI 结果、Copilot 和 peer review 的评论，以及这个 ticket 的 session 发的 `report`，比如自我 review 之后的那一句说明。**收起时间线** 能把它收起来，tab（默认收起，带 展开/收起 按钮）能显示或收起整个面板，两者都记在这台电脑上。feature 页是一张表，每个 ticket 的每个仓库一行；epic 页每个 feature 一条进度条，写着已合并多少个 PR。
 - **合并后清理 worktree。** 一旦 handoff 报告某个 ticket 的 PR 已合并，Butler 就用 `git worktree remove` 删掉这个 ticket 的 worktree。分支保留，在那里再开 session 时会重建 worktree。有未提交改动或未跟踪文件的 worktree，或者自己的 session 还在终端里运行的，Butler 不会删。这时 ticket 页会说明原因，并给一个 **重新检查** 按钮，那个终端退出时 Butler 也会再试一次。被 `.gitignore` 忽略的文件（`node_modules`、本地的 `.env`）会随 worktree 一起删掉。
+- **review 经验。** Butler 会读你已合并 PR 上的 review 评论（经 `gh` 和你自己的 `claude`），为每个仓库提炼出规矩，比如“改 schema 要加迁移”。在侧栏打开 **review 经验** 查看：新规矩先放在 **待确认** 里，等你确认、编辑后确认或驳回，侧栏上的数字是待确认的条数。在某个仓库上点 **分析历史**，会回头分析它过去的 PR，之后新合并的 PR 会自动接着分析。相关的仓库可以归成一个产品，产品的规矩对它的所有仓库都生效。只有你确认过的规矩才会送出去，而且只送给 Butler 开的 ticket session 和修复 session，放在 session 说明里（每个 session 最多 30 条，出现次数多的优先）。规矩改了以后，下一次打开或恢复 session 时才生效，已经开着的 session 不受影响。规矩只存在 Butler 里，不会写进你的仓库（不写 `CLAUDE.md`，也不写 `.github/copilot-instructions.md`）。
 - **晚间 handoff。** 在你选定的时间，Butler 让你自己登录好的 `claude` 为每个有动静的 ticket 写一份结构化的 handoff。
   - `Edit`、`Write` 和 `NotebookEdit` 一律禁止。
   - Butler 允许读文件、`gh pr view`、`gh pr checks`、`git log`、`git status`，以及你选定的 tracker MCP 工具。
@@ -197,7 +198,7 @@ NSIS 安装包目前没有签名（见[代码签名政策](#代码签名政策)�
 
 | 路径 | 内容 |
 |------|------|
-| `~/.butler/app.db` | ticket、session、handoff、跟进事项、设置、LLM 审计日志和加密后的 API key（SQLite）。旧版本留下的行（早间简报、敏感词列表）还在，但已不再使用。 |
+| `~/.butler/app.db` | ticket、session、handoff、跟进事项、设置、LLM 审计日志、review 经验（只存在这里，不会写进你的仓库）和加密后的 API key（SQLite）。旧版本留下的行（早间简报、敏感词列表）还在，但已不再使用。 |
 | `~/.butler/statecore/statecore.db` | StateCore 记忆 |
 | `~/.butler/inbox/` | 等待处理的 hook 报告（读不了的放在 `inbox/bad/`） |
 | `~/.butler/bin/butler-hook` | Claude Code 运行的 hook 程序（Windows 上是 `butler-hook.exe`） |
@@ -255,7 +256,7 @@ epic 下的所有东西还有 `butler-epic`，即 epic 的记忆（scope 为 `ep
 
 ## 隐私模型
 
-公司的工作只经过你公司的 `claude`。可选的个人 API 只用来做一件事：在 **完整** 隐私档位下蒸馏 StateCore 记忆。它会发送真实的 ticket 号、原始对话片段和现有的记忆，不做扫描（见 [StateCore 记忆](#statecore-记忆)）。在 **关闭**、**仅元数据（默认）** 和 **脱敏文本** 档位下，个人 API 从不会被调用。
+公司的工作只经过你公司的 `claude`。可选的个人 API 只用来做一件事：在 **完整** 隐私档位下蒸馏 StateCore 记忆。它会发送真实的 ticket 号、原始对话片段和现有的记忆，不做扫描（见 [StateCore 记忆](#statecore-记忆)）。review 经验的分析是另一回事：它会把 PR 的评论、相关代码改动，以及 Butler 的 handoff 和对话记录摘录交给你自己的 `claude`，不经过个人 LLM API，所以不受隐私档位影响。在 **关闭**、**仅元数据（默认）** 和 **脱敏文本** 档位下，个人 API 从不会被调用。
 
 **审计** 页列出每一次发出的调用，以及因超出预算而被拒绝的调用。有些拒绝只写进日志，比如因为档位变了而被拒绝的蒸馏调用，或者已保存的 key 无法再解密。
 

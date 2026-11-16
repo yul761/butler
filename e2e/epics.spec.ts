@@ -186,7 +186,7 @@ test("an epic from planning to archive: features from the epic session, the plan
   // 3. epic session：在 epic 的工作区里打开，每个仓库一个 --add-dir，挂 epic 记忆和 epic 模式的 butler-sessions。它不是总控。
   await page.locator(".epic-page").getByRole("button", { name: `+ ${S.newEpicSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
-  await expect.poll(() => fakeLog(s)).toContain(`mcp=butler-workspace,butler-epic,butler-sessions cwd=${epicWorkspace} adddirs=${join(shop, "backend")}|${join(shop, "frontend")}\n`);
+  await expect.poll(() => fakeLog(s)).toContain(`mcp=butler-workspace,butler-epic,butler-sessions cwd=${epicWorkspace} adddirs=${join(shop, "backend")}|${join(shop, "frontend")} guide=`);
   const [epicSession] = sessionsIn(s, epicWorkspace);
   await expect(page.locator(".epic-page .session .place")).toHaveText([S.epicSession]);
   expect(dbRows(s, "SELECT coordinator, epic_id AS epic, feature_id AS feature, ticket_key AS ticket FROM sessions WHERE id = ?", epicSession)).toEqual([{ coordinator: 0, epic: 1, feature: null, ticket: null }]);
