@@ -278,6 +278,61 @@ describe("applyEntry across turns", () => {
     });
   });
 
+  describe("turn ends that no Stop hook announces (follow-up D)", () => {
+    const say = (content: unknown) => ({ type: "user", message: { role: "user", content } });
+    const ended = (s: ReturnType<typeof newTranscriptState>) => s.events.filter((e) => e.type === "turn-end");
+    const apiError = { type: "assistant", isApiErrorMessage: true, message: { model: "<synthetic>", role: "assistant", stop_reason: "stop_sequence", content: [{ type: "text", text: "limit reached" }] } };
+
+    it("records an Esc interrupt as a hookless turn end", () => {
+      const s = newTranscriptState();
+      applyEntry(s, say("go"));
+      applyEntry(s, toolUse("t1", "Bash", { command: "sleep 99" }));
+      applyEntry(s, say("[Request interrupted by user for tool use]"));
+      expect(ended(s)).toEqual([expect.objectContaining({ hookless: true })]);
+    });
+
+    it("records a synthetic API error closed by turn_duration as a hookless turn end", () => {
+      const s = newTranscriptState();
+      applyEntry(s, say("go"));
+      applyEntry(s, apiError);
+      expect(ended(s)).toEqual([]);
+      applyEntry(s, { type: "system", subtype: "turn_duration" });
+      expect(ended(s)).toEqual([expect.objectContaining({ hookless: true })]);
+    });
+
+    it("does not mark a normal end_turn, nor a turn_duration after it", () => {
+      const s = newTranscriptState();
+      applyEntry(s, say("go"));
+      applyEntry(s, { type: "assistant", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } });
+      applyEntry(s, { type: "system", subtype: "turn_duration" });
+      expect(ended(s)).toEqual([expect.objectContaining({ type: "turn-end" })]);
+      expect(ended(s)[0]).not.toHaveProperty("hookless");
+    });
+
+    it("does not keep the synthetic error text as the last reply (needs-you must not judge it)", () => {
+      const s = newTranscriptState();
+      applyEntry(s, say("go"));
+      applyEntry(s, { type: "assistant", message: { role: "assistant", id: "m1", stop_reason: "end_turn", content: [{ type: "text", text: "real answer" }] } });
+      applyEntry(s, { ...apiError, message: { ...apiError.message, id: "m2" } });
+      applyEntry(s, { type: "system", subtype: "turn_duration" });
+      expect(s.lastReply).toBe("real answer");
+      expect(s.lastReplyId).toBe("m1");
+      const fresh = newTranscriptState();
+      applyEntry(fresh, apiError);
+      expect(fresh.lastReply).toBeNull();
+    });
+
+    it("a normal turn after an API error is not marked", () => {
+      const s = newTranscriptState();
+      applyEntry(s, apiError);
+      applyEntry(s, { type: "system", subtype: "turn_duration" });
+      applyEntry(s, say("retry"));
+      applyEntry(s, { type: "assistant", message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "text", text: "ok" }] } });
+      applyEntry(s, { type: "system", subtype: "turn_duration" });
+      expect(ended(s).map((e) => "hookless" in e)).toEqual([true, false]);
+    });
+  });
+
   it("opens the turn on any assistant entry that is not end_turn (task notification restart)", () => {
     const s = newTranscriptState();
     applyEntry(s, { type: "assistant", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } });

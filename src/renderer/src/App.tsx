@@ -203,6 +203,7 @@ export function App() {
                 key={currentEpic.id}
                 epic={currentEpic}
                 onOpenFeature={(id) => setRoute({ page: "feature", id })}
+                onOpenTicket={(key) => setRoute({ page: "ticket", key })}
                 onFeatureCreated={goFeature}
                 focusSession={route.focusSession}
                 onOpenTarget={openTarget}

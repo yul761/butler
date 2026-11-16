@@ -3,6 +3,7 @@ import { CONTEXT_LIMIT } from "../../shared/control";
 import type {
   AddRepoInput, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
+import type { PrStagesScope } from "../../shared/pr-stages";
 import { EPIC_NAME_LIMIT } from "../epics/epic-service";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 import { M } from "../strings";
@@ -140,6 +141,16 @@ export function inboxScopeArg(v: unknown): InboxScope {
   if (o.featureId !== undefined) return { featureId: featureIdArg(o.featureId) };
   if (o.epicId !== undefined) return { epicId: epicIdArg(o.epicId) };
   throw new Error("invalid inbox scope");
+}
+
+/** PR 进度的范围：一个 ticket、一个 feature 或一个 epic。 */
+export function prStagesScopeArg(v: unknown): PrStagesScope {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid PR stages scope");
+  if (o.ticketKey !== undefined) return { ticketKey: ticketKeyArg(o.ticketKey) };
+  if (o.featureId !== undefined) return { featureId: featureIdArg(o.featureId) };
+  if (o.epicId !== undefined) return { epicId: epicIdArg(o.epicId) };
+  throw new Error("invalid PR stages scope");
 }
 
 /** 目录：1–4096 字的字符串（存在与否由调用方检查）。 */

@@ -100,3 +100,36 @@ test("Butler control messages a feature coordinator by name, reopening it when i
   await expect.poll(() => flat(messagesIn(s, workspace)[coordinator]?.at(-1))).toBe("Butler 总控发来的消息： 再看一下");
   expect(fakeLog(s).match(new RegExp(`interactive resume ${coordinator} `, "g"))).toHaveLength(1);
 });
+
+/**
+ * 刚开的 epic session 没人打过字：claude 停在空输入框上，不会有 Stop。Butler 总控给它发消息不能被当成“忙”挡回来（BTL-190 follow-up D）。
+ */
+test("Butler control messages an open epic session nobody has typed into", async ({ makeSandbox, launch }) => {
+  test.setTimeout(180_000);
+  const s = makeSandbox();
+  s.env = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000" };
+  const shop = join(s.dir, "shop");
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  makeGitRepo(join(shop, "frontend"));
+  makeGitRepo(join(shop, "backend"));
+  const side = page.locator(".sidebar");
+  await create(page, side.getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "checkout-revamp", shop);
+  const workspace = join(s.dir, "shop-epics", "checkout-revamp");
+  await page.locator(".epic-page").getByRole("button", { name: `+ ${S.newEpicSession}`, exact: true }).click();
+  await expect.poll(() => sessionsIn(s, workspace).length).toBe(1);
+  const [epicSession] = sessionsIn(s, workspace);
+  await expect.poll(() => terminalText(page)).toContain(`fake claude ready (${epicSession.slice(0, 8)})`);
+  // 什么都不输入：直接去 Butler 总控那里发。
+  await side.getByRole("button", { name: S.butlerNav, exact: true }).click();
+  await page.locator(".butler-page").getByRole("button", { name: `+ ${S.newButlerSession}`, exact: true }).click();
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+  await page.waitForTimeout(1500);
+
+  const sent = await callTool(page, s, "send_message", { epic: "checkout-revamp", text: "先看一下规划" });
+  expect(sent.error).toBe(false);
+  expect(JSON.parse(sent.text)).toMatchObject({ sent: true, sessionId: epicSession });
+  expect(JSON.parse(sent.text).opened).toBeUndefined();
+  await expect.poll(() => flat(messagesIn(s, workspace)[epicSession]?.at(-1))).toBe("Butler 总控发来的消息： 先看一下规划");
+  expect(sessionsIn(s, workspace)).toEqual([epicSession]);
+});

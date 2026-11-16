@@ -1,3 +1,4 @@
+import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { PrivacyLevel } from "../../shared/llm";
 import type { ReportKind } from "../../shared/control";
 import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
@@ -321,6 +322,10 @@ export const EN: UiStrings = {
   inboxNoReports: "No reports yet.",
   inboxNoDecisions: "Nothing to decide.",
   tabCollapseHint: "Click again to collapse",
+  tabToggleCollapseHint: "Collapse to give the terminal more room",
+  tabToggleExpandHint: "Expand to the tab you were last on",
+  tabCollapse: "Collapse",
+  tabExpand: "Expand",
   inboxReportKinds: { progress: "Progress", done: "Done", blocked: "Blocked" } as Record<ReportKind, string>,
   inboxWho: (role: InboxRole, ticketKey: string | null, repo: string | null) =>
     role === "ticket" ? `${ticketKey ?? ""}${repo ? ` (${repo})` : ""}`
@@ -537,4 +542,38 @@ export const EN: UiStrings = {
   wizardPrivacyHelp: "The personal API is used only at the full level, for memory distillation; the other levels never call it. If you don't want it, choose Off or leave everything empty.",
   wizardDoneTitle: "All set",
   wizardDoneHelp: "Click “New ticket” on the left to start. Every night Butler writes a handoff for each ticket with activity. You can change all of this in Settings later, and rerun this wizard from there.",
+  prStagesTab: "PR progress",
+  prStage: { design: "Design", dev: "Develop", self_review: "Self-review", ci: "CI", peer_review: "Peer review", merge: "Merge" } as Record<PrStageId, string>,
+  prClosed: "Closed",
+  prStageSkipped: "Skipped",
+  prStageUnknown: "Unknown",
+  prStageActive: "In progress",
+  prStateDone: "Done",
+  prStateFailed: "Failed",
+  prStateTodo: "Not started",
+  prStageFeatureLevel: "At feature level",
+  prRound: (n: number) => `Round ${n}`,
+  prTimelineShow: "Show timeline",
+  prTimelineHide: "Hide timeline",
+  prMergedOf: (m: number, n: number) => `${m}/${n} merged`,
+  prNoRepos: "No repos yet",
+  prBackToDev: "→ back to dev",
+  prTimeline: {
+    design_skill: (d) => (d ? `skill ${d}` : "skill"),
+    review_skill: (d) => (d ? `skill ${d}` : "skill"),
+    first_commit: () => "First commit",
+    pr_opened: () => "PR opened",
+    push: () => "Push",
+    ci_pending: () => "running",
+    ci_passed: () => "✓",
+    ci_failed: () => "✗",
+    copilot_review: (d) => (d ? `Copilot review (${d} comments)` : "Copilot review"),
+    human_approved: (d) => (d ? `${d} approved` : "Approved"),
+    human_changes: (d) => (d ? `${d} requested changes` : "Changes requested"),
+    human_commented: (d) => (d ? `${d} commented` : "Commented"),
+    human_dismissed: (d) => (d ? `${d}'s review was dismissed` : "A review was dismissed"),
+    merged: () => "✓",
+    closed: () => "PR closed",
+    report: (d) => (d ? `Report: ${d}` : "Report"),
+  } as Record<PrTimelineKind, (detail: string | null) => string>,
 };

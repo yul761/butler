@@ -27,7 +27,9 @@ export interface BackgroundTask {
  */
 export type TranscriptEvent =
   | { type: "tool"; at: number; name: string; input: Record<string, unknown> }
-  | { type: "turn-start" | "turn-end"; at: number };
+  | { type: "turn-start"; at: number }
+  /** hookless：这一轮不是靠 Stop hook 结束的（Esc 打断，或者 API / 限额错误），读 transcript 的一方要自己把它当作停下来等输入。 */
+  | { type: "turn-end"; at: number; hookless?: true };
 
 /** events 最多攒多少条：第一次读 4MB 的尾部时不会无限涨，取走的一方只关心最近的。 */
 export const MAX_PENDING_EVENTS = 100;
@@ -43,10 +45,12 @@ export interface TranscriptState {
   lastReplyId: string | null;
   /** 还没被取走的事件，从旧到新，最多 MAX_PENDING_EVENTS 条。 */
   events: TranscriptEvent[];
+  /** 最近一条 assistant 记录是 Claude Code 自己合成的错误（isApiErrorMessage / <synthetic>）：这一轮会以 turn_duration 结束，不会有 Stop。 */
+  apiError: boolean;
 }
 
 export function newTranscriptState(): TranscriptState {
-  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null, lastReplyId: null, events: [] };
+  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null, lastReplyId: null, events: [], apiError: false };
 }
 
 function pushEvent(s: TranscriptState, e: TranscriptEvent): void {
@@ -54,9 +58,9 @@ function pushEvent(s: TranscriptState, e: TranscriptEvent): void {
   if (s.events.length > MAX_PENDING_EVENTS) s.events.splice(0, s.events.length - MAX_PENDING_EVENTS);
 }
 
-/** 改 turnOpen；真的从关到开、从开到关时记一条 turn-start / turn-end。 */
-function setTurn(s: TranscriptState, open: boolean, at: number): void {
-  if (s.turnOpen !== open) pushEvent(s, { type: open ? "turn-start" : "turn-end", at });
+/** 改 turnOpen；真的从关到开、从开到关时记一条 turn-start / turn-end。hookless：关的这一下不会有 Stop hook。 */
+function setTurn(s: TranscriptState, open: boolean, at: number, hookless = false): void {
+  if (s.turnOpen !== open) pushEvent(s, open ? { type: "turn-start", at } : { type: "turn-end", at, ...(hookless && { hookless: true as const }) });
   s.turnOpen = open;
 }
 
@@ -131,9 +135,10 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
   const message = isObj(entry.message) ? entry.message : null;
 
   if (entry.type === "assistant" && message) {
+    s.apiError = entry.isApiErrorMessage === true || message.model === "<synthetic>";
     // 后台任务靠通知或 TaskStop 清，没拿到结果的前台工具（被打断）在轮次结束时清掉
     if (message.stop_reason === "end_turn") {
-      setTurn(s, false, entryTime(entry));
+      setTurn(s, false, entryTime(entry), s.apiError);
       s.running.clear();
     } else {
       // 后台任务完成会让 Claude 在没有用户消息的情况下重新开始一轮
@@ -143,7 +148,8 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
     const text = message.content
       .flatMap((b) => (isObj(b) && b.type === "text" && typeof b.text === "string" && b.text.trim() ? [b.text.trim()] : []))
       .join("\n");
-    if (text) {
+    // Claude Code 合成的报错（限额、API 出错）不是 claude 说的话，不当作最后一条回复，“需要你”不会拿它去判断
+    if (text && !s.apiError) {
       s.lastReply = text;
       s.lastReplyId = typeof message.id === "string" && message.id ? message.id : null;
     }
@@ -185,14 +191,18 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
     if (text !== null) {
       // 新的用户消息或者打断：上一轮没拿到结果的前台工具不会再有结果了
       s.running.clear();
-      setTurn(s, !text.startsWith(INTERRUPT_PREFIX), entryTime(entry));
+      const interrupted = text.startsWith(INTERRUPT_PREFIX);
+      if (!interrupted) s.apiError = false;
+      // Esc 打断：Claude Code 不触发 Stop hook
+      setTurn(s, !interrupted, entryTime(entry), interrupted);
     }
     return;
   }
 
   if (entry.type === "system") {
     if (entry.subtype === "turn_duration" || entry.subtype === "stop_hook_summary") {
-      setTurn(s, false, entryTime(entry));
+      // 错误结束的轮次（限额、API 报错）触发的是 StopFailure，不是 Stop
+      setTurn(s, false, entryTime(entry), entry.subtype === "turn_duration" && s.apiError);
       s.running.clear();
     }
     return;

@@ -1,9 +1,9 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { S, STRINGS, type UiStrings } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, openTab, pageTab, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, create, expect, makeGitRepo, newTicket, openTab, pageTab, terminalText, test, type Sandbox } from "./fixtures";
 
 /** 假 claude 跑的命令：第一个词让它归类成“跑测试”。 */
 const LONG_COMMAND = "pnpm test --filter @acme/checkout-frontend --run --reporter=verbose";
@@ -71,28 +71,6 @@ async function callTool(page: Page, s: Sandbox, tool: string, args: unknown = {}
   await expect.poll(() => calls().length).toBe(before + 1);
   const r = calls()[before];
   return { error: r.isError === true, text: r.content[0].text };
-}
-
-/** 点 open 打开新建对话框（epic 或 feature），选上一层目录，下面的两个仓库都用。建好后停在新页面上。 */
-async function create(page: Page, open: Locator, label: string, name: string, dir: string, T: UiStrings = S): Promise<void> {
-  await open.click();
-  await page.getByLabel(label, { exact: true }).fill(name);
-  const box = page.getByRole("textbox", { name: `${T.repo} ${T.pick}`, exact: true });
-  await box.fill(dir);
-  await box.blur();
-  await expect(page.getByText(T.subReposFound(2), { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: T.create, exact: true }).click();
-  await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
-}
-
-/** 在当前 feature 页上建 ticket，只用一个仓库；建完停在 ticket 页。 */
-async function newTicket(page: Page, key: string, repo: string, other: string): Promise<void> {
-  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
-  await page.getByLabel(S.ticketKey, { exact: true }).fill(key);
-  await page.locator(".modal").getByRole("checkbox", { name: repo, exact: true }).check();
-  await page.locator(".modal").getByRole("checkbox", { name: other, exact: true }).uncheck();
-  await page.getByRole("button", { name: S.create, exact: true }).click();
-  await expect(page.getByRole("heading", { name: key, exact: true })).toBeVisible();
 }
 
 /** 新开一个总控（已有的总控不算），等它就绪，返回 session id。 */
@@ -193,6 +171,7 @@ test("an epic from planning to archive: features from the epic session, the plan
   await create(page, newEpic, S.epicName, "checkout-revamp", shop);
   await expect(sections).toHaveText([S.epics, S.features]);
   await expect(page.locator(".epic-page .repos-bar .repo .name")).toHaveText(["backend", "frontend"]);
+  await openTab(page, S.features);
   await expect(page.locator(".epic-page")).toContainText(S.noEpicFeatures);
 
   await newEpic.click();
@@ -240,6 +219,7 @@ test("an epic from planning to archive: features from the epic session, the plan
   // 5. 点一行进 feature 页：规划在整体进度区，可折叠，保留换行。总控没有自动开：只跑过 epic session 这一个 claude，feature 下面没有 session。
   await row("payment").locator(".progress").click();
   await onPage("payment");
+  await openTab(page, S.featureProgress);
   await expect(page.locator(".feature-brief p")).toHaveText(paymentBrief);
   await expect(moveTo).toHaveValue("1");
   await shot(page, "epic-feature-brief.png");
@@ -366,14 +346,17 @@ test("an epic from planning to archive: features from the epic session, the plan
   await expect.poll(() => terminalText(page)).toContain("收到：still planning");
   await exitSession(page);
 
-  // 12. 等待标记往上传：现在什么都没在等。logs 的 DMS-1 开 session 说一句话，真的 Stop hook：ticket → feature → epic，epic 折叠时也看得到。
+  // 12. 等待标记往上传：现在什么都没在等。logs 的 DMS-1 开 session（刚启动就算在等）再说一句话，真的 Stop hook：ticket → feature → epic，epic 折叠时也看得到。
   await expect(epicRow.locator(".badge")).toHaveCount(0);
   await goToFeature("logs");
   await newTicket(page, "DMS-1", "audit", "metrics");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   expect(interactiveRuns(s).at(-1)).toContain("butler-epic");
-  await expect(epicRow.locator(".badge")).toHaveCount(0);
+  // 刚打开、还没人打字的 session 也算停着在等输入（1.9.0 起，总控才能往里发），等待标记同样往上传。
+  await expect(sidebarTicket("DMS-1").locator(".badge")).toBeVisible();
+  await expect(epicRow.locator(".badge")).toBeVisible();
+  await expect(featureRow("payment").locator(".badge")).toHaveCount(0);
   await typeLine(page, "hello");
   await expect.poll(() => terminalText(page)).toContain("收到：hello");
   await expect(sidebarTicket("DMS-1").locator(".badge")).toBeVisible();
@@ -488,6 +471,7 @@ test("a stuck ticket marks its feature and epic", async ({ makeSandbox, launch }
   await expect(epicRow.locator(".stuck-mark")).toBeVisible();
   await expect(featureRow("logs").locator(".stuck-mark")).toBeVisible();
   await goToEpic();
+  await openTab(page, S.features);
   await expect(row("logs").locator(".status")).toContainText(S.epicStatus.stuck);
   await expect(row("logs").locator(".stuck-mark")).toBeVisible();
   await expect(row("logs").locator(".badge")).toHaveCount(0);
@@ -549,6 +533,7 @@ test("ending a waiting session with × clears the mark at every level", async ({
   await expect(featureRow("logs").locator(".badge")).toHaveCount(0);
   await expect(epicRow.locator(".badge")).toHaveCount(0);
   await goToEpic();
+  await openTab(page, S.features);
   await expect(row("logs").locator(".status")).toContainText(S.epicStatus.active);
   await expect(row("logs").locator(".badge")).toHaveCount(0);
   expect(dbRows(s, "SELECT COUNT(*) AS n FROM sessions WHERE waiting_for_input = 1")).toEqual([{ n: 0 }]);
@@ -586,6 +571,7 @@ test("the plan waits for the summaries create_feature started", async ({ makeSan
   writeFileSync(gate, "");
   expect((await callTool(page, s, "create_feature", { name: "next", repos: ["backend"], brief: "下一步。" })).error).toBe(false);
   await expect.poll(() => fakeLog(s)).toContain(" summary held");
+  await openTab(page, S.features);
   await row("next").locator(".progress").click();
   await expect(page.getByRole("heading", { name: "next", exact: true })).toBeVisible();
   const coordinator = await newCoordinator(page, s, nextWorkspace);
@@ -672,6 +658,7 @@ test("archiving waits for fresh summaries, and the user can walk away meanwhile"
   hold();
   expect((await callTool(page, s, "create_feature", { name: "next", repos: ["backend"], brief: "下一步。" })).error).toBe(false);
   await expect.poll(held).toBe(1);
+  await openTab(page, S.features);
   await expect(row("next")).toBeVisible();
   await expect(row("pay").locator(".progress")).toHaveText(S.epicNoSummary);
   release();
@@ -779,6 +766,7 @@ test("an epic in English: the page, the tools' errors and the plan", async ({ ma
   const refused = await callTool(page, s, "create_feature", { name: "nope", repos: ["audit"], brief: "x" });
   expect(refused.error).toBe(true);
   expect(refused.text).toContain("This epic has no repo audit");
+  await openTab(page, E.features);
   await expect(row("payment").locator(".progress")).toHaveText(E.epicNoSummary);
   await expect(row("payment").locator(".status")).toHaveText(E.epicStatus.not_started);
   await shot(page, "epic-en.png");

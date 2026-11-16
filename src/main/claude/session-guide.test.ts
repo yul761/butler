@@ -21,6 +21,17 @@ describe("session guide", () => {
     expect(sessionGuide("en", "ticket")).not.toContain("start_session");
   });
 
+  it("只有 ticket session 被告知自我 review 之后用 report 说明结果（PR 进度时间线）", () => {
+    expect(sessionGuide("zh", "ticket")).toContain("自我 review");
+    expect(sessionGuide("zh", "ticket")).toContain("进度时间线");
+    expect(sessionGuide("en", "ticket")).toContain("progress timeline");
+    expect(sessionGuide("en", "ticket")).toContain("self-review");
+    for (const kind of ["coordinator", "epic", "butler"] as const) {
+      expect(sessionGuide("zh", kind)).not.toContain("自我 review");
+      expect(sessionGuide("en", kind)).not.toContain("self-review");
+    }
+  });
+
   it("所有 session 都被告知上下文会被换新，并要 remember 重要决定", () => {
     for (const kind of ["ticket", "coordinator"] as const) {
       expect(sessionGuide("zh", kind)).toContain("再让你从记忆里接上");

@@ -5,6 +5,8 @@ import { reportError } from "../errors";
 import { repoName, repoWhere, sessionPlace } from "../repos";
 import { sessionLabel, splitSessions } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
+import { PageTabs } from "./PageTabs";
+import { TicketPrStages } from "./PrStages";
 import { RepoDialog } from "./RepoDialog";
 import { EndSessionButton } from "./EndSessionButton";
 import { CloseIdleButton, DeleteHiddenButton } from "./SessionCleanupButtons";
@@ -201,6 +203,12 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
           </div>
         </div>
       )}
+
+      <PageTabs
+        page={`ticket:${ticket.key}`}
+        defaultTab="stages"
+        tabs={[{ id: "stages", label: S.prStagesTab, content: <TicketPrStages ticketKey={ticket.key} /> }]}
+      />
 
       <TicketOverview ticketKey={ticket.key} />
 

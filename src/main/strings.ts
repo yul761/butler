@@ -192,7 +192,7 @@ const ZH = {
   ctlStartBlocked: (name: string, why: string) => `feature ${name} 的总控已经在运行，但现在不能往里发：${why}。稍后再试，或者先不发`,
   ctlStartBlock: {
     closed: "它的终端刚关掉",
-    busy: "它正在干活",
+    busy: "它还没停下来等输入：还在干活，或者正在给它递别的自动消息",
     screen: "它的屏幕上有等用户回答的确认",
     needs_you: "它在等用户回答问题",
     typing: "用户正在它的终端里打字",
@@ -469,7 +469,7 @@ const EN: MainStrings = {
   ctlStartBlocked: (name: string, why: string) => `The coordinator of feature ${name} is running, but nothing can be sent to it now: ${why}. Try again later, or leave it be`,
   ctlStartBlock: {
     closed: "its terminal just closed",
-    busy: "it is working",
+    busy: "it has not stopped to wait for input: it is still working, or another automatic message is being delivered to it",
     screen: "its screen shows a prompt waiting for the user",
     needs_you: "it is waiting for the user to answer a question",
     typing: "the user is typing in its terminal",

@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrWatchRepo, PrWatchRow } from "../db/pr-watch-repo";
-import type { BranchRuns, CiCheck, PrStatus, branchRuns, failedLog, prStatus } from "../tickets/gh";
+import type { StageEvent } from "../db/pr-stage-repo";
+import { derivePrStages } from "./pr-stages";
+import type { BranchRuns, CiCheck, PrComment, PrStatus, branchRuns, failedLog, prStatus } from "../tickets/gh";
 import { CI_LOG_LINES, PR_FAST_MS, PR_GH_TIMEOUT_MS, PR_SLOW_MS, PR_WATCH_MAX, PrWatcher, nextCheckAt, type PrTarget } from "./pr-watcher";
 
 const target = (o: Partial<PrTarget> = {}): PrTarget => ({ ticketKey: "BTL-1", repoId: 1, repoPath: "/r", cwd: "/w", branch: "b", sessionOpen: true, ...o });
 const check = (name: string, state: CiCheck["state"], runId: number | null = null): CiCheck => ({ name, state, runId });
 const pr = (o: Partial<PrStatus> = {}): PrStatus => ({
-  number: 7, url: "https://x/pull/7", state: "OPEN", isDraft: false, review: "pending", headSha: "a1", checks: [check("test", "pending", 9)], ci: "pending", ...o,
+  number: 7, url: "https://x/pull/7", state: "OPEN", isDraft: false, review: "pending", headSha: "a1", checks: [check("test", "pending", 9)], ci: "pending",
+  author: "me", reviews: [], comments: [], firstCommitAt: null, createdAt: null, mergedAt: null, closedAt: null, ...o,
 });
 const row = (o: Partial<PrWatchRow> = {}): PrWatchRow => ({
   ticketKey: "BTL-1", repoId: 1, repoPath: "/r", branch: "b", number: 7, url: "https://x/pull/7", state: "open", review: "pending",
@@ -404,5 +407,211 @@ describe("PrWatcher", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(s.gh.prStatus).toHaveBeenCalledTimes(1);
     s.w.stop();
+  });
+});
+
+describe("PrWatcher stages", () => {
+  const review = { id: "PRR_kwHuman1", author: "alice", state: "COMMENTED" as const, body: "", submittedAt: 5 };
+  const copilot = { id: "PRR_kwCopilot1", author: "copilot-pull-request-reviewer", state: "COMMENTED" as const, body: "", submittedAt: 6 };
+  function withStages(opts: { rowOf?: PrWatchRow; targets?: PrTarget[] } = {}) {
+    const s = setup(opts.targets);
+    if (opts.rowOf) s.repo.rows.set(1, opts.rowOf);
+    const keys = new Set<string>();
+    const events: StageEvent[] = [];
+    const stages = {
+      has: vi.fn((k: string) => keys.has(k)),
+      add: vi.fn((e: Omit<StageEvent, "id">, k: string) => {
+        if (keys.has(k)) return false;
+        keys.add(k);
+        events.push({ ...e, id: events.length + 1 });
+        return true;
+      }),
+    };
+    const reviewComments = vi.fn<typeof import("../tickets/gh").reviewComments>(async () => []);
+    const firstCommitAt = vi.fn<typeof import("../tickets/git").firstCommitAt>(async () => null);
+    const reviewAuthors = vi.fn<typeof import("../tickets/gh").reviewAuthors>(async () => ({ botReviewIds: new Set(), botLogins: new Set() }));
+    const w = new PrWatcher({ ...s.deps, gh: { ...s.gh, reviewComments, reviewAuthors }, git: { firstCommitAt }, stages });
+    return { ...s, w, stages, events, reviewComments, reviewAuthors, firstCommitAt };
+  }
+  const derived = (events: StageEvent[]) =>
+    derivePrStages({
+      ticketKey: "BTL-1", featureId: null, repoId: 1, repoName: "r", branch: "b", ticketCreatedAt: 0, events, upperDesign: [], reports: [],
+      pr: { number: 7, url: "u", state: "open" }, skillTracking: true,
+    });
+
+  it("records every review at once and fetches inline comments only for a new Copilot review; a repeat round neither fetches nor notifies", async () => {
+    const s = withStages();
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [review, copilot] }));
+    await s.w.check();
+    expect(s.reviewComments).toHaveBeenCalledTimes(1);
+    expect(s.reviewComments).toHaveBeenCalledWith("/w", 7, PR_GH_TIMEOUT_MS);
+    expect(s.events.filter((e) => e.kind === "review").map((e) => e.data.id)).toEqual(["PRR_kwHuman1", "PRR_kwCopilot1"]);
+    expect(s.deps.notify).toHaveBeenCalledTimes(1);
+    s.advance(PR_FAST_MS);
+    const adds = s.stages.add.mock.calls.length;
+    await s.w.check();
+    expect(s.reviewComments).toHaveBeenCalledTimes(1);
+    const second = s.stages.add.mock.results.slice(adds);
+    expect(second.length).toBeGreaterThan(0);
+    expect(second.every((r) => r.value === false)).toBe(true);
+    expect(s.deps.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("a suffix-less app login that REST says is a Bot does not count as peer review; repeat polls make no extra call", async () => {
+    const s = withStages();
+    const app = { id: "PRR_kwApp1", author: "someapp", state: "APPROVED" as const, body: "", submittedAt: 5 };
+    s.reviewAuthors.mockResolvedValue({ botReviewIds: new Set(["PRR_kwApp1"]), botLogins: new Set(["someapp"]) });
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [app], comments: [{ id: "C1", author: "someapp", body: "x", createdAt: 6, url: null, path: null, line: null, reviewId: null }] }));
+    await s.w.check();
+    expect(s.reviewAuthors).toHaveBeenCalledTimes(1);
+    expect(s.reviewAuthors).toHaveBeenCalledWith("/w", 7, PR_GH_TIMEOUT_MS);
+    expect(s.events.filter((e) => e.kind === "review" || e.kind === "comment").map((e) => e.data.who)).toEqual(["bot", "bot"]);
+    const peer = derived(s.events).stages.find((c) => c.id === "peer_review");
+    expect(peer?.state).not.toBe("done");
+    s.advance(PR_FAST_MS);
+    await s.w.check();
+    expect(s.reviewAuthors).toHaveBeenCalledTimes(1);
+  });
+
+  it("a review later dismissed is recorded again (one extra REST call), and repeat polls then record nothing", async () => {
+    const s = withStages();
+    const approved = { ...review, state: "APPROVED" as const };
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [approved] }));
+    await s.w.check();
+    expect(s.reviewAuthors).toHaveBeenCalledTimes(1);
+    s.advance(PR_FAST_MS);
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [{ ...approved, state: "DISMISSED" }] }));
+    await s.w.check();
+    expect(s.events.filter((e) => e.kind === "review").map((e) => e.data.state)).toEqual(["APPROVED", "DISMISSED"]);
+    expect(s.reviewAuthors).toHaveBeenCalledTimes(2);
+    s.advance(PR_FAST_MS);
+    const adds = s.stages.add.mock.calls.length;
+    await s.w.check();
+    expect(s.reviewAuthors).toHaveBeenCalledTimes(2);
+    expect(s.stages.add.mock.results.slice(adds).every((r) => r.value === false)).toBe(true);
+  });
+
+  it("falls back to the name list when the REST reviews call fails, without blocking", async () => {
+    const s = withStages();
+    s.reviewAuthors.mockResolvedValue(null);
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [{ ...review, id: "PRR_kwX", author: "coderabbitai", state: "APPROVED" }, { ...review, id: "PRR_kwY", author: "unknownapp", state: "APPROVED" }] }));
+    await s.w.check();
+    expect(s.events.filter((e) => e.kind === "review").map((e) => e.data.who)).toEqual(["bot", "human"]);
+  });
+
+  it("a Copilot-only or already recorded review does not trigger the REST reviews call", async () => {
+    const s = withStages();
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [copilot] }));
+    await s.w.check();
+    expect(s.reviewAuthors).not.toHaveBeenCalled();
+  });
+
+  it("a human review never calls reviewComments, and a pending Copilot review is not fetched for", async () => {
+    const s = withStages();
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [review, { ...copilot, state: "PENDING" }] }));
+    await s.w.check();
+    await s.w.check();
+    expect(s.reviewComments).not.toHaveBeenCalled();
+    expect(s.events.some((e) => e.kind === "review" && e.data.who === "human")).toBe(true);
+  });
+
+  it("records a Copilot review even when its inline comments cannot be fetched, retries later and stops after 3 attempts", async () => {
+    const s = withStages();
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [copilot] }));
+    s.reviewComments.mockResolvedValue(null);
+    await s.w.check();
+    expect(s.stages.has("1:review:b:PRR_kwCopilot1:COMMENTED")).toBe(true);
+    for (let i = 0; i < 4; i++) {
+      s.advance(PR_FAST_MS);
+      await s.w.check();
+    }
+    expect(s.reviewComments).toHaveBeenCalledTimes(3);
+  });
+
+  it("counts the Copilot inline comments through derivePrStages with realistic ids, even when they arrive in a later round", async () => {
+    const s = withStages();
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [copilot] }));
+    s.reviewComments.mockResolvedValueOnce(null);
+    await s.w.check();
+    s.advance(PR_FAST_MS);
+    const inline = (id: string): PrComment => ({ id, author: "Copilot", body: "b", createdAt: 7, url: null, path: "a.ts", line: 1, reviewId: "PRR_kwCopilot1" });
+    s.reviewComments.mockResolvedValueOnce([inline("101"), inline("102")]);
+    await s.w.check();
+    const entry = derived([...s.events].sort((a, b) => a.at - b.at)).timeline.find((e) => e.kind === "copilot_review");
+    expect(entry?.detail).toBe("2");
+  });
+
+  it("treats the first sighting of a PR as opened even when the pr_watch row already had it with CI passing (upgrade)", async () => {
+    const s = withStages({ rowOf: row({ ci: "passing", checkedAt: 1000 }) });
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "passing", reviews: [{ ...review, state: "APPROVED", submittedAt: s.now() - 10 }] }));
+    await s.w.check();
+    expect(s.events.map((e) => e.kind)).toEqual(["pr_opened", "ci", "review"]);
+    expect(s.events[1].data).toMatchObject({ result: "passing", sha: "a1" });
+    const dev = derived(s.events).stages.find((c) => c.id === "dev");
+    expect(dev?.state).toBe("done");
+  });
+
+  it("records the CI of a PR that appears on the sha a branch-only row already had passing", async () => {
+    const s = withStages({ rowOf: row({ number: null, url: null, state: null, review: null, ci: "passing", checkedAt: 1000 }) });
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "passing" }));
+    await s.w.check();
+    expect(s.events.filter((e) => e.kind === "ci").map((e) => e.data.result)).toEqual(["passing"]);
+    expect(s.events.some((e) => e.kind === "pr_opened")).toBe(true);
+  });
+
+  it("after a branch change on the same PR number, pr_opened and CI are recorded again for the new branch", async () => {
+    const tg = target();
+    const s = withStages({ targets: [tg] });
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "pending" }));
+    await s.w.check();
+    tg.branch = "new";
+    s.advance(PR_FAST_MS);
+    await s.w.check();
+    const keys = s.stages.add.mock.calls.map((c) => c[1]);
+    expect(keys.filter((k) => k.startsWith("1:opened:"))).toEqual(["1:opened:b:7", "1:opened:new:7"]);
+    expect(keys.filter((k) => k.includes(":ci:new:"))).toHaveLength(1);
+    expect(s.events.filter((e) => e.branch === "new").map((e) => e.kind)).toEqual(expect.arrayContaining(["pr_opened", "ci"]));
+  });
+
+  it("asks git for the first commit every round while there is no PR and it is not recorded, even on the same head sha", async () => {
+    const s = withStages();
+    s.gh.branchRuns.mockResolvedValue({ headSha: "s1", checks: [], ci: "none" });
+    await s.w.check();
+    expect(s.firstCommitAt).toHaveBeenCalledWith("/w", "b");
+    expect(s.events.some((e) => e.kind === "first_commit")).toBe(false);
+    s.advance(PR_SLOW_MS);
+    s.firstCommitAt.mockResolvedValue(42);
+    await s.w.check();
+    expect(s.firstCommitAt).toHaveBeenCalledTimes(2);
+    expect(s.stages.add).toHaveBeenCalledWith(expect.objectContaining({ kind: "first_commit", at: 42 }), "1:first_commit:b");
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.firstCommitAt).toHaveBeenCalledTimes(2);
+  });
+
+  it("notifies when only a stage event is new and the pr_watch row is unchanged", async () => {
+    const s = withStages();
+    s.gh.prStatus.mockResolvedValue(pr());
+    await s.w.check();
+    expect(s.deps.notify).toHaveBeenCalledTimes(1);
+    s.advance(PR_FAST_MS);
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [review] }));
+    await s.w.check();
+    expect(s.deps.notify).toHaveBeenCalledTimes(2);
+  });
+
+  it("records nothing and calls nothing without both stages and git", async () => {
+    const s = setup();
+    const stages = { has: vi.fn(() => false), add: vi.fn(() => true) };
+    const firstCommitAt = vi.fn<typeof import("../tickets/git").firstCommitAt>(async () => 1);
+    const reviewComments = vi.fn<typeof import("../tickets/gh").reviewComments>(async () => []);
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [review, copilot] }));
+    await new PrWatcher({ ...s.deps, gh: { ...s.gh, reviewComments }, stages }).check();
+    s.advance(PR_SLOW_MS);
+    await new PrWatcher({ ...s.deps, gh: { ...s.gh, reviewComments }, git: { firstCommitAt } }).check();
+    expect(stages.has).not.toHaveBeenCalled();
+    expect(stages.add).not.toHaveBeenCalled();
+    expect(firstCommitAt).not.toHaveBeenCalled();
+    expect(reviewComments).not.toHaveBeenCalled();
   });
 });

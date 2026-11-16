@@ -203,7 +203,7 @@ describe("Butler 总控 send_message and refresh_session (BTL-190 5)", () => {
     expect(err(await call({ op: "send_message", feature: "nope", text: "t" }))).toContain("checkout");
     expect(err(await call({ op: "send_message", epic: "old", text: "t" }))).toContain("shop");
     setGuard(() => ({ ok: false, block: "busy" }));
-    expect(err(await call({ op: "send_message", session: "ep", text: "t" }))).toContain("它正在干活");
+    expect(err(await call({ op: "send_message", session: "ep", text: "t" }))).toContain("它还没停下来等输入");
     expect(delivered).toEqual([]);
   });
 

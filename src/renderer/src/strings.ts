@@ -1,3 +1,4 @@
+import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
@@ -327,6 +328,10 @@ const ZH = {
   inboxNoReports: "还没有汇报。",
   inboxNoDecisions: "没有要你决定的。",
   tabCollapseHint: "再点一下收起",
+  tabToggleCollapseHint: "收起，让终端更大",
+  tabToggleExpandHint: "展开，回到上次停的 tab",
+  tabCollapse: "收起",
+  tabExpand: "展开",
   inboxReportKinds: { progress: "进展", done: "完成", blocked: "卡住" } as Record<ReportKind, string>,
   inboxWho: (role: InboxRole, ticketKey: string | null, repo: string | null) =>
     role === "ticket" ? `${ticketKey ?? ""}${repo ? `（${repo}）` : ""}`
@@ -544,6 +549,40 @@ const ZH = {
   wizardPrivacyHelp: "个人 API 只在完整档位下用来做记忆蒸馏，其他档位不调用。不想用就选“关闭”或者什么都不填。",
   wizardDoneTitle: "准备好了",
   wizardDoneHelp: "点左侧“新建 ticket”开始。每晚 Butler 会为有活动的 ticket 生成 handoff。这些设置之后都能在设置页修改，也可以从设置页重新运行这个向导。",
+  prStagesTab: "PR 进度",
+  prStage: { design: "设计", dev: "开发", self_review: "自我 review", ci: "CI", peer_review: "peer review", merge: "合并" } as Record<PrStageId, string>,
+  prClosed: "已关闭",
+  prStageSkipped: "跳过",
+  prStageUnknown: "未知",
+  prStageActive: "进行中",
+  prStateDone: "完成",
+  prStateFailed: "失败",
+  prStateTodo: "未开始",
+  prStageFeatureLevel: "在 feature 层",
+  prRound: (n: number) => `第 ${n} 轮`,
+  prTimelineShow: "展开时间线",
+  prTimelineHide: "收起时间线",
+  prMergedOf: (m: number, n: number) => `${m}/${n} 已合并`,
+  prNoRepos: "还没有仓库",
+  prBackToDev: "→ 回到开发",
+  prTimeline: {
+    design_skill: (d) => (d ? `skill ${d}` : "skill"),
+    review_skill: (d) => (d ? `skill ${d}` : "skill"),
+    first_commit: () => "第一次提交",
+    pr_opened: () => "开了 PR",
+    push: () => "推送",
+    ci_pending: () => "进行中",
+    ci_passed: () => "✓",
+    ci_failed: () => "✗",
+    copilot_review: (d) => (d ? `Copilot review（${d} 条评论）` : "Copilot review"),
+    human_approved: (d) => (d ? `${d} 批准` : "有人批准"),
+    human_changes: (d) => (d ? `${d} 要求修改` : "有人要求修改"),
+    human_commented: (d) => (d ? `${d} 留了评论` : "有人留了评论"),
+    human_dismissed: (d) => (d ? `${d} 的 review 被撤销` : "有 review 被撤销"),
+    merged: () => "✓",
+    closed: () => "PR 关闭",
+    report: (d) => (d ? `汇报：${d}` : "汇报"),
+  } as Record<PrTimelineKind, (detail: string | null) => string>,
 };
 
 export type UiStrings = typeof ZH;

@@ -289,6 +289,29 @@ describe("PtyManager", () => {
     expect(mgr.autoInputInFlight("t1")).toBe(false);
   });
 
+  it("reserve shows as an automatic input in flight until released, alongside a deliver, and releases only once (follow-up D)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    const release = mgr.reserve("t1");
+    expect(mgr.autoInputInFlight("t1")).toBe(true);
+    expect(mgr.autoInputInFlight("t2")).toBe(false);
+    const p = mgr.deliver("t1", "x", { startWaitMs: 0 });
+    spawned[0].pty.emit("ready");
+    await vi.advanceTimersByTimeAsync(7000);
+    expect(await p).toBe("sent");
+    // deliver 完了、预留还在
+    expect(mgr.autoInputInFlight("t1")).toBe(true);
+    release();
+    release();
+    expect(mgr.autoInputInFlight("t1")).toBe(false);
+    // 重复 release 不会吃掉别人的预留
+    const other = mgr.reserve("t1");
+    release();
+    expect(mgr.autoInputInFlight("t1")).toBe(true);
+    other();
+    expect(mgr.autoInputInFlight("t1")).toBe(false);
+  });
+
   it("deliver re-checks right before the paste and writes nothing when the re-check fails (I2)", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);

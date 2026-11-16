@@ -264,6 +264,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await featurePage();
   const progress = page.locator(".feature-page .feature-progress");
   const row = (key: string) => page.locator(".feature-page .ticket-table tr").filter({ hasText: key });
+  await openTab(page, S.featureProgress);
   await expect(pageTab(page, S.featureProgress)).toHaveAttribute("aria-selected", "true");
   await expect(progress.getByText(S.featureSummaryNone, { exact: true })).toBeVisible();
   await openTab(page, S.featureTickets);
@@ -469,6 +470,7 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   const coordinatorId = sessionIn(workspace)!;
   expect(coordinatorId).toBeTruthy();
   await typeLine(page, "/handoff");
+  await openTab(page, S.featureProgress);
   await expect(page.locator(".feature-summary p").first()).toBeVisible();
 
   // 2. DMS-1 的 session 开始跑一个命令，这一轮不结束。

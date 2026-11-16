@@ -78,6 +78,23 @@ export interface CiCheck {
   /** 失败日志的末尾，PrWatcher 填（Task 5）。 */
   log?: string;
 }
+export interface PrReview {
+  id: string;
+  author: string;
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING";
+  body: string;
+  submittedAt: number;
+}
+export interface PrComment {
+  id: string;
+  author: string;
+  body: string;
+  createdAt: number;
+  url: string | null;
+  path: string | null;
+  line: number | null;
+  reviewId: string | null;
+}
 export interface PrStatus {
   number: number;
   url: string;
@@ -87,6 +104,15 @@ export interface PrStatus {
   headSha: string;
   checks: CiCheck[];
   ci: CiState;
+  author: string;
+  reviews: PrReview[];
+  comments: PrComment[];
+  /** PR 里最早一个 commit 的作者时间（毫秒）；旧版 gh 没有这个字段时为 null。 */
+  firstCommitAt: number | null;
+  /** PR 的创建、合并、关闭时间（毫秒）；没有为 null。 */
+  createdAt: number | null;
+  mergedAt: number | null;
+  closedAt: number | null;
 }
 export interface BranchRuns {
   headSha: string;
@@ -142,10 +168,16 @@ export function ciOf(checks: CiCheck[]): CiState {
 
 /** 跑 gh，成功返回 stdout，任何失败返回 null，从不抛错。不能执行 gh（Windows 上没找到）时不启动进程，直接 null。 */
 function runGh(cwd: string, args: string[], timeoutMs: number, maxBuffer: number): Promise<string | null> {
+  return runGhDetail(cwd, args, timeoutMs, maxBuffer).then((r) => r.stdout);
+}
+
+/** 同 runGh，另外带回 stderr（失败时用来分辨原因）。 */
+function runGhDetail(cwd: string, args: string[], timeoutMs: number, maxBuffer: number): Promise<{ stdout: string | null; stderr: string }> {
   const bin = ghBinary();
-  if (bin === null) return Promise.resolve(null);
+  if (bin === null) return Promise.resolve({ stdout: null, stderr: "" });
   return new Promise((done) => {
-    execFile(bin, args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer }, (err, stdout) => done(err ? null : String(stdout)));
+    execFile(bin, args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer }, (err, stdout, stderr) =>
+      done({ stdout: err ? null : String(stdout), stderr: String(stderr ?? "") }));
   });
 }
 
@@ -158,11 +190,80 @@ function parseJson(text: string | null): unknown {
   }
 }
 
+const REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"]);
+/** gh pr view 给的 author 不带 [bot] 后缀，GitHub App 要靠名字认；authoritative 的判断是 REST 的 user.type（reviewAuthors）。 */
+const BOT_LOGINS = [
+  "github-actions", "dependabot", "renovate", "chatgpt-codex-connector", "coderabbitai", "gemini-code-assist", "sourcery-ai",
+  "codecov", "sonarcloud", "vercel", "netlify", "github-advanced-security", "cursor",
+];
+
+function obj(v: unknown): Record<string, unknown> | null {
+  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
+}
+
+function loginOf(v: unknown): string {
+  return str(obj(v)?.login);
+}
+
+function timeOf(v: unknown): number | null {
+  if (typeof v !== "string") return null;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? null : t;
+}
+
+function reviewsOf(v: unknown): PrReview[] {
+  if (!Array.isArray(v)) return [];
+  const out: PrReview[] = [];
+  for (const item of v) {
+    const r = obj(item);
+    if (!r || typeof r.id !== "string" || r.id === "" || !REVIEW_STATES.has(str(r.state))) continue;
+    const submittedAt = timeOf(r.submittedAt);
+    if (submittedAt === null) continue;
+    out.push({ id: r.id, author: loginOf(r.author), state: r.state as PrReview["state"], body: str(r.body), submittedAt });
+  }
+  return out;
+}
+
+function commentsOf(v: unknown): PrComment[] {
+  if (!Array.isArray(v)) return [];
+  const out: PrComment[] = [];
+  for (const item of v) {
+    const r = obj(item);
+    if (!r || typeof r.id !== "string" || r.id === "") continue;
+    const createdAt = timeOf(r.createdAt);
+    if (createdAt === null) continue;
+    out.push({ id: r.id, author: loginOf(r.author), body: str(r.body), createdAt, url: typeof r.url === "string" ? r.url : null, path: null, line: null, reviewId: null });
+  }
+  return out;
+}
+
+function firstCommitOf(v: unknown): number | null {
+  if (!Array.isArray(v)) return null;
+  const times = v.map((c) => timeOf(obj(c)?.authoredDate)).filter((t): t is number => t !== null);
+  return times.length > 0 ? Math.min(...times) : null;
+}
+
+/** 纯函数：login 归类。PR 作者 → author；含 copilot → copilot；[bot] 结尾或在 BOT_LOGINS 里 → bot；其余 human。 */
+export function reviewerKind(login: string, prAuthor: string): "copilot" | "human" | "author" | "bot" {
+  if (login === prAuthor) return "author";
+  const l = login.toLowerCase();
+  if (l.includes("copilot")) return "copilot";
+  if (l.endsWith("[bot]") || BOT_LOGINS.includes(l)) return "bot";
+  return "human";
+}
+
 const REVIEWS = { REVIEW_REQUIRED: "pending", CHANGES_REQUESTED: "changes_requested", APPROVED: "approved" } as const;
+
+// 这些字段要 gh >= 2.18（headRefOid，2022-10）；更旧的 gh 报 Unknown JSON field，prStatus 返回 null。
+const PR_FIELDS = "number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt";
 
 /** gh pr view <branch>：没有 PR、gh 不可用、输出不对都返回 null。 */
 export async function prStatus(cwd: string, branch: string, timeoutMs: number): Promise<PrStatus | null> {
-  const j = parseJson(await runGh(cwd, ["pr", "view", branch, "--json", "number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup"], timeoutMs, 4 * 1024 * 1024));
+  return parsePr(await runGh(cwd, ["pr", "view", branch, "--json", PR_FIELDS], timeoutMs, 8 * 1024 * 1024));
+}
+
+function parsePr(text: string | null): PrStatus | null {
+  const j = parseJson(text);
   if (typeof j !== "object" || j === null) return null;
   const r = j as Record<string, unknown>;
   if (typeof r.number !== "number" || typeof r.url !== "string" || typeof r.headRefOid !== "string") return null;
@@ -177,7 +278,85 @@ export async function prStatus(cwd: string, branch: string, timeoutMs: number): 
     headSha: r.headRefOid,
     checks,
     ci: ciOf(checks),
+    author: loginOf(r.author),
+    reviews: reviewsOf(r.reviews),
+    comments: commentsOf(r.comments),
+    firstCommitAt: firstCommitOf(r.commits),
+    createdAt: timeOf(r.createdAt),
+    mergedAt: timeOf(r.mergedAt),
+    closedAt: timeOf(r.closedAt),
   };
+}
+
+/** --jq '.[]' 的输出：每行一个紧凑 JSON 对象。空行跳过；任何一行解析失败整体返回 null（丢一个对象会被当成没有数据）。 */
+function parseLines(text: string | null): unknown[] | null {
+  if (text === null) return null;
+  const out: unknown[] = [];
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      return null;
+    }
+  }
+  return out;
+}
+
+/**
+ * 行内 review 评论：gh api repos/{owner}/{repo}/pulls/N/comments --paginate。失败返回 null。
+ * REST 的 pull_request_review_id 是数字，而 gh pr view 给的 review id 是 GraphQL 的 node id（PRR_…）：再取一次 reviews 列表，把评论的 reviewId 换成 node id。
+ */
+export async function reviewComments(cwd: string, number: number, timeoutMs: number): Promise<PrComment[] | null> {
+  const j = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/comments`, "--paginate", "--jq", ".[]"], timeoutMs, 8 * 1024 * 1024));
+  if (j === null) return null;
+  const reviews = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--paginate", "--jq", ".[] | {id, node_id}"], timeoutMs, 8 * 1024 * 1024));
+  if (reviews === null) return null;
+  const nodeOf = new Map<number, string>();
+  for (const item of reviews) {
+    const r = obj(item);
+    if (r && typeof r.id === "number" && typeof r.node_id === "string" && r.node_id !== "") nodeOf.set(r.id, r.node_id);
+  }
+  const out: PrComment[] = [];
+  for (const item of j) {
+    const r = obj(item);
+    if (!r || typeof r.id !== "number") continue;
+    const createdAt = timeOf(r.created_at);
+    if (createdAt === null) continue;
+    out.push({
+      id: String(r.id),
+      author: loginOf(r.user),
+      body: str(r.body),
+      createdAt,
+      url: typeof r.html_url === "string" ? r.html_url : null,
+      path: typeof r.path === "string" ? r.path : null,
+      line: typeof r.line === "number" ? r.line : null,
+      reviewId: typeof r.pull_request_review_id === "number" ? (nodeOf.get(r.pull_request_review_id) ?? null) : null,
+    });
+  }
+  return out;
+}
+
+export interface ReviewAuthors {
+  /** user.type 是 Bot 的 review（GraphQL node id）。 */
+  botReviewIds: Set<string>;
+  /** 这些 review 里 Bot 的 login（小写、去掉 [bot]），用来认同一个人的评论。 */
+  botLogins: Set<string>;
+}
+
+/** REST 的 reviews 列表里谁是 Bot：gh pr view 给的 author 没有 [bot] 后缀和类型。失败返回 null（调用方退回按名字认）。 */
+export async function reviewAuthors(cwd: string, number: number, timeoutMs: number): Promise<ReviewAuthors | null> {
+  const rows = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--paginate", "--jq", ".[] | {node_id, user: {login: .user.login, type: .user.type}}"], timeoutMs, 8 * 1024 * 1024));
+  if (rows === null) return null;
+  const out: ReviewAuthors = { botReviewIds: new Set(), botLogins: new Set() };
+  for (const item of rows) {
+    const r = obj(item);
+    const user = obj(r?.user);
+    if (!r || !user || user.type !== "Bot") continue;
+    if (typeof r.node_id === "string" && r.node_id !== "") out.botReviewIds.add(r.node_id);
+    if (typeof user.login === "string" && user.login !== "") out.botLogins.add(user.login.toLowerCase().replace(/\[bot\]$/, ""));
+  }
+  return out;
 }
 
 /** gh run list --branch：只看最新的 headSha（列表按时间倒序，第一条即最新）。没有 run 返回 null。 */

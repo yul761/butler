@@ -86,6 +86,9 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .page-tab .blocker { color: var(--danger); font-weight: normal; }
 .page-tab.attention, .page-tab.attention .count { color: var(--danger); }
 .page-tab.attention.active { border-bottom-color: var(--danger); }
+.page-tabs-toggle { margin-left: auto; flex-shrink: 0; align-self: center; padding: 2px 8px; border: none; background: transparent; color: var(--muted); font-size: 12px; }
+.page-tabs-toggle:hover { color: var(--text); }
+.page-tabs-toggle + .page-tabs-actions { margin-left: 0; }
 .page-tabs-actions { margin-left: auto; padding-left: 12px; display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .page-tabs-actions button { padding: 2px 8px; font-size: 12px; }
 .page-tabs-panel { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: 8px 16px 10px; }
@@ -375,3 +378,33 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .now-decisions { display: flex; flex-direction: column; margin: 4px 0 6px; }
 /* Butler 总控页（BTL-190 第 5 点）。 */
 .butler-intro { margin: 0; padding: 0 16px 8px; }
+
+/* PR 进度 tab：状态色用已有的 --ok / --accent / --danger / --muted，深浅色都跟着变量走。 */
+.pr-stages { display: flex; flex-direction: column; gap: 10px; }
+.pr-steps { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pr-repo-name { font-weight: 600; margin-right: 4px; }
+.pr-cell { display: inline-flex; gap: 4px; align-items: center; padding: 2px 8px; border-radius: 6px; font-size: 12px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); }
+.pr-cell-name { font-weight: 600; }
+.pr-cell.pr-done, .pr-cell.pr-feature_level { background: color-mix(in srgb, var(--ok) 18%, var(--bg)); border-color: var(--ok); color: var(--ok); }
+.pr-cell.pr-active { background: color-mix(in srgb, var(--accent) 18%, var(--bg)); border-color: var(--accent); color: var(--accent); }
+.pr-cell.pr-failed { background: color-mix(in srgb, var(--danger) 18%, var(--bg)); border-color: var(--danger); color: var(--danger); }
+.pr-cell.pr-todo, .pr-cell.pr-skipped { background: var(--panel); color: var(--muted); }
+.pr-cell.pr-unknown { background: var(--panel); color: var(--muted); border-style: dashed; font-style: italic; }
+.pr-link { margin-left: auto; font-size: 12px; }
+.pr-closed { margin-left: 6px; padding: 1px 6px; border-radius: 6px; font-size: 12px; border: 1px solid var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--bg)); }
+.pr-timeline-toggle { font-size: 12px; margin-top: 4px; }
+.pr-timeline { list-style: none; margin: 4px 0 0; padding: 0 0 0 8px; border-left: 2px solid var(--border); font-size: 12px; }
+.pr-timeline li { padding: 1px 0; }
+.pr-timeline li.pr-back { color: var(--danger); }
+.pr-table { border-collapse: collapse; width: 100%; }
+.pr-table th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 2px 6px; }
+.pr-table td { padding: 3px 6px; border-top: 1px solid var(--border); }
+.pr-table tr.clickable, .pr-epic-row.clickable { cursor: pointer; }
+.pr-table tr.clickable:hover, .pr-epic-row.clickable:hover { background: var(--panel); }
+.pr-epic-row { display: flex; gap: 12px; align-items: center; padding: 5px 6px; border-top: 1px solid var(--border); }
+.pr-epic-name { flex: 0 0 220px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-bar { flex: 1; display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--panel); border: 1px solid var(--border); }
+.pr-seg.pr-done { background: var(--ok); }
+.pr-seg.pr-active { background: var(--accent); }
+.pr-seg.pr-failed { background: var(--danger); }
+.pr-seg.pr-todo { background: var(--border); }

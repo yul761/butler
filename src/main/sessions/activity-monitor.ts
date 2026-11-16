@@ -88,6 +88,11 @@ export interface ActivityDeps {
    * 文件截短或轮转后重读出来的不推。
    */
   onEvent?: (e: ActivityEvent) => void;
+  /**
+   * transcript 显示这一轮没经过 Stop hook 就结束了（Esc 打断、API / 限额错误）：只在记录是现场写的（不是重放的）、
+   * 这次读完轮次还是关着、UserPromptSubmit 的等待也过去了才调。调用方据此把 head 记成在等输入。
+   */
+  onTurnEnd?: (headId: string, at: number) => void;
   /** 盯 transcript 的 fs.watch；测试注入假的，null 不盯（只靠 tick）。默认用真的 fs.watch。 */
   watch?: WatchFn | null;
   /** 默认 300ms。 */
@@ -196,6 +201,8 @@ interface Tracked {
   promptSize: number;
   /** transcript 里最近一次轮次开始的时间；还没有为 null。 */
   turnStartAt: number | null;
+  /** 这次读到的、没有 Stop hook 的轮次结束的时间（现场写的）；没有为 null。 */
+  hooklessEndAt: number | null;
 }
 
 /** 这一次更新里最多读一次进程树：后台任务的检查和卡住采样共用。 */
@@ -391,10 +398,12 @@ export class ActivityMonitor {
     const { state: full, size } = await this.readTranscript(t);
     this.watchTranscript(t);
     const recentChanged = this.takeEvents(t, full, now);
+    const hookless = t.hooklessEndAt;
     const probe = this.probe(t, now);
     const state = await this.liveBackground(t, full, now, probe);
     const { eligible, ...found } = deriveActivity(state, this.d.pty.permissionShowing(termId));
     const derived = this.holdPrompt(t, found, size, now);
+    if (hookless !== null && !full.turnOpen && t.promptAt === null && !this.stopped) this.d.onTurnEnd?.(head.id, hookless);
     const output = await this.readOutput(t, state);
     const grew = size !== t.transcriptSize || output.size !== t.outputSize;
     t.transcriptSize = size;
@@ -438,8 +447,12 @@ export class ActivityMonitor {
       changed = t.recent.length > 0;
       t.recent = [];
     }
+    t.hooklessEndAt = null;
     for (const raw of pending) {
       const e = liveEvent(t.id, raw);
+      // 只认现场写的、没有 Stop hook 的结束；后面又开了新一轮的不算。
+      if (raw.type === "turn-start") t.hooklessEndAt = null;
+      else if (raw.type === "turn-end") t.hooklessEndAt = raw.hookless && raw.at >= t.eventsSince ? raw.at : null;
       if (e.kind === "turn-start") t.turnStartAt = e.at;
       if (e.kind !== "turn-start" && e.kind !== "turn-end") {
         t.recent = [...t.recent, e].slice(-RECENT_TOOLS);
@@ -469,7 +482,7 @@ export class ActivityMonitor {
       id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, fileSizes: new Map(), outputText: "", lastOutputAt: null,
       eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null, lastReplyId: null,
       shellKey: "", shellCommands: [], shellAlive: null, shellCheckedAt: Number.NEGATIVE_INFINITY,
-      watch: null, recent: [], eventsSince: this.d.now() - EVENT_SLACK_MS, restarts: 0, promptAt: null, promptSize: 0, turnStartAt: null,
+      watch: null, recent: [], eventsSince: this.d.now() - EVENT_SLACK_MS, restarts: 0, promptAt: null, promptSize: 0, turnStartAt: null, hooklessEndAt: null,
     };
     this.tracked.set(id, t);
     return t;

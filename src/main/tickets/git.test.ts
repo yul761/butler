@@ -5,7 +5,7 @@ import { makeRepo, tempDir } from "../test-utils";
 import { applyGitResolution, resetGitBinary, setGitBinary } from "../util/git-path";
 import { execFileSync } from "node:child_process";
 import { renameSync, symlinkSync } from "node:fs";
-import { defaultBranch, fetchQuiet, git, GIT_SUMMARY_LIMIT, GitError, gitEnv, gitErrorSummary, isAncestor, mainRepoRoot, mergeConflicts, scanRepos, upstreamRef } from "./git";
+import { defaultBranch, fetchQuiet, firstCommitAt, git, GIT_SUMMARY_LIMIT, GitError, gitEnv, gitErrorSummary, isAncestor, mainRepoRoot, mergeConflicts, scanRepos, upstreamRef } from "./git";
 
 describe("git helpers", () => {
   it("only switches git messages to English and keeps the user's locale for everything else", () => {
@@ -160,6 +160,22 @@ describe("merge coordinator helpers", () => {
     run(repo, "update-ref", "refs/remotes/origin/develop", "HEAD");
     run(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop");
     expect(await defaultBranch(repo)).toBe("develop");
+  });
+
+  it("firstCommitAt is the author time of the first commit ahead of origin/<default>", async () => {
+    const repo = makeRepo();
+    run(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+    run(repo, "checkout", "-b", "feat");
+    expect(await firstCommitAt(repo, "feat")).toBeNull();
+    const at = (sec: number) => ({ GIT_AUTHOR_DATE: `@${sec} +0000`, GIT_COMMITTER_DATE: `@${sec} +0000` });
+    const commitAt = (file: string, sec: number) => {
+      writeFileSync(join(repo, file), file);
+      run(repo, "add", ".");
+      execFileSync("git", ["commit", "-m", file], { cwd: repo, stdio: "ignore", env: { ...process.env, ...at(sec) } });
+    };
+    commitAt("a.txt", 1_700_000_000);
+    commitAt("b.txt", 1_700_000_100);
+    expect(await firstCommitAt(repo, "feat")).toBe(1_700_000_000_000);
   });
 
   it("upstreamRef prefers origin/<branch> when it exists", async () => {

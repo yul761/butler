@@ -684,6 +684,26 @@ describe("the first message of a feature in an epic (design 2026-11-01)", () => 
       expect(submitted.map(([id]) => id)).toEqual([(first as { termId: string }).termId]);
     });
 
+    it("holds the terminal as an automatic input in flight from the open until the message is delivered (follow-up D)", async () => {
+      const { service, pty, fid, finish } = await refreshSetup();
+      const r = await service.openFeature({ featureId: fid });
+      if (!r.ok) throw new Error("open failed");
+      // 汇总还在生成：没有 deliver 在跑，但终端已经被预留
+      await vi.advanceTimersByTimeAsync(BRIEF_REFRESH_WAIT_MS - 1);
+      expect(pty.autoInputInFlight(r.termId)).toBe(true);
+      await finish();
+      expect(pty.autoInputInFlight(r.termId)).toBe(false);
+    });
+
+    it("releases the hold when the wait ends in nothing to send", async () => {
+      const { service, pty, features, fid, finish } = await refreshSetup();
+      const r = await service.openFeature({ featureId: fid });
+      if (!r.ok) throw new Error("open failed");
+      features.archive(fid, 5);
+      await finish();
+      expect(pty.autoInputInFlight(r.termId)).toBe(false);
+    });
+
     it("does not record a delivery that failed after the wait, and the next new coordinator gets it", async () => {
       const { service, features, submitted, setSubmit, setEpicRefresh, fid, finish } = await refreshSetup();
       setSubmit(async () => "exited");

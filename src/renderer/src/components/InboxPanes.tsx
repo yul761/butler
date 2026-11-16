@@ -1,41 +1,17 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useState, type KeyboardEvent } from "react";
 import type { InboxItemView, InboxScope, InboxView } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
 import { inboxWho } from "../now-view";
 import { S } from "../strings";
 import type { PageTab } from "./PageTabs";
-
-/** hook 事件一来一串：合并成一次重读（和 App 的刷新一样）。 */
-const STATE_DEBOUNCE_MS = 80;
+import { useStateRefetch } from "./useStateRefetch";
 
 const timeOf = (ms: number): string => new Date(ms).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 /** 一块范围里的「待你决定」和最近的汇报：打开时取一次，之后每次 stateChanged 重取。还没取到时为 null。 */
 export function useInbox(scope: InboxScope): InboxView | null {
-  // scope 每次渲染都是新对象：按内容决定要不要重新订阅。
-  const key = JSON.stringify(scope);
-  const [view, setView] = useState<InboxView | null>(null);
-  useEffect(() => {
-    let live = true;
-    let seq = 0;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const load = () => {
-      const n = ++seq;
-      api.inbox(JSON.parse(key) as InboxScope).then((v) => live && n === seq && setView(v), reportError);
-    };
-    load();
-    const off = api.onStateChanged(() => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(load, STATE_DEBOUNCE_MS);
-    });
-    return () => {
-      live = false;
-      if (timer) clearTimeout(timer);
-      off();
-    };
-  }, [key]);
-  return view;
+  return useStateRefetch(JSON.stringify(scope), () => api.inbox(scope));
 }
 
 /**

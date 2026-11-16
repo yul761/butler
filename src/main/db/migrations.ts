@@ -338,4 +338,23 @@ export const MIGRATIONS: string[] = [
   // Butler 总控（BTL-190 第 5 点）：全局只有一个的 session，ticket、feature、epic 都是空的。单独一列标出来，
   // 免得被当成没归属的 session（认领页）或者 epic session。
   `ALTER TABLE sessions ADD COLUMN butler INTEGER NOT NULL DEFAULT 0;`,
+  // PR 进度条（pr-stages）：记录观察到的原始事件（skill 调用、首次提交、push、CI、review、评论、合并），阶段由纯函数从这些事件推导。
+  // ticket_key 不加外键：feature/epic 层的 skill 事件没有 ticket。
+  `
+  CREATE TABLE pr_stage_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dedupe_key TEXT NOT NULL UNIQUE,
+    ticket_key TEXT,
+    repo_id INTEGER REFERENCES ticket_repos(id) ON DELETE CASCADE,
+    branch TEXT,
+    feature_id INTEGER,
+    epic_id INTEGER,
+    session_id TEXT,
+    kind TEXT NOT NULL CHECK (kind IN ('skill','first_commit','pr_opened','push','ci','review','comment','merged','closed')),
+    at INTEGER NOT NULL,
+    data TEXT NOT NULL DEFAULT '{}'
+  );
+  CREATE INDEX idx_pr_stage_events_ticket ON pr_stage_events (ticket_key, at);
+  CREATE INDEX idx_pr_stage_events_upper ON pr_stage_events (feature_id, epic_id);
+  `,
 ];

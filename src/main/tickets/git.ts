@@ -262,3 +262,12 @@ export async function defaultBranch(repo: string): Promise<string> {
   const ref = r.code === 0 ? r.stdout.trim() : "";
   return ref.startsWith("refs/remotes/origin/") ? ref.slice("refs/remotes/origin/".length) : "main";
 }
+
+/** 分支上比 origin/<默认分支> 新的第一个 commit 的作者时间（毫秒）；没有或出错返回 null。 */
+export async function firstCommitAt(cwd: string, branch: string): Promise<number | null> {
+  const base = await defaultBranch(cwd);
+  const r = await gitRaw(cwd, ["log", "--reverse", "--format=%at", `origin/${base}..${branch}`]);
+  if (r.code !== 0) return null;
+  const sec = Number(r.stdout.split("\n")[0].trim());
+  return Number.isFinite(sec) && sec > 0 ? sec * 1000 : null;
+}

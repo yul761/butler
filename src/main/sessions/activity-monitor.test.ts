@@ -1667,6 +1667,75 @@ describe("the live window's signals (BTL-190 7)", () => {
     expect(events.map((e) => e.kind)).toEqual(["turn-start", "turn-end"]);
   });
 
+  describe("onTurnEnd: turns that end without a Stop hook (follow-up D)", () => {
+    const apiError = (timestamp = NEW) => ({ type: "assistant", timestamp, isApiErrorMessage: true, message: { model: "<synthetic>", stop_reason: "stop_sequence", content: [{ type: "text", text: "limit" }] } });
+    const duration = (timestamp = NEW) => ({ type: "system", subtype: "turn_duration", timestamp });
+    const intr = (timestamp = NEW) => ({ type: "user", timestamp, message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } });
+
+    it("fires once for a live Esc interrupt", async () => {
+      const ends: [string, number][] = [];
+      const h = harness({ onTurnEnd: (id, at) => ends.push([id, at]) });
+      h.openSession("s1");
+      h.transcript("s1", say("go"), use("t1", "Bash", { command: "sleep 9" }));
+      await h.beat();
+      expect(ends).toEqual([]);
+      h.transcript("s1", intr());
+      await h.beat();
+      expect(ends).toEqual([["s1", AT_MS]]);
+      await h.beat();
+      expect(ends).toHaveLength(1);
+    });
+
+    it("fires for a live API error closed by turn_duration", async () => {
+      const ends: [string, number][] = [];
+      const h = harness({ onTurnEnd: (id, at) => ends.push([id, at]) });
+      h.openSession("s1");
+      h.transcript("s1", say("go"), apiError(), duration());
+      await h.beat();
+      expect(ends).toEqual([["s1", AT_MS]]);
+    });
+
+    it("does not fire for a normal end_turn", async () => {
+      const ends: unknown[] = [];
+      const h = harness({ onTurnEnd: (...a) => ends.push(a) });
+      h.openSession("s1");
+      h.transcript("s1", say("go"), done(), duration());
+      await h.beat();
+      expect(ends).toEqual([]);
+    });
+
+    it("does not fire for replayed entries from before it started watching", async () => {
+      const ends: unknown[] = [];
+      const h = harness({ onTurnEnd: (...a) => ends.push(a) });
+      h.openSession("s1");
+      h.transcript("s1", say("old", OLD), apiError(OLD), duration(OLD), say("older", OLD), intr(OLD));
+      await h.beat();
+      expect(ends).toEqual([]);
+    });
+
+    it("does not fire when the turn reopens in the same read", async () => {
+      const ends: unknown[] = [];
+      const h = harness({ onTurnEnd: (...a) => ends.push(a) });
+      h.openSession("s1");
+      h.transcript("s1", say("go"), intr(), say("again"));
+      await h.beat();
+      expect(ends).toEqual([]);
+    });
+
+    it("does not fire again for an interrupt already reported when the next prompt is held", async () => {
+      const ends: unknown[] = [];
+      const h = harness({ onTurnEnd: (...a) => ends.push(a) });
+      h.openSession("s1");
+      h.transcript("s1", say("go"), intr());
+      await h.beat();
+      expect(ends).toHaveLength(1);
+      // 用户接着发了新的一句：hook 到了、transcript 还没动，这时不会再报一次旧的结束（promptAt 占着的那几秒里也不报，由 update 里的 promptAt 判断保证）。
+      await h.monitor.promptSubmitted("s1");
+      await h.beat();
+      expect(ends).toHaveLength(1);
+    });
+  });
+
   it("does not push what was written before it started watching (a --resume replay), but still shows it as the recent lines", async () => {
     const events: ActivityEvent[] = [];
     const h = harness({ onEvent: (e) => events.push(e) });
