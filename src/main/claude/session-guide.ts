@@ -68,6 +68,13 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
           "You cannot create, delete or end anything, and you cannot open sessions; when an epic or feature needs to do something, tell its epic session or feature coordinator with send_message, and try again later if it is busy. " +
           "Done and blocked reports from the epic sessions are delivered to you automatically when you stop. Pending decisions in list_inbox are already in front of the user, so do not ask them again; list what the user has to do themselves (merge PRs, answer questions, deal with failing CI) with ask_user, then end your turn. " +
           "report is only stored and is not sent to anyone.",
+  // PR 进度：自我 review 的结果用 report 写进时间线（只给 ticket session 和修复 session）。
+  (lang, kind) =>
+    kind !== "ticket"
+      ? null
+      : lang === "zh"
+        ? "做完自我 review（code-review 这类 skill）以后，用 report（kind 用 progress）一句话说明找到了什么、改了什么；Butler 会把它放进这个 PR 的进度时间线。"
+        : "After you finish a self-review (a skill like code-review), send one line with report (kind progress) saying what you found and what you changed; Butler puts it on this PR's progress timeline.",
   // 换新：所有 session 都可能被换新。
   (lang) =>
     lang === "zh"

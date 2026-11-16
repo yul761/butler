@@ -13,6 +13,7 @@
 //     输入 /fake-fullscreen 时像 claude 的全屏界面：打开备用屏幕和鼠标上报（只发这一次），之后收到滚轮就记日志；
 //     输入 /fake-run <命令> 时像 Bash 工具：先跑 PreToolUse（也读 --settings 里的 hook，合并总控的 gate 在那里），拒绝就打印 denied: <理由>，
 //     否则在 cwd 里执行、打印输出、再跑 PostToolUse；日志记 gate deny <理由> / gate allow <命令>，这一轮照常结束；
+//     输入 /fake-skill <skill 名> 时像 Skill 工具：跑 PostToolUse（tool_name=Skill，带 tool_use_id；也读 --settings 里 matcher 为 Skill 的 hook），打印 skill <名>，这一轮照常结束；
 //     输入 /fake-tool <工具名> [JSON 参数] 时写一条 tool_use 和它的结果，这一轮不结束（实况窗口：工具调用、记忆读写的行和光点）；
 //     输入 /fake-later <毫秒> <一行> 时过这么久再把那一行当成输入（e2e 在别的页面上等它带来的变化）；
 //     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 butler-sessions，调用它，结果写进运行记录；
@@ -274,6 +275,7 @@ function interactive() {
   out("> ");
   /** assistant 记录的 message.id：和 Claude Code 一样每条回复一个（「需要你」按它每条只判断一次）。 */
   let messages = 0;
+  let skillCalls = 0;
   const messageId = () => `msg-${process.pid}-${++messages}`;
   /** 写一条 Bash 的 tool_use 和它的输出文件。 */
   const startBash = (command, input) => {
@@ -416,6 +418,15 @@ function interactive() {
       runHooks("Stop", { session_id: sessionId, cwd, stop_hook_active: false, transcript_path: transcript });
       out("> ");
     };
+    const skill = /^\/fake-skill (\S+)$/.exec(line);
+    if (skill) {
+      // 像 Skill 工具：PostToolUse 带 tool_use_id（Butler 按它去重）。
+      runHooks("PostToolUse", { session_id: sessionId, cwd, tool_name: "Skill", tool_input: { skill: skill[1] }, tool_use_id: `toolu_fake_${++skillCalls}`, transcript_path: transcript });
+      log(`fake-skill ${skill[1]}`);
+      out(`skill ${skill[1]}\n`);
+      endTurn("收到");
+      return;
+    }
     const run = /^\/fake-run (.+)$/.exec(line);
     if (run) {
       // 像 Bash 工具：PreToolUse 拒绝就不执行；否则在 cwd 里执行，再跑 PostToolUse。e2e 按日志里的 gate deny / gate allow 判断。
