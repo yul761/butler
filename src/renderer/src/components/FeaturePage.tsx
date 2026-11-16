@@ -7,6 +7,7 @@ import { S, STATUS_LABEL } from "../strings";
 import { inboxTabs, useInbox } from "./InboxPanes";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { PageTabs } from "./PageTabs";
+import { FeaturePrStages } from "./PrStages";
 import { StuckPanel } from "./StuckPanel";
 import { activityText, useNow } from "./TicketActivity";
 import { useCollapsed } from "./useCollapsed";
@@ -156,6 +157,7 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
               </section>
             ),
           },
+          { id: "stages", label: S.prStagesTab, content: <FeaturePrStages featureId={feature.id} onOpenTicket={onOpenTicket} /> },
           ...inboxTabs(inbox, goTo),
         ]}
       />

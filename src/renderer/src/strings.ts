@@ -1,3 +1,4 @@
+import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
@@ -544,6 +545,35 @@ const ZH = {
   wizardPrivacyHelp: "个人 API 只在完整档位下用来做记忆蒸馏，其他档位不调用。不想用就选“关闭”或者什么都不填。",
   wizardDoneTitle: "准备好了",
   wizardDoneHelp: "点左侧“新建 ticket”开始。每晚 Butler 会为有活动的 ticket 生成 handoff。这些设置之后都能在设置页修改，也可以从设置页重新运行这个向导。",
+  prStagesTab: "PR 进度",
+  prStage: { design: "设计", dev: "开发", self_review: "自我 review", ci: "CI", peer_review: "peer review", merge: "合并" } as Record<PrStageId, string>,
+  prStageSkipped: "跳过",
+  prStageUnknown: "未知",
+  prStageFeatureLevel: "在 feature 层",
+  prRound: (n: number) => `第 ${n} 轮`,
+  prTimelineShow: "展开时间线",
+  prTimelineHide: "收起时间线",
+  prMergedOf: (m: number, n: number) => `${m}/${n} 已合并`,
+  prNoRepos: "还没有仓库",
+  prBackToDev: "→ 回到开发",
+  prOpenPr: (n: number | null) => (n === null ? "PR" : `PR #${n}`),
+  prTimeline: {
+    design_skill: (d) => `设计：${d ?? ""}`,
+    review_skill: (d) => `自我 review：${d ?? ""}`,
+    first_commit: () => "第一次提交",
+    pr_opened: () => "开了 PR",
+    push: () => "推送",
+    ci_pending: () => "CI 进行中",
+    ci_passed: () => "CI ✓",
+    ci_failed: () => "CI ✗",
+    copilot_review: (d) => (d ? `Copilot review（${d} 条评论）` : "Copilot review"),
+    human_approved: (d) => (d ? `${d} 批准` : "有人批准"),
+    human_changes: (d) => (d ? `${d} 要求修改` : "有人要求修改"),
+    human_commented: (d) => (d ? `${d} 留了评论` : "有人留了评论"),
+    merged: () => "已合并",
+    closed: () => "PR 关闭",
+    report: (d) => `汇报：${d ?? ""}`,
+  } as Record<PrTimelineKind, (detail: string | null) => string>,
 };
 
 export type UiStrings = typeof ZH;

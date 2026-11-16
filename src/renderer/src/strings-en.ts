@@ -1,3 +1,4 @@
+import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { PrivacyLevel } from "../../shared/llm";
 import type { ReportKind } from "../../shared/control";
 import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
@@ -537,4 +538,33 @@ export const EN: UiStrings = {
   wizardPrivacyHelp: "The personal API is used only at the full level, for memory distillation; the other levels never call it. If you don't want it, choose Off or leave everything empty.",
   wizardDoneTitle: "All set",
   wizardDoneHelp: "Click “New ticket” on the left to start. Every night Butler writes a handoff for each ticket with activity. You can change all of this in Settings later, and rerun this wizard from there.",
+  prStagesTab: "PR progress",
+  prStage: { design: "Design", dev: "Develop", self_review: "Self-review", ci: "CI", peer_review: "Peer review", merge: "Merge" } as Record<PrStageId, string>,
+  prStageSkipped: "Skipped",
+  prStageUnknown: "Unknown",
+  prStageFeatureLevel: "At feature level",
+  prRound: (n: number) => `Round ${n}`,
+  prTimelineShow: "Show timeline",
+  prTimelineHide: "Hide timeline",
+  prMergedOf: (m: number, n: number) => `${m}/${n} merged`,
+  prNoRepos: "No repos yet",
+  prBackToDev: "→ back to dev",
+  prOpenPr: (n: number | null) => (n === null ? "PR" : `PR #${n}`),
+  prTimeline: {
+    design_skill: (d) => `Design: ${d ?? ""}`,
+    review_skill: (d) => `Self-review: ${d ?? ""}`,
+    first_commit: () => "First commit",
+    pr_opened: () => "PR opened",
+    push: () => "Push",
+    ci_pending: () => "CI running",
+    ci_passed: () => "CI ✓",
+    ci_failed: () => "CI ✗",
+    copilot_review: (d) => (d ? `Copilot review (${d} comments)` : "Copilot review"),
+    human_approved: (d) => (d ? `${d} approved` : "Approved"),
+    human_changes: (d) => (d ? `${d} requested changes` : "Changes requested"),
+    human_commented: (d) => (d ? `${d} commented` : "Commented"),
+    merged: () => "Merged",
+    closed: () => "PR closed",
+    report: (d) => `Report: ${d ?? ""}`,
+  } as Record<PrTimelineKind, (detail: string | null) => string>,
 };

@@ -6,6 +6,7 @@ import { epicErrorText, epicOpenError, epicRowText } from "./epic-row";
 import { inboxTabs, useInbox } from "./InboxPanes";
 import { NewFeatureDialog } from "./NewFeatureDialog";
 import { PageTabs } from "./PageTabs";
+import { EpicPrStages } from "./PrStages";
 import { useCollapsed } from "./useCollapsed";
 import { SessionArea, useSessionPanes, WorkspaceHeader } from "./WorkspaceParts";
 
@@ -96,6 +97,7 @@ export function EpicPage({ epic, onOpenFeature, onFeatureCreated, focusSession, 
               </>
             ),
           },
+          { id: "stages", label: S.prStagesTab, content: <EpicPrStages epicId={epic.id} features={live.map((f) => ({ id: f.id, name: f.name }))} /> },
           ...inboxTabs(inbox, goTo),
         ]}
       />
