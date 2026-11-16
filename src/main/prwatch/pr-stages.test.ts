@@ -293,4 +293,21 @@ describe("derivePrStages", () => {
     const once = derive(input({ pr: merged, events: [ev("first_commit", 120), ev("merged", 150, { number: 7 })] }));
     expect(once.timeline.filter((t) => t.kind === "merged")).toHaveLength(1);
   });
+
+  it("a review skill after the first commit finishes dev: only self-review is active", () => {
+    const v = derive(input({ pr: null, events: [ev("first_commit", 120), reviewSkill(130)] }));
+    expect(cell(v, "dev").state).toBe("done");
+    expect(cell(v, "self_review").state).toBe("active");
+  });
+
+  it("an approval after failed CI keeps the approval but stays on CI; the fix push starts round 2", () => {
+    const events = [ev("first_commit", 120), ci(140, "pending"), ci(150, "failing"), human(160, "APPROVED")];
+    const v = derive(input({ events }));
+    expect(cell(v, "ci").state).toBe("failed");
+    expect(cell(v, "peer_review").state).toBe("done");
+    expect(cell(v, "merge").state).toBe("todo");
+    const v2 = derive(input({ events: [...events, ev("push", 170, { sha: "s170" })] }));
+    expect(cell(v2, "dev").state).toBe("active");
+    expect(cell(v2, "dev").round).toBe(2);
+  });
 });

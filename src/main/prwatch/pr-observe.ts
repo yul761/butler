@@ -32,8 +32,9 @@ export function prObservations(
   const sha = next.headSha;
   const pushed = prev?.headSha != null && sha !== null && prev.headSha !== sha;
   if (pushed && sha !== null) add("push", seen, `push:${sha}`, { sha });
+  // 只在 CI 变了时记（每轮重复看到同一结果不记）；key 带上看到的时间，同一个 sha 上重跑出的同一结果也是新的一条。
   if (next.number != null && (next.ci === "pending" || next.ci === "passing" || next.ci === "failing")) {
-    if (!prev || prev.number == null || prev.ci !== next.ci || prev.headSha !== sha) add("ci", seen, `ci:${sha ?? ""}:${next.ci}`, { result: next.ci, sha });
+    if (!prev || prev.number == null || prev.ci !== next.ci || prev.headSha !== sha) add("ci", seen, `ci:${sha ?? ""}:${next.ci}:${seen}`, { result: next.ci, sha });
   }
   const kindOf = (login: string, reviewId: string | null) => {
     const k = reviewerKind(login, pr?.author ?? "");

@@ -25,7 +25,7 @@ const keys = (o: ReturnType<typeof prObservations>) => o.map((x) => x.dedupeKey)
 describe("prObservations", () => {
   it("records a new PR with its CI, reviews and comments", () => {
     const o = prObservations(t, null, next(), pr(), [comment("i1", { reviewId: "r1", path: "a.ts", line: 3 })], 5, 1000);
-    expect(keys(o)).toEqual(["3:first_commit:b", "3:opened:7", "3:ci:a1:pending", "3:review:r1", "3:review:r2", "3:comment:c1", "3:comment:i1"]);
+    expect(keys(o)).toEqual(["3:first_commit:b", "3:opened:7", "3:ci:a1:pending:1000", "3:review:r1", "3:review:r2", "3:comment:c1", "3:comment:i1"]);
     expect(o[0].event).toMatchObject({ kind: "first_commit", at: 5, ticketKey: "BTL-1", repoId: 3, branch: "b" });
     expect(o[2].event).toMatchObject({ kind: "ci", at: 1000, data: { result: "pending", sha: "a1" } });
     expect(o[3].event).toMatchObject({ kind: "review", at: 10, data: { id: "r1", who: "copilot", state: "COMMENTED" } });
@@ -38,9 +38,19 @@ describe("prObservations", () => {
     expect(keys(o)).toEqual(["3:review:r1", "3:review:r2", "3:comment:c1"]);
   });
 
+  it("keeps a repeated CI result on the same sha (a rerun) as its own event", () => {
+    const seq: Array<["pending" | "passing" | "failing", "pending" | "passing" | "failing", number]> = [
+      ["pending", "passing", 1000], ["passing", "pending", 2000], ["pending", "failing", 3000], ["failing", "pending", 4000], ["pending", "passing", 5000],
+    ];
+    const all = seq.flatMap(([a, b, now]) => prObservations(t, prev({ ci: a }), next({ ci: b }), null, [], null, now));
+    const ciKeys = all.filter((o) => o.event.kind === "ci").map((o) => o.dedupeKey);
+    expect(new Set(ciKeys).size).toBe(5);
+    expect(all.at(-1)?.event.data).toMatchObject({ result: "passing" });
+  });
+
   it("puts the push before the CI of the new sha, so they sort that way at the same time", () => {
     const o = prObservations(t, prev({ ci: "passing" }), next({ headSha: "b2", ci: "pending" }), null, [], null, 1000);
-    expect(keys(o)).toEqual(["3:push:b2", "3:ci:b2:pending"]);
+    expect(keys(o)).toEqual(["3:push:b2", "3:ci:b2:pending:1000"]);
     expect(o[0].event.at).toBe(o[1].event.at);
   });
 
@@ -55,7 +65,7 @@ describe("prObservations", () => {
 
   it("records the CI of a PR that appears on the sha CI already ran on", () => {
     const o = prObservations(t, prev({ number: null, state: null, ci: "passing" }), next({ ci: "passing" }), pr({ ci: "passing" }), [], null, 1000);
-    expect(keys(o).filter((k) => k !== "3:review:r1" && k !== "3:review:r2" && k !== "3:comment:c1")).toEqual(["3:opened:7", "3:ci:a1:passing"]);
+    expect(keys(o).filter((k) => k !== "3:review:r1" && k !== "3:review:r2" && k !== "3:comment:c1")).toEqual(["3:opened:7", "3:ci:a1:passing:1000"]);
   });
 
   it("records no CI without a PR", () => {

@@ -83,9 +83,9 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
     if (sr === "active") set("self_review", "done", at);
     else if (sr === "todo") set("self_review", untracked, at);
   };
-  /** 在 CI 之前的某一步还在进行（同一时间只能有一步进行中）。 */
-  const beforeReviewActive = () =>
-    PR_STAGES.slice(0, PR_STAGES.indexOf("peer_review")).some((id) => cell(id).state === "active");
+  /** 在 peer review 之前的某一步还在进行或失败了（比如 CI 挂了）：批准只记下，不往合并走。 */
+  const beforeReviewOpen = () =>
+    PR_STAGES.slice(0, PR_STAGES.indexOf("peer_review")).some((id) => cell(id).state === "active" || cell(id).state === "failed");
 
   /** ci pending 的效果；ci 结果之前没看到 pending 时也先走一遍。 */
   const ciPending = (at: number): boolean => {
@@ -117,6 +117,8 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
           log(at, "design", "design_skill", name);
         } else if (category === "review") {
           if (!frozen() && (cur === "dev" || cur === "self_review")) {
+            // 进入自我 review：开发这一步算完成，同一时间只有一步进行中。
+            if (cell("dev").state === "active") set("dev", "done", at);
             set("self_review", "active", at);
             cur = "self_review";
           }
@@ -195,8 +197,8 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
           } else if (state === "APPROVED") {
             if (!frozen()) {
               set("peer_review", "done", at);
-              // 前面还有一步在进行（通常是 CI 在跑）：只记批准，等 CI 通过再进入合并。
-              if (!beforeReviewActive()) {
+              // 前面还有一步在进行或失败（通常是 CI 在跑或挂了）：只记批准，等 CI 通过再进入合并。
+              if (!beforeReviewOpen()) {
                 set("merge", "active", at);
                 cur = "merge";
               }
