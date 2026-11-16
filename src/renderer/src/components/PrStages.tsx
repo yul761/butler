@@ -25,7 +25,7 @@ function RepoStages({ row, showName }: { row: PrStagesView; showName: boolean })
         {showName && <span className="pr-repo-name">{row.repoName}</span>}
         {row.stages.map((c) => <Cell key={c.id} cell={c} named />)}
         {row.prUrl && <span className="pr-link muted" title={row.prUrl}>{row.prNumber === null ? "PR" : `#${row.prNumber}`}</span>}
-        {row.closed && <span className={row.prUrl ? "pr-closed" : "pr-closed pr-link"}>{S.prClosed}</span>}
+        {row.closed && <span className="pr-closed">{S.prClosed}</span>}
       </div>
       {row.timeline.length > 0 && (
         <>
@@ -91,7 +91,7 @@ export function FeaturePrStages({ featureId, onOpenTicket }: { featureId: number
   return <StagesTable rows={rows} onOpenTicket={onOpenTicket} />;
 }
 
-export function EpicPrStages({ epicId, features }: { epicId: number; features: { id: number; name: string }[] }) {
+export function EpicPrStages({ epicId, features, onOpenTicket }: { epicId: number; features: { id: number; name: string }[]; onOpenTicket: (key: string) => void }) {
   const rows = usePrStages({ epicId });
   const [open, setOpen] = useState<number | null>(null);
   if (rows === null) return null;
@@ -115,7 +115,7 @@ export function EpicPrStages({ epicId, features }: { epicId: number; features: {
               </span>
               <span className="muted">{S.prMergedOf(s?.merged ?? 0, total)}</span>
             </div>
-            {open === f.id && (mine.length === 0 ? <p className="muted">{S.prNoRepos}</p> : <StagesTable rows={mine} />)}
+            {open === f.id && (mine.length === 0 ? <p className="muted">{S.prNoRepos}</p> : <StagesTable rows={mine} onOpenTicket={onOpenTicket} />)}
           </div>
         );
       })}

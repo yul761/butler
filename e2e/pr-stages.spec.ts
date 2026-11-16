@@ -1,5 +1,7 @@
+import type { Locator } from "@playwright/test";
+import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, pageTab, terminalText, test } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, pageTab, terminalText, test } from "./fixtures";
 
 /**
  * PR 进度（设计文档 2026-11-15 第 1 部分）：假 claude 里输入 /fake-skill，走真实的路径：
@@ -50,4 +52,48 @@ test("a skill call in a session moves the design step to active; tab and timelin
   await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
   await expect(pageTab(page, S.prStagesTab)).toHaveAttribute("aria-selected", "false");
   await expect(page.locator(".pr-stages")).toHaveCount(0);
+});
+
+test("an expanded feature in the epic's stages tab opens its ticket (mouse and keyboard)", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const shop = join(s.dir, "shop");
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  makeGitRepo(join(shop, "frontend"));
+  makeGitRepo(join(shop, "backend"));
+
+  const dialog = async (open: Locator, label: string, name: string) => {
+    await open.click();
+    await page.getByLabel(label, { exact: true }).fill(name);
+    const box = page.getByRole("textbox", { name: `${S.repo} ${S.pick}`, exact: true });
+    await box.fill(shop);
+    await box.blur();
+    await expect(page.getByText(S.subReposFound(2), { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: S.create, exact: true }).click();
+    await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+  };
+  await dialog(page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "shop-epic");
+  await dialog(page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "pay");
+
+  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await page.getByLabel(S.ticketKey, { exact: true }).fill("EP-1");
+  await page.locator(".modal").getByRole("checkbox", { name: "frontend", exact: true }).check();
+  await page.locator(".modal").getByRole("checkbox", { name: "backend", exact: true }).uncheck();
+  await page.getByRole("button", { name: S.create, exact: true }).click();
+  await expect(page.getByRole("heading", { name: "EP-1", exact: true })).toBeVisible();
+
+  const openFromEpic = async (activate: (chip: Locator) => Promise<void>) => {
+    await page.locator(".sidebar .epic-group > .feature-row .ticket").click();
+    await expect(page.getByRole("heading", { name: "shop-epic", exact: true })).toBeVisible();
+    const tab = pageTab(page, S.prStagesTab);
+    if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
+    await page.locator(".pr-epic").getByRole("button", { name: "pay", exact: true }).click();
+    await activate(page.locator(".pr-table").getByRole("button", { name: "EP-1", exact: true }));
+    await expect(page.getByRole("heading", { name: "EP-1", exact: true })).toBeVisible();
+  };
+  await openFromEpic((chip) => chip.click());
+  await openFromEpic(async (chip) => {
+    await chip.focus();
+    await page.keyboard.press("Enter");
+  });
 });
