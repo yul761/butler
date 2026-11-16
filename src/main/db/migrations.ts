@@ -357,4 +357,37 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX idx_pr_stage_events_ticket ON pr_stage_events (ticket_key, at);
   CREATE INDEX idx_pr_stage_events_upper ON pr_stage_events (feature_id, epic_id);
   `,
+  // 复盘规矩（review-lessons）：从已合并 PR 的 review 里提炼出来的规矩，只存在 Butler 里。
+  // lessons 属于一个仓库或一个产品（二选一）；lesson_queue 是待分析的 PR，(repo_slug, pr_number) 唯一，不会排两次。
+  `
+  CREATE TABLE lesson_repos (
+    slug TEXT PRIMARY KEY, local_path TEXT NOT NULL,
+    merged_cursor TEXT,
+    backfilled_at INTEGER, last_analyzed_at INTEGER, analyzed_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL);
+  CREATE TABLE lesson_products (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL);
+  CREATE TABLE lesson_product_repos (
+    product_id INTEGER NOT NULL REFERENCES lesson_products(id) ON DELETE CASCADE,
+    repo_slug TEXT NOT NULL REFERENCES lesson_repos(slug) ON DELETE CASCADE,
+    PRIMARY KEY (product_id, repo_slug));
+  CREATE TABLE lessons (
+    id INTEGER PRIMARY KEY,
+    repo_slug TEXT REFERENCES lesson_repos(slug) ON DELETE CASCADE,
+    product_id INTEGER REFERENCES lesson_products(id) ON DELETE CASCADE,
+    text TEXT NOT NULL, why TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending','confirmed','disabled','rejected')),
+    hits INTEGER NOT NULL DEFAULT 1, last_seen_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    CHECK ((repo_slug IS NULL) <> (product_id IS NULL)));
+  CREATE TABLE lesson_sources (
+    id INTEGER PRIMARY KEY, lesson_id INTEGER NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+    pr_number INTEGER NOT NULL, url TEXT, at INTEGER NOT NULL,
+    UNIQUE (lesson_id, pr_number, url));
+  CREATE TABLE lesson_queue (
+    id INTEGER PRIMARY KEY, repo_slug TEXT NOT NULL REFERENCES lesson_repos(slug) ON DELETE CASCADE,
+    pr_number INTEGER NOT NULL, origin TEXT NOT NULL CHECK (origin IN ('backfill','merged','daily')),
+    status TEXT NOT NULL CHECK (status IN ('queued','running','done','skipped','failed')),
+    error TEXT, enqueued_at INTEGER NOT NULL, finished_at INTEGER, not_before INTEGER,
+    UNIQUE (repo_slug, pr_number));
+  CREATE INDEX lesson_queue_status ON lesson_queue(status, enqueued_at);
+  `,
 ];
