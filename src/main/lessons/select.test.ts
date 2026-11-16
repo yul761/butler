@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { memDb } from "../test-utils";
 import { LessonsRepo } from "../db/lessons-repo";
 import { RepoIdentity } from "./repo-identity";
-import { overflowFor, productSuggestions, sessionLessons } from "./select";
+import { overflowFor, productSuggestions, safeSessionLessons, sessionLessons } from "./select";
 
 const identity = () =>
   new RepoIdentity({
@@ -29,8 +29,9 @@ describe("sessionLessons", () => {
     for (let i = 0; i < 15; i++) add(repo, { kind: "repo", slug: "acme/web" }, `web-${i}`, "confirmed", 100 + i);
     for (let i = 0; i < 15; i++) add(repo, { kind: "repo", slug: "acme/api" }, `api-${i}`, "confirmed", 200 + i);
     for (let i = 0; i < 10; i++) add(repo, { kind: "product", productId: pid }, `prod-${i}`, "confirmed", 50 + i);
-    for (let i = 0; i < 3; i++) add(repo, { kind: "repo", slug: "acme/web" }, `pending-${i}`, "pending");
-    for (let i = 0; i < 2; i++) add(repo, { kind: "repo", slug: "acme/web" }, `disabled-${i}`, "disabled");
+    for (let i = 0; i < 3; i++) add(repo, { kind: "repo", slug: "acme/web" }, `pending-${i}`, "pending", 999);
+    for (let i = 0; i < 2; i++) add(repo, { kind: "repo", slug: "acme/web" }, `disabled-${i}`, "disabled", 999);
+    for (const id of repo.lessons({ status: ["pending", "disabled"] }).map((l) => l.id)) repo.hit(id, 999, { prNumber: 50 + id, url: null });
     const top = add(repo, { kind: "product", productId: pid }, "top", "confirmed", 1);
     repo.hit(top, 1, { prNumber: 2, url: null });
     repo.hit(top, 1, { prNumber: 3, url: null });
@@ -57,6 +58,18 @@ describe("sessionLessons", () => {
     const pid = repo.createProduct("shop", ["acme/web", "acme/api"], 1);
     add(repo, { kind: "product", productId: pid }, "p");
     expect(sessionLessons(repo, identity(), ["/acme_web", "/acme_api"])).toEqual([{ label: "shop", text: "p" }]);
+  });
+});
+
+describe("safeSessionLessons", () => {
+  it("returns [] and logs when selecting throws", () => {
+    const repo = setup();
+    const logs: string[] = [];
+    vi.spyOn(repo, "lessons").mockImplementation(() => {
+      throw new Error("db");
+    });
+    expect(safeSessionLessons(repo, identity(), ["/acme_web"], (m) => logs.push(m))).toEqual([]);
+    expect(logs).toHaveLength(1);
   });
 });
 

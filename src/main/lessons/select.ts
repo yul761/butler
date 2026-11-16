@@ -47,3 +47,13 @@ export function productSuggestions(groups: string[][], products: LessonProductVi
     .filter((c) => c.together >= 2 && !products.some((p) => c.slugs.every((s) => p.slugs.includes(s))))
     .sort((a, b) => b.together - a.together || a.slugs.join(",").localeCompare(b.slugs.join(",")));
 }
+
+/** 送规矩出错（数据库、解析 slug）时只是这次不带规矩，不能连累整份 session 说明。 */
+export function safeSessionLessons(repo: LessonsRepo, identity: RepoIdentity, repoPaths: string[], log?: (msg: string, err?: unknown) => void): SessionLesson[] {
+  try {
+    return sessionLessons(repo, identity, repoPaths);
+  } catch (e) {
+    log?.("session lessons failed, guide goes without them", e);
+    return [];
+  }
+}

@@ -59,7 +59,7 @@ import { EpicService } from "./epics/epic-service";
 import { FeaturesRepo } from "./db/features-repo";
 import { currentLang, onLangChange, setLang } from "./i18n";
 import { pruneSessionGuides, writeSessionGuide } from "./claude/session-guide";
-import { sessionLessons } from "./lessons/select";
+import { safeSessionLessons } from "./lessons/select";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
 import { HandoffRunner } from "./handoff/runner";
@@ -525,7 +525,7 @@ async function bootstrap(): Promise<void> {
     // 装着的 butler-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
     mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, allowTools: SESSIONS_AUTO_ALLOW, gateCommand: health.hookBinCurrent() && existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
     guidePath: (kind, repoPaths) =>
-      writeSessionGuide(paths.mcp, currentLang(), kind, kind === "ticket" ? sessionLessons(lessonsRepo, repoIdentity, repoPaths) : []),
+      writeSessionGuide(paths.mcp, currentLang(), kind, kind === "ticket" ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger) : []),
     featureMcpConfig,
     epicMcpConfig,
     butlerWorkspace: paths.butlerWorkspace,
