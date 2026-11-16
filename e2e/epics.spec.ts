@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { S, STRINGS, type UiStrings } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, openTab, pageTab, terminalText, test, type Sandbox } from "./fixtures";
 
 /** 假 claude 跑的命令：第一个词让它归类成“跑测试”。 */
 const LONG_COMMAND = "pnpm test --filter @acme/checkout-frontend --run --reporter=verbose";
@@ -457,7 +457,7 @@ test("an epic from planning to archive: features from the epic session, the plan
 
   // 18. 页面上的“新建 feature”：建好进 feature 页，已经在这个 epic 下面。
   await goToEpic();
-  await create(page, page.locator(".epic-page .epic-features").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "ui-made", shop);
+  await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "ui-made", shop);
   await expect(moveTo).toHaveValue("1");
   await expect(sections).toHaveText([S.epics]);
   expect(pageErrors).toEqual([]);
@@ -479,7 +479,7 @@ test("a stuck ticket marks its feature and epic", async ({ makeSandbox, launch }
   const { epicRow, featureRow, sidebarFeatures, row, goToEpic, goToFeature, collapseEpic } = places(page);
 
   await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "checkout-revamp", shop);
-  await create(page, page.locator(".epic-page .epic-features").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "logs", shop);
+  await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "logs", shop);
   await newTicket(page, "DMS-1", "frontend", "backend");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
@@ -493,19 +493,19 @@ test("a stuck ticket marks its feature and epic", async ({ makeSandbox, launch }
   await expect(row("logs").locator(".badge")).toHaveCount(0);
   await shot(page, "epic-stuck.png");
   await shot(page, "epic-stuck-dark.png", "dark");
-  // 收起 feature 列表：行和“新建 feature”都收掉，标题上留着数量和红点；离开再回来还是收起的，再点展开。
-  const featuresToggle = page.locator(".epic-features .section-toggle");
-  await featuresToggle.click();
-  await expect(featuresToggle).toHaveAttribute("aria-expanded", "false");
+  // feature tab 上留着数量和红点。再点一下收起：行收掉，“新建 feature”还在 tab 条上；离开再回来还是收起的，再点展开。
+  const featuresTab = pageTab(page, S.features);
+  await expect(featuresTab.locator(".stuck-mark")).toBeVisible();
+  await featuresTab.click();
+  await expect(featuresTab).toHaveAttribute("aria-selected", "false");
   await expect(page.locator(".epic-features .ticket-table")).toHaveCount(0);
-  await expect(page.locator(".epic-features").getByRole("button", { name: `+ ${S.newFeature}`, exact: true })).toHaveCount(0);
-  await expect(featuresToggle.locator(".stuck-mark")).toBeVisible();
+  await expect(page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true })).toBeVisible();
+  await expect(featuresTab.locator(".stuck-mark")).toBeVisible();
   await goToFeature("logs");
   await goToEpic();
   await expect(page.locator(".epic-features .ticket-table")).toHaveCount(0);
-  await featuresToggle.click();
+  await openTab(page, S.features);
   await expect(row("logs").locator(".stuck-mark")).toBeVisible();
-  await expect(featuresToggle.locator(".stuck-mark")).toHaveCount(0);
 
   // 折叠 epic：看的是 epic 页，下面的 feature 收起，红点还在。
   await collapseEpic();
@@ -531,7 +531,7 @@ test("ending a waiting session with × clears the mark at every level", async ({
   const { epicRow, featureRow, sidebarTicket, row, goToEpic } = places(page);
 
   await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "checkout-revamp", shop);
-  await create(page, page.locator(".epic-page .epic-features").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "logs", shop);
+  await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "logs", shop);
   await newTicket(page, "DMS-1", "frontend", "backend");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
@@ -573,7 +573,7 @@ test("the plan waits for the summaries create_feature started", async ({ makeSan
   const { row, goToEpic } = places(page);
 
   await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "epic-a", shop);
-  await create(page, page.locator(".epic-page .epic-features").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "pay", shop);
+  await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "pay", shop);
   await newCoordinator(page, s, payWorkspace);
   await typeLine(page, "note");
   await expect.poll(() => terminalText(page)).toContain("收到：note");
@@ -630,7 +630,7 @@ test("archiving waits for fresh summaries, and the user can walk away meanwhile"
 
   await create(page, side.getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "outside", shop);
   await create(page, side.getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "epic-a", shop);
-  await create(page, page.locator(".epic-page .epic-features").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "pay", shop);
+  await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "pay", shop);
   await newTicket(page, "DMS-1", "frontend", "backend");
 
   /** pay 的总控说一句话再退出：transcript 比上次汇总新，归档前真的要跑汇总。 */

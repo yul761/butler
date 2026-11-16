@@ -3,8 +3,9 @@ import type { EpicFeatureRow, EpicView, InboxItemView, NowTarget } from "../../.
 import { api } from "../api";
 import { S } from "../strings";
 import { epicErrorText, epicOpenError, epicRowText } from "./epic-row";
-import { InboxPanes } from "./InboxPanes";
+import { inboxTabs, useInbox } from "./InboxPanes";
 import { NewFeatureDialog } from "./NewFeatureDialog";
+import { PageTabs } from "./PageTabs";
 import { useCollapsed } from "./useCollapsed";
 import { SessionArea, useSessionPanes, WorkspaceHeader } from "./WorkspaceParts";
 
@@ -20,8 +21,8 @@ interface Props {
 }
 
 /**
- * epic 页（设计文档 2026-11-01，草图 A）：从上到下是名字和工作区、一行一个 feature（一句进度和状态，不列 ticket），
- * 然后是仓库、epic session 和它们的终端，布局和 feature 页一样。
+ * epic 页（设计文档 2026-11-01，草图 A）：从上到下是名字和工作区，一排 tab（feature 列表：一行一个 feature，一句进度和状态，
+ * 不列 ticket；汇报；待你决定），然后是仓库、epic session 和它们的终端，布局和 feature 页一样。
  */
 export function EpicPage({ epic, onOpenFeature, onFeatureCreated, focusSession, onOpenTarget }: Props) {
   const [error, setError] = useState<string | null>(null);
@@ -45,8 +46,7 @@ export function EpicPage({ epic, onOpenFeature, onFeatureCreated, focusSession, 
     else void panes.open(item.sessionId);
   }
 
-  // feature 列表可以收起（每个 epic 各记各的），收起时标题上还留着数量和等待、卡住的记号，和 feature 页的 ticket 表一样。
-  const [featuresCollapsed, toggleFeatures] = useCollapsed(`epic-features:${epic.id}`);
+  const inbox = useInbox({ epicId: epic.id });
   const live = epic.features.filter((f) => f.status !== "archived");
   const archived = epic.features.filter((f) => f.status === "archived");
 
@@ -63,30 +63,42 @@ export function EpicPage({ epic, onOpenFeature, onFeatureCreated, focusSession, 
         onError={showError}
       />
 
-      <div className="feature-overview">
-        <section className="epic-features">
-          <h3>
-            <button className="section-toggle" aria-expanded={!featuresCollapsed} onClick={toggleFeatures}>
-              <span className="twisty">{featuresCollapsed ? "▸" : "▾"}</span>
-              {S.features}
-              <span className="muted">{live.length}</span>
-              {featuresCollapsed && live.some((f) => f.status === "waiting") && <span className="badge" title={S.waiting}>●</span>}
-              {featuresCollapsed && live.some((f) => f.status === "stuck") && <span className="stuck-mark" title={S.stuckDot}>●</span>}
-            </button>
-          </h3>
-          {featuresCollapsed ? null : live.length === 0 ? (
-            <p className="muted">{S.noEpicFeatures}</p>
-          ) : (
-            <table className="ticket-table">
-              <tbody>
-                {live.map((f) => <FeatureRow key={f.id} row={f} onOpen={() => onOpenFeature(f.id)} />)}
-              </tbody>
-            </table>
-          )}
-          {!featuresCollapsed && <button onClick={() => setNewFeature(true)}>+ {S.newFeature}</button>}
-        </section>
-        {archived.length > 0 && <ArchivedFeatures epicId={epic.id} rows={archived} />}
-      </div>
+      <PageTabs
+        page={`epic:${epic.id}`}
+        defaultTab="features"
+        actions={<button onClick={() => setNewFeature(true)}>+ {S.newFeature}</button>}
+        tabs={[
+          {
+            id: "features",
+            // tab 上留着数量和等待、卡住的记号，和 feature 页的 ticket tab 一样。
+            label: (
+              <>
+                {S.features}
+                <span className="muted">{live.length}</span>
+                {live.some((f) => f.status === "waiting") && <span className="badge" title={S.waiting}>●</span>}
+                {live.some((f) => f.status === "stuck") && <span className="stuck-mark" title={S.stuckDot}>●</span>}
+              </>
+            ),
+            content: (
+              <>
+                <section className="epic-features">
+                  {live.length === 0 ? (
+                    <p className="muted">{S.noEpicFeatures}</p>
+                  ) : (
+                    <table className="ticket-table">
+                      <tbody>
+                        {live.map((f) => <FeatureRow key={f.id} row={f} onOpen={() => onOpenFeature(f.id)} />)}
+                      </tbody>
+                    </table>
+                  )}
+                </section>
+                {archived.length > 0 && <ArchivedFeatures epicId={epic.id} rows={archived} />}
+              </>
+            ),
+          },
+          ...inboxTabs(inbox, goTo),
+        ]}
+      />
       {newFeature && (
         <NewFeatureDialog
           epicId={epic.id}
@@ -94,8 +106,6 @@ export function EpicPage({ epic, onOpenFeature, onFeatureCreated, focusSession, 
           onCreated={(id) => (setNewFeature(false), onFeatureCreated(id))}
         />
       )}
-
-      <InboxPanes scope={{ epicId: epic.id }} onGo={goTo} />
 
       <SessionArea
         repos={epic.repos}

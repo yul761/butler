@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, terminalText, test } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, openTab, terminalText, test } from "./fixtures";
 
 async function typeLine(page: Page, line: string): Promise<void> {
   await page.locator(".terminal-wrap:visible .xterm").click();
@@ -59,6 +59,7 @@ test("the coordinator terminal still scrolls after its output outgrows the repla
   await scrollUp();
   await expect.poll(wheels).toBe(1);
 
+  await openTab(page, S.featureTickets);
   await page.locator(".feature-page .ticket-table").getByRole("button", { name: "DMS-1", exact: true }).click();
   await expect(page.getByRole("heading", { name: "DMS-1", exact: true })).toBeVisible();
   await page.locator(".feature-link").getByRole("button", { name: "checkout", exact: true }).click();

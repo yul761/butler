@@ -5,7 +5,7 @@ import { completeWizard, expect, terminalText, test, type Sandbox } from "./fixt
 
 const fakeLog = (s: Sandbox) => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
 
-test("the Butler 总控 page: both inbox panes on top and one terminal in its own workspace (BTL-190 5)", async ({ makeSandbox, launch }) => {
+test("the Butler 总控 page: both inbox tabs on top and one terminal in its own workspace (BTL-190 5)", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
@@ -13,11 +13,13 @@ test("the Butler 总控 page: both inbox panes on top and one terminal in its ow
   // 侧栏紧跟「现在」的入口。
   await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
   const butler = page.locator(".butler-page");
-  // 两栏都空也显示。
-  await expect(butler.locator(".inbox-reports h3")).toContainText(S.inboxReports);
-  await expect(butler.locator(".inbox-decisions h3")).toContainText(S.inboxDecisions);
-  await expect(butler.locator(".inbox-reports")).toContainText(S.inboxNoReports);
-  await expect(butler.locator(".inbox-decisions")).toContainText(S.inboxNoDecisions);
+  // 终端上面是「汇报 / 待你决定」两个 tab，都空也显示；默认停在「待你决定」，点「汇报」切过去。
+  const tab = (name: string) => butler.locator(".page-tabs-bar").getByRole("tab", { name: new RegExp(`^${name}`) });
+  await expect(tab(S.inboxDecisions)).toHaveAttribute("aria-selected", "true");
+  await expect(butler.locator(".page-tabs-panel")).toContainText(S.inboxNoDecisions);
+  await tab(S.inboxReports).click();
+  await expect(tab(S.inboxReports)).toHaveAttribute("aria-selected", "true");
+  await expect(butler.locator(".page-tabs-panel")).toContainText(S.inboxNoReports);
   // 没有仓库条。
   await expect(butler.locator(".repos-bar")).toHaveCount(0);
   await expect(butler).toContainText(S.noButlerSessions);

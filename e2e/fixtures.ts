@@ -284,6 +284,18 @@ export const test = base.extend<{ e2eCleanup: Tracker; makeSandbox: () => Sandbo
 });
 export { expect };
 
+/**
+ * feature、epic、Butler 总控页上面的 tab：名字开头是 name 的那个（后面跟着数量和记号）。
+ * openTab 只在它没选中时点：再点一下当前 tab 会收起。
+ */
+export const pageTab = (page: Page, name: string) =>
+  page.locator(".page-tabs-bar").getByRole("tab", { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) });
+export async function openTab(page: Page, name: string): Promise<void> {
+  const tab = pageTab(page, name);
+  if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
+  await expect(tab).toHaveAttribute("aria-selected", "true");
+}
+
 /** 名字正好是 term 的 <dt> 后面那个 <dd>（健康检查的键值表）。 */
 export function kvValue(page: Page, term: string) {
   const exact = new RegExp(`^${escapeRe(term)}$`);
