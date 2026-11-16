@@ -172,3 +172,22 @@ describe("firstCommitObservation", () => {
     expect(firstCommitObservation(t, 42, 9).dedupeKey).toBe("3:first_commit:b:after:9");
   });
 });
+
+describe("prObservations: first_commit fallback from the PR's commits", () => {
+  const fc = (o: ReturnType<typeof prObservations>) => kinds(o, "first_commit");
+
+  it("records the first commit with the branch check's key and event when asked, never later than now", () => {
+    const o = prObservations(s, unread(), next(), pr({ firstCommitAt: 50 }), [], 1000, null, null, { afterPrId: null });
+    expect(fc(o)).toEqual([firstCommitObservation({ ticketKey: "BTL-1", repoId: 3, branch: "b" }, 50, null)]);
+    expect(fc(o)[0].dedupeKey).toBe("3:first_commit:b");
+    expect(fc(prObservations(s, prev(), next(), pr({ firstCommitAt: 50 }), [], 1000, null, null, { afterPrId: 9 }))[0].dedupeKey).toBe("3:first_commit:b:after:9");
+    expect(fc(prObservations(s, prev(), next(), pr({ firstCommitAt: 5000 }), [], 1000, null, null, { afterPrId: null }))[0].event.at).toBe(1000);
+  });
+
+  it("records nothing without the option, without firstCommitAt, or for a PR outside the ticket's repos", () => {
+    expect(fc(prObservations(s, unread(), next(), pr({ firstCommitAt: 50 }), [], 1000, null, null))).toEqual([]);
+    expect(fc(prObservations(s, unread(), next(), pr({ firstCommitAt: null }), [], 1000, null, null, { afterPrId: null }))).toEqual([]);
+    const slugOnly: ObsScope = { ...s, repoId: null, scope: scopeOf("BTL-1", null, "o/x") };
+    expect(fc(prObservations(slugOnly, unread(), next(), pr({ firstCommitAt: 50 }), [], 1000, null, null, { afterPrId: null }))).toEqual([]);
+  });
+});

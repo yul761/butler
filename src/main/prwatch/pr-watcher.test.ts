@@ -115,6 +115,54 @@ describe("PrWatcher: reading PRs", () => {
     expect(s.events("merged")).toHaveLength(1);
   });
 
+  it("backs off a never-read PR that keeps failing: 60s, doubling, capped at PR_SLOW_MS; a success resets it", async () => {
+    const s = setup();
+    s.link();
+    const calls = () => s.gh.prStatus.mock.calls.length;
+    await s.w.check();
+    expect(calls()).toBe(1);
+    // 每次失败之后等的时间：60、120、240，然后封顶 300。
+    for (const [wait, total] of [[60_000, 2], [120_000, 3], [240_000, 4], [PR_SLOW_MS, 5], [PR_SLOW_MS, 6]] as const) {
+      s.advance(wait - 1);
+      await s.w.check();
+      expect(calls()).toBe(total - 1);
+      s.advance(1);
+      await s.w.check();
+      expect(calls()).toBe(total);
+    }
+    // 读成功一次：退避清零。另一个 ticket 新链接的同一个 PR 马上读，再失败从 60 秒开始。
+    s.advance(PR_SLOW_MS);
+    s.gh.prStatus.mockResolvedValueOnce(pr());
+    await s.w.check();
+    expect(calls()).toBe(7);
+    s.addTicket("BTL-2");
+    s.prs.link({ ticketKey: "BTL-2", url: url(7), slug: "o/app", repoId: null, number: 7, headBranch: "b", state: "open", source: "handoff", linkedAt: s.now() });
+    await s.w.check();
+    expect(calls()).toBe(8);
+    s.advance(60_000);
+    await s.w.check();
+    expect(calls()).toBe(9);
+  });
+
+  it("forgets the backoff of a PR whose rows are gone, so a later link reads it at once", async () => {
+    const s = setup();
+    s.link();
+    await s.w.check();
+    s.advance(60_000);
+    await s.w.check();
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(2);
+    // 换分支：旧分支没合并的行删掉了；这一轮也不再查它。
+    s.tickets.updateRepo({ id: s.repoId, workMode: "branch", worktreePath: null, branch: "c" });
+    s.advance(15_000);
+    await s.w.check();
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(2);
+    // 同一个 PR 又链接到新分支上（例如 PR 改了 head）：不用等 120 秒。
+    s.link({ headBranch: "c" });
+    s.advance(15_000);
+    await s.w.check();
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(3);
+  });
+
   it("polls a URL shared by two tickets once and updates both rows", async () => {
     const s = setup();
     s.addTicket("BTL-2");
@@ -399,6 +447,40 @@ describe("PrWatcher: branches", () => {
     s.advance(PR_SLOW_MS);
     await s.w.check();
     expect(s.git.firstCommitAt).toHaveBeenCalledTimes(1);
+  });
+
+  it("an open PR linked before any branch check gets first_commit from its PR read, keyed after the last ended PR; the branch check does not add another", async () => {
+    const s = setup();
+    const merged = s.link({ number: 5, url: url(5), state: "merged", mergedAt: s.now() - 2000 });
+    s.prs.update(merged.id, { checkedAt: s.now() - 1 });
+    s.prs.setMergedHandled(merged.id, s.now() - 1);
+    const open = s.link();
+    s.prs.update(open.id, { checkedAt: s.now() - PR_SLOW_MS });
+    s.branches.upsert({ repoId: s.repoId, ticketKey: "BTL-1", branch: "b", ci: "unknown", headSha: null, failed: [], readError: false, checkedAt: s.now() });
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => (u === url(7) ? pr({ firstCommitAt: s.now() - 500 }) : null));
+    await s.w.check();
+    expect(s.gh.prsForBranch).not.toHaveBeenCalled();
+    expect(s.events("first_commit")).toEqual([expect.objectContaining({ at: s.now() - 500, prId: null, repoId: s.repoId, branch: "b" })]);
+    expect(s.stages.has(`${s.repoId}:first_commit:b:after:${merged.id}`)).toBe(true);
+    // 强制查一次分支：key 一样，不再问 git、不再记。
+    s.git.firstCommitAt.mockResolvedValue(s.now() - 900);
+    s.w.soon(s.repoId);
+    await s.w.check();
+    expect(s.gh.prsForBranch).toHaveBeenCalled();
+    expect(s.git.firstCommitAt).not.toHaveBeenCalled();
+    expect(s.events("first_commit")).toHaveLength(1);
+  });
+
+  it("the branch check stays the primary source: a PR read does not add first_commit once the branch check recorded it", async () => {
+    const s = setup();
+    s.git.firstCommitAt.mockResolvedValue(42);
+    s.gh.prsForBranch.mockResolvedValue([listed(7)]);
+    await s.w.check();
+    s.gh.prStatus.mockResolvedValue(pr({ firstCommitAt: 77 }));
+    s.advance(15_000);
+    await s.w.check();
+    expect(s.gh.prStatus).toHaveBeenCalled();
+    expect(s.events("first_commit").map((e) => e.at)).toEqual([42]);
   });
 
   it("without any ended PR the first commit has the plain key", async () => {

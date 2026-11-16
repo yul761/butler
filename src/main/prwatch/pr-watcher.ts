@@ -10,7 +10,7 @@ import { prUrlParts } from "../../shared/pr-url";
 import type { Ticket, TicketRepo, WatchedPr } from "../../shared/types";
 import type { CiItem } from "./ci-delivery";
 import { firstCommitObservation, prObservations, scopeOf, stageKey, type ObsScope, type PrSnapshot } from "./pr-observe";
-import { branchTargets, capRound, nextBranchCheckAt, nextPrCheckAt, prPolls, type BranchTarget, type PrPoll } from "./pr-schedule";
+import { branchTargets, capRound, nextBranchCheckAt, nextPrCheckAt, PR_SLOW_MS, prPolls, type BranchTarget, type PrPoll } from "./pr-schedule";
 
 /** 每次 gh 调用的超时。 */
 export const PR_GH_TIMEOUT_MS = 5000;
@@ -28,7 +28,7 @@ const INLINE_TRIES_MAX = 3;
 const SOON_MS = 1000;
 /** cachedByUrl 只认这么久之内读成功的。 */
 const CACHE_FRESH_MS = 60_000;
-/** 从没读成功过的 PR 读失败了：这么久之后再试（读过的按 checkedAt 排）。 */
+/** 从没读成功过的 PR 读失败了：第一次等这么久再试，之后每次翻倍、最多 PR_SLOW_MS（读过的按 checkedAt 排）。 */
 const UNREAD_RETRY_MS = 60_000;
 
 export interface PrWatcherDeps {
@@ -92,8 +92,8 @@ export class PrWatcher {
   private readonly ghWaiting: (() => void)[] = [];
   /** Copilot review 的行内评论拉失败的次数，键 `${url}:${reviewId}`；拉到了就删掉。只在内存里。 */
   private readonly inlineTries = new Map<string, number>();
-  /** 从没读成功过的 PR 读失败后，下次再试的时间（键 URL）。只在内存里。 */
-  private readonly unreadRetryAt = new Map<string, number>();
+  /** 从没读成功过的 PR 读失败后的退避（键 URL）：下次再试的时间、这次等了多久。读成功或行没了就删掉。只在内存里。 */
+  private readonly unreadBackoff = new Map<string, { at: number; delay: number }>();
 
   constructor(private readonly d: PrWatcherDeps) {}
 
@@ -220,13 +220,15 @@ export class PrWatcher {
   private async pollPrs(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, marks: Marks): Promise<void> {
     const live = new Set(tickets.map((t) => t.key));
     const rows = this.d.prs.needingRead().filter((r) => live.has(r.ticketKey));
+    const urls = new Set(rows.map((r) => r.url));
+    for (const u of this.unreadBackoff.keys()) if (!urls.has(u)) this.unreadBackoff.delete(u);
     const polls = prPolls(rows, {
       repoOf: (id) => this.d.repoOf(id), ghWorkDir: (r) => this.d.ghWorkDir(r), home: this.d.home, sessionOpen: (k, id) => this.d.sessionOpen(k, id),
     });
     const now = this.d.now();
     const due = capRound(
       polls.filter((p) =>
-        p.rows.some((r) => forced(r.ticketKey, r.repoId) || (now >= nextPrCheckAt(r, p.sessionOpen) && now >= (this.unreadRetryAt.get(p.url) ?? 0))),
+        p.rows.some((r) => forced(r.ticketKey, r.repoId) || (now >= nextPrCheckAt(r, p.sessionOpen) && now >= (this.unreadBackoff.get(p.url)?.at ?? 0))),
       ),
     );
     await Promise.all(due.map((p) => this.part(`reading ${p.url}`, () => this.poll(p, marks))));
@@ -243,10 +245,14 @@ export class PrWatcher {
         this.d.prs.update(r.id, r.checkedAt === 0 ? { readError: true } : { readError: true, checkedAt: now });
         if (!r.readError) marks.changed = true;
       }
-      if (p.rows.some((r) => r.checkedAt === 0)) this.unreadRetryAt.set(p.url, now + UNREAD_RETRY_MS);
+      if (p.rows.some((r) => r.checkedAt === 0)) {
+        const prev = this.unreadBackoff.get(p.url);
+        const delay = prev ? Math.min(prev.delay * 2, PR_SLOW_MS) : UNREAD_RETRY_MS;
+        this.unreadBackoff.set(p.url, { at: now + delay, delay });
+      }
       return;
     }
-    this.unreadRetryAt.delete(p.url);
+    this.unreadBackoff.delete(p.url);
     const failed = pr.ci === "failing" ? await this.failedWithLogs(p.cwd, pr.checks, p.slug) : [];
     const inline = await this.inlineComments(p, pr);
     const bots = await this.botsOf(p, pr);
@@ -268,7 +274,9 @@ export class PrWatcher {
     const first = r.checkedAt === 0;
     let added = false;
     try {
-      const obs = prObservations(this.scopeOf(r, headBranch), r, next, { ...pr, mergedAt, closedAt }, inline, now, bots, this.d.stages.lastCi(r.id));
+      const obs = prObservations(
+        this.scopeOf(r, headBranch), r, next, { ...pr, mergedAt, closedAt }, inline, now, bots, this.d.stages.lastCi(r.id), this.firstCommitFallback(r, state, headBranch),
+      );
       for (const o of obs) if (this.d.stages.add(o.event, o.dedupeKey)) added = true;
     } catch (e) {
       this.d.log(`pr watch: recording the stages of ${r.url} for ${r.ticketKey} failed`, e);
@@ -288,6 +296,27 @@ export class PrWatcher {
         this.d.log(`pr watch: handing over the CI result of ${r.url} for ${r.ticketKey} failed`, e);
       }
     }
+  }
+
+  /**
+   * 开着的 PR 在 ticket 仓库现在的分支上时，分支检查停着（由 PR 的读取接手）：用 PR 的 commit 补记第一个 commit。
+   * 已经记过（分支检查记的，或者上一次读记的）就不给。
+   */
+  private firstCommitFallback(r: TicketPr, state: TicketPr["state"], branch: string | null): { afterPrId: number | null } | null {
+    if (state !== "open" || r.repoId === null || branch === null || this.d.repoOf(r.repoId)?.branch !== branch) return null;
+    const afterPrId = this.lastEnded(r.ticketKey, r.repoId, branch)?.pr.id ?? null;
+    return this.d.stages.has(stageKey.firstCommit({ scope: String(r.repoId), branch }, afterPrId)) ? null : { afterPrId };
+  }
+
+  /** 这个 ticket 这个仓库这个分支上最后结束（合并或关闭）的 PR 和结束的时间。 */
+  private lastEnded(ticketKey: string, repoId: number, branch: string): { pr: TicketPr; end: number } | null {
+    let last: { pr: TicketPr; end: number } | null = null;
+    for (const r of this.d.prs.byTicket(ticketKey)) {
+      const end = r.mergedAt ?? r.closedAt;
+      if (r.repoId !== repoId || r.headBranch !== branch || end === null || (last && end <= last.end)) continue;
+      last = { pr: r, end };
+    }
+    return last;
   }
 
   /** Copilot review 的行内评论：新的（或之前没拉到、不到 3 次的）才拉。所有 review 照常马上记，行内评论晚到也会被数上。 */
@@ -388,17 +417,10 @@ export class PrWatcher {
    * 本地的一次 git 调用：每次查分支都问，直到记下来为止。
    */
   private async recordFirstCommit(t: BranchTarget): Promise<boolean> {
-    let last: TicketPr | null = null;
-    let lastEnd = -Infinity;
-    for (const r of this.d.prs.byTicket(t.ticketKey)) {
-      const end = r.mergedAt ?? r.closedAt;
-      if (r.repoId !== t.repoId || r.headBranch !== t.branch || end === null || end <= lastEnd) continue;
-      last = r;
-      lastEnd = end;
-    }
-    const afterId = last?.id ?? null;
+    const last = this.lastEnded(t.ticketKey, t.repoId, t.branch);
+    const afterId = last?.pr.id ?? null;
     if (this.d.stages.has(stageKey.firstCommit({ scope: String(t.repoId), branch: t.branch }, afterId))) return false;
-    const at = await this.d.git.firstCommitAt(t.cwd, t.branch, last ? lastEnd : null);
+    const at = await this.d.git.firstCommitAt(t.cwd, t.branch, last?.end ?? null);
     if (at === null) return false;
     const o = firstCommitObservation(t, at, afterId);
     return this.d.stages.add(o.event, o.dedupeKey);

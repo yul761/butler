@@ -27,8 +27,8 @@ export const stageKey = {
   review: (t: KeyScope, id: string, state: string) => `${t.scope}:review:${t.branch}:${id}:${state}`,
 };
 
-/** 分支上第一个 commit（没有 PR 时由分支检查记下）。 */
-export function firstCommitObservation(t: BranchTarget, at: number, afterPrId: number | null): Observation {
+/** 分支上第一个 commit（主要由分支检查记下；分支上有开着的 PR、分支不查时由 PR 的读取补上，同一个 key）。 */
+export function firstCommitObservation(t: Pick<BranchTarget, "ticketKey" | "repoId" | "branch">, at: number, afterPrId: number | null): Observation {
   return {
     event: { ticketKey: t.ticketKey, repoId: t.repoId, prId: null, branch: t.branch, featureId: null, epicId: null, sessionId: null, kind: "first_commit", at, data: {} },
     dedupeKey: stageKey.firstCommit({ scope: String(t.repoId), branch: t.branch }, afterPrId),
@@ -42,11 +42,14 @@ export function firstCommitObservation(t: BranchTarget, at: number, afterPrId: n
  * review：第一次读用 min(submittedAt, now)，之后用看到的时间（GitHub 的钟和本机的钟不一定对得上，后看到的不能排到已经记下的事件前面）。
  * CI 只和这个 PR 最后一条 ci 事件（lastCi）比：gh 某一轮失败（行上的 ci 留着）不会让同一个结论再记一次。
  * bots：这一轮从 REST 查到的 Bot（gh pr view 的作者没有 [bot] 后缀）；没查或失败为 null，按名字认。
+ * firstCommit：给了就用 PR 的 commit 里最早的作者时间补记分支的第一个 commit（key 和分支检查的一样，谁先记都只有一条）；
+ * afterPrId 是这个分支上一个结束了的 PR。只给 ticket 仓库的 PR。
  * 顺序有意义：同一轮的事件 at 都是 now，derivePrStages 按 at、id 排，所以 push 要在新 sha 的 ci 之前。
  */
 export function prObservations(
   s: ObsScope, prev: PrSnapshot | null, next: PrSnapshot, pr: PrStatus | null,
   inline: PrComment[], now: number, bots: ReviewAuthors | null, lastCi: { sha: string | null; result: string } | null,
+  firstCommit: { afterPrId: number | null } | null = null,
 ): Observation[] {
   const out: Observation[] = [];
   const add = (kind: StageEvent["kind"], at: number, key: string, data: Record<string, unknown>) =>
@@ -58,6 +61,9 @@ export function prObservations(
   const p = s.scope;
   const b = s.branch;
 
+  if (firstCommit && s.repoId !== null && b !== null && pr?.firstCommitAt != null) {
+    out.push(firstCommitObservation({ ticketKey: s.ticketKey, repoId: s.repoId, branch: b }, Math.min(pr.firstCommitAt, now), firstCommit.afterPrId));
+  }
   // 每轮都给：key 去重；迁移前就有、但没记过 pr_opened 的 PR 也补上。
   if (pr) add("pr_opened", Math.min(pr.createdAt ?? now, now), stageKey.opened(s, next.number), { number: next.number });
   // 这一轮看到 PR 已经合并或关闭：CI 和 push 的时间不晚于合并、关闭的时间，时间线上才排在它前面。
