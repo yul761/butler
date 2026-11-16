@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clickTab, pickTab, tabIsOpen, toggleTabs } from "./page-tabs";
+import { clickTab, pickTab, readTabState, tabIsOpen, toggleTabs } from "./page-tabs";
 
 describe("page tabs", () => {
   const ids = ["progress", "tickets", "reports", "decisions"];
@@ -39,5 +39,17 @@ describe("page tabs", () => {
     const collapsed = clickTab({ tab: "reports", open: true }, "reports");
     expect(toggleTabs(collapsed)).toEqual({ tab: "reports", open: true });
     expect(toggleTabs({ tab: "reports", open: true })).toEqual({ tab: "reports", open: false });
+  });
+
+  it("combines the stored tab and open flag into the initial state", () => {
+    const ids = ["progress", "reports"];
+    expect(readTabState(null, null, ids, "progress")).toEqual({ tab: "progress", open: false });
+    expect(readTabState("reports", "1", ids, "progress")).toEqual({ tab: "reports", open: true });
+    // 升级：旧版本只存了 tab、没有展开标记，收起，最近的 tab 照样记着。
+    expect(readTabState("reports", null, ids, "progress")).toEqual({ tab: "reports", open: false });
+    // 旧版本的空字符串（收起）：收起，tab 回到默认的。
+    expect(readTabState("", null, ids, "progress")).toEqual({ tab: "progress", open: false });
+    // 记着的 tab 已经没了：用默认的，展开标记不变。
+    expect(readTabState("gone", "1", ids, "progress")).toEqual({ tab: "progress", open: true });
   });
 });

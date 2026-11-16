@@ -53,6 +53,8 @@ test("page tabs start collapsed, the toggle expands them and the choice survives
   await expect(butler.locator(".page-tabs-panel")).toHaveCount(0);
   await expect(tab(S.inboxReports)).toHaveAttribute("aria-selected", "false");
   await expect(tab(S.inboxDecisions)).toBeVisible();
+  // 收起时 tab 上的计数照样显示（没有待决事项时不标红）。
+  await expect(tab(S.inboxDecisions)).toHaveText(/\d/);
 
   // 展开：回到最近的 tab（没记过就是默认的「待你决定」）；换到「汇报」。
   await toggle.click();

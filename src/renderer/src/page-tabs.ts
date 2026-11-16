@@ -1,4 +1,4 @@
-/** 页面上半部分 tab 的状态：last 是最近停的 tab，open 是展开还是收起（默认收起）。 */
+/** 页面上半部分 tab 的状态：tab 是最近停的 tab，open 是展开还是收起（默认收起）。 */
 export interface TabState {
   tab: string;
   open: boolean;
@@ -12,6 +12,12 @@ export function pickTab(saved: string | null, ids: readonly string[], fallback: 
   if (saved !== null && ids.includes(saved)) return saved;
   return ids.includes(fallback) ? fallback : (ids[0] ?? "");
 }
+
+/** 把存着的最近 tab 和展开标记合成初始状态：旧版本只存了 tab（甚至是空字符串）、没有展开标记，就是收起，最近的 tab 照样记着。 */
+export const readTabState = (savedTab: string | null, openFlag: string | null, ids: readonly string[], fallback: string): TabState => ({
+  tab: pickTab(savedTab, ids, fallback),
+  open: tabIsOpen(openFlag),
+});
 
 /** 只有记着 "1" 才是展开；没记过、旧版本的空字符串都算收起。 */
 export const tabIsOpen = (flag: string | null): boolean => flag === "1";

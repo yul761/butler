@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { saveTab, saveTabOpen, savedTab, savedTabOpen } from "../local-prefs";
-import { clickTab, pickTab, tabIsOpen, toggleTabs, type TabState } from "../page-tabs";
+import { clickTab, readTabState, toggleTabs, type TabState } from "../page-tabs";
 import { S } from "../strings";
 
 export interface PageTab {
@@ -18,16 +18,17 @@ export interface PageTab {
  * actions：放在 tab 条右边、不管停在哪个 tab 都点得到的按钮（新建 ticket、新建 feature）。
  */
 export function PageTabs({ page, tabs, defaultTab, actions }: { page: string; tabs: PageTab[]; defaultTab: string; actions?: ReactNode }) {
+  const panelId = `page-tabs-panel-${page.replace(/[^A-Za-z0-9_-]/g, "-")}`;
   const ids = tabs.map((t) => t.id);
-  const read = () => ({ saved: savedTab(page), open: tabIsOpen(savedTabOpen(page)) });
+  const read = () => ({ saved: savedTab(page), flag: savedTabOpen(page) });
   const [mem, setMem] = useState(read);
   useEffect(() => setMem(read()), [page]);
-  const state: TabState = { tab: pickTab(mem.saved, ids, defaultTab), open: mem.open };
+  const state: TabState = readTabState(mem.saved, mem.flag, ids, defaultTab);
   const tab = state.open ? tabs.find((t) => t.id === state.tab) : undefined;
   const apply = (next: TabState) => {
     saveTab(page, next.tab);
     saveTabOpen(page, next.open);
-    setMem({ saved: next.tab, open: next.open });
+    setMem({ saved: next.tab, flag: next.open ? "1" : null });
   };
   return (
     <div className={tab ? "page-tabs" : "page-tabs collapsed"}>
@@ -45,9 +46,11 @@ export function PageTabs({ page, tabs, defaultTab, actions }: { page: string; ta
           </button>
         ))}
         <button
+          type="button"
           className="page-tabs-toggle"
           aria-expanded={!!tab}
-          title={S.tabCollapseHint}
+          aria-controls={tab ? panelId : undefined}
+          title={tab ? S.tabToggleCollapseHint : S.tabToggleExpandHint}
           onClick={() => apply(toggleTabs(state))}
         >
           {tab ? `▾ ${S.tabCollapse}` : `▸ ${S.tabExpand}`}
@@ -55,7 +58,7 @@ export function PageTabs({ page, tabs, defaultTab, actions }: { page: string; ta
         {actions && <span className="page-tabs-actions">{actions}</span>}
       </div>
       {tab && (
-        <div className={`page-tabs-panel tab-panel-${tab.id}`} role="tabpanel">
+        <div id={panelId} className={`page-tabs-panel tab-panel-${tab.id}`} role="tabpanel">
           {tab.content}
         </div>
       )}

@@ -72,7 +72,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
 
   **从 epic 一路开工。** 你同意开工之后，epic session 可以直接打开某个 feature 的总控并让它开工，不用你点进 feature。它调用 `start_feature`，或者调用带 `start` 的 `create_feature`。总控的第一条消息带着规划和 epic 里其他 feature 的数据，并告诉它不用等你确认，按规划建 ticket、在每个 ticket 里开 session；需要你决定的事用 `ask_user`，做完或卡住了用 `report` 汇报。如果这个 feature 的总控已经开着，`start_feature` 不会再开第二个：给了额外的 `instructions` 就在总控空下来时转给它，没给就只说明总控正在运行。feature 没有规划时，epic session 必须给 `instructions`。一个 epic 同时最多 4 个 feature 总控在跑，每个 feature 照旧最多 8 个终端。`create_feature` 建好了 feature 但总控开不了（比如已到上限）时，feature 照样建好，epic session 会被告知原因。
 
-  epic 页终端上面有 **Feature**、**汇报**、**待你决定** 三个 tab。**Feature** 里每个 feature 一行：汇总的第一句话和一个状态（有 ticket 卡住、等你回话、未开始或进行中）。点一行看详情；ticket 只在 feature 页上列出。归档的 feature 折叠在 **已归档** 下。tab 下面是仓库、epic session，以及一个至少占窗口一半高度的终端。侧栏里 Epic 分组在 Feature 上面，每个 epic 都能折叠。等待标记和红点会从 ticket 传到 feature 再传到 epic，epic 折叠时也看得见。
+  epic 页终端上面有 **Feature**、**汇报**、**待你决定** 三个 tab，默认收起，点开才展开。**Feature** 里每个 feature 一行：汇总的第一句话和一个状态（有 ticket 卡住、等你回话、未开始或进行中）。点一行看详情；ticket 只在 feature 页上列出。归档的 feature 折叠在 **已归档** 下。tab 下面是仓库、epic session，以及一个至少占窗口一半高度的终端。侧栏里 Epic 分组在 Feature 上面，每个 epic 都能折叠。等待标记和红点会从 ticket 传到 feature 再传到 epic，epic 折叠时也看得见。
 
   feature 页头部的 **移到 epic** 可以把已有的 feature 移进某个 epic、移出来，或移到另一个 epic。只改归属：工作区和 worktree 都不动。epic 还没有的仓库会加到 epic 上，移出 feature 时不会删 epic 的仓库。已经在运行的 session 要重新打开后才能看到 epic 的记忆。
 
@@ -92,7 +92,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
   - 在卡片上选一个选项或打字回答，或者直接在终端里回答都行。卡片上的回答要等 session 停下来才送，送的时候是"你问的『…』，用户的回答：…"，卡片上会写明在等它停下。如果你先在终端里回答了，卡片自己关掉。点 **不用了** 不会送任何东西。
   - **需要你** 现在只算真要你拍板的事：屏幕上的权限确认、提问或退出计划模式的确认，未决的 `ask_user`，真的卡住的 session，以及确实在请你决定的回复。"要我继续吗？""还有别的吗？"这类回复不算，总控也不会为子 session 已经提过的事再出现一行。侧栏的数字是这些行加上未决的待你决定。
   - 这两个工具在 Butler 给 session 写的设置里是放行的，第一次用不会弹权限确认；同一个 server 的其他工具照样要确认。
-- **Butler 总控。** 一个在所有 epic 之上的全局 session，从侧栏的 **Butler 总控** 打开。它的工作目录是 `~/.butler/workspaces/_butler`，用的是 workspace 记忆。同一时间只有一个：已经开着时，点按钮会切到它，想换另一段对话要先在终端里退出。它的页面在终端上面有同样的两个 tab，显示全部内容，默认停在 **待你决定**。
+- **Butler 总控。** 一个在所有 epic 之上的全局 session，从侧栏的 **Butler 总控** 打开。它的工作目录是 `~/.butler/workspaces/_butler`，用的是 workspace 记忆。同一时间只有一个：已经开着时，点按钮会切到它，想换另一段对话要先在终端里退出。它的页面在终端上面有同样的两个 tab，显示全部内容，默认收起，展开后先看到 **待你决定**。
   - **它能看**所有 epic、feature 和 ticket，每个 PR 的 review 和 CI 状态，每个开着的 session 在做什么、是不是需要你，以及未决的待你决定和最近的汇报（`list_epics`、`list_features`、`list_tickets`、`list_prs`、`list_sessions`、`session_activity`、`list_inbox`）。
   - **它能做的**只有说话：`send_message` 给 feature 总控或 epic session 带一句话，用 feature、epic 或 session id 指定。它的终端关着（闲置时被自动关掉了，或者 Butler 重启过）时，Butler 接着它最近的对话打开（feature 从没开过总控就新开一个），再把话交进去。开着的只在它停下来、你也没在打字时送进去，否则让 Butler 总控稍后再试。属于 epic、还没开工的 feature 留给 epic session 用 `start_feature` 开工。`refresh_session` 给某个 session 换新。`ask_user` 和 `report` 和别的 session 一样；它自己的汇报只存着。
   - **它不能**建、删或结束任何东西，也不能为别的事开 session。这些留给 epic 和 feature 总控。
