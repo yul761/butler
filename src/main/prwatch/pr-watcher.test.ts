@@ -8,7 +8,7 @@ import { CI_LOG_LINES, PR_FAST_MS, PR_GH_TIMEOUT_MS, PR_SLOW_MS, PR_WATCH_MAX, P
 const target = (o: Partial<PrTarget> = {}): PrTarget => ({ ticketKey: "BTL-1", repoId: 1, repoPath: "/r", cwd: "/w", branch: "b", sessionOpen: true, ...o });
 const check = (name: string, state: CiCheck["state"], runId: number | null = null): CiCheck => ({ name, state, runId });
 const pr = (o: Partial<PrStatus> = {}): PrStatus => ({
-  number: 7, url: "https://x/pull/7", state: "OPEN", isDraft: false, review: "pending", headSha: "a1", checks: [check("test", "pending", 9)], ci: "pending",
+  number: 7, url: "https://x/pull/7", state: "OPEN", isDraft: false, review: "pending", headSha: "a1", headBranch: "b", checks: [check("test", "pending", 9)], ci: "pending",
   author: "me", reviews: [], comments: [], firstCommitAt: null, createdAt: null, mergedAt: null, closedAt: null, ...o,
 });
 const row = (o: Partial<PrWatchRow> = {}): PrWatchRow => ({

@@ -12,7 +12,7 @@ const next = (o: Partial<Omit<PrWatchRow, "deliveredKey">> = {}): Omit<PrWatchRo
 const prev = (o: Partial<PrWatchRow> = {}): PrWatchRow => ({ ...next(), deliveredKey: null, ...o });
 const comment = (id: string, o: Partial<PrComment> = {}): PrComment => ({ id, author: "bob", body: "hi", createdAt: 50, url: null, path: null, line: null, reviewId: null, ...o });
 const pr = (o: Partial<PrStatus> = {}): PrStatus => ({
-  number: 7, url: "u", state: "OPEN", isDraft: false, review: null, headSha: "a1", checks: [], ci: "pending", author: "me", createdAt: null, mergedAt: null, closedAt: null,
+  number: 7, url: "u", state: "OPEN", isDraft: false, review: null, headSha: "a1", headBranch: "b", checks: [], ci: "pending", author: "me", createdAt: null, mergedAt: null, closedAt: null,
   reviews: [
     { id: "r1", author: "copilot-pull-request-reviewer", state: "COMMENTED", body: "x", submittedAt: 10 },
     { id: "r2", author: "alice", state: "APPROVED", body: "ok", submittedAt: 20 },
