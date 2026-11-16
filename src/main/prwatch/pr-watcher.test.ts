@@ -429,8 +429,9 @@ describe("PrWatcher stages", () => {
     };
     const reviewComments = vi.fn<typeof import("../tickets/gh").reviewComments>(async () => []);
     const firstCommitAt = vi.fn<typeof import("../tickets/git").firstCommitAt>(async () => null);
-    const w = new PrWatcher({ ...s.deps, gh: { ...s.gh, reviewComments }, git: { firstCommitAt }, stages });
-    return { ...s, w, stages, events, reviewComments, firstCommitAt };
+    const reviewAuthors = vi.fn<typeof import("../tickets/gh").reviewAuthors>(async () => ({ botReviewIds: new Set(), botLogins: new Set() }));
+    const w = new PrWatcher({ ...s.deps, gh: { ...s.gh, reviewComments, reviewAuthors }, git: { firstCommitAt }, stages });
+    return { ...s, w, stages, events, reviewComments, reviewAuthors, firstCommitAt };
   }
   const derived = (events: StageEvent[]) =>
     derivePrStages({
@@ -454,6 +455,37 @@ describe("PrWatcher stages", () => {
     expect(second.length).toBeGreaterThan(0);
     expect(second.every((r) => r.value === false)).toBe(true);
     expect(s.deps.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("a suffix-less app login that REST says is a Bot does not count as peer review; repeat polls make no extra call", async () => {
+    const s = withStages();
+    const app = { id: "PRR_kwApp1", author: "someapp", state: "APPROVED" as const, body: "", submittedAt: 5 };
+    s.reviewAuthors.mockResolvedValue({ botReviewIds: new Set(["PRR_kwApp1"]), botLogins: new Set(["someapp"]) });
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [app], comments: [{ id: "C1", author: "someapp", body: "x", createdAt: 6, url: null, path: null, line: null, reviewId: null }] }));
+    await s.w.check();
+    expect(s.reviewAuthors).toHaveBeenCalledTimes(1);
+    expect(s.reviewAuthors).toHaveBeenCalledWith("/w", 7, PR_GH_TIMEOUT_MS);
+    expect(s.events.filter((e) => e.kind === "review" || e.kind === "comment").map((e) => e.data.who)).toEqual(["bot", "bot"]);
+    const peer = derived(s.events).stages.find((c) => c.id === "peer_review");
+    expect(peer?.state).not.toBe("done");
+    s.advance(PR_FAST_MS);
+    await s.w.check();
+    expect(s.reviewAuthors).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the name list when the REST reviews call fails, without blocking", async () => {
+    const s = withStages();
+    s.reviewAuthors.mockResolvedValue(null);
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [{ ...review, id: "PRR_kwX", author: "coderabbitai", state: "APPROVED" }, { ...review, id: "PRR_kwY", author: "unknownapp", state: "APPROVED" }] }));
+    await s.w.check();
+    expect(s.events.filter((e) => e.kind === "review").map((e) => e.data.who)).toEqual(["bot", "human"]);
+  });
+
+  it("a Copilot-only or already recorded review does not trigger the REST reviews call", async () => {
+    const s = withStages();
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [copilot] }));
+    await s.w.check();
+    expect(s.reviewAuthors).not.toHaveBeenCalled();
   });
 
   it("a human review never calls reviewComments, and a pending Copilot review is not fetched for", async () => {

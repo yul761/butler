@@ -1,6 +1,6 @@
 import type { PrWatchRepo, PrWatchRow } from "../db/pr-watch-repo";
 import type { PrStageRepo } from "../db/pr-stage-repo";
-import { reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prStatus, type reviewComments } from "../tickets/gh";
+import { reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prStatus, type reviewAuthors, type ReviewAuthors, type reviewComments } from "../tickets/gh";
 import type { firstCommitAt } from "../tickets/git";
 import type { WatchedPr } from "../../shared/types";
 import { prObservations } from "./pr-observe";
@@ -39,7 +39,7 @@ export interface PrWatcherDeps {
   repo: Pick<PrWatchRepo, "upsert" | "get" | "byTicket" | "all">;
   /** 要查的分支：未归档 ticket 的每个仓库，条件是这个仓库的 session 开着，或者 pr_watch 里它的 PR 还开着、或还没查过但 ticket 最新 handoff 里有开着的 PR。 */
   targets(): PrTarget[];
-  gh: { prStatus: typeof prStatus; branchRuns: typeof branchRuns; failedLog: typeof failedLog; reviewComments?: typeof reviewComments };
+  gh: { prStatus: typeof prStatus; branchRuns: typeof branchRuns; failedLog: typeof failedLog; reviewComments?: typeof reviewComments; reviewAuthors?: typeof reviewAuthors };
   /** 没有 PR 时第一个 commit 的时间（PR 进度用）。 */
   git?: { firstCommitAt: typeof firstCommitAt };
   /** PR 进度的事件；没给就不记。 */
@@ -241,13 +241,18 @@ export class PrWatcher {
         }
         if (got) inline = got;
       }
+      // 谁是 Bot：gh pr view 的作者没有类型。有新的、按名字认是人的 review 才问一次 REST；失败按名字认，不拦。
+      let bots: ReviewAuthors | null = null;
+      const authors = this.d.gh.reviewAuthors;
+      const fresh = (pr?.reviews ?? []).some((r) => r.state !== "PENDING" && reviewerKind(r.author, pr?.author ?? "") === "human" && !stages.has(`${t.repoId}:review:${r.id}`));
+      if (pr && fresh && authors) bots = await this.gh(() => authors(t.cwd, pr.number, PR_GH_TIMEOUT_MS));
       let firstCommit = pr?.firstCommitAt ?? null;
       // 本地的一次 git 调用：每轮都问，直到记下来为止（没有 PR 时 headSha 来自远端的 workflow run，本地新提交不会让它变）。
       if (!pr && !stages.has(`${t.repoId}:first_commit:${t.branch}`)) {
         firstCommit = await this.d.git.firstCommitAt(t.cwd, t.branch);
       }
       let added = false;
-      for (const o of prObservations(t, from, next, pr, inline, firstCommit, this.d.now())) {
+      for (const o of prObservations(t, from, next, pr, inline, firstCommit, this.d.now(), bots)) {
         if (stages.add(o.event, o.dedupeKey)) added = true;
       }
       return added;

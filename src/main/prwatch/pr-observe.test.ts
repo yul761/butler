@@ -91,4 +91,14 @@ describe("prObservations", () => {
       done(merged(o));
     });
   });
+
+  it("uses REST bot info for suffix-less app logins, in reviews and in same-login comments; real humans stay human", () => {
+    const p = pr({
+      reviews: [{ id: "r9", author: "someapp", state: "APPROVED", body: "", submittedAt: 10 }, { id: "r8", author: "alice", state: "APPROVED", body: "", submittedAt: 11 }],
+      comments: [comment("c9", { author: "SomeApp" }), comment("c8", { author: "alice" })],
+    });
+    const o = prObservations(t, prev(), next(), p, [], null, 1000, { botReviewIds: new Set(["r9"]), botLogins: new Set(["someapp"]) });
+    const who = Object.fromEntries(o.filter((x) => x.event.kind !== "ci").map((x) => [x.dedupeKey, x.event.data.who]));
+    expect(who).toMatchObject({ "3:review:r9": "bot", "3:review:r8": "human", "3:comment:c9": "bot", "3:comment:c8": "human" });
+  });
 });

@@ -64,9 +64,16 @@ describe("cellText", () => {
     expect(cellText(cell("active"))).toBe(S.prStageActive);
     expect(cellText(cell("feature_level"))).toBe(S.prStageFeatureLevel);
   });
-  it("adds the round after the first", () => {
-    expect(cellText(cell("done", 2))).toContain(S.prRound(2));
-    expect(cellText(cell("done", 1))).not.toContain(S.prRound(1));
+  it("shows the round after the first only on the current step (active or failed), not on done, todo or skipped cells", () => {
+    expect(cellText(cell("active", 2))).toContain(S.prRound(2));
+    expect(cellText(cell("failed", 2))).toContain(S.prRound(2));
+    for (const state of ["done", "todo", "skipped", "unknown", "feature_level"] as const) expect(cellText(cell(state, 2))).not.toContain(S.prRound(2));
+    expect(cellText(cell("active", 1))).not.toContain(S.prRound(1));
+  });
+  it("puts the round in the label of a failed symbol cell, and nowhere else", () => {
+    expect(cellLabel(cell("failed", 2))).toBe(`${S.prStateFailed} ${S.prRound(2)}`);
+    expect(cellLabel(cell("done", 2))).toBe(S.prStateDone);
+    expect(cellLabel(cell("todo", 3))).toBe(S.prStateTodo);
   });
   it("labels symbol cells with their state text", () => {
     expect(cellLabel(cell("done"))).toBe(S.prStateDone);

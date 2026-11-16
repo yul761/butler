@@ -85,4 +85,15 @@ describe("PrStagesService", () => {
     expect(make({ tickets: t, forRepo: () => events, skillTracking: true }).view({ ticketKey: "A-1" })[0].stages[0].state).toBe("skipped");
     expect(make({ tickets: t, forRepo: () => events, skillTracking: false }).view({ ticketKey: "A-1" })[0].stages[0].state).toBe("unknown");
   });
+
+  it("ignores a pr_watch row from the repo's old branch", () => {
+    const stale: PrWatchRow = {
+      ticketKey: "A-1", repoId: 5, repoPath: "/code/r5", branch: "old", number: 3, url: "https://x/pull/3", state: "closed", review: null, ci: "passing", headSha: "a", checkedAt: 1, failed: [], deliveredKey: null,
+    };
+    const t = [ticket("A-1", [repo(5, "A-1", "new")])];
+    const v = make({ tickets: t, pr: () => stale }).view({ ticketKey: "A-1" })[0];
+    expect([v.prNumber, v.prUrl, v.closed]).toEqual([null, null, false]);
+    const same = make({ tickets: t, pr: () => ({ ...stale, branch: "new", state: "open" }) }).view({ ticketKey: "A-1" })[0];
+    expect([same.prNumber, same.closed]).toEqual([3, false]);
+  });
 });

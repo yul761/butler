@@ -281,4 +281,16 @@ describe("derivePrStages", () => {
     expect(cell(v, "dev").state).toBe("active");
     expect(v.timeline.map((t) => t.kind)).toEqual(["first_commit"]);
   });
+
+  it("a merged pr_watch row with no merged event (merged before the upgrade) is treated as merged at the latest event time", () => {
+    const merged = { number: 7, url: "https://x/pull/7", state: "merged" as const };
+    const none = derive(input({ pr: merged }));
+    expect(states(none)).toEqual({ design: "skipped", dev: "done", self_review: "skipped", ci: "skipped", peer_review: "skipped", merge: "done" });
+    expect(none.timeline.map((t) => [t.at, t.kind])).toEqual([[100, "merged"]]);
+    const approved = derive(input({ pr: merged, events: [ev("first_commit", 120), ci(140, "pending"), ci(150, "passing"), human(160, "APPROVED")] }));
+    expect(states(approved)).toMatchObject({ ci: "done", peer_review: "done", merge: "done" });
+    expect(approved.timeline.at(-1)).toMatchObject({ at: 160, kind: "merged" });
+    const once = derive(input({ pr: merged, events: [ev("first_commit", 120), ev("merged", 150, { number: 7 })] }));
+    expect(once.timeline.filter((t) => t.kind === "merged")).toHaveLength(1);
+  });
 });

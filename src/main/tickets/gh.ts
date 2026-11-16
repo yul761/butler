@@ -185,7 +185,11 @@ function parseJson(text: string | null): unknown {
 }
 
 const REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"]);
-const BOT_LOGINS = ["github-actions", "dependabot", "renovate"];
+/** gh pr view 给的 author 不带 [bot] 后缀，GitHub App 要靠名字认；authoritative 的判断是 REST 的 user.type（reviewAuthors）。 */
+const BOT_LOGINS = [
+  "github-actions", "dependabot", "renovate", "chatgpt-codex-connector", "coderabbitai", "gemini-code-assist", "sourcery-ai",
+  "codecov", "sonarcloud", "vercel", "netlify", "github-advanced-security", "cursor",
+];
 
 function obj(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
@@ -244,9 +248,18 @@ export function reviewerKind(login: string, prAuthor: string): "copilot" | "huma
 
 const REVIEWS = { REVIEW_REQUIRED: "pending", CHANGES_REQUESTED: "changes_requested", APPROVED: "approved" } as const;
 
-/** gh pr view <branch>：没有 PR、gh 不可用、输出不对都返回 null。 */
+const PR_FIELDS_MIN = "number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup";
+const PR_FIELDS = `${PR_FIELDS_MIN},author,reviews,comments,commits,createdAt,mergedAt,closedAt`;
+
+/** gh pr view <branch>：没有 PR、gh 不可用、输出不对都返回 null。旧版 gh 不认新增的字段时，退回最初的字段再试一次（reviews、comments 为空）。 */
 export async function prStatus(cwd: string, branch: string, timeoutMs: number): Promise<PrStatus | null> {
-  const j = parseJson(await runGh(cwd, ["pr", "view", branch, "--json", "number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt"], timeoutMs, 8 * 1024 * 1024));
+  const view = (fields: string) => runGh(cwd, ["pr", "view", branch, "--json", fields], timeoutMs, 8 * 1024 * 1024);
+  const text = await view(PR_FIELDS);
+  return parsePr(text !== null ? text : await view(PR_FIELDS_MIN));
+}
+
+function parsePr(text: string | null): PrStatus | null {
+  const j = parseJson(text);
   if (typeof j !== "object" || j === null) return null;
   const r = j as Record<string, unknown>;
   if (typeof r.number !== "number" || typeof r.url !== "string" || typeof r.headRefOid !== "string") return null;
@@ -316,6 +329,28 @@ export async function reviewComments(cwd: string, number: number, timeoutMs: num
       line: typeof r.line === "number" ? r.line : null,
       reviewId: typeof r.pull_request_review_id === "number" ? (nodeOf.get(r.pull_request_review_id) ?? null) : null,
     });
+  }
+  return out;
+}
+
+export interface ReviewAuthors {
+  /** user.type 是 Bot 的 review（GraphQL node id）。 */
+  botReviewIds: Set<string>;
+  /** 这些 review 里 Bot 的 login（小写、去掉 [bot]），用来认同一个人的评论。 */
+  botLogins: Set<string>;
+}
+
+/** REST 的 reviews 列表里谁是 Bot：gh pr view 给的 author 没有 [bot] 后缀和类型。失败返回 null（调用方退回按名字认）。 */
+export async function reviewAuthors(cwd: string, number: number, timeoutMs: number): Promise<ReviewAuthors | null> {
+  const rows = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--paginate", "--jq", ".[] | {node_id, user: {login: .user.login, type: .user.type}}"], timeoutMs, 8 * 1024 * 1024));
+  if (rows === null) return null;
+  const out: ReviewAuthors = { botReviewIds: new Set(), botLogins: new Set() };
+  for (const item of rows) {
+    const r = obj(item);
+    const user = obj(r?.user);
+    if (!r || !user || user.type !== "Bot") continue;
+    if (typeof r.node_id === "string" && r.node_id !== "") out.botReviewIds.add(r.node_id);
+    if (typeof user.login === "string" && user.login !== "") out.botLogins.add(user.login.toLowerCase().replace(/\[bot\]$/, ""));
   }
   return out;
 }

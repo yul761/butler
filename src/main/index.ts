@@ -101,7 +101,7 @@ import { pathKey } from "./util/env";
 import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
-import { applyGhResolution, branchRuns, failedLog, prInfo, prStatus, reviewComments } from "./tickets/gh";
+import { applyGhResolution, branchRuns, failedLog, prInfo, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
 import type { HeadlessExecDeps } from "./handoff/headless-exec";
 import * as git from "./tickets/git";
 import { canSend } from "./safe-send";
@@ -921,7 +921,7 @@ async function bootstrap(): Promise<void> {
         watched: (repoId) => prWatchRepo.get(repoId),
         handoffHasOpenPr: (key) => handoffs.latestValid(key)?.payload?.prs.some((p) => p.state === "open") ?? false,
       }),
-    gh: { prStatus, branchRuns, failedLog, reviewComments },
+    gh: { prStatus, branchRuns, failedLog, reviewComments, reviewAuthors },
     git: { firstCommitAt: git.firstCommitAt },
     stages: prStages,
     // PR 的状态或 review 变了：在最新的 handoff 上换掉 prs，存成一条 refresh。ticket 状态、PR 标签、合并后清理 worktree 都照旧走 ingest。

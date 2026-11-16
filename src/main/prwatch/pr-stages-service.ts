@@ -46,7 +46,9 @@ export class PrStagesService {
     return [...t.repos]
       .sort((a, b) => a.id - b.id)
       .map((r) => {
-        const pr = this.d.prWatch.get(r.id);
+        // ticket 的分支改过时 pr_watch 里还是旧分支的行：当作没有（和 PrWatcher.rowOf 一样）。
+        const row = this.d.prWatch.get(r.id);
+        const pr = row && row.branch === r.branch ? row : null;
         return derivePrStages({
           ticketKey: t.key, featureId: t.featureId, repoId: r.id, repoName: baseName(r.repoPath), branch: r.branch,
           ticketCreatedAt: t.createdAt,

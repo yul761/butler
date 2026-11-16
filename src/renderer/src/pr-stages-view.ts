@@ -8,6 +8,9 @@ export function usePrStages(scope: PrStagesScope): PrStagesView[] | null {
   return useStateRefetch(JSON.stringify(scope), () => api.prStages(scope));
 }
 
+/** 第 N 轮只写在当前这一步（进行中或失败）上，别的格子不写。 */
+const roundShown = (c: PrStageCell): boolean => c.round > 1 && (c.state === "active" || c.state === "failed");
+
 /** 一个 cell 上写的字：完成 / 失败 / 没开始用符号（调用方把 cellLabel 放进 title 和 aria-label），其余用文字；第 N 轮跟在后面。 */
 export function cellText(c: PrStageCell): string {
   const base = ((): string => {
@@ -21,14 +24,14 @@ export function cellText(c: PrStageCell): string {
       case "feature_level": return S.prStageFeatureLevel;
     }
   })();
-  return c.round > 1 ? `${base} ${S.prRound(c.round)}` : base;
+  return roundShown(c) ? `${base} ${S.prRound(c.round)}` : base;
 }
 
 /** 符号 cell 的 title / aria-label。 */
 export function cellLabel(c: PrStageCell): string {
   switch (c.state) {
     case "done": return S.prStateDone;
-    case "failed": return S.prStateFailed;
+    case "failed": return roundShown(c) ? `${S.prStateFailed} ${S.prRound(c.round)}` : S.prStateFailed;
     case "todo": return S.prStateTodo;
     default: return cellText(c);
   }
