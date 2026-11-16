@@ -473,3 +473,13 @@ describe("TicketService.featureHeadlessDirs", () => {
     expect(service.featureHeadlessDirs(featureId)).toEqual({ cwd: ws, addDirs: [outside], repoDirs: [inside, outside, gone] });
   });
 });
+
+describe("TicketService.ghWorkDir", () => {
+  it("falls back to the repo path after the worktree was removed", () => {
+    const { service } = setup();
+    const base = { id: 1, ticketKey: "T-1", repoPath: "/repo", workMode: "worktree" as const, branch: "b", createdAt: 0, cleanupBlocked: null };
+    expect(service.ghWorkDir({ ...base, worktreePath: "/wt", worktreeRemovedAt: null })).toBe("/wt");
+    expect(service.ghWorkDir({ ...base, worktreePath: "/wt", worktreeRemovedAt: 5 })).toBe("/repo");
+    expect(service.ghWorkDir({ ...base, worktreePath: null, worktreeRemovedAt: null })).toBe("/repo");
+  });
+});

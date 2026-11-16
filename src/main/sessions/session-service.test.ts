@@ -607,6 +607,14 @@ describe("SessionService with several repos and the coordinator", () => {
     expect(seen).toEqual([["PROJ-1", false], ["PROJ-1", true]]);
   });
 
+  it("hasTicketTerminal counts the ticket's coordinator for every repo", async () => {
+    const { service, web, apiRepo } = await multi();
+    await service.open({ ticketKey: "PROJ-1", coordinator: true });
+    expect(service.hasOpenTerminal("PROJ-1", web.id)).toBe(true);
+    expect(service.hasOpenTerminal("PROJ-1", apiRepo.id)).toBe(true);
+    expect(service.hasOpenTerminal("PROJ-2", web.id)).toBe(false);
+  });
+
   it("counts terminals per repo: the repo's own, the coordinator, and sessions of no known repo", async () => {
     const { service, sessions, web, apiRepo } = await multi();
     await service.open({ ticketKey: "PROJ-1", repoId: web.id });

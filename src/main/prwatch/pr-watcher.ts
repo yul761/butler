@@ -3,14 +3,9 @@ import type { PrStageRepo } from "../db/pr-stage-repo";
 import { reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prStatus, type reviewAuthors, type ReviewAuthors, type reviewComments } from "../tickets/gh";
 import type { firstCommitAt } from "../tickets/git";
 import type { WatchedPr } from "../../shared/types";
+import { PR_FAST_MS, PR_SLOW_MS, PR_WATCH_MAX } from "./pr-schedule";
 import { prObservations, stageKey } from "./pr-observe";
 
-/** 有检查在跑、session 开着：每分钟查一次。 */
-export const PR_FAST_MS = 60_000;
-/** 其余每 5 分钟查一次。 */
-export const PR_SLOW_MS = 300_000;
-/** 同时跟踪的分支最多这么多个，超出时优先保留 session 开着的。 */
-export const PR_WATCH_MAX = 40;
 /** 每次 gh 调用的超时。 */
 export const PR_GH_TIMEOUT_MS = 5000;
 /** 失败日志取最后这么多行。 */
@@ -25,6 +20,8 @@ const INLINE_TRIES_MAX = 3;
 const SOON_MS = 1000;
 /** cachedByUrl 只认这么久之内查过的。 */
 const CACHE_FRESH_MS = 60_000;
+
+export { PR_FAST_MS, PR_SLOW_MS, PR_WATCH_MAX };
 
 export interface PrTarget {
   ticketKey: string;
