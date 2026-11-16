@@ -31,11 +31,13 @@ describe("PrStageRepo", () => {
     const db = memDb();
     const id = addRepo(db, "T-1");
     addRepo(db, "T-2");
+    const other = new TicketsRepo(db).addRepo({ ticketKey: "T-1", repoPath: "/r2", workMode: "branch", worktreePath: null, branch: "b2", createdAt: 1 });
     const repo = new PrStageRepo(db);
     repo.add(ev({ repoId: id, branch: "feat", kind: "ci", at: 3, data: { result: "passing", sha: "a" } }), "ci");
     repo.add(ev({ repoId: null, kind: "skill", at: 2, data: { name: "x", category: "design" } }), "sk");
     repo.add(ev({ repoId: id, branch: "old", kind: "push", at: 1 }), "old");
     repo.add(ev({ ticketKey: "T-2", repoId: null, at: 1 }), "other");
+    repo.add(ev({ repoId: other, branch: "feat", kind: "push", at: 1 }), "other-repo");
     const got = repo.forRepo("T-1", id, "feat");
     expect(got.map((e) => e.kind)).toEqual(["skill", "ci"]);
     expect(got[1]).toMatchObject({ repoId: id, branch: "feat", data: { result: "passing", sha: "a" } });
@@ -46,6 +48,9 @@ describe("PrStageRepo", () => {
     repo.add(ev({ ticketKey: null, featureId: 3, at: 2, data: { name: "a", category: "design" } }), "f");
     repo.add(ev({ ticketKey: null, epicId: 9, at: 1, data: { name: "b", category: "design" } }), "e9");
     repo.add(ev({ ticketKey: null, epicId: 8, at: 1, data: { name: "c", category: "design" } }), "e8");
+    repo.add(ev({ ticketKey: null, featureId: 3, at: 3, data: { name: "r", category: "review" } }), "rev");
+    repo.add(ev({ ticketKey: null, featureId: 3, kind: "push", at: 3, data: { category: "design" } }), "nonskill");
+    repo.add(ev({ ticketKey: "T-1", featureId: 3, at: 3, data: { name: "t", category: "design" } }), "ticketlvl");
     expect(repo.upperDesign(3, 9).map((e) => e.data.name)).toEqual(["b", "a"]);
     expect(repo.upperDesign(3, null).map((e) => e.data.name)).toEqual(["a"]);
   });

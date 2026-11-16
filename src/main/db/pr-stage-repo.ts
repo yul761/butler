@@ -81,7 +81,8 @@ export class PrStageRepo {
       this.db
         .prepare(
           `SELECT * FROM pr_stage_events
-           WHERE kind = 'skill' AND json_extract(data, '$.category') = 'design' AND (feature_id = ? OR (? IS NOT NULL AND epic_id = ?))
+           WHERE kind = 'skill' AND json_extract(data, '$.category') = 'design' AND ticket_key IS NULL
+             AND (feature_id = ? OR (? IS NOT NULL AND epic_id = ? AND feature_id IS NULL))
            ORDER BY at, id`,
         )
         .all(featureId, epicId, epicId) as unknown as Row[]
