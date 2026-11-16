@@ -34,6 +34,9 @@ async function create(page: Page, open: Locator, label: string, name: string, di
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
 }
 
+/** Windows 的终端把粘贴进去的换行变成空格：比较前把空白合成一个空格。 */
+const flat = (m: string | undefined): string => (m ?? "").replace(/\s+/g, " ");
+
 /** 这个目录里每个 session 收到的用户消息（session id → 消息）。 */
 function messagesIn(s: Sandbox, cwd: string): Record<string, string[]> {
   const dir = join(s.claudeConfigDir, "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"));
@@ -85,7 +88,7 @@ test("Butler control messages a feature coordinator by name, reopening it when i
   expect(sent.error).toBe(false);
   expect(JSON.parse(sent.text)).toMatchObject({ sent: true, sessionId: coordinator, opened: "resumed" });
   await expect.poll(() => fakeLog(s)).toContain(`interactive resume ${coordinator} `);
-  await expect.poll(() => messagesIn(s, workspace)[coordinator]?.at(-1) ?? "").toBe("Butler 总控发来的消息：\n去看一下 PR");
+  await expect.poll(() => flat(messagesIn(s, workspace)[coordinator]?.at(-1))).toBe("Butler 总控发来的消息： 去看一下 PR");
   expect(sessionsIn(s, workspace)).toEqual([coordinator]);
 
   // 现在开着：list_features 给出它的 id，按 id 发直接发进去，不再开新的。
@@ -94,6 +97,6 @@ test("Butler control messages a feature coordinator by name, reopening it when i
   const again = await callTool(page, s, "send_message", { session: coordinator, text: "再看一下" });
   expect(JSON.parse(again.text)).toMatchObject({ sent: true, sessionId: coordinator });
   expect(JSON.parse(again.text).opened).toBeUndefined();
-  await expect.poll(() => messagesIn(s, workspace)[coordinator]?.at(-1) ?? "").toBe("Butler 总控发来的消息：\n再看一下");
+  await expect.poll(() => flat(messagesIn(s, workspace)[coordinator]?.at(-1))).toBe("Butler 总控发来的消息： 再看一下");
   expect(fakeLog(s).match(new RegExp(`interactive resume ${coordinator} `, "g"))).toHaveLength(1);
 });
