@@ -35,10 +35,16 @@ describe("PrLinker", () => {
     expect(prs.byTicket("T-1")[0]).toMatchObject({ repoId: null, slug: "ghe.acme.io/team/app", number: 9 });
   });
 
-  it("does not link an empty-URL PR in a multi-repo ticket", () => {
+  it("never links an empty or unparsable URL", () => {
     const { prs, linker } = setup(["/a", "/b"]);
     expect(linker.linkHandoffPrs("T-1", [pr(5, ""), pr(6, "not a url")])).toBe(0);
     expect(prs.byTicket("T-1")).toEqual([]);
+  });
+
+  it("in a multi-repo ticket a PR links to the repo whose slug matches", () => {
+    const { prs, linker, repoIds } = setup(["/a", "/b"]);
+    linker.linkHandoffPrs("T-1", [pr(1, "https://github.com/a/y/pull/1")]);
+    expect(prs.byTicket("T-1")[0]).toMatchObject({ repoId: repoIds[1], slug: "a/y", number: 1 });
   });
 
   it("linkHold resolves a null ticket through the session and uses released_at as mergedAt", () => {

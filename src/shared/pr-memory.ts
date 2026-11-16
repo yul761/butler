@@ -31,6 +31,7 @@ export function dedupeHandoffPrs(prs: Pr[]): Pr[] {
  * - latest 里有、以前合并过的：按已合并算；
  * - latest 里没有、以前合并过的：接在后面（新的在前）；
  * - 以前开着、关掉的 PR 不补：它们会变，只信最新一次。
+ * 同号的 PR，有 URL 的赢过没有 URL 的（空 URL 的条目只是折叠掉）。
  * older 从新到旧。
  */
 export function rememberMergedPrs(latest: Pr[], older: Pr[][]): Pr[] {

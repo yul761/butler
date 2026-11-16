@@ -45,6 +45,7 @@ describe("dedupeHandoffPrs", () => {
   it("rememberMergedPrs no longer returns both #3 and https://…/pull/3", () => {
     const out = rememberMergedPrs([pr(3, "open")], [[pr(3, "merged", "")]]);
     expect(out.map((p) => p.number)).toEqual([3]);
+    expect(out).toEqual([pr(3, "open")]);
     expect(rememberMergedPrs([pr(3, "open", ""), pr(3, "open")], []).map((p) => p.url)).toEqual(["https://github.com/acme/ui/pull/3"]);
   });
 });

@@ -167,6 +167,8 @@ describe("MergeGate: merges", () => {
     expect(t.repo.activeHolds()).toHaveLength(1);
     expect(t.repo.activeHold(t.repoPath, "dms-1")).toMatchObject({ id: local.id, kind: "pr", prUrl: "https://x/pull/8", target: "main", sessionId: "s-coord", ticketKey: "DMS-1", createdAt: 5000 });
     expect(t.repo.waitersOf(local.id).map((w) => w.sessionId)).toEqual(["s2"]);
+    expect(t.onPrHold).toHaveBeenCalledTimes(1);
+    expect(t.onPrHold).toHaveBeenCalledWith(local.id);
   });
 
   it("lets a branch that already holds the merge try again without waiting for anyone or recording it twice", async () => {

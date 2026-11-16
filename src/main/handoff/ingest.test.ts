@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Handoff, HandoffFollowup } from "../../shared/handoff";
 import { FollowupsRepo } from "../db/followups-repo";
 import { HandoffsRepo } from "../db/handoffs-repo";
@@ -104,6 +104,9 @@ describe("ingestHandoff", () => {
     });
     expect(handoffs.latest("PROJ-1")).toMatchObject({ degraded: true, rawText: "我做了很多事" });
     expect(tickets.get("PROJ-1")?.status).toBe("in_review");
+    const linkPrs = vi.fn();
+    ingestHandoff({ ...deps, linkPrs }, { ticketKey: "PROJ-1", sessionId: "s2", trigger: "nightly", payload: null, rawText: "又一份" });
+    expect(linkPrs).not.toHaveBeenCalled();
   });
 
   it("ignores a repeated sourceRef and unknown tickets", () => {
