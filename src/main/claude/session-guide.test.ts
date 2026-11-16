@@ -1,8 +1,8 @@
-import { readFileSync, statSync, utimesSync } from "node:fs";
+import { existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { GUIDE_SECTIONS, sessionGuide, writeSessionGuide } from "./session-guide";
+import { GUIDE_SECTIONS, pruneSessionGuides, sessionGuide, writeSessionGuide } from "./session-guide";
 
 describe("session guide", () => {
   it("包含 CI 那一段，中英各一份", () => {
@@ -104,5 +104,49 @@ describe("session guide", () => {
     utimesSync(file, old, old);
     expect(writeSessionGuide(dir, "zh", "ticket")).toBe(file);
     expect(statSync(file).mtimeMs).toBe(old.getTime());
+  });
+  describe("lessons", () => {
+    const lessons = [{ label: "acme/web", text: "改 schema 要加迁移" }];
+
+    it("puts lessons in ticket guides only", () => {
+      const zh = sessionGuide("zh", "ticket", lessons);
+      expect(zh).toContain("逐条对照");
+      expect(zh).toContain("- [acme/web] 改 schema 要加迁移");
+      expect(sessionGuide("en", "ticket", [{ label: "a/b", text: "x" }])).toContain("- [a/b] x");
+      expect(/[\u4e00-\u9fff]/.test(sessionGuide("en", "ticket", [{ label: "a/b", text: "x" }]))).toBe(false);
+      for (const kind of ["coordinator", "epic", "butler"] as const) expect(sessionGuide("zh", kind, lessons)).not.toContain("acme/web");
+      expect(sessionGuide("zh", "ticket", [])).toBe(sessionGuide("zh", "ticket"));
+    });
+
+    it("writes a content-hashed file when there are lessons", () => {
+      const dir = tempDir("guide");
+      const file = writeSessionGuide(dir, "zh", "ticket", lessons);
+      expect(file).toMatch(/guide-ticket-zh-[0-9a-f]{12}\.md$/);
+      expect(readFileSync(file, "utf8")).toBe(sessionGuide("zh", "ticket", lessons));
+      expect(writeSessionGuide(dir, "zh", "ticket", lessons)).toBe(file);
+      expect(writeSessionGuide(dir, "zh", "ticket", [{ label: "acme/web", text: "别的" }])).not.toBe(file);
+      expect(writeSessionGuide(dir, "zh", "ticket", [])).toBe(join(dir, "guide-ticket-zh.md"));
+    });
+
+    it("prunes hashed guides older than 30 days only", () => {
+      const dir = tempDir("guide");
+      const now = Date.now();
+      const day = 86400_000;
+      const mk = (name: string, ageDays: number) => {
+        const f = join(dir, name);
+        writeFileSync(f, "x");
+        const t = new Date(now - ageDays * day);
+        utimesSync(f, t, t);
+        return f;
+      };
+      const old = mk("guide-ticket-zh-0123456789ab.md", 31);
+      const fresh = mk("guide-ticket-en-0123456789ab.md", 1);
+      const plain = mk("guide-ticket-zh.md", 90);
+      const other = mk("guide-ticket-zh-xyz.md", 90);
+      expect(pruneSessionGuides(dir, now)).toBe(1);
+      expect(existsSync(old)).toBe(false);
+      for (const f of [fresh, plain, other]) expect(existsSync(f)).toBe(true);
+      expect(pruneSessionGuides(join(dir, "missing"), now)).toBe(0);
+    });
   });
 });

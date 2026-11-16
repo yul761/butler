@@ -58,7 +58,8 @@ import { EPIC_HISTORY_READ_ENTRIES } from "./epics/epic-history-view";
 import { EpicService } from "./epics/epic-service";
 import { FeaturesRepo } from "./db/features-repo";
 import { currentLang, onLangChange, setLang } from "./i18n";
-import { writeSessionGuide } from "./claude/session-guide";
+import { pruneSessionGuides, writeSessionGuide } from "./claude/session-guide";
+import { sessionLessons } from "./lessons/select";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
 import { HandoffRunner } from "./handoff/runner";
@@ -431,6 +432,8 @@ async function bootstrap(): Promise<void> {
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
   const repoIdentity = new RepoIdentity();
+  // 带 hash 的 session 说明文件每次规矩变了就多一份，启动时清掉 30 天没用过的。
+  pruneSessionGuides(paths.mcp, Date.now());
   const lessonRunner = new LessonRunner({
     repo: lessonsRepo, identity: repoIdentity, jobs,
     gh: { mergedPrs, prLessonData, compareFiles, available: () => ghBinary() !== null },
@@ -521,7 +524,8 @@ async function bootstrap(): Promise<void> {
     mcpConfig: memoryMcpConfig,
     // 装着的 butler-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
     mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, allowTools: SESSIONS_AUTO_ALLOW, gateCommand: health.hookBinCurrent() && existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
-    guidePath: (kind) => writeSessionGuide(paths.mcp, currentLang(), kind),
+    guidePath: (kind, repoPaths) =>
+      writeSessionGuide(paths.mcp, currentLang(), kind, kind === "ticket" ? sessionLessons(lessonsRepo, repoIdentity, repoPaths) : []),
     featureMcpConfig,
     epicMcpConfig,
     butlerWorkspace: paths.butlerWorkspace,
