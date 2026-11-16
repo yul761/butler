@@ -1,7 +1,7 @@
 import type { Locator } from "@playwright/test";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, create, expect, makeGitRepo, newTicket, pageTab, terminalText, test } from "./fixtures";
+import { completeWizard, create, expect, makeGitRepo, newTicket, openTab, pageTab, terminalText, test } from "./fixtures";
 
 /**
  * PR 进度（设计文档 2026-11-15 第 1 部分）：假 claude 里输入 /fake-skill，走真实的路径：
@@ -18,8 +18,10 @@ test("a skill call in a session moves the design step to active; tab and timelin
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
 
+  // tab 默认收起，先展开。
   const tab = pageTab(page, S.prStagesTab);
-  await expect(tab).toHaveAttribute("aria-selected", "true");
+  await expect(tab).toHaveAttribute("aria-selected", "false");
+  await openTab(page, S.prStagesTab);
   const design = page.locator(".pr-stages .pr-cell").filter({ hasText: S.prStage.design });
   await expect(design).toHaveClass(/pr-todo/);
 

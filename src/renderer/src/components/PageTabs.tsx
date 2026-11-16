@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { saveTab, savedTab } from "../local-prefs";
-import { clickTab, pickTab } from "../page-tabs";
+import { saveTab, saveTabOpen, savedTab, savedTabOpen } from "../local-prefs";
+import { clickTab, pickTab, tabIsOpen, toggleTabs, type TabState } from "../page-tabs";
 import { S } from "../strings";
 
 export interface PageTab {
@@ -14,19 +14,20 @@ export interface PageTab {
 
 /**
  * feature 页、epic 页、Butler 总控页终端上面的部分：一个 tab 一块，同一时间只显示一块，内容多了在自己的框里滚动，
- * 不挤掉别的块，也不挤占终端（终端至少占窗口一半高）。再点一下当前 tab 收起。每个页面记着停在哪个 tab。
+ * 不挤掉别的块，也不挤占终端（终端至少占窗口一半高）。默认收起，让终端尽量大；点 tab 或右边的「展开」按钮展开，再点一下当前 tab 或「收起」按钮收起。每个页面记着展开还是收起、最近停在哪个 tab。
  * actions：放在 tab 条右边、不管停在哪个 tab 都点得到的按钮（新建 ticket、新建 feature）。
  */
 export function PageTabs({ page, tabs, defaultTab, actions }: { page: string; tabs: PageTab[]; defaultTab: string; actions?: ReactNode }) {
   const ids = tabs.map((t) => t.id);
-  const [saved, setSaved] = useState(() => savedTab(page));
-  useEffect(() => setSaved(savedTab(page)), [page]);
-  const current = pickTab(saved, ids, defaultTab);
-  const tab = tabs.find((t) => t.id === current);
-  const choose = (id: string) => {
-    const next = clickTab(current, id);
-    saveTab(page, next);
-    setSaved(next);
+  const read = () => ({ saved: savedTab(page), open: tabIsOpen(savedTabOpen(page)) });
+  const [mem, setMem] = useState(read);
+  useEffect(() => setMem(read()), [page]);
+  const state: TabState = { tab: pickTab(mem.saved, ids, defaultTab), open: mem.open };
+  const tab = state.open ? tabs.find((t) => t.id === state.tab) : undefined;
+  const apply = (next: TabState) => {
+    saveTab(page, next.tab);
+    saveTabOpen(page, next.open);
+    setMem({ saved: next.tab, open: next.open });
   };
   return (
     <div className={tab ? "page-tabs" : "page-tabs collapsed"}>
@@ -35,14 +36,22 @@ export function PageTabs({ page, tabs, defaultTab, actions }: { page: string; ta
           <button
             key={t.id}
             role="tab"
-            aria-selected={t.id === current}
-            className={["page-tab", `tab-${t.id}`, t.id === current ? "active" : "", t.className ?? ""].filter(Boolean).join(" ")}
-            title={t.id === current ? S.tabCollapseHint : undefined}
-            onClick={() => choose(t.id)}
+            aria-selected={!!tab && t.id === state.tab}
+            className={["page-tab", `tab-${t.id}`, tab && t.id === state.tab ? "active" : "", t.className ?? ""].filter(Boolean).join(" ")}
+            title={tab && t.id === state.tab ? S.tabCollapseHint : undefined}
+            onClick={() => apply(clickTab(state, t.id))}
           >
             {t.label}
           </button>
         ))}
+        <button
+          className="page-tabs-toggle"
+          aria-expanded={!!tab}
+          title={S.tabCollapseHint}
+          onClick={() => apply(toggleTabs(state))}
+        >
+          {tab ? `▾ ${S.tabCollapse}` : `▸ ${S.tabExpand}`}
+        </button>
         {actions && <span className="page-tabs-actions">{actions}</span>}
       </div>
       {tab && (

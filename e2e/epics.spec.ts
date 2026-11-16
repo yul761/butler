@@ -171,6 +171,7 @@ test("an epic from planning to archive: features from the epic session, the plan
   await create(page, newEpic, S.epicName, "checkout-revamp", shop);
   await expect(sections).toHaveText([S.epics, S.features]);
   await expect(page.locator(".epic-page .repos-bar .repo .name")).toHaveText(["backend", "frontend"]);
+  await openTab(page, S.features);
   await expect(page.locator(".epic-page")).toContainText(S.noEpicFeatures);
 
   await newEpic.click();
@@ -218,6 +219,7 @@ test("an epic from planning to archive: features from the epic session, the plan
   // 5. 点一行进 feature 页：规划在整体进度区，可折叠，保留换行。总控没有自动开：只跑过 epic session 这一个 claude，feature 下面没有 session。
   await row("payment").locator(".progress").click();
   await onPage("payment");
+  await openTab(page, S.featureProgress);
   await expect(page.locator(".feature-brief p")).toHaveText(paymentBrief);
   await expect(moveTo).toHaveValue("1");
   await shot(page, "epic-feature-brief.png");
@@ -466,6 +468,7 @@ test("a stuck ticket marks its feature and epic", async ({ makeSandbox, launch }
   await expect(epicRow.locator(".stuck-mark")).toBeVisible();
   await expect(featureRow("logs").locator(".stuck-mark")).toBeVisible();
   await goToEpic();
+  await openTab(page, S.features);
   await expect(row("logs").locator(".status")).toContainText(S.epicStatus.stuck);
   await expect(row("logs").locator(".stuck-mark")).toBeVisible();
   await expect(row("logs").locator(".badge")).toHaveCount(0);
@@ -527,6 +530,7 @@ test("ending a waiting session with × clears the mark at every level", async ({
   await expect(featureRow("logs").locator(".badge")).toHaveCount(0);
   await expect(epicRow.locator(".badge")).toHaveCount(0);
   await goToEpic();
+  await openTab(page, S.features);
   await expect(row("logs").locator(".status")).toContainText(S.epicStatus.active);
   await expect(row("logs").locator(".badge")).toHaveCount(0);
   expect(dbRows(s, "SELECT COUNT(*) AS n FROM sessions WHERE waiting_for_input = 1")).toEqual([{ n: 0 }]);
@@ -564,6 +568,7 @@ test("the plan waits for the summaries create_feature started", async ({ makeSan
   writeFileSync(gate, "");
   expect((await callTool(page, s, "create_feature", { name: "next", repos: ["backend"], brief: "下一步。" })).error).toBe(false);
   await expect.poll(() => fakeLog(s)).toContain(" summary held");
+  await openTab(page, S.features);
   await row("next").locator(".progress").click();
   await expect(page.getByRole("heading", { name: "next", exact: true })).toBeVisible();
   const coordinator = await newCoordinator(page, s, nextWorkspace);
@@ -650,6 +655,7 @@ test("archiving waits for fresh summaries, and the user can walk away meanwhile"
   hold();
   expect((await callTool(page, s, "create_feature", { name: "next", repos: ["backend"], brief: "下一步。" })).error).toBe(false);
   await expect.poll(held).toBe(1);
+  await openTab(page, S.features);
   await expect(row("next")).toBeVisible();
   await expect(row("pay").locator(".progress")).toHaveText(S.epicNoSummary);
   release();
@@ -757,6 +763,7 @@ test("an epic in English: the page, the tools' errors and the plan", async ({ ma
   const refused = await callTool(page, s, "create_feature", { name: "nope", repos: ["audit"], brief: "x" });
   expect(refused.error).toBe(true);
   expect(refused.text).toContain("This epic has no repo audit");
+  await openTab(page, E.features);
   await expect(row("payment").locator(".progress")).toHaveText(E.epicNoSummary);
   await expect(row("payment").locator(".status")).toHaveText(E.epicStatus.not_started);
   await shot(page, "epic-en.png");

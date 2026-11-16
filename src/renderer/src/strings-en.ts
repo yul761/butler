@@ -322,6 +322,8 @@ export const EN: UiStrings = {
   inboxNoReports: "No reports yet.",
   inboxNoDecisions: "Nothing to decide.",
   tabCollapseHint: "Click again to collapse",
+  tabCollapse: "Collapse",
+  tabExpand: "Expand",
   inboxReportKinds: { progress: "Progress", done: "Done", blocked: "Blocked" } as Record<ReportKind, string>,
   inboxWho: (role: InboxRole, ticketKey: string | null, repo: string | null) =>
     role === "ticket" ? `${ticketKey ?? ""}${repo ? ` (${repo})` : ""}`
