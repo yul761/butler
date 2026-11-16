@@ -407,3 +407,67 @@ describe("PrWatcher", () => {
     s.w.stop();
   });
 });
+
+describe("PrWatcher stages", () => {
+  const review = { id: "r1", author: "alice", state: "COMMENTED" as const, body: "", submittedAt: 5 };
+  function withStages() {
+    const s = setup();
+    const keys = new Set<string>();
+    const stages = {
+      has: vi.fn((k: string) => keys.has(k)),
+      add: vi.fn((_e: unknown, k: string) => (keys.has(k) ? false : (keys.add(k), true))),
+    };
+    const reviewComments = vi.fn<typeof import("../tickets/gh").reviewComments>(async () => []);
+    const firstCommitAt = vi.fn<typeof import("../tickets/git").firstCommitAt>(async () => null);
+    const w = new PrWatcher({ ...s.deps, gh: { ...s.gh, reviewComments }, git: { firstCommitAt }, stages });
+    return { ...s, w, stages, reviewComments, firstCommitAt };
+  }
+
+  it("fetches inline comments only for reviews it has not recorded, and does not notify for repeats", async () => {
+    const s = withStages();
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [review] }));
+    await s.w.check();
+    expect(s.reviewComments).toHaveBeenCalledTimes(1);
+    expect(s.reviewComments).toHaveBeenCalledWith("/w", 7, PR_GH_TIMEOUT_MS);
+    expect(s.deps.notify).toHaveBeenCalledTimes(1);
+    s.advance(PR_FAST_MS);
+    await s.w.check();
+    expect(s.reviewComments).toHaveBeenCalledTimes(1);
+    expect(s.stages.add.mock.results.slice(-1)[0]?.value).toBe(false);
+    expect(s.deps.notify).toHaveBeenCalledTimes(1);
+    s.advance(PR_FAST_MS);
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [review, { ...review, id: "r2" }] }));
+    await s.w.check();
+    expect(s.reviewComments).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a review next round when its inline comments could not be fetched", async () => {
+    const s = withStages();
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [review] }));
+    s.reviewComments.mockResolvedValueOnce(null);
+    await s.w.check();
+    expect(s.stages.has("1:review:r1")).toBe(false);
+    s.advance(PR_FAST_MS);
+    await s.w.check();
+    expect(s.reviewComments).toHaveBeenCalledTimes(2);
+    expect(s.stages.has("1:review:r1")).toBe(true);
+  });
+
+  it("asks git for the first commit only while there is no PR and it is not recorded", async () => {
+    const s = withStages();
+    s.firstCommitAt.mockResolvedValue(42);
+    await s.w.check();
+    expect(s.firstCommitAt).toHaveBeenCalledWith("/w", "b");
+    expect(s.stages.add).toHaveBeenCalledWith(expect.objectContaining({ kind: "first_commit", at: 42 }), "1:first_commit:b");
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.firstCommitAt).toHaveBeenCalledTimes(1);
+  });
+
+  it("records nothing without stages and git", async () => {
+    const s = setup();
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [review] }));
+    await s.w.check();
+    expect(s.repo.get(1)?.number).toBe(7);
+  });
+});

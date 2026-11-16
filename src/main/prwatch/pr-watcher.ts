@@ -1,6 +1,9 @@
 import type { PrWatchRepo, PrWatchRow } from "../db/pr-watch-repo";
-import type { CiCheck, branchRuns, failedLog, prStatus } from "../tickets/gh";
+import type { PrStageRepo } from "../db/pr-stage-repo";
+import type { CiCheck, PrComment, PrStatus, branchRuns, failedLog, prStatus, reviewComments } from "../tickets/gh";
+import type { firstCommitAt } from "../tickets/git";
 import type { WatchedPr } from "../../shared/types";
+import { prObservations } from "./pr-observe";
 
 /** 有检查在跑、session 开着：每分钟查一次。 */
 export const PR_FAST_MS = 60_000;
@@ -34,7 +37,11 @@ export interface PrWatcherDeps {
   repo: Pick<PrWatchRepo, "upsert" | "get" | "byTicket" | "all">;
   /** 要查的分支：未归档 ticket 的每个仓库，条件是这个仓库的 session 开着，或者 pr_watch 里它的 PR 还开着、或还没查过但 ticket 最新 handoff 里有开着的 PR。 */
   targets(): PrTarget[];
-  gh: { prStatus: typeof prStatus; branchRuns: typeof branchRuns; failedLog: typeof failedLog };
+  gh: { prStatus: typeof prStatus; branchRuns: typeof branchRuns; failedLog: typeof failedLog; reviewComments?: typeof reviewComments };
+  /** 没有 PR 时第一个 commit 的时间（PR 进度用）。 */
+  git?: { firstCommitAt: typeof firstCommitAt };
+  /** PR 进度的事件；没给就不记。 */
+  stages?: Pick<PrStageRepo, "has" | "add">;
   /** PR 的状态或 review 变了：把这个 ticket 所有仓库的 PR 写成一条 refresh handoff。 */
   onPrChanged(ticketKey: string): void;
   /** CI 有了新的结论（Task 6 接上）。 */
@@ -184,8 +191,9 @@ export class PrWatcher {
   private async checkOne(t: PrTarget): Promise<{ prChanged: boolean; changed: boolean } | null> {
     try {
       const prev = this.rowOf(t);
-      const next = await this.read(t, prev);
+      const { row: next, pr } = await this.read(t, prev);
       this.d.repo.upsert(next);
+      const staged = await this.record(t, prev, next, pr);
       if (settled(prev, next)) {
         const row = this.d.repo.get(t.repoId);
         if (row) {
@@ -197,34 +205,75 @@ export class PrWatcher {
         }
       }
       const prChanged = (prev?.state ?? null) !== next.state || (prev?.review ?? null) !== next.review;
-      return { prChanged, changed: changed(prev, next) };
+      return { prChanged, changed: changed(prev, next) || staged };
     } catch (e) {
       this.d.log(`pr watch: checking ${t.branch} in ${t.repoPath} failed`, e);
       return null;
     }
   }
 
-  /** 这个仓库现在的状态。gh 不可用时 ci 记 unknown，其余沿用上次的。 */
-  private async read(t: PrTarget, prev: PrWatchRow | null): Promise<Omit<PrWatchRow, "deliveredKey">> {
+  /** PR 进度：把这一轮看到的变化记成事件，有新记下的返回 true。出错只记日志，不影响 pr_watch。 */
+  private async record(t: PrTarget, prev: PrWatchRow | null, next: Omit<PrWatchRow, "deliveredKey">, pr: PrStatus | null): Promise<boolean> {
+    const stages = this.d.stages;
+    if (!stages || !this.d.git) return false;
+    try {
+      let seen = pr;
+      let inline: PrComment[] = [];
+      // 有没记过的 review 才拉行内评论（Copilot 的 review 要数它的行内评论）；这个 review 记下之后就不再拉了。
+      const fresh = pr?.reviews.filter((r) => !stages.has(`${t.repoId}:review:${r.id}`)) ?? [];
+      const fetcher = this.d.gh.reviewComments;
+      if (pr && fresh.length > 0 && fetcher) {
+        const got = await this.gh(() => fetcher(t.cwd, pr.number, PR_GH_TIMEOUT_MS));
+        if (got) inline = got;
+        // 拉失败：这一轮先不记这些 review，下一轮再试，免得行内评论数记成 0。
+        else seen = { ...pr, reviews: pr.reviews.filter((r) => !fresh.includes(r)) };
+      }
+      let firstCommit = pr?.firstCommitAt ?? null;
+      if (!pr && !stages.has(`${t.repoId}:first_commit:${t.branch}`)) {
+        const git = this.d.git;
+        firstCommit = await git.firstCommitAt(t.cwd, t.branch);
+      }
+      let added = false;
+      for (const o of prObservations(t, prev, next, seen, inline, firstCommit, this.d.now())) {
+        if (stages.add(o.event, o.dedupeKey)) added = true;
+      }
+      return added;
+    } catch (e) {
+      this.d.log(`pr watch: recording the stages of ${t.branch} in ${t.repoPath} failed`, e);
+      return false;
+    }
+  }
+
+  /** 这个仓库现在的状态（和这一轮的 prStatus，没有为 null）。gh 不可用时 ci 记 unknown，其余沿用上次的。 */
+  private async read(t: PrTarget, prev: PrWatchRow | null): Promise<{ row: Omit<PrWatchRow, "deliveredKey">; pr: PrStatus | null }> {
     const base = { ticketKey: t.ticketKey, repoId: t.repoId, repoPath: t.repoPath, branch: t.branch, checkedAt: this.d.now() };
     const pr = await this.gh(() => this.d.gh.prStatus(t.cwd, t.branch, PR_GH_TIMEOUT_MS));
     if (pr) {
       return {
-        ...base, number: pr.number, url: pr.url, state: STATES[pr.state], review: pr.review, ci: pr.ci, headSha: pr.headSha,
-        failed: pr.ci === "failing" ? await this.failedWithLogs(t.cwd, pr.checks) : [],
+        pr,
+        row: {
+          ...base, number: pr.number, url: pr.url, state: STATES[pr.state], review: pr.review, ci: pr.ci, headSha: pr.headSha,
+          failed: pr.ci === "failing" ? await this.failedWithLogs(t.cwd, pr.checks) : [],
+        },
       };
     }
     // 见过 PR 的分支不会再“没有 PR”（gh pr view <branch> 也找得到合并、关闭的）：这里是 gh 失败了，不能当成 PR 没了。
     const runs = prev?.number == null ? await this.gh(() => this.d.gh.branchRuns(t.cwd, t.branch, PR_GH_TIMEOUT_MS)) : null;
     if (runs) {
       return {
-        ...base, number: null, url: null, state: null, review: null, ci: runs.ci, headSha: runs.headSha,
-        failed: runs.ci === "failing" ? await this.failedWithLogs(t.cwd, runs.checks) : [],
+        pr: null,
+        row: {
+          ...base, number: null, url: null, state: null, review: null, ci: runs.ci, headSha: runs.headSha,
+          failed: runs.ci === "failing" ? await this.failedWithLogs(t.cwd, runs.checks) : [],
+        },
       };
     }
     return {
-      ...base, number: prev?.number ?? null, url: prev?.url ?? null, state: prev?.state ?? null, review: prev?.review ?? null,
-      ci: "unknown", headSha: prev?.headSha ?? null, failed: prev?.failed ?? [],
+      pr: null,
+      row: {
+        ...base, number: prev?.number ?? null, url: prev?.url ?? null, state: prev?.state ?? null, review: prev?.review ?? null,
+        ci: "unknown", headSha: prev?.headSha ?? null, failed: prev?.failed ?? [],
+      },
     };
   }
 
