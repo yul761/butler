@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BranchWatchRow } from "../db/branch-watch-repo";
 import type { TicketPr } from "../db/ticket-prs-repo";
 import type { TicketRepo } from "../../shared/types";
-import { BRANCH_IDLE_MS, PR_FAST_MS, PR_SLOW_MS, PR_WATCH_MAX, capRound, nextBranchCheckAt, nextPrCheckAt, prPolls } from "./pr-schedule";
+import { BRANCH_IDLE_MS, PR_FAST_MS, PR_SLOW_MS, PR_WATCH_MAX, capRound, nextBranchCheckAt, nextPrCheckAt, branchTargets, prPolls } from "./pr-schedule";
 
 const bw = (o: Partial<BranchWatchRow> = {}): BranchWatchRow => ({
   repoId: 1, ticketKey: "T-1", branch: "b", ci: "passing", headSha: null, failed: [], readError: false, checkedAt: 1000, deliveredKey: null, ...o,
@@ -73,5 +73,19 @@ describe("capRound", () => {
     expect(out.slice(0, 5).map((x) => x.id)).toEqual([40, 41, 42, 43, 44]);
     expect(out[5].id).toBe(0);
     expect(out.map((x) => x.id)).not.toContain(PR_WATCH_MAX - 1);
+  });
+});
+
+describe("branchTargets", () => {
+  it("uses the repo work dir as cwd and asks sessionOpen per repo", () => {
+    const t = { key: "T-1", repos: [repo(1), repo(2, { worktreeRemovedAt: 9 })] };
+    const out = branchTargets([t], {
+      ghWorkDir: (r) => (r.worktreeRemovedAt === null && r.worktreePath ? r.worktreePath : r.repoPath),
+      sessionOpen: (_k, id) => id === 2,
+    });
+    expect(out).toEqual([
+      { ticketKey: "T-1", repoId: 1, repoPath: "/r1", cwd: "/w1", branch: "b", sessionOpen: false },
+      { ticketKey: "T-1", repoId: 2, repoPath: "/r2", cwd: "/r2", branch: "b", sessionOpen: true },
+    ]);
   });
 });

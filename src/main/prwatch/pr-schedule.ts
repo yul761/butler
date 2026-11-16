@@ -55,8 +55,11 @@ export function prPolls(
   const byUrl = new Map<string, TicketPr[]>();
   for (const r of rows) byUrl.set(r.url, [...(byUrl.get(r.url) ?? []), r]);
   return [...byUrl.entries()].map(([url, group]) => {
-    const withRepo = group.find((r) => r.repoId !== null && d.repoOf(r.repoId) !== null);
-    const repo = withRepo ? d.repoOf(withRepo.repoId!) : null;
+    let repo: TicketRepo | null = null;
+    for (const r of group) {
+      repo = r.repoId === null ? null : d.repoOf(r.repoId);
+      if (repo) break;
+    }
     return {
       url,
       rows: group,
