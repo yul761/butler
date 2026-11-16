@@ -23,6 +23,8 @@ import type { HandoffRunner } from "../handoff/runner";
 import type { FeatureSummaryRunner } from "../handoff/feature-runner";
 import type { HealthService } from "../hooks/health";
 import type { PrStagesView } from "../../shared/pr-stages";
+import type { LessonsState } from "../../shared/lessons";
+import type { LessonsService } from "../lessons/lessons-service";
 import type { PrStagesService } from "../prwatch/pr-stages-service";
 import type { InboxService } from "../inbox/inbox-service";
 import { addDays, localDate } from "../schedule/calendar";
@@ -40,7 +42,7 @@ import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, moveTargetArg, prStagesScopeArg,
+  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
 } from "./validate";
 import { M } from "../strings";
@@ -64,6 +66,8 @@ export interface IpcDeps {
   prWatchList: () => WatchedPr[];
   /** PR 进度。 */
   prStages: Pick<PrStagesService, "view">;
+  /** 复盘规矩页。 */
+  lessons: Pick<LessonsService, "state" | "act" | "pendingCount">;
   /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
   nowView: (merges: MergeEvent[]) => NowView;
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）。 */
@@ -342,6 +346,9 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.mergeEvents, recentMerges);
   handle(IPC.prWatchList, (): WatchedPr[] => d.prWatchList());
   handle(IPC.prStages, (raw: unknown): PrStagesView[] => d.prStages.view(prStagesScopeArg(raw)));
+  handle(IPC.lessonsState, (): LessonsState => d.lessons.state());
+  handle(IPC.lessonsAct, (raw: unknown) => d.lessons.act(lessonActionArg(raw)));
+  handle(IPC.lessonsPending, (): number => d.lessons.pendingCount());
   handle(IPC.nowView, (): NowView => d.nowView(recentMerges()));
   // 答了、不用了都由 InboxService 自己 notify。
   handle(IPC.inboxList, (raw: unknown): InboxView => d.inbox.view(inboxScopeArg(raw)));

@@ -21,10 +21,12 @@
 //     输入 /fake-ask 时回一句以“？”结尾的问话（ASK_REPLY）并结束这一轮：需要你的判断认出它；
 //     输入 /clear 时像 Claude Code：换一个新的 session id 和新的 transcript，跑 SessionStart（source=clear），停在空的输入框上（没有 Stop）；
 //     每条 assistant 记录都带 usage：上下文是 FAKE_CLAUDE_CONTEXT_TOKENS（e2e 用它撑过换新的阈值），/clear 之后从头算，回到 CLEARED_CONTEXT；
+//     交互日志 interactive new/resume 行末尾带 guide=<--append-system-prompt-file 的路径>（没有就是空）；
 //     其余输入回“收到：<输入>”并结束这一轮；每条输入都在运行记录里记一行 prompt <JSON 字符串>；
 //   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果、feature 汇总或卡住判断；stream-json 的 MCP 探测只回 init。
 //     需要你的判断（schema 里有 needs_user）：回复是 /fake-ask 的问话就说需要你（理由是那句问话），别的都失败退出（Butler 当作不需要你）；
 //     FAKE_CLAUDE_JUDGE_DELAY_MS 设了就等这么久才失败（像真的 Haiku 要判断几秒）。
+//     review 经验的分析（schema 里有 findings）：回 { findings: [] }。
 //     FAKE_CLAUDE_SUMMARY_GATE 指向的文件存在时，feature 汇总等到文件被删掉才回答：e2e 用它控制归档前要等多久。
 "use strict";
 const fs = require("node:fs");
@@ -195,6 +197,12 @@ function headless() {
       }, Number(process.env.FAKE_CLAUDE_JUDGE_DELAY_MS) || 0);
       return;
     }
+    if (props.findings) {
+      // review 经验的分析（--json-schema 里有 findings）：不提炼规矩，回空的。
+      const none = { findings: [] };
+      process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `lessons-${Date.now()}`, result: JSON.stringify(none), structured_output: none, permission_denials: [], total_cost_usd: 0 })}\n`);
+      return;
+    }
     // prompt 的第一行有中文就当中文，否则英文（Butler 按界面语言出 prompt）。
     const lang = /[\u4e00-\u9fff]/.test(input.split("\n")[0]) ? "zh" : "en";
     const judge = !!props.stuck;
@@ -268,7 +276,7 @@ function interactive() {
     fs.writeFileSync(path.join(configDir, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId, cwd, name, status: "idle" }));
   };
   register();
-  log(`interactive ${has("--resume") ? "resume" : "new"} ${sessionId} mcp=${servers.join(",")} cwd=${cwd} adddirs=${flags("--add-dir").join("|")}`);
+  log(`interactive ${has("--resume") ? "resume" : "new"} ${sessionId} mcp=${servers.join(",")} cwd=${cwd} adddirs=${flags("--add-dir").join("|")} guide=${flag("--append-system-prompt-file") || ""}`);
   runHooks("SessionStart", { session_id: sessionId, cwd, source: has("--resume") ? "resume" : "startup", transcript_path: transcript });
   out(`fake claude ready (${sessionId.slice(0, 8)})\n`);
   if (mcp) out(`mcp: ${servers.join(", ")}\n`);

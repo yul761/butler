@@ -124,6 +124,12 @@ export class TicketsRepo {
     return rows.map(toRepo);
   }
 
+  /** 所有 ticket（包括归档的）里这个分支名的仓库行。 */
+  reposByBranch(branch: string): TicketRepo[] {
+    const rows = this.db.prepare(`SELECT * FROM ticket_repos WHERE branch = ? ORDER BY id`).all(branch) as unknown as RepoRow[];
+    return rows.map(toRepo);
+  }
+
   /** 改一个仓库的工作方式、worktree 路径和分支。worktree 由此重新建好，不再算"已清理"。 */
   updateRepo(r: Pick<TicketRepo, "id" | "workMode" | "worktreePath" | "branch">): void {
     this.db

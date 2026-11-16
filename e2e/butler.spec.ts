@@ -30,7 +30,7 @@ test("the Butler 总控 page: both inbox tabs on top and one terminal in its own
   await newSession.click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   const workspace = join(s.butlerHome, "workspaces", "_butler");
-  await expect.poll(() => fakeLog(s)).toContain(`mcp=butler-workspace,butler-sessions cwd=${workspace} adddirs=\n`);
+  await expect.poll(() => fakeLog(s)).toContain(`mcp=butler-workspace,butler-sessions cwd=${workspace} adddirs= guide=`);
   await expect(butler.locator(".session .place")).toHaveText([S.butlerSession]);
 
   // 全局只有一个在跑：再点一次切回同一个终端，不新开。

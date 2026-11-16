@@ -83,7 +83,8 @@ export interface SessionServiceDeps {
    */
   mcpSettings?: (dirs: string[]) => string | null;
   /** Butler 的 session 说明文件（--append-system-prompt-file）；不给或返回 null 时不加。 */
-  guidePath?: (kind: GuideKind) => string | null;
+  /** repoPaths：这个 session 涉及的仓库路径，用来挑要送进去的规矩。 */
+  guidePath?: (kind: GuideKind, repoPaths: string[]) => string | null;
   /** feature（设计文档 2026-10-26）；不给就没有 feature 总控。 */
   features?: FeaturesRepo;
   /** epic（设计文档 2026-11-01）；不给就没有 epic session。 */
@@ -135,6 +136,8 @@ interface WorkspaceTarget {
   dirs: string[];
   mcpConfig: () => string | null;
   guideKind: GuideKind;
+  /** 送规矩用的仓库路径（只有修复 session 非空）。 */
+  guideRepoPaths: string[];
   /** 新建 session 时这一行的角色。 */
   row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "epicId" | "butler"> & { model?: SessionModel | null };
 }
@@ -226,7 +229,7 @@ export class SessionService {
     const epicId = ticket.featureId === null ? null : (this.d.features?.get(ticket.featureId)?.epicId ?? null);
     const mcpConfigPath = this.configPath(ticket.key, () => this.d.mcpConfig?.(ticket.key, { coordinator, featureId: ticket.featureId, epicId }) ?? null, claudePath, launch.viaCmd);
     const settingsPath = this.configPath(ticket.key, () => this.d.mcpSettings?.([cwd, ...ticket.repos.map((r) => r.repoPath)]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
-    const guidePath = this.configPath(ticket.key, () => this.d.guidePath?.(coordinator ? "coordinator" : "ticket") ?? null, claudePath, launch.viaCmd, "session guide");
+    const guidePath = this.configPath(ticket.key, () => this.d.guidePath?.(coordinator ? "coordinator" : "ticket", coordinator ? [] : ticket.repos.map((r) => r.repoPath)) ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs = coordinator ? this.addDirsFor(ticket, claudePath, launch.viaCmd) : [];
     let termId: string;
     let args: string[];
@@ -481,6 +484,7 @@ export class SessionService {
         label: "butler", workspace, repoPaths: [], dirs: [],
         mcpConfig: () => this.d.butlerMcpConfig?.() ?? null,
         guideKind: "butler",
+        guideRepoPaths: [],
         row: { butler: true },
       }, claude, head);
     });
@@ -590,6 +594,15 @@ export class SessionService {
 
   /** 在 feature 工作区里启动 claude，返回终端 id：恢复 head；没有 head 时新建一行，给了 fixes 就是修复 session，否则是总控。 */
   private startInFeature(feature: Feature, claude: Claude, from: { head?: Session | null; fixes?: string }): string {
+    // 恢复时 from 里没有 fixes，从这一行记的 fixesSession 看它是不是修复 session。
+    const fixes = from.fixes ?? from.head?.fixesSession ?? undefined;
+    let guideRepoPaths: string[] = [];
+    if (fixes) {
+      // 被修的 session 有 ticket 就用那个 ticket 的仓库，否则用 feature 的。
+      const stuck = this.d.sessions.head(fixes);
+      const ticket = stuck?.ticketKey ? this.d.tickets.get(stuck.ticketKey) : null;
+      guideRepoPaths = (ticket ?? feature).repos.map((r) => r.repoPath);
+    }
     return this.startInWorkspace({
       label: `feature ${feature.id}`,
       workspace: this.d.ticketService.featureWorkspaceDir(feature.id),
@@ -597,8 +610,9 @@ export class SessionService {
       // feature 下未归档 ticket 的仓库工作目录。
       dirs: this.d.tickets.listByFeature(feature.id).flatMap((t) => t.repos.map((r) => this.d.ticketService.workDir(r))),
       mcpConfig: () => this.d.featureMcpConfig?.(feature.id, feature.epicId) ?? null,
-      guideKind: from.fixes ? "ticket" : "coordinator",
-      row: { coordinator: !from.fixes, featureId: feature.id, fixesSession: from.fixes ?? null, model: from.fixes ? "sonnet" : null },
+      guideKind: fixes ? "ticket" : "coordinator",
+      guideRepoPaths,
+      row: { coordinator: !fixes, featureId: feature.id, fixesSession: fixes ?? null, model: fixes ? "sonnet" : null },
     }, claude, from.head ?? null);
   }
 
@@ -619,6 +633,7 @@ export class SessionService {
       dirs: repoPaths,
       mcpConfig: () => this.d.epicMcpConfig?.(epic.id) ?? null,
       guideKind: "epic",
+      guideRepoPaths: [],
       row: { epicId: epic.id },
     }, claude, head);
   }
@@ -630,7 +645,7 @@ export class SessionService {
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
     const mcpConfigPath = this.configPath(target.label, target.mcpConfig, claudePath, launch.viaCmd);
     const settingsPath = this.configPath(target.label, () => this.d.mcpSettings?.([cwd, ...target.repoPaths]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
-    const guidePath = this.configPath(target.label, () => this.d.guidePath?.(target.guideKind) ?? null, claudePath, launch.viaCmd, "session guide");
+    const guidePath = this.configPath(target.label, () => this.d.guidePath?.(target.guideKind, target.guideRepoPaths) ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs = this.workspaceAddDirs(target, claudePath, launch.viaCmd);
     let termId: string;
     let args: string[];

@@ -113,7 +113,7 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
   await page.locator(".sidebar .ticket.feature").click();
   await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
-  await expect.poll(fakeLog).toContain(`mcp=butler-workspace,butler-feature,butler-sessions cwd=${workspace} adddirs=\n`);
+  await expect.poll(fakeLog).toContain(`mcp=butler-workspace,butler-feature,butler-sessions cwd=${workspace} adddirs= guide=`);
   const coordinatorId = /interactive new (\S+) mcp=butler-workspace,butler-feature,butler-sessions/.exec(fakeLog())![1];
 
   // 4. 按配置启动 butler-sessions，像 claude 一样经 stdio 调用：给 DMS-1（只有一个仓库，不用指定 repo）开子 session。
@@ -139,7 +139,7 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
   await expect(page.locator(".sidebar .feature-group .feature-tickets .ticket .key")).toHaveText(["DMS-1", "DMS-2", "DMS-3"]);
   expect(existsSync(join(workspace, "backend-dms-3"))).toBe(true);
   // 子 session 是 DMS-1 的普通 session：在它的 worktree 里，挂 ticket 记忆和 feature 记忆，没有 butler-sessions。
-  await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-feature,butler-sessions cwd=${feWorktree} adddirs=\n`);
+  await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-feature,butler-sessions cwd=${feWorktree} adddirs= guide=`);
 
   // 5. 在 DMS-1 里看到子 session，等任务提交后用按钮旁的 × 结束它（点两次；这个仓库自己的终端在跑时不会清理）。
   await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();

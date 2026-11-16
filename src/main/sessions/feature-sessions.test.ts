@@ -47,7 +47,7 @@ async function setup() {
   const mcpAsked: { key: string; coordinator: boolean; featureId: number | null; epicId: number | null }[] = [];
   const featureMcpAsked: [number, number | null][] = [];
   const epicMcpAsked: number[] = [];
-  const guidesAsked: string[] = [];
+  const guidesAsked: (string | string[])[][] = [];
   const butlerWorkspace = join(tempDir("butler-home-"), "workspaces", "_butler");
   const settingsAsked: string[][] = [];
   const activities = new Map<string, SessionActivity>();
@@ -80,7 +80,7 @@ async function setup() {
     mcpSettings: (dirs) => (settingsAsked.push(dirs), "/mcp/approve.json"),
     butlerWorkspace,
     butlerMcpConfig: () => "/mcp/butler.json",
-    guidePath: (kind) => (guidesAsked.push(kind), null),
+    guidePath: (kind, paths) => (guidesAsked.push([kind, paths]), null),
   });
   return {
     service, featureService, ticketService, featureHandoffs, handoffs, epicHistory, sessions, tickets, features, epics, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, featureMcpAsked, epicMcpAsked, settingsAsked,
@@ -766,6 +766,25 @@ describe("fix sessions (design 2026-10-31)", () => {
     expect(s.opts.env.BUTLER_SESSION).toBe("new-2");
   });
 
+  it("asks the guide as a ticket session with the stuck ticket's repos, also when resumed after closing", async () => {
+    const { service, spawned, sessions, feature, guidesAsked, frontend, req, stuckId } = await stuckSetup();
+    guidesAsked.length = 0;
+    await service.openFix(req);
+    expect(guidesAsked).toEqual([["ticket", [frontend]]]);
+    spawned[1].pty.emitExit(0);
+    expect(sessions.get("new-2")?.fixesSession).toBe(stuckId);
+    await service.openFeature({ featureId: feature.id, sessionId: "new-2" });
+    expect(guidesAsked).toEqual([["ticket", [frontend]], ["ticket", [frontend]]]);
+  });
+
+  it("uses the feature's repos when the stuck session has no ticket", async () => {
+    const { service, sessions, feature, guidesAsked, frontend, backend } = await stuckSetup();
+    sessions.insertIfAbsent({ id: "fx", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: "ghost" });
+    guidesAsked.length = 0;
+    await service.openFeature({ featureId: feature.id, sessionId: "fx" });
+    expect(guidesAsked).toEqual([["ticket", [frontend, backend]]]);
+  });
+
   it("sends the task with submit, not prefill, and does not wait for it", async () => {
     const { service, pty, req, stuckId, submitted, names, activities, sessions, setSubmit } = await stuckSetup();
     const prefill = vi.spyOn(pty, "prefill");
@@ -1065,7 +1084,7 @@ describe("the Butler 总控 session (BTL-190 5)", () => {
     expect(s.opts.cwd).toBe(butlerWorkspace);
     expect(s.args).toEqual(["--session-id", "new-1", "--mcp-config", "/mcp/butler.json", "--settings", "/mcp/approve.json"]);
     expect(settingsAsked).toEqual([[butlerWorkspace]]);
-    expect(guidesAsked).toEqual(["butler"]);
+    expect(guidesAsked).toEqual([["butler", []]]);
     expect(s.opts.env.BUTLER_TICKET).toBeUndefined();
     expect(sessions.get("new-1")).toMatchObject({ ticketKey: null, featureId: null, epicId: null, coordinator: false, butler: true, cwd: butlerWorkspace });
     expect(service.unclaimed()).toEqual([]);

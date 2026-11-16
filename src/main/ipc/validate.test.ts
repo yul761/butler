@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, moveTargetArg, prStagesScopeArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -208,5 +208,26 @@ describe("inbox IPC arguments (BTL-190 2+3)", () => {
     expect(prStagesScopeArg({ featureId: 1 })).toEqual({ featureId: 1 });
     expect(prStagesScopeArg({ epicId: 2 })).toEqual({ epicId: 2 });
     for (const bad of [{}, null, "A-1", { featureId: "x" }, { epicId: 0 }, { ticketKey: "" }]) expect(() => prStagesScopeArg(bad), JSON.stringify(bad)).toThrow();
+  });
+});
+
+describe("lessonActionArg", () => {
+  it("rejects blank text, unknown ops and bad fields", () => {
+    expect(() => lessonActionArg({ op: "edit", id: 1, text: "  " })).toThrow();
+    expect(() => lessonActionArg({ op: "nope" })).toThrow();
+    expect(() => lessonActionArg({ op: "edit", id: 1, text: "x".repeat(2001) })).toThrow();
+    expect(() => lessonActionArg({ op: "reject", id: "1" })).toThrow();
+    expect(() => lessonActionArg({ op: "createProduct", name: " ", slugs: [] })).toThrow();
+    expect(() => lessonActionArg({ op: "createProduct", name: "p", slugs: [1] })).toThrow();
+    expect(() => lessonActionArg(null)).toThrow();
+  });
+
+  it("returns valid actions, trimming text and names", () => {
+    expect(lessonActionArg({ op: "backfill", slug: "acme/web" })).toEqual({ op: "backfill", slug: "acme/web" });
+    expect(lessonActionArg({ op: "confirm", id: 2 })).toEqual({ op: "confirm", id: 2 });
+    expect(lessonActionArg({ op: "confirm", id: 2, text: " hi " })).toEqual({ op: "confirm", id: 2, text: "hi" });
+    expect(lessonActionArg({ op: "createProduct", name: " shop ", slugs: ["a/b"] })).toEqual({ op: "createProduct", name: "shop", slugs: ["a/b"] });
+    expect(lessonActionArg({ op: "merge", keepId: 1, dropId: 2, text: "t" })).toEqual({ op: "merge", keepId: 1, dropId: 2, text: "t" });
+    expect(lessonActionArg({ op: "setDisabled", id: 1, disabled: true })).toEqual({ op: "setDisabled", id: 1, disabled: true });
   });
 });

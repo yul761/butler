@@ -26,7 +26,7 @@ async function setup(opts: {
   factory?: PtyFactory;
   mcpConfig?: (ticketKey: string, opts: { coordinator: boolean }) => string | null;
   mcpSettings?: (dirs: string[]) => string | null;
-  guidePath?: (kind: GuideKind) => string | null;
+  guidePath?: (kind: GuideKind, repoPaths: string[]) => string | null;
   syncMemory?: (ticketKey: string) => void;
   dirBusy?: (repo: TicketRepo) => Promise<{ ticket: string; branch: string } | null>;
   platform?: NodeJS.Platform;
@@ -150,6 +150,14 @@ describe("SessionService.open", () => {
     await service.open({ ticketKey: "PROJ-1" });
     expect(spawned[0].args).toEqual(["--session-id", "new-1", "--append-system-prompt-file", "/b/mcp/guide.md"]);
     expect(asked).toEqual(["ticket"]);
+  });
+
+  it("asks the guide with the ticket's repo paths, and none for the coordinator", async () => {
+    const asked: [string, string[]][] = [];
+    const { service, ticket } = await setup({ guidePath: (kind, paths) => (asked.push([kind, paths]), null) });
+    await service.open({ ticketKey: "PROJ-1" });
+    await service.open({ ticketKey: "PROJ-1", coordinator: true });
+    expect(asked).toEqual([["ticket", ticket.repos.map((r) => r.repoPath)], ["coordinator", []]]);
   });
 
   it("passes the .mcp.json approval settings, asked with the session's folder and the repo roots", async () => {

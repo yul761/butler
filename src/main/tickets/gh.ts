@@ -378,3 +378,97 @@ export async function failedLog(cwd: string, runId: number, lines: number, timeo
   if (out === null) return null;
   return out.replace(/\n+$/, "").split("\n").slice(-lines).join("\n");
 }
+
+export const LESSON_GH_TIMEOUT_MS = 15_000;
+
+export interface MergedPr {
+  number: number;
+  mergedAt: string;
+  headRefName: string;
+}
+
+/** gh pr list --state merged：after 不为空时只要合并时间晚于它的。按 mergedAt 升序；失败返回 null。 */
+export async function mergedPrs(cwd: string, after: string | null, limit: number, timeoutMs: number): Promise<MergedPr[] | null> {
+  const args = ["pr", "list", "--state", "merged", "--limit", String(limit), "--json", "number,mergedAt,headRefName", "--jq", ".[]"];
+  if (after !== null) args.push("--search", `merged:>${after}`);
+  const j = parseLines(await runGh(cwd, args, timeoutMs, 8 * 1024 * 1024));
+  if (j === null) return null;
+  const out: MergedPr[] = [];
+  for (const item of j) {
+    const r = obj(item);
+    if (!r || typeof r.number !== "number" || typeof r.mergedAt !== "string" || timeOf(r.mergedAt) === null) continue;
+    out.push({ number: r.number, mergedAt: r.mergedAt, headRefName: str(r.headRefName) });
+  }
+  return out.sort((a, b) => Date.parse(a.mergedAt) - Date.parse(b.mergedAt));
+}
+
+export interface PrCommit {
+  oid: string;
+  committedDate: string;
+  headline: string;
+  body: string;
+}
+
+export interface PrLessonData {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  author: string;
+  headRefName: string;
+  mergedAt: string | null;
+  reviews: PrReview[];
+  comments: PrComment[];
+  inline: PrComment[];
+  commits: PrCommit[];
+  /** reviewAuthors 的结果；拿不到时为空集合。 */
+  botLogins: Set<string>;
+}
+
+function commitsOf(v: unknown): PrCommit[] {
+  if (!Array.isArray(v)) return [];
+  const out: PrCommit[] = [];
+  for (const item of v) {
+    const r = obj(item);
+    if (!r || typeof r.oid !== "string") continue;
+    out.push({ oid: r.oid, committedDate: str(r.committedDate), headline: str(r.messageHeadline), body: str(r.messageBody) });
+  }
+  return out;
+}
+
+/** 一个 PR 做规矩分析要的全部数据：gh pr view，再加行内评论和 bot 名单。pr view 或行内评论失败返回 null；bot 名单拿不到按空集合算。 */
+export async function prLessonData(cwd: string, number: number, timeoutMs: number): Promise<PrLessonData | null> {
+  const fields = "number,title,body,url,author,headRefName,mergedAt,reviews,comments,commits";
+  const j = obj(parseJson(await runGh(cwd, ["pr", "view", String(number), "--json", fields], timeoutMs, 16 * 1024 * 1024)));
+  if (!j || typeof j.number !== "number") return null;
+  const inline = await reviewComments(cwd, number, timeoutMs);
+  if (inline === null) return null;
+  const authors = await reviewAuthors(cwd, number, timeoutMs);
+  return {
+    number: j.number,
+    title: str(j.title),
+    body: str(j.body),
+    url: str(j.url),
+    author: loginOf(j.author),
+    headRefName: str(j.headRefName),
+    mergedAt: typeof j.mergedAt === "string" && j.mergedAt !== "" ? j.mergedAt : null,
+    reviews: reviewsOf(j.reviews),
+    comments: commentsOf(j.comments),
+    inline,
+    commits: commitsOf(j.commits),
+    botLogins: authors?.botLogins ?? new Set(),
+  };
+}
+
+/** gh api compare：两个提交之间改了哪些文件和 patch。没有 patch 的文件（二进制）patch 为 ""。失败返回 null。 */
+export async function compareFiles(cwd: string, base: string, head: string, timeoutMs: number): Promise<{ filename: string; patch: string }[] | null> {
+  const rows = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/compare/${base}...${head}`, "--jq", ".files[] | {filename, patch}"], timeoutMs, 8 * 1024 * 1024));
+  if (rows === null) return null;
+  const out: { filename: string; patch: string }[] = [];
+  for (const item of rows) {
+    const r = obj(item);
+    if (!r || typeof r.filename !== "string") continue;
+    out.push({ filename: r.filename, patch: typeof r.patch === "string" ? r.patch : "" });
+  }
+  return out;
+}

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, Tray } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, shell, Tray } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -58,7 +58,8 @@ import { EPIC_HISTORY_READ_ENTRIES } from "./epics/epic-history-view";
 import { EpicService } from "./epics/epic-service";
 import { FeaturesRepo } from "./db/features-repo";
 import { currentLang, onLangChange, setLang } from "./i18n";
-import { writeSessionGuide } from "./claude/session-guide";
+import { pruneSessionGuides, writeSessionGuide } from "./claude/session-guide";
+import { safeSessionLessons } from "./lessons/select";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
 import { HandoffRunner } from "./handoff/runner";
@@ -102,7 +103,12 @@ import { pathKey } from "./util/env";
 import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { TicketService } from "./tickets/ticket-service";
-import { applyGhResolution, branchRuns, failedLog, prInfo, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
+import { applyGhResolution, branchRuns, compareFiles, failedLog, ghBinary, mergedPrs, prInfo, prLessonData, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
+import { LessonsRepo } from "./db/lessons-repo";
+import { RepoIdentity } from "./lessons/repo-identity";
+import { readTailLines, TRANSCRIPT_TAIL_BYTES } from "./lessons/tail";
+import { LessonRunner } from "./lessons/lesson-runner";
+import { LessonsService } from "./lessons/lessons-service";
 import type { HeadlessExecDeps } from "./handoff/headless-exec";
 import * as git from "./tickets/git";
 import { canSend } from "./safe-send";
@@ -425,6 +431,65 @@ async function bootstrap(): Promise<void> {
     run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID,
     signal: headlessAbort.signal, onUsage: recordHeadlessUsage, log: logger,
   };
+  // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
+  const lessonsRepo = new LessonsRepo(db);
+  const repoIdentity = new RepoIdentity();
+  // 带 hash 的 session 说明文件每次规矩变了就多一份，启动时清掉 30 天没用过的。
+  pruneSessionGuides(paths.mcp, Date.now());
+  const lessonRunner = new LessonRunner({
+    repo: lessonsRepo, identity: repoIdentity, jobs,
+    gh: { mergedPrs, prLessonData, compareFiles, available: () => ghBinary() !== null },
+    headless: { ...judgeDeps },
+    ticketForBranch: (slug, branch) => tickets.reposByBranch(branch).find((r) => repoIdentity.slugOf(r.repoPath) === slug)?.ticketKey ?? null,
+    butlerContext: async (key, wantTranscripts) => {
+      const ps = handoffs.listByTicket(key, 20).flatMap((h) => (h.payload ? [h.payload] : []));
+      const seen = new Set<string>();
+      const transcripts: string[][] = [];
+      if (wantTranscripts) {
+        for (const s of sessions.listByTicket(key)) {
+          for (const id of sessions.chainOf(s.id)) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const file = findTranscript(paths.claudeProjects, id);
+            if (!file) continue;
+            try {
+              transcripts.push(await readTailLines(file, TRANSCRIPT_TAIL_BYTES));
+            } catch {
+              // 读不了的记录跳过。
+            }
+          }
+        }
+      }
+      return { decisions: ps.flatMap((p) => p.decisions.map((d) => d.statement)), learnings: ps.flatMap((p) => p.learnings), transcripts };
+    },
+    lang: () => currentLang(), now: Date.now, notify: () => notify(), log: logger,
+  });
+  // 复盘规矩页：仓库路径直接查表（含已归档的 ticket 仓库）；归组建议按 ticket 和 feature 各算一组。
+  const repoPathRows = (sql: string): { k: number | string; repo_path: string }[] => db.prepare(sql).all() as unknown as { k: number | string; repo_path: string }[];
+  const lessonsService = new LessonsService({
+    repo: lessonsRepo, identity: repoIdentity, runner: lessonRunner,
+    knownRepoPaths: () => [
+      ...new Set(
+        repoPathRows(
+          `SELECT ticket_key AS k, repo_path FROM ticket_repos UNION SELECT feature_id AS k, repo_path FROM feature_repos UNION SELECT epic_id AS k, repo_path FROM epic_repos`,
+        ).map((r) => r.repo_path),
+      ),
+    ],
+    repoGroups: () => {
+      const groups = new Map<string, Set<string>>();
+      for (const [kind, sql] of [
+        ["t", `SELECT ticket_key AS k, repo_path FROM ticket_repos`],
+        ["f", `SELECT feature_id AS k, repo_path FROM feature_repos`],
+      ] as const) {
+        for (const r of repoPathRows(sql)) {
+          const key = `${kind}:${r.k}`;
+          (groups.get(key) ?? groups.set(key, new Set()).get(key)!).add(r.repo_path);
+        }
+      }
+      return [...groups.values()].map((g) => [...g]);
+    },
+    ghAvailable: () => ghBinary() !== null, openExternal: (url) => void shell.openExternal(url), now: Date.now, notify: () => notify(),
+  });
   /** 开着终端的 Butler session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
   const needsYouHeads = (): NeedsYouHead[] => {
     const heads = new Map<string, NeedsYouHead>();
@@ -489,7 +554,8 @@ async function bootstrap(): Promise<void> {
     mcpConfig: memoryMcpConfig,
     // 装着的 butler-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
     mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, allowTools: SESSIONS_AUTO_ALLOW, gateCommand: health.hookBinCurrent() && existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
-    guidePath: (kind) => writeSessionGuide(paths.mcp, currentLang(), kind),
+    guidePath: (kind, repoPaths) =>
+      writeSessionGuide(paths.mcp, currentLang(), kind, kind === "ticket" ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger) : []),
     featureMcpConfig,
     epicMcpConfig,
     butlerWorkspace: paths.butlerWorkspace,
@@ -669,6 +735,7 @@ async function bootstrap(): Promise<void> {
   const checkSchedule = (trigger: ScheduleTrigger) => {
     if (headlessAbort.signal.aborted) return Promise.resolve();
     void butlerPatrol.check();
+    void lessonRunner.daily().catch((e: unknown) => logger("lessons: daily pull failed", e));
     return scheduler.check(trigger);
   };
 
@@ -930,6 +997,7 @@ async function bootstrap(): Promise<void> {
     gh: { prStatus, branchRuns, failedLog, reviewComments, reviewAuthors },
     git: { firstCommitAt: git.firstCommitAt },
     stages: prStages,
+    onMerged: (t, n) => lessonRunner.merged(t.repoPath, n),
     // PR 的状态或 review 变了：在最新的 handoff 上换掉 prs，存成一条 refresh。ticket 状态、PR 标签、合并后清理 worktree 都照旧走 ingest。
     onPrChanged: (key) => {
       const base = handoffs.latestValid(key);
@@ -1135,6 +1203,7 @@ async function bootstrap(): Promise<void> {
     closeIdleSessions: (ids) => sessionCleanup.closeIdleNow(ids),
     deleteHiddenSessions: (ids) => sessionCleanup.deleteHidden(ids),
     inbox: inboxService,
+    lessons: lessonsService,
     prStages: new PrStagesService({
       tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id) },
       features: {
@@ -1239,6 +1308,9 @@ async function bootstrap(): Promise<void> {
   // 等 git 和 gh 的路径按登录 shell 的 PATH 解析好再查：第一轮就可能看到合并、触发 worktree 清理。已经开始退出就不再启动。
   void healthReady.then(() => {
     if (!headlessAbort.signal.aborted) prWatcher.start();
+  });
+  void healthReady.then(() => {
+    if (!headlessAbort.signal.aborted) lessonRunner.start();
   });
   activityMonitor.start();
   usageScanner.start(usageScanMs(process.env));

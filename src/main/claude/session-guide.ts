@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { MAX_RUNNING_FEATURES_PER_EPIC } from "../../shared/control";
 import type { Lang } from "../../shared/i18n";
+import type { SessionLesson } from "../../shared/lessons";
 
 /**
  * ticket：ticket session 和修复 session；coordinator：ticket 总控、feature 总控；epic：epic session（BTL-190 第 4 点起单独一种，它开的是 feature 总控）；
@@ -82,16 +84,55 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : "Butler may refresh a session whose context grows too long: it writes a handoff for you, clears the session, and has you pick up from memory; just follow what it says. Save important decisions and agreements to memory with remember as you go.",
 ];
 
-export function sessionGuide(lang: Lang, kind: GuideKind): string {
-  return GUIDE_SECTIONS.map((s) => s(lang, kind)).filter((s): s is string => !!s).join("\n\n") + "\n";
+/** 用户确认过的规矩，只给 ticket session 和修复 session。 */
+function lessonsSection(lang: Lang, kind: GuideKind, lessons: SessionLesson[]): string | null {
+  if (kind !== "ticket" || lessons.length === 0) return null;
+  const head =
+    lang === "zh"
+      ? "下面是从这个仓库以前的 review 里总结出来、用户确认过的规矩。写代码时就照着做；做自我 review 时逐条对照，在 report 里写明对照的结果（哪几条相关、有没有违反、改了什么）。"
+      : "Below are rules distilled from this repo's earlier reviews and confirmed by the user. Follow them when you write code; in your self-review, check against them one by one, and say in your report what you found (which ones apply, whether any was violated, what you changed).";
+  return [head, ...lessons.map((l) => `- [${l.label}] ${l.text}`)].join("\n");
 }
 
-/** 写到 <mcpDir>/guide-<kind>-<lang>.md；内容没变就不重写，返回路径。 */
-export function writeSessionGuide(mcpDir: string, lang: Lang, kind: GuideKind): string {
-  const file = join(mcpDir, `guide-${kind}-${lang}.md`);
-  const text = sessionGuide(lang, kind);
+export function sessionGuide(lang: Lang, kind: GuideKind, lessons: SessionLesson[] = []): string {
+  const parts = GUIDE_SECTIONS.map((s) => s(lang, kind)).filter((s): s is string => !!s);
+  const l = lessonsSection(lang, kind, lessons);
+  if (l) parts.push(l);
+  return parts.join("\n\n") + "\n";
+}
+
+/** lessons 为空：写 <mcpDir>/guide-<kind>-<lang>.md。不为空：写 guide-<kind>-<lang>-<内容 sha256 前 12 位>.md。内容没变就不重写，返回路径。 */
+export function writeSessionGuide(mcpDir: string, lang: Lang, kind: GuideKind, lessons: SessionLesson[] = []): string {
+  const text = sessionGuide(lang, kind, lessons);
+  const hash = lessons.length > 0 ? `-${createHash("sha256").update(text).digest("hex").slice(0, 12)}` : "";
+  const file = join(mcpDir, `guide-${kind}-${lang}${hash}.md`);
   if (existsSync(file) && readFileSync(file, "utf8") === text) return file;
   mkdirSync(mcpDir, { recursive: true });
   writeFileSync(file, text);
   return file;
+}
+
+const GUIDE_MAX_AGE_MS = 30 * 24 * 3600_000;
+
+/** 删掉 mcpDir 里 30 天没改过的 guide-<kind>-<lang>-<12 位 hex>.md（不碰没有 hash 的那几份）；返回删了几个。启动时调一次。 */
+export function pruneSessionGuides(mcpDir: string, now: number): number {
+  let names: string[];
+  try {
+    names = readdirSync(mcpDir);
+  } catch {
+    return 0;
+  }
+  let n = 0;
+  for (const name of names) {
+    if (!/^guide-[a-z]+-[a-z]+-[0-9a-f]{12}\.md$/.test(name)) continue;
+    try {
+      const file = join(mcpDir, name);
+      if (now - statSync(file).mtimeMs <= GUIDE_MAX_AGE_MS) continue;
+      unlinkSync(file);
+      n++;
+    } catch {
+      /* 单个文件出错不影响其他的 */
+    }
+  }
+  return n;
 }

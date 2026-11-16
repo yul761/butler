@@ -41,14 +41,14 @@ test("a ticket over two repos: a session per repo and a coordinator that sees bo
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await page.getByRole("button", { name: S.switchAndOpen, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
-  await expect.poll(fakeLog).toContain(`cwd=${s.apiRepo} adddirs=\n`);
+  await expect.poll(fakeLog).toContain(`cwd=${s.apiRepo} adddirs= guide=`);
   await expect(page.locator(".sessions-bar .session .place")).toHaveText(["api"]);
 
   // 4. 总控：在工作区目录里，两个仓库都用 --add-dir 加进去。
   await page.getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
   const worktree = join(`${s.repo}-worktrees`, "FULL-1");
   const workspace = join(s.butlerHome, "workspaces", "FULL-1");
-  await expect.poll(fakeLog).toContain(`cwd=${workspace} adddirs=${worktree}|${s.apiRepo}\n`);
+  await expect.poll(fakeLog).toContain(`cwd=${workspace} adddirs=${worktree}|${s.apiRepo} guide=`);
   await expect(page.locator(".sessions-bar .session .place")).toHaveText([S.coordinator, "api"]);
 
   // 5. 总控的 mcp 配置里有 butler-sessions；按配置启动它，调用 start_session。普通 session 也挂 butler-sessions
@@ -77,7 +77,7 @@ test("a ticket over two repos: a session per repo and a coordinator that sees bo
     expect(started.repo).toBe("repo");
 
     // 子 session 出现在同一个 ticket 下，开在 repo 的 worktree 里，任务作为第一条消息提交。
-    await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-sessions cwd=${worktree} adddirs=\n`);
+    await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-sessions cwd=${worktree} adddirs= guide=`);
     const childButton = page.locator(".sessions-bar .session").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
     await expect(childButton).toBeVisible();
     await expect(childButton).toHaveAttribute("title", /^总控 session 交给你的任务：[\n ]+boss-says-build-the-ui[\n ]+开始之前先用 recall 读一下 ticket 记忆（butler-memory）里的背景和约定。/);

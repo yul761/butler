@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, branchRuns, checksOf, ciOf, failedLog, ghBinary, prInfo, prStatus, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
+import { applyGhResolution, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, prLessonData, prStatus, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -282,5 +282,74 @@ describe("reviewerKind", () => {
     for (const app of ["chatgpt-codex-connector", "CodeRabbitai", "coderabbitai", "gemini-code-assist", "sourcery-ai", "codecov", "sonarcloud", "vercel", "netlify", "github-advanced-security", "cursor"]) {
       expect(reviewerKind(app, "me")).toBe("bot");
     }
+  });
+});
+
+describe.skipIf(process.platform === "win32")("mergedPrs", () => {
+  const rows = `echo '{"number":2,"mergedAt":"2026-11-03T00:00:00Z","headRefName":"b"}'\necho '{"number":1,"mergedAt":"2026-11-01T00:00:00Z","headRefName":"a"}'`;
+
+  it("sorts by mergedAt ascending and adds --search only with an after date", async () => {
+    const dir = fakeGh(`echo "$@" > "$(dirname "$0")/args.txt"\n${rows}`);
+    const list = await mergedPrs(dir, "2026-11-01T00:00:00Z", 50, 5000);
+    expect(list?.map((p) => p.number)).toEqual([1, 2]);
+    expect(list?.[0]).toEqual({ number: 1, mergedAt: "2026-11-01T00:00:00Z", headRefName: "a" });
+    const args = readFileSync(join(dir, "args.txt"), "utf8");
+    expect(args).toContain("--search");
+    expect(args).toContain("merged:>2026-11-01T00:00:00Z");
+    await mergedPrs(dir, null, 50, 5000);
+    expect(readFileSync(join(dir, "args.txt"), "utf8")).not.toContain("--search");
+  });
+
+  it("returns null when gh fails", async () => {
+    const dir = fakeGh("exit 1");
+    expect(await mergedPrs(dir, null, 50, 5000)).toBeNull();
+  });
+});
+
+describe.skipIf(process.platform === "win32")("prLessonData", () => {
+  const script = (view: string) => `case "$1 $2" in
+"pr view")
+${view}
+;;
+"api repos/{owner}/{repo}/pulls/5/comments") echo '{"id":11,"user":{"login":"bot"},"body":"nit","created_at":"2026-11-02T00:00:00Z","path":"a.ts","line":3,"pull_request_review_id":99}' ;;
+"api repos/{owner}/{repo}/pulls/5/reviews") echo '{"id":99,"node_id":"PRR_1","user":{"login":"coderabbitai[bot]","type":"Bot"}}' ;;
+*) exit 1 ;;
+esac`;
+  const view = `cat <<'JSON'
+{"number":5,"title":"T","body":"B","url":"https://x/pull/5","author":{"login":"me"},"headRefName":"feat","mergedAt":"2026-11-03T00:00:00Z","reviews":[{"id":"PRR_1","author":{"login":"coderabbitai"},"state":"COMMENTED","body":"r","submittedAt":"2026-11-02T00:00:00Z"}],"comments":[{"id":"IC_1","author":{"login":"me"},"body":"c","createdAt":"2026-11-02T01:00:00Z","url":"u"}],"commits":[{"oid":"abc","committedDate":"2026-11-01T00:00:00Z","messageHeadline":"fix it","messageBody":"why"}]}
+JSON`;
+
+  it("combines pr view, inline comments and bot authors", async () => {
+    const dir = fakeGh(script(view));
+    const d = await prLessonData(dir, 5, 5000);
+    expect(d?.title).toBe("T");
+    expect(d?.author).toBe("me");
+    expect(d?.commits[0]).toEqual({ oid: "abc", committedDate: "2026-11-01T00:00:00Z", headline: "fix it", body: "why" });
+    expect(d?.reviews).toHaveLength(1);
+    expect(d?.comments).toHaveLength(1);
+    expect(d?.inline.length).toBe(1);
+    expect(d?.botLogins.has("coderabbitai")).toBe(true);
+  });
+
+  it("returns null when pr view fails", async () => {
+    const dir = fakeGh(script("exit 1"));
+    expect(await prLessonData(dir, 5, 5000)).toBeNull();
+  });
+});
+
+describe.skipIf(process.platform === "win32")("compareFiles", () => {
+  it("maps files and uses an empty patch when missing", async () => {
+    const dir = fakeGh(`echo "$@" > "$(dirname "$0")/args.txt"\necho '{"filename":"a.ts","patch":"@@ ..."}'\necho '{"filename":"b.png","patch":null}'\necho '{"filename":"c.bin"}'`);
+    expect(await compareFiles(dir, "base", "head", 5000)).toEqual([
+      { filename: "a.ts", patch: "@@ ..." },
+      { filename: "b.png", patch: "" },
+      { filename: "c.bin", patch: "" },
+    ]);
+    expect(readFileSync(join(dir, "args.txt"), "utf8")).toContain("repos/{owner}/{repo}/compare/base...head");
+  });
+
+  it("returns null when gh fails", async () => {
+    const dir = fakeGh("exit 1");
+    expect(await compareFiles(dir, "a", "b", 5000)).toBeNull();
   });
 });

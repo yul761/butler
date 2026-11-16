@@ -4,6 +4,7 @@ import type {
   AddRepoInput, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
 import type { PrStagesScope } from "../../shared/pr-stages";
+import type { LessonAction } from "../../shared/lessons";
 import { EPIC_NAME_LIMIT } from "../epics/epic-service";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 import { M } from "../strings";
@@ -266,4 +267,61 @@ export function openEpicArg(v: unknown): OpenEpicSessionRequest {
     ...(o.sessionId !== undefined && { sessionId: sessionIdArg(o.sessionId) }),
     ...(o.prefill !== undefined && { prefill: o.prefill }),
   };
+}
+
+const LESSON_TEXT_LIMIT = 2000;
+
+function lessonIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error("invalid lesson id");
+  return v;
+}
+
+/** 规矩正文和产品名：去掉首尾空白后不能为空，最长 2000 字。 */
+function lessonTextArg(v: unknown): string {
+  if (typeof v !== "string") throw new Error("invalid lesson text");
+  const t = v.trim();
+  if (!t || t.length > LESSON_TEXT_LIMIT) throw new Error("invalid lesson text");
+  return t;
+}
+
+function lessonSlugArg(v: unknown): string {
+  if (typeof v !== "string" || !v || v.length > 512) throw new Error("invalid repo slug");
+  return v;
+}
+
+/** 复盘规矩页的操作。 */
+export function lessonActionArg(v: unknown): LessonAction {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid lesson action");
+  switch (o.op) {
+    case "confirm":
+      return o.text === undefined ? { op: "confirm", id: lessonIdArg(o.id) } : { op: "confirm", id: lessonIdArg(o.id), text: lessonTextArg(o.text) };
+    case "reject":
+      return { op: "reject", id: lessonIdArg(o.id) };
+    case "edit":
+      return { op: "edit", id: lessonIdArg(o.id), text: lessonTextArg(o.text) };
+    case "setDisabled":
+      if (typeof o.disabled !== "boolean") throw new Error("invalid lesson action");
+      return { op: "setDisabled", id: lessonIdArg(o.id), disabled: o.disabled };
+    case "delete":
+      return { op: "delete", id: lessonIdArg(o.id) };
+    case "merge":
+      return { op: "merge", keepId: lessonIdArg(o.keepId), dropId: lessonIdArg(o.dropId), text: lessonTextArg(o.text) };
+    case "createProduct": {
+      if (!Array.isArray(o.slugs) || o.slugs.length > 100) throw new Error("invalid lesson action");
+      return { op: "createProduct", name: lessonTextArg(o.name), slugs: o.slugs.map(lessonSlugArg) };
+    }
+    case "deleteProduct":
+      return { op: "deleteProduct", id: lessonIdArg(o.id) };
+    case "addToProduct":
+      return { op: "addToProduct", id: lessonIdArg(o.id), slug: lessonSlugArg(o.slug) };
+    case "removeFromProduct":
+      return { op: "removeFromProduct", id: lessonIdArg(o.id), slug: lessonSlugArg(o.slug) };
+    case "backfill":
+      return { op: "backfill", slug: lessonSlugArg(o.slug) };
+    case "openSource":
+      return { op: "openSource", sourceId: lessonIdArg(o.sourceId) };
+    default:
+      throw new Error("invalid lesson action");
+  }
 }
