@@ -90,6 +90,12 @@ export interface Material {
 export const MATERIAL_MAX_CHARS = 60_000;
 const ITEM_BODY_MAX = 1500;
 const PATCH_MAX = 4000;
+const PR_BODY_MAX = 8000;
+const TITLE_MAX = 500;
+const COMMITS_MAX = 100;
+const HEADLINE_MAX = 300;
+const NOTES_MAX = 50;
+const NOTE_MAX = 500;
 
 const H = {
   zh: { pr: "PR", body: "描述", commits: "提交", review: "评审意见", fixes: "之后的修改", butler: "Butler 上下文", decisions: "决定", learnings: "心得", excerpts: "对话摘录" },
@@ -101,8 +107,8 @@ const cut = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s)
 function render(m: Material, lang: Lang, o: { excerpts: boolean; fixes: boolean; bodyMax: number }): string {
   const h = H[lang];
   const p = m.pr;
-  const out: string[] = [`## ${h.pr} #${p.number}: ${p.title}`, p.url, `### ${h.body}`, p.body, `### ${h.commits}`];
-  for (const c of p.commits) out.push(`- ${c.oid.slice(0, 7)} ${c.headline}`);
+  const out: string[] = [`## ${h.pr} #${p.number}: ${cut(p.title, TITLE_MAX)}`, p.url, `### ${h.body}`, cut(p.body, PR_BODY_MAX), `### ${h.commits}`];
+  for (const c of p.commits.slice(0, COMMITS_MAX)) out.push(`- ${c.oid.slice(0, 7)} ${cut(c.headline, HEADLINE_MAX)}`);
   out.push(`### ${h.review}`);
   m.items.forEach((i, n) => {
     const where = i.path ? ` ${i.path}${i.line !== null ? `:${i.line}` : ""}` : "";
@@ -115,8 +121,8 @@ function render(m: Material, lang: Lang, o: { excerpts: boolean; fixes: boolean;
   const b = m.butler;
   if (b) {
     out.push(`### ${h.butler} (${b.ticketKey})`);
-    if (b.decisions.length > 0) out.push(`#### ${h.decisions}`, ...b.decisions.map((d) => `- ${d}`));
-    if (b.learnings.length > 0) out.push(`#### ${h.learnings}`, ...b.learnings.map((d) => `- ${d}`));
+    if (b.decisions.length > 0) out.push(`#### ${h.decisions}`, ...b.decisions.slice(0, NOTES_MAX).map((d) => `- ${cut(d, NOTE_MAX)}`));
+    if (b.learnings.length > 0) out.push(`#### ${h.learnings}`, ...b.learnings.slice(0, NOTES_MAX).map((d) => `- ${cut(d, NOTE_MAX)}`));
     if (o.excerpts && b.excerpts.length > 0) out.push(`#### ${h.excerpts}`, ...b.excerpts);
   }
   return out.join("\n");

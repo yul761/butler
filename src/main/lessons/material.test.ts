@@ -112,4 +112,24 @@ describe("materialText", () => {
     const t = materialText(m, "en");
     for (const s of ["PATCH", "f.ts", "BTL-1", "DEC", "LRN", "EXC"]) expect(t).toContain(s);
   });
+  const names = Array.from({ length: 12 }, (_, i) => `rev${i}`);
+  const mk = (n: number, body: string, prBody = "B"): Material => ({
+    pr: pr({ body: prBody }),
+    items: Array.from({ length: n }, (_, i) => ({
+      who: "human" as const, author: n === 12 ? names[i]! : `user${i}`, body, url: null, path: null, line: null, at: iso("10:00"),
+    })),
+    fixes: [], butler: null,
+  });
+  it("caps a 70k PR body so every author survives", () => {
+    const t = materialText(mk(12, "y".repeat(1500), "p".repeat(70_000)), "en");
+    expect(t.length).toBeLessThanOrEqual(MATERIAL_MAX_CHARS);
+    for (const a of names) expect(t).toContain(a);
+  });
+  it("falls back to per-item shares when hundreds of items overflow", () => {
+    const m = mk(300, "z".repeat(1500));
+    const t = materialText(m, "zh");
+    expect(t.length).toBeLessThanOrEqual(MATERIAL_MAX_CHARS);
+    for (const i of m.items) expect(t).toContain(`${i.author} (`);
+    expect(t).toContain("user299 (");
+  });
 });
