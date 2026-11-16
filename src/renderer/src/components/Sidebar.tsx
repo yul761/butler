@@ -3,7 +3,9 @@ import type { Route } from "../App";
 import { groupTickets } from "../group";
 import { featuresOutsideEpics } from "./epic-row";
 import { useCollapsed } from "./useCollapsed";
+import { api } from "../api";
 import { S, STATUS_LABEL } from "../strings";
+import { useStateRefetch } from "./useStateRefetch";
 
 interface Props {
   /** 单独的 ticket（feature 下的 ticket 在 features 里）。 */
@@ -30,6 +32,7 @@ const NEEDS_YOU_DESC_ID = "sidebar-needs-you-count";
 const cls = (base: string, active: boolean) => (active ? `${base} active` : base);
 
 export function Sidebar({ tickets, features, epics, unclaimedCount, needsYouCount, route, onNavigate, onNew, onNewFeature, onNewEpic, keepAwake, onKeepAwake }: Props) {
+  const lessonsPending = useStateRefetch("lessons-pending", api.lessonsPending) ?? 0;
   const looseFeatures = featuresOutsideEpics(features, epics);
   const ticketButton = (t: TicketView) => (
     <button
@@ -94,6 +97,9 @@ export function Sidebar({ tickets, features, epics, unclaimedCount, needsYouCoun
         {S.unclaimed}{unclaimedCount > 0 ? ` (${unclaimedCount})` : ""}
       </button>
       <button className={cls("nav", route.page === "archived")} onClick={() => onNavigate({ page: "archived" })}>{S.archived}</button>
+      <button className={cls("nav", route.page === "lessons")} data-testid="lessons-nav" title={lessonsPending > 0 ? S.lessonsNavCount(lessonsPending) : undefined} onClick={() => onNavigate({ page: "lessons" })}>
+        {S.lessons}{lessonsPending > 0 ? ` · ${lessonsPending}` : ""}
+      </button>
       <button className={cls("nav", route.page === "audit")} onClick={() => onNavigate({ page: "audit" })}>{S.audit}</button>
       <button className={cls("nav", route.page === "settings")} onClick={() => onNavigate({ page: "settings" })}>{S.settings}</button>
       <label className={cls("keep-awake", keepAwake)} title={S.keepAwakeHint}>

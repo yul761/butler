@@ -16,6 +16,7 @@ import { NowPage } from "./components/NowPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
 import { TicketPage } from "./components/TicketPage";
+import { LessonsPage } from "./components/LessonsPage";
 import { UnclaimedPage } from "./components/UnclaimedPage";
 import { Wizard } from "./components/Wizard";
 import { S } from "./strings";
@@ -35,7 +36,8 @@ export type Route =
   | { page: "unclaimed" }
   | { page: "archived" }
   | { page: "settings" }
-  | { page: "audit" };
+  | { page: "audit" }
+  | { page: "lessons" };
 
 export function App() {
   const [route, setRoute] = useState<Route>({ page: "home" });
@@ -214,6 +216,7 @@ export function App() {
             {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} onEpicRestored={goEpic} />}
             {route.page === "settings" && <SettingsPage onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "audit" && <AuditPage />}
+            {route.page === "lessons" && <LessonsPage />}
           </>
         )}
       </main>
