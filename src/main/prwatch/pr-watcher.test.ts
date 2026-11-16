@@ -473,6 +473,24 @@ describe("PrWatcher stages", () => {
     expect(s.reviewAuthors).toHaveBeenCalledTimes(1);
   });
 
+  it("a review later dismissed is recorded again (one extra REST call), and repeat polls then record nothing", async () => {
+    const s = withStages();
+    const approved = { ...review, state: "APPROVED" as const };
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [approved] }));
+    await s.w.check();
+    expect(s.reviewAuthors).toHaveBeenCalledTimes(1);
+    s.advance(PR_FAST_MS);
+    s.gh.prStatus.mockResolvedValue(pr({ reviews: [{ ...approved, state: "DISMISSED" }] }));
+    await s.w.check();
+    expect(s.events.filter((e) => e.kind === "review").map((e) => e.data.state)).toEqual(["APPROVED", "DISMISSED"]);
+    expect(s.reviewAuthors).toHaveBeenCalledTimes(2);
+    s.advance(PR_FAST_MS);
+    const adds = s.stages.add.mock.calls.length;
+    await s.w.check();
+    expect(s.reviewAuthors).toHaveBeenCalledTimes(2);
+    expect(s.stages.add.mock.results.slice(adds).every((r) => r.value === false)).toBe(true);
+  });
+
   it("falls back to the name list when the REST reviews call fails, without blocking", async () => {
     const s = withStages();
     s.reviewAuthors.mockResolvedValue(null);
@@ -502,7 +520,7 @@ describe("PrWatcher stages", () => {
     s.gh.prStatus.mockResolvedValue(pr({ reviews: [copilot] }));
     s.reviewComments.mockResolvedValue(null);
     await s.w.check();
-    expect(s.stages.has("1:review:PRR_kwCopilot1")).toBe(true);
+    expect(s.stages.has("1:review:b:PRR_kwCopilot1:COMMENTED")).toBe(true);
     for (let i = 0; i < 4; i++) {
       s.advance(PR_FAST_MS);
       await s.w.check();

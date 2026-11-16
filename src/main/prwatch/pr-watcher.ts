@@ -3,7 +3,7 @@ import type { PrStageRepo } from "../db/pr-stage-repo";
 import { reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prStatus, type reviewAuthors, type ReviewAuthors, type reviewComments } from "../tickets/gh";
 import type { firstCommitAt } from "../tickets/git";
 import type { WatchedPr } from "../../shared/types";
-import { prObservations } from "./pr-observe";
+import { prObservations, stageKey } from "./pr-observe";
 
 /** 有检查在跑、session 开着：每分钟查一次。 */
 export const PR_FAST_MS = 60_000;
@@ -223,13 +223,13 @@ export class PrWatcher {
     try {
       let inline: PrComment[] = [];
       // 第一次看到这个 PR（升级前就有的行、或分支上先有 CI 后开 PR）：当作 PR 刚出现，补上 pr_opened 和当前的 CI。
-      const first = pr !== null && !stages.has(`${t.repoId}:opened:${pr.number}`);
+      const first = pr !== null && !stages.has(stageKey.opened(t, pr.number));
       const from = first && prev ? { ...prev, number: null, state: null } : prev;
       // Copilot 的 review 要数行内评论：新的（或之前没拉到、不到 3 次的）才拉。所有 review 照常马上记，行内评论晚到也会被数上。
       const wanted = (pr?.reviews ?? []).filter((r) => {
         if (r.state === "PENDING" || reviewerKind(r.author, pr?.author ?? "") !== "copilot") return false;
         const tries = this.inlineTries.get(`${t.repoId}:${r.id}`);
-        return tries === undefined ? !stages.has(`${t.repoId}:review:${r.id}`) : tries < INLINE_TRIES_MAX;
+        return tries === undefined ? !stages.has(stageKey.review(t, r.id, r.state)) : tries < INLINE_TRIES_MAX;
       });
       const fetcher = this.d.gh.reviewComments;
       if (pr && wanted.length > 0 && fetcher) {
@@ -244,11 +244,11 @@ export class PrWatcher {
       // 谁是 Bot：gh pr view 的作者没有类型。有新的、按名字认是人的 review 才问一次 REST；失败按名字认，不拦。
       let bots: ReviewAuthors | null = null;
       const authors = this.d.gh.reviewAuthors;
-      const fresh = (pr?.reviews ?? []).some((r) => r.state !== "PENDING" && reviewerKind(r.author, pr?.author ?? "") === "human" && !stages.has(`${t.repoId}:review:${r.id}`));
+      const fresh = (pr?.reviews ?? []).some((r) => r.state !== "PENDING" && reviewerKind(r.author, pr?.author ?? "") === "human" && !stages.has(stageKey.review(t, r.id, r.state)));
       if (pr && fresh && authors) bots = await this.gh(() => authors(t.cwd, pr.number, PR_GH_TIMEOUT_MS));
       let firstCommit = pr?.firstCommitAt ?? null;
       // 本地的一次 git 调用：每轮都问，直到记下来为止（没有 PR 时 headSha 来自远端的 workflow run，本地新提交不会让它变）。
-      if (!pr && !stages.has(`${t.repoId}:first_commit:${t.branch}`)) {
+      if (!pr && !stages.has(stageKey.firstCommit(t))) {
         firstCommit = await this.d.git.firstCommitAt(t.cwd, t.branch);
       }
       let added = false;

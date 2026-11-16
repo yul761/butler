@@ -25,7 +25,7 @@ const keys = (o: ReturnType<typeof prObservations>) => o.map((x) => x.dedupeKey)
 describe("prObservations", () => {
   it("records a new PR with its CI, reviews and comments", () => {
     const o = prObservations(t, null, next(), pr(), [comment("i1", { reviewId: "r1", path: "a.ts", line: 3 })], 5, 1000);
-    expect(keys(o)).toEqual(["3:first_commit:b", "3:opened:7", "3:ci:a1:pending:1000", "3:review:r1", "3:review:r2", "3:comment:c1", "3:comment:i1"]);
+    expect(keys(o)).toEqual(["3:first_commit:b", "3:opened:b:7", "3:ci:b:a1:pending:1000", "3:review:b:r1:COMMENTED", "3:review:b:r2:APPROVED", "3:comment:b:c1", "3:comment:b:i1"]);
     expect(o[0].event).toMatchObject({ kind: "first_commit", at: 5, ticketKey: "BTL-1", repoId: 3, branch: "b" });
     expect(o[2].event).toMatchObject({ kind: "ci", at: 1000, data: { result: "pending", sha: "a1" } });
     expect(o[3].event).toMatchObject({ kind: "review", at: 10, data: { id: "r1", who: "copilot", state: "COMMENTED" } });
@@ -35,7 +35,7 @@ describe("prObservations", () => {
 
   it("repeats reviews but not push or CI when nothing changed", () => {
     const o = prObservations(t, prev(), next(), pr(), [], null, 1000);
-    expect(keys(o)).toEqual(["3:review:r1", "3:review:r2", "3:comment:c1"]);
+    expect(keys(o)).toEqual(["3:review:b:r1:COMMENTED", "3:review:b:r2:APPROVED", "3:comment:b:c1"]);
   });
 
   it("keeps a repeated CI result on the same sha (a rerun) as its own event", () => {
@@ -50,7 +50,7 @@ describe("prObservations", () => {
 
   it("puts the push before the CI of the new sha, so they sort that way at the same time", () => {
     const o = prObservations(t, prev({ ci: "passing" }), next({ headSha: "b2", ci: "pending" }), null, [], null, 1000);
-    expect(keys(o)).toEqual(["3:push:b2", "3:ci:b2:pending:1000"]);
+    expect(keys(o)).toEqual(["3:push:b:b2", "3:ci:b:b2:pending:1000"]);
     expect(o[0].event.at).toBe(o[1].event.at);
   });
 
@@ -65,7 +65,7 @@ describe("prObservations", () => {
 
   it("records the CI of a PR that appears on the sha CI already ran on", () => {
     const o = prObservations(t, prev({ number: null, state: null, ci: "passing" }), next({ ci: "passing" }), pr({ ci: "passing" }), [], null, 1000);
-    expect(keys(o).filter((k) => k !== "3:review:r1" && k !== "3:review:r2" && k !== "3:comment:c1")).toEqual(["3:opened:7", "3:ci:a1:passing:1000"]);
+    expect(keys(o).filter((k) => k !== "3:review:b:r1:COMMENTED" && k !== "3:review:b:r2:APPROVED" && k !== "3:comment:b:c1")).toEqual(["3:opened:b:7", "3:ci:b:a1:passing:1000"]);
   });
 
   it("records no CI without a PR", () => {
@@ -73,8 +73,8 @@ describe("prObservations", () => {
   });
 
   it("records merged and closed when the state changes", () => {
-    expect(keys(prObservations(t, prev(), next({ state: "merged" }), null, [], null, 1000))).toEqual(["3:merged:7"]);
-    expect(keys(prObservations(t, prev(), next({ state: "closed" }), null, [], null, 1000))).toEqual(["3:closed:7"]);
+    expect(keys(prObservations(t, prev(), next({ state: "merged" }), null, [], null, 1000))).toEqual(["3:merged:b:7"]);
+    expect(keys(prObservations(t, prev(), next({ state: "closed" }), null, [], null, 1000))).toEqual(["3:closed:b:7"]);
   });
 
   describe("a PR that merges", () => {
@@ -109,6 +109,22 @@ describe("prObservations", () => {
     });
     const o = prObservations(t, prev(), next(), p, [], null, 1000, { botReviewIds: new Set(["r9"]), botLogins: new Set(["someapp"]) });
     const who = Object.fromEntries(o.filter((x) => x.event.kind !== "ci").map((x) => [x.dedupeKey, x.event.data.who]));
-    expect(who).toMatchObject({ "3:review:r9": "bot", "3:review:r8": "human", "3:comment:c9": "bot", "3:comment:c8": "human" });
+    expect(who).toMatchObject({ "3:review:b:r9:APPROVED": "bot", "3:review:b:r8:APPROVED": "human", "3:comment:b:c9": "bot", "3:comment:b:c8": "human" });
+  });
+
+  it("keys carry the branch: the same sha and PR number on a new branch are new events; the same branch repeats the same keys", () => {
+    const on = (branch: string) => prObservations({ ...t, branch }, prev({ headSha: "a0", branch }), next({ branch }), pr(), [], null, 1000);
+    const a = keys(on("b"));
+    const c = keys(on("c"));
+    expect(a.filter((k) => c.includes(k))).toEqual([]);
+    expect(keys(on("b"))).toEqual(a);
+    expect(a.some((k) => k.includes(":push:b:a1"))).toBe(true);
+  });
+
+  it("a review that changes state (approved, then dismissed) gets a new key; PENDING stays skipped", () => {
+    const p = (state: "APPROVED" | "DISMISSED") => pr({ reviews: [{ id: "r2", author: "alice", state, body: "", submittedAt: 20 }, { id: "r3", author: "alice", state: "PENDING", body: "", submittedAt: 30 }], comments: [] });
+    const rk = (state: "APPROVED" | "DISMISSED") => keys(prObservations(t, prev(), next(), p(state), [], null, 1000)).filter((k) => k.includes(":review:"));
+    expect(rk("APPROVED")).toEqual(["3:review:b:r2:APPROVED"]);
+    expect(rk("DISMISSED")).toEqual(["3:review:b:r2:DISMISSED"]);
   });
 });
