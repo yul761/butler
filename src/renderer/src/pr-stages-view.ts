@@ -1,45 +1,44 @@
-import { useEffect, useState } from "react";
-import type { PrStagesScope, PrStagesView, PrTimelineEntry } from "../../shared/pr-stages";
+import type { PrStageCell, PrStagesScope, PrStagesView, PrTimelineEntry } from "../../shared/pr-stages";
 import { api } from "./api";
-import { reportError } from "./errors";
+import { useStateRefetch } from "./components/useStateRefetch";
 import { S } from "./strings";
-
-/** hook 事件一来一串：合并成一次重读（和 useInbox 一样）。 */
-const STATE_DEBOUNCE_MS = 80;
 
 /** 一块范围里每个仓库的 PR 进度：打开时取一次，之后每次 stateChanged 重取。还没取到时为 null。 */
 export function usePrStages(scope: PrStagesScope): PrStagesView[] | null {
-  // scope 每次渲染都是新对象：按内容决定要不要重新订阅。
-  const key = JSON.stringify(scope);
-  const [rows, setRows] = useState<PrStagesView[] | null>(null);
-  useEffect(() => {
-    let live = true;
-    let seq = 0;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const load = () => {
-      const n = ++seq;
-      api.prStages(JSON.parse(key) as PrStagesScope).then((v) => live && n === seq && setRows(v), reportError);
-    };
-    load();
-    const off = api.onStateChanged(() => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(load, STATE_DEBOUNCE_MS);
-    });
-    return () => {
-      live = false;
-      if (timer) clearTimeout(timer);
-      off();
-    };
-  }, [key]);
-  return rows;
+  return useStateRefetch(JSON.stringify(scope), () => api.prStages(scope));
 }
 
-/** 一条时间线的文字；回到开发的条目后面加一句。 */
+/** 一个 cell 上写的字：完成 / 失败 / 没开始用符号（调用方把 cellLabel 放进 title 和 aria-label），其余用文字；第 N 轮跟在后面。 */
+export function cellText(c: PrStageCell): string {
+  const base = ((): string => {
+    switch (c.state) {
+      case "done": return "✓";
+      case "failed": return "✗";
+      case "todo": return "—";
+      case "active": return S.prStageActive;
+      case "skipped": return S.prStageSkipped;
+      case "unknown": return S.prStageUnknown;
+      case "feature_level": return S.prStageFeatureLevel;
+    }
+  })();
+  return c.round > 1 ? `${base} ${S.prRound(c.round)}` : base;
+}
+
+/** 符号 cell 的 title / aria-label。 */
+export function cellLabel(c: PrStageCell): string {
+  switch (c.state) {
+    case "done": return S.prStateDone;
+    case "failed": return S.prStateFailed;
+    case "todo": return S.prStateTodo;
+    default: return cellText(c);
+  }
+}
+
+/** 一条时间线的文字：阶段名只在这里写一次；回到开发的条目后面加一句。 */
 export function timelineText(e: PrTimelineEntry): string {
-  const text = S.prTimeline[e.kind](e.detail);
+  const text = `${S.prStage[e.stage]} ${S.prTimeline[e.kind](e.detail)}`;
   return e.back ? `${text} ${S.prBackToDev}` : text;
 }
-
 export interface EpicPrRow {
   featureId: number;
   merged: number;

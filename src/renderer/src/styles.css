@@ -382,11 +382,11 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .pr-repo-name { font-weight: 600; margin-right: 4px; }
 .pr-cell { display: inline-flex; gap: 4px; align-items: center; padding: 2px 8px; border-radius: 6px; font-size: 12px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); }
 .pr-cell-name { font-weight: 600; }
-.pr-cell-round { font-size: 11px; opacity: 0.85; }
 .pr-cell.pr-done, .pr-cell.pr-feature_level { background: color-mix(in srgb, var(--ok) 18%, var(--bg)); border-color: var(--ok); color: var(--ok); }
 .pr-cell.pr-active { background: color-mix(in srgb, var(--accent) 18%, var(--bg)); border-color: var(--accent); color: var(--accent); }
 .pr-cell.pr-failed { background: color-mix(in srgb, var(--danger) 18%, var(--bg)); border-color: var(--danger); color: var(--danger); }
-.pr-cell.pr-todo, .pr-cell.pr-skipped, .pr-cell.pr-unknown { background: var(--panel); color: var(--muted); }
+.pr-cell.pr-todo, .pr-cell.pr-skipped { background: var(--panel); color: var(--muted); }
+.pr-cell.pr-unknown { background: var(--panel); color: var(--muted); border-style: dashed; font-style: italic; }
 .pr-link { margin-left: auto; font-size: 12px; }
 .pr-timeline-toggle { font-size: 12px; margin-top: 4px; }
 .pr-timeline { list-style: none; margin: 4px 0 0; padding: 0 0 0 8px; border-left: 2px solid var(--border); font-size: 12px; }
@@ -398,7 +398,7 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .pr-table tr.clickable, .pr-epic-row.clickable { cursor: pointer; }
 .pr-table tr.clickable:hover, .pr-epic-row.clickable:hover { background: var(--panel); }
 .pr-epic-row { display: flex; gap: 12px; align-items: center; padding: 5px 6px; border-top: 1px solid var(--border); }
-.pr-epic-name { flex: 0 0 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-epic-name { flex: 0 0 220px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-bar { flex: 1; display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--panel); border: 1px solid var(--border); }
 .pr-seg.pr-done { background: var(--ok); }
 .pr-seg.pr-active { background: var(--accent); }
