@@ -52,7 +52,8 @@ export function prObservations(
   if (pr) {
     for (const r of pr.reviews) {
       if (r.state === "PENDING") continue;
-      add("review", r.submittedAt, stageKey.review(t, r.id, r.state), { id: r.id, author: r.author, who: kindOf(r.author, r.id), state: r.state, body: r.body });
+      // DISMISSED 保留 GitHub 原来的 submittedAt，回放时会排到被撤销的 review 那个时间，改写之后的历史：用看到的时间。
+      add("review", r.state === "DISMISSED" ? seen : r.submittedAt, stageKey.review(t, r.id, r.state), { id: r.id, author: r.author, who: kindOf(r.author, r.id), state: r.state, body: r.body });
     }
     for (const c of [...pr.comments, ...inline]) {
       add("comment", c.createdAt, `${t.repoId}:comment:${t.branch}:${c.id}`, {

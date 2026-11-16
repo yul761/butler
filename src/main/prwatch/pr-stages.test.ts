@@ -355,12 +355,39 @@ describe("derivePrStages", () => {
       expect(v.timeline.at(-1)?.kind).toBe("human_dismissed");
     });
 
-    it("merged and then dismissed: the states do not change", () => {
-      const events = [...base, humanId(160, "APPROVED", "r1"), ev("merged", 165, { number: 7 })];
-      const before = states(derive(input({ events })));
-      const v = derive(input({ events: [...events, humanId(170, "DISMISSED", "r1")] }));
-      expect(states(v)).toEqual(before);
-      expect(v.timeline.at(-1)?.kind).toBe("human_dismissed");
+    it("a dismissal before the merge: peer review is skipped like any merge without an approval", () => {
+      const v = derive(input({ events: [...base, humanId(160, "APPROVED", "r1"), humanId(162, "DISMISSED", "r1"), ev("merged", 165, { number: 7 })] }));
+      expect(cell(v, "peer_review").state).toBe("skipped");
+      expect(cell(v, "merge").state).toBe("done");
+    });
+
+    const active = (v: ReturnType<typeof derive>) => v.stages.filter((c) => c.state === "active").map((c) => c.id);
+
+    it("changes requested during CI, dismissed, then CI passes: peer review becomes the one active step", () => {
+      const v = derive(input({ events: [ev("first_commit", 120), ci(140, "pending"), humanId(145, "CHANGES_REQUESTED", "r1"), humanId(146, "DISMISSED", "r1"), ci(150, "passing")] }));
+      expect(active(v)).toEqual(["peer_review"]);
+      expect(cell(v, "ci").state).toBe("done");
+    });
+
+    it("approval dismissed while another reviewer's changes request stands: peer review failed, CI the only active step", () => {
+      const v = derive(input({ events: [ev("first_commit", 120), ci(140, "pending"), humanId(145, "CHANGES_REQUESTED", "r1", "bob"), humanId(146, "APPROVED", "r2"), humanId(147, "DISMISSED", "r2")] }));
+      expect(cell(v, "peer_review").state).toBe("failed");
+      expect(active(v)).toEqual(["ci"]);
+    });
+
+    it("a late dismissal of a round-1 changes request does not erase round 2's rewind", () => {
+      const common = [ev("first_commit", 120), ci(140, "pending"), ci(150, "passing"), humanId(160, "CHANGES_REQUESTED", "r1")];
+      const later = [ev("push", 200, { sha: "x" }), ci(210, "pending"), ci(220, "passing"), humanId(230, "APPROVED", "r2", "bob")];
+      const before = derive(input({ events: [...common, ...later] }));
+      const v = derive(input({ events: [...common, ...later, humanId(300, "DISMISSED", "r1")] }));
+      expect(states(v)).toEqual(states(before));
+      expect(v.timeline.filter((t) => t.kind === "push")).toEqual(before.timeline.filter((t) => t.kind === "push"));
+    });
+
+    it("a stale approval does not count: alice approves then requests changes, bob's approval is dismissed", () => {
+      const v = derive(input({ events: [...base, humanId(160, "APPROVED", "r1"), humanId(170, "CHANGES_REQUESTED", "r2"), humanId(175, "APPROVED", "r3", "bob"), humanId(180, "DISMISSED", "r3", "bob")] }));
+      expect(cell(v, "peer_review").state).toBe("failed");
+      expect(cell(v, "merge").state).toBe("todo");
     });
   });
 

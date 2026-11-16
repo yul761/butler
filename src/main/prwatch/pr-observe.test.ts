@@ -112,6 +112,13 @@ describe("prObservations", () => {
     expect(who).toMatchObject({ "3:review:b:r9:APPROVED": "bot", "3:review:b:r8:APPROVED": "human", "3:comment:b:c9": "bot", "3:comment:b:c8": "human" });
   });
 
+  it("a DISMISSED review is stamped with the time it was seen, not GitHub's original submittedAt", () => {
+    const p = pr({ reviews: [{ id: "r2", author: "alice", state: "DISMISSED", body: "", submittedAt: 20 }] });
+    const o = prObservations(t, prev(), next(), p, [], null, 1000).find((x) => x.event.kind === "review");
+    expect(o?.event.at).toBe(1000);
+    expect(o?.event.data.state).toBe("DISMISSED");
+  });
+
   it("keys carry the branch: the same sha and PR number on a new branch are new events; the same branch repeats the same keys", () => {
     const on = (branch: string) => prObservations({ ...t, branch }, prev({ headSha: "a0", branch }), next({ branch }), pr(), [], null, 1000);
     const a = keys(on("b"));

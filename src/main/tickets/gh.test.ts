@@ -139,19 +139,6 @@ describe.skipIf(process.platform === "win32")("prStatus / branchRuns / failedLog
     expect([s?.createdAt, s?.mergedAt, s?.closedAt]).toEqual([Date.parse("2026-01-06T00:00:00Z"), Date.parse("2026-01-07T00:00:00Z"), null]);
   });
 
-  it("prStatus retries with the original minimal fields when an older gh rejects the new ones", async () => {
-    const minimal = { number: 5, url: "u", state: "OPEN", isDraft: false, reviewDecision: "", headRefOid: "abc", statusCheckRollup: [{ name: "t", status: "COMPLETED", conclusion: "SUCCESS" }] };
-    const dir = fakeGh(
-      `echo "$@" >> "$(dirname "$0")/args.txt"\ncase "$*" in *author*) echo 'Unknown JSON field: "author"' >&2; exit 1;; esac\ncat <<'JSON'\n${JSON.stringify(minimal)}\nJSON`,
-    );
-    const s = await prStatus(dir, "feat", 5000);
-    expect(s).toMatchObject({ number: 5, headSha: "abc", ci: "passing", reviews: [], comments: [], firstCommitAt: null, author: "", createdAt: null, mergedAt: null, closedAt: null });
-    expect(readFileSync(join(dir, "args.txt"), "utf8").trim().split("\n")[1]).toBe("pr view feat --json number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup");
-    // 记住了：下一轮直接用最初的字段，只调一次。
-    await prStatus(dir, "feat", 5000);
-    expect(readFileSync(join(dir, "args.txt"), "utf8").trim().split("\n").slice(2)).toEqual(["pr view feat --json number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup"]);
-  });
-
   it("prStatus does not retry when the branch simply has no PR", async () => {
     const dir = fakeGh(`echo "$@" >> "$(dirname "$0")/args.txt"\necho 'no pull requests found for branch "b"' >&2; exit 1`);
     expect(await prStatus(dir, "b", 5000)).toBeNull();

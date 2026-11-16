@@ -413,8 +413,8 @@ describe("PrWatcher", () => {
 describe("PrWatcher stages", () => {
   const review = { id: "PRR_kwHuman1", author: "alice", state: "COMMENTED" as const, body: "", submittedAt: 5 };
   const copilot = { id: "PRR_kwCopilot1", author: "copilot-pull-request-reviewer", state: "COMMENTED" as const, body: "", submittedAt: 6 };
-  function withStages(opts: { rowOf?: PrWatchRow } = {}) {
-    const s = setup();
+  function withStages(opts: { rowOf?: PrWatchRow; targets?: PrTarget[] } = {}) {
+    const s = setup(opts.targets);
     if (opts.rowOf) s.repo.rows.set(1, opts.rowOf);
     const keys = new Set<string>();
     const events: StageEvent[] = [];
@@ -557,6 +557,20 @@ describe("PrWatcher stages", () => {
     await s.w.check();
     expect(s.events.filter((e) => e.kind === "ci").map((e) => e.data.result)).toEqual(["passing"]);
     expect(s.events.some((e) => e.kind === "pr_opened")).toBe(true);
+  });
+
+  it("after a branch change on the same PR number, pr_opened and CI are recorded again for the new branch", async () => {
+    const tg = target();
+    const s = withStages({ targets: [tg] });
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "pending" }));
+    await s.w.check();
+    tg.branch = "new";
+    s.advance(PR_FAST_MS);
+    await s.w.check();
+    const keys = s.stages.add.mock.calls.map((c) => c[1]);
+    expect(keys.filter((k) => k.startsWith("1:opened:"))).toEqual(["1:opened:b:7", "1:opened:new:7"]);
+    expect(keys.filter((k) => k.includes(":ci:new:"))).toHaveLength(1);
+    expect(s.events.filter((e) => e.branch === "new").map((e) => e.kind)).toEqual(expect.arrayContaining(["pr_opened", "ci"]));
   });
 
   it("asks git for the first commit every round while there is no PR and it is not recorded, even on the same head sha", async () => {

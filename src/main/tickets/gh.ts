@@ -7,13 +7,10 @@ import { execFile } from "node:child_process";
 let binary: string | null = "gh";
 let resolved = false;
 let warned = false;
-/** 这个 gh 不认 prStatus 新增的 --json 字段（报过 Unknown JSON field）：之后直接用最初的字段，不再每轮多调一次。换 gh 时重置。 */
-let oldPrFields = false;
 
 export function setGhBinary(p: string): void {
   binary = p;
   resolved = true;
-  oldPrFields = false;
 }
 
 /** 测试用：回到“还没解析过”的初始状态。 */
@@ -21,7 +18,6 @@ export function resetGhBinary(): void {
   binary = "gh";
   resolved = false;
   warned = false;
-  oldPrFields = false;
 }
 
 /**
@@ -258,22 +254,12 @@ export function reviewerKind(login: string, prAuthor: string): "copilot" | "huma
 
 const REVIEWS = { REVIEW_REQUIRED: "pending", CHANGES_REQUESTED: "changes_requested", APPROVED: "approved" } as const;
 
-// 退回用的最小字段里有 headRefOid，它是 gh v2.18.0（2022-10-18，cli/cli bb252020）才加的；
-// 新增的 author、comments、createdAt、closedAt、mergedAt、reviews、statusCheckRollup 在 v1.9.0（2021-04）的 PullRequestFields 里就有，
-// commits 最晚 v1.10.0（2021-05）也有。所以认 headRefOid 的 gh 一定认全部字段，"Unknown JSON field" 退回只会发生在连最小字段也不认的旧 gh 上（结果仍是 null）；
-// 不需要用 REST 补 reviews、comments。
-const PR_FIELDS_MIN = "number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup";
-const PR_FIELDS = `${PR_FIELDS_MIN},author,reviews,comments,commits,createdAt,mergedAt,closedAt`;
+// 这些字段要 gh >= 2.18（headRefOid，2022-10）；更旧的 gh 报 Unknown JSON field，prStatus 返回 null。
+const PR_FIELDS = "number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt";
 
-/** gh pr view <branch>：没有 PR、gh 不可用、输出不对都返回 null。旧版 gh 不认新增的字段时，退回最初的字段（reviews、comments 为空），并记住，之后直接用最初的字段。 */
+/** gh pr view <branch>：没有 PR、gh 不可用、输出不对都返回 null。 */
 export async function prStatus(cwd: string, branch: string, timeoutMs: number): Promise<PrStatus | null> {
-  const view = (fields: string) => runGhDetail(cwd, ["pr", "view", branch, "--json", fields], timeoutMs, 8 * 1024 * 1024);
-  if (oldPrFields) return parsePr((await view(PR_FIELDS_MIN)).stdout);
-  const full = await view(PR_FIELDS);
-  // 只在 gh 明说不认字段时退回；没有 PR、超时等失败不重试（不然没有 PR 的分支每轮都多调一次）。
-  if (full.stdout !== null || !/Unknown JSON field/i.test(full.stderr)) return parsePr(full.stdout);
-  oldPrFields = true;
-  return parsePr((await view(PR_FIELDS_MIN)).stdout);
+  return parsePr(await runGh(cwd, ["pr", "view", branch, "--json", PR_FIELDS], timeoutMs, 8 * 1024 * 1024));
 }
 
 function parsePr(text: string | null): PrStatus | null {
