@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, shell, Tray } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -106,6 +106,7 @@ import { TicketService } from "./tickets/ticket-service";
 import { applyGhResolution, branchRuns, compareFiles, failedLog, ghBinary, mergedPrs, prInfo, prLessonData, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
 import { LessonsRepo } from "./db/lessons-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
+import { readTailLines, TRANSCRIPT_TAIL_BYTES } from "./lessons/tail";
 import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
 import type { HeadlessExecDeps } from "./handoff/headless-exec";
@@ -440,20 +441,22 @@ async function bootstrap(): Promise<void> {
     gh: { mergedPrs, prLessonData, compareFiles, available: () => ghBinary() !== null },
     headless: { ...judgeDeps },
     ticketForBranch: (slug, branch) => tickets.reposByBranch(branch).find((r) => repoIdentity.slugOf(r.repoPath) === slug)?.ticketKey ?? null,
-    butlerContext: (key) => {
+    butlerContext: async (key, wantTranscripts) => {
       const ps = handoffs.listByTicket(key, 20).flatMap((h) => (h.payload ? [h.payload] : []));
       const seen = new Set<string>();
       const transcripts: string[][] = [];
-      for (const s of sessions.listByTicket(key)) {
-        for (const id of sessions.chainOf(s.id)) {
-          if (seen.has(id)) continue;
-          seen.add(id);
-          const file = findTranscript(paths.claudeProjects, id);
-          if (!file) continue;
-          try {
-            transcripts.push(readFileSync(file, "utf8").split("\n").filter(Boolean));
-          } catch {
-            // 读不了的记录跳过。
+      if (wantTranscripts) {
+        for (const s of sessions.listByTicket(key)) {
+          for (const id of sessions.chainOf(s.id)) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const file = findTranscript(paths.claudeProjects, id);
+            if (!file) continue;
+            try {
+              transcripts.push(await readTailLines(file, TRANSCRIPT_TAIL_BYTES));
+            } catch {
+              // 读不了的记录跳过。
+            }
           }
         }
       }

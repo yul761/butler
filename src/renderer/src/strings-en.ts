@@ -465,7 +465,7 @@ export const EN: UiStrings = {
   llmOverBudget: (spent: string, budget: string) => `Spent ${spent} this month, which reaches the budget of ${budget}. No more calls this month.`,
   llmFullWarning: "At the full level, StateCore memory distillation sends real ticket ids, raw conversation excerpts, the existing memory (decisions, follow-ups, notes, cross-ticket learnings, the previous summary) and the text of forgotten entries to the provider, with no replacement and no sensitive-data scan. Every call is still logged on the audit page and counts against the monthly budget.",
   lessons: "Review lessons",
-  lessonsIntro: "Rules distilled from review comments on past PRs. Once you confirm one, it is sent into the tickets and fix sessions Butler opens; unconfirmed ones are never sent.",
+  lessonsIntro: "Rules distilled from review comments on past PRs. Once you confirm a rule, Butler gives it to the ticket sessions and fix sessions it opens; rules you have not confirmed are never sent.",
   lessonsPendingTitle: "Pending",
   lessonsConfirmedTitle: "Confirmed",
   lessonsNoPending: "No lessons waiting for confirmation.",

@@ -26,6 +26,22 @@ const NOT_FOUND = { ok: false, reason: "not_found" } as const;
 export class LessonsService {
   constructor(private readonly d: LessonsServiceDeps) {}
 
+  /** 只打开 github.com，或者某个已知仓库自己的主机（企业版 GitHub，slug 是 host/owner/repo）上的 https 链接。 */
+  private allowedUrl(url: string): boolean {
+    let u: URL;
+    try {
+      u = new URL(url);
+    } catch {
+      return false;
+    }
+    if (u.protocol !== "https:") return false;
+    if (u.hostname === "github.com") return true;
+    return this.d.repo.repos().some((r) => {
+      const parts = r.slug.split("/");
+      return parts.length === 3 && parts[0] === u.hostname;
+    });
+  }
+
   /** 先把 knownRepoPaths 里解析得出的 upsertRepo，再拼视图。 */
   state(): LessonsState {
     const { repo, identity } = this.d;
@@ -126,7 +142,7 @@ export class LessonsService {
         return this.d.runner.backfill(a.slug);
       case "openSource": {
         const url = repo.source(a.sourceId)?.url;
-        if (!url || !url.startsWith("https:")) return { ok: false, reason: "bad_url" };
+        if (!url || !this.allowedUrl(url)) return { ok: false, reason: "bad_url" };
         this.d.openExternal(url);
         return { ok: true };
       }

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { gitBinary, GIT_SAFE_ARGS } from "../util/git-path";
 
 /** 把 git remote URL 变成 "owner/repo"（小写）；非 github.com 的主机名保留在前面。解析不出返回 null。 */
 export function parseRemoteSlug(url: string): string | null {
@@ -24,19 +25,21 @@ export function parseRemoteSlug(url: string): string | null {
   return h === "github.com" ? slug : `${h}/${slug}`;
 }
 
+/** origin 的 URL；确定没有 origin remote 时返回 null（git 退出码 2）。超时、找不到 git、不是仓库等其他失败都抛出，不当成结论。 */
 function defaultGit(path: string): string | null {
   try {
-    return execFileSync("git", ["-C", path, "remote", "get-url", "origin"], {
+    return execFileSync(gitBinary(), [...GIT_SAFE_ARGS, "-C", path, "remote", "get-url", "origin"], {
       timeout: 3000,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-  } catch {
-    return null;
+  } catch (e) {
+    if ((e as { status?: unknown }).status === 2) return null;
+    throw e;
   }
 }
 
-/** 仓库路径 -> 仓库身份（来自 origin remote）。结果按路径缓存，app 运行期间不过期。 */
+/** 仓库路径 -> 仓库身份（来自 origin remote）。成功的结果和“确定没有 origin”按路径缓存，app 运行期间不过期；超时和出错不缓存。 */
 export class RepoIdentity {
   private readonly git: (path: string) => string | null;
   private readonly cache = new Map<string, string | null>();
@@ -47,7 +50,12 @@ export class RepoIdentity {
 
   slugOf(path: string): string | null {
     if (this.cache.has(path)) return this.cache.get(path) ?? null;
-    const url = this.git(path);
+    let url: string | null;
+    try {
+      url = this.git(path);
+    } catch {
+      return null; // 超时或出错：这次没结果，但不缓存，下次再查。
+    }
     const slug = url ? parseRemoteSlug(url) : null;
     this.cache.set(path, slug);
     return slug;

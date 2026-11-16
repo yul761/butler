@@ -75,13 +75,16 @@ ${material}`;
 
 export interface ApplyResult { created: number; hit: number; dropped: number }
 
-export function applyAnalysis(repo: LessonsRepo, slug: string, prNumber: number, a: Analysis, now: number): ApplyResult {
+/** allowed：素材里出现过的链接（每条评论的 url 加 PR 的 url）。模型给的 comment_url 不在里面就换成 PR 的链接。 */
+export interface SourceUrls { allowed: ReadonlySet<string>; prUrl: string }
+
+export function applyAnalysis(repo: LessonsRepo, slug: string, prNumber: number, a: Analysis, now: number, urls: SourceUrls): ApplyResult {
   const res: ApplyResult = { created: 0, hit: 0, dropped: 0 };
   return repo.transaction(() => {
     const productIds = new Set(repo.productsOf(slug).map((p) => p.id));
     for (const f of a.findings) {
       if (!f.avoidable || !f.rule) continue;
-      const source = { prNumber, url: f.comment_url };
+      const source = { prNumber, url: f.comment_url !== null && urls.allowed.has(f.comment_url) ? f.comment_url : urls.prUrl };
       const same = f.rule.same_as === null ? null : repo.get(f.rule.same_as);
       const related =
         same !== null &&

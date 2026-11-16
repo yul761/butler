@@ -18,7 +18,7 @@ const iso = (ms: number): string => new Date(ms).toISOString();
 export function reviewItems(pr: PrLessonData): ReviewItem[] {
   const kind = (login: string): Who => {
     const k = reviewerKind(login, pr.author);
-    return k === "human" && pr.botLogins.has(login) ? "bot" : k;
+    return k === "human" && pr.botLogins.has(login.toLowerCase().replace(/\[bot\]$/, "")) ? "bot" : k;
   };
   const all: { ms: number; item: ReviewItem }[] = [];
   const push = (ms: number, author: string, body: string, url: string | null, path: string | null, line: number | null): void => {
@@ -71,7 +71,7 @@ export function transcriptExcerpts(jsonl: string[], paths: string[], maxChars: n
       })
       .join("\n");
     if (text === "" || !names.some((n) => text.includes(n))) continue;
-    if (total + text.length > maxChars) break;
+    if (total + text.length > maxChars) continue;
     out.push(text);
     total += text.length;
   }

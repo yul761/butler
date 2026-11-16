@@ -24,7 +24,9 @@ const seed = (repo: LessonsRepo, status: "confirmed" | "rejected", slug = "acme/
   repo.setStatus(id, status, 6);
   return id;
 };
-const apply = (repo: LessonsRepo, ...f: Finding[]) => applyAnalysis(repo, "acme/web", 7, { findings: f }, 100);
+const PR_URL = "https://github.com/acme/web/pull/7";
+const ALLOWED = new Set(["https://x/7#c1", "u1", "u2"]);
+const apply = (repo: LessonsRepo, ...f: Finding[]) => applyAnalysis(repo, "acme/web", 7, { findings: f }, 100, { allowed: ALLOWED, prUrl: PR_URL });
 
 describe("applyAnalysis", () => {
   it("new repo rule becomes pending with source PR 7 and the comment url", () => {
@@ -33,6 +35,12 @@ describe("applyAnalysis", () => {
     const [l] = repo.lessons();
     expect(l).toMatchObject({ scope: { kind: "repo", slug: "acme/web" }, status: "pending", text: "rule text" });
     expect(l.sources).toMatchObject([{ prNumber: 7, url: "https://x/7#c1" }]);
+  });
+
+  it("keeps only comment urls from the material; anything else becomes the PR url", () => {
+    const { repo } = setup();
+    apply(repo, finding({ text: "a" }, { comment_url: "https://evil.example/x" }), finding({ text: "b" }, { comment_url: null }), finding({ text: "c" }));
+    expect(repo.lessons().map((l) => l.sources[0]!.url)).toEqual([PR_URL, PR_URL, "https://x/7#c1"]);
   });
 
   it("product scope attaches to the product of this repo; unrelated product falls back to repo", () => {

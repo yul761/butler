@@ -101,6 +101,10 @@ describe("LessonsService.act", () => {
     const bad = repo.get(id)!.sources.find((s) => s.prNumber === 2)!.id;
     expect(await svc.act({ op: "openSource", sourceId: bad })).toEqual({ ok: false, reason: "bad_url" });
     expect(openExternal).toHaveBeenCalledTimes(1);
+    repo.hit(id, 3, { prNumber: 3, url: "https://evil.example/github.com/x" });
+    const foreign = repo.get(id)!.sources.find((s) => s.prNumber === 3)!.id;
+    expect(await svc.act({ op: "openSource", sourceId: foreign })).toEqual({ ok: false, reason: "bad_url" });
+    expect(openExternal).toHaveBeenCalledTimes(1);
   });
 
   it("backfill returns the runner result as is", async () => {

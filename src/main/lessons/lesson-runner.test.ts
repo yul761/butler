@@ -53,7 +53,7 @@ function setup(o: { identity?: (p: string) => string | null; available?: boolean
       sessions: { recordHeadless: () => undefined } as never, now: () => t, newRunId: () => "r",
     } as unknown as HeadlessExecDeps,
     ticketForBranch: () => null,
-    butlerContext: () => ({ decisions: [], learnings: [], transcripts: [] }),
+    butlerContext: async () => ({ decisions: [], learnings: [], transcripts: [] }),
     lang: () => "en",
     now: () => t,
     notify: vi.fn(),
@@ -226,13 +226,25 @@ describe("LessonRunner queue", () => {
   it("puts Butler context into the prompt for a Butler PR", async () => {
     const s = setup();
     s.deps.ticketForBranch = (slug, branch) => (slug === "acme/web" && branch === "b7" ? "BTL-1" : null);
-    s.deps.butlerContext = vi.fn(() => ({ decisions: ["DECISION-TEXT"], learnings: ["LEARNING-TEXT"], transcripts: [] }));
+    s.deps.butlerContext = vi.fn(async () => ({ decisions: ["DECISION-TEXT"], learnings: ["LEARNING-TEXT"], transcripts: [] }));
     const r = new LessonRunner(s.deps);
     s.repo.enqueue("acme/web", [7], "merged", T0);
     r.start();
     await r.idle();
     expect(s.run.mock.calls[0]![0].prompt).toContain("DECISION-TEXT");
     expect(s.run.mock.calls[0]![0].prompt).toContain("BTL-1");
+  });
+
+  it("does not ask for transcripts when no comment points at a file", async () => {
+    const s = setup();
+    s.deps.ticketForBranch = () => "BTL-1";
+    const ctx = vi.fn(async () => ({ decisions: [], learnings: [], transcripts: [] }));
+    s.deps.butlerContext = ctx;
+    const r = new LessonRunner(s.deps);
+    s.repo.enqueue("acme/web", [7], "merged", T0);
+    r.start();
+    await r.idle();
+    expect(ctx).toHaveBeenCalledWith("BTL-1", false);
   });
 
   it("only keeps the fix patches of files the comments point at, and survives compareFiles failing", async () => {
@@ -309,7 +321,21 @@ describe("LessonRunner daily", () => {
     s.advance(DAY);
     await s.runner.daily();
     expect(s.gh.mergedPrs).toHaveBeenCalledTimes(2);
-    expect(s.gh.mergedPrs).toHaveBeenLastCalledWith("/w", "2026-06-10T01:00:00Z", BACKFILL_LIMIT, expect.any(Number));
+    expect(s.gh.mergedPrs).toHaveBeenLastCalledWith("/w", "2026-06-10T00:00:00Z", BACKFILL_LIMIT, expect.any(Number));
+  });
+
+  it("does not analyze an already analyzed PR again when the overlap returns it", async () => {
+    const s = setup();
+    s.repo.setBackfilled("acme/web", 1);
+    s.gh.mergedPrs.mockResolvedValue([{ number: 9, mergedAt: "2026-06-10T01:00:00Z", headRefName: "x" }]);
+    await s.runner.daily();
+    s.runner.start();
+    await s.runner.idle();
+    expect(s.run).toHaveBeenCalledTimes(1);
+    s.advance(DAY);
+    await s.runner.daily();
+    await s.runner.idle();
+    expect(s.run).toHaveBeenCalledTimes(1);
   });
 });
 

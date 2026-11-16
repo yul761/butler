@@ -51,6 +51,13 @@ describe("reviewItems", () => {
   });
 });
 
+describe("reviewItems login normalisation", () => {
+  it("treats a bot login that differs only in case as a bot", () => {
+    const items = reviewItems(pr({ botLogins: new Set(["acme-lint"]), comments: [cm("c1", "Acme-Lint", "nit", T("10:03")), cm("c3", "alice", "real", T("10:05"))] }));
+    expect(items.map((i) => i.author)).toEqual(["alice"]);
+  });
+});
+
 describe("fixRange", () => {
   const withInline = (hhmm: string) => {
     const p = pr({ inline: [cm("i", "alice", "fix", T(hhmm), "src/a.ts")] });
@@ -81,6 +88,14 @@ describe("transcriptExcerpts", () => {
   it("prefers the newest within maxChars", () => {
     const jsonl = [line([{ type: "text", text: "old a.ts" }]), line([{ type: "text", text: "new a.ts" }])];
     expect(transcriptExcerpts(jsonl, ["a.ts"], 10)).toEqual(["new a.ts"]);
+  });
+});
+
+describe("transcriptExcerpts skipping", () => {
+  const line = (text: string) => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } });
+  it("skips one over-long excerpt and still returns older ones", () => {
+    const jsonl = [line("older a.ts"), line("huge a.ts " + "x".repeat(100)), line("newest a.ts")];
+    expect(transcriptExcerpts(jsonl, ["a.ts"], 40)).toEqual(["newest a.ts", "older a.ts"]);
   });
 });
 

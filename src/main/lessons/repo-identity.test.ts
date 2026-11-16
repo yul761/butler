@@ -30,6 +30,19 @@ describe("RepoIdentity", () => {
     expect(nullCalls).toBe(1);
   });
 
+  it("does not cache a lookup that threw (timeout or error)", () => {
+    let calls = 0;
+    const id = new RepoIdentity({
+      git: () => {
+        if (calls++ === 0) throw new Error("timeout");
+        return "git@github.com:acme/web.git";
+      },
+    });
+    expect(id.slugOf("/a")).toBeNull();
+    expect(id.slugOf("/a")).toBe("acme/web");
+    expect(calls).toBe(2);
+  });
+
   it("resolve explains why", () => {
     const id = new RepoIdentity({ git: () => null });
     expect(id.resolve(makeRepo())).toEqual({ reason: "no_remote" });

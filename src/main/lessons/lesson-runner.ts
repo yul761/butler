@@ -24,11 +24,19 @@ export interface LessonRunnerDeps {
   headless: HeadlessExecDeps;
   /** PR 分支 → Butler 的 ticket：在所有 ticket_repos（包括归档的）里找 branch 相同、slugOf(repo_path) 相同的那一行。 */
   ticketForBranch: (slug: string, branch: string) => string | null;
-  butlerContext: (ticketKey: string) => { decisions: string[]; learnings: string[]; transcripts: string[][] };
+  /** wantTranscripts 为 false 时不用读对话记录（没有评论指到文件，摘录一定为空）。 */
+  butlerContext: (ticketKey: string, wantTranscripts: boolean) => Promise<{ decisions: string[]; learnings: string[]; transcripts: string[][] }>;
   lang: () => Lang;
   now: () => number;
   notify: () => void;
   log?: (msg: string, e?: unknown) => void;
+}
+
+/** GitHub 的搜索索引有延迟，刚合并的 PR 可能晚点才搜得到：从游标往前 1 小时搜。重复的 PR 入队时会被忽略，已分析过的不会再分析。 */
+const CURSOR_OVERLAP_MS = 60 * 60_000;
+function overlapped(cursor: string): string {
+  const ms = Date.parse(cursor);
+  return Number.isNaN(ms) ? cursor : new Date(ms - CURSOR_OVERLAP_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 const maxMergedAt = (prs: MergedPr[]): string | null => prs.reduce<string | null>((m, p) => (m === null || p.mergedAt > m ? p.mergedAt : m), null);
@@ -90,7 +98,7 @@ export class LessonRunner {
       for (const row of this.d.repo.repos()) {
         if (row.backfilledAt === null) continue;
         try {
-          const prs = await this.d.gh.mergedPrs(row.localPath, row.mergedCursor, BACKFILL_LIMIT, LESSON_GH_TIMEOUT_MS);
+          const prs = await this.d.gh.mergedPrs(row.localPath, row.mergedCursor === null ? null : overlapped(row.mergedCursor), BACKFILL_LIMIT, LESSON_GH_TIMEOUT_MS);
           if (prs === null) {
             this.d.log?.(`lessons: daily pull failed for ${row.slug}`);
             continue;
@@ -203,7 +211,7 @@ export class LessonRunner {
     let butler: Material["butler"] = null;
     const ticketKey = this.d.ticketForBranch(item.slug, pr.headRefName);
     if (ticketKey !== null) {
-      const ctx = this.d.butlerContext(ticketKey);
+      const ctx = await this.d.butlerContext(ticketKey, paths.length > 0);
       const excerpts: string[] = [];
       let left = EXCERPT_MAX_CHARS;
       for (const t of ctx.transcripts) {
@@ -241,7 +249,9 @@ export class LessonRunner {
       return;
     }
     repo.transaction(() => {
-      applyAnalysis(repo, item.slug, item.prNumber, v.value, this.d.now());
+      const allowed = new Set<string>([pr.url]);
+      for (const i of items) if (i.url) allowed.add(i.url);
+      applyAnalysis(repo, item.slug, item.prNumber, v.value, this.d.now(), { allowed, prUrl: pr.url });
       repo.finish(item.id, "done", this.d.now());
     });
     try {

@@ -472,7 +472,7 @@ const ZH = {
   llmOverBudget: (spent: string, budget: string) => `本月已花 ${spent}，达到预算 ${budget}：本月不再调用。`,
   llmFullWarning: "完整档位下，StateCore 记忆蒸馏会把真实的 ticket 号、原始对话片段、已有的记忆（决策、follow-up、笔记、跨 ticket 的经验、上一次的摘要）和已遗忘条目的原文发给服务商，不替换也不做敏感信息扫描，但都记进审计页、计入月预算。",
   lessons: "review 经验",
-  lessonsIntro: "从历史 PR 的 review 评论里提炼出来的规矩。你确认后，会送进 Butler 开的 ticket 和修复 session；没确认的不会送。",
+  lessonsIntro: "从历史 PR 的 review 评论里提炼出来的规矩。你确认后，会送进 Butler 开的 ticket session 和修复 session；没确认的不会送。",
   lessonsPendingTitle: "待确认",
   lessonsConfirmedTitle: "已确认",
   lessonsNoPending: "没有待确认的规矩。",
