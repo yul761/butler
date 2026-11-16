@@ -23,7 +23,6 @@ type Owner = { ticketKey: string | null; repoId: number | null; featureId: numbe
 /** 事件归到哪一层：ticket（加仓库）、feature、epic；归不了为 null。 */
 function ownerOf(s: Session, sessions: Pick<SessionsRepo, "get">): Owner | null {
   if (s.butler) return null;
-  if (s.ticketKey) return { ticketKey: s.ticketKey, repoId: s.repoId, featureId: null, epicId: null };
   if (s.fixesSession) {
     // 修复 session 的工作算在被修的那个 session 上。
     const t = sessions.get(s.fixesSession);
@@ -33,6 +32,7 @@ function ownerOf(s: Session, sessions: Pick<SessionsRepo, "get">): Owner | null 
     if (t.epicId !== null) return { ticketKey: null, repoId: null, featureId: null, epicId: t.epicId };
     return null;
   }
+  if (s.ticketKey) return { ticketKey: s.ticketKey, repoId: s.repoId, featureId: null, epicId: null };
   if (s.featureId !== null) return { ticketKey: null, repoId: null, featureId: s.featureId, epicId: null };
   if (s.epicId !== null) return { ticketKey: null, repoId: null, featureId: null, epicId: s.epicId };
   return null;
@@ -51,8 +51,11 @@ export function stageEventFromHook(env: HookEnvelope, sessions: Pick<SessionsRep
   if (!s || s.origin !== "butler") return null;
   const owner = ownerOf(s, sessions);
   if (!owner) return null;
+  // PostToolUse 按 tool_use_id 去重（receivedAt 每次 hook 都不同）；没有就退回 receivedAt。
+  const toolUseId = str(p.tool_use_id);
+  const key = str(p.hook_event_name) === "PostToolUse" && toolUseId ? `skill:${sessionId}:${toolUseId}` : `skill:${sessionId}:${env.receivedAt}:${name}`;
   return {
     event: { ...owner, branch: null, sessionId, kind: "skill", at: env.receivedAt, data: { name, category } },
-    dedupeKey: `skill:${sessionId}:${env.receivedAt}:${name}`,
+    dedupeKey: key,
   };
 }

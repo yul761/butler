@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { HookEnvelope } from "../../shared/hook-envelope";
 import type { Session } from "../../shared/types";
+import { SessionsRepo } from "../db/sessions-repo";
+import { TicketsRepo } from "../db/tickets-repo";
+import { memDb } from "../test-utils";
+import { applyHookEnvelope } from "./hook-events";
 import { stageEventFromHook } from "./stage-hook";
 
 const sess = (o: Partial<Session> = {}): Session => ({
@@ -63,5 +67,30 @@ describe("stageEventFromHook", () => {
     expect(stageEventFromHook(skill("code-review"), repo())).toBeNull();
     expect(stageEventFromHook(skill("code-review"), repo(sess({ ticketKey: "BTL-1", origin: "discovered" })))).toBeNull();
     expect(stageEventFromHook(skill("code-review"), repo(sess({ butler: true })))).toBeNull();
+  });
+  it("a fix session attributes to its target even when it has a ticket itself", () => {
+    const o = stageEventFromHook(skill("code-review"), repo(sess({ ticketKey: "BTL-9", repoId: 1, fixesSession: "t2" }), sess({ id: "t2", ticketKey: "BTL-2", repoId: 9 })));
+    expect(o?.event).toMatchObject({ ticketKey: "BTL-2", repoId: 9 });
+  });
+  it("PostToolUse dedupes on tool_use_id across different receivedAt; without it falls back to receivedAt", () => {
+    const withId = (at: number, id: string | undefined) => {
+      const e = skill("code-review", { receivedAt: at });
+      if (id) (e.payload as Record<string, unknown>).tool_use_id = id;
+      return stageEventFromHook(e, repo(sess({ ticketKey: "BTL-1" })));
+    };
+    expect(withId(500, "tu1")?.dedupeKey).toBe("skill:s1:tu1");
+    expect(withId(900, "tu1")?.dedupeKey).toBe(withId(500, "tu1")?.dedupeKey);
+    expect(withId(500, "tu2")?.dedupeKey).not.toBe(withId(500, "tu1")?.dedupeKey);
+    expect(withId(500, undefined)?.dedupeKey).toBe("skill:s1:500:code-review");
+  });
+  it("a payload-null envelope gives null", () => {
+    expect(stageEventFromHook({ v: 1, receivedAt: 1, ticket: null, butlerSession: null, payload: null }, repo())).toBeNull();
+  });
+  it("ordering pin: applyHookEnvelope ignores a PostToolUse Skill envelope, yet stageEventFromHook still records it", () => {
+    const db = memDb();
+    const sessions = new SessionsRepo(db);
+    const env = skill("code-review");
+    expect(applyHookEnvelope(env, { sessions, tickets: new TicketsRepo(db) })).toMatchObject({ kind: "ignored", reason: "unhandled_event:PostToolUse" });
+    expect(stageEventFromHook(env, repo(sess({ ticketKey: "BTL-1" })))).not.toBeNull();
   });
 });
