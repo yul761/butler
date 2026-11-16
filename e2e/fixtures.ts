@@ -1,9 +1,9 @@
-import { _electron as electron, test as base, expect, type ElectronApplication, type Page, type TestInfo } from "@playwright/test";
+import { _electron as electron, test as base, expect, type ElectronApplication, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { execFileSync, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, parse, resolve } from "node:path";
-import { S } from "../src/renderer/src/strings";
+import { S, type UiStrings } from "../src/renderer/src/strings";
 
 export const ROOT = resolve(__dirname, "..");
 
@@ -326,4 +326,26 @@ export async function completeWizard(page: Page, s: Sandbox): Promise<void> {
 /** 当前显示的终端里的文字（xterm 的 DOM 渲染器）。 */
 export async function terminalText(page: Page): Promise<string> {
   return page.locator(".terminal-wrap:visible .xterm-rows").innerText();
+}
+
+/** 点 open 打开新建对话框（epic 或 feature），选上一层目录，下面的两个仓库都用。建好后停在新页面上。 */
+export async function create(page: Page, open: Locator, label: string, name: string, dir: string, T: UiStrings = S): Promise<void> {
+  await open.click();
+  await page.getByLabel(label, { exact: true }).fill(name);
+  const box = page.getByRole("textbox", { name: `${T.repo} ${T.pick}`, exact: true });
+  await box.fill(dir);
+  await box.blur();
+  await expect(page.getByText(T.subReposFound(2), { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: T.create, exact: true }).click();
+  await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+}
+
+/** 在当前 feature 页上建 ticket，只用一个仓库；建完停在 ticket 页。 */
+export async function newTicket(page: Page, key: string, repo: string, other: string): Promise<void> {
+  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await page.getByLabel(S.ticketKey, { exact: true }).fill(key);
+  await page.locator(".modal").getByRole("checkbox", { name: repo, exact: true }).check();
+  await page.locator(".modal").getByRole("checkbox", { name: other, exact: true }).uncheck();
+  await page.getByRole("button", { name: S.create, exact: true }).click();
+  await expect(page.getByRole("heading", { name: key, exact: true })).toBeVisible();
 }

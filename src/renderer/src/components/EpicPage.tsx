@@ -27,7 +27,7 @@ interface Props {
  * epic 页（设计文档 2026-11-01，草图 A）：从上到下是名字和工作区，一排 tab（feature 列表：一行一个 feature，一句进度和状态，
  * 不列 ticket；汇报；待你决定），然后是仓库、epic session 和它们的终端，布局和 feature 页一样。
  */
-export function EpicPage({ epic, onOpenFeature, onOpenTicket,onFeatureCreated, focusSession, onOpenTarget }: Props) {
+export function EpicPage({ epic, onOpenFeature, onOpenTicket, onFeatureCreated, focusSession, onOpenTarget }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newFeature, setNewFeature] = useState(false);
   const errorText = (e: unknown) => epicErrorText(e, S);
