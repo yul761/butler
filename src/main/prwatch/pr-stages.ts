@@ -36,6 +36,9 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
   let cur: PrStageId = "design";
   /** 看到 closed 事件之后状态不再变。 */
   let closed = false;
+  /** 看到 merged 事件之后状态也不再变（同一轮里晚到的 ci、review 只进时间线）。 */
+  let merged = false;
+  const frozen = () => closed || merged;
   let devStarted = false;
 
   const events = i.events.filter((e) => Number.isFinite(e.at));
@@ -105,10 +108,10 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
         if (!name) return;
         const category = d.category === "design" || d.category === "review" ? d.category : skillCategory(name);
         if (category === "design") {
-          if (!closed && cur === "design") set("design", "active", at);
+          if (!frozen() && cur === "design") set("design", "active", at);
           log(at, "design", "design_skill", name);
         } else if (category === "review") {
-          if (!closed && (cur === "dev" || cur === "self_review")) {
+          if (!frozen() && (cur === "dev" || cur === "self_review")) {
             set("self_review", "active", at);
             cur = "self_review";
           }
@@ -117,11 +120,11 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
         return;
       }
       case "first_commit":
-        if (!closed) startDev(at);
+        if (!frozen()) startDev(at);
         log(at, "dev", "first_commit");
         return;
       case "pr_opened":
-        if (!closed) {
+        if (!frozen()) {
           implyDev(at);
           // 开了 PR，开发和自我 review 结束；进入 CI 但不标"进行中"，没有 CI 的仓库不会卡着一步。
           if (cur === "dev" || cur === "self_review") {
@@ -134,7 +137,7 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
       case "ci": {
         const result = d.result;
         if (result !== "pending" && result !== "passing" && result !== "failing") return;
-        if (!closed) {
+        if (!frozen()) {
           implyDev(at);
           if (result === "pending") ciPending(at);
           else if (cur !== "ci" && cell("ci").state === "active") {
@@ -154,7 +157,7 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
         return;
       }
       case "push": {
-        const back = !closed && cell(cur).state === "failed";
+        const back = !frozen() && cell(cur).state === "failed";
         if (back) {
           round += 1;
           set("dev", "active", at);
@@ -178,14 +181,14 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
         } else if (who === "human") {
           const login = str(d.author);
           if (state === "CHANGES_REQUESTED") {
-            if (!closed) {
+            if (!frozen()) {
               set("peer_review", "failed", at);
               if (cell("merge").state === "active") set("merge", "todo", at);
               cur = "peer_review";
             }
             log(at, "peer_review", "human_changes", login);
           } else if (state === "APPROVED") {
-            if (!closed) {
+            if (!frozen()) {
               set("peer_review", "done", at);
               // 前面还有一步在进行（通常是 CI 在跑）：只记批准，等 CI 通过再进入合并。
               if (!beforeReviewActive()) {
@@ -202,7 +205,7 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
         return;
       }
       case "merged":
-        if (!closed) {
+        if (!frozen()) {
           implyDev(at);
           finishDev(at);
           if (cell("peer_review").state !== "done") set("peer_review", "skipped", at);
@@ -215,6 +218,7 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
             else if (s === "active" && id === "ci") set(id, "unknown", at);
           }
           cur = "merge";
+          merged = true;
         }
         log(at, "merge", "merged");
         return;

@@ -509,22 +509,18 @@ describe("PrWatcher stages", () => {
     expect(s.events.some((e) => e.kind === "pr_opened")).toBe(true);
   });
 
-  it("asks git for the first commit only while there is no PR, it is not recorded, and the head sha changed since the last ask", async () => {
+  it("asks git for the first commit every round while there is no PR and it is not recorded, even on the same head sha", async () => {
     const s = withStages();
     s.gh.branchRuns.mockResolvedValue({ headSha: "s1", checks: [], ci: "none" });
     await s.w.check();
     expect(s.firstCommitAt).toHaveBeenCalledWith("/w", "b");
+    expect(s.events.some((e) => e.kind === "first_commit")).toBe(false);
     s.advance(PR_SLOW_MS);
-    await s.w.check();
-    expect(s.firstCommitAt).toHaveBeenCalledTimes(1);
-    s.advance(PR_SLOW_MS);
-    s.gh.branchRuns.mockResolvedValue({ headSha: "s2", checks: [], ci: "none" });
     s.firstCommitAt.mockResolvedValue(42);
     await s.w.check();
     expect(s.firstCommitAt).toHaveBeenCalledTimes(2);
     expect(s.stages.add).toHaveBeenCalledWith(expect.objectContaining({ kind: "first_commit", at: 42 }), "1:first_commit:b");
     s.advance(PR_SLOW_MS);
-    s.gh.branchRuns.mockResolvedValue({ headSha: "s3", checks: [], ci: "none" });
     await s.w.check();
     expect(s.firstCommitAt).toHaveBeenCalledTimes(2);
   });

@@ -25,11 +25,14 @@ export function prObservations(
 
   if (firstCommit !== null) add("first_commit", firstCommit, `first_commit:${t.branch}`, {});
   if (prev?.number == null && next.number != null) add("pr_opened", pr?.createdAt ?? now, `opened:${next.number}`, { number: next.number });
+  // 这一轮看到 PR 已经合并或关闭：CI 和 push 的时间不晚于合并、关闭的时间，时间线上才排在它前面。
+  const endedAt = next.state === "merged" ? pr?.mergedAt : next.state === "closed" ? pr?.closedAt : null;
+  const seen = endedAt != null ? Math.min(now, endedAt) : now;
   const sha = next.headSha;
   const pushed = prev?.headSha != null && sha !== null && prev.headSha !== sha;
-  if (pushed && sha !== null) add("push", now, `push:${sha}`, { sha });
+  if (pushed && sha !== null) add("push", seen, `push:${sha}`, { sha });
   if (next.number != null && (next.ci === "pending" || next.ci === "passing" || next.ci === "failing")) {
-    if (!prev || prev.number == null || prev.ci !== next.ci || prev.headSha !== sha) add("ci", now, `ci:${sha ?? ""}:${next.ci}`, { result: next.ci, sha });
+    if (!prev || prev.number == null || prev.ci !== next.ci || prev.headSha !== sha) add("ci", seen, `ci:${sha ?? ""}:${next.ci}`, { result: next.ci, sha });
   }
   if (pr) {
     for (const r of pr.reviews) {

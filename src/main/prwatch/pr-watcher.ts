@@ -104,8 +104,6 @@ export class PrWatcher {
   private readonly ghWaiting: (() => void)[] = [];
   /** Copilot review 的行内评论拉失败的次数，键 `${repoId}:${reviewId}`；拉到了就删掉。只在内存里。 */
   private readonly inlineTries = new Map<string, number>();
-  /** 上次问 git 第一个 commit 时分支的 headSha，键 `${repoId}:${branch}`；headSha 没变就不再问。 */
-  private readonly firstCommitTried = new Map<string, string | null>();
 
   constructor(private readonly d: PrWatcherDeps) {}
 
@@ -244,9 +242,8 @@ export class PrWatcher {
         if (got) inline = got;
       }
       let firstCommit = pr?.firstCommitAt ?? null;
-      const fcKey = `${t.repoId}:${t.branch}`;
-      if (!pr && !stages.has(`${t.repoId}:first_commit:${t.branch}`) && (!this.firstCommitTried.has(fcKey) || this.firstCommitTried.get(fcKey) !== next.headSha)) {
-        this.firstCommitTried.set(fcKey, next.headSha);
+      // 本地的一次 git 调用：每轮都问，直到记下来为止（没有 PR 时 headSha 来自远端的 workflow run，本地新提交不会让它变）。
+      if (!pr && !stages.has(`${t.repoId}:first_commit:${t.branch}`)) {
         firstCommit = await this.d.git.firstCommitAt(t.cwd, t.branch);
       }
       let added = false;

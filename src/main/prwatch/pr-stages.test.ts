@@ -165,6 +165,12 @@ describe("derivePrStages", () => {
     expect(cell(row, "ci").state).toBe("active");
   });
 
+  it("states freeze after a merged event: later ci, review and push only add timeline rows", () => {
+    const v = derive(input({ events: [ev("first_commit", 120), ci(140, "pending"), ev("merged", 150, { number: 7 }), ci(160, "passing"), human(170, "CHANGES_REQUESTED"), ev("push", 180, { sha: "x" })] }));
+    expect(states(v)).toMatchObject({ ci: "unknown", peer_review: "skipped", merge: "done" });
+    expect(v.timeline.map((t) => t.kind)).toEqual(["first_commit", "ci_pending", "merged", "ci_passed", "human_changes", "push"]);
+  });
+
   it("a CI result seen without its pending still moves the bar", () => {
     const v = derive(input({ events: [ev("first_commit", 120), ci(140, "passing")] }));
     expect(states(v)).toMatchObject({ dev: "done", ci: "done", peer_review: "active" });
