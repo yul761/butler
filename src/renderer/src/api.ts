@@ -2,6 +2,7 @@ import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
 import { IPC, type IpcResult } from "../../shared/ipc";
 import type { PrStagesScope, PrStagesView } from "../../shared/pr-stages";
+import type { LessonAction, LessonsState } from "../../shared/lessons";
 import type { MemoryView, WhyEntry } from "../../shared/memory";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
@@ -97,6 +98,9 @@ export const api = {
   mergeEvents: () => call<MergeEvent[]>(IPC.mergeEvents),
   prWatchList: () => call<WatchedPr[]>(IPC.prWatchList),
   prStages: (scope: PrStagesScope) => call<PrStagesView[]>(IPC.prStages, scope),
+  lessonsState: () => call<LessonsState>(IPC.lessonsState),
+  lessonsAct: (a: LessonAction) => call<{ ok: true } | { ok: false; reason: string }>(IPC.lessonsAct, a),
+  lessonsPending: () => call<number>(IPC.lessonsPending),
   nowView: () => call<NowView>(IPC.nowView),
   inbox: (scope: InboxScope) => call<InboxView>(IPC.inboxList, scope),
   answerInbox: (id: number, text: string) => call<boolean>(IPC.inboxAnswer, id, text),

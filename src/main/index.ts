@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, Tray } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, shell, Tray } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -107,6 +107,7 @@ import { applyGhResolution, branchRuns, compareFiles, failedLog, ghBinary, merge
 import { LessonsRepo } from "./db/lessons-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
 import { LessonRunner } from "./lessons/lesson-runner";
+import { LessonsService } from "./lessons/lessons-service";
 import type { HeadlessExecDeps } from "./handoff/headless-exec";
 import * as git from "./tickets/git";
 import { canSend } from "./safe-send";
@@ -459,6 +460,32 @@ async function bootstrap(): Promise<void> {
       return { decisions: ps.flatMap((p) => p.decisions.map((d) => d.statement)), learnings: ps.flatMap((p) => p.learnings), transcripts };
     },
     lang: () => currentLang(), now: Date.now, notify: () => notify(), log: logger,
+  });
+  // 复盘规矩页：仓库路径直接查表（含已归档的 ticket 仓库）；归组建议按 ticket 和 feature 各算一组。
+  const repoPathRows = (sql: string): { k: number | string; repo_path: string }[] => db.prepare(sql).all() as unknown as { k: number | string; repo_path: string }[];
+  const lessonsService = new LessonsService({
+    repo: lessonsRepo, identity: repoIdentity, runner: lessonRunner,
+    knownRepoPaths: () => [
+      ...new Set(
+        repoPathRows(
+          `SELECT ticket_key AS k, repo_path FROM ticket_repos UNION SELECT feature_id AS k, repo_path FROM feature_repos UNION SELECT epic_id AS k, repo_path FROM epic_repos`,
+        ).map((r) => r.repo_path),
+      ),
+    ],
+    repoGroups: () => {
+      const groups = new Map<string, Set<string>>();
+      for (const [kind, sql] of [
+        ["t", `SELECT ticket_key AS k, repo_path FROM ticket_repos`],
+        ["f", `SELECT feature_id AS k, repo_path FROM feature_repos`],
+      ] as const) {
+        for (const r of repoPathRows(sql)) {
+          const key = `${kind}:${r.k}`;
+          (groups.get(key) ?? groups.set(key, new Set()).get(key)!).add(r.repo_path);
+        }
+      }
+      return [...groups.values()].map((g) => [...g]);
+    },
+    ghAvailable: () => ghBinary() !== null, openExternal: (url) => void shell.openExternal(url), now: Date.now, notify: () => notify(),
   });
   /** 开着终端的 Butler session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
   const needsYouHeads = (): NeedsYouHead[] => {
@@ -1173,6 +1200,7 @@ async function bootstrap(): Promise<void> {
     closeIdleSessions: (ids) => sessionCleanup.closeIdleNow(ids),
     deleteHiddenSessions: (ids) => sessionCleanup.deleteHidden(ids),
     inbox: inboxService,
+    lessons: lessonsService,
     prStages: new PrStagesService({
       tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id) },
       features: {
