@@ -386,7 +386,7 @@ export class SessionService {
    * 第一次开总控时把规划和其他 feature 的情况发过去（设计文档 2026-11-01“规划到开工的流程”）。用户开的总控只有新开的走到这里：
    * 恢复的、运行中的总控和修复 session 都不走。投递成功才记 briefSentAt，失败时下一个新总控重发。不等投递，出错只记日志，session 已经开了。
    * epic 的汇总正在后台生成时（create_feature 刚触发）先等它，最多 BRIEF_REFRESH_WAIT_MS，这样其他 feature 的进度是新的。
-   * 从等待开始就算在投递中，这期间再开总控不会多发。等完按现状判断：feature 可能已经归档或移走了。
+   * 从等待开始就算在投递中（briefsSending 防重发；终端上用 pty.reserve 占住，guard 看得到），这期间再开总控不会多发。等完按现状判断：feature 可能已经归档或移走了。
    * epic 用 start_feature 开的（start，BTL-190 第 4 点；新开的和恢复的都走到这里）：规划还没发过就发开工版的规划；
    * 发过了（或者正在发）就发一条短的开工消息，附上 brief，不再记 briefSentAt。
    */
@@ -396,6 +396,9 @@ export class SessionService {
     const full = !!feature.brief?.trim() && feature.briefSentAt === null && !this.briefsSending.has(id);
     if (!full && !start) return;
     if (full) this.briefsSending.add(id);
+    // 从现在到这条消息递完，这个终端都算有自动输入在路上：全新启动的 claude 一到输入框就记成在等输入，
+    // 等汇总的那段时间（最多 BRIEF_REFRESH_WAIT_MS）里别的自动输入不能抢先贴进去。同步取，赶在 SessionStart 之前。
+    const release = this.d.pty.reserve(termId);
     try {
       if (full) {
         const inflight = this.d.epicRefresh?.(feature.epicId);
@@ -422,6 +425,7 @@ export class SessionService {
     } catch (e) {
       this.d.log?.(`brief of feature ${id} failed`, e);
     } finally {
+      release();
       if (full) this.briefsSending.delete(id);
     }
   }

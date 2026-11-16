@@ -4,8 +4,11 @@ import type { TicketsRepo } from "../db/tickets-repo";
 import { normalizePromptText, type TranscriptState } from "../sessions/discovery";
 
 export type HookEffect =
-  /** resumed：Butler 终端里 resume 起来的 session，停在输入框等着（BTL-190 第 2+3 点：马上递卡片上答好的回答）。 */
-  | { kind: "session_started"; sessionId: string; ticketKey: string | null; replaced: string | null; resumed?: true }
+  /**
+   * resumed：Butler 终端里 resume 起来的 session，停在输入框等着（BTL-190 第 2+3 点：马上递卡片上答好的回答）。
+   * fresh：Butler 终端里全新启动（source startup）的 session，同样停在空输入框上（BTL-190 follow-up D）。
+   */
+  | { kind: "session_started"; sessionId: string; ticketKey: string | null; replaced: string | null; resumed?: true; fresh?: true }
   | { kind: "nested"; sessionId: string }
   | { kind: "waiting"; sessionId: string; waiting: boolean }
   | { kind: "ended"; sessionId: string }
@@ -106,7 +109,11 @@ export function applyHookEnvelope(
       // 关着终端时在卡片上答好的回答就一直递不进去（BTL-190 第 2+3 点）。只管 Butler 终端里的。
       const resumed = source === "resume" && Boolean(env.butlerSession) && sessions.get(id) !== null;
       if (resumed) sessions.setWaiting(id, true, at);
-      return { kind: "session_started", sessionId: id, ticketKey, replaced, ...(resumed && { resumed: true as const }) };
+      // 全新启动（startup）的 claude 也停在空输入框上，没人打过字就不会有 Stop；不记成在等，guard 就一直说它忙。
+      // 只管 Butler 终端里的（嵌套的 claude 上面已经返回）。
+      const fresh = source === "startup" && env.butlerSession === id && sessions.get(id) !== null;
+      if (fresh) sessions.setWaiting(id, true, at);
+      return { kind: "session_started", sessionId: id, ticketKey, replaced, ...(resumed && { resumed: true as const }), ...(fresh && { fresh: true as const }) };
     }
     case "Stop":
       ensure();

@@ -92,6 +92,7 @@ import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
 import { judgeStuck } from "./sessions/stuck-judge";
+import { markTurnEndedWithoutStop } from "./sessions/turn-end";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
 import { idleCloseMinutes, llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
@@ -459,6 +460,11 @@ async function bootstrap(): Promise<void> {
     intervals: activityIntervals(process.env),
     // 实况窗口（BTL-190 第 7 点）：新的工具调用、记忆读写直接推给界面。
     onEvent: (e) => safeSend(IPC.activityEvent, e),
+    // transcript 显示这一轮没经过 Stop 就结束了（Esc 打断、API / 限额错误）：Claude Code 不触发 Stop，不记成在等输入的话，
+    // 之后往里发消息、闲置自动关闭都认为它还在忙。at 之后已经有输入（UserPromptSubmit）就不动。
+    onTurnEnd: (id, at) => {
+      if (markTurnEndedWithoutStop(sessions, id, at)) sessionStopped(id);
+    },
     log: logger,
   });
   /** 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。 */
@@ -964,6 +970,28 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
 
+  /**
+   * 一个 session 停下来等输入了（Stop hook、终端重新打开、全新启动，或者 transcript 显示这一轮没经过 Stop 就结束了）：
+   * 有“对方已经合完”的通知就趁现在发（设计文档 2026-11-04：不打断忙着的 session）。
+   * 同一个时机也递还没递出去的 CI 结论（先重读活动），并且马上查一次这个仓库的 PR 和 CI（刚停下的 session 常常刚 push）。
+   */
+  const sessionStopped = (stopped: string): void => {
+    void holdWatcher.sessionIdle(stopped);
+    // 活动没变时 activityMonitor 不会 notify：停下来以后的「需要你」判断在这里补一次。
+    void refreshActivityOf(stopped)
+      .catch((e: unknown) => logger(`ci delivery: re-reading the activity of ${stopped} failed`, e))
+      .then(() => {
+        needsYou.update();
+        // 卡片上答好的回答、该送给总控的汇报也趁现在送（永不 reject）。
+        void inboxService.flush();
+        // 在等 Butler 总控停下来的巡检也趁现在送（BTL-190 第 5 点，永不 reject）。
+        if (!headlessAbort.signal.aborted) void butlerPatrol.check();
+        return flushCi();
+      });
+    const repoId = sessions.head(stopped)?.repoId;
+    if (repoId != null) prWatcher.soon(repoId);
+  };
+
   const inbox = new HookInbox({
     dir: paths.inbox,
     badDir: paths.inboxBad,
@@ -1015,22 +1043,9 @@ async function bootstrap(): Promise<void> {
       // claude 停下来等输入了：有“对方已经合完”的通知就趁现在发（设计文档 2026-11-04：不打断忙着的 session）。
       // 同一个时机也递还没递出去的 CI 结论（先重读活动），并且马上查一次这个仓库的 PR 和 CI（刚停下的 session 常常刚 push）。
       // 终端重新打开（--resume）的 session 停在输入框等着（hook-events 记成 waiting）：和停下来一样，马上递卡片上答好的回答等。
-      if ((effect.kind === "waiting" && effect.waiting) || (effect.kind === "session_started" && effect.resumed === true)) {
-        const stopped = env.butlerSession ?? effect.sessionId;
-        void holdWatcher.sessionIdle(stopped);
-        // 活动没变时 activityMonitor 不会 notify：停下来以后的「需要你」判断在这里补一次。
-        void refreshActivityOf(stopped)
-          .catch((e: unknown) => logger(`ci delivery: re-reading the activity of ${stopped} failed`, e))
-          .then(() => {
-            needsYou.update();
-            // 卡片上答好的回答、该送给总控的汇报也趁现在送（永不 reject）。
-            void inboxService.flush();
-            // 在等 Butler 总控停下来的巡检也趁现在送（BTL-190 第 5 点，永不 reject）。
-            if (!headlessAbort.signal.aborted) void butlerPatrol.check();
-            return flushCi();
-          });
-        const repoId = sessions.head(stopped)?.repoId;
-        if (repoId != null) prWatcher.soon(repoId);
+      // 全新启动的也一样（hook-events 记成 waiting）：没人打过字就不会有 Stop，不在这里送的话，等着的回答和汇报要等到用户先说一句话。
+      if ((effect.kind === "waiting" && effect.waiting) || (effect.kind === "session_started" && (effect.resumed === true || effect.fresh === true))) {
+        sessionStopped(env.butlerSession ?? effect.sessionId);
       }
       notify();
       // 还没归属 ticket、又缺 cwd / 分支 / 首条提示的 session：触发一次发现（每个 session 每次运行最多一次）。

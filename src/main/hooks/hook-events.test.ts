@@ -24,7 +24,7 @@ describe("applyHookEnvelope", () => {
   it("SessionStart from a Butler terminal binds the ticket", () => {
     const { sessions, deps } = setup();
     expect(applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", butlerSession: "s1" }), deps))
-      .toEqual({ kind: "session_started", sessionId: "s1", ticketKey: "PROJ-1", replaced: null });
+      .toMatchObject({ kind: "session_started", sessionId: "s1", ticketKey: "PROJ-1", replaced: null });
     expect(sessions.get("s1")).toMatchObject({ ticketKey: "PROJ-1", origin: "butler", cwd: "/w", lastActivityAt: 100 });
   });
 
@@ -101,6 +101,27 @@ describe("applyHookEnvelope", () => {
     const { deps } = setup();
     expect(applyHookEnvelope({ v: 1, receivedAt: 1, ticket: null, butlerSession: null, payload: null }, deps).kind).toBe("ignored");
     expect(applyHookEnvelope(env("Notification", "s1"), deps)).toEqual({ kind: "ignored", reason: "unhandled_event:Notification" });
+  });
+
+  it("a fresh claude (startup) in a Butler terminal is waiting at the empty prompt; the first prompt clears it (follow-up D)", () => {
+    const { sessions, deps } = setup();
+    const eff = applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", butlerSession: "s1" }, { source: "startup" }), deps);
+    expect(eff).toEqual({ kind: "session_started", sessionId: "s1", ticketKey: "PROJ-1", replaced: null, fresh: true });
+    expect(sessions.get("s1")?.waitingForInput).toBe(true);
+    applyHookEnvelope(env("UserPromptSubmit", "s1", { receivedAt: 200 }), deps);
+    expect(sessions.get("s1")?.waitingForInput).toBe(false);
+  });
+
+  it("startup outside a Butler terminal, or nested under another id, is not marked waiting (follow-up D)", () => {
+    const { sessions, deps } = setup();
+    const eff = applyHookEnvelope(env("SessionStart", "x1", {}, { source: "startup" }), deps);
+    expect(eff).toEqual({ kind: "session_started", sessionId: "x1", ticketKey: null, replaced: null });
+    expect(sessions.get("x1")?.waitingForInput).toBe(false);
+    applyHookEnvelope(env("SessionStart", "A", { butlerSession: "A" }, { source: "startup" }), deps);
+    applyHookEnvelope(env("UserPromptSubmit", "A"), deps);
+    expect(applyHookEnvelope(env("SessionStart", "N", { butlerSession: "A" }, { source: "startup" }), deps)).toEqual({ kind: "nested", sessionId: "N" });
+    expect(sessions.get("N")?.waitingForInput).toBe(false);
+    expect(sessions.get("A")?.waitingForInput).toBe(false);
   });
 
   it("a nested claude (startup, other id) in a Butler terminal does not hijack the chain", () => {

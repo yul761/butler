@@ -287,6 +287,21 @@ export class PtyManager {
     return (this.inFlight.get(termId) ?? 0) > 0;
   }
 
+  /**
+   * 先占住这个终端：到返回的 release 被调用之前，autoInputInFlight 一直是 true。给「要把第一条消息交给刚启动的 claude」的路径用——
+   * 从启动（SessionStart 之前）起就要让 guard 看到有自动输入在路上，否则 claude 一停在空输入框上，别的自动输入就能插进来。
+   * release 只生效一次。
+   */
+  reserve(termId: string): () => void {
+    this.hold(termId, 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.hold(termId, -1);
+    };
+  }
+
   private hold(termId: string, delta: 1 | -1): void {
     const n = (this.inFlight.get(termId) ?? 0) + delta;
     if (n > 0) this.inFlight.set(termId, n);
