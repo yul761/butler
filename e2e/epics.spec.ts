@@ -346,14 +346,17 @@ test("an epic from planning to archive: features from the epic session, the plan
   await expect.poll(() => terminalText(page)).toContain("收到：still planning");
   await exitSession(page);
 
-  // 12. 等待标记往上传：现在什么都没在等。logs 的 DMS-1 开 session 说一句话，真的 Stop hook：ticket → feature → epic，epic 折叠时也看得到。
+  // 12. 等待标记往上传：现在什么都没在等。logs 的 DMS-1 开 session（刚启动就算在等）再说一句话，真的 Stop hook：ticket → feature → epic，epic 折叠时也看得到。
   await expect(epicRow.locator(".badge")).toHaveCount(0);
   await goToFeature("logs");
   await newTicket(page, "DMS-1", "audit", "metrics");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   expect(interactiveRuns(s).at(-1)).toContain("butler-epic");
-  await expect(epicRow.locator(".badge")).toHaveCount(0);
+  // 刚打开、还没人打字的 session 也算停着在等输入（1.9.0 起，总控才能往里发），等待标记同样往上传。
+  await expect(sidebarTicket("DMS-1").locator(".badge")).toBeVisible();
+  await expect(epicRow.locator(".badge")).toBeVisible();
+  await expect(featureRow("payment").locator(".badge")).toHaveCount(0);
   await typeLine(page, "hello");
   await expect.poll(() => terminalText(page)).toContain("收到：hello");
   await expect(sidebarTicket("DMS-1").locator(".badge")).toBeVisible();
