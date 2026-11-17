@@ -1,6 +1,6 @@
 import type { BranchWatchRepo, BranchWatchRow } from "../db/branch-watch-repo";
 import type { PrStageRepo } from "../db/pr-stage-repo";
-import { PR_READ_GIVE_UP, type TicketPr, type TicketPrsRepo } from "../db/ticket-prs-repo";
+import type { TicketPr, TicketPrsRepo } from "../db/ticket-prs-repo";
 import {
   reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prStatus, type prsForBranch, type reviewAuthors,
   type ReviewAuthors, type reviewComments,
@@ -219,40 +219,55 @@ export class PrWatcher {
 
   private async pollPrs(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, marks: Marks): Promise<void> {
     const live = new Set(tickets.map((t) => t.key));
+    const now = this.d.now();
     // 归档 ticket 里没读过的行（补链接来的）也读一次；读过以后 needingRead 不再给它。
-    const rows = this.d.prs.needingRead(this.d.now()).filter((r) => live.has(r.ticketKey) || r.checkedAt === 0);
+    // 放弃了的（read_retry_at 还没到）不读，除非这一轮是强制的（用户点了刷新、session 刚 push）。
+    const rows = this.d.prs
+      .needingRead()
+      .filter((r) => (live.has(r.ticketKey) || r.checkedAt === 0) && (r.readRetryAt === null || r.readRetryAt <= now || forced(r.ticketKey, r.repoId)));
     const urls = new Set(rows.map((r) => r.url));
     for (const u of this.unreadBackoff.keys()) if (!urls.has(u)) this.unreadBackoff.delete(u);
     const polls = prPolls(rows, {
       repoOf: (id) => this.d.repoOf(id), ghWorkDir: (r) => this.d.ghWorkDir(r), home: this.d.home, sessionOpen: (k, id) => this.d.sessionOpen(k, id),
     });
-    const now = this.d.now();
     const due = capRound(
       polls.filter((p) =>
         p.rows.some((r) => forced(r.ticketKey, r.repoId) || (now >= nextPrCheckAt(r, p.sessionOpen) && now >= (this.unreadBackoff.get(p.url)?.at ?? 0))),
       ),
     );
-    await Promise.all(due.map((p) => this.part(`reading ${p.url}`, () => this.poll(p, marks))));
+    const unread: PrPoll[] = [];
+    await Promise.all(due.map((p) => this.part(`reading ${p.url}`, () => this.poll(p, unread, marks))));
+    // 这一轮读了两个以上、全都失败：多半是 gh 离线 / 没登录 / 网络断了，不是这些 PR 的问题，不算进失败次数。
+    const outage = due.length >= 2 && unread.length === due.length;
+    if (outage) this.d.log(`pr watch: all ${due.length} PR reads failed this round; not counting them (gh offline?)`);
+    for (const p of unread) await this.part(`noting the failed read of ${p.url}`, () => this.noteFailed(p, !outage, marks));
   }
 
-  /** 读一个 PR，写进链接它的每个 ticket 的行。 */
-  private async poll(p: PrPoll, marks: Marks): Promise<void> {
+  /**
+   * C-V7：读失败不是 PR 变了。ci、state 留着上一次的，只记下读失败；从没读成功过的 checkedAt 留 0（还算第一次读），过一会儿再试。
+   * 失败了 10 次（PR_READ_GIVE_UP）、持续一天：停一天（只有强制读会读它），开着的状态也不再挡着 ticket。
+   */
+  private noteFailed(p: PrPoll, count: boolean, marks: Marks): void {
+    const now = this.d.now();
+    let gaveUp = false;
+    for (const r of p.rows) {
+      if (this.d.prs.noteReadFailure(r.id, now, { count }).gaveUp) gaveUp = true;
+      if (!r.readError) marks.changed = true;
+    }
+    if (gaveUp) {
+      this.d.log(`pr watch: giving up on ${p.url} after a day of failed reads; trying again once a day`);
+      marks.changed = true;
+      for (const r of p.rows) marks.prChanged.add(r.ticketKey);
+    }
+  }
+
+  /** 读一个 PR，写进链接它的每个 ticket 的行。读失败的放进 unread，整轮读完再记（要先知道是不是整轮都失败了）。 */
+  private async poll(p: PrPoll, unread: PrPoll[], marks: Marks): Promise<void> {
     const pr = await this.gh(() => this.d.gh.prStatus(p.cwd, p.url, PR_GH_TIMEOUT_MS));
     const now = this.d.now();
     if (!pr) {
-      // C-V7：读失败不是 PR 变了。ci、state 留着上一次的，只记下读失败；从没读成功过的 checkedAt 留 0（还算第一次读），过一会儿再试。
-      // 连续失败到 PR_READ_GIVE_UP 次：停一天（needingRead 不给它），开着的状态也不再挡着 ticket。
       this.d.log(`pr watch: reading ${p.url} failed`);
-      let gaveUp = false;
-      for (const r of p.rows) {
-        if (this.d.prs.noteReadFailure(r.id, now) === PR_READ_GIVE_UP) gaveUp = true;
-        if (!r.readError) marks.changed = true;
-      }
-      if (gaveUp) {
-        this.d.log(`pr watch: giving up on ${p.url} after ${PR_READ_GIVE_UP} failed reads in a row; trying again once a day`);
-        marks.changed = true;
-        for (const r of p.rows) marks.prChanged.add(r.ticketKey);
-      }
+      unread.push(p);
       if (p.rows.some((r) => r.checkedAt === 0)) {
         const prev = this.unreadBackoff.get(p.url);
         const delay = prev ? Math.min(prev.delay * 2, PR_SLOW_MS) : UNREAD_RETRY_MS;
@@ -292,7 +307,7 @@ export class PrWatcher {
       this.d.log(`pr watch: recording the stages of ${r.url} for ${r.ticketKey} failed`, e);
     }
     this.d.prs.update(r.id, {
-      state, review: pr.review, ci: pr.ci, headSha: pr.headSha, headBranch, failed, readError: false, readFailures: 0, readRetryAt: null, checkedAt: now,
+      state, review: pr.review, ci: pr.ci, headSha: pr.headSha, headBranch, failed, readError: false, readFailures: 0, readFailingSince: null, readRetryAt: null, checkedAt: now,
       openedAt: pr.createdAt ?? r.openedAt, mergedAt, closedAt,
     });
     if (first || r.state !== state || r.review !== pr.review) marks.prChanged.add(r.ticketKey);
@@ -361,8 +376,8 @@ export class PrWatcher {
 
   private async checkBranches(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, marks: Marks): Promise<void> {
     const targets = branchTargets(tickets, { ghWorkDir: (r) => this.d.ghWorkDir(r), sessionOpen: (k, id) => this.d.sessionOpen(k, id) });
-    const open = this.d.prs.needingRead(this.d.now()).filter((r) => r.state === "open");
     const now = this.d.now();
+    const open = this.d.prs.needingRead().filter((r) => r.state === "open" && (r.readRetryAt === null || r.readRetryAt <= now));
     const due = capRound(
       targets.filter((t) => {
         const hasOpenPr = open.some((r) => r.repoId === t.repoId && r.headBranch === t.branch);

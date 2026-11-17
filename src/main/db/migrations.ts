@@ -487,9 +487,10 @@ export const MIGRATIONS: string[] = [
   CREATE TABLE claude_availability (id INTEGER PRIMARY KEY CHECK (id = 1), state TEXT NOT NULL, updated_at INTEGER NOT NULL);
   ALTER TABLE sessions ADD COLUMN lesson_run_id INTEGER REFERENCES lesson_runs(id) ON DELETE SET NULL;
   `,
-  // PR 一直读不到：连续失败的次数；失败到上限后 read_retry_at 之前不再读（一天试一次）。读成功两个都清掉。
+  // PR 一直读不到：连续失败的次数和这一串失败开始的时间；失败到上限、而且已经失败了一天，read_retry_at 之前不再读（一天试一次）。读成功三个都清掉。
   `
   ALTER TABLE ticket_prs ADD COLUMN read_failures INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE ticket_prs ADD COLUMN read_failing_since INTEGER;
   ALTER TABLE ticket_prs ADD COLUMN read_retry_at INTEGER;
   `,
 ];

@@ -71,28 +71,37 @@ describe("TicketPrsRepo", () => {
     const doneMerged = prs.link(link({ url: "u/4", number: 4, state: "merged" })).pr;
     const doneClosed = prs.link(link({ url: "u/5", number: 5, state: "closed" })).pr;
     for (const p of [readOpen, doneMerged, doneClosed]) prs.update(p.id, { checkedAt: 9 });
-    expect(prs.needingRead(9).map((p) => p.id)).toEqual([open.id, readOpen.id, neverRead.id]);
+    expect(prs.needingRead().map((p) => p.id)).toEqual([open.id, readOpen.id, neverRead.id]);
   });
 
-  it("noteReadFailure counts failures; the 10th parks the row for 24 h and needingRead skips it until then; a successful read resets both", () => {
+  it("noteReadFailure gives up only after 10 failures that span 24 h; then parks the row for 24 h; a successful read resets all three", () => {
     const { prs } = setup();
     const p = prs.link(link()).pr;
-    expect(prs.get(p.id)).toMatchObject({ readFailures: 0, readRetryAt: null });
-    for (let i = 1; i < PR_READ_GIVE_UP; i++) prs.noteReadFailure(p.id, 100 + i);
-    expect(prs.get(p.id)).toMatchObject({ readFailures: PR_READ_GIVE_UP - 1, readRetryAt: null, readError: true });
+    expect(prs.get(p.id)).toMatchObject({ readFailures: 0, readRetryAt: null, readFailingSince: null });
+    // 一小时里失败十几次（gh 短暂离线）：不放弃。
+    for (let i = 0; i < PR_READ_GIVE_UP + 2; i++) expect(prs.noteReadFailure(p.id, 100 + i * 60_000).gaveUp).toBe(false);
+    expect(prs.get(p.id)).toMatchObject({ readFailures: PR_READ_GIVE_UP + 2, readRetryAt: null, readFailingSince: 100, readError: true });
     expect(prGivenUp(prs.get(p.id)!)).toBe(false);
-    expect(prs.needingRead(200).map((x) => x.id)).toEqual([p.id]);
-    prs.noteReadFailure(p.id, 200);
-    expect(prs.get(p.id)).toMatchObject({ readFailures: PR_READ_GIVE_UP, readRetryAt: 200 + PR_READ_RETRY_MS });
+    // 从第一次失败起满 24 小时还在失败：放弃，停一天。
+    const at = 100 + PR_READ_RETRY_MS;
+    expect(prs.noteReadFailure(p.id, at)).toEqual({ failures: PR_READ_GIVE_UP + 3, gaveUp: true });
+    expect(prs.get(p.id)).toMatchObject({ readRetryAt: at + PR_READ_RETRY_MS, readFailingSince: 100 });
     expect(prGivenUp(prs.get(p.id)!)).toBe(true);
-    expect(prs.needingRead(201)).toEqual([]);
-    expect(prs.needingRead(200 + PR_READ_RETRY_MS).map((x) => x.id)).toEqual([p.id]);
-    // 过了一天再失败：再停一天。
-    prs.noteReadFailure(p.id, 200 + PR_READ_RETRY_MS);
-    expect(prs.get(p.id)).toMatchObject({ readFailures: PR_READ_GIVE_UP + 1, readRetryAt: 200 + 2 * PR_READ_RETRY_MS });
-    prs.update(p.id, { readError: false, readFailures: 0, readRetryAt: null, checkedAt: 300 });
-    expect(prs.get(p.id)).toMatchObject({ readFailures: 0, readRetryAt: null });
-    expect(prs.needingRead(301).map((x) => x.id)).toEqual([p.id]);
+    // needingRead 不过滤：停着的由调用方决定（强制读要能读到）。
+    expect(prs.needingRead().map((x) => x.id)).toEqual([p.id]);
+    // 过了一天再失败：再停一天，不再算“刚放弃”。
+    expect(prs.noteReadFailure(p.id, at + PR_READ_RETRY_MS).gaveUp).toBe(false);
+    expect(prs.get(p.id)).toMatchObject({ readRetryAt: at + 2 * PR_READ_RETRY_MS });
+    prs.update(p.id, { readError: false, readFailures: 0, readRetryAt: null, readFailingSince: null, checkedAt: 300 });
+    expect(prs.get(p.id)).toMatchObject({ readFailures: 0, readRetryAt: null, readFailingSince: null });
+  });
+
+  it("noteReadFailure with count: false only flags read_error (an outage round)", () => {
+    const { prs } = setup();
+    const p = prs.link(link()).pr;
+    prs.update(p.id, { checkedAt: 5 });
+    expect(prs.noteReadFailure(p.id, 50, { count: false })).toEqual({ failures: 0, gaveUp: false });
+    expect(prs.get(p.id)).toMatchObject({ readError: true, checkedAt: 50, readFailures: 0, readFailingSince: null, readRetryAt: null });
   });
 
   it("noteReadFailure keeps checked_at at 0 on a never-read row and stamps it on a read row", () => {
@@ -107,11 +116,10 @@ describe("TicketPrsRepo", () => {
   });
 
   it("linkedOpen: a read open PR counts; never-read and given-up ones do not", () => {
-    const row = { state: "open" as const, checkedAt: 5, readFailures: 0 };
+    const row = { state: "open" as const, checkedAt: 5, readRetryAt: null };
     expect(linkedOpen([row])).toBe(true);
     expect(linkedOpen([{ ...row, checkedAt: 0 }])).toBe(false);
-    expect(linkedOpen([{ ...row, readFailures: PR_READ_GIVE_UP }])).toBe(false);
-    expect(linkedOpen([{ ...row, readFailures: PR_READ_GIVE_UP - 1 }])).toBe(true);
+    expect(linkedOpen([{ ...row, readRetryAt: 9 }])).toBe(false);
     expect(linkedOpen([{ ...row, state: "merged" }])).toBe(false);
   });
 

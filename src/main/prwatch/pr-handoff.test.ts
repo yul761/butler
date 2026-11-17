@@ -6,7 +6,7 @@ import { prHandoff } from "./pr-handoff";
 const row = (o: Partial<TicketPr> = {}): TicketPr => ({
   id: 1, ticketKey: "BTL-1", url: "https://github.com/o/app/pull/7", slug: "o/app", repoId: 1, number: 7, headBranch: "btl-1",
   state: "open", review: "pending", ci: "passing", readError: false, headSha: "a1", failed: [], openedAt: 1, mergedAt: null, closedAt: null,
-  source: "branch", linkedAt: 1, checkedAt: 1, deliveredKey: null, mergedHandledAt: null, readFailures: 0, readRetryAt: null, ...o,
+  source: "branch", linkedAt: 1, checkedAt: 1, deliveredKey: null, mergedHandledAt: null, readFailures: 0, readFailingSince: null, readRetryAt: null, ...o,
 });
 const pr = (o: Partial<Pr> = {}): Pr => ({ number: 7, url: "https://github.com/o/app/pull/7", state: "open", review: "pending", ...o });
 const base = (id: number, prs: Pr[]) => ({ id, createdAt: 0, status: "in_review" as const, prs });

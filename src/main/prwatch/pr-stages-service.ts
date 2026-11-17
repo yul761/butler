@@ -35,11 +35,11 @@ const scopePr = (p: TicketPr): ScopePr => ({
  * 一直读不到、放弃了的（prGivenUp）开着的 PR 不挡。
  */
 export function ticketMerged(
-  t: Pick<Ticket, "status" | "statusManual">, prs: (Pick<TicketPr, "state"> & Partial<Pick<TicketPr, "readFailures">>)[],
+  t: Pick<Ticket, "status" | "statusManual">, prs: (Pick<TicketPr, "state"> & Partial<Pick<TicketPr, "readRetryAt">>)[],
 ): boolean {
   const status = effectiveStatus(t);
   if (status === "merged_pending_followup" || status === "done") return true;
-  return prs.length > 0 && prs.every((p) => p.state !== "open" || prGivenUp({ readFailures: p.readFailures ?? 0 })) && prs.some((p) => p.state === "merged");
+  return prs.length > 0 && prs.every((p) => p.state !== "open" || prGivenUp({ readRetryAt: p.readRetryAt ?? null })) && prs.some((p) => p.state === "merged");
 }
 
 export class PrStagesService {
