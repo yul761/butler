@@ -401,6 +401,7 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .pr-cell.pr-unknown { background: var(--panel); color: var(--stage-muted); border-style: dashed; font-style: italic; }
 .pr-link, .pr-no-pr { margin-left: auto; font-size: 12px; }
 .pr-closed { margin-left: 6px; padding: 1px 6px; border-radius: 6px; font-size: 12px; border: 1px solid var(--danger); color: var(--stage-danger); background: color-mix(in srgb, var(--danger) 12%, var(--bg)); }
+.pr-row-name .pill { margin: 0 0 0 6px; }
 .pr-archived { margin-left: 6px; padding: 1px 6px; border-radius: 6px; font-size: 12px; border: 1px solid var(--border); color: var(--stage-muted); }
 .pr-timeline-toggle { font-size: 12px; margin-top: 4px; }
 .pr-timeline { list-style: none; margin: 4px 0 0; padding: 0 0 0 8px; border-left: 2px solid var(--border); font-size: 12px; }

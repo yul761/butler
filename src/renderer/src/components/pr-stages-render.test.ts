@@ -72,6 +72,21 @@ describe("the feature and epic PR tables", () => {
     expect(html).toContain(S.prTicketNoRepos);
   });
 
+  it("a merged ticket shows the merged marker, also with no PRs", () => {
+    const html = renderFeature([ticket("T-1", [noPrRow], { merged: true }), ticket("T-2", [prRow(2, { ticketKey: "T-2" })])]);
+    expect(html.match(/<span class="pill merged">/g)).toHaveLength(1);
+    expect(html).toContain(S.prPill.merged);
+    expect(html.indexOf(S.prPill.merged)).toBeLessThan(html.indexOf("T-2"));
+  });
+
+  it("the feature row shows the live PR, not a PR closed after it", () => {
+    const live = prRow(2, { stages: stages.map((c) => ({ ...c, state: c.id === "merge" ? "active" : c.state })), timeline: [{ at: 200, stage: "ci", kind: "ci_passed", detail: null, back: false }] });
+    const closed = prRow(1, { closed: true, timeline: [{ at: 300, stage: "merge", kind: "closed", detail: null, back: false }] });
+    const html = renderFeature([ticket("T-1", [live, closed])]);
+    expect(html).toContain("pr-cell pr-active");
+    expect(html).not.toContain(S.prClosed);
+  });
+
   it("an epic feature with no tickets says so instead of 0/0", () => {
     const html = renderEpic([ticket("T-1", [prRow(1)], { merged: true })], [{ id: 1, name: "pay" }, { id: 2, name: "ship" }]);
     expect(html).toContain(S.prMergedOf(1, 1));

@@ -73,7 +73,7 @@ export function TicketPrStages({ ticketKey }: { ticketKey: string }) {
   return <TicketPrRows rows={tickets[0]?.rows ?? []} />;
 }
 
-/** 一张表：一行一个 ticket（含已归档的），六列是它最新那一行的进度；没有仓库的 ticket 写一句。整行可点，打开 ticket。 */
+/** 一张表：一行一个 ticket（含已归档的），六列是它最新那一行的进度；已合并的 ticket 有标记，没有仓库的写一句。整行可点，打开 ticket。 */
 function TicketsTable({ tickets, onOpenTicket }: { tickets: PrStagesTicket[]; onOpenTicket: (key: string) => void }) {
   return (
     <table className="pr-table">
@@ -92,9 +92,11 @@ function TicketsTable({ tickets, onOpenTicket }: { tickets: PrStagesTicket[]; on
               <td className="pr-row-name">
                 <button className="chip" onClick={(ev) => (ev.stopPropagation(), onOpenTicket(t.ticketKey))}>{t.ticketKey}</button>
                 {prs > 1 && <span className="muted"> {S.prCount(prs)}</span>}
+                {t.merged && <span className="pill merged">{S.prPill.merged}</span>}
                 {t.archived && <span className="pr-archived">{S.prArchived}</span>}
                 {r?.closed && <span className="pr-closed">{S.prClosed}</span>}
               </td>
+              {/* 看有没有行而不是 hasRepos：没有仓库、只有别的仓库的 PR 的 ticket 照样显示进度。 */}
               {r === null
                 ? <td className="muted" colSpan={PR_STAGES.length}>{S.prTicketNoRepos}</td>
                 : r.stages.map((c) => <td key={c.id}><Cell cell={c} named={false} /></td>)}
@@ -126,8 +128,7 @@ interface EpicProps {
 /** epic 的 PR 进度：一行一个 feature，按 ticket 数的进度条和「m/n 已合并」；点开是这个 feature 的 ticket 表（不取数据，便于测试）。 */
 export function EpicPrRows({ tickets, features, onOpenTicket }: EpicProps & { tickets: PrStagesTicket[] }) {
   const [open, setOpen] = useState<number | null>(null);
-  const featureOf = new Map(tickets.map((t) => [t.ticketKey, t.featureId]));
-  const summary = epicPrSummary(tickets, (key) => featureOf.get(key) ?? null);
+  const summary = epicPrSummary(tickets);
   return (
     <div className="pr-epic">
       {features.map((f) => {

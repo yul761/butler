@@ -12,8 +12,6 @@ function row(featureId: number | null, states: Partial<Record<PrStageId, PrStage
 const at = (...ms: number[]): PrTimelineEntry[] => ms.map((m) => ({ at: m, stage: "dev", kind: "push", detail: null, back: false }));
 const ticket = (key: string, featureId: number | null, rows: PrStagesView[], o: Partial<PrStagesTicket> = {}): PrStagesTicket =>
   ({ ticketKey: key, featureId, title: null, archived: false, merged: false, hasRepos: true, rows, ...o });
-const featureOfList = (ts: PrStagesTicket[]) => (key: string) => ts.find((t) => t.ticketKey === key)?.featureId ?? null;
-const summary = (ts: PrStagesTicket[]) => epicPrSummary(ts, featureOfList(ts));
 
 describe("epicPrSummary", () => {
   it("epicPrSummary counts tickets, not PR rows", () => {
@@ -29,27 +27,48 @@ describe("epicPrSummary", () => {
       ticket("A-5", 1, [row(1, { dev: "active" })]),
       ticket("B-1", 2, [row(2, { dev: "done", merge: "done" }, { prId: 7 })]),
     ];
-    expect(summary(ts).get(1)).toEqual({ featureId: 1, merged: 1, active: 1, failed: 1, notStarted: 2, total: 5 });
+    expect(epicPrSummary(ts).get(1)).toEqual({ featureId: 1, merged: 1, active: 1, failed: 1, notStarted: 2, total: 5 });
     // 行上 merge 完成但 ticket 没算合并：不算 merged。
-    expect(summary(ts).get(2)).toMatchObject({ merged: 0, active: 1, total: 1 });
+    expect(epicPrSummary(ts).get(2)).toMatchObject({ merged: 0, active: 1, total: 1 });
   });
 
   it("an epic feature with no tickets has total 0", () => {
     const ts = [ticket("A-1", 1, [row(1, {})]), ticket("X-1", null, [row(null, {})])];
-    const m = summary(ts);
+    const m = epicPrSummary(ts);
     expect(m.get(2)?.total ?? 0).toBe(0);
     expect([...m.keys()]).toEqual([1]);
   });
 });
 
 describe("newestRow", () => {
-  it("is the row with the latest activity; ties and quiet rows keep the main process order", () => {
+  it("is the row with the latest activity; ties keep the main process order", () => {
     const quiet = row(1, {});
-    const a = row(1, {}, { prId: 1, timeline: at(100, 400) });
-    const b = row(1, {}, { prId: 2, timeline: at(300) });
+    const a = row(1, {}, { prId: 1, noPr: false, timeline: at(100, 400) });
+    const b = row(1, {}, { prId: 2, noPr: false, timeline: at(300) });
     expect(newestRow(ticket("A-1", 1, [quiet, b, a]))).toBe(a);
-    expect(newestRow(ticket("A-1", 1, [quiet, row(1, {}, { prId: 3 })]))).toBe(quiet);
+    const [c, d] = [row(1, {}, { prId: 3, noPr: false }), row(1, {}, { prId: 4, noPr: false })];
+    expect(newestRow(ticket("A-1", 1, [c, d]))).toBe(c);
     expect(newestRow(ticket("A-1", 1, []))).toBeNull();
+  });
+
+  it("on a tie a PR row beats a no-PR row", () => {
+    const quiet = row(1, {});
+    const pr = row(1, {}, { prId: 3, noPr: false });
+    expect(newestRow(ticket("A-1", 1, [quiet, pr]))).toBe(pr);
+    const [early, prAt] = [row(1, {}, { timeline: at(200) }), row(1, {}, { prId: 5, noPr: false, timeline: at(200) })];
+    expect(newestRow(ticket("A-1", 1, [early, prAt]))).toBe(prAt);
+  });
+
+  it("a closed PR never hides a live one, in the feature row and the epic count", () => {
+    // #2 换掉了 #1，#2 的 CI 过了（t=200），之后才关掉 #1（t=300）。
+    const live = row(1, { dev: "done", ci: "done" }, { prId: 2, noPr: false, timeline: at(200) });
+    const closed = row(1, { dev: "done" }, { prId: 1, noPr: false, closed: true, timeline: at(100, 300) });
+    const t = ticket("A-1", 1, [live, closed]);
+    expect(newestRow(t)).toBe(live);
+    expect(epicPrSummary([t]).get(1)).toMatchObject({ active: 1, notStarted: 0, total: 1 });
+    // 全关了才用最新的关闭的那行。
+    const old = row(1, {}, { prId: 0, noPr: false, closed: true, timeline: at(50) });
+    expect(newestRow(ticket("A-2", 1, [old, closed]))).toBe(closed);
   });
 });
 

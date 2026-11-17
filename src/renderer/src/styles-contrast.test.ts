@@ -57,17 +57,20 @@ const decl = (body: string, prop: string): string | null => new RegExp(`(?:^|[;{
 /** 选择器里有 .pr-cell 或 .pr-closed、写了文字颜色的规则；没写底色的格子用 .pr-cell 本身的底色。 */
 const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ selector: m[1].trim(), body: m[2] }));
 const base = rules.find((r) => r.selector === ".pr-cell")!;
-const stageText = rules
-  .filter((r) => /\.pr-(cell|closed)\b(?!-)/.test(r.selector) && decl(r.body, "color") !== null)
-  .map((r) => ({ selector: r.selector, color: decl(r.body, "color")!, background: decl(r.body, "background") ?? decl(base.body, "background")! }));
+const textRule = (r: { selector: string; body: string }) =>
+  ({ selector: r.selector, color: decl(r.body, "color")!, background: decl(r.body, "background") ?? decl(base.body, "background")! });
+const stageText = rules.filter((r) => /\.pr-(cell|closed|archived)\b(?!-)/.test(r.selector) && decl(r.body, "color") !== null).map(textRule);
+/** feature 表里「已合并」用的是现成的 .pill.merged，有自己的颜色，也一起查。 */
+const checked = [...stageText, ...rules.filter((r) => r.selector === ".pill.merged").map(textRule)];
 const stageTokens = [...light.keys()].filter((k) => k.startsWith("--stage-"));
 
 describe("PR stage text contrast (D-14)", () => {
   it("finds the stage rules and tokens it checks", () => {
     expect(stageTokens.sort()).toEqual(["--stage-accent", "--stage-danger", "--stage-muted", "--stage-ok"]);
     expect(stageText.map((r) => r.selector)).toEqual(expect.arrayContaining([
-      ".pr-cell", ".pr-cell.pr-done, .pr-cell.pr-feature_level", ".pr-cell.pr-active", ".pr-cell.pr-failed", ".pr-closed",
+      ".pr-cell", ".pr-cell.pr-done, .pr-cell.pr-feature_level", ".pr-cell.pr-active", ".pr-cell.pr-failed", ".pr-closed", ".pr-archived",
     ]));
+    expect(checked.map((r) => r.selector)).toContain(".pill.merged");
   });
 
   it("stage text uses the --stage-* tokens", () => {
@@ -76,7 +79,7 @@ describe("PR stage text contrast (D-14)", () => {
 
   for (const [theme, vars] of [["light", light], ["dark", dark]] as const) {
     it(`${theme}: every stage text colour reaches 4.5:1 on its real background`, () => {
-      for (const r of stageText) {
+      for (const r of checked) {
         const ratio = contrast(resolve(r.color, vars), resolve(r.background, vars));
         expect(ratio, `${r.selector}: ${r.color} on ${r.background}`).toBeGreaterThanOrEqual(4.5);
       }

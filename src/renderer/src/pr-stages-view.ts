@@ -56,19 +56,24 @@ export interface EpicPrRow {
 const lastAt = (r: PrStagesView): number =>
   Math.max(-Infinity, ...r.timeline.map((e) => e.at), ...r.stages.flatMap((c) => (c.at === null ? [] : [c.at])));
 
-/** ticket 最新的一行：最后有动静的那行；一样晚（或都没动静）时取主进程排在前面的（没有 PR 的行，然后新的 PR）。没有行为 null。 */
+/** r 比 best 新：动静更晚；一样晚时 PR 行胜过没有 PR 的行，其余照主进程的顺序（新的 PR 在前）。 */
+const newer = (r: PrStagesView, best: PrStagesView): boolean =>
+  lastAt(r) > lastAt(best) || (lastAt(r) === lastAt(best) && best.noPr && !r.noPr);
+
+/** ticket 最新的一行：没关闭的行里最新的（关掉旧 PR 不会盖住还开着的新 PR）；全都关了才取关闭的里最新的。没有行为 null。 */
 export function newestRow(t: PrStagesTicket): PrStagesView | null {
-  return t.rows.reduce<PrStagesView | null>((best, r) => (best === null || lastAt(r) > lastAt(best) ? r : best), null);
+  const live = t.rows.filter((r) => !r.closed);
+  return (live.length > 0 ? live : t.rows).reduce<PrStagesView | null>((best, r) => (best === null || newer(r, best) ? r : best), null);
 }
 
 /**
  * 按 feature 数 ticket（不是行，含已归档的）：ticket.merged → merged；其余看最新的一行：
- * 没有行或 PR 已关闭 → notStarted；有 failed 的 cell → failed；dev 还是 todo → notStarted；其余 active。
+ * 没有行或 PR 全关了 → notStarted；有 failed 的 cell → failed；dev 还是 todo → notStarted；其余 active。
  */
-export function epicPrSummary(tickets: PrStagesTicket[], featureOf: (ticketKey: string) => number | null): Map<number, EpicPrRow> {
+export function epicPrSummary(tickets: PrStagesTicket[]): Map<number, EpicPrRow> {
   const out = new Map<number, EpicPrRow>();
   for (const t of tickets) {
-    const featureId = featureOf(t.ticketKey);
+    const featureId = t.featureId;
     if (featureId === null) continue;
     const e = out.get(featureId) ?? { featureId, merged: 0, active: 0, failed: 0, notStarted: 0, total: 0 };
     const r = newestRow(t);
