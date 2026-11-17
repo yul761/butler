@@ -503,8 +503,6 @@ const ZH = {
   lessonsHits: (n: number) => `出现 ${n} 次`,
   lessonsLastSeen: (t: string) => `最后出现 ${t}`,
   lessonsWhy: (why: string) => `为什么：${why}`,
-  lessonsProducts: "产品",
-  lessonsProductScope: (name: string) => `产品：${name}`,
   lessonsNewProduct: "新建产品",
   lessonsProductName: "产品名",
   lessonsAddRepo: "加仓库",

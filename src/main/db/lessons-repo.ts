@@ -119,6 +119,11 @@ export class LessonsRepo {
     return rows.map((p) => this.productView(Number(p.id), p.name));
   }
 
+  product(id: number): LessonProductView | null {
+    const r = this.db.prepare(`SELECT id, name FROM lesson_products WHERE id = ?`).get(id) as unknown as { id: number; name: string } | undefined;
+    return r ? this.productView(Number(r.id), r.name) : null;
+  }
+
   productsOf(slug: string): LessonProductView[] {
     const rows = this.db
       .prepare(

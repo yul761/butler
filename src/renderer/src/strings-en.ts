@@ -496,8 +496,6 @@ export const EN: UiStrings = {
   lessonsHits: (count: number) => `Seen ${n(count, "time")}`,
   lessonsLastSeen: (t: string) => `Last seen ${t}`,
   lessonsWhy: (why: string) => `Why: ${why}`,
-  lessonsProducts: "Products",
-  lessonsProductScope: (name: string) => `Product: ${name}`,
   lessonsNewProduct: "New product",
   lessonsProductName: "Product name",
   lessonsAddRepo: "Add repo",

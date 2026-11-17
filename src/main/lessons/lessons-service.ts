@@ -98,13 +98,17 @@ export class LessonsService {
     const { repo } = this.d;
     const now = this.d.now();
     switch (a.op) {
-      case "confirm":
-        if (!repo.get(a.id)) return NOT_FOUND;
+      case "confirm": {
+        const l = repo.get(a.id);
+        if (!l) return NOT_FOUND;
+        // 只有待确认的能确认：已拒绝或已停用的不能靠这个翻回来。
+        if (l.status !== "pending") return { ok: false, reason: "bad_status" };
         repo.transaction(() => {
           if (a.text !== undefined) repo.setText(a.id, a.text, now);
           repo.setStatus(a.id, "confirmed", now);
         });
         return { ok: true };
+      }
       case "reject":
         if (!repo.get(a.id)) return NOT_FOUND;
         repo.setStatus(a.id, "rejected", now);
@@ -139,12 +143,15 @@ export class LessonsService {
         repo.createProduct(a.name, a.slugs, now);
         return { ok: true };
       case "deleteProduct":
+        if (!repo.product(a.id)) return NOT_FOUND;
         repo.deleteProduct(a.id);
         return { ok: true };
       case "addToProduct":
+        if (!repo.product(a.id) || !repo.repo(a.slug)) return NOT_FOUND;
         repo.addToProduct(a.id, a.slug);
         return { ok: true };
       case "removeFromProduct":
+        if (!repo.product(a.id)) return NOT_FOUND;
         repo.removeFromProduct(a.id, a.slug);
         return { ok: true };
       case "backfill":

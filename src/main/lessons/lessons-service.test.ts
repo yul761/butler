@@ -187,3 +187,30 @@ describe("LessonsService.pendingCount", () => {
     expect(svc.pendingCount()).toBe(2);
   });
 });
+
+describe("LessonsService product and confirm guards", () => {
+  it("confirm on a rejected lesson returns bad_status and leaves it rejected", async () => {
+    const { svc, repo, add } = setup();
+    const id = add("acme/web");
+    repo.setStatus(id, "rejected", 1);
+    expect(await svc.act({ op: "confirm", id })).toEqual({ ok: false, reason: "bad_status" });
+    expect(repo.get(id)?.status).toBe("rejected");
+  });
+
+  it("deleteProduct on a missing id returns not_found", async () => {
+    const { svc } = setup();
+    expect(await svc.act({ op: "deleteProduct", id: 999 })).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("addToProduct on a missing product returns not_found, not an FK error", async () => {
+    const { svc } = setup();
+    expect(await svc.act({ op: "addToProduct", id: 999, slug: "acme/web" })).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("addToProduct with an unknown slug and removeFromProduct on a missing product return not_found", async () => {
+    const { svc, repo } = setup();
+    const pid = repo.createProduct("p", [], 1);
+    expect(await svc.act({ op: "addToProduct", id: pid, slug: "no/such" })).toEqual({ ok: false, reason: "not_found" });
+    expect(await svc.act({ op: "removeFromProduct", id: 999, slug: "acme/web" })).toEqual({ ok: false, reason: "not_found" });
+  });
+});

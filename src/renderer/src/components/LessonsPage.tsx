@@ -34,11 +34,12 @@ export function LessonsPage() {
   // 数据刷新后，指向已经不存在的规矩或产品的界面状态要丢掉（产品 id 会被 SQLite 复用）。
   useEffect(() => {
     if (!state) return;
-    const next = pruneLessonsUi(state, { editing, merging, checked, confirmingDelete });
+    const next = pruneLessonsUi(state, { editing, merging, checked, confirmingDelete, sel });
     if (next.editing !== editing) setEditing(next.editing);
     if (next.merging !== merging) setMerging(next.merging);
     if (next.checked.length !== checked.length) setChecked(next.checked);
     if (next.confirmingDelete !== confirmingDelete) setConfirmingDelete(next.confirmingDelete);
+    if (next.sel !== sel) setSel(next.sel);
   }, [state]);
 
   /** 发一个操作；失败时把原因记在 key 下。成功后什么都不补：等 stateChanged。 */
@@ -81,9 +82,10 @@ export function LessonsPage() {
     const first = !seenRepo.has(r.slug);
     seenRepo.add(r.slug);
     const suffix = first ? r.slug : `${productId ?? "x"}-${r.slug}`;
-    const key = `repo-${r.slug}`;
+    // 产品下的成员行各用自己的键，不然同一个仓库在几个产品下会共用错误和 React 键。
+    const key = productId === null ? `repo-${r.slug}` : `product-${productId}-repo-${r.slug}`;
     return (
-      <li key={suffix} className={`lessons-repo${sel?.kind === "repo" && sel.slug === r.slug ? " selected" : ""}`}>
+      <li key={key} className={`lessons-repo${sel?.kind === "repo" && sel.slug === r.slug ? " selected" : ""}`}>
         <div className="lessons-row">
           <button className="lessons-select" data-testid={`lessons-repo-${suffix}`} onClick={() => select({ kind: "repo", slug: r.slug })}>{r.slug}</button>
           <span className="muted">{r.lastAnalyzedAt === null ? S.lessonsNever : S.lessonsLastAnalyzed(formatTime(r.lastAnalyzedAt))}</span>
