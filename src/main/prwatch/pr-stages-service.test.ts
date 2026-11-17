@@ -182,6 +182,32 @@ describe("PrStagesService", () => {
     expect(ticketMerged(st, [{ state: "open", readRetryAt: 5 }])).toBe(false);
   });
 
+  it("an unread handoff row with a made-up url and the same number as a read row is not shown: one row", () => {
+    const real = prRow({ id: 1, number: 25, url: "https://github.com/yul761/butler/pull/25", slug: "yul761/butler", state: "merged", mergedAt: 200 });
+    const bogus = prRow({
+      id: 2, number: 25, url: "https://github.com/yuchenlin/butler/pull/25", slug: "yuchenlin/butler", repoId: null, headBranch: null, state: "merged",
+      mergedAt: null, openedAt: null, source: "handoff", checkedAt: 0, ci: "unknown",
+    });
+    const rows = rowsOf(make({ tickets: [ticket("A-1", [repo(5, "A-1")])], prs: [real, bogus] }));
+    expect(rows.map((r) => [r.prId, r.noPr])).toEqual([[1, false]]);
+  });
+
+  it("a ticket whose only PR rows were never read: no PR rows and not merged; once read, the row shows and counts", () => {
+    const unread = prRow({ id: 3, number: 26, state: "merged", mergedAt: null, source: "handoff", checkedAt: 0 });
+    const before = make({ tickets: [ticket("A-1", [repo(5, "A-1")])], prs: [unread] }).view({ ticketKey: "A-1" })[0];
+    expect(before.merged).toBe(false);
+    expect(before.rows.filter((r) => !r.noPr)).toEqual([]);
+    const after = make({ tickets: [ticket("A-1", [repo(5, "A-1")])], prs: [{ ...unread, checkedAt: 300, mergedAt: 250 }] }).view({ ticketKey: "A-1" })[0];
+    expect(after.merged).toBe(true);
+    expect(after.rows.map((r) => [r.prId, r.noPr])).toEqual([[3, false]]);
+  });
+
+  it("ticketMerged ignores never-read rows, for and against", () => {
+    const st = { status: "active" as const, statusManual: null };
+    expect(ticketMerged(st, [{ state: "merged", checkedAt: 0 }])).toBe(false);
+    expect(ticketMerged(st, [{ state: "merged", checkedAt: 5 }, { state: "open", checkedAt: 0 }])).toBe(true);
+  });
+
   it("each ticket carries its feature id, also without rows", () => {
     const svc = make({ tickets: [ticket("A-1", [], 10), ticket("B-1", [repo(2, "B-1")], 11)], features: [{ id: 10, epicId: 7 }, { id: 11, epicId: 7 }] });
     expect(svc.view({ epicId: 7 }).map((t) => [t.ticketKey, t.featureId, t.rows.length])).toEqual([["A-1", 10, 0], ["B-1", 11, 1]]);

@@ -32,14 +32,15 @@ const scopePr = (p: TicketPr): ScopePr => ({
 
 /**
  * D-6：ticket 的 PR 都合并或关闭、至少一个合并；或者（手动优先的）状态已经是 merged_pending_followup / done。
- * 一直读不到、放弃了的（prGivenUp）开着的 PR 不挡。
+ * 一直读不到、放弃了的（prGivenUp）开着的 PR 不挡。从没读成功过的行（checkedAt 0）只是链接时的说法（例如模型在 handoff 里编的 URL），不算。
  */
 export function ticketMerged(
-  t: Pick<Ticket, "status" | "statusManual">, prs: (Pick<TicketPr, "state"> & Partial<Pick<TicketPr, "readRetryAt">>)[],
+  t: Pick<Ticket, "status" | "statusManual">, prs: (Pick<TicketPr, "state"> & Partial<Pick<TicketPr, "readRetryAt" | "checkedAt">>)[],
 ): boolean {
   const status = effectiveStatus(t);
   if (status === "merged_pending_followup" || status === "done") return true;
-  return prs.length > 0 && prs.every((p) => p.state !== "open" || prGivenUp({ readRetryAt: p.readRetryAt ?? null })) && prs.some((p) => p.state === "merged");
+  const read = prs.filter((p) => p.checkedAt !== 0);
+  return read.length > 0 && read.every((p) => p.state !== "open" || prGivenUp({ readRetryAt: p.readRetryAt ?? null })) && read.some((p) => p.state === "merged");
 }
 
 export class PrStagesService {
@@ -63,7 +64,8 @@ export class PrStagesService {
   private ticketOf(t: Ticket, since: number | null): PrStagesTicket {
     const upper = t.featureId === null ? [] : this.d.stages.upperDesign(t.featureId, this.d.features.get(t.featureId)?.epicId ?? null);
     const repos = [...t.repos].sort((a, b) => a.id - b.id);
-    const prs = [...this.d.prs.byTicket(t.key)].sort((a, b) => (b.openedAt ?? b.linkedAt) - (a.openedAt ?? a.linkedAt) || b.id - a.id);
+    // 从没读成功过的行（checkedAt 0）只是链接时的说法，不当 PR 显示：handoff 里的 URL 可能是模型编的、永远读不到。读到以后照常显示。
+    const prs = this.d.prs.byTicket(t.key).filter((p) => p.checkedAt > 0).sort((a, b) => (b.openedAt ?? b.linkedAt) - (a.openedAt ?? a.linkedAt) || b.id - a.id);
     const scopes = prs.map(scopePr);
     const refs = repos.map((r) => ({ id: r.id, branch: r.branch }));
     // pr_opened / merged / closed 的 PR 号在 data.number 里。
