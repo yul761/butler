@@ -85,6 +85,14 @@ describe("stageEventFromHook", () => {
     const o = stageEventFromHook(prompt("/code-review"), repo(sess({ ticketKey: "BTL-1", origin: "discovered" })));
     expect(o?.event).toMatchObject({ ticketKey: "BTL-1", data: { name: "code-review", category: "review" } });
   });
+  it("a session with no owner records nothing", () => {
+    expect(stageEventFromHook(prompt("/code-review"), repo(sess({ origin: "discovered" })))).toBeNull();
+  });
+  it("only a word starting with review counts: preview does not", () => {
+    expect(stageEventFromHook(agent("Add preview pane"), repo(sess({ ticketKey: "BTL-1" })))).toBeNull();
+    expect(stageEventFromHook(agent("Review task 3"), repo(sess({ ticketKey: "BTL-1" })))).not.toBeNull();
+    expect(stageEventFromHook(agent(undefined, "code-reviewer"), repo(sess({ ticketKey: "BTL-1" })))).not.toBeNull();
+  });
   it("the skill event carries the session's git branch", () => {
     expect(stageEventFromHook(skill("code-review"), repo(sess({ ticketKey: "BTL-1", gitBranch: "feature/BTL-1" })))?.event.branch).toBe("feature/BTL-1");
     expect(stageEventFromHook(skill("code-review"), repo(sess({ ticketKey: "BTL-1" })))?.event.branch).toBeNull();

@@ -15,7 +15,7 @@ function skillName(p: Record<string, unknown>): string | null {
     const description = str(input.description);
     const subagentType = str(input.subagent_type);
     // 只有描述或类型里带 review 的子 agent 才算：别的子 agent 不是 PR 进度。
-    return /review/i.test(`${description ?? ""} ${subagentType ?? ""}`) ? `agent:${description ?? subagentType}` : null;
+    return /\breview/i.test(`${description ?? ""} ${subagentType ?? ""}`) ? `agent:${description ?? subagentType}` : null;
   }
   if (event === "PostToolUse" && p.tool_name === "Skill") {
     const input = p.tool_input && typeof p.tool_input === "object" ? (p.tool_input as Record<string, unknown>) : {};

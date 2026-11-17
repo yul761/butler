@@ -28,6 +28,11 @@ describe("butler-hook", () => {
     expect((task.payload as Record<string, unknown>).tool_response).toBeUndefined();
   });
 
+  it("passes a non-Agent PostToolUse payload through unchanged", () => {
+    const payload = { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Bash", tool_input: { command: "ls" }, tool_response: { stdout: "x" } };
+    expect(buildEnvelope(JSON.stringify(payload), {}, 1).payload).toEqual(payload);
+  });
+
   it("keeps a truncated raw copy when stdin is not JSON", () => {
     const env = buildEnvelope("x".repeat(20_000), { BUTLER_TICKET: "  " }, 1);
     expect(env.payload).toBeNull();

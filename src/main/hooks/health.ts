@@ -25,6 +25,8 @@ export interface HealthDeps {
   readPath?: () => Promise<string>;
   run?: ExecText;
   log?: (msg: string, err?: unknown) => void;
+  /** installHooks 装好当前版本的 hook 程序之后调用（健康页安装路径）；启动时的同类播种在 index.ts。抛错会被记日志并忽略。 */
+  onHookBinCurrent?: () => void;
 }
 
 async function sha256(file: string): Promise<string> {
@@ -153,6 +155,11 @@ export class HealthService {
     await this.binSync;
     await installHookBinary(this.d.bundledHookBin, this.d.paths.hookBin);
     this.binCurrent = true;
+    try {
+      this.d.onHookBinCurrent?.();
+    } catch (e) {
+      this.d.log?.("onHookBinCurrent failed", e);
+    }
     await installHooks(this.d.paths.claudeSettings, this.d.paths.hookBin, this.d.platform);
     try {
       // 用户自己的 handoff.md 会得到 conflict（不覆盖，不抛错）；写入失败也不能让整个安装白做、健康页不刷新。

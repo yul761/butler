@@ -322,19 +322,22 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   const ticketService = new TicketService({ tickets, features, settings, now: Date.now, workspacesDir: paths.workspaces });
-  const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath(), log: logger });
+  // hook 程序是当前版本（启动时刚换好或本来就是，或健康页刚装好）才看得到 skill 调用：从这时起记「开始记 skill 的时间」。幂等，不会往后移。
+  const seedSkillTracking = () => {
+    try {
+      ensureSkillTrackingSince({ settings, firstSkillAt: () => prStages.firstSkillAt(), now: Date.now });
+    } catch (e) {
+      logger("skill tracking start not recorded", e);
+    }
+  };
+  const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath(), log: logger, onHookBinCurrent: seedSkillTracking });
   const notify = () => safeSend(IPC.stateChanged);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
   // 同时把升级后还是旧版本的 butler-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
   // Butler 旧版本装的 /handoff 也先换成当前版本再探测（C1），健康页报告的是换完的状态。syncHandoffCommand 不抛错。
   const healthReady: Promise<void> = Promise.all([health.syncHandoffCommand().then(() => health.refresh()), health.syncHookBinary()]).then(
     () => {
-      // hook 程序是当前版本（刚换好，或者启动时本来就是）才看得到 skill 调用：从这时起记「开始记 skill 的时间」。幂等，不会往后移。
-      try {
-        if (health.hookBinCurrent() && existsSync(paths.hookBin)) ensureSkillTrackingSince({ settings, firstSkillAt: () => prStages.firstSkillAt(), now: Date.now });
-      } catch (e) {
-        logger("skill tracking start not recorded", e);
-      }
+      if (health.hookBinCurrent() && existsSync(paths.hookBin)) seedSkillTracking();
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       applyGhResolution(resolveGh(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       notify();
