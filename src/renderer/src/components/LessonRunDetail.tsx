@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import type { LessonQueueRowStatus } from "../../../shared/lessons";
 import { api } from "../api";
 import { reportError } from "../errors";
-import { detailButtons, detailSections, openInClaudeOutcome, runDetailFacts, runErrorText, timeText } from "../lesson-runs-view";
+import { detailButtons, detailSections, openInClaudeOutcome, runDetailFacts, runErrorText, runStatusLabel, timeText } from "../lesson-runs-view";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 
@@ -129,7 +129,7 @@ export function LessonRunDetail({ runId, queue, onOpenSession }: {
             {[...d.attempts, d].sort((x, y) => y.id - x.id).map((a) => (
               <li key={a.id} className={a.id === viewId ? "lesson-run selected" : "lesson-run"}>
                 <button className="link" data-testid={`lesson-run-attempt-${a.id}`} aria-current={a.id === viewId ? "true" : undefined} onClick={() => setViewId(a.id)}>
-                  {timeText(a.startedAt)} · {S.lessonRunStatus[a.status === "aborted" ? "failed" : a.status]}
+                  {timeText(a.startedAt)} · {runStatusLabel(a.status, S)}
                 </button>
               </li>
             ))}

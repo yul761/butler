@@ -4,7 +4,7 @@ import { S } from "./strings";
 import type { LessonOrigin } from "../../shared/lessons";
 import { EN } from "./strings-en";
 import { formatDuration } from "./components/TicketActivity";
-import { timeText, detailButtons, detailSections, openInClaudeOutcome, runDetailFacts, queueBarButtons, queueBarText, reasonText, retryAllCount, runErrorText, rowButtons, runCountsText, runSelectable, runStatusPill, RUNNING_TICK_MS, runningTicker, sourceLabel } from "./lesson-runs-view";
+import { timeText, detailButtons, detailSections, openInClaudeOutcome, runDetailFacts, queueBarButtons, queueBarText, reasonText, retryAllCount, runErrorText, rowButtons, runCountsText, runSelectable, runStatusPill, RUNNING_TICK_MS, runningTicker, runStatusLabel, sourceLabel } from "./lesson-runs-view";
 
 const now = new Date(2026, 10, 16, 12, 0).getTime();
 const at = new Date(2026, 10, 16, 15, 0).getTime();
@@ -182,6 +182,17 @@ describe("runDetailFacts", () => {
     expect(facts[S.lessonRunFact.started]).toBe(timeText(d.startedAt));
     const bare = runDetailFacts(detail(), S).map(([k]) => k);
     expect(bare).toEqual([S.lessonRunFact.status, S.lessonRunFact.started, S.lessonRunFact.attempt]);
+  });
+});
+
+describe("runStatusLabel", () => {
+  it("labels an aborted run Interrupted, not failed, in the facts and the attempts list", () => {
+    expect(runStatusLabel("aborted", S)).toBe("中断");
+    expect(runStatusLabel("aborted", EN)).toBe("Interrupted");
+    expect(runStatusLabel("failed", S)).toBe("失败");
+    expect(runStatusLabel("running", EN)).toBe("Running");
+    const facts = Object.fromEntries(runDetailFacts(detail({ status: "aborted", reason: "app_quit" }), EN));
+    expect(facts[EN.lessonRunFact.status]).toBe(`Interrupted · ${EN.lessonRunReason.app_quit}`);
   });
 });
 

@@ -1,5 +1,5 @@
 import type { AvailabilityView } from "../../shared/availability";
-import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason } from "../../shared/lessons";
+import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason, LessonRunStatus } from "../../shared/lessons";
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
@@ -575,7 +575,7 @@ const ZH = {
   lessonQueuePause: "暂停",
   lessonQueueResume: "恢复",
   lessonQueueRunNow: "立即运行",
-  lessonRunStatus: { queued: "排队中", waiting: "等待中", limited: "受限", running: "分析中", done: "完成", skipped: "跳过", cancelled: "已取消", failed: "失败" } satisfies Record<LessonQueueRowStatus, string>,
+  lessonRunStatus: { queued: "排队中", waiting: "等待中", limited: "受限", running: "分析中", done: "完成", skipped: "跳过", cancelled: "已取消", failed: "失败", aborted: "中断" } satisfies Record<LessonQueueRowStatus | LessonRunStatus, string>,
   lessonRunReason: {
     unknown_repo: "不认识这个仓库",
     gh: "调用 gh 失败",

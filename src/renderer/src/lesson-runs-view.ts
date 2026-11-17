@@ -1,4 +1,6 @@
-import type { LessonActResult, LessonFinding, LessonQueueRowStatus, LessonRunDetail, LessonQueueRowView, LessonQueueView, LessonRunSummary, LessonScope, LessonSource } from "../../shared/lessons";
+import type {
+  LessonActResult, LessonFinding, LessonQueueRowStatus, LessonRunDetail, LessonQueueRowView, LessonQueueView, LessonRunStatus, LessonRunSummary, LessonScope, LessonSource,
+} from "../../shared/lessons";
 import { resetClock } from "./availability-view";
 import { formatDuration } from "./components/TicketActivity";
 import type { UiStrings } from "./strings";
@@ -42,6 +44,11 @@ export function runningTicker(rows: Pick<LessonQueueRowView, "status">[], tick: 
   if (!rows.some((r) => r.status === "running")) return () => {};
   const timer = setInterval(tick, ms);
   return () => clearInterval(timer);
+}
+
+/** 一次运行的状态文字（详情和尝试列表用）：aborted（Butler 退出等打断的）显示“中断”，不算失败。 */
+export function runStatusLabel(status: LessonRunStatus, S: UiStrings): string {
+  return S.lessonRunStatus[status];
 }
 
 /** 一行操作失败的文字：先用分析记录自己的措辞，没有的再用规矩页的。 */
@@ -90,7 +97,7 @@ export const timeText = (ms: number) => new Date(ms).toLocaleString([], { month:
 /** 详情里的“状态 / 开始 / 用时 / 模型 / 费用 / token / 第几次”；没有值的省略。 */
 export function runDetailFacts(d: LessonRunDetail, S: UiStrings): [label: string, value: string][] {
   const F = S.lessonRunFact;
-  const label = S.lessonRunStatus[d.status === "aborted" ? "failed" : d.status];
+  const label = runStatusLabel(d.status, S);
   const reason = reasonText(d.reason, S);
   const earlier = d.attempts.filter((a) => a.id < d.id).length;
   const facts: [string, string | null][] = [

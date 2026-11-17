@@ -1,5 +1,5 @@
 import type { AvailabilityView } from "../../shared/availability";
-import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason } from "../../shared/lessons";
+import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason, LessonRunStatus } from "../../shared/lessons";
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { PrivacyLevel } from "../../shared/llm";
 import type { ReportKind } from "../../shared/control";
@@ -568,7 +568,7 @@ export const EN: UiStrings = {
   lessonQueuePause: "Pause",
   lessonQueueResume: "Resume",
   lessonQueueRunNow: "Run now",
-  lessonRunStatus: { queued: "Queued", waiting: "Waiting", limited: "Limited", running: "Running", done: "Done", skipped: "Skipped", cancelled: "Cancelled", failed: "Failed" } satisfies Record<LessonQueueRowStatus, string>,
+  lessonRunStatus: { queued: "Queued", waiting: "Waiting", limited: "Limited", running: "Running", done: "Done", skipped: "Skipped", cancelled: "Cancelled", failed: "Failed", aborted: "Interrupted" } satisfies Record<LessonQueueRowStatus | LessonRunStatus, string>,
   lessonRunReason: {
     unknown_repo: "Unknown repository",
     gh: "gh failed",
