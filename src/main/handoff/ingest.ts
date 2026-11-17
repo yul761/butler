@@ -1,6 +1,6 @@
 import type { Handoff, Pr } from "../../shared/handoff";
 import type { HandoffTrigger, TicketStatus } from "../../shared/types";
-import { rememberMergedPrs } from "../../shared/pr-memory";
+import { rememberMergedPrs, splitOwnAndRemembered } from "../../shared/pr-memory";
 import { withTransaction, type Db } from "../db/database";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
@@ -44,10 +44,12 @@ const openFollowups = (d: StatusDeps, ticketKey: string): number =>
 export function ingestHandoff(d: IngestDeps, input: IngestInput): IngestResult {
   if (!d.tickets.get(input.ticketKey)) return { stored: false, reason: "no_ticket" };
   const now = d.now();
+  const given = input.payload;
+  const reported = given?.prs ?? [];
   return withTransaction(d.db, (): IngestResult => {
     // ticket 以 Butler 的记录为准，模型写错了也不影响归属。以前合并过的 PR 记着（模型这次没提、或者报错了状态）。
-    const stored = input.payload ? rememberMergedPrs(input.payload.prs, [d.handoffs.knownPrs(input.ticketKey)]) : [];
-    const payload = input.payload ? { ...input.payload, ticket: input.ticketKey, prs: stored } : null;
+    const stored = given ? rememberMergedPrs(given.prs, [d.handoffs.knownPrs(input.ticketKey)]) : [];
+    const payload = given ? { ...given, ticket: input.ticketKey, prs: stored } : null;
     const id = d.handoffs.insert({
       ticketKey: input.ticketKey, sessionId: input.sessionId, trigger: input.trigger, createdAt: now,
       payload, rawText: input.rawText, sourceRef: input.sourceRef ?? null,
@@ -63,7 +65,8 @@ export function ingestHandoff(d: IngestDeps, input: IngestInput): IngestResult {
     for (const u of plan.updates) d.followups.update(u.id, u.patch);
     for (const fid of plan.done) d.followups.setStatus(fid, "done", now);
     // 状态按模型自己报的 PR 算；记着的和链接的只能让它保持 in_review。
-    const status = deriveStatus(input.payload!, openFollowups(d, input.ticketKey), { remembered: stored, linkedOpen: d.linkedOpen?.(input.ticketKey) ?? false });
+    const { own, remembered } = splitOwnAndRemembered(reported, stored);
+    const status = deriveStatus({ ...payload, prs: own }, openFollowups(d, input.ticketKey), { remembered, linkedOpen: d.linkedOpen?.(input.ticketKey) ?? false });
     d.tickets.setStatus(input.ticketKey, status, now);
     return { stored: true, handoffId: id, degraded: false, status };
   });

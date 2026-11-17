@@ -43,3 +43,13 @@ export function rememberMergedPrs(latest: Pr[], older: Pr[][]): Pr[] {
   for (const [id, p] of merged) if (!seen.has(id)) out.push(p);
   return dedupeHandoffPrs(out);
 }
+
+/**
+ * 把 rememberMergedPrs 的结果（stored）拆成模型这次自己报的（own，状态已按记忆修正）和全部记着的（remembered）。
+ * 按链接认，报的 PR 没有链接时按号认（同 dedupeHandoffPrs）。
+ */
+export function splitOwnAndRemembered(reported: Pr[], stored: Pr[]): { own: Pr[]; remembered: Pr[] } {
+  const ids = new Set(reported.filter((p) => prUrlKey(p.url) !== "").map(prId));
+  const numbers = new Set(reported.filter((p) => prUrlKey(p.url) === "").map((p) => p.number));
+  return { own: stored.filter((p) => ids.has(prId(p)) || numbers.has(p.number)), remembered: stored };
+}

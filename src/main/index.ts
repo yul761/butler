@@ -598,7 +598,7 @@ async function bootstrap(): Promise<void> {
   }
   const ingest = (input: IngestInput) => {
     const r = ingestHandoff(
-      { db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}`, linkPrs: (k, prs) => void prLinker.linkHandoffPrs(k, prs), linkedOpen: (k) => ticketPrs.byTicket(k).some((p) => p.state === "open") },
+      { db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}`, linkPrs: (k, prs) => void prLinker.linkHandoffPrs(k, prs), linkedOpen },
       input,
     );
     // 设计文档 5.4：入库后同步写入 StateCore（异步，失败只记日志）。
@@ -959,6 +959,8 @@ async function bootstrap(): Promise<void> {
   });
   // PR 和 CI 的监视（计划 13）。
   const ticketPrs = new TicketPrsRepo(db);
+  // 只数读过的行（checkedAt > 0，同 prHandoff）：没读过的行状态只是链接时的猜测，不能把 ticket 钉在 in_review；新链接的行下一轮轮询就会读到。
+  const linkedOpen = (k: string): boolean => ticketPrs.byTicket(k).some((p) => p.state === "open" && p.checkedAt > 0);
   const branchWatch = new BranchWatchRepo(db);
   const prLinker = new PrLinker({ prs: ticketPrs, tickets, slugOf: (path) => repoIdentity.slugOf(path), now: Date.now });
   const holdWatcher = new HoldWatcher({
@@ -1256,7 +1258,7 @@ async function bootstrap(): Promise<void> {
       });
     },
     rederive: (key) => {
-      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen: (k) => ticketPrs.byTicket(k).some((p) => p.state === "open") }, key);
+      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen }, key);
       // followup 完成 / 忽略 / 恢复：StateCore 里对应的条目跟着 forget / 重写。
       void memory.syncTicket(key);
     },

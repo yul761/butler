@@ -43,6 +43,18 @@ describe("ingestHandoff", () => {
     expect(handoffs.latest("PROJ-1")?.payload?.prs).toEqual([{ ...merged, state: "merged" }]);
   });
 
+  it("a stale open report of a remembered merged PR still derives done; active stays active", () => {
+    const { deps, tickets, tick } = setup();
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ status: "in_review", prs: [merged] }) });
+    tick(10);
+    const stale = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ status: "in_review", prs: [{ ...merged, state: "open" }] }) });
+    expect(stale).toMatchObject({ status: "done" });
+    tick(10);
+    const active = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ status: "active", prs: [{ ...merged, state: "open" }] }) });
+    expect(active).toMatchObject({ status: "active" });
+    expect(tickets.get("PROJ-1")?.status).toBe("active");
+  });
+
   it("knownPrs recovers merged PRs from older handoffs stored before this fix", () => {
     const { handoffs } = setup();
     handoffs.insert({ ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", createdAt: 1, payload: payload({ ticket: "PROJ-1", prs: [merged] }), rawText: null, sourceRef: null });
@@ -150,8 +162,8 @@ describe("ingestHandoff", () => {
     expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("merged_pending_followup");
     tick(10);
     // 自动状态是 active 时，记着的已合并 PR 不会把它变成 done。
-    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", rawText: null, payload: payload({ status: "active", prs: [merged] }) });
-    tickets.setStatus("PROJ-1", "active", 3000);
+    const again = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", rawText: null, payload: payload({ status: "active", prs: [merged] }) });
+    expect(again).toMatchObject({ status: "active" });
     expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("active");
     expect(tickets.get("PROJ-1")?.status).toBe("active");
   });

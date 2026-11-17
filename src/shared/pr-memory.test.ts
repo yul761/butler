@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Pr } from "./handoff";
-import { dedupeHandoffPrs, rememberMergedPrs } from "./pr-memory";
+import { dedupeHandoffPrs, rememberMergedPrs, splitOwnAndRemembered } from "./pr-memory";
 
 const pr = (number: number, state: Pr["state"], url = `https://github.com/acme/ui/pull/${number}`): Pr => ({ number, url, state, review: null });
 
@@ -47,5 +47,16 @@ describe("dedupeHandoffPrs", () => {
     expect(out.map((p) => p.number)).toEqual([3]);
     expect(out).toEqual([pr(3, "open")]);
     expect(rememberMergedPrs([pr(3, "open", ""), pr(3, "open")], []).map((p) => p.url)).toEqual(["https://github.com/acme/ui/pull/3"]);
+  });
+});
+
+describe("splitOwnAndRemembered", () => {
+  it("own is what the model reported, with remembered states; remembered is everything", () => {
+    const reported = [pr(1, "open"), pr(2, "open", "")];
+    const stored = rememberMergedPrs(reported, [[pr(1, "merged"), pr(2, "merged"), pr(3, "merged")]]);
+    const out = splitOwnAndRemembered(reported, stored);
+    expect(out.own.map((p) => [p.number, p.state])).toEqual([[1, "merged"], [2, "merged"]]);
+    expect(out.remembered).toEqual(stored);
+    expect(out.remembered.map((p) => p.number)).toEqual([1, 2, 3]);
   });
 });
