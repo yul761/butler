@@ -8,11 +8,32 @@ import { renameWithRetrySync } from "../src/main/util/fs-retry";
 
 const RAW_LIMIT = 10_000;
 
+const DESCRIPTION_LIMIT = 200;
+
+/** Agent / Task 的 PostToolUse 带着整个 prompt 和 tool_response（可能很大）：只留判断是不是 review 要用的几个字段。 */
+function trimAgentPayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object") return payload;
+  const p = payload as Record<string, unknown>;
+  if (p.hook_event_name !== "PostToolUse" || (p.tool_name !== "Agent" && p.tool_name !== "Task")) return payload;
+  const input = p.tool_input && typeof p.tool_input === "object" ? (p.tool_input as Record<string, unknown>) : {};
+  return {
+    hook_event_name: p.hook_event_name,
+    session_id: p.session_id,
+    tool_name: p.tool_name,
+    tool_use_id: p.tool_use_id,
+    cwd: p.cwd,
+    tool_input: {
+      description: typeof input.description === "string" ? input.description.slice(0, DESCRIPTION_LIMIT) : null,
+      subagent_type: typeof input.subagent_type === "string" ? input.subagent_type : null,
+    },
+  };
+}
+
 export function buildEnvelope(raw: string, env: NodeJS.ProcessEnv, now: number): HookEnvelope {
   const ticket = env.BUTLER_TICKET?.trim() || null;
   const butlerSession = env.BUTLER_SESSION?.trim() || null;
   try {
-    return { v: 1, receivedAt: now, ticket, butlerSession, payload: JSON.parse(raw) };
+    return { v: 1, receivedAt: now, ticket, butlerSession, payload: trimAgentPayload(JSON.parse(raw)) };
   } catch (e) {
     return { v: 1, receivedAt: now, ticket, butlerSession, payload: null, parseError: (e as Error).message, raw: raw.slice(0, RAW_LIMIT) };
   }

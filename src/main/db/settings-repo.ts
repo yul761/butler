@@ -15,6 +15,8 @@ export const SETTING_DEFAULTS = {
   trackerTools: "",
   /** 后台 handoff / 刷新 / 探测也挂上仓库 .mcp.json（已批准的）和本地级的 MCP：1 开 0 关。 */
   headlessProjectMcp: "0",
+  /** 开始记 skill 事件的时间（毫秒，字符串）；空表示还没开始。PR 进度据此区分「没记」和「没做」。 */
+  skillTrackingSince: "",
   handoffPrompt: DEFAULT_HANDOFF_PROMPT,
   refreshPrompt: DEFAULT_REFRESH_PROMPT,
   /** 个人 API 的隐私档位：off | metadata | redacted | full（设计文档 7.3，默认 metadata）。 */

@@ -67,10 +67,12 @@ export type PrStagesScope = { ticketKey: string } | { featureId: number } | { ep
 export type SkillCategory = "design" | "review";
 
 const DESIGN_SKILLS = ["brainstorming", "writing-plans"];
-const REVIEW_SKILLS = ["code-review", "requesting-code-review", "simplify", "security-review", "review"];
+const REVIEW_SKILLS = ["code-review", "requesting-code-review", "simplify", "security-review", "review", "subagent-driven-development", "receiving-code-review"];
 
 /** 去掉最后一个 `:` 之前的插件前缀，转小写后查表。 */
 export function skillCategory(name: string): SkillCategory | null {
+  // review agent 的派发记成 `agent:<描述>`：描述里可能带 `:`，所以先于前缀剥离判断。
+  if (name.startsWith("agent:")) return "review";
   const base = name.slice(name.lastIndexOf(":") + 1).trim().toLowerCase();
   if (DESIGN_SKILLS.includes(base)) return "design";
   if (REVIEW_SKILLS.includes(base)) return "review";

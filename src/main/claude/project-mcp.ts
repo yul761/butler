@@ -262,7 +262,9 @@ export function projectMcpApprovalSettings(dirs: string[], p: ProjectMcpPaths & 
       // 命令失败时只有 PostToolUseFailure，没有 PostToolUse：两个都要，不然失败的合并一直占着。
       // Skill 调用另记一组（PR 进度的设计 / 自我 review）：命令不带 gate，走写信封的那条路。
       const skill = { matcher: "Skill", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
-      content.hooks = { PreToolUse: group, PostToolUse: [...group, skill], PostToolUseFailure: group };
+      // 子 agent 的派发另记一组（review agent 算自我 review）：同样不带 gate，信封里只留 description / subagent_type。
+      const agent = { matcher: "Agent|Task", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
+      content.hooks = { PreToolUse: group, PostToolUse: [...group, skill, agent], PostToolUseFailure: group };
     }
     const file = join(p.mcpDir, `approve-${createHash("sha1").update(JSON.stringify(content)).digest("hex").slice(0, 12)}.json`);
     writePrivate(file, content);
