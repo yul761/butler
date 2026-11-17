@@ -449,3 +449,4 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .lesson-run { padding: 4px 0; border-bottom: 1px solid var(--border); }
 .lesson-run.selected { border-left: 2px solid var(--accent); padding-left: 6px; }
 .lesson-run-title { font-weight: 600; }
+.lessons-queue-bar .pill { white-space: normal; }

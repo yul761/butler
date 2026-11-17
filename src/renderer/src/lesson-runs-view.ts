@@ -11,7 +11,7 @@ export const TONE_PILL: Record<Tone, string> = { ok: "approved", warn: "pending"
 /** 队列条上的一行字：正在分析谁、队列多长、是否暂停（到几点）。 */
 export function queueBarText(q: LessonQueueView, S: UiStrings, now: number): { text: string; tone: Tone } {
   const parts: string[] = [];
-  if (q.running.length > 0) parts.push(S.lessonQueueRunning(q.running.map((r) => `${r.slug}#${r.prNumber}`).join("、")));
+  if (q.running.length > 0) parts.push(S.lessonQueueRunning(q.running.map((r) => `${r.slug}#${r.prNumber}`).join(S.lessonQueueSep)));
   if (q.queued > 0) parts.push(S.lessonQueueQueued(q.queued));
   if (q.pause) {
     if (q.pause.reason === "manual") parts.push(S.lessonQueuePausedManual);
@@ -32,6 +32,13 @@ export function runStatusPill(r: LessonQueueRowView, S: UiStrings, now: number):
   if (r.status === "running") return { text: `${label} · ${formatDuration(now - (r.lastRun?.startedAt ?? r.enqueuedAt), S)}`, tone: "muted" };
   const tone: Tone = r.status === "failed" ? "danger" : r.status === "limited" ? "warn" : r.status === "done" ? "ok" : "muted";
   return { text: label, tone };
+}
+
+/** 一行操作失败的文字：先用分析记录自己的措辞，没有的再用规矩页的。 */
+export function runErrorText(code: string, S: UiStrings): string {
+  const own: Record<string, string> = S.lessonRunError;
+  const shared: Record<string, string> = S.lessonsError;
+  return (Object.hasOwn(own, code) ? own[code] : undefined) ?? (Object.hasOwn(shared, code) ? shared[code] : undefined) ?? S.lessonsErrorGeneric;
 }
 
 /** 原因的文字；不认识的代码原样显示。 */

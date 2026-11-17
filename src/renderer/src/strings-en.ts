@@ -1,4 +1,4 @@
-import type { LessonQueueRowStatus, LessonRunReason } from "../../shared/lessons";
+import type { LessonOrigin, LessonQueueRowStatus, LessonRunReason } from "../../shared/lessons";
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { PrivacyLevel } from "../../shared/llm";
 import type { ReportKind } from "../../shared/control";
@@ -546,11 +546,12 @@ export const EN: UiStrings = {
   lessonQueueQueued: (count: number) => `${count} queued`,
   lessonQueuePausedUntil: (at: string, msg: string | null) => `Paused until ${at}${msg ? ` — ${msg}` : ""}`,
   lessonQueuePausedManual: "Paused by you",
+  lessonQueueSep: ", ",
   lessonQueueIdle: "Queue idle",
   lessonQueuePause: "Pause",
   lessonQueueResume: "Resume",
   lessonQueueRunNow: "Run now",
-  lessonRunStatus: { queued: "Queued", waiting: "Waiting", limited: "Limited", running: "Running", done: "Done", skipped: "Skipped", cancelled: "Cancelled", failed: "Failed" } as Record<LessonQueueRowStatus, string>,
+  lessonRunStatus: { queued: "Queued", waiting: "Waiting", limited: "Limited", running: "Running", done: "Done", skipped: "Skipped", cancelled: "Cancelled", failed: "Failed" } satisfies Record<LessonQueueRowStatus, string>,
   lessonRunReason: {
     unknown_repo: "Unknown repository",
     gh: "gh failed",
@@ -568,7 +569,9 @@ export const EN: UiStrings = {
     cancelled: "Cancelled",
     app_quit: "Interrupted when the app quit",
     error: "Internal error",
-  } as Record<LessonRunReason, string>,
+  } satisfies Record<LessonRunReason, string>,
+  lessonRunOrigin: { backfill: "Backfill", merged: "Merged", daily: "Daily" } satisfies Record<LessonOrigin, string>,
+  lessonRunError: { not_found: "This analysis no longer exists.", bad_status: "This analysis changed status. Refresh and try again." } as Record<string, string>,
   lessonRunCounts: (c: number, h: number, d: number) => `new ${c} · seen again ${h} · dropped ${d}`,
   lessonRunRetry: "Retry",
   lessonRunCancel: "Cancel",

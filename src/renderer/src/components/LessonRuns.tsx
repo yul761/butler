@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { LessonAction } from "../../../shared/lessons";
 import { api } from "../api";
 import { reportError } from "../errors";
-import { reasonText, retryAllCount, rowButtons, runCountsText, runSelectable, runStatusPill, TONE_PILL } from "../lesson-runs-view";
+import { reasonText, runErrorText, retryAllCount, rowButtons, runCountsText, runSelectable, runStatusPill, TONE_PILL } from "../lesson-runs-view";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 
@@ -23,7 +23,7 @@ export function LessonRuns({ slug, selectedRunId, onSelect }: { slug: string; se
   const act = async (a: LessonAction) => {
     try {
       const r = await api.lessonsAct(a);
-      setError(r.ok ? null : S.lessonsError[r.reason] ?? S.lessonsErrorGeneric);
+      setError(r.ok ? null : runErrorText(r.reason, S));
     } catch (e) {
       reportError(e);
     }
@@ -54,7 +54,7 @@ export function LessonRuns({ slug, selectedRunId, onSelect }: { slug: string; se
                 ) : (
                   <span className="lesson-run-title">#{r.prNumber}{r.prTitle ? ` ${r.prTitle}` : ""}</span>
                 )}
-                <span className="muted">{r.origin}</span>
+                <span className="muted">{S.lessonRunOrigin[r.origin]}</span>
                 <span className={`pill ${TONE_PILL[pill.tone]}`}>{pill.text}</span>
                 {reason && <span className="muted">{reason}</span>}
                 <span className="muted">{formatTime(r.finishedAt ?? r.lastRun?.startedAt ?? r.enqueuedAt)}</span>

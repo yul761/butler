@@ -1,4 +1,4 @@
-import type { LessonQueueRowStatus, LessonRunReason } from "../../shared/lessons";
+import type { LessonOrigin, LessonQueueRowStatus, LessonRunReason } from "../../shared/lessons";
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
@@ -553,11 +553,12 @@ const ZH = {
   lessonQueueQueued: (n: number) => `队列 ${n}`,
   lessonQueuePausedUntil: (at: string, msg: string | null) => `已暂停到 ${at}${msg ? ` — ${msg}` : ""}`,
   lessonQueuePausedManual: "已手动暂停",
+  lessonQueueSep: "、",
   lessonQueueIdle: "队列空闲",
   lessonQueuePause: "暂停",
   lessonQueueResume: "恢复",
   lessonQueueRunNow: "立即运行",
-  lessonRunStatus: { queued: "排队中", waiting: "等待中", limited: "受限", running: "分析中", done: "完成", skipped: "跳过", cancelled: "已取消", failed: "失败" } as Record<LessonQueueRowStatus, string>,
+  lessonRunStatus: { queued: "排队中", waiting: "等待中", limited: "受限", running: "分析中", done: "完成", skipped: "跳过", cancelled: "已取消", failed: "失败" } satisfies Record<LessonQueueRowStatus, string>,
   lessonRunReason: {
     unknown_repo: "不认识这个仓库",
     gh: "调用 gh 失败",
@@ -575,7 +576,9 @@ const ZH = {
     cancelled: "已取消",
     app_quit: "应用退出时中断",
     error: "内部错误",
-  } as Record<LessonRunReason, string>,
+  } satisfies Record<LessonRunReason, string>,
+  lessonRunOrigin: { backfill: "补录", merged: "已合并", daily: "每日" } satisfies Record<LessonOrigin, string>,
+  lessonRunError: { not_found: "这条分析已不存在。", bad_status: "这条分析的状态已经变了，请刷新后再试。" } as Record<string, string>,
   lessonRunCounts: (c: number, h: number, d: number) => `新 ${c} · 再次 ${h} · 丢弃 ${d}`,
   lessonRunRetry: "重试",
   lessonRunCancel: "取消",

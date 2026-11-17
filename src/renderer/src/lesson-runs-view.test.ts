@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { LessonQueueRowStatus, LessonQueueRowView, LessonQueueView, LessonRunSummary } from "../../shared/lessons";
 import { S } from "./strings";
+import type { LessonOrigin } from "../../shared/lessons";
 import { EN } from "./strings-en";
-import { queueBarButtons, queueBarText, reasonText, retryAllCount, rowButtons, runCountsText, runSelectable, runStatusPill, sourceLabel } from "./lesson-runs-view";
+import { queueBarButtons, queueBarText, reasonText, retryAllCount, runErrorText, rowButtons, runCountsText, runSelectable, runStatusPill, sourceLabel } from "./lesson-runs-view";
 
 const now = new Date(2026, 10, 16, 12, 0).getTime();
 const at = new Date(2026, 10, 16, 15, 0).getTime();
@@ -102,5 +103,24 @@ describe("row buttons", () => {
   it("a row never started is not selectable", () => {
     expect(runSelectable(row("queued"))).toBe(false);
     expect(runSelectable(row("failed", { lastRun: run() }))).toBe(true);
+  });
+});
+
+describe("separators, origins and run errors", () => {
+  it("joins several running items with the language's separator", () => {
+    const q = queue({ running: [{ queueId: 1, runId: 1, slug: "a/b", prNumber: 1, startedAt: now }, { queueId: 2, runId: 2, slug: "a/b", prNumber: 2, startedAt: now }] });
+    expect(queueBarText(q, EN, now).text).toBe("Analysing a/b#1, a/b#2");
+    expect(queueBarText(q, S, now).text).toBe("正在分析 a/b#1、a/b#2");
+  });
+  it("labels every origin in both languages", () => {
+    const all: LessonOrigin[] = ["backfill", "merged", "daily"];
+    expect(all.map((o) => S.lessonRunOrigin[o])).toEqual(["补录", "已合并", "每日"]);
+    expect(all.map((o) => EN.lessonRunOrigin[o])).toEqual(["Backfill", "Merged", "Daily"]);
+  });
+  it("uses run wording for not_found and bad_status, falling back to the lesson wording", () => {
+    expect(runErrorText("not_found", EN)).toBe("This analysis no longer exists.");
+    expect(runErrorText("bad_status", S)).toBe("这条分析的状态已经变了，请刷新后再试。");
+    expect(runErrorText("no_gh", EN)).toBe(EN.lessonsError.no_gh);
+    expect(runErrorText("zzz", EN)).toBe(EN.lessonsErrorGeneric);
   });
 });
