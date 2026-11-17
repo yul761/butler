@@ -220,11 +220,12 @@ export class LessonRunner {
     let fixes: Material["fixes"] = [];
     let fixesNote: Material["fixesNote"] = null;
     const range = fixRange(pr, items);
-    if (!range && paths.length > 0) {
-      fixesNote = "rewritten";
-      this.d.log?.(`lessons: no fix range for ${item.slug}#${item.prNumber}, history was likely rewritten`);
-    }
-    if (range) {
+    if ("none" in range) {
+      if (range.none === "rewritten" && paths.length > 0) {
+        fixesNote = "rewritten";
+        this.d.log?.(`lessons: history rewritten for ${item.slug}#${item.prNumber}, no fix range`);
+      }
+    } else {
       try {
         const files = await gh.compareFiles(cwd, range.base, range.head, LESSON_GH_TIMEOUT_MS);
         if (files) fixes = files.filter((f) => paths.includes(f.filename));

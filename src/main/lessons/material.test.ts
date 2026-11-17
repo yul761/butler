@@ -67,11 +67,17 @@ describe("fixRange", () => {
     expect(withInline("10:30")).toEqual({ base: "c1", head: "c3" });
   });
   it("is null when no commit follows the comment", () => {
-    expect(withInline("12:30")).toBeNull();
+    expect(withInline("12:30")).toEqual({ none: "no_fixes" });
+  });
+  it("is rewritten when commits follow the comment but none is at or before it", () => {
+    const p = pr({
+      inline: [cm("i", "bob", "x", T("09:00"), "src/a.ts")],
+    });
+    expect(fixRange(p, reviewItems(p))).toEqual({ none: "rewritten" });
   });
   it("is null without inline comments", () => {
     const p = pr({ comments: [cm("a", "alice", "x", T("10:30"))] });
-    expect(fixRange(p, reviewItems(p))).toBeNull();
+    expect(fixRange(p, reviewItems(p))).toEqual({ none: "no_fixes" });
   });
 });
 
@@ -178,5 +184,12 @@ describe("materialText", () => {
     expect(materialText(m, "en")).toContain("history was rewritten");
     expect(materialText(m, "zh")).toContain("改写");
     expect(materialText({ ...m, fixesNote: null }, "en")).not.toContain("rewritten");
+  });
+  it("the note survives size reduction", () => {
+    const big = "x".repeat(1500);
+    const m: Material = { pr: pr({ body: "p".repeat(8000) }), items: Array.from({ length: 60 }, (_, i) => item(`u${i}`, big, "a.ts")), fixes: [], fixesNote: "rewritten", butler: null };
+    const t = materialText(m, "en");
+    expect(t.length).toBeLessThanOrEqual(MATERIAL_MAX_CHARS);
+    expect(t).toContain("history was rewritten");
   });
 });

@@ -294,6 +294,22 @@ describe("LessonRunner queue", () => {
     expect(s.statusOf(7).status).toBe("done");
   });
 
+  it("no commit after the comment leaves fixesNote null", async () => {
+    const s = setup();
+    s.gh.prLessonData.mockResolvedValue(
+      prData(7, {
+        inline: [{ id: "i", author: "alice", body: "fix this", createdAt: Date.parse("2026-01-01T10:00:00Z"), url: "u", path: "src/a.ts", line: 3 } as never],
+        commits: [{ oid: "c1", committedDate: "2026-01-01T09:00:00Z", headline: "h", body: "" }],
+      }),
+    );
+    s.repo.enqueue("acme/web", [7], "merged", T0);
+    s.runner.start();
+    await s.runner.idle();
+    expect(s.run.mock.calls[0]![0].prompt).not.toContain("history was rewritten");
+    expect(s.deps.log).not.toHaveBeenCalledWith(expect.stringContaining("rewritten"));
+    expect(s.statusOf(7).status).toBe("done");
+  });
+
   it("only keeps the fix patches of files the comments point at, and survives compareFiles failing", async () => {
     const s = setup();
     s.gh.prLessonData.mockResolvedValue(
