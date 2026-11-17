@@ -17,9 +17,16 @@ export class AvailabilityRepo {
     const row = this.db.prepare(`SELECT state FROM claude_availability WHERE id = 1`).get() as { state: string } | undefined;
     if (!row) return null;
     try {
-      const s = JSON.parse(row.state) as StoredAvailability;
-      if (typeof s !== "object" || s === null || typeof s.backoffStep !== "number") throw new Error("not an availability state");
-      return s;
+      const s = JSON.parse(row.state) as Partial<StoredAvailability> | null;
+      if (typeof s !== "object" || s === null || Array.isArray(s)) throw new Error("not an availability state");
+      const step = Number.isFinite(s.backoffStep) ? Math.trunc(s.backoffStep as number) : 0;
+      return {
+        current: s.current ?? null,
+        lastHit: s.lastHit ?? null,
+        retryAt: s.retryAt ?? null,
+        backoffStep: Math.min(4, Math.max(0, step)),
+        lessonsPause: s.lessonsPause ?? null,
+      };
     } catch (e) {
       this.log("availability: stored state is unreadable, starting clean", e);
       return null;

@@ -120,7 +120,7 @@ describe("ClaudeAvailability", () => {
   it("noteSuccess never clears a manual pause", () => {
     const s = setup();
     s.a.pauseLessons();
-    expect(s.a.lessonsGate(T0)).toMatchObject({ paused: true, reason: "manual", until: null });
+    expect(s.a.lessonsGate(T0)).toEqual({ paused: true, reason: "manual", until: null, message: null });
     s.a.report(usage());
     expect(s.a.view().lessonsPause?.reason).toBe("manual");
     s.a.noteSuccess(T0, "lessons");
@@ -183,5 +183,25 @@ describe("ClaudeAvailability", () => {
     s.a.report(usage());
     s.a.dispose();
     expect(s.live()).toHaveLength(0);
+  });
+
+  it("a partial stored row loads with nulls", () => {
+    const s = setup();
+    s.db.prepare(`INSERT INTO claude_availability (id, state, updated_at) VALUES (1, '{"backoffStep":99}', 1)`).run();
+    const b = s.make();
+    expect(b.view()).toEqual({ state: "ok", current: null, lastHit: null, retryAt: null, lessonsPause: null });
+    expect(b.lessonsGate(T0)).toEqual({ paused: false });
+  });
+
+  it("a far-future reset clamps the timer and an early fire keeps the pause", () => {
+    const s = setup();
+    s.a.report(usage({ resetsAt: T0 + 40 * 86_400_000 }));
+    const t = s.live()[0]!;
+    expect(t.ms).toBe(2 ** 31 - 1);
+    s.clock.t += t.ms;
+    t.fn();
+    expect(s.a.view().state).toBe("limited");
+    expect(s.a.view().lessonsPause?.reason).toBe("limit");
+    expect(s.live()).toHaveLength(1);
   });
 });

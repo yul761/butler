@@ -6,6 +6,8 @@ export const RESUME_SLACK_MS = 60_000;
 export const BACKOFF_MINUTES = [10, 20, 40, 80, 120];
 export const HIT_DEDUPE_MS = 60_000;
 export const MODEL_RETRY_MS = 3_600_000;
+/** setTimeout 的上限：更大的延时会溢出并立刻触发。 */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 export type LessonsGate = { paused: false } | { paused: true; reason: LessonsPauseReason; until: number | null; message: string | null };
 
@@ -102,6 +104,7 @@ export class ClaudeAvailability {
   lessonsGate(now: number): LessonsGate {
     const p = this.s.lessonsPause;
     if (p === null || (p.until !== null && p.until <= now)) return { paused: false };
+    if (p.reason === "manual") return { paused: true, reason: "manual", until: null, message: null };
     return { paused: true, reason: p.reason, until: p.until, message: this.s.current?.message ?? this.s.lastHit?.message ?? null };
   }
 
@@ -154,11 +157,15 @@ export class ClaudeAvailability {
   private arm(): void {
     this.disarm();
     if (this.s.retryAt === null) return;
-    this.timer = this.setTimer(() => this.fire(), Math.max(0, this.s.retryAt - this.d.now()));
+    this.timer = this.setTimer(() => this.fire(), Math.min(MAX_TIMER_MS, Math.max(0, this.s.retryAt - this.d.now())));
   }
 
   private fire(): void {
     this.timer = null;
+    if (this.s.retryAt !== null && this.s.retryAt > this.d.now()) {
+      this.arm();
+      return;
+    }
     this.clearAuto();
     this.commit();
   }
