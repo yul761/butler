@@ -41,17 +41,17 @@ describe("availabilityRows", () => {
 
   it("for ok shows only state", () => {
     const rows = availabilityRows({ state: "ok", current: null, lastHit: null, retryAt: null, lessonsPause: null }, S, now);
-    expect(rows).toEqual([["状态", "正常", "ok"]]);
+    expect(rows).toEqual([["状态", "正常", "ok", true]]);
   });
 
   it("for a usage limit shows current, retry time and paused lessons", () => {
     const rows = availabilityRows({ state: "limited", current: hit, lastHit: hit, retryAt: at, lessonsPause: { reason: "limit", since: 1, until: at } }, S, now);
     expect(rows).toEqual([
-      ["状态", "受限", "warn"],
-      ["当前", "用量已达上限，14:30 恢复 · 后台 · lessons · limit msg", "warn"],
-      ["重试时间", "14:30", "muted"],
-      ["上次受限", "用量已达上限 · 09:00", "muted"],
-      ["复盘队列", "暂停到 14:30", "warn"],
+      ["状态", "受限", "warn", true],
+      ["当前", "用量已达上限 · 09:00 · 后台 · lessons · limit msg", "warn", false],
+      ["重试时间", "14:30", "muted", true],
+      ["上次受限", "用量已达上限 · 09:00", "muted", true],
+      ["复盘队列", "暂停到 14:30", "warn", true],
     ]);
   });
 
@@ -59,18 +59,22 @@ describe("availabilityRows", () => {
     const rows = availabilityRows({ state: "limited", current: { ...hit, source: "session", job: null, sessionId: "s" }, lastHit: null, retryAt: null, lessonsPause: null }, S, now);
     expect(rows[1][1]).toContain("会话");
     expect(rows[1][1]).not.toContain("后台");
-    expect(rows[2]).toEqual(["复盘队列", "运行中", "ok"]);
+    expect(rows[2]).toEqual(["复盘队列", "运行中", "ok", true]);
   });
 
   it("a manual pause shows paused by you and no time", () => {
     const rows = availabilityRows({ state: "ok", current: null, lastHit: null, retryAt: null, lessonsPause: { reason: "manual", since: 1, until: null } }, S, now);
-    expect(rows[1]).toEqual(["复盘队列", "已手动暂停", "muted"]);
+    expect(rows[1]).toEqual(["复盘队列", "已手动暂停", "muted", true]);
   });
 
-  it("a reset time already in the past is shown as a plain time, without resets", () => {
-    const past = new Date(2026, 9, 31, 8, 0).getTime();
-    const rows = availabilityRows({ state: "limited", current: { ...hit, resetsAt: past }, lastHit: null, retryAt: null, lessonsPause: null }, S, now);
-    expect(rows[1][1]).toBe("用量已达上限 · 08:00 · 后台 · lessons · limit msg");
+  it("current row shows the hit time, tone follows state, empty message is omitted", () => {
+    const rows = availabilityRows({ state: "model_unavailable", current: { ...hit, kind: "model_unavailable", resetsAt: null, message: "  " }, lastHit: null, retryAt: null, lessonsPause: null }, S, now);
+    expect(rows[1]).toEqual(["当前", "模型不可用 · 09:00 · 后台 · lessons", "danger", false]);
+  });
+
+  it("a pause without an end time says just paused", () => {
+    const rows = availabilityRows({ state: "limited", current: hit, lastHit: null, retryAt: null, lessonsPause: { reason: "limit", since: 1, until: null } }, S, now);
+    expect(rows[rows.length - 1]).toEqual(["复盘队列", "已暂停", "warn", true]);
   });
 
   it("buttons follow pause and current", () => {

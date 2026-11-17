@@ -150,6 +150,7 @@ export const EN: UiStrings = {
   availabilityLessonsRunning: "Running",
   availabilityLessonsPausedUntil: (at: string) => `Paused until ${at}`,
   availabilityLessonsPausedManual: "Paused by you",
+  availabilityLessonsPaused: "Paused",
   availabilityResume: "Resume",
   availabilityPause: "Pause lessons",
   noticeResume: "Resume",

@@ -155,6 +155,7 @@ const ZH = {
   availabilityLessonsRunning: "运行中",
   availabilityLessonsPausedUntil: (at: string) => `暂停到 ${at}`,
   availabilityLessonsPausedManual: "已手动暂停",
+  availabilityLessonsPaused: "已暂停",
   availabilityResume: "恢复",
   availabilityPause: "暂停复盘",
   noticeResume: "恢复",

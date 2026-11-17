@@ -36,28 +36,26 @@ export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: str
 }
 
 export type AvailabilityTone = "ok" | "warn" | "danger" | "muted";
-export type AvailabilityRow = [label: string, value: string, tone: AvailabilityTone];
-
-/** 一次受限：恢复时间已过就只写时钟（不再说「恢复」），否则同 limitLine。 */
-function hitLine(h: LimitHit, S: UiStrings, now: number): string {
-  if (h.resetsAt !== null && h.resetsAt <= now) return `${S.limitKind[h.kind]} · ${resetClock(h.resetsAt, now)}`;
-  return limitLine(h, S, now);
-}
+/** pill=false：长文本（如报错原文），按普通文字显示并换行。 */
+export type AvailabilityRow = [label: string, value: string, tone: AvailabilityTone, pill: boolean];
 
 /** 设置 → 健康里「Claude 可用性」的行；没东西可显示的行不出，状态行总在。 */
 export function availabilityRows(v: AvailabilityView, S: UiStrings, now: number): AvailabilityRow[] {
-  const rows: AvailabilityRow[] = [[S.availabilityStateLabel, S.availabilityState[v.state], v.state === "ok" ? "ok" : v.state === "limited" ? "warn" : "danger"]];
+  const stateTone: AvailabilityTone = v.state === "ok" ? "ok" : v.state === "limited" ? "warn" : "danger";
+  const rows: AvailabilityRow[] = [[S.availabilityStateLabel, S.availabilityState[v.state], stateTone, true]];
   if (v.current) {
     const c = v.current;
-    rows.push([S.availabilityCurrent, `${hitLine(c, S, now)} · ${S.availabilitySource(c.source, c.job)} · ${c.message}`, "warn"]);
+    const parts = [`${S.limitKind[c.kind]} · ${resetClock(c.at, now)}`, S.availabilitySource(c.source, c.job)];
+    if (c.message.trim()) parts.push(c.message);
+    rows.push([S.availabilityCurrent, parts.join(" · "), stateTone, false]);
   }
-  if (v.retryAt !== null) rows.push([S.availabilityRetryAt, resetClock(v.retryAt, now), "muted"]);
-  if (v.lastHit) rows.push([S.availabilityLastHit, `${S.limitKind[v.lastHit.kind]} · ${resetClock(v.lastHit.at, now)}`, "muted"]);
+  if (v.retryAt !== null) rows.push([S.availabilityRetryAt, resetClock(v.retryAt, now), "muted", true]);
+  if (v.lastHit) rows.push([S.availabilityLastHit, `${S.limitKind[v.lastHit.kind]} · ${resetClock(v.lastHit.at, now)}`, "muted", true]);
   const p = v.lessonsPause;
   if (p) {
-    rows.push([S.availabilityLessons, p.reason === "manual" ? S.availabilityLessonsPausedManual : S.availabilityLessonsPausedUntil(p.until === null ? "—" : resetClock(p.until, now)), p.reason === "manual" ? "muted" : "warn"]);
+    rows.push([S.availabilityLessons, p.reason === "manual" ? S.availabilityLessonsPausedManual : p.until === null ? S.availabilityLessonsPaused : S.availabilityLessonsPausedUntil(resetClock(p.until, now)), p.reason === "manual" ? "muted" : "warn", true]);
   } else if (v.current) {
-    rows.push([S.availabilityLessons, S.availabilityLessonsRunning, "ok"]);
+    rows.push([S.availabilityLessons, S.availabilityLessonsRunning, "ok", true]);
   }
   return rows;
 }

@@ -39,16 +39,6 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
     void run(api.health);
   }, []);
 
-  // 从「现在」页的提醒跳来：块挂上后滚到它，只滚一次（之后重渲染不再跳）。
-  const scrolled = useRef(false);
-  useEffect(() => {
-    if (section !== "health" || !report || scrolled.current) return;
-    const el = document.getElementById("claude-availability");
-    if (!el) return;
-    scrolled.current = true;
-    el.scrollIntoView({ block: "start" });
-  });
-
   if (!report) return <p className="empty">{error ?? S.loading}</p>;
   const { claude } = report;
 
@@ -65,7 +55,7 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
         <dt>{S.butlerHome}</dt><dd>{report.butlerHome}</dd>
         <dt>{S.claudeSettings}</dt><dd>{report.claudeSettingsPath}</dd>
       </dl>
-      <ClaudeAvailability />
+      <ClaudeAvailability scrollIntoView={section === "health"} />
       <p className="muted">{S.hookExplain}</p>
       {error && <p className="error">{error}</p>}
       <div className="actions">
