@@ -52,14 +52,33 @@ export interface PrTimelineEntry {
 export interface PrStagesView {
   ticketKey: string;
   featureId: number | null;
-  repoId: number;
+  /** 不是 ticket 仓库的 PR 为 null。 */
+  repoId: number | null;
+  /** 仓库目录名；不是 ticket 仓库的 PR 写 slug。 */
   repoName: string;
+  /** ticket_prs 的 id；没有 PR 的行为 null。 */
+  prId: number | null;
+  /** 只有 PR 不在 ticket 仓库里时才有。 */
+  slug: string | null;
+  /** 仓库还没有 PR（或上一个 PR 结束后又有了提交）的那一行。 */
+  noPr: boolean;
   prNumber: number | null;
   prUrl: string | null;
   closed: boolean;
   stages: PrStageCell[];
   /** 从早到晚。 */
   timeline: PrTimelineEntry[];
+}
+
+/** 一个 ticket 的 PR 进度：没有 PR 的行在前，然后是 PR，新的在前。 */
+export interface PrStagesTicket {
+  ticketKey: string;
+  title: string | null;
+  archived: boolean;
+  /** 按 D-6 判断整个 ticket 是否已合并；还没实现，先是 false。 */
+  merged: boolean;
+  hasRepos: boolean;
+  rows: PrStagesView[];
 }
 
 export type PrStagesScope = { ticketKey: string } | { featureId: number } | { epicId: number };

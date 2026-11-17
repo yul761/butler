@@ -65,19 +65,6 @@ export class PrStageRepo {
     return this.db.prepare(`SELECT 1 FROM pr_stage_events WHERE dedupe_key = ?`).get(dedupeKey) !== undefined;
   }
 
-  /** 这个 ticket 的事件：repoId 等于 repoId 或为 null 的，PR 监视的事件只要 branch 等于 branch 的。按 at、id 排序。 */
-  forRepo(ticketKey: string, repoId: number, branch: string): StageEvent[] {
-    return (
-      this.db
-        .prepare(
-          `SELECT * FROM pr_stage_events
-           WHERE ticket_key = ? AND (repo_id IS NULL OR repo_id = ?) AND (branch IS NULL OR branch = ?)
-           ORDER BY at, id`,
-        )
-        .all(ticketKey, repoId, branch) as unknown as Row[]
-    ).map(toEvent);
-  }
-
   /** 这个 ticket 的全部事件（所有 PR），按 at、id 排序。 */
   forTicket(ticketKey: string): StageEvent[] {
     return (

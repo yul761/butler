@@ -1,10 +1,10 @@
-import type { PrStageCell, PrStagesScope, PrStagesView, PrTimelineEntry } from "../../shared/pr-stages";
+import type { PrStageCell, PrStagesScope, PrStagesTicket, PrTimelineEntry } from "../../shared/pr-stages";
 import { api } from "./api";
 import { useStateRefetch } from "./components/useStateRefetch";
 import { S } from "./strings";
 
-/** 一块范围里每个仓库的 PR 进度：打开时取一次，之后每次 stateChanged 重取。还没取到时为 null。 */
-export function usePrStages(scope: PrStagesScope): PrStagesView[] | null {
+/** 一块范围里每个 ticket 的 PR 进度：打开时取一次，之后每次 stateChanged 重取。还没取到时为 null。 */
+export function usePrStages(scope: PrStagesScope): PrStagesTicket[] | null {
   return useStateRefetch(JSON.stringify(scope), () => api.prStages(scope));
 }
 
@@ -52,9 +52,9 @@ export interface EpicPrRow {
 }
 
 /** 按 feature 分组计数：merge=done → merged；closed 不计；有 failed 的 cell → failed；dev 还是 todo → notStarted；其余 active。 */
-export function epicPrSummary(rows: PrStagesView[]): Map<number, EpicPrRow> {
+export function epicPrSummary(tickets: PrStagesTicket[]): Map<number, EpicPrRow> {
   const out = new Map<number, EpicPrRow>();
-  for (const r of rows) {
+  for (const r of tickets.flatMap((t) => t.rows)) {
     if (r.featureId === null || r.closed) continue;
     const e = out.get(r.featureId) ?? { featureId: r.featureId, merged: 0, active: 0, failed: 0, notStarted: 0, total: 0 };
     const state = (id: string) => r.stages.find((c) => c.id === id)?.state;

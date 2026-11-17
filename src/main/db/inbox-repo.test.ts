@@ -100,14 +100,14 @@ describe("InboxRepo (BTL-190 2+3)", () => {
     expect(repo.recentReports(null, 10)).toEqual([]);
   });
 
-  it("reportsForTicket returns only that ticket's reports, with the sending session's repo (null when unknown)", () => {
+  it("reportsForTicket returns only that ticket's reports, with the sending session's repo and branch (null when unknown)", () => {
     const db = memDb();
     const tickets = new TicketsRepo(db);
     const sessions = new SessionsRepo(db);
     const repo = new InboxRepo(db);
     tickets.insert({ key: "T-1", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null });
     const r1 = tickets.addRepo({ ticketKey: "T-1", repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", createdAt: 1 });
-    sessions.insertIfAbsent({ id: "fix", ticketKey: "T-1", cwd: "/w", origin: "butler", createdAt: 1, lastActivityAt: null, repoId: r1 });
+    sessions.insertIfAbsent({ id: "fix", ticketKey: "T-1", cwd: "/w", origin: "butler", createdAt: 1, lastActivityAt: null, repoId: r1, gitBranch: "b" });
     sessions.insertIfAbsent({ id: "coord", ticketKey: "T-1", cwd: "/w", origin: "butler", createdAt: 1, lastActivityAt: null });
     repo.addReport({ ...owner("coord", { ticketKey: "T-1" }), text: "coordinator", kind: "done", status: "pending", createdAt: 3 });
     repo.addReport({ ...owner("fix", { ticketKey: "T-1" }), text: "fixer", kind: "done", status: "pending", createdAt: 2 });
@@ -115,9 +115,9 @@ describe("InboxRepo (BTL-190 2+3)", () => {
     repo.addReport({ ...owner("fix", { ticketKey: "T-2" }), text: "other ticket", kind: "done", status: "pending", createdAt: 5 });
     repo.addDecision({ ...owner("fix", { ticketKey: "T-1" }), question: "q", options: [], context: null, createdAt: 6 });
     expect(repo.reportsForTicket("T-1")).toEqual([
-      { at: 2, text: "fixer", repoId: r1 },
-      { at: 3, text: "coordinator", repoId: null },
-      { at: 4, text: "no session row", repoId: null },
+      { at: 2, text: "fixer", repoId: r1, branch: "b" },
+      { at: 3, text: "coordinator", repoId: null, branch: null },
+      { at: 4, text: "no session row", repoId: null, branch: null },
     ]);
   });
 });

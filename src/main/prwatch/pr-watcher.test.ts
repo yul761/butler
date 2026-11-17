@@ -703,7 +703,7 @@ describe("PrWatcher: stages", () => {
   const derived = (events: StageEvent[]) =>
     derivePrStages({
       ticketKey: "BTL-1", featureId: null, repoId: 1, repoName: "r", branch: "b", ticketCreatedAt: 0, events, upperDesign: [], reports: [],
-      pr: { number: 7, url: "u", state: "open" }, skillTracking: true,
+      pr: { number: 7, url: "u", state: "open", ci: "none", review: null, mergedAt: null, closedAt: null, checkedAt: 0 }, skillTrackingSince: 0,
     });
   const repeat = async (s: ReturnType<typeof setup>) => {
     const before = s.events().length;

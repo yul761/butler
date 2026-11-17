@@ -28,23 +28,7 @@ describe("PrStageRepo", () => {
     expect(repo.add(ev({ repoId: id, branch: "feat", kind: "push", data: { sha: "a" } }), "k1")).toBe(false);
     expect(repo.has("k1")).toBe(true);
     expect(repo.has("nope")).toBe(false);
-    expect(repo.forRepo("T-1", id, "feat")).toHaveLength(1);
-  });
-
-  it("forRepo filters by ticket, repo and branch", () => {
-    const db = memDb();
-    const id = addRepo(db, "T-1");
-    addRepo(db, "T-2");
-    const other = new TicketsRepo(db).addRepo({ ticketKey: "T-1", repoPath: "/r2", workMode: "branch", worktreePath: null, branch: "b2", createdAt: 1 });
-    const repo = new PrStageRepo(db);
-    repo.add(ev({ repoId: id, branch: "feat", kind: "ci", at: 3, data: { result: "passing", sha: "a" } }), "ci");
-    repo.add(ev({ repoId: null, kind: "skill", at: 2, data: { name: "x", category: "design" } }), "sk");
-    repo.add(ev({ repoId: id, branch: "old", kind: "push", at: 1 }), "old");
-    repo.add(ev({ ticketKey: "T-2", repoId: null, at: 1 }), "other");
-    repo.add(ev({ repoId: other, branch: "feat", kind: "push", at: 1 }), "other-repo");
-    const got = repo.forRepo("T-1", id, "feat");
-    expect(got.map((e) => e.kind)).toEqual(["skill", "ci"]);
-    expect(got[1]).toMatchObject({ repoId: id, branch: "feat", data: { result: "passing", sha: "a" } });
+    expect(repo.forTicket("T-1")).toHaveLength(1);
   });
 
   it("upperDesign returns feature and epic skill events only", () => {

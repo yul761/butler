@@ -1,24 +1,31 @@
 // PR 进度：把存下来的原始事件推导成六步进度条和时间线。纯函数，宁可"跳过"/"未知"，也不给错的状态。
 import type { StageEvent } from "../db/pr-stage-repo";
+import type { WatchedPr } from "../../shared/types";
 import {
   PR_STAGES, skillCategory,
   type PrStageCell, type PrStageId, type PrStageState, type PrStagesView, type PrTimelineEntry, type PrTimelineKind,
 } from "../../shared/pr-stages";
 
 export interface DeriveInput {
-  ticketKey: string; featureId: number | null; repoId: number; repoName: string; branch: string;
+  ticketKey: string; featureId: number | null; repoId: number | null; repoName: string; branch: string | null;
   ticketCreatedAt: number;
-  /** forRepo 的结果。 */
+  /** 已经分到这一行（这个 PR，或仓库没有 PR 的那一行）的事件。 */
   events: StageEvent[];
   /** upperDesign 的结果。 */
   upperDesign: StageEvent[];
-  /** 这个 ticket 的 report（inbox_items kind=report），已经按仓库筛好（session 的 repoId 等于这个仓库或为 null）。 */
+  /** 已经分到这一行的 report（inbox_items kind=report）。 */
   reports: { at: number; text: string }[];
-  /** pr_watch 的当前行，没有为 null。 */
-  pr: { number: number | null; url: string | null; state: "open" | "merged" | "closed" | null } | null;
-  /** hook 程序是当前版本，能看到 skill 调用。 */
-  skillTracking: boolean;
+  /** 这一行的 PR；没有 PR 的行为 null。 */
+  pr: {
+    number: number; url: string; state: "open" | "merged" | "closed"; ci: WatchedPr["ci"]; review: WatchedPr["review"];
+    mergedAt: number | null; closedAt: number | null; checkedAt: number;
+  } | null;
+  /** hook 从什么时候起记 skill 调用；null = 看不到 skill 调用。 */
+  skillTrackingSince: number | null;
 }
+
+/** 推导出的一行；prId、slug、noPr 由调用方补上。 */
+export type DerivedStages = Omit<PrStagesView, "prId" | "slug" | "noPr">;
 
 const REPORT_MAX = 200;
 
@@ -27,9 +34,11 @@ const idOf = (v: unknown): string | null => (typeof v === "number" || typeof v =
 
 type Item = { at: number; event: StageEvent } | { at: number; report: string };
 
-export function derivePrStages(i: DeriveInput): PrStagesView {
+export function derivePrStages(i: DeriveInput): DerivedStages {
+  // 先只看有没有开始时间。
+  const skillTracking = i.skillTrackingSince !== null;
   const cells = new Map<PrStageId, PrStageCell>(
-    PR_STAGES.map((id) => [id, { id, state: id === "design" && !i.skillTracking ? "unknown" : "todo", round: 1, at: null }]),
+    PR_STAGES.map((id) => [id, { id, state: id === "design" && !skillTracking ? "unknown" : "todo", round: 1, at: null }]),
   );
   const timeline: PrTimelineEntry[] = [];
   let round = 1;
@@ -53,8 +62,8 @@ export function derivePrStages(i: DeriveInput): PrStagesView {
     events.push({ id: Number.MAX_SAFE_INTEGER, ticketKey: i.ticketKey, repoId: i.repoId, prId: null, branch: i.branch, featureId: i.featureId, epicId: null, sessionId: null, kind: "merged", at, data: { number: i.pr.number } });
   }
   const hasFirstCommit = events.some((e) => e.kind === "first_commit");
-  const hasPr = i.pr?.number != null || events.some((e) => e.kind === "pr_opened");
-  const untracked: PrStageState = i.skillTracking ? "skipped" : "unknown";
+  const hasPr = i.pr !== null || events.some((e) => e.kind === "pr_opened");
+  const untracked: PrStageState = skillTracking ? "skipped" : "unknown";
 
   const cell = (id: PrStageId) => cells.get(id)!;
   const set = (id: PrStageId, state: PrStageState, at: number) => {

@@ -114,7 +114,7 @@ describe("prObservations", () => {
     const merged = (events: ReturnType<typeof prObservations>) =>
       derivePrStages({
         ticketKey: "BTL-1", featureId: null, repoId: 3, repoName: "r", branch: "b", ticketCreatedAt: 0, upperDesign: [], reports: [],
-        events: events.map((o, i) => ({ id: i + 1, ...o.event })), pr: { number: 7, url: "u", state: "merged" }, skillTracking: true,
+        events: events.map((o, i) => ({ id: i + 1, ...o.event })), pr: { number: 7, url: "u", state: "merged", ci: "none", review: null, mergedAt: null, closedAt: null, checkedAt: 0 }, skillTrackingSince: 0,
       }).stages.map((c) => `${c.id}:${c.state}`);
     const done = (cells: string[]) => {
       expect(cells.filter((c) => c.endsWith(":active"))).toEqual([]);

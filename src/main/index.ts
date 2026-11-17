@@ -37,7 +37,7 @@ import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
 import { CiDelivery } from "./prwatch/ci-delivery";
 import { prHandoff } from "./prwatch/pr-handoff";
 import { runPrBackfill } from "./prwatch/pr-backfill";
-import { ensureSkillTrackingSince } from "./prwatch/skill-tracking";
+import { ensureSkillTrackingSince, skillTrackingSince } from "./prwatch/skill-tracking";
 import { PrLinker } from "./prwatch/pr-links";
 import { PrWatcher } from "./prwatch/pr-watcher";
 import { makeWhoOf } from "./gate/who";
@@ -1238,16 +1238,15 @@ async function bootstrap(): Promise<void> {
     inbox: inboxService,
     lessons: lessonsService,
     prStages: new PrStagesService({
-      tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id) },
+      tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id, { includeArchived: true }) },
       features: {
-        byEpic: (epicId) => features.list().filter((f) => f.epicId === epicId),
+        byEpic: (epicId) => features.listByEpic(epicId, { includeArchived: true }),
         get: (id) => features.get(id),
       },
       stages: prStages,
       prs: ticketPrs,
       reports: (key) => inboxRepo.reportsForTicket(key),
-      // 和 gateCommand 同一个条件：hook 程序不是当前版本就看不到 skill 调用。
-      skillTracking: () => health.hookBinCurrent() && existsSync(paths.hookBin),
+      skillTrackingSince: () => skillTrackingSince(settings),
     }),
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
     nowView: (merges) => {

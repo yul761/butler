@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StageEvent, StageEventKind } from "../db/pr-stage-repo";
-import type { PrStageId, PrStagesView } from "../../shared/pr-stages";
-import { derivePrStages, type DeriveInput } from "./pr-stages";
+import type { PrStageId } from "../../shared/pr-stages";
+import { derivePrStages, type DeriveInput, type DerivedStages } from "./pr-stages";
 
 let nextId = 1;
 const ev = (kind: StageEventKind, at: number, data: Record<string, unknown> = {}): StageEvent => ({
@@ -17,15 +17,18 @@ const human = (at: number, state: string, author = "alice") =>
 const humanId = (at: number, state: string, id: string, author = "alice") =>
   ev("review", at, { id, author, who: "human", state, body: "" });
 
+const pr = (o: Pick<NonNullable<DeriveInput["pr"]>, "number" | "url" | "state">): DeriveInput["pr"] => ({
+  ci: "none", review: null, mergedAt: null, closedAt: null, checkedAt: 0, ...o,
+});
 const input = (o: Partial<DeriveInput> = {}): DeriveInput => ({
   ticketKey: "BTL-1", featureId: null, repoId: 1, repoName: "repo", branch: "b", ticketCreatedAt: 100,
-  events: [], upperDesign: [], reports: [], pr: { number: 7, url: "https://x/pull/7", state: "open" },
-  skillTracking: true, ...o,
+  events: [], upperDesign: [], reports: [], pr: pr({ number: 7, url: "https://x/pull/7", state: "open" }),
+  skillTrackingSince: 0, ...o,
 });
-const cell = (v: PrStagesView, id: PrStageId) => v.stages.find((s) => s.id === id)!;
-const states = (v: PrStagesView) => Object.fromEntries(v.stages.map((s) => [s.id, s.state]));
+const cell = (v: DerivedStages, id: PrStageId) => v.stages.find((s) => s.id === id)!;
+const states = (v: DerivedStages) => Object.fromEntries(v.stages.map((s) => [s.id, s.state]));
 /** 每个用例最后都检查：同一时间最多一步"进行中"。 */
-const derive = (i: DeriveInput): PrStagesView => {
+const derive = (i: DeriveInput): DerivedStages => {
   const v = derivePrStages(i);
   expect(v).not.toHaveProperty("branch");
   expect(v.stages.filter((s) => s.state === "active").map((s) => s.id).length, JSON.stringify(states(v))).toBeLessThanOrEqual(1);
@@ -52,7 +55,7 @@ describe("derivePrStages", () => {
   it("design without a design skill: skipped when tracking, unknown when not", () => {
     const events = [ev("first_commit", 120)];
     expect(cell(derive(input({ events })), "design").state).toBe("skipped");
-    expect(cell(derive(input({ events, skillTracking: false })), "design").state).toBe("unknown");
+    expect(cell(derive(input({ events, skillTrackingSince: null })), "design").state).toBe("unknown");
   });
 
   it("design done at feature level only when the upper design predates the ticket", () => {
@@ -121,7 +124,7 @@ describe("derivePrStages", () => {
     const v = derive(input({ events: [ev("first_commit", 120), ev("closed", 130, { number: 7 })] }));
     expect(v.closed).toBe(true);
     expect(v.timeline.at(-1)?.kind).toBe("closed");
-    expect(derive(input({ pr: { number: 7, url: null, state: "closed" } })).closed).toBe(true);
+    expect(derive(input({ pr: pr({ number: 7, url: "u", state: "closed" }) })).closed).toBe(true);
   });
 
   it("a report during CI lands on the timeline at the ci stage", () => {
@@ -158,14 +161,14 @@ describe("derivePrStages", () => {
   it("no events: design todo when tracking, unknown when not; the rest todo", () => {
     expect(states(derive(input()))).toEqual(
       { design: "todo", dev: "todo", self_review: "todo", ci: "todo", peer_review: "todo", merge: "todo" });
-    expect(cell(derive(input({ skillTracking: false })), "design").state).toBe("unknown");
+    expect(cell(derive(input({ skillTrackingSince: null })), "design").state).toBe("unknown");
   });
 
   it("states freeze after a closed event; a closed PR row alone does not freeze", () => {
     const v = derive(input({ events: [ev("first_commit", 120), ev("closed", 130), ci(140, "pending")] }));
     expect(cell(v, "ci").state).toBe("todo");
     expect(v.timeline.map((t) => t.kind)).toEqual(["first_commit", "closed", "ci_pending"]);
-    const row = derive(input({ pr: { number: 7, url: null, state: "closed" }, events: [ev("first_commit", 120), ci(140, "pending")] }));
+    const row = derive(input({ pr: pr({ number: 7, url: "u", state: "closed" }), events: [ev("first_commit", 120), ci(140, "pending")] }));
     expect(cell(row, "ci").state).toBe("active");
   });
 
@@ -190,7 +193,7 @@ describe("derivePrStages", () => {
   });
 
   it("merge without skill tracking leaves self review unknown, not skipped", () => {
-    const v = derive(input({ skillTracking: false, events: [ev("pr_opened", 130), ev("merged", 160)] }));
+    const v = derive(input({ skillTrackingSince: null, events: [ev("pr_opened", 130), ev("merged", 160)] }));
     expect(states(v)).toEqual(
       { design: "unknown", dev: "done", self_review: "unknown", ci: "skipped", peer_review: "skipped", merge: "done" });
     const running = derive(input({ events: [ev("first_commit", 120), ci(140, "pending"), ev("merged", 160)] }));
@@ -287,7 +290,7 @@ describe("derivePrStages", () => {
   });
 
   it("a merged pr_watch row with no merged event (merged before the upgrade) is treated as merged at the latest event time", () => {
-    const merged = { number: 7, url: "https://x/pull/7", state: "merged" as const };
+    const merged = pr({ number: 7, url: "https://x/pull/7", state: "merged" });
     const none = derive(input({ pr: merged }));
     expect(states(none)).toEqual({ design: "skipped", dev: "done", self_review: "skipped", ci: "skipped", peer_review: "skipped", merge: "done" });
     expect(none.timeline.map((t) => [t.at, t.kind])).toEqual([[100, "merged"]]);

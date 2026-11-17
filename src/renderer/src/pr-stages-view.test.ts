@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PrStageCell, PrStageId, PrStageState, PrStagesView } from "../../shared/pr-stages";
+import type { PrStageCell, PrStageId, PrStageState, PrStagesTicket, PrStagesView } from "../../shared/pr-stages";
 import { cellLabel, cellText, epicPrSummary, timelineText } from "./pr-stages-view";
 import { S } from "./strings";
 
@@ -7,8 +7,10 @@ const IDS: PrStageId[] = ["design", "dev", "self_review", "ci", "peer_review", "
 
 function row(featureId: number | null, states: Partial<Record<PrStageId, PrStageState>>, closed = false): PrStagesView {
   const stages: PrStageCell[] = IDS.map((id) => ({ id, state: states[id] ?? "todo", round: 1, at: null }));
-  return { ticketKey: "T-1", featureId, repoId: 1, repoName: "r", prNumber: null, prUrl: null, closed, stages, timeline: [] };
+  return { ticketKey: "T-1", featureId, repoId: 1, repoName: "r", prId: null, slug: null, noPr: true, prNumber: null, prUrl: null, closed, stages, timeline: [] };
 }
+const tickets = (...rows: PrStagesView[]): PrStagesTicket[] =>
+  rows.map((r, i) => ({ ticketKey: `T-${i}`, title: null, archived: false, merged: false, hasRepos: true, rows: [r] }));
 
 describe("epicPrSummary", () => {
   it("counts merged / failed / notStarted per feature and ignores closed PRs", () => {
@@ -18,13 +20,13 @@ describe("epicPrSummary", () => {
       row(1, {}),
       row(2, { dev: "done" }, true),
     ];
-    const m = epicPrSummary(rows);
+    const m = epicPrSummary(tickets(...rows));
     expect(m.get(1)).toEqual({ featureId: 1, merged: 1, active: 0, failed: 1, notStarted: 1, total: 3 });
     expect(m.has(2)).toBe(false);
   });
 
   it("counts a started, unfinished, not failed row as active", () => {
-    const m = epicPrSummary([row(3, { dev: "active" })]);
+    const m = epicPrSummary(tickets(row(3, { dev: "active" })));
     expect(m.get(3)).toMatchObject({ active: 1, total: 1 });
   });
 });

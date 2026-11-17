@@ -15,10 +15,13 @@ function Cell({ cell, named }: { cell: PrStageCell; named: boolean }) {
   );
 }
 
+/** 一行的 key：PR 行按 PR，没有 PR 的行按仓库（和以前每个仓库一行时的 key 一样，记住的收起状态还在）。 */
+const rowKey = (r: PrStagesView): string => (r.prId === null ? String(r.repoId) : `pr:${r.prId}`);
+
 const timeOf = (ms: number): string => new Date(ms).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 function RepoStages({ row, showName }: { row: PrStagesView; showName: boolean }) {
-  const [collapsed, toggle] = useCollapsed(`pr-timeline:${row.ticketKey}:${row.repoId}`);
+  const [collapsed, toggle] = useCollapsed(`pr-timeline:${row.ticketKey}:${rowKey(row)}`);
   return (
     <section className="pr-repo">
       <div className="pr-steps">
@@ -46,12 +49,13 @@ function RepoStages({ row, showName }: { row: PrStagesView; showName: boolean })
 }
 
 export function TicketPrStages({ ticketKey }: { ticketKey: string }) {
-  const rows = usePrStages({ ticketKey });
-  if (rows === null) return null;
+  const tickets = usePrStages({ ticketKey });
+  if (tickets === null) return null;
+  const rows = tickets[0]?.rows ?? [];
   if (rows.length === 0) return <p className="muted">{S.prNoRepos}</p>;
   return (
     <div className="pr-stages">
-      {rows.map((r) => <RepoStages key={r.repoId} row={r} showName={rows.length > 1} />)}
+      {rows.map((r) => <RepoStages key={rowKey(r)} row={r} showName={rows.length > 1} />)}
     </div>
   );
 }
@@ -70,7 +74,7 @@ function StagesTable({ rows, onOpenTicket }: { rows: PrStagesView[]; onOpenTicke
       </thead>
       <tbody>
         {rows.map((r) => (
-          <tr key={`${r.ticketKey}:${r.repoId}`} className={onOpenTicket ? "clickable" : undefined} onClick={onOpenTicket && (() => onOpenTicket(r.ticketKey))}>
+          <tr key={`${r.ticketKey}:${rowKey(r)}`} className={onOpenTicket ? "clickable" : undefined} onClick={onOpenTicket && (() => onOpenTicket(r.ticketKey))}>
             <td className="pr-row-name">
               {onOpenTicket ? <button className="chip" onClick={(ev) => (ev.stopPropagation(), onOpenTicket(r.ticketKey))}>{r.ticketKey}</button> : r.ticketKey}
               {(perTicket.get(r.ticketKey) ?? 0) > 1 && <span className="muted"> {r.repoName}</span>}
@@ -85,17 +89,19 @@ function StagesTable({ rows, onOpenTicket }: { rows: PrStagesView[]; onOpenTicke
 }
 
 export function FeaturePrStages({ featureId, onOpenTicket }: { featureId: number; onOpenTicket: (key: string) => void }) {
-  const rows = usePrStages({ featureId });
-  if (rows === null) return null;
+  const tickets = usePrStages({ featureId });
+  if (tickets === null) return null;
+  const rows = tickets.flatMap((t) => t.rows);
   if (rows.length === 0) return <p className="muted">{S.prNoRepos}</p>;
   return <StagesTable rows={rows} onOpenTicket={onOpenTicket} />;
 }
 
 export function EpicPrStages({ epicId, features, onOpenTicket }: { epicId: number; features: { id: number; name: string }[]; onOpenTicket: (key: string) => void }) {
-  const rows = usePrStages({ epicId });
+  const tickets = usePrStages({ epicId });
   const [open, setOpen] = useState<number | null>(null);
-  if (rows === null) return null;
-  const summary = epicPrSummary(rows);
+  if (tickets === null) return null;
+  const summary = epicPrSummary(tickets);
+  const rows = tickets.flatMap((t) => t.rows);
   return (
     <div className="pr-epic">
       {features.map((f) => {

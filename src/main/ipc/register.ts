@@ -22,7 +22,7 @@ import { auditPage } from "../gateway/status";
 import type { HandoffRunner } from "../handoff/runner";
 import type { FeatureSummaryRunner } from "../handoff/feature-runner";
 import type { HealthService } from "../hooks/health";
-import type { PrStagesView } from "../../shared/pr-stages";
+import type { PrStagesTicket } from "../../shared/pr-stages";
 import type { LessonsState } from "../../shared/lessons";
 import type { LessonsService } from "../lessons/lessons-service";
 import type { PrStagesService } from "../prwatch/pr-stages-service";
@@ -345,7 +345,7 @@ export function registerIpc(d: IpcDeps): void {
   const recentMerges = (): MergeEvent[] => d.gateRepo.recentEvents(d.now() - 7 * 24 * 3600 * 1000, 20);
   handle(IPC.mergeEvents, recentMerges);
   handle(IPC.prWatchList, (): WatchedPr[] => d.prWatchList());
-  handle(IPC.prStages, (raw: unknown): PrStagesView[] => d.prStages.view(prStagesScopeArg(raw)));
+  handle(IPC.prStages, (raw: unknown): PrStagesTicket[] => d.prStages.view(prStagesScopeArg(raw)));
   handle(IPC.lessonsState, (): LessonsState => d.lessons.state());
   handle(IPC.lessonsAct, (raw: unknown) => d.lessons.act(lessonActionArg(raw)));
   handle(IPC.lessonsPending, (): number => d.lessons.pendingCount());
