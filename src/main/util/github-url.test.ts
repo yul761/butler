@@ -35,8 +35,17 @@ describe("openKnownPr", () => {
   const setup = (known: string[], trusted: string[]) => {
     const openExternal = vi.fn();
     const prs = { byUrl: (url: string) => known.filter((k) => prUrlKey(k) === prUrlKey(url)) };
-    return { open: (url: string) => openKnownPr(url, { prs, trustedSlugs: () => trusted, openExternal }), openExternal };
+    return { open: (url: string) => openKnownPr(url, { prs, trustedSlugs: () => trusted, openExternal, log: vi.fn() }), openExternal };
   };
+
+  it("logs a failed open instead of leaving the rejection unhandled", async () => {
+    const boom = new Error("no browser");
+    const log = vi.fn();
+    const prs = { byUrl: () => ["https://github.com/a/b/pull/1"] };
+    const r = openKnownPr("https://github.com/a/b/pull/1", { prs, trustedSlugs: () => [], openExternal: () => Promise.reject(boom), log });
+    expect(r).toEqual({ ok: true });
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith("opening https://github.com/a/b/pull/1 failed", boom));
+  });
 
   it("opens a linked PR on an allowed host", () => {
     const { open, openExternal } = setup(["https://github.com/a/b/pull/1"], []);

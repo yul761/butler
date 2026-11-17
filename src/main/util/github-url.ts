@@ -32,10 +32,22 @@ export type PrOpenResult = { ok: true } | { ok: false; reason: "bad_url" };
  */
 export function openKnownPr(
   url: string,
-  d: { prs: { byUrl(url: string): readonly unknown[] }; trustedSlugs: () => readonly string[]; openExternal: (url: string) => void },
+  d: {
+    prs: { byUrl(url: string): readonly unknown[] };
+    trustedSlugs: () => readonly string[];
+    /** shell.openExternal：失败（没有浏览器、系统拒绝）时 reject，记日志。 */
+    openExternal: (url: string) => void | Promise<void>;
+    log: (msg: string, e?: unknown) => void;
+  },
 ): PrOpenResult {
   const u = d.prs.byUrl(url).length > 0 ? allowedGithubUrl(url, d.trustedSlugs()) : null;
   if (!u) return { ok: false, reason: "bad_url" };
-  d.openExternal(u.href);
+  const href = u.href;
+  const failed = (e: unknown) => d.log(`opening ${href} failed`, e);
+  try {
+    void d.openExternal(href)?.catch(failed);
+  } catch (e) {
+    failed(e);
+  }
   return { ok: true };
 }
