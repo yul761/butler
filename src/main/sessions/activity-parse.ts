@@ -163,7 +163,7 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
       setTurn(s, true, entryTime(entry));
     }
     if (!Array.isArray(message.content)) {
-      if (s.apiError) setApiLimit(s, entry, "");
+      if (s.apiError) setApiLimit(s, entry, typeof message.content === "string" ? message.content : "");
       else clearApiError(s);
       return;
     }

@@ -130,6 +130,7 @@ function harness(over: Partial<ActivityDeps> = {}) {
   return {
     dir, deps, monitor, heads, open, screens, tickets, features, judgeCalls, judgeResults, stuckInfos, cpuPids, procCommands, logs, transcript, openSession, checks, beat, sleep,
     notifications: () => notifications,
+    setClock: (v: number) => (clock = v),
     setCpu: (v: number | null) => (cpu = v),
     setShell: (v: boolean | null) => (shell = v),
     setOpenedAt: (v: number) => (openedAt = v),
@@ -1676,9 +1677,12 @@ describe("the live window's signals (BTL-190 7)", () => {
   describe("limits in interactive sessions", () => {
     const limitEntry = (timestamp: string) => ({ type: "assistant", timestamp, isApiErrorMessage: true, message: { model: "<synthetic>", stop_reason: "stop_sequence", content: [{ type: "text", text: "Claude AI usage limit reached" }] } });
 
+    const MIN = 60_000;
+
     it("a live limit is reported once", async () => {
       const hits: [string, string, number][] = [];
       const h = harness({ onLimit: (id, hit, at) => hits.push([id, hit.kind, at]) });
+      h.setClock(AT_MS + MIN);
       h.openSession("s1");
       h.transcript("s1", say("go"), limitEntry(AT));
       await h.beat();
@@ -1686,13 +1690,30 @@ describe("the live window's signals (BTL-190 7)", () => {
       expect(hits).toEqual([["s1", "usage_limit", AT_MS]]);
     });
 
-    it("a limit older than 10 minutes is not reported", async () => {
-      const hits: unknown[] = [];
-      const h = harness({ onLimit: (...a) => hits.push(a) });
+    it("reports a limit 9 minutes old but not one 11 minutes old", async () => {
+      for (const [age, expected] of [[9, 1], [11, 0]] as const) {
+        const hits: unknown[] = [];
+        const h = harness({ onLimit: (...a) => hits.push(a) });
+        h.setClock(AT_MS + age * MIN - ACTIVITY_TICK_MS);
+        h.openSession("s1");
+        h.transcript("s1", say("go"), limitEntry(AT));
+        await h.beat();
+        expect(hits).toHaveLength(expected);
+      }
+    });
+
+    it("two distinct limits in one session are both reported", async () => {
+      const hits: number[] = [];
+      const h = harness({ onLimit: (_id, _hit, at) => hits.push(at) });
+      h.setClock(AT_MS + MIN);
       h.openSession("s1");
-      h.transcript("s1", say("go", OLD), limitEntry(OLD));
+      h.transcript("s1", say("go"), limitEntry(AT));
       await h.beat();
-      expect(hits).toEqual([]);
+      const later = new Date(AT_MS + 2 * MIN).toISOString();
+      h.transcript("s1", say("again", later), limitEntry(later));
+      await h.beat();
+      await h.beat();
+      expect(hits).toEqual([AT_MS, AT_MS + 2 * MIN]);
     });
 
     it("activity carries the limit", async () => {

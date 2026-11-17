@@ -291,6 +291,18 @@ describe("applyEntry across turns", () => {
       expect(s.apiErrorAt).toBe(Date.parse(LIMIT_AT));
     });
 
+    it("a real-shaped 5-hour limit entry carries its reset", () => {
+      const s = newTranscriptState();
+      applyEntry(s, { type: "assistant", timestamp: "2026-01-12T12:00:00.000Z", isApiErrorMessage: true, message: { model: "<synthetic>", role: "assistant", stop_reason: "stop_sequence", content: [{ type: "text", text: "You've hit your 5-hour limit · resets 9pm (America/Vancouver)" }] } });
+      expect(s.apiLimit).toMatchObject({ kind: "usage_limit", resetsAt: Date.UTC(2026, 0, 13, 5, 0) });
+    });
+
+    it("string content is classified too", () => {
+      const s = newTranscriptState();
+      applyEntry(s, { ...limitMsg, message: { ...limitMsg.message, content: `Claude AI usage limit reached|${RESET}` } });
+      expect(s.apiLimit).toMatchObject({ kind: "usage_limit" });
+    });
+
     it("the next user message clears apiLimit", () => {
       const s = newTranscriptState();
       applyEntry(s, limitMsg);

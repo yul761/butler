@@ -7,7 +7,7 @@ const MESSAGE_MAX = 300;
 /** 按顺序检查，先找到的种类胜出。 */
 const PATTERNS: [LimitKind, RegExp][] = [
   ["model_unavailable", /issue with the selected model|may not exist or you may not have access|model_not_found/i],
-  ["usage_limit", /usage limit reached|usage credit limit reached|spend limit reached|(?:5-hour|weekly|opus|session) limit reached|hit your limit|out of extra usage|credit balance (?:is )?too low|billing_error|usage limit is set to \$0/i],
+  ["usage_limit", /usage limit reached|usage credit limit reached|spend limit reached|(?:5-hour|weekly|opus|session) limit reached|hit your (?:[\w/-]+ )?limit|out of extra usage|credit balance (?:is )?too low|billing_error|usage limit is set to \$0/i],
   ["overloaded", /overloaded_error|\boverloaded\b/i],
   ["rate_limit", /rate_limit_error|rate.?limit|too many requests|ThrottlingException|too many tokens|quota/i],
 ];
@@ -54,7 +54,7 @@ export function classifyLimit(i: { text: string; apiStatus: number | null; now: 
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const EPOCH_RE = /limit reached\|(\d{10}|\d{13})/i;
-const RESETS_RE = /resets? (?:at )?(?:([A-Za-z]{3,9}) (\d{1,2}),? )?(?:(\d{1,2})(?::(\d{2}))?\s?(am|pm)?)?(?: \(([A-Za-z_]+\/[A-Za-z_]+|UTC)\))?/i;
+const RESETS_RE = /resets? (?:at )?(?:([A-Za-z]{3,9}) (\d{1,2}),?(?: at)? )?(?:(\d{1,2})(?::(\d{2}))?\s?(am|pm)?)?(?: \(([A-Za-z_]+\/[A-Za-z_]+|UTC)\))?/i;
 
 function parts(ms: number, tz: string): { y: number; mo: number; d: number; h: number; mi: number; s: number } {
   const f = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" });
