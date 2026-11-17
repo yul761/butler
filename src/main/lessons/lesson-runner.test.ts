@@ -20,7 +20,7 @@ const withReview = (n: number, over: Partial<PrLessonData> = {}): PrLessonData =
 
 const result = (structured: unknown): HeadlessOutcome => ({
   ok: true,
-  result: { sessionId: "s", isError: false, subtype: "success", resultText: "", structured, permissionDenials: [], apiErrorStatus: null, costUsd: 0, usage: null, model: null },
+  result: { sessionId: "s", isError: false, subtype: "success", resultText: "", structured, permissionDenials: [], apiErrorStatus: null, costUsd: 0, usage: null, model: null, durationMs: null },
 });
 const noFindings = result({ findings: [] });
 const newRule = result({
@@ -120,7 +120,7 @@ describe("LessonRunner queue", () => {
 
   it("defers on rate_limited by 10 minutes and takes nothing until then", async () => {
     const s = setup();
-    s.run.mockResolvedValueOnce({ ok: false, reason: "rate_limited", message: "", result: null });
+    s.run.mockResolvedValueOnce({ ok: false, reason: "rate_limited", message: "", result: null, limit: null, stderr: "" });
     s.repo.enqueue("acme/web", [1], "backfill", T0);
     s.runner.start();
     await s.runner.idle();
@@ -140,7 +140,7 @@ describe("LessonRunner queue", () => {
     vi.useFakeTimers();
     try {
       const s = setup();
-      s.run.mockResolvedValueOnce({ ok: false, reason: "rate_limited", message: "", result: null });
+      s.run.mockResolvedValueOnce({ ok: false, reason: "rate_limited", message: "", result: null, limit: null, stderr: "" });
       s.repo.enqueue("acme/web", [1], "backfill", T0);
       s.runner.start();
       await s.runner.idle();
@@ -161,7 +161,7 @@ describe("LessonRunner queue", () => {
 
   it("puts an aborted run back in the queue", async () => {
     const s = setup();
-    s.run.mockResolvedValueOnce({ ok: false, reason: "aborted", message: "", result: null });
+    s.run.mockResolvedValueOnce({ ok: false, reason: "aborted", message: "", result: null, limit: null, stderr: "" });
     s.repo.enqueue("acme/web", [1], "merged", T0);
     s.runner.start();
     await s.runner.idle();
@@ -182,7 +182,7 @@ describe("LessonRunner queue", () => {
 
   it("marks other failures failed with the reason, and bad output as bad_output", async () => {
     const s = setup();
-    s.run.mockResolvedValueOnce({ ok: false, reason: "timeout", message: "", result: null });
+    s.run.mockResolvedValueOnce({ ok: false, reason: "timeout", message: "", result: null, limit: null, stderr: "" });
     s.run.mockResolvedValueOnce(result({ nope: 1 }));
     s.repo.enqueue("acme/web", [1, 2], "backfill", T0);
     s.runner.start();

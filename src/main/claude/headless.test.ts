@@ -67,7 +67,7 @@ describe("parseClaudeJson", () => {
     expect(parseClaudeJson(`${JSON.stringify(OBSERVED)}\n`)).toEqual({
       sessionId: "a861b9bd-25a8-481b-a01a-3fca83dd069f", isError: false, subtype: "success", resultText: '{"word":"hello","count":3}',
       structured: { word: "hello", count: 3 }, permissionDenials: [], apiErrorStatus: null, costUsd: 0.23302,
-      usage: null, model: null,
+      usage: null, model: null, durationMs: null,
     });
   });
 
@@ -97,6 +97,52 @@ describe("parseClaudeJson", () => {
     // stderr 里的数字（行号、端口）不算；只有 api_error_status 或 “API Error: 429/529” 才看状态码。
     expect(isRateLimited(null, "warning: config.ts:429: deprecated option")).toBe(false);
     expect(isRateLimited({ ...base, resultText: "API Error: 529 Overloaded" }, "")).toBe(true);
+  });
+});
+
+describe("runHeadless failure detail", () => {
+  const run = (body: string) => {
+    const dir = tempDir();
+    const fake = writeFakeClaude(dir, body);
+    return runHeadless({ claudePath: fake.path, args: [], prompt: "x", cwd: dir, env: env() });
+  };
+
+  it("a JSON is_error usage-limit result is rate_limited with limit and resetsAt", async () => {
+    const epoch = Math.floor(Date.now() / 1000) + 3600;
+    const out = await run(`emit({ type: "result", is_error: true, result: "Claude AI usage limit reached|${epoch}" }); process.exitCode = 1;`);
+    expect(out).toMatchObject({ ok: false, reason: "rate_limited", limit: { kind: "usage_limit", resetsAt: epoch * 1000 } });
+  });
+
+  it("model unavailable is its own reason", async () => {
+    const out = await run('emit({ type: "result", is_error: true, result: "There\'s an issue with the selected model (x). It may not exist or you may not have access to it." }); process.exitCode = 1;');
+    expect(out).toMatchObject({ ok: false, reason: "model_unavailable", limit: { kind: "model_unavailable" } });
+  });
+
+  it("failure keeps the last 8192 chars of stderr", async () => {
+    const out = await run('process.stderr.write("a".repeat(10000) + "b".repeat(10000)); process.exit(2);');
+    if (out.ok) throw new Error("expected failure");
+    expect(out.stderr).toBe("b".repeat(8192));
+  });
+
+  it("durationMs comes from duration_ms", async () => {
+    const out = await run('result({ a: 1 }, { duration_ms: 4321 });');
+    expect(out).toMatchObject({ ok: true, result: { durationMs: 4321 } });
+  });
+
+  it("a 3000-char result text survives intact", async () => {
+    const text = "e".repeat(3000);
+    const out = await run(`emit({ type: "result", is_error: true, result: ${JSON.stringify(text)} }); process.exitCode = 1;`);
+    expect(out).toMatchObject({ ok: false, reason: "claude_error", message: text });
+  });
+
+  it("non-JSON exit 1 with stderr stays exit_nonzero", async () => {
+    const out = await run('process.stderr.write("something broke"); process.exit(1);');
+    expect(out).toMatchObject({ ok: false, reason: "exit_nonzero", limit: null, stderr: "something broke" });
+  });
+
+  it("non-JSON output that is a usage limit is rate_limited", async () => {
+    const out = await run('process.stderr.write("Weekly limit reached"); process.exit(1);');
+    expect(out).toMatchObject({ ok: false, reason: "rate_limited", limit: { kind: "usage_limit" } });
   });
 });
 

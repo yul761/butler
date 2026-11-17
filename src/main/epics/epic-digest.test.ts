@@ -19,7 +19,7 @@ const ok = (structured: unknown): HeadlessOutcome => ({
   ok: true,
   result: {
     sessionId: null, isError: false, subtype: null, resultText: "", structured, permissionDenials: [], apiErrorStatus: null, costUsd: null,
-    usage: { input: 1, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 1 }, model: "claude-sonnet",
+    usage: { input: 1, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 1 }, model: "claude-sonnet", durationMs: null,
   },
 });
 
@@ -197,7 +197,7 @@ describe("EpicDigestRunner.weekly", () => {
   it("stores nothing and logs when the run fails or the answer is invalid", async () => {
     const t = setup();
     t.addSummary(t.checkout, t.now() - DAY);
-    t.answer({ ok: false, reason: "timeout", message: "timed out", result: null });
+    t.answer({ ok: false, reason: "timeout", message: "timed out", result: null, limit: null, stderr: "" });
     await expect(t.runner.weekly()).resolves.toBeUndefined();
     t.setNow(t.now() + 7 * DAY);
     t.answer(ok({ summary: 3 }));

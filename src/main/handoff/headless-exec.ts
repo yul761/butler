@@ -1,4 +1,5 @@
-import type { HeadlessRun } from "../claude/headless";
+import type { LimitHit } from "../../shared/availability";
+import type { ClaudeResult, HeadlessFailure, HeadlessRun } from "../claude/headless";
 import { headlessEnv } from "../claude/spawn";
 import type { SessionsRepo } from "../db/sessions-repo";
 import { M } from "../strings";
@@ -20,10 +21,16 @@ export interface HeadlessExecDeps {
   signal?: AbortSignal;
   /** 每次运行（含失败的）带回用量时调用。 */
   onUsage?: (u: { runId: string; label: string; at: number; model: string | null; usage: UsageCounts }) => void;
+  /** 失败里带限流 / 模型不可用时调用；job 是 jobOf(label)。抛错只记日志。 */
+  onLimit?: (hit: LimitHit, job: string) => void;
+  /** 成功时调用。抛错只记日志。 */
+  onSuccess?: (at: number, job: string) => void;
   log?: (msg: string, err?: unknown) => void;
 }
 
-export type HeadlessExecResult = { ok: true; value: unknown; rawText: string } | { ok: false; reason: string; message: string };
+export type HeadlessExecResult =
+  | { ok: true; value: unknown; rawText: string; result: ClaudeResult }
+  | { ok: false; reason: HeadlessFailure | "claude_missing"; message: string; limit: LimitHit | null; stderr: string; result: ClaudeResult | null; rawText: string | null };
 
 /** 去掉 label 末尾的 ticket 号或数字：“handoff BTL-1” → “handoff”，“feature summary 3” → “feature summary”。 */
 export function jobOf(label: string): string {
@@ -37,7 +44,7 @@ export async function execHeadlessJson(
 ): Promise<HeadlessExecResult> {
   await d.ready();
   const { path, pathValue } = d.claude();
-  if (!path) return { ok: false, reason: "claude_missing", message: M().claudeMissing };
+  if (!path) return { ok: false, reason: "claude_missing", message: M().claudeMissing, limit: null, stderr: "", result: null, rawText: null };
   const runId = d.newRunId();
   const out = await d.run({
     claudePath: path, args: o.args, prompt: o.prompt, cwd: o.cwd,
@@ -51,9 +58,23 @@ export async function execHeadlessJson(
   const sid = out.result?.sessionId;
   // 返回的 id 就是被恢复的真实 session 时，绝不能把它记成 headless。
   if (sid && sid !== o.resumedId) d.sessions.recordHeadless(sid, o.cwd, d.now());
+  const job = jobOf(o.label);
+  const hook = (name: string, f: () => void) => {
+    try {
+      f();
+    } catch (e) {
+      d.log?.(`${o.label}: ${name} threw`, e);
+    }
+  };
   if (!out.ok) {
-    d.log?.(`${o.label}: ${out.reason}: ${out.message}`);
-    return { ok: false, reason: out.reason, message: out.message };
+    d.log?.(`${o.label}: ${out.reason}: ${out.message.slice(0, 500)}`);
+    if (out.limit) {
+      const hit = out.limit;
+      hook("onLimit", () => d.onLimit?.(hit, job));
+    }
+    const rawText = out.result ? out.result.resultText || JSON.stringify(out.result.structured ?? null) : null;
+    return { ok: false, reason: out.reason, message: out.message, limit: out.limit, stderr: out.stderr, result: out.result, rawText };
   }
-  return { ok: true, value: pickStructured(out.result), rawText: out.result.resultText || JSON.stringify(out.result.structured ?? null) };
+  hook("onSuccess", () => d.onSuccess?.(d.now(), job));
+  return { ok: true, value: pickStructured(out.result), rawText: out.result.resultText || JSON.stringify(out.result.structured ?? null), result: out.result };
 }
