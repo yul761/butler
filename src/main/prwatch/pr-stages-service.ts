@@ -1,6 +1,6 @@
 // PR 进度：把 ticket 的每个 PR 推导成一行（六步进度条和时间线），仓库还没有 PR 时一行“没有 PR”。
 import type { PrStageRepo } from "../db/pr-stage-repo";
-import type { TicketPr } from "../db/ticket-prs-repo";
+import { prGivenUp, type TicketPr } from "../db/ticket-prs-repo";
 import type { PrStagesScope, PrStagesTicket, PrStagesView } from "../../shared/pr-stages";
 import { effectiveStatus, type Ticket } from "../../shared/types";
 import { assignToPrs, prEnd, type ScopePr } from "./pr-scope";
@@ -30,11 +30,16 @@ const scopePr = (p: TicketPr): ScopePr => ({
   id: p.id, repoId: p.repoId, slug: p.slug, number: p.number, headBranch: p.headBranch, start: p.openedAt ?? p.linkedAt, end: prEnd(p),
 });
 
-/** D-6：ticket 的 PR 都合并或关闭、至少一个合并；或者（手动优先的）状态已经是 merged_pending_followup / done。 */
-export function ticketMerged(t: Pick<Ticket, "status" | "statusManual">, prs: Pick<TicketPr, "state">[]): boolean {
+/**
+ * D-6：ticket 的 PR 都合并或关闭、至少一个合并；或者（手动优先的）状态已经是 merged_pending_followup / done。
+ * 一直读不到、放弃了的（prGivenUp）开着的 PR 不挡。
+ */
+export function ticketMerged(
+  t: Pick<Ticket, "status" | "statusManual">, prs: (Pick<TicketPr, "state"> & Partial<Pick<TicketPr, "readFailures">>)[],
+): boolean {
   const status = effectiveStatus(t);
   if (status === "merged_pending_followup" || status === "done") return true;
-  return prs.length > 0 && prs.every((p) => p.state !== "open") && prs.some((p) => p.state === "merged");
+  return prs.length > 0 && prs.every((p) => p.state !== "open" || prGivenUp({ readFailures: p.readFailures ?? 0 })) && prs.some((p) => p.state === "merged");
 }
 
 export class PrStagesService {

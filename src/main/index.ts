@@ -26,7 +26,7 @@ import { MemorySyncRepo } from "./db/memory-sync-repo";
 import { MergeGateRepo } from "./db/merge-gate-repo";
 import { PrStageRepo } from "./db/pr-stage-repo";
 import { BranchWatchRepo } from "./db/branch-watch-repo";
-import { TicketPrsRepo } from "./db/ticket-prs-repo";
+import { linkedOpen as anyLinkedOpen, TicketPrsRepo } from "./db/ticket-prs-repo";
 import { SecretsRepo } from "./db/secrets-repo";
 import { SessionsRepo } from "./db/sessions-repo";
 import { SettingsRepo } from "./db/settings-repo";
@@ -999,7 +999,8 @@ async function bootstrap(): Promise<void> {
   // PR 和 CI 的监视（计划 13）。
   const ticketPrs = new TicketPrsRepo(db);
   // 只数读过的行（checkedAt > 0，同 prHandoff）：没读过的行状态只是链接时的猜测，不能把 ticket 钉在 in_review；新链接的行下一轮轮询就会读到。
-  const linkedOpen = (k: string): boolean => ticketPrs.byTicket(k).some((p) => p.state === "open" && p.checkedAt > 0);
+  // 一直读不到、放弃了的行也不数。
+  const linkedOpen = (k: string): boolean => anyLinkedOpen(ticketPrs.byTicket(k));
   const branchWatch = new BranchWatchRepo(db);
   const prLinker = new PrLinker({ prs: ticketPrs, tickets, slugOf: (path) => repoIdentity.slugOf(path), now: Date.now });
   const holdWatcher = new HoldWatcher({

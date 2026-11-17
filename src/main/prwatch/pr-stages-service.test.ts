@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StageEvent } from "../db/pr-stage-repo";
-import type { TicketPr } from "../db/ticket-prs-repo";
+import { PR_READ_GIVE_UP, type TicketPr } from "../db/ticket-prs-repo";
 import type { PrStagesView } from "../../shared/pr-stages";
 import type { Ticket, TicketRepo } from "../../shared/types";
 import { PrStagesService, ticketMerged, type PrStagesServiceDeps } from "./pr-stages-service";
@@ -17,7 +17,7 @@ const ev = (o: Partial<StageEvent> = {}): StageEvent => ({
 const prRow = (o: Partial<TicketPr>): TicketPr => ({
   id: 1, ticketKey: "A-1", url: "https://github.com/o/r/pull/1", slug: "o/r", repoId: 5, number: 1, headBranch: "feat", state: "open", review: null,
   ci: "passing", readError: false, headSha: "a", failed: [], openedAt: 100, mergedAt: null, closedAt: null, source: "branch", linkedAt: 100,
-  checkedAt: 100, deliveredKey: null, mergedHandledAt: null, ...o,
+  checkedAt: 100, deliveredKey: null, mergedHandledAt: null, readFailures: 0, readRetryAt: null, ...o,
 });
 
 function make(o: {
@@ -172,6 +172,14 @@ describe("PrStagesService", () => {
     expect(ticketMerged(st("merged_pending_followup"), [{ state: "open" }])).toBe(true);
     expect(ticketMerged(st("done", "active"), [])).toBe(false);
     expect(ticketMerged(st("active", "done"), [{ state: "open" }])).toBe(true);
+  });
+
+  it("ticketMerged: an open PR Butler gave up reading (10 failed reads) does not hold the ticket back", () => {
+    const st = { status: "active" as const, statusManual: null };
+    expect(ticketMerged(st, [{ state: "merged" }, { state: "open", readFailures: PR_READ_GIVE_UP }])).toBe(true);
+    expect(ticketMerged(st, [{ state: "merged" }, { state: "open", readFailures: PR_READ_GIVE_UP - 1 }])).toBe(false);
+    // 只有放弃了的：没有合并的，不算合并。
+    expect(ticketMerged(st, [{ state: "open", readFailures: PR_READ_GIVE_UP }])).toBe(false);
   });
 
   it("each ticket carries its feature id, also without rows", () => {

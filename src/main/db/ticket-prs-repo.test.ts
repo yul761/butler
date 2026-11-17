@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { memDb } from "../test-utils";
 import type { Db } from "./database";
-import { TicketPrsRepo, type NewPrLink } from "./ticket-prs-repo";
+import { linkedOpen, PR_READ_GIVE_UP, PR_READ_RETRY_MS, prGivenUp, TicketPrsRepo, type NewPrLink } from "./ticket-prs-repo";
 import { TicketsRepo } from "./tickets-repo";
 
 function setup(): { db: Db; prs: TicketPrsRepo; tickets: TicketsRepo; repoId: number } {
@@ -70,7 +70,48 @@ describe("TicketPrsRepo", () => {
     const doneMerged = prs.link(link({ url: "u/4", number: 4, state: "merged" })).pr;
     const doneClosed = prs.link(link({ url: "u/5", number: 5, state: "closed" })).pr;
     for (const p of [readOpen, doneMerged, doneClosed]) prs.update(p.id, { checkedAt: 9 });
-    expect(prs.needingRead().map((p) => p.id)).toEqual([open.id, readOpen.id, neverRead.id]);
+    expect(prs.needingRead(9).map((p) => p.id)).toEqual([open.id, readOpen.id, neverRead.id]);
+  });
+
+  it("noteReadFailure counts failures; the 10th parks the row for 24 h and needingRead skips it until then; a successful read resets both", () => {
+    const { prs } = setup();
+    const p = prs.link(link()).pr;
+    expect(prs.get(p.id)).toMatchObject({ readFailures: 0, readRetryAt: null });
+    for (let i = 1; i < PR_READ_GIVE_UP; i++) prs.noteReadFailure(p.id, 100 + i);
+    expect(prs.get(p.id)).toMatchObject({ readFailures: PR_READ_GIVE_UP - 1, readRetryAt: null, readError: true });
+    expect(prGivenUp(prs.get(p.id)!)).toBe(false);
+    expect(prs.needingRead(200).map((x) => x.id)).toEqual([p.id]);
+    prs.noteReadFailure(p.id, 200);
+    expect(prs.get(p.id)).toMatchObject({ readFailures: PR_READ_GIVE_UP, readRetryAt: 200 + PR_READ_RETRY_MS });
+    expect(prGivenUp(prs.get(p.id)!)).toBe(true);
+    expect(prs.needingRead(201)).toEqual([]);
+    expect(prs.needingRead(200 + PR_READ_RETRY_MS).map((x) => x.id)).toEqual([p.id]);
+    // 过了一天再失败：再停一天。
+    prs.noteReadFailure(p.id, 200 + PR_READ_RETRY_MS);
+    expect(prs.get(p.id)).toMatchObject({ readFailures: PR_READ_GIVE_UP + 1, readRetryAt: 200 + 2 * PR_READ_RETRY_MS });
+    prs.update(p.id, { readError: false, readFailures: 0, readRetryAt: null, checkedAt: 300 });
+    expect(prs.get(p.id)).toMatchObject({ readFailures: 0, readRetryAt: null });
+    expect(prs.needingRead(301).map((x) => x.id)).toEqual([p.id]);
+  });
+
+  it("noteReadFailure keeps checked_at at 0 on a never-read row and stamps it on a read row", () => {
+    const { prs } = setup();
+    const unread = prs.link(link({ url: "u/1", number: 1 })).pr;
+    const read = prs.link(link({ url: "u/2", number: 2 })).pr;
+    prs.update(read.id, { checkedAt: 5 });
+    prs.noteReadFailure(unread.id, 50);
+    prs.noteReadFailure(read.id, 50);
+    expect(prs.get(unread.id)).toMatchObject({ checkedAt: 0, readError: true, readFailures: 1 });
+    expect(prs.get(read.id)).toMatchObject({ checkedAt: 50, readError: true, readFailures: 1 });
+  });
+
+  it("linkedOpen: a read open PR counts; never-read and given-up ones do not", () => {
+    const row = { state: "open" as const, checkedAt: 5, readFailures: 0 };
+    expect(linkedOpen([row])).toBe(true);
+    expect(linkedOpen([{ ...row, checkedAt: 0 }])).toBe(false);
+    expect(linkedOpen([{ ...row, readFailures: PR_READ_GIVE_UP }])).toBe(false);
+    expect(linkedOpen([{ ...row, readFailures: PR_READ_GIVE_UP - 1 }])).toBe(true);
+    expect(linkedOpen([{ ...row, state: "merged" }])).toBe(false);
   });
 
   it("pendingMerged (read rows only), setMergedHandled, setDelivered and update round-trip", () => {

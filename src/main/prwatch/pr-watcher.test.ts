@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BranchWatchRepo } from "../db/branch-watch-repo";
 import { PrStageRepo, type StageEvent } from "../db/pr-stage-repo";
-import { TicketPrsRepo, type NewPrLink } from "../db/ticket-prs-repo";
+import { PR_READ_GIVE_UP, PR_READ_RETRY_MS, TicketPrsRepo, type NewPrLink } from "../db/ticket-prs-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { memDb } from "../test-utils";
 import type { BranchPr, BranchRuns, CiCheck, PrComment, PrStatus } from "../tickets/gh";
@@ -145,6 +145,42 @@ describe("PrWatcher: reading PRs", () => {
     s.advance(60_000);
     await s.w.check();
     expect(calls()).toBe(9);
+  });
+
+  it("gives up on a PR after 10 failed reads in a row: no reads for 24 h, then one a day; a success resets the count", async () => {
+    const s = setup();
+    const read = s.link();
+    const unread = s.link({ url: url(8), number: 8 });
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => (u === url(7) ? pr() : null));
+    await s.w.check();
+    expect(s.prs.get(read.id)).toMatchObject({ checkedAt: s.now(), readFailures: 0 });
+    expect(s.prs.get(unread.id)).toMatchObject({ checkedAt: 0, readFailures: 1 });
+    s.gh.prStatus.mockResolvedValue(null);
+    const calls = (u: string) => s.gh.prStatus.mock.calls.filter((c) => c[1] === u).length;
+    for (let i = 0; i < PR_READ_GIVE_UP; i++) {
+      s.advance(PR_SLOW_MS);
+      await s.w.check();
+    }
+    expect(calls(url(7))).toBe(1 + PR_READ_GIVE_UP);
+    expect(s.prs.get(read.id)).toMatchObject({ readFailures: PR_READ_GIVE_UP, readRetryAt: s.now() + PR_READ_RETRY_MS, readError: true });
+    // 没读成功过的那个先失败了一次，上一轮就停了。
+    expect(s.prs.get(unread.id)).toMatchObject({ readFailures: PR_READ_GIVE_UP, checkedAt: 0 });
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining(`giving up on ${url(7)}`));
+    // 放弃了：一天之内不再读。
+    const before = s.gh.prStatus.mock.calls.length;
+    for (let i = 0; i < 5; i++) {
+      s.advance(PR_SLOW_MS);
+      await s.w.check();
+    }
+    expect(s.gh.prStatus.mock.calls.length).toBe(before);
+    // 一天后再试一次；读成功：两个都清掉。
+    s.advance(PR_READ_RETRY_MS);
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => (u === url(7) ? pr() : null));
+    await s.w.check();
+    expect(calls(url(7))).toBe(2 + PR_READ_GIVE_UP);
+    expect(s.prs.get(read.id)).toMatchObject({ readFailures: 0, readRetryAt: null, readError: false });
+    // 另一个又失败了：再停一天。
+    expect(s.prs.get(unread.id)).toMatchObject({ readFailures: PR_READ_GIVE_UP + 1, readRetryAt: s.now() + PR_READ_RETRY_MS });
   });
 
   it("forgets the backoff of a PR whose rows are gone, so a later link reads it at once", async () => {

@@ -3,6 +3,11 @@ import type { WatchedPr } from "../../shared/types";
 import type { CiCheck } from "../tickets/gh";
 import type { Db } from "./database";
 
+/** 连续读失败这么多次就放弃：之后一天才再试一次，开着的状态也不再挡着 ticket 合并 / 留在 in_review。 */
+export const PR_READ_GIVE_UP = 10;
+/** 放弃以后隔这么久再试一次。 */
+export const PR_READ_RETRY_MS = 24 * 60 * 60_000;
+
 export type PrLinkSource = "branch" | "handoff" | "merge_gate" | "backfill";
 
 export interface TicketPr {
@@ -31,7 +36,18 @@ export interface TicketPr {
   checkedAt: number;
   deliveredKey: string | null;
   mergedHandledAt: number | null;
+  /** 连续读失败的次数；读成功清零。 */
+  readFailures: number;
+  /** 放弃读以后下次再试的时间；null = 没停。 */
+  readRetryAt: number | null;
 }
+
+/** 连续读失败到了上限：状态只是最后一次读到的，不再当真。 */
+export const prGivenUp = (p: Pick<TicketPr, "readFailures">): boolean => p.readFailures >= PR_READ_GIVE_UP;
+
+/** ticket 是不是还有链接的 PR 开着：只算读过的、没放弃的。 */
+export const linkedOpen = (prs: Pick<TicketPr, "state" | "checkedAt" | "readFailures">[]): boolean =>
+  prs.some((p) => p.state === "open" && p.checkedAt > 0 && !prGivenUp(p));
 
 export interface NewPrLink {
   ticketKey: string;
@@ -50,7 +66,7 @@ export interface NewPrLink {
 }
 
 export type TicketPrPatch = Partial<
-  Pick<TicketPr, "state" | "review" | "ci" | "readError" | "headSha" | "failed" | "headBranch" | "openedAt" | "mergedAt" | "closedAt" | "checkedAt">
+  Pick<TicketPr, "state" | "review" | "ci" | "readError" | "headSha" | "failed" | "headBranch" | "openedAt" | "mergedAt" | "closedAt" | "checkedAt" | "readFailures" | "readRetryAt">
 >;
 
 interface Row {
@@ -75,6 +91,8 @@ interface Row {
   checked_at: number;
   delivered_key: string | null;
   merged_handled_at: number | null;
+  read_failures: number;
+  read_retry_at: number | null;
 }
 
 const num = (v: number | null): number | null => (v === null ? null : Number(v));
@@ -84,7 +102,7 @@ const toPr = (r: Row): TicketPr => ({
   headBranch: r.head_branch, state: r.state, review: r.review, ci: r.ci, readError: Number(r.read_error) !== 0, headSha: r.head_sha,
   failed: JSON.parse(r.failed) as CiCheck[], openedAt: num(r.opened_at), mergedAt: num(r.merged_at), closedAt: num(r.closed_at),
   source: r.source, linkedAt: Number(r.linked_at), checkedAt: Number(r.checked_at), deliveredKey: r.delivered_key,
-  mergedHandledAt: num(r.merged_handled_at),
+  mergedHandledAt: num(r.merged_handled_at), readFailures: Number(r.read_failures), readRetryAt: num(r.read_retry_at),
 });
 
 /** 每个 (ticket, PR 链接) 一行：PR 的状态、CI、评审和已经交付给会话的 CI。 */
@@ -136,10 +154,12 @@ export class TicketPrsRepo {
     return (this.db.prepare(`SELECT * FROM ticket_prs WHERE url = ? ORDER BY id`).all(prUrlKey(url)) as unknown as Row[]).map(toPr);
   }
 
-  /** 要读的：还开着的，和从没读过的。 */
-  needingRead(): TicketPr[] {
+  /** 要读的：还开着的，和从没读过的。给了 now 时不含放弃读、还没到 read_retry_at 的。 */
+  needingRead(now?: number): TicketPr[] {
     return (
-      this.db.prepare(`SELECT * FROM ticket_prs WHERE state = 'open' OR checked_at = 0 ORDER BY id`).all() as unknown as Row[]
+      this.db
+        .prepare(`SELECT * FROM ticket_prs WHERE (state = 'open' OR checked_at = 0) AND (? IS NULL OR read_retry_at IS NULL OR read_retry_at <= ?) ORDER BY id`)
+        .all(now ?? null, now ?? null) as unknown as Row[]
     ).map(toPr);
   }
 
@@ -168,8 +188,26 @@ export class TicketPrsRepo {
     if (p.mergedAt !== undefined) set("merged_at", p.mergedAt);
     if (p.closedAt !== undefined) set("closed_at", p.closedAt);
     if (p.checkedAt !== undefined) set("checked_at", p.checkedAt);
+    if (p.readFailures !== undefined) set("read_failures", p.readFailures);
+    if (p.readRetryAt !== undefined) set("read_retry_at", p.readRetryAt);
     if (sets.length === 0) return;
     this.db.prepare(`UPDATE ticket_prs SET ${sets.join(", ")} WHERE id = ?`).run(...vals, id);
+  }
+
+  /**
+   * 一次读失败：记 read_error、失败次数加一；从没读成功过的 checked_at 留 0（还算第一次读），读过的记成 now。
+   * 失败到 PR_READ_GIVE_UP 次（以及之后每次）停 PR_READ_RETRY_MS。返回新的失败次数。
+   */
+  noteReadFailure(id: number, now: number): number {
+    const r = this.db
+      .prepare(
+        `UPDATE ticket_prs SET read_error = 1, read_failures = read_failures + 1,
+           checked_at = CASE WHEN checked_at = 0 THEN 0 ELSE ? END,
+           read_retry_at = CASE WHEN read_failures + 1 >= ? THEN ? ELSE read_retry_at END
+         WHERE id = ? RETURNING read_failures`,
+      )
+      .get(now, PR_READ_GIVE_UP, now + PR_READ_RETRY_MS, id) as { read_failures: number } | undefined;
+    return r ? Number(r.read_failures) : 0;
   }
 
   setDelivered(id: number, key: string | null): void {
