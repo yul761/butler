@@ -73,4 +73,13 @@ describe("prHandoff", () => {
     const b = { id: 1, createdAt: 100, status: "active" as const, prs: [pr()] };
     expect(prHandoff("BTL-1", [row({ state: "merged", mergedAt: 50 })], b)?.status).toBe("active");
   });
+
+  it("leaves out a given-up open row and drops it from the base, so a merged sibling promotes the ticket", () => {
+    const b = "https://github.com/o/app/pull/8";
+    const rows = [row({ state: "merged", mergedAt: 5 }), row({ id: 2, number: 8, url: b, readFailures: 12, readFailingSince: 1, readRetryAt: 99, readError: true })];
+    const out = prHandoff("BTL-1", rows, base(3, [pr(), pr({ number: 8, url: b })]));
+    expect(out?.prs).toEqual([pr({ state: "merged" })]);
+    expect(out?.status).toBe("done");
+  });
 });
+

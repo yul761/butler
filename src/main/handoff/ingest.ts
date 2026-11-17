@@ -19,6 +19,8 @@ export interface IngestDeps {
   linkPrs?: (ticketKey: string, prs: Pr[]) => void;
   /** ticket_prs 里这个 ticket 是否有链接的 PR 还开着。 */
   linkedOpen?: (ticketKey: string) => boolean;
+  /** 这个 ticket 链接的、Butler 放弃读了的 PR（prUrlKey 形式）。 */
+  givenUpPrs?: (ticketKey: string) => ReadonlySet<string>;
 }
 
 export interface IngestInput {
@@ -35,7 +37,7 @@ export type IngestResult =
   | { stored: true; handoffId: number; degraded: boolean; status: TicketStatus | null }
   | { stored: false; reason: "no_ticket" | "duplicate" | "no_block" };
 
-type StatusDeps = Pick<IngestDeps, "tickets" | "handoffs" | "followups" | "now" | "linkedOpen">;
+type StatusDeps = Pick<IngestDeps, "tickets" | "handoffs" | "followups" | "now" | "linkedOpen" | "givenUpPrs">;
 
 const openFollowups = (d: StatusDeps, ticketKey: string): number =>
   d.followups.listByTicket(ticketKey).filter((f) => f.status === "open" || f.status === "snoozed").length;
@@ -66,7 +68,9 @@ export function ingestHandoff(d: IngestDeps, input: IngestInput): IngestResult {
     for (const fid of plan.done) d.followups.setStatus(fid, "done", now);
     // 状态按模型自己报的 PR 算；记着的和链接的只能让它保持 in_review。
     const { own, remembered } = splitOwnAndRemembered(reported, stored);
-    const status = deriveStatus({ ...payload, prs: own }, openFollowups(d, input.ticketKey), { remembered, linkedOpen: d.linkedOpen?.(input.ticketKey) ?? false });
+    const status = deriveStatus({ ...payload, prs: own }, openFollowups(d, input.ticketKey), {
+      remembered, linkedOpen: d.linkedOpen?.(input.ticketKey) ?? false, givenUp: d.givenUpPrs?.(input.ticketKey),
+    });
     d.tickets.setStatus(input.ticketKey, status, now);
     return { stored: true, handoffId: id, degraded: false, status };
   });
@@ -85,7 +89,9 @@ export function rederiveTicketStatus(d: StatusDeps, ticketKey: string): TicketSt
   const status =
     current === "done" || current === "merged_pending_followup"
       ? open > 0 ? "merged_pending_followup" : "done"
-      : deriveStatus({ ...latest.payload, prs: [] }, open, { remembered: latest.payload.prs, linkedOpen: d.linkedOpen?.(ticketKey) ?? false });
+      : deriveStatus({ ...latest.payload, prs: [] }, open, {
+          remembered: latest.payload.prs, linkedOpen: d.linkedOpen?.(ticketKey) ?? false, givenUp: d.givenUpPrs?.(ticketKey),
+        });
   d.tickets.setStatus(ticketKey, status, d.now());
   return status;
 }

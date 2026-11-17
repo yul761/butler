@@ -167,4 +167,22 @@ describe("ingestHandoff", () => {
     expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("active");
     expect(tickets.get("PROJ-1")?.status).toBe("active");
   });
+
+  it("PR A merged and PR B given up: B no longer holds the ticket in review (ingest and rederive)", () => {
+    const { deps, tickets, tick } = setup();
+    const a = { number: 7, url: "https://github.com/o/app/pull/7", state: "merged" as const, review: "approved" as const };
+    const b = { number: 8, url: "https://github.com/o/app/pull/8", state: "open" as const, review: "pending" as const };
+    const held = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ status: "in_review", prs: [a, b] }) });
+    expect(held).toMatchObject({ status: "in_review" });
+    const givenUp = { ...deps, givenUpPrs: () => new Set([b.url]) };
+    tick(10);
+    const r = ingestHandoff(givenUp, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ status: "in_review", prs: [a, b] }) });
+    expect(r).toMatchObject({ status: "done" });
+    // 模型说 active、handoff 里还记着开着的 B：rederive 不再因为 B 留在 in_review。
+    tick(10);
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ status: "active", prs: [b] }) });
+    expect(tickets.get("PROJ-1")?.status).toBe("in_review");
+    expect(rederiveTicketStatus(givenUp, "PROJ-1")).toBe("active");
+  });
 });
+

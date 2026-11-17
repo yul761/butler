@@ -48,4 +48,13 @@ describe("deriveStatus", () => {
   it("model active with its own merged PR stays active (sequential PRs)", () => {
     expect(deriveStatus(h({ status: "active", prs: [pr("merged")] }), 0)).toBe("active");
   });
+
+  it("a PR Butler gave up reading does not hold the ticket in review, whether the model, the memory or a refresh reports it open", () => {
+    const a = { number: 1, url: "https://github.com/o/app/pull/1", state: "merged" as const, review: null };
+    const b = { number: 2, url: "https://github.com/o/app/pull/2", state: "open" as const, review: null };
+    const givenUp = new Set(["https://github.com/o/app/pull/2"]);
+    expect(deriveStatus({ status: "in_review", prs: [a, b], blockers: [] }, 0)).toBe("in_review");
+    expect(deriveStatus({ status: "in_review", prs: [a, { ...b, url: "https://github.com/O/app/pull/2/" }], blockers: [] }, 0, { remembered: [], linkedOpen: false, givenUp })).toBe("done");
+    expect(deriveStatus({ status: "active", prs: [], blockers: [] }, 0, { remembered: [a, b], linkedOpen: false, givenUp })).toBe("active");
+  });
 });
