@@ -379,7 +379,8 @@ export class PrWatcher {
   private async checkBranches(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, marks: Marks): Promise<void> {
     const targets = branchTargets(tickets, { ghWorkDir: (r) => this.d.ghWorkDir(r), sessionOpen: (k, id) => this.d.sessionOpen(k, id) });
     const now = this.d.now();
-    const open = this.d.prs.needingRead().filter((r) => r.state === "open" && (r.readRetryAt === null || r.readRetryAt <= now));
+    // 放弃读了的开着的 PR 也算：PR 还在，只是读不到，分支检查照样停着（不然它每轮都去列这个分支）。
+    const open = this.d.prs.needingRead().filter((r) => r.state === "open");
     const due = capRound(
       targets.filter((t) => {
         const hasOpenPr = open.some((r) => r.repoId === t.repoId && r.headBranch === t.branch);
