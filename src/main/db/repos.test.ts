@@ -547,6 +547,41 @@ describe("migration 23: pr_watch → ticket_prs / branch_watch", () => {
   });
 });
 
+describe("migration 23: rows that are not a usable PR", () => {
+  it("routes a PR row without a url / state or with a non-PR url to branch_watch, and skips an orphan ticket instead of aborting", () => {
+    const db = new DatabaseSync(":memory:");
+    for (const sql of MIGRATIONS.slice(0, 20)) db.exec(sql);
+    db.exec("PRAGMA user_version = 20");
+    db.prepare(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES ('BTL-1', '', 'branch', '', 1)`).run();
+    const repo = (branch: string) =>
+      Number(db.prepare(`INSERT INTO ticket_repos (ticket_key, repo_path, work_mode, branch, created_at) VALUES ('BTL-1', ?, 'branch', ?, 1)`).run(`/r/${branch}`, branch).lastInsertRowid);
+    const watch = db.prepare(
+      `INSERT INTO pr_watch (repo_id, ticket_key, repo_path, branch, number, url, state, review, ci, head_sha, failed, checked_at, delivered_key)
+       VALUES (?, ?, '/r', ?, ?, ?, ?, NULL, 'passing', 'h', '[]', 500, NULL)`,
+    );
+    const noUrl = repo("no-url");
+    const noState = repo("no-state");
+    const notPull = repo("not-pull");
+    const orphan = repo("orphan");
+    const good = repo("good");
+    watch.run(noUrl, "BTL-1", "no-url", 5, null, "open");
+    watch.run(noState, "BTL-1", "no-state", 6, "https://github.com/acme/app/pull/6", null);
+    watch.run(notPull, "BTL-1", "not-pull", 7, "https://github.com/acme/app/issues/7", "open");
+    // ticket 已经不在了（pr_watch.ticket_key 没有外键）：不能让 ticket_prs 的外键把启动卡住。
+    watch.run(orphan, "GONE-1", "orphan", 8, "https://github.com/acme/app/pull/8", "open");
+    watch.run(good, "BTL-1", "good", 9, "https://github.com/acme/app/pull/9", "open");
+
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+
+    expect(db.prepare(`SELECT repo_id, branch, ci, head_sha, checked_at FROM branch_watch ORDER BY repo_id`).all()).toEqual([
+      { repo_id: noUrl, branch: "no-url", ci: "passing", head_sha: "h", checked_at: 500 },
+      { repo_id: noState, branch: "no-state", ci: "passing", head_sha: "h", checked_at: 500 },
+      { repo_id: notPull, branch: "not-pull", ci: "passing", head_sha: "h", checked_at: 500 },
+    ]);
+    expect(db.prepare(`SELECT ticket_key, number FROM ticket_prs`).all()).toEqual([{ ticket_key: "BTL-1", number: 9 }]);
+  });
+});
+
 describe("migration 24: lesson runs", () => {
   it("migration 24 from a v23 database keeps lessons and backfills source slugs", () => {
     const db = new DatabaseSync(":memory:");

@@ -427,10 +427,13 @@ export const MIGRATIONS: string[] = [
   `,
   // pr_watch 的行搬进 ticket_prs（有 PR 的）和 branch_watch（只有分支的），事件补上 pr_id，然后删掉 pr_watch。
   // 已合并、已关闭但没有对应事件的行 checked_at 记 0：再读一次拿到 GitHub 的时间；已合并的记作 onMerged 处理过，不再排复盘。
+  // 有号但 url / state 不全、url 不是 PR 的，当作只有分支：进 branch_watch，不丢。ticket 已经不在的（pr_watch.ticket_key 没有外键）
+  // 不进 ticket_prs：它的外键会让整个迁移失败、启动不了。
   `
   WITH w AS (
     SELECT *, lower(rtrim(trim(url), '/')) AS u FROM pr_watch
-    WHERE number IS NOT NULL AND url IS NOT NULL AND state IS NOT NULL AND instr(lower(url), '/pull/') > 0
+    WHERE number IS NOT NULL AND url IS NOT NULL AND ifnull(state, '') IN ('open','merged','closed') AND instr(lower(url), '/pull/') > 0
+      AND ticket_key IN (SELECT key FROM tickets)
   ), p AS (
     SELECT *, substr(u, instr(u, '://') + 3) AS rest FROM w
   ), q AS (
@@ -448,7 +451,8 @@ export const MIGRATIONS: string[] = [
     delivered_key, CASE WHEN state = 'merged' THEN checked_at END
   FROM q;
   INSERT INTO branch_watch (repo_id, ticket_key, branch, ci, head_sha, failed, read_error, checked_at, delivered_key)
-    SELECT repo_id, ticket_key, branch, ci, head_sha, failed, 0, checked_at, delivered_key FROM pr_watch WHERE number IS NULL;
+    SELECT repo_id, ticket_key, branch, ci, head_sha, failed, 0, checked_at, delivered_key FROM pr_watch
+    WHERE NOT (number IS NOT NULL AND url IS NOT NULL AND ifnull(state, '') IN ('open','merged','closed') AND instr(lower(url), '/pull/') > 0);
   UPDATE pr_stage_events SET pr_id = (SELECT t.id FROM ticket_prs t WHERE t.repo_id = pr_stage_events.repo_id AND t.head_branch = pr_stage_events.branch)
     WHERE pr_id IS NULL AND kind IN ('pr_opened','push','ci','review','comment','merged','closed');
   DROP TABLE pr_watch;
