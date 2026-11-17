@@ -422,6 +422,21 @@ describe("derivePrStages", () => {
       expect(states(merged)).toMatchObject({ peer_review: "failed", merge: "done" });
     });
 
+    it("a change request that survives the push stays failed when round 2's CI passes", () => {
+      const evs = [...passed, human(160, "CHANGES_REQUESTED"), ev("push", 170, { sha: "s2" })];
+      // 没有人重新 review：CI 通过后 peer review 还是失败，不是进行中。
+      const pure = derive(input({ events: [...evs, ci(180, "pending"), ci(190, "passing")] }));
+      expect(states(pure)).toMatchObject({ ci: "done", peer_review: "failed", merge: "todo" });
+      expect(cell(pure, "peer_review").round).toBe(2);
+      // 别人在 CI 之前批准了：CI 通过也不把失败改成进行中。
+      const approved = derive(input({ events: [...evs, human(175, "APPROVED", "bob"), ci(180, "pending"), ci(190, "passing")] }));
+      expect(states(approved)).toMatchObject({ ci: "done", peer_review: "failed" });
+      expect(cell(approved, "merge").state).not.toBe("active");
+      // alice 自己批准之后才算数，进入合并。
+      const resolved = derive(input({ events: [...evs, ci(180, "pending"), ci(190, "passing"), human(200, "APPROVED")] }));
+      expect(states(resolved)).toMatchObject({ peer_review: "done", merge: "active" });
+    });
+
     it("merged with a standing change request: peer review failed, merge done", () => {
       const v = derive(input({ events: [...passed, human(160, "CHANGES_REQUESTED"), ev("merged", 170, { number: 7 })] }));
       expect(states(v)).toMatchObject({ ci: "done", peer_review: "failed", merge: "done" });

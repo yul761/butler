@@ -140,6 +140,21 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
   /** 在 peer review 之前的某一步还在进行或失败了（比如 CI 挂了）：批准只记下，不往合并走。 */
   const beforeReviewOpen = () =>
     PR_STAGES.slice(0, PR_STAGES.indexOf("peer_review")).some((id) => cell(id).state === "active" || cell(id).state === "failed");
+  /** 最早一个进行中或失败的步骤；都没有时是 cur。 */
+  const earliestOpen = () => PR_STAGES.find((id) => cell(id).state === "active" || cell(id).state === "failed") ?? cur;
+  /**
+   * CI 通过之后往后走：这一轮已经有人批准过（批准在 CI 结束之前）直接到合并，不把批准抹掉；
+   * 有人的修改请求还在（push 也不撤销它）时 peer review 是失败，不是进行中，合并不开始。
+   */
+  const afterCiPassed = (at: number) => {
+    if (standing("CHANGES_REQUESTED")) {
+      set("peer_review", "failed", at);
+      cur = "peer_review";
+      return;
+    }
+    cur = cell("peer_review").state === "done" ? "merge" : "peer_review";
+    set(cur, "active", at);
+  };
 
   /** ci pending 的效果；ci 结果之前没看到 pending 时也先走一遍。 */
   const ciPending = (at: number): boolean => {
@@ -214,9 +229,7 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
             if (result === "failing") set("ci", "failed", at);
             else {
               set("ci", "done", at);
-              // 这一轮已经有人批准过（批准在 CI 结束之前），直接到合并，不把批准抹掉。
-              cur = cell("peer_review").state === "done" ? "merge" : "peer_review";
-              set(cur, "active", at);
+              afterCiPassed(at);
             }
           }
         }
@@ -230,7 +243,7 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
           round += 1;
           set("dev", "active", at);
           // 批准跨 push 有效：还有人批准、没有人要求修改时，peer review 保持完成，带进新一轮。
-          const keepApproval = standing("APPROVED") && !standing("CHANGES_REQUESTED");
+          const keepApproval = standing("APPROVED") && !standing("CHANGES_REQUESTED") && cell("peer_review").state === "done";
           for (const id of ["self_review", "ci", "peer_review", "merge"] as const) {
             if (id !== "peer_review" || !keepApproval) set(id, "todo", at);
             cell(id).round = round;
@@ -269,7 +282,7 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
             if (!beforeReviewOpen()) {
               set("merge", "active", at);
               cur = "merge";
-            } else cur = PR_STAGES.find((id) => cell(id).state === "active" || cell(id).state === "failed") ?? cur;
+            } else cur = earliestOpen();
           };
           if (state === "DISMISSED") {
             if (stance.get(key)?.id === rid) stance.delete(key);
@@ -285,7 +298,7 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
                 if (beforeReviewOpen()) {
                   // 前面还有一步在进行或失败（CI 还在跑）：评审等它走完，当前停在最早的那一步。
                   set("peer_review", "todo", at);
-                  cur = PR_STAGES.find((id) => cell(id).state === "active" || cell(id).state === "failed") ?? cur;
+                  cur = earliestOpen();
                 } else {
                   if (cell("merge").state === "active") set("merge", "todo", at);
                   set("peer_review", "active", at);
@@ -372,11 +385,8 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
     if (!hasCi) {
       if (i.pr.ci === "passing") {
         set("ci", "done", at);
-        // 停在 CI 这一步（开了 PR）：和 ci 事件一样往评审走；这一轮已经批准过就到合并。
-        if (cur === "ci" && !frozen()) {
-          cur = cell("peer_review").state === "done" ? "merge" : "peer_review";
-          set(cur, "active", at);
-        }
+        // 停在 CI 这一步（开了 PR）：和 ci 事件一样往评审走。
+        if (cur === "ci" && !frozen()) afterCiPassed(at);
       } else if (i.pr.ci === "failing") set("ci", "failed", at);
       // 合并、关闭之后不再"进行中"。
       else if (i.pr.ci === "pending" && !frozen() && !PR_STAGES.some((id) => cell(id).state === "active")) set("ci", "active", at);
