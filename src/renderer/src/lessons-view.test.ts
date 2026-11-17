@@ -58,7 +58,7 @@ describe("pruneLessonsUi", () => {
   });
   const ui = {
     editing: { id: 1 }, merging: { keepId: 1, dropId: 2 }, checked: [1, 2, 9], confirmingDelete: "lesson-1" as string | null,
-    sel: null as LessonsSelection | null,
+    sel: null as LessonsSelection | null, selectedRunId: null as number | null,
   };
   it("keeps everything that still exists", () => {
     expect(pruneLessonsUi(s, { ...ui, checked: [1, 2] })).toEqual({ ...ui, checked: [1, 2] });
@@ -66,7 +66,7 @@ describe("pruneLessonsUi", () => {
   it("drops state pointing at gone lessons and products", () => {
     const gone = state({ lessons: [lesson(2, { kind: "repo", slug: "o/a" }, "confirmed")] });
     const r = pruneLessonsUi(gone, ui);
-    expect(r).toEqual({ editing: null, merging: null, checked: [2], confirmingDelete: null, sel: null });
+    expect(r).toEqual({ editing: null, merging: null, checked: [2], confirmingDelete: null, sel: null, selectedRunId: null });
   });
   it("disarms a product delete when the product is gone", () => {
     expect(pruneLessonsUi(s, { ...ui, confirmingDelete: "product-5" }).confirmingDelete).toBe("product-5");
@@ -84,5 +84,12 @@ describe("pruneLessonsUi", () => {
     const live = state({ repos: [repo("o/a")] });
     expect(pruneLessonsUi(live, { ...ui, sel }).sel).toEqual(sel);
     expect(pruneLessonsUi(state(), { ...ui, sel }).sel).toBeNull();
+  });
+  it("keeps a selected run while its repo is selected and alive, drops it otherwise", () => {
+    const sel: LessonsSelection = { kind: "repo", slug: "o/a" };
+    const live = state({ repos: [repo("o/a")] });
+    expect(pruneLessonsUi(live, { ...ui, sel, selectedRunId: 4 }).selectedRunId).toBe(4);
+    expect(pruneLessonsUi(state(), { ...ui, sel, selectedRunId: 4 }).selectedRunId).toBeNull();
+    expect(pruneLessonsUi(s, { ...ui, sel: { kind: "product", id: 5 }, selectedRunId: 4 }).selectedRunId).toBeNull();
   });
 });

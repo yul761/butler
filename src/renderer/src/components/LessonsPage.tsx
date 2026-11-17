@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import type { Lesson, LessonAction, LessonRepoView, LessonsState } from "../../../shared/lessons";
 import { api } from "../api";
 import { reportError } from "../errors";
+import { queueBarButtons, queueBarText, sourceLabel, TONE_PILL } from "../lesson-runs-view";
 import { lessonsFor, lessonsTree, pruneLessonsUi, type LessonsSelection } from "../lessons-view";
 import { S } from "../strings";
+import { LessonRuns } from "./LessonRuns";
 import { useStateRefetch } from "./useStateRefetch";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -19,6 +21,8 @@ export function LessonsPage() {
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [checked, setChecked] = useState<number[]>([]);
   const [merging, setMerging] = useState<{ keepId: number; dropId: number; text: string } | null>(null);
+  const [tab, setTab] = useState<"lessons" | "runs">("lessons");
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [newName, setNewName] = useState("");
   const [newSlugs, setNewSlugs] = useState<string[]>([]);
 
@@ -29,17 +33,20 @@ export function LessonsPage() {
     setMerging(null);
     setChecked([]);
     setConfirmingDelete(null);
+    setTab("lessons");
+    setSelectedRunId(null);
   };
 
   // 数据刷新后，指向已经不存在的规矩或产品的界面状态要丢掉（产品 id 会被 SQLite 复用）。
   useEffect(() => {
     if (!state) return;
-    const next = pruneLessonsUi(state, { editing, merging, checked, confirmingDelete, sel });
+    const next = pruneLessonsUi(state, { editing, merging, checked, confirmingDelete, sel, selectedRunId });
     if (next.editing !== editing) setEditing(next.editing);
     if (next.merging !== merging) setMerging(next.merging);
     if (next.checked.length !== checked.length) setChecked(next.checked);
     if (next.confirmingDelete !== confirmingDelete) setConfirmingDelete(next.confirmingDelete);
     if (next.sel !== sel) setSel(next.sel);
+    if (next.selectedRunId !== selectedRunId) setSelectedRunId(next.selectedRunId);
   }, [state]);
 
   /** 发一个操作；失败时把原因记在 key 下。成功后什么都不补：等 stateChanged。 */
@@ -72,7 +79,7 @@ export function LessonsPage() {
       <span className="lesson-sources">
         {l.sources.map((src) => (
           <button key={src.id} className="link lesson-source" data-testid={`lesson-source-${src.id}`} onClick={() => void act(`lesson-${l.id}`, { op: "openSource", sourceId: src.id })}>
-            #{src.prNumber}
+            {sourceLabel(src, l.scope)}
           </button>
         ))}
       </span>
@@ -89,7 +96,7 @@ export function LessonsPage() {
         <div className="lessons-row">
           <button className="lessons-select" data-testid={`lessons-repo-${suffix}`} onClick={() => select({ kind: "repo", slug: r.slug })}>{r.slug}</button>
           <span className="muted">{r.lastAnalyzedAt === null ? S.lessonsNever : S.lessonsLastAnalyzed(formatTime(r.lastAnalyzedAt))}</span>
-          <span className="muted">{S.lessonsCounts(r.analyzedCount, r.queued, r.failed)}</span>
+          <span className="muted">{S.lessonsCounts(r.analyzedCount, r.queued, r.failed, r.skipped)}</span>
           <button
             data-testid={`lessons-backfill-${suffix}`}
             disabled={!s.ghAvailable}
@@ -148,8 +155,38 @@ export function LessonsPage() {
     );
   };
 
+  const queueBar = () => {
+    const bar = queueBarText(s.queue, S, Date.now());
+    const btn = queueBarButtons(s.queue);
+    return (
+      <div className="lessons-queue-bar lessons-row" data-testid="lessons-queue-bar">
+        <span className={`pill ${TONE_PILL[bar.tone]}`} data-testid="lessons-queue-text">{bar.text}</span>
+        <button data-testid="lessons-queue-toggle" onClick={() => void act("queue", { op: btn.toggle === "pause" ? "pauseQueue" : "resumeQueue" })}>
+          {btn.toggle === "pause" ? S.lessonQueuePause : S.lessonQueueResume}
+        </button>
+        {btn.runNow && <button data-testid="lessons-queue-run-now" onClick={() => void act("queue", { op: "runNow" })}>{S.lessonQueueRunNow}</button>}
+        {err("queue")}
+      </div>
+    );
+  };
+
+  const tabs = (
+    <div className="lessons-tabs lessons-row" role="tablist">
+      <button role="tab" aria-selected={tab === "lessons"} className={tab === "lessons" ? "primary" : undefined} data-testid="lessons-tab-lessons" onClick={() => setTab("lessons")}>{S.lessonsTabLessons}</button>
+      <button role="tab" aria-selected={tab === "runs"} className={tab === "runs" ? "primary" : undefined} data-testid="lessons-tab-runs" onClick={() => setTab("runs")}>{S.lessonsTabRuns}</button>
+    </div>
+  );
+
   const detail = () => {
     if (!sel) return <p className="muted">{S.lessonsSelectHint}</p>;
+    if (sel.kind === "repo" && tab === "runs") {
+      return (
+        <div className="lessons-detail">
+          {tabs}
+          <LessonRuns slug={sel.slug} selectedRunId={selectedRunId} onSelect={setSelectedRunId} />
+        </div>
+      );
+    }
     const { pending, confirmed } = lessonsFor(s, sel);
     const startEdit = (l: Lesson, mode: "edit" | "confirm") => setEditing({ id: l.id, mode, text: l.text });
     const editor = (l: Lesson) =>
@@ -183,6 +220,7 @@ export function LessonsPage() {
     };
     return (
       <div className="lessons-detail">
+        {sel.kind === "repo" && tabs}
         <h3>{S.lessonsPendingTitle}</h3>
         {pending.length === 0 && <p className="muted">{S.lessonsNoPending}</p>}
         {pending.map((l) => (
@@ -273,6 +311,7 @@ export function LessonsPage() {
         <p className="muted" data-testid="lessons-empty">{S.lessonsEmpty}</p>
       ) : (
         <>
+          {queueBar()}
           <div className="lessons-tree">{lessonsTree(s).map(productBlock)}</div>
           {s.unknownRepos.length > 0 && (
             <ul className="lessons-unknown muted">

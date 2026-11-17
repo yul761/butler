@@ -443,3 +443,9 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .lesson-sources { display: inline-flex; gap: 8px; margin: 2px 0; color: var(--accent); }
 .lesson-editor textarea { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; }
 button.danger { border-color: var(--danger); color: var(--danger); }
+.lessons-queue-bar { margin: 8px 0; }
+.lessons-tabs { margin-top: 12px; }
+.lesson-run-list { list-style: none; margin: 6px 0; padding: 0; }
+.lesson-run { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.lesson-run.selected { border-left: 2px solid var(--accent); padding-left: 6px; }
+.lesson-run-title { font-weight: 600; }
