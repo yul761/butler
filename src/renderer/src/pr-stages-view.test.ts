@@ -41,6 +41,10 @@ describe("timelineText", () => {
   it("shows the report text", () => {
     expect(timelineText({ at: 1, stage: "self_review", kind: "report", detail: "找到 2 处", back: false })).toContain("找到 2 处");
   });
+  it("a report entry has no stage prefix", () => {
+    expect(timelineText({ at: 1, stage: "self_review", kind: "report", detail: "找到 2 处", back: false })).toBe(S.prTimeline.report("找到 2 处"));
+    expect(timelineText({ at: 1, stage: "self_review", kind: "review_skill", detail: "simplify", back: false })).toContain(S.prStage.self_review);
+  });
 });
 
 describe("timelineText stage name and detail", () => {

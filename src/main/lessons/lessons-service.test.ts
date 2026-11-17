@@ -107,6 +107,23 @@ describe("LessonsService.act", () => {
     expect(openExternal).toHaveBeenCalledTimes(1);
   });
 
+  it("openSource accepts a known enterprise host and rejects credentials and lookalikes", async () => {
+    const { svc, repo, add, openExternal } = setup();
+    repo.upsertRepo("ghe.acme.io/t/a", "/ghe", 1);
+    const id = add("acme/web");
+    const source = (n: number, url: string) => {
+      repo.hit(id, n, { prNumber: n, url });
+      return repo.get(id)!.sources.find((s) => s.prNumber === n)!.id;
+    };
+    expect(await svc.act({ op: "openSource", sourceId: source(2, "https://ghe.acme.io/t/a/pull/3") })).toEqual({ ok: true });
+    expect(openExternal).toHaveBeenCalledWith("https://ghe.acme.io/t/a/pull/3");
+    const bad = ["https://github.com@evil.com/a/b/pull/1", "https://github.com.evil.com/a/b", "https://evilgithub.com/a", "https://user:pw@github.com/a"];
+    for (const [i, url] of bad.entries()) {
+      expect(await svc.act({ op: "openSource", sourceId: source(10 + i, url) }), url).toEqual({ ok: false, reason: "bad_url" });
+    }
+    expect(openExternal).toHaveBeenCalledTimes(1);
+  });
+
   it("backfill returns the runner result as is", async () => {
     const { svc, backfill } = setup();
     expect(await svc.act({ op: "backfill", slug: "acme/web" })).toEqual({ ok: true, enqueued: 3 });

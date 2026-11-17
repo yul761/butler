@@ -154,6 +154,12 @@ export function prStagesScopeArg(v: unknown): PrStagesScope {
   throw new Error("invalid PR stages scope");
 }
 
+/** 要打开的 PR 链接：最多 2000 字的字符串（能不能开由 openKnownPr 判断）。 */
+export function prUrlArg(v: unknown): string {
+  if (typeof v !== "string" || v.length > 2000) throw new Error("invalid PR url");
+  return v;
+}
+
 /** 目录：1–4096 字的字符串（存在与否由调用方检查）。 */
 export function dirArg(v: unknown): string {
   if (typeof v !== "string" || v.length === 0 || v.length > 4096) throw new Error("invalid directory");

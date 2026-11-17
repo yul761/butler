@@ -105,6 +105,7 @@ import { M } from "./strings";
 import { pathKey } from "./util/env";
 import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
+import { openKnownPr } from "./util/github-url";
 import { TicketService } from "./tickets/ticket-service";
 import { applyGhResolution, branchRuns, compareFiles, failedLog, ghBinary, mergedPrs, prInfo, prLessonData, prsForBranch, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
 import { LessonsRepo } from "./db/lessons-repo";
@@ -1248,6 +1249,7 @@ async function bootstrap(): Promise<void> {
       reports: (key) => inboxRepo.reportsForTicket(key),
       skillTrackingSince: () => skillTrackingSince(settings),
     }),
+    prOpen: (url) => openKnownPr(url, { prs: ticketPrs, openExternal: (u) => void shell.openExternal(u) }),
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
     nowView: (merges) => {
       // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。

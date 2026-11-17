@@ -37,9 +37,10 @@ export function cellLabel(c: PrStageCell): string {
   }
 }
 
-/** 一条时间线的文字：阶段名只在这里写一次；回到开发的条目后面加一句。 */
+/** 一条时间线的文字：阶段名只在这里写一次（汇报不写阶段名）；回到开发的条目后面加一句。 */
 export function timelineText(e: PrTimelineEntry): string {
-  const text = `${S.prStage[e.stage]} ${S.prTimeline[e.kind](e.detail)}`;
+  const body = S.prTimeline[e.kind](e.detail);
+  const text = e.kind === "report" ? body : `${S.prStage[e.stage]} ${body}`;
   return e.back ? `${text} ${S.prBackToDev}` : text;
 }
 export interface EpicPrRow {

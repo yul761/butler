@@ -26,6 +26,7 @@ import type { PrStagesTicket } from "../../shared/pr-stages";
 import type { LessonsState } from "../../shared/lessons";
 import type { LessonsService } from "../lessons/lessons-service";
 import type { PrStagesService } from "../prwatch/pr-stages-service";
+import type { PrOpenResult } from "../util/github-url";
 import type { InboxService } from "../inbox/inbox-service";
 import { addDays, localDate } from "../schedule/calendar";
 import type { Scheduler } from "../schedule/scheduler";
@@ -42,7 +43,7 @@ import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg,
+  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
 } from "./validate";
 import { M } from "../strings";
@@ -66,6 +67,8 @@ export interface IpcDeps {
   prWatchList: () => WatchedPr[];
   /** PR 进度。 */
   prStages: Pick<PrStagesService, "view">;
+  /** 在系统浏览器里打开 PR 链接：只开 ticket 链接过、主机允许的（openKnownPr）。 */
+  prOpen: (url: string) => PrOpenResult;
   /** 复盘规矩页。 */
   lessons: Pick<LessonsService, "state" | "act" | "pendingCount">;
   /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
@@ -346,6 +349,7 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.mergeEvents, recentMerges);
   handle(IPC.prWatchList, (): WatchedPr[] => d.prWatchList());
   handle(IPC.prStages, (raw: unknown): PrStagesTicket[] => d.prStages.view(prStagesScopeArg(raw)));
+  handle(IPC.prOpen, (raw: unknown): PrOpenResult => d.prOpen(prUrlArg(raw)));
   handle(IPC.lessonsState, (): LessonsState => d.lessons.state());
   handle(IPC.lessonsAct, (raw: unknown) => d.lessons.act(lessonActionArg(raw)));
   handle(IPC.lessonsPending, (): number => d.lessons.pendingCount());

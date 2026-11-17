@@ -612,6 +612,8 @@ export const EN: UiStrings = {
   prTimelineHide: "Hide timeline",
   prMergedOf: (m: number, n: number) => `${m}/${n} merged`,
   prNoRepos: "No repos yet",
+  prNoPrYet: "In progress, no PR yet",
+  prArchived: "Archived",
   prBackToDev: "→ back to dev",
   prTimeline: {
     design_skill: (d) => (d ? `skill ${d}` : "skill"),
@@ -622,7 +624,7 @@ export const EN: UiStrings = {
     ci_pending: () => "running",
     ci_passed: () => "✓",
     ci_failed: () => "✗",
-    copilot_review: (d) => (d ? `Copilot review (${d} comments)` : "Copilot review"),
+    copilot_review: (d) => (d ? `AI review (${d} comments)` : "AI review"),
     human_approved: (d) => (d ? `${d} approved` : "Approved"),
     human_changes: (d) => (d ? `${d} requested changes` : "Changes requested"),
     human_commented: (d) => (d ? `${d} commented` : "Commented"),

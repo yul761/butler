@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
-import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -208,6 +208,12 @@ describe("inbox IPC arguments (BTL-190 2+3)", () => {
     expect(prStagesScopeArg({ featureId: 1 })).toEqual({ featureId: 1 });
     expect(prStagesScopeArg({ epicId: 2 })).toEqual({ epicId: 2 });
     for (const bad of [{}, null, "A-1", { featureId: "x" }, { epicId: 0 }, { ticketKey: "" }]) expect(() => prStagesScopeArg(bad), JSON.stringify(bad)).toThrow();
+  });
+
+  it("validates a PR url to open: a string of at most 2000 chars", () => {
+    expect(prUrlArg("https://github.com/a/b/pull/1")).toBe("https://github.com/a/b/pull/1");
+    expect(prUrlArg("x".repeat(2000))).toHaveLength(2000);
+    for (const bad of [null, 3, {}, ["https://github.com/a/b/pull/1"], "x".repeat(2001)]) expect(() => prUrlArg(bad), JSON.stringify(bad)).toThrow();
   });
 });
 

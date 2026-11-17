@@ -619,6 +619,8 @@ const ZH = {
   prTimelineHide: "收起时间线",
   prMergedOf: (m: number, n: number) => `${m}/${n} 已合并`,
   prNoRepos: "还没有仓库",
+  prNoPrYet: "进行中，还没有 PR",
+  prArchived: "已归档",
   prBackToDev: "→ 回到开发",
   prTimeline: {
     design_skill: (d) => (d ? `skill ${d}` : "skill"),
@@ -629,7 +631,7 @@ const ZH = {
     ci_pending: () => "进行中",
     ci_passed: () => "✓",
     ci_failed: () => "✗",
-    copilot_review: (d) => (d ? `Copilot review（${d} 条评论）` : "Copilot review"),
+    copilot_review: (d) => (d ? `AI review（${d} 条评论）` : "AI review"),
     human_approved: (d) => (d ? `${d} 批准` : "有人批准"),
     human_changes: (d) => (d ? `${d} 要求修改` : "有人要求修改"),
     human_commented: (d) => (d ? `${d} 留了评论` : "有人留了评论"),

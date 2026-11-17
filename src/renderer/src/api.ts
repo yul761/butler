@@ -98,6 +98,7 @@ export const api = {
   mergeEvents: () => call<MergeEvent[]>(IPC.mergeEvents),
   prWatchList: () => call<WatchedPr[]>(IPC.prWatchList),
   prStages: (scope: PrStagesScope) => call<PrStagesTicket[]>(IPC.prStages, scope),
+  prOpen: (url: string) => call<{ ok: true } | { ok: false; reason: "bad_url" }>(IPC.prOpen, url),
   lessonsState: () => call<LessonsState>(IPC.lessonsState),
   lessonsAct: (a: LessonAction) => call<{ ok: true } | { ok: false; reason: string }>(IPC.lessonsAct, a),
   lessonsPending: () => call<number>(IPC.lessonsPending),

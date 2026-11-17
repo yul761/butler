@@ -1,5 +1,6 @@
 import type { Lesson, LessonAction, LessonProductView, LessonRepoView, LessonsState, LessonUnknownRepo } from "../../shared/lessons";
 import type { LessonsRepo } from "../db/lessons-repo";
+import { isAllowedGithubUrl } from "../util/github-url";
 import type { LessonRunner } from "./lesson-runner";
 import type { RepoIdentity } from "./repo-identity";
 import { overflowFor, productSuggestions } from "./select";
@@ -28,18 +29,7 @@ export class LessonsService {
 
   /** 只打开 github.com，或者某个已知仓库自己的主机（企业版 GitHub，slug 是 host/owner/repo）上的 https 链接。 */
   private allowedUrl(url: string): boolean {
-    let u: URL;
-    try {
-      u = new URL(url);
-    } catch {
-      return false;
-    }
-    if (u.protocol !== "https:") return false;
-    if (u.hostname === "github.com") return true;
-    return this.d.repo.repos().some((r) => {
-      const parts = r.slug.split("/");
-      return parts.length === 3 && parts[0] === u.hostname;
-    });
+    return isAllowedGithubUrl(url, this.d.repo.repos().map((r) => r.slug));
   }
 
   /** 先把 knownRepoPaths 里解析得出的 upsertRepo，再拼视图。 */
