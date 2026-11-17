@@ -4,7 +4,7 @@
 //   交互模式（在 PTY 里）：打印就绪行和挂载的 MCP server 名；每读到一行输入就写 transcript、
 //     按 CLAUDE_CONFIG_DIR/settings.json 和 --settings 文件执行 hook（macOS 用 /bin/sh，Windows 用 Git Bash，和 Claude Code 一样）；
 //     输入 /handoff 时按 Claude Code 的格式写命令消息，回一个 handoff 代码块（feature 总控里是 butler-feature-handoff，
-//     /handoff <问题> 把它写进 open_questions）；
+//     /handoff <问题> 把它写进 open_questions；FAKE_HANDOFF_PRS（JSON 数组）设了就用它换掉 ticket handoff 默认报的 PR）；
 //     输入 /fake-bash <命令> 时像 Bash 工具在跑：写一条没有结果的 tool_use 和 tasks/<id>.output，这一轮不结束；
 //     输入 /fake-bg <命令> 时像后台命令：tool_result 带任务 id 和输出文件，这一轮结束；/fake-bg-done 写它的完成通知；
 //       和 Claude Code 一样，命令在跑的时候有一个后台 shell 子进程（不真的执行命令，等到完成通知或假 claude 退出）：
@@ -80,6 +80,9 @@ const COMMAND_HANDOFF = {
   decisions: [],
   learnings: [],
 };
+/** ticket session 的 /handoff：FAKE_HANDOFF_PRS 设了就替换（不是追加）默认的 prs。 */
+const commandHandoff = () =>
+  process.env.FAKE_HANDOFF_PRS ? { ...COMMAND_HANDOFF, prs: JSON.parse(process.env.FAKE_HANDOFF_PRS) } : COMMAND_HANDOFF;
 /** feature 总控里键入 /handoff 时输出的 butler-feature-handoff。ticket 号故意写成小写，入库时规范成大写。 */
 const COMMAND_FEATURE_HANDOFF = {
   summary: "结账页前端（DMS-1）已提 PR 等合并；后端下单接口（DMS-2）还在写，两边还没联调。",
@@ -475,7 +478,7 @@ function interactive() {
         ? `收到：${line}`
         : coordinator
           ? `handoff：\n\n\`\`\`butler-feature-handoff\n${JSON.stringify(featureHandoff, null, 2)}\n\`\`\``
-          : `handoff：\n\n\`\`\`butler-handoff\n${JSON.stringify(COMMAND_HANDOFF, null, 2)}\n\`\`\``);
+          : `handoff：\n\n\`\`\`butler-handoff\n${JSON.stringify(commandHandoff(), null, 2)}\n\`\`\``);
   });
   rl.on("close", () => process.exit(0));
 }
