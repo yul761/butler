@@ -9,7 +9,7 @@ import { ANSWERING_TTL_MS, InboxService, REPORT_DELIVERY_MAX_AGE_MS, roleOf } fr
 
 const session = (id: string, o: Partial<Session> = {}): Session => ({
   id, ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: true, replacedBy: null,
-  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: false, ...o,
+  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: false, lessonRunId: null, ...o,
 });
 
 const ticket = (key: string, featureId: number | null, repos: { id: number; repoPath: string }[] = [{ id: 1, repoPath: "/r/api" }]): Ticket =>

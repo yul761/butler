@@ -525,6 +525,8 @@ const ZH = {
   } as Record<string, string>,
   lessonsErrorGeneric: "操作失败。",
   lessonsNavCount: (n: number) => `${n} 条待确认`,
+  lessonSessionsHeading: "复盘分析会话",
+  lessonSession: "复盘分析",
   audit: "审计",
   auditStatecore: "StateCore 记忆蒸馏",
   auditIntro: "每次调用个人 LLM API 的记录（完整档位下 StateCore 记忆的蒸馏，以及旧版本留下的记录）：原样发出的内容、响应、token 数和费用；被拦截或超预算的请求只记原因，没有发出任何内容。",

@@ -158,10 +158,42 @@ interface AreaProps {
   newSessionHint: string;
   error: string | null;
   onError: (e: unknown) => void;
+  /** session 条下面、终端上面再放的东西（Butler 总控页的复盘分析 session）。 */
+  children?: ReactNode;
+}
+
+/** session 条上的一个 session：切换 / 打开，开着时换新和结束，关着时隐藏。 */
+export function SessionButton({ s, panes, place }: { s: SessionView; panes: SessionPanes; place: string }) {
+  const label = sessionLabel(s, S.untitledSession);
+  return (
+    <span className="session-wrap">
+      <button
+        className={s.termId && s.termId === panes.active ? "session active" : "session"}
+        title={`${s.firstPrompt ?? S.untitledSession}\n${s.id}`}
+        onClick={() => (s.termId ? panes.setActive(s.termId) : void panes.open(s.id))}
+      >
+        {s.waitingForInput && <span className="badge">●</span>}
+        <span className="place">{place}</span>
+        <span className="label">{label}</span>
+        <span className="action">{s.termId ? S.switchTo : S.open}</span>
+      </button>
+      {s.termId ? (
+        <>
+          {/* 修复 session 和复盘分析 session 不换新（计划 16）。 */}
+          {s.fixesSession === null && s.lessonRunId === null && <RefreshSessionButton sessionId={s.id} label={label} />}
+          <EndSessionButton termId={s.termId} label={label} onEnded={() => panes.close(s.termId!)} />
+        </>
+      ) : (
+        <button className="session-hide" title={S.hideSession} aria-label={S.hideSessionNamed(label)} onClick={() => api.hideSession(s.id).catch(reportError)}>
+          ×
+        </button>
+      )}
+    </span>
+  );
 }
 
 /** 页面下半部分：仓库条、session 条和终端。 */
-export function SessionArea({ repos, reposHint, onAddRepo, onRemoveRepo, sessions, hiddenSessions, panes, placeOf, noSessions, newSession, newSessionHint, error, onError }: AreaProps) {
+export function SessionArea({ repos, reposHint, onAddRepo, onRemoveRepo, sessions, hiddenSessions, panes, placeOf, noSessions, newSession, newSessionHint, error, onError, children }: AreaProps) {
   const [addingRepo, setAddingRepo] = useState<string[] | null>(null);
   const [showHidden, setShowHidden] = useState(false);
 
@@ -201,31 +233,7 @@ export function SessionArea({ repos, reposHint, onAddRepo, onRemoveRepo, session
 
       <div className="sessions-bar">
         {sessions.length === 0 && <span className="muted">{noSessions}</span>}
-        {sessions.map((s) => (
-          <span key={s.id} className="session-wrap">
-            <button
-              className={s.termId && s.termId === panes.active ? "session active" : "session"}
-              title={`${s.firstPrompt ?? S.untitledSession}\n${s.id}`}
-              onClick={() => (s.termId ? panes.setActive(s.termId) : void panes.open(s.id))}
-            >
-              {s.waitingForInput && <span className="badge">●</span>}
-              <span className="place">{placeOf(s)}</span>
-              <span className="label">{sessionLabel(s, S.untitledSession)}</span>
-              <span className="action">{s.termId ? S.switchTo : S.open}</span>
-            </button>
-            {s.termId ? (
-              <>
-                {/* 修复 session 不换新（计划 16）。 */}
-                {s.fixesSession === null && <RefreshSessionButton sessionId={s.id} label={sessionLabel(s, S.untitledSession)} />}
-                <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => panes.close(s.termId!)} />
-              </>
-            ) : (
-              <button className="session-hide" title={S.hideSession} aria-label={S.hideSessionNamed(sessionLabel(s, S.untitledSession))} onClick={() => api.hideSession(s.id).catch(reportError)}>
-                ×
-              </button>
-            )}
-          </span>
-        ))}
+        {sessions.map((s) => <SessionButton key={s.id} s={s} panes={panes} place={placeOf(s)} />)}
         {hiddenSessions.length > 0 && (
           <button className="session more" onClick={() => setShowHidden(!showHidden)}>{S.hiddenSessions(hiddenSessions.length)}</button>
         )}
@@ -246,6 +254,7 @@ export function SessionArea({ repos, reposHint, onAddRepo, onRemoveRepo, session
           </div>
         </div>
       )}
+      {children}
       {error && <p className="error">{error}</p>}
 
       <div className="terminals">

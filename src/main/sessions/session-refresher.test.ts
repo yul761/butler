@@ -12,7 +12,7 @@ import {
 const base = (o: Partial<Session> = {}): Session => ({
   id: "x", ticketKey: null, cwd: "/r", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null,
   waitingForInput: true, replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null,
-  featureId: null, fixesSession: null, epicId: null, model: null, butler: false, ...o,
+  featureId: null, fixesSession: null, epicId: null, model: null, butler: false, lessonRunId: null, ...o,
 });
 
 /** 一个开着的终端：chain[0] 是终端启动时的 id（termId），最后一个是 head。 */
@@ -999,6 +999,12 @@ describe("refreshKindOf (plan 16)", () => {
     expect(open(base({ ticketKey: "DMS-1", origin: "discovered" }))).toBeNull();
     expect(refreshKindOf(base({ ticketKey: "DMS-1" }), false)).toBeNull();
     expect(open(base())).toBeNull();
+  });
+});
+
+describe("refreshKindOf and lesson sessions (lessons visibility task 7)", () => {
+  it("lesson sessions have no refresh kind", () => {
+    expect(refreshKindOf(base({ lessonRunId: 4 }), true)).toBeNull();
   });
 });
 

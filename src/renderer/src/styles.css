@@ -387,6 +387,7 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .now-decisions { display: flex; flex-direction: column; margin: 4px 0 6px; }
 /* Butler 总控页（BTL-190 第 5 点）。 */
 .butler-intro { margin: 0; padding: 0 16px 8px; }
+.lesson-sessions h3 { margin: 8px 16px 0; font-size: 12px; font-weight: 600; color: var(--muted); }
 
 /* PR 进度 tab：边框和底色用 --ok / --accent / --danger，字用 --stage-*（浅色更深，styles-contrast.test.ts 查对比度）。 */
 .pr-stages { display: flex; flex-direction: column; gap: 10px; }

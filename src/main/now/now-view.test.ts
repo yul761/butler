@@ -24,6 +24,7 @@ function session(id: string, over: Partial<SessionView> = {}): SessionView {
     epicId: null,
     model: null,
     butler: false,
+    lessonRunId: null,
     termId: id,
     ...over,
   };

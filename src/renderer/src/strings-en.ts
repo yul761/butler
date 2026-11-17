@@ -518,6 +518,8 @@ export const EN: UiStrings = {
   } as Record<string, string>,
   lessonsErrorGeneric: "That didn't work.",
   lessonsNavCount: (count: number) => `${count} pending`,
+  lessonSessionsHeading: "Lesson analysis sessions",
+  lessonSession: "Lesson analysis",
   audit: "Audit",
   auditStatecore: "StateCore memory distillation",
   auditIntro: "Every call to your personal LLM API (StateCore memory distillation at the full level, plus any records left by earlier versions): exactly what was sent, the response, token counts and cost. Blocked or over-budget requests only record why; nothing was sent for them.",

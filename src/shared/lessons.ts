@@ -180,7 +180,9 @@ export type LessonAction =
   | { op: "cancel"; queueId: number }
   | { op: "pauseQueue" }
   | { op: "resumeQueue" }
-  | { op: "runNow" };
+  | { op: "runNow" }
+  /** 在一个看得见的 Claude session 里打开这次运行；成功时 sessionId 是它的终端 id。 */
+  | { op: "openInClaude"; runId: number };
 
 export type LessonActResult = { ok: true; sessionId?: string } | { ok: false; reason: string };
 

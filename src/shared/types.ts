@@ -130,6 +130,8 @@ export interface Session {
   model: string | null;
   /** Butler 总控（BTL-190 第 5 点）：全局只有一个，ticket、feature、epic 都是 null。 */
   butler: boolean;
+  /** 复盘分析 session：为了看哪一次复盘运行开的（null：不是）。没有 Butler 的工具，不判断卡住、不换新。 */
+  lessonRunId: number | null;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */
@@ -171,11 +173,13 @@ export interface EpicView extends Epic {
   features: EpicFeatureRow[];
 }
 
-/** Butler 总控页（BTL-190 第 5 点）：它的 session 和工作目录。 */
+/** Butler 总控页（BTL-190 第 5 点）：它的 session 和工作目录，以及复盘分析 session。 */
 export interface ButlerView {
   workspaceDir: string;
   sessions: SessionView[];
   hiddenSessions: SessionView[];
+  /** 复盘分析 session（没隐藏的 head），最近活动的在前。 */
+  lessonSessions: SessionView[];
 }
 
 export interface UnclaimedSession extends Session {

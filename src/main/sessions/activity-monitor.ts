@@ -489,7 +489,8 @@ export class ActivityMonitor {
   }
 
   private scope(head: Session): StuckScope | null {
-    if (head.origin !== "butler" || head.fixesSession !== null) return null;
+    // 修复 session 和复盘分析 session 不判断卡住（也就不判断需要你）。
+    if (head.origin !== "butler" || head.fixesSession !== null || head.lessonRunId !== null) return null;
     const ticket = head.ticketKey ? this.d.tickets.get(head.ticketKey) : null;
     if (head.ticketKey && (!ticket || ticket.archivedAt !== null)) return null;
     const featureId = ticket?.featureId ?? head.featureId;

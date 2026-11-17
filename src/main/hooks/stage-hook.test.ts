@@ -10,7 +10,7 @@ import { stageEventFromHook } from "./stage-hook";
 const sess = (o: Partial<Session> = {}): Session => ({
   id: "s1", ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null,
   waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null,
-  featureId: null, fixesSession: null, epicId: null, model: null, butler: false, ...o,
+  featureId: null, fixesSession: null, epicId: null, model: null, butler: false, lessonRunId: null, ...o,
 });
 const repo = (...ss: Session[]) => ({ get: (id: string) => ss.find((s) => s.id === id) ?? null });
 const skill = (name: string, o: Partial<HookEnvelope> = {}): HookEnvelope => ({

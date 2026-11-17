@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import type { ButlerView, InboxItemView, NowTarget } from "../../../shared/types";
+import type { ButlerView, InboxItemView, NowTarget, OpenSessionResult } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
 import { epicErrorText } from "./epic-row";
 import { inboxTabs, useInbox } from "./InboxPanes";
 import { PageTabs } from "./PageTabs";
-import { SessionArea, useSessionPanes } from "./WorkspaceParts";
+import { SessionArea, SessionButton, useSessionPanes } from "./WorkspaceParts";
 
 /** hook 事件一来一串：合并成一次重读（和 App 的刷新一样）。 */
 const STATE_DEBOUNCE_MS = 80;
@@ -44,6 +44,17 @@ interface Props {
 }
 
 /**
+ * 关着的复盘分析 session 和复盘页的「在 Claude 里打开」走同一条路（重写运行记录，接着原来的对话打开，不再发消息）。
+ * 打不开时抛出要显示的文字：运行或仓库不在了按 session 不存在报。
+ */
+async function openLessonSession(runId: number): Promise<OpenSessionResult> {
+  const r = await api.lessonsAct({ op: "openInClaude", runId });
+  if (r.ok && r.sessionId) return { ok: true, termId: r.sessionId, alreadyOpen: false };
+  const reason = r.ok ? "no_session" : r.reason === "not_found" ? "no_session" : r.reason;
+  throw new Error(S.openErrors[reason] ?? S.lessonsErrorGeneric);
+}
+
+/**
  * Butler 总控页（BTL-190 第 5 点）：上面是所有范围的「汇报 / 待你决定」两个 tab，下面是 Butler 总控的 session 和终端。
  * 没有仓库条：Butler 总控在自己的工作目录里，只读不改代码。
  */
@@ -58,8 +69,12 @@ function ButlerArea({ view, focusSession, onOpenTarget }: Props & { view: Butler
   const [error, setError] = useState<string | null>(null);
   const errorText = (e: unknown) => epicErrorText(e, S);
   const inbox = useInbox({ all: true });
-  const panes = useSessionPanes(view.sessions, {
-    openSession: (sessionId) => api.openButlerSession({ sessionId }),
+  // 复盘分析 session 和 Butler 总控的共用一组终端：从复盘页「在 Claude 里打开」跳过来时，focusSession 是复盘分析 session。
+  const panes = useSessionPanes([...view.sessions, ...view.lessonSessions], {
+    openSession: (sessionId) => {
+      const runId = view.lessonSessions.find((s) => s.id === sessionId)?.lessonRunId;
+      return runId ? openLessonSession(runId) : api.openButlerSession({ sessionId });
+    },
     openFailure: (reason) => S.butlerOpenErrors[reason] ?? S.openErrors[reason] ?? reason,
     errorText,
     setError,
@@ -96,7 +111,16 @@ function ButlerArea({ view, focusSession, onOpenTarget }: Props & { view: Butler
         newSessionHint={S.butlerSessionHint}
         error={error}
         onError={(e) => setError(errorText(e))}
-      />
+      >
+        {view.lessonSessions.length > 0 && (
+          <section className="lesson-sessions">
+            <h3>{S.lessonSessionsHeading}</h3>
+            <div className="sessions-bar">
+              {view.lessonSessions.map((s) => <SessionButton key={s.id} s={s} panes={panes} place={S.lessonSession} />)}
+            </div>
+          </section>
+        )}
+      </SessionArea>
     </div>
   );
 }

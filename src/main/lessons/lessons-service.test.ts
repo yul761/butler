@@ -4,6 +4,8 @@ import { LessonsRepo } from "../db/lessons-repo";
 import { LessonRunsRepo } from "../db/lesson-runs-repo";
 import type { LessonsGate } from "../claude/availability";
 import type { LessonQueueRow } from "../db/lessons-repo";
+import type { LessonRunDetail } from "../../shared/lessons";
+import type { OpenSessionResult } from "../../shared/types";
 import { RepoIdentity } from "./repo-identity";
 import { LessonsService, queueRowStatus } from "./lessons-service";
 
@@ -28,8 +30,9 @@ const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: strin
   };
   const gate: { value: LessonsGate } = { value: { paused: false } };
   const availability = { lessonsGate: vi.fn(() => gate.value), pauseLessons: vi.fn(), resumeLessons: vi.fn() };
+  const openRun = vi.fn<(d: LessonRunDetail, repoPath: string) => Promise<OpenSessionResult>>(async () => ({ ok: true, termId: "term-1", alreadyOpen: false }));
   const svc = new LessonsService({
-    repo, runs, availability, identity: new RepoIdentity({ git, exists }), runner,
+    repo, runs, availability, identity: new RepoIdentity({ git, exists }), runner, openRun,
     knownRepoPaths: () => over.paths ?? ["/acme_web", "/acme_api", "/none_x"],
     repoGroups: () => over.groups ?? [],
     exists,
@@ -37,7 +40,7 @@ const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: strin
   });
   svc.state();
   const add = (slug: string, text = "t") => repo.addLesson({ scope: { kind: "repo", slug }, text, why: "w", at: 1, source: src });
-  return { repo, runs, svc, openExternal, notify, backfill, add, runner, availability, gate };
+  return { repo, runs, svc, openExternal, notify, backfill, add, runner, availability, gate, openRun };
 };
 
 describe("LessonsService.state", () => {
@@ -80,7 +83,7 @@ describe("LessonsService.state", () => {
     const a = setup({ paths: [] });
     const spyA = vi.spyOn(a.repo, "upsertRepo");
     const svcA = new LessonsService({
-      repo: a.repo, runs: a.runs, availability: a.availability, identity: new RepoIdentity({ git: () => "git@github.com:acme/web.git", exists: () => true }), runner: a.runner,
+      repo: a.repo, runs: a.runs, availability: a.availability, identity: new RepoIdentity({ git: () => "git@github.com:acme/web.git", exists: () => true }), runner: a.runner, openRun: a.openRun,
       knownRepoPaths: () => both, repoGroups: () => [], exists: () => true,
       ghAvailable: () => true, openExternal: a.openExternal, now: () => 100, notify: a.notify,
     });
@@ -334,6 +337,29 @@ describe("LessonsService queue views", () => {
     expect(d).toMatchObject({ slug: "acme/web", prNumber: 1, prUrl: "https://github.com/acme/web/pull/1", model: "m", inputTokens: 5, outputTokens: 6, trimmed: false });
     expect(d.attempts.map((a) => a.id)).toEqual([earlier]);
     expect(svc.run(9999)).toBeNull();
+  });
+
+  it("openInClaude returns the session id", async () => {
+    const { svc, runs, openRun, notify } = setup();
+    const id = finishRun(runs, { status: "failed", reason: "claude_error", finishedAt: 3, message: "boom" });
+    expect(await svc.act({ op: "openInClaude", runId: id })).toEqual({ ok: true, sessionId: "term-1" });
+    expect(openRun).toHaveBeenCalledTimes(1);
+    const [d, repoPath] = openRun.mock.calls[0];
+    expect(d).toEqual(svc.run(id));
+    expect(repoPath).toBe("/acme_web");
+    expect(notify).toHaveBeenCalled();
+    openRun.mockResolvedValueOnce({ ok: false, reason: "claude_missing" });
+    expect(await svc.act({ op: "openInClaude", runId: id })).toEqual({ ok: false, reason: "claude_missing" });
+  });
+
+  it("openInClaude for an unknown run is not_found", async () => {
+    const { svc, runs, openRun, repo } = setup();
+    expect(await svc.act({ op: "openInClaude", runId: 9999 })).toEqual({ ok: false, reason: "not_found" });
+    // 运行还在，仓库没了（这里直接看 repo.repo 查不到）。
+    const id = finishRun(runs, { status: "done", reason: null, finishedAt: 3 });
+    vi.spyOn(repo, "repo").mockReturnValue(null);
+    expect(await svc.act({ op: "openInClaude", runId: id })).toEqual({ ok: false, reason: "not_found" });
+    expect(openRun).not.toHaveBeenCalled();
   });
 
   it("run with unparsable findings returns findings null", () => {

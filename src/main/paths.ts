@@ -18,6 +18,8 @@ export interface ButlerPaths {
   workspaces: string;
   /** Butler 总控（BTL-190 第 5 点）的工作目录：workspaces/_butler，全局只有一个。 */
   butlerWorkspace: string;
+  /** 复盘分析 session 的工作目录：workspaces/_lessons，每次运行的记录文件 run-<id>.md 也写在这里。 */
+  lessonsWorkspace: string;
   /** 换新前的对话尾巴（BTL-190 第 6 点）：每个 session 一个 <session id>.md，见 refreshTailPath。 */
   refresh: string;
   /** 总控开子 session 的请求和结果（sessions MCP server ↔ Butler，走文件）。 */
@@ -68,6 +70,7 @@ export function resolvePaths(
     statecore: join(butlerHome, "statecore"),
     workspaces: join(butlerHome, "workspaces"),
     butlerWorkspace: join(butlerHome, "workspaces", "_butler"),
+    lessonsWorkspace: join(butlerHome, "workspaces", "_lessons"),
     refresh: join(butlerHome, "refresh"),
     controlRequests: join(butlerHome, "control", "requests"),
     controlResults: join(butlerHome, "control", "results"),

@@ -8,6 +8,7 @@ import type { LessonRunRow, LessonRunsRepo } from "../db/lesson-runs-repo";
 import type { LessonQueueRow, LessonsRepo } from "../db/lessons-repo";
 import { AnalysisSchema } from "./analyze";
 import { isAllowedGithubUrl } from "../util/github-url";
+import type { OpenSessionResult } from "../../shared/types";
 import type { LessonRunner } from "./lesson-runner";
 import type { RepoIdentity } from "./repo-identity";
 import { overflowFor, productSuggestions } from "./select";
@@ -26,6 +27,8 @@ export interface LessonsServiceDeps {
   exists?: (p: string) => boolean;
   ghAvailable: () => boolean;
   openExternal: (url: string) => void;
+  /** 写好这次运行的记录文件，在复盘分析 session 里打开它（repoPath：这个仓库的本地路径）。 */
+  openRun: (d: LessonRunDetail, repoPath: string) => Promise<OpenSessionResult>;
   now: () => number;
   notify: () => void;
 }
@@ -262,6 +265,13 @@ export class LessonsService {
       case "runNow":
         this.d.runner.runNow();
         return { ok: true };
+      case "openInClaude": {
+        const d = this.run(a.runId);
+        const local = d ? repo.repo(d.slug)?.localPath : undefined;
+        if (!d || !local) return NOT_FOUND;
+        const r = await this.d.openRun(d, local);
+        return r.ok ? { ok: true, sessionId: r.termId } : { ok: false, reason: r.reason };
+      }
       case "openSource": {
         const url = repo.source(a.sourceId)?.url;
         if (!url || !this.allowedUrl(url)) return { ok: false, reason: "bad_url" };

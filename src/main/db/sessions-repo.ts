@@ -22,6 +22,7 @@ interface SessionRow {
   epic_id: number | null;
   model: string | null;
   butler: number;
+  lesson_run_id: number | null;
 }
 
 function toSession(r: SessionRow): Session {
@@ -45,6 +46,7 @@ function toSession(r: SessionRow): Session {
     epicId: r.epic_id === null ? null : Number(r.epic_id),
     model: r.model,
     butler: r.butler === 1,
+    lessonRunId: r.lesson_run_id === null ? null : Number(r.lesson_run_id),
   };
 }
 
@@ -66,6 +68,8 @@ export interface NewSession {
   model?: string | null;
   /** Butler 总控（BTL-190 第 5 点）。 */
   butler?: boolean;
+  /** 复盘分析 session 看的是哪一次运行。 */
+  lessonRunId?: number | null;
 }
 
 export interface SessionDetails {
@@ -89,12 +93,13 @@ export class SessionsRepo {
   insertIfAbsent(s: NewSession): boolean {
     const r = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session, epic_id, model, butler)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session, epic_id, model, butler, lesson_run_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
         s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null, s.epicId ?? null, s.model ?? null, s.butler ? 1 : 0,
+        s.lessonRunId ?? null,
       );
     if (Number(r.changes) > 0) {
       this.forgotten.delete(s.id);
@@ -169,6 +174,22 @@ export class SessionsRepo {
     return rows.map(toSession);
   }
 
+  /** 这次复盘运行的复盘分析 session：最近活动的 head（隐藏着的也算）；没有是 null。 */
+  forLessonRun(runId: number): Session | null {
+    const row = this.db
+      .prepare(`SELECT * FROM sessions WHERE lesson_run_id = ? AND replaced_by IS NULL ORDER BY ${RECENCY} DESC, id LIMIT 1`)
+      .get(runId) as SessionRow | undefined;
+    return row ? toSession(row) : null;
+  }
+
+  /** 没隐藏的复盘分析 session（head），最近活动的在前。 */
+  listLessonSessions(): Session[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM sessions WHERE lesson_run_id IS NOT NULL AND replaced_by IS NULL AND dismissed = 0 ORDER BY ${RECENCY} DESC, id`)
+      .all() as unknown as SessionRow[];
+    return rows.map(toSession);
+  }
+
   /** 记成这个 epic 的 session；null：它不是 epic session（嵌套的 claude）。 */
   setEpic(id: string, epicId: number | null): void {
     this.db.prepare(`UPDATE sessions SET epic_id = ? WHERE id = ?`).run(epicId, id);
@@ -178,7 +199,7 @@ export class SessionsRepo {
     const rows = this.db
       .prepare(
         `SELECT * FROM sessions
-         WHERE ticket_key IS NULL AND feature_id IS NULL AND epic_id IS NULL AND butler = 0 AND dismissed = 0 AND replaced_by IS NULL AND ${RECENCY} >= ?
+         WHERE ticket_key IS NULL AND feature_id IS NULL AND epic_id IS NULL AND butler = 0 AND lesson_run_id IS NULL AND dismissed = 0 AND replaced_by IS NULL AND ${RECENCY} >= ?
          ORDER BY ${RECENCY} DESC, id`,
       )
       .all(sinceMs) as unknown as SessionRow[];
@@ -206,6 +227,7 @@ export class SessionsRepo {
 
   /**
    * /clear、compact 产生的新 session 接替旧的：同一个终端，仓库、总控、开启者、feature 和修复目标也照旧。
+   * 模型和复盘运行（复盘分析 session）不管怎么接上的都照旧：/resume 也一样，终端还是那个复盘分析的终端。
    * 修复 session 的新段不是总控：磁盘扫描可能先按目录把它记成了总控，这里清掉。
    * epic session 和 feature 级 session 互斥，同样以旧 session 为准：epic session 的新段不会是 feature 总控，反过来也一样。
    * /resume（source 是 "resume"）接上的是已有的 session，不是新段：总控、feature、修复目标都留它自己的。resume 出来的新 id 由 hook 插入时继承。
@@ -225,7 +247,8 @@ export class SessionsRepo {
           `UPDATE sessions SET
              repo_id = COALESCE(repo_id, ${old("repo_id")}),
              spawned_by = COALESCE(spawned_by, ${old("spawned_by")}),
-             model = COALESCE(model, ${old("model")})${source === "resume" ? "" : role}
+             model = COALESCE(model, ${old("model")}),
+             lesson_run_id = COALESCE(lesson_run_id, ${old("lesson_run_id")})${source === "resume" ? "" : role}
            WHERE id = ?2 AND ticket_key IS ${old("ticket_key")}`,
         )
         .run(id, newId);

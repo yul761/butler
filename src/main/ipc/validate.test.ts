@@ -264,6 +264,11 @@ describe("lessonActionArg", () => {
     expect(() => lessonActionArg({ op: "retryFailed" })).toThrow();
   });
 
+  it("lessonActionArg accepts openInClaude with a positive runId", () => {
+    expect(lessonActionArg({ op: "openInClaude", runId: 3 })).toEqual({ op: "openInClaude", runId: 3 });
+    for (const bad of [0, -1, 1.5, "3", undefined]) expect(() => lessonActionArg({ op: "openInClaude", runId: bad })).toThrow();
+  });
+
   it("lessonRunIdArg rejects 0 and strings", () => {
     expect(lessonRunIdArg(7)).toBe(7);
     for (const bad of [0, -1, 1.5, "1", null, undefined]) expect(() => lessonRunIdArg(bad)).toThrow();

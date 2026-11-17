@@ -95,6 +95,15 @@ describe("session guide", () => {
     for (const kind of ["ticket", "coordinator", "epic"] as const) expect(sessionGuide("zh", kind)).not.toContain("Butler 总控");
   });
 
+  it("复盘分析 session 没有 Butler 的工具：不提 ask_user、report、记忆和 CI，只留子代理的模型准则（lessons visibility task 7）", () => {
+    for (const lang of ["zh", "en"] as const) {
+      const g = sessionGuide(lang, "lessons");
+      expect(g).toContain('model: "opus"');
+      for (const word of ["ask_user", "report", "remember", "send_message", "start_session", "CI"]) expect(g, word).not.toContain(word);
+    }
+    expect(/[\u4e00-\u9fff]/.test(sessionGuide("en", "lessons"))).toBe(false);
+  });
+
   it("写到 mcp 目录，内容没变就不重写", () => {
     const dir = tempDir("guide");
     const file = writeSessionGuide(dir, "zh", "ticket");

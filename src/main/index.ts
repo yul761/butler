@@ -117,6 +117,7 @@ import { RepoIdentity } from "./lessons/repo-identity";
 import { readTailLines, TRANSCRIPT_TAIL_BYTES } from "./lessons/tail";
 import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
+import { writeRunFile } from "./lessons/run-file";
 import type { HeadlessExecDeps } from "./handoff/headless-exec";
 import * as git from "./tickets/git";
 import { canSend } from "./safe-send";
@@ -517,13 +518,19 @@ async function bootstrap(): Promise<void> {
       return [...groups.values()].map((g) => [...g]);
     },
     ghAvailable: () => ghAvailable(), openExternal: (url) => void shell.openExternal(url), now: Date.now, notify: () => notify(),
+    // sessionService 在下面才建好：调用时才用到。
+    openRun: (d, repoPath) => {
+      const file = writeRunFile(paths.lessonsWorkspace, d, currentLang());
+      return sessionService.openLessonRun({ runId: d.id, repoPath, file, label: `lesson run ${d.id}` });
+    },
   });
   /** 开着终端的 Butler session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
   const needsYouHeads = (): NeedsYouHead[] => {
     const heads = new Map<string, NeedsYouHead>();
     for (const termId of pty.openIds()) {
       const h = sessions.head(termId);
-      if (!h || h.origin !== "butler" || heads.has(h.id)) continue;
+      // 复盘分析 session 只是用户来问问题的，不判断需要你。
+      if (!h || h.origin !== "butler" || h.lessonRunId !== null || heads.has(h.id)) continue;
       heads.set(h.id, { id: h.id, cwd: h.cwd, waiting: h.waitingForInput, kind: activityMonitor.get(h.id)?.kind ?? null, reply: activityMonitor.lastReplyOf(h.id) });
     }
     return [...heads.values()];
@@ -588,6 +595,7 @@ async function bootstrap(): Promise<void> {
     epicMcpConfig,
     butlerWorkspace: paths.butlerWorkspace,
     butlerMcpConfig,
+    lessonsWorkspace: paths.lessonsWorkspace,
     features, epics, featureHandoffs, handoffs, epicHistory,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),

@@ -350,6 +350,8 @@ export function lessonActionArg(v: unknown): LessonAction {
       return { op: "resumeQueue" };
     case "runNow":
       return { op: "runNow" };
+    case "openInClaude":
+      return { op: "openInClaude", runId: lessonRunIdArg(o.runId) };
     default:
       throw new Error("invalid lesson action");
   }
