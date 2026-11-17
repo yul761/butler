@@ -598,7 +598,7 @@ async function bootstrap(): Promise<void> {
   }
   const ingest = (input: IngestInput) => {
     const r = ingestHandoff(
-      { db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}`, linkPrs: (k, prs) => void prLinker.linkHandoffPrs(k, prs) },
+      { db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}`, linkPrs: (k, prs) => void prLinker.linkHandoffPrs(k, prs), linkedOpen: (k) => ticketPrs.byTicket(k).some((p) => p.state === "open") },
       input,
     );
     // 设计文档 5.4：入库后同步写入 StateCore（异步，失败只记日志）。
@@ -1256,7 +1256,7 @@ async function bootstrap(): Promise<void> {
       });
     },
     rederive: (key) => {
-      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now }, key);
+      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen: (k) => ticketPrs.byTicket(k).some((p) => p.state === "open") }, key);
       // followup 完成 / 忽略 / 恢复：StateCore 里对应的条目跟着 forget / 重写。
       void memory.syncTicket(key);
     },

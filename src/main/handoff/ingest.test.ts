@@ -32,7 +32,7 @@ describe("ingestHandoff", () => {
     ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ prs: [merged, open2] }) });
     tick(10);
     // 刷新（worktree 清理之后）没找到 PR：合并过的 #7 记着，开着的 #8 不补。
-    const r = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "refresh", rawText: null, payload: payload({ prs: [] }) });
+    const r = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "refresh", rawText: null, payload: payload({ status: "done", prs: [] }) });
     expect(r).toMatchObject({ status: "done" });
     expect(handoffs.latest("PROJ-1")?.payload?.prs).toEqual([merged]);
     expect(handoffs.knownPrs("PROJ-1")).toEqual([merged]);
@@ -84,12 +84,12 @@ describe("ingestHandoff", () => {
     const { deps, tickets, followups, tick } = setup();
     ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ followups: [fu(), fu({ description: "开 flag" })] }) });
     tick(10);
-    const second = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ prs: [merged], followups: [fu({ id: "f1", done: true })] }) });
+    const second = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ status: "in_review", prs: [merged], followups: [fu({ id: "f1", done: true })] }) });
     expect(second).toMatchObject({ status: "merged_pending_followup" });
     expect(followups.get("f1")).toMatchObject({ status: "done", doneAt: 1010 });
     followups.setStatus("f2", "ignored", 1020);
     tick(10);
-    const third = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "command", rawText: null, payload: payload({ prs: [merged], followups: [fu({ description: "开 flag" })] }) });
+    const third = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "command", rawText: null, payload: payload({ status: "in_review", prs: [merged], followups: [fu({ description: "开 flag" })] }) });
     expect(third).toMatchObject({ status: "done" });
     expect(followups.get("f2")?.status).toBe("ignored");
     expect(followups.listByTicket("PROJ-1")).toHaveLength(2);
@@ -120,10 +120,39 @@ describe("ingestHandoff", () => {
 
   it("re-derives the status after a followup is completed by hand", () => {
     const { deps, tickets, followups } = setup();
-    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", rawText: null, payload: payload({ prs: [merged], followups: [fu()] }) });
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", rawText: null, payload: payload({ status: "in_review", prs: [merged], followups: [fu()] }) });
     expect(tickets.get("PROJ-1")?.status).toBe("merged_pending_followup");
     followups.setStatus("f1", "done", 2000);
     expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("done");
     expect(tickets.get("PROJ-1")?.status).toBe("done");
+  });
+
+  it("ingest passes the model's own prs and the remembered ones separately", () => {
+    const { deps, tickets, tick } = setup();
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ prs: [merged] }) });
+    tick(10);
+    // 模型说 active、没提 PR：以前合并的 #7 只是记忆，不让它变 done。
+    const r = ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ status: "active", prs: [] }) });
+    expect(r).toMatchObject({ status: "active" });
+    expect(tickets.get("PROJ-1")?.status).toBe("active");
+    tick(10);
+    const linked = ingestHandoff({ ...deps, linkedOpen: () => true }, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ status: "active", prs: [] }) });
+    expect(linked).toMatchObject({ status: "in_review" });
+  });
+
+  it("rederive keeps done/mpf in sync with followups and leaves active alone", () => {
+    const { deps, tickets, followups, tick } = setup();
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", rawText: null, payload: payload({ status: "done", followups: [fu()] }) });
+    expect(tickets.get("PROJ-1")?.status).toBe("merged_pending_followup");
+    followups.setStatus("f1", "done", 2000);
+    expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("done");
+    followups.setStatus("f1", "open", 2001);
+    expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("merged_pending_followup");
+    tick(10);
+    // 自动状态是 active 时，记着的已合并 PR 不会把它变成 done。
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", rawText: null, payload: payload({ status: "active", prs: [merged] }) });
+    tickets.setStatus("PROJ-1", "active", 3000);
+    expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("active");
+    expect(tickets.get("PROJ-1")?.status).toBe("active");
   });
 });

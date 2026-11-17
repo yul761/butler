@@ -61,4 +61,16 @@ describe("prHandoff", () => {
     const again = prHandoff("BTL-1", [row({ review: "approved" })], base(3, pending!.prs));
     expect(new Set([approved?.sourceRef, pending?.sourceRef, again?.sourceRef]).size).toBe(3);
   });
+
+  it("a PR merged after the base handoff, none open, promotes active to done", () => {
+    const b = { id: 1, createdAt: 100, status: "active" as const, prs: [pr()] };
+    expect(prHandoff("BTL-1", [row({ state: "merged", mergedAt: 200 })], b)?.status).toBe("done");
+    expect(prHandoff("BTL-1", [row({ state: "merged", mergedAt: 200 })], { ...b, status: "in_review" })?.status).toBe("done");
+    expect(prHandoff("BTL-1", [row({ state: "merged", mergedAt: 200 }), row({ id: 2, number: 8, url: "https://github.com/o/app/pull/8" })], b)?.status).toBe("active");
+  });
+
+  it("a PR merged before the base handoff does not", () => {
+    const b = { id: 1, createdAt: 100, status: "active" as const, prs: [pr()] };
+    expect(prHandoff("BTL-1", [row({ state: "merged", mergedAt: 50 })], b)?.status).toBe("active");
+  });
 });

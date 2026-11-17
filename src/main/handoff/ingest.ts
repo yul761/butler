@@ -17,6 +17,8 @@ export interface IngestDeps {
   newFollowupId: () => string;
   /** 存下来的 PR 列表链接到 ticket_prs。在事务里调用：抛错会让这条 handoff 一起回滚。 */
   linkPrs?: (ticketKey: string, prs: Pr[]) => void;
+  /** ticket_prs 里这个 ticket 是否有链接的 PR 还开着。 */
+  linkedOpen?: (ticketKey: string) => boolean;
 }
 
 export interface IngestInput {
@@ -33,14 +35,10 @@ export type IngestResult =
   | { stored: true; handoffId: number; degraded: boolean; status: TicketStatus | null }
   | { stored: false; reason: "no_ticket" | "duplicate" | "no_block" };
 
-type StatusDeps = Pick<IngestDeps, "tickets" | "handoffs" | "followups" | "now">;
+type StatusDeps = Pick<IngestDeps, "tickets" | "handoffs" | "followups" | "now" | "linkedOpen">;
 
-function applyStatus(d: StatusDeps, ticketKey: string, payload: Handoff, now: number): TicketStatus {
-  const open = d.followups.listByTicket(ticketKey).filter((f) => f.status === "open" || f.status === "snoozed").length;
-  const status = deriveStatus(payload, open);
-  d.tickets.setStatus(ticketKey, status, now);
-  return status;
-}
+const openFollowups = (d: StatusDeps, ticketKey: string): number =>
+  d.followups.listByTicket(ticketKey).filter((f) => f.status === "open" || f.status === "snoozed").length;
 
 /** 写入一条 handoff（只追加），合并 followups，重新推导 ticket 状态。全部在一个事务里。 */
 export function ingestHandoff(d: IngestDeps, input: IngestInput): IngestResult {
@@ -48,9 +46,8 @@ export function ingestHandoff(d: IngestDeps, input: IngestInput): IngestResult {
   const now = d.now();
   return withTransaction(d.db, (): IngestResult => {
     // ticket 以 Butler 的记录为准，模型写错了也不影响归属。以前合并过的 PR 记着（模型这次没提、或者报错了状态）。
-    const payload = input.payload
-      ? { ...input.payload, ticket: input.ticketKey, prs: rememberMergedPrs(input.payload.prs, [d.handoffs.knownPrs(input.ticketKey)]) }
-      : null;
+    const stored = input.payload ? rememberMergedPrs(input.payload.prs, [d.handoffs.knownPrs(input.ticketKey)]) : [];
+    const payload = input.payload ? { ...input.payload, ticket: input.ticketKey, prs: stored } : null;
     const id = d.handoffs.insert({
       ticketKey: input.ticketKey, sessionId: input.sessionId, trigger: input.trigger, createdAt: now,
       payload, rawText: input.rawText, sourceRef: input.sourceRef ?? null,
@@ -65,13 +62,27 @@ export function ingestHandoff(d: IngestDeps, input: IngestInput): IngestResult {
     for (const f of plan.inserts) d.followups.insert(f);
     for (const u of plan.updates) d.followups.update(u.id, u.patch);
     for (const fid of plan.done) d.followups.setStatus(fid, "done", now);
-    return { stored: true, handoffId: id, degraded: false, status: applyStatus(d, input.ticketKey, payload, now) };
+    // 状态按模型自己报的 PR 算；记着的和链接的只能让它保持 in_review。
+    const status = deriveStatus(input.payload!, openFollowups(d, input.ticketKey), { remembered: stored, linkedOpen: d.linkedOpen?.(input.ticketKey) ?? false });
+    d.tickets.setStatus(input.ticketKey, status, now);
+    return { stored: true, handoffId: id, degraded: false, status };
   });
 }
 
-/** followup 被手动完成/忽略/恢复后重新推导（例如最后一个合并后任务做完 → done）。没有完整 handoff 时不动。 */
+/**
+ * followup 被手动完成/忽略/恢复后重新推导（例如最后一个合并后任务做完 → done）。没有完整 handoff 时不动。
+ * 当前自动状态已经是 done / merged_pending_followup 时只按 followup 数在两者间切换；
+ * 否则 handoff 里的 PR 都当“记着的”，只用来看有没有开着的，不会把 active 变成 done。
+ */
 export function rederiveTicketStatus(d: StatusDeps, ticketKey: string): TicketStatus | null {
   const latest = d.handoffs.latestValid(ticketKey);
   if (!latest?.payload) return null;
-  return applyStatus(d, ticketKey, latest.payload, d.now());
+  const open = openFollowups(d, ticketKey);
+  const current = d.tickets.get(ticketKey)?.status;
+  const status =
+    current === "done" || current === "merged_pending_followup"
+      ? open > 0 ? "merged_pending_followup" : "done"
+      : deriveStatus({ ...latest.payload, prs: [] }, open, { remembered: latest.payload.prs, linkedOpen: d.linkedOpen?.(ticketKey) ?? false });
+  d.tickets.setStatus(ticketKey, status, d.now());
+  return status;
 }
