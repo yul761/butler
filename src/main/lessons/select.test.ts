@@ -6,6 +6,7 @@ import { overflowFor, productSuggestions, safeSessionLessons, sessionLessons } f
 
 const identity = () =>
   new RepoIdentity({
+    exists: () => true,
     git: (p) => (p.startsWith("/none") ? null : `git@github.com:${p.slice(1).replace(/^(.*?)-(\d)$/, "$1").replace("_", "/")}.git`),
   });
 

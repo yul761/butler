@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import type { Lesson, LessonAction, LessonProductView, LessonRepoView, LessonsState, LessonUnknownRepo } from "../../shared/lessons";
 import type { LessonsRepo } from "../db/lessons-repo";
 import { isAllowedGithubUrl } from "../util/github-url";
@@ -13,6 +14,8 @@ export interface LessonsServiceDeps {
   knownRepoPaths: () => string[];
   /** 每个 ticket 和每个 feature 的仓库根路径，一组一个数组，给归组建议用。 */
   repoGroups: () => string[][];
+  /** 路径是否存在，默认 existsSync。不存在的已知路径整个跳过。 */
+  exists?: (p: string) => boolean;
   ghAvailable: () => boolean;
   openExternal: (url: string) => void;
   now: () => number;
@@ -32,17 +35,31 @@ export class LessonsService {
     return isAllowedGithubUrl(url, this.d.repo.repos().map((r) => r.slug));
   }
 
-  /** 先把 knownRepoPaths 里解析得出的 upsertRepo，再拼视图。 */
+  /** 先把 knownRepoPaths 里解析得出、且表里还没有（或路径变了）的 upsertRepo，再拼视图。 */
   state(): LessonsState {
     const { repo, identity } = this.d;
+    const exists = this.d.exists ?? existsSync;
     const unknownRepos: LessonUnknownRepo[] = [];
+    let rows = repo.repos();
+    const known = new Map(rows.map((r) => [r.slug, r.localPath]));
+    const seen = new Set<string>(); // 同一个 slug 多个路径：本轮第一个赢，免得每次刷新来回改。
+    let changed = false;
     for (const path of new Set(this.d.knownRepoPaths())) {
+      if (!exists(path)) continue;
       const r = identity.resolve(path);
-      if ("slug" in r) repo.upsertRepo(r.slug, path, this.d.now());
-      else unknownRepos.push({ path, reason: r.reason });
+      if (!("slug" in r)) {
+        unknownRepos.push({ path, reason: r.reason });
+        continue;
+      }
+      if (seen.has(r.slug)) continue;
+      seen.add(r.slug);
+      if (known.get(r.slug) !== path) {
+        repo.upsertRepo(r.slug, path, this.d.now());
+        changed = true;
+      }
     }
-    const repos: LessonRepoView[] = repo
-      .repos()
+    if (changed) rows = repo.repos();
+    const repos: LessonRepoView[] = rows
       .map((r) => ({
         slug: r.slug,
         localPath: r.localPath,

@@ -26,9 +26,9 @@ export function parseRemoteSlug(url: string): string | null {
 }
 
 /** origin 的 URL；确定没有 origin remote 时返回 null（git 退出码 2）。超时、找不到 git、不是仓库等其他失败都抛出，不当成结论。 */
-function defaultGit(path: string): string | null {
+export function defaultGit(path: string, exec: typeof execFileSync = execFileSync): string | null {
   try {
-    return execFileSync(gitBinary(), [...GIT_SAFE_ARGS, "-C", path, "remote", "get-url", "origin"], {
+    return exec(gitBinary(), [...GIT_SAFE_ARGS, "-C", path, "remote", "get-url", "origin"], {
       timeout: 3000,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
@@ -39,17 +39,24 @@ function defaultGit(path: string): string | null {
   }
 }
 
-/** 仓库路径 -> 仓库身份（来自 origin remote）。成功的结果和“确定没有 origin”按路径缓存，app 运行期间不过期；超时和出错不缓存。 */
+/** 仓库路径 -> 仓库身份（来自 origin remote）。成功的结果、“确定没有 origin”和“存在但不是 git 仓库”按路径缓存，app 运行期间不过期；路径不存在、超时和出错不缓存。 */
 export class RepoIdentity {
   private readonly git: (path: string) => string | null;
+  private readonly exists: (p: string) => boolean;
   private readonly cache = new Map<string, string | null>();
 
-  constructor(d: { git?: (path: string) => string | null } = {}) {
+  constructor(d: { git?: (path: string) => string | null; exists?: (p: string) => boolean } = {}) {
     this.git = d.git ?? defaultGit;
+    this.exists = d.exists ?? existsSync;
   }
 
   slugOf(path: string): string | null {
     if (this.cache.has(path)) return this.cache.get(path) ?? null;
+    if (!this.exists(path)) return null; // 路径不在（比如外接盘没挂上）：不缓存，也不起 git。
+    if (!this.exists(join(path, ".git"))) {
+      this.cache.set(path, null); // 存在但不是 git 仓库：不用起 git，直接记下。
+      return null;
+    }
     let url: string | null;
     try {
       url = this.git(path);
@@ -65,6 +72,6 @@ export class RepoIdentity {
   resolve(path: string): { slug: string } | { reason: "no_remote" | "not_git" } {
     const slug = this.slugOf(path);
     if (slug) return { slug };
-    return { reason: existsSync(join(path, ".git")) ? "no_remote" : "not_git" };
+    return { reason: this.exists(join(path, ".git")) ? "no_remote" : "not_git" };
   }
 }

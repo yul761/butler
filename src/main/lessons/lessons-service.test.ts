@@ -7,15 +7,17 @@ import { LessonsService } from "./lessons-service";
 const git = (p: string): string | null => (p.startsWith("/none") ? null : `git@github.com:${p.slice(1).replace("_", "/")}.git`);
 const src = { prNumber: 1, url: "https://github.com/acme/web/pull/1" };
 
-const setup = (over: { paths?: string[]; groups?: string[][] } = {}) => {
+const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: string) => boolean } = {}) => {
+  const exists = over.exists ?? ((p: string) => !p.startsWith("/none") || !p.endsWith(".git"));
   const repo = new LessonsRepo(memDb());
   const openExternal = vi.fn();
   const notify = vi.fn();
   const backfill = vi.fn(async () => ({ ok: true as const, enqueued: 3 }));
   const svc = new LessonsService({
-    repo, identity: new RepoIdentity({ git }), runner: { backfill },
+    repo, identity: new RepoIdentity({ git, exists }), runner: { backfill },
     knownRepoPaths: () => over.paths ?? ["/acme_web", "/acme_api", "/none_x"],
     repoGroups: () => over.groups ?? [],
+    exists,
     ghAvailable: () => true, openExternal, now: () => 100, notify,
   });
   svc.state();
@@ -30,6 +32,21 @@ describe("LessonsService.state", () => {
     expect(s.repos.map((r) => r.slug)).toEqual(["acme/api", "acme/web"]);
     expect(s.unknownRepos).toEqual([{ path: "/none_x", reason: "not_git" }]);
     expect(s.ghAvailable).toBe(true);
+  });
+
+  it("does not upsert an unchanged repo", () => {
+    const { svc, repo } = setup();
+    const spy = vi.spyOn(repo, "upsertRepo");
+    svc.state();
+    svc.state();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("skips paths that do not exist", () => {
+    const { svc } = setup({ paths: ["/acme_web", "/gone_x"], exists: (p) => !p.startsWith("/gone") });
+    const s = svc.state();
+    expect(s.repos.map((r) => r.slug)).toEqual(["acme/web"]);
+    expect(s.unknownRepos).toEqual([]);
   });
 
   it("reports queued/failed, overflow and hides rejected lessons", () => {

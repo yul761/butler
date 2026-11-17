@@ -486,15 +486,17 @@ async function bootstrap(): Promise<void> {
     knownRepoPaths: () => [
       ...new Set(
         repoPathRows(
-          `SELECT ticket_key AS k, repo_path FROM ticket_repos UNION SELECT feature_id AS k, repo_path FROM feature_repos UNION SELECT epic_id AS k, repo_path FROM epic_repos`,
+          `SELECT tr.repo_path FROM ticket_repos tr JOIN tickets t ON t.key = tr.ticket_key WHERE t.archived_at IS NULL
+           UNION SELECT fr.repo_path FROM feature_repos fr JOIN features f ON f.id = fr.feature_id WHERE f.archived_at IS NULL
+           UNION SELECT er.repo_path FROM epic_repos er JOIN epics e ON e.id = er.epic_id WHERE e.archived_at IS NULL`,
         ).map((r) => r.repo_path),
       ),
     ],
     repoGroups: () => {
       const groups = new Map<string, Set<string>>();
       for (const [kind, sql] of [
-        ["t", `SELECT ticket_key AS k, repo_path FROM ticket_repos`],
-        ["f", `SELECT feature_id AS k, repo_path FROM feature_repos`],
+        ["t", `SELECT tr.ticket_key AS k, tr.repo_path FROM ticket_repos tr JOIN tickets t ON t.key = tr.ticket_key WHERE t.archived_at IS NULL`],
+        ["f", `SELECT fr.feature_id AS k, fr.repo_path FROM feature_repos fr JOIN features f ON f.id = fr.feature_id WHERE f.archived_at IS NULL`],
       ] as const) {
         for (const r of repoPathRows(sql)) {
           const key = `${kind}:${r.k}`;
