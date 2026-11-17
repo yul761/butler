@@ -2,6 +2,7 @@ import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
 import { IPC, type IpcResult } from "../../shared/ipc";
 import type { PrStagesScope, PrStagesTicket } from "../../shared/pr-stages";
+import type { AvailabilityAction, AvailabilityView } from "../../shared/availability";
 import type { LessonAction, LessonsState } from "../../shared/lessons";
 import type { MemoryView, WhyEntry } from "../../shared/memory";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
@@ -102,6 +103,8 @@ export const api = {
   lessonsState: () => call<LessonsState>(IPC.lessonsState),
   lessonsAct: (a: LessonAction) => call<{ ok: true } | { ok: false; reason: string }>(IPC.lessonsAct, a),
   lessonsPending: () => call<number>(IPC.lessonsPending),
+  availability: () => call<AvailabilityView>(IPC.availabilityGet),
+  availabilityAct: (a: AvailabilityAction) => call<void>(IPC.availabilityAct, a),
   nowView: () => call<NowView>(IPC.nowView),
   inbox: (scope: InboxScope) => call<InboxView>(IPC.inboxList, scope),
   answerInbox: (id: number, text: string) => call<boolean>(IPC.inboxAnswer, id, text),

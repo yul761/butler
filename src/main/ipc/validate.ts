@@ -1,3 +1,4 @@
+import type { AvailabilityAction } from "../../shared/availability";
 import type { SensitiveTerm } from "../../shared/llm";
 import { CONTEXT_LIMIT } from "../../shared/control";
 import type {
@@ -330,4 +331,13 @@ export function lessonActionArg(v: unknown): LessonAction {
     default:
       throw new Error("invalid lesson action");
   }
+}
+
+/** 可用状态页的操作：只有手动暂停 / 恢复复盘。 */
+export function availabilityActionArg(v: unknown): AvailabilityAction {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid availability action");
+  if (o.op === "resumeLessons") return { op: "resumeLessons" };
+  if (o.op === "pauseLessons") return { op: "pauseLessons" };
+  throw new Error("invalid availability action");
 }

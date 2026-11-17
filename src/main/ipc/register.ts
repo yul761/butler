@@ -43,10 +43,12 @@ import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, apiKeyArg, availabilityActionArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
 } from "./validate";
 import { M } from "../strings";
+import type { ClaudeAvailability } from "../claude/availability";
+import type { AvailabilityView } from "../../shared/availability";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -71,6 +73,8 @@ export interface IpcDeps {
   prOpen: (url: string) => PrOpenResult;
   /** 复盘规矩页。 */
   lessons: Pick<LessonsService, "state" | "act" | "pendingCount">;
+  /** Claude 可用状态；act 只有手动暂停 / 恢复复盘。 */
+  availability: Pick<ClaudeAvailability, "view" | "pauseLessons" | "resumeLessons">;
   /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
   nowView: (merges: MergeEvent[]) => NowView;
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）。 */
@@ -353,6 +357,12 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.lessonsState, (): LessonsState => d.lessons.state());
   handle(IPC.lessonsAct, (raw: unknown) => d.lessons.act(lessonActionArg(raw)));
   handle(IPC.lessonsPending, (): number => d.lessons.pendingCount());
+  handle(IPC.availabilityGet, (): AvailabilityView => d.availability.view());
+  handle(IPC.availabilityAct, (raw: unknown): void => {
+    const a = availabilityActionArg(raw);
+    if (a.op === "pauseLessons") d.availability.pauseLessons();
+    else d.availability.resumeLessons();
+  });
   handle(IPC.nowView, (): NowView => d.nowView(recentMerges()));
   // 答了、不用了都由 InboxService 自己 notify。
   handle(IPC.inboxList, (raw: unknown): InboxView => d.inbox.view(inboxScopeArg(raw)));

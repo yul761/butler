@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
-import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -255,5 +255,11 @@ describe("lessonActionArg", () => {
     expect(lessonActionArg({ op: "createProduct", name: " shop ", slugs: ["a/b"] })).toEqual({ op: "createProduct", name: "shop", slugs: ["a/b"] });
     expect(lessonActionArg({ op: "merge", keepId: 1, dropId: 2, text: "t" })).toEqual({ op: "merge", keepId: 1, dropId: 2, text: "t" });
     expect(lessonActionArg({ op: "setDisabled", id: 1, disabled: true })).toEqual({ op: "setDisabled", id: 1, disabled: true });
+  });
+
+  it("availabilityActionArg accepts the two ops and rejects others", () => {
+    expect(availabilityActionArg({ op: "resumeLessons" })).toEqual({ op: "resumeLessons" });
+    expect(availabilityActionArg({ op: "pauseLessons", extra: 1 })).toEqual({ op: "pauseLessons" });
+    for (const bad of [null, undefined, "pauseLessons", {}, { op: "x" }, { op: 1 }]) expect(() => availabilityActionArg(bad)).toThrow();
   });
 });

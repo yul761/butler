@@ -7,6 +7,9 @@ import { pathToFileURL } from "node:url";
 import { sanitizeTask } from "../shared/control";
 import { parseGateRequest, type GateRequest, type GateResult } from "../shared/gate";
 import { IPC } from "../shared/ipc";
+import type { LimitHit } from "../shared/availability";
+import { ClaudeAvailability } from "./claude/availability";
+import { AvailabilityRepo } from "./db/availability-repo";
 import type { Session } from "../shared/types";
 import { APP_ID, shouldSetAppId } from "./app-id";
 import { runHeadless } from "./claude/headless";
@@ -441,10 +444,16 @@ async function bootstrap(): Promise<void> {
     if (Object.keys(servers).length === 0) return null;
     return writeButlerMcpConfig({ mcpDir: paths.mcp, servers });
   };
+  const availability = new ClaudeAvailability({ repo: new AvailabilityRepo(db, logger), now: Date.now, onChange: notify, log: logger });
+  /** headless 运行报告限流 / 成功给可用状态。 */
+  const availabilityHooks = {
+    onLimit: (hit: LimitHit, job: string) => availability.report({ ...hit, source: "headless", job, sessionId: null }),
+    onSuccess: (at: number, job: string) => availability.noteSuccess(at, job),
+  };
   /** 卡住判断和「需要你」判断共用的 headless 设置。 */
   const judgeDeps: HeadlessExecDeps = {
     run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID,
-    signal: headlessAbort.signal, onUsage: recordHeadlessUsage, log: logger,
+    signal: headlessAbort.signal, onUsage: recordHeadlessUsage, ...availabilityHooks, log: logger,
   };
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
@@ -644,6 +653,7 @@ async function bootstrap(): Promise<void> {
     projectMcp,
     signal: headlessAbort.signal,
     onUsage: recordHeadlessUsage,
+    ...availabilityHooks,
     log: logger,
   });
   /** feature 有新汇总时，它所在的 epic 重新渲染 handoff（异步，失败只记日志）。 */
@@ -673,6 +683,7 @@ async function bootstrap(): Promise<void> {
     projectMcp,
     signal: headlessAbort.signal,
     onUsage: recordHeadlessUsage,
+    ...availabilityHooks,
     log: logger,
   });
   /**
@@ -1242,6 +1253,7 @@ async function bootstrap(): Promise<void> {
     deleteHiddenSessions: (ids) => sessionCleanup.deleteHidden(ids),
     inbox: inboxService,
     lessons: lessonsService,
+    availability,
     prStages: new PrStagesService({
       tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id, { includeArchived: true }) },
       features: {
@@ -1404,6 +1416,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(discoveryTimer);
     clearInterval(refreshTimer);
     clearInterval(scheduleTimer);
+    availability.dispose();
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     activityMonitor.stop();
     usageScanner.stop();
