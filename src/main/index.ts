@@ -110,8 +110,9 @@ import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { openKnownPr } from "./util/github-url";
 import { TicketService } from "./tickets/ticket-service";
-import { applyGhResolution, branchRuns, ghAvailable, probeGh, compareFiles, failedLog, mergedPrs, prInfo, prLessonData, prsForBranch, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
+import { applyGhResolution, branchRuns, ghAvailable, probeGh, compareFiles, failedLog, mergedPrs, prInfo, prLessonDataDetail, prsForBranch, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
 import { LessonsRepo } from "./db/lessons-repo";
+import { LessonRunsRepo } from "./db/lesson-runs-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
 import { readTailLines, TRANSCRIPT_TAIL_BYTES } from "./lessons/tail";
 import { LessonRunner } from "./lessons/lesson-runner";
@@ -457,12 +458,13 @@ async function bootstrap(): Promise<void> {
   };
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
+  const lessonRuns = new LessonRunsRepo(db);
   const repoIdentity = new RepoIdentity();
   // 带 hash 的 session 说明文件每次规矩变了就多一份，启动时清掉 30 天没用过的。
   pruneSessionGuides(paths.mcp, Date.now());
   const lessonRunner = new LessonRunner({
-    repo: lessonsRepo, identity: repoIdentity, jobs,
-    gh: { mergedPrs, prLessonData, compareFiles, available: () => ghAvailable() },
+    repo: lessonsRepo, runs: lessonRuns, availability, identity: repoIdentity, jobs,
+    gh: { mergedPrs, prLessonDataDetail, compareFiles, available: () => ghAvailable() },
     headless: { ...judgeDeps },
     ticketForBranch: (slug, branch) => tickets.reposByBranch(branch).find((r) => repoIdentity.slugOf(r.repoPath) === slug)?.ticketKey ?? null,
     butlerContext: async (key, wantTranscripts) => {

@@ -11,7 +11,16 @@ export type LessonRunReason =
   | "timeout" | "spawn_failed" | "exit_nonzero" | "bad_output" | "claude_error" | "claude_missing"
   | "cancelled" | "app_quit" | "error";
 
-export type LessonStatus = "pending" | "confirmed" | "disabled" | "rejected";
+/** 正在分析的一个队列项（取消按钮用 queueId）。 */
+export interface LessonRunningItem {
+  queueId: number;
+  runId: number;
+  slug: string;
+  prNumber: number;
+  startedAt: number;
+}
+
+export type LessonStatus ="pending" | "confirmed" | "disabled" | "rejected";
 export type LessonScope = { kind: "repo"; slug: string } | { kind: "product"; productId: number };
 
 export interface LessonSource {

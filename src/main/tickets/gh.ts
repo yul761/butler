@@ -215,6 +215,11 @@ function runGhDetail(cwd: string, args: string[], timeoutMs: number, maxBuffer: 
   });
 }
 
+/** 几次 gh 调用的 stderr 拼在一起，空的跳过。 */
+function joinStderr(...parts: string[]): string {
+  return parts.map((p) => p.trimEnd()).filter((p) => p !== "").join("\n");
+}
+
 /** slug（github.com 上是 owner/repo，其他主机是 host/owner/repo）→ gh 的环境变量（两段的 slug 固定 GH_HOST=github.com，不受环境里的 GH_HOST 影响），让 {owner}/{repo} 从它解析而不是从 cwd。没有 slug 返回 undefined。 */
 function repoEnv(repo: string | null | undefined): NodeJS.ProcessEnv | undefined {
   if (!repo) return undefined;
@@ -366,11 +371,19 @@ function parseLines(text: string | null): unknown[] | null {
  * REST 的 pull_request_review_id 是数字，而 gh pr view 给的 review id 是 GraphQL 的 node id（PRR_…）：再取一次 reviews 列表，把评论的 reviewId 换成 node id。
  */
 export async function reviewComments(cwd: string, number: number, timeoutMs: number, repo?: string | null): Promise<PrComment[] | null> {
+  return (await reviewCommentsDetail(cwd, number, timeoutMs, repo)).data;
+}
+
+/** 同 reviewComments，另外带回两次 gh 调用的 stderr。 */
+async function reviewCommentsDetail(cwd: string, number: number, timeoutMs: number, repo?: string | null): Promise<{ data: PrComment[] | null; stderr: string }> {
   const env = repoEnv(repo);
-  const j = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/comments`, "--paginate", "--jq", ".[]"], timeoutMs, 8 * 1024 * 1024, env));
-  if (j === null) return null;
-  const reviews = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--paginate", "--jq", ".[] | {id, node_id}"], timeoutMs, 8 * 1024 * 1024, env));
-  if (reviews === null) return null;
+  const c = await runGhDetail(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/comments`, "--paginate", "--jq", ".[]"], timeoutMs, 8 * 1024 * 1024, env);
+  const j = parseLines(c.stdout);
+  if (j === null) return { data: null, stderr: c.stderr };
+  const rv = await runGhDetail(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--paginate", "--jq", ".[] | {id, node_id}"], timeoutMs, 8 * 1024 * 1024, env);
+  const stderr = joinStderr(c.stderr, rv.stderr);
+  const reviews = parseLines(rv.stdout);
+  if (reviews === null) return { data: null, stderr };
   const nodeOf = new Map<number, string>();
   for (const item of reviews) {
     const r = obj(item);
@@ -393,7 +406,7 @@ export async function reviewComments(cwd: string, number: number, timeoutMs: num
       reviewId: typeof r.pull_request_review_id === "number" ? (nodeOf.get(r.pull_request_review_id) ?? null) : null,
     });
   }
-  return out;
+  return { data: out, stderr };
 }
 
 export interface ReviewAuthors {
@@ -405,8 +418,14 @@ export interface ReviewAuthors {
 
 /** REST 的 reviews 列表里谁是 Bot：gh pr view 给的 author 没有 [bot] 后缀和类型。失败返回 null（调用方退回按名字认）。 */
 export async function reviewAuthors(cwd: string, number: number, timeoutMs: number, repo?: string | null): Promise<ReviewAuthors | null> {
-  const rows = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--paginate", "--jq", ".[] | {node_id, user: {login: .user.login, type: .user.type}}"], timeoutMs, 8 * 1024 * 1024, repoEnv(repo)));
-  if (rows === null) return null;
+  return (await reviewAuthorsDetail(cwd, number, timeoutMs, repo)).data;
+}
+
+/** 同 reviewAuthors，另外带回 stderr。 */
+async function reviewAuthorsDetail(cwd: string, number: number, timeoutMs: number, repo?: string | null): Promise<{ data: ReviewAuthors | null; stderr: string }> {
+  const res = await runGhDetail(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--paginate", "--jq", ".[] | {node_id, user: {login: .user.login, type: .user.type}}"], timeoutMs, 8 * 1024 * 1024, repoEnv(repo));
+  const rows = parseLines(res.stdout);
+  if (rows === null) return { data: null, stderr: res.stderr };
   const out: ReviewAuthors = { botReviewIds: new Set(), botLogins: new Set() };
   for (const item of rows) {
     const r = obj(item);
@@ -415,7 +434,7 @@ export async function reviewAuthors(cwd: string, number: number, timeoutMs: numb
     if (typeof r.node_id === "string" && r.node_id !== "") out.botReviewIds.add(r.node_id);
     if (typeof user.login === "string" && user.login !== "") out.botLogins.add(user.login.toLowerCase().replace(/\[bot\]$/, ""));
   }
-  return out;
+  return { data: out, stderr: res.stderr };
 }
 
 /** gh run list --branch：只看最新的 headSha（列表按时间倒序，第一条即最新）。没有 run 返回 null。 */
@@ -497,13 +516,20 @@ function commitsOf(v: unknown): PrCommit[] {
 
 /** 一个 PR 做规矩分析要的全部数据：gh pr view，再加行内评论和 bot 名单。pr view 或行内评论失败返回 null；bot 名单拿不到按空集合算。 */
 export async function prLessonData(cwd: string, number: number, timeoutMs: number): Promise<PrLessonData | null> {
+  return (await prLessonDataDetail(cwd, number, timeoutMs)).data;
+}
+
+/** 同 prLessonData，另外带回各次 gh 调用的 stderr（失败时给运行记录看原因）。 */
+export async function prLessonDataDetail(cwd: string, number: number, timeoutMs: number): Promise<{ data: PrLessonData | null; stderr: string }> {
   const fields = "number,title,body,url,author,headRefName,mergedAt,reviews,comments,commits";
-  const j = obj(parseJson(await runGh(cwd, ["pr", "view", String(number), "--json", fields], timeoutMs, 16 * 1024 * 1024)));
-  if (!j || typeof j.number !== "number") return null;
-  const inline = await reviewComments(cwd, number, timeoutMs);
-  if (inline === null) return null;
-  const authors = await reviewAuthors(cwd, number, timeoutMs);
-  return {
+  const view = await runGhDetail(cwd, ["pr", "view", String(number), "--json", fields], timeoutMs, 16 * 1024 * 1024);
+  const j = obj(parseJson(view.stdout));
+  if (!j || typeof j.number !== "number") return { data: null, stderr: joinStderr(view.stderr) };
+  const inline = await reviewCommentsDetail(cwd, number, timeoutMs);
+  if (inline.data === null) return { data: null, stderr: joinStderr(view.stderr, inline.stderr) };
+  const authors = await reviewAuthorsDetail(cwd, number, timeoutMs);
+  const stderr = joinStderr(view.stderr, inline.stderr, authors.stderr);
+  const data: PrLessonData = {
     number: j.number,
     title: str(j.title),
     body: str(j.body),
@@ -513,10 +539,11 @@ export async function prLessonData(cwd: string, number: number, timeoutMs: numbe
     mergedAt: typeof j.mergedAt === "string" && j.mergedAt !== "" ? j.mergedAt : null,
     reviews: reviewsOf(j.reviews),
     comments: commentsOf(j.comments),
-    inline,
+    inline: inline.data,
     commits: commitsOf(j.commits),
-    botLogins: authors?.botLogins ?? new Set(),
+    botLogins: authors.data?.botLogins ?? new Set(),
   };
+  return { data, stderr };
 }
 
 /** gh api compare：两个提交之间改了哪些文件和 patch。没有 patch 的文件（二进制）patch 为 ""。失败返回 null。 */

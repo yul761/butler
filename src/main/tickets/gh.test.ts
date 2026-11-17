@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, prLessonData, prStatus, prsForBranch, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
+import { applyGhResolution, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, prLessonData, prLessonDataDetail, prStatus, prsForBranch, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -421,6 +421,24 @@ JSON`;
   it("returns null when pr view fails", async () => {
     const dir = fakeGh(script("exit 1"));
     expect(await prLessonData(dir, 5, 5000)).toBeNull();
+  });
+
+  it("prLessonDataDetail returns stderr when pr view fails", async () => {
+    const dir = fakeGh(script(`echo "GraphQL: Could not resolve to a PullRequest with the number of 5." >&2\nexit 1`));
+    expect(await prLessonDataDetail(dir, 5, 5000)).toEqual({ data: null, stderr: "GraphQL: Could not resolve to a PullRequest with the number of 5." });
+  });
+
+  it("prLessonDataDetail returns stderr when the review comments call fails, and data with empty stderr on success", async () => {
+    const failing = fakeGh(`case "$1 $2" in
+"pr view")
+${view}
+;;
+*) echo "HTTP 404: Not Found" >&2; exit 1 ;;
+esac`);
+    expect(await prLessonDataDetail(failing, 5, 5000)).toEqual({ data: null, stderr: "HTTP 404: Not Found" });
+    const ok = await prLessonDataDetail(fakeGh(script(view)), 5, 5000);
+    expect(ok.data?.title).toBe("T");
+    expect(ok.stderr).toBe("");
   });
 });
 
