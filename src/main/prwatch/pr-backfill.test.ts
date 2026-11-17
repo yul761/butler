@@ -146,7 +146,7 @@ describe("runPrBackfill", () => {
     const r = await runPrBackfill(d);
     expect(r).toEqual({ ok: true, linked: 2, failed: 0, skipped: 0 });
     expect(d.prsForBranch).toHaveBeenCalledWith("/home", "feat", expect.any(Number), "a/y");
-    expect(d.prsForBranch).not.toHaveBeenCalledWith("/gone", expect.anything(), expect.anything());
+    expect(vi.mocked(d.prsForBranch).mock.calls.map((c) => c[0])).not.toContain("/gone");
     expect(s.prs.byTicket("T-1").map((p) => [p.number, p.slug, p.state]).sort()).toEqual([[1, "a/x", "open"], [2, "a/y", "merged"]]);
   });
 
