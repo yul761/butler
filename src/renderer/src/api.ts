@@ -3,7 +3,7 @@ import type { Lang } from "../../shared/i18n";
 import { IPC, type IpcResult } from "../../shared/ipc";
 import type { PrStagesScope, PrStagesTicket } from "../../shared/pr-stages";
 import type { AvailabilityAction, AvailabilityView } from "../../shared/availability";
-import type { LessonAction, LessonsState } from "../../shared/lessons";
+import type { LessonAction, LessonActResult, LessonQueueRowView, LessonRunDetail, LessonsState } from "../../shared/lessons";
 import type { MemoryView, WhyEntry } from "../../shared/memory";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
@@ -101,7 +101,9 @@ export const api = {
   prStages: (scope: PrStagesScope) => call<PrStagesTicket[]>(IPC.prStages, scope),
   prOpen: (url: string) => call<{ ok: true } | { ok: false; reason: "bad_url" }>(IPC.prOpen, url),
   lessonsState: () => call<LessonsState>(IPC.lessonsState),
-  lessonsAct: (a: LessonAction) => call<{ ok: true } | { ok: false; reason: string }>(IPC.lessonsAct, a),
+  lessonsAct: (a: LessonAction) => call<LessonActResult>(IPC.lessonsAct, a),
+  lessonsRuns: (slug: string) => call<LessonQueueRowView[]>(IPC.lessonsRuns, slug),
+  lessonsRun: (id: number) => call<LessonRunDetail | null>(IPC.lessonsRun, id),
   lessonsPending: () => call<number>(IPC.lessonsPending),
   availability: () => call<AvailabilityView>(IPC.availabilityGet),
   availabilityAct: (a: AvailabilityAction) => call<void>(IPC.availabilityAct, a),

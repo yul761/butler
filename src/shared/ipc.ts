@@ -75,6 +75,8 @@ export const IPC = {
   prOpen: "pr:open",
   lessonsState: "lessons:state",
   lessonsAct: "lessons:act",
+  lessonsRuns: "lessons:runs",
+  lessonsRun: "lessons:run",
   lessonsPending: "lessons:pending",
   /** Claude 可用状态（限流、模型不可用）和复盘的暂停。 */
   availabilityGet: "availability:get",
@@ -123,7 +125,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.butlerView, IPC.butlerOpenSession,
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
-  IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsPending, IPC.availabilityGet, IPC.availabilityAct, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
+  IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending, IPC.availabilityGet, IPC.availabilityAct, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,

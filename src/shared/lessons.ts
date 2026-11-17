@@ -1,3 +1,5 @@
+import type { LessonsPauseReason } from "./availability";
+
 /** 每个 session 最多送进去的规矩条数。 */
 export const MAX_SESSION_LESSONS = 30;
 
@@ -47,6 +49,73 @@ export interface Lesson {
   sources: LessonSource[];
 }
 
+export type LessonQueueRowStatus = "queued" | "waiting" | "limited" | "running" | "done" | "skipped" | "cancelled" | "failed";
+
+export interface LessonRunSummary {
+  id: number;
+  status: LessonRunStatus;
+  reason: LessonRunReason | null;
+  startedAt: number;
+  finishedAt: number | null;
+  created: number;
+  hit: number;
+  dropped: number;
+  costUsd: number | null;
+  durationMs: number | null;
+}
+
+/** Runs 标签页的一行：一个 PR 的队列项加它最近一次运行。 */
+export interface LessonQueueRowView {
+  queueId: number;
+  prNumber: number;
+  prTitle: string | null;
+  origin: string;
+  status: LessonQueueRowStatus;
+  reason: string | null;
+  message: string | null;
+  attempts: number;
+  enqueuedAt: number;
+  finishedAt: number | null;
+  notBefore: number | null;
+  lastRun: LessonRunSummary | null;
+}
+
+export interface LessonFinding {
+  summary: string;
+  avoidable: boolean;
+  whyMissed: string;
+  rule: { text: string; why: string; scope: "repo" | "product" } | null;
+  commentUrl: string | null;
+}
+
+export interface LessonRunDetail extends LessonRunSummary {
+  slug: string;
+  prNumber: number;
+  prUrl: string | null;
+  prTitle: string | null;
+  origin: string;
+  message: string | null;
+  stderrTail: string | null;
+  ghStderr: string | null;
+  material: string | null;
+  rawOutput: string | null;
+  trimmed: boolean;
+  /** 存的输出解析不出来（被截断或格式不对）时为 null。 */
+  findings: LessonFinding[] | null;
+  model: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  lessons: { id: number; text: string; status: LessonStatus; kind: "created" | "hit" }[];
+  /** 同一个 PR 的其它运行，新的在前。 */
+  attempts: LessonRunSummary[];
+}
+
+export interface LessonQueueView {
+  running: LessonRunningItem[];
+  queued: number;
+  pause: { reason: LessonsPauseReason; until: number | null; message: string | null } | null;
+}
+
 export interface LessonRepoView {
   slug: string;
   localPath: string;
@@ -55,6 +124,9 @@ export interface LessonRepoView {
   analyzedCount: number;
   queued: number;
   failed: number;
+  running: number;
+  skipped: number;
+  cancelled: number;
   backfilled: boolean;
   /** 单独开这个仓库的 session 时，有几条已确认的送不进去。 */
   overflow: number;
@@ -85,6 +157,7 @@ export interface LessonsState {
   /** 不含 rejected。 */
   lessons: Lesson[];
   ghAvailable: boolean;
+  queue: LessonQueueView;
 }
 
 export type LessonAction =
@@ -99,7 +172,15 @@ export type LessonAction =
   | { op: "addToProduct"; id: number; slug: string }
   | { op: "removeFromProduct"; id: number; slug: string }
   | { op: "backfill"; slug: string }
-  | { op: "openSource"; sourceId: number };
+  | { op: "openSource"; sourceId: number }
+  | { op: "retry"; queueId: number }
+  | { op: "retryFailed"; slug: string }
+  | { op: "cancel"; queueId: number }
+  | { op: "pauseQueue" }
+  | { op: "resumeQueue" }
+  | { op: "runNow" };
+
+export type LessonActResult = { ok: true; sessionId?: string } | { ok: false; reason: string };
 
 /** 送进 session 说明的一行。label 是仓库 slug 或产品名。 */
 export interface SessionLesson {

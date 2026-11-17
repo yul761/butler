@@ -291,8 +291,13 @@ function lessonTextArg(v: unknown): string {
   return t;
 }
 
-function lessonSlugArg(v: unknown): string {
+export function lessonSlugArg(v: unknown): string {
   if (typeof v !== "string" || !v || v.length > 512) throw new Error("invalid repo slug");
+  return v;
+}
+
+export function lessonRunIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error("invalid lesson run id");
   return v;
 }
 
@@ -328,6 +333,18 @@ export function lessonActionArg(v: unknown): LessonAction {
       return { op: "backfill", slug: lessonSlugArg(o.slug) };
     case "openSource":
       return { op: "openSource", sourceId: lessonIdArg(o.sourceId) };
+    case "retry":
+      return { op: "retry", queueId: lessonRunIdArg(o.queueId) };
+    case "retryFailed":
+      return { op: "retryFailed", slug: lessonSlugArg(o.slug) };
+    case "cancel":
+      return { op: "cancel", queueId: lessonRunIdArg(o.queueId) };
+    case "pauseQueue":
+      return { op: "pauseQueue" };
+    case "resumeQueue":
+      return { op: "resumeQueue" };
+    case "runNow":
+      return { op: "runNow" };
     default:
       throw new Error("invalid lesson action");
   }

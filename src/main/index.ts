@@ -493,7 +493,7 @@ async function bootstrap(): Promise<void> {
   // 复盘规矩页：仓库路径直接查表（已归档的 ticket、feature、epic 不算）；归组建议按 ticket 和 feature 各算一组。
   const repoPathRows = <T extends { repo_path: string }>(sql: string): T[] => db.prepare(sql).all() as unknown as T[];
   const lessonsService = new LessonsService({
-    repo: lessonsRepo, identity: repoIdentity, runner: lessonRunner,
+    repo: lessonsRepo, runs: lessonRuns, availability, identity: repoIdentity, runner: lessonRunner,
     knownRepoPaths: () => [
       ...new Set(
         repoPathRows<{ repo_path: string }>(

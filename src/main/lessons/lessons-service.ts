@@ -1,6 +1,12 @@
 import { existsSync } from "node:fs";
-import type { Lesson, LessonAction, LessonProductView, LessonRepoView, LessonsState, LessonUnknownRepo } from "../../shared/lessons";
-import type { LessonsRepo } from "../db/lessons-repo";
+import type {
+  Lesson, LessonAction, LessonActResult, LessonFinding, LessonProductView, LessonQueueRowStatus, LessonQueueRowView, LessonQueueView, LessonRepoView,
+  LessonRunDetail, LessonRunSummary, LessonsState, LessonUnknownRepo,
+} from "../../shared/lessons";
+import type { ClaudeAvailability } from "../claude/availability";
+import type { LessonRunRow, LessonRunsRepo } from "../db/lesson-runs-repo";
+import type { LessonQueueRow, LessonsRepo } from "../db/lessons-repo";
+import { AnalysisSchema } from "./analyze";
 import { isAllowedGithubUrl } from "../util/github-url";
 import type { LessonRunner } from "./lesson-runner";
 import type { RepoIdentity } from "./repo-identity";
@@ -9,7 +15,9 @@ import { overflowFor, productSuggestions } from "./select";
 export interface LessonsServiceDeps {
   repo: LessonsRepo;
   identity: RepoIdentity;
-  runner: Pick<LessonRunner, "backfill">;
+  runs: LessonRunsRepo;
+  availability: Pick<ClaudeAvailability, "lessonsGate" | "pauseLessons" | "resumeLessons">;
+  runner: Pick<LessonRunner, "backfill" | "cancel" | "retry" | "retryFailed" | "runNow" | "running">;
   /** Butler 知道的所有仓库根路径（ticket_repos、feature_repos、epic_repos 的 repo_path 去重）。 */
   knownRepoPaths: () => string[];
   /** 每个 ticket 和每个 feature 的仓库根路径，一组一个数组，给归组建议用。 */
@@ -22,10 +30,40 @@ export interface LessonsServiceDeps {
   notify: () => void;
 }
 
-export type LessonActResult = { ok: true } | { ok: false; reason: string };
+export type { LessonActResult };
 
-/** LessonRepoView 到 Task 6 才放宽，这里只取 queued/failed，别把别的字段漏出去。 */
-const pickQueue = ({ queued, failed }: { queued: number; failed: number }) => ({ queued, failed });
+/** 队列项在页面上的状态：running、limited、waiting、cancelled 是从底层状态加上最近一次运行推出来的。now 由调用方传入。 */
+export function queueRowStatus(row: Pick<LessonQueueRow, "status" | "error" | "notBefore">, lastRun: Pick<LessonRunSummary, "status"> | null, now: number): LessonQueueRowStatus {
+  if (row.status === "running") return "running";
+  if (row.status === "queued") {
+    if (lastRun?.status === "limited") return "limited";
+    if (row.notBefore !== null && row.notBefore > now) return "waiting";
+    return "queued";
+  }
+  if (row.status === "skipped" && row.error === "cancelled") return "cancelled";
+  return row.status;
+}
+
+const summary = (r: LessonRunRow): LessonRunSummary => ({
+  id: r.id, status: r.status, reason: r.reason, startedAt: r.startedAt, finishedAt: r.finishedAt,
+  created: r.created, hit: r.hit, dropped: r.dropped, costUsd: r.costUsd, durationMs: r.durationMs,
+});
+
+/** 存的 findings 按分析输出的格式解析；解析不出来（被截断、格式不对）返回 null。 */
+function parseFindings(raw: unknown): LessonFinding[] | null {
+  if (raw === null) return null;
+  const p = AnalysisSchema.safeParse({ findings: raw });
+  if (!p.success) return null;
+  return p.data.findings.map((f) => ({
+    summary: f.summary,
+    avoidable: f.avoidable,
+    whyMissed: f.why_missed,
+    rule: f.rule ? { text: f.rule.text, why: f.rule.why, scope: f.rule.scope } : null,
+    commentUrl: f.comment_url,
+  }));
+}
+
+const fromRunner = (r: "ok" | "not_found" | "bad_status"): LessonActResult => (r === "ok" ? { ok: true } : { ok: false, reason: r });
 const NOT_FOUND = { ok: false, reason: "not_found" } as const;
 const PRODUCT_NOT_FOUND = { ok: false, reason: "product_not_found" } as const;
 
@@ -70,7 +108,7 @@ export class LessonsService {
         localPath: r.localPath,
         lastAnalyzedAt: r.lastAnalyzedAt,
         analyzedCount: r.analyzedCount,
-        ...pickQueue(repo.queueCounts(r.slug)),
+        ...repo.queueCounts(r.slug),
         backfilled: r.backfilledAt !== null,
         overflow: overflowFor(repo, r.slug),
       }))
@@ -84,6 +122,54 @@ export class LessonsService {
       suggestions: productSuggestions(groups, products),
       lessons: repo.lessons().filter((l) => l.status !== "rejected"),
       ghAvailable: this.d.ghAvailable(),
+      queue: this.queueView(),
+    };
+  }
+
+  private queueView(): LessonQueueView {
+    const gate = this.d.availability.lessonsGate(this.d.now());
+    return {
+      running: this.d.runner.running(),
+      queued: this.d.repo.queuedTotal(),
+      pause: gate.paused ? { reason: gate.reason, until: gate.until, message: gate.message } : null,
+    };
+  }
+
+  /** 某个仓库的队列项，各带最近一次运行。 */
+  runs(slug: string): LessonQueueRowView[] {
+    const now = this.d.now();
+    return this.d.repo.queueRows(slug).map((q) => {
+      const run = q.lastRunId === null ? null : this.d.runs.get(q.lastRunId);
+      const lastRun = run ? summary(run) : null;
+      return {
+        queueId: q.id,
+        prNumber: q.prNumber,
+        prTitle: run?.prTitle ?? null,
+        origin: q.origin,
+        status: queueRowStatus(q, lastRun, now),
+        reason: q.error,
+        message: q.errorMessage,
+        attempts: q.attempts,
+        enqueuedAt: q.enqueuedAt,
+        finishedAt: q.finishedAt,
+        notBefore: q.notBefore,
+        lastRun,
+      };
+    });
+  }
+
+  /** 一次运行的全部细节；运行已被清理时为 null。 */
+  run(id: number): LessonRunDetail | null {
+    const r = this.d.runs.get(id);
+    if (!r) return null;
+    return {
+      ...summary(r),
+      slug: r.slug, prNumber: r.prNumber, prUrl: r.prUrl, prTitle: r.prTitle, origin: r.origin,
+      message: r.message, stderrTail: r.stderrTail, ghStderr: r.ghStderr, material: r.material, rawOutput: r.rawOutput, trimmed: r.trimmed,
+      findings: parseFindings(r.findings),
+      model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens,
+      lessons: this.d.repo.runLessons(r.id),
+      attempts: this.d.runs.forPr(r.slug, r.prNumber).filter((a) => a.id !== r.id).map(summary),
     };
   }
 
@@ -92,12 +178,12 @@ export class LessonsService {
   }
 
   async act(a: LessonAction): Promise<LessonActResult> {
-    const r = await this.run(a);
+    const r = await this.dispatch(a);
     if (r.ok) this.d.notify();
     return r;
   }
 
-  private async run(a: LessonAction): Promise<LessonActResult> {
+  private async dispatch(a: LessonAction): Promise<LessonActResult> {
     const { repo } = this.d;
     const now = this.d.now();
     switch (a.op) {
@@ -159,6 +245,22 @@ export class LessonsService {
         return { ok: true };
       case "backfill":
         return this.d.runner.backfill(a.slug);
+      case "retry":
+        return fromRunner(this.d.runner.retry(a.queueId));
+      case "retryFailed":
+        this.d.runner.retryFailed(a.slug);
+        return { ok: true };
+      case "cancel":
+        return fromRunner(this.d.runner.cancel(a.queueId));
+      case "pauseQueue":
+        this.d.availability.pauseLessons();
+        return { ok: true };
+      case "resumeQueue":
+        this.d.availability.resumeLessons();
+        return { ok: true };
+      case "runNow":
+        this.d.runner.runNow();
+        return { ok: true };
       case "openSource": {
         const url = repo.source(a.sourceId)?.url;
         if (!url || !this.allowedUrl(url)) return { ok: false, reason: "bad_url" };

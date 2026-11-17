@@ -23,7 +23,7 @@ import type { HandoffRunner } from "../handoff/runner";
 import type { FeatureSummaryRunner } from "../handoff/feature-runner";
 import type { HealthService } from "../hooks/health";
 import type { PrStagesTicket } from "../../shared/pr-stages";
-import type { LessonsState } from "../../shared/lessons";
+import type { LessonQueueRowView, LessonRunDetail, LessonsState } from "../../shared/lessons";
 import type { LessonsService } from "../lessons/lessons-service";
 import type { PrStagesService } from "../prwatch/pr-stages-service";
 import type { PrOpenResult } from "../util/github-url";
@@ -43,7 +43,7 @@ import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, availabilityActionArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, apiKeyArg, availabilityActionArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
 } from "./validate";
 import { M } from "../strings";
@@ -72,7 +72,7 @@ export interface IpcDeps {
   /** 在系统浏览器里打开 PR 链接：只开 ticket 链接过、主机允许的（openKnownPr）。 */
   prOpen: (url: string) => PrOpenResult;
   /** 复盘规矩页。 */
-  lessons: Pick<LessonsService, "state" | "act" | "pendingCount">;
+  lessons: Pick<LessonsService, "state" | "act" | "pendingCount" | "runs" | "run">;
   /** Claude 可用状态；act 只有手动暂停 / 恢复复盘。 */
   availability: Pick<ClaudeAvailability, "view" | "pauseLessons" | "resumeLessons">;
   /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
@@ -356,6 +356,8 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.prOpen, (raw: unknown): PrOpenResult => d.prOpen(prUrlArg(raw)));
   handle(IPC.lessonsState, (): LessonsState => d.lessons.state());
   handle(IPC.lessonsAct, (raw: unknown) => d.lessons.act(lessonActionArg(raw)));
+  handle(IPC.lessonsRuns, (raw: unknown): LessonQueueRowView[] => d.lessons.runs(lessonSlugArg(raw)));
+  handle(IPC.lessonsRun, (raw: unknown): LessonRunDetail | null => d.lessons.run(lessonRunIdArg(raw)));
   handle(IPC.lessonsPending, (): number => d.lessons.pendingCount());
   handle(IPC.availabilityGet, (): AvailabilityView => d.availability.view());
   handle(IPC.availabilityAct, (raw: unknown): void => {

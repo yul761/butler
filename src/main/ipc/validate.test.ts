@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
-import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -244,8 +244,31 @@ describe("lessonActionArg", () => {
       { op: "removeFromProduct", id: 1, slug: "a/b" },
       { op: "backfill", slug: "a/b" },
       { op: "openSource", sourceId: 1 },
+      { op: "retry", queueId: 1 },
+      { op: "retryFailed", slug: "a/b" },
+      { op: "cancel", queueId: 2 },
+      { op: "pauseQueue" },
+      { op: "resumeQueue" },
+      { op: "runNow" },
     ];
     for (const a of valid) expect(lessonActionArg(a), a.op).toEqual(a);
+  });
+
+  it("lessonActionArg accepts the queue ops and rejects a non-integer queueId", () => {
+    expect(lessonActionArg({ op: "retry", queueId: 3 })).toEqual({ op: "retry", queueId: 3 });
+    expect(lessonActionArg({ op: "pauseQueue", extra: 1 })).toEqual({ op: "pauseQueue" });
+    for (const bad of [1.5, 0, -1, "1", null, undefined, NaN]) {
+      expect(() => lessonActionArg({ op: "cancel", queueId: bad })).toThrow();
+      expect(() => lessonActionArg({ op: "retry", queueId: bad })).toThrow();
+    }
+    expect(() => lessonActionArg({ op: "retryFailed" })).toThrow();
+  });
+
+  it("lessonRunIdArg rejects 0 and strings", () => {
+    expect(lessonRunIdArg(7)).toBe(7);
+    for (const bad of [0, -1, 1.5, "1", null, undefined]) expect(() => lessonRunIdArg(bad)).toThrow();
+    expect(lessonSlugArg("a/b")).toBe("a/b");
+    expect(() => lessonSlugArg("")).toThrow();
   });
 
   it("returns valid actions, trimming text and names", () => {
