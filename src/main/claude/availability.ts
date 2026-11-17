@@ -78,10 +78,15 @@ export class ClaudeAvailability {
     this.commit();
   }
 
-  /** 一次成功：清掉限流 / 模型不可用的暂停。运行开始得比当前这次撞限还早（startedAt < current.at）时，它的成功说明不了现在，什么都不改。 */
+  /**
+   * 一次成功：清掉限流 / 模型不可用的暂停。运行开始得比当前这次撞限还早（startedAt < current.at）时，它的成功说明不了现在，什么都不改。
+   * 撞限时给了重置时间、还没到（resetsAt 或 retryAt 在将来）：只有 lessons 自己的成功才清，别的 job（judge 等，可能用的是别的模型 / 额度）不清。
+   */
   noteSuccess(startedAt: number, job: string | null): void {
     const s = this.s;
     if (s.current !== null && startedAt < s.current.at) return;
+    const resetsAt = s.current?.resetsAt ?? null;
+    if (job !== "lessons" && resetsAt !== null && Math.max(resetsAt, s.retryAt ?? 0) > this.d.now()) return;
     const keepModel = s.lessonsPause?.reason === "model" && job !== "lessons";
     let changed = false;
     if (s.current !== null && !(keepModel && s.current.kind === "model_unavailable")) {

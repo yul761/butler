@@ -108,6 +108,44 @@ describe("ClaudeAvailability", () => {
     expect((s.a.view().retryAt! - s.clock.t) / MIN).toBe(10);
   });
 
+  it("a non-lessons success does not clear a limit whose reset time is still ahead; after it, or from lessons, it does", () => {
+    const s = setup();
+    s.a.report(usage({ resetsAt: T0 + 30 * MIN }));
+    const before = s.a.view();
+    const [saves, changes] = [s.saves(), s.changes()];
+    s.clock.t += MIN;
+    s.a.noteSuccess(s.clock.t, "judge");
+    expect(s.a.view()).toEqual(before);
+    expect(s.a.lessonsGate(s.clock.t).paused).toBe(true);
+    expect([s.saves(), s.changes()]).toEqual([saves, changes]);
+    // 到了重置时间、还在 60 秒的余量里：仍然不清。
+    s.clock.t = T0 + 30 * MIN + 1;
+    s.a.noteSuccess(s.clock.t, "judge");
+    expect(s.a.view()).toEqual(before);
+    // 过了 retryAt：清。
+    s.clock.t = before.retryAt! + 1;
+    s.a.noteSuccess(s.clock.t, "judge");
+    expect(s.a.view()).toMatchObject({ state: "ok", current: null, retryAt: null, lessonsPause: null });
+  });
+
+  it("a lessons success clears a limit even while its reset time is ahead", () => {
+    const s = setup();
+    s.a.report(usage({ resetsAt: T0 + 30 * MIN }));
+    s.clock.t += MIN;
+    s.a.noteSuccess(s.clock.t, "lessons");
+    expect(s.a.view()).toMatchObject({ state: "ok", current: null, retryAt: null, lessonsPause: null });
+    expect(s.a.lessonsGate(s.clock.t)).toEqual({ paused: false });
+  });
+
+  it("a non-lessons success clears a limit that has no reset time", () => {
+    const s = setup();
+    s.a.report(usage({ job: "judge" }));
+    expect(s.a.view().lessonsPause?.reason).toBe("limit");
+    s.clock.t += MIN;
+    s.a.noteSuccess(s.clock.t, "judge");
+    expect(s.a.view()).toMatchObject({ state: "ok", current: null, retryAt: null, lessonsPause: null });
+  });
+
   it("noteSuccess clears a model pause only for lessons", () => {
     const s = setup();
     s.a.report(usage({ kind: "model_unavailable", job: "lessons" }));
