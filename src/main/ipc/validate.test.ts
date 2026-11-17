@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
-import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -267,6 +267,10 @@ describe("lessonActionArg", () => {
   it("lessonRunIdArg rejects 0 and strings", () => {
     expect(lessonRunIdArg(7)).toBe(7);
     for (const bad of [0, -1, 1.5, "1", null, undefined]) expect(() => lessonRunIdArg(bad)).toThrow();
+    expect(() => lessonRunIdArg(0)).toThrow("invalid lesson run id");
+    expect(() => lessonQueueIdArg(0)).toThrow("invalid lesson queue id");
+    expect(lessonQueueIdArg(3)).toBe(3);
+    expect(() => lessonActionArg({ op: "cancel", queueId: 0 })).toThrow("invalid lesson queue id");
     expect(lessonSlugArg("a/b")).toBe("a/b");
     expect(() => lessonSlugArg("")).toThrow();
   });

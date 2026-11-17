@@ -296,6 +296,11 @@ export function lessonSlugArg(v: unknown): string {
   return v;
 }
 
+export function lessonQueueIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error("invalid lesson queue id");
+  return v;
+}
+
 export function lessonRunIdArg(v: unknown): number {
   if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error("invalid lesson run id");
   return v;
@@ -334,11 +339,11 @@ export function lessonActionArg(v: unknown): LessonAction {
     case "openSource":
       return { op: "openSource", sourceId: lessonIdArg(o.sourceId) };
     case "retry":
-      return { op: "retry", queueId: lessonRunIdArg(o.queueId) };
+      return { op: "retry", queueId: lessonQueueIdArg(o.queueId) };
     case "retryFailed":
       return { op: "retryFailed", slug: lessonSlugArg(o.slug) };
     case "cancel":
-      return { op: "cancel", queueId: lessonRunIdArg(o.queueId) };
+      return { op: "cancel", queueId: lessonQueueIdArg(o.queueId) };
     case "pauseQueue":
       return { op: "pauseQueue" };
     case "resumeQueue":

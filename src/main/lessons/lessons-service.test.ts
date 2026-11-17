@@ -254,7 +254,11 @@ const qrow = (over: Partial<LessonQueueRow>): LessonQueueRow => ({
 describe("queueRowStatus", () => {
   it("maps limited, waiting and cancelled", () => {
     expect(queueRowStatus(qrow({ status: "running" }), null, 10)).toBe("running");
-    expect(queueRowStatus(qrow({ status: "queued" }), { status: "limited" }, 10)).toBe("limited");
+    const limit = { paused: true, reason: "limit" } as const;
+    expect(queueRowStatus(qrow({ status: "queued" }), { status: "limited" }, 10, limit)).toBe("limited");
+    expect(queueRowStatus(qrow({ status: "queued" }), { status: "limited" }, 10)).toBe("queued");
+    expect(queueRowStatus(qrow({ status: "queued", notBefore: 50 }), { status: "limited" }, 10)).toBe("waiting");
+    expect(queueRowStatus(qrow({ status: "queued" }), { status: "limited" }, 10, { paused: true, reason: "manual" })).toBe("queued");
     expect(queueRowStatus(qrow({ status: "queued", notBefore: 50 }), null, 10)).toBe("waiting");
     expect(queueRowStatus(qrow({ status: "queued", notBefore: 5 }), null, 10)).toBe("queued");
     expect(queueRowStatus(qrow({ status: "skipped", error: "cancelled" }), null, 10)).toBe("cancelled");
@@ -288,7 +292,7 @@ describe("LessonsService queue views", () => {
   });
 
   it("runs lists queue rows with their last run", () => {
-    const { svc, repo, runs } = setup();
+    const { svc, repo, runs, gate } = setup();
     repo.enqueue("acme/web", [5, 6], "merged", 1);
     const a = repo.take(1)!;
     const runId = runs.start({ queueId: a.id, slug: "acme/web", prNumber: 5, origin: "merged", startedAt: 10 });
@@ -296,7 +300,10 @@ describe("LessonsService queue views", () => {
     repo.defer(a.id, 99999, runId);
     const rows = svc.runs("acme/web");
     const r5 = rows.find((r) => r.prNumber === 5)!;
-    expect(r5).toMatchObject({ queueId: a.id, prTitle: "Fix it", status: "limited", notBefore: 99999, origin: "merged" });
+    expect(r5.status).toBe("waiting");
+    gate.value = { paused: true, reason: "limit", until: 99999, message: null };
+    expect(svc.runs("acme/web").find((r) => r.prNumber === 5)!.status).toBe("limited");
+    expect(r5).toMatchObject({ queueId: a.id, prTitle: "Fix it", notBefore: 99999, origin: "merged" });
     expect(r5.lastRun).toEqual({ id: runId, status: "limited", reason: "usage_limit", startedAt: 10, finishedAt: 20, created: 1, hit: 0, dropped: 0, costUsd: 0.5, durationMs: 1000 });
     const r6 = rows.find((r) => r.prNumber === 6)!;
     expect(r6).toMatchObject({ status: "queued", lastRun: null, prTitle: null });

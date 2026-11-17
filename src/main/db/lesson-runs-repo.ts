@@ -1,4 +1,4 @@
-import { RUN_MESSAGE_MAX, type LessonRunReason, type LessonRunStatus } from "../../shared/lessons";
+import { RUN_MESSAGE_MAX, type LessonOrigin, type LessonRunReason, type LessonRunStatus } from "../../shared/lessons";
 import { withTransaction, type Db } from "./database";
 
 export const RUN_CAPS = { message: RUN_MESSAGE_MAX, stderrTail: 8192, ghStderr: 4096, material: 65536, rawOutput: 65536, findings: 65536 } as const;
@@ -25,7 +25,7 @@ export function capTail(s: string, max: number): string {
   return `[… ${start} chars cut]\n${s.slice(start)}`;
 }
 
-export interface NewLessonRun { queueId: number | null; slug: string; prNumber: number; origin: string; startedAt: number }
+export interface NewLessonRun { queueId: number | null; slug: string; prNumber: number; origin: LessonOrigin; startedAt: number }
 export interface LessonRunFinish {
   status: Exclude<LessonRunStatus, "running">;
   reason: LessonRunReason | null;
@@ -52,7 +52,7 @@ export interface LessonRunRow {
   queueId: number | null;
   slug: string;
   prNumber: number;
-  origin: string;
+  origin: LessonOrigin;
   status: LessonRunStatus;
   reason: LessonRunReason | null;
   message: string | null;
@@ -77,7 +77,7 @@ export interface LessonRunRow {
 }
 
 interface Row {
-  id: number; queue_id: number | null; repo_slug: string; pr_number: number; origin: string; status: LessonRunStatus; reason: string | null;
+  id: number; queue_id: number | null; repo_slug: string; pr_number: number; origin: LessonOrigin; status: LessonRunStatus; reason: string | null;
   message: string | null; stderr_tail: string | null; gh_stderr: string | null; pr_title: string | null; pr_url: string | null;
   material: string | null; raw_output: string | null; findings_json: string | null; trimmed: number;
   created: number; hit: number; dropped: number; model: string | null; cost_usd: number | null;

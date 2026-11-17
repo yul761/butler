@@ -3,7 +3,7 @@ import type {
   Lesson, LessonAction, LessonActResult, LessonFinding, LessonProductView, LessonQueueRowStatus, LessonQueueRowView, LessonQueueView, LessonRepoView,
   LessonRunDetail, LessonRunSummary, LessonsState, LessonUnknownRepo,
 } from "../../shared/lessons";
-import type { ClaudeAvailability } from "../claude/availability";
+import type { ClaudeAvailability, LessonsGate } from "../claude/availability";
 import type { LessonRunRow, LessonRunsRepo } from "../db/lesson-runs-repo";
 import type { LessonQueueRow, LessonsRepo } from "../db/lessons-repo";
 import { AnalysisSchema } from "./analyze";
@@ -32,11 +32,11 @@ export interface LessonsServiceDeps {
 
 export type { LessonActResult };
 
-/** 队列项在页面上的状态：running、limited、waiting、cancelled 是从底层状态加上最近一次运行推出来的。now 由调用方传入。 */
-export function queueRowStatus(row: Pick<LessonQueueRow, "status" | "error" | "notBefore">, lastRun: Pick<LessonRunSummary, "status"> | null, now: number): LessonQueueRowStatus {
+/** 队列项在页面上的状态（limited 只在限额暂停期间显示，闸门开了或手动暂停都不算）：running、limited、waiting、cancelled 是从底层状态加上最近一次运行推出来的。now 由调用方传入。 */
+export function queueRowStatus(row: Pick<LessonQueueRow, "status" | "error" | "notBefore">, lastRun: Pick<LessonRunSummary, "status"> | null, now: number, gate: Pick<LessonsGate, "paused"> & { reason?: string } = { paused: false }): LessonQueueRowStatus {
   if (row.status === "running") return "running";
   if (row.status === "queued") {
-    if (lastRun?.status === "limited") return "limited";
+    if (lastRun?.status === "limited" && gate.paused && gate.reason !== "manual") return "limited";
     if (row.notBefore !== null && row.notBefore > now) return "waiting";
     return "queued";
   }
@@ -138,6 +138,7 @@ export class LessonsService {
   /** 某个仓库的队列项，各带最近一次运行。 */
   runs(slug: string): LessonQueueRowView[] {
     const now = this.d.now();
+    const gate = this.d.availability.lessonsGate(now);
     return this.d.repo.queueRows(slug).map((q) => {
       const run = q.lastRunId === null ? null : this.d.runs.get(q.lastRunId);
       const lastRun = run ? summary(run) : null;
@@ -146,7 +147,7 @@ export class LessonsService {
         prNumber: q.prNumber,
         prTitle: run?.prTitle ?? null,
         origin: q.origin,
-        status: queueRowStatus(q, lastRun, now),
+        status: queueRowStatus(q, lastRun, now, gate),
         reason: q.error,
         message: q.errorMessage,
         attempts: q.attempts,

@@ -49,6 +49,8 @@ export interface Lesson {
   sources: LessonSource[];
 }
 
+export type LessonOrigin = "backfill" | "merged" | "daily";
+
 export type LessonQueueRowStatus = "queued" | "waiting" | "limited" | "running" | "done" | "skipped" | "cancelled" | "failed";
 
 export interface LessonRunSummary {
@@ -69,7 +71,7 @@ export interface LessonQueueRowView {
   queueId: number;
   prNumber: number;
   prTitle: string | null;
-  origin: string;
+  origin: LessonOrigin;
   status: LessonQueueRowStatus;
   reason: string | null;
   message: string | null;
@@ -93,7 +95,7 @@ export interface LessonRunDetail extends LessonRunSummary {
   prNumber: number;
   prUrl: string | null;
   prTitle: string | null;
-  origin: string;
+  origin: LessonOrigin;
   message: string | null;
   stderrTail: string | null;
   ghStderr: string | null;

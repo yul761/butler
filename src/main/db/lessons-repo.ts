@@ -1,4 +1,4 @@
-import type { Lesson, LessonProductView, LessonScope, LessonSource, LessonStatus } from "../../shared/lessons";
+import type { Lesson, LessonOrigin, LessonProductView, LessonScope, LessonSource, LessonStatus } from "../../shared/lessons";
 import { withTransaction, type Db } from "./database";
 import { capHead, RUN_CAPS } from "./lesson-runs-repo";
 
@@ -10,7 +10,7 @@ export interface LessonRepoRow {
   lastAnalyzedAt: number | null;
   analyzedCount: number;
 }
-export interface QueueItem { id: number; slug: string; prNumber: number; origin: "backfill" | "merged" | "daily"; attempts: number }
+export interface QueueItem { id: number; slug: string; prNumber: number; origin: LessonOrigin; attempts: number }
 export interface LessonQueueRow {
   id: number;
   prNumber: number;
