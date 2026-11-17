@@ -218,11 +218,14 @@ export class TicketPrsRepo {
     this.db.prepare(`UPDATE ticket_prs SET merged_handled_at = ? WHERE id = ?`).run(at, id);
   }
 
-  /** 仓库换了分支：删掉旧分支找到的、还没合并的行（branch / backfill 来源）。合并的和 handoff 来源的留着。返回删了几行。 */
+  /**
+   * 仓库换了分支：删掉旧分支找到的、还开着的行（branch / backfill 来源）。合并的、关闭的（连同它们的进度事件）和 handoff 来源的留着。
+   * 返回删了几行。
+   */
   pruneStale(repoId: number, currentBranch: string): number {
     const res = this.db
       .prepare(
-        `DELETE FROM ticket_prs WHERE repo_id = ? AND source IN ('branch','backfill') AND head_branch IS NOT ? AND state != 'merged'`,
+        `DELETE FROM ticket_prs WHERE repo_id = ? AND source IN ('branch','backfill') AND head_branch IS NOT ? AND state = 'open'`,
       )
       .run(repoId, currentBranch);
     return Number(res.changes);

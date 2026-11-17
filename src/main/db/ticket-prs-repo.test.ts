@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { memDb } from "../test-utils";
 import type { Db } from "./database";
+import { PrStageRepo } from "./pr-stage-repo";
 import { linkedOpen, PR_READ_GIVE_UP, PR_READ_RETRY_MS, prGivenUp, TicketPrsRepo, type NewPrLink } from "./ticket-prs-repo";
 import { TicketsRepo } from "./tickets-repo";
 
@@ -141,6 +142,19 @@ describe("TicketPrsRepo", () => {
     expect(prs.get(stale.id)).toBeNull();
     expect(prs.get(staleBackfill.id)).toBeNull();
     for (const p of [merged, handoff, current]) expect(prs.get(p.id)).not.toBeNull();
+  });
+
+  it("pruneStale keeps a closed PR of an old head branch, and with it its stage events", () => {
+    const { db, prs, repoId } = setup();
+    const stages = new PrStageRepo(db);
+    const closed = prs.link(link({ url: "u/1", number: 1, repoId, headBranch: "old", state: "closed" })).pr;
+    stages.add(
+      { ticketKey: "T-1", repoId, prId: closed.id, branch: "old", featureId: null, epicId: null, sessionId: null, kind: "closed", at: 5, data: { number: 1 } },
+      "closed:1",
+    );
+    expect(prs.pruneStale(repoId, "feat")).toBe(0);
+    expect(prs.get(closed.id)).not.toBeNull();
+    expect(stages.forTicket("T-1").map((e) => e.kind)).toEqual(["closed"]);
   });
 
   it("deleting the ticket repo sets repo_id to null", () => {

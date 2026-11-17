@@ -203,7 +203,7 @@ export class PrWatcher {
     await this.part("roundDone", () => this.d.roundDone?.());
   }
 
-  /** ticket 换了分支（C-S3）：删掉旧分支找到的、没合并的 PR 行；分支行换成新分支的、没查过的。 */
+  /** ticket 换了分支（C-S3）：删掉旧分支找到的、还开着的 PR 行；分支行换成新分支的、没查过的。 */
   private prune(tickets: Pick<Ticket, "key" | "repos">[], marks: Marks): void {
     for (const t of tickets) {
       for (const r of t.repos) {
