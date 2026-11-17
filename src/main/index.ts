@@ -36,6 +36,7 @@ import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
 import { CiDelivery } from "./prwatch/ci-delivery";
 import { prHandoff } from "./prwatch/pr-handoff";
+import { runPrBackfill } from "./prwatch/pr-backfill";
 import { PrLinker } from "./prwatch/pr-links";
 import { PrWatcher } from "./prwatch/pr-watcher";
 import { makeWhoOf } from "./gate/who";
@@ -1326,7 +1327,23 @@ async function bootstrap(): Promise<void> {
   holdWatcher.start(Number(process.env.BUTLER_GATE_CHECK_MS) || HOLD_CHECK_MS);
   // 等 git 和 gh 的路径按登录 shell 的 PATH 解析好再查：第一轮就可能看到合并、触发 worktree 清理。已经开始退出就不再启动。
   void healthReady.then(() => {
-    if (!headlessAbort.signal.aborted) prWatcher.start();
+    if (headlessAbort.signal.aborted) return;
+    prWatcher.start();
+    // 一次性补链接所有 ticket（含归档）的 PR；后台跑，失败下次启动重试。
+    void runPrBackfill({
+      tickets: () => tickets.list({ includeArchived: true }),
+      linker: prLinker,
+      prs: ticketPrs,
+      handoffPrs: (key) => handoffs.allPrs(key),
+      holds: () => gateRepo.prHolds(),
+      sessionTicket: (s) => sessions.get(s)?.ticketKey ?? null,
+      prsForBranch,
+      ghWorkDir: (r) => ticketService.ghWorkDir(r),
+      jobs,
+      now: Date.now,
+      log: logger,
+      soon: (repoId) => prWatcher.soon(repoId),
+    }).catch((e: unknown) => logger("pr backfill failed", e));
   });
   void healthReady.then(() => {
     if (!headlessAbort.signal.aborted) lessonRunner.start();

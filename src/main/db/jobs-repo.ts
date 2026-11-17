@@ -8,7 +8,9 @@ export const JOB_MORNING = "morning_brief";
 export const JOB_PATROL = "butler_patrol";
 /** 复盘规矩：每天拉一次各仓库新合并的 PR。 */
 export const JOB_LESSONS_DAILY = "lessons_daily";
-export type JobName = typeof JOB_NIGHTLY | typeof JOB_MORNING | typeof JOB_PATROL | typeof JOB_LESSONS_DAILY;
+/** 一次性：给所有 ticket（含归档）补链接 PR。记成 ok 之后不再跑。 */
+export const JOB_PR_BACKFILL = "pr_backfill";
+export type JobName = typeof JOB_NIGHTLY | typeof JOB_MORNING | typeof JOB_PATROL | typeof JOB_LESSONS_DAILY | typeof JOB_PR_BACKFILL;
 
 export type JobState = JobStateView;
 
