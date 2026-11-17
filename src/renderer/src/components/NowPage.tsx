@@ -46,7 +46,7 @@ export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup
         <h2>{S.nowTitle}</h2>
         <span className="muted">{S.nowRunning(view.running)}</span>
       </header>
-      {view.notices.map((n, i) => <Notice key={i} notice={n} now={now} onOpen={onOpen} onGo={onGo} />)}
+      {view.notices.map((n) => <Notice key={noticeKey(n)} notice={n} now={now} onOpen={onOpen} onGo={onGo} />)}
       {/* 实况（BTL-190 第 7 点）：没人在干活时它说“现在没有正在进行的工作”，下面的列表可能是空的。 */}
       <LiveWindow view={view} onOpen={onOpen} />
       {needsYouTotal(view) > 0 && <NeedsYou view={view} now={now} onOpen={onOpen} />}
@@ -64,6 +64,12 @@ export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup
 }
 
 /** 顶上的一条提醒：一句话加几个按钮；恢复、重试都是让复盘队列重新开始。 */
+function noticeKey(n: NowNotice): string {
+  if (n.kind !== "session_limited") return n.kind;
+  const t = n.target;
+  return `session_limited:${t.page}:${"key" in t ? t.key : "id" in t ? t.id : ""}:${t.sessionId ?? ""}`;
+}
+
 function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: number; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
   const { text, actions } = noticeText(n, S, now);
   const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen };

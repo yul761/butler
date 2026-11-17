@@ -16,6 +16,15 @@ describe("buildNotices", () => {
     expect(buildNotices({ availability: free, recentRuns: [] })).toEqual([{ kind: "claude_limited", hit: h, retryAt: null, lessonsPaused: false }]);
   });
 
+  it("a manual pause during a limit gives claude_limited unpaused plus lessons_paused", () => {
+    const h = hit("usage_limit");
+    const a = view({ state: "limited", current: h, retryAt: 5000, lessonsPause: { reason: "manual", since: 1, until: null } });
+    expect(buildNotices({ availability: a, recentRuns: [] })).toEqual([
+      { kind: "claude_limited", hit: h, retryAt: 5000, lessonsPaused: false },
+      { kind: "lessons_paused" },
+    ]);
+  });
+
   it("model unavailable gives its own notice", () => {
     const h = hit("model_unavailable");
     expect(buildNotices({ availability: view({ state: "model_unavailable", current: h, retryAt: 9 }), recentRuns: [] })).toEqual([{ kind: "model_unavailable", hit: h, retryAt: 9 }]);

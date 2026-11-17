@@ -13,8 +13,8 @@ export function buildNotices(i: { availability: AvailabilityView; recentRuns: { 
   const { current, retryAt, lessonsPause } = i.availability;
   const out: NowNotice[] = [];
   if (current !== null) {
-    if (current.kind === "model_unavailable") out.push({ kind: "model_unavailable", hit: current, retryAt });
-    else out.push({ kind: "claude_limited", hit: current, retryAt, lessonsPaused: lessonsPause?.reason === "limit" });
+    if (i.availability.state === "model_unavailable") out.push({ kind: "model_unavailable", hit: current, retryAt });
+    else if (i.availability.state === "limited") out.push({ kind: "claude_limited", hit: current, retryAt, lessonsPaused: lessonsPause?.reason === "limit" });
   }
   if (lessonsPause?.reason === "manual") out.push({ kind: "lessons_paused" });
   let failed = 0;
