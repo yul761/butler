@@ -12,8 +12,12 @@ import { LessonsService, queueRowStatus } from "./lessons-service";
 const git = (p: string): string | null => (p.startsWith("/none") ? null : `git@github.com:${p.slice(1).replace("_", "/")}.git`);
 const src = { prNumber: 1, url: "https://github.com/acme/web/pull/1", slug: "acme/web", runId: null };
 
+// path.join 在 Windows 上用反斜杠：比较前先统一成 /。
+const posix = (p: string): string => p.replace(/\\/g, "/");
+
 const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: string) => boolean } = {}) => {
-  const exists = over.exists ?? ((p: string) => !p.startsWith("/none") || !p.endsWith(".git"));
+  const given = over.exists;
+  const exists = given ? (p: string) => given(posix(p)) : (p: string) => !posix(p).startsWith("/none") || !posix(p).endsWith(".git");
   const db = memDb();
   const repo = new LessonsRepo(db);
   const runs = new LessonRunsRepo(db);
