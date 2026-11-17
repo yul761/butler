@@ -124,10 +124,10 @@ export class LessonRunner {
     return n;
   }
 
-  /** 「现在就跑」：解除暂停，等待中的项马上可取。 */
+  /** 「现在就跑」：等待中的项马上可取，再解除暂停。顺序要紧：resumeLessons 会同步触发订阅的 pump，那时 not_before 必须已经清掉。 */
   runNow(): void {
-    this.d.availability.resumeLessons();
     this.d.repo.clearNotBefore();
+    this.d.availability.resumeLessons();
     this.pump();
   }
 

@@ -23,8 +23,8 @@ export interface HeadlessExecDeps {
   onUsage?: (u: { runId: string; label: string; at: number; model: string | null; usage: UsageCounts }) => void;
   /** 失败里带限流 / 模型不可用时调用；job 是 jobOf(label)。抛错只记日志。 */
   onLimit?: (hit: LimitHit, job: string) => void;
-  /** 成功时调用。抛错只记日志。 */
-  onSuccess?: (at: number, job: string) => void;
+  /** 成功时调用；startedAt 是这次运行开始的时间（比限流记录早的成功说明不了现在）。抛错只记日志。 */
+  onSuccess?: (startedAt: number, job: string) => void;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -46,6 +46,7 @@ export async function execHeadlessJson(
   const { path, pathValue } = d.claude();
   if (!path) return { ok: false, reason: "claude_missing", message: M().claudeMissing, limit: null, stderr: "", result: null, rawText: null };
   const runId = d.newRunId();
+  const startedAt = d.now();
   const out = await d.run({
     claudePath: path, args: o.args, prompt: o.prompt, cwd: o.cwd,
     env: headlessEnv(d.baseEnv, { pathValue, runId }),
@@ -75,6 +76,6 @@ export async function execHeadlessJson(
     const rawText = out.result ? out.result.resultText || JSON.stringify(out.result.structured ?? null) : null;
     return { ok: false, reason: out.reason, message: out.message, limit: out.limit, stderr: out.stderr, result: out.result, rawText };
   }
-  hook("onSuccess", () => d.onSuccess?.(d.now(), job));
+  hook("onSuccess", () => d.onSuccess?.(startedAt, job));
   return { ok: true, value: pickStructured(out.result), rawText: out.result.resultText || JSON.stringify(out.result.structured ?? null), result: out.result };
 }

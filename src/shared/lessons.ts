@@ -20,7 +20,7 @@ export interface LessonRunningItem {
   startedAt: number;
 }
 
-export type LessonStatus ="pending" | "confirmed" | "disabled" | "rejected";
+export type LessonStatus = "pending" | "confirmed" | "disabled" | "rejected";
 export type LessonScope = { kind: "repo"; slug: string } | { kind: "product"; productId: number };
 
 export interface LessonSource {

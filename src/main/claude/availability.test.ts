@@ -128,6 +128,20 @@ describe("ClaudeAvailability", () => {
     expect(s.a.view().current).toBeNull();
   });
 
+  it("a success from a run that started before the hit changes nothing; one that started after clears the pause", () => {
+    const s = setup(memDb(), 100);
+    s.a.report(usage());
+    const before = s.a.view();
+    const [saves, changes] = [s.saves(), s.changes()];
+    s.a.noteSuccess(50, "lessons");
+    expect(s.a.view()).toEqual(before);
+    expect(s.a.lessonsGate(100).paused).toBe(true);
+    expect([s.saves(), s.changes()]).toEqual([saves, changes]);
+    s.a.noteSuccess(150, "lessons");
+    expect(s.a.view()).toMatchObject({ state: "ok", current: null, retryAt: null, lessonsPause: null });
+    expect(s.a.lessonsGate(150)).toEqual({ paused: false });
+  });
+
   it("noteSuccess with nothing to clear does not save or emit", () => {
     const s = setup();
     const [saves, changes] = [s.saves(), s.changes()];

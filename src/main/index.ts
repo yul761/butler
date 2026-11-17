@@ -449,7 +449,7 @@ async function bootstrap(): Promise<void> {
   /** headless 运行报告限流 / 成功给可用状态。 */
   const availabilityHooks = {
     onLimit: (hit: LimitHit, job: string) => availability.report({ ...hit, source: "headless", job, sessionId: null }),
-    onSuccess: (at: number, job: string) => availability.noteSuccess(at, job),
+    onSuccess: (startedAt: number, job: string) => availability.noteSuccess(startedAt, job),
   };
   /** 卡住判断和「需要你」判断共用的 headless 设置。 */
   const judgeDeps: HeadlessExecDeps = {
@@ -1378,9 +1378,11 @@ async function bootstrap(): Promise<void> {
       soon: (repoId) => prWatcher.soon(repoId),
     }).catch((e: unknown) => logger("pr backfill failed", e));
   });
-  void healthReady.then(() => {
-    if (!headlessAbort.signal.aborted) lessonRunner.start();
-  });
+  void healthReady
+    .then(() => {
+      if (!headlessAbort.signal.aborted) lessonRunner.start();
+    })
+    .catch((e: unknown) => logger("lessons: starting the runner failed", e));
   activityMonitor.start();
   usageScanner.start(usageScanMs(process.env));
   void runDiscovery();

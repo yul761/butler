@@ -185,11 +185,15 @@ describe("LessonRunner queue", () => {
       return fail("aborted");
     });
     s.repo.enqueue("acme/web", [1], "merged", T0);
+    const earlier = s.runs.start({ queueId: s.queueId(1), slug: "acme/web", prNumber: 1, origin: "merged", startedAt: T0 - 5000 });
+    s.runs.finish(earlier, { status: "failed", reason: "timeout", finishedAt: T0 - 4000 });
+    s.db.prepare(`UPDATE lesson_queue SET last_run_id = ?`).run(earlier);
     s.runner.start();
     await s.runner.idle();
     expect(s.run).toHaveBeenCalledTimes(1);
     expect(s.lastRun(1)).toMatchObject({ status: "aborted", reason: "app_quit" });
-    expect(s.statusOf(1)).toMatchObject({ status: "queued", not_before: T0, attempts: 1 });
+    // defer 不带 runId：last_run_id 留着上一次的。
+    expect(s.statusOf(1)).toMatchObject({ status: "queued", not_before: T0, attempts: 1, last_run_id: earlier });
   });
 
   it("does not take when the signal is already aborted", async () => {
@@ -553,19 +557,43 @@ describe("LessonRunner availability", () => {
     expect(s.availability.lessonsGate(s.now())).toMatchObject({ paused: true, reason: "model" });
   });
 
-  it("runNow resumes a limit pause and clears not_before", async () => {
+  it("runNow resumes a limit pause and clears not_before, taking the older deferred item first", async () => {
     const s = setup();
     s.availability.report({ kind: "usage_limit", resetsAt: null, message: "limit", source: "session", job: null, sessionId: "sess" });
     s.repo.enqueue("acme/web", [1], "merged", T0);
     s.repo.defer(s.queueId(1), T0 + 3_600_000);
+    s.repo.enqueue("acme/web", [2], "merged", T0 + 1000);
     s.runner.start();
     await s.runner.idle();
     expect(s.run).not.toHaveBeenCalled();
     s.runner.runNow();
     await s.runner.idle();
     expect(s.availability.lessonsGate(s.now()).paused).toBe(false);
-    expect(s.run).toHaveBeenCalledTimes(1);
+    expect(s.gh.prLessonDataDetail.mock.calls.map((c) => c[1])).toEqual([1, 2]);
+    expect(s.run).toHaveBeenCalledTimes(2);
     expect(s.statusOf(1).status).toBe("done");
+    expect(s.statusOf(2).status).toBe("done");
+  });
+
+  it("a sibling that started before the limit and then succeeds does not lift the pause", async () => {
+    const s = setup();
+    (s.deps.headless as HeadlessExecDeps).onSuccess = (startedAt, job) => s.availability.noteSuccess(startedAt, job);
+    const pending = new Map<number, (o: HeadlessOutcome) => void>();
+    s.run.mockImplementation((req) => new Promise((res) => pending.set([1, 2, 3].find((n) => isPr(req, n))!, res)));
+    s.repo.enqueue("acme/web", [1, 2, 3], "backfill", T0);
+    s.runner.start();
+    await flush();
+    expect([...pending.keys()].sort()).toEqual([1, 2]);
+    s.advance(1000);
+    pending.get(1)!(fail("rate_limited", { message: "limit", limit: { kind: "usage_limit", resetsAt: null, message: "limit" } }));
+    await flush();
+    expect(s.availability.lessonsGate(s.now()).paused).toBe(true);
+    pending.get(2)!(noFindings);
+    await s.runner.idle();
+    expect(s.statusOf(2).status).toBe("done");
+    expect(s.availability.lessonsGate(s.now())).toMatchObject({ paused: true, reason: "limit" });
+    expect(s.statusOf(3).status).toBe("queued");
+    expect(s.run).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -604,6 +632,25 @@ describe("LessonRunner cancel and retry", () => {
     expect(s.run).not.toHaveBeenCalled();
     const r = s.lastRun(1);
     expect(r).toMatchObject({ status: "cancelled", reason: "cancelled", prTitle: "PR 1" });
+    expect(s.statusOf(1)).toMatchObject({ status: "skipped", error: "cancelled", attempts: 0, last_run_id: r.id });
+  });
+
+  it("cancel while the Butler context is loading never spawns claude", async () => {
+    const s = setup();
+    s.deps.ticketForBranch = () => "BTL-1";
+    let release!: () => void;
+    s.deps.butlerContext = () => new Promise((res) => (release = () => res({ decisions: [], learnings: [], transcripts: [] })));
+    s.repo.enqueue("acme/web", [1], "merged", T0);
+    s.runner.start();
+    await flush();
+    expect(s.gh.prLessonDataDetail).toHaveBeenCalledTimes(1);
+    expect(s.runner.cancel(s.queueId(1))).toBe("ok");
+    release();
+    await s.runner.idle();
+    expect(s.run).not.toHaveBeenCalled();
+    const r = s.lastRun(1);
+    expect(r).toMatchObject({ status: "cancelled", reason: "cancelled", prTitle: "PR 1" });
+    expect(r.material).toContain("please handle null");
     expect(s.statusOf(1)).toMatchObject({ status: "skipped", error: "cancelled", attempts: 0, last_run_id: r.id });
   });
 

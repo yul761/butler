@@ -78,8 +78,10 @@ export class ClaudeAvailability {
     this.commit();
   }
 
-  noteSuccess(_at: number, job: string | null): void {
+  /** 一次成功：清掉限流 / 模型不可用的暂停。运行开始得比当前这次撞限还早（startedAt < current.at）时，它的成功说明不了现在，什么都不改。 */
+  noteSuccess(startedAt: number, job: string | null): void {
     const s = this.s;
+    if (s.current !== null && startedAt < s.current.at) return;
     const keepModel = s.lessonsPause?.reason === "model" && job !== "lessons";
     let changed = false;
     if (s.current !== null && !(keepModel && s.current.kind === "model_unavailable")) {

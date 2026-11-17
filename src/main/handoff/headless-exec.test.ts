@@ -73,6 +73,14 @@ describe("execHeadlessJson hooks and failure detail", () => {
     expect(r).toMatchObject({ ok: true, result: { sessionId: "s1" } });
   });
 
+  it("onSuccess gets the time the run started, not when it ended", async () => {
+    const { d } = setup({ ok: true, result: result() });
+    let t = 10;
+    const onSuccess = vi.fn();
+    await execHeadlessJson({ ...d, now: () => t, run: async () => { t = 500; return { ok: true, result: result() }; }, onSuccess }, o);
+    expect(onSuccess).toHaveBeenCalledWith(10, "handoff");
+  });
+
   it("a throwing onLimit does not change the result", async () => {
     const { d } = setup(limited);
     const log = vi.fn();
