@@ -47,6 +47,14 @@ describe("sessionLessons", () => {
     expect(out.find((l) => l.text === "web-0")).toBeUndefined();
   });
 
+  it("equal rank: lower id first", () => {
+    const repo = setup();
+    const a = add(repo, { kind: "repo", slug: "acme/web" }, "first", "confirmed", 10);
+    const b = add(repo, { kind: "repo", slug: "acme/web" }, "second", "confirmed", 10);
+    expect(a).toBeLessThan(b);
+    expect(sessionLessons(repo, identity(), ["/acme_web"]).map((l) => l.text)).toEqual(["first", "second"]);
+  });
+
   it("ignores paths that resolve to no slug, and does not repeat lessons for two paths of one slug", () => {
     const repo = setup();
     add(repo, { kind: "repo", slug: "acme/web" }, "only");

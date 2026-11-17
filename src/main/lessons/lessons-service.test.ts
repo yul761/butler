@@ -197,6 +197,23 @@ describe("LessonsService product and confirm guards", () => {
     expect(repo.get(id)?.status).toBe("rejected");
   });
 
+  it("setDisabled on a pending lesson returns bad_status", async () => {
+    const { svc, repo, add } = setup();
+    const id = add("acme/web");
+    expect(await svc.act({ op: "setDisabled", id, disabled: true })).toEqual({ ok: false, reason: "bad_status" });
+    expect(repo.get(id)?.status).toBe("pending");
+  });
+
+  it("disable then enable returns to confirmed", async () => {
+    const { svc, repo, add } = setup();
+    const id = add("acme/web");
+    repo.setStatus(id, "confirmed", 1);
+    expect(await svc.act({ op: "setDisabled", id, disabled: true })).toEqual({ ok: true });
+    expect(repo.get(id)?.status).toBe("disabled");
+    expect(await svc.act({ op: "setDisabled", id, disabled: false })).toEqual({ ok: true });
+    expect(repo.get(id)?.status).toBe("confirmed");
+  });
+
   it("deleteProduct on a missing id returns product_not_found", async () => {
     const { svc } = setup();
     expect(await svc.act({ op: "deleteProduct", id: 999 })).toEqual({ ok: false, reason: "product_not_found" });

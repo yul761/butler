@@ -905,6 +905,14 @@ describe("fix sessions (design 2026-10-31)", () => {
     expect(await service.openFix({ featureId: elsewhere, stuckSessionId: stuckId })).toEqual({ ok: false, reason: "no_session" });
   });
 
+  it("openFix for a stuck session without a ticket returns no_session", async () => {
+    const { service, sessions, activities, feature, spawned } = await stuckSetup();
+    sessions.insertIfAbsent({ id: "nt", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id });
+    activities.set("nt", stuckActivity("nt"));
+    expect(await service.openFix({ featureId: feature.id, stuckSessionId: "nt" })).toEqual({ ok: false, reason: "no_session" });
+    expect(spawned).toHaveLength(1);
+  });
+
   it("refuses a missing or archived feature, and a missing claude", async () => {
     const { service, features, feature, claude, req } = await stuckSetup();
     expect(await service.openFix({ ...req, featureId: 999 })).toEqual({ ok: false, reason: "no_ticket" });

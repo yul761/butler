@@ -136,6 +136,28 @@ describe("LessonRunner queue", () => {
     for (const n of [1, 2, 3]) expect(s.statusOf(n).status).toBe("done");
   });
 
+  it("rate-limit pause: nothing is taken before RATE_LIMIT_PAUSE_MS, the item is taken after it", async () => {
+    vi.useFakeTimers();
+    try {
+      const s = setup();
+      s.run.mockResolvedValueOnce({ ok: false, reason: "rate_limited", message: "", result: null });
+      s.repo.enqueue("acme/web", [1], "backfill", T0);
+      s.runner.start();
+      await s.runner.idle();
+      expect(s.run).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_PAUSE_MS - 2000);
+      await s.runner.idle();
+      expect(s.run).toHaveBeenCalledTimes(1);
+      s.advance(RATE_LIMIT_PAUSE_MS + 1000);
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_PAUSE_MS + 1000);
+      await s.runner.idle();
+      expect(s.run).toHaveBeenCalledTimes(2);
+      expect(s.statusOf(1).status).toBe("done");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("puts an aborted run back in the queue", async () => {
     const s = setup();
     s.run.mockResolvedValueOnce({ ok: false, reason: "aborted", message: "", result: null });
@@ -426,16 +448,25 @@ describe("LessonRunner daily", () => {
   it("does not analyze an already analyzed PR again when the overlap returns it", async () => {
     const s = setup();
     s.repo.setBackfilled("acme/web", 1);
-    s.gh.mergedPrs.mockResolvedValue([{ number: 9, mergedAt: "2026-06-10T01:00:00Z", headRefName: "x" }]);
+    const cursor = "2026-06-10T01:00:00Z";
+    const overlapAfter = "2026-06-10T00:00:00Z"; // the cursor minus the one-hour overlap
+    // the PR comes back only when the call asks from the overlapped cursor
+    s.gh.mergedPrs.mockImplementation(async (_cwd, after) =>
+      after === null || after === overlapAfter ? [{ number: 9, mergedAt: cursor, headRefName: "x" }] : [],
+    );
     await s.runner.daily();
     s.runner.start();
     await s.runner.idle();
+    expect(s.gh.mergedPrs.mock.calls[0][1]).toBeNull();
     expect(s.run).toHaveBeenCalledTimes(1);
+    expect(s.repo.repo("acme/web")?.mergedCursor).toBe(cursor);
     s.advance(DAY);
     await s.runner.daily();
     await s.runner.idle();
+    expect(s.gh.mergedPrs.mock.calls[1][1]).toBe(overlapAfter);
     expect(s.run).toHaveBeenCalledTimes(1);
   });
+
 });
 
 describe("LessonRunner merged", () => {

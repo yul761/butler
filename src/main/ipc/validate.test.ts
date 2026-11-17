@@ -228,6 +228,25 @@ describe("lessonActionArg", () => {
     expect(() => lessonActionArg(null)).toThrow();
   });
 
+  it("every op accepts a valid payload", () => {
+    const valid = [
+      { op: "confirm", id: 1 },
+      { op: "confirm", id: 1, text: "t" },
+      { op: "reject", id: 1 },
+      { op: "edit", id: 1, text: "t" },
+      { op: "setDisabled", id: 1, disabled: false },
+      { op: "delete", id: 1 },
+      { op: "merge", keepId: 1, dropId: 2, text: "t" },
+      { op: "createProduct", name: "shop", slugs: ["a/b"] },
+      { op: "deleteProduct", id: 1 },
+      { op: "addToProduct", id: 1, slug: "a/b" },
+      { op: "removeFromProduct", id: 1, slug: "a/b" },
+      { op: "backfill", slug: "a/b" },
+      { op: "openSource", sourceId: 1 },
+    ];
+    for (const a of valid) expect(lessonActionArg(a), a.op).toEqual(a);
+  });
+
   it("returns valid actions, trimming text and names", () => {
     expect(lessonActionArg({ op: "backfill", slug: "acme/web" })).toEqual({ op: "backfill", slug: "acme/web" });
     expect(lessonActionArg({ op: "confirm", id: 2 })).toEqual({ op: "confirm", id: 2 });
