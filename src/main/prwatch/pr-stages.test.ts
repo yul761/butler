@@ -17,7 +17,7 @@ const human = (at: number, state: string, author = "alice") =>
 const humanId = (at: number, state: string, id: string, author = "alice") =>
   ev("review", at, { id, author, who: "human", state, body: "" });
 
-const pr = (o: Pick<NonNullable<DeriveInput["pr"]>, "number" | "url" | "state">): DeriveInput["pr"] => ({
+const pr = (o: Pick<NonNullable<DeriveInput["pr"]>, "number" | "url" | "state"> & Partial<NonNullable<DeriveInput["pr"]>>): DeriveInput["pr"] => ({
   ci: "none", review: null, mergedAt: null, closedAt: null, checkedAt: 0, ...o,
 });
 const input = (o: Partial<DeriveInput> = {}): DeriveInput => ({
@@ -58,12 +58,21 @@ describe("derivePrStages", () => {
     expect(cell(derive(input({ events, skillTrackingSince: null })), "design").state).toBe("unknown");
   });
 
-  it("design done at feature level only when the upper design predates the ticket", () => {
+  it("design done at feature level only when the upper design predates the first commit", () => {
     const events = [ev("first_commit", 120)];
     const before = { ...design(90), ticketKey: null, featureId: 3 };
-    const after = { ...design(105), ticketKey: null, featureId: 3 };
+    const after = { ...design(130), ticketKey: null, featureId: 3 };
     expect(cell(derive(input({ events, upperDesign: [before] })), "design").state).toBe("feature_level");
     expect(cell(derive(input({ events, upperDesign: [after] })), "design").state).toBe("skipped");
+  });
+
+  it("feature-level design after ticket creation but before the first commit counts", () => {
+    const upper = { ...design(110), ticketKey: null, featureId: 3 };
+    const v = derive(input({ events: [ev("first_commit", 120)], upperDesign: [upper] }));
+    expect(cell(v, "design")).toMatchObject({ state: "feature_level", at: 120 });
+    // 没有 first_commit 时以 pr_opened 为开发开始。
+    const opened = derive(input({ events: [ev("pr_opened", 130)], upperDesign: [{ ...design(125), ticketKey: null, featureId: 3 }] }));
+    expect(cell(opened, "design").state).toBe("feature_level");
   });
 
   it("CI failure then push starts round 2 back at dev", () => {
@@ -120,11 +129,14 @@ describe("derivePrStages", () => {
     expect(v.timeline.some((t) => t.kind === "human_approved")).toBe(false);
   });
 
-  it("closed → closed=true, from the event or from the PR row", () => {
-    const v = derive(input({ events: [ev("first_commit", 120), ev("closed", 130, { number: 7 })] }));
+  it("closed follows the PR row: true only when the row is closed", () => {
+    const closedRow = pr({ number: 7, url: "u", state: "closed", closedAt: 130, checkedAt: 500 });
+    const v = derive(input({ pr: closedRow, events: [ev("first_commit", 120), ev("closed", 130, { number: 7 })] }));
     expect(v.closed).toBe(true);
     expect(v.timeline.at(-1)?.kind).toBe("closed");
-    expect(derive(input({ pr: pr({ number: 7, url: "u", state: "closed" }) })).closed).toBe(true);
+    expect(derive(input({ pr: closedRow })).closed).toBe(true);
+    expect(derive(input({ events: [ev("first_commit", 120), ev("closed", 130, { number: 7 })] })).closed).toBe(false);
+    expect(derive(input({ pr: null, events: [ev("first_commit", 120)] })).closed).toBe(false);
   });
 
   it("a report during CI lands on the timeline at the ci stage", () => {
@@ -164,12 +176,34 @@ describe("derivePrStages", () => {
     expect(cell(derive(input({ skillTrackingSince: null })), "design").state).toBe("unknown");
   });
 
-  it("states freeze after a closed event; a closed PR row alone does not freeze", () => {
-    const v = derive(input({ events: [ev("first_commit", 120), ev("closed", 130), ci(140, "pending")] }));
+  it("states freeze after the closed event of a closed PR; a closed row without one freezes at closedAt", () => {
+    const closedRow = pr({ number: 7, url: "u", state: "closed", closedAt: 130, checkedAt: 500 });
+    const v = derive(input({ pr: closedRow, events: [ev("first_commit", 120), ev("closed", 130), ci(140, "pending")] }));
     expect(cell(v, "ci").state).toBe("todo");
     expect(v.timeline.map((t) => t.kind)).toEqual(["first_commit", "closed", "ci_pending"]);
-    const row = derive(input({ pr: pr({ number: 7, url: "u", state: "closed" }), events: [ev("first_commit", 120), ci(140, "pending")] }));
-    expect(cell(row, "ci").state).toBe("active");
+    const row = derive(input({ pr: closedRow, events: [ev("first_commit", 120), ci(140, "pending")] }));
+    expect(cell(row, "ci").state).toBe("todo");
+    expect(row.timeline.map((t) => [t.at, t.kind])).toEqual([[120, "first_commit"], [130, "closed"], [140, "ci_pending"]]);
+    // closedAt 不会晚于 checkedAt；没有 closedAt 用 checkedAt。
+    const late = derive(input({ pr: pr({ number: 7, url: "u", state: "closed", closedAt: 900, checkedAt: 135 }), events: [ev("first_commit", 120), ci(140, "pending")] }));
+    expect(late.timeline.find((t) => t.kind === "closed")?.at).toBe(135);
+    const noTime = derive(input({ pr: pr({ number: 7, url: "u", state: "closed", checkedAt: 135 }), events: [ev("first_commit", 120), ci(140, "pending")] }));
+    expect(noTime.timeline.find((t) => t.kind === "closed")?.at).toBe(135);
+    expect(cell(noTime, "ci").state).toBe("todo");
+  });
+
+  it("a closed then reopened PR is not frozen", () => {
+    const v = derive(input({ events: [ev("first_commit", 120), ev("pr_opened", 125), ev("closed", 130, { number: 7 }), ci(140, "pending")] }));
+    expect(v.closed).toBe(false);
+    expect(cell(v, "ci").state).toBe("active");
+    expect(v.timeline.map((t) => t.kind)).toEqual(["first_commit", "pr_opened", "closed", "ci_pending"]);
+    // 关了、重开、又关了：只有最后一次关闭冻结。
+    const again = derive(input({
+      pr: pr({ number: 7, url: "u", state: "closed", closedAt: 160, checkedAt: 500 }),
+      events: [ev("first_commit", 120), ev("pr_opened", 125), ev("closed", 130), ci(140, "pending"), ci(150, "passing"), ev("closed", 160), human(170, "APPROVED")],
+    }));
+    expect(again.closed).toBe(true);
+    expect(states(again)).toMatchObject({ ci: "done", peer_review: "active" });
   });
 
   it("states freeze after a merged event: later ci, review and push only add timeline rows", () => {
@@ -193,9 +227,9 @@ describe("derivePrStages", () => {
   });
 
   it("merge without skill tracking leaves self review unknown, not skipped", () => {
-    const v = derive(input({ skillTrackingSince: null, events: [ev("pr_opened", 130), ev("merged", 160)] }));
+    const v = derive(input({ skillTrackingSince: null, events: [ev("pr_opened", 130), ci(140, "passing"), ev("merged", 160)] }));
     expect(states(v)).toEqual(
-      { design: "unknown", dev: "done", self_review: "unknown", ci: "skipped", peer_review: "skipped", merge: "done" });
+      { design: "unknown", dev: "done", self_review: "unknown", ci: "done", peer_review: "skipped", merge: "done" });
     const running = derive(input({ events: [ev("first_commit", 120), ci(140, "pending"), ev("merged", 160)] }));
     expect(cell(running, "ci").state).toBe("unknown");
   });
@@ -267,17 +301,25 @@ describe("derivePrStages", () => {
   });
 
   it("merged while dev is active with skill tracking", () => {
-    const v = derive(input({ events: [ev("first_commit", 120), ev("merged", 150)] }));
+    const v = derive(input({ events: [ev("first_commit", 120), ev("push", 130), ev("merged", 150)] }));
     expect(states(v)).toEqual(
       { design: "skipped", dev: "done", self_review: "skipped", ci: "skipped", peer_review: "skipped", merge: "done" });
+    // 没观察过这个 PR（没有 ci、push、review）：没有证据的步骤是"未知"，不是"跳过"。
+    const unobserved = derive(input({ events: [ev("first_commit", 120), ev("merged", 150)] }));
+    expect(states(unobserved)).toEqual(
+      { design: "skipped", dev: "done", self_review: "skipped", ci: "unknown", peer_review: "unknown", merge: "done" });
   });
 
-  it("merged alone triggers the implied first_commit", () => {
-    const v = derive(input({ events: [ev("merged", 150)] }));
+  it("merged after an observed review triggers the implied dev start", () => {
+    const v = derive(input({ events: [ev("review", 140, { id: 9, author: "c", who: "copilot", state: "COMMENTED", body: "" }), ev("merged", 150)] }));
     expect(states(v)).toEqual(
       { design: "skipped", dev: "done", self_review: "skipped", ci: "skipped", peer_review: "skipped", merge: "done" });
     expect(cell(v, "dev").at).toBe(150);
-    expect(v.timeline.map((t) => t.kind)).toEqual(["merged"]);
+    // 只有 merged：什么都没观察到，除了合并都是未知。
+    const alone = derive(input({ events: [ev("merged", 150)] }));
+    expect(states(alone)).toEqual(
+      { design: "unknown", dev: "unknown", self_review: "unknown", ci: "unknown", peer_review: "unknown", merge: "done" });
+    expect(alone.timeline.map((t) => t.kind)).toEqual(["merged"]);
   });
 
   it("skips malformed rows without throwing", () => {
@@ -289,16 +331,48 @@ describe("derivePrStages", () => {
     expect(v.timeline.map((t) => t.kind)).toEqual(["first_commit"]);
   });
 
-  it("a merged pr_watch row with no merged event (merged before the upgrade) is treated as merged at the latest event time", () => {
-    const merged = pr({ number: 7, url: "https://x/pull/7", state: "merged" });
-    const none = derive(input({ pr: merged }));
-    expect(states(none)).toEqual({ design: "skipped", dev: "done", self_review: "skipped", ci: "skipped", peer_review: "skipped", merge: "done" });
-    expect(none.timeline.map((t) => [t.at, t.kind])).toEqual([[100, "merged"]]);
-    const approved = derive(input({ pr: merged, events: [ev("first_commit", 120), ci(140, "pending"), ci(150, "passing"), human(160, "APPROVED")] }));
-    expect(states(approved)).toMatchObject({ ci: "done", peer_review: "done", merge: "done" });
-    expect(approved.timeline.at(-1)).toMatchObject({ at: 160, kind: "merged" });
+  it("a merged row without a merged event uses the real mergedAt and does not pull later events in", () => {
+    const merged = pr({ number: 7, url: "https://x/pull/7", state: "merged", mergedAt: 200, checkedAt: 500 });
+    const v = derive(input({
+      pr: merged,
+      events: [ev("first_commit", 120), ci(140, "pending"), ci(150, "passing"), human(160, "APPROVED"), ci(300, "failing")],
+    }));
+    expect(states(v)).toEqual({ design: "skipped", dev: "done", self_review: "skipped", ci: "done", peer_review: "done", merge: "done" });
+    expect(cell(v, "merge").at).toBe(200);
+    expect(v.timeline.map((t) => [t.at, t.kind])).toEqual(
+      [[120, "first_commit"], [140, "ci_pending"], [150, "ci_passed"], [160, "human_approved"], [200, "merged"], [300, "ci_failed"]]);
+    // mergedAt 不晚于 checkedAt；没有 mergedAt 用 checkedAt。
+    const capped = derive(input({ pr: { ...merged!, mergedAt: 900, checkedAt: 250 }, events: [ev("first_commit", 120), ci(300, "pending")] }));
+    expect(capped.timeline.find((t) => t.kind === "merged")?.at).toBe(250);
+    // 250 之后的 ci pending 不进进度：ci 是跳过，不是进行中。
+    expect(cell(capped, "ci").state).toBe("skipped");
+    const noTime = derive(input({ pr: { ...merged!, mergedAt: null, checkedAt: 250 }, events: [ev("first_commit", 120)] }));
+    expect(noTime.timeline.find((t) => t.kind === "merged")?.at).toBe(250);
+    // 已经有 merged 事件就不再补。
     const once = derive(input({ pr: merged, events: [ev("first_commit", 120), ev("merged", 150, { number: 7 })] }));
     expect(once.timeline.filter((t) => t.kind === "merged")).toHaveLength(1);
+  });
+
+  it("a backfilled merged PR with no history: ci seeded from the row, peer review from review, the rest unknown, merge done", () => {
+    const row = pr({ number: 7, url: "u", state: "merged", ci: "passing", review: "approved", mergedAt: 200, checkedAt: 500 });
+    const v = derive(input({ pr: row }));
+    expect(states(v)).toEqual({ design: "unknown", dev: "unknown", self_review: "unknown", ci: "done", peer_review: "done", merge: "done" });
+    expect(v.timeline.map((t) => [t.at, t.kind])).toEqual([[200, "merged"]]);
+    const bad = derive(input({ pr: { ...row!, ci: "failing", review: "changes_requested" } }));
+    expect(states(bad)).toMatchObject({ ci: "failed", peer_review: "failed", merge: "done" });
+    // CI 还没出结果就合并：不知道结果，不标"进行中"。
+    expect(states(derive(input({ pr: { ...row!, ci: "pending", review: null } })))).toMatchObject({ ci: "unknown", peer_review: "unknown" });
+    // 有 ci 事件、人的 review 事件时不看 PR 行。
+    const seen = derive(input({ pr: { ...row!, ci: "failing", review: "changes_requested" }, events: [ev("first_commit", 120), ci(140, "passing"), human(150, "APPROVED")] }));
+    expect(states(seen)).toMatchObject({ ci: "done", peer_review: "done" });
+  });
+
+  it("an open PR without ci events takes ci pending from the row only when nothing else is active", () => {
+    const row = pr({ number: 7, url: "u", state: "open", ci: "pending", checkedAt: 500 });
+    expect(states(derive(input({ pr: row, events: [ev("first_commit", 120), ev("pr_opened", 130)] })))).toMatchObject({ dev: "done", ci: "active" });
+    expect(states(derive(input({ pr: row, events: [ev("first_commit", 120)] })))).toMatchObject({ dev: "active", ci: "todo" });
+    const approved = derive(input({ pr: { ...row!, ci: "passing", review: "approved" }, events: [ev("first_commit", 120), ci(140, "passing")] }));
+    expect(states(approved)).toMatchObject({ ci: "done", peer_review: "done", merge: "active" });
   });
 
   it("a review skill after the first commit finishes dev: only self-review is active", () => {
@@ -407,5 +481,41 @@ describe("derivePrStages", () => {
     const v = derive(input({ pr: null, events: [design(105), reviewSkill(110)] }));
     expect(cell(v, "design").state).toBe("done");
     expect(cell(v, "self_review").state).toBe("active");
+  });
+
+  it("work before skill tracking began shows design and self-review unknown, not skipped", () => {
+    const events = [ev("first_commit", 120), ev("pr_opened", 130), ci(140, "pending"), ci(150, "passing"), ev("merged", 160)];
+    const before = derive(input({ skillTrackingSince: 125, events }));
+    expect(states(before)).toEqual({ design: "unknown", dev: "done", self_review: "unknown", ci: "done", peer_review: "skipped", merge: "done" });
+    expect(states(derive(input({ skillTrackingSince: 125, events: events.slice(0, 1) })))).toMatchObject({ design: "unknown", self_review: "unknown" });
+    // 一开始就在记：跳过。
+    expect(states(derive(input({ skillTrackingSince: 120, events })))).toMatchObject({ design: "skipped", self_review: "skipped" });
+    // 记录开始之后的 review skill 仍然算。
+    const late = derive(input({ skillTrackingSince: 125, events: [ev("first_commit", 120), reviewSkill(126), ev("pr_opened", 130)] }));
+    expect(states(late)).toMatchObject({ design: "unknown", self_review: "done" });
+  });
+
+  it("a review skill after the PR opened marks a skipped self-review done", () => {
+    const base = [ev("first_commit", 120), ev("pr_opened", 130), ci(140, "pending")];
+    const v = derive(input({ events: [...base, reviewSkill(145)] }));
+    expect(cell(v, "self_review")).toMatchObject({ state: "done", at: 145, round: 1 });
+    expect(cell(v, "ci").state).toBe("active");
+    expect(v.timeline.at(-1)).toMatchObject({ kind: "review_skill", stage: "self_review" });
+    // 没在记 skill 时（未知）也一样。
+    expect(cell(derive(input({ skillTrackingSince: null, events: [...base, reviewSkill(145)] })), "self_review").state).toBe("done");
+    // 合并之后的不算。
+    const after = derive(input({ events: [...base, ci(150, "passing"), ev("merged", 160), reviewSkill(170)] }));
+    expect(cell(after, "self_review").state).toBe("skipped");
+    // 第二轮：算在第二轮。
+    const r2 = derive(input({ events: [...base, ci(150, "failing"), ev("push", 160), ci(170, "pending"), reviewSkill(175)] }));
+    expect(cell(r2, "self_review")).toMatchObject({ state: "done", round: 2 });
+    expect(cell(r2, "ci").state).toBe("active");
+  });
+
+  it("a first_commit after pr_opened: CI before it still counts", () => {
+    const v = derive(input({ events: [ev("pr_opened", 130), ci(140, "pending"), ci(150, "passing"), ev("first_commit", 160)] }));
+    expect(states(v)).toMatchObject({ dev: "done", self_review: "skipped", ci: "done", peer_review: "active" });
+    expect(cell(v, "dev").at).toBe(130);
+    expect(v.timeline.map((t) => t.kind)).toEqual(["pr_opened", "ci_pending", "ci_passed", "first_commit"]);
   });
 });
