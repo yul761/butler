@@ -1013,6 +1013,8 @@ async function bootstrap(): Promise<void> {
     onMerged: (pr, repoPath) => lessonRunner.merged({ repoPath, slug: pr.slug }, pr.number),
     // PR 的状态或 review 变了：在最新的 handoff 上换掉 prs，存成一条 refresh。ticket 状态、PR 标签、合并后清理 worktree 都照旧走 ingest。
     onPrChanged: (key) => {
+      // 归档 ticket 的补链接行读一次也会走到这里：不为它们写 refresh handoff、不同步记忆。
+      if (tickets.get(key)?.archivedAt != null) return;
       const base = handoffs.latestValid(key);
       if (!base?.payload) return;
       const next = prHandoff(key, ticketPrs.byTicket(key), { id: base.id, createdAt: base.createdAt, status: base.payload.status, prs: base.payload.prs });

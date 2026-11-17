@@ -5,7 +5,7 @@ import type { PrLinkSource, TicketPrsRepo } from "../db/ticket-prs-repo";
 import type { BranchPr } from "../tickets/gh";
 import type { TicketsRepo } from "../db/tickets-repo";
 
-const BRANCH_STATES = { OPEN: "open", MERGED: "merged", CLOSED: "closed" } as const;
+export const PR_STATES = { OPEN: "open", MERGED: "merged", CLOSED: "closed" } as const;
 
 export interface PrLinkerDeps {
   prs: TicketPrsRepo;
@@ -50,7 +50,7 @@ export class PrLinker {
       const slug = prUrlParts(b.url)?.slug ?? repoSlug;
       if (!slug) continue;
       const r = this.d.prs.link({
-        ticketKey, url: b.url, slug, repoId: repo.id, number: b.number, headBranch: b.headRefName || repo.branch, state: BRANCH_STATES[b.state],
+        ticketKey, url: b.url, slug, repoId: repo.id, number: b.number, headBranch: b.headRefName || repo.branch, state: PR_STATES[b.state],
         openedAt: b.createdAt, mergedAt: b.mergedAt, closedAt: b.closedAt, source, linkedAt: this.d.now(),
       });
       if (r.created) created++;

@@ -8,7 +8,7 @@ import {
 import type { firstCommitAt } from "../tickets/git";
 import type { Ticket, TicketRepo, WatchedPr } from "../../shared/types";
 import type { CiItem } from "./ci-delivery";
-import type { PrLinker } from "./pr-links";
+import { PR_STATES, type PrLinker } from "./pr-links";
 import { firstCommitObservation, prObservations, scopeOf, stageKey, type ObsScope, type PrSnapshot } from "./pr-observe";
 import { branchTargets, capRound, nextBranchCheckAt, nextPrCheckAt, PR_SLOW_MS, prPolls, type BranchTarget, type PrPoll } from "./pr-schedule";
 
@@ -64,7 +64,6 @@ export interface PrWatcherDeps {
   log(msg: string, err?: unknown): void;
 }
 
-const STATES = { OPEN: "open", MERGED: "merged", CLOSED: "closed" } as const;
 
 /** 一轮里攒下的：哪些 ticket 的 PR 状态或 review 变了、页面要不要刷新。 */
 interface Marks {
@@ -267,7 +266,7 @@ export class PrWatcher {
 
   /** 这一轮读到的写进一行：先记事件，再更新行。 */
   private apply(r: TicketPr, pr: PrStatus, failed: CiCheck[], inline: PrComment[], bots: ReviewAuthors | null, now: number, marks: Marks): void {
-    const state = STATES[pr.state];
+    const state = PR_STATES[pr.state];
     // GitHub 的时间，没有就用行里存的（例如合并占位释放的时间），再没有用 now；都不晚于 now。只有合并了、关闭了才有。
     const mergedAt = state === "merged" ? Math.min(pr.mergedAt ?? r.mergedAt ?? now, now) : r.mergedAt;
     const closedAt = state === "closed" ? Math.min(pr.closedAt ?? r.closedAt ?? now, now) : r.closedAt;
