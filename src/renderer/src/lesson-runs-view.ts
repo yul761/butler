@@ -67,10 +67,10 @@ export function sourceLabel(src: Pick<LessonSource, "prNumber" | "slug">, scope:
   return scope.kind === "product" && src.slug ? `${src.slug}#${src.prNumber}` : `#${src.prNumber}`;
 }
 
-/** 一行上的按钮：重试（失败、跳过、已取消、受限），取消（排队、等待、受限、分析中）。 */
+/** 一行上的按钮：重试（失败、跳过、已取消），取消（排队、等待、受限、分析中）。受限的等限额重置后自己会跑，不给重试。 */
 export function rowButtons(status: LessonQueueRowStatus): Array<"retry" | "cancel"> {
   const out: Array<"retry" | "cancel"> = [];
-  if (status === "failed" || status === "skipped" || status === "cancelled" || status === "limited") out.push("retry");
+  if (status === "failed" || status === "skipped" || status === "cancelled") out.push("retry");
   if (status === "queued" || status === "waiting" || status === "limited" || status === "running") out.push("cancel");
   return out;
 }

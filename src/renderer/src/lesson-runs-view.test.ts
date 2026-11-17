@@ -122,12 +122,13 @@ describe("runCountsText / sourceLabel", () => {
 });
 
 describe("row buttons", () => {
-  it("retry for failed, skipped, cancelled, limited; cancel for queued, waiting, limited, running", () => {
+  it("retry for failed, skipped, cancelled; cancel for queued, waiting, limited, running", () => {
     const b = (s: LessonQueueRowStatus) => rowButtons(s);
     expect(b("failed")).toEqual(["retry"]);
     expect(b("skipped")).toEqual(["retry"]);
     expect(b("cancelled")).toEqual(["retry"]);
-    expect(b("limited")).toEqual(["retry", "cancel"]);
+    // 受限的行等限额重置后自己会跑：重试也只是再撞一次限额。
+    expect(b("limited")).toEqual(["cancel"]);
     expect(b("queued")).toEqual(["cancel"]);
     expect(b("waiting")).toEqual(["cancel"]);
     expect(b("running")).toEqual(["cancel"]);
