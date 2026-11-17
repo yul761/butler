@@ -34,6 +34,16 @@ export function runStatusPill(r: LessonQueueRowView, S: UiStrings, now: number):
   return { text: label, tone };
 }
 
+/** 有行在分析时，Runs 标签页每隔这么久重画一次，让已用时间往前走。 */
+export const RUNNING_TICK_MS = 30_000;
+
+/** 有行在分析时每 RUNNING_TICK_MS 调一次 tick；没有就不设定时器。返回清理函数（卸载或行变了时调）。 */
+export function runningTicker(rows: Pick<LessonQueueRowView, "status">[], tick: () => void, ms = RUNNING_TICK_MS): () => void {
+  if (!rows.some((r) => r.status === "running")) return () => {};
+  const timer = setInterval(tick, ms);
+  return () => clearInterval(timer);
+}
+
 /** 一行操作失败的文字：先用分析记录自己的措辞，没有的再用规矩页的。 */
 export function runErrorText(code: string, S: UiStrings): string {
   const own: Record<string, string> = S.lessonRunError;

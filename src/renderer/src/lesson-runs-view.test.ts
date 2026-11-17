@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { LessonQueueRowStatus, LessonQueueRowView, LessonQueueView, LessonRunDetail, LessonRunSummary } from "../../shared/lessons";
 import { S } from "./strings";
 import type { LessonOrigin } from "../../shared/lessons";
 import { EN } from "./strings-en";
 import { formatDuration } from "./components/TicketActivity";
-import { timeText, detailButtons, detailSections, openInClaudeOutcome, runDetailFacts, queueBarButtons, queueBarText, reasonText, retryAllCount, runErrorText, rowButtons, runCountsText, runSelectable, runStatusPill, sourceLabel } from "./lesson-runs-view";
+import { timeText, detailButtons, detailSections, openInClaudeOutcome, runDetailFacts, queueBarButtons, queueBarText, reasonText, retryAllCount, runErrorText, rowButtons, runCountsText, runSelectable, runStatusPill, RUNNING_TICK_MS, runningTicker, sourceLabel } from "./lesson-runs-view";
 
 const now = new Date(2026, 10, 16, 12, 0).getTime();
 const at = new Date(2026, 10, 16, 15, 0).getTime();
@@ -59,6 +59,41 @@ describe("runStatusPill", () => {
     // 和 LessonsService.runs 给的一样：正在跑的这次，还没结束、没有计数。
     const r = row("running", { lastRun: run({ status: "running", startedAt: now - 5 * 60_000, finishedAt: null, created: 0, hit: 0 }) });
     expect(runStatusPill(r, S, now)).toEqual({ text: "分析中 · 5 分钟", tone: "muted" });
+  });
+});
+
+describe("runningTicker", () => {
+  it("ticks every 30 s while a row is running and stops on cleanup", () => {
+    vi.useFakeTimers();
+    try {
+      const tick = vi.fn();
+      const stop = runningTicker([row("queued"), row("running")], tick);
+      vi.advanceTimersByTime(RUNNING_TICK_MS - 1);
+      expect(tick).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(tick).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(RUNNING_TICK_MS);
+      expect(tick).toHaveBeenCalledTimes(2);
+      stop();
+      vi.advanceTimersByTime(10 * RUNNING_TICK_MS);
+      expect(tick).toHaveBeenCalledTimes(2);
+      expect(RUNNING_TICK_MS).toBe(30_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("sets no timer when nothing is running", () => {
+    vi.useFakeTimers();
+    try {
+      const tick = vi.fn();
+      const stop = runningTicker([row("queued"), row("done")], tick);
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(10 * RUNNING_TICK_MS);
+      expect(tick).not.toHaveBeenCalled();
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

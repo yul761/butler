@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { LessonAction } from "../../../shared/lessons";
 import { api } from "../api";
 import { reportError } from "../errors";
-import { reasonText, runErrorText, retryAllCount, rowButtons, runCountsText, runSelectable, runStatusPill, TONE_PILL } from "../lesson-runs-view";
+import { reasonText, runErrorText, retryAllCount, rowButtons, runCountsText, runningTicker, runSelectable, runStatusPill, TONE_PILL } from "../lesson-runs-view";
 import { S } from "../strings";
 import { LessonRunDetail } from "./LessonRunDetail";
 import { useStateRefetch } from "./useStateRefetch";
@@ -13,11 +13,16 @@ const formatTime = (ms: number) => new Date(ms).toLocaleString([], { month: "num
 export function LessonRuns({ slug, selectedRunId, onSelect, onOpenSession }: { slug: string; selectedRunId: number | null; onSelect(runId: number | null): void; onOpenSession(id: string): void }) {
   const rows = useStateRefetch(`lessons-runs:${slug}`, () => api.lessonsRuns(slug));
   const [error, setError] = useState<string | null>(null);
+  const [, setTick] = useState(0);
+  const anyRunning = rows?.some((r) => r.status === "running") ?? false;
 
   // 选中的那次运行被清理掉了：不要留着一个指向空的选中。
   useEffect(() => {
     if (rows && selectedRunId !== null && !rows.some((r) => r.lastRun?.id === selectedRunId)) onSelect(null);
   }, [rows]);
+
+  // 有行在分析：每 30 秒重画一次，已用时间往前走；没有了（或卸载）就停。只在“有没有在分析”变了时重设。
+  useEffect(() => runningTicker(rows ?? [], () => setTick((t) => t + 1)), [anyRunning]);
 
   if (!rows) return null;
   const now = Date.now();
