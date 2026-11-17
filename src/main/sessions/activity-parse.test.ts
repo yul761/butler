@@ -278,6 +278,29 @@ describe("applyEntry across turns", () => {
     });
   });
 
+  describe("limit messages", () => {
+    const LIMIT_AT = "2026-10-31T10:00:00.000Z";
+    const RESET = Math.floor(Date.parse(LIMIT_AT) / 1000) + 3600;
+    const limitMsg = { type: "assistant", timestamp: LIMIT_AT, isApiErrorMessage: true, message: { model: "<synthetic>", role: "assistant", stop_reason: "stop_sequence", content: [{ type: "text", text: `Claude AI usage limit reached|${RESET}` }] } };
+
+    it("a synthetic usage-limit message sets apiLimit with its reset", () => {
+      const s = newTranscriptState();
+      applyEntry(s, limitMsg);
+      expect(s.apiError).toBe(true);
+      expect(s.apiLimit).toMatchObject({ kind: "usage_limit", resetsAt: RESET * 1000 });
+      expect(s.apiErrorAt).toBe(Date.parse(LIMIT_AT));
+    });
+
+    it("the next user message clears apiLimit", () => {
+      const s = newTranscriptState();
+      applyEntry(s, limitMsg);
+      applyEntry(s, { type: "user", message: { role: "user", content: "go on" } });
+      expect(s.apiError).toBe(false);
+      expect(s.apiLimit).toBeNull();
+      expect(s.apiErrorAt).toBeNull();
+    });
+  });
+
   describe("turn ends that no Stop hook announces (follow-up D)", () => {
     const say = (content: unknown) => ({ type: "user", message: { role: "user", content } });
     const ended = (s: ReturnType<typeof newTranscriptState>) => s.events.filter((e) => e.type === "turn-end");

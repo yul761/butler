@@ -565,6 +565,7 @@ async function bootstrap(): Promise<void> {
     onTurnEnd: (id, at) => {
       if (markTurnEndedWithoutStop(sessions, id, at)) sessionStopped(id);
     },
+    onLimit: (id, hit, at) => availability.report({ ...hit, at, source: "session", job: null, sessionId: id }),
     log: logger,
   });
   /** 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。 */

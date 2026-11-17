@@ -1,3 +1,5 @@
+import type { LimitHit } from "./availability";
+
 /** 一个 session 此刻在做什么。 */
 export type ActivityKind = "edit" | "read" | "push" | "rebase" | "ci" | "test" | "command" | "agent" | "thinking" | "approval" | "waiting" | "idle";
 
@@ -14,6 +16,8 @@ export interface SessionActivity {
   reason: string | null;
   action: string | null;
   lastOutput: string[];
+  /** 最近一条合成报错是限额（用量、频率、过载、模型不可用）；没有时为 null 或缺省。 */
+  limit?: LimitHit | null;
 }
 
 /** 实况窗口（BTL-190 第 7 点）的一条信号：一次工具调用、一次记忆写入或读取、一轮开始或结束。 */

@@ -1673,6 +1673,37 @@ describe("the live window's signals (BTL-190 7)", () => {
     expect(events.map((e) => e.kind)).toEqual(["turn-start", "turn-end"]);
   });
 
+  describe("limits in interactive sessions", () => {
+    const limitEntry = (timestamp: string) => ({ type: "assistant", timestamp, isApiErrorMessage: true, message: { model: "<synthetic>", stop_reason: "stop_sequence", content: [{ type: "text", text: "Claude AI usage limit reached" }] } });
+
+    it("a live limit is reported once", async () => {
+      const hits: [string, string, number][] = [];
+      const h = harness({ onLimit: (id, hit, at) => hits.push([id, hit.kind, at]) });
+      h.openSession("s1");
+      h.transcript("s1", say("go"), limitEntry(AT));
+      await h.beat();
+      await h.beat();
+      expect(hits).toEqual([["s1", "usage_limit", AT_MS]]);
+    });
+
+    it("a limit older than 10 minutes is not reported", async () => {
+      const hits: unknown[] = [];
+      const h = harness({ onLimit: (...a) => hits.push(a) });
+      h.openSession("s1");
+      h.transcript("s1", say("go", OLD), limitEntry(OLD));
+      await h.beat();
+      expect(hits).toEqual([]);
+    });
+
+    it("activity carries the limit", async () => {
+      const h = harness();
+      h.openSession("s1");
+      h.transcript("s1", say("go"), limitEntry(AT));
+      await h.beat();
+      expect(h.monitor.get("s1")?.limit).toMatchObject({ kind: "usage_limit" });
+    });
+  });
+
   describe("onTurnEnd: turns that end without a Stop hook (follow-up D)", () => {
     const apiError = (timestamp = NEW) => ({ type: "assistant", timestamp, isApiErrorMessage: true, message: { model: "<synthetic>", stop_reason: "stop_sequence", content: [{ type: "text", text: "limit" }] } });
     const duration = (timestamp = NEW) => ({ type: "system", subtype: "turn_duration", timestamp });

@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { ACTIVITY_OUTPUT_LIMIT, LAST_REPLY_LIMIT } from "../../shared/control";
+import type { LimitHit } from "../../shared/availability";
 import type { ActivityEvent, ActivityKind, SessionActivity } from "../../shared/activity";
 import type { Feature, Session, Ticket } from "../../shared/types";
 import { M } from "../strings";
@@ -93,6 +94,11 @@ export interface ActivityDeps {
    * 这次读完轮次还是关着、UserPromptSubmit 的等待也过去了才调。调用方据此把 head 记成在等输入。
    */
   onTurnEnd?: (headId: string, at: number) => void;
+  /**
+   * 现场写入的 transcript 里出现了限额（用量、频率、过载、模型不可用）：同一个 head 的同一条记录只调一次，
+   * 记录时间离现在超过 LIVE_LIMIT_WINDOW_MS（重放旧 transcript）的不调。
+   */
+  onLimit?: (headId: string, hit: LimitHit, at: number) => void;
   /** 盯 transcript 的 fs.watch；测试注入假的，null 不盯（只靠 tick）。默认用真的 fs.watch。 */
   watch?: WatchFn | null;
   /** 默认 300ms。 */
@@ -108,6 +114,9 @@ export interface ActivityDeps {
   tasksDir?: (transcriptFile: string, sessionId: string) => string | null;
   log?: (msg: string, err?: unknown) => void;
 }
+
+/** 限额记录晚于这么久就不当作现场发生的。 */
+export const LIVE_LIMIT_WINDOW_MS = 10 * 60_000;
 
 export interface DerivedActivity extends Pick<SessionActivity, "kind" | "detail" | "background" | "startedAt"> {
   /** 这一轮没结束或者有后台命令在跑，也没在等人确认或回答：才参与卡住检测。 */
@@ -195,6 +204,8 @@ interface Tracked {
   eventsSince: number;
   /** TranscriptTail 从头重建过的次数：变了说明这次读到的是重读出来的旧记录。 */
   restarts: number;
+  /** 已经报过的限额记录的时间（apiErrorAt）：每个 head 只记最近一条，不会越攒越多。 */
+  limitReportedAt: number | null;
   /** UserPromptSubmit 到的时间：transcript 动之前先当它在想；没有为 null。 */
   promptAt: number | null;
   /** 那时读到的 transcript 大小。 */
@@ -398,6 +409,7 @@ export class ActivityMonitor {
     const { state: full, size } = await this.readTranscript(t);
     this.watchTranscript(t);
     const recentChanged = this.takeEvents(t, full, now);
+    this.reportLimit(t, full, now);
     const hookless = t.hooklessEndAt;
     const probe = this.probe(t, now);
     const state = await this.liveBackground(t, full, now, probe);
@@ -414,10 +426,18 @@ export class ActivityMonitor {
     t.lastReplyId = state.lastReplyId;
     if (grew) t.lastOutputAt = now;
     await this.sample(t, grew, now, probe);
-    const next: SessionActivity = { sessionId: t.id, ...derived, lastOutputAt: t.lastOutputAt, ...this.verdict(t), lastOutput: output.lines };
+    const next: SessionActivity = { sessionId: t.id, ...derived, lastOutputAt: t.lastOutputAt, ...this.verdict(t), lastOutput: output.lines, limit: state.apiError ? state.apiLimit : null };
     const changed = recentChanged || !isDeepStrictEqual(next, t.activity);
     t.activity = next;
     return changed;
+  }
+
+  /** 新出现的限额记录报给 onLimit：同一条只报一次，太旧的（重放）不报。 */
+  private reportLimit(t: Tracked, state: TranscriptState, now: number): void {
+    const at = state.apiErrorAt;
+    if (!state.apiError || !state.apiLimit || at === null || at === t.limitReportedAt) return;
+    t.limitReportedAt = at;
+    if (now - at <= LIVE_LIMIT_WINDOW_MS && !this.stopped) this.d.onLimit?.(t.id, state.apiLimit, at);
   }
 
   /** 找到 transcript 以后挂上 fs.watch（已经挂着就什么也不做；文件被换掉后在这里重新挂）。 */
@@ -482,7 +502,7 @@ export class ActivityMonitor {
       id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, fileSizes: new Map(), outputText: "", lastOutputAt: null,
       eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null, lastReplyId: null,
       shellKey: "", shellCommands: [], shellAlive: null, shellCheckedAt: Number.NEGATIVE_INFINITY,
-      watch: null, recent: [], eventsSince: this.d.now() - EVENT_SLACK_MS, restarts: 0, promptAt: null, promptSize: 0, turnStartAt: null, hooklessEndAt: null,
+      watch: null, recent: [], eventsSince: this.d.now() - EVENT_SLACK_MS, restarts: 0, limitReportedAt: null, promptAt: null, promptSize: 0, turnStartAt: null, hooklessEndAt: null,
     };
     this.tracked.set(id, t);
     return t;
