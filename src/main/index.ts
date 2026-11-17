@@ -1384,6 +1384,9 @@ async function bootstrap(): Promise<void> {
       sessionTicket: (s) => sessions.get(s)?.ticketKey ?? null,
       prsForBranch,
       ghWorkDir: (r) => ticketService.ghWorkDir(r),
+      home: homedir(),
+      // 目录不在时 slugOf 给不出：用这个仓库已经链接过的 PR 的 slug。
+      slugOf: (r) => repoIdentity.slugOf(r.repoPath) ?? ticketPrs.byTicket(r.ticketKey).find((p) => p.repoId === r.id)?.slug ?? null,
       jobs,
       now: Date.now,
       log: logger,

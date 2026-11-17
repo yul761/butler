@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import type { Pr } from "../../shared/handoff";
 import type { Ticket, TicketRepo } from "../../shared/types";
 import { JOB_PR_BACKFILL, type JobsRepo } from "../db/jobs-repo";
@@ -17,6 +18,12 @@ export interface PrBackfillDeps {
   sessionTicket(sessionId: string): string | null;
   prsForBranch: typeof prsForBranch;
   ghWorkDir(r: TicketRepo): string;
+  /** 目录还在不在；默认 existsSync。 */
+  exists?(path: string): boolean;
+  /** 目录不在时在这里跑 gh（带上仓库的 slug）。 */
+  home: string;
+  /** 仓库的 slug（owner/repo）；不知道为 null。 */
+  slugOf(r: TicketRepo): string | null;
   jobs: Pick<JobsRepo, "get" | "record">;
   now(): number;
   log(msg: string, e?: unknown): void;
@@ -31,15 +38,19 @@ const MAX_CONSECUTIVE_FAILURES = 5;
  * 一次性补链接：每个 ticket 仓库分支上的所有 PR，加上 handoff 里报过的和合并总控占过的。
  * 这里不读 PR：新行 checked_at = 0，由 PrWatcher 去读并按真实时间写事件；merged_handled_at 也不在这里设，
  * 合不合并后复盘由 watcher 的 MERGED_RECENT_MS 判断。每次写都是 upsert，失败后下次启动重跑是安全的。
+ * 仓库目录不在了（删掉的 worktree、没挂上的盘）：知道 slug 就在 home 里按 slug 列，不知道就跳过（skipped）。
+ * 跳过的不算失败，也不推进熔断；只有跳过、没有失败时记 ok。
  */
-export async function runPrBackfill(d: PrBackfillDeps): Promise<{ ok: boolean; linked: number; failed: number }> {
-  if (d.jobs.get(JOB_PR_BACKFILL).lastStatus === "ok") return { ok: true, linked: 0, failed: 0 };
+export async function runPrBackfill(d: PrBackfillDeps): Promise<{ ok: boolean; linked: number; failed: number; skipped: number }> {
+  if (d.jobs.get(JOB_PR_BACKFILL).lastStatus === "ok") return { ok: true, linked: 0, failed: 0, skipped: 0 };
+  const exists = d.exists ?? existsSync;
   const tickets = d.tickets();
   const queue = tickets.flatMap((t) => t.repos.map((r) => ({ t, r })));
   const branchPrs = new Map<number, BranchPr[]>();
   const repoOf = new Map<number, { t: Ticket; r: TicketRepo }>();
   let linked = 0;
   let failed = 0;
+  let skipped = 0;
   let consecutive = 0;
 
   const worker = async (): Promise<void> => {
@@ -48,7 +59,18 @@ export async function runPrBackfill(d: PrBackfillDeps): Promise<{ ok: boolean; l
       const item = queue.shift();
       if (!item) return;
       const { t, r } = item;
-      const list = await d.prsForBranch(d.ghWorkDir(r), r.branch, PR_GH_TIMEOUT_MS).catch((e: unknown) => {
+      let cwd = d.ghWorkDir(r);
+      let slug: string | null = null;
+      if (!exists(cwd)) {
+        slug = d.slugOf(r);
+        if (!slug) {
+          skipped++;
+          d.log(`pr backfill: skipping ${t.key} ${r.repoPath} (${r.branch}): ${cwd} is gone and its slug is unknown`);
+          continue;
+        }
+        cwd = d.home;
+      }
+      const list = await d.prsForBranch(cwd, r.branch, PR_GH_TIMEOUT_MS, slug).catch((e: unknown) => {
         d.log(`pr backfill: gh threw for ${t.key} ${r.repoPath}`, e);
         return null;
       });
@@ -85,5 +107,5 @@ export async function runPrBackfill(d: PrBackfillDeps): Promise<{ ok: boolean; l
 
   const ok = failed === 0;
   d.jobs.record(JOB_PR_BACKFILL, d.now(), ok ? "ok" : "failed", ok ? null : `${failed} gh call(s) failed`);
-  return { ok, linked, failed };
+  return { ok, linked, failed, skipped };
 }

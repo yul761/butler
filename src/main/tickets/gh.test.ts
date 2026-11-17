@@ -365,6 +365,13 @@ exit 0`);
     expect(readFileSync(join(dir, "env.txt"), "utf8").trim()).toBe("GH_REPO=o/r");
   });
 
+  it("prsForBranch with a repo passes GH_REPO to gh", async () => {
+    const dir = fakeGh(`echo "GH_REPO=$GH_REPO" > "$(dirname "$0")/env.txt"
+echo '[]'`);
+    expect(await prsForBranch(dir, "feat", 5000, "o/r")).toEqual([]);
+    expect(readFileSync(join(dir, "env.txt"), "utf8").trim()).toBe("GH_REPO=o/r");
+  });
+
   it("a github.com slug sets GH_HOST=github.com", async () => {
     const dir = fakeGh(`echo "GH_REPO=$GH_REPO GH_HOST=$GH_HOST" > "$(dirname "$0")/env.txt"`);
     await reviewAuthors(dir, 5, 5000, "o/r");

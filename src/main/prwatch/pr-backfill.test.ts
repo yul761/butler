@@ -24,15 +24,21 @@ function setup(opts: { repos?: string[]; archived?: boolean } = {}) {
   const linker = new PrLinker({ prs, tickets, slugOf: (p) => SLUGS[p] ?? null, now: () => 50 });
   let handoffPrs: Pr[] = [];
   let holds: MergeHold[] = [];
-  const state = { branch: new Map<string, BranchPr[] | null>() };
+  const state = { branch: new Map<string, BranchPr[] | null>(), missing: new Set<string>(), slugs: new Map<string, string>() };
   const deps = (): PrBackfillDeps => ({
     tickets: () => tickets.list({ includeArchived: true }),
     linker, prs, jobs,
     handoffPrs: () => handoffPrs,
     holds: () => holds,
     sessionTicket: (s) => (s === "s1" ? "T-1" : null),
-    prsForBranch: vi.fn(async (cwd: string) => (state.branch.has(cwd) ? state.branch.get(cwd)! : [])),
+    prsForBranch: vi.fn(async (cwd: string, _branch: string, _timeout: number, repo?: string | null) => {
+      const k = repo ? `${cwd}:${repo}` : cwd;
+      return state.branch.has(k) ? state.branch.get(k)! : [];
+    }),
     ghWorkDir: (r) => r.repoPath,
+    exists: (p) => !state.missing.has(p),
+    home: "/home",
+    slugOf: (r) => state.slugs.get(r.repoPath) ?? null,
     now: () => 77,
     log: vi.fn(),
   });
@@ -44,7 +50,7 @@ describe("runPrBackfill", () => {
     const s = setup({ archived: true });
     s.state.branch.set("/a", [bp(1, "MERGED", { mergedAt: 200, createdAt: 100 }), bp(2, "OPEN")]);
     const r = await runPrBackfill(s.deps());
-    expect(r).toEqual({ ok: true, linked: 2, failed: 0 });
+    expect(r).toEqual({ ok: true, linked: 2, failed: 0, skipped: 0 });
     const rows = s.prs.byTicket("T-1");
     expect(rows).toHaveLength(2);
     const merged = rows.find((p) => p.number === 1)!;
@@ -126,8 +132,43 @@ describe("runPrBackfill", () => {
     const s = setup();
     s.jobs.record(JOB_PR_BACKFILL, 1, "ok", null);
     const d = s.deps();
-    expect(await runPrBackfill(d)).toEqual({ ok: true, linked: 0, failed: 0 });
+    expect(await runPrBackfill(d)).toEqual({ ok: true, linked: 0, failed: 0, skipped: 0 });
     expect(d.prsForBranch).not.toHaveBeenCalled();
+  });
+
+  it("a repo whose dir is gone but whose slug is known is listed from home with the slug", async () => {
+    const s = setup({ repos: ["/a", "/gone"] });
+    s.state.missing.add("/gone");
+    s.state.slugs.set("/gone", "a/y");
+    s.state.branch.set("/a", [bp(1, "OPEN")]);
+    s.state.branch.set("/home:a/y", [bp(2, "MERGED", { url: "https://github.com/a/y/pull/2", mergedAt: 300 })]);
+    const d = s.deps();
+    const r = await runPrBackfill(d);
+    expect(r).toEqual({ ok: true, linked: 2, failed: 0, skipped: 0 });
+    expect(d.prsForBranch).toHaveBeenCalledWith("/home", "feat", expect.any(Number), "a/y");
+    expect(d.prsForBranch).not.toHaveBeenCalledWith("/gone", expect.anything(), expect.anything());
+    expect(s.prs.byTicket("T-1").map((p) => [p.number, p.slug, p.state]).sort()).toEqual([[1, "a/x", "open"], [2, "a/y", "merged"]]);
+  });
+
+  it("skips a repo whose dir is gone and whose slug is unknown: no gh call, no breaker, still ok", async () => {
+    const gone = Array.from({ length: 6 }, (_, i) => `/gone${i}`);
+    const s = setup({ repos: [...gone, "/a"] });
+    for (const g of gone) s.state.missing.add(g);
+    s.state.branch.set("/a", [bp(1, "OPEN")]);
+    const d = s.deps();
+    const r = await runPrBackfill(d);
+    expect(r).toEqual({ ok: true, linked: 1, failed: 0, skipped: 6 });
+    expect(d.prsForBranch).toHaveBeenCalledTimes(1);
+    expect(s.jobs.get(JOB_PR_BACKFILL).lastStatus).toBe("ok");
+  });
+
+  it("skips don't reset or advance the breaker, and a failure alongside skips still records failed", async () => {
+    const s = setup({ repos: ["/gone", "/b"] });
+    s.state.missing.add("/gone");
+    s.state.branch.set("/b", null);
+    const r = await runPrBackfill(s.deps());
+    expect(r).toEqual({ ok: false, linked: 0, failed: 1, skipped: 1 });
+    expect(s.jobs.get(JOB_PR_BACKFILL).lastStatus).toBe("failed");
   });
 
   it("stops early after 5 consecutive gh failures", async () => {

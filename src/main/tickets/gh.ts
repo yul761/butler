@@ -310,9 +310,11 @@ export async function prStatus(cwd: string, ref: string, timeoutMs: number): Pro
   return parsePr(await runGh(cwd, ["pr", "view", ref, "--json", PR_FIELDS], timeoutMs, 8 * 1024 * 1024));
 }
 
-/** gh pr list --head <branch> --state all：一个分支的所有 PR。[] 是没有 PR，null 是 gh 失败（不可用、超时、输出不对）。 */
-export async function prsForBranch(cwd: string, branch: string, timeoutMs: number): Promise<BranchPr[] | null> {
-  const j = parseJson(await runGh(cwd, ["pr", "list", "--head", branch, "--state", "all", "--limit", "30", "--json", "number,url,state,headRefName,createdAt,mergedAt,closedAt"], timeoutMs, 8 * 1024 * 1024));
+/** gh pr list --head <branch> --state all：一个分支的所有 PR。[] 是没有 PR，null 是 gh 失败（不可用、超时、输出不对）。给了 repo（slug）时列那个仓库的，不看 cwd。 */
+export async function prsForBranch(cwd: string, branch: string, timeoutMs: number, repo?: string | null): Promise<BranchPr[] | null> {
+  const j = parseJson(
+    await runGh(cwd, ["pr", "list", "--head", branch, "--state", "all", "--limit", "30", "--json", "number,url,state,headRefName,createdAt,mergedAt,closedAt"], timeoutMs, 8 * 1024 * 1024, repoEnv(repo)),
+  );
   if (!Array.isArray(j)) return null;
   const out: BranchPr[] = [];
   for (const item of j) {

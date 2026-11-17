@@ -67,7 +67,8 @@ describe.skipIf(!file)("real database copy (BUTLER_VERIFY_DB)", () => {
         handoffPrs: (key) => handoffs.allPrs(key),
         holds: () => gate.prHolds(),
         sessionTicket: (s) => sessions.get(s)?.ticketKey ?? null,
-        prsForBranch, ghWorkDir, now: Date.now, log,
+        prsForBranch, ghWorkDir, now: Date.now, log, home: homedir(),
+        slugOf: (r) => slugOf(r.repoPath) ?? prs.byTicket(r.ticketKey).find((p) => p.repoId === r.id)?.slug ?? null,
       });
       log(`backfill ${JSON.stringify(backfill)}`);
 
