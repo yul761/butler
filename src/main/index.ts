@@ -1006,6 +1006,7 @@ async function bootstrap(): Promise<void> {
     sessionOpen: (key, repoId) => sessionService.hasOpenTerminal(key, repoId ?? undefined),
     home: homedir(),
     slugOf: (path) => repoIdentity.slugOf(path),
+    linker: prLinker,
     gh: { prStatus, prsForBranch, branchRuns, failedLog, reviewComments, reviewAuthors },
     git: { firstCommitAt: git.firstCommitAt },
     stages: prStages,

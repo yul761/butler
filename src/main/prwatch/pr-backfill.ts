@@ -1,5 +1,4 @@
 import type { Pr } from "../../shared/handoff";
-import { prUrlParts } from "../../shared/pr-url";
 import type { Ticket, TicketRepo } from "../../shared/types";
 import { JOB_PR_BACKFILL, type JobsRepo } from "../db/jobs-repo";
 import type { MergeHold } from "../db/merge-gate-repo";
@@ -38,6 +37,7 @@ export async function runPrBackfill(d: PrBackfillDeps): Promise<{ ok: boolean; l
   const tickets = d.tickets();
   const queue = tickets.flatMap((t) => t.repos.map((r) => ({ t, r })));
   const branchPrs = new Map<number, BranchPr[]>();
+  const repoOf = new Map<number, { t: Ticket; r: TicketRepo }>();
   let linked = 0;
   let failed = 0;
   let consecutive = 0;
@@ -48,7 +48,10 @@ export async function runPrBackfill(d: PrBackfillDeps): Promise<{ ok: boolean; l
       const item = queue.shift();
       if (!item) return;
       const { t, r } = item;
-      const list = await d.prsForBranch(d.ghWorkDir(r), r.branch, PR_GH_TIMEOUT_MS).catch(() => null);
+      const list = await d.prsForBranch(d.ghWorkDir(r), r.branch, PR_GH_TIMEOUT_MS).catch((e: unknown) => {
+        d.log(`pr backfill: gh threw for ${t.key} ${r.repoPath}`, e);
+        return null;
+      });
       if (list === null) {
         failed++;
         consecutive++;
@@ -57,23 +60,12 @@ export async function runPrBackfill(d: PrBackfillDeps): Promise<{ ok: boolean; l
       }
       consecutive = 0;
       branchPrs.set(r.id, list);
-      let created = 0;
-      for (const p of list) {
-        const parts = prUrlParts(p.url);
-        if (!parts) continue;
-        const res = d.prs.link({
-          ticketKey: t.key, url: p.url, slug: parts.slug, repoId: r.id, number: p.number, headBranch: p.headRefName || r.branch,
-          state: p.state === "MERGED" ? "merged" : p.state === "CLOSED" ? "closed" : "open",
-          openedAt: p.createdAt, mergedAt: p.mergedAt, closedAt: p.closedAt, source: "backfill", linkedAt: d.now(),
-        });
-        if (res.created) created++;
-      }
-      linked += created;
-      if (created > 0) d.soon?.(r.id);
+      repoOf.set(r.id, { t, r });
     }
   };
   await Promise.all(Array.from({ length: GH_PARALLEL }, worker));
 
+  // 先链接 handoff 和占位里的（它们的 state 可能是旧的），最后链接 GitHub 列出来的：没读过的行会采用最后写的 state，GitHub 的为准。
   for (const t of tickets) {
     const fromBranch = t.repos.length === 1 ? (branchPrs.get(t.repos[0].id) ?? []) : [];
     const prs = d.handoffPrs(t.key).flatMap((p): Pr[] => {
@@ -84,6 +76,12 @@ export async function runPrBackfill(d: PrBackfillDeps): Promise<{ ok: boolean; l
     linked += d.linker.linkHandoffPrs(t.key, prs);
   }
   for (const h of d.holds()) if (d.linker.linkHold(h, d.sessionTicket)) linked++;
+  for (const [repoId, list] of branchPrs) {
+    const { t, r } = repoOf.get(repoId)!;
+    const created = d.linker.linkBranchPrs(t.key, r, list, "backfill");
+    linked += created;
+    if (created > 0) d.soon?.(repoId);
+  }
 
   const ok = failed === 0;
   d.jobs.record(JOB_PR_BACKFILL, d.now(), ok ? "ok" : "failed", ok ? null : `${failed} gh call(s) failed`);

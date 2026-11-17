@@ -63,21 +63,53 @@ describe("runPrBackfill", () => {
   });
 
   it("records failed and links nothing twice when gh fails for one repo", async () => {
+    const handoff: Pr[] = [{ number: 7, url: "https://github.com/a/x/pull/7", state: "open", review: null }];
     const s = setup({ repos: ["/a", "/b"] });
+    s.setHandoff(handoff);
     s.state.branch.set("/a", [bp(1, "OPEN")]);
     s.state.branch.set("/b", null);
-    const first = await runPrBackfill(s.deps());
+    const d1 = s.deps();
+    const first = await runPrBackfill(d1);
     expect(first).toMatchObject({ ok: false, failed: 1 });
+    expect(d1.log).toHaveBeenCalled();
     expect(s.jobs.get(JOB_PR_BACKFILL).lastStatus).toBe("failed");
     s.state.branch.set("/b", [bp(2, "OPEN", { url: "https://github.com/a/y/pull/2" })]);
     const second = await runPrBackfill(s.deps());
-    expect(second.ok).toBe(true);
+    expect(second).toMatchObject({ ok: true, linked: 1 });
     const clean = setup({ repos: ["/a", "/b"] });
+    clean.setHandoff(handoff);
     clean.state.branch.set("/a", [bp(1, "OPEN")]);
     clean.state.branch.set("/b", [bp(2, "OPEN", { url: "https://github.com/a/y/pull/2" })]);
     await runPrBackfill(clean.deps());
-    expect(s.prs.byTicket("T-1")).toHaveLength(2);
-    expect(s.prs.byTicket("T-1").length).toBe(clean.prs.byTicket("T-1").length);
+    const shape = (r: ReturnType<typeof s.prs.byTicket>) => r.map((p) => [p.number, p.url, p.state, p.source]).sort();
+    expect(shape(s.prs.byTicket("T-1"))).toEqual(shape(clean.prs.byTicket("T-1")));
+    expect(s.prs.byTicket("T-1")).toHaveLength(3);
+  });
+
+  it("GitHub's state wins over a stale handoff or hold state", async () => {
+    const s = setup();
+    s.state.branch.set("/a", [bp(1, "MERGED", { mergedAt: 200 })]);
+    s.setHandoff([{ number: 1, url: "https://github.com/a/x/pull/1", state: "open", review: null }]);
+    await runPrBackfill(s.deps());
+    expect(s.prs.byTicket("T-1")[0]).toMatchObject({ number: 1, state: "merged", mergedAt: 200 });
+  });
+
+  it("logs the error when gh throws and counts it as failed", async () => {
+    const s = setup();
+    const d = s.deps();
+    const boom = new Error("boom");
+    d.prsForBranch = vi.fn(async () => { throw boom; });
+    const r = await runPrBackfill(d);
+    expect(r).toMatchObject({ ok: false, failed: 1 });
+    expect(d.log).toHaveBeenCalledWith(expect.any(String), boom);
+  });
+
+  it("a multi-repo ticket does not link an empty-URL handoff PR", async () => {
+    const s = setup({ repos: ["/a", "/b"] });
+    s.state.branch.set("/a", [bp(4, "OPEN")]);
+    s.setHandoff([{ number: 4, url: "", state: "open", review: null }]);
+    await runPrBackfill(s.deps());
+    expect(s.prs.byTicket("T-1").map((p) => p.source)).toEqual(["backfill"]);
   });
 
   it("an empty-URL PR in a single-repo ticket takes the URL from the branch list", async () => {
@@ -99,14 +131,13 @@ describe("runPrBackfill", () => {
   });
 
   it("stops early after 5 consecutive gh failures", async () => {
-    const s = setup();
+    const s = setup({ repos: Array.from({ length: 8 }, (_, i) => `/r${i}`) });
     for (let i = 0; i < 8; i++) s.state.branch.set(`/r${i}`, null);
     const d = s.deps();
-    d.tickets = () => [{ key: "T", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null, featureId: null,
-      repos: Array.from({ length: 8 }, (_, i) => ({ id: i + 1, ticketKey: "T", repoPath: `/r${i}`, workMode: "branch", worktreePath: null, branch: "b", createdAt: 1, worktreeRemovedAt: null, cleanupBlocked: null })) }] as never;
     const r = await runPrBackfill(d);
     expect(r.ok).toBe(false);
-    expect(r.failed).toBeLessThan(8);
     expect(r.failed).toBeGreaterThanOrEqual(5);
+    expect(r.failed).toBeLessThan(8);
+    expect(s.jobs.get(JOB_PR_BACKFILL).lastStatus).toBe("failed");
   });
 });

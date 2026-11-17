@@ -8,6 +8,7 @@ import type { BranchPr, BranchRuns, CiCheck, PrComment, PrStatus } from "../tick
 import type * as Gh from "../tickets/gh";
 import type * as Git from "../tickets/git";
 import { CiDelivery } from "./ci-delivery";
+import { PrLinker } from "./pr-links";
 import { derivePrStages } from "./pr-stages";
 import { PR_FAST_MS, PR_SLOW_MS, PR_WATCH_MAX } from "./pr-schedule";
 import { CI_LOG_LINES, MERGED_RECENT_MS, PR_GH_TIMEOUT_MS, PrWatcher, type PrWatcherDeps } from "./pr-watcher";
@@ -43,11 +44,13 @@ function setup(o: Opts = {}) {
     reviewAuthors: vi.fn<typeof Gh.reviewAuthors>(async () => ({ botReviewIds: new Set(), botLogins: new Set() })),
   };
   const git = { firstCommitAt: vi.fn<typeof Git.firstCommitAt>(async () => null) };
+  const slugOf = (p: string) => `o/${p.split("/").pop()}`;
+  const linker = new PrLinker({ prs, tickets, slugOf, now: () => t });
   const deps = {
     prs, branches, tickets: () => tickets.list(), repoOf: (id: number) => tickets.getRepo(id),
     ghWorkDir: (r: { repoPath: string }) => `/w${r.repoPath}`,
     sessionOpen: vi.fn<PrWatcherDeps["sessionOpen"]>(o.sessionOpen ?? (() => true)),
-    home: "/home", slugOf: (p: string) => `o/${p.split("/").pop()}`, gh, git, stages,
+    home: "/home", slugOf, linker, gh, git, stages,
     onMerged: vi.fn<PrWatcherDeps["onMerged"]>(), onPrChanged: vi.fn<(key: string) => void>(), onCiSettled: vi.fn<PrWatcherDeps["onCiSettled"]>(),
     notify: vi.fn<() => void>(), roundDone: vi.fn<() => void>(), now: () => t, log: vi.fn<(msg: string, err?: unknown) => void>(),
   } satisfies PrWatcherDeps;
@@ -291,12 +294,21 @@ describe("PrWatcher: reading PRs", () => {
     expect(peak).toBe(4);
   });
 
-  it("does not read PRs of archived tickets", async () => {
+  it("reads an unread PR row of an archived ticket once, and never again", async () => {
     const s = setup();
-    s.link();
+    const row = s.link();
     s.tickets.archive("BTL-1", 5);
+    s.gh.prStatus.mockResolvedValue(pr({ createdAt: 5 }));
     await s.w.check();
-    expect(s.gh.prStatus).not.toHaveBeenCalled();
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(1);
+    expect(s.gh.prStatus).toHaveBeenCalledWith("/w/r/app", url(7), PR_GH_TIMEOUT_MS);
+    expect(s.prs.get(row.id)?.checkedAt).toBe(s.now());
+    expect(s.events("pr_opened")).toHaveLength(1);
+    s.advance(PR_FAST_MS);
+    await s.w.check();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(1);
   });
 
   it("notifies only when something changed", async () => {

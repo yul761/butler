@@ -1,8 +1,11 @@
 import type { Pr } from "../../shared/handoff";
 import { prUrlParts } from "../../shared/pr-url";
 import type { MergeHold } from "../db/merge-gate-repo";
-import type { TicketPrsRepo } from "../db/ticket-prs-repo";
+import type { PrLinkSource, TicketPrsRepo } from "../db/ticket-prs-repo";
+import type { BranchPr } from "../tickets/gh";
 import type { TicketsRepo } from "../db/tickets-repo";
+
+const BRANCH_STATES = { OPEN: "open", MERGED: "merged", CLOSED: "closed" } as const;
 
 export interface PrLinkerDeps {
   prs: TicketPrsRepo;
@@ -30,6 +33,25 @@ export class PrLinker {
       const r = this.d.prs.link({
         ticketKey, url: p.url, slug: parts.slug, repoId: this.repoFor(ticketKey, parts.slug), number: parts.number,
         headBranch: null, state: p.state, source: "handoff", linkedAt: this.d.now(),
+      });
+      if (r.created) created++;
+    }
+    return created;
+  }
+
+  /**
+   * 一个分支上 gh 列出来的 PR 链接到 ticket 仓库（watcher 和一次性补链接共用）：GitHub 的状态和时间原样带上；
+   * URL 解析不出 slug 时用仓库自己的 slug。返回新建了几行。
+   */
+  linkBranchPrs(ticketKey: string, repo: { id: number; repoPath: string; branch: string }, list: BranchPr[], source: PrLinkSource): number {
+    const repoSlug = this.d.slugOf(repo.repoPath);
+    let created = 0;
+    for (const b of list) {
+      const slug = prUrlParts(b.url)?.slug ?? repoSlug;
+      if (!slug) continue;
+      const r = this.d.prs.link({
+        ticketKey, url: b.url, slug, repoId: repo.id, number: b.number, headBranch: b.headRefName || repo.branch, state: BRANCH_STATES[b.state],
+        openedAt: b.createdAt, mergedAt: b.mergedAt, closedAt: b.closedAt, source, linkedAt: this.d.now(),
       });
       if (r.created) created++;
     }

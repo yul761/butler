@@ -6,9 +6,9 @@ import {
   type ReviewAuthors, type reviewComments,
 } from "../tickets/gh";
 import type { firstCommitAt } from "../tickets/git";
-import { prUrlParts } from "../../shared/pr-url";
 import type { Ticket, TicketRepo, WatchedPr } from "../../shared/types";
 import type { CiItem } from "./ci-delivery";
+import type { PrLinker } from "./pr-links";
 import { firstCommitObservation, prObservations, scopeOf, stageKey, type ObsScope, type PrSnapshot } from "./pr-observe";
 import { branchTargets, capRound, nextBranchCheckAt, nextPrCheckAt, PR_SLOW_MS, prPolls, type BranchTarget, type PrPoll } from "./pr-schedule";
 
@@ -44,6 +44,7 @@ export interface PrWatcherDeps {
   /** 不是 ticket 仓库的 PR 在这里跑 gh（gh pr view <url> 不需要在仓库里）。 */
   home: string;
   slugOf(path: string): string | null;
+  linker: Pick<PrLinker, "linkBranchPrs">;
   gh: {
     prStatus: typeof prStatus; prsForBranch: typeof prsForBranch; branchRuns: typeof branchRuns; failedLog: typeof failedLog;
     reviewComments: typeof reviewComments; reviewAuthors: typeof reviewAuthors;
@@ -219,7 +220,8 @@ export class PrWatcher {
 
   private async pollPrs(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, marks: Marks): Promise<void> {
     const live = new Set(tickets.map((t) => t.key));
-    const rows = this.d.prs.needingRead().filter((r) => live.has(r.ticketKey));
+    // 归档 ticket 里没读过的行（补链接来的）也读一次；读过以后 needingRead 不再给它。
+    const rows = this.d.prs.needingRead().filter((r) => live.has(r.ticketKey) || r.checkedAt === 0);
     const urls = new Set(rows.map((r) => r.url));
     for (const u of this.unreadBackoff.keys()) if (!urls.has(u)) this.unreadBackoff.delete(u);
     const polls = prPolls(rows, {
@@ -381,17 +383,8 @@ export class PrWatcher {
       if (!prev?.readError) marks.changed = true;
       return;
     }
-    const repoSlug = this.d.slugOf(t.repoPath);
-    for (const b of list) {
-      const slug = prUrlParts(b.url)?.slug ?? repoSlug;
-      if (!slug) continue;
-      // 新链接的行 checked_at 为 0，下一轮的 PR 读取马上读它（R12）。
-      const { created } = this.d.prs.link({
-        ticketKey: t.ticketKey, url: b.url, slug, repoId: t.repoId, number: b.number, headBranch: b.headRefName || t.branch, state: STATES[b.state],
-        openedAt: b.createdAt, mergedAt: b.mergedAt, closedAt: b.closedAt, source: "branch", linkedAt: now,
-      });
-      if (created) marks.changed = true;
-    }
+    // 新链接的行 checked_at 为 0，下一轮的 PR 读取马上读它（R12）。
+    if (this.d.linker.linkBranchPrs(t.ticketKey, { id: t.repoId, repoPath: t.repoPath, branch: t.branch }, list, "branch") > 0) marks.changed = true;
     if (list.some((b) => b.state === "OPEN")) {
       // CI 由 PR 的读取接手。
       this.d.branches.upsert({ ...base, ...kept, readError: false, checkedAt: now });
