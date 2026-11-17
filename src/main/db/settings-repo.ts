@@ -1,4 +1,4 @@
-import { DEFAULT_HANDOFF_PROMPT, DEFAULT_REFRESH_PROMPT, defaultHandoffPrompt, defaultRefreshPrompt, PREVIOUS_HANDOFF_PROMPTS } from "../handoff/templates";
+import { DEFAULT_HANDOFF_PROMPT, DEFAULT_REFRESH_PROMPT, defaultHandoffPrompt, defaultRefreshPrompt, PREVIOUS_HANDOFF_PROMPTS, PREVIOUS_REFRESH_PROMPTS } from "../handoff/templates";
 import { currentLang } from "../i18n";
 import type { Lang } from "../../shared/i18n";
 import type { Db } from "./database";
@@ -58,7 +58,7 @@ type PromptKey = "handoffPrompt" | "refreshPrompt";
 const PROMPT_DEFAULTS: Record<PromptKey, (l: Lang) => string> = { handoffPrompt: defaultHandoffPrompt, refreshPrompt: defaultRefreshPrompt };
 const LANGS: Lang[] = ["zh", "en"];
 /** 以前版本的默认值：存的是它们也当作没改过。 */
-const PREVIOUS_PROMPT_DEFAULTS: Record<PromptKey, readonly string[]> = { handoffPrompt: PREVIOUS_HANDOFF_PROMPTS, refreshPrompt: [] };
+const PREVIOUS_PROMPT_DEFAULTS: Record<PromptKey, readonly string[]> = { handoffPrompt: PREVIOUS_HANDOFF_PROMPTS, refreshPrompt: PREVIOUS_REFRESH_PROMPTS };
 
 export class SettingsRepo {
   constructor(private readonly db: Db) {}

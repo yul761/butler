@@ -5,7 +5,7 @@ import {
 } from "./schema";
 import { featureHandoffExample, featureHandoffSchemaDoc } from "./feature-templates";
 import {
-  DEFAULT_HANDOFF_PROMPT, DEFAULT_REFRESH_PROMPT, HANDOFF_COMMAND_MARKER, HANDOFF_COMMAND_MD, HANDOFF_EXAMPLE, HANDOFF_EXAMPLE_VALUE, handoffCommandBody,
+  DEFAULT_HANDOFF_PROMPT, DEFAULT_REFRESH_PROMPT, defaultRefreshPrompt, HANDOFF_COMMAND_MARKER, HANDOFF_COMMAND_MD, HANDOFF_EXAMPLE, HANDOFF_EXAMPLE_VALUE, handoffCommandBody,
 } from "./templates";
 
 describe("handoff schema", () => {
@@ -122,6 +122,12 @@ describe("templates", () => {
       expect(DEFAULT_HANDOFF_PROMPT).toContain(p);
     }
     for (const p of ["{{ticket}}", "{{branch}}", "{{tracker_tools}}", "{{current_status}}", "{{schema}}"]) expect(DEFAULT_REFRESH_PROMPT).toContain(p);
+  });
+
+  it("the refresh prompt and the /handoff command say to copy each PR url exactly as gh prints it", () => {
+    // BTL-190：模型在 handoff 里自己拼了 yuchenlin/Butler/pull/N，真的是 yul761/butler；拼出来的读不到。
+    for (const text of [defaultRefreshPrompt("zh"), handoffCommandBody("zh")]) expect(text).toContain("PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。");
+    for (const text of [defaultRefreshPrompt("en"), handoffCommandBody("en")]) expect(text).toContain("Copy each PR url exactly as gh prints it; never build or guess one.");
   });
 
   it("the /handoff command asks for a butler-handoff block and passes arguments", () => {

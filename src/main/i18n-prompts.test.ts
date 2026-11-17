@@ -28,6 +28,18 @@ describe("prompts follow the language (design 2026-10-26 i18n)", () => {
     expect(settings.get("refreshPrompt")).toBe(defaultRefreshPrompt("zh"));
   });
 
+  it("a saved copy of the refresh default from before the PR-url line still counts as the default", () => {
+    const settings = new SettingsRepo(memDb());
+    const line = { zh: "PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。", en: "Copy each PR url exactly as gh prints it; never build or guess one." } as const;
+    for (const lang of ["zh", "en"] as const) {
+      setLang(lang);
+      const old = defaultRefreshPrompt(lang).replace(lang === "zh" ? line.zh : ` ${line.en}`, "");
+      expect(old).not.toBe(defaultRefreshPrompt(lang));
+      settings.set("refreshPrompt", old);
+      expect(settings.get("refreshPrompt")).toBe(defaultRefreshPrompt(lang));
+    }
+  });
+
   it("no longer mentions the brief, and still treats a saved copy of the old default as the default", () => {
     const settings = new SettingsRepo(memDb());
     for (const lang of ["zh", "en"] as const) {

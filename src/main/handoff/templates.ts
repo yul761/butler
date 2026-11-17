@@ -126,7 +126,7 @@ export const DEFAULT_HANDOFF_PROMPT = `你在为 Butler 生成 ticket {{ticket}}
 /** 早间快速刷新用的默认 prompt（不 resume，只查 PR 和 tracker 状态）。 */
 export const DEFAULT_REFRESH_PROMPT = `只查询 ticket {{ticket}}（分支 {{branch}}）的最新状态，不要总结对话，也不要修改任何文件。
 
-1. 用 \`gh pr view <分支>\` 查询 PR 的 state 和 review 状态（分支：{{branch}}）。几个仓库就在每个仓库的目录里各查一次，PR 都放进 prs；没有 PR 时 prs 填 []。
+1. 用 \`gh pr view <分支>\` 查询 PR 的 state 和 review 状态（分支：{{branch}}）。几个仓库就在每个仓库的目录里各查一次，PR 都放进 prs；没有 PR 时 prs 填 []。PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。
 2. 用 tracker MCP 工具查询 ticket {{ticket}} 的状态和子任务。可用的工具：{{tracker_tools}}。不可用时 jira 填 null。
 3. status：PR 都已合并填 merged_pending_followup；还有 PR 打开中填 in_review；其他情况沿用当前状态 {{current_status}}。
 
@@ -159,7 +159,7 @@ Example:
 
 export const DEFAULT_REFRESH_PROMPT_EN = `Only look up the latest state of ticket {{ticket}} (branch {{branch}}). Don't summarize the conversation and don't change any file.
 
-1. Look up the PR state and review state with \`gh pr view <branch>\` (branch: {{branch}}). With several repos, check in each repo's folder and put every PR into prs; if there is none, set prs to [].
+1. Look up the PR state and review state with \`gh pr view <branch>\` (branch: {{branch}}). With several repos, check in each repo's folder and put every PR into prs; if there is none, set prs to []. Copy each PR url exactly as gh prints it; never build or guess one.
 2. Look up ticket {{ticket}}'s status and subtasks with the tracker MCP tools. Available tools: {{tracker_tools}}. If they are unavailable, set jira to null.
 3. status: merged_pending_followup if all PRs are merged; in_review if a PR is still open; otherwise keep the current status {{current_status}}.
 
@@ -177,6 +177,11 @@ export const PREVIOUS_HANDOFF_PROMPTS: readonly string[] = [
   DEFAULT_HANDOFF_PROMPT_EN.replace("for later sessions and memory.", "for tomorrow morning's brief."),
 ];
 export const defaultRefreshPrompt = (l: Lang): string => (l === "en" ? DEFAULT_REFRESH_PROMPT_EN : DEFAULT_REFRESH_PROMPT);
+/** 以前版本的默认刷新 prompt（还没有“PR 的 url 照原样复制”那句）：存的是它也当作没改过。 */
+export const PREVIOUS_REFRESH_PROMPTS: readonly string[] = [
+  DEFAULT_REFRESH_PROMPT.replace("PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。", ""),
+  DEFAULT_REFRESH_PROMPT_EN.replace(" Copy each PR url exactly as gh prints it; never build or guess one.", ""),
+];
 
 /**
  * handoff.md 里的标记行紧跟在 front matter 之后：`<!-- butler:handoff-command v1 sha256:<hex> -->`。
@@ -255,6 +260,7 @@ description: 生成 Butler handoff（当前 ticket 的进度摘要；在 feature
 ${FEATURE_COORDINATOR_SECTION}请为当前 session 对应的 ticket 生成一份 handoff，供之后的 session 和记忆使用。
 
 - 依据这个 session 的完整对话；如果可以，再用 tracker MCP 工具和 \`gh pr view\` 确认 ticket 与 PR 的最新状态。
+- PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。
 - 只读：不要修改文件，不要提交或推送。
 - ticket 填当前的 ticket 号（通常在分支名里，例如 PROJ-123）。
 - 已有的 followup 如果知道 id 就填 id，否则 id 填 null。
@@ -280,6 +286,7 @@ description: Write a Butler handoff (a progress summary of the current ticket; i
 ${FEATURE_COORDINATOR_SECTION_EN}Write a handoff for the ticket of this session, for later sessions and memory.
 
 - Base it on this session's whole conversation; if you can, confirm the latest state of the ticket and its PRs with the tracker MCP tools and \`gh pr view\`.
+- Copy each PR url exactly as gh prints it; never build or guess one.
 - Read only: don't change files, don't commit or push.
 - Set ticket to the current ticket id (usually in the branch name, for example PROJ-123).
 - For an existing followup, use its id if you know it; otherwise use null.
