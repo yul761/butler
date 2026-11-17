@@ -58,6 +58,7 @@ describe("execHeadlessJson hooks and failure detail", () => {
     const { d } = setup(limited);
     const onLimit = vi.fn();
     await execHeadlessJson({ ...d, onLimit }, o);
+    expect(onLimit).toHaveBeenCalledTimes(1);
     expect(onLimit).toHaveBeenCalledWith(hit, "handoff");
   });
 
@@ -77,9 +78,11 @@ describe("execHeadlessJson hooks and failure detail", () => {
     const log = vi.fn();
     const r = await execHeadlessJson({ ...d, log, onLimit: () => { throw new Error("x"); } }, o);
     expect(r).toMatchObject({ ok: false, reason: "rate_limited", limit: hit });
-    expect(log).toHaveBeenCalled();
+    expect(log.mock.calls.some((c) => String(c[0]).includes("onLimit threw"))).toBe(true);
     const s = setup({ ok: true, result: result() });
-    expect(await execHeadlessJson({ ...s.d, onSuccess: () => { throw new Error("y"); } }, o)).toMatchObject({ ok: true });
+    const log2 = vi.fn();
+    expect(await execHeadlessJson({ ...s.d, log: log2, onSuccess: () => { throw new Error("y"); } }, o)).toMatchObject({ ok: true });
+    expect(log2.mock.calls.some((c) => String(c[0]).includes("onSuccess threw"))).toBe(true);
   });
 
   it("failure carries stderr, result and rawText", async () => {

@@ -266,7 +266,7 @@ export const runHeadless: HeadlessRun = (req) =>
       }
       if (result.isError || code !== 0 || result.subtype !== "success") {
         const message = (result.resultText || stderr || result.subtype || `exit ${code}`).slice(0, MESSAGE_MAX);
-        const limit = classifyLimit({ text: `${result.resultText}\n${stderr}`, apiStatus: result.apiErrorStatus, now });
+        const limit = classifyLimit({ text: `${result.isError ? result.resultText : ""}\n${stderr}`, apiStatus: result.apiErrorStatus, now });
         finish(fail(failureReason(limit, "claude_error"), message, result, limit));
         return;
       }

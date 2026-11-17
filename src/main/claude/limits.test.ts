@@ -9,6 +9,10 @@ describe("classifyLimit", () => {
     if (s.resetsAt !== undefined) expect(hit?.resetsAt ?? null).toBe(s.resetsAt);
   });
 
+  it("text patterns win over the status code", () => {
+    expect(classifyLimit({ text: "usage limit reached", apiStatus: 429, now: LIMIT_NOW })?.kind).toBe("usage_limit");
+  });
+
   it("message is the matching line, at most 300 chars", () => {
     const hit = classifyLimit({ text: `noise\n  Weekly limit reached ${"x".repeat(400)}\nmore`, apiStatus: null, now: LIMIT_NOW });
     expect(hit?.message.startsWith("Weekly limit reached")).toBe(true);

@@ -140,6 +140,11 @@ describe("runHeadless failure detail", () => {
     expect(out).toMatchObject({ ok: false, reason: "exit_nonzero", limit: null, stderr: "something broke" });
   });
 
+  it("a non-error result that mentions rate limiting is claude_error, not a limit", async () => {
+    const out = await run('emit({ type: "result", subtype: "success", is_error: false, result: "{\\"summary\\":\\"add rate limiting to the API\\"}" }); process.exitCode = 1;');
+    expect(out).toMatchObject({ ok: false, reason: "claude_error", limit: null });
+  });
+
   it("non-JSON output that is a usage limit is rate_limited", async () => {
     const out = await run('process.stderr.write("Weekly limit reached"); process.exit(1);');
     expect(out).toMatchObject({ ok: false, reason: "rate_limited", limit: { kind: "usage_limit" } });
