@@ -479,13 +479,13 @@ async function bootstrap(): Promise<void> {
     },
     lang: () => currentLang(), now: Date.now, notify: () => notify(), log: logger,
   });
-  // 复盘规矩页：仓库路径直接查表（含已归档的 ticket 仓库）；归组建议按 ticket 和 feature 各算一组。
-  const repoPathRows = (sql: string): { k: number | string; repo_path: string }[] => db.prepare(sql).all() as unknown as { k: number | string; repo_path: string }[];
+  // 复盘规矩页：仓库路径直接查表（已归档的 ticket、feature、epic 不算）；归组建议按 ticket 和 feature 各算一组。
+  const repoPathRows = <T extends { repo_path: string }>(sql: string): T[] => db.prepare(sql).all() as unknown as T[];
   const lessonsService = new LessonsService({
     repo: lessonsRepo, identity: repoIdentity, runner: lessonRunner,
     knownRepoPaths: () => [
       ...new Set(
-        repoPathRows(
+        repoPathRows<{ repo_path: string }>(
           `SELECT tr.repo_path FROM ticket_repos tr JOIN tickets t ON t.key = tr.ticket_key WHERE t.archived_at IS NULL
            UNION SELECT fr.repo_path FROM feature_repos fr JOIN features f ON f.id = fr.feature_id WHERE f.archived_at IS NULL
            UNION SELECT er.repo_path FROM epic_repos er JOIN epics e ON e.id = er.epic_id WHERE e.archived_at IS NULL`,
@@ -498,7 +498,7 @@ async function bootstrap(): Promise<void> {
         ["t", `SELECT tr.ticket_key AS k, tr.repo_path FROM ticket_repos tr JOIN tickets t ON t.key = tr.ticket_key WHERE t.archived_at IS NULL`],
         ["f", `SELECT fr.feature_id AS k, fr.repo_path FROM feature_repos fr JOIN features f ON f.id = fr.feature_id WHERE f.archived_at IS NULL`],
       ] as const) {
-        for (const r of repoPathRows(sql)) {
+        for (const r of repoPathRows<{ k: number | string; repo_path: string }>(sql)) {
           const key = `${kind}:${r.k}`;
           (groups.get(key) ?? groups.set(key, new Set()).get(key)!).add(r.repo_path);
         }

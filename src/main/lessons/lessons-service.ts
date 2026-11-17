@@ -42,8 +42,7 @@ export class LessonsService {
     const unknownRepos: LessonUnknownRepo[] = [];
     let rows = repo.repos();
     const known = new Map(rows.map((r) => [r.slug, r.localPath]));
-    const seen = new Set<string>(); // 同一个 slug 多个路径：本轮第一个赢，免得每次刷新来回改。
-    let changed = false;
+    const candidates = new Map<string, string[]>(); // slug -> 存在的候选路径（按出现顺序）
     for (const path of new Set(this.d.knownRepoPaths())) {
       if (!exists(path)) continue;
       const r = identity.resolve(path);
@@ -51,12 +50,15 @@ export class LessonsService {
         unknownRepos.push({ path, reason: r.reason });
         continue;
       }
-      if (seen.has(r.slug)) continue;
-      seen.add(r.slug);
-      if (known.get(r.slug) !== path) {
-        repo.upsertRepo(r.slug, path, this.d.now());
-        changed = true;
-      }
+      (candidates.get(r.slug) ?? candidates.set(r.slug, []).get(r.slug)!).push(path);
+    }
+    let changed = false;
+    for (const [slug, paths] of candidates) {
+      const stored = known.get(slug);
+      // 已存的路径还在候选里就不动；否则写第一个候选。
+      if (stored !== undefined && paths.includes(stored)) continue;
+      repo.upsertRepo(slug, paths[0], this.d.now());
+      changed = true;
     }
     if (changed) rows = repo.repos();
     const repos: LessonRepoView[] = rows

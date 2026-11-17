@@ -49,6 +49,36 @@ describe("LessonsService.state", () => {
     expect(s.unknownRepos).toEqual([]);
   });
 
+  it("upserts once when the stored path is no longer a candidate", () => {
+    const paths = ["/acme_web"];
+    const { svc, repo } = setup({ paths });
+    paths[0] = "/acme_web2";
+    const spy = vi.spyOn(repo, "upsertRepo");
+    svc.state();
+    svc.state();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][1]).toBe("/acme_web2");
+  });
+
+  it("writes the first of several paths for one slug once, and keeps a stored candidate", () => {
+    const both = ["/acme_web", "/acme_web2"];
+    const a = setup({ paths: [] });
+    const spyA = vi.spyOn(a.repo, "upsertRepo");
+    const svcA = new LessonsService({
+      repo: a.repo, identity: new RepoIdentity({ git: () => "git@github.com:acme/web.git", exists: () => true }), runner: { backfill: a.backfill },
+      knownRepoPaths: () => both, repoGroups: () => [], exists: () => true,
+      ghAvailable: () => true, openExternal: a.openExternal, now: () => 100, notify: a.notify,
+    });
+    svcA.state();
+    svcA.state();
+    expect(spyA).toHaveBeenCalledTimes(1);
+    expect(spyA.mock.calls[0][1]).toBe("/acme_web");
+    a.repo.upsertRepo("acme/web", "/acme_web2", 1);
+    spyA.mockClear();
+    svcA.state();
+    expect(spyA).not.toHaveBeenCalled();
+  });
+
   it("reports queued/failed, overflow and hides rejected lessons", () => {
     const { svc, repo, add } = setup();
     for (let i = 0; i < 35; i++) repo.setStatus(add("acme/web", `l${i}`), "confirmed", 2);
