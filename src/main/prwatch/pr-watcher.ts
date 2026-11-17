@@ -276,11 +276,13 @@ export class PrWatcher {
       return;
     }
     this.unreadBackoff.delete(p.url);
-    // 合并了、关闭了的不再取失败日志、行内评论和 review 作者：没人会再看，省下 gh 调用。失败的检查照记（不带日志）。
+    // 合并了、关闭了的不再取失败日志：没人会再看，省下 gh 调用。失败的检查照记（不带日志）。
+    // 行内评论和 review 作者只在开着变成合并 / 关闭的那一次还取（合并前刚交的 review 要记对）；之后的读（例如补链接来的）不取。
     const open = pr.state === "OPEN";
+    const wasOpen = open || p.rows.some((r) => r.state === "open" && r.checkedAt > 0);
     const failed = pr.ci !== "failing" ? [] : open ? await this.failedWithLogs(p.cwd, pr.checks, p.slug) : pr.checks.filter((c) => c.state === "failing").map((c) => ({ ...c }));
-    const inline = open ? await this.inlineComments(p, pr) : [];
-    const bots = open ? await this.botsOf(p, pr) : null;
+    const inline = wasOpen ? await this.inlineComments(p, pr) : [];
+    const bots = wasOpen ? await this.botsOf(p, pr) : null;
     for (const r of p.rows) this.apply(r, pr, failed, inline, bots, now, marks);
   }
 

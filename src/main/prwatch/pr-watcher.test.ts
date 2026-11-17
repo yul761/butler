@@ -908,6 +908,20 @@ describe("PrWatcher: stages", () => {
     }
   });
 
+  it("the open-to-merged read still fetches inline comments and review authors (reviews may land with the merge), but no failed logs", async () => {
+    const s = setup();
+    s.link();
+    s.gh.prStatus.mockResolvedValue(pr());
+    await s.w.check();
+    s.advance(PR_SLOW_MS);
+    s.gh.prStatus.mockResolvedValue(pr({ state: "MERGED", mergedAt: s.now() - 5, ci: "failing", checks: [check("test", "failing", 4)], reviews: [review, copilot] }));
+    await s.w.check();
+    expect(s.prs.get(1)).toMatchObject({ state: "merged", failed: [check("test", "failing", 4)] });
+    expect(s.gh.failedLog).not.toHaveBeenCalled();
+    expect(s.gh.reviewComments).toHaveBeenCalledTimes(1);
+    expect(s.gh.reviewAuthors).toHaveBeenCalledTimes(1);
+  });
+
   it("records merged once when the PR goes from open to merged, at GitHub's time", async () => {
     const s = setup();
     s.link();
