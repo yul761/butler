@@ -218,7 +218,12 @@ export class LessonRunner {
     const paths = items.flatMap((i) => (i.path ? [i.path] : []));
 
     let fixes: Material["fixes"] = [];
+    let fixesNote: Material["fixesNote"] = null;
     const range = fixRange(pr, items);
+    if (!range && paths.length > 0) {
+      fixesNote = "rewritten";
+      this.d.log?.(`lessons: no fix range for ${item.slug}#${item.prNumber}, history was likely rewritten`);
+    }
     if (range) {
       try {
         const files = await gh.compareFiles(cwd, range.base, range.head, LESSON_GH_TIMEOUT_MS);
@@ -246,7 +251,7 @@ export class LessonRunner {
     const products = repo.products().filter((p) => p.slugs.includes(item.slug));
     const productIds = new Set(products.map((p) => p.id));
     const existing = repo.lessons().filter((l) => (l.scope.kind === "repo" ? l.scope.slug === item.slug : productIds.has(l.scope.productId)));
-    const prompt = analysisPrompt(this.d.lang(), item.slug, { pr, items, fixes, butler }, existing, products);
+    const prompt = analysisPrompt(this.d.lang(), item.slug, { pr, items, fixes, fixesNote, butler }, existing, products);
 
     const r = await execHeadlessJson(this.d.headless, {
       label: "lessons",

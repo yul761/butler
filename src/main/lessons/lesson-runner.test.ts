@@ -277,6 +277,23 @@ describe("LessonRunner queue", () => {
     expect(ctx).toHaveBeenCalledWith("BTL-1", false);
   });
 
+  it("inline comments with no fix range set fixesNote and still analyse", async () => {
+    const s = setup();
+    s.gh.prLessonData.mockResolvedValue(
+      prData(7, {
+        inline: [{ id: "i", author: "alice", body: "fix this", createdAt: Date.parse("2026-01-01T10:00:00Z"), url: "u", path: "src/a.ts", line: 3 } as never],
+        commits: [{ oid: "c1", committedDate: "2026-01-01T12:00:00Z", headline: "h", body: "" }],
+      }),
+    );
+    s.repo.enqueue("acme/web", [7], "merged", T0);
+    s.runner.start();
+    await s.runner.idle();
+    expect(s.gh.compareFiles).not.toHaveBeenCalled();
+    expect(s.run.mock.calls[0]![0].prompt).toContain("history was rewritten");
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("rewritten"));
+    expect(s.statusOf(7).status).toBe("done");
+  });
+
   it("only keeps the fix patches of files the comments point at, and survives compareFiles failing", async () => {
     const s = setup();
     s.gh.prLessonData.mockResolvedValue(

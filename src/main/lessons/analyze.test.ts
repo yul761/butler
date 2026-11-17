@@ -107,7 +107,7 @@ describe("applyAnalysis", () => {
 });
 
 describe("analysisPrompt / schema", () => {
-  const m = { pr: { number: 7, title: "T", body: "", url: "https://x/7", author: "a", headRefName: "h", mergedAt: null, reviews: [], comments: [], inline: [], commits: [], botLogins: new Set() }, items: [], fixes: [], butler: null } as unknown as Material;
+  const m = { pr: { number: 7, title: "T", body: "", url: "https://x/7", author: "a", headRefName: "h", mergedAt: null, reviews: [], comments: [], inline: [], commits: [], botLogins: new Set() }, items: [], fixes: [], fixesNote: null, butler: null } as unknown as Material;
   it("lists existing lessons with id and status, and products with product_id", () => {
     const { repo, shop } = setup();
     const a = seed(repo, "confirmed");
