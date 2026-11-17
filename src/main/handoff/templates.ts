@@ -105,7 +105,7 @@ export const DEFAULT_HANDOFF_PROMPT = `你在为 Butler 生成 ticket {{ticket}}
 
 要求：
 1. 用 tracker MCP 工具读取 ticket {{ticket}} 的描述、评论和子任务。可用的工具：{{tracker_tools}}。工具不可用或读取失败时 jira 填 null，不要编造。
-2. 用 \`gh pr view <分支>\` 和 \`gh pr checks <分支>\` 读取 PR 状态（分支：{{branch}}）。ticket 涉及几个仓库就在每个仓库的目录里各查一次，把找到的 PR 都放进 prs；一个都没有时 prs 填 []。
+2. 用 \`gh pr view <分支>\` 和 \`gh pr checks <分支>\` 读取 PR 状态（分支：{{branch}}）。ticket 涉及几个仓库就在每个仓库的目录里各查一次，把找到的 PR 都放进 prs；一个都没有时 prs 填 []。PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。
 3. 只读：不要修改任何文件，不要提交或推送。
 4. followups 是“合并或部署之后还要做的事”（改配置、开关 feature flag、部署、写文档等）。下面列出了已有的 followups：已有的项保留原来的 id；已经做完的 done 填 true；新发现的项 id 填 null。
 5. done_today 只写今天实际完成的事；next_steps 的第一条写明天最先要做的一步。
@@ -138,7 +138,7 @@ export const DEFAULT_HANDOFF_PROMPT_EN = `You are writing Butler's handoff for t
 
 Requirements:
 1. Read ticket {{ticket}}'s description, comments and subtasks with the tracker MCP tools. Available tools: {{tracker_tools}}. If the tools are unavailable or fail, set jira to null; never make it up.
-2. Read the PR state with \`gh pr view <branch>\` and \`gh pr checks <branch>\` (branch: {{branch}}). If the ticket spans several repos, check in each repo's folder and put every PR you find into prs; if there is none, set prs to [].
+2. Read the PR state with \`gh pr view <branch>\` and \`gh pr checks <branch>\` (branch: {{branch}}). If the ticket spans several repos, check in each repo's folder and put every PR you find into prs; if there is none, set prs to []. Copy each PR url exactly as gh prints it; never build or guess one.
 3. Read only: don't change any file, don't commit or push.
 4. followups are "what still has to happen after the merge or deploy" (config changes, feature flags, deploys, docs and so on). The existing followups are listed below: keep their ids; set done to true for the ones that are finished; use null as the id of a new item.
 5. done_today lists only what was actually finished today; the first item of next_steps is the first step tomorrow.
@@ -169,12 +169,16 @@ Output only one JSON object with the three fields status, prs and jira, meaning 
 
 export const defaultHandoffPrompt = (l: Lang): string => (l === "en" ? DEFAULT_HANDOFF_PROMPT_EN : DEFAULT_HANDOFF_PROMPT);
 /**
- * 以前版本的默认 handoff prompt（第一句还写着“供明天早上的简报使用”）。用户点过保存但没改过的话，存的就是它：
+ * 以前版本的默认 handoff prompt（没有 PR url 那句的；更早的第一句还写着“供明天早上的简报使用”）。用户点过保存但没改过的话，存的就是它：
  * 设置里照样当成默认值，换成当前的默认 prompt。
  */
 export const PREVIOUS_HANDOFF_PROMPTS: readonly string[] = [
-  DEFAULT_HANDOFF_PROMPT.replace("供之后的 session 和记忆使用。", "供明天早上的简报使用。"),
-  DEFAULT_HANDOFF_PROMPT_EN.replace("for later sessions and memory.", "for tomorrow morning's brief."),
+  // 还没有“PR 的 url 照原样复制”那句的版本。
+  DEFAULT_HANDOFF_PROMPT.replace("PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。", ""),
+  DEFAULT_HANDOFF_PROMPT_EN.replace(" Copy each PR url exactly as gh prints it; never build or guess one.", ""),
+  // 更早：第一句还写着“供明天早上的简报使用”（也还没有那句）。
+  DEFAULT_HANDOFF_PROMPT.replace("PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。", "").replace("供之后的 session 和记忆使用。", "供明天早上的简报使用。"),
+  DEFAULT_HANDOFF_PROMPT_EN.replace(" Copy each PR url exactly as gh prints it; never build or guess one.", "").replace("for later sessions and memory.", "for tomorrow morning's brief."),
 ];
 export const defaultRefreshPrompt = (l: Lang): string => (l === "en" ? DEFAULT_REFRESH_PROMPT_EN : DEFAULT_REFRESH_PROMPT);
 /** 以前版本的默认刷新 prompt（还没有“PR 的 url 照原样复制”那句）：存的是它也当作没改过。 */

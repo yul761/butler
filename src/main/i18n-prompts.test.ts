@@ -11,6 +11,7 @@ import { followupNote, handoffSummaryFor } from "./memory/notes";
 import { memDb, tempDir } from "./test-utils";
 
 const hasChinese = (s: string) => /[一-鿿]/.test(s);
+const URL_LINE = { zh: "PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。", en: "Copy each PR url exactly as gh prints it; never build or guess one." } as const;
 
 afterEach(() => setLang("zh"));
 
@@ -30,13 +31,23 @@ describe("prompts follow the language (design 2026-10-26 i18n)", () => {
 
   it("a saved copy of the refresh default from before the PR-url line still counts as the default", () => {
     const settings = new SettingsRepo(memDb());
-    const line = { zh: "PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。", en: "Copy each PR url exactly as gh prints it; never build or guess one." } as const;
     for (const lang of ["zh", "en"] as const) {
       setLang(lang);
-      const old = defaultRefreshPrompt(lang).replace(lang === "zh" ? line.zh : ` ${line.en}`, "");
+      const old = defaultRefreshPrompt(lang).replace(lang === "zh" ? URL_LINE.zh : ` ${URL_LINE.en}`, "");
       expect(old).not.toBe(defaultRefreshPrompt(lang));
       settings.set("refreshPrompt", old);
       expect(settings.get("refreshPrompt")).toBe(defaultRefreshPrompt(lang));
+    }
+  });
+
+  it("the handoff prompt says to copy each PR url exactly; a saved copy of the default from before that line still counts as the default", () => {
+    const settings = new SettingsRepo(memDb());
+    for (const lang of ["zh", "en"] as const) {
+      setLang(lang);
+      expect(defaultHandoffPrompt(lang)).toContain(URL_LINE[lang]);
+      const old = defaultHandoffPrompt(lang).replace(lang === "zh" ? URL_LINE.zh : ` ${URL_LINE.en}`, "");
+      settings.set("handoffPrompt", old);
+      expect(settings.get("handoffPrompt")).toBe(defaultHandoffPrompt(lang));
     }
   });
 
@@ -47,9 +58,10 @@ describe("prompts follow the language (design 2026-10-26 i18n)", () => {
       expect(defaultHandoffPrompt(lang)).not.toMatch(/简报|brief/i);
       expect(handoffCommandBody(lang)).not.toMatch(/简报|brief/i);
       // 旧版本的默认 prompt 原样存下来过（点过保存但没改）：照样当成默认，跟着语言和新文字走。
+      // 那个版本还没有“PR 的 url 照原样复制”那句。
       const old = lang === "zh"
-        ? DEFAULT_HANDOFF_PROMPT.replace("供之后的 session 和记忆使用。", "供明天早上的简报使用。")
-        : defaultHandoffPrompt("en").replace("for later sessions and memory.", "for tomorrow morning's brief.");
+        ? DEFAULT_HANDOFF_PROMPT.replace("供之后的 session 和记忆使用。", "供明天早上的简报使用。").replace(URL_LINE.zh, "")
+        : defaultHandoffPrompt("en").replace("for later sessions and memory.", "for tomorrow morning's brief.").replace(` ${URL_LINE.en}`, "");
       expect(old).not.toBe(defaultHandoffPrompt(lang));
       settings.set("handoffPrompt", old);
       expect(settings.get("handoffPrompt")).toBe(defaultHandoffPrompt(lang));
