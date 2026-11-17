@@ -139,17 +139,29 @@ export class LessonsService {
     };
   }
 
-  /** 某个仓库的队列项，各带最近一次运行。 */
+  /**
+   * 某个仓库的队列项，各带最近一次运行。正在跑的行用 runner 手里的这次（last_run_id 要到结束或延后时才写，
+   * 那时它还指着上一次尝试）：已用时间从这次开始算，点开看的也是这次。
+   */
   runs(slug: string): LessonQueueRowView[] {
     const now = this.d.now();
     const gate = this.d.availability.lessonsGate(now);
+    const live = new Map(this.d.runner.running().map((r) => [r.queueId, r]));
     return this.d.repo.queueRows(slug).map((q) => {
-      const run = q.lastRunId === null ? null : this.d.runs.get(q.lastRunId);
-      const lastRun = run ? summary(run) : null;
+      const prev = q.lastRunId === null ? null : this.d.runs.get(q.lastRunId);
+      const running = q.status === "running" ? live.get(q.id) : undefined;
+      const current = running ? this.d.runs.get(running.runId) : null;
+      const lastRun: LessonRunSummary | null = running
+        ? current
+          ? summary(current)
+          : { id: running.runId, status: "running", reason: null, startedAt: running.startedAt, finishedAt: null, created: 0, hit: 0, dropped: 0, costUsd: null, durationMs: null }
+        : prev
+          ? summary(prev)
+          : null;
       return {
         queueId: q.id,
         prNumber: q.prNumber,
-        prTitle: run?.prTitle ?? null,
+        prTitle: current?.prTitle ?? prev?.prTitle ?? null,
         origin: q.origin,
         status: queueRowStatus(q, lastRun, now, gate),
         reason: q.error,

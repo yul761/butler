@@ -313,6 +313,39 @@ describe("LessonsService queue views", () => {
     expect(r6).toMatchObject({ status: "queued", lastRun: null, prTitle: null });
   });
 
+  it("a running retry shows the running run, not the failed attempt before it", () => {
+    const { svc, repo, runs, runner } = setup();
+    repo.enqueue("acme/web", [5], "merged", 1);
+    const q = repo.take(1)!;
+    const failedRun = runs.start({ queueId: q.id, slug: "acme/web", prNumber: 5, origin: "merged", startedAt: 10 });
+    runs.finish(failedRun, { status: "failed", reason: "exit_nonzero", finishedAt: 20, prTitle: "Fix it" });
+    repo.finish(q.id, "failed", 20, "exit_nonzero", { runId: failedRun });
+    expect(repo.retry(q.id, 40)).toBe("ok");
+    repo.take(41);
+    const live = runs.start({ queueId: q.id, slug: "acme/web", prNumber: 5, origin: "merged", startedAt: 50 });
+    runner.running.mockReturnValue([{ queueId: q.id, runId: live, slug: "acme/web", prNumber: 5, startedAt: 50 }]);
+    const r = svc.runs("acme/web")[0];
+    expect(r.status).toBe("running");
+    expect(r.lastRun).toMatchObject({ id: live, status: "running", startedAt: 50, finishedAt: null });
+    // 这次还没读到 PR 标题：沿用上一次的。
+    expect(r.prTitle).toBe("Fix it");
+    // 从这一行打开的详情就是正在跑的这次，上一次失败的在尝试列表里。
+    const d = svc.run(r.lastRun!.id)!;
+    expect(d).toMatchObject({ id: live, status: "running" });
+    expect(d.attempts.map((a) => a.id)).toEqual([failedRun]);
+  });
+
+  it("a first attempt that is running has its run as the last run", () => {
+    const { svc, repo, runs, runner } = setup();
+    repo.enqueue("acme/web", [5], "merged", 1);
+    const q = repo.take(1)!;
+    const live = runs.start({ queueId: q.id, slug: "acme/web", prNumber: 5, origin: "merged", startedAt: 30 });
+    runner.running.mockReturnValue([{ queueId: q.id, runId: live, slug: "acme/web", prNumber: 5, startedAt: 30 }]);
+    const r = svc.runs("acme/web")[0];
+    expect(r).toMatchObject({ status: "running", prTitle: null });
+    expect(r.lastRun).toEqual({ id: live, status: "running", reason: null, startedAt: 30, finishedAt: null, created: 0, hit: 0, dropped: 0, costUsd: null, durationMs: null });
+  });
+
   const finding = { comment_url: "https://github.com/acme/web/pull/1#r1", summary: "s", avoidable: true, why_missed: "w", rule: { text: "r", why: "y", scope: "repo", product_id: null, same_as: null } };
   const finishRun = (runs: LessonRunsRepo, over: Parameters<LessonRunsRepo["finish"]>[1]) => {
     const id = runs.start({ queueId: null, slug: "acme/web", prNumber: 1, origin: "merged", startedAt: 1 });

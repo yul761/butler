@@ -56,7 +56,8 @@ describe("runStatusPill", () => {
     expect(runStatusPill(row("failed"), S, now).text).toBe("失败");
   });
   it("running pill shows elapsed time", () => {
-    const r = row("running", { lastRun: run({ status: "running", startedAt: now - 5 * 60_000 }) });
+    // 和 LessonsService.runs 给的一样：正在跑的这次，还没结束、没有计数。
+    const r = row("running", { lastRun: run({ status: "running", startedAt: now - 5 * 60_000, finishedAt: null, created: 0, hit: 0 }) });
     expect(runStatusPill(r, S, now)).toEqual({ text: "分析中 · 5 分钟", tone: "muted" });
   });
 });
