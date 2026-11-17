@@ -30,6 +30,8 @@ export function LessonRuns({ slug, selectedRunId, onSelect, onOpenSession }: { s
     }
   };
   const failed = retryAllCount(rows);
+  const selectedRow = rows.find((r) => r.lastRun?.id === selectedRunId);
+  const detailQueue = selectedRow ? { queueId: selectedRow.queueId, status: selectedRow.status } : null;
   return (
     <div className="lesson-runs" data-testid="lesson-runs">
       {failed > 0 && (
@@ -72,14 +74,7 @@ export function LessonRuns({ slug, selectedRunId, onSelect, onOpenSession }: { s
         })}
       </ul>
       {selectedRunId !== null && (
-        <LessonRunDetail
-          runId={selectedRunId}
-          queue={(() => {
-            const q = rows.find((r) => r.lastRun?.id === selectedRunId);
-            return q ? { queueId: q.queueId, status: q.status } : null;
-          })()}
-          onOpenSession={onOpenSession}
-        />
+        <LessonRunDetail key={selectedRunId} runId={selectedRunId} queue={detailQueue} onOpenSession={onOpenSession} />
       )}
     </div>
   );

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import type { LessonQueueRowStatus } from "../../../shared/lessons";
 import { api } from "../api";
 import { reportError } from "../errors";
-import { detailButtons, detailSections, openInClaudeOutcome, runDetailFacts, runErrorText } from "../lesson-runs-view";
+import { detailButtons, detailSections, openInClaudeOutcome, runDetailFacts, runErrorText, timeText } from "../lesson-runs-view";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 
@@ -15,10 +15,8 @@ export function LessonRunDetail({ runId, queue, onOpenSession }: {
   /** 点“之前的尝试”看那一次；换了选中的运行就回到它。 */
   const [viewId, setViewId] = useState(runId);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    setViewId(runId);
-    setError(null);
-  }, [runId]);
+  // 换了看的那一次，上一次操作的错误不带过去。
+  useEffect(() => setError(null), [viewId]);
   const d = useStateRefetch(`lessons-run:${viewId}`, () => api.lessonsRun(viewId));
   if (!d || d.id !== viewId) return null;
 
@@ -100,7 +98,7 @@ export function LessonRunDetail({ runId, queue, onOpenSession }: {
           <ul className="lesson-run-lessons">
             {d.lessons.map((l) => (
               <li key={l.id}>
-                <span className="lesson-text">{l.text}</span> <span className="pill none">{l.kind === "created" ? S.lessonRunCreated : S.lessonRunHit}</span>
+                <span className="lesson-text">{l.text}</span> <span className="pill none">{l.kind === "created" ? S.lessonRunCreated : S.lessonRunHit}</span> <span className="pill none" data-testid={`lesson-run-lesson-status-${l.id}`}>{S.lessonRunLessonStatus[l.status]}</span>
               </li>
             ))}
           </ul>
@@ -128,10 +126,10 @@ export function LessonRunDetail({ runId, queue, onOpenSession }: {
         <>
           <h4>{S.lessonRunAttempts}</h4>
           <ul className="lesson-run-attempts">
-            {d.attempts.map((a) => (
-              <li key={a.id}>
-                <button className="link" data-testid={`lesson-run-attempt-${a.id}`} onClick={() => setViewId(a.id)}>
-                  {new Date(a.startedAt).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })} · {S.lessonRunStatus[a.status === "aborted" ? "failed" : a.status]}
+            {[...d.attempts, d].sort((x, y) => y.id - x.id).map((a) => (
+              <li key={a.id} className={a.id === viewId ? "lesson-run selected" : "lesson-run"}>
+                <button className="link" data-testid={`lesson-run-attempt-${a.id}`} aria-current={a.id === viewId ? "true" : undefined} onClick={() => setViewId(a.id)}>
+                  {timeText(a.startedAt)} · {S.lessonRunStatus[a.status === "aborted" ? "failed" : a.status]}
                 </button>
               </li>
             ))}

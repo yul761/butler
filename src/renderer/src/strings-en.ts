@@ -1,4 +1,4 @@
-import type { LessonOrigin, LessonQueueRowStatus, LessonRunReason } from "../../shared/lessons";
+import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason } from "../../shared/lessons";
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { PrivacyLevel } from "../../shared/llm";
 import type { ReportKind } from "../../shared/control";
@@ -591,6 +591,7 @@ export const EN: UiStrings = {
   lessonRunWhyMissed: "Why it was missed",
   lessonRunLessons: "Lessons",
   lessonRunCreated: "new",
+  lessonRunLessonStatus: { pending: "Pending", confirmed: "Confirmed", disabled: "Disabled", rejected: "Rejected" } satisfies Record<LessonStatus, string>,
   lessonRunHit: "seen again",
   lessonRunDropped: (n: number) => `${n} dropped`,
   lessonRunAttempts: "Earlier attempts",

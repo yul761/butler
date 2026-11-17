@@ -3,7 +3,8 @@ import type { LessonQueueRowStatus, LessonQueueRowView, LessonQueueView, LessonR
 import { S } from "./strings";
 import type { LessonOrigin } from "../../shared/lessons";
 import { EN } from "./strings-en";
-import { detailButtons, detailSections, openInClaudeOutcome, runDetailFacts, queueBarButtons, queueBarText, reasonText, retryAllCount, runErrorText, rowButtons, runCountsText, runSelectable, runStatusPill, sourceLabel } from "./lesson-runs-view";
+import { formatDuration } from "./components/TicketActivity";
+import { timeText, detailButtons, detailSections, openInClaudeOutcome, runDetailFacts, queueBarButtons, queueBarText, reasonText, retryAllCount, runErrorText, rowButtons, runCountsText, runSelectable, runStatusPill, sourceLabel } from "./lesson-runs-view";
 
 const now = new Date(2026, 10, 16, 12, 0).getTime();
 const at = new Date(2026, 10, 16, 15, 0).getTime();
@@ -140,14 +141,15 @@ describe("runDetailFacts", () => {
     expect(facts[S.lessonRunFact.tokens]).toBe("1000 / 50");
     expect(facts[S.lessonRunFact.model]).toBe("opus");
     expect(facts[S.lessonRunFact.attempt]).toBe("2 / 3");
-    expect(facts[S.lessonRunFact.duration]).toBeTruthy();
+    expect(facts[S.lessonRunFact.duration]).toBe(formatDuration(125_000, S));
+    expect(facts[S.lessonRunFact.started]).toBe(timeText(d.startedAt));
     const bare = runDetailFacts(detail(), S).map(([k]) => k);
     expect(bare).toEqual([S.lessonRunFact.status, S.lessonRunFact.started, S.lessonRunFact.attempt]);
   });
 });
 
 describe("detailSections", () => {
-  it("shows message, stderr and material for a failed run: message, stderr and material", () => {
+  it("shows message, stderr, gh stderr and material for a failed run", () => {
     const s = detailSections(detail({ status: "failed", message: "boom", stderrTail: "err", ghStderr: "gh err" }));
     expect(s).toMatchObject({ message: "boom", stderr: "err", ghStderr: "gh err", material: "M", rawOutput: "R", trimmedNote: false });
   });
@@ -170,9 +172,9 @@ describe("detailButtons", () => {
     expect(detailButtons(detail(), "running")).toEqual(["cancel", "open"]);
     expect(detailButtons(detail(), "done")).toEqual(["open"]);
   });
-  it("has no queue actions for an earlier run, and no open once trimmed", () => {
+  it("has no queue actions for an earlier run, and still open when trimmed", () => {
     expect(detailButtons(detail(), null)).toEqual(["open"]);
-    expect(detailButtons(detail({ trimmed: true, material: null }), "failed")).toEqual(["retry"]);
+    expect(detailButtons(detail({ trimmed: true, material: null }), "failed")).toEqual(["retry", "open"]);
   });
 });
 

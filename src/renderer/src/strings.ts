@@ -1,4 +1,4 @@
-import type { LessonOrigin, LessonQueueRowStatus, LessonRunReason } from "../../shared/lessons";
+import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason } from "../../shared/lessons";
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { Lang } from "../../shared/i18n";
 import type { PrivacyLevel } from "../../shared/llm";
@@ -598,6 +598,7 @@ const ZH = {
   lessonRunWhyMissed: "为什么没注意到",
   lessonRunLessons: "产出的规矩",
   lessonRunCreated: "新",
+  lessonRunLessonStatus: { pending: "待确认", confirmed: "已确认", disabled: "已停用", rejected: "已拒绝" } satisfies Record<LessonStatus, string>,
   lessonRunHit: "再次",
   lessonRunDropped: (n: number) => `丢弃 ${n} 条`,
   lessonRunAttempts: "之前的尝试",

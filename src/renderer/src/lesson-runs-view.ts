@@ -75,7 +75,7 @@ export function runSelectable(r: LessonQueueRowView): boolean {
   return r.lastRun !== null;
 }
 
-const timeText = (ms: number) => new Date(ms).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+export const timeText = (ms: number) => new Date(ms).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 /** 详情里的“状态 / 开始 / 用时 / 模型 / 费用 / token / 第几次”；没有值的省略。 */
 export function runDetailFacts(d: LessonRunDetail, S: UiStrings): [label: string, value: string][] {
@@ -127,10 +127,10 @@ export function detailSections(d: LessonRunDetail): {
   };
 }
 
-/** 详情里的按钮：重试/取消只给这个 PR 最近一次运行（有队列项）；清理过的运行没有材料可打开。 */
+/** 详情里的按钮：重试/取消只给这个 PR 最近一次运行（有队列项）；总能在 Claude 里打开（清理过的运行文件里会写明材料已清理）。 */
 export function detailButtons(d: LessonRunDetail, queueStatus: LessonQueueRowStatus | null): Array<"retry" | "cancel" | "open"> {
   const out: Array<"retry" | "cancel" | "open"> = queueStatus === null ? [] : rowButtons(queueStatus);
-  if (!d.trimmed && d.material !== null) out.push("open");
+  out.push("open");
   return out;
 }
 
