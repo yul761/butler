@@ -2,7 +2,7 @@
 import type { PrStageRepo } from "../db/pr-stage-repo";
 import type { TicketPr } from "../db/ticket-prs-repo";
 import type { PrStagesScope, PrStagesTicket, PrStagesView } from "../../shared/pr-stages";
-import type { Ticket } from "../../shared/types";
+import { effectiveStatus, type Ticket } from "../../shared/types";
 import { assignToPrs, prEnd, type ScopePr } from "./pr-scope";
 import { derivePrStages, type DeriveInput } from "./pr-stages";
 
@@ -29,6 +29,13 @@ const baseName = (p: string): string => p.replace(/[\\/]+$/, "").split(/[\\/]/).
 const scopePr = (p: TicketPr): ScopePr => ({
   id: p.id, repoId: p.repoId, slug: p.slug, number: p.number, headBranch: p.headBranch, start: p.openedAt ?? p.linkedAt, end: prEnd(p),
 });
+
+/** D-6：ticket 的 PR 都合并或关闭、至少一个合并；或者（手动优先的）状态已经是 merged_pending_followup / done。 */
+export function ticketMerged(t: Pick<Ticket, "status" | "statusManual">, prs: Pick<TicketPr, "state">[]): boolean {
+  const status = effectiveStatus(t);
+  if (status === "merged_pending_followup" || status === "done") return true;
+  return prs.length > 0 && prs.every((p) => p.state !== "open") && prs.some((p) => p.state === "merged");
+}
 
 export class PrStagesService {
   constructor(private readonly d: PrStagesServiceDeps) {}
@@ -87,6 +94,9 @@ export class PrStagesService {
         { prId: p.id, slug: r ? null : p.slug, noPr: false },
       );
     });
-    return { ticketKey: t.key, title: t.title, archived: t.archivedAt !== null, merged: false, hasRepos: t.repos.length > 0, rows: [...noPrRows, ...prRows] };
+    return {
+      ticketKey: t.key, title: t.title, featureId: t.featureId, archived: t.archivedAt !== null, merged: ticketMerged(t, prs),
+      hasRepos: t.repos.length > 0, rows: [...noPrRows, ...prRows],
+    };
   }
 }

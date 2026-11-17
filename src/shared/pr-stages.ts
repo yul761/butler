@@ -74,8 +74,10 @@ export interface PrStagesView {
 export interface PrStagesTicket {
   ticketKey: string;
   title: string | null;
+  /** 没有行（没有仓库）的 ticket 也知道自己在哪个 feature 下：epic 按它分组。 */
+  featureId: number | null;
   archived: boolean;
-  /** 按 D-6 判断整个 ticket 是否已合并；还没实现，先是 false。 */
+  /** 整个 ticket 算已合并（D-6）：PR 都合并或关闭且至少一个合并，或者状态是 merged_pending_followup / done。 */
   merged: boolean;
   hasRepos: boolean;
   rows: PrStagesView[];

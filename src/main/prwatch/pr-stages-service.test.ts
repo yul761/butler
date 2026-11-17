@@ -3,7 +3,7 @@ import type { StageEvent } from "../db/pr-stage-repo";
 import type { TicketPr } from "../db/ticket-prs-repo";
 import type { PrStagesView } from "../../shared/pr-stages";
 import type { Ticket, TicketRepo } from "../../shared/types";
-import { PrStagesService, type PrStagesServiceDeps } from "./pr-stages-service";
+import { PrStagesService, ticketMerged, type PrStagesServiceDeps } from "./pr-stages-service";
 
 const repo = (id: number, key: string, branch = "feat", path = `/code/r${id}`): TicketRepo => ({
   id, ticketKey: key, repoPath: path, workMode: "branch", worktreePath: null, branch, createdAt: 1, worktreeRemovedAt: null, cleanupBlocked: null,
@@ -144,5 +144,38 @@ describe("PrStagesService", () => {
     const sr = (since: number | null) => rowsOf(make({ tickets: t, events, prs, since }))[0].stages[2];
     expect(sr(null).state).toBe("unknown");
     expect(sr(0).state).toBe("skipped");
+  });
+
+  it("feature 1 shape: five merged_pending_followup tickets count 5/5, including one with no PRs", () => {
+    const keys = ["F-1", "F-2", "F-3", "F-4", "F-5"];
+    const tickets = keys.map((k, i) => ticket(k, [repo(i + 1, k)], 10, { status: "merged_pending_followup" }));
+    // F-1 到 F-4 各有一个合并了的 PR（F-2 还有一个关掉的）；F-5 没有 PR。
+    const prs = keys.slice(0, 4).map((k, i) => prRow({ id: i + 1, ticketKey: k, repoId: i + 1, number: i + 1, state: "merged", mergedAt: 200 }));
+    prs.push(prRow({ id: 9, ticketKey: "F-2", repoId: 2, number: 9, state: "closed", closedAt: 150 }));
+    const view = make({ tickets, prs }).view({ featureId: 10 });
+    expect(view.map((t) => [t.ticketKey, t.merged])).toEqual(keys.map((k) => [k, true]));
+    expect(view.find((t) => t.ticketKey === "F-5")?.rows.map((r) => r.noPr)).toEqual([true]);
+  });
+
+  it("all PRs closed, none merged, status active: not merged", () => {
+    const prs = [prRow({ id: 1, state: "closed", closedAt: 200 }), prRow({ id: 2, number: 2, state: "closed", closedAt: 300 })];
+    const [t] = make({ tickets: [ticket("A-1", [repo(5, "A-1")])], prs }).view({ ticketKey: "A-1" });
+    expect(t.merged).toBe(false);
+  });
+
+  it("ticketMerged: every PR merged or closed with one merged, or a merged / done status (manual status first)", () => {
+    const st = (status: Ticket["status"], statusManual: Ticket["statusManual"] = null) => ({ status, statusManual });
+    expect(ticketMerged(st("active"), [{ state: "merged" }, { state: "closed" }])).toBe(true);
+    expect(ticketMerged(st("active"), [{ state: "merged" }, { state: "open" }])).toBe(false);
+    expect(ticketMerged(st("active"), [])).toBe(false);
+    expect(ticketMerged(st("done"), [])).toBe(true);
+    expect(ticketMerged(st("merged_pending_followup"), [{ state: "open" }])).toBe(true);
+    expect(ticketMerged(st("done", "active"), [])).toBe(false);
+    expect(ticketMerged(st("active", "done"), [{ state: "open" }])).toBe(true);
+  });
+
+  it("each ticket carries its feature id, also without rows", () => {
+    const svc = make({ tickets: [ticket("A-1", [], 10), ticket("B-1", [repo(2, "B-1")], 11)], features: [{ id: 10, epicId: 7 }, { id: 11, epicId: 7 }] });
+    expect(svc.view({ epicId: 7 }).map((t) => [t.ticketKey, t.featureId, t.rows.length])).toEqual([["A-1", 10, 0], ["B-1", 11, 1]]);
   });
 });

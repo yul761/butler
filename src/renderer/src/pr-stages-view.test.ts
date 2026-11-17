@@ -1,33 +1,55 @@
 import { describe, expect, it } from "vitest";
-import type { PrStageCell, PrStageId, PrStageState, PrStagesTicket, PrStagesView } from "../../shared/pr-stages";
-import { cellLabel, cellText, epicPrSummary, timelineText } from "./pr-stages-view";
+import type { PrStageCell, PrStageId, PrStageState, PrStagesTicket, PrStagesView, PrTimelineEntry } from "../../shared/pr-stages";
+import { cellLabel, cellText, epicPrSummary, newestRow, timelineText } from "./pr-stages-view";
 import { S } from "./strings";
 
 const IDS: PrStageId[] = ["design", "dev", "self_review", "ci", "peer_review", "merge"];
 
-function row(featureId: number | null, states: Partial<Record<PrStageId, PrStageState>>, closed = false): PrStagesView {
+function row(featureId: number | null, states: Partial<Record<PrStageId, PrStageState>>, o: Partial<PrStagesView> = {}): PrStagesView {
   const stages: PrStageCell[] = IDS.map((id) => ({ id, state: states[id] ?? "todo", round: 1, at: null }));
-  return { ticketKey: "T-1", featureId, repoId: 1, repoName: "r", prId: null, slug: null, noPr: true, prNumber: null, prUrl: null, closed, stages, timeline: [] };
+  return { ticketKey: "T-1", featureId, repoId: 1, repoName: "r", prId: null, slug: null, noPr: true, prNumber: null, prUrl: null, closed: false, stages, timeline: [], ...o };
 }
-const tickets = (...rows: PrStagesView[]): PrStagesTicket[] =>
-  rows.map((r, i) => ({ ticketKey: `T-${i}`, title: null, archived: false, merged: false, hasRepos: true, rows: [r] }));
+const at = (...ms: number[]): PrTimelineEntry[] => ms.map((m) => ({ at: m, stage: "dev", kind: "push", detail: null, back: false }));
+const ticket = (key: string, featureId: number | null, rows: PrStagesView[], o: Partial<PrStagesTicket> = {}): PrStagesTicket =>
+  ({ ticketKey: key, featureId, title: null, archived: false, merged: false, hasRepos: true, rows, ...o });
+const featureOfList = (ts: PrStagesTicket[]) => (key: string) => ts.find((t) => t.ticketKey === key)?.featureId ?? null;
+const summary = (ts: PrStagesTicket[]) => epicPrSummary(ts, featureOfList(ts));
 
 describe("epicPrSummary", () => {
-  it("counts merged / failed / notStarted per feature and ignores closed PRs", () => {
-    const rows = [
-      row(1, { dev: "done", ci: "done", merge: "done" }),
-      row(1, { dev: "done", ci: "failed" }),
-      row(1, {}),
-      row(2, { dev: "done" }, true),
+  it("epicPrSummary counts tickets, not PR rows", () => {
+    const ts = [
+      // 三个 PR 的 ticket 只算一个；merged 按 ticket.merged，不看行。
+      ticket("A-1", 1, [row(1, { dev: "done" }, { prId: 3 }), row(1, { dev: "done", merge: "done" }, { prId: 2 }), row(1, {}, { prId: 1 })], { merged: true }),
+      // 最新的行（最后有动静的）是失败的那个 PR；没动过的仓库那行不算。
+      ticket("A-2", 1, [row(1, {}), row(1, { dev: "done", ci: "failed" }, { prId: 4, timeline: at(300) }), row(1, { dev: "done" }, { prId: 5, timeline: at(200) })]),
+      // 没有仓库也没有行：还没开始。
+      ticket("A-3", 1, [], { hasRepos: false }),
+      // 已归档的也算；PR 全关了、没合并：还没开始。
+      ticket("A-4", 1, [row(1, { dev: "done" }, { prId: 6, closed: true, timeline: at(100) })], { archived: true }),
+      ticket("A-5", 1, [row(1, { dev: "active" })]),
+      ticket("B-1", 2, [row(2, { dev: "done", merge: "done" }, { prId: 7 })]),
     ];
-    const m = epicPrSummary(tickets(...rows));
-    expect(m.get(1)).toEqual({ featureId: 1, merged: 1, active: 0, failed: 1, notStarted: 1, total: 3 });
-    expect(m.has(2)).toBe(false);
+    expect(summary(ts).get(1)).toEqual({ featureId: 1, merged: 1, active: 1, failed: 1, notStarted: 2, total: 5 });
+    // 行上 merge 完成但 ticket 没算合并：不算 merged。
+    expect(summary(ts).get(2)).toMatchObject({ merged: 0, active: 1, total: 1 });
   });
 
-  it("counts a started, unfinished, not failed row as active", () => {
-    const m = epicPrSummary(tickets(row(3, { dev: "active" })));
-    expect(m.get(3)).toMatchObject({ active: 1, total: 1 });
+  it("an epic feature with no tickets has total 0", () => {
+    const ts = [ticket("A-1", 1, [row(1, {})]), ticket("X-1", null, [row(null, {})])];
+    const m = summary(ts);
+    expect(m.get(2)?.total ?? 0).toBe(0);
+    expect([...m.keys()]).toEqual([1]);
+  });
+});
+
+describe("newestRow", () => {
+  it("is the row with the latest activity; ties and quiet rows keep the main process order", () => {
+    const quiet = row(1, {});
+    const a = row(1, {}, { prId: 1, timeline: at(100, 400) });
+    const b = row(1, {}, { prId: 2, timeline: at(300) });
+    expect(newestRow(ticket("A-1", 1, [quiet, b, a]))).toBe(a);
+    expect(newestRow(ticket("A-1", 1, [quiet, row(1, {}, { prId: 3 })]))).toBe(quiet);
+    expect(newestRow(ticket("A-1", 1, []))).toBeNull();
   });
 });
 

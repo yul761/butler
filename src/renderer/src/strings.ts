@@ -621,6 +621,9 @@ const ZH = {
   prNoRepos: "还没有仓库",
   prNoPrYet: "进行中，还没有 PR",
   prArchived: "已归档",
+  prNoTickets: "还没有 ticket",
+  prTicketNoRepos: "这个 ticket 还没有仓库",
+  prCount: (n: number) => `${n} 个 PR`,
   prBackToDev: "→ 回到开发",
   prTimeline: {
     design_skill: (d) => (d ? `skill ${d}` : "skill"),

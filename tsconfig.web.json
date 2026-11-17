@@ -10,5 +10,6 @@
     "noEmit": true,
     "types": []
   },
-  "include": ["src/renderer/src/**/*", "src/shared/**/*"]
+  "include": ["src/renderer/src/**/*", "src/shared/**/*"],
+  "exclude": ["src/renderer/src/styles-contrast.test.ts"]
 }

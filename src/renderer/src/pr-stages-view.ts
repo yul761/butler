@@ -1,4 +1,4 @@
-import type { PrStageCell, PrStagesScope, PrStagesTicket, PrTimelineEntry } from "../../shared/pr-stages";
+import type { PrStageCell, PrStagesScope, PrStagesTicket, PrStagesView, PrTimelineEntry } from "../../shared/pr-stages";
 import { api } from "./api";
 import { useStateRefetch } from "./components/useStateRefetch";
 import { S } from "./strings";
@@ -52,19 +52,33 @@ export interface EpicPrRow {
   total: number;
 }
 
-/** 按 feature 分组计数：merge=done → merged；closed 不计；有 failed 的 cell → failed；dev 还是 todo → notStarted；其余 active。 */
-export function epicPrSummary(tickets: PrStagesTicket[]): Map<number, EpicPrRow> {
+/** 一行最后有动静的时间：时间线和格子上最晚的时间；什么都没有为 -Infinity。 */
+const lastAt = (r: PrStagesView): number =>
+  Math.max(-Infinity, ...r.timeline.map((e) => e.at), ...r.stages.flatMap((c) => (c.at === null ? [] : [c.at])));
+
+/** ticket 最新的一行：最后有动静的那行；一样晚（或都没动静）时取主进程排在前面的（没有 PR 的行，然后新的 PR）。没有行为 null。 */
+export function newestRow(t: PrStagesTicket): PrStagesView | null {
+  return t.rows.reduce<PrStagesView | null>((best, r) => (best === null || lastAt(r) > lastAt(best) ? r : best), null);
+}
+
+/**
+ * 按 feature 数 ticket（不是行，含已归档的）：ticket.merged → merged；其余看最新的一行：
+ * 没有行或 PR 已关闭 → notStarted；有 failed 的 cell → failed；dev 还是 todo → notStarted；其余 active。
+ */
+export function epicPrSummary(tickets: PrStagesTicket[], featureOf: (ticketKey: string) => number | null): Map<number, EpicPrRow> {
   const out = new Map<number, EpicPrRow>();
-  for (const r of tickets.flatMap((t) => t.rows)) {
-    if (r.featureId === null || r.closed) continue;
-    const e = out.get(r.featureId) ?? { featureId: r.featureId, merged: 0, active: 0, failed: 0, notStarted: 0, total: 0 };
-    const state = (id: string) => r.stages.find((c) => c.id === id)?.state;
-    if (state("merge") === "done") e.merged++;
+  for (const t of tickets) {
+    const featureId = featureOf(t.ticketKey);
+    if (featureId === null) continue;
+    const e = out.get(featureId) ?? { featureId, merged: 0, active: 0, failed: 0, notStarted: 0, total: 0 };
+    const r = newestRow(t);
+    if (t.merged) e.merged++;
+    else if (r === null || r.closed) e.notStarted++;
     else if (r.stages.some((c) => c.state === "failed")) e.failed++;
-    else if (state("dev") === "todo") e.notStarted++;
+    else if (r.stages.find((c) => c.id === "dev")?.state === "todo") e.notStarted++;
     else e.active++;
     e.total++;
-    out.set(r.featureId, e);
+    out.set(featureId, e);
   }
   return out;
 }

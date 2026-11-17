@@ -1,9 +1,9 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PrStageCell, PrStageId, PrStagesView } from "../../../shared/pr-stages";
+import type { PrStageCell, PrStageId, PrStagesTicket, PrStagesView } from "../../../shared/pr-stages";
 import { S } from "../strings";
-import { TicketPrRows } from "./PrStages";
+import { EpicPrRows, FeaturePrRows, TicketPrRows } from "./PrStages";
 
 const IDS: PrStageId[] = ["design", "dev", "self_review", "ci", "peer_review", "merge"];
 const stages: PrStageCell[] = IDS.map((id) => ({ id, state: "done", round: 1, at: null }));
@@ -42,5 +42,40 @@ describe("the ticket tab's PR rows", () => {
     expect(html).toContain(S.prNoPrYet);
     expect(html.indexOf(S.prNoPrYet)).toBeLessThan(html.indexOf("#1"));
     expect(html.match(/class="pr-link link"/g)).toHaveLength(1);
+  });
+});
+
+const ticket = (key: string, rows: PrStagesView[], o: Partial<PrStagesTicket> = {}): PrStagesTicket =>
+  ({ ticketKey: key, featureId: 1, title: null, archived: false, merged: false, hasRepos: true, rows, ...o });
+const renderFeature = (tickets: PrStagesTicket[]): string => renderToStaticMarkup(createElement(FeaturePrRows, { tickets, onOpenTicket: () => {} }));
+const renderEpic = (tickets: PrStagesTicket[], features: { id: number; name: string }[]): string =>
+  renderToStaticMarkup(createElement(EpicPrRows, { tickets, features, onOpenTicket: () => {} }));
+
+describe("the feature and epic PR tables", () => {
+  it("a feature with no tickets does not say 还没有仓库", () => {
+    const html = renderFeature([]);
+    expect(html).toContain(S.prNoTickets);
+    expect(html).not.toContain(S.prNoRepos);
+  });
+
+  it("archived tickets show the tag", () => {
+    const html = renderFeature([ticket("T-1", [prRow(1)], { archived: true }), ticket("T-2", [prRow(2, { ticketKey: "T-2" })])]);
+    expect(html.match(new RegExp(S.prArchived, "g"))).toHaveLength(1);
+    expect(html.indexOf(S.prArchived)).toBeLessThan(html.indexOf("T-2"));
+  });
+
+  it("one row per ticket, with the PR count when there are several, and a note for a ticket with no repos", () => {
+    const html = renderFeature([ticket("T-1", [noPrRow, prRow(3), prRow(2)]), ticket("T-2", [prRow(4, { ticketKey: "T-2" })]), ticket("T-3", [], { hasRepos: false })]);
+    expect(html.match(/<tr class="clickable"/g)).toHaveLength(3);
+    expect(html.match(new RegExp(S.prCount(2), "g"))).toHaveLength(1);
+    expect(html).not.toContain(S.prCount(1));
+    expect(html).toContain(S.prTicketNoRepos);
+  });
+
+  it("an epic feature with no tickets says so instead of 0/0", () => {
+    const html = renderEpic([ticket("T-1", [prRow(1)], { merged: true })], [{ id: 1, name: "pay" }, { id: 2, name: "ship" }]);
+    expect(html).toContain(S.prMergedOf(1, 1));
+    expect(html).toContain(S.prNoTickets);
+    expect(html).not.toContain(S.prMergedOf(0, 0));
   });
 });

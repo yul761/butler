@@ -614,6 +614,9 @@ export const EN: UiStrings = {
   prNoRepos: "No repos yet",
   prNoPrYet: "In progress, no PR yet",
   prArchived: "Archived",
+  prNoTickets: "No tickets yet",
+  prTicketNoRepos: "This ticket has no repos",
+  prCount: (n: number) => `${n} PRs`,
   prBackToDev: "→ back to dev",
   prTimeline: {
     design_skill: (d) => (d ? `skill ${d}` : "skill"),
