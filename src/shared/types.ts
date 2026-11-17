@@ -1,4 +1,5 @@
 import type { ActivityEvent, SessionActivity } from "./activity";
+import type { AvailabilityHit, LimitHit } from "./availability";
 import type { ReportKind } from "./control";
 import type { FeatureHandoff, Handoff, Pr } from "./handoff";
 export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
@@ -573,7 +574,17 @@ export interface InboxView {
 /** 收件箱看哪一块：一个 feature（含它的 ticket）、一个 epic（含它的 feature 和 ticket），或者全部。 */
 export type InboxScope = { featureId: number } | { epicId: number } | { all: true };
 
+/** 「现在」页顶上的一条提醒（Claude 限额、复盘暂停或失败、某个 session 撞了限额）。 */
+export type NowNotice =
+  | { kind: "claude_limited"; hit: AvailabilityHit; retryAt: number | null; lessonsPaused: boolean }
+  | { kind: "model_unavailable"; hit: AvailabilityHit; retryAt: number | null }
+  | { kind: "lessons_paused" }
+  | { kind: "lessons_failing"; count: number }
+  | { kind: "session_limited"; target: NowTarget; title: string | null; limit: LimitHit };
+
 export interface NowView {
+  /** 页面顶上的提醒，即使没有什么需要你也显示。 */
+  notices: NowNotice[];
   /** 全部需要你的行，按 since 从早到晚。有未决「待你决定」的 session 不在这里（它的卡片在 decisions 里）。 */
   needsYou: NowRow[];
   /** 全部未决的「待你决定」（BTL-190 第 2+3 点），从早到晚；终端关着的 session 的也在。 */

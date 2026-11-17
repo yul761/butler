@@ -9,6 +9,7 @@ import { parseGateRequest, type GateRequest, type GateResult } from "../shared/g
 import { IPC } from "../shared/ipc";
 import type { LimitHit } from "../shared/availability";
 import { ClaudeAvailability } from "./claude/availability";
+import { buildNotices } from "./now/notices";
 import { AvailabilityRepo } from "./db/availability-repo";
 import type { Session } from "../shared/types";
 import { APP_ID, shouldSetAppId } from "./app-id";
@@ -1298,6 +1299,7 @@ async function bootstrap(): Promise<void> {
         decisions: inboxService.pendingDecisionViews(),
         recent: (id) => activityMonitor.recent(id),
         memory: activityMonitor.memoryLog(),
+        notices: buildNotices({ availability: availability.view(), recentRuns: lessonRuns.recentFinished(20) }),
       });
     },
     rederive: (key) => {

@@ -32,6 +32,11 @@ const usage = (over: Partial<UsageSummary> = {}): UsageSummary => ({
 afterEach(() => setUiLang("zh"));
 
 describe("rowText", () => {
+  it("rowText of a limited row is danger", () => {
+    const limit = { kind: "usage_limit" as const, resetsAt: null, message: "hit your limit" };
+    expect(rowText(row({ activity: act({ kind: "waiting", limit }), working: false }), S, NOW)).toEqual({ main: "用量已达上限", sub: "hit your limit", tone: "danger" });
+  });
+
   it("needs-you rows read 等你 with the reason", () => {
     const r = rowText(row({ needsYou: "问要不要拆 PR", activity: act({ kind: "waiting" }) }), S, NOW);
     expect(r).toMatchObject({ main: "等你：问要不要拆 PR", tone: "danger" });
@@ -166,7 +171,7 @@ describe("rowPlace", () => {
     const loose = row({ sessionId: "s9", ticketKey: "BTL-9", title: "独立的 ticket" });
     const counts = { active: 1, needsYou: 0, stuck: 0 };
     const view: NowView = {
-      needsYou: [], decisions: [], butler: null, running: 4, merges: [], memory: [],
+      needsYou: [], decisions: [], butler: null, running: 4, merges: [], memory: [], notices: [],
       epics: [
         { id: 3, name: "结账改版", rows: [epicRow], counts, features: [{ id: 7, name: "支付重构", rows: [coord, ticket], counts }] },
         { id: null, name: "", rows: [], counts, features: [{ id: null, name: "", rows: [loose], counts }] },
@@ -197,9 +202,9 @@ describe("inbox helpers (BTL-190 2+3)", () => {
 
   it("counts every pending decision as one more thing that needs you", () => {
     expect(needsYouTotal(null)).toBe(0);
-    expect(needsYouTotal({ needsYou: [row()], decisions: [item(), item({ id: 2 })], epics: [], butler: null, running: 1, merges: [], memory: [] })).toBe(3);
+    expect(needsYouTotal({ needsYou: [row()], decisions: [item(), item({ id: 2 })], epics: [], butler: null, running: 1, merges: [], memory: [], notices: [] })).toBe(3);
     // 已经在卡片上答了、等着送进去的不算。
-    expect(needsYouTotal({ needsYou: [], decisions: [item(), item({ id: 2, answer: "A" })], epics: [], butler: null, running: 1, merges: [], memory: [] })).toBe(1);
+    expect(needsYouTotal({ needsYou: [], decisions: [item(), item({ id: 2, answer: "A" })], epics: [], butler: null, running: 1, merges: [], memory: [], notices: [] })).toBe(1);
   });
 });
 
@@ -207,7 +212,7 @@ describe("the live window (BTL-190 7)", () => {
   const ev = (at: number, label: string, over: Partial<ActivityEvent> = {}): ActivityEvent => ({ sessionId: "s1", at, kind: "tool", label, ...over });
   const counts = { active: 0, needsYou: 0, stuck: 0 };
   const view = (rows: NowRow[], featureRows: NowRow[] = [], butler: NowRow | null = null): NowView => ({
-    needsYou: [], decisions: [], butler, running: 0, merges: [], memory: [],
+    needsYou: [], decisions: [], butler, running: 0, merges: [], memory: [], notices: [],
     epics: [{ id: 1, name: "e", rows, counts, features: [{ id: 2, name: "f", rows: featureRows, counts }] }],
   });
 

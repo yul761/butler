@@ -48,6 +48,8 @@ export function rowText(r: NowRow, S: UiStrings, now: number): { main: string; s
   if (r.decisions > 0) return { main: S.nowWaitingDecision, sub, tone: "danger" };
   if (r.refreshing !== null) return { main: r.refreshing === "close" ? S.nowClosing : S.nowRefreshing, sub: null, tone: "warn" };
   if (isStuck(r)) return { main: S.nowStuck, sub, tone: "danger" };
+  // 撞了限额：activityText 写的是哪种限额和恢复时间，原文放在 sub 里。
+  if (a?.limit) return { ...activityText(a, S, now), tone: "danger" };
   if (r.mergeQueued) return { main: S.nowMergeQueued, sub, tone: "warn" };
   if (live) return { main: live.main, sub, tone: "ok" };
   const pr = prText(r.prs, S);
