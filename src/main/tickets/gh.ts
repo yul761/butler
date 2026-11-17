@@ -28,13 +28,15 @@ export function resetGhBinary(): void {
  * 其他平台用裸 "gh"；整个进程只警告一次。
  */
 export function applyGhResolution(found: string | null, platform: NodeJS.Platform, log: (msg: string) => void): void {
-  probed = null;
+  const before = binary;
   if (found) {
     setGhBinary(found);
+    if (binary !== before) probed = null;
     return;
   }
   if (resolved) return;
   binary = platform === "win32" ? null : "gh";
+  if (binary !== before) probed = null;
   if (warned) return;
   warned = true;
   log(platform === "win32" ? "gh not found on PATH: PR and CI checks are disabled" : "gh not found on PATH: falling back to plain gh");
@@ -50,7 +52,7 @@ export function ghAvailable(): boolean {
   return binary !== null && (resolved || probed === true);
 }
 
-/** 异步执行 `<gh> --version`，结果缓存到下一次 applyGhResolution。从不抛错。 */
+/** 异步执行 `<gh> --version`，结果缓存到 applyGhResolution 真的换了 binary 为止。从不抛错。 */
 export function probeGh(timeoutMs: number): Promise<boolean> {
   const bin = binary;
   if (bin === null) return Promise.resolve(false);

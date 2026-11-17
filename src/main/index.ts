@@ -343,7 +343,7 @@ async function bootstrap(): Promise<void> {
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       applyGhResolution(resolveGh(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       notify();
-      void probeGh(5000).then(() => notify());
+      void probeGh(5000).then(() => notify()).catch((e: unknown) => logger("gh probe notify failed", e));
     },
     (e: unknown) => {
       logger("initial health refresh failed", e);

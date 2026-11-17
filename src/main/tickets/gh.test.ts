@@ -248,8 +248,17 @@ describe("gh binary (resolved like git: a GUI app's PATH often lacks Homebrew)",
     expect(await probeGh(5000)).toBe(true);
     expect(ghAvailable()).toBe(true);
     process.env.PATH = tempDir();
+    applyGhResolution("/opt/homebrew/bin/gh", "darwin", () => undefined);
+    expect(ghBinary()).toBe("/opt/homebrew/bin/gh");
+    expect(ghAvailable()).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("re-applying the same resolution keeps a successful probe", async () => {
+    fakeGh("exit 0");
     applyGhResolution(null, "darwin", () => undefined);
-    expect(ghAvailable()).toBe(false);
+    expect(await probeGh(5000)).toBe(true);
+    applyGhResolution(null, "darwin", () => undefined);
+    expect(ghAvailable()).toBe(true);
   });
 
   it("ghAvailable is true when a path was found", () => {

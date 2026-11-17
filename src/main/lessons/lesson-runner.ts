@@ -15,6 +15,8 @@ export const LESSON_CONCURRENCY = 2;
 export const BACKFILL_LIMIT = 100;
 export const RATE_LIMIT_PAUSE_MS = 10 * 60_000;
 const EXCERPT_MAX_CHARS = 20_000;
+/** 每日拉取全部失败后，这么久之内不再重试（调度器每分钟触发一次）。 */
+export const DAILY_RETRY_BACKOFF_MS = 30 * 60_000;
 
 export interface LessonRunnerDeps {
   repo: LessonsRepo;
@@ -99,6 +101,7 @@ export class LessonRunner {
     const { lastRunAt: last, lastStatus } = this.d.jobs.get(JOB_LESSONS_DAILY);
     const now = this.d.now();
     if (last !== null && lastStatus === "ok" && last >= dayStart(localDate(now))) return;
+    if (last !== null && lastStatus === "failed" && now - last < DAILY_RETRY_BACKOFF_MS) return;
     this.dailyRunning = true;
     try {
       let attempted = 0;

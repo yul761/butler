@@ -5,7 +5,7 @@ import { LessonsRepo } from "../db/lessons-repo";
 import type { HeadlessExecDeps } from "../handoff/headless-exec";
 import type { MergedPr, PrLessonData } from "../tickets/gh";
 import { memDb } from "../test-utils";
-import { BACKFILL_LIMIT, LessonRunner, RATE_LIMIT_PAUSE_MS, type LessonRunnerDeps } from "./lesson-runner";
+import { BACKFILL_LIMIT, DAILY_RETRY_BACKOFF_MS, LessonRunner, RATE_LIMIT_PAUSE_MS, type LessonRunnerDeps } from "./lesson-runner";
 
 const DAY = 86_400_000;
 const T0 = new Date(2026, 5, 10, 12).getTime();
@@ -233,6 +233,16 @@ describe("LessonRunner queue", () => {
     expect(s.deps.notify).toHaveBeenCalledTimes(1);
   });
 
+  it("an exception inside an analysis still notifies once", async () => {
+    const s = setup();
+    s.gh.prLessonData.mockRejectedValue(new Error("boom"));
+    s.repo.enqueue("acme/web", [1], "merged", T0);
+    s.runner.start();
+    await s.runner.idle();
+    expect(s.statusOf(1)).toMatchObject({ status: "failed", error: "error" });
+    expect(s.deps.notify).toHaveBeenCalledTimes(1);
+  });
+
   it("a failed analysis notifies", async () => {
     const s = setup();
     s.gh.prLessonData.mockResolvedValue(null);
@@ -351,11 +361,33 @@ describe("LessonRunner daily", () => {
     await s.runner.daily();
     expect(s.jobs.get(JOB_LESSONS_DAILY)).toMatchObject({ lastStatus: "failed", lastError: "all repos failed" });
     s.gh.mergedPrs.mockResolvedValue([]);
+    s.advance(60_000);
+    await s.runner.daily();
+    expect(s.gh.mergedPrs).toHaveBeenCalledTimes(1);
+    s.advance(DAILY_RETRY_BACKOFF_MS);
     await s.runner.daily();
     expect(s.gh.mergedPrs).toHaveBeenCalledTimes(2);
     expect(s.jobs.get(JOB_LESSONS_DAILY).lastStatus).toBe("ok");
     await s.runner.daily();
     expect(s.gh.mergedPrs).toHaveBeenCalledTimes(2);
+  });
+
+  it("a throwing mergedPrs counts as failed", async () => {
+    const s = setup();
+    s.repo.setBackfilled("acme/web", 1);
+    s.gh.mergedPrs.mockRejectedValue(new Error("boom"));
+    await s.runner.daily();
+    expect(s.jobs.get(JOB_LESSONS_DAILY)).toMatchObject({ lastStatus: "failed", lastError: "all repos failed" });
+  });
+
+  it("a partial failure records ok", async () => {
+    const s = setup();
+    s.repo.upsertRepo("acme/api", "/a", 1);
+    s.repo.setBackfilled("acme/web", 1);
+    s.repo.setBackfilled("acme/api", 1);
+    s.gh.mergedPrs.mockImplementation(async (cwd) => (cwd === "/w" ? null : []));
+    await s.runner.daily();
+    expect(s.jobs.get(JOB_LESSONS_DAILY).lastStatus).toBe("ok");
   });
 
   it("does not analyze an already analyzed PR again when the overlap returns it", async () => {
