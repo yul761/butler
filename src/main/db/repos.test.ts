@@ -489,3 +489,132 @@ describe("Butler 总控 sessions (BTL-190 item 5)", () => {
     expect(new SessionsRepo(db).get("old")?.butler).toBe(false);
   });
 });
+
+describe("migration 23: pr_watch → ticket_prs / branch_watch", () => {
+  it("migration 23 from a v20 database", () => {
+    const db = new DatabaseSync(":memory:");
+    for (const sql of MIGRATIONS.slice(0, 20)) db.exec(sql);
+    db.exec("PRAGMA user_version = 20");
+    db.prepare(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES ('BTL-1', '', 'branch', '', 1)`).run();
+    const repo = (path: string, branch: string) =>
+      Number(db.prepare(`INSERT INTO ticket_repos (ticket_key, repo_path, work_mode, branch, created_at) VALUES ('BTL-1', ?, 'branch', ?, 1)`).run(path, branch).lastInsertRowid);
+    const plain = repo("/r/web", "btl-1");
+    const app = repo("/r/app", "btl-1-app");
+    const api = repo("/r/api", "btl-1-api");
+    const lib = repo("/r/lib", "btl-1-lib");
+    const watch = db.prepare(
+      `INSERT INTO pr_watch (repo_id, ticket_key, repo_path, branch, number, url, state, review, ci, head_sha, failed, checked_at, delivered_key)
+       VALUES (?, 'BTL-1', ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
+    );
+    // 没查到 PR、ci 还是 unknown（旧的 neverRead）。
+    watch.run(plain, "/r/web", "btl-1", null, null, null, null, "unknown", null, 500, null);
+    // #25 已合并，但没有 merged 事件。
+    watch.run(app, "/r/app", "btl-1-app", 25, "https://github.com/Acme/App/pull/25/", "merged", "approved", "passing", "s1", 900, "s1:passing");
+    db.prepare(
+      `INSERT INTO pr_stage_events (dedupe_key, ticket_key, repo_id, branch, kind, at, data) VALUES (?, 'BTL-1', ?, 'btl-1-app', 'ci', 800, '{"result":"passing","sha":"s1"}')`,
+    ).run(`${app}:ci:btl-1-app:s1:passing:800`, app);
+    // #30 开着：checked_at 照旧，不算合并处理过。
+    watch.run(api, "/r/api", "btl-1-api", 30, "https://github.com/acme/api/pull/30", "open", null, "pending", "s2", 700, null);
+    // #40 已合并、有 merged 事件：checked_at 照旧，merged_at 取事件的时间。
+    watch.run(lib, "/r/lib", "btl-1-lib", 40, "https://github.com/acme/lib/pull/40", "merged", "approved", "passing", "s3", 950, null);
+    db.prepare(
+      `INSERT INTO pr_stage_events (dedupe_key, ticket_key, repo_id, branch, kind, at, data) VALUES (?, 'BTL-1', ?, 'btl-1-lib', 'merged', 650, '{"number":40}')`,
+    ).run(`${lib}:merged:btl-1-lib:40`, lib);
+
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+
+    expect(db.prepare(`SELECT repo_id, ticket_key, branch, ci, read_error, checked_at FROM branch_watch`).all()).toEqual([
+      { repo_id: plain, ticket_key: "BTL-1", branch: "btl-1", ci: "unknown", read_error: 0, checked_at: 500 },
+    ]);
+    const prs = db.prepare(`SELECT * FROM ticket_prs ORDER BY number`).all() as Record<string, unknown>[];
+    expect(prs).toHaveLength(3);
+    expect(prs[0]).toMatchObject({
+      ticket_key: "BTL-1", url: "https://github.com/acme/app/pull/25", slug: "acme/app", repo_id: app, number: 25, head_branch: "btl-1-app",
+      state: "merged", review: "approved", ci: "passing", read_error: 0, head_sha: "s1", source: "branch", linked_at: 900,
+      checked_at: 0, delivered_key: "s1:passing", merged_handled_at: 900, merged_at: null,
+    });
+    expect(prs[1]).toMatchObject({
+      url: "https://github.com/acme/api/pull/30", slug: "acme/api", repo_id: api, number: 30, head_branch: "btl-1-api", state: "open", ci: "pending",
+      head_sha: "s2", linked_at: 700, checked_at: 700, merged_handled_at: null, merged_at: null,
+    });
+    expect(prs[2]).toMatchObject({
+      url: "https://github.com/acme/lib/pull/40", slug: "acme/lib", repo_id: lib, number: 40, state: "merged", linked_at: 950, checked_at: 950,
+      merged_at: 650, merged_handled_at: 950,
+    });
+    expect(db.prepare(`SELECT pr_id FROM pr_stage_events WHERE kind = 'ci'`).get()).toEqual({ pr_id: prs[0].id });
+    expect(db.prepare(`SELECT pr_id FROM pr_stage_events WHERE kind = 'merged'`).get()).toEqual({ pr_id: prs[2].id });
+    expect(db.prepare(`SELECT name FROM sqlite_master WHERE name = 'pr_watch'`).get()).toBeUndefined();
+  });
+});
+
+describe("migration 23: rows that are not a usable PR", () => {
+  it("routes a PR row without a url / state or with a non-PR url to branch_watch, and skips an orphan ticket instead of aborting", () => {
+    const db = new DatabaseSync(":memory:");
+    for (const sql of MIGRATIONS.slice(0, 20)) db.exec(sql);
+    db.exec("PRAGMA user_version = 20");
+    db.prepare(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES ('BTL-1', '', 'branch', '', 1)`).run();
+    const repo = (branch: string) =>
+      Number(db.prepare(`INSERT INTO ticket_repos (ticket_key, repo_path, work_mode, branch, created_at) VALUES ('BTL-1', ?, 'branch', ?, 1)`).run(`/r/${branch}`, branch).lastInsertRowid);
+    const watch = db.prepare(
+      `INSERT INTO pr_watch (repo_id, ticket_key, repo_path, branch, number, url, state, review, ci, head_sha, failed, checked_at, delivered_key)
+       VALUES (?, ?, '/r', ?, ?, ?, ?, NULL, 'passing', 'h', '[]', 500, NULL)`,
+    );
+    const noUrl = repo("no-url");
+    const noState = repo("no-state");
+    const notPull = repo("not-pull");
+    const orphan = repo("orphan");
+    const good = repo("good");
+    watch.run(noUrl, "BTL-1", "no-url", 5, null, "open");
+    watch.run(noState, "BTL-1", "no-state", 6, "https://github.com/acme/app/pull/6", null);
+    watch.run(notPull, "BTL-1", "not-pull", 7, "https://github.com/acme/app/issues/7", "open");
+    // ticket 已经不在了（pr_watch.ticket_key 没有外键）：不能让 ticket_prs 的外键把启动卡住。
+    watch.run(orphan, "GONE-1", "orphan", 8, "https://github.com/acme/app/pull/8", "open");
+    watch.run(good, "BTL-1", "good", 9, "https://github.com/acme/app/pull/9", "open");
+
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+
+    expect(db.prepare(`SELECT repo_id, branch, ci, head_sha, checked_at FROM branch_watch ORDER BY repo_id`).all()).toEqual([
+      { repo_id: noUrl, branch: "no-url", ci: "passing", head_sha: "h", checked_at: 500 },
+      { repo_id: noState, branch: "no-state", ci: "passing", head_sha: "h", checked_at: 500 },
+      { repo_id: notPull, branch: "not-pull", ci: "passing", head_sha: "h", checked_at: 500 },
+    ]);
+    expect(db.prepare(`SELECT ticket_key, number FROM ticket_prs`).all()).toEqual([{ ticket_key: "BTL-1", number: 9 }]);
+  });
+});
+
+describe("migration 24: lesson runs", () => {
+  it("migration 24 from a v23 database keeps lessons and backfills source slugs", () => {
+    const db = new DatabaseSync(":memory:");
+    for (const sql of MIGRATIONS.slice(0, 23)) db.exec(sql);
+    db.exec("PRAGMA user_version = 23");
+    db.prepare(`INSERT INTO lesson_repos (slug, local_path, created_at) VALUES ('acme/app', '/r/app', 1)`).run();
+    db.prepare(`INSERT INTO lessons (id, repo_slug, text, why, status, last_seen_at, created_at, updated_at) VALUES (1, 'acme/app', 't', 'w', 'confirmed', 1, 1, 1)`).run();
+    db.prepare(`INSERT INTO lesson_products (id, name, created_at) VALUES (1, 'p', 1)`).run();
+    db.prepare(`INSERT INTO lessons (id, product_id, text, why, status, last_seen_at, created_at, updated_at) VALUES (2, 1, 't2', 'w', 'confirmed', 1, 1, 1)`).run();
+    db.prepare(`INSERT INTO lessons (id, product_id, text, why, status, last_seen_at, created_at, updated_at) VALUES (3, 1, 't3', 'w', 'confirmed', 1, 1, 1)`).run();
+    const src = db.prepare(`INSERT INTO lesson_sources (lesson_id, pr_number, url, at) VALUES (?, ?, ?, 1)`);
+    src.run(1, 12, "#12");
+    src.run(2, 12, "https://github.com/acme/app/pull/12#discussion_r1");
+    src.run(3, 3, "https://ghe.acme.io/t/x/pull/3");
+    db.prepare(`INSERT INTO lesson_queue (repo_slug, pr_number, origin, status, error, enqueued_at) VALUES ('acme/app', 9, 'merged', 'failed', 'boom', 1)`).run();
+
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+
+    const slugs = db.prepare(`SELECT lesson_id, repo_slug FROM lesson_sources ORDER BY lesson_id`).all();
+    expect(slugs).toEqual([
+      { lesson_id: 1, repo_slug: "acme/app" },
+      { lesson_id: 2, repo_slug: "acme/app" },
+      { lesson_id: 3, repo_slug: null },
+    ]);
+    expect(db.prepare(`SELECT status, attempts, priority FROM lesson_queue`).get()).toEqual({ status: "failed", attempts: 0, priority: 0 });
+    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(MIGRATIONS.length);
+  });
+
+  it("sessions gain lesson_run_id; claude_availability allows one row", () => {
+    const db = memDb();
+    db.prepare(`INSERT INTO sessions (id, cwd, origin, created_at) VALUES ('s', '/w', 'butler', 1)`).run();
+    expect(db.prepare(`SELECT lesson_run_id FROM sessions WHERE id = 's'`).get()).toEqual({ lesson_run_id: null });
+    db.prepare(`INSERT INTO claude_availability (id, state, updated_at) VALUES (1, '{}', 1)`).run();
+    expect(() => db.prepare(`INSERT INTO claude_availability (id, state, updated_at) VALUES (2, '{}', 1)`).run()).toThrow();
+  });
+});

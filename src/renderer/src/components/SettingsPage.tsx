@@ -5,8 +5,9 @@ import { S } from "../strings";
 import { PrivacySettings } from "./PrivacySettings";
 import { GeneralSettings } from "./GeneralSettings";
 import { ScheduleSettings } from "./ScheduleSettings";
+import { ClaudeAvailability } from "./ClaudeAvailability";
 
-export function SettingsPage({ onRerunWizard }: { onRerunWizard: () => void }) {
+export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => void; section?: "health" }) {
   const [report, setReport] = useState<HealthReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,6 +55,7 @@ export function SettingsPage({ onRerunWizard }: { onRerunWizard: () => void }) {
         <dt>{S.butlerHome}</dt><dd>{report.butlerHome}</dd>
         <dt>{S.claudeSettings}</dt><dd>{report.claudeSettingsPath}</dd>
       </dl>
+      <ClaudeAvailability scrollIntoView={section === "health"} />
       <p className="muted">{S.hookExplain}</p>
       {error && <p className="error">{error}</p>}
       <div className="actions">

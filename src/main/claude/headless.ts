@@ -1,12 +1,18 @@
 import { execFile, type ChildProcess } from "node:child_process";
 import { pathKey } from "../util/env";
 import { childLaunch, isCmdShim, spawnClaude } from "./launch";
+import type { LimitHit } from "../../shared/availability";
+import { RUN_MESSAGE_MAX } from "../../shared/lessons";
 import { M } from "../strings";
+import { classifyLimit, isPauseKind } from "./limits";
 import { usageCounts, type UsageCounts } from "../usage/usage-parse";
 
 export const HEADLESS_TIMEOUT_MS = 5 * 60 * 1000;
 const STDOUT_LIMIT = 20 * 1024 * 1024;
-const STDERR_LIMIT = 64 * 1024;
+/** 失败结果带回的 stderr 尾部长度。 */
+export const HEADLESS_STDERR_TAIL = 8192;
+/** 失败 message 的上限，和运行记录的 RUN_CAPS.message 同一个来源。 */
+const MESSAGE_MAX = RUN_MESSAGE_MAX;
 
 /** handoff 的只读白名单：读文件、查 PR、看 git 历史。tracker MCP 工具由设置追加。 */
 export const READ_ONLY_TOOLS = ["Read", "Grep", "Glob", "Bash(gh pr view:*)", "Bash(gh pr checks:*)", "Bash(git log:*)", "Bash(git status)"];
@@ -45,13 +51,15 @@ export interface ClaudeResult {
   usage: UsageCounts | null;
   /** modelUsage 里的第一个键；没有为 null。 */
   model: string | null;
+  /** duration_ms；没有为 null。 */
+  durationMs: number | null;
 }
 
-export type HeadlessFailure = "timeout" | "spawn_failed" | "exit_nonzero" | "bad_output" | "rate_limited" | "claude_error" | "aborted";
+export type HeadlessFailure = "timeout" | "spawn_failed" | "exit_nonzero" | "bad_output" | "rate_limited" | "claude_error" | "model_unavailable" | "aborted";
 
 export type HeadlessOutcome =
   | { ok: true; result: ClaudeResult }
-  | { ok: false; reason: HeadlessFailure; message: string; result: ClaudeResult | null };
+  | { ok: false; reason: HeadlessFailure; message: string; result: ClaudeResult | null; limit: LimitHit | null; stderr: string };
 
 export type HeadlessRun = (req: HeadlessRequest) => Promise<HeadlessOutcome>;
 
@@ -115,21 +123,21 @@ export function parseClaudeJson(stdout: string): ClaudeResult | null {
     costUsd: typeof o.total_cost_usd === "number" ? o.total_cost_usd : null,
     usage: usageCounts(o.usage),
     model: firstKey(o.modelUsage),
+    durationMs: typeof o.duration_ms === "number" ? o.duration_ms : null,
   };
 }
-
-const RATE_LIMIT_TEXT_RE = /rate.?limit|usage limit|quota|overloaded|too many requests/i;
-const API_ERROR_STATUS_RE = /\bAPI Error:\s*(?:429|529)\b/i;
 
 /**
  * 额度用完或被限流（启发式）。只在运行失败时调用。
  * 状态码只看 api_error_status 和 result 里的 “API Error: 429/529”：stderr 里随便一个 429（行号、端口）不算。
  */
 export function isRateLimited(r: ClaudeResult | null, stderr: string): boolean {
-  if (r?.apiErrorStatus === 429 || r?.apiErrorStatus === 529) return true;
-  if (API_ERROR_STATUS_RE.test(r?.resultText ?? "")) return true;
-  return RATE_LIMIT_TEXT_RE.test(`${r?.resultText ?? ""}\n${stderr}`);
+  const hit = classifyLimit({ text: `${r?.resultText ?? ""}\n${stderr}`, apiStatus: r?.apiErrorStatus ?? null, now: Date.now() });
+  return hit !== null && isPauseKind(hit.kind);
 }
+
+const failureReason = (limit: LimitHit | null, otherwise: HeadlessFailure): HeadlessFailure =>
+  limit === null ? otherwise : limit.kind === "model_unavailable" ? "model_unavailable" : "rate_limited";
 
 const GRACE_MS = 2000;
 
@@ -193,7 +201,10 @@ export const runHeadless: HeadlessRun = (req) =>
       child?.stdout?.destroy();
       child?.stderr?.destroy();
     };
-    const timeoutOutcome = (): HeadlessOutcome => ({ ok: false, reason: "timeout", message: M().timedOutAfter(M().duration(timeoutMs)), result: null });
+    const fail = (reason: HeadlessFailure, message: string, result: ClaudeResult | null = null, limit: LimitHit | null = null): HeadlessOutcome => ({
+      ok: false, reason, message, result, limit, stderr,
+    });
+    const timeoutOutcome = (): HeadlessOutcome => fail("timeout", M().timedOutAfter(M().duration(timeoutMs)));
     const timer = setTimeout(() => {
       timedOut = true;
       if (child) killTree(child);
@@ -207,18 +218,18 @@ export const runHeadless: HeadlessRun = (req) =>
       // app 正在退出：直接杀，不等宽限期。
       if (child) killTree(child, true);
       release();
-      finish({ ok: false, reason: "aborted", message: M().cancelled, result: null });
+      finish(fail("aborted", M().cancelled));
     }
 
     if (req.signal?.aborted) {
-      finish({ ok: false, reason: "aborted", message: M().cancelled, result: null });
+      finish(fail("aborted", M().cancelled));
       return;
     }
     // 启动方式只解析一次：检查和启动用同一个结果（P5-PF10）。只有认不出 shim、必须经过 cmd.exe 时才需要这道检查。
     const launch = childLaunch(req.claudePath, req.args, process.platform, { pathValue: req.env[pathKey(req.env)] });
     const bad = launch.viaCmd ? unsafeCmdArg(req.args, req.claudePath, process.platform) : null;
     if (bad !== null) {
-      finish({ ok: false, reason: "spawn_failed", message: M().cmdUnsafe, result: null });
+      finish(fail("spawn_failed", M().cmdUnsafe));
       return;
     }
 
@@ -226,7 +237,7 @@ export const runHeadless: HeadlessRun = (req) =>
       // POSIX 上独立进程组，超时/取消时可以整组杀掉；仍然正常等待它退出（不 unref）。
       child = spawnClaude(launch, { cwd: req.cwd, env: req.env, stdio: ["pipe", "pipe", "pipe"] });
     } catch (e) {
-      finish({ ok: false, reason: "spawn_failed", message: e instanceof Error ? e.message : String(e), result: null });
+      finish(fail("spawn_failed", e instanceof Error ? e.message : String(e)));
       return;
     }
     req.signal?.addEventListener("abort", onAbort, { once: true });
@@ -238,24 +249,26 @@ export const runHeadless: HeadlessRun = (req) =>
     });
     proc.stderr?.setEncoding("utf8");
     proc.stderr?.on("data", (c: string) => {
-      if (stderr.length < STDERR_LIMIT) stderr += c;
+      stderr = (stderr + c).slice(-HEADLESS_STDERR_TAIL);
     });
-    proc.on("error", (e) => finish({ ok: false, reason: "spawn_failed", message: e.message, result: null }));
+    proc.on("error", (e) => finish(fail("spawn_failed", e.message)));
     proc.on("close", (code) => {
       if (timedOut) {
         finish(timeoutOutcome());
         return;
       }
       const result = parseClaudeJson(stdout);
+      const now = Date.now();
       if (!result) {
-        const message = (stderr.trim() || stdout.trim()).slice(0, 500) || `exit ${code}`;
-        const reason: HeadlessFailure = isRateLimited(null, `${stderr}\n${stdout}`) ? "rate_limited" : code === 0 ? "bad_output" : "exit_nonzero";
-        finish({ ok: false, reason, message, result: null });
+        const message = (stderr.trim() || stdout.trim()).slice(0, MESSAGE_MAX) || `exit ${code}`;
+        const limit = classifyLimit({ text: `${stderr}\n${stdout}`, apiStatus: null, now });
+        finish(fail(failureReason(limit, code === 0 ? "bad_output" : "exit_nonzero"), message, null, limit));
         return;
       }
       if (result.isError || code !== 0 || result.subtype !== "success") {
-        const message = (result.resultText || stderr || result.subtype || `exit ${code}`).slice(0, 500);
-        finish({ ok: false, reason: isRateLimited(result, stderr) ? "rate_limited" : "claude_error", message, result });
+        const message = (result.resultText || stderr || result.subtype || `exit ${code}`).slice(0, MESSAGE_MAX);
+        const limit = classifyLimit({ text: `${result.isError ? result.resultText : ""}\n${stderr}`, apiStatus: result.apiErrorStatus, now });
+        finish(fail(failureReason(limit, "claude_error"), message, result, limit));
         return;
       }
       finish({ ok: true, result });

@@ -22,7 +22,7 @@ const valid = (over: Partial<Handoff> = {}): Handoff => ({ ...emptyHandoff("X"),
 
 const ok = (structured: unknown, sessionId = "fork-1"): HeadlessOutcome => ({
   ok: true,
-  result: { sessionId, isError: false, subtype: "success", resultText: JSON.stringify(structured), structured, permissionDenials: [], apiErrorStatus: null, costUsd: 0, usage: null, model: null },
+  result: { sessionId, isError: false, subtype: "success", resultText: JSON.stringify(structured), structured, permissionDenials: [], apiErrorStatus: null, costUsd: 0, usage: null, model: null, durationMs: null },
 });
 
 function setup(opts: { run?: HeadlessRun; signal?: AbortSignal; projectMcp?: (cwd: string) => string[]; addDirs?: string[] } = {}) {
@@ -181,7 +181,7 @@ describe("HandoffRunner", () => {
   it("stops starting new runs after a rate limit and reports the batch as partial", async () => {
     const { runner, addTicket, calls, setRespond } = setup();
     for (const k of ["A-1", "B-2", "C-3", "D-4"]) addTicket(k);
-    setRespond(async () => ({ ok: false, reason: "rate_limited", message: "429", result: null }));
+    setRespond(async () => ({ ok: false, reason: "rate_limited", message: "429", result: null, limit: null, stderr: "" }));
     const batch = await runner.runNightly();
     expect(batch.status).toBe("partial");
     expect(batch.outcomes.every((o) => o.status === "skipped" && o.reason === "rate_limited")).toBe(true);
@@ -191,7 +191,7 @@ describe("HandoffRunner", () => {
   it("reports a timeout as failed and stores nothing", async () => {
     const { runner, addTicket, handoffs, setRespond } = setup();
     addTicket("A-1");
-    setRespond(async () => ({ ok: false, reason: "timeout", message: "超过 300 秒没有完成", result: null }));
+    setRespond(async () => ({ ok: false, reason: "timeout", message: "超过 300 秒没有完成", result: null, limit: null, stderr: "" }));
     expect(await runner.runManual("A-1")).toMatchObject({ status: "failed", reason: "timeout" });
     expect(handoffs.latest("A-1")).toBeNull();
   });
@@ -321,7 +321,7 @@ describe("HandoffRunner", () => {
     for (const k of ["A-1", "B-2", "C-3", "D-4"]) addTicket(k);
     setRespond(async () => {
       ac.abort();
-      return { ok: false, reason: "aborted", message: "已取消", result: null };
+      return { ok: false, reason: "aborted", message: "已取消", result: null, limit: null, stderr: "" };
     });
     const batch = await runner.runNightly();
     expect(batch.status).toBe("partial");

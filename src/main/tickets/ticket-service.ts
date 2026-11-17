@@ -367,6 +367,11 @@ export class TicketService {
     return r.worktreePath ?? r.repoPath;
   }
 
+  /** gh 在哪里跑：worktree 已被清理（或没有）时用仓库本身。 */
+  ghWorkDir(r: TicketRepo): string {
+    return r.worktreeRemovedAt !== null || r.worktreePath === null ? r.repoPath : r.worktreePath;
+  }
+
   /** 总控 session 的工作区目录（Butler 建的空目录）：~/.butler/workspaces/<ticket>。 */
   workspaceDir(ticketKey: string): string {
     const dir = this.workspacePath(ticketKey);

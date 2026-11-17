@@ -1,4 +1,4 @@
-import { DEFAULT_HANDOFF_PROMPT, DEFAULT_REFRESH_PROMPT, defaultHandoffPrompt, defaultRefreshPrompt, PREVIOUS_HANDOFF_PROMPTS } from "../handoff/templates";
+import { DEFAULT_HANDOFF_PROMPT, DEFAULT_REFRESH_PROMPT, defaultHandoffPrompt, defaultRefreshPrompt, PREVIOUS_HANDOFF_PROMPTS, PREVIOUS_REFRESH_PROMPTS } from "../handoff/templates";
 import { currentLang } from "../i18n";
 import type { Lang } from "../../shared/i18n";
 import type { Db } from "./database";
@@ -15,6 +15,8 @@ export const SETTING_DEFAULTS = {
   trackerTools: "",
   /** 后台 handoff / 刷新 / 探测也挂上仓库 .mcp.json（已批准的）和本地级的 MCP：1 开 0 关。 */
   headlessProjectMcp: "0",
+  /** 开始记 skill 事件的时间（毫秒，字符串）；空表示还没开始。PR 进度据此区分「没记」和「没做」。 */
+  skillTrackingSince: "",
   handoffPrompt: DEFAULT_HANDOFF_PROMPT,
   refreshPrompt: DEFAULT_REFRESH_PROMPT,
   /** 个人 API 的隐私档位：off | metadata | redacted | full（设计文档 7.3，默认 metadata）。 */
@@ -56,7 +58,7 @@ type PromptKey = "handoffPrompt" | "refreshPrompt";
 const PROMPT_DEFAULTS: Record<PromptKey, (l: Lang) => string> = { handoffPrompt: defaultHandoffPrompt, refreshPrompt: defaultRefreshPrompt };
 const LANGS: Lang[] = ["zh", "en"];
 /** 以前版本的默认值：存的是它们也当作没改过。 */
-const PREVIOUS_PROMPT_DEFAULTS: Record<PromptKey, readonly string[]> = { handoffPrompt: PREVIOUS_HANDOFF_PROMPTS, refreshPrompt: [] };
+const PREVIOUS_PROMPT_DEFAULTS: Record<PromptKey, readonly string[]> = { handoffPrompt: PREVIOUS_HANDOFF_PROMPTS, refreshPrompt: PREVIOUS_REFRESH_PROMPTS };
 
 export class SettingsRepo {
   constructor(private readonly db: Db) {}

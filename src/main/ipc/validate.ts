@@ -1,3 +1,4 @@
+import type { AvailabilityAction } from "../../shared/availability";
 import type { SensitiveTerm } from "../../shared/llm";
 import { CONTEXT_LIMIT } from "../../shared/control";
 import type {
@@ -154,6 +155,12 @@ export function prStagesScopeArg(v: unknown): PrStagesScope {
   throw new Error("invalid PR stages scope");
 }
 
+/** 要打开的 PR 链接：最多 2000 字的字符串（能不能开由 openKnownPr 判断）。 */
+export function prUrlArg(v: unknown): string {
+  if (typeof v !== "string" || v.length > 2000) throw new Error("invalid PR url");
+  return v;
+}
+
 /** 目录：1–4096 字的字符串（存在与否由调用方检查）。 */
 export function dirArg(v: unknown): string {
   if (typeof v !== "string" || v.length === 0 || v.length > 4096) throw new Error("invalid directory");
@@ -284,8 +291,18 @@ function lessonTextArg(v: unknown): string {
   return t;
 }
 
-function lessonSlugArg(v: unknown): string {
+export function lessonSlugArg(v: unknown): string {
   if (typeof v !== "string" || !v || v.length > 512) throw new Error("invalid repo slug");
+  return v;
+}
+
+export function lessonQueueIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error("invalid lesson queue id");
+  return v;
+}
+
+export function lessonRunIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error("invalid lesson run id");
   return v;
 }
 
@@ -321,7 +338,30 @@ export function lessonActionArg(v: unknown): LessonAction {
       return { op: "backfill", slug: lessonSlugArg(o.slug) };
     case "openSource":
       return { op: "openSource", sourceId: lessonIdArg(o.sourceId) };
+    case "retry":
+      return { op: "retry", queueId: lessonQueueIdArg(o.queueId) };
+    case "retryFailed":
+      return { op: "retryFailed", slug: lessonSlugArg(o.slug) };
+    case "cancel":
+      return { op: "cancel", queueId: lessonQueueIdArg(o.queueId) };
+    case "pauseQueue":
+      return { op: "pauseQueue" };
+    case "resumeQueue":
+      return { op: "resumeQueue" };
+    case "runNow":
+      return { op: "runNow" };
+    case "openInClaude":
+      return { op: "openInClaude", runId: lessonRunIdArg(o.runId) };
     default:
       throw new Error("invalid lesson action");
   }
+}
+
+/** 可用状态页的操作：只有手动暂停 / 恢复复盘。 */
+export function availabilityActionArg(v: unknown): AvailabilityAction {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid availability action");
+  if (o.op === "resumeLessons") return { op: "resumeLessons" };
+  if (o.op === "pauseLessons") return { op: "pauseLessons" };
+  throw new Error("invalid availability action");
 }

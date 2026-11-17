@@ -35,7 +35,8 @@ export type Route =
   | { page: "butler"; focusSession?: string | null }
   | { page: "unclaimed" }
   | { page: "archived" }
-  | { page: "settings" }
+  /** section：从「现在」页的提醒跳来时要看的那一块。 */
+  | { page: "settings"; section?: "health" }
   | { page: "audit" }
   | { page: "lessons" };
 
@@ -177,7 +178,7 @@ export function App() {
           />
         ) : (
           <>
-            {route.page === "home" && <NowPage view={nowView} onOpen={openTarget} onOpenTicket={(key) => openTicket(key)} liveTickets={new Set(allTickets.map((t) => t.key))} onResumeSetup={() => dispatchOnboarding({ type: "rerun" })} />}
+            {route.page === "home" && <NowPage view={nowView} onOpen={openTarget} onOpenTicket={(key) => openTicket(key)} liveTickets={new Set(allTickets.map((t) => t.key))} onResumeSetup={() => dispatchOnboarding({ type: "rerun" })} onGo={setRoute} />}
             {route.page === "ticket" && current && (
               <TicketPage
                 key={current.key}
@@ -214,9 +215,9 @@ export function App() {
             {route.page === "butler" && <ButlerPage key={route.focusSession ?? ""} focusSession={route.focusSession} onOpenTarget={openTarget} />}
             {route.page === "unclaimed" && <UnclaimedPage tickets={allTickets} />}
             {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} onEpicRestored={goEpic} />}
-            {route.page === "settings" && <SettingsPage onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
+            {route.page === "settings" && <SettingsPage section={route.section} onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "audit" && <AuditPage />}
-            {route.page === "lessons" && <LessonsPage />}
+            {route.page === "lessons" && <LessonsPage onOpenSession={(id) => setRoute({ page: "butler", focusSession: id })} />}
           </>
         )}
       </main>

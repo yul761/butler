@@ -24,6 +24,7 @@ function session(id: string, over: Partial<SessionView> = {}): SessionView {
     epicId: null,
     model: null,
     butler: false,
+    lessonRunId: null,
     termId: id,
     ...over,
   };
@@ -80,7 +81,7 @@ function act(sessionId: string, over: Partial<SessionActivity> = {}): SessionAct
 }
 
 function pr(ticketKey: string, repoId: number, over: Partial<WatchedPr> = {}): WatchedPr {
-  return { ticketKey, repoId, repoPath: "/r", branch: "b", number: 1, url: null, state: "open", review: "pending", ci: "passing", headSha: null, checkedAt: 0, ...over };
+  return { ticketKey, prId: 1, repoId, repoPath: "/r", branch: "b", number: 1, url: null, state: "open", review: "pending", ci: "passing", headSha: null, checkedAt: 0, readError: false, ...over };
 }
 
 function input(over: Partial<NowInput> = {}): NowInput {
@@ -99,6 +100,7 @@ function input(over: Partial<NowInput> = {}): NowInput {
     decisions: [],
     recent: () => [],
     memory: [],
+    notices: [],
     ...over,
   };
 }
@@ -448,5 +450,21 @@ describe("buildNowView with ask_user decisions (BTL-190 2+3)", () => {
     expect(rows.find((r) => r.sessionId === "s1")?.recent.map((e) => e.label)).toEqual(["Read a.ts", "Bash pnpm test"]);
     expect(rows.find((r) => r.sessionId === "s-fc")?.recent).toEqual([]);
     expect(v.memory).toBe(memory);
+  });
+
+  it("a limited session row adds a session_limited notice with its target", () => {
+    const limit = { kind: "usage_limit" as const, resetsAt: 9000, message: "m" };
+    const a1 = ticket("A-1", null, [session("s-a1", { ticketKey: "A-1" })]);
+    const v = buildNowView(input({ tickets: [a1], activity: () => act("s-a1", { kind: "waiting", limit }), notices: [{ kind: "lessons_paused" }] }));
+    expect(v.notices).toEqual([{ kind: "lessons_paused" }, { kind: "session_limited", target: { page: "ticket", key: "A-1", sessionId: "s-a1" }, title: "title A-1", limit }]);
+  });
+
+  it("a limited row is not idle", () => {
+    const limit = { kind: "rate_limit" as const, resetsAt: null, message: "m" };
+    const a1 = ticket("A-1", null, [session("s-a1", { ticketKey: "A-1" })]);
+    const idle = buildNowView(input({ tickets: [a1], activity: () => act("s-a1", { kind: "waiting" }) }));
+    expect(idle.epics[0].features[0].rows[0].idle).toBe(true);
+    const limited = buildNowView(input({ tickets: [a1], activity: () => act("s-a1", { kind: "waiting", limit }) }));
+    expect(limited.epics[0].features[0].rows[0].idle).toBe(false);
   });
 });

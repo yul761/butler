@@ -197,7 +197,7 @@ describe("controlHandler", () => {
       await sessionService.open({ ticketKey: "FULL-1", repoId: 1 });
       expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toEqual({
         v: 1, ok: true,
-        value: { sessionId: "s-1", kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, output: "", last_reply: null },
+        value: { sessionId: "s-1", kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, limit: null, output: "", last_reply: null },
       });
     });
 

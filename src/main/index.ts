@@ -7,6 +7,10 @@ import { pathToFileURL } from "node:url";
 import { sanitizeTask } from "../shared/control";
 import { parseGateRequest, type GateRequest, type GateResult } from "../shared/gate";
 import { IPC } from "../shared/ipc";
+import type { LimitHit } from "../shared/availability";
+import { ClaudeAvailability } from "./claude/availability";
+import { buildNotices } from "./now/notices";
+import { AvailabilityRepo } from "./db/availability-repo";
 import type { Session } from "../shared/types";
 import { APP_ID, shouldSetAppId } from "./app-id";
 import { runHeadless } from "./claude/headless";
@@ -21,7 +25,8 @@ import { JobsRepo } from "./db/jobs-repo";
 import { MemorySyncRepo } from "./db/memory-sync-repo";
 import { MergeGateRepo } from "./db/merge-gate-repo";
 import { PrStageRepo } from "./db/pr-stage-repo";
-import { PrWatchRepo } from "./db/pr-watch-repo";
+import { BranchWatchRepo } from "./db/branch-watch-repo";
+import { linkedOpen as anyLinkedOpen, prGivenUp, TicketPrsRepo } from "./db/ticket-prs-repo";
 import { SecretsRepo } from "./db/secrets-repo";
 import { SessionsRepo } from "./db/sessions-repo";
 import { SettingsRepo } from "./db/settings-repo";
@@ -35,7 +40,9 @@ import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
 import { CiDelivery } from "./prwatch/ci-delivery";
 import { prHandoff } from "./prwatch/pr-handoff";
-import { watchTargets } from "./prwatch/pr-targets";
+import { runPrBackfill } from "./prwatch/pr-backfill";
+import { ensureSkillTrackingSince, skillTrackingSince } from "./prwatch/skill-tracking";
+import { PrLinker } from "./prwatch/pr-links";
 import { PrWatcher } from "./prwatch/pr-watcher";
 import { makeWhoOf } from "./gate/who";
 import { auditCutoff, stalePendingCost } from "./gateway/budget";
@@ -102,13 +109,16 @@ import { M } from "./strings";
 import { pathKey } from "./util/env";
 import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
+import { openKnownPr } from "./util/github-url";
 import { TicketService } from "./tickets/ticket-service";
-import { applyGhResolution, branchRuns, compareFiles, failedLog, ghBinary, mergedPrs, prInfo, prLessonData, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
+import { applyGhResolution, branchRuns, ghAvailable, probeGh, compareFiles, failedLog, mergedPrs, prInfo, prLessonDataDetail, prsForBranch, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
 import { LessonsRepo } from "./db/lessons-repo";
+import { LessonRunsRepo } from "./db/lesson-runs-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
 import { readTailLines, TRANSCRIPT_TAIL_BYTES } from "./lessons/tail";
 import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
+import { writeRunFile } from "./lessons/run-file";
 import type { HeadlessExecDeps } from "./handoff/headless-exec";
 import * as git from "./tickets/git";
 import { canSend } from "./safe-send";
@@ -283,6 +293,7 @@ async function bootstrap(): Promise<void> {
   const ownPath = process.env[pathKey(process.env)] ?? "";
   applyGitResolution(resolveGit(ownPath, process.platform), process.platform, (m) => logger(m));
   applyGhResolution(resolveGh(ownPath, process.platform), process.platform, (m) => logger(m));
+  void probeGh(5000);
   const db = openDatabase(paths.db);
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -319,16 +330,26 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   const ticketService = new TicketService({ tickets, features, settings, now: Date.now, workspacesDir: paths.workspaces });
-  const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath(), log: logger });
+  // hook 程序是当前版本（启动时刚换好或本来就是，或健康页刚装好）才看得到 skill 调用：从这时起记「开始记 skill 的时间」。幂等，不会往后移。
+  const seedSkillTracking = () => {
+    try {
+      ensureSkillTrackingSince({ settings, firstSkillAt: () => prStages.firstSkillAt(), now: Date.now });
+    } catch (e) {
+      logger("skill tracking start not recorded", e);
+    }
+  };
+  const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath(), log: logger, onHookBinCurrent: seedSkillTracking });
   const notify = () => safeSend(IPC.stateChanged);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
   // 同时把升级后还是旧版本的 butler-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
   // Butler 旧版本装的 /handoff 也先换成当前版本再探测（C1），健康页报告的是换完的状态。syncHandoffCommand 不抛错。
   const healthReady: Promise<void> = Promise.all([health.syncHandoffCommand().then(() => health.refresh()), health.syncHookBinary()]).then(
     () => {
+      if (health.hookBinCurrent() && existsSync(paths.hookBin)) seedSkillTracking();
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       applyGhResolution(resolveGh(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       notify();
+      void probeGh(5000).then(() => notify()).catch((e: unknown) => logger("gh probe notify failed", e));
     },
     (e: unknown) => {
       logger("initial health refresh failed", e);
@@ -426,19 +447,26 @@ async function bootstrap(): Promise<void> {
     if (Object.keys(servers).length === 0) return null;
     return writeButlerMcpConfig({ mcpDir: paths.mcp, servers });
   };
+  const availability = new ClaudeAvailability({ repo: new AvailabilityRepo(db, logger), now: Date.now, onChange: notify, log: logger });
+  /** headless 运行报告限流 / 成功给可用状态。 */
+  const availabilityHooks = {
+    onLimit: (hit: LimitHit, job: string) => availability.report({ ...hit, source: "headless", job, sessionId: null }),
+    onSuccess: (startedAt: number, job: string) => availability.noteSuccess(startedAt, job),
+  };
   /** 卡住判断和「需要你」判断共用的 headless 设置。 */
   const judgeDeps: HeadlessExecDeps = {
     run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID,
-    signal: headlessAbort.signal, onUsage: recordHeadlessUsage, log: logger,
+    signal: headlessAbort.signal, onUsage: recordHeadlessUsage, ...availabilityHooks, log: logger,
   };
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
+  const lessonRuns = new LessonRunsRepo(db);
   const repoIdentity = new RepoIdentity();
   // 带 hash 的 session 说明文件每次规矩变了就多一份，启动时清掉 30 天没用过的。
   pruneSessionGuides(paths.mcp, Date.now());
   const lessonRunner = new LessonRunner({
-    repo: lessonsRepo, identity: repoIdentity, jobs,
-    gh: { mergedPrs, prLessonData, compareFiles, available: () => ghBinary() !== null },
+    repo: lessonsRepo, runs: lessonRuns, availability, identity: repoIdentity, jobs,
+    gh: { mergedPrs, prLessonDataDetail, compareFiles, available: () => ghAvailable() },
     headless: { ...judgeDeps },
     ticketForBranch: (slug, branch) => tickets.reposByBranch(branch).find((r) => repoIdentity.slugOf(r.repoPath) === slug)?.ticketKey ?? null,
     butlerContext: async (key, wantTranscripts) => {
@@ -464,38 +492,46 @@ async function bootstrap(): Promise<void> {
     },
     lang: () => currentLang(), now: Date.now, notify: () => notify(), log: logger,
   });
-  // 复盘规矩页：仓库路径直接查表（含已归档的 ticket 仓库）；归组建议按 ticket 和 feature 各算一组。
-  const repoPathRows = (sql: string): { k: number | string; repo_path: string }[] => db.prepare(sql).all() as unknown as { k: number | string; repo_path: string }[];
+  // 复盘规矩页：仓库路径直接查表（已归档的 ticket、feature、epic 不算）；归组建议按 ticket 和 feature 各算一组。
+  const repoPathRows = <T extends { repo_path: string }>(sql: string): T[] => db.prepare(sql).all() as unknown as T[];
   const lessonsService = new LessonsService({
-    repo: lessonsRepo, identity: repoIdentity, runner: lessonRunner,
+    repo: lessonsRepo, runs: lessonRuns, availability, identity: repoIdentity, runner: lessonRunner,
     knownRepoPaths: () => [
       ...new Set(
-        repoPathRows(
-          `SELECT ticket_key AS k, repo_path FROM ticket_repos UNION SELECT feature_id AS k, repo_path FROM feature_repos UNION SELECT epic_id AS k, repo_path FROM epic_repos`,
+        repoPathRows<{ repo_path: string }>(
+          `SELECT tr.repo_path FROM ticket_repos tr JOIN tickets t ON t.key = tr.ticket_key WHERE t.archived_at IS NULL
+           UNION SELECT fr.repo_path FROM feature_repos fr JOIN features f ON f.id = fr.feature_id WHERE f.archived_at IS NULL
+           UNION SELECT er.repo_path FROM epic_repos er JOIN epics e ON e.id = er.epic_id WHERE e.archived_at IS NULL`,
         ).map((r) => r.repo_path),
       ),
     ],
     repoGroups: () => {
       const groups = new Map<string, Set<string>>();
       for (const [kind, sql] of [
-        ["t", `SELECT ticket_key AS k, repo_path FROM ticket_repos`],
-        ["f", `SELECT feature_id AS k, repo_path FROM feature_repos`],
+        ["t", `SELECT tr.ticket_key AS k, tr.repo_path FROM ticket_repos tr JOIN tickets t ON t.key = tr.ticket_key WHERE t.archived_at IS NULL`],
+        ["f", `SELECT fr.feature_id AS k, fr.repo_path FROM feature_repos fr JOIN features f ON f.id = fr.feature_id WHERE f.archived_at IS NULL`],
       ] as const) {
-        for (const r of repoPathRows(sql)) {
+        for (const r of repoPathRows<{ k: number | string; repo_path: string }>(sql)) {
           const key = `${kind}:${r.k}`;
           (groups.get(key) ?? groups.set(key, new Set()).get(key)!).add(r.repo_path);
         }
       }
       return [...groups.values()].map((g) => [...g]);
     },
-    ghAvailable: () => ghBinary() !== null, openExternal: (url) => void shell.openExternal(url), now: Date.now, notify: () => notify(),
+    ghAvailable: () => ghAvailable(), openExternal: (url) => void shell.openExternal(url), now: Date.now, notify: () => notify(), log: logger,
+    // writeRunFile 写不了会同步抛出：LessonsService 接住，记日志，返回 write_failed。sessionService 在下面才建好：调用时才用到。
+    openRun: (d, repoPath) => {
+      const file = writeRunFile(paths.lessonsWorkspace, d, currentLang());
+      return sessionService.openLessonRun({ runId: d.id, repoPath, file, label: `lesson run ${d.id}` });
+    },
   });
   /** 开着终端的 Butler session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
   const needsYouHeads = (): NeedsYouHead[] => {
     const heads = new Map<string, NeedsYouHead>();
     for (const termId of pty.openIds()) {
       const h = sessions.head(termId);
-      if (!h || h.origin !== "butler" || heads.has(h.id)) continue;
+      // 复盘分析 session 只是用户来问问题的，不判断需要你。
+      if (!h || h.origin !== "butler" || h.lessonRunId !== null || heads.has(h.id)) continue;
       heads.set(h.id, { id: h.id, cwd: h.cwd, waiting: h.waitingForInput, kind: activityMonitor.get(h.id)?.kind ?? null, reply: activityMonitor.lastReplyOf(h.id) });
     }
     return [...heads.values()];
@@ -530,6 +566,7 @@ async function bootstrap(): Promise<void> {
     onTurnEnd: (id, at) => {
       if (markTurnEndedWithoutStop(sessions, id, at)) sessionStopped(id);
     },
+    onLimit: (id, hit, at) => availability.report({ ...hit, at, source: "session", job: null, sessionId: id }),
     log: logger,
   });
   /** 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。 */
@@ -560,6 +597,7 @@ async function bootstrap(): Promise<void> {
     epicMcpConfig,
     butlerWorkspace: paths.butlerWorkspace,
     butlerMcpConfig,
+    lessonsWorkspace: paths.lessonsWorkspace,
     features, epics, featureHandoffs, handoffs, epicHistory,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
@@ -596,7 +634,10 @@ async function bootstrap(): Promise<void> {
     );
   }
   const ingest = (input: IngestInput) => {
-    const r = ingestHandoff({ db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}` }, input);
+    const r = ingestHandoff(
+      { db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}`, linkPrs: (k, prs) => void prLinker.linkHandoffPrs(k, prs), linkedOpen, givenUpPrs },
+      input,
+    );
     // 设计文档 5.4：入库后同步写入 StateCore（异步，失败只记日志）。
     if (r.stored && !r.degraded) {
       void memory.syncTicket(input.ticketKey);
@@ -624,6 +665,7 @@ async function bootstrap(): Promise<void> {
     projectMcp,
     signal: headlessAbort.signal,
     onUsage: recordHeadlessUsage,
+    ...availabilityHooks,
     log: logger,
   });
   /** feature 有新汇总时，它所在的 epic 重新渲染 handoff（异步，失败只记日志）。 */
@@ -653,6 +695,7 @@ async function bootstrap(): Promise<void> {
     projectMcp,
     signal: headlessAbort.signal,
     onUsage: recordHeadlessUsage,
+    ...availabilityHooks,
     log: logger,
   });
   /**
@@ -940,7 +983,8 @@ async function bootstrap(): Promise<void> {
     waitingOnButler: (headId) => {
       if ([...gateRepo.waitingSessionIds()].some((id) => (sessions.head(id)?.id ?? id) === headId)) return true;
       const key = sessions.head(headId)?.ticketKey;
-      return key != null && prWatcher.statusOf(key).some((p) => p.ci === "pending");
+      // 合并、关闭了的 PR 留着最后一次读到的 CI：只算开着的 PR 和还没有 PR 的分支。
+      return key != null && prWatcher.statusOf(key).some((p) => (p.state === "open" || p.state === null) && p.ci === "pending");
     },
     refresher,
     hiddenBefore: (before) => sessions.listHiddenBefore(before),
@@ -953,7 +997,14 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   // PR 和 CI 的监视（计划 13）。
-  const prWatchRepo = new PrWatchRepo(db);
+  const ticketPrs = new TicketPrsRepo(db);
+  // 只数读过的行（checkedAt > 0，同 prHandoff）：没读过的行状态只是链接时的猜测，不能把 ticket 钉在 in_review；新链接的行下一轮轮询就会读到。
+  // 一直读不到、放弃了的行也不数。
+  const linkedOpen = (k: string): boolean => anyLinkedOpen(ticketPrs.byTicket(k));
+  // 放弃读了的 PR：handoff 里（模型报的、记着的）开着也不再把 ticket 留在 in_review。
+  const givenUpPrs = (k: string): ReadonlySet<string> => new Set(ticketPrs.byTicket(k).filter(prGivenUp).map((p) => p.url));
+  const branchWatch = new BranchWatchRepo(db);
+  const prLinker = new PrLinker({ prs: ticketPrs, tickets, slugOf: (path) => repoIdentity.slugOf(path), now: Date.now });
   const holdWatcher = new HoldWatcher({
     repo: gateRepo, prInfo, git,
     isOpen: (id) => gateTerm(id) !== null,
@@ -970,7 +1021,9 @@ async function bootstrap(): Promise<void> {
   });
   // CI 的结论递给这个仓库自己的 session（不算总控）：和合并通知走同一道 guard，最多等 1 分钟。
   const ciDelivery = new CiDelivery({
-    repo: prWatchRepo,
+    prs: ticketPrs,
+    branches: branchWatch,
+    currentBranch: (repoId) => tickets.getRepo(repoId)?.branch ?? null,
     guard: deliveryGuard,
     sessionFor: (key, repoId) => {
       for (const t of pty.openIds()) {
@@ -986,32 +1039,35 @@ async function bootstrap(): Promise<void> {
   /** 递还没递出去的 CI 结论（永不 reject）。 */
   const flushCi = (): Promise<void> => ciDelivery.flush().catch((e: unknown) => logger("ci delivery: flush failed", e));
   const prWatcher = new PrWatcher({
-    repo: prWatchRepo,
-    targets: () =>
-      watchTargets(tickets.list(), {
-        workDir: (r) => ticketService.workDir(r),
-        sessionOpen: (key, repoId) => sessionService.hasRepoTerminal(key, repoId),
-        watched: (repoId) => prWatchRepo.get(repoId),
-        handoffHasOpenPr: (key) => handoffs.latestValid(key)?.payload?.prs.some((p) => p.state === "open") ?? false,
-      }),
-    gh: { prStatus, branchRuns, failedLog, reviewComments, reviewAuthors },
+    prs: ticketPrs,
+    branches: branchWatch,
+    tickets: () => tickets.list(),
+    repoOf: (repoId) => tickets.getRepo(repoId),
+    ghWorkDir: (r) => ticketService.ghWorkDir(r),
+    sessionOpen: (key, repoId) => sessionService.hasOpenTerminal(key, repoId ?? undefined),
+    home: homedir(),
+    slugOf: (path) => repoIdentity.slugOf(path),
+    linker: prLinker,
+    gh: { prStatus, prsForBranch, branchRuns, failedLog, reviewComments, reviewAuthors },
     git: { firstCommitAt: git.firstCommitAt },
     stages: prStages,
-    onMerged: (t, n) => lessonRunner.merged(t.repoPath, n),
+    onMerged: (pr, repoPath) => lessonRunner.merged({ repoPath, slug: pr.slug }, pr.number),
     // PR 的状态或 review 变了：在最新的 handoff 上换掉 prs，存成一条 refresh。ticket 状态、PR 标签、合并后清理 worktree 都照旧走 ingest。
     onPrChanged: (key) => {
+      // 归档 ticket 的补链接行读一次也会走到这里：不为它们写 refresh handoff、不同步记忆。
+      if (tickets.get(key)?.archivedAt != null) return;
       const base = handoffs.latestValid(key);
       if (!base?.payload) return;
-      const next = prHandoff(key, prWatchRepo.byTicket(key), { id: base.id, prs: base.payload.prs });
+      const next = prHandoff(key, ticketPrs.byTicket(key), { id: base.id, createdAt: base.createdAt, status: base.payload.status, prs: base.payload.prs });
       if (!next) return;
       // 和早间刷新一样：done_today、followups、decisions、learnings 清空，免得重复计算、重复写进记忆。
       ingest({
         ticketKey: key, sessionId: null, trigger: "refresh",
-        payload: { ...base.payload, done_today: [], followups: [], decisions: [], learnings: [], prs: next.prs },
+        payload: { ...base.payload, status: next.status, done_today: [], followups: [], decisions: [], learnings: [], prs: next.prs },
         rawText: null, sourceRef: next.sourceRef,
       });
     },
-    onCiSettled: (row) => void ciDelivery.settled(row).catch((e: unknown) => logger("ci delivery: handing over a CI result failed", e)),
+    onCiSettled: (item) => void ciDelivery.settled(item).catch((e: unknown) => logger("ci delivery: handing over a CI result failed", e)),
     notify,
     // 每轮之后再递一遍：session 停着但当时用户在打字、有草稿的，安静下来之后在这里递出去。
     roundDone: () => void flushCi(),
@@ -1023,6 +1079,11 @@ async function bootstrap(): Promise<void> {
     openTerminals: (key) => sessionService.openTerminalCount(key),
     notify: () => notify(),
     checkSoon: () => holdWatcher.soon(),
+    // 新链接的行 checked_at 为 0，下一轮就会读，不用再催。
+    onPrHold: (id) => {
+      const hold = gateRepo.hold(id);
+      if (hold) prLinker.linkHold(hold, (s) => sessions.get(s)?.ticketKey ?? null);
+    },
     now: Date.now,
     log: logger,
   });
@@ -1056,8 +1117,11 @@ async function bootstrap(): Promise<void> {
         if (!headlessAbort.signal.aborted) void butlerPatrol.check();
         return flushCi();
       });
-    const repoId = sessions.head(stopped)?.repoId;
-    if (repoId != null) prWatcher.soon(repoId);
+    // 这个 ticket 的 PR 都马上查一次；feature 总控查它所有 ticket 的；别的按仓库。
+    const head = sessions.head(stopped);
+    if (head?.ticketKey) prWatcher.soonTicket(head.ticketKey);
+    else if (head?.coordinator && head.featureId != null) for (const t of tickets.listByFeature(head.featureId)) prWatcher.soonTicket(t.key);
+    else if (head?.repoId != null) prWatcher.soon(head.repoId);
   };
 
   const inbox = new HookInbox({
@@ -1204,18 +1268,20 @@ async function bootstrap(): Promise<void> {
     deleteHiddenSessions: (ids) => sessionCleanup.deleteHidden(ids),
     inbox: inboxService,
     lessons: lessonsService,
+    availability,
     prStages: new PrStagesService({
-      tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id) },
+      tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id, { includeArchived: true }) },
       features: {
-        byEpic: (epicId) => features.list().filter((f) => f.epicId === epicId),
+        byEpic: (epicId) => features.listByEpic(epicId, { includeArchived: true }),
         get: (id) => features.get(id),
       },
       stages: prStages,
-      prWatch: prWatchRepo,
+      prs: ticketPrs,
       reports: (key) => inboxRepo.reportsForTicket(key),
-      // 和 gateCommand 同一个条件：hook 程序不是当前版本就看不到 skill 调用。
-      skillTracking: () => health.hookBinCurrent() && existsSync(paths.hookBin),
+      skillTrackingSince: () => skillTrackingSince(settings),
     }),
+    // 允许的主机和 lessons 的 openSource 一样，只认 git remote 认出来的仓库（lessons_repos），不认 ticket_prs 自己的 slug。
+    prOpen: (url) => openKnownPr(url, { prs: ticketPrs, trustedSlugs: () => lessonsRepo.repos().map((r) => r.slug), openExternal: (u) => shell.openExternal(u), log: logger }),
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
     nowView: (merges) => {
       // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
@@ -1236,10 +1302,11 @@ async function bootstrap(): Promise<void> {
         decisions: inboxService.pendingDecisionViews(),
         recent: (id) => activityMonitor.recent(id),
         memory: activityMonitor.memoryLog(),
+        notices: buildNotices({ availability: availability.view(), recentRuns: lessonRuns.recentFinished(20) }),
       });
     },
     rederive: (key) => {
-      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now }, key);
+      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs }, key);
       // followup 完成 / 忽略 / 恢复：StateCore 里对应的条目跟着 forget / 重写。
       void memory.syncTicket(key);
     },
@@ -1307,11 +1374,32 @@ async function bootstrap(): Promise<void> {
   holdWatcher.start(Number(process.env.BUTLER_GATE_CHECK_MS) || HOLD_CHECK_MS);
   // 等 git 和 gh 的路径按登录 shell 的 PATH 解析好再查：第一轮就可能看到合并、触发 worktree 清理。已经开始退出就不再启动。
   void healthReady.then(() => {
-    if (!headlessAbort.signal.aborted) prWatcher.start();
+    if (headlessAbort.signal.aborted) return;
+    prWatcher.start();
+    // 一次性补链接所有 ticket（含归档）的 PR；后台跑，失败下次启动重试。
+    void runPrBackfill({
+      tickets: () => tickets.list({ includeArchived: true }),
+      linker: prLinker,
+      prs: ticketPrs,
+      handoffPrs: (key) => handoffs.allPrs(key),
+      holds: () => gateRepo.prHolds(),
+      sessionTicket: (s) => sessions.get(s)?.ticketKey ?? null,
+      prsForBranch,
+      ghWorkDir: (r) => ticketService.ghWorkDir(r),
+      home: homedir(),
+      // 目录不在时 slugOf 给不出：用这个仓库已经链接过的 PR 的 slug。
+      slugOf: (r) => repoIdentity.slugOf(r.repoPath) ?? ticketPrs.byTicket(r.ticketKey).find((p) => p.repoId === r.id)?.slug ?? null,
+      jobs,
+      now: Date.now,
+      log: logger,
+      soon: (repoId) => prWatcher.soon(repoId),
+    }).catch((e: unknown) => logger("pr backfill failed", e));
   });
-  void healthReady.then(() => {
-    if (!headlessAbort.signal.aborted) lessonRunner.start();
-  });
+  void healthReady
+    .then(() => {
+      if (!headlessAbort.signal.aborted) lessonRunner.start();
+    })
+    .catch((e: unknown) => logger("lessons: starting the runner failed", e));
   activityMonitor.start();
   usageScanner.start(usageScanMs(process.env));
   void runDiscovery();
@@ -1349,6 +1437,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(discoveryTimer);
     clearInterval(refreshTimer);
     clearInterval(scheduleTimer);
+    availability.dispose();
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     activityMonitor.stop();
     usageScanner.stop();

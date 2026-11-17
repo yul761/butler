@@ -1,26 +1,35 @@
+import type { LimitKind } from "../../shared/availability";
 import type { Lang } from "../../shared/i18n";
-import { headlessArgs } from "../claude/headless";
+import type { LessonRunningItem } from "../../shared/lessons";
+import type { ClaudeAvailability } from "../claude/availability";
+import { headlessArgs, type ClaudeResult } from "../claude/headless";
 import type { JobsRepo } from "../db/jobs-repo";
 import { JOB_LESSONS_DAILY } from "../db/jobs-repo";
+import type { LessonRunFinish, LessonRunsRepo } from "../db/lesson-runs-repo";
 import type { LessonsRepo, QueueItem } from "../db/lessons-repo";
-import { execHeadlessJson, type HeadlessExecDeps } from "../handoff/headless-exec";
+import { execHeadlessJson, type HeadlessExecDeps, type HeadlessExecResult } from "../handoff/headless-exec";
 import { toCliJsonSchema, validate } from "../handoff/schema";
 import { dayStart, localDate } from "../schedule/calendar";
-import { LESSON_GH_TIMEOUT_MS, type compareFiles, type mergedPrs, type MergedPr, type prLessonData } from "../tickets/gh";
+import { LESSON_GH_TIMEOUT_MS, type compareFiles, type mergedPrs, type MergedPr, type prLessonDataDetail } from "../tickets/gh";
 import { AnalysisSchema, analysisPrompt, applyAnalysis } from "./analyze";
 import { fixRange, reviewItems, transcriptExcerpts, type Material } from "./material";
 import type { RepoIdentity } from "./repo-identity";
 
 export const LESSON_CONCURRENCY = 2;
 export const BACKFILL_LIMIT = 100;
-export const RATE_LIMIT_PAUSE_MS = 10 * 60_000;
 const EXCERPT_MAX_CHARS = 20_000;
+/** 每日拉取全部失败后，这么久之内不再重试（调度器每分钟触发一次）。 */
+export const DAILY_RETRY_BACKOFF_MS = 30 * 60_000;
 
 export interface LessonRunnerDeps {
   repo: LessonsRepo;
+  /** 每次分析（含失败、限流、取消的）一条运行记录。 */
+  runs: LessonRunsRepo;
+  /** 限流 / 模型不可用 / 手动暂停时不取新的；恢复时通过 subscribe 接着跑。 */
+  availability: Pick<ClaudeAvailability, "lessonsGate" | "subscribe" | "resumeLessons" | "report">;
   identity: RepoIdentity;
   jobs: JobsRepo;
-  gh: { mergedPrs: typeof mergedPrs; prLessonData: typeof prLessonData; compareFiles: typeof compareFiles; available: () => boolean };
+  gh: { mergedPrs: typeof mergedPrs; prLessonDataDetail: typeof prLessonDataDetail; compareFiles: typeof compareFiles; available: () => boolean };
   headless: HeadlessExecDeps;
   /** PR 分支 → Butler 的 ticket：在所有 ticket_repos（包括归档的）里找 branch 相同、slugOf(repo_path) 相同的那一行。 */
   ticketForBranch: (slug: string, branch: string) => string | null;
@@ -41,22 +50,89 @@ function overlapped(cursor: string): string {
 
 const maxMergedAt = (prs: MergedPr[]): string | null => prs.reduce<string | null>((m, p) => (m === null || p.mergedAt > m ? p.mergedAt : m), null);
 
+/** 运行记录里除了结束时间以外的内容。 */
+type RunEnd = Omit<LessonRunFinish, "finishedAt">;
+/** 队列行怎么收尾：finish 成某个状态，或者回到 queued（linkRun：last_run_id 指向这次运行）。 */
+type QueueEnd = { finish: "done" | "skipped" | "failed"; error?: string; message?: string } | { defer: true; linkRun: boolean };
+type HeadlessFailed = Extract<HeadlessExecResult, { ok: false }>;
+
+/** 一个正在跑的队列项。ctx 随分析一路补上，出异常时也记得住已经拿到的 PR 信息和素材。 */
+interface Attempt {
+  item: QueueItem;
+  runId: number;
+  startedAt: number;
+  ctl: AbortController;
+  ctx: Pick<RunEnd, "prTitle" | "prUrl" | "material">;
+}
+
+/** claude 结果里的花费、模型、token（输入含缓存读写）和时长。 */
+function claudeFields(r: ClaudeResult | null): Partial<RunEnd> {
+  if (!r) return {};
+  const u = r.usage;
+  return {
+    model: r.model ?? undefined,
+    costUsd: r.costUsd ?? undefined,
+    inputTokens: u ? u.input + u.cacheWrite5m + u.cacheWrite1h + u.cacheRead : undefined,
+    outputTokens: u?.output,
+    durationMs: r.durationMs ?? undefined,
+  };
+}
+
 /** 复盘规矩的后台队列：最多 LESSON_CONCURRENCY 个 PR 同时交给 headless claude 分析；队列在库里，退出重开后接着跑。 */
 export class LessonRunner {
   private readonly active = new Set<Promise<void>>();
-  private pausedUntil = 0;
-  private pauseTimer: NodeJS.Timeout | null = null;
+  /** 正在跑的项，按队列 id。 */
+  private readonly live = new Map<number, Attempt>();
   private dailyRunning = false;
   /** start() 之前不取队列：resetRunning 之前取走的行会被它改回 queued，造成重复分析。 */
   private started = false;
 
   constructor(private readonly d: LessonRunnerDeps) {}
 
-  /** 启动时调一次：running 的回到 queued，然后开跑。 */
+  /** 启动时调一次：上次没跑完的运行记为 aborted，running 的回到 queued，清理旧运行，然后开跑；可用状态一变就再取。 */
   start(): void {
+    const now = this.d.now();
+    this.d.runs.abortRunning(now);
     this.d.repo.resetRunning();
+    this.prune(now);
     this.started = true;
+    this.d.availability.subscribe(() => this.pump());
     this.pump();
+  }
+
+  /** 取消：正在跑的中止它的 claude（还没起进程的不会再起）；排队中的直接标成取消。 */
+  cancel(queueId: number): "ok" | "not_found" | "bad_status" {
+    const a = this.live.get(queueId);
+    if (a) {
+      a.ctl.abort();
+      return "ok";
+    }
+    return this.d.repo.cancelQueued(queueId, this.d.now());
+  }
+
+  /** 手动重试一项：排到最前。 */
+  retry(queueId: number): "ok" | "not_found" | "bad_status" {
+    const r = this.d.repo.retry(queueId, this.d.now());
+    if (r === "ok") this.pump();
+    return r;
+  }
+
+  /** 这个仓库所有失败的项重试，返回个数。 */
+  retryFailed(slug: string): number {
+    const n = this.d.repo.retryFailed(slug, this.d.now());
+    if (n > 0) this.pump();
+    return n;
+  }
+
+  /** 「现在就跑」：等待中的项马上可取，再解除暂停。顺序要紧：resumeLessons 会同步触发订阅的 pump，那时 not_before 必须已经清掉。 */
+  runNow(): void {
+    this.d.repo.clearNotBefore();
+    this.d.availability.resumeLessons();
+    this.pump();
+  }
+
+  running(): LessonRunningItem[] {
+    return [...this.live.values()].map((a) => ({ queueId: a.item.id, runId: a.runId, slug: a.item.slug, prNumber: a.item.prNumber, startedAt: a.startedAt }));
   }
 
   /** 页面的「分析历史」。没有 gh、解析不出 slug 时返回原因，不排队。 */
@@ -78,29 +154,40 @@ export class LessonRunner {
     return { ok: true, enqueued };
   }
 
-  /** PR 监视看到 Butler 跟踪的 PR 合并时调用。 */
-  merged(repoPath: string, prNumber: number): void {
-    const slug = this.d.identity.slugOf(repoPath);
-    if (slug === null) return;
-    this.d.repo.upsertRepo(slug, repoPath, this.d.now());
-    this.d.repo.enqueue(slug, [prNumber], "merged", this.d.now());
+  /**
+   * PR 监视看到 Butler 跟踪的 PR 合并时调用。repoPath 是这个 PR 所在的 ticket 仓库（不是 ticket 仓库的 PR 为 null）。
+   * 认得出仓库的按仓库登记、排队；否则用 PR 的 slug，但只排已经登记过的仓库（没有本地仓库没法分析）。
+   */
+  merged(t: { repoPath: string | null; slug: string }, prNumber: number): void {
+    const slug = t.repoPath === null ? null : this.d.identity.slugOf(t.repoPath);
+    if (t.repoPath !== null && slug !== null) {
+      this.d.repo.upsertRepo(slug, t.repoPath, this.d.now());
+      this.d.repo.enqueue(slug, [prNumber], "merged", this.d.now());
+    } else if (this.d.repo.repo(t.slug)) {
+      this.d.repo.enqueue(t.slug, [prNumber], "merged", this.d.now());
+    } else return;
     this.pump();
   }
 
   /** checkSchedule 每次调；今天已经跑过就什么都不做。 */
   async daily(): Promise<void> {
     if (this.dailyRunning || !this.d.gh.available()) return;
-    const last = this.d.jobs.get(JOB_LESSONS_DAILY).lastRunAt;
+    const { lastRunAt: last, lastStatus } = this.d.jobs.get(JOB_LESSONS_DAILY);
     const now = this.d.now();
-    if (last !== null && last >= dayStart(localDate(now))) return;
+    if (last !== null && lastStatus === "ok" && last >= dayStart(localDate(now))) return;
+    if (last !== null && lastStatus === "failed" && now - last < DAILY_RETRY_BACKOFF_MS) return;
     this.dailyRunning = true;
     try {
+      let attempted = 0;
+      let failed = 0;
       for (const row of this.d.repo.repos()) {
         if (row.backfilledAt === null) continue;
+        attempted++;
         try {
           const prs = await this.d.gh.mergedPrs(row.localPath, row.mergedCursor === null ? null : overlapped(row.mergedCursor), BACKFILL_LIMIT, LESSON_GH_TIMEOUT_MS);
           if (prs === null) {
             this.d.log?.(`lessons: daily pull failed for ${row.slug}`);
+            failed++;
             continue;
           }
           this.warnIfTruncated(row.slug, prs);
@@ -111,9 +198,12 @@ export class LessonRunner {
           });
         } catch (e) {
           this.d.log?.(`lessons: daily pull failed for ${row.slug}`, e);
+          failed++;
         }
       }
-      this.d.jobs.record(JOB_LESSONS_DAILY, this.d.now(), "ok", null);
+      if (attempted > 0 && failed === attempted) this.d.jobs.record(JOB_LESSONS_DAILY, this.d.now(), "failed", "all repos failed");
+      else this.d.jobs.record(JOB_LESSONS_DAILY, this.d.now(), "ok", null);
+      this.prune(this.d.now());
     } finally {
       this.dailyRunning = false;
     }
@@ -129,15 +219,21 @@ export class LessonRunner {
     if (prs.length === BACKFILL_LIMIT) this.d.log?.(`lessons: merged PR list hit the limit for ${slug}; older ones may be skipped`);
   }
 
+  private prune(now: number): void {
+    try {
+      this.d.runs.prune(now);
+    } catch (e) {
+      this.d.log?.("lessons: pruning runs failed", e);
+    }
+  }
+
+  /** 暂停时一个都不取；正在跑的照常跑完。 */
   private pump(): void {
     if (!this.started) return;
     while (this.active.size < LESSON_CONCURRENCY) {
       if (this.d.headless.signal?.aborted) return;
       const now = this.d.now();
-      if (now < this.pausedUntil) {
-        this.schedulePump(this.pausedUntil - now);
-        return;
-      }
+      if (this.d.availability.lessonsGate(now).paused) return;
       let item: QueueItem | null;
       try {
         item = this.d.repo.take(now);
@@ -154,52 +250,112 @@ export class LessonRunner {
     }
   }
 
-  private schedulePump(ms: number): void {
-    if (this.pauseTimer) return;
-    this.pauseTimer = setTimeout(() => {
-      this.pauseTimer = null;
-      this.pump();
-    }, ms + 1000);
-    this.pauseTimer.unref?.();
-  }
-
   /** 一个队列项；任何异常都记成 failed（error），不让它停在 running，也不让 pump 崩。 */
   private async process(item: QueueItem): Promise<void> {
+    let a: Attempt | null = null;
     try {
-      await this.analyze(item);
+      const startedAt = this.d.now();
+      const runId = this.d.runs.start({ queueId: item.id, slug: item.slug, prNumber: item.prNumber, origin: item.origin, startedAt });
+      a = { item, runId, startedAt, ctl: new AbortController(), ctx: {} };
+      this.live.set(item.id, a);
+      await this.analyze(a);
     } catch (e) {
       this.d.log?.(`lessons: analyzing ${item.slug}#${item.prNumber} failed`, e);
+      const message = String(e);
       try {
-        this.d.repo.finish(item.id, "failed", this.d.now(), "error");
+        if (a) this.settle(a, { status: "failed", reason: "error", message }, { finish: "failed", error: "error", message });
+        else this.d.repo.finish(item.id, "failed", this.d.now(), "error", { message });
       } catch (e2) {
         this.d.log?.(`lessons: could not mark ${item.slug}#${item.prNumber} failed`, e2);
       }
+    } finally {
+      this.live.delete(item.id);
+    }
+    try {
+      this.d.notify();
+    } catch (e) {
+      this.d.log?.("lessons: notify failed", e);
     }
   }
 
-  private async analyze(item: QueueItem): Promise<void> {
+  /** 运行记录和队列行在一个事务里收尾。时长没有 claude 给的就用墙钟。 */
+  private settle(a: Attempt, run: RunEnd, q: QueueEnd): void {
+    const { repo } = this.d;
+    const now = this.d.now();
+    repo.transaction(() => {
+      this.d.runs.finish(a.runId, { ...a.ctx, ...run, durationMs: run.durationMs ?? now - a.startedAt, finishedAt: now });
+      if ("defer" in q) repo.defer(a.item.id, now, q.linkRun ? a.runId : undefined);
+      else repo.finish(a.item.id, q.finish, now, q.error, { message: q.message ?? null, runId: a.runId });
+    });
+  }
+
+  private settleCancelled(a: Attempt, extra: Partial<RunEnd> = {}): void {
+    this.settle(a, { ...extra, status: "cancelled", reason: "cancelled" }, { finish: "skipped", error: "cancelled" });
+  }
+
+  private settleFailure(a: Attempt, r: HeadlessFailed): void {
+    const detail: Partial<RunEnd> = { message: r.message, stderrTail: r.stderr || undefined, rawOutput: r.rawText ?? undefined, ...claudeFields(r.result) };
+    if (r.reason === "rate_limited" || r.reason === "model_unavailable") {
+      const kind: LimitKind = r.reason === "model_unavailable" ? "model_unavailable" : (r.limit?.kind ?? "rate_limit");
+      this.ensurePaused(r, kind);
+      this.settle(a, { ...detail, status: "limited", reason: kind }, { defer: true, linkRun: true });
+    } else if (r.reason === "aborted") {
+      if (a.ctl.signal.aborted) this.settleCancelled(a, detail);
+      else this.settle(a, { ...detail, status: "aborted", reason: "app_quit" }, { defer: true, linkRun: false });
+    } else {
+      this.settle(a, { ...detail, status: "failed", reason: r.reason }, { finish: "failed", error: r.reason, message: r.message });
+    }
+  }
+
+  /**
+   * headless 的 onLimit 一般已经报过、闸门已经关了。分类器没认出来（limit 为空）时闸门还开着：自己报一次，
+   * 不然刚放回队列的这一项会被马上再取走。
+   */
+  private ensurePaused(r: HeadlessFailed, kind: LimitKind): void {
+    try {
+      if (this.d.availability.lessonsGate(this.d.now()).paused) return;
+      this.d.availability.report({ kind, resetsAt: r.limit?.resetsAt ?? null, message: r.limit?.message ?? r.message, source: "headless", job: "lessons", sessionId: null });
+    } catch (e) {
+      this.d.log?.("lessons: reporting the limit failed", e);
+    }
+  }
+
+  private async analyze(a: Attempt): Promise<void> {
     const { repo, gh } = this.d;
+    const { item } = a;
     const row = repo.repo(item.slug);
     if (!row) {
-      repo.finish(item.id, "failed", this.d.now(), "unknown_repo");
+      this.settle(a, { status: "failed", reason: "unknown_repo" }, { finish: "failed", error: "unknown_repo" });
       return;
     }
     const cwd = row.localPath;
-    const pr = await gh.prLessonData(cwd, item.prNumber, LESSON_GH_TIMEOUT_MS);
+    const got = await gh.prLessonDataDetail(cwd, item.prNumber, LESSON_GH_TIMEOUT_MS);
+    const pr = got.data;
+    if (pr) a.ctx = { prTitle: pr.title, prUrl: pr.url };
+    if (a.ctl.signal.aborted) {
+      this.settleCancelled(a);
+      return;
+    }
     if (!pr) {
-      repo.finish(item.id, "failed", this.d.now(), "gh");
+      this.settle(a, { status: "failed", reason: "gh", ghStderr: got.stderr || undefined }, { finish: "failed", error: "gh", message: got.stderr || undefined });
       return;
     }
     const items = reviewItems(pr);
     if (items.length === 0) {
-      repo.finish(item.id, "skipped", this.d.now());
+      this.settle(a, { status: "skipped", reason: "no_review_comments" }, { finish: "skipped" });
       return;
     }
     const paths = items.flatMap((i) => (i.path ? [i.path] : []));
 
     let fixes: Material["fixes"] = [];
+    let fixesNote: Material["fixesNote"] = null;
     const range = fixRange(pr, items);
-    if (range) {
+    if ("none" in range) {
+      if (range.none === "rewritten" && paths.length > 0) {
+        fixesNote = "rewritten";
+        this.d.log?.(`lessons: history rewritten for ${item.slug}#${item.prNumber}, no fix range`);
+      }
+    } else {
       try {
         const files = await gh.compareFiles(cwd, range.base, range.head, LESSON_GH_TIMEOUT_MS);
         if (files) fixes = files.filter((f) => paths.includes(f.filename));
@@ -226,38 +382,38 @@ export class LessonRunner {
     const products = repo.products().filter((p) => p.slugs.includes(item.slug));
     const productIds = new Set(products.map((p) => p.id));
     const existing = repo.lessons().filter((l) => (l.scope.kind === "repo" ? l.scope.slug === item.slug : productIds.has(l.scope.productId)));
-    const prompt = analysisPrompt(this.d.lang(), item.slug, { pr, items, fixes, butler }, existing, products);
+    const prompt = analysisPrompt(this.d.lang(), item.slug, { pr, items, fixes, fixesNote, butler }, existing, products);
+    a.ctx.material = prompt;
 
-    const r = await execHeadlessJson(this.d.headless, {
+    // 取消可能发生在拉 gh 数据、读对话记录的时候：起进程前再看一次。
+    if (a.ctl.signal.aborted) {
+      this.settleCancelled(a);
+      return;
+    }
+    repo.markSpawned(item.id);
+    const signals = [this.d.headless.signal, a.ctl.signal].filter((s): s is AbortSignal => s !== undefined);
+    const r = await execHeadlessJson({ ...this.d.headless, signal: AbortSignal.any(signals) }, {
       label: "lessons",
       args: headlessArgs({ schema: toCliJsonSchema(AnalysisSchema), allowedTools: [] }),
       prompt,
       cwd,
     });
     if (!r.ok) {
-      if (r.reason === "rate_limited") {
-        this.pausedUntil = this.d.now() + RATE_LIMIT_PAUSE_MS;
-        repo.defer(item.id, this.pausedUntil);
-      } else if (r.reason === "aborted") repo.defer(item.id, this.d.now());
-      else repo.finish(item.id, "failed", this.d.now(), r.reason);
+      this.settleFailure(a, r);
       return;
     }
+    const output: Partial<RunEnd> = { rawOutput: r.rawText, ...claudeFields(r.result) };
     const v = validate(AnalysisSchema, r.value);
     if (!v.ok) {
       this.d.log?.(`lessons: bad output for ${item.slug}#${item.prNumber}: ${v.errors}`);
-      repo.finish(item.id, "failed", this.d.now(), "bad_output");
+      this.settle(a, { ...output, status: "failed", reason: "bad_output", message: v.errors }, { finish: "failed", error: "bad_output", message: v.errors });
       return;
     }
     repo.transaction(() => {
       const allowed = new Set<string>([pr.url]);
       for (const i of items) if (i.url) allowed.add(i.url);
-      applyAnalysis(repo, item.slug, item.prNumber, v.value, this.d.now(), { allowed, prUrl: pr.url });
-      repo.finish(item.id, "done", this.d.now());
+      const applied = applyAnalysis(repo, item.slug, item.prNumber, v.value, this.d.now(), { allowed, prUrl: pr.url }, a.runId);
+      this.settle(a, { ...output, ...applied, status: "done", reason: null, findings: v.value.findings }, { finish: "done" });
     });
-    try {
-      this.d.notify();
-    } catch (e) {
-      this.d.log?.("lessons: notify failed", e);
-    }
   }
 }

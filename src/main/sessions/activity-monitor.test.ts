@@ -40,7 +40,7 @@ const backgroundDone = (taskId: string) => ({
 const flush = () => new Promise((r) => setImmediate(r));
 const row = (id: string, over: Partial<Session> = {}): Session => ({
   id, ticketKey: "DMS-1", cwd: "/work", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
-  replacedBy: null, dismissed: false, createdAt: 1, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: false, ...over,
+  replacedBy: null, dismissed: false, createdAt: 1, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: false, lessonRunId: null, ...over,
 });
 
 /** 假的依赖：session、ticket、feature 是内存表，transcript 和输出文件是真的临时文件。 */
@@ -130,6 +130,7 @@ function harness(over: Partial<ActivityDeps> = {}) {
   return {
     dir, deps, monitor, heads, open, screens, tickets, features, judgeCalls, judgeResults, stuckInfos, cpuPids, procCommands, logs, transcript, openSession, checks, beat, sleep,
     notifications: () => notifications,
+    setClock: (v: number) => (clock = v),
     setCpu: (v: number | null) => (cpu = v),
     setShell: (v: boolean | null) => (shell = v),
     setOpenedAt: (v: number) => (openedAt = v),
@@ -561,6 +562,12 @@ describe("ActivityMonitor stuck detection scope", () => {
   it("does not check a fix session", async () => {
     const h = harness();
     h.openSession("s1", { fixesSession: "stuck-one" });
+    await judgedNever(h, "s1");
+  });
+
+  it("lesson sessions are not judged", async () => {
+    const h = harness();
+    h.openSession("s1", { ticketKey: null, repoId: null, lessonRunId: 4 });
     await judgedNever(h, "s1");
   });
 
@@ -1665,6 +1672,57 @@ describe("the live window's signals (BTL-190 7)", () => {
     h.transcript("s1", done());
     await h.beat();
     expect(events.map((e) => e.kind)).toEqual(["turn-start", "turn-end"]);
+  });
+
+  describe("limits in interactive sessions", () => {
+    const limitEntry = (timestamp: string) => ({ type: "assistant", timestamp, isApiErrorMessage: true, message: { model: "<synthetic>", stop_reason: "stop_sequence", content: [{ type: "text", text: "Claude AI usage limit reached" }] } });
+
+    const MIN = 60_000;
+
+    it("a live limit is reported once", async () => {
+      const hits: [string, string, number][] = [];
+      const h = harness({ onLimit: (id, hit, at) => hits.push([id, hit.kind, at]) });
+      h.setClock(AT_MS + MIN);
+      h.openSession("s1");
+      h.transcript("s1", say("go"), limitEntry(AT));
+      await h.beat();
+      await h.beat();
+      expect(hits).toEqual([["s1", "usage_limit", AT_MS]]);
+    });
+
+    it("reports a limit 9 minutes old but not one 11 minutes old", async () => {
+      for (const [age, expected] of [[9, 1], [11, 0]] as const) {
+        const hits: unknown[] = [];
+        const h = harness({ onLimit: (...a) => hits.push(a) });
+        h.setClock(AT_MS + age * MIN - ACTIVITY_TICK_MS);
+        h.openSession("s1");
+        h.transcript("s1", say("go"), limitEntry(AT));
+        await h.beat();
+        expect(hits).toHaveLength(expected);
+      }
+    });
+
+    it("two distinct limits in one session are both reported", async () => {
+      const hits: number[] = [];
+      const h = harness({ onLimit: (_id, _hit, at) => hits.push(at) });
+      h.setClock(AT_MS + MIN);
+      h.openSession("s1");
+      h.transcript("s1", say("go"), limitEntry(AT));
+      await h.beat();
+      const later = new Date(AT_MS + 2 * MIN).toISOString();
+      h.transcript("s1", say("again", later), limitEntry(later));
+      await h.beat();
+      await h.beat();
+      expect(hits).toEqual([AT_MS, AT_MS + 2 * MIN]);
+    });
+
+    it("activity carries the limit", async () => {
+      const h = harness();
+      h.openSession("s1");
+      h.transcript("s1", say("go"), limitEntry(AT));
+      await h.beat();
+      expect(h.monitor.get("s1")?.limit).toMatchObject({ kind: "usage_limit" });
+    });
   });
 
   describe("onTurnEnd: turns that end without a Stop hook (follow-up D)", () => {

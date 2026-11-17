@@ -33,19 +33,22 @@ export function reviewItems(pr: PrLessonData): ReviewItem[] {
   return all.sort((a, b) => a.ms - b.ms).map((x) => x.item);
 }
 
-/** 最早一条有 path 的行内评论之前最后一个 commit 的 oid，和最后一个 commit 的 oid；没有行内评论或评论之后没有 commit 时为 null。 */
-export function fixRange(pr: PrLessonData, items: ReviewItem[]): { base: string; head: string } | null {
+/**
+ * 最早一条有 path 的行内评论之前最后一个 commit 的 oid，和最后一个 commit 的 oid。
+ * 没有范围时给出原因：no_fixes = 没有行内评论或评论之后没有 commit（没做修改）；rewritten = 评论之后有 commit 但评论时或之前一个都没有（历史被改写）。
+ */
+export function fixRange(pr: PrLessonData, items: ReviewItem[]): { base: string; head: string } | { none: "no_fixes" | "rewritten" } {
   const first = items.filter((i) => i.path !== null).map((i) => Date.parse(i.at)).sort((a, b) => a - b)[0];
-  if (first === undefined) return null;
+  if (first === undefined) return { none: "no_fixes" };
   const commits = pr.commits
     .map((c) => ({ oid: c.oid, ms: Date.parse(c.committedDate) }))
     .filter((c) => !Number.isNaN(c.ms))
     .sort((a, b) => a.ms - b.ms);
   const last = commits[commits.length - 1];
-  if (!last || last.ms <= first) return null;
+  if (!last || last.ms <= first) return { none: "no_fixes" };
   const before = commits.filter((c) => c.ms <= first);
   const base = before[before.length - 1];
-  return base ? { base: base.oid, head: last.oid } : null;
+  return base ? { base: base.oid, head: last.oid } : { none: "rewritten" };
 }
 
 /** 从 JSONL 对话记录里取 assistant 的文字块（不要 tool_use、thinking），只留提到任一 path 的文件名（basename）的；从新到旧，合计不超过 maxChars。 */
@@ -83,6 +86,8 @@ export interface Material {
   items: ReviewItem[];
   /** 评论指到的那几个文件在修改之后的 patch，每个最多 4000 字。 */
   fixes: { filename: string; patch: string }[];
+  /** 有行内评论但算不出修改范围（多半是 force-push 改写了历史）时为 "rewritten"。 */
+  fixesNote: "rewritten" | null;
   /** Butler 做的 PR：handoff 里的 decisions 和 learnings，以及对话记录摘录；不是 Butler 做的为 null。 */
   butler: { ticketKey: string; decisions: string[]; learnings: string[]; excerpts: string[] } | null;
 }
@@ -90,6 +95,7 @@ export interface Material {
 export const MATERIAL_MAX_CHARS = 60_000;
 const ITEM_BODY_MAX = 1500;
 const PATCH_MAX = 4000;
+const ITEM_HEADER_MAX = 200;
 const PR_BODY_MAX = 8000;
 const TITLE_MAX = 500;
 const COMMITS_MAX = 100;
@@ -98,8 +104,8 @@ const NOTES_MAX = 50;
 const NOTE_MAX = 500;
 
 const H = {
-  zh: { pr: "PR", body: "描述", commits: "提交", review: "评审意见", fixes: "之后的修改", butler: "Butler 上下文", decisions: "决定", learnings: "心得", excerpts: "对话摘录" },
-  en: { pr: "PR", body: "Description", commits: "Commits", review: "Review comments", fixes: "Later fixes", butler: "Butler context", decisions: "Decisions", learnings: "Learnings", excerpts: "Transcript excerpts" },
+  zh: { pr: "PR", body: "描述", commits: "提交", review: "评审意见", fixes: "之后的修改", rewritten: "无法给出修改：PR 的历史被改写过（force-push）。", butler: "Butler 上下文", decisions: "决定", learnings: "心得", excerpts: "对话摘录" },
+  en: { pr: "PR", body: "Description", commits: "Commits", review: "Review comments", fixes: "Later fixes", rewritten: "Fixes unavailable: the PR's history was rewritten (force-push).", butler: "Butler context", decisions: "Decisions", learnings: "Learnings", excerpts: "Transcript excerpts" },
 } as const;
 
 const cut = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s);
@@ -112,11 +118,12 @@ function render(m: Material, lang: Lang, o: { excerpts: boolean; fixes: boolean;
   out.push(`### ${h.review}`);
   m.items.forEach((i, n) => {
     const where = i.path ? ` ${i.path}${i.line !== null ? `:${i.line}` : ""}` : "";
-    out.push(`#### ${n + 1}. ${i.author} (${i.who}) ${i.at}${where}`, cut(i.body, o.bodyMax));
+    out.push(cut(`#### ${n + 1}. ${i.author} (${i.who}) ${i.at}${where}`, ITEM_HEADER_MAX), cut(i.body, o.bodyMax));
   });
-  if (o.fixes && m.fixes.length > 0) {
+  if (m.fixesNote !== null || (o.fixes && m.fixes.length > 0)) {
     out.push(`### ${h.fixes}`);
-    for (const f of m.fixes) out.push(`#### ${f.filename}`, cut(f.patch, PATCH_MAX));
+    if (m.fixesNote === "rewritten") out.push(h.rewritten);
+    if (o.fixes) for (const f of m.fixes) out.push(cut(`#### ${f.filename}`, ITEM_HEADER_MAX), cut(f.patch, PATCH_MAX));
   }
   const b = m.butler;
   if (b) {

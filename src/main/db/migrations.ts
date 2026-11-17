@@ -390,4 +390,107 @@ export const MIGRATIONS: string[] = [
     UNIQUE (repo_slug, pr_number));
   CREATE INDEX lesson_queue_status ON lesson_queue(status, enqueued_at);
   `,
+  // PR 进度按 PR 记（ticket_prs），不再按 ticket 仓库记；branch_watch 只记分支的 CI。pr_stage_events 加 pr_id。
+  `
+  CREATE TABLE ticket_prs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_key TEXT NOT NULL REFERENCES tickets(key),
+    url TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    repo_id INTEGER REFERENCES ticket_repos(id) ON DELETE SET NULL,
+    number INTEGER NOT NULL,
+    head_branch TEXT,
+    state TEXT NOT NULL CHECK (state IN ('open','merged','closed')),
+    review TEXT,
+    ci TEXT NOT NULL DEFAULT 'unknown',
+    read_error INTEGER NOT NULL DEFAULT 0,
+    head_sha TEXT,
+    failed TEXT NOT NULL DEFAULT '[]',
+    opened_at INTEGER, merged_at INTEGER, closed_at INTEGER,
+    source TEXT NOT NULL CHECK (source IN ('branch','handoff','merge_gate','backfill')),
+    linked_at INTEGER NOT NULL,
+    checked_at INTEGER NOT NULL DEFAULT 0,
+    delivered_key TEXT,
+    merged_handled_at INTEGER,
+    UNIQUE (ticket_key, url)
+  );
+  CREATE INDEX idx_ticket_prs_url ON ticket_prs (url);
+  CREATE INDEX idx_ticket_prs_state ON ticket_prs (state);
+  CREATE TABLE branch_watch (
+    repo_id INTEGER PRIMARY KEY REFERENCES ticket_repos(id) ON DELETE CASCADE,
+    ticket_key TEXT NOT NULL, branch TEXT NOT NULL,
+    ci TEXT NOT NULL DEFAULT 'unknown', head_sha TEXT, failed TEXT NOT NULL DEFAULT '[]',
+    read_error INTEGER NOT NULL DEFAULT 0, checked_at INTEGER NOT NULL DEFAULT 0, delivered_key TEXT
+  );
+  ALTER TABLE pr_stage_events ADD COLUMN pr_id INTEGER REFERENCES ticket_prs(id) ON DELETE CASCADE;
+  CREATE INDEX idx_pr_stage_events_pr ON pr_stage_events (pr_id);
+  `,
+  // pr_watch 的行搬进 ticket_prs（有 PR 的）和 branch_watch（只有分支的），事件补上 pr_id，然后删掉 pr_watch。
+  // 已合并、已关闭但没有对应事件的行 checked_at 记 0：再读一次拿到 GitHub 的时间；已合并的记作 onMerged 处理过，不再排复盘。
+  // 有号但 url / state 不全、url 不是 PR 的，当作只有分支：进 branch_watch，不丢。ticket 已经不在的（pr_watch.ticket_key 没有外键）
+  // 不进 ticket_prs：它的外键会让整个迁移失败、启动不了。
+  `
+  WITH w AS (
+    SELECT *, lower(rtrim(trim(url), '/')) AS u FROM pr_watch
+    WHERE number IS NOT NULL AND url IS NOT NULL AND ifnull(state, '') IN ('open','merged','closed') AND instr(lower(url), '/pull/') > 0
+      AND ticket_key IN (SELECT key FROM tickets)
+  ), p AS (
+    SELECT *, substr(u, instr(u, '://') + 3) AS rest FROM w
+  ), q AS (
+    SELECT *, substr(rest, 1, instr(rest, '/pull/') - 1) AS path,
+      (SELECT MIN(at) FROM pr_stage_events e WHERE e.repo_id = p.repo_id AND e.branch = p.branch AND e.kind = 'pr_opened') AS opened,
+      (SELECT MIN(at) FROM pr_stage_events e WHERE e.repo_id = p.repo_id AND e.branch = p.branch AND e.kind = 'merged') AS merged,
+      (SELECT MIN(at) FROM pr_stage_events e WHERE e.repo_id = p.repo_id AND e.branch = p.branch AND e.kind = 'closed') AS closed
+    FROM p
+  )
+  INSERT OR IGNORE INTO ticket_prs (ticket_key, url, slug, repo_id, number, head_branch, state, review, ci, read_error, head_sha, failed,
+    opened_at, merged_at, closed_at, source, linked_at, checked_at, delivered_key, merged_handled_at)
+  SELECT ticket_key, u, CASE WHEN path LIKE 'github.com/%' THEN substr(path, 12) ELSE path END, repo_id, number, branch, state,
+    review, ci, 0, head_sha, failed, opened, merged, closed, 'branch', checked_at,
+    CASE WHEN (state = 'merged' AND merged IS NULL) OR (state = 'closed' AND closed IS NULL) THEN 0 ELSE checked_at END,
+    delivered_key, CASE WHEN state = 'merged' THEN checked_at END
+  FROM q;
+  INSERT INTO branch_watch (repo_id, ticket_key, branch, ci, head_sha, failed, read_error, checked_at, delivered_key)
+    SELECT repo_id, ticket_key, branch, ci, head_sha, failed, 0, checked_at, delivered_key FROM pr_watch
+    WHERE NOT (number IS NOT NULL AND url IS NOT NULL AND ifnull(state, '') IN ('open','merged','closed') AND instr(lower(url), '/pull/') > 0);
+  UPDATE pr_stage_events SET pr_id = (SELECT t.id FROM ticket_prs t WHERE t.repo_id = pr_stage_events.repo_id AND t.head_branch = pr_stage_events.branch)
+    WHERE pr_id IS NULL AND kind IN ('pr_opened','push','ci','review','comment','merged','closed');
+  DROP TABLE pr_watch;
+  `,
+  // 分析运行记录（lesson_runs）、队列的重试/错误信息、规矩出处带仓库和运行、Claude 可用性、session 关联运行。
+  `
+  CREATE TABLE lesson_runs (
+    id INTEGER PRIMARY KEY,
+    queue_id INTEGER REFERENCES lesson_queue(id) ON DELETE SET NULL,
+    repo_slug TEXT NOT NULL REFERENCES lesson_repos(slug) ON DELETE CASCADE,
+    pr_number INTEGER NOT NULL,
+    origin TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running','done','skipped','failed','limited','aborted','cancelled')),
+    reason TEXT, message TEXT, stderr_tail TEXT, gh_stderr TEXT,
+    pr_title TEXT, pr_url TEXT,
+    material TEXT, raw_output TEXT, findings_json TEXT,
+    trimmed INTEGER NOT NULL DEFAULT 0,
+    created INTEGER NOT NULL DEFAULT 0, hit INTEGER NOT NULL DEFAULT 0, dropped INTEGER NOT NULL DEFAULT 0,
+    model TEXT, cost_usd REAL, input_tokens INTEGER, output_tokens INTEGER, duration_ms INTEGER,
+    started_at INTEGER NOT NULL, finished_at INTEGER);
+  CREATE INDEX lesson_runs_pr ON lesson_runs (repo_slug, pr_number, started_at);
+  CREATE INDEX lesson_runs_started ON lesson_runs (started_at);
+  ALTER TABLE lesson_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE lesson_queue ADD COLUMN last_run_id INTEGER REFERENCES lesson_runs(id) ON DELETE SET NULL;
+  ALTER TABLE lesson_queue ADD COLUMN error_message TEXT;
+  ALTER TABLE lesson_queue ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE lesson_sources ADD COLUMN repo_slug TEXT;
+  ALTER TABLE lesson_sources ADD COLUMN run_id INTEGER REFERENCES lesson_runs(id) ON DELETE SET NULL;
+  UPDATE lesson_sources SET repo_slug = (SELECT l.repo_slug FROM lessons l WHERE l.id = lesson_sources.lesson_id);
+  UPDATE lesson_sources SET repo_slug = substr(url, 20, instr(url, '/pull/') - 20)
+    WHERE repo_slug IS NULL AND url LIKE 'https://github.com/%/pull/%';
+  CREATE TABLE claude_availability (id INTEGER PRIMARY KEY CHECK (id = 1), state TEXT NOT NULL, updated_at INTEGER NOT NULL);
+  ALTER TABLE sessions ADD COLUMN lesson_run_id INTEGER REFERENCES lesson_runs(id) ON DELETE SET NULL;
+  `,
+  // PR 一直读不到：连续失败的次数和这一串失败开始的时间；失败到上限、而且已经失败了一天，read_retry_at 之前不再读（一天试一次）。读成功三个都清掉。
+  `
+  ALTER TABLE ticket_prs ADD COLUMN read_failures INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE ticket_prs ADD COLUMN read_failing_since INTEGER;
+  ALTER TABLE ticket_prs ADD COLUMN read_retry_at INTEGER;
+  `,
 ];

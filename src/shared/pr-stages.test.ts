@@ -12,6 +12,11 @@ describe("skillCategory", () => {
       expect(skillCategory(n)).toBe("review");
     }
   });
+  it("skillCategory maps subagent-driven-development, receiving-code-review and agent:* to review", () => {
+    for (const n of ["subagent-driven-development", "superpowers:receiving-code-review", "agent:Review task 3", "agent:code-reviewer"]) {
+      expect(skillCategory(n)).toBe("review");
+    }
+  });
   it("其他返回 null", () => {
     expect(skillCategory("handoff")).toBeNull();
     expect(skillCategory("")).toBeNull();

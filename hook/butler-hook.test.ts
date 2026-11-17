@@ -11,6 +11,28 @@ describe("butler-hook", () => {
     expect(env).toEqual({ v: 1, receivedAt: 42, ticket: "PROJ-1", butlerSession: "s0", payload: { hook_event_name: "Stop", session_id: "s1" } });
   });
 
+  it("trims an Agent PostToolUse payload to description and subagent_type", () => {
+    const raw = JSON.stringify({
+      hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Agent", tool_use_id: "tu1", cwd: "/w", transcript_path: "/t",
+      tool_input: { description: "d".repeat(500), subagent_type: "code-reviewer", prompt: "p".repeat(1000) },
+      tool_response: { content: "x".repeat(1_000_000) },
+    });
+    const env = buildEnvelope(raw, {}, 1);
+    expect(JSON.stringify(env).length).toBeLessThan(2048);
+    expect(env.payload).toEqual({
+      hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Agent", tool_use_id: "tu1", cwd: "/w",
+      tool_input: { description: "d".repeat(200), subagent_type: "code-reviewer" },
+    });
+    const task = buildEnvelope(JSON.stringify({ hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Task", tool_input: { description: "x" }, tool_response: "y" }), {}, 1);
+    expect(task.payload).toMatchObject({ tool_name: "Task", tool_input: { description: "x", subagent_type: null } });
+    expect((task.payload as Record<string, unknown>).tool_response).toBeUndefined();
+  });
+
+  it("passes a non-Agent PostToolUse payload through unchanged", () => {
+    const payload = { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Bash", tool_input: { command: "ls" }, tool_response: { stdout: "x" } };
+    expect(buildEnvelope(JSON.stringify(payload), {}, 1).payload).toEqual(payload);
+  });
+
   it("keeps a truncated raw copy when stdin is not JSON", () => {
     const env = buildEnvelope("x".repeat(20_000), { BUTLER_TICKET: "  " }, 1);
     expect(env.payload).toBeNull();

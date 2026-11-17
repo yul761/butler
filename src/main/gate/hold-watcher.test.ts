@@ -5,6 +5,9 @@ import type { Db } from "../db/database";
 import { MergeGateRepo } from "../db/merge-gate-repo";
 import { M } from "../strings";
 import { DeliveryGuard } from "../sessions/delivery-guard";
+import { TicketPrsRepo } from "../db/ticket-prs-repo";
+import { TicketsRepo } from "../db/tickets-repo";
+import { PrWatcher, type PrWatcherDeps } from "../prwatch/pr-watcher";
 import { memDb } from "../test-utils";
 import type { PrInfo } from "../tickets/gh";
 import { HoldWatcher, LOCAL_HOLD_MAX_MS, NOTICE_KEEP_MS, USER_TYPING_QUIET_MS, type HoldWatcherDeps } from "./hold-watcher";
@@ -297,7 +300,7 @@ describe("HoldWatcher: PR holds", () => {
 
 describe("HoldWatcher: PR state cached by the PR watcher", () => {
   type Cached = ReturnType<NonNullable<HoldWatcherDeps["cachedByUrl"]>>;
-  const cached = (state: "open" | "merged" | "closed", ci: "passing" | "unknown" = "passing") => vi.fn<(url: string) => Cached>(() => ({ state, ci }));
+  const cached = (state: "open" | "merged" | "closed") => vi.fn<(url: string) => Cached>(() => ({ state }));
 
   it("releases as merged from a cached MERGED reading without asking gh", async () => {
     const cachedByUrl = cached("merged");
@@ -316,11 +319,23 @@ describe("HoldWatcher: PR state cached by the PR watcher", () => {
     expect(t.outcome()).toBe("cancelled");
   });
 
-  it("asks gh when the cached reading failed (ci unknown): its state is only the last good one", async () => {
-    const t = setup({ pr: () => pr("OPEN", true), cachedByUrl: cached("merged", "unknown") });
-    await t.watcher.check();
-    expect(t.prInfo).toHaveBeenCalledWith(REPO, PR_URL, 2000);
-    expect(t.outcome()).toBeNull();
+  it("trusts a cached merged state and ignores rows with read_error", async () => {
+    // 真的 PrWatcher.cachedByUrl：只给 60 秒内读成功的行。
+    const prDb = memDb();
+    new TicketsRepo(prDb).insert({ key: "DMS-1", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null });
+    const prs = new TicketPrsRepo(prDb);
+    const watcher = new PrWatcher({ prs, now: () => 100_000 } as unknown as PrWatcherDeps);
+    const row = prs.link({ ticketKey: "DMS-1", url: PR_URL, slug: "o/app", repoId: null, number: 12, headBranch: "dms-1", state: "open", source: "merge_gate", linkedAt: 1 }).pr;
+    prs.update(row.id, { state: "merged", checkedAt: 90_000, readError: true });
+    const failed = setup({ pr: () => pr("OPEN", true), cachedByUrl: (url) => watcher.cachedByUrl(url) });
+    await failed.watcher.check();
+    expect(failed.prInfo).toHaveBeenCalledWith(REPO, PR_URL, 2000);
+    expect(failed.outcome()).toBeNull();
+    prs.update(row.id, { readError: false });
+    const good = setup({ pr: () => pr("OPEN", true), cachedByUrl: (url) => watcher.cachedByUrl(url) });
+    await good.watcher.check();
+    expect(good.prInfo).not.toHaveBeenCalled();
+    expect(good.outcome()).toBe("merged");
   });
 
   it("asks gh for an open PR (the cache does not know about auto-merge) and when nothing is cached", async () => {

@@ -15,6 +15,7 @@ import { NPM_EXE_SHIM, NPM_SHIM, PNPM_NODE_PATH, PNPM_NODE_PATH_SHIM } from "../
 import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import type { TranscriptState } from "./discovery";
 import { PtyManager, type PtyFactory } from "./pty-manager";
+import { M } from "../strings";
 import { SessionService } from "./session-service";
 
 async function setup(opts: {
@@ -32,6 +33,7 @@ async function setup(opts: {
   platform?: NodeJS.Platform;
   launchFs?: { read: (f: string) => string; exists: (p: string) => boolean };
   pathValue?: string;
+  lessonsWorkspace?: string;
 } = {}) {
   const stateOf = (id: string): TranscriptState =>
     opts.transcriptState ?? (opts.transcripts === undefined || opts.transcripts.includes(id) ? "present" : "absent");
@@ -43,6 +45,7 @@ async function setup(opts: {
   const { factory, spawned } = fakePtyFactory();
   const pty = new PtyManager(opts.factory ?? factory, { data: () => undefined, exit: () => undefined });
   const logs: string[] = [];
+  const submitted: [string, string][] = [];
   let n = 0;
   const service = new SessionService({
     tickets, sessions, settings, ticketService, pty,
@@ -60,11 +63,13 @@ async function setup(opts: {
     syncMemory: opts.syncMemory,
     dirBusy: opts.dirBusy,
     launchFs: opts.launchFs,
+    lessonsWorkspace: opts.lessonsWorkspace,
+    submit: async (termId, message) => (submitted.push([termId, message]), "sent"),
     log: (m) => logs.push(m),
   });
   const repo = makeRepo();
   const ticket = await ticketService.create({ key: "PROJ-1", repoPath: repo, workMode: opts.workMode ?? "worktree" });
-  return { service, sessions, tickets, spawned, pty, repo, ticket, ticketService, logs };
+  return { db, service, sessions, tickets, spawned, pty, repo, ticket, ticketService, logs, submitted };
 }
 
 describe("SessionService and cleaned-up worktrees (design 2026-10-26)", () => {
@@ -607,6 +612,14 @@ describe("SessionService with several repos and the coordinator", () => {
     expect(seen).toEqual([["PROJ-1", false], ["PROJ-1", true]]);
   });
 
+  it("hasOpenTerminal counts the ticket's coordinator for every repo", async () => {
+    const { service, web, apiRepo } = await multi();
+    await service.open({ ticketKey: "PROJ-1", coordinator: true });
+    expect(service.hasOpenTerminal("PROJ-1", web.id)).toBe(true);
+    expect(service.hasOpenTerminal("PROJ-1", apiRepo.id)).toBe(true);
+    expect(service.hasOpenTerminal("PROJ-2", web.id)).toBe(false);
+  });
+
   it("counts terminals per repo: the repo's own, the coordinator, and sessions of no known repo", async () => {
     const { service, sessions, web, apiRepo } = await multi();
     await service.open({ ticketKey: "PROJ-1", repoId: web.id });
@@ -723,5 +736,73 @@ describe("FeatureView.activity", () => {
     const l = activity("l", loser);
     expect(setupFeature(["w", "l"], { w, l }).service.featureViews()[0].activity["DMS-1"]).toEqual(w);
     expect(setupFeature(["l", "w"], { w, l }).service.featureViews()[0].activity["DMS-1"]).toEqual(w);
+  });
+});
+
+describe("SessionService.openLessonRun (lessons visibility task 7)", () => {
+  async function lessonSetup() {
+    const lessonsWorkspace = join(tempDir("butler-home-"), "workspaces", "_lessons");
+    const guides: [GuideKind, string[]][] = [];
+    const h = await setup({ lessonsWorkspace, guidePath: (kind, paths) => (guides.push([kind, paths]), null), mcpSettings: () => "/mcp/approve.json" });
+    h.db.prepare(`INSERT INTO lesson_repos (slug, local_path, created_at) VALUES ('acme/app', ?, 1)`).run(h.repo);
+    const runId = Number(h.db.prepare(`INSERT INTO lesson_runs (repo_slug, pr_number, origin, status, started_at) VALUES ('acme/app', 7, 'merged', 'failed', 1)`).run().lastInsertRowid);
+    const req = { runId, repoPath: h.repo, file: join(lessonsWorkspace, `run-${runId}.md`), label: `lesson run ${runId}` };
+    return { ...h, lessonsWorkspace, guides, runId, req };
+  }
+
+  it("openLessonRun starts in _lessons with the repo added and submits the task", async () => {
+    const { service, spawned, sessions, submitted, guides, lessonsWorkspace, repo, runId, req } = await lessonSetup();
+    expect(await service.openLessonRun(req)).toEqual({ ok: true, termId: "new-1", alreadyOpen: false });
+    expect(spawned[0].opts.cwd).toBe(lessonsWorkspace);
+    expect(existsSync(lessonsWorkspace)).toBe(true);
+    // 没有 Butler 的 MCP；仓库加进来，它的 .mcp.json 审批照旧。
+    expect(spawned[0].args).toEqual(["--session-id", "new-1", "--settings", "/mcp/approve.json", "--add-dir", repo]);
+    expect(guides).toEqual([["lessons", []]]);
+    expect(sessions.get("new-1")).toMatchObject({ ticketKey: null, featureId: null, epicId: null, butler: false, coordinator: false, lessonRunId: runId, origin: "butler" });
+    await new Promise((r) => setImmediate(r));
+    expect(submitted).toEqual([["new-1", M().lessonRunTask(req.file)]]);
+  });
+
+  it("openLessonRun returns the open terminal", async () => {
+    const { service, spawned, submitted, req } = await lessonSetup();
+    await service.openLessonRun(req);
+    expect(await service.openLessonRun(req)).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
+    expect(spawned).toHaveLength(1);
+    await new Promise((r) => setImmediate(r));
+    expect(submitted).toHaveLength(1);
+  });
+
+  it("openLessonRun reopens a closed session without submitting", async () => {
+    const { service, spawned, sessions, submitted, runId, req } = await lessonSetup();
+    const elsewhere = tempDir("butler-lessons-old-");
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: elsewhere, origin: "butler", createdAt: 1, lessonRunId: runId });
+    sessions.insertIfAbsent({ id: "old-2", ticketKey: null, cwd: elsewhere, origin: "butler", createdAt: 2 });
+    sessions.setReplacedBy("old", "old-2", "clear");
+    sessions.dismiss("old-2");
+    expect(await service.openLessonRun(req)).toEqual({ ok: true, termId: "old-2", alreadyOpen: false });
+    expect(spawned[0].args.slice(0, 2)).toEqual(["--resume", "old-2"]);
+    expect(spawned[0].opts.cwd).toBe(elsewhere);
+    // 用户点了打开：隐藏着的也重新显示。
+    expect(sessions.get("old-2")?.dismissed).toBe(false);
+    await new Promise((r) => setImmediate(r));
+    expect(submitted).toEqual([]);
+  });
+
+  it("openLessonRun reports a missing claude", async () => {
+    const lessonsWorkspace = join(tempDir("butler-home-"), "workspaces", "_lessons");
+    const { service, spawned } = await setup({ lessonsWorkspace, claudePath: null });
+    expect(await service.openLessonRun({ runId: 1, repoPath: "/r", file: "/f.md", label: "x" })).toEqual({ ok: false, reason: "claude_missing" });
+    expect(spawned).toEqual([]);
+  });
+
+  it("butlerView lists lesson sessions with their terminals, not among the Butler sessions", async () => {
+    const { service, sessions, runId, req } = await lessonSetup();
+    await service.openLessonRun(req);
+    sessions.insertIfAbsent({ id: "closed", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1, lessonRunId: runId });
+    sessions.insertIfAbsent({ id: "hidden", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1, lessonRunId: runId });
+    sessions.dismiss("hidden");
+    const view = service.butlerView();
+    expect(view.sessions).toEqual([]);
+    expect(view.lessonSessions.map((s) => [s.id, s.termId])).toEqual([["new-1", "new-1"], ["closed", null]]);
   });
 });

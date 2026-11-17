@@ -7,8 +7,8 @@ const h = (over: Partial<StatusInput>): StatusInput => ({ status: "active", prs:
 
 describe("deriveStatus", () => {
   it.each<[string, StatusInput, number, TicketStatus]>([
-    ["merged PR with open followups", h({ prs: [pr("merged")] }), 1, "merged_pending_followup"],
-    ["merged PR, nothing left", h({ prs: [pr("merged")] }), 0, "done"],
+    ["merged PR with open followups", h({ status: "in_review", prs: [pr("merged")] }), 1, "merged_pending_followup"],
+    ["merged PR, nothing left", h({ status: "in_review", prs: [pr("merged")] }), 0, "done"],
     ["model says done, followups left", h({ status: "done" }), 2, "merged_pending_followup"],
     ["model says merged_pending_followup but none left", h({ status: "merged_pending_followup" }), 0, "done"],
     ["explicitly blocked even with an open PR", h({ status: "blocked", prs: [pr("open")] }), 0, "blocked"],
@@ -29,5 +29,32 @@ describe("deriveStatus", () => {
     expect(deriveStatus({ status: "merged_pending_followup", prs: [pr("merged"), pr("open")], blockers: [] }, 1)).toBe("in_review");
     expect(deriveStatus({ status: "in_review", prs: [pr("merged"), pr("merged")], blockers: [] }, 1)).toBe("merged_pending_followup");
     expect(deriveStatus({ status: "in_review", prs: [pr("merged"), pr("closed")], blockers: [] }, 0)).toBe("done");
+  });
+
+  it("a remembered merged PR does not override an explicit active", () => {
+    expect(deriveStatus(h({ status: "active" }), 0, { remembered: [pr("merged")], linkedOpen: false })).toBe("active");
+  });
+
+  it("a remembered merged PR does not override in_review", () => {
+    expect(deriveStatus(h({ status: "in_review" }), 0, { remembered: [pr("merged")], linkedOpen: false })).toBe("in_review");
+  });
+
+  it("an open linked PR makes an active ticket in_review", () => {
+    expect(deriveStatus(h({ status: "active" }), 0, { remembered: [], linkedOpen: true })).toBe("in_review");
+    expect(deriveStatus(h({ status: "blocked" }), 0, { remembered: [], linkedOpen: true })).toBe("blocked");
+    expect(deriveStatus(h({ status: "active" }), 0, { remembered: [pr("open")], linkedOpen: false })).toBe("in_review");
+  });
+
+  it("model active with its own merged PR stays active (sequential PRs)", () => {
+    expect(deriveStatus(h({ status: "active", prs: [pr("merged")] }), 0)).toBe("active");
+  });
+
+  it("a PR Butler gave up reading does not hold the ticket in review, whether the model, the memory or a refresh reports it open", () => {
+    const a = { number: 1, url: "https://github.com/o/app/pull/1", state: "merged" as const, review: null };
+    const b = { number: 2, url: "https://github.com/o/app/pull/2", state: "open" as const, review: null };
+    const givenUp = new Set(["https://github.com/o/app/pull/2"]);
+    expect(deriveStatus({ status: "in_review", prs: [a, b], blockers: [] }, 0)).toBe("in_review");
+    expect(deriveStatus({ status: "in_review", prs: [a, { ...b, url: "https://github.com/O/app/pull/2/" }], blockers: [] }, 0, { remembered: [], linkedOpen: false, givenUp })).toBe("done");
+    expect(deriveStatus({ status: "active", prs: [], blockers: [] }, 0, { remembered: [a, b], linkedOpen: false, givenUp })).toBe("active");
   });
 });

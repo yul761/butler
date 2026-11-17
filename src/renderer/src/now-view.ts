@@ -26,7 +26,8 @@ export function needsYouText(r: NowRow, S: UiStrings): string {
 function prText(prs: WatchedPr[], S: UiStrings): { main: string; tone: RowTone } | null {
   const open = prs.filter((p) => p.state === "open");
   if (open.some((p) => p.ci === "failing")) return { main: S.nowCiFailed, tone: "danger" };
-  if (prs.some((p) => p.ci === "pending")) return { main: S.nowWaitCi, tone: "warn" };
+  // 合并、关闭了的 PR 留着最后一次读到的 CI：只看开着的 PR 和还没有 PR 的分支。
+  if (prs.some((p) => (p.state === "open" || p.state === null) && p.ci === "pending")) return { main: S.nowWaitCi, tone: "warn" };
   if (open.length === 0) return null;
   if (open.some((p) => p.review === "changes_requested")) return { main: S.nowChangesRequested, tone: "muted" };
   if (open.every((p) => p.review === "approved")) return { main: S.nowApproved, tone: "muted" };
@@ -47,6 +48,8 @@ export function rowText(r: NowRow, S: UiStrings, now: number): { main: string; s
   if (r.decisions > 0) return { main: S.nowWaitingDecision, sub, tone: "danger" };
   if (r.refreshing !== null) return { main: r.refreshing === "close" ? S.nowClosing : S.nowRefreshing, sub: null, tone: "warn" };
   if (isStuck(r)) return { main: S.nowStuck, sub, tone: "danger" };
+  // 撞了限额：activityText 写的是哪种限额和恢复时间，原文放在 sub 里。
+  if (a?.limit) return { ...activityText(a, S, now), tone: "danger" };
   if (r.mergeQueued) return { main: S.nowMergeQueued, sub, tone: "warn" };
   if (live) return { main: live.main, sub, tone: "ok" };
   const pr = prText(r.prs, S);
@@ -54,10 +57,10 @@ export function rowText(r: NowRow, S: UiStrings, now: number): { main: string; s
   return { main: S.nowStopped, sub: null, tone: "muted" };
 }
 
-/** PR 标签：CI 失败用“要改”的颜色，CI 在跑用“待 review”的颜色，其余按 PR 的状态和 review。没有 PR 或已关闭的不显示；gh 读不了、又没见过 PR 的显示灰色的“PR 状态不可用”。 */
+/** PR 标签：CI 失败用“要改”的颜色，CI 在跑用“待 review”的颜色，其余按 PR 的状态和 review。没有 PR 或已关闭的不显示；上一次 gh 没读成的显示灰色的“PR 状态不可用”。 */
 export function prPill(p: WatchedPr, S: UiStrings): { text: string; tone: "merged" | "approved" | "changes" | "pending" | "none" } | null {
-  // gh 没装、没登录、没网，又从没见过这个分支的 PR：不知道有没有 PR，说一声（设计文档：显示"PR 状态不可用"，不报错）。
-  if (p.number === null && p.ci === "unknown") return { text: S.nowPrUnavailable, tone: "none" };
+  // 上一次 gh 没读成（没装、没登录、没网）：显示的状态不一定是现在的，说一声（设计文档：显示"PR 状态不可用"，不报错）。
+  if (p.readError) return { text: S.nowPrUnavailable, tone: "none" };
   if (p.state === null || p.state === "closed") return null;
   const text = (state: string) => S.nowPr(p.number, state);
   if (p.state === "merged") return { text: text(S.prPill.merged), tone: "merged" };

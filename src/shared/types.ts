@@ -1,4 +1,5 @@
 import type { ActivityEvent, SessionActivity } from "./activity";
+import type { AvailabilityHit, LimitHit } from "./availability";
 import type { ReportKind } from "./control";
 import type { FeatureHandoff, Handoff, Pr } from "./handoff";
 export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
@@ -130,6 +131,8 @@ export interface Session {
   model: string | null;
   /** Butler 总控（BTL-190 第 5 点）：全局只有一个，ticket、feature、epic 都是 null。 */
   butler: boolean;
+  /** 复盘分析 session：为了看哪一次复盘运行开的（null：不是）。没有 Butler 的工具，不判断卡住、不换新。 */
+  lessonRunId: number | null;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */
@@ -171,11 +174,13 @@ export interface EpicView extends Epic {
   features: EpicFeatureRow[];
 }
 
-/** Butler 总控页（BTL-190 第 5 点）：它的 session 和工作目录。 */
+/** Butler 总控页（BTL-190 第 5 点）：它的 session 和工作目录，以及复盘分析 session。 */
 export interface ButlerView {
   workspaceDir: string;
   sessions: SessionView[];
   hiddenSessions: SessionView[];
+  /** 复盘分析 session（没隐藏的 head），最近活动的在前。 */
+  lessonSessions: SessionView[];
 }
 
 export interface UnclaimedSession extends Session {
@@ -432,11 +437,18 @@ export interface UsageSummary {
   byModel: Record<string, number>;
 }
 
-/** 后台监视的一个分支的 PR / CI 状态（渲染进程也用）。 */
+/**
+ * 后台监视的一个 PR（ticket_prs 的一行）或一个还没有 PR 的分支（branch_watch 的一行）的状态（渲染进程也用）。
+ * PR 行的 prId、number、url、state 都有；分支行的都是 null。
+ */
 export interface WatchedPr {
   ticketKey: string;
-  repoId: number;
-  repoPath: string;
+  /** ticket_prs 的 id；分支行为 null。 */
+  prId: number | null;
+  /** PR 所在的 ticket 仓库；不是 ticket 仓库的 PR 为 null。 */
+  repoId: number | null;
+  repoPath: string | null;
+  /** PR 的 head 分支（还不知道时为空字符串），或分支行的分支。 */
   branch: string;
   number: number | null;
   url: string | null;
@@ -446,6 +458,8 @@ export interface WatchedPr {
   ci: "pending" | "passing" | "failing" | "none" | "unknown";
   headSha: string | null;
   checkedAt: number;
+  /** 上一次 gh 读取失败：ci、state 是再上一次的。 */
+  readError: boolean;
 }
 
 /** 「现在」页一行点开去哪：ticket 页、feature 页、epic 页或 Butler 总控页，sessionId 是要切到的终端（null：页面自己选）。 */
@@ -560,7 +574,17 @@ export interface InboxView {
 /** 收件箱看哪一块：一个 feature（含它的 ticket）、一个 epic（含它的 feature 和 ticket），或者全部。 */
 export type InboxScope = { featureId: number } | { epicId: number } | { all: true };
 
+/** 「现在」页顶上的一条提醒（Claude 限额、复盘暂停或失败、某个 session 撞了限额）。 */
+export type NowNotice =
+  | { kind: "claude_limited"; hit: AvailabilityHit; retryAt: number | null; lessonsPaused: boolean }
+  | { kind: "model_unavailable"; hit: AvailabilityHit; retryAt: number | null }
+  | { kind: "lessons_paused" }
+  | { kind: "lessons_failing"; count: number }
+  | { kind: "session_limited"; target: NowTarget; title: string | null; limit: LimitHit };
+
 export interface NowView {
+  /** 页面顶上的提醒，即使没有什么需要你也显示。 */
+  notices: NowNotice[];
   /** 全部需要你的行，按 since 从早到晚。有未决「待你决定」的 session 不在这里（它的卡片在 decisions 里）。 */
   needsYou: NowRow[];
   /** 全部未决的「待你决定」（BTL-190 第 2+3 点），从早到晚；终端关着的 session 的也在。 */

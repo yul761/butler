@@ -28,6 +28,10 @@ export interface LessonsUi {
   checked: number[];
   /** `lesson-<id>` 或 `product-<id>`：已经点过一次删除、等第二次确认的那个。 */
   confirmingDelete: string | null;
+  /** 左侧选中的仓库或产品；目标不在了就清掉。 */
+  sel: LessonsSelection | null;
+  /** 分析记录标签页里选中的那次运行；它的仓库不在了就清掉（运行本身消失由列表自己清）。 */
+  selectedRunId: number | null;
 }
 
 export function pruneLessonsUi<T extends LessonsUi>(s: LessonsState, ui: T): T {
@@ -35,8 +39,12 @@ export function pruneLessonsUi<T extends LessonsUi>(s: LessonsState, ui: T): T {
   const productKeys = new Set(s.products.map((p) => `product-${p.id}`));
   const armed = ui.confirmingDelete;
   const armedAlive = armed === null || (armed.startsWith("product-") ? productKeys.has(armed) : ids.has(Number(armed.slice("lesson-".length))));
+  const sel = ui.sel;
+  const selAlive = sel === null || (sel.kind === "product" ? s.products.some((p) => p.id === sel.id) : s.repos.some((r) => r.slug === sel.slug));
   return {
     ...ui,
+    sel: selAlive ? sel : null,
+    selectedRunId: selAlive && sel?.kind === "repo" ? ui.selectedRunId : null,
     editing: ui.editing && ids.has(ui.editing.id) ? ui.editing : null,
     merging: ui.merging && ids.has(ui.merging.keepId) && ids.has(ui.merging.dropId) ? ui.merging : null,
     checked: ui.checked.filter((id) => ids.has(id)),

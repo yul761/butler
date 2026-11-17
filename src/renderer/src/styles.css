@@ -7,6 +7,11 @@
   --accent: #2f6fdf;
   --danger: #c2410c;
   --ok: #15803d;
+  /* PR 进度格子上的字（D-14）：比 --ok / --accent / --danger / --muted 深一些，在格子底色上到 4.5:1。 */
+  --stage-ok: #166534;
+  --stage-accent: #1d4ed8;
+  --stage-danger: #9a3412;
+  --stage-muted: #5f5f5a;
   /* PR 标签（feature 页 ticket 表）：底色和文字色。 */
   --pill-merged-bg: #e3d7fb; --pill-merged: #5b2bb5;
   --pill-approved-bg: #d6f0e3; --pill-approved: #1d7a4c;
@@ -30,6 +35,10 @@
     --accent: #6b9cf0;
     --danger: #f08a5d;
     --ok: #4ade80;
+    --stage-ok: var(--ok);
+    --stage-accent: var(--accent);
+    --stage-danger: var(--danger);
+    --stage-muted: var(--muted);
     --pill-merged-bg: #362a52; --pill-merged: #c9b3f5;
     --pill-approved-bg: #1d3a2b; --pill-approved: #7ee0a8;
     --pill-changes-bg: #4a2620; --pill-changes: #f5a593;
@@ -378,20 +387,23 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .now-decisions { display: flex; flex-direction: column; margin: 4px 0 6px; }
 /* Butler 总控页（BTL-190 第 5 点）。 */
 .butler-intro { margin: 0; padding: 0 16px 8px; }
+.lesson-sessions h3 { margin: 8px 16px 0; font-size: 12px; font-weight: 600; color: var(--muted); }
 
-/* PR 进度 tab：状态色用已有的 --ok / --accent / --danger / --muted，深浅色都跟着变量走。 */
+/* PR 进度 tab：边框和底色用 --ok / --accent / --danger，字用 --stage-*（浅色更深，styles-contrast.test.ts 查对比度）。 */
 .pr-stages { display: flex; flex-direction: column; gap: 10px; }
 .pr-steps { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .pr-repo-name { font-weight: 600; margin-right: 4px; }
-.pr-cell { display: inline-flex; gap: 4px; align-items: center; padding: 2px 8px; border-radius: 6px; font-size: 12px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); }
+.pr-cell { display: inline-flex; gap: 4px; align-items: center; padding: 2px 8px; border-radius: 6px; font-size: 12px; border: 1px solid var(--border); background: var(--panel); color: var(--stage-muted); }
 .pr-cell-name { font-weight: 600; }
-.pr-cell.pr-done, .pr-cell.pr-feature_level { background: color-mix(in srgb, var(--ok) 18%, var(--bg)); border-color: var(--ok); color: var(--ok); }
-.pr-cell.pr-active { background: color-mix(in srgb, var(--accent) 18%, var(--bg)); border-color: var(--accent); color: var(--accent); }
-.pr-cell.pr-failed { background: color-mix(in srgb, var(--danger) 18%, var(--bg)); border-color: var(--danger); color: var(--danger); }
-.pr-cell.pr-todo, .pr-cell.pr-skipped { background: var(--panel); color: var(--muted); }
-.pr-cell.pr-unknown { background: var(--panel); color: var(--muted); border-style: dashed; font-style: italic; }
-.pr-link { margin-left: auto; font-size: 12px; }
-.pr-closed { margin-left: 6px; padding: 1px 6px; border-radius: 6px; font-size: 12px; border: 1px solid var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--bg)); }
+.pr-cell.pr-done, .pr-cell.pr-feature_level { background: color-mix(in srgb, var(--ok) 18%, var(--bg)); border-color: var(--ok); color: var(--stage-ok); }
+.pr-cell.pr-active { background: color-mix(in srgb, var(--accent) 18%, var(--bg)); border-color: var(--accent); color: var(--stage-accent); }
+.pr-cell.pr-failed { background: color-mix(in srgb, var(--danger) 18%, var(--bg)); border-color: var(--danger); color: var(--stage-danger); }
+.pr-cell.pr-todo, .pr-cell.pr-skipped { background: var(--panel); color: var(--stage-muted); }
+.pr-cell.pr-unknown { background: var(--panel); color: var(--stage-muted); border-style: dashed; font-style: italic; }
+.pr-link, .pr-no-pr { margin-left: auto; font-size: 12px; }
+.pr-closed { margin-left: 6px; padding: 1px 6px; border-radius: 6px; font-size: 12px; border: 1px solid var(--danger); color: var(--stage-danger); background: color-mix(in srgb, var(--danger) 12%, var(--bg)); }
+.pr-row-name .pill { margin: 0 0 0 6px; }
+.pr-archived { margin-left: 6px; padding: 1px 6px; border-radius: 6px; font-size: 12px; border: 1px solid var(--border); color: var(--stage-muted); }
 .pr-timeline-toggle { font-size: 12px; margin-top: 4px; }
 .pr-timeline { list-style: none; margin: 4px 0 0; padding: 0 0 0 8px; border-left: 2px solid var(--border); font-size: 12px; }
 .pr-timeline li { padding: 1px 0; }
@@ -431,3 +443,10 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .lesson-sources { display: inline-flex; gap: 8px; margin: 2px 0; color: var(--accent); }
 .lesson-editor textarea { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; }
 button.danger { border-color: var(--danger); color: var(--danger); }
+.lessons-queue-bar { margin: 8px 0; }
+.lessons-tabs { margin-top: 12px; }
+.lesson-run-list { list-style: none; margin: 6px 0; padding: 0; }
+.lesson-run { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.lesson-run.selected { border-left: 2px solid var(--accent); padding-left: 6px; }
+.lesson-run-title { font-weight: 600; }
+.lessons-queue-bar .pill { white-space: normal; }

@@ -1,5 +1,5 @@
 import { isWorking, type ActivityEvent, type SessionActivity } from "../../shared/activity";
-import type { EpicView, FeatureView, InboxItemView, MergeEvent, NowCounts, NowEpic, NowFeature, NowRow, NowTarget, NowView, RefreshStep, SessionView, TicketView, WatchedPr } from "../../shared/types";
+import type { EpicView, FeatureView, InboxItemView, MergeEvent, NowCounts, NowEpic, NowFeature, NowNotice, NowRow, NowTarget, NowView, RefreshStep, SessionView, TicketView, WatchedPr } from "../../shared/types";
 
 export interface NowInput {
   tickets: TicketView[];
@@ -22,6 +22,8 @@ export interface NowInput {
   recent: (sessionId: string) => ActivityEvent[];
   /** 最近的记忆读写（实况窗口的核心卡片），从早到晚。 */
   memory: ActivityEvent[];
+  /** 页面顶上的提醒（buildNotices）；buildNowView 再加上撞了限额的 session。 */
+  notices: NowNotice[];
 }
 
 /** 算进「现在」页的 session：Butler 开的、终端开着。 */
@@ -75,7 +77,7 @@ function sessionRow(i: NowInput, s: SessionView, base: RowBase, scope: Scope = n
     : activity?.stuck === true ? (activity.reason ?? "")
     : childDecision(i, s, scope) ? null
     : i.needsYouReason(s.id);
-  const idle = refreshing === null && needsYou === null && pending === 0 && !mergeQueued && stopped(activity);
+  const idle = refreshing === null && activity?.limit == null && needsYou === null && pending === 0 && !mergeQueued && stopped(activity);
   return {
     ...base, sessionId: s.id, activity, working: isWorking(activity), recent: i.recent(s.id), mergeQueued, needsYou, refreshing, decisions, idle,
     since: activity?.startedAt ?? s.lastActivityAt,
@@ -185,5 +187,6 @@ export function buildNowView(i: NowInput): NowView {
   const all = [...(butler ? [butler] : []), ...epics.flatMap((e) => [...e.rows, ...e.features.flatMap((f) => f.rows)])];
   const needsYou = all.filter((r) => r.needsYou !== null).sort(bySince);
   const decisions = [...i.decisions].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id);
-  return { needsYou, decisions, epics, butler, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges };
+  const limited: NowNotice[] = all.flatMap((r) => (r.activity?.limit ? [{ kind: "session_limited" as const, target: r.target, title: r.title, limit: r.activity.limit }] : []));
+  return { notices: [...i.notices, ...limited], needsYou, decisions, epics, butler, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges };
 }

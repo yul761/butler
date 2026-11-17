@@ -8,6 +8,8 @@ export interface StageEvent {
   /** ticket 层事件：ticketKey 有值。repoId 为 null 表示挂到这个 ticket 的所有仓库（多仓库 ticket 的总控）。 */
   ticketKey: string | null;
   repoId: number | null;
+  /** 事件属于哪个 PR（ticket_prs.id）；skill 等不属于具体 PR 的事件为 null。 */
+  prId: number | null;
   /** PR 监视的事件记下当时的分支；skill 事件为 null。 */
   branch: string | null;
   /** feature 层或 epic 层的 skill 事件（只用来判断"在 feature 层完成"）。 */
@@ -26,6 +28,7 @@ interface Row {
   id: number;
   ticket_key: string | null;
   repo_id: number | null;
+  pr_id: number | null;
   branch: string | null;
   feature_id: number | null;
   epic_id: number | null;
@@ -38,7 +41,7 @@ interface Row {
 const num = (v: number | null): number | null => (v === null ? null : Number(v));
 
 const toEvent = (r: Row): StageEvent => ({
-  id: Number(r.id), ticketKey: r.ticket_key, repoId: num(r.repo_id), branch: r.branch, featureId: num(r.feature_id),
+  id: Number(r.id), ticketKey: r.ticket_key, repoId: num(r.repo_id), prId: num(r.pr_id), branch: r.branch, featureId: num(r.feature_id),
   epicId: num(r.epic_id), sessionId: r.session_id, kind: r.kind, at: Number(r.at), data: JSON.parse(r.data) as Record<string, unknown>,
 });
 
@@ -50,11 +53,11 @@ export class PrStageRepo {
   add(e: Omit<StageEvent, "id">, dedupeKey: string): boolean {
     const res = this.db
       .prepare(
-        `INSERT INTO pr_stage_events (dedupe_key, ticket_key, repo_id, branch, feature_id, epic_id, session_id, kind, at, data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO pr_stage_events (dedupe_key, ticket_key, repo_id, pr_id, branch, feature_id, epic_id, session_id, kind, at, data)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (dedupe_key) DO NOTHING`,
       )
-      .run(dedupeKey, e.ticketKey, e.repoId, e.branch, e.featureId, e.epicId, e.sessionId, e.kind, e.at, JSON.stringify(e.data));
+      .run(dedupeKey, e.ticketKey, e.repoId, e.prId, e.branch, e.featureId, e.epicId, e.sessionId, e.kind, e.at, JSON.stringify(e.data));
     return Number(res.changes) > 0;
   }
 
@@ -62,17 +65,27 @@ export class PrStageRepo {
     return this.db.prepare(`SELECT 1 FROM pr_stage_events WHERE dedupe_key = ?`).get(dedupeKey) !== undefined;
   }
 
-  /** 这个 ticket 的事件：repoId 等于 repoId 或为 null 的，PR 监视的事件只要 branch 等于 branch 的。按 at、id 排序。 */
-  forRepo(ticketKey: string, repoId: number, branch: string): StageEvent[] {
+  /** 这个 ticket 的全部事件（所有 PR），按 at、id 排序。 */
+  forTicket(ticketKey: string): StageEvent[] {
     return (
-      this.db
-        .prepare(
-          `SELECT * FROM pr_stage_events
-           WHERE ticket_key = ? AND (repo_id IS NULL OR repo_id = ?) AND (branch IS NULL OR branch = ?)
-           ORDER BY at, id`,
-        )
-        .all(ticketKey, repoId, branch) as unknown as Row[]
+      this.db.prepare(`SELECT * FROM pr_stage_events WHERE ticket_key = ? ORDER BY at, id`).all(ticketKey) as unknown as Row[]
     ).map(toEvent);
+  }
+
+  /** 这个 PR 最新的 ci 事件。 */
+  lastCi(prId: number): { sha: string | null; result: string } | null {
+    const r = this.db
+      .prepare(`SELECT data FROM pr_stage_events WHERE pr_id = ? AND kind = 'ci' ORDER BY at DESC, id DESC LIMIT 1`)
+      .get(prId) as unknown as { data: string } | undefined;
+    if (!r) return null;
+    const d = JSON.parse(r.data) as { sha?: string | null; result?: string };
+    return { sha: d.sha ?? null, result: d.result ?? "" };
+  }
+
+  /** 最早的 skill 事件时间；没有为 null。 */
+  firstSkillAt(): number | null {
+    const r = this.db.prepare(`SELECT MIN(at) AS at FROM pr_stage_events WHERE kind = 'skill'`).get() as unknown as { at: number | null };
+    return r.at === null ? null : Number(r.at);
   }
 
   /** feature 层和它所在 epic 层的 design skill 事件，按 at 排序。epicId 为 null 时只看 feature。 */

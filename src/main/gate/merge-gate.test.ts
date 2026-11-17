@@ -52,6 +52,7 @@ function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (p
   const logs: string[] = [];
   const openTerminals = vi.fn((key: string) => o.terminals?.[key] ?? 0);
   const checkSoon = vi.fn();
+  const onPrHold = vi.fn();
   const prInfo = vi.fn(async (_cwd: string, pr: string | null) => (o.pr ? o.pr(pr) : null));
   const gitDeps: MergeGateDeps["git"] = {
     mainRepoRoot: git.mainRepoRoot, mergeConflicts: vi.fn(git.mergeConflicts), isAncestor: git.isAncestor, fetchQuiet: git.fetchQuiet, upstreamRef: git.upstreamRef,
@@ -60,13 +61,13 @@ function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (p
   const gate = new MergeGate({
     tickets: { list: () => tickets, listRepos: (key: string) => tickets.find((t) => t.key === key)?.repos ?? [] },
     repo, openTerminals, git: gitDeps, prInfo, notify: (e) => events.push(e), now: o.now ?? (() => 1000), log: (m) => logs.push(m), deadlineMs: o.deadlineMs ?? TEST_DEADLINE_MS,
-    whoOf: (t, b) => (t ? `${t}（支付）` : b), checkSoon,
+    whoOf: (t, b) => (t ? `${t}（支付）` : b), checkSoon, onPrHold,
   });
   const ask = (action: GateAction, extra: Partial<Pick<GateRequest, "session" | "ticket" | "cwd" | "phase">> = {}, meta?: { ageMs?: number }) =>
     gate.handle({ v: 1, phase: "pre", action, cwd: repoPath, session: "s-req", ticket: null, ...extra } as GateRequest, meta);
   const merge = (source: string, extra: Parameters<typeof ask>[1] = {}, meta?: { ageMs?: number }) => ask({ kind: "local_merge", dir: null, source }, extra, meta);
   const outcomes = () => db.prepare(`SELECT branch, outcome FROM merge_holds ORDER BY id`).all() as { branch: string; outcome: string | null }[];
-  return { repoPath, gate, repo, db, events, logs, openTerminals, checkSoon, prInfo, gitDeps, ask, merge, outcomes };
+  return { repoPath, gate, repo, db, events, logs, openTerminals, checkSoon, onPrHold, prInfo, gitDeps, ask, merge, outcomes };
 }
 
 describe("MergeGate: merges", () => {
@@ -134,6 +135,16 @@ describe("MergeGate: merges", () => {
     expect(t.repo.activeHold(t.repoPath, "dms-3")).toMatchObject({ kind: "pr", prUrl: "https://x/pull/8", target: "main", ticketKey: "DMS-3" });
   });
 
+  it("a PR hold calls onPrHold; a local hold does not", async () => {
+    const t = setup({ pr: () => ({ number: 8, url: "https://x/pull/8", head: "dms-3", base: "main", state: "OPEN", autoMerge: false }) });
+    await t.ask({ kind: "pr_merge", dir: null, pr: null });
+    expect(t.onPrHold).toHaveBeenCalledTimes(1);
+    expect(t.onPrHold).toHaveBeenCalledWith(t.repo.activeHold(t.repoPath, "dms-3")!.id);
+    const local = setup();
+    await local.merge("dms-1");
+    expect(local.onPrHold).not.toHaveBeenCalled();
+  });
+
   it("makes a branch that belongs to no ticket wait for a conflicting held one", async () => {
     const t = setup();
     run(t.repoPath, "checkout", "-q", "-b", "hotfix", "main");
@@ -156,6 +167,8 @@ describe("MergeGate: merges", () => {
     expect(t.repo.activeHolds()).toHaveLength(1);
     expect(t.repo.activeHold(t.repoPath, "dms-1")).toMatchObject({ id: local.id, kind: "pr", prUrl: "https://x/pull/8", target: "main", sessionId: "s-coord", ticketKey: "DMS-1", createdAt: 5000 });
     expect(t.repo.waitersOf(local.id).map((w) => w.sessionId)).toEqual(["s2"]);
+    expect(t.onPrHold).toHaveBeenCalledTimes(1);
+    expect(t.onPrHold).toHaveBeenCalledWith(local.id);
   });
 
   it("lets a branch that already holds the merge try again without waiting for anyone or recording it twice", async () => {

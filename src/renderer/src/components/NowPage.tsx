@@ -1,11 +1,13 @@
 import { Fragment, useEffect, useState, type ReactNode } from "react";
-import type { MergeEvent, NowEpic, NowFeature, NowRow, NowTarget, NowView, UsageSummary } from "../../../shared/types";
+import type { MergeEvent, NowEpic, NowFeature, NowNotice, NowRow, NowTarget, NowView, UsageSummary } from "../../../shared/types";
 import { api } from "../api";
+import { noticeText, type NoticeAction } from "../availability-view";
 import { reportError } from "../errors";
 import { setWizardSkipped, wizardSkipped } from "../local-prefs";
 import { mergeEventText } from "../merge-events-view";
 import { groupSummary, needsYouText, needsYouTotal, prPill, rowKey, rowLabel, rowPlace, rowText, usageDetails, usageLine } from "../now-view";
 import { S } from "../strings";
+import type { Route } from "../App";
 import { DecisionCard } from "./InboxPanes";
 import { LiveWindow } from "./LiveWindow";
 import { formatDuration, useNow } from "./TicketActivity";
@@ -24,13 +26,15 @@ interface Props {
   liveTickets: Set<string>;
   /** 跳过了向导的人点“继续设置”：重新打开向导。 */
   onResumeSetup: () => void;
+  /** 提醒上的“查看状态”“打开复盘”：跳到别的页面。 */
+  onGo: (r: Route) => void;
 }
 
 /**
  * 首页「现在」（设计文档 2026-11-06）：最上面是实况窗口（BTL-190 第 7 点），然后是需要你的，下面按 epic → feature → 行排，每一层都能收起；
  * 最下面是最近合并和一行用量。只显示和跳转，数据由主进程的 buildNowView 拼好。
  */
-export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup }: Props) {
+export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup, onGo }: Props) {
   const now = useNow();
   const usage = useUsage();
   const setup = <SetupSkipped onResumeSetup={onResumeSetup} />;
@@ -42,6 +46,7 @@ export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup
         <h2>{S.nowTitle}</h2>
         <span className="muted">{S.nowRunning(view.running)}</span>
       </header>
+      {view.notices.map((n) => <Notice key={noticeKey(n)} notice={n} now={now} onOpen={onOpen} onGo={onGo} />)}
       {/* 实况（BTL-190 第 7 点）：没人在干活时它说“现在没有正在进行的工作”，下面的列表可能是空的。 */}
       <LiveWindow view={view} onOpen={onOpen} />
       {needsYouTotal(view) > 0 && <NeedsYou view={view} now={now} onOpen={onOpen} />}
@@ -54,6 +59,32 @@ export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup
       {view.epics.map((e) => <EpicBlock key={e.id ?? "none"} epic={e} now={now} onOpen={onOpen} />)}
       <RecentMerges merges={view.merges} onOpenTicket={onOpenTicket} liveTickets={liveTickets} />
       {usage && <UsageLine usage={usage} />}
+    </div>
+  );
+}
+
+/** 顶上的一条提醒：一句话加几个按钮；恢复、重试都是让复盘队列重新开始。 */
+function noticeKey(n: NowNotice): string {
+  if (n.kind !== "session_limited") return n.kind;
+  const t = n.target;
+  return `session_limited:${t.page}:${"key" in t ? t.key : "id" in t ? t.id : ""}:${t.sessionId ?? ""}`;
+}
+
+function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: number; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
+  const { text, actions } = noticeText(n, S, now);
+  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen };
+  const run = (a: NoticeAction): void => {
+    if (a === "resume" || a === "retry") void api.availabilityAct({ op: "resumeLessons" }).catch(reportError);
+    else if (a === "health") onGo({ page: "settings", section: "health" });
+    else if (a === "lessons") onGo({ page: "lessons" });
+    else if (n.kind === "session_limited") onOpen(n.target);
+  };
+  return (
+    <div className="notice" data-testid={`now-notice-${n.kind}`}>
+      <p>{text}</p>
+      <div className="actions">
+        {actions.map((a) => <button key={a} onClick={() => run(a)}>{label[a]}</button>)}
+      </div>
     </div>
   );
 }

@@ -173,7 +173,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (!h || !belongs(h)) return fail(M().ctlNoSuchSession(wanted));
     const a = listedActivity(h.id);
     // 监控还没看到：键和有活动时一样，值都是 null
-    if (!a) return ok({ sessionId: h.id, kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, output: "", last_reply: lastReply(h.id) });
+    if (!a) return ok({ sessionId: h.id, kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, limit: null, output: "", last_reply: lastReply(h.id) });
     let output = "";
     try {
       output = (await d.activityOutput?.(h.id)) ?? "";

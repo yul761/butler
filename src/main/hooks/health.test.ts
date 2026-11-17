@@ -155,6 +155,27 @@ describe("HealthService", () => {
       expect(readFileSync(paths.hookBin, "utf8")).toBe("#!/bin/sh\necho old\n");
     });
 
+    it("installHooks calls onHookBinCurrent after a successful install, not after a failed one", async () => {
+      const mk = (withBundled: boolean) => {
+        const home = tempDir();
+        const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+        const bundled = join(home, "bundled-hook");
+        if (withBundled) writeFileSync(bundled, "#!/bin/sh\necho new\n");
+        let calls = 0;
+        const health = new HealthService({
+          paths, platform: "darwin", env: {}, settings: new SettingsRepo(memDb()), bundledHookBin: bundled,
+          readPath: async () => "/usr/bin", run: async () => "", onHookBinCurrent: () => void calls++,
+        });
+        return { health, calls: () => calls };
+      };
+      const ok = mk(true);
+      await ok.health.installHooks();
+      expect(ok.calls()).toBe(1);
+      const bad = mk(false);
+      await expect(bad.health.installHooks()).rejects.toThrow();
+      expect(bad.calls()).toBe(0);
+    });
+
     it("installHooks turns the gate on", async () => {
       const { health } = setup();
       await health.installHooks();

@@ -19,7 +19,7 @@ function deps(out: HeadlessOutcome, seen: HeadlessRequest[] = []): HeadlessExecD
 }
 const ok = (structured: unknown): HeadlessOutcome => ({
   ok: true,
-  result: { sessionId: null, isError: false, subtype: null, resultText: "", structured, permissionDenials: [], apiErrorStatus: null, costUsd: null, usage: null, model: null },
+  result: { sessionId: null, isError: false, subtype: null, resultText: "", structured, permissionDenials: [], apiErrorStatus: null, costUsd: null, usage: null, model: null, durationMs: null },
 });
 
 afterEach(() => setLang("zh"));
@@ -77,7 +77,7 @@ describe("judgeStuck", () => {
   });
 
   it("headless 失败或输出不合规时返回 null", async () => {
-    expect(await judgeStuck(deps({ ok: false, reason: "timeout", message: "x", result: null }), input)).toBeNull();
+    expect(await judgeStuck(deps({ ok: false, reason: "timeout", message: "x", result: null, limit: null, stderr: "" }), input)).toBeNull();
     expect(await judgeStuck(deps(ok({ stuck: "yes" })), input)).toBeNull();
     expect(await judgeStuck(deps(ok(null)), input)).toBeNull();
   });

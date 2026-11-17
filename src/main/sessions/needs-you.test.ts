@@ -20,7 +20,7 @@ function deps(out: HeadlessOutcome, seen: HeadlessRequest[] = [], labels: string
 const usage = { input: 1, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 1 };
 const ok = (structured: unknown): HeadlessOutcome => ({
   ok: true,
-  result: { sessionId: null, isError: false, subtype: null, resultText: "", structured, permissionDenials: [], apiErrorStatus: null, costUsd: null, usage, model: null },
+  result: { sessionId: null, isError: false, subtype: null, resultText: "", structured, permissionDenials: [], apiErrorStatus: null, costUsd: null, usage, model: null, durationMs: null },
 });
 
 afterEach(() => setLang("zh"));
@@ -62,7 +62,7 @@ describe("judgeNeedsYou", () => {
   });
 
   it("returns null when the run fails or the answer is malformed", async () => {
-    expect(await judgeNeedsYou(deps({ ok: false, reason: "timeout", message: "x", result: null }), "？", "/r")).toBeNull();
+    expect(await judgeNeedsYou(deps({ ok: false, reason: "timeout", message: "x", result: null, limit: null, stderr: "" }), "？", "/r")).toBeNull();
     expect(await judgeNeedsYou(deps(ok({ needs_user: "yes" })), "？", "/r")).toBeNull();
     expect(await judgeNeedsYou(deps(ok(null)), "？", "/r")).toBeNull();
   });

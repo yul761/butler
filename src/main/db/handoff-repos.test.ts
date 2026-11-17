@@ -86,6 +86,24 @@ describe("HandoffsRepo", () => {
     expect(repo.latestValid("PROJ-1")?.createdAt).toBe(100);
   });
 
+  it("allPrs collects PRs from every valid handoff, deduped", () => {
+    const { db } = setup();
+    const repo = new HandoffsRepo(db);
+    const pr = (number: number, url: string, state: "open" | "merged" = "open") => ({ number, url, state, review: null });
+    const at = (createdAt: number, prs: ReturnType<typeof pr>[]) =>
+      repo.insert({ ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", createdAt, payload: { ...emptyHandoff("PROJ-1"), prs }, rawText: null });
+    at(100, [pr(1, "https://github.com/a/x/pull/1"), pr(3, "")]);
+    at(200, [pr(2, "https://github.com/a/x/pull/2"), pr(1, "https://github.com/a/x/pull/1/", "merged")]);
+    repo.insert({ ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", createdAt: 300, payload: null, rawText: "bad" });
+    at(400, [pr(3, "https://github.com/a/x/pull/3")]);
+    expect(repo.allPrs("PROJ-1").map((p) => [p.number, p.url, p.state])).toEqual([
+      [3, "https://github.com/a/x/pull/3", "open"],
+      [2, "https://github.com/a/x/pull/2", "open"],
+      [1, "https://github.com/a/x/pull/1/", "merged"],
+    ]);
+    expect(repo.allPrs("NONE-1")).toEqual([]);
+  });
+
   it("treats an unreadable payload as degraded", () => {
     const { db } = setup();
     db.prepare(`INSERT INTO handoffs (ticket_key, trigger, created_at, payload, degraded) VALUES ('PROJ-1', 'nightly', 1, '{broken', 0)`).run();

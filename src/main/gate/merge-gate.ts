@@ -50,6 +50,8 @@ export interface MergeGateDeps {
   whoOf(ticketKey: string | null, branch: string): string;
   /** post 阶段之后让 HoldWatcher（Task 7）尽快检查一轮。 */
   checkSoon(): void;
+  /** PR 占位建好（或本地占位换成 PR 占位）之后：把这个 PR 链接到 ticket 上。 */
+  onPrHold?: (holdId: number) => void;
   /** 一次裁决最多用多久，默认 GATE_DEADLINE_MS（测试用）。 */
   deadlineMs?: number;
 }
@@ -229,7 +231,10 @@ export class MergeGate {
     const mine = this.d.repo.activeHold(repo, branch);
     if (mine && mine.target === target) {
       if (this.late(clock)) return ALLOW;
-      if (mine.kind === "local" && m.kind === "pr") this.d.repo.toPrHold(mine.id, { prUrl: m.prUrl, sessionId: req.session, ticketKey: own, createdAt: this.d.now() });
+      if (mine.kind === "local" && m.kind === "pr") {
+        this.d.repo.toPrHold(mine.id, { prUrl: m.prUrl, sessionId: req.session, ticketKey: own, createdAt: this.d.now() });
+        this.d.onPrHold?.(mine.id);
+      }
       return ALLOW;
     }
 
@@ -265,7 +270,10 @@ export class MergeGate {
       this.record({ repoPath: repo, kind: "proceed_conflict", ticketKey: own, branch, otherTicket: c.ticket, otherBranch: c.branch, files: c.files });
     }
     // 已经占着别的目标的不再加一个（一个 branch 同时只占一处）。
-    if (!mine) this.d.repo.addHold({ repoPath: repo, branch, target, kind: m.kind, prUrl: m.prUrl, sessionId: req.session, ticketKey: own, createdAt: this.d.now() });
+    if (!mine) {
+      const id = this.d.repo.addHold({ repoPath: repo, branch, target, kind: m.kind, prUrl: m.prUrl, sessionId: req.session, ticketKey: own, createdAt: this.d.now() });
+      if (m.kind === "pr") this.d.onPrHold?.(id);
+    }
     return ALLOW;
   }
 

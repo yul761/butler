@@ -54,6 +54,12 @@ describe("activityText", () => {
     expect(activityText(act({ kind: "thinking" }), S, NOW).main).toBe("思考中");
   });
 
+  it("a limited session reads as the limit with its reset", () => {
+    const resetsAt = new Date(NOW).setHours(23, 59, 0, 0);
+    const t = activityText(act({ kind: "waiting", limit: { kind: "usage_limit", resetsAt, message: "Claude AI usage limit reached" } }), S, NOW);
+    expect(t).toEqual({ main: "用量已达上限，23:59 恢复", sub: "Claude AI usage limit reached" });
+  });
+
   it("speaks English", () => {
     setUiLang("en");
     const t = activityText(act({ kind: "push", stuck: true, startedAt: NOW - 18 * MIN, lastOutputAt: NOW - 12 * MIN }), S, NOW);

@@ -1,3 +1,5 @@
+import type { LimitHit } from "../../shared/availability";
+import { classifyLimit } from "../claude/limits";
 import { extractUserText } from "./discovery";
 
 /** 命令文字最多保留多少个字符。 */
@@ -47,10 +49,14 @@ export interface TranscriptState {
   events: TranscriptEvent[];
   /** 最近一条 assistant 记录是 Claude Code 自己合成的错误（isApiErrorMessage / <synthetic>）：这一轮会以 turn_duration 结束，不会有 Stop。 */
   apiError: boolean;
+  /** apiError 那条合成消息按限额分类的结果；不是限额、或没有 apiError 时为 null。 */
+  apiLimit: LimitHit | null;
+  /** apiError 那条记录的时间；没有 apiError 时为 null。 */
+  apiErrorAt: number | null;
 }
 
 export function newTranscriptState(): TranscriptState {
-  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null, lastReplyId: null, events: [], apiError: false };
+  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null, lastReplyId: null, events: [], apiError: false, apiLimit: null, apiErrorAt: null };
 }
 
 function pushEvent(s: TranscriptState, e: TranscriptEvent): void {
@@ -62,6 +68,18 @@ function pushEvent(s: TranscriptState, e: TranscriptEvent): void {
 function setTurn(s: TranscriptState, open: boolean, at: number, hookless = false): void {
   if (s.turnOpen !== open) pushEvent(s, open ? { type: "turn-start", at } : { type: "turn-end", at, ...(hookless && { hookless: true as const }) });
   s.turnOpen = open;
+}
+
+function clearApiError(s: TranscriptState): void {
+  s.apiError = false;
+  s.apiLimit = null;
+  s.apiErrorAt = null;
+}
+
+function setApiLimit(s: TranscriptState, entry: Obj, text: string): void {
+  const at = entryTime(entry);
+  s.apiErrorAt = at;
+  s.apiLimit = classifyLimit({ text, apiStatus: null, now: at });
 }
 
 /** 用户按 Esc 打断时 Claude Code 写的文字（也有 for tool use 的说法）；它后面不会再有结束这一轮的记录。 */
@@ -144,10 +162,16 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
       // 后台任务完成会让 Claude 在没有用户消息的情况下重新开始一轮
       setTurn(s, true, entryTime(entry));
     }
-    if (!Array.isArray(message.content)) return;
+    if (!Array.isArray(message.content)) {
+      if (s.apiError) setApiLimit(s, entry, typeof message.content === "string" ? message.content : "");
+      else clearApiError(s);
+      return;
+    }
     const text = message.content
       .flatMap((b) => (isObj(b) && b.type === "text" && typeof b.text === "string" && b.text.trim() ? [b.text.trim()] : []))
       .join("\n");
+    if (s.apiError) setApiLimit(s, entry, text);
+    else clearApiError(s);
     // Claude Code 合成的报错（限额、API 出错）不是 claude 说的话，不当作最后一条回复，“需要你”不会拿它去判断
     if (text && !s.apiError) {
       s.lastReply = text;
@@ -192,7 +216,7 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
       // 新的用户消息或者打断：上一轮没拿到结果的前台工具不会再有结果了
       s.running.clear();
       const interrupted = text.startsWith(INTERRUPT_PREFIX);
-      if (!interrupted) s.apiError = false;
+      if (!interrupted) clearApiError(s);
       // Esc 打断：Claude Code 不触发 Stop hook
       setTurn(s, !interrupted, entryTime(entry), interrupted);
     }

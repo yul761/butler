@@ -77,6 +77,8 @@ export interface SessionServiceDeps {
   butlerWorkspace?: string;
   /** Butler 总控的 --mcp-config 文件。 */
   butlerMcpConfig?: () => string | null;
+  /** 复盘分析 session 的工作目录（~/.butler/workspaces/_lessons）；不给就开不了复盘分析 session。 */
+  lessonsWorkspace?: string;
   /**
    * 交互 session 的 --settings 文件：直接启用仓库 .mcp.json 里的 server，不停在选择对话框上（用户在 dirs 里禁用过的照旧禁用）。
    * 返回 null 时不加 --settings。
@@ -139,7 +141,7 @@ interface WorkspaceTarget {
   /** 送规矩用的仓库路径（只有修复 session 非空）。 */
   guideRepoPaths: string[];
   /** 新建 session 时这一行的角色。 */
-  row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "epicId" | "butler"> & { model?: SessionModel | null };
+  row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "epicId" | "butler" | "lessonRunId"> & { model?: SessionModel | null };
 }
 
 type Claude = { path: string; pathValue: string };
@@ -504,10 +506,51 @@ export class SessionService {
     return this.d.sessions.listButler().find((s) => !s.replacedBy && !s.dismissed) ?? null;
   }
 
-  /** Butler 总控页：它的 session（分显示的和隐藏的）和工作目录。 */
+  /** Butler 总控页：它的 session（分显示的和隐藏的）和工作目录，以及复盘分析 session。 */
   butlerView(): ButlerView {
-    const { sessions, hiddenSessions } = this.split(this.d.sessions.listButler(), this.openHeads());
-    return { workspaceDir: this.d.butlerWorkspace ?? "", sessions, hiddenSessions };
+    const heads = this.openHeads();
+    const { sessions, hiddenSessions } = this.split(this.d.sessions.listButler(), heads);
+    const lessonSessions = this.d.sessions.listLessonSessions().map((s) => ({ ...s, termId: heads.get(s.id) ?? null }));
+    return { workspaceDir: this.d.butlerWorkspace ?? "", sessions, hiddenSessions, lessonSessions };
+  }
+
+  /**
+   * 复盘分析 session（lessons visibility 任务 7）：在 _lessons 工作目录里看一次复盘运行，仓库用 --add-dir 加进来，没有 Butler 的 MCP。
+   * 这次运行已经有终端开着就返回它；有关着的 session 就接着它打开，什么都不发；都没有就新开一个，把「先读 file」作为第一条消息发进去。
+   */
+  async openLessonRun(req: { runId: number; repoPath: string; file: string; label: string }): Promise<OpenSessionResult> {
+    await this.d.ready();
+    const workspace = this.d.lessonsWorkspace;
+    if (!workspace) return { ok: false, reason: "no_ticket" };
+    const head = this.d.sessions.forLessonRun(req.runId);
+    const running = head ? this.openHeads().get(head.id) : undefined;
+    if (running) return { ok: true, termId: running, alreadyOpen: true };
+    const claude = this.d.claude();
+    if (!claude.path) return { ok: false, reason: "claude_missing" };
+    const cwd = head?.cwd || workspace;
+    try {
+      mkdirSync(cwd, { recursive: true });
+    } catch (e) {
+      this.d.log?.(`${req.label}: cannot create ${cwd}`, e);
+      return { ok: false, reason: "no_repo" };
+    }
+    // 用户点了打开：隐藏着的也重新显示。
+    if (head?.dismissed) this.d.sessions.undismiss(head.id);
+    const termId = this.startInWorkspace({
+      label: req.label, workspace, repoPaths: [req.repoPath], dirs: [req.repoPath],
+      mcpConfig: () => null,
+      guideKind: "lessons",
+      guideRepoPaths: [],
+      row: { lessonRunId: req.runId },
+    }, { path: claude.path, pathValue: claude.pathValue }, head);
+    if (!head) {
+      // 和修复 session 一样不等：等输入框就绪可能要十几秒，界面先切到新终端。
+      this.d.submit?.(termId, M().lessonRunTask(req.file)).then(
+        (res) => res === "sent" || this.d.log?.(`lesson run task for ${termId} not delivered (${res})`),
+        (e: unknown) => this.d.log?.(`lesson run task for ${termId} failed`, e),
+      );
+    }
+    return { ok: true, termId, alreadyOpen: false };
   }
 
   /** 恢复 sessionId 这个 session（属于这里、终端还开着时直接用那个终端），或者新开一个。start 返回终端 id。 */

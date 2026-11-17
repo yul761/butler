@@ -1,10 +1,10 @@
-import type { PrStageCell, PrStagesScope, PrStagesView, PrTimelineEntry } from "../../shared/pr-stages";
+import type { PrStageCell, PrStagesScope, PrStagesTicket, PrStagesView, PrTimelineEntry } from "../../shared/pr-stages";
 import { api } from "./api";
 import { useStateRefetch } from "./components/useStateRefetch";
 import { S } from "./strings";
 
-/** 一块范围里每个仓库的 PR 进度：打开时取一次，之后每次 stateChanged 重取。还没取到时为 null。 */
-export function usePrStages(scope: PrStagesScope): PrStagesView[] | null {
+/** 一块范围里每个 ticket 的 PR 进度：打开时取一次，之后每次 stateChanged 重取。还没取到时为 null。 */
+export function usePrStages(scope: PrStagesScope): PrStagesTicket[] | null {
   return useStateRefetch(JSON.stringify(scope), () => api.prStages(scope));
 }
 
@@ -37,9 +37,10 @@ export function cellLabel(c: PrStageCell): string {
   }
 }
 
-/** 一条时间线的文字：阶段名只在这里写一次；回到开发的条目后面加一句。 */
+/** 一条时间线的文字：阶段名只在这里写一次（汇报不写阶段名）；回到开发的条目后面加一句。 */
 export function timelineText(e: PrTimelineEntry): string {
-  const text = `${S.prStage[e.stage]} ${S.prTimeline[e.kind](e.detail)}`;
+  const body = S.prTimeline[e.kind](e.detail);
+  const text = e.kind === "report" ? body : `${S.prStage[e.stage]} ${body}`;
   return e.back ? `${text} ${S.prBackToDev}` : text;
 }
 export interface EpicPrRow {
@@ -51,19 +52,38 @@ export interface EpicPrRow {
   total: number;
 }
 
-/** 按 feature 分组计数：merge=done → merged；closed 不计；有 failed 的 cell → failed；dev 还是 todo → notStarted；其余 active。 */
-export function epicPrSummary(rows: PrStagesView[]): Map<number, EpicPrRow> {
+/** 一行最后有动静的时间：时间线和格子上最晚的时间；什么都没有为 -Infinity。 */
+const lastAt = (r: PrStagesView): number =>
+  Math.max(-Infinity, ...r.timeline.map((e) => e.at), ...r.stages.flatMap((c) => (c.at === null ? [] : [c.at])));
+
+/** r 比 best 新：动静更晚；一样晚时 PR 行胜过没有 PR 的行，其余照主进程的顺序（新的 PR 在前）。 */
+const newer = (r: PrStagesView, best: PrStagesView): boolean =>
+  lastAt(r) > lastAt(best) || (lastAt(r) === lastAt(best) && best.noPr && !r.noPr);
+
+/** ticket 最新的一行：没关闭的行里最新的（关掉旧 PR 不会盖住还开着的新 PR）；全都关了才取关闭的里最新的。没有行为 null。 */
+export function newestRow(t: PrStagesTicket): PrStagesView | null {
+  const live = t.rows.filter((r) => !r.closed);
+  return (live.length > 0 ? live : t.rows).reduce<PrStagesView | null>((best, r) => (best === null || newer(r, best) ? r : best), null);
+}
+
+/**
+ * 按 feature 数 ticket（不是行，含已归档的）：ticket.merged → merged；其余看最新的一行：
+ * 没有行或 PR 全关了 → notStarted；有 failed 的 cell → failed；dev 还是 todo → notStarted；其余 active。
+ */
+export function epicPrSummary(tickets: PrStagesTicket[]): Map<number, EpicPrRow> {
   const out = new Map<number, EpicPrRow>();
-  for (const r of rows) {
-    if (r.featureId === null || r.closed) continue;
-    const e = out.get(r.featureId) ?? { featureId: r.featureId, merged: 0, active: 0, failed: 0, notStarted: 0, total: 0 };
-    const state = (id: string) => r.stages.find((c) => c.id === id)?.state;
-    if (state("merge") === "done") e.merged++;
+  for (const t of tickets) {
+    const featureId = t.featureId;
+    if (featureId === null) continue;
+    const e = out.get(featureId) ?? { featureId, merged: 0, active: 0, failed: 0, notStarted: 0, total: 0 };
+    const r = newestRow(t);
+    if (t.merged) e.merged++;
+    else if (r === null || r.closed) e.notStarted++;
     else if (r.stages.some((c) => c.state === "failed")) e.failed++;
-    else if (state("dev") === "todo") e.notStarted++;
+    else if (r.stages.find((c) => c.id === "dev")?.state === "todo") e.notStarted++;
     else e.active++;
     e.total++;
-    out.set(r.featureId, e);
+    out.set(featureId, e);
   }
   return out;
 }

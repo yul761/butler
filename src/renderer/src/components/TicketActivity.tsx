@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { SessionActivity } from "../../../shared/activity";
+import { limitLine } from "../availability-view";
 import type { UiStrings } from "../strings";
 
 const MINUTE = 60_000;
@@ -16,6 +17,8 @@ export function formatDuration(ms: number, S: UiStrings): string {
  * 后台命令在 main 前加“后台”，卡住时 sub 里加上多久没有新输出。
  */
 export function activityText(a: SessionActivity, S: UiStrings, now: number): { main: string; sub: string | null } {
+  const limit = a.limit ?? null;
+  if (limit) return { main: limitLine(limit, S, now), sub: limit.message };
   const since = a.startedAt === null ? null : formatDuration(now - a.startedAt, S);
   let main = S.activity[a.kind];
   let sub: string | null;

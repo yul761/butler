@@ -15,8 +15,8 @@ const act = (over: Partial<SessionActivity> = {}): SessionActivity => ({
 });
 
 const pr = (over: Partial<WatchedPr> = {}): WatchedPr => ({
-  ticketKey: "BTL-1", repoId: 1, repoPath: "/r", branch: "b", number: 212, url: "https://github.com/o/r/pull/212",
-  state: "open", review: "pending", ci: "passing", headSha: null, checkedAt: NOW, ...over,
+  ticketKey: "BTL-1", prId: 1, repoId: 1, repoPath: "/r", branch: "b", number: 212, url: "https://github.com/o/r/pull/212",
+  state: "open", review: "pending", ci: "passing", headSha: null, checkedAt: NOW, readError: false, ...over,
 });
 
 const row = (over: Partial<NowRow> = {}): NowRow => ({
@@ -32,6 +32,11 @@ const usage = (over: Partial<UsageSummary> = {}): UsageSummary => ({
 afterEach(() => setUiLang("zh"));
 
 describe("rowText", () => {
+  it("rowText of a limited row is danger", () => {
+    const limit = { kind: "usage_limit" as const, resetsAt: null, message: "hit your limit" };
+    expect(rowText(row({ activity: act({ kind: "waiting", limit }), working: false }), S, NOW)).toEqual({ main: "用量已达上限", sub: "hit your limit", tone: "danger" });
+  });
+
   it("needs-you rows read 等你 with the reason", () => {
     const r = rowText(row({ needsYou: "问要不要拆 PR", activity: act({ kind: "waiting" }) }), S, NOW);
     expect(r).toMatchObject({ main: "等你：问要不要拆 PR", tone: "danger" });
@@ -54,6 +59,9 @@ describe("rowText", () => {
     const bare = (prs: WatchedPr[]) => rowText(row({ sessionId: null, activity: null, since: null, prs }), S, NOW);
     expect(bare([pr({ ci: "failing" })])).toEqual({ main: "CI 失败", sub: null, tone: "danger" });
     expect(bare([pr({ ci: "pending" })])).toEqual({ main: "等 CI", sub: null, tone: "warn" });
+    expect(bare([pr({ state: null, number: null, url: null, prId: null, review: null, ci: "pending" })])).toEqual({ main: "等 CI", sub: null, tone: "warn" });
+    // 合并了的 PR 留着最后一次读到的 CI：不算还在等。
+    expect(bare([pr({ state: "merged", ci: "pending" })])).toEqual({ main: "已停下", sub: null, tone: "muted" });
     expect(bare([pr({ review: "pending" })])).toEqual({ main: "等 review", sub: null, tone: "muted" });
     expect(bare([pr({ review: "changes_requested" })])).toEqual({ main: "要修改", sub: null, tone: "muted" });
     expect(bare([pr({ review: "approved" })])).toEqual({ main: "已批准", sub: null, tone: "muted" });
@@ -115,13 +123,15 @@ describe("prPill", () => {
     expect(prPill(pr({ review: null }), S)).toEqual({ text: "PR #212 待 review", tone: "pending" });
   });
 
-  it("says the PR status is unavailable when gh could not read a branch with no PR seen yet (I6)", () => {
-    expect(prPill(pr({ state: null, number: null, url: null, ci: "unknown" }), S)).toEqual({ text: "PR 状态不可用", tone: "none" });
+  it("says the PR status is unavailable when the last gh read failed (I6)", () => {
+    expect(prPill(pr({ state: null, number: null, url: null, prId: null, ci: "unknown", readError: true }), S)).toEqual({ text: "PR 状态不可用", tone: "none" });
+    expect(prPill(pr({ readError: true }), S)).toEqual({ text: "PR 状态不可用", tone: "none" });
     setUiLang("en");
-    expect(prPill(pr({ state: null, number: null, url: null, ci: "unknown" }), S)).toEqual({ text: "PR status unavailable", tone: "none" });
+    expect(prPill(pr({ readError: true }), S)).toEqual({ text: "PR status unavailable", tone: "none" });
     setUiLang("zh");
-    // 见过 PR 的：gh 这一次没查成，照旧显示上次的状态。
+    // 读成功了、只是还不知道 CI：照常显示。
     expect(prPill(pr({ ci: "unknown" }), S)).toEqual({ text: "PR #212 待 review", tone: "pending" });
+    expect(prPill(pr({ state: null, number: null, url: null, prId: null, ci: "unknown" }), S)).toBeNull();
   });
 
   it("shows nothing for a branch with no PR or a closed one", () => {
@@ -161,7 +171,7 @@ describe("rowPlace", () => {
     const loose = row({ sessionId: "s9", ticketKey: "BTL-9", title: "独立的 ticket" });
     const counts = { active: 1, needsYou: 0, stuck: 0 };
     const view: NowView = {
-      needsYou: [], decisions: [], butler: null, running: 4, merges: [], memory: [],
+      needsYou: [], decisions: [], butler: null, running: 4, merges: [], memory: [], notices: [],
       epics: [
         { id: 3, name: "结账改版", rows: [epicRow], counts, features: [{ id: 7, name: "支付重构", rows: [coord, ticket], counts }] },
         { id: null, name: "", rows: [], counts, features: [{ id: null, name: "", rows: [loose], counts }] },
@@ -192,9 +202,9 @@ describe("inbox helpers (BTL-190 2+3)", () => {
 
   it("counts every pending decision as one more thing that needs you", () => {
     expect(needsYouTotal(null)).toBe(0);
-    expect(needsYouTotal({ needsYou: [row()], decisions: [item(), item({ id: 2 })], epics: [], butler: null, running: 1, merges: [], memory: [] })).toBe(3);
+    expect(needsYouTotal({ needsYou: [row()], decisions: [item(), item({ id: 2 })], epics: [], butler: null, running: 1, merges: [], memory: [], notices: [] })).toBe(3);
     // 已经在卡片上答了、等着送进去的不算。
-    expect(needsYouTotal({ needsYou: [], decisions: [item(), item({ id: 2, answer: "A" })], epics: [], butler: null, running: 1, merges: [], memory: [] })).toBe(1);
+    expect(needsYouTotal({ needsYou: [], decisions: [item(), item({ id: 2, answer: "A" })], epics: [], butler: null, running: 1, merges: [], memory: [], notices: [] })).toBe(1);
   });
 });
 
@@ -202,7 +212,7 @@ describe("the live window (BTL-190 7)", () => {
   const ev = (at: number, label: string, over: Partial<ActivityEvent> = {}): ActivityEvent => ({ sessionId: "s1", at, kind: "tool", label, ...over });
   const counts = { active: 0, needsYou: 0, stuck: 0 };
   const view = (rows: NowRow[], featureRows: NowRow[] = [], butler: NowRow | null = null): NowView => ({
-    needsYou: [], decisions: [], butler, running: 0, merges: [], memory: [],
+    needsYou: [], decisions: [], butler, running: 0, merges: [], memory: [], notices: [],
     epics: [{ id: 1, name: "e", rows, counts, features: [{ id: 2, name: "f", rows: featureRows, counts }] }],
   });
 

@@ -4,7 +4,7 @@
 //   交互模式（在 PTY 里）：打印就绪行和挂载的 MCP server 名；每读到一行输入就写 transcript、
 //     按 CLAUDE_CONFIG_DIR/settings.json 和 --settings 文件执行 hook（macOS 用 /bin/sh，Windows 用 Git Bash，和 Claude Code 一样）；
 //     输入 /handoff 时按 Claude Code 的格式写命令消息，回一个 handoff 代码块（feature 总控里是 butler-feature-handoff，
-//     /handoff <问题> 把它写进 open_questions）；
+//     /handoff <问题> 把它写进 open_questions；FAKE_HANDOFF_PRS（JSON 数组）设了就用它换掉 ticket handoff 默认报的 PR）；
 //     输入 /fake-bash <命令> 时像 Bash 工具在跑：写一条没有结果的 tool_use 和 tasks/<id>.output，这一轮不结束；
 //     输入 /fake-bg <命令> 时像后台命令：tool_result 带任务 id 和输出文件，这一轮结束；/fake-bg-done 写它的完成通知；
 //       和 Claude Code 一样，命令在跑的时候有一个后台 shell 子进程（不真的执行命令，等到完成通知或假 claude 退出）：
@@ -19,6 +19,8 @@
 //     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 butler-sessions，调用它，结果写进运行记录；
 //     启动时写一份 sessions/<pid>.json 登记文件，Butler 从这里查 session 的名字；
 //     输入 /fake-ask 时回一句以“？”结尾的问话（ASK_REPLY）并结束这一轮：需要你的判断认出它；
+//     输入 /fake-limit <文字> 时像 Claude Code 撞了额度：写一条它合成的 assistant 报错（isApiErrorMessage、model <synthetic>），
+//       再写 system / turn_duration 结束这一轮，不跑 Stop（真的 CLI 这时触发的是 StopFailure）；
 //     输入 /clear 时像 Claude Code：换一个新的 session id 和新的 transcript，跑 SessionStart（source=clear），停在空的输入框上（没有 Stop）；
 //     每条 assistant 记录都带 usage：上下文是 FAKE_CLAUDE_CONTEXT_TOKENS（e2e 用它撑过换新的阈值），/clear 之后从头算，回到 CLEARED_CONTEXT；
 //     交互日志 interactive new/resume 行末尾带 guide=<--append-system-prompt-file 的路径>（没有就是空）；
@@ -26,7 +28,10 @@
 //   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果、feature 汇总或卡住判断；stream-json 的 MCP 探测只回 init。
 //     需要你的判断（schema 里有 needs_user）：回复是 /fake-ask 的问话就说需要你（理由是那句问话），别的都失败退出（Butler 当作不需要你）；
 //     FAKE_CLAUDE_JUDGE_DELAY_MS 设了就等这么久才失败（像真的 Haiku 要判断几秒）。
-//     review 经验的分析（schema 里有 findings）：回 { findings: [] }。
+//     review 经验的分析（schema 里有 findings）：每次重新读 FAKE_CLAUDE_LESSONS_FILE 里的模式，运行记录记一行 lessons <模式>：
+//       没有这个文件或 ok → 回 { findings: [] }，带花费、时长和 modelUsage；
+//       fail → stdout 一个 is_error 的结果（result 是 boom，带花费），stderr 一行 fake lessons stderr: boom，退出 1；
+//       limit:<秒级时间戳> → stdout 一个 is_error 的结果“Claude AI usage limit reached|<时间戳>”（CLI 撞额度的格式），退出 1；
 //     FAKE_CLAUDE_SUMMARY_GATE 指向的文件存在时，feature 汇总等到文件被删掉才回答：e2e 用它控制归档前要等多久。
 "use strict";
 const fs = require("node:fs");
@@ -80,6 +85,9 @@ const COMMAND_HANDOFF = {
   decisions: [],
   learnings: [],
 };
+/** ticket session 的 /handoff：FAKE_HANDOFF_PRS 设了就替换（不是追加）默认的 prs。 */
+const commandHandoff = () =>
+  process.env.FAKE_HANDOFF_PRS ? { ...COMMAND_HANDOFF, prs: JSON.parse(process.env.FAKE_HANDOFF_PRS) } : COMMAND_HANDOFF;
 /** feature 总控里键入 /handoff 时输出的 butler-feature-handoff。ticket 号故意写成小写，入库时规范成大写。 */
 const COMMAND_FEATURE_HANDOFF = {
   summary: "结账页前端（DMS-1）已提 PR 等合并；后端下单接口（DMS-2）还在写，两边还没联调。",
@@ -164,6 +172,40 @@ function denyReason(outputs) {
   return null;
 }
 
+/** 复盘分析的模式：FAKE_CLAUDE_LESSONS_FILE 的内容，每次重新读（e2e 中途会改）；没有这个文件就是 ok。 */
+function lessonsMode() {
+  const file = process.env.FAKE_CLAUDE_LESSONS_FILE;
+  try {
+    return (file ? fs.readFileSync(file, "utf8").trim() : "") || "ok";
+  } catch {
+    return "ok";
+  }
+}
+
+/** review 经验的分析（--json-schema 里有 findings），按 lessonsMode 回答。 */
+function lessonsAnalysis() {
+  const mode = lessonsMode();
+  log(`lessons ${mode}`);
+  const result = (r) => process.stdout.write(`${JSON.stringify({ type: "result", ...r })}\n`);
+  const limit = /^limit:(\d+)$/.exec(mode);
+  if (mode === "ok") {
+    // 不提炼规矩，回空的。
+    const none = { findings: [] };
+    result({ subtype: "success", is_error: false, session_id: `lessons-${Date.now()}`, result: JSON.stringify(none), structured_output: none, permission_denials: [], total_cost_usd: 0.0123, duration_ms: 1500, modelUsage: { "claude-fake-lessons": { inputTokens: 1200, outputTokens: 80, costUSD: 0.0123 } } });
+  } else if (mode === "fail") {
+    // 带 JSON 的失败：Butler 记成 claude_error，错误信息是 result，花费照记，stderr 也留下。
+    result({ is_error: true, result: "boom", total_cost_usd: 0.0042 });
+    process.stderr.write("fake lessons stderr: boom\n");
+    process.exitCode = 1;
+  } else if (limit) {
+    result({ subtype: "success", is_error: true, result: `Claude AI usage limit reached|${limit[1]}`, session_id: "lessons-limit" });
+    process.exitCode = 1;
+  } else {
+    process.stderr.write(`fake claude: unknown lessons mode ${JSON.stringify(mode)}\n`);
+    process.exitCode = 2;
+  }
+}
+
 function headless() {
   let input = "";
   process.stdin.setEncoding("utf8");
@@ -198,9 +240,7 @@ function headless() {
       return;
     }
     if (props.findings) {
-      // review 经验的分析（--json-schema 里有 findings）：不提炼规矩，回空的。
-      const none = { findings: [] };
-      process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `lessons-${Date.now()}`, result: JSON.stringify(none), structured_output: none, permission_denials: [], total_cost_usd: 0 })}\n`);
+      lessonsAnalysis();
       return;
     }
     // prompt 的第一行有中文就当中文，否则英文（Butler 按界面语言出 prompt）。
@@ -405,6 +445,15 @@ function interactive() {
       out("running\n");
       return;
     }
+    const limitText = /^\/fake-limit (.+)$/.exec(line);
+    if (limitText) {
+      // Claude Code 撞了额度：一条它自己合成的报错（不是模型说的），这一轮以 turn_duration 结束，没有 Stop。
+      append({ type: "assistant", uuid: `a-${Date.now()}`, isApiErrorMessage: true, message: { id: messageId(), role: "assistant", model: "<synthetic>", content: [{ type: "text", text: limitText[1] }] } });
+      append({ type: "system", subtype: "turn_duration", durationMs: 1 });
+      log(`fake-limit ${limitText[1]}`);
+      out(`${limitText[1]}\n> `);
+      return;
+    }
     const fakeTool = /^\/fake-tool (\S+)(?: (.+))?$/.exec(line);
     if (fakeTool) {
       // 工具调用完了、模型还在想：这一轮不结束，也不跑 Stop。
@@ -475,7 +524,7 @@ function interactive() {
         ? `收到：${line}`
         : coordinator
           ? `handoff：\n\n\`\`\`butler-feature-handoff\n${JSON.stringify(featureHandoff, null, 2)}\n\`\`\``
-          : `handoff：\n\n\`\`\`butler-handoff\n${JSON.stringify(COMMAND_HANDOFF, null, 2)}\n\`\`\``);
+          : `handoff：\n\n\`\`\`butler-handoff\n${JSON.stringify(commandHandoff(), null, 2)}\n\`\`\``);
   });
   rl.on("close", () => process.exit(0));
 }

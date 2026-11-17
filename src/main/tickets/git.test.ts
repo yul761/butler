@@ -178,6 +178,26 @@ describe("merge coordinator helpers", () => {
     expect(await firstCommitAt(repo, "feat")).toBe(1_700_000_000_000);
   });
 
+  it("firstCommitAt with afterMs ignores commits committed before it", async () => {
+    const repo = makeRepo();
+    run(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+    run(repo, "checkout", "-b", "feat");
+    // 作者时间和提交时间分开：rebase 过的 commit 作者时间早、提交时间晚。
+    const commitAt = (file: string, author: number, committer: number) => {
+      writeFileSync(join(repo, file), file);
+      run(repo, "add", ".");
+      execFileSync("git", ["commit", "-m", file], { cwd: repo, stdio: "ignore", env: { ...process.env, GIT_AUTHOR_DATE: `@${author} +0000`, GIT_COMMITTER_DATE: `@${committer} +0000` } });
+    };
+    commitAt("a.txt", 1_700_000_000, 1_700_000_000);
+    commitAt("b.txt", 1_700_000_200, 1_700_000_200);
+    commitAt("c.txt", 1_700_000_050, 1_700_000_300);
+    expect(await firstCommitAt(repo, "feat")).toBe(1_700_000_000_000);
+    expect(await firstCommitAt(repo, "feat", null)).toBe(1_700_000_000_000);
+    // 上一个 PR 在 100 结束：之后提交的是 b（作者 200）和 c（作者 50，提交 300），取作者时间最早的。
+    expect(await firstCommitAt(repo, "feat", 1_700_000_100_000)).toBe(1_700_000_050_000);
+    expect(await firstCommitAt(repo, "feat", 1_700_000_300_000)).toBeNull();
+  });
+
   it("upstreamRef prefers origin/<branch> when it exists", async () => {
     const repo = makeRepo();
     expect(await upstreamRef(repo, "main")).toBe("main");

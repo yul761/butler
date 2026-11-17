@@ -10,7 +10,7 @@ import { stageEventFromHook } from "./stage-hook";
 const sess = (o: Partial<Session> = {}): Session => ({
   id: "s1", ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null,
   waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null,
-  featureId: null, fixesSession: null, epicId: null, model: null, butler: false, ...o,
+  featureId: null, fixesSession: null, epicId: null, model: null, butler: false, lessonRunId: null, ...o,
 });
 const repo = (...ss: Session[]) => ({ get: (id: string) => ss.find((s) => s.id === id) ?? null });
 const skill = (name: string, o: Partial<HookEnvelope> = {}): HookEnvelope => ({
@@ -26,7 +26,7 @@ describe("stageEventFromHook", () => {
   it("records a design skill of a ticket session with its ticket and repo", () => {
     const o = stageEventFromHook(skill("superpowers:brainstorming"), repo(sess({ ticketKey: "BTL-1", repoId: 7 })));
     expect(o).toEqual({
-      event: { ticketKey: "BTL-1", repoId: 7, branch: null, featureId: null, epicId: null, sessionId: "s1", kind: "skill", at: 500, data: { name: "superpowers:brainstorming", category: "design" } },
+      event: { ticketKey: "BTL-1", repoId: 7, prId: null, branch: null, featureId: null, epicId: null, sessionId: "s1", kind: "skill", at: 500, data: { name: "superpowers:brainstorming", category: "design" } },
       dedupeKey: "skill:s1:500:superpowers:brainstorming",
     });
   });
@@ -57,7 +57,7 @@ describe("stageEventFromHook", () => {
     expect(stageEventFromHook(prompt("/handoff"), repo(sess({ ticketKey: "BTL-1" })))).toBeNull();
     expect(stageEventFromHook(prompt("please review"), repo(sess({ ticketKey: "BTL-1" })))).toBeNull();
   });
-  it("ignores other tools, uncategorised skills, headless envelopes, unknown, discovered and Butler control sessions", () => {
+  it("ignores other tools, uncategorised skills, headless envelopes, unknown and Butler control sessions", () => {
     const s = repo(sess({ ticketKey: "BTL-1" }));
     const bash = skill("code-review");
     (bash.payload as Record<string, unknown>).tool_name = "Bash";
@@ -65,8 +65,37 @@ describe("stageEventFromHook", () => {
     expect(stageEventFromHook(skill("handoff"), s)).toBeNull();
     expect(stageEventFromHook(skill("code-review", { butlerSession: "headless:x" }), s)).toBeNull();
     expect(stageEventFromHook(skill("code-review"), repo())).toBeNull();
-    expect(stageEventFromHook(skill("code-review"), repo(sess({ ticketKey: "BTL-1", origin: "discovered" })))).toBeNull();
     expect(stageEventFromHook(skill("code-review"), repo(sess({ butler: true })))).toBeNull();
+  });
+  const agent = (description: string | undefined, subagentType?: string): HookEnvelope => ({
+    v: 1, receivedAt: 500, ticket: null, butlerSession: "t1",
+    payload: { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Agent", tool_use_id: "tu9", tool_input: { description, subagent_type: subagentType } },
+  });
+  it('an Agent dispatch described "Review task 3" records agent:Review task 3 as review', () => {
+    const o = stageEventFromHook(agent("Review task 3"), repo(sess({ ticketKey: "BTL-1", repoId: 7 })));
+    expect(o?.event).toMatchObject({ ticketKey: "BTL-1", repoId: 7, kind: "skill", data: { name: "agent:Review task 3", category: "review" } });
+    expect(o?.dedupeKey).toBe("skill:s1:tu9");
+    expect(stageEventFromHook(agent(undefined, "code-reviewer"), repo(sess({ ticketKey: "BTL-1" })))?.event.data).toEqual({ name: "agent:code-reviewer", category: "review" });
+  });
+  it("a non-review agent records nothing", () => {
+    expect(stageEventFromHook(agent("Implement task 3", "general-purpose"), repo(sess({ ticketKey: "BTL-1" })))).toBeNull();
+    expect(stageEventFromHook(agent(undefined), repo(sess({ ticketKey: "BTL-1" })))).toBeNull();
+  });
+  it("a discovered session attached to a ticket records /skill", () => {
+    const o = stageEventFromHook(prompt("/code-review"), repo(sess({ ticketKey: "BTL-1", origin: "discovered" })));
+    expect(o?.event).toMatchObject({ ticketKey: "BTL-1", data: { name: "code-review", category: "review" } });
+  });
+  it("a session with no owner records nothing", () => {
+    expect(stageEventFromHook(prompt("/code-review"), repo(sess({ origin: "discovered" })))).toBeNull();
+  });
+  it("only a word starting with review counts: preview does not", () => {
+    expect(stageEventFromHook(agent("Add preview pane"), repo(sess({ ticketKey: "BTL-1" })))).toBeNull();
+    expect(stageEventFromHook(agent("Review task 3"), repo(sess({ ticketKey: "BTL-1" })))).not.toBeNull();
+    expect(stageEventFromHook(agent(undefined, "code-reviewer"), repo(sess({ ticketKey: "BTL-1" })))).not.toBeNull();
+  });
+  it("the skill event carries the session's git branch", () => {
+    expect(stageEventFromHook(skill("code-review"), repo(sess({ ticketKey: "BTL-1", gitBranch: "feature/BTL-1" })))?.event.branch).toBe("feature/BTL-1");
+    expect(stageEventFromHook(skill("code-review"), repo(sess({ ticketKey: "BTL-1" })))?.event.branch).toBeNull();
   });
   it("a fix session attributes to its target even when it has a ticket itself", () => {
     const o = stageEventFromHook(skill("code-review"), repo(sess({ ticketKey: "BTL-9", repoId: 1, fixesSession: "t2" }), sess({ id: "t2", ticketKey: "BTL-2", repoId: 9 })));

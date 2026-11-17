@@ -26,7 +26,7 @@ const summary = (over: Partial<FeatureHandoff> = {}): FeatureHandoff => ({
 
 const ok = (structured: unknown, sessionId = "fork-1"): HeadlessOutcome => ({
   ok: true,
-  result: { sessionId, isError: false, subtype: "success", resultText: JSON.stringify(structured), structured, permissionDenials: [], apiErrorStatus: null, costUsd: 0, usage: null, model: null },
+  result: { sessionId, isError: false, subtype: "success", resultText: JSON.stringify(structured), structured, permissionDenials: [], apiErrorStatus: null, costUsd: 0, usage: null, model: null, durationMs: null },
 });
 
 function setup() {
@@ -301,7 +301,7 @@ describe("FeatureSummaryRunner.runNightly", () => {
     addCoordinator("c-1", 30, 1, featureId);
     addCoordinator("c-2", 30, 1, second);
     addCoordinator("c-3", null, 1, idle);
-    setRespond(async () => ({ ok: false, reason: "rate_limited", message: "429", result: null }));
+    setRespond(async () => ({ ok: false, reason: "rate_limited", message: "429", result: null, limit: null, stderr: "" }));
     const batch = await runner.runNightly();
     expect(batch.status).toBe("partial");
     expect(batch.outcomes).toEqual([
@@ -787,7 +787,7 @@ describe("FeatureSummaryRunner.runFromCommand", () => {
     setTicketCandidates(["A-1"]);
     addCoordinator("c-1", 30);
     const old = addSummary(10);
-    setRespond(async () => ({ ok: false, reason: "rate_limited", message: "429", result: null }));
+    setRespond(async () => ({ ok: false, reason: "rate_limited", message: "429", result: null, limit: null, stderr: "" }));
     expect(await runner.runFromCommand(featureId, "c-1")).toEqual({ featureId, status: "skipped", reason: "rate_limited" });
     expect(childRuns).toEqual(["A-1"]);
     expect(featureHandoffs.get(old)?.coversUntil).toBeNull();

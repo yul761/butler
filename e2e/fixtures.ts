@@ -1,6 +1,6 @@
 import { _electron as electron, test as base, expect, type ElectronApplication, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { execFileSync, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, parse, resolve } from "node:path";
 import { S, type UiStrings } from "../src/renderer/src/strings";
@@ -25,6 +25,60 @@ export interface Sandbox {
   lang: "zh" | "en" | null;
   /** 这个测试额外传给 Butler 的环境变量（比如调短活动监视的间隔）。 */
   env: Record<string, string>;
+  /** 假 gh 的 fixture 文件；null：这个沙盒没有 gh（makeSandbox 没给 gh）。 */
+  ghFixture: string | null;
+  /** 假 gh 的调用记录：每行一次调用的参数（JSON 数组）。 */
+  ghLog: string;
+  /** 换掉假 gh 的 fixture（假 gh 每次调用都重新读）；沙盒还没有 gh 就装上，下次启动 Butler 时生效。 */
+  setGh(fixture: FakeGhFixture): void;
+  /**
+   * 假 claude 复盘分析的模式（ok、fail、limit:<秒级时间戳>，见 fake-claude.cjs）：写进模式文件，假 claude 每次分析都重新读，测试中途可以改。
+   * 同时把 FAKE_CLAUDE_LESSONS_FILE 设进 s.env：env 在启动 Butler 时才传过去，所以第一次要在启动之前调；之后整个换掉 s.env 会把它丢掉。
+   */
+  lessonsMode(mode: string): void;
+}
+
+/** gh pr list --head <分支> --state all --json … 的一项（gh 的字段名）。 */
+export interface BranchPrFixture {
+  number: number;
+  url: string;
+  state: "OPEN" | "MERGED" | "CLOSED";
+  headRefName: string;
+  createdAt: string | null;
+  mergedAt: string | null;
+  closedAt: string | null;
+}
+
+/** gh pr view <链接> --json … 的结果（src/main/tickets/gh.ts 的 PR_FIELDS）。 */
+export interface PrViewFixture extends BranchPrFixture {
+  isDraft: boolean;
+  reviewDecision: string;
+  headRefOid: string;
+  statusCheckRollup: unknown[];
+  author: { login: string };
+  reviews: unknown[];
+  comments: unknown[];
+  commits: unknown[];
+  /** gh pr view <号> 给复盘分析的字段（prLessonData）。 */
+  title?: string;
+  body?: string;
+}
+
+/** 假 gh（e2e/fake-gh/fake-gh.cjs）的数据：branches 按分支名，prs 按 prUrlKey 形式的链接（小写、没有末尾斜杠；gh pr view <号> 取链接以 /pull/<号> 结尾的第一项）。 */
+export interface FakeGhFixture {
+  branches: Record<string, BranchPrFixture[]>;
+  prs: Record<string, PrViewFixture>;
+}
+
+/**
+ * 用假 gh 的测试给仓库设的 origin（makeGitRepo 的第二个参数，slug acme/app）：fixture 里的 PR 链接都在这个仓库。
+ * 不设在沙盒自带的 repo 上：feature、epic 的工作区建在所选上层目录的旁边（<目录>-features），上层目录要是沙盒里的子目录，不能是沙盒本身。
+ */
+export const FAKE_GH_ORIGIN = "https://github.com/acme/app.git";
+
+export interface SandboxOptions {
+  /** 给了就在沙盒的 PATH 里装假 gh。不支持 Windows。 */
+  gh?: FakeGhFixture;
 }
 
 const isWin = process.platform === "win32";
@@ -49,8 +103,8 @@ const NPM_STYLE_SHIM = [
  */
 const FAKE_LOGIN_SHELL = '#!/bin/sh\nfor last; do :; done\nexec /bin/sh -c "$last"\n';
 
-/** 在 path 建一个带一个提交、当前分支为 main 的 git 仓库（目录会被建出来，可以多层）。 */
-export function makeGitRepo(path: string): string {
+/** 在 path 建一个带一个提交、当前分支为 main 的 git 仓库（目录会被建出来，可以多层）；给了 origin 就加上这个 remote（只加，不 fetch）。 */
+export function makeGitRepo(path: string, origin?: string): string {
   mkdirSync(path, { recursive: true });
   const git = (...a: string[]) =>
     execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "-c", "commit.gpgsign=false", ...a], { cwd: path, stdio: "ignore" });
@@ -58,11 +112,22 @@ export function makeGitRepo(path: string): string {
   writeFileSync(join(path, "README.md"), "e2e\n");
   git("add", ".");
   git("commit", "-q", "-m", "init");
+  if (origin) git("remote", "add", "origin", origin);
   return path;
 }
 
-/** 一套全新的临时目录：BUTLER_HOME、CLAUDE_CONFIG_DIR、HOME、TMPDIR、假 claude、假登录 shell、两个各带一个提交的 git 仓库。 */
-function createSandbox(): Sandbox {
+/** 在沙盒的 PATH 目录里装假 gh：和假 claude 一样是写死 node 的 sh 包装（Windows 上 resolveGh 只认 gh.exe，不支持）。 */
+function installFakeGh(dir: string): void {
+  if (isWin) throw new Error("the fake gh is an sh wrapper: not supported on Windows (resolveGh only accepts gh.exe)");
+  const bin = binDir(dir);
+  copyFileSync(join(ROOT, "e2e", "fake-gh", "fake-gh.cjs"), join(bin, "fake-gh.cjs"));
+  const gh = join(bin, "gh");
+  writeFileSync(gh, `#!/bin/sh\nexec "${process.execPath}" "${join(bin, "fake-gh.cjs")}" "$@"\n`);
+  chmodSync(gh, 0o755);
+}
+
+/** 一套全新的临时目录：BUTLER_HOME、CLAUDE_CONFIG_DIR、HOME、TMPDIR、假 claude、假登录 shell、两个各带一个提交的 git 仓库；要 gh 时再加假 gh。 */
+function createSandbox(opts: SandboxOptions = {}): Sandbox {
   for (const f of ["out/main/index.js", "build/memory-mcp/statecore-mcp.cjs", isWin ? "build/hook/butler-hook.exe" : "build/hook/butler-hook"]) {
     if (!existsSync(join(ROOT, f))) throw new Error(`${f} is missing: run pnpm build && pnpm build:hook before pnpm e2e:only`);
   }
@@ -89,7 +154,25 @@ function createSandbox(): Sandbox {
   }
   const repo = makeGitRepo(join(dir, "repo"));
   const apiRepo = makeGitRepo(join(dir, "api"));
-  return { dir, butlerHome, claudeConfigDir, claudePath, repo, apiRepo, fakeLog: join(dir, "fake-claude.log"), lang: "zh", env: {} };
+  const s: Sandbox = {
+    dir, butlerHome, claudeConfigDir, claudePath, repo, apiRepo, fakeLog: join(dir, "fake-claude.log"), lang: "zh", env: {},
+    ghFixture: null,
+    ghLog: join(dir, "fake-gh.log"),
+    setGh(fixture) {
+      if (s.ghFixture === null) {
+        installFakeGh(dir);
+        s.ghFixture = join(dir, "fake-gh.json");
+      }
+      writeFileSync(s.ghFixture, JSON.stringify(fixture, null, 2));
+    },
+    lessonsMode(mode) {
+      const file = join(dir, "fake-claude-lessons");
+      writeFileSync(file, mode);
+      s.env.FAKE_CLAUDE_LESSONS_FILE = file;
+    },
+  };
+  if (opts.gh) s.setGh(opts.gh);
+  return s;
 }
 
 /**
@@ -139,10 +222,26 @@ function sandboxEnv(s: Sandbox): Record<string, string> {
   env.BUTLER_HOME = s.butlerHome;
   env.CLAUDE_CONFIG_DIR = s.claudeConfigDir;
   env.FAKE_CLAUDE_LOG = s.fakeLog;
+  if (s.ghFixture !== null) {
+    env.FAKE_GH_FIXTURE = s.ghFixture;
+    env.FAKE_GH_LOG = s.ghLog;
+  }
   // 窗口在后台打开，不抢焦点（用户反馈 2026-10-28：跑测试时正在别处打字被打断）。
   env.BUTLER_BACKGROUND_WINDOWS = "1";
   if (s.lang) env.BUTLER_LANG = s.lang;
   return { ...env, ...s.env };
+}
+
+/**
+ * 假 gh 不认的调用（fake-gh.cjs 记的 {"unsupported": 参数} 行）的参数。用假 gh 的测试在结尾断言它是空的：
+ * 产品新调了一条假 gh 不认的命令时，测试会失败，而不是把它当成"gh 出错"悄悄吞掉。
+ */
+export function unsupportedGhCalls(s: Sandbox): string[][] {
+  if (!existsSync(s.ghLog)) return [];
+  return readFileSync(s.ghLog, "utf8")
+    .split("\n")
+    .filter((l) => l.startsWith("{"))
+    .map((l) => (JSON.parse(l) as { unsupported: string[] }).unsupported);
 }
 
 /**
@@ -256,11 +355,11 @@ async function teardown(tracker: Tracker, info: TestInfo): Promise<void> {
 
 /**
  * E2E 的 test：spec 从这里 import { test, expect }。
- * - makeSandbox()：建一个新沙盒（一个测试里可以建多个）；
+ * - makeSandbox(opts?)：建一个新沙盒（一个测试里可以建多个）；opts.gh 给了就带假 gh，之后用 s.setGh 换数据；
  * - launch(s)：在沙盒里启动 Butler（同一个沙盒可以先关再启动，测重启）；
  * 测试结束后自动收尾（e2eCleanup 是自动 fixture，不用每个 spec 写 afterEach，也不用 try/finally）。
  */
-export const test = base.extend<{ e2eCleanup: Tracker; makeSandbox: () => Sandbox; launch: (s: Sandbox) => Promise<Launched> }>({
+export const test = base.extend<{ e2eCleanup: Tracker; makeSandbox: (opts?: SandboxOptions) => Sandbox; launch: (s: Sandbox) => Promise<Launched> }>({
   e2eCleanup: [
     // Playwright 要求第一个参数写成解构形式。
     // eslint-disable-next-line no-empty-pattern
@@ -272,8 +371,8 @@ export const test = base.extend<{ e2eCleanup: Tracker; makeSandbox: () => Sandbo
     { auto: true },
   ],
   makeSandbox: async ({ e2eCleanup }, use) => {
-    await use(() => {
-      const s = createSandbox();
+    await use((opts) => {
+      const s = createSandbox(opts);
       e2eCleanup.sandboxes.push(s);
       return s;
     });

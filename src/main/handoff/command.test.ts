@@ -132,6 +132,7 @@ describe("/handoff command for feature coordinators", () => {
       hash: "e1b25b8d150d6a4496b2c2361e31cbe2b17d7c233d7430e8d724b1346aa4e8e8",
       description: ["生成 Butler handoff（当前 ticket 的进度摘要；在 feature 总控里是 feature 汇总）", "生成 Butler handoff（当前 ticket 的进度摘要）"],
       purpose: ["供之后的 session 和记忆使用。", "供 Butler 的早间简报使用。"],
+      urlRule: "- PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。\n",
     },
     en: {
       hash: "d942faeb2ca90337a20ae215bef582b6206c62eb252be0c4ad8d06eb4b6c46f8",
@@ -140,6 +141,7 @@ describe("/handoff command for feature coordinators", () => {
         "Write a Butler handoff (a progress summary of the current ticket)",
       ],
       purpose: ["for later sessions and memory.", "for Butler's morning brief."],
+      urlRule: "- Copy each PR url exactly as gh prints it; never build or guess one.\n",
     },
   } as const;
 
@@ -150,7 +152,8 @@ describe("/handoff command for feature coordinators", () => {
       const current = handoffCommandBody(l);
       expect(current).toContain(featureCoordinatorSection(l));
       const [purposeNow, purposeBefore] = PREVIOUS[l].purpose;
-      const previous = current.replace(featureCoordinatorSection(l), "").replace(now, before).replace(purposeNow, purposeBefore);
+      // 后来加的那句“PR 的 url 照原样复制”也去掉，才是那个版本的正文。
+      const previous = current.replace(featureCoordinatorSection(l), "").replace(now, before).replace(purposeNow, purposeBefore).replace(PREVIOUS[l].urlRule, "");
       expect(commandBodyHash(previous)).toBe(PREVIOUS[l].hash);
       const file = handoffCommandPath(tempDir());
       writeFileSync(file, renderHandoffCommand(previous));

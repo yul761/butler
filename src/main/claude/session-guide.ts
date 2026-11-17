@@ -7,15 +7,15 @@ import type { SessionLesson } from "../../shared/lessons";
 
 /**
  * ticket：ticket session 和修复 session；coordinator：ticket 总控、feature 总控；epic：epic session（BTL-190 第 4 点起单独一种，它开的是 feature 总控）；
- * butler：Butler 总控（BTL-190 第 5 点），只看不建。
+ * butler：Butler 总控（BTL-190 第 5 点），只看不建。lessons：复盘分析 session（看一次复盘运行），没有 Butler 的 MCP 工具，也不会被换新。
  */
-export type GuideKind = "ticket" | "coordinator" | "epic" | "butler";
+export type GuideKind = "ticket" | "coordinator" | "epic" | "butler" | "lessons";
 
 /** 每段一个函数，按语言返回一段文字（返回 null 表示这个 kind 不需要）；后续计划往里加段落。 */
 export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | null> = [
-  // Butler 总控不 push，没有自己的 PR。
+  // Butler 总控和复盘分析 session 不 push，没有自己的 PR。
   (lang, kind) =>
-    kind === "butler"
+    kind === "butler" || kind === "lessons"
       ? null
       : lang === "zh"
       ? "Butler 会在后台盯着你的 PR 和 CI。push 之后不要循环查 CI（不要 gh run watch、gh pr checks --watch、sleep 轮询），直接结束这一轮；CI 跑完后 Butler 会把结果发给你。"
@@ -32,9 +32,9 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : lang === "zh"
         ? "用 start_session 开子 session 时按任务选 model：范围小、目标明确的用 sonnet，需要判断的用 opus，拿不准就用 opus。"
         : "When you open a child session with start_session, pick the model by task: sonnet for small, well-defined work, opus for work that needs judgment, and opus when unsure.",
-  // 「待你决定」和汇报（BTL-190 第 2+3 点）：所有 session 都有 ask_user 和 report；Butler 总控的写在它自己那一段里。
+  // 「待你决定」和汇报（BTL-190 第 2+3 点）：有 butler-sessions 的 session 都有 ask_user 和 report；Butler 总控的写在它自己那一段里，复盘分析 session 没有这些工具。
   (lang, kind) =>
-    kind === "butler"
+    kind === "butler" || kind === "lessons"
       ? null
       : lang === "zh"
       ? "需要用户回答一个具体的问题、做一个决定时，调用 butler-sessions 的 ask_user（问题、可选的几个选项、背景），然后结束这一轮，等回答送进来；" +
@@ -43,7 +43,7 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
         "Do not use it for \"shall I continue?\" or \"anything else?\"; when you are done, just stop. When you finish a piece of work or get blocked, send one line with report (kind done or blocked) and your coordinator will get it; use progress for updates along the way.",
   // 总控和 epic session：子 session 的问题和汇报 Butler 已经处理了。
   (lang, kind) =>
-    kind === "ticket" || kind === "butler"
+    kind === "ticket" || kind === "butler" || kind === "lessons"
       ? null
       : lang === "zh"
         ? "子 session 用 ask_user 提的问题会直接摆在用户面前，不用你再转述一遍；它们 done / blocked 的汇报会在你停下来时自动送到。"
@@ -77,9 +77,11 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : lang === "zh"
         ? "做完自我 review（code-review 这类 skill）以后，用 report（kind 用 progress）一句话说明找到了什么、改了什么；Butler 会把它放进这个 PR 的进度时间线。"
         : "After you finish a self-review (a skill like code-review), send one line with report (kind progress) saying what you found and what you changed; Butler puts it on this PR's progress timeline.",
-  // 换新：所有 session 都可能被换新。
-  (lang) =>
-    lang === "zh"
+  // 换新：复盘分析 session 之外的都可能被换新（它也没有记忆工具）。
+  (lang, kind) =>
+    kind === "lessons"
+      ? null
+      : lang === "zh"
       ? "上下文太长时 Butler 会替你写 handoff、清空、再让你从记忆里接上，这时按它的话做就行。重要的决定和约定随时用 remember 写进记忆。"
       : "Butler may refresh a session whose context grows too long: it writes a handoff for you, clears the session, and has you pick up from memory; just follow what it says. Save important decisions and agreements to memory with remember as you go.",
 ];

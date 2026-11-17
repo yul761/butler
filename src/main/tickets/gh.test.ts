@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, prLessonData, prStatus, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
+import { applyGhResolution, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, prLessonData, prLessonDataDetail, prStatus, prsForBranch, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -96,9 +96,9 @@ describe.skipIf(process.platform === "win32")("prStatus / branchRuns / failedLog
     expect(await prStatus(dir, "feat", 5000)).toEqual({
       number: 5, url: "u", state: "OPEN", isDraft: true, review: "pending", headSha: "abc",
       checks: [{ name: "t", state: "passing", runId: 9 }], ci: "passing",
-      author: "", reviews: [], comments: [], firstCommitAt: null, createdAt: null, mergedAt: null, closedAt: null,
+      headBranch: "", author: "", reviews: [], comments: [], firstCommitAt: null, createdAt: null, mergedAt: null, closedAt: null,
     });
-    expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe("pr view feat --json number,url,state,isDraft,reviewDecision,headRefOid,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt");
+    expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe("pr view feat --json number,url,state,isDraft,reviewDecision,headRefOid,headRefName,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt");
   });
 
   it("prStatus maps empty reviewDecision to null and returns null when there is no PR", async () => {
@@ -233,6 +233,39 @@ describe("gh binary (resolved like git: a GUI app's PATH often lacks Homebrew)",
     expect(ghBinary()).toBe("/usr/local/bin/gh");
   });
 
+  it.skipIf(process.platform === "win32")("ghAvailable is false on macOS when gh is not on PATH and the probe fails", async () => {
+    process.env.PATH = tempDir();
+    applyGhResolution(null, "darwin", () => undefined);
+    expect(ghAvailable()).toBe(false);
+    expect(await probeGh(5000)).toBe(false);
+    expect(ghAvailable()).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("ghAvailable is true after a successful probe, and a new resolution clears the cached probe", async () => {
+    fakeGh("exit 0");
+    applyGhResolution(null, "darwin", () => undefined);
+    expect(ghAvailable()).toBe(false);
+    expect(await probeGh(5000)).toBe(true);
+    expect(ghAvailable()).toBe(true);
+    process.env.PATH = tempDir();
+    applyGhResolution("/opt/homebrew/bin/gh", "darwin", () => undefined);
+    expect(ghBinary()).toBe("/opt/homebrew/bin/gh");
+    expect(ghAvailable()).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("re-applying the same resolution keeps a successful probe", async () => {
+    fakeGh("exit 0");
+    applyGhResolution(null, "darwin", () => undefined);
+    expect(await probeGh(5000)).toBe(true);
+    applyGhResolution(null, "darwin", () => undefined);
+    expect(ghAvailable()).toBe(true);
+  });
+
+  it("ghAvailable is true when a path was found", () => {
+    applyGhResolution("/opt/homebrew/bin/gh", "darwin", () => undefined);
+    expect(ghAvailable()).toBe(true);
+  });
+
   it("on Windows, with no gh found, runs nothing: a bare gh would pick up a gh.exe in the repo (I5)", async () => {
     const logs: string[] = [];
     // PATH 上有一个 gh：真去执行就会留下记录。
@@ -272,6 +305,13 @@ exit 1`);
 });
 
 describe("reviewerKind", () => {
+  it("treats chatgpt-codex-connector and chatgpt-codex-connector[bot] as copilot", () => {
+    expect(reviewerKind("chatgpt-codex-connector", "me")).toBe("copilot");
+    expect(reviewerKind("chatgpt-codex-connector[bot]", "me")).toBe("copilot");
+    expect(reviewerKind("copilot-pull-request-reviewer[bot]", "me")).toBe("copilot");
+    expect(reviewerKind("dependabot[bot]", "me")).toBe("bot");
+  });
+
   it("classifies logins", () => {
     expect(reviewerKind("copilot-pull-request-reviewer", "me")).toBe("copilot");
     expect(reviewerKind("Copilot", "me")).toBe("copilot");
@@ -279,9 +319,63 @@ describe("reviewerKind", () => {
     expect(reviewerKind("github-actions[bot]", "me")).toBe("bot");
     expect(reviewerKind("dependabot", "me")).toBe("bot");
     expect(reviewerKind("alice", "me")).toBe("human");
-    for (const app of ["chatgpt-codex-connector", "CodeRabbitai", "coderabbitai", "gemini-code-assist", "sourcery-ai", "codecov", "sonarcloud", "vercel", "netlify", "github-advanced-security", "cursor"]) {
+    for (const app of ["CodeRabbitai", "coderabbitai", "gemini-code-assist", "sourcery-ai", "codecov", "sonarcloud", "vercel", "netlify", "github-advanced-security", "cursor"]) {
       expect(reviewerKind(app, "me")).toBe("bot");
     }
+  });
+});
+
+describe.skipIf(process.platform === "win32")("per-PR gh additions", () => {
+  it("prsForBranch parses gh pr list and returns [] for an empty list and null on a non-zero exit", async () => {
+    const dir = fakeGh(`echo "$@" > "$(dirname "$0")/args.txt"
+echo '[{"number":3,"url":"https://github.com/o/r/pull/3","state":"MERGED","headRefName":"feat","createdAt":"2026-11-01T00:00:00Z","mergedAt":"2026-11-02T00:00:00Z","closedAt":"2026-11-02T00:00:00Z"},{"number":4,"url":"u4","state":"OPEN","headRefName":"feat","createdAt":"2026-11-03T00:00:00Z","mergedAt":null,"closedAt":null}]'`);
+    const list = await prsForBranch(dir, "feat", 5000);
+    expect(list).toEqual([
+      { number: 3, url: "https://github.com/o/r/pull/3", state: "MERGED", headRefName: "feat", createdAt: Date.parse("2026-11-01T00:00:00Z"), mergedAt: Date.parse("2026-11-02T00:00:00Z"), closedAt: Date.parse("2026-11-02T00:00:00Z") },
+      { number: 4, url: "u4", state: "OPEN", headRefName: "feat", createdAt: Date.parse("2026-11-03T00:00:00Z"), mergedAt: null, closedAt: null },
+    ]);
+    expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe("pr list --head feat --state all --limit 30 --json number,url,state,headRefName,createdAt,mergedAt,closedAt");
+    fakeGh("echo '[]'");
+    expect(await prsForBranch(dir, "feat", 5000)).toEqual([]);
+    fakeGh("exit 1");
+    expect(await prsForBranch(dir, "feat", 5000)).toBeNull();
+  });
+
+  it("prStatus accepts a URL ref and reads headRefName", async () => {
+    const dir = fakeGh(`echo "$@" > "$(dirname "$0")/args.txt"
+echo '{"number":5,"url":"https://github.com/o/r/pull/5","state":"OPEN","isDraft":false,"reviewDecision":"","headRefOid":"abc","headRefName":"feat/x","statusCheckRollup":[]}'`);
+    const s = await prStatus(dir, "https://github.com/o/r/pull/5", 5000);
+    expect(s?.headBranch).toBe("feat/x");
+    expect(readFileSync(join(dir, "args.txt"), "utf8")).toContain("pr view https://github.com/o/r/pull/5 --json");
+  });
+
+  it("reviewComments with a repo sets GH_REPO and GH_HOST for an enterprise slug", async () => {
+    const dir = fakeGh(`echo "GH_REPO=$GH_REPO" >> "$(dirname "$0")/env.txt"
+echo "GH_HOST=$GH_HOST" >> "$(dirname "$0")/env.txt"
+exit 0`);
+    await reviewComments(dir, 5, 5000, "ghe.acme.io/team/app");
+    const env = readFileSync(join(dir, "env.txt"), "utf8");
+    expect(env).toContain("GH_REPO=ghe.acme.io/team/app");
+    expect(env).toContain("GH_HOST=ghe.acme.io");
+  });
+
+  it("failedLog with a repo passes GH_REPO to gh", async () => {
+    const dir = fakeGh(`echo "GH_REPO=$GH_REPO" > "$(dirname "$0")/env.txt"`);
+    await failedLog(dir, 1, 10, 5000, "o/r");
+    expect(readFileSync(join(dir, "env.txt"), "utf8").trim()).toBe("GH_REPO=o/r");
+  });
+
+  it("prsForBranch with a repo passes GH_REPO to gh", async () => {
+    const dir = fakeGh(`echo "GH_REPO=$GH_REPO" > "$(dirname "$0")/env.txt"
+echo '[]'`);
+    expect(await prsForBranch(dir, "feat", 5000, "o/r")).toEqual([]);
+    expect(readFileSync(join(dir, "env.txt"), "utf8").trim()).toBe("GH_REPO=o/r");
+  });
+
+  it("a github.com slug sets GH_HOST=github.com", async () => {
+    const dir = fakeGh(`echo "GH_REPO=$GH_REPO GH_HOST=$GH_HOST" > "$(dirname "$0")/env.txt"`);
+    await reviewAuthors(dir, 5, 5000, "o/r");
+    expect(readFileSync(join(dir, "env.txt"), "utf8").trim()).toBe("GH_REPO=o/r GH_HOST=github.com");
   });
 });
 
@@ -334,6 +428,24 @@ JSON`;
   it("returns null when pr view fails", async () => {
     const dir = fakeGh(script("exit 1"));
     expect(await prLessonData(dir, 5, 5000)).toBeNull();
+  });
+
+  it("prLessonDataDetail returns stderr when pr view fails", async () => {
+    const dir = fakeGh(script(`echo "GraphQL: Could not resolve to a PullRequest with the number of 5." >&2\nexit 1`));
+    expect(await prLessonDataDetail(dir, 5, 5000)).toEqual({ data: null, stderr: "GraphQL: Could not resolve to a PullRequest with the number of 5." });
+  });
+
+  it("prLessonDataDetail returns stderr when the review comments call fails, and data with empty stderr on success", async () => {
+    const failing = fakeGh(`case "$1 $2" in
+"pr view")
+${view}
+;;
+*) echo "HTTP 404: Not Found" >&2; exit 1 ;;
+esac`);
+    expect(await prLessonDataDetail(failing, 5, 5000)).toEqual({ data: null, stderr: "HTTP 404: Not Found" });
+    const ok = await prLessonDataDetail(fakeGh(script(view)), 5, 5000);
+    expect(ok.data?.title).toBe("T");
+    expect(ok.stderr).toBe("");
   });
 });
 
