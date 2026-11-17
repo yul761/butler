@@ -145,11 +145,12 @@ describe("LessonRunner queue", () => {
       s.runner.start();
       await s.runner.idle();
       expect(s.run).toHaveBeenCalledTimes(1);
+      s.advance(RATE_LIMIT_PAUSE_MS - 2000);
       await vi.advanceTimersByTimeAsync(RATE_LIMIT_PAUSE_MS - 2000);
       await s.runner.idle();
       expect(s.run).toHaveBeenCalledTimes(1);
-      s.advance(RATE_LIMIT_PAUSE_MS + 1000);
-      await vi.advanceTimersByTimeAsync(RATE_LIMIT_PAUSE_MS + 1000);
+      s.advance(3000);
+      await vi.advanceTimersByTimeAsync(3000);
       await s.runner.idle();
       expect(s.run).toHaveBeenCalledTimes(2);
       expect(s.statusOf(1).status).toBe("done");
@@ -466,7 +467,6 @@ describe("LessonRunner daily", () => {
     expect(s.gh.mergedPrs.mock.calls[1][1]).toBe(overlapAfter);
     expect(s.run).toHaveBeenCalledTimes(1);
   });
-
 });
 
 describe("LessonRunner merged", () => {

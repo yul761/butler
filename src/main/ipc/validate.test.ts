@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
+import type { LessonAction } from "../../shared/lessons";
 import { apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
@@ -229,7 +230,7 @@ describe("lessonActionArg", () => {
   });
 
   it("every op accepts a valid payload", () => {
-    const valid = [
+    const valid: LessonAction[] = [
       { op: "confirm", id: 1 },
       { op: "confirm", id: 1, text: "t" },
       { op: "reject", id: 1 },

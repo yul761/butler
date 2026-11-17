@@ -49,10 +49,12 @@ describe("sessionLessons", () => {
 
   it("equal rank: lower id first", () => {
     const repo = setup();
-    const a = add(repo, { kind: "repo", slug: "acme/web" }, "first", "confirmed", 10);
-    const b = add(repo, { kind: "repo", slug: "acme/web" }, "second", "confirmed", 10);
+    const pid = repo.createProduct("shop", ["acme/web"], 1);
+    // confirmedFor collects repo lessons before product lessons, so the lower id arrives second
+    const a = add(repo, { kind: "product", productId: pid }, "product-first", "confirmed", 10);
+    const b = add(repo, { kind: "repo", slug: "acme/web" }, "repo-second", "confirmed", 10);
     expect(a).toBeLessThan(b);
-    expect(sessionLessons(repo, identity(), ["/acme_web"]).map((l) => l.text)).toEqual(["first", "second"]);
+    expect(sessionLessons(repo, identity(), ["/acme_web"]).map((l) => l.text)).toEqual(["product-first", "repo-second"]);
   });
 
   it("ignores paths that resolve to no slug, and does not repeat lessons for two paths of one slug", () => {
