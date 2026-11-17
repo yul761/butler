@@ -4,12 +4,13 @@ import { api } from "../api";
 import { reportError } from "../errors";
 import { reasonText, runErrorText, retryAllCount, rowButtons, runCountsText, runSelectable, runStatusPill, TONE_PILL } from "../lesson-runs-view";
 import { S } from "../strings";
+import { LessonRunDetail } from "./LessonRunDetail";
 import { useStateRefetch } from "./useStateRefetch";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 /** 一个仓库的分析记录：每个 PR 一行，带状态、原因、重试和取消。 */
-export function LessonRuns({ slug, selectedRunId, onSelect }: { slug: string; selectedRunId: number | null; onSelect(runId: number | null): void }) {
+export function LessonRuns({ slug, selectedRunId, onSelect, onOpenSession }: { slug: string; selectedRunId: number | null; onSelect(runId: number | null): void; onOpenSession(id: string): void }) {
   const rows = useStateRefetch(`lessons-runs:${slug}`, () => api.lessonsRuns(slug));
   const [error, setError] = useState<string | null>(null);
 
@@ -70,7 +71,16 @@ export function LessonRuns({ slug, selectedRunId, onSelect }: { slug: string; se
           );
         })}
       </ul>
-      {/* 运行详情（Task 11）放在这里：按 selectedRunId 取。 */}
+      {selectedRunId !== null && (
+        <LessonRunDetail
+          runId={selectedRunId}
+          queue={(() => {
+            const q = rows.find((r) => r.lastRun?.id === selectedRunId);
+            return q ? { queueId: q.queueId, status: q.status } : null;
+          })()}
+          onOpenSession={onOpenSession}
+        />
+      )}
     </div>
   );
 }

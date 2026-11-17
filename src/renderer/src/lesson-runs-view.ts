@@ -1,4 +1,4 @@
-import type { LessonQueueRowStatus, LessonQueueRowView, LessonQueueView, LessonRunSummary, LessonScope, LessonSource } from "../../shared/lessons";
+import type { LessonActResult, LessonFinding, LessonQueueRowStatus, LessonRunDetail, LessonQueueRowView, LessonQueueView, LessonRunSummary, LessonScope, LessonSource } from "../../shared/lessons";
 import { resetClock } from "./availability-view";
 import { formatDuration } from "./components/TicketActivity";
 import type { UiStrings } from "./strings";
@@ -73,4 +73,69 @@ export function retryAllCount(rows: LessonQueueRowView[]): number {
 /** 还没开始过的行（没有运行）没有详情可看。 */
 export function runSelectable(r: LessonQueueRowView): boolean {
   return r.lastRun !== null;
+}
+
+const timeText = (ms: number) => new Date(ms).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+/** 详情里的“状态 / 开始 / 用时 / 模型 / 费用 / token / 第几次”；没有值的省略。 */
+export function runDetailFacts(d: LessonRunDetail, S: UiStrings): [label: string, value: string][] {
+  const F = S.lessonRunFact;
+  const label = S.lessonRunStatus[d.status === "aborted" ? "failed" : d.status];
+  const reason = reasonText(d.reason, S);
+  const earlier = d.attempts.filter((a) => a.id < d.id).length;
+  const facts: [string, string | null][] = [
+    [F.status, reason ? `${label} · ${reason}` : label],
+    [F.started, timeText(d.startedAt)],
+    [F.duration, d.durationMs === null ? null : formatDuration(d.durationMs, S)],
+    [F.model, d.model],
+    [F.cost, d.costUsd === null ? null : `$${d.costUsd.toFixed(4)}`],
+    [F.tokens, d.inputTokens === null || d.outputTokens === null ? null : `${d.inputTokens} / ${d.outputTokens}`],
+    [F.attempt, `${earlier + 1} / ${d.attempts.length + 1}`],
+  ];
+  return facts.filter((f): f is [string, string] => f[1] !== null);
+}
+
+/**
+ * 详情里哪些段落要显示。
+ * findings 为 null 时分不出“被截断”还是“格式不对”，所以只是不显示这一段；
+ * 材料和原始输出被清理后（trimmed）显示一句说明代替。
+ */
+export function detailSections(d: LessonRunDetail): {
+  message: string | null;
+  stderr: string | null;
+  ghStderr: string | null;
+  lessons: boolean;
+  dropped: boolean;
+  findings: LessonFinding[] | null;
+  material: string | null;
+  rawOutput: string | null;
+  trimmedNote: boolean;
+  attempts: boolean;
+} {
+  const text = (v: string | null) => (v && v.trim() ? v : null);
+  return {
+    message: text(d.message),
+    stderr: text(d.stderrTail),
+    ghStderr: text(d.ghStderr),
+    lessons: d.lessons.length > 0,
+    dropped: d.dropped > 0,
+    findings: d.findings && d.findings.length > 0 ? d.findings : null,
+    material: text(d.material),
+    rawOutput: text(d.rawOutput),
+    trimmedNote: d.trimmed,
+    attempts: d.attempts.length > 0,
+  };
+}
+
+/** 详情里的按钮：重试/取消只给这个 PR 最近一次运行（有队列项）；清理过的运行没有材料可打开。 */
+export function detailButtons(d: LessonRunDetail, queueStatus: LessonQueueRowStatus | null): Array<"retry" | "cancel" | "open"> {
+  const out: Array<"retry" | "cancel" | "open"> = queueStatus === null ? [] : rowButtons(queueStatus);
+  if (!d.trimmed && d.material !== null) out.push("open");
+  return out;
+}
+
+/** “在 Claude 里打开”的结果：成功就跳到那个 session，失败显示原因。 */
+export function openInClaudeOutcome(r: LessonActResult, S: UiStrings): { kind: "open"; sessionId: string } | { kind: "error"; text: string } | { kind: "none" } {
+  if (!r.ok) return { kind: "error", text: runErrorText(r.reason, S) };
+  return r.sessionId ? { kind: "open", sessionId: r.sessionId } : { kind: "none" };
 }

@@ -11,7 +11,7 @@ import { useStateRefetch } from "./useStateRefetch";
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 /** 只有界面状态放在这里；数据都等 stateChanged 之后重取。 */
-export function LessonsPage() {
+export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void }) {
   const state = useStateRefetch("lessons", api.lessonsState);
   const [sel, setSel] = useState<LessonsSelection | null>(null);
   /** 失败原因，按"那一条"的键存：lesson-<id>、repo-<slug>、product-<id>、product-<id>-repo-<slug>、new-product、suggest-<i>。 */
@@ -183,7 +183,7 @@ export function LessonsPage() {
       return (
         <div className="lessons-detail">
           {tabs}
-          <LessonRuns slug={sel.slug} selectedRunId={selectedRunId} onSelect={setSelectedRunId} />
+          <LessonRuns slug={sel.slug} selectedRunId={selectedRunId} onSelect={setSelectedRunId} onOpenSession={onOpenSession} />
         </div>
       );
     }

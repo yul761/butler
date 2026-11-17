@@ -217,7 +217,7 @@ export function App() {
             {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} onEpicRestored={goEpic} />}
             {route.page === "settings" && <SettingsPage onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "audit" && <AuditPage />}
-            {route.page === "lessons" && <LessonsPage />}
+            {route.page === "lessons" && <LessonsPage onOpenSession={(id) => setRoute({ page: "butler", focusSession: id })} />}
           </>
         )}
       </main>
