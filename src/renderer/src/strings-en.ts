@@ -1,3 +1,4 @@
+import type { AvailabilityView } from "../../shared/availability";
 import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason } from "../../shared/lessons";
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { PrivacyLevel } from "../../shared/llm";
@@ -138,6 +139,19 @@ export const EN: UiStrings = {
   noticeLessonsPaused: "The lessons queue is paused",
   noticeLessonsFailing: (n: number) => `${n} lesson analyses failed in a row`,
   noticeSessionLimited: (title: string, line: string) => `${title}: ${line}`,
+  availabilityTitle: "Claude availability",
+  availabilityStateLabel: "Status",
+  availabilityState: { ok: "OK", limited: "Limited", model_unavailable: "Model unavailable" } satisfies Record<AvailabilityView["state"], string>,
+  availabilityCurrent: "Current",
+  availabilityRetryAt: "Retries at",
+  availabilityLastHit: "Last limit",
+  availabilitySource: (src: "headless" | "session", job: string | null) => `${src === "session" ? "session" : "background"}${job ? ` · ${job}` : ""}`,
+  availabilityLessons: "Lessons queue",
+  availabilityLessonsRunning: "Running",
+  availabilityLessonsPausedUntil: (at: string) => `Paused until ${at}`,
+  availabilityLessonsPausedManual: "Paused by you",
+  availabilityResume: "Resume",
+  availabilityPause: "Pause lessons",
   noticeResume: "Resume",
   noticeRetry: "Retry",
   noticeHealth: "Health",

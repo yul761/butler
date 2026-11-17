@@ -1,4 +1,4 @@
-import type { LimitHit } from "../../shared/availability";
+import type { AvailabilityView, LimitHit } from "../../shared/availability";
 import type { NowNotice } from "../../shared/types";
 import type { UiStrings } from "./strings";
 
@@ -33,4 +33,36 @@ export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: str
       return { text: n.title === null ? line : S.noticeSessionLimited(n.title, line), actions: ["open"] };
     }
   }
+}
+
+export type AvailabilityTone = "ok" | "warn" | "danger" | "muted";
+export type AvailabilityRow = [label: string, value: string, tone: AvailabilityTone];
+
+/** 一次受限：恢复时间已过就只写时钟（不再说「恢复」），否则同 limitLine。 */
+function hitLine(h: LimitHit, S: UiStrings, now: number): string {
+  if (h.resetsAt !== null && h.resetsAt <= now) return `${S.limitKind[h.kind]} · ${resetClock(h.resetsAt, now)}`;
+  return limitLine(h, S, now);
+}
+
+/** 设置 → 健康里「Claude 可用性」的行；没东西可显示的行不出，状态行总在。 */
+export function availabilityRows(v: AvailabilityView, S: UiStrings, now: number): AvailabilityRow[] {
+  const rows: AvailabilityRow[] = [[S.availabilityStateLabel, S.availabilityState[v.state], v.state === "ok" ? "ok" : v.state === "limited" ? "warn" : "danger"]];
+  if (v.current) {
+    const c = v.current;
+    rows.push([S.availabilityCurrent, `${hitLine(c, S, now)} · ${S.availabilitySource(c.source, c.job)} · ${c.message}`, "warn"]);
+  }
+  if (v.retryAt !== null) rows.push([S.availabilityRetryAt, resetClock(v.retryAt, now), "muted"]);
+  if (v.lastHit) rows.push([S.availabilityLastHit, `${S.limitKind[v.lastHit.kind]} · ${resetClock(v.lastHit.at, now)}`, "muted"]);
+  const p = v.lessonsPause;
+  if (p) {
+    rows.push([S.availabilityLessons, p.reason === "manual" ? S.availabilityLessonsPausedManual : S.availabilityLessonsPausedUntil(p.until === null ? "—" : resetClock(p.until, now)), p.reason === "manual" ? "muted" : "warn"]);
+  } else if (v.current) {
+    rows.push([S.availabilityLessons, S.availabilityLessonsRunning, "ok"]);
+  }
+  return rows;
+}
+
+/** 按钮：有暂停或当前受限时能恢复；没手动暂停时能暂停。 */
+export function availabilityButtons(v: AvailabilityView): { resume: boolean; pause: boolean } {
+  return { resume: v.lessonsPause !== null || v.current !== null, pause: v.lessonsPause?.reason !== "manual" };
 }

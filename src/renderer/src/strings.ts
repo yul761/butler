@@ -1,3 +1,4 @@
+import type { AvailabilityView } from "../../shared/availability";
 import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason } from "../../shared/lessons";
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { Lang } from "../../shared/i18n";
@@ -143,6 +144,19 @@ const ZH = {
   noticeLessonsPaused: "复盘队列已手动暂停",
   noticeLessonsFailing: (n: number) => `复盘连续 ${n} 次分析失败`,
   noticeSessionLimited: (title: string, line: string) => `${title}：${line}`,
+  availabilityTitle: "Claude 可用性",
+  availabilityStateLabel: "状态",
+  availabilityState: { ok: "正常", limited: "受限", model_unavailable: "模型不可用" } satisfies Record<AvailabilityView["state"], string>,
+  availabilityCurrent: "当前",
+  availabilityRetryAt: "重试时间",
+  availabilityLastHit: "上次受限",
+  availabilitySource: (src: "headless" | "session", job: string | null) => `${src === "session" ? "会话" : "后台"}${job ? ` · ${job}` : ""}`,
+  availabilityLessons: "复盘队列",
+  availabilityLessonsRunning: "运行中",
+  availabilityLessonsPausedUntil: (at: string) => `暂停到 ${at}`,
+  availabilityLessonsPausedManual: "已手动暂停",
+  availabilityResume: "恢复",
+  availabilityPause: "暂停复盘",
   noticeResume: "恢复",
   noticeRetry: "重试",
   noticeHealth: "查看状态",
