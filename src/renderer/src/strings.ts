@@ -520,6 +520,7 @@ const ZH = {
     bad_url: "出处链接不能打开。",
     same_lesson: "不能和自己合并。",
     not_found: "这条规矩已经不存在了。",
+    product_not_found: "这个产品或仓库已经不存在了。",
     bad_status: "这条规矩的状态变了，不能这样操作。",
   } as Record<string, string>,
   lessonsErrorGeneric: "操作失败。",

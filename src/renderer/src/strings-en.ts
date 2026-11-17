@@ -513,6 +513,7 @@ export const EN: UiStrings = {
     bad_url: "The source link can't be opened.",
     same_lesson: "A lesson can't be merged with itself.",
     not_found: "This lesson no longer exists.",
+    product_not_found: "This product or repo no longer exists.",
     bad_status: "This lesson's status changed, so that action isn't possible.",
   } as Record<string, string>,
   lessonsErrorGeneric: "That didn't work.",

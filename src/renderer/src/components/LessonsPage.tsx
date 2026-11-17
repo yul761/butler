@@ -12,7 +12,7 @@ const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "nume
 export function LessonsPage() {
   const state = useStateRefetch("lessons", api.lessonsState);
   const [sel, setSel] = useState<LessonsSelection | null>(null);
-  /** 失败原因，按"那一条"的键存：lesson-<id>、repo-<slug>、product-<id>、new-product、suggest-<i>。 */
+  /** 失败原因，按"那一条"的键存：lesson-<id>、repo-<slug>、product-<id>、product-<id>-repo-<slug>、new-product、suggest-<i>。 */
   const [errors, setErrors] = useState<Record<string, string>>({});
   /** 正在编辑的规矩：mode 决定保存时是只编辑，还是编辑后确认。 */
   const [editing, setEditing] = useState<{ id: number; mode: "edit" | "confirm"; text: string } | null>(null);

@@ -25,6 +25,7 @@ export interface LessonsServiceDeps {
 export type LessonActResult = { ok: true } | { ok: false; reason: string };
 
 const NOT_FOUND = { ok: false, reason: "not_found" } as const;
+const PRODUCT_NOT_FOUND = { ok: false, reason: "product_not_found" } as const;
 
 /** 复盘规矩页：拼出整页的状态，执行页面上的操作。 */
 export class LessonsService {
@@ -143,15 +144,15 @@ export class LessonsService {
         repo.createProduct(a.name, a.slugs, now);
         return { ok: true };
       case "deleteProduct":
-        if (!repo.product(a.id)) return NOT_FOUND;
+        if (!repo.product(a.id)) return PRODUCT_NOT_FOUND;
         repo.deleteProduct(a.id);
         return { ok: true };
       case "addToProduct":
-        if (!repo.product(a.id) || !repo.repo(a.slug)) return NOT_FOUND;
+        if (!repo.product(a.id) || !repo.repo(a.slug)) return PRODUCT_NOT_FOUND;
         repo.addToProduct(a.id, a.slug);
         return { ok: true };
       case "removeFromProduct":
-        if (!repo.product(a.id)) return NOT_FOUND;
+        if (!repo.product(a.id)) return PRODUCT_NOT_FOUND;
         repo.removeFromProduct(a.id, a.slug);
         return { ok: true };
       case "backfill":
