@@ -37,13 +37,27 @@ type Item = { at: number; event: StageEvent } | { at: number; report: string };
 const firstAt = (events: StageEvent[], kinds: StageEvent["kind"][]): number | null =>
   events.reduce<number | null>((m, e) => (kinds.includes(e.kind) && (m === null || e.at < m) ? e.at : m), null);
 
-/** 合并、关闭但没有事件时补的那一条：PR 行上的时间，不晚于 checkedAt（checkedAt 为 0 时不限）。 */
-const syntheticAt = (at: number | null, checkedAt: number): number => Math.min(at ?? checkedAt, checkedAt || Infinity);
+/**
+ * 合并、关闭但没有事件时补的那一条：PR 行上的时间，不晚于 checkedAt（checkedAt 为 0 = 还没读过，不限）。
+ * 时间不知道（没有 at，checkedAt 也是 0）时用最晚的事件时间，不在 1970 年切一刀。
+ */
+const syntheticAt = (at: number | null, checkedAt: number, latest: number): number =>
+  Math.min(at ?? (checkedAt || latest), checkedAt || Infinity);
 
 export function derivePrStages(i: DeriveInput): DerivedStages {
   const events = i.events.filter((e) => Number.isFinite(e.at));
-  /** 开发开始：第一个 commit 或开 PR，取早的；都没有就是第一个 ci / push，再没有用 ticket 创建时间。 */
-  const devStart = firstAt(events, ["first_commit", "pr_opened"]) ?? firstAt(events, ["ci", "push"]) ?? i.ticketCreatedAt;
+  /** 已知的最晚事件时间，没有事件用 ticket 创建时间：时间不知道时的退路。 */
+  const latest = events.reduce((m, e) => Math.max(m, e.at), events.length ? -Infinity : i.ticketCreatedAt);
+  const hasPr = i.pr !== null || events.some((e) => e.kind === "pr_opened");
+  /**
+   * 开发开始：第一个 commit 或开 PR，取早的；有 PR 时第一个 ci / push 更早也算（没有 pr_opened 事件、first_commit 晚到）。
+   * 都没有就是第一个 ci / push，再没有用 ticket 创建时间。
+   */
+  const commitOrPr = firstAt(events, ["first_commit", "pr_opened"]);
+  const ciOrPush = firstAt(events, ["ci", "push"]);
+  const devStart = commitOrPr !== null && ciOrPush !== null && hasPr
+    ? Math.min(commitOrPr, ciOrPush)
+    : commitOrPr ?? ciOrPush ?? i.ticketCreatedAt;
   // 开发开始时 hook 已经在记 skill 调用，才知道设计、自我 review 是不是跳过了。
   const tracked = i.skillTrackingSince !== null && devStart >= i.skillTrackingSince;
   const untracked: PrStageState = tracked ? "skipped" : "unknown";
@@ -54,7 +68,8 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
   );
   const timeline: PrTimelineEntry[] = [];
   let round = 1;
-  let cur: PrStageId = "design";
+  // 写法避免 TS 把 cur 收窄成 "design"（它只在闭包里改）。
+  let cur = "design" as PrStageId;
   /** PR 现在是关闭的，看到最后一个 closed 事件之后状态不再变（关了又重开的 PR 只记时间线）。 */
   let closed = false;
   /** 看到 merged 事件之后状态也不再变（同一轮里晚到的 ci、review 只进时间线）。 */
@@ -71,19 +86,21 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
 
   const hasCi = events.some((e) => e.kind === "ci");
   const hasHumanReview = events.some((e) => e.kind === "review" && e.data?.who === "human");
+  /** PR 行上的时间不知道时的退路（见 syntheticAt）。 */
+  const rowAt = (at: number | null, checkedAt: number) => syntheticAt(at, checkedAt, latest);
   // 合并、关闭前没被监视的 PR 没有 merged / closed 事件：用 PR 行上的时间补一条，之后的事件照样冻结在外。
-  const synthetic = (kind: "merged" | "closed", at: number, id: number) => {
-    if (i.pr && !events.some((e) => e.kind === kind)) {
+  // since：这个时间或之后已经有这种事件就不补（关了、重开、又关了，第二次关闭没有事件时也补）；null = 有一条就不补。
+  const synthetic = (kind: "merged" | "closed", since: number | null, at: number, id: number) => {
+    if (i.pr && !events.some((e) => e.kind === kind && (since === null || e.at >= since))) {
       events.push({ id, ticketKey: i.ticketKey, repoId: i.repoId, prId: null, branch: i.branch, featureId: i.featureId, epicId: null, sessionId: null, kind, at, data: { number: i.pr.number } });
     }
   };
-  if (i.pr?.state === "merged") synthetic("merged", syntheticAt(i.pr.mergedAt, i.pr.checkedAt), Number.MAX_SAFE_INTEGER);
-  if (i.pr?.state === "closed") synthetic("closed", syntheticAt(i.pr.closedAt, i.pr.checkedAt), Number.MAX_SAFE_INTEGER - 1);
+  if (i.pr?.state === "merged") synthetic("merged", null, rowAt(i.pr.mergedAt, i.pr.checkedAt), Number.MAX_SAFE_INTEGER);
+  if (i.pr?.state === "closed") synthetic("closed", i.pr.closedAt, rowAt(i.pr.closedAt, i.pr.checkedAt), Number.MAX_SAFE_INTEGER - 1);
   /** 冻结的 closed 事件：PR 现在关着时最后一个。 */
   const closing = i.pr?.state === "closed"
     ? events.reduce<StageEvent | null>((m, e) => (e.kind === "closed" && (m === null || e.at >= m.at) ? e : m), null)
     : null;
-  const hasPr = i.pr !== null || events.some((e) => e.kind === "pr_opened");
 
   const cell = (id: PrStageId) => cells.get(id)!;
   const set = (id: PrStageId, state: PrStageState, at: number) => {
@@ -326,10 +343,16 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
 
   // 没有 ci / 人的 review 事件（升级前、回填的 PR）：用 PR 行上最近读到的状态。
   if (i.pr) {
-    const at = endAt ?? i.pr.checkedAt;
+    const at = endAt ?? rowAt(null, i.pr.checkedAt);
     if (!hasCi) {
-      if (i.pr.ci === "passing") set("ci", "done", at);
-      else if (i.pr.ci === "failing") set("ci", "failed", at);
+      if (i.pr.ci === "passing") {
+        set("ci", "done", at);
+        // 停在 CI 这一步（开了 PR）：和 ci 事件一样往评审走；这一轮已经批准过就到合并。
+        if (cur === "ci" && !frozen()) {
+          cur = cell("peer_review").state === "done" ? "merge" : "peer_review";
+          set(cur, "active", at);
+        }
+      } else if (i.pr.ci === "failing") set("ci", "failed", at);
       // 合并、关闭之后不再"进行中"。
       else if (i.pr.ci === "pending" && !frozen() && !PR_STAGES.some((id) => cell(id).state === "active")) set("ci", "active", at);
     }

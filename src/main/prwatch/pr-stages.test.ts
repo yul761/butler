@@ -518,4 +518,53 @@ describe("derivePrStages", () => {
     expect(cell(v, "dev").at).toBe(130);
     expect(v.timeline.map((t) => t.kind)).toEqual(["pr_opened", "ci_pending", "ci_passed", "first_commit"]);
   });
+
+  it("a merged or closed row with no known time is not cut at epoch 0: the end comes after the last event", () => {
+    const history = [ev("first_commit", 120), ci(140, "pending"), ci(150, "passing"), human(160, "APPROVED")];
+    const merged = derive(input({ pr: pr({ number: 7, url: "u", state: "merged", mergedAt: null, checkedAt: 0 }), events: history }));
+    expect(states(merged)).toEqual({ design: "skipped", dev: "done", self_review: "skipped", ci: "done", peer_review: "done", merge: "done" });
+    expect(merged.timeline.at(-1)).toMatchObject({ at: 160, kind: "merged" });
+    expect(cell(merged, "merge").at).toBe(160);
+    const open = derive(input({ events: history }));
+    const closed = derive(input({ pr: pr({ number: 7, url: "u", state: "closed", closedAt: null, checkedAt: 0 }), events: history }));
+    expect(states(closed)).toEqual(states(open));
+    expect(closed.closed).toBe(true);
+    expect(closed.timeline.at(-1)).toMatchObject({ at: 160, kind: "closed" });
+    // 没有事件：用 ticket 创建时间；从 PR 行补的格子时间也不是 0。
+    const bare = derive(input({ pr: pr({ number: 7, url: "u", state: "merged", ci: "passing", mergedAt: null, checkedAt: 0 }) }));
+    expect(bare.timeline.map((t) => [t.at, t.kind])).toEqual([[100, "merged"]]);
+    expect(cell(bare, "ci").at).toBe(100);
+    const openSeed = derive(input({ pr: pr({ number: 7, url: "u", state: "open", ci: "failing", checkedAt: 0 }), events: [ev("first_commit", 120)] }));
+    expect(cell(openSeed, "ci")).toMatchObject({ state: "failed", at: 120 });
+  });
+
+  it("a seeded passing ci on an open PR at the ci step moves the bar on", () => {
+    const row = pr({ number: 7, url: "u", state: "open", ci: "passing", checkedAt: 500 });
+    const v = derive(input({ pr: row, events: [ev("first_commit", 120), ev("pr_opened", 130)] }));
+    expect(states(v)).toMatchObject({ ci: "done", peer_review: "active", merge: "todo" });
+    const approved = derive(input({ pr: row, events: [ev("first_commit", 120), ev("pr_opened", 130), human(140, "APPROVED")] }));
+    expect(states(approved)).toMatchObject({ ci: "done", peer_review: "done", merge: "active" });
+    const seededApproval = derive(input({ pr: { ...row!, review: "approved" }, events: [ev("first_commit", 120), ev("pr_opened", 130)] }));
+    expect(states(seededApproval)).toMatchObject({ ci: "done", peer_review: "done", merge: "active" });
+    // 还在开发：只写 ci 这一格。
+    expect(states(derive(input({ pr: row, events: [ev("first_commit", 120)] })))).toMatchObject({ dev: "active", ci: "done", peer_review: "todo" });
+  });
+
+  it("a late first_commit without a pr_opened event: CI before it still counts on a PR row", () => {
+    const v = derive(input({ events: [ci(140, "pending"), ci(150, "passing"), ev("first_commit", 160)] }));
+    expect(states(v)).toMatchObject({ dev: "done", ci: "done", peer_review: "active" });
+    expect(cell(v, "dev").at).toBe(140);
+    // 没有 PR 的行：开发从第一个 commit 开始。
+    const noPr = derive(input({ pr: null, events: [ev("push", 140), ev("first_commit", 160)] }));
+    expect(cell(noPr, "dev")).toMatchObject({ state: "active", at: 160 });
+  });
+
+  it("closed, reopened and closed again without an event for the second close freezes at closedAt", () => {
+    const v = derive(input({
+      pr: pr({ number: 7, url: "u", state: "closed", closedAt: 170, checkedAt: 500 }),
+      events: [ev("first_commit", 120), ev("pr_opened", 125), ev("closed", 130), ci(140, "pending"), ci(150, "passing"), human(180, "APPROVED")],
+    }));
+    expect(states(v)).toMatchObject({ ci: "done", peer_review: "active", merge: "todo" });
+    expect(v.timeline.filter((t) => t.kind === "closed").map((t) => t.at)).toEqual([130, 170]);
+  });
 });
