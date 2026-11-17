@@ -133,9 +133,10 @@ describe("queue", () => {
     const a = repo.take(200)!;
     const b = repo.take(200)!;
     expect([a.prNumber, b.prNumber]).toEqual([1, 2]);
-    repo.finish(b.id, "failed", 150, "gh down");
+    repo.finish(b.id, "failed", 150, "gh down", { message: "old failure" });
     expect(repo.queueCounts("acme/web")).toEqual({ queued: 1, running: 1, failed: 1, skipped: 0, cancelled: 0 });
     expect(repo.enqueue("acme/web", [2], "backfill", 160)).toBe(0);
+    expect(repo.queueRows("acme/web").find((r) => r.id === b.id)).toMatchObject({ status: "queued", error: null, errorMessage: null });
     expect(repo.queueCounts("acme/web")).toEqual({ queued: 2, running: 1, failed: 0, skipped: 0, cancelled: 0 });
   });
 
@@ -189,21 +190,51 @@ describe("queue", () => {
     const { repo, db } = setup();
     repo.enqueue("acme/web", [1, 2, 3, 4], "daily", 1);
     const [a, b, c] = [repo.take(5)!, repo.take(5)!, repo.take(5)!];
-    repo.finish(a.id, "failed", 6, "boom");
-    repo.finish(b.id, "skipped", 6);
+    repo.finish(a.id, "failed", 6, "boom", { message: "m" });
+    repo.finish(b.id, "skipped", 6, "cancelled", { message: "m" });
     repo.finish(c.id, "failed", 6, "x", { message: "m" });
-    db.prepare(`UPDATE lesson_queue SET not_before = 99 WHERE id = ?`).run(c.id);
+    db.prepare(`UPDATE lesson_queue SET not_before = 99`).run();
     const q = repo.enqueue("acme/web", [5], "daily", 7);
     expect(q).toBe(1);
     expect(repo.cancelQueued(repo.take(8)!.id, 9)).toBe("bad_status");
     expect(repo.retry(a.id, 100)).toBe("ok");
     expect(repo.retry(b.id, 101)).toBe("ok");
     expect(repo.retry(c.id, 102)).toBe("ok");
-    const row = db.prepare(`SELECT status, priority, not_before, error, error_message, enqueued_at FROM lesson_queue WHERE id = ?`).get(a.id);
-    expect(row).toEqual({ status: "queued", priority: 1, not_before: null, error: null, error_message: null, enqueued_at: 100 });
+    for (const [id, at] of [[a.id, 100], [b.id, 101], [c.id, 102]] as const) {
+      const row = db.prepare(`SELECT status, priority, not_before, error, error_message, finished_at, enqueued_at FROM lesson_queue WHERE id = ?`).get(id);
+      expect(row).toEqual({ status: "queued", priority: 1, not_before: null, error: null, error_message: null, finished_at: null, enqueued_at: at });
+    }
     expect(repo.take(200)?.id).toBe(a.id);
     expect(repo.take(200)?.id).toBe(b.id);
     expect(repo.retry(999, 1)).toBe("not_found");
+  });
+
+  it("take zeroes priority: a retried row that was taken and deferred does not jump the queue", () => {
+    const { repo } = setup();
+    repo.enqueue("acme/web", [1, 2], "daily", 1);
+    const a = repo.take(5)!;
+    repo.finish(a.id, "failed", 6, "x");
+    repo.retry(a.id, 50);
+    expect(repo.take(60)?.id).toBe(a.id);
+    repo.defer(a.id, 70);
+    expect(repo.take(80)?.prNumber).toBe(2);
+  });
+
+  it("finish links only its own run; defer keeps the earlier link", () => {
+    const { repo, db } = setup();
+    const runs = new LessonRunsRepo(db);
+    const r1 = runs.start({ queueId: null, slug: "acme/web", prNumber: 1, origin: "daily", startedAt: 1 });
+    repo.enqueue("acme/web", [1], "daily", 1);
+    const a = repo.take(5)!;
+    repo.finish(a.id, "failed", 6, "x", { runId: r1 });
+    expect(repo.queueRows("acme/web")[0]!.lastRunId).toBe(r1);
+    repo.retry(a.id, 7);
+    repo.take(8);
+    repo.defer(a.id, 20);
+    expect(repo.queueRows("acme/web")[0]!.lastRunId).toBe(r1);
+    repo.take(30);
+    repo.finish(a.id, "failed", 31, "gh");
+    expect(repo.queueRows("acme/web")[0]!.lastRunId).toBeNull();
   });
 
   it("retry on a queued row bumps priority", () => {
@@ -250,6 +281,7 @@ describe("queue", () => {
     expect(repo.cancelQueued(row.id, 6)).toBe("bad_status");
     expect(repo.cancelQueued(999, 6)).toBe("not_found");
     expect(repo.retry(row.id, 11)).toBe("ok");
+    expect(repo.queueRows("acme/web")[0]).toMatchObject({ status: "queued", error: null, errorMessage: null, finishedAt: null });
   });
 
   it("queueCounts separates skipped from cancelled and counts running", () => {

@@ -274,7 +274,7 @@ export class LessonsRepo {
          ON CONFLICT (repo_slug, pr_number) DO NOTHING`,
       );
       const retry = this.db.prepare(
-        `UPDATE lesson_queue SET status = 'queued', error = NULL, finished_at = NULL, not_before = NULL
+        `UPDATE lesson_queue SET status = 'queued', error = NULL, error_message = NULL, finished_at = NULL, not_before = NULL
          WHERE repo_slug = ? AND pr_number = ? AND status = 'failed'`,
       );
       let added = 0;
@@ -307,7 +307,7 @@ export class LessonsRepo {
     this.db.prepare(`UPDATE lesson_queue SET attempts = attempts + 1 WHERE id = ?`).run(id);
   }
 
-  /** done 时更新 lesson_repos 的 last_analyzed_at 和 analyzed_count。detail.runId 不给就保留原来的 last_run_id。 */
+  /** done 时更新 lesson_repos 的 last_analyzed_at 和 analyzed_count。last_run_id 只写这次给的 runId，不给就清空，不沿用上一次尝试的。 */
   finish(
     id: number,
     status: "done" | "skipped" | "failed",
@@ -319,7 +319,7 @@ export class LessonsRepo {
       const message = detail?.message == null ? null : capHead(detail.message, RUN_CAPS.message);
       this.db
         .prepare(
-          `UPDATE lesson_queue SET status = ?, error = ?, error_message = ?, last_run_id = COALESCE(?, last_run_id),
+          `UPDATE lesson_queue SET status = ?, error = ?, error_message = ?, last_run_id = ?,
              finished_at = ?, not_before = NULL WHERE id = ?`,
         )
         .run(status, error ?? null, message, detail?.runId ?? null, now, id);
