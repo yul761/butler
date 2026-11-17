@@ -19,6 +19,10 @@ export interface LessonSource {
   prNumber: number;
   url: string | null;
   at: number;
+  /** 出处所在仓库；老数据补不出来时为空。 */
+  slug: string | null;
+  /** 产生这条出处的分析运行；老数据或运行已被清理时为空。 */
+  runId: number | null;
 }
 
 export interface Lesson {

@@ -20,15 +20,26 @@ const setup = () => {
   return { repo, shop, other };
 };
 const seed = (repo: LessonsRepo, status: "confirmed" | "rejected", slug = "acme/web") => {
-  const id = repo.addLesson({ scope: { kind: "repo", slug }, text: "old", why: "w", at: 5, source: { prNumber: 3, url: null } });
+  const id = repo.addLesson({ scope: { kind: "repo", slug }, text: "old", why: "w", at: 5, source: { prNumber: 3, url: null, slug: "acme/web", runId: null } });
   repo.setStatus(id, status, 6);
   return id;
 };
 const PR_URL = "https://github.com/acme/web/pull/7";
 const ALLOWED = new Set(["https://x/7#c1", "u1", "u2"]);
-const apply = (repo: LessonsRepo, ...f: Finding[]) => applyAnalysis(repo, "acme/web", 7, { findings: f }, 100, { allowed: ALLOWED, prUrl: PR_URL });
+const apply = (repo: LessonsRepo, ...f: Finding[]) => applyAnalysis(repo, "acme/web", 7, { findings: f }, 100, { allowed: ALLOWED, prUrl: PR_URL }, null);
 
 describe("applyAnalysis", () => {
+  it("applyAnalysis records run id and slug on new and hit sources", () => {
+    const { repo } = setup();
+    const db = (repo as unknown as { db: import("../db/database").Db }).db;
+    const run = Number(db.prepare(`INSERT INTO lesson_runs (repo_slug, pr_number, origin, status, started_at) VALUES ('acme/web', 7, 'daily', 'running', 1)`).run().lastInsertRowid);
+    const old = seed(repo, "confirmed");
+    applyAnalysis(repo, "acme/web", 7, { findings: [finding({ text: "n" }), finding({ same_as: old })] }, 100, { allowed: ALLOWED, prUrl: PR_URL }, run);
+    const created = repo.lessons().find((l) => l.text === "n")!;
+    expect(created.sources).toMatchObject([{ slug: "acme/web", runId: run }]);
+    expect(repo.get(old)!.sources).toMatchObject([{ runId: null }, { slug: "acme/web", runId: run }]);
+  });
+
   it("new repo rule becomes pending with source PR 7 and the comment url", () => {
     const { repo } = setup();
     expect(apply(repo, finding({}))).toEqual({ created: 1, hit: 0, dropped: 0 });
@@ -79,7 +90,7 @@ describe("applyAnalysis", () => {
   it("same_as pointing at another repo's lesson, or a missing id, creates a new pending lesson", () => {
     const { repo } = setup();
     repo.upsertRepo("other/x", "/o", 1);
-    const foreign = repo.addLesson({ scope: { kind: "repo", slug: "other/x" }, text: "f", why: "w", at: 1, source: { prNumber: 1, url: null } });
+    const foreign = repo.addLesson({ scope: { kind: "repo", slug: "other/x" }, text: "f", why: "w", at: 1, source: { prNumber: 1, url: null, slug: "other/x", runId: null } });
     expect(apply(repo, finding({ same_as: 9999 }), finding({ same_as: foreign }))).toEqual({ created: 2, hit: 0, dropped: 0 });
     expect(repo.get(foreign)?.hits).toBe(1);
     expect(repo.lessons({ scope: { kind: "repo", slug: "acme/web" } })).toHaveLength(2);
@@ -87,7 +98,7 @@ describe("applyAnalysis", () => {
 
   it("same_as a lesson of this repo's product hits it", () => {
     const { repo, shop } = setup();
-    const id = repo.addLesson({ scope: { kind: "product", productId: shop }, text: "p", why: "w", at: 1, source: { prNumber: 1, url: null } });
+    const id = repo.addLesson({ scope: { kind: "product", productId: shop }, text: "p", why: "w", at: 1, source: { prNumber: 1, url: null, slug: "acme/web", runId: null } });
     expect(apply(repo, finding({ same_as: id })).hit).toBe(1);
   });
 

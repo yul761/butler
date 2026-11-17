@@ -24,6 +24,8 @@ export interface LessonsServiceDeps {
 
 export type LessonActResult = { ok: true } | { ok: false; reason: string };
 
+/** LessonRepoView 到 Task 6 才放宽，这里只取 queued/failed，别把别的字段漏出去。 */
+const pickQueue = ({ queued, failed }: { queued: number; failed: number }) => ({ queued, failed });
 const NOT_FOUND = { ok: false, reason: "not_found" } as const;
 const PRODUCT_NOT_FOUND = { ok: false, reason: "product_not_found" } as const;
 
@@ -68,7 +70,7 @@ export class LessonsService {
         localPath: r.localPath,
         lastAnalyzedAt: r.lastAnalyzedAt,
         analyzedCount: r.analyzedCount,
-        ...repo.queueCounts(r.slug),
+        ...pickQueue(repo.queueCounts(r.slug)),
         backfilled: r.backfilledAt !== null,
         overflow: overflowFor(repo, r.slug),
       }))

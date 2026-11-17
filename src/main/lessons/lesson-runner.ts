@@ -277,7 +277,7 @@ export class LessonRunner {
     repo.transaction(() => {
       const allowed = new Set<string>([pr.url]);
       for (const i of items) if (i.url) allowed.add(i.url);
-      applyAnalysis(repo, item.slug, item.prNumber, v.value, this.d.now(), { allowed, prUrl: pr.url });
+      applyAnalysis(repo, item.slug, item.prNumber, v.value, this.d.now(), { allowed, prUrl: pr.url }, null);
       repo.finish(item.id, "done", this.d.now());
     });
   }

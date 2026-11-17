@@ -16,7 +16,7 @@ const setup = () => {
   repo.upsertRepo("acme/api", "/acme_api", 1);
   return repo;
 };
-const src = { prNumber: 1, url: null };
+const src = { prNumber: 1, url: null, slug: "acme/web", runId: null };
 const add = (repo: LessonsRepo, scope: Parameters<LessonsRepo["addLesson"]>[0]["scope"], text: string, status: "confirmed" | "pending" | "disabled" = "confirmed", at = 10) => {
   const id = repo.addLesson({ scope, text, why: "w", at, source: src });
   if (status !== "pending") repo.setStatus(id, status, at);
@@ -32,10 +32,10 @@ describe("sessionLessons", () => {
     for (let i = 0; i < 10; i++) add(repo, { kind: "product", productId: pid }, `prod-${i}`, "confirmed", 50 + i);
     for (let i = 0; i < 3; i++) add(repo, { kind: "repo", slug: "acme/web" }, `pending-${i}`, "pending", 999);
     for (let i = 0; i < 2; i++) add(repo, { kind: "repo", slug: "acme/web" }, `disabled-${i}`, "disabled", 999);
-    for (const id of repo.lessons({ status: ["pending", "disabled"] }).map((l) => l.id)) repo.hit(id, 999, { prNumber: 50 + id, url: null });
+    for (const id of repo.lessons({ status: ["pending", "disabled"] }).map((l) => l.id)) repo.hit(id, 999, { prNumber: 50 + id, url: null, slug: "acme/web", runId: null });
     const top = add(repo, { kind: "product", productId: pid }, "top", "confirmed", 1);
-    repo.hit(top, 1, { prNumber: 2, url: null });
-    repo.hit(top, 1, { prNumber: 3, url: null });
+    repo.hit(top, 1, { prNumber: 2, url: null, slug: "acme/web", runId: null });
+    repo.hit(top, 1, { prNumber: 3, url: null, slug: "acme/web", runId: null });
     const out = sessionLessons(repo, identity(), ["/acme_web", "/acme_api"]);
     expect(out).toHaveLength(30);
     expect(out[0]).toEqual({ label: "shop", text: "top" });

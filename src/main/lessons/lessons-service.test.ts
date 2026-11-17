@@ -5,7 +5,7 @@ import { RepoIdentity } from "./repo-identity";
 import { LessonsService } from "./lessons-service";
 
 const git = (p: string): string | null => (p.startsWith("/none") ? null : `git@github.com:${p.slice(1).replace("_", "/")}.git`);
-const src = { prNumber: 1, url: "https://github.com/acme/web/pull/1" };
+const src = { prNumber: 1, url: "https://github.com/acme/web/pull/1", slug: "acme/web", runId: null };
 
 const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: string) => boolean } = {}) => {
   const exists = over.exists ?? ((p: string) => !p.startsWith("/none") || !p.endsWith(".git"));
@@ -144,11 +144,11 @@ describe("LessonsService.act", () => {
     const good = repo.get(id)!.sources[0]!.id;
     expect(await svc.act({ op: "openSource", sourceId: good })).toEqual({ ok: true });
     expect(openExternal).toHaveBeenCalledWith("https://github.com/acme/web/pull/1");
-    repo.hit(id, 2, { prNumber: 2, url: "javascript:alert(1)" });
+    repo.hit(id, 2, { prNumber: 2, url: "javascript:alert(1)", slug: "acme/web", runId: null });
     const bad = repo.get(id)!.sources.find((s) => s.prNumber === 2)!.id;
     expect(await svc.act({ op: "openSource", sourceId: bad })).toEqual({ ok: false, reason: "bad_url" });
     expect(openExternal).toHaveBeenCalledTimes(1);
-    repo.hit(id, 3, { prNumber: 3, url: "https://evil.example/github.com/x" });
+    repo.hit(id, 3, { prNumber: 3, url: "https://evil.example/github.com/x", slug: "acme/web", runId: null });
     const foreign = repo.get(id)!.sources.find((s) => s.prNumber === 3)!.id;
     expect(await svc.act({ op: "openSource", sourceId: foreign })).toEqual({ ok: false, reason: "bad_url" });
     expect(openExternal).toHaveBeenCalledTimes(1);
@@ -159,7 +159,7 @@ describe("LessonsService.act", () => {
     repo.upsertRepo("ghe.acme.io/t/a", "/ghe", 1);
     const id = add("acme/web");
     const source = (n: number, url: string) => {
-      repo.hit(id, n, { prNumber: n, url });
+      repo.hit(id, n, { prNumber: n, url, slug: "acme/web", runId: null });
       return repo.get(id)!.sources.find((s) => s.prNumber === n)!.id;
     };
     expect(await svc.act({ op: "openSource", sourceId: source(2, "https://ghe.acme.io/t/a/pull/3") })).toEqual({ ok: true });
