@@ -517,8 +517,8 @@ async function bootstrap(): Promise<void> {
       }
       return [...groups.values()].map((g) => [...g]);
     },
-    ghAvailable: () => ghAvailable(), openExternal: (url) => void shell.openExternal(url), now: Date.now, notify: () => notify(),
-    // sessionService 在下面才建好：调用时才用到。
+    ghAvailable: () => ghAvailable(), openExternal: (url) => void shell.openExternal(url), now: Date.now, notify: () => notify(), log: logger,
+    // writeRunFile 写不了会同步抛出：LessonsService 接住，记日志，返回 write_failed。sessionService 在下面才建好：调用时才用到。
     openRun: (d, repoPath) => {
       const file = writeRunFile(paths.lessonsWorkspace, d, currentLang());
       return sessionService.openLessonRun({ runId: d.id, repoPath, file, label: `lesson run ${d.id}` });

@@ -45,13 +45,14 @@ interface Props {
 
 /**
  * 关着的复盘分析 session 和复盘页的「在 Claude 里打开」走同一条路（重写运行记录，接着原来的对话打开，不再发消息）。
- * 打不开时抛出要显示的文字：运行或仓库不在了按 session 不存在报。
+ * 打不开时抛出要显示的文字：只有运行（或仓库）不在了和找不到 claude 有自己的说法，别的（写不了运行记录等）都是通用的失败。
+ * 不用 openErrors：那里的 no_repo、no_ticket 说的是 ticket。
  */
 async function openLessonSession(runId: number): Promise<OpenSessionResult> {
   const r = await api.lessonsAct({ op: "openInClaude", runId });
   if (r.ok && r.sessionId) return { ok: true, termId: r.sessionId, alreadyOpen: false };
-  const reason = r.ok ? "no_session" : r.reason === "not_found" ? "no_session" : r.reason;
-  throw new Error(S.openErrors[reason] ?? S.lessonsErrorGeneric);
+  const reason = r.ok ? null : r.reason;
+  throw new Error(reason === "not_found" ? S.lessonSessionGone : reason === "claude_missing" ? S.openErrors.claude_missing : S.lessonsErrorGeneric);
 }
 
 /**

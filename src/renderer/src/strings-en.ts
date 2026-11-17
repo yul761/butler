@@ -520,6 +520,7 @@ export const EN: UiStrings = {
   lessonsNavCount: (count: number) => `${count} pending`,
   lessonSessionsHeading: "Lesson analysis sessions",
   lessonSession: "Lesson analysis",
+  lessonSessionGone: "This analysis run or its repo no longer exists.",
   audit: "Audit",
   auditStatecore: "StateCore memory distillation",
   auditIntro: "Every call to your personal LLM API (StateCore memory distillation at the full level, plus any records left by earlier versions): exactly what was sent, the response, token counts and cost. Blocked or over-budget requests only record why; nothing was sent for them.",

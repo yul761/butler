@@ -31,8 +31,9 @@ const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: strin
   const gate: { value: LessonsGate } = { value: { paused: false } };
   const availability = { lessonsGate: vi.fn(() => gate.value), pauseLessons: vi.fn(), resumeLessons: vi.fn() };
   const openRun = vi.fn<(d: LessonRunDetail, repoPath: string) => Promise<OpenSessionResult>>(async () => ({ ok: true, termId: "term-1", alreadyOpen: false }));
+  const log = vi.fn();
   const svc = new LessonsService({
-    repo, runs, availability, identity: new RepoIdentity({ git, exists }), runner, openRun,
+    repo, runs, availability, identity: new RepoIdentity({ git, exists }), runner, openRun, log,
     knownRepoPaths: () => over.paths ?? ["/acme_web", "/acme_api", "/none_x"],
     repoGroups: () => over.groups ?? [],
     exists,
@@ -40,7 +41,7 @@ const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: strin
   });
   svc.state();
   const add = (slug: string, text = "t") => repo.addLesson({ scope: { kind: "repo", slug }, text, why: "w", at: 1, source: src });
-  return { repo, runs, svc, openExternal, notify, backfill, add, runner, availability, gate, openRun };
+  return { repo, runs, svc, openExternal, notify, backfill, add, runner, availability, gate, openRun, log };
 };
 
 describe("LessonsService.state", () => {
@@ -360,6 +361,16 @@ describe("LessonsService queue views", () => {
     vi.spyOn(repo, "repo").mockReturnValue(null);
     expect(await svc.act({ op: "openInClaude", runId: id })).toEqual({ ok: false, reason: "not_found" });
     expect(openRun).not.toHaveBeenCalled();
+  });
+
+  it("openInClaude returns ok:false when writing the run file fails", async () => {
+    const { svc, runs, openRun, log } = setup();
+    const id = finishRun(runs, { status: "done", reason: null, finishedAt: 3 });
+    openRun.mockImplementationOnce(() => {
+      throw new Error("EACCES");
+    });
+    expect(await svc.act({ op: "openInClaude", runId: id })).toEqual({ ok: false, reason: "write_failed" });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(`run ${id}`), expect.any(Error));
   });
 
   it("run with unparsable findings returns findings null", () => {

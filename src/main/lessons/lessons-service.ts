@@ -29,6 +29,7 @@ export interface LessonsServiceDeps {
   openExternal: (url: string) => void;
   /** 写好这次运行的记录文件，在复盘分析 session 里打开它（repoPath：这个仓库的本地路径）。 */
   openRun: (d: LessonRunDetail, repoPath: string) => Promise<OpenSessionResult>;
+  log?: (msg: string, err?: unknown) => void;
   now: () => number;
   notify: () => void;
 }
@@ -269,7 +270,14 @@ export class LessonsService {
         const d = this.run(a.runId);
         const local = d ? repo.repo(d.slug)?.localPath : undefined;
         if (!d || !local) return NOT_FOUND;
-        const r = await this.d.openRun(d, local);
+        let r: OpenSessionResult;
+        try {
+          r = await this.d.openRun(d, local);
+        } catch (e) {
+          // 写运行记录（建目录、写文件）失败：按失败返回，不变成 IPC 的异常。
+          this.d.log?.(`lessons: cannot open run ${d.id} in claude`, e);
+          return { ok: false, reason: "write_failed" };
+        }
         return r.ok ? { ok: true, sessionId: r.termId } : { ok: false, reason: r.reason };
       }
       case "openSource": {
