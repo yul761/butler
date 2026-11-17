@@ -76,6 +76,15 @@ const runPill = (page: Page, queueId: number) => runRow(page, queueId).locator("
 const kv = (scope: Locator, term: string) =>
   scope.locator("dt").filter({ hasText: new RegExp(`^${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).locator("xpath=following-sibling::dd[1]");
 
+/** 设置页的滚动容器（.page）滚了多少，以及这一块的顶边离容器顶边多远。 */
+function settingsScroll(block: Locator): Promise<{ scrollTop: number; offset: number }> {
+  return block.evaluate((el) => {
+    const scroller = el.closest(".page");
+    if (!scroller) throw new Error("no .page scroll container");
+    return { scrollTop: scroller.scrollTop, offset: el.getBoundingClientRect().top - scroller.getBoundingClientRect().top };
+  });
+}
+
 /** 展开详情里的一段日志（<details>），返回它的正文。 */
 async function openLog(detail: Locator, testid: string): Promise<Locator> {
   const block = detail.getByTestId(testid);
@@ -137,19 +146,24 @@ test("a usage-limit run pauses the queue and shows the Now notice", async ({ mak
   const hit = { kind: "usage_limit", resetsAt: resetSec * 1000, message: "" } as const;
   await expect(notice.locator("p")).toHaveText(S.noticeLimited(limitLine(hit, S, Date.now()), true));
 
-  // 2. 暂停之后不再起新的分析：最多是开始时同时取走的两个（LESSON_CONCURRENCY），3 秒后还是这么多。
+  // 2. 复盘页：先等两行都不在“分析中”（受限或排队）。开始时两个是同时取走的（LESSON_CONCURRENCY），
+  //    提醒出现时 #8 的假 claude 可能还没读完输入、没写日志；两行都停下来，起过的分析就都已经记进日志了。
+  await openRuns(page);
+  const stopped = new RegExp(`^(${S.lessonRunStatus.limited}|${S.lessonRunStatus.queued})$`);
+  await expect(runPill(page, q7)).toHaveText(stopped);
+  await expect(runPill(page, q8)).toHaveText(stopped);
+  // 队列条写着暂停到几点（恢复时间加一分钟余量），#7 受限。
+  await expect(page.getByTestId("lessons-queue-text")).toContainText(S.lessonQueuePausedUntil(resetClock(resetSec * 1000 + RESUME_SLACK_MS, Date.now()), null));
+  await expect(runPill(page, q7)).toHaveText(S.lessonRunStatus.limited);
+  await expect(runRow(page, q7)).toContainText(S.lessonRunReason.usage_limit);
+
+  // 3. 暂停之后不再起新的分析：最多是开始时同时取走的两个，3 秒后还是这么多。
   const calls = lessonsCalls(s);
   expect(calls.length).toBeGreaterThanOrEqual(1);
   expect(calls.length).toBeLessThanOrEqual(2);
   expect(calls.every((c) => c === `limit:${resetSec}`)).toBe(true);
   await page.waitForTimeout(3000);
   expect(lessonsCalls(s)).toEqual(calls);
-
-  // 3. 复盘页：队列条写着暂停到几点（恢复时间加一分钟余量），#7 受限。
-  await openRuns(page);
-  await expect(page.getByTestId("lessons-queue-text")).toContainText(S.lessonQueuePausedUntil(resetClock(resetSec * 1000 + RESUME_SLACK_MS, Date.now()), null));
-  await expect(runPill(page, q7)).toHaveText(S.lessonRunStatus.limited);
-  await expect(runRow(page, q7)).toContainText(S.lessonRunReason.usage_limit);
 
   // 4. 换成正常回答，在「现在」页点恢复：提醒消失，两个都分析完。
   s.lessonsMode("ok");
@@ -192,10 +206,19 @@ test("a session that hits a limit shows the badge, the notice and the Health ent
   await expect.poll(() => terminalText(page)).toContain("hit your limit");
 
   // 3. 账号受限的提醒（session_limited 只有“打开会话”）点“查看状态”：设置页滚到 Claude 可用性，状态受限，来源是会话。
+  //    这个窗口大小下可用性一块本来就在视口里，光看 toBeInViewport 证明不了滚过：
+  //    看滚动容器（.page）——从侧栏直接进设置页是 0，从提醒跳来要滚到这一块顶边贴着容器顶边。
+  const block = page.getByTestId("claude-availability");
+  await page.locator(".sidebar").getByRole("button", { name: S.settings, exact: true }).click();
+  await expect(block).toBeVisible();
+  const fresh = await settingsScroll(block);
+  expect(fresh.scrollTop).toBe(0);
+  expect(fresh.offset).toBeGreaterThan(50);
   await homeButton(page).click();
   await page.getByTestId("now-notice-claude_limited").getByRole("button", { name: S.noticeHealth, exact: true }).click();
-  const block = page.getByTestId("claude-availability");
   await expect(block).toBeInViewport();
+  await expect.poll(async () => (await settingsScroll(block)).scrollTop).toBeGreaterThan(0);
+  expect(Math.abs((await settingsScroll(block)).offset)).toBeLessThanOrEqual(1);
   await expect(block.locator("h3")).toHaveText(S.availabilityTitle);
   await expect(kv(block, S.availabilityStateLabel)).toHaveText(S.availabilityState.limited);
   await expect(kv(block, S.availabilityCurrent)).toContainText(S.availabilitySource("session", null));
