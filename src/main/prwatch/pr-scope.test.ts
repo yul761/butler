@@ -42,6 +42,11 @@ describe("assignToPrs", () => {
     expect(names(byPr, 25)).toEqual(["plain"]);
   });
 
+  it("a branch no PR is on falls back to all the group's PRs, smallest end first", () => {
+    const prs = [pr(25, 25, 100, 300), pr(30, 30, 150, Infinity, { headBranch: "feature/x" })];
+    expect(names(assignToPrs([item("z", 200, { branch: "zzz" })], prs, repos).byPr, 25)).toEqual(["z"]);
+  });
+
   it("several open PRs: the latest started wins", () => {
     const prs = [pr(1, 1, 100, Infinity, { headBranch: "a" }), pr(2, 2, 200, Infinity, { headBranch: "b" })];
     expect(names(assignToPrs([item("e", 300)], prs, repos).byPr, 2)).toEqual(["e"]);
@@ -66,6 +71,12 @@ describe("assignToPrs", () => {
     expect(names(byPr, 25)).toEqual(["ci"]);
     expect(names(byPr, 26)).toEqual([]);
     expect(noPr.get(1) ?? []).toEqual([]);
+  });
+
+  it("a prId not among the PRs falls through to the time rules", () => {
+    const { byPr } = assignToPrs([item("gone", 320, { prId: 99 })], sequential, repos);
+    expect(names(byPr, 26)).toEqual(["gone"]);
+    expect(byPr.has(99)).toBe(false);
   });
 
   it("an event with a PR number goes to that PR of its repo", () => {

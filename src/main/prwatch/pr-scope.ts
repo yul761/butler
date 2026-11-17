@@ -42,11 +42,17 @@ export function assignToPrs<T extends Scoped>(
   const groups = new Map<number | string, ScopePr[]>(repos.map((r) => [r.id, []]));
   for (const p of prs) {
     const key = p.repoId !== null && repoIds.has(p.repoId) ? p.repoId : `slug:${p.slug}`;
-    groups.set(key, [...(groups.get(key) ?? []), p]);
+    const g = groups.get(key);
+    if (g) g.push(p);
+    else groups.set(key, [p]);
   }
   const byPr = new Map<number, T[]>();
   const noPr = new Map<number, T[]>();
-  const push = <K>(m: Map<K, T[]>, k: K, it: T) => m.set(k, [...(m.get(k) ?? []), it]);
+  const push = <K>(m: Map<K, T[]>, k: K, it: T) => {
+    const bucket = m.get(k);
+    if (bucket) bucket.push(it);
+    else m.set(k, [it]);
+  };
 
   for (const it of items) {
     const own = it.prId === null ? undefined : prs.find((p) => p.id === it.prId);
