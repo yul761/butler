@@ -261,9 +261,11 @@ export class PrWatcher {
       return;
     }
     this.unreadBackoff.delete(p.url);
-    const failed = pr.ci === "failing" ? await this.failedWithLogs(p.cwd, pr.checks, p.slug) : [];
-    const inline = await this.inlineComments(p, pr);
-    const bots = await this.botsOf(p, pr);
+    // 合并了、关闭了的不再取失败日志、行内评论和 review 作者：没人会再看，省下 gh 调用。失败的检查照记（不带日志）。
+    const open = pr.state === "OPEN";
+    const failed = pr.ci !== "failing" ? [] : open ? await this.failedWithLogs(p.cwd, pr.checks, p.slug) : pr.checks.filter((c) => c.state === "failing").map((c) => ({ ...c }));
+    const inline = open ? await this.inlineComments(p, pr) : [];
+    const bots = open ? await this.botsOf(p, pr) : null;
     for (const r of p.rows) this.apply(r, pr, failed, inline, bots, now, marks);
   }
 

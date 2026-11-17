@@ -845,6 +845,23 @@ describe("PrWatcher: stages", () => {
     expect(s.events("pr_opened")).toHaveLength(1);
   });
 
+  it("a merged or closed read fetches no failed logs, inline comments or review authors", async () => {
+    for (const state of ["MERGED", "CLOSED"] as const) {
+      const s = setup();
+      s.link();
+      s.gh.prStatus.mockResolvedValue(
+        pr({ state, mergedAt: state === "MERGED" ? s.now() - 5 : null, closedAt: state === "CLOSED" ? s.now() - 5 : null, ci: "failing", checks: [check("test", "failing", 4)], reviews: [review, copilot] }),
+      );
+      await s.w.check();
+      expect(s.prs.get(1)).toMatchObject({ state: state.toLowerCase(), ci: "failing", failed: [check("test", "failing", 4)] });
+      expect(s.gh.failedLog).not.toHaveBeenCalled();
+      expect(s.gh.reviewComments).not.toHaveBeenCalled();
+      expect(s.gh.reviewAuthors).not.toHaveBeenCalled();
+      // review 照常记。
+      expect(s.events("review").map((e) => e.data.id)).toEqual(["PRR_kwHuman1", "PRR_kwCopilot1"]);
+    }
+  });
+
   it("records merged once when the PR goes from open to merged, at GitHub's time", async () => {
     const s = setup();
     s.link();
