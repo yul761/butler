@@ -54,7 +54,7 @@ export interface LessonRunRow {
   prNumber: number;
   origin: string;
   status: LessonRunStatus;
-  reason: string | null;
+  reason: LessonRunReason | null;
   message: string | null;
   stderrTail: string | null;
   ghStderr: string | null;
@@ -94,7 +94,7 @@ const parse = (s: string | null): unknown | null => {
   }
 };
 const toRow = (r: Row): LessonRunRow => ({
-  id: Number(r.id), queueId: n(r.queue_id), slug: r.repo_slug, prNumber: Number(r.pr_number), origin: r.origin, status: r.status, reason: r.reason,
+  id: Number(r.id), queueId: n(r.queue_id), slug: r.repo_slug, prNumber: Number(r.pr_number), origin: r.origin, status: r.status, reason: r.reason as LessonRunReason | null,
   message: r.message, stderrTail: r.stderr_tail, ghStderr: r.gh_stderr, prTitle: r.pr_title, prUrl: r.pr_url,
   material: r.material, rawOutput: r.raw_output, findings: parse(r.findings_json), trimmed: Number(r.trimmed) === 1,
   created: Number(r.created), hit: Number(r.hit), dropped: Number(r.dropped), model: r.model, costUsd: n(r.cost_usd),
@@ -148,11 +148,11 @@ export class LessonRunsRepo {
   }
 
   /** 最近结束的运行（按 finished_at，新的在前）。 */
-  recentFinished(limit: number): { status: LessonRunStatus; reason: string | null }[] {
+  recentFinished(limit: number): { status: LessonRunStatus; reason: LessonRunReason | null }[] {
     const rows = this.db
       .prepare(`SELECT status, reason FROM lesson_runs WHERE finished_at IS NOT NULL ORDER BY finished_at DESC, id DESC LIMIT ?`)
       .all(limit) as unknown as { status: LessonRunStatus; reason: string | null }[];
-    return rows.map((r) => ({ status: r.status, reason: r.reason }));
+    return rows.map((r) => ({ status: r.status, reason: r.reason as LessonRunReason | null }));
   }
 
   /** 启动时把上次没跑完的记为 aborted / app_quit。返回改了几行。 */

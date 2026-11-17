@@ -86,8 +86,19 @@ describe("LessonRunsRepo", () => {
     mk(runs, 30, { pr: 2 });
     expect(runs.forPr("acme/app", 1).map((r) => r.id)).toEqual([b, a]);
     mk(runs, 5, { finish: false });
-    expect(runs.recentFinished(2)).toEqual([{ status: "done", reason: null }, { status: "done", reason: null }]);
     expect(runs.recentFinished(10)).toHaveLength(3);
+    // finished_at order differs from started_at order: c started last but finished first
+    const x = mk(runs, 100, { finish: false });
+    const y = mk(runs, 200, { finish: false });
+    const z = mk(runs, 300, { finish: false });
+    runs.finish(z, { status: "failed", reason: "timeout", finishedAt: 1000 });
+    runs.finish(x, { status: "aborted", reason: "cancelled", finishedAt: 3000 });
+    runs.finish(y, { status: "failed", reason: "gh", finishedAt: 2000 });
+    expect(runs.recentFinished(3)).toEqual([
+      { status: "aborted", reason: "cancelled" },
+      { status: "failed", reason: "gh" },
+      { status: "failed", reason: "timeout" },
+    ]);
   });
 
   it("prune keeps the newest 3 runs per PR", () => {

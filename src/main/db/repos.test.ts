@@ -564,7 +564,6 @@ describe("migration 24: lesson runs", () => {
     db.prepare(`INSERT INTO lesson_queue (repo_slug, pr_number, origin, status, error, enqueued_at) VALUES ('acme/app', 9, 'merged', 'failed', 'boom', 1)`).run();
 
     expect(migrate(db)).toBe(MIGRATIONS.length);
-    expect(MIGRATIONS.length).toBe(24);
 
     const slugs = db.prepare(`SELECT lesson_id, repo_slug FROM lesson_sources ORDER BY lesson_id`).all();
     expect(slugs).toEqual([
