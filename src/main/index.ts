@@ -107,7 +107,7 @@ import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { openKnownPr } from "./util/github-url";
 import { TicketService } from "./tickets/ticket-service";
-import { applyGhResolution, branchRuns, compareFiles, failedLog, ghBinary, mergedPrs, prInfo, prLessonData, prsForBranch, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
+import { applyGhResolution, branchRuns, ghAvailable, probeGh, compareFiles, failedLog, mergedPrs, prInfo, prLessonData, prsForBranch, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
 import { LessonsRepo } from "./db/lessons-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
 import { readTailLines, TRANSCRIPT_TAIL_BYTES } from "./lessons/tail";
@@ -287,6 +287,7 @@ async function bootstrap(): Promise<void> {
   const ownPath = process.env[pathKey(process.env)] ?? "";
   applyGitResolution(resolveGit(ownPath, process.platform), process.platform, (m) => logger(m));
   applyGhResolution(resolveGh(ownPath, process.platform), process.platform, (m) => logger(m));
+  void probeGh(5000);
   const db = openDatabase(paths.db);
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -342,6 +343,7 @@ async function bootstrap(): Promise<void> {
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       applyGhResolution(resolveGh(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       notify();
+      void probeGh(5000).then(() => notify());
     },
     (e: unknown) => {
       logger("initial health refresh failed", e);
@@ -451,7 +453,7 @@ async function bootstrap(): Promise<void> {
   pruneSessionGuides(paths.mcp, Date.now());
   const lessonRunner = new LessonRunner({
     repo: lessonsRepo, identity: repoIdentity, jobs,
-    gh: { mergedPrs, prLessonData, compareFiles, available: () => ghBinary() !== null },
+    gh: { mergedPrs, prLessonData, compareFiles, available: () => ghAvailable() },
     headless: { ...judgeDeps },
     ticketForBranch: (slug, branch) => tickets.reposByBranch(branch).find((r) => repoIdentity.slugOf(r.repoPath) === slug)?.ticketKey ?? null,
     butlerContext: async (key, wantTranscripts) => {
@@ -501,7 +503,7 @@ async function bootstrap(): Promise<void> {
       }
       return [...groups.values()].map((g) => [...g]);
     },
-    ghAvailable: () => ghBinary() !== null, openExternal: (url) => void shell.openExternal(url), now: Date.now, notify: () => notify(),
+    ghAvailable: () => ghAvailable(), openExternal: (url) => void shell.openExternal(url), now: Date.now, notify: () => notify(),
   });
   /** 开着终端的 Butler session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
   const needsYouHeads = (): NeedsYouHead[] => {

@@ -66,7 +66,7 @@ export class LessonsService {
   }
 
   pendingCount(): number {
-    return this.d.repo.lessons({ status: ["pending"] }).length;
+    return this.d.repo.pendingCount();
   }
 
   async act(a: LessonAction): Promise<LessonActResult> {

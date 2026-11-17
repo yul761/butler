@@ -96,17 +96,21 @@ export class LessonRunner {
   /** checkSchedule 每次调；今天已经跑过就什么都不做。 */
   async daily(): Promise<void> {
     if (this.dailyRunning || !this.d.gh.available()) return;
-    const last = this.d.jobs.get(JOB_LESSONS_DAILY).lastRunAt;
+    const { lastRunAt: last, lastStatus } = this.d.jobs.get(JOB_LESSONS_DAILY);
     const now = this.d.now();
-    if (last !== null && last >= dayStart(localDate(now))) return;
+    if (last !== null && lastStatus === "ok" && last >= dayStart(localDate(now))) return;
     this.dailyRunning = true;
     try {
+      let attempted = 0;
+      let failed = 0;
       for (const row of this.d.repo.repos()) {
         if (row.backfilledAt === null) continue;
+        attempted++;
         try {
           const prs = await this.d.gh.mergedPrs(row.localPath, row.mergedCursor === null ? null : overlapped(row.mergedCursor), BACKFILL_LIMIT, LESSON_GH_TIMEOUT_MS);
           if (prs === null) {
             this.d.log?.(`lessons: daily pull failed for ${row.slug}`);
+            failed++;
             continue;
           }
           this.warnIfTruncated(row.slug, prs);
@@ -117,9 +121,11 @@ export class LessonRunner {
           });
         } catch (e) {
           this.d.log?.(`lessons: daily pull failed for ${row.slug}`, e);
+          failed++;
         }
       }
-      this.d.jobs.record(JOB_LESSONS_DAILY, this.d.now(), "ok", null);
+      if (attempted > 0 && failed === attempted) this.d.jobs.record(JOB_LESSONS_DAILY, this.d.now(), "failed", "all repos failed");
+      else this.d.jobs.record(JOB_LESSONS_DAILY, this.d.now(), "ok", null);
     } finally {
       this.dailyRunning = false;
     }
@@ -180,6 +186,11 @@ export class LessonRunner {
       } catch (e2) {
         this.d.log?.(`lessons: could not mark ${item.slug}#${item.prNumber} failed`, e2);
       }
+    }
+    try {
+      this.d.notify();
+    } catch (e) {
+      this.d.log?.("lessons: notify failed", e);
     }
   }
 
@@ -260,10 +271,5 @@ export class LessonRunner {
       applyAnalysis(repo, item.slug, item.prNumber, v.value, this.d.now(), { allowed, prUrl: pr.url });
       repo.finish(item.id, "done", this.d.now());
     });
-    try {
-      this.d.notify();
-    } catch (e) {
-      this.d.log?.("lessons: notify failed", e);
-    }
   }
 }

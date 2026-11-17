@@ -7,6 +7,8 @@ import { execFile } from "node:child_process";
 let binary: string | null = "gh";
 let resolved = false;
 let warned = false;
+/** probeGh 的缓存结果；null：还没探测过。applyGhResolution 会清掉。 */
+let probed: boolean | null = null;
 
 export function setGhBinary(p: string): void {
   binary = p;
@@ -18,6 +20,7 @@ export function resetGhBinary(): void {
   binary = "gh";
   resolved = false;
   warned = false;
+  probed = null;
 }
 
 /**
@@ -25,6 +28,7 @@ export function resetGhBinary(): void {
  * 其他平台用裸 "gh"；整个进程只警告一次。
  */
 export function applyGhResolution(found: string | null, platform: NodeJS.Platform, log: (msg: string) => void): void {
+  probed = null;
   if (found) {
     setGhBinary(found);
     return;
@@ -39,6 +43,23 @@ export function applyGhResolution(found: string | null, platform: NodeJS.Platfor
 /** null：不能执行 gh（Windows 上没找到）。 */
 export function ghBinary(): string | null {
   return binary;
+}
+
+/** gh 能用：解析到过路径，或者缓存的探测成功了。没解析到时 binary 是裸 "gh"，要靠 probeGh 确认。 */
+export function ghAvailable(): boolean {
+  return binary !== null && (resolved || probed === true);
+}
+
+/** 异步执行 `<gh> --version`，结果缓存到下一次 applyGhResolution。从不抛错。 */
+export function probeGh(timeoutMs: number): Promise<boolean> {
+  const bin = binary;
+  if (bin === null) return Promise.resolve(false);
+  return new Promise((done) => {
+    execFile(bin, ["--version"], { timeout: timeoutMs, windowsHide: true }, (err) => {
+      if (binary === bin) probed = !err;
+      done(!err);
+    });
+  });
 }
 
 export interface PrInfo {

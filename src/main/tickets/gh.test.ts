@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, prLessonData, prStatus, prsForBranch, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
+import { applyGhResolution, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, prLessonData, prStatus, prsForBranch, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -231,6 +231,30 @@ describe("gh binary (resolved like git: a GUI app's PATH often lacks Homebrew)",
     expect(ghBinary()).toBe("/opt/homebrew/bin/gh");
     setGhBinary("/usr/local/bin/gh");
     expect(ghBinary()).toBe("/usr/local/bin/gh");
+  });
+
+  it.skipIf(process.platform === "win32")("ghAvailable is false on macOS when gh is not on PATH and the probe fails", async () => {
+    process.env.PATH = tempDir();
+    applyGhResolution(null, "darwin", () => undefined);
+    expect(ghAvailable()).toBe(false);
+    expect(await probeGh(5000)).toBe(false);
+    expect(ghAvailable()).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("ghAvailable is true after a successful probe, and a new resolution clears the cached probe", async () => {
+    fakeGh("exit 0");
+    applyGhResolution(null, "darwin", () => undefined);
+    expect(ghAvailable()).toBe(false);
+    expect(await probeGh(5000)).toBe(true);
+    expect(ghAvailable()).toBe(true);
+    process.env.PATH = tempDir();
+    applyGhResolution(null, "darwin", () => undefined);
+    expect(ghAvailable()).toBe(false);
+  });
+
+  it("ghAvailable is true when a path was found", () => {
+    applyGhResolution("/opt/homebrew/bin/gh", "darwin", () => undefined);
+    expect(ghAvailable()).toBe(true);
   });
 
   it("on Windows, with no gh found, runs nothing: a bare gh would pick up a gh.exe in the repo (I5)", async () => {

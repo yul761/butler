@@ -223,6 +223,26 @@ describe("LessonRunner queue", () => {
     expect(s.deps.notify).toHaveBeenCalled();
   });
 
+  it("a skipped analysis notifies", async () => {
+    const s = setup();
+    s.gh.prLessonData.mockResolvedValue(prData(1));
+    s.repo.enqueue("acme/web", [1], "merged", T0);
+    s.runner.start();
+    await s.runner.idle();
+    expect(s.statusOf(1).status).toBe("skipped");
+    expect(s.deps.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed analysis notifies", async () => {
+    const s = setup();
+    s.gh.prLessonData.mockResolvedValue(null);
+    s.repo.enqueue("acme/web", [1], "merged", T0);
+    s.runner.start();
+    await s.runner.idle();
+    expect(s.statusOf(1).status).toBe("failed");
+    expect(s.deps.notify).toHaveBeenCalledTimes(1);
+  });
+
   it("puts Butler context into the prompt for a Butler PR", async () => {
     const s = setup();
     s.deps.ticketForBranch = (slug, branch) => (slug === "acme/web" && branch === "b7" ? "BTL-1" : null);
@@ -322,6 +342,20 @@ describe("LessonRunner daily", () => {
     await s.runner.daily();
     expect(s.gh.mergedPrs).toHaveBeenCalledTimes(2);
     expect(s.gh.mergedPrs).toHaveBeenLastCalledWith("/w", "2026-06-10T00:00:00Z", BACKFILL_LIMIT, expect.any(Number));
+  });
+
+  it("daily with every repo failing records failed and runs again on the next call the same day", async () => {
+    const s = setup();
+    s.repo.setBackfilled("acme/web", 1);
+    s.gh.mergedPrs.mockResolvedValue(null);
+    await s.runner.daily();
+    expect(s.jobs.get(JOB_LESSONS_DAILY)).toMatchObject({ lastStatus: "failed", lastError: "all repos failed" });
+    s.gh.mergedPrs.mockResolvedValue([]);
+    await s.runner.daily();
+    expect(s.gh.mergedPrs).toHaveBeenCalledTimes(2);
+    expect(s.jobs.get(JOB_LESSONS_DAILY).lastStatus).toBe("ok");
+    await s.runner.daily();
+    expect(s.gh.mergedPrs).toHaveBeenCalledTimes(2);
   });
 
   it("does not analyze an already analyzed PR again when the overlap returns it", async () => {

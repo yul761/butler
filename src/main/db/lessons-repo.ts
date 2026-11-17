@@ -160,6 +160,10 @@ export class LessonsRepo {
     return rows.map((r) => toLesson(r, this.sourcesOf(Number(r.id))));
   }
 
+  pendingCount(): number {
+    return (this.db.prepare(`SELECT COUNT(*) AS n FROM lessons WHERE status = 'pending'`).get() as { n: number }).n;
+  }
+
   get(id: number): Lesson | null {
     const r = this.db.prepare(`SELECT * FROM lessons WHERE id = ?`).get(id) as unknown as LessonRow | undefined;
     return r ? toLesson(r, this.sourcesOf(id)) : null;

@@ -14,6 +14,16 @@ const src = { prNumber: 7, url: "https://x/7" };
 const add = (repo: LessonsRepo, text = "t", slug = "acme/web") =>
   repo.addLesson({ scope: { kind: "repo", slug }, text, why: "w", at: 10, source: src });
 
+describe("pendingCount", () => {
+  it("pendingCount counts pending lessons only", () => {
+    const { repo } = setup();
+    add(repo);
+    add(repo);
+    repo.setStatus(add(repo), "confirmed", 2);
+    expect(repo.pendingCount()).toBe(2);
+  });
+});
+
 describe("migrations", () => {
   it("user_version equals MIGRATIONS.length", () => {
     const { db } = setup();
