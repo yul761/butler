@@ -1249,7 +1249,8 @@ async function bootstrap(): Promise<void> {
       reports: (key) => inboxRepo.reportsForTicket(key),
       skillTrackingSince: () => skillTrackingSince(settings),
     }),
-    prOpen: (url) => openKnownPr(url, { prs: ticketPrs, openExternal: (u) => void shell.openExternal(u) }),
+    // 允许的主机和 lessons 的 openSource 一样，只认 git remote 认出来的仓库（lessons_repos），不认 ticket_prs 自己的 slug。
+    prOpen: (url) => openKnownPr(url, { prs: ticketPrs, trustedSlugs: () => lessonsRepo.repos().map((r) => r.slug), openExternal: (u) => void shell.openExternal(u) }),
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
     nowView: (merges) => {
       // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
