@@ -453,4 +453,34 @@ export const MIGRATIONS: string[] = [
     WHERE pr_id IS NULL AND kind IN ('pr_opened','push','ci','review','comment','merged','closed');
   DROP TABLE pr_watch;
   `,
+  // 分析运行记录（lesson_runs）、队列的重试/错误信息、规矩出处带仓库和运行、Claude 可用性、session 关联运行。
+  `
+  CREATE TABLE lesson_runs (
+    id INTEGER PRIMARY KEY,
+    queue_id INTEGER REFERENCES lesson_queue(id) ON DELETE SET NULL,
+    repo_slug TEXT NOT NULL REFERENCES lesson_repos(slug) ON DELETE CASCADE,
+    pr_number INTEGER NOT NULL,
+    origin TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running','done','skipped','failed','limited','aborted','cancelled')),
+    reason TEXT, message TEXT, stderr_tail TEXT, gh_stderr TEXT,
+    pr_title TEXT, pr_url TEXT,
+    material TEXT, raw_output TEXT, findings_json TEXT,
+    trimmed INTEGER NOT NULL DEFAULT 0,
+    created INTEGER NOT NULL DEFAULT 0, hit INTEGER NOT NULL DEFAULT 0, dropped INTEGER NOT NULL DEFAULT 0,
+    model TEXT, cost_usd REAL, input_tokens INTEGER, output_tokens INTEGER, duration_ms INTEGER,
+    started_at INTEGER NOT NULL, finished_at INTEGER);
+  CREATE INDEX lesson_runs_pr ON lesson_runs (repo_slug, pr_number, started_at);
+  CREATE INDEX lesson_runs_started ON lesson_runs (started_at);
+  ALTER TABLE lesson_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE lesson_queue ADD COLUMN last_run_id INTEGER REFERENCES lesson_runs(id) ON DELETE SET NULL;
+  ALTER TABLE lesson_queue ADD COLUMN error_message TEXT;
+  ALTER TABLE lesson_queue ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE lesson_sources ADD COLUMN repo_slug TEXT;
+  ALTER TABLE lesson_sources ADD COLUMN run_id INTEGER REFERENCES lesson_runs(id) ON DELETE SET NULL;
+  UPDATE lesson_sources SET repo_slug = (SELECT l.repo_slug FROM lessons l WHERE l.id = lesson_sources.lesson_id);
+  UPDATE lesson_sources SET repo_slug = substr(url, 20, instr(url, '/pull/') - 20)
+    WHERE repo_slug IS NULL AND url LIKE 'https://github.com/%/pull/%';
+  CREATE TABLE claude_availability (id INTEGER PRIMARY KEY CHECK (id = 1), state TEXT NOT NULL, updated_at INTEGER NOT NULL);
+  ALTER TABLE sessions ADD COLUMN lesson_run_id INTEGER REFERENCES lesson_runs(id) ON DELETE SET NULL;
+  `,
 ];

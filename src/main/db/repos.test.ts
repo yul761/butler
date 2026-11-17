@@ -546,3 +546,41 @@ describe("migration 23: pr_watch → ticket_prs / branch_watch", () => {
     expect(db.prepare(`SELECT name FROM sqlite_master WHERE name = 'pr_watch'`).get()).toBeUndefined();
   });
 });
+
+describe("migration 24: lesson runs", () => {
+  it("migration 24 from a v23 database keeps lessons and backfills source slugs", () => {
+    const db = new DatabaseSync(":memory:");
+    for (const sql of MIGRATIONS.slice(0, 23)) db.exec(sql);
+    db.exec("PRAGMA user_version = 23");
+    db.prepare(`INSERT INTO lesson_repos (slug, local_path, created_at) VALUES ('acme/app', '/r/app', 1)`).run();
+    db.prepare(`INSERT INTO lessons (id, repo_slug, text, why, status, last_seen_at, created_at, updated_at) VALUES (1, 'acme/app', 't', 'w', 'confirmed', 1, 1, 1)`).run();
+    db.prepare(`INSERT INTO lesson_products (id, name, created_at) VALUES (1, 'p', 1)`).run();
+    db.prepare(`INSERT INTO lessons (id, product_id, text, why, status, last_seen_at, created_at, updated_at) VALUES (2, 1, 't2', 'w', 'confirmed', 1, 1, 1)`).run();
+    db.prepare(`INSERT INTO lessons (id, product_id, text, why, status, last_seen_at, created_at, updated_at) VALUES (3, 1, 't3', 'w', 'confirmed', 1, 1, 1)`).run();
+    const src = db.prepare(`INSERT INTO lesson_sources (lesson_id, pr_number, url, at) VALUES (?, ?, ?, 1)`);
+    src.run(1, 12, "#12");
+    src.run(2, 12, "https://github.com/acme/app/pull/12#discussion_r1");
+    src.run(3, 3, "https://ghe.acme.io/t/x/pull/3");
+    db.prepare(`INSERT INTO lesson_queue (repo_slug, pr_number, origin, status, error, enqueued_at) VALUES ('acme/app', 9, 'merged', 'failed', 'boom', 1)`).run();
+
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+    expect(MIGRATIONS.length).toBe(24);
+
+    const slugs = db.prepare(`SELECT lesson_id, repo_slug FROM lesson_sources ORDER BY lesson_id`).all();
+    expect(slugs).toEqual([
+      { lesson_id: 1, repo_slug: "acme/app" },
+      { lesson_id: 2, repo_slug: "acme/app" },
+      { lesson_id: 3, repo_slug: null },
+    ]);
+    expect(db.prepare(`SELECT status, attempts, priority FROM lesson_queue`).get()).toEqual({ status: "failed", attempts: 0, priority: 0 });
+    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(MIGRATIONS.length);
+  });
+
+  it("sessions gain lesson_run_id; claude_availability allows one row", () => {
+    const db = memDb();
+    db.prepare(`INSERT INTO sessions (id, cwd, origin, created_at) VALUES ('s', '/w', 'butler', 1)`).run();
+    expect(db.prepare(`SELECT lesson_run_id FROM sessions WHERE id = 's'`).get()).toEqual({ lesson_run_id: null });
+    db.prepare(`INSERT INTO claude_availability (id, state, updated_at) VALUES (1, '{}', 1)`).run();
+    expect(() => db.prepare(`INSERT INTO claude_availability (id, state, updated_at) VALUES (2, '{}', 1)`).run()).toThrow();
+  });
+});

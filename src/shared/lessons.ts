@@ -1,6 +1,16 @@
 /** 每个 session 最多送进去的规矩条数。 */
 export const MAX_SESSION_LESSONS = 30;
 
+/** 运行记录和 headless 失败 message 的字符上限（两处共用）。 */
+export const RUN_MESSAGE_MAX = 4000;
+
+export type LessonRunStatus = "running" | "done" | "skipped" | "failed" | "limited" | "aborted" | "cancelled";
+export type LessonRunReason =
+  | "unknown_repo" | "gh" | "no_review_comments"
+  | "usage_limit" | "rate_limit" | "overloaded" | "model_unavailable"
+  | "timeout" | "spawn_failed" | "exit_nonzero" | "bad_output" | "claude_error" | "claude_missing"
+  | "cancelled" | "app_quit" | "error";
+
 export type LessonStatus = "pending" | "confirmed" | "disabled" | "rejected";
 export type LessonScope = { kind: "repo"; slug: string } | { kind: "product"; productId: number };
 

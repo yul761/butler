@@ -2,6 +2,7 @@ import { execFile, type ChildProcess } from "node:child_process";
 import { pathKey } from "../util/env";
 import { childLaunch, isCmdShim, spawnClaude } from "./launch";
 import type { LimitHit } from "../../shared/availability";
+import { RUN_MESSAGE_MAX } from "../../shared/lessons";
 import { M } from "../strings";
 import { classifyLimit, isPauseKind } from "./limits";
 import { usageCounts, type UsageCounts } from "../usage/usage-parse";
@@ -10,8 +11,8 @@ export const HEADLESS_TIMEOUT_MS = 5 * 60 * 1000;
 const STDOUT_LIMIT = 20 * 1024 * 1024;
 /** 失败结果带回的 stderr 尾部长度。 */
 export const HEADLESS_STDERR_TAIL = 8192;
-/** 失败 message 的上限（和运行记录的 RUN_CAPS.message 一致）。 */
-const MESSAGE_MAX = 4000;
+/** 失败 message 的上限，和运行记录的 RUN_CAPS.message 同一个来源。 */
+const MESSAGE_MAX = RUN_MESSAGE_MAX;
 
 /** handoff 的只读白名单：读文件、查 PR、看 git 历史。tracker MCP 工具由设置追加。 */
 export const READ_ONLY_TOOLS = ["Read", "Grep", "Glob", "Bash(gh pr view:*)", "Bash(gh pr checks:*)", "Bash(git log:*)", "Bash(git status)"];
