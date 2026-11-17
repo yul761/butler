@@ -5,9 +5,10 @@
 //   --version；
 //   pr list --head <分支> --state all …：branches[分支]，没有就是 []；
 //   pr view <链接或分支> --json …：prs[prUrlKey(参数)]，没有就退出 1（--json 的字段不筛，原样输出）；
-//   run list …：[]；
-//   api …：没有输出；
-//   其余一律退出 1。
+//   run list --branch <分支> …：[]；
+//   api repos/{owner}/{repo}/pulls/<n>/comments 和 …/pulls/<n>/reviews：没有输出（行内评论、review 列表都是空的）；
+//   其余一律退出 1，并往 FAKE_GH_LOG 追加一行 {"unsupported": 参数}：测试结束时 unsupportedGhCalls 会把它们找出来，
+//   免得产品调了假 gh 不认的命令却被当成"gh 出错"悄悄吞掉。
 "use strict";
 const fs = require("node:fs");
 
@@ -25,10 +26,18 @@ const fixture = () => {
   return { branches: f.branches ?? {}, prs: f.prs ?? {} };
 };
 const out = (v) => process.stdout.write(`${JSON.stringify(v)}\n`);
-const fail = (msg) => {
+/** fixture 里没有：和真 gh 一样退出 1，是正常结果，不记 unsupported。 */
+const notFound = (msg) => {
   process.stderr.write(`fake gh: ${msg}\n`);
   process.exit(1);
 };
+/** 假 gh 不认的调用：记一行 unsupported，再退出 1。 */
+const unsupported = () => {
+  if (process.env.FAKE_GH_LOG) fs.appendFileSync(process.env.FAKE_GH_LOG, `${JSON.stringify({ unsupported: args })}\n`);
+  process.stderr.write(`fake gh: unsupported: ${args.join(" ")}\n`);
+  process.exit(1);
+};
+const API_PULL = /^repos\/\{owner\}\/\{repo\}\/pulls\/\d+\/(comments|reviews)$/;
 
 const [cmd, sub, ref] = args;
 if (cmd === "--version") {
@@ -37,12 +46,12 @@ if (cmd === "--version") {
   out(fixture().branches[flag("--head")] ?? []);
 } else if (cmd === "pr" && sub === "view" && ref !== undefined && !ref.startsWith("-") && args.includes("--json")) {
   const pr = fixture().prs[prUrlKey(ref)];
-  if (!pr) fail(`no pull requests found for ${ref}`);
+  if (!pr) notFound(`no pull requests found for ${ref}`);
   out(pr);
-} else if (cmd === "run" && sub === "list") {
+} else if (cmd === "run" && sub === "list" && flag("--branch") !== undefined) {
   out([]);
-} else if (cmd === "api") {
+} else if (cmd === "api" && API_PULL.test(sub ?? "")) {
   // 行内评论、review 列表：没有。
 } else {
-  fail(`unsupported: ${args.join(" ")}`);
+  unsupported();
 }

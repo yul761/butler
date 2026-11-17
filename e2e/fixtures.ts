@@ -1,6 +1,6 @@
 import { _electron as electron, test as base, expect, type ElectronApplication, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { execFileSync, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, parse, resolve } from "node:path";
 import { S, type UiStrings } from "../src/renderer/src/strings";
@@ -217,6 +217,18 @@ function sandboxEnv(s: Sandbox): Record<string, string> {
   env.BUTLER_BACKGROUND_WINDOWS = "1";
   if (s.lang) env.BUTLER_LANG = s.lang;
   return { ...env, ...s.env };
+}
+
+/**
+ * 假 gh 不认的调用（fake-gh.cjs 记的 {"unsupported": 参数} 行）的参数。用假 gh 的测试在结尾断言它是空的：
+ * 产品新调了一条假 gh 不认的命令时，测试会失败，而不是把它当成"gh 出错"悄悄吞掉。
+ */
+export function unsupportedGhCalls(s: Sandbox): string[][] {
+  if (!existsSync(s.ghLog)) return [];
+  return readFileSync(s.ghLog, "utf8")
+    .split("\n")
+    .filter((l) => l.startsWith("{"))
+    .map((l) => (JSON.parse(l) as { unsupported: string[] }).unsupported);
 }
 
 /**

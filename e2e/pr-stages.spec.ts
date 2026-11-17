@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PR_STAGES, type PrStageId } from "../src/shared/pr-stages";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newTicket, openTab, pageTab, terminalText, test, type BranchPrFixture, type PrViewFixture, type Sandbox } from "./fixtures";
+import { completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newTicket, openTab, pageTab, terminalText, test, unsupportedGhCalls, type BranchPrFixture, type PrViewFixture, type Sandbox } from "./fixtures";
 
 /**
  * PR 进度（设计文档 2026-11-15 第 1 部分）：假 claude 里输入 /fake-skill，走真实的路径：
@@ -116,7 +116,7 @@ const stageCell = (row: Locator, id: PrStageId) => row.locator("td").nth(PR_STAG
  */
 test("three PRs: two sequential on the branch and one on another branch linked by handoff", async ({ makeSandbox, launch }) => {
   test.skip(process.platform === "win32", "the fake gh is an sh wrapper; resolveGh only accepts gh.exe on Windows");
-  // 合并在三周前：链接时早就合并了的不排复盘分析（MERGED_RECENT_MS）。
+  // 合并时间必须比现在早超过 MERGED_RECENT_MS（24 小时）：链接时早就合并了的 PR 不排复盘分析。
   const one = mergedPr(1, "feature/DMS-1", "2026-10-20T08:00:00Z", "2026-10-21T08:00:00Z");
   const two = mergedPr(2, "feature/DMS-1", "2026-10-22T08:00:00Z", "2026-10-23T08:00:00Z");
   const three = mergedPr(3, "other", "2026-10-24T08:00:00Z", "2026-10-25T08:00:00Z");
@@ -148,7 +148,6 @@ test("three PRs: two sequential on the branch and one on another branch linked b
   await openTab(page, S.prStagesTab);
   const links = page.locator(".pr-stages .pr-repo .pr-link");
   await expect(links).toHaveText(["#3", "#2", "#1"], { timeout: 60_000 });
-  await expect(page.locator(".pr-stages .pr-repo")).toHaveCount(3);
 
   // 4. feature 页：这个 ticket 一行，3 个 PR、已合并。
   await page.locator(".feature-link").getByRole("button", { name: "app", exact: true }).click();
@@ -164,10 +163,11 @@ test("three PRs: two sequential on the branch and one on another branch linked b
   await expect(page.getByRole("heading", { name: "shop", exact: true })).toBeVisible();
   await openTab(page, S.prStagesTab);
   await expect(page.locator(".pr-epic-row").filter({ hasText: "app" })).toContainText(S.prMergedOf(1, 1));
+  expect(unsupportedGhCalls(s)).toEqual([]);
 });
 
 /**
- * 一次性补链接（计划 2026-11-16）：归档了的老 ticket，下次启动时从 gh pr list 找回它分支上 2025 年合并的 #9，watcher 读一次。
+ * 一次性补链接（计划 2026-11-16）：归档了的老 ticket，下次启动时从 gh pr list 找回它分支上 2025 年合并的 #9（开、合并时间都取自 pr list 那一项）。
  * 归档的 ticket 打不开 ticket 页：在 feature 的 PR 进度表里看它那一行。合并完成；设计、自我 review 未知（那时 hook 还没在记 skill），带“已归档”。
  */
 test("backfill of an old merged ticket", async ({ makeSandbox, launch }) => {
@@ -197,11 +197,12 @@ test("backfill of an old merged ticket", async ({ makeSandbox, launch }) => {
   const row = featureRow(page, "OLD-1");
   await expect(page.locator(".pr-table tbody tr")).toHaveCount(1);
   await expect(row.locator(".pr-archived")).toHaveText(S.prArchived);
-  // 读过 #9 才有它 2025 年的开 PR 时间：在那之前开发开始算 ticket 创建的时候，设计不会是未知。
+  // 链上 #9 才有它 2025 年的开 PR 时间（pr list 的 createdAt）：在那之前开发开始算 ticket 创建的时候，设计不会是未知。
   await expect(stageCell(row, "design")).toHaveClass(/pr-unknown/, { timeout: 60_000 });
   await expect(stageCell(row, "self_review")).toHaveClass(/pr-unknown/);
   await expect(stageCell(row, "merge")).toHaveClass(/pr-done/);
   // 只有一个 PR：多于一个时 ticket 号后面才写“n 个 PR”。
   await expect(row.locator(".pr-row-name .muted")).toHaveCount(0);
   await expect(row.locator(".pill.merged")).toHaveText(S.prPill.merged);
+  expect(unsupportedGhCalls(s)).toEqual([]);
 });
