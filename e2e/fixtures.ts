@@ -31,6 +31,11 @@ export interface Sandbox {
   ghLog: string;
   /** 换掉假 gh 的 fixture（假 gh 每次调用都重新读）；沙盒还没有 gh 就装上，下次启动 Butler 时生效。 */
   setGh(fixture: FakeGhFixture): void;
+  /**
+   * 假 claude 复盘分析的模式（ok、fail、limit:<秒级时间戳>，见 fake-claude.cjs）：写进模式文件，假 claude 每次分析都重新读，测试中途可以改。
+   * 同时把 FAKE_CLAUDE_LESSONS_FILE 设进 s.env：env 在启动 Butler 时才传过去，所以第一次要在启动之前调；之后整个换掉 s.env 会把它丢掉。
+   */
+  lessonsMode(mode: string): void;
 }
 
 /** gh pr list --head <分支> --state all --json … 的一项（gh 的字段名）。 */
@@ -54,9 +59,12 @@ export interface PrViewFixture extends BranchPrFixture {
   reviews: unknown[];
   comments: unknown[];
   commits: unknown[];
+  /** gh pr view <号> 给复盘分析的字段（prLessonData）。 */
+  title?: string;
+  body?: string;
 }
 
-/** 假 gh（e2e/fake-gh/fake-gh.cjs）的数据：branches 按分支名，prs 按 prUrlKey 形式的链接（小写、没有末尾斜杠）。 */
+/** 假 gh（e2e/fake-gh/fake-gh.cjs）的数据：branches 按分支名，prs 按 prUrlKey 形式的链接（小写、没有末尾斜杠；gh pr view <号> 取链接以 /pull/<号> 结尾的第一项）。 */
 export interface FakeGhFixture {
   branches: Record<string, BranchPrFixture[]>;
   prs: Record<string, PrViewFixture>;
@@ -156,6 +164,11 @@ function createSandbox(opts: SandboxOptions = {}): Sandbox {
         s.ghFixture = join(dir, "fake-gh.json");
       }
       writeFileSync(s.ghFixture, JSON.stringify(fixture, null, 2));
+    },
+    lessonsMode(mode) {
+      const file = join(dir, "fake-claude-lessons");
+      writeFileSync(file, mode);
+      s.env.FAKE_CLAUDE_LESSONS_FILE = file;
     },
   };
   if (opts.gh) s.setGh(opts.gh);
