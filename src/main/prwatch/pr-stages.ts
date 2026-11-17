@@ -1,4 +1,7 @@
 // PR 进度：把存下来的原始事件推导成六步进度条和时间线。纯函数，宁可"跳过"/"未知"，也不给错的状态。
+// peer review 跟 GitHub 一样看每个人的立场（最近一条批准或要求修改）：批准跨 push、跨 CI 轮次一直有效，
+// 直到被撤销或被 CHANGES_REQUESTED 取代；push 不撤销批准，也不撤销修改请求。
+// 有人的修改请求还在时，别人的批准不算（peer review 保持失败）；这时合并了，peer review 显示失败，不是跳过。
 import type { StageEvent } from "../db/pr-stage-repo";
 import type { WatchedPr } from "../../shared/types";
 import {
@@ -80,7 +83,7 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
   let endAt: number | null = null;
   /** 每条 review（按 id）最近的状态；DISMISSED 要看它撤销的是哪一种。 */
   const reviewState = new Map<string, string>();
-  /** 每个人当前的立场：最近一条不是 COMMENTED / PENDING 的 review；它被撤销就没有立场。 */
+  /** 每个人（没有 login 时按 review id）当前的立场：最近一条不是 COMMENTED / PENDING 的 review；它被撤销就没有立场。 */
   const stance = new Map<string, { id: string | null; state: "APPROVED" | "CHANGES_REQUESTED" }>();
   const standing = (st: string) => [...stance.values()].some((v) => v.state === st);
 
@@ -226,8 +229,10 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
         if (back) {
           round += 1;
           set("dev", "active", at);
+          // 批准跨 push 有效：还有人批准、没有人要求修改时，peer review 保持完成，带进新一轮。
+          const keepApproval = standing("APPROVED") && !standing("CHANGES_REQUESTED");
           for (const id of ["self_review", "ci", "peer_review", "merge"] as const) {
-            set(id, "todo", at);
+            if (id !== "peer_review" || !keepApproval) set(id, "todo", at);
             cell(id).round = round;
           }
           cur = "dev";
@@ -246,17 +251,37 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
         } else if (who === "human") {
           const login = str(d.author);
           const rid = idOf(d.id);
+          // 没有 login 的 review 各算一个人，不互相覆盖。
+          const key = login ?? `review:${rid}`;
           const earlier = rid === null ? undefined : reviewState.get(rid);
           if (rid !== null && state !== "PENDING") reviewState.set(rid, state);
+          /** 有人的修改请求还在：批准不算，peer review 失败、合并不在进行中。 */
+          const changesStand = () => {
+            set("peer_review", "failed", at);
+            if (cell("merge").state === "active") set("merge", "todo", at);
+          };
+          /**
+           * 批准算数：peer review 完成。前面还有一步在进行或失败（通常是 CI 在跑或挂了）时只记批准，
+           * 当前停在最早的那一步，等 CI 通过再进入合并。
+           */
+          const approvalCounts = () => {
+            set("peer_review", "done", at);
+            if (!beforeReviewOpen()) {
+              set("merge", "active", at);
+              cur = "merge";
+            } else cur = PR_STAGES.find((id) => cell(id).state === "active" || cell(id).state === "failed") ?? cur;
+          };
           if (state === "DISMISSED") {
-            if (stance.get(login ?? "")?.id === rid) stance.delete(login ?? "");
+            if (stance.get(key)?.id === rid) stance.delete(key);
             if (!frozen() && (earlier === "APPROVED" || earlier === "CHANGES_REQUESTED")) {
               if (standing("CHANGES_REQUESTED")) {
                 // 还有别人的修改请求在：批准不算，回到失败。
-                set("peer_review", "failed", at);
-                if (cell("merge").state === "active") set("merge", "todo", at);
+                changesStand();
                 cur = "peer_review";
-              } else if (!standing("APPROVED")) {
+              } else if (standing("APPROVED")) {
+                // 撤销的是挡着的修改请求，别人的批准还在：批准算数（已经算了就不动）。
+                if (cell("peer_review").state !== "done") approvalCounts();
+              } else {
                 if (beforeReviewOpen()) {
                   // 前面还有一步在进行或失败（CI 还在跑）：评审等它走完，当前停在最早的那一步。
                   set("peer_review", "todo", at);
@@ -270,22 +295,20 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
             }
             log(at, "peer_review", "human_dismissed", login);
           } else if (state === "CHANGES_REQUESTED") {
-            stance.set(login ?? "", { id: rid, state });
+            stance.set(key, { id: rid, state });
             if (!frozen()) {
-              set("peer_review", "failed", at);
-              if (cell("merge").state === "active") set("merge", "todo", at);
+              changesStand();
               cur = "peer_review";
             }
             log(at, "peer_review", "human_changes", login);
           } else if (state === "APPROVED") {
-            stance.set(login ?? "", { id: rid, state });
+            stance.set(key, { id: rid, state });
             if (!frozen()) {
-              set("peer_review", "done", at);
-              // 前面还有一步在进行或失败（通常是 CI 在跑或挂了）：只记批准，等 CI 通过再进入合并。
-              if (!beforeReviewOpen()) {
-                set("merge", "active", at);
-                cur = "merge";
-              }
+              if (standing("CHANGES_REQUESTED")) {
+                // 别人的修改请求还在（push 也不撤销它）：这条批准不算。前面还有一步在进行时进度不动。
+                changesStand();
+                if (!beforeReviewOpen()) cur = "peer_review";
+              } else approvalCounts();
             }
             log(at, "peer_review", "human_approved", login);
           } else if (state === "COMMENTED") {
@@ -302,7 +325,9 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
           if (devStarted) finishDev(at);
           // 剩下没做的：观察过就是跳过，没观察过就是未知。
           const none: PrStageState = observed ? "skipped" : "unknown";
-          if (cell("peer_review").state !== "done") set("peer_review", none, at);
+          // 有人的修改请求还在就合并了：peer review 失败，不是跳过。
+          if (standing("CHANGES_REQUESTED")) set("peer_review", "failed", at);
+          else if (cell("peer_review").state !== "done") set("peer_review", none, at);
           set("merge", "done", at);
           for (const id of PR_STAGES) {
             const s = cell(id).state;

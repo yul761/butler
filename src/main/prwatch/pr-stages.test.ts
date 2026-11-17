@@ -260,7 +260,8 @@ describe("derivePrStages", () => {
     const failed = derive(input({ events: [...base, ci(150, "failing")] }));
     expect(states(failed)).toMatchObject({ ci: "failed", peer_review: "done", merge: "todo" });
     const back = derive(input({ events: [...base, ci(150, "failing"), ev("push", 160)] }));
-    expect(states(back)).toMatchObject({ dev: "active", ci: "todo", peer_review: "todo", merge: "todo" });
+    // 批准跨 push 有效：peer review 保持完成，带进第 2 轮。
+    expect(states(back)).toMatchObject({ dev: "active", ci: "todo", peer_review: "done", merge: "todo" });
     expect(cell(back, "dev").round).toBe(2);
   });
 
@@ -381,15 +382,66 @@ describe("derivePrStages", () => {
     expect(cell(v, "self_review").state).toBe("active");
   });
 
-  it("an approval after failed CI keeps the approval but stays on CI; the fix push starts round 2", () => {
+  it("an approval after failed CI keeps the approval but stays on CI; the fix push starts round 2 with the approval carried", () => {
     const events = [ev("first_commit", 120), ci(140, "pending"), ci(150, "failing"), human(160, "APPROVED")];
     const v = derive(input({ events }));
     expect(cell(v, "ci").state).toBe("failed");
     expect(cell(v, "peer_review").state).toBe("done");
     expect(cell(v, "merge").state).toBe("todo");
     const v2 = derive(input({ events: [...events, ev("push", 170, { sha: "s170" })] }));
-    expect(cell(v2, "dev").state).toBe("active");
-    expect(cell(v2, "dev").round).toBe(2);
+    expect(cell(v2, "dev")).toMatchObject({ state: "active", round: 2 });
+    // 批准跟 GitHub 一样跨 push 有效：带进新一轮。
+    expect(cell(v2, "peer_review")).toMatchObject({ state: "done", round: 2 });
+    expect(states(v2)).toMatchObject({ self_review: "todo", ci: "todo", merge: "todo" });
+    // 新一轮 CI 通过直接到合并。
+    const v3 = derive(input({ events: [...events, ev("push", 170, { sha: "s170" }), ci(180, "pending"), ci(190, "passing")] }));
+    expect(states(v3)).toMatchObject({ ci: "done", peer_review: "done", merge: "active" });
+  });
+
+  describe("review stances", () => {
+    const passed = [ev("first_commit", 120), ci(140, "pending"), ci(150, "passing")];
+    const noLogin = (at: number, state: string, id: string) => ev("review", at, { id, who: "human", state, body: "" });
+
+    it("alice requests changes, bob approves: peer review stays failed", () => {
+      const v = derive(input({ events: [...passed, human(160, "CHANGES_REQUESTED"), human(170, "APPROVED", "bob")] }));
+      expect(cell(v, "peer_review").state).toBe("failed");
+      expect(cell(v, "merge").state).toBe("todo");
+      expect(v.timeline.at(-1)).toMatchObject({ kind: "human_approved", detail: "bob" });
+    });
+
+    it("changes requested then push: peer review resets to todo", () => {
+      const evs = [...passed, human(160, "CHANGES_REQUESTED"), ev("push", 170, { sha: "s2" })];
+      const pushed = derive(input({ events: evs }));
+      expect(cell(pushed, "dev")).toMatchObject({ state: "active", round: 2 });
+      expect(cell(pushed, "peer_review")).toMatchObject({ state: "todo", round: 2 });
+      // push 不撤销修改请求：之后别人的批准不算。
+      const approved = derive(input({ events: [...evs, human(180, "APPROVED", "bob")] }));
+      expect(cell(approved, "peer_review").state).toBe("failed");
+      expect(cell(approved, "merge").state).not.toBe("active");
+      const merged = derive(input({ events: [...evs, human(180, "APPROVED", "bob"), ev("merged", 190, { number: 7 })] }));
+      expect(states(merged)).toMatchObject({ peer_review: "failed", merge: "done" });
+    });
+
+    it("merged with a standing change request: peer review failed, merge done", () => {
+      const v = derive(input({ events: [...passed, human(160, "CHANGES_REQUESTED"), ev("merged", 170, { number: 7 })] }));
+      expect(states(v)).toMatchObject({ ci: "done", peer_review: "failed", merge: "done" });
+    });
+
+    it("two reviews without login do not overwrite each other", () => {
+      const approvals = derive(input({ events: [...passed, noLogin(160, "APPROVED", "r1"), noLogin(165, "APPROVED", "r2"), noLogin(170, "DISMISSED", "r2")] }));
+      expect(states(approvals)).toMatchObject({ peer_review: "done", merge: "active" });
+      const mixed = derive(input({ events: [...passed, noLogin(160, "CHANGES_REQUESTED", "r1"), noLogin(165, "APPROVED", "r2")] }));
+      expect(cell(mixed, "peer_review").state).toBe("failed");
+    });
+
+    it("dismissing the standing change request lets the other approval count", () => {
+      const v = derive(input({ events: [...passed, humanId(160, "CHANGES_REQUESTED", "r1"), humanId(170, "APPROVED", "r2", "bob"), humanId(180, "DISMISSED", "r1")] }));
+      expect(states(v)).toMatchObject({ peer_review: "done", merge: "active" });
+      // CI 还在跑时撤销：批准算数，CI 仍是进行中的那一步，通过后到合并。
+      const running = [ev("first_commit", 120), ci(140, "pending"), humanId(145, "CHANGES_REQUESTED", "r1"), humanId(146, "APPROVED", "r2", "bob"), humanId(147, "DISMISSED", "r1")];
+      expect(states(derive(input({ events: running })))).toMatchObject({ ci: "active", peer_review: "done", merge: "todo" });
+      expect(states(derive(input({ events: [...running, ci(150, "passing")] })))).toMatchObject({ ci: "done", peer_review: "done", merge: "active" });
+    });
   });
 
   describe("dismissed reviews", () => {
@@ -456,8 +508,12 @@ describe("derivePrStages", () => {
       const common = [ev("first_commit", 120), ci(140, "pending"), ci(150, "passing"), humanId(160, "CHANGES_REQUESTED", "r1")];
       const later = [ev("push", 200, { sha: "x" }), ci(210, "pending"), ci(220, "passing"), humanId(230, "APPROVED", "r2", "bob")];
       const before = derive(input({ events: [...common, ...later] }));
+      // alice 的修改请求跨 push 还在：bob 的批准不算。
+      expect(states(before)).toMatchObject({ dev: "done", ci: "done", peer_review: "failed", merge: "todo" });
       const v = derive(input({ events: [...common, ...later, humanId(300, "DISMISSED", "r1")] }));
-      expect(states(v)).toEqual(states(before));
+      // 撤销之后 bob 的批准算数；还是第 2 轮，不回退。
+      expect(states(v)).toEqual({ ...states(before), peer_review: "done", merge: "active" });
+      expect(v.stages.filter((s) => s.id !== "design").every((s) => s.round === 2)).toBe(true);
       expect(v.timeline.filter((t) => t.kind === "push")).toEqual(before.timeline.filter((t) => t.kind === "push"));
     });
 

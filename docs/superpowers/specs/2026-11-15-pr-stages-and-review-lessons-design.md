@@ -57,13 +57,13 @@
 | 开发 | 分支上出现第一个比 base 新的 commit | 开始自我 review，或者开了 PR |
 | 自我 review | 调用了 code-review、requesting-code-review、simplify 一类的 skill | 下一次 push（`headSha` 变了），或者开了 PR。没调用过就显示"跳过" |
 | CI | 有 PR、CI 在跑 | CI 通过或失败；失败就回到"开发" |
-| peer review | CI 通过、PR 开着 | 有一个人（不是 PR 作者、不是 bot）的最新 review 是 APPROVED。有人的最新 review 是 CHANGES_REQUESTED 时回到"开发"，下一轮 peer review 记作第 2 轮。没有人批准就合并了，显示"跳过" |
+| peer review | CI 通过、PR 开着 | 有一个人（不是 PR 作者、不是 bot）的最新 review 是 APPROVED。有人的最新 review 是 CHANGES_REQUESTED 时回到"开发"，下一轮 peer review 记作第 2 轮。批准跟 GitHub 一样：an approval stands across pushes and CI rounds until dismissed or superseded by CHANGES_REQUESTED（批准跨 push 和 CI 轮次一直有效，直到被撤销或被 CHANGES_REQUESTED 取代）；有人的修改请求还在时，别人的批准不算。没有人批准就合并了，显示"跳过"；合并时还有人的修改请求在，显示"失败" |
 | 合并 | peer review 结束（批准或跳过） | PR merged；closed 没合并就整条标成"已关闭" |
 
 peer review 不看 `reviewDecision`，看拉回来的 reviews 列表，这样没开"必须 review"的仓库也能判断（我的判断）。Copilot 的 review 不算 peer review（用户把它们当成两件事说），只作为时间线条目出现。
 
 具体规则：
-- **回退和轮数。** CI 失败、peer review 要求修改都会回到"开发"，之后的自我 review、CI、peer review 按新一轮重新走。步骤条显示当前这一轮。轮数大于 1 时，在当前那一步上标"第 N 轮"。
+- **回退和轮数。** CI 失败、peer review 要求修改都会回到"开发"，之后的自我 review、CI、peer review 按新一轮重新走（还在的批准带进新一轮，peer review 不用重做）。步骤条显示当前这一轮。轮数大于 1 时，在当前那一步上标"第 N 轮"。
 - **识别 skill 调用。** 两条来源都要：
   - session 的 `--settings` 内容加一个 `PostToolUse` 的 `Skill` matcher，命令走现有的 butler hook（写信封），不走闸门。按内容 hash 共用文件不影响这件事；和闸门一样，只在 hook 程序是当前版本时写进去，不是当前版本时这两步显示"未知"而不是"跳过"。
   - `UserPromptSubmit` 里，用户输入以 `/skill名` 开头的也算。
