@@ -162,3 +162,26 @@ export interface CostBreakerView {
 }
 
 export type CostResumeResult = { ok: true; cap: number } | { ok: false; reason: "not_found" | "not_tripped" };
+
+/** cost_events 的一行（设置页「最近的熔断」）。 */
+export interface CostEventView {
+  id: number;
+  at: number;
+  subjectKind: CostSubjectKind;
+  subjectId: string;
+  kind: CostEventKind;
+  spent: number | null;
+  cap: number | null;
+  unit: string | null;
+  detail: string | null;
+}
+
+/** 设置页「花费与后台」：这一层的策略、设了覆盖的层、现在的熔断状态、最近的记录。 */
+export interface CostView {
+  policy: CostPolicyView;
+  layers: { scope: PolicyScope; label: string; overrides: CostPolicyOverrides }[];
+  breakers: CostBreakerView[];
+  events: CostEventView[];
+}
+
+export type CostSetResult = { ok: true } | { ok: false; key: string; message: string };

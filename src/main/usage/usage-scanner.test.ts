@@ -27,6 +27,23 @@ function setup(opts: { chunkBytes?: number; ids?: () => string[] } = {}) {
 }
 
 describe("UsageScanner", () => {
+  it("calls onScanned after each full pass, even when a pass fails (workstream L)", async () => {
+    const repo = new UsageRepo(memDb());
+    let calls = 0;
+    let fail = false;
+    const scanner = new UsageScanner({
+      repo, transcriptFile: () => null, onScanned: () => void calls++,
+      sessionIds: () => {
+        if (fail) throw new Error("x");
+        return ["s1"];
+      },
+    });
+    await scanner.scanAll();
+    fail = true;
+    await scanner.scanAll();
+    expect(calls).toBe(2);
+  });
+
   it("records new turns and resumes from the cursor", async () => {
     const { file, scanner, repo } = setup();
     writeFileSync(file("s1"), line("a") + line("b"));

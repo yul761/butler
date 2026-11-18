@@ -496,6 +496,8 @@ export class LessonRunner {
       args: headlessArgs({ schema: toCliJsonSchema(AnalysisSchema), allowedTools: [] }),
       prompt,
       cwd,
+      // 复盘的花费算到这个 ticket 上，熔断停了它的后台调用时这里也停（工作流 L）。
+      ...(ticketKey !== null && { ticketKey }),
     });
     if (!r.ok) {
       this.settleFailure(a, r);

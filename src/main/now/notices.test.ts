@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { AvailabilityHit, AvailabilityView } from "../../shared/availability";
 import type { LessonRunStatus } from "../../shared/lessons";
-import { buildNotices, ciNotices } from "./notices";
+import type { CostBreakerView } from "../../shared/cost";
+import { buildNotices, ciNotices, costNotices } from "./notices";
 
 const hit = (kind: AvailabilityHit["kind"]): AvailabilityHit => ({ kind, resetsAt: 5000, message: "m", at: 1, source: "headless", job: "lessons", sessionId: null });
 const view = (over: Partial<AvailabilityView> = {}): AvailabilityView => ({ state: "ok", current: null, lastHit: null, retryAt: null, lessonsPause: null, ...over });
@@ -60,5 +61,18 @@ describe("ciNotices", () => {
   it("turns each undelivered CI result into a notice that opens its ticket", () => {
     const ci = { item: { kind: "pr" as const, id: 3 }, ticketKey: "T-1", number: 34, branch: "feat/a", reason: "guard:typing" as const, since: 5, sessionId: "s1" };
     expect(ciNotices([ci], (k) => `title of ${k}`)).toEqual([{ kind: "ci_undelivered", ci, title: "title of T-1", target: { page: "ticket", key: "T-1", sessionId: "s1" } }]);
+  });
+});
+
+describe("costNotices (workstream L)", () => {
+  const v = (subjectId: string, state: CostBreakerView["state"], trippedAt: number): CostBreakerView => ({
+    subjectKind: "session", subjectId, sessionId: subjectId, ticketKey: "T-1", title: subjectId, state, spent: 1, cap: 1, unit: "usd",
+    partial: false, pauseScope: "session", fromModel: null, toModel: null, trippedAt, pausedAt: null, stoppedAt: null, takenOver: false,
+  });
+  it("puts paused first and links each to its target", () => {
+    const out = costNotices([v("a", "warned", 1), v("b", "paused", 5), v("c", "downgraded", 2), v("d", "paused", 3)], (b) => (b.subjectId === "a" ? null : { page: "ticket", key: "T-1", sessionId: b.sessionId }));
+    expect(out.map((n) => (n.kind === "cost" ? n.breaker.subjectId : ""))).toEqual(["d", "b", "c", "a"]);
+    expect(out[3]).toMatchObject({ kind: "cost", target: null });
+    expect(out[0]).toMatchObject({ target: { page: "ticket", key: "T-1", sessionId: "d" } });
   });
 });

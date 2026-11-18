@@ -410,6 +410,22 @@ export class SessionsRepo {
   }
 
   /** 沿 replaced_by 链走到最新的 session（/clear、compact 会产生新 id）。 */
+  /** 这个 id 所在链最早的那一段（成本熔断按它记一个 session 的花费，换新、换模型都不变）；不认识为 null。 */
+  rootOf(id: string): string | null {
+    const head = this.head(id);
+    if (!head) return null;
+    const row = this.db
+      .prepare(
+        `WITH RECURSIVE chain(id, depth) AS (
+           SELECT id, 0 FROM sessions WHERE id = ?
+           UNION SELECT s.id, c.depth + 1 FROM sessions s JOIN chain c ON s.replaced_by = c.id
+         )
+         SELECT id FROM chain ORDER BY depth DESC, id LIMIT 1`,
+      )
+      .get(head.id) as { id: string } | undefined;
+    return row?.id ?? head.id;
+  }
+
   head(id: string): Session | null {
     let cur = this.get(id);
     const seen = new Set<string>();

@@ -105,3 +105,6 @@ export interface BackgroundStatusView {
   quota: { level: "ok" | "soft" | "hard"; plentiful: boolean };
   kinds: BgKindStatus[];
 }
+
+/** 设置页上手动停 / 恢复一种后台任务。 */
+export type BackgroundAction = { op: "pauseKind" | "resumeKind"; kind: BgKind };

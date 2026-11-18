@@ -4,7 +4,9 @@ import type { AdmissionPolicyService } from "../lessons/admission-policies";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { ConfigIoFacade } from "../config-io/facade";
 import type { BatchDetail, BatchView } from "../../shared/batches";
-import type { AdmissionPolicyView } from "../../shared/admission-policy";
+import type { AdmissionPolicyView, PolicyScope } from "../../shared/admission-policy";
+import type { BackgroundAction, BackgroundStatusView } from "../../shared/background";
+import type { CostResumeResult, CostSetResult, CostSubjectKind, CostView } from "../../shared/cost";
 import type {
   AdmissionPageState, AdmissionScope, CalibrationAction, CalibrationActResult, CalibrationSample, CalibrationStatsView, RegroupResult, WizardAction, WizardActResult, WizardEstimate,
 } from "../../shared/lesson-admission";
@@ -69,7 +71,7 @@ import { meteredIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg } from "./validate";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -114,6 +116,10 @@ export interface IpcDeps {
   availability: Pick<ClaudeAvailability, "view" | "pauseLessons" | "resumeLessons">;
   /** 模型路由（3.0）：设置页的整份数据和操作；act 返回错误文字，成功为 null。 */
   routing: { view(): RoutingView; act(a: RoutingAction): Promise<string | null> };
+  /** 花费上限和成本熔断（工作流 L）。set 不合法时回错误文字（不抛）。 */
+  cost: { view(scope: PolicyScope): CostView; set(scope: PolicyScope, overrides: unknown): CostSetResult; resume(kind: CostSubjectKind, id: string): Promise<CostResumeResult> };
+  /** 后台调度（工作流 L）。 */
+  background: { status(): BackgroundStatusView; act(a: BackgroundAction): void };
   /** session 撞限后换模型（SessionModelSwitcher）。 */
   switcher: { switch(sessionId: string, model?: string): Promise<SwitchResult>; dismiss(sessionId: string): void; views(): SessionLimitView[] };
   /** 用户在终端里打字（WS-M E：马上恢复优先级）。 */
@@ -500,6 +506,24 @@ export function registerIpc(d: IpcDeps): void {
     const r = await d.routing.act(routingActionArg(raw));
     d.notify();
     return r;
+  });
+  handle(IPC.costView, (raw: unknown): CostView => d.cost.view(policyScopeArg(raw)));
+  handle(IPC.costSet, (raw: unknown): CostSetResult => {
+    const { scope, overrides } = costSetArg(raw);
+    const r = d.cost.set(scope, overrides);
+    d.notify();
+    return r;
+  });
+  handle(IPC.costResume, async (raw: unknown): Promise<CostResumeResult> => {
+    const { subjectKind, subjectId } = costSubjectArg(raw);
+    const r = await d.cost.resume(subjectKind, subjectId);
+    d.notify();
+    return r;
+  });
+  handle(IPC.backgroundStatus, (): BackgroundStatusView => d.background.status());
+  handle(IPC.backgroundAct, (raw: unknown): void => {
+    d.background.act(backgroundActionArg(raw));
+    d.notify();
   });
   handle(IPC.sessionsSwitchModel, async (id: unknown, model: unknown): Promise<SwitchResult> => {
     const r = await d.switcher.switch(sessionIdArg(id), switchModelArg(model));

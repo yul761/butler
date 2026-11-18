@@ -1,4 +1,4 @@
-import type { CostEventKind, CostPauseScope, CostState, CostSubjectKind, CostUnit } from "../../shared/cost";
+import type { CostEventKind, CostEventView, CostPauseScope, CostState, CostSubjectKind, CostUnit } from "../../shared/cost";
 import type { Db } from "./database";
 
 /** 一个 session（链的根 id）或 ticket 的熔断状态。 */
@@ -38,17 +38,7 @@ const toRow = (r: DbRow): CostRow => ({
   takenOverAt: num(r.taken_over_at), updatedAt: Number(r.updated_at),
 });
 
-export interface CostEvent {
-  id: number;
-  at: number;
-  subjectKind: CostSubjectKind;
-  subjectId: string;
-  kind: CostEventKind;
-  spent: number | null;
-  cap: number | null;
-  unit: string | null;
-  detail: string | null;
-}
+export type CostEvent = CostEventView;
 
 /** 成本熔断的状态和记录（工作流 L）。重启以后接着用：暂停的还是暂停。 */
 export class CostRepo {

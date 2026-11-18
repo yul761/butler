@@ -2,6 +2,7 @@ import { checkKeyArg, checkLessonIdArg, checkScopeArg, checksActionArg } from ".
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
+import { backgroundActionArg, costSetArg, costSubjectArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
 import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, progressFilterArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
@@ -453,5 +454,23 @@ describe("admission IPC arguments (workstream D)", () => {
     expect(calibrationActionArg({ op: "mark", lessonId: 2, mark: "good", since: 9 })).toEqual({ op: "mark", lessonId: 2, mark: "good", since: 9 });
     expect(calibrationActionArg({ op: "markCalibrated" })).toEqual({ op: "markCalibrated" });
     for (const bad of [{ op: "mark", lessonId: 2, mark: "great", since: 9 }, { op: "mark", lessonId: 2, mark: "good" }, { op: "other" }]) expect(() => calibrationActionArg(bad)).toThrow();
+  });
+});
+
+describe("cost and background IPC args (workstream L)", () => {
+  it("accepts a cost layer change and a subject, rejects anything else", () => {
+    expect(costSetArg({ scope: { kind: "repo", slug: "acme/web" }, overrides: { sessionCap: 5 } })).toEqual({ scope: { kind: "repo", slug: "acme/web" }, overrides: { sessionCap: 5 } });
+    expect(() => costSetArg({ scope: { kind: "global" }, overrides: [] })).toThrow();
+    expect(() => costSetArg({ scope: { kind: "global" }, overrides: {}, extra: 1 })).toThrow();
+    expect(costSubjectArg({ subjectKind: "ticket", subjectId: "T-1" })).toEqual({ subjectKind: "ticket", subjectId: "T-1" });
+    expect(costSubjectArg({ subjectKind: "session", subjectId: "abc-1" })).toEqual({ subjectKind: "session", subjectId: "abc-1" });
+    expect(() => costSubjectArg({ subjectKind: "session", subjectId: "a b" })).toThrow();
+    expect(() => costSubjectArg({ subjectKind: "repo", subjectId: "x" })).toThrow();
+  });
+
+  it("accepts pausing a known background kind only", () => {
+    expect(backgroundActionArg({ op: "pauseKind", kind: "lesson_backfill" })).toEqual({ op: "pauseKind", kind: "lesson_backfill" });
+    expect(() => backgroundActionArg({ op: "pauseKind", kind: "nope" })).toThrow();
+    expect(() => backgroundActionArg({ op: "drop", kind: "lesson_backfill" })).toThrow();
   });
 });
