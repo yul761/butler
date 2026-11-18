@@ -68,7 +68,9 @@ export function bucketOf(t: Pick<Ticket, "status" | "statusManual">, prs: Progre
   const status = effectiveStatus(t);
   const open = prs.filter((p) => p.state === "open");
   if (status === "done" || status === "merged_pending_followup" || (open.length === 0 && prs.some((p) => p.state === "merged"))) return "merged";
-  if (status === "blocked" || open.some((p) => p.ci === "failing" || (p.waitingOn !== null && BLOCKING.has(p.waitingOn.reason)))) return "blocked";
+  // draft 也一样看：waitingOn 对 draft 先给 draft，冲突、要求修改会被盖住，所以按非 draft 再判一次。
+  const blocking = (p: ProgressPr): boolean => BLOCKING.has(waitingOnOf({ ...p, isDraft: false })?.reason ?? "draft");
+  if (status === "blocked" || open.some(blocking)) return "blocked";
   if (open.some((p) => !p.isDraft)) return "in_review";
   if (open.length > 0 || started) return "in_progress";
   return "not_started";
@@ -148,7 +150,9 @@ export function buildProgress(input: ProgressInput, filter: ProgressFilter = {})
   const keys = new Set(tickets.map((t) => t.key));
   const watched = input.prs.filter((p) => keys.has(p.ticketKey) && p.prId !== null);
   // 从没读成功过的行（checkedAt 0）只是链接时的说法（handoff 里的 URL 可能是编的），和 PR 进度 tab 一样不当 PR 算。
-  const read = watched.filter((p) => p.checkedAt > 0).map(toProgressPr).filter((p): p is ProgressPr => p !== null);
+  // 放弃读了的也不算：它的"开着"不再当真（和 PR 监视里一样不再挡 ticket），只在新鲜度里算读取失败。
+  const givenUp = watched.filter((p) => p.checkedAt > 0 && p.gaveUp === true).length;
+  const read = watched.filter((p) => p.checkedAt > 0 && p.gaveUp !== true).map(toProgressPr).filter((p): p is ProgressPr => p !== null);
   const prsOf = new Map<string, ProgressPr[]>();
   for (const p of read) prsOf.set(p.ticketKey, [...(prsOf.get(p.ticketKey) ?? []), p]);
   // 同一个 PR 链接在两个 ticket 上：表、树里只出现一次（先出现的那个 ticket）。
@@ -220,7 +224,7 @@ export function buildProgress(input: ProgressInput, filter: ProgressFilter = {})
       generatedAt: input.now,
       prsCheckedOldest: checked.length > 0 ? Math.min(...checked) : null,
       prsCheckedNewest: checked.length > 0 ? Math.max(...checked) : null,
-      readErrors: read.filter((p) => p.readError).length,
+      readErrors: read.filter((p) => p.readError).length + givenUp,
       unread: watched.filter((p) => p.checkedAt === 0).length,
       summaryOldest: summaryTimes.length > 0 ? Math.min(...summaryTimes) : null,
     },
@@ -230,8 +234,8 @@ export function buildProgress(input: ProgressInput, filter: ProgressFilter = {})
 /** 总控看的进度里换成 ISO 字符串的时间字段。 */
 const TIME_KEYS = new Set(["at", "since", "checkedAt", "statusChangedAt", "summaryAt", "prStatusAt", "generatedAt", "prsCheckedOldest", "prsCheckedNewest", "summaryOldest"]);
 
-/** PR 在总控结果里的引用："仓库#号"。 */
-const prRef = (p: ProgressPr): string => `${p.repo}#${p.number}`;
+/** PR 在总控结果里的引用："owner/仓库#号"（两个仓库同名时也分得开）；不知道 slug 用仓库目录名。 */
+const prRef = (p: ProgressPr): string => `${p.slug ?? p.repo}#${p.number}`;
 
 /**
  * progress_overview 的结果：同一份 ProgressView，但时间写成 ISO 字符串，featureId / epicId 旁边带上名字，

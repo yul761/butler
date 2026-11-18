@@ -45,6 +45,9 @@ describe("bucketOf", () => {
     expect(bucketOf(t, [p({}, { reviewers: [{ login: "x", state: "changes_requested", at: 1, bot: false }] })!], false)).toBe("blocked");
     expect(bucketOf(t, [p()!, merged], false)).toBe("in_review");
     expect(bucketOf(t, [p({}, { isDraft: true })!], false)).toBe("in_progress");
+    // draft 也会因为冲突、要求修改落进阻塞。
+    expect(bucketOf(t, [p({}, { isDraft: true, mergeable: "conflicting" })!], false)).toBe("blocked");
+    expect(bucketOf(t, [p({}, { isDraft: true, reviewers: [{ login: "x", state: "changes_requested", at: 1, bot: false }] })!], false)).toBe("blocked");
     expect(bucketOf(t, [], true)).toBe("in_progress");
     expect(bucketOf(t, [], false)).toBe("not_started");
   });
@@ -112,6 +115,13 @@ describe("buildProgress", () => {
     expect(v.freshness).toEqual({ generatedAt: 1000, prsCheckedOldest: 500, prsCheckedNewest: 900, readErrors: 1, unread: 1, summaryOldest: 50 });
   });
 
+  it("does not trust a PR Butler gave up reading", () => {
+    const v = buildProgress(input({ tickets: [ticket("A")], prs: [pr("A", 1, { ci: "failing", gaveUp: true, readError: true })] }));
+    expect(v.counts).toMatchObject({ blocked: 0, not_started: 1 });
+    expect(v.stuck).toEqual([]);
+    expect(v.freshness.readErrors).toBe(1);
+  });
+
   it("filters by epic and by feature", () => {
     const byEpic = buildProgress(base, { epicId: 10 });
     expect(byEpic.counts.total).toBe(3);
@@ -153,15 +163,15 @@ interface Overview {
 }
 
 describe("progressOverview", () => {
-  it("writes times as ISO, names next to ids, and each PR once with repo#number references", () => {
+  it("writes times as ISO, names next to ids, and each PR once with owner/repo#number references", () => {
     const v = buildProgress(input({
       tickets: [ticket("A", { featureId: 1 })], features: [{ id: 1, name: "Login", epicId: 10 }], epics: [{ id: 10, name: "Q4" }],
       prs: [pr("A", 1, {}, { reviewRequests: [{ kind: "user", name: "bob" }], labels: ["ui"], statusChangedAt: 86_400_000 }), pr("A", 2, {}, { baseBranch: "b1" })],
     }));
     const o = progressOverview(v) as unknown as Overview;
-    expect(o.stuck[1]).toMatchObject({ pr: "app#1", since: "1970-01-02T00:00:00.000Z", featureId: 1, feature: "Login" });
-    expect(o.stacks[0].stacks).toEqual([{ pr: "app#1", children: [{ pr: "app#2" }] }]);
-    expect(o.groups.byLabel[0]).toEqual({ key: "ui", prs: ["app#1"] });
+    expect(o.stuck[1]).toMatchObject({ pr: "o/app#1", since: "1970-01-02T00:00:00.000Z", featureId: 1, feature: "Login" });
+    expect(o.stacks[0].stacks).toEqual([{ pr: "o/app#1", children: [{ pr: "o/app#2" }] }]);
+    expect(o.groups.byLabel[0]).toEqual({ key: "ui", prs: ["o/app#1"] });
     expect(o.features[0]).toMatchObject({ id: 1, epicId: 10, epic: "Q4" });
     expect(o.prs.map((p) => p.number).sort()).toEqual([1, 2]);
     expect(o.prs[0]).not.toHaveProperty("prId");

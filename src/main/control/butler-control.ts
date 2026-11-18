@@ -251,7 +251,7 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
             ticket: p.ticketKey, repo: p.repoPath === null ? null : basename(p.repoPath), branch: p.branch, number: p.number, url: p.url, state: p.state, review: p.review, ci: p.ci,
             checkedAt: p.checkedAt ? new Date(p.checkedAt).toISOString() : null, ...(t ? ticketOwners(t) : { feature: null, epic: null }),
             // ws-b：叠放、卡在谁手上要的字段。分支行（还没有 PR）没有。
-            ...(x && {
+            ...(x && p.checkedAt > 0 && {
               title: x.title, headBranch: p.branch || null, baseBranch: x.baseBranch, draft: x.isDraft, author: x.author, labels: x.labels,
               reviewRequests: x.reviewRequests, reviewers: x.reviewers.map((r) => ({ ...r, at: iso(r.at) })), mergeable: x.mergeable, mergeState: x.mergeState,
               statusChangedAt: iso(x.statusChangedAt), waitingOn: waitingOnOf({ ...x, state: p.state, ci: p.ci, review: p.review }),

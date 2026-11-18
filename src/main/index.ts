@@ -1817,6 +1817,21 @@ async function bootstrap(): Promise<void> {
     aborted: () => headlessAbort.signal.aborted,
   });
 
+  /**
+   * 汇总过时没有（ws-b）：hasNewActivity 要同步扫 transcript 目录，进度页每次 stateChanged 都会重取，所以按 feature 缓存一会儿。
+   * 新写了一份汇总（latest 的 id 变了）马上重算。
+   */
+  const STALE_TTL_MS = 20_000;
+  const staleCache = new Map<number, { summaryId: number | null; at: number; stale: boolean }>();
+  const summaryStale = (id: number): boolean => {
+    const summaryId = featureHandoffs.latest(id)?.id ?? null;
+    const now = Date.now();
+    const hit = staleCache.get(id);
+    if (hit && hit.summaryId === summaryId && now - hit.at < STALE_TTL_MS) return hit.stale;
+    const stale = featureRunner.hasNewActivity(id);
+    staleCache.set(id, { summaryId, at: now, stale });
+    return stale;
+  };
   /** 进度页和总控 progress_overview 共用的聚合（ws-b）。 */
   const progressView = (filter: ProgressFilter): ProgressView => {
     const firstCommits = prStages.ticketsWith("first_commit");
@@ -1829,7 +1844,7 @@ async function bootstrap(): Promise<void> {
       prs: live.flatMap((t) => prWatcher.statusOf(t.key)),
       summary: (id) => {
         const rec = featureHandoffs.latestValid(id);
-        return { summary: rec?.payload?.summary ?? null, at: rec?.createdAt ?? null, prStatusAt: rec?.prStatusAt ?? null, stale: featureRunner.hasNewActivity(id) };
+        return { summary: rec?.payload?.summary ?? null, at: rec?.createdAt ?? null, prStatusAt: rec?.prStatusAt ?? null, stale: summaryStale(id) };
       },
       started: (key) => firstCommits.has(key) || sessions.listByTicket(key).length > 0,
     }, filter);
@@ -1860,7 +1875,7 @@ async function bootstrap(): Promise<void> {
         progress: progressView,
         summaries: {
           running: (id) => featureRunner.isRunning(id),
-          stale: (id) => featureRunner.hasNewActivity(id),
+          stale: (id) => summaryStale(id),
           prStatusAt: (id) => featureHandoffs.latestValid(id)?.prStatusAt ?? null,
           // 和 feature 页的"立即更新"一样：后台跑，完成后刷新界面。
           refresh: (id) => void featureRunner.runManual(id).then(notify, (e: unknown) => logger(`control: refreshing the summary of feature ${id} failed`, e)),

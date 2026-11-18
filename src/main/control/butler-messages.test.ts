@@ -78,6 +78,10 @@ describe("ButlerMessagesRepo", () => {
     expect(repo.get("old")).toMatchObject({ status: "expired", error: "no_reply" });
     expect(repo.get("rep")).toMatchObject({ status: "expired", error: "not_delivered" });
     expect(repo.get("fresh")?.status).toBe("waiting");
+    // 了结了的、够旧的删掉；还在等的不删。
+    expect(repo.prune(100)).toBe(2);
+    expect(repo.get("old")).toBeNull();
+    expect(repo.get("fresh")?.status).toBe("waiting");
   });
 });
 
@@ -175,6 +179,29 @@ describe("ButlerMessages", () => {
     expect(text).toContain("req-1");
     expect(text).toContain("req-2");
     expect(text).toContain("epic-3");
+  });
+
+  it("takes the reply when the target stopped before the deliver result came back", async () => {
+    const { svc, state, deliver, repo } = setup();
+    state.replies.set("coord", { id: "r0", text: "old", at: 500 });
+    const id = svc.begin({ from: "butler", target: "coord", featureId: 7, epicId: null, text: "status?" });
+    // 目标已经答完、停下了，消息还是 sending。
+    state.now = 1_100;
+    state.replies.set("coord", { id: "r1", text: "done fast", at: 1_050 });
+    await svc.targetStopped("coord");
+    expect(repo.get(id)?.status).toBe("sending");
+    svc.settled(id, "coord", "sent");
+    await vi.waitFor(() => expect(repo.get(id)?.status).toBe("delivered"));
+    expect(deliver.mock.calls[0][1]).toContain("done fast");
+  });
+
+  it("does not look again on settle when the target has not stopped since", () => {
+    const { svc, state, repo } = setup();
+    state.replies.set("coord", { id: "r0", text: "old", at: 500 });
+    const id = svc.begin({ from: "butler", target: "coord", featureId: 7, epicId: null, text: "status?" });
+    state.replies.set("coord", { id: "r1", text: "unrelated", at: 1_050 });
+    svc.settled(id, "coord", "sent");
+    expect(repo.get(id)?.status).toBe("waiting");
   });
 
   it("records failures and expiry, and lists recent messages newest first", async () => {

@@ -11,6 +11,8 @@ import { M } from "../strings";
 export const MESSAGE_WAIT_MS = 24 * 3600_000;
 /** 回复这么久没能送回总控（总控一直关着、一直在忙）就不送了，和递汇报一样。 */
 export const REPLY_DELIVERY_MAX_AGE_MS = 6 * 3600_000;
+/** 了结了的消息留这么久（Butler 页"回复"tab 看得到），之后删掉。 */
+export const MESSAGE_KEEP_MS = 30 * 24 * 3600_000;
 /** list_inbox 里带最近几条。 */
 export const RECENT_MESSAGES = 30;
 
@@ -42,6 +44,11 @@ const iso = (t: number | null): string | null => (t === null ? null : new Date(t
 export class ButlerMessages {
   /** 正在往这个总控送回复：同一个总控不同时送两段。 */
   private readonly busy = new Set<string>();
+  /**
+   * 每个 session（head）最后一次停下来的时间。目标可能在 deliver 的结果回来之前就答完、停下了（假 claude、很短的回复）：
+   * 那时消息还是 sending，targetStopped 看不到它。settled 标成 waiting 时看这里，交消息之后停过就马上补查一次。
+   */
+  private readonly stoppedAt = new Map<string, number>();
 
   constructor(private readonly d: ButlerMessagesDeps) {}
 
@@ -77,6 +84,10 @@ export class ButlerMessages {
     if (result === "sent") this.d.repo.sent(id, head);
     else this.d.repo.failed(id, result);
     this.d.notify();
+    const queuedAt = this.d.repo.get(id)?.queuedAt;
+    if (result === "sent" && queuedAt !== undefined && (this.stoppedAt.get(head) ?? -Infinity) >= queuedAt) {
+      void this.targetStopped(head).catch((e: unknown) => this.d.log(`butler messages: late check for ${head} failed`, e));
+    }
   }
 
   /**
@@ -85,6 +96,7 @@ export class ButlerMessages {
    */
   async targetStopped(sessionId: string): Promise<void> {
     const head = this.d.head(sessionId)?.id ?? sessionId;
+    this.stoppedAt.set(head, this.d.now());
     const waiting = this.d.repo.withStatus("waiting").filter((m) => m.targetSession !== null && (this.d.head(m.targetSession)?.id ?? m.targetSession) === head);
     if (waiting.length === 0) return;
     const reply = this.d.lastReply(head);
@@ -104,7 +116,8 @@ export class ButlerMessages {
   /** 过期的不再等；拿到的回复按发消息的总控合成一条送回去。和递汇报一样每个 tick、总控停下来时调。永不 reject。 */
   async flush(): Promise<void> {
     try {
-      if (this.d.repo.expire(this.d.now(), MESSAGE_WAIT_MS, REPLY_DELIVERY_MAX_AGE_MS) > 0) this.d.notify();
+      const expired = this.d.repo.expire(this.d.now(), MESSAGE_WAIT_MS, REPLY_DELIVERY_MAX_AGE_MS);
+      if (expired + this.d.repo.prune(this.d.now() - MESSAGE_KEEP_MS) > 0) this.d.notify();
       const byFrom = new Map<string, ButlerMessage[]>();
       for (const m of this.d.repo.withStatus("replied")) {
         const from = this.d.head(m.fromSession)?.id ?? m.fromSession;

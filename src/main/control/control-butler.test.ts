@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
 import type { ButlerControlRequest, ControlResult } from "../../shared/control";
-import type { EpicFeatureRow, InboxView, Session, SessionView, WatchedPr } from "../../shared/types";
+import type { EpicFeatureRow, InboxView, PrDetail, Session, SessionView, WatchedPr } from "../../shared/types";
 import { EpicsRepo } from "../db/epics-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
@@ -188,10 +188,14 @@ describe("Butler 总控 read-only tools (BTL-190 5)", () => {
 
   it("list_prs adds the stack, review and merge fields and who the PR waits on (ws-b)", async () => {
     const { call, prs } = setup();
-    prs[0] = { ...prs[0], detail: {
+    const detail: PrDetail = {
       baseBranch: "main", isDraft: false, title: "Checkout", author: "me", labels: ["ui"], reviewRequests: [], mergeable: "mergeable", mergeState: "clean", statusChangedAt: 86_400_000, slug: "o/r",
       reviewers: [{ login: "ann", state: "approved", at: 0, bot: false }],
-    } };
+    };
+    // 从没读成功过的（handoff 里给的链接）：不给 waitingOn 这些，和进度页一样不当 PR 算。
+    prs[0] = { ...prs[0], checkedAt: 0, detail };
+    expect(value<Record<string, unknown>[]>(await call({ op: "list_prs" }))[0]).not.toHaveProperty("waitingOn");
+    prs[0] = { ...prs[0], checkedAt: 1, detail };
     const list = value<Record<string, unknown>[]>(await call({ op: "list_prs" }));
     expect(list[0]).toMatchObject({
       title: "Checkout", headBranch: "b-BTL-1", baseBranch: "main", draft: false, author: "me", labels: ["ui"], mergeable: "mergeable", mergeState: "clean",

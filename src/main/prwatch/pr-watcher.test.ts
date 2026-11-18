@@ -12,7 +12,7 @@ import { CiDelivery, pickRecipient } from "./ci-delivery";
 import { PrLinker } from "./pr-links";
 import { derivePrStages } from "./pr-stages";
 import { PR_FAST_MS, PR_SLOW_MS, PR_WATCH_MAX } from "./pr-schedule";
-import { CI_LOG_LINES, MERGED_RECENT_MS, PR_GH_TIMEOUT_MS, PrWatcher, type PrWatcherDeps } from "./pr-watcher";
+import { CI_LOG_LINES, MERGED_RECENT_MS, PR_GH_TIMEOUT_MS, prStatusChanged, PrWatcher, type PrWatcherDeps } from "./pr-watcher";
 
 const url = (n: number, repo = "app") => `https://github.com/o/${repo}/pull/${n}`;
 const check = (name: string, state: CiCheck["state"], runId: number | null = null): CiCheck => ({ name, state, runId });
@@ -1051,5 +1051,34 @@ describe("PrWatcher: branches a session pushed (workstream W)", () => {
     s.advance(10 * 60_000);
     await s.w.check();
     expect(owned()).toBe(before + 1);
+  });
+});
+
+describe("prStatusChanged", () => {
+  type Prev = Parameters<typeof prStatusChanged>[0];
+  const base: Prev = {
+    state: "open", review: "pending", ci: "passing", headSha: "a", isDraft: false, mergeable: "mergeable", mergeState: "clean",
+    reviewers: [{ login: "alice", state: "commented", at: 1, bot: false }], reviewRequests: [{ kind: "user", name: "bob" }], statusChangedAt: 10,
+  };
+  it("counts real changes and the first read", () => {
+    expect(prStatusChanged(base, base, true)).toBe(true);
+    expect(prStatusChanged(base, base, false)).toBe(false);
+    expect(prStatusChanged(base, { ...base, ci: "failing" }, false)).toBe(true);
+    expect(prStatusChanged(base, { ...base, isDraft: true }, false)).toBe(true);
+    expect(prStatusChanged(base, { ...base, mergeable: "conflicting" }, false)).toBe(true);
+    expect(prStatusChanged(base, { ...base, reviewers: [{ login: "alice", state: "approved", at: 2, bot: false }] }, false)).toBe(true);
+    expect(prStatusChanged(base, { ...base, reviewRequests: [] }, false)).toBe(true);
+  });
+  it("ignores GitHub recomputing mergeability, review timestamps, bots and request order", () => {
+    expect(prStatusChanged(base, { ...base, mergeable: "unknown", mergeState: "unknown" }, false)).toBe(false);
+    expect(prStatusChanged({ ...base, mergeable: "unknown", mergeState: "unknown" }, base, false)).toBe(false);
+    expect(prStatusChanged(base, { ...base, reviewers: [{ login: "alice", state: "commented", at: 99, bot: false }, { login: "ci-bot", state: "commented", at: 3, bot: true }] }, false)).toBe(false);
+    const two = { ...base, reviewRequests: [{ kind: "user" as const, name: "bob" }, { kind: "team" as const, name: "core" }] };
+    expect(prStatusChanged(two, { ...two, reviewRequests: [...two.reviewRequests].reverse() }, false)).toBe(false);
+  });
+  it("treats a row from before the upgrade as a baseline: only the old fields count", () => {
+    const legacy: Prev = { ...base, mergeable: null, mergeState: null, reviewers: [], reviewRequests: [], statusChangedAt: null };
+    expect(prStatusChanged(legacy, base, false)).toBe(false);
+    expect(prStatusChanged(legacy, { ...base, ci: "failing" }, false)).toBe(true);
   });
 });

@@ -109,6 +109,11 @@ export class ButlerMessagesRepo {
     return Number(a.changes) + Number(b.changes);
   }
 
+  /** 了结了的（送回了、失败了、过期了）、交消息早于 before 的删掉；返回删了几行。 */
+  prune(before: number): number {
+    return Number(this.db.prepare(`DELETE FROM butler_messages WHERE status IN ('delivered', 'failed', 'expired') AND queued_at < ?`).run(before).changes);
+  }
+
   /** 最近的几条，新的在前。 */
   recent(limit: number): ButlerMessage[] {
     return (this.db.prepare(`SELECT * FROM butler_messages ORDER BY queued_at DESC, id DESC LIMIT ?`).all(limit) as unknown as Row[]).map(toMessage);

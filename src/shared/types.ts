@@ -483,6 +483,8 @@ export interface WatchedPr {
   checkedAt: number;
   /** 上一次 gh 读取失败：ci、state 是再上一次的。 */
   readError: boolean;
+  /** 放弃读了（一直读不到）：状态只是最后一次读到的，不再当真（ws-b 进度页不算它）。分支行没有。 */
+  gaveUp?: boolean;
   /** PR 行的 base、draft、标题、reviewer 等（ws-b）；分支行没有。 */
   detail?: PrDetail;
 }

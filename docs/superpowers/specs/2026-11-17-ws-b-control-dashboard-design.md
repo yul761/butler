@@ -162,6 +162,18 @@ export class ExternalActions {
 - feature / epic 的 PR 进度 tab 上的"卡在谁手上"带一个"在进度页里看"，跳到按这个 feature / epic 过滤的进度页。
 - `list_inbox` 多返回 `messages`（最近 30 条 send_message 的状态），总控不用另开工具就能查某个 `requestId`。
 
+## 6.2 自我审查之后的调整
+
+- **状态变化时间不乱跳**：`prStatusChanged` 是单独的函数。合并状态在 `unknown`（GitHub 重新算）和已知值之间来回变不算变化；reviewer 只比人和态度，不比时间，也不看 bot；请人的列表不看顺序。升级前就有的行（读过、但 `status_changed_at` 是 null）第一次读到时只比老字段（state / review / CI / head）。这样升级后、每次往 base 合东西后，汇总不会全部变成过时，也不会让夜里全部重写。
+- **过时判断加缓存**：`hasNewActivity` 要同步扫 transcript 目录，进度页每次 stateChanged 都重取。现在按 feature 缓存 20 秒；有新汇总（latest 的 id 变了）马上重算。
+- **快回复不丢**：目标可能在 deliver 的结果回来之前就答完、停下了，那时消息还是 sending。`ButlerMessages` 记下每个 session 最后一次停下的时间，`settled` 标成 waiting 时如果交消息之后停过，就马上补查一次。没有这一步，这条消息会拿到下一轮不相干的回复。
+- **放弃读的 PR 不当真**：`WatchedPr.gaveUp`。进度页不算这样的 PR（不进格子、不进卡在谁手上），只在新鲜度的"读取失败"里算一次。
+- **list_prs**：从没读成功过的链接（checkedAt 0）不给 waitingOn 这些字段，和进度页一致。
+- **draft 的阻塞**：draft 有冲突或要求修改也算阻塞。判断时把它当非 draft 再判一次。
+- **progress_overview 的 PR 引用**改成 `owner/仓库#号`，两个仓库同名时也分得开。
+- **butler_messages 清理**：了结了的（送回、失败、过期）30 天后删掉，在 flush 里做。
+- 没改的：叠放树遇到环时，号最小的 PR 正好接在环上，它会显示成单个 PR。只是显示上的小毛病，数据没错。
+
 ## 7. 测试
 
 - 纯函数：`waitingOnOf`、`buildProgress`（每一格、分组、叠放树、过滤）、reviewer 最新态度、标题前缀。
