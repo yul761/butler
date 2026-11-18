@@ -27,6 +27,8 @@ export interface ConfigIoDeps {
   now: () => number;
   /** 导出 / 备份之后记一下时间（「定期导出」提醒用）。 */
   onExported?: (at: number) => void;
+  /** 导入应用完（有改动）：检查快照之类的派生文件跟着重写。 */
+  onApplied?: () => void;
   log?: (msg: string, e?: unknown) => void;
 }
 
@@ -90,7 +92,7 @@ export class ConfigIoService {
 
   /** 写到 file（先写临时文件再改名，写一半不会留下坏文件）。 */
   writeExport(req: ExportRequest, file: string): { ok: true; file: string; counts: Record<string, number> } | { ok: false; reason: "not_found" | "write_failed" | "no_checks" } {
-    if (!req.starter && req.options.content === "checks" && this.d.registry.forContent("checks", false).length === 0) return { ok: false, reason: "no_checks" };
+    if (!req.starter && req.options.content === "checks" && !this.d.registry.list().some((s) => s.id === "checks")) return { ok: false, reason: "no_checks" };
     const doc = this.exportDoc(req);
     if (!doc) return { ok: false, reason: "not_found" };
     try {
@@ -339,6 +341,7 @@ export class ConfigIoService {
     );
     if (outcome.batchId !== null) this.d.recorder.setSummary(outcome.batchId, { sections: counts, skippedSections: p.skipped, backupFile: backupFile ? basename(backupFile) : null });
     this.pending.delete(req.token);
+    if (outcome.batchId !== null) this.d.onApplied?.();
     return { ok: true, batchId: outcome.batchId, sections: counts, backupFile };
   }
 }

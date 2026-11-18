@@ -56,8 +56,8 @@ export interface ConfigSection<Item = unknown> {
   id: string;
   /** 应用顺序：小的先（产品要在规矩和策略之前建好）。 */
   order: number;
-  /** 「只导出规矩」包含 lessons；「只导出检查」包含 checks；config 只在「全部」里。 */
-  content: "lessons" | "checks" | "config";
+  /** 「只导出规矩」包含 lessons；「只导出检查」包含 checks；config 只在「全部」里。一个部分可以属于几种（产品：规矩和检查都要）。 */
+  content: SectionContent | readonly SectionContent[];
   /** 一个条目的 schema。 */
   item: z.ZodType<Item>;
   /** 起步包里有没有这个部分。 */
@@ -67,6 +67,10 @@ export interface ConfigSection<Item = unknown> {
   diff(ctx: DiffContext<Item>): PreviewRow[];
   apply(ctx: ApplyContext<Item>): SectionApplyCounts;
 }
+
+export type SectionContent = "lessons" | "checks" | "config";
+
+const hasContent = (s: { content: SectionContent | readonly SectionContent[] }, c: SectionContent): boolean => (typeof s.content === "string" ? s.content === c : s.content.includes(c));
 
 export class SectionRegistry {
   private readonly sections = new Map<string, ConfigSection<unknown>>();
@@ -86,7 +90,7 @@ export class SectionRegistry {
 
   /** 某种导出内容包含哪些部分。 */
   forContent(content: ExportOptions["content"], starter: boolean): ConfigSection<unknown>[] {
-    return this.list().filter((s) => (starter ? s.inStarter === true : content === "all" ? true : s.content === content));
+    return this.list().filter((s) => (starter ? s.inStarter === true : content === "all" ? true : hasContent(s, content)));
   }
 }
 

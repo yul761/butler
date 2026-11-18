@@ -60,6 +60,12 @@ export const SETTING_DEFAULTS = {
   configExportReminderDays: "30",
   /** 上次手动导出的时间（毫秒，字符串）；空 = 从没导出过。不在设置页上。 */
   configLastExportAt: "",
+  /** 确定性检查（契约 4.5）的总开关：1 开 0 关。关掉后编辑和 push 时都不检查。 */
+  checksEnabled: "1",
+  /** 一次编辑的检查最多用几秒（1–30）；hook 自己的超时是它加 3。 */
+  checksEditTimeoutSec: "8",
+  /** push 前的检查最多用几秒（10–3600）。 */
+  checksPushTimeoutSec: "600",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

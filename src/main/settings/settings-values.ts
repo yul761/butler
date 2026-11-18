@@ -344,6 +344,7 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       return normalizeTicketPattern(value);
     case "memoryEnabled":
     case "onboardingDone":
+    case "checksEnabled":
       return normalizeFlag(value);
     case "refreshThresholdTokens": {
       const t = value.trim();
@@ -370,6 +371,13 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "configBackupKeep": {
       const t = value.trim();
       if (!/^\d{1,3}$/.test(t) || Number(t) < 1) throw new SettingError(M().configBackupKeep);
+      return String(Number(t));
+    }
+    case "checksEditTimeoutSec":
+    case "checksPushTimeoutSec": {
+      const t = value.trim();
+      const [lo, hi] = key === "checksEditTimeoutSec" ? CHECKS_EDIT_RANGE : CHECKS_PUSH_RANGE;
+      if (!/^\d{1,4}$/.test(t) || Number(t) < lo || Number(t) > hi) throw new SettingError(key === "checksEditTimeoutSec" ? M().checksEditTimeoutSec : M().checksPushTimeoutSec);
       return String(Number(t));
     }
     case "language": {
@@ -484,5 +492,22 @@ export function llmConfig(s: SettingsRepo): LlmConfig {
     prices,
     confirm: s.get("llmConfirm") === "1",
     retentionDays: parseRetentionDays(s.get("auditRetentionDays")),
+  };
+}
+
+const CHECKS_EDIT_RANGE = [1, 30] as const;
+const CHECKS_PUSH_RANGE = [10, 3600] as const;
+
+/** 确定性检查的设置（契约 4.5）；存坏了的值回退到默认。 */
+export function checksConfig(s: Pick<SettingsRepo, "get">): { enabled: boolean; editTimeoutSec: number; pushTimeoutSec: number; ticketPattern: string } {
+  const num = (k: "checksEditTimeoutSec" | "checksPushTimeoutSec", [lo, hi]: readonly [number, number]) => {
+    const n = Number(s.get(k));
+    return Number.isInteger(n) && n >= lo && n <= hi ? n : Number(SETTING_DEFAULTS[k]);
+  };
+  return {
+    enabled: s.get("checksEnabled") !== "0",
+    editTimeoutSec: num("checksEditTimeoutSec", CHECKS_EDIT_RANGE),
+    pushTimeoutSec: num("checksPushTimeoutSec", CHECKS_PUSH_RANGE),
+    ticketPattern: s.get("ticketPattern") || SETTING_DEFAULTS.ticketPattern,
   };
 }

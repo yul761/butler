@@ -108,5 +108,5 @@ export interface ConfigIoStatus {
   /** 该提醒导出了：有已确认的规矩，而且 reminderDays 天里没有导出也没有备份。 */
   remind: boolean;
   /** 已注册的部分（checks 出现后「只导出检查」才能选）。 */
-  sections: { id: string; content: "lessons" | "checks" | "config" }[];
+  sections: { id: string; content: "lessons" | "checks" | "config" | readonly ("lessons" | "checks" | "config")[] }[];
 }

@@ -9,6 +9,7 @@ import { PageTabs } from "./PageTabs";
 import { TicketPrStages } from "./PrStages";
 import { RepoDialog } from "./RepoDialog";
 import { EndSessionButton } from "./EndSessionButton";
+import { NoChecksMark } from "./NoChecksMark";
 import { CloseIdleButton, DeleteHiddenButton } from "./SessionCleanupButtons";
 import { RefreshSessionButton } from "./RefreshSessionButton";
 import { TerminalPane } from "./TerminalPane";
@@ -225,6 +226,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
               {sessionPlace(s, ticket.repos, S.coordinator) && <span className="place">{sessionPlace(s, ticket.repos, S.coordinator)}</span>}
               {s.spawnedBy && <span className="muted" title={S.spawnedByCoordinator}>↳</span>}
               <span className="label">{sessionLabel(s, S.untitledSession)}</span>
+              <NoChecksMark reason={s.checksAbsent} />
               <span className="muted">{s.lastActivityAt ? formatShort(s.lastActivityAt) : ""}</span>
               <span className="action">{s.termId ? S.switchTo : S.open}</span>
             </button>

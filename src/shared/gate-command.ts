@@ -136,3 +136,38 @@ export function classifyGateCommand(command: string): GateAction | null {
   }
   return null;
 }
+
+/**
+ * push 前的重检查（契约 4.5）用：认出任何真正会推送的 `git push`（不要求写 refspec，和合并总控的 classifyGateCommand 分开，
+ * 那边的行为不变）。--dry-run / -n、只删除远端分支（--delete、-d、`:branch`）不算。dir 是 `git -C` 或前面 `cd` 的目录。
+ */
+export function classifyPush(command: string): { dir: string | null } | null {
+  if (!/\bpush\b/.test(command)) return null;
+  let dir: string | null = null;
+  for (const tokens of splitSegments(command)) {
+    let i = 0;
+    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+    if (tokens[i] === "cd") {
+      if (tokens[i + 1]) dir = dir && !/^([/\\]|[A-Za-z]:)/.test(tokens[i + 1]) ? `${dir}/${tokens[i + 1]}` : tokens[i + 1];
+      continue;
+    }
+    if (tokens[i] !== "git") continue;
+    i++;
+    let segDir = dir;
+    while (i < tokens.length && isOption(tokens[i])) {
+      if (tokens[i] === "-C" && i + 1 < tokens.length) {
+        segDir = segDir && !/^([/\\]|[A-Za-z]:)/.test(tokens[i + 1]) ? `${segDir}/${tokens[i + 1]}` : tokens[i + 1];
+        i += 2;
+      } else if (tokens[i] === "-c") i += 2;
+      else i++;
+    }
+    if (tokens[i] !== "push") continue;
+    const args = tokens.slice(i + 1);
+    if (args.some((a) => a === "--dry-run" || a === "-n" || a === "--delete" || a === "-d" || /^-[a-zA-Z]*[nd][a-zA-Z]*$/.test(a))) continue;
+    const pos = positionals(args, ["--repo", "-o", "--push-option", "--receive-pack", "--exec"]);
+    const refspecs = pos.slice(1);
+    if (refspecs.length > 0 && refspecs.every((r) => r.startsWith(":"))) continue;
+    return { dir: segDir };
+  }
+  return null;
+}

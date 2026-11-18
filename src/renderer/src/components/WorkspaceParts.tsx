@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { NoChecksMark } from "./NoChecksMark";
 import type { OpenSessionResult, SessionView } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
@@ -175,6 +176,7 @@ export function SessionButton({ s, panes, place }: { s: SessionView; panes: Sess
         {s.waitingForInput && <span className="badge">●</span>}
         <span className="place">{place}</span>
         <span className="label">{label}</span>
+        <NoChecksMark reason={s.checksAbsent} />
         <span className="action">{s.termId ? S.switchTo : S.open}</span>
       </button>
       {s.termId ? (

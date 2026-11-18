@@ -247,8 +247,16 @@ export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
  * 用户在这些目录（session 的目录、仓库主目录）里禁用过的 server 一并写进 disabledMcpjsonServers：禁用优先于全部启用。
  * 文件名按内容取 hash，内容一样就是同一个文件。写不了记日志返回 null（照旧弹出对话框）。
  */
-/** allowTools：不用确认就能调用的工具（写进 permissions.allow），空的或者不给就不写。 */
-export function projectMcpApprovalSettings(dirs: string[], p: ProjectMcpPaths & { gateCommand?: string; allowTools?: readonly string[] }): string | null {
+/**
+ * allowTools：不用确认就能调用的工具（写进 permissions.allow），空的或者不给就不写。
+ * checks：确定性检查打开时给（契约 4.5）：编辑后跑 `check`，Bash 前再跑 `check-push`；hook 的超时比检查的预算多留几秒，
+ * 检查自己到点就放行，不会被 Claude Code 当成 hook 超时。预算也写在命令行上（--budget-ms）：session 开着时把设置调大，
+ * 快照里的预算变了，但这份 settings 里的超时不会变，hook 按两者里小的那个跑。
+ */
+export function projectMcpApprovalSettings(
+  dirs: string[],
+  p: ProjectMcpPaths & { gateCommand?: string; allowTools?: readonly string[]; checks?: { editTimeoutSec: number; pushTimeoutSec: number } },
+): string | null {
   try {
     sweepStaleTmp(p.mcpDir);
     const claudeJson = readJson(p.claudeJson, p.log, { repo: false });
@@ -264,7 +272,12 @@ export function projectMcpApprovalSettings(dirs: string[], p: ProjectMcpPaths & 
       const skill = { matcher: "Skill", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
       // 子 agent 的派发另记一组（review agent 算自我 review）：同样不带 gate，信封里只留 description / subagent_type。
       const agent = { matcher: "Agent|Task", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
-      content.hooks = { PreToolUse: group, PostToolUse: [...group, skill, agent], PostToolUseFailure: group };
+      const hooks = { PreToolUse: group as unknown[], PostToolUse: [...group, skill, agent] as unknown[], PostToolUseFailure: group };
+      if (p.checks) {
+        hooks.PreToolUse = [...group, { matcher: "Bash", hooks: [{ type: "command", command: `${p.gateCommand} check-push --budget-ms ${p.checks.pushTimeoutSec * 1000}`, timeout: p.checks.pushTimeoutSec + 30 }] }];
+        hooks.PostToolUse.push({ matcher: "Edit|Write|MultiEdit", hooks: [{ type: "command", command: `${p.gateCommand} check --budget-ms ${p.checks.editTimeoutSec * 1000}`, timeout: p.checks.editTimeoutSec + 3 }] });
+      }
+      content.hooks = hooks;
     }
     const file = join(p.mcpDir, `approve-${createHash("sha1").update(JSON.stringify(content)).digest("hex").slice(0, 12)}.json`);
     writePrivate(file, content);

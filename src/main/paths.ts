@@ -29,6 +29,10 @@ export interface ButlerPaths {
   gateRequests: string;
   gateResults: string;
   gateAlive: string;
+  /** 确定性检查（契约 4.5）：Butler 写的只读快照、hook 写的命中日志、hook 的防抖状态。见 checksLayout。 */
+  checksSnapshot: string;
+  checksHits: string;
+  checksState: string;
   claudeConfigDir: string;
   claudeSettings: string;
   claudeProjects: string;
@@ -77,6 +81,7 @@ export function resolvePaths(
     gateRequests: join(butlerHome, "gate", "requests"),
     gateResults: join(butlerHome, "gate", "results"),
     gateAlive: join(butlerHome, "gate", "alive.json"),
+    ...checksLayout(butlerHome),
     claudeConfigDir,
     claudeSettings: join(claudeConfigDir, "settings.json"),
     claudeProjects: join(claudeConfigDir, "projects"),
@@ -84,6 +89,12 @@ export function resolvePaths(
     claudeCommands: join(claudeConfigDir, "commands"),
     claudeJson: configOverride ? join(configOverride, ".claude.json") : join(home, ".claude.json"),
   };
+}
+
+/** 检查用到的几个位置；hook 和 Butler 都从 BUTLER_HOME 算，所以放在一处。 */
+export function checksLayout(butlerHome: string): { checksSnapshot: string; checksHits: string; checksState: string } {
+  const dir = join(butlerHome, "checks");
+  return { checksSnapshot: join(dir, "snapshot.json"), checksHits: join(dir, "hits"), checksState: join(dir, "state") };
 }
 
 /**
@@ -95,7 +106,7 @@ export function refreshTailPath(p: Pick<ButlerPaths, "refresh">, sessionId: stri
 }
 
 export async function ensureDirs(p: ButlerPaths): Promise<void> {
-  for (const dir of [p.home, p.inbox, p.inboxBad, p.bin, p.logs, p.mcp, p.statecore, p.workspaces, p.refresh, p.controlRequests, p.controlResults, p.gateRequests, p.gateResults]) {
+  for (const dir of [p.home, p.inbox, p.inboxBad, p.bin, p.logs, p.mcp, p.statecore, p.workspaces, p.refresh, p.controlRequests, p.controlResults, p.gateRequests, p.gateResults, p.checksHits, p.checksState]) {
     await mkdir(dir, { recursive: true });
   }
 }

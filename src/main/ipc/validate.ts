@@ -7,6 +7,7 @@ import type {
 import type { PrStagesScope } from "../../shared/pr-stages";
 import { LESSON_BULK_VERBS, MAX_TARGET_IDS, type LessonAction, type LessonBulkVerb, type LessonTarget } from "../../shared/lessons";
 import { parseLessonFilter } from "../../shared/lesson-filter";
+import { CHECKS_BULK_OPS, parseCheckScope, type CheckScope, type ChecksAction, type ChecksBulkOp } from "../../shared/checks";
 import { parsePolicyOverrides, type AdmissionPolicyOverrides, type PolicyScope } from "../../shared/admission-policy";
 import {
   EXPORT_CONTENTS, type ExportContent, type ExportRequest, type ExportScopeArg, type ImportApplyRequest, type Resolution, type StarterTarget,
@@ -507,3 +508,52 @@ export function importApplyArg(v: unknown): ImportApplyRequest {
   }
   return req;
 }
+
+/** 检查的层：global / product / repo（slug 规范化后）。 */
+export function checkScopeArg(v: unknown): CheckScope {
+  const s = parseCheckScope(v);
+  if (!s) throw new Error("invalid check scope");
+  return s;
+}
+
+/** 一条检查的 key：内置的 builtin:…，自己建的 ck_…，导入的保持原样（只要是短的可见字符）。 */
+export function checkKeyArg(v: unknown): string {
+  if (typeof v !== "string" || !/^[A-Za-z0-9_:.-]{1,80}$/.test(v)) throw new Error("invalid check key");
+  return v;
+}
+
+const positiveId = (v: unknown, what: string): number => {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error(`invalid ${what}`);
+  return v;
+};
+
+/** 检查页的操作。检查内容本身（input）只限大小，字段由 ChecksService 用 validateCheckInput 校验。 */
+export function checksActionArg(v: unknown): ChecksAction {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("invalid checks action");
+  switch (o.op) {
+    case "save": {
+      if (JSON.stringify(o.input ?? null).length > 64 * 1024) throw new Error("invalid checks action");
+      const id = o.id === null ? null : positiveId(o.id, "check id");
+      const lessonId = o.lessonId === undefined || o.lessonId === null ? null : positiveId(o.lessonId, "lesson id");
+      return { op: "save", scope: checkScopeArg(o.scope), id, input: o.input, lessonId };
+    }
+    case "override":
+      return { op: "override", scope: checkScopeArg(o.scope), key: checkKeyArg(o.key) };
+    case "bulk": {
+      if (!Array.isArray(o.ids) || o.ids.length < 1 || o.ids.length > 500) throw new Error("invalid checks action");
+      if (typeof o.verb !== "string" || !CHECKS_BULK_OPS.includes(o.verb as ChecksBulkOp)) throw new Error("invalid checks action");
+      return { op: "bulk", ids: o.ids.map((x) => positiveId(x, "check id")), verb: o.verb as ChecksBulkOp };
+    }
+    case "verdict":
+      if (o.verdict !== null && o.verdict !== "false_positive" && o.verdict !== "true_positive") throw new Error("invalid checks action");
+      return { op: "verdict", hitId: positiveId(o.hitId, "hit id"), verdict: o.verdict };
+    case "classify":
+      if (o.checkability !== null && o.checkability !== "checkable" && o.checkability !== "prose") throw new Error("invalid checks action");
+      return { op: "classify", lessonId: positiveId(o.lessonId, "lesson id"), checkability: o.checkability };
+    default:
+      throw new Error("invalid checks action");
+  }
+}
+
+export const checkLessonIdArg = (v: unknown): number => positiveId(v, "lesson id");

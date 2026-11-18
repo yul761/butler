@@ -25,6 +25,8 @@ export interface LessonBatchDeps {
   now: () => number;
   /** 准入策略的某一层被改了（撤销恢复了策略、删产品连带删了它的策略层）：策略版本要加一。 */
   onPolicyChanged?: () => void;
+  /** 检查被改了（撤销恢复了检查、删产品连带删了它的检查）：重写 hook 读的快照（契约 4.5）。 */
+  onChecksChanged?: () => void;
 }
 
 /**
@@ -177,6 +179,7 @@ export class LessonBatchService {
     const r = this.d.recorder.undo(batchId, now);
     if (!r.ok) return r;
     if (r.restored.some((x) => x.entity === "policy")) this.d.onPolicyChanged?.();
+    if (r.restored.some((x) => x.entity === "check" || x.entity === "product")) this.d.onChecksChanged?.();
     if (r.original.origin === "auto") {
       const cal: { lesson: Lesson; human: Verdict; auto: Verdict | null }[] = [];
       for (const x of r.restored) {
@@ -286,10 +289,12 @@ export class LessonBatchService {
         ctx.track("policy", Number(layer.id));
         policy = true;
       }
+      for (const c of this.d.db.prepare(`SELECT id FROM checks WHERE scope_kind = 'product' AND product_id = ?`).all(productId) as { id: number }[]) ctx.track("check", Number(c.id));
       ctx.track("product", productId);
       this.repo.deleteProduct(productId);
     });
     if (policy) this.d.onPolicyChanged?.();
+    this.d.onChecksChanged?.();
     return { ok: true, batchId: outcome.batchId, affected: outcome.affected, skipped: outcome.skipped };
   }
 }

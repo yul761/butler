@@ -10,6 +10,8 @@ interface Deps {
   memoryToggled: (on: boolean) => void;
   /** language 改了之后（在 notify 之前）重新解析当前语言。 */
   languageChanged?: () => void;
+  /** 任何设置改了之后（在 notify 之前）：检查快照要跟着设置和语言重写。 */
+  settingChanged?: (key: EditableSettingKey) => void;
 }
 
 /**
@@ -33,6 +35,7 @@ export function settingsHandlers(d: Deps): {
     write();
     const memoryAfter = memoryOn(d.settings);
     if (k === "language") d.languageChanged?.();
+    d.settingChanged?.(k);
     d.notify();
     if (memoryAfter !== memoryBefore) d.memoryToggled(memoryAfter);
   };

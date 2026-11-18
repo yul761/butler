@@ -572,4 +572,57 @@ export const MIGRATIONS: string[] = [
     at INTEGER NOT NULL);
   CREATE INDEX score_calibration_at ON score_calibration (at);
   `,
+  // 工作流 E1：确定性检查（契约 4.5）。checks 按层存（全局 / 产品 / 仓库），同一个 key 在更窄的层里是覆盖；
+  // check_hits 是 hook 命中日志的入库；sessions.checks_absent 记 session 启动时为什么没有检查。
+  // 种一条全局、默认关闭的注释规则（名字和文案留空，写快照时按界面语言补默认）。
+  `
+  CREATE TABLE checks (
+    id INTEGER PRIMARY KEY,
+    key TEXT NOT NULL,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global','product','repo')),
+    product_id INTEGER REFERENCES lesson_products(id) ON DELETE CASCADE,
+    repo_slug TEXT,
+    type TEXT NOT NULL CHECK (type IN ('forbidden_pattern','import_boundary','comment_policy','run_command')),
+    name TEXT NOT NULL DEFAULT '',
+    params TEXT NOT NULL DEFAULT '{}',
+    globs TEXT NOT NULL DEFAULT '[]',
+    exclude_globs TEXT NOT NULL DEFAULT '[]',
+    severity TEXT NOT NULL CHECK (severity IN ('block','warn')),
+    mode TEXT NOT NULL CHECK (mode IN ('shadow','enforce')),
+    enabled INTEGER NOT NULL DEFAULT 1,
+    message TEXT NOT NULL DEFAULT '',
+    lesson_id INTEGER REFERENCES lessons(id) ON DELETE SET NULL,
+    batch_id INTEGER REFERENCES admission_batches(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    CHECK ((scope_kind = 'global' AND product_id IS NULL AND repo_slug IS NULL)
+        OR (scope_kind = 'product' AND product_id IS NOT NULL AND repo_slug IS NULL)
+        OR (scope_kind = 'repo' AND product_id IS NULL AND repo_slug IS NOT NULL)));
+  CREATE UNIQUE INDEX checks_layer_key ON checks (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''), key);
+  CREATE INDEX checks_lesson ON checks (lesson_id);
+  CREATE TABLE check_hits (
+    id INTEGER PRIMARY KEY,
+    check_id INTEGER REFERENCES checks(id) ON DELETE SET NULL,
+    check_key TEXT NOT NULL,
+    repo_slug TEXT,
+    file TEXT NOT NULL DEFAULT '',
+    line INTEGER,
+    stage TEXT NOT NULL CHECK (stage IN ('edit','push')),
+    mode TEXT NOT NULL CHECK (mode IN ('shadow','enforce')),
+    severity TEXT NOT NULL CHECK (severity IN ('block','warn')),
+    outcome TEXT NOT NULL CHECK (outcome IN ('fail','resolved','timeout','unavailable','error')),
+    blocked INTEGER NOT NULL DEFAULT 0,
+    detail TEXT NOT NULL DEFAULT '',
+    session_id TEXT,
+    verdict TEXT CHECK (verdict IS NULL OR verdict IN ('false_positive','true_positive')),
+    verdict_at INTEGER,
+    at INTEGER NOT NULL,
+    ingest_key TEXT NOT NULL UNIQUE);
+  CREATE INDEX check_hits_check ON check_hits (check_id, at);
+  CREATE INDEX check_hits_key ON check_hits (check_key, at);
+  CREATE INDEX check_hits_session ON check_hits (session_id);
+  ALTER TABLE sessions ADD COLUMN checks_absent TEXT;
+  INSERT INTO checks (key, scope_kind, type, params, severity, mode, enabled, created_at, updated_at)
+    VALUES ('builtin:comment_policy', 'global', 'comment_policy', '{}', 'block', 'enforce', 0, 0, 0);
+  `,
 ];

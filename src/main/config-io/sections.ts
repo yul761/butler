@@ -26,14 +26,15 @@ const sortedSlugs = (s: readonly string[]) => [...new Set(s)].sort();
 export const productsSection: ConfigSection<ProductItem> = {
   id: "products",
   order: 10,
-  content: "lessons",
+  // 产品层的规矩和检查都要先有产品。
+  content: ["lessons", "checks"],
   item: ProductItem,
   export(sel, { repo }) {
     if (sel.kind === "repo") return [];
     const ps = sel.kind === "all" ? repo.products() : repo.products().filter((p) => p.id === sel.productId);
     return ps.map((p) => ({ name: p.name, repos: sortedSlugs(p.slugs) }));
   },
-  diff({ items, repo, fileScope }) {
+  diff({ items, repo, fileScope, doc }) {
     const local = new Map(repo.products().map((p) => [p.name, p]));
     const seen = new Set<string>();
     const rows: PreviewRow[] = [];
@@ -54,7 +55,8 @@ export const productsSection: ConfigSection<ProductItem> = {
         diffs: same ? [] : [{ field: "repos", local: a, incoming: b }], reasons: same ? [] : ["repos"], localId: l.id,
       });
     }
-    if (fileScope.kind === "all") {
+    // 只有带规矩的文件才删本机多出来的产品：只导出检查的文件里产品只是为了让产品层的检查有处可放，替换检查不该连带删掉产品和它的规矩。
+    if (fileScope.kind === "all" && "lessons" in doc) {
       for (const l of local.values()) {
         if (!seen.has(l.name)) rows.push({ fingerprint: productFingerprint(l.name), label: l.name, status: "removed", diffs: [], reasons: [], localId: l.id });
       }
@@ -99,6 +101,7 @@ export const productsSection: ConfigSection<ProductItem> = {
         for (const l of repo.lessons({ scope: { kind: "product", productId: row.localId }, includeMerged: true })) batch.track("lesson", l.id);
         const layer = policies.rowId({ kind: "product", productId: row.localId });
         if (layer !== null) batch.track("policy", layer);
+        for (const c of ctx.db.prepare(`SELECT id FROM checks WHERE scope_kind = 'product' AND product_id = ?`).all(row.localId) as { id: number }[]) batch.track("check", Number(c.id));
         batch.track("product", row.localId);
         repo.deleteProduct(row.localId);
         if (layer !== null) policies.bumpVersion();
