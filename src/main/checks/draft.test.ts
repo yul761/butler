@@ -10,14 +10,14 @@ import type { HeadlessExecResult } from "../handoff/headless-exec";
 const route = { task: "check_draft" as const, requestedTier: null, actualModel: null, fallbackFrom: null, degraded: false, sameModelReview: false };
 const ok = (value: unknown): HeadlessExecResult => ({ ok: true, value, rawText: "", result: {} as never, route });
 
-const setup = (answer: () => HeadlessExecResult) => {
+const setup = (answer: () => HeadlessExecResult, baseline?: (slugs: string[]) => string) => {
   const db = memDb();
   const lessons = new LessonsRepo(db);
   lessons.upsertRepo("acme/web", "/definitely/missing", 1);
   const recorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db)]);
   const checks = new ChecksService({ db, lessons, recorder, now: () => 1, config: () => ({ enabled: true, editTimeoutSec: 8, pushTimeoutSec: 600, ticketPattern: "X-\\d+" }) });
   const calls: Parameters<CheckDraftRunner>[0][] = [];
-  const drafter = new CheckDrafter({ lessons, checks, fallbackCwd: () => "/home", run: async (req) => (calls.push(req), answer()) });
+  const drafter = new CheckDrafter({ lessons, checks, fallbackCwd: () => "/home", baseline, run: async (req) => (calls.push(req), answer()) });
   const lid = lessons.addLesson({ scope: { kind: "repo", slug: "acme/web" }, text: "never call useEffect in views", why: "w", at: 1, source: { prNumber: 1, url: null, slug: "acme/web", runId: null } });
   return { lessons, drafter, calls, lid };
 };
@@ -33,6 +33,21 @@ describe("CheckDrafter", () => {
     expect(calls[0].prompt).toContain("never call useEffect in views");
     // 没有本地仓库：不给读文件的工具。
     expect(calls[0].args).not.toContain("--allowedTools");
+  });
+
+  it("gives the model the repo's existing checks when a scan exists", async () => {
+    const seen: string[][] = [];
+    const { drafter, calls, lid } = setup(
+      () => ok({ checkable: false, reason: "eslint no-restricted-syntax covers it" }),
+      (slugs) => (seen.push(slugs), "repo acme/web:\n- . lint eslint [high]: pnpm lint rules: no-console"),
+    );
+    await drafter.draft(lid);
+    expect(seen).toEqual([["acme/web"]]);
+    expect(calls[0].prompt).toContain("仓库现在已经有的检查");
+    expect(calls[0].prompt).toContain("pnpm lint rules: no-console");
+    const bare = setup(() => ok({ checkable: false, reason: "x" }), () => "");
+    await bare.drafter.draft(bare.lid);
+    expect(bare.calls[0].prompt).not.toContain("仓库现在已经有的检查");
   });
 
   it("marks the lesson prose when it cannot be checked", async () => {
