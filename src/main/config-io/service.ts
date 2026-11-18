@@ -81,6 +81,7 @@ export class ConfigIoService {
     const env = this.env();
     const sections: Record<string, unknown[]> = {};
     for (const s of this.d.registry.forContent(req.options.content, starter)) {
+      if (s.include && !s.include(req.options)) continue;
       sections[s.id] = s.export(sel, { ...env, options: starter ? { ...req.options, includeSourceUrls: false } : req.options, starter });
     }
     const scope: FileScope = starter

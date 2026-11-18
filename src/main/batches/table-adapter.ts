@@ -144,3 +144,20 @@ export const checkAdapter = (db: Db): EntityAdapter =>
       state: `${String(s.mode ?? "")}/${String(s.severity ?? "")}${s.enabled === 0 ? " off" : ""}`,
     }),
   });
+
+/** 标记文件表的覆盖行（工作流 E2）：导入能撤销。 */
+export const baselineRuleAdapter = (db: Db): EntityAdapter =>
+  tableAdapter(db, {
+    entity: "baseline_rule",
+    table: "baseline_rules",
+    volatile: ["updated_at"],
+    describe: (s) => ({ label: String(s.key ?? ""), state: s.enabled === 0 ? "off" : "on" }),
+  });
+
+/** 导入的仓库现状（工作流 E2）：撤销就删掉这一条。 */
+export const baselineAdapter = (db: Db): EntityAdapter =>
+  tableAdapter(db, {
+    entity: "baseline",
+    table: "repo_baselines",
+    describe: (s) => ({ label: String(s.repo_slug ?? ""), state: String(s.origin ?? "") }),
+  });

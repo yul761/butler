@@ -484,9 +484,10 @@ export function exportRequestArg(v: unknown): ExportRequest {
   else if (sc.kind === "product" && sc.slug === undefined) scope = { kind: "product", productId: posInt(sc.productId, "export scope") };
   else if (sc.kind === "repo" && sc.productId === undefined) scope = { kind: "repo", slug: lessonSlugArg(sc.slug) };
   else throw new Error("invalid export scope");
-  const op = objArg(o.options, "export options", ["content", "includeSourceUrls"]);
+  const op = objArg(o.options, "export options", ["content", "includeSourceUrls", "includeBaselines"]);
   if (!(EXPORT_CONTENTS as readonly unknown[]).includes(op.content) || typeof op.includeSourceUrls !== "boolean") throw new Error("invalid export options");
-  const req: ExportRequest = { scope, options: { content: op.content as ExportContent, includeSourceUrls: op.includeSourceUrls } };
+  if (op.includeBaselines !== undefined && typeof op.includeBaselines !== "boolean") throw new Error("invalid export options");
+  const req: ExportRequest = { scope, options: { content: op.content as ExportContent, includeSourceUrls: op.includeSourceUrls, ...(op.includeBaselines ? { includeBaselines: true } : {}) } };
   if (o.starter !== undefined) {
     const st = objArg(o.starter, "starter pack", ["name"]);
     if (typeof st.name !== "string" || !st.name.trim() || st.name.length > 200) throw new Error("invalid starter pack");

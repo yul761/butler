@@ -62,6 +62,8 @@ export interface ConfigSection<Item = unknown> {
   item: z.ZodType<Item>;
   /** 起步包里有没有这个部分。 */
   inStarter?: boolean;
+  /** 要勾选才导出的部分（如仓库现状）：返回 false 时文件里没有这一节。 */
+  include?(options: ExportOptions): boolean;
   export(sel: ExportSelection, ctx: ExportContext): Item[];
   /** 和本地比：added / changed / conflicting / unchanged，以及文件范围里本地有、文件没有的 removed（只在替换模式下删）。 */
   diff(ctx: DiffContext<Item>): PreviewRow[];

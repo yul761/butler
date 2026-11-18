@@ -140,6 +140,12 @@ export class BaselinesRepo {
     }
   }
 
+  ruleId(scope: CheckScope, key: string): number | null {
+    const [w, args] = where(scope);
+    const r = this.db.prepare(`SELECT id FROM baseline_rules WHERE key = ? AND ${w}`).get(key, ...args) as { id: number } | undefined;
+    return r ? Number(r.id) : null;
+  }
+
   removeRule(scope: CheckScope, key: string): boolean {
     const [w, args] = where(scope);
     return Number(this.db.prepare(`DELETE FROM baseline_rules WHERE key = ? AND ${w}`).run(key, ...args).changes) > 0;
