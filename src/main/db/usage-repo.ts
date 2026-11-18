@@ -1,4 +1,5 @@
 import type { UsageTurn } from "../usage/usage-parse";
+import { USAGE_WEIGHTS as W } from "../usage/usage-summary";
 import { withTransaction, type Db } from "./database";
 
 export type UsageSource = "session" | "subagent" | "headless";
@@ -100,7 +101,6 @@ export class UsageRepo {
     return (this.db.prepare(`SELECT * FROM session_usage WHERE at >= ? ORDER BY at`).all(sinceMs) as unknown as UsageDbRow[]).map(toRow);
   }
 
-  /** at >= sinceMs 的用量按模型和任务汇总。input 含缓存写入和读取（都按 token 计）。 */
   /** 这之后用量里出现过的模型名（模型发现用），用得多的在前。 */
   modelsSince(sinceMs: number, limit = 20): string[] {
     const rows = this.db
@@ -109,13 +109,17 @@ export class UsageRepo {
     return rows.map((r) => r.model);
   }
 
+  /**
+   * at >= sinceMs 的用量按模型和任务汇总。input（token 配额用）含缓存写入、不含缓存读取（读取便宜得多，算进去配额会很快用完）；
+   * u_in（没记 cost_usd 的行按单价折钱用）按 USAGE_WEIGHTS 把缓存写入 / 读取折成普通输入。
+   */
   spendSince(sinceMs: number): SpendRow[] {
     const rows = this.db
       .prepare(
         `SELECT model, task, COUNT(*) AS rows,
-           SUM(input + cache_write_5m + cache_write_1h + cache_read) AS input, SUM(output) AS output,
+           SUM(input + cache_write_5m + cache_write_1h) AS input, SUM(output) AS output,
            SUM(COALESCE(cost_usd, 0)) AS cost,
-           SUM(CASE WHEN cost_usd IS NULL THEN input + cache_write_5m + cache_write_1h + cache_read ELSE 0 END) AS u_in,
+           SUM(CASE WHEN cost_usd IS NULL THEN input + ${W.cacheWrite5m} * cache_write_5m + ${W.cacheWrite1h} * cache_write_1h + ${W.cacheRead} * cache_read ELSE 0 END) AS u_in,
            SUM(CASE WHEN cost_usd IS NULL THEN output ELSE 0 END) AS u_out,
            SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS u_rows
          FROM session_usage WHERE at >= ? GROUP BY model, task`,

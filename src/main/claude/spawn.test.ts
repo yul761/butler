@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { inboxDir } from "../../../hook/butler-hook";
-import { AUTO_COMPACT_WINDOW_DEFAULT, SUBAGENT_MODEL_DEFAULT, claudeArgs, cmdShimSafe, headlessEnv, sessionEnv } from "./spawn";
+import { AUTO_COMPACT_WINDOW_DEFAULT, SUBAGENT_MODEL_DEFAULT, claudeArgs, cmdShimSafe, headlessEnv, sessionEnv, storedModel } from "./spawn";
 
 describe("claude spawn helpers", () => {
   it("adds the guide file after the other flags", () => {
@@ -93,6 +93,17 @@ describe("claude spawn helpers", () => {
       expect(e.CLAUDE_CONFIG_DIR).toBe(resolve("rel/c"));
     }
     expect("BUTLER_HOME" in headlessEnv({ PATH: "/usr/bin" }, { pathValue: "", runId: "r" })).toBe(false);
+  });
+});
+
+describe("storedModel", () => {
+  it("keeps aliases and names the registry has (even disabled ones), drops the rest like 2.1.0", () => {
+    const registered = (m: string) => m === "claude-fake-high";
+    expect(storedModel({ model: "opus" })).toBe("opus");
+    expect(storedModel({ model: "claude-fake-high" }, registered)).toBe("claude-fake-high");
+    expect(storedModel({ model: "claude-fake-high" })).toBeNull();
+    expect(storedModel({ model: "gpt" }, registered)).toBeNull();
+    expect(storedModel({ model: null }, registered)).toBeNull();
   });
 });
 

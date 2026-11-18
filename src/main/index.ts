@@ -684,8 +684,11 @@ async function bootstrap(): Promise<void> {
       availability.report({ ...hit, at, source: "session", job: null, sessionId: id });
       // 配置了路由：把撞限记到这个 session 的模型上（usage_limit 一般是整个账号的）。
       try {
-        routing.onSessionLimit(sessions.head(id)?.model ?? null, hit, hit.kind === "usage_limit");
-        switcher.noteLimit(id, hit, at);
+        // 换模型之前的那条报错（恢复后又被读到）不再记到新模型上。
+        if (!switcher.staleHit(id, at)) {
+          routing.onSessionLimit(sessions.head(id)?.model ?? null, hit, hit.kind === "usage_limit");
+          switcher.noteLimit(id, hit, at);
+        }
       } catch (e) {
         logger("routing: recording a session limit failed", e);
       }
@@ -705,8 +708,8 @@ async function bootstrap(): Promise<void> {
     return st === "ok" ? null : st === "version" ? "snapshot_version" : "no_snapshot";
   };
   const sessionService = new SessionService({
+    knownModel: routing.registered,
     tickets, sessions, settings, ticketService, pty,
-    knownModel: routing.knows,
     activity: (id) => activityMonitor.get(id),
     sessionName: (id) => sessionRegistryName(paths.claudeSessions, id),
     submit: submitTask,
@@ -827,6 +830,7 @@ async function bootstrap(): Promise<void> {
     signal: headlessAbort.signal,
     onUsage: recordHeadlessUsage,
     ...availabilityHooks,
+    routing,
     log: logger,
   });
   /** feature 有新汇总时，它所在的 epic 重新渲染 handoff（异步，失败只记日志）。 */
@@ -857,6 +861,7 @@ async function bootstrap(): Promise<void> {
     signal: headlessAbort.signal,
     onUsage: recordHeadlessUsage,
     ...availabilityHooks,
+    routing,
     log: logger,
   });
   /**

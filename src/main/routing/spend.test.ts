@@ -74,7 +74,7 @@ describe("summarizeSpend", () => {
     expect(s.level("other", "low")).toBe("ok");
   });
 
-  it("reads from session_usage", () => {
+  it("reads from session_usage: tokens leave out cache reads, unpriced input weights them", () => {
     const db = memDb();
     migrate(db);
     const u = new UsageRepo(db);
@@ -84,7 +84,7 @@ describe("summarizeSpend", () => {
       { ...base, messageId: "b", at: 20, model: "H", task: "lesson_analyze" },
       { ...base, messageId: "c", at: 1, model: "H", task: "lesson_analyze" },
     ]);
-    expect(u.spendSince(5)).toEqual([{ model: "H", task: "lesson_analyze", rows: 2, input: 300, output: 20, tokens: 320, costUsd: 0.5, unpricedInput: 150, unpricedOutput: 10, unpricedRows: 1 }]);
+    expect(u.spendSince(5)).toEqual([{ model: "H", task: "lesson_analyze", rows: 2, input: 200, output: 20, tokens: 220, costUsd: 0.5, unpricedInput: 105, unpricedOutput: 10, unpricedRows: 1 }]);
     expect(u.since(10)[0]).toMatchObject({ task: "lesson_analyze", requestedTier: "mid", fallbackFrom: "M", costUsd: 0.5 });
   });
 });

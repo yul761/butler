@@ -11,7 +11,7 @@ export type SwitchResult = SwitchModelResult;
 
 export interface SessionSwitchDeps {
   head: (sessionId: string) => Session | null;
-  setModel: (sessionId: string, model: string) => void;
+  setModel: (sessionId: string, model: string | null) => void;
   /** 这个 session 现在的终端 id；没开着为 null。 */
   termIdOf: (sessionId: string) => string | null;
   kill: (termId: string) => void;
@@ -46,16 +46,25 @@ interface Limited {
 export class SessionModelSwitcher {
   private readonly limited = new Map<string, Limited>();
   private readonly switching = new Set<string>();
+  /** 每个 session 最近一次开始换模型的时间：恢复后的记录里还是那条旧报错，它不算新的撞限。 */
+  private readonly switchedAt = new Map<string, number>();
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly d: SessionSwitchDeps) {
     this.sleep = d.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
-  /** ActivityMonitor 看到 session 撞限。 */
+  /** 这条撞限记录（at 是记录的时间）早于最近一次换模型：是换之前那条，不是新模型撞的。 */
+  staleHit(sessionId: string, at: number): boolean {
+    const id = this.d.head(sessionId)?.id ?? sessionId;
+    const t = this.switchedAt.get(id);
+    return t !== undefined && at <= t;
+  }
+
+  /** ActivityMonitor 看到 session 撞限。换模型之前的那条（恢复后又被读到）不算。 */
   noteLimit(sessionId: string, hit: LimitHit, at: number): void {
     const head = this.d.head(sessionId);
-    if (!head) return;
+    if (!head || this.staleHit(head.id, at)) return;
     this.limited.set(head.id, { model: head.model, kind: hit.kind, message: hit.message, at, resetsAt: hit.resetsAt });
     this.d.onChange?.();
     if (this.d.autoSwitch() && this.d.nextModel(head.model) !== null) {
@@ -93,6 +102,7 @@ export class SessionModelSwitcher {
     if (!target) return { ok: false, reason: "no_next" };
     if (this.switching.has(head.id)) return { ok: false, reason: "busy" };
     this.switching.add(head.id);
+    this.switchedAt.set(head.id, this.d.now());
     this.d.onChange?.();
     try {
       const term = this.d.termIdOf(head.id);
@@ -107,6 +117,8 @@ export class SessionModelSwitcher {
       this.d.setModel(head.id, target);
       const r = await this.d.reopen({ ...head, model: target });
       if (!r.ok) {
+        // 没开起来：记下的模型改回原来的，下次手动重开还是原模型。
+        this.d.setModel(head.id, head.model);
         this.d.log?.(`routing: reopening ${head.id} on ${target} failed (${r.reason})`);
         return { ok: false, reason: "open_failed", detail: r.reason };
       }

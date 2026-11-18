@@ -85,6 +85,16 @@ describe("RoutingService", () => {
     expect(s.health.usable("M1")).toBe(true);
   });
 
+  it("dismissing one error leaves a suspicion raised by a different error", async () => {
+    const { s, repo, tick } = setup([reg("M1", "mid")]);
+    s.onFailure("M1", "billing hiccup at the proxy", null, null);
+    tick(1000);
+    s.onFailure("M1", "API Error: 402 credits gone", null, null);
+    const first = repo.unrecognized().find((u) => u.sample.startsWith("billing"))!;
+    await s.act({ op: "dismissError", id: first.id });
+    expect(s.health.usable("M1")).toBe(false);
+  });
+
   it("account-level limits mark same-account models of the same or a higher tier", () => {
     const { s } = setup([reg("H", "high"), reg("M", "mid"), reg("L", "low"), reg("X", "high", { account: "other" })]);
     const marked = s.onLimit("M", { kind: "usage_limit", resetsAt: null, message: "x" }, { task: null, accountLevel: true });
@@ -112,6 +122,67 @@ describe("RoutingService", () => {
     s.event("fallback", { task: "pr_brief", model: "H", toModel: "M" });
     s.onLimit("H", { kind: "rate_limit", resetsAt: null, message: "x" }, { task: null, accountLevel: false });
     expect(s.attention()).toEqual({ limited: ["H"], fallbacks: 1 });
+  });
+
+  it("automatic probes only for registered, enabled models; removing a model clears its health", async () => {
+    const db = memDb();
+    migrate(db);
+    const repo = new RoutingRepo(db);
+    repo.upsertModel(reg("M", "mid"));
+    repo.upsertModel(reg("GONE", "mid", { enabled: false }));
+    const timers: (() => void)[] = [];
+    const probes: string[] = [];
+    let now = 0;
+    const s = new RoutingService({
+      repo, usage: new UsageRepo(db), now: () => now,
+      settings: () => ({ quotas: "", thresholds: "70,90", periodStartDay: 1, effort: "", maxConcurrent: "", autoSwitch: false }),
+      flags: () => ({ model: true, effort: true }),
+      probe: async (m) => {
+        probes.push(m);
+        return { ok: true };
+      },
+      setTimer: (fn) => (timers.push(fn), timers.length), clearTimer: () => undefined,
+    });
+    s.onLimit("M", { kind: "model_unavailable", resetsAt: null, message: "x" }, { task: null, accountLevel: false });
+    s.onLimit("GONE", { kind: "model_unavailable", resetsAt: null, message: "x" }, { task: null, accountLevel: false });
+    now = 2 * 3_600_000;
+    for (const t of timers.splice(0)) t();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(probes).toEqual(["M"]);
+    expect(s.health.get("GONE").state).toBe("ok");
+    expect([s.knows("GONE"), s.registered("GONE"), s.registered("NOPE")]).toEqual([false, true, false]);
+    s.onLimit("M", { kind: "rate_limit", resetsAt: null, message: "x" }, { task: null, accountLevel: false });
+    await s.act({ op: "removeModel", name: "M" });
+    expect(s.health.get("M").state).toBe("ok");
+  });
+
+  it("a quota wait wakes up when the period ends", () => {
+    const db = memDb();
+    migrate(db);
+    const repo = new RoutingRepo(db);
+    repo.upsertModel(reg("M", "mid"));
+    const usage = new UsageRepo(db);
+    let now = Date.UTC(2026, 10, 30, 12);
+    usage.record([{ messageId: "a", at: now - 1000, sessionId: null, agentId: null, source: "headless", job: "lessons", model: "M", task: "lesson_analyze", input: 1, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 1, context: 0, costUsd: 50 }]);
+    const timers: { fn: () => void; ms: number }[] = [];
+    let changes = 0;
+    const s = new RoutingService({
+      repo, usage, now: () => now,
+      settings: () => ({ quotas: JSON.stringify([{ target: "model:M", unit: "usd", monthly: 10 }]), thresholds: "70,90", periodStartDay: 1, effort: "", maxConcurrent: "", autoSwitch: false }),
+      flags: () => ({ model: true, effort: true }),
+      probe: async () => ({ ok: true }),
+      setTimer: (fn, ms) => (timers.push({ fn, ms }), timers.length), clearTimer: () => undefined,
+      onChange: () => void changes++,
+    });
+    const end = s.spend().periodEnd; // 周期按本地时间算
+    expect(s.plan("lesson_analyze")).toMatchObject({ mode: "wait", until: end });
+    const t = timers.at(-1)!;
+    expect(t.ms).toBeLessThanOrEqual(86_400_000);
+    now = end + 2_000;
+    const before = changes;
+    t.fn();
+    expect(changes).toBeGreaterThan(before);
+    expect(s.plan("lesson_analyze")).toMatchObject({ mode: "routed" });
   });
 
   it("manual probe recovers a model", async () => {
@@ -151,6 +222,7 @@ describe("RoutingService", () => {
     });
     expect(s.sessionModel("high")).toMatchObject({ ok: true, model: null, note: "no_flag" });
     expect(s.effortFor("needs_you", "low")).toBeNull();
+    expect(s.effortFor("model_probe", null)).toBeNull();
   });
 
   it("validates settings-page actions", async () => {
@@ -173,6 +245,7 @@ describe("RoutingService", () => {
     const { s } = setup([], { effort: '{"needs_you":"low","mid":"medium"}', maxConcurrent: '{"high":1}' });
     expect(s.effortFor("needs_you", "low")).toBe("low");
     expect(s.effortFor("pr_brief", "mid")).toBe("medium");
+    expect(s.effortFor("model_probe", null)).toBe("low");
     const r1 = await s.acquire("high");
     let second = false;
     const p = s.acquire("high").then((r) => {

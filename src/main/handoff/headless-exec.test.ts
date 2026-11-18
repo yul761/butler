@@ -159,6 +159,12 @@ describe("execHeadlessJson routing", () => {
     expect(reports[0]).toMatchObject({ task: "lesson_analyze", requestedTier: "mid", fallbackFrom: "M1" });
   });
 
+  it("starting below the requested tier because that tier has no models is not degraded", async () => {
+    const { d } = routed([reg("H1", "high"), reg("L1", "low")], () => ({ ok: true, result: result() }));
+    const r = await execHeadlessJson(d, lo);
+    expect(r).toMatchObject({ ok: true, route: { actualModel: "L1", requestedTier: "mid", fallbackFrom: null, degraded: false } });
+  });
+
   it("a limit hit mid-run falls back to the next model, down a tier for fallback tasks", async () => {
     const { d, routing, argv } = routed([reg("M1", "mid"), reg("L1", "low")], (m) => (m === "M1" ? limited("M1") : { ok: true, result: result() }));
     const r = await execHeadlessJson(d, lo);

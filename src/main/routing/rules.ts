@@ -145,9 +145,12 @@ export type GenericSignal = { kind: LimitKind; signal: "status" | "keyword" };
 const GENERIC_STATUS: Record<number, LimitKind> = { 429: "rate_limit", 529: "overloaded", 402: "usage_limit" };
 const MONEY_WORDS = /\b(?:quota|billing|credits?|insufficient[_ ]funds|payment required)\b/i;
 const LIMIT_WORD = /\blimit(?:s|ed)?\b/i;
+/** 说的是这次对话本身到了上限（上下文、轮数、输出长度、文件大小），不是模型或账号被限：换模型也一样，不算信号。 */
+const NOT_A_SERVICE_LIMIT = /\b(?:context(?:[ _-]window)?|prompt|max[ _-]?turns?|turns?|tokens?|output|length|size|file|line|recursion|depth|timeout|time)[ _-]+limit|\blimit[ _-]+(?:of|on)[ _-]+(?:turns?|tokens?|context)|context[ _-]length|max_tokens|too long/i;
 
 /**
- * 规则认不出、但运行失败时看的通用信号：HTTP 429 / 529 / 402，输出里有 quota / billing / credit（→ 额度）或 limit（→ 限流）。
+ * 规则认不出、但运行失败时看的通用信号：HTTP 429 / 529 / 402，输出里有 quota / billing / credit（→ 额度）或 limit（→ 限流；
+ * 上下文、轮数、token、输出长度这类「这次对话到了上限」的不算）。
  * 只在 run 失败（非零退出或 is_error）时调用。
  */
 export function genericSignal(i: { text: string; apiStatus: number | null }): GenericSignal | null {
@@ -156,7 +159,7 @@ export function genericSignal(i: { text: string; apiStatus: number | null }): Ge
     if (s !== null && GENERIC_STATUS[s]) return { kind: GENERIC_STATUS[s]!, signal: "status" };
   }
   if (MONEY_WORDS.test(i.text)) return { kind: "usage_limit", signal: "keyword" };
-  if (LIMIT_WORD.test(i.text)) return { kind: "rate_limit", signal: "keyword" };
+  if (LIMIT_WORD.test(i.text) && !NOT_A_SERVICE_LIMIT.test(i.text)) return { kind: "rate_limit", signal: "keyword" };
   return null;
 }
 

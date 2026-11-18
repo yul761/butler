@@ -38,8 +38,17 @@ function setup(over: Partial<SessionSwitchDeps> = {}) {
 }
 
 describe("SessionModelSwitcher", () => {
+  it("a failed reopen puts the stored model back", async () => {
+    const { sw, calls, row } = setup({ reopen: async () => ({ ok: false, reason: "no_repo" as const }) });
+    sw.noteLimit("s1", { kind: "usage_limit", resetsAt: null, message: "limit reached" }, 1_000);
+    expect(await sw.switch("s1")).toMatchObject({ ok: false, reason: "open_failed" });
+    expect(calls).toEqual(["kill s1", "set M1", "set H1"]);
+    expect(row().model).toBe("H1");
+    expect(sw.views()).toHaveLength(1);
+  });
+
   it("shows the limit on the row with the next model, then switches with --resume on it", async () => {
-    const { sw, calls, row } = setup();
+    const { sw, calls, row, tick } = setup();
     sw.noteLimit("s1", { kind: "usage_limit", resetsAt: null, message: "limit reached" }, 1_000);
     expect(sw.views()).toEqual([expect.objectContaining({ sessionId: "s1", model: "H1", next: "M1", switching: false })]);
     expect(calls).toEqual([]);
@@ -47,6 +56,13 @@ describe("SessionModelSwitcher", () => {
     expect(calls).toEqual(["kill s1", "set M1", "reopen s1 M1", "switched s1 H1 M1"]);
     expect(row().model).toBe("M1");
     expect(sw.views()).toEqual([]);
+    // 恢复后又读到换之前那条报错：不算 M1 撞限。之后的新报错照常提示。
+    expect(sw.staleHit("s1", 1_000)).toBe(true);
+    sw.noteLimit("s1", { kind: "usage_limit", resetsAt: null, message: "limit reached" }, 1_000);
+    expect(sw.views()).toEqual([]);
+    tick(5_000);
+    sw.noteLimit("s1", { kind: "rate_limit", resetsAt: null, message: "again" }, 6_000);
+    expect(sw.views()).toEqual([expect.objectContaining({ model: "M1", kind: "rate_limit" })]);
   });
 
   it("auto-switch (off by default) switches right away", async () => {

@@ -12,8 +12,8 @@ import { pickStructured } from "./schema";
 export interface ExecRouting {
   plan: (task: TaskId, ctx: { sessionModel?: string | null; producer?: Candidate | null }) => Plan;
   usable: (model: string) => boolean;
-  /** 模型路由里登记了这个名字（记下的 session 模型要靠它认）。 */
-  knows: (model: string) => boolean;
+  /** 模型路由的注册表里有这个名字（停用的也算；记下的 session 模型要靠它认）。 */
+  registered: (model: string) => boolean;
   effortFor: (task: TaskId, tier: Tier | null) => EffortLevel | null;
   flags: () => { model: boolean; effort: boolean };
   acquire: (tier: Tier | null) => Promise<() => void>;
@@ -220,9 +220,12 @@ export async function execHeadlessJson(d: HeadlessExecDeps, o: ExecOptions): Pro
 
   // ---- 走路由：按顺序试，撞限换下一个 ----
   const routing = r!;
+  // 「降级」相对这次本来能用的最高档：要求的档没有模型、只能从更低一档开始时，那一档就是满分，不算降级（否则升级重跑永远等不到）。
+  const preferredTier = [...plan.candidates, ...plan.skipped].find((c) => c.model === plan.preferred)?.tier ?? plan.requestedTier;
+  const baseline = tierRank(preferredTier) < tierRank(plan.requestedTier) ? preferredTier : plan.requestedTier;
   const routeFor = (cand: Candidate): RouteInfo => ({
     task: o.task, requestedTier: plan.requestedTier, actualModel: cand.model, fallbackFrom: cand.model === plan.preferred ? null : plan.preferred,
-    degraded: tierRank(cand.tier) < tierRank(plan.requestedTier), sameModelReview: plan.sameModelReview,
+    degraded: tierRank(cand.tier) < tierRank(baseline), sameModelReview: plan.sameModelReview,
   });
   let last: { out: Extract<HeadlessOutcome, { ok: false }>; limit: LimitHit; cand: Candidate } | null = null;
   for (let i = 0; i < plan.candidates.length; i++) {

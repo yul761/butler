@@ -90,6 +90,10 @@ describe("generic signals", () => {
     expect(genericSignal({ text: "request limited by gateway", apiStatus: null })?.kind).toBe("rate_limit");
     expect(genericSignal({ text: "TypeError at line 429", apiStatus: null })).toBeNull();
     expect(genericSignal({ text: "unlimited", apiStatus: null })).toBeNull();
+    // 这次对话自己的上限，不是模型被限：
+    for (const text of ["Error: Reached max turns limit (30)", "Prompt is too long: context limit exceeded", "output token limit reached", "max_tokens limit hit", "File size limit exceeded"]) {
+      expect(genericSignal({ text, apiStatus: null }), text).toBeNull();
+    }
   });
 });
 

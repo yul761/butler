@@ -144,7 +144,7 @@ export class HandoffRunner {
       schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(mcpCwd), addDirs,
     });
     // fork 换模型会让 prompt 缓存整个失效：沿用被 fork 的 session 自己的模型（路由不给 session 任务换模型）。
-    const sessionModel = session ? storedModel(session, this.d.routing?.knows) : null;
+    const sessionModel = session ? storedModel(session, this.d.routing?.registered) : null;
 
     let attempt = await this.exec(key, "handoff", args, prompt, cwd, session?.id, sessionModel);
     if (!attempt.ok) return attempt.outcome;

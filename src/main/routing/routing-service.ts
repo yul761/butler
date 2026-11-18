@@ -101,6 +101,12 @@ export function parseMaxConcurrent(v: string): Partial<Record<Tier, number>> {
 
 /** 「现在」页数最近多久的降级。 */
 export const ATTENTION_WINDOW_MS = 3_600_000;
+const PERIOD_TIMER_MAX_MS = 86_400_000;
+
+/** 疑似限额记到健康状态上的那句话：报错的第一行非空内容。 */
+function suspectMessage(text: string): string | null {
+  return text.trim().split("\n").find((l) => l.trim())?.slice(0, 300) ?? null;
+}
 
 /**
  * 模型路由的总入口（设计 addendum）：配置、健康、花费、识别规则和学习。
@@ -113,6 +119,8 @@ export class RoutingService {
   private sems = new Map<Tier, Semaphore>();
   private listeners = new Set<() => void>();
   private probing = new Set<string>();
+  /** 周期结束时的定时器：配额用完在等的任务（和复盘闸门）到新周期要重新算。 */
+  private periodTimer: { end: number; handle: unknown } | null = null;
   private log: (msg: string, err?: unknown) => void;
 
   constructor(private d: RoutingServiceDeps) {
@@ -132,6 +140,35 @@ export class RoutingService {
 
   dispose(): void {
     this.health.dispose();
+    this.clearPeriodTimer();
+  }
+
+  private clearPeriodTimer(): void {
+    if (this.periodTimer) (this.d.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>)))(this.periodTimer.handle);
+    this.periodTimer = null;
+  }
+
+  /** 设了配额就在周期结束时丢掉花费缓存、通知一次（等着的任务、闸门、升级重跑重新看）。一次最多等一天，到了再对。 */
+  private armPeriodTimer(end: number, hasQuotas: boolean): void {
+    if (!hasQuotas) return this.clearPeriodTimer();
+    if (this.periodTimer?.end === end) return;
+    this.clearPeriodTimer();
+    const set = this.d.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms).unref?.());
+    const ms = Math.min(PERIOD_TIMER_MAX_MS, Math.max(0, end - this.d.now()) + 1_000);
+    const handle = set(() => {
+      this.periodTimer = null;
+      if (this.d.now() >= end) {
+        this.spendCache = null;
+        this.changed();
+      }
+      try {
+        const s = this.spend();
+        this.armPeriodTimer(s.periodEnd, s.quotas.length > 0);
+      } catch (e) {
+        this.log("routing: re-arming the period timer failed", e);
+      }
+    }, ms);
+    this.periodTimer = { end, handle };
   }
 
   subscribe(fn: () => void): () => void {
@@ -168,6 +205,8 @@ export class RoutingService {
 
   /** 登记过、启用着的模型名。 */
   knows = (model: string): boolean => this.config().registry.some((m) => m.enabled && m.name === model);
+  /** 注册表里有这一行（停用的也算）：恢复 session 时记下的模型照传 --model，停用一个模型不会让正在用它的 session 悄悄换回默认模型。 */
+  registered = (model: string): boolean => this.config().registry.some((m) => m.name === model);
 
   usable = (model: string): boolean => this.health.usable(model);
 
@@ -211,7 +250,9 @@ export class RoutingService {
       }
       this.spendCache = { at: now, start, summary: summarizeSpend(rows, this.config().registry, parseQuotas(s.quotas), parseThresholds(s.thresholds)) };
     }
-    return { ...this.spendCache.summary, periodStart: start, periodEnd: periodEnd(start) };
+    const end = periodEnd(start);
+    this.armPeriodTimer(end, this.spendCache.summary.quotas.length > 0);
+    return { ...this.spendCache.summary, periodStart: start, periodEnd: end };
   }
 
   // ---- 规划 ----
@@ -234,7 +275,8 @@ export class RoutingService {
   effortFor(task: TaskId, tier: Tier | null): EffortLevel | null {
     if (!this.d.flags().effort) return null;
     const e = parseEffort(this.d.settings().effort);
-    return e[task] ?? (tier ? e[tier] : undefined) ?? null;
+    // 探测只要模型回一句话：没单独设就用 low。
+    return e[task] ?? (tier ? e[tier] : undefined) ?? (task === "model_probe" ? "low" : null);
   }
 
   flags(): { model: boolean; effort: boolean } {
@@ -342,7 +384,7 @@ export class RoutingService {
       this.changed();
       return null;
     }
-    const hit: LimitHit = { kind, resetsAt: null, message: text.trim().split("\n").find((l) => l.trim())?.slice(0, 300) ?? kind };
+    const hit: LimitHit = { kind, resetsAt: null, message: suspectMessage(text) ?? kind };
     // 疑似的只标这一个模型（不知道是不是账号级）。
     this.onLimit(model, hit, { task, accountLevel: false, suspected: true });
     return hit;
@@ -352,6 +394,11 @@ export class RoutingService {
 
   private async runProbe(model: string, why: "auto" | "manual"): Promise<void> {
     if (this.probing.has(model)) return;
+    // 自动探测只给登记着、启用着的模型：删掉、停用的（或整个没配置时）清掉状态，不再在后台调 claude。
+    if (why === "auto" && !this.knows(model)) {
+      this.health.clear(model);
+      return;
+    }
     this.probing.add(model);
     try {
       const r = await this.d.probe(model);
@@ -489,6 +536,7 @@ export class RoutingService {
       }
       case "removeModel":
         repo.removeModel(a.name);
+        this.health.clear(a.name);
         this.configChanged();
         return null;
       case "moveModel":
@@ -538,7 +586,12 @@ export class RoutingService {
           this.refreshRules();
         }
         // 这条报错造成的疑似标记清掉。
-        for (const m of u.models) if (this.health.get(m).suspected) this.health.clear(m);
+        // 只清这条报错打上的（同一句话），别的报错让它疑似的不动。
+        const msg = suspectMessage(u.sample);
+        for (const m of u.models) {
+          const h = this.health.get(m);
+          if (h.suspected && (msg === null || h.lastFailureText === msg)) this.health.clear(m);
+        }
         this.changed();
         return null;
       }

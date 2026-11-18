@@ -273,7 +273,7 @@ export class FeatureSummaryRunner {
       mcpConfigs: this.mcpConfigs(mcpCwd), addDirs: dirs.addDirs.filter((d) => d !== cwd),
     });
     // fork 换模型会让 prompt 缓存整个失效：沿用被 fork 的总控自己的模型（路由不给 session 任务换模型）。
-    const sessionModel = session ? storedModel(this.d.sessions.get(session.id) ?? { model: null }, this.d.routing?.knows) : null;
+    const sessionModel = session ? storedModel(this.d.sessions.get(session.id) ?? { model: null }, this.d.routing?.registered) : null;
 
     let attempt = await this.exec(featureId, args, prompt, cwd, session?.id, sessionModel);
     if (!attempt.ok) return attempt.outcome;
