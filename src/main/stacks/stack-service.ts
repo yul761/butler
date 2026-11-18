@@ -567,7 +567,7 @@ export class StackService {
         return;
       }
       if (!remote) {
-        const r = await this.d.external.attempt("branch_push" as ExternalActionKind, { scope, target: layer.branch, summary: `push ${layer.branch} before opening its PR` }, () =>
+        const r = await this.d.external.attempt("branch_push", { scope, target: layer.branch, summary: `push ${layer.branch} before opening its PR` }, () =>
           pushBranch(repo, stack.remote, layer.branch, null));
         if (!r.ran) return;
       }
@@ -637,7 +637,7 @@ export class StackService {
       for (const b of [parent, layer]) {
         if (b.state === "merged") continue;
         if (!(await remoteTip(repo, stack.remote, b.branch))) {
-          const r = await this.d.external.attempt("branch_push" as ExternalActionKind, { scope: { repoSlug: slug, ticketKey: b.ticketKey }, target: b.branch, summary: `push ${b.branch} before opening a draft` }, () =>
+          const r = await this.d.external.attempt("branch_push", { scope: { repoSlug: slug, ticketKey: b.ticketKey }, target: b.branch, summary: `push ${b.branch} before opening a draft` }, () =>
             pushBranch(repo, stack.remote, b.branch, null));
           if (!r.ran) return { ok: false, message: t.switchOff("branch_push") };
         }
@@ -808,8 +808,31 @@ export class StackService {
     const scope = { repoSlug: s.repoSlug };
     const lr = this.d.repo.lastRun(s.id);
     const settled = !lr || lr.outcome === "rebased" || lr.outcome === "noop" || lr.outcome === "restored";
+    if (settled && this.d.external.allowed("force_push", scope)) await this.pushPending(s);
     if (settled && p.autoOpenBottomPr && this.needsPromotion(s) && this.d.external.allowed("pr_open", scope)) await this.promoteBottom(s);
     if (p.overview === "issue" && this.d.external.allowed("issue_post", scope)) await this.syncOverview(s);
+  }
+
+  /**
+   * 改写过、但当时 force_push 关着没推出去的层（remoteOkSha 有值）：开关打开后补推。
+   * 只在远端还停在 Butler 替换掉的那个提交、本地还是 Butler 记下的顶端时推；别的情况留给下一次 run。
+   */
+  private async pushPending(s: StackRow): Promise<void> {
+    for (const l of this.d.repo.layers(s.id)) {
+      if (l.state === "merged" || l.remoteOkSha === null) continue;
+      const local = await revParse(s.repoPath, `refs/heads/${l.branch}`);
+      const remote = await remoteTip(s.repoPath, s.remote, l.branch);
+      if (remote === local) {
+        this.d.repo.updateLayer(l.id, { remoteOkSha: null });
+        continue;
+      }
+      if (!local || local !== l.tipSha || remote !== l.remoteOkSha) continue;
+      const ok = await this.forcePush(s, { position: l.position, branch: l.branch, oldTip: local, newTip: local, checkout: null, remoteTip: remote, remoteOkSha: l.remoteOkSha }, l).catch((e) => {
+        this.d.log(`stacks: pushing ${l.branch} failed`, e);
+        return false;
+      });
+      if (ok) this.d.repo.updateLayer(l.id, { remoteOkSha: null });
+    }
   }
 
   /** 第 3.6 节：每个仓库每 5 分钟 fetch 一次（force = 现在就要）；同一个仓库串行。返回这次真的 fetch 了。 */

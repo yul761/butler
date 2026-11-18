@@ -1,0 +1,535 @@
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExternalActionKind } from "../../shared/external";
+import type { StackRunMode } from "../../shared/stacks";
+import { StacksRepo } from "../db/stacks-repo";
+import type { ExternalDetail } from "../external/actions";
+import { makeRepo, memDb, tempDir } from "../test-utils";
+import type { CreatePr, PrSnapshot } from "./gh-stack";
+import { StackPolicyService } from "./stack-policy";
+import { StackService, type StackServiceDeps } from "./stack-service";
+
+/** 假的 GitHub：只记 PR 和调用，不联网。git 部分是真的（临时仓库 + 本地 bare 远端）。 */
+const fake = vi.hoisted(() => ({
+  prs: new Map<number, PrSnapshot>(),
+  issues: new Map<number, { title: string; body: string }>(),
+  next: 100,
+  calls: [] as { fn: string; args: unknown[] }[],
+}));
+
+vi.mock("./gh-stack", async (orig) => {
+  const real = await orig<typeof import("./gh-stack")>();
+  const rec = (fn: string, ...args: unknown[]) => fake.calls.push({ fn, args });
+  const pr = (n: number) => {
+    const p = fake.prs.get(n);
+    if (!p) throw new Error(`no PR #${n}`);
+    return p;
+  };
+  return {
+    ...real,
+    prCreate: vi.fn(async (_c: string, _s: string | null, p: CreatePr) => {
+      rec("prCreate", p);
+      const number = fake.next++;
+      const url = `https://github.com/acme/app/pull/${number}`;
+      fake.prs.set(number, { number, url, state: "OPEN", isDraft: p.draft, title: p.title, body: p.body, base: p.base, head: p.head, headSha: null, labels: [...p.labels] });
+      return { number, url };
+    }),
+    prEditBase: vi.fn(async (_c: string, _s: string | null, n: number, base: string) => (rec("prEditBase", n, base), (pr(n).base = base))),
+    prEditTitle: vi.fn(async (_c: string, _s: string | null, n: number, title: string) => (rec("prEditTitle", n, title), (pr(n).title = title))),
+    prEditBody: vi.fn(async (_c: string, _s: string | null, n: number, body: string) => (rec("prEditBody", n, body), (pr(n).body = body))),
+    prLabel: vi.fn(async (_c: string, _s: string | null, n: number, label: string, add: boolean) => {
+      rec("prLabel", n, label, add);
+      const p = pr(n);
+      p.labels = add ? [...p.labels, label] : p.labels.filter((l) => l !== label);
+    }),
+    prReady: vi.fn(async (_c: string, _s: string | null, n: number) => (rec("prReady", n), (pr(n).isDraft = false))),
+    prClose: vi.fn(async (_c: string, _s: string | null, n: number, comment: string) => (rec("prClose", n, comment), (pr(n).state = "CLOSED"))),
+    ensureLabel: vi.fn(async (_c: string, _s: string | null, name: string) => void rec("ensureLabel", name)),
+    prView: vi.fn(async (_c: string, _s: string | null, n: number) => (fake.prs.has(n) ? { ...fake.prs.get(n)!, labels: [...fake.prs.get(n)!.labels] } : null)),
+    openPrs: vi.fn(async () => [...fake.prs.values()].filter((p) => p.state === "OPEN")),
+    issueCreate: vi.fn(async (_c: string, _s: string | null, title: string, body: string) => {
+      rec("issueCreate", title);
+      const number = fake.next++;
+      fake.issues.set(number, { title, body });
+      return { number, url: `https://github.com/acme/app/issues/${number}` };
+    }),
+    issueEdit: vi.fn(async (_c: string, _s: string | null, n: number, title: string, body: string) => (rec("issueEdit", n), fake.issues.set(n, { title, body }))),
+  };
+});
+
+const g = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+function commit(repo: string, file: string, text: string, msg: string): string {
+  writeFileSync(join(repo, file), text);
+  g(repo, "add", file);
+  g(repo, "commit", "-q", "-m", msg);
+  return g(repo, "rev-parse", "HEAD");
+}
+
+const BRANCHES = ["a", "b", "c", "d"];
+
+/** 4 层的栈 a ← b ← c ← d，每层一个提交、各改各的文件；全部推到远端。另有一个「GitHub」克隆用来合并。 */
+function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind) => boolean; autoRebase?: boolean; policy?: Record<string, unknown> } = {}) {
+  const remote = tempDir("butler-remote-");
+  g(remote, "init", "-q", "--bare", "-b", "main");
+  const repo = makeRepo();
+  g(repo, "remote", "add", "origin", remote);
+  g(repo, "push", "-q", "origin", "main");
+  let prev = "main";
+  for (const b of BRANCHES) {
+    g(repo, "checkout", "-q", "-b", b, prev);
+    commit(repo, `${b}.txt`, `${b}\n`, `${b} one`);
+    g(repo, "push", "-q", "origin", b);
+    prev = b;
+  }
+  g(repo, "checkout", "-q", "main");
+  g(repo, "fetch", "-q", "origin");
+  const hub = tempDir("butler-hub-");
+  g(hub, "clone", "-q", remote, ".");
+  g(hub, "config", "user.email", "hub@example.com");
+  g(hub, "config", "user.name", "Hub");
+  g(hub, "config", "commit.gpgsign", "false");
+
+  const db = memDb();
+  let clock = Date.parse("2026-11-18T10:00:00");
+  const policy = new StackPolicyService({ db, productsOf: () => [], productName: () => null, now: () => clock });
+  policy.setLayer({ kind: "global" }, { autoRebase: o.autoRebase ?? true, ...o.policy });
+  const repoT = new StacksRepo(db, () => clock);
+  const external: { kind: ExternalActionKind; detail: ExternalDetail; ran: boolean }[] = [];
+  const allow = o.allow ?? (() => true);
+  const delivered: { ticketKey: string; text: string }[] = [];
+  const posted: string[] = [];
+  const deps: StackServiceDeps = {
+    repo: repoT,
+    policy,
+    external: {
+      async attempt<T>(kind: ExternalActionKind, detail: ExternalDetail, run: () => Promise<T>) {
+        const ran = allow(kind);
+        external.push({ kind, detail, ran });
+        if (!ran) return { ran: false as const, auditId: 1 };
+        return { ran: true as const, value: await run(), auditId: 1 };
+      },
+      allowed: (k) => allow(k),
+    },
+    workRoot: join(tempDir("butler-stackwork-"), "stack-work"),
+    execPath: process.execPath,
+    now: () => clock,
+    log: () => undefined,
+    owned: (_r, b) => (BRANCHES.includes(b) || b === "e" ? { ticketKey: b.toUpperCase(), ticketRepoId: 1, ticketTitle: `title ${b}`, worktree: null } : null),
+    slugOf: async () => "acme/app",
+    sessionBusy: () => false,
+    gateHeld: () => false,
+    trunkBusy: () => false,
+    deliver: vi.fn(async (ticketKey: string, text: string) => (delivered.push({ ticketKey, text }), true)),
+    briefProvider: (l) => ({ markdown: `<!-- butler:brief -->brief for ${l.branch}<!-- /butler:brief -->`, posted: (url) => posted.push(url) }),
+    forceMode: o.mode,
+  };
+  const svc = new StackService(deps);
+  return {
+    repo, remote, hub, db, svc, deps, repoT, policy, external, delivered, posted,
+    tip: (b: string) => g(repo, "rev-parse", b),
+    remoteTip: (b: string) => g(remote, "rev-parse", b),
+    advance: (ms: number) => (clock += ms),
+    /** 在「GitHub」上把 a 合进 main。 */
+    mergeOnHub(branch: string, how: "squash" | "merge") {
+      g(hub, "fetch", "-q", "origin");
+      g(hub, "checkout", "-q", "main");
+      g(hub, "reset", "-q", "--hard", "origin/main");
+      const head = g(hub, "rev-parse", `origin/${branch}`);
+      if (how === "squash") {
+        g(hub, "merge", "-q", "--squash", `origin/${branch}`);
+        g(hub, "commit", "-q", "-m", `${branch} (squashed)`);
+      } else {
+        g(hub, "merge", "-q", "--no-ff", "-m", `Merge ${branch}`, `origin/${branch}`);
+      }
+      g(hub, "push", "-q", "origin", "main");
+      return head;
+    },
+    /** 别人往 main 推了一个提交。 */
+    pushMain(file: string, text: string) {
+      g(hub, "fetch", "-q", "origin");
+      g(hub, "checkout", "-q", "main");
+      g(hub, "reset", "-q", "--hard", "origin/main");
+      commit(hub, file, text, `main ${file}`);
+      g(hub, "push", "-q", "origin", "main");
+    },
+  };
+}
+
+type World = ReturnType<typeof world>;
+
+async function defineAll(w: World) {
+  const r = await w.svc.define({ repoPath: w.repo, branches: BRANCHES, source: "mcp" });
+  expect(r.ok).toBe(true);
+  return r.stackId!;
+}
+
+/** 从 trunk 到 branch 一共有几个提交、是不是直接接在 trunk 上。 */
+function shape(w: World, branch: string) {
+  g(w.repo, "fetch", "-q", "origin");
+  return {
+    count: Number(g(w.repo, "rev-list", "--count", `origin/main..${branch}`)),
+    onTrunk: (() => {
+      try {
+        g(w.repo, "merge-base", "--is-ancestor", "origin/main", branch);
+        return true;
+      } catch {
+        return false;
+      }
+    })(),
+  };
+}
+
+beforeEach(() => {
+  fake.prs.clear();
+  fake.issues.clear();
+  fake.calls.length = 0;
+  fake.next = 100;
+});
+
+describe("StackService.define", () => {
+  it("records layers with their tips and bases", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const layers = w.repoT.layers(id);
+    expect(layers.map((l) => l.branch)).toEqual(BRANCHES);
+    expect(layers[1]!.baseSha).toBe(w.tip("a"));
+    expect(layers[3]!.tipSha).toBe(w.tip("d"));
+    expect(w.repoT.get(id)).toMatchObject({ trunk: "main", remote: "origin", repoSlug: "acme/app", name: "A → B → C → D" });
+  });
+
+  it("refuses too few, foreign, duplicate and already-stacked branches", async () => {
+    const w = world();
+    expect((await w.svc.define({ repoPath: w.repo, branches: ["a"], source: "mcp" })).ok).toBe(false);
+    expect((await w.svc.define({ repoPath: w.repo, branches: ["a", "main"], source: "mcp" })).ok).toBe(false);
+    expect((await w.svc.define({ repoPath: w.repo, branches: ["a", "a"], source: "mcp" })).ok).toBe(false);
+    await w.svc.define({ repoPath: w.repo, branches: ["a", "b"], source: "mcp" });
+    expect((await w.svc.define({ repoPath: w.repo, branches: ["b", "c"], source: "mcp" })).ok).toBe(false);
+  });
+
+  it("stacks a new branch only on the top", async () => {
+    const w = world();
+    const r = await w.svc.define({ repoPath: w.repo, branches: ["a", "b"], source: "mcp" });
+    expect(w.svc.canStackOn(w.repo, "a").ok).toBe(false);
+    expect(w.svc.canStackOn(w.repo, "b").ok).toBe(true);
+    g(w.repo, "branch", "e", "b");
+    const s = await w.svc.stackOn({ repoPath: w.repo, parentBranch: "b", branch: "e", featureId: null, epicId: null });
+    expect(s).toMatchObject({ ok: true, stackId: r.stackId });
+    expect(w.repoT.layers(r.stackId!).map((l) => l.branch)).toEqual(["a", "b", "e"]);
+  });
+
+  it("detects chains of Butler PRs", async () => {
+    const w = world();
+    for (const [i, b] of BRANCHES.entries()) {
+      fake.prs.set(10 + i, { number: 10 + i, url: `https://github.com/acme/app/pull/${10 + i}`, state: "OPEN", isDraft: i > 0, title: b, body: "", base: i ? BRANCHES[i - 1]! : "main", head: b, headSha: null, labels: [] });
+    }
+    const ids = await w.svc.detect(w.repo);
+    expect(ids).toHaveLength(1);
+    const layers = w.repoT.layers(ids[0]!);
+    expect(layers.map((l) => [l.branch, l.prNumber, l.state])).toEqual([["a", 10, "ready"], ["b", 11, "draft"], ["c", 12, "draft"], ["d", 13, "draft"]]);
+    expect(await w.svc.detect(w.repo)).toEqual([]);
+  });
+});
+
+describe.each<[string, StackRunMode | undefined]>([["--update-refs", undefined], ["per-layer fallback", "per_layer"]])("bottom merged (%s)", (_n, mode) => {
+  it.each(["squash", "merge"] as const)("rebases the top three layers after a %s merge and opens the new bottom as a ready PR", async (how) => {
+    const w = world({ mode });
+    const id = await defineAll(w);
+    const head = w.mergeOnHub("a", how);
+    const old = { b: w.tip("b"), c: w.tip("c"), d: w.tip("d") };
+    await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+
+    expect(w.repoT.get(id)!.mergeMethod).toBe(how);
+    for (const [b, n] of [["b", 1], ["c", 2], ["d", 3]] as const) {
+      expect(shape(w, b)).toEqual({ count: n, onTrunk: true });
+      expect(w.tip(b)).not.toBe(old[b]);
+      expect(w.remoteTip(b)).toBe(w.tip(b));
+    }
+    const run = w.repoT.lastRun(id)!;
+    expect(run).toMatchObject({ trigger: "bottom_merged", outcome: "rebased" });
+    expect(run.detail.mergeMethod).toBe(how);
+    expect(run.detail.pushed).toEqual(["b", "c", "d"]);
+    // 备份引用留着
+    for (const l of run.detail.layers!) expect(g(w.repo, "rev-parse", l.backupRef!)).toBe(l.oldTip);
+    expect(w.external.filter((e) => e.kind === "force_push").map((e) => e.detail.target)).toEqual(["b", "c", "d"]);
+
+    const create = fake.calls.find((c) => c.fn === "prCreate")!.args[0] as CreatePr;
+    expect(create).toMatchObject({ base: "main", head: "b", draft: false, title: "B title b" });
+    expect(create.body.indexOf("brief for b")).toBeLessThan(create.body.indexOf("b one"));
+    expect(w.posted).toEqual(["https://github.com/acme/app/pull/100"]);
+    const layers = w.repoT.layers(id);
+    expect(layers.map((l) => l.state)).toEqual(["merged", "ready", "branch_only", "branch_only"]);
+    expect(layers[1]!.prNumber).toBe(100);
+  });
+});
+
+describe("StackService draft layers", () => {
+  it("opens drafts with the prefix, label and depends line, and promotes them when their turn comes", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const [la, lb, lc] = w.repoT.layers(id);
+    // 栈底开着 PR；b、c 开 draft
+    fake.prs.set(1, { number: 1, url: "https://github.com/acme/app/pull/1", state: "OPEN", isDraft: false, title: "A", body: "", base: "main", head: "a", headSha: null, labels: [] });
+    w.repoT.updateLayer(la!.id, { prNumber: 1, prUrl: "https://github.com/acme/app/pull/1", state: "ready" });
+    expect((await w.svc.setLayerMode(la!.id, "draft")).ok).toBe(false);
+    expect(await w.svc.setLayerMode(lb!.id, "draft")).toEqual({ ok: true });
+    expect(await w.svc.setLayerMode(lc!.id, "draft")).toEqual({ ok: true });
+    const b = fake.prs.get(100)!;
+    expect(b).toMatchObject({ isDraft: true, base: "a", labels: ["stacked"] });
+    expect(b.title).toMatch(/^\[stack 2\/4 · (勿 review|do not review)\] B title b$/);
+    expect(b.body.split("\n")[0]).toMatch(/#1/);
+    expect(fake.prs.get(101)!.body.split("\n")[0]).toMatch(/#100/);
+
+    const head = w.mergeOnHub("a", "squash");
+    await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+    const nb = fake.prs.get(100)!;
+    expect(nb).toMatchObject({ isDraft: false, base: "main", labels: [], title: "B title b" });
+    expect(nb.body).toContain("brief for b");
+    expect(nb.body.split("\n")[0]).not.toMatch(/#1\b/);
+    expect(w.repoT.layer(lb!.id)).toMatchObject({ state: "ready", mode: "branch", draftSince: null });
+    // c 仍是 draft，k/n 和依赖行跟着变：现在是 3/4，依赖 #100
+    expect(fake.prs.get(101)!.title).toMatch(/^\[stack 3\/4 /);
+    expect(fake.prs.get(101)!.body.split("\n")[0]).toMatch(/#100/);
+  });
+
+  it("demotes a draft back to a plain branch", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const lc = w.repoT.layers(id)[2]!;
+    await w.svc.setLayerMode(lc.id, "draft");
+    expect(await w.svc.setLayerMode(lc.id, "branch")).toEqual({ ok: true });
+    expect(fake.prs.get(100)!.state).toBe("CLOSED");
+    expect(w.repoT.layer(lc.id)).toMatchObject({ mode: "branch", state: "branch_only", prNumber: null });
+  });
+
+  it("reminds about stale drafts", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    await w.svc.setLayerMode(w.repoT.layers(id)[2]!.id, "draft");
+    expect(w.svc.notices().filter((n) => n.reason === "draft_stale")).toEqual([]);
+    w.advance(15 * 24 * 3600_000);
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "draft_stale", branch: "c", days: 15, prNumber: 100, ticketKey: "C" }));
+  });
+});
+
+describe("StackService switches", () => {
+  it("does not touch branches with autoRebase off", async () => {
+    const w = world({ autoRebase: false });
+    const id = await defineAll(w);
+    const before = BRANCHES.map(w.tip);
+    expect((await w.svc.rebaseNow(id)).ok).toBe(false);
+    const head = w.mergeOnHub("a", "squash");
+    await w.svc.onMerged({ url: "u1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+    w.pushMain("m.txt", "m\n");
+    w.advance(10 * 60_000);
+    await w.svc.tick();
+    expect(BRANCHES.map(w.tip)).toEqual(before);
+    expect(w.repoT.layers(id)[0]!.state).toBe("merged");
+    expect(w.external.filter((e) => e.kind === "force_push")).toEqual([]);
+  });
+
+  it("rebases locally but neither pushes nor opens PRs with the outward switches off, then catches up", async () => {
+    let on = false;
+    const w = world({ allow: () => on });
+    const id = await defineAll(w);
+    const oldRemote = w.remoteTip("b");
+    const head = w.mergeOnHub("a", "squash");
+    await w.svc.onMerged({ url: "u1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+    expect(shape(w, "b")).toEqual({ count: 1, onTrunk: true });
+    expect(w.remoteTip("b")).toBe(oldRemote);
+    expect(fake.calls.filter((c) => c.fn === "prCreate")).toEqual([]);
+    const lr = w.repoT.lastRun(id)!;
+    expect(lr.detail.unpushed).toEqual(["b", "c", "d"]);
+    expect(w.repoT.layers(id)[1]).toMatchObject({ state: "branch_only", remoteOkSha: oldRemote });
+    // 再改一次（layer_commits）：远端还停在 Butler 上次替换掉的提交，照样能改
+    g(w.repo, "checkout", "-q", "c");
+    commit(w.repo, "c2.txt", "c2\n", "c two");
+    g(w.repo, "checkout", "-q", "main");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "layer_commits", outcome: "rebased" });
+    // 开关打开后：下一次跑会推上去，再开 PR
+    on = true;
+    await w.svc.rebaseNow(id);
+    await w.svc.tick();
+    expect(w.remoteTip("b")).toBe(w.tip("b"));
+    expect(fake.calls.filter((c) => c.fn === "prCreate")).toHaveLength(1);
+  });
+});
+
+describe("StackService triggers", () => {
+  it("rebases the whole stack once a day and keeps it current", async () => {
+    const w = world({ policy: { rebaseOnMainUpdate: false } });
+    const id = await defineAll(w);
+    await w.svc.tick(); // 今天的第一次：没东西可做
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "daily", outcome: "noop" });
+    w.pushMain("m.txt", "m\n");
+    w.advance(10 * 60_000);
+    await w.svc.tick();
+    expect(shape(w, "a").count).toBe(1);
+    expect(shape(w, "a").onTrunk).toBe(false); // 同一天不再跑
+    w.advance(24 * 3600_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "daily", outcome: "rebased" });
+    for (const [b, n] of [["a", 1], ["b", 2], ["c", 3], ["d", 4]] as const) expect(shape(w, b)).toEqual({ count: n, onTrunk: true });
+  });
+
+  it("follows main when it moves", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("m.txt", "m\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "main_updated", outcome: "rebased" });
+    expect(shape(w, "d")).toEqual({ count: 4, onTrunk: true });
+  });
+
+  it("defers when a layer is checked out somewhere Butler does not manage and collapses repeats", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    const wt = join(tempDir(), "wt");
+    g(w.repo, "worktree", "add", "-q", wt, "c");
+    const before = BRANCHES.map(w.tip);
+    w.pushMain("m.txt", "m\n");
+    await w.svc.tick();
+    await w.svc.rebaseNow(id);
+    expect(BRANCHES.map(w.tip)).toEqual(before);
+    const runs = w.repoT.runs(id);
+    expect(runs[0]).toMatchObject({ outcome: "deferred" });
+    expect(runs[0]!.detail.repeats).toBe(2);
+    expect(runs.filter((r) => r.outcome === "deferred")).toHaveLength(1);
+    w.advance(25 * 3600_000);
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "stuck", branch: "a" }));
+  });
+
+  it("defers while review comments are being checked or the merge gate is held", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.deps.gateHeld = (_r, b) => b === "b";
+    w.pushMain("m.txt", "m\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred" });
+    expect(w.repoT.lastRun(id)!.reason).toMatch(/merge gate/);
+  });
+
+  it("sends a conflict to that layer's session once and leaves every branch alone", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("b.txt", "main's b\n");
+    const before = BRANCHES.map(w.tip);
+    await w.svc.tick();
+    expect(BRANCHES.map(w.tip)).toEqual(before);
+    const run = w.repoT.lastRun(id)!;
+    expect(run).toMatchObject({ outcome: "conflict" });
+    expect(run.detail.conflict).toMatchObject({ branch: "b", files: ["b.txt"] });
+    expect(w.delivered).toHaveLength(1);
+    expect(w.delivered[0]!.ticketKey).toBe("B");
+    expect(w.delivered[0]!.text).toContain("git rebase --onto");
+    await w.svc.rebaseNow(id);
+    expect(w.delivered).toHaveLength(1);
+    expect(w.svc.notices().filter((n) => n.reason === "conflict")).toEqual([]);
+    expect(g(w.repo, "for-each-ref", "refs/heads/butler-stack/")).toBe("");
+    expect(g(w.repo, "worktree", "list").split("\n")).toHaveLength(1);
+  });
+
+  it("shows the conflict on the Now page when it should not go to the session", async () => {
+    const w = world({ policy: { dailyRebase: false, conflictToSession: false } });
+    await defineAll(w);
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    expect(w.delivered).toEqual([]);
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "conflict", branch: "b", files: ["b.txt"], ticketKey: "B" }));
+  });
+
+  it("warns when the bottom falls behind main", async () => {
+    const w = world({ autoRebase: false, policy: { behindCommits: 2 } });
+    await defineAll(w);
+    for (const f of ["x", "y", "z"]) w.pushMain(`${f}.txt`, `${f}\n`);
+    await w.svc.tick();
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "behind", branch: "a", commits: 3 }));
+  });
+
+  it("folds fixup commits in with autosquash", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    await w.svc.tick();
+    g(w.repo, "checkout", "-q", "b");
+    commit(w.repo, "b-fix.txt", "fix\n", "fixup! b one");
+    g(w.repo, "checkout", "-q", "main");
+    await w.svc.tick(); // layer_commits：b 有新提交，先把上面的层接上去
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "layer_commits", outcome: "rebased" });
+    await w.svc.tick(); // 栈是新的、有 fixup：autosquash
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "autosquash", outcome: "rebased" });
+    expect(g(w.repo, "log", "--format=%s", "main..b")).toBe("b one\na one");
+    expect(g(w.repo, "log", "--format=%s", "main..d")).toBe("d one\nc one\nb one\na one");
+  });
+
+  it("does not autosquash while comments are being checked", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.repoT.updateLayer(w.repoT.layers(id)[1]!.id, { prUrl: "pr-b" });
+    w.deps.awaitingCheck = (u) => u === "pr-b";
+    g(w.repo, "checkout", "-q", "b");
+    commit(w.repo, "b-fix.txt", "fix\n", "fixup! b one");
+    g(w.repo, "checkout", "-q", "main");
+    await w.svc.tick();
+    await w.svc.tick();
+    expect(g(w.repo, "log", "--format=%s", "main..b")).toBe("fixup! b one\nb one\na one");
+  });
+});
+
+describe("StackService restore", () => {
+  it("puts every branch back from the backups of the last rebase", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    const before = BRANCHES.map(w.tip);
+    w.pushMain("m.txt", "m\n");
+    await w.svc.tick();
+    expect(BRANCHES.map(w.tip)).not.toEqual(before);
+    expect(await w.svc.restore(id)).toEqual({ ok: true });
+    expect(BRANCHES.map(w.tip)).toEqual(before);
+    expect(BRANCHES.map(w.remoteTip)).toEqual(before);
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "restore", outcome: "restored" });
+    expect((await w.svc.restore(id)).ok).toBe(false);
+  });
+
+  it("deletes backups after 30 days", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    await defineAll(w);
+    w.pushMain("m.txt", "m\n");
+    await w.svc.tick();
+    expect(g(w.repo, "for-each-ref", "refs/butler/stack-backup/")).not.toBe("");
+    w.advance(31 * 24 * 3600_000);
+    await w.svc.daily();
+    expect(g(w.repo, "for-each-ref", "refs/butler/stack-backup/")).toBe("");
+  });
+});
+
+describe("StackService for other workstreams", () => {
+  it("adds a stack note to review comments on a layer", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    w.repoT.updateLayer(w.repoT.layers(id)[1]!.id, { prUrl: "https://github.com/acme/app/pull/7", prNumber: 7 });
+    const note = w.svc.stackNote("https://github.com/acme/app/pull/7", "b");
+    expect(note).toMatch(/2\/4/);
+    expect(note).toContain("--fixup");
+    expect(w.svc.stackNote("https://github.com/acme/app/pull/9", "zzz")).toBeNull();
+  });
+
+  it("posts the epic overview as an issue only when asked to", async () => {
+    const w = world({ policy: { overview: "issue", dailyRebase: false } });
+    await defineAll(w);
+    await w.svc.tick();
+    expect(fake.calls.filter((c) => c.fn === "issueCreate")).toHaveLength(1);
+    await w.svc.tick();
+    expect(fake.calls.filter((c) => c.fn.startsWith("issue"))).toHaveLength(1);
+  });
+
+  it("builds the progress view", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const v = await w.svc.view({ featureId: null, epicId: null });
+    expect(v.stacks).toHaveLength(1);
+    expect(v.stacks[0]).toMatchObject({ id, autoRebase: true, layers: [{ branch: "a", ticketTitle: "title a" }, {}, {}, {}] });
+  });
+});
