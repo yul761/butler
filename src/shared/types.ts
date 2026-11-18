@@ -128,7 +128,7 @@ export interface Session {
   fixesSession: string | null;
   /** epic session 属于哪个 epic（这时 ticketKey 和 featureId 都是 null）。 */
   epicId: number | null;
-  /** 开出来时用的模型（opus / sonnet）；null：没指定，恢复时也不传 --model。 */
+  /** 开出来时用的模型（别名或模型路由里的名字；换模型后是新的那个）；null：没指定，恢复时也不传 --model。 */
   model: string | null;
   /** Butler 总控（BTL-190 第 5 点）：全局只有一个，ticket、feature、epic 都是 null。 */
   butler: boolean;
@@ -583,7 +583,9 @@ export type NowNotice =
   | { kind: "model_unavailable"; hit: AvailabilityHit; retryAt: number | null }
   | { kind: "lessons_paused" }
   | { kind: "lessons_failing"; count: number }
-  | { kind: "session_limited"; target: NowTarget; title: string | null; limit: LimitHit };
+  | { kind: "session_limited"; target: NowTarget; title: string | null; limit: LimitHit }
+  /** 模型路由（3.0）：有模型撞限或不可用，或最近一小时有任务降级。只在配置了路由时出现。 */
+  | { kind: "routing"; limited: string[]; fallbacks: number };
 
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */

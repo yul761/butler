@@ -49,6 +49,8 @@ import type { DeliverResult, PtyManager } from "./pty-manager";
 import { M } from "../strings";
 
 export interface SessionServiceDeps {
+  /** 模型路由里登记了这个名字：恢复 session 时才把记下的非别名模型传给 --model。 */
+  knownModel?: (model: string) => boolean;
   tickets: TicketsRepo;
   sessions: SessionsRepo;
   settings: SettingsRepo;
@@ -245,7 +247,7 @@ export class SessionService {
     if (head) {
       // claude --resume 只能在 session 当初的项目目录里找到它；没发过消息的 session 没有记录，用同一个 id 重新开
       termId = head.id;
-      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath, model: storedModel(head) });
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath, model: storedModel(head, this.d.knownModel) });
     } else {
       termId = this.d.newId();
       args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath, model: extra.model });
@@ -702,7 +704,7 @@ export class SessionService {
     let insertedRow = false;
     if (head) {
       termId = head.id;
-      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath, model: storedModel(head) });
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath, model: storedModel(head, this.d.knownModel) });
     } else {
       termId = this.d.newId();
       args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath, model: target.row.model });

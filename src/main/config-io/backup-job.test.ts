@@ -97,7 +97,7 @@ describe("ConfigBackups", () => {
     advance(31 * DAY);
     const s = backups.status();
     expect(s).toMatchObject({ remind: true, lastExportAt: null, intervalDays: 0, keep: 10, reminderDays: 30 });
-    expect(s.sections.map((x) => x.id)).toEqual(["products", "policies", "lessons", "checks"]);
+    expect(s.sections.map((x) => x.id)).toEqual(["products", "policies", "lessons", "checks", "models"]);
     io.writeExport({ scope: { kind: "all" }, options: { content: "all", includeSourceUrls: false } }, join(dir, "e.json"));
     expect(backups.status()).toMatchObject({ remind: false, lastExportAt: 41 * DAY });
   });

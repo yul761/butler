@@ -66,6 +66,18 @@ export const SETTING_DEFAULTS = {
   checksEditTimeoutSec: "8",
   /** push 前的检查最多用几秒（10–3600）。 */
   checksPushTimeoutSec: "600",
+  /** 模型路由（3.0）：每月配额，JSON 数组 [{ target: "tier:high" | "model:<名字>", unit: "usd" | "tokens", monthly }]；空 = 不限。 */
+  routingQuotas: "",
+  /** 配额的两个软阈值（百分比，逗号分隔）：到第一个时低价值任务降档，到第二个时只有关键任务用高档。 */
+  routingThresholds: "70,90",
+  /** 配额周期从每月几号开始（1–28，本地时间）。 */
+  routingPeriodStartDay: "1",
+  /** 推理强度：JSON 对象，键是任务 id 或档位（high / mid / low），值是 low / medium / high / xhigh / max；空 = 用 CLI 默认。 */
+  routingEffort: "",
+  /** 每档同时最多几个后台调用：JSON 对象 { "high": 1 }；空 = 不限。 */
+  routingMaxConcurrent: "",
+  /** 交互 session 撞限时自动切到下一档并继续：1 开 0 关（默认关，只在 session 行上给按钮）。 */
+  routingAutoSwitch: "0",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

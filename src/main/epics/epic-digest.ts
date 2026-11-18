@@ -177,7 +177,7 @@ export class EpicDigestRunner {
     const label = "epic digest";
     const r = await execHeadlessJson(
       { ...this.d, timeoutMs: DIGEST_TIMEOUT_MS },
-      { label, args: headlessArgs({ schema: DIGEST_JSON_SCHEMA, allowedTools: [], model: "sonnet" }), prompt: prompt(target, items, until, lang), cwd: this.d.cwd() },
+      { task: "epic_digest", label, args: headlessArgs({ schema: DIGEST_JSON_SCHEMA, allowedTools: [] }), prompt: prompt(target, items, until, lang), cwd: this.d.cwd() },
     );
     if (!r.ok) {
       // 其余失败 execHeadlessJson 已经记过日志。

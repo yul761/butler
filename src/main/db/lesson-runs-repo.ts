@@ -46,6 +46,10 @@ export interface LessonRunFinish {
   inputTokens?: number;
   outputTokens?: number;
   durationMs?: number;
+  /** 模型路由：要求的档位、实际用的模型、降级前的模型（没走路由时都不写）。 */
+  requestedTier?: string | null;
+  actualModel?: string | null;
+  fallbackFrom?: string | null;
 }
 export interface LessonRunRow {
   id: number;
@@ -72,6 +76,9 @@ export interface LessonRunRow {
   inputTokens: number | null;
   outputTokens: number | null;
   durationMs: number | null;
+  requestedTier: string | null;
+  actualModel: string | null;
+  fallbackFrom: string | null;
   startedAt: number;
   finishedAt: number | null;
 }
@@ -82,6 +89,7 @@ interface Row {
   material: string | null; raw_output: string | null; findings_json: string | null; trimmed: number;
   created: number; hit: number; dropped: number; model: string | null; cost_usd: number | null;
   input_tokens: number | null; output_tokens: number | null; duration_ms: number | null; started_at: number; finished_at: number | null;
+  requested_tier: string | null; actual_model: string | null; fallback_from: string | null;
 }
 
 const n = (v: number | null): number | null => (v === null ? null : Number(v));
@@ -98,7 +106,9 @@ const toRow = (r: Row): LessonRunRow => ({
   message: r.message, stderrTail: r.stderr_tail, ghStderr: r.gh_stderr, prTitle: r.pr_title, prUrl: r.pr_url,
   material: r.material, rawOutput: r.raw_output, findings: parse(r.findings_json), trimmed: Number(r.trimmed) === 1,
   created: Number(r.created), hit: Number(r.hit), dropped: Number(r.dropped), model: r.model, costUsd: n(r.cost_usd),
-  inputTokens: n(r.input_tokens), outputTokens: n(r.output_tokens), durationMs: n(r.duration_ms), startedAt: Number(r.started_at), finishedAt: n(r.finished_at),
+  inputTokens: n(r.input_tokens), outputTokens: n(r.output_tokens), durationMs: n(r.duration_ms),
+  requestedTier: r.requested_tier ?? null, actualModel: r.actual_model ?? null, fallbackFrom: r.fallback_from ?? null,
+  startedAt: Number(r.started_at), finishedAt: n(r.finished_at),
 });
 
 const head = (s: string | undefined, max: number): string | null => (s === undefined ? null : capHead(s, max));
@@ -124,13 +134,13 @@ export class LessonRunsRepo {
       .prepare(
         `UPDATE lesson_runs SET status = ?, reason = ?, finished_at = ?, message = ?, stderr_tail = ?, gh_stderr = ?, pr_title = ?, pr_url = ?,
            material = ?, raw_output = ?, findings_json = ?, created = ?, hit = ?, dropped = ?, model = ?, cost_usd = ?,
-           input_tokens = ?, output_tokens = ?, duration_ms = ? WHERE id = ?`,
+           input_tokens = ?, output_tokens = ?, duration_ms = ?, requested_tier = ?, actual_model = ?, fallback_from = ? WHERE id = ?`,
       )
       .run(
         f.status, f.reason, f.finishedAt, head(f.message, RUN_CAPS.message), tail(f.stderrTail, RUN_CAPS.stderrTail), tail(f.ghStderr, RUN_CAPS.ghStderr),
         f.prTitle ?? null, f.prUrl ?? null, head(f.material, RUN_CAPS.material), head(f.rawOutput, RUN_CAPS.rawOutput), findings,
         f.created ?? 0, f.hit ?? 0, f.dropped ?? 0, f.model ?? null, f.costUsd ?? null,
-        f.inputTokens ?? null, f.outputTokens ?? null, f.durationMs ?? null, id,
+        f.inputTokens ?? null, f.outputTokens ?? null, f.durationMs ?? null, f.requestedTier ?? null, f.actualModel ?? null, f.fallbackFrom ?? null, id,
       );
   }
 

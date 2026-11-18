@@ -34,7 +34,6 @@ import { TermsRepo } from "./db/terms-repo";
 import { TicketsRepo } from "./db/tickets-repo";
 import { UsageRepo } from "./db/usage-repo";
 import { execHeadlessJson, jobOf } from "./handoff/headless-exec";
-import type { UsageCounts } from "./usage/usage-parse";
 import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
@@ -132,13 +131,21 @@ import { CheckDrafter } from "./checks/draft";
 import { HIT_RETENTION_MS } from "./db/checks-repo";
 import { CHECKS_SNAPSHOT_VERSION, type CheckAbsenceReason } from "../shared/checks";
 import { writeRunFile } from "./lessons/run-file";
-import type { HeadlessExecDeps } from "./handoff/headless-exec";
+import type { HeadlessExecDeps, UsageReport } from "./handoff/headless-exec";
 import * as git from "./tickets/git";
 import { canSend } from "./safe-send";
 import { createQuitState } from "./quit-state";
 import { KeepAwake } from "./keep-awake";
 import { TRAY_ICONS } from "./tray-icons";
 import { CSP_VIOLATION_LOG_PREFIX, isCspViolationMessage } from "./csp-log";
+import { RoutingRepo } from "./db/routing-repo";
+import { ModelDiscovery } from "./routing/discovery";
+import { RoutedLessonsGate } from "./routing/lessons-gate";
+import { DISCOVERY_USAGE_WINDOW_MS, MODEL_PROBE_TIMEOUT_MS, probeWithHeadless, readClaudeSettingsModel } from "./routing/probe";
+import { RoutingService } from "./routing/routing-service";
+import { SessionModelSwitcher } from "./routing/session-switch";
+import { routingSettings } from "./routing/routing-settings";
+import type { DiscoveryView, Tier } from "../shared/model-routing";
 
 const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
 /** hook 发现没有 ticket 的 session 后，稍等片刻再扫描磁盘（合并连续事件）。 */
@@ -372,11 +379,12 @@ async function bootstrap(): Promise<void> {
   /** 某个 session（取 head）最近一轮的上下文大小：计划 16 的自动换新看它。 */
   const contextOf = (sessionId: string): number | null => usageRepo.latestContext(sessions.head(sessionId)?.id ?? sessionId);
   /** headless 运行（handoff、feature 汇总、卡住判断）的用量入库。 */
-  const recordHeadlessUsage = ({ runId, label, at, model, usage }: { runId: string; label: string; at: number; model: string | null; usage: UsageCounts }) => {
+  const recordHeadlessUsage = ({ runId, label, at, model, usage, task, requestedTier, fallbackFrom, costUsd }: UsageReport) => {
     try {
       usageRepo.record([{
         messageId: `headless:${runId}`, sessionId: null, agentId: null, source: "headless", job: jobOf(label), at, model, ...usage,
         context: usage.input + usage.cacheWrite5m + usage.cacheWrite1h + usage.cacheRead,
+        ...(task !== undefined && { task, requestedTier: requestedTier ?? null, fallbackFrom: fallbackFrom ?? null, costUsd: costUsd ?? null }),
       }]);
     } catch (e) {
       logger("recording headless usage failed", e);
@@ -466,11 +474,41 @@ async function bootstrap(): Promise<void> {
     onLimit: (hit: LimitHit, job: string) => availability.report({ ...hit, source: "headless", job, sessionId: null }),
     onSuccess: (startedAt: number, job: string) => availability.noteSuccess(startedAt, job),
   };
+  /** 没走路由的 headless 设置（模型探测用：只用指定的模型、不回报健康）。 */
+  const probeDeps: HeadlessExecDeps = {
+    run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID,
+    signal: headlessAbort.signal, onUsage: recordHeadlessUsage, timeoutMs: MODEL_PROBE_TIMEOUT_MS, log: logger,
+  };
+  const probeModel = (model: string) => probeWithHeadless(probeDeps, model);
+  // 模型路由（3.0）：没有登记任何模型时每个调用点照旧用 2.1.0 的模型。
+  const routingRepo = new RoutingRepo(db);
+  const routing: RoutingService = new RoutingService({
+    repo: routingRepo, usage: usageRepo, settings: () => routingSettings(settings), flags: () => health.claudeFlags(), now: Date.now,
+    probe: probeModel,
+    discovery: { view: (): DiscoveryView | null => discovery.view(), run: (): Promise<void> => discovery.run() },
+    onChange: () => notify(), log: logger,
+  });
+  const discovery: ModelDiscovery = new ModelDiscovery({
+    env: process.env,
+    settingsModel: () => readClaudeSettingsModel(paths.claudeSettings),
+    recentModels: () => usageRepo.modelsSince(Date.now() - DISCOVERY_USAGE_WINDOW_MS),
+    registry: (): string[] => routing.config().registry.map((m) => m.name),
+    probe: probeModel,
+    onResult: (name, from, r) => {
+      // 登记了却不存在 / 在限额里的：记到健康状态，路由跳过它。
+      if (from !== "registry") return;
+      if (r.ok) routing.health.probeResult(name, { ok: true });
+      else if (r.hit) routing.onLimit(name, r.hit, { task: "model_probe", accountLevel: false });
+    },
+    now: Date.now, onChange: () => notify(), log: logger,
+  });
   /** 卡住判断和「需要你」判断共用的 headless 设置。 */
   const judgeDeps: HeadlessExecDeps = {
     run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID,
-    signal: headlessAbort.signal, onUsage: recordHeadlessUsage, ...availabilityHooks, log: logger,
+    signal: headlessAbort.signal, onUsage: recordHeadlessUsage, ...availabilityHooks, routing, log: logger,
   };
+  /** 复盘的闸门：没配置路由时就是账号级的可用状态；配置了只在 lesson_analyze 哪个模型都用不了时停。 */
+  const lessonsGate = new RoutedLessonsGate({ availability, routing, now: Date.now });
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
   // 规矩、产品和准入策略的改动都记成可撤销的批次（契约 4.4）。
@@ -515,12 +553,12 @@ async function bootstrap(): Promise<void> {
   const configRegistry = defaultRegistry();
   const configIo = new ConfigIoService({
     db, repo: lessonsRepo, policies: admissionPolicies, recorder: batchRecorder, registry: configRegistry, butlerVersion: app.getVersion(),
-    backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), onApplied: () => checkSnapshots.schedule(), log: logger,
+    backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), onApplied: () => (checkSnapshots.schedule(), routing.reloadConfig()), log: logger,
   });
-  // 从规矩生成检查（任务 check_draft）。A 的模型路由合并前直接走 execHeadlessJson，task 先丢掉。
+  // 从规矩生成检查（任务 check_draft）：走模型路由（高档，撞限就等；没配置路由时和以前一样不带 --model）。
   const checkDrafter = new CheckDrafter({
     lessons: lessonsRepo, checks: checksService, fallbackCwd: () => paths.home,
-    run: ({ label, args, prompt, cwd }) => execHeadlessJson(judgeDeps, { label, args, prompt, cwd }),
+    run: (req) => execHeadlessJson(judgeDeps, req),
   });
   const configBackups = new ConfigBackups({
     io: configIo, registry: configRegistry, jobs, repo: lessonsRepo, backupDir: configBackupDir, now: Date.now, log: logger,
@@ -535,7 +573,8 @@ async function bootstrap(): Promise<void> {
   // 带 hash 的 session 说明文件每次规矩变了就多一份，启动时清掉 30 天没用过的。
   pruneSessionGuides(paths.mcp, Date.now());
   const lessonRunner = new LessonRunner({
-    repo: lessonsRepo, runs: lessonRuns, availability, identity: repoIdentity, jobs,
+    repo: lessonsRepo, runs: lessonRuns, availability: lessonsGate, identity: repoIdentity, jobs,
+    upgradeReady: () => routing.tierHealthy(routing.plan("lesson_analyze").route.tier as Tier),
     gh: { mergedPrs, prLessonDataDetail, compareFiles, available: () => ghAvailable() },
     headless: { ...judgeDeps },
     ticketForBranch: (slug, branch) => tickets.reposByBranch(branch).find((r) => repoIdentity.slugOf(r.repoPath) === slug)?.ticketKey ?? null,
@@ -562,10 +601,14 @@ async function bootstrap(): Promise<void> {
     },
     lang: () => currentLang(), now: Date.now, notify: () => notify(), log: logger,
   });
+  // 设置页「升级重跑」按钮；另外每小时看一次（档位恢复时路由的变化也会触发）。
+  routing.rerunHook = () => void lessonRunner.requeueUpgrades(true);
+  const upgradeTimer = setInterval(() => lessonRunner.requeueUpgrades(), 60 * 60_000);
+  upgradeTimer.unref?.();
   // 复盘规矩页：仓库路径直接查表（已归档的 ticket、feature、epic 不算）；归组建议按 ticket 和 feature 各算一组。
   const repoPathRows = <T extends { repo_path: string }>(sql: string): T[] => db.prepare(sql).all() as unknown as T[];
   const lessonsService = new LessonsService({
-    repo: lessonsRepo, batches: lessonBatches, runs: lessonRuns, availability, identity: repoIdentity, runner: lessonRunner,
+    repo: lessonsRepo, batches: lessonBatches, runs: lessonRuns, availability: lessonsGate, identity: repoIdentity, runner: lessonRunner,
     knownRepoPaths: () => [
       ...new Set(
         repoPathRows<{ repo_path: string }>(
@@ -636,7 +679,19 @@ async function bootstrap(): Promise<void> {
     onTurnEnd: (id, at) => {
       if (markTurnEndedWithoutStop(sessions, id, at)) sessionStopped(id);
     },
-    onLimit: (id, hit, at) => availability.report({ ...hit, at, source: "session", job: null, sessionId: id }),
+    onLimit: (id, hit, at) => {
+      availability.report({ ...hit, at, source: "session", job: null, sessionId: id });
+      // 配置了路由：把撞限记到这个 session 的模型上（usage_limit 一般是整个账号的）。
+      try {
+        // 换模型之前的那条报错（恢复后又被读到）不再记到新模型上。
+        if (!switcher.staleHit(id, at)) {
+          routing.onSessionLimit(sessions.head(id)?.model ?? null, hit, hit.kind === "usage_limit");
+          switcher.noteLimit(id, hit, at);
+        }
+      } catch (e) {
+        logger("routing: recording a session limit failed", e);
+      }
+    },
     log: logger,
   });
   /** 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。 */
@@ -652,6 +707,7 @@ async function bootstrap(): Promise<void> {
     return st === "ok" ? null : st === "version" ? "snapshot_version" : "no_snapshot";
   };
   const sessionService = new SessionService({
+    knownModel: routing.registered,
     tickets, sessions, settings, ticketService, pty,
     activity: (id) => activityMonitor.get(id),
     sessionName: (id) => sessionRegistryName(paths.claudeSessions, id),
@@ -690,6 +746,25 @@ async function bootstrap(): Promise<void> {
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
     log: logger,
+  });
+  // 交互 session 撞限后「换下一档继续」（3.0 模型路由）：按 session 的种类用 --resume 重新打开。
+  const switcher = new SessionModelSwitcher({
+    head: (id) => sessions.head(id),
+    setModel: (id, model) => sessions.setModel(id, model),
+    termIdOf: (id) => sessionService.termIdOf(id),
+    kill: (termId) => pty.kill(termId),
+    running: (termId) => pty.isOpen(termId),
+    reopen: (h) => {
+      if (h.butler) return sessionService.openButler({ sessionId: h.id });
+      if (h.ticketKey) return sessionService.open({ ticketKey: h.ticketKey, sessionId: h.id });
+      if (h.featureId !== null) return sessionService.openFeature({ featureId: h.featureId, sessionId: h.id });
+      if (h.epicId !== null) return sessionService.openEpic({ epicId: h.epicId, sessionId: h.id });
+      return Promise.resolve({ ok: false, reason: "no_session" } as const);
+    },
+    nextModel: (m) => routing.nextModel(m),
+    autoSwitch: () => routing.autoSwitch(),
+    now: Date.now, onChange: () => notify(), log: logger,
+    onSwitched: (id, from, to) => routing.event("session_switch", { model: from, toModel: to, detail: id }),
   });
   // 上次退出时终端还开着（退出事件来得比关数据库晚）：那时没删掉的空 session 在这里补删。
   try {
@@ -754,6 +829,7 @@ async function bootstrap(): Promise<void> {
     signal: headlessAbort.signal,
     onUsage: recordHeadlessUsage,
     ...availabilityHooks,
+    routing,
     log: logger,
   });
   /** feature 有新汇总时，它所在的 epic 重新渲染 handoff（异步，失败只记日志）。 */
@@ -784,6 +860,7 @@ async function bootstrap(): Promise<void> {
     signal: headlessAbort.signal,
     onUsage: recordHeadlessUsage,
     ...availabilityHooks,
+    routing,
     log: logger,
   });
   /**
@@ -1391,6 +1468,7 @@ async function bootstrap(): Promise<void> {
       },
     }),
     availability,
+    routing, switcher,
     prStages: new PrStagesService({
       tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id, { includeArchived: true }) },
       features: {
@@ -1424,7 +1502,7 @@ async function bootstrap(): Promise<void> {
         decisions: inboxService.pendingDecisionViews(),
         recent: (id) => activityMonitor.recent(id),
         memory: activityMonitor.memoryLog(),
-        notices: buildNotices({ availability: availability.view(), recentRuns: lessonRuns.recentFinished(20) }),
+        notices: buildNotices({ availability: availability.view(), recentRuns: lessonRuns.recentFinished(20), routing: routing.attention() }),
       });
     },
     rederive: (key) => {
@@ -1477,6 +1555,7 @@ async function bootstrap(): Promise<void> {
       deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
       memoryEnabled: () => memoryOn(settings),
       ticketPattern: () => settings.get("ticketPattern"),
+      sessionModel: (m) => routing.sessionModel(m),
       log: logger,
     }),
     log: logger,
@@ -1560,6 +1639,9 @@ async function bootstrap(): Promise<void> {
     clearInterval(refreshTimer);
     clearInterval(scheduleTimer);
     availability.dispose();
+    lessonsGate.dispose();
+    routing.dispose();
+    clearInterval(upgradeTimer);
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     activityMonitor.stop();
     usageScanner.stop();

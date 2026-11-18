@@ -36,7 +36,7 @@ export type Route =
   | { page: "unclaimed" }
   | { page: "archived" }
   /** section：从「现在」页的提醒跳来时要看的那一块。 */
-  | { page: "settings"; section?: "health" }
+  | { page: "settings"; section?: "health" | "routing" }
   | { page: "audit" }
   | { page: "lessons" };
 

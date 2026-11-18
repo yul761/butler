@@ -7,6 +7,7 @@ import {
   MESSAGE_LIMIT, QUESTION_LIMIT, REASON_LIMIT, REPORT_KINDS, REPORT_LIMIT, START_INSTRUCTIONS_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult, type ReportKind,
 } from "../src/shared/control";
 import type { Lang } from "../src/shared/i18n";
+import { isModelName, isTier } from "../src/shared/model-routing";
 
 /**
  * butler-sessions：挂给总控 session 的 MCP server（设计文档 2026-10-23 第二步）。stdio 上按行收发 JSON-RPC 2.0；
@@ -176,19 +177,22 @@ export const REPORT_TOOL_EN = {
 export const INBOX_TOOLS = [ASK_USER_TOOL, REPORT_TOOL] as const;
 export const INBOX_TOOLS_EN = [ASK_USER_TOOL_EN, REPORT_TOOL_EN] as const;
 
-/** start_session 的 model 参数（两种总控共用）。 */
+/** start_session 的 model 参数（两种总控共用）：档位或模型名，主进程按模型路由选实际的模型。 */
 const MODEL_PROP = {
   type: "string",
-  enum: ["opus", "sonnet"],
   description:
-    "这个 session 用哪个模型。sonnet：范围小、目标明确的活，比如修 CI、处理 rebase 冲突、补测试、按已经定好的方案实现。" +
-    "opus：需要判断的活，比如查原因不明的 bug、做架构设计、跨模块改动、代码审查。拿不准就用 opus。省略时用默认模型。",
+    "这个 session 用哪个档位或模型：high / mid / low，或者一个模型名（旧的 opus、sonnet 照旧能用）。" +
+    "mid（或 sonnet）：范围小、目标明确的活，比如修 CI、处理 rebase 冲突、补测试、按已经定好的方案实现。" +
+    "high（或 opus）：需要判断的活，比如查原因不明的 bug、做架构设计、跨模块改动、代码审查。拿不准就用 high。" +
+    "Butler 会按模型路由挑这一档里能用的模型，结果里的 model 是实际用的。省略时用默认模型。",
 } as const;
 const MODEL_PROP_EN = {
   ...MODEL_PROP,
   description:
-    "Which model this session uses. sonnet: small, well-defined work, such as fixing CI, resolving rebase conflicts, adding tests, or implementing an approach that is already settled. " +
-    "opus: work that needs judgment, such as chasing a bug with an unknown cause, architecture design, changes across modules, or code review. When unsure, use opus. Omit it to use the default model.",
+    "Which tier or model this session uses: high / mid / low, or a model name (the old opus and sonnet still work). " +
+    "mid (or sonnet): small, well-defined work, such as fixing CI, resolving rebase conflicts, adding tests, or implementing an approach that is already settled. " +
+    "high (or opus): work that needs judgment, such as chasing a bug with an unknown cause, architecture design, changes across modules, or code review. When unsure, use high. " +
+    "Butler picks a usable model of that tier from its model routing; model in the result is the one actually used. Omit it to use the default model.",
 } as const;
 
 export const TOOLS = [
@@ -742,7 +746,7 @@ const TEXT = {
     needRepoTask: "start_session 需要 repo 和 task 两个字符串参数",
     needTicketTask: "start_session 需要 ticket 和 task 两个字符串参数",
     repoString: "repo 必须是字符串",
-    badModel: "model 只能是 opus 或 sonnet",
+    badModel: "model 只能是 high / mid / low 或一个模型名",
     needSession: "session_activity 需要字符串参数 session",
     needEnd: `end_session 需要字符串参数 session 和 reason（reason 不能为空，最多 ${REASON_LIMIT} 字符）`,
     needRefresh: "refresh_session 需要字符串参数 session",
@@ -769,7 +773,7 @@ const TEXT = {
     needRepoTask: "start_session needs two string arguments, repo and task",
     needTicketTask: "start_session needs two string arguments, ticket and task",
     repoString: "repo must be a string",
-    badModel: "model must be opus or sonnet",
+    badModel: "model must be high / mid / low or a model name",
     needSession: "session_activity needs a string argument, session",
     needEnd: `end_session needs string arguments, session and reason (reason must not be empty and is at most ${REASON_LIMIT} characters)`,
     needRefresh: "refresh_session needs a string argument, session",
@@ -900,7 +904,7 @@ export class SessionsServer {
       case "start_session":
         if (typeof args.repo !== "string" || typeof args.task !== "string") return toolError(this.text.needRepoTask);
         if (args.task.length > TASK_LIMIT) return toolError(this.text.taskTooLong);
-        if (args.model !== undefined && args.model !== "opus" && args.model !== "sonnet") return toolError(this.text.badModel);
+        if (args.model !== undefined && !isTier(args.model) && !isModelName(args.model)) return toolError(this.text.badModel);
         return { ...base, op: "start_session", repo: args.repo, task: args.task, ...(args.model !== undefined && { model: args.model }) };
       default:
         return toolError(this.text.noTool(String(tool)));
@@ -1027,7 +1031,7 @@ export class SessionsServer {
         if (typeof args.ticket !== "string" || typeof args.task !== "string") return toolError(this.text.needTicketTask);
         if (args.repo !== undefined && typeof args.repo !== "string") return toolError(this.text.repoString);
         if (args.task.length > TASK_LIMIT) return toolError(this.text.taskTooLong);
-        if (args.model !== undefined && args.model !== "opus" && args.model !== "sonnet") return toolError(this.text.badModel);
+        if (args.model !== undefined && !isTier(args.model) && !isModelName(args.model)) return toolError(this.text.badModel);
         return {
           ...base, op: "start_session", ticket: args.ticket, ...(typeof args.repo === "string" && { repo: args.repo }), task: args.task,
           ...(args.model !== undefined && { model: args.model }),

@@ -6,6 +6,7 @@ import { PRIVACY_LEVELS, TERM_CATEGORIES, type PrivacyLevel, type SensitiveTerm,
 import type { EditableSettingKey } from "../../shared/settings";
 import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
 import { M } from "../strings";
+import { normalizeRoutingSetting, RoutingSettingError } from "../routing/routing-settings";
 
 export class SettingError extends Error {
   readonly code = "invalid_setting";
@@ -385,6 +386,18 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!(LANG_SETTINGS as readonly string[]).includes(t)) throw new SettingError(M().language);
       return t;
     }
+    case "routingQuotas":
+    case "routingThresholds":
+    case "routingPeriodStartDay":
+    case "routingEffort":
+    case "routingMaxConcurrent":
+    case "routingAutoSwitch":
+      try {
+        return normalizeRoutingSetting(key, value);
+      } catch (e) {
+        if (e instanceof RoutingSettingError) throw new SettingError(e.message);
+        throw e;
+      }
     default: {
       // IPC 层已经用 isEditableSetting 拦过；这里再兜一次，免得以后新增的调用方绕过。
       const unknown: never = key;

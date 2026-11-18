@@ -9,6 +9,9 @@ import { LessonsRepo } from "../db/lessons-repo";
 import type { HeadlessExecDeps } from "../handoff/headless-exec";
 import type { MergedPr, PrLessonData } from "../tickets/gh";
 import { memDb } from "../test-utils";
+import { RoutingRepo } from "../db/routing-repo";
+import { UsageRepo } from "../db/usage-repo";
+import { RoutingService } from "../routing/routing-service";
 import { BACKFILL_LIMIT, DAILY_RETRY_BACKOFF_MS, LessonRunner, type LessonRunnerDeps } from "./lesson-runner";
 
 const DAY = 86_400_000;
@@ -888,5 +891,42 @@ describe("LessonRunner merged", () => {
     expect(s.db.prepare(`SELECT repo_slug, pr_number, origin FROM lesson_queue`).all()).toEqual([{ repo_slug: "acme/web", pr_number: 7, origin: "merged" }]);
     expect(s.repo.repo("acme/web")?.localPath).toBe("/w");
     expect(s.repo.repo("acme/other")).toBeNull();
+  });
+});
+
+describe("LessonRunner with model routing", () => {
+  it("records the fallback and re-runs on the requested tier once it recovers (acceptance 1)", async () => {
+    const s = setup();
+    const routingRepo = new RoutingRepo(s.db);
+    routingRepo.upsertModel({ name: "M", tier: "mid", enabled: true, account: "default", priceIn: null, priceOut: null, note: "" });
+    routingRepo.upsertModel({ name: "L", tier: "low", enabled: true, account: "default", priceIn: null, priceOut: null, note: "" });
+    const routing = new RoutingService({
+      repo: routingRepo, usage: new UsageRepo(s.db), now: s.now, probe: async () => ({ ok: true }),
+      settings: () => ({ quotas: "", thresholds: "70,90", periodStartDay: 1, effort: "", maxConcurrent: "", autoSwitch: false }),
+      flags: () => ({ model: true, effort: false }), setTimer: () => 0, clearTimer: () => undefined,
+    });
+    s.deps.headless.routing = routing;
+    s.deps.upgradeReady = () => routing.tierHealthy("mid");
+    routing.onLimit("M", { kind: "rate_limit", resetsAt: null, message: "simulated" }, { task: null, accountLevel: false });
+    s.run.mockImplementation(async () => newRule);
+    s.repo.enqueue("acme/web", [1], "backfill", T0);
+    s.runner.start();
+    await s.runner.idle();
+    expect(s.run.mock.calls[0]![0].args).toContain("L");
+    expect(s.lastRun(1)).toMatchObject({ status: "done", requestedTier: "mid", actualModel: "L", fallbackFrom: "M" });
+    expect(s.repo.upgradePendingCount()).toBe(1);
+    const lessonsBefore = (s.db.prepare(`SELECT COUNT(*) AS c FROM lessons`).get() as { c: number }).c;
+    expect(Number(lessonsBefore)).toBe(1);
+
+    expect(s.runner.requeueUpgrades(true)).toBe(0); // M 还在限额里
+    routing.health.clear("M");
+    expect(s.runner.requeueUpgrades(true)).toBe(1);
+    expect(Number((s.db.prepare(`SELECT COUNT(*) AS c FROM lessons`).get() as { c: number }).c)).toBe(0);
+    s.runner.retry(s.queueId(1)); // 让它马上被取
+    await s.runner.idle();
+    expect(s.run.mock.calls.at(-1)![0].args).toContain("M");
+    expect(s.lastRun(1)).toMatchObject({ status: "done", actualModel: "M", fallbackFrom: null });
+    expect(s.repo.upgradePendingCount()).toBe(0);
+    expect(Number((s.db.prepare(`SELECT COUNT(*) AS c FROM lessons`).get() as { c: number }).c)).toBe(1);
   });
 });

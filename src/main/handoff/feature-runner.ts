@@ -271,16 +271,16 @@ export class FeatureSummaryRunner {
     const args = headlessArgs({
       schema: FEATURE_HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: [...READ_ONLY_TOOLS, ...trackerTools(this.d.settings)],
       mcpConfigs: this.mcpConfigs(mcpCwd), addDirs: dirs.addDirs.filter((d) => d !== cwd),
-      // fork 换模型会让 prompt 缓存整个失效：沿用被 fork 的总控自己的模型。
-      model: (session && storedModel(this.d.sessions.get(session.id) ?? { model: null })) ?? undefined,
     });
+    // fork 换模型会让 prompt 缓存整个失效：沿用被 fork 的总控自己的模型（路由不给 session 任务换模型）。
+    const sessionModel = session ? storedModel(this.d.sessions.get(session.id) ?? { model: null }, this.d.routing?.registered) : null;
 
-    let attempt = await this.exec(featureId, args, prompt, cwd, session?.id);
+    let attempt = await this.exec(featureId, args, prompt, cwd, session?.id, sessionModel);
     if (!attempt.ok) return attempt.outcome;
     let checked = validate(FeatureHandoffSchema, attempt.value);
     if (!checked.ok) {
       this.d.log?.(`feature summary ${featureId}: output failed validation, retrying once: ${checked.errors}`);
-      attempt = await this.exec(featureId, args, retryPrompt(prompt, checked.errors), cwd, session?.id);
+      attempt = await this.exec(featureId, args, retryPrompt(prompt, checked.errors), cwd, session?.id, sessionModel);
       if (!attempt.ok) return attempt.outcome;
       checked = validate(FeatureHandoffSchema, attempt.value);
     }
@@ -289,8 +289,8 @@ export class FeatureSummaryRunner {
     return { featureId, status: "stored", handoffId: r.handoffId, degraded: r.degraded };
   }
 
-  private async exec(featureId: number, args: string[], prompt: string, cwd: string, resumedId?: string): Promise<Exec> {
-    const r = await execHeadlessJson(this.d, { label: `feature summary ${featureId}`, args, prompt, cwd, resumedId });
+  private async exec(featureId: number, args: string[], prompt: string, cwd: string, resumedId?: string, sessionModel?: string | null): Promise<Exec> {
+    const r = await execHeadlessJson(this.d, { task: "feature_summary", label: `feature summary ${featureId}`, args, prompt, cwd, resumedId, sessionModel });
     if (r.ok) return r;
     if (r.reason === "rate_limited") return { ok: false, outcome: { featureId, status: "skipped", reason: "rate_limited" } };
     return { ok: false, outcome: failed(featureId, r.reason, r.message) };

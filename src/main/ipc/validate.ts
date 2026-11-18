@@ -1,4 +1,5 @@
-import type { AvailabilityAction } from "../../shared/availability";
+import type { AvailabilityAction, LimitKind } from "../../shared/availability";
+import { isModelName, isTaskId, isTier, POLICIES, type LimitPolicy, type LimitRuleKind, type RegistryModel, type RoutingAction, type Tier } from "../../shared/model-routing";
 import type { SensitiveTerm } from "../../shared/llm";
 import { CONTEXT_LIMIT } from "../../shared/control";
 import type {
@@ -557,3 +558,88 @@ export function checksActionArg(v: unknown): ChecksAction {
 }
 
 export const checkLessonIdArg = (v: unknown): number => positiveId(v, "lesson id");
+
+const LIMIT_KINDS: readonly unknown[] = ["usage_limit", "rate_limit", "overloaded", "model_unavailable"];
+const RULE_KINDS: readonly unknown[] = ["regex", "status", "field", "reset"];
+const bad = (): never => {
+  throw new Error("invalid routing action");
+};
+const str = (v: unknown, max = 500): string => (typeof v === "string" && v.length <= max ? v : bad());
+const bool = (v: unknown): boolean => (typeof v === "boolean" ? v : bad());
+const price = (v: unknown): number | null => (v === null || (typeof v === "number" && Number.isFinite(v) && v >= 0) ? v : bad());
+const tierOrNull = (v: unknown): Tier | null => (v === null || v === undefined ? null : isTier(v) ? v : bad());
+
+function registryModelArg(v: unknown): RegistryModel {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") bad();
+  return {
+    name: str(o!.name, 200), tier: isTier(o!.tier) ? o!.tier : bad(), enabled: bool(o!.enabled), account: str(o!.account, 100),
+    priceIn: price(o!.priceIn), priceOut: price(o!.priceOut), note: str(o!.note, 500),
+  };
+}
+
+/** 设置页「模型路由」的操作：只查形状，内容（名字格式、是否重复等）由 RoutingService.act 查。 */
+export function routingActionArg(v: unknown): RoutingAction {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") return bad();
+  switch (o.op) {
+    case "discover":
+    case "rerunDegraded":
+      return { op: o.op };
+    case "addModel":
+      return { op: "addModel", model: registryModelArg(o.model) };
+    case "updateModel": {
+      const p = o.patch as Record<string, unknown> | null;
+      if (!p || typeof p !== "object") return bad();
+      const patch: Partial<Omit<RegistryModel, "name">> = {};
+      if (p.tier !== undefined) patch.tier = isTier(p.tier) ? p.tier : bad();
+      if (p.enabled !== undefined) patch.enabled = bool(p.enabled);
+      if (p.account !== undefined) patch.account = str(p.account, 100);
+      if (p.priceIn !== undefined) patch.priceIn = price(p.priceIn);
+      if (p.priceOut !== undefined) patch.priceOut = price(p.priceOut);
+      if (p.note !== undefined) patch.note = str(p.note, 500);
+      return { op: "updateModel", name: str(o.name, 200), patch };
+    }
+    case "removeModel":
+    case "clearHealth":
+    case "probe":
+      return o.op === "removeModel" ? { op: o.op, name: str(o.name, 200) } : { op: o.op, model: str(o.model, 200) };
+    case "moveModel":
+      return { op: "moveModel", name: str(o.name, 200), delta: o.delta === 1 || o.delta === -1 ? o.delta : bad() };
+    case "setChain":
+      if (!Array.isArray(o.models) || o.models.length > 50) return bad();
+      return { op: "setChain", tier: isTier(o.tier) ? o.tier : bad(), models: o.models.map((m) => str(m, 200)) };
+    case "setTaskRoute": {
+      const r = o.route as Record<string, unknown> | null;
+      if (!r || typeof r !== "object" || !isTaskId(r.task)) return bad();
+      const policy = r.policy === null || r.policy === undefined ? null : POLICIES.includes(r.policy as LimitPolicy) ? (r.policy as LimitPolicy) : bad();
+      const critical = r.critical === null || r.critical === undefined ? null : bool(r.critical);
+      return { op: "setTaskRoute", route: { task: r.task, tier: tierOrNull(r.tier), minTier: tierOrNull(r.minTier), policy, critical } };
+    }
+    case "clearTaskRoute":
+      return isTaskId(o.task) ? { op: "clearTaskRoute", task: o.task } : bad();
+    case "confirmError":
+      if (!Number.isInteger(o.id) || !LIMIT_KINDS.includes(o.category)) return bad();
+      return { op: "confirmError", id: o.id as number, category: o.category as LimitKind, accountLevel: bool(o.accountLevel) };
+    case "dismissError":
+      return Number.isInteger(o.id) ? { op: "dismissError", id: o.id as number } : bad();
+    case "addRule": {
+      const r = o.rule as Record<string, unknown> | null;
+      if (!r || typeof r !== "object" || !RULE_KINDS.includes(r.kind)) return bad();
+      const category = r.category === null ? null : LIMIT_KINDS.includes(r.category) ? (r.category as LimitKind) : bad();
+      return { op: "addRule", rule: { kind: r.kind as LimitRuleKind, pattern: str(r.pattern, 500), category, accountLevel: bool(r.accountLevel), note: str(r.note, 500) } };
+    }
+    case "removeRule":
+      return { op: "removeRule", id: str(o.id, 200) };
+    case "toggleRule":
+      return { op: "toggleRule", id: str(o.id, 200), enabled: bool(o.enabled) };
+    default:
+      return bad();
+  }
+}
+
+/** sessions:switchModel 的 model：省略（换下一档）或一个模型名。 */
+export function switchModelArg(v: unknown): string | undefined {
+  if (v === undefined || v === null) return undefined;
+  return isModelName(v) ? v : bad();
+}

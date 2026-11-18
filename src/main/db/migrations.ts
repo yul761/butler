@@ -625,4 +625,44 @@ export const MIGRATIONS: string[] = [
   INSERT INTO checks (key, scope_kind, type, params, severity, mode, enabled, created_at, updated_at)
     VALUES ('builtin:comment_policy', 'global', 'comment_policy', '{}', 'block', 'enforce', 0, 0, 0);
   `,
+  // 模型路由（工作流 A）：模型注册表、每档的降级链、任务覆盖、识别规则、按模型的健康状态、未识别报错、路由事件；
+  // 用量和复盘运行记下任务、要的档位、实际模型、从哪个模型降下来；复盘队列的「待升级重跑」。
+  `
+  CREATE TABLE model_registry (
+    name TEXT PRIMARY KEY, tier TEXT NOT NULL CHECK (tier IN ('high','mid','low')), enabled INTEGER NOT NULL DEFAULT 1,
+    account TEXT NOT NULL DEFAULT 'default', price_in REAL, price_out REAL, note TEXT NOT NULL DEFAULT '', position INTEGER NOT NULL DEFAULT 0);
+  CREATE TABLE model_chains (
+    tier TEXT NOT NULL CHECK (tier IN ('high','mid','low')), position INTEGER NOT NULL, model TEXT NOT NULL,
+    PRIMARY KEY (tier, position));
+  CREATE TABLE task_routes (
+    task TEXT PRIMARY KEY, tier TEXT CHECK (tier IS NULL OR tier IN ('high','mid','low')),
+    min_tier TEXT CHECK (min_tier IS NULL OR min_tier IN ('high','mid','low')),
+    policy TEXT CHECK (policy IS NULL OR policy IN ('fallback','wait','escalate')), critical INTEGER);
+  CREATE TABLE limit_rules (
+    id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('regex','status','field','reset')), pattern TEXT NOT NULL,
+    category TEXT CHECK (category IS NULL OR category IN ('usage_limit','rate_limit','overloaded','model_unavailable')),
+    account_level INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL CHECK (source IN ('builtin','user','learned')),
+    enabled INTEGER NOT NULL DEFAULT 1, note TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
+  CREATE TABLE model_health (
+    model TEXT PRIMARY KEY, state TEXT NOT NULL CHECK (state IN ('ok','limited','unavailable','probing')),
+    kind TEXT, until INTEGER, reset_known INTEGER NOT NULL DEFAULT 0, backoff_step INTEGER NOT NULL DEFAULT 0,
+    hit_at INTEGER, suspected INTEGER NOT NULL DEFAULT 0, consecutive_failures INTEGER NOT NULL DEFAULT 0, failure_streak_since INTEGER,
+    last_success_at INTEGER, last_failure_at INTEGER, last_failure_text TEXT, updated_at INTEGER NOT NULL);
+  CREATE TABLE unrecognized_errors (
+    id INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL UNIQUE, sample TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 1,
+    models TEXT NOT NULL DEFAULT '[]', first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','confirmed','dismissed')),
+    category TEXT, signal TEXT NOT NULL DEFAULT 'observed', rule_id TEXT);
+  CREATE TABLE route_events (
+    id INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL, task TEXT, model TEXT, to_model TEXT, detail TEXT);
+  CREATE INDEX route_events_at ON route_events (at);
+  ALTER TABLE session_usage ADD COLUMN task TEXT;
+  ALTER TABLE session_usage ADD COLUMN requested_tier TEXT;
+  ALTER TABLE session_usage ADD COLUMN fallback_from TEXT;
+  ALTER TABLE session_usage ADD COLUMN cost_usd REAL;
+  ALTER TABLE lesson_runs ADD COLUMN requested_tier TEXT;
+  ALTER TABLE lesson_runs ADD COLUMN actual_model TEXT;
+  ALTER TABLE lesson_runs ADD COLUMN fallback_from TEXT;
+  ALTER TABLE lesson_queue ADD COLUMN upgrade_pending INTEGER NOT NULL DEFAULT 0;
+  `,
 ];

@@ -501,6 +501,41 @@ export class LessonsRepo {
     });
   }
 
+  /** 这次分析是降了档跑的：等这一档恢复后再用要求的档位重跑一次。 */
+  markUpgrade(id: number): void {
+    this.db.prepare(`UPDATE lesson_queue SET upgrade_pending = 1 WHERE id = ?`).run(id);
+  }
+
+  upgradePendingCount(): number {
+    const r = this.db.prepare(`SELECT COUNT(*) AS c FROM lesson_queue WHERE upgrade_pending = 1 AND status = 'done'`).get() as unknown as { c: number };
+    return Number(r.c);
+  }
+
+  /**
+   * 等着升级重跑的放回队列。降级那次新建、还没人确认（pending）、出处全来自那次运行的规矩先撤掉，免得重跑再建一条重复的；
+   * 被那次命中的旧规矩不动（出处按 PR + 链接去重，重跑不会多算）。返回放回了几个。
+   */
+  requeueUpgrades(now: number): number {
+    return withTransaction(this.db, () => {
+      const rows = this.db
+        .prepare(`SELECT id, last_run_id FROM lesson_queue WHERE upgrade_pending = 1 AND status = 'done'`)
+        .all() as unknown as { id: number; last_run_id: number | null }[];
+      const withdraw = this.db.prepare(
+        `DELETE FROM lessons WHERE status = 'pending' AND id IN (SELECT lesson_id FROM lesson_sources WHERE run_id = ?)
+           AND NOT EXISTS (SELECT 1 FROM lesson_sources s WHERE s.lesson_id = lessons.id AND (s.run_id IS NULL OR s.run_id <> ?))`,
+      );
+      const requeue = this.db.prepare(
+        `UPDATE lesson_queue SET status = 'queued', upgrade_pending = 0, priority = 0, not_before = NULL, error = NULL, error_message = NULL,
+           finished_at = NULL, enqueued_at = ? WHERE id = ?`,
+      );
+      for (const r of rows) {
+        if (r.last_run_id !== null) withdraw.run(r.last_run_id, r.last_run_id);
+        requeue.run(now, r.id);
+      }
+      return rows.length;
+    });
+  }
+
   /** 回到 queued，notBefore 之前不会被取。 */
   defer(id: number, notBefore: number, runId?: number): void {
     this.db

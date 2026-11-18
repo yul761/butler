@@ -28,6 +28,12 @@ export const EDITABLE_SETTINGS = [
   "checksEnabled",
   "checksEditTimeoutSec",
   "checksPushTimeoutSec",
+  "routingQuotas",
+  "routingThresholds",
+  "routingPeriodStartDay",
+  "routingEffort",
+  "routingMaxConcurrent",
+  "routingAutoSwitch",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

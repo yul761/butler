@@ -9,6 +9,7 @@ import type { AdmissionPolicyOverrides, AdmissionPolicyView, PolicyScope } from 
 import type { ConfigIoStatus, ExportRequest, ExportResult, ImportApplyRequest, ImportApplyResult, ImportPreviewResult, StarterTarget } from "../../shared/config-io";
 import type { LessonAction, LessonActResult, LessonQueueRowView, LessonRunDetail, LessonsState } from "../../shared/lessons";
 import type { MemoryView, WhyEntry } from "../../shared/memory";
+import type { RoutingAction, RoutingView, SessionLimitView, SwitchModelResult } from "../../shared/model-routing";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
 import type {
@@ -126,6 +127,12 @@ export const api = {
   configOpenBackups: () => call<void>(IPC.configOpenBackups),
   availability: () => call<AvailabilityView>(IPC.availabilityGet),
   availabilityAct: (a: AvailabilityAction) => call<void>(IPC.availabilityAct, a),
+  /** 模型路由（3.0）：act 返回错误文字，成功为 null。 */
+  routingView: () => call<RoutingView>(IPC.routingView),
+  routingAct: (a: RoutingAction) => call<string | null>(IPC.routingAct, a),
+  switchModel: (sessionId: string, model?: string) => call<SwitchModelResult>(IPC.sessionsSwitchModel, sessionId, model ?? null),
+  dismissSessionLimit: (sessionId: string) => call<void>(IPC.sessionsDismissLimit, sessionId),
+  sessionLimits: () => call<SessionLimitView[]>(IPC.sessionsLimits),
   nowView: () => call<NowView>(IPC.nowView),
   inbox: (scope: InboxScope) => call<InboxView>(IPC.inboxList, scope),
   answerInbox: (id: number, text: string) => call<boolean>(IPC.inboxAnswer, id, text),
