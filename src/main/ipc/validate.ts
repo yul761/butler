@@ -12,6 +12,8 @@ import { parseLessonFilter } from "../../shared/lesson-filter";
 import type { AdmissionScope, CalibrationAction, WizardAction } from "../../shared/lesson-admission";
 import { CHECKS_BULK_OPS, parseCheckScope, type CheckScope, type ChecksAction, type ChecksBulkOp } from "../../shared/checks";
 import { parsePolicyOverrides, type AdmissionPolicyOverrides, type PolicyScope } from "../../shared/admission-policy";
+import { parseLoopOverrides, type LoopPolicyOverrides, type LoopScope } from "../../shared/loop-policy";
+import { COMMENT_CATEGORIES, type CommentAction, type CommentCategory, type FlakyAction } from "../../shared/loop";
 import {
   EXPORT_CONTENTS, type ExportContent, type ExportRequest, type ExportScopeArg, type ImportApplyRequest, type Resolution, type StarterTarget,
 } from "../../shared/config-io";
@@ -531,6 +533,32 @@ export function policyScopeArg(v: unknown): PolicyScope {
 export function policySetArg(v: unknown): { scope: PolicyScope; overrides: AdmissionPolicyOverrides } {
   const o = objArg(v, "policy change", ["scope", "overrides"]);
   return { scope: policyScopeArg(o.scope), overrides: parsePolicyOverrides(o.overrides) };
+}
+
+/** 评论与 CI 策略改一层（工作流 I）：覆盖整个换掉，值按键校验。 */
+export function loopSetArg(v: unknown): { scope: LoopScope; overrides: LoopPolicyOverrides } {
+  const o = objArg(v, "loop policy change", ["scope", "overrides"]);
+  return { scope: policyScopeArg(o.scope), overrides: parseLoopOverrides(o.overrides) };
+}
+
+export function commentActionArg(v: unknown): CommentAction {
+  const o = objArg(v, "comment action", ["op", "id", "category"]);
+  const id = posInt(o.id, "comment action");
+  if (o.op === "categorize") {
+    if (!(COMMENT_CATEGORIES as readonly unknown[]).includes(o.category)) throw new Error("invalid comment action");
+    return { op: "categorize", id, category: o.category as CommentCategory };
+  }
+  if (o.category !== undefined) throw new Error("invalid comment action");
+  if (o.op === "send" || o.op === "dismiss" || o.op === "reply") return { op: o.op, id };
+  throw new Error("invalid comment action");
+}
+
+export function flakyActionArg(v: unknown): FlakyAction {
+  const o = objArg(v, "flaky action", ["op", "repoSlug", "kind", "name"]);
+  if (o.op !== "add" && o.op !== "remove") throw new Error("invalid flaky action");
+  if (o.kind !== "check" && o.kind !== "test") throw new Error("invalid flaky action");
+  if (typeof o.name !== "string" || !o.name.trim() || o.name.length > 200) throw new Error("invalid flaky action");
+  return { op: o.op, repoSlug: lessonSlugArg(o.repoSlug), kind: o.kind, name: o.name.trim() };
 }
 
 export function exportRequestArg(v: unknown): ExportRequest {

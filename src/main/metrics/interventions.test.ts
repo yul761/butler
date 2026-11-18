@@ -255,6 +255,18 @@ describe("manual_trigger recording (successful invokes)", () => {
     expect(repo.events(0).map((e) => [e.sessionId, e.ticketKey])).toEqual([[null, "T-3"], ["root-1", null]]);
   });
 
+  it("counts sending or re-replying a comment, not recategorising or dismissing it", () => {
+    const { repo, record } = rec();
+    const view = { id: 1 };
+    expect(recordInvoke(record, IPC.loopCommentsAct, [{ op: "send", id: 1 }], view)).toBe(true);
+    expect(recordInvoke(record, IPC.loopCommentsAct, [{ op: "reply", id: 1 }], view)).toBe(true);
+    expect(recordInvoke(record, IPC.loopCommentsAct, [{ op: "send", id: 2 }], null)).toBe(false);
+    expect(recordInvoke(record, IPC.loopCommentsAct, [{ op: "categorize", id: 1, category: "fix" }], view)).toBe(false);
+    expect(recordInvoke(record, IPC.loopCommentsAct, [{ op: "dismiss", id: 1 }], view)).toBe(false);
+    expect(recordInvoke(record, IPC.loopPolicySet, [{}])).toBe(false);
+    expect(repo.events(0)).toHaveLength(2);
+  });
+
   it("ignores reads, setup and channels counted as needs_you_answer", () => {
     const { repo, record } = rec();
     expect(recordInvoke(record, IPC.ticketsList, [])).toBe(false);

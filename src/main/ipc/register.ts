@@ -21,6 +21,8 @@ export interface AdmissionFacade {
   calibrationAct(a: CalibrationAction): CalibrationActResult;
   regroupPrinciples(): Promise<RegroupResult>;
 }
+import type { LoopPolicyOverrides, LoopPolicyView, LoopScope } from "../../shared/loop-policy";
+import type { CommentAction, CommentItemView, FlakyAction, FlakyEntry, LoopEffect, PrCommentsView } from "../../shared/loop";
 import type { ConfigIoStatus, ExportResult, ImportApplyResult, ImportPreviewResult } from "../../shared/config-io";
 import type { MemoryHistoryPoint } from "../../shared/mem-usage";
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
@@ -71,7 +73,7 @@ import { meteredIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg } from "./validate";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -108,6 +110,16 @@ export interface IpcDeps {
   admission: AdmissionFacade;
   /** 三层准入策略（契约 4.2）。 */
   policies: Pick<AdmissionPolicyService, "view" | "setLayer">;
+  /** 评论闭环和 CI 分类（工作流 I）：策略、评论项、flaky 名单、效果。 */
+  loop: {
+    policyView(scope: LoopScope): LoopPolicyView;
+    policySet(scope: LoopScope, overrides: LoopPolicyOverrides): void;
+    comments(ticketKey: string): PrCommentsView[];
+    act(a: CommentAction): Promise<CommentItemView | null>;
+    flaky(): FlakyEntry[];
+    flakyAct(a: FlakyAction): boolean;
+    effect(days: unknown): LoopEffect;
+  };
   /** 导入导出（契约 4.3）。 */
   configIo: ConfigIoFacade;
   /** 确定性检查（契约 4.5）：检查页的读、写和从规矩生成草稿。 */
@@ -477,6 +489,21 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
     return r;
   });
+  handle(IPC.loopPolicyGet, (raw: unknown): LoopPolicyView => d.loop.policyView(policyScopeArg(raw)));
+  handle(IPC.loopPolicySet, (raw: unknown): void => {
+    const { scope, overrides } = loopSetArg(raw);
+    d.loop.policySet(scope, overrides);
+    d.notify();
+  });
+  handle(IPC.loopCommentsList, (raw: unknown): PrCommentsView[] => d.loop.comments(ticketKeyArg(raw)));
+  handle(IPC.loopCommentsAct, async (raw: unknown): Promise<CommentItemView | null> => {
+    const r = await d.loop.act(commentActionArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.loopFlakyList, (): FlakyEntry[] => d.loop.flaky());
+  handle(IPC.loopFlakyAct, (raw: unknown): boolean => d.loop.flakyAct(flakyActionArg(raw)));
+  handle(IPC.loopEffect, (raw: unknown): LoopEffect => d.loop.effect(raw));
   handle(IPC.checksView, (raw: unknown): ChecksView => d.checks.view(checkScopeArg(raw)));
   handle(IPC.checksHits, (raw: unknown): CheckHitView[] => d.checks.hits(checkKeyArg(raw)));
   handle(IPC.checksAct, (raw: unknown): ChecksActResult => {

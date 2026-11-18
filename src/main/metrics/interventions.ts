@@ -130,6 +130,8 @@ export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.butlerOpenSession, IPC.jobsRunNightly, IPC.ciResend, IPC.followupsSetStatus, IPC.lessonsRun, IPC.availabilityAct,
   // 熔断停下的「继续并提高上限」（工作流 L）
   IPC.costResume,
+  // 评论：「送进 session」「再回复」推动工作；改分类、忽略不算（recordInvoke 里按 op 分）。
+  IPC.loopCommentsAct,
 ]);
 
 /** 记成别的人介入的通道（不再算手动触发）：卡片上回答、「不用了」是 needs_you_answer。 */
@@ -146,6 +148,7 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.auditList, IPC.externalAuditList, IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory, IPC.appAutostartGet, IPC.appKeepAwakeGet,
   IPC.clipboardRead, IPC.admissionState, IPC.wizardEstimate, IPC.calibrationSample, IPC.calibrationStats,
   IPC.costView, IPC.costBreakers, IPC.backgroundStatus,
+  IPC.clipboardRead, IPC.loopPolicyGet, IPC.loopCommentsList, IPC.loopFlakyList, IPC.loopEffect,
   // 建立、整理、归档
   IPC.ticketsCreate, IPC.ticketsArchive, IPC.ticketsUpdate, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
   IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive, IPC.featuresUnarchive, IPC.featuresMove,
@@ -160,6 +163,7 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.wizardAct, IPC.calibrationAct, IPC.principlesRegroup,
   // 花费上限、手动停 / 恢复一种后台任务（工作流 L）
   IPC.costSet, IPC.backgroundAct,
+  IPC.loopPolicySet, IPC.loopFlakyAct,
 ]);
 
 /** 这个通道算不算手动触发。 */
@@ -175,6 +179,7 @@ const shortString = (v: unknown): string | undefined => (typeof v === "string" &
 /** 调用成功了、但什么都没做（唤醒没成或者在冷却、不用唤醒；换新被拒）：不算一次手动触发。 */
 export function noOpResult(channel: string, result: unknown): boolean {
   if (channel === IPC.sessionsWake) return result !== "woken";
+  if (channel === IPC.loopCommentsAct) return result === null || result === undefined;
   return !!result && typeof result === "object" && (result as { ok?: unknown }).ok === false;
 }
 
@@ -185,6 +190,10 @@ export function noOpResult(channel: string, result: unknown): boolean {
 export function recordInvoke(record: RecordEvent, channel: string, args: readonly unknown[], result?: unknown): boolean {
   if (!isManualTrigger(channel) || noOpResult(channel, result)) return false;
   const first = args[0];
+  if (channel === IPC.loopCommentsAct) {
+    const op = first && typeof first === "object" ? (first as { op?: unknown }).op : undefined;
+    if (op !== "send" && op !== "reply") return false;
+  }
   const sessionId = SESSION_ARG.has(channel) ? shortString(first) : undefined;
   let ticketKey = TICKET_ARG.has(channel) ? shortString(first) : undefined;
   if (channel === IPC.sessionsOpen && first && typeof first === "object") ticketKey = shortString((first as { ticketKey?: unknown }).ticketKey);

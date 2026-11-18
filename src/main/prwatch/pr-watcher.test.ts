@@ -1082,3 +1082,21 @@ describe("prStatusChanged", () => {
     expect(prStatusChanged(legacy, { ...base, ci: "failing" }, false)).toBe(true);
   });
 });
+
+describe("PrWatcher.onPrRead (workstream I)", () => {
+  it("hands each read PR with its updated rows to the comment loop without waiting for it", async () => {
+    const s = setup();
+    const row = s.link();
+    let release!: () => void;
+    const onPrRead = vi.fn<NonNullable<PrWatcherDeps["onPrRead"]>>(() => new Promise<void>((r) => (release = r)));
+    const w = new PrWatcher({ ...s.deps, onPrRead });
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "passing", headSha: "zz9" }));
+    await w.check();
+    expect(onPrRead).toHaveBeenCalledTimes(1);
+    const [rows, status, where] = onPrRead.mock.calls[0];
+    expect(rows.map((r) => [r.id, r.headSha])).toEqual([[row.id, "zz9"]]);
+    expect(status.headSha).toBe("zz9");
+    expect(where).toEqual({ cwd: "/w/r/app", slug: "o/app" });
+    release();
+  });
+});

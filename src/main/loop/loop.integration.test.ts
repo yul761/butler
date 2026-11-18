@@ -35,25 +35,26 @@ function world() {
   const reruns: number[] = [];
   const events: string[] = [];
   const deliver = vi.fn(async () => "sent" as const);
-  let ci!: CiDelivery;
+  const box: { ci: CiDelivery | null } = { ci: null };
   const triage = new CiTriage({
     repo, policy: () => ({ ...LOOP_POLICY_DEFAULTS, "ci.enabled": true }),
     external: { attempt: (async (_k: string, _d: unknown, f: () => Promise<unknown>) => ({ ran: true, value: await f(), auditId: 1 })) as never },
     gh: { runInfo: async () => info, failedLog: async () => NET, rerunFailed: async (_c, id) => (reruns.push(id), { ok: true, url: null }) },
     model: async () => null,
     where: () => ({ cwd: "/r", slug: "o/r", ticketKey: "T-1", prId: pr.id, target: pr.url }),
-    wake: (item) => void ci.settled(item),
+    wake: (item) => void box.ci?.settled(item),
     soon: () => undefined,
     recordEvent: (k) => (events.push(k), true),
     later: () => undefined,
     now: () => t, log: () => undefined,
   });
-  ci = new CiDelivery({
+  const ci = new CiDelivery({
     prs, branches: new BranchWatchRepo(db), currentBranch: () => "b",
     guard: { check: () => ({ ok: true, termId: "t1", headId: "h1" }), recheckAfter: () => () => true },
     recipient: (key, rid, branch) => pickRecipient({ owner: "h1", ownerOpen: true, open: [], ticketBranch: "b", branch }),
     deliver, triage, now: () => t, log: () => undefined,
   });
+  box.ci = ci;
   /** PrWatcher 读到一个结论。 */
   const read = async (state: "failing" | "passing" | "pending") => {
     prs.update(pr.id, { headSha: "abc1234", ci: state, failed: state === "failing" ? [{ name: "test", state: "failing", runId: 55, log: NET }] : [], checkedAt: t });

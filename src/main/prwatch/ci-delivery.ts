@@ -24,6 +24,8 @@ export interface CiDeliveryDeps {
   deliver(termId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
   /** CI 失败分类（工作流 I）：递之前问一下，hold 就先不递（不算没递出去），note 附在通知后面。没有就原样递。 */
   triage?: { decide(item: CiItem, row: { headSha: string | null; ci: string; failed: CiCheck[] }): TriageDecision };
+  /** 正在递的 session，和评论闭环共用（同一个 session 同时只递一条）。没有就自己建一个。 */
+  busy?: Set<string>;
   now(): number;
   log(msg: string, err?: unknown): void;
 }
@@ -137,13 +139,15 @@ const itemId = (item: CiItem): string => (item.kind === "pr" ? `pr:${item.id}` :
  */
 export class CiDelivery {
   /** 正在递的 session：同一个 session 同时只递一条。 */
-  private readonly busy = new Set<string>();
+  private readonly busy: Set<string>;
   /** 每一条上一次记日志的 `${deliveryKey}|${reason}`：原因没变不再记。 */
   private readonly logged = new Map<string, string>();
   /** 还没递出去的结论，键 itemId。只在内存里：重启后第一轮会再递一次，递不出去再从头计时。 */
   private readonly waiting = new Map<string, Waiting>();
 
-  constructor(private readonly d: CiDeliveryDeps) {}
+  constructor(private readonly d: CiDeliveryDeps) {
+    this.busy = d.busy ?? new Set();
+  }
 
   async settled(item: CiItem): Promise<void> {
     await this.tryDeliver(item);
