@@ -9,7 +9,10 @@ import { BaselinesRepo } from "../../db/baselines-repo";
 import { memDb } from "../../test-utils";
 import { writeRepo } from "../test-repo";
 import { CheckExporter, runGit, type GitRun } from "./exporter";
-import { stubOutward, type OutwardGate } from "./outward";
+import type { OutwardGate } from "./outward";
+import { ExternalAuditRepo } from "../../db/external-audit-repo";
+import { SettingsRepo } from "../../db/settings-repo";
+import { ExternalActions } from "../../external/actions";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -44,20 +47,22 @@ function setup(files: Record<string, string>, o: { outward?: OutwardGate; git?: 
   git(root, "remote", "set-head", "origin", "main");
   const home = mkdtempSync(join(tmpdir(), "butler-home-"));
   dirs.push(home);
-  const repo = new BaselinesRepo(memDb());
-  const logs: string[] = [];
+  const db = memDb();
+  const repo = new BaselinesRepo(db);
+  const audit = new ExternalAuditRepo(db);
+  const settings = new SettingsRepo(db);
   const prs: unknown[] = [];
   let t = 1000;
   const ex = new CheckExporter({
     repo, check: (slug, key) => (slug === "acme/app" && key === (o.check ?? CHECK).key ? { ...(o.check ?? CHECK), checkId: null } : null),
     baseline: () => (o.noBaseline ? null : baseline()), localPath: (s) => (s === "acme/app" ? root : null), exportsDir: join(home, "exports"),
-    outward: o.outward ?? stubOutward((m) => logs.push(m)), ticketPattern: () => "", now: () => ++t, git: o.git,
+    outward: o.outward ?? new ExternalActions({ repo: audit, setting: (k) => settings.get(k), now: () => t }), ticketPattern: () => "", now: () => ++t, git: o.git,
     openPr: async (req) => {
       prs.push(req);
       return "https://example.invalid/pr/1";
     },
   });
-  return { root, remote, home, repo, ex, logs, prs };
+  return { root, remote, home, repo, ex, audit, prs };
 }
 
 const allowAll: OutwardGate = { allowed: () => true, attempt: async (_k, _d, run) => ({ ran: true, value: await run(), auditId: 1 }) };
@@ -117,17 +122,20 @@ describe("check export into a Butler worktree", () => {
     expect(await nb.ex.run(CHECK.key, "acme/app")).toMatchObject({ ok: false });
   });
 
-  it("does not push or open a PR while the outward switches are off, and logs the attempt", async () => {
-    const { remote, ex, logs, repo } = setup({ "go.mod": "" });
+  it("does not push or open a PR while the outward switches are off, and records each attempt as skipped", async () => {
+    const { remote, ex, audit, repo } = setup({ "go.mod": "" });
     const r = await ex.run(CHECK.key, "acme/app");
     if (!r.ok) throw new Error(r.message);
     const id = r.export!.id;
     const push = await ex.act({ kind: "push", id });
     expect(push.ok).toBe(false);
-    expect(logs.some((l) => l.includes("branch_push skipped"))).toBe(true);
     expect(repo.getExport(id)!.status).toBe("ready");
     expect(git(remote, "branch", "--list")).not.toContain("butler/");
     expect(await ex.act({ kind: "pr", id })).toMatchObject({ ok: false });
+    const rows = audit.list();
+    expect(rows.find((r) => r.kind === "branch_push")).toMatchObject({ outcome: "skipped", repoSlug: "acme/app", target: "butler/check-no-debugger-a1b2c3" });
+    // 没推送就开不了 PR：不算一次对外尝试。
+    expect(rows.filter((r) => r.kind === "pr_open")).toEqual([]);
   });
 
   it("pushes and opens a PR when the switches allow it", async () => {

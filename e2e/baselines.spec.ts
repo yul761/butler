@@ -151,4 +151,12 @@ test("baselines: scan, adopt, profile in the ticket guide, inferred fallback, le
   await expect(row.locator("[data-testid^=check-repo-msg-]")).toHaveText(M().lintExport.pushOff);
   await expect(exportRow.locator("[data-testid^=export-status-]")).toHaveText(S.lintExport.status.ready);
   expect(git(s.repo, "branch", "-r")).toBe("");
+  // 拒绝的推送记进对外动作的审计（B 的 ExternalActions），标成 skipped。
+  const d = new DatabaseSync(join(s.butlerHome, "app.db"), { timeout: 5000 });
+  try {
+    const rows = d.prepare("SELECT kind, outcome, repo_slug AS slug, target FROM external_action_audit").all();
+    expect(rows).toEqual([expect.objectContaining({ kind: "branch_push", outcome: "skipped", slug: "acme/web", target: branch })]);
+  } finally {
+    d.close();
+  }
 });

@@ -1606,13 +1606,14 @@ const ZH = {
   prStagesOpenProgress: "在进度页里看",
   /** 设置里的「对外动作」（契约 4.8，ws-b）。 */
   externalHeading: "对外动作",
-  externalIntro: "Butler 代你在 GitHub 或别的外部服务上留下东西的动作，每种一个开关，默认全关。关着时 Butler 不会做，只在审计页记一笔“跳过”。现在还没有功能用到这些开关，之后的版本接入时才会生效。",
+  externalIntro: "Butler 代你在 GitHub 或别的外部服务上留下东西的动作，每种一个开关，默认全关。关着时 Butler 不会做，只在审计页记一笔“跳过”。现在用到的是导出成仓库规则的「推送分支」和「开 PR」，其余的等之后的版本接入时才会生效。",
   externalActions: {
     comment_reply: { label: "回复 review 评论", hint: "在 PR 的评论下以你的账号回复" },
     comment_resolve: { label: "标记评论已解决", hint: "把 PR 上的 review 讨论标成 resolved" },
     pr_description_edit: { label: "改 PR 描述", hint: "改写 PR 的正文" },
     pr_label: { label: "加减 PR label", hint: "给 PR 加或去掉 label" },
     pr_open: { label: "开 PR", hint: "用 gh 新开 PR" },
+    branch_push: { label: "推送分支", hint: "把 Butler 建的分支（比如导出成仓库规则的分支）推到远端" },
     pr_title_edit: { label: "改 PR 标题", hint: "改 PR 的标题" },
     force_push: { label: "强推（force push）", hint: "改写远端分支的历史" },
     ci_rerun: { label: "重跑 CI", hint: "重新触发失败的 CI" },

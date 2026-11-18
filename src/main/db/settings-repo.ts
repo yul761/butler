@@ -131,6 +131,7 @@ export const SETTING_DEFAULTS = {
   externalPrDescriptionEdit: "0",
   externalPrLabel: "0",
   externalPrOpen: "0",
+  externalBranchPush: "0",
   externalPrTitleEdit: "0",
   externalForcePush: "0",
   externalCiRerun: "0",

@@ -60,6 +60,7 @@ export const EDITABLE_SETTINGS = [
   "externalPrDescriptionEdit",
   "externalPrLabel",
   "externalPrOpen",
+  "externalBranchPush",
   "externalPrTitleEdit",
   "externalForcePush",
   "externalCiRerun",

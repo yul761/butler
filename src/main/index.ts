@@ -166,7 +166,6 @@ import { BaselineService } from "./baselines/baselines-service";
 import { LegacyScanService } from "./baselines/legacy-service";
 import { baselineWorkerRunner } from "./baselines/worker-host";
 import { CheckExporter } from "./baselines/export/exporter";
-import { stubOutward } from "./baselines/export/outward";
 import { BaselinesRepo } from "./db/baselines-repo";
 import { ChecksService } from "./checks/checks-service";
 import { SnapshotWriter, readSnapshotState } from "./checks/snapshot-writer";
@@ -686,7 +685,16 @@ async function bootstrap(): Promise<void> {
   } catch (e) {
     logger("legacy scan: recovering interrupted scans failed", e);
   }
-  // 导出成 lint：写进 <BUTLER_HOME>/exports/<id> 的 worktree 就停；推送和开 PR 只经对外动作开关（契约 4.8，B 合并前是关着的桩，尝试都写日志）。
+  // 对外动作（契约 4.8，ws-b）：开关和审计的框架；接入的 workstream 用 externalActions.attempt（现在是导出成 lint 的推送分支和开 PR）。
+  const externalAudit = new ExternalAuditRepo(db);
+  const externalActions = new ExternalActions({
+    repo: externalAudit,
+    setting: (key) => settings.get(key),
+    now: Date.now,
+    cutoff: (now) => auditCutoff(now, llmConfig(settings).retentionDays),
+    log: logger,
+  });
+  // 导出成 lint：写进 <BUTLER_HOME>/exports/<id> 的 worktree 就停；推送和开 PR 只经对外动作开关（契约 4.8），做没做都记进审计。
   const checkExporter = new CheckExporter({
     repo: baselinesRepo,
     check: (slug, key) => {
@@ -694,7 +702,7 @@ async function bootstrap(): Promise<void> {
       return c ? { ...c, checkId: c.id } : null;
     },
     baseline: (slug) => baselineService.latest(slug), localPath: repoLocalPath, exportsDir: join(paths.home, "exports"),
-    outward: stubOutward((m) => logger(m)), ticketPattern: () => checksConfig(settings).ticketPattern, now: Date.now,
+    outward: externalActions, ticketPattern: () => checksConfig(settings).ticketPattern, now: Date.now,
     openPr: (req) => createPr(req), openPath: (dir) => void shell.openPath(dir), onChanged: () => notify(), log: logger,
   });
   // 上次跑到一半退出的导出：建了的 worktree 和分支收回去。
@@ -1086,17 +1094,6 @@ async function bootstrap(): Promise<void> {
     featureFollowup(featureId, handoffId, sessionId);
   };
   const audit = new AuditRepo(db);
-  // 对外动作（契约 4.8，ws-b）：开关和审计的框架；接入的 workstream 用 externalActions.attempt。
-  const externalAudit = new ExternalAuditRepo(db);
-  const externalActions = new ExternalActions({
-    repo: externalAudit,
-    setting: (key) => settings.get(key),
-    now: Date.now,
-    cutoff: (now) => auditCutoff(now, llmConfig(settings).retentionDays),
-    log: logger,
-  });
-  // 现在还没有调用方（I、K、J 接入时用）：先建好，开关和保留期从这里开始生效。
-  void externalActions;
   // 审计的启动收尾，先于一切读写审计的代码：上次退出时没发完的请求记为 failed（请求体保留，可能已经发出），
   // 再按保留期清理一次（不删本月的记录，预算要用；之后 gateway 每次调用前也会清理）。
   try {

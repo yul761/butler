@@ -440,7 +440,7 @@ Checks are exported and imported with the other configuration (**Checks only** o
 
 ## Outward actions
 
-Some later features will let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. No feature uses these switches yet.
+Some features let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Today the repo rule export uses **Push branches** and **Open PRs**; the other switches take effect as later features start using them. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. No feature uses these switches yet.
 
 | Setting | Key | Default | What it allows |
 |---------|-----|---------|----------------|
@@ -449,6 +449,7 @@ Some later features will let Butler leave something outside your machine on your
 | Edit PR descriptions | `externalPrDescriptionEdit` | `0` (off) | Rewriting a PR's body. |
 | Add or remove PR labels | `externalPrLabel` | `0` (off) | Adding labels to a PR or removing them. |
 | Open PRs | `externalPrOpen` | `0` (off) | Opening a new PR with `gh`. |
+| Push branches | `externalBranchPush` | `0` (off) | Pushing a branch Butler made, such as a repo rule export, to the remote. |
 | Edit PR titles | `externalPrTitleEdit` | `0` (off) | Changing a PR's title. |
 | Force push | `externalForcePush` | `0` (off) | Rewriting a remote branch's history. |
 | Rerun CI | `externalCiRerun` | `0` (off) | Starting failed CI runs again. |

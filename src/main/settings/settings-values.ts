@@ -358,6 +358,7 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "externalPrDescriptionEdit":
     case "externalPrLabel":
     case "externalPrOpen":
+    case "externalBranchPush":
     case "externalPrTitleEdit":
     case "externalForcePush":
     case "externalCiRerun":
