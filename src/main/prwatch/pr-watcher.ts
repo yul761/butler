@@ -1,3 +1,4 @@
+import type { BranchOwnersRepo } from "../db/branch-owners-repo";
 import type { BranchWatchRepo, BranchWatchRow } from "../db/branch-watch-repo";
 import type { PrStageRepo } from "../db/pr-stage-repo";
 import type { TicketPr, TicketPrsRepo } from "../db/ticket-prs-repo";
@@ -10,7 +11,7 @@ import type { Ticket, TicketRepo, WatchedPr } from "../../shared/types";
 import type { CiItem } from "./ci-delivery";
 import { PR_STATES, type PrLinker } from "./pr-links";
 import { firstCommitObservation, prObservations, scopeOf, stageKey, type ObsScope, type PrSnapshot } from "./pr-observe";
-import { branchTargets, capRound, nextBranchCheckAt, nextPrCheckAt, PR_SLOW_MS, prPolls, type BranchTarget, type PrPoll } from "./pr-schedule";
+import { branchTargets, capRound, nextBranchCheckAt, nextPrCheckAt, PR_SLOW_MS, PR_WATCH_MAX, prPolls, type BranchTarget, type PrPoll } from "./pr-schedule";
 
 /** 每次 gh 调用的超时。 */
 export const PR_GH_TIMEOUT_MS = 5000;
@@ -30,6 +31,10 @@ const SOON_MS = 1000;
 const CACHE_FRESH_MS = 60_000;
 /** 从没读成功过的 PR 读失败了：第一次等这么久再试，之后每次翻倍、最多 PR_SLOW_MS（读过的按 checkedAt 排）。 */
 const UNREAD_RETRY_MS = 60_000;
+/** 有归属的分支（不是 ticket 分支）最多这么久列一次 PR。 */
+export const OWNED_LIST_MS = 5 * 60_000;
+/** 这么久之前推的分支不再去列。 */
+export const OWNED_FRESH_MS = 14 * 24 * 60 * 60_000;
 
 export interface PrWatcherDeps {
   prs: TicketPrsRepo;
@@ -51,6 +56,8 @@ export interface PrWatcherDeps {
   };
   git: { firstCommitAt: typeof firstCommitAt };
   stages: Pick<PrStageRepo, "has" | "add" | "lastCi">;
+  /** 哪些分支是哪个 session 推的（工作流 W）：不是 ticket 分支的也去列 PR。没有时不列。 */
+  owners?: Pick<BranchOwnersRepo, "since">;
   /** Butler 跟踪的 PR 合并了：复盘规矩的分析排队用。抛错下一轮再来，成功后不再调用。repoPath 是 PR 所在的 ticket 仓库。 */
   onMerged(pr: TicketPr, repoPath: string | null): void;
   /** PR 的状态或 review 变了：把这个 ticket 所有 PR 写成一条 refresh handoff。 */
@@ -92,6 +99,8 @@ export class PrWatcher {
   private readonly ghWaiting: (() => void)[] = [];
   /** Copilot review 的行内评论拉失败的次数，键 `${url}:${reviewId}`；拉到了就删掉。只在内存里。 */
   private readonly inlineTries = new Map<string, number>();
+  /** 有归属的分支上次列 PR 的时间，键 `${ticket}:${repoId}:${branch}`。只在内存里。 */
+  private readonly ownedListedAt = new Map<string, number>();
   /** 从没读成功过的 PR 读失败后的退避（键 URL）：下次再试的时间、这次等了多久。读成功或行没了就删掉。只在内存里。 */
   private readonly unreadBackoff = new Map<string, { at: number; delay: number }>();
 
@@ -196,6 +205,7 @@ export class PrWatcher {
     await this.part("pruning old branches", () => this.prune(tickets, marks));
     await this.part("reading PRs", () => this.pollPrs(tickets, forced, marks));
     await this.part("checking branches", () => this.checkBranches(tickets, forced, marks));
+    await this.part("checking owned branches", () => this.checkOwnedBranches(tickets, forced, marks));
     await this.part("handling merged PRs", () => this.handleMerged());
     // 一个 ticket 的所有 PR 都写完了再告诉 onPrChanged，而且只告诉一次。
     for (const key of marks.prChanged) await this.part(`updating ${key} after its PR changed`, () => this.d.onPrChanged(key));
@@ -388,6 +398,38 @@ export class PrWatcher {
       }),
     );
     await Promise.all(due.map((t) => this.part(`checking ${t.branch} in ${t.repoPath}`, () => this.checkBranch(t, marks))));
+  }
+
+  /**
+   * session 推过、在上面开过 PR 的别的分支（worktree 里的子 session 最常见）：列出上面的 PR 并链接上，下一轮读它们的 CI。
+   * ticket 分支本身由 checkBranches 管；已经有开着的 PR 的、OWNED_FRESH_MS 之前记下的不列；同一个分支最多 OWNED_LIST_MS 列一次（强制的除外）。
+   */
+  private async checkOwnedBranches(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, marks: Marks): Promise<void> {
+    if (!this.d.owners) return;
+    const now = this.d.now();
+    const open = this.d.prs.needingRead().filter((r) => r.state === "open");
+    const due: { ticketKey: string; repo: TicketRepo; branch: string; id: string }[] = [];
+    const seen = new Set<string>();
+    for (const o of this.d.owners.since(now - OWNED_FRESH_MS)) {
+      const repo = tickets.find((t) => t.key === o.ticketKey)?.repos.find((r) => r.id === o.repoId);
+      if (!repo || o.branch === repo.branch) continue;
+      const id = `${o.ticketKey}:${o.repoId}:${o.branch}`;
+      seen.add(id);
+      if (open.some((r) => r.ticketKey === o.ticketKey && r.repoId === o.repoId && r.headBranch === o.branch)) continue;
+      if (!forced(o.ticketKey, o.repoId) && now < (this.ownedListedAt.get(id) ?? 0) + OWNED_LIST_MS) continue;
+      due.push({ ticketKey: o.ticketKey, repo, branch: o.branch, id });
+    }
+    for (const id of this.ownedListedAt.keys()) if (!seen.has(id)) this.ownedListedAt.delete(id);
+    await Promise.all(
+      due.slice(0, PR_WATCH_MAX).map((t) =>
+        this.part(`listing the PRs of ${t.branch} in ${t.repo.repoPath}`, async () => {
+          const list = await this.gh(() => this.d.gh.prsForBranch(this.d.ghWorkDir(t.repo), t.branch, PR_GH_TIMEOUT_MS));
+          this.ownedListedAt.set(t.id, this.d.now());
+          if (list === null) return this.d.log(`pr watch: listing the PRs of ${t.branch} in ${t.repo.repoPath} failed`);
+          if (this.d.linker.linkBranchPrs(t.ticketKey, { id: t.repo.id, repoPath: t.repo.repoPath, branch: t.branch }, list, "branch") > 0) marks.changed = true;
+        }),
+      ),
+    );
   }
 
   /** 这个仓库的分支行；分支改过时行还是旧分支的，当作没有。 */

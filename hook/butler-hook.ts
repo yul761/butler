@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { classifyShip } from "../src/shared/gate-command";
 import type { HookEnvelope } from "../src/shared/hook-envelope";
 import { dirFromEnv } from "../src/main/paths";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
@@ -29,11 +30,50 @@ function trimAgentPayload(payload: unknown): unknown {
   };
 }
 
+const COMMAND_LIMIT = 2000;
+const PR_URLS_MAX = 5;
+
+const isBashPost = (p: unknown): p is Record<string, unknown> =>
+  !!p && typeof p === "object" && (p as Record<string, unknown>).hook_event_name === "PostToolUse" && (p as Record<string, unknown>).tool_name === "Bash";
+
+const bashCommand = (p: Record<string, unknown>): string | null => {
+  const input = p.tool_input && typeof p.tool_input === "object" ? (p.tool_input as Record<string, unknown>) : {};
+  return typeof input.command === "string" ? input.command : null;
+};
+
+/**
+ * Bash 的 PostToolUse（工作流 W：记下分支是谁的）：只留命令、目录和 gh pr create 打出来的 PR 链接。
+ * 输出可能很大、可能有敏感内容，不带。
+ */
+function trimBashPayload(payload: unknown): unknown {
+  if (!isBashPost(payload)) return payload;
+  const p = payload;
+  const response = p.tool_response && typeof p.tool_response === "object" ? (p.tool_response as Record<string, unknown>) : {};
+  const out = [response.stdout, response.stderr].filter((v): v is string => typeof v === "string").join("\n");
+  const urls = [...new Set(out.match(/https?:\/\/[^\s"'<>()]+\/pull\/\d+/g) ?? [])].slice(0, PR_URLS_MAX);
+  return {
+    hook_event_name: p.hook_event_name,
+    session_id: p.session_id,
+    tool_name: p.tool_name,
+    tool_use_id: p.tool_use_id,
+    cwd: p.cwd,
+    tool_input: { command: (bashCommand(p) ?? "").slice(0, COMMAND_LIMIT) },
+    pr_urls: urls,
+  };
+}
+
+/** 要不要写进收件箱：Bash 的 PostToolUse 只有推送分支、开 PR 的才写（别的 Bash 调用每次都来，主进程用不上）。 */
+export function wanted(envelope: HookEnvelope): boolean {
+  if (!isBashPost(envelope.payload)) return true;
+  const command = bashCommand(envelope.payload);
+  return command !== null && classifyShip(command).length > 0;
+}
+
 export function buildEnvelope(raw: string, env: NodeJS.ProcessEnv, now: number): HookEnvelope {
   const ticket = env.BUTLER_TICKET?.trim() || null;
   const butlerSession = env.BUTLER_SESSION?.trim() || null;
   try {
-    return { v: 1, receivedAt: now, ticket, butlerSession, payload: trimAgentPayload(JSON.parse(raw)) };
+    return { v: 1, receivedAt: now, ticket, butlerSession, payload: trimBashPayload(trimAgentPayload(JSON.parse(raw))) };
   } catch (e) {
     return { v: 1, receivedAt: now, ticket, butlerSession, payload: null, parseError: (e as Error).message, raw: raw.slice(0, RAW_LIMIT) };
   }
@@ -83,7 +123,8 @@ export function readStdin(timeoutMs = 2000): Promise<string> {
 export async function main(): Promise<void> {
   try {
     const raw = await readStdin();
-    writeEnvelope(inboxDir(process.env), buildEnvelope(raw, process.env, Date.now()));
+    const envelope = buildEnvelope(raw, process.env, Date.now());
+    if (wanted(envelope)) writeEnvelope(inboxDir(process.env), envelope);
   } catch {
     // 绝不阻塞 Claude Code：任何错误都静默吞掉。
   }

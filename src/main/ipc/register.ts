@@ -8,7 +8,7 @@ import type { ConfigIoStatus, ExportResult, ImportApplyResult, ImportPreviewResu
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc";
 import {
-  FOLLOWUP_STATUSES, type AutostartState, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr,
+  FOLLOWUP_STATUSES, type AutostartState, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr,
 } from "../../shared/types";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EpicService } from "../epics/epic-service";
@@ -50,7 +50,7 @@ import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, apiKeyArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg } from "./validate";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -97,6 +97,8 @@ export interface IpcDeps {
   switcher: { switch(sessionId: string, model?: string): Promise<SwitchResult>; dismiss(sessionId: string): void; views(): SessionLimitView[] };
   /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
   nowView: (merges: MergeEvent[]) => NowView;
+  /** 重发一条递不出去的 CI 结论（工作流 W）。 */
+  ciResend: (item: CiItemRef) => Promise<string>;
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）。 */
   inbox: Pick<InboxService, "view" | "answer" | "dismiss">;
   /** 界面上的“换新”按钮（计划 16）：马上回答，换新在后台跑。 */
@@ -431,6 +433,7 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
   });
   handle(IPC.nowView, (): NowView => d.nowView(recentMerges()));
+  handle(IPC.ciResend, (raw: unknown): Promise<string> => d.ciResend(ciItemArg(raw)));
   // 答了、不用了都由 InboxService 自己 notify。
   handle(IPC.inboxList, (raw: unknown): InboxView => d.inbox.view(inboxScopeArg(raw)));
   handle(IPC.inboxAnswer, (id: unknown, text: unknown): boolean => d.inbox.answer(inboxIdArg(id), inboxAnswerArg(text)));

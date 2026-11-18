@@ -7,7 +7,8 @@ import { memDb } from "../test-utils";
 import type { BranchPr, BranchRuns, CiCheck, PrComment, PrStatus } from "../tickets/gh";
 import type * as Gh from "../tickets/gh";
 import type * as Git from "../tickets/git";
-import { CiDelivery } from "./ci-delivery";
+import { BranchOwnersRepo } from "../db/branch-owners-repo";
+import { CiDelivery, pickRecipient } from "./ci-delivery";
 import { PrLinker } from "./pr-links";
 import { derivePrStages } from "./pr-stages";
 import { PR_FAST_MS, PR_SLOW_MS, PR_WATCH_MAX } from "./pr-schedule";
@@ -35,6 +36,7 @@ function setup(o: Opts = {}) {
   const prs = new TicketPrsRepo(db);
   const branches = new BranchWatchRepo(db);
   const stages = new PrStageRepo(db);
+  const owners = new BranchOwnersRepo(db);
   const gh = {
     prStatus: vi.fn<typeof Gh.prStatus>(async () => null),
     prsForBranch: vi.fn<typeof Gh.prsForBranch>(async () => []),
@@ -50,7 +52,7 @@ function setup(o: Opts = {}) {
     prs, branches, tickets: () => tickets.list(), repoOf: (id: number) => tickets.getRepo(id),
     ghWorkDir: (r: { repoPath: string }) => `/w${r.repoPath}`,
     sessionOpen: vi.fn<PrWatcherDeps["sessionOpen"]>(o.sessionOpen ?? (() => true)),
-    home: "/home", slugOf, linker, gh, git, stages,
+    home: "/home", slugOf, linker, gh, git, stages, owners,
     onMerged: vi.fn<PrWatcherDeps["onMerged"]>(), onPrChanged: vi.fn<(key: string) => void>(), onCiSettled: vi.fn<PrWatcherDeps["onCiSettled"]>(),
     notify: vi.fn<() => void>(), roundDone: vi.fn<() => void>(), now: () => t, log: vi.fn<(msg: string, err?: unknown) => void>(),
   } satisfies PrWatcherDeps;
@@ -59,7 +61,7 @@ function setup(o: Opts = {}) {
   const link = (o: Partial<NewPrLink> = {}) =>
     prs.link({ ticketKey: "BTL-1", url: url(7), slug: "o/app", repoId, number: 7, headBranch: "b", state: "open", source: "branch", linkedAt: t, ...o }).pr;
   const events = (kind?: StageEvent["kind"]) => stages.forTicket("BTL-1").filter((e) => !kind || e.kind === kind);
-  return { db, tickets, addTicket, addRepo, repoId, prs, branches, stages, gh, git, deps, w, link, events, advance: (ms: number) => (t += ms), now: () => t };
+  return { db, tickets, addTicket, addRepo, repoId, prs, branches, stages, owners, gh, git, deps, w, link, events, advance: (ms: number) => (t += ms), now: () => t };
 }
 
 afterEach(() => {
@@ -495,7 +497,9 @@ describe("PrWatcher: branches", () => {
     const deliver = vi.fn(async () => "sent" as const);
     const ci = new CiDelivery({
       prs: s.prs, branches: s.branches, currentBranch: (id) => s.tickets.getRepo(id)?.branch ?? null,
-      guard: { check: () => ({ ok: true, termId: "t", headId: "h" }), recheckAfter: () => () => true }, sessionFor: () => "h", deliver, now: s.now, log: () => {},
+      guard: { check: () => ({ ok: true, termId: "t", headId: "h" }), recheckAfter: () => () => true },
+      recipient: (_k, id, branch) => pickRecipient({ owner: null, ownerOpen: false, open: [{ id: "h", gitBranch: null, coordinator: false }], ticketBranch: s.tickets.getRepo(id)?.branch ?? null, branch }),
+      deliver, now: s.now, log: () => {},
     });
     s.tickets.updateRepo({ id: s.repoId, workMode: "branch", worktreePath: null, branch: "c" });
     await ci.flush();
@@ -943,3 +947,48 @@ describe("PrWatcher: stages", () => {
   });
 });
 
+
+describe("PrWatcher: branches a session pushed (workstream W)", () => {
+  it("lists PRs on an owned branch that is not the ticket branch, links them, and reads them next round", async () => {
+    const s = setup();
+    s.owners.record({ ticketKey: "BTL-1", repoId: s.repoId, branch: "feat/wt", sessionId: "s1", dir: "/wt/a", at: s.now() });
+    s.gh.prsForBranch.mockImplementation(async (_cwd, branch) => (branch === "feat/wt" ? [listed(34, { headRefName: "feat/wt" })] : []));
+    await s.w.check();
+    expect(s.gh.prsForBranch).toHaveBeenCalledWith("/w/r/app", "feat/wt", PR_GH_TIMEOUT_MS);
+    const row = s.prs.byTicket("BTL-1").find((p) => p.number === 34);
+    expect(row).toMatchObject({ headBranch: "feat/wt", repoId: s.repoId, source: "branch", state: "open" });
+    // 下一轮不被 pruneStale 删掉，照常读。
+    s.gh.prStatus.mockResolvedValue(pr({ number: 34, url: url(34), headBranch: "feat/wt" }));
+    s.advance(15_000);
+    await s.w.check();
+    expect(s.prs.get(row!.id)).toMatchObject({ checkedAt: s.now(), ci: "pending" });
+  });
+
+  it("does not list an owned branch again while it has an open PR, nor more than every 5 minutes, nor after 14 days", async () => {
+    const s = setup();
+    s.owners.record({ ticketKey: "BTL-1", repoId: s.repoId, branch: "feat/x", sessionId: "s1", dir: "/wt/x", at: s.now() });
+    // ticket 分支本身不在这里列（checkBranches 列它）。
+    s.owners.record({ ticketKey: "BTL-1", repoId: s.repoId, branch: "b", sessionId: "s1", dir: "/r/app", at: s.now() });
+    const owned = () => s.gh.prsForBranch.mock.calls.filter((c) => c[1] === "feat/x").length;
+    await s.w.check();
+    expect(owned()).toBe(1);
+    s.advance(60_000);
+    await s.w.check();
+    expect(owned()).toBe(1);
+    s.advance(5 * 60_000);
+    await s.w.check();
+    expect(owned()).toBe(2);
+    // push 之后 soon(repoId)：马上再列。
+    s.w.soon(s.repoId);
+    await s.w.check();
+    expect(owned()).toBe(3);
+    s.link({ url: url(9), number: 9, headBranch: "feat/x" });
+    s.advance(10 * 60_000);
+    await s.w.check();
+    expect(owned()).toBe(3);
+    s.prs.update(s.prs.byTicket("BTL-1").find((p) => p.number === 9)!.id, { state: "merged" });
+    s.advance(14 * 24 * 3600_000);
+    await s.w.check();
+    expect(owned()).toBe(3);
+  });
+});

@@ -578,6 +578,30 @@ export interface InboxView {
 export type InboxScope = { featureId: number } | { epicId: number } | { all: true };
 
 /** 「现在」页顶上的一条提醒（Claude 限额、复盘暂停或失败、某个 session 撞了限额）。 */
+/** 一条 CI 结论：一个 PR 行（ticket_prs 的 id）或一个仓库的分支行（branch_watch 的 repoId）。 */
+export type CiItemRef = { kind: "pr"; id: number } | { kind: "branch"; repoId: number };
+
+/**
+ * CI 结论为什么没递出去（工作流 W）。no_repo：PR 不在 ticket 的仓库里；no_sha：gh 没给 commit；no_session：没有开着的 session；
+ * owner_closed：推这个分支的 session 终端关了；unowned：开着的 session 认不出是谁的；busy_delivering：那个 session 正在收别的；
+ * guard:*：递送守卫拦着（在输入、有草稿、在等你……）；deliver:*：粘贴没成功；failed：出错。
+ */
+export type CiUndeliveredReason =
+  | "no_repo" | "no_sha" | "no_session" | "owner_closed" | "unowned" | "busy_delivering" | "failed"
+  | `guard:${string}` | `deliver:${string}`;
+
+/** 递不出去太久的一条 CI 结论。sessionId：本来要递给的 session（还没认出是谁的为 null）。 */
+export interface CiUndelivered {
+  item: CiItemRef;
+  ticketKey: string;
+  /** PR 号；分支行为 null。 */
+  number: number | null;
+  branch: string;
+  reason: CiUndeliveredReason;
+  since: number;
+  sessionId: string | null;
+}
+
 export type NowNotice =
   | { kind: "claude_limited"; hit: AvailabilityHit; retryAt: number | null; lessonsPaused: boolean }
   | { kind: "model_unavailable"; hit: AvailabilityHit; retryAt: number | null }
@@ -585,7 +609,9 @@ export type NowNotice =
   | { kind: "lessons_failing"; count: number }
   | { kind: "session_limited"; target: NowTarget; title: string | null; limit: LimitHit }
   /** 模型路由（3.0）：有模型撞限或不可用，或最近一小时有任务降级。只在配置了路由时出现。 */
-  | { kind: "routing"; limited: string[]; fallbacks: number };
+  | { kind: "routing"; limited: string[]; fallbacks: number }
+  /** CI 结论超过半小时没递出去（工作流 W）：可以重发、打开 ticket。 */
+  | { kind: "ci_undelivered"; ci: CiUndelivered; target: NowTarget; title: string | null };
 
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */

@@ -68,6 +68,8 @@ export interface PrViewFixture extends BranchPrFixture {
 export interface FakeGhFixture {
   branches: Record<string, BranchPrFixture[]>;
   prs: Record<string, PrViewFixture>;
+  /** gh pr create 打印的新 PR 链接；没有时 gh pr create 是不支持的调用。 */
+  created?: string;
 }
 
 /**

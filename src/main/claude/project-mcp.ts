@@ -272,7 +272,9 @@ export function projectMcpApprovalSettings(
       const skill = { matcher: "Skill", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
       // 子 agent 的派发另记一组（review agent 算自我 review）：同样不带 gate，信封里只留 description / subagent_type。
       const agent = { matcher: "Agent|Task", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
-      const hooks = { PreToolUse: group as unknown[], PostToolUse: [...group, skill, agent] as unknown[], PostToolUseFailure: group };
+      // 推送和开 PR 另记一组（工作流 W：分支是谁的，CI 结论按它递）：不带 gate，hook 只为 git push / gh pr create 写信封。
+      const ship = { matcher: "Bash", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
+      const hooks = { PreToolUse: group as unknown[], PostToolUse: [...group, skill, agent, ship] as unknown[], PostToolUseFailure: group };
       if (p.checks) {
         hooks.PreToolUse = [...group, { matcher: "Bash", hooks: [{ type: "command", command: `${p.gateCommand} check-push --budget-ms ${p.checks.pushTimeoutSec * 1000}`, timeout: p.checks.pushTimeoutSec + 30 }] }];
         hooks.PostToolUse.push({ matcher: "Edit|Write|MultiEdit", hooks: [{ type: "command", command: `${p.gateCommand} check --budget-ms ${p.checks.editTimeoutSec * 1000}`, timeout: p.checks.editTimeoutSec + 3 }] });

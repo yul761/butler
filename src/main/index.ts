@@ -9,7 +9,7 @@ import { parseGateRequest, type GateRequest, type GateResult } from "../shared/g
 import { IPC } from "../shared/ipc";
 import type { LimitHit } from "../shared/availability";
 import { ClaudeAvailability } from "./claude/availability";
-import { buildNotices } from "./now/notices";
+import { buildNotices, ciNotices } from "./now/notices";
 import { AvailabilityRepo } from "./db/availability-repo";
 import type { Session } from "../shared/types";
 import { APP_ID, shouldSetAppId } from "./app-id";
@@ -25,6 +25,7 @@ import { JobsRepo } from "./db/jobs-repo";
 import { MemorySyncRepo } from "./db/memory-sync-repo";
 import { MergeGateRepo } from "./db/merge-gate-repo";
 import { PrStageRepo } from "./db/pr-stage-repo";
+import { BranchOwnersRepo } from "./db/branch-owners-repo";
 import { BranchWatchRepo } from "./db/branch-watch-repo";
 import { linkedOpen as anyLinkedOpen, prGivenUp, TicketPrsRepo } from "./db/ticket-prs-repo";
 import { SecretsRepo } from "./db/secrets-repo";
@@ -37,7 +38,8 @@ import { execHeadlessJson, jobOf } from "./handoff/headless-exec";
 import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
-import { CiDelivery } from "./prwatch/ci-delivery";
+import { BranchOwnership } from "./prwatch/branch-owners";
+import { CiDelivery, pickRecipient, type RecipientCandidate } from "./prwatch/ci-delivery";
 import { prHandoff } from "./prwatch/pr-handoff";
 import { runPrBackfill } from "./prwatch/pr-backfill";
 import { ensureSkillTrackingSince, skillTrackingSince } from "./prwatch/skill-tracking";
@@ -1185,25 +1187,43 @@ async function bootstrap(): Promise<void> {
     },
     whoOf, now: Date.now, log: logger,
   });
-  // CI 的结论递给这个仓库自己的 session（不算总控）：和合并通知走同一道 guard，最多等 1 分钟。
+  // 分支是谁的（工作流 W）：hook 看到的 git push / gh pr create 记下来，CI 的结论按它递。
+  const branchOwners = new BranchOwnersRepo(db);
+  // CI 的结论递给 PR 所属的 session（pickRecipient：推这个分支的、启动时就在这个分支上的、ticket 分支上的第一个）：
+  // 和合并通知走同一道 guard，最多等 1 分钟。
   const ciDelivery = new CiDelivery({
     prs: ticketPrs,
     branches: branchWatch,
     currentBranch: (repoId) => tickets.getRepo(repoId)?.branch ?? null,
     guard: deliveryGuard,
-    sessionFor: (key, repoId) => {
+    recipient: (key, repoId, branch) => {
+      const open: RecipientCandidate[] = [];
+      const seen = new Set<string>();
       for (const t of pty.openIds()) {
         const h = sessions.head(t);
-        if (h && h.ticketKey === key && h.repoId === repoId && !h.coordinator) return h.id;
+        if (!h || seen.has(h.id) || h.ticketKey !== key || h.repoId !== repoId) continue;
+        seen.add(h.id);
+        open.push({ id: h.id, gitBranch: h.gitBranch, coordinator: h.coordinator });
       }
-      return null;
+      const o = branchOwners.get(key, repoId, branch);
+      const owner = o ? (sessions.head(o.sessionId)?.id ?? o.sessionId) : null;
+      return pickRecipient({ owner, ownerOpen: o !== null && gateTerm(o.sessionId) !== null, open, ticketBranch: tickets.getRepo(repoId)?.branch ?? null, branch });
     },
     deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
     now: Date.now,
     log: logger,
   });
-  /** 递还没递出去的 CI 结论（永不 reject）。 */
-  const flushCi = (): Promise<void> => ciDelivery.flush().catch((e: unknown) => logger("ci delivery: flush failed", e));
+  /** 「现在」页上「CI 结果未能送达」的提醒上次是哪几条：变了才刷新页面。 */
+  let ciStuck = "";
+  const ciStuckChanged = (): void => {
+    const next = ciDelivery.undelivered().map((u) => `${u.item.kind}:${"id" in u.item ? u.item.id : u.item.repoId}:${u.reason}`).join("|");
+    if (next !== ciStuck) {
+      ciStuck = next;
+      notify();
+    }
+  };
+  /** 递还没递出去的 CI 结论（永不 reject）。每一轮都看一次有没有刚满半小时的。 */
+  const flushCi = (): Promise<void> => ciDelivery.flush().then(ciStuckChanged).catch((e: unknown) => logger("ci delivery: flush failed", e));
   const prWatcher = new PrWatcher({
     prs: ticketPrs,
     branches: branchWatch,
@@ -1217,6 +1237,7 @@ async function bootstrap(): Promise<void> {
     gh: { prStatus, prsForBranch, branchRuns, failedLog, reviewComments, reviewAuthors },
     git: { firstCommitAt: git.firstCommitAt },
     stages: prStages,
+    owners: branchOwners,
     onMerged: (pr, repoPath) => lessonRunner.merged({ repoPath, slug: pr.slug }, pr.number),
     // PR 的状态或 review 变了：在最新的 handoff 上换掉 prs，存成一条 refresh。ticket 状态、PR 标签、合并后清理 worktree 都照旧走 ingest。
     onPrChanged: (key) => {
@@ -1290,6 +1311,18 @@ async function bootstrap(): Promise<void> {
     else if (head?.repoId != null) prWatcher.soon(head.repoId);
   };
 
+  const branchOwnership = new BranchOwnership({
+    tickets,
+    sessionTicket: (id) => sessions.head(id)?.ticketKey ?? null,
+    currentBranch: git.currentBranch,
+    mainRepoRoot: git.mainRepoRoot,
+    owners: branchOwners,
+    linker: prLinker,
+    soon: (repoId) => prWatcher.soon(repoId),
+    now: Date.now,
+    log: logger,
+  });
+
   const inbox = new HookInbox({
     dir: paths.inbox,
     badDir: paths.inboxBad,
@@ -1323,6 +1356,8 @@ async function bootstrap(): Promise<void> {
           (e: unknown) => logger("capture /handoff failed", e),
         );
       }
+      // 推送和开 PR 记下分支是谁的（工作流 W）。同样在 ignored 提前返回之前（PostToolUse）。
+      void branchOwnership.handle(env).catch((e: unknown) => logger("branch owner: recording failed", e));
       // 设计 / 自我 review 的 skill 调用记进 PR 进度。必须在 ignored 提前返回之前：PostToolUse 在 applyHookEnvelope 里恒为 ignored。
       const stageObs = stageEventFromHook(env, sessions);
       if (stageObs && prStages.add(stageObs.event, stageObs.dedupeKey)) notify();
@@ -1469,6 +1504,11 @@ async function bootstrap(): Promise<void> {
     }),
     availability,
     routing, switcher,
+    ciResend: async (item) => {
+      const r = await ciDelivery.resend(item);
+      ciStuckChanged();
+      return r;
+    },
     prStages: new PrStagesService({
       tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id, { includeArchived: true }) },
       features: {
@@ -1502,7 +1542,10 @@ async function bootstrap(): Promise<void> {
         decisions: inboxService.pendingDecisionViews(),
         recent: (id) => activityMonitor.recent(id),
         memory: activityMonitor.memoryLog(),
-        notices: buildNotices({ availability: availability.view(), recentRuns: lessonRuns.recentFinished(20), routing: routing.attention() }),
+        notices: [
+          ...buildNotices({ availability: availability.view(), recentRuns: lessonRuns.recentFinished(20), routing: routing.attention() }),
+          ...ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
+        ],
       });
     },
     rederive: (key) => {

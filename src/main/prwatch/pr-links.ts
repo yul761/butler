@@ -58,6 +58,16 @@ export class PrLinker {
     return created;
   }
 
+  /** session 刚用 gh pr create 开的 PR（工作流 W）：按打出来的链接马上链接上，分支是开 PR 的那个。返回是不是新建了一行。 */
+  linkCreatedPr(ticketKey: string, url: string, headBranch: string): boolean {
+    const parts = prUrlParts(url);
+    if (!parts) return false;
+    return this.d.prs.link({
+      ticketKey, url, slug: parts.slug, repoId: this.repoFor(ticketKey, parts.slug), number: parts.number,
+      headBranch, state: PR_STATES.OPEN, source: "branch", linkedAt: this.d.now(),
+    }).created;
+  }
+
   /** 占位的 PR 链接到它的 ticket（ticket_key 为空时用 session 的 ticket）。返回是不是新建了一行。 */
   linkHold(h: MergeHold, sessionTicket: (sessionId: string) => string | null): boolean {
     const parts = h.prUrl ? prUrlParts(h.prUrl) : null;

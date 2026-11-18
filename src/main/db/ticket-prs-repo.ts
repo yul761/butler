@@ -231,12 +231,14 @@ export class TicketPrsRepo {
 
   /**
    * 仓库换了分支：删掉旧分支找到的、还开着的行（branch / backfill 来源）。合并的、关闭的（连同它们的进度事件）和 handoff 来源的留着。
+   * 有 session 推过的分支（branch_owners）不算旧分支：worktree 里、checkout -b 开的分支上的 PR 留着。
    * 返回删了几行。
    */
   pruneStale(repoId: number, currentBranch: string): number {
     const res = this.db
       .prepare(
-        `DELETE FROM ticket_prs WHERE repo_id = ? AND source IN ('branch','backfill') AND head_branch IS NOT ? AND state = 'open'`,
+        `DELETE FROM ticket_prs WHERE repo_id = ? AND source IN ('branch','backfill') AND head_branch IS NOT ? AND state = 'open'
+           AND NOT EXISTS (SELECT 1 FROM branch_owners o WHERE o.ticket_key = ticket_prs.ticket_key AND o.repo_id = ticket_prs.repo_id AND o.branch = ticket_prs.head_branch)`,
       )
       .run(repoId, currentBranch);
     return Number(res.changes);

@@ -3,7 +3,7 @@ import { isModelName, isTaskId, isTier, POLICIES, type LimitPolicy, type LimitRu
 import type { SensitiveTerm } from "../../shared/llm";
 import { CONTEXT_LIMIT } from "../../shared/control";
 import type {
-  AddRepoInput, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
+  AddRepoInput, CiItemRef, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
 import type { PrStagesScope } from "../../shared/pr-stages";
 import { LESSON_BULK_VERBS, MAX_TARGET_IDS, type LessonAction, type LessonBulkVerb, type LessonTarget } from "../../shared/lessons";
@@ -420,6 +420,18 @@ export function availabilityActionArg(v: unknown): AvailabilityAction {
   if (o.op === "resumeLessons") return { op: "resumeLessons" };
   if (o.op === "pauseLessons") return { op: "pauseLessons" };
   throw new Error("invalid availability action");
+}
+
+/** 「现在」页重发的那条 CI 结论（工作流 W）。 */
+export function ciItemArg(v: unknown): CiItemRef {
+  const o = v as Record<string, unknown> | null;
+  const id = (n: unknown) => typeof n === "number" && Number.isSafeInteger(n) && n > 0;
+  if (o && typeof o === "object" && !Array.isArray(o)) {
+    const keys = Object.keys(o).sort().join(",");
+    if (o.kind === "pr" && keys === "id,kind" && id(o.id)) return { kind: "pr", id: o.id as number };
+    if (o.kind === "branch" && keys === "kind,repoId" && id(o.repoId)) return { kind: "branch", repoId: o.repoId as number };
+  }
+  throw new Error("invalid ci item");
 }
 
 // ---- 准入策略、导入导出（契约 4.2 / 4.3）

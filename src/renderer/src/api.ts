@@ -13,7 +13,7 @@ import type { RoutingAction, RoutingView, SessionLimitView, SwitchModelResult } 
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
 import type {
-  AutostartState, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
+  AutostartState, CiItemRef, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
   CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, OpenButlerSessionRequest, ButlerView, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView,
@@ -133,6 +133,7 @@ export const api = {
   switchModel: (sessionId: string, model?: string) => call<SwitchModelResult>(IPC.sessionsSwitchModel, sessionId, model ?? null),
   dismissSessionLimit: (sessionId: string) => call<void>(IPC.sessionsDismissLimit, sessionId),
   sessionLimits: () => call<SessionLimitView[]>(IPC.sessionsLimits),
+  ciResend: (item: CiItemRef) => call<string>(IPC.ciResend, item),
   nowView: () => call<NowView>(IPC.nowView),
   inbox: (scope: InboxScope) => call<InboxView>(IPC.inboxList, scope),
   answerInbox: (id: number, text: string) => call<boolean>(IPC.inboxAnswer, id, text),

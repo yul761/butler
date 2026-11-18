@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseEnvelope } from "../src/shared/hook-envelope";
 import { tempDir } from "../src/main/test-utils";
-import { buildEnvelope, inboxDir, writeEnvelope } from "./butler-hook";
+import { buildEnvelope, inboxDir, wanted, writeEnvelope } from "./butler-hook";
 
 describe("butler-hook", () => {
   it("wraps valid JSON with ticket and session from env", () => {
@@ -28,8 +28,24 @@ describe("butler-hook", () => {
     expect((task.payload as Record<string, unknown>).tool_response).toBeUndefined();
   });
 
-  it("passes a non-Agent PostToolUse payload through unchanged", () => {
-    const payload = { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Bash", tool_input: { command: "ls" }, tool_response: { stdout: "x" } };
+  it("keeps only git push / gh pr create Bash calls, trimmed to the command, cwd and printed PR links", () => {
+    const bash = (command: string, stdout = "") =>
+      buildEnvelope(JSON.stringify({ hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Bash", tool_use_id: "tu", cwd: "/w", tool_input: { command, description: "d" }, tool_response: { stdout, stderr: "secret".repeat(10) } }), { BUTLER_SESSION: "b1" }, 1);
+    expect(wanted(bash("ls -la"))).toBe(false);
+    expect(wanted(bash("git status && npm test"))).toBe(false);
+    const push = bash("cd /wt && git push -u origin feat/x");
+    expect(wanted(push)).toBe(true);
+    expect(push.payload).toEqual({ hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Bash", tool_use_id: "tu", cwd: "/w", tool_input: { command: "cd /wt && git push -u origin feat/x" }, pr_urls: [] });
+    const pr = bash("gh pr create --fill", "Creating pull request\nhttps://github.com/o/r/pull/34\n");
+    expect(wanted(pr)).toBe(true);
+    expect((pr.payload as { pr_urls: string[] }).pr_urls).toEqual(["https://github.com/o/r/pull/34"]);
+    expect(JSON.stringify(pr.payload)).not.toContain("secret");
+    // 别的事件照旧都写。
+    expect(wanted(buildEnvelope('{"hook_event_name":"Stop","session_id":"s1"}', {}, 1))).toBe(true);
+  });
+
+  it("passes a non-Agent, non-Bash PostToolUse payload through unchanged", () => {
+    const payload = { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Skill", tool_input: { skill: "x" }, tool_response: { stdout: "x" } };
     expect(buildEnvelope(JSON.stringify(payload), {}, 1).payload).toEqual(payload);
   });
 

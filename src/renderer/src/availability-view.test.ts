@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { S, STRINGS } from "./strings";
-import { availabilityButtons, availabilityRows, limitLine, noticeText, resetClock } from "./availability-view";
+import { availabilityButtons, availabilityRows, ciReasonText, limitLine, noticeText, resetClock } from "./availability-view";
 
 describe("availability view", () => {
   it("resetClock same day and other day", () => {
@@ -85,5 +85,26 @@ describe("availabilityRows", () => {
     expect(availabilityButtons({ state: "ok", current: null, lastHit: null, retryAt: null, lessonsPause: null })).toEqual({ resume: false, pause: true });
     expect(availabilityButtons({ state: "ok", current: null, lastHit: null, retryAt: null, lessonsPause: { reason: "manual", since: 1, until: null } })).toEqual({ resume: true, pause: false });
     expect(availabilityButtons({ state: "limited", current: hit, lastHit: hit, retryAt: at, lessonsPause: { reason: "limit", since: 1, until: at } })).toEqual({ resume: true, pause: true });
+  });
+});
+
+describe("ci_undelivered notice", () => {
+  it("names the PR or branch, how long it has waited and why, with resend and open", () => {
+    const ci = { item: { kind: "pr" as const, id: 3 }, ticketKey: "T-1", number: 34, branch: "feat/a", reason: "guard:typing" as const, since: 0, sessionId: "s1" };
+    const target = { page: "ticket" as const, key: "T-1", sessionId: "s1" };
+    expect(noticeText({ kind: "ci_undelivered", ci, target, title: null }, S, 35 * 60_000)).toEqual({
+      text: "CI 结果未能送达：T-1 PR #34（feat/a），已等 35 分钟（你正在终端里输入）", actions: ["resend", "open"],
+    });
+    expect(noticeText({ kind: "ci_undelivered", ci: { ...ci, number: null, item: { kind: "branch", repoId: 2 }, reason: "unowned" }, target, title: null }, S, 31 * 60_000).text).toBe(
+      "CI 结果未能送达：T-1 分支 feat/a，已等 31 分钟（认不出是哪个会话的）",
+    );
+  });
+
+  it("every reason has words; unknown ones pass through", () => {
+    for (const r of ["unowned", "busy_delivering", "failed", "no_repo", "no_sha", "no_session", "owner_closed", "guard:busy", "guard:typing", "guard:draft", "guard:screen", "guard:needs_you", "guard:closed", "deliver:timeout", "deliver:blocked", "deliver:exited"]) {
+      expect(ciReasonText(r, S)).not.toContain("原因：");
+    }
+    expect(ciReasonText("guard:new_thing", S)).toBe("原因：guard:new_thing");
+    expect(ciReasonText("toString", S)).toBe("原因：toString");
   });
 });

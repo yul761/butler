@@ -665,4 +665,16 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE lesson_runs ADD COLUMN fallback_from TEXT;
   ALTER TABLE lesson_queue ADD COLUMN upgrade_pending INTEGER NOT NULL DEFAULT 0;
   `,
+  // 工作流 W：分支是谁的（session 推过、开过 PR 的分支），CI 结论按它递（设计文档 2026-11-18-ws-w-ci-delivery）。
+  `
+  CREATE TABLE branch_owners (
+    ticket_key TEXT NOT NULL,
+    repo_id INTEGER NOT NULL REFERENCES ticket_repos(id) ON DELETE CASCADE,
+    branch TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    dir TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (ticket_key, repo_id, branch));
+  CREATE INDEX branch_owners_at ON branch_owners (at);
+  `,
 ];

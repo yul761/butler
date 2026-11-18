@@ -7,6 +7,7 @@
 //   pr list --state merged …（复盘的补录、每日拉取）：没有已合并的 PR（[]；带 --jq .[] 时就是没有输出）；
 //   pr view <链接或分支> --json …：prs[prUrlKey(参数)]，没有就退出 1（--json 的字段不筛，原样输出）；
 //   pr view <号> --json …（复盘分析）：prs 里链接以 /pull/<号> 结尾的第一项，没有就退出 1；
+//   pr create …：打印 fixture 的 created（新 PR 的链接，像真 gh 一样一行），没有就记 unsupported；
 //   run list --branch <分支> …：[]；
 //   api repos/{owner}/{repo}/pulls/<n>/comments 和 …/pulls/<n>/reviews：没有输出（行内评论、review 列表都是空的）；
 //   其余一律退出 1，并往 FAKE_GH_LOG 追加一行 {"unsupported": 参数}：测试结束时 unsupportedGhCalls 会把它们找出来，
@@ -25,7 +26,7 @@ const flag = (name) => {
 };
 const fixture = () => {
   const f = JSON.parse(fs.readFileSync(process.env.FAKE_GH_FIXTURE, "utf8"));
-  return { branches: f.branches ?? {}, prs: f.prs ?? {} };
+  return { branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null };
 };
 const out = (v) => process.stdout.write(`${JSON.stringify(v)}\n`);
 /** fixture 里没有：和真 gh 一样退出 1，是正常结果，不记 unsupported。 */
@@ -53,6 +54,8 @@ if (cmd === "--version") {
   const pr = /^\d+$/.test(ref) ? Object.entries(prs).find(([url]) => url.endsWith(`/pull/${ref}`))?.[1] : prs[prUrlKey(ref)];
   if (!pr) notFound(`no pull requests found for ${ref}`);
   out(pr);
+} else if (cmd === "pr" && sub === "create" && fixture().created) {
+  process.stdout.write(`${fixture().created}\n`);
 } else if (cmd === "run" && sub === "list" && flag("--branch") !== undefined) {
   out([]);
 } else if (cmd === "api" && API_PULL.test(sub ?? "")) {

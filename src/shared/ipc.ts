@@ -108,6 +108,8 @@ export const IPC = {
   /** 设置页「模型路由」（3.0）。 */
   routingView: "routing:view",
   routingAct: "routing:act",
+  /** 重发一条递不出去的 CI 结论（工作流 W）：马上再试一次，返回结果（sent 或没递的原因）。 */
+  ciResend: "ci:resend",
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）：一个 feature、一个 epic 或者全部的未决条目和最近的汇报。 */
   inboxList: "inbox:list",
   /** 在卡片上回答一条「待你决定」：记下答案，等提问的 session 停下来送进去。 */
@@ -154,7 +156,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
   IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget,
-  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.routingView, IPC.routingAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
+  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.ciResend, IPC.routingView, IPC.routingAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,
