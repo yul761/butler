@@ -27,7 +27,7 @@ export interface SessionCapacity {
   maxRunning: number | null;
   /** macOS 的内存压力；别的平台或读不到为 null。 */
   pressure: "normal" | "warn" | "critical" | null;
-  source: "vm_stat" | "memory_pressure" | "os" | null;
+  source: "vm_stat" | "memory_pressure" | "os" | "fixed" | null;
 }
 /** start_session 的任务最长多少字。 */
 export const TASK_LIMIT = 8000;

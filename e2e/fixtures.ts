@@ -240,6 +240,9 @@ function sandboxEnv(s: Sandbox): Record<string, string> {
   }
   // 窗口在后台打开，不抢焦点（用户反馈 2026-10-28：跑测试时正在别处打字被打断）。
   env.BUTLER_BACKGROUND_WINDOWS = "1";
+  // 开新 session 前的内存准入（工作流 W）不看 CI 机器的真实内存（macOS runner 只有 7 GB 左右，开着 Electron 就不够了）：
+  // 定死一个够开很多个的读数。测「内存不够」的 spec 在 s.env 里换成小的。
+  env.BUTLER_E2E_AVAILABLE_MB = "65536";
   if (s.lang) env.BUTLER_LANG = s.lang;
   return { ...env, ...s.env };
 }

@@ -1,12 +1,12 @@
 import type { SessionCapacity } from "../../shared/control";
-import type { MemoryReading } from "./available-memory";
+import { readingLine, type MemoryReading } from "./available-memory";
 
 /** 刚放行的 session 还没长到它该占的内存：这么久之内放行的，每个按预估占用先扣掉。 */
 export const PENDING_MS = 120_000;
 
 export interface AdmissionSettings {
-  /** 开完新 session 以后至少还要剩这么多（MB）给系统和别的程序。 */
-  reserveMb: number;
+  /** 开完新 session 以后至少还要剩这么多（MB）给系统和别的程序；null = 自动（autoReserveMb，默认）。 */
+  reserveMb: number | null;
   /** 没有实测时，一个新 session（Claude 加它的 MCP server 和子进程）预计占多少（MB）。 */
   sessionMb: number;
   /** 同时开着的终端最多几个；0 = 不限（默认，只看内存）。 */
@@ -32,6 +32,20 @@ export type Capacity = SessionCapacity;
 export type Admission = { ok: true; capacity: Capacity; release: () => void } | { ok: false; reason: "memory" | "pressure" | "max_running"; capacity: Capacity };
 
 const mb = (kb: number) => Math.round(kb / 1024);
+
+/** 自动保留线的上下限（MB）。 */
+export const AUTO_RESERVE_MIN_MB = 512;
+export const AUTO_RESERVE_MAX_MB = 2048;
+
+/**
+ * 自动保留线：物理内存的 10%，限在 512 到 2048 MB 之间（8 GB 的机器 819 MB，16 GB 1638 MB，20 GB 以上 2048 MB）。
+ * 可用量按 vm_stat 算（不算要压缩才拿得回来的匿名页），本来就偏保守：小内存的机器再固定留 2 GB，连一个都开不了（附录第 7 节）。
+ * 读不到总量时按上限。
+ */
+export function autoReserveMb(totalKb: number | null): number {
+  if (totalKb === null || !(totalKb > 0)) return AUTO_RESERVE_MAX_MB;
+  return Math.min(AUTO_RESERVE_MAX_MB, Math.max(AUTO_RESERVE_MIN_MB, Math.round(totalKb / 1024 / 10)));
+}
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
 
 /**
@@ -55,6 +69,10 @@ export class MemoryAdmission {
 
   /** 现在的余量，不放行也不记。 */
   async capacity(): Promise<Capacity> {
+    return (await this.measure()).capacity;
+  }
+
+  private async measure(): Promise<{ capacity: Capacity; reading: MemoryReading | null; reserveAuto: boolean }> {
     const s = this.d.settings();
     const now = this.d.now();
     this.admitted = this.admitted.filter((a) => now - a.at < PENDING_MS);
@@ -68,11 +86,16 @@ export class MemoryAdmission {
       this.d.log("memory admission: reading memory failed, only the hard limit applies", e);
     }
     const pending = this.admitted.length;
+    const reserveMb = s.reserveMb ?? autoReserveMb(reading?.totalKb ?? null);
     const availableMb = reading ? Math.max(0, mb(reading.availableKb) - pending * sessionMb) : null;
-    const byMemory = availableMb === null ? null : reading?.pressure === "critical" ? 0 : Math.max(0, Math.floor((availableMb - s.reserveMb) / sessionMb));
+    const byMemory = availableMb === null ? null : reading?.pressure === "critical" ? 0 : Math.max(0, Math.floor((availableMb - reserveMb) / sessionMb));
     const byLimit = maxRunning === null ? null : Math.max(0, maxRunning - running);
     const canStart = byMemory === null ? byLimit : byLimit === null ? byMemory : Math.min(byMemory, byLimit);
-    return { availableMb, reserveMb: s.reserveMb, sessionMb, estimate, pending, canStart, running, maxRunning, pressure: reading?.pressure ?? null, source: reading?.source ?? null };
+    return {
+      capacity: { availableMb, reserveMb, sessionMb, estimate, pending, canStart, running, maxRunning, pressure: reading?.pressure ?? null, source: reading?.source ?? null },
+      reading,
+      reserveAuto: s.reserveMb === null,
+    };
   }
 
   /** 要开一个新终端：放行就记下（之后 PENDING_MS 内按预估占用扣掉），不放行说明是哪一条。 */
@@ -83,15 +106,19 @@ export class MemoryAdmission {
   }
 
   private async admitNow(what: string): Promise<Admission> {
-    const c = await this.capacity();
+    const { capacity: c, reading, reserveAuto } = await this.measure();
+    // 读数写进日志（附录第 7 节）：别的机器上（CI、8 GB 的 Mac）看得出 vm_stat 算出来的合不合理。
+    const read = reading ? readingLine(reading) : "no reading";
+    const reserve = `${c.reserveMb} MB${reserveAuto ? " (auto)" : ""}`;
     let reason: Extract<Admission, { ok: false }>["reason"] | null = null;
     if (c.maxRunning !== null && c.running >= c.maxRunning) reason = "max_running";
     else if (c.availableMb !== null && c.pressure === "critical") reason = "pressure";
     else if (c.availableMb !== null && c.availableMb - c.sessionMb < c.reserveMb) reason = "memory";
     if (reason) {
-      this.d.log(`memory admission: ${what} refused (${reason}): available ${c.availableMb ?? "?"} MB, need ${c.sessionMb} MB + reserve ${c.reserveMb} MB, running ${c.running}`);
+      this.d.log(`memory admission: ${what} refused (${reason}): available ${c.availableMb ?? "?"} MB, need ${c.sessionMb} MB + reserve ${reserve}, pending ${c.pending}, running ${c.running}; ${read}`);
       return { ok: false, reason, capacity: c };
     }
+    this.d.log(`memory admission: ${what} admitted: available ${c.availableMb ?? "?"} MB, need ${c.sessionMb} MB + reserve ${reserve}, pending ${c.pending}, running ${c.running}; ${read}`);
     const slot = { at: this.d.now() };
     this.admitted.push(slot);
     // 返回的是开了这一个以后的余量；没开成时调 release 把这一个还回去（只还自己的，调几次都只还一次）。

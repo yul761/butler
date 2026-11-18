@@ -75,9 +75,11 @@ Butler 还会把正则和分支名模板放在一起检查。如果正则接受�
 
 macOS 上的可用内存按 Activity Monitor 的算法从 `vm_stat` 算：总量减去 wired、压缩器占用和匿名页（扣掉可清除的部分），文件缓存算可用。这里不用 `os.freemem()`，因为它只算空闲页，几十 GB 空余的机器上也常常只有几 GB。`vm_stat` 读不到时用 `memory_pressure -Q` 的空闲百分比，再不行才用 `os.freemem()`。Windows 上 `os.freemem()` 就是可用物理内存（空闲加 standby），Linux 上是 `MemAvailable`，都直接用。
 
+日志（Butler 数据目录里的 `logs/main.log`）会记下启动时的读数，旁边附上 macOS 自己的空闲百分比和 `os.freemem()` 作对照；每次放行或拒绝也会连同用到的数一起记下来。如果机器看着还有空、session 却被拒了，从这几行就能看出原因。
+
 | 设置 | 键 | 默认值 | 可填的值和说明 |
 |------|----|--------|----------------|
-| 开新 session 后至少留给系统的内存（MB） | `sessionMemoryReserveMb` | `2048` | `0` 到 `1048576` 的 MB 整数。可用内存减去一个新 session 的预估占用后不少于这个数才开。 |
+| 开新 session 后至少留给系统的内存（MB） | `sessionMemoryReserveMb` | 空（自动） | 留空是自动：物理内存的 10%，最少 512 MB、最多 2048 MB（8 GB 的电脑留 819 MB，16 GB 的留 1638 MB，20 GB 以上留 2048 MB）。也可以填 `0` 到 `1048576` 的 MB 整数。可用内存减去一个新 session 的预估占用后不少于这个数才开。 |
 | 一个新 session 预计占多少内存（MB） | `sessionMemoryEstimateMb` | `1024` | `64` 到 `1048576` 的 MB 整数：Claude 加上它的 MCP server 和子进程。现在用这个数；以后接上每个 session 的内存实测后，有实测时用开着的 session 的实测平均。 |
 | 同时开着的终端最多几个（0 = 不限） | `sessionMaxRunning` | `0`（不限） | `0` 到 `999` 的整数。默认关着，只当保险：设了以后，Butler 已经开着这么多终端时不再开新的，不管内存还剩多少。 |
 

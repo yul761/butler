@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseFreePercentage, parsePressureLevel, parseVmStatAvailable, readAvailableMemory, type ReadDeps } from "./available-memory";
+import { memorySnapshotLine, parseFreePercentage, parsePressureLevel, parseVmStatAvailable, readAvailableMemory, readingLine, type ReadDeps } from "./available-memory";
 
 const GB = 1024 * 1024 * 1024;
 
@@ -21,12 +21,13 @@ Pages occupied by compressor:                 531429.
 
 const deps = (o: Partial<ReadDeps> & { out?: Record<string, string | Error> } = {}): ReadDeps => ({
   platform: o.platform ?? "darwin",
+  fixedAvailableMb: o.fixedAvailableMb,
   totalmem: o.totalmem ?? (() => 48 * GB),
   freemem: o.freemem ?? (() => 2 * GB),
   run:
     o.run ??
     vi.fn(async (file: string) => {
-      const r = o.out?.[file];
+      const r = o.out?.[file.split("/").pop()!];
       if (r === undefined || r instanceof Error) throw r ?? new Error(`no ${file}`);
       return r;
     }),
@@ -61,8 +62,14 @@ describe("parsers", () => {
 
 describe("readAvailableMemory", () => {
   it("macOS: uses vm_stat, not os.freemem, and reads the pressure level", async () => {
-    const r = await readAvailableMemory(deps({ out: { vm_stat: VM_STAT, sysctl: "2\n" } }));
+    const d = deps({ out: { vm_stat: VM_STAT, sysctl: "2\n" } });
+    const r = await readAvailableMemory(d);
+    // 绝对路径：Dock 启动和 e2e 沙盒的 PATH 里可能没有 /usr/sbin。
+    expect(d.run).toHaveBeenCalledWith("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]);
+    expect(d.run).toHaveBeenCalledWith("/usr/bin/vm_stat", []);
     expect(r).toMatchObject({ source: "vm_stat", pressure: "warn", totalKb: 48 * 1024 * 1024 });
+    // 各项写进日志（附录第 7 节）。
+    expect(r.detail).toBe("wired 4660, compressor 8304, anonymous 22331, purgeable 263, file-backed 10792, free 2093 MB");
     expect(r.availableKb).toBe(parseVmStatAvailable(VM_STAT, 48 * 1024 * 1024));
   });
 
@@ -79,5 +86,36 @@ describe("readAvailableMemory", () => {
       expect(await readAvailableMemory(d)).toEqual({ totalKb: 32 * 1024 * 1024, availableKb: 9 * 1024 * 1024, source: "os", pressure: null });
       expect(d.run).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("fixed reading for e2e (BUTLER_E2E_AVAILABLE_MB)", () => {
+  it("uses the fixed number on every platform and runs nothing; ignores a value that is not a whole number", async () => {
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      const d = deps({ platform, fixedAvailableMb: "1000" });
+      expect(await readAvailableMemory(d)).toMatchObject({ source: "fixed", availableKb: 1000 * 1024, totalKb: 48 * 1024 * 1024, pressure: null });
+      expect(d.run).not.toHaveBeenCalled();
+    }
+    // 比总量还大：总量跟着抬上去（自动保留线按总量算）。
+    expect(await readAvailableMemory(deps({ platform: "linux", fixedAvailableMb: "65536", totalmem: () => 7 * GB }))).toMatchObject({ totalKb: 64 * 1024 * 1024 });
+    for (const bad of ["", " ", "lots", "-1", "1.5"]) expect((await readAvailableMemory(deps({ platform: "linux", fixedAvailableMb: bad }))).source, bad).toBe("os");
+  });
+});
+
+describe("log lines", () => {
+  it("startup line: the admission reading next to macOS's own free percentage and os.freemem", async () => {
+    const line = await memorySnapshotLine(deps({ out: { vm_stat: VM_STAT, sysctl: "1", memory_pressure: "System-wide memory free percentage: 73%" } }));
+    expect(line).toMatch(/^vm_stat: total 49152 MB, available \d+ MB, pressure normal \(wired 4660, .*\), memory_pressure free 73%, os.freemem 2048 MB$/);
+    // memory_pressure 读不到只是少一段对照；别的平台不跑它。
+    expect(await memorySnapshotLine(deps({ out: { vm_stat: VM_STAT } }))).not.toContain("memory_pressure");
+    // e2e 定死了读数：照样读真实的，再注明准入用的是定死的。
+    expect(await memorySnapshotLine(deps({ out: { vm_stat: VM_STAT }, fixedAvailableMb: "65536" }))).toMatch(/^vm_stat: total 49152 MB, .*; admission uses a fixed 65536 MB \(BUTLER_E2E_AVAILABLE_MB\)$/);
+    const win = deps({ platform: "win32", freemem: () => 9 * GB, totalmem: () => 32 * GB });
+    expect(await memorySnapshotLine(win)).toBe("os: total 32768 MB, available 9216 MB, pressure ?, os.freemem 9216 MB");
+    expect(win.run).not.toHaveBeenCalled();
+  });
+
+  it("readingLine without a detail", () => {
+    expect(readingLine({ totalKb: 8 * 1024 * 1024, availableKb: 2096 * 1024, source: "os", pressure: null })).toBe("os: total 8192 MB, available 2096 MB, pressure ?");
   });
 });

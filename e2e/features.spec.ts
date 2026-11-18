@@ -224,6 +224,43 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
  * → “立即更新”生成新的汇总，来源变成“手动更新” → 切到英文后再更新一次，界面和汇总都是英文。
  * 设了 BUTLER_E2E_SHOTS_DIR 时把中英文的 feature 页各截一张图存到那里（CI 不设）。
  */
+/**
+ * 工作流 W（按内存决定能开几个 session）：可用内存不够时 start_session 被拒，提示里写出现在可用多少、再开一个要多少、要留多少，
+ * 不开终端；list_sessions 附的那一行说还能再开 0 个。可用内存用 BUTLER_E2E_AVAILABLE_MB 定死，不看这台机器。
+ */
+test("start_session is refused when memory is short, with how much is available and needed", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  // 1000 MB：自动保留线最少 512 MB，加上预估的 1024 MB，在哪台机器上都不够。
+  s.env = { BUTLER_E2E_AVAILABLE_MB: "1000" };
+  const feWorktree = join(s.dir, "shop-features", "checkout", "frontend-dms-1");
+  const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await createCheckoutFeature(page, s);
+  await newFeatureTicket(page, "DMS-1", "frontend");
+  await page.locator(".sidebar .ticket.feature").click();
+  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
+  await expect.poll(fakeLog).toContain("mcp=butler-workspace,butler-feature,butler-sessions");
+  const coordinatorId = /interactive new (\S+) mcp=butler-workspace,butler-feature,butler-sessions/.exec(fakeLog())![1];
+  const config = JSON.parse(readFileSync(join(s.butlerHome, "mcp", "features", "1.json"), "utf8")) as { mcpServers: Record<string, McpServerConfig> };
+  const mcp = await sessionsServer(config.mcpServers["butler-sessions"], coordinatorId);
+  try {
+    const refused = await mcp.call("start_session", { ticket: "DMS-1", task: "build-the-cart" });
+    expect(refused.isError).toBe(true);
+    const text = refused.content[0].text;
+    expect(text).toContain("内存不够再开一个 session：现在可用 1000 MB");
+    expect(text).toContain("再开一个预计要 1.0 GB");
+    expect(text).toMatch(/开完还要留 (\d+ MB|\d+\.\d GB) 给系统/);
+    const listed = await mcp.call("list_sessions");
+    expect(listed.content.map((c) => c.text).join("\n")).toContain("现在还能再开 0 个 session（按内存算）：可用 1000 MB，每个按 1.0 GB 算");
+  } finally {
+    mcp.close();
+  }
+  // 没有给 DMS-1 开终端。
+  await page.waitForTimeout(500);
+  expect(fakeLog()).not.toContain(`cwd=${feWorktree}`);
+});
+
 test("feature summary: the coordinator's /handoff, child tickets' handoffs and the update button", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const workspace = join(s.dir, "shop-features", "checkout");

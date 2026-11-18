@@ -157,6 +157,7 @@ export function GeneralSettings({ report, onHealth, onRerunWizard }: { report: H
             min={min}
             step={step}
             value={value(k)}
+            placeholder={k === "sessionMemoryReserveMb" ? S.sessionMemoryReserveAuto : undefined}
             onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))}
             onBlur={() => {
               if (draft[k] !== undefined && draft[k] !== current[k]) void save(k);

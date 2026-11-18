@@ -46,8 +46,11 @@ export const SETTING_DEFAULTS = {
    * 「清理闲置」按钮不看它。
    */
   idleCloseMinutes: "180",
-  /** 总控开新 session 前按内存放行（工作流 W）：开完以后至少还要剩这么多 MB 可用内存。 */
-  sessionMemoryReserveMb: "2048",
+  /**
+   * 总控开新 session 前按内存放行（工作流 W）：开完以后至少还要剩这么多 MB 可用内存。
+   * 空 = 自动（默认）：物理内存的 10%，限在 512 到 2048 MB 之间（autoReserveMb）。
+   */
+  sessionMemoryReserveMb: "",
   /** 没有实测时，一个新 session（Claude 加它的 MCP server 和子进程）预计占多少 MB。 */
   sessionMemoryEstimateMb: "1024",
   /** 同时开着的终端最多几个，只当保险；0 = 不限（默认，只看内存）。 */

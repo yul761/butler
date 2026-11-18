@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MemoryReading } from "./available-memory";
-import { MemoryAdmission, PENDING_MS, type AdmissionDeps, type AdmissionSettings } from "./memory-admission";
+import { autoReserveMb, MemoryAdmission, PENDING_MS, type AdmissionDeps, type AdmissionSettings } from "./memory-admission";
 
 const MB = 1024;
 
-function setup(o: { availableMb?: number; pressure?: MemoryReading["pressure"]; settings?: Partial<AdmissionSettings>; measured?: number[]; running?: number; readFails?: boolean } = {}) {
+function setup(o: { availableMb?: number; totalMb?: number; pressure?: MemoryReading["pressure"]; settings?: Partial<AdmissionSettings>; measured?: number[]; running?: number; readFails?: boolean } = {}) {
   let now = 1_000_000;
   let available = o.availableMb ?? 10_000;
   let running = o.running ?? 0;
   const d = {
     read: vi.fn(async (): Promise<MemoryReading> => {
       if (o.readFails) throw new Error("vm_stat hung");
-      return { totalKb: 48 * 1024 * MB, availableKb: available * MB, source: "vm_stat", pressure: o.pressure ?? "normal" };
+      return { totalKb: (o.totalMb ?? 48 * 1024) * MB, availableKb: available * MB, source: "vm_stat", pressure: o.pressure ?? "normal", detail: "wired 1, compressor 2" };
     }),
     settings: () => ({ reserveMb: 2048, sessionMb: 1024, maxRunning: 0, ...o.settings }),
     measuredSessionsKb: o.measured ? () => o.measured! : undefined,
@@ -112,5 +112,43 @@ describe("MemoryAdmission", () => {
     expect(s.d.log).toHaveBeenCalledWith(expect.stringMatching(/reading memory failed/), expect.any(Error));
     const capped = setup({ readFails: true, running: 3, settings: { maxRunning: 3 } });
     expect((await capped.a.admit("x")).ok).toBe(false);
+  });
+
+  it("logs the reading with every decision, so a CI artifact or a user's log shows whether vm_stat made sense", async () => {
+    const s = setup({ availableMb: 6000 });
+    await s.a.admit("T-1");
+    expect(s.d.log).toHaveBeenCalledWith(
+      "memory admission: T-1 admitted: available 6000 MB, need 1024 MB + reserve 2048 MB, pending 0, running 0; vm_stat: total 49152 MB, available 6000 MB, pressure normal (wired 1, compressor 2)",
+    );
+  });
+});
+
+describe("automatic reserve (setting left empty)", () => {
+  it("is 10% of physical memory, at least 512 MB and at most 2048 MB", () => {
+    expect(autoReserveMb(8 * 1024 * MB)).toBe(819);
+    expect(autoReserveMb(16 * 1024 * MB)).toBe(1638);
+    expect(autoReserveMb(48 * 1024 * MB)).toBe(2048);
+    expect(autoReserveMb(4 * 1024 * MB)).toBe(512);
+    expect(autoReserveMb(null)).toBe(2048);
+    expect(autoReserveMb(0)).toBe(2048);
+  });
+
+  it("an 8 GB Mac with 2 GB available (what the macOS runner reads) opens one more instead of none", async () => {
+    const auto = setup({ availableMb: 2096, totalMb: 8 * 1024, settings: { reserveMb: null } });
+    expect(await auto.a.capacity()).toMatchObject({ reserveMb: 819, canStart: 1 });
+    expect(await auto.a.admit("T-1")).toMatchObject({ ok: true });
+    expect(auto.d.log).toHaveBeenCalledWith(expect.stringContaining("reserve 819 MB (auto)"));
+    // 刚开的那个按预估扣掉：第二个不放行。
+    expect(await auto.a.admit("T-2")).toMatchObject({ ok: false, reason: "memory", capacity: { reserveMb: 819, pending: 1 } });
+    // 固定留 2048 MB 时连一个都开不了（这次改默认值的原因）。
+    const fixed = setup({ availableMb: 2096, totalMb: 8 * 1024 });
+    expect(await fixed.a.admit("T-1")).toMatchObject({ ok: false, reason: "memory" });
+  });
+
+  it("follows the reading's total; an explicit setting (0 included) wins", async () => {
+    expect((await setup({ totalMb: 64 * 1024, settings: { reserveMb: null } }).a.capacity()).reserveMb).toBe(2048);
+    expect((await setup({ totalMb: 8 * 1024, settings: { reserveMb: 0 } }).a.capacity()).reserveMb).toBe(0);
+    // 读不到内存：按上限（反正只看硬上限）。
+    expect((await setup({ readFails: true, settings: { reserveMb: null } }).a.capacity())).toMatchObject({ reserveMb: 2048, availableMb: null });
   });
 });
