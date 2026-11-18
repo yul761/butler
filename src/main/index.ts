@@ -109,6 +109,9 @@ import { markTurnEndedWithoutStop } from "./sessions/turn-end";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
 import { checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, idleCloseMinutes, llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
+import { watcherGuideLines } from "./procs/watcher-policy";
+import { createProcServices, type ProcServices } from "./procs/proc-services";
+import { MemorySamplesRepo } from "./db/memory-samples-repo";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
 import { pathKey } from "./util/env";
@@ -156,6 +159,8 @@ const HOOK_DISCOVERY_DEBOUNCE_MS = 3000;
 const ACTIVE_IDLE_SECONDS = 120;
 
 let win: BrowserWindow | null = null;
+/** 窗口 show / restore 时调（bootstrap 里接到 WS-M 的优先级上）。 */
+let windowShownHook: () => void = () => undefined;
 let tray: Tray | null = null;
 /** e2e 设 BUTLER_BACKGROUND_WINDOWS=1：窗口不激活、macOS 上不进 Dock，测试跑起来不把焦点从别的程序抢过来。 */
 const BACKGROUND_WINDOWS = process.env.BUTLER_BACKGROUND_WINDOWS === "1";
@@ -238,6 +243,9 @@ function createWindow(): BrowserWindow {
   w.on("closed", () => {
     if (win === w) win = null;
   });
+  // 窗口又出现了：看得见的终端马上恢复优先级（WS-M E）。
+  w.on("show", () => windowShownHook());
+  w.on("restore", () => windowShownHook());
   // Windows 注销 / 关机：不能再把关窗口拦成“藏到托盘”，否则会挡住系统（计划 1 Task 12）。
   w.on("session-end", () => quitState.requestQuit());
   // 关窗口只是藏到托盘，终端进程继续运行。
@@ -400,11 +408,14 @@ async function bootstrap(): Promise<void> {
   });
   /** will-quit 关数据库之前置位：之后才到的终端退出事件（killAll 是异步的）不再碰数据库。没处理的空 session 下次启动时清掉。 */
   let closing = false;
+  // 内存、优先级、孤儿（WS-M）：要等 refresher 建好才装，终端退出事件在那之前到就跳过。
+  let procs: ProcServices | null = null;
   const pty = new PtyManager(nodePtyFactory, {
     data: (id, data) => safeSend(IPC.ptyData, id, data),
     exit: (id, code) => {
       safeSend(IPC.ptyExit, id, code);
       if (closing) return;
+      procs?.terminalExited(id);
       // 合并后因为这个终端还在跑而没清理的 worktree：终端一退出就再试（设计文档 2026-10-26）。
       const exitedHead = sessions.head(id);
       const exitedTicket = exitedHead?.ticketKey ?? null;
@@ -738,7 +749,7 @@ async function bootstrap(): Promise<void> {
     },
     checksAbsence,
     guidePath: (kind, repoPaths) =>
-      writeSessionGuide(paths.mcp, currentLang(), kind, kind === "ticket" ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger) : []),
+      writeSessionGuide(paths.mcp, currentLang(), kind, kind === "ticket" ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger) : [], kind === "ticket" ? watcherGuideLines(currentLang(), repoPaths) : []),
     featureMcpConfig,
     epicMcpConfig,
     butlerWorkspace: paths.butlerWorkspace,
@@ -1374,6 +1385,7 @@ async function bootstrap(): Promise<void> {
       // 同一个时机：用户在终端里回答了，这个 session 卡片上还没答的「待你决定」都算答过（换新、Butler 刚递回答时不算，BTL-190 第 2+3 点）。
       if (effect.kind === "waiting" && !effect.waiting) {
         pty.markSubmitted(env.butlerSession ?? effect.sessionId);
+        procs?.terminalActive(env.butlerSession ?? effect.sessionId);
         inboxService.promptSubmitted(env.butlerSession ?? effect.sessionId);
         // 马上重读活动：实况窗口里它立刻算在干活（BTL-190 第 7 点）。
         void activityMonitor.promptSubmitted(env.butlerSession ?? effect.sessionId).catch((e: unknown) => logger("re-reading the activity on prompt submit failed", e));
@@ -1398,7 +1410,19 @@ async function bootstrap(): Promise<void> {
   });
 
   // before-quit 里先停换新再关终端：终端关掉时正在等的换新不再输入、不再读库（will-quit 里数据库就关了），也不当作失败。
+  procs = createProcServices({
+    settings, sessions, samples: new MemorySamplesRepo(db), pty,
+    activity: (id) => activityMonitor.get(id),
+    refresher,
+    appMetrics: () => app.getAppMetrics().map((m) => ({ pid: m.pid, type: m.type, kb: m.memory.workingSetSize })),
+    windowShown: () => !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
+    ownedFile: paths.procsOwned,
+    log: logger,
+  });
+  const procServices = procs;
+  windowShownHook = () => procServices.windowShown();
   shutdownSessions = () => {
+    void procServices.stop();
     refresher.stop();
     pty.killAll();
   };
@@ -1528,6 +1552,9 @@ async function bootstrap(): Promise<void> {
     // 允许的主机和 lessons 的 openSource 一样，只认 git remote 认出来的仓库（lessons_repos），不认 ticket_prs 自己的 slug。
     prOpen: (url) => openKnownPr(url, { prs: ticketPrs, trustedSlugs: () => lessonsRepo.repos().map((r) => r.slug), openExternal: (u) => shell.openExternal(u), log: logger }),
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
+    terminalVisible: (id, v) => procServices.terminalVisible(id, v),
+    terminalInput: (id) => procServices.terminalActive(id),
+    memoryHistory: (since) => procServices.monitor.history(since),
     nowView: (merges) => {
       // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
       const queued = new Set([...gateRepo.waitingSessionIds()].map((id) => sessions.head(id)?.id ?? id));
@@ -1551,6 +1578,8 @@ async function bootstrap(): Promise<void> {
           ...buildNotices({ availability: availability.view(), recentRuns: lessonRuns.recentFinished(20), routing: routing.attention() }),
           ...ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
         ],
+        sessionMemory: (id) => procServices.monitor.memoryOf(id),
+        memorySnapshot: procServices.monitor.snapshot(),
       });
     },
     rederive: (key) => {
@@ -1650,6 +1679,7 @@ async function bootstrap(): Promise<void> {
     })
     .catch((e: unknown) => logger("lessons: starting the runner failed", e));
   activityMonitor.start();
+  procServices.start();
   usageScanner.start(usageScanMs(process.env));
   void runDiscovery();
   // 启动时补齐记忆：老数据、上次退出时没写完的。
@@ -1692,6 +1722,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(upgradeTimer);
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     activityMonitor.stop();
+    void procServices.stop();
     usageScanner.stop();
     memory.stop();
     inbox.stop();

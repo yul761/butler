@@ -25,6 +25,8 @@ interface SessionRow {
   butler: number;
   lesson_run_id: number | null;
   checks_absent: string | null;
+  mem_kb?: number | null;
+  mem_at?: number | null;
 }
 
 function toSession(r: SessionRow): Session {
@@ -50,6 +52,8 @@ function toSession(r: SessionRow): Session {
     butler: r.butler === 1,
     lessonRunId: r.lesson_run_id === null ? null : Number(r.lesson_run_id),
     checksAbsent: (r.checks_absent ?? null) as CheckAbsenceReason | null,
+    memKb: r.mem_kb == null ? null : Number(r.mem_kb),
+    memAt: r.mem_at == null ? null : Number(r.mem_at),
   };
 }
 
@@ -225,6 +229,11 @@ export class SessionsRepo {
   /** 换 ticket 时仓库归属一起换（null 表示不属于任何仓库）。 */
   setTicket(id: string, ticketKey: string | null, repoId: number | null = null): void {
     this.db.prepare(`UPDATE sessions SET ticket_key = ?, repo_id = ? WHERE id = ?`).run(ticketKey, ticketKey ? repoId : null, id);
+  }
+
+  /** 最近一次采到的进程树内存（WS-M A），记在 head 上。 */
+  setMemory(id: string, kb: number, at: number): void {
+    this.db.prepare(`UPDATE sessions SET mem_kb = ?, mem_at = ? WHERE id = ?`).run(Math.round(kb), at, id);
   }
 
   setWaiting(id: string, waiting: boolean, at: number): void {

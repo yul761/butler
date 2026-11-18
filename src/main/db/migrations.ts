@@ -677,4 +677,18 @@ export const MIGRATIONS: string[] = [
     PRIMARY KEY (ticket_key, repo_id, branch));
   CREATE INDEX branch_owners_at ON branch_owners (at);
   `,
+  // 内存与卡顿（WS-M A）：每个 session 最近一次采到的进程树内存，和每 5 分钟一行的历史（留 14 天）。
+  // kind：session（session_id 是 head）、butler（Butler 自己的进程）、system（系统可用内存）。detail 是各类别的 JSON。
+  `
+  ALTER TABLE sessions ADD COLUMN mem_kb INTEGER;
+  ALTER TABLE sessions ADD COLUMN mem_at INTEGER;
+  CREATE TABLE memory_samples (
+    id INTEGER PRIMARY KEY,
+    at INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('session','butler','system')),
+    session_id TEXT,
+    total_kb INTEGER NOT NULL,
+    detail TEXT);
+  CREATE INDEX memory_samples_at ON memory_samples (at);
+  `,
 ];

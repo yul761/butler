@@ -5,6 +5,8 @@ import { ciReasonText, noticeText, type NoticeAction } from "../availability-vie
 import { reportError } from "../errors";
 import { setWizardSkipped, wizardSkipped } from "../local-prefs";
 import { mergeEventText } from "../merge-events-view";
+import { butlerLines, formatKb, heavyMcp, peakKb, rowMemDetail, rowMemText, snapshotLine, sparkPath } from "../mem-view";
+import type { MemoryHistoryPoint, MemorySnapshot } from "../../../shared/mem-usage";
 import { groupSummary, needsYouText, needsYouTotal, prPill, rowKey, rowLabel, rowPlace, rowText, usageDetails, usageLine } from "../now-view";
 import { S } from "../strings";
 import type { Route } from "../App";
@@ -47,6 +49,7 @@ export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup
         <span className="muted">{S.nowRunning(view.running)}</span>
       </header>
       {view.notices.map((n) => <Notice key={noticeKey(n)} notice={n} now={now} onOpen={onOpen} onGo={onGo} />)}
+      {view.mem && <MemoryCard snap={view.mem} view={view} />}
       {/* 实况（BTL-190 第 7 点）：没人在干活时它说“现在没有正在进行的工作”，下面的列表可能是空的。 */}
       <LiveWindow view={view} onOpen={onOpen} />
       {needsYouTotal(view) > 0 && <NeedsYou view={view} now={now} onOpen={onOpen} />}
@@ -256,8 +259,56 @@ function Row({ row: r, now, onOpen }: { row: NowRow; now: number; onOpen: (t: No
       <span className="now-prs">
         {pills.map((p, n) => <span key={p.url ?? n} className={`pill ${p.tone}`} title={p.url ?? undefined}>{p.text}</span>)}
       </span>
+      <span className="now-mem" title={r.mem ? rowMemDetail(r.mem, S) : undefined}>{rowMemText(r.mem, S)}</span>
       <span className="now-since">{since(r, now)}</span>
     </button>
+  );
+}
+
+/** 历史曲线多久重取一次（历史每 5 分钟才多一个点）。 */
+const MEM_HISTORY_REFRESH_MS = 5 * 60_000;
+
+/** 内存卡片（WS-M A）：一行汇总，展开后是 Butler 自己的明细、24 小时的曲线和「你装的 MCP 太大」的提示。默认收起。 */
+function MemoryCard({ snap, view }: { snap: MemorySnapshot; view: NowView }) {
+  // 这个记号在存储里的意思是“展开了”。
+  const [open, toggle] = useCollapsed("now:mem");
+  const [history, setHistory] = useState<MemoryHistoryPoint[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    const load = () => void api.memUsageHistory(24).then(setHistory, reportError);
+    load();
+    const t = setInterval(load, MEM_HISTORY_REFRESH_MS);
+    return () => clearInterval(t);
+  }, [open]);
+  const W = 240, H = 36;
+  const d = open ? sparkPath(history, W, H) : null;
+  const heavy = open ? heavyMcp(view) : [];
+  return (
+    <section className="now-usage now-mem-card">
+      <GroupToggle open={open} onToggle={toggle}>{S.perf.memTitle}: {snapshotLine(snap, S)}</GroupToggle>
+      {open && (
+        <div className="now-usage-details">
+          <div>
+            <h4>{S.perf.memButler}</h4>
+            <ul>{butlerLines(snap, S).map((l) => <li key={l}>{l}</li>)}</ul>
+          </div>
+          <div>
+            <h4>{S.perf.memHistory}{history.length > 1 ? ` · ${formatKb(peakKb(history))}` : ""}</h4>
+            {d ? (
+              <svg className="mem-spark" width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img" aria-label={S.perf.memHistory}>
+                <path d={d} fill="none" stroke="currentColor" strokeWidth="1.5" />
+              </svg>
+            ) : <p className="muted">{S.perf.memNone}</p>}
+          </div>
+          {heavy.length > 0 && (
+            <div>
+              <p>{S.perf.tipsHeavyMcp(heavy.join(", "))}</p>
+              <p className="muted">{S.perf.tipsMcp}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 

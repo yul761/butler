@@ -346,6 +346,9 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "memoryEnabled":
     case "onboardingDone":
     case "checksEnabled":
+    case "memoryMonitor":
+    case "backgroundPriority":
+    case "orphanCleanup":
       return normalizeFlag(value);
     case "refreshThresholdTokens": {
       const t = value.trim();
@@ -379,6 +382,11 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       const t = value.trim();
       const [lo, hi] = key === "checksEditTimeoutSec" ? CHECKS_EDIT_RANGE : CHECKS_PUSH_RANGE;
       if (!/^\d{1,4}$/.test(t) || Number(t) < lo || Number(t) > hi) throw new SettingError(key === "checksEditTimeoutSec" ? M().checksEditTimeoutSec : M().checksPushTimeoutSec);
+      return String(Number(t));
+    }
+    case "refreshMemoryMb": {
+      const t = value.trim();
+      if (!MEMORY_MB_RE.test(t) || (Number(t) !== 0 && Number(t) < MIN_REFRESH_MEMORY_MB)) throw new SettingError(M().refreshMemoryMb);
       return String(Number(t));
     }
     case "language": {
@@ -454,6 +462,31 @@ export const configBackupIntervalDays = (s: Pick<SettingsRepo, "get">) => config
 export const configBackupKeep = (s: Pick<SettingsRepo, "get">) => configNumber(s, "configBackupKeep", (n) => n >= 1);
 /** 导出提醒（天）：0 = 不提醒。 */
 export const configExportReminderDays = (s: Pick<SettingsRepo, "get">) => configNumber(s, "configExportReminderDays", (n) => n <= MAX_CONFIG_DAYS);
+
+/** 开关读法：存成 "1" 才算开，其余（包括损坏的值）都按默认值。 */
+function flagOn(s: Pick<SettingsRepo, "get">, key: "memoryMonitor" | "backgroundPriority" | "orphanCleanup"): boolean {
+  const v = s.get(key).trim();
+  return v === "0" || v === "1" ? v === "1" : SETTING_DEFAULTS[key] === "1";
+}
+
+/** 内存采样（WS-M A）开着没有。 */
+export const memoryMonitorOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn(s, "memoryMonitor");
+/** 后台优先级（WS-M E）开着没有。 */
+export const backgroundPriorityOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn(s, "backgroundPriority");
+/** 孤儿进程清理（WS-M F）开着没有。 */
+export const orphanCleanupOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn(s, "orphanCleanup");
+
+/** 内存阈值的 MB 数：0 或者最多 6 位的整数。 */
+const MEMORY_MB_RE = /^\d{1,6}$/;
+/** 按内存换新的最低阈值：再低的话刚开的 claude 就超了。 */
+const MIN_REFRESH_MEMORY_MB = 256;
+
+/** 按内存换新的阈值（refreshMemoryMb，WS-M G）：0 = 关；存的值不合法时用默认的 2048。 */
+export function refreshMemoryMb(s: Pick<SettingsRepo, "get">): number {
+  const t = s.get("refreshMemoryMb").trim();
+  const n = Number(t);
+  return MEMORY_MB_RE.test(t) && (n === 0 || n >= MIN_REFRESH_MEMORY_MB) ? n : Number(SETTING_DEFAULTS.refreshMemoryMb);
+}
 
 /** Butler 总控每天巡检的时刻（butlerPatrolTime，BTL-190 第 5 点）：关着或者存的值不合法时为 null（不猜一个时间）。 */
 export function butlerPatrolTime(s: Pick<SettingsRepo, "get">): { h: number; m: number } | null {

@@ -5,6 +5,7 @@ import type { ConfigIoFacade } from "../config-io/facade";
 import type { BatchDetail, BatchView } from "../../shared/batches";
 import type { AdmissionPolicyView } from "../../shared/admission-policy";
 import type { ConfigIoStatus, ExportResult, ImportApplyResult, ImportPreviewResult } from "../../shared/config-io";
+import type { MemoryHistoryPoint } from "../../shared/mem-usage";
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc";
 import {
@@ -95,6 +96,12 @@ export interface IpcDeps {
   routing: { view(): RoutingView; act(a: RoutingAction): Promise<string | null> };
   /** session 撞限后换模型（SessionModelSwitcher）。 */
   switcher: { switch(sessionId: string, model?: string): Promise<SwitchResult>; dismiss(sessionId: string): void; views(): SessionLimitView[] };
+  /** 用户在终端里打字（WS-M E：马上恢复优先级）。 */
+  terminalInput?: (termId: string) => void;
+  /** 渲染进程报的终端可见性（WS-M D、E）。 */
+  terminalVisible?: (termId: string, visible: boolean) => void;
+  /** 内存历史（WS-M A），since 以后的点。 */
+  memoryHistory?: (since: number) => MemoryHistoryPoint[];
   /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
   nowView: (merges: MergeEvent[]) => NowView;
   /** 重发一条递不出去的 CI 结论（工作流 W）。 */
@@ -354,8 +361,14 @@ export function registerIpc(d: IpcDeps): void {
 
   handle(IPC.ptySnapshot, (id: string) => d.pty.snapshot(id));
   handle(IPC.ptyKill, (id: string) => d.pty.kill(id));
-  ipcMain.on(IPC.ptyWrite, (_e, id: string, data: string) => d.pty.write(id, data));
+  ipcMain.on(IPC.ptyWrite, (_e, id: string, data: string) => {
+    d.pty.write(id, data);
+    d.terminalInput?.(id);
+  });
   ipcMain.on(IPC.ptyResize, (_e, id: string, cols: number, rows: number) => d.pty.resize(id, cols, rows));
+  ipcMain.on(IPC.ptyVisible, (_e, id: unknown, visible: unknown) => {
+    if (typeof id === "string") d.terminalVisible?.(id, visible === true);
+  });
 
   handle(IPC.healthGet, () => d.health.refresh());
   handle(IPC.healthInstallHooks, () => d.health.installHooks());
@@ -495,6 +508,11 @@ export function registerIpc(d: IpcDeps): void {
   const mem = memoryHandlers({ tickets: d.tickets, memory: d.memory, enabled: () => memoryOn(d.settings) });
   handle(IPC.memoryView, mem.view);
   handle(IPC.memoryWhy, mem.why);
+  // 内存历史（WS-M A）：最近 hours 小时（1 到 336），默认 24。
+  handle(IPC.memUsageHistory, (hours: unknown): MemoryHistoryPoint[] => {
+    const h = typeof hours === "number" && Number.isFinite(hours) ? Math.min(336, Math.max(1, hours)) : 24;
+    return d.memoryHistory?.(d.now() - h * 3600_000) ?? [];
+  });
 
   handle(IPC.appAutostartGet, () => d.autostart.get());
   handle(IPC.appLanguage, () => currentLang());
