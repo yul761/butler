@@ -23,11 +23,11 @@ export const SESSIONS_SERVER = "butler-sessions";
  * 交互 session 不用确认就能调用的 sessions 工具：
  * - ask_user 和 report（BTL-190 第 2+3 点）只是把问题、汇报交给 Butler，第一次用就弹权限确认的话 session 会卡在那里等人；
  * - 只读的查询工具（BTL-190 第 5 点，Butler 总控巡检时一路调用；同名的工具在总控里也只是读）。
- * 会动别的终端或建东西的（start_session、end_session、send_message、refresh_session、create_*）照样要确认。
+ * 会动别的终端、建东西或花额度的（start_session、end_session、send_message、refresh_session、refresh_feature_summary、create_*）照样要确认。
  */
 export const SESSIONS_AUTO_ALLOW: readonly string[] = [
   "ask_user", "report",
-  "list_epics", "list_features", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox",
+  "list_epics", "list_features", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "progress_overview",
 ].map((tool) => `mcp__${SESSIONS_SERVER}__${tool}`);
 
 /** 怎么启动打包好的 StateCore MCP：command 是 Butler 自己的 Electron（process.execPath），script 是 bundle。 */
