@@ -59,8 +59,9 @@ export type CommentAction =
   | { op: "dismiss"; id: number }
   | { op: "reply"; id: number };
 
-/** 「现在」页：等你看分类的评论。 */
+/** 「现在」页：review = 等你看分类的评论；undelivered = 该送进 session 的评论超过 30 分钟还没送出去。 */
 export interface CommentsWaiting {
+  reason: "review" | "undelivered";
   ticketKey: string;
   prId: number;
   number: number;

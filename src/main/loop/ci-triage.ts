@@ -132,7 +132,7 @@ export class CiTriage {
     const m = M();
     switch (row.state) {
       case "classifying":
-        if (!this.inflight.has(row.id)) this.background(row.id, () => this.classify(item, row, checks.find((c) => c.log)?.log ?? null, w, policy, null));
+        if (!this.inflight.has(row.id)) this.background(item, row.id, () => this.classify(item, row, checks.find((c) => c.log)?.log ?? null, w, policy, null));
         return { kind: "pending" };
       case "rerunning": {
         if (this.d.now() - (row.rerunAt ?? row.updatedAt) > RERUN_GIVE_UP_MS) {
@@ -143,7 +143,7 @@ export class CiTriage {
         const due = RERUN_CHECK_MS - (this.d.now() - last);
         if (!this.inflight.has(row.id) && due <= 0) {
           this.checkedAt.set(row.id, this.d.now());
-          this.background(row.id, () => this.checkRerun(item, row, w, policy));
+          this.background(item, row.id, () => this.checkRerun(item, row, w, policy));
         }
         // 没有别的东西会再问 decide 时（PR 的结论没变），自己过一会儿再看一次。
         this.schedule(item, row.id, Math.max(due, 0) + RERUN_CHECK_MS);
@@ -162,7 +162,7 @@ export class CiTriage {
           return { kind: "deliver", row, outcome: "same_twice", note: m.ciTriageSameTwice(reason, row.category === "flaky") };
         }
         if (row.reruns >= policy["ci.maxReruns"]) return { kind: "deliver", row, outcome: "possibly_flaky", note: m.ciTriagePossiblyFlaky(reason, row.reruns) };
-        if (!this.inflight.has(row.id)) this.background(row.id, () => this.rerun(item, row, w));
+        if (!this.inflight.has(row.id)) this.background(item, row.id, () => this.rerun(item, row, w));
         return { kind: "pending" };
       }
       // 已经递过、通过了的：这次又失败（例如有人手动重跑了），照常递。
@@ -182,15 +182,19 @@ export class CiTriage {
     else setTimeout(fire, ms).unref?.();
   }
 
-  private background(id: number, f: () => Promise<void>): void {
+  /** 后台做一件事；做完（清掉 inflight 以后）f 返回 true 就叫 CiDelivery 重新问。 */
+  private background(item: CiItem, id: number, f: () => Promise<boolean>): void {
     this.inflight.add(id);
     void f()
-      .catch((e: unknown) => this.d.log(`ci triage: row ${id} failed`, e))
-      .finally(() => this.inflight.delete(id));
+      .catch((e: unknown) => (this.d.log(`ci triage: row ${id} failed`, e), false))
+      .then((wake) => {
+        this.inflight.delete(id);
+        if (wake) this.d.wake(item);
+      });
   }
 
   /** 分类一个失败的 run（第一次，或重跑以后又失败了：prevSignature 是上一次的签名）。 */
-  private async classify(item: CiItem, row: TriageRow, rowLog: string | null, w: TriageWhere, policy: LoopPolicy, after: { info: RunInfo; prevSignature: string | null } | null): Promise<void> {
+  private async classify(item: CiItem, row: TriageRow, rowLog: string | null, w: TriageWhere, policy: LoopPolicy, after: { info: RunInfo; prevSignature: string | null } | null): Promise<boolean> {
     const info = after?.info ?? (await this.d.gh.runInfo(w.cwd, row.runId, CI_TRIAGE_GH_TIMEOUT_MS, w.slug));
     // 重跑以后的日志一定要重新取；第一次用 PrWatcher 这一轮取到的，没有才取。
     const log = after || rowLog === null ? await this.d.gh.failedLog(w.cwd, row.runId, CI_TRIAGE_LOG_LINES, CI_TRIAGE_GH_TIMEOUT_MS, w.slug) : rowLog;
@@ -208,11 +212,11 @@ export class CiTriage {
       prevSignature: after?.prevSignature ?? null, tests: failedTests(log), attempt: info?.attempt ?? row.attempt, outcome: null,
     }, now);
     this.d.log(`ci triage ${itemKey(item)} run ${row.runId}: ${verdict.category} (${verdict.source}: ${verdict.reason})`);
-    this.d.wake(item);
+    return true;
   }
 
   /** 触发重跑（对外动作 ci_rerun，开关关着记 skipped）。 */
-  private async rerun(item: CiItem, row: TriageRow, w: TriageWhere): Promise<void> {
+  private async rerun(item: CiItem, row: TriageRow, w: TriageWhere): Promise<boolean> {
     const detail = {
       scope: { repoSlug: w.slug ?? undefined, ticketKey: w.ticketKey },
       target: w.target ?? undefined,
@@ -243,20 +247,19 @@ export class CiTriage {
       this.d.log(`ci triage ${itemKey(item)}: reran run ${row.runId} (${row.reruns + 1})`);
       this.d.soon(item);
     }
-    this.d.wake(item);
+    return true;
   }
 
   /** 在等重跑：attempt 变大而且跑完了才算有结果。通过了算一次 flaky；又失败了重新分类（带上一次的签名）。 */
-  private async checkRerun(item: CiItem, row: TriageRow, w: TriageWhere, policy: LoopPolicy): Promise<void> {
+  private async checkRerun(item: CiItem, row: TriageRow, w: TriageWhere, policy: LoopPolicy): Promise<boolean> {
     const info = await this.d.gh.runInfo(w.cwd, row.runId, CI_TRIAGE_GH_TIMEOUT_MS, w.slug);
-    if (!info || info.attempt <= (row.rerunAttempt ?? row.attempt) || info.status !== "completed") return;
+    if (!info || info.attempt <= (row.rerunAttempt ?? row.attempt) || info.status !== "completed") return false;
     if (info.conclusion === "success") {
       const fresh = this.d.repo.byId(row.id);
       if (fresh && fresh.state === "rerunning") this.passed(item, fresh, w);
-      this.d.wake(item);
-      return;
+      return true;
     }
-    await this.classify(item, row, null, w, policy, { info, prevSignature: row.signature });
+    return this.classify(item, row, null, w, policy, { info, prevSignature: row.signature });
   }
 
   /** 重跑以后通过了：记 flaky（检查名和认出的测试名各一条）、浪费的时间，次数够了自动列入名单。 */
