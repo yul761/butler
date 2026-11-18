@@ -1497,7 +1497,7 @@ async function bootstrap(): Promise<void> {
         decisions: inboxService.pendingDecisionViews(),
         recent: (id) => activityMonitor.recent(id),
         memory: activityMonitor.memoryLog(),
-        notices: buildNotices({ availability: availability.view(), recentRuns: lessonRuns.recentFinished(20) }),
+        notices: buildNotices({ availability: availability.view(), recentRuns: lessonRuns.recentFinished(20), routing: routing.attention() }),
       });
     },
     rederive: (key) => {

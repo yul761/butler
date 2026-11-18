@@ -8,6 +8,11 @@ const view = (over: Partial<AvailabilityView> = {}): AvailabilityView => ({ stat
 const runs = (...statuses: LessonRunStatus[]) => statuses.map((status) => ({ status }));
 
 describe("buildNotices", () => {
+  it("model routing attention becomes a routing notice", () => {
+    expect(buildNotices({ availability: view(), recentRuns: [], routing: null })).toEqual([]);
+    expect(buildNotices({ availability: view(), recentRuns: [], routing: { limited: ["H"], fallbacks: 2 } })).toEqual([{ kind: "routing", limited: ["H"], fallbacks: 2 }]);
+  });
+
   it("a usage limit gives claude_limited with the pause flag", () => {
     const h = hit("usage_limit");
     const paused = view({ state: "limited", current: h, retryAt: 5000, lessonsPause: { reason: "limit", since: 1, until: 5000 } });

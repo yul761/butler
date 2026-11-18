@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { S } from "./strings";
+import { S, STRINGS } from "./strings";
 import { availabilityButtons, availabilityRows, limitLine, noticeText, resetClock } from "./availability-view";
 
 describe("availability view", () => {
@@ -18,6 +18,10 @@ describe("availability view", () => {
 });
 
 describe("noticeText", () => {
+  it("routing notice", () => {
+    expect(noticeText({ kind: "routing", limited: ["H", "M"], fallbacks: 3 }, STRINGS.en, 0)).toEqual({ text: "Models limited: H, M · 3 fallbacks in the last hour", actions: ["routing"] });
+    expect(noticeText({ kind: "routing", limited: [], fallbacks: 1 }, STRINGS.en, 0).text).toBe("1 fallback in the last hour");
+  });
   const now = new Date(2026, 9, 31, 9, 5).getTime();
   const at = new Date(2026, 9, 31, 14, 30).getTime();
   const hit = { kind: "usage_limit" as const, resetsAt: at, message: "m", at: 1, source: "headless" as const, job: null, sessionId: null };

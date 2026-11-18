@@ -103,6 +103,17 @@ describe("RoutingService", () => {
     expect(s.lessonsBlockedUntil()).not.toBeNull();
   });
 
+  it("Now-page attention: limited models and fallbacks in the last hour, only when configured", () => {
+    expect(setup().s.attention()).toBeNull();
+    const { s, tick } = setup([reg("H", "high"), reg("M", "mid")]);
+    expect(s.attention()).toBeNull();
+    s.event("fallback", { task: "pr_brief", model: "H", toModel: "M" });
+    tick(2 * 3_600_000);
+    s.event("fallback", { task: "pr_brief", model: "H", toModel: "M" });
+    s.onLimit("H", { kind: "rate_limit", resetsAt: null, message: "x" }, { task: null, accountLevel: false });
+    expect(s.attention()).toEqual({ limited: ["H"], fallbacks: 1 });
+  });
+
   it("manual probe recovers a model", async () => {
     const { s, probes } = setup([reg("M", "mid")]);
     s.onLimit("M", { kind: "rate_limit", resetsAt: null, message: "x" }, { task: null, accountLevel: false });

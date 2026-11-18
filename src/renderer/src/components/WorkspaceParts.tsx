@@ -9,6 +9,7 @@ import { S } from "../strings";
 import { EndSessionButton } from "./EndSessionButton";
 import { CloseIdleButton, DeleteHiddenButton } from "./SessionCleanupButtons";
 import { RefreshSessionButton } from "./RefreshSessionButton";
+import { SessionLimit } from "./SessionLimit";
 import { RepoPicker } from "./RepoPicker";
 import { TerminalPane } from "./TerminalPane";
 
@@ -182,6 +183,7 @@ export function SessionButton({ s, panes, place }: { s: SessionView; panes: Sess
       {s.termId ? (
         <>
           {/* 修复 session 和复盘分析 session 不换新（计划 16）。 */}
+          <SessionLimit sessionId={s.id} />
           {s.fixesSession === null && s.lessonRunId === null && <RefreshSessionButton sessionId={s.id} label={label} />}
           <EndSessionButton termId={s.termId} label={label} onEnded={() => panes.close(s.termId!)} />
         </>

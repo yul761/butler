@@ -99,6 +99,9 @@ export function parseMaxConcurrent(v: string): Partial<Record<Tier, number>> {
   return out;
 }
 
+/** 「现在」页数最近多久的降级。 */
+export const ATTENTION_WINDOW_MS = 3_600_000;
+
 /**
  * 模型路由的总入口（设计 addendum）：配置、健康、花费、识别规则和学习。
  * headless 执行层、交互 session、IPC 和设置页都走这里。
@@ -415,6 +418,15 @@ export class RoutingService {
   }
 
   // ---- 设置页 ----
+
+  /** 「现在」页的提示：哪些登记的模型撞限或不可用，最近一小时降级了几次。没配置或都没有为 null。 */
+  attention(): { limited: string[]; fallbacks: number } | null {
+    if (!this.configured()) return null;
+    const limited = this.health.view().filter((h) => h.state === "limited" || h.state === "unavailable").map((h) => h.model);
+    const since = this.d.now() - ATTENTION_WINDOW_MS;
+    const fallbacks = this.d.repo.events(200).filter((e) => e.kind === "fallback" && e.at >= since).length;
+    return limited.length || fallbacks ? { limited, fallbacks } : null;
+  }
 
   view(): RoutingView {
     const config = this.config();

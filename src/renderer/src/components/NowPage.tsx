@@ -72,11 +72,12 @@ function noticeKey(n: NowNotice): string {
 
 function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: number; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
   const { text, actions } = noticeText(n, S, now);
-  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen };
+  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen, routing: S.rt.nowOpen };
   const run = (a: NoticeAction): void => {
     if (a === "resume" || a === "retry") void api.availabilityAct({ op: "resumeLessons" }).catch(reportError);
     else if (a === "health") onGo({ page: "settings", section: "health" });
     else if (a === "lessons") onGo({ page: "lessons" });
+    else if (a === "routing") onGo({ page: "settings", section: "routing" });
     else if (n.kind === "session_limited") onOpen(n.target);
   };
   return (

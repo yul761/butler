@@ -52,6 +52,8 @@ export const IPC = {
   /** session 撞限后「换下一档继续」（3.0 模型路由）：结束终端，用 --resume + --model 接着。 */
   sessionsSwitchModel: "sessions:switchModel",
   sessionsDismissLimit: "sessions:dismissLimit",
+  /** 撞限的交互 session（session 行上的提示）。 */
+  sessionsLimits: "sessions:limits",
   activityDismiss: "activity:dismiss",
   usageSummary: "usage:summary",
   ptySnapshot: "pty:snapshot",
@@ -152,7 +154,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
   IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget,
-  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.routingView, IPC.routingAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
+  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.routingView, IPC.routingAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,

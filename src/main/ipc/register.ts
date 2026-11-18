@@ -55,7 +55,7 @@ import {
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
 import type { AvailabilityView } from "../../shared/availability";
-import type { RoutingAction, RoutingView } from "../../shared/model-routing";
+import type { RoutingAction, RoutingView, SessionLimitView } from "../../shared/model-routing";
 import type { SwitchResult } from "../routing/session-switch";
 
 export interface IpcDeps {
@@ -94,7 +94,7 @@ export interface IpcDeps {
   /** 模型路由（3.0）：设置页的整份数据和操作；act 返回错误文字，成功为 null。 */
   routing: { view(): RoutingView; act(a: RoutingAction): Promise<string | null> };
   /** session 撞限后换模型（SessionModelSwitcher）。 */
-  switcher: { switch(sessionId: string, model?: string): Promise<SwitchResult>; dismiss(sessionId: string): void };
+  switcher: { switch(sessionId: string, model?: string): Promise<SwitchResult>; dismiss(sessionId: string): void; views(): SessionLimitView[] };
   /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
   nowView: (merges: MergeEvent[]) => NowView;
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）。 */
@@ -425,6 +425,7 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
     return r;
   });
+  handle(IPC.sessionsLimits, (): SessionLimitView[] => d.switcher.views());
   handle(IPC.sessionsDismissLimit, (id: unknown): void => {
     d.switcher.dismiss(sessionIdArg(id));
     d.notify();

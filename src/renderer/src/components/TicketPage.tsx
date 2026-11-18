@@ -12,6 +12,7 @@ import { EndSessionButton } from "./EndSessionButton";
 import { NoChecksMark } from "./NoChecksMark";
 import { CloseIdleButton, DeleteHiddenButton } from "./SessionCleanupButtons";
 import { RefreshSessionButton } from "./RefreshSessionButton";
+import { SessionLimit } from "./SessionLimit";
 import { TerminalPane } from "./TerminalPane";
 import { TicketOverview } from "./TicketOverview";
 import { TitleDialog } from "./TitleDialog";
@@ -234,6 +235,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
             {s.termId ? (
               <>
                 {/* 修复 session 不换新（计划 16）。 */}
+                <SessionLimit sessionId={s.id} />
                 {s.fixesSession === null && <RefreshSessionButton sessionId={s.id} label={sessionLabel(s, S.untitledSession)} />}
                 <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => closePane(s.termId!)} />
               </>

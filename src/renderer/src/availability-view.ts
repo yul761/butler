@@ -19,7 +19,7 @@ export function limitLine(l: LimitHit, S: UiStrings, now: number): string {
   return l.resetsAt === null ? S.limitNoReset(kind) : S.limitUntil(kind, resetClock(l.resetsAt, now));
 }
 
-export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry";
+export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | "routing";
 
 /** 「现在」页一条提醒的文字和按钮。 */
 export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: string; actions: NoticeAction[] } {
@@ -28,6 +28,12 @@ export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: str
     case "model_unavailable": return { text: S.noticeModel(limitLine(n.hit, S, now)), actions: ["retry", "health"] };
     case "lessons_paused": return { text: S.noticeLessonsPaused, actions: ["resume"] };
     case "lessons_failing": return { text: S.noticeLessonsFailing(n.count), actions: ["lessons"] };
+    case "routing": {
+      const parts = [];
+      if (n.limited.length) parts.push(S.rt.nowLimited(n.limited.join(", ")));
+      if (n.fallbacks) parts.push(S.rt.nowFallbacks(n.fallbacks));
+      return { text: parts.join(" · "), actions: ["routing"] };
+    }
     case "session_limited": {
       const line = limitLine(n.limit, S, now);
       return { text: n.title === null ? line : S.noticeSessionLimited(n.title, line), actions: ["open"] };

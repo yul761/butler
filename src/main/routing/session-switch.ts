@@ -1,5 +1,5 @@
 import type { LimitHit } from "../../shared/availability";
-import type { SessionLimitView } from "../../shared/model-routing";
+import type { SessionLimitView, SwitchModelResult } from "../../shared/model-routing";
 import type { OpenSessionResult, Session } from "../../shared/types";
 
 /** 等终端退出最多这么久，之后不再换（session 可能还在写东西）。 */
@@ -7,7 +7,7 @@ export const SWITCH_EXIT_WAIT_MS = 15_000;
 /** session 上的撞限提示没有恢复时间时最多挂这么久。 */
 export const SESSION_LIMIT_TTL_MS = 6 * 3_600_000;
 
-export type SwitchResult = { ok: true; model: string; termId: string } | { ok: false; reason: "no_session" | "no_next" | "busy" | "still_running" | "open_failed"; detail?: string };
+export type SwitchResult = SwitchModelResult;
 
 export interface SessionSwitchDeps {
   head: (sessionId: string) => Session | null;

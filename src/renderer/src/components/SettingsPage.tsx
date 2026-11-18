@@ -7,8 +7,15 @@ import { GeneralSettings } from "./GeneralSettings";
 import { ScheduleSettings } from "./ScheduleSettings";
 import { LessonsSettings } from "./LessonsSettings";
 import { ClaudeAvailability } from "./ClaudeAvailability";
+import { RoutingSettings } from "./RoutingSettings";
 
-export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => void; section?: "health" }) {
+type SettingsTab = "general" | "routing";
+
+export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => void; section?: "health" | "routing" }) {
+  const [tab, setTab] = useState<SettingsTab>(section === "routing" ? "routing" : "general");
+  useEffect(() => {
+    if (section) setTab(section === "routing" ? "routing" : "general");
+  }, [section]);
   const [report, setReport] = useState<HealthReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,11 +47,29 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
     void run(api.health);
   }, []);
 
-  if (!report) return <p className="empty">{error ?? S.loading}</p>;
+  const tabs = (
+    <div className="settings-tabs" role="tablist">
+      {(["general", "routing"] as const).map((t) => (
+        <button key={t} role="tab" data-testid={`settings-tab-${t}`} aria-selected={tab === t} className={tab === t ? "page-tab active" : "page-tab"} onClick={() => setTab(t)}>
+          {S.settingsTabs[t]}
+        </button>
+      ))}
+    </div>
+  );
+  if (tab === "routing") {
+    return (
+      <div className="page">
+        {tabs}
+        <RoutingSettings />
+      </div>
+    );
+  }
+  if (!report) return <div className="page">{tabs}<p className="empty">{error ?? S.loading}</p></div>;
   const { claude } = report;
 
   return (
     <div className="page">
+      {tabs}
       <h2>{S.health}</h2>
       <dl className="kv">
         <dt>{S.claudePath}</dt><dd>{claude.path ?? <span className="error">{S.notFound}</span>}</dd>

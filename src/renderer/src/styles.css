@@ -487,3 +487,13 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .check-hit { border-top: 1px solid var(--border); padding: 4px 0; }
 .check-hit-detail { margin: 2px 0; font-size: 11px; white-space: pre-wrap; word-break: break-all; color: var(--muted); }
 .session-no-checks { font-size: 10px; margin-left: 4px; }
+
+/* 设置页的 tab（常规 / 模型路由）和模型路由页（3.0）。 */
+.settings-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.routing-settings section { margin: 14px 0; }
+.routing-settings th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 6px; }
+.routing-settings .ticket-table tr { cursor: default; }
+.routing-settings .row-actions { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.routing-settings pre.sample { margin: 0 0 2px; max-height: 6em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11.5px; }
+.routing-settings label.check { display: inline-flex; gap: 4px; align-items: center; }
+.session-limit { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }

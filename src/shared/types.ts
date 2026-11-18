@@ -583,7 +583,9 @@ export type NowNotice =
   | { kind: "model_unavailable"; hit: AvailabilityHit; retryAt: number | null }
   | { kind: "lessons_paused" }
   | { kind: "lessons_failing"; count: number }
-  | { kind: "session_limited"; target: NowTarget; title: string | null; limit: LimitHit };
+  | { kind: "session_limited"; target: NowTarget; title: string | null; limit: LimitHit }
+  /** 模型路由（3.0）：有模型撞限或不可用，或最近一小时有任务降级。只在配置了路由时出现。 */
+  | { kind: "routing"; limited: string[]; fallbacks: number };
 
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */

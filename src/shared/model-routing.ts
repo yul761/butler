@@ -272,6 +272,11 @@ export interface SessionLimitView {
   switching: boolean;
 }
 
+/** sessions:switchModel 的结果。 */
+export type SwitchModelResult =
+  | { ok: true; model: string; termId: string }
+  | { ok: false; reason: "no_session" | "no_next" | "busy" | "still_running" | "open_failed"; detail?: string };
+
 export type DiscoveryStatus = "available" | "unavailable" | "limited" | "error" | "pending";
 export interface DiscoveredModel {
   name: string;
