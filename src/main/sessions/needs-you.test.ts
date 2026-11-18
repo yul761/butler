@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActivityKind } from "../../shared/activity";
 import type { HeadlessOutcome, HeadlessRequest } from "../claude/headless";
 import { jobOf, type HeadlessExecDeps } from "../handoff/headless-exec";
@@ -31,7 +31,7 @@ describe("judgeNeedsYou", () => {
     const labels: string[] = [];
     const reply = `${"早".repeat(100)}${"中".repeat(NEEDS_YOU_REPLY_CHARS - 1)}要拆成两个 PR 吗？`;
     const v = await judgeNeedsYou(deps(ok({ needs_user: true, reason: "问要不要拆 PR" }), seen, labels), reply, "/repo");
-    expect(v).toEqual({ needsYou: true, reason: "问要不要拆 PR" });
+    expect(v).toEqual({ needsYou: true, reason: "问要不要拆 PR", category: "question" });
     const args = seen[0].args;
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "haiku"]);
     expect(args).not.toContain("--allowedTools");
@@ -56,7 +56,7 @@ describe("judgeNeedsYou", () => {
 
   it("cleans stray tags out of the reason (live finding: Haiku ended one with </reason></invoke>)", async () => {
     const v = await judgeNeedsYou(deps(ok({ needs_user: true, reason: "询问用户是否把改动拆成两个 PR，需要用户做决定</reason>\n</invoke>\n" })), "要拆吗？", "/r");
-    expect(v).toEqual({ needsYou: true, reason: "询问用户是否把改动拆成两个 PR，需要用户做决定" });
+    expect(v).toEqual({ needsYou: true, reason: "询问用户是否把改动拆成两个 PR，需要用户做决定", category: "question" });
     const long = await judgeNeedsYou(deps(ok({ needs_user: true, reason: `  ${"问".repeat(100)}  ` })), "要拆吗？", "/r");
     expect([...long!.reason]).toHaveLength(80);
   });
@@ -113,7 +113,9 @@ function deferred<T>() {
 function harness(heads: Head[]) {
   const calls: { reply: string; cwd: string; done: (v: NeedsYouVerdict | null) => void }[] = [];
   let notified = 0;
+  const flagged: [string, string, string][] = [];
   const tracker = new NeedsYouTracker({
+    onNeedsYou: (id, replyId, category) => flagged.push([id, replyId, category]),
     judge: (reply, cwd) => {
       const d = deferred<NeedsYouVerdict | null>();
       calls.push({ reply, cwd, done: d.resolve });
@@ -123,12 +125,38 @@ function harness(heads: Head[]) {
     notify: () => notified++,
   });
   const settle = () => new Promise((r) => setTimeout(r, 0));
-  return { tracker, calls, heads, notified: () => notified, settle };
+  return { tracker, calls, heads, notified: () => notified, settle, flagged };
 }
 
 const stopped = (id: string, replyId: string, text: string): Head => ({ id, cwd: `/repo/${id}`, waiting: true, kind: "waiting", reply: { id: replyId, text } });
 
 describe("NeedsYouTracker", () => {
+  it("keeps judging queued replies when onNeedsYou throws", async () => {
+    const heads = [stopped("s1", "m1", "a?"), stopped("s2", "m2", "b?"), stopped("s3", "m3", "c?")];
+    const calls: ((v: NeedsYouVerdict | null) => void)[] = [];
+    const log = vi.fn();
+    const tracker = new NeedsYouTracker({
+      onNeedsYou: () => {
+        throw new Error("metrics db closed");
+      },
+      judge: () => {
+        const d = deferred<NeedsYouVerdict | null>();
+        calls.push(d.resolve);
+        return d.promise;
+      },
+      sessions: () => heads,
+      notify: () => {},
+      log,
+    });
+    tracker.update();
+    const settle = () => new Promise((r) => setTimeout(r, 0));
+    const started = calls.length;
+    for (const done of [...calls]) done({ needsYou: true, reason: "r", category: "question" });
+    await settle();
+    expect(calls.length).toBeGreaterThan(started);
+    expect(log).toHaveBeenCalled();
+  });
+
   it("judges each reply id once", async () => {
     const h = harness([stopped("s1", "m1", "要拆成两个 PR 吗？")]);
     h.tracker.update();
@@ -335,5 +363,36 @@ describe("NeedsYouTracker", () => {
     // 新回复 m1b 在旧判断结束后排上
     expect(h.calls).toHaveLength(3);
     expect(h.calls[2].reply).toBe("做完了。");
+  });
+});
+
+describe("needs-you interrupt category (ws-h)", () => {
+  it("asks for the category in the same call and maps it, defaulting to question", async () => {
+    const seen: HeadlessRequest[] = [];
+    expect(await judgeNeedsYou(deps(ok({ needs_user: true, reason: "r", category: "missing_info" }), seen), "要哪个 token？", "/r")).toMatchObject({ category: "missing_info" });
+    expect(seen[0].prompt).toContain("missing_info");
+    expect(seen).toHaveLength(1);
+    expect(await judgeNeedsYou(deps(ok({ needs_user: true, reason: "r", category: "weird" })), "？", "/r")).toMatchObject({ category: "question" });
+    expect(await judgeNeedsYou(deps(ok({ needs_user: true, reason: "r" })), "？", "/r")).toMatchObject({ category: "question" });
+  });
+
+  it("reports each needs-you reply once with its category, and exposes categories()", async () => {
+    const h = harness([stopped("s1", "m1", "A 还是 B？")]);
+    h.tracker.update();
+    h.calls[0].done({ needsYou: true, reason: "选方案", category: "choice" });
+    await h.settle();
+    h.tracker.update();
+    expect(h.flagged).toEqual([["s1", "m1", "choice"]]);
+    expect(h.tracker.categories().get("s1")).toBe("choice");
+    expect(h.tracker.categories().has("nope")).toBe(false);
+  });
+
+  it("does not report replies judged not needed", async () => {
+    const h = harness([stopped("s1", "m1", "做完了。")]);
+    h.tracker.update();
+    h.calls[0].done({ needsYou: false, reason: "" });
+    await h.settle();
+    expect(h.flagged).toEqual([]);
+    expect(h.tracker.categories().has("s1")).toBe(false);
   });
 });

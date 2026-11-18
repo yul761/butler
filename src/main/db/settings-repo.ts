@@ -17,6 +17,8 @@ export const SETTING_DEFAULTS = {
   headlessProjectMcp: "0",
   /** 开始记 skill 事件的时间（毫秒，字符串）；空表示还没开始。PR 进度据此区分「没记」和「没做」。 */
   skillTrackingSince: "",
+  /** 开始记度量（ws-h）的时间（毫秒，字符串）；空表示还没开始。基线截止点和「从什么时候起有人介入数据」看它。 */
+  metricsSince: "",
   handoffPrompt: DEFAULT_HANDOFF_PROMPT,
   refreshPrompt: DEFAULT_REFRESH_PROMPT,
   /** 个人 API 的隐私档位：off | metadata | redacted | full（设计文档 7.3，默认 metadata）。 */

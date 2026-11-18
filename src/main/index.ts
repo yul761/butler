@@ -92,6 +92,13 @@ import { stageEventFromHook } from "./hooks/stage-hook";
 import { InboxRepo } from "./db/inbox-repo";
 import { PrStagesService } from "./prwatch/pr-stages-service";
 import { InboxService } from "./inbox/inbox-service";
+import { MetricsRepo } from "./db/metrics-repo";
+import { Metrics } from "./metrics/events";
+import { classifyQuestion, InterruptRecorder } from "./metrics/interrupts";
+import { isDialogKey, promptOnTerminalChain, questionToolShowing, recordInvoke, TerminalInputMeter } from "./metrics/interventions";
+import { MetricsRollup } from "./metrics/rollup";
+import { ensureMetricsSince, metricsSince } from "./metrics/since";
+import { TOUCH_MS as WAIT_TOUCH_MS, WaitTracker, type WaitHead } from "./metrics/wait-tracker";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
@@ -406,6 +413,10 @@ async function bootstrap(): Promise<void> {
     },
   );
   const usageRepo = new UsageRepo(db);
+  // 度量（ws-h，契约 4.7）：人介入、打断、等人时间记成事件和等待段，每小时汇总进 metrics_daily。
+  const metricsRepo = new MetricsRepo(db);
+  const recordEvent = new Metrics({ repo: metricsRepo, now: Date.now, log: logger }).recordEvent;
+  ensureMetricsSince(settings, Date.now());
   /** 某个 session（取 head）最近一轮的上下文大小：计划 16 的自动换新看它。 */
   const contextOf = (sessionId: string): number | null => usageRepo.latestContext(sessions.head(sessionId)?.id ?? sessionId);
   /** headless 运行（handoff、feature 汇总、卡住判断）的用量入库。 */
@@ -445,6 +456,8 @@ async function bootstrap(): Promise<void> {
       // 共享 MCP（WS-M H）：撤掉这个终端的路由，删掉它的配置文件。
       mcpHub.removeTerminal(id);
       removeTerminalMcpConfig(paths.mcp, id);
+      // 度量（ws-h）：这个终端的按键去重记录不用留着。
+      terminalMeter.forget(id);
       // 合并后因为这个终端还在跑而没清理的 worktree：终端一退出就再试（设计文档 2026-10-26）。
       const exitedHead = sessions.head(id);
       const exitedTicket = exitedHead?.ticketKey ?? null;
@@ -580,6 +593,14 @@ async function bootstrap(): Promise<void> {
     run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID,
     signal: headlessAbort.signal, onUsage: recordHeadlessUsage, ...availabilityHooks, routing, log: logger,
   };
+  // 打断原因（7.4）：ask_user、需要你、卡住、权限确认和 AskUserQuestion 各记一条。inboxService、waitTracker 在下面才建好：调用时才用到。
+  const interrupts = new InterruptRecorder({
+    record: recordEvent,
+    classify: (q) => classifyQuestion(judgeDeps, q.question, q.context, sessions.head(q.sessionId)?.cwd ?? homedir()),
+    hasPendingDecision: (id) => inboxService.hasPendingDecision(id),
+    ticketOf: (id) => sessions.head(id)?.ticketKey ?? null,
+    log: logger,
+  });
   /** 复盘的闸门：没配置路由时就是账号级的可用状态；配置了只在 lesson_analyze 哪个模型都用不了时停。 */
   const lessonsGate = new RoutedLessonsGate({ availability, routing, now: Date.now });
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
@@ -737,6 +758,14 @@ async function bootstrap(): Promise<void> {
     judge: (reply, cwd) => judgeNeedsYou({ ...judgeDeps, timeoutMs: 60_000 }, reply, cwd),
     sessions: needsYouHeads,
     notify,
+    onNeedsYou: (id, replyId, category) => {
+      try {
+        interrupts.needsYou(id, replyId, category);
+      } catch (e) {
+        logger("metrics: recording a needs-you interrupt failed", e);
+      }
+      waitTracker.sync();
+    },
     log: logger,
   });
   const activityMonitor = new ActivityMonitor({
@@ -748,10 +777,14 @@ async function bootstrap(): Promise<void> {
     notify: () => {
       needsYou.update();
       refresher.autoCheck();
+      waitTracker.sync();
       notify();
     },
-    // 卡住不再弹系统通知（之后在「现在」页里显示）：只刷新界面。
-    onStuck: () => notify(),
+    // 卡住不再弹系统通知（之后在「现在」页里显示）：只刷新界面，记一次打断（ws-h）。
+    onStuck: (info) => {
+      interrupts.stuck(info.sessionId, info.ticketKey);
+      notify();
+    },
     now: Date.now,
     intervals: activityIntervals(process.env),
     // 实况窗口（BTL-190 第 7 点）：新的工具调用、记忆读写直接推给界面。
@@ -1223,10 +1256,66 @@ async function bootstrap(): Promise<void> {
     deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
     // 换新输入的 /handoff 和接着做的话也会触发 UserPromptSubmit：那不是用户在终端里回答。
     refreshing: (id) => refresher.isRefreshing(id),
+    recordEvent,
+    onAsked: (q) => {
+      // 先 asked（又问一遍的那种同步就定了类别），再 sync：sync 会清掉已经结束的条目的类别，包括刚被顶掉的那条。
+      const classified = interrupts.asked(q);
+      waitTracker.sync();
+      void classified.then(() => waitTracker.sync(), (e: unknown) => logger("metrics: classifying a question failed", e));
+    },
     notify,
     now: Date.now,
     log: logger,
   });
+  // 等人时间（ws-h）：开着终端的 Butler head（复盘分析 session 除外）此刻在等什么。休眠的没有终端，不算。
+  const waitHeads = (): WaitHead[] => {
+    const categories = needsYou.categories();
+    const asksByHead = inboxService.unansweredAsksByHead();
+    interrupts.retainAsks(new Set([...asksByHead.values()].flat()));
+    const out = new Map<string, WaitHead>();
+    for (const termId of pty.openIds()) {
+      const h = sessions.head(termId);
+      if (!h || h.origin !== "butler" || h.lessonRunId !== null || out.has(h.id)) continue;
+      const asks = asksByHead.get(h.id) ?? [];
+      const activity = activityMonitor.get(h.id) ?? null;
+      out.set(h.id, {
+        id: h.id, ticketKey: h.ticketKey, waiting: h.waitingForInput, hibernated: h.hibernatedAt !== null,
+        kind: activity?.kind ?? null, permission: pty.permissionShowing(termId), questionTool: questionToolShowing(activity),
+        ask: asks.length > 0 ? interrupts.askCategory(asks[asks.length - 1]) : undefined,
+        needsYou: categories.get(h.id) ?? null,
+      });
+    }
+    return [...out.values()];
+  };
+  const waitTracker = new WaitTracker({
+    repo: metricsRepo, heads: waitHeads, now: Date.now, log: logger,
+    // 权限确认和 AskUserQuestion 只在这里看得到：开段时记打断。ask_user、需要你各自在自己那里记。
+    onHumanSpan: (spanId, h, st) => {
+      if ((st.source === "permission_prompt" || st.source === "question_tool") && st.category) interrupts.spanOpened(spanId, h.id, h.ticketKey, st.category, st.source);
+    },
+  });
+  waitTracker.recover();
+  const waitTimer = setInterval(() => waitTracker.sync(), WAIT_TOUCH_MS);
+  // 人在终端里的输入（ws-h）：UserPromptSubmit 和对话框按键。Butler 自己递的（回答、汇报、换新）不算。
+  // 只算 Butler 开着终端的 session：外部终端里认领的、复盘分析 session 不算。
+  const terminalMeter = new TerminalInputMeter({
+    record: recordEvent, now: Date.now, log: logger,
+    session: (termId) => {
+      if (!pty.isOpen(termId)) return null;
+      const h = sessions.head(termId);
+      return h && h.origin === "butler" && h.lessonRunId === null ? { id: h.id, ticketKey: h.ticketKey } : null;
+    },
+    autoInputInFlight: (termId) => pty.autoInputInFlight(termId) || refresher.isRefreshing(sessions.head(termId)?.id ?? termId),
+    permissionShowing: (termId) => pty.permissionShowing(termId),
+    activity: (termId) => activityMonitor.get(sessions.head(termId)?.id ?? termId) ?? null,
+    waitingFor: (termId) => waitTracker.waitingFor(sessions.head(termId)?.id ?? termId),
+  });
+  /** 对话框按键（ws-h）：权限确认往往在下一次活动 tick 之前就被答掉了，先 sync 一次把等待段和打断记上，屏幕重画以后再 sync 关掉。 */
+  const meterTerminalKeys = (termId: string, data: string): void => {
+    if (!isDialogKey(data)) return;
+    waitTracker.sync();
+    if (terminalMeter.keys(termId, data)) setTimeout(() => waitTracker.sync(), 1500).unref?.();
+  };
   // send_message 的回复回流（ws-b）：目标停下来时把它最后一条回复送回发消息的总控，和递汇报同一道 guard。
   const butlerMessages = new ButlerMessages({
     repo: new ButlerMessagesRepo(db),
@@ -1503,6 +1592,9 @@ async function bootstrap(): Promise<void> {
       // /clear 以后 hook 里的 session id 已经换了。
       // 同一个时机：用户在终端里回答了，这个 session 卡片上还没答的「待你决定」都算答过（换新、Butler 刚递回答时不算，BTL-190 第 2+3 点）。
       if (effect.kind === "waiting" && !effect.waiting) {
+        // 先记人介入（ws-h）：markSubmitted 之后就分不出这是不是 Butler 递进去的了。终端里嵌套的 claude 的输入不算（不抛）。
+        const termId = env.butlerSession ?? effect.sessionId;
+        if (promptOnTerminalChain((id) => sessions.head(id)?.id ?? null, effect.sessionId, termId)) terminalMeter.promptSubmitted(termId);
         pty.markSubmitted(env.butlerSession ?? effect.sessionId);
         procs?.terminalActive(env.butlerSession ?? effect.sessionId);
         inboxService.promptSubmitted(env.butlerSession ?? effect.sessionId);
@@ -1763,6 +1855,8 @@ async function bootstrap(): Promise<void> {
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
     terminalVisible: (id, v) => procServices.terminalVisible(id, v),
     terminalInput: (id) => procServices.terminalActive(id),
+    terminalKeys: meterTerminalKeys,
+    onInvoked: (channel, args, result) => void recordInvoke(recordEvent, channel, args, result),
     memoryHistory: (since) => procServices.monitor.history(since),
     nowView: (merges) => {
       // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
@@ -1974,10 +2068,21 @@ async function bootstrap(): Promise<void> {
   // macOS / Linux 关机：和 Windows 的 session-end 一样，不再拦着关窗口。
   powerMonitor.on("shutdown", () => quitState.requestQuit());
   // 合上盖子（进入睡眠）时关掉防休眠，醒来后保持关闭，要用再手动打开。
-  powerMonitor.on("suspend", () => keepAwakeSwitch.set(false));
+  powerMonitor.on("suspend", () => {
+    keepAwakeSwitch.set(false);
+    // 睡着的时间不算等待（ws-h）：开着的等待段现在关掉，醒来以后下一次 sync 重新开。
+    waitTracker.closeAll();
+  });
   // 共享 MCP 开着就现在启动 hub，免得第一批 session 还在等它起来、先用了 stdio（WS-M H）。
   if (sharedMcpOn(settings) && existsSync(bundledHubPath())) mcpHub.start();
   const scheduleTimer = setInterval(() => void checkSchedule("tick"), TICK_MS);
+  // 度量汇总（ws-h）：启动一分钟后一次，之后每小时一次；整窗重算，幂等。
+  const metricsRollup = new MetricsRollup({
+    db, repo: metricsRepo, holds: gateRepo, registry: () => routing.config().registry, record: recordEvent,
+    since: () => metricsSince(settings) ?? Date.now(), now: Date.now, log: logger,
+  });
+  const rollupFirst = setTimeout(() => metricsRollup.run(), 60_000);
+  const rollupTimer = setInterval(() => metricsRollup.run(), 60 * 60_000);
 
   app.on("will-quit", () => {
     // 正常情况下 before-quit 已经停过；没经过 before-quit 的退出也要在关数据库之前停下。
@@ -1991,6 +2096,9 @@ async function bootstrap(): Promise<void> {
     lessonsGate.dispose();
     routing.dispose();
     clearInterval(upgradeTimer);
+    clearInterval(waitTimer);
+    clearTimeout(rollupFirst);
+    clearInterval(rollupTimer);
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     activityMonitor.stop();
     void procServices.stop();
@@ -2012,6 +2120,8 @@ async function bootstrap(): Promise<void> {
     pty.killAll();
     keepAwakeSwitch.set(false);
     tray?.destroy();
+    // 开着的等待段在关数据库之前关掉（突然退出的下次启动按最后看到的时间补关）。
+    waitTracker.closeAll();
     closing = true;
     db.close();
   });

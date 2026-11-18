@@ -4,6 +4,7 @@ import { headlessArgs } from "../claude/headless";
 import { execHeadlessJson, type HeadlessExecDeps } from "../handoff/headless-exec";
 import { toCliJsonSchema, validate } from "../handoff/schema";
 import { currentLang } from "../i18n";
+import { INTERRUPT_CATEGORIES, isInterruptCategory, type InterruptCategory } from "../../shared/metrics";
 import { sanitizeJudgeReason } from "../util/judge-text";
 
 /** 给判断看的最后一条回复最多多少个字符（取结尾）。 */
@@ -13,13 +14,19 @@ const REASON_FALLBACK_CHARS = 80;
 /** 同时最多几个判断。 */
 const MAX_JUDGES = 2;
 
-const AnswerSchema = z.object({ needs_user: z.boolean(), reason: z.string() });
+// category（ws-h，7.4 的打断原因）和判断同一次调用给出，不多调一次模型；不认识或没给的记成 question。
+const AnswerSchema = z.object({ needs_user: z.boolean(), reason: z.string(), category: z.string().optional() });
 const NEEDS_YOU_JSON_SCHEMA = toCliJsonSchema(AnswerSchema);
 
 export interface NeedsYouVerdict {
   needsYou: boolean;
   reason: string;
+  /** 在等用户什么（ws-h）：权限确认、选择题、缺信息、真问题、卡住。旧的结论没有。 */
+  category?: InterruptCategory;
 }
+
+/** 模型给的类别归一化：不认识的、没给的都是 question。 */
+export const toCategory = (v: unknown): InterruptCategory => (isInterruptCategory(v) ? v : "question");
 
 /** 按字符（不切开代理对）取结尾。 */
 function tail(text: string, chars: number): string {
@@ -35,7 +42,10 @@ function prompt(reply: string): string {
       'None of these count: reporting progress or results, saying "done", "waiting for CI" or "waiting for another session", ' +
         'and open-ended offers such as "shall I continue?", "anything else?" or "what should I do next?" (that is just waiting for the next instruction).',
       "When unsure, answer false.",
-      "Answer as JSON: needs_user (boolean), reason (one sentence in English on what it is waiting for from the user, at most 15 words; leave empty if not needed).",
+      "Answer as JSON: needs_user (boolean), reason (one sentence in English on what it is waiting for from the user, at most 15 words; leave empty if not needed),",
+      `category (one of ${INTERRUPT_CATEGORIES.join(", ")}: permission = asking to be allowed to do something; choice = pick one of the options it listed; ` +
+        "missing_info = it lacks a fact, file, access or credential only the user has; question = a real open question that needs the user's judgement; " +
+        "stuck = it tried and cannot get past an error or blocker; use question when not needed).",
       "",
       "Message:",
       reply,
@@ -47,7 +57,9 @@ function prompt(reply: string): string {
     '下面这些都不算：单纯汇报进度或结果、说"做完了"、说"在等 CI"或"在等别的 session"，' +
       '以及"要我继续吗""还有别的吗""下一步做什么"这类泛泛的问法（那只是在等下一条命令）。',
     "拿不准就答 false。",
-    "用 JSON 回答：needs_user（布尔），reason（一句话，说它在等用户什么，不超过 30 个字；不需要就留空）。",
+    "用 JSON 回答：needs_user（布尔），reason（一句话，说它在等用户什么，不超过 30 个字；不需要就留空），",
+    `category（${INTERRUPT_CATEGORIES.join("、")} 之一：permission = 请你允许它做某件事；choice = 在它列出的几个选项里选一个；` +
+      "missing_info = 缺一个只有用户有的信息、文件、权限或凭据；question = 需要用户拿主意的真问题；stuck = 试过了，被报错或障碍卡住过不去；不需要时填 question）。",
     "",
     "消息：",
     reply,
@@ -61,7 +73,7 @@ export async function judgeNeedsYou(d: HeadlessExecDeps, reply: string, cwd: str
   if (!r.ok) return null;
   const v = validate(AnswerSchema, r.value);
   // 理由会显示在「现在」页上：去掉混进来的标签，压成一行，最多 80 字（R34）。
-  return v.ok ? { needsYou: v.value.needs_user, reason: sanitizeJudgeReason(v.value.reason) } : null;
+  return v.ok ? { needsYou: v.value.needs_user, reason: sanitizeJudgeReason(v.value.reason), category: toCategory(v.value.category) } : null;
 }
 
 /** 回复末尾的包装：空白、Markdown 的强调和代码标记、右括号、右引号。 */
@@ -98,6 +110,8 @@ export interface NeedsYouDeps {
   sessions: () => NeedsYouHead[];
   notify: () => void;
   log?: (msg: string, err?: unknown) => void;
+  /** 度量（ws-h）：一条回复被判断成需要你（还没被回答）时调一次，记打断原因。 */
+  onNeedsYou?: (sessionId: string, replyId: string, category: InterruptCategory) => void;
 }
 
 interface Entry {
@@ -181,6 +195,15 @@ export class NeedsYouTracker {
     return out;
   }
 
+  /** 需要你的 session 各自在等什么（ws-h 的等人时间段用，一次取齐）；不需要你的不在里面。 */
+  categories(): Map<string, InterruptCategory> {
+    const out = new Map<string, InterruptCategory>();
+    for (const s of this.d.sessions()) {
+      if (this.reasonFor(s) !== null) out.set(s.id, this.entries.get(s.id)?.verdict?.category ?? "question");
+    }
+    return out;
+  }
+
   private reasonFor(s: NeedsYouHead): string | null {
     const reply = stoppedReply(s);
     const e = this.entries.get(s.id);
@@ -218,7 +241,15 @@ export class NeedsYouTracker {
     // 判断期间有了新回复或者终端关了：这个结论已经无关。
     if (e?.replyId === job.replyId) {
       e.verdict = verdict ?? NOT_NEEDED;
-      if (e.verdict.needsYou && !e.answered) this.d.notify();
+      if (e.verdict.needsYou && !e.answered) {
+        this.d.notify();
+        // 度量出错不能让排着的判断停下（下面的 pump）。
+        try {
+          this.d.onNeedsYou?.(job.sessionId, job.replyId, e.verdict.category ?? "question");
+        } catch (err) {
+          this.d.log?.(`needs-you: onNeedsYou for session ${job.sessionId} failed`, err);
+        }
+      }
     }
     this.pump();
   }

@@ -50,7 +50,7 @@ import { scanRepos } from "../tickets/git";
 import { TicketError, type TicketService } from "../tickets/ticket-service";
 import type { CleanupOutcome } from "../tickets/worktree-cleanup";
 import { currentLang } from "../i18n";
-import { toIpcResult } from "./result";
+import { meteredIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
@@ -101,6 +101,10 @@ export interface IpcDeps {
   switcher: { switch(sessionId: string, model?: string): Promise<SwitchResult>; dismiss(sessionId: string): void; views(): SessionLimitView[] };
   /** 用户在终端里打字（WS-M E：马上恢复优先级）。 */
   terminalInput?: (termId: string) => void;
+  /** 度量（ws-h）：用户在终端里按的键（权限确认、选项、Esc 打断）。 */
+  terminalKeys?: (termId: string, data: string) => void;
+  /** 度量（ws-h）：一次成功的 invoke 和它的返回值（手动触发在这里记）。 */
+  onInvoked?: (channel: string, args: readonly unknown[], result: unknown) => void;
   /** 渲染进程报的终端可见性（WS-M D、E）。 */
   terminalVisible?: (termId: string, visible: boolean) => void;
   /** 内存历史（WS-M A），since 以后的点。 */
@@ -166,7 +170,7 @@ export interface IpcDeps {
 export function registerIpc(d: IpcDeps): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handle = (channel: string, fn: (...args: any[]) => unknown) =>
-    ipcMain.handle(channel, (_e, ...args: unknown[]) => toIpcResult(() => fn(...args)));
+    ipcMain.handle(channel, (_e, ...args: unknown[]) => meteredIpcResult(channel, args, () => fn(...args), d.onInvoked));
 
   const setFollowupStatus = (id: string, status: FollowupStatus) => {
     if (!(FOLLOWUP_STATUSES as readonly string[]).includes(status)) throw new Error(`unknown followup status: ${String(status)}`);
@@ -386,6 +390,7 @@ export function registerIpc(d: IpcDeps): void {
   ipcMain.on(IPC.ptyWrite, (_e, id: string, data: string) => {
     d.pty.write(id, data);
     d.terminalInput?.(id);
+    if (typeof id === "string" && typeof data === "string") d.terminalKeys?.(id, data);
   });
   ipcMain.on(IPC.ptyResize, (_e, id: string, cols: number, rows: number) => d.pty.resize(id, cols, rows));
   ipcMain.on(IPC.ptyVisible, (_e, id: unknown, visible: unknown) => {

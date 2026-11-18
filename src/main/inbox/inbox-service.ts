@@ -1,6 +1,7 @@
 import { sanitizeTask, TASK_LIMIT, type ReportKind } from "../../shared/control";
 import type { InboxItemView, InboxRole, InboxScope, InboxView, NowTarget, Session, Ticket } from "../../shared/types";
 import type { InboxArchiveScope, InboxFilter, InboxItem, InboxOwner, InboxRepo } from "../db/inbox-repo";
+import type { RecordEvent } from "../metrics/events";
 import type { DeliveryGuard } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import { M } from "../strings";
@@ -40,6 +41,22 @@ export interface InboxServiceDeps {
   notify(): void;
   now(): number;
   log(msg: string, err?: unknown): void;
+  /** 度量（ws-h）：卡片上回答、「不用了」记一条 needs_you_answer。 */
+  recordEvent?: RecordEvent;
+  /** 度量（ws-h）：记下一条「待你决定」之后调（打断原因的分类）。 */
+  onAsked?(q: AskedQuestion): void;
+}
+
+/** 刚记下的一条 ask_user。 */
+export interface AskedQuestion {
+  id: number;
+  sessionId: string;
+  ticketKey: string | null;
+  question: string;
+  options: string[];
+  context: string | null;
+  /** 被这条顶掉的、同一个问题的旧条目（又问了一遍，不算新的打断）。 */
+  supersedes: number[];
 }
 
 /** 提问 / 汇报的是哪种 session。 */
@@ -96,11 +113,13 @@ export class InboxService {
   /** ask_user：记一条「待你决定」。同一个 session 还没决的同一个问题被这条顶掉（superseded）。s 是提问的 session 的 head。 */
   ask(s: Session, q: { question: string; options?: string[]; context?: string }): number {
     const now = this.d.now();
+    const supersedes: number[] = [];
     for (const old of this.d.repo.pendingDecisions()) {
-      if (old.text === q.question && this.headId(old.sessionId) === s.id) this.d.repo.resolve(old.id, "superseded", now);
+      if (old.text === q.question && this.headId(old.sessionId) === s.id && this.d.repo.resolve(old.id, "superseded", now)) supersedes.push(old.id);
     }
     const id = this.d.repo.addDecision({ ...this.owner(s), question: q.question, options: q.options ?? [], context: q.context ?? null, createdAt: now });
     this.d.notify();
+    this.d.onAsked?.({ id, sessionId: s.id, ticketKey: s.ticketKey, question: q.question, options: q.options ?? [], context: q.context ?? null, supersedes });
     return id;
   }
 
@@ -136,6 +155,7 @@ export class InboxService {
     const answer = text.trim();
     const item = this.d.repo.get(id);
     if (!answer || !item || item.kind !== "decision" || !this.d.repo.setAnswer(id, answer)) return false;
+    this.recordAnswer(item, "card");
     this.d.notify();
     void this.flushAnswers(this.headId(item.sessionId));
     return true;
@@ -145,8 +165,17 @@ export class InboxService {
   dismiss(id: number): boolean {
     const item = this.d.repo.get(id);
     if (!item || item.kind !== "decision" || !this.d.repo.resolve(id, "dismissed", this.d.now())) return false;
+    this.recordAnswer(item, "dismiss");
     this.d.notify();
     return true;
+  }
+
+  /** 人介入（ws-h）：卡片上回答或者「不用了」。同一条只记一次（改答案不算又一次）。 */
+  private recordAnswer(item: InboxItem, via: "card" | "dismiss"): void {
+    this.d.recordEvent?.("needs_you_answer", {
+      sessionId: this.headId(item.sessionId), ticketKey: item.ticketKey, dedupeKey: `answer:${item.id}`,
+      data: { via, options: item.options.length },
+    });
   }
 
   /**
@@ -175,6 +204,20 @@ export class InboxService {
   hasPendingDecision(sessionId: string): boolean {
     const head = this.headId(sessionId);
     return this.d.repo.pendingDecisions().some((item) => this.headId(item.sessionId) === head);
+  }
+
+  /** 还没回答的 ask_user 条目 id，按 session（head）分好，旧的在前（度量的等人时间用；一次 sync 查一次库）。 */
+  unansweredAsksByHead(): Map<string, number[]> {
+    const out = new Map<string, number[]>();
+    for (const item of this.d.repo.pendingDecisions()) {
+      if (item.answer !== null) continue;
+      const head = this.headId(item.sessionId);
+      const list = out.get(head);
+      if (list) list.push(item.id);
+      else out.set(head, [item.id]);
+    }
+    for (const list of out.values()) list.sort((a, b) => a - b);
+    return out;
   }
 
   /** 递还没递出去的回答和汇报；太旧的汇报不再送。永不 reject。 */
