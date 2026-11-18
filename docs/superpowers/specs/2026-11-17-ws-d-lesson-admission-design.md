@@ -234,3 +234,7 @@ The policy keys travel with the `policies` section unchanged. Principles are der
 - **A principle with fewer than three visible cases** (confirmed, in the repositories of the session) is not shown in the guide; its lessons appear one by one.
 - **Guide and cases files that are reused unchanged** get their modification time refreshed, so pruning (30 days by mtime) never removes a file a current guide points to. The plain guide without lessons is not touched (it is never pruned).
 - **The calibration page** shows each lesson's score parts.
+
+### 14.2 Rebase onto H (metrics)
+- **Intervention metrics:** H requires every invoke channel to be in exactly one group. D's read-only channels (`admission:state`, `admission:wizard-estimate`, `admission:calibration-sample`, `admission:calibration-stats`) and its actions (`admission:wizard-act`, `admission:calibration-act`, `admission:principles-regroup`) are all in `NOT_TRIGGERS`. Like `lessons:act`, they curate lessons and set up the environment rather than push a piece of work, so they do not count as manual triggers.
+- **Naming:** in `src/main/index.ts` the pipeline is `lessonAdmission`, because `admission` is the memory-based session admission.
