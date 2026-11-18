@@ -22,12 +22,15 @@ export const REQUIRED_FLAGS = [
   "--settings",
 ] as const;
 
+/** 有就用、没有也能跑的参数：模型路由传 --model / --effort；老版本没有时不传（用 CLI 默认模型）。 */
+export const OPTIONAL_FLAGS = ["--model", "--effort"] as const;
+
 export function parseVersion(out: string): string | null {
   return /\d+\.\d+\.\d+/.exec(out)?.[0] ?? null;
 }
 
 export function parseFlags(help: string): Record<string, boolean> {
-  return Object.fromEntries(REQUIRED_FLAGS.map((f) => [f, new RegExp(`(^|[\\s,])${f}(?![\\w-])`, "m").test(help)]));
+  return Object.fromEntries([...REQUIRED_FLAGS, ...OPTIONAL_FLAGS].map((f) => [f, new RegExp(`(^|[\\s,])${f}(?![\\w-])`, "m").test(help)]));
 }
 
 export async function probeClaude(claudePath: string | null, env: NodeJS.ProcessEnv, run: ExecText = execText): Promise<ClaudeHealth> {

@@ -45,6 +45,12 @@ const ZH = {
     sessionUnknownModel: (name: string, valid: string) => `不认识的模型 “${name}”；用 high / mid / low，或者这些之一：${valid}`,
     sessionBadModel: (name: string) => `模型参数不对：${name}`,
     waiting: (until: string) => `能用的模型都在限额里，等到 ${until} 再跑`,
+    badQuotas: "配额要是 JSON 数组，每条 { target: \"tier:high\" 或 \"model:名字\", unit: \"usd\" 或 \"tokens\", monthly: 正数 }",
+    badThresholds: "阈值写两个 1–100 的整数，用逗号分开，前一个小于后一个，例如 70,90",
+    badPeriodDay: "周期起始日是 1 到 28 之间的整数",
+    badEffort: "推理强度要是 JSON 对象，键是任务 id 或 high / mid / low，值是 low / medium / high / xhigh / max",
+    badMaxConcurrent: "并发上限要是 JSON 对象，键是 high / mid / low，值是 1 到 50 的整数",
+    badFlag: "只能是 0 或 1",
   },
   /** 请 Claude 判断卡住时，用这些词告诉它 session 在做什么。 */
   activityKinds: {
@@ -426,6 +432,12 @@ const EN: MainStrings = {
     sessionUnknownModel: (name: string, valid: string) => `Unknown model "${name}"; use high / mid / low or one of: ${valid}`,
     sessionBadModel: (name: string) => `Bad model value: ${name}`,
     waiting: (until: string) => `Every usable model is at its limit; waiting until ${until}`,
+    badQuotas: "Quotas must be a JSON array of { target: \"tier:high\" or \"model:<name>\", unit: \"usd\" or \"tokens\", monthly: a positive number }",
+    badThresholds: "Thresholds are two whole numbers from 1 to 100, comma-separated, the first smaller, e.g. 70,90",
+    badPeriodDay: "The period start day is a whole number from 1 to 28",
+    badEffort: "Effort must be a JSON object keyed by task id or high / mid / low, with values low / medium / high / xhigh / max",
+    badMaxConcurrent: "Concurrency caps must be a JSON object keyed by high / mid / low, with whole numbers from 1 to 50",
+    badFlag: "Must be 0 or 1",
   },
   activityKinds: {
     edit: "writing code", read: "reading code", rebase: "rebasing", push: "running git push (pre-push hook)", ci: "watching CI", test: "running tests", command: "running a command",

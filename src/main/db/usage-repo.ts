@@ -101,6 +101,14 @@ export class UsageRepo {
   }
 
   /** at >= sinceMs 的用量按模型和任务汇总。input 含缓存写入和读取（都按 token 计）。 */
+  /** 这之后用量里出现过的模型名（模型发现用），用得多的在前。 */
+  modelsSince(sinceMs: number, limit = 20): string[] {
+    const rows = this.db
+      .prepare(`SELECT model, COUNT(*) AS c FROM session_usage WHERE at >= ? AND model IS NOT NULL AND model <> '' GROUP BY model ORDER BY c DESC LIMIT ?`)
+      .all(sinceMs, limit) as unknown as { model: string }[];
+    return rows.map((r) => r.model);
+  }
+
   spendSince(sinceMs: number): SpendRow[] {
     const rows = this.db
       .prepare(

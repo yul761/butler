@@ -45,6 +45,8 @@ async function sameContent(a: string, b: string): Promise<boolean> {
 
 export class HealthService {
   private state: { path: string | null; pathValue: string } = { path: null, pathValue: "" };
+  /** 最近一次探测到的可选参数；探测失败或还没探测时按 2.1.0 的假设：认 --model，不认 --effort。 */
+  private optional: { model: boolean; effort: boolean } = { model: true, effort: false };
   /** 装着的 butler-hook 和随 app 分发的一样（认得 gate）。只有这时才给 session 挂合并总控的 gate hook。 */
   private binCurrent = false;
   /** 进行中的 syncHookBinary：安装要等它做完，两边写的是同一个临时文件。 */
@@ -59,6 +61,11 @@ export class HealthService {
   /** 最近一次 refresh 得到的 claude 路径和登录 shell 的 PATH。 */
   claude(): { path: string | null; pathValue: string } {
     return this.state;
+  }
+
+  /** claude 认不认 --model / --effort（模型路由用）。 */
+  claudeFlags(): { model: boolean; effort: boolean } {
+    return this.optional;
   }
 
   hookBinCurrent(): boolean {
@@ -117,6 +124,7 @@ export class HealthService {
     const path = locateClaude({ override: this.d.settings.get("claudePath"), pathValue, platform: this.d.platform });
     const claude = await probeClaude(path, withPath(this.d.env, pathValue), this.d.run);
     this.state = { path, pathValue };
+    this.optional = claude.error === null ? { model: claude.flags["--model"] === true, effort: claude.flags["--effort"] === true } : { model: true, effort: false };
 
     let hooks: HookStatus;
     let statecorePlugin = false;

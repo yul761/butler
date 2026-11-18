@@ -38,8 +38,13 @@ export interface LessonRunnerDeps {
   lang: () => Lang;
   now: () => number;
   notify: () => void;
+  /** 模型路由：lesson_analyze 要求的档位现在能用了吗（能用时把降级跑出来的结果放回队列重跑）。没有就不重跑。 */
+  upgradeReady?: () => boolean;
   log?: (msg: string, e?: unknown) => void;
 }
+
+/** 看一次有没有该升级重跑的最多这么频繁（pump 很频繁）。 */
+export const UPGRADE_CHECK_MS = 60_000;
 
 /** GitHub 的搜索索引有延迟，刚合并的 PR 可能晚点才搜得到：从游标往前 1 小时搜。重复的 PR 入队时会被忽略，已分析过的不会再分析。 */
 const CURSOR_OVERLAP_MS = 60 * 60_000;
@@ -65,6 +70,13 @@ interface Attempt {
   ctx: Pick<RunEnd, "prTitle" | "prUrl" | "material">;
 }
 
+/** 走了路由的运行：要求的档位、实际模型、降级前的模型。 */
+function routeFields(r: HeadlessExecResult): Partial<RunEnd> {
+  const route = r.route;
+  if (route.requestedTier === null) return {};
+  return { requestedTier: route.requestedTier, actualModel: route.actualModel, fallbackFrom: route.fallbackFrom };
+}
+
 /** claude 结果里的花费、模型、token（输入含缓存读写）和时长。 */
 function claudeFields(r: ClaudeResult | null): Partial<RunEnd> {
   if (!r) return {};
@@ -86,8 +98,29 @@ export class LessonRunner {
   private dailyRunning = false;
   /** start() 之前不取队列：resetRunning 之前取走的行会被它改回 queued，造成重复分析。 */
   private started = false;
+  private upgradeCheckedAt = -Infinity;
 
   constructor(private readonly d: LessonRunnerDeps) {}
+
+  /** 降级跑出来的结果：要求的档位恢复后放回队列重跑（最多每 UPGRADE_CHECK_MS 看一次）。返回放回了几个。 */
+  requeueUpgrades(force = false): number {
+    const now = this.d.now();
+    if (!this.d.upgradeReady || (!force && now - this.upgradeCheckedAt < UPGRADE_CHECK_MS)) return 0;
+    this.upgradeCheckedAt = now;
+    try {
+      if (this.d.repo.upgradePendingCount() === 0 || !this.d.upgradeReady()) return 0;
+      const n = this.d.repo.requeueUpgrades(now);
+      if (n > 0) {
+        this.d.log?.(`lessons: re-running ${n} analyses that ran on a lower tier`);
+        this.d.notify();
+        this.pump();
+      }
+      return n;
+    } catch (e) {
+      this.d.log?.("lessons: requeueing upgrades failed", e);
+      return 0;
+    }
+  }
 
   /** 启动时调一次：上次没跑完的运行记为 aborted，running 的回到 queued，清理旧运行，然后开跑；可用状态一变就再取。 */
   start(): void {
@@ -231,6 +264,7 @@ export class LessonRunner {
   /** 暂停时一个都不取；正在跑的照常跑完。 */
   private pump(): void {
     if (!this.started) return;
+    this.requeueUpgrades();
     while (this.active.size < LESSON_CONCURRENCY) {
       if (this.d.headless.signal?.aborted) return;
       const now = this.d.now();
@@ -295,7 +329,7 @@ export class LessonRunner {
   }
 
   private settleFailure(a: Attempt, r: HeadlessFailed): void {
-    const detail: Partial<RunEnd> = { message: r.message, stderrTail: r.stderr || undefined, rawOutput: r.rawText ?? undefined, ...claudeFields(r.result) };
+    const detail: Partial<RunEnd> = { message: r.message, stderrTail: r.stderr || undefined, rawOutput: r.rawText ?? undefined, ...claudeFields(r.result), ...routeFields(r) };
     if (r.reason === "rate_limited" || r.reason === "model_unavailable") {
       const kind: LimitKind = r.reason === "model_unavailable" ? "model_unavailable" : (r.limit?.kind ?? "rate_limit");
       this.ensurePaused(r, kind);
@@ -404,7 +438,7 @@ export class LessonRunner {
       this.settleFailure(a, r);
       return;
     }
-    const output: Partial<RunEnd> = { rawOutput: r.rawText, ...claudeFields(r.result) };
+    const output: Partial<RunEnd> = { rawOutput: r.rawText, ...claudeFields(r.result), ...routeFields(r) };
     const v = validate(AnalysisSchema, r.value);
     if (!v.ok) {
       this.d.log?.(`lessons: bad output for ${item.slug}#${item.prNumber}: ${v.errors}`);
@@ -416,6 +450,8 @@ export class LessonRunner {
       for (const i of items) if (i.url) allowed.add(i.url);
       const applied = applyAnalysis(repo, item.slug, item.prNumber, v.value, this.d.now(), { allowed, prUrl: pr.url }, a.runId);
       this.settle(a, { ...output, ...applied, status: "done", reason: null, findings: v.value.findings }, { finish: "done" });
+      // 降了档跑的：要求的档位恢复后重跑一次（D 也会读 fallback_from 降低这次结果的权重）。
+      if (r.route.degraded) repo.markUpgrade(item.id);
     });
   }
 }

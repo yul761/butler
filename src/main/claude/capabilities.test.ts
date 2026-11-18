@@ -36,6 +36,15 @@ describe("capabilities", () => {
     expect(REQUIRED_FLAGS.every((f) => flags[f])).toBe(true);
   });
 
+  it("optional flags are detected but never reported missing", async () => {
+    expect(parseFlags(HELP)["--model"]).toBe(false);
+    const withModel = `${HELP}  --model <model>   Model for the current session\n  --effort <level>   Effort level\n`;
+    expect(parseFlags(withModel)).toMatchObject({ "--model": true, "--effort": true });
+    const h = await probeClaude("/bin/claude", {}, async (_f, args) => (args[0] === "--version" ? "2.1.0" : HELP));
+    expect(h.missingFlags).toEqual([]);
+    expect(h.flags["--model"]).toBe(false);
+  });
+
   it("does not match a flag that is only a prefix of another", () => {
     expect(parseFlags("  --resume-later   nope")["--resume"]).toBe(false);
   });

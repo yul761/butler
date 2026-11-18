@@ -8,10 +8,10 @@ export interface SpawnSpec {
   args: string[];
 }
 
-/** session 的模型：别名（opus、sonnet、haiku）或模型路由里登记的名字。 */
+/** session 的模型：别名（opus、sonnet、haiku、fable）或模型路由里登记的名字。 */
 export type SessionModel = string;
 
-const ALIASES: ReadonlySet<string> = new Set(["opus", "sonnet", "haiku"]);
+const ALIASES: ReadonlySet<string> = new Set(["opus", "sonnet", "haiku", "fable"]);
 
 /** 记下的模型：别名，或者 known 认得的名字（模型路由里登记的）；别的值（老数据、手改）当没记。 */
 export function storedModel(s: { model: string | null }, known?: (model: string) => boolean): SessionModel | null {
