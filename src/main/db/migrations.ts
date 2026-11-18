@@ -914,4 +914,100 @@ export const MIGRATIONS: string[] = [
     detail TEXT);
   CREATE INDEX cost_events_subject ON cost_events (subject_kind, subject_id, at);
   `,
+  // 工作流 I（设计补充 2026-11-17-ws-i）：评论闭环和 CI 分类。loop_policies 是三层策略（契约 4.2）；pr_comment_items 每个 (PR 行, 评论) 一行；
+  // ci_triage 每个 (条目, head sha, run) 一行；ci_flaky_events 每次重跑后通过记一行；ci_flaky_list 是 flaky 名单（auto / manual）。
+  `
+  CREATE TABLE loop_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global', 'product', 'repo')),
+    product_id INTEGER,
+    repo_slug TEXT,
+    overrides TEXT NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX loop_policies_layer ON loop_policies (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''));
+  CREATE TABLE pr_comment_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pr_id INTEGER NOT NULL,
+    comment_key TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('inline', 'review', 'issue')),
+    thread_id TEXT,
+    database_id INTEGER,
+    author TEXT NOT NULL,
+    who TEXT NOT NULL,
+    path TEXT,
+    line INTEGER,
+    body TEXT NOT NULL,
+    url TEXT,
+    commented_at INTEGER,
+    seen_sha TEXT,
+    first_seen INTEGER NOT NULL,
+    category TEXT CHECK (category IN ('fix', 'question', 'ignore', 'human')),
+    source TEXT CHECK (source IN ('rule', 'model', 'user')),
+    reason TEXT,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'review', 'queued', 'delivered', 'addressed', 'ignored', 'dismissed', 'closed')),
+    queued_at INTEGER,
+    delivered_at INTEGER,
+    delivered_sha TEXT,
+    delivered_session TEXT,
+    unchanged INTEGER NOT NULL DEFAULT 0,
+    checked_sha TEXT,
+    addressed_at INTEGER,
+    addressed_sha TEXT,
+    verified TEXT,
+    replied_at INTEGER,
+    resolved_at INTEGER,
+    reply_error TEXT,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (pr_id, comment_key)
+  );
+  CREATE INDEX idx_pr_comment_items_state ON pr_comment_items (state);
+  CREATE TABLE ci_triage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_kind TEXT NOT NULL CHECK (item_kind IN ('pr', 'branch')),
+    item_id INTEGER NOT NULL,
+    repo_slug TEXT,
+    ticket_key TEXT,
+    head_sha TEXT NOT NULL,
+    run_id INTEGER NOT NULL,
+    checks TEXT NOT NULL DEFAULT '[]',
+    tests TEXT NOT NULL DEFAULT '[]',
+    attempt INTEGER NOT NULL DEFAULT 1,
+    category TEXT CHECK (category IN ('env', 'flaky', 'code')),
+    source TEXT,
+    reason TEXT,
+    signature TEXT,
+    prev_signature TEXT,
+    reruns INTEGER NOT NULL DEFAULT 0,
+    rerun_attempt INTEGER,
+    state TEXT NOT NULL CHECK (state IN ('classifying', 'classified', 'rerunning', 'delivered', 'passed', 'abandoned')),
+    outcome TEXT,
+    first_failed_at INTEGER NOT NULL,
+    rerun_at INTEGER,
+    passed_at INTEGER,
+    delivered_at INTEGER,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (item_kind, item_id, head_sha, run_id)
+  );
+  CREATE INDEX idx_ci_triage_item ON ci_triage (item_kind, item_id, id);
+  CREATE TABLE ci_flaky_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_slug TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('check', 'test')),
+    name TEXT NOT NULL,
+    triage_id INTEGER,
+    at INTEGER NOT NULL,
+    wasted_ms INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX idx_ci_flaky_events_name ON ci_flaky_events (repo_slug, kind, name, at);
+  CREATE TABLE ci_flaky_list (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_slug TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('check', 'test')),
+    name TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('auto', 'manual')),
+    added_at INTEGER NOT NULL,
+    UNIQUE (repo_slug, kind, name)
+  );
+  `,
 ];
