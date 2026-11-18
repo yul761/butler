@@ -189,7 +189,7 @@ session 的作用域按它所在 ticket 的仓库解析；一个 ticket 有多�
 8. 「现有通知」= 「现在」页提醒、托盘提示的第二行、session 行上的条。应用里没有系统通知；要发系统 / 手机推送得走 B 的 `externalPushNotification` 开关（契约 4.8），这次不加。L 的动作全在本机（终端里的 Esc 和「接着做」、本机提醒），没有对外动作，不接 4.8 的开关。
 9. ticket 的标题按 `KEY 标题` 显示；session 用它的标题，没有标题时用 id。
 10. H 的 `recordEvent`：`CostBreaker` 的 `onEvent` 现在在 index.ts 里是空的，H 合并后接上。
-11. W 的 #40 还没合：`admitSession` 暂时一律放行；#40 合并后在 rebase 时接上 `ctx.admitSession`，并加「拒绝准入就延后」的测试。
+11. W 的 #40 已合：`index.ts` 把队列的 `admission` 接到 `MemoryAdmission`（它在后台队列 `start()` 之前建好），`ctx.admitSession` 不放行时任务延后、原因 `memory`；`queue.test.ts` 用真的 `MemoryAdmission` 测了这一条。
 12. session 行上的条：先看 session 自己的熔断，再看它的 ticket 的（ticket 只是 `warned` 时不在每一行上提醒，避免一个 ticket 的提醒铺满所有行）。
 13. 花费上限这一层的输入：空 = 继承，`none` = 这一层明确不限（`null`），和准入策略的「空 = 继承」一致，只多一个 `none`。
 14. 花费上限暂不进导出文件（契约 4.3 没把 L 列为某个部分的提供方）；以后要导出就注册一个 `cost` 部分，读写 `cost_caps`。

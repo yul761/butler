@@ -492,6 +492,8 @@ async function bootstrap(): Promise<void> {
   let procs: ProcServices | null = null;
   // 休眠（WS-M B、C）：要等 procs 和下面的一堆服务建好才装，在那之前没有休眠这回事。
   let hibernator: Hibernator | null = null;
+  // 内存准入（工作流 W）：要等 procs 建好才装（实测要 M 的内存采样）；后台队列在那之后才 start，用的时候一定装好了。
+  let memoryAdmission: MemoryAdmission | null = null;
   /** 休眠着的 head（Butler 结束了它的终端，等事情来了再 --resume）。 */
   const hibernatedHeads = (): Session[] => sessions.listHibernated();
   /** 这条链休眠着（正在休眠、正在唤醒的也算）。 */
@@ -666,7 +668,7 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   bgScheduler.subscribe(() => notify());
-  // 通用后台队列：D、F、G、N 的任务在这里登记处理函数。W 的内存准入（#40）合并前 admitSession 一律放行。
+  // 通用后台队列：D、F、G、N 的任务在这里登记处理函数。要开新 session 的任务先过 W 的内存准入（ctx.admitSession），不放行就延后。
   const bgRepo = new BackgroundRepo(db);
   try {
     const n = bgRepo.pruneFinished(Date.now() - BG_FINISHED_RETENTION_MS);
@@ -674,7 +676,7 @@ async function bootstrap(): Promise<void> {
   } catch (e) {
     logger("background: pruning finished jobs failed", e);
   }
-  const bgQueue = new BackgroundQueue({ repo: bgRepo, scheduler: bgScheduler, now: Date.now, isHibernated, onChange: () => notify(), log: logger });
+  const bgQueue = new BackgroundQueue({ repo: bgRepo, scheduler: bgScheduler, now: Date.now, isHibernated, admission: () => memoryAdmission, onChange: () => notify(), log: logger });
   /** 复盘的闸门：没配置路由时就是账号级的可用状态；配置了只在 lesson_analyze 哪个模型都用不了时停。 */
   const lessonsGate = new RoutedLessonsGate({ availability, routing, now: Date.now });
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
@@ -1919,7 +1921,7 @@ async function bootstrap(): Promise<void> {
   const memoryReadDeps = defaultReadDeps((file, args) => execText(file, args, { timeoutMs: 2_000 }), app.isPackaged);
   // 启动时记一次读数（附录第 7 节）：看得出这台机器上 vm_stat 算出来的可用内存合不合理。
   void memorySnapshotLine(memoryReadDeps).then((line) => logger(`memory at startup: ${line}`), (e: unknown) => logger("memory at startup: reading failed", e));
-  const admission = new MemoryAdmission({
+  const admission = memoryAdmission = new MemoryAdmission({
     read: () => readAvailableMemory(memoryReadDeps),
     settings: () => sessionAdmission(settings),
     measuredSessionsKb: () => measuredOpenSessionsKb(

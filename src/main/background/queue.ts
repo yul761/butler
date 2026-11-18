@@ -40,7 +40,7 @@ export interface BackgroundQueueDeps {
   now: () => number;
   /** M 的休眠：这个 session 休眠着吗。 */
   isHibernated: (sessionId: string) => boolean;
-  /** W 的内存准入；没接（#40 合并前）一律放行。 */
+  /** W 的内存准入（index.ts 接的是 MemoryAdmission）；没接或返回 null（单测）时一律放行。 */
   admission?: () => SessionAdmission | null;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (h: unknown) => void;

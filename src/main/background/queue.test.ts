@@ -6,6 +6,7 @@ import { readBgSettings } from "./bg-settings";
 import { fakeIdleSignal } from "./idle";
 import { BackgroundQueue, type BgHandler, type SessionAdmission } from "./queue";
 import { BackgroundScheduler } from "./scheduler";
+import { MemoryAdmission } from "../sessions/memory-admission";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -223,6 +224,41 @@ describe("background queue", () => {
       await flush();
       expect(g.pending()).toBe(0);
       expect(u.repo.get(id)).toMatchObject({ state: "failed", error: "could not open the terminal" });
+    });
+
+    it("defers on W's real MemoryAdmission when memory is short, and runs once there is room", async () => {
+      let availableMb = 1024;
+      const memory = new MemoryAdmission({
+        read: async () => ({ totalKb: 16 * 1024 * 1024, availableKb: availableMb * 1024, source: "fixed", pressure: "normal" }),
+        settings: () => ({ reserveMb: 2048, sessionMb: 1024, maxRunning: 0 }),
+        running: () => 0,
+        now: () => 1_000_000,
+        log: () => undefined,
+      });
+      const t = setup({ idleSeconds: 3600, admission: memory });
+      const opened: string[] = [];
+      t.queue.register("intake", async (ctx) => {
+        const a = await ctx.admitSession("intake T-1");
+        if (!a.ok) return { defer: true, reason: a.reason };
+        a.opened();
+        opened.push("T-1");
+        return { done: true };
+      });
+      t.queue.start();
+      const refused = t.queue.enqueue("intake", {});
+      await flush();
+      await flush();
+      expect(opened).toEqual([]);
+      expect(t.repo.get(refused)).toMatchObject({ state: "queued", error: "memory" });
+      expect((await memory.capacity()).pending).toBe(0);
+      // 内存够了：新排的一条放行、开成，记成刚开的（之后 PENDING_MS 内按预估扣掉）
+      availableMb = 8192;
+      const ok = t.queue.enqueue("intake", {});
+      await flush();
+      await flush();
+      expect(opened).toEqual(["T-1"]);
+      expect(t.repo.get(ok)?.state).toBe("done");
+      expect((await memory.capacity()).pending).toBe(1);
     });
 
     it("lets everything through before W is wired", async () => {
