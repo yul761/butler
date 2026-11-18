@@ -237,6 +237,18 @@ export interface LegacyScanView {
   error: string | null;
 }
 
+/** 给 F（回测）的最新一次存量扫描。 */
+export interface LegacyLatest {
+  scanId: number;
+  count: number;
+  at: number;
+  status: LegacyStatus;
+}
+
+export type LegacyScanResult = { ok: true; scan: LegacyScanView } | { ok: false; message: string };
+
+export type LegacyAction = { kind: "run"; checkId: number; slug: string } | { kind: "cancel"; scanId: number };
+
 // ---- 导出成 lint ----
 
 export type ExportTarget = "pre_commit" | "eslint" | "lint_staged" | "husky" | "script";

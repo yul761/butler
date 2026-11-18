@@ -29,6 +29,8 @@ export const inProcessRunner: JobRunner = (job, onMessage) => {
 export function workerRunner(create: (job: Job) => Worker, watchdogMs = WATCHDOG_MS): JobRunner {
   return (job, onMessage) => {
     const w = create(job);
+    // 整个仓库跑一次命令时中间没有消息：看门狗至少等到命令自己的超时之后。
+    const limit = job.kind === "legacy" && job.check.type === "run_command" ? Math.max(watchdogMs, job.timeoutMs + 5_000) : watchdogMs;
     let settled = false;
     let lastFile = "";
     let finish!: (e: JobEnd) => void;
@@ -43,7 +45,7 @@ export function workerRunner(create: (job: Job) => Worker, watchdogMs = WATCHDOG
     };
     const arm = () => {
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => end({ kind: "stalled", lastFile }), watchdogMs);
+      timer = setTimeout(() => end({ kind: "stalled", lastFile }), limit);
       timer.unref?.();
     };
     arm();

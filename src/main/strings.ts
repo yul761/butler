@@ -452,6 +452,15 @@ const ZH = {
     },
   },
   /** 仓库现状（工作流 E2）：模型补全的提示词、session guide 里的仓库档案、导出成 lint 的提交说明和拒绝理由。 */
+  legacy: {
+    noCheck: "找不到这条检查，或者它不适用于这个仓库。",
+    notCloned: "这个仓库没有本地副本，没法扫。",
+    running: "这条检查在这个仓库正在扫。",
+    notRunning: "这次扫描已经结束了。",
+    stalled: (file: string) => (file ? `卡在 ${file} 超过 20 秒没有进展，已经停下。` : "超过 20 秒没有进展，已经停下。"),
+    interrupted: "Butler 退出时这次扫描还没跑完。",
+    timeout: "命令超时了。",
+  },
   baselines: {
     adoptNone: "没有选中可以建的检查。",
     adoptConfirm: (names: string[]) => `这几条是推断出来的（低置信），要先逐条确认：${names.join("、")}`,
@@ -881,6 +890,15 @@ const EN: MainStrings = {
       covered: (by: string) => `already covered by ${by}`,
       duplicate: (keeper: number) => `the same thing as #${keeper}`,
     },
+  },
+  legacy: {
+    noCheck: "That check doesn't exist or doesn't apply to this repo.",
+    notCloned: "This repo has no local copy to scan.",
+    running: "This check is already being scanned in this repo.",
+    notRunning: "That scan has already finished.",
+    stalled: (file: string) => (file ? `Stopped: no progress for 20 seconds on ${file}.` : "Stopped: no progress for 20 seconds."),
+    interrupted: "Butler quit before this scan finished.",
+    timeout: "The command timed out.",
   },
   baselines: {
     adoptNone: "None of the selected checks can be created.",

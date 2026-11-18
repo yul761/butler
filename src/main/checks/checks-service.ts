@@ -90,6 +90,12 @@ export class ChecksService {
     return this.resolved(scope).filter((x) => x.row.enabled).map((x) => this.localize(x.row));
   }
 
+  /** 某个仓库看到的这条检查（三层合并后，含停用的），存量扫描和导出用（工作流 E2）。 */
+  resolvedFor(slug: string, key: string): (ResolvedCheck & { enabled: boolean; origin: ScopeRef }) | null {
+    const x = this.resolved({ kind: "repo", slug }).find((r) => r.key === key);
+    return x ? { ...this.localize(x.row), enabled: x.row.enabled, origin: x.origin } : null;
+  }
+
   private localize(r: CheckRow): ResolvedCheck {
     const s = M().checks;
     return {
