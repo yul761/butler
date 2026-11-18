@@ -64,8 +64,8 @@ export interface StackServiceDeps {
   trunkBusy(repoPath: string, trunk: string, ignore: string[]): boolean;
   /** 工作流 I：这个 PR 有送进 session、还没核对的评论。 */
   awaitingCheck?(prUrl: string): boolean;
-  /** 把一段话送进这个 ticket 的 session；true = 递进去了。 */
-  deliver(ticketKey: string, text: string): Promise<boolean>;
+  /** 把一段话送进这一层的 session（ticket 的这个仓库、这个分支）；true = 递进去了。 */
+  deliver(to: { ticketKey: string; ticketRepoId: number | null; branch: string }, text: string): Promise<boolean>;
   /** 工作流 G 的 review 简报。 */
   briefProvider?(layer: BriefLayer): { markdown: string; posted(prUrl: string): void } | null;
   /** 度量（契约 4.7）。 */
@@ -465,7 +465,7 @@ export class StackService {
     const text = T().conflict({ branch: c.branch, files: c.files, onto: c.onto, upstream: c.upstream, above });
     let ok = false;
     try {
-      ok = await this.d.deliver(layer.ticketKey, text);
+      ok = await this.d.deliver({ ticketKey: layer.ticketKey, ticketRepoId: layer.ticketRepoId, branch: layer.branch }, text);
     } catch (e) {
       this.d.log(`stacks: delivering the conflict on ${c.branch} failed`, e);
     }
@@ -771,6 +771,13 @@ export class StackService {
       if (!layers.some((l) => l.ticketKey === ticketKey && l.state !== "merged")) continue;
       const p = this.policyOf(s);
       if (!p.autoRebase) continue;
+      // 上次没递进去的冲突（session 当时在忙）趁现在递。
+      const lr = this.d.repo.lastRun(s.id);
+      const c = lr?.outcome === "conflict" ? lr.detail.conflict : undefined;
+      if (lr && c && !lr.detail.delivered && p.conflictToSession && layers.some((l) => l.branch === c.branch && l.ticketKey === ticketKey)) {
+        await this.deliverConflict(s, lr.id);
+        continue;
+      }
       if ((await this.dueTrigger(s, p, false)) === "layer_commits") await this.run(s, "layer_commits");
     }
   }

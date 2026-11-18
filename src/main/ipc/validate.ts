@@ -15,6 +15,7 @@ import { parsePolicyOverrides, type AdmissionPolicyOverrides, type PolicyScope }
 import type { BaselinesAction, CheckExportAction, LegacyAction } from "../../shared/baselines";
 import { parseLoopOverrides, type LoopPolicyOverrides, type LoopScope } from "../../shared/loop-policy";
 import { COMMENT_CATEGORIES, type CommentAction, type CommentCategory, type FlakyAction } from "../../shared/loop";
+import type { StackLayerMode, StacksFilter } from "../../shared/stacks";
 import {
   EXPORT_CONTENTS, type ExportContent, type ExportRequest, type ExportScopeArg, type ImportApplyRequest, type Resolution, type StarterTarget,
 } from "../../shared/config-io";
@@ -840,4 +841,33 @@ export function backgroundActionArg(v: unknown): BackgroundAction {
   const o = objArg(v, "background action", ["op", "kind"]);
   if ((o.op === "pauseKind" || o.op === "resumeKind") && isBgKind(o.kind)) return { op: o.op, kind: o.kind };
   throw new Error("invalid background action");
+}
+
+// ---- 栈（工作流 K）
+
+/** 进度页的范围：epic / feature 都可以是 null。 */
+export function stacksFilterArg(v: unknown): StacksFilter {
+  if (v === undefined || v === null) return { epicId: null, featureId: null };
+  const o = objArg(v, "stacks filter", ["epicId", "featureId"]);
+  return {
+    epicId: o.epicId === undefined || o.epicId === null ? null : posInt(o.epicId, "stacks filter"),
+    featureId: o.featureId === undefined || o.featureId === null ? null : posInt(o.featureId, "stacks filter"),
+  };
+}
+
+export function stackIdArg(v: unknown): number {
+  return posInt(v, "stack id");
+}
+
+export function stackLayerModeArg(v: unknown): { layerId: number; mode: StackLayerMode } {
+  const o = objArg(v, "stack layer mode", ["layerId", "mode"]);
+  if (o.mode !== "draft" && o.mode !== "branch") throw new Error("invalid stack layer mode");
+  return { layerId: posInt(o.layerId, "stack layer"), mode: o.mode };
+}
+
+/** 栈策略改一层：值在服务里按键校验（不合法的返回 ok:false 和是哪个键）。 */
+export function stackPolicySetArg(v: unknown): { scope: PolicyScope; overrides: Record<string, unknown> } {
+  const o = objArg(v, "stack policy change", ["scope", "overrides"]);
+  if (typeof o.overrides !== "object" || o.overrides === null || Array.isArray(o.overrides)) throw new Error("invalid stack policy overrides");
+  return { scope: policyScopeArg(o.scope), overrides: o.overrides as Record<string, unknown> };
 }

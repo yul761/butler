@@ -123,7 +123,7 @@ function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind) => bool
     sessionBusy: () => false,
     gateHeld: () => false,
     trunkBusy: () => false,
-    deliver: vi.fn(async (ticketKey: string, text: string) => (delivered.push({ ticketKey, text }), true)),
+    deliver: vi.fn(async (to: { ticketKey: string }, text: string) => (delivered.push({ ticketKey: to.ticketKey, text }), true)),
     briefProvider: (l) => ({ markdown: `<!-- butler:brief -->brief for ${l.branch}<!-- /butler:brief -->`, posted: (url) => posted.push(url) }),
     forceMode: o.mode,
   };

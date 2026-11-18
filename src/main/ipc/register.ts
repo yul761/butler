@@ -25,6 +25,7 @@ import type { LoopPolicyOverrides, LoopPolicyView, LoopScope } from "../../share
 import type { CommentAction, CommentItemView, FlakyAction, FlakyEntry, LoopEffect, PrCommentsView } from "../../shared/loop";
 import type { ConfigIoStatus, ExportResult, ImportApplyResult, ImportPreviewResult } from "../../shared/config-io";
 import type { MemoryHistoryPoint } from "../../shared/mem-usage";
+import type { StackActionResult, StackLayerMode, StackPolicyLayer, StackPolicySetResult, StackPolicyView, StacksFilter, StacksView } from "../../shared/stacks";
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc";
 import {
@@ -76,7 +77,8 @@ import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
   addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
-  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg } from "./validate";
+  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
+  stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -125,6 +127,17 @@ export interface IpcDeps {
   };
   /** 打断与通知（工作流 J）。 */
   interrupts: Pick<InterruptsFacade, "state" | "act" | "profiles" | "scan">;
+  /** 栈式 PR（工作流 K）：进度页的栈、手动操作和三层策略。 */
+  stacks: {
+    view(filter: StacksFilter): Promise<StacksView>;
+    rebaseNow(stackId: number): Promise<StackActionResult>;
+    setLayerMode(layerId: number, mode: StackLayerMode): Promise<StackActionResult>;
+    restore(stackId: number): Promise<StackActionResult>;
+    remove(stackId: number): StackActionResult;
+    policyView(scope: PolicyScope): StackPolicyView;
+    policySet(scope: PolicyScope, overrides: Record<string, unknown>): StackPolicySetResult;
+    policyLayers(): StackPolicyLayer[];
+  };
   /** 导入导出（契约 4.3）。 */
   configIo: ConfigIoFacade;
   /** 确定性检查（契约 4.5）：检查页的读、写和从规矩生成草稿。 */
@@ -510,6 +523,36 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
     return r;
   });
+  handle(IPC.stacksList, (raw: unknown): Promise<StacksView> => d.stacks.view(stacksFilterArg(raw)));
+  handle(IPC.stacksRebase, async (raw: unknown): Promise<StackActionResult> => {
+    const r = await d.stacks.rebaseNow(stackIdArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.stacksLayerMode, async (raw: unknown): Promise<StackActionResult> => {
+    const { layerId, mode } = stackLayerModeArg(raw);
+    const r = await d.stacks.setLayerMode(layerId, mode);
+    d.notify();
+    return r;
+  });
+  handle(IPC.stacksRestore, async (raw: unknown): Promise<StackActionResult> => {
+    const r = await d.stacks.restore(stackIdArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.stacksRemove, (raw: unknown): StackActionResult => {
+    const r = d.stacks.remove(stackIdArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.stacksPolicyGet, (raw: unknown): StackPolicyView => d.stacks.policyView(policyScopeArg(raw)));
+  handle(IPC.stacksPolicySet, (raw: unknown): StackPolicySetResult => {
+    const { scope, overrides } = stackPolicySetArg(raw);
+    const r = d.stacks.policySet(scope, overrides);
+    if (r.ok) d.notify();
+    return r;
+  });
+  handle(IPC.stacksPolicyLayers, (): StackPolicyLayer[] => d.stacks.policyLayers());
   handle(IPC.loopFlakyList, (): FlakyEntry[] => d.loop.flaky());
   handle(IPC.loopFlakyAct, (raw: unknown): boolean => {
     const r = d.loop.flakyAct(flakyActionArg(raw));
