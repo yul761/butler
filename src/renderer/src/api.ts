@@ -8,10 +8,17 @@ import type { PrStagesScope, PrStagesTicket } from "../../shared/pr-stages";
 import type { AvailabilityAction, AvailabilityView } from "../../shared/availability";
 import type { BatchDetail, BatchView } from "../../shared/batches";
 import type { AdmissionPolicyOverrides, AdmissionPolicyView, PolicyScope } from "../../shared/admission-policy";
+import type { LoopPolicyOverrides, LoopPolicyView, LoopScope } from "../../shared/loop-policy";
+import type { CommentAction, CommentItemView, FlakyAction, FlakyEntry, LoopEffect, PrCommentsView } from "../../shared/loop";
 import type { ConfigIoStatus, ExportRequest, ExportResult, ImportApplyRequest, ImportApplyResult, ImportPreviewResult, StarterTarget } from "../../shared/config-io";
+import type {
+  AdmissionPageState, AdmissionScope, CalibrationAction, CalibrationActResult, CalibrationSample, CalibrationStatsView, RegroupResult, WizardAction, WizardActResult, WizardEstimate,
+} from "../../shared/lesson-admission";
 import type { LessonAction, LessonActResult, LessonQueueRowView, LessonRunDetail, LessonsState } from "../../shared/lessons";
 import type { MemoryView, WhyEntry } from "../../shared/memory";
 import type { RoutingAction, RoutingView, SessionLimitView, SwitchModelResult } from "../../shared/model-routing";
+import type { BackgroundAction, BackgroundStatusView } from "../../shared/background";
+import type { CostBreakerView, CostPolicyOverrides, CostResumeResult, CostSetResult, CostSubjectKind, CostView } from "../../shared/cost";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { ExternalActionEntry } from "../../shared/external";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
@@ -124,8 +131,23 @@ export const api = {
   lessonsPending: () => call<number>(IPC.lessonsPending),
   lessonsBatches: (opts?: { limit?: number; beforeId?: number }) => call<BatchView[]>(IPC.lessonsBatches, opts ?? {}),
   lessonsBatch: (id: number) => call<BatchDetail | null>(IPC.lessonsBatch, id),
+  admissionState: () => call<AdmissionPageState>(IPC.admissionState),
+  wizardEstimate: (scope: AdmissionScope) => call<WizardEstimate>(IPC.wizardEstimate, scope),
+  wizardAct: (a: WizardAction) => call<WizardActResult>(IPC.wizardAct, a),
+  calibrationSample: (scope: AdmissionScope) => call<CalibrationSample>(IPC.calibrationSample, scope),
+  calibrationStats: (since: number | null) => call<CalibrationStatsView>(IPC.calibrationStats, since),
+  calibrationAct: (a: CalibrationAction) => call<CalibrationActResult>(IPC.calibrationAct, a),
+  principlesRegroup: () => call<RegroupResult>(IPC.principlesRegroup),
   policiesGet: (scope: PolicyScope) => call<AdmissionPolicyView>(IPC.policiesGet, scope),
   policiesSet: (scope: PolicyScope, overrides: AdmissionPolicyOverrides) => call<{ batchId: number | null; version: number }>(IPC.policiesSet, { scope, overrides }),
+  loopPolicyGet: (scope: LoopScope) => call<LoopPolicyView>(IPC.loopPolicyGet, scope),
+  loopPolicySet: (scope: LoopScope, overrides: LoopPolicyOverrides) => call<void>(IPC.loopPolicySet, { scope, overrides }),
+  loopComments: (ticketKey: string) => call<PrCommentsView[]>(IPC.loopCommentsList, ticketKey),
+  loopCommentsAct: (a: CommentAction) => call<CommentItemView | null>(IPC.loopCommentsAct, a),
+  loopFlaky: () => call<FlakyEntry[]>(IPC.loopFlakyList),
+  loopFlakyAct: (a: FlakyAction) => call<boolean>(IPC.loopFlakyAct, a),
+  /** 给「效果」页（工作流 H）：最近 days 天（1–365，默认 30）评论闭环和 CI 分类做了什么。 */
+  loopEffect: (days?: number) => call<LoopEffect>(IPC.loopEffect, days ?? 30),
   checksView: (scope: CheckScope) => call<ChecksView>(IPC.checksView, scope),
   checksHits: (key: string) => call<CheckHitView[]>(IPC.checksHits, key),
   checksAct: (a: ChecksAction) => call<ChecksActResult>(IPC.checksAct, a),
@@ -151,6 +173,14 @@ export const api = {
   /** 模型路由（3.0）：act 返回错误文字，成功为 null。 */
   routingView: () => call<RoutingView>(IPC.routingView),
   routingAct: (a: RoutingAction) => call<string | null>(IPC.routingAct, a),
+  /** 花费上限和成本熔断（工作流 L）。 */
+  costView: (scope: PolicyScope) => call<CostView>(IPC.costView, scope),
+  costSet: (scope: PolicyScope, overrides: CostPolicyOverrides) => call<CostSetResult>(IPC.costSet, { scope, overrides }),
+  costResume: (subjectKind: CostSubjectKind, subjectId: string) => call<CostResumeResult>(IPC.costResume, { subjectKind, subjectId }),
+  costBreakers: () => call<CostBreakerView[]>(IPC.costBreakers),
+  /** 后台调度（工作流 L）。 */
+  backgroundStatus: () => call<BackgroundStatusView>(IPC.backgroundStatus),
+  backgroundAct: (a: BackgroundAction) => call<void>(IPC.backgroundAct, a),
   switchModel: (sessionId: string, model?: string) => call<SwitchModelResult>(IPC.sessionsSwitchModel, sessionId, model ?? null),
   dismissSessionLimit: (sessionId: string) => call<void>(IPC.sessionsDismissLimit, sessionId),
   sessionLimits: () => call<SessionLimitView[]>(IPC.sessionsLimits),

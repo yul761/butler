@@ -1,6 +1,8 @@
 import type { LimitKind } from "../../shared/availability";
 import type { Lang } from "../../shared/i18n";
-import type { LessonRunningItem } from "../../shared/lessons";
+import type { BgKind } from "../../shared/background";
+import type { LessonOrigin, LessonRunningItem } from "../../shared/lessons";
+import type { BackgroundScheduler } from "../background/scheduler";
 import type { ClaudeAvailability } from "../claude/availability";
 import { headlessArgs, type ClaudeResult } from "../claude/headless";
 import type { JobsRepo } from "../db/jobs-repo";
@@ -38,6 +40,11 @@ export interface LessonRunnerDeps {
   lang: () => Lang;
   now: () => number;
   notify: () => void;
+  /**
+   * 后台调度（工作流 L）：backfill 来源的是 lesson_backfill，其余是 lesson_analyze。闸门不放行的来源不取；
+   * 要让路时（可打断、bgYield = interrupt）正在跑的停下、放回队列，不算失败。没接时和 2.1.0 一样随时跑。
+   */
+  scheduler?: Pick<BackgroundScheduler, "gate" | "subscribe" | "onYield" | "registerSource">;
   /** 模型路由：lesson_analyze 要求的档位现在能用了吗（能用时把降级跑出来的结果放回队列重跑）。没有就不重跑。 */
   upgradeReady?: () => boolean;
   /** 一次分析加了或命中了规矩（工作流 D 的自动准入接在这里）。在事务之外调用。 */
@@ -60,7 +67,10 @@ const maxMergedAt = (prs: MergedPr[]): string | null => prs.reduce<string | null
 /** 运行记录里除了结束时间以外的内容。 */
 type RunEnd = Omit<LessonRunFinish, "finishedAt">;
 /** 队列行怎么收尾：finish 成某个状态，或者回到 queued（linkRun：last_run_id 指向这次运行）。 */
-type QueueEnd = { finish: "done" | "skipped" | "failed"; error?: string; message?: string } | { defer: true; linkRun: boolean };
+type QueueEnd = { finish: "done" | "skipped" | "failed"; error?: string; message?: string } | { defer: true; linkRun: boolean; notBefore?: number };
+
+/** 这一项的 ticket 被成本熔断停了后台：过这么久再试（解除熔断不会马上拿它，最多晚这么久）。 */
+export const LESSON_COST_RETRY_MS = 5 * 60_000;
 type HeadlessFailed = Extract<HeadlessExecResult, { ok: false }>;
 
 /** 一个正在跑的队列项。ctx 随分析一路补上，出异常时也记得住已经拿到的 PR 信息和素材。 */
@@ -69,8 +79,14 @@ interface Attempt {
   runId: number;
   startedAt: number;
   ctl: AbortController;
+  /** 后台调度要它让路（和用户取消分开：让路的放回队列）。 */
+  yieldCtl: AbortController;
   ctx: Pick<RunEnd, "prTitle" | "prUrl" | "material">;
 }
+
+/** 复盘队列项的来源 → 后台任务种类。 */
+export const lessonKindOf = (origin: LessonOrigin): BgKind => (origin === "backfill" ? "lesson_backfill" : "lesson_analyze");
+const ORIGINS: readonly LessonOrigin[] = ["merged", "daily", "backfill"];
 
 /** 走了路由的运行：要求的档位、实际模型、降级前的模型。 */
 function routeFields(r: HeadlessExecResult): Partial<RunEnd> {
@@ -132,6 +148,26 @@ export class LessonRunner {
     this.prune(now);
     this.started = true;
     this.d.availability.subscribe(() => this.pump());
+    const sch = this.d.scheduler;
+    if (sch) {
+      sch.subscribe(() => this.pump());
+      sch.onYield((s) => {
+        if (!("kinds" in s)) return; // 复盘不归哪个 ticket，熔断按 ticket 停的不管它
+        for (const a of this.live.values()) {
+          if (s.kinds.includes(lessonKindOf(a.item.origin)) && !a.yieldCtl.signal.aborted) {
+            this.d.log?.(`lessons: ${a.item.slug}#${a.item.prNumber} yields to interactive work`);
+            a.yieldCtl.abort();
+          }
+        }
+      });
+      sch.registerSource(() => {
+        const c = this.d.repo.queueCountsByOrigin();
+        return {
+          lesson_analyze: { queued: (c.merged?.queued ?? 0) + (c.daily?.queued ?? 0), running: (c.merged?.running ?? 0) + (c.daily?.running ?? 0) },
+          lesson_backfill: { queued: c.backfill?.queued ?? 0, running: c.backfill?.running ?? 0 },
+        };
+      });
+    }
     this.pump();
   }
 
@@ -171,7 +207,15 @@ export class LessonRunner {
   }
 
   /** 页面的「分析历史」。没有 gh、解析不出 slug 时返回原因，不排队。 */
-  async backfill(slug: string): Promise<{ ok: true; enqueued: number } | { ok: false; reason: "no_gh" | "gh_failed" | "unknown_repo" }> {
+  /** 向导开始前的估算：这个仓库合并过的 PR 号（最多 BACKFILL_LIMIT 个），不排队。 */
+  async mergedPrNumbers(slug: string): Promise<number[] | null> {
+    const row = this.d.repo.repo(slug);
+    if (!this.d.gh.available() || !row || !isCloned(row)) return null;
+    const prs = await this.d.gh.mergedPrs(row.localPath, null, BACKFILL_LIMIT, LESSON_GH_TIMEOUT_MS);
+    return prs === null ? null : prs.map((p) => p.number);
+  }
+
+  async backfill(slug: string): Promise<{ ok: true; enqueued: number; prs: number[] } | { ok: false; reason: "no_gh" | "gh_failed" | "unknown_repo" }> {
     if (!this.d.gh.available()) return { ok: false, reason: "no_gh" };
     const row = this.d.repo.repo(slug);
     // 本地路径为空 = 导入来的、这台机器上没有克隆：没有仓库就没法在里面跑 gh（cwd 为空会落到 Butler 自己的目录）。
@@ -187,7 +231,7 @@ export class LessonRunner {
       return n;
     });
     this.pump();
-    return { ok: true, enqueued };
+    return { ok: true, enqueued, prs: prs.map((p) => p.number) };
   }
 
   /**
@@ -271,9 +315,12 @@ export class LessonRunner {
       if (this.d.headless.signal?.aborted) return;
       const now = this.d.now();
       if (this.d.availability.lessonsGate(now).paused) return;
+      const sch = this.d.scheduler;
+      const origins = sch ? ORIGINS.filter((o) => sch.gate(lessonKindOf(o)).run) : undefined;
+      if (origins && origins.length === 0) return;
       let item: QueueItem | null;
       try {
-        item = this.d.repo.take(now);
+        item = this.d.repo.take(now, origins);
       } catch (e) {
         this.d.log?.("lessons: taking the next queue item failed", e);
         return;
@@ -293,7 +340,7 @@ export class LessonRunner {
     try {
       const startedAt = this.d.now();
       const runId = this.d.runs.start({ queueId: item.id, slug: item.slug, prNumber: item.prNumber, origin: item.origin, startedAt });
-      a = { item, runId, startedAt, ctl: new AbortController(), ctx: {} };
+      a = { item, runId, startedAt, ctl: new AbortController(), yieldCtl: new AbortController(), ctx: {} };
       this.live.set(item.id, a);
       await this.analyze(a);
     } catch (e) {
@@ -321,9 +368,14 @@ export class LessonRunner {
     const now = this.d.now();
     repo.transaction(() => {
       this.d.runs.finish(a.runId, { ...a.ctx, ...run, durationMs: run.durationMs ?? now - a.startedAt, finishedAt: now });
-      if ("defer" in q) repo.defer(a.item.id, now, q.linkRun ? a.runId : undefined);
+      if ("defer" in q) repo.defer(a.item.id, q.notBefore ?? now, q.linkRun ? a.runId : undefined);
       else repo.finish(a.item.id, q.finish, now, q.error, { message: q.message ?? null, runId: a.runId });
     });
+  }
+
+  /** 让路：这次记 aborted（yielded），队列项马上回到 queued（闸门再开时接着分析这一项），不算失败。 */
+  private settleYielded(a: Attempt, extra: Partial<RunEnd> = {}): void {
+    this.settle(a, { ...extra, status: "aborted", reason: "yielded" }, { defer: true, linkRun: false });
   }
 
   private settleCancelled(a: Attempt, extra: Partial<RunEnd> = {}): void {
@@ -336,8 +388,12 @@ export class LessonRunner {
       const kind: LimitKind = r.reason === "model_unavailable" ? "model_unavailable" : (r.limit?.kind ?? "rate_limit");
       this.ensurePaused(r, kind);
       this.settle(a, { ...detail, status: "limited", reason: kind }, { defer: true, linkRun: true });
+    } else if (r.reason === "cost_paused") {
+      // 这一项的 ticket 被熔断停了后台（工作流 L）：放回队列、过一阵再试，不然 pump 会马上再取它、一直空转。
+      this.settle(a, { ...detail, status: "aborted", reason: "cost_paused" }, { defer: true, linkRun: false, notBefore: this.d.now() + LESSON_COST_RETRY_MS });
     } else if (r.reason === "aborted") {
       if (a.ctl.signal.aborted) this.settleCancelled(a, detail);
+      else if (a.yieldCtl.signal.aborted) this.settleYielded(a, detail);
       else this.settle(a, { ...detail, status: "aborted", reason: "app_quit" }, { defer: true, linkRun: false });
     } else {
       this.settle(a, { ...detail, status: "failed", reason: r.reason }, { finish: "failed", error: r.reason, message: r.message });
@@ -371,6 +427,10 @@ export class LessonRunner {
     if (pr) a.ctx = { prTitle: pr.title, prUrl: pr.url };
     if (a.ctl.signal.aborted) {
       this.settleCancelled(a);
+      return;
+    }
+    if (a.yieldCtl.signal.aborted) {
+      this.settleYielded(a);
       return;
     }
     if (!pr) {
@@ -427,14 +487,20 @@ export class LessonRunner {
       this.settleCancelled(a);
       return;
     }
+    if (a.yieldCtl.signal.aborted) {
+      this.settleYielded(a);
+      return;
+    }
     repo.markSpawned(item.id);
-    const signals = [this.d.headless.signal, a.ctl.signal].filter((s): s is AbortSignal => s !== undefined);
+    const signals = [this.d.headless.signal, a.ctl.signal, a.yieldCtl.signal].filter((s): s is AbortSignal => s !== undefined);
     const r = await execHeadlessJson({ ...this.d.headless, signal: AbortSignal.any(signals) }, {
       task: "lesson_analyze",
       label: "lessons",
       args: headlessArgs({ schema: toCliJsonSchema(AnalysisSchema), allowedTools: [] }),
       prompt,
       cwd,
+      // 复盘的花费算到这个 ticket 上，熔断停了它的后台调用时这里也停（工作流 L）。
+      ...(ticketKey !== null && { ticketKey }),
     });
     if (!r.ok) {
       this.settleFailure(a, r);

@@ -15,6 +15,8 @@ The Settings page has these sections, in order:
 5. **Privacy and personal API**
 6. **Lessons** (automatic backups, the export reminder and the admission policy; see [Lessons: bulk actions, admission policy and import / export](#lessons-bulk-actions-admission-policy-and-import--export))
 
+Two more tabs sit at the top of the Settings page: **Model routing** (see [Model routing](#model-routing)) and **Comments & CI** (see [Comments and CI](#comments-and-ci)).
+
 The merge coordinator and the `end_session` tool for coordinators are described under [Merge coordinator](#merge-coordinator) and in the [README](../README.md); neither has a setting.
 
 The audit log has its own page, **Audit**, in the sidebar. The **Effect** page has no setting either; see [Effect page](#effect-page).
@@ -282,9 +284,50 @@ The **Effect** page (below **Progress** in the sidebar) shows what Butler's PRs 
 - **Four cards**: per merged Butler PR, the average cycle time (PR opened → merged, and ticket started → merged), comments (human and Copilot, plus how many the lesson run marked avoidable), human interventions (and how long sessions waited on you) and cost in weighted tokens (and in dollars, from what Claude Code reports or estimated from the model's registered prices). Cycle time and comments are compared with a baseline; the other two show "before —" because there is nothing to compare them with.
 - **Baseline**: once a day Butler reads from GitHub the PRs you opened yourself and that were merged in the 180 days before your first Butler session (up to 100 per repo, skipping PRs linked to a ticket), and stores their cycle time and comment counts. Comments from bots are left out, the same way as for Butler's PRs. "Ticket started" for these PRs is approximated by the first commit. The cutoff is fixed when the first Butler session appears and does not move afterwards. Until a read finds such PRs (for example while gh is not available), the page says there is no baseline yet.
 - **Why sessions stopped for you**: how often each kind of stop happened (permission, choice, missing info, real question, stuck), how long each kept you waiting, and how many were resolved automatically. Idle time while a session is stopped but not waiting on you is counted separately.
+- **Comments and CI**: what the [comment loop and CI triage](#comments-and-ci) did in the chosen range: comments handled automatically (Copilot and people, replied, resolved, still waiting for you), how often a CI failure passed after an automatic rerun (flaky), the time those flaky runs cost from the first failure, and the checks and tests that were flaky most often.
 - **Trend** by week or by month (the last 12), **human interventions** by kind, **groups** (Butler PRs against other PRs linked to a ticket; by repo, product and risk level, where PRs without a level are "Unrated"), **where the cost goes** by model and by task, and **rework**: CI failures, reopened PRs and PRs reverted after merging. The same daily GitHub read finds reopens and reverts (a merged PR whose title is `Revert "<title>"` or whose body says `Reverts #N`).
 
 Numbers are rolled up from local events once an hour; opening the page rolls up again if the last run is more than 10 minutes old. Time a session spent while the computer slept is not counted as waiting.
+
+## Spend caps and background work
+
+**Settings → Spend & background** has two parts: spend caps for sessions and tickets, and when background work may run. With nothing changed, Butler behaves as 2.1.0 did: no caps, and background work runs at any time.
+
+### Spend caps
+
+A cap limits how much one **session** may spend (the whole chain, including the sessions `/clear` continues) or one **ticket** (all its sessions plus the background calls charged to it, such as its needs-you and stuck checks and its lessons analysis). Spending comes from the same usage Butler already meters. In dollars it uses the cost Claude Code reports, or tokens × the registered prices. In tokens it uses the same weights as the quotas under [Spending](#spending).
+
+Caps are set in layers, like the admission policy: **global**, then **product**, then **repo**. A repo's value beats its product's, which beats the global one. Leave a field empty to inherit; type `none` in a cap to make that layer explicitly unlimited. A ticket or session that spans several repos uses the strictest cap among them.
+
+| Field | Key | Default | Accepted values and notes |
+|-------|-----|---------|---------------------------|
+| Cap per session | `sessionCap` | none | A positive number in the unit below, or `none`. |
+| Cap per ticket | `ticketCap` | none | A positive number in the unit below, or `none`. |
+| Unit | `unit` | `usd` | `usd` or `tokens`. |
+| At the cap | `action` | `downgrade_then_pause` | `downgrade_then_pause`: switch to the next lower model through model routing, and pause if spending still passes the cap by the overshoot below. `pause`: pause right away. With no lower model, Butler pauses. |
+| What to pause | `pauseScope` | `session` | `session`: Butler interrupts the turn the session is running (as if you pressed Esc), sends it no more messages, and stops its background calls. `background`: only its background calls stop; the terminal keeps going. |
+| Overshoot after downgrading before pausing (%) | `graceAfterDowngradePercent` | `20` | 0 to 1000. |
+| How much "Continue and raise the cap" adds (%) | `raisePercent` | `50` | 1 to 1000. The new cap is what was already spent plus this share of the cap. |
+
+**What you see.** Past the first soft threshold of `routingThresholds` (70% by default) the **Now** page warns. At the cap, the **Now** page, the session's row and the tray tooltip say what happened. **Continue and raise the cap** clears the pause and raises the cap for that session or ticket only; changing the cap in settings resets that raise. A paused session that is still running 90 seconds after the pause, and has spent more since, has its terminal ended unless you typed in it; if you type in it yourself, Butler leaves it to you. A paused session is never woken from hibernation. Every warning, downgrade, pause, stop and resume is listed under **Recent events** on the same page.
+
+The spend caps don't replace the stuck judge: the stuck check and the needs-you check still run while a session or ticket is over its cap, and a stuck session is still reported even when it is within budget.
+
+### Background work
+
+Background work (lessons analysis and backfills, lesson admission, and the kinds later features add) comes after the sessions you are using. Each kind has a priority (`high`, `normal`, `low`) and may be limited to certain times. When it has to yield, nothing is lost: an interrupted item goes back to the queue and runs again later (kinds that save a checkpoint continue from it), also after a restart. Background work never wakes a hibernated session.
+
+| Setting | Key | Default | Accepted values and notes |
+|---------|-----|---------|---------------------------|
+| When to run | `bgWindow` | `anytime` | `anytime`, `idle` ("Only while I'm idle"), `hours` ("Only in these hours") or `idle_or_hours`. `high` priority kinds ignore this. |
+| These hours | `bgHours` | `22:00-07:00` | Comma-separated `HH:MM-HH:MM` ranges in local time; a range may cross midnight. |
+| Idle after (minutes) | `bgIdleMinutes` | `10` | 1 to 240. Minutes without keyboard or mouse input on macOS or Windows before you count as idle. A locked screen counts as idle at once. |
+| When it has to yield | `bgYield` | `finish` | `finish`: work already running finishes, nothing new starts. `interrupt`: work that can be stopped stops now and is requeued. |
+| When quota is tight | `bgQuotaOrder` | `pause_first` | `pause_first`: past the first soft threshold low-priority background work pauses, and past the second normal-priority work pauses too. `downgrade_first`: background work keeps running on the lower tier model routing picks, and only low-priority work pauses, past the second threshold. `high` priority keeps running either way. Model routing still moves fallback tasks to a lower tier past the first threshold. |
+| Plentiful quota (%) | `bgPlentifulPercent` | empty | 1 to 99. While every quota is below this share, background work runs outside its hours and while you are active too. Empty turns it off. |
+| Per-kind changes | `bgKinds` | empty | A JSON object from a kind to `{"priority": ..., "window": ..., "paused": true}`. The table on the page writes it for you. |
+
+The table on the page shows each kind, whether it may run now and why not (paused by you, spend breaker, quota, yielding to you, outside the hours), and how many items are queued and running. A kind that opens a session also asks the memory admission check first and waits while it refuses. **Pause** stops one kind until you resume it.
 
 ## Privacy and personal API
 
@@ -383,7 +426,7 @@ Butler can judge pending lessons for you. Judging runs four gates on the candida
 
 The score combines evidence (hits, PRs, reviewers, how recent), clarity (can you tell right code from wrong code with it; lessons from a fallback model lose `score.degradedPenalty`) and consistency (1, or 0.5 when another lesson limits it). Expand a lesson's score on the Lessons page to see each part and why. A lesson at or above the admit line (`score.admitLine`, or the stricter `score.proseAdmitLine` for prose) is **recommended**; between the lines it is shelved as `low_score` with its weakest part named; below `score.dropLine` it is shelved as `below_drop`. A checkable lesson that is recommended gets a check draft in shadow mode; its score is capped at `score.untestedCap` until it has been backtested.
 
-Judging only sets fields (admission, shelved reason, score); it is recorded as an undoable batch. A sample of `batch.sampleSize` recommended lessons is then reviewed by a different model. If the sample pass rate is below `batch.minSamplePassRate` or more than `batch.maxShelvedShare` of the judged lessons were shelved, "Accept all" is hidden and the weakest metric is named; single lessons can still be confirmed one by one. **Accept all recommended** merges the duplicates, moves cross-repository lessons up to their product, confirms the recommended lessons and writes their check drafts as shadow checks, all in one batch that one **Undo** reverses. Model answers are cached, so judging again only asks about new or edited lessons. When a model call fails, the lesson is left pending and counted as unfinished.
+Judging only sets fields (admission, shelved reason, score); it is recorded as an undoable batch. A sample of `batch.sampleSize` recommended lessons is then reviewed by a different model. If not every sampled lesson could be reviewed (for example the review call failed), the sample pass rate is below `batch.minSamplePassRate`, or more than `batch.maxShelvedShare` of the judged lessons were shelved, "Accept all" is hidden and the weakest metric is named; single lessons can still be confirmed one by one. **Accept all recommended** merges the duplicates, moves cross-repository lessons up to their product, confirms the recommended lessons and writes their check drafts as shadow checks, all in one batch that one **Undo** reverses. Model answers are cached, so judging again only asks about new or edited lessons. When a model call fails, the lesson is left pending and counted as unfinished. A lesson you confirm, reject or edit while a pass is running keeps your decision; the pass does not overwrite it.
 
 | Setting | Key | Default | Accepted values and notes |
 |---------|-----|---------|---------------------------|
@@ -391,7 +434,28 @@ Judging only sets fields (admission, shelved reason, score); it is recorded as a
 | Group lessons into principles | `lessonsPrinciples` | `0` | `1` or `0`. When on, confirmed lessons that share one principle are grouped once a day, and the session guide shows the principle with a pointer to its cases. |
 | Short core guide | `lessonsCoreGuide` | `0` | `1` or `0`. When on, the session guide keeps at most 10 core lessons (the most often broken first). |
 
-`admissionCalibratedAt` records when you marked the score lines calibrated on the **Calibration** tab; it is not edited directly.
+`admissionCalibratedAt` records when you marked the score lines calibrated on the **Calibration** tab; it is not edited directly. `lessonsPrinciplesRegroupedAt` records the last daily principles grouping, so a restart does not group again the same day; it is not edited directly either.
+
+### Setup wizard
+
+The **Setup wizard** tab on the Lessons page does the first pass for a repository, a product or everything. Before you start it shows, per repository, how many merged PRs there are and how many are already analysed, plus the expected number of model calls and an estimated time (from how long past analyses took). A repository that an accepted wizard already covered is marked **set up**. The list of merged PRs is fetched from GitHub at most once every 10 minutes. It then:
+
+1. scans the existing code (skipped until a scanner is available; the summary says so);
+2. analyses the merged PRs that are not analysed yet and fills in missing fields of older lessons;
+3. backtests (until backtesting is available the summary says **not backtested**, and scores of checkable lessons stay capped);
+4. judges every candidate as described above and waits for you.
+
+The wizard survives a restart: it picks up at the stage it was in, and items already done are not asked again. A call that fails is retried automatically after 1, 5 and 15 minutes; after that it waits for **Retry now**. A model limit only delays an item and does not use up an attempt. An item that a later pass no longer needs (its group changed, or the lesson is no longer a candidate) is dropped instead of retried. Failed PR analyses are retried from the analysis queue on the **Runs** tab, not here. **Cancel** is final: a pass that is still running writes nothing afterwards. You do not have to wait for the retries: the summary is ready after the first pass and counts the unfinished items, and it is updated when a retry succeeds.
+
+The summary shows PRs analysed, failed and skipped, candidates, lessons recommended (as text or as checks), merged, shelved per reason and covered, the sample pass rate (and whether the review had to use the same model), and how many model calls the wizard made. **Accept all** confirms the recommended lessons in one batch that one **Undo** reverses; it is hidden, with the weakest metric named, when the sample review is past its floor. Shelved lessons are grouped by reason: pull one back or a whole group (each one becomes a calibration sample), or reject a group. After changing the lines in the admission policy, **Recalculate** re-scores and re-decides without analysing again; cached answers are reused, so the model is asked only about lessons that were not judged before (for example ones the new lines now let through), and failed items are not retried (that is what **Retry now** does). Shelved lessons that you have since pulled back, rejected or confirmed elsewhere are no longer listed.
+
+### Calibration
+
+The **Calibration** tab draws up to five scored lessons from each band (at or above the admit line, between the lines, below the drop line) and asks whether each should be accepted; each lesson shows its score parts. A lesson exactly on the drop line counts as between the lines, and a high-scoring lesson whose clarity is below `score.minClarity` counts as shelved by the pipeline. Only lessons of the current draw can be marked. Every mark is recorded as a calibration sample next to the ones recorded when you override the pipeline; marking a lesson again in the same draw replaces your earlier mark. The page shows, per band, how many you marked and how many you would accept, the agreement with the pipeline for this draw and for all samples, and the score weights and lines, which you can edit in place. **Mark as calibrated** records the time in `admissionCalibratedAt` and removes the "not calibrated yet" note from the policy editor.
+
+### Principles and the core guide
+
+With `lessonsPrinciples` on, Butler asks the model once a day (or when you press **Group now** in Settings) which confirmed lessons of one repository or product share a principle; a principle needs at least three lessons. The grouping is one undoable batch, and it is recorded apart from the lessons themselves: undoing an older batch of lessons keeps the grouping, and the daily grouping never stops you undoing one. A principle whose lessons have not changed keeps its id, and answers are cached, so an unchanged set of lessons costs no call. In the session guide a principle replaces its lessons with one line, "principle (N cases)", and its cases go to a file next to the guide that the session reads when the principle is relevant. A principle with fewer than three cases left in the guide (some were disabled or rejected since) is not shown; its lessons appear one by one. With `lessonsCoreGuide` on, the guide keeps at most 10 lessons, the ones broken most often since they were confirmed first.
 
 ### Export file
 
@@ -440,7 +504,7 @@ Checks are exported and imported with the other configuration (**Checks only** o
 
 ## Outward actions
 
-Some features let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Today the repo rule export uses **Push branches** and **Open PRs**; the other switches take effect as later features start using them. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. No feature uses these switches yet.
+Some features let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Today the repo rule export uses **Push branches** and **Open PRs**, and [Comments and CI](#comments-and-ci) uses **Reply to review comments**, **Resolve comments** and **Rerun CI**; the other switches take effect as later features start using them. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. No feature uses these switches yet.
 
 | Setting | Key | Default | What it allows |
 |---------|-----|---------|----------------|
@@ -488,6 +552,67 @@ On the **Checks** tab, **Existing code / export** under a check shows two action
 | Most files a legacy scan reads | `legacyScanMaxFiles` | `50000` | A whole number from `100` to `500000`. |
 
 **Import / export:** the marker table (section `baseline_rules`) travels with **All** and **Checks only**; products by name, invalid rules skipped. Repository baselines (section `baselines`) are only exported when you tick **Include each repo's baseline scan**, never with local paths, file hashes or lesson text. An imported baseline is kept only when it is newer than the local one (a date in the future counts as now), is marked as imported and out of date, and is replaced by the first local scan. Until then it stays out of the session guide, and every check drafted from it must be ticked **I checked this command** before it is created, because its commands came from another machine. A marker rule whose commands are new or changed is imported turned off, so you read its commands before it is used; a command with a line break is rejected. An import never removes a local baseline, even in replace mode.
+
+## Comments and CI
+
+**Settings → Comments & CI** controls two loops that keep a PR moving without you relaying messages. Both are off by default; with them off Butler behaves as before. Each key can be set on the global, product and repository layers, merged key by key in the same way as the [admission policy](#admission-policy) (a repository's own value, else a product's, else global, else the default; when products disagree, the one whose name sorts last wins and the page warns).
+
+### Comment loop
+
+Each time the PR watcher reads an open PR of a repo where `comments.enabled` is on, Butler reads its review threads, review bodies and PR comments and puts each new comment in one of four categories:
+
+- **fix**: a change is asked for;
+- **question**: the reviewer asks something;
+- **ignore**: thanks, agreement, an outdated position, a comment you already answered, Copilot's overview, or a match in `comments.ignorePatterns`;
+- **human**: someone needs to judge it.
+
+Rules run first: resolved threads, your own comments and other bots are skipped, a ```` ```suggestion ```` block means fix, and the cases above mean ignore. Whatever the rules can't place goes to a model through the `comment_classify` routing task when `comments.useModel` is on; a comment the model can't place, or every unplaced comment when the model is off, is marked human.
+
+Copilot and people have separate policies (`comments.copilot`, `comments.human`). With `auto`, fixes (and questions when `comments.questions` is `session`) are sent to the session that owns the PR's branch, the same session CI results go to. Butler waits until that session is idle and never interrupts it; it sends at most `comments.maxPerDelivery` comments at a time, with file, line and text, and one delivery at a time per session (shared with CI results). With `review` (the default for people) the comment waits for you on the ticket's **Comments** tab, and the **Now** page shows a notice. A comment that should have been sent but has waited 30 minutes also shows a notice. With `off` the comments are left alone.
+
+After a push Butler checks each sent comment at the new head: an inline comment counts as addressed when its thread was resolved elsewhere, its position is outdated or gone, or the pushed diff touches its lines (within three lines); a review body or PR comment counts as addressed after any new commit. A comment that is still unchanged after two pushes goes back to you. For an addressed comment, Butler replies "Addressed in <commit>." (marked as an automated reply from Butler) when `comments.reply` is on, and resolves the thread when `comments.resolve` is on. Each of these also needs its switch under [Outward actions](#outward-actions) (`externalCommentReply`, `externalCommentResolve`), and every attempt is listed on the Audit page.
+
+On the ticket's **Comments** tab you can send a comment to the session, change its category, dismiss it, or reply again.
+
+| Key | Default | Values | What it does |
+|-----|---------|--------|--------------|
+| `comments.enabled` | `false` | `true` / `false` | Turn the comment loop on |
+| `comments.copilot` | `auto` | `auto` / `review` / `off` | What happens to Copilot's comments: send to the session, show you first, or leave alone |
+| `comments.human` | `review` | `auto` / `review` / `off` | The same for comments from people |
+| `comments.questions` | `user` | `user` / `session` | Whether questions wait for you or go to the session |
+| `comments.useModel` | `true` | `true` / `false` | Ask a model when the rules can't decide |
+| `comments.ignorePatterns` | none | list | Comments matching any of these are ignored |
+| `comments.maxPerDelivery` | `10` | whole number 1–50 | Most comments sent to the session at once |
+| `comments.reply` | `true` | `true` / `false` | Reply after a comment is addressed (also needs `externalCommentReply`) |
+| `comments.resolve` | `true` | `true` / `false` | Resolve the thread after it is addressed (also needs `externalCommentResolve`) |
+| `comments.replyLanguage` | `en` | `en` / `zh` | Language of the reply |
+
+### CI triage
+
+When `ci.enabled` is on for a repo, Butler classifies a failed CI result before telling the session. Failed checks are grouped by workflow run; checks that don't come from a GitHub Actions run are delivered as before. Rules run first:
+
+- **env**: the run never got a runner or failed while setting up the job; the log matches a built-in environment keyword (network timeouts, DNS errors, registry or rate-limit errors, a runner shutdown, a full disk) or `ci.envPatterns`; or the failed step installs, checks out or downloads something and the log looks like a network problem;
+- **code**: the log matches a built-in code keyword (type errors, assertions, failed tests, lint or compile errors) or `ci.codePatterns`. Code keywords win over environment keywords;
+- **flaky**: a failed check or test is on the flaky list (`ci.flakyTests` plus the names Butler listed itself).
+
+A failure the rules can't place goes to a model through the `ci_classify` routing task when `ci.useModel` is on, otherwise it counts as code.
+
+Code failures are delivered as before. Environment and flaky failures are rerun with `gh run rerun <run> --failed`, at most `ci.maxReruns` times, without telling the session; this needs the `externalCiRerun` switch under [Outward actions](#outward-actions), and while it is off the failure is delivered with a note saying so. If the rerun passes, the session gets the usual "CI passed" message. If it fails the same way again, it is delivered as a code failure; if it keeps failing past the limit, it is delivered marked "possibly flaky". A rerun with no result after six hours is delivered too.
+
+Every pass after a rerun is recorded per check and test name, with the time it cost from the first failure. A name that passes after a rerun `ci.autoListThreshold` times within `ci.autoListDays` days is put on the flaky list automatically. The **Flaky list** on the same page shows the counts and wasted time, and lets you list or unlist a name by hand. Below it, a summary shows what both loops did in the last 30 days.
+
+Lists take one entry per line in the editor. An entry wrapped in `/…/` is a regular expression; anything else matches as a substring. Both ignore case.
+
+| Key | Default | Values | What it does |
+|-----|---------|--------|--------------|
+| `ci.enabled` | `false` | `true` / `false` | Turn CI triage on |
+| `ci.maxReruns` | `2` | whole number 0–5 | Most automatic reruns of one failure |
+| `ci.useModel` | `true` | `true` / `false` | Ask a model when the rules can't decide |
+| `ci.envPatterns` | none | list | Extra log patterns that mean an environment problem |
+| `ci.codePatterns` | none | list | Extra log patterns that mean a code problem |
+| `ci.flakyTests` | none | list | Checks or tests known to be flaky |
+| `ci.autoListThreshold` | `3` | whole number 1–100 | Passes after a rerun before a name is listed as flaky |
+| `ci.autoListDays` | `30` | whole number 1–365 | Days counted for flaky stats and auto-listing |
 
 ## Several companies or profiles
 

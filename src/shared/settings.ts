@@ -69,6 +69,13 @@ export const EDITABLE_SETTINGS = [
   "lessonsAutoAdmit",
   "lessonsPrinciples",
   "lessonsCoreGuide",
+  "bgWindow",
+  "bgHours",
+  "bgIdleMinutes",
+  "bgYield",
+  "bgQuotaOrder",
+  "bgPlentifulPercent",
+  "bgKinds",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

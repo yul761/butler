@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { LoopEffect } from "../../../shared/loop";
 import type { GroupMetrics, KeyCount, MetricsOverview, TrendPoint } from "../../../shared/metrics";
 import { api } from "../api";
 import {
@@ -280,10 +281,47 @@ function OtherEvents({ items }: { items: KeyCount[] }) {
   );
 }
 
+/** 评论与 CI（工作流 I）：评论闭环处理了多少、flaky 几次、浪费了多久；数据来自 loop:effect，跟着页面的时间范围。 */
+export function LoopEffectSection({ e }: { e: LoopEffect }) {
+  const c = e.comments;
+  const ci = e.ci;
+  const top = ci.topFlaky.map((f) => ({
+    key: `${f.repoSlug}\u0000${f.kind}\u0000${f.name}`, label: `${f.name}${f.listed ? E().loopListed : ""}`, value: f.count, text: E().loopFlakyText(f.count, fmtDuration(f.wastedMs)),
+  }));
+  return (
+    <section className="effect-section" data-testid="effect-loop">
+      <h3>{E().loop}</h3>
+      <p className="muted">{E().loopIntro}</p>
+      <div className="effect-cards">
+        <Card
+          testId="effect-loop-handled" title={E().loopHandled} value={fmtNumber(c.autoHandled)} sub={E().loopHandledSub(c.byWho.copilot, c.byWho.human)}
+          extra={c.waitingForYou > 0 ? `${E().loopReplied(c.replied, c.resolved)} · ${E().loopWaiting(c.waitingForYou)}` : E().loopReplied(c.replied, c.resolved)}
+          mine={c.autoHandled} base={null}
+        />
+        <Card
+          testId="effect-loop-flaky" title={E().loopFlaky} value={fmtNumber(ci.passedAfterRerun)} sub={E().loopFlakySub(ci.reruns)}
+          extra={E().loopTriaged(ci.triaged, ci.byCategory.env, ci.byCategory.flaky, ci.byCategory.code)} mine={ci.passedAfterRerun} base={null}
+        />
+        <Card
+          testId="effect-loop-wasted" title={E().loopWasted} value={fmtDuration(ci.flakyWastedMs)} sub={E().loopWastedSub(ci.possiblyFlaky)}
+          mine={ci.flakyWastedMs} base={null}
+        />
+      </div>
+      {top.length > 0 && (
+        <>
+          <h4>{E().loopTopFlaky}</h4>
+          <Bars rows={top} testId="effect-loop-top-flaky" />
+        </>
+      )}
+    </section>
+  );
+}
+
 /** 「效果」页（ws-h）：和总控 metrics_overview 同一份数据，stateChanged 时重取。 */
 export function EffectPage() {
   const [days, setDays] = useState<number>(30);
   const o = useStateRefetch(`metrics:${days}`, () => api.metrics(days));
+  const loop = useStateRefetch(`loop-effect:${days}`, () => api.loopEffect(days));
   return (
     <div className="page effect-page" data-testid="effect-page">
       <h2>{E().title}</h2>
@@ -301,6 +339,7 @@ export function EffectPage() {
         )}
       </div>
       {o && <EffectBody o={o} />}
+      {loop && <LoopEffectSection e={loop} />}
     </div>
   );
 }

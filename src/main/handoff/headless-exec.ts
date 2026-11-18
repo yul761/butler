@@ -1,5 +1,5 @@
 import type { LimitHit } from "../../shared/availability";
-import { TASKS, tierRank, type EffortLevel, type RouteEventKind, type TaskId, type Tier } from "../../shared/model-routing";
+import { TASKS, tierRank, type EffortLevel, type RouteEventKind, type SpendLevel, type TaskId, type Tier } from "../../shared/model-routing";
 import type { ClaudeResult, HeadlessFailure, HeadlessOutcome, HeadlessRun } from "../claude/headless";
 import { headlessEnv } from "../claude/spawn";
 import type { SessionsRepo } from "../db/sessions-repo";
@@ -10,7 +10,7 @@ import { pickStructured } from "./schema";
 
 /** 执行层用到的路由服务部分（RoutingService 实现；测试里可以换成假的）。 */
 export interface ExecRouting {
-  plan: (task: TaskId, ctx: { sessionModel?: string | null; producer?: Candidate | null }) => Plan;
+  plan: (task: TaskId, ctx: { sessionModel?: string | null; producer?: Candidate | null; minLevel?: SpendLevel }) => Plan;
   usable: (model: string) => boolean;
   /** 模型路由的注册表里有这个名字（停用的也算；记下的 session 模型要靠它认）。 */
   registered: (model: string) => boolean;
@@ -46,7 +46,12 @@ export interface UsageReport {
   requestedTier?: Tier | null;
   fallbackFrom?: string | null;
   costUsd?: number | null;
+  /** 归到哪个 ticket（成本熔断按 ticket 汇总，工作流 L）；不归 ticket 为 null。 */
+  ticketKey?: string | null;
 }
+
+/** 成本熔断（工作流 L）对一次后台调用的回答：照常、按降档规划（路由器当作 soft）、不跑。 */
+export type CostVerdict = "ok" | "downgrade" | "pause";
 
 /** 跑一次 headless claude 要的依赖（ticket handoff 和 feature 汇总共用）。 */
 export interface HeadlessExecDeps {
@@ -69,13 +74,15 @@ export interface HeadlessExecDeps {
   onSuccess?: (startedAt: number, job: string) => void;
   /** 模型路由；没有时每个任务用 2.1.0 的模型，不降级。 */
   routing?: ExecRouting;
+  /** 成本熔断（工作流 L）：这个 ticket 的后台调用现在能不能跑、要不要降档。没接时一律照常。 */
+  costGate?: (o: { task: TaskId; ticketKey: string | null; label: string }) => CostVerdict;
   log?: (msg: string, err?: unknown) => void;
 }
 
 export type HeadlessExecResult =
   | { ok: true; value: unknown; rawText: string; result: ClaudeResult; route: RouteInfo }
   | {
-      ok: false; reason: HeadlessFailure | "claude_missing"; message: string; limit: LimitHit | null; stderr: string; result: ClaudeResult | null; rawText: string | null;
+      ok: false; reason: HeadlessFailure | "claude_missing" | "cost_paused"; message: string; limit: LimitHit | null; stderr: string; result: ClaudeResult | null; rawText: string | null;
       route: RouteInfo;
       /** 链走完了 / 一开始就没有能用的模型：预计什么时候能再跑（不知道为 null）。 */
       waitUntil?: number | null;
@@ -94,6 +101,8 @@ export interface ExecOptions {
   producer?: Candidate | null;
   /** 只用这个模型、不走路由、不回报健康（模型探测用）。 */
   forceModel?: string;
+  /** 这次调用是为哪个 ticket 做的：用量记到它名下，成本熔断按它判断（工作流 L）。 */
+  ticketKey?: string | null;
 }
 
 /** 去掉 label 末尾的 ticket 号或数字：“handoff BTL-1” → “handoff”，“feature summary 3” → “feature summary”。 */
@@ -128,6 +137,19 @@ export async function execHeadlessJson(d: HeadlessExecDeps, o: ExecOptions): Pro
   const { path, pathValue } = d.claude();
   if (!path) return { ok: false, reason: "claude_missing", message: M().claudeMissing, limit: null, stderr: "", result: null, rawText: null, route: baseRoute };
   const job = jobOf(o.label);
+  let verdict: CostVerdict = "ok";
+  if (d.costGate && !o.forceModel) {
+    try {
+      verdict = d.costGate({ task: o.task, ticketKey: o.ticketKey ?? null, label: o.label });
+    } catch (e) {
+      d.log?.(`${o.label}: cost gate threw`, e);
+    }
+  }
+  if (verdict === "pause") {
+    d.log?.(`${o.label}: not run, the cost breaker paused background work for ${o.ticketKey ?? "this ticket"}`);
+    return { ok: false, reason: "cost_paused", message: M().costPausedHeadless, limit: null, stderr: "", result: null, rawText: null, route: baseRoute };
+  }
+  const minLevel: SpendLevel | undefined = verdict === "downgrade" ? "soft" : undefined;
   const hook = (name: string, f: () => void) => {
     try {
       f();
@@ -158,7 +180,7 @@ export async function execHeadlessJson(d: HeadlessExecDeps, o: ExecOptions): Pro
     // 失败的运行也花了 token：判断 ok 之前先记。
     const usage = out.result?.usage;
     if (usage) {
-      const u: UsageReport = { runId, label: o.label, at: d.now(), model: out.result?.model ?? null, usage };
+      const u: UsageReport = { runId, label: o.label, at: d.now(), model: out.result?.model ?? null, usage, ...(o.ticketKey && { ticketKey: o.ticketKey }) };
       if (r) Object.assign(u, { task: o.task, costUsd: out.result?.costUsd ?? null, ...extra });
       hook("onUsage", () => d.onUsage?.(u));
     }
@@ -185,7 +207,7 @@ export async function execHeadlessJson(d: HeadlessExecDeps, o: ExecOptions): Pro
   }
 
   const plan: Plan = r
-    ? r.plan(o.task, { sessionModel: o.sessionModel, producer: o.producer })
+    ? r.plan(o.task, { sessionModel: o.sessionModel, producer: o.producer, minLevel })
     : { mode: "legacy", model: def.legacy === "session" ? (o.sessionModel ?? null) : def.legacy, route: { ...def, overridden: false }, why: "unconfigured" };
 
   // ---- 不走路由：2.1.0 的做法 ----
@@ -263,7 +285,7 @@ export async function execHeadlessJson(d: HeadlessExecDeps, o: ExecOptions): Pro
   const end = last!;
   let waitUntil: number | null = null;
   try {
-    const after = routing.plan(o.task, { sessionModel: o.sessionModel, producer: o.producer });
+    const after = routing.plan(o.task, { sessionModel: o.sessionModel, producer: o.producer, minLevel });
     waitUntil = after.mode === "wait" ? after.until : null;
   } catch (e) {
     d.log?.(`${o.label}: re-planning failed`, e);

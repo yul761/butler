@@ -1,6 +1,8 @@
 import type { AvailabilityView } from "../../shared/availability";
 import type { LessonRunStatus } from "../../shared/lessons";
-import type { CiUndelivered, NowNotice } from "../../shared/types";
+import type { CostBreakerView } from "../../shared/cost";
+import type { CiUndelivered, NowNotice, NowTarget } from "../../shared/types";
+import type { CommentsWaiting } from "../../shared/loop";
 
 /** 连续这么多次分析失败才提醒。 */
 export const LESSONS_FAILING_MIN = 3;
@@ -37,4 +39,17 @@ export function buildNotices(i: {
 /** 递不出去的 CI 结论（工作流 W）：每条一个提醒，点开去 ticket（有要递给的 session 就打开它）。 */
 export function ciNotices(list: CiUndelivered[], title: (ticketKey: string) => string | null): NowNotice[] {
   return list.map((ci) => ({ kind: "ci_undelivered" as const, ci, title: title(ci.ticketKey), target: { page: "ticket" as const, key: ci.ticketKey, sessionId: ci.sessionId } }));
+}
+
+/** 成本熔断（工作流 L）：暂停的排在前面，其次降档、提醒。target：「打开」去哪儿（找不到为 null）。 */
+export function costNotices(views: readonly CostBreakerView[], targetOf: (v: CostBreakerView) => NowTarget | null): NowNotice[] {
+  const order = { paused: 0, downgraded: 1, warned: 2 } as const;
+  return [...views]
+    .sort((a, b) => order[a.state] - order[b.state] || (a.trippedAt ?? 0) - (b.trippedAt ?? 0))
+    .map((breaker) => ({ kind: "cost" as const, breaker, target: targetOf(breaker) }));
+}
+
+/** 评论闭环（工作流 I）：等你看的、该送没送出去的评论，每个 PR 一条，点开去 ticket。 */
+export function commentNotices(list: CommentsWaiting[], title: (ticketKey: string) => string | null): NowNotice[] {
+  return list.map((w) => ({ kind: "comments_waiting" as const, waiting: w, title: title(w.ticketKey), target: { page: "ticket" as const, key: w.ticketKey, sessionId: null } }));
 }

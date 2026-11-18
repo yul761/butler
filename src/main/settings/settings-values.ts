@@ -7,6 +7,7 @@ import type { EditableSettingKey } from "../../shared/settings";
 import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
 import { M } from "../strings";
 import { normalizeRoutingSetting, RoutingSettingError } from "../routing/routing-settings";
+import { BgSettingError, normalizeBgSetting } from "../background/bg-settings";
 
 export class SettingError extends Error {
   readonly code = "invalid_setting";
@@ -458,6 +459,19 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
         return normalizeRoutingSetting(key, value);
       } catch (e) {
         if (e instanceof RoutingSettingError) throw new SettingError(e.message);
+        throw e;
+      }
+    case "bgWindow":
+    case "bgHours":
+    case "bgIdleMinutes":
+    case "bgYield":
+    case "bgQuotaOrder":
+    case "bgPlentifulPercent":
+    case "bgKinds":
+      try {
+        return normalizeBgSetting(key, value);
+      } catch (e) {
+        if (e instanceof BgSettingError) throw new SettingError(e.message);
         throw e;
       }
     default: {

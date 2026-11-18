@@ -161,7 +161,9 @@ export class LessonEnricher {
           ctx.track("lesson", l.id);
           for (const s of own) this.d.repo.fillSource(s.id, details.get(s.id)!);
           if (item) {
-            const patch = fillEmpty(l, ruleFields(item), now);
+            // 用写入时的那一行：调用期间分类可能已经被人改了、或者被分析补上了。
+            const fresh = this.d.repo.get(l.id);
+            const patch = fresh ? fillEmpty(fresh, ruleFields(item), now) : null;
             if (patch) this.d.repo.setFields(l.id, patch, now);
           }
         }

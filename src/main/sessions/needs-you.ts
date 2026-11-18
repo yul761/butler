@@ -67,9 +67,9 @@ function prompt(reply: string): string {
 }
 
 /** 请低档模型（没配置路由时是 Haiku）判断一条回复是不是在等用户。不给任何工具，只看回复的最后 1500 字；失败返回 null。 */
-export async function judgeNeedsYou(d: HeadlessExecDeps, reply: string, cwd: string): Promise<NeedsYouVerdict | null> {
+export async function judgeNeedsYou(d: HeadlessExecDeps, reply: string, cwd: string, ticketKey: string | null = null): Promise<NeedsYouVerdict | null> {
   const args = headlessArgs({ schema: NEEDS_YOU_JSON_SCHEMA, allowedTools: [] });
-  const r = await execHeadlessJson(d, { task: "needs_you", label: "needs-you judge", args, prompt: prompt(tail(reply, NEEDS_YOU_REPLY_CHARS)), cwd });
+  const r = await execHeadlessJson(d, { task: "needs_you", label: "needs-you judge", args, prompt: prompt(tail(reply, NEEDS_YOU_REPLY_CHARS)), cwd, ticketKey });
   if (!r.ok) return null;
   const v = validate(AnswerSchema, r.value);
   // 理由会显示在「现在」页上：去掉混进来的标签，压成一行，最多 80 字（R34）。
@@ -105,7 +105,8 @@ export interface NeedsYouHead {
 }
 
 export interface NeedsYouDeps {
-  judge: (reply: string, cwd: string) => Promise<NeedsYouVerdict | null>;
+  /** sessionId 只用来把用量记到它的 ticket 名下（工作流 L）。 */
+  judge: (reply: string, cwd: string, sessionId: string) => Promise<NeedsYouVerdict | null>;
   /** 开着终端的 Butler session 的 head：id、cwd、是否停着等输入、活动、最后一条回复。 */
   sessions: () => NeedsYouHead[];
   notify: () => void;
@@ -231,7 +232,7 @@ export class NeedsYouTracker {
   private async judge(job: Job): Promise<void> {
     let verdict: NeedsYouVerdict | null = null;
     try {
-      verdict = await this.d.judge(job.text, job.cwd);
+      verdict = await this.d.judge(job.text, job.cwd, job.sessionId);
     } catch (e) {
       this.d.log?.(`needs-you judge of session ${job.sessionId} failed`, e);
     } finally {

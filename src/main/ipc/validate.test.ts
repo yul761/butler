@@ -2,6 +2,8 @@ import { baselinesActionArg, checkExportActionArg, checkKeyArg, checkLessonIdArg
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
+import { backgroundActionArg, costSetArg, costSubjectArg } from "./validate";
+import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
 import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, progressFilterArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
@@ -453,5 +455,72 @@ describe("repo baseline arguments (E2)", () => {
     expect(checkExportActionArg({ kind: "run", checkKey: "ck_a", slug: "a/b" })).toEqual({ kind: "run", checkKey: "ck_a", slug: "a/b" });
     expect(checkExportActionArg({ kind: "push", id: 4 })).toEqual({ kind: "push", id: 4 });
     expect(() => checkExportActionArg({ kind: "merge", id: 4 })).toThrow();
+  });
+});
+
+describe("admission IPC arguments (workstream D)", () => {
+  it("checks the scope, wizard actions and calibration actions", async () => {
+    const { admissionScopeArg, wizardActionArg, calibrationActionArg, calibrationSinceArg } = await import("./validate");
+    expect(admissionScopeArg({ kind: "all" })).toEqual({ kind: "all" });
+    expect(admissionScopeArg({ kind: "repo", slug: "acme/web" })).toEqual({ kind: "repo", slug: "acme/web" });
+    expect(admissionScopeArg({ kind: "product", productId: 3 })).toEqual({ kind: "product", productId: 3 });
+    for (const bad of [null, {}, { kind: "repo" }, { kind: "product", productId: -1 }, { kind: "x" }]) expect(() => admissionScopeArg(bad)).toThrow();
+
+    expect(wizardActionArg({ op: "start", scope: { kind: "all" } })).toEqual({ op: "start", scope: { kind: "all" } });
+    expect(wizardActionArg({ op: "accept", runId: 4, extra: 1 })).toEqual({ op: "accept", runId: 4 });
+    expect(wizardActionArg({ op: "pullBack", runId: 4, lessonIds: [1, 2] })).toEqual({ op: "pullBack", runId: 4, lessonIds: [1, 2] });
+    for (const bad of [{ op: "accept" }, { op: "accept", runId: 0 }, { op: "pullBack", runId: 1, lessonIds: [] }, { op: "rejectGroup", runId: 1, lessonIds: ["a"] }, { op: "drop", runId: 1 }]) {
+      expect(() => wizardActionArg(bad)).toThrow();
+    }
+
+    expect(calibrationSinceArg(null)).toBeNull();
+    expect(calibrationSinceArg(5)).toBe(5);
+    expect(() => calibrationSinceArg(-1)).toThrow();
+    expect(calibrationActionArg({ op: "mark", lessonId: 2, mark: "good", since: 9 })).toEqual({ op: "mark", lessonId: 2, mark: "good", since: 9 });
+    expect(calibrationActionArg({ op: "markCalibrated" })).toEqual({ op: "markCalibrated" });
+    for (const bad of [{ op: "mark", lessonId: 2, mark: "great", since: 9 }, { op: "mark", lessonId: 2, mark: "good" }, { op: "other" }]) expect(() => calibrationActionArg(bad)).toThrow();
+  });
+});
+
+describe("cost and background IPC args (workstream L)", () => {
+  it("accepts a cost layer change and a subject, rejects anything else", () => {
+    expect(costSetArg({ scope: { kind: "repo", slug: "acme/web" }, overrides: { sessionCap: 5 } })).toEqual({ scope: { kind: "repo", slug: "acme/web" }, overrides: { sessionCap: 5 } });
+    expect(() => costSetArg({ scope: { kind: "global" }, overrides: [] })).toThrow();
+    expect(() => costSetArg({ scope: { kind: "global" }, overrides: {}, extra: 1 })).toThrow();
+    expect(costSubjectArg({ subjectKind: "ticket", subjectId: "T-1" })).toEqual({ subjectKind: "ticket", subjectId: "T-1" });
+    expect(costSubjectArg({ subjectKind: "session", subjectId: "abc-1" })).toEqual({ subjectKind: "session", subjectId: "abc-1" });
+    expect(() => costSubjectArg({ subjectKind: "session", subjectId: "a b" })).toThrow();
+    expect(() => costSubjectArg({ subjectKind: "repo", subjectId: "x" })).toThrow();
+  });
+
+  it("accepts pausing a known background kind only", () => {
+    expect(backgroundActionArg({ op: "pauseKind", kind: "lesson_backfill" })).toEqual({ op: "pauseKind", kind: "lesson_backfill" });
+    expect(() => backgroundActionArg({ op: "pauseKind", kind: "nope" })).toThrow();
+    expect(() => backgroundActionArg({ op: "drop", kind: "lesson_backfill" })).toThrow();
+  });
+});
+
+describe("comment and CI loop arguments", () => {
+  it("validates a loop policy change", () => {
+    expect(loopSetArg({ scope: { kind: "repo", slug: "o/r" }, overrides: { "ci.maxReruns": 1, "comments.enabled": true } }))
+      .toEqual({ scope: { kind: "repo", slug: "o/r" }, overrides: { "ci.maxReruns": 1, "comments.enabled": true } });
+    expect(() => loopSetArg({ scope: { kind: "global" }, overrides: { "ci.maxReruns": 9 } })).toThrow();
+    expect(() => loopSetArg({ scope: { kind: "global" }, overrides: { nope: true } })).toThrow();
+    expect(() => loopSetArg({ scope: { kind: "global" }, overrides: { "ci.envPatterns": ["/(/"] } })).toThrow();
+  });
+
+  it("validates a comment action", () => {
+    expect(commentActionArg({ op: "send", id: 3 })).toEqual({ op: "send", id: 3 });
+    expect(commentActionArg({ op: "categorize", id: 3, category: "ignore" })).toEqual({ op: "categorize", id: 3, category: "ignore" });
+    for (const bad of [{ op: "send", id: 0 }, { op: "categorize", id: 3, category: "x" }, { op: "dismiss", id: 3, category: "fix" }, { op: "zap", id: 3 }, { op: "send", id: 3, extra: 1 }]) {
+      expect(() => commentActionArg(bad)).toThrow();
+    }
+  });
+
+  it("validates a flaky list change", () => {
+    expect(flakyActionArg({ op: "add", repoSlug: "o/r", kind: "test", name: " a.spec " })).toEqual({ op: "add", repoSlug: "o/r", kind: "test", name: "a.spec" });
+    for (const bad of [{ op: "add", repoSlug: "o/r", kind: "job", name: "a" }, { op: "add", repoSlug: "", kind: "test", name: "a" }, { op: "add", repoSlug: "o/r", kind: "test", name: " " }]) {
+      expect(() => flakyActionArg(bad)).toThrow();
+    }
   });
 });

@@ -145,6 +145,22 @@ export const SETTING_DEFAULTS = {
   lessonsCoreGuide: "0",
   /** 校准页「标为已校准」的时间（毫秒，字符串）；空 = 没校准过（策略页显示「未校准的默认值」）。不在设置页上。 */
   admissionCalibratedAt: "",
+  /** 原则上一次每日重新分组的时间（毫秒）；重启以后也不会当天再分一次。 */
+  lessonsPrinciplesRegroupedAt: "",
+  /** 后台任务（工作流 L）什么时候跑：anytime（随时，默认）、idle（只在空闲时）、hours（只在 bgHours 里）、idle_or_hours。 */
+  bgWindow: "anytime",
+  /** 后台任务可以跑的小时（本地时间，可以跨午夜，逗号分开写几段）。 */
+  bgHours: "22:00-07:00",
+  /** 系统多少分钟没有键鼠输入算空闲（锁屏马上算）。 */
+  bgIdleMinutes: "10",
+  /** 该让路时：finish（跑着的跑完）或 interrupt（可打断的马上停、放回队列）。 */
+  bgYield: "finish",
+  /** 额度紧张时：pause_first（先停低优先级后台任务）或 downgrade_first（先交给路由器降档）。 */
+  bgQuotaOrder: "pause_first",
+  /** 每个配额都用了不到百分之几时算额度充裕，后台任务不看时段；空 = 不用。 */
+  bgPlentifulPercent: "",
+  /** 每种后台任务的优先级、时段、停用：JSON 对象 { "backtest": { "priority": "low", "window": "idle", "paused": true } }。 */
+  bgKinds: "",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

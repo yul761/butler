@@ -4,7 +4,25 @@ import type { AdmissionPolicyService } from "../lessons/admission-policies";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { ConfigIoFacade } from "../config-io/facade";
 import type { BatchDetail, BatchView } from "../../shared/batches";
-import type { AdmissionPolicyView } from "../../shared/admission-policy";
+import type { AdmissionPolicyView, PolicyScope } from "../../shared/admission-policy";
+import type { BackgroundAction, BackgroundStatusView } from "../../shared/background";
+import type { CostBreakerView, CostResumeResult, CostSetResult, CostSubjectKind, CostView } from "../../shared/cost";
+import type {
+  AdmissionPageState, AdmissionScope, CalibrationAction, CalibrationActResult, CalibrationSample, CalibrationStatsView, RegroupResult, WizardAction, WizardActResult, WizardEstimate,
+} from "../../shared/lesson-admission";
+
+/** 规矩准入的页面接口（index.ts 拼起来）。 */
+export interface AdmissionFacade {
+  state(): AdmissionPageState;
+  estimate(scope: AdmissionScope): Promise<WizardEstimate>;
+  wizardAct(a: WizardAction): Promise<WizardActResult>;
+  calibrationSample(scope: AdmissionScope): CalibrationSample;
+  calibrationStats(since: number | null): CalibrationStatsView;
+  calibrationAct(a: CalibrationAction): CalibrationActResult;
+  regroupPrinciples(): Promise<RegroupResult>;
+}
+import type { LoopPolicyOverrides, LoopPolicyView, LoopScope } from "../../shared/loop-policy";
+import type { CommentAction, CommentItemView, FlakyAction, FlakyEntry, LoopEffect, PrCommentsView } from "../../shared/loop";
 import type { ConfigIoStatus, ExportResult, ImportApplyResult, ImportPreviewResult } from "../../shared/config-io";
 import type { MemoryHistoryPoint } from "../../shared/mem-usage";
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
@@ -55,8 +73,8 @@ import { meteredIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
-  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg } from "./validate";
+  addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
+  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -89,8 +107,20 @@ export interface IpcDeps {
   lessons: Pick<LessonsService, "state" | "act" | "pendingCount" | "runs" | "run">;
   /** 批次历史（契约 4.4）。 */
   batches: Pick<BatchRecorder, "list" | "get">;
+  /** 规矩准入（工作流 D）：向导、校准页、原则。 */
+  admission: AdmissionFacade;
   /** 三层准入策略（契约 4.2）。 */
   policies: Pick<AdmissionPolicyService, "view" | "setLayer">;
+  /** 评论闭环和 CI 分类（工作流 I）：策略、评论项、flaky 名单、效果。 */
+  loop: {
+    policyView(scope: LoopScope): LoopPolicyView;
+    policySet(scope: LoopScope, overrides: LoopPolicyOverrides): void;
+    comments(ticketKey: string): PrCommentsView[];
+    act(a: CommentAction): Promise<CommentItemView | null>;
+    flaky(): FlakyEntry[];
+    flakyAct(a: FlakyAction): boolean;
+    effect(days: unknown): LoopEffect;
+  };
   /** 导入导出（契约 4.3）。 */
   configIo: ConfigIoFacade;
   /** 确定性检查（契约 4.5）：检查页的读、写和从规矩生成草稿。 */
@@ -103,6 +133,10 @@ export interface IpcDeps {
   availability: Pick<ClaudeAvailability, "view" | "pauseLessons" | "resumeLessons">;
   /** 模型路由（3.0）：设置页的整份数据和操作；act 返回错误文字，成功为 null。 */
   routing: { view(): RoutingView; act(a: RoutingAction): Promise<string | null> };
+  /** 花费上限和成本熔断（工作流 L）。set 不合法时回错误文字（不抛）。 */
+  cost: { breakers(): CostBreakerView[]; view(scope: PolicyScope): CostView; set(scope: PolicyScope, overrides: unknown): CostSetResult; resume(kind: CostSubjectKind, id: string): Promise<CostResumeResult> };
+  /** 后台调度（工作流 L）。 */
+  background: { status(): BackgroundStatusView; act(a: BackgroundAction): void };
   /** session 撞限后换模型（SessionModelSwitcher）。 */
   switcher: { switch(sessionId: string, model?: string): Promise<SwitchResult>; dismiss(sessionId: string): void; views(): SessionLimitView[] };
   /** 用户在终端里打字（WS-M E：马上恢复优先级）。 */
@@ -434,6 +468,25 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.lessonsPending, (): number => d.lessons.pendingCount());
   handle(IPC.lessonsBatches, (raw: unknown): BatchView[] => d.batches.list(batchListArg(raw)));
   handle(IPC.lessonsBatch, (raw: unknown): BatchDetail | null => d.batches.get(batchIdArg(raw)));
+  handle(IPC.admissionState, (): AdmissionPageState => d.admission.state());
+  handle(IPC.wizardEstimate, (raw: unknown): Promise<WizardEstimate> => d.admission.estimate(admissionScopeArg(raw)));
+  handle(IPC.wizardAct, async (raw: unknown): Promise<WizardActResult> => {
+    const r = await d.admission.wizardAct(wizardActionArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.calibrationSample, (raw: unknown): CalibrationSample => d.admission.calibrationSample(admissionScopeArg(raw)));
+  handle(IPC.calibrationStats, (raw: unknown): CalibrationStatsView => d.admission.calibrationStats(calibrationSinceArg(raw)));
+  handle(IPC.calibrationAct, (raw: unknown): CalibrationActResult => {
+    const r = d.admission.calibrationAct(calibrationActionArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.principlesRegroup, async (): Promise<RegroupResult> => {
+    const r = await d.admission.regroupPrinciples();
+    d.notify();
+    return r;
+  });
   handle(IPC.policiesGet, (raw: unknown): AdmissionPolicyView => d.policies.view(policyScopeArg(raw)));
   handle(IPC.policiesSet, (raw: unknown) => {
     const { scope, overrides } = policySetArg(raw);
@@ -441,6 +494,25 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
     return r;
   });
+  handle(IPC.loopPolicyGet, (raw: unknown): LoopPolicyView => d.loop.policyView(policyScopeArg(raw)));
+  handle(IPC.loopPolicySet, (raw: unknown): void => {
+    const { scope, overrides } = loopSetArg(raw);
+    d.loop.policySet(scope, overrides);
+    d.notify();
+  });
+  handle(IPC.loopCommentsList, (raw: unknown): PrCommentsView[] => d.loop.comments(ticketKeyArg(raw)));
+  handle(IPC.loopCommentsAct, async (raw: unknown): Promise<CommentItemView | null> => {
+    const r = await d.loop.act(commentActionArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.loopFlakyList, (): FlakyEntry[] => d.loop.flaky());
+  handle(IPC.loopFlakyAct, (raw: unknown): boolean => {
+    const r = d.loop.flakyAct(flakyActionArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.loopEffect, (raw: unknown): LoopEffect => d.loop.effect(raw));
   handle(IPC.checksView, (raw: unknown): ChecksView => d.checks.view(checkScopeArg(raw)));
   handle(IPC.checksHits, (raw: unknown): CheckHitView[] => d.checks.hits(checkKeyArg(raw)));
   handle(IPC.checksAct, (raw: unknown): ChecksActResult => {
@@ -496,6 +568,25 @@ export function registerIpc(d: IpcDeps): void {
     const r = await d.routing.act(routingActionArg(raw));
     d.notify();
     return r;
+  });
+  handle(IPC.costBreakers, (): CostBreakerView[] => d.cost.breakers());
+  handle(IPC.costView, (raw: unknown): CostView => d.cost.view(policyScopeArg(raw)));
+  handle(IPC.costSet, (raw: unknown): CostSetResult => {
+    const { scope, overrides } = costSetArg(raw);
+    const r = d.cost.set(scope, overrides);
+    d.notify();
+    return r;
+  });
+  handle(IPC.costResume, async (raw: unknown): Promise<CostResumeResult> => {
+    const { subjectKind, subjectId } = costSubjectArg(raw);
+    const r = await d.cost.resume(subjectKind, subjectId);
+    d.notify();
+    return r;
+  });
+  handle(IPC.backgroundStatus, (): BackgroundStatusView => d.background.status());
+  handle(IPC.backgroundAct, (raw: unknown): void => {
+    d.background.act(backgroundActionArg(raw));
+    d.notify();
   });
   handle(IPC.sessionsSwitchModel, async (id: unknown, model: unknown): Promise<SwitchResult> => {
     const r = await d.switcher.switch(sessionIdArg(id), switchModelArg(model));

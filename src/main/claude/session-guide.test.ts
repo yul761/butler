@@ -163,20 +163,60 @@ describe("session guide", () => {
 describe("repo profile", () => {
   const profile = "Repo a/web (scanned 2026-11-18; the repo's own commands):\n- all tests: `pnpm test`";
   it("goes into ticket guides only, after the lessons", () => {
-    const t = sessionGuide("en", "ticket", [{ label: "a/web", text: "keep it small" }], [], profile);
+    const t = sessionGuide("en", "ticket", [{ label: "a/web", text: "keep it small" }], { profile });
     expect(t).toContain("use the repo's own commands");
     expect(t.indexOf("`pnpm test`")).toBeGreaterThan(t.indexOf("keep it small"));
-    expect(sessionGuide("en", "coordinator", [], [], profile)).not.toContain("pnpm test");
-    expect(sessionGuide("zh", "ticket", [], [], profile)).toContain("优先用这些仓库自己的命令");
+    expect(sessionGuide("en", "coordinator", [], { profile })).not.toContain("pnpm test");
+    expect(sessionGuide("zh", "ticket", [], { profile })).toContain("优先用这些仓库自己的命令");
   });
   it("is part of the hashed file name", () => {
     const dir = tempDir();
     const plain = writeSessionGuide(dir, "en", "ticket");
-    const a = writeSessionGuide(dir, "en", "ticket", [], [], profile);
-    const b = writeSessionGuide(dir, "en", "ticket", [], [], `${profile}\n- lint: \`pnpm lint\``);
+    const a = writeSessionGuide(dir, "en", "ticket", [], { profile });
+    const b = writeSessionGuide(dir, "en", "ticket", [], { profile: `${profile}\n- lint: \`pnpm lint\`` });
     expect(a).not.toBe(plain);
     expect(a).not.toBe(b);
     expect(readFileSync(b, "utf8")).toContain("pnpm lint");
-    expect(writeSessionGuide(dir, "en", "coordinator", [], [], profile)).toBe(writeSessionGuide(dir, "en", "coordinator"));
+    expect(writeSessionGuide(dir, "en", "coordinator", [], { profile })).toBe(writeSessionGuide(dir, "en", "coordinator"));
+  });
+});
+
+describe("session guide: principles and pre-review (workstream D)", () => {
+  it("writes principle lines with a case count and the cases into a sibling file", () => {
+    const dir = tempDir();
+    const lessons = [{ label: "acme/web", text: "Never swallow errors", cases: ["log errors", "rethrow errors"] }, { label: "acme/web", text: "use tabs" }];
+    const file = writeSessionGuide(dir, "en", "ticket", lessons);
+    const text = readFileSync(file, "utf8");
+    expect(text).toContain("- [acme/web] Never swallow errors (2 cases)");
+    expect(text).toContain("- [acme/web] use tabs");
+    const cases = /read its cases .* in (\S+lessons-cases-[0-9a-f]{12}\.md)\./.exec(text)?.[1];
+    expect(cases).toBeDefined();
+    expect(readFileSync(cases!, "utf8")).toContain("## [acme/web] Never swallow errors\n- log errors\n- rethrow errors");
+    expect(text).not.toContain("pre-review");
+  });
+
+  it("mentions the pre-review only when one is active", () => {
+    expect(sessionGuide("en", "ticket", [{ label: "r", text: "t" }], { preReview: true })).toContain("A pre-review runs automatically before a PR is opened");
+    expect(sessionGuide("zh", "ticket", [{ label: "r", text: "t" }], { preReview: false })).not.toContain("预审");
+  });
+
+  it("prunes old cases files with the guides", () => {
+    const dir = tempDir();
+    const f = join(dir, "lessons-cases-0123456789ab.md");
+    writeFileSync(f, "x");
+    utimesSync(f, 1, 1);
+    expect(pruneSessionGuides(dir, Date.now())).toBe(1);
+    expect(existsSync(f)).toBe(false);
+  });
+
+  it("a guide and cases file reused unchanged count as fresh, so pruning keeps them", () => {
+    const dir = tempDir();
+    const lessons = [{ label: "acme/web", text: "P", cases: ["a", "b", "c"] }];
+    const file = writeSessionGuide(dir, "en", "ticket", lessons);
+    const cases = /in (\S+lessons-cases-[0-9a-f]{12}\.md)\./.exec(readFileSync(file, "utf8"))![1];
+    for (const f of [file, cases]) utimesSync(f, 1, 1);
+    expect(writeSessionGuide(dir, "en", "ticket", lessons)).toBe(file);
+    expect(pruneSessionGuides(dir, Date.now())).toBe(0);
+    for (const f of [file, cases]) expect(existsSync(f)).toBe(true);
   });
 });

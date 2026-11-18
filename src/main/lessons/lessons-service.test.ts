@@ -26,7 +26,7 @@ const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: strin
   const runs = new LessonRunsRepo(db);
   const openExternal = vi.fn();
   const notify = vi.fn();
-  const backfill = vi.fn(async () => ({ ok: true as const, enqueued: 3 }));
+  const backfill = vi.fn(async () => ({ ok: true as const, enqueued: 3, prs: [1, 2, 3] }));
   const runner = {
     backfill,
     cancel: vi.fn((): "ok" | "not_found" | "bad_status" => "ok"),

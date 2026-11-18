@@ -63,6 +63,15 @@ describe("DeliveryGuard", () => {
     expect(woken).toHaveLength(1);
   });
 
+  it("blocks a cost-paused session before anything else and does not wake it (workstream L)", () => {
+    const t = setup();
+    t.state.term = null;
+    const woken: string[] = [];
+    const g = new DeliveryGuard({ ...t.deps(), wakeIfHibernated: (id) => (woken.push(id), true), costPaused: (id) => id === "s-old" });
+    expect(g.check("s-old")).toEqual({ ok: false, block: "cost_paused" });
+    expect(woken).toEqual([]);
+  });
+
   it("blocks on a draft even after the quiet period", () => {
     const t = setup();
     t.state.typedAt = t.state.now - 10 * USER_TYPING_QUIET_MS;

@@ -32,6 +32,8 @@
 //     需要你的判断（schema 里有 needs_user）：回复是 /fake-ask 的问话就说需要你（理由是那句问话），别的都失败退出（Butler 当作不需要你）；
 //     FAKE_CLAUDE_JUDGE_DELAY_MS 设了就等这么久才失败（像真的 Haiku 要判断几秒）。
 //     规矩补填（schema 里有 enriched）：每条规矩补上 globs ["src/**"]，正文提到 console 的算 checkable；运行记录记一行 lesson enrich <条数>；
+//     规矩准入（schema 里有 groups / conflicts / clarity / classified / reviews / principles）：没有重复和冲突、都清楚、
+//       提到 console 的算 checkable、抽查都通过、不归原则；运行记录记一行 admission <键> <条数>；
 //     review 经验的分析（schema 里有 findings）：每次重新读 FAKE_CLAUDE_LESSONS_FILE 里的模式，运行记录记一行 lessons <模式>：
 //       没有这个文件或 ok → 回 { findings: [] }，带花费、时长和 modelUsage；
 //       fail → stdout 一个 is_error 的结果（result 是 boom，带花费），stderr 一行 fake lessons stderr: boom，退出 1；
@@ -268,6 +270,23 @@ function headless() {
         : { checkable: true, reason: "fake: a pattern is enough", check: { type: "forbidden_pattern", name: "no console.log", params: { pattern: "console\\.log\\(" }, globs: ["src/**"], severity: "block", message: "Use the logger instead." } };
       log(`check draft ${draft.checkable}`);
       process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `draft-${Date.now()}`, result: JSON.stringify(draft), structured_output: draft, permission_denials: [], total_cost_usd: 0 })}\n`);
+      return;
+    }
+    // 规矩准入的几步（工作流 D）：没有重复、没有冲突、都清楚、提到 console 的能写成检查、抽查都通过、不归原则。
+    const admissionKey = ["groups", "conflicts", "clarity", "classified", "reviews", "principles"].find((k) => props[k]);
+    if (admissionKey) {
+      const ids = [...input.matchAll(/^#(\d+) \[[^\]]*\] (.*)$/gm)].map((m) => ({ id: Number(m[1]), text: m[2] }));
+      const answer = {
+        groups: () => [],
+        conflicts: () => [],
+        principles: () => [],
+        clarity: () => ids.map((l) => ({ id: l.id, answer: "yes", scope_clear: true, reason: "fake: clear" })),
+        classified: () => ids.map((l) => ({ id: l.id, checkability: /console/i.test(l.text) ? "checkable" : "prose", reason: "fake classify", covered_by: null })),
+        reviews: () => ids.map((l) => ({ id: l.id, reasonable: true, follows: true, scope_ok: true, note: "fake: fine" })),
+      }[admissionKey]();
+      const out = { [admissionKey]: answer };
+      log(`admission ${admissionKey} ${ids.length}`);
+      process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `admission-${Date.now()}`, result: JSON.stringify(out), structured_output: out, permission_denials: [], total_cost_usd: 0 })}\n`);
       return;
     }
     if (props.inferred_checks) {

@@ -245,6 +245,28 @@ describe("manual_trigger recording (successful invokes)", () => {
     expect(noOpResult(IPC.handoffsRun, undefined)).toBe(false);
   });
 
+  it("counts a breaker continue-and-raise on its ticket or session, but not when nothing was tripped", () => {
+    const { repo, record } = rec();
+    expect(recordInvoke(record, IPC.costResume, [{ subjectKind: "ticket", subjectId: "T-3" }], { ok: true, cap: 10 })).toBe(true);
+    expect(recordInvoke(record, IPC.costResume, [{ subjectKind: "session", subjectId: "root-1" }], { ok: true, cap: 10 })).toBe(true);
+    expect(recordInvoke(record, IPC.costResume, [{ subjectKind: "ticket", subjectId: "T-3" }], { ok: false, reason: "not_tripped" })).toBe(false);
+    expect(recordInvoke(record, IPC.costSet, [{}])).toBe(false);
+    expect(recordInvoke(record, IPC.backgroundAct, [{ op: "pauseKind", kind: "backtest" }])).toBe(false);
+    expect(repo.events(0).map((e) => [e.sessionId, e.ticketKey])).toEqual([[null, "T-3"], ["root-1", null]]);
+  });
+
+  it("counts sending or re-replying a comment, not recategorising or dismissing it", () => {
+    const { repo, record } = rec();
+    const view = { id: 1 };
+    expect(recordInvoke(record, IPC.loopCommentsAct, [{ op: "send", id: 1 }], view)).toBe(true);
+    expect(recordInvoke(record, IPC.loopCommentsAct, [{ op: "reply", id: 1 }], view)).toBe(true);
+    expect(recordInvoke(record, IPC.loopCommentsAct, [{ op: "send", id: 2 }], null)).toBe(false);
+    expect(recordInvoke(record, IPC.loopCommentsAct, [{ op: "categorize", id: 1, category: "fix" }], view)).toBe(false);
+    expect(recordInvoke(record, IPC.loopCommentsAct, [{ op: "dismiss", id: 1 }], view)).toBe(false);
+    expect(recordInvoke(record, IPC.loopPolicySet, [{}])).toBe(false);
+    expect(repo.events(0)).toHaveLength(2);
+  });
+
   it("ignores reads, setup and channels counted as needs_you_answer", () => {
     const { repo, record } = rec();
     expect(recordInvoke(record, IPC.ticketsList, [])).toBe(false);

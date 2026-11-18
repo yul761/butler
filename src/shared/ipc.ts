@@ -94,6 +94,14 @@ export const IPC = {
   /** 批次历史（契约 4.4）：列表和一个批次的明细。撤销走 lessons:act 的 undoBatch。 */
   lessonsBatches: "lessons:batches",
   lessonsBatch: "lessons:batch",
+  /** 规矩准入（工作流 D）：向导的运行、估算和动作；校准页；原则重新分组。 */
+  admissionState: "admission:state",
+  wizardEstimate: "admission:wizard-estimate",
+  wizardAct: "admission:wizard-act",
+  calibrationSample: "admission:calibration-sample",
+  calibrationStats: "admission:calibration-stats",
+  calibrationAct: "admission:calibration-act",
+  principlesRegroup: "admission:principles-regroup",
   /** 三层准入策略（契约 4.2）。 */
   policiesGet: "policies:get",
   policiesSet: "policies:set",
@@ -128,6 +136,15 @@ export const IPC = {
   /** 设置页「模型路由」（3.0）。 */
   routingView: "routing:view",
   routingAct: "routing:act",
+  /** 设置页「花费与后台」（工作流 L）：花费上限的一层、熔断状态和记录；改一层；「继续并提高上限」。 */
+  costView: "cost:view",
+  costSet: "cost:set",
+  costResume: "cost:resume",
+  /** session 行的熔断提示：现在不是 ok 的熔断状态。 */
+  costBreakers: "cost:breakers",
+  /** 后台调度的现状（空闲、时段、额度、每种任务）；手动停 / 恢复一种任务。 */
+  backgroundStatus: "background:status",
+  backgroundAct: "background:act",
   /** 重发一条递不出去的 CI 结论（工作流 W）：马上再试一次，返回结果（sent 或没递的原因）。 */
   ciResend: "ci:resend",
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）：一个 feature、一个 epic 或者全部的未决条目和最近的汇报。 */
@@ -152,6 +169,14 @@ export const IPC = {
   termsSave: "terms:save",
   auditList: "audit:list",
   externalAuditList: "externalAudit:list",
+  /** 评论闭环和 CI 分类（工作流 I）。 */
+  loopPolicyGet: "loop:policy:get",
+  loopPolicySet: "loop:policy:set",
+  loopCommentsList: "loop:comments:list",
+  loopCommentsAct: "loop:comments:act",
+  loopFlakyList: "loop:flaky:list",
+  loopFlakyAct: "loop:flaky:act",
+  loopEffect: "loop:effect",
   progressGet: "progress:get",
   /** 「效果」页（ws-h）：和总控 metrics_overview 同一份。 */
   metricsView: "metrics:view",
@@ -181,11 +206,12 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
   IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft,
-  IPC.baselinesView, IPC.baselinesAct, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyAct, IPC.legacyViolations, IPC.checkExportList, IPC.checkExportAct, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget,
-  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.ciResend, IPC.routingView, IPC.routingAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
+  IPC.baselinesView, IPC.baselinesAct, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyAct, IPC.legacyViolations, IPC.checkExportList, IPC.checkExportAct, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget, IPC.admissionState, IPC.wizardEstimate, IPC.wizardAct, IPC.calibrationSample, IPC.calibrationStats, IPC.calibrationAct, IPC.principlesRegroup,
+  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.ciResend, IPC.routingView, IPC.routingAct, IPC.costView, IPC.costSet, IPC.costResume, IPC.costBreakers, IPC.backgroundStatus, IPC.backgroundAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList, IPC.externalAuditList,
+  IPC.loopPolicyGet, IPC.loopPolicySet, IPC.loopCommentsList, IPC.loopCommentsAct, IPC.loopFlakyList, IPC.loopFlakyAct, IPC.loopEffect,
   IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,
 ];

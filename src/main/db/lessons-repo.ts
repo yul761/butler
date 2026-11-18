@@ -321,6 +321,12 @@ export class LessonsRepo {
     return cur;
   }
 
+  /** 这一行最后一次改动的时间（准入的计划只写这一遍开始以后没被改过的）。 */
+  updatedAt(id: number): number | null {
+    const r = this.db.prepare(`SELECT updated_at FROM lessons WHERE id = ?`).get(id) as { updated_at: number } | undefined;
+    return r ? Number(r.updated_at) : null;
+  }
+
   /** 改准入、范围、评分等字段（只改给了的）。 */
   setFields(id: number, patch: LessonFieldsPatch, now: number): void {
     const sets: string[] = [];
@@ -510,15 +516,18 @@ export class LessonsRepo {
   }
 
   /** 优先级高的先，其次最早的 queued 且 not_before 为空或 <= now，改成 running（优先级清零）。不计 attempts，真正起进程前调 markSpawned。 */
-  take(now: number): QueueItem | null {
+  take(now: number, origins?: readonly QueueItem["origin"][]): QueueItem | null {
+    if (origins && origins.length === 0) return null;
     return withTransaction(this.db, () => {
+      // origins：后台调度（工作流 L）这会儿放行的来源；不给就不限。
+      const only = origins ? `AND origin IN (${origins.map(() => "?").join(",")})` : "";
       const r = this.db
         .prepare(
           `SELECT id, repo_slug, pr_number, origin, attempts FROM lesson_queue
-           WHERE status = 'queued' AND (not_before IS NULL OR not_before <= ?)
+           WHERE status = 'queued' AND (not_before IS NULL OR not_before <= ?) ${only}
            ORDER BY priority DESC, enqueued_at, id LIMIT 1`,
         )
-        .get(now) as unknown as { id: number; repo_slug: string; pr_number: number; origin: QueueItem["origin"]; attempts: number } | undefined;
+        .get(now, ...(origins ?? [])) as unknown as { id: number; repo_slug: string; pr_number: number; origin: QueueItem["origin"]; attempts: number } | undefined;
       if (!r) return null;
       this.db.prepare(`UPDATE lesson_queue SET status = 'running', priority = 0 WHERE id = ?`).run(r.id);
       return { id: Number(r.id), slug: r.repo_slug, prNumber: Number(r.pr_number), origin: r.origin, attempts: Number(r.attempts) };
@@ -643,6 +652,16 @@ export class LessonsRepo {
     return Number((this.db.prepare(`SELECT COUNT(*) AS n FROM lesson_queue WHERE status = 'queued'`).get() as { n: number }).n);
   }
 
+  /** 按来源数排队和在跑的（后台调度的状态表用）。 */
+  queueCountsByOrigin(): Partial<Record<QueueItem["origin"], { queued: number; running: number }>> {
+    const rows = this.db
+      .prepare(`SELECT origin, SUM(status = 'queued') AS q, SUM(status = 'running') AS r FROM lesson_queue WHERE status IN ('queued','running') GROUP BY origin`)
+      .all() as unknown as { origin: QueueItem["origin"]; q: number; r: number }[];
+    const out: Partial<Record<QueueItem["origin"], { queued: number; running: number }>> = {};
+    for (const r of rows) out[r.origin] = { queued: Number(r.q), running: Number(r.r) };
+    return out;
+  }
+
   /** 启动时 running → queued，返回个数。 */
   resetRunning(): number {
     return Number(this.db.prepare(`UPDATE lesson_queue SET status = 'queued' WHERE status = 'running'`).run().changes);
@@ -659,6 +678,50 @@ export class LessonsRepo {
       )
       .get(slug) as unknown as LessonQueueCounts;
     return { queued: Number(r.queued), running: Number(r.running), failed: Number(r.failed), skipped: Number(r.skipped), cancelled: Number(r.cancelled) };
+  }
+
+  /** 这几个 PR 在队列里的状态（向导等它们分析完）；不在队列里的没有。 */
+  queueStatusOf(slug: string, prs: readonly number[]): Map<number, { status: LessonQueueRow["status"]; attempts: number }> {
+    const out = new Map<number, { status: LessonQueueRow["status"]; attempts: number }>();
+    const want = new Set(prs);
+    for (const r of this.db.prepare(`SELECT pr_number, status, attempts FROM lesson_queue WHERE repo_slug = ?`).all(slug) as { pr_number: number; status: LessonQueueRow["status"]; attempts: number }[])
+      if (want.has(Number(r.pr_number))) out.set(Number(r.pr_number), { status: r.status, attempts: Number(r.attempts) });
+    return out;
+  }
+
+  /** 原则的正文（会话说明用）。 */
+  /** 归到哪条原则（不算对规矩的改动：不动 updated_at）。 */
+  setPrinciple(id: number, principleId: number | null): void {
+    this.db.prepare(`UPDATE lessons SET principle_id = ? WHERE id = ?`).run(principleId, id);
+  }
+
+  principleTexts(ids: readonly number[]): Map<number, { text: string; why: string }> {
+    const out = new Map<number, { text: string; why: string }>();
+    if (!ids.length) return out;
+    const q = this.db.prepare(`SELECT id, text, why FROM lesson_principles WHERE id = ?`);
+    for (const id of new Set(ids)) {
+      const r = q.get(id) as { id: number; text: string; why: string } | undefined;
+      if (r) out.set(Number(r.id), { text: r.text, why: r.why });
+    }
+    return out;
+  }
+
+  /**
+   * 确认以后又被违反了几次（核心说明的排序）：确认之后才来的出处（review 里又被指出），加上从它做出来的检查的 fail 命中。
+   */
+  violationCounts(ids: readonly number[]): Map<number, number> {
+    const out = new Map<number, number>();
+    if (!ids.length) return out;
+    const src = this.db.prepare(`SELECT COUNT(*) AS n FROM lesson_sources s JOIN lessons l ON l.id = s.lesson_id WHERE s.lesson_id = ? AND l.confirmed_at IS NOT NULL AND s.at > l.confirmed_at`);
+    const hits = this.db.prepare(`SELECT COUNT(*) AS n FROM check_hits h JOIN checks c ON c.id = h.check_id WHERE c.lesson_id = ? AND h.outcome = 'fail'`);
+    for (const id of new Set(ids)) out.set(id, Number((src.get(id) as { n: number }).n) + Number((hits.get(id) as { n: number }).n));
+    return out;
+  }
+
+  /** 分析一个 PR 平均要多久（向导的估算）；没有记录时为 null。 */
+  averageRunMs(): number | null {
+    const r = this.db.prepare(`SELECT AVG(duration_ms) AS ms FROM (SELECT duration_ms FROM lesson_runs WHERE status = 'done' AND duration_ms IS NOT NULL ORDER BY id DESC LIMIT 50)`).get() as { ms: number | null };
+    return r.ms === null ? null : Math.round(Number(r.ms));
   }
 
   queueRows(slug: string): LessonQueueRow[] {

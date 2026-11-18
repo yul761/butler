@@ -277,6 +277,16 @@ export class PtyManager {
     this.guard(termId, "write", () => t?.proc.write(data));
   }
 
+  /**
+   * Butler 自己按 Esc 打断正在跑的这一轮（成本熔断暂停，工作流 L）。不算用户输入：
+   * 不然熔断会把自己的 Esc 当成「用户接手了」，之后再也不结束还在花钱的终端。草稿也不动。
+   */
+  interrupt(termId: string): void {
+    const t = this.terms.get(termId);
+    if (!t) return;
+    this.guard(termId, "write", () => t.proc.write("\x1b"));
+  }
+
   /** 用户最后一次回车之后有没有打过可见字符（还没发出去）。Butler 的 prefill 也算草稿；deliver 不算。终端不在了返回 false。 */
   hasDraft(termId: string): boolean {
     return (this.terms.get(termId)?.draftLen ?? 0) > 0;

@@ -1,4 +1,5 @@
 import type { AvailabilityAction, LimitKind } from "../../shared/availability";
+import { isBgKind, type BackgroundAction } from "../../shared/background";
 import { isModelName, isTaskId, isTier, POLICIES, type LimitPolicy, type LimitRuleKind, type RegistryModel, type RoutingAction, type Tier } from "../../shared/model-routing";
 import type { SensitiveTerm } from "../../shared/llm";
 import { CONTEXT_LIMIT } from "../../shared/control";
@@ -8,9 +9,12 @@ import type {
 import type { PrStagesScope } from "../../shared/pr-stages";
 import { LESSON_BULK_VERBS, MAX_TARGET_IDS, type LessonAction, type LessonBulkVerb, type LessonTarget } from "../../shared/lessons";
 import { parseLessonFilter } from "../../shared/lesson-filter";
+import type { AdmissionScope, CalibrationAction, WizardAction } from "../../shared/lesson-admission";
 import { CHECKS_BULK_OPS, parseCheckScope, type CheckScope, type ChecksAction, type ChecksBulkOp } from "../../shared/checks";
 import { parsePolicyOverrides, type AdmissionPolicyOverrides, type PolicyScope } from "../../shared/admission-policy";
 import type { BaselinesAction, CheckExportAction, LegacyAction } from "../../shared/baselines";
+import { parseLoopOverrides, type LoopPolicyOverrides, type LoopScope } from "../../shared/loop-policy";
+import { COMMENT_CATEGORIES, type CommentAction, type CommentCategory, type FlakyAction } from "../../shared/loop";
 import {
   EXPORT_CONTENTS, type ExportContent, type ExportRequest, type ExportScopeArg, type ImportApplyRequest, type Resolution, type StarterTarget,
 } from "../../shared/config-io";
@@ -408,6 +412,61 @@ export function lessonActionArg(v: unknown): LessonAction {
   }
 }
 
+/** 准入的范围：一个仓库、一个产品或全部。 */
+export function admissionScopeArg(v: unknown): AdmissionScope {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid admission scope");
+  if (o.kind === "all") return { kind: "all" };
+  if (o.kind === "repo") return { kind: "repo", slug: lessonSlugArg(o.slug) };
+  if (o.kind === "product") return { kind: "product", productId: lessonIdArg(o.productId) };
+  throw new Error("invalid admission scope");
+}
+
+const wizardRunIdArg = (v: unknown): number => {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error("invalid wizard run");
+  return v;
+};
+
+export function wizardActionArg(v: unknown): WizardAction {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid wizard action");
+  switch (o.op) {
+    case "start":
+      return { op: "start", scope: admissionScopeArg(o.scope) };
+    case "recalculate":
+    case "retry":
+    case "accept":
+    case "cancel":
+      return { op: o.op, runId: wizardRunIdArg(o.runId) };
+    case "pullBack":
+    case "rejectGroup":
+      if (!Array.isArray(o.lessonIds) || o.lessonIds.length === 0 || o.lessonIds.length > MAX_TARGET_IDS) throw new Error("invalid wizard action");
+      return { op: o.op, runId: wizardRunIdArg(o.runId), lessonIds: o.lessonIds.map(lessonIdArg) };
+    default:
+      throw new Error("invalid wizard action");
+  }
+}
+
+/** 校准页「这次抽样从什么时候起」：null 或毫秒时间戳。 */
+export function calibrationSinceArg(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw new Error("invalid calibration time");
+  return v;
+}
+
+export function calibrationActionArg(v: unknown): CalibrationAction {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid calibration action");
+  if (o.op === "markCalibrated") return { op: "markCalibrated" };
+  if (o.op === "mark") {
+    if (o.mark !== "good" && o.mark !== "bad" && o.mark !== "skip") throw new Error("invalid calibration action");
+    const since = calibrationSinceArg(o.since);
+    if (since === null) throw new Error("invalid calibration action");
+    return { op: "mark", lessonId: lessonIdArg(o.lessonId), mark: o.mark, since };
+  }
+  throw new Error("invalid calibration action");
+}
+
 /** 批次 id：正整数。 */
 export function batchIdArg(v: unknown): number {
   if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error("invalid batch id");
@@ -475,6 +534,32 @@ export function policyScopeArg(v: unknown): PolicyScope {
 export function policySetArg(v: unknown): { scope: PolicyScope; overrides: AdmissionPolicyOverrides } {
   const o = objArg(v, "policy change", ["scope", "overrides"]);
   return { scope: policyScopeArg(o.scope), overrides: parsePolicyOverrides(o.overrides) };
+}
+
+/** 评论与 CI 策略改一层（工作流 I）：覆盖整个换掉，值按键校验。 */
+export function loopSetArg(v: unknown): { scope: LoopScope; overrides: LoopPolicyOverrides } {
+  const o = objArg(v, "loop policy change", ["scope", "overrides"]);
+  return { scope: policyScopeArg(o.scope), overrides: parseLoopOverrides(o.overrides) };
+}
+
+export function commentActionArg(v: unknown): CommentAction {
+  const o = objArg(v, "comment action", ["op", "id", "category"]);
+  const id = posInt(o.id, "comment action");
+  if (o.op === "categorize") {
+    if (!(COMMENT_CATEGORIES as readonly unknown[]).includes(o.category)) throw new Error("invalid comment action");
+    return { op: "categorize", id, category: o.category as CommentCategory };
+  }
+  if (o.category !== undefined) throw new Error("invalid comment action");
+  if (o.op === "send" || o.op === "dismiss" || o.op === "reply") return { op: o.op, id };
+  throw new Error("invalid comment action");
+}
+
+export function flakyActionArg(v: unknown): FlakyAction {
+  const o = objArg(v, "flaky action", ["op", "repoSlug", "kind", "name"]);
+  if (o.op !== "add" && o.op !== "remove") throw new Error("invalid flaky action");
+  if (o.kind !== "check" && o.kind !== "test") throw new Error("invalid flaky action");
+  if (typeof o.name !== "string" || !o.name.trim() || o.name.length > 200) throw new Error("invalid flaky action");
+  return { op: o.op, repoSlug: lessonSlugArg(o.repoSlug), kind: o.kind, name: o.name.trim() };
 }
 
 export function exportRequestArg(v: unknown): ExportRequest {
@@ -734,4 +819,25 @@ export function checkExportActionArg(v: unknown): CheckExportAction {
   if (o.kind === "run") return { kind: "run", checkKey: checkKeyArg(o.checkKey), slug: slugArg(o.slug) };
   if (o.kind === "discard" || o.kind === "push" || o.kind === "pr" || o.kind === "open") return { kind: o.kind, id: positiveId(o.id, "export id") };
   throw new Error("invalid export action");
+}
+
+/** 改花费上限的一层（工作流 L）：覆盖整个换掉，值在 CostPolicyService 里按键校验（不合法的回 CostSetResult）。 */
+export function costSetArg(v: unknown): { scope: PolicyScope; overrides: unknown } {
+  const o = objArg(v, "cost change", ["scope", "overrides"]);
+  if (!o.overrides || typeof o.overrides !== "object" || Array.isArray(o.overrides)) throw new Error("invalid cost change");
+  return { scope: policyScopeArg(o.scope), overrides: o.overrides };
+}
+
+/** 「继续并提高上限」的对象：session（链的根 id）或 ticket。 */
+export function costSubjectArg(v: unknown): { subjectKind: "session" | "ticket"; subjectId: string } {
+  const o = objArg(v, "cost subject", ["subjectKind", "subjectId"]);
+  if (o.subjectKind === "session") return { subjectKind: "session", subjectId: sessionIdArg(o.subjectId) };
+  if (o.subjectKind === "ticket") return { subjectKind: "ticket", subjectId: ticketKeyArg(o.subjectId) };
+  throw new Error("invalid cost subject");
+}
+
+export function backgroundActionArg(v: unknown): BackgroundAction {
+  const o = objArg(v, "background action", ["op", "kind"]);
+  if ((o.op === "pauseKind" || o.op === "resumeKind") && isBgKind(o.kind)) return { op: o.op, kind: o.kind };
+  throw new Error("invalid background action");
 }

@@ -215,7 +215,7 @@ function runGh(cwd: string, args: string[], timeoutMs: number, maxBuffer: number
 }
 
 /** 同 runGh，另外带回 stderr（失败时用来分辨原因）。 */
-function runGhDetail(cwd: string, args: string[], timeoutMs: number, maxBuffer: number, env?: NodeJS.ProcessEnv): Promise<{ stdout: string | null; stderr: string }> {
+export function runGhDetail(cwd: string, args: string[], timeoutMs: number, maxBuffer: number, env?: NodeJS.ProcessEnv): Promise<{ stdout: string | null; stderr: string }> {
   const bin = ghBinary();
   if (bin === null) return Promise.resolve({ stdout: null, stderr: "" });
   return new Promise((done) => {
@@ -230,7 +230,7 @@ function joinStderr(...parts: string[]): string {
 }
 
 /** slug（github.com 上是 owner/repo，其他主机是 host/owner/repo）→ gh 的环境变量（两段的 slug 固定 GH_HOST=github.com，不受环境里的 GH_HOST 影响），让 {owner}/{repo} 从它解析而不是从 cwd。没有 slug 返回 undefined。 */
-function repoEnv(repo: string | null | undefined): NodeJS.ProcessEnv | undefined {
+export function repoEnv(repo: string | null | undefined): NodeJS.ProcessEnv | undefined {
   if (!repo) return undefined;
   const parts = repo.split("/");
   return parts.length === 3 ? { GH_REPO: repo, GH_HOST: parts[0] } : { GH_REPO: repo, GH_HOST: "github.com" };
@@ -624,8 +624,8 @@ export async function prLessonDataDetail(cwd: string, number: number, timeoutMs:
 }
 
 /** gh api compare：两个提交之间改了哪些文件和 patch。没有 patch 的文件（二进制）patch 为 ""。失败返回 null。 */
-export async function compareFiles(cwd: string, base: string, head: string, timeoutMs: number): Promise<{ filename: string; patch: string }[] | null> {
-  const rows = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/compare/${base}...${head}`, "--jq", ".files[] | {filename, patch}"], timeoutMs, 8 * 1024 * 1024));
+export async function compareFiles(cwd: string, base: string, head: string, timeoutMs: number, repo?: string | null): Promise<{ filename: string; patch: string }[] | null> {
+  const rows = parseLines(await runGh(cwd, ["api", `repos/{owner}/{repo}/compare/${base}...${head}`, "--jq", ".files[] | {filename, patch}"], timeoutMs, 8 * 1024 * 1024, repoEnv(repo)));
   if (rows === null) return null;
   const out: { filename: string; patch: string }[] = [];
   for (const item of rows) {

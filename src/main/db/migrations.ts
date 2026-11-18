@@ -851,6 +851,165 @@ export const MIGRATIONS: string[] = [
     PRIMARY KEY (run_id, lesson_id));
   ALTER TABLE score_calibration ADD COLUMN source TEXT NOT NULL DEFAULT 'override' CHECK (source IN ('override','review'));
   `,
+  // 工作流 L：通用后台队列（设计 2026-11-17-ws-l-cost-idle 第 3.6 节）。state：queued / running / done / failed / cancelled；
+  // checkpoint 是任务自己存的 JSON（让路、重启后从这里接着跑）；dedupe_key 在排队和在跑的行里每种唯一。
+  // session_usage.ticket_key：headless 调用归到哪个 ticket（成本熔断按 ticket 汇总）。
+  // cost_caps：花费上限的三层覆盖（契约 4.2）；cost_breaker：每个 session（链的根 id）/ ticket 的熔断状态；cost_events：熔断的记录。
+  `
+  CREATE TABLE background_jobs (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','running','done','failed','cancelled')),
+    checkpoint TEXT,
+    priority INTEGER NOT NULL DEFAULT 0,
+    ticket_key TEXT,
+    dedupe_key TEXT,
+    not_before INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    enqueued_at INTEGER NOT NULL,
+    started_at INTEGER,
+    finished_at INTEGER);
+  CREATE INDEX background_jobs_pick ON background_jobs (state, kind, priority DESC, id);
+  CREATE UNIQUE INDEX background_jobs_dedupe ON background_jobs (kind, dedupe_key) WHERE dedupe_key IS NOT NULL AND state IN ('queued','running');
+  ALTER TABLE session_usage ADD COLUMN ticket_key TEXT;
+  CREATE INDEX session_usage_ticket ON session_usage (ticket_key) WHERE ticket_key IS NOT NULL;
+  CREATE TABLE cost_caps (
+    id INTEGER PRIMARY KEY,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global','product','repo')),
+    product_id INTEGER,
+    repo_slug TEXT,
+    overrides TEXT NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL);
+  CREATE UNIQUE INDEX cost_caps_scope ON cost_caps (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''));
+  CREATE TABLE cost_breaker (
+    subject_kind TEXT NOT NULL CHECK (subject_kind IN ('session','ticket')),
+    subject_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('ok','warned','downgraded','paused')),
+    cap REAL,
+    raised_cap REAL,
+    unit TEXT,
+    spent REAL NOT NULL DEFAULT 0,
+    scope TEXT,
+    from_model TEXT,
+    to_model TEXT,
+    tripped_at INTEGER,
+    paused_at INTEGER,
+    stopped_at INTEGER,
+    taken_over_at INTEGER,
+    paused_spent REAL,
+    partial INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (subject_kind, subject_id));
+  CREATE TABLE cost_events (
+    id INTEGER PRIMARY KEY,
+    at INTEGER NOT NULL,
+    subject_kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    spent REAL,
+    cap REAL,
+    unit TEXT,
+    detail TEXT);
+  CREATE INDEX cost_events_subject ON cost_events (subject_kind, subject_id, at);
+  `,
+  // 工作流 I（设计补充 2026-11-17-ws-i）：评论闭环和 CI 分类。loop_policies 是三层策略（契约 4.2）；pr_comment_items 每个 (PR 行, 评论) 一行；
+  // ci_triage 每个 (条目, head sha, run) 一行；ci_flaky_events 每次重跑后通过记一行；ci_flaky_list 是 flaky 名单（auto / manual）。
+  `
+  CREATE TABLE loop_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global', 'product', 'repo')),
+    product_id INTEGER,
+    repo_slug TEXT,
+    overrides TEXT NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX loop_policies_layer ON loop_policies (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''));
+  CREATE TABLE pr_comment_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pr_id INTEGER NOT NULL,
+    comment_key TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('inline', 'review', 'issue')),
+    thread_id TEXT,
+    database_id INTEGER,
+    author TEXT NOT NULL,
+    who TEXT NOT NULL,
+    path TEXT,
+    line INTEGER,
+    body TEXT NOT NULL,
+    url TEXT,
+    commented_at INTEGER,
+    seen_sha TEXT,
+    first_seen INTEGER NOT NULL,
+    category TEXT CHECK (category IN ('fix', 'question', 'ignore', 'human')),
+    source TEXT CHECK (source IN ('rule', 'model', 'user')),
+    reason TEXT,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'review', 'queued', 'delivered', 'addressed', 'ignored', 'dismissed', 'closed')),
+    queued_at INTEGER,
+    delivered_at INTEGER,
+    delivered_sha TEXT,
+    delivered_session TEXT,
+    unchanged INTEGER NOT NULL DEFAULT 0,
+    checked_sha TEXT,
+    addressed_at INTEGER,
+    addressed_sha TEXT,
+    verified TEXT,
+    replied_at INTEGER,
+    resolved_at INTEGER,
+    reply_error TEXT,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (pr_id, comment_key)
+  );
+  CREATE INDEX idx_pr_comment_items_state ON pr_comment_items (state);
+  CREATE TABLE ci_triage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_kind TEXT NOT NULL CHECK (item_kind IN ('pr', 'branch')),
+    item_id INTEGER NOT NULL,
+    repo_slug TEXT,
+    ticket_key TEXT,
+    head_sha TEXT NOT NULL,
+    run_id INTEGER NOT NULL,
+    checks TEXT NOT NULL DEFAULT '[]',
+    tests TEXT NOT NULL DEFAULT '[]',
+    attempt INTEGER NOT NULL DEFAULT 1,
+    category TEXT CHECK (category IN ('env', 'flaky', 'code')),
+    source TEXT,
+    reason TEXT,
+    signature TEXT,
+    prev_signature TEXT,
+    reruns INTEGER NOT NULL DEFAULT 0,
+    rerun_attempt INTEGER,
+    state TEXT NOT NULL CHECK (state IN ('classifying', 'classified', 'rerunning', 'delivered', 'passed', 'abandoned')),
+    outcome TEXT,
+    first_failed_at INTEGER NOT NULL,
+    rerun_at INTEGER,
+    passed_at INTEGER,
+    delivered_at INTEGER,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (item_kind, item_id, head_sha, run_id)
+  );
+  CREATE INDEX idx_ci_triage_item ON ci_triage (item_kind, item_id, id);
+  CREATE TABLE ci_flaky_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_slug TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('check', 'test')),
+    name TEXT NOT NULL,
+    triage_id INTEGER,
+    at INTEGER NOT NULL,
+    wasted_ms INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX idx_ci_flaky_events_name ON ci_flaky_events (repo_slug, kind, name, at);
+  CREATE TABLE ci_flaky_list (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_slug TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('check', 'test')),
+    name TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('auto', 'manual')),
+    added_at INTEGER NOT NULL,
+    UNIQUE (repo_slug, kind, name)
+  );
+  `,
   // 仓库现状（工作流 E2）：每次扫描一行（只留最近 10 次）、标记文件表的用户层、存量扫描和它找到的违规、导出成 lint 的记录。
   `
   CREATE TABLE repo_baselines (

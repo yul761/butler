@@ -259,3 +259,18 @@ describe("RoutingService", () => {
     expect(second).toBe(true);
   });
 });
+
+describe("RoutingService.plan minLevel (workstream L)", () => {
+  it("treats only the requested tier as soft, so fallback tasks step down one tier", () => {
+    const { s } = setup([reg("H1", "high"), reg("M1", "mid"), reg("L1", "low")]);
+    expect(s.plan("lesson_analyze")).toMatchObject({ mode: "routed", candidates: [{ model: "M1" }, { model: "L1" }] });
+    const p = s.plan("lesson_analyze", { minLevel: "soft" });
+    expect(p).toMatchObject({ mode: "routed", requestedTier: "mid" });
+    expect(p.mode === "routed" && p.candidates.map((c) => c.model)).toEqual(["L1"]);
+  });
+
+  it("keeps the plain plan when stepping down would leave nothing to run", () => {
+    const { s } = setup([reg("L1", "low")]);
+    expect(s.plan("needs_you", { minLevel: "soft" })).toMatchObject({ mode: "routed", candidates: [{ model: "L1" }] });
+  });
+});

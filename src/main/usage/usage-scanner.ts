@@ -22,6 +22,8 @@ export interface UsageScannerDeps {
   transcriptFile: (sessionId: string) => string | null;
   /** 每次读多少字节，默认 USAGE_CHUNK_BYTES（测试用小值）。 */
   chunkBytes?: number;
+  /** 扫完一遍以后（成本熔断按新用量看一遍）。 */
+  onScanned?: () => void;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -57,6 +59,11 @@ export class UsageScanner {
       this.d.log?.("usage scan failed", err);
     } finally {
       this.running = false;
+    }
+    try {
+      this.d.onScanned?.();
+    } catch (err) {
+      this.d.log?.("usage: the after-scan hook threw", err);
     }
   }
 

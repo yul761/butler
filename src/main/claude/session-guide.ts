@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Lang } from "../../shared/i18n";
 import type { SessionLesson } from "../../shared/lessons";
@@ -87,14 +87,15 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : "Butler may refresh a session whose context grows too long: it writes a handoff for you, clears the session, and has you pick up from memory; just follow what it says. Save important decisions and agreements to memory with remember as you go.",
 ];
 
-/** 用户确认过的规矩，只给 ticket session 和修复 session。 */
-function lessonsSection(lang: Lang, kind: GuideKind, lessons: SessionLesson[]): string | null {
-  if (kind !== "ticket" || lessons.length === 0) return null;
-  const head =
-    lang === "zh"
-      ? "下面是从这个仓库以前的 review 里总结出来、用户确认过的规矩。写代码时就照着做；做自我 review 时逐条对照，在 report 里写明对照的结果（哪几条相关、有没有违反、改了什么）。"
-      : "Below are rules distilled from this repo's earlier reviews and confirmed by the user. Follow them when you write code; in your self-review, check against them one by one, and say in your report what you found (which ones apply, whether any was violated, what you changed).";
-  return [head, ...lessons.map((l) => `- [${l.label}] ${l.text}`)].join("\n");
+export interface GuideOptions {
+  /** 原则的案例文件（有原则行时）。 */
+  casesFile?: string;
+  /** 有自动预审（G）时才写「开 PR 之前会自动跑一次预审」；没有时不写，否则是假话。 */
+  preReview?: boolean;
+  /** 仓库相关的几行（WS-M I 的 watcher 规定），放在最后。 */
+  extra?: string[];
+  /** 仓库档案（工作流 E2）：在规矩后面、extra 前面，只给 ticket session。 */
+  profile?: string;
 }
 
 /** 仓库档案（工作流 E2，7.8）：只给 ticket session 和修复 session，只有这个 ticket 的仓库；文字已经按字数上限排好。 */
@@ -107,29 +108,75 @@ function profileSection(lang: Lang, kind: GuideKind, profile: string): string | 
   return `${head}\n\n${profile.trim()}`;
 }
 
-/** extra：仓库相关的几行（WS-M I 的 watcher 规定），放在最后；profile：仓库档案（E2），在规矩后面、extra 前面。 */
-export function sessionGuide(lang: Lang, kind: GuideKind, lessons: SessionLesson[] = [], extra: string[] = [], profile = ""): string {
+/** 用户确认过的规矩，只给 ticket session 和修复 session。 */
+function lessonsSection(lang: Lang, kind: GuideKind, lessons: SessionLesson[], opts: GuideOptions): string | null {
+  if (kind !== "ticket" || lessons.length === 0) return null;
+  const zh = lang === "zh";
+  const head = zh
+    ? "下面是从这个仓库以前的 review 里总结出来、用户确认过的规矩。写代码时就照着做；做自我 review 时逐条对照，在 report 里写明对照的结果（哪几条相关、有没有违反、改了什么）。"
+    : "Below are rules distilled from this repo's earlier reviews and confirmed by the user. Follow them when you write code; in your self-review, check against them one by one, and say in your report what you found (which ones apply, whether any was violated, what you changed).";
+  const lines = lessons.map((l) => (l.cases?.length ? `- [${l.label}] ${l.text} ${zh ? `（${l.cases.length} 个案例）` : `(${l.cases.length} cases)`}` : `- [${l.label}] ${l.text}`));
+  const out = [head, ...lines];
+  if (opts.casesFile && lessons.some((l) => l.cases?.length))
+    out.push(
+      zh
+        ? `带案例数的是原则：和你在做的事相关时，读 ${opts.casesFile} 里它的案例（这个仓库以前被指出过的具体规矩）。`
+        : `Lines with a case count are principles: when one is relevant to what you are doing, read its cases (the specific rules this repo was given in earlier reviews) in ${opts.casesFile}.`,
+    );
+  if (opts.preReview) out.push(zh ? "开 PR 之前会自动跑一次预审，对照的就是这些规矩。" : "A pre-review runs automatically before a PR is opened, against these same rules.");
+  return out.join("\n");
+}
+
+export function sessionGuide(lang: Lang, kind: GuideKind, lessons: SessionLesson[] = [], opts: GuideOptions = {}): string {
   const parts = GUIDE_SECTIONS.map((s) => s(lang, kind)).filter((s): s is string => !!s);
-  const l = lessonsSection(lang, kind, lessons);
+  const l = lessonsSection(lang, kind, lessons, opts);
   if (l) parts.push(l);
-  const p = profileSection(lang, kind, profile);
+  const p = profileSection(lang, kind, opts.profile ?? "");
   if (p) parts.push(p);
-  parts.push(...extra);
+  parts.push(...(opts.extra ?? []));
   return parts.join("\n\n") + "\n";
 }
 
-/**
- * 没有规矩、extra 和仓库档案：写 <mcpDir>/guide-<kind>-<lang>.md。不然写 guide-<kind>-<lang>-<内容 sha256 前 12 位>.md。
- * 内容没变就不重写，返回路径。
- */
-export function writeSessionGuide(mcpDir: string, lang: Lang, kind: GuideKind, lessons: SessionLesson[] = [], extra: string[] = [], profile = ""): string {
-  const text = sessionGuide(lang, kind, lessons, extra, profile);
-  const custom = lessons.length > 0 || extra.length > 0 || (kind === "ticket" && !!profile.trim());
-  const hash = custom ? `-${createHash("sha256").update(text).digest("hex").slice(0, 12)}` : "";
-  const file = join(mcpDir, `guide-${kind}-${lang}${hash}.md`);
-  if (existsSync(file) && readFileSync(file, "utf8") === text) return file;
-  mkdirSync(mcpDir, { recursive: true });
+/** 原则的案例文件：每个原则一节，下面是它的规矩。 */
+export function casesText(lang: Lang, lessons: SessionLesson[]): string {
+  const zh = lang === "zh";
+  const parts = lessons.filter((l) => l.cases?.length).map((l) => [`## [${l.label}] ${l.text}`, ...l.cases!.map((c) => `- ${c}`)].join("\n"));
+  return `# ${zh ? "原则的案例" : "Cases for the principles"}\n\n${parts.join("\n\n")}\n`;
+}
+
+/** 内容没变就不重写。touch：会被 pruneSessionGuides 清理的文件把修改时间改成现在，还在用的不会被当成 30 天没用删掉。 */
+function writeIfChanged(dir: string, file: string, text: string, touch: boolean): void {
+  if (existsSync(file) && readFileSync(file, "utf8") === text) {
+    if (!touch) return;
+    const now = new Date();
+    try {
+      utimesSync(file, now, now);
+    } catch {
+      // 改不了时间不影响这次用
+    }
+    return;
+  }
+  mkdirSync(dir, { recursive: true });
   writeFileSync(file, text);
+}
+
+const short = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 12);
+
+/**
+ * lessons、extra 和仓库档案都为空：写 <mcpDir>/guide-<kind>-<lang>.md。不然写 guide-<kind>-<lang>-<内容 sha256 前 12 位>.md。内容没变就不重写，返回路径。
+ * 有原则行时案例写进旁边的 lessons-cases-<内容 sha256 前 12 位>.md，说明里写它的路径。
+ */
+export function writeSessionGuide(mcpDir: string, lang: Lang, kind: GuideKind, lessons: SessionLesson[] = [], opts: Omit<GuideOptions, "casesFile"> = {}): string {
+  let casesFile: string | undefined;
+  if (kind === "ticket" && lessons.some((l) => l.cases?.length)) {
+    const cases = casesText(lang, lessons);
+    casesFile = join(mcpDir, `lessons-cases-${short(cases)}.md`);
+    writeIfChanged(mcpDir, casesFile, cases, true);
+  }
+  const text = sessionGuide(lang, kind, lessons, { ...opts, casesFile });
+  const hash = lessons.length > 0 || (opts.extra?.length ?? 0) > 0 || (kind === "ticket" && !!opts.profile?.trim()) ? `-${short(text)}` : "";
+  const file = join(mcpDir, `guide-${kind}-${lang}${hash}.md`);
+  writeIfChanged(mcpDir, file, text, hash !== "");
   return file;
 }
 
@@ -145,7 +192,7 @@ export function pruneSessionGuides(mcpDir: string, now: number): number {
   }
   let n = 0;
   for (const name of names) {
-    if (!/^guide-[a-z]+-[a-z]+-[0-9a-f]{12}\.md$/.test(name)) continue;
+    if (!/^guide-[a-z]+-[a-z]+-[0-9a-f]{12}\.md$/.test(name) && !/^lessons-cases-[0-9a-f]{12}\.md$/.test(name)) continue;
     try {
       const file = join(mcpDir, name);
       if (now - statSync(file).mtimeMs <= GUIDE_MAX_AGE_MS) continue;

@@ -34,6 +34,31 @@ describe("UsageRepo", () => {
     const r = new UsageRepo(memDb());
     r.record([row("a", { at: 100 }), row("b", { at: 200, source: "headless", sessionId: null, job: "summary", model: null })]);
     const got = r.since(150);
-    expect(got).toEqual([{ ...row("b", { at: 200, source: "headless", sessionId: null, job: "summary", model: null }), task: null, requestedTier: null, fallbackFrom: null, costUsd: null }]);
+    expect(got).toEqual([{ ...row("b", { at: 200, source: "headless", sessionId: null, job: "summary", model: null }), task: null, requestedTier: null, fallbackFrom: null, costUsd: null, ticketKey: null }]);
+  });
+});
+
+describe("UsageRepo.totalsFor (workstream L)", () => {
+  const row = (id: string, o: Partial<UsageRow>): UsageRow => ({
+    messageId: id, sessionId: null, agentId: null, source: "session", job: null, at: 1, model: "M1",
+    input: 10, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 100, output: 2, context: 0, ...o,
+  });
+
+  it("adds a session chain and the ticket's headless rows, weighting tokens", () => {
+    const repo = new UsageRepo(memDb());
+    repo.record([
+      row("a", { sessionId: "s1" }),
+      row("b", { sessionId: "s2", agentId: "sub" }),
+      row("c", { sessionId: "other" }),
+      row("d", { source: "headless", ticketKey: "T-1", costUsd: 0.5 }),
+      row("e", { source: "headless", ticketKey: "T-2" }),
+    ]);
+    const t = repo.totalsFor({ sessionIds: ["s1", "s2"], ticketKey: "T-1" });
+    expect(t).toHaveLength(1);
+    // 每行 10 + 0.1×100 + 5×2 = 30
+    expect(t[0]).toMatchObject({ model: "M1", rows: 3, weighted: 90, costUsd: 0.5, unpricedRows: 2 });
+    expect(repo.totalsFor({ sessionIds: ["s1"] })[0]).toMatchObject({ rows: 1 });
+    expect(repo.totalsFor({})).toEqual([]);
+    expect(repo.since(0).find((r) => r.messageId === "d")?.ticketKey).toBe("T-1");
   });
 });
