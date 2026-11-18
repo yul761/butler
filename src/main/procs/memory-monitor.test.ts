@@ -41,6 +41,7 @@ function setup(over: Partial<MemoryMonitorDeps> = {}) {
     samples,
     now: () => now,
     log: () => {},
+    changed: () => {},
     ...over,
   };
   const m = new MemoryMonitor(d);
@@ -99,6 +100,30 @@ describe("MemoryMonitor", () => {
     expect(m.memoryOf("h1")).toBeNull();
     expect(mem).toEqual({});
     expect(samples.since(0)).toEqual([]);
+  });
+
+  it("tells the renderer after each sample it shows, before slow hooks finish, and once when the card goes away", async () => {
+    // 「现在」页只在 stateChanged 时重取：采样不通知的话，比最后一个 hook 事件晚到的第一次采样要等一分钟才显示（Windows 上 PowerShell 冷启动就是这样）。
+    let changed = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const { m, setRecord } = setup({ changed: () => void changed++ });
+    m.onSample(() => gate);
+    const first = m.tick();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(changed).toBe(1);
+    release();
+    await first;
+    await m.tick();
+    expect(changed).toBe(2);
+    setRecord(false);
+    await m.tick();
+    expect(changed).toBe(3);
+    await m.tick();
+    expect(changed).toBe(3);
+    const fail = setup({ readTable: async () => null, changed: () => void changed++ });
+    await fail.m.tick();
+    expect(changed).toBe(3);
   });
 
   it("does nothing when nothing needs samples, and skips a sample when ps fails", async () => {

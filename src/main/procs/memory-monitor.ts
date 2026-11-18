@@ -57,6 +57,11 @@ export interface MemoryMonitorDeps {
   samples: { insertMany(rows: MemorySampleRow[]): void; prune(before: number): number; since(since: number): MemorySampleRow[] };
   now(): number;
   log(msg: string, err?: unknown): void;
+  /**
+   * 「现在」页上的读数变了（记下一次采样，或者监控关掉、卡片要收起）。主进程接到后发 stateChanged：
+   * 「现在」页只在 stateChanged 时重取，不通知的话比最后一个 hook 事件晚到的采样要等下一次事件才显示。
+   */
+  changed(): void;
 }
 
 /** Electron 的进程类型对应到哪一份。 */
@@ -197,8 +202,10 @@ export class MemoryMonitor {
 
   private record(s: MonitorSample): void {
     if (!this.d.recordOn()) {
+      const shown = this.snap !== null || this.latest.size > 0;
       this.latest.clear();
       this.snap = null;
+      if (shown) this.d.changed();
       return;
     }
     this.latest = new Map(s.terms.map((t) => [t.head, { ...t.summary, at: s.at }]));
@@ -214,5 +221,6 @@ export class MemoryMonitor {
       this.d.samples.insertMany(rows);
     }
     if (this.count % PRUNE_EVERY === 1) this.d.samples.prune(s.at - HISTORY_KEEP_MS);
+    this.d.changed();
   }
 }

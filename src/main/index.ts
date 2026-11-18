@@ -1418,6 +1418,7 @@ async function bootstrap(): Promise<void> {
     windowShown: () => !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
     ownedFile: paths.procsOwned,
     log: logger,
+    changed: notify,
   });
   const procServices = procs;
   windowShownHook = () => procServices.windowShown();

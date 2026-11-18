@@ -28,6 +28,8 @@ export interface ProcServicesDeps {
   ownedFile: string;
   platform?: NodeJS.Platform;
   log: (msg: string, err?: unknown) => void;
+  /** 「现在」页的内存读数变了：发 stateChanged。 */
+  changed: () => void;
 }
 
 export interface ProcServices {
@@ -70,6 +72,7 @@ export function createProcServices(d: ProcServicesDeps): ProcServices {
     samples: d.samples,
     now: Date.now,
     log: d.log,
+    changed: d.changed,
   });
   const orphans = new OrphanSweeper({
     enabled: () => orphanCleanupOn(d.settings),
