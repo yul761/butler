@@ -12,6 +12,9 @@ import { memDb } from "../test-utils";
 import { RoutingRepo } from "../db/routing-repo";
 import { UsageRepo } from "../db/usage-repo";
 import { RoutingService } from "../routing/routing-service";
+import { readBgSettings } from "../background/bg-settings";
+import { fakeIdleSignal } from "../background/idle";
+import { BackgroundScheduler } from "../background/scheduler";
 import { BACKFILL_LIMIT, DAILY_RETRY_BACKOFF_MS, LessonRunner, type LessonRunnerDeps } from "./lesson-runner";
 
 const DAY = 86_400_000;
@@ -939,5 +942,87 @@ describe("LessonRunner with model routing", () => {
     expect(s.lastRun(1)).toMatchObject({ status: "done", actualModel: "M", fallbackFrom: null });
     expect(s.repo.upgradePendingCount()).toBe(0);
     expect(Number((s.db.prepare(`SELECT COUNT(*) AS c FROM lessons`).get() as { c: number }).c)).toBe(1);
+  });
+});
+
+describe("LessonRunner under the background scheduler (workstream L)", () => {
+  function withScheduler(settings: Record<string, string>, idleSeconds: number) {
+    const s = setup();
+    const idle = fakeIdleSignal({ idleSeconds });
+    const scheduler = new BackgroundScheduler({
+      settings: () => readBgSettings({ get: (k) => settings[k] ?? "" }), setSetting: () => undefined,
+      idle, quota: () => null, costBlocked: () => false, now: s.now, setInterval: () => 1, clearInterval: () => undefined,
+    });
+    scheduler.start();
+    s.deps.scheduler = scheduler;
+    const runner = new LessonRunner(s.deps);
+    return { ...s, runner, idle, scheduler };
+  }
+
+  it("leaves backfill queued while the user is active and runs it once idle; merged PRs follow their own window", async () => {
+    const s = withScheduler({ bgKinds: JSON.stringify({ lesson_backfill: { window: "idle" } }) }, 0);
+    s.repo.enqueue("acme/web", [1], "backfill", T0);
+    s.repo.enqueue("acme/web", [2], "merged", T0);
+    s.runner.start();
+    await s.runner.idle();
+    await flush();
+    expect(s.statusOf(1).status).toBe("queued");
+    expect(s.statusOf(2).status).toBe("done");
+    s.idle.set({ idleSeconds: 3600 });
+    await flush();
+    await s.runner.idle();
+    expect(s.statusOf(1).status).toBe("done");
+    expect(s.scheduler.status().kinds.find((k) => k.kind === "lesson_backfill")).toMatchObject({ queued: 0, running: 0 });
+  });
+
+  it("in interrupt mode stops a running analysis when the user comes back and puts it back without counting a failure", async () => {
+    const s = withScheduler({ bgWindow: "idle", bgYield: "interrupt" }, 3600);
+    s.run.mockImplementation((req) => new Promise((res) => req.signal?.addEventListener("abort", () => res(fail("aborted")))));
+    s.repo.enqueue("acme/web", [1], "backfill", T0);
+    s.runner.start();
+    await flush();
+    expect(s.run).toHaveBeenCalledTimes(1);
+    s.idle.set({ idleSeconds: 0 });
+    await s.runner.idle();
+    expect(s.lastRun(1)).toMatchObject({ status: "aborted", reason: "yielded" });
+    expect(s.statusOf(1)).toMatchObject({ status: "queued", error: null });
+    // 回来了：不再取
+    await flush();
+    expect(s.run).toHaveBeenCalledTimes(1);
+    // 又空闲了：接着分析这一项
+    s.run.mockImplementation(async () => noFindings);
+    s.idle.set({ idleSeconds: 3600 });
+    await flush();
+    await s.runner.idle();
+    expect(s.statusOf(1).status).toBe("done");
+  });
+
+  it("in finish mode lets the running analysis finish but takes nothing new", async () => {
+    const s = withScheduler({ bgWindow: "idle" }, 3600);
+    s.hold();
+    s.repo.enqueue("acme/web", [1, 2, 3], "backfill", T0);
+    s.runner.start();
+    await flush();
+    expect(s.run).toHaveBeenCalledTimes(2);
+    s.idle.set({ idleSeconds: 0 });
+    await s.releaseAll();
+    expect(s.statusOf(1).status).toBe("done");
+    expect(s.statusOf(2).status).toBe("done");
+    expect(s.statusOf(3).status).toBe("queued");
+  });
+
+  it("keeps the queue across a restart", async () => {
+    const s = withScheduler({ bgWindow: "idle" }, 0);
+    s.repo.enqueue("acme/web", [1, 2], "backfill", T0);
+    s.runner.start();
+    await flush();
+    expect(s.statusOf(1).status).toBe("queued");
+    const again = new LessonRunner(s.deps);
+    s.idle.set({ idleSeconds: 3600 });
+    again.start();
+    await flush();
+    await again.idle();
+    expect(s.statusOf(1).status).toBe("done");
+    expect(s.statusOf(2).status).toBe("done");
   });
 });

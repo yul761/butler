@@ -2,7 +2,7 @@ import type { LimitHit, LimitKind } from "../../shared/availability";
 import {
   EFFORT_LEVELS, LEGACY_TIER_ALIAS, TASK_IDS, isModelName, isTaskId, isTier, routingConfigured, tierRank,
   type DiscoveryView, type EffortLevel, type LimitRule, type RegistryModel, type RouteEventKind, type RoutingAction,
-  type RoutingConfig, type RoutingView, type TaskId, type Tier,
+  type RoutingConfig, type RoutingView, type SpendLevel, type TaskId, type Tier,
 } from "../../shared/model-routing";
 import type { RoutingRepo } from "../db/routing-repo";
 import { M } from "../strings";
@@ -44,7 +44,11 @@ export interface RoutingServiceDeps {
 export interface PlanContext {
   sessionModel?: string | null;
   producer?: Candidate | null;
+  /** 至少按这个花费级别规划（成本熔断让某个 ticket 的后台调用降档时传 soft，工作流 L）。 */
+  minLevel?: SpendLevel;
 }
+
+const levelRank = (l: SpendLevel) => (l === "hard" ? 2 : l === "soft" ? 1 : 0);
 
 /** 交互 session 要的模型（tier / 注册表模型名 / 旧的 opus、sonnet、haiku）→ 实际传给 --model 的。 */
 export type SessionModelChoice =
@@ -261,15 +265,24 @@ export class RoutingService {
     const now = this.d.now();
     const configured = this.configured();
     const spend = configured ? this.spend() : null;
-    return planTask({
+    const input = (minLevel: SpendLevel | undefined, startTier: Tier | null) => ({
       task, config: this.config(), now,
-      usable: (m) => this.health.usable(m, now),
-      recoversAt: (m) => this.health.recoversAt(m, now),
-      spendLevel: (m, t) => spend?.level(m, t) ?? "ok",
+      usable: (m: string) => this.health.usable(m, now),
+      recoversAt: (m: string) => this.health.recoversAt(m, now),
+      spendLevel: (m: string, t: Tier) => {
+        const l = spend?.level(m, t) ?? "ok";
+        // 熔断要求降档（工作流 L）：只把要求的那一档当作 soft，低一档的照常可用。
+        return minLevel && t === startTier && levelRank(minLevel) > levelRank(l) ? minLevel : l;
+      },
       periodEnd: spend?.periodEnd ?? now,
       sessionModel: ctx.sessionModel ?? null,
       producer: ctx.producer ?? null,
     });
+    const base = planTask(input(undefined, null));
+    if (!ctx.minLevel || base.mode !== "routed") return base;
+    const down = planTask(input(ctx.minLevel, base.requestedTier));
+    // 降不下去（已经是最低档、任务不许降）：照原来的跑，到上限加宽限时熔断会暂停它。
+    return down.mode === "routed" ? down : base;
   }
 
   effortFor(task: TaskId, tier: Tier | null): EffortLevel | null {

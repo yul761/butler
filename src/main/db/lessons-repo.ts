@@ -516,15 +516,18 @@ export class LessonsRepo {
   }
 
   /** 优先级高的先，其次最早的 queued 且 not_before 为空或 <= now，改成 running（优先级清零）。不计 attempts，真正起进程前调 markSpawned。 */
-  take(now: number): QueueItem | null {
+  take(now: number, origins?: readonly QueueItem["origin"][]): QueueItem | null {
+    if (origins && origins.length === 0) return null;
     return withTransaction(this.db, () => {
+      // origins：后台调度（工作流 L）这会儿放行的来源；不给就不限。
+      const only = origins ? `AND origin IN (${origins.map(() => "?").join(",")})` : "";
       const r = this.db
         .prepare(
           `SELECT id, repo_slug, pr_number, origin, attempts FROM lesson_queue
-           WHERE status = 'queued' AND (not_before IS NULL OR not_before <= ?)
+           WHERE status = 'queued' AND (not_before IS NULL OR not_before <= ?) ${only}
            ORDER BY priority DESC, enqueued_at, id LIMIT 1`,
         )
-        .get(now) as unknown as { id: number; repo_slug: string; pr_number: number; origin: QueueItem["origin"]; attempts: number } | undefined;
+        .get(now, ...(origins ?? [])) as unknown as { id: number; repo_slug: string; pr_number: number; origin: QueueItem["origin"]; attempts: number } | undefined;
       if (!r) return null;
       this.db.prepare(`UPDATE lesson_queue SET status = 'running', priority = 0 WHERE id = ?`).run(r.id);
       return { id: Number(r.id), slug: r.repo_slug, prNumber: Number(r.pr_number), origin: r.origin, attempts: Number(r.attempts) };
@@ -647,6 +650,16 @@ export class LessonsRepo {
 
   queuedTotal(): number {
     return Number((this.db.prepare(`SELECT COUNT(*) AS n FROM lesson_queue WHERE status = 'queued'`).get() as { n: number }).n);
+  }
+
+  /** 按来源数排队和在跑的（后台调度的状态表用）。 */
+  queueCountsByOrigin(): Partial<Record<QueueItem["origin"], { queued: number; running: number }>> {
+    const rows = this.db
+      .prepare(`SELECT origin, SUM(status = 'queued') AS q, SUM(status = 'running') AS r FROM lesson_queue WHERE status IN ('queued','running') GROUP BY origin`)
+      .all() as unknown as { origin: QueueItem["origin"]; q: number; r: number }[];
+    const out: Partial<Record<QueueItem["origin"], { queued: number; running: number }>> = {};
+    for (const r of rows) out[r.origin] = { queued: Number(r.q), running: Number(r.r) };
+    return out;
   }
 
   /** 启动时 running → queued，返回个数。 */

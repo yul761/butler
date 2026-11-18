@@ -10,6 +10,8 @@ const VerdictSchema = z.object({ stuck: z.boolean(), reason: z.string(), action:
 const STUCK_JSON_SCHEMA = toCliJsonSchema(VerdictSchema);
 
 export interface StuckInput {
+  /** 被判断的 session（只用来把这次调用的用量记到它的 ticket 名下，不进提示词）。 */
+  sessionId?: string;
   cwd: string;
   /** 现在在做什么（“运行 pnpm test”之类）。 */
   activity: string;
@@ -52,9 +54,9 @@ function prompt(i: StuckInput): string {
 }
 
 /** 请 headless Claude 判断一个可疑的 session 是否卡住。不给任何工具；失败返回 null。 */
-export async function judgeStuck(d: HeadlessExecDeps, input: StuckInput): Promise<StuckVerdict | null> {
+export async function judgeStuck(d: HeadlessExecDeps, input: StuckInput, ticketKey: string | null = null): Promise<StuckVerdict | null> {
   const args = headlessArgs({ schema: STUCK_JSON_SCHEMA, allowedTools: [] });
-  const r = await execHeadlessJson(d, { task: "stuck_judge", label: "stuck judge", args, prompt: prompt(input), cwd: input.cwd });
+  const r = await execHeadlessJson(d, { task: "stuck_judge", label: "stuck judge", args, prompt: prompt(input), cwd: input.cwd, ticketKey });
   if (!r.ok) return null;
   const v = validate(VerdictSchema, r.value);
   // 原因和建议显示在界面上：和「需要你」的理由一样清掉混进来的标签（R34）。

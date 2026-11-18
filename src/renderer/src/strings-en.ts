@@ -1159,6 +1159,7 @@ export const EN: UiStrings = {
     claude_missing: "claude was not found",
     cancelled: "Cancelled",
     app_quit: "Interrupted when the app quit",
+    yielded: "Yielded to interactive work, queued again",
     error: "Internal error",
   } satisfies Record<LessonRunReason, string>,
   lessonRunOrigin: { backfill: "Backfill", merged: "Merged", daily: "Daily" } satisfies Record<LessonOrigin, string>,

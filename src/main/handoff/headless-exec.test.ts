@@ -38,6 +38,30 @@ describe("execHeadlessJson usage", () => {
     expect(onUsage).toHaveBeenCalledWith({ runId: "run-7", label: "handoff BTL-1", at: 99, model: "claude-sonnet-5-5", usage: USAGE });
   });
 
+  it("carries the ticket the call was made for", async () => {
+    const { d, onUsage } = setup({ ok: true, result: result() });
+    await execHeadlessJson(d, { ...o, ticketKey: "BTL-1" });
+    expect(onUsage.mock.calls[0]![0]).toMatchObject({ ticketKey: "BTL-1" });
+  });
+});
+
+describe("execHeadlessJson cost gate (workstream L)", () => {
+  it("does not run when the breaker paused the ticket's background work", async () => {
+    const { d } = setup({ ok: true, result: result() });
+    const run = vi.fn(d.run);
+    const gate = vi.fn(() => "pause" as const);
+    const r = await execHeadlessJson({ ...d, run, costGate: gate }, { ...o, ticketKey: "BTL-1" });
+    expect(gate).toHaveBeenCalledWith({ task: "handoff", ticketKey: "BTL-1", label: "handoff BTL-1" });
+    expect(r).toMatchObject({ ok: false, reason: "cost_paused" });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("runs normally when the gate says ok or throws", async () => {
+    const { d } = setup({ ok: true, result: result() });
+    expect((await execHeadlessJson({ ...d, costGate: () => "ok" }, o)).ok).toBe(true);
+    expect((await execHeadlessJson({ ...d, costGate: () => { throw new Error("x"); } }, o)).ok).toBe(true);
+  });
+
   it("records usage of a failed run", async () => {
     const { d, onUsage } = setup({ ok: false, reason: "claude_error", message: "x", result: result({ isError: true }), limit: null, stderr: "" });
     const r = await execHeadlessJson(d, o);
@@ -157,6 +181,20 @@ describe("execHeadlessJson routing", () => {
     expect(r).toMatchObject({ ok: true, route: { actualModel: "M2", fallbackFrom: "M1", requestedTier: "mid", degraded: false } });
     expect(argv).toEqual([["-p", "--model", "M2", "--output-format", "json"]]);
     expect(reports[0]).toMatchObject({ task: "lesson_analyze", requestedTier: "mid", fallbackFrom: "M1" });
+  });
+
+  it("a downgrade verdict from the cost gate plans one tier lower (workstream L)", async () => {
+    const { d, argv } = routed([reg("M1", "mid"), reg("L1", "low")], () => ({ ok: true, result: result() }));
+    const r = await execHeadlessJson({ ...d, costGate: () => "downgrade" }, { ...lo, ticketKey: "T-1" });
+    expect(argv.map((a) => a[a.indexOf("--model") + 1])).toEqual(["L1"]);
+    expect(r).toMatchObject({ ok: true, route: { actualModel: "L1", degraded: true } });
+  });
+
+  it("a downgrade verdict with nowhere lower to go keeps the requested tier", async () => {
+    const { d, argv } = routed([reg("L1", "low")], () => ({ ok: true, result: result() }));
+    const r = await execHeadlessJson({ ...d, costGate: () => "downgrade" }, { ...lo, task: "needs_you", ticketKey: "T-1" });
+    expect(argv.map((a) => a[a.indexOf("--model") + 1])).toEqual(["L1"]);
+    expect(r.ok).toBe(true);
   });
 
   it("starting below the requested tier because that tier has no models is not degraded", async () => {

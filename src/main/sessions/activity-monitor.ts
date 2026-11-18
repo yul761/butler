@@ -665,6 +665,7 @@ export class ActivityMonitor {
 
   private judgeInput(t: Tracked, now: number): StuckInput {
     return {
+      sessionId: t.id,
       cwd: t.cwd,
       activity: t.activity ? describeActivity(t.activity) : "",
       minutes: Math.round((now - (t.lastOutputAt ?? now)) / 60_000),

@@ -184,9 +184,11 @@ export class HandoffRunner {
   }
 
   private async exec(key: string, task: "handoff" | "handoff_refresh", args: string[], prompt: string, cwd: string, resumedId?: string, sessionModel?: string | null): Promise<Exec> {
-    const r = await execHeadlessJson(this.d, { task, label: `handoff ${key}`, args, prompt, cwd, resumedId, sessionModel });
+    const r = await execHeadlessJson(this.d, { task, label: `handoff ${key}`, args, prompt, cwd, resumedId, sessionModel, ticketKey: key });
     if (r.ok) return r;
     if (r.reason === "rate_limited") return { ok: false, outcome: { ticketKey: key, status: "skipped", reason: "rate_limited" } };
+    // 成本熔断停了这个 ticket 的后台调用：跳过，恢复以后下一次触发再写。
+    if (r.reason === "cost_paused") return { ok: false, outcome: { ticketKey: key, status: "skipped", reason: "cost_paused" } };
     return { ok: false, outcome: failed(key, r.reason, r.message) };
   }
 }

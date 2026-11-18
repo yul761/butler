@@ -435,10 +435,10 @@ async function bootstrap(): Promise<void> {
   /** 某个 session（取 head）最近一轮的上下文大小：计划 16 的自动换新看它。 */
   const contextOf = (sessionId: string): number | null => usageRepo.latestContext(sessions.head(sessionId)?.id ?? sessionId);
   /** headless 运行（handoff、feature 汇总、卡住判断）的用量入库。 */
-  const recordHeadlessUsage = ({ runId, label, at, model, usage, task, requestedTier, fallbackFrom, costUsd }: UsageReport) => {
+  const recordHeadlessUsage = ({ runId, label, at, model, usage, task, requestedTier, fallbackFrom, costUsd, ticketKey }: UsageReport) => {
     try {
       usageRepo.record([{
-        messageId: `headless:${runId}`, sessionId: null, agentId: null, source: "headless", job: jobOf(label), at, model, ...usage,
+        messageId: `headless:${runId}`, sessionId: null, agentId: null, source: "headless", job: jobOf(label), at, model, ...usage, ticketKey: ticketKey ?? null,
         context: usage.input + usage.cacheWrite5m + usage.cacheWrite1h + usage.cacheRead,
         ...(task !== undefined && { task, requestedTier: requestedTier ?? null, fallbackFrom: fallbackFrom ?? null, costUsd: costUsd ?? null }),
       }]);
