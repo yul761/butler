@@ -624,6 +624,7 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN checks_absent TEXT;
   INSERT INTO checks (key, scope_kind, type, params, severity, mode, enabled, created_at, updated_at)
     VALUES ('builtin:comment_policy', 'global', 'comment_policy', '{}', 'block', 'enforce', 0, 0, 0);
+  `,
   // 模型路由（工作流 A）：模型注册表、每档的降级链、任务覆盖、识别规则、按模型的健康状态、未识别报错、路由事件；
   // 用量和复盘运行记下任务、要的档位、实际模型、从哪个模型降下来；复盘队列的「待升级重跑」。
   `

@@ -49,6 +49,9 @@ export const IPC = {
   /** 隐藏列表里的「全部删除」（BTL-190 第 8 点）：删掉这些隐藏的 session 行，返回删掉的个数。transcript 不动。 */
   sessionsDeleteHidden: "sessions:deleteHidden",
   sessionOpenFix: "sessions:openFix",
+  /** session 撞限后「换下一档继续」（3.0 模型路由）：结束终端，用 --resume + --model 接着。 */
+  sessionsSwitchModel: "sessions:switchModel",
+  sessionsDismissLimit: "sessions:dismissLimit",
   activityDismiss: "activity:dismiss",
   usageSummary: "usage:summary",
   ptySnapshot: "pty:snapshot",
@@ -100,6 +103,9 @@ export const IPC = {
   /** Claude 可用状态（限流、模型不可用）和复盘的暂停。 */
   availabilityGet: "availability:get",
   availabilityAct: "availability:act",
+  /** 设置页「模型路由」（3.0）。 */
+  routingView: "routing:view",
+  routingAct: "routing:act",
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）：一个 feature、一个 epic 或者全部的未决条目和最近的汇报。 */
   inboxList: "inbox:list",
   /** 在卡片上回答一条「待你决定」：记下答案，等提问的 session 停下来送进去。 */
@@ -146,7 +152,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
   IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget,
-  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
+  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.routingView, IPC.routingAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,

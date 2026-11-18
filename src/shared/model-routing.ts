@@ -259,6 +259,19 @@ export interface RoutingView {
   flags: { model: boolean; effort: boolean };
 }
 
+/** 交互 session 撞限的提示（session 行和「现在」页）。 */
+export interface SessionLimitView {
+  sessionId: string;
+  model: string | null;
+  kind: LimitKind;
+  message: string;
+  at: number;
+  resetsAt: number | null;
+  /** 「换下一档继续」会换成的模型；没有可换的为 null。 */
+  next: string | null;
+  switching: boolean;
+}
+
 export type DiscoveryStatus = "available" | "unavailable" | "limited" | "error" | "pending";
 export interface DiscoveredModel {
   name: string;

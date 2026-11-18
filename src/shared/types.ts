@@ -128,7 +128,7 @@ export interface Session {
   fixesSession: string | null;
   /** epic session 属于哪个 epic（这时 ticketKey 和 featureId 都是 null）。 */
   epicId: number | null;
-  /** 开出来时用的模型（opus / sonnet）；null：没指定，恢复时也不传 --model。 */
+  /** 开出来时用的模型（别名或模型路由里的名字；换模型后是新的那个）；null：没指定，恢复时也不传 --model。 */
   model: string | null;
   /** Butler 总控（BTL-190 第 5 点）：全局只有一个，ticket、feature、epic 都是 null。 */
   butler: boolean;

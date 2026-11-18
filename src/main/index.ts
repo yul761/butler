@@ -144,6 +144,7 @@ import { ModelDiscovery } from "./routing/discovery";
 import { RoutedLessonsGate } from "./routing/lessons-gate";
 import { DISCOVERY_USAGE_WINDOW_MS, MODEL_PROBE_TIMEOUT_MS, probeWithHeadless, readClaudeSettingsModel } from "./routing/probe";
 import { RoutingService } from "./routing/routing-service";
+import { SessionModelSwitcher } from "./routing/session-switch";
 import { routingSettings } from "./routing/routing-settings";
 import type { DiscoveryView, Tier } from "../shared/model-routing";
 
@@ -683,7 +684,8 @@ async function bootstrap(): Promise<void> {
       availability.report({ ...hit, at, source: "session", job: null, sessionId: id });
       // 配置了路由：把撞限记到这个 session 的模型上（usage_limit 一般是整个账号的）。
       try {
-        routing.onSessionLimit(sessions.get(id)?.model ?? null, hit, hit.kind === "usage_limit");
+        routing.onSessionLimit(sessions.head(id)?.model ?? null, hit, hit.kind === "usage_limit");
+        switcher.noteLimit(id, hit, at);
       } catch (e) {
         logger("routing: recording a session limit failed", e);
       }
@@ -742,6 +744,24 @@ async function bootstrap(): Promise<void> {
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
     log: logger,
+  });
+  // 交互 session 撞限后「换下一档继续」（3.0 模型路由）：按 session 的种类用 --resume 重新打开。
+  const switcher = new SessionModelSwitcher({
+    head: (id) => sessions.head(id),
+    setModel: (id, model) => sessions.setModel(id, model),
+    termIdOf: (id) => sessionService.termIdOf(id),
+    kill: (termId) => pty.kill(termId),
+    running: (termId) => pty.isOpen(termId),
+    reopen: (h) => {
+      if (h.butler) return sessionService.openButler({ sessionId: h.id });
+      if (h.ticketKey) return sessionService.open({ ticketKey: h.ticketKey, sessionId: h.id });
+      if (h.featureId !== null) return sessionService.openFeature({ featureId: h.featureId, sessionId: h.id });
+      if (h.epicId !== null) return sessionService.openEpic({ epicId: h.epicId, sessionId: h.id });
+      return Promise.resolve({ ok: false, reason: "no_session" } as const);
+    },
+    nextModel: (m) => routing.nextModel(m),
+    autoSwitch: () => routing.autoSwitch(),
+    now: Date.now, onChange: () => notify(), log: logger,
   });
   // 上次退出时终端还开着（退出事件来得比关数据库晚）：那时没删掉的空 session 在这里补删。
   try {
@@ -1443,6 +1463,7 @@ async function bootstrap(): Promise<void> {
       },
     }),
     availability,
+    routing, switcher,
     prStages: new PrStagesService({
       tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id, { includeArchived: true }) },
       features: {

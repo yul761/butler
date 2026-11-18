@@ -194,6 +194,11 @@ export class SessionsRepo {
   }
 
   /** 记成这个 epic 的 session；null：它不是 epic session（嵌套的 claude）。 */
+  /** session 换模型（撞限后「换下一档继续」）：下次 --resume 带这个 --model。 */
+  setModel(id: string, model: string | null): void {
+    this.db.prepare(`UPDATE sessions SET model = ? WHERE id = ?`).run(model, id);
+  }
+
   setEpic(id: string, epicId: number | null): void {
     this.db.prepare(`UPDATE sessions SET epic_id = ? WHERE id = ?`).run(epicId, id);
   }

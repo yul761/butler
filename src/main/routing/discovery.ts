@@ -53,13 +53,7 @@ export async function discoveryCandidates(s: DiscoverySources): Promise<{ name: 
   };
   for (const n of s.registry()) add(n, "registry");
   for (const k of MODEL_ENV_KEYS) add(s.env[k], k);
-  let fromSettings: string | null = null;
-  try {
-    fromSettings = await s.settingsModel();
-  } catch {
-    fromSettings = null;
-  }
-  add(fromSettings, "settings.json");
+  add(await s.settingsModel().catch(() => null), "settings.json");
   for (const n of s.recentModels()) add(n, "usage");
   for (const n of CLI_ALIASES) add(n, "alias");
   return out;

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
-import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -396,5 +396,28 @@ describe("checks IPC arguments", () => {
     expect(() => checksActionArg({ op: "classify", lessonId: 4, checkability: "converted" })).toThrow();
     expect(() => checksActionArg({ op: "nope" })).toThrow();
     expect(() => checkLessonIdArg(0)).toThrow();
+  });
+});
+
+describe("routingActionArg", () => {
+  it("accepts well-formed actions and rejects the rest", () => {
+    expect(routingActionArg({ op: "discover" })).toEqual({ op: "discover" });
+    const model = { name: "corp-x", tier: "mid", enabled: true, account: "default", priceIn: 3, priceOut: null, note: "" };
+    expect(routingActionArg({ op: "addModel", model })).toEqual({ op: "addModel", model });
+    expect(routingActionArg({ op: "updateModel", name: "corp-x", patch: { enabled: false } })).toEqual({ op: "updateModel", name: "corp-x", patch: { enabled: false } });
+    expect(routingActionArg({ op: "setTaskRoute", route: { task: "pr_brief", tier: "low" } })).toEqual({
+      op: "setTaskRoute", route: { task: "pr_brief", tier: "low", minTier: null, policy: null, critical: null },
+    });
+    expect(routingActionArg({ op: "confirmError", id: 3, category: "usage_limit", accountLevel: true })).toMatchObject({ id: 3 });
+    for (const bad of [
+      null, { op: "nope" }, { op: "addModel", model: { ...model, priceIn: -1 } }, { op: "addModel", model: { ...model, tier: "ultra" } },
+      { op: "setChain", tier: "mid", models: [1] }, { op: "setTaskRoute", route: { task: "bogus" } }, { op: "confirmError", id: 1.5, category: "usage_limit", accountLevel: true },
+      { op: "moveModel", name: "x", delta: 2 }, { op: "addRule", rule: { kind: "eval", pattern: "x", category: null, accountLevel: false, note: "" } },
+    ]) {
+      expect(() => routingActionArg(bad)).toThrow();
+    }
+    expect(switchModelArg(undefined)).toBeUndefined();
+    expect(switchModelArg("corp-x")).toBe("corp-x");
+    expect(() => switchModelArg("bad name!")).toThrow();
   });
 });

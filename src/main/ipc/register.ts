@@ -50,11 +50,13 @@ import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, availabilityActionArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, apiKeyArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg } from "./validate";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
 import type { AvailabilityView } from "../../shared/availability";
+import type { RoutingAction, RoutingView } from "../../shared/model-routing";
+import type { SwitchResult } from "../routing/session-switch";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -89,6 +91,10 @@ export interface IpcDeps {
   checks: { act: (a: ChecksAction) => ChecksActResult; view: (scope: CheckScope) => ChecksView; hits: (key: string) => CheckHitView[]; draft: (lessonId: number) => Promise<CheckDraftResult> };
   /** Claude 可用状态；act 只有手动暂停 / 恢复复盘。 */
   availability: Pick<ClaudeAvailability, "view" | "pauseLessons" | "resumeLessons">;
+  /** 模型路由（3.0）：设置页的整份数据和操作；act 返回错误文字，成功为 null。 */
+  routing: { view(): RoutingView; act(a: RoutingAction): Promise<string | null> };
+  /** session 撞限后换模型（SessionModelSwitcher）。 */
+  switcher: { switch(sessionId: string, model?: string): Promise<SwitchResult>; dismiss(sessionId: string): void };
   /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
   nowView: (merges: MergeEvent[]) => NowView;
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）。 */
@@ -407,6 +413,21 @@ export function registerIpc(d: IpcDeps): void {
     const a = availabilityActionArg(raw);
     if (a.op === "pauseLessons") d.availability.pauseLessons();
     else d.availability.resumeLessons();
+  });
+  handle(IPC.routingView, (): RoutingView => d.routing.view());
+  handle(IPC.routingAct, async (raw: unknown): Promise<string | null> => {
+    const r = await d.routing.act(routingActionArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.sessionsSwitchModel, async (id: unknown, model: unknown): Promise<SwitchResult> => {
+    const r = await d.switcher.switch(sessionIdArg(id), switchModelArg(model));
+    d.notify();
+    return r;
+  });
+  handle(IPC.sessionsDismissLimit, (id: unknown): void => {
+    d.switcher.dismiss(sessionIdArg(id));
+    d.notify();
   });
   handle(IPC.nowView, (): NowView => d.nowView(recentMerges()));
   // 答了、不用了都由 InboxService 自己 notify。
