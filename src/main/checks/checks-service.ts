@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { Db } from "../db/database";
 import type { LessonsRepo } from "../db/lessons-repo";
-import type { BatchRecorder } from "../batches/batch-recorder";
+import type { BatchContext, BatchRecorder } from "../batches/batch-recorder";
 import { ChecksRepo, emptyStats } from "../db/checks-repo";
 import { LayeredResolver, type Origin, type ScopeRef } from "../scope/layered";
 import { M } from "../strings";
@@ -200,29 +200,48 @@ export class ChecksService {
     if (!this.layerExists(scope)) return NOT_FOUND;
     const existing = id === null ? null : this.repo.get(id);
     if (id !== null && (!existing || !sameScope(existing.scope, scope))) return NOT_FOUND;
-    const lesson = opts.lessonId ? this.d.lessons.get(opts.lessonId) : null;
-    if (opts.lessonId && !lesson) return NOT_FOUND;
+    if (opts.lessonId && !this.d.lessons.get(opts.lessonId)) return NOT_FOUND;
     const now = this.d.now();
     const { outcome, result } = this.d.recorder.run(
       { kind: id === null ? "check_create" : "check_edit", origin: opts.origin ?? "manual", entity: "check", scope: { layer: scope }, summary: { name: v.value.name, type: v.value.type }, now },
-      (ctx) => {
-        let rowId: number;
-        if (existing) {
-          ctx.track("check", existing.id);
-          this.repo.update(existing.id, v.value, now);
-          rowId = existing.id;
-        } else {
-          rowId = this.repo.insert(scope, newKey(), v.value, { lessonId: lesson?.id ?? null, now });
-          ctx.created("check", rowId);
-        }
-        if (lesson && lesson.checkability !== "converted") {
-          ctx.track("lesson", lesson.id);
-          this.d.lessons.setFields(lesson.id, { checkability: "converted" }, now);
-        }
-        return rowId;
-      },
+      (ctx) => this.saveIn(ctx, scope, id, v.value, { lessonId: opts.lessonId ?? null }),
     );
+    if (typeof result !== "number") return result;
     return this.changed({ ok: true, batchId: outcome.batchId, affected: outcome.affected, id: result });
+  }
+
+  /**
+   * 在调用方已经开着的批次里新建或编辑一条检查（规矩准入的「全部接受」把草稿和确认放进同一个批次，工作流 D）。
+   * 返回新行的 id；参数不对或层不存在时什么也不写，返回失败。调用方在批次结束后自己调 notifyChanged()。
+   */
+  saveIn(ctx: BatchContext, scope: CheckScope, id: number | null, raw: unknown, opts: { lessonId?: number | null } = {}): number | Extract<ChecksActResult, { ok: false }> {
+    const v = validateCheckInput(raw);
+    if (!v.ok) return { ok: false, reason: "invalid", message: v.error };
+    if (!this.layerExists(scope)) return NOT_FOUND;
+    const existing = id === null ? null : this.repo.get(id);
+    if (id !== null && (!existing || !sameScope(existing.scope, scope))) return NOT_FOUND;
+    const lesson = opts.lessonId ? this.d.lessons.get(opts.lessonId) : null;
+    if (opts.lessonId && !lesson) return NOT_FOUND;
+    const now = this.d.now();
+    let rowId: number;
+    if (existing) {
+      ctx.track("check", existing.id);
+      this.repo.update(existing.id, v.value, now);
+      rowId = existing.id;
+    } else {
+      rowId = this.repo.insert(scope, newKey(), v.value, { lessonId: lesson?.id ?? null, now });
+      ctx.created("check", rowId);
+    }
+    if (lesson && lesson.checkability !== "converted") {
+      ctx.track("lesson", lesson.id);
+      this.d.lessons.setFields(lesson.id, { checkability: "converted" }, now);
+    }
+    return rowId;
+  }
+
+  /** 批次外写了检查之后通知重写快照。 */
+  notifyChanged(): void {
+    this.d.onChanged?.();
   }
 
   /** 把继承来的一条检查复制到这一层（同一个 key = 覆盖），之后在这一层改它。 */
@@ -293,7 +312,14 @@ export class ChecksService {
         this.d.lessons.setFields(lessonId, { checkability }, now);
       },
     );
+    if ((opts.origin ?? "manual") === "manual" && outcome.batchId !== null) this.classified?.(lessonId, l.checkability, checkability, l.checkabilityReason);
     return { ok: true, batchId: outcome.batchId, affected: outcome.affected };
+  }
+
+  private classified: ((lessonId: number, before: LessonCheckability | null, after: LessonCheckability | null, beforeReason: string | null) => void) | null = null;
+  /** 人改了一条规矩的分类以后（工作流 D：重判这一条，推翻了流水线的分类时记一个校准样本）。 */
+  onLessonClassified(fn: (lessonId: number, before: LessonCheckability | null, after: LessonCheckability | null, beforeReason: string | null) => void): void {
+    this.classified = fn;
   }
 
   /** 检查页上的一个操作（checks:act），参数已经过 IPC 校验。 */

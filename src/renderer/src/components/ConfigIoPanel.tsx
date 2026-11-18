@@ -260,6 +260,7 @@ function ImportFlow({ s }: { s: LessonsState }) {
             {S.ioFileInfo(preview.file.butlerVersion, formatTime(preview.file.exportedAt))} · {S.ioFileScope(preview.file.scope)}
             {preview.file.includeSourceUrls && <> · {S.ioFileHasUrls}</>}
           </p>
+          {preview.semanticFailed && <p className="muted" data-testid="io-semantic-failed">{S.ioSemanticFailed}</p>}
           {preview.skippedSections.length > 0 && <p className="muted" data-testid="io-skipped">{S.ioSkipped(preview.skippedSections)}</p>}
           {preview.starter && (
             <label className="inline">

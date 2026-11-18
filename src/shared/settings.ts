@@ -61,6 +61,9 @@ export const EDITABLE_SETTINGS = [
   "externalCiRerun",
   "externalIssuePost",
   "externalPushNotification",
+  "lessonsAutoAdmit",
+  "lessonsPrinciples",
+  "lessonsCoreGuide",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

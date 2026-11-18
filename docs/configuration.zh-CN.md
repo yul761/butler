@@ -341,15 +341,21 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 | `score.reviewerBonus` | `0.05` | 0–1 | 评审人亲自提过的加分 |
 | `score.recencyHalfLifeDays` | `180` | 1–3650 的整数 | 旧证据衰减的半衰期（天） |
 | `score.degradedPenalty` | `0.1` | 0–1 | 分析用的是降级模型时的扣分 |
+| `score.evidenceFullHits` | `5` | 1–1000 的整数 | 出现多少次时「出现次数」拿满分 |
+| `score.evidenceFullPrs` | `3` | 1–1000 的整数 | 在多少个不同的 PR 里出现时「覆盖面」拿满分 |
+| `score.minClarity` | `0.4` | 0–1 | 清晰度低于这个值就搁置 |
 | `batch.sampleSize` | `20` | 1–1000 的整数 | 自动批次抽查多少条 |
 | `batch.minSamplePassRate` | `0.8` | 0–1 | 抽查通过率至少多少 |
 | `batch.minCoverage` | `0.3` | 0–1 | 一批里至少多大比例要有结论 |
 | `batch.maxShelvedShare` | `0.7` | 0–1 | 一批里最多多大比例被搁置 |
 | `batch.minBacktestRecall` | `0.01` | 0–1 | 整批回测召回率至少多少 |
 | `batch.maxBacktestFalsePositiveRate` | `0.2` | 0–1 | 整批回测误报率最多多少 |
+| `dedupe.minSimilarity` | `0.35` | 0–1 | 文字相似度达到多少时，把两条规矩交给模型判断是不是重复 |
+| `dedupe.maxGroup` | `30` | 2–100 的整数 | 每次去重或查冲突的调用最多带几条规矩 |
 | `generality.minHits` | `2` | 0–1000 的整数 | 规矩至少出现几次 |
 | `generality.minPrs` | `2` | 0–1000 的整数 | 至少在几个不同的 PR 里出现 |
 | `generality.minReviewers` | `0` | 0–100 的整数 | 至少几个不同的评审人提过 |
+| `generality.allowSingleReviewer` | `true` | `true` / `false` | 同一个评审人在几个 PR 里反复提同一件事，算团队习惯 |
 | `backtest.recentPrs` | `50` | 1–1000 的整数 | 用最近多少个合并的 PR 回测 |
 | `backtest.minRecall` | `0.01` | 0–1 | 回测召回率至少多少 |
 | `backtest.maxFalsePositiveRate` | `0.2` | 0–1 | 回测误报率最多多少 |
@@ -365,6 +371,27 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 | `demote.noReductionPrs` | `10` | 1–1000 的整数 | 连续这么多个 PR 重复评论没减少就降级 |
 | `demote.to` | `shadow` | `shadow` / `review` | 降级到哪：shadow（影子运行）或 review（回到待审） |
 | `admission.autoConfirm` | `false` | `true` / `false` | 通过准入的规矩自动确认，不再问 |
+
+### 自动准入
+
+Butler 可以替你判待确认的规矩。判的时候，对一个仓库、一个产品（连同它的所有仓库）或者全部的候选规矩过四道闸门，剩下的再打分：
+
+1. **去重。** 文字够像（`dedupe.minSimilarity`）而且文件范围有重叠的规矩交给模型，由它说哪些讲的是同一件事。出现次数最多的那条留下，其余的以 `duplicate` 搁置、指向它。这一组跨了同一个产品的几个仓库时，接受的时候留下的那条提到产品层。已经确认过的规矩总是原样留着。
+2. **冲突。** 可能互相矛盾的规矩交给模型。冲突的两边都以 `conflict` 搁置、互相指向，除非开了 `conflict.autoPickHigherHits`（那样留出现次数多的那条）。确认过的规矩从不被搁置，只搁置和它矛盾的候选。
+3. **普遍性。** 一条规矩至少要在 `generality.minPrs` 个不同的 PR 里出现 `generality.minHits` 次。同一个评审人在几个 PR 里提同一件事算团队习惯，除非关掉 `generality.allowSingleReviewer`。只出现过一次的以 `generality` 搁置，不丢：再命中一次就回来。
+4. **可检查性。** 模型把每条分成能检查的或只能是文字的，并指出已经被现有检查或 lint 覆盖的（以 `covered` 搁置）。手动改分类会重判这一条，并记成一个校准样本。
+
+分数由证据（出现次数、PR 数、评审人数、多新）、清晰度（照着它能不能分出代码对错；降档模型产出的规矩再扣 `score.degradedPenalty`）和一致性（1，被别的规矩限定时 0.5）组成。在复盘规矩页上展开一条规矩的分数，能看到每一项和理由。达到准入线（`score.admitLine`，只能是文字的规矩用更严的 `score.proseAdmitLine`）的**推荐**；在两条线之间的以 `low_score` 搁置并写明最弱的一项；低于 `score.dropLine` 的以 `below_drop` 搁置。推荐的可检查规矩会生成一个影子模式的检查草稿；回测之前它的分数封顶在 `score.untestedCap`。
+
+判只改字段（准入状态、搁置原因、分数），记成一个可撤销的批次。之后从推荐的规矩里抽 `batch.sampleSize` 条换一个模型复核。抽查通过率低于 `batch.minSamplePassRate`，或者判过的规矩里被搁置的超过 `batch.maxShelvedShare` 时，不显示「全部接受」，并指出最弱的指标；单条规矩照样可以一条条确认。**全部接受推荐**会合并重复的、把跨仓库的规矩提到它们的产品、确认推荐的规矩并把它们的检查草稿写成影子检查，全部在一个批次里，一次**撤销**就全部还原。模型的回答有缓存，再判只问新加或改过的规矩。模型调用失败时，那条规矩留在待确认，记为没做完。
+
+| 设置 | 键 | 默认值 | 取值和说明 |
+|------|----|--------|------------|
+| 自动判新规矩 | `lessonsAutoAdmit` | `0` | `1` 或 `0`。打开后，一次分析加了或命中了规矩，就在后台判那个仓库（只推荐；只有开了 `admission.autoConfirm` 而且抽查通过时才自动确认）。 |
+| 把规矩归成原则 | `lessonsPrinciples` | `0` | `1` 或 `0`。打开后，每天把讲同一个原则的已确认规矩归成一组，session 说明里写原则，并指向它的案例。 |
+| 精简的核心说明 | `lessonsCoreGuide` | `0` | `1` 或 `0`。打开后，session 说明最多保留 10 条核心规矩（最常被违反的在前）。 |
+
+`admissionCalibratedAt` 记的是你在**校准**页上把分数线标为已校准的时间，不直接编辑。
 
 ### 导出文件
 
