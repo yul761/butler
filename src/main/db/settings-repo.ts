@@ -50,6 +50,8 @@ export const SETTING_DEFAULTS = {
   butlerPatrolTime: "",
   /** 界面和提示词的语言：auto | zh | en（设计文档 2026-10-26）。迁移 7 给老用户写 zh。 */
   language: "auto",
+  /** 准入策略的版本：每次改策略（任一层）加一，评分时写进 score_policy_version。不在设置页上。 */
+  admissionPolicyVersion: "1",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
