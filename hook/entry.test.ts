@@ -64,6 +64,27 @@ describe("butler-hook entry gate mode", () => {
   });
 });
 
+describe("butler-hook entry check modes", () => {
+  it("exits 0 silently without a snapshot and records the absence once", () => {
+    const home = tempDir();
+    const input = JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: join(home, "a.ts"), content: "x" }, cwd: home });
+    for (let i = 0; i < 2; i++) {
+      const r = spawnSync(process.execPath, [bundle, "check"], { input, env: { ...process.env, BUTLER_HOME: home, BUTLER_SESSION: "s1" }, timeout: 10_000, encoding: "utf8" });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toBe("");
+    }
+    const files = readdirSync(join(home, "checks", "hits")).filter((n) => n.endsWith(".jsonl"));
+    expect(files).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(home, "checks", "hits", files[0]), "utf8"))).toMatchObject({ kind: "absent", reason: "no_snapshot", session: "s1" });
+  });
+
+  it("exits 0 for check-push on garbage input", () => {
+    const r = spawnSync(process.execPath, [bundle, "check-push"], { input: "not json", env: { ...process.env, BUTLER_HOME: tempDir() }, timeout: 10_000, encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+});
+
 describe("build:hook toolchain check", () => {
   it("pins a Node version in .node-version", () => {
     expect(readFileSync(join(root, ".node-version"), "utf8").trim()).toMatch(/^\d+\.\d+\.\d+$/);
