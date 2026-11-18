@@ -46,8 +46,14 @@ describe("start_session model", () => {
     expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "t" })).not.toHaveProperty("model");
   });
 
-  it("rejects an unknown model", () => {
-    for (const model of ["gpt-4", "haiku", "", 3, null]) {
+  it("accepts tiers and model names; whether a name exists is the main process's call", () => {
+    for (const model of ["high", "mid", "low", "haiku", "claude-opus-5-5", "corp/gw:fast"]) {
+      expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "t", model })).toMatchObject({ model });
+    }
+  });
+
+  it("rejects a malformed model", () => {
+    for (const model of ["bad name!", "", "-x", "x".repeat(101), 3, null]) {
       expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "start_session", repo: "api", task: "t", model })).toBeNull();
       expect(parseControlRequest({ v: 1, featureId: 7, op: "start_session", ticket: "DMS-1", task: "t", model })).toBeNull();
     }

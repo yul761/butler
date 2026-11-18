@@ -11,9 +11,9 @@ import type { RefreshResult, RefreshTrigger } from "../sessions/session-refreshe
 import { SessionService } from "../sessions/session-service";
 import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import { TicketService } from "../tickets/ticket-service";
-import { controlHandler } from "./control-handler";
+import { controlHandler, type ControlHandlerDeps } from "./control-handler";
 
-async function setup(o: { memoryEnabled?: () => boolean } = {}) {
+async function setup(o: { memoryEnabled?: () => boolean; sessionModel?: ControlHandlerDeps["sessionModel"] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -55,6 +55,7 @@ async function setup(o: { memoryEnabled?: () => boolean } = {}) {
     screenNeedsUser: () => false,
     lastReply: () => null,
     memoryEnabled: o.memoryEnabled,
+    sessionModel: o.sessionModel,
     log: (msg) => void logs.push(msg),
   });
   const web = makeRepo();
@@ -120,6 +121,34 @@ describe("controlHandler", () => {
     expect(r).toMatchObject({ ok: true, value: { sessionId: "s-2", model: "sonnet" } });
     expect(sessions.get("s-2")).toMatchObject({ model: "sonnet" });
     expect(spawned[1].args).toEqual(expect.arrayContaining(["--model", "sonnet"]));
+  });
+
+  it("resolves a tier through model routing, returns the actual model, refuses an unknown name", async () => {
+    const choices: string[] = [];
+    const { handle, sessionService, sessions, spawned, tickets } = await setup({
+      sessionModel: (req: string) => {
+        choices.push(req);
+        if (req === "high") return { ok: true, model: "corp-big", requested: req, tier: "high", note: "routed" };
+        if (req === "nope") return { ok: false, error: "unknown model nope" };
+        return { ok: true, model: null, requested: req, tier: null, note: "no_flag" };
+      },
+    });
+    await sessionService.open({ ticketKey: "FULL-1", coordinator: true });
+    const repo = tickets.get("FULL-1")!.repos[1];
+    const r = await handle({ ...base, from: "s-1", op: "start_session", repo: repo.worktreePath!, task: "查原因", model: "high" });
+    expect(r).toMatchObject({ ok: true, value: { sessionId: "s-2", model: "corp-big", requestedModel: "high" } });
+    expect(sessions.get("s-2")).toMatchObject({ model: "corp-big" });
+    expect(spawned[1].args).toEqual(expect.arrayContaining(["--model", "corp-big"]));
+
+    const bad = await handle({ ...base, from: "s-1", op: "start_session", repo: repo.worktreePath!, task: "x", model: "nope" });
+    expect(bad).toEqual({ v: 1, ok: false, error: "unknown model nope" });
+    expect(spawned).toHaveLength(2);
+
+    // CLI 不支持 --model：照常开，不传 --model，结果里 model 为 null。
+    const noFlag = await handle({ ...base, from: "s-1", op: "start_session", repo: repo.worktreePath!, task: "y", model: "mid" });
+    expect(noFlag).toMatchObject({ ok: true, value: { model: null, requestedModel: "mid" } });
+    expect(spawned[2].args).not.toContain("--model");
+    expect(choices).toEqual(["high", "nope", "mid"]);
   });
 
   it("accepts the repo's working directory, and does not trust a spawner that is not this ticket's coordinator", async () => {

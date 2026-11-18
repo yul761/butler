@@ -1529,6 +1529,7 @@ async function bootstrap(): Promise<void> {
       deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
       memoryEnabled: () => memoryOn(settings),
       ticketPattern: () => settings.get("ticketPattern"),
+      sessionModel: (m) => routing.sessionModel(m),
       log: logger,
     }),
     log: logger,

@@ -1,4 +1,5 @@
 import type { Lang } from "./i18n";
+import { isModelName, isTier } from "./model-routing";
 
 /**
  * 总控 session 开子 session（设计文档 2026-10-23 第二步）：butler-sessions MCP server ↔ Butler 主进程，走文件。
@@ -22,12 +23,14 @@ export const LAST_REPLY_LIMIT = 500;
 /** 请求 id：文件名，只用安全字符。 */
 export const CONTROL_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 
-/** start_session 能选的模型：只有这两个别名。 */
-export type StartModel = "opus" | "sonnet";
-const START_MODELS: readonly unknown[] = ["opus", "sonnet"];
-/** model 省略（undefined）或是 opus / sonnet 才算合法；别的值整个请求当作坏请求。 */
+/**
+ * start_session 的模型（3.0 模型路由）：档位 high / mid / low，或模型名（旧的 opus / sonnet 照旧能用）。
+ * 名字是不是真的存在由主进程按模型路由判断，这里只查格式。
+ */
+export type StartModel = string;
+/** model 省略（undefined）、是档位或像个模型名才算合法；别的值整个请求当作坏请求。 */
 function okModel(v: unknown): boolean {
-  return v === undefined || START_MODELS.includes(v);
+  return v === undefined || isTier(v) || isModelName(v);
 }
 
 /** report 的种类（BTL-190 第 2+3 点）：progress 只存不送；done、blocked 还送进所属总控的终端。 */

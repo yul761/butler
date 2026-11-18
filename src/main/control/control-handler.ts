@@ -13,6 +13,7 @@ import type { FeaturesRepo } from "../db/features-repo";
 import { currentLang } from "../i18n";
 import { M } from "../strings";
 import type { SessionsRepo } from "../db/sessions-repo";
+import type { SessionModelChoice } from "../routing/routing-service";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { butlerControl, type ButlerControlDeps } from "./butler-control";
 import type { InboxService } from "../inbox/inbox-service";
@@ -73,6 +74,11 @@ export interface ControlHandlerDeps {
   ticketPattern?: () => string;
   /** set_epic_plan 记下的时间（不给用 Date.now）。 */
   now?: () => number;
+  /**
+   * start_session 的 model（档位或名字）→ 实际用的模型（RoutingService.sessionModel）。
+   * 不给时原样传（2.1.0 的行为）。
+   */
+  sessionModel?: (requested: string) => SessionModelChoice;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -129,7 +135,14 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (d.sessionService.openTerminalCount(t.key) >= MAX_RUNNING_PER_TICKET) {
       return fail(M().ctlTicketLimit(MAX_RUNNING_PER_TICKET));
     }
-    const r = await d.sessionService.open({ ticketKey: t.key, repoId: repo.id }, { spawnedBy: spawnedBy ?? undefined, model });
+    // 档位或名字 → 实际的模型；不认识的名字在开终端之前就拒绝。
+    let actual: string | null | undefined = model;
+    if (model !== undefined && d.sessionModel) {
+      const c = d.sessionModel(model);
+      if (!c.ok) return fail(c.error);
+      actual = c.model;
+    }
+    const r = await d.sessionService.open({ ticketKey: t.key, repoId: repo.id }, { spawnedBy: spawnedBy ?? undefined, model: actual ?? undefined });
     if (!r.ok) return fail(openError(r, repo));
     d.notify();
     // 不等任务写完：等输入框就绪可能要十几秒（用户还要处理信任文件夹之类的对话框），总控先拿到 session id。
@@ -139,7 +152,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       (e: unknown) => d.log?.(`control: task for ${r.termId} failed`, e),
     );
     return ok({
-      sessionId: r.termId, ...(model && { model }), ...extra, repo: name(repo), dir: d.ticketService.workDir(repo),
+      sessionId: r.termId, ...(model !== undefined && { model: actual ?? null }), ...(model !== undefined && actual !== model && { requestedModel: model }),
+      ...extra, repo: name(repo), dir: d.ticketService.workDir(repo),
       note: M().ctlTaskNote,
     });
   };

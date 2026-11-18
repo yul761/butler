@@ -60,8 +60,12 @@ describe("butler-sessions MCP server", () => {
     const call = server.handle({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t", model: "sonnet" } } });
     expect(await answer({ v: 1, ok: true, value: {} })).toMatchObject({ op: "start_session", model: "sonnet" });
     await call;
+    const tier = setup();
+    const tierCall = tier.server.handle({ jsonrpc: "2.0", id: 24, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t", model: "mid" } } });
+    expect(await tier.answer({ v: 1, ok: true, value: {} })).toMatchObject({ op: "start_session", model: "mid" });
+    await tierCall;
     const bad = setup(200);
-    expect(await bad.server.handle({ jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t", model: "gpt-4" } } })).toMatchObject({ result: { isError: true } });
+    expect(await bad.server.handle({ jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t", model: "bad name!" } } })).toMatchObject({ result: { isError: true } });
     const badFeature = setup(200, { featureId: 7 });
     expect(await badFeature.server.handle({ jsonrpc: "2.0", id: 23, method: "tools/call", params: { name: "start_session", arguments: { ticket: "A-1", task: "t", model: 3 } } })).toMatchObject({ result: { isError: true } });
     // 没发出任何请求：目录要么没建，要么是空的。
@@ -79,7 +83,8 @@ describe("butler-sessions MCP server", () => {
     for (const tools of [TOOLS, TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN]) {
       const start = tools.find((t) => t.name === "start_session")!;
       const model = (start.inputSchema.properties as Record<string, { enum?: readonly string[]; description: string }>).model;
-      expect(model.enum).toEqual(["opus", "sonnet"]);
+      expect(model.enum).toBeUndefined();
+      expect(model.description).toMatch(/high \/ mid \/ low/);
       expect(model.description).toMatch(/opus/);
       expect("required" in start.inputSchema && start.inputSchema.required).not.toContain("model");
     }
