@@ -1,3 +1,9 @@
+import type { BatchRecorder } from "../batches/batch-recorder";
+import type { AdmissionPolicyService } from "../lessons/admission-policies";
+import type { ConfigIoFacade } from "../config-io/facade";
+import type { BatchDetail, BatchView } from "../../shared/batches";
+import type { AdmissionPolicyView } from "../../shared/admission-policy";
+import type { ConfigIoStatus, ExportResult, ImportApplyResult, ImportPreviewResult } from "../../shared/config-io";
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc";
 import {
@@ -44,8 +50,7 @@ import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
   addRepoArg, apiKeyArg, availabilityActionArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
-  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg,
-} from "./validate";
+  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg } from "./validate";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
 import type { AvailabilityView } from "../../shared/availability";
@@ -73,6 +78,12 @@ export interface IpcDeps {
   prOpen: (url: string) => PrOpenResult;
   /** 复盘规矩页。 */
   lessons: Pick<LessonsService, "state" | "act" | "pendingCount" | "runs" | "run">;
+  /** 批次历史（契约 4.4）。 */
+  batches: Pick<BatchRecorder, "list" | "get">;
+  /** 三层准入策略（契约 4.2）。 */
+  policies: Pick<AdmissionPolicyService, "view" | "setLayer">;
+  /** 导入导出（契约 4.3）。 */
+  configIo: ConfigIoFacade;
   /** Claude 可用状态；act 只有手动暂停 / 恢复复盘。 */
   availability: Pick<ClaudeAvailability, "view" | "pauseLessons" | "resumeLessons">;
   /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
@@ -359,6 +370,25 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.lessonsRuns, (raw: unknown): LessonQueueRowView[] => d.lessons.runs(lessonSlugArg(raw)));
   handle(IPC.lessonsRun, (raw: unknown): LessonRunDetail | null => d.lessons.run(lessonRunIdArg(raw)));
   handle(IPC.lessonsPending, (): number => d.lessons.pendingCount());
+  handle(IPC.lessonsBatches, (raw: unknown): BatchView[] => d.batches.list(batchListArg(raw)));
+  handle(IPC.lessonsBatch, (raw: unknown): BatchDetail | null => d.batches.get(batchIdArg(raw)));
+  handle(IPC.policiesGet, (raw: unknown): AdmissionPolicyView => d.policies.view(policyScopeArg(raw)));
+  handle(IPC.policiesSet, (raw: unknown) => {
+    const { scope, overrides } = policySetArg(raw);
+    const r = d.policies.setLayer(scope, overrides);
+    d.notify();
+    return r;
+  });
+  handle(IPC.configStatus, (): ConfigIoStatus => d.configIo.status());
+  handle(IPC.configExport, (raw: unknown): Promise<ExportResult> => d.configIo.exportTo(exportRequestArg(raw)));
+  handle(IPC.configImportPreview, (): Promise<ImportPreviewResult> => d.configIo.importPreview());
+  handle(IPC.configImportRetarget, (raw: unknown): Promise<ImportPreviewResult> => {
+    const { token, target } = importRetargetArg(raw);
+    return d.configIo.retarget(token, target);
+  });
+  handle(IPC.configImportApply, (raw: unknown): ImportApplyResult => d.configIo.apply(importApplyArg(raw)));
+  handle(IPC.configBackupNow, () => d.configIo.backupNow());
+  handle(IPC.configOpenBackups, () => d.configIo.openBackups());
   handle(IPC.availabilityGet, (): AvailabilityView => d.availability.view());
   handle(IPC.availabilityAct, (raw: unknown): void => {
     const a = availabilityActionArg(raw);

@@ -13,6 +13,7 @@ The Settings page has these sections, in order:
 3. **Memory (StateCore)**
 4. **Schedule and handoffs**
 5. **Privacy and personal API**
+6. **Lessons** (automatic backups, the export reminder and the admission policy; see [Lessons: bulk actions, admission policy and import / export](#lessons-bulk-actions-admission-policy-and-import--export))
 
 The merge coordinator and the `end_session` tool for coordinators are described under [Merge coordinator](#merge-coordinator) and in the [README](../README.md); neither has a setting.
 
@@ -214,7 +215,7 @@ The personal API is called through Electron's network stack, so it follows your 
 
 ### Bulk actions and batches
 
-On the **Lessons** page you can filter the list (repository or product, status, admission, checkability, shelved reason, minimum hits, score range, batch, text) and then act on **every lesson that matches** in one step: **Confirm all N**, **Reject all N**, **Disable all N**, **Enable all N** or **Delete all N**. You can also tick single pending lessons and act on just those. **Accept all recommended (M)** confirms the lessons the admission pipeline recommended (admission `auto`) and leaves the rest alone.
+On the **Lessons** page you can filter the list (repository or product, status, admission, checkability, shelved reason, minimum hits, score range, batch, text, only output of a fallback model) and then act on **every lesson that matches** in one step: **Confirm all N**, **Reject all N**, **Disable all N**, **Enable all N** or **Delete all N**. You can also tick single pending lessons and act on just those. **Accept all recommended (M)** confirms the lessons the admission pipeline recommended (admission `auto`) and leaves the rest alone.
 
 Every bulk action, every single confirm / reject / edit / disable / delete / merge, every policy change and every import is recorded as a **batch** with a snapshot of each row before and after. The **Batches** tab lists them; **Undo** puts every row of a batch back as it was. A row that has changed again since that batch is left alone and counted as skipped. Undoing is itself recorded and cannot be undone again. Merging no longer deletes the merged lesson: it is kept, hidden, pointing at the lesson it was merged into, so the merge can be undone.
 
@@ -230,7 +231,7 @@ Old lessons that you had already confirmed, disabled or rejected keep their stat
 
 ### Admission policy
 
-The admission policy decides how the lesson pipeline scores, shelves, backtests, shadows and demotes rules. Every key can be set on three layers: **global**, **product** and **repository**. A repository uses its own value for a key, else the value of a product it belongs to, else the global value, else the default; the layers are merged key by key. When a repository belongs to several products that set the same key differently, the product whose name sorts last wins and **Settings → Admission policy** shows a warning. Each change is an undoable batch and raises the policy version (scores record the version they were computed with). The defaults have not been calibrated yet; the page says so.
+The admission policy decides how the lesson pipeline scores, shelves, backtests, shadows and demotes rules. Every key can be set on three layers: **global**, **product** and **repository**. A repository uses its own value for a key, else the value of a product it belongs to, else the global value, else the default; the layers are merged key by key. When a repository belongs to several products that set the same key differently, the product whose name sorts last wins and **Settings → Lessons → Admission policy** shows a warning. Each change is an undoable batch and raises the policy version (scores record the version they were computed with). The defaults have not been calibrated yet; the page says so.
 
 | Key | Default | Values | What it does |
 |-----|---------|--------|--------------|

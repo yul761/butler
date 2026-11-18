@@ -5,6 +5,7 @@ import { S } from "../strings";
 import { PrivacySettings } from "./PrivacySettings";
 import { GeneralSettings } from "./GeneralSettings";
 import { ScheduleSettings } from "./ScheduleSettings";
+import { LessonsSettings } from "./LessonsSettings";
 import { ClaudeAvailability } from "./ClaudeAvailability";
 
 export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => void; section?: "health" }) {
@@ -66,6 +67,7 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
       <GeneralSettings report={report} onHealth={applyHealth} onRerunWizard={onRerunWizard} />
       <ScheduleSettings />
       <PrivacySettings />
+      <LessonsSettings />
     </div>
   );
 }

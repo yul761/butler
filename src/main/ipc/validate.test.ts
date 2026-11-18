@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
-import { batchIdArg, batchListArg, lessonTargetArg } from "./validate";
+import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
 import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
@@ -322,5 +322,50 @@ describe("lessonActionArg", () => {
     expect(availabilityActionArg({ op: "resumeLessons" })).toEqual({ op: "resumeLessons" });
     expect(availabilityActionArg({ op: "pauseLessons", extra: 1 })).toEqual({ op: "pauseLessons" });
     for (const bad of [null, undefined, "pauseLessons", {}, { op: "x" }, { op: 1 }]) expect(() => availabilityActionArg(bad)).toThrow();
+  });
+});
+
+describe("policy and config import / export arguments", () => {
+  const tok = "0123abcd-0123-4567-89ab-0123456789ab";
+  it("accepts the three policy layers and checks override values", () => {
+    expect(policyScopeArg({ kind: "global" })).toEqual({ kind: "global" });
+    expect(policyScopeArg({ kind: "product", productId: 2 })).toEqual({ kind: "product", productId: 2 });
+    expect(policyScopeArg({ kind: "repo", slug: "o/web" })).toEqual({ kind: "repo", slug: "o/web" });
+    for (const bad of [null, {}, { kind: "global", slug: "x" }, { kind: "product", productId: 0 }, { kind: "repo" }, { kind: "x" }]) expect(() => policyScopeArg(bad)).toThrow();
+    expect(policySetArg({ scope: { kind: "global" }, overrides: { "score.admitLine": 0.8 } })).toEqual({ scope: { kind: "global" }, overrides: { "score.admitLine": 0.8 } });
+    expect(() => policySetArg({ scope: { kind: "global" }, overrides: { "score.admitLine": 2 } })).toThrow();
+    expect(() => policySetArg({ scope: { kind: "global" }, overrides: { nope: 1 } })).toThrow();
+  });
+
+  it("checks export requests", () => {
+    const options = { content: "all", includeSourceUrls: false };
+    expect(exportRequestArg({ scope: { kind: "all" }, options })).toEqual({ scope: { kind: "all" }, options });
+    expect(exportRequestArg({ scope: { kind: "repo", slug: "o/web" }, options, starter: { name: " pack " } }).starter).toEqual({ name: "pack" });
+    for (const bad of [
+      { scope: { kind: "all" }, options: { content: "x", includeSourceUrls: false } },
+      { scope: { kind: "all" }, options: { content: "all" } },
+      { scope: { kind: "product" }, options },
+      { scope: { kind: "all" }, options, starter: { name: "" } },
+      { scope: { kind: "all" }, options, extra: 1 },
+    ]) expect(() => exportRequestArg(bad)).toThrow();
+  });
+
+  it("checks import apply and retarget requests", () => {
+    const fp = "0123456789abcdef";
+    expect(importApplyArg({ token: tok, mode: "merge" })).toEqual({ token: tok, mode: "merge" });
+    expect(importApplyArg({ token: tok, mode: "replace", bulk: "local", resolutions: { [`lessons:${fp}`]: "imported" } })).toEqual({
+      token: tok, mode: "replace", bulk: "local", resolutions: { [`lessons:${fp}`]: "imported" },
+    });
+    for (const bad of [
+      { token: "x", mode: "merge" },
+      { token: tok, mode: "both" },
+      { token: tok, mode: "merge", bulk: "mine" },
+      { token: tok, mode: "merge", resolutions: { "lessons:zz": "imported" } },
+      { token: tok, mode: "merge", resolutions: { [`lessons:${fp}`]: "maybe" } },
+      { token: tok, mode: "merge", resolutions: [] },
+    ]) expect(() => importApplyArg(bad)).toThrow();
+    expect(importRetargetArg({ token: tok, target: { kind: "repo", slug: "o/web" } })).toEqual({ token: tok, target: { kind: "repo", slug: "o/web" } });
+    expect(starterTargetArg({ kind: "product", productId: 4 })).toEqual({ kind: "product", productId: 4 });
+    expect(() => starterTargetArg({ kind: "all" })).toThrow();
   });
 });

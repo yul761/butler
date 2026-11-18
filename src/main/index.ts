@@ -89,6 +89,10 @@ import { isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { ButlerPatrol } from "./schedule/butler-patrol";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
+import { AdmissionPolicyService } from "./lessons/admission-policies";
+import { ConfigIoService, defaultRegistry } from "./config-io";
+import { ConfigBackups } from "./config-io/backup-job";
+import { configIoFacade } from "./config-io/facade";
 import { ActivityMonitor, activityIntervals } from "./sessions/activity-monitor";
 import { sessionRegistryName } from "./sessions/activity-sources";
 import { DeliveryGuard, type DeliveryGuardDeps } from "./sessions/delivery-guard";
@@ -103,7 +107,7 @@ import { judgeStuck } from "./sessions/stuck-judge";
 import { markTurnEndedWithoutStop } from "./sessions/turn-end";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
-import { idleCloseMinutes, llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
+import { configBackupIntervalDays, configBackupKeep, configExportReminderDays, idleCloseMinutes, llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
 import { pathKey } from "./util/env";
@@ -466,6 +470,29 @@ async function bootstrap(): Promise<void> {
   // 规矩、产品和准入策略的改动都记成可撤销的批次（契约 4.4）。
   const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db)]);
   const lessonBatches = new LessonBatchService({ db, repo: lessonsRepo, recorder: batchRecorder, now: Date.now });
+  // 三层准入策略（契约 4.2）：版本存在设置 admissionPolicyVersion 里。
+  const admissionPolicies = new AdmissionPolicyService({
+    db, repo: lessonsRepo, recorder: batchRecorder, now: Date.now,
+    version: {
+      get: () => Math.max(1, Number.parseInt(settings.get("admissionPolicyVersion"), 10) || 1),
+      set: (v) => settings.set("admissionPolicyVersion", String(v)),
+    },
+  });
+  // 导入导出（契约 4.3）：备份放在 <BUTLER_HOME>/backups。
+  const configBackupDir = join(paths.home, "backups");
+  const configRegistry = defaultRegistry();
+  const configIo = new ConfigIoService({
+    db, repo: lessonsRepo, policies: admissionPolicies, recorder: batchRecorder, registry: configRegistry, butlerVersion: app.getVersion(),
+    backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), log: logger,
+  });
+  const configBackups = new ConfigBackups({
+    io: configIo, registry: configRegistry, jobs, repo: lessonsRepo, backupDir: configBackupDir, now: Date.now, log: logger,
+    intervalDays: () => configBackupIntervalDays(settings), keep: () => configBackupKeep(settings), reminderDays: () => configExportReminderDays(settings),
+    lastExportAt: () => {
+      const v = Number(settings.get("configLastExportAt"));
+      return Number.isFinite(v) && v > 0 ? v : null;
+    },
+  });
   const lessonRuns = new LessonRunsRepo(db);
   const repoIdentity = new RepoIdentity();
   // 带 hash 的 session 说明文件每次规矩变了就多一份，启动时清掉 30 天没用过的。
@@ -785,6 +812,7 @@ async function bootstrap(): Promise<void> {
     if (headlessAbort.signal.aborted) return Promise.resolve();
     void butlerPatrol.check();
     void lessonRunner.daily().catch((e: unknown) => logger("lessons: daily pull failed", e));
+    if (configBackups.tick()) notify();
     return scheduler.check(trigger);
   };
 
@@ -1274,6 +1302,26 @@ async function bootstrap(): Promise<void> {
     deleteHiddenSessions: (ids) => sessionCleanup.deleteHidden(ids),
     inbox: inboxService,
     lessons: lessonsService,
+    batches: batchRecorder,
+    policies: admissionPolicies,
+    configIo: configIoFacade({
+      io: configIo, backups: configBackups, backupDir: configBackupDir, now: Date.now, notify, log: logger,
+      openPath: (dir) => shell.openPath(dir),
+      dialogs: {
+        save: async (defaultName) => {
+          const w = win;
+          const opts = { defaultPath: join(app.getPath("documents"), defaultName), filters: [{ name: "JSON", extensions: ["json"] }] };
+          const r = w ? await dialog.showSaveDialog(w, opts) : await dialog.showSaveDialog(opts);
+          return r.canceled || !r.filePath ? null : r.filePath;
+        },
+        open: async () => {
+          const w = win;
+          const opts = { properties: ["openFile" as const], filters: [{ name: "JSON", extensions: ["json"] }] };
+          const r = w ? await dialog.showOpenDialog(w, opts) : await dialog.showOpenDialog(opts);
+          return r.canceled ? null : (r.filePaths[0] ?? null);
+        },
+      },
+    }),
     availability,
     prStages: new PrStagesService({
       tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id, { includeArchived: true }) },

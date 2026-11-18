@@ -7,6 +7,10 @@ import type {
 import type { PrStagesScope } from "../../shared/pr-stages";
 import { LESSON_BULK_VERBS, MAX_TARGET_IDS, type LessonAction, type LessonBulkVerb, type LessonTarget } from "../../shared/lessons";
 import { parseLessonFilter } from "../../shared/lesson-filter";
+import { parsePolicyOverrides, type AdmissionPolicyOverrides, type PolicyScope } from "../../shared/admission-policy";
+import {
+  EXPORT_CONTENTS, type ExportContent, type ExportRequest, type ExportScopeArg, type ImportApplyRequest, type Resolution, type StarterTarget,
+} from "../../shared/config-io";
 import { EPIC_NAME_LIMIT } from "../epics/epic-service";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 import { M } from "../strings";
@@ -407,4 +411,92 @@ export function availabilityActionArg(v: unknown): AvailabilityAction {
   if (o.op === "resumeLessons") return { op: "resumeLessons" };
   if (o.op === "pauseLessons") return { op: "pauseLessons" };
   throw new Error("invalid availability action");
+}
+
+// ---- 准入策略、导入导出（契约 4.2 / 4.3）
+
+const objArg = (v: unknown, what: string, keys: readonly string[]): Record<string, unknown> => {
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error(`invalid ${what}`);
+  for (const k of Object.keys(v)) if (!keys.includes(k)) throw new Error(`invalid ${what}`);
+  return v as Record<string, unknown>;
+};
+const posInt = (v: unknown, what: string): number => {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error(`invalid ${what}`);
+  return v;
+};
+
+/** 策略的一层：global / product / repo。 */
+export function policyScopeArg(v: unknown): PolicyScope {
+  const o = objArg(v, "policy scope", ["kind", "productId", "slug"]);
+  if (o.kind === "global" && o.productId === undefined && o.slug === undefined) return { kind: "global" };
+  if (o.kind === "product" && o.slug === undefined) return { kind: "product", productId: posInt(o.productId, "policy scope") };
+  if (o.kind === "repo" && o.productId === undefined) return { kind: "repo", slug: lessonSlugArg(o.slug) };
+  throw new Error("invalid policy scope");
+}
+
+/** 改一层：覆盖整个换掉（值在服务里再按键校验）。 */
+export function policySetArg(v: unknown): { scope: PolicyScope; overrides: AdmissionPolicyOverrides } {
+  const o = objArg(v, "policy change", ["scope", "overrides"]);
+  return { scope: policyScopeArg(o.scope), overrides: parsePolicyOverrides(o.overrides) };
+}
+
+export function exportRequestArg(v: unknown): ExportRequest {
+  const o = objArg(v, "export request", ["scope", "options", "starter"]);
+  const sc = objArg(o.scope, "export scope", ["kind", "productId", "slug"]);
+  let scope: ExportScopeArg;
+  if (sc.kind === "all" && sc.productId === undefined && sc.slug === undefined) scope = { kind: "all" };
+  else if (sc.kind === "product" && sc.slug === undefined) scope = { kind: "product", productId: posInt(sc.productId, "export scope") };
+  else if (sc.kind === "repo" && sc.productId === undefined) scope = { kind: "repo", slug: lessonSlugArg(sc.slug) };
+  else throw new Error("invalid export scope");
+  const op = objArg(o.options, "export options", ["content", "includeSourceUrls"]);
+  if (!(EXPORT_CONTENTS as readonly unknown[]).includes(op.content) || typeof op.includeSourceUrls !== "boolean") throw new Error("invalid export options");
+  const req: ExportRequest = { scope, options: { content: op.content as ExportContent, includeSourceUrls: op.includeSourceUrls } };
+  if (o.starter !== undefined) {
+    const st = objArg(o.starter, "starter pack", ["name"]);
+    if (typeof st.name !== "string" || !st.name.trim() || st.name.length > 200) throw new Error("invalid starter pack");
+    req.starter = { name: st.name.trim() };
+  }
+  return req;
+}
+
+const TOKEN_RE = /^[0-9a-f-]{36}$/;
+function tokenArg(v: unknown): string {
+  if (typeof v !== "string" || !TOKEN_RE.test(v)) throw new Error("invalid import token");
+  return v;
+}
+
+export function starterTargetArg(v: unknown): StarterTarget {
+  const o = objArg(v, "starter target", ["kind", "productId", "slug"]);
+  if (o.kind === "repo" && o.productId === undefined) return { kind: "repo", slug: lessonSlugArg(o.slug) };
+  if (o.kind === "product" && o.slug === undefined) return { kind: "product", productId: posInt(o.productId, "starter target") };
+  throw new Error("invalid starter target");
+}
+
+export function importRetargetArg(v: unknown): { token: string; target: StarterTarget } {
+  const o = objArg(v, "import retarget", ["token", "target"]);
+  return { token: tokenArg(o.token), target: starterTargetArg(o.target) };
+}
+
+const RESOLUTIONS = ["imported", "local"] as const;
+const MAX_RESOLUTIONS = 100_000;
+export function importApplyArg(v: unknown): ImportApplyRequest {
+  const o = objArg(v, "import", ["token", "mode", "bulk", "resolutions"]);
+  if (o.mode !== "merge" && o.mode !== "replace") throw new Error("invalid import");
+  const req: ImportApplyRequest = { token: tokenArg(o.token), mode: o.mode };
+  if (o.bulk !== undefined) {
+    if (!(RESOLUTIONS as readonly unknown[]).includes(o.bulk)) throw new Error("invalid import");
+    req.bulk = o.bulk as Resolution;
+  }
+  if (o.resolutions !== undefined) {
+    const r = objArg(o.resolutions, "import", Object.keys((o.resolutions ?? {}) as object));
+    const entries = Object.entries(r);
+    if (entries.length > MAX_RESOLUTIONS) throw new Error("invalid import");
+    const out: Record<string, Resolution> = {};
+    for (const [k, val] of entries) {
+      if (!/^[\w-]{1,100}:[0-9a-f]{16}$/.test(k) || !(RESOLUTIONS as readonly unknown[]).includes(val)) throw new Error("invalid import");
+      out[k] = val as Resolution;
+    }
+    req.resolutions = out;
+  }
+  return req;
 }
