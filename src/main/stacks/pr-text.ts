@@ -36,6 +36,23 @@ const ZH = {
     `解决冲突（两边的意图都要保留），git rebase --continue，然后 git push --force-with-lease。rerere 已经打开，你解过的冲突 Butler 下次会自动套用。` +
     (p.above.length ? `上面的层（${p.above.join("、")}）不要自己动，Butler 会接着处理。` : "") +
     `做完以后结束这一轮。`,
+  errors: {
+    notFound: "没有这个栈",
+    layerNotFound: "没有这一层",
+    tooFew: "栈至少要两层",
+    duplicate: (b: string) => `分支 ${b} 出现了两次`,
+    notOwned: (b: string) => `分支 ${b} 不是 Butler 的 ticket 分支，不能放进栈`,
+    missing: (b: string) => `仓库里没有分支 ${b}`,
+    inOther: (b: string, name: string) => `分支 ${b} 已经在栈「${name}」里`,
+    notTop: (b: string) => `${b} 不是栈顶：只能接在栈顶上（栈只能是一条线）`,
+    autoRebaseOff: "这个仓库的「允许 Butler 自动 rebase 栈」没开（设置 → 栈）",
+    busy: "这个栈正在处理，稍后再试",
+    isBottom: "栈底就是要 review 的那层，不用开 draft",
+    merged: "这一层已经合并了",
+    nothingToRestore: "没有可以恢复的备份",
+    restoreMoved: (b: string) => `${b} 在那次 rebase 之后又变过，不能直接恢复`,
+    switchOff: (what: string) => `对外动作「${what}」没开（设置 → 通用 → 对外动作），这一步没做`,
+  },
   note: (p: { k: number; n: number; above: string[] }) =>
     `这个 PR 是栈的第 ${p.k}/${p.n} 层` +
     (p.above.length ? `，上面还有 ${p.above.join("、")}` : "") +
@@ -66,6 +83,23 @@ const EN: StackTexts = {
     `Resolve the conflict (keep the intent of both sides), git rebase --continue, then git push --force-with-lease. rerere is on, so Butler reuses your resolution next time.` +
     (p.above.length ? ` Leave the layers above (${p.above.join(", ")}) alone; Butler handles them next.` : "") +
     ` End the turn when done.`,
+  errors: {
+    notFound: "No such stack",
+    layerNotFound: "No such layer",
+    tooFew: "A stack needs at least two layers",
+    duplicate: (b) => `Branch ${b} appears twice`,
+    notOwned: (b) => `Branch ${b} is not a Butler ticket branch and can't go into a stack`,
+    missing: (b) => `The repository has no branch ${b}`,
+    inOther: (b, name) => `Branch ${b} is already in the stack "${name}"`,
+    notTop: (b) => `${b} is not the top of its stack: new layers go on top (a stack is a single line)`,
+    autoRebaseOff: "\"Let Butler rebase stacks\" is off for this repository (Settings → Stacks)",
+    busy: "This stack is being processed; try again shortly",
+    isBottom: "The bottom layer is the one to review; it doesn't need a draft",
+    merged: "This layer is already merged",
+    nothingToRestore: "There is no backup to restore",
+    restoreMoved: (b) => `${b} changed after that rebase, so it can't be restored directly`,
+    switchOff: (what) => `The outward action "${what}" is off (Settings → General → Outward actions), so this step was not done`,
+  },
   note: (p) =>
     `This PR is layer ${p.k}/${p.n} of a stack` +
     (p.above.length ? `, with ${p.above.join(", ")} above it` : "") +

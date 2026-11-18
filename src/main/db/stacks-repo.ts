@@ -1,3 +1,4 @@
+import type { SQLInputValue } from "node:sqlite";
 import type {
   StackLayerMode, StackLayerState, StackRunMode, StackRunOutcome, StackSource, StackTrigger,
 } from "../../shared/stacks";
@@ -68,6 +69,8 @@ export interface RunDetail {
   /** 同一原因连续推迟了几次（只留一行）。 */
   repeats?: number;
   restoredFrom?: number;
+  /** 冲突已经送进那一层的 session。 */
+  delivered?: boolean;
 }
 
 export interface RunRow {
@@ -156,14 +159,14 @@ const LAYER_COLS: Record<string, string> = {
   lastRebaseAt: "last_rebase_at", conflictKey: "conflict_key",
 };
 
-function setClause(cols: Record<string, string>, patch: Record<string, unknown>): [string, unknown[]] {
+function setClause(cols: Record<string, string>, patch: Record<string, unknown>): [string, SQLInputValue[]] {
   const parts: string[] = [];
-  const args: unknown[] = [];
+  const args: SQLInputValue[] = [];
   for (const [k, v] of Object.entries(patch)) {
     const c = cols[k];
     if (!c || v === undefined) continue;
     parts.push(`${c} = ?`);
-    args.push(v);
+    args.push(v as SQLInputValue);
   }
   return [parts.join(", "), args];
 }
@@ -300,6 +303,11 @@ export class StacksRepo {
     this.db
       .prepare(`UPDATE stack_runs SET outcome = ?, reason = ?, detail = ?, mode = COALESCE(?, mode), finished_at = ? WHERE id = ?`)
       .run(r.outcome, r.reason ?? null, JSON.stringify(r.detail ?? cur?.detail ?? {}), r.mode ?? null, this.now(), id);
+  }
+
+  /** 开了头又没东西可记的 run（没变化的自动触发、被推迟的）。 */
+  deleteRun(id: number): void {
+    this.db.prepare(`DELETE FROM stack_runs WHERE id = ?`).run(id);
   }
 
   /**

@@ -249,6 +249,8 @@ export interface StackNoticeInfo {
   stackId: number;
   stackName: string;
   branch: string;
+  /** 这一层的 ticket（提醒上「打开 ticket」用）。 */
+  ticketKey?: string | null;
   /** conflict：冲突文件；stuck：最近的原因。 */
   files?: string[];
   detail?: string | null;
