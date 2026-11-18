@@ -746,4 +746,55 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_external_action_audit_ts ON external_action_audit (ts);
   `,
+  // ws-h 度量（契约 4.7）：事件、等人时间段、每日汇总、基线 PR，以及 ticket_prs 的「Butler 做的」标记。
+  `
+  CREATE TABLE metrics_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    session_id TEXT,
+    ticket_key TEXT,
+    pr_id INTEGER,
+    repo_slug TEXT,
+    data TEXT NOT NULL DEFAULT '{}',
+    dedupe_key TEXT UNIQUE
+  );
+  CREATE INDEX idx_metrics_events_at ON metrics_events (at);
+  CREATE INDEX idx_metrics_events_kind_at ON metrics_events (kind, at);
+  CREATE TABLE metrics_wait_spans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    ticket_key TEXT,
+    kind TEXT NOT NULL CHECK (kind IN ('human', 'idle')),
+    category TEXT,
+    source TEXT,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    last_seen_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_metrics_wait_spans_open ON metrics_wait_spans (ended_at);
+  CREATE INDEX idx_metrics_wait_spans_started ON metrics_wait_spans (started_at);
+  CREATE TABLE metrics_daily (
+    day TEXT NOT NULL,
+    group_kind TEXT NOT NULL CHECK (group_kind IN ('all', 'repo', 'product', 'risk')),
+    group_key TEXT NOT NULL,
+    butler INTEGER NOT NULL,
+    metric TEXT NOT NULL,
+    n INTEGER NOT NULL DEFAULT 0,
+    total REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, group_kind, group_key, butler, metric)
+  );
+  CREATE TABLE metrics_baseline_prs (
+    slug TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    opened_at INTEGER NOT NULL,
+    merged_at INTEGER NOT NULL,
+    first_commit_at INTEGER,
+    human_comments INTEGER NOT NULL DEFAULT 0,
+    copilot_comments INTEGER NOT NULL DEFAULT 0,
+    fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (slug, number)
+  );
+  ALTER TABLE ticket_prs ADD COLUMN butler_made INTEGER;
+  `,
 ];

@@ -5,7 +5,8 @@ import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import { memDb } from "../test-utils";
 import { TASK_LIMIT } from "../../shared/control";
-import { ANSWERING_TTL_MS, InboxService, REPORT_DELIVERY_MAX_AGE_MS, roleOf } from "./inbox-service";
+import type { RecordEvent } from "../metrics/events";
+import { ANSWERING_TTL_MS, InboxService, REPORT_DELIVERY_MAX_AGE_MS, roleOf, type AskedQuestion } from "./inbox-service";
 
 const session = (id: string, o: Partial<Session> = {}): Session => ({
   id, ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: true, replacedBy: null,
@@ -16,7 +17,7 @@ const ticket = (key: string, featureId: number | null, repos: { id: number; repo
   ({ key, featureId, repos, title: null } as unknown as Ticket);
 
 /** 链：chains 里 old → new 的映射，head 沿着走到底。 */
-function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<number, number>; open?: string[]; epicNames?: Record<number, string> }) {
+function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<number, number>; open?: string[]; epicNames?: Record<number, string>; recordEvent?: RecordEvent; onAsked?: (q: AskedQuestion) => void }) {
   const repo = new InboxRepo(memDb());
   const sessions = new Map(o.sessions.map((s) => [s.id, s]));
   const replaced = new Map<string, string>();
@@ -48,6 +49,7 @@ function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<num
     epicName: (id) => o.epicNames?.[id] ?? null,
     refreshing: (id) => state.refreshing.has(head(id)?.id ?? id),
     answerGuard: gate("answerGate"), reportGuard: gate("reportGate"), deliver, notify, now: () => state.now, log: () => {},
+    recordEvent: o.recordEvent, onAsked: o.onAsked,
   });
   const replace = (from: string, to: Session) => {
     sessions.set(to.id, to);
@@ -485,5 +487,59 @@ describe("InboxService and the Butler 总控 (BTL-190 5)", () => {
     inbox.ask(bt, { question: "q" });
     sessions.delete("bt");
     expect(inbox.pendingDecisionViews()[0]).toMatchObject({ role: "butler", target: { page: "butler", sessionId: "bt" } });
+  });
+});
+
+describe("InboxService metrics (ws-h)", () => {
+  it("records needs_you_answer for a card answer, once per item", () => {
+    const s = session("s1", { ticketKey: "BTL-1" });
+    const recordEvent = vi.fn<RecordEvent>(() => true);
+    const { inbox } = setup({ sessions: [s], tickets: [ticket("BTL-1", null)], recordEvent });
+    const id = inbox.ask(s, { question: "q?", options: ["A", "B"] });
+    inbox.answer(id, "A");
+    expect(recordEvent).toHaveBeenCalledWith("needs_you_answer", { sessionId: "s1", ticketKey: "BTL-1", dedupeKey: `answer:${id}`, data: { via: "card", options: 2 } });
+    expect(inbox.answer(id, "   ")).toBe(false);
+    expect(recordEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("records needs_you_answer for 「不用了」", () => {
+    const s = session("s1");
+    const recordEvent = vi.fn<RecordEvent>(() => true);
+    const { inbox } = setup({ sessions: [s], recordEvent });
+    const id = inbox.ask(s, { question: "q?" });
+    expect(inbox.dismiss(id)).toBe(true);
+    expect(recordEvent).toHaveBeenCalledWith("needs_you_answer", expect.objectContaining({ data: { via: "dismiss", options: 0 } }));
+    expect(inbox.dismiss(id)).toBe(false);
+    expect(recordEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands every new question to onAsked", () => {
+    const s = session("s1", { ticketKey: "BTL-1" });
+    const onAsked = vi.fn();
+    const { inbox } = setup({ sessions: [s], tickets: [ticket("BTL-1", null)], onAsked });
+    const id = inbox.ask(s, { question: "Which?", options: ["A", "B"], context: "c" });
+    expect(onAsked).toHaveBeenCalledWith({ id, sessionId: "s1", ticketKey: "BTL-1", question: "Which?", options: ["A", "B"], context: "c", supersedes: [] });
+  });
+
+  it("tells onAsked which pending items the same question replaced", () => {
+    const s = session("s1");
+    const onAsked = vi.fn();
+    const { inbox } = setup({ sessions: [s], onAsked });
+    const first = inbox.ask(s, { question: "Which?" });
+    inbox.ask(s, { question: "Which?" });
+    expect(onAsked).toHaveBeenLastCalledWith(expect.objectContaining({ supersedes: [first] }));
+  });
+
+  it("lists unanswered questions by head, not ones answered on the card", () => {
+    const s = session("s1");
+    const t = session("t1");
+    const { inbox } = setup({ sessions: [s, t] });
+    const a = inbox.ask(s, { question: "a?" });
+    const b = inbox.ask(s, { question: "b?" });
+    const c = inbox.ask(t, { question: "c?" });
+    expect(inbox.unansweredAsksByHead()).toEqual(new Map([["s1", [a, b]], ["t1", [c]]]));
+    inbox.answer(a, "yes");
+    expect(inbox.unansweredAsksByHead().get("s1")).toEqual([b]);
+    expect(inbox.unansweredAsksByHead().get("other")).toBeUndefined();
   });
 });

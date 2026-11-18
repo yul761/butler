@@ -76,6 +76,11 @@ export class MergeGateRepo {
     return (this.db.prepare(`SELECT * FROM merge_holds WHERE kind = 'pr' AND pr_url IS NOT NULL ORDER BY id`).all() as unknown as HoldRow[]).map(toHold);
   }
 
+  /** 全部占位，PR 的和本地的、释放了没有都算（度量判断合并是谁做的用）。 */
+  allHolds(): MergeHold[] {
+    return (this.db.prepare(`SELECT * FROM merge_holds ORDER BY id`).all() as unknown as HoldRow[]).map(toHold);
+  }
+
   activeHold(repoPath: string, branch: string): MergeHold | null {
     const r = this.db.prepare(`SELECT * FROM merge_holds WHERE released_at IS NULL AND repo_path = ? AND branch = ? ORDER BY id DESC LIMIT 1`).get(repoPath, branch) as unknown as HoldRow | undefined;
     return r ? toHold(r) : null;
