@@ -321,6 +321,12 @@ export class LessonsRepo {
     return cur;
   }
 
+  /** 这一行最后一次改动的时间（准入的计划只写这一遍开始以后没被改过的）。 */
+  updatedAt(id: number): number | null {
+    const r = this.db.prepare(`SELECT updated_at FROM lessons WHERE id = ?`).get(id) as { updated_at: number } | undefined;
+    return r ? Number(r.updated_at) : null;
+  }
+
   /** 改准入、范围、评分等字段（只改给了的）。 */
   setFields(id: number, patch: LessonFieldsPatch, now: number): void {
     const sets: string[] = [];
@@ -671,6 +677,11 @@ export class LessonsRepo {
   }
 
   /** 原则的正文（会话说明用）。 */
+  /** 归到哪条原则（不算对规矩的改动：不动 updated_at）。 */
+  setPrinciple(id: number, principleId: number | null): void {
+    this.db.prepare(`UPDATE lessons SET principle_id = ? WHERE id = ?`).run(principleId, id);
+  }
+
   principleTexts(ids: readonly number[]): Map<number, { text: string; why: string }> {
     const out = new Map<number, { text: string; why: string }>();
     if (!ids.length) return out;

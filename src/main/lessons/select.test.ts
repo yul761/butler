@@ -123,12 +123,20 @@ describe("sessionLessons: principles and the core guide (workstream D)", () => {
     repo.upsertRepo("acme/web", "/acme_web", 1);
     const a = add(repo, { kind: "repo", slug: "acme/web" }, "log errors", "confirmed", 30);
     const b = add(repo, { kind: "repo", slug: "acme/web" }, "rethrow errors", "confirmed", 20);
+    const c = add(repo, { kind: "repo", slug: "acme/web" }, "report errors to the caller", "confirmed", 10);
     add(repo, { kind: "repo", slug: "acme/web" }, "use tabs", "confirmed", 25);
-    principle(repo, db, "Never swallow errors", [a, b]);
-    expect(sessionLessons(repo, identity(), ["/acme_web"]).map((l) => l.text)).toEqual(["log errors", "use tabs", "rethrow errors"]);
+    principle(repo, db, "Never swallow errors", [a, b, c]);
+    expect(sessionLessons(repo, identity(), ["/acme_web"]).map((l) => l.text)).toEqual(["log errors", "use tabs", "rethrow errors", "report errors to the caller"]);
     expect(sessionLessons(repo, identity(), ["/acme_web"], 30, { principles: true })).toEqual([
-      { label: "acme/web", text: "Never swallow errors", cases: ["log errors", "rethrow errors"] },
+      { label: "acme/web", text: "Never swallow errors", cases: ["log errors", "rethrow errors", "report errors to the caller"] },
       { label: "acme/web", text: "use tabs" },
+    ]);
+    // 一条案例被停用以后不到 3 条：原则不再显示，剩下的规矩各占一行。
+    repo.setStatus(c, "disabled", 2);
+    expect(sessionLessons(repo, identity(), ["/acme_web"], 30, { principles: true })).toEqual([
+      { label: "acme/web", text: "log errors" },
+      { label: "acme/web", text: "use tabs" },
+      { label: "acme/web", text: "rethrow errors" },
     ]);
   });
 

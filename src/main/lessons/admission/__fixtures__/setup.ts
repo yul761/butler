@@ -1,5 +1,5 @@
 import { BatchRecorder } from "../../../batches/batch-recorder";
-import { checkAdapter, lessonAdapter, policyAdapter, principleAdapter, productAdapter } from "../../../batches/table-adapter";
+import { checkAdapter, lessonAdapter, lessonPrincipleAdapter, policyAdapter, principleAdapter, productAdapter } from "../../../batches/table-adapter";
 import { ChecksService } from "../../../checks/checks-service";
 import { LessonRunsRepo } from "../../../db/lesson-runs-repo";
 import { LessonsRepo, type NewLessonSource } from "../../../db/lessons-repo";
@@ -20,7 +20,7 @@ export function fakeRunner(answers: Partial<Record<TaskId, FakeAnswer>>, model =
     const route = { task: req.task, requestedTier: "mid" as const, actualModel: model, fallbackFrom: null, degraded: false, sameModelReview: false };
     const a = answers[req.task];
     if (!a) return { ok: false, reason: "claude_error", message: `no fake answer for ${req.task}`, limit: null, stderr: "", result: null, rawText: null, route };
-    const v = a(req);
+    const v = await a(req); // 回答可以是 Promise（测试在模型调用中途改状态）
     if (v && typeof v === "object" && "ok" in v && (v as { ok: unknown }).ok === false) return { route, ...(v as object) } as HeadlessExecResult;
     return { ok: true, value: v, rawText: JSON.stringify(v), result: {} as never, route };
   };
@@ -37,7 +37,7 @@ export function setupAdmission(now = 1_000_000) {
   const repo = new LessonsRepo(db);
   repo.upsertRepo("acme/web", "/definitely/missing/web", 1);
   repo.upsertRepo("acme/api", "/definitely/missing/api", 1);
-  const recorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db)]);
+  const recorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db), lessonPrincipleAdapter(db)]);
   const clock = { now };
   const checks = new ChecksService({ db, lessons: repo, recorder, now: () => clock.now, config: () => ({ enabled: true, editTimeoutSec: 8, pushTimeoutSec: 600, ticketPattern: "X-\\d+" }) });
   let version = 1;

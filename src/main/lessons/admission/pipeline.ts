@@ -76,6 +76,8 @@ export interface JudgeOptions {
   skipDedupe?: boolean;
   /** 批次的 kind（默认 admission_plan）。 */
   kind?: string;
+  /** 写计划之前再问一次：返回 false 就不写（向导在判的时候被取消、接受了）。 */
+  live?: () => boolean;
 }
 
 export interface JudgeResult {
@@ -205,8 +207,7 @@ export class AdmissionPipeline {
     const toks = new Map(pool.map((l) => [l.id, tokens(l.text)]));
     const minSim = Number(policy["dedupe.minSimilarity"]);
     const maxGroup = Number(policy["dedupe.maxGroup"]);
-    const ask = new UnionFind();
-    const asked = new Set<number>();
+    const edges: [number, number][] = [];
     // 产品桶里不同仓库的规矩也要比（找出跨仓库重复的）；合进确认规矩时再看适不适用（splitByConfirmed）。
     const comparable = (a: Lesson, c: Lesson) => !(a.status === "confirmed" && c.status === "confirmed") && globsOverlap(a.scopeGlobs, c.scopeGlobs);
     for (let i = 0; i < pool.length; i++)
@@ -216,14 +217,9 @@ export class AdmissionPipeline {
         if (!comparable(a, c)) continue;
         if (readSame(this.d.judgments, steps.get(a.id)!, steps.get(c.id)!) !== null) continue;
         if (textSimilarity(toks.get(a.id)!, toks.get(c.id)!) < minSim) continue;
-        ask.union(a.id, c.id);
-        asked.add(a.id).add(c.id);
+        edges.push([a.id, c.id]);
       }
-    const toAsk = ask.groups([...asked]).flatMap((ids) => {
-      const out: StepLesson[][] = [];
-      for (let i = 0; i < ids.length; i += maxGroup) out.push(ids.slice(i, i + maxGroup).map((id) => steps.get(id)!));
-      return out.filter((g) => g.length > 1);
-    });
+    const toAsk = packPairs(edges, maxGroup).map((ids) => ids.map((id) => steps.get(id)!));
     const failedGroups = await runCluster(ctx, toAsk);
     for (const g of toAsk) if (failedGroups.has([...g.map((l) => l.id)].sort((x, y) => x - y).join(","))) for (const l of g) if (isCandidate(pool.find((p) => p.id === l.id)!)) unfinished.add(l.id);
 
@@ -411,7 +407,8 @@ export class AdmissionPipeline {
         }
         const step = this.stepOf(k, g.text, g.members);
         if (k.checkability === null) needClass.push({ g, step });
-        else toClarify.push({ g, step, category: k.checkability, reasonPatch: {}, policy });
+        // 存成 converted、检查却不再启用的（covered 里没拦下来）按可检查的判，推荐了再起草。
+        else toClarify.push({ g, step, category: k.checkability === "converted" ? "checkable" : k.checkability, reasonPatch: {}, policy });
       }
 
       if (needClass.length) {
@@ -460,7 +457,10 @@ export class AdmissionPipeline {
 
       // 被推荐的可检查规矩起草检查；起草器说只能是文字的，按文字规矩的线重新落线。
       const drafts = scored.filter((r) => r.s.outcome === "admit" && r.x.category === "checkable");
-      if (drafts.length) for (const id of await runDrafts(ctx, drafts.map((r) => this.rawStep(r.x.g.keeper)), this.d.drafter)) unfinished.add(Number(id));
+      if (drafts.length) for (const id of await runDrafts(ctx, drafts.map((r) => this.rawStep(r.x.g.keeper)), this.d.drafter, (id) => {
+        const cur = this.d.repo.get(id);
+        return cur ? this.rawStep(cur) : null;
+      })) unfinished.add(Number(id));
       for (const r of scored) {
         const k = r.x.g.keeper;
         if (unfinished.has(k.id)) continue;
@@ -496,7 +496,7 @@ export class AdmissionPipeline {
       }
     }
 
-    const planBatch = this.writePlan(scope, patches, opts);
+    const planBatch = opts.live && !opts.live() ? null : this.writePlan(scope, patches, opts, now);
     return { planBatch, candidates, verdicts: [...verdicts.values()].sort((a, b) => a.lessonId - b.lessonId), admitted, producer: this.producerOf(producers), ctx };
   }
 
@@ -530,8 +530,11 @@ export class AdmissionPipeline {
     return best ? { model: best[0], tier: best[1].tier } : null;
   }
 
-  /** 计划批次：每条候选一行，值没变的跳过（撤销计划批次总是安全的：每行互不依赖）。 */
-  private writePlan(scope: AdmissionScope, patches: Map<number, LessonFieldsPatch>, opts: JudgeOptions): number | null {
+  /**
+   * 计划批次：每条候选一行，值没变的跳过（撤销计划批次总是安全的：每行互不依赖）。判的时候（等模型的那段）被人确认、
+   * 驳回、合并或者改过的规矩不写：它们已经不是这一遍看到的样子，下一遍再判。
+   */
+  private writePlan(scope: AdmissionScope, patches: Map<number, LessonFieldsPatch>, opts: JudgeOptions, passStart: number): number | null {
     if (!patches.size) return null;
     const now = this.d.now();
     const { outcome } = this.d.recorder.run(
@@ -539,7 +542,7 @@ export class AdmissionPipeline {
       (ctx) => {
         for (const [id, p] of patches) {
           const l = this.d.repo.get(id);
-          if (!l || !changes(l, p)) {
+          if (!l || !isCandidate(l) || l.mergedInto !== null || (this.d.repo.updatedAt(id) ?? 0) > passStart || !changes(l, p)) {
             ctx.skip();
             continue;
           }
@@ -557,15 +560,51 @@ export class AdmissionPipeline {
   }
 }
 
+/**
+ * 把要问的相似对装进不超过 maxGroup 条的组：每一对都至少在一个组里（组可以重叠），所以问过一次以后每一对都有缓存，
+ * 下一遍不会因为切片切开了一对而再问。一对优先放进已经有它一头、还有空位的组。顺序确定，组的组成（缓存键）也确定。
+ */
+export function packPairs(edges: readonly [number, number][], maxGroup: number): number[][] {
+  const cap = Math.max(2, Math.floor(maxGroup));
+  const groups: Set<number>[] = [];
+  for (const [a, b] of edges) {
+    if (groups.some((g) => g.has(a) && g.has(b))) continue;
+    const room = (g: Set<number>) => g.size + (g.has(a) ? 0 : 1) + (g.has(b) ? 0 : 1) <= cap;
+    const g = groups.find((x) => (x.has(a) || x.has(b)) && room(x));
+    if (g) g.add(a).add(b);
+    else groups.push(new Set([a, b]));
+  }
+  return groups.map((g) => [...g].sort((x, y) => x - y));
+}
+
+/** 分数差不到这么多不算改了（证据的新近程度每天都在变，不能让每一遍都写一个计划批次）。 */
+const SCORE_EPSILON = 0.01;
+
+const near = (a: unknown, b: unknown) => typeof a === "number" && typeof b === "number" && Math.abs(a - b) < SCORE_EPSILON;
+
+/** 分项只看有哪几项和各项的值（理由里的天数之类每天都变）。 */
+function partsChanged(a: unknown, b: unknown): boolean {
+  if (a === null || a === undefined || b === null || b === undefined) return (a ?? null) !== (b ?? null);
+  const x = a as Record<string, { value: number } | undefined>;
+  const y = b as Record<string, { value: number } | undefined>;
+  const keys = new Set([...Object.keys(x), ...Object.keys(y)].filter((k) => x[k] !== undefined || y[k] !== undefined));
+  for (const k of keys) {
+    if (!x[k] || !y[k]) return true;
+    if (!near(x[k]!.value, y[k]!.value)) return true;
+  }
+  return false;
+}
+
 /** 补丁会不会改东西（打分时间这种每次都变的只在分数或分项真变了时才算）。 */
-function changes(l: Lesson, p: LessonFieldsPatch): boolean {
+export function changes(l: Lesson, p: LessonFieldsPatch): boolean {
   const cur = l as unknown as Record<string, unknown>;
   for (const [k, v] of Object.entries(p)) {
     if (k === "scoredAt" || k === "scorePolicyVersion") continue;
     if (k === "scoreParts") {
-      if (JSON.stringify(cur.scoreParts ?? null) !== JSON.stringify(v ?? null)) return true;
+      if (partsChanged(cur.scoreParts, v)) return true;
       continue;
     }
+    if (k === "score" && near(cur.score, v)) continue;
     if ((cur[k] ?? null) !== (v ?? null)) return true;
   }
   if (p.scorePolicyVersion !== undefined && (l.scorePolicyVersion ?? null) !== p.scorePolicyVersion) return true;

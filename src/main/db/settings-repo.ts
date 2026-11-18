@@ -136,6 +136,8 @@ export const SETTING_DEFAULTS = {
   lessonsCoreGuide: "0",
   /** 校准页「标为已校准」的时间（毫秒，字符串）；空 = 没校准过（策略页显示「未校准的默认值」）。不在设置页上。 */
   admissionCalibratedAt: "",
+  /** 原则上一次每日重新分组的时间（毫秒）；重启以后也不会当天再分一次。 */
+  lessonsPrinciplesRegroupedAt: "",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

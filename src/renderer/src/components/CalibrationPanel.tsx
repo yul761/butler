@@ -7,6 +7,7 @@ import { reportError } from "../errors";
 import { formatScore } from "../lessons-bulk-view";
 import { S } from "../strings";
 import { PolicyEditor } from "./LessonsSettings";
+import { ScoreParts } from "./ScoreParts";
 import { useStateRefetch } from "./useStateRefetch";
 
 const MARKS: readonly CalibrationMark[] = ["good", "bad", "skip"];
@@ -23,7 +24,7 @@ export function CalibrationPanel({ lessons }: { lessons: LessonsState }) {
   const [error, setError] = useState<string | null>(null);
   /** 跳过的不记样本（主进程只删掉之前的判断）：按钮的按下状态在页面上记。 */
   const [skipped, setSkipped] = useState<number[]>([]);
-  const text = (id: number) => lessons.lessons.find((l) => l.id === id)?.text ?? `#${id}`;
+  const lessonOf = (id: number) => lessons.lessons.find((l) => l.id === id);
 
   const draw = async () => {
     try {
@@ -64,9 +65,12 @@ export function CalibrationPanel({ lessons }: { lessons: LessonsState }) {
         <ul className="calibration-items" data-testid="calibration-items">
           {sample.items.map((it) => {
             const mine = skipped.includes(it.lessonId) ? "skip" : stats?.marks[it.lessonId];
+            const l = lessonOf(it.lessonId);
             return (
               <li key={it.lessonId} className="lesson" data-testid={`calibration-item-${it.lessonId}`}>
-                <span className="lesson-text">{text(it.lessonId)}</span>
+                <span className="lesson-text">{l?.text ?? `#${it.lessonId}`}</span>
+                {/* 判之前能看到分数是怎么来的（每一项的值和理由）。 */}
+                {l && <ScoreParts lesson={l} />}
                 <div className="lessons-row">
                   <span className="pill none">{S.calibrationBand[it.band]}</span>
                   <span className="muted">{S.lessonScoreTag(formatScore(it.score))} · {S.calibrationAuto[it.auto]}</span>

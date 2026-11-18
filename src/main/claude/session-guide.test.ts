@@ -187,4 +187,15 @@ describe("session guide: principles and pre-review (workstream D)", () => {
     expect(pruneSessionGuides(dir, Date.now())).toBe(1);
     expect(existsSync(f)).toBe(false);
   });
+
+  it("a guide and cases file reused unchanged count as fresh, so pruning keeps them", () => {
+    const dir = tempDir();
+    const lessons = [{ label: "acme/web", text: "P", cases: ["a", "b", "c"] }];
+    const file = writeSessionGuide(dir, "en", "ticket", lessons);
+    const cases = /in (\S+lessons-cases-[0-9a-f]{12}\.md)\./.exec(readFileSync(file, "utf8"))![1];
+    for (const f of [file, cases]) utimesSync(f, 1, 1);
+    expect(writeSessionGuide(dir, "en", "ticket", lessons)).toBe(file);
+    expect(pruneSessionGuides(dir, Date.now())).toBe(0);
+    for (const f of [file, cases]) expect(existsSync(f)).toBe(true);
+  });
 });

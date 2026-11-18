@@ -165,7 +165,7 @@ import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
 import { LessonBatchService } from "./lessons/lesson-batches";
 import { BatchRecorder } from "./batches/batch-recorder";
-import { checkAdapter, lessonAdapter, policyAdapter, principleAdapter, productAdapter } from "./batches/table-adapter";
+import { checkAdapter, lessonAdapter, lessonPrincipleAdapter, policyAdapter, principleAdapter, productAdapter } from "./batches/table-adapter";
 import { ChecksService } from "./checks/checks-service";
 import { SnapshotWriter, readSnapshotState } from "./checks/snapshot-writer";
 import { HitIngest } from "./checks/hit-ingest";
@@ -621,7 +621,7 @@ async function bootstrap(): Promise<void> {
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
   // 规矩、产品和准入策略的改动都记成可撤销的批次（契约 4.4）。
-  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db)]);
+  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db), lessonPrincipleAdapter(db)]);
   // 确定性检查（契约 4.5）：库里是三层的定义，hook 只读 Butler 写出来的快照（<BUTLER_HOME>/checks/snapshot.json）。
   // 检查、产品、设置、语言一变就重写快照（合并一小段时间里的改动）；内容没变不写。
   const checksService: ChecksService = new ChecksService({
@@ -747,7 +747,6 @@ async function bootstrap(): Promise<void> {
   });
   const principles = new PrinciplesService({ db, repo: lessonsRepo, recorder: batchRecorder, pipeline: lessonAdmission.pipeline, ctx: admissionCtx, now: Date.now, log: logger });
   let principlesRunning = false;
-  let principlesDailyAt = 0;
   const regroupPrinciples = async () => {
     principlesRunning = true;
     notify();
@@ -1157,8 +1156,8 @@ async function bootstrap(): Promise<void> {
     void lessonRunner.daily().catch((e: unknown) => logger("lessons: daily pull failed", e));
     void metricsGhJob?.daily().catch((e: unknown) => logger("metrics: daily gh job failed", e));
     // 原则每天重新分组一次（设置 lessonsPrinciples）；规矩没变时读缓存，不调模型。
-    if (settings.get("lessonsPrinciples") === "1" && Date.now() - principlesDailyAt > 20 * 3600_000) {
-      principlesDailyAt = Date.now();
+    if (settings.get("lessonsPrinciples") === "1" && Date.now() - (Number(settings.get("lessonsPrinciplesRegroupedAt")) || 0) > 20 * 3600_000) {
+      settings.set("lessonsPrinciplesRegroupedAt", String(Date.now()));
       void regroupPrinciples().catch((e: unknown) => logger("lessons: principles regroup failed", e));
     }
     if (configBackups.tick()) notify();

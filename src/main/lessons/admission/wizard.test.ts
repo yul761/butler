@@ -25,7 +25,7 @@ function manualTimers() {
   return t;
 }
 
-function build(o: { cluster?: FakeAnswer; review?: FakeAnswer; prs?: number[] } = {}) {
+function build(o: { cluster?: FakeAnswer; review?: FakeAnswer; clarity?: FakeAnswer; prs?: number[] } = {}) {
   setLang("en");
   const s = setupAdmission();
   const fake = fakeRunner({
@@ -36,7 +36,7 @@ function build(o: { cluster?: FakeAnswer; review?: FakeAnswer; prs?: number[] } 
         return { groups: rs.length > 1 ? [{ ids: rs.map((r) => r.id), text: "Add a migration whenever the schema changes" }] : [] };
       }),
     lesson_conflict: () => ({ conflicts: [] }),
-    lesson_clarity: (req) => ({ clarity: ids(req.prompt).map((r) => ({ id: r.id, answer: "yes", scope_clear: true, reason: "ok" })) }),
+    lesson_clarity: o.clarity ?? ((req) => ({ clarity: ids(req.prompt).map((r) => ({ id: r.id, answer: "yes", scope_clear: true, reason: "ok" })) })),
     lesson_classify: (req) => ({ classified: ids(req.prompt).map((r) => ({ id: r.id, checkability: r.text.includes("console") ? "checkable" : "prose", reason: "r", covered_by: null })) }),
     lesson_sample_review:
       o.review ?? ((req) => ({ reviews: [...req.prompt.matchAll(/^#(\d+) /gm)].map((m) => ({ id: Number(m[1]), reasonable: true, follows: true, scope_ok: true, note: "" })) })),
@@ -231,5 +231,77 @@ describe("WizardService", () => {
     const fresh = s.fake.calls.slice(calls).map((c) => c.task);
     expect(fresh).not.toContain("lesson_cluster");
     expect(fresh).not.toContain("lesson_conflict");
+  });
+
+  it("a cancel while starting or judging is final: nothing is written afterwards", async () => {
+    let release!: () => void;
+    const gateOpen = new Promise<void>((r) => (release = r));
+    const s = build({ clarity: async (req) => (await gateOpen, { clarity: ids(req.prompt).map((r) => ({ id: r.id, answer: "yes", scope_clear: true, reason: "ok" })) }) });
+    // 刚开始就取消：推进停在原地，不再排队列的轮询。
+    const first = s.wizard.start({ kind: "repo", slug: "acme/web" });
+    expect(await s.wizard.act({ op: "cancel", runId: first })).toMatchObject({ ok: true });
+    await s.wizard.idle();
+    expect(s.wizard.view(first)!.state).toBe("cancelled");
+    expect(s.timers.pending()).toEqual([]);
+
+    // 判到一半（等清晰度的回答）取消：不写结论、不写计划批次。
+    s.lesson("no console calls in src", { sources: [{}, {}] });
+    s.finishQueue();
+    const id = s.wizard.start({ kind: "repo", slug: "acme/web" });
+    await s.wizard.idle().catch(() => undefined);
+    s.finishQueue();
+    await s.timers.fire();
+    for (let i = 0; i < 20 && s.fake.of("lesson_clarity").length === 0; i++) await new Promise((r) => setTimeout(r, 1));
+    expect(s.wizard.view(id)!.state).toBe("judging");
+    await s.wizard.act({ op: "cancel", runId: id });
+    release();
+    await s.wizard.idle();
+    const v = s.wizard.view(id)!;
+    expect(v.state).toBe("cancelled");
+    expect(v.verdicts).toEqual([]);
+    expect(v.planBatch).toBeNull();
+    expect(s.db.prepare(`SELECT COUNT(*) AS n FROM admission_batches WHERE kind = 'admission_plan'`).get()).toEqual({ n: 0 });
+  });
+
+  it("a failed item that no later pass needs is dropped instead of being retried forever", async () => {
+    const s = build({ cluster: () => failed() });
+    s.lesson("add a migration when the schema changes", { sources: [{}, {}] });
+    const b = s.lesson("schema changes need a migration", { sources: [{}, {}] });
+    s.finishQueue();
+    const id = s.wizard.start({ kind: "repo", slug: "acme/web" });
+    await s.wizard.idle();
+    s.finishQueue();
+    await s.timers.fire();
+    await s.wizard.idle();
+    expect(s.wizard.view(id)!.failed).toEqual([expect.objectContaining({ kind: "cluster" })]);
+    s.batches.bulk("reject", { ids: [b] }); // 组没了：那个去重单元不会再有人问
+    s.clock.now += WIZARD_RETRY_MS[0];
+    await s.timers.fire();
+    await s.wizard.idle();
+    expect(s.wizard.view(id)!.failed).toEqual([]);
+    expect(s.timers.pending()).toEqual([]);
+  });
+
+  it("recalculate does not retry failed items; pull back and reject only touch lessons still shelved", async () => {
+    const s = build({ cluster: () => failed() });
+    s.lesson("add a migration when the schema changes", { sources: [{}, {}] });
+    s.lesson("schema changes need a migration", { sources: [{}, {}] });
+    const one = s.lesson("rename the helper");
+    s.finishQueue();
+    const id = s.wizard.start({ kind: "repo", slug: "acme/web" });
+    await s.wizard.idle();
+    s.finishQueue();
+    await s.timers.fire();
+    await s.wizard.idle();
+    const calls = s.fake.of("lesson_cluster").length;
+    s.clock.now += WIZARD_RETRY_MS[0]; // 到期了，重新计算也不重试
+    await s.wizard.act({ op: "recalculate", runId: id });
+    expect(s.fake.of("lesson_cluster")).toHaveLength(calls);
+    expect(await s.wizard.act({ op: "pullBack", runId: id, lessonIds: [one] })).toMatchObject({ ok: true, affected: 1 });
+    expect(await s.wizard.act({ op: "rejectGroup", runId: id, lessonIds: [one] })).toEqual({ ok: false, reason: "not_shelved" });
+    expect(s.repo.get(one)!.status).toBe("confirmed");
+    s.wizard.stop();
+    await s.timers.fire(); // 停了以后计时器不再做事
+    expect(s.fake.of("lesson_cluster")).toHaveLength(calls);
   });
 });

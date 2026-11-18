@@ -1,3 +1,4 @@
+import { PRINCIPLE_MIN_CASES } from "./admission/model-steps";
 import { CORE_GUIDE_MAX, MAX_SESSION_LESSONS, type Lesson, type LessonProductSuggestion, type LessonProductView, type SessionLesson } from "../../shared/lessons";
 import type { LessonsRepo } from "../db/lessons-repo";
 import type { RepoIdentity } from "./repo-identity";
@@ -38,11 +39,15 @@ export function sessionLessons(repo: LessonsRepo, identity: RepoIdentity, repoPa
   }
   if (!opts.principles) return ranked.slice(0, limit).map(({ lesson, label }) => ({ label, text: lesson.text }));
   // 原则排在它排得最靠前的那条规矩的位置；案例是它在这些仓库里的全部规矩。
-  const texts = repo.principleTexts(ranked.flatMap((r) => (r.lesson.principleId === null ? [] : [r.lesson.principleId])));
+  // 案例只数这里看得到的（已确认、在这些仓库里）：分组以后有规矩被停用、驳回，剩下不到 PRINCIPLE_MIN_CASES 条的原则不再显示，规矩各占一行。
+  const seen = new Map<number, number>();
+  for (const r of ranked) if (r.lesson.principleId !== null) seen.set(r.lesson.principleId, (seen.get(r.lesson.principleId) ?? 0) + 1);
+  const shown = (pid: number | null): pid is number => pid !== null && (seen.get(pid) ?? 0) >= PRINCIPLE_MIN_CASES;
+  const texts = repo.principleTexts(ranked.flatMap((r) => (shown(r.lesson.principleId) ? [r.lesson.principleId] : [])));
   const out: SessionLesson[] = [];
   const at = new Map<number, SessionLesson>();
   for (const { lesson, label } of ranked) {
-    const pid = lesson.principleId;
+    const pid = shown(lesson.principleId) ? lesson.principleId : null;
     const p = pid === null ? undefined : texts.get(pid);
     if (pid === null || !p) {
       out.push({ label, text: lesson.text });

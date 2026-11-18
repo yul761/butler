@@ -118,8 +118,8 @@ export class PrinciplesService {
         for (const l of ls) {
           const to = want.get(l.id) ?? null;
           if (l.principleId === to) continue;
-          ctx.track("lesson", l.id);
-          this.d.repo.setFields(l.id, { principleId: to }, now);
+          ctx.track("lesson_principle", l.id);
+          this.d.repo.setPrinciple(l.id, to);
           lessons++;
           changes++;
         }
@@ -127,8 +127,8 @@ export class PrinciplesService {
         for (const p of existing) {
           if (kept.has(p.id)) continue;
           for (const r of db.prepare(`SELECT id FROM lessons WHERE principle_id = ?`).all(p.id) as { id: number }[]) {
-            ctx.track("lesson", Number(r.id));
-            this.d.repo.setFields(Number(r.id), { principleId: null }, now);
+            ctx.track("lesson_principle", Number(r.id));
+            this.d.repo.setPrinciple(Number(r.id), null);
           }
           ctx.track("principle", p.id);
           changes++;

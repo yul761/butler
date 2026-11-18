@@ -34,6 +34,8 @@ export class AdmissionService {
   readonly pipeline: AdmissionPipeline;
   readonly reviews: BatchReviews;
   private busy = new Set<string>();
+  /** 判的每一遍排队一个一个来（向导、规矩页、自动准入、改分类后的重判不同时写同一批规矩）。 */
+  private queue: Promise<unknown> = Promise.resolve();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly d: AdmissionServiceDeps) {
@@ -43,11 +45,21 @@ export class AdmissionService {
 
   /** 判一个范围，写计划批次，再对被推荐的规矩抽查（seed 固定抽样，向导用运行 id）。 */
   async judge(scope: AdmissionScope, opts: JudgeOptions & { seed?: number; review?: boolean; reviewBatch?: number | null } = {}): Promise<JudgeAndReview> {
+    return this.exclusive(() => this.judgeNow(scope, opts));
+  }
+
+  private exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.queue.catch(() => undefined).then(fn);
+    this.queue = next.catch(() => undefined);
+    return next;
+  }
+
+  private async judgeNow(scope: AdmissionScope, opts: JudgeOptions & { seed?: number; review?: boolean; reviewBatch?: number | null }): Promise<JudgeAndReview> {
     const r = await this.pipeline.judge(scope, opts);
     let reviewId: number | null = null;
     // 这次什么都没变（没有新的计划批次）时，复核挂在调用方给的那个批次上（向导：这次运行上一个计划批次）。
     const batchId = r.planBatch ?? opts.reviewBatch ?? null;
-    if (opts.review !== false && batchId !== null) {
+    if (opts.review !== false && batchId !== null && (!opts.live || opts.live())) {
       reviewId = await this.reviews.review({
         batchId, ctx: r.ctx, admitted: r.admitted, producer: r.producer, verdicts: r.verdicts, policy: this.reviewPolicy(scope), seed: opts.seed ?? batchId,
       });
@@ -74,7 +86,8 @@ export class AdmissionService {
 
   /**
    * 人改了一条规矩的分类：之前是流水线分的（有分类理由）就记一个校准样本；还是候选的话按新分类重判这一条
-   * （闸门 1、2 不看分类，不重做；只重做普遍性、覆盖、清晰度、打分和草稿）。
+   * （闸门 1、2 不看分类，不重做；只重做普遍性、覆盖、清晰度、打分和草稿）。因为重复或冲突搁置的保持原样：
+   * 重判跳过闸门 1、2，会把它们当成单独的一条放出来。
    */
   async onClassified(lessonId: number, before: LessonCheckability | null, after: LessonCheckability | null, beforeReason: string | null): Promise<void> {
     const l = this.d.repo.get(lessonId);
@@ -85,9 +98,10 @@ export class AdmissionService {
         .run(lessonId, lessonId, before, after ?? "none", l.score, l.scoreParts === null ? null : JSON.stringify(l.scoreParts), this.d.now());
     }
     if (!isCandidate(l) || l.mergedInto !== null) return;
+    if (l.admission === "shelved" && (l.shelvedReason === "duplicate" || l.shelvedReason === "conflict")) return;
     const scope: AdmissionScope = l.scope.kind === "repo" ? { kind: "repo", slug: l.scope.slug } : { kind: "product", productId: l.scope.productId };
     try {
-      await this.pipeline.judge(scope, { only: [lessonId], skipDedupe: true, kind: "admission_rejudge", origin: "manual" });
+      await this.exclusive(() => this.pipeline.judge(scope, { only: [lessonId], skipDedupe: true, kind: "admission_rejudge", origin: "manual" }));
       this.d.notify?.();
     } catch (e) {
       this.d.log?.(`lesson ${lessonId}: re-judging after a category change failed`, e);

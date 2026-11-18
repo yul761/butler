@@ -1,5 +1,5 @@
-import { useState } from "react";
-import type { AdmissionScope, WizardAction, WizardRunView } from "../../../shared/lesson-admission";
+import { useEffect, useState } from "react";
+import type { AdmissionScope, WizardAction, WizardEstimate, WizardRunView } from "../../../shared/lesson-admission";
 import type { LessonsState } from "../../../shared/lessons";
 import { api } from "../api";
 import { admissionScopeFromKey, admissionScopeKey, blockedText, durationText, latestRunFor, noteText, pct, shelvedGroups, wizardLive } from "../admission-view";
@@ -18,10 +18,19 @@ export function WizardPanel({ lessons, onNotice }: { lessons: LessonsState; onNo
   const page = useStateRefetch("admission-state", api.admissionState);
   const [scopeKey, setScopeKey] = useState("all");
   const scope: AdmissionScope = admissionScopeFromKey(scopeKey);
-  const estimate = useStateRefetch(`wizard-estimate-${scopeKey}`, () => api.wizardEstimate(scope));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const run = page ? latestRunFor(page.runs, scope) : null;
+  const live = run !== null && wizardLive(run.state);
+  // 估算要问 gh：只在换范围、运行结束（或开始）时重取，不跟着每次状态变化。
+  const [estimate, setEstimate] = useState<WizardEstimate | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api.wizardEstimate(admissionScopeFromKey(scopeKey)).then((e) => alive && setEstimate(e), reportError);
+    return () => {
+      alive = false;
+    };
+  }, [scopeKey, live]);
 
   const act = async (a: WizardAction): Promise<boolean> => {
     setBusy(true);
@@ -68,6 +77,7 @@ export function WizardPanel({ lessons, onNotice }: { lessons: LessonsState; onNo
                     <li key={r.slug} data-testid={`wizard-estimate-repo-${r.slug}`}>
                       {S.wizardEstimateRepo(r.slug, r.merged, r.analysed)}
                       {!r.cloned && <span className="pill none"> {S.wizardNotCloned}</span>}
+                      {r.setUp && <span className="pill approved" data-testid={`wizard-estimate-setup-${r.slug}`}> {S.wizardSetUp}</span>}
                     </li>
                   ))}
                 </ul>
@@ -89,7 +99,12 @@ function RunView({ run, lessons, busy, act }: { run: WizardRunView; lessons: Les
   const sum = run.summary;
   const blocked = run.review ? blockedText(run.review, S) : null;
   const acceptable = run.verdicts.filter((v) => v.verdict === "admit" || v.verdict === "merged").length;
-  const groups = shelvedGroups(run.verdicts);
+  // 拉回、驳回、在别处确认过的不再列（结论表还记着搁置）。
+  const stillShelved = (id: number) => {
+    const l = lessons.lessons.find((x) => x.id === id);
+    return !l || (l.status === "pending" && l.mergedInto === null && l.admission === "shelved");
+  };
+  const groups = shelvedGroups(run.verdicts.filter((v) => stillShelved(v.lessonId)));
   return (
     <div className="wizard-run" data-testid="wizard-run" data-state={run.state}>
       <div className="lessons-row">
@@ -119,7 +134,7 @@ function RunView({ run, lessons, busy, act }: { run: WizardRunView; lessons: Les
               {S.wizardSummaryPassRate(pct(sum.passRate))}
               {sum.sameModelReview && <span className="muted"> · {S.wizardSameModel}</span>}
             </li>
-            {!sum.backtested && <li data-testid="wizard-summary-not-backtested"><span className="pill warn">{S.wizardNotBacktested}</span></li>}
+            {!sum.backtested && <li data-testid="wizard-summary-not-backtested"><span className="pill changes">{S.wizardNotBacktested}</span></li>}
             <li className="muted">{S.wizardCalls(sum.calls)}</li>
           </ul>
         </div>

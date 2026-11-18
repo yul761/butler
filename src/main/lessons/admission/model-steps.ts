@@ -392,8 +392,11 @@ export function runClassify(ctx: StepCtx, lessons: StepLesson[], baseline: strin
 
 // ------------------------------------------------------------------ 起草检查（check_draft，E1 的起草器）
 
-/** 一条一个调用（起草器要读仓库）；答「只能是文字」也缓存。 */
-export async function runDrafts(ctx: StepCtx, lessons: StepLesson[], drafter: Pick<CheckDrafter, "generate">): Promise<Set<string>> {
+/**
+ * 一条一个调用（起草器要读仓库）；答「只能是文字」也缓存。起草器读的是库里当时的规矩，所以缓存键用调用前后读到的那一份
+ * （current）；调用期间规矩被改了就不缓存，这一条算没做完。
+ */
+export async function runDrafts(ctx: StepCtx, lessons: StepLesson[], drafter: Pick<CheckDrafter, "generate">, current: (id: number) => StepLesson | null = () => null): Promise<Set<string>> {
   const missing = new Set<string>();
   const todo = lessons.filter((l) => readDraft(ctx.judgments, l) === null);
   await pool(
@@ -401,12 +404,16 @@ export async function runDrafts(ctx: StepCtx, lessons: StepLesson[], drafter: Pi
       const key = String(l.id);
       if (!ctx.gate.allowed("draft", key)) return void missing.add(key);
       ctx.onCall?.();
+      const before = current(l.id) ?? l;
       const g = await drafter.generate(l.id);
       if (!g.ok) {
         missing.add(key);
         return ctx.gate.failed("draft", key, { reason: g.reason, message: g.message, waitUntil: g.waitUntil });
       }
-      ctx.judgments.put("draft", key, draftHash(l), g, { model: g.model, degraded: g.degraded, at: ctx.now() });
+      const after = current(l.id) ?? l;
+      if (draftHash(before) !== draftHash(after)) return void missing.add(key);
+      ctx.judgments.put("draft", key, draftHash(after), g, { model: g.model, degraded: g.degraded, at: ctx.now() });
+      if (draftHash(after) !== draftHash(l)) return void missing.add(key);
       ctx.gate.done("draft", key);
     }),
   );

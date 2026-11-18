@@ -39,15 +39,29 @@ export function admitLineOf(l: Pick<Lesson, "checkability">, p: AdmissionPolicy)
   return l.checkability === "prose" ? Number(p["score.proseAdmitLine"]) : Number(p["score.admitLine"]);
 }
 
+/** 和评分一样：低于淘汰线（严格小于）才是低分段。 */
 export function bandOf(score: number, admitLine: number, dropLine: number): CalibrationBand {
-  return score >= admitLine ? "high" : score <= dropLine ? "low" : "mid";
+  return score >= admitLine ? "high" : score < dropLine ? "low" : "mid";
 }
 
-export function autoOf(band: CalibrationBand): CalibrationAuto {
-  return band === "high" ? "admit" : band === "low" ? "reject" : "shelve";
+/** 清晰度低于 score.minClarity 的，分数再高流水线也搁置。 */
+export function lowClarity(parts: Lesson["scoreParts"] | null | undefined, p: AdmissionPolicy): boolean {
+  const c = parts?.clarity?.value;
+  return typeof c === "number" && c < Number(p["score.minClarity"]);
 }
+
+export function autoOf(band: CalibrationBand, unclear = false): CalibrationAuto {
+  if (band === "high") return unclear ? "shelve" : "admit";
+  return band === "low" ? "reject" : "shelve";
+}
+
+/** 抽样只在内存里记最近这么多次（页面拿着的那一次一定在里面）。 */
+const ISSUED_KEEP = 20;
 
 export class CalibrationService {
+  /** 发出去的抽样：抽样时间 → 里面的规矩。判的时候只认这些（渲染进程给的 since 不可信）。 */
+  private readonly issued = new Map<number, Set<number>>();
+
   constructor(private readonly d: CalibrationDeps) {}
 
   sample(scope: AdmissionScope): CalibrationSample {
@@ -62,17 +76,21 @@ export class CalibrationService {
     for (const band of BANDS) {
       const pool = scored.filter((l) => bandOf(l.score!, admitLineOf(l, p), drop) === band);
       for (const l of seededSample(pool, CALIBRATION_PER_BAND, seed + BANDS.indexOf(band)))
-        items.push({ lessonId: l.id, band, score: l.score!, auto: autoOf(band) });
+        items.push({ lessonId: l.id, band, score: l.score!, auto: autoOf(band, lowClarity(l.scoreParts, p)) });
     }
-    return { drawnAt: this.d.now(), items };
+    const drawnAt = this.d.now();
+    this.issued.set(drawnAt, new Set([...(this.issued.get(drawnAt) ?? []), ...items.map((i) => i.lessonId)]));
+    while (this.issued.size > ISSUED_KEEP) this.issued.delete(this.issued.keys().next().value!);
+    return { drawnAt, items };
   }
 
   /** 判一条：skip 不记；同一条在同一次抽样里再判一次覆盖上一次。 */
   mark(lessonId: number, mark: CalibrationMark, since: number): { ok: true } | { ok: false; reason: string } {
+    if (!this.issued.get(since)?.has(lessonId)) return { ok: false, reason: "not_in_sample" };
     const l = this.d.repo.get(lessonId);
     if (!l || l.score === null) return { ok: false, reason: "not_scored" };
     const p = this.d.policy();
-    const auto = autoOf(bandOf(l.score, admitLineOf(l, p), Number(p["score.dropLine"])));
+    const auto = autoOf(bandOf(l.score, admitLineOf(l, p), Number(p["score.dropLine"])), lowClarity(l.scoreParts, p));
     this.d.db.prepare(`DELETE FROM score_calibration WHERE source = 'review' AND lesson_id = ? AND at >= ?`).run(lessonId, since);
     if (mark === "skip") return { ok: true };
     this.d.db
@@ -93,14 +111,15 @@ export class CalibrationService {
     const p = this.d.policy();
     const drop = Number(p["score.dropLine"]);
     const rows = this.d.db
-      .prepare(`SELECT c.lesson_id, c.human_verdict, c.score, c.source, c.at, l.checkability FROM score_calibration c LEFT JOIN lessons l ON l.id = c.lesson_id WHERE c.entity = 'lesson' AND c.score IS NOT NULL`)
-      .all() as { lesson_id: number | null; human_verdict: string; score: number; source: "override" | "review"; at: number; checkability: Lesson["checkability"] }[];
+      .prepare(`SELECT c.lesson_id, c.human_verdict, c.score, c.score_parts, c.source, c.at, l.checkability FROM score_calibration c LEFT JOIN lessons l ON l.id = c.lesson_id WHERE c.entity = 'lesson' AND c.score IS NOT NULL`)
+      .all() as { lesson_id: number | null; human_verdict: string; score: number; score_parts: string | null; source: "override" | "review"; at: number; checkability: Lesson["checkability"] }[];
     const judged = rows
       .filter((r) => r.human_verdict === "admit" || r.human_verdict === "reject")
       .map((r) => {
         const line = admitLineOf({ checkability: r.checkability ?? null }, p);
         const good = r.human_verdict === "admit";
-        return { ...r, good, band: bandOf(Number(r.score), line, drop), agree: good === Number(r.score) >= line };
+        const admits = Number(r.score) >= line && !lowClarity(parseParts(r.score_parts), p);
+        return { ...r, good, band: bandOf(Number(r.score), line, drop), agree: good === admits };
       });
     const rate = (xs: { agree: boolean }[]) => (xs.length ? xs.filter((x) => x.agree).length / xs.length : null);
     const latest = since === null ? [] : judged.filter((r) => r.source === "review" && Number(r.at) >= since);
@@ -127,5 +146,14 @@ export class CalibrationService {
     if (scope.kind === "repo") return l.scope.kind === "repo" && l.scope.slug === scope.slug;
     if (l.scope.kind === "product") return l.scope.productId === scope.productId;
     return this.d.repo.product(scope.productId)?.slugs.includes(l.scope.slug) ?? false;
+  }
+}
+
+function parseParts(s: string | null): Lesson["scoreParts"] | null {
+  if (s === null) return null;
+  try {
+    return JSON.parse(s) as Lesson["scoreParts"];
+  } catch {
+    return null;
   }
 }

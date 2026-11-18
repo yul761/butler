@@ -107,13 +107,14 @@ export class BatchReviews {
     const live = this.d.metrics?.metrics(Number(r.batch_id)) ?? null;
     const coverage = live?.coverage ?? r.coverage;
     const recall = live?.backtestRecall ?? r.backtest_recall;
-    const metrics = assessMetrics({ passRate: r.pass_rate, shelvedShare: shelved.share, coverage, backtestRecall: recall, backtestFalsePositiveRate: live?.backtestFalsePositiveRate ?? null }, policy);
+    const reviewedCount = items.filter((i) => i.reviewed).length;
+    const metrics = assessMetrics({ passRate: r.pass_rate, sampleReviewed: Number(r.sample_size) > 0 ? reviewedCount / Number(r.sample_size) : null, shelvedShare: shelved.share, coverage, backtestRecall: recall, backtestFalsePositiveRate: live?.backtestFalsePositiveRate ?? null }, policy);
     const past = metrics.filter((x) => x.past).sort((a, b) => b.distance - a.distance);
     return {
       id: Number(r.id),
       batchId: Number(r.batch_id),
       sampleSize: Number(r.sample_size),
-      reviewed: items.filter((i) => i.reviewed).length,
+      reviewed: reviewedCount,
       passRate: r.pass_rate,
       sameModelReview: !Array.isArray(stored) && stored.sameModelReview,
       shelved,
@@ -128,12 +129,18 @@ export class BatchReviews {
   }
 }
 
+/**
+ * 抽到的每一条都要有复核的回答：复核的调用失败了（限额、答非所问）时通过率不能代表这一批，「全部接受」和自动确认都要等。
+ */
+export const SAMPLE_REVIEWED_FLOOR = 1;
+
 /** 每个有值的指标对着它的线：越线的距离按线的比例算（线是 0 时按值本身）。 */
 export function assessMetrics(
-  v: { passRate: number | null; shelvedShare: number | null; coverage: number | null; backtestRecall: number | null; backtestFalsePositiveRate: number | null },
+  v: { passRate: number | null; sampleReviewed?: number | null; shelvedShare: number | null; coverage: number | null; backtestRecall: number | null; backtestFalsePositiveRate: number | null },
   p: AdmissionPolicy,
 ): BatchMetricView[] {
   const defs: { key: BatchMetricKey; value: number | null; floor: number; bound: "min" | "max" }[] = [
+    { key: "sampleReviewed", value: v.sampleReviewed ?? null, floor: SAMPLE_REVIEWED_FLOOR, bound: "min" },
     { key: "samplePassRate", value: v.passRate, floor: Number(p["batch.minSamplePassRate"]), bound: "min" },
     { key: "shelvedShare", value: v.shelvedShare, floor: Number(p["batch.maxShelvedShare"]), bound: "max" },
     { key: "coverage", value: v.coverage, floor: Number(p["batch.minCoverage"]), bound: "min" },

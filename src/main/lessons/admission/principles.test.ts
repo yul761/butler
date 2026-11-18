@@ -65,4 +65,19 @@ describe("PrinciplesService", () => {
     expect(xs.map((x) => s.repo.get(x)!.principleId)).toEqual([null, null, null]);
     expect(s.db.prepare(`SELECT COUNT(*) AS n FROM lesson_principles`).get()).toEqual({ n: 0 });
   });
+
+  it("a regroup does not block undoing an earlier lesson batch, and undoing that batch keeps the grouping", async () => {
+    const s = build((rs) => ({ principles: [{ ids: rs.map((r) => r.id), text: "P", why: "w" }] }));
+    const xs = [1, 2, 3].map((i) => s.lesson(`rule ${i}`));
+    const confirm = s.batches.bulk("confirm", { ids: xs });
+    const r = await s.svc.regroup();
+    const pid = s.repo.get(xs[0])!.principleId;
+    expect(pid).not.toBeNull();
+    expect(s.recorder.undo(confirm.batchId!, 5)).toMatchObject({ ok: true, outcome: { skipped: 0 } });
+    expect(xs.map((x) => s.repo.get(x)!.status)).toEqual(["pending", "pending", "pending"]);
+    expect(xs.map((x) => s.repo.get(x)!.principleId)).toEqual([pid, pid, pid]);
+    // 分组那一批也还能撤（原则删掉，规矩不再指着它）。
+    expect(s.recorder.undo(r.batchId!, 6)).toMatchObject({ ok: true, outcome: { skipped: 0 } });
+    expect(xs.map((x) => s.repo.get(x)!.principleId)).toEqual([null, null, null]);
+  });
 });

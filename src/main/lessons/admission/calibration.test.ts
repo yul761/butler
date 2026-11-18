@@ -32,12 +32,27 @@ describe("CalibrationService", () => {
     expect(s.cal.sample({ kind: "repo", slug: "acme/web" }).items).toEqual(sample.items);
   });
 
+  it("puts a lesson exactly on the drop line in the middle band and treats low clarity as shelved", () => {
+    const s = build();
+    const p = s.policies.resolve({ kind: "global" }).value;
+    const onDrop = s.scored(Number(p["score.dropLine"]));
+    const unclear = s.lesson("unclear high", {});
+    s.repo.setFields(unclear, { score: 0.95, checkability: "checkable", scoreParts: { clarity: { value: 0, reason: "vague" } } }, 1);
+    const items = s.cal.sample({ kind: "all" }).items;
+    expect(items.find((i) => i.lessonId === onDrop)).toMatchObject({ band: "mid", auto: "shelve" });
+    expect(items.find((i) => i.lessonId === unclear)).toMatchObject({ band: "high", auto: "shelve" });
+  });
+
   it("records marks as review samples and computes agreement", () => {
     const s = build();
     const hi = s.scored(0.9);
     const lo = s.scored(0.1);
     const mid = s.scored(0.5);
-    const since = s.clock.now;
+    const other = s.scored(0.6);
+    const since = s.cal.sample({ kind: "repo", slug: "acme/web" }).drawnAt;
+    // since 只认发出去的抽样；更早的判断不能借一个假的 since 删掉。
+    expect(s.cal.mark(hi, "good", 0)).toEqual({ ok: false, reason: "not_in_sample" });
+    void other;
     s.cal.mark(hi, "good", since);
     s.cal.mark(lo, "good", since);
     s.cal.mark(mid, "bad", since);

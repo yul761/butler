@@ -23,7 +23,7 @@ export interface ShelvedShares {
   byReason: Record<string, number>;
 }
 
-export type BatchMetricKey = "samplePassRate" | "shelvedShare" | "coverage" | "backtestRecall" | "backtestFalsePositiveRate";
+export type BatchMetricKey = "sampleReviewed" | "samplePassRate" | "shelvedShare" | "coverage" | "backtestRecall" | "backtestFalsePositiveRate";
 
 export interface BatchMetricView {
   key: BatchMetricKey;
@@ -124,7 +124,8 @@ export interface WizardRunView {
 }
 
 export interface WizardEstimate {
-  repos: { slug: string; cloned: boolean; merged: number | null; analysed: number }[];
+  /** setUp：这个仓库被一次接受了的向导覆盖过（它自己、它的产品或「全部」）。 */
+  repos: { slug: string; cloned: boolean; merged: number | null; analysed: number; setUp: boolean }[];
   pendingLessons: number;
   enrichNeeding: number;
   expectedCalls: number;

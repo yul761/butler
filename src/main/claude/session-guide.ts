@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Lang } from "../../shared/i18n";
 import type { SessionLesson } from "../../shared/lessons";
@@ -130,8 +130,18 @@ export function casesText(lang: Lang, lessons: SessionLesson[]): string {
   return `# ${zh ? "原则的案例" : "Cases for the principles"}\n\n${parts.join("\n\n")}\n`;
 }
 
-function writeIfChanged(dir: string, file: string, text: string): void {
-  if (existsSync(file) && readFileSync(file, "utf8") === text) return;
+/** 内容没变就不重写。touch：会被 pruneSessionGuides 清理的文件把修改时间改成现在，还在用的不会被当成 30 天没用删掉。 */
+function writeIfChanged(dir: string, file: string, text: string, touch: boolean): void {
+  if (existsSync(file) && readFileSync(file, "utf8") === text) {
+    if (!touch) return;
+    const now = new Date();
+    try {
+      utimesSync(file, now, now);
+    } catch {
+      // 改不了时间不影响这次用
+    }
+    return;
+  }
   mkdirSync(dir, { recursive: true });
   writeFileSync(file, text);
 }
@@ -147,12 +157,12 @@ export function writeSessionGuide(mcpDir: string, lang: Lang, kind: GuideKind, l
   if (kind === "ticket" && lessons.some((l) => l.cases?.length)) {
     const cases = casesText(lang, lessons);
     casesFile = join(mcpDir, `lessons-cases-${short(cases)}.md`);
-    writeIfChanged(mcpDir, casesFile, cases);
+    writeIfChanged(mcpDir, casesFile, cases, true);
   }
   const text = sessionGuide(lang, kind, lessons, { ...opts, casesFile });
   const hash = lessons.length > 0 || (opts.extra?.length ?? 0) > 0 ? `-${short(text)}` : "";
   const file = join(mcpDir, `guide-${kind}-${lang}${hash}.md`);
-  writeIfChanged(mcpDir, file, text);
+  writeIfChanged(mcpDir, file, text, hash !== "");
   return file;
 }
 
