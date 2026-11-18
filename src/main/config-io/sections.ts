@@ -34,7 +34,7 @@ export const productsSection: ConfigSection<ProductItem> = {
     const ps = sel.kind === "all" ? repo.products() : repo.products().filter((p) => p.id === sel.productId);
     return ps.map((p) => ({ name: p.name, repos: sortedSlugs(p.slugs) }));
   },
-  diff({ items, repo, fileScope }) {
+  diff({ items, repo, fileScope, doc }) {
     const local = new Map(repo.products().map((p) => [p.name, p]));
     const seen = new Set<string>();
     const rows: PreviewRow[] = [];
@@ -55,7 +55,8 @@ export const productsSection: ConfigSection<ProductItem> = {
         diffs: same ? [] : [{ field: "repos", local: a, incoming: b }], reasons: same ? [] : ["repos"], localId: l.id,
       });
     }
-    if (fileScope.kind === "all") {
+    // 只有带规矩的文件才删本机多出来的产品：只导出检查的文件里产品只是为了让产品层的检查有处可放，替换检查不该连带删掉产品和它的规矩。
+    if (fileScope.kind === "all" && "lessons" in doc) {
       for (const l of local.values()) {
         if (!seen.has(l.name)) rows.push({ fingerprint: productFingerprint(l.name), label: l.name, status: "removed", diffs: [], reasons: [], localId: l.id });
       }

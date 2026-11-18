@@ -40,13 +40,18 @@ export function findShell(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, exi
   return null;
 }
 
+/** 有 shell 控制符的（多条命令、管道、重定向、子 shell、命令替换）不算一条简单命令。 */
+const COMPOUND = /[;&|<>`()\n]|\$\(/;
+
 /**
- * 命令文字里的 {file} 换成 "$1"，文件名作为参数传进去，绝不拼进 shell 文字里。
- * 编辑时的命令没写 {file} 就把文件接在最后；push 时（file 为 null）只把 {file} 去掉。
+ * 命令文字里的 {file} 换成 "$1"，文件名作为参数传进去，绝不拼进 shell 文字里（另外也在 BUTLER_CHECK_FILE 里）。
+ * 编辑时的命令没写 {file}：一条简单命令就把文件接在最后；复合命令原样跑（接在最后只会接到最后一条上）。
+ * push 时（file 为 null）只把 {file} 去掉。
  */
 export function commandScript(command: string, file: string | null): string {
   if (file === null) return command.split("{file}").join("");
-  return command.includes("{file}") ? command.split("{file}").join('"$1"') : `${command} "$1"`;
+  if (command.includes("{file}")) return command.split("{file}").join('"$1"');
+  return COMPOUND.test(command) ? command : `${command} "$1"`;
 }
 
 const keepTail = (s: string): string => (s.length > OUTPUT_CAP ? s.slice(s.length - OUTPUT_CAP) : s);
@@ -65,7 +70,18 @@ export function killTree(pid: number, platform: NodeJS.Platform): void {
   }
 }
 
-/** 跑一条检查命令；超时就杀掉整棵树。永不 reject。 */
+/** 正在跑的检查命令：hook 被 Claude Code 杀掉时一起杀（见 entry.ts）。 */
+const live = new Set<number>();
+
+export function killLiveCommands(platform: NodeJS.Platform = process.platform): void {
+  for (const pid of [...live]) killTree(pid, platform);
+  live.clear();
+}
+
+/** shell 退出后，最多再等这么久把管道里剩下的输出读完（后台子进程可能一直攥着管道）。 */
+const DRAIN_MS = 200;
+
+/** 跑一条检查命令；超时就杀掉整棵树。永不 reject。结果按 shell 的退出码定，不等后台子进程放开管道。 */
 export function runCommand(o: {
   command: string;
   file: string | null;
@@ -87,13 +103,16 @@ export function runCommand(o: {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      if (child?.pid) live.delete(child.pid);
+      child?.stdout?.destroy();
+      child?.stderr?.destroy();
       resolve(r);
     };
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(shell, ["-c", commandScript(o.command, o.file), "butler-check", ...(o.file === null ? [] : [o.file])], {
         cwd: o.cwd,
-        env: o.env,
+        env: o.file === null ? o.env : { ...o.env, BUTLER_CHECK_FILE: o.file },
         stdio: ["ignore", "pipe", "pipe"],
         detached: platform !== "win32",
         windowsHide: true,
@@ -102,6 +121,7 @@ export function runCommand(o: {
       resolve({ kind: "unavailable", reason: e instanceof Error ? e.message : String(e) });
       return;
     }
+    if (child.pid) live.add(child.pid);
     const timer = setTimeout(() => {
       timedOut = true;
       if (child.pid) killTree(child.pid, platform);
@@ -114,12 +134,23 @@ export function runCommand(o: {
     child.stdout?.on("data", add);
     child.stderr?.on("data", add);
     child.on("error", (e) => finish({ kind: "unavailable", reason: e.message }));
-    child.on("close", (code) => {
+    let exitCode: number | null | undefined;
+    const decide = () => {
       if (timedOut) return finish({ kind: "timeout", output: keepTail(out) });
+      const code = exitCode ?? null;
       if (code === 0) return finish({ kind: "pass" });
       // 127：找不到命令；126：不能执行。都是「检查跑不起来」，不是代码有问题。
       if (code === 127 || code === 126) return finish({ kind: "unavailable", reason: keepTail(out).trim().slice(-500) || `exit ${code}` });
       finish({ kind: "fail", code, output: keepTail(out) });
+    };
+    child.on("exit", (code) => {
+      exitCode = code;
+      // 输出可能还在管道里：等 close，最多等 DRAIN_MS（后台子进程攥着管道时 close 要等它退出）。
+      setTimeout(decide, DRAIN_MS).unref?.();
+    });
+    child.on("close", (code) => {
+      if (exitCode === undefined) exitCode = code;
+      decide();
     });
   });
 }

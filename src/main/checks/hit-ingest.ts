@@ -27,6 +27,7 @@ export function parseCheckLogRecord(line: string): CheckLogRecord | null {
   if (r.kind === "absent") {
     return inList(CHECK_ABSENCE_REASONS, r.reason) ? { kind: "absent", reason: r.reason as CheckAbsenceReason, session, at: r.at } : null;
   }
+  if (r.kind === "present") return { kind: "present", session, at: r.at };
   if (r.kind !== "hit") return null;
   if (!Number.isSafeInteger(r.checkId) || !isStr(r.checkKey, 200) || !r.checkKey || !isStr(r.slug, 300) || !isStr(r.file, 2000)) return null;
   const line_ = r.line === null || r.line === undefined ? null : Number.isSafeInteger(r.line) && (r.line as number) > 0 ? (r.line as number) : undefined;
@@ -42,7 +43,8 @@ export function parseCheckLogRecord(line: string): CheckLogRecord | null {
 export interface HitIngestOptions {
   dir: string;
   insertHits: (rows: { key: string; rec: Hit }[]) => number;
-  markAbsent: (session: string, reason: CheckAbsenceReason) => void;
+  /** reason 为 null：又检查上了，清掉标记。 */
+  markAbsent: (session: string, reason: CheckAbsenceReason | null) => void;
   /** 有新的命中写进库之后（页面刷新）。 */
   onIngested?: (n: number) => void;
   intervalMs?: number;
@@ -109,7 +111,7 @@ export class HitIngest {
         if (rec.kind === "hit") hits.push({ key: `${name}:${i}`, rec });
         else if (rec.session) {
           try {
-            this.o.markAbsent(rec.session, rec.reason);
+            this.o.markAbsent(rec.session, rec.kind === "absent" ? rec.reason : null);
           } catch (e) {
             this.o.log?.("checks: recording missing checks failed", e);
           }

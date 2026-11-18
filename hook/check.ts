@@ -10,12 +10,16 @@ import { GIT_SAFE_ARGS, resolveGit } from "../src/main/util/git-path";
 import { classifyPush } from "../src/shared/gate-command";
 import { inScope, normalizePath } from "../src/shared/glob";
 import { parseRemoteSlug } from "../src/shared/repo-slug";
-import { editedLines, evaluateBuiltin, fingerprints, newViolations, reconstructBefore, type Violation } from "../src/shared/check-rules";
+import {
+  commentsOf, contentLines, editedLines, evaluateBuiltin, fingerprints, newViolations, patternFlags, reconstructBefore, ticketPatternOf,
+  type RegexTest, type Violation,
+} from "../src/shared/check-rules";
 import {
   CHECKS_SNAPSHOT_VERSION,
   type CheckAbsenceReason, type CheckLogRecord, type CheckSnapshot, type CheckStage, type ResolvedCheck,
 } from "../src/shared/checks";
 import { runCommand, type CommandResult } from "./check-run";
+import { runRegexJobs, type RegexJob, type RegexJobsResult } from "./regex-worker";
 
 /** 文件太大就不跑内置检查（生成的文件、打包产物）。 */
 const MAX_CONTENT = 2 * 1024 * 1024;
@@ -23,6 +27,8 @@ const MAX_CONTENT = 2 * 1024 * 1024;
 const MAX_REPORTED = 20;
 /** 给 agent 看的命令输出末尾。 */
 const OUTPUT_TAIL = 3000;
+/** 用户正则最多跑这么久（再受编辑预算限制）：剩下的时间留给命令检查。 */
+const REGEX_BUDGET_MS = 2000;
 
 type Hit = Extract<CheckLogRecord, { kind: "hit" }>;
 
@@ -42,15 +48,19 @@ export interface CheckHookDeps {
   writeAtomic(file: string, text: string): void;
   exists(p: string): boolean;
   isFile(p: string): boolean;
-  /** owner/name 的来源：git remote get-url origin；没有 origin 返回 null。 */
-  remoteUrl(root: string, env: NodeJS.ProcessEnv): string | null;
+  /** owner/name 的来源：git remote get-url origin。none = 确实没有 origin；error = 这次没问出来（超时、git 找不到），不缓存。 */
+  remoteUrl(root: string, env: NodeJS.ProcessEnv): RemoteLookup;
   /** push 改动了哪些文件（相对仓库根）；算不出来返回 null（那就全跑）。 */
   pushedFiles(root: string, env: NodeJS.ProcessEnv): string[] | null;
   run(o: { command: string; file: string | null; cwd: string; timeoutMs: number; env: NodeJS.ProcessEnv }): Promise<CommandResult>;
+  /** 用户写的正则（限时，见 regex-worker）。 */
+  regex(jobs: RegexJob[], timeoutMs: number): Promise<RegexJobsResult>;
   now(): number;
   rand(): string;
   pid: number;
 }
+
+export type RemoteLookup = { kind: "url"; url: string } | { kind: "none" } | { kind: "error" };
 
 const emptyState = (): CheckState => ({ reported: {}, seen: {}, cmd: {}, slugs: {}, absent: null });
 
@@ -122,11 +132,13 @@ export function repoRootOf(d: Pick<CheckHookDeps, "exists">, start: string): str
   return null;
 }
 
+/** 只缓存确定的答案：git 一时没回话（Windows 上冷启动超时之类）下次再问，不让整个 session 的检查都停掉。 */
 function slugOf(d: CheckHookDeps, state: CheckState, root: string, env: NodeJS.ProcessEnv): string | null {
   const cached = state.slugs[root];
   if (cached !== undefined) return cached || null;
-  const url = d.remoteUrl(root, env);
-  const slug = url ? parseRemoteSlug(url) : null;
+  const r = d.remoteUrl(root, env);
+  if (r.kind === "error") return null;
+  const slug = r.kind === "url" ? parseRemoteSlug(r.url) : null;
   state.slugs[root] = slug ?? "";
   return slug;
 }
@@ -159,10 +171,54 @@ function render(snap: CheckSnapshot, fails: Failure[]): string {
 
 const enforced = (c: ResolvedCheck) => c.mode === "enforce" && c.severity === "block";
 
+const regexKey = (pattern: string, flags: string) => `${flags}\u0000${pattern}`;
+
+/** 这条内置检查要跑的用户正则：禁用写法（非字面）测每一行，注释规则的 ticket 号测每条注释。 */
+function regexNeeds(c: ResolvedCheck, contents: string[], ctx: { path: string; ticketPattern: string }): RegexJob | null {
+  const p = c.params as Record<string, unknown>;
+  if (c.type === "forbidden_pattern" && p.literal !== true && typeof p.pattern === "string") {
+    return { pattern: p.pattern, flags: patternFlags({ flags: typeof p.flags === "string" ? p.flags : undefined }), texts: contents.flatMap(contentLines) };
+  }
+  if (c.type === "comment_policy") {
+    const pattern = ticketPatternOf({ ticketPattern: typeof p.ticketPattern === "string" ? p.ticketPattern : undefined }, ctx);
+    if (pattern) return { pattern, flags: "", texts: contents.flatMap((t) => commentsOf(t, ctx.path).map((x) => x.text)) };
+  }
+  return null;
+}
+
+/**
+ * 先在 worker 里把所有用户正则对要测的文字跑完（同一个正则合并），再给规则一个查表的 test。
+ * 超时返回 null：这些检查这次记「超时」放行。
+ */
+async function precomputeRegexes(d: CheckHookDeps, checks: ResolvedCheck[], contents: string[], ctx: { path: string; ticketPattern: string }, budgetMs: number): Promise<RegexTest | null> {
+  const jobs = new Map<string, { pattern: string; flags: string; texts: Set<string> }>();
+  for (const c of checks) {
+    const need = regexNeeds(c, contents, ctx);
+    if (!need) continue;
+    const k = regexKey(need.pattern, need.flags);
+    const j = jobs.get(k) ?? jobs.set(k, { pattern: need.pattern, flags: need.flags, texts: new Set() }).get(k)!;
+    for (const t of need.texts) j.texts.add(t);
+  }
+  const list = [...jobs.entries()].map(([k, j]) => ({ k, job: { pattern: j.pattern, flags: j.flags, texts: [...j.texts] } }));
+  const r = await d.regex(list.map((x) => x.job), budgetMs);
+  if (!r.ok) return null;
+  const table = new Map(list.map((x, i) => [x.k, new Map(x.job.texts.map((t, n) => [t, r.results[i]?.[n] === true]))]));
+  return (pattern, flags, text) => table.get(regexKey(pattern, flags))?.get(text) ?? false;
+}
+
 function writeHits(d: CheckHookDeps, l: Layout, recs: CheckLogRecord[]): void {
   if (!recs.length) return;
   const name = `${d.now()}-${d.pid}-${d.rand()}.jsonl`;
   d.writeAtomic(path.join(l.hits, name), recs.map((r) => JSON.stringify(r)).join("\n") + "\n");
+}
+
+/** 写命中日志；写不下来也照常回答 agent。 */
+function flushHits(d: CheckHookDeps, l: Layout, recs: CheckLogRecord[]): void {
+  try {
+    writeHits(d, l, recs);
+  } catch {
+    // 照常回答。
+  }
 }
 
 /** 「没有检查」每个 session 只记一次（原因变了再记）。 */
@@ -188,11 +244,25 @@ export interface HookPayload {
   tool_response?: unknown;
 }
 
+/** 命令行上的选项：budgetMs 是注册 hook 时的预算（hook 的超时按它留了余量），快照里的预算后来调大了也不超过它。 */
+export interface CheckRunOptions {
+  budgetMs?: number;
+}
+
+/** `--budget-ms N`：认不出就当没给。 */
+export function parseCheckArgs(argv: readonly string[]): CheckRunOptions {
+  const i = argv.indexOf("--budget-ms");
+  const n = i >= 0 ? Number(argv[i + 1]) : NaN;
+  return Number.isFinite(n) && n > 0 ? { budgetMs: n } : {};
+}
+
+const budgetOf = (snapMs: number, o: CheckRunOptions) => (o.budgetMs === undefined ? snapMs : Math.min(snapMs, o.budgetMs));
+
 /**
  * PostToolUse Edit|Write|MultiEdit（addendum 第 5 节）。返回要写到 stdout 的 JSON（空串 = 不说话）。
  * 什么情况下都不抛错、不阻止 Claude Code：出错就放行。
  */
-export async function runCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHookDeps): Promise<string> {
+export async function runCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHookDeps, opts: CheckRunOptions = {}): Promise<string> {
   const started = d.now();
   const p = parseJson(stdin);
   if (!isObj(p)) return "";
@@ -213,40 +283,50 @@ export async function runCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHo
   }
   const snap = sr.snap;
   if (!snap.enabled) return "";
+  const budgetMs = budgetOf(snap.editTimeoutMs, opts);
   const sfile = stateFile(l, session);
   const state = loadState(d, sfile);
   const root = repoRootOf(d, path.dirname(file));
   if (!root) return "";
   const slug = slugOf(d, state, root, env);
+  const records: CheckLogRecord[] = [];
+  const cleared = presentAgain(d, state, session, records);
+  const touched = new Set<string>();
+  const finishQuiet = () => {
+    flushHits(d, l, records);
+    safeWrite(d, sfile, state, touched, cleared);
+    return "";
+  };
   if (!slug) {
     // 没有 remote：放行，不记（源计划「没有 remote 就放行」）。只把 slug 缓存存下来。
-    safeWrite(d, sfile, state);
-    return "";
+    return finishQuiet();
   }
   const rel = normalizePath(path.relative(root, file));
-  if (!rel || rel.startsWith("../")) return "";
+  if (!rel || rel.startsWith("../")) return finishQuiet();
   const checks = checksFor(snap, slug).filter((c) => stageOf(c) === "edit" && inScope(rel, c.globs ?? [], c.excludeGlobs ?? []));
-  if (!checks.length) {
-    safeWrite(d, sfile, state);
-    return "";
-  }
+  if (!checks.length) return finishQuiet();
   const after = d.isFile(file) ? d.readText(file) : null;
-  if (after === null) return "";
-  const records: CheckLogRecord[] = [];
+  if (after === null) return finishQuiet();
   const fails: Failure[] = [];
   const base = { slug, file: rel, stage: "edit" as const, session, at: started };
   const rec = (c: ResolvedCheck, r: Pick<Hit, "line" | "outcome" | "blocked" | "detail">): Hit => ({
     kind: "hit", checkId: c.id, checkKey: c.key, mode: c.mode, severity: c.severity, ...base, ...r, detail: r.detail.slice(0, 2000),
   });
-  const ctx = { path: rel, ticketPattern: snap.ticketPattern };
   const before = after.length <= MAX_CONTENT ? reconstructBefore(tool, input, payload.tool_response, after) : null;
   const edited = editedLines(tool, input, after);
   const lines = after.split("\n");
+  const base0 = { path: rel, ticketPattern: snap.ticketPattern };
+  const builtins = after.length <= MAX_CONTENT ? checks.filter((c) => c.type !== "run_command") : [];
+  const regexBudget = Math.min(REGEX_BUDGET_MS, budgetMs - (d.now() - started));
+  const test = builtins.length ? await precomputeRegexes(d, builtins, before === null ? [after] : [after, before], base0, regexBudget) : undefined;
+  const regexTimedOut = test === null;
+  const ctx = { ...base0, test: test ?? undefined };
   for (const c of checks) {
     const sk = `${c.key}\u0000${rel}`;
+    touched.add(sk);
     try {
       if (c.type === "run_command") {
-        const budget = snap.editTimeoutMs - (d.now() - started);
+        const budget = budgetMs - (d.now() - started);
         const own = typeof c.params.timeoutMs === "number" ? c.params.timeoutMs : budget;
         const r = await d.run({ command: String(c.params.command ?? ""), file: rel, cwd: root, timeoutMs: Math.min(budget, own), env });
         if (r.kind === "pass") {
@@ -266,6 +346,11 @@ export async function runCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHo
         continue;
       }
       if (after.length > MAX_CONTENT) continue;
+      if (regexTimedOut && regexNeeds(c, [], base0)) {
+        // 正则跑太久（多半是嵌套量词）：这次没检查成，放行，页面上算「没能检查」。
+        records.push(rec(c, { line: null, outcome: "timeout", blocked: false, detail: "regex took too long" }));
+        continue;
+      }
       const now = evaluateBuiltin(c, after, ctx);
       const was = before === null ? null : evaluateBuiltin(c, before, ctx);
       const fresh = newViolations(was, now, before === null ? edited : null);
@@ -298,12 +383,8 @@ export async function runCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHo
       records.push(rec(c, { line: null, outcome: "error", blocked: false, detail: e instanceof Error ? e.message : String(e) }));
     }
   }
-  try {
-    writeHits(d, l, records);
-  } catch {
-    // 日志写不下来也照常回答 agent。
-  }
-  safeWrite(d, sfile, state);
+  flushHits(d, l, records);
+  safeWrite(d, sfile, state, touched, cleared);
   if (!fails.length) return "";
   const text = render(snap, fails);
   if (fails.some((f) => enforced(f.check))) {
@@ -312,19 +393,42 @@ export async function runCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHo
   return JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: text } });
 }
 
-function safeWrite(d: CheckHookDeps, file: string, state: CheckState): void {
+/**
+ * 写回防抖状态：先重新读一遍文件，只换上这次动过的那些（检查, 文件）键，slug 缓存取并集。
+ * 同一个 session 里并行的几次编辑各自的 hook 同时在跑，整份覆盖会互相丢掉对方记下的东西。
+ */
+function safeWrite(d: CheckHookDeps, file: string, state: CheckState, touched: ReadonlySet<string> = new Set(), clearAbsent = false): void {
   try {
-    d.writeAtomic(file, JSON.stringify(state));
+    const fresh = loadState(d, file);
+    for (const k of touched) {
+      for (const field of ["reported", "seen"] as const) {
+        if (state[field][k]) fresh[field][k] = state[field][k];
+        else delete fresh[field][k];
+      }
+      if (state.cmd[k]) fresh.cmd[k] = state.cmd[k];
+      else delete fresh.cmd[k];
+    }
+    Object.assign(fresh.slugs, state.slugs);
+    if (clearAbsent) fresh.absent = null;
+    d.writeAtomic(file, JSON.stringify(fresh));
   } catch {
     // 状态写不下来：下次可能重复提醒一次，不影响放行。
   }
+}
+
+/** 这个 session 记过「没有检查」，现在又检查上了：记一条 present，Butler 清掉标记。返回要不要在状态里清掉。 */
+function presentAgain(d: CheckHookDeps, state: CheckState, session: string | null, records: CheckLogRecord[]): boolean {
+  if (!session || state.absent === null) return false;
+  records.push({ kind: "present", session, at: d.now() });
+  state.absent = null;
+  return true;
 }
 
 /**
  * PreToolUse Bash 里的 push 前检查（addendum 第 6 节）：只在认出真正的 git push 时跑仓库的 stage=push 命令；
  * 强制 + 拦截的失败 → deny 并给出原因；其余只提示。和合并闸门并行，闸门的行为不变。
  */
-export async function runPushCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHookDeps): Promise<string> {
+export async function runPushCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHookDeps, opts: CheckRunOptions = {}): Promise<string> {
   const started = d.now();
   const p = parseJson(stdin);
   if (!isObj(p)) return "";
@@ -350,16 +454,23 @@ export async function runPushCheck(stdin: string, env: NodeJS.ProcessEnv, d: Che
   const sfile = stateFile(l, session);
   const state = loadState(d, sfile);
   const slug = slugOf(d, state, root, env);
-  safeWrite(d, sfile, state);
-  if (!slug) return "";
+  const records: CheckLogRecord[] = [];
+  const cleared = presentAgain(d, state, session, records);
+  safeWrite(d, sfile, state, new Set(), cleared);
+  if (!slug) {
+    flushHits(d, l, records);
+    return "";
+  }
   let checks = checksFor(snap, slug).filter((c) => stageOf(c) === "push");
-  if (!checks.length) return "";
+  if (!checks.length) {
+    flushHits(d, l, records);
+    return "";
+  }
   const changed = checks.some((c) => (c.globs ?? []).length > 0) ? d.pushedFiles(root, env) : null;
   if (changed) checks = checks.filter((c) => !(c.globs ?? []).length || changed.some((f) => inScope(f, c.globs, c.excludeGlobs ?? [])));
-  const records: CheckLogRecord[] = [];
   const fails: Failure[] = [];
   for (const c of checks) {
-    const budget = snap.pushTimeoutMs - (d.now() - started);
+    const budget = budgetOf(snap.pushTimeoutMs, opts) - (d.now() - started);
     const own = typeof c.params.timeoutMs === "number" ? c.params.timeoutMs : budget;
     const r = await d.run({ command: String(c.params.command ?? ""), file: null, cwd: root, timeoutMs: Math.min(budget, own), env });
     const base = { kind: "hit" as const, checkId: c.id, checkKey: c.key, slug, file: "", line: null, stage: "push" as const, mode: c.mode, severity: c.severity, session, at: started };
@@ -371,11 +482,7 @@ export async function runPushCheck(stdin: string, env: NodeJS.ProcessEnv, d: Che
     } else if (r.kind === "timeout") records.push({ ...base, outcome: "timeout", blocked: false, detail: tail(r.output.trim(), 500) });
     else records.push({ ...base, outcome: "unavailable", blocked: false, detail: r.reason.slice(0, 2000) });
   }
-  try {
-    writeHits(d, l, records);
-  } catch {
-    // 照常回答。
-  }
+  flushHits(d, l, records);
   if (!fails.length) return "";
   const text = render(snap, fails);
   if (fails.some((f) => enforced(f.check))) {
@@ -389,11 +496,28 @@ function git(env: NodeJS.ProcessEnv): string | null {
   return resolveGit(env[pathKey(env)] ?? "", process.platform) ?? (process.platform === "win32" ? null : "git");
 }
 
-function gitOut(root: string, env: NodeJS.ProcessEnv, args: string[]): string | null {
+/** 跑一条 git；git 找不到、起不来、超时返回 null。 */
+function gitRun(root: string, env: NodeJS.ProcessEnv, args: string[]): { status: number | null; stdout: string } | null {
   const bin = git(env);
   if (!bin) return null;
   const r = spawnSync(bin, [...GIT_SAFE_ARGS, "-C", root, ...args], { encoding: "utf8", timeout: 3000, windowsHide: true, env: { ...env, GIT_TERMINAL_PROMPT: "0" } });
-  return r.status === 0 && typeof r.stdout === "string" ? r.stdout : null;
+  if (r.error || r.signal) return null;
+  return { status: r.status, stdout: typeof r.stdout === "string" ? r.stdout : "" };
+}
+
+function gitOut(root: string, env: NodeJS.ProcessEnv, args: string[]): string | null {
+  const r = gitRun(root, env, args);
+  return r && r.status === 0 ? r.stdout : null;
+}
+
+/** `git remote get-url origin`：退出码 2 是「没有这个 remote」（确定的答案），其余失败都算这次没问出来。 */
+export function remoteLookupOf(r: { status: number | null; stdout: string } | null): RemoteLookup {
+  if (!r) return { kind: "error" };
+  if (r.status === 0) {
+    const url = r.stdout.trim();
+    return url ? { kind: "url", url } : { kind: "none" };
+  }
+  return r.status === 2 ? { kind: "none" } : { kind: "error" };
 }
 
 export const realCheckDeps: CheckHookDeps = {
@@ -427,15 +551,17 @@ export const realCheckDeps: CheckHookDeps = {
       return false;
     }
   },
-  remoteUrl: (root, env) => gitOut(root, env, ["remote", "get-url", "origin"])?.trim() || null,
+  remoteUrl: (root, env) => remoteLookupOf(gitRun(root, env, ["remote", "get-url", "origin"])),
   pushedFiles(root, env) {
     for (const range of ["@{upstream}...HEAD", "origin/HEAD...HEAD"]) {
-      const out = gitOut(root, env, ["diff", "--name-only", range]);
+      // quotepath=off：中文等非 ASCII 的路径原样输出，不然带引号和八进制转义，glob 对不上。
+      const out = gitOut(root, env, ["-c", "core.quotepath=off", "diff", "--name-only", range]);
       if (out !== null) return out.split("\n").map((s) => s.trim()).filter(Boolean);
     }
     return null;
   },
   run: (o) => runCommand(o),
+  regex: (jobs, timeoutMs) => runRegexJobs(jobs, timeoutMs),
   now: () => Date.now(),
   rand: () => randomBytes(4).toString("hex"),
   pid: process.pid,

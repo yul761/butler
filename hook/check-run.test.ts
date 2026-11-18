@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
-import { commandScript, findShell, OUTPUT_CAP, runCommand } from "./check-run";
+import { commandScript, findShell, killLiveCommands, OUTPUT_CAP, runCommand } from "./check-run";
 
 describe("findShell", () => {
   it("uses /bin/sh off Windows", () => {
@@ -25,6 +25,11 @@ describe("commandScript", () => {
     expect(commandScript("eslint {file}", "a b.ts")).toBe('eslint "$1"');
     expect(commandScript("eslint", "a.ts")).toBe('eslint "$1"');
     expect(commandScript("pnpm test {file}", null)).toBe("pnpm test ");
+  });
+
+  it("appends the file only to a single simple command", () => {
+    expect(commandScript("eslint --max-warnings 0", "a.ts")).toBe('eslint --max-warnings 0 "$1"');
+    for (const c of ["pnpm lint && echo ok", "echo hi; exit 2", "a | b", "x > out", "(cd web && lint)", "a\nb", "echo `date`"]) expect(commandScript(c, "a.ts")).toBe(c);
   });
 });
 
@@ -55,6 +60,26 @@ describe("runCommand", () => {
     const t0 = Date.now();
     const r = await run("sleep 30 & sleep 30; wait", null, 400);
     expect(r.kind).toBe("timeout");
+    expect(Date.now() - t0).toBeLessThan(5000);
+  }, 15_000);
+
+  it("gives the file in BUTLER_CHECK_FILE too (for compound commands)", async () => {
+    expect(await run('printf "%s" "$BUTLER_CHECK_FILE"; exit 1', "src/a b.ts")).toEqual({ kind: "fail", code: 1, output: "src/a b.ts" });
+  });
+
+  it("decides on the shell's exit, not on a background child still holding the pipe", async () => {
+    const t0 = Date.now();
+    const r = await run("(sleep 3 &) ; echo bad; exit 1", null, 5000);
+    expect(r).toEqual({ kind: "fail", code: 1, output: "bad\n" });
+    expect(Date.now() - t0).toBeLessThan(2500);
+  }, 15_000);
+
+  it("killLiveCommands stops running commands (the hook calls it when Claude Code kills the hook)", async () => {
+    const t0 = Date.now();
+    const p = run("sleep 30", null, 20_000);
+    await new Promise((r) => setTimeout(r, 200));
+    killLiveCommands();
+    expect((await p).kind).not.toBe("pass");
     expect(Date.now() - t0).toBeLessThan(5000);
   }, 15_000);
 

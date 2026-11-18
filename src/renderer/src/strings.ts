@@ -625,7 +625,7 @@ const ZH = {
   checksFormAllow: "例外（一行一个）",
   checksFormKeywords: "关键词（一行一个；空着用默认的中英文关键词）",
   checksFormTicket: "ticket 号的正则（空着用设置里的 ticket 格式）",
-  checksFormCommand: "命令（{file} 换成改动的文件；没写就接在最后）",
+  checksFormCommand: "命令（{file} 换成改动的文件，也在 $BUTLER_CHECK_FILE 里；没写时一条简单命令会把文件接在最后）",
   checksFormStage: "什么时候跑",
   checksStageLabel: { edit: "每次编辑后（只查改动的文件）", push: "push 前（跑一次）" } satisfies Record<CheckStage, string>,
   checksFormTimeout: "这条命令最多几秒（空着：用整体的时间）",

@@ -1,4 +1,4 @@
-// 内置检查类型的求值（契约 4.5）：禁用模式、import 边界、注释策略。纯函数，hook 在进程内逐行跑，毫秒级。
+// 内置检查类型的求值（契约 4.5）：禁用模式、import 边界、注释策略。纯函数，毫秒级；用户写的正则经 ctx.test 跑（hook 在 worker 里限时跑）。
 // 也给 Butler 页面和测试用。只看文字，不执行任何东西。
 import { matchAny, normalizePath } from "./glob";
 import type { CommentPolicyParams, ForbiddenPatternParams, ImportBoundaryParams } from "./checks";
@@ -12,31 +12,53 @@ export interface Violation {
   detail: string;
 }
 
+/** 用户写的正则（禁用写法、ticket 号）测一段文字。编不过返回 false。hook 换成在 worker 里限时跑的版本（防 ReDoS）。 */
+export type RegexTest = (pattern: string, flags: string, text: string) => boolean;
+
 export interface RuleContext {
   /** 仓库内路径，/ 分隔。 */
   path: string;
   /** 注释规则默认的 ticket 号正则。 */
   ticketPattern: string;
+  test?: RegexTest;
 }
 
+/** 进程内直接编译、直接跑（页面和测试用）；编译结果按 flags + pattern 缓存。 */
+export function directRegexTest(): RegexTest {
+  const cache = new Map<string, RegExp | null>();
+  return (pattern, flags, text) => {
+    const k = `${flags}\u0000${pattern}`;
+    let re = cache.get(k);
+    if (re === undefined) {
+      try {
+        re = new RegExp(pattern, flags);
+      } catch {
+        re = null;
+      }
+      cache.set(k, re);
+    }
+    return re ? re.test(text) : false;
+  };
+}
+
+/** 禁用写法的正则 flags（只认 i）。 */
+export const patternFlags = (p: Pick<ForbiddenPatternParams, "flags">): string => (p.flags === "i" ? "i" : "");
+
 const squash = (s: string): string => s.trim().replace(/\s+/g, " ");
-const lines = (content: string): string[] => content.split(/\r?\n/);
+/** 规则按这个切行（hook 预先算正则结果时也要切得一样）。 */
+export const contentLines = (content: string): string[] => content.split(/\r?\n/);
+const lines = contentLines;
 
 // ---------------------------------------------------------------- forbidden_pattern
 
-export function forbiddenPattern(p: ForbiddenPatternParams, content: string): Violation[] {
+export function forbiddenPattern(p: ForbiddenPatternParams, content: string, rx: RegexTest = directRegexTest()): Violation[] {
   let test: (line: string) => boolean;
   if (p.literal) {
     const needle = p.flags === "i" ? p.pattern.toLowerCase() : p.pattern;
     test = (l) => (p.flags === "i" ? l.toLowerCase() : l).includes(needle);
   } else {
-    let re: RegExp;
-    try {
-      re = new RegExp(p.pattern, p.flags === "i" ? "i" : "");
-    } catch {
-      return [];
-    }
-    test = (l) => re.test(l);
+    const flags = patternFlags(p);
+    test = (l) => rx(p.pattern, flags, l);
   }
   const out: Violation[] = [];
   lines(content).forEach((l, i) => {
@@ -120,14 +142,17 @@ export const DEFAULT_COMMENT_KEYWORDS: readonly string[] = [
   "暂时", "临时", "先这样", "权宜", "不是最优", "以后再", "待优化", "凑合",
 ];
 
-type CommentSyntax = { line: string[]; block: [string, string][] };
-const C_LIKE: CommentSyntax = { line: ["//"], block: [["/*", "*/"]] };
-const HASH: CommentSyntax = { line: ["#"], block: [] };
+/** template：反引号字符串能跨行（JS / TS 一类）。 */
+type CommentSyntax = { line: string[]; block: [string, string][]; template: boolean };
+const C_LIKE: CommentSyntax = { line: ["//"], block: [["/*", "*/"]], template: true };
+const HASH: CommentSyntax = { line: ["#"], block: [], template: false };
 const SYNTAX: [RegExp, CommentSyntax][] = [
   [/\.(py|pyi|sh|bash|zsh|rb|ya?ml|toml|pl|r|ps1|cfg|conf|mk|cmake|tf|nix)$|(^|\/)(Dockerfile|Makefile|Gemfile|Rakefile)$/i, HASH],
-  [/\.(sql|lua|hs)$/i, { line: ["--"], block: [["/*", "*/"]] }],
-  [/\.(html?|xml|svg|md|vue|svelte)$/i, { line: ["//"], block: [["<!--", "-->"], ["/*", "*/"]] }],
-  [/\.(css|scss|less)$/i, { line: ["//"], block: [["/*", "*/"]] }],
+  [/\.(sql|lua|hs)$/i, { line: ["--"], block: [["/*", "*/"]], template: false }],
+  // Markdown / HTML 的正文里 `//` 只是文字：只认 <!-- -->。
+  [/\.(html?|xml|svg|md|markdown)$/i, { line: [], block: [["<!--", "-->"]], template: false }],
+  [/\.(vue|svelte)$/i, { line: ["//"], block: [["<!--", "-->"], ["/*", "*/"]], template: true }],
+  [/\.(css|scss|less)$/i, { line: ["//"], block: [["/*", "*/"]], template: false }],
 ];
 
 function syntaxFor(path: string): CommentSyntax {
@@ -140,9 +165,11 @@ export function commentsOf(content: string, path: string): { line: number; text:
   const syn = syntaxFor(path);
   const out: { line: number; text: string }[] = [];
   let inBlock: string | null = null; // 块注释的结束符
+  // 反引号的模板字符串可以跨行；单双引号的到行尾就算结束（写错了也不连累后面的行）。
+  let template = false;
   lines(content).forEach((l, idx) => {
     let i = 0;
-    let quote: string | null = null;
+    let quote: string | null = template ? "`" : null;
     let buf = "";
     const flush = () => {
       if (buf.trim()) out.push({ line: idx + 1, text: buf.trim() });
@@ -182,7 +209,8 @@ export function commentsOf(content: string, path: string): { line: number; text:
         i += block[0].length;
         continue;
       }
-      const lc = syn.line.find((s) => l.startsWith(s, i) && !(s === "//" && l[i - 1] === ":"));
+      // `://` 是网址；shell 的 `$#`、`${#x}` 不是注释。
+      const lc = syn.line.find((s) => l.startsWith(s, i) && !(s === "//" && l[i - 1] === ":") && !(s === "#" && (l[i - 1] === "$" || l[i - 1] === "{")));
       if (lc) {
         buf += l.slice(i + lc.length);
         i = l.length;
@@ -191,6 +219,7 @@ export function commentsOf(content: string, path: string): { line: number; text:
       i++;
     }
     flush();
+    template = quote === "`" && syn.template;
   });
   return out;
 }
@@ -209,20 +238,17 @@ function keywordMatcher(keywords: readonly string[]): (text: string) => string |
   };
 }
 
-function ticketMatcher(pattern: string): (text: string) => boolean {
-  let custom: RegExp | null = null;
-  try {
-    custom = pattern ? new RegExp(pattern) : null;
-  } catch {
-    custom = null;
-  }
+/** 注释规则用的 ticket 号正则：检查自己的，没有就用设置里的。 */
+export const ticketPatternOf = (p: CommentPolicyParams, ctx: Pick<RuleContext, "ticketPattern">): string => p.ticketPattern || ctx.ticketPattern;
+
+function ticketMatcher(pattern: string, rx: RegexTest): (text: string) => boolean {
   const extra = /(^|[^\w&])#\d+\b|https?:\/\/\S+/;
-  return (text) => (custom?.test(text) ?? false) || extra.test(text);
+  return (text) => extra.test(text) || (pattern !== "" && rx(pattern, "", text));
 }
 
 export function commentPolicy(p: CommentPolicyParams, content: string, ctx: RuleContext): Violation[] {
   const has = keywordMatcher(p.keywords?.length ? p.keywords : DEFAULT_COMMENT_KEYWORDS);
-  const ticket = ticketMatcher(p.ticketPattern || ctx.ticketPattern);
+  const ticket = ticketMatcher(ticketPatternOf(p, ctx), ctx.test ?? directRegexTest());
   const out: Violation[] = [];
   for (const c of commentsOf(content, ctx.path)) {
     const kw = has(c.text);
@@ -324,7 +350,7 @@ export function editedLines(tool: string, input: Record<string, unknown>, after:
 export function evaluateBuiltin(check: { type: string; params: Record<string, unknown> }, content: string, ctx: RuleContext): Violation[] {
   switch (check.type) {
     case "forbidden_pattern":
-      return forbiddenPattern(check.params as unknown as ForbiddenPatternParams, content);
+      return forbiddenPattern(check.params as unknown as ForbiddenPatternParams, content, ctx.test);
     case "import_boundary":
       return importBoundary(check.params as unknown as ImportBoundaryParams, content, ctx);
     case "comment_policy":

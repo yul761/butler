@@ -2,11 +2,18 @@ import { z } from "zod";
 import { ChecksRepo } from "../db/checks-repo";
 import { fingerprint } from "./fingerprint";
 import { emptyCounts, type ConfigSection, type ExportSelection, type SectionEnv } from "./registry";
-import { CHECK_MODES, CHECK_SEVERITIES, CHECK_TYPES, validateCheckInput, type CheckInput, type CheckRow, type CheckScope } from "../../shared/checks";
+import { CHECK_MODES, CHECK_SEVERITIES, CHECK_TYPES, normalizeCheckSlug, validateCheckInput, type CheckInput, type CheckRow, type CheckScope } from "../../shared/checks";
 import type { FileScope, PreviewDiff, PreviewRow } from "../../shared/config-io";
 
 const NAME = z.string().trim().min(1).max(200);
-const SLUG = z.string().regex(/^[^\s/]+\/[^\s/]+$/).max(300);
+const SLUG = z.string().max(300).transform((s, c) => {
+  const v = normalizeCheckSlug(s);
+  if (v === null) {
+    c.addIssue({ code: "custom", message: "invalid repo slug" });
+    return z.NEVER;
+  }
+  return v;
+});
 
 /** 文件里的层：产品用名字（两台机器上 id 不同），仓库用 slug。 */
 const CheckLayer = z.discriminatedUnion("kind", [
@@ -90,9 +97,26 @@ const toItem = (r: CheckRow, layer: CheckLayer): CheckItem => ({
   severity: r.severity, mode: r.mode, enabled: r.enabled, message: r.message,
 });
 
-const inputOf = (it: CheckItem, mode: CheckInput["mode"]): CheckInput => ({
-  type: it.type, name: it.name, params: it.params, globs: it.globs, excludeGlobs: it.excludeGlobs, severity: it.severity, mode, enabled: it.enabled, message: it.message,
+const inputOf = (it: CheckItem, mode: CheckInput["mode"], enabled = it.enabled): CheckInput => ({
+  type: it.type, name: it.name, params: it.params, globs: it.globs, excludeGlobs: it.excludeGlobs, severity: it.severity, mode, enabled, message: it.message,
 });
+
+const commandOf = (c: { type: string; params: Record<string, unknown> }): string | null => (c.type === "run_command" && typeof c.params.command === "string" ? c.params.command : null);
+
+/**
+ * 导入的命令检查执行的是别处写的 shell 命令，试运行也照样执行：新来的、命令文字变了的一律先关掉，看过再打开（审查发现）。
+ * 命令没变（只改了 glob、严重程度之类）的照文件。
+ */
+const commandNeedsReview = (it: CheckItem, local: CheckRow | null): boolean => {
+  const cmd = commandOf(it);
+  return cmd !== null && (local === null || commandOf(local) !== cmd);
+};
+
+/** 预览里的标签：命令检查带上命令本身，导入前就能看到要执行什么。 */
+const labelOf = (c: { type: string; name: string; params: Record<string, unknown> }, layer: CheckLayer): string => {
+  const cmd = commandOf(c);
+  return `${c.name || c.type} · ${layerLabel(layer)}${cmd === null ? "" : ` · $ ${cmd.length > 200 ? `${cmd.slice(0, 200)}…` : cmd}`}`;
+};
 
 /** 内置的检查是种子数据：替换导入也不删，只能改。 */
 const isBuiltin = (key: string) => key.startsWith("builtin:");
@@ -120,7 +144,7 @@ export const checksSection: ConfigSection<CheckItem> = {
       seen.add(fp);
       const scope = localScope(it.scope, ctx);
       const local = scope ? checks.byKey(scope, it.key) : null;
-      const label = `${it.name || it.type} · ${layerLabel(it.scope)}`;
+      const label = labelOf(it, it.scope);
       if (!local) {
         rows.push({ fingerprint: fp, label, status: "added", diffs: [], reasons: [], localId: null });
         continue;
@@ -143,7 +167,7 @@ export const checksSection: ConfigSection<CheckItem> = {
         const layer = fileLayer(r.scope, names);
         if (!layer) continue;
         const fp = checkFingerprint(r.key, layer);
-        if (!seen.has(fp)) rows.push({ fingerprint: fp, label: `${r.name || r.type} · ${layerLabel(layer)}`, status: "removed", diffs: [], reasons: [], localId: r.id });
+        if (!seen.has(fp)) rows.push({ fingerprint: fp, label: labelOf(r, layer), status: "removed", diffs: [], reasons: [], localId: r.id });
       }
     }
     return rows;
@@ -184,14 +208,14 @@ export const checksSection: ConfigSection<CheckItem> = {
       const local = checks.byKey(scope, it.key);
       if (!local) {
         // 新的检查一律进试运行：别处验证过的，在这台机器上也要先证明自己。
-        const id = checks.insert(scope, it.key, inputOf(it, "shadow"), { lessonId: null, now: ctx.now });
+        const id = checks.insert(scope, it.key, inputOf(it, "shadow", commandNeedsReview(it, null) ? false : it.enabled), { lessonId: null, now: ctx.now });
         ctx.batch.created("check", id);
         counts.added++;
         continue;
       }
       ctx.batch.track("check", local.id);
       // 行为变了：回到试运行；只改了名字 / 提示语：模式照旧。
-      checks.update(local.id, inputOf(it, row.status === "conflicting" ? "shadow" : local.mode), ctx.now);
+      checks.update(local.id, inputOf(it, row.status === "conflicting" ? "shadow" : local.mode, commandNeedsReview(it, local) ? false : it.enabled), ctx.now);
       counts.updated++;
     }
     return counts;

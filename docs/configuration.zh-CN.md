@@ -303,9 +303,9 @@ Butler 自己从不和你的 tracker 通信。handoff 通过公司 Claude Code �
 - Butler 把打开的检查写到 `<BUTLER_HOME>/checks/snapshot.json`。Butler 的 session 里每次 `Edit`、`Write`、`MultiEdit` 之后，`butler-hook check` 只读这个文件（从不碰数据库）；agent 跑 `git push` 时，`butler-hook check-push` 跑 push 阶段的检查。Butler 之外的 session 不受影响，你自己的 Claude Code 配置从不改动。
 - hook 从文件所在的文件夹找仓库（它的 `origin` remote）。没有 remote 的文件夹、读不了的快照、别的 Butler 版本写的快照，一律放行，并在 session 上记**没有检查**。
 - 路径 glob（`globs`、`excludeGlobs`）匹配相对仓库根目录的路径，`/` 和 `\` 都行。
-- **类型。**`forbidden_pattern`：新写的行里不许出现的正则（或原样文字）。`import_boundary`：匹配 `forbid` 的 import（仓库路径 glob 或 `electron` 这样的包名）不许出现，匹配 `allow` 的除外。`comment_policy`：说代码是临时的注释（内置中英文关键词，比如 *temporary*、*workaround*、*TODO*、临时、先这样）要带一个符合 ticket 格式的 ticket 号；这条内置检查一开始就有，但是**关着**。`run_command`：一条 shell 命令（macOS、Linux 用 `/bin/sh`，Windows 用 Git Bash）；`{file}` 换成改动的文件，作为参数传进去，绝不拼进命令文字。编辑阶段的命令只对改动的文件跑；push 阶段的命令在 push 前跑一次。
+- **类型。**`forbidden_pattern`：新写的行里不许出现的正则（或原样文字）。`import_boundary`：匹配 `forbid` 的 import（仓库路径 glob 或 `electron` 这样的包名）不许出现，匹配 `allow` 的除外。`comment_policy`：说代码是临时的注释（内置中英文关键词，比如 *temporary*、*workaround*、*TODO*、临时、先这样）要带一个符合 ticket 格式的 ticket 号；这条内置检查一开始就有，但是**关着**。`run_command`：一条 shell 命令（macOS、Linux 用 `/bin/sh`，Windows 用 Git Bash）；`{file}` 换成改动的文件，作为参数传进去，绝不拼进命令文字；环境变量 `BUTLER_CHECK_FILE` 里也有这个文件。编辑阶段的命令没写 `{file}` 时，只有一条简单命令（`eslint --max-warnings 0`）才把文件接在最后；复合命令（带 `;`、`&&`、`|`、重定向或子 shell）原样执行。编辑阶段的命令只对改动的文件跑；push 阶段的命令在 push 前跑一次。
 - **模式。**新建的检查、导入的检查都从**试运行**开始：命中只记录。命中列表看着对了再切到**强制**。强制的 `block` 检查用 hook 的 block 把失败告诉 agent（改动保留，要求它修根本原因）；强制的 `warn` 检查和所有试运行命中只加一条提示。只报这次编辑新引入的问题，每个只报一次。
-- 超时的命令连同整棵进程树一起被杀掉，记为**没能检查**，编辑放行。push 阶段的检查失败会拦下 `git push` 并说明原因。合并闸门不变。
+- 超时的命令连同整棵进程树一起被杀掉，记为**没能检查**，编辑放行。正则（禁用写法、ticket 格式）每次编辑最多跑两秒；更久的（比如 `(\w+\s?)+$` 这样的嵌套量词）会被停掉，同样记为**没能检查**。调大时间限制之前就开着的 session 仍按它开始时的限制。push 阶段的检查失败会拦下 `git push` 并说明原因。合并闸门不变。
 - 检查标签里每条检查显示命中次数、agent 之后改掉了多少（采纳）、你标了多少误报。超过一年的命中记录会删掉。
 
 | 设置 | 键 | 默认 | 说明 |
@@ -314,7 +314,7 @@ Butler 自己从不和你的 tracker 通信。handoff 通过公司 Claude Code �
 | 每次编辑后检查的时间（秒） | `checksEditTimeoutSec` | `8` | `1` 到 `30` 的整数。一次编辑的所有编辑阶段检查共用。 |
 | push 前检查的时间（秒） | `checksPushTimeoutSec` | `600` | `10` 到 `3600` 的整数。所有 push 阶段检查共用。 |
 
-检查跟着其它配置一起导出、导入（**只导出检查**或**全部**）。按 key 和层对应；行为上的改动（类型、参数、glob、严重程度、开关）算冲突，选了导入的就回到试运行；只改名字或提示语的，模式照旧。替换导入从不删除内置检查。
+检查跟着其它配置一起导出、导入（**只导出检查**或**全部**）。按 key 和层对应；行为上的改动（类型、参数、glob、严重程度、开关）算冲突，选了导入的就回到试运行；只改名字或提示语的，模式照旧。新来的或命令文字变了的 `run_command` 检查导入后是**关着**的，因为试运行也会执行命令：预览里能看到每条命令，看过再打开。只有检查的文件即使用替换导入也不会删掉你的产品。替换导入从不删除内置检查。
 
 ## 多家公司或多个配置
 

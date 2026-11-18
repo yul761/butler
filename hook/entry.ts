@@ -1,10 +1,18 @@
 import { main, readStdin } from "./butler-hook";
-import { realCheckDeps, runCheck, runPushCheck } from "./check";
+import { parseCheckArgs, realCheckDeps, runCheck, runPushCheck } from "./check";
+import { killLiveCommands } from "./check-run";
 import { realGateDeps, runGate } from "./gate";
 
 // 设计文档 4.3：任何异常都以退出码 0 静默结束，绝不阻塞 Claude Code。
 process.on("uncaughtException", () => process.exit(0));
 process.on("unhandledRejection", () => process.exit(0));
+// Claude Code 到点会杀掉 hook：先把还在跑的检查命令（各自的进程组）一起杀掉，别留下孤儿。
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+  process.on(sig, () => {
+    killLiveCommands();
+    process.exit(0);
+  });
+}
 
 /** 跑一个会回答 Claude Code 的模式：等写完再退出，管道上的输出才不会被截断。 */
 async function answer(run: (stdin: string) => Promise<string>): Promise<void> {
@@ -18,13 +26,14 @@ async function answer(run: (stdin: string) => Promise<string>): Promise<void> {
 }
 
 const mode = process.argv[2];
+const opts = parseCheckArgs(process.argv.slice(3));
 // gate：合并闸门；check：编辑后的确定性检查；check-push：push 前的检查（契约 4.5）；其余照旧写收件箱。
 const job =
   mode === "gate"
     ? answer((s) => runGate(s, process.env, realGateDeps))
     : mode === "check"
-      ? answer((s) => runCheck(s, process.env, realCheckDeps))
+      ? answer((s) => runCheck(s, process.env, realCheckDeps, opts))
       : mode === "check-push"
-        ? answer((s) => runPushCheck(s, process.env, realCheckDeps))
+        ? answer((s) => runPushCheck(s, process.env, realCheckDeps, opts))
         : main();
 void job.finally(() => process.exit(0));

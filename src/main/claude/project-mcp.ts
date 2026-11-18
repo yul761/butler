@@ -250,7 +250,8 @@ export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
 /**
  * allowTools：不用确认就能调用的工具（写进 permissions.allow），空的或者不给就不写。
  * checks：确定性检查打开时给（契约 4.5）：编辑后跑 `check`，Bash 前再跑 `check-push`；hook 的超时比检查的预算多留几秒，
- * 检查自己到点就放行，不会被 Claude Code 当成 hook 超时。
+ * 检查自己到点就放行，不会被 Claude Code 当成 hook 超时。预算也写在命令行上（--budget-ms）：session 开着时把设置调大，
+ * 快照里的预算变了，但这份 settings 里的超时不会变，hook 按两者里小的那个跑。
  */
 export function projectMcpApprovalSettings(
   dirs: string[],
@@ -273,8 +274,8 @@ export function projectMcpApprovalSettings(
       const agent = { matcher: "Agent|Task", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
       const hooks = { PreToolUse: group as unknown[], PostToolUse: [...group, skill, agent] as unknown[], PostToolUseFailure: group };
       if (p.checks) {
-        hooks.PreToolUse = [...group, { matcher: "Bash", hooks: [{ type: "command", command: `${p.gateCommand} check-push`, timeout: p.checks.pushTimeoutSec + 30 }] }];
-        hooks.PostToolUse.push({ matcher: "Edit|Write|MultiEdit", hooks: [{ type: "command", command: `${p.gateCommand} check`, timeout: p.checks.editTimeoutSec + 3 }] });
+        hooks.PreToolUse = [...group, { matcher: "Bash", hooks: [{ type: "command", command: `${p.gateCommand} check-push --budget-ms ${p.checks.pushTimeoutSec * 1000}`, timeout: p.checks.pushTimeoutSec + 30 }] }];
+        hooks.PostToolUse.push({ matcher: "Edit|Write|MultiEdit", hooks: [{ type: "command", command: `${p.gateCommand} check --budget-ms ${p.checks.editTimeoutSec * 1000}`, timeout: p.checks.editTimeoutSec + 3 }] });
       }
       content.hooks = hooks;
     }

@@ -128,7 +128,9 @@ export type CheckLogRecord =
       session: string | null;
       at: number;
     }
-  | { kind: "absent"; reason: CheckAbsenceReason; session: string | null; at: number };
+  | { kind: "absent"; reason: CheckAbsenceReason; session: string | null; at: number }
+  /** 记过「没有检查」的 session 后来又检查上了（快照恢复了）：清掉 session 上的标记。 */
+  | { kind: "present"; session: string | null; at: number };
 
 export type CheckVerdict = "false_positive" | "true_positive";
 
@@ -289,9 +291,18 @@ export function parseCheckScope(raw: unknown): CheckScope | null {
   if (!isObj(raw)) return null;
   if (raw.kind === "global") return { kind: "global" };
   if (raw.kind === "product" && Number.isSafeInteger(raw.productId) && (raw.productId as number) > 0) return { kind: "product", productId: raw.productId as number };
-  // 仓库层用 owner/name（和 remote 解析出来的一样）。
-  if (raw.kind === "repo" && typeof raw.slug === "string" && raw.slug.length <= 300 && /^[^\s/]+\/[^\s/]+$/.test(raw.slug.trim())) return { kind: "repo", slug: raw.slug.trim() };
+  // 仓库层用 parseRemoteSlug 的写法：GitHub 是 owner/name，别的主机带上主机名和子组（gitlab.com/grp/sub/repo）；一律小写。
+  if (raw.kind === "repo" && typeof raw.slug === "string" && raw.slug.length <= 300) {
+    const slug = normalizeCheckSlug(raw.slug);
+    if (slug) return { kind: "repo", slug };
+  }
   return null;
+}
+
+/** 仓库 slug：两段以上、没有空白和空段，小写（hook 查快照用的是 remote 解析出来的小写 slug）。不合格返回 null。 */
+export function normalizeCheckSlug(raw: string): string | null {
+  const s = raw.trim().toLowerCase();
+  return /^[^\s/]+(?:\/[^\s/]+)+$/.test(s) ? s : null;
 }
 
 export const sameScope = (a: CheckScope, b: CheckScope): boolean =>

@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeRepo, tempDir } from "../src/main/test-utils";
-import { realCheckDeps, readSnapshot, repoRootOf, runCheck, runPushCheck } from "./check";
+import { parseCheckArgs, realCheckDeps, readSnapshot, remoteLookupOf, repoRootOf, runCheck, runPushCheck, type CheckHookDeps } from "./check";
 import { CHECKS_SNAPSHOT_VERSION, type CheckLogRecord, type CheckSnapshot, type ResolvedCheck } from "../src/shared/checks";
 
 const SLUG = "acme/web";
@@ -177,5 +177,80 @@ describe("helpers", () => {
     expect(readSnapshot({ readText: () => null }, "x")).toEqual({ ok: false, reason: "no_snapshot" });
     expect(readSnapshot({ readText: () => "{" }, "x")).toEqual({ ok: false, reason: "no_snapshot" });
     expect(readSnapshot({ readText: () => JSON.stringify({ v: 0 }) }, "x")).toEqual({ ok: false, reason: "snapshot_version" });
+  });
+});
+
+describe("review fixes", () => {
+  it("the budget on the command line caps a larger budget in the snapshot (the hook timeout was set from it)", async () => {
+    const t = setup([check({ type: "run_command", name: "slow", params: { command: "sleep 30; : {file}", stage: "edit" } })], { editTimeoutMs: 60_000 });
+    const t0 = Date.now();
+    expect(await runCheck(t.write("src/a.ts", "x\n"), t.env, realCheckDeps, { budgetMs: 500 })).toBe("");
+    expect(Date.now() - t0).toBeLessThan(6000);
+    expect(t.hits()).toMatchObject([{ kind: "hit", outcome: "timeout" }]);
+    expect(parseCheckArgs(["--budget-ms", "8000"])).toEqual({ budgetMs: 8000 });
+    expect(parseCheckArgs(["--budget-ms", "x"])).toEqual({});
+    expect(parseCheckArgs([])).toEqual({});
+  }, 15_000);
+
+  it("a catastrophic regex is cut off and recorded as a timeout, not left to hang the hook", async () => {
+    const t = setup([check({ params: { pattern: "^(\\w+\\s?)+$" } }), check({ id: 2, key: "ck_2", name: "plain", params: { pattern: "bar" } })], { editTimeoutMs: 1000 });
+    const t0 = Date.now();
+    expect(await runCheck(t.write("src/a.ts", `${"a".repeat(40)}!\nbar\n`), t.env, realCheckDeps)).toBe("");
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(t.hits()).toMatchObject([{ checkKey: "ck_1", outcome: "timeout", blocked: false }, { checkKey: "ck_2", outcome: "timeout" }]);
+  }, 15_000);
+
+  it("does not cache a failed remote lookup: the next edit asks git again", async () => {
+    const t = setup([check({})]);
+    let calls = 0;
+    const deps: CheckHookDeps = { ...realCheckDeps, remoteUrl: (root, env) => (++calls === 1 ? { kind: "error" } : realCheckDeps.remoteUrl(root, env)) };
+    expect(await runCheck(t.write("src/a.ts", "foo(1)\n"), t.env, deps)).toBe("");
+    expect(await runCheck(t.write("src/b.ts", "foo(1)\n"), t.env, deps)).not.toBe("");
+    expect(calls).toBe(2);
+    // 确定没有 origin 的才缓存。
+    expect(remoteLookupOf({ status: 2, stdout: "" })).toEqual({ kind: "none" });
+    expect(remoteLookupOf({ status: 128, stdout: "" })).toEqual({ kind: "error" });
+    expect(remoteLookupOf(null)).toEqual({ kind: "error" });
+    expect(remoteLookupOf({ status: 0, stdout: "git@github.com:a/b.git\n" })).toEqual({ kind: "url", url: "git@github.com:a/b.git" });
+  });
+
+  it("records present once checks work again after an absence", async () => {
+    const t = setup([check({})]);
+    const snap = join(t.home, "checks", "snapshot.json");
+    renameSync(snap, `${snap}.bak`);
+    expect(await runCheck(t.write("src/a.ts", "x\n"), t.env, realCheckDeps)).toBe("");
+    renameSync(`${snap}.bak`, snap);
+    expect(await runCheck(t.write("src/a.ts", "y\n"), t.env, realCheckDeps)).toBe("");
+    expect(await runCheck(t.write("src/a.ts", "z\n"), t.env, realCheckDeps)).toBe("");
+    expect(t.hits().map((h) => h.kind)).toEqual(["absent", "present"]);
+  });
+
+  it("keeps what a parallel hook in the same session wrote to the state file", async () => {
+    const t = setup([check({}), check({ id: 2, key: "ck_cmd", type: "run_command", name: "cmd", params: { command: "exit 0", stage: "edit" } })]);
+    const stateFile = join(t.home, "checks", "state", "sess-1.json");
+    const deps: CheckHookDeps = {
+      ...realCheckDeps,
+      // 这次 hook 跑命令的时候，另一个 hook（别的文件）写下了它报过的违规。
+      run: async (o) => {
+        mkdirSync(join(t.home, "checks", "state"), { recursive: true });
+        writeFileSync(stateFile, JSON.stringify({ reported: { "ck_1\u0000src/other.ts": ["foo(9)#0"] }, seen: {}, cmd: {}, slugs: {}, absent: null }));
+        return realCheckDeps.run(o);
+      },
+    };
+    expect(await runCheck(t.write("src/a.ts", "foo(1)\n"), t.env, deps)).not.toBe("");
+    const st = JSON.parse(readFileSync(stateFile, "utf8"));
+    expect(Object.keys(st.reported).sort()).toEqual(["ck_1\u0000src/a.ts", "ck_1\u0000src/other.ts"]);
+  });
+
+  it("push-time globs see non-ASCII paths unquoted", () => {
+    const repo = makeRepo();
+    const g = (...a: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...a], { cwd: repo });
+    g("branch", "base");
+    g("branch", "-u", "base");
+    mkdirSync(join(repo, "src"), { recursive: true });
+    writeFileSync(join(repo, "src", "中文.ts"), "x\n");
+    g("add", ".");
+    g("commit", "-q", "-m", "add");
+    expect(realCheckDeps.pushedFiles(repo, process.env)).toEqual(["src/中文.ts"]);
   });
 });

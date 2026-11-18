@@ -485,9 +485,9 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     const hooks = JSON.parse(readFileSync(projectMcpApprovalSettings([s.repo], { ...s.p, gateCommand: "/b/h", checks: { editTimeoutSec: 8, pushTimeoutSec: 600 } })!, "utf8")).hooks;
     expect(hooks.PreToolUse).toEqual([
       { matcher: "Bash", hooks: [{ type: "command", command: "/b/h gate", timeout: 10 }] },
-      { matcher: "Bash", hooks: [{ type: "command", command: "/b/h check-push", timeout: 630 }] },
+      { matcher: "Bash", hooks: [{ type: "command", command: "/b/h check-push --budget-ms 600000", timeout: 630 }] },
     ]);
-    expect(hooks.PostToolUse.at(-1)).toEqual({ matcher: "Edit|Write|MultiEdit", hooks: [{ type: "command", command: "/b/h check", timeout: 11 }] });
+    expect(hooks.PostToolUse.at(-1)).toEqual({ matcher: "Edit|Write|MultiEdit", hooks: [{ type: "command", command: "/b/h check --budget-ms 8000", timeout: 11 }] });
     expect(hooks.PostToolUseFailure).toEqual([{ matcher: "Bash", hooks: [{ type: "command", command: "/b/h gate", timeout: 10 }] }]);
     // 没有 hook 程序就没有检查。
     expect(Object.keys(read(projectMcpApprovalSettings([s.repo], { ...s.p, checks: { editTimeoutSec: 8, pushTimeoutSec: 600 } })!))).not.toContain("hooks");

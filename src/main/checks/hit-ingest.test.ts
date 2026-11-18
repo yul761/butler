@@ -15,7 +15,8 @@ const hit = {
 };
 
 describe("parseCheckLogRecord", () => {
-  it("accepts hits and absent records", () => {
+  it("accepts hits, absent and present records", () => {
+    expect(parseCheckLogRecord(JSON.stringify({ kind: "present", session: "s1", at: 3 }))).toEqual({ kind: "present", session: "s1", at: 3 });
     expect(parseCheckLogRecord(JSON.stringify(hit))).toMatchObject({ kind: "hit", checkKey: "ck_1", line: 2 });
     expect(parseCheckLogRecord(JSON.stringify({ kind: "absent", reason: "no_snapshot", session: "s1", at: 1 }))).toMatchObject({ kind: "absent" });
   });
@@ -31,7 +32,7 @@ describe("HitIngest", () => {
   it("ingests each file once, records absences and deletes the file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "butler-hits-"));
     dirs.push(dir);
-    writeFileSync(join(dir, "1-1-a.jsonl"), [JSON.stringify(hit), "garbage", JSON.stringify({ kind: "absent", reason: "snapshot_version", session: "s1", at: 1 })].join("\n"));
+    writeFileSync(join(dir, "1-1-a.jsonl"), [JSON.stringify(hit), "garbage", JSON.stringify({ kind: "absent", reason: "snapshot_version", session: "s1", at: 1 }), JSON.stringify({ kind: "present", session: "s1", at: 2 })].join("\n"));
     writeFileSync(join(dir, "ignored.tmp"), "x");
     const rows: { key: string }[] = [];
     const absent: string[] = [];
@@ -41,7 +42,7 @@ describe("HitIngest", () => {
     });
     expect(await ing.drain()).toBe(1);
     expect(rows.map((r) => r.key)).toEqual(["1-1-a.jsonl:0"]);
-    expect(absent).toEqual(["s1:snapshot_version"]);
+    expect(absent).toEqual(["s1:snapshot_version", "s1:null"]);
     expect(notified).toBe(1);
     expect(readdirSync(dir)).toEqual(["ignored.tmp"]);
   });

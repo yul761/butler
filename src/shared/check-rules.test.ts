@@ -84,6 +84,45 @@ describe("comment_policy", () => {
   });
 });
 
+describe("user regexes go through ctx.test (the hook runs them under a deadline)", () => {
+  it("forbidden_pattern and the ticket pattern ask ctx.test instead of compiling", () => {
+    const asked: string[] = [];
+    const test = (pattern: string, flags: string, text: string) => {
+      asked.push(`${pattern}|${flags}|${text}`);
+      return text.endsWith("bad");
+    };
+    expect(forbiddenPattern({ pattern: "x+", flags: "i" }, "ok\nbad", test).map((v) => v.line)).toEqual([2]);
+    expect(asked).toEqual(["x+|i|ok", "x+|i|bad"]);
+    asked.length = 0;
+    const v = commentPolicy({ keywords: [] }, "// hack\n// hack bad", { path: "a.ts", ticketPattern: "T-\\d+", test });
+    expect(v.map((x) => x.line)).toEqual([1]);
+    expect(asked).toEqual(["T-\\d+||hack", "T-\\d+||hack bad"]);
+  });
+
+  it("literal patterns never ask", () => {
+    const test = () => {
+      throw new Error("should not be called");
+    };
+    expect(forbiddenPattern({ pattern: "a+", literal: true }, "a+", test)).toHaveLength(1);
+  });
+});
+
+describe("comment_policy false positives", () => {
+  it("shell $# and ${#x} are not comments", () => {
+    expect(commentsOf('if [ $# -eq 0 ]; then echo hack; fi\nn=${#arr[@]} # real', "run.sh").map((c) => c.text)).toEqual(["real"]);
+  });
+
+  it("a // inside a multi-line template literal is not a comment", () => {
+    const src = "const s = `line one\n// hack inside the string\n`; // after";
+    expect(commentsOf(src, "a.ts").map((c) => [c.line, c.text])).toEqual([[3, "after"]]);
+  });
+
+  it("Markdown and HTML only have <!-- --> comments", () => {
+    expect(commentsOf("Use a // b as a hack\n<!-- hack -->", "README.md").map((c) => c.text)).toEqual(["hack"]);
+    expect(commentsOf("<p>a // hack</p>", "page.html")).toEqual([]);
+  });
+});
+
 describe("new violations and edits", () => {
   it("only reports what the edit added", () => {
     const before = forbiddenPattern({ pattern: "bad" }, "bad\nok");

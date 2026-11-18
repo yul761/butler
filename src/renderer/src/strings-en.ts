@@ -614,7 +614,7 @@ export const EN: UiStrings = {
   checksFormAllow: "Exceptions (one per line)",
   checksFormKeywords: "Keywords (one per line; empty uses the built-in English and Chinese keywords)",
   checksFormTicket: "Ticket id regular expression (empty uses the ticket pattern setting)",
-  checksFormCommand: "Command ({file} is replaced by the changed file; without it the file is appended)",
+  checksFormCommand: "Command ({file} is replaced by the changed file, also in $BUTLER_CHECK_FILE; without it a single simple command gets the file appended)",
   checksFormStage: "When to run",
   checksStageLabel: { edit: "After each edit (changed file only)", push: "Before a push (once)" },
   checksFormTimeout: "Seconds this command may take (empty: the overall time)",

@@ -379,6 +379,10 @@ describe("checks IPC arguments", () => {
   it("accepts well-formed actions and rejects the rest", () => {
     expect(checkScopeArg({ kind: "repo", slug: "acme/web" })).toEqual({ kind: "repo", slug: "acme/web" });
     expect(() => checkScopeArg({ kind: "repo", slug: "nope" })).toThrow();
+    // 别的主机带主机名和子组；一律小写。
+    expect(checkScopeArg({ kind: "repo", slug: "gitlab.com/Grp/Sub/Repo" })).toEqual({ kind: "repo", slug: "gitlab.com/grp/sub/repo" });
+    expect(checkScopeArg({ kind: "repo", slug: " Acme/Web " })).toEqual({ kind: "repo", slug: "acme/web" });
+    expect(() => checkScopeArg({ kind: "repo", slug: "a//b" })).toThrow();
     expect(checkKeyArg("builtin:comment_policy")).toBe("builtin:comment_policy");
     expect(() => checkKeyArg("a b")).toThrow();
     expect(checksActionArg({ op: "save", scope: { kind: "global" }, id: null, input: { type: "forbidden_pattern" } })).toMatchObject({ op: "save", id: null, lessonId: null });
