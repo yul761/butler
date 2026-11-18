@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import type {
   ConfigIoStatus, ExportRequest, ExportResult, ImportApplyRequest, ImportApplyResult, ImportPreviewResult, StarterTarget,
 } from "../../shared/config-io";
@@ -32,6 +33,22 @@ export interface ConfigIoFacadeDeps {
   notify: () => void;
   now: () => number;
   log?: (msg: string, e?: unknown) => void;
+}
+
+/**
+ * 保存框的默认位置：「文档」文件夹，取不到（Windows 上没有或被重定向时 Electron 会抛错）就用主目录，
+ * 都取不到就只给文件名，由系统决定放哪。
+ */
+export function defaultSavePath(getPath: (name: "documents" | "home") => string, fileName: string): string {
+  for (const name of ["documents", "home"] as const) {
+    try {
+      const dir = getPath(name);
+      if (dir) return join(dir, fileName);
+    } catch {
+      // 换下一个
+    }
+  }
+  return fileName;
 }
 
 /** 起步包的文件名里只留字母数字和连字符。 */

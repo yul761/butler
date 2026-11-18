@@ -9,7 +9,7 @@ import { BatchRecorder } from "../batches/batch-recorder";
 import { lessonAdapter, policyAdapter, productAdapter } from "../batches/table-adapter";
 import { AdmissionPolicyService } from "../lessons/admission-policies";
 import { ConfigBackups } from "./backup-job";
-import { configIoFacade } from "./facade";
+import { configIoFacade, defaultSavePath } from "./facade";
 import { ConfigIoService, defaultRegistry } from ".";
 
 const dirs: string[] = [];
@@ -79,5 +79,17 @@ describe("configIoFacade", () => {
     await facade.openBackups();
     expect(existsSync(backupDir)).toBe(true);
     expect(opened).toEqual([backupDir]);
+  });
+});
+
+describe("defaultSavePath", () => {
+  it("uses Documents, falls back to home when Electron cannot resolve it, and to the bare name last", () => {
+    expect(defaultSavePath(() => "/docs", "x.json")).toBe(join("/docs", "x.json"));
+    const noDocs = (n: "documents" | "home") => {
+      if (n === "documents") throw new Error("Failed to get 'documents' path");
+      return "/home/me";
+    };
+    expect(defaultSavePath(noDocs, "x.json")).toBe(join("/home/me", "x.json"));
+    expect(defaultSavePath(() => { throw new Error("no"); }, "x.json")).toBe("x.json");
   });
 });

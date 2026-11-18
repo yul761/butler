@@ -92,7 +92,7 @@ import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { AdmissionPolicyService } from "./lessons/admission-policies";
 import { ConfigIoService, defaultRegistry } from "./config-io";
 import { ConfigBackups } from "./config-io/backup-job";
-import { configIoFacade } from "./config-io/facade";
+import { configIoFacade, defaultSavePath } from "./config-io/facade";
 import { ActivityMonitor, activityIntervals } from "./sessions/activity-monitor";
 import { sessionRegistryName } from "./sessions/activity-sources";
 import { DeliveryGuard, type DeliveryGuardDeps } from "./sessions/delivery-guard";
@@ -1311,7 +1311,7 @@ async function bootstrap(): Promise<void> {
       dialogs: {
         save: async (defaultName) => {
           const w = win;
-          const opts = { defaultPath: join(app.getPath("documents"), defaultName), filters: [{ name: "JSON", extensions: ["json"] }] };
+          const opts = { defaultPath: defaultSavePath((n) => app.getPath(n), defaultName), filters: [{ name: "JSON", extensions: ["json"] }] };
           const r = w ? await dialog.showSaveDialog(w, opts) : await dialog.showSaveDialog(opts);
           return r.canceled || !r.filePath ? null : r.filePath;
         },
