@@ -753,6 +753,16 @@ describe("LessonRunner backfill", () => {
     expect(s.repo.queueCounts("acme/web").queued).toBe(0);
   });
 
+  it("refuses repos that came from an import and are not cloned here, and never queues their merged PRs", async () => {
+    const s = setup();
+    s.repo.ensureRepo("acme/imported", T0);
+    s.gh.mergedPrs.mockClear();
+    expect(await s.runner.backfill("acme/imported")).toEqual({ ok: false, reason: "unknown_repo" });
+    expect(s.gh.mergedPrs).not.toHaveBeenCalled();
+    s.runner.merged({ repoPath: null, slug: "acme/imported" }, 9);
+    expect(s.repo.queueCounts("acme/imported").queued).toBe(0);
+  });
+
   it("enqueues every PR, marks backfilled and advances the cursor to the newest mergedAt", async () => {
     const s = setup();
     s.hold();

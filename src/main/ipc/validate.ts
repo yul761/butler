@@ -5,7 +5,12 @@ import type {
   AddRepoInput, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
 import type { PrStagesScope } from "../../shared/pr-stages";
-import type { LessonAction } from "../../shared/lessons";
+import { LESSON_BULK_VERBS, MAX_TARGET_IDS, type LessonAction, type LessonBulkVerb, type LessonTarget } from "../../shared/lessons";
+import { parseLessonFilter } from "../../shared/lesson-filter";
+import { parsePolicyOverrides, type AdmissionPolicyOverrides, type PolicyScope } from "../../shared/admission-policy";
+import {
+  EXPORT_CONTENTS, type ExportContent, type ExportRequest, type ExportScopeArg, type ImportApplyRequest, type Resolution, type StarterTarget,
+} from "../../shared/config-io";
 import { EPIC_NAME_LIMIT } from "../epics/epic-service";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 import { M } from "../strings";
@@ -307,10 +312,38 @@ export function lessonRunIdArg(v: unknown): number {
 }
 
 /** 复盘规矩页的操作。 */
+/** 批量动作的目标：id 列表（1..5000 个正整数）或筛选条件，二者取一。 */
+/** 批量动作的 expect：没给就不检查。 */
+function expectArg(v: unknown): { expect?: number } {
+  if (v === undefined) return {};
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw new Error("invalid lesson action");
+  return { expect: v };
+}
+
+export function lessonTargetArg(v: unknown): LessonTarget {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("invalid lesson target");
+  const keys = Object.keys(o);
+  if (keys.length !== 1) throw new Error("invalid lesson target");
+  if (keys[0] === "ids") {
+    if (!Array.isArray(o.ids) || o.ids.length > MAX_TARGET_IDS) throw new Error("invalid lesson target");
+    return { ids: o.ids.map(lessonIdArg) };
+  }
+  if (keys[0] === "filter") return { filter: parseLessonFilter(o.filter) };
+  throw new Error("invalid lesson target");
+}
+
 export function lessonActionArg(v: unknown): LessonAction {
   const o = v as Record<string, unknown> | null;
   if (!o || typeof o !== "object") throw new Error("invalid lesson action");
   switch (o.op) {
+    case "bulk":
+      if (typeof o.verb !== "string" || !LESSON_BULK_VERBS.includes(o.verb as LessonBulkVerb)) throw new Error("invalid lesson action");
+      return { op: "bulk", verb: o.verb as LessonBulkVerb, target: lessonTargetArg(o.target), ...expectArg(o.expect) };
+    case "acceptRecommended":
+      return { op: "acceptRecommended", ...(o.target === undefined ? {} : { target: lessonTargetArg(o.target) }), ...expectArg(o.expect) };
+    case "undoBatch":
+      return { op: "undoBatch", batchId: batchIdArg(o.batchId) };
     case "confirm":
       return o.text === undefined ? { op: "confirm", id: lessonIdArg(o.id) } : { op: "confirm", id: lessonIdArg(o.id), text: lessonTextArg(o.text) };
     case "reject":
@@ -357,6 +390,27 @@ export function lessonActionArg(v: unknown): LessonAction {
   }
 }
 
+/** 批次 id：正整数。 */
+export function batchIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error("invalid batch id");
+  return v;
+}
+
+/** 批次历史的分页：limit 1..500，beforeId 是上一页最后一个的 id。 */
+export function batchListArg(v: unknown): { limit?: number; beforeId?: number } {
+  if (v === undefined || v === null) return {};
+  const o = v as Record<string, unknown>;
+  if (typeof o !== "object" || Array.isArray(o)) throw new Error("invalid batch list");
+  for (const k of Object.keys(o)) if (k !== "limit" && k !== "beforeId") throw new Error("invalid batch list");
+  const out: { limit?: number; beforeId?: number } = {};
+  if (o.limit !== undefined) {
+    if (typeof o.limit !== "number" || !Number.isSafeInteger(o.limit) || o.limit < 1 || o.limit > 500) throw new Error("invalid batch list");
+    out.limit = o.limit;
+  }
+  if (o.beforeId !== undefined) out.beforeId = batchIdArg(o.beforeId);
+  return out;
+}
+
 /** 可用状态页的操作：只有手动暂停 / 恢复复盘。 */
 export function availabilityActionArg(v: unknown): AvailabilityAction {
   const o = v as Record<string, unknown> | null;
@@ -364,4 +418,92 @@ export function availabilityActionArg(v: unknown): AvailabilityAction {
   if (o.op === "resumeLessons") return { op: "resumeLessons" };
   if (o.op === "pauseLessons") return { op: "pauseLessons" };
   throw new Error("invalid availability action");
+}
+
+// ---- 准入策略、导入导出（契约 4.2 / 4.3）
+
+const objArg = (v: unknown, what: string, keys: readonly string[]): Record<string, unknown> => {
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error(`invalid ${what}`);
+  for (const k of Object.keys(v)) if (!keys.includes(k)) throw new Error(`invalid ${what}`);
+  return v as Record<string, unknown>;
+};
+const posInt = (v: unknown, what: string): number => {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error(`invalid ${what}`);
+  return v;
+};
+
+/** 策略的一层：global / product / repo。 */
+export function policyScopeArg(v: unknown): PolicyScope {
+  const o = objArg(v, "policy scope", ["kind", "productId", "slug"]);
+  if (o.kind === "global" && o.productId === undefined && o.slug === undefined) return { kind: "global" };
+  if (o.kind === "product" && o.slug === undefined) return { kind: "product", productId: posInt(o.productId, "policy scope") };
+  if (o.kind === "repo" && o.productId === undefined) return { kind: "repo", slug: lessonSlugArg(o.slug) };
+  throw new Error("invalid policy scope");
+}
+
+/** 改一层：覆盖整个换掉（值在服务里再按键校验）。 */
+export function policySetArg(v: unknown): { scope: PolicyScope; overrides: AdmissionPolicyOverrides } {
+  const o = objArg(v, "policy change", ["scope", "overrides"]);
+  return { scope: policyScopeArg(o.scope), overrides: parsePolicyOverrides(o.overrides) };
+}
+
+export function exportRequestArg(v: unknown): ExportRequest {
+  const o = objArg(v, "export request", ["scope", "options", "starter"]);
+  const sc = objArg(o.scope, "export scope", ["kind", "productId", "slug"]);
+  let scope: ExportScopeArg;
+  if (sc.kind === "all" && sc.productId === undefined && sc.slug === undefined) scope = { kind: "all" };
+  else if (sc.kind === "product" && sc.slug === undefined) scope = { kind: "product", productId: posInt(sc.productId, "export scope") };
+  else if (sc.kind === "repo" && sc.productId === undefined) scope = { kind: "repo", slug: lessonSlugArg(sc.slug) };
+  else throw new Error("invalid export scope");
+  const op = objArg(o.options, "export options", ["content", "includeSourceUrls"]);
+  if (!(EXPORT_CONTENTS as readonly unknown[]).includes(op.content) || typeof op.includeSourceUrls !== "boolean") throw new Error("invalid export options");
+  const req: ExportRequest = { scope, options: { content: op.content as ExportContent, includeSourceUrls: op.includeSourceUrls } };
+  if (o.starter !== undefined) {
+    const st = objArg(o.starter, "starter pack", ["name"]);
+    if (typeof st.name !== "string" || !st.name.trim() || st.name.length > 200) throw new Error("invalid starter pack");
+    req.starter = { name: st.name.trim() };
+  }
+  return req;
+}
+
+const TOKEN_RE = /^[0-9a-f-]{36}$/;
+function tokenArg(v: unknown): string {
+  if (typeof v !== "string" || !TOKEN_RE.test(v)) throw new Error("invalid import token");
+  return v;
+}
+
+export function starterTargetArg(v: unknown): StarterTarget {
+  const o = objArg(v, "starter target", ["kind", "productId", "slug"]);
+  if (o.kind === "repo" && o.productId === undefined) return { kind: "repo", slug: lessonSlugArg(o.slug) };
+  if (o.kind === "product" && o.slug === undefined) return { kind: "product", productId: posInt(o.productId, "starter target") };
+  throw new Error("invalid starter target");
+}
+
+export function importRetargetArg(v: unknown): { token: string; target: StarterTarget } {
+  const o = objArg(v, "import retarget", ["token", "target"]);
+  return { token: tokenArg(o.token), target: starterTargetArg(o.target) };
+}
+
+const RESOLUTIONS = ["imported", "local"] as const;
+const MAX_RESOLUTIONS = 100_000;
+export function importApplyArg(v: unknown): ImportApplyRequest {
+  const o = objArg(v, "import", ["token", "mode", "bulk", "resolutions"]);
+  if (o.mode !== "merge" && o.mode !== "replace") throw new Error("invalid import");
+  const req: ImportApplyRequest = { token: tokenArg(o.token), mode: o.mode };
+  if (o.bulk !== undefined) {
+    if (!(RESOLUTIONS as readonly unknown[]).includes(o.bulk)) throw new Error("invalid import");
+    req.bulk = o.bulk as Resolution;
+  }
+  if (o.resolutions !== undefined) {
+    const r = objArg(o.resolutions, "import", Object.keys((o.resolutions ?? {}) as object));
+    const entries = Object.entries(r);
+    if (entries.length > MAX_RESOLUTIONS) throw new Error("invalid import");
+    const out: Record<string, Resolution> = {};
+    for (const [k, val] of entries) {
+      if (!/^[\w-]{1,100}:[0-9a-f]{16}$/.test(k) || !(RESOLUTIONS as readonly unknown[]).includes(val)) throw new Error("invalid import");
+      out[k] = val as Resolution;
+    }
+    req.resolutions = out;
+  }
+  return req;
 }

@@ -50,6 +50,16 @@ export const SETTING_DEFAULTS = {
   butlerPatrolTime: "",
   /** 界面和提示词的语言：auto | zh | en（设计文档 2026-10-26）。迁移 7 给老用户写 zh。 */
   language: "auto",
+  /** 准入策略的版本：每次改策略（任一层）加一，评分时写进 score_policy_version。不在设置页上。 */
+  admissionPolicyVersion: "1",
+  /** 每隔几天自动备份一次全部配置到 <BUTLER_HOME>/backups（契约 4.3）；0 = 关（默认）。 */
+  configBackupIntervalDays: "0",
+  /** 自动备份留几个（最新的）。 */
+  configBackupKeep: "10",
+  /** 多少天没导出也没备份就提醒一次；0 = 不提醒。 */
+  configExportReminderDays: "30",
+  /** 上次手动导出的时间（毫秒，字符串）；空 = 从没导出过。不在设置页上。 */
+  configLastExportAt: "",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

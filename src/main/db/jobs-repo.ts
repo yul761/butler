@@ -10,7 +10,9 @@ export const JOB_PATROL = "butler_patrol";
 export const JOB_LESSONS_DAILY = "lessons_daily";
 /** 一次性：给所有 ticket（含归档）补链接 PR。记成 ok 之后不再跑。 */
 export const JOB_PR_BACKFILL = "pr_backfill";
-export type JobName = typeof JOB_NIGHTLY | typeof JOB_MORNING | typeof JOB_PATROL | typeof JOB_LESSONS_DAILY | typeof JOB_PR_BACKFILL;
+/** 定期自动备份配置（设置 configBackupIntervalDays）。 */
+export const JOB_CONFIG_BACKUP = "config_backup";
+export type JobName = typeof JOB_NIGHTLY | typeof JOB_MORNING | typeof JOB_PATROL | typeof JOB_LESSONS_DAILY | typeof JOB_PR_BACKFILL | typeof JOB_CONFIG_BACKUP;
 
 export type JobState = JobStateView;
 

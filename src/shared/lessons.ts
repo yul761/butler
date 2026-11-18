@@ -23,6 +23,26 @@ export interface LessonRunningItem {
 }
 
 export type LessonStatus = "pending" | "confirmed" | "disabled" | "rejected";
+/** 准入流水线的判断（和 status 分开：status 决定进不进 session）。manual = 人决定过；auto = 流水线推荐 / 自动准入；shelved = 搁置，见 shelvedReason。 */
+export type LessonAdmission = "pending" | "auto" | "manual" | "shelved";
+export const LESSON_ADMISSIONS: readonly LessonAdmission[] = ["pending", "auto", "manual", "shelved"];
+export type LessonStrength = "must" | "should";
+export const LESSON_STRENGTHS: readonly LessonStrength[] = ["must", "should"];
+/** 可检查性：能写成确定性检查 / 只能留文字 / 已转成检查 / 已被仓库现有检查覆盖。null = 还没分类。 */
+export type LessonCheckability = "checkable" | "prose" | "converted" | "covered";
+export const LESSON_CHECKABILITIES: readonly LessonCheckability[] = ["checkable", "prose", "converted", "covered"];
+export const LESSON_STATUSES: readonly LessonStatus[] = ["pending", "confirmed", "disabled", "rejected"];
+/** 搁置原因；流水线以后可能加别的，所以页面对不认识的原因显示原文。 */
+export type LessonShelvedReason = "conflict" | "generality" | "low_score" | "clarity" | "backtest_fp" | "covered" | "duplicate" | (string & {});
+/** 评分的一个分项：0..1 的值和一句理由；还没有数据时整个分项不出现。 */
+export interface LessonScorePart { value: number; reason: string }
+export interface LessonScoreParts {
+  evidence?: LessonScorePart;
+  clarity?: LessonScorePart;
+  consistency?: LessonScorePart;
+  verifiability?: LessonScorePart;
+  performance?: LessonScorePart;
+}
 export type LessonScope = { kind: "repo"; slug: string } | { kind: "product"; productId: number };
 
 export interface LessonSource {
@@ -47,6 +67,27 @@ export interface Lesson {
   lastSeenAt: number;
   createdAt: number;
   sources: LessonSource[];
+  /** 适用路径 glob；空 = 在它的仓库或产品里处处适用。 */
+  scopeGlobs: string[];
+  scopeLang: string | null;
+  scopeLayer: string | null;
+  strength: LessonStrength | null;
+  checkability: LessonCheckability | null;
+  admission: LessonAdmission;
+  shelvedReason: LessonShelvedReason | null;
+  /** 冲突时的另一条规矩。 */
+  shelvedRef: number | null;
+  /** 最近一次改动它的批次。 */
+  batchId: number | null;
+  /** 被合并进的那条；合并过的行留着（撤销用），但不在任何列表里出现。 */
+  mergedInto: number | null;
+  score: number | null;
+  scoreParts: LessonScoreParts | null;
+  scoredAt: number | null;
+  scorePolicyVersion: number | null;
+  /** 由降级后的模型产出（模型路由，契约 4.1）。 */
+  degraded: boolean;
+  degradedFrom: string | null;
 }
 
 export type LessonOrigin = "backfill" | "merged" | "daily";
@@ -162,7 +203,27 @@ export interface LessonsState {
   queue: LessonQueueView;
 }
 
+/** 准入、范围、评分这些字段都还没填时的样子（迁移后的默认值）。 */
+export const LESSON_FIELD_DEFAULTS = {
+  scopeGlobs: [] as string[], scopeLang: null, scopeLayer: null, strength: null, checkability: null, admission: "pending",
+  shelvedReason: null, shelvedRef: null, batchId: null, mergedInto: null, score: null, scoreParts: null, scoredAt: null,
+  scorePolicyVersion: null, degraded: false, degradedFrom: null,
+} as const satisfies Omit<Lesson, "id" | "scope" | "text" | "why" | "status" | "hits" | "lastSeenAt" | "createdAt" | "sources">;
+
+/** 批量动作（契约 4.4）。 */
+export type LessonBulkVerb = "confirm" | "reject" | "disable" | "enable" | "delete";
+export const LESSON_BULK_VERBS: readonly LessonBulkVerb[] = ["confirm", "reject", "disable", "enable", "delete"];
+/** 一次批量动作按 id 给的上限（按筛选条件给的不设上限）。 */
+export const MAX_TARGET_IDS = 5000;
+/** 批量动作的目标：一串 id（最多 5000 个），或一个筛选条件（主进程在事务里按它找行）。 */
+export type LessonTarget = { ids: number[] } | { filter: import("./lesson-filter").LessonFilter };
+
 export type LessonAction =
+  /** expect：页面按钮上的数。真会改的比它多（列表在页面没刷新时变了）就什么都不改，返回 stale。 */
+  | { op: "bulk"; verb: LessonBulkVerb; target: LessonTarget; expect?: number }
+  /** 接受全部推荐：待确认、admission = auto 的全部确认；target 可再缩小范围。 */
+  | { op: "acceptRecommended"; target?: LessonTarget; expect?: number }
+  | { op: "undoBatch"; batchId: number }
   | { op: "confirm"; id: number; text?: string }
   | { op: "reject"; id: number }
   | { op: "edit"; id: number; text: string }
@@ -184,7 +245,10 @@ export type LessonAction =
   /** 在一个看得见的 Claude session 里打开这次运行；成功时 sessionId 是它的终端 id。 */
   | { op: "openInClaude"; runId: number };
 
-export type LessonActResult = { ok: true; sessionId?: string } | { ok: false; reason: string };
+/** 改规矩的动作成功时带上它记成的批次（没有一行真变时 batchId 为 null）、改了几行、跳过几行。 */
+export type LessonActResult =
+  | { ok: true; sessionId?: string; batchId?: number | null; affected?: number; skipped?: number }
+  | { ok: false; reason: string };
 
 /** 送进 session 说明的一行。label 是仓库 slug 或产品名。 */
 export interface SessionLesson {

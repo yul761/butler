@@ -361,6 +361,17 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!IDLE_CLOSE_RE.test(t) || (Number(t) !== 0 && Number(t) < MIN_IDLE_CLOSE_MINUTES)) throw new SettingError(M().idleCloseMinutes);
       return String(Number(t));
     }
+    case "configBackupIntervalDays":
+    case "configExportReminderDays": {
+      const t = value.trim();
+      if (!/^\d{1,3}$/.test(t) || Number(t) > MAX_CONFIG_DAYS) throw new SettingError(key === "configBackupIntervalDays" ? M().configBackupIntervalDays : M().configExportReminderDays);
+      return String(Number(t));
+    }
+    case "configBackupKeep": {
+      const t = value.trim();
+      if (!/^\d{1,3}$/.test(t) || Number(t) < 1) throw new SettingError(M().configBackupKeep);
+      return String(Number(t));
+    }
     case "language": {
       const t = value.trim();
       if (!(LANG_SETTINGS as readonly string[]).includes(t)) throw new SettingError(M().language);
@@ -408,6 +419,20 @@ export function idleCloseMinutes(s: Pick<SettingsRepo, "get">): number {
   const n = Number(t);
   return IDLE_CLOSE_RE.test(t) && (n === 0 || n >= MIN_IDLE_CLOSE_MINUTES) ? n : Number(SETTING_DEFAULTS.idleCloseMinutes);
 }
+
+/** 备份间隔和导出提醒最多一年。 */
+const MAX_CONFIG_DAYS = 365;
+const configNumber = (s: Pick<SettingsRepo, "get">, key: "configBackupIntervalDays" | "configBackupKeep" | "configExportReminderDays", ok: (n: number) => boolean): number => {
+  const t = s.get(key).trim();
+  const n = Number(t);
+  return /^\d{1,3}$/.test(t) && ok(n) ? n : Number(SETTING_DEFAULTS[key]);
+};
+/** 自动备份间隔（天）：0 = 关；存的值不合法时用默认（关）。 */
+export const configBackupIntervalDays = (s: Pick<SettingsRepo, "get">) => configNumber(s, "configBackupIntervalDays", (n) => n <= MAX_CONFIG_DAYS);
+/** 自动备份留几个：至少 1。 */
+export const configBackupKeep = (s: Pick<SettingsRepo, "get">) => configNumber(s, "configBackupKeep", (n) => n >= 1);
+/** 导出提醒（天）：0 = 不提醒。 */
+export const configExportReminderDays = (s: Pick<SettingsRepo, "get">) => configNumber(s, "configExportReminderDays", (n) => n <= MAX_CONFIG_DAYS);
 
 /** Butler 总控每天巡检的时刻（butlerPatrolTime，BTL-190 第 5 点）：关着或者存的值不合法时为 null（不猜一个时间）。 */
 export function butlerPatrolTime(s: Pick<SettingsRepo, "get">): { h: number; m: number } | null {

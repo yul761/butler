@@ -450,3 +450,29 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .lesson-run.selected { border-left: 2px solid var(--accent); padding-left: 6px; }
 .lesson-run-title { font-weight: 600; }
 .lessons-queue-bar .pill { white-space: normal; }
+
+/* 批量操作、批次历史、导入导出（契约 4.3 / 4.4） */
+.lesson-tags { display: inline-flex; flex-wrap: wrap; gap: 2px; margin: 2px 0; }
+.lessons-notice { margin: 8px 0; padding: 6px 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--panel); }
+.lessons-bulk { margin: 12px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+.lessons-bulk h3 { margin-top: 0; }
+.bulk-filters { align-items: flex-start; }
+.bulk-pick { border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px 4px; margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.bulk-pick legend { font-size: 11px; color: var(--muted); padding: 0 4px; }
+.bulk-score { width: 9em; }
+.lesson-run.undone .lesson-run-title { color: var(--muted); }
+.lesson-batch-items { list-style: none; margin: 6px 0; padding: 0; }
+.lesson-batch-items li { padding: 3px 0; border-bottom: 1px solid var(--border); white-space: pre-wrap; }
+.config-io section { margin: 12px 0; }
+.config-io label.inline { display: inline-flex; gap: 6px; align-items: center; margin-right: 12px; }
+.config-io-mode { border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; margin: 8px 0; display: flex; flex-direction: column; gap: 4px; }
+.config-io-section h4 { margin: 12px 0 2px; font-size: 12px; }
+.config-io-rows { list-style: none; margin: 4px 0; padding: 0; }
+.config-io-row { padding: 6px 8px; margin: 4px 0; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+.config-io-diffs { margin: 2px 0 2px 16px; padding: 0; }
+.policy-table { width: 100%; border-collapse: collapse; margin: 4px 0 10px; }
+.policy-table th, .policy-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.policy-table th { font-size: 11px; color: var(--muted); font-weight: 600; }
+.policy-table td.policy-key code { font-size: 11px; }
+.policy-table input { width: 7em; }
+.policy-group { margin: 10px 0 2px; font-size: 12px; }

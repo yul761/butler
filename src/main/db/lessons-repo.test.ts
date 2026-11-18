@@ -108,7 +108,7 @@ describe("lessons", () => {
     expect(repo.get(id)?.sources.map((s) => s.prNumber)).toEqual([7, 8]);
   });
 
-  it("merge sums hits, unions sources, takes max last_seen, removes drop", () => {
+  it("merge sums hits, unions sources, takes max last_seen, and hides drop behind merged_into", () => {
     const { repo } = setup();
     const keep = add(repo, "k");
     const drop = add(repo, "d");
@@ -118,10 +118,52 @@ describe("lessons", () => {
     const l = repo.get(keep)!;
     expect(l).toMatchObject({ text: "merged", hits: 4, lastSeenAt: 50 });
     expect(l.sources.map((s) => s.prNumber).sort()).toEqual([7, 8, 9]);
-    expect(repo.get(drop)).toBeNull();
+    expect(repo.get(drop)?.mergedInto).toBe(keep);
+    expect(repo.lessons().map((x) => x.id)).toEqual([keep]);
+    expect(repo.lessons({ includeMerged: true }).map((x) => x.id)).toEqual([keep, drop]);
+    expect(repo.resolveMerged(drop)?.id).toBe(keep);
     expect(repo.source(l.sources[0].id)?.prNumber).toBe(l.sources[0].prNumber);
     repo.remove(keep);
     expect(repo.get(keep)).toBeNull();
+    expect(repo.get(drop)?.mergedInto).toBeNull();
+  });
+
+  it("re-points older merges at the new keeper and does not count merged pending rows", () => {
+    const { repo } = setup();
+    const a = add(repo, "a");
+    const b = add(repo, "b");
+    const c = add(repo, "c");
+    repo.merge(b, a, "b+a", 2);
+    repo.merge(c, b, "c+b", 3);
+    expect(repo.get(a)?.mergedInto).toBe(c);
+    expect(repo.resolveMerged(a)?.id).toBe(c);
+    expect(repo.pendingCount()).toBe(1);
+  });
+
+  it("reads defaults for the new fields and patches only what is given", () => {
+    const { repo } = setup();
+    const id = add(repo, "x");
+    expect(repo.get(id)).toMatchObject({
+      scopeGlobs: [], scopeLang: null, scopeLayer: null, strength: null, checkability: null, admission: "pending",
+      shelvedReason: null, shelvedRef: null, batchId: null, mergedInto: null, score: null, scoreParts: null, scoredAt: null,
+      scorePolicyVersion: null, degraded: false, degradedFrom: null,
+    });
+    repo.setFields(id, { scopeGlobs: ["src/**/*.ts"], strength: "must", checkability: "prose", admission: "shelved", shelvedReason: "generality", score: 0.42, scoreParts: { evidence: { value: 0.2, reason: "one PR" } }, degraded: true, degradedFrom: "high" }, 9);
+    expect(repo.get(id)).toMatchObject({
+      scopeGlobs: ["src/**/*.ts"], strength: "must", checkability: "prose", admission: "shelved", shelvedReason: "generality",
+      score: 0.42, scoreParts: { evidence: { value: 0.2, reason: "one PR" } }, degraded: true, degradedFrom: "high", text: "x",
+    });
+    repo.setFields(id, { score: null }, 10);
+    expect(repo.get(id)).toMatchObject({ score: null, strength: "must" });
+  });
+
+  it("filters by an id list", () => {
+    const { repo } = setup();
+    const a = add(repo, "a");
+    add(repo, "b");
+    const c = add(repo, "c");
+    expect(repo.lessons({ ids: [c, a] }).map((l) => l.id)).toEqual([a, c]);
+    expect(repo.lessons({ ids: [] })).toEqual([]);
   });
 });
 

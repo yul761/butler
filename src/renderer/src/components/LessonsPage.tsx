@@ -6,6 +6,11 @@ import { queueBarButtons, queueBarText, sourceLabel, TONE_PILL } from "../lesson
 import { lessonsFor, lessonsTree, pruneLessonsUi, type LessonsSelection } from "../lessons-view";
 import { S } from "../strings";
 import { LessonRuns } from "./LessonRuns";
+import { lessonTags, livePicked } from "../lessons-bulk-view";
+import { BatchNotice, LessonBulkBar, LessonTags, runBatch, type BatchNoticeState } from "./LessonBulkBar";
+import { LessonBatches } from "./LessonBatches";
+import { ConfigIoPanel } from "./ConfigIoPanel";
+import type { LessonFilter } from "../../../shared/lesson-filter";
 import { useStateRefetch } from "./useStateRefetch";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -13,6 +18,8 @@ const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "nume
 /** 只有界面状态放在这里；数据都等 stateChanged 之后重取。 */
 export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void }) {
   const state = useStateRefetch("lessons", api.lessonsState);
+  // 「该导出了」的提醒在规矩标签页也显示（导入导出标签页里另有一条）。
+  const ioStatus = useStateRefetch("lessons-io-status", api.configStatus);
   const [sel, setSel] = useState<LessonsSelection | null>(null);
   /** 失败原因，按"那一条"的键存：lesson-<id>、repo-<slug>、product-<id>、product-<id>-repo-<slug>、new-product、suggest-<i>。 */
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -25,6 +32,12 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [newName, setNewName] = useState("");
   const [newSlugs, setNewSlugs] = useState<string[]>([]);
+  /** 页面顶上的标签：规矩 / 批次历史 / 导入导出。 */
+  const [pageTab, setPageTab] = useState<"lessons" | "batches" | "io">("lessons");
+  /** 待确认里勾选的（批量确认 / 拒绝选中的）。 */
+  const [pendingPicked, setPendingPicked] = useState<number[]>([]);
+  /** 最近一个批次的提示条（可以撤销）。 */
+  const [notice, setNotice] = useState<BatchNoticeState | null>(null);
 
   /** 换选中项：编辑、合并、勾选、待确认的删除都不带过去。 */
   const select = (next: LessonsSelection) => {
@@ -32,6 +45,7 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
     setEditing(null);
     setMerging(null);
     setChecked([]);
+    setPendingPicked([]);
     setConfirmingDelete(null);
     setTab("lessons");
     setSelectedRunId(null);
@@ -73,6 +87,11 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
   const noRepos = s.repos.length === 0 && s.products.length === 0 && s.unknownRepos.length === 0;
   const repoBySlug = new Map(s.repos.map((r) => [r.slug, r]));
   const seenRepo = new Set<string>();
+  // 批量操作的范围：左边选中的仓库 / 产品；没选就是全部。换范围时筛选条件重来。
+  const selProduct = sel?.kind === "product" ? s.products.find((p) => p.id === sel.id) : undefined;
+  const bulkBase: LessonFilter = sel?.kind === "repo" ? { slug: sel.slug } : sel?.kind === "product" ? { productId: sel.id } : {};
+  const bulkLabel = sel?.kind === "repo" ? sel.slug : selProduct ? selProduct.name : null;
+  const bulkKey = sel ? (sel.kind === "repo" ? `repo-${sel.slug}` : `product-${sel.id}`) : "all";
 
   const sources = (l: Lesson) =>
     l.sources.length > 0 && (
@@ -97,10 +116,11 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
           <button className="lessons-select" data-testid={`lessons-repo-${suffix}`} onClick={() => select({ kind: "repo", slug: r.slug })}>{r.slug}</button>
           <span className="muted">{r.lastAnalyzedAt === null ? S.lessonsNever : S.lessonsLastAnalyzed(formatTime(r.lastAnalyzedAt))}</span>
           <span className="muted">{S.lessonsCounts(r.analyzedCount, r.queued, r.failed, r.skipped)}</span>
+          {r.localPath === "" && <span className="pill none" data-testid={`lessons-not-cloned-${suffix}`} title={S.lessonsNotClonedTitle}>{S.lessonsNotCloned}</span>}
           <button
             data-testid={`lessons-backfill-${suffix}`}
-            disabled={!s.ghAvailable}
-            title={s.ghAvailable ? undefined : S.lessonsNoGh}
+            disabled={!s.ghAvailable || r.localPath === ""}
+            title={!s.ghAvailable ? S.lessonsNoGh : r.localPath === "" ? S.lessonsNotClonedTitle : undefined}
             onClick={() => void act(key, { op: "backfill", slug: r.slug })}
           >
             {S.lessonsBackfill}
@@ -212,6 +232,23 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
     const isEditing = (l: Lesson) => editing?.id === l.id;
     const toggleCheck = (id: number) => setChecked((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]));
     const picked = confirmed.filter((l) => checked.includes(l.id));
+    const picks = livePicked(pendingPicked, pending);
+    const togglePick = (id: number) => setPendingPicked((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]));
+    // 勾选的几条一起改（一个批次，可撤销）：待确认的确认 / 拒绝，已确认的停用 / 拒绝。
+    const pickedBatch = async (verb: "confirm" | "reject" | "disable", which: "pending" | "confirmed") => {
+      const ids = which === "pending" ? picks : picked.map((l) => l.id);
+      const key = `${which}-picked`;
+      const message = await runBatch({ op: "bulk", verb, target: { ids } }, verb, setNotice);
+      setErrors((e) => {
+        const next = { ...e };
+        if (message) next[key] = message;
+        else delete next[key];
+        return next;
+      });
+      if (message) return;
+      if (which === "pending") setPendingPicked([]);
+      else setChecked([]);
+    };
     const startMerge = () => {
       const [a, b] = picked;
       const keep = b.hits > a.hits ? b : a;
@@ -223,9 +260,34 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
         {sel.kind === "repo" && tabs}
         <h3>{S.lessonsPendingTitle}</h3>
         {pending.length === 0 && <p className="muted">{S.lessonsNoPending}</p>}
+        {pending.length > 0 && (
+          <div className="lessons-row" data-testid="pending-selection">
+            <label className="inline">
+              <input
+                type="checkbox"
+                data-testid="pending-select-all"
+                checked={picks.length === pending.length}
+                onChange={() => setPendingPicked(picks.length === pending.length ? [] : pending.map((l) => l.id))}
+              />
+              {S.pendingSelectAll}
+            </label>
+            {picks.length > 0 && (
+              <>
+                <span className="muted">{S.pendingSelected(picks.length)}</span>
+                <button className="primary" data-testid="pending-confirm-selected" onClick={() => void pickedBatch("confirm", "pending")}>{S.pendingConfirmSelected}</button>
+                <button data-testid="pending-reject-selected" onClick={() => void pickedBatch("reject", "pending")}>{S.pendingRejectSelected}</button>
+              </>
+            )}
+            {err("pending-picked")}
+          </div>
+        )}
         {pending.map((l) => (
           <div key={l.id} className="lesson pending" data-testid={`lesson-${l.id}`}>
-            <p className="lesson-text">{l.text}</p>
+            <label className="lesson-check">
+              <input type="checkbox" data-testid={`lesson-pick-${l.id}`} checked={picks.includes(l.id)} onChange={() => togglePick(l.id)} />
+              <span className="lesson-text">{l.text}</span>
+            </label>
+            <LessonTags tags={lessonTags(l, S)} />
             {l.why && <p className="muted">{S.lessonsWhy(l.why)}</p>}
             {sources(l)}
             {isEditing(l) ? editor(l) : (
@@ -240,8 +302,14 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
         ))}
         <h3>{S.lessonsConfirmedTitle}</h3>
         {confirmed.length === 0 && <p className="muted">{S.lessonsNoConfirmed}</p>}
-        {picked.length === 2 && !merging && (
-          <button data-testid="lessons-merge" onClick={startMerge}>{S.lessonsMerge}</button>
+        {picked.length > 0 && !merging && (
+          <div className="lessons-row" data-testid="confirmed-selection">
+            <span className="muted">{S.pendingSelected(picked.length)}</span>
+            {picked.length === 2 && <button data-testid="lessons-merge" onClick={startMerge}>{S.lessonsMerge}</button>}
+            <button data-testid="confirmed-disable-selected" onClick={() => void pickedBatch("disable", "confirmed")}>{S.confirmedDisableSelected}</button>
+            <button data-testid="confirmed-reject-selected" onClick={() => void pickedBatch("reject", "confirmed")}>{S.pendingRejectSelected}</button>
+            {err("confirmed-picked")}
+          </div>
         )}
         {merging && (
           <div className="lesson-editor">
@@ -274,6 +342,7 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
                 <span className="lesson-text">{l.text}</span>
                 {l.status === "disabled" && <span className="pill none">{S.lessonsDisabledTag}</span>}
               </label>
+              <LessonTags tags={lessonTags(l, S)} />
               <p className="muted">{S.lessonsHits(l.hits)} · {S.lessonsLastSeen(formatTime(l.lastSeenAt))}</p>
               {sources(l)}
               {isEditing(l) ? editor(l) : (
@@ -307,7 +376,25 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
     <div className="page lessons-page">
       <h2>{S.lessons}</h2>
       <p className="muted">{S.lessonsIntro}</p>
-      {noRepos ? (
+      <div className="lessons-tabs lessons-row" role="tablist">
+        {(["lessons", "batches", "io"] as const).map((t) => (
+          <button key={t} role="tab" aria-selected={pageTab === t} className={pageTab === t ? "primary" : undefined} data-testid={`lessons-page-tab-${t}`} onClick={() => setPageTab(t)}>
+            {S.lessonsPageTab[t]}
+          </button>
+        ))}
+      </div>
+      {notice && <BatchNotice notice={notice} onChange={setNotice} />}
+      {pageTab === "lessons" && ioStatus?.remind && (
+        <p className="lessons-suggest" role="status" data-testid="lessons-export-reminder">
+          <span>{S.ioReminder(ioStatus.reminderDays)}</span>
+          <button className="link" data-testid="lessons-export-reminder-open" onClick={() => setPageTab("io")}>{S.ioOpenTab}</button>
+        </p>
+      )}
+      {pageTab === "batches" ? (
+        <LessonBatches />
+      ) : pageTab === "io" ? (
+        <ConfigIoPanel s={s} />
+      ) : noRepos ? (
         <p className="muted" data-testid="lessons-empty">{S.lessonsEmpty}</p>
       ) : (
         <>
@@ -361,6 +448,7 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
             </button>
             {err("new-product")}
           </div>
+          <LessonBulkBar key={bulkKey} lessons={s.lessons} base={bulkBase} scopeLabel={bulkLabel} onNotice={setNotice} />
           {detail()}
         </>
       )}

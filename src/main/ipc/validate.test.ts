@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
+import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
 import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
@@ -218,6 +219,38 @@ describe("inbox IPC arguments (BTL-190 2+3)", () => {
   });
 });
 
+describe("bulk lesson actions", () => {
+  it("validate the verb, the target and the batch id", () => {
+    expect(lessonActionArg({ op: "bulk", verb: "confirm", target: { filter: { slug: "acme/web", status: ["pending"] } } })).toEqual({
+      op: "bulk", verb: "confirm", target: { filter: { slug: "acme/web", status: ["pending"] } },
+    });
+    expect(lessonActionArg({ op: "bulk", verb: "delete", target: { ids: [1, 2] } })).toEqual({ op: "bulk", verb: "delete", target: { ids: [1, 2] } });
+    expect(lessonActionArg({ op: "acceptRecommended" })).toEqual({ op: "acceptRecommended" });
+    expect(lessonActionArg({ op: "bulk", verb: "confirm", target: { filter: { maxId: 40 } }, expect: 12 })).toEqual({ op: "bulk", verb: "confirm", target: { filter: { maxId: 40 } }, expect: 12 });
+    expect(lessonActionArg({ op: "acceptRecommended", expect: 0 })).toEqual({ op: "acceptRecommended", expect: 0 });
+    for (const bad of [-1, 1.5, "3", null]) expect(() => lessonActionArg({ op: "bulk", verb: "confirm", target: { ids: [1] }, expect: bad })).toThrow();
+    expect(() => lessonActionArg({ op: "bulk", verb: "confirm", target: { filter: { maxId: -1 } } })).toThrow();
+    expect(lessonActionArg({ op: "acceptRecommended", target: { filter: {} } })).toEqual({ op: "acceptRecommended", target: { filter: {} } });
+    expect(lessonActionArg({ op: "undoBatch", batchId: 3 })).toEqual({ op: "undoBatch", batchId: 3 });
+    for (const bad of [
+      { op: "bulk", verb: "explode", target: { ids: [1] } },
+      { op: "bulk", verb: "confirm" },
+      { op: "bulk", verb: "confirm", target: { ids: [1], filter: {} } },
+      { op: "bulk", verb: "confirm", target: { ids: [0] } },
+      { op: "bulk", verb: "confirm", target: { ids: Array.from({ length: 5001 }, (_, i) => i + 1) } },
+      { op: "bulk", verb: "confirm", target: { filter: { status: ["nope"] } } },
+      { op: "bulk", verb: "confirm", target: { other: 1 } },
+      { op: "undoBatch", batchId: 0 },
+      { op: "undoBatch", batchId: "1" },
+    ]) expect(() => lessonActionArg(bad), JSON.stringify(bad).slice(0, 80)).toThrow();
+    expect(() => lessonTargetArg([])).toThrow();
+    expect(batchIdArg(1)).toBe(1);
+    expect(batchListArg(undefined)).toEqual({});
+    expect(batchListArg({ limit: 50, beforeId: 9 })).toEqual({ limit: 50, beforeId: 9 });
+    for (const bad of [{ limit: 0 }, { limit: 501 }, { beforeId: -1 }, { other: 1 }, []]) expect(() => batchListArg(bad)).toThrow();
+  });
+});
+
 describe("lessonActionArg", () => {
   it("rejects blank text, unknown ops and bad fields", () => {
     expect(() => lessonActionArg({ op: "edit", id: 1, text: "  " })).toThrow();
@@ -293,5 +326,50 @@ describe("lessonActionArg", () => {
     expect(availabilityActionArg({ op: "resumeLessons" })).toEqual({ op: "resumeLessons" });
     expect(availabilityActionArg({ op: "pauseLessons", extra: 1 })).toEqual({ op: "pauseLessons" });
     for (const bad of [null, undefined, "pauseLessons", {}, { op: "x" }, { op: 1 }]) expect(() => availabilityActionArg(bad)).toThrow();
+  });
+});
+
+describe("policy and config import / export arguments", () => {
+  const tok = "0123abcd-0123-4567-89ab-0123456789ab";
+  it("accepts the three policy layers and checks override values", () => {
+    expect(policyScopeArg({ kind: "global" })).toEqual({ kind: "global" });
+    expect(policyScopeArg({ kind: "product", productId: 2 })).toEqual({ kind: "product", productId: 2 });
+    expect(policyScopeArg({ kind: "repo", slug: "o/web" })).toEqual({ kind: "repo", slug: "o/web" });
+    for (const bad of [null, {}, { kind: "global", slug: "x" }, { kind: "product", productId: 0 }, { kind: "repo" }, { kind: "x" }]) expect(() => policyScopeArg(bad)).toThrow();
+    expect(policySetArg({ scope: { kind: "global" }, overrides: { "score.admitLine": 0.8 } })).toEqual({ scope: { kind: "global" }, overrides: { "score.admitLine": 0.8 } });
+    expect(() => policySetArg({ scope: { kind: "global" }, overrides: { "score.admitLine": 2 } })).toThrow();
+    expect(() => policySetArg({ scope: { kind: "global" }, overrides: { nope: 1 } })).toThrow();
+  });
+
+  it("checks export requests", () => {
+    const options = { content: "all", includeSourceUrls: false };
+    expect(exportRequestArg({ scope: { kind: "all" }, options })).toEqual({ scope: { kind: "all" }, options });
+    expect(exportRequestArg({ scope: { kind: "repo", slug: "o/web" }, options, starter: { name: " pack " } }).starter).toEqual({ name: "pack" });
+    for (const bad of [
+      { scope: { kind: "all" }, options: { content: "x", includeSourceUrls: false } },
+      { scope: { kind: "all" }, options: { content: "all" } },
+      { scope: { kind: "product" }, options },
+      { scope: { kind: "all" }, options, starter: { name: "" } },
+      { scope: { kind: "all" }, options, extra: 1 },
+    ]) expect(() => exportRequestArg(bad)).toThrow();
+  });
+
+  it("checks import apply and retarget requests", () => {
+    const fp = "0123456789abcdef";
+    expect(importApplyArg({ token: tok, mode: "merge" })).toEqual({ token: tok, mode: "merge" });
+    expect(importApplyArg({ token: tok, mode: "replace", bulk: "local", resolutions: { [`lessons:${fp}`]: "imported" } })).toEqual({
+      token: tok, mode: "replace", bulk: "local", resolutions: { [`lessons:${fp}`]: "imported" },
+    });
+    for (const bad of [
+      { token: "x", mode: "merge" },
+      { token: tok, mode: "both" },
+      { token: tok, mode: "merge", bulk: "mine" },
+      { token: tok, mode: "merge", resolutions: { "lessons:zz": "imported" } },
+      { token: tok, mode: "merge", resolutions: { [`lessons:${fp}`]: "maybe" } },
+      { token: tok, mode: "merge", resolutions: [] },
+    ]) expect(() => importApplyArg(bad)).toThrow();
+    expect(importRetargetArg({ token: tok, target: { kind: "repo", slug: "o/web" } })).toEqual({ token: tok, target: { kind: "repo", slug: "o/web" } });
+    expect(starterTargetArg({ kind: "product", productId: 4 })).toEqual({ kind: "product", productId: 4 });
+    expect(() => starterTargetArg({ kind: "all" })).toThrow();
   });
 });

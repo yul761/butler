@@ -3,6 +3,9 @@ import type { Lang } from "../../shared/i18n";
 import { IPC, type IpcResult } from "../../shared/ipc";
 import type { PrStagesScope, PrStagesTicket } from "../../shared/pr-stages";
 import type { AvailabilityAction, AvailabilityView } from "../../shared/availability";
+import type { BatchDetail, BatchView } from "../../shared/batches";
+import type { AdmissionPolicyOverrides, AdmissionPolicyView, PolicyScope } from "../../shared/admission-policy";
+import type { ConfigIoStatus, ExportRequest, ExportResult, ImportApplyRequest, ImportApplyResult, ImportPreviewResult, StarterTarget } from "../../shared/config-io";
 import type { LessonAction, LessonActResult, LessonQueueRowView, LessonRunDetail, LessonsState } from "../../shared/lessons";
 import type { MemoryView, WhyEntry } from "../../shared/memory";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
@@ -105,6 +108,17 @@ export const api = {
   lessonsRuns: (slug: string) => call<LessonQueueRowView[]>(IPC.lessonsRuns, slug),
   lessonsRun: (id: number) => call<LessonRunDetail | null>(IPC.lessonsRun, id),
   lessonsPending: () => call<number>(IPC.lessonsPending),
+  lessonsBatches: (opts?: { limit?: number; beforeId?: number }) => call<BatchView[]>(IPC.lessonsBatches, opts ?? {}),
+  lessonsBatch: (id: number) => call<BatchDetail | null>(IPC.lessonsBatch, id),
+  policiesGet: (scope: PolicyScope) => call<AdmissionPolicyView>(IPC.policiesGet, scope),
+  policiesSet: (scope: PolicyScope, overrides: AdmissionPolicyOverrides) => call<{ batchId: number | null; version: number }>(IPC.policiesSet, { scope, overrides }),
+  configStatus: () => call<ConfigIoStatus>(IPC.configStatus),
+  configExport: (req: ExportRequest) => call<ExportResult>(IPC.configExport, req),
+  configImportPreview: () => call<ImportPreviewResult>(IPC.configImportPreview),
+  configImportRetarget: (token: string, target: StarterTarget) => call<ImportPreviewResult>(IPC.configImportRetarget, { token, target }),
+  configImportApply: (req: ImportApplyRequest) => call<ImportApplyResult>(IPC.configImportApply, req),
+  configBackupNow: () => call<{ ok: true; name: string } | { ok: false }>(IPC.configBackupNow),
+  configOpenBackups: () => call<void>(IPC.configOpenBackups),
   availability: () => call<AvailabilityView>(IPC.availabilityGet),
   availabilityAct: (a: AvailabilityAction) => call<void>(IPC.availabilityAct, a),
   nowView: () => call<NowView>(IPC.nowView),

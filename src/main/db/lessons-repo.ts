@@ -1,4 +1,6 @@
-import type { Lesson, LessonOrigin, LessonProductView, LessonScope, LessonSource, LessonStatus } from "../../shared/lessons";
+import type {
+  Lesson, LessonAdmission, LessonCheckability, LessonOrigin, LessonProductView, LessonScope, LessonScoreParts, LessonSource, LessonStatus, LessonStrength,
+} from "../../shared/lessons";
 import { withTransaction, type Db } from "./database";
 import { capHead, RUN_CAPS } from "./lesson-runs-repo";
 
@@ -52,7 +54,76 @@ interface LessonRow {
   hits: number;
   last_seen_at: number;
   created_at: number;
+  scope_globs: string;
+  scope_lang: string | null;
+  scope_layer: string | null;
+  strength: LessonStrength | null;
+  checkability: LessonCheckability | null;
+  admission: LessonAdmission;
+  shelved_reason: string | null;
+  shelved_ref: number | null;
+  batch_id: number | null;
+  merged_into: number | null;
+  score: number | null;
+  score_parts: string | null;
+  scored_at: number | null;
+  score_policy_version: number | null;
+  degraded: number;
+  degraded_from: string | null;
 }
+/** 从导出文件来的一条规矩。 */
+export interface ImportedLesson {
+  scope: LessonScope;
+  text: string;
+  why: string;
+  status: LessonStatus;
+  admission: LessonAdmission;
+  hits: number;
+  lastSeenAt: number;
+  createdAt: number;
+  now: number;
+  scopeGlobs: string[];
+  scopeLang: string | null;
+  scopeLayer: string | null;
+  strength: LessonStrength | null;
+  checkability: LessonCheckability | null;
+  sources: { prNumber: number; url: string | null; slug: string | null; at: number }[];
+}
+/** 流水线（D）回填或改写的字段；没给的不动。 */
+export interface LessonFieldsPatch {
+  scopeGlobs?: string[];
+  scopeLang?: string | null;
+  scopeLayer?: string | null;
+  strength?: LessonStrength | null;
+  checkability?: LessonCheckability | null;
+  admission?: LessonAdmission;
+  shelvedReason?: string | null;
+  shelvedRef?: number | null;
+  batchId?: number | null;
+  score?: number | null;
+  scoreParts?: LessonScoreParts | null;
+  scoredAt?: number | null;
+  scorePolicyVersion?: number | null;
+  degraded?: boolean;
+  degradedFrom?: string | null;
+}
+const PATCH_COLUMNS: Record<keyof LessonFieldsPatch, [string, (v: never) => string | number | null]> = {
+  scopeGlobs: ["scope_globs", (v: string[]) => JSON.stringify(v)],
+  scopeLang: ["scope_lang", (v: string | null) => v],
+  scopeLayer: ["scope_layer", (v: string | null) => v],
+  strength: ["strength", (v: string | null) => v],
+  checkability: ["checkability", (v: string | null) => v],
+  admission: ["admission", (v: string) => v],
+  shelvedReason: ["shelved_reason", (v: string | null) => v],
+  shelvedRef: ["shelved_ref", (v: number | null) => v],
+  batchId: ["batch_id", (v: number | null) => v],
+  score: ["score", (v: number | null) => v],
+  scoreParts: ["score_parts", (v: LessonScoreParts | null) => (v === null ? null : JSON.stringify(v))],
+  scoredAt: ["scored_at", (v: number | null) => v],
+  scorePolicyVersion: ["score_policy_version", (v: number | null) => v],
+  degraded: ["degraded", (v: boolean) => (v ? 1 : 0)],
+  degradedFrom: ["degraded_from", (v: string | null) => v],
+};
 interface SourceRow { id: number; lesson_id: number; pr_number: number; url: string | null; at: number; repo_slug: string | null; run_id: number | null }
 
 const num = (v: number | null): number | null => (v === null ? null : Number(v));
@@ -62,11 +133,30 @@ const toRepo = (r: RepoRow): LessonRepoRow => ({
   lastAnalyzedAt: num(r.last_analyzed_at), analyzedCount: Number(r.analyzed_count),
 });
 const toSource = (r: SourceRow): LessonSource => ({ id: Number(r.id), prNumber: Number(r.pr_number), url: r.url, at: Number(r.at), slug: r.repo_slug, runId: num(r.run_id) });
+function jsonOr<T>(raw: string | null, fallback: T, ok: (v: unknown) => boolean): T {
+  if (raw === null) return fallback;
+  try {
+    const v: unknown = JSON.parse(raw);
+    return ok(v) ? (v as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+const isStringArray = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === "string");
+const isObject = (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v);
 const toLesson = (r: LessonRow, sources: LessonSource[]): Lesson => ({
   id: Number(r.id),
   scope: r.repo_slug !== null ? { kind: "repo", slug: r.repo_slug } : { kind: "product", productId: Number(r.product_id) },
   text: r.text, why: r.why, status: r.status, hits: Number(r.hits), lastSeenAt: Number(r.last_seen_at),
   createdAt: Number(r.created_at), sources,
+  scopeGlobs: jsonOr<string[]>(r.scope_globs, [], isStringArray),
+  scopeLang: r.scope_lang, scopeLayer: r.scope_layer, strength: r.strength, checkability: r.checkability,
+  admission: r.admission, shelvedReason: r.shelved_reason, shelvedRef: num(r.shelved_ref),
+  batchId: num(r.batch_id), mergedInto: num(r.merged_into),
+  score: r.score === null ? null : Number(r.score),
+  scoreParts: jsonOr<LessonScoreParts | null>(r.score_parts, null, isObject),
+  scoredAt: num(r.scored_at), scorePolicyVersion: num(r.score_policy_version),
+  degraded: Number(r.degraded) === 1, degradedFrom: r.degraded_from,
 });
 
 /** 复盘规矩：仓库、产品、规矩、出处和待分析的 PR 队列。 */
@@ -158,9 +248,16 @@ export class LessonsRepo {
   }
 
   // ---- 规矩 ----
-  lessons(filter?: { status?: LessonStatus[]; scope?: LessonScope }): Lesson[] {
+  /** 合并过的行（merged_into 不为空）默认不列：它们只为撤销留着。 */
+  lessons(filter?: { status?: LessonStatus[]; scope?: LessonScope; includeMerged?: boolean; ids?: number[] }): Lesson[] {
     const where: string[] = [];
     const args: (string | number)[] = [];
+    if (!filter?.includeMerged) where.push(`merged_into IS NULL`);
+    if (filter?.ids) {
+      if (filter.ids.length === 0) return [];
+      where.push(`id IN (SELECT value FROM json_each(?))`);
+      args.push(JSON.stringify(filter.ids));
+    }
     if (filter?.status) {
       if (filter.status.length === 0) return [];
       where.push(`status IN (${filter.status.map(() => "?").join(",")})`);
@@ -182,7 +279,32 @@ export class LessonsRepo {
   }
 
   pendingCount(): number {
-    return (this.db.prepare(`SELECT COUNT(*) AS n FROM lessons WHERE status = 'pending'`).get() as { n: number }).n;
+    return Number((this.db.prepare(`SELECT COUNT(*) AS n FROM lessons WHERE status = 'pending' AND merged_into IS NULL`).get() as { n: number }).n);
+  }
+
+  /** 顺着 merged_into 找到最终留下的那条（防环：最多走 50 步）；id 不存在返回 null。 */
+  resolveMerged(id: number): Lesson | null {
+    let cur = this.get(id);
+    for (let i = 0; cur && cur.mergedInto !== null && i < 50; i++) {
+      const next = this.get(cur.mergedInto);
+      if (!next) break;
+      cur = next;
+    }
+    return cur;
+  }
+
+  /** 改准入、范围、评分等字段（只改给了的）。 */
+  setFields(id: number, patch: LessonFieldsPatch, now: number): void {
+    const sets: string[] = [];
+    const args: (string | number | null)[] = [];
+    for (const [k, v] of Object.entries(patch) as [keyof LessonFieldsPatch, unknown][]) {
+      if (v === undefined) continue;
+      const [col, enc] = PATCH_COLUMNS[k];
+      sets.push(`${col} = ?`);
+      args.push(enc(v as never));
+    }
+    if (sets.length === 0) return;
+    this.db.prepare(`UPDATE lessons SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`).run(...args, now, id);
   }
 
   get(id: number): Lesson | null {
@@ -224,6 +346,44 @@ export class LessonsRepo {
     });
   }
 
+  /** 导入时用：这台机器没有的仓库先建一行，本地路径留空（「这台机器上没有克隆」）；已有的不动。 */
+  ensureRepo(slug: string, now: number): void {
+    this.db.prepare(`INSERT INTO lesson_repos (slug, local_path, created_at) VALUES (?, '', ?) ON CONFLICT (slug) DO NOTHING`).run(slug, now);
+  }
+
+  /** 导入一条规矩：状态、准入、范围字段和出处都按给的写。 */
+  importLesson(l: ImportedLesson): number {
+    return withTransaction(this.db, () => {
+      const id = Number(
+        this.db
+          .prepare(
+            `INSERT INTO lessons (repo_slug, product_id, text, why, status, hits, last_seen_at, created_at, updated_at,
+               scope_globs, scope_lang, scope_layer, strength, checkability, admission)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            l.scope.kind === "repo" ? l.scope.slug : null, l.scope.kind === "product" ? l.scope.productId : null,
+            l.text, l.why, l.status, Math.max(1, l.hits), l.lastSeenAt, l.createdAt, l.now,
+            JSON.stringify(l.scopeGlobs), l.scopeLang, l.scopeLayer, l.strength, l.checkability, l.admission,
+          ).lastInsertRowid,
+      );
+      for (const s of l.sources) this.addSource(id, { ...s, runId: null }, s.at);
+      return id;
+    });
+  }
+
+  /** 导入时选了「用导入的」：改正文以外的内容，hits 取大，出处合并。 */
+  updateImported(id: number, u: { why: string; hits: number; lastSeenAt: number; sources: ImportedLesson["sources"]; status?: LessonStatus; fields: LessonFieldsPatch }, now: number): void {
+    withTransaction(this.db, () => {
+      this.db
+        .prepare(`UPDATE lessons SET why = ?, hits = MAX(hits, ?), last_seen_at = MAX(last_seen_at, ?), updated_at = ? WHERE id = ?`)
+        .run(u.why, u.hits, u.lastSeenAt, now, id);
+      if (u.status) this.setStatus(id, u.status, now);
+      this.setFields(id, u.fields, now);
+      for (const s of u.sources) this.addSource(id, { ...s, runId: null }, s.at);
+    });
+  }
+
   /** 又出现一次：hits+1、last_seen_at、加一条出处（同一出处重复时 hits 不加）。 */
   hit(id: number, at: number, source: NewLessonSource): void {
     withTransaction(this.db, () => {
@@ -246,7 +406,12 @@ export class LessonsRepo {
     this.db.prepare(`DELETE FROM lessons WHERE id = ?`).run(id);
   }
 
-  /** keep 收下 drop 的出处、hits 相加、last_seen_at 取大，text 换成新的；drop 删掉。 */
+  /** 合并进这一条的那些行的 id。 */
+  mergedIds(keepId: number): number[] {
+    return (this.db.prepare(`SELECT id FROM lessons WHERE merged_into = ? ORDER BY id`).all(keepId) as { id: number }[]).map((r) => Number(r.id));
+  }
+
+  /** keep 收下 drop 的出处、hits 相加、last_seen_at 取大，text 换成新的；drop 不删，记 merged_into = keep（撤销用，列表里不再出现）。 */
   merge(keepId: number, dropId: number, text: string, now: number): void {
     withTransaction(this.db, () => {
       const drop = this.get(dropId);
@@ -256,7 +421,9 @@ export class LessonsRepo {
       this.db
         .prepare(`UPDATE lessons SET text = ?, hits = hits + ?, last_seen_at = MAX(last_seen_at, ?), updated_at = ? WHERE id = ?`)
         .run(text, drop.hits, drop.lastSeenAt, now, keepId);
-      this.remove(dropId);
+      this.db.prepare(`UPDATE lessons SET merged_into = ?, updated_at = ? WHERE id = ?`).run(keepId, now, dropId);
+      // 指向 drop 的合并也改指向 keep，链不会越来越长。
+      this.db.prepare(`UPDATE lessons SET merged_into = ? WHERE merged_into = ?`).run(keepId, dropId);
     });
   }
 

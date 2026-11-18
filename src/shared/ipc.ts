@@ -78,6 +78,20 @@ export const IPC = {
   lessonsRuns: "lessons:runs",
   lessonsRun: "lessons:run",
   lessonsPending: "lessons:pending",
+  /** 批次历史（契约 4.4）：列表和一个批次的明细。撤销走 lessons:act 的 undoBatch。 */
+  lessonsBatches: "lessons:batches",
+  lessonsBatch: "lessons:batch",
+  /** 三层准入策略（契约 4.2）。 */
+  policiesGet: "policies:get",
+  policiesSet: "policies:set",
+  /** 导入导出（契约 4.3）。文件选择框在主进程里开。 */
+  configStatus: "config:status",
+  configExport: "config:export",
+  configImportPreview: "config:importPreview",
+  configImportRetarget: "config:importRetarget",
+  configImportApply: "config:importApply",
+  configBackupNow: "config:backupNow",
+  configOpenBackups: "config:openBackups",
   /** Claude 可用状态（限流、模型不可用）和复盘的暂停。 */
   availabilityGet: "availability:get",
   availabilityAct: "availability:act",
@@ -125,7 +139,9 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.butlerView, IPC.butlerOpenSession,
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
-  IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending, IPC.availabilityGet, IPC.availabilityAct, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
+  IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
+  IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget,
+  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,

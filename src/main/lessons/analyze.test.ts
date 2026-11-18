@@ -29,6 +29,17 @@ const ALLOWED = new Set(["https://x/7#c1", "u1", "u2"]);
 const apply = (repo: LessonsRepo, ...f: Finding[]) => applyAnalysis(repo, "acme/web", 7, { findings: f }, 100, { allowed: ALLOWED, prUrl: PR_URL }, null);
 
 describe("applyAnalysis", () => {
+  it("a same_as pointing at a merged lesson hits the lesson it was merged into", () => {
+    const { repo } = setup();
+    const keep = seed(repo, "confirmed");
+    const drop = seed(repo, "confirmed");
+    repo.merge(keep, drop, "both", 50);
+    const hitsBefore = repo.get(keep)!.hits;
+    expect(apply(repo, finding({ same_as: drop }, { comment_url: "u1" }))).toEqual({ created: 0, hit: 1, dropped: 0 });
+    expect(repo.get(keep)!.hits).toBe(hitsBefore + 1);
+    expect(repo.get(drop)!.hits).toBe(1);
+  });
+
   it("applyAnalysis records run id and slug on new and hit sources", () => {
     const { repo } = setup();
     const db = (repo as unknown as { db: import("../db/database").Db }).db;

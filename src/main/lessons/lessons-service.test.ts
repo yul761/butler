@@ -8,6 +8,9 @@ import type { LessonRunDetail } from "../../shared/lessons";
 import type { OpenSessionResult } from "../../shared/types";
 import { RepoIdentity } from "./repo-identity";
 import { LessonsService, queueRowStatus } from "./lessons-service";
+import { LessonBatchService } from "./lesson-batches";
+import { BatchRecorder } from "../batches/batch-recorder";
+import { lessonAdapter, policyAdapter, productAdapter } from "../batches/table-adapter";
 
 const git = (p: string): string | null => (p.startsWith("/none") ? null : `git@github.com:${p.slice(1).replace("_", "/")}.git`);
 const src = { prNumber: 1, url: "https://github.com/acme/web/pull/1", slug: "acme/web", runId: null };
@@ -36,8 +39,10 @@ const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: strin
   const availability = { lessonsGate: vi.fn(() => gate.value), pauseLessons: vi.fn(), resumeLessons: vi.fn() };
   const openRun = vi.fn<(d: LessonRunDetail, repoPath: string) => Promise<OpenSessionResult>>(async () => ({ ok: true, termId: "term-1", alreadyOpen: false }));
   const log = vi.fn();
+  const recorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db)]);
+  const batches = new LessonBatchService({ db, repo, recorder, now: () => 100 });
   const svc = new LessonsService({
-    repo, runs, availability, identity: new RepoIdentity({ git, exists }), runner, openRun, log,
+    repo, batches, runs, availability, identity: new RepoIdentity({ git, exists }), runner, openRun, log,
     knownRepoPaths: () => over.paths ?? ["/acme_web", "/acme_api", "/none_x"],
     repoGroups: () => over.groups ?? [],
     exists,
@@ -45,7 +50,7 @@ const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: strin
   });
   svc.state();
   const add = (slug: string, text = "t") => repo.addLesson({ scope: { kind: "repo", slug }, text, why: "w", at: 1, source: src });
-  return { repo, runs, svc, openExternal, notify, backfill, add, runner, availability, gate, openRun, log };
+  return { db, recorder, batches, repo, runs, svc, openExternal, notify, backfill, add, runner, availability, gate, openRun, log };
 };
 
 describe("LessonsService.state", () => {
@@ -88,7 +93,7 @@ describe("LessonsService.state", () => {
     const a = setup({ paths: [] });
     const spyA = vi.spyOn(a.repo, "upsertRepo");
     const svcA = new LessonsService({
-      repo: a.repo, runs: a.runs, availability: a.availability, identity: new RepoIdentity({ git: () => "git@github.com:acme/web.git", exists: () => true }), runner: a.runner, openRun: a.openRun,
+      repo: a.repo, batches: a.batches, runs: a.runs, availability: a.availability, identity: new RepoIdentity({ git: () => "git@github.com:acme/web.git", exists: () => true }), runner: a.runner, openRun: a.openRun,
       knownRepoPaths: () => both, repoGroups: () => [], exists: () => true,
       ghAvailable: () => true, openExternal: a.openExternal, now: () => 100, notify: a.notify,
     });
@@ -130,7 +135,7 @@ describe("LessonsService.act", () => {
     const { svc, repo, add, notify } = setup();
     svc.state();
     const id = add("acme/web", "old");
-    expect(await svc.act({ op: "confirm", id, text: "新正文" })).toEqual({ ok: true });
+    expect(await svc.act({ op: "confirm", id, text: "新正文" })).toMatchObject({ ok: true, affected: 1 });
     expect(repo.get(id)).toMatchObject({ status: "confirmed", text: "新正文" });
     expect(notify).toHaveBeenCalled();
   });
@@ -145,8 +150,8 @@ describe("LessonsService.act", () => {
     expect(repo.get(a)?.hits).toBe(1);
     expect(notify).not.toHaveBeenCalled();
     const c = add("acme/web");
-    expect(await svc.act({ op: "merge", keepId: a, dropId: c, text: "x" })).toEqual({ ok: true });
-    expect(repo.get(c)).toBeNull();
+    expect(await svc.act({ op: "merge", keepId: a, dropId: c, text: "x" })).toMatchObject({ ok: true, affected: 2 });
+    expect(repo.get(c)?.mergedInto).toBe(a);
   });
 
   it("returns not_found for a lesson id that does not exist", async () => {
@@ -231,9 +236,9 @@ describe("LessonsService product and confirm guards", () => {
     const { svc, repo, add } = setup();
     const id = add("acme/web");
     repo.setStatus(id, "confirmed", 1);
-    expect(await svc.act({ op: "setDisabled", id, disabled: true })).toEqual({ ok: true });
+    expect(await svc.act({ op: "setDisabled", id, disabled: true })).toMatchObject({ ok: true, affected: 1 });
     expect(repo.get(id)?.status).toBe("disabled");
-    expect(await svc.act({ op: "setDisabled", id, disabled: false })).toEqual({ ok: true });
+    expect(await svc.act({ op: "setDisabled", id, disabled: false })).toMatchObject({ ok: true, affected: 1 });
     expect(repo.get(id)?.status).toBe("confirmed");
   });
 
@@ -442,5 +447,20 @@ describe("LessonsService queue views", () => {
     expect(await svc.act({ op: "cancel", queueId: 99 })).toEqual({ ok: false, reason: "not_found" });
     expect(await svc.act({ op: "retry", queueId: 99 })).toEqual({ ok: false, reason: "bad_status" });
     expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("LessonsService bulk staleness", () => {
+  it("refuses a bulk action that would change more lessons than the page showed", async () => {
+    const { svc, add, repo } = setup();
+    const a = add("acme/web");
+    const b = add("acme/web");
+    expect(await svc.act({ op: "bulk", verb: "confirm", target: { filter: { slug: "acme/web" } }, expect: 1 })).toEqual({ ok: false, reason: "stale" });
+    expect([repo.get(a)?.status, repo.get(b)?.status]).toEqual(["pending", "pending"]);
+    expect(await svc.act({ op: "bulk", verb: "confirm", target: { filter: { slug: "acme/web", maxId: a } }, expect: 1 })).toMatchObject({ ok: true, affected: 1 });
+    expect(repo.get(b)?.status).toBe("pending");
+    repo.setFields(b, { admission: "auto" }, 5);
+    expect(await svc.act({ op: "acceptRecommended", expect: 0 })).toEqual({ ok: false, reason: "stale" });
+    expect(await svc.act({ op: "acceptRecommended", expect: 1 })).toMatchObject({ ok: true, affected: 1 });
   });
 });
