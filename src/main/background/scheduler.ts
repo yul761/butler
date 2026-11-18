@@ -177,6 +177,11 @@ export class BackgroundScheduler {
     this.emit();
   }
 
+  /** 外面的状态变了（熔断解除了某个 ticket）：队列重新取。 */
+  changed(): void {
+    this.emit();
+  }
+
   private emitYield(sig: BgYieldSignal): void {
     for (const fn of [...this.yielders]) {
       try {

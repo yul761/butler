@@ -897,6 +897,9 @@ export const MIGRATIONS: string[] = [
     tripped_at INTEGER,
     paused_at INTEGER,
     stopped_at INTEGER,
+    taken_over_at INTEGER,
+    paused_spent REAL,
+    partial INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (subject_kind, subject_id));
   CREATE TABLE cost_events (
