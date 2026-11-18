@@ -8,6 +8,9 @@ import { useStateRefetch } from "./useStateRefetch";
 import type { AvailabilityAction } from "../../../shared/availability";
 
 /** 设置 → 健康：Claude 现在能不能用、复盘队列是否暂停，以及恢复／暂停按钮。 */
+/** 跳来之后，内容还在长高时继续滚到这一块的时间。 */
+const SCROLL_SETTLE_MS = 2000;
+
 export function ClaudeAvailability({ scrollIntoView = false }: { scrollIntoView?: boolean }) {
   const view = useStateRefetch("availability", api.availability);
   // 从「现在」页的提醒跳来：内容出现后滚到这里，只滚一次。
@@ -16,7 +19,28 @@ export function ClaudeAvailability({ scrollIntoView = false }: { scrollIntoView?
   useEffect(() => {
     if (!scrollIntoView || !ready || scrolled.current) return;
     scrolled.current = true;
-    document.getElementById("claude-availability")?.scrollIntoView({ block: "start" });
+    const el = document.getElementById("claude-availability");
+    if (!el) return;
+    el.scrollIntoView({ block: "start" });
+    // 下面几块（常规、计划、隐私）可能还在加载，页面这时还滚不动：内容长高时再滚一次，最多等一会儿；用户自己滚了就停。
+    const page = el.closest(".page");
+    if (!page || typeof ResizeObserver === "undefined") return;
+    let stop = false;
+    const ro = new ResizeObserver(() => {
+      if (!stop) el.scrollIntoView({ block: "start" });
+    });
+    for (const c of Array.from(page.children)) ro.observe(c);
+    const end = () => {
+      stop = true;
+      ro.disconnect();
+    };
+    const timer = setTimeout(end, SCROLL_SETTLE_MS);
+    page.addEventListener("wheel", end, { once: true, passive: true });
+    return () => {
+      clearTimeout(timer);
+      page.removeEventListener("wheel", end);
+      end();
+    };
   }, [scrollIntoView, ready]);
   if (!view) return null;
   const rows = availabilityRows(view, S, Date.now());
