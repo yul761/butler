@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AvailabilityHit, AvailabilityView } from "../../shared/availability";
 import type { LessonRunStatus } from "../../shared/lessons";
-import { buildNotices } from "./notices";
+import { buildNotices, ciNotices } from "./notices";
 
 const hit = (kind: AvailabilityHit["kind"]): AvailabilityHit => ({ kind, resetsAt: 5000, message: "m", at: 1, source: "headless", job: "lessons", sessionId: null });
 const view = (over: Partial<AvailabilityView> = {}): AvailabilityView => ({ state: "ok", current: null, lastHit: null, retryAt: null, lessonsPause: null, ...over });
@@ -48,5 +48,12 @@ describe("buildNotices", () => {
   it("two failures give nothing", () => {
     expect(buildNotices({ availability: view(), recentRuns: runs("failed", "failed", "done", "failed") })).toEqual([]);
     expect(buildNotices({ availability: view(), recentRuns: runs("failed", "failed") })).toEqual([]);
+  });
+});
+
+describe("ciNotices", () => {
+  it("turns each undelivered CI result into a notice that opens its ticket", () => {
+    const ci = { item: { kind: "pr" as const, id: 3 }, ticketKey: "T-1", number: 34, branch: "feat/a", reason: "guard:typing" as const, since: 5, sessionId: "s1" };
+    expect(ciNotices([ci], (k) => `title of ${k}`)).toEqual([{ kind: "ci_undelivered", ci, title: "title of T-1", target: { page: "ticket", key: "T-1", sessionId: "s1" } }]);
   });
 });

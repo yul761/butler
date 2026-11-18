@@ -19,7 +19,15 @@ export function limitLine(l: LimitHit, S: UiStrings, now: number): string {
   return l.resetsAt === null ? S.limitNoReset(kind) : S.limitUntil(kind, resetClock(l.resetsAt, now));
 }
 
-export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | "routing";
+export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend";
+
+/** CI 结论为什么没递出去，一句人话（工作流 W）。认不得的原样带上。 */
+export function ciReasonText(reason: string, S: UiStrings): string {
+  const [head, tail] = reason.split(":", 2) as [string, string | undefined];
+  const pick = (m: Record<string, string>, k: string): string | undefined => (Object.prototype.hasOwnProperty.call(m, k) ? m[k] : undefined);
+  const known = tail === undefined ? pick(S.ciReason, head) : head === "guard" ? pick(S.ciGuard, tail) : head === "deliver" ? pick(S.ciDeliver, tail) : undefined;
+  return known ?? S.ciReasonOther(reason);
+}
 
 /** 「现在」页一条提醒的文字和按钮。 */
 export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: string; actions: NoticeAction[] } {
@@ -37,6 +45,11 @@ export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: str
     case "session_limited": {
       const line = limitLine(n.limit, S, now);
       return { text: n.title === null ? line : S.noticeSessionLimited(n.title, line), actions: ["open"] };
+    }
+    case "ci_undelivered": {
+      const c = n.ci;
+      const what = c.number === null ? S.ciWhatBranch(c.ticketKey, c.branch) : S.ciWhatPr(c.ticketKey, c.number, c.branch);
+      return { text: S.noticeCiUndelivered(what, Math.max(1, Math.floor((now - c.since) / 60_000)), ciReasonText(c.reason, S)), actions: ["resend", "open"] };
     }
   }
 }

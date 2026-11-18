@@ -1,6 +1,6 @@
 import type { AvailabilityView } from "../../shared/availability";
 import type { LessonRunStatus } from "../../shared/lessons";
-import type { NowNotice } from "../../shared/types";
+import type { CiUndelivered, NowNotice } from "../../shared/types";
 
 /** 连续这么多次分析失败才提醒。 */
 export const LESSONS_FAILING_MIN = 3;
@@ -30,4 +30,9 @@ export function buildNotices(i: {
   }
   if (failed >= LESSONS_FAILING_MIN) out.push({ kind: "lessons_failing", count: failed });
   return out;
+}
+
+/** 递不出去的 CI 结论（工作流 W）：每条一个提醒，点开去 ticket（有要递给的 session 就打开它）。 */
+export function ciNotices(list: CiUndelivered[], title: (ticketKey: string) => string | null): NowNotice[] {
+  return list.map((ci) => ({ kind: "ci_undelivered" as const, ci, title: title(ci.ticketKey), target: { page: "ticket" as const, key: ci.ticketKey, sessionId: ci.sessionId } }));
 }

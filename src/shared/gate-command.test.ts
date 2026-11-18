@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyGateCommand, classifyPush } from "./gate-command";
+import { classifyGateCommand, classifyPush, classifyShip } from "./gate-command";
 
 describe("classifyGateCommand", () => {
   it("recognises gh pr merge", () => {
@@ -85,5 +85,47 @@ describe("classifyPush", () => {
   });
   it("finds the push in a later segment", () => {
     expect(classifyPush("git add -A && git commit -m 'push it' && git push")).toEqual({ dir: null });
+  });
+});
+
+describe("classifyShip", () => {
+  it("takes the pushed branch from the refspec's remote side; HEAD or no refspec is the current branch (null)", () => {
+    expect(classifyShip("git push -u origin feat/x")).toEqual([{ kind: "push", dir: null, branch: "feat/x" }]);
+    expect(classifyShip("git push origin HEAD")).toEqual([{ kind: "push", dir: null, branch: null }]);
+    expect(classifyShip("git push --force-with-lease")).toEqual([{ kind: "push", dir: null, branch: null }]);
+    expect(classifyShip("git push origin HEAD:refs/heads/feat/y")).toEqual([{ kind: "push", dir: null, branch: "feat/y" }]);
+    expect(classifyShip("git push origin +local:feat/z")).toEqual([{ kind: "push", dir: null, branch: "feat/z" }]);
+  });
+  it("takes the directory from cd and -C", () => {
+    expect(classifyShip("cd /wt/ws-a && git push -u origin feat/a")).toEqual([{ kind: "push", dir: "/wt/ws-a", branch: "feat/a" }]);
+    expect(classifyShip("git -C ../wt push")).toEqual([{ kind: "push", dir: "../wt", branch: null }]);
+    expect(classifyShip('cd "C:\\wt\\ws a" && git push')).toEqual([{ kind: "push", dir: "C:\\wt\\ws a", branch: null }]);
+  });
+  it("ignores redirections, unwraps $( ) and ( ) and records every refspec; tag refs are not branches", () => {
+    expect(classifyShip("git push origin 2>&1")).toEqual([{ kind: "push", dir: null, branch: null }]);
+    expect(classifyShip("git push origin >/dev/null 2>&1")).toEqual([{ kind: "push", dir: null, branch: null }]);
+    expect(classifyShip("git push -u origin feat/x > out.log 2>&1")).toEqual([{ kind: "push", dir: null, branch: "feat/x" }]);
+    expect(classifyShip("PR=$(gh pr create --fill)")).toEqual([{ kind: "pr_create", dir: null, head: null }]);
+    expect(classifyShip("(cd /wt && git push)")).toEqual([{ kind: "push", dir: "/wt", branch: null }]);
+    expect(classifyShip("git push origin a b")).toEqual([{ kind: "push", dir: null, branch: "a" }, { kind: "push", dir: null, branch: "b" }]);
+    expect(classifyShip("git push origin refs/tags/v2")).toEqual([]);
+    expect(classifyShip("echo $(git rev-parse HEAD)")).toEqual([]);
+  });
+  it("recognises gh pr create with or without --head, and both in one command", () => {
+    expect(classifyShip("gh pr create --fill")).toEqual([{ kind: "pr_create", dir: null, head: null }]);
+    expect(classifyShip("gh pr create -H owner:feat/x -t t -b body")).toEqual([{ kind: "pr_create", dir: null, head: "feat/x" }]);
+    expect(classifyShip("cd /wt && git push -u origin feat/a && gh pr create --title 'x' --body \"$(cat <<'X'\nbody\nX\n)\"")).toEqual([
+      { kind: "push", dir: "/wt", branch: "feat/a" },
+      { kind: "pr_create", dir: "/wt", head: null },
+    ]);
+  });
+  it("ignores dry runs, deletes, tag pushes and lookalikes", () => {
+    expect(classifyShip("git push --dry-run origin x")).toEqual([]);
+    expect(classifyShip("git push origin --delete old")).toEqual([]);
+    expect(classifyShip("git push origin :old")).toEqual([]);
+    expect(classifyShip("git push --tags")).toEqual([]);
+    expect(classifyShip("git stash push")).toEqual([]);
+    expect(classifyShip("gh pr view 3")).toEqual([]);
+    expect(classifyShip("echo 'gh pr create'")).toEqual([]);
   });
 });

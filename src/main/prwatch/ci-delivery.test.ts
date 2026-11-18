@@ -6,11 +6,11 @@ import { DeliveryGuard } from "../sessions/delivery-guard";
 import { deliveryNeedsYou, NeedsYouTracker, type NeedsYouVerdict } from "../sessions/needs-you";
 import { memDb } from "../test-utils";
 import type { Session } from "../../shared/types";
-import { CiDelivery, deliveryKey, type CiDeliveryDeps } from "./ci-delivery";
+import { CI_UNDELIVERED_MS, CiDelivery, deliveryKey, pickRecipient, type CiDeliveryDeps, type RecipientCandidate } from "./ci-delivery";
 
 type Deliver = (term: string, text: string, recheck: () => boolean) => Promise<"sent" | "exited" | "timeout" | "blocked">;
 
-function setup(opts: { session?: string | null; guard?: ReturnType<DeliveryGuard["check"]>; deliver?: Deliver; guardImpl?: CiDeliveryDeps["guard"]; sessionFor?: CiDeliveryDeps["sessionFor"] } = {}) {
+function setup(opts: { session?: string | null; guard?: ReturnType<DeliveryGuard["check"]>; deliver?: Deliver; guardImpl?: CiDeliveryDeps["guard"]; recipient?: CiDeliveryDeps["recipient"] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   for (const key of ["BTL-1", "BTL-2"]) tickets.insert({ key, title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null });
@@ -18,15 +18,27 @@ function setup(opts: { session?: string | null; guard?: ReturnType<DeliveryGuard
   const otherRepo = tickets.addRepo({ ticketKey: "BTL-2", repoPath: "/r2", workMode: "branch", worktreePath: null, branch: "b2", createdAt: 1 });
   const prs = new TicketPrsRepo(db);
   const branches = new BranchWatchRepo(db);
-  const state = { guard: opts.guard ?? ({ ok: true, termId: "t1", headId: "h1" } as ReturnType<DeliveryGuard["check"]>), session: opts.session === undefined ? "h1" : opts.session, recheck: true };
+  const state = {
+    guard: opts.guard ?? ({ ok: true, termId: "t1", headId: "h1" } as ReturnType<DeliveryGuard["check"]>),
+    /** 开着的 session（ticket 仓库的 head）；session: null 时一个都没有。 */
+    open: (opts.session === null ? [] : [{ id: opts.session ?? "h1", gitBranch: null, coordinator: false }]) as RecipientCandidate[],
+    /** 记下的分支归属：`${ticket}:${repoId}:${branch}` → head id。 */
+    owners: new Map<string, string>(),
+    closed: new Set<string>(),
+    recheck: true,
+    now: 1,
+  };
   const deliver = vi.fn(opts.deliver ?? (async () => "sent" as const));
   const log = vi.fn();
   const d = new CiDelivery({
     prs, branches,
     currentBranch: (id) => tickets.getRepo(id)?.branch ?? null,
     guard: opts.guardImpl ?? { check: () => state.guard, recheckAfter: () => () => state.recheck },
-    sessionFor: opts.sessionFor ?? (() => state.session),
-    deliver, now: () => 1, log,
+    recipient: opts.recipient ?? ((key, rid, branch) => {
+      const owner = state.owners.get(`${key}:${rid}:${branch}`) ?? null;
+      return pickRecipient({ owner, ownerOpen: owner !== null && !state.closed.has(owner), open: state.open, ticketBranch: tickets.getRepo(rid)?.branch ?? null, branch });
+    }),
+    deliver, now: () => state.now, log,
   });
   /** 一个读过的 PR 行。 */
   const pr = (o: TicketPrPatch & { ticketKey?: string; repoId?: number | null; number?: number } = {}) => {
@@ -57,7 +69,7 @@ describe("CiDelivery", () => {
     expect(s.prs.get(r.id)!.deliveredKey).toBe("abcdef1234567:failing");
   });
 
-  it("delivers a PR row's CI only when head_branch is the repo's current branch", async () => {
+  it("without an owner, delivers a PR row's CI only when head_branch is the repo's current branch", async () => {
     const s = setup();
     const r = s.pr({ ci: "passing" });
     // ticket 换了分支：旧分支 PR 的 CI 不递给现在的 session。
@@ -83,7 +95,7 @@ describe("CiDelivery", () => {
 
   it("delivers the same PR to each ticket that links it, through that ticket's own session", async () => {
     const seen: [string, number][] = [];
-    const s = setup({ sessionFor: (key, repoId) => (seen.push([key, repoId]), `h-${key}`) });
+    const s = setup({ recipient: (key, repoId) => (seen.push([key, repoId]), { ok: true, sessionId: `h-${key}`, via: "ticket" }) });
     const a = s.pr({ ci: "passing" });
     const b = s.pr({ ci: "passing", ticketKey: "BTL-2", repoId: s.otherRepo });
     s.tickets.updateRepo({ id: s.otherRepo, workMode: "branch", worktreePath: null, branch: "b" });
@@ -179,6 +191,158 @@ describe("CiDelivery", () => {
   });
 });
 
+describe("CiDelivery picks the session the PR belongs to (workstream W)", () => {
+  it("delivers a PR opened from a worktree branch to the session that pushed it", async () => {
+    const s = setup();
+    // 子 session 在自己的 worktree 里开 feat/ws-a，ticket 仓库的分支还是 b。
+    const r = s.pr({ ci: "passing", headBranch: "feat/ws-a" });
+    s.state.owners.set(`BTL-1:${s.repoId}:feat/ws-a`, "h1");
+    await s.d.settled({ kind: "pr", id: r.id });
+    expect(s.deliver).toHaveBeenCalledTimes(1);
+    expect(s.prs.get(r.id)!.deliveredKey).toBe(deliveryKey(r));
+  });
+
+  it("with several sessions on one repo, each gets only the PR on its own branch", async () => {
+    const terms: Record<string, string> = { ha: "ta", hb: "tb", hc: "tc" };
+    const s = setup({
+      guardImpl: { check: (id) => ({ ok: true, termId: terms[id], headId: id }), recheckAfter: () => () => true },
+    });
+    s.state.open = [{ id: "hc", gitBranch: "b", coordinator: false }, { id: "ha", gitBranch: "b", coordinator: false }, { id: "hb", gitBranch: "b", coordinator: false }];
+    const a = s.pr({ number: 1, ci: "passing", headBranch: "feat/a" });
+    const b = s.pr({ number: 2, ci: "failing", headBranch: "feat/b" });
+    s.state.owners.set(`BTL-1:${s.repoId}:feat/a`, "ha");
+    s.state.owners.set(`BTL-1:${s.repoId}:feat/b`, "hb");
+    await s.d.flush();
+    const sent = s.deliver.mock.calls.map((c) => [c[0], (c[1] as string).match(/PR #(\d+)/)?.[1]]);
+    expect(sent.sort()).toEqual([["ta", "1"], ["tb", "2"]]);
+    expect([s.prs.get(a.id)!.deliveredKey, s.prs.get(b.id)!.deliveredKey]).toEqual([deliveryKey(a), deliveryKey(b)]);
+  });
+
+  it("does not hand an owned PR's result to a session on another branch when the owner's terminal is closed", async () => {
+    const s = setup();
+    s.state.open = [{ id: "h2", gitBranch: "feat/other", coordinator: false }];
+    const r = s.pr({ ci: "passing", headBranch: "b" });
+    s.state.owners.set(`BTL-1:${s.repoId}:b`, "h1");
+    s.state.closed.add("h1");
+    await s.d.settled({ kind: "pr", id: r.id });
+    expect(s.deliver).not.toHaveBeenCalled();
+    expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/BTL-1#7 .*not delivered: owner_closed/));
+  });
+
+  it("hands it to the new session on the same branch when the session that pushed it has closed", async () => {
+    const s = setup();
+    s.state.open = [{ id: "h2", gitBranch: "b", coordinator: false }];
+    const r = s.pr({ ci: "passing", headBranch: "b" });
+    s.state.owners.set(`BTL-1:${s.repoId}:b`, "h1");
+    s.state.closed.add("h1");
+    await s.d.settled({ kind: "pr", id: r.id });
+    expect(s.deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unidentified PR off the ticket branch is only logged, never a Now notice (nobody was promised it)", async () => {
+    const s = setup();
+    s.state.open = [{ id: "h2", gitBranch: "feat/x", coordinator: false }, { id: "h3", gitBranch: "feat/y", coordinator: false }];
+    const r = s.pr({ ci: "passing", headBranch: "feat/related" });
+    await s.d.settled({ kind: "pr", id: r.id });
+    expect(s.deliver).not.toHaveBeenCalled();
+    expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/not delivered: unowned/));
+    s.state.now = CI_UNDELIVERED_MS + 10;
+    expect(s.d.undelivered()).toEqual([]);
+  });
+
+  it("logs every reason it does not deliver, once per reason", async () => {
+    const s = setup({ guard: { ok: false, block: "typing" } });
+    const r = s.pr();
+    await s.d.settled({ kind: "pr", id: r.id });
+    await s.d.flush();
+    await s.d.flush();
+    const lines = () => s.log.mock.calls.map((c) => c[0] as string).filter((m) => m.startsWith("ci delivery"));
+    expect(lines()).toEqual([expect.stringMatching(/BTL-1#7 \(abcdef1:failing\) not delivered: guard:typing/)]);
+    s.state.guard = { ok: false, block: "draft" };
+    await s.d.flush();
+    expect(lines()).toHaveLength(2);
+    // 没有 sha、没有开着的 session、PR 不在 ticket 仓库：都记一笔。
+    const noSha = s.pr({ number: 8, headSha: null });
+    const elsewhere = s.pr({ number: 9, repoId: null });
+    s.state.guard = { ok: true, termId: "t1", headId: "h1" };
+    s.state.open = [];
+    const other = s.pr({ number: 10, headBranch: "feat/x" });
+    await s.d.flush();
+    for (const [n, reason] of [[8, "no_sha"], [9, "no_repo"], [10, "no_session"], [7, "no_session"]] as const) {
+      expect(lines().some((m) => m.includes(`BTL-1#${n} `) && m.endsWith(`not delivered: ${reason}`))).toBe(true);
+    }
+    // 两个开着的 session、PR 不在 ticket 分支上、没有归属：认不出是谁的。
+    s.state.open = [{ id: "h1", gitBranch: "b", coordinator: false }, { id: "h2", gitBranch: "b", coordinator: false }];
+    await s.d.flush();
+    expect(lines().some((m) => m.includes("BTL-1#10 ") && m.endsWith("not delivered: unowned"))).toBe(true);
+    void noSha; void elsewhere; void other;
+  });
+
+  it("lists results stuck for 30 minutes and resends them on request", async () => {
+    const s = setup({ guard: { ok: false, block: "busy" } });
+    const r = s.pr();
+    await s.d.settled({ kind: "pr", id: r.id });
+    expect(s.d.undelivered()).toEqual([]);
+    s.state.now = 1 + CI_UNDELIVERED_MS;
+    await s.d.flush();
+    expect(s.d.undelivered()).toEqual([
+      expect.objectContaining({ item: { kind: "pr", id: r.id }, ticketKey: "BTL-1", number: 7, branch: "b", reason: "guard:busy", since: 1, sessionId: "h1" }),
+    ]);
+    // 归属的终端关了、没有 session：没人在等，不提醒。
+    const owned = s.pr({ number: 8, headBranch: "feat/o" });
+    s.state.owners.set(`BTL-1:${s.repoId}:feat/o`, "hx");
+    s.state.closed.add("hx");
+    await s.d.flush();
+    s.state.now += CI_UNDELIVERED_MS;
+    await s.d.flush();
+    expect(s.d.undelivered().map((u) => u.number)).toEqual([7]);
+    s.state.guard = { ok: true, termId: "t1", headId: "h1" };
+    expect(await s.d.resend({ kind: "pr", id: r.id })).toBe("sent");
+    expect(s.d.undelivered()).toEqual([]);
+    expect(await s.d.resend({ kind: "pr", id: r.id })).toBe("delivered");
+    expect(await s.d.resend({ kind: "pr", id: owned.id })).toBe("owner_closed");
+  });
+
+  it("a new commit restarts the undelivered clock", async () => {
+    const s = setup({ guard: { ok: false, block: "busy" } });
+    const r = s.pr();
+    await s.d.settled({ kind: "pr", id: r.id });
+    s.state.now = CI_UNDELIVERED_MS;
+    s.prs.update(r.id, { headSha: "fedcba9876543" });
+    await s.d.flush();
+    s.state.now = CI_UNDELIVERED_MS + 10;
+    expect(s.d.undelivered()).toEqual([]);
+  });
+});
+
+describe("pickRecipient", () => {
+  const c = (id: string, gitBranch: string | null = null, coordinator = false): RecipientCandidate => ({ id, gitBranch, coordinator });
+  const pick = (owner: string | null, ownerOpen: boolean, open: RecipientCandidate[], branch: string, ticketBranch = "main") => pickRecipient({ owner, ownerOpen, open, ticketBranch, branch });
+  it("prefers the open owner", () => {
+    expect(pick("o", true, [c("a", "b")], "b")).toEqual({ ok: true, sessionId: "o", via: "owner" });
+  });
+  it("a closed owner is replaced only by the one session started on that branch", () => {
+    expect(pick("o", false, [c("a", "b")], "b")).toEqual({ ok: true, sessionId: "a", via: "branch" });
+    expect(pick("o", false, [c("a", "feat")], "b")).toEqual({ ok: false, reason: "owner_closed" });
+    expect(pick("o", false, [c("a", "b"), c("x", "b")], "b")).toEqual({ ok: false, reason: "owner_closed" });
+    expect(pick("o", false, [c("a")], "main")).toEqual({ ok: false, reason: "owner_closed" });
+  });
+  it("without an owner: the one session on that branch; off the ticket branch an unknown one is unowned and not promised", () => {
+    expect(pick(null, false, [c("a", "main"), c("x", "feat"), c("k", "feat", true)], "feat")).toEqual({ ok: true, sessionId: "x", via: "branch" });
+    expect(pick(null, false, [c("a"), c("b")], "feat")).toEqual({ ok: false, reason: "unowned", candidates: ["a", "b"], promised: false });
+    expect(pick(null, false, [c("a")], "feat")).toEqual({ ok: false, reason: "unowned", candidates: ["a"], promised: false });
+  });
+  it("on the ticket branch: the first session started on it; child sessions on their own branches never get it", () => {
+    expect(pick(null, false, [c("k", "main", true), c("a", "main"), c("b", "main")], "main")).toEqual({ ok: true, sessionId: "a", via: "ticket" });
+    expect(pick(null, false, [c("w1", "feat/a"), c("w2", "feat/b")], "main")).toEqual({ ok: false, reason: "unowned", candidates: ["w1", "w2"], promised: true });
+    expect(pick(null, false, [c("w1", "feat/a"), c("s", "main")], "main")).toEqual({ ok: true, sessionId: "s", via: "ticket" });
+    // 只开着一个、还不知道在哪个分支上的：原来的规则。两个就认不出了。
+    expect(pick(null, false, [c("k", null, true), c("a")], "main")).toEqual({ ok: true, sessionId: "a", via: "ticket" });
+    expect(pick(null, false, [c("a"), c("b")], "main")).toEqual({ ok: false, reason: "unowned", candidates: ["a", "b"], promised: true });
+    expect(pick(null, false, [c("k", null, true)], "main")).toEqual({ ok: false, reason: "no_session" });
+  });
+});
+
 describe("CiDelivery with the real guard and needs-you tracker (I1)", () => {
   it("a Stop whose new reply is not judged yet does not get the CI result; the flush after a 'not needed' verdict does", async () => {
     const head = {
@@ -199,7 +363,7 @@ describe("CiDelivery with the real guard and needs-you tracker (I1)", () => {
       needsYou: (id) => deliveryNeedsYou(tracker, id),
       now: () => 1_000_000,
     });
-    const s = setup({ guardImpl: guard, sessionFor: () => "h1" });
+    const s = setup({ guardImpl: guard, recipient: () => ({ ok: true, sessionId: "h1", via: "ticket" }) });
     const r = s.pr();
     // Stop：新回复排进判断，结论还没出。
     tracker.update();

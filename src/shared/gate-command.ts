@@ -171,3 +171,94 @@ export function classifyPush(command: string): { dir: string | null } | null {
   }
   return null;
 }
+
+/** 一条推送或开 PR 的命令（工作流 W：记下分支是谁的）。dir 是 `git -C` 或前面 `cd` 的目录，相对 hook 的 cwd。 */
+export type ShipCommand =
+  /** branch：推到远端的哪个分支；HEAD 或没写 refspec 时是当前分支（null，由调用方在 dir 里查）。 */
+  | { kind: "push"; dir: string | null; branch: string | null }
+  /** head：--head 写的分支（去掉 `owner:`）；没写是当前分支（null）。 */
+  | { kind: "pr_create"; dir: string | null; head: string | null };
+
+const isAbsDir = (d: string): boolean => /^([/\\]|[A-Za-z]:)/.test(d);
+const joinDir = (base: string | null, next: string): string => (base && !isAbsDir(next) ? `${base}/${next}` : next);
+const remoteBranch = (r: string): string => r.replace(/^\+/, "").replace(/^refs\/heads\//, "");
+
+/**
+ * 命令里所有真正推送分支的 `git push` 和 `gh pr create`，按出现的顺序。--dry-run、只删除远端分支、只推 tag 的不算。
+ * 认不准的不返回（最多是少记一次分支是谁的）。
+ */
+export function classifyShip(command: string): ShipCommand[] {
+  if (!/\bpush\b|\bpr\b/.test(command)) return [];
+  const out: ShipCommand[] = [];
+  let dir: string | null = null;
+  for (const raw of splitSegments(command)) {
+    const tokens = shipTokens(raw);
+    let i = 0;
+    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+    if (tokens[i] === "cd") {
+      if (tokens[i + 1]) dir = joinDir(dir, tokens[i + 1]);
+      continue;
+    }
+    if (tokens[i] === "gh" && tokens[i + 1] === "pr" && tokens[i + 2] === "create") {
+      const args = tokens.slice(i + 3);
+      const h = args.findIndex((a) => a === "--head" || a === "-H");
+      const eq = args.find((a) => a.startsWith("--head="));
+      const raw = h >= 0 ? (args[h + 1] ?? null) : eq ? eq.slice("--head=".length) : null;
+      const head = raw ? raw.slice(raw.indexOf(":") + 1) || null : null;
+      out.push({ kind: "pr_create", dir, head });
+      continue;
+    }
+    if (tokens[i] !== "git") continue;
+    i++;
+    let segDir = dir;
+    while (i < tokens.length && isOption(tokens[i])) {
+      if (tokens[i] === "-C" && i + 1 < tokens.length) {
+        segDir = joinDir(segDir, tokens[i + 1]);
+        i += 2;
+      } else if (tokens[i] === "-c") i += 2;
+      else i++;
+    }
+    if (tokens[i] !== "push") continue;
+    const args = tokens.slice(i + 1);
+    if (args.some((a) => a === "--dry-run" || a === "-n" || a === "--delete" || a === "-d" || /^-[a-zA-Z]*[nd][a-zA-Z]*$/.test(a))) continue;
+    if (args.some((a) => a === "--tags" || a === "--mirror" || a === "--all" || a === "--branches")) continue;
+    const pos = positionals(args, ["--repo", "-o", "--push-option", "--receive-pack", "--exec"]);
+    const refspecs = pos.slice(1).filter((r) => !r.startsWith(":"));
+    if (pos.length > 1 && refspecs.length === 0) continue;
+    if (refspecs.length === 0) out.push({ kind: "push", dir: segDir, branch: null });
+    for (const r of refspecs) {
+      const dst = remoteBranch(r.slice(r.lastIndexOf(":") + 1));
+      // 推 tag（refs/tags/…）不是分支。
+      if (/^refs\/(?!heads\/)/.test(dst)) continue;
+      out.push({ kind: "push", dir: segDir, branch: dst && dst !== "HEAD" ? dst : null });
+    }
+  }
+  return out;
+}
+
+/**
+ * classifyShip 用的一段词：去掉重定向（`2>&1` 被 & 切开后剩下的 `2>`、`>/dev/null`、`> out.log`），
+ * 把命令替换和子 shell 的开头剥掉（`PR=$(gh pr create …)`、`(cd /wt && git push)`），结尾的 `)` 也去掉。
+ */
+function shipTokens(tokens: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    let t = tokens[i];
+    const redirect = /^\d*(?:>>?|<)(.*)$/.exec(t);
+    if (redirect) {
+      // 只写了符号（`>` `2>`）：下一个词是目标，一起去掉；`>&` 被切开了，后面没有词。
+      if (redirect[1] === "" && i + 1 < tokens.length) i++;
+      continue;
+    }
+    if (out.length === 0) {
+      const sub = /^(?:[A-Za-z_][A-Za-z0-9_]*=)?(?:\$\(|`|\()+(.*)$/.exec(t);
+      if (sub) {
+        t = sub[1];
+        if (t === "") continue;
+      }
+    }
+    t = t.replace(/[)`]+$/, "");
+    if (t !== "") out.push(t);
+  }
+  return out;
+}

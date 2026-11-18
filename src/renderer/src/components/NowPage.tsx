@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import type { MergeEvent, NowEpic, NowFeature, NowNotice, NowRow, NowTarget, NowView, UsageSummary } from "../../../shared/types";
 import { api } from "../api";
-import { noticeText, type NoticeAction } from "../availability-view";
+import { ciReasonText, noticeText, type NoticeAction } from "../availability-view";
 import { reportError } from "../errors";
 import { setWizardSkipped, wizardSkipped } from "../local-prefs";
 import { mergeEventText } from "../merge-events-view";
@@ -65,6 +65,7 @@ export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup
 
 /** 顶上的一条提醒：一句话加几个按钮；恢复、重试都是让复盘队列重新开始。 */
 function noticeKey(n: NowNotice): string {
+  if (n.kind === "ci_undelivered") return `ci_undelivered:${n.ci.item.kind}:${n.ci.item.kind === "pr" ? n.ci.item.id : n.ci.item.repoId}`;
   if (n.kind !== "session_limited") return n.kind;
   const t = n.target;
   return `session_limited:${t.page}:${"key" in t ? t.key : "id" in t ? t.id : ""}:${t.sessionId ?? ""}`;
@@ -72,17 +73,23 @@ function noticeKey(n: NowNotice): string {
 
 function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: number; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
   const { text, actions } = noticeText(n, S, now);
-  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen, routing: S.rt.nowOpen };
+  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen, routing: S.rt.nowOpen, resend: S.noticeResend };
+  // 重发的结果（CI 结果未能送达）：送到了提醒会在下一次刷新时消失，没送到写上为什么。
+  const [result, setResult] = useState<string | null>(null);
   const run = (a: NoticeAction): void => {
     if (a === "resume" || a === "retry") void api.availabilityAct({ op: "resumeLessons" }).catch(reportError);
     else if (a === "health") onGo({ page: "settings", section: "health" });
     else if (a === "lessons") onGo({ page: "lessons" });
     else if (a === "routing") onGo({ page: "settings", section: "routing" });
-    else if (n.kind === "session_limited") onOpen(n.target);
+    else if (a === "resend" && n.kind === "ci_undelivered") {
+      setResult(null);
+      void api.ciResend(n.ci.item).then((r) => setResult(r === "sent" || r === "delivered" ? S.ciResendSent : r === "busy_delivering" ? S.ciResendBusy : S.ciResendNot(ciReasonText(r, S))), reportError);
+    } else if (n.kind === "session_limited" || n.kind === "ci_undelivered") onOpen(n.target);
   };
   return (
     <div className="notice" data-testid={`now-notice-${n.kind}`}>
       <p>{text}</p>
+      {result && <p className="muted" data-testid="now-notice-result">{result}</p>}
       <div className="actions">
         {actions.map((a) => <button key={a} onClick={() => run(a)}>{label[a]}</button>)}
       </div>
