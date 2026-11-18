@@ -18,7 +18,7 @@ const url = (n: number, repo = "app") => `https://github.com/o/${repo}/pull/${n}
 const check = (name: string, state: CiCheck["state"], runId: number | null = null): CiCheck => ({ name, state, runId });
 const pr = (o: Partial<PrStatus> = {}): PrStatus => ({
   number: 7, url: url(7), state: "OPEN", isDraft: false, review: "pending", headSha: "a1", headBranch: "b", checks: [check("test", "pending", 9)], ci: "pending",
-  author: "me", reviews: [], comments: [], firstCommitAt: null, createdAt: null, mergedAt: null, closedAt: null, ...o,
+  author: "me", reviews: [], comments: [], firstCommitAt: null, createdAt: null, mergedAt: null, closedAt: null, baseBranch: null, title: null, labels: [], reviewRequests: [], mergeable: null, mergeState: null, ...o,
 });
 const listed = (n: number, o: Partial<BranchPr> = {}): BranchPr => ({ number: n, url: url(n), state: "OPEN", headRefName: "b", createdAt: 10, mergedAt: null, closedAt: null, ...o });
 
@@ -78,6 +78,39 @@ describe("PrWatcher: reading PRs", () => {
     expect(s.prs.get(row.id)).toMatchObject({ state: "open", review: "pending", ci: "pending", headSha: "a1", readError: false, checkedAt: s.now(), openedAt: 5, failed: [] });
     expect(s.events().map((e) => [e.kind, e.prId])).toEqual([["pr_opened", row.id], ["ci", row.id]]);
     expect(s.deps.onPrChanged).toHaveBeenCalledWith("BTL-1");
+  });
+
+  it("stores base, draft, title, labels, reviewers and merge state; statusChangedAt moves only when the status does", async () => {
+    const s = setup();
+    const row = s.link();
+    const reviews = [{ id: "R1", author: "alice", state: "CHANGES_REQUESTED" as const, body: "", submittedAt: 5 }];
+    s.gh.prStatus.mockResolvedValue(pr({
+      baseBranch: "main", title: "[ui] page", labels: ["frontend"], reviewRequests: [{ kind: "user", name: "bob" }], mergeable: "mergeable", mergeState: "blocked", isDraft: true, reviews,
+    }));
+    await s.w.check();
+    const first = s.now();
+    expect(s.prs.get(row.id)).toMatchObject({
+      baseBranch: "main", isDraft: true, title: "[ui] page", author: "me", labels: ["frontend"], reviewRequests: [{ kind: "user", name: "bob" }],
+      reviewers: [{ login: "alice", state: "changes_requested", at: 5, bot: false }], mergeable: "mergeable", mergeState: "blocked", statusChangedAt: first,
+    });
+    expect(s.w.statusOf("BTL-1")[0].detail).toMatchObject({ baseBranch: "main", isDraft: true, slug: "o/app", statusChangedAt: first });
+    // 只改了标题和 label：不算状态变化。
+    s.advance(PR_SLOW_MS);
+    s.gh.prStatus.mockResolvedValue(pr({
+      baseBranch: "main", title: "[ui] page v2", labels: ["frontend", "x"], reviewRequests: [{ kind: "user", name: "bob" }], mergeable: "mergeable", mergeState: "blocked", isDraft: true, reviews,
+    }));
+    await s.w.check();
+    expect(s.prs.get(row.id)).toMatchObject({ title: "[ui] page v2", labels: ["frontend", "x"], statusChangedAt: first });
+    // 不再是 draft：算。
+    s.advance(PR_SLOW_MS);
+    s.gh.prStatus.mockResolvedValue(pr({ baseBranch: "main", title: "[ui] page v2", reviewRequests: [{ kind: "user", name: "bob" }], mergeable: "mergeable", mergeState: "blocked", reviews }));
+    await s.w.check();
+    expect(s.prs.get(row.id)?.statusChangedAt).toBe(s.now());
+    // 新来一个 review：算；读不到 base / 标题时留着上一次的。
+    s.advance(PR_SLOW_MS);
+    s.gh.prStatus.mockResolvedValue(pr({ reviewRequests: [{ kind: "user", name: "bob" }], mergeable: "mergeable", mergeState: "blocked", reviews: [...reviews, { id: "R2", author: "bob", state: "APPROVED", body: "", submittedAt: 9 }] }));
+    await s.w.check();
+    expect(s.prs.get(row.id)).toMatchObject({ statusChangedAt: s.now(), baseBranch: "main", title: "[ui] page v2" });
   });
 
   it("keeps the previous ci and flags read_error when prStatus fails; cachedByUrl then returns null", async () => {
@@ -772,7 +805,12 @@ describe("PrWatcher: rounds", () => {
     s.advance(PR_SLOW_MS);
     await s.w.check();
     expect(s.w.statusOf("BTL-1")).toEqual([
-      { ticketKey: "BTL-1", prId: row.id, repoId: s.repoId, repoPath: "/r/app", branch: "b", number: 7, url: url(7), state: "open", review: "pending", ci: "pending", headSha: "a1", checkedAt: s.now(), readError: false },
+      { ticketKey: "BTL-1", prId: row.id, repoId: s.repoId, repoPath: "/r/app", branch: "b", number: 7, url: url(7), state: "open", review: "pending", ci: "pending", headSha: "a1", checkedAt: s.now(), readError: false,
+        detail: {
+          baseBranch: null, isDraft: false, title: null, author: "me", labels: [], reviewRequests: [], reviewers: [], mergeable: null, mergeState: null,
+          statusChangedAt: s.now(), slug: "o/app",
+        },
+      },
     ]);
     expect(s.w.statusOf("BTL-2")).toEqual([]);
   });

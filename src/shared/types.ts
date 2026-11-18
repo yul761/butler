@@ -4,6 +4,7 @@ import type { ActivityEvent, SessionActivity } from "./activity";
 import type { AvailabilityHit, LimitHit } from "./availability";
 import type { ReportKind } from "./control";
 import type { FeatureHandoff, Handoff, Pr } from "./handoff";
+import type { PrMergeable, PrMergeState, PrReviewer, PrReviewRequest } from "./progress";
 export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
 export type WorkMode = "worktree" | "branch";
@@ -480,6 +481,24 @@ export interface WatchedPr {
   checkedAt: number;
   /** 上一次 gh 读取失败：ci、state 是再上一次的。 */
   readError: boolean;
+  /** PR 行的 base、draft、标题、reviewer 等（ws-b）；分支行没有。 */
+  detail?: PrDetail;
+}
+
+/** ticket_prs 里 ws-b 加的那些字段（叠放树、卡在谁手上、汇总新鲜度）。 */
+export interface PrDetail {
+  baseBranch: string | null;
+  isDraft: boolean;
+  title: string | null;
+  author: string | null;
+  labels: string[];
+  reviewRequests: PrReviewRequest[];
+  reviewers: PrReviewer[];
+  mergeable: PrMergeable | null;
+  mergeState: PrMergeState | null;
+  /** 状态最后一次变化的时间；没读过为 null。 */
+  statusChangedAt: number | null;
+  slug: string;
 }
 
 /** 「现在」页一行点开去哪：ticket 页、feature 页、epic 页或 Butler 总控页，sessionId 是要切到的终端（null：页面自己选）。 */

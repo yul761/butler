@@ -19,6 +19,25 @@ const link = (o: Partial<NewPrLink> = {}): NewPrLink => ({
 });
 
 describe("TicketPrsRepo", () => {
+  it("new rows start with empty ws-b fields; update writes and reads them back", () => {
+    const { db, prs } = setup();
+    const p = prs.link(link()).pr;
+    expect(p).toMatchObject({
+      baseBranch: null, isDraft: false, title: null, author: null, labels: [], reviewRequests: [], reviewers: [], mergeable: null, mergeState: null, statusChangedAt: null,
+    });
+    prs.update(p.id, {
+      baseBranch: "main", isDraft: true, title: "[ui] x", author: "me", labels: ["a", "b"], reviewRequests: [{ kind: "team", name: "core" }],
+      reviewers: [{ login: "alice", state: "approved", at: 3, bot: false }], mergeable: "conflicting", mergeState: "dirty", statusChangedAt: 42,
+    });
+    expect(prs.get(p.id)).toMatchObject({
+      baseBranch: "main", isDraft: true, title: "[ui] x", author: "me", labels: ["a", "b"], reviewRequests: [{ kind: "team", name: "core" }],
+      reviewers: [{ login: "alice", state: "approved", at: 3, bot: false }], mergeable: "conflicting", mergeState: "dirty", statusChangedAt: 42,
+    });
+    // 坏的 JSON 不让整行读不出来。
+    db.prepare(`UPDATE ticket_prs SET labels = 'nope', reviewers = '{"x":1}' WHERE id = ?`).run(p.id);
+    expect(prs.get(p.id)).toMatchObject({ labels: [], reviewers: [] });
+  });
+
   it("link fills nulls on a second link but keeps the read state", () => {
     const { prs, repoId } = setup();
     expect(repoId).toBeGreaterThan(0);

@@ -3,7 +3,7 @@ import type { BranchWatchRepo, BranchWatchRow } from "../db/branch-watch-repo";
 import type { PrStageRepo } from "../db/pr-stage-repo";
 import type { TicketPr, TicketPrsRepo } from "../db/ticket-prs-repo";
 import {
-  reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prStatus, type prsForBranch, type reviewAuthors,
+  latestReviewers, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prStatus, type prsForBranch, type reviewAuthors,
   type ReviewAuthors, type reviewComments,
 } from "../tickets/gh";
 import type { firstCommitAt } from "../tickets/git";
@@ -150,6 +150,10 @@ export class PrWatcher {
       ticketKey, prId: r.id, repoId: r.repoId, repoPath: r.repoId === null ? null : (this.d.repoOf(r.repoId)?.repoPath ?? null),
       branch: r.headBranch ?? "", number: r.number, url: r.url, state: r.state, review: r.review, ci: r.ci, headSha: r.headSha,
       checkedAt: r.checkedAt, readError: r.readError,
+      detail: {
+        baseBranch: r.baseBranch, isDraft: r.isDraft, title: r.title, author: r.author, labels: r.labels, reviewRequests: r.reviewRequests, reviewers: r.reviewers,
+        mergeable: r.mergeable, mergeState: r.mergeState, statusChangedAt: r.statusChangedAt, slug: r.slug,
+      },
     }));
     for (const b of this.d.branches.all()) {
       if (b.ticketKey !== ticketKey || b.checkedAt === 0) continue;
@@ -320,9 +324,16 @@ export class PrWatcher {
     } catch (e) {
       this.d.log(`pr watch: recording the stages of ${r.url} for ${r.ticketKey} failed`, e);
     }
+    const detail = prDetailOf(pr);
+    // 状态最后一次变化（ws-b）：汇总新鲜度和"卡了多久"看它；第一次读到也算。标题、label 不算状态。
+    const statusChanged = first || r.state !== state || r.review !== pr.review || r.ci !== pr.ci || r.headSha !== pr.headSha
+      || r.isDraft !== detail.isDraft || r.mergeable !== detail.mergeable || r.mergeState !== detail.mergeState
+      || JSON.stringify(r.reviewers) !== JSON.stringify(detail.reviewers) || JSON.stringify(r.reviewRequests) !== JSON.stringify(detail.reviewRequests);
     this.d.prs.update(r.id, {
       state, review: pr.review, ci: pr.ci, headSha: pr.headSha, headBranch, failed, readError: false, readFailures: 0, readFailingSince: null, readRetryAt: null, checkedAt: now,
       openedAt: pr.createdAt ?? r.openedAt, mergedAt, closedAt,
+      ...detail, baseBranch: detail.baseBranch ?? r.baseBranch, title: detail.title ?? r.title, author: detail.author ?? r.author,
+      ...(statusChanged && { statusChangedAt: now }),
     });
     if (first || r.state !== state || r.review !== pr.review) marks.prChanged.add(r.ticketKey);
     if (first || added || r.readError || r.state !== state || r.review !== pr.review || r.ci !== pr.ci || r.headSha !== pr.headSha || !sameChecks(r.failed, failed)) {
@@ -544,4 +555,12 @@ export class PrWatcher {
       this.ghWaiting.shift()?.();
     }
   }
+}
+
+/** 一次读到的 PR 里 ws-b 要存的字段（reviewer 按 GitHub 的规则取每个人最新的态度）。 */
+export function prDetailOf(pr: PrStatus): Pick<TicketPr, "baseBranch" | "isDraft" | "title" | "author" | "labels" | "reviewRequests" | "reviewers" | "mergeable" | "mergeState"> {
+  return {
+    baseBranch: pr.baseBranch, isDraft: pr.isDraft, title: pr.title, author: pr.author || null, labels: pr.labels, reviewRequests: pr.reviewRequests,
+    reviewers: latestReviewers(pr.reviews, pr.author), mergeable: pr.mergeable, mergeState: pr.mergeState,
+  };
 }

@@ -1,4 +1,5 @@
 import { prUrlKey } from "../../shared/pr-url";
+import type { PrMergeable, PrMergeState, PrReviewer, PrReviewRequest } from "../../shared/progress";
 import type { WatchedPr } from "../../shared/types";
 import type { CiCheck } from "../tickets/gh";
 import type { Db } from "./database";
@@ -45,6 +46,18 @@ export interface TicketPr {
   readFailingSince: number | null;
   /** 放弃读以后下次再试的时间；null = 没放弃。 */
   readRetryAt: number | null;
+  /** 以下是 ws-b 加的（叠放树、卡在谁手上）；没读过时是空值。 */
+  baseBranch: string | null;
+  isDraft: boolean;
+  title: string | null;
+  author: string | null;
+  labels: string[];
+  reviewRequests: PrReviewRequest[];
+  reviewers: PrReviewer[];
+  mergeable: PrMergeable | null;
+  mergeState: PrMergeState | null;
+  /** 状态（state、review、CI、head、draft、合并状态、reviewer）最后一次变化的时间；没读过为 null。 */
+  statusChangedAt: number | null;
 }
 
 /** 放弃读了（失败了 PR_READ_GIVE_UP 次、持续一天）：状态只是最后一次读到的，不再当真。 */
@@ -71,7 +84,8 @@ export interface NewPrLink {
 }
 
 export type TicketPrPatch = Partial<
-  Pick<TicketPr, "state" | "review" | "ci" | "readError" | "headSha" | "failed" | "headBranch" | "openedAt" | "mergedAt" | "closedAt" | "checkedAt" | "readFailures" | "readFailingSince" | "readRetryAt">
+  Pick<TicketPr, "state" | "review" | "ci" | "readError" | "headSha" | "failed" | "headBranch" | "openedAt" | "mergedAt" | "closedAt" | "checkedAt" | "readFailures" | "readFailingSince" | "readRetryAt"
+    | "baseBranch" | "isDraft" | "title" | "author" | "labels" | "reviewRequests" | "reviewers" | "mergeable" | "mergeState" | "statusChangedAt">
 >;
 
 interface Row {
@@ -99,6 +113,27 @@ interface Row {
   read_failures: number;
   read_failing_since: number | null;
   read_retry_at: number | null;
+  base_branch: string | null;
+  is_draft: number;
+  title: string | null;
+  author: string | null;
+  labels: string;
+  review_requests: string;
+  reviewers: string;
+  mergeable: PrMergeable | null;
+  merge_state: PrMergeState | null;
+  status_changed_at: number | null;
+}
+
+/** JSON 列：坏了就当作空的（不让一行坏数据挡住整个列表）。 */
+function jsonList<T>(text: string | null): T[] {
+  if (!text) return [];
+  try {
+    const v: unknown = JSON.parse(text);
+    return Array.isArray(v) ? (v as T[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 const num = (v: number | null): number | null => (v === null ? null : Number(v));
@@ -109,6 +144,9 @@ const toPr = (r: Row): TicketPr => ({
   failed: JSON.parse(r.failed) as CiCheck[], openedAt: num(r.opened_at), mergedAt: num(r.merged_at), closedAt: num(r.closed_at),
   source: r.source, linkedAt: Number(r.linked_at), checkedAt: Number(r.checked_at), deliveredKey: r.delivered_key,
   mergedHandledAt: num(r.merged_handled_at), readFailures: Number(r.read_failures), readFailingSince: num(r.read_failing_since), readRetryAt: num(r.read_retry_at),
+  baseBranch: r.base_branch, isDraft: Number(r.is_draft) !== 0, title: r.title, author: r.author, labels: jsonList<string>(r.labels),
+  reviewRequests: jsonList<PrReviewRequest>(r.review_requests), reviewers: jsonList<PrReviewer>(r.reviewers),
+  mergeable: r.mergeable, mergeState: r.merge_state, statusChangedAt: num(r.status_changed_at),
 });
 
 /** 每个 (ticket, PR 链接) 一行：PR 的状态、CI、评审和已经交付给会话的 CI。 */
@@ -193,6 +231,16 @@ export class TicketPrsRepo {
     if (p.readFailures !== undefined) set("read_failures", p.readFailures);
     if (p.readFailingSince !== undefined) set("read_failing_since", p.readFailingSince);
     if (p.readRetryAt !== undefined) set("read_retry_at", p.readRetryAt);
+    if (p.baseBranch !== undefined) set("base_branch", p.baseBranch);
+    if (p.isDraft !== undefined) set("is_draft", p.isDraft ? 1 : 0);
+    if (p.title !== undefined) set("title", p.title);
+    if (p.author !== undefined) set("author", p.author);
+    if (p.labels !== undefined) set("labels", JSON.stringify(p.labels));
+    if (p.reviewRequests !== undefined) set("review_requests", JSON.stringify(p.reviewRequests));
+    if (p.reviewers !== undefined) set("reviewers", JSON.stringify(p.reviewers));
+    if (p.mergeable !== undefined) set("mergeable", p.mergeable);
+    if (p.mergeState !== undefined) set("merge_state", p.mergeState);
+    if (p.statusChangedAt !== undefined) set("status_changed_at", p.statusChangedAt);
     if (sets.length === 0) return;
     this.db.prepare(`UPDATE ticket_prs SET ${sets.join(", ")} WHERE id = ?`).run(...vals, id);
   }
