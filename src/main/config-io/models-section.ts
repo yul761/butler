@@ -13,7 +13,7 @@ import { emptyCounts, type ConfigSection, type SectionEnv } from "./registry";
  *
  * 不导出：健康、事件、花费、未识别的报错（本机状态）；规则的 note（学到的规则的 note 是报错原文的一行，可能带路径或名字）。
  * 导入的模型和规则先停用（契约里的 pending）：导入之后行为不变，用户在「模型路由」页启用；本机已有的保留本机的启用状态。
- * 这些表不在批次撤销（4.4）的适配器里：导入前的自动备份就是撤销手段。
+ * 这些表不在批次撤销（4.4）的适配器里：合并只加停用的条目、默认留本地的；替换之前框架写的备份是回退手段。
  */
 
 const LIMIT_KINDS = ["usage_limit", "rate_limit", "overloaded", "model_unavailable"] as const;
