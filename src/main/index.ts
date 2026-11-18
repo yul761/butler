@@ -1855,7 +1855,8 @@ async function bootstrap(): Promise<void> {
 
   // 开新 session 前按内存放行（工作流 W）：取代以前每 ticket、每 feature、每 epic 写死的上限。
   // 实测的每个 session 占用（工作流 M 的采样）合进来以后接 measuredSessionsKb；现在用设置里的预估值。
-  const memoryReadDeps = defaultReadDeps((file, args) => execText(file, args, { timeoutMs: 2_000 }));
+  // BUTLER_E2E_AVAILABLE_MB 只在没打包时生效（e2e 用）。
+  const memoryReadDeps = defaultReadDeps((file, args) => execText(file, args, { timeoutMs: 2_000 }), app.isPackaged);
   // 启动时记一次读数（附录第 7 节）：看得出这台机器上 vm_stat 算出来的可用内存合不合理。
   void memorySnapshotLine(memoryReadDeps).then((line) => logger(`memory at startup: ${line}`), (e: unknown) => logger("memory at startup: reading failed", e));
   const admission = new MemoryAdmission({

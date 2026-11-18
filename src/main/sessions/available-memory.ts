@@ -124,8 +124,16 @@ export async function readAvailableMemory(d: ReadDeps): Promise<MemoryReading> {
   return osReading(pressure);
 }
 
-export const defaultReadDeps = (run: RunText): ReadDeps => ({
-  platform: process.platform, run, totalmem: os.totalmem, freemem: os.freemem, fixedAvailableMb: process.env.BUTLER_E2E_AVAILABLE_MB,
+/**
+ * e2e 定死的可用内存：只在没打包时读 BUTLER_E2E_AVAILABLE_MB（e2e 跑的是没打包的构建）。
+ * 打包好的正式版不理它：环境里碰巧有这个变量也不能让准入不看真实内存。
+ */
+export function e2eFixedAvailableMb(env: NodeJS.ProcessEnv, packaged: boolean): string | undefined {
+  return packaged ? undefined : env.BUTLER_E2E_AVAILABLE_MB;
+}
+
+export const defaultReadDeps = (run: RunText, packaged: boolean): ReadDeps => ({
+  platform: process.platform, run, totalmem: os.totalmem, freemem: os.freemem, fixedAvailableMb: e2eFixedAvailableMb(process.env, packaged),
 });
 
 /** 日志用的一行：从哪读的、总量、可用、压力、各项。 */

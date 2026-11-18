@@ -65,7 +65,7 @@ The 4-coordinator limit per epic was there for the same reason as the others: to
   It also covers the fixed e2e reading, the per-field detail, and the startup log line.
 - `memory-admission.test.ts`: admit, refuse on memory with the message's numbers, burst counting and the pending window, release, measured estimate, critical pressure, the cap on and off, read failure.
 - Control layer: per-ticket, per-feature and per-epic caps are gone (more than the old numbers open), refusal with "not enough memory" opens no terminal, `capacity` on `start_session`, `start_feature` and `list_sessions`, an already running coordinator is not gated.
-- e2e: every sandbox sets `BUTLER_E2E_AVAILABLE_MB=65536` (`e2e/fixtures.ts`), so no spec depends on the CI machine's real memory. `features.spec.ts` "start_session is refused when memory is short" sets it to 1000. It checks that the refusal states what is available, what is needed and what must stay free, that no terminal opens, and that `list_sessions` says 0 more can start.
+- e2e: every sandbox sets `BUTLER_E2E_AVAILABLE_MB=65536` (`e2e/fixtures.ts`), so no spec depends on the CI machine's real memory. Only an unpackaged build reads the variable (`e2eFixedAvailableMb`). A packaged release ignores it even if it is set, and a unit test covers that. `features.spec.ts` "start_session is refused when memory is short" sets it to 1000. It checks that the refusal states what is available, what is needed and what must stay free, that no terminal opens, and that `list_sessions` says 0 more can start.
 
 ## 7. Small machines: the default reserve is automatic (after the first CI run of #40)
 

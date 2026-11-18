@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { memorySnapshotLine, parseFreePercentage, parsePressureLevel, parseVmStatAvailable, readAvailableMemory, readingLine, type ReadDeps } from "./available-memory";
+import { defaultReadDeps, e2eFixedAvailableMb, memorySnapshotLine, parseFreePercentage, parsePressureLevel, parseVmStatAvailable, readAvailableMemory, readingLine, type ReadDeps } from "./available-memory";
 
 const GB = 1024 * 1024 * 1024;
 
@@ -99,6 +99,30 @@ describe("fixed reading for e2e (BUTLER_E2E_AVAILABLE_MB)", () => {
     // 比总量还大：总量跟着抬上去（自动保留线按总量算）。
     expect(await readAvailableMemory(deps({ platform: "linux", fixedAvailableMb: "65536", totalmem: () => 7 * GB }))).toMatchObject({ totalKb: 64 * 1024 * 1024 });
     for (const bad of ["", " ", "lots", "-1", "1.5"]) expect((await readAvailableMemory(deps({ platform: "linux", fixedAvailableMb: bad }))).source, bad).toBe("os");
+  });
+});
+
+describe("BUTLER_E2E_AVAILABLE_MB only outside a packaged build", () => {
+  it("a packaged build ignores it; an unpackaged one (e2e) reads it", async () => {
+    const env = { BUTLER_E2E_AVAILABLE_MB: "1000" };
+    expect(e2eFixedAvailableMb(env, true)).toBeUndefined();
+    expect(e2eFixedAvailableMb(env, false)).toBe("1000");
+    expect(e2eFixedAvailableMb({}, false)).toBeUndefined();
+    // 走一遍 defaultReadDeps：打包环境里设了这个变量，读的还是这台机器。
+    const before = process.env.BUTLER_E2E_AVAILABLE_MB;
+    process.env.BUTLER_E2E_AVAILABLE_MB = "1000";
+    try {
+      const run = vi.fn(async () => {
+        throw new Error("no command");
+      });
+      const packaged = await readAvailableMemory({ ...defaultReadDeps(run, true), platform: "linux" });
+      expect(packaged.source).toBe("os");
+      expect(defaultReadDeps(run, true).fixedAvailableMb).toBeUndefined();
+      expect((await readAvailableMemory({ ...defaultReadDeps(run, false), platform: "linux" })).source).toBe("fixed");
+    } finally {
+      if (before === undefined) delete process.env.BUTLER_E2E_AVAILABLE_MB;
+      else process.env.BUTLER_E2E_AVAILABLE_MB = before;
+    }
   });
 });
 
