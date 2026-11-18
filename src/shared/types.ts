@@ -1,4 +1,5 @@
 import type { CheckAbsenceReason } from "./checks";
+import type { MemorySnapshot, SessionMemory } from "./mem-usage";
 import type { ActivityEvent, SessionActivity } from "./activity";
 import type { AvailabilityHit, LimitHit } from "./availability";
 import type { ReportKind } from "./control";
@@ -136,6 +137,10 @@ export interface Session {
   lessonRunId: number | null;
   /** 这个 session 启动时为什么没有检查（契约 4.5）；null = 有检查，或者根本没有启用的检查。 */
   checksAbsent?: CheckAbsenceReason | null;
+  /** 最近一次采到的整棵进程树内存（KB，WS-M A）；没采过为 null 或缺省。 */
+  memKb?: number | null;
+  /** 那次采样的时间。 */
+  memAt?: number | null;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */
@@ -512,6 +517,8 @@ export interface NowRow {
   /** 这个状态从什么时候开始（activity.startedAt，没有就用 session 的 lastActivityAt）。 */
   since: number | null;
   target: NowTarget;
+  /** 这个 session 整棵进程树最近一次的内存读数（WS-M A）；监控关着、没采到、只有 PR 的行为 null 或缺省。 */
+  mem?: SessionMemory | null;
 }
 
 /** 一组的汇总：在干活的行数（NowRow.working）、需要你的件数、卡住的行数。 */
@@ -628,4 +635,6 @@ export interface NowView {
   /** 最近的记忆读写（实况窗口的核心卡片，BTL-190 第 7 点），从早到晚。 */
   memory: ActivityEvent[];
   merges: MergeEvent[];
+  /** 内存卡片（WS-M A）：最近一次采样；监控关着或还没采到为 null 或缺省。 */
+  mem?: MemorySnapshot | null;
 }

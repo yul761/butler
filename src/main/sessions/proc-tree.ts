@@ -62,7 +62,7 @@ export function descendantCpuMs(rootPid: number, table: Map<number, ProcEntry>):
 const SHELLS = new Set(["bash", "zsh", "sh", "dash", "fish", "ksh", "cmd", "powershell", "pwsh"]);
 
 /** 命令行第一段的程序名：去掉路径、登录 shell 的「-」和 .exe，小写。 */
-function programName(args: string): string {
+export function programName(args: string): string {
   const first = args.trim().split(/\s+/)[0] ?? "";
   return (first.split(/[\\/]/).pop() ?? "").replace(/^-/, "").replace(/\.exe$/i, "").toLowerCase();
 }

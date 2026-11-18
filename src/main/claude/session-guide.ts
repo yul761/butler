@@ -96,17 +96,19 @@ function lessonsSection(lang: Lang, kind: GuideKind, lessons: SessionLesson[]): 
   return [head, ...lessons.map((l) => `- [${l.label}] ${l.text}`)].join("\n");
 }
 
-export function sessionGuide(lang: Lang, kind: GuideKind, lessons: SessionLesson[] = []): string {
+/** extra：仓库相关的几行（WS-M I 的 watcher 规定），放在最后。 */
+export function sessionGuide(lang: Lang, kind: GuideKind, lessons: SessionLesson[] = [], extra: string[] = []): string {
   const parts = GUIDE_SECTIONS.map((s) => s(lang, kind)).filter((s): s is string => !!s);
   const l = lessonsSection(lang, kind, lessons);
   if (l) parts.push(l);
+  parts.push(...extra);
   return parts.join("\n\n") + "\n";
 }
 
-/** lessons 为空：写 <mcpDir>/guide-<kind>-<lang>.md。不为空：写 guide-<kind>-<lang>-<内容 sha256 前 12 位>.md。内容没变就不重写，返回路径。 */
-export function writeSessionGuide(mcpDir: string, lang: Lang, kind: GuideKind, lessons: SessionLesson[] = []): string {
-  const text = sessionGuide(lang, kind, lessons);
-  const hash = lessons.length > 0 ? `-${createHash("sha256").update(text).digest("hex").slice(0, 12)}` : "";
+/** lessons 和 extra 都为空：写 <mcpDir>/guide-<kind>-<lang>.md。不然写 guide-<kind>-<lang>-<内容 sha256 前 12 位>.md。内容没变就不重写，返回路径。 */
+export function writeSessionGuide(mcpDir: string, lang: Lang, kind: GuideKind, lessons: SessionLesson[] = [], extra: string[] = []): string {
+  const text = sessionGuide(lang, kind, lessons, extra);
+  const hash = lessons.length > 0 || extra.length > 0 ? `-${createHash("sha256").update(text).digest("hex").slice(0, 12)}` : "";
   const file = join(mcpDir, `guide-${kind}-${lang}${hash}.md`);
   if (existsSync(file) && readFileSync(file, "utf8") === text) return file;
   mkdirSync(mcpDir, { recursive: true });

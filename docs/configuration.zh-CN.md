@@ -108,6 +108,23 @@ Butler 还会把正则和分支名模板放在一起检查。如果正则接受�
 
   没能处理完所有事件的一次运行会被记为部分完成，它的 ticket 会重新同步；什么都没蒸馏出来的一次运行会把事件留到第二天晚上。这些调用由 Butler 的主进程在隐私网关里发出，StateCore 的进程永远拿不到 API key。
 
+## 内存与性能
+
+这些设置在**设置 → 常规 → 内存与性能**。没有一项是靠限制同时运行的 session 数量来省内存的。
+
+| 设置 | 键 | 默认 | 可填的值和说明 |
+|------|----|------|----------------|
+| 记录每个 session 用了多少内存 | `memoryMonitor` | `1`（开） | `1` 或 `0`。Butler 每分钟读一次进程表（macOS 用 `ps`，Windows 用 `Get-CimInstance Win32_Process`，不调用任何模型），把每个开着的 session 的整棵进程树（claude、它的 MCP server、shell、watcher、dev server）和 Butler 自己的进程加起来，再读系统还有多少可用内存。**现在**页每一行上显示最近一次的读数（悬停看明细），最上面有一行**内存**：Butler、session、系统可用、Butler 的 MCP，展开后有最近 24 小时的曲线。每 5 分钟往 Butler 的数据库存一个点，保留 14 天。只读，不动任何进程。 |
+| 降低看不见又停着的 session 的优先级 | `backgroundPriority` | `0`（关） | `1` 或 `0`。macOS 上，不在屏幕上、又停着的 session，整棵进程树被设成后台（`taskpolicy -b`）。Windows 上，看不见的 session 设成 `BelowNormal`，又停着的再打开 EcoQoS。终端出现在屏幕上、你在里面打字、或者 session 又开始干活，马上恢复；退出 Butler 时全部恢复。macOS 上正在干活的 session 不降：后台优先级会把编译和测试拖得很慢。 |
+| 清理 session 留下的孤儿进程 | `orphanCleanup` | `1`（开） | `1` 或 `0`。Butler 记着它在每个 session 下面见过哪些进程（`~/.butler/procs/owned.json`，带启动时间和命令行）。session 的终端结束 5 秒后，其中还活着、又不在任何开着的 session 下面的，会被结束：先正常结束，5 秒后还在就强制结束（Windows 上用 `taskkill /T`）。启动时也会清掉 Butler 上次异常退出留下的。启动时间或命令行对不上的（比如 pid 被别的程序重用了）绝不碰。每结束一个都写进日志。 |
+| claude 进程超过多少 MB 就换新（0 = 关） | `refreshMemoryMb` | `2048` | `0` 关掉，否则是不小于 256 的整数 MB（最多 6 位）。只算 claude 进程自己，不算它的 MCP server 和别的子进程。超过以后，Butler 在这个 session 下一次停下来的时候换新，检查和步骤和 `refreshThresholdTokens` 一样（所以要开着记忆）。换新以后 claude 还在阈值的 80% 以上，Butler 写进日志；6 小时以后再试。 |
+
+### Butler 管不了、但很有用的建议
+
+- **Windows：**在 Windows 安全中心给 Defender 加排除：放 worktree 的目录、`node_modules`、`.git` 和 `%USERPROFILE%\.butler`。很多 node 和 git 进程一起跑时，实时扫描开销很大。确认页面文件够大：设成**系统管理的大小**，或者至少是内存的 1.5 倍。
+- **macOS：**把放 worktree 的目录加进「聚焦」的隐私列表（系统设置 → Siri 与聚焦 → 聚焦隐私），免得每次 `pnpm install` 都被重新索引。装了第三方杀毒软件的话，同样排除这些目录。macOS 自己管交换空间：磁盘至少留 15%～20% 的空闲，它才有地方换出。
+- **两边都是：**你自己的 Claude 配置里装的每个 MCP server，每个 session 都会再起一份。**现在**页的**内存**那一行会列出你装的 MCP 里占内存最多的。不常用的可以从你的 Claude 配置里去掉；Butler 不会替你改这个配置。
+
 ## 调度与 handoff
 
 | 设置 | 键 | 默认值 | 可填的值和说明 |

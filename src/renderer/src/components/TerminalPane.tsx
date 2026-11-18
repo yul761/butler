@@ -12,19 +12,39 @@ import { compositionShift } from "./composition-fit";
 /** Ctrl+V 时剪贴板里没有文字（比如截图）：照常把 ^V 交给 claude，由它自己读剪贴板里的图片。 */
 const CTRL_V = "\x16";
 
+/** xterm 留的回滚行数（WS-M D）：主进程的快照另外留着 256 KB 的原始输出，切回来时从快照重建。 */
+export const TERMINAL_SCROLLBACK = 3000;
+
+/**
+ * 只有看得见的终端才有 xterm（WS-M D）：切走就 dispose，切回来从主进程的快照重建，渲染进程里只留一个终端的缓冲区和 WebGL / DOM。
+ * 可见性同时报给主进程（pty:visible），后台优先级（E）按它判断。
+ */
 export function TerminalPane({ termId, visible, onClose, onResume }: { termId: string; visible: boolean; onClose: () => void; onResume: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
 
   useEffect(() => {
-    const term = new Terminal({ fontFamily: 'Menlo, Consolas, "Cascadia Mono", monospace', fontSize: 13, cursorBlink: true, scrollback: 10_000 });
+    if (!visible) return;
+    api.ptyVisible(termId, true);
+    const term = new Terminal({ fontFamily: 'Menlo, Consolas, "Cascadia Mono", monospace', fontSize: 13, cursorBlink: true, scrollback: TERMINAL_SCROLLBACK });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(ref.current!);
     termRef.current = term;
-    fitRef.current = fit;
+
+    const doFit = () => {
+      if (!ref.current || ref.current.offsetParent === null) return;
+      fit.fit();
+      api.ptyResize(termId, term.cols, term.rows);
+    };
+    // 快照写进来之前先量好尺寸：新建的 xterm 是 80x24，按那个宽度重放按 200 列画的屏幕会错行，
+    // 而尺寸和 pty 一样时 claude 收不到 SIGWINCH、不会重画，错的画面会一直留着。
+    try {
+      doFit();
+    } catch {
+      // 还量不出字宽：等下面的第一帧。
+    }
 
     // 主进程按顺序发送数据事件和 invoke 的返回：快照返回之前收到的数据都已包含在快照里，直接丢弃。
     let ready = false;
@@ -43,13 +63,18 @@ export function TerminalPane({ termId, visible, onClose, onResume }: { termId: s
       .then((snap) => {
         if (disposed) return;
         term.write(snap.data);
-        if (snap.exitCode !== null) setExitCode(snap.exitCode);
+        setExitCode(snap.exitCode);
         ready = true;
       })
       .catch((e) => {
         ready = true;
         reportError(e);
       });
+    const firstFrame = requestAnimationFrame(() => {
+      if (disposed) return;
+      doFit();
+      term.focus();
+    });
 
     const input = term.onData((d) => api.ptyWrite(termId, d));
     // Windows / Linux 的 Ctrl+C / Ctrl+V（见 terminal-keys）。preventDefault 让菜单里的粘贴快捷键不再触发第二次。
@@ -82,17 +107,14 @@ export function TerminalPane({ termId, visible, onClose, onResume }: { termId: s
     const textarea = term.textarea;
     textarea?.addEventListener("compositionupdate", fitComposition);
     textarea?.addEventListener("compositionend", fitComposition);
-    const doFit = () => {
-      if (!ref.current || ref.current.offsetParent === null) return;
-      fit.fit();
-      api.ptyResize(termId, term.cols, term.rows);
-    };
     const ro = new ResizeObserver(doFit);
     ro.observe(ref.current!);
 
     return () => {
       disposed = true;
+      api.ptyVisible(termId, false);
       ro.disconnect();
+      cancelAnimationFrame(firstFrame);
       cancelAnimationFrame(fitFrame);
       textarea?.removeEventListener("compositionupdate", fitComposition);
       textarea?.removeEventListener("compositionend", fitComposition);
@@ -100,19 +122,9 @@ export function TerminalPane({ termId, visible, onClose, onResume }: { termId: s
       offExit();
       input.dispose();
       term.dispose();
+      termRef.current = null;
     };
-  }, [termId]);
-
-  useEffect(() => {
-    if (!visible) return;
-    requestAnimationFrame(() => {
-      const term = termRef.current;
-      if (!term || !ref.current || ref.current.offsetParent === null) return;
-      fitRef.current?.fit();
-      api.ptyResize(termId, term.cols, term.rows);
-      term.focus();
-    });
-  }, [visible, termId]);
+  }, [termId, visible]);
 
   function copySelection(term: Terminal) {
     api.clipboardWrite(term.getSelection()).catch(reportError);

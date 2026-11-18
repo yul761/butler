@@ -34,6 +34,10 @@ export const EDITABLE_SETTINGS = [
   "routingEffort",
   "routingMaxConcurrent",
   "routingAutoSwitch",
+  "memoryMonitor",
+  "backgroundPriority",
+  "orphanCleanup",
+  "refreshMemoryMb",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

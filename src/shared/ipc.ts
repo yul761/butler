@@ -60,6 +60,10 @@ export const IPC = {
   ptyKill: "pty:kill",
   ptyWrite: "pty:write",
   ptyResize: "pty:resize",
+  /** 终端出现在屏幕上 / 不在了（WS-M D、E）。 */
+  ptyVisible: "pty:visible",
+  /** 内存历史曲线（WS-M A）。 */
+  memUsageHistory: "memusage:history",
   ptyData: "pty:data",
   ptyExit: "pty:exit",
   stateChanged: "state:changed",
@@ -160,11 +164,11 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList,
-  IPC.memoryView, IPC.memoryWhy,
+  IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
-export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize];
+export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible];
 /** 主进程 → 渲染进程。 */
 export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.activityEvent, IPC.memoryChanged, IPC.appKeepAwakeChanged];
 

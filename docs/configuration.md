@@ -108,6 +108,23 @@ This section also shows:
 
   A run that could not process every event is reported as partial and its ticket is resynced; a run that distilled nothing leaves the events for the next night. The calls are made by Butler's main process, inside the privacy gateway, and no StateCore process ever receives the API key.
 
+## Memory and performance
+
+These settings are in **Settings → General → Memory and performance**. None of them limits how many sessions run at once.
+
+| Setting | Key | Default | Accepted values and notes |
+|---------|-----|---------|---------------------------|
+| Record how much memory each session uses | `memoryMonitor` | `1` (on) | `1` or `0`. Once a minute Butler reads the process table (`ps` on macOS, `Get-CimInstance Win32_Process` on Windows; no model is called). It adds up each open session's whole process tree (claude, its MCP servers, shells, watchers, dev servers) and Butler's own processes, and reads how much memory the system has free. The **Now** page shows the latest reading on each row (hover for the breakdown) and a **Memory** line at the top: Butler, sessions, free memory, Butler's MCP servers, and a 24-hour curve when you open it. Every five minutes a point is stored in Butler's database. Points are kept for 14 days. Reading only; it never changes a process. |
+| Lower the priority of sessions you can't see that have stopped | `backgroundPriority` | `0` (off) | `1` or `0`. On macOS, the whole tree of a session that is not on screen and has stopped is put in the background (`taskpolicy -b`). On Windows, a session you can't see gets `BelowNormal`, and one that has also stopped gets EcoQoS too. Showing the terminal, typing into it, or the session starting to work again restores normal priority at once; quitting Butler restores everything. Sessions that are working are never lowered on macOS, because background priority makes builds and tests very slow. |
+| Clean up orphan processes a session leaves behind | `orphanCleanup` | `1` (on) | `1` or `0`. Butler remembers which processes it has seen under each session (`~/.butler/procs/owned.json`, with each one's start time and command line). Five seconds after a session's terminal ends, any of them still running, and no longer under a live session, is ended: first politely, then by force five seconds later (`taskkill /T` on Windows). At startup it does the same for processes left over when Butler last quit unexpectedly. A process whose start time or command line no longer matches, such as a reused pid, is never touched. Every process ended is written to the log. |
+| Refresh a session whose claude process uses more than this many MB (0 = off) | `refreshMemoryMb` | `2048` | `0` turns it off, otherwise a whole number of MB from 256 up (at most 6 digits). Only the claude process itself counts, not its MCP servers or other children. When it is over the limit, Butler refreshes the session at its next idle point, with the same checks and steps as `refreshThresholdTokens` (so memory must be on). If claude is still above 80% of the limit afterwards, Butler logs it; it tries again after six hours. |
+
+### Tips Butler can't apply for you
+
+- **Windows:** in Windows Security, add Defender exclusions for the folder that holds your worktrees, `node_modules`, `.git` and `%USERPROFILE%\.butler`. Real-time scanning costs a lot when many node and git processes run at once. Make sure the page file is large enough: leave it **System managed**, or at least 1.5 times your RAM.
+- **macOS:** add the folder that holds your worktrees to Spotlight's privacy list (System Settings → Siri & Spotlight → Spotlight Privacy) so every `pnpm install` isn't indexed again. If you run third-party antivirus, exclude the same folders. macOS manages swap itself: keep at least 15–20% of the disk free so it has room.
+- **Both:** every MCP server in your own Claude configuration starts once per session. The **Memory** line on the **Now** page names the ones of yours that use the most. Remove the ones you rarely use from your Claude configuration; Butler never changes it for you.
+
 ## Schedule and handoffs
 
 | Setting | Key | Default | Accepted values and notes |

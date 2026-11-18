@@ -78,6 +78,14 @@ export const SETTING_DEFAULTS = {
   routingMaxConcurrent: "",
   /** 交互 session 撞限时自动切到下一档并继续：1 开 0 关（默认关，只在 session 行上给按钮）。 */
   routingAutoSwitch: "0",
+  /** 每分钟采样一次每个 session 的进程树内存（WS-M A）：1 开 0 关。只读，不改任何进程。 */
+  memoryMonitor: "1",
+  /** 看不见又停着的 session 的进程树降到后台优先级（WS-M E）：1 开 0 关（默认关，先观察）。 */
+  backgroundPriority: "0",
+  /** 定时清理 Butler 自己的 session 留下的孤儿进程（WS-M F）：1 开 0 关。 */
+  orphanCleanup: "1",
+  /** claude 进程的内存超过这么多 MB 就在下一个空闲点换新（WS-M G）；0 = 关。 */
+  refreshMemoryMb: "2048",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { EditableSettingKey, EditableSettings } from "../../../shared/settings";
 import type { AutostartState, HealthReport } from "../../../shared/types";
-import { api, ButlerError } from "../api";
+import { api, ButlerError, platform } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
 import { LanguagePicker } from "./LanguagePicker";
@@ -159,9 +159,55 @@ export function GeneralSettings({ report, onHealth, onRerunWizard }: { report: H
         </div>
       </div>
       {m.statecorePlugin && <p className="error">{S.statecorePluginWarning}</p>}
+
+      {/* 内存与性能（WS-M）：三个开关、按内存换新的阈值，和 Butler 管不了的建议（J）。 */}
+      <h2>{S.perf.section}</h2>
+      {(["memoryMonitor", "backgroundPriority", "orphanCleanup"] as const).map((k) => (
+        <div key={k} className="field">
+          <label className="inline">
+            <input type="checkbox" checked={current[k] !== "0"} onChange={(e) => void save(k, e.target.checked ? "1" : "0")} />
+            {S.perf[k]}
+          </label>
+          <p className="muted">{perfHelp(k)}</p>
+        </div>
+      ))}
+      <div className="field">
+        {S.perf.refreshMemoryMb}
+        <input
+          className="mono"
+          type="number"
+          min={0}
+          step={256}
+          value={value("refreshMemoryMb")}
+          onChange={(e) => setDraft((d) => ({ ...d, refreshMemoryMb: e.target.value }))}
+          onBlur={() => {
+            if (draft.refreshMemoryMb !== undefined && draft.refreshMemoryMb !== current.refreshMemoryMb) void save("refreshMemoryMb");
+            else clearDraft("refreshMemoryMb");
+          }}
+        />
+        <p className="muted">{S.perf.refreshMemoryMbHelp}</p>
+        <div className="actions">
+          <button onClick={() => void reset("refreshMemoryMb")}>{S.resetDefault}</button>
+        </div>
+      </div>
+      <h3>{S.perf.tipsTitle}</h3>
+      <ul className="perf-tips">
+        {perfTips().map((t) => <li key={t}>{t}</li>)}
+        <li>{S.perf.tipsMcp}</li>
+      </ul>
       <div className="actions">
         <button onClick={() => api.setSetting("onboardingDone", "0").then(onRerunWizard, reportError)}>{S.rerunWizard}</button>
       </div>
     </section>
   );
 }
+
+/** 这个平台的说明：没有专门一份的平台用 other。 */
+const byPlatform = <T,>(r: Record<string, T>): T => r[platform()] ?? r.other;
+
+function perfHelp(k: "memoryMonitor" | "backgroundPriority" | "orphanCleanup"): string {
+  if (k === "backgroundPriority") return byPlatform(S.perf.backgroundPriorityHelp);
+  return k === "memoryMonitor" ? S.perf.memoryMonitorHelp : S.perf.orphanCleanupHelp;
+}
+
+const perfTips = (): string[] => byPlatform(S.perf.tips);

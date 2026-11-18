@@ -1,4 +1,5 @@
 import { isWorking, type ActivityEvent, type SessionActivity } from "../../shared/activity";
+import type { MemorySnapshot, SessionMemory } from "../../shared/mem-usage";
 import type { EpicView, FeatureView, InboxItemView, MergeEvent, NowCounts, NowEpic, NowFeature, NowNotice, NowRow, NowTarget, NowView, RefreshStep, SessionView, TicketView, WatchedPr } from "../../shared/types";
 
 export interface NowInput {
@@ -24,6 +25,9 @@ export interface NowInput {
   memory: ActivityEvent[];
   /** 页面顶上的提醒（buildNotices）；buildNowView 再加上撞了限额的 session。 */
   notices: NowNotice[];
+  /** 每个 head 最近一次的内存读数（WS-M A）；没有就省掉。 */
+  sessionMemory?: (sessionId: string) => SessionMemory | null;
+  memorySnapshot?: MemorySnapshot | null;
 }
 
 /** 算进「现在」页的 session：Butler 开的、终端开着。 */
@@ -81,6 +85,7 @@ function sessionRow(i: NowInput, s: SessionView, base: RowBase, scope: Scope = n
   return {
     ...base, sessionId: s.id, activity, working: isWorking(activity), recent: i.recent(s.id), mergeQueued, needsYou, refreshing, decisions, idle,
     since: activity?.startedAt ?? s.lastActivityAt,
+    mem: i.sessionMemory?.(s.id) ?? null,
   };
 }
 
@@ -188,5 +193,5 @@ export function buildNowView(i: NowInput): NowView {
   const needsYou = all.filter((r) => r.needsYou !== null).sort(bySince);
   const decisions = [...i.decisions].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id);
   const limited: NowNotice[] = all.flatMap((r) => (r.activity?.limit ? [{ kind: "session_limited" as const, target: r.target, title: r.title, limit: r.activity.limit }] : []));
-  return { notices: [...i.notices, ...limited], needsYou, decisions, epics, butler, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges };
+  return { notices: [...i.notices, ...limited], needsYou, decisions, epics, butler, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges, mem: i.memorySnapshot ?? null };
 }

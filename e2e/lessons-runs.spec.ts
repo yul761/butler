@@ -218,7 +218,8 @@ test("a session that hits a limit shows the badge, the notice and the Health ent
   await page.getByTestId("now-notice-claude_limited").getByRole("button", { name: S.noticeHealth, exact: true }).click();
   await expect(block).toBeInViewport();
   await expect.poll(async () => (await settingsScroll(block)).scrollTop).toBeGreaterThan(0);
-  expect(Math.abs((await settingsScroll(block)).offset)).toBeLessThanOrEqual(1);
+  // 下面几块设置可能比这一块晚出来：页面变长以后这一块还得贴着顶（只滚一次的话会停在离顶几百像素处）。
+  await expect.poll(async () => Math.abs((await settingsScroll(block)).offset)).toBeLessThanOrEqual(1);
   await expect(block.locator("h3")).toHaveText(S.availabilityTitle);
   await expect(kv(block, S.availabilityStateLabel)).toHaveText(S.availabilityState.limited);
   await expect(kv(block, S.availabilityCurrent)).toContainText(S.availabilitySource("session", null));

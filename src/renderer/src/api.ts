@@ -1,4 +1,5 @@
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
+import type { MemoryHistoryPoint } from "../../shared/mem-usage";
 import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
 import { IPC, type IpcResult } from "../../shared/ipc";
@@ -97,6 +98,8 @@ export const api = {
   ptyKill: (termId: string) => call<void>(IPC.ptyKill, termId),
   ptyWrite: (termId: string, data: string) => window.butler.send(IPC.ptyWrite, termId, data),
   ptyResize: (termId: string, cols: number, rows: number) => window.butler.send(IPC.ptyResize, termId, cols, rows),
+  ptyVisible: (termId: string, visible: boolean) => window.butler.send(IPC.ptyVisible, termId, visible),
+  memUsageHistory: (hours = 24) => call<MemoryHistoryPoint[]>(IPC.memUsageHistory, hours),
   health: () => call<HealthReport>(IPC.healthGet),
   installHooks: () => call<HealthReport>(IPC.healthInstallHooks),
   uninstallHooks: () => call<HealthReport>(IPC.healthUninstallHooks),
