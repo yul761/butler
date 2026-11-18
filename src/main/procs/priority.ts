@@ -1,6 +1,6 @@
 import os from "node:os";
 import type { MonitorSample } from "./memory-monitor";
-import { runCommand, type RunCommand } from "./proc-table";
+import { powershellExe, runCommand, type RunCommand } from "./proc-table";
 
 /**
  * 后台优先级（WS-M E，设计 §6）。
@@ -214,7 +214,7 @@ export function winBackend(
     if (on.length || off.length) {
       let set = new Set<number>();
       try {
-        const res = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ecoScript(on, off)]);
+        const res = await run(powershellExe(), ["-NoProfile", "-NonInteractive", "-Command", ecoScript(on, off)]);
         set = new Set(res.split(/\r?\n/).filter((l) => /^\d+$/.test(l.trim())).map((l) => Number(l.trim())));
       } catch {
         // EcoQoS 不支持（老版本 Windows）：只有 BelowNormal。

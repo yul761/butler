@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyTree, compareStart, parsePsTable, parseWinTable, readProcTable, summarize, treeOf, type ProcTable } from "./proc-table";
+import { classifyTree, compareStart, parsePsTable, parseWinTable, powershellExe, readProcTable, summarize, treeOf, type ProcTable } from "./proc-table";
 
 const PS = [
   "  100     1  50000 Mon Nov 17 09:00:00 2026 /Applications/Butler.app/Contents/MacOS/Butler",
@@ -161,9 +161,16 @@ describe("readProcTable", () => {
       calls.push({ cmd, args });
       return "1\t0\t10\t0\tx\t";
     });
-    expect(calls[0].cmd).toBe("powershell.exe");
+    expect(calls[0].cmd).toBe(powershellExe());
     expect(calls[0].args.slice(0, 2)).toEqual(["-NoProfile", "-NonInteractive"]);
     expect(calls[0].args.join(" ")).toContain("Win32_Process");
+  });
+
+  it("finds PowerShell under SystemRoot, not on PATH (a trimmed PATH must not hide it)", () => {
+    expect(powershellExe({ SystemRoot: "D:\\Win" })).toBe("D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    // 环境变量在 Windows 上不分大小写，Node 的 process.env 也是；传进来的普通对象按 windir 兜底。
+    expect(powershellExe({ windir: "C:\\Windows" })).toBe("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    expect(powershellExe({})).toBe("powershell.exe");
   });
 
   it("returns null when the command fails", async () => {

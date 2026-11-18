@@ -66,6 +66,15 @@ const WIN_SCRIPT = [
   "Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,WorkingSetSize,CreationDate,Name,CommandLine | ForEach-Object { $s = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 }; \"$($_.ProcessId)`t$($_.ParentProcessId)`t$([int64]($_.WorkingSetSize / 1024))`t$s`t$($_.Name)`t$($_.CommandLine)\" }",
 ].join("; ");
 
+/**
+ * Windows PowerShell 的完整路径。不靠 PATH 找：PATH 被删减过（e2e 的沙盒就只有 System32）时按名字调会 ENOENT，
+ * 内存采样就一次都采不到，也不报错。系统目录读不到时才退回按名字找。
+ */
+export function powershellExe(env: Record<string, string | undefined> = process.env): string {
+  const root = env.SystemRoot ?? env.SYSTEMROOT ?? env.windir ?? env.WINDIR;
+  return root ? `${root.replace(/[\\/]+$/, "")}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : "powershell.exe";
+}
+
 export type RunCommand = (cmd: string, args: string[]) => Promise<string>;
 
 export const runCommand: RunCommand = (cmd, args) =>
@@ -78,7 +87,7 @@ export const runCommand: RunCommand = (cmd, args) =>
 /** 读整张进程表；命令失败返回 null（这一次采样跳过）。 */
 export async function readProcTable(platform: NodeJS.Platform = process.platform, run: RunCommand = runCommand): Promise<ProcTable | null> {
   try {
-    if (platform === "win32") return parseWinTable(await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", WIN_SCRIPT]));
+    if (platform === "win32") return parseWinTable(await run(powershellExe(), ["-NoProfile", "-NonInteractive", "-Command", WIN_SCRIPT]));
     return parsePsTable(await run("ps", ["-A", "-o", "pid=,ppid=,pgid=,rss=,lstart=,args="]));
   } catch {
     return null;
