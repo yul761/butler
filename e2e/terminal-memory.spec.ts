@@ -50,7 +50,8 @@ test("only the visible terminal keeps an xterm, switching back rebuilds it from 
   await expect(xterms).toHaveCount(1);
 
   // 切回第一个：从快照重建，之前的输出还在，还是只有一个 xterm。
-  await page.locator(".ticket-page .session-wrap .session").first().click();
+  // 列表的顺序跟最近活动走，按标题找第一个 session（它的标题来自第一句话）。
+  await page.locator(".ticket-page .session-wrap .session").filter({ hasText: "first terminal says" }).click();
   await expect.poll(() => terminalText(page)).toContain("收到：first terminal says hello");
   await expect(xterms).toHaveCount(1);
   // 重建出来的终端照样能打字。

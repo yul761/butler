@@ -258,7 +258,7 @@ test("the Now page is readable in light and dark", async ({ makeSandbox, launch 
     since: page.locator(".now-row .now-since").first(),
     idleToggle: page.locator(".now-idle > .section-toggle"),
     idleRow: page.locator(".now-idle .now-row .main"),
-    usage: page.locator(".now-usage > .section-toggle"),
+    usage: page.locator(".now-usage:not(.now-mem-card) > .section-toggle"),
     badge: page.locator(".sidebar .needs-you-badge"),
     // 实况窗口（BTL-190 第 7 点）：在跑测试的 DMS-3 和问了话的 DMS-1。
     liveTitle: page.locator(".live-title"),
