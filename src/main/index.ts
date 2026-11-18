@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, shell, Tray } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -96,10 +97,12 @@ import { ConfigBackups } from "./config-io/backup-job";
 import { configIoFacade, defaultSavePath } from "./config-io/facade";
 import { ActivityMonitor, activityIntervals } from "./sessions/activity-monitor";
 import { sessionRegistryName } from "./sessions/activity-sources";
-import { DeliveryGuard, type DeliveryGuardDeps } from "./sessions/delivery-guard";
+import { DeliveryGuard, USER_TYPING_QUIET_MS, type DeliveryGuardDeps } from "./sessions/delivery-guard";
 import { writeRefreshTail } from "./sessions/refresh-tail";
 import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
-import { SessionCleanup } from "./sessions/session-cleanup";
+import { SessionCleanup, working } from "./sessions/session-cleanup";
+import { Hibernator } from "./sessions/hibernator";
+import { childrenWorking } from "./sessions/managed-by";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { PtyManager } from "./sessions/pty-manager";
 import { nodePtyFactory } from "./sessions/pty-node";
@@ -108,9 +111,14 @@ import { judgeStuck } from "./sessions/stuck-judge";
 import { markTurnEndedWithoutStop } from "./sessions/turn-end";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
-import { checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, idleCloseMinutes, llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
+import {
+  checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, llmConfig, memoryOn,
+  memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, SettingError, trackerTools,
+} from "./settings/settings-values";
 import { watcherGuideLines } from "./procs/watcher-policy";
 import { createProcServices, type ProcServices } from "./procs/proc-services";
+import { platformKill } from "./procs/orphans";
+import { readProcTable } from "./procs/proc-table";
 import { MemorySamplesRepo } from "./db/memory-samples-repo";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
@@ -410,6 +418,12 @@ async function bootstrap(): Promise<void> {
   let closing = false;
   // 内存、优先级、孤儿（WS-M）：要等 refresher 建好才装，终端退出事件在那之前到就跳过。
   let procs: ProcServices | null = null;
+  // 休眠（WS-M B、C）：要等 procs 和下面的一堆服务建好才装，在那之前没有休眠这回事。
+  let hibernator: Hibernator | null = null;
+  /** 休眠着的 head（Butler 结束了它的终端，等事情来了再 --resume）。 */
+  const hibernatedHeads = (): Session[] => sessions.listHibernated();
+  /** 这条链休眠着（正在休眠、正在唤醒的也算）。 */
+  const isHibernated = (id: string): boolean => hibernator?.isHibernated(id) ?? false;
   const pty = new PtyManager(nodePtyFactory, {
     data: (id, data) => safeSend(IPC.ptyData, id, data),
     exit: (id, code) => {
@@ -651,6 +665,8 @@ async function bootstrap(): Promise<void> {
       return sessionService.openLessonRun({ runId: d.id, repoPath, file, label: `lesson run ${d.id}` });
     },
   });
+  /** 休眠前最后一次看到的样子：休眠的 session 照样留在「需要你」里（活动监视只看开着的终端）。 */
+  const needsYouFrozen = new Map<string, NeedsYouHead>();
   /** 开着终端的 Butler session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
   const needsYouHeads = (): NeedsYouHead[] => {
     const heads = new Map<string, NeedsYouHead>();
@@ -659,6 +675,13 @@ async function bootstrap(): Promise<void> {
       // 复盘分析 session 只是用户来问问题的，不判断需要你。
       if (!h || h.origin !== "butler" || h.lessonRunId !== null || heads.has(h.id)) continue;
       heads.set(h.id, { id: h.id, cwd: h.cwd, waiting: h.waitingForInput, kind: activityMonitor.get(h.id)?.kind ?? null, reply: activityMonitor.lastReplyOf(h.id) });
+    }
+    const hibernated = new Set(hibernatedHeads().map((h) => h.id));
+    for (const id of [...needsYouFrozen.keys()]) if (!hibernated.has(id) || heads.has(id)) needsYouFrozen.delete(id);
+    for (const [id, h] of heads) if (h.kind !== null) needsYouFrozen.set(id, h);
+    for (const id of hibernated) {
+      const frozen = needsYouFrozen.get(id);
+      if (frozen && !heads.has(id)) heads.set(id, frozen);
     }
     return [...heads.values()];
   };
@@ -758,6 +781,8 @@ async function bootstrap(): Promise<void> {
     features, epics, featureHandoffs, handoffs, epicHistory,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
+    opened: (termId) => hibernator?.opened(termId),
+    hidden: (id) => hibernator?.forget(id),
     log: logger,
   });
   // 交互 session 撞限后「换下一档继续」（3.0 模型路由）：按 session 的种类用 --resume 重新打开。
@@ -1038,6 +1063,12 @@ async function bootstrap(): Promise<void> {
     pty,
     // BUTLER_GATE_TYPING_QUIET_MS 只给 e2e 用（它刚在终端里打过字，不想多等 30 秒）。
     typingQuietMs: Number(process.env.BUTLER_GATE_TYPING_QUIET_MS) || undefined,
+    // 休眠着的：叫它醒，醒来以后 sessionStopped 再递（WS-M B）。
+    wakeIfHibernated: (id) => {
+      if (!hibernator || !isHibernated(id)) return false;
+      void hibernator.wake(id, "delivery");
+      return true;
+    },
     now: Date.now,
   };
   // 合并通知和 CI 结果用的：在等用户回答的 session 不往里贴东西（计划 14），「需要你」还没判断完的也先不贴（I1），
@@ -1060,6 +1091,12 @@ async function bootstrap(): Promise<void> {
       const h = sessions.head(termId);
       if (h && h.origin === "butler") heads.set(h.id, h);
     }
+    return [...heads.values()];
+  };
+  /** 开着终端的加上休眠着的 Butler session 的 head：汇报找总控时休眠的总控也算（送的时候叫它醒）。 */
+  const liveButlerHeads = (): Session[] => {
+    const heads = new Map(openButlerHeads().map((h) => [h.id, h]));
+    for (const h of hibernatedHeads()) if (h.origin === "butler" && !heads.has(h.id)) heads.set(h.id, h);
     return [...heads.values()];
   };
   // 上下文换新（计划 16）。它自己的两道 guard 不带 refreshing（R25），否则换新会挡住自己的下一步。
@@ -1120,7 +1157,7 @@ async function bootstrap(): Promise<void> {
     epicOfFeature: (id) => features.get(id)?.epicId ?? null,
     epicName: (id) => epics.get(id)?.name ?? null,
     termOf: gateTerm,
-    openHeads: openButlerHeads,
+    openHeads: liveButlerHeads,
     answerGuard: new DeliveryGuard({ ...guardDeps, refreshing: (id) => refresher.isRefreshing(id) }),
     reportGuard: deliveryGuard,
     deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
@@ -1186,7 +1223,8 @@ async function bootstrap(): Promise<void> {
   const prLinker = new PrLinker({ prs: ticketPrs, tickets, slugOf: (path) => repoIdentity.slugOf(path), now: Date.now });
   const holdWatcher = new HoldWatcher({
     repo: gateRepo, prInfo, git,
-    isOpen: (id) => gateTerm(id) !== null,
+    // 休眠的也算开着：guard 叫它醒，醒来以后 Stop 再递。
+    isOpen: (id) => gateTerm(id) !== null || isHibernated(id),
     guard: deliveryGuard,
     refreshActivity: refreshActivityOf,
     // PrWatcher 刚查过的 PR 不用再问 gh。prWatcher 在后面才建好：回调里才用到。
@@ -1216,9 +1254,16 @@ async function bootstrap(): Promise<void> {
         seen.add(h.id);
         open.push({ id: h.id, gitBranch: h.gitBranch, coordinator: h.coordinator });
       }
+      // 休眠着的（WS-M B）也算：guard 叫它醒，醒来以后 sessionStopped 里的 flushCi 再递。
+      for (const h of hibernatedHeads()) {
+        if (seen.has(h.id) || h.ticketKey !== key || h.repoId !== repoId) continue;
+        seen.add(h.id);
+        open.push({ id: h.id, gitBranch: h.gitBranch, coordinator: h.coordinator });
+      }
       const o = branchOwners.get(key, repoId, branch);
       const owner = o ? (sessions.head(o.sessionId)?.id ?? o.sessionId) : null;
-      return pickRecipient({ owner, ownerOpen: o !== null && gateTerm(o.sessionId) !== null, open, ticketBranch: tickets.getRepo(repoId)?.branch ?? null, branch });
+      const ownerOpen = o !== null && (gateTerm(o.sessionId) !== null || (owner !== null && isHibernated(owner)));
+      return pickRecipient({ owner, ownerOpen, open, ticketBranch: tickets.getRepo(repoId)?.branch ?? null, branch });
     },
     deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
     now: Date.now,
@@ -1241,7 +1286,8 @@ async function bootstrap(): Promise<void> {
     tickets: () => tickets.list(),
     repoOf: (repoId) => tickets.getRepo(repoId),
     ghWorkDir: (r) => ticketService.ghWorkDir(r),
-    sessionOpen: (key, repoId) => sessionService.hasOpenTerminal(key, repoId ?? undefined),
+    // 休眠着的也算：它在等 CI，CI 有结论就要叫醒它。
+    sessionOpen: (key, repoId) => sessionService.hasLiveSession(key, repoId ?? undefined),
     home: homedir(),
     slugOf: (path) => repoIdentity.slugOf(path),
     linker: prLinker,
@@ -1379,7 +1425,8 @@ async function bootstrap(): Promise<void> {
       if (stageObs && prStages.add(stageObs.event, stageObs.dedupeKey)) notify();
       if (effect.kind === "ignored") return;
       // 总控开的子 session 等这个信号才交任务（信任文件夹之类的启动对话框已经过去）。
-      if (effect.kind === "session_started") pty.markStarted(effect.sessionId);
+      // 终端按 BUTLER_SESSION 记：--resume 有时换 session id，唤醒（WS-M B）和交任务等的都是终端的 id。
+      if (effect.kind === "session_started") pty.markStarted(env.butlerSession ?? effect.sessionId);
       // claude 收下了一条输入（UserPromptSubmit）：deliver 回车以后等的就是它（BTL-190 第 9 点）。终端按 BUTLER_SESSION 记，
       // /clear 以后 hook 里的 session id 已经换了。
       // 同一个时机：用户在终端里回答了，这个 session 卡片上还没答的「待你决定」都算答过（换新、Butler 刚递回答时不算，BTL-190 第 2+3 点）。
@@ -1417,12 +1464,87 @@ async function bootstrap(): Promise<void> {
     appMetrics: () => app.getAppMetrics().map((m) => ({ pid: m.pid, type: m.type, kb: m.memory.workingSetSize })),
     windowShown: () => !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
     ownedFile: paths.procsOwned,
+    pinned: (head) => sessions.head(head)?.pinned === true,
+    restart: (head) => hibernator?.restart(head) ?? Promise.resolve(),
+    onSample: (s) => hibernator?.onSample(s),
+    sampleNeeded: () => memoryPressureOn(settings),
     log: logger,
     changed: notify,
   });
   const procServices = procs;
+  // e2e（后台窗口模式下才算数）：BUTLER_HIBERNATE_AFTER_MS 把四种等待的分钟数都换成这么多毫秒，安静期也一起缩短。
+  const hibernateAfterMs = BACKGROUND_WINDOWS ? Number(process.env.BUTLER_HIBERNATE_AFTER_MS) || 0 : 0;
+  const butlerTerminals = () =>
+    pty.openIds().flatMap((termId) => {
+      const head = sessions.head(termId);
+      return head && head.origin === "butler" ? [{ termId, head }] : [];
+    });
+  const scope = { ticketsOfFeature: (id: number) => tickets.listByFeature(id).map((t) => t.key), featuresOfEpic: (id: number) => features.listByEpic(id).map((f) => f.id) };
+  const prPending = (key: string | null, ci: "pending" | "review"): boolean =>
+    key != null &&
+    prWatcher.statusOf(key).some((p) =>
+      ci === "pending" ? (p.state === "open" || p.state === null) && p.ci === "pending" : p.state === "open" && p.ci !== "pending" && p.review !== "approved",
+    );
+  hibernator = new Hibernator({
+    enabled: () => hibernateOn(settings),
+    minutes: (state) => (hibernateAfterMs > 0 ? hibernateAfterMs / 60_000 : hibernateMinutes(settings, state)),
+    endWatchers: () => hibernateEndWatchersOn(settings),
+    pressureOn: () => memoryPressureOn(settings),
+    pressureLine: () => memoryPressureFreePercent(settings),
+    terminals: butlerTerminals,
+    candidate: (t) => {
+      const a = activityMonitor.get(t.head.id);
+      const typed = pty.lastUserInputAt(t.termId);
+      const terms = butlerTerminals();
+      return {
+        head: t.head, termId: t.termId, pinned: t.head.pinned === true,
+        transcript: transcriptState(paths.claudeProjects, t.head.id),
+        activity: a && { working: working(a), background: a.background },
+        screenNeedsUser: pty.screenNeedsUser(t.termId),
+        draft: pty.hasDraft(t.termId),
+        typing: typed > 0 && Date.now() - typed < (guardDeps.typingQuietMs ?? USER_TYPING_QUIET_MS),
+        autoInput: pty.autoInputInFlight(t.termId),
+        refreshing: refresher.isRefreshing(t.head.id),
+        visible: procServices.isVisible(t.termId),
+        childrenWorking: childrenWorking(t.head, terms.map((x) => x.head), (id) => working(activityMonitor.get(id)), scope),
+        openedAt: pty.openedAt(t.termId),
+        idleSince: Math.max(t.head.lastActivityAt ?? 0, a?.lastOutputAt ?? 0, typed, pty.openedAt(t.termId)),
+      };
+    },
+    waitInput: (h) => ({
+      needsYou: needsYou.reasonOf(h.id) !== null || inboxService.hasPendingDecision(h.id),
+      ciPending: [...gateRepo.waitingSessionIds()].some((id) => (sessions.head(id)?.id ?? id) === h.id) || prPending(h.ticketKey, "pending"),
+      reviewPending: prPending(h.ticketKey, "review"),
+    }),
+    sessions,
+    readTable: () => readProcTable(process.platform),
+    pid: (termId) => pty.pid(termId),
+    isOpen: (termId) => pty.isOpen(termId),
+    started: (termId) => pty.started(termId),
+    reserve: (termId) => pty.reserve(termId),
+    endTerminal: (termId) => pty.kill(termId),
+    kill: platformKill(process.platform, (cmd, args) => void execFile(cmd, args, { windowsHide: true }, () => undefined)),
+    spare: (owner, list) => procServices.orphans.spare(owner, list),
+    release: (owner) => void procServices.orphans.release(owner).catch((e: unknown) => logger("hibernate: releasing kept watchers failed", e)),
+    open: (head) => openHibernated(head),
+    notify,
+    now: Date.now,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    log: logger,
+    ...(hibernateAfterMs > 0 && { quiet: { openMs: hibernateAfterMs, wakeMs: hibernateAfterMs } }),
+  });
+  /** 按种类 --resume 一个休眠的 head（不 force：分支对不上就算唤醒失败，交给用户）。 */
+  const openHibernated = async (head: Session): Promise<{ ok: true; termId: string } | { ok: false; reason: string }> => {
+    const r = head.butler && head.ticketKey === null ? await sessionService.openButler({ sessionId: head.id })
+      : head.ticketKey !== null ? await sessionService.open({ ticketKey: head.ticketKey, sessionId: head.id })
+      : head.featureId !== null ? await sessionService.openFeature({ featureId: head.featureId, sessionId: head.id })
+      : head.epicId !== null ? await sessionService.openEpic({ epicId: head.epicId, sessionId: head.id })
+      : ({ ok: false, reason: "kind" } as const);
+    return r.ok ? { ok: true, termId: r.termId } : { ok: false, reason: r.reason };
+  };
   windowShownHook = () => procServices.windowShown();
   shutdownSessions = () => {
+    hibernator?.stop();
     void procServices.stop();
     refresher.stop();
     pty.killAll();
@@ -1504,6 +1626,11 @@ async function bootstrap(): Promise<void> {
     },
     closeIdleSessions: (ids) => sessionCleanup.closeIdleNow(ids),
     deleteHiddenSessions: (ids) => sessionCleanup.deleteHidden(ids),
+    pinSession: (id, on) => {
+      const head = sessions.head(id);
+      if (head) sessions.setPinned(head.id, on);
+    },
+    wakeSession: async (id) => (hibernator ? hibernator.wake(id, "user") : "not_hibernated"),
     inbox: inboxService,
     lessons: lessonsService,
     batches: batchRecorder,
@@ -1564,7 +1691,10 @@ async function bootstrap(): Promise<void> {
         tickets: sessionService.ticketViews(),
         features: sessionService.featureViews(),
         epics: sessionService.epicViews(),
-        butler: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id) } : null))(sessionService.runningButler()),
+        // 休眠着的 Butler 总控照样算（WS-M B）。
+        butler: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id) } : null))(
+          sessionService.runningButler() ?? hibernatedHeads().find((h) => h.butler && h.ticketKey === null) ?? null,
+        ),
         activity: (id) => activityMonitor.get(id),
         needsYouReason: (id) => reasons.get(id) ?? null,
         prs: (key) => prWatcher.statusOf(key),
@@ -1626,6 +1756,12 @@ async function bootstrap(): Promise<void> {
       },
       // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。
       kill: (termId) => pty.kill(termId),
+      endHibernated: (id) => {
+        const h = sessions.get(id);
+        hibernator?.forget(id, "ended by end_session");
+        if (h?.waitingForInput) sessions.setWaiting(id, false, h.lastActivityAt ?? 0);
+        notify();
+      },
       screenNeedsUser: (termId) => pty.screenNeedsUser(termId),
       submit: submitTask,
       // start_feature 给已经在跑的 feature 总控补充说明（BTL-190 第 4 点）：和递汇报同一道 guard。
@@ -1693,6 +1829,7 @@ async function bootstrap(): Promise<void> {
     if (headlessAbort.signal.aborted) return;
     refresher.autoCheck();
     sessionCleanup.tick();
+    hibernator?.tick();
     // 等着送的回答和汇报：Stop 那一刻没送成（用户在打字、有草稿）的，按这个节奏再试。
     void inboxService.flush();
   }, activityIntervals(process.env).tickMs);
@@ -1714,6 +1851,7 @@ async function bootstrap(): Promise<void> {
   app.on("will-quit", () => {
     // 正常情况下 before-quit 已经停过；没经过 before-quit 的退出也要在关数据库之前停下。
     refresher.stop();
+    hibernator?.stop();
     clearInterval(discoveryTimer);
     clearInterval(refreshTimer);
     clearInterval(scheduleTimer);

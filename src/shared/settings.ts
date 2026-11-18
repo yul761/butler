@@ -38,6 +38,14 @@ export const EDITABLE_SETTINGS = [
   "backgroundPriority",
   "orphanCleanup",
   "refreshMemoryMb",
+  "hibernateEnabled",
+  "hibernateYouMinutes",
+  "hibernateCiMinutes",
+  "hibernateReviewMinutes",
+  "hibernateIdleMinutes",
+  "hibernateEndWatchers",
+  "memoryPressureEnabled",
+  "memoryPressureFreePercent",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

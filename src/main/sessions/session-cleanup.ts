@@ -1,5 +1,6 @@
 import type { SessionActivity } from "../../shared/activity";
 import type { Session } from "../../shared/types";
+import { childrenWorking } from "./managed-by";
 import type { CloseTrigger, RefreshResult, SessionRefresher } from "./session-refresher";
 
 /** 隐藏超过这么久的 session 行自动删掉（BTL-190 第 8 点）。 */
@@ -194,23 +195,6 @@ export class SessionCleanup {
 
   /** 总控（ticket 总控、feature 总控、epic session）管的、开着终端的子 session 有没有在干活。不是总控的返回 false。 */
   private childrenWorking(coord: Session, terms: OpenTerminal[]): boolean {
-    const manages = this.managedBy(coord);
-    if (!manages) return false;
-    return terms.some((t) => t.head.id !== coord.id && manages(t.head) && working(this.d.activity(t.head.id)));
-  }
-
-  /** 和总控的 end_session 范围一样（control-handler）：ticket 总控管同一个 ticket 的；feature 总控管它 ticket 的和修复 session；epic 管它 feature 的。 */
-  private managedBy(coord: Session): ((s: Session) => boolean) | null {
-    if (coord.epicId !== null) {
-      const features = new Set(this.d.featuresOfEpic(coord.epicId));
-      const keys = new Set([...features].flatMap((f) => this.d.ticketsOfFeature(f)));
-      return (s) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId !== null && features.has(s.featureId));
-    }
-    if (coord.ticketKey !== null) return coord.coordinator ? (s) => s.ticketKey === coord.ticketKey : null;
-    if (coord.featureId !== null && coord.fixesSession === null) {
-      const keys = new Set(this.d.ticketsOfFeature(coord.featureId));
-      return (s) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === coord.featureId && s.fixesSession !== null);
-    }
-    return null;
+    return childrenWorking(coord, terms.map((t) => t.head), (id) => working(this.d.activity(id)), this.d);
   }
 }

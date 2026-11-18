@@ -5,7 +5,7 @@ import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason,
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { PrivacyLevel } from "../../shared/llm";
 import type { ReportKind } from "../../shared/control";
-import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 
 /** "1 ticket", "2 tickets". */
@@ -1254,5 +1254,40 @@ export const EN: UiStrings = {
       headless: "Background claude",
       hub: "Shared MCP",
     } as Record<string, string>,
+  },
+  hib: {
+    badge: "Hibernated",
+    now: "Hibernated",
+    reason: {
+      you: "Waiting for you; its processes were ended to save memory, and opening it resumes the same conversation",
+      ci: "Waiting for CI; it wakes up when CI finishes",
+      review: "Waiting for review; it wakes up when a review or comment arrives",
+      idle: "Idle; opening it resumes the same conversation",
+      pressure: "Hibernated while memory was low; opening it resumes the same conversation",
+      memory: "Using too much memory, restarting",
+    } as Record<HibernateReason, string>,
+    open: "Wake",
+    pin: "Pin",
+    unpin: "Unpin",
+    pinHint: "A pinned session is never hibernated or lowered in priority",
+    pinNamed: (label: string) => `Pin ${label}`,
+    unpinNamed: (label: string) => `Unpin ${label}`,
+    wakeFailed: (why: string) => `The last automatic wake failed (${why}). Opening it tries again.`,
+    wakeFailedNow: "Wake failed: claude --resume did not start. Open it to retry, or start a new session",
+    settings: {
+      enabled: "Hibernate stopped sessions (end their processes, --resume them when something arrives)",
+      enabledHelp:
+        "Once a session has been stopped for the time below, Butler ends its whole process tree and keeps only the transcript. It wakes up on its own (claude --resume, with the whole conversation) when a CI result, a merge notice, a report or your answer has to reach it, and when you open it. Sessions that are working, have a prompt on screen or a draft in the input, that you are looking at, or that are pinned are never hibernated. This never limits how many sessions you can run.",
+      you: "Waiting for you: hibernate after this many minutes (0 = never)",
+      ci: "Waiting for CI: hibernate after this many minutes (0 = never)",
+      review: "Waiting for review: hibernate after this many minutes (0 = never)",
+      idle: "Idle: hibernate after this many minutes (0 = never)",
+      minutesHelp: "0 means this kind of wait never hibernates; otherwise at least 5 minutes.",
+      endWatchers: "Also end watchers and dev servers when hibernating",
+      endWatchersHelp: "When off, the watchers (tsc --watch, vite and the like) and dev servers a session started keep running, and are cleaned up when it wakes or ends.",
+      pressure: "Hibernate the longest-idle session when memory is low",
+      pressureHelp: "While free system memory is below the percentage below, Butler hibernates one session per minute that has been idle for at least 5 minutes and may be hibernated, until free memory is back 5 points above it. This works even with the hibernation switch above off.",
+      pressureFree: "Free memory below this percentage counts as low (1–50)",
+    },
   },
 };

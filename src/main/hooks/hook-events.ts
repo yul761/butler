@@ -129,7 +129,8 @@ export function applyHookEnvelope(
       return { kind: "waiting", sessionId: id, waiting: false };
     case "SessionEnd":
       ensure();
-      sessions.setWaiting(id, false, at);
+      // 休眠（WS-M B）是 Butler 结束的进程：session 还在等（等你、等 CI……），等待标记留着（同 handleExit）。
+      if (!sessions.head(id)?.hibernatedAt) sessions.setWaiting(id, false, at);
       return { kind: "ended", sessionId: id };
     default:
       return { kind: "ignored", reason: `unhandled_event:${event}` };

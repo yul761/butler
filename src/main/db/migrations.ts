@@ -691,4 +691,14 @@ export const MIGRATIONS: string[] = [
     detail TEXT);
   CREATE INDEX memory_samples_at ON memory_samples (at);
   `,
+  // 休眠（WS-M B）：记在 head 上。hibernated_at 非空表示进程被 Butler 结束了、等着 --resume；hibernate_reason 是当时在等什么
+  // （you、ci、review、idle、pressure、memory）。pinned：用户钉住的不休眠、不降优先级，/clear 以后跟着新 head 走。
+  // wake_error：上一次自动唤醒失败的原因和时间，下一次成功打开时清掉。
+  `
+  ALTER TABLE sessions ADD COLUMN hibernated_at INTEGER;
+  ALTER TABLE sessions ADD COLUMN hibernate_reason TEXT;
+  ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE sessions ADD COLUMN wake_error TEXT;
+  ALTER TABLE sessions ADD COLUMN wake_error_at INTEGER;
+  `,
 ];

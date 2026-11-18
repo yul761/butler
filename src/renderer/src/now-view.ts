@@ -51,6 +51,10 @@ export function rowText(r: NowRow, S: UiStrings, now: number): { main: string; s
   // 撞了限额：activityText 写的是哪种限额和恢复时间，原文放在 sub 里。
   if (a?.limit) return { ...activityText(a, S, now), tone: "danger" };
   if (r.mergeQueued) return { main: S.nowMergeQueued, sub, tone: "warn" };
+  // 自动唤醒失败（WS-M B）：现在是关着的，等的东西送不进去了。
+  if (r.wakeError) return { main: S.hib.wakeFailedNow, sub: r.wakeError, tone: "danger" };
+  // 休眠着（WS-M B）：等的东西来了会自己醒，点开也会醒。
+  if (r.hibernated) return { main: S.hib.now, sub: S.hib.reason[r.hibernated], tone: "muted" };
   if (live) return { main: live.main, sub, tone: "ok" };
   const pr = prText(r.prs, S);
   if (pr) return { ...pr, sub: null };

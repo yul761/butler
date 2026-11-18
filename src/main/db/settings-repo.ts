@@ -86,6 +86,22 @@ export const SETTING_DEFAULTS = {
   orphanCleanup: "1",
   /** claude 进程的内存超过这么多 MB 就在下一个空闲点换新（WS-M G）；0 = 关。 */
   refreshMemoryMb: "2048",
+  /** 停着的 session 过一阵就休眠（WS-M B）：结束 claude 进程，有事要递时再 --resume。1 开 0 关（默认关）。 */
+  hibernateEnabled: "0",
+  /** 在等你（需要你、有没回答的 ask_user）多少分钟后休眠；0 = 这种不休眠。 */
+  hibernateYouMinutes: "30",
+  /** 在等 CI（PR 的 CI 在跑、排在合并总控里）多少分钟后休眠；0 = 不休眠。 */
+  hibernateCiMinutes: "20",
+  /** 在等 review（PR 开着、CI 跑完、还没批准）多少分钟后休眠；0 = 不休眠。 */
+  hibernateReviewMinutes: "30",
+  /** 别的停着的多少分钟后休眠；0 = 不休眠。 */
+  hibernateIdleMinutes: "60",
+  /** 休眠时一起结束它起的 watcher 和 dev server（WS-M I）：1 是，0 留着（唤醒或结束时再清）。 */
+  hibernateEndWatchers: "1",
+  /** 系统可用内存低于下面的比例时，每次采样休眠一个闲着最久的 session（WS-M C）：1 开 0 关（默认关）。不需要打开 hibernateEnabled。 */
+  memoryPressureEnabled: "0",
+  /** 内存紧张的线：可用内存低于百分之几（1–50）。回到这条线以上 5 个点才停。 */
+  memoryPressureFreePercent: "10",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

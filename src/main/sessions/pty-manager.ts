@@ -338,6 +338,11 @@ export class PtyManager {
     if (t) t.started = true;
   }
 
+  /** SessionStart 到过没有（唤醒等的就是它，WS-M B）。终端不在了为 false。 */
+  started(termId: string): boolean {
+    return this.terms.get(termId)?.started === true;
+  }
+
   /** 这个终端的 claude 收下了一条输入（UserPromptSubmit hook）：deliver 回车以后等的就是它。 */
   markSubmitted(termId: string): void {
     const t = this.terms.get(termId);

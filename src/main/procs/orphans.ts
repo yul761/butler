@@ -10,7 +10,7 @@ import { childrenIndex, compareStart, treeOf, type ProcInfo, type ProcTable } fr
  * macOS 上被收养到 1 号进程的还留在原来那个 shell 的进程组里（pgid），按组认回来。
  * 认不出来的：起它的 shell 在被采样到之前就退出了（macOS，组长没记下）；Windows 上父进程退出、自己没被采样到过的（见 WS-M addendum）。
  * 终端结束以后等一会儿，还活着、而且不在任何开着的终端底下的，就是漏掉的孤儿（claude 用 & 或 nohup 起的 dev server、
- * 被 MCP 留下的浏览器）：先 SIGTERM，5 秒后还在就 SIGKILL（Windows 用 taskkill /T /F）。每杀一个都写日志。
+ * 被 MCP 留下的浏览器）：先 SIGTERM，5 秒后还在就 SIGKILL（Windows 用 taskkill，强制时加 /F，不加 /T）。每杀一个都写日志。
  * 记录存在 procs/owned.json：Butler 崩了、被强制退出，下次启动时扫一遍。
  */
 export interface OwnedProc {
@@ -72,8 +72,8 @@ function adopt(procs: Map<number, OwnedProc>, table: ProcTable): void {
 export class OrphanSweeper {
   /** termId → 那棵树里见过、上次采样时还活着的进程。 */
   private owned = new Map<string, Map<number, OwnedProc>>();
-  /** 不要清理的（PR 2：休眠时留下的 watcher）。 */
-  private readonly spared = new Map<number, string>();
+  /** 不要清理的（休眠时留下的 watcher）：pid → 那个进程和留下它的 session（head）。 */
+  private readonly spared = new Map<number, OwnedProc & { owner: string }>();
   private saved = "";
 
   constructor(private readonly d: OrphanDeps) {}
@@ -95,9 +95,27 @@ export class OrphanSweeper {
     await this.save();
   }
 
-  /** 这些进程不清理（休眠留下的 watcher；它们照样算 Butler 的，下次启动不扫）。 */
-  spare(procs: OwnedProc[]): void {
-    for (const p of procs) this.spared.set(p.pid, p.start);
+  /**
+   * 这些进程先不清理（休眠时留下的 watcher 和 dev server，WS-M B）。owner 是休眠的 session。
+   * 照样写进 owned.json：Butler 重启时（留着它们的 session 已经不在跑了）启动扫描会结束它们。
+   */
+  spare(owner: string, procs: OwnedProc[]): void {
+    for (const p of procs) this.spared.set(p.pid, { ...p, owner });
+    void this.save();
+  }
+
+  /** owner 醒了、结束了或者被删了：它留下的 watcher 变成普通的孤儿，现在就清理。返回结束掉的个数。 */
+  async release(owner: string): Promise<number> {
+    const mine = [...this.spared.values()].filter((p) => p.owner === owner);
+    if (mine.length === 0) return 0;
+    for (const p of mine) this.spared.delete(p.pid);
+    if (!this.d.enabled()) {
+      await this.save();
+      return 0;
+    }
+    const n = await this.sweep(mine.map(({ pid, start, args }) => ({ pid, start, args })), `session ${owner} no longer hibernated`);
+    await this.save();
+    return n;
   }
 
   /** 终端结束了：等一会儿，把它底下还活着的孤儿结束掉。返回结束掉的个数。 */
@@ -137,7 +155,7 @@ export class OrphanSweeper {
     adopt(all, table);
     const children = childrenIndex(table);
     const underLive = new Set(this.d.liveRoots().flatMap((r) => treeOf(r, table, children).map((p) => p.pid)));
-    const victims = [...all.values()].filter((c) => same(c, table.get(c.pid)) && !underLive.has(c.pid) && this.spared.get(c.pid) !== c.start);
+    const victims = [...all.values()].filter((c) => same(c, table.get(c.pid)) && !underLive.has(c.pid) && this.spared.get(c.pid)?.start !== c.start);
     if (victims.length === 0) return 0;
     for (const v of victims) {
       this.d.log(`orphan cleanup (${why}): ending pid ${v.pid} ${v.args.slice(0, 200)}`);
@@ -163,7 +181,8 @@ export class OrphanSweeper {
 
   /** 内容变了才写；先写临时文件再改名，崩在中间也不会留下半个文件。 */
   private async save(force = false): Promise<void> {
-    const procs = [...this.owned.values()].flatMap((m) => [...m.values()]);
+    const kept = [...this.spared.values()].map(({ pid, start, args }) => ({ pid, start, args }));
+    const procs = [...this.owned.values()].flatMap((m) => [...m.values()]).filter((p) => !this.spared.has(p.pid)).concat(kept);
     const text = JSON.stringify({ procs });
     if (!force && text === this.saved) return;
     this.saved = text;

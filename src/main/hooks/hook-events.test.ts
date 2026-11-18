@@ -97,6 +97,14 @@ describe("applyHookEnvelope", () => {
     expect(sessions.get("s1")?.waitingForInput).toBe(false);
   });
 
+  it("SessionEnd of a hibernated session keeps the waiting flag: Butler ended it, it still waits (WS-M B)", () => {
+    const { sessions, deps } = setup();
+    applyHookEnvelope(env("Stop", "s1"), deps);
+    sessions.setHibernated("s1", 150, "you", null);
+    applyHookEnvelope(env("SessionEnd", "s1", { receivedAt: 200 }), deps);
+    expect(sessions.get("s1")?.waitingForInput).toBe(true);
+  });
+
   it("ignores payloads without event or session id", () => {
     const { deps } = setup();
     expect(applyHookEnvelope({ v: 1, receivedAt: 1, ticket: null, butlerSession: null, payload: null }, deps).kind).toBe("ignored");

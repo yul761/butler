@@ -114,6 +114,10 @@ export interface IpcDeps {
   closeIdleSessions: (sessionIds: string[]) => number;
   /** 隐藏列表里的「全部删除」（BTL-190 第 8 点）：返回删掉的个数。 */
   deleteHiddenSessions: (sessionIds: string[]) => number;
+  /** 「钉住」（WS-M B）。 */
+  pinSession: (sessionId: string, pinned: boolean) => void;
+  /** 唤醒休眠的 session（用户点的：不管上次唤醒失败的冷却）。 */
+  wakeSession: (sessionId: string) => Promise<string>;
   runner: HandoffRunner;
   featureRunner: Pick<FeatureSummaryRunner, "runManual">;
   scheduler: Scheduler;
@@ -348,6 +352,11 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
     return n;
   });
+  handle(IPC.sessionsPin, (raw: unknown, on: unknown) => {
+    d.pinSession(sessionIdArg(raw), boolArg(on));
+    d.notify();
+  });
+  handle(IPC.sessionsWake, (raw: unknown): Promise<string> => d.wakeSession(sessionIdArg(raw)));
   handle(IPC.sessionsDismiss, (id: string) => {
     d.sessionService.dismiss(id);
     d.notify();

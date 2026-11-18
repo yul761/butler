@@ -69,3 +69,60 @@ describe("SessionsRepo lesson sessions (lessons visibility task 7)", () => {
     expect(repo.listUnclaimed(0).map((s) => s.id)).toEqual(["loose"]);
   });
 });
+
+describe("SessionsRepo hibernation (WS-M B)", () => {
+  const row = (repo: SessionsRepo, id: string, at = 1) => repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: at });
+
+  it("marks, lists and clears a hibernated head", () => {
+    const { repo } = setup();
+    row(repo, "a");
+    row(repo, "b");
+    repo.setHibernated("a", 100, "ci", 2048.4);
+    expect(repo.get("a")).toMatchObject({ hibernatedAt: 100, hibernateReason: "ci", memKb: 2048, memAt: 100 });
+    expect(repo.listHibernated().map((s) => s.id)).toEqual(["a"]);
+    repo.clearHibernated("a");
+    expect(repo.get("a")).toMatchObject({ hibernatedAt: null, hibernateReason: null, memKb: 2048 });
+    expect(repo.listHibernated()).toEqual([]);
+  });
+
+  it("keeps the last memory reading when hibernating without one", () => {
+    const { repo } = setup();
+    row(repo, "a");
+    repo.setMemory("a", 900, 50);
+    repo.setHibernated("a", 100, "idle", null);
+    expect(repo.get("a")).toMatchObject({ memKb: 900, memAt: 50, hibernatedAt: 100 });
+  });
+
+  it("does not list a replaced id as hibernated", () => {
+    const { repo } = setup();
+    row(repo, "a");
+    row(repo, "b", 2);
+    repo.setHibernated("a", 100, "idle", null);
+    repo.setReplacedBy("a", "b", "clear");
+    expect(repo.listHibernated()).toEqual([]);
+  });
+
+  it("records and clears a wake error", () => {
+    const { repo } = setup();
+    row(repo, "a");
+    repo.setWakeError("a", "no SessionStart", 7);
+    expect(repo.get("a")).toMatchObject({ wakeError: "no SessionStart", wakeErrorAt: 7 });
+    repo.setWakeError("a", null, 9);
+    expect(repo.get("a")).toMatchObject({ wakeError: null, wakeErrorAt: null });
+  });
+
+  it("pinned follows /clear and /resume to the new head", () => {
+    const { repo } = setup();
+    row(repo, "a");
+    row(repo, "b", 2);
+    row(repo, "c", 3);
+    repo.setPinned("a", true);
+    expect(repo.get("a")?.pinned).toBe(true);
+    repo.setReplacedBy("a", "b", "clear");
+    expect(repo.get("b")?.pinned).toBe(true);
+    repo.setReplacedBy("b", "c", "resume");
+    expect(repo.get("c")?.pinned).toBe(true);
+    repo.setPinned("c", false);
+    expect(repo.get("c")?.pinned).toBe(false);
+  });
+});

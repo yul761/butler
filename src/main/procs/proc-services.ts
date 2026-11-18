@@ -4,7 +4,7 @@ import type { MemorySamplesRepo } from "../db/memory-samples-repo";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import { backgroundPriorityOn, memoryMonitorOn, orphanCleanupOn, refreshMemoryMb } from "../settings/settings-values";
-import { MemoryMonitor, type AppMetric } from "./memory-monitor";
+import { MemoryMonitor, type AppMetric, type MonitorSample } from "./memory-monitor";
 import { MemoryRefresh } from "./memory-refresh";
 import { OrphanSweeper, platformKill } from "./orphans";
 import { platformBackend, PriorityManager } from "./priority";
@@ -26,6 +26,14 @@ export interface ProcServicesDeps {
   /** 主窗口在屏幕上（没最小化、没藏到托盘）。 */
   windowShown: () => boolean;
   ownedFile: string;
+  /** 钉住的 session（head）：不降优先级（WS-M B 的「钉住」）。 */
+  pinned?: (head: string) => boolean;
+  /** 换新也没把内存降下来：结束再 --resume（Hibernator.restart，WS-M G）。 */
+  restart?: (head: string) => Promise<unknown>;
+  /** 每次采样（内存紧张时休眠，WS-M C）。 */
+  onSample?: (s: MonitorSample) => void;
+  /** 别的功能也要采样（内存紧张时休眠要系统的空闲内存）。 */
+  sampleNeeded?: () => boolean;
   platform?: NodeJS.Platform;
   log: (msg: string, err?: unknown) => void;
   /** 「现在」页的内存读数变了：发 stateChanged。 */
@@ -44,6 +52,8 @@ export interface ProcServices {
   windowShown(): void;
   /** 终端结束：清它留下的孤儿。 */
   terminalExited(termId: string): void;
+  /** 渲染进程里看得见这个终端（不管主窗口在不在屏幕上：休眠只看它）。 */
+  isVisible(termId: string): boolean;
   start(): void;
   /** 退出前：停采样，恢复改过的优先级。 */
   stop(): Promise<void>;
@@ -68,7 +78,7 @@ export function createProcServices(d: ProcServicesDeps): ProcServices {
     mainPid: process.pid,
     readTable,
     readSystem: () => readSystemMemory(platform),
-    enabled: () => memoryMonitorOn(d.settings) || backgroundPriorityOn(d.settings) || orphanCleanupOn(d.settings),
+    enabled: () => memoryMonitorOn(d.settings) || backgroundPriorityOn(d.settings) || orphanCleanupOn(d.settings) || !!d.sampleNeeded?.(),
     recordOn: () => memoryMonitorOn(d.settings),
     sessions: d.sessions,
     samples: d.samples,
@@ -89,8 +99,7 @@ export function createProcServices(d: ProcServicesDeps): ProcServices {
     enabled: () => backgroundPriorityOn(d.settings),
     visible: (termId) => visible.has(termId) && d.windowShown(),
     idle: (head) => idleActivity(d.activity(head)),
-    // PR 2 的钉住接在这里。
-    exempt: () => false,
+    exempt: (head) => d.pinned?.(head) ?? false,
     backend: platformBackend(platform),
     log: d.log,
   });
@@ -100,12 +109,14 @@ export function createProcServices(d: ProcServicesDeps): ProcServices {
     precheck: (head) => d.refresher.precheck(head, "auto"),
     refresh: (head) => d.refresher.refresh(head, "auto"),
     refreshing: (head) => d.refresher.isRefreshing(head),
+    restart: d.restart,
     now: Date.now,
     log: d.log,
   });
   monitor.onSample((s) => orphans.onSample(s));
   monitor.onSample((s) => priority.onSample(s));
   monitor.onSample((s) => memRefresh.onSample(s));
+  if (d.onSample) monitor.onSample(d.onSample);
 
   const restore = (termId: string): void => void priority.restoreTerm(termId).catch((e: unknown) => d.log("restoring priority failed", e));
   return {
@@ -122,6 +133,7 @@ export function createProcServices(d: ProcServicesDeps): ProcServices {
     windowShown: () => {
       for (const termId of visible) restore(termId);
     },
+    isVisible: (termId) => visible.has(termId),
     terminalExited: (termId) => {
       visible.delete(termId);
       void orphans.termExited(termId).catch((e: unknown) => d.log("orphan cleanup failed", e));

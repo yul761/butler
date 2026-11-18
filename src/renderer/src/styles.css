@@ -173,6 +173,12 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .session-hide { padding: 0 6px; color: var(--muted); border-left: none; border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .session-hide:hover { color: var(--text); }
 .session-hide.armed { color: var(--danger); white-space: nowrap; }
+.session.hibernated .label { color: var(--muted); }
+.session .hib-badge { color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+.session .wake-error { color: var(--danger); font-weight: 600; }
+.session-pin { padding: 0 6px; border-left: none; border-radius: 0; opacity: 0.35; filter: grayscale(1); }
+.session-pin:hover { opacity: 0.8; }
+.session-pin.on { opacity: 1; filter: none; }
 .hidden-sessions button.armed { color: var(--danger); }
 .hidden-sessions .row { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
 .repos-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 16px; border-bottom: 1px solid var(--border); }

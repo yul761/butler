@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MonitorSample } from "./memory-monitor";
 import { OrphanSweeper, platformKill } from "./orphans";
 import { classifyTree, parsePsTable, summarize, type ProcTable } from "./proc-table";
@@ -71,8 +71,22 @@ describe("OrphanSweeper (WS-M F)", () => {
 
     const c = setup([table(L.vite.replace("  112   111", "  112     1"))]);
     await c.s.onSample(sample(before, [{ termId: "t1", pid: 110 }]));
-    c.s.spare([{ pid: 112, start: "Mon Nov 17 09:01:02 2026", args: "node /r/node_modules/.bin/vite" }]);
+    c.s.spare("h1", [{ pid: 112, start: "Mon Nov 17 09:01:02 2026", args: "node /r/node_modules/.bin/vite" }]);
     expect(await c.s.termExited("t1")).toBe(0);
+  });
+
+  it("ends what a hibernated session kept once it is released, and only that session's", async () => {
+    const vite = { pid: 112, start: "Mon Nov 17 09:01:02 2026", args: "node /r/node_modules/.bin/vite" };
+    const left = table(L.vite.replace("  112   111", "  112     1"));
+    const { s, kills, file } = setup([left, table()]);
+    s.spare("h1", [vite]);
+    // 留着的也写进记录：Butler 重启时启动扫描结束它们。
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(file, "utf8")).procs).toEqual([vite]));
+    expect(await s.release("other")).toBe(0);
+    expect(kills).toEqual([]);
+    expect(await s.release("h1")).toBe(1);
+    expect(kills).toEqual([[112, false]]);
+    expect(await s.release("h1")).toBe(0);
   });
 
   it("sweeps what the last run recorded at startup, then starts a fresh record", async () => {

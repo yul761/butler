@@ -5,6 +5,7 @@ import { memDb } from "../test-utils";
 import {
   isLoopbackHost, llmConfig, normalizeBaseUrl, checkBranchTemplateFits, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTerms, normalizeTicketPattern, parsePriceTable, parseTime, parseToolList,
   parseWorkingDays, priceFor, butlerPatrolTime, idleCloseMinutes, refreshThreshold, scheduleConfig, SettingError, TERMS_LIMIT, trackerTools,
+  hibernateEndWatchersOn, hibernateMinutes, hibernateOn, memoryPressureFreePercent, memoryPressureOn,
 } from "./settings-values";
 
 describe("settings values", () => {
@@ -278,5 +279,35 @@ describe("refresh threshold (plan 16)", () => {
     expect(normalizeSetting("refreshThresholdTokens", "0")).toBe("0");
     expect(normalizeSetting("refreshThresholdTokens", "007")).toBe("7");
     for (const bad of ["", "abc", "-5", "1.5", "1e9", "12345678901"]) expect(() => normalizeSetting("refreshThresholdTokens", bad), bad).toThrow(SettingError);
+  });
+});
+
+describe("hibernation settings (WS-M B, C)", () => {
+  it("defaults: hibernation and pressure off, end watchers on, minutes 30/20/30/60, line 10%", () => {
+    const s = new SettingsRepo(memDb());
+    expect([hibernateOn(s), hibernateEndWatchersOn(s), memoryPressureOn(s)]).toEqual([false, true, false]);
+    expect((["you", "ci", "review", "idle"] as const).map((k) => hibernateMinutes(s, k))).toEqual([30, 20, 30, 60]);
+    expect(memoryPressureFreePercent(s)).toBe(10);
+  });
+
+  it("reads stored values; broken ones fall back to the default", () => {
+    const s = new SettingsRepo(memDb());
+    s.set("hibernateCiMinutes", "0");
+    s.set("hibernateIdleMinutes", "15");
+    s.set("hibernateYouMinutes", "3");
+    s.set("memoryPressureFreePercent", "80");
+    expect(hibernateMinutes(s, "ci")).toBe(0);
+    expect(hibernateMinutes(s, "idle")).toBe(15);
+    expect(hibernateMinutes(s, "you")).toBe(30);
+    expect(memoryPressureFreePercent(s)).toBe(10);
+  });
+
+  it("normalizes and rejects", () => {
+    expect(normalizeSetting("hibernateIdleMinutes", " 045 ")).toBe("45");
+    expect(normalizeSetting("hibernateIdleMinutes", "0")).toBe("0");
+    for (const bad of ["", "4", "-5", "1.5", "123456"]) expect(() => normalizeSetting("hibernateReviewMinutes", bad), bad).toThrow(SettingError);
+    expect(normalizeSetting("memoryPressureFreePercent", "15")).toBe("15");
+    for (const bad of ["", "0", "51", "abc", "5.5"]) expect(() => normalizeSetting("memoryPressureFreePercent", bad), bad).toThrow(SettingError);
+    expect(normalizeSetting("hibernateEnabled", "1")).toBe("1");
   });
 });

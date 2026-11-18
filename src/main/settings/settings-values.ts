@@ -349,7 +349,23 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "memoryMonitor":
     case "backgroundPriority":
     case "orphanCleanup":
+    case "hibernateEnabled":
+    case "hibernateEndWatchers":
+    case "memoryPressureEnabled":
       return normalizeFlag(value);
+    case "hibernateYouMinutes":
+    case "hibernateCiMinutes":
+    case "hibernateReviewMinutes":
+    case "hibernateIdleMinutes": {
+      const t = value.trim();
+      if (!HIBERNATE_MINUTES_RE.test(t) || (Number(t) !== 0 && Number(t) < MIN_HIBERNATE_MINUTES)) throw new SettingError(M().hibernateMinutes);
+      return String(Number(t));
+    }
+    case "memoryPressureFreePercent": {
+      const t = value.trim();
+      if (!/^\d{1,2}$/.test(t) || Number(t) < 1 || Number(t) > MAX_PRESSURE_PERCENT) throw new SettingError(M().memoryPressureFreePercent);
+      return String(Number(t));
+    }
     case "refreshThresholdTokens": {
       const t = value.trim();
       if (!REFRESH_THRESHOLD_RE.test(t)) throw new SettingError(M().refreshThreshold);
@@ -464,7 +480,10 @@ export const configBackupKeep = (s: Pick<SettingsRepo, "get">) => configNumber(s
 export const configExportReminderDays = (s: Pick<SettingsRepo, "get">) => configNumber(s, "configExportReminderDays", (n) => n <= MAX_CONFIG_DAYS);
 
 /** 开关读法：存成 "1" 才算开，其余（包括损坏的值）都按默认值。 */
-function flagOn(s: Pick<SettingsRepo, "get">, key: "memoryMonitor" | "backgroundPriority" | "orphanCleanup"): boolean {
+function flagOn(
+  s: Pick<SettingsRepo, "get">,
+  key: "memoryMonitor" | "backgroundPriority" | "orphanCleanup" | "hibernateEnabled" | "hibernateEndWatchers" | "memoryPressureEnabled",
+): boolean {
   const v = s.get(key).trim();
   return v === "0" || v === "1" ? v === "1" : SETTING_DEFAULTS[key] === "1";
 }
@@ -475,6 +494,41 @@ export const memoryMonitorOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn
 export const backgroundPriorityOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn(s, "backgroundPriority");
 /** 孤儿进程清理（WS-M F）开着没有。 */
 export const orphanCleanupOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn(s, "orphanCleanup");
+
+/** 休眠（WS-M B）开着没有。 */
+export const hibernateOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn(s, "hibernateEnabled");
+/** 休眠时结束 watcher 和 dev server（WS-M I）。 */
+export const hibernateEndWatchersOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn(s, "hibernateEndWatchers");
+/** 内存紧张时休眠（WS-M C）开着没有。 */
+export const memoryPressureOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn(s, "memoryPressureEnabled");
+
+/** 休眠的分钟数：0 或者最多 5 位的整数。 */
+const HIBERNATE_MINUTES_RE = /^\d{1,5}$/;
+/** 休眠最短的等待：再短的话刚停下就被结束了。 */
+const MIN_HIBERNATE_MINUTES = 5;
+const MAX_PRESSURE_PERCENT = 50;
+
+const HIBERNATE_MINUTE_KEYS = {
+  you: "hibernateYouMinutes",
+  ci: "hibernateCiMinutes",
+  review: "hibernateReviewMinutes",
+  idle: "hibernateIdleMinutes",
+} as const;
+
+/** 在 state 这种等待里停多少分钟后休眠（WS-M B）：0 = 不休眠；存的值不合法时用默认值。 */
+export function hibernateMinutes(s: Pick<SettingsRepo, "get">, state: keyof typeof HIBERNATE_MINUTE_KEYS): number {
+  const key = HIBERNATE_MINUTE_KEYS[state];
+  const t = s.get(key).trim();
+  const n = Number(t);
+  return HIBERNATE_MINUTES_RE.test(t) && (n === 0 || n >= MIN_HIBERNATE_MINUTES) ? n : Number(SETTING_DEFAULTS[key]);
+}
+
+/** 内存紧张的线（memoryPressureFreePercent，WS-M C）：可用内存低于百分之几；不合法时用默认的 10。 */
+export function memoryPressureFreePercent(s: Pick<SettingsRepo, "get">): number {
+  const t = s.get("memoryPressureFreePercent").trim();
+  const n = Number(t);
+  return /^\d{1,2}$/.test(t) && n >= 1 && n <= MAX_PRESSURE_PERCENT ? n : Number(SETTING_DEFAULTS.memoryPressureFreePercent);
+}
 
 /** 内存阈值的 MB 数：0 或者最多 6 位的整数。 */
 const MEMORY_MB_RE = /^\d{1,6}$/;

@@ -1,4 +1,4 @@
-import type { Session, SessionOrigin } from "../../shared/types";
+import type { HibernateReason, Session, SessionOrigin } from "../../shared/types";
 import type { CheckAbsenceReason } from "../../shared/checks";
 import { withTransaction, type Db } from "./database";
 
@@ -27,6 +27,11 @@ interface SessionRow {
   checks_absent: string | null;
   mem_kb?: number | null;
   mem_at?: number | null;
+  hibernated_at?: number | null;
+  hibernate_reason?: string | null;
+  pinned?: number;
+  wake_error?: string | null;
+  wake_error_at?: number | null;
 }
 
 function toSession(r: SessionRow): Session {
@@ -54,6 +59,11 @@ function toSession(r: SessionRow): Session {
     checksAbsent: (r.checks_absent ?? null) as CheckAbsenceReason | null,
     memKb: r.mem_kb == null ? null : Number(r.mem_kb),
     memAt: r.mem_at == null ? null : Number(r.mem_at),
+    hibernatedAt: r.hibernated_at == null ? null : Number(r.hibernated_at),
+    hibernateReason: (r.hibernate_reason ?? null) as HibernateReason | null,
+    pinned: r.pinned === 1,
+    wakeError: r.wake_error ?? null,
+    wakeErrorAt: r.wake_error_at == null ? null : Number(r.wake_error_at),
   };
 }
 
@@ -236,6 +246,32 @@ export class SessionsRepo {
     this.db.prepare(`UPDATE sessions SET mem_kb = ?, mem_at = ? WHERE id = ?`).run(Math.round(kb), at, id);
   }
 
+  /** 休眠（WS-M B）：在结束进程之前写，handleExit 才知道这次退出是休眠。memKb 是休眠前那棵树的内存。 */
+  setHibernated(id: string, at: number, reason: HibernateReason, memKb: number | null): void {
+    this.db
+      .prepare(`UPDATE sessions SET hibernated_at = ?, hibernate_reason = ?, mem_kb = COALESCE(?, mem_kb), mem_at = CASE WHEN ? IS NULL THEN mem_at ELSE ? END WHERE id = ?`)
+      .run(at, reason, memKb === null ? null : Math.round(memKb), memKb, at, id);
+  }
+
+  /** 醒了（或者唤醒失败、退回成普通的关着的 session）：清掉休眠。链上任何一个 id 都清，免得旧段留着标记。 */
+  clearHibernated(id: string): void {
+    this.db.prepare(`UPDATE sessions SET hibernated_at = NULL, hibernate_reason = NULL WHERE id = ? AND hibernated_at IS NOT NULL`).run(id);
+  }
+
+  /** 自动唤醒失败：记下原因和时间（「现在」页提醒，10 分钟内不再自动唤醒）。error 为 null 时清掉。 */
+  setWakeError(id: string, error: string | null, at: number | null): void {
+    this.db.prepare(`UPDATE sessions SET wake_error = ?, wake_error_at = ? WHERE id = ?`).run(error, error === null ? null : at, id);
+  }
+
+  setPinned(id: string, pinned: boolean): void {
+    this.db.prepare(`UPDATE sessions SET pinned = ? WHERE id = ?`).run(pinned ? 1 : 0, id);
+  }
+
+  /** 休眠着的 head（没被替换的）。 */
+  listHibernated(): Session[] {
+    return (this.db.prepare(`SELECT * FROM sessions WHERE hibernated_at IS NOT NULL AND replaced_by IS NULL ORDER BY hibernated_at, id`).all() as unknown as SessionRow[]).map(toSession);
+  }
+
   setWaiting(id: string, waiting: boolean, at: number): void {
     this.db
       .prepare(`UPDATE sessions SET waiting_for_input = ?, last_activity_at = MAX(COALESCE(last_activity_at, 0), ?) WHERE id = ?`)
@@ -266,7 +302,8 @@ export class SessionsRepo {
              spawned_by = COALESCE(spawned_by, ${old("spawned_by")}),
              model = COALESCE(model, ${old("model")}),
              lesson_run_id = COALESCE(lesson_run_id, ${old("lesson_run_id")}),
-             checks_absent = COALESCE(checks_absent, ${old("checks_absent")})${source === "resume" ? "" : role}
+             checks_absent = COALESCE(checks_absent, ${old("checks_absent")}),
+             pinned = MAX(pinned, ${old("pinned")})${source === "resume" ? "" : role}
            WHERE id = ?2 AND ticket_key IS ${old("ticket_key")}`,
         )
         .run(id, newId);
