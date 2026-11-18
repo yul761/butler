@@ -59,7 +59,7 @@ const log = (line) => {
 const FLAGS = [
   "--print", "--session-id", "--resume", "--fork-session", "--mcp-config", "--output-format", "--json-schema",
   "--allowedTools", "--disallowedTools", "--no-session-persistence", "--permission-mode", "--setting-sources", "--add-dir",
-  "--settings",
+  "--settings", "--model", "--effort",
 ];
 const PR = { number: 7, url: "https://github.com/acme/backend/pull/7", state: "merged", review: "approved" };
 const HANDOFF = {
