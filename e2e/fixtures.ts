@@ -76,6 +76,19 @@ export interface FakeGhFixture {
   prs: Record<string, PrViewFixture>;
   /** gh pr create 打印的新 PR 链接；没有时 gh pr create 是不支持的调用。 */
   created?: string;
+  /** 评论闭环（工作流 I）：PR 号 → GraphQL 的 review thread 节点。 */
+  threads?: Record<string, unknown[]>;
+  /** CI 分类（工作流 I）：run id → gh run view --json 的结果；run id → --log-failed 的输出。 */
+  runs?: Record<string, unknown>;
+  logs?: Record<string, string>;
+  /** gh api …/compare/<base>...<head> 的文件。 */
+  compare?: { filename: string; patch?: string }[];
+}
+
+/** 假 gh 的调用记录（每行一次调用的参数）。 */
+export function ghCalls(s: Sandbox): string[][] {
+  if (!existsSync(s.ghLog)) return [];
+  return readFileSync(s.ghLog, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as unknown).filter((v): v is string[] => Array.isArray(v));
 }
 
 /**
@@ -462,4 +475,27 @@ export async function newTicket(page: Page, key: string, repo: string, other: st
   await page.locator(".modal").getByRole("checkbox", { name: other, exact: true }).uncheck();
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: key, exact: true })).toBeVisible();
+}
+
+/**
+ * 设置 →「评论与 CI」（工作流 I）：在全局这一层把 values 里的键设上（布尔、枚举是下拉框，其余是输入框），保存；
+ * external 里的对外动作开关一并打开。
+ */
+export async function setLoopPolicy(page: Page, values: Record<string, string>, external: readonly string[] = []): Promise<void> {
+  await page.locator(".sidebar").getByRole("button", { name: S.settings, exact: true }).click();
+  await page.getByTestId("settings-tab-loop").click();
+  const editor = page.getByTestId("loop-policy-editor");
+  await expect(editor.getByTestId("loop-row-comments.enabled")).toBeVisible();
+  for (const [key, v] of Object.entries(values)) {
+    const input = editor.getByTestId(`loop-input-${key}`);
+    if ((await input.evaluate((el) => el.tagName)) === "SELECT") await input.selectOption(v);
+    else await input.fill(v);
+  }
+  await editor.getByTestId("loop-save").click();
+  await expect(editor.getByTestId("loop-message")).toHaveText(S.lp.saved);
+  for (const kind of external) {
+    const box = page.getByTestId(`loop-external-${kind}`);
+    await box.check();
+    await expect(box).toBeChecked();
+  }
 }

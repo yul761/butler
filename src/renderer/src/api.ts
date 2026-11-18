@@ -7,6 +7,8 @@ import type { PrStagesScope, PrStagesTicket } from "../../shared/pr-stages";
 import type { AvailabilityAction, AvailabilityView } from "../../shared/availability";
 import type { BatchDetail, BatchView } from "../../shared/batches";
 import type { AdmissionPolicyOverrides, AdmissionPolicyView, PolicyScope } from "../../shared/admission-policy";
+import type { LoopPolicyOverrides, LoopPolicyView, LoopScope } from "../../shared/loop-policy";
+import type { CommentAction, CommentItemView, FlakyAction, FlakyEntry, LoopEffect, PrCommentsView } from "../../shared/loop";
 import type { ConfigIoStatus, ExportRequest, ExportResult, ImportApplyRequest, ImportApplyResult, ImportPreviewResult, StarterTarget } from "../../shared/config-io";
 import type {
   AdmissionPageState, AdmissionScope, CalibrationAction, CalibrationActResult, CalibrationSample, CalibrationStatsView, RegroupResult, WizardAction, WizardActResult, WizardEstimate,
@@ -137,6 +139,14 @@ export const api = {
   principlesRegroup: () => call<RegroupResult>(IPC.principlesRegroup),
   policiesGet: (scope: PolicyScope) => call<AdmissionPolicyView>(IPC.policiesGet, scope),
   policiesSet: (scope: PolicyScope, overrides: AdmissionPolicyOverrides) => call<{ batchId: number | null; version: number }>(IPC.policiesSet, { scope, overrides }),
+  loopPolicyGet: (scope: LoopScope) => call<LoopPolicyView>(IPC.loopPolicyGet, scope),
+  loopPolicySet: (scope: LoopScope, overrides: LoopPolicyOverrides) => call<void>(IPC.loopPolicySet, { scope, overrides }),
+  loopComments: (ticketKey: string) => call<PrCommentsView[]>(IPC.loopCommentsList, ticketKey),
+  loopCommentsAct: (a: CommentAction) => call<CommentItemView | null>(IPC.loopCommentsAct, a),
+  loopFlaky: () => call<FlakyEntry[]>(IPC.loopFlakyList),
+  loopFlakyAct: (a: FlakyAction) => call<boolean>(IPC.loopFlakyAct, a),
+  /** 给「效果」页（工作流 H）：最近 days 天（1–365，默认 30）评论闭环和 CI 分类做了什么。 */
+  loopEffect: (days?: number) => call<LoopEffect>(IPC.loopEffect, days ?? 30),
   checksView: (scope: CheckScope) => call<ChecksView>(IPC.checksView, scope),
   checksHits: (key: string) => call<CheckHitView[]>(IPC.checksHits, key),
   checksAct: (a: ChecksAction) => call<ChecksActResult>(IPC.checksAct, a),

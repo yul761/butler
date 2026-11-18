@@ -122,3 +122,12 @@ describe("cost notice (workstream L)", () => {
     expect(noticeText({ kind: "cost", breaker, target: null }, STRINGS.en, 0).actions).toEqual(["raise"]);
   });
 });
+
+describe("comments_waiting notice", () => {
+  const target = { page: "ticket" as const, key: "T-3", sessionId: null };
+  it("says how many comments wait for you, or how long they have waited to be sent", () => {
+    const w = { reason: "review" as const, ticketKey: "T-3", prId: 1, number: 12, count: 2, since: 0 };
+    expect(noticeText({ kind: "comments_waiting", waiting: w, target, title: null }, S, 0)).toEqual({ text: S.lp.noticeReview(S.lp.noticePr("T-3", 12), 2), actions: ["comments"] });
+    expect(noticeText({ kind: "comments_waiting", waiting: { ...w, reason: "undelivered" }, target, title: null }, S, 45 * 60_000).text).toBe(S.lp.noticeUndelivered(S.lp.noticePr("T-3", 12), 2, 45));
+  });
+});

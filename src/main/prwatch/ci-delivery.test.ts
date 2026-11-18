@@ -10,7 +10,7 @@ import { CI_UNDELIVERED_MS, CiDelivery, ciRecipient, deliveryKey, pickRecipient,
 
 type Deliver = (term: string, text: string, recheck: () => boolean) => Promise<"sent" | "exited" | "timeout" | "blocked">;
 
-function setup(opts: { session?: string | null; guard?: ReturnType<DeliveryGuard["check"]>; deliver?: Deliver; guardImpl?: CiDeliveryDeps["guard"]; recipient?: CiDeliveryDeps["recipient"] } = {}) {
+function setup(opts: { session?: string | null; guard?: ReturnType<DeliveryGuard["check"]>; deliver?: Deliver; guardImpl?: CiDeliveryDeps["guard"]; recipient?: CiDeliveryDeps["recipient"]; triage?: CiDeliveryDeps["triage"] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   for (const key of ["BTL-1", "BTL-2"]) tickets.insert({ key, title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null });
@@ -38,7 +38,7 @@ function setup(opts: { session?: string | null; guard?: ReturnType<DeliveryGuard
       const owner = state.owners.get(`${key}:${rid}:${branch}`) ?? null;
       return pickRecipient({ owner, ownerOpen: owner !== null && !state.closed.has(owner), open: state.open, ticketBranch: tickets.getRepo(rid)?.branch ?? null, branch });
     }),
-    deliver, now: () => state.now, log,
+    deliver, now: () => state.now, log, triage: opts.triage,
   });
   /** 一个读过的 PR 行。 */
   const pr = (o: TicketPrPatch & { ticketKey?: string; repoId?: number | null; number?: number } = {}) => {
@@ -479,5 +479,41 @@ describe("CiDelivery to a hibernated session", () => {
     await d.settled({ kind: "pr", id: r.id });
     expect(t.deliver).toHaveBeenCalledTimes(1);
     expect(wake).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("CiDelivery with CI triage (workstream I)", () => {
+  it("holds while triage works, without counting it as undelivered", async () => {
+    const decide = vi.fn((): import("../loop/ci-triage").TriageDecision => ({ action: "hold", reason: "triage" }));
+    const s = setup({ triage: { decide } });
+    const r = s.pr({ failed: [{ name: "test", state: "failing", runId: 1 }] });
+    expect(await s.d.resend({ kind: "pr", id: r.id })).toBe("triage");
+    s.state.now = CI_UNDELIVERED_MS * 2;
+    await s.d.flush();
+    expect(s.deliver).not.toHaveBeenCalled();
+    expect(s.d.undelivered()).toEqual([]);
+    expect(decide).toHaveBeenCalledWith({ kind: "pr", id: r.id }, expect.objectContaining({ ci: "failing", headSha: "abcdef1234567" }));
+  });
+
+  it("appends the note and tells triage once it is sent", async () => {
+    const onSent = vi.fn();
+    const s = setup({ triage: { decide: () => ({ action: "deliver", note: "可能是 flaky：重跑了 2 次", onSent }) } });
+    const r = s.pr({ failed: [{ name: "test", state: "failing", runId: 1 }] });
+    await s.d.settled({ kind: "pr", id: r.id });
+    const text = s.deliver.mock.calls[0][1] as string;
+    expect(text).toMatch(/push[\s\S]*可能是 flaky：重跑了 2 次$/);
+    expect(onSent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not tell triage when the paste did not go through, and delivers anyway when triage throws", async () => {
+    const onSent = vi.fn();
+    const s = setup({ deliver: async () => "timeout", triage: { decide: () => ({ action: "deliver", note: null, onSent }) } });
+    const r = s.pr();
+    await s.d.settled({ kind: "pr", id: r.id });
+    expect(onSent).not.toHaveBeenCalled();
+    const t = setup({ triage: { decide: () => { throw new Error("boom"); } } });
+    const q = t.pr();
+    await t.d.settled({ kind: "pr", id: q.id });
+    expect(t.deliver).toHaveBeenCalledTimes(1);
   });
 });

@@ -157,6 +157,14 @@ export const IPC = {
   termsSave: "terms:save",
   auditList: "audit:list",
   externalAuditList: "externalAudit:list",
+  /** 评论闭环和 CI 分类（工作流 I）。 */
+  loopPolicyGet: "loop:policy:get",
+  loopPolicySet: "loop:policy:set",
+  loopCommentsList: "loop:comments:list",
+  loopCommentsAct: "loop:comments:act",
+  loopFlakyList: "loop:flaky:list",
+  loopFlakyAct: "loop:flaky:act",
+  loopEffect: "loop:effect",
   progressGet: "progress:get",
   /** 「效果」页（ws-h）：和总控 metrics_overview 同一份。 */
   metricsView: "metrics:view",
@@ -190,6 +198,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList, IPC.externalAuditList,
+  IPC.loopPolicyGet, IPC.loopPolicySet, IPC.loopCommentsList, IPC.loopCommentsAct, IPC.loopFlakyList, IPC.loopFlakyAct, IPC.loopEffect,
   IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,
 ];

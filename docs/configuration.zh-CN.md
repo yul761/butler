@@ -15,6 +15,8 @@ Butler 没有配置文件。所有设置都在 **设置** 页里改，存在 `~/
 5. **隐私与个人 API**
 6. **复盘规矩**（自动备份、导出提醒和准入策略，见[复盘规矩：批量操作、准入策略和导入导出](#复盘规矩批量操作准入策略和导入导出)）
 
+设置页顶上还有两个标签：**模型路由**（见[模型路由](#模型路由)）和 **评论与 CI**（见[评论与 CI](#评论与-ci)）。
+
 合并总控，以及给总控 session 用的 `end_session` 工具，见[合并总控](#合并总控)和 [README](../README.zh-CN.md)，两者都没有设置项。
 
 审计记录在侧边栏单独的 **审计** 页里。**效果** 页也没有设置项，见[效果页](#效果页)。
@@ -282,6 +284,7 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 - **四张卡**：每个合并了的 Butler PR 平均的周期（开 PR → 合并，以及 ticket 开始 → 合并）、评论（人和 Copilot，以及复盘标成可避免的有几条）、人介入（以及 session 等了你多久）和花费（加权 token；也折成美元，用 Claude Code 报的金额，没有的按模型登记的价格估）。周期和评论和基线比；另外两张没有可比的，写"之前 —"。
 - **基线**：Butler 每天从 GitHub 读一次你自己开的、在第一个 Butler session 之前 180 天里合并的 PR（每个仓库最多 100 个，链接到 ticket 的不算），记下周期和评论数。bot 的评论不算，和 Butler 的 PR 一样。这些 PR 的"ticket 开始"用第一个 commit 的时间近似。截止点在第一个 Butler session 出现时定下，之后不再变。还没读到这样的 PR 时（比如 gh 用不了），页面上写还没有基线。
 - **打断原因**：每种停下来等你的原因（权限确认、选择题、缺信息、真问题、卡住）各有几次、各让你等了多久，以及自动放行了几次。session 停着、但不是在等你的空闲时间单独算。
+- **评论与 CI**：选定时间范围里[评论闭环和 CI 分类](#评论与-ci)做了什么：自动处理了几条评论（Copilot 和人、回复了几条、resolve 了几条、还有几条在等你），CI 失败在自动重跑后通过（flaky）了几次，这些 flaky 从第一次失败起浪费了多久，以及最常 flaky 的检查和测试。
 - 按周或按月的 **趋势**（最近 12 个）、按种类的 **人介入构成**、**分组**（Butler PR 和其他链接到 ticket 的 PR；按仓库、产品和风险等级，没有等级的是"未分级"）、按模型和按任务的 **花费构成**，以及 **返工**：CI 失败、PR 重开和合并后被 revert。重开和 revert 也是每天那次读 GitHub 找到的（标题是 `Revert "<标题>"` 或者正文写着 `Reverts #N` 的已合并 PR）。
 
 数字每小时从本地事件汇总一次；打开页面时，上次汇总超过 10 分钟就再汇总一次。电脑睡着的时间不算等待。
@@ -501,7 +504,7 @@ Butler 可以替你判待确认的规矩。判的时候，对一个仓库、一�
 
 ## 对外动作
 
-之后的一些功能会让 Butler 代你在本机以外留下东西，比如在 PR 评论下回复。每一种动作在 **设置 → 对外动作** 里有自己的开关，默认全关。开关关着时 Butler 不做这个动作，只记一条"跳过"。做了的、失败的、跳过的动作都列在 **审计** 页的 **对外动作** 里，写着仓库、ticket、目标和发了什么，保留时间和 `auditRetentionDays` 一样。现在还没有功能用到这些开关。
+有些功能会让 Butler 代你在本机以外留下东西，比如在 PR 评论下回复。每一种动作在 **设置 → 对外动作** 里有自己的开关，默认全关。开关关着时 Butler 不做这个动作，只记一条"跳过"。做了的、失败的、跳过的动作都列在 **审计** 页的 **对外动作** 里，写着仓库、ticket、目标和发了什么，保留时间和 `auditRetentionDays` 一样。[评论闭环和 CI 分类](#评论与-ci)用到回复、resolve 和重跑这三个开关。
 
 | 设置 | 键 | 默认值 | 允许做什么 |
 |------|----|--------|------------|
@@ -517,6 +520,67 @@ Butler 可以替你判待确认的规矩。判的时候，对一个仓库、一�
 | 推送通知 | `externalPushNotification` | `0`（关） | 往外部服务（比如手机推送、聊天工具）发通知。 |
 
 每个开关填 `1` 或 `0`。
+
+## 评论与 CI
+
+**设置 → 评论与 CI** 管两个闭环，让 PR 不用你来回传话也能往前走。两个都默认关；关着时 Butler 和以前一样。每个键都能在全局、产品、仓库三层设置，按键合并，规则和[准入策略](#准入策略)一样（仓库自己的值，否则产品的，否则全局的，否则默认值；几个产品设得不一样时名字靠后的产品生效，页面上会提示）。
+
+### 评论闭环
+
+`comments.enabled` 开着的仓库，PR 监视每读一次开着的 PR，Butler 就读它的 review thread、review 正文和 PR 评论，把每条新评论分成四类：
+
+- **要改**：要求改代码；
+- **提问**：reviewer 在问问题；
+- **可忽略**：致谢、表态、位置已过时、你已经回复过、Copilot 的总览，或者匹配 `comments.ignorePatterns`；
+- **需要人判断**。
+
+先用规则：已经 resolve 的 thread、你自己的评论和其他机器人的评论跳过，带 ```` ```suggestion ```` 的算要改，上面那几种情况算可忽略。规则判断不了的，`comments.useModel` 开着时经模型路由的 `comment_classify` 任务交给模型；模型也给不出结果的，或者模型关着时规则判断不了的，都算需要人判断。
+
+Copilot 和人的评论分开设置（`comments.copilot`、`comments.human`）。设成 `auto` 时，要改的（`comments.questions` 是 `session` 时还有提问）送进这个 PR 分支所属的 session，也就是 CI 结论送去的那个 session。Butler 等它停下来才送，不会打断它；一次最多送 `comments.maxPerDelivery` 条，带文件、行号和原文，同一个 session 同时只送一样东西（和 CI 结论共用）。设成 `review`（人的评论默认这样）时，评论在 ticket 的 **评论** 标签里等你看，**现在** 页会有提醒。该送进 session 却等了 30 分钟还没送出去的评论也会提醒。设成 `off` 就不处理。
+
+push 之后，Butler 在新的 head 上核对送出去的每条评论：行内评论的 thread 在别处 resolve 了、位置过时或没了，或者这次的改动碰到了它那几行（前后 3 行以内），就算已处理；review 正文和 PR 评论有新提交就算已处理。push 两次还没改到的，交回给你。已处理的评论，`comments.reply` 开着时 Butler 回复"已在 <提交> 中修改。"（标明是 Butler 的自动回复），`comments.resolve` 开着时 resolve 这个 thread。这两件事还要各自打开[对外动作](#对外动作)里的开关（`externalCommentReply`、`externalCommentResolve`），每次尝试都记在审计页上。
+
+在 ticket 的 **评论** 标签里，可以把评论送进 session、改分类、忽略，或者再回复一次。
+
+| 键 | 默认值 | 取值 | 作用 |
+|----|--------|------|------|
+| `comments.enabled` | `false` | `true` / `false` | 启用评论闭环 |
+| `comments.copilot` | `auto` | `auto` / `review` / `off` | Copilot 的评论怎么办：送进 session、先给你看、不处理 |
+| `comments.human` | `review` | `auto` / `review` / `off` | 人的评论怎么办，同上 |
+| `comments.questions` | `user` | `user` / `session` | 提问等你回答，还是送进 session |
+| `comments.useModel` | `true` | `true` / `false` | 规则判断不了时问模型 |
+| `comments.ignorePatterns` | 无 | 列表 | 匹配任意一条的评论算可忽略 |
+| `comments.maxPerDelivery` | `10` | 整数 1–50 | 一次最多送进 session 几条 |
+| `comments.reply` | `true` | `true` / `false` | 评论处理后自动回复（还要开 `externalCommentReply`） |
+| `comments.resolve` | `true` | `true` / `false` | 评论处理后自动 resolve（还要开 `externalCommentResolve`） |
+| `comments.replyLanguage` | `en` | `en` / `zh` | 回复用的语言 |
+
+### CI 分类
+
+仓库的 `ci.enabled` 开着时，CI 失败的结论先分类再告诉 session。失败的检查按 workflow run 分组；不是 GitHub Actions run 的检查照旧送。先用规则：
+
+- **环境问题**：run 没分到 runner，或者在准备 job 时就失败了；日志匹配内置的环境类关键字（网络超时、DNS 错误、包仓库或限流错误、runner 被关、磁盘满）或 `ci.envPatterns`；或者失败的那一步在安装、checkout、下载，日志看着像网络问题；
+- **代码问题**：日志匹配内置的代码类关键字（类型错误、断言、测试失败、lint 或编译错误）或 `ci.codePatterns`。同时命中两类时按代码问题算；
+- **flaky**：失败的检查或测试在 flaky 名单上（`ci.flakyTests` 加上 Butler 自动列入的）。
+
+规则判断不了的，`ci.useModel` 开着时经模型路由的 `ci_classify` 任务交给模型，否则按代码问题算。
+
+代码问题照旧送进 session。环境问题和 flaky 用 `gh run rerun <run> --failed` 重跑，最多 `ci.maxReruns` 次，不告诉 session；这要打开[对外动作](#对外动作)里的 `externalCiRerun`，关着时照常送，并注明自动重跑没开。重跑通过了，session 收到平常的"CI 全部通过"。重跑后又是同样的失败，按代码问题送；超过次数还在失败，送的时候标上"可能是 flaky"。重跑 6 小时还没有结果的也照常送。
+
+每次重跑后通过，都按检查名和测试名记一笔，连同从第一次失败起浪费的时间。一个名字在 `ci.autoListDays` 天里重跑后通过了 `ci.autoListThreshold` 次，就自动列入 flaky 名单。同一页的 **flaky 名单** 列出次数和浪费的时间，可以手动列入或移出。再下面是两个闭环最近 30 天做了什么。
+
+列表在编辑器里一行一条。用 `/…/` 包起来的是正则，其余按子串匹配，都不区分大小写。
+
+| 键 | 默认值 | 取值 | 作用 |
+|----|--------|------|------|
+| `ci.enabled` | `false` | `true` / `false` | 启用 CI 分类 |
+| `ci.maxReruns` | `2` | 整数 0–5 | 同一个失败最多自动重跑几次 |
+| `ci.useModel` | `true` | `true` / `false` | 规则判断不了时问模型 |
+| `ci.envPatterns` | 无 | 列表 | 额外的、算环境问题的日志模式 |
+| `ci.codePatterns` | 无 | 列表 | 额外的、算代码问题的日志模式 |
+| `ci.flakyTests` | 无 | 列表 | 已知 flaky 的检查或测试 |
+| `ci.autoListThreshold` | `3` | 整数 1–100 | 重跑后通过几次就列入 flaky 名单 |
+| `ci.autoListDays` | `30` | 整数 1–365 | flaky 统计和自动列入看最近几天 |
 
 ## 多家公司或多个配置
 

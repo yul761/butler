@@ -66,6 +66,8 @@ export interface PrWatcherDeps {
   onPrChanged(ticketKey: string): void;
   /** CI 有了新的结论。 */
   onCiSettled(item: CiItem): void;
+  /** 读成功一个 PR、写完所有行以后（工作流 I 的评论闭环）：不等它，不让它拖慢这一轮。rows 是更新后的行。 */
+  onPrRead?(rows: TicketPr[], pr: PrStatus, where: { cwd: string; slug: string }): Promise<void>;
   notify(): void;
   /** 每一轮结束后（不管查没查、成没成）：主进程用它再递一遍还没递出去的 CI 结论（session 刚安静下来）。 */
   roundDone?(): void;
@@ -300,6 +302,10 @@ export class PrWatcher {
     const inline = wasOpen ? await this.inlineComments(p, pr) : [];
     const bots = wasOpen ? await this.botsOf(p, pr) : null;
     for (const r of p.rows) this.apply(r, pr, failed, inline, bots, now, marks);
+    if (this.d.onPrRead) {
+      const rows = p.rows.map((r) => this.d.prs.get(r.id)).filter((r): r is TicketPr => r !== null);
+      void this.d.onPrRead(rows, pr, { cwd: p.cwd, slug: p.slug }).catch((e: unknown) => this.d.log(`pr watch: after reading ${p.url}`, e));
+    }
   }
 
   private scopeOf(r: TicketPr, branch: string | null): ObsScope {

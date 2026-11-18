@@ -11,7 +11,7 @@ import { parseGateRequest, type GateRequest, type GateResult } from "../shared/g
 import { IPC } from "../shared/ipc";
 import type { LimitHit } from "../shared/availability";
 import { ClaudeAvailability } from "./claude/availability";
-import { buildNotices, ciNotices, costNotices } from "./now/notices";
+import { buildNotices, ciNotices, commentNotices, costNotices } from "./now/notices";
 import { BackgroundRepo } from "./db/background-repo";
 import { CostRepo } from "./db/cost-repo";
 import { readBgSettings } from "./background/bg-settings";
@@ -160,6 +160,16 @@ import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { openKnownPr } from "./util/github-url";
 import { TicketService } from "./tickets/ticket-service";
+import { classifyCiByModel } from "./loop/ci-model";
+import { CiTriage } from "./loop/ci-triage";
+import { CommentLoop } from "./loop/comment-loop";
+import { classifyCommentsByModel } from "./loop/comment-model";
+import { LoopPolicies } from "./loop/policies";
+import { effectDays, LoopStats } from "./loop/stats";
+import { CiTriageRepo } from "./db/ci-triage-repo";
+import { CommentItemsRepo } from "./db/comment-items-repo";
+import { commentOnPr, replyToReviewComment, rerunFailed, resolveReviewThread, reviewThreads, runInfo } from "./tickets/gh-loop";
+import type { CiItem } from "./prwatch/ci-delivery";
 import { applyGhResolution, branchRuns, ghAvailable, probeGh, compareFiles, failedLog, mergedPrs, prInfo, prLessonDataDetail, prsForBranch, prStatus, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
 import { LessonsRepo } from "./db/lessons-repo";
 import { LessonRunsRepo } from "./db/lesson-runs-repo";
@@ -1147,8 +1157,6 @@ async function bootstrap(): Promise<void> {
     cutoff: (now) => auditCutoff(now, llmConfig(settings).retentionDays),
     log: logger,
   });
-  // 现在还没有调用方（I、K、J 接入时用）：先建好，开关和保留期从这里开始生效。
-  void externalActions;
   // 审计的启动收尾，先于一切读写审计的代码：上次退出时没发完的请求记为 failed（请求体保留，可能已经发出），
   // 再按保留期清理一次（不删本月的记录，预算要用；之后 gateway 每次调用前也会清理）。
   try {
@@ -1668,6 +1676,75 @@ async function bootstrap(): Promise<void> {
   });
   // 分支是谁的（工作流 W）：hook 看到的 git push / gh pr create 记下来，CI 的结论按它递。
   const branchOwners = new BranchOwnersRepo(db);
+  /** CI 结论和评论递给谁（pickRecipient + 休眠的，WS-M B）：CiDelivery 和评论闭环共用。 */
+  const loopRecipient = (key: string, repoId: number, branch: string) => {
+    const o = branchOwners.get(key, repoId, branch);
+    return ciRecipient({
+      ticketKey: key, repoId, branch,
+      openHeads: pty.openIds().flatMap((t) => sessions.head(t) ?? []),
+      hibernatedHeads: hibernatedHeads(),
+      ownerSessionId: o?.sessionId ?? null,
+      headOf: (id) => sessions.head(id),
+      ownerTermOpen: o !== null && gateTerm(o.sessionId) !== null,
+      ticketBranch: tickets.getRepo(repoId)?.branch ?? null,
+    });
+  };
+  const loopDeliver = (termId: string, text: string, recheck: () => boolean) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck });
+  /** 正在递的 session：CI 和评论共用，同一个 session 同时只递一条。 */
+  const deliveringTo = new Set<string>();
+  // 评论闭环和 CI 分类（工作流 I）：三层策略（契约 4.2），模型经路由（comment_classify / ci_classify），对外动作过 4.8 的开关。
+  const loopPolicies = new LoopPolicies({ db, products: { productsOf: (slug) => lessonsRepo.productsOf(slug), product: (id) => lessonsRepo.product(id) }, now: Date.now });
+  const loopPolicyFor = (slug: string | null) => loopPolicies.forSlug(slug);
+  const ciTriageRepo = new CiTriageRepo(db);
+  const commentItems = new CommentItemsRepo(db);
+  const loopStats = new LoopStats({ comments: commentItems, triage: ciTriageRepo });
+  const prGhDir = (pr: { repoId: number | null }): string => {
+    const r = pr.repoId === null ? null : tickets.getRepo(pr.repoId);
+    return r ? ticketService.ghWorkDir(r) : homedir();
+  };
+  const ciTriage = new CiTriage({
+    repo: ciTriageRepo,
+    policy: loopPolicyFor,
+    external: externalActions,
+    gh: { runInfo, failedLog, rerunFailed },
+    model: (input) => classifyCiByModel(judgeDeps, input),
+    where: (item: CiItem) => {
+      if (item.kind === "pr") {
+        const r = ticketPrs.get(item.id);
+        return r ? { cwd: prGhDir(r), slug: r.slug, ticketKey: r.ticketKey, prId: r.id, target: r.url } : null;
+      }
+      const b = branchWatch.get(item.repoId);
+      const repo = tickets.getRepo(item.repoId);
+      return b && repo ? { cwd: ticketService.ghWorkDir(repo), slug: repoIdentity.slugOf(repo.repoPath), ticketKey: b.ticketKey, prId: null, target: null } : null;
+    },
+    // ciDelivery 在下面才建好：回调到调用时才用。
+    wake: (item) => void ciDelivery.settled(item).catch((e: unknown) => logger("ci delivery: after triage failed", e)),
+    soon: (item) => {
+      if (item.kind === "branch") return prWatcher.soon(item.repoId);
+      const r = ticketPrs.get(item.id);
+      if (r) prWatcher.soonTicket(r.ticketKey);
+    },
+    recordEvent,
+    now: Date.now,
+    log: logger,
+  });
+  const commentLoop = new CommentLoop({
+    items: commentItems,
+    prs: ticketPrs,
+    policy: loopPolicyFor,
+    cwdOf: prGhDir,
+    gh: { reviewThreads, compareFiles, replyToReviewComment, commentOnPr, resolveReviewThread },
+    model: (cwd, list) => classifyCommentsByModel(judgeDeps, cwd, list),
+    external: externalActions,
+    recipient: loopRecipient,
+    guard: deliveryGuard,
+    deliver: loopDeliver,
+    busy: deliveringTo,
+    recordEvent,
+    changed: () => notify(),
+    now: Date.now,
+    log: logger,
+  });
   // CI 的结论递给 PR 所属的 session（pickRecipient：推这个分支的、启动时就在这个分支上的、ticket 分支上的第一个）：
   // 和合并通知走同一道 guard，最多等 1 分钟。
   const ciDelivery = new CiDelivery({
@@ -1676,19 +1753,10 @@ async function bootstrap(): Promise<void> {
     currentBranch: (repoId) => tickets.getRepo(repoId)?.branch ?? null,
     guard: deliveryGuard,
     // 休眠着的（WS-M B）也算：guard 叫它醒，醒来以后 sessionStopped 里的 flushCi 再递。
-    recipient: (key, repoId, branch) => {
-      const o = branchOwners.get(key, repoId, branch);
-      return ciRecipient({
-        ticketKey: key, repoId, branch,
-        openHeads: pty.openIds().flatMap((t) => sessions.head(t) ?? []),
-        hibernatedHeads: hibernatedHeads(),
-        ownerSessionId: o?.sessionId ?? null,
-        headOf: (id) => sessions.head(id),
-        ownerTermOpen: o !== null && gateTerm(o.sessionId) !== null,
-        ticketBranch: tickets.getRepo(repoId)?.branch ?? null,
-      });
-    },
-    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
+    recipient: loopRecipient,
+    deliver: loopDeliver,
+    triage: ciTriage,
+    busy: deliveringTo,
     now: Date.now,
     log: logger,
   });
@@ -1702,7 +1770,9 @@ async function bootstrap(): Promise<void> {
     }
   };
   /** 递还没递出去的 CI 结论（永不 reject）。每一轮都看一次有没有刚满半小时的。 */
-  const flushCi = (): Promise<void> => ciDelivery.flush().then(ciStuckChanged).catch((e: unknown) => logger("ci delivery: flush failed", e));
+  // 评论闭环排着队的评论跟在 CI 后面递（同一个时机；CI 递出去了 session 就忙了，评论等它下次停下来）。
+  const flushCi = (): Promise<void> => ciDelivery.flush().then(ciStuckChanged).catch((e: unknown) => logger("ci delivery: flush failed", e))
+    .then(() => commentLoop.flush()).catch((e: unknown) => logger("comment loop: flush failed", e));
   const prWatcher = new PrWatcher({
     prs: ticketPrs,
     branches: branchWatch,
@@ -1735,6 +1805,7 @@ async function bootstrap(): Promise<void> {
       });
     },
     onCiSettled: (item) => void ciDelivery.settled(item).catch((e: unknown) => logger("ci delivery: handing over a CI result failed", e)),
+    onPrRead: (rows, pr, where) => commentLoop.observe(rows, pr, where),
     notify,
     // 每轮之后再递一遍：session 停着但当时用户在打字、有草稿的，安静下来之后在这里递出去。
     roundDone: () => void flushCi(),
@@ -2103,6 +2174,18 @@ async function bootstrap(): Promise<void> {
     batches: batchRecorder,
     policies: admissionPolicies,
     admission: admissionFacade,
+    loop: {
+      policyView: (scope) => loopPolicies.view(scope),
+      policySet: (scope, overrides) => loopPolicies.setLayer(scope, overrides),
+      comments: (key) => commentLoop.list(key),
+      act: (a) => commentLoop.act(a),
+      flaky: () => ciTriageRepo.flakyEntries(Date.now() - loopPolicies.forSlug(null)["ci.autoListDays"] * 86_400_000),
+      flakyAct: (a) => (a.op === "add" ? ciTriageRepo.list(a.repoSlug, a.kind, a.name, "manual", Date.now()) : ciTriageRepo.unlist(a.repoSlug, a.kind, a.name)),
+      effect: (days) => {
+        const until = Date.now();
+        return loopStats.summary({ since: until - effectDays(days) * 86_400_000, until });
+      },
+    },
     checks: {
       act: (a) => checksService.act(a),
       view: (scope) => checksService.view(scope),
@@ -2202,6 +2285,7 @@ async function bootstrap(): Promise<void> {
           }),
           ...ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
           ...costNotices(costBreaker?.views() ?? [], costTargetOf),
+          ...commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
         ],
         sessionMemory: (id) => procServices.monitor.memoryOf(id),
         memorySnapshot: procServices.monitor.snapshot(),

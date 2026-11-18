@@ -15,6 +15,8 @@ The Settings page has these sections, in order:
 5. **Privacy and personal API**
 6. **Lessons** (automatic backups, the export reminder and the admission policy; see [Lessons: bulk actions, admission policy and import / export](#lessons-bulk-actions-admission-policy-and-import--export))
 
+Two more tabs sit at the top of the Settings page: **Model routing** (see [Model routing](#model-routing)) and **Comments & CI** (see [Comments and CI](#comments-and-ci)).
+
 The merge coordinator and the `end_session` tool for coordinators are described under [Merge coordinator](#merge-coordinator) and in the [README](../README.md); neither has a setting.
 
 The audit log has its own page, **Audit**, in the sidebar. The **Effect** page has no setting either; see [Effect page](#effect-page).
@@ -282,6 +284,7 @@ The **Effect** page (below **Progress** in the sidebar) shows what Butler's PRs 
 - **Four cards**: per merged Butler PR, the average cycle time (PR opened → merged, and ticket started → merged), comments (human and Copilot, plus how many the lesson run marked avoidable), human interventions (and how long sessions waited on you) and cost in weighted tokens (and in dollars, from what Claude Code reports or estimated from the model's registered prices). Cycle time and comments are compared with a baseline; the other two show "before —" because there is nothing to compare them with.
 - **Baseline**: once a day Butler reads from GitHub the PRs you opened yourself and that were merged in the 180 days before your first Butler session (up to 100 per repo, skipping PRs linked to a ticket), and stores their cycle time and comment counts. Comments from bots are left out, the same way as for Butler's PRs. "Ticket started" for these PRs is approximated by the first commit. The cutoff is fixed when the first Butler session appears and does not move afterwards. Until a read finds such PRs (for example while gh is not available), the page says there is no baseline yet.
 - **Why sessions stopped for you**: how often each kind of stop happened (permission, choice, missing info, real question, stuck), how long each kept you waiting, and how many were resolved automatically. Idle time while a session is stopped but not waiting on you is counted separately.
+- **Comments and CI**: what the [comment loop and CI triage](#comments-and-ci) did in the chosen range: comments handled automatically (Copilot and people, replied, resolved, still waiting for you), how often a CI failure passed after an automatic rerun (flaky), the time those flaky runs cost from the first failure, and the checks and tests that were flaky most often.
 - **Trend** by week or by month (the last 12), **human interventions** by kind, **groups** (Butler PRs against other PRs linked to a ticket; by repo, product and risk level, where PRs without a level are "Unrated"), **where the cost goes** by model and by task, and **rework**: CI failures, reopened PRs and PRs reverted after merging. The same daily GitHub read finds reopens and reverts (a merged PR whose title is `Revert "<title>"` or whose body says `Reverts #N`).
 
 Numbers are rolled up from local events once an hour; opening the page rolls up again if the last run is more than 10 minutes old. Time a session spent while the computer slept is not counted as waiting.
@@ -501,7 +504,7 @@ Checks are exported and imported with the other configuration (**Checks only** o
 
 ## Outward actions
 
-Some later features will let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. No feature uses these switches yet.
+Some features let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. The [comment loop and CI triage](#comments-and-ci) use the reply, resolve and rerun switches.
 
 | Setting | Key | Default | What it allows |
 |---------|-----|---------|----------------|
@@ -517,6 +520,67 @@ Some later features will let Butler leave something outside your machine on your
 | Push notifications | `externalPushNotification` | `0` (off) | Sending notifications to an outside service, such as phone push or chat. |
 
 Each switch is `1` or `0`.
+
+## Comments and CI
+
+**Settings → Comments & CI** controls two loops that keep a PR moving without you relaying messages. Both are off by default; with them off Butler behaves as before. Each key can be set on the global, product and repository layers, merged key by key in the same way as the [admission policy](#admission-policy) (a repository's own value, else a product's, else global, else the default; when products disagree, the one whose name sorts last wins and the page warns).
+
+### Comment loop
+
+Each time the PR watcher reads an open PR of a repo where `comments.enabled` is on, Butler reads its review threads, review bodies and PR comments and puts each new comment in one of four categories:
+
+- **fix**: a change is asked for;
+- **question**: the reviewer asks something;
+- **ignore**: thanks, agreement, an outdated position, a comment you already answered, Copilot's overview, or a match in `comments.ignorePatterns`;
+- **human**: someone needs to judge it.
+
+Rules run first: resolved threads, your own comments and other bots are skipped, a ```` ```suggestion ```` block means fix, and the cases above mean ignore. Whatever the rules can't place goes to a model through the `comment_classify` routing task when `comments.useModel` is on; a comment the model can't place, or every unplaced comment when the model is off, is marked human.
+
+Copilot and people have separate policies (`comments.copilot`, `comments.human`). With `auto`, fixes (and questions when `comments.questions` is `session`) are sent to the session that owns the PR's branch, the same session CI results go to. Butler waits until that session is idle and never interrupts it; it sends at most `comments.maxPerDelivery` comments at a time, with file, line and text, and one delivery at a time per session (shared with CI results). With `review` (the default for people) the comment waits for you on the ticket's **Comments** tab, and the **Now** page shows a notice. A comment that should have been sent but has waited 30 minutes also shows a notice. With `off` the comments are left alone.
+
+After a push Butler checks each sent comment at the new head: an inline comment counts as addressed when its thread was resolved elsewhere, its position is outdated or gone, or the pushed diff touches its lines (within three lines); a review body or PR comment counts as addressed after any new commit. A comment that is still unchanged after two pushes goes back to you. For an addressed comment, Butler replies "Addressed in <commit>." (marked as an automated reply from Butler) when `comments.reply` is on, and resolves the thread when `comments.resolve` is on. Each of these also needs its switch under [Outward actions](#outward-actions) (`externalCommentReply`, `externalCommentResolve`), and every attempt is listed on the Audit page.
+
+On the ticket's **Comments** tab you can send a comment to the session, change its category, dismiss it, or reply again.
+
+| Key | Default | Values | What it does |
+|-----|---------|--------|--------------|
+| `comments.enabled` | `false` | `true` / `false` | Turn the comment loop on |
+| `comments.copilot` | `auto` | `auto` / `review` / `off` | What happens to Copilot's comments: send to the session, show you first, or leave alone |
+| `comments.human` | `review` | `auto` / `review` / `off` | The same for comments from people |
+| `comments.questions` | `user` | `user` / `session` | Whether questions wait for you or go to the session |
+| `comments.useModel` | `true` | `true` / `false` | Ask a model when the rules can't decide |
+| `comments.ignorePatterns` | none | list | Comments matching any of these are ignored |
+| `comments.maxPerDelivery` | `10` | whole number 1–50 | Most comments sent to the session at once |
+| `comments.reply` | `true` | `true` / `false` | Reply after a comment is addressed (also needs `externalCommentReply`) |
+| `comments.resolve` | `true` | `true` / `false` | Resolve the thread after it is addressed (also needs `externalCommentResolve`) |
+| `comments.replyLanguage` | `en` | `en` / `zh` | Language of the reply |
+
+### CI triage
+
+When `ci.enabled` is on for a repo, Butler classifies a failed CI result before telling the session. Failed checks are grouped by workflow run; checks that don't come from a GitHub Actions run are delivered as before. Rules run first:
+
+- **env**: the run never got a runner or failed while setting up the job; the log matches a built-in environment keyword (network timeouts, DNS errors, registry or rate-limit errors, a runner shutdown, a full disk) or `ci.envPatterns`; or the failed step installs, checks out or downloads something and the log looks like a network problem;
+- **code**: the log matches a built-in code keyword (type errors, assertions, failed tests, lint or compile errors) or `ci.codePatterns`. Code keywords win over environment keywords;
+- **flaky**: a failed check or test is on the flaky list (`ci.flakyTests` plus the names Butler listed itself).
+
+A failure the rules can't place goes to a model through the `ci_classify` routing task when `ci.useModel` is on, otherwise it counts as code.
+
+Code failures are delivered as before. Environment and flaky failures are rerun with `gh run rerun <run> --failed`, at most `ci.maxReruns` times, without telling the session; this needs the `externalCiRerun` switch under [Outward actions](#outward-actions), and while it is off the failure is delivered with a note saying so. If the rerun passes, the session gets the usual "CI passed" message. If it fails the same way again, it is delivered as a code failure; if it keeps failing past the limit, it is delivered marked "possibly flaky". A rerun with no result after six hours is delivered too.
+
+Every pass after a rerun is recorded per check and test name, with the time it cost from the first failure. A name that passes after a rerun `ci.autoListThreshold` times within `ci.autoListDays` days is put on the flaky list automatically. The **Flaky list** on the same page shows the counts and wasted time, and lets you list or unlist a name by hand. Below it, a summary shows what both loops did in the last 30 days.
+
+Lists take one entry per line in the editor. An entry wrapped in `/…/` is a regular expression; anything else matches as a substring. Both ignore case.
+
+| Key | Default | Values | What it does |
+|-----|---------|--------|--------------|
+| `ci.enabled` | `false` | `true` / `false` | Turn CI triage on |
+| `ci.maxReruns` | `2` | whole number 0–5 | Most automatic reruns of one failure |
+| `ci.useModel` | `true` | `true` / `false` | Ask a model when the rules can't decide |
+| `ci.envPatterns` | none | list | Extra log patterns that mean an environment problem |
+| `ci.codePatterns` | none | list | Extra log patterns that mean a code problem |
+| `ci.flakyTests` | none | list | Checks or tests known to be flaky |
+| `ci.autoListThreshold` | `3` | whole number 1–100 | Passes after a rerun before a name is listed as flaky |
+| `ci.autoListDays` | `30` | whole number 1–365 | Days counted for flaky stats and auto-listing |
 
 ## Several companies or profiles
 

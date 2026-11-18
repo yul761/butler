@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AvailabilityHit, AvailabilityView } from "../../shared/availability";
 import type { LessonRunStatus } from "../../shared/lessons";
 import type { CostBreakerView } from "../../shared/cost";
-import { buildNotices, ciNotices, costNotices } from "./notices";
+import { buildNotices, ciNotices, commentNotices, costNotices } from "./notices";
 
 const hit = (kind: AvailabilityHit["kind"]): AvailabilityHit => ({ kind, resetsAt: 5000, message: "m", at: 1, source: "headless", job: "lessons", sessionId: null });
 const view = (over: Partial<AvailabilityView> = {}): AvailabilityView => ({ state: "ok", current: null, lastHit: null, retryAt: null, lessonsPause: null, ...over });
@@ -74,5 +74,12 @@ describe("costNotices (workstream L)", () => {
     expect(out.map((n) => (n.kind === "cost" ? n.breaker.subjectId : ""))).toEqual(["d", "b", "c", "a"]);
     expect(out[3]).toMatchObject({ kind: "cost", target: null });
     expect(out[0]).toMatchObject({ target: { page: "ticket", key: "T-1", sessionId: "d" } });
+  });
+});
+
+describe("commentNotices", () => {
+  it("makes one notice per waiting PR that opens the ticket", () => {
+    const w = { reason: "review" as const, ticketKey: "T-2", prId: 4, number: 9, count: 3, since: 1 };
+    expect(commentNotices([w], () => null)).toEqual([{ kind: "comments_waiting", waiting: w, title: null, target: { page: "ticket", key: "T-2", sessionId: null } }]);
   });
 });

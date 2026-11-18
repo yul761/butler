@@ -307,6 +307,23 @@ const ZH = {
   gateNotMerged: (who: string) => `Butler：${who} 的合并没有完成。你现在可以再试一次合并（如果还有冲突，Butler 会再告诉你）。`,
   ciWherePr: (n: number) => `PR #${n}`,
   ciWhereBranch: (b: string) => `分支 ${b}`,
+  /** 评论闭环（工作流 I）送进 session 的一条：每项是 where（文件:行 或 「整个 PR」）、作者种类、原文。 */
+  commentDelivery: (pr: string, items: Array<{ where: string; who: string; body: string; question: boolean }>, counts: { copilot: number; human: number }) => {
+    const by = [counts.copilot > 0 ? `Copilot ${counts.copilot} 条` : "", counts.human > 0 ? `人 ${counts.human} 条` : ""].filter(Boolean).join("，");
+    const list = items.map((it, i) => `${i + 1}. ${it.where}（${it.who}${it.question ? "，在提问" : ""}）\n${it.body.split("\n").map((l) => `   ${l}`).join("\n")}`).join("\n");
+    const ask = items.some((it) => it.question) ? "在提问的那几条，在终端里回答就好，不需要改代码的就不要改。" : "";
+    return `Butler：${pr} 有 ${items.length} 条 review 评论要处理（${by}）：\n${list}\n\n请逐条修改，改好后 commit 并 push。不同意的那条，在终端里说明原因，不要改。${ask}Butler 会在你 push 之后核对这些位置并回复评论。push 以后结束这一轮。`;
+  },
+  commentWhoCopilot: "Copilot",
+  commentWhoHuman: "人",
+  commentWholePr: "整个 PR",
+  ciTriageRerunOff: (reason: string) => `Butler 看着像环境问题（${reason}），但自动重跑没开（设置 → 对外动作 → 重跑 CI），所以照常交给你。确认是环境问题的话也可以自己重跑。`,
+  ciTriageRerunFailed: (reason: string) => `Butler 看着像环境问题（${reason}），但触发重跑失败了，所以照常交给你。`,
+  ciTriageRerunLost: (reruns: number) => `Butler 重跑了 ${reruns} 次，一直没等到结果，所以照常交给你。`,
+  ciTriageSameTwice: (reason: string, flaky: boolean) => `Butler 先当成${flaky ? " flaky" : "环境问题"}（${reason}）重跑过，但又是同样的失败，所以按代码问题交给你。`,
+  ciTriageSameAsBefore: (reason: string, flaky: boolean) => `Butler 看着像${flaky ? " flaky" : "环境问题"}（${reason}），但上一次 CI 就是同样的失败，所以按代码问题交给你。`,
+  ciTriageNoRerun: (reason: string, flaky: boolean) => `Butler 看着像${flaky ? " flaky" : "环境问题"}（${reason}），但自动重跑次数设成了 0（设置 → 评论与 CI），所以照常交给你。`,
+  ciTriagePossiblyFlaky: (reason: string, reruns: number) => `可能是 flaky：Butler 已经重跑了 ${reruns} 次（${reason}），还是失败。请看看是不是代码的问题；确实是 flaky 的话可以在设置 → 评论与 CI 里列入 flaky 名单。`,
   ciPassedNotice: (where: string, sha7: string) => `Butler：${where} 的 CI 全部通过（${sha7}）。可以继续下一步。`,
   ciFailedNotice: (where: string, sha7: string, failed: Array<{ name: string; log?: string }>) =>
     `Butler：${where} 的 CI 失败（${sha7}）。失败的检查：${failed.map((f) => f.name).join("、")}。\n\n${ciLogBlocks(failed)}\n\n请修复后再 push。push 以后结束这一轮，Butler 会再告诉你结果。`,
@@ -750,6 +767,22 @@ const EN: MainStrings = {
   gateNotMerged: (who: string) => `Butler: ${who} did not finish merging. You can try the merge again now (if there is still a conflict, Butler will tell you).`,
   ciWherePr: (n: number) => `PR #${n}`,
   ciWhereBranch: (b: string) => `branch ${b}`,
+  commentDelivery: (pr: string, items: Array<{ where: string; who: string; body: string; question: boolean }>, counts: { copilot: number; human: number }) => {
+    const by = [counts.copilot > 0 ? `${counts.copilot} from Copilot` : "", counts.human > 0 ? `${counts.human} from people` : ""].filter(Boolean).join(", ");
+    const list = items.map((it, i) => `${i + 1}. ${it.where} (${it.who}${it.question ? ", a question" : ""})\n${it.body.split("\n").map((l) => `   ${l}`).join("\n")}`).join("\n");
+    const ask = items.some((it) => it.question) ? "For the questions, just answer in the terminal; don't change code that doesn't need changing. " : "";
+    return `Butler: ${pr} has ${items.length} review comment(s) to handle (${by}):\n${list}\n\nFix them one by one, then commit and push. If you disagree with one, explain why in the terminal and leave it. ${ask}Butler will check these places after you push and reply to the comments. End this turn after pushing.`;
+  },
+  commentWhoCopilot: "Copilot",
+  commentWhoHuman: "person",
+  commentWholePr: "whole PR",
+  ciTriageRerunOff: (reason: string) => `Butler thinks this is an environment problem (${reason}), but automatic reruns are off (Settings → External actions → Rerun CI), so it is passed on as usual. If it really is the environment you can rerun it yourself.`,
+  ciTriageRerunFailed: (reason: string) => `Butler thinks this is an environment problem (${reason}), but triggering the rerun failed, so it is passed on as usual.`,
+  ciTriageRerunLost: (reruns: number) => `Butler reran this ${reruns} time(s) but never saw a result, so it is passed on as usual.`,
+  ciTriageSameTwice: (reason: string, flaky: boolean) => `Butler first treated this as ${flaky ? "flaky" : "an environment problem"} (${reason}) and reran it, but it failed the same way again, so it is passed on as a code problem.`,
+  ciTriageSameAsBefore: (reason: string, flaky: boolean) => `Butler took this for ${flaky ? "a flaky failure" : "an environment problem"} (${reason}), but the previous CI run failed the same way, so it is passed on as a code problem.`,
+  ciTriageNoRerun: (reason: string, flaky: boolean) => `Butler took this for ${flaky ? "a flaky failure" : "an environment problem"} (${reason}), but automatic reruns are set to 0 (Settings → Comments & CI), so it is passed on as usual.`,
+  ciTriagePossiblyFlaky: (reason: string, reruns: number) => `Possibly flaky: Butler has rerun this ${reruns} time(s) (${reason}) and it still fails. Check whether it is a code problem; if it really is flaky you can add it to the flaky list in Settings → Comments & CI.`,
   ciPassedNotice: (where: string, sha7: string) => `Butler: CI passed on ${where} (${sha7}). You can move on to the next step.`,
   ciFailedNotice: (where: string, sha7: string, failed: Array<{ name: string; log?: string }>) =>
     `Butler: CI failed on ${where} (${sha7}). Failed checks: ${failed.map((f) => f.name).join(", ")}.\n\n${ciLogBlocks(failed)}\n\nFix it, then push. End this turn after pushing and Butler will tell you the result.`,
