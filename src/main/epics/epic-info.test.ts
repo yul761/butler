@@ -85,12 +85,12 @@ describe("epicFeatureRows", () => {
     const t = setup();
     const a = t.add("a", {
       stuck: false, waiting: false, started: true,
-      summary: { id: 1, featureId: 0, sessionId: null, trigger: "nightly", createdAt: 7, coversUntil: null, payload: summary({ summary: "live" }), degraded: false, rawText: null, sourceRef: null },
+      summary: { id: 1, featureId: 0, sessionId: null, trigger: "nightly", createdAt: 7, coversUntil: null, payload: summary({ summary: "live" }), degraded: false, rawText: null, sourceRef: null, prStatusAt: null },
     });
     expect(t.rows()[0]).toMatchObject({ summary: "live", summaryAt: 7 });
     t.addSummary(a, summary({ summary: "db" }), 3);
     const d = setup();
-    const b = d.add("b", { stuck: false, waiting: false, started: true, summary: { id: 1, featureId: 0, sessionId: null, trigger: "nightly", createdAt: 9, coversUntil: null, payload: null, degraded: true, rawText: "x", sourceRef: null } });
+    const b = d.add("b", { stuck: false, waiting: false, started: true, summary: { id: 1, featureId: 0, sessionId: null, trigger: "nightly", createdAt: 9, coversUntil: null, payload: null, degraded: true, rawText: "x", sourceRef: null, prStatusAt: null } });
     d.addSummary(b, summary({ summary: "valid" }), 3);
     expect(d.rows()[0]).toMatchObject({ summary: "valid", summaryAt: 3 });
   });

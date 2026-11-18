@@ -1,6 +1,7 @@
 import type { FeatureHandoff, Handoff, Pr } from "../../shared/handoff";
 import type { Lang } from "../../shared/i18n";
-import type { TicketStatus } from "../../shared/types";
+import { waitingOnOf } from "../../shared/progress";
+import type { TicketStatus, WatchedPr } from "../../shared/types";
 
 /** feature 汇总 prompt 里一个 ticket 的情况（设计文档 2026-10-28）。 */
 export interface FeatureTicketContext {
@@ -10,6 +11,8 @@ export interface FeatureTicketContext {
   prs: Pr[];
   /** 最新一条完整的 ticket handoff；还没有就是 null。 */
   latest: Handoff | null;
+  /** Butler 实时读到的 PR（ticket_prs，ws-b）；给了就优先用它，handoff 里提到、没在这里的 PR 照旧列出。 */
+  live?: WatchedPr[];
 }
 
 /** 给 claude 看的字段说明，和 src/shared/handoff.ts 的 FeatureHandoffSchema 一一对应。 */
@@ -123,6 +126,12 @@ const FILL = {
     none: "无",
     noHandoff: "  （还没有 handoff）",
     sep: "；",
+    asOf: (at: string) => `PR 状态截至 ${at}（Butler 实时读的 GitHub 状态；标"handoff 里记的"的是 ticket handoff 当时写下的）。`,
+    fromHandoff: "（handoff 里记的）",
+    draft: " draft",
+    ci: (c: string) => `，CI ${c}`,
+    review: (r: string) => `，review ${r}`,
+    waiting: (w: string) => `，在等：${w}`,
   },
   en: {
     noTickets: "(this feature has no tickets yet)",
@@ -137,6 +146,12 @@ const FILL = {
     none: "nothing",
     noHandoff: "  (no handoff yet)",
     sep: "; ",
+    asOf: (at: string) => `PR status as of ${at} (read live from GitHub by Butler; PRs marked "from handoff" are as the ticket handoff recorded them).`,
+    fromHandoff: " (from handoff)",
+    draft: " draft",
+    ci: (c: string) => `, CI ${c}`,
+    review: (r: string) => `, review ${r}`,
+    waiting: (w: string) => `, waiting on: ${w}`,
   },
 };
 
@@ -146,19 +161,39 @@ function prLabel(p: Pr): string {
   return `${repo}#${p.number} ${p.state}${p.review ? ` (${p.review})` : ""}`;
 }
 
-/** {{tickets}}：每个 ticket 的号、标题、状态、PR 和最新 handoff 里的完成、下一步、卡住。 */
-export function renderFeatureTickets(rows: FeatureTicketContext[], l: Lang): string {
+/** 实时 PR 写成"仓库名#号 状态 [draft]，CI x，review y，在等：谁（原因）"。 */
+function livePrLabel(p: WatchedPr, l: Lang): string {
+  const f = FILL[l];
+  const d = p.detail;
+  const repo = d?.slug.split("/").pop() ?? (p.url ? /github\.com\/[^/]+\/([^/]+)\/pull\//.exec(p.url)?.[1] : null) ?? "";
+  const w = d ? waitingOnOf({ ...d, state: p.state, ci: p.ci, review: p.review }) : null;
+  const who = w ? `${w.names.length > 0 ? w.names.join(", ") : w.who} (${w.reason})` : null;
+  return `${repo}#${p.number} ${p.state}${d?.isDraft ? f.draft : ""}${f.ci(p.ci)}${p.review ? f.review(p.review) : ""}${who ? f.waiting(who) : ""}`;
+}
+
+/**
+ * {{tickets}}：每个 ticket 的号、标题、状态、PR 和最新 handoff 里的完成、下一步、卡住。
+ * prStatusAt：给了实时 PR（live）时读它们的时间，开头写一句"PR 状态截至…"。
+ */
+export function renderFeatureTickets(rows: FeatureTicketContext[], l: Lang, prStatusAt?: number): string {
   const f = FILL[l];
   if (rows.length === 0) return f.noTickets;
   const list = (items: string[]) => (items.length > 0 ? items.join(f.sep) : f.none);
-  return rows
+  const prsOf = (r: FeatureTicketContext): string[] => {
+    if (!r.live) return r.prs.map(prLabel);
+    const live = r.live.filter((p) => p.prId !== null && p.checkedAt > 0);
+    const urls = new Set(live.map((p) => p.url));
+    return [...live.map((p) => livePrLabel(p, l)), ...r.prs.filter((p) => !urls.has(p.url)).map((p) => `${prLabel(p)}${f.fromHandoff}`)];
+  };
+  const head = prStatusAt !== undefined && rows.some((r) => r.live) ? [f.asOf(new Date(prStatusAt).toISOString())] : [];
+  return [...head, ...rows
     .flatMap((r) => [
       `- ${r.key} ${r.title ?? f.untitled}${f.status(r.status)}`,
-      `${f.prs}${r.prs.length > 0 ? r.prs.map(prLabel).join(", ") : f.noPrs}`,
+      `${f.prs}${prsOf(r).length > 0 ? prsOf(r).join(", ") : f.noPrs}`,
       ...(r.latest
         ? [`${f.done}${list(r.latest.done_today)}`, `${f.next}${list(r.latest.next_steps)}`, `${f.blockers}${list(r.latest.blockers)}`]
         : [f.noHandoff]),
-    ])
+    ])]
     .join("\n");
 }
 

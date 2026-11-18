@@ -352,7 +352,7 @@ describe("ActivityMonitor activity", () => {
     expect(h.monitor.lastReply("s1")).toBeNull();
   });
 
-  it("gives the whole last reply with its message id", async () => {
+  it("gives the whole last reply with its message id and time", async () => {
     const h = harness();
     h.openSession("s1");
     await h.beat();
@@ -360,7 +360,7 @@ describe("ActivityMonitor activity", () => {
     const long = `${"前".repeat(600)}要我关掉吗？`;
     h.transcript("s1", { type: "assistant", timestamp: AT, message: { id: "msg_1", stop_reason: "end_turn", content: [{ type: "text", text: long }] } });
     await h.beat();
-    expect(h.monitor.lastReplyOf("s1")).toEqual({ id: "msg_1", text: long });
+    expect(h.monitor.lastReplyOf("s1")).toEqual({ id: "msg_1", text: long, at: Date.parse(AT) });
     expect(h.monitor.lastReplyOf("nope")).toBeNull();
     h.open.delete("s1");
     await h.beat();

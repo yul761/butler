@@ -226,3 +226,52 @@ export function buildProgress(input: ProgressInput, filter: ProgressFilter = {})
     },
   };
 }
+
+/** 总控看的进度里换成 ISO 字符串的时间字段。 */
+const TIME_KEYS = new Set(["at", "since", "checkedAt", "statusChangedAt", "summaryAt", "prStatusAt", "generatedAt", "prsCheckedOldest", "prsCheckedNewest", "summaryOldest"]);
+
+/** PR 在总控结果里的引用："仓库#号"。 */
+const prRef = (p: ProgressPr): string => `${p.repo}#${p.number}`;
+
+/**
+ * progress_overview 的结果：同一份 ProgressView，但时间写成 ISO 字符串，featureId / epicId 旁边带上名字，
+ * 每个 PR 的完整字段只在 prs 里出现一次，卡在谁、叠放树、分组里用"仓库#号"引用（省得同一个 PR 重复好几遍）。
+ */
+export function progressOverview(v: ProgressView): object {
+  const featureName = new Map(v.features.map((f) => [f.id, f.name]));
+  const epicName = new Map(v.epics.map((e) => [e.id, e.name]));
+  const prs = new Map<string, ProgressPr>();
+  const ref = (p: ProgressPr): string => {
+    prs.set(p.url, p);
+    return prRef(p);
+  };
+  const tree = (n: ProgressStackNode): object => ({ pr: ref(n.pr), ...(n.children.length > 0 && { children: n.children.map(tree) }) });
+  const shaped = {
+    filter: v.filter, counts: v.counts,
+    stuck: v.stuck.map((s) => ({ ...s, pr: s.pr ? ref(s.pr) : null })),
+    stacks: v.stacks.map((r) => ({ repo: r.repo, stacks: r.stacks.map(tree), single: r.single.map(ref) })),
+    groups: { byLabel: v.groups.byLabel.map((g) => ({ key: g.key, prs: g.prs.map(ref) })), byPrefix: v.groups.byPrefix.map((g) => ({ key: g.key, prs: g.prs.map(ref) })) },
+    features: v.featureGroups,
+    freshness: v.freshness,
+  };
+  const out = { ...shaped, prs: [...prs.values()].map((p) => {
+    const rest: Partial<ProgressPr> = { ...p };
+    delete rest.prId;
+    return rest;
+  }) };
+  const walk = (x: unknown, key: string | null): unknown => {
+    if (Array.isArray(x)) return x.map((y) => walk(y, null));
+    if (x !== null && typeof x === "object") {
+      const o: Record<string, unknown> = {};
+      for (const [k, val] of Object.entries(x)) {
+        o[k] = walk(val, k);
+        if (k === "featureId" && typeof val === "number") o.feature = featureName.get(val) ?? null;
+        if (k === "epicId" && typeof val === "number") o.epic = epicName.get(val) ?? null;
+      }
+      return o;
+    }
+    if (key !== null && TIME_KEYS.has(key) && typeof x === "number") return x > 0 ? new Date(x).toISOString() : null;
+    return x;
+  };
+  return walk(out, null) as object;
+}

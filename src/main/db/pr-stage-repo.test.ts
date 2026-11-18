@@ -31,6 +31,16 @@ describe("PrStageRepo", () => {
     expect(repo.forTicket("T-1")).toHaveLength(1);
   });
 
+  it("ticketsWith lists the tickets that have an event of that kind", () => {
+    const db = memDb();
+    const a = addRepo(db, "T-1");
+    const b = addRepo(db, "T-2");
+    const repo = new PrStageRepo(db);
+    repo.add(ev({ repoId: a, kind: "first_commit" }), "f1");
+    repo.add(ev({ ticketKey: "T-2", repoId: b, kind: "push" }), "p2");
+    expect([...repo.ticketsWith("first_commit")]).toEqual(["T-1"]);
+  });
+
   it("upperDesign returns feature and epic skill events only", () => {
     const repo = new PrStageRepo(memDb());
     repo.add(ev({ ticketKey: null, featureId: 3, at: 2, data: { name: "a", category: "design" } }), "f");

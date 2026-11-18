@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FeatureHandoff, Handoff } from "../../shared/handoff";
-import type { HandoffOutcome } from "../../shared/types";
+import type { HandoffOutcome, WatchedPr } from "../../shared/types";
 import type { HeadlessOutcome, HeadlessRequest, HeadlessRun } from "../claude/headless";
 import { EpicsRepo } from "../db/epics-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
@@ -62,6 +62,7 @@ function setup() {
   };
   const featureId = features.insert({ name: "登录改版", workspaceDir: WS, createdAt: 2 });
   const logs: string[] = [];
+  const live: Record<string, WatchedPr[]> = {};
   const runner = new FeatureSummaryRunner({
     features, tickets, sessions, handoffs, featureHandoffs, settings,
     ingest: (i) => ingestFeatureHandoff({ features, tickets, featureHandoffs, now: () => clock }, i),
@@ -76,6 +77,7 @@ function setup() {
     claude: () => ({ path: "/bin/claude", pathValue: "/login/bin" }),
     baseEnv: { HOME: "/h" },
     transcriptMtime: (id) => mtimes[id] ?? null,
+    livePrs: (key) => live[key] ?? [],
     now: () => clock,
     newRunId: () => "run-1",
     log: (m) => logs.push(m),
@@ -111,7 +113,7 @@ function setup() {
     return id;
   };
   return {
-    runner, db, logs, features, tickets, sessions, featureHandoffs, featureId, calls, order, childRuns, mtimes, addTicket, addCoordinator, addFix, ticketHandoff, addSummary,
+    runner, db, logs, live, features, tickets, sessions, featureHandoffs, featureId, calls, order, childRuns, mtimes, addTicket, addCoordinator, addFix, ticketHandoff, addSummary,
     setRespond: (fn: typeof respond) => {
       respond = fn;
     },
@@ -182,6 +184,55 @@ describe("FeatureSummaryRunner.candidates", () => {
     addCoordinator("c-1", 10);
     features.archive(featureId, 5);
     expect(runner.candidates()).toEqual([]);
+  });
+});
+
+/** 一个读到过的实时 PR 行（ws-b）。 */
+const livePr = (ticketKey: string, statusChangedAt: number, o: Partial<WatchedPr> = {}): WatchedPr => ({
+  ticketKey, prId: 1, repoId: 1, repoPath: "/r/web", branch: "b", number: 12, url: "https://github.com/o/web/pull/12", state: "open", review: "pending", ci: "failing",
+  headSha: "s", checkedAt: statusChangedAt, readError: false,
+  detail: {
+    baseBranch: "main", isDraft: false, title: "t", author: "me", labels: [], reviewRequests: [], reviewers: [], mergeable: "mergeable", mergeState: "clean",
+    statusChangedAt, slug: "o/web",
+  },
+  ...o,
+});
+
+describe("FeatureSummaryRunner: PR status counts as activity (ws-b)", () => {
+  it("a PR status change after the summary read PRs makes the feature stale", () => {
+    const { runner, featureId, featureHandoffs, addTicket, addSummary, live } = setup();
+    addTicket("A-1");
+    addSummary(100);
+    live["A-1"] = [livePr("A-1", 90)];
+    expect(runner.hasNewActivity(featureId)).toBe(false);
+    live["A-1"] = [livePr("A-1", 150)];
+    expect(runner.hasNewActivity(featureId)).toBe(true);
+    expect(runner.candidates()).toEqual([featureId]);
+    // 汇总记下了读 PR 的时间：按它算，不按 createdAt。
+    featureHandoffs.insert({ featureId, sessionId: null, trigger: "manual", createdAt: 200, payload: summary(), rawText: null, prStatusAt: 160 });
+    expect(runner.hasNewActivity(featureId)).toBe(false);
+    live["A-1"] = [livePr("A-1", 170)];
+    expect(runner.hasNewActivity(featureId)).toBe(true);
+  });
+
+  it("the prompt uses the live PR status with an as-of line, and the stored summary records when PRs were read", async () => {
+    const { runner, featureId, calls, featureHandoffs, addTicket, addCoordinator, ticketHandoff, live, setNow } = setup();
+    addTicket("A-1");
+    addCoordinator("c-1", 10);
+    ticketHandoff("A-1", 20, { prs: [{ number: 12, url: "https://github.com/o/web/pull/12", state: "open", review: null }, { number: 3, url: "https://github.com/o/api/pull/3", state: "merged", review: null }] });
+    live["A-1"] = [livePr("A-1", 15)];
+    setNow(60_000);
+    expect(runner.isRunning(featureId)).toBe(false);
+    const p = runner.runManual(featureId);
+    expect(runner.isRunning(featureId)).toBe(true);
+    await p;
+    expect(runner.isRunning(featureId)).toBe(false);
+    const prompt = calls[0].prompt;
+    expect(prompt).toContain(`PR 状态截至 ${new Date(60_000).toISOString()}`);
+    expect(prompt).toContain("web#12 open，CI failing，review pending，在等：me (ci_failing)");
+    expect(prompt).toContain("api#3 merged（handoff 里记的）");
+    expect(prompt).not.toContain("web#12 open (pending)");
+    expect(featureHandoffs.latestValid(featureId)?.prStatusAt).toBe(60_000);
   });
 });
 

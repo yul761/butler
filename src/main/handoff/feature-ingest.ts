@@ -12,6 +12,7 @@ export interface FeatureIngestInput {
   payload: FeatureHandoff | null;
   rawText: string | null;
   sourceRef?: string | null;
+  prStatusAt?: number | null;
 }
 
 export type FeatureIngestResult =
@@ -42,7 +43,7 @@ export function ingestFeatureHandoff(d: FeatureIngestDeps, input: FeatureIngestI
     : null;
   const id = d.featureHandoffs.insert({
     featureId: input.featureId, sessionId: input.sessionId, trigger: input.trigger, createdAt: d.now(),
-    payload, rawText: input.rawText, sourceRef: input.sourceRef ?? null,
+    payload, rawText: input.rawText, sourceRef: input.sourceRef ?? null, prStatusAt: input.prStatusAt ?? null,
   });
   if (id === null) return { stored: false, reason: "duplicate" };
   if (payload !== null) {

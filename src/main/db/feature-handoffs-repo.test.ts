@@ -22,7 +22,7 @@ describe("migration 8", () => {
   it("adds feature_handoffs", () => {
     const db = memDb();
     const cols = (db.prepare(`PRAGMA table_info(feature_handoffs)`).all() as { name: string }[]).map((c) => c.name);
-    expect(cols).toEqual(["id", "feature_id", "session_id", "trigger", "created_at", "covers_until", "payload", "degraded", "raw_text", "source_ref"]);
+    expect(cols).toEqual(["id", "feature_id", "session_id", "trigger", "created_at", "covers_until", "payload", "degraded", "raw_text", "source_ref", "pr_status_at"]);
   });
 
   it("upgrades a version 7 database", () => {

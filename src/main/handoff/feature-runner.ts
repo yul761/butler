@@ -1,5 +1,5 @@
 import { FeatureHandoffSchema } from "../../shared/handoff";
-import { effectiveStatus, type FeatureHandoffOutcome, type FeatureHandoffTrigger, type HandoffOutcome, type Ticket } from "../../shared/types";
+import { effectiveStatus, type FeatureHandoffOutcome, type FeatureHandoffTrigger, type HandoffOutcome, type Ticket, type WatchedPr } from "../../shared/types";
 import { storedModel } from "../claude/spawn";
 import { headlessArgs, READ_ONLY_TOOLS } from "../claude/headless";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
@@ -40,6 +40,8 @@ export interface FeatureRunnerDeps extends HeadlessExecDeps {
   transcriptMtime: (sessionId: string) => number | null;
   /** 设置 headlessProjectMcp 打开时调用：这个目录要额外挂的 --mcp-config 文件。 */
   projectMcp?: (cwd: string) => string[];
+  /** Butler 实时读到的这个 ticket 的 PR（PrWatcher.statusOf，ws-b）：汇总的 prompt 用它，PR 状态变化也算新活动。 */
+  livePrs?: (ticketKey: string) => WatchedPr[];
 }
 
 type Exec = { ok: true; value: unknown; rawText: string } | { ok: false; outcome: FeatureHandoffOutcome };
@@ -69,14 +71,30 @@ export class FeatureSummaryRunner {
 
   /**
    * 最新有效汇总之后有没有已经捕获到的新活动：总控 session 的 transcript 晚于汇总，
-   * 或者下面有 ticket 在汇总覆盖到的时间之后捕获了新的 handoff（不算 refresh 和 degraded）。
+   * 或者下面有 ticket 在汇总覆盖到的时间之后捕获了新的 handoff（不算 refresh 和 degraded），
+   * 或者下面有 ticket 的 PR 状态（state、review、CI、draft、合并状态、reviewer）在汇总读 PR 之后变过（ws-b）。
+   * 进度页、list_features 的"过期"也用它。
    */
-  private hasNewActivity(id: number): boolean {
+  hasNewActivity(id: number): boolean {
     const last = this.d.featureHandoffs.latestValid(id);
     const coordinator = Math.max(0, ...this.d.sessions.listFeatureCoordinators(id).map((s) => this.d.transcriptMtime(s.id) ?? 0));
     if (coordinator > (last?.createdAt ?? 0)) return true;
     const covered = last ? (last.coversUntil ?? last.createdAt) : 0;
-    return this.d.tickets.listByFeature(id).some((t) => (this.d.handoffs.lastCapturedAt(t.key) ?? 0) > covered);
+    const tickets = this.d.tickets.listByFeature(id);
+    if (tickets.some((t) => (this.d.handoffs.lastCapturedAt(t.key) ?? 0) > covered)) return true;
+    return this.prChangedSince(tickets, last ? (last.prStatusAt ?? last.createdAt) : 0);
+  }
+
+  /** 这些 ticket 的 PR 有没有在 since 之后变过状态。 */
+  private prChangedSince(tickets: Ticket[], since: number): boolean {
+    const live = this.d.livePrs;
+    if (!live) return false;
+    return tickets.some((t) => live(t.key).some((p) => (p.detail?.statusChangedAt ?? 0) > since));
+  }
+
+  /** 这个 feature 正在生成汇总（手动、晚间或 /handoff 的退路）。 */
+  isRunning(featureId: number): boolean {
+    return this.inflight.has(featureId);
   }
 
   /**
@@ -234,6 +252,7 @@ export class FeatureSummaryRunner {
       // PR 取最新的有效 handoff（早间刷新会更新它）；完成、下一步取最新的完整 handoff（刷新会清空 done_today）。
       prs: this.d.handoffs.knownPrs(t.key),
       latest: this.d.handoffs.latestValidFull(t.key)?.payload ?? null,
+      ...(this.d.livePrs && { live: this.d.livePrs(t.key) }),
     }));
   }
 
@@ -258,13 +277,15 @@ export class FeatureSummaryRunner {
       return { featureId, status: "skipped", reason: "nothing_to_summarize" };
     }
     const rows = this.ticketContexts(tickets);
+    // 读 PR 实时状态的时间：记进汇总，之后 PR 再变就算过期（hasNewActivity 第三条）。
+    const prStatusAt = this.d.livePrs ? this.d.now() : undefined;
     const dirs = this.d.dirs(featureId);
     const cwd = session?.cwd || dirs.cwd;
     const l = currentLang();
     const prompt = renderTemplate(defaultFeatureHandoffPrompt(l), {
       feature: feature.name,
       previous: renderPreviousSummary(this.d.featureHandoffs.latestValid(featureId)?.payload ?? null, l),
-      tickets: renderFeatureTickets(rows, l),
+      tickets: renderFeatureTickets(rows, l, prStatusAt),
     });
     // 工作区里一般没有项目级 MCP 配置：按第一个仓库找（同 HandoffRunner 对总控 session 的处理）。
     const mcpCwd = dirs.repoDirs[0] ?? dirs.cwd;
@@ -284,7 +305,7 @@ export class FeatureSummaryRunner {
       if (!attempt.ok) return attempt.outcome;
       checked = validate(FeatureHandoffSchema, attempt.value);
     }
-    const r = this.d.ingest({ featureId, sessionId: session?.id ?? null, trigger, payload: checked.ok ? checked.value : null, rawText: attempt.rawText });
+    const r = this.d.ingest({ featureId, sessionId: session?.id ?? null, trigger, payload: checked.ok ? checked.value : null, rawText: attempt.rawText, prStatusAt });
     if (!r.stored) return failed(featureId, r.reason, r.reason);
     return { featureId, status: "stored", handoffId: r.handoffId, degraded: r.degraded };
   }

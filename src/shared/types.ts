@@ -401,6 +401,8 @@ export interface FeatureHandoffRecord {
   degraded: boolean;
   rawText: string | null;
   sourceRef: string | null;
+  /** 汇总读 PR 实时状态的时间（ws-b）；总控 /handoff 交上来的、或者升级前的为 null（按 createdAt 算）。 */
+  prStatusAt: number | null;
 }
 
 /** 一次 feature 汇总的结果。 */
