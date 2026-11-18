@@ -244,6 +244,8 @@ describe("parseControlRequest for the Butler 总控 (BTL-190 5)", () => {
       .toEqual({ v: 1, butler: true, from: null, op: "list_tickets", feature: "checkout", epic: "7" });
     expect(parseControlRequest({ ...base, op: "progress_overview" })).toEqual({ v: 1, butler: true, from: null, op: "progress_overview" });
     expect(parseControlRequest({ ...base, op: "progress_overview", epic: "Q4" })).toEqual({ v: 1, butler: true, from: null, op: "progress_overview", epic: "Q4" });
+    expect(parseControlRequest({ ...base, op: "metrics_overview" })).toEqual({ v: 1, butler: true, from: null, op: "metrics_overview" });
+    expect(parseControlRequest({ ...base, op: "metrics_overview", days: 365 })).toEqual({ v: 1, butler: true, from: null, op: "metrics_overview", days: 365 });
     expect(parseControlRequest({ ...base, from: "b", op: "refresh_feature_summary", feature: "3" }))
       .toEqual({ v: 1, butler: true, from: "b", op: "refresh_feature_summary", feature: "3" });
     expect(parseControlRequest({ ...base, op: "session_activity", session: "s1" })).toEqual({ v: 1, butler: true, from: null, op: "session_activity", session: "s1" });
@@ -263,6 +265,7 @@ describe("parseControlRequest for the Butler 总控 (BTL-190 5)", () => {
       { ...base, op: "send_message", session: "s1", text: "x".repeat(MESSAGE_LIMIT + 1) }, { ...base, op: "send_message", text: "t" },
       { ...base, op: "session_activity" }, { ...base, op: "list_tickets", feature: 3 }, { ...base, op: "list_tickets", epic: "" },
       { ...base, op: "refresh_feature_summary" }, { ...base, op: "refresh_feature_summary", feature: 3 }, { ...base, op: "progress_overview", feature: "" },
+      { ...base, op: "metrics_overview", days: 0 }, { ...base, op: "metrics_overview", days: 366 }, { ...base, op: "metrics_overview", days: 2.5 }, { ...base, op: "metrics_overview", days: "7" },
       { v: 1, butler: "yes", op: "list_epics" }, { v: 1, butler: false, op: "list_epics" },
       { ...base, epicId: 3, op: "list_epics" }, { ...base, featureId: 3, op: "list_epics" }, { ...base, ticketKey: "P-1", op: "list_epics" },
       { v: 1, epicId: 3, op: "list_epics" }, { v: 1, featureId: 3, op: "list_prs" }, { v: 1, ticketKey: "P-1", op: "send_message", session: "s", text: "t" },

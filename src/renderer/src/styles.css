@@ -565,3 +565,40 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .external-audit-section { margin-top: 24px; }
 .external-audit td { vertical-align: top; overflow-wrap: anywhere; }
 .external-audit tr.outcome-skipped { color: var(--muted); }
+
+/* 「效果」页（ws-h）：一种颜色（--accent）表示大小，文字一律正文 / 次要色。 */
+.effect-page h3 { margin: 22px 0 6px; font-size: 14px; }
+.effect-page h4 { margin: 10px 0 4px; font-size: 13px; }
+.effect-toolbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 8px 0 14px; }
+.effect-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.effect-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; background: var(--panel); display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.effect-card-title { font-size: 12px; color: var(--muted); }
+.effect-card-value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.effect-card-sub, .effect-card-base { font-size: 12px; }
+.effect-card-base { margin-top: 4px; }
+.effect-card-delta { color: var(--text); }
+.effect-baseline-note { font-size: 12px; margin: 8px 0 0; }
+.effect-section-head { display: flex; align-items: center; gap: 12px; }
+.effect-section-head h3 { margin-right: auto; }
+.effect-trends { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.effect-trend { margin: 0; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.effect-trend figcaption { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; margin-bottom: 4px; }
+.effect-trend-readout { font-variant-numeric: tabular-nums; text-align: right; }
+.effect-trend svg { width: 100%; height: auto; display: block; }
+.effect-axis { stroke: var(--border); stroke-width: 1; }
+.effect-crosshair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
+.effect-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.effect-dot { fill: var(--accent); stroke: var(--bg); stroke-width: 2; }
+.effect-hit { fill: transparent; }
+.effect-table-toggle { margin-top: 8px; font-size: 12px; }
+.effect-table td, .effect-table th { font-variant-numeric: tabular-nums; }
+.effect-bars { list-style: none; padding: 0; margin: 6px 0; display: grid; gap: 6px; max-width: 640px; }
+.effect-bars li { display: grid; grid-template-columns: minmax(90px, 160px) 1fr minmax(90px, auto); gap: 10px; align-items: center; font-size: 13px; }
+.effect-bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.effect-bar-track { height: 10px; }
+.effect-bar { display: block; height: 100%; min-width: 2px; background: var(--accent); border-radius: 0 4px 4px 0; }
+.effect-bar-value { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.effect-list { list-style: none; padding: 0; margin: 6px 0; display: grid; gap: 4px; }
+.effect-sublist { list-style: none; padding-left: 16px; margin: 2px 0 0; font-size: 12px; }
+.effect-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.effect-group { margin-top: 6px; }

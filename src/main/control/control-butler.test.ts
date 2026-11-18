@@ -17,7 +17,7 @@ import type { ControlHandlerDeps } from "./control-handler";
 import { controlHandler } from "./control-handler";
 
 /** Butler 总控（BTL-190 第 5 点）：两个 epic（一个归档了）、三个 feature（一个不属于 epic）、两个 ticket（一个归档了）和各种 session。 */
-function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admission"] } = {}) {
+function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admission"]; noMetrics?: boolean } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -84,6 +84,7 @@ function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admiss
     targetName: (m) => (m.featureId !== null ? `feature ${m.featureId}` : `epic ${m.epicId}`), notify: () => {}, now: () => now, log: () => {},
   });
   const progressCalls: ProgressFilter[] = [];
+  const metricsCalls: (number | undefined)[] = [];
   const progressView = { filter: { epicId: null, featureId: null }, epics: [], features: [], counts: { merged: 0, blocked: 0, in_review: 0, in_progress: 0, not_started: 0, total: 0 },
     stuck: [], stacks: [], groups: { byLabel: [], byPrefix: [] }, featureGroups: [], freshness: { generatedAt: 0, prsCheckedOldest: null, prsCheckedNewest: null, readErrors: 0, unread: 0, summaryOldest: null } } satisfies ProgressView;
   const summaryState = { running: new Set<number>(), stale: new Set<number>(), prStatusAt: new Map<number, number>(), refreshed: [] as number[] };
@@ -120,6 +121,7 @@ function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admiss
         inbox: { view: () => inboxView },
         messages,
         progress: (f) => (progressCalls.push(f), progressView),
+        ...(!o.noMetrics && { metrics: (days: number | undefined) => (metricsCalls.push(days), { days: days ?? 30 } as never) }),
         summaries: {
           running: (id) => summaryState.running.has(id), stale: (id) => summaryState.stale.has(id), prStatusAt: (id) => summaryState.prStatusAt.get(id) ?? null,
           refresh: (id) => void summaryState.refreshed.push(id),
@@ -131,7 +133,7 @@ function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admiss
   const call = (req: Record<string, unknown>) => handle({ ...base, ...req } as ButlerControlRequest);
   return {
     handle, call, base, shop, checkout, docs, sessions, features, open, activities, needs, delivered, refreshed, opened, submitted, inboxView, asked, setGuard: (f: typeof guardCheck) => (guardCheck = f),
-    prs, replies, messages, progressCalls, summaryState, setNow: (t: number) => (now = t),
+    prs, replies, messages, progressCalls, metricsCalls, summaryState, setNow: (t: number) => (now = t),
   };
 }
 
@@ -225,6 +227,14 @@ describe("Butler 总控 read-only tools (BTL-190 5)", () => {
     expect(progressCalls).toEqual([{ featureId: null, epicId: null }, { featureId: checkout, epicId: null }, { featureId: null, epicId: shop }]);
     expect(err(await call({ op: "progress_overview", feature: "gone" }))).toContain("checkout");
     expect(err(await call({ op: "progress_overview", epic: "old" }))).toContain("shop");
+  });
+
+  it("metrics_overview passes the days through and fails without effect data (ws-h)", async () => {
+    const { call, metricsCalls } = setup();
+    expect(value(await call({ op: "metrics_overview" }))).toEqual({ days: 30 });
+    expect(value(await call({ op: "metrics_overview", days: 90 }))).toEqual({ days: 90 });
+    expect(metricsCalls).toEqual([undefined, 90]);
+    expect((await setup({ noMetrics: true }).call({ op: "metrics_overview" })).ok).toBe(false);
   });
 
   it("refresh_feature_summary starts a background run once, only for the open Butler 总控 (ws-b)", async () => {

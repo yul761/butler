@@ -27,7 +27,7 @@ export const SESSIONS_SERVER = "butler-sessions";
  */
 export const SESSIONS_AUTO_ALLOW: readonly string[] = [
   "ask_user", "report",
-  "list_epics", "list_features", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "progress_overview",
+  "list_epics", "list_features", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "progress_overview", "metrics_overview",
 ].map((tool) => `mcp__${SESSIONS_SERVER}__${tool}`);
 
 /** 怎么启动打包好的 StateCore MCP：command 是 Butler 自己的 Electron（process.execPath），script 是 bundle。 */

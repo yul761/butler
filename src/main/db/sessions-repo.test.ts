@@ -70,6 +70,19 @@ describe("SessionsRepo lesson sessions (lessons visibility task 7)", () => {
   });
 });
 
+describe("SessionsRepo.firstButlerCreatedAt (ws-h baseline cutoff)", () => {
+  it("is the earliest Butler session, lesson sessions and discovered ones excluded", () => {
+    const { repo, run } = setup();
+    expect(repo.firstButlerCreatedAt()).toBeNull();
+    repo.insertIfAbsent({ id: "l", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 5, lessonRunId: run() });
+    repo.insertIfAbsent({ id: "d", ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 7 });
+    expect(repo.firstButlerCreatedAt()).toBeNull();
+    repo.insertIfAbsent({ id: "b2", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 20 });
+    repo.insertIfAbsent({ id: "b1", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 10 });
+    expect(repo.firstButlerCreatedAt()).toBe(10);
+  });
+});
+
 describe("SessionsRepo hibernation (WS-M B)", () => {
   const row = (repo: SessionsRepo, id: string, at = 1) => repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: at });
 

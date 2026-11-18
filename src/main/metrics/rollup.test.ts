@@ -160,7 +160,24 @@ describe("computeDaily", () => {
     expect(find(rows, "interrupt:choice", "repo", "o/app")).toHaveLength(1);
     expect(find(rows, "event:terminal_input")[0].n).toBe(1);
     expect(find(rows, "wait_human:permission")[0].total).toBe(H);
+    expect(find(rows, "event_sub:terminal_input:prompt")).toHaveLength(0); // 没有子类的事件不写 event_sub
     expect(find(rows, "wait_idle")[0].total).toBe(H); // 还开着：算到现在
+  });
+
+  it("counts event subtypes from data.mode, data.via or data.channel under event_sub (ws-h)", () => {
+    const f = facts({
+      events: [
+        ev({ kind: "terminal_input", data: { mode: "prompt" } }), ev({ kind: "terminal_input", data: { mode: "prompt" } }), ev({ kind: "terminal_input", data: { mode: "dialog" } }),
+        ev({ kind: "needs_you_answer", data: { via: "card" } }), ev({ kind: "manual_trigger", data: { channel: "lessons:run" } }), ev({ kind: "manual_merge", data: { mode: 3 } }),
+      ],
+    });
+    const rows = computeDaily(f, new Map(), T0 + 6 * H, "2000-01-01");
+    expect(find(rows, "event_sub:terminal_input:prompt")[0]).toMatchObject({ n: 2, total: 2, groupKind: "all" });
+    expect(find(rows, "event_sub:terminal_input:dialog")[0].n).toBe(1);
+    expect(find(rows, "event_sub:needs_you_answer:card")[0].n).toBe(1);
+    expect(find(rows, "event_sub:manual_trigger:lessons:run")[0].n).toBe(1);
+    expect(rows.filter((r) => r.metric.startsWith("event_sub:manual_merge"))).toHaveLength(0); // 不是字符串的不算
+    expect(rows.filter((r) => r.metric.startsWith("event_sub:") && r.groupKind !== "all")).toHaveLength(0);
   });
 
   it("marks session-less events Butler by their PR or ticket (manual merges of Butler PRs)", () => {

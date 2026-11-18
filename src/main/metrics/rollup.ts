@@ -291,6 +291,15 @@ class DailyBuilder {
 
 const ALL: Group[] = [{ kind: "all", key: "" }];
 
+/** 事件的子类型（mode / via / channel 里第一个是字符串的），没有为 null。 */
+export function subtypeOf(e: Pick<MetricEvent, "data">): string | null {
+  for (const k of ["mode", "via", "channel"]) {
+    const v = e.data[k];
+    if (typeof v === "string" && v !== "") return v;
+  }
+  return null;
+}
+
 /** 从事实算出 fromDay 之后的全部 metrics_daily 行（纯函数）。 */
 export function computeDaily(f: Facts, butlerMade: Map<number, boolean>, now: number, fromDay: string): DailyRow[] {
   const b = new DailyBuilder(fromDay);
@@ -341,6 +350,9 @@ export function computeDaily(f: Facts, butlerMade: Map<number, boolean>, now: nu
     const butler = butlerEvent(e);
     b.add(day, g, butler, `event:${e.kind}`, 1, 1);
     if (e.kind === "interrupt" && typeof e.data.category === "string") b.add(day, g, butler, `interrupt:${e.data.category}`, 1, 1);
+    // 人介入构成按子类型：终端输入的 mode、卡片的 via、手动触发的 IPC 通道。
+    const sub = subtypeOf(e);
+    if (sub !== null) b.add(day, ALL, butler, `event_sub:${e.kind}:${sub}`, 1, 1);
   }
   for (const sp of f.spans) {
     const ms = Math.max(0, (sp.endedAt ?? now) - sp.startedAt);

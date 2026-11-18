@@ -4,6 +4,7 @@ import { waitingOnOf, type ProgressFilter, type ProgressView } from "../../share
 import { effectiveStatus, type Epic, type EpicFeatureRow, type EpicView, type Feature, type OpenSessionResult, type Session, type Ticket, type WatchedPr } from "../../shared/types";
 import { roleOf, type InboxService } from "../inbox/inbox-service";
 import { progressOverview } from "../progress/progress-view";
+import type { MetricsOverview } from "../../shared/metrics";
 import { M } from "../strings";
 import type { ButlerMessages } from "./butler-messages";
 import { admitOrRefuse } from "./admission";
@@ -24,6 +25,8 @@ export interface ButlerControlDeps {
   inbox: Pick<InboxService, "view">;
   /** 进度聚合（buildProgress，和进度页同一份，ws-b）。 */
   progress?: (filter: ProgressFilter) => ProgressView;
+  /** 效果总览（ws-h，和「效果」页同一份）。 */
+  metrics?: (days: number | undefined) => MetricsOverview;
   /** feature 汇总的新鲜度和后台重新生成（ws-b）。 */
   summaries?: {
     running(featureId: number): boolean;
@@ -311,6 +314,10 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
           epicId = e.id;
         }
         return ok(progressOverview(b.progress({ featureId, epicId })));
+      }
+      case "metrics_overview": {
+        if (!b.metrics) return fail(M().ctlMetricsUnavailable);
+        return ok(b.metrics(req.days));
       }
       case "refresh_feature_summary": {
         // 会花额度：和 refresh_session 一样只接受开着的 Butler 总控自己发的。

@@ -383,6 +383,12 @@ export class SessionsRepo {
     return ids;
   }
 
+  /** 最早的 Butler session（复盘分析的除外）的创建时间；没有为 null。度量的基线截止点（ws-h）。 */
+  firstButlerCreatedAt(): number | null {
+    const r = this.db.prepare(`SELECT MIN(created_at) AS at FROM sessions WHERE origin = 'butler' AND lesson_run_id IS NULL`).get() as { at: number | null } | undefined;
+    return r?.at ?? null;
+  }
+
   setOrigin(id: string, origin: SessionOrigin): void {
     this.db.prepare(`UPDATE sessions SET origin = ? WHERE id = ?`).run(origin, id);
   }

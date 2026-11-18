@@ -13,6 +13,7 @@ import { NewEpicDialog } from "./components/NewEpicDialog";
 import { NewFeatureDialog } from "./components/NewFeatureDialog";
 import { NewTicketDialog } from "./components/NewTicketDialog";
 import { NowPage } from "./components/NowPage";
+import { EffectPage } from "./components/EffectPage";
 import { ProgressPage } from "./components/ProgressPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
@@ -36,6 +37,7 @@ export type Route =
   | { page: "butler"; focusSession?: string | null }
   /** 进度看板（ws-b）：从 feature / epic 的 PR 进度 tab 点过来时带着过滤条件。 */
   | { page: "progress"; epicId?: number | null; featureId?: number | null }
+  | { page: "effect" }
   | { page: "unclaimed" }
   | { page: "archived" }
   /** section：从「现在」页的提醒跳来时要看的那一块。 */
@@ -227,6 +229,7 @@ export function App() {
                 onOpenFeature={(id) => setRoute({ page: "feature", id })}
               />
             )}
+            {route.page === "effect" && <EffectPage />}
             {route.page === "unclaimed" && <UnclaimedPage tickets={allTickets} />}
             {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} onEpicRestored={goEpic} />}
             {route.page === "settings" && <SettingsPage section={route.section} onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}

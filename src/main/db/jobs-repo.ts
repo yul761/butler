@@ -12,7 +12,10 @@ export const JOB_LESSONS_DAILY = "lessons_daily";
 export const JOB_PR_BACKFILL = "pr_backfill";
 /** 定期自动备份配置（设置 configBackupIntervalDays）。 */
 export const JOB_CONFIG_BACKUP = "config_backup";
-export type JobName = typeof JOB_NIGHTLY | typeof JOB_MORNING | typeof JOB_PATROL | typeof JOB_LESSONS_DAILY | typeof JOB_PR_BACKFILL | typeof JOB_CONFIG_BACKUP;
+/** 度量（ws-h）：每天一次读 gh，记 revert、重开，回填基线 PR。 */
+export const JOB_METRICS_GH = "metrics_gh";
+export type JobName =
+  | typeof JOB_NIGHTLY | typeof JOB_MORNING | typeof JOB_PATROL | typeof JOB_LESSONS_DAILY | typeof JOB_PR_BACKFILL | typeof JOB_CONFIG_BACKUP | typeof JOB_METRICS_GH;
 
 export type JobState = JobStateView;
 
