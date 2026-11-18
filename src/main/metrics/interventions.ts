@@ -142,7 +142,7 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.lessonsBatch, IPC.policiesGet, IPC.checksView, IPC.checksHits, IPC.configStatus, IPC.availabilityGet, IPC.routingView,
   IPC.sessionsLimits, IPC.nowView, IPC.inboxList, IPC.followupsList, IPC.handoffsList, IPC.settingsGet, IPC.llmStatus, IPC.termsList,
   IPC.auditList, IPC.externalAuditList, IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory, IPC.appAutostartGet, IPC.appKeepAwakeGet,
-  IPC.clipboardRead,
+  IPC.clipboardRead, IPC.baselinesView, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyViolations, IPC.checkExportList,
   // 建立、整理、归档
   IPC.ticketsCreate, IPC.ticketsArchive, IPC.ticketsUpdate, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
   IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive, IPC.featuresUnarchive, IPC.featuresMove,
@@ -153,6 +153,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget, IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups,
   IPC.routingAct, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsSave,
   IPC.appAutostartSet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardWrite,
+  // 仓库现状和检查的整理（扫描、采用、存量扫描、导出成 lint）：搭检查，和 checksAct、reposScan 一样不算推动一次工作。
+  IPC.baselinesAct, IPC.legacyAct, IPC.checkExportAct,
 ]);
 
 /** 这个通道算不算手动触发。 */
