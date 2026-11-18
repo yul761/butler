@@ -457,6 +457,37 @@ Some later features will let Butler leave something outside your machine on your
 
 Each switch is `1` or `0`.
 
+## Repo baseline: what each repository already checks
+
+The **Repo baseline** tab of the Lessons page reads what a repository already checks on its own (lint, type checks, tests, builds, security and format tools) and where each one runs: at commit, at push or in CI. Nothing happens until you press **Scan** or **Scan all**. A scan only reads the repository; it never changes a file, runs a command or touches a branch.
+
+- **How it reads a repository.** First the marker files (for example `package.json`, `pyproject.toml`, `go.mod`, `.pre-commit-config.yaml`, ESLint and TypeScript configs), then the commands in the CI configuration (GitHub Actions, GitLab CI and similar), matched by keyword. When those are not enough and **Fill in unknown repos with the model** is on, Butler asks a model to read the repository (read-only tools, through model routing task `repo_scan_infer`). What the model adds is marked **model inference** with **low** confidence.
+- **Monorepos.** Each project directory (each `package.json`, `pyproject.toml`, `go.mod`… below the root) is listed separately, and every check belongs to its directory.
+- **Confidence.** A command in CI or an explicit script is **high**; a tool that is only configured is **medium**; a model guess is **low**. Low-confidence results never become checks by themselves.
+- A repository without a local copy, one that cannot be read or one that is not a git repository is **skipped**, with the reason shown.
+- **Add basic checks first.** A project without lint, a type check or tests (where the language has one) is listed under this advice.
+- **Checks ready to use.** Each command the repository already runs can become a `run_command` check that reuses the command, so Butler sessions run what the repository's CI would run. Pick them and press **Create**; they start in shadow mode. A low-confidence one must be ticked **I checked this command** before it is created. **Make a check** on a lesson also gets the baseline, so the draft reuses the repository's commands.
+- **Repo profile in the session guide.** Ticket and fix sessions get a short profile of their own repositories in the session guide: how to install, build, run all tests, run one test, lint and type check, the directory conventions and the CI steps, at most **Characters per repo in the session guide** per repository. Other repositories are never included. A profile whose config files changed since the scan is marked as possibly out of date, and with **Rescan in the background** on Butler rescans it after the launch (without the model).
+- **Marker table.** Which file means which tool is data, not code: the built-in rules are the defaults, and at the global, product or repository layer you can change a rule's fields, turn it off or add a new one (JSON). The nearest layer wins.
+
+### Existing code and export as a repo rule
+
+On the **Checks** tab, **Existing code / export** under a check shows two actions for one repository:
+
+- **Scan existing code** runs the check over every tracked file of the repository and shows **N existing** with the list of places (200 at a time). It runs in the background and can be stopped; it reads at most **Most files a legacy scan reads** files. A `run_command` check is only scanned when you press the button, since that runs the command on each file.
+- **Export as a repo rule** turns the check into the repository's own rule, so it runs for everyone, not only in Butler sessions. Butler picks the target from the baseline: a `pre-commit` hook (`pygrep` for patterns), ESLint `no-restricted-imports` for package import boundaries, a lint-staged entry or a husky hook for commands, or else a small checker script in the repository's own runtime (`scripts/butler-checks/<name>.mjs`, `scripts/butler_checks/<name>.py` or `scripts/butler-checks/<name>.sh`) wired into whichever of those exist plus a `package.json` script or Makefile target. It is written into a new branch `butler/check-<name>-<key>` off the remote's default branch, in a worktree under `<BUTLER_HOME>/exports/<id>`, and committed locally (left staged when git has no `user.name` / `user.email`). Your own checkout is never touched. Then it stops: you see the branch, the files and the diff.
+- **Push branch** and **Open PR** are separate buttons and go through the outward-action switches, which are **off by default**; every attempt is logged. **Discard** removes the worktree and the local branch.
+- When a check cannot be exported, Butler says why and creates nothing: the repository has no local copy or no baseline yet, the check needs Node or Python and the repository has neither, the regular expression uses syntax the target cannot express (for example `\p{…}`), a command has no hook manager to go into, or the repository's CI already runs that command.
+
+| Setting | Key | Default | Notes |
+| --- | --- | --- | --- |
+| Fill in unknown repos with the model | `baselineInfer` | `auto` | `auto` or `off`. `auto`: when the marker files and CI are not enough, a scan you start asks the model (read-only). Background rescans never call the model. |
+| Rescan in the background when config files change | `baselineAutoRescan` | `1` | `1` or `0`. Only for repositories already scanned. |
+| Characters per repo in the session guide | `baselineGuideChars` | `1200` | A whole number from `200` to `4000`. |
+| Most files a legacy scan reads | `legacyScanMaxFiles` | `50000` | A whole number from `100` to `500000`. |
+
+**Import / export:** the marker table (section `baseline_rules`) travels with **All** and **Checks only**; products by name, invalid rules skipped. Repository baselines (section `baselines`) are only exported when you tick **Include each repo's baseline scan**, never with local paths, file hashes or lesson text. An imported baseline is kept only when it is newer than the local one, is marked as imported and out of date, and is replaced by the first local scan. An import never removes a local baseline, even in replace mode.
+
 ## Several companies or profiles
 
 Start Butler with a different `BUTLER_HOME`. If each company has its own Claude Code login, also set a different `CLAUDE_CONFIG_DIR`. Each `BUTLER_HOME` is a separate Butler with its own database, memory, hook binary, logs and settings, and its own Electron profile (`$BUTLER_HOME/electron`). Butler passes both variables on to the `claude` sessions it starts, so their hooks report to the right inbox.

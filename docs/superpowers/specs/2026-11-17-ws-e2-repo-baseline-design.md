@@ -202,7 +202,7 @@ An explicit per-check action "Write into the repo". It never pushes or opens a P
 
 ## 10. Export / import (4.3)
 
-- Section `baseline_rules` (order 45, content `config` and `checks`, so it travels with "everything" and "checks only"): the user rows of the marker table, products by name. Fingerprint = key + layer. Preview: added / changed (rule JSON differs) / unchanged / removed (replace). Imported rules arrive enabled (they are data, not behaviour that touches the agent), invalid ones are skipped.
+- Section `baseline_rules` (order 45, content `config` and `checks`, so it travels with "everything" and "checks only"): the user rows of the marker table, products by name. Fingerprint = key + layer. Preview: added / changed (rule JSON differs) / unchanged / removed (replace). Imported rules keep the on/off state the file gives them (they are data, not behaviour that touches the agent); a rule that is not valid once merged with the built-in one of the same key is skipped and counted.
 - Section `baselines` (order 90, only when "include repo baselines" is ticked; default off): the latest baseline per slug in the export scope **without** local paths, `inputs` or the export history: slug, scanned at, projects, checks, advice, profile (pitfalls dropped: they are lesson text). Import: added when the slug has no local baseline, changed when the incoming one is newer; stored with `origin: imported` and `stale_at` set, so the first local scan replaces it.
 
 ## 11. UI
@@ -233,3 +233,20 @@ All on the baseline tab and in `docs/configuration.md` and its Chinese twin. A u
 8. The profile in the guide is only for ticket / fix sessions and only for the ticket's repos; pitfalls are not duplicated when the lessons section is present.
 9. Staleness is checked cheaply at session launch from stored input hashes; the full listing comparison happens on rescans.
 10. Baselines are exported only on request and never with local paths or file hashes.
+
+## 14. Addendum: decisions made while building
+
+11. **One commit-time hook per export.** A check is wired into the first hook manager that applies (pre-commit, then lint-staged, then husky), not into all of them, so it never runs twice per commit. The package.json script and Makefile target are added too, because they are entry points for people and CI, not hooks.
+12. **Simple vs compound commands.** A `run_command` whose command is one simple command is written into the hook as is; a compound one (`;`, `&&`, `|`, redirection, subshell) is wrapped in a per-file runner `scripts/butler-checks/<name>.sh`, so the hook manager's own argument passing cannot change its meaning.
+13. **pygrep gets `(?a)`.** Python's `\w`, `\d` and `\s` match Unicode by default while JavaScript's do not; the exported pattern is prefixed with `(?a)` so the repo rule matches what the Butler check matched.
+14. **ESLint falls back to the script target** when the config already sets `no-restricted-imports`: merging two option lists cannot be done safely by text editing, and overriding the repo's own rule is not acceptable.
+15. **The shell target needs `git grep -P`.** The generated script checks for PCRE support first and exits with a clear message when git was built without it.
+16. **The Butler commit uses `--no-verify`.** The repo's own hooks may not be installed in the new worktree (or may need tools that are not there); the point of the commit is to hand over a reviewed diff, and the PR's CI runs the hooks for real.
+17. **The layout comes from the base commit**, not the user's working copy (`git ls-tree` and `git show <base>:<path>`), so uncommitted local edits never leak into the export and a refusal is decided before anything is created: a refused export leaves no branch, worktree or row.
+18. **Outward stub shape.** `stubOutward` matches B's `ExternalActions.attempt(kind, detail, run) → {ran:false,auditId} | {ran:true,value,auditId}`; B's registry lacks `branch_push` and adds it when the two merge.
+19. **IPC is grouped by page** (`baselines:act` for scan / cancel / adopt / rule save / rule remove, `legacy:act`, `checkExport:act`) instead of one channel per verb; each action is a validated tagged union.
+20. **Baselines are never removed by an import**, even in replace mode: a scan is an observation of a repo, not configuration; a missing row in the file says nothing about the local repo.
+21. **The baselines export section uses an `include(options)` hook** on the registry, so it is opt-in per export without a new content kind.
+22. **The profile in the guide** is joined over the ticket's repos with a total budget of twice `baselineGuideChars`; a repo whose baseline is stale is marked so in the text and (with `baselineAutoRescan`) rescanned in the background without the model, never delaying the launch.
+23. **Legacy scan and export live on the Checks tab** behind one per-check toggle "Existing code / export", with a repo picker defaulting to the repo layer's own slug.
+
