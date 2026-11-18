@@ -38,6 +38,7 @@
 //       没有这个文件或 ok → 回 { findings: [] }，带花费、时长和 modelUsage；
 //       fail → stdout 一个 is_error 的结果（result 是 boom，带花费），stderr 一行 fake lessons stderr: boom，退出 1；
 //       limit:<秒级时间戳> → stdout 一个 is_error 的结果“Claude AI usage limit reached|<时间戳>”（CLI 撞额度的格式），退出 1；
+//     仓库现状的模型补全（schema 里有 inferred_checks）：回一条测试命令和一条 lint 命令，记一行 repo scan infer；FAKE_CLAUDE_INFER=fail 时失败退出；
 //     FAKE_CLAUDE_SUMMARY_GATE 指向的文件存在时，feature 汇总等到文件被删掉才回答：e2e 用它控制归档前要等多久。
 "use strict";
 const fs = require("node:fs");
@@ -286,6 +287,25 @@ function headless() {
       const out = { [admissionKey]: answer };
       log(`admission ${admissionKey} ${ids.length}`);
       process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `admission-${Date.now()}`, result: JSON.stringify(out), structured_output: out, permission_denials: [], total_cost_usd: 0 })}\n`);
+      return;
+    }
+    if (props.inferred_checks) {
+      // 仓库现状的模型补全（repo_scan_infer）：回一条测试命令和一条 lint 命令；FAKE_CLAUDE_INFER=fail 时失败退出。
+      log(`repo scan infer cwd=${process.cwd()}`);
+      if (process.env.FAKE_CLAUDE_INFER === "fail") {
+        process.stderr.write("fake infer failed\n");
+        process.exitCode = 1;
+        return;
+      }
+      const answer = {
+        inferred_checks: [
+          { dir: "", category: "test", tool: "check-sh", command: "./tools/check.sh", changedFiles: false, evidence: ".gitlab-ci.yml" },
+          { dir: "", category: "lint", tool: "make-verify", command: "make verify", changedFiles: false, evidence: ".gitlab-ci.yml" },
+        ],
+        profiles: [{ dir: "", testAll: "./tools/check.sh", lint: "make verify", fastest: "make verify" }],
+        notes: "fake: read the CI file",
+      };
+      process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `infer-${Date.now()}`, result: JSON.stringify(answer), structured_output: answer, permission_denials: [], total_cost_usd: 0 })}\n`);
       return;
     }
     // prompt 的第一行有中文就当中文，否则英文（Butler 按界面语言出 prompt）。

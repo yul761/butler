@@ -8,6 +8,7 @@ import { adoption, checksErrorText, emptyForm, formFromInput, inputFromForm, liv
 import { S } from "../strings";
 import type { BatchNoticeState } from "./LessonBulkBar";
 import { useStateRefetch } from "./useStateRefetch";
+import { CheckRepoTools } from "./CheckRepoTools";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -221,6 +222,7 @@ export function ChecksPanel({ draft, onDraftTaken, onNotice }: { draft: CheckDra
   const [formError, setFormError] = useState<string | null>(null);
   const [picked, setPicked] = useState<number[]>([]);
   const [openHits, setOpenHits] = useState<string | null>(null);
+  const [openTools, setOpenTools] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [armedDelete, setArmedDelete] = useState(false);
 
@@ -242,6 +244,7 @@ export function ChecksPanel({ draft, onDraftTaken, onNotice }: { draft: CheckDra
     setLayer(k);
     setPicked([]);
     setOpenHits(null);
+    setOpenTools(null);
     setArmedDelete(false);
     setError(null);
   };
@@ -319,8 +322,10 @@ export function ChecksPanel({ draft, onDraftTaken, onNotice }: { draft: CheckDra
             scope.kind !== "global" && <button data-testid={`check-override-${c.key}`} title={S.checksOverrideHint} onClick={() => void run({ op: "override", scope, key: c.key })}>{S.checksOverride}</button>
           )}
           <button data-testid={`check-hits-toggle-${c.key}`} onClick={() => setOpenHits(hitsOpen ? null : c.key)}>{hitsOpen ? S.checksHitsHide : S.checksHitsShow}</button>
+          {(view?.repos.length ?? 0) > 0 && <button data-testid={`check-tools-toggle-${c.key}`} onClick={() => setOpenTools(openTools === c.key ? null : c.key)}>{openTools === c.key ? S.legacy.toolsHide : S.legacy.tools}</button>}
         </div>
         {hitsOpen && <HitList checkKey={c.key} onError={setError} />}
+        {openTools === c.key && view && <CheckRepoTools checkId={k.id} checkKey={c.key} repos={view.repos} defaultSlug={scope.kind === "repo" ? scope.slug : null} />}
       </div>
     );
   };

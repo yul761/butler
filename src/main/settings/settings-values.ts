@@ -359,6 +359,7 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "externalPrDescriptionEdit":
     case "externalPrLabel":
     case "externalPrOpen":
+    case "externalBranchPush":
     case "externalPrTitleEdit":
     case "externalForcePush":
     case "externalCiRerun":
@@ -367,6 +368,7 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "lessonsAutoAdmit":
     case "lessonsPrinciples":
     case "lessonsCoreGuide":
+    case "baselineAutoRescan":
       return normalizeFlag(value);
     case "hibernateYouMinutes":
     case "hibernateCiMinutes":
@@ -428,6 +430,18 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "refreshMemoryMb": {
       const t = value.trim();
       if (!MEMORY_MB_RE.test(t) || (Number(t) !== 0 && Number(t) < MIN_REFRESH_MEMORY_MB)) throw new SettingError(M().refreshMemoryMb);
+      return String(Number(t));
+    }
+    case "baselineInfer": {
+      const t = value.trim();
+      if (t !== "auto" && t !== "off") throw new SettingError(M().baselineInfer);
+      return t;
+    }
+    case "baselineGuideChars":
+    case "legacyScanMaxFiles": {
+      const t = value.trim();
+      const [lo, hi] = key === "baselineGuideChars" ? BASELINE_GUIDE_RANGE : LEGACY_FILES_RANGE;
+      if (!/^\d{1,6}$/.test(t) || Number(t) < lo || Number(t) > hi) throw new SettingError(key === "baselineGuideChars" ? M().baselineGuideChars : M().legacyScanMaxFiles);
       return String(Number(t));
     }
     case "language": {
@@ -660,6 +674,23 @@ export function llmConfig(s: SettingsRepo): LlmConfig {
 
 const CHECKS_EDIT_RANGE = [1, 30] as const;
 const CHECKS_PUSH_RANGE = [10, 3600] as const;
+
+const BASELINE_GUIDE_RANGE = [200, 4000] as const;
+const LEGACY_FILES_RANGE = [100, 500_000] as const;
+
+/** 仓库现状和存量扫描的设置（工作流 E2）；存坏了的值回退到默认。 */
+export function baselinesConfig(s: Pick<SettingsRepo, "get">): { infer: "auto" | "off"; autoRescan: boolean; guideChars: number; legacyMaxFiles: number } {
+  const num = (k: "baselineGuideChars" | "legacyScanMaxFiles", [lo, hi]: readonly [number, number]) => {
+    const n = Number(s.get(k));
+    return Number.isInteger(n) && n >= lo && n <= hi ? n : Number(SETTING_DEFAULTS[k]);
+  };
+  return {
+    infer: s.get("baselineInfer") === "off" ? "off" : "auto",
+    autoRescan: s.get("baselineAutoRescan") !== "0",
+    guideChars: num("baselineGuideChars", BASELINE_GUIDE_RANGE),
+    legacyMaxFiles: num("legacyScanMaxFiles", LEGACY_FILES_RANGE),
+  };
+}
 
 /** 确定性检查的设置（契约 4.5）；存坏了的值回退到默认。 */
 export function checksConfig(s: Pick<SettingsRepo, "get">): { enabled: boolean; editTimeoutSec: number; pushTimeoutSec: number; ticketPattern: string } {

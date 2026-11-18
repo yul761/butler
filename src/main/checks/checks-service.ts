@@ -90,6 +90,12 @@ export class ChecksService {
     return this.resolved(scope).filter((x) => x.row.enabled).map((x) => this.localize(x.row));
   }
 
+  /** 某个仓库看到的这条检查（三层合并后，含停用的），存量扫描和导出用（工作流 E2）。 */
+  resolvedFor(slug: string, key: string): (ResolvedCheck & { enabled: boolean; origin: ScopeRef }) | null {
+    const x = this.resolved({ kind: "repo", slug }).find((r) => r.key === key);
+    return x ? { ...this.localize(x.row), enabled: x.row.enabled, origin: x.origin } : null;
+  }
+
   private localize(r: CheckRow): ResolvedCheck {
     const s = M().checks;
     return {
@@ -242,6 +248,26 @@ export class ChecksService {
   /** 批次外写了检查之后通知重写快照。 */
   notifyChanged(): void {
     this.d.onChanged?.();
+  }
+
+  /** 一次新建好几条（仓库现状里采纳的检查，工作流 E2）：一个批次，撤销时一起撤。有一条不合法就一条都不建。 */
+  createMany(scope: CheckScope, raws: unknown[], opts: { origin?: BatchOrigin; summary?: Record<string, unknown> } = {}): ChecksActResult {
+    const inputs: CheckInput[] = [];
+    for (const raw of raws) {
+      const v = validateCheckInput(raw);
+      if (!v.ok) return { ok: false, reason: "invalid", message: v.error };
+      inputs.push(v.value);
+    }
+    if (!inputs.length) return { ok: true, batchId: null, affected: 0 };
+    if (!this.layerExists(scope)) return NOT_FOUND;
+    const now = this.d.now();
+    const { outcome } = this.d.recorder.run(
+      { kind: "check_create", origin: opts.origin ?? "manual", entity: "check", scope: { layer: scope }, summary: { count: inputs.length, names: inputs.map((i) => i.name).slice(0, 20), ...opts.summary }, now },
+      (ctx) => {
+        for (const input of inputs) ctx.created("check", this.repo.insert(scope, newKey(), input, { lessonId: null, now }));
+      },
+    );
+    return this.changed({ ok: true, batchId: outcome.batchId, affected: outcome.affected });
   }
 
   /** 把继承来的一条检查复制到这一层（同一个 key = 覆盖），之后在这一层改它。 */

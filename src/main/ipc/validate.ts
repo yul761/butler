@@ -12,6 +12,7 @@ import { parseLessonFilter } from "../../shared/lesson-filter";
 import type { AdmissionScope, CalibrationAction, WizardAction } from "../../shared/lesson-admission";
 import { CHECKS_BULK_OPS, parseCheckScope, type CheckScope, type ChecksAction, type ChecksBulkOp } from "../../shared/checks";
 import { parsePolicyOverrides, type AdmissionPolicyOverrides, type PolicyScope } from "../../shared/admission-policy";
+import type { BaselinesAction, CheckExportAction, LegacyAction } from "../../shared/baselines";
 import { parseLoopOverrides, type LoopPolicyOverrides, type LoopScope } from "../../shared/loop-policy";
 import { COMMENT_CATEGORIES, type CommentAction, type CommentCategory, type FlakyAction } from "../../shared/loop";
 import {
@@ -569,9 +570,10 @@ export function exportRequestArg(v: unknown): ExportRequest {
   else if (sc.kind === "product" && sc.slug === undefined) scope = { kind: "product", productId: posInt(sc.productId, "export scope") };
   else if (sc.kind === "repo" && sc.productId === undefined) scope = { kind: "repo", slug: lessonSlugArg(sc.slug) };
   else throw new Error("invalid export scope");
-  const op = objArg(o.options, "export options", ["content", "includeSourceUrls"]);
+  const op = objArg(o.options, "export options", ["content", "includeSourceUrls", "includeBaselines"]);
   if (!(EXPORT_CONTENTS as readonly unknown[]).includes(op.content) || typeof op.includeSourceUrls !== "boolean") throw new Error("invalid export options");
-  const req: ExportRequest = { scope, options: { content: op.content as ExportContent, includeSourceUrls: op.includeSourceUrls } };
+  if (op.includeBaselines !== undefined && typeof op.includeBaselines !== "boolean") throw new Error("invalid export options");
+  const req: ExportRequest = { scope, options: { content: op.content as ExportContent, includeSourceUrls: op.includeSourceUrls, ...(op.includeBaselines ? { includeBaselines: true } : {}) } };
   if (o.starter !== undefined) {
     const st = objArg(o.starter, "starter pack", ["name"]);
     if (typeof st.name !== "string" || !st.name.trim() || st.name.length > 200) throw new Error("invalid starter pack");
@@ -754,6 +756,69 @@ export function routingActionArg(v: unknown): RoutingAction {
 export function switchModelArg(v: unknown): string | undefined {
   if (v === undefined || v === null) return undefined;
   return isModelName(v) ? v : bad();
+}
+
+// ---------------------------------------------------------------- 仓库现状（工作流 E2）
+
+const slugArg = (v: unknown): string => {
+  if (typeof v !== "string" || v.length > 300 || !/^[^\s/]+\/[^\s/]+$/.test(v) || v.split("/").some((p) => p === "." || p === "..")) throw new Error("invalid repo slug");
+  return v;
+};
+const idList = (v: unknown, what: string, max = 500): string[] => {
+  if (!Array.isArray(v) || v.length > max || v.some((x) => typeof x !== "string" || x.length > 700)) throw new Error(`invalid ${what}`);
+  return v as string[];
+};
+const objOf = (v: unknown, what: string): Record<string, unknown> => {
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error(`invalid ${what}`);
+  return v as Record<string, unknown>;
+};
+
+export function baselinesActionArg(v: unknown): BaselinesAction {
+  const o = objOf(v, "baselines action");
+  switch (o.kind) {
+    case "scan": {
+      if (!Array.isArray(o.slugs) || o.slugs.length < 1 || o.slugs.length > 500) throw new Error("invalid baselines action");
+      if (typeof o.infer !== "boolean" || (o.force !== undefined && typeof o.force !== "boolean")) throw new Error("invalid baselines action");
+      return { kind: "scan", slugs: o.slugs.map(slugArg), infer: o.infer, ...(o.force === undefined ? {} : { force: o.force as boolean }) };
+    }
+    case "cancel":
+      return { kind: "cancel", slug: slugArg(o.slug) };
+    case "adopt":
+      return { kind: "adopt", slug: slugArg(o.slug), ids: idList(o.ids, "baseline check ids"), confirmLow: idList(o.confirmLow, "baseline check ids") };
+    case "ruleSave":
+      if (typeof o.key !== "string" || !/^[A-Za-z0-9_.:-]{1,60}$/.test(o.key) || typeof o.rule !== "string" || o.rule.length > 16 * 1024 || typeof o.enabled !== "boolean") {
+        throw new Error("invalid baselines action");
+      }
+      return { kind: "ruleSave", scope: checkScopeArg(o.scope), key: o.key, rule: o.rule, enabled: o.enabled };
+    case "ruleRemove":
+      if (typeof o.key !== "string" || !/^[A-Za-z0-9_.:-]{1,60}$/.test(o.key)) throw new Error("invalid baselines action");
+      return { kind: "ruleRemove", scope: checkScopeArg(o.scope), key: o.key };
+    default:
+      throw new Error("invalid baselines action");
+  }
+}
+
+export function legacyActionArg(v: unknown): LegacyAction {
+  const o = objOf(v, "legacy action");
+  if (o.kind === "run") return { kind: "run", checkId: positiveId(o.checkId, "check id"), slug: slugArg(o.slug) };
+  if (o.kind === "cancel") return { kind: "cancel", scanId: positiveId(o.scanId, "scan id") };
+  throw new Error("invalid legacy action");
+}
+
+export function legacyViolationsArg(v: unknown): { scanId: number; offset: number; limit: number } {
+  const o = objOf(v, "violations request");
+  const offset = o.offset === undefined ? 0 : o.offset;
+  const limit = o.limit === undefined ? 200 : o.limit;
+  if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) throw new Error("invalid violations request");
+  if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new Error("invalid violations request");
+  return { scanId: positiveId(o.scanId, "scan id"), offset, limit };
+}
+
+export function checkExportActionArg(v: unknown): CheckExportAction {
+  const o = objOf(v, "export action");
+  if (o.kind === "run") return { kind: "run", checkKey: checkKeyArg(o.checkKey), slug: slugArg(o.slug) };
+  if (o.kind === "discard" || o.kind === "push" || o.kind === "pr" || o.kind === "open") return { kind: o.kind, id: positiveId(o.id, "export id") };
+  throw new Error("invalid export action");
 }
 
 /** 改花费上限的一层（工作流 L）：覆盖整个换掉，值在 CostPolicyService 里按键校验（不合法的回 CostSetResult）。 */

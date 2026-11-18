@@ -2,6 +2,7 @@ import { SectionRegistry } from "./registry";
 import { lessonsSection, policiesSection, productsSection } from "./sections";
 import { checksSection } from "./checks-section";
 import { modelsSection } from "./models-section";
+import { baselineRulesSection, baselinesSection } from "./baselines-section";
 
 export { ConfigIoService, type ConfigIoDeps, type BackupKind } from "./service";
 export { SectionRegistry, type ConfigSection } from "./registry";
@@ -17,5 +18,8 @@ export function defaultRegistry(): SectionRegistry {
   r.register(checksSection);
   // A：模型路由（content: "config"，只在「全部」里）。
   r.register(modelsSection);
+  // E2：标记文件表的用户层，和（勾选时）各仓库的现状扫描。
+  r.register(baselineRulesSection);
+  r.register(baselinesSection);
   return r;
 }

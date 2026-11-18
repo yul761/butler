@@ -42,7 +42,7 @@ const HeaderSchema = z.object({
   exportedAt: z.number().int().nonnegative(),
   butlerVersion: z.string().max(50),
   scope: FileScopeSchema,
-  options: z.object({ content: z.enum(["all", "lessons", "checks"]), includeSourceUrls: z.boolean() }),
+  options: z.object({ content: z.enum(["all", "lessons", "checks"]), includeSourceUrls: z.boolean(), includeBaselines: z.boolean().optional() }),
   sections: z.record(z.string().max(100), z.array(z.unknown())),
 });
 

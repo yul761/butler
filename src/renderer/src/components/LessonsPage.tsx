@@ -10,6 +10,7 @@ import { lessonTags, livePicked } from "../lessons-bulk-view";
 import { BatchNotice, LessonBulkBar, LessonTags, runBatch, type BatchNoticeState } from "./LessonBulkBar";
 import { LessonBatches } from "./LessonBatches";
 import { ConfigIoPanel } from "./ConfigIoPanel";
+import { BaselinePanel } from "./BaselinePanel";
 import { ChecksPanel, type CheckDraftState } from "./ChecksPanel";
 import { draftErrorText } from "../checks-view";
 import type { LessonFilter } from "../../../shared/lesson-filter";
@@ -38,7 +39,7 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
   const [newName, setNewName] = useState("");
   const [newSlugs, setNewSlugs] = useState<string[]>([]);
   /** 页面顶上的标签：规矩 / 批次历史 / 导入导出。 */
-  const [pageTab, setPageTab] = useState<"lessons" | "wizard" | "calibration" | "checks" | "batches" | "io">("lessons");
+  const [pageTab, setPageTab] = useState<"lessons" | "wizard" | "calibration" | "checks" | "baselines" | "batches" | "io">("lessons");
   /** 从规矩起草好的检查：交给检查标签页打开表单。 */
   const [checkDraft, setCheckDraft] = useState<CheckDraftState | null>(null);
   /** 正在起草检查的规矩（按钮显示「正在起草…」）。 */
@@ -457,7 +458,7 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
       <h2>{S.lessons}</h2>
       <p className="muted">{S.lessonsIntro}</p>
       <div className="lessons-tabs lessons-row" role="tablist">
-        {(["lessons", "wizard", "calibration", "checks", "batches", "io"] as const).map((t) => (
+        {(["lessons", "wizard", "calibration", "checks", "baselines", "batches", "io"] as const).map((t) => (
           <button key={t} role="tab" aria-selected={pageTab === t} className={pageTab === t ? "primary" : undefined} data-testid={`lessons-page-tab-${t}`} onClick={() => setPageTab(t)}>
             {S.lessonsPageTab[t]}
           </button>
@@ -476,6 +477,8 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
         <CalibrationPanel lessons={s} />
       ) : pageTab === "checks" ? (
         <ChecksPanel draft={checkDraft} onDraftTaken={() => setCheckDraft(null)} onNotice={setNotice} />
+      ) : pageTab === "baselines" ? (
+        <BaselinePanel />
       ) : pageTab === "batches" ? (
         <LessonBatches />
       ) : pageTab === "io" ? (

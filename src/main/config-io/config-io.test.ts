@@ -129,7 +129,7 @@ describe("export", () => {
     const lessonsOnly = a.io.exportDoc({ ...all, options: { content: "lessons", includeSourceUrls: false } })!;
     expect(Object.keys(lessonsOnly.sections).sort()).toEqual(["lessons", "products"]);
     const checksOnly = a.io.exportDoc({ ...all, options: { content: "checks", includeSourceUrls: false } })!;
-    expect(Object.keys(checksOnly.sections).sort()).toEqual(["checks", "products"]);
+    expect(Object.keys(checksOnly.sections).sort()).toEqual(["baseline_rules", "checks", "products"]);
     expect(a.io.exportDoc({ scope: { kind: "product", productId: 999 }, options: all.options })).toBeNull();
   });
 
@@ -267,9 +267,9 @@ describe("import into another BUTLER_HOME", () => {
     const { a } = seed();
     const doc = a.io.exportDoc(all)!;
     const b = home();
-    const pr = await b.io.previewText(JSON.stringify({ ...doc, sections: { ...doc.sections, baselines: [] } }));
+    const pr = await b.io.previewText(JSON.stringify({ ...doc, sections: { ...doc.sections, from_the_future: [] } }));
     if (!pr.ok) throw new Error("preview");
-    expect(pr.preview.skippedSections.sort()).toEqual(["baselines"]);
+    expect(pr.preview.skippedSections.sort()).toEqual(["from_the_future"]);
     expect(await b.io.previewText(JSON.stringify({ ...doc, sections: { checks: [{ x: 1 }] } }))).toMatchObject({ ok: false, reason: "bad_section", section: "checks" });
     expect(await b.io.previewText(JSON.stringify({ ...doc, sections: { lessons: [{ text: "" }] } }))).toEqual({ ok: false, reason: "bad_section", section: "lessons" });
     expect(await b.io.previewText(JSON.stringify({ ...doc, sections: { policies: [{ layer: { kind: "global" }, overrides: { "score.admitLine": 7 } }] } }))).toMatchObject({ ok: false, section: "policies" });

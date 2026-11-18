@@ -79,6 +79,14 @@ export const SETTING_DEFAULTS = {
   checksEditTimeoutSec: "8",
   /** push 前的检查最多用几秒（10–3600）。 */
   checksPushTimeoutSec: "600",
+  /** 仓库现状扫描（工作流 E2）：标记文件和 CI 都认不出时，让 claude 只读地看一遍补上（auto）；off = 不调模型。 */
+  baselineInfer: "auto",
+  /** 配置文件改过后，开 session 时在后台重扫（只跑不调模型的两层）：1 开 0 关。 */
+  baselineAutoRescan: "1",
+  /** session guide 里一个仓库的档案最多几个字符（200–4000）。 */
+  baselineGuideChars: "1200",
+  /** 一次存量扫描最多看几个文件（100–500000），超了记成截断。 */
+  legacyScanMaxFiles: "50000",
   /** 模型路由（3.0）：每月配额，JSON 数组 [{ target: "tier:high" | "model:<名字>", unit: "usd" | "tokens", monthly }]；空 = 不限。 */
   routingQuotas: "",
   /** 配额的两个软阈值（百分比，逗号分隔）：到第一个时低价值任务降档，到第二个时只有关键任务用高档。 */
@@ -123,6 +131,7 @@ export const SETTING_DEFAULTS = {
   externalPrDescriptionEdit: "0",
   externalPrLabel: "0",
   externalPrOpen: "0",
+  externalBranchPush: "0",
   externalPrTitleEdit: "0",
   externalForcePush: "0",
   externalCiRerun: "0",

@@ -160,6 +160,27 @@ describe("session guide", () => {
   });
 });
 
+describe("repo profile", () => {
+  const profile = "Repo a/web (scanned 2026-11-18; the repo's own commands):\n- all tests: `pnpm test`";
+  it("goes into ticket guides only, after the lessons", () => {
+    const t = sessionGuide("en", "ticket", [{ label: "a/web", text: "keep it small" }], { profile });
+    expect(t).toContain("use the repo's own commands");
+    expect(t.indexOf("`pnpm test`")).toBeGreaterThan(t.indexOf("keep it small"));
+    expect(sessionGuide("en", "coordinator", [], { profile })).not.toContain("pnpm test");
+    expect(sessionGuide("zh", "ticket", [], { profile })).toContain("优先用这些仓库自己的命令");
+  });
+  it("is part of the hashed file name", () => {
+    const dir = tempDir();
+    const plain = writeSessionGuide(dir, "en", "ticket");
+    const a = writeSessionGuide(dir, "en", "ticket", [], { profile });
+    const b = writeSessionGuide(dir, "en", "ticket", [], { profile: `${profile}\n- lint: \`pnpm lint\`` });
+    expect(a).not.toBe(plain);
+    expect(a).not.toBe(b);
+    expect(readFileSync(b, "utf8")).toContain("pnpm lint");
+    expect(writeSessionGuide(dir, "en", "coordinator", [], { profile })).toBe(writeSessionGuide(dir, "en", "coordinator"));
+  });
+});
+
 describe("session guide: principles and pre-review (workstream D)", () => {
   it("writes principle lines with a case count and the cases into a sibling file", () => {
     const dir = tempDir();

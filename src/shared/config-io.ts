@@ -10,6 +10,8 @@ export interface ExportOptions {
   content: ExportContent;
   /** 带上出处 URL 和 PR 号（默认不带）。 */
   includeSourceUrls: boolean;
+  /** 带上各仓库最近一次的现状扫描（不含本地路径；默认不带，工作流 E2）。 */
+  includeBaselines?: boolean;
 }
 
 export interface ExportRequest {

@@ -145,7 +145,7 @@ import { markTurnEndedWithoutStop } from "./sessions/turn-end";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
 import {
-  checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, llmConfig, memoryOn,
+  baselinesConfig, checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, llmConfig, memoryOn,
   memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, sessionAdmission, SettingError, trackerTools,
 } from "./settings/settings-values";
 import { watcherGuideLines } from "./procs/watcher-policy";
@@ -170,7 +170,7 @@ import { CiTriageRepo } from "./db/ci-triage-repo";
 import { CommentItemsRepo } from "./db/comment-items-repo";
 import { commentOnPr, replyToReviewComment, rerunFailed, resolveReviewThread, reviewThreads, runInfo } from "./tickets/gh-loop";
 import type { CiItem } from "./prwatch/ci-delivery";
-import { applyGhResolution, branchRuns, ghAvailable, probeGh, compareFiles, failedLog, mergedPrs, prInfo, prLessonDataDetail, prsForBranch, prStatus, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
+import { applyGhResolution, branchRuns, createPr, ghAvailable, probeGh, compareFiles, failedLog, mergedPrs, prInfo, prLessonDataDetail, prsForBranch, prStatus, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
 import { LessonsRepo } from "./db/lessons-repo";
 import { LessonRunsRepo } from "./db/lesson-runs-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
@@ -188,7 +188,12 @@ import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
 import { LessonBatchService } from "./lessons/lesson-batches";
 import { BatchRecorder } from "./batches/batch-recorder";
-import { checkAdapter, lessonAdapter, lessonPrincipleAdapter, policyAdapter, principleAdapter, productAdapter } from "./batches/table-adapter";
+import { baselineAdapter, baselineRuleAdapter, checkAdapter, lessonAdapter, lessonPrincipleAdapter, policyAdapter, principleAdapter, productAdapter } from "./batches/table-adapter";
+import { BaselineService } from "./baselines/baselines-service";
+import { LegacyScanService } from "./baselines/legacy-service";
+import { baselineWorkerRunner } from "./baselines/worker-host";
+import { CheckExporter } from "./baselines/export/exporter";
+import { BaselinesRepo } from "./db/baselines-repo";
 import { ChecksService } from "./checks/checks-service";
 import { SnapshotWriter, readSnapshotState } from "./checks/snapshot-writer";
 import { HitIngest } from "./checks/hit-ingest";
@@ -693,7 +698,7 @@ async function bootstrap(): Promise<void> {
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
   // 规矩、产品和准入策略的改动都记成可撤销的批次（契约 4.4）。
-  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db), lessonPrincipleAdapter(db)]);
+  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db), lessonPrincipleAdapter(db), baselineRuleAdapter(db), baselineAdapter(db)]);
   // 确定性检查（契约 4.5）：库里是三层的定义，hook 只读 Butler 写出来的快照（<BUTLER_HOME>/checks/snapshot.json）。
   // 检查、产品、设置、语言一变就重写快照（合并一小段时间里的改动）；内容没变不写。
   const checksService: ChecksService = new ChecksService({
@@ -738,10 +743,64 @@ async function bootstrap(): Promise<void> {
     db, repo: lessonsRepo, policies: admissionPolicies, recorder: batchRecorder, registry: configRegistry, butlerVersion: app.getVersion(),
     backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), onApplied: () => (checkSnapshots.schedule(), routing.reloadConfig()), log: logger,
   });
-  // 从规矩生成检查（任务 check_draft）：走模型路由（高档，撞限就等；没配置路由时和以前一样不带 --model）。
+  // 仓库现状（工作流 E2）：扫描在 worker 线程里跑；模型补全走路由的 repo_scan_infer（中档，撞限换下一个）。
+  const repoLocalPath = (slug: string): string | null => lessonsRepo.repo(slug)?.localPath ?? null;
+  const baselineService = new BaselineService({
+    db, lessons: lessonsRepo, checks: checksService, localPath: repoLocalPath, runner: baselineWorkerRunner,
+    infer: (req) => execHeadlessJson(judgeDeps, req), config: () => baselinesConfig(settings), lang: () => currentLang(), now: Date.now,
+    onChanged: () => notify(), log: logger,
+  });
+  // 存量扫描：整个仓库跑一条检查；上次没跑完的（应用退出时）标成失败。
+  const baselinesRepo = new BaselinesRepo(db);
+  const legacyScans = new LegacyScanService({
+    repo: baselinesRepo, checks: checksService, localPath: repoLocalPath, runner: baselineWorkerRunner,
+    config: () => ({ maxFiles: baselinesConfig(settings).legacyMaxFiles, ...checksConfig(settings) }), now: Date.now, onChanged: () => notify(), log: logger,
+  });
+  try {
+    legacyScans.recover();
+  } catch (e) {
+    logger("legacy scan: recovering interrupted scans failed", e);
+  }
+  // 对外动作（契约 4.8，ws-b）：开关和审计的框架；接入的 workstream 用 externalActions.attempt（现在是导出成 lint 的推送分支和开 PR）。
+  const externalAudit = new ExternalAuditRepo(db);
+  const externalActions = new ExternalActions({
+    repo: externalAudit,
+    setting: (key) => settings.get(key),
+    now: Date.now,
+    cutoff: (now) => auditCutoff(now, llmConfig(settings).retentionDays),
+    log: logger,
+  });
+  // 导出成 lint：写进 <BUTLER_HOME>/exports/<id> 的 worktree 就停；推送和开 PR 只经对外动作开关（契约 4.8），做没做都记进审计。
+  const checkExporter = new CheckExporter({
+    repo: baselinesRepo,
+    check: (slug, key) => {
+      const c = checksService.resolvedFor(slug, key);
+      return c ? { ...c, checkId: c.id } : null;
+    },
+    baseline: (slug) => baselineService.latest(slug), localPath: repoLocalPath, exportsDir: join(paths.home, "exports"),
+    outward: externalActions, ticketPattern: () => checksConfig(settings).ticketPattern, now: Date.now,
+    openPr: (req) => createPr(req), openPath: (dir) => void shell.openPath(dir), onChanged: () => notify(), log: logger,
+  });
+  // 上次跑到一半退出的导出：建了的 worktree 和分支收回去。
+  void checkExporter.recover().catch((e) => logger("check export: recovering interrupted exports failed", e));
+  /** ticket session 的 guide 里的仓库档案：worktree 路径 → slug。 */
+  const sessionProfile = (repoPaths: string[], hasLessons: boolean): string => {
+    try {
+      const repos = repoPaths.flatMap((root) => {
+        const slug = repoIdentity.slugOf(root);
+        return slug ? [{ slug, root }] : [];
+      });
+      return baselineService.guideProfile(repos, hasLessons);
+    } catch (e) {
+      logger("session guide: repo profile failed", e);
+      return "";
+    }
+  };
+  // 从规矩生成检查（任务 check_draft）：走模型路由（高档，撞限就等；没配置路由时和以前一样不带 --model）。提示里带上仓库现状（已有的命令和规则）。
   const checkDrafter = new CheckDrafter({
     lessons: lessonsRepo, checks: checksService, fallbackCwd: () => paths.home,
     run: (req) => execHeadlessJson(judgeDeps, req),
+    baseline: (slugs) => baselineService.describeForPrompt(slugs),
   });
   const configBackups = new ConfigBackups({
     io: configIo, registry: configRegistry, jobs, repo: lessonsRepo, backupDir: configBackupDir, now: Date.now, log: logger,
@@ -994,15 +1053,17 @@ async function bootstrap(): Promise<void> {
       });
     },
     checksAbsence,
-    guidePath: (kind, repoPaths) =>
-      writeSessionGuide(
-        paths.mcp, currentLang(), kind,
-        kind === "ticket"
-          ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger, { principles: settings.get("lessonsPrinciples") === "1", core: settings.get("lessonsCoreGuide") === "1" })
-          : [],
+    guidePath: (kind, repoPaths) => {
+      const lessons = kind === "ticket"
+        ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger, { principles: settings.get("lessonsPrinciples") === "1", core: settings.get("lessonsCoreGuide") === "1" })
+        : [];
+      return writeSessionGuide(paths.mcp, currentLang(), kind, lessons, {
         // 预审（工作流 G）还没接进来：指南里那句「PR 前会自动预审」先不写；G 合进来后把这里换成它的开关。
-        { preReview: false, extra: kind === "ticket" ? watcherGuideLines(currentLang(), repoPaths) : [] },
-      ),
+        preReview: false,
+        extra: kind === "ticket" ? watcherGuideLines(currentLang(), repoPaths) : [],
+        profile: kind === "ticket" ? sessionProfile(repoPaths, lessons.length > 0) : "",
+      });
+    },
     featureMcpConfig,
     epicMcpConfig,
     butlerWorkspace: paths.butlerWorkspace,
@@ -1148,15 +1209,6 @@ async function bootstrap(): Promise<void> {
     featureFollowup(featureId, handoffId, sessionId);
   };
   const audit = new AuditRepo(db);
-  // 对外动作（契约 4.8，ws-b）：开关和审计的框架；接入的 workstream 用 externalActions.attempt。
-  const externalAudit = new ExternalAuditRepo(db);
-  const externalActions = new ExternalActions({
-    repo: externalAudit,
-    setting: (key) => settings.get(key),
-    now: Date.now,
-    cutoff: (now) => auditCutoff(now, llmConfig(settings).retentionDays),
-    log: logger,
-  });
   // 审计的启动收尾，先于一切读写审计的代码：上次退出时没发完的请求记为 failed（请求体保留，可能已经发出），
   // 再按保留期清理一次（不删本月的记录，预算要用；之后 gateway 每次调用前也会清理）。
   try {
@@ -2192,6 +2244,14 @@ async function bootstrap(): Promise<void> {
       hits: (key) => checksService.hits(key),
       draft: (lessonId) => checkDrafter.draft(lessonId),
     },
+    baselines: {
+      view: () => baselineService.view(), act: (a) => baselineService.act(a), rulesView: (scope) => baselineService.rulesView(scope), summary: (scope) => baselineService.summary(scope),
+    },
+    legacy: {
+      views: () => legacyScans.views(), start: (checkId, slug) => legacyScans.start(checkId, slug), cancel: (id) => legacyScans.cancel(id),
+      violations: (id, offset, limit) => legacyScans.violations(id, offset, limit),
+    },
+    checkExports: { list: () => checkExporter.list(), act: (a) => checkExporter.act(a) },
     configIo: configIoFacade({
       io: configIo, backups: configBackups, backupDir: configBackupDir, now: Date.now, notify, log: logger,
       openPath: (dir) => shell.openPath(dir),

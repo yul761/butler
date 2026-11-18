@@ -1010,4 +1010,38 @@ export const MIGRATIONS: string[] = [
     UNIQUE (repo_slug, kind, name)
   );
   `,
+  // 仓库现状（工作流 E2）：每次扫描一行（只留最近 10 次）、标记文件表的用户层、存量扫描和它找到的违规、导出成 lint 的记录。
+  `
+  CREATE TABLE repo_baselines (
+    id INTEGER PRIMARY KEY, repo_slug TEXT NOT NULL, scanned_at INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('ok','partial','skipped','failed')), skip_reason TEXT, detail TEXT,
+    origin TEXT NOT NULL DEFAULT 'local' CHECK (origin IN ('local','imported')),
+    projects TEXT NOT NULL DEFAULT '[]', checks TEXT NOT NULL DEFAULT '[]', advice TEXT NOT NULL DEFAULT '[]', profile TEXT NOT NULL DEFAULT '{}',
+    inputs TEXT NOT NULL DEFAULT '[]', listing_hash TEXT NOT NULL DEFAULT '', stale_at INTEGER,
+    inferred TEXT NOT NULL DEFAULT 'none' CHECK (inferred IN ('none','ran','failed','skipped_off')), infer_detail TEXT,
+    duration_ms INTEGER NOT NULL DEFAULT 0);
+  CREATE INDEX repo_baselines_slug ON repo_baselines (repo_slug, scanned_at);
+  CREATE TABLE baseline_rules (
+    id INTEGER PRIMARY KEY, key TEXT NOT NULL,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global','product','repo')),
+    product_id INTEGER REFERENCES lesson_products(id) ON DELETE CASCADE, repo_slug TEXT,
+    rule TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+  CREATE UNIQUE INDEX baseline_rules_layer ON baseline_rules (key, scope_kind, IFNULL(product_id, 0), IFNULL(repo_slug, ''));
+  CREATE TABLE legacy_scans (
+    id INTEGER PRIMARY KEY, check_id INTEGER REFERENCES checks(id) ON DELETE CASCADE, check_key TEXT NOT NULL, repo_slug TEXT NOT NULL,
+    started_at INTEGER NOT NULL, finished_at INTEGER,
+    status TEXT NOT NULL CHECK (status IN ('running','done','cancelled','failed','truncated')),
+    files_total INTEGER NOT NULL DEFAULT 0, files_scanned INTEGER NOT NULL DEFAULT 0, count INTEGER NOT NULL DEFAULT 0, error TEXT);
+  CREATE INDEX legacy_scans_key ON legacy_scans (check_key, repo_slug, started_at);
+  CREATE TABLE legacy_violations (
+    id INTEGER PRIMARY KEY, scan_id INTEGER NOT NULL REFERENCES legacy_scans(id) ON DELETE CASCADE, file TEXT NOT NULL, line INTEGER, snippet TEXT NOT NULL DEFAULT '');
+  CREATE INDEX legacy_violations_scan ON legacy_violations (scan_id, id);
+  CREATE TABLE check_exports (
+    id INTEGER PRIMARY KEY, check_id INTEGER REFERENCES checks(id) ON DELETE SET NULL, check_key TEXT NOT NULL, repo_slug TEXT NOT NULL,
+    target TEXT NOT NULL, branch TEXT NOT NULL, base TEXT NOT NULL, worktree TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]', diff TEXT NOT NULL DEFAULT '',
+    committed INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('ready','pushed','pr_opened','discarded','failed')), detail TEXT, pr_url TEXT,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+  CREATE INDEX check_exports_key ON check_exports (check_key, created_at);
+  `,
 ];

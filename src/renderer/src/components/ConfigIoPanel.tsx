@@ -39,13 +39,14 @@ function ExportForm({ s, checksAvailable }: { s: LessonsState; checksAvailable: 
   const [scope, setScope] = useState("all");
   const [content, setContent] = useState<ExportContent>("all");
   const [urls, setUrls] = useState(false);
+  const [withBaselines, setWithBaselines] = useState(false);
   const [starter, setStarter] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
 
   const run = async () => {
-    const req: ExportRequest = { scope: scopeArg(scope), options: { content: starter ? "lessons" : content, includeSourceUrls: starter ? false : urls } };
+    const req: ExportRequest = { scope: scopeArg(scope), options: { content: starter ? "lessons" : content, includeSourceUrls: starter ? false : urls, ...(!starter && withBaselines && content !== "lessons" ? { includeBaselines: true } : {}) } };
     if (starter) req.starter = { name: name.trim() };
     setBusy(true);
     try {
@@ -81,6 +82,10 @@ function ExportForm({ s, checksAvailable }: { s: LessonsState; checksAvailable: 
       <label className="inline">
         <input type="checkbox" data-testid="io-export-urls" checked={urls && !starter} disabled={starter} onChange={(e) => setUrls(e.target.checked)} />
         {S.ioIncludeUrls}
+      </label>
+      <label className="inline">
+        <input type="checkbox" data-testid="io-export-baselines" checked={withBaselines && !starter && content !== "lessons"} disabled={starter || content === "lessons"} onChange={(e) => setWithBaselines(e.target.checked)} />
+        {S.ioIncludeBaselines}
       </label>
       <label className="inline">
         <input type="checkbox" data-testid="io-export-starter" checked={starter} onChange={(e) => setStarter(e.target.checked)} />

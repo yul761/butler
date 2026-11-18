@@ -57,6 +57,8 @@ export interface CheckDrafterDeps {
   run: CheckDraftRunner;
   /** 没有本地仓库时的工作目录。 */
   fallbackCwd: () => string;
+  /** 这些仓库已有检查的紧凑描述（工作流 E2 的仓库现状）；没有就不写进 prompt。 */
+  baseline?: (slugs: string[]) => string;
 }
 
 /** 从一条规矩生成检查草稿（addendum 第 8 节、决定 8）：草稿交给表单，用户按保存才落库；模型说不能检查时把规矩标成 prose（一个批次）。 */
@@ -71,6 +73,16 @@ export class CheckDrafter {
     const p = this.run(lessonId).finally(() => this.inflight.delete(lessonId));
     this.inflight.set(lessonId, p);
     return p;
+  }
+
+  private baselineFor(scope: { kind: "repo"; slug: string } | { kind: "product"; productId: number }): string {
+    if (!this.d.baseline) return "";
+    const slugs = scope.kind === "repo" ? [scope.slug] : (this.d.lessons.product(scope.productId)?.slugs ?? []);
+    try {
+      return this.d.baseline(slugs);
+    } catch {
+      return "";
+    }
   }
 
   private async run(lessonId: number): Promise<CheckDraftResult> {
@@ -99,7 +111,7 @@ export class CheckDrafter {
       task: "check_draft",
       label: "check draft",
       args: headlessArgs({ schema: CHECK_DRAFT_JSON_SCHEMA, allowedTools: repoLabel ? DRAFT_TOOLS : [] }),
-      prompt: M().checks.draftPrompt(l.text, l.why, l.scopeGlobs, repoLabel),
+      prompt: M().checks.draftPrompt(l.text, l.why, l.scopeGlobs, repoLabel, this.baselineFor(l.scope)),
       cwd,
     });
     if (!r.ok) {

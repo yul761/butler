@@ -495,6 +495,12 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .check-hits { list-style: none; padding: 0; margin: 6px 0 0 12px; }
 .check-hit { border-top: 1px solid var(--border); padding: 4px 0; }
 .check-hit-detail { margin: 2px 0; font-size: 11px; white-space: pre-wrap; word-break: break-all; color: var(--muted); }
+.baseline-checks { width: 100%; border-collapse: collapse; font-size: 12px; margin: 4px 0; }
+.baseline-checks th, .baseline-checks td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.baseline-checks td code { word-break: break-all; }
+.baseline-drafts, .baseline-rules { list-style: none; padding: 0; margin: 4px 0; }
+.baseline-drafts li, .baseline-rules li { margin: 2px 0; }
+.check-repo-tools { border-left: 2px solid var(--border); padding-left: 8px; }
 .session-no-checks { font-size: 10px; margin-left: 4px; }
 
 /* 设置页的 tab（常规 / 模型路由）和模型路由页（3.0）。 */

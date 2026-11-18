@@ -1,4 +1,4 @@
-import { checkKeyArg, checkLessonIdArg, checkScopeArg, checksActionArg } from "./validate";
+import { baselinesActionArg, checkExportActionArg, checkKeyArg, checkLessonIdArg, checkScopeArg, checksActionArg, legacyActionArg, legacyViolationsArg } from "./validate";
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
@@ -431,6 +431,30 @@ describe("progressFilterArg", () => {
     expect(progressFilterArg({ epicId: 3 })).toEqual({ epicId: 3, featureId: null });
     expect(progressFilterArg({ epicId: null, featureId: 7 })).toEqual({ epicId: null, featureId: 7 });
     for (const bad of ["x", [1], { epicId: 0 }, { featureId: 1.5 }, { featureId: "2" }]) expect(() => progressFilterArg(bad)).toThrow();
+  });
+});
+
+describe("repo baseline arguments (E2)", () => {
+  it("accepts the page's actions and rejects anything else", () => {
+    expect(baselinesActionArg({ kind: "scan", slugs: ["a/b"], infer: true })).toEqual({ kind: "scan", slugs: ["a/b"], infer: true });
+    expect(baselinesActionArg({ kind: "scan", slugs: ["a/b"], infer: false, force: false })).toEqual({ kind: "scan", slugs: ["a/b"], infer: false, force: false });
+    expect(() => baselinesActionArg({ kind: "scan", slugs: ["../x"], infer: true })).toThrow();
+    expect(() => baselinesActionArg({ kind: "scan", slugs: [], infer: true })).toThrow();
+    expect(baselinesActionArg({ kind: "adopt", slug: "a/b", ids: ["|test|vitest"], confirmLow: [] })).toMatchObject({ kind: "adopt" });
+    expect(() => baselinesActionArg({ kind: "adopt", slug: "a/b", ids: "x", confirmLow: [] })).toThrow();
+    expect(baselinesActionArg({ kind: "ruleSave", scope: { kind: "global" }, key: "node", rule: "{}", enabled: true })).toMatchObject({ key: "node" });
+    expect(() => baselinesActionArg({ kind: "ruleSave", scope: { kind: "global" }, key: "a b", rule: "{}", enabled: true })).toThrow();
+    expect(() => baselinesActionArg({ kind: "ruleSave", scope: { kind: "global" }, key: "k", rule: "x".repeat(20_000), enabled: true })).toThrow();
+    expect(baselinesActionArg({ kind: "ruleRemove", scope: { kind: "repo", slug: "a/b" }, key: "k" })).toMatchObject({ kind: "ruleRemove" });
+    expect(() => baselinesActionArg({ kind: "drop" })).toThrow();
+    expect(legacyActionArg({ kind: "run", checkId: 3, slug: "a/b" })).toEqual({ kind: "run", checkId: 3, slug: "a/b" });
+    expect(legacyActionArg({ kind: "cancel", scanId: 1 })).toEqual({ kind: "cancel", scanId: 1 });
+    expect(() => legacyActionArg({ kind: "run", checkId: 0, slug: "a/b" })).toThrow();
+    expect(legacyViolationsArg({ scanId: 2 })).toEqual({ scanId: 2, offset: 0, limit: 200 });
+    expect(() => legacyViolationsArg({ scanId: 2, limit: 5000 })).toThrow();
+    expect(checkExportActionArg({ kind: "run", checkKey: "ck_a", slug: "a/b" })).toEqual({ kind: "run", checkKey: "ck_a", slug: "a/b" });
+    expect(checkExportActionArg({ kind: "push", id: 4 })).toEqual({ kind: "push", id: 4 });
+    expect(() => checkExportActionArg({ kind: "merge", id: 4 })).toThrow();
   });
 });
 

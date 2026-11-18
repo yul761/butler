@@ -94,6 +94,18 @@ export interface GuideOptions {
   preReview?: boolean;
   /** 仓库相关的几行（WS-M I 的 watcher 规定），放在最后。 */
   extra?: string[];
+  /** 仓库档案（工作流 E2）：在规矩后面、extra 前面，只给 ticket session。 */
+  profile?: string;
+}
+
+/** 仓库档案（工作流 E2，7.8）：只给 ticket session 和修复 session，只有这个 ticket 的仓库；文字已经按字数上限排好。 */
+function profileSection(lang: Lang, kind: GuideKind, profile: string): string | null {
+  if (kind !== "ticket" || !profile.trim()) return null;
+  const head =
+    lang === "zh"
+      ? "下面是 Butler 扫描到的仓库现状：装依赖、跑测试、lint、类型检查时优先用这些仓库自己的命令，不要自己猜。"
+      : "Below is what Butler found about the repo: when you install, run tests, lint or type check, use the repo's own commands listed here instead of guessing.";
+  return `${head}\n\n${profile.trim()}`;
 }
 
 /** 用户确认过的规矩，只给 ticket session 和修复 session。 */
@@ -119,6 +131,8 @@ export function sessionGuide(lang: Lang, kind: GuideKind, lessons: SessionLesson
   const parts = GUIDE_SECTIONS.map((s) => s(lang, kind)).filter((s): s is string => !!s);
   const l = lessonsSection(lang, kind, lessons, opts);
   if (l) parts.push(l);
+  const p = profileSection(lang, kind, opts.profile ?? "");
+  if (p) parts.push(p);
   parts.push(...(opts.extra ?? []));
   return parts.join("\n\n") + "\n";
 }
@@ -149,7 +163,7 @@ function writeIfChanged(dir: string, file: string, text: string, touch: boolean)
 const short = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 12);
 
 /**
- * lessons 和 extra 都为空：写 <mcpDir>/guide-<kind>-<lang>.md。不然写 guide-<kind>-<lang>-<内容 sha256 前 12 位>.md。内容没变就不重写，返回路径。
+ * lessons、extra 和仓库档案都为空：写 <mcpDir>/guide-<kind>-<lang>.md。不然写 guide-<kind>-<lang>-<内容 sha256 前 12 位>.md。内容没变就不重写，返回路径。
  * 有原则行时案例写进旁边的 lessons-cases-<内容 sha256 前 12 位>.md，说明里写它的路径。
  */
 export function writeSessionGuide(mcpDir: string, lang: Lang, kind: GuideKind, lessons: SessionLesson[] = [], opts: Omit<GuideOptions, "casesFile"> = {}): string {
@@ -160,7 +174,7 @@ export function writeSessionGuide(mcpDir: string, lang: Lang, kind: GuideKind, l
     writeIfChanged(mcpDir, casesFile, cases, true);
   }
   const text = sessionGuide(lang, kind, lessons, { ...opts, casesFile });
-  const hash = lessons.length > 0 || (opts.extra?.length ?? 0) > 0 ? `-${short(text)}` : "";
+  const hash = lessons.length > 0 || (opts.extra?.length ?? 0) > 0 || (kind === "ticket" && !!opts.profile?.trim()) ? `-${short(text)}` : "";
   const file = join(mcpDir, `guide-${kind}-${lang}${hash}.md`);
   writeIfChanged(mcpDir, file, text, hash !== "");
   return file;

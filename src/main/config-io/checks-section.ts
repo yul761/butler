@@ -16,12 +16,12 @@ const SLUG = z.string().max(300).transform((s, c) => {
 });
 
 /** 文件里的层：产品用名字（两台机器上 id 不同），仓库用 slug。 */
-const CheckLayer = z.discriminatedUnion("kind", [
+export const CheckLayer = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("global") }),
   z.object({ kind: z.literal("product"), name: NAME }),
   z.object({ kind: z.literal("repo"), slug: SLUG }),
 ]);
-type CheckLayer = z.infer<typeof CheckLayer>;
+export type CheckLayer = z.infer<typeof CheckLayer>;
 
 /** 一条检查（addendum 第 9 节）。字段再用 validateCheckInput 校验一遍：正则编不过、命令为空的进不来。 */
 export const CheckItem = z
@@ -50,16 +50,16 @@ export type CheckItem = z.infer<typeof CheckItem>;
 
 export const checkFingerprint = (key: string, scope: CheckLayer): string => fingerprint({ t: "check", key, scope });
 
-const layerLabel = (l: CheckLayer) => (l.kind === "global" ? "global" : l.kind === "product" ? l.name : l.slug);
+export const layerLabel = (l: CheckLayer) => (l.kind === "global" ? "global" : l.kind === "product" ? l.name : l.slug);
 
-function localScope(l: CheckLayer, env: SectionEnv): CheckScope | null {
+export function localScope(l: CheckLayer, env: SectionEnv): CheckScope | null {
   if (l.kind === "global") return { kind: "global" };
   if (l.kind === "repo") return { kind: "repo", slug: l.slug };
   const p = env.repo.products().find((x) => x.name === l.name);
   return p ? { kind: "product", productId: p.id } : null;
 }
 
-function fileLayer(s: CheckScope, names: Map<number, string>): CheckLayer | null {
+export function fileLayer(s: CheckScope, names: Map<number, string>): CheckLayer | null {
   if (s.kind === "global") return { kind: "global" };
   if (s.kind === "repo") return { kind: "repo", slug: s.slug };
   const n = names.get(s.productId);
@@ -73,16 +73,16 @@ const COSMETIC = ["name", "message"] as const;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 /** 一个范围包含哪些层：产品带上它的仓库（和导出的范围一样）。ExportSelection 也是这个形状。 */
-type Selection = { kind: "all" } | { kind: "repo"; slug: string } | { kind: "product"; productId: number; slugs: string[] };
+export type Selection = { kind: "all" } | { kind: "repo"; slug: string } | { kind: "product"; productId: number; slugs: string[] };
 
-function inSelection(s: CheckScope, sel: Selection | ExportSelection): boolean {
+export function inSelection(s: CheckScope, sel: Selection | ExportSelection): boolean {
   if (sel.kind === "all") return true;
   if (sel.kind === "repo") return s.kind === "repo" && s.slug === sel.slug;
   return (s.kind === "product" && s.productId === sel.productId) || (s.kind === "repo" && sel.slugs.includes(s.slug));
 }
 
 /** 文件的范围在本机对应哪些行（替换模式下文件里没有的就删）。起步包不删。 */
-function fileSelection(fs: FileScope, env: SectionEnv): Selection | null {
+export function fileSelection(fs: FileScope, env: SectionEnv): Selection | null {
   if (fs.kind === "all") return { kind: "all" };
   if (fs.kind === "repo") return { kind: "repo", slug: fs.slug };
   if (fs.kind === "product") {

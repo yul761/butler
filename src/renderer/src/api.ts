@@ -1,5 +1,6 @@
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { MemoryHistoryPoint } from "../../shared/mem-usage";
+import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyAction, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
 import { IPC, type IpcResult } from "../../shared/ipc";
@@ -151,6 +152,15 @@ export const api = {
   checksHits: (key: string) => call<CheckHitView[]>(IPC.checksHits, key),
   checksAct: (a: ChecksAction) => call<ChecksActResult>(IPC.checksAct, a),
   checksDraft: (lessonId: number) => call<CheckDraftResult>(IPC.checksDraft, lessonId),
+  baselinesView: () => call<BaselinesView>(IPC.baselinesView),
+  baselinesAct: (a: BaselinesAction) => call<BaselinesActResult>(IPC.baselinesAct, a),
+  baselinesRules: (scope: CheckScope) => call<RuleRowView[]>(IPC.baselinesRules, scope),
+  baselinesSummary: (scope: CheckScope) => call<BaselineSummary>(IPC.baselinesSummary, scope),
+  legacyView: () => call<LegacyScanView[]>(IPC.legacyView),
+  legacyAct: (a: LegacyAction) => call<{ ok: true } | { ok: false; message: string }>(IPC.legacyAct, a),
+  legacyViolations: (scanId: number, offset = 0, limit = 200) => call<LegacyViolation[]>(IPC.legacyViolations, { scanId, offset, limit }),
+  checkExportList: () => call<CheckExportView[]>(IPC.checkExportList),
+  checkExportAct: (a: CheckExportAction) => call<CheckExportResult>(IPC.checkExportAct, a),
   configStatus: () => call<ConfigIoStatus>(IPC.configStatus),
   configExport: (req: ExportRequest) => call<ExportResult>(IPC.configExport, req),
   configImportPreview: () => call<ImportPreviewResult>(IPC.configImportPreview),
