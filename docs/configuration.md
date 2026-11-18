@@ -210,6 +210,91 @@ A saved key that can no longer be decrypted, for example after the keychain was 
 
 The personal API is called through Electron's network stack, so it follows your system proxy settings (including PAC scripts).
 
+## Lessons: bulk actions, admission policy and import / export
+
+### Bulk actions and batches
+
+On the **Lessons** page you can filter the list (repository or product, status, admission, checkability, shelved reason, minimum hits, score range, batch, text) and then act on **every lesson that matches** in one step: **Confirm all N**, **Reject all N**, **Disable all N**, **Enable all N** or **Delete all N**. You can also tick single pending lessons and act on just those. **Accept all recommended (M)** confirms the lessons the admission pipeline recommended (admission `auto`) and leaves the rest alone.
+
+Every bulk action, every single confirm / reject / edit / disable / delete / merge, every policy change and every import is recorded as a **batch** with a snapshot of each row before and after. The **Batches** tab lists them; **Undo** puts every row of a batch back as it was. A row that has changed again since that batch is left alone and counted as skipped. Undoing is itself recorded and cannot be undone again. Merging no longer deletes the merged lesson: it is kept, hidden, pointing at the lesson it was merged into, so the merge can be undone.
+
+Old lessons that you had already confirmed, disabled or rejected keep their status and get admission `manual`.
+
+### Backup and export settings
+
+| Setting | Key | Default | Accepted values and notes |
+|---------|-----|---------|---------------------------|
+| Back up all configuration automatically every this many days (0 = off) | `configBackupIntervalDays` | `0` | A whole number from `0` (off) to `365`. Butler writes a full export to `<BUTLER_HOME>/backups/auto-<time>.json` once per interval (job `config_backup`; a failure is retried after an hour). Backups never contain secrets or local paths. |
+| Automatic backups to keep | `configBackupKeep` | `10` | A whole number from `1` to `999`. Only the newest automatic backups are kept; backups written before a replace import and backups you start with **Back up now** are never removed. |
+| Remind me to export after this many days (0 = off) | `configExportReminderDays` | `30` | A whole number from `0` (off) to `365`. When you have confirmed lessons and neither an export nor a backup has happened in this many days (counted from your first confirmed lesson if there has never been one), the Import / export tab and the Lessons tab say so. |
+
+### Admission policy
+
+The admission policy decides how the lesson pipeline scores, shelves, backtests, shadows and demotes rules. Every key can be set on three layers: **global**, **product** and **repository**. A repository uses its own value for a key, else the value of a product it belongs to, else the global value, else the default; the layers are merged key by key. When a repository belongs to several products that set the same key differently, the product whose name sorts last wins and **Settings → Admission policy** shows a warning. Each change is an undoable batch and raises the policy version (scores record the version they were computed with). The defaults have not been calibrated yet; the page says so.
+
+| Key | Default | Values | What it does |
+|-----|---------|--------|--------------|
+| `score.weight.evidence` | `0.3` | 0–1 | Weight of evidence (hits, PRs, reviewers) in the score |
+| `score.weight.clarity` | `0.2` | 0–1 | Weight of clarity |
+| `score.weight.consistency` | `0.2` | 0–1 | Weight of consistency with the existing rules |
+| `score.weight.verifiability` | `0.3` | 0–1 | Weight of verifiability (can it become a check) |
+| `score.weight.performance` | `0` | 0–1 | Weight of measured performance in shadow mode |
+| `score.admitLine` | `0.7` | 0–1 | A checkable rule scoring at least this is admitted |
+| `score.dropLine` | `0.3` | 0–1 | A rule scoring below this is shelved |
+| `score.proseAdmitLine` | `0.8` | 0–1 | Admission line for rules that can only stay as prose |
+| `score.untestedCap` | `0.69` | 0–1 | Highest score for a rule that has not been backtested |
+| `score.reviewerBonus` | `0.05` | 0–1 | Bonus when a human reviewer raised the rule |
+| `score.recencyHalfLifeDays` | `180` | whole number 1–3650 | Half-life in days for old evidence |
+| `score.degradedPenalty` | `0.1` | 0–1 | Penalty when the analysis ran on a fallback model |
+| `batch.sampleSize` | `20` | whole number 1–1000 | How many items of an automatic batch are sampled for review |
+| `batch.minSamplePassRate` | `0.8` | 0–1 | Lowest share of the sample that must pass |
+| `batch.minCoverage` | `0.3` | 0–1 | Lowest share of the batch that must get a verdict |
+| `batch.maxShelvedShare` | `0.7` | 0–1 | Highest share of a batch that may be shelved |
+| `batch.minBacktestRecall` | `0.01` | 0–1 | Lowest backtest recall for the batch as a whole |
+| `batch.maxBacktestFalsePositiveRate` | `0.2` | 0–1 | Highest backtest false-positive rate for the batch |
+| `generality.minHits` | `2` | whole number 0–1000 | Times a rule must have come up |
+| `generality.minPrs` | `2` | whole number 0–1000 | Distinct PRs it must have come up in |
+| `generality.minReviewers` | `0` | whole number 0–100 | Distinct reviewers who must have raised it |
+| `backtest.recentPrs` | `50` | whole number 1–1000 | How many recent merged PRs a check is backtested on |
+| `backtest.minRecall` | `0.01` | 0–1 | Lowest recall in the backtest |
+| `backtest.maxFalsePositiveRate` | `0.2` | 0–1 | Highest false-positive rate in the backtest |
+| `backtest.allowUntestedShadow` | `true` | `true` / `false` | Rules that cannot be backtested may still run in shadow mode |
+| `shadow.minPrs` | `5` | whole number 0–1000 | PRs a rule must run on in shadow mode before promotion |
+| `shadow.minDays` | `7` | whole number 0–365 | Days in shadow mode before promotion |
+| `shadow.maxFalsePositiveRate` | `0.2` | 0–1 | Highest false-positive rate in shadow mode |
+| `shadow.minAdoption` | `0.6` | 0–1 | Lowest share of findings that were acted on |
+| `shadow.autoPromote` | `false` | `true` / `false` | Promote out of shadow mode automatically when the bars are met |
+| `conflict.autoPickHigherHits` | `false` | `true` / `false` | Settle conflicting rules by keeping the one with more hits |
+| `demote.enabled` | `true` | `true` / `false` | Demote admitted rules that stop paying off |
+| `demote.maxBypassRate` | `0.3` | 0–1 | Demote when a rule is bypassed more often than this |
+| `demote.noReductionPrs` | `10` | whole number 1–1000 | Demote after this many PRs without fewer repeat comments |
+| `demote.to` | `shadow` | `shadow` / `review` | Where a demoted rule goes: shadow (shadow mode) or review (back to the queue) |
+| `admission.autoConfirm` | `false` | `true` / `false` | Confirm rules that pass admission without asking |
+
+### Export file
+
+**Import / export** on the Lessons page exports everything, one product or one repository, and either all content, lessons only (with products) or checks only (once checks exist). The file is JSON:
+
+```json
+{
+  "format": "butler-config",
+  "formatVersion": 1,
+  "exportedAt": 1763337600000,
+  "butlerVersion": "3.0.0",
+  "scope": { "kind": "all" },
+  "options": { "content": "all", "includeSourceUrls": false },
+  "sections": { "products": [], "policies": [], "lessons": [] }
+}
+```
+
+- **No secrets, no local paths, no comment text, no scores.** Lessons carry their text, reason, owner (repository slug or product name), status, admission, scope fields, hits and how many sources and distinct PRs they came from. Source PR links are included only when you tick **Include source links**.
+- A file from a newer Butler (higher `formatVersion`) is refused; an older one is upgraded first. Sections this Butler does not know are skipped and listed.
+- Every item has a stable **fingerprint** built from what it is, not from local ids: a lesson's normalised text (trimmed, spaces collapsed, lower case) plus its owner and path globs; a product's name; a policy layer's global / product name / repository slug.
+- **Preview** shows each item as added, changed, conflicting (a decision differs: a lesson's status, strength or checkability, a product's repositories or a policy value), unchanged, or removed (replace only).
+- **Merge** adds new items and keeps your local version of changed and conflicting ones by default; local items the file lacks stay. **Replace** first writes `<BUTLER_HOME>/backups/before-replace-<time>.json` (if that fails nothing changes), takes the imported version by default and removes local items in the file's scope that the file lacks. Either way you can switch every row to **all imported** or **all local**, or pick row by row.
+- Imported lessons arrive **pending** (lessons the file had rejected stay rejected), in one batch you can undo from the Batches tab. Repositories this machine has not cloned are added without a local path.
+- A **starter pack** exports your confirmed lessons without owner, status, hits or sources. Importing one asks which repository or product to add them to.
+
 ## Several companies or profiles
 
 Start Butler with a different `BUTLER_HOME`. If each company has its own Claude Code login, also set a different `CLAUDE_CONFIG_DIR`. Each `BUTLER_HOME` is a separate Butler with its own database, memory, hook binary, logs and settings, and its own Electron profile (`$BUTLER_HOME/electron`). Butler passes both variables on to the `claude` sessions it starts, so their hooks report to the right inbox.

@@ -22,6 +22,9 @@ export const EDITABLE_SETTINGS = [
   "butlerPatrolTime",
   "onboardingDone",
   "language",
+  "configBackupIntervalDays",
+  "configBackupKeep",
+  "configExportReminderDays",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];
