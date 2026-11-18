@@ -33,7 +33,7 @@ export type LessonCheckability = "checkable" | "prose" | "converted" | "covered"
 export const LESSON_CHECKABILITIES: readonly LessonCheckability[] = ["checkable", "prose", "converted", "covered"];
 export const LESSON_STATUSES: readonly LessonStatus[] = ["pending", "confirmed", "disabled", "rejected"];
 /** 搁置原因；流水线以后可能加别的，所以页面对不认识的原因显示原文。 */
-export type LessonShelvedReason = "conflict" | "generality" | "low_score" | "clarity" | "backtest_fp" | "covered" | "duplicate" | (string & {});
+export type LessonShelvedReason = "conflict" | "generality" | "low_score" | "clarity" | "backtest_fp" | "covered" | "duplicate" | "below_drop" | (string & {});
 /** 评分的一个分项：0..1 的值和一句理由；还没有数据时整个分项不出现。 */
 export interface LessonScorePart { value: number; reason: string }
 export interface LessonScoreParts {
@@ -42,6 +42,10 @@ export interface LessonScoreParts {
   consistency?: LessonScorePart;
   verifiability?: LessonScorePart;
   performance?: LessonScorePart;
+  /** 可检查的规矩还没有回测：给检查用的综合分被封顶（value 是封顶后的分），不能凭别的分项自动变成拦截。 */
+  cap?: LessonScorePart;
+  /** 综合分怎么来的一句话（用了哪些分项、准入线是多少）。 */
+  composite?: LessonScorePart;
 }
 export type LessonScope = { kind: "repo"; slug: string } | { kind: "product"; productId: number };
 
@@ -54,6 +58,10 @@ export interface LessonSource {
   slug: string | null;
   /** 产生这条出处的分析运行；老数据或运行已被清理时为空。 */
   runId: number | null;
+  /** 留评论的人、评论所在的文件和行（工作流 D 补的；老数据补不出来时为空）。评论原文只在主进程里用，不送页面。 */
+  reviewer: string | null;
+  path: string | null;
+  line: number | null;
 }
 
 export interface Lesson {
@@ -88,6 +96,16 @@ export interface Lesson {
   /** 由降级后的模型产出（模型路由，契约 4.1）。 */
   degraded: boolean;
   degradedFrom: string | null;
+  /** 范围、类型、可检查性最近一次补填的时间（null = 还没补过）。 */
+  enrichedAt: number | null;
+  /** 可检查性的一句理由（分类或起草检查时给的）。 */
+  checkabilityReason: string | null;
+  /** 为什么搁置，一句话（冲突的原因、普适性的数字、拖后腿的分项）。 */
+  shelvedNote: string | null;
+  /** 归到的原则。 */
+  principleId: number | null;
+  /** 第一次确认的时间。 */
+  confirmedAt: number | null;
 }
 
 export type LessonOrigin = "backfill" | "merged" | "daily";
@@ -201,13 +219,16 @@ export interface LessonsState {
   lessons: Lesson[];
   ghAvailable: boolean;
   queue: LessonQueueView;
+  /** 还没补过范围、类型和可检查性的规矩（工作流 D 的补填）；running：正在后台补。 */
+  enrich: { needing: number; running: boolean };
 }
 
 /** 准入、范围、评分这些字段都还没填时的样子（迁移后的默认值）。 */
 export const LESSON_FIELD_DEFAULTS = {
   scopeGlobs: [] as string[], scopeLang: null, scopeLayer: null, strength: null, checkability: null, admission: "pending",
   shelvedReason: null, shelvedRef: null, batchId: null, mergedInto: null, score: null, scoreParts: null, scoredAt: null,
-  scorePolicyVersion: null, degraded: false, degradedFrom: null,
+  scorePolicyVersion: null, degraded: false, degradedFrom: null, enrichedAt: null, checkabilityReason: null, shelvedNote: null,
+  principleId: null, confirmedAt: null,
 } as const satisfies Omit<Lesson, "id" | "scope" | "text" | "why" | "status" | "hits" | "lastSeenAt" | "createdAt" | "sources">;
 
 /** 批量动作（契约 4.4）。 */
@@ -223,6 +244,8 @@ export type LessonAction =
   | { op: "bulk"; verb: LessonBulkVerb; target: LessonTarget; expect?: number }
   /** 接受全部推荐：待确认、admission = auto 的全部确认；target 可再缩小范围。 */
   | { op: "acceptRecommended"; target?: LessonTarget; expect?: number }
+  /** 后台补填老规矩的范围、类型、强度和可检查性（lesson_enrich）；不重新分析 PR。 */
+  | { op: "enrich" }
   | { op: "undoBatch"; batchId: number }
   | { op: "confirm"; id: number; text?: string }
   | { op: "reject"; id: number }

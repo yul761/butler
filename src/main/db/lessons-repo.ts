@@ -27,7 +27,13 @@ export interface LessonQueueRow {
   notBefore: number | null;
 }
 export interface LessonQueueCounts { queued: number; running: number; failed: number; skipped: number; cancelled: number }
-export interface NewLessonSource { prNumber: number; url: string | null; slug: string; runId: number | null }
+/** 出处的评论细节（工作流 D）：谁留的、在哪个文件哪一行、评论原文（只在本机，不导出、不送页面）。 */
+export interface SourceDetails { reviewer?: string | null; path?: string | null; line?: number | null; excerpt?: string | null }
+export interface NewLessonSource extends SourceDetails { prNumber: number; url: string | null; slug: string; runId: number | null }
+/** 给模型看的一条出处：带评论原文。 */
+export interface SourceWithExcerpt extends LessonSource { excerpt: string | null }
+/** 评论原文最多存这么长。 */
+export const EXCERPT_MAX = 2000;
 export interface NewLesson {
   scope: LessonScope;
   text: string;
@@ -70,6 +76,11 @@ interface LessonRow {
   score_policy_version: number | null;
   degraded: number;
   degraded_from: string | null;
+  enriched_at: number | null;
+  checkability_reason: string | null;
+  shelved_note: string | null;
+  principle_id: number | null;
+  confirmed_at: number | null;
 }
 /** 从导出文件来的一条规矩。 */
 export interface ImportedLesson {
@@ -106,6 +117,10 @@ export interface LessonFieldsPatch {
   scorePolicyVersion?: number | null;
   degraded?: boolean;
   degradedFrom?: string | null;
+  enrichedAt?: number | null;
+  checkabilityReason?: string | null;
+  shelvedNote?: string | null;
+  principleId?: number | null;
 }
 const PATCH_COLUMNS: Record<keyof LessonFieldsPatch, [string, (v: never) => string | number | null]> = {
   scopeGlobs: ["scope_globs", (v: string[]) => JSON.stringify(v)],
@@ -123,8 +138,15 @@ const PATCH_COLUMNS: Record<keyof LessonFieldsPatch, [string, (v: never) => stri
   scorePolicyVersion: ["score_policy_version", (v: number | null) => v],
   degraded: ["degraded", (v: boolean) => (v ? 1 : 0)],
   degradedFrom: ["degraded_from", (v: string | null) => v],
+  enrichedAt: ["enriched_at", (v: number | null) => v],
+  checkabilityReason: ["checkability_reason", (v: string | null) => v],
+  shelvedNote: ["shelved_note", (v: string | null) => v],
+  principleId: ["principle_id", (v: number | null) => v],
 };
-interface SourceRow { id: number; lesson_id: number; pr_number: number; url: string | null; at: number; repo_slug: string | null; run_id: number | null }
+interface SourceRow {
+  id: number; lesson_id: number; pr_number: number; url: string | null; at: number; repo_slug: string | null; run_id: number | null;
+  reviewer: string | null; path: string | null; line: number | null; excerpt: string | null;
+}
 
 const num = (v: number | null): number | null => (v === null ? null : Number(v));
 
@@ -132,7 +154,11 @@ const toRepo = (r: RepoRow): LessonRepoRow => ({
   slug: r.slug, localPath: r.local_path, mergedCursor: r.merged_cursor, backfilledAt: num(r.backfilled_at),
   lastAnalyzedAt: num(r.last_analyzed_at), analyzedCount: Number(r.analyzed_count),
 });
-const toSource = (r: SourceRow): LessonSource => ({ id: Number(r.id), prNumber: Number(r.pr_number), url: r.url, at: Number(r.at), slug: r.repo_slug, runId: num(r.run_id) });
+const toSource = (r: SourceRow): LessonSource => ({
+  id: Number(r.id), prNumber: Number(r.pr_number), url: r.url, at: Number(r.at), slug: r.repo_slug, runId: num(r.run_id),
+  reviewer: r.reviewer ?? null, path: r.path ?? null, line: num(r.line ?? null),
+});
+const cut = (v: string | null | undefined): string | null => (v === undefined || v === null || v === "" ? null : v.slice(0, EXCERPT_MAX));
 function jsonOr<T>(raw: string | null, fallback: T, ok: (v: unknown) => boolean): T {
   if (raw === null) return fallback;
   try {
@@ -157,6 +183,8 @@ const toLesson = (r: LessonRow, sources: LessonSource[]): Lesson => ({
   scoreParts: jsonOr<LessonScoreParts | null>(r.score_parts, null, isObject),
   scoredAt: num(r.scored_at), scorePolicyVersion: num(r.score_policy_version),
   degraded: Number(r.degraded) === 1, degradedFrom: r.degraded_from,
+  enrichedAt: num(r.enriched_at ?? null), checkabilityReason: r.checkability_reason ?? null, shelvedNote: r.shelved_note ?? null,
+  principleId: num(r.principle_id ?? null), confirmedAt: num(r.confirmed_at ?? null),
 });
 
 /** 复盘规矩：仓库、产品、规矩、出处和待分析的 PR 队列。 */
@@ -319,13 +347,13 @@ export class LessonsRepo {
   }
 
   /** 同一出处（PR 号 + url）已有就不再加；返回是否新加了。url 为空时 UNIQUE 约束拦不住（NULL 互不相等），这里手动查。 */
-  private addSource(lessonId: number, s: Omit<NewLessonSource, "slug"> & { slug: string | null }, at: number): boolean {
+  private addSource(lessonId: number, s: Omit<NewLessonSource, "slug"> & { slug: string | null } & SourceDetails, at: number): boolean {
     const dup = this.db
       .prepare(`SELECT 1 FROM lesson_sources WHERE lesson_id = ? AND pr_number = ? AND url IS ?`)
       .get(lessonId, s.prNumber, s.url);
     if (dup) return false;
-    this.db.prepare(`INSERT INTO lesson_sources (lesson_id, pr_number, url, at, repo_slug, run_id) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(lessonId, s.prNumber, s.url, at, s.slug, s.runId);
+    this.db.prepare(`INSERT INTO lesson_sources (lesson_id, pr_number, url, at, repo_slug, run_id, reviewer, path, line, excerpt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(lessonId, s.prNumber, s.url, at, s.slug, s.runId, s.reviewer ?? null, s.path ?? null, s.line ?? null, cut(s.excerpt));
     return true;
   }
 
@@ -394,8 +422,36 @@ export class LessonsRepo {
     });
   }
 
+  /** 第一次变成已确认时记下 confirmed_at（「最常违反」按确认之后又出现的出处算）。 */
   setStatus(id: number, s: LessonStatus, now: number): void {
-    this.db.prepare(`UPDATE lessons SET status = ?, updated_at = ? WHERE id = ?`).run(s, now, id);
+    this.db
+      .prepare(`UPDATE lessons SET status = ?, updated_at = ?, confirmed_at = CASE WHEN ? = 'confirmed' AND confirmed_at IS NULL THEN ? ELSE confirmed_at END WHERE id = ?`)
+      .run(s, now, s, now, id);
+  }
+
+  /** 换范围（产品提升：跨仓库重复的规矩挪到产品层）。 */
+  setScope(id: number, scope: LessonScope, now: number): void {
+    this.db
+      .prepare(`UPDATE lessons SET repo_slug = ?, product_id = ?, updated_at = ? WHERE id = ?`)
+      .run(scope.kind === "repo" ? scope.slug : null, scope.kind === "product" ? scope.productId : null, now, id);
+  }
+
+  /** 一条规矩的出处，带评论原文（给模型看）。 */
+  sourcesWithExcerpt(lessonId: number): SourceWithExcerpt[] {
+    return (this.db.prepare(`SELECT * FROM lesson_sources WHERE lesson_id = ? ORDER BY at, id`).all(lessonId) as unknown as SourceRow[]).map((r) => ({
+      ...toSource(r), excerpt: r.excerpt ?? null,
+    }));
+  }
+
+  /** 补一条出处的评论细节：只填空着的。返回是否改了。 */
+  fillSource(sourceId: number, d: SourceDetails): boolean {
+    const r = this.db
+      .prepare(
+        `UPDATE lesson_sources SET reviewer = COALESCE(reviewer, ?), path = COALESCE(path, ?), line = COALESCE(line, ?), excerpt = COALESCE(excerpt, ?)
+         WHERE id = ? AND (reviewer IS NULL OR path IS NULL OR line IS NULL OR excerpt IS NULL)`,
+      )
+      .run(d.reviewer ?? null, d.path ?? null, d.line ?? null, cut(d.excerpt), sourceId);
+    return Number(r.changes) > 0;
   }
 
   setText(id: number, text: string, now: number): void {
@@ -417,10 +473,10 @@ export class LessonsRepo {
       const drop = this.get(dropId);
       const keep = this.get(keepId);
       if (!drop || !keep) throw new Error(`lesson not found: ${!keep ? keepId : dropId}`);
-      for (const s of drop.sources) this.addSource(keepId, s, s.at);
+      for (const s of this.sourcesWithExcerpt(dropId)) this.addSource(keepId, s, s.at);
       this.db
-        .prepare(`UPDATE lessons SET text = ?, hits = hits + ?, last_seen_at = MAX(last_seen_at, ?), updated_at = ? WHERE id = ?`)
-        .run(text, drop.hits, drop.lastSeenAt, now, keepId);
+        .prepare(`UPDATE lessons SET text = ?, hits = hits + ?, last_seen_at = MAX(last_seen_at, ?), created_at = MIN(created_at, ?), updated_at = ? WHERE id = ?`)
+        .run(text, drop.hits, drop.lastSeenAt, drop.createdAt, now, keepId);
       this.db.prepare(`UPDATE lessons SET merged_into = ?, updated_at = ? WHERE id = ?`).run(keepId, now, dropId);
       // 指向 drop 的合并也改指向 keep，链不会越来越长。
       this.db.prepare(`UPDATE lessons SET merged_into = ? WHERE merged_into = ?`).run(keepId, dropId);

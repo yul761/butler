@@ -797,4 +797,58 @@ export const MIGRATIONS: string[] = [
   );
   ALTER TABLE ticket_prs ADD COLUMN butler_made INTEGER;
   `,
+  // 规矩质量与自动准入（工作流 D）：出处记下 reviewer、文件、行号和评论原文（只在本机，不导出）；
+  // 规矩记下补填时间、分类理由、搁置说明、所属原则、确认时间；模型判断的缓存、初始化向导的运行 / 工作项 / 结论、原则表；
+  // 校准样本分来源（人推翻流水线 / 校准页上判的）。
+  `
+  ALTER TABLE lesson_sources ADD COLUMN reviewer TEXT;
+  ALTER TABLE lesson_sources ADD COLUMN path TEXT;
+  ALTER TABLE lesson_sources ADD COLUMN line INTEGER;
+  ALTER TABLE lesson_sources ADD COLUMN excerpt TEXT;
+  CREATE TABLE lesson_principles (
+    id INTEGER PRIMARY KEY,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('repo','product')),
+    repo_slug TEXT,
+    product_id INTEGER REFERENCES lesson_products(id) ON DELETE CASCADE,
+    text TEXT NOT NULL, why TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    batch_id INTEGER REFERENCES admission_batches(id) ON DELETE SET NULL);
+  ALTER TABLE lessons ADD COLUMN enriched_at INTEGER;
+  ALTER TABLE lessons ADD COLUMN checkability_reason TEXT;
+  ALTER TABLE lessons ADD COLUMN shelved_note TEXT;
+  ALTER TABLE lessons ADD COLUMN principle_id INTEGER REFERENCES lesson_principles(id) ON DELETE SET NULL;
+  ALTER TABLE lessons ADD COLUMN confirmed_at INTEGER;
+  UPDATE lessons SET confirmed_at = updated_at WHERE status IN ('confirmed','disabled');
+  CREATE TABLE lesson_judgments (
+    kind TEXT NOT NULL, key TEXT NOT NULL, input_hash TEXT NOT NULL, result TEXT NOT NULL,
+    model TEXT, degraded INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL,
+    PRIMARY KEY (kind, key));
+  CREATE TABLE lesson_wizard_runs (
+    id INTEGER PRIMARY KEY,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('repo','product','all')),
+    repo_slug TEXT,
+    product_id INTEGER REFERENCES lesson_products(id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK (state IN ('scanning','extracting','generating','judging','awaiting_accept','accepted','cancelled','failed')),
+    detail TEXT NOT NULL DEFAULT '{}',
+    policy_version INTEGER,
+    plan_batch INTEGER REFERENCES admission_batches(id) ON DELETE SET NULL,
+    accept_batch INTEGER REFERENCES admission_batches(id) ON DELETE SET NULL,
+    review_id INTEGER REFERENCES batch_reviews(id) ON DELETE SET NULL,
+    calls INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, finished_at INTEGER);
+  CREATE TABLE lesson_wizard_items (
+    run_id INTEGER NOT NULL REFERENCES lesson_wizard_runs(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL, key TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('queued','running','done','failed','skipped')),
+    attempts INTEGER NOT NULL DEFAULT 0, not_before INTEGER, error TEXT,
+    PRIMARY KEY (run_id, kind, key));
+  CREATE TABLE lesson_wizard_verdicts (
+    run_id INTEGER NOT NULL REFERENCES lesson_wizard_runs(id) ON DELETE CASCADE,
+    lesson_id INTEGER NOT NULL,
+    verdict TEXT NOT NULL CHECK (verdict IN ('admit','merged','shelved','covered','unfinished')),
+    reason TEXT, ref INTEGER, score REAL,
+    PRIMARY KEY (run_id, lesson_id));
+  ALTER TABLE score_calibration ADD COLUMN source TEXT NOT NULL DEFAULT 'override' CHECK (source IN ('override','review'));
+  `,
 ];

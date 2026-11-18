@@ -7,7 +7,7 @@ const lesson = (id: number, scope: Lesson["scope"], status: Lesson["status"], hi
   id, scope, text: `t${id}`, why: "", status, hits, lastSeenAt, createdAt: 0, sources: [], ...LESSON_FIELD_DEFAULTS, scopeGlobs: [],
 });
 const state = (over: Partial<LessonsState> = {}): LessonsState => ({
-  repos: [], unknownRepos: [], products: [], suggestions: [], lessons: [], ghAvailable: true, queue: { running: [], queued: 0, pause: null }, ...over,
+  repos: [], unknownRepos: [], products: [], suggestions: [], lessons: [], ghAvailable: true, queue: { running: [], queued: 0, pause: null }, enrich: { needing: 0, running: false }, ...over,
 });
 
 describe("lessonsTree", () => {

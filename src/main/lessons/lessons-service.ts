@@ -6,7 +6,7 @@ import type {
 import type { ClaudeAvailability, LessonsGate } from "../claude/availability";
 import type { LessonRunRow, LessonRunsRepo } from "../db/lesson-runs-repo";
 import type { LessonQueueRow, LessonsRepo } from "../db/lessons-repo";
-import { AnalysisSchema } from "./analyze";
+import { StoredAnalysisSchema } from "./analyze";
 import { isAllowedGithubUrl } from "../util/github-url";
 import type { OpenSessionResult } from "../../shared/types";
 import type { LessonRunner } from "./lesson-runner";
@@ -32,6 +32,8 @@ export interface LessonsServiceDeps {
   openExternal: (url: string) => void;
   /** 写好这次运行的记录文件，在复盘分析 session 里打开它（repoPath：这个仓库的本地路径）。 */
   openRun: (d: LessonRunDetail, repoPath: string) => Promise<OpenSessionResult>;
+  /** 老规矩的补填（工作流 D）；没有时页面不显示补填。 */
+  enricher?: Pick<import("./enrich").LessonEnricher, "needing" | "start" | "running">;
   log?: (msg: string, err?: unknown) => void;
   now: () => number;
   notify: () => void;
@@ -59,7 +61,7 @@ const summary = (r: LessonRunRow): LessonRunSummary => ({
 /** 存的 findings 按分析输出的格式解析；解析不出来（被截断、格式不对）返回 null。 */
 function parseFindings(raw: unknown): LessonFinding[] | null {
   if (raw === null) return null;
-  const p = AnalysisSchema.safeParse({ findings: raw });
+  const p = StoredAnalysisSchema.safeParse({ findings: raw });
   if (!p.success) return null;
   return p.data.findings.map((f) => ({
     summary: f.summary,
@@ -130,6 +132,7 @@ export class LessonsService {
       lessons: repo.lessons().filter((l) => l.status !== "rejected"),
       ghAvailable: this.d.ghAvailable(),
       queue: this.queueView(),
+      enrich: { needing: this.d.enricher?.needing().length ?? 0, running: this.d.enricher?.running() ?? false },
     };
   }
 
@@ -213,6 +216,10 @@ export class LessonsService {
       case "acceptRecommended":
         if (a.expect !== undefined && this.d.batches.recommendedTargets(a.target).length > a.expect) return { ok: false, reason: "stale" };
         return { ok: true, ...this.d.batches.acceptRecommended(a.target) };
+      case "enrich":
+        if (!this.d.enricher) return NOT_FOUND;
+        if (!this.d.enricher.start(undefined, () => this.d.notify())) return { ok: false, reason: "busy" };
+        return { ok: true };
       case "undoBatch":
         return this.d.batches.undo(a.batchId);
       case "confirm":

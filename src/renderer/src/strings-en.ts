@@ -1040,6 +1040,9 @@ export const EN: UiStrings = {
   lessonQueueIdle: "Queue idle",
   lessonQueuePause: "Pause",
   lessonQueueResume: "Resume",
+  lessonEnrich: (n: number) => `Fill in scopes (${n})`,
+  lessonEnrichTitle: "Fills in which files each rule governs, how strong it is and whether it can become a check, from its text and source comments. PRs are not analysed again; only empty fields are filled.",
+  lessonEnrichRunning: "Filling in scopes…",
   lessonQueueRunNow: "Run now",
   lessonRunStatus: { queued: "Queued", waiting: "Waiting", limited: "Limited", running: "Running", done: "Done", skipped: "Skipped", cancelled: "Cancelled", failed: "Failed", aborted: "Interrupted" } satisfies Record<LessonQueueRowStatus | LessonRunStatus, string>,
   lessonRunReason: {

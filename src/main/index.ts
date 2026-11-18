@@ -152,6 +152,8 @@ import { LessonsRepo } from "./db/lessons-repo";
 import { LessonRunsRepo } from "./db/lesson-runs-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
 import { readTailLines, TRANSCRIPT_TAIL_BYTES } from "./lessons/tail";
+import { JudgmentCache } from "./lessons/admission/judgments";
+import { LessonEnricher } from "./lessons/enrich";
 import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
 import { LessonBatchService } from "./lessons/lesson-batches";
@@ -705,10 +707,18 @@ async function bootstrap(): Promise<void> {
   routing.rerunHook = () => void lessonRunner.requeueUpgrades(true);
   const upgradeTimer = setInterval(() => lessonRunner.requeueUpgrades(), 60 * 60_000);
   upgradeTimer.unref?.();
+  // 规矩质量与自动准入（工作流 D）：模型判断的缓存，老规矩的补填。
+  const lessonJudgments = new JudgmentCache(db);
+  const lessonEnricher = new LessonEnricher({
+    repo: lessonsRepo, runs: lessonRuns, recorder: batchRecorder, judgments: lessonJudgments,
+    run: (req) => execHeadlessJson(judgeDeps, req),
+    gh: { prLessonDataDetail, available: () => ghAvailable() },
+    lang: () => currentLang(), now: Date.now, fallbackCwd: () => paths.home, log: logger,
+  });
   // 复盘规矩页：仓库路径直接查表（已归档的 ticket、feature、epic 不算）；归组建议按 ticket 和 feature 各算一组。
   const repoPathRows = <T extends { repo_path: string }>(sql: string): T[] => db.prepare(sql).all() as unknown as T[];
   const lessonsService = new LessonsService({
-    repo: lessonsRepo, batches: lessonBatches, runs: lessonRuns, availability: lessonsGate, identity: repoIdentity, runner: lessonRunner,
+    repo: lessonsRepo, batches: lessonBatches, runs: lessonRuns, availability: lessonsGate, identity: repoIdentity, runner: lessonRunner, enricher: lessonEnricher,
     knownRepoPaths: () => [
       ...new Set(
         repoPathRows<{ repo_path: string }>(

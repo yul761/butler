@@ -31,6 +31,7 @@
 //   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果、feature 汇总或卡住判断；stream-json 的 MCP 探测只回 init。
 //     需要你的判断（schema 里有 needs_user）：回复是 /fake-ask 的问话就说需要你（理由是那句问话），别的都失败退出（Butler 当作不需要你）；
 //     FAKE_CLAUDE_JUDGE_DELAY_MS 设了就等这么久才失败（像真的 Haiku 要判断几秒）。
+//     规矩补填（schema 里有 enriched）：每条规矩补上 globs ["src/**"]，正文提到 console 的算 checkable；运行记录记一行 lesson enrich <条数>；
 //     review 经验的分析（schema 里有 findings）：每次重新读 FAKE_CLAUDE_LESSONS_FILE 里的模式，运行记录记一行 lessons <模式>：
 //       没有这个文件或 ok → 回 { findings: [] }，带花费、时长和 modelUsage；
 //       fail → stdout 一个 is_error 的结果（result 是 boom，带花费），stderr 一行 fake lessons stderr: boom，退出 1；
@@ -246,6 +247,17 @@ function headless() {
     }
     if (props.findings) {
       lessonsAnalysis();
+      return;
+    }
+    if (props.enriched) {
+      // 规矩补填（lesson_enrich，工作流 D）：prompt 里每条 "#id " 开头的规矩补一项；正文提到 console 的算能写成检查。
+      const lines = [...input.matchAll(/^#(\d+) \[[^\]]*\] (.*)$/gm)];
+      const enriched = lines.map((m) => ({
+        id: Number(m[1]), globs: ["src/**"], lang: "ts", layer: null, strength: "should",
+        checkability: /console/i.test(m[2]) ? "checkable" : "prose", checkability_reason: "fake enrich",
+      }));
+      log(`lesson enrich ${enriched.length}`);
+      process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `enrich-${Date.now()}`, result: JSON.stringify({ enriched }), structured_output: { enriched }, permission_denials: [], total_cost_usd: 0 })}\n`);
       return;
     }
     if (props.checkable) {

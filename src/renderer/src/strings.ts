@@ -1049,6 +1049,9 @@ const ZH = {
   lessonQueueIdle: "队列空闲",
   lessonQueuePause: "暂停",
   lessonQueueResume: "恢复",
+  lessonEnrich: (n: number) => `补填范围（${n} 条）`,
+  lessonEnrichTitle: "按每条规矩的正文和出处评论补上它管哪些文件、强弱和能不能写成检查；不重新分析 PR，只填空着的字段",
+  lessonEnrichRunning: "正在补填范围…",
   lessonQueueRunNow: "立即运行",
   lessonRunStatus: { queued: "排队中", waiting: "等待中", limited: "受限", running: "分析中", done: "完成", skipped: "跳过", cancelled: "已取消", failed: "失败", aborted: "中断" } satisfies Record<LessonQueueRowStatus | LessonRunStatus, string>,
   lessonRunReason: {

@@ -226,6 +226,7 @@ describe("bulk lesson actions", () => {
       op: "bulk", verb: "confirm", target: { filter: { slug: "acme/web", status: ["pending"] } },
     });
     expect(lessonActionArg({ op: "bulk", verb: "delete", target: { ids: [1, 2] } })).toEqual({ op: "bulk", verb: "delete", target: { ids: [1, 2] } });
+    expect(lessonActionArg({ op: "enrich", extra: 1 })).toEqual({ op: "enrich" });
     expect(lessonActionArg({ op: "acceptRecommended" })).toEqual({ op: "acceptRecommended" });
     expect(lessonActionArg({ op: "bulk", verb: "confirm", target: { filter: { maxId: 40 } }, expect: 12 })).toEqual({ op: "bulk", verb: "confirm", target: { filter: { maxId: 40 } }, expect: 12 });
     expect(lessonActionArg({ op: "acceptRecommended", expect: 0 })).toEqual({ op: "acceptRecommended", expect: 0 });
