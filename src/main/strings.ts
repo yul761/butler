@@ -24,6 +24,15 @@ function ciLogBlocks(failed: Array<{ name: string; log?: string }>): string {
 }
 
 const ZH = {
+  background: {
+    badWindow: "时段只能是 anytime、idle、hours、idle_or_hours",
+    badYield: "让路方式只能是 finish 或 interrupt",
+    badQuotaOrder: "额度紧张时的顺序只能是 pause_first 或 downgrade_first",
+    badHours: "时段要写成 22:00-07:00，可以用逗号分开写几段",
+    badIdleMinutes: (max: number) => `空闲分钟数要是 1 到 ${max} 的整数`,
+    badPlentiful: "额度充裕的百分比要是 1 到 99 的整数，或者留空",
+    badKinds: "每种后台任务的设置不对：种类、优先级（high / normal / low）或时段认不出",
+  },
   routing: {
     badModelName: "模型名只能用字母、数字和 . _ - : / @ [ ]，最长 100 个字符",
     badTier: "档位只能是 high、mid、low",
@@ -456,6 +465,15 @@ const ZH = {
 export type MainStrings = typeof ZH;
 
 const EN: MainStrings = {
+  background: {
+    badWindow: "The window must be anytime, idle, hours or idle_or_hours",
+    badYield: "Yielding must be finish or interrupt",
+    badQuotaOrder: "The order when quota is tight must be pause_first or downgrade_first",
+    badHours: "Write hours like 22:00-07:00; separate several ranges with commas",
+    badIdleMinutes: (max: number) => `Idle minutes must be a whole number from 1 to ${max}`,
+    badPlentiful: "The plentiful-quota percentage must be a whole number from 1 to 99, or empty",
+    badKinds: "The per-task background settings are invalid: unknown task, priority (high / normal / low) or window",
+  },
   routing: {
     badModelName: "Model names use letters, digits and . _ - : / @ [ ] (at most 100 characters)",
     badTier: "The tier must be high, mid or low",
