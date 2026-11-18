@@ -146,7 +146,7 @@ describe("LessonsService.act", () => {
     expect(notify).not.toHaveBeenCalled();
     const c = add("acme/web");
     expect(await svc.act({ op: "merge", keepId: a, dropId: c, text: "x" })).toEqual({ ok: true });
-    expect(repo.get(c)).toBeNull();
+    expect(repo.get(c)?.mergedInto).toBe(a);
   });
 
   it("returns not_found for a lesson id that does not exist", async () => {

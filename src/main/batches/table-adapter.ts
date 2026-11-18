@@ -1,0 +1,126 @@
+import type { Db } from "../db/database";
+import type { EntityAdapter, Snapshot } from "./batch-recorder";
+
+/** 跟着主行一起拍快照、一起恢复的子表（如规矩的出处、产品的仓库）。 */
+export interface ChildTable {
+  table: string;
+  /** 指向主行 id 的列。 */
+  fk: string;
+  orderBy: string;
+  /** 插回去失败时（引用的行没了）改成 NULL 再试的列。 */
+  nullable?: readonly string[];
+}
+
+export interface TableAdapterSpec {
+  entity: string;
+  table: string;
+  volatile?: readonly string[];
+  children?: readonly ChildTable[];
+  stampColumn?: string;
+  describe(s: Snapshot): { label: string; state: string };
+}
+
+type Val = string | number | null;
+const toVal = (v: unknown): Val => (v === null || v === undefined ? null : typeof v === "number" || typeof v === "string" ? v : typeof v === "bigint" ? Number(v) : JSON.stringify(v));
+
+/**
+ * 按表拍快照的通用适配器：快照 = 整行 + 子表的行。列名只认表结构里有的（快照存在库里，读回来也不信任它的键）。
+ */
+export function tableAdapter(db: Db, spec: TableAdapterSpec): EntityAdapter {
+  const colsCache = new Map<string, Set<string>>();
+  const cols = (table: string): Set<string> => {
+    let c = colsCache.get(table);
+    if (!c) {
+      c = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((r) => r.name));
+      colsCache.set(table, c);
+    }
+    return c;
+  };
+  const known = (table: string, row: Record<string, unknown>): [string, Val][] =>
+    Object.entries(row).filter(([k]) => cols(table).has(k)).map(([k, v]) => [k, toVal(v)]);
+
+  const insert = (table: string, entries: [string, Val][]): void => {
+    db.prepare(`INSERT INTO ${table} (${entries.map(([k]) => k).join(", ")}) VALUES (${entries.map(() => "?").join(", ")})`).run(...entries.map(([, v]) => v));
+  };
+
+  const insertChild = (child: ChildTable, row: Record<string, unknown>, parentId: number): void => {
+    const entries = known(child.table, { ...row, [child.fk]: parentId });
+    try {
+      insert(child.table, entries);
+    } catch {
+      // 原 id 被占了，或引用的行没了：不带 id、把可空的引用置空再插一次。
+      const nulls = new Set(child.nullable ?? []);
+      insert(child.table, entries.filter(([k]) => k !== "id").map(([k, v]) => [k, nulls.has(k) ? null : v]));
+    }
+  };
+
+  return {
+    entity: spec.entity,
+    volatile: spec.volatile,
+    snapshot(id) {
+      const row = db.prepare(`SELECT * FROM ${spec.table} WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+      if (!row) return null;
+      const s: Snapshot = { ...row };
+      for (const c of spec.children ?? []) {
+        s[`$${c.table}`] = db.prepare(`SELECT * FROM ${c.table} WHERE ${c.fk} = ? ORDER BY ${c.orderBy}`).all(id) as Record<string, unknown>[];
+      }
+      return s;
+    },
+    restore(id, to) {
+      if (to === null) {
+        db.prepare(`DELETE FROM ${spec.table} WHERE id = ?`).run(id);
+        return;
+      }
+      const entries = known(spec.table, to).filter(([k]) => k !== "id");
+      const exists = db.prepare(`SELECT 1 FROM ${spec.table} WHERE id = ?`).get(id) !== undefined;
+      if (exists) {
+        if (entries.length) db.prepare(`UPDATE ${spec.table} SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...entries.map(([, v]) => v), id);
+      } else {
+        insert(spec.table, [["id", id], ...entries]);
+      }
+      for (const c of spec.children ?? []) {
+        const rows = Array.isArray(to[`$${c.table}`]) ? (to[`$${c.table}`] as Record<string, unknown>[]) : [];
+        db.prepare(`DELETE FROM ${c.table} WHERE ${c.fk} = ?`).run(id);
+        for (const r of rows) if (r && typeof r === "object") insertChild(c, r, id);
+      }
+    },
+    stamp: spec.stampColumn
+      ? (id, batchId) => {
+          db.prepare(`UPDATE ${spec.table} SET ${spec.stampColumn} = ? WHERE id = ?`).run(batchId, id);
+        }
+      : undefined,
+    describe: spec.describe,
+  };
+}
+
+/** 规矩：整行 + 出处；batch_id 记最近一次改动它的批次。 */
+export const lessonAdapter = (db: Db): EntityAdapter =>
+  tableAdapter(db, {
+    entity: "lesson",
+    table: "lessons",
+    volatile: ["updated_at"],
+    children: [{ table: "lesson_sources", fk: "lesson_id", orderBy: "id", nullable: ["run_id"] }],
+    stampColumn: "batch_id",
+    describe: (s) => ({ label: String(s.text ?? ""), state: s.merged_into !== null && s.merged_into !== undefined ? "merged" : String(s.status ?? "") }),
+  });
+
+/** 产品：名字 + 包含的仓库。 */
+export const productAdapter = (db: Db): EntityAdapter =>
+  tableAdapter(db, {
+    entity: "product",
+    table: "lesson_products",
+    children: [{ table: "lesson_product_repos", fk: "product_id", orderBy: "repo_slug" }],
+    describe: (s) => ({ label: String(s.name ?? ""), state: Array.isArray(s.$lesson_product_repos) ? `${s.$lesson_product_repos.length} repos` : "" }),
+  });
+
+/** 准入策略的一层。 */
+export const policyAdapter = (db: Db): EntityAdapter =>
+  tableAdapter(db, {
+    entity: "policy",
+    table: "admission_policies",
+    volatile: ["updated_at"],
+    describe: (s) => ({
+      label: s.scope_kind === "global" ? "global" : s.scope_kind === "product" ? `product #${String(s.product_id)}` : `repo ${String(s.repo_slug)}`,
+      state: String(s.overrides ?? "{}"),
+    }),
+  });

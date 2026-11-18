@@ -85,7 +85,7 @@ export function applyAnalysis(repo: LessonsRepo, slug: string, prNumber: number,
     for (const f of a.findings) {
       if (!f.avoidable || !f.rule) continue;
       const source = { prNumber, url: f.comment_url !== null && urls.allowed.has(f.comment_url) ? f.comment_url : urls.prUrl, slug, runId };
-      const same = f.rule.same_as === null ? null : repo.get(f.rule.same_as);
+      const same = f.rule.same_as === null ? null : repo.resolveMerged(f.rule.same_as); // 合并过的跟到留下的那条。
       const related =
         same !== null &&
         (same.scope.kind === "repo" ? same.scope.slug === slug : productIds.has(same.scope.productId));

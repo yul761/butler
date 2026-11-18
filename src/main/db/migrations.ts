@@ -493,4 +493,83 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE ticket_prs ADD COLUMN read_failing_since INTEGER;
   ALTER TABLE ticket_prs ADD COLUMN read_retry_at INTEGER;
   `,
+  // 规矩的准入和评分（Butler 3 工作流 C）：批次（每次批量或自动改动一批，带逐行的前后快照，可整批撤销）、三层准入策略、
+  // 批次评审和校准样本；lessons 加适用范围、强度、可检查性、准入、评分、合并目标和降级产出标记。
+  // status 不变；已经由人决定过的（confirmed / disabled / rejected）admission 记 manual，自动降级不碰它们。
+  `
+  CREATE TABLE admission_batches (
+    id INTEGER PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('manual','auto','import')),
+    entity TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT '{}',
+    policy_snapshot TEXT,
+    summary TEXT NOT NULL DEFAULT '{}',
+    affected INTEGER NOT NULL DEFAULT 0,
+    undone_at INTEGER,
+    undo_of INTEGER REFERENCES admission_batches(id) ON DELETE SET NULL);
+  CREATE INDEX admission_batches_created ON admission_batches (created_at);
+  CREATE TABLE admission_batch_items (
+    batch_id INTEGER NOT NULL REFERENCES admission_batches(id) ON DELETE CASCADE,
+    entity TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    before TEXT,
+    after TEXT,
+    PRIMARY KEY (batch_id, entity, entity_id));
+  CREATE INDEX admission_batch_items_entity ON admission_batch_items (entity, entity_id);
+  ALTER TABLE lessons ADD COLUMN scope_globs TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE lessons ADD COLUMN scope_lang TEXT;
+  ALTER TABLE lessons ADD COLUMN scope_layer TEXT;
+  ALTER TABLE lessons ADD COLUMN strength TEXT CHECK (strength IS NULL OR strength IN ('must','should'));
+  ALTER TABLE lessons ADD COLUMN checkability TEXT CHECK (checkability IS NULL OR checkability IN ('checkable','prose','converted','covered'));
+  ALTER TABLE lessons ADD COLUMN admission TEXT NOT NULL DEFAULT 'pending' CHECK (admission IN ('pending','auto','manual','shelved'));
+  ALTER TABLE lessons ADD COLUMN shelved_reason TEXT;
+  ALTER TABLE lessons ADD COLUMN shelved_ref INTEGER;
+  ALTER TABLE lessons ADD COLUMN batch_id INTEGER REFERENCES admission_batches(id) ON DELETE SET NULL;
+  ALTER TABLE lessons ADD COLUMN merged_into INTEGER REFERENCES lessons(id) ON DELETE SET NULL;
+  ALTER TABLE lessons ADD COLUMN score REAL;
+  ALTER TABLE lessons ADD COLUMN score_parts TEXT;
+  ALTER TABLE lessons ADD COLUMN scored_at INTEGER;
+  ALTER TABLE lessons ADD COLUMN score_policy_version INTEGER;
+  ALTER TABLE lessons ADD COLUMN degraded INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE lessons ADD COLUMN degraded_from TEXT;
+  UPDATE lessons SET admission = 'manual' WHERE status IN ('confirmed','disabled','rejected');
+  CREATE INDEX lessons_merged ON lessons (merged_into);
+  CREATE TABLE admission_policies (
+    id INTEGER PRIMARY KEY,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global','product','repo')),
+    product_id INTEGER REFERENCES lesson_products(id) ON DELETE CASCADE,
+    repo_slug TEXT,
+    overrides TEXT NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL,
+    CHECK ((scope_kind = 'global' AND product_id IS NULL AND repo_slug IS NULL)
+        OR (scope_kind = 'product' AND product_id IS NOT NULL AND repo_slug IS NULL)
+        OR (scope_kind = 'repo' AND product_id IS NULL AND repo_slug IS NOT NULL)));
+  CREATE UNIQUE INDEX admission_policies_layer ON admission_policies (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''));
+  CREATE TABLE batch_reviews (
+    id INTEGER PRIMARY KEY,
+    batch_id INTEGER NOT NULL REFERENCES admission_batches(id) ON DELETE CASCADE,
+    sample_size INTEGER NOT NULL DEFAULT 0,
+    pass_rate REAL,
+    coverage REAL,
+    shelved_shares TEXT NOT NULL DEFAULT '{}',
+    backtest_recall REAL,
+    backtest_false_positives INTEGER,
+    verdicts TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL);
+  CREATE INDEX batch_reviews_batch ON batch_reviews (batch_id);
+  CREATE TABLE score_calibration (
+    id INTEGER PRIMARY KEY,
+    entity TEXT NOT NULL DEFAULT 'lesson',
+    lesson_id INTEGER REFERENCES lessons(id) ON DELETE SET NULL,
+    entity_id INTEGER,
+    auto_verdict TEXT NOT NULL,
+    human_verdict TEXT NOT NULL,
+    score REAL,
+    score_parts TEXT,
+    batch_id INTEGER REFERENCES admission_batches(id) ON DELETE SET NULL,
+    at INTEGER NOT NULL);
+  CREATE INDEX score_calibration_at ON score_calibration (at);
+  `,
 ];

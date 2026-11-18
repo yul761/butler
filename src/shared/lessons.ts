@@ -23,6 +23,26 @@ export interface LessonRunningItem {
 }
 
 export type LessonStatus = "pending" | "confirmed" | "disabled" | "rejected";
+/** 准入流水线的判断（和 status 分开：status 决定进不进 session）。manual = 人决定过；auto = 流水线推荐 / 自动准入；shelved = 搁置，见 shelvedReason。 */
+export type LessonAdmission = "pending" | "auto" | "manual" | "shelved";
+export const LESSON_ADMISSIONS: readonly LessonAdmission[] = ["pending", "auto", "manual", "shelved"];
+export type LessonStrength = "must" | "should";
+export const LESSON_STRENGTHS: readonly LessonStrength[] = ["must", "should"];
+/** 可检查性：能写成确定性检查 / 只能留文字 / 已转成检查 / 已被仓库现有检查覆盖。null = 还没分类。 */
+export type LessonCheckability = "checkable" | "prose" | "converted" | "covered";
+export const LESSON_CHECKABILITIES: readonly LessonCheckability[] = ["checkable", "prose", "converted", "covered"];
+export const LESSON_STATUSES: readonly LessonStatus[] = ["pending", "confirmed", "disabled", "rejected"];
+/** 搁置原因；流水线以后可能加别的，所以页面对不认识的原因显示原文。 */
+export type LessonShelvedReason = "conflict" | "generality" | "low_score" | "clarity" | "backtest_fp" | "covered" | "duplicate" | (string & {});
+/** 评分的一个分项：0..1 的值和一句理由；还没有数据时整个分项不出现。 */
+export interface LessonScorePart { value: number; reason: string }
+export interface LessonScoreParts {
+  evidence?: LessonScorePart;
+  clarity?: LessonScorePart;
+  consistency?: LessonScorePart;
+  verifiability?: LessonScorePart;
+  performance?: LessonScorePart;
+}
 export type LessonScope = { kind: "repo"; slug: string } | { kind: "product"; productId: number };
 
 export interface LessonSource {
@@ -47,6 +67,27 @@ export interface Lesson {
   lastSeenAt: number;
   createdAt: number;
   sources: LessonSource[];
+  /** 适用路径 glob；空 = 在它的仓库或产品里处处适用。 */
+  scopeGlobs: string[];
+  scopeLang: string | null;
+  scopeLayer: string | null;
+  strength: LessonStrength | null;
+  checkability: LessonCheckability | null;
+  admission: LessonAdmission;
+  shelvedReason: LessonShelvedReason | null;
+  /** 冲突时的另一条规矩。 */
+  shelvedRef: number | null;
+  /** 最近一次改动它的批次。 */
+  batchId: number | null;
+  /** 被合并进的那条；合并过的行留着（撤销用），但不在任何列表里出现。 */
+  mergedInto: number | null;
+  score: number | null;
+  scoreParts: LessonScoreParts | null;
+  scoredAt: number | null;
+  scorePolicyVersion: number | null;
+  /** 由降级后的模型产出（模型路由，契约 4.1）。 */
+  degraded: boolean;
+  degradedFrom: string | null;
 }
 
 export type LessonOrigin = "backfill" | "merged" | "daily";
