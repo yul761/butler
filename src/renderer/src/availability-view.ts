@@ -20,7 +20,7 @@ export function limitLine(l: LimitHit, S: UiStrings, now: number): string {
   return l.resetsAt === null ? S.limitNoReset(kind) : S.limitUntil(kind, resetClock(l.resetsAt, now));
 }
 
-export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend" | "raise";
+export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend" | "raise" | "comments";
 
 /** CI 结论为什么没递出去，一句人话（工作流 W）。认不得的原样带上。 */
 export function ciReasonText(reason: string, S: UiStrings): string {
@@ -58,6 +58,12 @@ export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: str
       const actions: NoticeAction[] = n.breaker.state === "warned" ? [] : ["raise"];
       if (n.target) actions.push("open");
       return { text: costBreakerText(n.breaker, S), actions };
+    }
+    case "comments_waiting": {
+      const w = n.waiting;
+      const pr = S.lp.noticePr(w.ticketKey, w.number);
+      const text = w.reason === "review" ? S.lp.noticeReview(pr, w.count) : S.lp.noticeUndelivered(pr, w.count, Math.max(1, Math.floor((now - w.since) / 60_000)));
+      return { text, actions: ["comments"] };
     }
   }
 }

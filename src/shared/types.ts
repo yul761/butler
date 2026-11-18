@@ -1,4 +1,5 @@
 import type { CostBreakerView } from "./cost";
+import type { CommentsWaiting } from "./loop";
 import type { CheckAbsenceReason } from "./checks";
 import type { MemorySnapshot, SessionMemory } from "./mem-usage";
 import type { ActivityEvent, SessionActivity } from "./activity";
@@ -662,7 +663,9 @@ export type NowNotice =
   /** CI 结论超过半小时没递出去（工作流 W）：可以重发、打开 ticket。 */
   | { kind: "ci_undelivered"; ci: CiUndelivered; target: NowTarget; title: string | null }
   /** 成本熔断（工作流 L）：某个 session / ticket 的花费到了提醒线、降了档或者被暂停了。暂停的可以「继续并提高上限」。 */
-  | { kind: "cost"; breaker: CostBreakerView; target: NowTarget | null };
+  | { kind: "cost"; breaker: CostBreakerView; target: NowTarget | null }
+  /** 评论闭环（工作流 I）：有评论等你看分类，或该送进 session 的评论超过 30 分钟没送出去。每个 PR 一条。 */
+  | { kind: "comments_waiting"; waiting: CommentsWaiting; target: NowTarget; title: string | null };
 
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */

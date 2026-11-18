@@ -4,7 +4,7 @@ import { api } from "../api";
 import { ciReasonText, noticeText, type NoticeAction } from "../availability-view";
 import { costAmount } from "../cost-view";
 import { reportError } from "../errors";
-import { setWizardSkipped, wizardSkipped } from "../local-prefs";
+import { saveTab, saveTabOpen, setWizardSkipped, wizardSkipped } from "../local-prefs";
 import { mergeEventText } from "../merge-events-view";
 import { butlerLines, formatKb, heavyMcp, peakKb, rowMemDetail, rowMemText, sharedMcpSavingKb, snapshotLine, sparkPath } from "../mem-view";
 import type { MemoryHistoryPoint, MemorySnapshot } from "../../../shared/mem-usage";
@@ -70,6 +70,7 @@ export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup
 /** 顶上的一条提醒：一句话加几个按钮；恢复、重试都是让复盘队列重新开始。 */
 function noticeKey(n: NowNotice): string {
   if (n.kind === "cost") return `cost:${n.breaker.subjectKind}:${n.breaker.subjectId}`;
+  if (n.kind === "comments_waiting") return `comments_waiting:${n.waiting.reason}:${n.waiting.prId}`;
   if (n.kind === "ci_undelivered") return `ci_undelivered:${n.ci.item.kind}:${n.ci.item.kind === "pr" ? n.ci.item.id : n.ci.item.repoId}`;
   if (n.kind !== "session_limited") return n.kind;
   const t = n.target;
@@ -78,7 +79,7 @@ function noticeKey(n: NowNotice): string {
 
 function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: number; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
   const { text, actions } = noticeText(n, S, now);
-  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen, routing: S.rt.nowOpen, resend: S.noticeResend, raise: S.cs.raise };
+  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen, routing: S.rt.nowOpen, resend: S.noticeResend, raise: S.cs.raise, comments: S.lp.noticeOpen };
   // 重发的结果（CI 结果未能送达）：送到了提醒会在下一次刷新时消失，没送到写上为什么。
   const [result, setResult] = useState<string | null>(null);
   const run = (a: NoticeAction): void => {
@@ -92,6 +93,11 @@ function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: numb
     } else if (a === "resend" && n.kind === "ci_undelivered") {
       setResult(null);
       void api.ciResend(n.ci.item).then((r) => setResult(r === "sent" || r === "delivered" ? S.ciResendSent : r === "busy_delivering" ? S.ciResendBusy : S.ciResendNot(ciReasonText(r, S))), reportError);
+    } else if (a === "comments" && n.kind === "comments_waiting") {
+      // 打开 ticket 时直接停在「评论」标签。
+      saveTab(`ticket:${n.waiting.ticketKey}`, "comments");
+      saveTabOpen(`ticket:${n.waiting.ticketKey}`, true);
+      onOpen(n.target);
     } else if (n.kind === "session_limited" || n.kind === "ci_undelivered") onOpen(n.target);
     else if (n.kind === "cost" && n.target) onOpen(n.target);
   };

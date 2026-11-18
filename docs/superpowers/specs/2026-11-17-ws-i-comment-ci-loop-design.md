@@ -64,7 +64,7 @@ query($owner: String!, $name: String!, $number: Int!) {
 
 字段：作者、作者种类（`copilot` / `human` / `bot` / `author`，用现有的 `reviewerKind`，REST 认出是 Bot 的按 bot）、文件、行号、原文（只存在本机库里，不进导出、不进度量事件）、链接、thread id、出现时的 head sha、分类、分类来源（`rule` / `model` / `user`）、分类理由、状态和各个时间点。
 
-为了让 7.1 的评论数算上闭环看到的评论，拉到的行内评论也按 `pr_stage_events` 原来的去重键（`<scope>:comment:<branch>:<databaseId>`）补记 `comment` 事件；已经记过的不会重复。
+闭环**不**往 `pr_stage_events` 补记 `comment` 事件：PrWatcher 的 `prObservations` 已经记了 PR 级评论和 Copilot 的行内评论，7.1 的评论数按这个口径算；闭环再补记人的行内评论，会改掉 7.1 的含义（实现时改的决定）。
 
 ### 2.3 分类
 
@@ -248,6 +248,21 @@ CREATE TABLE ci_flaky_list (...);      -- (repo_slug, kind, name) 唯一，sourc
 ## 8. 设置页
 
 设置页加一个标签「评论与 CI」：上面是分层策略编辑器（选一层：全局 / 产品 / 仓库，每个键的生效值、来源、这一层的覆盖，和准入策略编辑器一样），下面是三个对外动作开关的快捷方式（和「对外动作」一节是同一个设置）、flaky 名单（移出、手动加入）和最近 30 天的效果（第 5 节同一份数据）。中英文文案；每个键写进 `docs/configuration.md` 和 `docs/configuration.zh-CN.md`。
+
+## 8.1 实现时定下的细节
+
+- 重跑后通过：失败那次一直按住不送；通过时照常送「CI 全部通过」，session 不知道中间重跑过。
+- 判定「已通过」之后留 10 分钟（`PASSED_GRACE_MS`）：这段时间里同一个 head 的结论来回变，不重复送。
+- 等重跑结果时 CiTriage 自己挂定时器（`RERUN_CHECK_MS` 30 秒）去看 run 的状态，不靠 PrWatcher 下一轮；6 小时没结果就照常送。
+- `CommentsWaiting.reason` 只有两种：`review`（等你看）和 `undelivered`（该送的 30 分钟还没送出去）。
+- 送评论和送 CI 结论共用同一个「正在送」集合和同一个收件 session 的函数：同一个 session 同时只送一样东西；评论在 CI 之后 flush。
+- 回复被开关跳过时，resolve 仍按它自己的开关决定，两者互不牵连。
+- 「效果」汇总（`loop:effect`）不按仓库过滤，参数只有天数（1–365，默认 30）。
+- 在 ticket 页对评论点「送进 session」「再回复」算一次人工干预（`loopCommentsAct` 的 send / reply）；改分类、忽略不算。
+- 设置页 flaky 名单的统计窗口用全局层的 `ci.autoListDays`。
+- 「现在」页的评论提醒直接打开 ticket 的「评论」标签。
+- 三个对外动作开关在「常规 → 对外动作」和「评论与 CI」两处都能改，是同一个设置；后者先在界面上勾上，保存失败再改回来。
+- 产品之间冲突：名字靠后的产品生效（`LayeredResolver` 的规则，和准入策略一样），页面上提示。
 
 ## 9. 没做 / 留给以后
 

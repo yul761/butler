@@ -20,7 +20,7 @@ Design: `docs/superpowers/specs/2026-11-17-ws-i-comment-ci-loop-design.md`. Ever
 
 9. **Rules** (`loop/comment-rules.ts` + test): build items from threads / reviews / PR comments; prefilter order from the design; ignore patterns (substring or `/regex/`).
 10. **Model call** (`loop/comment-model.ts` + test): `comment_classify` batched per PR.
-11. **CommentLoop** (`loop/comment-loop.ts` + test): `observe(row, pr)` (fetch when needed, in-flight per PR), classify, attribution policy, delivery through guard + `pty.deliver`, verification after push (outdated or compare patch overlap), reply / resolve through `ExternalActions`, two pushes unchanged → human, `recordEvent("comment_auto_handled")`, stage `comment` events, user actions (send / recategorize / dismiss / reply again), undelivered list for the Now page.
+11. **CommentLoop** (`loop/comment-loop.ts` + test): `observe(row, pr)` (fetch when needed, in-flight per PR), classify, attribution policy, delivery through guard + `pty.deliver`, verification after push (outdated or compare patch overlap), reply / resolve through `ExternalActions`, two pushes unchanged → human, `recordEvent("comment_auto_handled")`, user actions (send / recategorize / dismiss / reply again), undelivered list for the Now page.
 12. **Integration test** (`loop/loop.integration.test.ts`): the three acceptance scenarios with fake gh functions and a fake pty, both platforms.
 
 ## Stage D: wiring and UI

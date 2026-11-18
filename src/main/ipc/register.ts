@@ -502,7 +502,11 @@ export function registerIpc(d: IpcDeps): void {
     return r;
   });
   handle(IPC.loopFlakyList, (): FlakyEntry[] => d.loop.flaky());
-  handle(IPC.loopFlakyAct, (raw: unknown): boolean => d.loop.flakyAct(flakyActionArg(raw)));
+  handle(IPC.loopFlakyAct, (raw: unknown): boolean => {
+    const r = d.loop.flakyAct(flakyActionArg(raw));
+    d.notify();
+    return r;
+  });
   handle(IPC.loopEffect, (raw: unknown): LoopEffect => d.loop.effect(raw));
   handle(IPC.checksView, (raw: unknown): ChecksView => d.checks.view(checkScopeArg(raw)));
   handle(IPC.checksHits, (raw: unknown): CheckHitView[] => d.checks.hits(checkKeyArg(raw)));
