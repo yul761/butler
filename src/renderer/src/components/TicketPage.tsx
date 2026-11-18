@@ -14,6 +14,7 @@ import { HibernateBadges, hibernationOf, isHibernated, PinButton, sessionTitle }
 import { CloseIdleButton, DeleteHiddenButton } from "./SessionCleanupButtons";
 import { RefreshSessionButton } from "./RefreshSessionButton";
 import { SessionLimit } from "./SessionLimit";
+import { SessionCost } from "./SessionCost";
 import { TerminalPane } from "./TerminalPane";
 import { TicketOverview } from "./TicketOverview";
 import { TitleDialog } from "./TitleDialog";
@@ -234,6 +235,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
               <span className="action">{s.termId ? S.switchTo : isHibernated(s) ? S.hib.open : S.open}</span>
             </button>
             <PinButton s={s} label={sessionLabel(s, S.untitledSession)} />
+            <SessionCost sessionId={s.id} ticketKey={s.ticketKey} />
             {/* 正在运行的终端不能隐藏，只能结束（×点两次）；结束之后才能隐藏。 */}
             {s.termId ? (
               <>

@@ -61,7 +61,7 @@ export function registryModelFor(registry: readonly RegistryModel[], usageModel:
   return registry.find((m) => /^[a-z]+$/.test(m.name) && (lower.startsWith(`${m.name}-`) || lower.includes(`-${m.name}-`) || lower.endsWith(`-${m.name}`))) ?? null;
 }
 
-function usdOf(r: SpendRow, m: RegistryModel | null): { usd: number; partial: boolean } {
+export function usdOf(r: SpendRow, m: RegistryModel | null): { usd: number; partial: boolean } {
   let usd = r.costUsd;
   let partial = false;
   if (r.unpricedRows > 0) {
@@ -124,4 +124,23 @@ export function summarizeSpend(rows: readonly SpendRow[], registry: readonly Reg
   };
   const sort = (m: Map<string, SpendLine>) => [...m.values()].sort((a, b) => b.usd - a.usd || b.tokens - a.tokens);
   return { byModel: sort(byModel), byTask: sort(byTask), quotas: views, level };
+}
+
+/**
+ * 成本熔断（工作流 L）：一组汇总行一共花了多少。usd 按 CLI 报的金额，没报的按注册表单价估，估不出的记 partial；
+ * tokens 按 USAGE_WEIGHTS 加权（缓存读便宜、输出贵）。
+ */
+export function spendTotal(rows: readonly (SpendRow & { weighted: number })[], registry: readonly RegistryModel[], unit: "usd" | "tokens"): { spent: number; partial: boolean } {
+  let spent = 0;
+  let partial = false;
+  for (const r of rows) {
+    if (unit === "tokens") {
+      spent += r.weighted;
+      continue;
+    }
+    const u = usdOf(r, registryModelFor(registry, r.model));
+    spent += u.usd;
+    partial ||= u.partial;
+  }
+  return { spent, partial };
 }

@@ -11,7 +11,20 @@ import { parseGateRequest, type GateRequest, type GateResult } from "../shared/g
 import { IPC } from "../shared/ipc";
 import type { LimitHit } from "../shared/availability";
 import { ClaudeAvailability } from "./claude/availability";
-import { buildNotices, ciNotices } from "./now/notices";
+import { buildNotices, ciNotices, costNotices } from "./now/notices";
+import { BackgroundRepo } from "./db/background-repo";
+import { CostRepo } from "./db/cost-repo";
+import { readBgSettings } from "./background/bg-settings";
+import { electronIdleSignal } from "./background/idle";
+import { BackgroundQueue } from "./background/queue";
+import { routingQuota } from "./background/routing-quota";
+import { BackgroundScheduler } from "./background/scheduler";
+import { CostBreaker, type CostSessionInfo } from "./cost/cost-breaker";
+import { CostPolicyService } from "./cost/cost-policy";
+import { backgroundMetricEvents, costMetricEvents } from "./cost/metric-events";
+import { parseThresholds } from "./routing/spend";
+import { CostPolicyError, type CostBreakerView } from "../shared/cost";
+import type { NowTarget } from "../shared/types";
 import { AvailabilityRepo } from "./db/availability-repo";
 import type { Session, WatchedPr } from "../shared/types";
 import { APP_ID, shouldSetAppId } from "./app-id";
@@ -194,6 +207,9 @@ const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
 const HOOK_DISCOVERY_DEBOUNCE_MS = 3000;
 /** 系统空闲超过这么多秒就不算“正在用电脑”（用于 tick 触发早间任务）。 */
 const ACTIVE_IDLE_SECONDS = 120;
+/** 熔断的「最近的记录」留多久；结束了的后台任务留多久（工作流 L）。启动时清一次。 */
+const COST_EVENTS_RETENTION_MS = 180 * 24 * 3600_000;
+const BG_FINISHED_RETENTION_MS = 30 * 24 * 3600_000;
 
 let win: BrowserWindow | null = null;
 /** 窗口 show / restore 时调（bootstrap 里接到 WS-M 的优先级上）。 */
@@ -352,8 +368,12 @@ function trayMenu(): Menu {
   ]);
 }
 
+/** 托盘提示的第二行：成本熔断暂停了几个（工作流 L）。 */
+let costPausedCount = 0;
+
 function trayTooltip(): string {
-  return keepAwake?.isOn() ? M().trayTooltipKeepAwake : "Butler";
+  const base = keepAwake?.isOn() ? M().trayTooltipKeepAwake : "Butler";
+  return costPausedCount > 0 ? `${base}\n${M().cost.trayPaused(costPausedCount)}` : base;
 }
 
 async function bootstrap(): Promise<void> {
@@ -435,13 +455,26 @@ async function bootstrap(): Promise<void> {
   /** 某个 session（取 head）最近一轮的上下文大小：计划 16 的自动换新看它。 */
   const contextOf = (sessionId: string): number | null => usageRepo.latestContext(sessions.head(sessionId)?.id ?? sessionId);
   /** headless 运行（handoff、feature 汇总、卡住判断）的用量入库。 */
-  const recordHeadlessUsage = ({ runId, label, at, model, usage, task, requestedTier, fallbackFrom, costUsd }: UsageReport) => {
+  // 成本熔断（工作流 L）：要等 switcher、guard 这些建好才装（见下面）；在那之前 gate 一律放行。
+  let costBreaker: CostBreaker | null = null;
+  let costCheckTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 用量变了：稍后让熔断看一遍（合并 2 秒内的多次）。 */
+  const costCheckSoon = (): void => {
+    if (costCheckTimer || !costBreaker) return;
+    costCheckTimer = setTimeout(() => {
+      costCheckTimer = null;
+      if (!closing && !headlessAbort.signal.aborted) void costBreaker?.check().catch((e: unknown) => logger("cost: check failed", e));
+    }, 2000);
+    costCheckTimer.unref?.();
+  };
+  const recordHeadlessUsage = ({ runId, label, at, model, usage, task, requestedTier, fallbackFrom, costUsd, ticketKey }: UsageReport) => {
     try {
       usageRepo.record([{
-        messageId: `headless:${runId}`, sessionId: null, agentId: null, source: "headless", job: jobOf(label), at, model, ...usage,
+        messageId: `headless:${runId}`, sessionId: null, agentId: null, source: "headless", job: jobOf(label), at, model, ...usage, ticketKey: ticketKey ?? null,
         context: usage.input + usage.cacheWrite5m + usage.cacheWrite1h + usage.cacheRead,
         ...(task !== undefined && { task, requestedTier: requestedTier ?? null, fallbackFrom: fallbackFrom ?? null, costUsd: costUsd ?? null }),
       }]);
+      if (ticketKey) costCheckSoon();
     } catch (e) {
       logger("recording headless usage failed", e);
     }
@@ -450,6 +483,8 @@ async function bootstrap(): Promise<void> {
     repo: usageRepo,
     sessionIds: () => pty.openIds().map((t) => sessions.head(t)).filter((s) => s?.origin === "butler").map((s) => s!.id),
     transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
+    // 扫完一遍：成本熔断按新用量看一遍（工作流 L）。
+    onScanned: () => costCheckSoon(),
     log: logger,
   });
   /** will-quit 关数据库之前置位：之后才到的终端退出事件（killAll 是异步的）不再碰数据库。没处理的空 session 下次启动时清掉。 */
@@ -458,6 +493,8 @@ async function bootstrap(): Promise<void> {
   let procs: ProcServices | null = null;
   // 休眠（WS-M B、C）：要等 procs 和下面的一堆服务建好才装，在那之前没有休眠这回事。
   let hibernator: Hibernator | null = null;
+  // 内存准入（工作流 W）：要等 procs 建好才装（实测要 M 的内存采样）；后台队列在那之后才 start，用的时候一定装好了。
+  let memoryAdmission: MemoryAdmission | null = null;
   /** 休眠着的 head（Butler 结束了它的终端，等事情来了再 --resume）。 */
   const hibernatedHeads = (): Session[] => sessions.listHibernated();
   /** 这条链休眠着（正在休眠、正在唤醒的也算）。 */
@@ -604,9 +641,11 @@ async function bootstrap(): Promise<void> {
     now: Date.now, onChange: () => notify(), log: logger,
   });
   /** 卡住判断和「需要你」判断共用的 headless 设置。 */
+  /** 成本熔断给 headless 调用的闸门（工作流 L）：ticket 的后台调用照常、降一档还是不跑；卡住判断不受影响。 */
+  const costGate: HeadlessExecDeps["costGate"] = (o) => costBreaker?.gate(o) ?? "ok";
   const judgeDeps: HeadlessExecDeps = {
     run: runHeadless, ready: () => healthReady, claude: () => health.claude(), baseEnv: process.env, sessions, now: Date.now, newRunId: randomUUID,
-    signal: headlessAbort.signal, onUsage: recordHeadlessUsage, ...availabilityHooks, routing, log: logger,
+    signal: headlessAbort.signal, onUsage: recordHeadlessUsage, ...availabilityHooks, routing, costGate, log: logger,
   };
   // 打断原因（7.4）：ask_user、需要你、卡住、权限确认和 AskUserQuestion 各记一条。inboxService、waitTracker 在下面才建好：调用时才用到。
   const interrupts = new InterruptRecorder({
@@ -616,6 +655,29 @@ async function bootstrap(): Promise<void> {
     ticketOf: (id) => sessions.head(id)?.ticketKey ?? null,
     log: logger,
   });
+  // 后台调度（工作流 L，设计 addendum 第 3 节）：交互 session 优先；后台任务按优先级、时段（空闲 / 这些小时）、额度和熔断跑。
+  const idleSignal = electronIdleSignal(powerMonitor, process.platform);
+  const bgScheduler = new BackgroundScheduler({
+    settings: () => readBgSettings(settings),
+    setSetting: (key, value) => settings.set(key, value),
+    idle: idleSignal,
+    quota: () => routingQuota(routing),
+    costBlocked: (key) => (costBreaker ? !costBreaker.allowBackground(key) : false),
+    now: Date.now,
+    // 让路和恢复记成 H 的度量事件（契约 4.7），日志照记。
+    onEvent: backgroundMetricEvents(recordEvent, logger),
+    log: logger,
+  });
+  bgScheduler.subscribe(() => notify());
+  // 通用后台队列：D、F、G、N 的任务在这里登记处理函数。要开新 session 的任务先过 W 的内存准入（ctx.admitSession），不放行就延后。
+  const bgRepo = new BackgroundRepo(db);
+  try {
+    const n = bgRepo.pruneFinished(Date.now() - BG_FINISHED_RETENTION_MS);
+    if (n > 0) logger(`background: pruned ${n} finished job(s)`);
+  } catch (e) {
+    logger("background: pruning finished jobs failed", e);
+  }
+  const bgQueue = new BackgroundQueue({ repo: bgRepo, scheduler: bgScheduler, now: Date.now, isHibernated, admission: () => memoryAdmission, onChange: () => notify(), log: logger });
   /** 复盘的闸门：没配置路由时就是账号级的可用状态；配置了只在 lesson_analyze 哪个模型都用不了时停。 */
   const lessonsGate = new RoutedLessonsGate({ availability, routing, now: Date.now });
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
@@ -688,6 +750,7 @@ async function bootstrap(): Promise<void> {
     upgradeReady: () => routing.tierHealthy(routing.plan("lesson_analyze").route.tier as Tier),
     gh: { mergedPrs, prLessonDataDetail, compareFiles, available: () => ghAvailable() },
     headless: { ...judgeDeps },
+    scheduler: bgScheduler,
     ticketForBranch: (slug, branch) => tickets.reposByBranch(branch).find((r) => repoIdentity.slugOf(r.repoPath) === slug)?.ticketKey ?? null,
     butlerContext: async (key, wantTranscripts) => {
       const ps = handoffs.listByTicket(key, 20).flatMap((h) => (h.payload ? [h.payload] : []));
@@ -825,7 +888,8 @@ async function bootstrap(): Promise<void> {
   // 「需要你」（计划 14）：停下来的 session 是不是在等用户。判断最多等 1 分钟（默认的 5 分钟会一直占着名额）。
   // 判断完只发 stateChanged（不经过下面 activityMonitor 的 notify），所以 update → notify 不会再回到 update。
   const needsYou = new NeedsYouTracker({
-    judge: (reply, cwd) => judgeNeedsYou({ ...judgeDeps, timeoutMs: 60_000 }, reply, cwd),
+    // 判断的花费算到这个 session 的 ticket 上（工作流 L）。
+    judge: (reply, cwd, sessionId) => judgeNeedsYou({ ...judgeDeps, timeoutMs: 60_000 }, reply, cwd, sessions.head(sessionId)?.ticketKey ?? null),
     sessions: needsYouHeads,
     notify,
     onNeedsYou: (id, replyId, category) => {
@@ -841,7 +905,7 @@ async function bootstrap(): Promise<void> {
   const activityMonitor = new ActivityMonitor({
     sessions, tickets, features, pty,
     transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
-    judge: (input) => judgeStuck(judgeDeps, input),
+    judge: (input) => judgeStuck(judgeDeps, input, input.sessionId ? (sessions.head(input.sessionId)?.ticketKey ?? null) : null),
     // 活动变了：先看停下来的 session 有没有新回复要判断、有没有该自动换新的，再刷新界面。
     // 换新自己的 notify 只发 stateChanged（不回到这里），所以 autoCheck → notify 不会再回到 autoCheck。
     notify: () => {
@@ -1024,6 +1088,7 @@ async function bootstrap(): Promise<void> {
     onUsage: recordHeadlessUsage,
     ...availabilityHooks,
     routing,
+    costGate,
     log: logger,
   });
   /** feature 有新汇总时，它所在的 epic 重新渲染 handoff（异步，失败只记日志）。 */
@@ -1235,6 +1300,8 @@ async function bootstrap(): Promise<void> {
   };
   // 所有自动输入共用的一道检查（计划 13）：停着等输入、屏幕上没有要回答的、用户没在打字、没有草稿才贴。
   const guardDeps: DeliveryGuardDeps = {
+    // 成本熔断暂停着的不往里递，也不为了递东西叫醒它（工作流 L）。
+    costPaused: (id) => costBreaker?.sessionPaused(id) ?? false,
     termOf: gateTerm,
     head: (id) => sessions.head(id),
     activity: (id) => activityMonitor.get(id),
@@ -1257,6 +1324,118 @@ async function bootstrap(): Promise<void> {
     needsYou: (id): boolean => deliveryNeedsYou(needsYou, id) || inboxService.hasPendingDecision(id),
     refreshing: (id) => refresher.isRefreshing(id),
   });
+  // 成本熔断（工作流 L，设计 addendum 第 4 节）。上限经三层配置；没设上限时什么都不做。
+  const costPolicy = new CostPolicyService({
+    db, now: Date.now,
+    productsOf: (slug) => lessonsRepo.productsOf(slug),
+    productName: (id) => lessonsRepo.product(id)?.name ?? null,
+    onChange: () => costCheckSoon(),
+  });
+  const ticketRepoSlugs = (key: string): string[] =>
+    tickets.listRepos(key).flatMap((r) => {
+      const slug = repoIdentity.slugOf(r.repoPath);
+      return slug ? [slug] : [];
+    });
+  const costTitleOf = (h: Session): string => {
+    if (h.ticketKey) return `${h.ticketKey} ${tickets.get(h.ticketKey)?.title ?? ""}`.trim();
+    if (h.featureId !== null) return features.get(h.featureId)?.name ?? `feature ${h.featureId}`;
+    if (h.epicId !== null) return epics.get(h.epicId)?.name ?? `epic ${h.epicId}`;
+    return "Butler";
+  };
+  const costSession = (root: string): CostSessionInfo | null => {
+    const h = sessions.head(root);
+    if (!h) return null;
+    return {
+      rootId: root, headId: h.id, ticketKey: h.ticketKey, title: costTitleOf(h), chainIds: sessions.chainOf(h.id),
+      repos: h.ticketKey ? ticketRepoSlugs(h.ticketKey) : [], model: h.model, open: gateTerm(h.id) !== null,
+    };
+  };
+  const costRepoInst = new CostRepo(db);
+  try {
+    const n = costRepoInst.pruneEvents(Date.now() - COST_EVENTS_RETENTION_MS);
+    if (n > 0) logger(`cost: pruned ${n} old breaker event(s)`);
+  } catch (e) {
+    logger("cost: pruning old events failed", e);
+  }
+  const costBreakerInst = new CostBreaker({
+    repo: costRepoInst, policy: costPolicy, usage: usageRepo, registry: () => routing.config().registry,
+    warnPercent: () => Math.round(parseThresholds(settings.get("routingThresholds"))[0] * 100),
+    rootOf: (id) => sessions.rootOf(id),
+    session: costSession,
+    ticket: (key) => {
+      const t = tickets.get(key);
+      if (!t) return null;
+      const ids = new Set<string>();
+      const open = new Set<string>();
+      for (const s of sessions.listByTicket(key)) {
+        for (const id of sessions.chainOf(sessions.head(s.id)?.id ?? s.id)) ids.add(id);
+        const root = sessions.rootOf(s.id);
+        if (root && gateTerm(s.id) !== null) open.add(root);
+      }
+      return { key, title: `${key} ${t.title ?? ""}`.trim(), repos: ticketRepoSlugs(key), sessionIds: [...ids], openRoots: [...open] };
+    },
+    active: () => {
+      const roots = new Set<string>();
+      const keys = new Set<string>();
+      for (const termId of pty.openIds()) {
+        const h = sessions.head(termId);
+        if (!h || h.origin !== "butler") continue;
+        const root = sessions.rootOf(h.id);
+        if (root) roots.add(root);
+        if (h.ticketKey) keys.add(h.ticketKey);
+      }
+      return { sessions: [...roots], tickets: [...keys] };
+    },
+    nextModel: (m) => routing.nextModel(m),
+    switchModel: async (headId, model) => {
+      const r = await switcher.switch(headId, model);
+      return r.ok ? { ok: true, model: r.model } : { ok: false, reason: r.reason };
+    },
+    busy: (headId) => sessions.head(headId)?.waitingForInput === false,
+    interrupt: (headId) => {
+      const t = gateTerm(headId);
+      // 不经 pty.write：那是用户输入的路，会把这次 Esc 记成用户接手了。
+      if (t) pty.interrupt(t);
+    },
+    // 和休眠一样结束终端：之后点开会 --resume 接上。
+    kill: (headId) => {
+      const t = gateTerm(headId);
+      if (t) pty.kill(t);
+    },
+    lastUserInputAt: (headId) => {
+      const t = gateTerm(headId);
+      return t ? pty.lastUserInputAt(t) : 0;
+    },
+    nudge: async (headId, text) => {
+      const g = deliveryGuard.check(headId);
+      if (!g.ok) return false;
+      const r = await pty.deliver(g.termId, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck: deliveryGuard.recheckAfter(headId, g) });
+      return r === "sent";
+    },
+    scheduler: bgScheduler,
+    texts: () => ({ continueAfterDowngrade: M().cost.continueAfterDowngrade, continueAfterRaise: M().cost.continueAfterRaise }),
+    now: Date.now,
+    onChange: () => costChanged(),
+    // 每一步也记成 H 的度量事件（契约 4.7）；cost_events 表和日志照记。
+    onEvent: costMetricEvents(recordEvent),
+    log: logger,
+  });
+  costBreaker = costBreakerInst;
+  /** 托盘的暂停数和界面跟着熔断状态走；启动时也算一次（上次停着的，check 不会报「变了」）。 */
+  function costChanged(): void {
+    costPausedCount = costBreakerInst.views().filter((v) => v.state === "paused").length;
+    tray?.setToolTip(trayTooltip());
+    notify();
+  }
+  /** 「现在」页的熔断提醒「打开」去哪儿。 */
+  const costTargetOf = (v: CostBreakerView): NowTarget | null => {
+    const h = v.sessionId ? sessions.head(v.sessionId) : null;
+    if (h?.ticketKey) return { page: "ticket", key: h.ticketKey, sessionId: h.id };
+    if (h && h.featureId !== null) return { page: "feature", id: h.featureId, sessionId: h.id };
+    if (h && h.epicId !== null) return { page: "epic", id: h.epicId, sessionId: h.id };
+    if (h?.butler) return { page: "butler", sessionId: h.id };
+    return v.ticketKey ? { page: "ticket", key: v.ticketKey, sessionId: null } : null;
+  };
   /** Stop 到的时候先重读这个 session 的活动（guard 看的是上一次刷新的）。活动按 head 的 id 跟踪；Stop 带来的可能是链上的旧 id。 */
   const refreshActivityOf = async (id: string): Promise<void> => {
     const head = sessions.head(id)?.id;
@@ -1594,6 +1773,8 @@ async function bootstrap(): Promise<void> {
    */
   const sessionStopped = (stopped: string): void => {
     void holdWatcher.sessionIdle(stopped);
+    // 熔断压着的「接着做」（降档、提高上限以后）趁现在递（工作流 L）。
+    void costBreaker?.sessionStopped(stopped).catch((e: unknown) => logger("cost: nudging after Stop failed", e));
     // 活动没变时 activityMonitor 不会 notify：停下来以后的「需要你」判断在这里补一次。
     void refreshActivityOf(stopped)
       .catch((e: unknown) => logger(`ci delivery: re-reading the activity of ${stopped} failed`, e))
@@ -1741,7 +1922,7 @@ async function bootstrap(): Promise<void> {
   const memoryReadDeps = defaultReadDeps((file, args) => execText(file, args, { timeoutMs: 2_000 }), app.isPackaged);
   // 启动时记一次读数（附录第 7 节）：看得出这台机器上 vm_stat 算出来的可用内存合不合理。
   void memorySnapshotLine(memoryReadDeps).then((line) => logger(`memory at startup: ${line}`), (e: unknown) => logger("memory at startup: reading failed", e));
-  const admission = new MemoryAdmission({
+  const admission = memoryAdmission = new MemoryAdmission({
     read: () => readAvailableMemory(memoryReadDeps),
     settings: () => sessionAdmission(settings),
     measuredSessionsKb: () => measuredOpenSessionsKb(
@@ -1881,6 +2062,9 @@ async function bootstrap(): Promise<void> {
     },
     settingChanged: (key) => {
       if (key === "checksEnabled" || key === "checksEditTimeoutSec" || key === "checksPushTimeoutSec" || key === "ticketPattern") checkSnapshots.schedule();
+      // 后台调度的设置（工作流 L）：马上按新的时段、空闲、额度重算，该让路的让路。提醒线跟着路由阈值。
+      if (key.startsWith("bg")) bgScheduler.tick();
+      if (key === "routingThresholds" || key === "routingQuotas") costCheckSoon();
     },
     // 共享 MCP（WS-M H）：打开就启动 hub（之后开的 session 用它）；关掉时接着它的 session 退完了再停。
     sharedMcpChanged: () => {
@@ -1945,6 +2129,24 @@ async function bootstrap(): Promise<void> {
     }),
     availability,
     routing, switcher,
+    cost: {
+      breakers: () => costBreakerInst.views(),
+      view: (scope) => ({ policy: costPolicy.view(scope), layers: costPolicy.layers(), breakers: costBreakerInst.views(), events: costRepoInst.events({ limit: 50 }) }),
+      set: (scope, overrides) => {
+        try {
+          costPolicy.setLayer(scope, overrides);
+          return { ok: true };
+        } catch (e) {
+          if (e instanceof CostPolicyError) return { ok: false, key: e.key, message: M().cost.error[e.code](e.key) };
+          throw e;
+        }
+      },
+      resume: (kind, id) => costBreakerInst.resume(kind, id),
+    },
+    background: {
+      status: () => bgScheduler.status(),
+      act: (a) => bgScheduler.setKindPaused(a.kind, a.op === "pauseKind"),
+    },
     ciResend: async (item) => {
       const r = await ciDelivery.resend(item);
       ciStuckChanged();
@@ -1999,6 +2201,7 @@ async function bootstrap(): Promise<void> {
             sharedMcpError: sharedMcpOn(settings) && mcpHub.status().state === "failed" ? mcpHub.status().error : null,
           }),
           ...ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
+          ...costNotices(costBreaker?.views() ?? [], costTargetOf),
         ],
         sessionMemory: (id) => procServices.monitor.memoryOf(id),
         memorySnapshot: procServices.monitor.snapshot(),
@@ -2157,6 +2360,10 @@ async function bootstrap(): Promise<void> {
   activityMonitor.start();
   procServices.start();
   usageScanner.start(usageScanMs(process.env));
+  bgScheduler.start();
+  bgQueue.start();
+  // 启动时看一遍：上次退出前暂停着的接着暂停，托盘和「现在」页马上显示。
+  void costBreakerInst.check().then(() => costBreakerInst.views().length > 0 && costChanged()).catch((e: unknown) => logger("cost: the first check failed", e));
   void runDiscovery();
   // 启动时补齐记忆：老数据、上次退出时没写完的。
   void memory.syncAll();
@@ -2247,6 +2454,9 @@ async function bootstrap(): Promise<void> {
     activityMonitor.stop();
     void procServices.stop();
     usageScanner.stop();
+    if (costCheckTimer) clearTimeout(costCheckTimer);
+    bgQueue.dispose();
+    bgScheduler.dispose();
     memory.stop();
     inbox.stop();
     controlInbox.stop();

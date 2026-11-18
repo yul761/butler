@@ -156,6 +156,18 @@ describe("PtyManager", () => {
     expect(mgr.lastUserInputAt("t1")).toBe(0);
   });
 
+  it("Butler's own interrupt (Esc) reaches the terminal but doesn't count as user input", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    await vi.advanceTimersByTimeAsync(1000);
+    const before = spawned[0].pty.written.length;
+    mgr.interrupt("t1");
+    expect(spawned[0].pty.written.slice(before)).toEqual(["\x1b"]);
+    expect(mgr.lastUserInputAt("t1")).toBe(0);
+    expect(mgr.hasDraft("t1")).toBe(false);
+    expect(() => mgr.interrupt("nope")).not.toThrow();
+  });
+
   it("terminal-generated reports do not count as user input; keys and text do (R37)", async () => {
     const { mgr } = setup();
     mgr.open("t1", spec, opts);

@@ -7,7 +7,8 @@ export const USER_TYPING_QUIET_MS = 30_000;
 
 /** 现在不能往这个终端里自动输入的原因。 */
 /** hibernated：终端是 Butler 为了省内存结束的（WS-M B），check 已经叫它醒了，醒来以后 sessionStopped 会再递一次。 */
-export type DeliveryBlock = "closed" | "hibernated" | "busy" | "screen" | "needs_you" | "typing" | "draft";
+/** cost_paused：成本熔断暂停了这个 session（工作流 L），用户点「继续并提高上限」之前 Butler 不往里输入，休眠的也不叫醒。 */
+export type DeliveryBlock = "closed" | "hibernated" | "busy" | "screen" | "needs_you" | "typing" | "draft" | "cost_paused";
 
 export interface DeliveryGuardDeps {
   /** 跑着这个 session（链上任何一个 id）的终端；没有为 null。index.ts 里就是现在的 gateTerm。 */
@@ -28,6 +29,8 @@ export interface DeliveryGuardDeps {
    * 醒来以后 SessionStart(resume) 调 sessionStopped，压着的东西在那里再递。
    */
   wakeIfHibernated?: (sessionId: string) => boolean;
+  /** 成本熔断暂停了这个 session（链上任何一个 id）；没接时恒为 false。 */
+  costPaused?: (sessionId: string) => boolean;
   /** 打过字之后多久之内不自动输入，默认 USER_TYPING_QUIET_MS（e2e 用环境变量调短）。 */
   typingQuietMs?: number;
   now(): number;
@@ -44,6 +47,8 @@ export class DeliveryGuard {
   constructor(private readonly d: DeliveryGuardDeps) {}
 
   check(sessionId: string): DeliveryCheck {
+    // 先看熔断：暂停着的不往里递，也不为了递东西叫醒它。
+    if (this.d.costPaused?.(sessionId)) return { ok: false, block: "cost_paused" };
     const termId = this.d.termOf(sessionId);
     if (termId === null) return { ok: false, block: this.d.wakeIfHibernated?.(sessionId) ? "hibernated" : "closed" };
     const head = this.d.head(termId);

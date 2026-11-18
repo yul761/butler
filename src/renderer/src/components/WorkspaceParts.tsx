@@ -11,6 +11,7 @@ import { HibernateBadges, hibernationOf, isHibernated, PinButton, sessionTitle }
 import { CloseIdleButton, DeleteHiddenButton } from "./SessionCleanupButtons";
 import { RefreshSessionButton } from "./RefreshSessionButton";
 import { SessionLimit } from "./SessionLimit";
+import { SessionCost } from "./SessionCost";
 import { RepoPicker } from "./RepoPicker";
 import { TerminalPane } from "./TerminalPane";
 
@@ -184,6 +185,7 @@ export function SessionButton({ s, panes, place }: { s: SessionView; panes: Sess
         <span className="action">{s.termId ? S.switchTo : hibernated ? S.hib.open : S.open}</span>
       </button>
       <PinButton s={s} label={label} />
+      <SessionCost sessionId={s.id} ticketKey={s.ticketKey} />
       {s.termId ? (
         <>
           {/* 修复 session 和复盘分析 session 不换新（计划 16）。 */}

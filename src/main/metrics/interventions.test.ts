@@ -245,6 +245,16 @@ describe("manual_trigger recording (successful invokes)", () => {
     expect(noOpResult(IPC.handoffsRun, undefined)).toBe(false);
   });
 
+  it("counts a breaker continue-and-raise on its ticket or session, but not when nothing was tripped", () => {
+    const { repo, record } = rec();
+    expect(recordInvoke(record, IPC.costResume, [{ subjectKind: "ticket", subjectId: "T-3" }], { ok: true, cap: 10 })).toBe(true);
+    expect(recordInvoke(record, IPC.costResume, [{ subjectKind: "session", subjectId: "root-1" }], { ok: true, cap: 10 })).toBe(true);
+    expect(recordInvoke(record, IPC.costResume, [{ subjectKind: "ticket", subjectId: "T-3" }], { ok: false, reason: "not_tripped" })).toBe(false);
+    expect(recordInvoke(record, IPC.costSet, [{}])).toBe(false);
+    expect(recordInvoke(record, IPC.backgroundAct, [{ op: "pauseKind", kind: "backtest" }])).toBe(false);
+    expect(repo.events(0).map((e) => [e.sessionId, e.ticketKey])).toEqual([[null, "T-3"], ["root-1", null]]);
+  });
+
   it("ignores reads, setup and channels counted as needs_you_answer", () => {
     const { repo, record } = rec();
     expect(recordInvoke(record, IPC.ticketsList, [])).toBe(false);

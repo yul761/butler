@@ -1,4 +1,5 @@
 import type { AvailabilityAction, LimitKind } from "../../shared/availability";
+import { isBgKind, type BackgroundAction } from "../../shared/background";
 import { isModelName, isTaskId, isTier, POLICIES, type LimitPolicy, type LimitRuleKind, type RegistryModel, type RoutingAction, type Tier } from "../../shared/model-routing";
 import type { SensitiveTerm } from "../../shared/llm";
 import { CONTEXT_LIMIT } from "../../shared/control";
@@ -725,4 +726,25 @@ export function routingActionArg(v: unknown): RoutingAction {
 export function switchModelArg(v: unknown): string | undefined {
   if (v === undefined || v === null) return undefined;
   return isModelName(v) ? v : bad();
+}
+
+/** 改花费上限的一层（工作流 L）：覆盖整个换掉，值在 CostPolicyService 里按键校验（不合法的回 CostSetResult）。 */
+export function costSetArg(v: unknown): { scope: PolicyScope; overrides: unknown } {
+  const o = objArg(v, "cost change", ["scope", "overrides"]);
+  if (!o.overrides || typeof o.overrides !== "object" || Array.isArray(o.overrides)) throw new Error("invalid cost change");
+  return { scope: policyScopeArg(o.scope), overrides: o.overrides };
+}
+
+/** 「继续并提高上限」的对象：session（链的根 id）或 ticket。 */
+export function costSubjectArg(v: unknown): { subjectKind: "session" | "ticket"; subjectId: string } {
+  const o = objArg(v, "cost subject", ["subjectKind", "subjectId"]);
+  if (o.subjectKind === "session") return { subjectKind: "session", subjectId: sessionIdArg(o.subjectId) };
+  if (o.subjectKind === "ticket") return { subjectKind: "ticket", subjectId: ticketKeyArg(o.subjectId) };
+  throw new Error("invalid cost subject");
+}
+
+export function backgroundActionArg(v: unknown): BackgroundAction {
+  const o = objArg(v, "background action", ["op", "kind"]);
+  if ((o.op === "pauseKind" || o.op === "resumeKind") && isBgKind(o.kind)) return { op: o.op, kind: o.kind };
+  throw new Error("invalid background action");
 }

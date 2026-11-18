@@ -3,7 +3,7 @@ import type { RegistryModel } from "../../shared/model-routing";
 import { memDb } from "../test-utils";
 import { migrate } from "../db/database";
 import { UsageRepo, type SpendRow } from "../db/usage-repo";
-import { parseQuotas, parseThresholds, periodEnd, periodStart, registryModelFor, summarizeSpend } from "./spend";
+import { parseQuotas, parseThresholds, periodEnd, periodStart, registryModelFor, spendTotal, summarizeSpend } from "./spend";
 
 const reg = (name: string, tier: RegistryModel["tier"], priceIn: number | null = null, priceOut: number | null = null): RegistryModel => ({
   name, tier, enabled: true, account: "default", priceIn, priceOut, note: "",
@@ -86,5 +86,21 @@ describe("summarizeSpend", () => {
     ]);
     expect(u.spendSince(5)).toEqual([{ model: "H", task: "lesson_analyze", rows: 2, input: 200, output: 20, tokens: 220, costUsd: 0.5, unpricedInput: 105, unpricedOutput: 10, unpricedRows: 1 }]);
     expect(u.since(10)[0]).toMatchObject({ task: "lesson_analyze", requestedTier: "mid", fallbackFrom: "M", costUsd: 0.5 });
+  });
+});
+
+describe("spendTotal (workstream L)", () => {
+  const r = (o: Partial<Parameters<typeof spendTotal>[0][number]>) => ({
+    model: "M1", task: null, rows: 1, input: 0, output: 0, tokens: 0, costUsd: 0, unpricedInput: 0, unpricedOutput: 0, unpricedRows: 0, weighted: 0, ...o,
+  });
+  const registry = [{ name: "M1", tier: "mid" as const, enabled: true, account: "default", priceIn: 3, priceOut: 15, note: "" }];
+
+  it("adds reported dollars and prices the rest from the registry", () => {
+    expect(spendTotal([r({ costUsd: 1 }), r({ unpricedRows: 1, unpricedInput: 1e6, unpricedOutput: 1e6 })], registry, "usd")).toEqual({ spent: 19, partial: false });
+  });
+
+  it("flags partial when a model has no price, and sums weighted tokens for the tokens unit", () => {
+    expect(spendTotal([r({ model: "X", unpricedRows: 1, unpricedInput: 5 })], registry, "usd")).toEqual({ spent: 0, partial: true });
+    expect(spendTotal([r({ weighted: 40 }), r({ weighted: 2 })], registry, "tokens")).toEqual({ spent: 42, partial: false });
   });
 });

@@ -1,3 +1,4 @@
+import type { CostBreakerView } from "./cost";
 import type { CheckAbsenceReason } from "./checks";
 import type { MemorySnapshot, SessionMemory } from "./mem-usage";
 import type { ActivityEvent, SessionActivity } from "./activity";
@@ -381,7 +382,7 @@ export interface HandoffRecord {
 /** 一次 handoff / 刷新的结果（“立即 handoff”按钮会显示它）。 */
 export type HandoffOutcome =
   | { ticketKey: string; status: "stored"; handoffId: number; degraded: boolean }
-  | { ticketKey: string; status: "skipped"; reason: "rate_limited" | "no_session" }
+  | { ticketKey: string; status: "skipped"; reason: "rate_limited" | "no_session" | "cost_paused" }
   | { ticketKey: string; status: "failed"; reason: string; message: string };
 
 export type FeatureHandoffTrigger = "nightly" | "manual" | "command";
@@ -659,7 +660,9 @@ export type NowNotice =
   /** 模型路由（3.0）：有模型撞限或不可用，或最近一小时有任务降级。只在配置了路由时出现。 */
   | { kind: "routing"; limited: string[]; fallbacks: number }
   /** CI 结论超过半小时没递出去（工作流 W）：可以重发、打开 ticket。 */
-  | { kind: "ci_undelivered"; ci: CiUndelivered; target: NowTarget; title: string | null };
+  | { kind: "ci_undelivered"; ci: CiUndelivered; target: NowTarget; title: string | null }
+  /** 成本熔断（工作流 L）：某个 session / ticket 的花费到了提醒线、降了档或者被暂停了。暂停的可以「继续并提高上限」。 */
+  | { kind: "cost"; breaker: CostBreakerView; target: NowTarget | null };
 
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */

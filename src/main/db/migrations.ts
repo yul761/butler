@@ -851,4 +851,67 @@ export const MIGRATIONS: string[] = [
     PRIMARY KEY (run_id, lesson_id));
   ALTER TABLE score_calibration ADD COLUMN source TEXT NOT NULL DEFAULT 'override' CHECK (source IN ('override','review'));
   `,
+  // 工作流 L：通用后台队列（设计 2026-11-17-ws-l-cost-idle 第 3.6 节）。state：queued / running / done / failed / cancelled；
+  // checkpoint 是任务自己存的 JSON（让路、重启后从这里接着跑）；dedupe_key 在排队和在跑的行里每种唯一。
+  // session_usage.ticket_key：headless 调用归到哪个 ticket（成本熔断按 ticket 汇总）。
+  // cost_caps：花费上限的三层覆盖（契约 4.2）；cost_breaker：每个 session（链的根 id）/ ticket 的熔断状态；cost_events：熔断的记录。
+  `
+  CREATE TABLE background_jobs (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','running','done','failed','cancelled')),
+    checkpoint TEXT,
+    priority INTEGER NOT NULL DEFAULT 0,
+    ticket_key TEXT,
+    dedupe_key TEXT,
+    not_before INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    enqueued_at INTEGER NOT NULL,
+    started_at INTEGER,
+    finished_at INTEGER);
+  CREATE INDEX background_jobs_pick ON background_jobs (state, kind, priority DESC, id);
+  CREATE UNIQUE INDEX background_jobs_dedupe ON background_jobs (kind, dedupe_key) WHERE dedupe_key IS NOT NULL AND state IN ('queued','running');
+  ALTER TABLE session_usage ADD COLUMN ticket_key TEXT;
+  CREATE INDEX session_usage_ticket ON session_usage (ticket_key) WHERE ticket_key IS NOT NULL;
+  CREATE TABLE cost_caps (
+    id INTEGER PRIMARY KEY,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global','product','repo')),
+    product_id INTEGER,
+    repo_slug TEXT,
+    overrides TEXT NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL);
+  CREATE UNIQUE INDEX cost_caps_scope ON cost_caps (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''));
+  CREATE TABLE cost_breaker (
+    subject_kind TEXT NOT NULL CHECK (subject_kind IN ('session','ticket')),
+    subject_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('ok','warned','downgraded','paused')),
+    cap REAL,
+    raised_cap REAL,
+    unit TEXT,
+    spent REAL NOT NULL DEFAULT 0,
+    scope TEXT,
+    from_model TEXT,
+    to_model TEXT,
+    tripped_at INTEGER,
+    paused_at INTEGER,
+    stopped_at INTEGER,
+    taken_over_at INTEGER,
+    paused_spent REAL,
+    partial INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (subject_kind, subject_id));
+  CREATE TABLE cost_events (
+    id INTEGER PRIMARY KEY,
+    at INTEGER NOT NULL,
+    subject_kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    spent REAL,
+    cap REAL,
+    unit TEXT,
+    detail TEXT);
+  CREATE INDEX cost_events_subject ON cost_events (subject_kind, subject_id, at);
+  `,
 ];

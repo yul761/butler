@@ -128,6 +128,8 @@ export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.sessionsOpen, IPC.sessionOpenFix, IPC.sessionsRefresh, IPC.sessionsWake, IPC.sessionsSwitchModel, IPC.sessionsCloseIdle,
   IPC.activityDismiss, IPC.ptyKill, IPC.handoffsRun, IPC.featuresSummaryRun, IPC.featuresOpenSession, IPC.epicsOpenSession,
   IPC.butlerOpenSession, IPC.jobsRunNightly, IPC.ciResend, IPC.followupsSetStatus, IPC.lessonsRun, IPC.availabilityAct,
+  // 熔断停下的「继续并提高上限」（工作流 L）
+  IPC.costResume,
 ]);
 
 /** 记成别的人介入的通道（不再算手动触发）：卡片上回答、「不用了」是 needs_you_answer。 */
@@ -143,6 +145,7 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.sessionsLimits, IPC.nowView, IPC.inboxList, IPC.followupsList, IPC.handoffsList, IPC.settingsGet, IPC.llmStatus, IPC.termsList,
   IPC.auditList, IPC.externalAuditList, IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory, IPC.appAutostartGet, IPC.appKeepAwakeGet,
   IPC.clipboardRead, IPC.admissionState, IPC.wizardEstimate, IPC.calibrationSample, IPC.calibrationStats,
+  IPC.costView, IPC.costBreakers, IPC.backgroundStatus,
   // 建立、整理、归档
   IPC.ticketsCreate, IPC.ticketsArchive, IPC.ticketsUpdate, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
   IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive, IPC.featuresUnarchive, IPC.featuresMove,
@@ -155,6 +158,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.appAutostartSet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardWrite,
   // 规矩的初始化向导、校准和原则（工作流 D）：和 lessonsAct 一样是整理规矩、搭环境，不是推动一次工作
   IPC.wizardAct, IPC.calibrationAct, IPC.principlesRegroup,
+  // 花费上限、手动停 / 恢复一种后台任务（工作流 L）
+  IPC.costSet, IPC.backgroundAct,
 ]);
 
 /** 这个通道算不算手动触发。 */
@@ -183,7 +188,14 @@ export function recordInvoke(record: RecordEvent, channel: string, args: readonl
   const sessionId = SESSION_ARG.has(channel) ? shortString(first) : undefined;
   let ticketKey = TICKET_ARG.has(channel) ? shortString(first) : undefined;
   if (channel === IPC.sessionsOpen && first && typeof first === "object") ticketKey = shortString((first as { ticketKey?: unknown }).ticketKey);
-  return record("manual_trigger", { sessionId, ticketKey, data: { channel } });
+  let resumedSession: string | undefined;
+  if (channel === IPC.costResume && first && typeof first === "object") {
+    // 熔断的对象是 ticket（key）或 session（链的根 id）。
+    const { subjectKind, subjectId } = first as { subjectKind?: unknown; subjectId?: unknown };
+    if (subjectKind === "ticket") ticketKey = shortString(subjectId);
+    else if (subjectKind === "session") resumedSession = shortString(subjectId);
+  }
+  return record("manual_trigger", { sessionId: sessionId ?? resumedSession, ticketKey, data: { channel } });
 }
 
 /** 没归类的 invoke 通道（测试用：必须为空）。 */

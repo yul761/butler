@@ -24,6 +24,15 @@ function ciLogBlocks(failed: Array<{ name: string; log?: string }>): string {
 }
 
 const ZH = {
+  background: {
+    badWindow: "时段只能是 anytime、idle、hours、idle_or_hours",
+    badYield: "让路方式只能是 finish 或 interrupt",
+    badQuotaOrder: "额度紧张时的顺序只能是 pause_first 或 downgrade_first",
+    badHours: "时段要写成 22:00-07:00，可以用逗号分开写几段",
+    badIdleMinutes: (max: number) => `空闲分钟数要是 1 到 ${max} 的整数`,
+    badPlentiful: "额度充裕的百分比要是 1 到 99 的整数，或者留空",
+    badKinds: "每种后台任务的设置不对：种类、优先级（high / normal / low）或时段认不出",
+  },
   routing: {
     badModelName: "模型名只能用字母、数字和 . _ - : / @ [ ]，最长 100 个字符",
     badTier: "档位只能是 high、mid、low",
@@ -69,6 +78,20 @@ const ZH = {
   startupFailed: "Butler 启动失败",
   claudeMissingCheck: "找不到 claude 命令，请先在“环境检查”里确认 claude 路径",
   claudeMissing: "找不到 claude 命令",
+  costPausedHeadless: "这个 ticket 的花费到了上限，后台调用暂停了；在「现在」页点「继续并提高上限」恢复",
+  cost: {
+    continueAfterDowngrade: (model: string) => `（Butler）这个 session 的花费到了上限，已经换成 ${model}。请从刚才停下的地方接着做。`,
+    continueAfterRaise: (cap: string) => `（Butler）花费上限提高到了 ${cap}。请从刚才停下的地方接着做。`,
+    trayPaused: (n: number) => `${n} 个因花费上限暂停`,
+    error: {
+      unknown_key: (key: string) => `不认识的设置：${key}`,
+      bad_cap: (key: string) => `${key} 要是大于 0 的数，或者留空表示不限`,
+      bad_unit: (key: string) => `${key} 只能是 usd 或 tokens`,
+      bad_action: (key: string) => `${key} 只能是「先降档再暂停」或「直接暂停」`,
+      bad_scope: (key: string) => `${key} 只能是「整个 session」或「只停后台」`,
+      bad_percent: (key: string) => `${key} 要是 0 到 1000 之间的整数`,
+    },
+  },
   autostartUnsupported: "只有安装好的 Butler 才能设置开机自启",
   duration: (ms: number) => formatDuration(ms),
   cancelled: "已取消",
@@ -241,6 +264,7 @@ const ZH = {
     needs_you: "它在等用户回答问题",
     typing: "用户正在它的终端里打字",
     draft: "它的输入框里有用户没发出去的草稿",
+    cost_paused: "它的花费到了上限，被暂停了；用户在「现在」页点「继续并提高上限」以后才能往里发",
   } satisfies Record<DeliveryBlock, string>,
   ctlPlanInvalid: (limit: number) => `plan 不能为空，最长 ${limit} 字符`,
   ctlPlanSaved: "规划已保存，替换了之前的规划。epic 的记忆里显示的是这一份，之后新开的 feature 总控收到的第一条消息里也带着它。butler-epic 的 handoff 只写进度。",
@@ -456,6 +480,15 @@ const ZH = {
 export type MainStrings = typeof ZH;
 
 const EN: MainStrings = {
+  background: {
+    badWindow: "The window must be anytime, idle, hours or idle_or_hours",
+    badYield: "Yielding must be finish or interrupt",
+    badQuotaOrder: "The order when quota is tight must be pause_first or downgrade_first",
+    badHours: "Write hours like 22:00-07:00; separate several ranges with commas",
+    badIdleMinutes: (max: number) => `Idle minutes must be a whole number from 1 to ${max}`,
+    badPlentiful: "The plentiful-quota percentage must be a whole number from 1 to 99, or empty",
+    badKinds: "The per-task background settings are invalid: unknown task, priority (high / normal / low) or window",
+  },
   routing: {
     badModelName: "Model names use letters, digits and . _ - : / @ [ ] (at most 100 characters)",
     badTier: "The tier must be high, mid or low",
@@ -498,6 +531,20 @@ const EN: MainStrings = {
   startupFailed: "Butler could not start",
   claudeMissingCheck: "The claude command was not found. Check the claude path under “Environment check” first",
   claudeMissing: "The claude command was not found",
+  costPausedHeadless: "This ticket reached its spend cap, so background calls are paused. Use “Continue and raise the cap” on the Now page to resume",
+  cost: {
+    continueAfterDowngrade: (model: string) => `(Butler) This session reached its spend cap and now runs on ${model}. Please carry on from where you stopped.`,
+    continueAfterRaise: (cap: string) => `(Butler) The spend cap was raised to ${cap}. Please carry on from where you stopped.`,
+    trayPaused: (n: number) => `${n} paused at the spend cap`,
+    error: {
+      unknown_key: (key: string) => `Unknown setting: ${key}`,
+      bad_cap: (key: string) => `${key} must be a number above 0, or empty for no cap`,
+      bad_unit: (key: string) => `${key} must be usd or tokens`,
+      bad_action: (key: string) => `${key} must be “downgrade, then pause” or “pause”`,
+      bad_scope: (key: string) => `${key} must be “the whole session” or “background only”`,
+      bad_percent: (key: string) => `${key} must be a whole number from 0 to 1000`,
+    },
+  },
   autostartUnsupported: "Only an installed Butler can start at login",
   duration: (ms: number) => enDuration(ms),
   cancelled: "Cancelled",
@@ -662,6 +709,7 @@ const EN: MainStrings = {
     needs_you: "it is waiting for the user to answer a question",
     typing: "the user is typing in its terminal",
     draft: "its input holds a draft the user has not sent",
+    cost_paused: "it reached its spend cap and is paused; nothing can be sent until the user clicks “Continue and raise the cap” on the Now page",
   },
   ctlPlanInvalid: (limit: number) => `plan can't be empty and is at most ${limit} characters`,
   ctlPlanSaved: "The plan is saved and replaces the previous one. The epic's memory shows this one, and the first message of every feature coordinator opened from now on includes it. Use butler-epic's handoff for progress only.",
