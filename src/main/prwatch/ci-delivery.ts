@@ -3,6 +3,7 @@ import type { TicketPrsRepo } from "../db/ticket-prs-repo";
 import type { DeliveryGuard } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import type { CiCheck } from "../tickets/gh";
+import type { TriageDecision } from "../loop/ci-triage";
 import type { CiItemRef, CiUndelivered, CiUndeliveredReason, Session } from "../../shared/types";
 import { sanitizeTask } from "../../shared/control";
 import { M } from "../strings";
@@ -21,6 +22,8 @@ export interface CiDeliveryDeps {
   recipient(ticketKey: string, repoId: number, branch: string): Recipient;
   /** recheck 在粘贴前调用（I2）：不通过就什么都不写，返回 blocked。 */
   deliver(termId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
+  /** CI 失败分类（工作流 I）：递之前问一下，hold 就先不递（不算没递出去），note 附在通知后面。没有就原样递。 */
+  triage?: { decide(item: CiItem, row: { headSha: string | null; ci: string; failed: CiCheck[] }): TriageDecision };
   now(): number;
   log(msg: string, err?: unknown): void;
 }
@@ -111,7 +114,7 @@ export function ciRecipient(i: {
 }
 
 /** 为什么没递（日志和「现在」页的提醒用）。delivered 是已经递过（resend 的返回值），不是失败。 */
-export type CiSkipReason = CiUndeliveredReason | "delivered" | "not_open" | "not_settled";
+export type CiSkipReason = CiUndeliveredReason | "delivered" | "not_open" | "not_settled" | "triage";
 
 /** 递一条要用的：哪个 ticket 的哪个仓库哪个分支、通知里写什么、递完记到哪。 */
 interface Pending { ticketKey: string; repoId: number; branch: string; number: number | null; label: string; key: string; text: () => string; mark: () => void }
@@ -199,9 +202,11 @@ export class CiDelivery {
       if (key === r.deliveredKey) return { skip: "delivered", label };
       if (r.headSha === null) return { skip: "no_sha", label };
       if (r.repoId === null || r.headBranch === null) return { skip: "no_repo", label };
+      const t = this.triage(item, r);
+      if (!t) return { skip: "triage", label };
       return {
         ticketKey: r.ticketKey, repoId: r.repoId, branch: r.headBranch, number: r.number, label, key,
-        text: () => notice(r, M().ciWherePr(r.number)), mark: () => this.d.prs.setDelivered(r.id, key),
+        text: () => withNote(notice(r, M().ciWherePr(r.number)), t.note), mark: () => (this.d.prs.setDelivered(r.id, key), t.onSent?.()),
       };
     }
     const r = this.d.branches.get(item.repoId);
@@ -213,15 +218,29 @@ export class CiDelivery {
     const key = deliveryKey(r);
     if (key === r.deliveredKey) return { skip: "delivered", label };
     if (r.headSha === null) return { skip: "no_sha", label };
+    const t = this.triage(item, r);
+    if (!t) return { skip: "triage", label };
     return {
       ticketKey: r.ticketKey, repoId: r.repoId, branch: r.branch, number: null, label, key,
-      text: () => notice(r, M().ciWhereBranch(r.branch)), mark: () => this.d.branches.setDelivered(r.repoId, key),
+      text: () => withNote(notice(r, M().ciWhereBranch(r.branch)), t.note), mark: () => (this.d.branches.setDelivered(r.repoId, key), t.onSent?.()),
     };
+  }
+
+  /** 问 triage：null = 先不递（在分类、在重跑）。triage 出错不挡递送。 */
+  private triage(item: CiItem, r: { headSha: string | null; ci: string; failed: CiCheck[] }): { note: string | null; onSent?: () => void } | null {
+    if (!this.d.triage) return { note: null };
+    try {
+      const t = this.d.triage.decide(item, r);
+      return t.action === "hold" ? null : t;
+    } catch (e) {
+      this.d.log("ci delivery: triage failed", e);
+      return { note: null };
+    }
   }
 
   /** 没递：记日志（原因变了才记），有人在等的记进 waiting。 */
   private skipped(id: string, label: string, key: string, reason: CiSkipReason, p: Pending | null, sessionId: string | null, notify?: boolean): CiSkipReason {
-    if (reason === "delivered" || reason === "not_open" || reason === "not_settled") {
+    if (reason === "delivered" || reason === "not_open" || reason === "not_settled" || reason === "triage") {
       this.forget(id);
       return reason;
     }
@@ -267,6 +286,11 @@ export class CiDelivery {
       this.busy.delete(sessionId);
     }
   }
+}
+
+/** Butler 的判断放在通知最后。日志最多 LOG_CHARS_TOTAL 字，加上判断也在 sanitizeTask 的上限以内。 */
+function withNote(text: string, note: string | null): string {
+  return note ? `${text}\n\n${note}` : text;
 }
 
 function notice(row: { ci: string; headSha: string | null; failed: CiCheck[] }, where: string): string {

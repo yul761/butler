@@ -57,6 +57,7 @@ const NETWORKY = /network|timed? ?out|timeout|fetch|ECONN|ENOTFOUND|EAI_AGAIN|so
 /** GitHub 的 --log-failed 每行是「job\tstep\t时间 内容」。 */
 export interface LogLine { job: string | null; step: string | null; text: string }
 
+// eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
 const STAMP = /^\uFEFF?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z\s?/;
 

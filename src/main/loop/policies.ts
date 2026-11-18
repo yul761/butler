@@ -95,7 +95,7 @@ export class LoopPolicies {
           : o.kind === "product"
             ? { kind: "product", productId: o.productId, name: this.d.products.product(o.productId)?.name ?? `#${o.productId}` }
             : o;
-      return { key, effective: r.value[key] as LoopValue, origin, override: own[key] ?? null };
+      return { key, effective: (r.value as unknown as Record<string, LoopValue>)[key], origin, override: own[key] ?? null };
     });
     const conflicts = scope.kind === "repo"
       ? this.resolver.conflicts(scope.slug).map((c) => ({ key: c.key, products: c.products.map((p) => ({ ...p, value: p.value as LoopValue })) }))

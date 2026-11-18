@@ -78,7 +78,7 @@ export type RuleOutcome = { skip: true; reason: "resolved" | "own" | "bot" } | {
 
 /** 只是表示认可、感谢的短评论。 */
 const ACK = /^(lgtm|looks good( to me)?|thanks?( you)?|thx|ty|nice|great|ok(ay)?|done|\+1|ship it|approved?|好的|谢谢|没问题|可以)[.!。！~\s]*$/i;
-const EMOJI_ONLY = /^[\p{Extended_Pictographic}\p{Emoji_Modifier}\u200d\ufe0f\s]*$/u;
+const EMOJI_ONLY = /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\u200d|\ufe0f|\s)*$/u;
 const SHORTCODES = /^(:[a-z0-9_+-]+:\s*)+$/i;
 const SUGGESTION = /```suggestion\b/;
 /** Copilot review 正文开头那段总述。 */

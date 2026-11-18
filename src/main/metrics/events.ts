@@ -31,6 +31,9 @@ export const METRIC_KINDS: Readonly<Record<string, MetricKindGroup>> = {
   pr_reopened: "rework",
   pr_reverted: "rework",
   comment_auto_handled: "comment",
+  // 工作流 I：CI 自动重跑、重跑后通过（flaky）。
+  ci_rerun: "other",
+  ci_flaky: "other",
   "cost.warn": "other",
   "cost.downgrade": "other",
   "cost.pause": "other",
