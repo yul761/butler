@@ -206,6 +206,9 @@ const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
 const HOOK_DISCOVERY_DEBOUNCE_MS = 3000;
 /** 系统空闲超过这么多秒就不算“正在用电脑”（用于 tick 触发早间任务）。 */
 const ACTIVE_IDLE_SECONDS = 120;
+/** 熔断的「最近的记录」留多久；结束了的后台任务留多久（工作流 L）。启动时清一次。 */
+const COST_EVENTS_RETENTION_MS = 180 * 24 * 3600_000;
+const BG_FINISHED_RETENTION_MS = 30 * 24 * 3600_000;
 
 let win: BrowserWindow | null = null;
 /** 窗口 show / restore 时调（bootstrap 里接到 WS-M 的优先级上）。 */
@@ -664,7 +667,14 @@ async function bootstrap(): Promise<void> {
   });
   bgScheduler.subscribe(() => notify());
   // 通用后台队列：D、F、G、N 的任务在这里登记处理函数。W 的内存准入（#40）合并前 admitSession 一律放行。
-  const bgQueue = new BackgroundQueue({ repo: new BackgroundRepo(db), scheduler: bgScheduler, now: Date.now, isHibernated, onChange: () => notify(), log: logger });
+  const bgRepo = new BackgroundRepo(db);
+  try {
+    const n = bgRepo.pruneFinished(Date.now() - BG_FINISHED_RETENTION_MS);
+    if (n > 0) logger(`background: pruned ${n} finished job(s)`);
+  } catch (e) {
+    logger("background: pruning finished jobs failed", e);
+  }
+  const bgQueue = new BackgroundQueue({ repo: bgRepo, scheduler: bgScheduler, now: Date.now, isHibernated, onChange: () => notify(), log: logger });
   /** 复盘的闸门：没配置路由时就是账号级的可用状态；配置了只在 lesson_analyze 哪个模型都用不了时停。 */
   const lessonsGate = new RoutedLessonsGate({ availability, routing, now: Date.now });
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
@@ -1338,6 +1348,12 @@ async function bootstrap(): Promise<void> {
     };
   };
   const costRepoInst = new CostRepo(db);
+  try {
+    const n = costRepoInst.pruneEvents(Date.now() - COST_EVENTS_RETENTION_MS);
+    if (n > 0) logger(`cost: pruned ${n} old breaker event(s)`);
+  } catch (e) {
+    logger("cost: pruning old events failed", e);
+  }
   const costBreakerInst = new CostBreaker({
     repo: costRepoInst, policy: costPolicy, usage: usageRepo, registry: () => routing.config().registry,
     warnPercent: () => Math.round(parseThresholds(settings.get("routingThresholds"))[0] * 100),
@@ -1375,7 +1391,8 @@ async function bootstrap(): Promise<void> {
     busy: (headId) => sessions.head(headId)?.waitingForInput === false,
     interrupt: (headId) => {
       const t = gateTerm(headId);
-      if (t) pty.write(t, "\x1b");
+      // 不经 pty.write：那是用户输入的路，会把这次 Esc 记成用户接手了。
+      if (t) pty.interrupt(t);
     },
     // 和休眠一样结束终端：之后点开会 --resume 接上。
     kill: (headId) => {
@@ -1395,16 +1412,18 @@ async function bootstrap(): Promise<void> {
     scheduler: bgScheduler,
     texts: () => ({ continueAfterDowngrade: M().cost.continueAfterDowngrade, continueAfterRaise: M().cost.continueAfterRaise }),
     now: Date.now,
-    onChange: () => {
-      costPausedCount = costBreakerInst.views().filter((v) => v.state === "paused").length;
-      tray?.setToolTip(trayTooltip());
-      notify();
-    },
+    onChange: () => costChanged(),
     // H 的 recordEvent 合并后接这里（契约 4.7）；cost_events 表和日志已经记了每一步。
     onEvent: () => undefined,
     log: logger,
   });
   costBreaker = costBreakerInst;
+  /** 托盘的暂停数和界面跟着熔断状态走；启动时也算一次（上次停着的，check 不会报「变了」）。 */
+  function costChanged(): void {
+    costPausedCount = costBreakerInst.views().filter((v) => v.state === "paused").length;
+    tray?.setToolTip(trayTooltip());
+    notify();
+  }
   /** 「现在」页的熔断提醒「打开」去哪儿。 */
   const costTargetOf = (v: CostBreakerView): NowTarget | null => {
     const h = v.sessionId ? sessions.head(v.sessionId) : null;
@@ -2341,7 +2360,7 @@ async function bootstrap(): Promise<void> {
   bgScheduler.start();
   bgQueue.start();
   // 启动时看一遍：上次退出前暂停着的接着暂停，托盘和「现在」页马上显示。
-  void costBreakerInst.check().then(() => costBreakerInst.views().length > 0 && notify()).catch((e: unknown) => logger("cost: the first check failed", e));
+  void costBreakerInst.check().then(() => costBreakerInst.views().length > 0 && costChanged()).catch((e: unknown) => logger("cost: the first check failed", e));
   void runDiscovery();
   // 启动时补齐记忆：老数据、上次退出时没写完的。
   void memory.syncAll();

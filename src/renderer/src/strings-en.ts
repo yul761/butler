@@ -1234,6 +1234,7 @@ export const EN: UiStrings = {
     cancelled: "Cancelled",
     app_quit: "Interrupted when the app quit",
     yielded: "Yielded to interactive work, queued again",
+    cost_paused: "Its ticket is paused by the spend breaker; retried in a few minutes",
     error: "Internal error",
   } satisfies Record<LessonRunReason, string>,
   lessonRunOrigin: { backfill: "Backfill", merged: "Merged", daily: "Daily" } satisfies Record<LessonOrigin, string>,

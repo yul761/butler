@@ -151,4 +151,12 @@ describe("SessionsRepo.rootOf (workstream L)", () => {
     expect(repo.rootOf("c")).toBe("a");
     expect(repo.rootOf("nope")).toBeNull();
   });
+
+  it("returns instead of looping forever when replaced_by forms a cycle", () => {
+    const { repo, db } = setup();
+    for (const [id, at] of [["a", 1], ["b", 2]] as const) repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: at });
+    db.prepare(`UPDATE sessions SET replaced_by = 'b' WHERE id = 'a'`).run();
+    db.prepare(`UPDATE sessions SET replaced_by = 'a' WHERE id = 'b'`).run();
+    expect(["a", "b"]).toContain(repo.rootOf("a"));
+  });
 });

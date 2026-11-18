@@ -306,13 +306,13 @@ Caps are set in layers, like the admission policy: **global**, then **product**,
 | Overshoot after downgrading before pausing (%) | `graceAfterDowngradePercent` | `20` | 0 to 1000. |
 | How much "Continue and raise the cap" adds (%) | `raisePercent` | `50` | 1 to 1000. The new cap is what was already spent plus this share of the cap. |
 
-**What you see.** Past the first soft threshold of `routingThresholds` (70% by default) the **Now** page warns. At the cap, the **Now** page, the session's row and the tray tooltip say what happened. **Continue and raise the cap** clears the pause and raises the cap for that session or ticket only; changing the cap in settings resets that raise. A paused session that keeps spending for more than 90 seconds without you typing in it has its terminal ended; if you type in it yourself, Butler leaves it to you. A paused session is never woken from hibernation. Every warning, downgrade, pause, stop and resume is listed under **Recent events** on the same page.
+**What you see.** Past the first soft threshold of `routingThresholds` (70% by default) the **Now** page warns. At the cap, the **Now** page, the session's row and the tray tooltip say what happened. **Continue and raise the cap** clears the pause and raises the cap for that session or ticket only; changing the cap in settings resets that raise. A paused session that is still running 90 seconds after the pause, and has spent more since, has its terminal ended unless you typed in it; if you type in it yourself, Butler leaves it to you. A paused session is never woken from hibernation. Every warning, downgrade, pause, stop and resume is listed under **Recent events** on the same page.
 
-The spend caps don't replace the stuck judge: a stuck check still runs while a session is over its cap, and a stuck session is still reported even when it is within budget.
+The spend caps don't replace the stuck judge: the stuck check and the needs-you check still run while a session or ticket is over its cap, and a stuck session is still reported even when it is within budget.
 
 ### Background work
 
-Background work (lessons analysis and backfills, lesson admission, and the kinds later features add) comes after the sessions you are using. Each kind has a priority (`high`, `normal`, `low`) and may be limited to certain times. When it has to yield, it keeps its progress: an interrupted item goes back to the queue and picks up from where it stopped, also after a restart. Background work never wakes a hibernated session.
+Background work (lessons analysis and backfills, lesson admission, and the kinds later features add) comes after the sessions you are using. Each kind has a priority (`high`, `normal`, `low`) and may be limited to certain times. When it has to yield, nothing is lost: an interrupted item goes back to the queue and runs again later (kinds that save a checkpoint continue from it), also after a restart. Background work never wakes a hibernated session.
 
 | Setting | Key | Default | Accepted values and notes |
 |---------|-----|---------|---------------------------|
@@ -320,11 +320,11 @@ Background work (lessons analysis and backfills, lesson admission, and the kinds
 | These hours | `bgHours` | `22:00-07:00` | Comma-separated `HH:MM-HH:MM` ranges in local time; a range may cross midnight. |
 | Idle after (minutes) | `bgIdleMinutes` | `10` | 1 to 240. Minutes without keyboard or mouse input on macOS or Windows before you count as idle. A locked screen counts as idle at once. |
 | When it has to yield | `bgYield` | `finish` | `finish`: work already running finishes, nothing new starts. `interrupt`: work that can be stopped stops now and is requeued. |
-| When quota is tight | `bgQuotaOrder` | `pause_first` | `pause_first`: past the first soft threshold, low-priority background work pauses before any task is moved to a lower tier. `downgrade_first`: tasks move to a lower tier first, and low-priority work pauses only past the second threshold. |
-| Plentiful quota (%) | `bgPlentifulPercent` | empty | 1 to 99. While every quota is below this share, background work runs outside its hours too. Empty turns it off. |
+| When quota is tight | `bgQuotaOrder` | `pause_first` | `pause_first`: past the first soft threshold low-priority background work pauses, and past the second normal-priority work pauses too. `downgrade_first`: background work keeps running on the lower tier model routing picks, and only low-priority work pauses, past the second threshold. `high` priority keeps running either way. Model routing still moves fallback tasks to a lower tier past the first threshold. |
+| Plentiful quota (%) | `bgPlentifulPercent` | empty | 1 to 99. While every quota is below this share, background work runs outside its hours and while you are active too. Empty turns it off. |
 | Per-kind changes | `bgKinds` | empty | A JSON object from a kind to `{"priority": ..., "window": ..., "paused": true}`. The table on the page writes it for you. |
 
-The table on the page shows each kind, whether it may run now and why not (paused by you, spend breaker, quota, yielding to you, outside the hours, not enough memory), and how many items are queued and running. **Pause** stops one kind until you resume it.
+The table on the page shows each kind, whether it may run now and why not (paused by you, spend breaker, quota, yielding to you, outside the hours), and how many items are queued and running. A kind that opens a session also asks the memory admission check first and waits while it refuses. **Pause** stops one kind until you resume it.
 
 ## Privacy and personal API
 

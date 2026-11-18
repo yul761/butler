@@ -66,13 +66,27 @@ export class BackgroundRepo {
   /** 这一种里下一个可以跑的（allowTicket 说这个 ticket 的能不能跑），标成 running、次数加一。 */
   take(kind: BgKind, now: number, allowTicket: (ticketKey: string) => boolean): BgJob | null {
     return withTransaction(this.db, () => {
+      // 一行一行看，找到第一个能跑的就停：不截前 N 行，不然前面一大串被熔断停住的 ticket 会把后面能跑的饿死。
+      // 每个 ticket 只问一次。
+      const asked = new Map<string, boolean>();
+      const allowed = (key: string) => {
+        let v = asked.get(key);
+        if (v === undefined) asked.set(key, (v = allowTicket(key)));
+        return v;
+      };
+      let r: Row | undefined;
       const rows = this.db
         .prepare(
           `SELECT * FROM background_jobs WHERE state = 'queued' AND kind = ? AND (not_before IS NULL OR not_before <= ?)
-           ORDER BY priority DESC, id LIMIT 200`,
+           ORDER BY priority DESC, id`,
         )
-        .all(kind, now) as unknown as Row[];
-      const r = rows.find((x) => x.ticket_key === null || allowTicket(x.ticket_key));
+        .iterate(kind, now) as Iterable<Row>;
+      for (const x of rows) {
+        if (x.ticket_key === null || allowed(x.ticket_key)) {
+          r = x;
+          break;
+        }
+      }
       if (!r) return null;
       this.db.prepare(`UPDATE background_jobs SET state = 'running', attempts = attempts + 1, started_at = ? WHERE id = ?`).run(now, r.id);
       return { ...toJob(r), state: "running", attempts: Number(r.attempts) + 1 };
@@ -94,6 +108,11 @@ export class BackgroundRepo {
 
   cancel(id: number, now: number): boolean {
     return Number(this.db.prepare(`UPDATE background_jobs SET state = 'cancelled', finished_at = ? WHERE id = ? AND state = 'queued'`).run(now, id).changes) > 0;
+  }
+
+  /** 删掉 before 之前就结束了的（done、failed、cancelled）；排队和在跑的不动。返回删了几条。 */
+  pruneFinished(before: number): number {
+    return Number(this.db.prepare(`DELETE FROM background_jobs WHERE state IN ('done','failed','cancelled') AND finished_at < ?`).run(before).changes);
   }
 
   /** 启动时：上次在跑的回到 queued（检查点留着）。 */

@@ -122,6 +122,17 @@ describe("cost breaker: a session over its cap (acceptance)", () => {
     expect(t.calls).toEqual(["switch s1 sonnet", "nudge s1: continue on sonnet"]);
   });
 
+  it("two flushes at the same time deliver the nudge once", async () => {
+    const t = setup({ caps: { sessionCap: 1 } });
+    t.addSession("s1");
+    t.nudgeOk.value = false;
+    t.spend(1);
+    await t.b.check();
+    t.nudgeOk.value = true;
+    await Promise.all([t.b.sessionStopped("s1"), t.b.sessionStopped("s1"), t.b.check()]);
+    expect(t.calls.filter((c) => c.startsWith("nudge"))).toEqual(["nudge s1: continue on sonnet"]);
+  });
+
   it("pauses straight away with the pause action, or when there is no lower model", async () => {
     const a = setup({ caps: { sessionCap: 1, action: "pause" } });
     a.addSession("s1");
@@ -187,6 +198,29 @@ describe("cost breaker: ticket caps and background work", () => {
     expect(t.scheduler.yieldTicket).toHaveBeenCalledWith("T-1");
   });
 
+  it("a session cap and a ticket cap reached in the same check switch the model once", async () => {
+    const t = setup({ caps: { sessionCap: 4, ticketCap: 4 } });
+    t.addSession("s1");
+    t.spend(4);
+    await t.b.check();
+    expect(t.calls.filter((c) => c.startsWith("switch"))).toEqual(["switch s1 sonnet"]);
+    expect(t.sessions.get("s1")?.model).toBe("sonnet");
+    expect(t.b.views().map((v) => [v.subjectKind, v.state]).sort()).toEqual([["session", "downgraded"], ["ticket", "downgraded"]]);
+  });
+
+  it("a whole-session pause also stops the ticket's background calls", async () => {
+    const t = setup({ caps: { sessionCap: 5, action: "pause" } });
+    t.addSession("s1");
+    t.spend(5);
+    await t.b.check();
+    expect(t.b.sessionPaused("s1")).toBe(true);
+    expect(t.b.gate({ task: "handoff_refresh", ticketKey: "T-1" })).toBe("pause");
+    expect(t.b.allowBackground("T-1")).toBe(false);
+    expect(t.scheduler.yieldTicket).toHaveBeenCalledWith("T-1");
+    expect(t.b.gate({ task: "stuck_judge", ticketKey: "T-1" })).toBe("ok");
+    expect(t.b.gate({ task: "needs_you", ticketKey: "T-1" })).toBe("ok");
+  });
+
   it("a ticket cap with session scope pauses every open session of the ticket", async () => {
     const t = setup({ caps: { ticketCap: 4, action: "pause" } });
     t.addSession("s1");
@@ -206,22 +240,69 @@ describe("cost breaker: after the pause", () => {
   it("stops the terminal when spending goes on and nobody typed, once", async () => {
     const t = setup({ caps: { sessionCap: 1, action: "pause" } });
     t.addSession("s1");
+    t.busy.add("s1");
     t.spend(1);
     await t.b.check();
     t.advance(COST_STOP_AFTER_MS - 1);
     t.spend(0.5);
     await t.b.check();
-    expect(t.calls).toEqual([]);
+    expect(t.calls).toEqual(["esc s1"]);
     t.advance(1);
     await t.b.check();
-    expect(t.calls).toEqual(["kill s1"]);
+    expect(t.calls).toEqual(["esc s1", "kill s1"]);
     expect(t.b.views()[0]).toMatchObject({ state: "paused", stoppedAt: t.now() });
     // 用户自己重开：不再结束
     t.sessions.get("s1")!.open = true;
     t.advance(COST_STOP_AFTER_MS);
     t.spend(1);
     await t.b.check();
-    expect(t.calls).toEqual(["kill s1"]);
+    expect(t.calls).toEqual(["esc s1", "kill s1"]);
+  });
+
+  it("does not stop a terminal that went quiet after the Esc, even when the last turn's usage arrives late", async () => {
+    const t = setup({ caps: { sessionCap: 1, action: "pause" } });
+    t.addSession("s1");
+    t.busy.add("s1");
+    t.spend(1);
+    await t.b.check();
+    expect(t.calls).toEqual(["esc s1"]);
+    // Esc 生效，终端停了；被打断那一轮的用量过了一会儿才扫到。
+    t.busy.delete("s1");
+    t.advance(COST_STOP_AFTER_MS * 3);
+    t.spend(0.4);
+    await t.b.check();
+    expect(t.calls).toEqual(["esc s1"]);
+    expect(t.b.views()[0]).toMatchObject({ state: "paused", stoppedAt: null });
+  });
+
+  it("lowering the cap while paused keeps the pause instead of downgrading again", async () => {
+    const t = setup({ caps: { sessionCap: 10 } });
+    t.addSession("s1");
+    t.spend(10);
+    await t.b.check();
+    t.spend(3);
+    await t.b.check();
+    expect(t.b.views()[0]).toMatchObject({ state: "paused", toModel: "sonnet" });
+    t.policy.setLayer({ kind: "global" }, { sessionCap: 5 });
+    await t.b.check();
+    expect(t.b.views()[0]).toMatchObject({ state: "paused", cap: 5 });
+    expect(t.b.sessionPaused("s1")).toBe(true);
+    expect(t.calls.filter((c) => c.startsWith("switch"))).toEqual(["switch s1 sonnet"]);
+    expect(t.events()).toEqual(["downgrade", "pause"]);
+  });
+
+  it("a check asked for while one is running is not dropped", async () => {
+    const t = setup({ caps: { sessionCap: 1, action: "pause" } });
+    t.addSession("s1");
+    t.addSession("s2", { ticketKey: "T-2" });
+    t.spend(1, { session: "s1" });
+    t.spend(1, { session: "s2" });
+    // 第二次在第一次还没看完时就来了：以前直接丢掉，s2 要等下一次扫描。
+    const first = t.b.check({ sessions: ["s1"] });
+    const second = t.b.check({ sessions: ["s2"] });
+    await Promise.all([first, second]);
+    expect(t.b.sessionPaused("s1")).toBe(true);
+    expect(t.b.sessionPaused("s2")).toBe(true);
   });
 
   it("does not stop a terminal that is quiet after the pause", async () => {
@@ -249,6 +330,17 @@ describe("cost breaker: after the pause", () => {
     expect(t.calls).toEqual([]);
     expect(t.b.views()[0]).toMatchObject({ state: "paused", takenOver: true });
     expect(t.events()).toEqual(["pause", "takeover"]);
+  });
+
+  it("old events can be pruned", async () => {
+    const t = setup({ caps: { sessionCap: 1, action: "pause" } });
+    t.addSession("s1");
+    t.spend(1);
+    await t.b.check();
+    t.advance(1000);
+    await t.b.resume("session", "s1");
+    expect(t.repo.pruneEvents(T0 + 1)).toBe(1);
+    expect(t.events()).toEqual(["raise", "resume"]);
   });
 
   it("keeps the pause across a restart", async () => {

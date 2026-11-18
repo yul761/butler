@@ -15,7 +15,7 @@ import { RoutingService } from "../routing/routing-service";
 import { readBgSettings } from "../background/bg-settings";
 import { fakeIdleSignal } from "../background/idle";
 import { BackgroundScheduler } from "../background/scheduler";
-import { BACKFILL_LIMIT, DAILY_RETRY_BACKOFF_MS, LessonRunner, type LessonRunnerDeps } from "./lesson-runner";
+import { BACKFILL_LIMIT, DAILY_RETRY_BACKOFF_MS, LESSON_COST_RETRY_MS, LessonRunner, type LessonRunnerDeps } from "./lesson-runner";
 
 const DAY = 86_400_000;
 const T0 = new Date(2026, 5, 10, 12).getTime();
@@ -44,7 +44,7 @@ const newRule = result({
 /** 素材里有 “## PR #n:” 这一行。 */
 const isPr = (req: { prompt: string }, n: number) => req.prompt.includes(`#${n}: PR ${n}`);
 
-function setup(o: { identity?: (p: string) => string | null; available?: boolean } = {}) {
+function setup(o: { identity?: (p: string) => string | null; available?: boolean; costGate?: HeadlessExecDeps["costGate"] } = {}) {
   const db = memDb();
   const repo = new LessonsRepo(db);
   const runs = new LessonRunsRepo(db);
@@ -86,6 +86,7 @@ function setup(o: { identity?: (p: string) => string | null; available?: boolean
       sessions: { recordHeadless: () => undefined } as never, now: () => t, newRunId: () => "r",
       // 和 index.ts 一样：headless 的限流先报给可用状态，runner 再看结果。
       onLimit: (hit: LimitHit, job: string) => availability.report({ ...hit, source: "headless", job, sessionId: null }),
+      costGate: o.costGate,
     } as unknown as HeadlessExecDeps,
     ticketForBranch: () => null,
     butlerContext: async () => ({ decisions: [], learnings: [], transcripts: [] }),
@@ -505,6 +506,16 @@ describe("LessonRunner availability", () => {
     s.runner.merged({ repoPath: "/w", slug: "acme/web" }, 4);
     await s.runner.idle();
     expect(s.run).toHaveBeenCalledTimes(2);
+  });
+
+  it("a ticket paused by the cost breaker defers the item for a while instead of retrying it at once", async () => {
+    const s = setup({ costGate: () => "pause" });
+    s.repo.enqueue("acme/web", [1], "merged", T0);
+    s.runner.start();
+    await s.runner.idle();
+    expect(s.run).not.toHaveBeenCalled();
+    expect(s.lastRun(1)).toMatchObject({ status: "aborted", reason: "cost_paused" });
+    expect(s.statusOf(1)).toMatchObject({ status: "queued", not_before: T0 + LESSON_COST_RETRY_MS, error: null });
   });
 
   it("a rate limit the classifier did not recognise still pauses, and the item is not spawned again at once", async () => {

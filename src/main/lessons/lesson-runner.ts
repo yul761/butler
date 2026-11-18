@@ -67,7 +67,10 @@ const maxMergedAt = (prs: MergedPr[]): string | null => prs.reduce<string | null
 /** 运行记录里除了结束时间以外的内容。 */
 type RunEnd = Omit<LessonRunFinish, "finishedAt">;
 /** 队列行怎么收尾：finish 成某个状态，或者回到 queued（linkRun：last_run_id 指向这次运行）。 */
-type QueueEnd = { finish: "done" | "skipped" | "failed"; error?: string; message?: string } | { defer: true; linkRun: boolean };
+type QueueEnd = { finish: "done" | "skipped" | "failed"; error?: string; message?: string } | { defer: true; linkRun: boolean; notBefore?: number };
+
+/** 这一项的 ticket 被成本熔断停了后台：过这么久再试（解除熔断不会马上拿它，最多晚这么久）。 */
+export const LESSON_COST_RETRY_MS = 5 * 60_000;
 type HeadlessFailed = Extract<HeadlessExecResult, { ok: false }>;
 
 /** 一个正在跑的队列项。ctx 随分析一路补上，出异常时也记得住已经拿到的 PR 信息和素材。 */
@@ -365,7 +368,7 @@ export class LessonRunner {
     const now = this.d.now();
     repo.transaction(() => {
       this.d.runs.finish(a.runId, { ...a.ctx, ...run, durationMs: run.durationMs ?? now - a.startedAt, finishedAt: now });
-      if ("defer" in q) repo.defer(a.item.id, now, q.linkRun ? a.runId : undefined);
+      if ("defer" in q) repo.defer(a.item.id, q.notBefore ?? now, q.linkRun ? a.runId : undefined);
       else repo.finish(a.item.id, q.finish, now, q.error, { message: q.message ?? null, runId: a.runId });
     });
   }
@@ -386,8 +389,8 @@ export class LessonRunner {
       this.ensurePaused(r, kind);
       this.settle(a, { ...detail, status: "limited", reason: kind }, { defer: true, linkRun: true });
     } else if (r.reason === "cost_paused") {
-      // 复盘不归 ticket，一般到不了这里；真到了就和让路一样放回队列。
-      this.settleYielded(a, detail);
+      // 这一项的 ticket 被熔断停了后台（工作流 L）：放回队列、过一阵再试，不然 pump 会马上再取它、一直空转。
+      this.settle(a, { ...detail, status: "aborted", reason: "cost_paused" }, { defer: true, linkRun: false, notBefore: this.d.now() + LESSON_COST_RETRY_MS });
     } else if (r.reason === "aborted") {
       if (a.ctl.signal.aborted) this.settleCancelled(a, detail);
       else if (a.yieldCtl.signal.aborted) this.settleYielded(a, detail);

@@ -101,6 +101,9 @@ const RECENCY = "COALESCE(last_activity_at, created_at)";
 /** 记住最近被 delete 的 id 的上限；只用来拦住迟到的 hook 事件，不必永久保存。 */
 const FORGOTTEN_LIMIT = 500;
 
+/** rootOf 往回最多走几段：replaced_by 万一成了环（坏数据），带深度的递归不会自己停。 */
+const ROOT_MAX_DEPTH = 1000;
+
 export class SessionsRepo {
   /** 最近被删除的 session id（按删除顺序，超出上限丢弃最旧的）。 */
   private readonly forgotten = new Set<string>();
@@ -418,7 +421,7 @@ export class SessionsRepo {
       .prepare(
         `WITH RECURSIVE chain(id, depth) AS (
            SELECT id, 0 FROM sessions WHERE id = ?
-           UNION SELECT s.id, c.depth + 1 FROM sessions s JOIN chain c ON s.replaced_by = c.id
+           UNION SELECT s.id, c.depth + 1 FROM sessions s JOIN chain c ON s.replaced_by = c.id WHERE c.depth < ${ROOT_MAX_DEPTH}
          )
          SELECT id FROM chain ORDER BY depth DESC, id LIMIT 1`,
       )

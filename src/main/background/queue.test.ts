@@ -239,6 +239,29 @@ describe("background queue", () => {
     });
   });
 
+  it("take finds a runnable job behind any number of blocked ones, asking once per ticket", () => {
+    const repo = new BackgroundRepo(memDb());
+    for (let i = 0; i < 250; i++) repo.enqueue({ kind: "backtest", ticketKey: "T-PAUSED", now: 1 });
+    const ok = repo.enqueue({ kind: "backtest", ticketKey: "T-OK", now: 1 });
+    const allow = vi.fn((k: string) => k !== "T-PAUSED");
+    expect(repo.take("backtest", 2, allow)?.id).toBe(ok);
+    expect(allow).toHaveBeenCalledTimes(2);
+    expect(repo.take("backtest", 2, allow)).toBeNull();
+  });
+
+  it("prunes finished jobs older than the cutoff and leaves queued ones", () => {
+    const repo = new BackgroundRepo(memDb());
+    const old = repo.enqueue({ kind: "backtest", now: 1 });
+    const fresh = repo.enqueue({ kind: "backtest", now: 1 });
+    const queued = repo.enqueue({ kind: "backtest", now: 1 });
+    repo.finish(old, "done", 10);
+    repo.finish(fresh, "failed", 100);
+    expect(repo.pruneFinished(50)).toBe(1);
+    expect(repo.get(old)).toBeNull();
+    expect(repo.get(fresh)?.state).toBe("failed");
+    expect(repo.get(queued)?.state).toBe("queued");
+  });
+
   it("dedupes queued jobs and lets them be cancelled", () => {
     const t = setup();
     const a = t.queue.enqueue("backtest", {}, { dedupeKey: "pr-1" });

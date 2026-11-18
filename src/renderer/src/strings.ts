@@ -1244,6 +1244,7 @@ const ZH = {
     cancelled: "已取消",
     app_quit: "应用退出时中断",
     yielded: "给交互 session 让路，放回队列",
+    cost_paused: "它的 ticket 被花费熔断停了，过几分钟再试",
     error: "内部错误",
   } satisfies Record<LessonRunReason, string>,
   lessonRunOrigin: { backfill: "补录", merged: "已合并", daily: "每日" } satisfies Record<LessonOrigin, string>,

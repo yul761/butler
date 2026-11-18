@@ -11,7 +11,7 @@ export type LessonRunReason =
   | "unknown_repo" | "gh" | "no_review_comments"
   | "usage_limit" | "rate_limit" | "overloaded" | "model_unavailable"
   | "timeout" | "spawn_failed" | "exit_nonzero" | "bad_output" | "claude_error" | "claude_missing"
-  | "cancelled" | "app_quit" | "yielded" | "error";
+  | "cancelled" | "app_quit" | "yielded" | "cost_paused" | "error";
 
 /** 正在分析的一个队列项（取消按钮用 queueId）。 */
 export interface LessonRunningItem {

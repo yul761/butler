@@ -87,6 +87,9 @@ interface Measured {
   ticketKey: string | null;
 }
 
+/** 熔断不拦的后台调用。 */
+const EXEMPT_TASKS: ReadonlySet<TaskId> = new Set<TaskId>(["stuck_judge", "needs_you"]);
+
 const fmt = (n: number, unit: CostUnit) => (unit === "usd" ? `$${n.toFixed(2)}` : `${Math.round(n).toLocaleString("en-US")} tokens`);
 
 /**
@@ -96,7 +99,11 @@ const fmt = (n: number, unit: CostUnit) => (unit === "usd" ? `$${n.toFixed(2)}` 
 export class CostBreaker {
   private readonly nudges = new Map<string, { text: string; until: number }>();
   private readonly switching = new Set<string>();
+  /** 这一遍里已经换过模型的 session（session 和 ticket 同时到上限时只换一档）：root → 换之前 / 之后。 */
+  private switchedNow = new Map<string, { from: string | null; to: string }>();
   private checking = false;
+  /** 正在看的时候又被叫了：看完再来一遍（null 表示全看）。 */
+  private again: { sessions: Set<string>; tickets: Set<string> } | null | undefined;
 
   constructor(private readonly d: CostBreakerDeps) {}
 
@@ -127,9 +134,12 @@ export class CostBreaker {
     return t?.state === "paused" && t.scope === "session";
   }
 
-  /** headless 调用前问（HeadlessExecDeps.costGate）：这个 ticket 的后台调用照常、降档还是不跑。卡住判断不受影响。 */
+  /**
+   * headless 调用前问（HeadlessExecDeps.costGate）：这个 ticket 的后台调用照常、降档还是不跑。
+   * 卡住判断和「需要你」判断不受影响：它们很便宜，停了用户就看不到 session 卡住了、在等他。
+   */
   gate(o: { task: TaskId; ticketKey: string | null }): CostVerdict {
-    if (!o.ticketKey || o.task === "stuck_judge") return "ok";
+    if (!o.ticketKey || EXEMPT_TASKS.has(o.task)) return "ok";
     return this.ticketVerdict(o.ticketKey);
   }
 
@@ -142,10 +152,10 @@ export class CostBreaker {
     const t = this.row("ticket", key);
     if (t?.state === "paused") return "pause";
     let verdict: CostVerdict = t?.state === "downgraded" ? "downgrade" : "ok";
-    // session 的上限设成「只停后台」：停的是它所在 ticket 的后台调用。
+    // session 到上限（整个 session 或只停后台都一样）：它所在 ticket 的后台调用也停 / 降档。
     try {
       for (const r of this.d.repo.all()) {
-        if (r.subjectKind !== "session" || r.scope !== "background") continue;
+        if (r.subjectKind !== "session") continue;
         if (this.d.session(r.subjectId)?.ticketKey !== key) continue;
         if (r.state === "paused") return "pause";
         if (r.state === "downgraded") verdict = "downgrade";
@@ -178,8 +188,18 @@ export class CostBreaker {
    * subjects 不给就看所有开着的和有状态的。
    */
   async check(subjects?: { sessions?: string[]; tickets?: string[] }): Promise<void> {
-    if (this.checking) return;
+    if (this.checking) {
+      // 不丢：记下来，这一遍完了再看。全看的请求盖过部分的。
+      if (!subjects || this.again === null) this.again = null;
+      else {
+        const a = (this.again ??= { sessions: new Set(), tickets: new Set() });
+        for (const id of subjects.sessions ?? []) a.sessions.add(id);
+        for (const k of subjects.tickets ?? []) a.tickets.add(k);
+      }
+      return;
+    }
     this.checking = true;
+    this.switchedNow = new Map();
     try {
       let rows: CostRow[] = [];
       try {
@@ -206,6 +226,11 @@ export class CostBreaker {
       if (changed) this.d.onChange?.();
     } finally {
       this.checking = false;
+    }
+    const again = this.again;
+    if (again !== undefined) {
+      this.again = undefined;
+      await this.check(again === null ? undefined : { sessions: [...again.sessions], tickets: [...again.tickets] });
     }
   }
 
@@ -246,11 +271,17 @@ export class CostBreaker {
     const policyChanged = prev !== null && (prev.cap !== m.policyCap || prev.unit !== unit);
     const raised = policyChanged ? null : (prev?.raisedCap ?? null);
     const cap = m.policyCap === null ? null : raised ?? m.policyCap;
-    const base: CostRow = prev && !policyChanged
-      ? { ...prev, spent: m.spent, partial: m.partial }
+    // 策略变了也接着原来的状态走：暂停着的、新上限还是不够就还停着（不会再降一档、把暂停冲掉）。
+    const base: CostRow = prev
+      ? {
+          ...prev, spent: m.spent, partial: m.partial,
+          ...(policyChanged && { raisedCap: null }),
+          // 单位换了：暂停时的花费也换成新单位，不然「暂停以后还在花」的比较没有意义。
+          ...(prev.unit !== unit && prev.pausedSpent !== null && { pausedSpent: m.spent }),
+        }
       : {
           subjectKind: kind, subjectId: id, state: "ok", cap: m.policyCap, raisedCap: null, unit, spent: m.spent, partial: m.partial, scope: m.policy.pauseScope,
-          fromModel: prev?.fromModel ?? null, toModel: prev?.toModel ?? null, trippedAt: null, pausedAt: null, pausedSpent: null, stoppedAt: null, takenOverAt: null, updatedAt: now,
+          fromModel: null, toModel: null, trippedAt: null, pausedAt: null, pausedSpent: null, stoppedAt: null, takenOverAt: null, updatedAt: now,
         };
     const wasPaused = prev?.state === "paused";
 
@@ -292,7 +323,7 @@ export class CostBreaker {
           row = { ...row, state: "downgraded", trippedAt: now, fromModel: down.from, toModel: down.to };
           this.d.repo.put(row);
           this.event(m, "downgrade", cap, down.to ? `${down.from ?? "default"} → ${down.to}` : "background calls plan one tier lower");
-          if (policy.pauseScope === "background" || kind === "ticket") this.d.scheduler?.changed();
+          if (m.ticketKey) this.d.scheduler?.changed();
           return true;
         }
       }
@@ -313,6 +344,12 @@ export class CostBreaker {
     if (scope === "background") return { ok: true, from: null, to: null };
     let first: { from: string | null; to: string } | null = null;
     for (const root of m.roots) {
+      const done = this.switchedNow.get(root);
+      if (done) {
+        // 这一遍已经因为另一个上限换过了：算降过，不再往下换。
+        first ??= done;
+        continue;
+      }
       const s = this.d.session(root);
       if (!s || !s.open || this.switching.has(root)) continue;
       const from = s.model;
@@ -323,6 +360,7 @@ export class CostBreaker {
         const r = await this.d.switchModel(s.headId, next);
         if (r.ok) {
           first ??= { from, to: r.model };
+          this.switchedNow.set(root, { from, to: r.model });
           this.nudges.set(root, { text: this.d.texts().continueAfterDowngrade(r.model), until: this.d.now() + COST_NUDGE_TTL_MS });
         } else this.d.log?.(`cost: switching ${s.headId} to ${next} failed (${r.reason})`);
       } catch (e) {
@@ -353,8 +391,7 @@ export class CostBreaker {
         }
       }
     }
-    const key = m.ticketKey;
-    if (key && (m.kind === "ticket" || next.scope === "background")) this.d.scheduler?.yieldTicket(key);
+    if (m.ticketKey) this.d.scheduler?.yieldTicket(m.ticketKey);
     return true;
   }
 
@@ -370,10 +407,11 @@ export class CostBreaker {
         next = { ...next, takenOverAt: now };
         this.event(m, "takeover", cap);
       } else if (row.stoppedAt === null && now - row.pausedAt >= this.stopAfter() && m.spent > (row.pausedSpent ?? 0)) {
+        // 只结束暂停以后还在跑的终端：Esc 之后安静了的（晚到的用量扫描、重启后重新打开的）不算还在花。
         let killed = 0;
         for (const root of m.roots) {
           const s = this.d.session(root);
-          if (!s?.open) continue;
+          if (!s?.open || !this.busySafe(s.headId)) continue;
           try {
             this.d.kill(s.headId);
             killed++;
@@ -389,6 +427,14 @@ export class CostBreaker {
     }
     this.d.repo.put(next);
     return next.takenOverAt !== row.takenOverAt || next.stoppedAt !== row.stoppedAt;
+  }
+
+  private busySafe(headId: string): boolean {
+    try {
+      return this.d.busy(headId);
+    } catch {
+      return false;
+    }
   }
 
   /** 暂停解除以后：session 递「继续」，后台任务重新跑。 */
@@ -408,14 +454,19 @@ export class CostBreaker {
         this.nudges.delete(root);
         continue;
       }
+      if (this.nudges.get(root) !== n) continue; // 别的一遍已经递了（或换了一句）
       if (this.sessionPaused(root)) continue;
       const s = this.d.session(root);
       if (!s?.open) continue;
+      // 先拿走再递：两遍同时跑（check 和 sessionStopped）时同一句不会递两次；没递进去再放回（没被换掉的话）。
+      this.nudges.delete(root);
+      let sent = false;
       try {
-        if (await this.d.nudge(s.headId, n.text)) this.nudges.delete(root);
+        sent = await this.d.nudge(s.headId, n.text);
       } catch (e) {
         this.d.log?.(`cost: nudging ${s.headId} failed`, e);
       }
+      if (!sent && !this.nudges.has(root)) this.nudges.set(root, n);
     }
   }
 
