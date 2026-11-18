@@ -40,6 +40,8 @@ export interface LessonRunnerDeps {
   notify: () => void;
   /** 模型路由：lesson_analyze 要求的档位现在能用了吗（能用时把降级跑出来的结果放回队列重跑）。没有就不重跑。 */
   upgradeReady?: () => boolean;
+  /** 一次分析加了或命中了规矩（工作流 D 的自动准入接在这里）。在事务之外调用。 */
+  onLessonsChanged?: (slug: string) => void;
   log?: (msg: string, e?: unknown) => void;
 }
 
@@ -445,6 +447,7 @@ export class LessonRunner {
       this.settle(a, { ...output, status: "failed", reason: "bad_output", message: v.errors }, { finish: "failed", error: "bad_output", message: v.errors });
       return;
     }
+    let changed = false;
     repo.transaction(() => {
       const allowed = new Set<string>([pr.url]);
       for (const i of items) if (i.url) allowed.add(i.url);
@@ -454,7 +457,9 @@ export class LessonRunner {
       this.settle(a, { ...output, ...applied, status: "done", reason: null, findings: v.value.findings }, { finish: "done" });
       // 降了档跑的：要求的档位恢复后重跑一次（D 也会读 fallback_from 降低这次结果的权重）。
       if (r.route.degraded) repo.markUpgrade(item.id);
+      changed = applied.created + applied.hit > 0;
     });
+    if (changed) this.d.onLessonsChanged?.(item.slug);
   }
 }
 

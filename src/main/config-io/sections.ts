@@ -147,6 +147,8 @@ export type LessonItem = z.infer<typeof LessonItem>;
 export type LessonConflictDetector = (
   incoming: { fingerprint: string; text: string; owner: LessonOwner }[],
   local: { id: number; text: string; owner: LessonOwner }[],
+  /** 有一部分没判成（调用失败）：预览里说「语义冲突没查全」。 */
+  onFailed?: () => void,
 ) => Promise<{ fingerprint: string; localId: number; reason: string }[]>;
 
 function ownerOf(l: Lesson, productName: (id: number) => string | null): LessonOwner | null {

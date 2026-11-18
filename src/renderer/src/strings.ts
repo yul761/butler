@@ -916,6 +916,7 @@ const ZH = {
     s.kind === "all" ? "范围：全部" : s.kind === "product" ? `范围：产品 ${s.name}` : s.kind === "repo" ? `范围：仓库 ${s.slug}` : `起步包「${s.name}」`,
   ioFileHasUrls: "含出处链接",
   ioSkipped: (ids: string[]) => `跳过这个版本不认识的部分：${ids.join("、")}`,
+  ioSemanticFailed: "导入的规矩和本地规矩是否矛盾没有查完，有些冲突可能没显示出来。",
   ioStarterTarget: "导入到",
   ioStarterPick: "选择一个仓库或产品",
   ioSection: { products: "产品", policies: "准入策略", lessons: "规矩", checks: "检查", models: "模型路由" } as Record<string, string>,

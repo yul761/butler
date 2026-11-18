@@ -361,6 +361,27 @@ The admission policy decides how the lesson pipeline scores, shelves, backtests,
 | `demote.to` | `shadow` | `shadow` / `review` | Where a demoted rule goes: shadow (shadow mode) or review (back to the queue) |
 | `admission.autoConfirm` | `false` | `true` / `false` | Confirm rules that pass admission without asking |
 
+### Automatic admission
+
+Butler can judge pending lessons for you. Judging runs four gates on the candidates of a repository, a product (with all its repositories) or everything, then scores what is left:
+
+1. **Duplicates.** Lessons whose text is similar enough (`dedupe.minSimilarity`) and whose file patterns overlap go to the model, which says which ones say the same thing. The one with the most hits stays; the others are shelved as `duplicate` pointing at it. When the group spans several repositories of one product, the lesson that stays is moved up to the product when you accept. A lesson you had already confirmed always stays as it is.
+2. **Conflicts.** Lessons that could contradict each other go to the model. Both sides of a conflict are shelved as `conflict` and point at each other, unless `conflict.autoPickHigherHits` is on (then the one with more hits stays). A confirmed lesson is never shelved; only the candidate that contradicts it is.
+3. **Generality.** A lesson must have come up at least `generality.minHits` times in `generality.minPrs` distinct PRs. One reviewer raising the same thing in several PRs counts as a team habit unless `generality.allowSingleReviewer` is off. Lessons that came up only once are shelved as `generality`, not dropped: a new hit brings them back.
+4. **Checkability.** The model sorts each lesson into checkable or prose and says when an existing check or lint already covers it (shelved as `covered`). Changing the category by hand re-judges the lesson and is recorded as a calibration sample.
+
+The score combines evidence (hits, PRs, reviewers, how recent), clarity (can you tell right code from wrong code with it; lessons from a fallback model lose `score.degradedPenalty`) and consistency (1, or 0.5 when another lesson limits it). Expand a lesson's score on the Lessons page to see each part and why. A lesson at or above the admit line (`score.admitLine`, or the stricter `score.proseAdmitLine` for prose) is **recommended**; between the lines it is shelved as `low_score` with its weakest part named; below `score.dropLine` it is shelved as `below_drop`. A checkable lesson that is recommended gets a check draft in shadow mode; its score is capped at `score.untestedCap` until it has been backtested.
+
+Judging only sets fields (admission, shelved reason, score); it is recorded as an undoable batch. A sample of `batch.sampleSize` recommended lessons is then reviewed by a different model. If the sample pass rate is below `batch.minSamplePassRate` or more than `batch.maxShelvedShare` of the judged lessons were shelved, "Accept all" is hidden and the weakest metric is named; single lessons can still be confirmed one by one. **Accept all recommended** merges the duplicates, moves cross-repository lessons up to their product, confirms the recommended lessons and writes their check drafts as shadow checks, all in one batch that one **Undo** reverses. Model answers are cached, so judging again only asks about new or edited lessons. When a model call fails, the lesson is left pending and counted as unfinished.
+
+| Setting | Key | Default | Accepted values and notes |
+|---------|-----|---------|---------------------------|
+| Judge new lessons automatically | `lessonsAutoAdmit` | `0` | `1` or `0`. When on, after an analysis adds or hits lessons, that repository is judged in the background (recommendations only; they are confirmed automatically only when `admission.autoConfirm` is on and the sample review passes). |
+| Group lessons into principles | `lessonsPrinciples` | `0` | `1` or `0`. When on, confirmed lessons that share one principle are grouped once a day, and the session guide shows the principle with a pointer to its cases. |
+| Short core guide | `lessonsCoreGuide` | `0` | `1` or `0`. When on, the session guide keeps at most 10 core lessons (the most often broken first). |
+
+`admissionCalibratedAt` records when you marked the score lines calibrated on the **Calibration** tab; it is not edited directly.
+
 ### Export file
 
 **Import / export** on the Lessons page exports everything, one product or one repository, and either all content, lessons only (with products) or checks only (once checks exist). The file is JSON:

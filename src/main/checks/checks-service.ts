@@ -312,7 +312,14 @@ export class ChecksService {
         this.d.lessons.setFields(lessonId, { checkability }, now);
       },
     );
+    if ((opts.origin ?? "manual") === "manual" && outcome.batchId !== null) this.classified?.(lessonId, l.checkability, checkability, l.checkabilityReason);
     return { ok: true, batchId: outcome.batchId, affected: outcome.affected };
+  }
+
+  private classified: ((lessonId: number, before: LessonCheckability | null, after: LessonCheckability | null, beforeReason: string | null) => void) | null = null;
+  /** 人改了一条规矩的分类以后（工作流 D：重判这一条，推翻了流水线的分类时记一个校准样本）。 */
+  onLessonClassified(fn: (lessonId: number, before: LessonCheckability | null, after: LessonCheckability | null, beforeReason: string | null) => void): void {
+    this.classified = fn;
   }
 
   /** 检查页上的一个操作（checks:act），参数已经过 IPC 校验。 */

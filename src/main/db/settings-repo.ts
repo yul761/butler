@@ -126,6 +126,14 @@ export const SETTING_DEFAULTS = {
   externalCiRerun: "0",
   externalIssuePost: "0",
   externalPushNotification: "0",
+  /** 工作流 D：一次分析加了或命中了规矩以后自动判那个仓库（只推荐，除非 admission.autoConfirm）：1 开 0 关。 */
+  lessonsAutoAdmit: "0",
+  /** 工作流 D：每天把已确认的规矩归成原则，session 说明里写原则 + 案例文件：1 开 0 关。 */
+  lessonsPrinciples: "0",
+  /** 工作流 D：session 说明最多保留 10 条核心规矩：1 开 0 关。 */
+  lessonsCoreGuide: "0",
+  /** 校准页「标为已校准」的时间（毫秒，字符串）；空 = 没校准过（策略页显示「未校准的默认值」）。不在设置页上。 */
+  admissionCalibratedAt: "",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

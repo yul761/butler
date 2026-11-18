@@ -84,7 +84,8 @@ export class LessonBatchService {
     }
   }
 
-  private calibrate(ctxBatch: { lesson: Lesson; human: Verdict; auto: Verdict | null }[], batchId: number | null, now: number): void {
+  /** 记校准样本（人对流水线结论的判断）；规矩准入的「全部接受」也用它（工作流 D）。 */
+  calibrate(ctxBatch: { lesson: Lesson; human: Verdict; auto: Verdict | null }[], batchId: number | null, now: number): void {
     if (batchId === null) return;
     const ins = this.d.db.prepare(
       `INSERT INTO score_calibration (entity, lesson_id, entity_id, auto_verdict, human_verdict, score, score_parts, batch_id, at) VALUES ('lesson', ?, ?, ?, ?, ?, ?, ?, ?)`,

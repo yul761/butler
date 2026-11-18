@@ -1,3 +1,5 @@
+import type { LessonTarget } from "../../shared/lessons";
+import type { BatchOutcome } from "../../shared/batches";
 import { existsSync } from "node:fs";
 import type {
   LessonAction, LessonActResult, LessonFinding, LessonProductView, LessonQueueRowStatus, LessonQueueRowView, LessonQueueView, LessonRepoView,
@@ -34,6 +36,8 @@ export interface LessonsServiceDeps {
   openRun: (d: LessonRunDetail, repoPath: string) => Promise<OpenSessionResult>;
   /** 老规矩的补填（工作流 D）；没有时页面不显示补填。 */
   enricher?: Pick<import("./enrich").LessonEnricher, "needing" | "start" | "running">;
+  /** 规矩准入（工作流 D）：「全部接受推荐」走它（合并、提层、写影子检查）；没有时用批量确认。 */
+  admission?: { accept(target?: LessonTarget): BatchOutcome };
   log?: (msg: string, err?: unknown) => void;
   now: () => number;
   notify: () => void;
@@ -215,6 +219,10 @@ export class LessonsService {
         return { ok: true, ...this.d.batches.bulk(a.verb, a.target) };
       case "acceptRecommended":
         if (a.expect !== undefined && this.d.batches.recommendedTargets(a.target).length > a.expect) return { ok: false, reason: "stale" };
+        if (this.d.admission) {
+          const r = this.d.admission.accept(a.target);
+          return { ok: true, batchId: r.batchId, affected: r.affected, skipped: r.skipped };
+        }
         return { ok: true, ...this.d.batches.acceptRecommended(a.target) };
       case "enrich":
         if (!this.d.enricher) return NOT_FOUND;

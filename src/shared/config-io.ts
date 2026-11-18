@@ -64,6 +64,8 @@ export interface ImportPreview {
   sections: SectionPreview[];
   /** 文件里有、这个 Butler 不认识的部分：跳过。 */
   skippedSections: string[];
+  /** 规矩的语义冲突检测（模型）没查全：没显示出来的冲突可能还有。 */
+  semanticFailed?: boolean;
   totals: PreviewCounts;
 }
 

@@ -1,6 +1,7 @@
 import type { AdmissionPolicy } from "../../../shared/admission-policy";
 import type { BatchOrigin } from "../../../shared/batches";
 import type { Lang } from "../../../shared/i18n";
+import type { AdmissionScope, AdmissionVerdictKind } from "../../../shared/lesson-admission";
 import type { Lesson, LessonCheckability, LessonScope } from "../../../shared/lessons";
 import { TIERS, type Tier } from "../../../shared/model-routing";
 import type { BatchRecorder } from "../../batches/batch-recorder";
@@ -26,8 +27,8 @@ import { globsOverlap, textSimilarity, tokens, UnionFind } from "./similarity";
  * judge() 不改结构：只写一个「计划」批次（每条候选的 admission / 搁置原因 / 分数），合并和提到产品层留给接受（accept.ts）。
  */
 
-export type AdmissionScope = { kind: "repo"; slug: string } | { kind: "product"; productId: number } | { kind: "all" };
-export type VerdictKind = "admit" | "merged" | "shelved" | "covered" | "unfinished";
+export type { AdmissionScope };
+export type VerdictKind = AdmissionVerdictKind;
 
 export interface LessonVerdict {
   lessonId: number;

@@ -363,6 +363,9 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "externalCiRerun":
     case "externalIssuePost":
     case "externalPushNotification":
+    case "lessonsAutoAdmit":
+    case "lessonsPrinciples":
+    case "lessonsCoreGuide":
       return normalizeFlag(value);
     case "hibernateYouMinutes":
     case "hibernateCiMinutes":

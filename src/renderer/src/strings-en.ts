@@ -906,6 +906,7 @@ export const EN: UiStrings = {
     s.kind === "all" ? "Scope: everything" : s.kind === "product" ? `Scope: product ${s.name}` : s.kind === "repo" ? `Scope: repo ${s.slug}` : `Starter pack "${s.name}"`,
   ioFileHasUrls: "includes source links",
   ioSkipped: (ids: string[]) => `Skipping parts this version doesn't know: ${ids.join(", ")}`,
+  ioSemanticFailed: "Checking imported lessons against local ones for contradictions did not finish; some conflicts may not be shown.",
   ioStarterTarget: "Import into",
   ioStarterPick: "Pick a repo or product",
   ioSection: { products: "Products", policies: "Admission policy", lessons: "Lessons", checks: "Checks", models: "Model routing" },

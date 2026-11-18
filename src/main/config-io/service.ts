@@ -42,6 +42,8 @@ interface Pending {
   bound: StarterBinding | null;
   /** 语义冲突检测给的结果（按 fingerprint）。 */
   semantic: Map<string, { localId: number; reason: string }>;
+  /** 语义冲突检测有一部分（或全部）失败了。 */
+  semanticFailed: boolean;
   skipped: string[];
   at: number;
 }
@@ -193,7 +195,7 @@ export class ConfigIoService {
     doc = { ...doc, sections };
     this.gc();
     const token = randomUUID();
-    const pending: Pending = { doc, bound: null, semantic: new Map(), skipped, at: this.d.now() };
+    const pending: Pending = { doc, bound: null, semantic: new Map(), semanticFailed: false, skipped, at: this.d.now() };
     this.pending.set(token, pending);
     if (target) {
       const b = this.bindTarget(target);
@@ -255,6 +257,7 @@ export class ConfigIoService {
 
   private async buildPreview(token: string, p: Pending): Promise<ImportPreview> {
     p.semantic = new Map();
+    p.semanticFailed = false;
     if (this.detector && (p.doc.scope.kind !== "starter" || p.bound)) {
       const first = this.diffAll(p).find((s) => s.id === "lessons");
       const items = (p.doc.sections.lessons ?? []) as LessonItem[];
@@ -274,8 +277,9 @@ export class ConfigIoService {
           return owner ? [{ id: l.id, text: l.text, owner }] : [];
         });
         try {
-          for (const c of await this.detector(incoming, local)) if (!p.semantic.has(c.fingerprint)) p.semantic.set(c.fingerprint, { localId: c.localId, reason: c.reason });
+          for (const c of await this.detector(incoming, local, () => (p.semanticFailed = true))) if (!p.semantic.has(c.fingerprint)) p.semantic.set(c.fingerprint, { localId: c.localId, reason: c.reason });
         } catch (e) {
+          p.semanticFailed = true;
           this.d.log?.("config import: conflict detector failed", e);
         }
       }
@@ -288,6 +292,7 @@ export class ConfigIoService {
       starter: p.doc.scope.kind === "starter",
       sections,
       skippedSections: p.skipped,
+      ...(p.semanticFailed ? { semanticFailed: true } : {}),
       totals,
     };
   }

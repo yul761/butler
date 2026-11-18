@@ -151,6 +151,9 @@ import { RepoIdentity } from "./lessons/repo-identity";
 import { readTailLines, TRANSCRIPT_TAIL_BYTES } from "./lessons/tail";
 import { JudgmentCache } from "./lessons/admission/judgments";
 import { LessonEnricher } from "./lessons/enrich";
+import { AdmissionService } from "./lessons/admission/service";
+import { importConflictDetector } from "./lessons/admission/import-conflicts";
+import { OPEN_GATE } from "./lessons/admission/model-steps";
 import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
 import { LessonBatchService } from "./lessons/lesson-batches";
@@ -642,6 +645,8 @@ async function bootstrap(): Promise<void> {
   // 三层准入策略（契约 4.2）：版本存在设置 admissionPolicyVersion 里。
   const admissionPolicies = new AdmissionPolicyService({
     db, repo: lessonsRepo, recorder: batchRecorder, now: Date.now,
+    // 校准页「标为已校准」之后，策略页不再说「未校准的默认值」（工作流 D）。
+    calibrated: () => settings.get("admissionCalibratedAt") !== "",
     version: {
       get: () => Math.max(1, Number.parseInt(settings.get("admissionPolicyVersion"), 10) || 1),
       set: (v) => settings.set("admissionPolicyVersion", String(v)),
@@ -699,6 +704,8 @@ async function bootstrap(): Promise<void> {
       return { decisions: ps.flatMap((p) => p.decisions.map((d) => d.statement)), learnings: ps.flatMap((p) => p.learnings), transcripts };
     },
     lang: () => currentLang(), now: Date.now, notify: () => notify(), log: logger,
+    // lessonAdmission 在下面才建：分析完成时（启动之后）才用到。
+    onLessonsChanged: (slug) => lessonAdmission.scheduleAuto(slug),
   });
   // 设置页「升级重跑」按钮；另外每小时看一次（档位恢复时路由的变化也会触发）。
   routing.rerunHook = () => void lessonRunner.requeueUpgrades(true);
@@ -712,10 +719,24 @@ async function bootstrap(): Promise<void> {
     gh: { prLessonDataDetail, available: () => ghAvailable() },
     lang: () => currentLang(), now: Date.now, fallbackCwd: () => paths.home, log: logger,
   });
+  // 准入流水线：判（四道闸门 + 打分 + 抽查）、全部接受、改了分类以后重判；分析加了或命中了规矩时按设置自动判。
+  const lessonAdmission = new AdmissionService({
+    db, repo: lessonsRepo, recorder: batchRecorder, policies: admissionPolicies, judgments: lessonJudgments, runs: lessonRuns,
+    checks: checksService, drafter: checkDrafter, batches: lessonBatches, run: (req) => execHeadlessJson(judgeDeps, req),
+    lang: () => currentLang(), now: Date.now, fallbackCwd: () => paths.home, notify: () => notify(), log: logger,
+    autoAdmitEnabled: () => settings.get("lessonsAutoAdmit") === "1",
+  });
+  checksService.onLessonClassified((id, before, after, reason) => void lessonAdmission.onClassified(id, before, after, reason));
+  configIo.setLessonConflictDetector(
+    importConflictDetector(
+      () => ({ run: (req) => execHeadlessJson(judgeDeps, req), judgments: lessonJudgments, lang: () => currentLang(), now: Date.now, cwd: paths.home, gate: OPEN_GATE }),
+      () => Number(admissionPolicies.resolve({ kind: "global" }).value["dedupe.maxGroup"]),
+    ),
+  );
   // 复盘规矩页：仓库路径直接查表（已归档的 ticket、feature、epic 不算）；归组建议按 ticket 和 feature 各算一组。
   const repoPathRows = <T extends { repo_path: string }>(sql: string): T[] => db.prepare(sql).all() as unknown as T[];
   const lessonsService = new LessonsService({
-    repo: lessonsRepo, batches: lessonBatches, runs: lessonRuns, availability: lessonsGate, identity: repoIdentity, runner: lessonRunner, enricher: lessonEnricher,
+    repo: lessonsRepo, batches: lessonBatches, runs: lessonRuns, availability: lessonsGate, identity: repoIdentity, runner: lessonRunner, enricher: lessonEnricher, admission: lessonAdmission,
     knownRepoPaths: () => [
       ...new Set(
         repoPathRows<{ repo_path: string }>(
@@ -2139,6 +2160,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(waitTimer);
     clearTimeout(rollupFirst);
     clearInterval(rollupTimer);
+    lessonAdmission.stop();
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     activityMonitor.stop();
     void procServices.stop();
