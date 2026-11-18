@@ -635,3 +635,55 @@ export async function compareFiles(cwd: string, base: string, head: string, time
   }
   return out;
 }
+
+/** 度量（ws-h）的 gh 调用：revert 扫描、基线回填、重开。 */
+export const METRICS_GH_TIMEOUT_MS = 20_000;
+
+export interface SearchedPr {
+  number: number;
+  url: string;
+  title: string;
+  body: string;
+  createdAt: number | null;
+  mergedAt: number | null;
+}
+
+/**
+ * gh pr list --state merged --search <search>（仓库由 GH_REPO 指定，不看 cwd）。author 给了就加 --author（"@me" = 当前登录的人）。
+ * 只读；失败返回 null。
+ */
+export async function searchMergedPrs(cwd: string, repo: string, search: string, limit: number, timeoutMs: number, author?: string): Promise<SearchedPr[] | null> {
+  const args = ["pr", "list", "--state", "merged", "--limit", String(limit), "--search", search, "--json", "number,url,title,body,createdAt,mergedAt"];
+  if (author) args.push("--author", author);
+  const j = parseJson(await runGh(cwd, args, timeoutMs, 16 * 1024 * 1024, repoEnv(repo)));
+  if (!Array.isArray(j)) return null;
+  const out: SearchedPr[] = [];
+  for (const item of j) {
+    const r = obj(item);
+    if (!r || typeof r.number !== "number" || typeof r.url !== "string") continue;
+    out.push({ number: r.number, url: r.url, title: str(r.title), body: str(r.body), createdAt: timeOf(r.createdAt), mergedAt: timeOf(r.mergedAt) });
+  }
+  return out;
+}
+
+export interface IssueEvent {
+  id: string;
+  event: string;
+  at: number;
+}
+
+/** gh api repos/{owner}/{repo}/issues/N/events：PR 的时间线事件（reopened、closed …）。只读；失败返回 null。 */
+export async function issueEvents(cwd: string, repo: string, number: number, timeoutMs: number): Promise<IssueEvent[] | null> {
+  const rows = parseLines(
+    await runGh(cwd, ["api", `repos/{owner}/{repo}/issues/${number}/events`, "--paginate", "--jq", ".[] | {id, event, created_at}"], timeoutMs, 8 * 1024 * 1024, repoEnv(repo)),
+  );
+  if (rows === null) return null;
+  const out: IssueEvent[] = [];
+  for (const item of rows) {
+    const r = obj(item);
+    const at = timeOf(r?.created_at);
+    if (!r || (typeof r.id !== "number" && typeof r.id !== "string") || typeof r.event !== "string" || at === null) continue;
+    out.push({ id: String(r.id), event: r.event, at });
+  }
+  return out;
+}

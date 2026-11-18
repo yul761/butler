@@ -17,7 +17,7 @@ The Settings page has these sections, in order:
 
 The merge coordinator and the `end_session` tool for coordinators are described under [Merge coordinator](#merge-coordinator) and in the [README](../README.md); neither has a setting.
 
-The audit log has its own page, **Audit**, in the sidebar.
+The audit log has its own page, **Audit**, in the sidebar. The **Effect** page has no setting either; see [Effect page](#effect-page).
 
 ## Environment check
 
@@ -274,6 +274,17 @@ When a session hits a limit, its row shows the limit and a **Switch to next tier
 | Auto-switch sessions | `routingAutoSwitch` | `0` (off) | `1` or `0`. When on, a session that hits a limit switches to the next tier at once instead of showing the button. |
 
 Spend by model and by task, health per model and the fallback event log are on the same page. The **Now** page shows a model limit or a fallback while it lasts.
+
+## Effect page
+
+The **Effect** page (below **Progress** in the sidebar) shows what Butler's PRs cost you and how they compare with before. Butler control's `metrics_overview` returns the same data, for 1 to 365 days (30 by default). There is nothing to set.
+
+- **Four cards**: per merged Butler PR, the average cycle time (PR opened → merged, and ticket started → merged), comments (human and Copilot, plus how many the lesson run marked avoidable), human interventions (and how long sessions waited on you) and cost in weighted tokens (and in dollars, from what Claude Code reports or estimated from the model's registered prices). Cycle time and comments are compared with a baseline; the other two show "before —" because there is nothing to compare them with.
+- **Baseline**: once a day Butler reads from GitHub the PRs you opened yourself and that were merged in the 180 days before your first Butler session (up to 100 per repo, skipping PRs linked to a ticket), and stores their cycle time and comment counts. Comments from bots are left out, the same way as for Butler's PRs. "Ticket started" for these PRs is approximated by the first commit. The cutoff is fixed when the first Butler session appears and does not move afterwards. Until a read finds such PRs (for example while gh is not available), the page says there is no baseline yet.
+- **Why sessions stopped for you**: how often each kind of stop happened (permission, choice, missing info, real question, stuck), how long each kept you waiting, and how many were resolved automatically. Idle time while a session is stopped but not waiting on you is counted separately.
+- **Trend** by week or by month (the last 12), **human interventions** by kind, **groups** (Butler PRs against other PRs linked to a ticket; by repo, product and risk level, where PRs without a level are "Unrated"), **where the cost goes** by model and by task, and **rework**: CI failures, reopened PRs and PRs reverted after merging. The same daily GitHub read finds reopens and reverts (a merged PR whose title is `Revert "<title>"` or whose body says `Reverts #N`).
+
+Numbers are rolled up from local events once an hour; opening the page rolls up again if the last run is more than 10 minutes old. Time a session spent while the computer slept is not counted as waiting.
 
 ## Privacy and personal API
 

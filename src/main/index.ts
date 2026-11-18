@@ -1,3 +1,4 @@
+import { METRICS_DAYS_DEFAULT, type MetricsOverview } from "../shared/metrics";
 import { execFile } from "node:child_process";
 import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, shell, Tray } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -96,8 +97,10 @@ import { MetricsRepo } from "./db/metrics-repo";
 import { Metrics } from "./metrics/events";
 import { classifyQuestion, InterruptRecorder } from "./metrics/interrupts";
 import { isDialogKey, promptOnTerminalChain, questionToolShowing, recordInvoke, TerminalInputMeter } from "./metrics/interventions";
+import { MetricsGhJob } from "./metrics/gh-job";
+import { buildOverview, clampDays, overviewFromDay } from "./metrics/overview";
 import { MetricsRollup } from "./metrics/rollup";
-import { ensureMetricsSince, metricsSince } from "./metrics/since";
+import { baselineCutoffOf, ensureMetricsSince, metricsSince } from "./metrics/since";
 import { TOUCH_MS as WAIT_TOUCH_MS, WaitTracker, type WaitHead } from "./metrics/wait-tracker";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
@@ -144,7 +147,7 @@ import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { openKnownPr } from "./util/github-url";
 import { TicketService } from "./tickets/ticket-service";
-import { applyGhResolution, branchRuns, ghAvailable, probeGh, compareFiles, failedLog, mergedPrs, prInfo, prLessonDataDetail, prsForBranch, prStatus, reviewAuthors, reviewComments } from "./tickets/gh";
+import { applyGhResolution, branchRuns, ghAvailable, probeGh, compareFiles, failedLog, mergedPrs, prInfo, prLessonDataDetail, prsForBranch, prStatus, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
 import { LessonsRepo } from "./db/lessons-repo";
 import { LessonRunsRepo } from "./db/lesson-runs-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
@@ -1074,10 +1077,13 @@ async function bootstrap(): Promise<void> {
    * 退出开始后不再发起新的调度任务。Butler 总控的每日巡检（BTL-190 第 5 点）用同样的触发时机，但不排进 Scheduler 的链：
    * 它可能要等 session 停下来，不能挡住晚间 handoff。butlerPatrol 在下面才建好：调用时才用到。
    */
+  /** 度量的每日 gh 任务（ws-h）：要等 ticketPrs 建好，在下面赋值。 */
+  let metricsGhJob: MetricsGhJob | null = null;
   const checkSchedule = (trigger: ScheduleTrigger) => {
     if (headlessAbort.signal.aborted) return Promise.resolve();
     void butlerPatrol.check();
     void lessonRunner.daily().catch((e: unknown) => logger("lessons: daily pull failed", e));
+    void metricsGhJob?.daily().catch((e: unknown) => logger("metrics: daily gh job failed", e));
     if (configBackups.tick()) notify();
     return scheduler.check(trigger);
   };
@@ -1817,6 +1823,7 @@ async function bootstrap(): Promise<void> {
     keys, terms, audit, memory,
     externalAudit,
     progress: (f) => progressView(f),
+    metrics: (days) => metricsView(days),
     butlerMessages: () => butlerMessages.recent(),
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     usage: usageRepo, sessions,
@@ -1996,6 +2003,7 @@ async function bootstrap(): Promise<void> {
         needsYou: (id) => needsYou.reasons().get(id) ?? null,
         inbox: inboxService,
         progress: progressView,
+        metrics: (days) => metricsView(days),
         summaries: {
           running: (id) => featureRunner.isRunning(id),
           stale: (id) => summaryStale(id),
@@ -2113,6 +2121,31 @@ async function bootstrap(): Promise<void> {
   });
   const rollupFirst = setTimeout(() => metricsRollup.run(), 60_000);
   const rollupTimer = setInterval(() => metricsRollup.run(), 60 * 60_000);
+  const METRICS_VIEW_STALE_MS = 10 * 60_000;
+  const metricsCutoff = () => baselineCutoffOf(settings, () => sessions.firstButlerCreatedAt(), metricsSince(settings) ?? Date.now());
+  /** 「效果」页和总控 metrics_overview 的数据：上次汇总超过 10 分钟就先汇总一次。 */
+  const metricsView = (days: number | undefined): MetricsOverview => {
+    metricsRollup.runIfStale(METRICS_VIEW_STALE_MS);
+    const now = Date.now();
+    const d = clampDays(days ?? METRICS_DAYS_DEFAULT);
+    return buildOverview({
+      daily: metricsRepo.daily(overviewFromDay(now, d)), baseline: metricsRepo.baselinePrs(), cutoff: metricsCutoff(), now, days: d,
+      rolledUpAt: metricsRollup.lastRun > 0 ? metricsRollup.lastRun : null,
+    });
+  };
+  // 每天一次读 gh（ws-h）：revert、重开、基线回填；只读，和别的调度任务一样在 checkSchedule 里触发。
+  metricsGhJob = new MetricsGhJob({
+    gh: { available: ghAvailable, searchMergedPrs, prStatus, reviewComments, reviewAuthors, issueEvents },
+    home: homedir(),
+    slugs: () => [...ticketPrs.slugs(), ...lessonsRepo.repos().map((r) => r.slug)],
+    prs: () => ticketPrs.all(),
+    baseline: metricsRepo,
+    cutoff: metricsCutoff,
+    record: recordEvent,
+    jobs,
+    now: Date.now,
+    log: logger,
+  });
 
   app.on("will-quit", () => {
     // 正常情况下 before-quit 已经停过；没经过 before-quit 的退出也要在关数据库之前停下。

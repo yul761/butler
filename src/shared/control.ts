@@ -156,7 +156,9 @@ export type ButlerControlRequest =
   /** 后台给一个 feature 重新生成汇总（ws-b）：立刻返回，生成完 list_features 能看到新的 summaryAt。 */
   | { v: 1; butler: true; from: string | null; op: "refresh_feature_summary"; feature: string }
   /** 进度总览（ws-b）：和进度页同一份聚合，可以按 epic / feature 过滤。只读。 */
-  | { v: 1; butler: true; from: string | null; op: "progress_overview"; feature?: string; epic?: string };
+  | { v: 1; butler: true; from: string | null; op: "progress_overview"; feature?: string; epic?: string }
+  /** 效果总览（ws-h）：和「效果」页同一份 MetricsOverview。只读。 */
+  | { v: 1; butler: true; from: string | null; op: "metrics_overview"; days?: number };
 
 export type ControlRequest = TicketControlRequest | FeatureControlRequest | EpicControlRequest | ButlerControlRequest;
 
@@ -293,6 +295,11 @@ function parseButlerRequest(o: Record<string, unknown>, from: string | null): Bu
     if (o.feature !== undefined && !okName(o.feature, 500)) return null;
     if (o.epic !== undefined && !okName(o.epic, 500)) return null;
     return { ...base, op: o.op, ...(o.feature !== undefined && { feature: o.feature as string }), ...(o.epic !== undefined && { epic: o.epic as string }) };
+  }
+  if (o.op === "metrics_overview") {
+    if (o.days === undefined) return { ...base, op: "metrics_overview" };
+    if (typeof o.days !== "number" || !Number.isInteger(o.days) || o.days < 1 || o.days > 365) return null;
+    return { ...base, op: "metrics_overview", days: o.days };
   }
   if (o.op === "refresh_feature_summary") {
     if (!okName(o.feature, 500)) return null;

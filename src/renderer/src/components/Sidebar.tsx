@@ -68,6 +68,7 @@ export function Sidebar({ tickets, features, epics, unclaimedCount, needsYouCoun
       <button className={cls("nav butler", route.page === "butler")} onClick={() => onNavigate({ page: "butler" })}>{S.butlerNav}</button>
       {/* 进度看板（ws-b）：全局的，紧跟 Butler。 */}
       <button className={cls("nav progress", route.page === "progress")} onClick={() => onNavigate({ page: "progress" })}>{S.progressNav}</button>
+      <button className={cls("nav effect", route.page === "effect")} data-testid="nav-effect" onClick={() => onNavigate({ page: "effect" })}>{S.effectNav}</button>
       <button className="new-ticket" onClick={onNew}>+ {S.newTicket}</button>
       <button className="new-ticket" onClick={onNewFeature}>+ {S.newFeature}</button>
       <button className="new-ticket" onClick={onNewEpic}>+ {S.newEpic}</button>

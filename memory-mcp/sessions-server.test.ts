@@ -522,7 +522,7 @@ describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
 });
 
 describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
-  const NAMES = ["list_epics", "list_features", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "send_message", "refresh_session", "progress_overview", "refresh_feature_summary"];
+  const NAMES = ["list_epics", "list_features", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "send_message", "refresh_session", "progress_overview", "refresh_feature_summary", "metrics_overview"];
 
   it("lists only read tools, send_message and refresh_session, plus ask_user and report, in both languages", async () => {
     expect(await tools(setup(2000, { butler: true }).server)).toEqual([...BUTLER_TOOLS, ...INBOX_TOOLS]);
@@ -578,6 +578,12 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
     const g2 = callTool(server, "progress_overview");
     expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "progress_overview" });
     await g2;
+    const m = callTool(server, "metrics_overview", { days: 90 });
+    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "metrics_overview", days: 90 });
+    await m;
+    const m2 = callTool(server, "metrics_overview");
+    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "metrics_overview" });
+    await m2;
     const h = callTool(server, "refresh_feature_summary", { feature: 4 });
     expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "refresh_feature_summary", feature: "4" });
     await h;
@@ -594,6 +600,7 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
       ["send_message", { feature: "", text: "t" }], ["send_message", { epic: 1.5, text: "t" }], ["session_activity", {}], ["refresh_session", { session: "" }],
       ["list_tickets", { feature: true }], ["list_tickets", { epic: "" }], ["list_tickets", { feature: 1.5 }],
       ["progress_overview", { feature: "" }], ["progress_overview", { epic: 1.5 }], ["refresh_feature_summary", {}], ["refresh_feature_summary", { feature: " " }],
+      ["metrics_overview", { days: 0 }], ["metrics_overview", { days: 366 }], ["metrics_overview", { days: 1.5 }], ["metrics_overview", { days: "30" }],
       ["start_session", { repo: "r", task: "t" }], ["create_feature", { name: "a", brief: "b" }], ["end_session", { session: "s", reason: "r" }],
     ] as const) {
       expect(await callTool(server, name, args), `${name} ${JSON.stringify(args).slice(0, 40)}`).toMatchObject({ result: { isError: true } });

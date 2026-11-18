@@ -1,3 +1,4 @@
+import type { MetricsOverview } from "../../shared/metrics";
 import type { BatchRecorder } from "../batches/batch-recorder";
 import type { AdmissionPolicyService } from "../lessons/admission-policies";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
@@ -136,6 +137,8 @@ export interface IpcDeps {
   externalAudit: Pick<ExternalAuditRepo, "list">;
   /** 进度页（ws-b）：和总控 progress_overview 同一份聚合。 */
   progress: (filter: ProgressFilter) => ProgressView;
+  /** 「效果」页（ws-h）：和总控 metrics_overview 同一份。 */
+  metrics: (days: number | undefined) => MetricsOverview;
   /** Butler 页"回复"tab（ws-b）。 */
   butlerMessages: () => ButlerMessageView[];
   memory: Pick<MemoryService, "view" | "why">;
@@ -323,6 +326,7 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.butlerView, () => d.sessionService.butlerView());
   handle(IPC.butlerMessages, (): ButlerMessageView[] => d.butlerMessages());
   handle(IPC.progressGet, (raw: unknown): ProgressView => d.progress(progressFilterArg(raw)));
+  handle(IPC.metricsView, (raw: unknown): MetricsOverview => d.metrics(typeof raw === "number" ? raw : undefined));
   handle(IPC.butlerOpenSession, async (raw: unknown) => {
     const r = await d.sessionService.openButler(openButlerArg(raw));
     d.notify();

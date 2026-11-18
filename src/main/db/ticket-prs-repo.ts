@@ -292,6 +292,11 @@ export class TicketPrsRepo {
     return Number(res.changes);
   }
 
+  /** 全部 PR（度量的每日 gh 任务用）。 */
+  all(): TicketPr[] {
+    return (this.db.prepare(`SELECT * FROM ticket_prs ORDER BY id`).all() as unknown as Row[]).map(toPr);
+  }
+
   slugs(): string[] {
     return (this.db.prepare(`SELECT DISTINCT slug FROM ticket_prs ORDER BY slug`).all() as unknown as { slug: string }[]).map((r) => r.slug);
   }

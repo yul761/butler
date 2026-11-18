@@ -14,6 +14,7 @@ import type { RoutingAction, RoutingView, SessionLimitView, SwitchModelResult } 
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { ExternalActionEntry } from "../../shared/external";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
+import type { MetricsOverview } from "../../shared/metrics";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
 import type {
   AutostartState, CiItemRef, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
@@ -87,6 +88,7 @@ export const api = {
   butlerView: () => call<ButlerView>(IPC.butlerView),
   butlerMessages: () => call<ButlerMessageView[]>(IPC.butlerMessages),
   progress: (filter: ProgressFilter) => call<ProgressView>(IPC.progressGet, filter),
+  metrics: (days?: number) => call<MetricsOverview>(IPC.metricsView, days),
   openButlerSession: (req: OpenButlerSessionRequest) => call<OpenSessionResult>(IPC.butlerOpenSession, req),
   openFixSession: (req: OpenFixSessionRequest) => call<OpenSessionResult>(IPC.sessionOpenFix, req),
   scanRepos: (dir: string) => call<ScanResult>(IPC.reposScan, dir),
