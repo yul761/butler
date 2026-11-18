@@ -322,5 +322,7 @@ describe("MetricsRollup", () => {
       db, repo, holds: { allHolds: () => { throw new Error("x"); } }, registry: () => [], record: () => false, since: () => 0, now: () => 1, log: () => {},
     });
     expect(r.run()).toBe(false);
+    // 一直失败也不会每次都重算：按上次开始跑的时间算新旧。
+    expect(r.runIfStale(10)).toBe(false);
   });
 });

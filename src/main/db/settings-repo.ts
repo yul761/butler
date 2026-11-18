@@ -19,6 +19,8 @@ export const SETTING_DEFAULTS = {
   skillTrackingSince: "",
   /** 开始记度量（ws-h）的时间（毫秒，字符串）；空表示还没开始。基线截止点和「从什么时候起有人介入数据」看它。 */
   metricsSince: "",
+  /** 「效果」页基线的截止点（ws-h）：第一个 Butler session 的创建时间，第一次看到时存下，之后不变；空表示还没有。 */
+  metricsBaselineCutoff: "",
   handoffPrompt: DEFAULT_HANDOFF_PROMPT,
   refreshPrompt: DEFAULT_REFRESH_PROMPT,
   /** 个人 API 的隐私档位：off | metadata | redacted | full（设计文档 7.3，默认 metadata）。 */

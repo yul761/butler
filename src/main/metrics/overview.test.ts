@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BaselinePr, DailyRow } from "../db/metrics-repo";
-import { baselineAverages, baselineCutoff, buildOverview, clampDays, monthStart, overviewFromDay, weekStart, windowFromDay } from "./overview";
+import { baselineAverages, buildOverview, clampDays, monthStart, overviewFromDay, weekStart, windowFromDay } from "./overview";
 import { dayOf } from "./rollup";
 
 const H = 3_600_000;
@@ -141,11 +141,6 @@ describe("buildOverview", () => {
 });
 
 describe("baseline", () => {
-  it("uses the first Butler session, else the metrics start", () => {
-    expect(baselineCutoff(5, 9)).toBe(5);
-    expect(baselineCutoff(null, 9)).toBe(9);
-  });
-
   it("clamps negative cycles to zero", () => {
     expect(baselineAverages([base({ openedAt: 30 * H, mergedAt: 20 * H, firstCommitAt: 25 * H })], 100 * H)).toMatchObject({ cycleOpenMs: 0, cycleTicketMs: 0 });
   });

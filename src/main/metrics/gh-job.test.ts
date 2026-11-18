@@ -30,6 +30,8 @@ describe("revertTargets", () => {
   it("matches the GitHub title `Revert \"<title>\"`", () => {
     expect(revertTargets(sp(), "o/app", [jp()]).map((p) => p.id)).toEqual([1]);
     expect(revertTargets(sp({ title: 'Revert "Something else"' }), "o/app", [jp()])).toEqual([]);
+    // 正文指了别的 PR：同名的 ticket PR 不算被 revert。
+    expect(revertTargets(sp({ body: "Reverts o/app#50" }), "o/app", [jp()])).toEqual([]);
   });
 
   it("only counts PRs in the same repo merged before the revert, and three-part slugs", () => {
@@ -71,6 +73,16 @@ describe("baselineOf", () => {
     });
   });
 
+  it("does not count reviews or comments by Bot accounts the reviews API names (logins without [bot])", () => {
+    const pr = status({
+      comments: [comment("reviewbot"), comment("alice")],
+      reviews: [{ id: "r1", author: "reviewbot", state: "COMMENTED", body: "auto", submittedAt: 1 }, { id: "r2", author: "dave", state: "COMMENTED", body: "ok", submittedAt: 2 }],
+    });
+    const bots = { botReviewIds: new Set(["r1"]), botLogins: new Set(["reviewbot"]) };
+    expect(baselineOf("o/app", pr, [comment("ReviewBot", "c3")], 1, bots)).toMatchObject({ humanComments: 2, copilotComments: 0 });
+    expect(baselineOf("o/app", pr, [], 1)).toMatchObject({ humanComments: 4 });
+  });
+
   it("returns null without open or merge times", () => {
     expect(baselineOf("o/app", status({ mergedAt: null }), [], 1)).toBeNull();
   });
@@ -87,6 +99,7 @@ function setup(o: { prs?: JobPr[]; gh?: Partial<MetricsGhDeps["gh"]>; cutoff?: n
     searchMergedPrs: vi.fn(async () => []),
     prStatus: vi.fn(async () => status()),
     reviewComments: vi.fn(async () => []),
+    reviewAuthors: vi.fn(async () => null),
     issueEvents: vi.fn(async () => []),
     ...o.gh,
   };
@@ -127,7 +140,7 @@ describe("MetricsGhJob", () => {
     expect(repo.baselinePrs().map((b) => [b.slug, b.number])).toEqual([["o/app", 3]]);
     expect(prStatus).toHaveBeenCalledWith("/home", "u3", expect.any(Number));
     const search = searchMergedPrs.mock.calls.find((c) => c[5] === "@me")![2];
-    expect(search).toMatch(/^merged:\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$/);
+    expect(search).toMatch(/^merged:\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2} sort:created-desc$/);
     await job.run();
     expect(prStatus).toHaveBeenCalledTimes(1);
   });
@@ -151,7 +164,17 @@ describe("MetricsGhJob", () => {
     const { job } = setup({ prs, gh: { issueEvents } });
     const r = await job.run();
     expect(r.failed).toBeLessThanOrEqual(6);
+    expect(r.stopped).toBe(true);
     expect(issueEvents.mock.calls.length).toBeLessThan(20);
+  });
+
+  it("records failed when it stops early even if some calls worked, so it retries after the backoff", async () => {
+    let n = 0;
+    const issueEvents = vi.fn(async () => (n++ < 3 ? [] : null));
+    const prs = Array.from({ length: 20 }, (_, i) => jp({ id: i, number: i, state: "open" }));
+    const { job, jobs } = setup({ prs, gh: { issueEvents } });
+    expect(await job.daily()).toBe(true);
+    expect(jobs.get(JOB_METRICS_GH).lastStatus).toBe("failed");
   });
 
   it("does nothing without gh", async () => {

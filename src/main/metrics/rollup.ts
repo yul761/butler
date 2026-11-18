@@ -388,6 +388,8 @@ export interface RollupDeps {
  */
 export class MetricsRollup {
   private lastRunAt = 0;
+  /** 上次开始跑的时间（失败也算）：一直失败时，页面每次重取不会都整窗重算。 */
+  private lastAttemptAt = 0;
 
   constructor(private readonly d: RollupDeps) {}
 
@@ -397,12 +399,13 @@ export class MetricsRollup {
 
   /** 上次跑过超过 maxAgeMs 才跑。 */
   runIfStale(maxAgeMs: number): boolean {
-    if (this.d.now() - this.lastRunAt < maxAgeMs) return false;
+    if (this.d.now() - Math.max(this.lastRunAt, this.lastAttemptAt) < maxAgeMs) return false;
     return this.run();
   }
 
   run(): boolean {
     const now = this.d.now();
+    this.lastAttemptAt = now;
     try {
       // 从那天的本地零点算：窗口最早那天也是整天，不会只算到一半就被冻住。
       const windowStart = startOfDay(now - ROLLUP_DAYS * DAY_MS);

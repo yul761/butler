@@ -17,7 +17,8 @@ describe("effect page formatting (ws-h)", () => {
     expect(fmtNumber(2.05, 2)).toBe("2.05");
     expect(fmtNumber(null)).toBe("—");
     expect(fmtDuration(null)).toBe("—");
-    expect(fmtDuration(30_000)).toBe(S.durationNow);
+    expect(fmtDuration(0)).toBe(S.durationMinutes(0));
+    expect(fmtDuration(30_000)).toBe(S.effect.durUnderMinute);
     expect(fmtDuration(25 * 60_000)).toBe(S.durationMinutes(25));
     expect(fmtDuration(5.5 * H)).toBe(S.effect.durHours("5.5"));
     expect(fmtDuration(3 * 24 * H)).toBe(S.effect.durDays("3"));

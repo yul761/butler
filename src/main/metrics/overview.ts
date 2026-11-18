@@ -246,8 +246,3 @@ export function buildOverview(input: OverviewInput): MetricsOverview {
     otherEvents,
   };
 }
-
-/** 基线截止点：最早的 Butler session 的创建时间，没有就是开始记度量的时间。 */
-export function baselineCutoff(firstButlerSessionAt: number | null, metricsSince: number): number {
-  return firstButlerSessionAt ?? metricsSince;
-}

@@ -98,9 +98,9 @@ import { Metrics } from "./metrics/events";
 import { classifyQuestion, InterruptRecorder } from "./metrics/interrupts";
 import { isDialogKey, promptOnTerminalChain, questionToolShowing, recordInvoke, TerminalInputMeter } from "./metrics/interventions";
 import { MetricsGhJob } from "./metrics/gh-job";
-import { baselineCutoff, buildOverview, clampDays, overviewFromDay } from "./metrics/overview";
+import { buildOverview, clampDays, overviewFromDay } from "./metrics/overview";
 import { MetricsRollup } from "./metrics/rollup";
-import { ensureMetricsSince, metricsSince } from "./metrics/since";
+import { baselineCutoffOf, ensureMetricsSince, metricsSince } from "./metrics/since";
 import { TOUCH_MS as WAIT_TOUCH_MS, WaitTracker, type WaitHead } from "./metrics/wait-tracker";
 import { registerIpc } from "./ipc/register";
 import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
@@ -2122,7 +2122,7 @@ async function bootstrap(): Promise<void> {
   const rollupFirst = setTimeout(() => metricsRollup.run(), 60_000);
   const rollupTimer = setInterval(() => metricsRollup.run(), 60 * 60_000);
   const METRICS_VIEW_STALE_MS = 10 * 60_000;
-  const metricsCutoff = () => baselineCutoff(sessions.firstButlerCreatedAt(), metricsSince(settings) ?? Date.now());
+  const metricsCutoff = () => baselineCutoffOf(settings, () => sessions.firstButlerCreatedAt(), metricsSince(settings) ?? Date.now());
   /** 「效果」页和总控 metrics_overview 的数据：上次汇总超过 10 分钟就先汇总一次。 */
   const metricsView = (days: number | undefined): MetricsOverview => {
     metricsRollup.runIfStale(METRICS_VIEW_STALE_MS);
@@ -2135,7 +2135,7 @@ async function bootstrap(): Promise<void> {
   };
   // 每天一次读 gh（ws-h）：revert、重开、基线回填；只读，和别的调度任务一样在 checkSchedule 里触发。
   metricsGhJob = new MetricsGhJob({
-    gh: { available: ghAvailable, searchMergedPrs, prStatus, reviewComments, issueEvents },
+    gh: { available: ghAvailable, searchMergedPrs, prStatus, reviewComments, reviewAuthors, issueEvents },
     home: homedir(),
     slugs: () => [...ticketPrs.slugs(), ...lessonsRepo.repos().map((r) => r.slug)],
     prs: () => ticketPrs.all(),

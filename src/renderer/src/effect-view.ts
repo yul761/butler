@@ -21,7 +21,8 @@ export function fmtNumber(v: number | null, digits = 1): string {
 export function fmtDuration(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms)) return DASH;
   const v = Math.max(0, ms);
-  if (v < 60_000) return S.durationNow;
+  if (v === 0) return S.durationMinutes(0);
+  if (v < 60_000) return S.effect.durUnderMinute;
   if (v < HOUR) return S.durationMinutes(Math.round(v / 60_000));
   if (v < 2 * DAY) return S.effect.durHours(fmtNumber(v / HOUR));
   return S.effect.durDays(fmtNumber(v / DAY));
