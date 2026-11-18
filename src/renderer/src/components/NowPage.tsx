@@ -83,7 +83,7 @@ function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: numb
     else if (a === "routing") onGo({ page: "settings", section: "routing" });
     else if (a === "resend" && n.kind === "ci_undelivered") {
       setResult(null);
-      void api.ciResend(n.ci.item).then((r) => setResult(r === "sent" || r === "delivered" ? S.ciResendSent : S.ciResendNot(ciReasonText(r, S))), reportError);
+      void api.ciResend(n.ci.item).then((r) => setResult(r === "sent" || r === "delivered" ? S.ciResendSent : r === "busy_delivering" ? S.ciResendBusy : S.ciResendNot(ciReasonText(r, S))), reportError);
     } else if (n.kind === "session_limited" || n.kind === "ci_undelivered") onOpen(n.target);
   };
   return (

@@ -35,7 +35,18 @@ describe("butler-hook", () => {
     expect(wanted(bash("git status && npm test"))).toBe(false);
     const push = bash("cd /wt && git push -u origin feat/x");
     expect(wanted(push)).toBe(true);
-    expect(push.payload).toEqual({ hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Bash", tool_use_id: "tu", cwd: "/w", tool_input: { command: "cd /wt && git push -u origin feat/x" }, pr_urls: [] });
+    expect(push.payload).toEqual({ hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Bash", tool_use_id: "tu", cwd: "/w", tool_input: { command: "cd /wt && git push -u origin feat/x" }, ship: [{ kind: "push", dir: "/wt", branch: "feat/x" }], pr_urls: [] });
+    // 提交信息很长：在截断之前解析，推送照样认得出。
+    const long = bash(`git commit -m "$(cat <<'EOF'\n${"x".repeat(2100)}\nEOF\n)" && git push -u origin feat/long`);
+    expect(wanted(long)).toBe(true);
+    expect((long.payload as { ship: unknown[] }).ship).toEqual([{ kind: "push", dir: null, branch: "feat/long" }]);
+    expect((long.payload as { tool_input: { command: string } }).tool_input.command).toHaveLength(2000);
+    // 失败的命令：输出在 error 里。
+    const failed = buildEnvelope(JSON.stringify({ hook_event_name: "PostToolUseFailure", session_id: "s1", tool_name: "Bash", cwd: "/w", tool_input: { command: "git push -u origin feat/x && gh pr create --fill" }, error: "https://github.com/o/r/pull/9\nalready exists" }), {}, 1);
+    expect(wanted(failed)).toBe(true);
+    expect((failed.payload as { pr_urls: string[] }).pr_urls).toEqual(["https://github.com/o/r/pull/9"]);
+    // 只推送的不带链接。
+    expect((bash("git push", "https://github.com/o/r/pull/3").payload as { pr_urls: string[] }).pr_urls).toEqual([]);
     const pr = bash("gh pr create --fill", "Creating pull request\nhttps://github.com/o/r/pull/34\n");
     expect(wanted(pr)).toBe(true);
     expect((pr.payload as { pr_urls: string[] }).pr_urls).toEqual(["https://github.com/o/r/pull/34"]);

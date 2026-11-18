@@ -218,15 +218,36 @@ describe("CiDelivery picks the session the PR belongs to (workstream W)", () => 
     expect([s.prs.get(a.id)!.deliveredKey, s.prs.get(b.id)!.deliveredKey]).toEqual([deliveryKey(a), deliveryKey(b)]);
   });
 
-  it("does not hand an owned PR's result to another session when the owner's terminal is closed", async () => {
+  it("does not hand an owned PR's result to a session on another branch when the owner's terminal is closed", async () => {
     const s = setup();
-    s.state.open = [{ id: "h2", gitBranch: "b", coordinator: false }];
+    s.state.open = [{ id: "h2", gitBranch: "feat/other", coordinator: false }];
     const r = s.pr({ ci: "passing", headBranch: "b" });
     s.state.owners.set(`BTL-1:${s.repoId}:b`, "h1");
     s.state.closed.add("h1");
     await s.d.settled({ kind: "pr", id: r.id });
     expect(s.deliver).not.toHaveBeenCalled();
     expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/BTL-1#7 .*not delivered: owner_closed/));
+  });
+
+  it("hands it to the new session on the same branch when the session that pushed it has closed", async () => {
+    const s = setup();
+    s.state.open = [{ id: "h2", gitBranch: "b", coordinator: false }];
+    const r = s.pr({ ci: "passing", headBranch: "b" });
+    s.state.owners.set(`BTL-1:${s.repoId}:b`, "h1");
+    s.state.closed.add("h1");
+    await s.d.settled({ kind: "pr", id: r.id });
+    expect(s.deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unidentified PR off the ticket branch is only logged, never a Now notice (nobody was promised it)", async () => {
+    const s = setup();
+    s.state.open = [{ id: "h2", gitBranch: "feat/x", coordinator: false }, { id: "h3", gitBranch: "feat/y", coordinator: false }];
+    const r = s.pr({ ci: "passing", headBranch: "feat/related" });
+    await s.d.settled({ kind: "pr", id: r.id });
+    expect(s.deliver).not.toHaveBeenCalled();
+    expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/not delivered: unowned/));
+    s.state.now = CI_UNDELIVERED_MS + 10;
+    expect(s.d.undelivered()).toEqual([]);
   });
 
   it("logs every reason it does not deliver, once per reason", async () => {
@@ -296,16 +317,29 @@ describe("CiDelivery picks the session the PR belongs to (workstream W)", () => 
 
 describe("pickRecipient", () => {
   const c = (id: string, gitBranch: string | null = null, coordinator = false): RecipientCandidate => ({ id, gitBranch, coordinator });
-  it("prefers the owner; a closed owner is not replaced", () => {
-    expect(pickRecipient({ owner: "o", ownerOpen: true, open: [c("a")], ticketBranch: "b", branch: "b" })).toEqual({ ok: true, sessionId: "o", via: "owner" });
-    expect(pickRecipient({ owner: "o", ownerOpen: false, open: [c("a")], ticketBranch: "b", branch: "b" })).toEqual({ ok: false, reason: "owner_closed" });
+  const pick = (owner: string | null, ownerOpen: boolean, open: RecipientCandidate[], branch: string, ticketBranch = "main") => pickRecipient({ owner, ownerOpen, open, ticketBranch, branch });
+  it("prefers the open owner", () => {
+    expect(pick("o", true, [c("a", "b")], "b")).toEqual({ ok: true, sessionId: "o", via: "owner" });
   });
-  it("then the one open session started on that branch, then the first session when the PR is on the ticket branch", () => {
-    expect(pickRecipient({ owner: null, ownerOpen: false, open: [c("a", "main"), c("x", "feat"), c("k", "feat", true)], ticketBranch: "main", branch: "feat" })).toEqual({ ok: true, sessionId: "x", via: "branch" });
-    expect(pickRecipient({ owner: null, ownerOpen: false, open: [c("k", null, true), c("a"), c("b")], ticketBranch: "main", branch: "main" })).toEqual({ ok: true, sessionId: "a", via: "ticket" });
-    expect(pickRecipient({ owner: null, ownerOpen: false, open: [c("a"), c("b")], ticketBranch: "main", branch: "feat" })).toEqual({ ok: false, reason: "unowned", candidates: ["a", "b"] });
-    expect(pickRecipient({ owner: null, ownerOpen: false, open: [c("a")], ticketBranch: "main", branch: "feat" })).toEqual({ ok: false, reason: "unowned", candidates: ["a"] });
-    expect(pickRecipient({ owner: null, ownerOpen: false, open: [c("k", null, true)], ticketBranch: "main", branch: "main" })).toEqual({ ok: false, reason: "no_session" });
+  it("a closed owner is replaced only by the one session started on that branch", () => {
+    expect(pick("o", false, [c("a", "b")], "b")).toEqual({ ok: true, sessionId: "a", via: "branch" });
+    expect(pick("o", false, [c("a", "feat")], "b")).toEqual({ ok: false, reason: "owner_closed" });
+    expect(pick("o", false, [c("a", "b"), c("x", "b")], "b")).toEqual({ ok: false, reason: "owner_closed" });
+    expect(pick("o", false, [c("a")], "main")).toEqual({ ok: false, reason: "owner_closed" });
+  });
+  it("without an owner: the one session on that branch; off the ticket branch an unknown one is unowned and not promised", () => {
+    expect(pick(null, false, [c("a", "main"), c("x", "feat"), c("k", "feat", true)], "feat")).toEqual({ ok: true, sessionId: "x", via: "branch" });
+    expect(pick(null, false, [c("a"), c("b")], "feat")).toEqual({ ok: false, reason: "unowned", candidates: ["a", "b"], promised: false });
+    expect(pick(null, false, [c("a")], "feat")).toEqual({ ok: false, reason: "unowned", candidates: ["a"], promised: false });
+  });
+  it("on the ticket branch: the first session started on it; child sessions on their own branches never get it", () => {
+    expect(pick(null, false, [c("k", "main", true), c("a", "main"), c("b", "main")], "main")).toEqual({ ok: true, sessionId: "a", via: "ticket" });
+    expect(pick(null, false, [c("w1", "feat/a"), c("w2", "feat/b")], "main")).toEqual({ ok: false, reason: "unowned", candidates: ["w1", "w2"], promised: true });
+    expect(pick(null, false, [c("w1", "feat/a"), c("s", "main")], "main")).toEqual({ ok: true, sessionId: "s", via: "ticket" });
+    // 只开着一个、还不知道在哪个分支上的：原来的规则。两个就认不出了。
+    expect(pick(null, false, [c("k", null, true), c("a")], "main")).toEqual({ ok: true, sessionId: "a", via: "ticket" });
+    expect(pick(null, false, [c("a"), c("b")], "main")).toEqual({ ok: false, reason: "unowned", candidates: ["a", "b"], promised: true });
+    expect(pick(null, false, [c("k", null, true)], "main")).toEqual({ ok: false, reason: "no_session" });
   });
 });
 

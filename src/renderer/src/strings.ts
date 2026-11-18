@@ -255,6 +255,8 @@ const ZH = {
   ciWhatPr: (key: string, n: number, branch: string) => `${key} PR #${n}（${branch}）`,
   ciWhatBranch: (key: string, branch: string) => `${key} 分支 ${branch}`,
   ciReason: {
+    not_open: "PR 已经合并或关闭了",
+    not_settled: "CI 又开始跑了",
     unowned: "认不出是哪个会话的",
     busy_delivering: "那个会话正在收别的消息",
     failed: "送的时候出错了",
@@ -275,6 +277,7 @@ const ZH = {
   ciReasonOther: (r: string) => `原因：${r}`,
   noticeResend: "重发",
   ciResendSent: "已送达",
+  ciResendBusy: "正在送达，稍后刷新",
   ciResendNot: (why: string) => `还是没送达：${why}`,
   availabilityTitle: "Claude 可用性",
   availabilityStateLabel: "状态",

@@ -35,6 +35,8 @@ const UNREAD_RETRY_MS = 60_000;
 export const OWNED_LIST_MS = 5 * 60_000;
 /** 这么久之前推的分支不再去列。 */
 export const OWNED_FRESH_MS = 14 * 24 * 60 * 60_000;
+/** 有归属的分支上已经合并 / 关闭的 PR：最近一次推送前这么久以内开的才算这次的（推送和开 PR 之间隔不了多久）。 */
+export const OWNED_PR_SLACK_MS = 24 * 60 * 60_000;
 
 export interface PrWatcherDeps {
   prs: TicketPrsRepo;
@@ -402,22 +404,26 @@ export class PrWatcher {
 
   /**
    * session 推过、在上面开过 PR 的别的分支（worktree 里的子 session 最常见）：列出上面的 PR 并链接上，下一轮读它们的 CI。
-   * ticket 分支本身由 checkBranches 管；已经有开着的 PR 的、OWNED_FRESH_MS 之前记下的不列；同一个分支最多 OWNED_LIST_MS 列一次（强制的除外）。
+   * ticket 分支本身由 checkBranches 管；OWNED_FRESH_MS 之前记下的不列；同一个分支最多 OWNED_LIST_MS 列一次（强制的除外）。
+   * 已经链接上的 PR 还开着、或者在最近一次推送之后才合并 / 关闭的：这次推送的 PR 已经有了，不再列（再推一次又会列）。
+   * 列出来的只链接开着的、和最近一次推送前一天以后开的：重名的老分支（`fix/ci`）上早就合并的 PR 不链接进来。
    */
   private async checkOwnedBranches(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, marks: Marks): Promise<void> {
     if (!this.d.owners) return;
     const now = this.d.now();
-    const open = this.d.prs.needingRead().filter((r) => r.state === "open");
-    const due: { ticketKey: string; repo: TicketRepo; branch: string; id: string }[] = [];
+    const due: { ticketKey: string; repo: TicketRepo; branch: string; id: string; at: number }[] = [];
     const seen = new Set<string>();
+    const linked = new Map<string, TicketPr[]>();
     for (const o of this.d.owners.since(now - OWNED_FRESH_MS)) {
       const repo = tickets.find((t) => t.key === o.ticketKey)?.repos.find((r) => r.id === o.repoId);
       if (!repo || o.branch === repo.branch) continue;
       const id = `${o.ticketKey}:${o.repoId}:${o.branch}`;
       seen.add(id);
-      if (open.some((r) => r.ticketKey === o.ticketKey && r.repoId === o.repoId && r.headBranch === o.branch)) continue;
+      if (!linked.has(o.ticketKey)) linked.set(o.ticketKey, this.d.prs.byTicket(o.ticketKey));
+      const done = (r: TicketPr): boolean => r.state === "open" || (r.mergedAt ?? r.closedAt ?? r.linkedAt) >= o.at;
+      if (linked.get(o.ticketKey)!.some((r) => r.repoId === o.repoId && r.headBranch === o.branch && done(r))) continue;
       if (!forced(o.ticketKey, o.repoId) && now < (this.ownedListedAt.get(id) ?? 0) + OWNED_LIST_MS) continue;
-      due.push({ ticketKey: o.ticketKey, repo, branch: o.branch, id });
+      due.push({ ticketKey: o.ticketKey, repo, branch: o.branch, id, at: o.at });
     }
     for (const id of this.ownedListedAt.keys()) if (!seen.has(id)) this.ownedListedAt.delete(id);
     await Promise.all(
@@ -426,7 +432,8 @@ export class PrWatcher {
           const list = await this.gh(() => this.d.gh.prsForBranch(this.d.ghWorkDir(t.repo), t.branch, PR_GH_TIMEOUT_MS));
           this.ownedListedAt.set(t.id, this.d.now());
           if (list === null) return this.d.log(`pr watch: listing the PRs of ${t.branch} in ${t.repo.repoPath} failed`);
-          if (this.d.linker.linkBranchPrs(t.ticketKey, { id: t.repo.id, repoPath: t.repo.repoPath, branch: t.branch }, list, "branch") > 0) marks.changed = true;
+          const fresh = list.filter((p) => p.state === "OPEN" || (p.createdAt !== null && p.createdAt >= t.at - OWNED_PR_SLACK_MS));
+          if (this.d.linker.linkBranchPrs(t.ticketKey, { id: t.repo.id, repoPath: t.repo.repoPath, branch: t.branch }, fresh, "branch") > 0) marks.changed = true;
         }),
       ),
     );

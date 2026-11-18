@@ -101,6 +101,16 @@ describe("classifyShip", () => {
     expect(classifyShip("git -C ../wt push")).toEqual([{ kind: "push", dir: "../wt", branch: null }]);
     expect(classifyShip('cd "C:\\wt\\ws a" && git push')).toEqual([{ kind: "push", dir: "C:\\wt\\ws a", branch: null }]);
   });
+  it("ignores redirections, unwraps $( ) and ( ) and records every refspec; tag refs are not branches", () => {
+    expect(classifyShip("git push origin 2>&1")).toEqual([{ kind: "push", dir: null, branch: null }]);
+    expect(classifyShip("git push origin >/dev/null 2>&1")).toEqual([{ kind: "push", dir: null, branch: null }]);
+    expect(classifyShip("git push -u origin feat/x > out.log 2>&1")).toEqual([{ kind: "push", dir: null, branch: "feat/x" }]);
+    expect(classifyShip("PR=$(gh pr create --fill)")).toEqual([{ kind: "pr_create", dir: null, head: null }]);
+    expect(classifyShip("(cd /wt && git push)")).toEqual([{ kind: "push", dir: "/wt", branch: null }]);
+    expect(classifyShip("git push origin a b")).toEqual([{ kind: "push", dir: null, branch: "a" }, { kind: "push", dir: null, branch: "b" }]);
+    expect(classifyShip("git push origin refs/tags/v2")).toEqual([]);
+    expect(classifyShip("echo $(git rev-parse HEAD)")).toEqual([]);
+  });
   it("recognises gh pr create with or without --head, and both in one command", () => {
     expect(classifyShip("gh pr create --fill")).toEqual([{ kind: "pr_create", dir: null, head: null }]);
     expect(classifyShip("gh pr create -H owner:feat/x -t t -b body")).toEqual([{ kind: "pr_create", dir: null, head: "feat/x" }]);

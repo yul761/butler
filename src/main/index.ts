@@ -1318,7 +1318,12 @@ async function bootstrap(): Promise<void> {
     mainRepoRoot: git.mainRepoRoot,
     owners: branchOwners,
     linker: prLinker,
+    isCoordinator: (id) => sessions.head(id)?.coordinator ?? false,
+    isOpen: (id) => gateTerm(id) !== null,
     soon: (repoId) => prWatcher.soon(repoId),
+    exists: existsSync,
+    home: homedir(),
+    win: process.platform === "win32",
     now: Date.now,
     log: logger,
   });

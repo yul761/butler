@@ -42,23 +42,26 @@ export interface RecipientCandidate { id: string; gitBranch: string | null; coor
 export type Recipient =
   | { ok: true; sessionId: string; via: "owner" | "branch" | "ticket" }
   | { ok: false; reason: "no_session" | "owner_closed" }
-  | { ok: false; reason: "unowned"; candidates: string[] };
+  /** promised：PR 在 ticket 分支上，本来有人等着（这时才在「现在」页提醒）；别的分支上认不出的多半是相关的、别人的 PR。 */
+  | { ok: false; reason: "unowned"; candidates: string[]; promised: boolean };
 
 /**
  * 结论递给谁（工作流 W，设计文档 2026-11-18-ws-w-ci-delivery）：
- * 1. 推过这个分支、在上面开过 PR 的 session（owner，hook 记下的）。记着归属但它的终端关了：不递给别人（以前就是这样递错人的）。
- * 2. 没有归属：开着的、不是总控的 session 里，启动时就在这个分支上的那一个（正好一个）。
- * 3. PR 在 ticket 仓库记着的分支上：第一个开着的、不是总控的 session（原来的规则）。
- * 都不是：没有开着的 session 为 no_session，有但认不出是谁的为 unowned。
+ * 1. 推过这个分支、在上面开过 PR 的 session（owner，hook 记下的），终端开着。
+ * 2. 开着的、不是总控的 session 里，启动时就在这个分支上的：正好一个就递它；ticket 分支上有几个（都在共享检出里）递第一个。
+ *    归属的终端关了也走这一步（用户新开了一个 session 在同一个分支上等），但不递给别的分支上的 session（以前就是这样递错人的）。
+ * 3. 没有归属、PR 在 ticket 分支上、只开着一个 session 而且还不知道它在哪个分支：递它（原来的规则，只留没有歧义的情况）。
+ * 都不是：没有开着的 session 为 no_session，记着归属的为 owner_closed，有 session 但认不出是谁的为 unowned。
  */
 export function pickRecipient(i: { owner: string | null; ownerOpen: boolean; open: RecipientCandidate[]; ticketBranch: string | null; branch: string }): Recipient {
-  if (i.owner !== null) return i.ownerOpen ? { ok: true, sessionId: i.owner, via: "owner" } : { ok: false, reason: "owner_closed" };
+  if (i.owner !== null && i.ownerOpen) return { ok: true, sessionId: i.owner, via: "owner" };
   const cands = i.open.filter((c) => !c.coordinator);
-  if (i.branch !== i.ticketBranch) {
-    const on = cands.filter((c) => c.gitBranch === i.branch);
-    if (on.length === 1) return { ok: true, sessionId: on[0].id, via: "branch" };
-  } else if (cands.length > 0) return { ok: true, sessionId: cands[0].id, via: "ticket" };
-  return cands.length === 0 ? { ok: false, reason: "no_session" } : { ok: false, reason: "unowned", candidates: cands.map((c) => c.id) };
+  const onTicket = i.branch === i.ticketBranch;
+  const on = cands.filter((c) => c.gitBranch === i.branch);
+  if (on.length === 1 || (on.length > 1 && onTicket)) return { ok: true, sessionId: on[0].id, via: onTicket ? "ticket" : "branch" };
+  if (i.owner !== null) return { ok: false, reason: "owner_closed" };
+  if (onTicket && cands.length === 1 && cands[0].gitBranch === null) return { ok: true, sessionId: cands[0].id, via: "ticket" };
+  return cands.length === 0 ? { ok: false, reason: "no_session" } : { ok: false, reason: "unowned", candidates: cands.map((c) => c.id), promised: onTicket };
 }
 
 /** 为什么没递（日志和「现在」页的提醒用）。delivered 是已经递过（resend 的返回值），不是失败。 */
@@ -68,10 +71,13 @@ export type CiSkipReason = CiUndeliveredReason | "delivered" | "not_open" | "not
 interface Pending { ticketKey: string; repoId: number; branch: string; number: number | null; label: string; key: string; text: () => string; mark: () => void }
 
 /** 还没递出去的一条：从什么时候起、最近一次为什么没递、本来要递给谁。 */
-interface Waiting { key: string; since: number; reason: CiUndeliveredReason; sessionId: string | null; ticketKey: string; number: number | null; branch: string }
+interface Waiting { key: string; since: number; reason: CiUndeliveredReason; notify: boolean; sessionId: string | null; ticketKey: string; number: number | null; branch: string }
 
-/** 有人在等（session 开着，只是现在递不进去、或者认不出是谁的）的原因才提醒；归属的终端关了、根本没有 session 的不提醒。 */
-const NOTIFY = (r: CiUndeliveredReason): boolean => r !== "no_session" && r !== "owner_closed" && r !== "no_repo" && r !== "no_sha";
+/**
+ * 有人在等、重发可能有用的才提醒：认出了要递给谁只是现在递不进去，或者 ticket 分支上的认不出是谁的（Recipient.promised）。
+ * 归属的终端关了、根本没有 session、别的分支上认不出是谁的不提醒（重发也还是一样，只记日志）。
+ */
+const NOTIFY = (r: CiUndeliveredReason): boolean => r !== "no_session" && r !== "owner_closed" && r !== "unowned" && r !== "no_repo" && r !== "no_sha";
 
 const itemId = (item: CiItem): string => (item.kind === "pr" ? `pr:${item.id}` : `branch:${item.repoId}`);
 
@@ -117,7 +123,7 @@ export class CiDelivery {
     const now = this.d.now();
     const out: CiUndelivered[] = [];
     for (const [id, w] of this.waiting) {
-      if (now - w.since < CI_UNDELIVERED_MS || !NOTIFY(w.reason)) continue;
+      if (now - w.since < CI_UNDELIVERED_MS || !w.notify) continue;
       const item: CiItem = id.startsWith("pr:") ? { kind: "pr", id: Number(id.slice(3)) } : { kind: "branch", repoId: Number(id.slice(7)) };
       out.push({ item, ticketKey: w.ticketKey, number: w.number, branch: w.branch, reason: w.reason, since: w.since, sessionId: w.sessionId });
     }
@@ -168,7 +174,7 @@ export class CiDelivery {
   }
 
   /** 没递：记日志（原因变了才记），有人在等的记进 waiting。 */
-  private skipped(id: string, label: string, key: string, reason: CiSkipReason, p: Pending | null, sessionId: string | null): CiSkipReason {
+  private skipped(id: string, label: string, key: string, reason: CiSkipReason, p: Pending | null, sessionId: string | null, notify?: boolean): CiSkipReason {
     if (reason === "delivered" || reason === "not_open" || reason === "not_settled") {
       this.forget(id);
       return reason;
@@ -181,7 +187,7 @@ export class CiDelivery {
     if (p) {
       const prev = this.waiting.get(id);
       const since = prev && prev.key === key ? prev.since : this.d.now();
-      this.waiting.set(id, { key, since, reason, sessionId, ticketKey: p.ticketKey, number: p.number, branch: p.branch });
+      this.waiting.set(id, { key, since, reason, notify: notify ?? NOTIFY(reason), sessionId, ticketKey: p.ticketKey, number: p.number, branch: p.branch });
     }
     return reason;
   }
@@ -191,7 +197,7 @@ export class CiDelivery {
     const p = this.pending(item);
     if ("skip" in p) return this.skipped(id, p.label, "", p.skip, null, null);
     const to = this.d.recipient(p.ticketKey, p.repoId, p.branch);
-    if (!to.ok) return this.skipped(id, p.label, p.key, to.reason, p, null);
+    if (!to.ok) return this.skipped(id, p.label, p.key, to.reason, p, null, to.reason === "unowned" ? to.promised : undefined);
     const sessionId = to.sessionId;
     if (this.busy.has(sessionId)) return this.skipped(id, p.label, p.key, "busy_delivering", p, sessionId);
     const gate = this.d.guard.check(sessionId);

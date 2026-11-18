@@ -274,7 +274,8 @@ export function projectMcpApprovalSettings(
       const agent = { matcher: "Agent|Task", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
       // 推送和开 PR 另记一组（工作流 W：分支是谁的，CI 结论按它递）：不带 gate，hook 只为 git push / gh pr create 写信封。
       const ship = { matcher: "Bash", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
-      const hooks = { PreToolUse: group as unknown[], PostToolUse: [...group, skill, agent, ship] as unknown[], PostToolUseFailure: group };
+      // 失败的也要：`git push && gh pr create` 里 gh 失败了只有 PostToolUseFailure，推送却成功了。
+      const hooks = { PreToolUse: group as unknown[], PostToolUse: [...group, skill, agent, ship] as unknown[], PostToolUseFailure: [...group, ship] as unknown[] };
       if (p.checks) {
         hooks.PreToolUse = [...group, { matcher: "Bash", hooks: [{ type: "command", command: `${p.gateCommand} check-push --budget-ms ${p.checks.pushTimeoutSec * 1000}`, timeout: p.checks.pushTimeoutSec + 30 }] }];
         hooks.PostToolUse.push({ matcher: "Edit|Write|MultiEdit", hooks: [{ type: "command", command: `${p.gateCommand} check --budget-ms ${p.checks.editTimeoutSec * 1000}`, timeout: p.checks.editTimeoutSec + 3 }] });

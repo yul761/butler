@@ -472,7 +472,7 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     // 推送、开 PR 记下分支是谁的（工作流 W）：同样走写信封的那条路，hook 只为 git push / gh pr create 写。
     const ship = { matcher: "Bash", hooks: [{ type: "command", command: '"/b/butler-hook"', timeout: 10 }] };
     expect(file).not.toBe(plain);
-    expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [], hooks: { PreToolUse: group, PostToolUse: [...group, skill, agent, ship], PostToolUseFailure: group } });
+    expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [], hooks: { PreToolUse: group, PostToolUse: [...group, skill, agent, ship], PostToolUseFailure: [...group, ship] } });
   });
 
   it("adds the Agent|Task matcher next to Skill only with a gate command", () => {
@@ -490,7 +490,7 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
       { matcher: "Bash", hooks: [{ type: "command", command: "/b/h check-push --budget-ms 600000", timeout: 630 }] },
     ]);
     expect(hooks.PostToolUse.at(-1)).toEqual({ matcher: "Edit|Write|MultiEdit", hooks: [{ type: "command", command: "/b/h check --budget-ms 8000", timeout: 11 }] });
-    expect(hooks.PostToolUseFailure).toEqual([{ matcher: "Bash", hooks: [{ type: "command", command: "/b/h gate", timeout: 10 }] }]);
+    expect(hooks.PostToolUseFailure).toEqual([{ matcher: "Bash", hooks: [{ type: "command", command: "/b/h gate", timeout: 10 }] }, { matcher: "Bash", hooks: [{ type: "command", command: "/b/h", timeout: 10 }] }]);
     // 没有 hook 程序就没有检查。
     expect(Object.keys(read(projectMcpApprovalSettings([s.repo], { ...s.p, checks: { editTimeoutSec: 8, pushTimeoutSec: 600 } })!))).not.toContain("hooks");
   });

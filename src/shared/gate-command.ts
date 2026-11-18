@@ -191,7 +191,8 @@ export function classifyShip(command: string): ShipCommand[] {
   if (!/\bpush\b|\bpr\b/.test(command)) return [];
   const out: ShipCommand[] = [];
   let dir: string | null = null;
-  for (const tokens of splitSegments(command)) {
+  for (const raw of splitSegments(command)) {
+    const tokens = shipTokens(raw);
     let i = 0;
     while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
     if (tokens[i] === "cd") {
@@ -224,9 +225,40 @@ export function classifyShip(command: string): ShipCommand[] {
     const pos = positionals(args, ["--repo", "-o", "--push-option", "--receive-pack", "--exec"]);
     const refspecs = pos.slice(1).filter((r) => !r.startsWith(":"));
     if (pos.length > 1 && refspecs.length === 0) continue;
-    const first = refspecs[0];
-    const dst = first === undefined ? null : remoteBranch(first.slice(first.lastIndexOf(":") + 1));
-    out.push({ kind: "push", dir: segDir, branch: dst && dst !== "HEAD" ? dst : null });
+    if (refspecs.length === 0) out.push({ kind: "push", dir: segDir, branch: null });
+    for (const r of refspecs) {
+      const dst = remoteBranch(r.slice(r.lastIndexOf(":") + 1));
+      // 推 tag（refs/tags/…）不是分支。
+      if (/^refs\/(?!heads\/)/.test(dst)) continue;
+      out.push({ kind: "push", dir: segDir, branch: dst && dst !== "HEAD" ? dst : null });
+    }
+  }
+  return out;
+}
+
+/**
+ * classifyShip 用的一段词：去掉重定向（`2>&1` 被 & 切开后剩下的 `2>`、`>/dev/null`、`> out.log`），
+ * 把命令替换和子 shell 的开头剥掉（`PR=$(gh pr create …)`、`(cd /wt && git push)`），结尾的 `)` 也去掉。
+ */
+function shipTokens(tokens: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    let t = tokens[i];
+    const redirect = /^\d*(?:>>?|<)(.*)$/.exec(t);
+    if (redirect) {
+      // 只写了符号（`>` `2>`）：下一个词是目标，一起去掉；`>&` 被切开了，后面没有词。
+      if (redirect[1] === "" && i + 1 < tokens.length) i++;
+      continue;
+    }
+    if (out.length === 0) {
+      const sub = /^(?:[A-Za-z_][A-Za-z0-9_]*=)?(?:\$\(|`|\()+(.*)$/.exec(t);
+      if (sub) {
+        t = sub[1];
+        if (t === "") continue;
+      }
+    }
+    t = t.replace(/[)`]+$/, "");
+    if (t !== "") out.push(t);
   }
   return out;
 }

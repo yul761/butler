@@ -991,4 +991,27 @@ describe("PrWatcher: branches a session pushed (workstream W)", () => {
     await s.w.check();
     expect(owned()).toBe(3);
   });
+
+  it("stops listing once the PR of the latest push is merged; a reused branch name does not pull in old merged PRs", async () => {
+    const s = setup();
+    const at = s.now();
+    s.owners.record({ ticketKey: "BTL-1", repoId: s.repoId, branch: "fix/ci", sessionId: "s1", dir: "/wt/x", at });
+    // 同名分支上一年前合并的 PR：不链接。
+    s.gh.prsForBranch.mockImplementation(async (_cwd, branch) => (branch === "fix/ci" ? [listed(3, { headRefName: "fix/ci", state: "MERGED", createdAt: at - 365 * 24 * 3600_000, mergedAt: at - 364 * 24 * 3600_000 })] : []));
+    await s.w.check();
+    expect(s.prs.byTicket("BTL-1").find((p) => p.number === 3)).toBeUndefined();
+    // 这次推送的 PR 在推送之后合并了：不再列。
+    s.link({ url: url(9), number: 9, headBranch: "fix/ci" });
+    s.prs.update(s.prs.byTicket("BTL-1").find((p) => p.number === 9)!.id, { state: "merged", mergedAt: at + 1000 });
+    const owned = () => s.gh.prsForBranch.mock.calls.filter((c) => c[1] === "fix/ci").length;
+    const before = owned();
+    s.advance(10 * 60_000);
+    await s.w.check();
+    expect(owned()).toBe(before);
+    // 合并以后又推了一次：又列。
+    s.owners.record({ ticketKey: "BTL-1", repoId: s.repoId, branch: "fix/ci", sessionId: "s1", dir: "/wt/x", at: s.now() });
+    s.advance(10 * 60_000);
+    await s.w.check();
+    expect(owned()).toBe(before + 1);
+  });
 });

@@ -58,12 +58,15 @@ export class PrLinker {
     return created;
   }
 
-  /** session 刚用 gh pr create 开的 PR（工作流 W）：按打出来的链接马上链接上，分支是开 PR 的那个。返回是不是新建了一行。 */
-  linkCreatedPr(ticketKey: string, url: string, headBranch: string): boolean {
+  /**
+   * session 刚用 gh pr create 开的 PR（工作流 W）：按打出来的链接马上链接上，分支是开 PR 的那个。
+   * 链接必须是 repoId 这个仓库的（同一条命令里 gh pr list、git log 打出来的别的 PR 不算）。返回是不是新建了一行。
+   */
+  linkCreatedPr(ticketKey: string, url: string, headBranch: string, repoId: number): boolean {
     const parts = prUrlParts(url);
-    if (!parts) return false;
+    if (!parts || this.repoFor(ticketKey, parts.slug) !== repoId) return false;
     return this.d.prs.link({
-      ticketKey, url, slug: parts.slug, repoId: this.repoFor(ticketKey, parts.slug), number: parts.number,
+      ticketKey, url, slug: parts.slug, repoId, number: parts.number,
       headBranch, state: PR_STATES.OPEN, source: "branch", linkedAt: this.d.now(),
     }).created;
   }

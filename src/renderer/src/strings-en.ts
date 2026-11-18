@@ -246,6 +246,8 @@ export const EN: UiStrings = {
   ciWhatPr: (key: string, n: number, branch: string) => `${key} PR #${n} (${branch})`,
   ciWhatBranch: (key: string, branch: string) => `${key} branch ${branch}`,
   ciReason: {
+    not_open: "the PR was merged or closed",
+    not_settled: "CI is running again",
     unowned: "can't tell which session it belongs to",
     busy_delivering: "that session is receiving another message",
     failed: "delivering it failed",
@@ -266,6 +268,7 @@ export const EN: UiStrings = {
   ciReasonOther: (r: string) => `reason: ${r}`,
   noticeResend: "Resend",
   ciResendSent: "Delivered",
+  ciResendBusy: "Delivering now; it will clear on the next refresh",
   ciResendNot: (why: string) => `Still not delivered: ${why}`,
   availabilityTitle: "Claude availability",
   availabilityStateLabel: "Status",

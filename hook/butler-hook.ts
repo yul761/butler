@@ -33,8 +33,12 @@ function trimAgentPayload(payload: unknown): unknown {
 const COMMAND_LIMIT = 2000;
 const PR_URLS_MAX = 5;
 
-const isBashPost = (p: unknown): p is Record<string, unknown> =>
-  !!p && typeof p === "object" && (p as Record<string, unknown>).hook_event_name === "PostToolUse" && (p as Record<string, unknown>).tool_name === "Bash";
+/** Bash 跑完（成功是 PostToolUse，失败是 PostToolUseFailure：`git push && gh pr create` 里 gh 失败了，推送还是成功的）。 */
+const isBashPost = (p: unknown): p is Record<string, unknown> => {
+  if (!p || typeof p !== "object") return false;
+  const o = p as Record<string, unknown>;
+  return (o.hook_event_name === "PostToolUse" || o.hook_event_name === "PostToolUseFailure") && o.tool_name === "Bash";
+};
 
 const bashCommand = (p: Record<string, unknown>): string | null => {
   const input = p.tool_input && typeof p.tool_input === "object" ? (p.tool_input as Record<string, unknown>) : {};
@@ -42,31 +46,35 @@ const bashCommand = (p: Record<string, unknown>): string | null => {
 };
 
 /**
- * Bash 的 PostToolUse（工作流 W：记下分支是谁的）：只留命令、目录和 gh pr create 打出来的 PR 链接。
- * 输出可能很大、可能有敏感内容，不带。
+ * Bash 跑完（工作流 W：记下分支是谁的）：在截断之前对整条命令跑 classifyShip（提交信息很长的 `git commit … && git push` 截断后就认不出了），
+ * 只留解析出来的 ship、截断的命令（日志用）、目录，和 gh pr create 打出来的 PR 链接。输出可能很大、可能有敏感内容，不带。
  */
 function trimBashPayload(payload: unknown): unknown {
   if (!isBashPost(payload)) return payload;
   const p = payload;
+  const command = bashCommand(p) ?? "";
+  const ship = classifyShip(command);
   const response = p.tool_response && typeof p.tool_response === "object" ? (p.tool_response as Record<string, unknown>) : {};
-  const out = [response.stdout, response.stderr].filter((v): v is string => typeof v === "string").join("\n");
-  const urls = [...new Set(out.match(/https?:\/\/[^\s"'<>()]+\/pull\/\d+/g) ?? [])].slice(0, PR_URLS_MAX);
+  // 失败的没有 tool_response，输出在 error 里。
+  const out = [response.stdout, response.stderr, p.error].filter((v): v is string => typeof v === "string").join("\n");
+  const urls = ship.some((c) => c.kind === "pr_create") ? [...new Set(out.match(/https?:\/\/[^\s"'<>()]+\/pull\/\d+/g) ?? [])].slice(-PR_URLS_MAX) : [];
   return {
     hook_event_name: p.hook_event_name,
     session_id: p.session_id,
     tool_name: p.tool_name,
     tool_use_id: p.tool_use_id,
     cwd: p.cwd,
-    tool_input: { command: (bashCommand(p) ?? "").slice(0, COMMAND_LIMIT) },
+    tool_input: { command: command.slice(0, COMMAND_LIMIT) },
+    ship,
     pr_urls: urls,
   };
 }
 
-/** 要不要写进收件箱：Bash 的 PostToolUse 只有推送分支、开 PR 的才写（别的 Bash 调用每次都来，主进程用不上）。 */
+/** 要不要写进收件箱：Bash 跑完的只有推送分支、开 PR 的才写（别的 Bash 调用每次都来，主进程用不上）。在 trimBashPayload 之后调用。 */
 export function wanted(envelope: HookEnvelope): boolean {
   if (!isBashPost(envelope.payload)) return true;
-  const command = bashCommand(envelope.payload);
-  return command !== null && classifyShip(command).length > 0;
+  const ship = envelope.payload.ship;
+  return Array.isArray(ship) && ship.length > 0;
 }
 
 export function buildEnvelope(raw: string, env: NodeJS.ProcessEnv, now: number): HookEnvelope {
