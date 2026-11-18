@@ -67,6 +67,40 @@ export function GeneralSettings({ report, onHealth, onRerunWizard }: { report: H
     }
   }
 
+  /** 一个开关（"0" / "1"）和它的说明。 */
+  const flagField = (k: EditableSettingKey, label: string, help: string) => (
+    <div className="field">
+      <label className="inline">
+        <input type="checkbox" checked={current[k] !== "0"} onChange={(e) => void save(k, e.target.checked ? "1" : "0")} />
+        {label}
+      </label>
+      <p className="muted">{help}</p>
+    </div>
+  );
+
+  /** 一个数字：离开输入框时保存，带「恢复默认」。 */
+  const numberField = (k: EditableSettingKey, label: string, help?: string, range: { min?: number; max?: number } = { min: 0 }) => (
+    <div className="field">
+      {label}
+      <input
+        className="mono"
+        type="number"
+        min={range.min}
+        max={range.max}
+        value={value(k)}
+        onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))}
+        onBlur={() => {
+          if (draft[k] !== undefined && draft[k] !== current[k]) void save(k);
+          else clearDraft(k);
+        }}
+      />
+      {help && <p className="muted">{help}</p>}
+      <div className="actions">
+        <button onClick={() => void reset(k)}>{S.resetDefault}</button>
+      </div>
+    </div>
+  );
+
   async function toggleAutostart(on: boolean) {
     try {
       setAutostart(await api.setAutostart(on));
@@ -190,6 +224,15 @@ export function GeneralSettings({ report, onHealth, onRerunWizard }: { report: H
           <button onClick={() => void reset("refreshMemoryMb")}>{S.resetDefault}</button>
         </div>
       </div>
+      {/* 休眠（WS-M B、C）：开关、四种等待各自的分钟数、要不要结束 watcher；内存紧张时休眠和它的比例。 */}
+      {flagField("hibernateEnabled", S.hib.settings.enabled, S.hib.settings.enabledHelp)}
+      {numberField("hibernateYouMinutes", S.hib.settings.you)}
+      {numberField("hibernateCiMinutes", S.hib.settings.ci)}
+      {numberField("hibernateReviewMinutes", S.hib.settings.review)}
+      {numberField("hibernateIdleMinutes", S.hib.settings.idle, S.hib.settings.minutesHelp)}
+      {flagField("hibernateEndWatchers", S.hib.settings.endWatchers, S.hib.settings.endWatchersHelp)}
+      {flagField("memoryPressureEnabled", S.hib.settings.pressure, S.hib.settings.pressureHelp)}
+      {numberField("memoryPressureFreePercent", S.hib.settings.pressureFree, undefined, { min: 1, max: 50 })}
       <h3>{S.perf.tipsTitle}</h3>
       <ul className="perf-tips">
         {perfTips().map((t) => <li key={t}>{t}</li>)}

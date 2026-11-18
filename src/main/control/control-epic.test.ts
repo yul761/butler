@@ -430,6 +430,15 @@ describe("start_feature from an epic session (BTL-190 4)", () => {
     expect(opened).toEqual([]);
   });
 
+  it("wakes a hibernated coordinator even at the limit: it is already counted (WS-M B)", async () => {
+    const { start, checkout, terminalsOf, opened, sessions } = await withFeatures();
+    sessions.insertIfAbsent({ id: "fc", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, featureId: checkout.id, coordinator: true });
+    sessions.setHibernated("fc", 5, "idle", null);
+    terminalsOf.set(checkout.id, MAX_RUNNING_PER_FEATURE);
+    expect(await start("checkout")).toMatchObject({ ok: true });
+    expect(opened).toEqual([expect.objectContaining({ featureId: checkout.id, sessionId: "fc" })]);
+  });
+
   it("does not open a second coordinator: says it is running, or hands it the instructions", async () => {
     const { start, checkout, running, opened, delivered } = await withFeatures();
     running(checkout.id, "fc");

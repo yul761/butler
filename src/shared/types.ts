@@ -141,7 +141,19 @@ export interface Session {
   memKb?: number | null;
   /** 那次采样的时间。 */
   memAt?: number | null;
+  /** 休眠的时间（WS-M B）：进程被 Butler 结束了，等着 --resume；null 或缺省：没休眠。 */
+  hibernatedAt?: number | null;
+  /** 休眠时在等什么。 */
+  hibernateReason?: HibernateReason | null;
+  /** 用户钉住了：不休眠、不降优先级。 */
+  pinned?: boolean;
+  /** 上一次自动唤醒失败的原因（下一次成功打开时清掉）。 */
+  wakeError?: string | null;
+  wakeErrorAt?: number | null;
 }
+
+/** 休眠时 session 在等什么（WS-M B）：you 等你、ci 等 CI、review 等 review、idle 闲着；pressure 内存紧张，memory 内存过大重启。 */
+export type HibernateReason = "you" | "ci" | "review" | "idle" | "pressure" | "memory";
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */
 export interface SessionView extends Session {
@@ -517,8 +529,12 @@ export interface NowRow {
   /** 这个状态从什么时候开始（activity.startedAt，没有就用 session 的 lastActivityAt）。 */
   since: number | null;
   target: NowTarget;
-  /** 这个 session 整棵进程树最近一次的内存读数（WS-M A）；监控关着、没采到、只有 PR 的行为 null 或缺省。 */
+  /** 这个 session 整棵进程树最近一次的内存读数（WS-M A）；监控关着、没采到、只有 PR 的行为 null 或缺省。休眠着的为 null。 */
   mem?: SessionMemory | null;
+  /** 休眠着（WS-M B）：为什么休眠的；没休眠为 null 或缺省。 */
+  hibernated?: HibernateReason | null;
+  /** 上次自动唤醒失败（WS-M B）：为什么失败的；没失败、或者已经打开了为 null 或缺省。 */
+  wakeError?: string | null;
 }
 
 /** 一组的汇总：在干活的行数（NowRow.working）、需要你的件数、卡住的行数。 */

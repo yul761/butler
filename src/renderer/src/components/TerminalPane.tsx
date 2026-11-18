@@ -2,6 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
+import type { HibernateReason } from "../../../shared/types";
 import { api, pathForFile, platform } from "../api";
 import { dropText } from "../drop";
 import { reportError } from "../errors";
@@ -19,10 +20,27 @@ export const TERMINAL_SCROLLBACK = 3000;
  * 只有看得见的终端才有 xterm（WS-M D）：切走就 dispose，切回来从主进程的快照重建，渲染进程里只留一个终端的缓冲区和 WebGL / DOM。
  * 可见性同时报给主进程（pty:visible），后台优先级（E）按它判断。
  */
-export function TerminalPane({ termId, visible, onClose, onResume }: { termId: string; visible: boolean; onClose: () => void; onResume: () => void }) {
+export function TerminalPane({ termId, visible, hibernated = null, onClose, onResume }: {
+  termId: string;
+  visible: boolean;
+  /** 这个终端是 Butler 为了省内存结束的（WS-M B），值是原因：切到它就自动唤醒（--resume）。 */
+  hibernated?: HibernateReason | null;
+  onClose: () => void;
+  onResume: () => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
+  // 切到休眠的终端：每次休眠唤醒一次（失败了留着横幅，用户自己点恢复）。醒了、或者不再算休眠以后，下次休眠再自动唤醒。
+  const woke = useRef(false);
+  useEffect(() => {
+    if (!hibernated || exitCode === null) woke.current = false;
+  }, [hibernated, exitCode]);
+  useEffect(() => {
+    if (!visible || !hibernated || exitCode === null || woke.current) return;
+    woke.current = true;
+    onResume();
+  }, [visible, hibernated, exitCode, onResume]);
 
   useEffect(() => {
     if (!visible) return;
@@ -157,7 +175,7 @@ export function TerminalPane({ termId, visible, onClose, onResume }: { termId: s
     <div className="terminal-wrap" style={{ display: visible ? "flex" : "none" }} onDragOver={(e) => e.preventDefault()} onDrop={onDrop} onContextMenu={onContextMenu}>
       {exitCode !== null && (
         <div className="exited">
-          {S.exited(exitCode)} <button onClick={onResume}>{S.resume}</button> <button onClick={onClose}>{S.close}</button>
+          {hibernated ? S.hib.reason[hibernated] : S.exited(exitCode)} <button onClick={onResume}>{hibernated ? S.hib.open : S.resume}</button> <button onClick={onClose}>{S.close}</button>
         </div>
       )}
       <div className="terminal" ref={ref} />

@@ -226,3 +226,23 @@ These are global (machine-level) settings. They don't go through 4.2's layered s
 1. `feat/ws-m-memory`: A, D, E, F, G, I, J, settings and migrations for them.
 2. `feat/ws-m-hibernate` (on 1): B, C, pin, wake paths, e2e.
 3. `feat/ws-m-mcp-hub` (on 2): H.
+
+## 14. As built in PR 2 (B, C, G's restart, pin)
+
+Differences from the design above, and edge cases left as they are:
+
+- **Killing.** Every process of the tree is checked (pid + start time + command line) and signalled on its own, on Windows too: `taskkill /PID <pid>` and then `taskkill /PID <pid> /F` for survivors. `/T` is never used, because taskkill finds children by ppid and can reach processes that are no longer related.
+- **Spared watchers** (`hibernateEndWatchers` off) are kept in orphan cleanup's `owned.json` with their owner. Waking, opening, hiding or a failed wake releases them, which ends them like ordinary orphans. A Butler restart ends them in the startup sweep, because their session is no longer running.
+- **Wake failure** sets `wake_error`, marks the session button with **!** (the reason is in its tooltip) and keeps the session on the Now page as a danger row until it is opened or hidden. Failures that can pass (`ticket_busy`, `claude_missing`, `branch_mismatch`, or `open` throwing) keep `hibernated_at`, so deliveries still wait for the session and automatic wakes retry after 10 minutes. Every other failure clears `hibernated_at`: the resumed claude exits or does not start within 60 s, the ticket or session is gone, or `open` returns a different session. A user open always retries.
+- **One Butler control.** `openButler` returns the running Butler control whatever session was asked for. A wake therefore checks that the terminal it got belongs to the chain it wanted; if it does not, the wake has failed. Opening another Butler conversation also retires any hibernated one, so deliveries stop trying to wake it.
+- **Hiding** a hibernated session, or a coordinator's `end_session` on it, clears its hibernation, so nothing wakes it afterwards. `end_session` also clears its waiting mark. `list_sessions` shows `hibernated: true` for these sessions. The limit errors say that hibernated sessions count and can be ended. Without this, a coordinator whose children all hibernated could not open more sessions.
+- **Counting.** The session limits count hibernated heads. A wake through `send_message` or `start_feature` is exempt, because the coordinator is already counted. The archive check (`hasFeatureTerminal`, `hasEpicTerminal`) counts only open terminals, because a hibernated session has no visible terminal to close.
+- **Exit bookkeeping.** `SessionEnd` from a hibernated session keeps its waiting mark, the same as `handleExit`. `markStarted` is keyed by the terminal (`BUTLER_SESSION`), so a `--resume` that changes the session id still counts as started. If the terminal is still open after the kill wait, the root gets one more forced kill. If it still has not exited, the hibernation is rolled back, so a live terminal is never treated as hibernated when it exits.
+- **Panes.** A visible pane auto-wakes once per hibernation and resets when the session wakes. Its banner shows the reason the session was hibernated.
+- **Needs-you** keeps the last value for a hibernated head (the judge cannot run without a terminal), so it still counts as waiting for you.
+- **G's restart** is `hibernate(head, "memory")` followed at once by `wake(head, "memory")`, with every exclusion rule applied. A session that cannot be hibernated is not restarted.
+- **e2e.** There is no test-only IPC. `BUTLER_HIBERNATE_AFTER_MS` (honoured only with background windows) replaces all four minute settings and both quiet windows, and the hibernate typing check follows `BUTLER_GATE_TYPING_QUIET_MS`. The e2e wakes the session with a child session's `report`, not a CI result. Fake gh does not run on Windows, and a report goes through the same `DeliveryGuard` → wake → `sessionStopped` → flush path. `/fake-recall` lists the user messages in the resumed transcript.
+- **Known edge cases**, not handled:
+  - A ticket or feature archived while a session is hibernated: a later wake fails, and the failure path clears the hibernation.
+  - A pane whose id no longer matches the head after `/clear` is not auto-woken. A hibernated session never sees `/clear`, so this only affects stale panes.
+  - `openAndSend` can race an in-flight kill. The terminal stays reserved until the kill finishes, so the guard reports `busy` and the sender retries.

@@ -136,7 +136,8 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
         if (!resume && f.epicId !== null && f.brief?.trim() && f.briefSentAt === null) {
           return fail(M().ctlSendNotStarted(f.name, epicOf(f.epicId)?.name ?? String(f.epicId)));
         }
-        if ((svc.featureTerminalCount?.(f.id) ?? 0) >= MAX_RUNNING_PER_FEATURE) return fail(M().ctlFeatureLimit(MAX_RUNNING_PER_FEATURE));
+        // 休眠着的总控已经算在里面了：叫醒它不多占名额。
+        if (!resume?.hibernatedAt && (svc.featureTerminalCount?.(f.id) ?? 0) >= MAX_RUNNING_PER_FEATURE) return fail(M().ctlFeatureLimit(MAX_RUNNING_PER_FEATURE));
         const openFeature = svc.openFeature.bind(svc);
         open = () => openFeature({ featureId: f.id, ...(resume && { sessionId: resume.id }) });
       } else {

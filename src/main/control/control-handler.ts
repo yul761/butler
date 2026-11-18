@@ -29,7 +29,7 @@ export interface ControlHandlerDeps {
   tickets: TicketsRepo;
   sessions: SessionsRepo;
   ticketService: Pick<TicketService, "workDir" | "create">;
-  sessionService: Pick<SessionService, "open" | "openTerminalCount" | "isRunning" | "termIdOf"> & Partial<Pick<SessionService, "featureTerminalCount" | "openFeature" | "openEpic" | "runningCoordinator">>;
+  sessionService: Pick<SessionService, "open" | "openTerminalCount" | "isRunning" | "termIdOf"> & Partial<Pick<SessionService, "featureTerminalCount" | "openFeature" | "openEpic" | "runningCoordinator" | "hasHibernatedCoordinator">>;
   /** feature 总控的请求（设计文档 2026-10-26）；不给就拒绝。 */
   features?: FeaturesRepo;
   /** epic session 的请求（设计文档 2026-11-01）和 feature 总控的 epic_context；不给就拒绝。 */
@@ -49,6 +49,8 @@ export interface ControlHandlerDeps {
   activityOutput?: (sessionId: string) => Promise<string>;
   /** end_session：关掉终端，和用户在界面上点 × 一样（pty.kill；session 留在列表里，之后能恢复）。 */
   kill: (termId: string) => void;
+  /** end_session 结束一个休眠着的 session（WS-M B）：不再算休眠、不再自动唤醒，留下的 watcher 放开，等待标记清掉。 */
+  endHibernated?: (headId: string) => void;
   /** refresh_session（计划 16）：先同步 precheck，能开始就在后台换新，不等它跑完。不给就拒绝。 */
   refresher?: Pick<SessionRefresher, "precheck" | "refresh">;
   /** 屏幕上有权限确认或启动对话框（PtyManager.screenNeedsUser）：这时不能结束。 */
@@ -160,17 +162,22 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
   const lastReply = (id: string) => d.lastReply?.(id) ?? null;
 
-  const sessionRow = (t: Ticket | null, s: { id: string; coordinator: boolean; repoId: number | null; firstPrompt: string | null; waitingForInput: boolean; lastActivityAt: number | null; spawnedBy: string | null }) => ({
+  const sessionRow = (t: Ticket | null, s: { id: string; coordinator: boolean; repoId: number | null; firstPrompt: string | null; waitingForInput: boolean; lastActivityAt: number | null; spawnedBy: string | null; hibernatedAt?: number | null }) => {
+    const running = d.sessionService.isRunning(s.id);
+    return {
     id: s.id,
     repo: s.coordinator ? M().ctlCoordinator : t ? repoNameOf(t, s.repoId) : null,
     firstPrompt: s.firstPrompt,
-    running: d.sessionService.isRunning(s.id),
+    running,
+    // 休眠着（WS-M B）：进程被 Butler 结束了，但还算在上限里；有消息时自动唤醒，不要了就 end_session。
+    hibernated: !running && !!s.hibernatedAt,
     waitingForInput: s.waitingForInput,
     lastActivityAt: s.lastActivityAt ? new Date(s.lastActivityAt).toISOString() : null,
     startedByCoordinator: s.spawnedBy !== null,
     activity: listedActivity(s.id),
     last_reply: lastReply(s.id),
-  });
+    };
+  };
 
   /** list_sessions 里的活动：不带 lastOutput（要看输出用 session_activity）；监控还没看到的是 null。 */
   function listedActivity(id: string) {
@@ -207,6 +214,12 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     const self = req.from ? (d.sessions.head(req.from)?.id ?? req.from) : null;
     if (!h || !belongs(h) || h.id === self) return fail(M().ctlNoSuchSession(req.session));
     const termId = d.sessionService.termIdOf(h.id);
+    if (!termId && h.hibernatedAt && d.endHibernated) {
+      // 休眠着的：进程早就结束了，这里只是让它不再占上限、不再自动唤醒。
+      d.endHibernated(h.id);
+      d.log?.(`end_session ${h.id} (hibernated) by ${req.from ?? "?"}: ${req.reason.replace(/\s+/g, " ").trim()}`);
+      return ok({ ended: true });
+    }
     if (!termId) return fail(M().ctlSessionNotRunning(h.id));
     // 监控还没看到（刚开的终端）也当作在忙：看不准就不关。
     const kind = d.activity?.(h.id)?.kind ?? null;
@@ -393,11 +406,12 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     const running = svc.runningCoordinator(f.id);
     if (running) return handOver(e, f, running.id, instructions);
     if (!f.brief?.trim() && !instructions) return fail(M().ctlStartNoBrief(f.name));
-    const busy = (d.features?.listByEpic(e.id) ?? []).filter((x) => x.id !== f.id && (starting.has(x.id) || svc.runningCoordinator?.(x.id)));
+    const busy = (d.features?.listByEpic(e.id) ?? []).filter((x) => x.id !== f.id && (starting.has(x.id) || svc.runningCoordinator?.(x.id) || svc.hasHibernatedCoordinator?.(x.id)));
     if (busy.length >= MAX_RUNNING_FEATURES_PER_EPIC) return fail(M().ctlEpicFeatureLimit(MAX_RUNNING_FEATURES_PER_EPIC, busy.map((x) => x.name).join(", ")));
-    if ((svc.featureTerminalCount?.(f.id) ?? 0) >= MAX_RUNNING_PER_FEATURE) return fail(M().ctlFeatureLimit(MAX_RUNNING_PER_FEATURE));
     // 和用户点进 feature 一样接着最近的总控（包括闲置时自动关掉的），它记得之前做到哪了。
     const resume = d.sessions.listFeatureCoordinators(f.id).find((s) => s.coordinator && s.replacedBy === null && !s.dismissed);
+    // 休眠着的总控已经算在里面了：叫醒它不多占名额（和 send_message 一样）。
+    if (!resume?.hibernatedAt && (svc.featureTerminalCount?.(f.id) ?? 0) >= MAX_RUNNING_PER_FEATURE) return fail(M().ctlFeatureLimit(MAX_RUNNING_PER_FEATURE));
     starting.add(f.id);
     let r: OpenSessionResult;
     try {

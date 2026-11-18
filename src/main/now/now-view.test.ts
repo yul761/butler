@@ -116,6 +116,20 @@ function decision(sessionId: string, over: Partial<InboxItemView> = {}): InboxIt
 const ids = (rows: { sessionId: string | null }[]) => rows.map((r) => r.sessionId);
 
 describe("buildNowView", () => {
+  it("keeps hibernated sessions and ones whose wake failed, without a memory reading (WS-M B)", () => {
+    const t = ticket("A-1", null, [
+      session("s-hib", { ticketKey: "A-1", termId: null, hibernatedAt: 5, hibernateReason: "ci" }),
+      session("s-fail", { ticketKey: "A-1", termId: null, wakeError: "claude --resume exited before it started" }),
+      session("s-closed", { ticketKey: "A-1", termId: null }),
+    ]);
+    const v = buildNowView(input({ tickets: [t], sessionMemory: () => ({ rssKb: 1, at: 1 }) as never }));
+
+    const rows = v.epics[0].features[0].rows;
+    expect(ids(rows)).toEqual(["s-hib", "s-fail"]);
+    expect(rows[0]).toMatchObject({ hibernated: "ci", wakeError: null, mem: null });
+    expect(rows[1]).toMatchObject({ hibernated: null, wakeError: "claude --resume exited before it started" });
+  });
+
   it("groups ticket rows under their feature and epic", () => {
     const merges: MergeEvent[] = [{ id: 1, repoPath: "/r", kind: "wait", ticketKey: "A-1", branch: "b", otherTicket: null, otherBranch: null, files: [], createdAt: 0 }];
     const a1 = ticket("A-1", 10, [session("s-a1", { ticketKey: "A-1" })]);

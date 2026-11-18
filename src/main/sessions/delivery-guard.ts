@@ -6,7 +6,8 @@ import type { PtyManager } from "./pty-manager";
 export const USER_TYPING_QUIET_MS = 30_000;
 
 /** 现在不能往这个终端里自动输入的原因。 */
-export type DeliveryBlock = "closed" | "busy" | "screen" | "needs_you" | "typing" | "draft";
+/** hibernated：终端是 Butler 为了省内存结束的（WS-M B），check 已经叫它醒了，醒来以后 sessionStopped 会再递一次。 */
+export type DeliveryBlock = "closed" | "hibernated" | "busy" | "screen" | "needs_you" | "typing" | "draft";
 
 export interface DeliveryGuardDeps {
   /** 跑着这个 session（链上任何一个 id）的终端；没有为 null。index.ts 里就是现在的 gateTerm。 */
@@ -22,6 +23,11 @@ export interface DeliveryGuardDeps {
    * 换新自己用的 guard 不带它（R25），否则换新会挡住自己的下一步。
    */
   refreshing?: (headId: string) => boolean;
+  /**
+   * 这个 session（链上任何一个 id）休眠着：叫它醒（Hibernator.wake，幂等），返回 true。没接时没有休眠这回事。
+   * 醒来以后 SessionStart(resume) 调 sessionStopped，压着的东西在那里再递。
+   */
+  wakeIfHibernated?: (sessionId: string) => boolean;
   /** 打过字之后多久之内不自动输入，默认 USER_TYPING_QUIET_MS（e2e 用环境变量调短）。 */
   typingQuietMs?: number;
   now(): number;
@@ -39,7 +45,7 @@ export class DeliveryGuard {
 
   check(sessionId: string): DeliveryCheck {
     const termId = this.d.termOf(sessionId);
-    if (termId === null) return { ok: false, block: "closed" };
+    if (termId === null) return { ok: false, block: this.d.wakeIfHibernated?.(sessionId) ? "hibernated" : "closed" };
     const head = this.d.head(termId);
     // 别的自动输入正在往这个终端里递（I2）：等它递完，两段不能贴在同一个输入框里，也不能贴在它那一轮的回复中间。
     if (!head || !this.quiet(head) || this.d.refreshing?.(head.id) || this.d.pty.autoInputInFlight(termId)) return { ok: false, block: "busy" };

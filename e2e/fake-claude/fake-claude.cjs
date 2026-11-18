@@ -26,6 +26,7 @@
 //     输入 /clear 时像 Claude Code：换一个新的 session id 和新的 transcript，跑 SessionStart（source=clear），停在空的输入框上（没有 Stop）；
 //     每条 assistant 记录都带 usage：上下文是 FAKE_CLAUDE_CONTEXT_TOKENS（e2e 用它撑过换新的阈值），/clear 之后从头算，回到 CLEARED_CONTEXT；
 //     交互日志 interactive new/resume 行末尾带 guide=<--append-system-prompt-file 的路径>（没有就是空）；
+//     输入 /fake-recall 时把 transcript 里用户说过的话列出来（日志 fake-recall <JSON>）：--resume 以后看得出原来的对话还在；
 //     其余输入回“收到：<输入>”并结束这一轮；每条输入都在运行记录里记一行 prompt <JSON 字符串>；
 //   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果、feature 汇总或卡住判断；stream-json 的 MCP 探测只回 init。
 //     需要你的判断（schema 里有 needs_user）：回复是 /fake-ask 的问话就说需要你（理由是那句问话），别的都失败退出（Butler 当作不需要你）；
@@ -560,6 +561,20 @@ function interactive() {
         },
         (e) => endTurn(`工具失败：${e.message}`),
       );
+      return;
+    }
+    if (line === "/fake-recall") {
+      // 像模型回忆这段对话：把 transcript 里用户说过的话列出来（--resume 接着同一个 transcript，休眠前说的也在）。
+      let said = [];
+      try {
+        said = fs.readFileSync(transcript, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))
+          .filter((e) => e.type === "user" && !e.isMeta && typeof e.message?.content === "string" && e.message.content !== "/fake-recall")
+          .map((e) => e.message.content);
+      } catch {
+        // 还没有 transcript。
+      }
+      log(`fake-recall ${JSON.stringify(said)}`);
+      endTurn(`记得：${said.join(" | ")}`);
       return;
     }
     const coordinator = featureCoordinator;

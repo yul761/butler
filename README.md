@@ -30,7 +30,7 @@ Butler works with Claude Code only.
 - `start_session` opens a new session in one repo and sends it a task as its first message. The new session appears under the same ticket, where you can watch it, take over and answer its permission prompts.
 - `list_sessions` shows what each session is doing.
 - `session_activity` shows one session's activity plus its last command output (up to 4 KB).
-- `end_session` closes a session of the ticket that is done, the same as clicking its ×. It refuses a session that is still working, one showing a prompt that waits for you, one that isn't running, and the caller itself.
+- `end_session` closes a session of the ticket that is done, the same as clicking its ×. It refuses a session that is still working, one showing a prompt that waits for you, one that isn't running, and the caller itself. A hibernated session (Butler ended its process to save memory; `list_sessions` marks it `hibernated`) still counts toward the session limit, and `end_session` on it stops Butler from waking it and frees its place.
 
 Before Butler hands a new session its first task, it looks at the real terminal screen, so it never presses Enter on a trust dialog or a permission prompt. It then checks that the task was submitted. Every other session Butler opens (a ticket session too) gets the same `butler-sessions` server with just two tools, `ask_user` and `report` (see **Decisions and reports** below).
 

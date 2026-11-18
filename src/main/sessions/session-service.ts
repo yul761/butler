@@ -122,6 +122,10 @@ export interface SessionServiceDeps {
   /** 读 claude.cmd shim 用的文件系统（测试注入；默认读真实磁盘）。 */
   launchFs?: Pick<LaunchDeps, "read" | "exists">;
   log?: (msg: string, err?: unknown) => void;
+  /** 终端打开了（新开或恢复，pty.open 成功之后）：休眠在这里清掉（WS-M B，Hibernator.opened）。 */
+  opened?: (termId: string) => void;
+  /** 休眠着的 session 不再算休眠（Hibernator.forget）：被隐藏了，或者被另开的 Butler 总控取代了。 */
+  hidden?: (headId: string) => void;
 }
 
 /** 规划最多等后台汇总这么久：总控开着，用户在等，过了这个时间就用已有的内容发。 */
@@ -270,6 +274,7 @@ export class SessionService {
       throw e;
     }
     this.noteChecks(termId);
+    this.d.opened?.(termId);
     if (prefill) this.prefill(termId, prefill);
     return { ok: true, termId, alreadyOpen: false };
   }
@@ -483,7 +488,7 @@ export class SessionService {
         return { ok: true, termId, alreadyOpen: true };
       }
     }
-    return this.resumeOrStart(req, (head) => head.butler && head.ticketKey === null, (claude, head) => {
+    const r = await this.resumeOrStart(req, (head) => head.butler && head.ticketKey === null, (claude, head) => {
       const cwd = head?.cwd || workspace;
       try {
         mkdirSync(cwd, { recursive: true });
@@ -499,6 +504,14 @@ export class SessionService {
         row: { butler: true },
       }, claude, head);
     });
+    // 全局只有一个 Butler 总控（WS-M B）：开了另一个对话，休眠着的旧总控就不再算休眠，不然投递会一直去叫醒它。
+    if (r.ok) {
+      const now = this.d.sessions.head(r.termId)?.id ?? r.termId;
+      for (const h of this.d.sessions.listHibernated()) {
+        if (h.butler && h.ticketKey === null && h.id !== now) this.d.hidden?.(h.id);
+      }
+    }
+    return r;
   }
 
   /** 正在运行的 Butler 总控的 head；没有在跑的是 null。 */
@@ -721,6 +734,7 @@ export class SessionService {
       throw e;
     }
     this.noteChecks(termId);
+    this.d.opened?.(termId);
     return termId;
   }
 
@@ -753,6 +767,8 @@ export class SessionService {
    */
   handleExit(termId: string): void {
     const head = this.d.sessions.head(termId);
+    // 休眠（WS-M B）：进程是 Butler 结束的，session 还在等（等你、等 CI……），等待标记留着；它有 transcript，也不删。
+    if (head?.hibernatedAt) return;
     if (head?.waitingForInput) this.d.sessions.setWaiting(head.id, false, head.lastActivityAt ?? 0);
     const s = this.d.sessions.get(termId);
     if (s) this.pruneIfEmpty(s);
@@ -810,31 +826,63 @@ export class SessionService {
     return this.openHeads().get(sessionId) ?? null;
   }
 
-  /** 这个 ticket 正在运行的终端数（总控开子 session 的上限用）。 */
-  openTerminalCount(ticketKey: string): number {
-    return this.d.pty.openIds().filter((termId) => this.d.sessions.head(termId)?.ticketKey === ticketKey).length;
-  }
-
-  /** feature 正在运行的终端数：feature 级 session（总控和修复 session），加上它所有 ticket 的终端。 */
-  featureTerminalCount(featureId: number): number {
-    const keys = new Set(this.d.tickets.listByFeature(featureId).map((t) => t.key));
-    return this.d.pty.openIds().filter((termId) => {
+  /**
+   * 开着终端的 head 加上休眠着的 head（WS-M B）：任务数上限把休眠的也算成在跑，休眠不会让总控多开活。
+   * 同一个 head 只算一次。
+   */
+  private liveHeads(withHibernated = true): Session[] {
+    const out = new Map<string, Session>();
+    for (const termId of this.d.pty.openIds()) {
       const h = this.d.sessions.head(termId);
-      return !!h && (h.featureId === featureId || (h.ticketKey !== null && keys.has(h.ticketKey)));
-    }).length;
+      if (h) out.set(`t:${termId}`, h);
+    }
+    if (!withHibernated) return [...out.values()];
+    const open = new Set([...out.values()].map((h) => h.id));
+    for (const h of this.d.sessions.listHibernated()) if (!open.has(h.id)) out.set(`h:${h.id}`, h);
+    return [...out.values()];
   }
 
+  private inFeature(featureId: number): (h: Session) => boolean {
+    const keys = new Set(this.d.tickets.listByFeature(featureId).map((t) => t.key));
+    return (h) => h.featureId === featureId || (h.ticketKey !== null && keys.has(h.ticketKey));
+  }
+
+  /** 这个 ticket 正在运行的终端数，休眠的也算（总控开子 session 的上限用）。 */
+  openTerminalCount(ticketKey: string): number {
+    return this.liveHeads().filter((h) => h.ticketKey === ticketKey).length;
+  }
+
+  /** feature 正在运行的终端数：feature 级 session（总控和修复 session），加上它所有 ticket 的终端；休眠的也算。 */
+  featureTerminalCount(featureId: number): number {
+    return this.liveHeads().filter(this.inFeature(featureId)).length;
+  }
+
+  /** 这个 ticket（给了 repoId 时同 hasOpenTerminal 的口径）有没有开着或者休眠着的 session：PR watcher 照样常看它的 CI。 */
+  hasLiveSession(ticketKey: string, repoId?: number): boolean {
+    return this.liveHeads().some((h) => h.ticketKey === ticketKey && (repoId === undefined || h.coordinator || h.repoId === null || h.repoId === repoId));
+  }
+
+  /** feature 的总控休眠着（epic 同时在跑的 feature 数也算它）。 */
+  hasHibernatedCoordinator(featureId: number): boolean {
+    return this.d.sessions.listHibernated().some((h) => h.featureId === featureId && h.ticketKey === null && h.fixesSession === null && h.coordinator);
+  }
+
+  /**
+   * 归档前的检查：只算真开着的终端。休眠的界面上看不到终端，不拦归档；
+   * 归档以后再唤醒它会打不开（no_ticket），唤醒失败时就不再算休眠。
+   */
   hasFeatureTerminal(featureId: number): boolean {
-    return this.featureTerminalCount(featureId) > 0;
+    return this.liveHeads(false).some(this.inFeature(featureId));
   }
 
   /** epic 自己的 session 正在运行的终端数（不算它下面的 feature）。 */
   epicTerminalCount(epicId: number): number {
-    return this.d.pty.openIds().filter((termId) => this.d.sessions.head(termId)?.epicId === epicId).length;
+    return this.liveHeads().filter((h) => h.epicId === epicId).length;
   }
 
+  /** 同 hasFeatureTerminal：休眠的不算。 */
   hasEpicTerminal(epicId: number): boolean {
-    return this.epicTerminalCount(epicId) > 0;
+    return this.liveHeads(false).some((h) => h.epicId === epicId);
   }
 
   /** session 行加上它的终端；分成显示的和隐藏的（正在运行的终端永远显示，隐藏只对没在跑的 session 起作用）。 */
@@ -986,6 +1034,7 @@ export class SessionService {
     if (!s || (!s.ticketKey && s.featureId === null && s.epicId === null && !s.butler)) throw new TicketError("not_found", M().sessionNotFound);
     if (this.openHeads().has(s.id)) throw new TicketError("sessions_open", M().sessionTerminalHide);
     this.d.sessions.dismiss(s.id, this.d.now());
+    if (s.hibernatedAt) this.d.hidden?.(s.id);
   }
 
   unhide(sessionId: string): void {

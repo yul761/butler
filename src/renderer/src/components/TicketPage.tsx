@@ -10,6 +10,7 @@ import { TicketPrStages } from "./PrStages";
 import { RepoDialog } from "./RepoDialog";
 import { EndSessionButton } from "./EndSessionButton";
 import { NoChecksMark } from "./NoChecksMark";
+import { HibernateBadges, hibernationOf, isHibernated, PinButton, sessionTitle } from "./HibernateParts";
 import { CloseIdleButton, DeleteHiddenButton } from "./SessionCleanupButtons";
 import { RefreshSessionButton } from "./RefreshSessionButton";
 import { SessionLimit } from "./SessionLimit";
@@ -219,8 +220,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         {(showAllSessions ? ticket.sessions : sessionSplit.shown).map((s) => (
           <span key={s.id} className="session-wrap">
             <button
-              className={s.termId && s.termId === active ? "session active" : "session"}
-              title={`${s.firstPrompt ?? S.untitledSession}\n${s.id}`}
+              className={s.termId && s.termId === active ? "session active" : isHibernated(s) ? "session hibernated" : "session"}
+              title={sessionTitle(s)}
               onClick={() => (s.termId ? setActive(s.termId) : void open({ ticketKey: ticket.key, sessionId: s.id }))}
             >
               {s.waitingForInput && <span className="badge">●</span>}
@@ -229,8 +230,10 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
               <span className="label">{sessionLabel(s, S.untitledSession)}</span>
               <NoChecksMark reason={s.checksAbsent} />
               <span className="muted">{s.lastActivityAt ? formatShort(s.lastActivityAt) : ""}</span>
-              <span className="action">{s.termId ? S.switchTo : S.open}</span>
+              <HibernateBadges s={s} />
+              <span className="action">{s.termId ? S.switchTo : isHibernated(s) ? S.hib.open : S.open}</span>
             </button>
+            <PinButton s={s} label={sessionLabel(s, S.untitledSession)} />
             {/* 正在运行的终端不能隐藏，只能结束（×点两次）；结束之后才能隐藏。 */}
             {s.termId ? (
               <>
@@ -305,7 +308,12 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
       )}
 
       <div className="terminals">
-        {panes.map((id) => <TerminalPane key={id} termId={id} visible={id === active} onClose={() => closePane(id)} onResume={() => void open({ ticketKey: ticket.key, sessionId: id })} />)}
+        {panes.map((id) => (
+          <TerminalPane
+            key={id} termId={id} visible={id === active} hibernated={hibernationOf(ticket.sessions, id)}
+            onClose={() => closePane(id)} onResume={() => void open({ ticketKey: ticket.key, sessionId: id })}
+          />
+        ))}
       </div>
     </div>
   );

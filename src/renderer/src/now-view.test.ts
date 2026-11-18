@@ -32,6 +32,12 @@ const usage = (over: Partial<UsageSummary> = {}): UsageSummary => ({
 afterEach(() => setUiLang("zh"));
 
 describe("rowText", () => {
+  it("hibernated rows say why; a failed wake is danger (WS-M B)", () => {
+    const stopped = { activity: act({ kind: "waiting" }), working: false };
+    expect(rowText(row({ ...stopped, hibernated: "review" }), S, NOW)).toEqual({ main: S.hib.now, sub: S.hib.reason.review, tone: "muted" });
+    expect(rowText(row({ ...stopped, wakeError: "boom" }), S, NOW)).toEqual({ main: S.hib.wakeFailedNow, sub: "boom", tone: "danger" });
+  });
+
   it("rowText of a limited row is danger", () => {
     const limit = { kind: "usage_limit" as const, resetsAt: null, message: "hit your limit" };
     expect(rowText(row({ activity: act({ kind: "waiting", limit }), working: false }), S, NOW)).toEqual({ main: "用量已达上限", sub: "hit your limit", tone: "danger" });

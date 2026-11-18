@@ -38,6 +38,7 @@ async function setup(o: { memoryEnabled?: () => boolean; sessionModel?: ControlH
   const activities = new Map<string, SessionActivity>();
   const outputs = new Map<string, string>();
   const killed: string[] = [];
+  const endedHibernated: string[] = [];
   const logs: string[] = [];
   /** 假的换新：precheck 返回 refusal；refresh 永远不结束（证明 refresh_session 不等它）。 */
   const refresh = { refusal: null as RefreshRefusal | null, prechecked: [] as [string, RefreshTrigger][], started: [] as [string, RefreshTrigger][] };
@@ -52,6 +53,10 @@ async function setup(o: { memoryEnabled?: () => boolean; sessionModel?: ControlH
     submit: async (termId, task) => (submitted.push([termId, task]), "sent" as const),
     notify: () => notified++,
     kill: (termId) => void killed.push(termId),
+    endHibernated: (id) => {
+      endedHibernated.push(id);
+      sessions.clearHibernated(id);
+    },
     screenNeedsUser: () => false,
     lastReply: () => null,
     memoryEnabled: o.memoryEnabled,
@@ -63,7 +68,7 @@ async function setup(o: { memoryEnabled?: () => boolean; sessionModel?: ControlH
   await ticketService.create({ key: "FULL-1" });
   await ticketService.addRepo({ ticketKey: "FULL-1", repoPath: web, workMode: "worktree" });
   await ticketService.addRepo({ ticketKey: "FULL-1", repoPath: api, workMode: "worktree" });
-  return { handle, sessionService, sessions, tickets, spawned, submitted, notified: () => notified, web, api, activities, outputs, ticketService, killed, refresh, logs };
+  return { handle, sessionService, sessions, tickets, spawned, submitted, notified: () => notified, web, api, activities, outputs, ticketService, killed, refresh, logs, endedHibernated };
 }
 
 const base = { v: 1 as const, ticketKey: "FULL-1", from: null };
@@ -265,6 +270,26 @@ describe("controlHandler", () => {
       expect(killed).toEqual([]);
       expect(await end("s-2")).toEqual({ v: 1, ok: true, value: { ended: true } });
       expect(killed).toEqual(["s-2"]);
+    });
+
+    it("hibernated sessions count toward the limit, show as hibernated, and end_session frees their place (WS-M B)", async () => {
+      const { handle, sessionService, sessions, spawned, killed, endedHibernated, web } = await setup();
+      await sessionService.open({ ticketKey: "FULL-1", coordinator: true });
+      for (let i = 1; i < MAX_RUNNING_PER_TICKET; i++) await handle({ ...base, from: "s-1", op: "start_session", repo: web, task: `任务 ${i}` });
+      // s-2 闲下来被休眠：先写 hibernated_at，再结束终端。
+      sessions.setHibernated("s-2", 5, "idle", null);
+      spawned[1].pty.kill();
+      expect(sessionService.isRunning("s-2")).toBe(false);
+      expect(await handle({ ...base, from: "s-1", op: "start_session", repo: web, task: "再来一个" })).toMatchObject({ ok: false, error: expect.stringContaining("end_session") });
+      const listed = await handle({ ...base, from: "s-1", op: "list_sessions" });
+      if (!listed.ok) throw new Error("list failed");
+      expect((listed.value as { id: string; running: boolean; hibernated: boolean }[]).find((s) => s.id === "s-2")).toMatchObject({ running: false, hibernated: true });
+      expect(await handle({ ...base, from: "s-1", op: "end_session", session: "s-2", reason: "不要了" })).toEqual({ v: 1, ok: true, value: { ended: true } });
+      expect(endedHibernated).toEqual(["s-2"]);
+      expect(killed).toEqual([]);
+      expect(await handle({ ...base, from: "s-1", op: "start_session", repo: web, task: "再来一个" })).toMatchObject({ ok: true });
+      // 不再休眠的关着的 session：照旧是已经结束了。
+      expect(await handle({ ...base, from: "s-1", op: "end_session", session: "s-2", reason: "x" })).toMatchObject({ ok: false, error: expect.stringContaining("s-2") });
     });
   });
 

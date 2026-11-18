@@ -11,7 +11,7 @@ import type { CheckAbsenceReason, CheckMode, CheckOutcome, CheckSeverity, CheckS
 import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
 import type { ReportKind } from "../../shared/control";
-import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "已合并·待收尾",
@@ -272,6 +272,7 @@ const ZH = {
     screen: "终端里有要回答的提示",
     needs_you: "会话在等你",
     closed: "终端关了",
+    hibernated: "会话休眠着，正在叫醒",
   } satisfies Record<string, string>,
   ciDeliver: { timeout: "输入框一直没就绪", blocked: "粘贴前被拦下了", exited: "终端已退出" } satisfies Record<string, string>,
   ciReasonOther: (r: string) => `原因：${r}`,
@@ -1263,6 +1264,41 @@ const ZH = {
       headless: "后台 claude",
       hub: "共享 MCP",
     } as Record<string, string>,
+  },
+  hib: {
+    badge: "休眠",
+    now: "休眠中",
+    reason: {
+      you: "停着等你；为了省内存结束了进程，点开就接着原来的对话",
+      ci: "在等 CI；CI 有结论时自动唤醒",
+      review: "在等 review；有新的结论或评论时自动唤醒",
+      idle: "闲置了；点开就接着原来的对话",
+      pressure: "内存紧张时休眠的；点开就接着原来的对话",
+      memory: "内存过大，正在重启",
+    } as Record<HibernateReason, string>,
+    open: "唤醒",
+    pin: "钉住",
+    unpin: "取消钉住",
+    pinHint: "钉住的 session 不休眠，也不降优先级",
+    pinNamed: (label: string) => `钉住 ${label}`,
+    unpinNamed: (label: string) => `取消钉住 ${label}`,
+    wakeFailed: (why: string) => `上次自动唤醒失败（${why}）。点开会再试一次。`,
+    wakeFailedNow: "唤醒失败：claude --resume 没有启动。点开重试，或者新开一个 session",
+    settings: {
+      enabled: "停着的 session 休眠（结束进程，事情来了再 --resume）",
+      enabledHelp:
+        "session 停够了下面的时间，Butler 就结束它的整棵进程树，只留下对话记录。CI 有结论、合并通知、汇报、你的回答要送进去时自动唤醒（claude --resume，原来的对话都在）；点开它也会唤醒。正在干活、屏幕上有确认、输入框有草稿、你正在看的、钉住的都不休眠。不限制同时开的 session 数。",
+      you: "等你：多少分钟后休眠（0 = 不休眠）",
+      ci: "等 CI：多少分钟后休眠（0 = 不休眠）",
+      review: "等 review：多少分钟后休眠（0 = 不休眠）",
+      idle: "闲置：多少分钟后休眠（0 = 不休眠）",
+      minutesHelp: "0 表示这种等待不休眠，否则至少 5 分钟。",
+      endWatchers: "休眠时也结束 watcher 和 dev server",
+      endWatchersHelp: "关掉的话，session 起的 watcher（tsc --watch、vite 等）和 dev server 留着，唤醒或者 session 结束时再清理。",
+      pressure: "内存紧张时休眠闲得最久的 session",
+      pressureHelp: "系统可用内存低于下面的比例时，每分钟休眠一个闲了至少 5 分钟、能休眠的 session，直到可用内存回到比例 + 5 个百分点以上。上面的休眠开关关着也照样生效。",
+      pressureFree: "可用内存低于百分之多少算紧张（1～50）",
+    },
   },
 };
 

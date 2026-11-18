@@ -101,7 +101,7 @@ describe("ci_undelivered notice", () => {
   });
 
   it("every reason has words; unknown ones pass through", () => {
-    for (const r of ["unowned", "busy_delivering", "failed", "no_repo", "no_sha", "no_session", "owner_closed", "guard:busy", "guard:typing", "guard:draft", "guard:screen", "guard:needs_you", "guard:closed", "deliver:timeout", "deliver:blocked", "deliver:exited"]) {
+    for (const r of ["unowned", "busy_delivering", "failed", "no_repo", "no_sha", "no_session", "owner_closed", "guard:busy", "guard:typing", "guard:draft", "guard:screen", "guard:needs_you", "guard:closed", "guard:hibernated", "deliver:timeout", "deliver:blocked", "deliver:exited"]) {
       expect(ciReasonText(r, S)).not.toContain("原因：");
     }
     expect(ciReasonText("guard:new_thing", S)).toBe("原因：guard:new_thing");

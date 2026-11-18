@@ -7,6 +7,7 @@ import { lastSegment } from "../repos";
 import { initialPane, sessionLabel } from "../sessions";
 import { S } from "../strings";
 import { EndSessionButton } from "./EndSessionButton";
+import { HibernateBadges, hibernationOf, isHibernated, PinButton, sessionTitle } from "./HibernateParts";
 import { CloseIdleButton, DeleteHiddenButton } from "./SessionCleanupButtons";
 import { RefreshSessionButton } from "./RefreshSessionButton";
 import { SessionLimit } from "./SessionLimit";
@@ -164,22 +165,25 @@ interface AreaProps {
   children?: ReactNode;
 }
 
-/** session 条上的一个 session：切换 / 打开，开着时换新和结束，关着时隐藏。 */
+/** session 条上的一个 session：切换 / 打开（休眠的打开就是唤醒），开着时换新和结束，关着时隐藏；能休眠的可以钉住。 */
 export function SessionButton({ s, panes, place }: { s: SessionView; panes: SessionPanes; place: string }) {
   const label = sessionLabel(s, S.untitledSession);
+  const hibernated = isHibernated(s);
   return (
     <span className="session-wrap">
       <button
-        className={s.termId && s.termId === panes.active ? "session active" : "session"}
-        title={`${s.firstPrompt ?? S.untitledSession}\n${s.id}`}
+        className={s.termId && s.termId === panes.active ? "session active" : hibernated ? "session hibernated" : "session"}
+        title={sessionTitle(s)}
         onClick={() => (s.termId ? panes.setActive(s.termId) : void panes.open(s.id))}
       >
         {s.waitingForInput && <span className="badge">●</span>}
         <span className="place">{place}</span>
         <span className="label">{label}</span>
         <NoChecksMark reason={s.checksAbsent} />
-        <span className="action">{s.termId ? S.switchTo : S.open}</span>
+        <HibernateBadges s={s} />
+        <span className="action">{s.termId ? S.switchTo : hibernated ? S.hib.open : S.open}</span>
       </button>
+      <PinButton s={s} label={label} />
       {s.termId ? (
         <>
           {/* 修复 session 和复盘分析 session 不换新（计划 16）。 */}
@@ -262,7 +266,9 @@ export function SessionArea({ repos, reposHint, onAddRepo, onRemoveRepo, session
       {error && <p className="error">{error}</p>}
 
       <div className="terminals">
-        {panes.panes.map((id) => <TerminalPane key={id} termId={id} visible={id === panes.active} onClose={() => panes.close(id)} onResume={() => void panes.open(id)} />)}
+        {panes.panes.map((id) => (
+          <TerminalPane key={id} termId={id} visible={id === panes.active} hibernated={hibernationOf(sessions, id)} onClose={() => panes.close(id)} onResume={() => void panes.open(id)} />
+        ))}
       </div>
     </>
   );

@@ -30,8 +30,11 @@ export interface NowInput {
   memorySnapshot?: MemorySnapshot | null;
 }
 
-/** 算进「现在」页的 session：Butler 开的、终端开着。 */
-const live = (s: SessionView): boolean => s.termId !== null && s.origin === "butler";
+/**
+ * 算进「现在」页的 session：Butler 开的、终端开着或者休眠着（WS-M B：休眠的照样在等东西）；
+ * 上次自动唤醒失败的也留着，直到用户点开或者隐藏它（等的东西不会再送进去了，要让用户看见）。
+ */
+const live = (s: SessionView): boolean => (s.termId !== null || !!s.hibernatedAt || !!s.wakeError) && s.origin === "butler";
 
 /** 停着：没有活动记录，或者回合结束在等下一条指令。 */
 const stopped = (a: SessionActivity | null): boolean => a === null || a.kind === "waiting" || a.kind === "idle";
@@ -85,7 +88,9 @@ function sessionRow(i: NowInput, s: SessionView, base: RowBase, scope: Scope = n
   return {
     ...base, sessionId: s.id, activity, working: isWorking(activity), recent: i.recent(s.id), mergeQueued, needsYou, refreshing, decisions, idle,
     since: activity?.startedAt ?? s.lastActivityAt,
-    mem: i.sessionMemory?.(s.id) ?? null,
+    mem: s.hibernatedAt ? null : (i.sessionMemory?.(s.id) ?? null),
+    hibernated: s.termId === null && s.hibernatedAt ? (s.hibernateReason ?? "idle") : null,
+    wakeError: s.termId === null && !s.hibernatedAt ? (s.wakeError ?? null) : null,
   };
 }
 

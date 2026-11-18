@@ -51,6 +51,18 @@ describe("DeliveryGuard", () => {
     expect(t.check()).toEqual({ ok: false, block: "closed" });
   });
 
+  it("wakes a hibernated session and reports it as hibernated (WS-M B)", () => {
+    const t = setup();
+    t.state.term = null;
+    const woken: string[] = [];
+    const g = new DeliveryGuard({ ...t.deps(), wakeIfHibernated: (id) => (woken.push(id), true) });
+    expect(g.check("s-old")).toEqual({ ok: false, block: "hibernated" });
+    expect(woken).toEqual(["s-old"]);
+    t.state.term = "t-1";
+    expect(new DeliveryGuard({ ...t.deps(), wakeIfHibernated: (id) => (woken.push(id), true) }).check("s-old").ok).toBe(true);
+    expect(woken).toHaveLength(1);
+  });
+
   it("blocks on a draft even after the quiet period", () => {
     const t = setup();
     t.state.typedAt = t.state.now - 10 * USER_TYPING_QUIET_MS;

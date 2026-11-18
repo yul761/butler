@@ -56,6 +56,7 @@ async function setup() {
   const submitted: [string, string][] = [];
   const claude: { path: string | null } = { path: "/bin/claude" };
   const logs: string[] = [];
+  const retired: string[] = [];
   let submit: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout"> = async (termId, message) => (submitted.push([termId, message]), "sent");
   let epicRefresh: (epicId: number) => Promise<void> | undefined = () => undefined;
   let n = 0;
@@ -81,8 +82,10 @@ async function setup() {
     butlerWorkspace,
     butlerMcpConfig: () => "/mcp/butler.json",
     guidePath: (kind, paths) => (guidesAsked.push([kind, paths]), null),
+    hidden: (id) => void retired.push(id),
   });
   return {
+    retired,
     service, featureService, ticketService, featureHandoffs, handoffs, epicHistory, sessions, tickets, features, epics, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, featureMcpAsked, epicMcpAsked, settingsAsked,
     guidesAsked, butlerWorkspace, activities, names, namesAsked, submitted, claude, logs, setSubmit: (f: typeof submit) => (submit = f),
     setEpicRefresh: (f: typeof epicRefresh) => (epicRefresh = f),
@@ -157,6 +160,16 @@ describe("feature coordinator sessions (design 2026-10-26)", () => {
     await service.open({ ticketKey: "SOLO-1", force: true });
     expect(service.featureTerminalCount(feature.id)).toBe(2);
     expect(service.hasFeatureTerminal(feature.id)).toBe(true);
+  });
+
+  it("a hibernated session counts toward the limit but does not block archiving (WS-M B)", async () => {
+    const { service, sessions, spawned, feature } = await setup();
+    const r = await service.open({ ticketKey: "DMS-1" });
+    if (!r.ok) throw new Error("did not open");
+    sessions.setHibernated(r.termId, 5, "idle", null);
+    spawned[0].pty.kill();
+    expect(service.featureTerminalCount(feature.id)).toBe(1);
+    expect(service.hasFeatureTerminal(feature.id)).toBe(false);
   });
 
   it("tells the memory config which feature a ticket session belongs to", async () => {
@@ -1108,6 +1121,14 @@ describe("the Butler 总控 session (BTL-190 5)", () => {
     expect(await service.openButler({})).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
     expect(await service.openButler({ sessionId: "old" })).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
     expect(spawned).toHaveLength(1);
+  });
+
+  it("opening another conversation retires a hibernated Butler 总控, so deliveries stop waking it (WS-M B)", async () => {
+    const { service, sessions, butlerWorkspace, retired } = await setup();
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: butlerWorkspace, origin: "butler", createdAt: 1, butler: true });
+    sessions.setHibernated("old", 5, "idle", null);
+    expect(await service.openButler({})).toMatchObject({ ok: true, termId: "new-1" });
+    expect(retired).toEqual(["old"]);
   });
 
   it("resumes its own session and refuses anyone else's", async () => {

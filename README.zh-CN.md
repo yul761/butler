@@ -30,7 +30,7 @@ Butler 只支持 Claude Code。
 - `start_session` 在某个仓库里开一个新 session，并把任务作为第一条消息发给它。新 session 出现在同一个 ticket 下，你可以看着它、接手、回答它的权限提示。
 - `list_sessions` 显示每个 session 在做什么。
 - `session_activity` 显示某个 session 的动态和它最后一条命令的输出（最多 4 KB）。
-- `end_session` 关掉这个 ticket 里一个已经完成的 session，效果和点它的 × 一样。正在工作的、正显示等你回应的提示的、没在运行的 session，以及调用者自己，它都会拒绝。
+- `end_session` 关掉这个 ticket 里一个已经完成的 session，效果和点它的 × 一样。正在工作的、正显示等你回应的提示的、没在运行的 session，以及调用者自己，它都会拒绝。休眠的 session（Butler 为了省内存结束了它的进程，`list_sessions` 里标着 `hibernated`）仍然算在 session 上限里；对它调用 `end_session`，Butler 就不再唤醒它，名额也空出来。
 
 Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕，所以不会在信任对话框或权限确认上按回车；交完之后还会确认任务真的提交了。Butler 开的其他 session（包括 ticket 的 session）也有同一个 `butler-sessions` server，但只有 `ask_user` 和 `report` 两个工具（见下面的 **待你决定和汇报**）。
 
