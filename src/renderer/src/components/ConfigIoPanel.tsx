@@ -60,7 +60,7 @@ function ExportForm({ s, checksAvailable }: { s: LessonsState; checksAvailable: 
   };
 
   return (
-    <section className="config-io-export" data-testid="io-export">
+    <section className="config-io-export" data-testid="io-export-form">
       <h3>{S.ioExportTitle}</h3>
       <div className="lessons-row">
         <label className="inline">
@@ -216,7 +216,7 @@ function ImportFlow({ s }: { s: LessonsState }) {
       }
       setError(null);
       setResult(r);
-      setNotice(r.batchId !== null ? { batchId: r.batchId, text: S.ioApplied } : { batchId: null, text: S.ioApplied });
+      setNotice({ batchId: r.batchId, text: S.ioApplied });
       reset();
     } catch (e) {
       reportError(e);
