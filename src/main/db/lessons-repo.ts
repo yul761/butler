@@ -71,6 +71,24 @@ interface LessonRow {
   degraded: number;
   degraded_from: string | null;
 }
+/** 从导出文件来的一条规矩。 */
+export interface ImportedLesson {
+  scope: LessonScope;
+  text: string;
+  why: string;
+  status: LessonStatus;
+  admission: LessonAdmission;
+  hits: number;
+  lastSeenAt: number;
+  createdAt: number;
+  now: number;
+  scopeGlobs: string[];
+  scopeLang: string | null;
+  scopeLayer: string | null;
+  strength: LessonStrength | null;
+  checkability: LessonCheckability | null;
+  sources: { prNumber: number; url: string | null; slug: string | null; at: number }[];
+}
 /** 流水线（D）回填或改写的字段；没给的不动。 */
 export interface LessonFieldsPatch {
   scopeGlobs?: string[];
@@ -325,6 +343,44 @@ export class LessonsRepo {
       const id = Number(res.lastInsertRowid);
       this.addSource(id, l.source, l.at);
       return id;
+    });
+  }
+
+  /** 导入时用：这台机器没有的仓库先建一行，本地路径留空（「这台机器上没有克隆」）；已有的不动。 */
+  ensureRepo(slug: string, now: number): void {
+    this.db.prepare(`INSERT INTO lesson_repos (slug, local_path, created_at) VALUES (?, '', ?) ON CONFLICT (slug) DO NOTHING`).run(slug, now);
+  }
+
+  /** 导入一条规矩：状态、准入、范围字段和出处都按给的写。 */
+  importLesson(l: ImportedLesson): number {
+    return withTransaction(this.db, () => {
+      const id = Number(
+        this.db
+          .prepare(
+            `INSERT INTO lessons (repo_slug, product_id, text, why, status, hits, last_seen_at, created_at, updated_at,
+               scope_globs, scope_lang, scope_layer, strength, checkability, admission)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            l.scope.kind === "repo" ? l.scope.slug : null, l.scope.kind === "product" ? l.scope.productId : null,
+            l.text, l.why, l.status, Math.max(1, l.hits), l.lastSeenAt, l.createdAt, l.now,
+            JSON.stringify(l.scopeGlobs), l.scopeLang, l.scopeLayer, l.strength, l.checkability, l.admission,
+          ).lastInsertRowid,
+      );
+      for (const s of l.sources) this.addSource(id, { ...s, runId: null }, s.at);
+      return id;
+    });
+  }
+
+  /** 导入时选了「用导入的」：改正文以外的内容，hits 取大，出处合并。 */
+  updateImported(id: number, u: { why: string; hits: number; lastSeenAt: number; sources: ImportedLesson["sources"]; status?: LessonStatus; fields: LessonFieldsPatch }, now: number): void {
+    withTransaction(this.db, () => {
+      this.db
+        .prepare(`UPDATE lessons SET why = ?, hits = MAX(hits, ?), last_seen_at = MAX(last_seen_at, ?), updated_at = ? WHERE id = ?`)
+        .run(u.why, u.hits, u.lastSeenAt, now, id);
+      if (u.status) this.setStatus(id, u.status, now);
+      this.setFields(id, u.fields, now);
+      for (const s of u.sources) this.addSource(id, { ...s, runId: null }, s.at);
     });
   }
 

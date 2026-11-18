@@ -155,6 +155,11 @@ export class BatchRecorder {
     });
   }
 
+  /** 批次跑完之后补写摘要（导入的计数要跑完才知道）。 */
+  setSummary(batchId: number, summary: Record<string, unknown>): void {
+    this.db.prepare(`UPDATE admission_batches SET summary = ? WHERE id = ?`).run(JSON.stringify(summary), batchId);
+  }
+
   /** 撤销一批：倒着恢复（先删后建的依赖顺序反过来）；自己也记成一个 undo 批次（不能再撤销）。 */
   undo(batchId: number, now: number): UndoResult {
     return withTransaction(this.db, () => {

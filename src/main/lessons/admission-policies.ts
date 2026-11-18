@@ -49,6 +49,11 @@ export class AdmissionPolicyService {
     return (this.d.db.prepare(`SELECT id, overrides FROM admission_policies WHERE ${w}`).get(...args) as PolicyRow | undefined) ?? null;
   }
 
+  /** 这一层在表里的行号（没有则 null）。 */
+  rowId(ref: ScopeRef): number | null {
+    return this.row(ref)?.id ?? null;
+  }
+
   version(): number {
     return this.d.version.get();
   }
