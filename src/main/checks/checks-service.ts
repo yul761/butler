@@ -244,6 +244,26 @@ export class ChecksService {
     this.d.onChanged?.();
   }
 
+  /** 一次新建好几条（仓库现状里采纳的检查，工作流 E2）：一个批次，撤销时一起撤。有一条不合法就一条都不建。 */
+  createMany(scope: CheckScope, raws: unknown[], opts: { origin?: BatchOrigin; summary?: Record<string, unknown> } = {}): ChecksActResult {
+    const inputs: CheckInput[] = [];
+    for (const raw of raws) {
+      const v = validateCheckInput(raw);
+      if (!v.ok) return { ok: false, reason: "invalid", message: v.error };
+      inputs.push(v.value);
+    }
+    if (!inputs.length) return { ok: true, batchId: null, affected: 0 };
+    if (!this.layerExists(scope)) return NOT_FOUND;
+    const now = this.d.now();
+    const { outcome } = this.d.recorder.run(
+      { kind: "check_create", origin: opts.origin ?? "manual", entity: "check", scope: { layer: scope }, summary: { count: inputs.length, names: inputs.map((i) => i.name).slice(0, 20), ...opts.summary }, now },
+      (ctx) => {
+        for (const input of inputs) ctx.created("check", this.repo.insert(scope, newKey(), input, { lessonId: null, now }));
+      },
+    );
+    return this.changed({ ok: true, batchId: outcome.batchId, affected: outcome.affected });
+  }
+
   /** 把继承来的一条检查复制到这一层（同一个 key = 覆盖），之后在这一层改它。 */
   override(scope: CheckScope, key: string, patch: Partial<Pick<CheckInput, "enabled" | "mode" | "severity">> = {}): ChecksActResult {
     if (scope.kind === "global") return { ok: false, reason: "bad_scope" };

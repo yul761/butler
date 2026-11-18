@@ -810,7 +810,7 @@ function conventions(files: string[], projects: BaselineProject[]): string[] {
   const parents = new Map<string, number>();
   for (const p of projects) if (p.dir) parents.set(dirOf(p.dir), (parents.get(dirOf(p.dir)) ?? 0) + 1);
   for (const [parent, n] of parents) if (n >= 2 && parent) out.push(`${parent}/* (${n} projects)`);
-  const topDirs = new Set(files.map((f) => f.split("/")[0]).filter((x, _i, _a) => x && !x.startsWith(".")));
+  const topDirs = new Set(files.map((f) => f.split("/")[0]).filter((x) => x && !x.startsWith(".")));
   for (const d of ["src", "lib", "app", "cmd", "internal", "pkg", "tests", "test", "spec", "e2e", "docs", "scripts"]) if (topDirs.has(d) && files.some((f) => f.startsWith(`${d}/`))) out.push(`${d}/`);
   const patterns: [RegExp, string][] = [
     [/\.test\.[cm]?[jt]sx?$/, "*.test.ts / *.test.js"],

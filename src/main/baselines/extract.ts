@@ -59,7 +59,7 @@ const dirOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) :
 
 function yaml(text: string): unknown {
   try {
-    return parseYaml(text.replace(/^﻿/, ""), { strict: false, uniqueKeys: false, logLevel: "silent" });
+    return parseYaml(text.replace(/^\uFEFF/, ""), { strict: false, uniqueKeys: false, logLevel: "silent" });
   } catch {
     return null;
   }

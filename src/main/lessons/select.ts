@@ -57,3 +57,8 @@ export function safeSessionLessons(repo: LessonsRepo, identity: RepoIdentity, re
     return [];
   }
 }
+
+/** 仓库档案里的「踩过的坑」（工作流 E2）：这个仓库和所属产品已确认的规矩，排好序的前 limit 条文字。 */
+export function pitfallsFor(repo: LessonsRepo, slug: string, limit = 5): string[] {
+  return confirmedFor(repo, [slug]).slice(0, limit).map(({ lesson }) => lesson.text);
+}

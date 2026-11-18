@@ -451,6 +451,36 @@ const ZH = {
       duplicate: (keeper: number) => `和 #${keeper} 是同一件事`,
     },
   },
+  /** 仓库现状（工作流 E2）：模型补全的提示词、session guide 里的仓库档案、导出成 lint 的提交说明和拒绝理由。 */
+  baselines: {
+    adoptNone: "没有选中可以建的检查。",
+    adoptConfirm: (names: string[]) => `这几条是推断出来的（低置信），要先逐条确认：${names.join("、")}`,
+    adoptExists: "选中的检查都已经有了。",
+    truncated: (n: number) => `仓库文件太多，只看了前 ${n} 个。`,
+    ruleBadKey: "规则 key 只能用字母、数字和 . _ : -，最长 80 个字符。",
+    ruleBadScope: "找不到这个产品。",
+    ruleNotFound: "这一层没有这条规则。",
+    notRunning: "这个仓库现在没在扫描。",
+    draftName: (tool: string, dir: string) => (dir ? `${tool}（${dir}）` : tool),
+    inferPrompt: (o: { slug: string; reasons: string[]; projects: string; found: string; ci: string; sample: string; more: number }) =>
+      [
+        "你在帮 Butler 弄清楚一个仓库自己是怎么检查代码的：装依赖、构建、跑测试、lint、类型检查用什么命令。当前目录就是这个仓库，可以读文件、搜索，但不要改任何文件、不要执行命令。",
+        `仓库：${o.slug}`,
+        `为什么问你：${o.reasons.join(", ")}`,
+        "按标记文件认出的项目：",
+        o.projects,
+        "已经确定的检查（不用重复）：",
+        o.found,
+        "CI 里认不出来的命令：",
+        o.ci,
+        `文件列表（前 150 个${o.more ? `，还有 ${o.more} 个没列` : ""}）：`,
+        o.sample,
+        "请读 CI 配置、构建脚本、README / CONTRIBUTING，找出仓库自己用的检查命令。",
+        "inferred_checks：每条 { dir: 项目目录（仓库相对，根目录是 \"\"）, category: lint / typecheck / test / build / security / format, tool: 工具的短名字, command: 在 dir 里执行的命令, fileCommand?: 只查一个文件的命令（用 {file}）, changedFiles: 能不能只查改过的文件, stages?: commit / push / ci 里仓库已经在哪儿跑它, evidence: 从哪个文件看出来的 }。",
+        "profiles：每个项目目录一条 { dir, install, build, testAll, testOne（用 {test} 表示一个测试）, fastest（最快的检查）, lint, typecheck }，不知道的填 null。",
+        "只写你在仓库里看到证据的命令，不要猜通用命令；没有就留空数组。notes 用一两句话说明你看了哪些文件。",
+      ].join("\n"),
+  },
 };
 
 export type MainStrings = typeof ZH;
@@ -851,6 +881,35 @@ const EN: MainStrings = {
       covered: (by: string) => `already covered by ${by}`,
       duplicate: (keeper: number) => `the same thing as #${keeper}`,
     },
+  },
+  baselines: {
+    adoptNone: "None of the selected checks can be created.",
+    adoptConfirm: (names: string[]) => `These were inferred (low confidence) and need confirming one by one first: ${names.join(", ")}`,
+    adoptExists: "All the selected checks already exist.",
+    truncated: (n: number) => `The repo has too many files; only the first ${n} were looked at.`,
+    ruleBadKey: "A rule key may only use letters, digits and . _ : -, up to 80 characters.",
+    ruleBadScope: "That product doesn't exist.",
+    ruleNotFound: "This layer has no such rule.",
+    notRunning: "This repo isn't being scanned right now.",
+    draftName: (tool: string, dir: string) => (dir ? `${tool} (${dir})` : tool),
+    inferPrompt: (o: { slug: string; reasons: string[]; projects: string; found: string; ci: string; sample: string; more: number }) =>
+      [
+        "You are helping Butler work out how a repository checks its own code: the commands it uses to install, build, test, lint and type check. The current directory is the repository; you may read and search files, but do not change any file and do not run commands.",
+        `Repository: ${o.slug}`,
+        `Why you are asked: ${o.reasons.join(", ")}`,
+        "Projects found from marker files:",
+        o.projects,
+        "Checks already known (do not repeat them):",
+        o.found,
+        "CI commands that could not be classified:",
+        o.ci,
+        `Files (first 150${o.more ? `, ${o.more} more not listed` : ""}):`,
+        o.sample,
+        "Read the CI configuration, build scripts, README / CONTRIBUTING and find the check commands the repository itself uses.",
+        "inferred_checks: each { dir: project directory (repo-relative, the root is \"\"), category: lint / typecheck / test / build / security / format, tool: a short tool name, command: the command run in dir, fileCommand?: a command for one file (with {file}), changedFiles: whether it can check only changed files, stages?: which of commit / push / ci already run it, evidence: the file that shows it }.",
+        "profiles: one per project directory { dir, install, build, testAll, testOne ({test} stands for one test), fastest (the quickest check), lint, typecheck }; null when unknown.",
+        "Only give commands you saw evidence for in the repository; do not guess generic commands. Leave the arrays empty when there are none. In notes, say in one or two sentences which files you read.",
+      ].join("\n"),
   },
 };
 
