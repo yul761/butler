@@ -1147,6 +1147,9 @@ export const MIGRATIONS: string[] = [
     status TEXT NOT NULL CHECK (status IN ('pending','ok','failed','too_large')), attempts INTEGER NOT NULL DEFAULT 0,
     diff TEXT, fetched_at INTEGER, comments_at INTEGER,
     PRIMARY KEY (repo_slug, pr_number));
+  CREATE TABLE backtest_repos (
+    repo_slug TEXT PRIMARY KEY, status TEXT NOT NULL CHECK (status IN ('ok','no_gh','failed')), attempts INTEGER NOT NULL DEFAULT 0,
+    window TEXT NOT NULL DEFAULT '[]', fetched_at INTEGER NOT NULL, error TEXT);
   CREATE TABLE backtest_comments (
     repo_slug TEXT NOT NULL, pr_number INTEGER NOT NULL, comment_id INTEGER NOT NULL,
     author TEXT, path TEXT, line INTEGER, original_line INTEGER, original_commit TEXT, fetched_at INTEGER NOT NULL,
