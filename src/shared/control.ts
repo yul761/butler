@@ -7,12 +7,28 @@ import { isModelName, isTier } from "./model-routing";
  */
 
 export const CONTROL_VERSION = 1;
-/** 一个 ticket 同时最多这么多个运行中的终端（含总控）。到上限时 start_session 返回错误。 */
-export const MAX_RUNNING_PER_TICKET = 6;
-/** 一个 feature 同时最多这么多个运行中的终端（feature 总控 + 它所有 ticket 的终端；设计文档 2026-10-26）。 */
-export const MAX_RUNNING_PER_FEATURE = 8;
-/** 一个 epic 下同时最多这么多个 feature 的总控在跑（BTL-190 第 4 点）。到上限时 start_feature 返回错误。 */
-export const MAX_RUNNING_FEATURES_PER_EPIC = 4;
+/**
+ * 现在还能再开几个 session（工作流 W：按内存决定，不再有每 ticket、每 feature、每 epic 的固定上限）。单位都是 MB。
+ * start_session、start_feature 和 list_sessions 的结果带上它，sessions-server 把它写成一行给总控看。
+ */
+export interface SessionCapacity {
+  /** 按可用内存和硬上限算，还能再开几个；读不到内存又没开硬上限时为 null（不限）。 */
+  canStart: number | null;
+  /** 可用内存，已经扣掉刚开、还在启动的 session；读不到为 null。 */
+  availableMb: number | null;
+  /** 一个新 session 预计占多少：measured 是开着的 session 实测的平均，setting 是设置里的值。 */
+  sessionMb: number;
+  estimate: "measured" | "setting";
+  reserveMb: number;
+  /** 刚放行、还没长到该有的内存的 session 个数。 */
+  pending: number;
+  running: number;
+  /** 设置里的硬上限；null = 没开（默认）。 */
+  maxRunning: number | null;
+  /** macOS 的内存压力；别的平台或读不到为 null。 */
+  pressure: "normal" | "warn" | "critical" | null;
+  source: "vm_stat" | "memory_pressure" | "os" | "fixed" | null;
+}
 /** start_session 的任务最长多少字。 */
 export const TASK_LIMIT = 8000;
 /** session_activity 返回的命令输出最多这么多字节。 */
@@ -144,7 +160,7 @@ export type ButlerControlRequest =
 
 export type ControlRequest = TicketControlRequest | FeatureControlRequest | EpicControlRequest | ButlerControlRequest;
 
-export type ControlResult = { v: 1; ok: true; value: unknown } | { v: 1; ok: false; error: string };
+export type ControlResult = { v: 1; ok: true; value: unknown; capacity?: SessionCapacity } | { v: 1; ok: false; error: string };
 
 const okTask = (t: unknown): t is string => typeof t === "string" && t.trim().length > 0 && t.length <= TASK_LIMIT;
 const okName = (x: unknown, max: number): x is string => typeof x === "string" && x.length > 0 && x.length <= max;

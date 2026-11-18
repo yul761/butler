@@ -36,7 +36,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
 
 有几条刻意设下的限制：
 - **通信：** 总控不能往别的 session 里打字。session 之间靠共享的 ticket 记忆协作。
-- **session 上限：** 每个 ticket 最多同时运行 6 个终端。归档的 ticket 列在 **已归档** 下，可以从那里恢复。在 Windows 的终端里，Ctrl+V 和右键是粘贴，选中文字时 Ctrl+C 是复制。
+- **同时开几个 session：** 内存够就能开。开新 session 前，Butler 会检查可用内存减去一个新 session 的占用后，还高于你在设置里定的保留量（见 [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md#同时开几个-session)）；ticket、feature、epic 都没有写死的个数。归档的 ticket 列在 **已归档** 下，可以从那里恢复。在 Windows 的终端里，Ctrl+V 和右键是粘贴，选中文字时 Ctrl+C 是复制。
 - **Feature：几个 ticket，一个工作区。** 一个 feature 有名字，下面归着几个 ticket，比如两个前端 ticket 和两个后端 ticket，各有自己的 Jira 号和分支。用 **+ 新建 feature** 创建。被问到仓库时，你可以选放仓库的那个上层文件夹，比如里面有 `frontend/` 和 `backend/` 的 `~/Code/shop`。Butler 会列出下一层的仓库，你勾选需要的就行。建 ticket 或添加仓库时选上层文件夹也是一样。feature 里每个 ticket 的 worktree 都放在 feature 的工作区里，默认是上层文件夹旁边的 `<上层>-features/<feature 名>`，比如 `~/Code/shop-features/checkout/frontend-dms-1234`。这样同一个仓库里的几个 ticket 可以同时开工。feature 的 **总控** session 运行在工作区里，能看到每个 ticket 的 worktree。它的 `butler-sessions` server 提供：
   - `list_tickets`：列出 feature 的 ticket 和它们的仓库；
   - `list_repos`：列出 feature 的仓库；
@@ -46,7 +46,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
   - `session_activity`：显示某个 session 的动态和它最后一条命令的输出（最多 4 KB）；
   - `end_session`：关掉 feature 里某个 ticket 已经完成的 session，或 feature 的某个修复 session（不能关总控自己）。拒绝的规则和 ticket 总控的一样。
 
-  一个 feature 最多同时运行 8 个终端。它的所有 session 还共享一份 feature 记忆 `butler-feature`，用来记前后端之间的 API 约定这类东西。你自己在工作区文件夹里开的 `claude` 也算这个 feature 的总控。归档 feature 时它的 ticket 一起归档；恢复时一起归档的 ticket 也会恢复。
+  它的所有 session 还共享一份 feature 记忆 `butler-feature`，用来记前后端之间的 API 约定这类东西。你自己在工作区文件夹里开的 `claude` 也算这个 feature 的总控。归档 feature 时它的 ticket 一起归档；恢复时一起归档的 ticket 也会恢复。
 
   feature 页最上面是 **整体进度**：跨 feature 里所有 ticket 的汇总，写着卡在哪里、下一步做什么。ticket 和它们 PR 的表格在旁边的 **Ticket** tab 里。汇总由晚间任务为有新动静的 feature 生成，或者在总控里输入 `/handoff`，或者点 **立即更新**。它从不显示完成百分比。终端上面的部分是一排 tab（**整体进度**、**Ticket**、**汇报**、**待你决定**），同一时间只显示一个。内容多的 tab 在自己的框里滚动。tab 默认是收起的，把空间留给 session：点一个 tab 或右边的 **展开** 按钮就打开，再点一下当前的 tab 或 **收起** 按钮就关上。每个页面记着是展开还是收起、上次停在哪个 tab；收起时 tab 上的数量和红标记照样显示。tab 上会显示有几件事卡着、等你回话和卡住的圆点以及数量，**待你决定** 有内容时会标红。不管上面内容有多少，终端至少占窗口一半的高度。
 
@@ -70,7 +70,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
 
   epic session 的 `butler-sessions` server 提供 `list_features`、`list_repos`、`create_feature`、`start_feature`、`list_sessions`、`session_activity` 和 `end_session`，另有 `ask_user` 和 `report`。`list_sessions` 和 `session_activity` 还会显示每个 session 的最后一条回复。`end_session` 关掉 epic 里某个未归档 feature 已经完成的 session：它的总控、修复 session，或它某个 ticket 的 session。它从不关 epic session 自己，拒绝的规则和 ticket 总控的一样。属于某个 epic 的 feature，其总控还有 `epic_context`，用来查看 epic 里的其他 feature。这两个工具读的都是 Butler 的最新数据，所以 session 不必依赖开始时被告知的内容。
 
-  **从 epic 一路开工。** 你同意开工之后，epic session 可以直接打开某个 feature 的总控并让它开工，不用你点进 feature。它调用 `start_feature`，或者调用带 `start` 的 `create_feature`。总控的第一条消息带着规划和 epic 里其他 feature 的数据，并告诉它不用等你确认，按规划建 ticket、在每个 ticket 里开 session；需要你决定的事用 `ask_user`，做完或卡住了用 `report` 汇报。如果这个 feature 的总控已经开着，`start_feature` 不会再开第二个：给了额外的 `instructions` 就在总控空下来时转给它，没给就只说明总控正在运行。feature 没有规划时，epic session 必须给 `instructions`。一个 epic 同时最多 4 个 feature 总控在跑，每个 feature 照旧最多 8 个终端。`create_feature` 建好了 feature 但总控开不了（比如已到上限）时，feature 照样建好，epic session 会被告知原因。
+  **从 epic 一路开工。** 你同意开工之后，epic session 可以直接打开某个 feature 的总控并让它开工，不用你点进 feature。它调用 `start_feature`，或者调用带 `start` 的 `create_feature`。总控的第一条消息带着规划和 epic 里其他 feature 的数据，并告诉它不用等你确认，按规划建 ticket、在每个 ticket 里开 session；需要你决定的事用 `ask_user`，做完或卡住了用 `report` 汇报。如果这个 feature 的总控已经开着，`start_feature` 不会再开第二个：给了额外的 `instructions` 就在总控空下来时转给它，没给就只说明总控正在运行。feature 没有规划时，epic session 必须给 `instructions`。能同时跑几个总控只看内存。`create_feature` 建好了 feature 但总控开不了（比如内存不够）时，feature 照样建好，epic session 会被告知原因。
 
   epic 页终端上面有 **Feature**、**汇报**、**待你决定** 三个 tab，默认收起，点开才展开。**Feature** 里每个 feature 一行：汇总的第一句话和一个状态（有 ticket 卡住、等你回话、未开始或进行中）。点一行看详情；ticket 只在 feature 页上列出。归档的 feature 折叠在 **已归档** 下。tab 下面是仓库、epic session，以及一个至少占窗口一半高度的终端。侧栏里 Epic 分组在 Feature 上面，每个 epic 都能折叠。等待标记和红点会从 ticket 传到 feature 再传到 epic，epic 折叠时也看得见。
 

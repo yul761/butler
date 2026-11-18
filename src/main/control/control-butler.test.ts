@@ -12,10 +12,12 @@ import { memDb } from "../test-utils";
 import { ButlerMessagesRepo } from "../db/butler-messages-repo";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import { ButlerMessages } from "./butler-messages";
+import { MemoryAdmission } from "../sessions/memory-admission";
+import type { ControlHandlerDeps } from "./control-handler";
 import { controlHandler } from "./control-handler";
 
 /** Butler 总控（BTL-190 第 5 点）：两个 epic（一个归档了）、三个 feature（一个不属于 epic）、两个 ticket（一个归档了）和各种 session。 */
-function setup(o: { butlerDeps?: boolean } = {}) {
+function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admission"] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -107,6 +109,7 @@ function setup(o: { butlerDeps?: boolean } = {}) {
     screenNeedsUser: () => false,
     submit: async (termId, text) => (submitted.push([termId, text]), "sent" as const),
     notify: () => {},
+    admission: o.admission,
     ...(o.butlerDeps !== false && {
       butler: {
         epicViews: () => [{ id: shop, name: "shop", sessions: [view("ep"), view("closed-ep")], waiting: true, stuck: false, features: rows.filter((r) => r.epicId === shop) }],
@@ -299,6 +302,22 @@ describe("Butler 总控 send_message and refresh_session (BTL-190 5)", () => {
     setGuard(() => ({ ok: false, block: "typing" }));
     expect((await call({ op: "send_message", session: "fc", text: "t" })).ok).toBe(false);
     expect(messages.recent()[0]).toMatchObject({ status: "failed" });
+  });
+
+  it("opening a closed coordinator asks memory first; a refusal says why, opens nothing and marks the message failed (workstream W, ws-b)", async () => {
+    const mem = { availableMb: 2500 };
+    const admission = new MemoryAdmission({
+      read: async () => ({ totalKb: 64 * 1024 * 1024, availableKb: mem.availableMb * 1024, source: "vm_stat", pressure: "normal" }),
+      settings: () => ({ reserveMb: 2048, sessionMb: 1024, maxRunning: 0 }),
+      running: () => 0, now: () => 0, log: () => undefined,
+    });
+    const { call, opened, submitted, messages } = setup({ admission });
+    expect(err(await call({ op: "send_message", feature: "docs", text: "看一下" }))).toContain("内存不够");
+    expect(opened).toEqual([]);
+    expect(submitted).toEqual([]);
+    expect(messages.recent()[0]).toMatchObject({ status: "failed", error: "no_memory" });
+    mem.availableMb = 8000;
+    expect(value(await call({ op: "send_message", feature: "docs", text: "看一下" }))).toMatchObject({ sessionId: "dc", opened: "resumed" });
   });
 
   it("refuses ticket and fix sessions, itself, unknown ones and a blocked guard", async () => {

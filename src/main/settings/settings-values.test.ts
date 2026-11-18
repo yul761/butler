@@ -4,7 +4,7 @@ import { SettingsRepo } from "../db/settings-repo";
 import { memDb } from "../test-utils";
 import {
   isLoopbackHost, llmConfig, normalizeBaseUrl, checkBranchTemplateFits, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTerms, normalizeTicketPattern, parsePriceTable, parseTime, parseToolList,
-  parseWorkingDays, priceFor, butlerPatrolTime, idleCloseMinutes, refreshThreshold, scheduleConfig, SettingError, TERMS_LIMIT, trackerTools,
+  parseWorkingDays, priceFor, butlerPatrolTime, idleCloseMinutes, sessionAdmission, refreshThreshold, scheduleConfig, SettingError, TERMS_LIMIT, trackerTools,
   hibernateEndWatchersOn, hibernateMinutes, hibernateOn, memoryPressureFreePercent, memoryPressureOn, sharedMcpOn,
 } from "./settings-values";
 
@@ -319,5 +319,31 @@ describe("hibernation settings (WS-M B, C)", () => {
     s.set("sharedMcp", "junk");
     expect(sharedMcpOn(s)).toBe(false);
     expect(() => normalizeSetting("sharedMcp", "yes")).toThrow(SettingError);
+  });
+});
+
+describe("session admission settings (workstream W)", () => {
+  it("reserve defaults to automatic (null); estimate 1024 and no cap; a broken value falls back to the default", () => {
+    const s = new SettingsRepo(memDb());
+    expect(sessionAdmission(s)).toEqual({ reserveMb: null, sessionMb: 1024, maxRunning: 0 });
+    s.set("sessionMemoryReserveMb", "1500");
+    s.set("sessionMemoryEstimateMb", "768");
+    s.set("sessionMaxRunning", "12");
+    expect(sessionAdmission(s)).toEqual({ reserveMb: 1500, sessionMb: 768, maxRunning: 12 });
+    s.set("sessionMemoryReserveMb", "0");
+    expect(sessionAdmission(s).reserveMb).toBe(0);
+    for (const bad of ["abc", "-5", "1.5"]) {
+      s.set("sessionMemoryReserveMb", bad);
+      s.set("sessionMemoryEstimateMb", bad);
+      expect(sessionAdmission(s), bad).toEqual({ reserveMb: null, sessionMb: 1024, maxRunning: 12 });
+    }
+  });
+
+  it("an empty reserve means automatic; the estimate and the cap must be numbers", () => {
+    expect(normalizeSetting("sessionMemoryReserveMb", "  ")).toBe("");
+    expect(normalizeSetting("sessionMemoryReserveMb", " 0900 ")).toBe("900");
+    expect(() => normalizeSetting("sessionMemoryReserveMb", "auto")).toThrow(SettingError);
+    for (const k of ["sessionMemoryEstimateMb", "sessionMaxRunning"] as const) expect(() => normalizeSetting(k, ""), k).toThrow(SettingError);
+    expect(() => normalizeSetting("sessionMemoryEstimateMb", "32")).toThrow(SettingError);
   });
 });

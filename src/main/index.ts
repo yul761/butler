@@ -111,7 +111,10 @@ import { SessionCleanup, working } from "./sessions/session-cleanup";
 import { Hibernator } from "./sessions/hibernator";
 import { childrenWorking } from "./sessions/managed-by";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
+import { defaultReadDeps, memorySnapshotLine, readAvailableMemory } from "./sessions/available-memory";
+import { measuredOpenSessionsKb, MemoryAdmission } from "./sessions/memory-admission";
 import { PtyManager } from "./sessions/pty-manager";
+import { execText } from "./util/exec";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
 import { judgeStuck } from "./sessions/stuck-judge";
@@ -120,7 +123,7 @@ import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } f
 import { buildNowView } from "./now/now-view";
 import {
   checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, llmConfig, memoryOn,
-  memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, SettingError, trackerTools,
+  memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, sessionAdmission, SettingError, trackerTools,
 } from "./settings/settings-values";
 import { watcherGuideLines } from "./procs/watcher-policy";
 import { createProcServices, type ProcServices } from "./procs/proc-services";
@@ -1557,6 +1560,28 @@ async function bootstrap(): Promise<void> {
     prWatcher.statusOf(key).some((p) =>
       ci === "pending" ? (p.state === "open" || p.state === null) && p.ci === "pending" : p.state === "open" && p.ci !== "pending" && p.review !== "approved",
     );
+  // 开新 session 前按内存放行（工作流 W）：取代以前每 ticket、每 feature、每 epic 写死的上限。
+  // 只数开着终端的：休眠的 session 进程已经结束，不占内存，也不在 pty.openIds() 里。
+  // 每个 session 的预估：有工作流 M 的实测就用开着的 session 的实测平均，没有就用设置里的值。
+  // BUTLER_E2E_AVAILABLE_MB 只在没打包时生效（e2e 用）。
+  const memoryReadDeps = defaultReadDeps((file, args) => execText(file, args, { timeoutMs: 2_000 }), app.isPackaged);
+  // 启动时记一次读数（附录第 7 节）：看得出这台机器上 vm_stat 算出来的可用内存合不合理。
+  void memorySnapshotLine(memoryReadDeps).then((line) => logger(`memory at startup: ${line}`), (e: unknown) => logger("memory at startup: reading failed", e));
+  const admission = new MemoryAdmission({
+    read: () => readAvailableMemory(memoryReadDeps),
+    settings: () => sessionAdmission(settings),
+    measuredSessionsKb: () => measuredOpenSessionsKb(
+      pty.openIds().flatMap((termId) => {
+        const h = sessions.head(termId);
+        return h ? [{ head: h.id, openedAt: pty.openedAt(termId) }] : [];
+      }),
+      (head) => procServices.monitor.memoryOf(head),
+      Date.now(),
+    ),
+    running: () => pty.openIds().length,
+    now: () => Date.now(),
+    log: logger,
+  });
   hibernator = new Hibernator({
     enabled: () => hibernateOn(settings),
     minutes: (state) => (hibernateAfterMs > 0 ? hibernateAfterMs / 60_000 : hibernateMinutes(settings, state)),
@@ -1612,6 +1637,8 @@ async function bootstrap(): Promise<void> {
       : head.featureId !== null ? await sessionService.openFeature({ featureId: head.featureId, sessionId: head.id })
       : head.epicId !== null ? await sessionService.openEpic({ epicId: head.epicId, sessionId: head.id })
       : ({ ok: false, reason: "kind" } as const);
+    // 唤醒不问内存（要递的消息不能被拒），但记成刚开的，紧接着的 start_session 照样扣掉它（工作流 W）。
+    if (r.ok && !r.alreadyOpen) admission.note(`wake ${head.id}`);
     return r.ok ? { ok: true, termId: r.termId } : { ok: false, reason: r.reason };
   };
   windowShownHook = () => procServices.windowShown();
@@ -1849,6 +1876,8 @@ async function bootstrap(): Promise<void> {
       started: (key) => firstCommits.has(key) || sessions.listByTicket(key).length > 0,
     }, filter);
   };
+
+
   // 总控 session 开子 session 的请求（设计文档 2026-10-23 第二步）。
   const controlInbox = new ControlInbox({
     requestsDir: paths.controlRequests,
@@ -1898,6 +1927,7 @@ async function bootstrap(): Promise<void> {
       memoryEnabled: () => memoryOn(settings),
       ticketPattern: () => settings.get("ticketPattern"),
       sessionModel: (m) => routing.sessionModel(m),
+      admission,
       log: logger,
     }),
     log: logger,

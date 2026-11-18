@@ -1,7 +1,7 @@
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
-import { MAX_RUNNING_PER_TICKET } from "../../shared/control";
+import { MemoryAdmission, PENDING_MS } from "../sessions/memory-admission";
 import type { RefreshRefusal } from "../../shared/types";
 import { SessionsRepo } from "../db/sessions-repo";
 import { SettingsRepo } from "../db/settings-repo";
@@ -13,7 +13,20 @@ import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import { TicketService } from "../tickets/ticket-service";
 import { controlHandler, type ControlHandlerDeps } from "./control-handler";
 
-async function setup(o: { memoryEnabled?: () => boolean; sessionModel?: ControlHandlerDeps["sessionModel"] } = {}) {
+/** 内存准入（工作流 W）：可用内存可以改，设置是保留 2048 MB、每个 1024 MB。 */
+function fakeAdmission(o: { availableMb: number; now?: () => number }) {
+  const mem = { availableMb: o.availableMb };
+  const admission = new MemoryAdmission({
+    read: async () => ({ totalKb: 64 * 1024 * 1024, availableKb: mem.availableMb * 1024, source: "vm_stat", pressure: "normal" }),
+    settings: () => ({ reserveMb: 2048, sessionMb: 1024, maxRunning: 0 }),
+    running: () => 0,
+    now: o.now ?? (() => 0),
+    log: () => undefined,
+  });
+  return { admission, mem };
+}
+
+async function setup(o: { memoryEnabled?: () => boolean; sessionModel?: ControlHandlerDeps["sessionModel"]; admission?: ControlHandlerDeps["admission"] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -61,6 +74,7 @@ async function setup(o: { memoryEnabled?: () => boolean; sessionModel?: ControlH
     lastReply: () => null,
     memoryEnabled: o.memoryEnabled,
     sessionModel: o.sessionModel,
+    admission: o.admission,
     log: (msg) => void logs.push(msg),
   });
   const web = makeRepo();
@@ -186,11 +200,44 @@ describe("controlHandler", () => {
     expect(await handle({ ...base, op: "list_sessions" })).toMatchObject({ ok: false });
   });
 
-  it(`stops at ${MAX_RUNNING_PER_TICKET} running terminals per ticket`, async () => {
-    const { handle, tickets } = await setup();
+  it("has no per-ticket cap any more: memory decides, and says how many more fit (workstream W)", async () => {
+    let now = 0;
+    const { admission, mem } = fakeAdmission({ availableMb: 100_000, now: () => now });
+    const { handle, tickets, spawned } = await setup({ admission });
     const dir = tickets.get("FULL-1")!.repos[0].worktreePath!;
-    for (let i = 0; i < MAX_RUNNING_PER_TICKET; i++) expect((await handle({ ...base, op: "start_session", repo: dir, task: `t${i}` })).ok).toBe(true);
-    expect(await handle({ ...base, op: "start_session", repo: dir, task: "one more" })).toMatchObject({ ok: false, error: expect.stringContaining(`${MAX_RUNNING_PER_TICKET}`) });
+    // 以前每个 ticket 最多 6 个：现在 8 个照样开。
+    for (let i = 0; i < 8; i++) expect((await handle({ ...base, op: "start_session", repo: dir, task: `t${i}` })).ok, String(i)).toBe(true);
+    const started = await handle({ ...base, op: "start_session", repo: dir, task: "t8" });
+    // 100000 − 8 个还在启动的 × 1024 − 这一个 = 90784；(90784 − 2048) / 1024 = 86
+    expect(started).toMatchObject({ ok: true, capacity: { canStart: 86, pending: 9, estimate: "setting" } });
+    const listed = await handle({ ...base, op: "list_sessions" });
+    expect(listed).toMatchObject({ ok: true, capacity: { canStart: 86 } });
+    expect(Array.isArray(listed.ok && listed.value)).toBe(true);
+
+    // 内存不够了：不开终端，说清楚还剩多少、要多少。
+    now += PENDING_MS;
+    mem.availableMb = 2500;
+    const count = spawned.length;
+    const r = await handle({ ...base, op: "start_session", repo: dir, task: "one more" });
+    expect(r).toMatchObject({ ok: false, error: expect.stringContaining("内存不够") });
+    expect(!r.ok && r.error).toContain("2.4 GB");
+    expect(!r.ok && r.error).toContain("1.0 GB");
+    expect(!r.ok && r.error).toContain("2.0 GB");
+    expect(spawned.length).toBe(count);
+    expect(await handle({ ...base, op: "list_sessions" })).toMatchObject({ capacity: { canStart: 0, availableMb: 2500 } });
+  });
+
+  it("asks memory only after validation, and counts an opened session as pending", async () => {
+    const { admission } = fakeAdmission({ availableMb: 4000 });
+    const admit = vi.spyOn(admission, "admit");
+    const { handle, tickets } = await setup({ admission, sessionModel: (m) => (m === "nope" ? { ok: false, error: "no such model" } : { ok: true, model: m, tier: null, fallbackFrom: null } as never) });
+    const dir = tickets.get("FULL-1")!.repos[0].worktreePath!;
+    expect((await handle({ ...base, op: "start_session", repo: dir, task: "t", model: "nope" })).ok).toBe(false);
+    expect(admit).not.toHaveBeenCalled();
+    expect((await handle({ ...base, op: "start_session", repo: dir, task: "t" })).ok).toBe(true);
+    expect((await admission.capacity()).pending).toBe(1);
+    // 4000 − 1024 刚开的 − 1024 < 2048：第二个不放行。
+    expect((await handle({ ...base, op: "start_session", repo: dir, task: "t2" })).ok).toBe(false);
   });
 
   describe("live activity", () => {
@@ -272,22 +319,20 @@ describe("controlHandler", () => {
       expect(killed).toEqual(["s-2"]);
     });
 
-    it("hibernated sessions count toward the limit, show as hibernated, and end_session frees their place (WS-M B)", async () => {
+    it("hibernated sessions show as hibernated and end_session ends them (WS-M B)", async () => {
       const { handle, sessionService, sessions, spawned, killed, endedHibernated, web } = await setup();
       await sessionService.open({ ticketKey: "FULL-1", coordinator: true });
-      for (let i = 1; i < MAX_RUNNING_PER_TICKET; i++) await handle({ ...base, from: "s-1", op: "start_session", repo: web, task: `任务 ${i}` });
+      await handle({ ...base, from: "s-1", op: "start_session", repo: web, task: "任务 1" });
       // s-2 闲下来被休眠：先写 hibernated_at，再结束终端。
       sessions.setHibernated("s-2", 5, "idle", null);
       spawned[1].pty.kill();
       expect(sessionService.isRunning("s-2")).toBe(false);
-      expect(await handle({ ...base, from: "s-1", op: "start_session", repo: web, task: "再来一个" })).toMatchObject({ ok: false, error: expect.stringContaining("end_session") });
       const listed = await handle({ ...base, from: "s-1", op: "list_sessions" });
       if (!listed.ok) throw new Error("list failed");
       expect((listed.value as { id: string; running: boolean; hibernated: boolean }[]).find((s) => s.id === "s-2")).toMatchObject({ running: false, hibernated: true });
       expect(await handle({ ...base, from: "s-1", op: "end_session", session: "s-2", reason: "不要了" })).toEqual({ v: 1, ok: true, value: { ended: true } });
       expect(endedHibernated).toEqual(["s-2"]);
       expect(killed).toEqual([]);
-      expect(await handle({ ...base, from: "s-1", op: "start_session", repo: web, task: "再来一个" })).toMatchObject({ ok: true });
       // 不再休眠的关着的 session：照旧是已经结束了。
       expect(await handle({ ...base, from: "s-1", op: "end_session", session: "s-2", reason: "x" })).toMatchObject({ ok: false, error: expect.stringContaining("s-2") });
     });

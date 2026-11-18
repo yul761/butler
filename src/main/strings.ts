@@ -153,6 +153,9 @@ const ZH = {
   retention: "保留天数是 1–3650 的整数",
   refreshThreshold: "换新阈值是 0（关）或者一个整数 token 数，最多 7 位",
   idleCloseMinutes: "闲置关闭的时间是 0（关）或者一个不小于 10 的整数分钟数，最多 5 位",
+  sessionMemoryReserveMb: "保留的内存留空（自动）或者是 0 到 1048576 之间的整数 MB",
+  sessionMemoryEstimateMb: "每个 session 的预估占用是 64 到 1048576 之间的整数 MB",
+  sessionMaxRunning: "同时开着的终端上限是 0（不限）到 999 之间的整数",
   configBackupIntervalDays: "自动备份间隔是 0（关）到 365 之间的整数天数",
   configBackupKeep: "自动备份保留的个数是 1 到 999 之间的整数",
   configExportReminderDays: "导出提醒是 0（不提醒）到 365 之间的整数天数",
@@ -199,8 +202,13 @@ const ZH = {
   ctlRepoAmbiguous: (wanted: string, dirs: string) => `有多个仓库叫 ${wanted}，请用工作目录指定：${dirs}`,
   ctlNoSuchRepo: (wanted: string, names: string) => `这个 ticket 没有仓库 ${wanted}。现有的仓库：${names}`,
   ctlEmptyTask: "task 是空的",
-  ctlTicketLimit: (n: number) => `这个 ticket 已经有 ${n} 个终端在运行（休眠的也算），先等其中一些结束；list_sessions 里 hibernated 为 true 的不要了可以 end_session`,
-  ctlFeatureLimit: (n: number) => `这个 feature 已经有 ${n} 个终端在运行（休眠的也算），先等其中一些结束；list_sessions 里 hibernated 为 true 的不要了可以 end_session`,
+  // 按内存决定能不能再开（工作流 W）。
+  ctlNoMemory: (availableGb: string, needGb: string, reserveGb: string, measured: boolean, pending: number) =>
+    `内存不够再开一个 session：现在可用 ${availableGb}${pending > 0 ? `（已经扣掉刚开、还在启动的 ${pending} 个）` : ""}，` +
+    `再开一个预计要 ${needGb}${measured ? "（按开着的 session 实测的平均）" : ""}，开完还要留 ${reserveGb} 给系统。` +
+    "先等一些 session 做完，或者用 end_session 关掉已经做完的；也可以请用户关掉别的程序，或者在设置里调低保留的内存。",
+  ctlMemoryPressure: "系统的内存压力已经是「严重」，现在不再开新 session。先等一些 session 做完，或者用 end_session 关掉已经做完的；也可以请用户关掉别的程序。",
+  ctlMaxRunning: (n: number) => `Butler 已经开着 ${n} 个终端，到了设置里同时开着的上限。先等其中一些结束，或者请用户在设置里调高或关掉这个上限。`,
   ctlTaskNote: "任务会在新 session 的输入框就绪后提交；如果它先弹出信任文件夹之类的确认，要等用户在 Butler 里处理。",
   ctlCoordinator: "总控",
   ctlFeatureGone: "找不到这个 feature（可能已经归档）",
@@ -219,7 +227,6 @@ const ZH = {
   ctlNoSuchEpicFeature: (wanted: string, names: string) => `这个 epic 没有（未归档的）feature ${wanted}。现有的 feature：${names}`,
   ctlNoFeatures: "（没有 feature）",
   ctlStartNoBrief: (name: string) => `feature ${name} 没有 brief，总控不知道要做什么。用 instructions 写清楚要它做什么再试`,
-  ctlEpicFeatureLimit: (n: number, names: string) => `这个 epic 已经有 ${n} 个 feature 的总控在运行（${names}），先等其中一些做完，或者请用户关掉一个`,
   ctlFeatureStarted: "总控已经打开：规划和开工的说明会在它的输入框就绪后作为第一条消息发给它；如果它先弹出信任文件夹之类的确认，要等用户在 Butler 里处理。做完或卡住时它的汇报会送到你这里。",
   ctlStartAlreadyRunning: "这个 feature 的总控已经在运行，没有再开一个，也没有发任何东西。要给它补充说明，带上 instructions 再调一次。",
   ctlStartSent: "这个 feature 的总控已经在运行，没有再开一个；instructions 会在它的输入框就绪后发给它。",
@@ -546,6 +553,9 @@ const EN: MainStrings = {
   retention: "Days to keep must be a whole number from 1 to 3650",
   refreshThreshold: "The refresh threshold must be 0 (off) or a whole number of tokens, at most 7 digits",
   idleCloseMinutes: "The idle close time must be 0 (off) or a whole number of minutes from 10 up, at most 5 digits",
+  sessionMemoryReserveMb: "The memory to keep free must be empty (automatic) or a whole number of MB from 0 to 1048576",
+  sessionMemoryEstimateMb: "The estimate per session must be a whole number of MB from 64 to 1048576",
+  sessionMaxRunning: "The cap on open terminals must be a whole number from 0 (no cap) to 999",
   configBackupIntervalDays: "The automatic backup interval must be a whole number of days from 0 (off) to 365",
   configBackupKeep: "The number of automatic backups to keep must be a whole number from 1 to 999",
   configExportReminderDays: "The export reminder must be a whole number of days from 0 (off) to 365",
@@ -588,8 +598,13 @@ const EN: MainStrings = {
   ctlRepoAmbiguous: (wanted: string, dirs: string) => `Several repos are called ${wanted}; name one by its working folder: ${dirs}`,
   ctlNoSuchRepo: (wanted: string, names: string) => `This ticket has no repo ${wanted}. Its repos: ${names}`,
   ctlEmptyTask: "task is empty",
-  ctlTicketLimit: (n: number) => `This ticket already has ${n} terminals running (hibernated ones count). Wait for some of them to finish, or end_session the ones list_sessions shows as hibernated if they are no longer needed`,
-  ctlFeatureLimit: (n: number) => `This feature already has ${n} terminals running (hibernated ones count). Wait for some of them to finish, or end_session the ones list_sessions shows as hibernated if they are no longer needed`,
+  // Whether memory allows one more (workstream W).
+  ctlNoMemory: (availableGb: string, needGb: string, reserveGb: string, measured: boolean, pending: number) =>
+    `Not enough memory for another session: ${availableGb} is available now${pending > 0 ? ` (after the ${pending} just opened and still starting)` : ""}, ` +
+    `another one needs about ${needGb}${measured ? " (the measured average of the open sessions)" : ""}, and ${reserveGb} must stay free for the system. ` +
+    "Wait for some sessions to finish, or close finished ones with end_session; you can also ask the user to quit other apps or lower the memory to keep free in Settings.",
+  ctlMemoryPressure: "The system's memory pressure is critical, so no new session is opened now. Wait for some sessions to finish, or close finished ones with end_session; you can also ask the user to quit other apps.",
+  ctlMaxRunning: (n: number) => `Butler already has ${n} terminals open, the cap set in Settings. Wait for some of them to end, or ask the user to raise or turn off the cap in Settings.`,
   ctlTaskNote: "The task is submitted once the new session's prompt is ready. If it first shows a confirmation such as trusting the folder, the user has to answer it in Butler.",
   ctlCoordinator: "coordinator",
   ctlFeatureGone: "That feature was not found (it may be archived)",
@@ -607,7 +622,6 @@ const EN: MainStrings = {
   ctlNoSuchEpicFeature: (wanted: string, names: string) => `This epic has no (unarchived) feature ${wanted}. Its features: ${names}`,
   ctlNoFeatures: "(no features)",
   ctlStartNoBrief: (name: string) => `Feature ${name} has no brief, so its coordinator would not know what to do. Say what it should do in instructions and try again`,
-  ctlEpicFeatureLimit: (n: number, names: string) => `This epic already has ${n} feature coordinators running (${names}). Wait for some of them to finish, or ask the user to close one`,
   ctlFeatureStarted: "The coordinator is open: the plan and the go-ahead are sent to it as the first message once its input is ready; if it first shows a prompt such as trusting the folder, the user has to handle it in Butler. Its reports reach you when it finishes or gets blocked.",
   ctlStartAlreadyRunning: "This feature's coordinator is already running. No second one was opened and nothing was sent. To add to what it is doing, call again with instructions.",
   ctlStartSent: "This feature's coordinator is already running, so no second one was opened; the instructions are sent to it once its input is ready.",

@@ -393,6 +393,16 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!IDLE_CLOSE_RE.test(t) || (Number(t) !== 0 && Number(t) < MIN_IDLE_CLOSE_MINUTES)) throw new SettingError(M().idleCloseMinutes);
       return String(Number(t));
     }
+    case "sessionMemoryReserveMb":
+    case "sessionMemoryEstimateMb":
+    case "sessionMaxRunning": {
+      const t = value.trim();
+      // 保留线留空 = 自动（物理内存的 10%，限在 512–2048 MB，见 autoReserveMb）。
+      if (key === "sessionMemoryReserveMb" && t === "") return "";
+      const [min, max] = SESSION_LIMITS[key];
+      if (!/^\d{1,7}$/.test(t) || Number(t) < min || Number(t) > max) throw new SettingError(M()[key]);
+      return String(Number(t));
+    }
     case "configBackupIntervalDays":
     case "configExportReminderDays": {
       const t = value.trim();
@@ -474,6 +484,29 @@ export function idleCloseMinutes(s: Pick<SettingsRepo, "get">): number {
   const t = s.get("idleCloseMinutes").trim();
   const n = Number(t);
   return IDLE_CLOSE_RE.test(t) && (n === 0 || n >= MIN_IDLE_CLOSE_MINUTES) ? n : Number(SETTING_DEFAULTS.idleCloseMinutes);
+}
+
+/** 并行 session 的三项设置的取值范围（含两端）。 */
+const SESSION_LIMITS = {
+  sessionMemoryReserveMb: [0, 1_048_576],
+  sessionMemoryEstimateMb: [64, 1_048_576],
+  sessionMaxRunning: [0, 999],
+} as const;
+
+/**
+ * 开新 session 前的内存准入（工作流 W）：保留线、预估占用（MB）和硬上限（0 = 不限）。
+ * 保留线 null = 自动（默认，留空）。存的值不合法时用默认值。
+ */
+export function sessionAdmission(s: Pick<SettingsRepo, "get">): { reserveMb: number | null; sessionMb: number; maxRunning: number } {
+  const read = (k: keyof typeof SESSION_LIMITS): number | null => {
+    const t = s.get(k).trim();
+    const n = Number(t);
+    const [min, max] = SESSION_LIMITS[k];
+    if (/^\d{1,7}$/.test(t) && n >= min && n <= max) return n;
+    const d = SETTING_DEFAULTS[k];
+    return d === "" ? null : Number(d);
+  };
+  return { reserveMb: read("sessionMemoryReserveMb"), sessionMb: read("sessionMemoryEstimateMb") ?? 1024, maxRunning: read("sessionMaxRunning") ?? 0 };
 }
 
 /** 备份间隔和导出提醒最多一年。 */

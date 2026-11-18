@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
-import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_RUNNING_FEATURES_PER_EPIC, MESSAGE_LIMIT, REASON_LIMIT, START_INSTRUCTIONS_LIMIT } from "../src/shared/control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MESSAGE_LIMIT, REASON_LIMIT, START_INSTRUCTIONS_LIMIT } from "../src/shared/control";
 import {
   BUTLER_TOOLS, BUTLER_TOOLS_EN, EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, SessionsServer, serveStdio, TOOLS, TOOLS_EN,
   type SessionsServerOptions,
@@ -260,7 +260,7 @@ describe("butler-sessions for an epic session (design 2026-11-01)", () => {
       const start = list.find((t) => t.name === "start_feature")!;
       expect(start.inputSchema.required).toEqual(["feature"]);
       expect(Object.keys(start.inputSchema.properties)).toEqual(["feature", "instructions"]);
-      expect(start.description).toContain(String(MAX_RUNNING_FEATURES_PER_EPIC));
+      expect(start.description).toMatch(/内存|memory/);
       expect(start.description).toContain("list_features");
       const create = list.find((t) => t.name === "create_feature")!;
       expect(create.inputSchema.properties).toHaveProperty("start", expect.objectContaining({ type: "boolean" }));
@@ -387,6 +387,23 @@ describe("end_session (task 11)", () => {
       expect(enEnd).toContain("last_reply");
       expect(/[\u4e00-\u9fff]/.test(enEnd)).toBe(false);
     }
+  });
+
+  it("adds a line saying how many more sessions fit when the result carries capacity (workstream W), in both languages", async () => {
+    const capacity = { canStart: 3, availableMb: 9216, sessionMb: 1024, estimate: "measured" as const, reserveMb: 2048, pending: 1, running: 4, maxRunning: null, pressure: "normal" as const, source: "vm_stat" as const };
+    for (const [lang, want] of [["zh", "现在还能再开 3 个 session"], ["en", "You can start 3 more sessions now"]] as const) {
+      const { server, answer } = setup(2000, { ticketKey: "P-1" }, lang);
+      const call = callTool(server, "list_sessions");
+      await answer({ v: 1, ok: true, value: [], capacity });
+      const r = (await call) as { result: { content: { text: string }[] } };
+      expect(r.result.content).toHaveLength(2);
+      expect(r.result.content[1].text).toContain(want);
+      expect(r.result.content[1].text).toContain("9.0 GB");
+    }
+    const { server, answer } = setup();
+    const plain = callTool(server, "list_sessions");
+    await answer({ v: 1, ok: true, value: [] });
+    expect(((await plain) as { result: { content: unknown[] } }).result.content).toHaveLength(1);
   });
 
   it("gives an epic session list_sessions and session_activity", async () => {
