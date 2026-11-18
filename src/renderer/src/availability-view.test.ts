@@ -32,6 +32,7 @@ describe("noticeText", () => {
     expect(noticeText({ kind: "model_unavailable", hit: { ...hit, kind: "model_unavailable", resetsAt: null }, retryAt: null }, S, now)).toEqual({ text: "复盘用的模型不可用：模型不可用，Butler 会稍后重试", actions: ["retry", "health"] });
     expect(noticeText({ kind: "lessons_paused" }, S, now)).toEqual({ text: "复盘队列已手动暂停", actions: ["resume"] });
     expect(noticeText({ kind: "lessons_failing", count: 4 }, S, now)).toEqual({ text: "复盘连续 4 次分析失败", actions: ["lessons"] });
+    expect(noticeText({ kind: "shared_mcp_failed", error: "exited (1)" }, S, now).text).toMatch(/共享 MCP 起不来（exited \(1\)）/);
     const target = { page: "ticket" as const, key: "A-1", sessionId: "s" };
     expect(noticeText({ kind: "session_limited", target, title: "通知中心", limit: hit }, S, now)).toEqual({ text: "通知中心：用量已达上限，14:30 恢复", actions: ["open"] });
     expect(noticeText({ kind: "session_limited", target, title: null, limit: hit }, S, now).text).toBe("用量已达上限，14:30 恢复");

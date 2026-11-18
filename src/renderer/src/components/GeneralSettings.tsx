@@ -233,6 +233,8 @@ export function GeneralSettings({ report, onHealth, onRerunWizard }: { report: H
       {flagField("hibernateEndWatchers", S.hib.settings.endWatchers, S.hib.settings.endWatchersHelp)}
       {flagField("memoryPressureEnabled", S.hib.settings.pressure, S.hib.settings.pressureHelp)}
       {numberField("memoryPressureFreePercent", S.hib.settings.pressureFree, undefined, { min: 1, max: 50 })}
+      {/* 共享 MCP（WS-M H）。 */}
+      {flagField("sharedMcp", S.perf.sharedMcp, S.perf.sharedMcpHelp)}
       <h3>{S.perf.tipsTitle}</h3>
       <ul className="perf-tips">
         {perfTips().map((t) => <li key={t}>{t}</li>)}

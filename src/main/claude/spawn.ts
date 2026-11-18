@@ -96,7 +96,24 @@ export function sessionEnv(
   // 用户自己的环境里有就不动。
   out.CLAUDE_CODE_SUBAGENT_MODEL ??= SUBAGENT_MODEL_DEFAULT;
   out.CLAUDE_CODE_AUTO_COMPACT_WINDOW ??= AUTO_COMPACT_WINDOW_DEFAULT;
+  bypassProxyForLoopback(out);
   return out;
+}
+
+/**
+ * 设了代理（HTTP_PROXY 之类）时把 127.0.0.1 加进 NO_PROXY：共享 MCP（WS-M H）的 URL 是本机回环，不能被送去代理（连不上，token 还会给代理看到）。
+ * 没设代理不动。已有的 NO_PROXY / no_proxy 不论大小写都在原来的键上追加（Windows 上环境变量不分大小写，不能有两个）。
+ */
+export function bypassProxyForLoopback(env: Record<string, string>): void {
+  const keys = Object.keys(env);
+  const has = (name: string) => keys.some((k) => k.toLowerCase() === name && env[k].trim() !== "");
+  if (!["http_proxy", "https_proxy", "all_proxy"].some(has)) return;
+  const noProxy = keys.filter((k) => k.toLowerCase() === "no_proxy");
+  if (noProxy.length === 0) noProxy.push(...(process.platform === "win32" ? ["NO_PROXY"] : ["NO_PROXY", "no_proxy"]));
+  for (const k of noProxy) {
+    const list = (env[k] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    if (!list.includes("127.0.0.1") && !list.includes("*")) env[k] = [...list, "127.0.0.1"].join(",");
+  }
 }
 
 /** headless claude（handoff、刷新、MCP 探测）：不挂 ticket；BUTLER_SESSION 带 headless: 前缀，hook 上报会被整体忽略。 */

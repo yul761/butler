@@ -5,7 +5,7 @@ import { memDb } from "../test-utils";
 import {
   isLoopbackHost, llmConfig, normalizeBaseUrl, checkBranchTemplateFits, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTerms, normalizeTicketPattern, parsePriceTable, parseTime, parseToolList,
   parseWorkingDays, priceFor, butlerPatrolTime, idleCloseMinutes, refreshThreshold, scheduleConfig, SettingError, TERMS_LIMIT, trackerTools,
-  hibernateEndWatchersOn, hibernateMinutes, hibernateOn, memoryPressureFreePercent, memoryPressureOn,
+  hibernateEndWatchersOn, hibernateMinutes, hibernateOn, memoryPressureFreePercent, memoryPressureOn, sharedMcpOn,
 } from "./settings-values";
 
 describe("settings values", () => {
@@ -309,5 +309,15 @@ describe("hibernation settings (WS-M B, C)", () => {
     expect(normalizeSetting("memoryPressureFreePercent", "15")).toBe("15");
     for (const bad of ["", "0", "51", "abc", "5.5"]) expect(() => normalizeSetting("memoryPressureFreePercent", bad), bad).toThrow(SettingError);
     expect(normalizeSetting("hibernateEnabled", "1")).toBe("1");
+  });
+
+  it("reads the shared MCP switch, off by default (WS-M H)", () => {
+    const s = new SettingsRepo(memDb());
+    expect(sharedMcpOn(s)).toBe(false);
+    s.set("sharedMcp", normalizeSetting("sharedMcp", "1"));
+    expect(sharedMcpOn(s)).toBe(true);
+    s.set("sharedMcp", "junk");
+    expect(sharedMcpOn(s)).toBe(false);
+    expect(() => normalizeSetting("sharedMcp", "yes")).toThrow(SettingError);
   });
 });

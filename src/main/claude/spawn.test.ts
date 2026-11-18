@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { inboxDir } from "../../../hook/butler-hook";
-import { AUTO_COMPACT_WINDOW_DEFAULT, SUBAGENT_MODEL_DEFAULT, claudeArgs, cmdShimSafe, headlessEnv, sessionEnv, storedModel } from "./spawn";
+import { AUTO_COMPACT_WINDOW_DEFAULT, SUBAGENT_MODEL_DEFAULT, bypassProxyForLoopback, claudeArgs, cmdShimSafe, headlessEnv, sessionEnv, storedModel } from "./spawn";
 
 describe("claude spawn helpers", () => {
   it("adds the guide file after the other flags", () => {
@@ -130,5 +130,23 @@ describe("BUTLER_HOME agreement between spawn env and the hook", () => {
       expect(inboxDir(env)).toBe(join(homedir(), "x", "inbox"));
       expect(inboxDir({ BUTLER_HOME: home })).toBe(inboxDir(env));
     }
+  });
+});
+
+describe("loopback stays off the proxy (WS-M H)", () => {
+  it("adds 127.0.0.1 to NO_PROXY only when a proxy is set, keeping what is there", () => {
+    const none: Record<string, string> = { PATH: "/bin" };
+    bypassProxyForLoopback(none);
+    expect(none).toEqual({ PATH: "/bin" });
+    const kept: Record<string, string> = { HTTPS_PROXY: "http://proxy:8080", no_proxy: "corp.example, localhost" };
+    bypassProxyForLoopback(kept);
+    expect(kept.no_proxy).toBe("corp.example,localhost,127.0.0.1");
+    expect(Object.keys(kept).filter((k) => k.toLowerCase() === "no_proxy")).toEqual(["no_proxy"]);
+    const fresh: Record<string, string> = { http_proxy: "http://p" };
+    bypassProxyForLoopback(fresh);
+    expect(fresh.NO_PROXY).toBe("127.0.0.1");
+    const all: Record<string, string> = { HTTP_PROXY: "http://p", NO_PROXY: "*" };
+    bypassProxyForLoopback(all);
+    expect(all.NO_PROXY).toBe("*");
   });
 });

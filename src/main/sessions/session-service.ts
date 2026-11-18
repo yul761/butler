@@ -70,16 +70,17 @@ export interface SessionServiceDeps {
   /**
    * 写好这个 ticket 的记忆 --mcp-config 文件并返回路径；记忆关闭或 bundle 不存在时返回 null（设计文档 8.4）。
    * featureId：ticket 属于的 feature，要多挂 feature 的记忆（设计文档 2026-10-26）。epicId：这个 feature 属于的 epic，要多挂 epic 的记忆。
+   * termId：要启动的终端。共享 MCP（WS-M H）开着时配置按终端写，butler-sessions 的调用者由路由带着。
    */
-  mcpConfig?: (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }) => string | null;
+  mcpConfig?: (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }, termId: string) => string | null;
   /** feature 总控的 --mcp-config 文件（feature 记忆、全局记忆、butler-sessions；feature 属于 epic 时加 epic 记忆）。 */
-  featureMcpConfig?: (featureId: number, epicId: number | null) => string | null;
+  featureMcpConfig?: (featureId: number, epicId: number | null, termId: string) => string | null;
   /** epic session 的 --mcp-config 文件。 */
-  epicMcpConfig?: (epicId: number) => string | null;
+  epicMcpConfig?: (epicId: number, termId: string) => string | null;
   /** Butler 总控的工作目录（BTL-190 第 5 点）；不给就没有 Butler 总控。 */
   butlerWorkspace?: string;
   /** Butler 总控的 --mcp-config 文件。 */
-  butlerMcpConfig?: () => string | null;
+  butlerMcpConfig?: (termId: string) => string | null;
   /** 复盘分析 session 的工作目录（~/.butler/workspaces/_lessons）；不给就开不了复盘分析 session。 */
   lessonsWorkspace?: string;
   /**
@@ -148,7 +149,8 @@ interface WorkspaceTarget {
   repoPaths: string[];
   /** 要 claude 看到的目录；工作区里面的、不存在的不加 --add-dir。 */
   dirs: string[];
-  mcpConfig: () => string | null;
+  /** 这个终端的 --mcp-config 文件。 */
+  mcpConfig: (termId: string) => string | null;
   guideKind: GuideKind;
   /** 送规矩用的仓库路径（只有修复 session 非空）。 */
   guideRepoPaths: string[];
@@ -241,19 +243,18 @@ export class SessionService {
     // 启动方式只解析一次：记忆挂载的检查和真正启动用同一个结果（P5-PF10）。
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
     const epicId = ticket.featureId === null ? null : (this.d.features?.get(ticket.featureId)?.epicId ?? null);
-    const mcpConfigPath = this.configPath(ticket.key, () => this.d.mcpConfig?.(ticket.key, { coordinator, featureId: ticket.featureId, epicId }) ?? null, claudePath, launch.viaCmd);
+    // 终端 id 先定下来：共享 MCP 的配置按终端写（WS-M H）。恢复时就是 head 的 id。
+    const termId = head ? head.id : this.d.newId();
+    const mcpConfigPath = this.configPath(ticket.key, () => this.d.mcpConfig?.(ticket.key, { coordinator, featureId: ticket.featureId, epicId }, termId) ?? null, claudePath, launch.viaCmd);
     const settingsPath = this.configPath(ticket.key, () => this.d.mcpSettings?.([cwd, ...ticket.repos.map((r) => r.repoPath)]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
     const guidePath = this.configPath(ticket.key, () => this.d.guidePath?.(coordinator ? "coordinator" : "ticket", coordinator ? [] : ticket.repos.map((r) => r.repoPath)) ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs = coordinator ? this.addDirsFor(ticket, claudePath, launch.viaCmd) : [];
-    let termId: string;
     let args: string[];
     let insertedRow = false;
     if (head) {
       // claude --resume 只能在 session 当初的项目目录里找到它；没发过消息的 session 没有记录，用同一个 id 重新开
-      termId = head.id;
       args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath, model: storedModel(head, this.d.knownModel) });
     } else {
-      termId = this.d.newId();
       args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath, model: extra.model });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
@@ -498,7 +499,7 @@ export class SessionService {
       }
       return this.startInWorkspace({
         label: "butler", workspace, repoPaths: [], dirs: [],
-        mcpConfig: () => this.d.butlerMcpConfig?.() ?? null,
+        mcpConfig: (termId) => this.d.butlerMcpConfig?.(termId) ?? null,
         guideKind: "butler",
         guideRepoPaths: [],
         row: { butler: true },
@@ -674,7 +675,7 @@ export class SessionService {
       repoPaths: feature.repos.map((r) => r.repoPath),
       // feature 下未归档 ticket 的仓库工作目录。
       dirs: this.d.tickets.listByFeature(feature.id).flatMap((t) => t.repos.map((r) => this.d.ticketService.workDir(r))),
-      mcpConfig: () => this.d.featureMcpConfig?.(feature.id, feature.epicId) ?? null,
+      mcpConfig: (termId) => this.d.featureMcpConfig?.(feature.id, feature.epicId, termId) ?? null,
       guideKind: fixes ? "ticket" : "coordinator",
       guideRepoPaths,
       row: { coordinator: !fixes, featureId: feature.id, fixesSession: fixes ?? null, model: fixes ? "sonnet" : null },
@@ -696,7 +697,7 @@ export class SessionService {
       workspace: epic.workspaceDir,
       repoPaths,
       dirs: repoPaths,
-      mcpConfig: () => this.d.epicMcpConfig?.(epic.id) ?? null,
+      mcpConfig: (termId) => this.d.epicMcpConfig?.(epic.id, termId) ?? null,
       guideKind: "epic",
       guideRepoPaths: [],
       row: { epicId: epic.id },
@@ -708,18 +709,16 @@ export class SessionService {
     const { path: claudePath, pathValue } = claude;
     const cwd = head?.cwd || target.workspace;
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
-    const mcpConfigPath = this.configPath(target.label, target.mcpConfig, claudePath, launch.viaCmd);
+    const termId = head ? head.id : this.d.newId();
+    const mcpConfigPath = this.configPath(target.label, () => target.mcpConfig(termId), claudePath, launch.viaCmd);
     const settingsPath = this.configPath(target.label, () => this.d.mcpSettings?.([cwd, ...target.repoPaths]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
     const guidePath = this.configPath(target.label, () => this.d.guidePath?.(target.guideKind, target.guideRepoPaths) ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs = this.workspaceAddDirs(target, claudePath, launch.viaCmd);
-    let termId: string;
     let args: string[];
     let insertedRow = false;
     if (head) {
-      termId = head.id;
       args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath, model: storedModel(head, this.d.knownModel) });
     } else {
-      termId = this.d.newId();
       args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath, model: target.row.model });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({

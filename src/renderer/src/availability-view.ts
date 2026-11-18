@@ -42,6 +42,7 @@ export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: str
       if (n.fallbacks) parts.push(S.rt.nowFallbacks(n.fallbacks));
       return { text: parts.join(" · "), actions: ["routing"] };
     }
+    case "shared_mcp_failed": return { text: S.noticeSharedMcpFailed(n.error), actions: [] };
     case "session_limited": {
       const line = limitLine(n.limit, S, now);
       return { text: n.title === null ? line : S.noticeSessionLimited(n.title, line), actions: ["open"] };

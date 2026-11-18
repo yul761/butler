@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
-import { startFakeProvider } from "../src/main/gateway/testing";
+import { postLoopback, startFakeProvider } from "../src/main/gateway/testing";
 import { memoryServers } from "../src/main/memory/mcp-config";
 import { withScope } from "../src/main/memory/statecore";
 import { tempDir } from "../src/main/test-utils";
@@ -163,3 +163,46 @@ describe("bundled StateCore MCP (design 8.4)", () => {
     expect(texts).toEqual(expect.arrayContaining(["决定：用 pnpm", "约束：不能改公共 API"]));
   }, 60_000);
 });
+
+describe("bundled shared MCP hub (WS-M H)", () => {
+  it("prints its port, serves a memory route over loopback HTTP, and exits when its stdin closes", async () => {
+    const hub = join(bundle, "..", "mcp-hub.cjs");
+    const dataDir = tempDir();
+    const child = spawn(process.execPath, [hub, "--data", dataDir, "--port", "0"], { env: { ...process.env, ...CLOSED_PORT_URLS, LOG_LEVEL: "warn" }, stdio: ["pipe", "pipe", "pipe"] });
+    const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
+    try {
+      const port = await new Promise<number>((resolve, reject) => {
+        let buf = "";
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (c: string) => {
+          buf += c;
+          const nl = buf.indexOf("\n");
+          if (nl >= 0) resolve((JSON.parse(buf.slice(0, nl)) as { port: number }).port);
+        });
+        child.on("exit", (code) => reject(new Error(`hub exited (${code})`)));
+      });
+      const token = "a".repeat(43);
+      child.stdin.write(`${JSON.stringify({ op: "add", token, route: { server: "memory", scope: "ticket:H-1" } })}\n`);
+      const post = async (path: string, body: object) => {
+        const r = await postLoopback(port, path, body);
+        return { status: r.status, json: r.json as Reply | null };
+      };
+      // 路由经 stdin 到，稍等它生效。
+      let init = await post(`/mcp/${token}`, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } });
+      for (let i = 0; i < 50 && init.status === 404; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        init = await post(`/mcp/${token}`, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } });
+      }
+      expect(init.status).toBe(200);
+      const remembered = await post(`/mcp/${token}`, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "remember", arguments: { text: "hub 记的：用 pnpm" } } });
+      expect(remembered.json?.result?.content?.[0]?.text).toContain('"ok": true');
+      expect((await post(`/mcp/${"b".repeat(43)}`, { jsonrpc: "2.0", id: 3, method: "ping" })).status).toBe(404);
+    } finally {
+      child.stdin.end();
+    }
+    expect(await exited).toBe(0);
+    const texts = await withScope({ dataDir, scope: "ticket:H-1" }, async (sc) => (await sc.facts()).map((i) => i.text));
+    expect(texts).toEqual(["hub 记的：用 pnpm"]);
+  }, 60_000);
+});
+

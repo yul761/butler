@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { epicScope, featureScope, ticketScope, WORKSPACE_SCOPE } from "../../shared/memory";
 import { currentLang } from "../i18n";
 import { renameWithRetrySync } from "../util/fs-retry";
 import { ticketFileStem } from "../util/ticket-file";
+import type { HubRouteSpec } from "./mcp-hub";
 
 /** 挂给 claude 的 server 名：不和用户自己装的 statecore 重名（设计文档 8.4）。 */
 export const MEMORY_SERVER = "butler-memory";
@@ -35,12 +36,20 @@ export interface MemoryMcpLauncher {
   script: string;
 }
 
-export interface McpServerSpec {
+export interface StdioServerSpec {
   type: "stdio";
   command: string;
   args: string[];
   env: Record<string, string>;
 }
+
+/** 共享 MCP（WS-M H）：hub 上这个终端、这个 server 的路由。 */
+export interface HttpServerSpec {
+  type: "http";
+  url: string;
+}
+
+export type McpServerSpec = StdioServerSpec | HttpServerSpec;
 
 /**
  * ticket 的记忆（给了 ticketKey）、全局记忆、feature 的记忆（给了 featureId）和 epic 的记忆（给了 epicId）。
@@ -52,8 +61,8 @@ export function memoryServers(o: {
   ticketKey?: string;
   featureId?: number | null;
   epicId?: number | null;
-}): Record<string, McpServerSpec> {
-  const server = (scope: string): McpServerSpec => ({
+}): Record<string, StdioServerSpec> {
+  const server = (scope: string): StdioServerSpec => ({
     type: "stdio",
     command: o.launcher.command,
     args: [o.launcher.script, "--data", o.statecoreDir],
@@ -78,7 +87,7 @@ export function sessionsServer(o: {
   scope: { ticketKey: string; member?: boolean } | { featureId: number; epic?: boolean } | { epicId: number } | { butler: true };
   requestsDir: string;
   resultsDir: string;
-}): Record<string, McpServerSpec> {
+}): Record<string, StdioServerSpec> {
   const scope = o.scope;
   const target: Record<string, string> =
     "butler" in scope ? { BUTLER_SCOPE: "butler" }
@@ -190,4 +199,66 @@ export function removeTicketMcpConfigs(mcpDir: string, ticketKey: string): void 
       // 本来就没有。
     }
   }
+}
+
+/**
+ * 共享 MCP（WS-M H）：stdio 的 server 换成 hub 上的路由。记忆按 STATECORE_SCOPE，butler-sessions 带着它的变量和调用者（终端 id），
+ * 和 stdio 时 claude 传下去的 BUTLER_SESSION 一样。认不出的 server 返回 null（这个终端就用 stdio）。
+ */
+export function hubRoutes(servers: Record<string, StdioServerSpec>, termId: string): Record<string, HubRouteSpec> | null {
+  const out: Record<string, HubRouteSpec> = {};
+  for (const [name, spec] of Object.entries(servers)) {
+    if (name === SESSIONS_SERVER) {
+      const env = Object.fromEntries(Object.entries(spec.env).filter(([k]) => k.startsWith("BUTLER_")));
+      out[name] = { server: "sessions", env, from: termId };
+    } else if (spec.env.STATECORE_SCOPE) {
+      out[name] = { server: "memory", scope: spec.env.STATECORE_SCOPE };
+    } else {
+      return null;
+    }
+  }
+  return out;
+}
+
+/** 共享 MCP 时每个终端一份配置：mcp/terms/<终端 id>.json（里面的 URL 带着这个终端的 token）。 */
+export const TERMINAL_MCP_SUBDIR = "terms";
+
+export function terminalMcpFile(mcpDir: string, termId: string): string {
+  // 终端 id 是 Butler 生成的 UUID；别的字符一律换掉，路径永远在 mcp/terms 里面。
+  return join(mcpDir, TERMINAL_MCP_SUBDIR, `${termId.replace(/[^A-Za-z0-9-]/g, "_")}.json`);
+}
+
+export function writeTerminalMcpConfig(o: { mcpDir: string; termId: string; servers: Record<string, McpServerSpec> }): string {
+  return writeConfig(terminalMcpFile(o.mcpDir, o.termId), o.servers);
+}
+
+/** 终端退出：它的 token 已经撤掉，配置文件也删掉。 */
+export function removeTerminalMcpConfig(mcpDir: string, termId: string): void {
+  try {
+    unlinkSync(terminalMcpFile(mcpDir, termId));
+  } catch {
+    // 本来就没有（这个终端用的是 stdio）。
+  }
+}
+
+/** 启动时：上次留下的终端配置都没用了（hub 是新的，token 全失效）。返回删掉的个数。 */
+export function pruneTerminalMcpConfigs(mcpDir: string): number {
+  const dir = join(mcpDir, TERMINAL_MCP_SUBDIR);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  let n = 0;
+  for (const name of names) {
+    if (!name.endsWith(".json") && !name.endsWith(".tmp")) continue;
+    try {
+      unlinkSync(join(dir, name));
+      n++;
+    } catch {
+      // 删不掉的留到下次。
+    }
+  }
+  return n;
 }

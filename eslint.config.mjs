@@ -34,9 +34,10 @@ const TEST_FILES = ["**/*.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"];
 /**
  * StateCore（statecore-mcp）自带联网的 http 后端，还会按环境变量（FEATURE_LLM / MODEL_*）直接调用模型。
  * 只有这几处能用它：主进程的适配层 src/main/memory/statecore.ts（环境变量由 statecoreEnv() 生成，模型只能是 PrivacyGateway 给的）、
- * 它所在目录的测试，以及给 claude 挂载的 MCP 入口 memory-mcp/entry.ts（先清掉环境变量里的 key）。见计划 4 Ruling R1。
+ * 它所在目录的测试，以及给 claude 挂载的 MCP 入口 memory-mcp/entry.ts 和共享 MCP 的入口 memory-mcp/hub-entry.ts（都先清掉环境变量里的 key）。
+ * 见计划 4 Ruling R1；hub 见 WS-M 设计 §8，它的契约测试要和真的 statecore-mcp 比。
  */
-const STATECORE_MESSAGE = "StateCore 只能经 src/main/memory/statecore.ts 或 memory-mcp/entry.ts 使用（计划 4 R1：模型 key 不能绕过 PrivacyGateway）。";
+const STATECORE_MESSAGE = "StateCore 只能经 src/main/memory/statecore.ts、memory-mcp/entry.ts 或 memory-mcp/hub-entry.ts 使用（计划 4 R1：模型 key 不能绕过 PrivacyGateway）。";
 const STATECORE_MODULE = "/^statecore-mcp(\\/.*)?$/";
 /** 动态 import / require / import = 的 statecore-mcp：报 StateCore 的提示，而不是出网的提示。 */
 const STATECORE_SYNTAX = [
@@ -54,8 +55,13 @@ const GATEWAY_LITERAL_SYNTAX = [
   { selector: 'CallExpression[callee.name="require"][arguments.0.type!="Literal"]', message: GATEWAY_LITERAL_MESSAGE },
   { selector: 'CallExpression[callee.name="require"][arguments.length!=1]', message: GATEWAY_LITERAL_MESSAGE },
 ];
-const STATECORE_ENTRY_FILES = ["src/main/memory/statecore.ts", "memory-mcp/entry.ts"];
-const STATECORE_TEST_FILES = ["src/main/memory/**/*.test.ts"];
+const STATECORE_ENTRY_FILES = ["src/main/memory/statecore.ts", "memory-mcp/entry.ts", "memory-mcp/hub-entry.ts"];
+const STATECORE_TEST_FILES = ["src/main/memory/**/*.test.ts", "memory-mcp/hub-contract.test.ts"];
+/**
+ * 假 claude 像 Claude Code 一样经 HTTP 调共享 MCP（WS-M H）：只有它能用 node:http，而且只连 127.0.0.1 上的 hub。
+ * 它只在 E2E 里跑，不进安装包。
+ */
+const FAKE_CLAUDE_FILES = ["e2e/fake-claude/fake-claude.cjs"];
 
 /**
  * gateway 的内部模块：直接发请求的 provider 和测试用假服务器 testing。
@@ -151,6 +157,20 @@ function withoutStatecore(rules) {
   };
 }
 
+/** 去掉 http / node:http 的 import 限制（只给 FAKE_CLAUDE_FILES 用）。其余网络模块、fetch 照旧被拦。 */
+function withoutHttp(rules) {
+  const [level, options] = rules["no-restricted-imports"];
+  return {
+    ...rules,
+    "no-restricted-imports": [level, { ...options, paths: options.paths.filter((p) => p.name !== "http" && p.name !== "node:http") }],
+    "no-restricted-syntax": [
+      ...rules["no-restricted-syntax"].slice(0, 1),
+      ...rules["no-restricted-syntax"].slice(1).filter((r) => !(typeof r === "object" && r.selector === `CallExpression[callee.name="require"][arguments.0.value=${DYNAMIC_MODULES}]`)),
+      { selector: `CallExpression[callee.name="require"][arguments.0.value=${DYNAMIC_MODULES}]:not([arguments.0.value=/^(node:)?http$/])`, message: EGRESS_MESSAGE },
+    ],
+  };
+}
+
 export default tseslint.config(
   { ignores: ["out/**", "build/**", "dist/**", "node_modules/**"] },
   js.configs.recommended,
@@ -194,4 +214,5 @@ export default tseslint.config(
   // StateCore 的两个入口和适配层的测试（计划 4 R1）。
   { files: STATECORE_ENTRY_FILES, rules: withoutStatecore(outsideGatewayRules) },
   { files: STATECORE_TEST_FILES, rules: withoutStatecore(egressRules) },
+  { files: FAKE_CLAUDE_FILES, rules: withoutHttp(outsideGatewayRules) },
 );

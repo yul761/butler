@@ -76,7 +76,8 @@ import { hookCommand } from "./hooks/installer";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { hubRoutes, memoryServers, pruneTerminalMcpConfigs, removeEpicMcpConfig, removeFeatureMcpConfig, removeTerminalMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, type StdioServerSpec, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTerminalMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { McpHub, spawnHub } from "./memory/mcp-hub";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
@@ -112,7 +113,7 @@ import { markTurnEndedWithoutStop } from "./sessions/turn-end";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
 import {
-  checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, llmConfig, memoryOn,
+  checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, llmConfig, memoryOn,
   memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, SettingError, trackerTools,
 } from "./settings/settings-values";
 import { watcherGuideLines } from "./procs/watcher-policy";
@@ -214,6 +215,11 @@ function bundledHookPath(): string {
 /** 打包好的 StateCore MCP（任务 7）：开发时在 build/ 下（pnpm dev / build 会先生成），安装包里在 resources 下。 */
 function bundledMemoryMcpPath(): string {
   return app.isPackaged ? join(process.resourcesPath, "memory-mcp", "statecore-mcp.cjs") : join(devBuildDir(), "memory-mcp", "statecore-mcp.cjs");
+}
+
+/** 共享 MCP 的 hub（WS-M H，和记忆 MCP 一起打包）。 */
+function bundledHubPath(): string {
+  return app.isPackaged ? join(process.resourcesPath, "memory-mcp", "mcp-hub.cjs") : join(devBuildDir(), "memory-mcp", "mcp-hub.cjs");
 }
 
 /** 总控 session 的 butler-sessions MCP（和记忆 MCP 一起打包，放在同一个目录）。 */
@@ -430,6 +436,9 @@ async function bootstrap(): Promise<void> {
       safeSend(IPC.ptyExit, id, code);
       if (closing) return;
       procs?.terminalExited(id);
+      // 共享 MCP（WS-M H）：撤掉这个终端的路由，删掉它的配置文件。
+      mcpHub.removeTerminal(id);
+      removeTerminalMcpConfig(paths.mcp, id);
       // 合并后因为这个终端还在跑而没清理的 worktree：终端一退出就再试（设计文档 2026-10-26）。
       const exitedHead = sessions.head(id);
       const exitedTicket = exitedHead?.ticketKey ?? null;
@@ -444,6 +453,13 @@ async function bootstrap(): Promise<void> {
       notify();
     },
   }, Date.now, logger);
+  // 共享 MCP（WS-M H）：上次留下的终端配置都失效了（token 是上一个 hub 的）。
+  try {
+    pruneTerminalMcpConfigs(paths.mcp);
+  } catch (e) {
+    logger("could not clear old shared MCP configs", e);
+  }
+  const mcpHub = new McpHub({ spawn: spawnHub(bundledHubPath(), (l) => logger(l)), dataDir: paths.statecore, log: logger, changed: () => notify() });
   const memoryMcpScript = bundledMemoryMcpPath();
   let memoryMcpMissingLogged = false;
   let sessionsMcpMissingLogged = false;
@@ -469,31 +485,55 @@ async function bootstrap(): Promise<void> {
       logger(`sessions MCP bundle missing at ${script}; sessions have no butler-sessions tools (run pnpm build:memory-mcp)`);
       sessionsMcpMissingLogged = true;
     }
-    return servers;
+    return servers as Record<string, StdioServerSpec>;
+  };
+  /**
+   * 共享 MCP 开着、hub 在跑：这个终端的 server 换成 hub 上的路由，写进 mcp/terms/<终端>.json；否则 null，调用方写今天的 stdio 配置。
+   * hub 还在启动、挂了、bundle 不在的时候都是 stdio，session 照样有 Butler 的 MCP。
+   */
+  let hubMissingLogged = false;
+  const sharedMcpConfig = (termId: string, servers: Record<string, StdioServerSpec>): string | null => {
+    if (!sharedMcpOn(settings)) return null;
+    if (!existsSync(bundledHubPath())) {
+      if (!hubMissingLogged) logger(`shared MCP hub bundle missing at ${bundledHubPath()}; sessions use their own MCP processes (run pnpm build:memory-mcp)`);
+      hubMissingLogged = true;
+      return null;
+    }
+    const routes = hubRoutes(servers, termId);
+    const urls = routes && mcpHub.route(termId, routes);
+    if (!urls) return null;
+    try {
+      return writeTerminalMcpConfig({ mcpDir: paths.mcp, termId, servers: Object.fromEntries(Object.entries(urls).map(([name, url]) => [name, { type: "http" as const, url }])) });
+    } catch (e) {
+      // 写不了这个终端的配置：撤掉刚登记的路由，这个 session 用 stdio。
+      logger("could not write the shared MCP config; this session uses its own MCP processes", e);
+      mcpHub.removeTerminal(termId);
+      return null;
+    }
   };
   /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。什么都不挂时返回 null。 */
-  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }): string | null => {
+  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }, termId: string): string | null => {
     const servers = mcpServers({ ticketKey, featureId: opts.featureId, epicId: opts.epicId }, opts.coordinator ? { ticketKey } : { ticketKey, member: true });
     if (Object.keys(servers).length === 0) return null;
-    return writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator });
+    return sharedMcpConfig(termId, servers) ?? writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator });
   };
   /** feature 总控：feature 记忆、全局记忆和 feature 模式的 butler-sessions；feature 属于 epic 时加 epic 记忆。 */
-  const featureMcpConfig = (featureId: number, epicId: number | null): string | null => {
+  const featureMcpConfig = (featureId: number, epicId: number | null, termId: string): string | null => {
     const servers = mcpServers({ featureId, epicId }, { featureId, epic: epicId !== null });
     if (Object.keys(servers).length === 0) return null;
-    return writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers });
+    return sharedMcpConfig(termId, servers) ?? writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers });
   };
   /** epic session：epic 记忆、全局记忆和 epic 模式的 butler-sessions（list_features、list_repos、create_feature，以及各 feature 的 session）。 */
-  const epicMcpConfig = (epicId: number): string | null => {
+  const epicMcpConfig = (epicId: number, termId: string): string | null => {
     const servers = mcpServers({ epicId }, { epicId });
     if (Object.keys(servers).length === 0) return null;
-    return writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers });
+    return sharedMcpConfig(termId, servers) ?? writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers });
   };
   /** Butler 总控（BTL-190 第 5 点）：只有全局记忆（butler-workspace）和 Butler 模式的 butler-sessions。 */
-  const butlerMcpConfig = (): string | null => {
+  const butlerMcpConfig = (termId: string): string | null => {
     const servers = mcpServers({}, { butler: true });
     if (Object.keys(servers).length === 0) return null;
-    return writeButlerMcpConfig({ mcpDir: paths.mcp, servers });
+    return sharedMcpConfig(termId, servers) ?? writeButlerMcpConfig({ mcpDir: paths.mcp, servers });
   };
   const availability = new ClaudeAvailability({ repo: new AvailabilityRepo(db, logger), now: Date.now, onChange: notify, log: logger });
   /** headless 运行报告限流 / 成功给可用状态。 */
@@ -1602,6 +1642,12 @@ async function bootstrap(): Promise<void> {
     settingChanged: (key) => {
       if (key === "checksEnabled" || key === "checksEditTimeoutSec" || key === "checksPushTimeoutSec" || key === "ticketPattern") checkSnapshots.schedule();
     },
+    // 共享 MCP（WS-M H）：打开就启动 hub（之后开的 session 用它）；关掉时接着它的 session 退完了再停。
+    sharedMcpChanged: () => {
+      if (sharedMcpOn(settings)) {
+        if (existsSync(bundledHubPath())) mcpHub.start();
+      } else mcpHub.stopWhenIdle();
+    },
     onFeatureArchived: (id) => {
       removeFeatureMcpConfig(paths.mcp, id);
       inboxService.dismissScope({ featureId: id });
@@ -1699,11 +1745,17 @@ async function bootstrap(): Promise<void> {
         recent: (id) => activityMonitor.recent(id),
         memory: activityMonitor.memoryLog(),
         notices: [
-          ...buildNotices({ availability: availability.view(), recentRuns: lessonRuns.recentFinished(20), routing: routing.attention() }),
+          ...buildNotices({
+            availability: availability.view(),
+            recentRuns: lessonRuns.recentFinished(20),
+            routing: routing.attention(),
+            sharedMcpError: sharedMcpOn(settings) && mcpHub.status().state === "failed" ? mcpHub.status().error : null,
+          }),
           ...ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
         ],
         sessionMemory: (id) => procServices.monitor.memoryOf(id),
         memorySnapshot: procServices.monitor.snapshot(),
+        sharedMcp: sharedMcpOn(settings),
       });
     },
     rederive: (key) => {
@@ -1839,12 +1891,15 @@ async function bootstrap(): Promise<void> {
   powerMonitor.on("shutdown", () => quitState.requestQuit());
   // 合上盖子（进入睡眠）时关掉防休眠，醒来后保持关闭，要用再手动打开。
   powerMonitor.on("suspend", () => keepAwakeSwitch.set(false));
+  // 共享 MCP 开着就现在启动 hub，免得第一批 session 还在等它起来、先用了 stdio（WS-M H）。
+  if (sharedMcpOn(settings) && existsSync(bundledHubPath())) mcpHub.start();
   const scheduleTimer = setInterval(() => void checkSchedule("tick"), TICK_MS);
 
   app.on("will-quit", () => {
     // 正常情况下 before-quit 已经停过；没经过 before-quit 的退出也要在关数据库之前停下。
     refresher.stop();
     hibernator?.stop();
+    mcpHub.stop();
     clearInterval(discoveryTimer);
     clearInterval(refreshTimer);
     clearInterval(scheduleTimer);

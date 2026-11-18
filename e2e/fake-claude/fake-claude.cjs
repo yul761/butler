@@ -43,6 +43,8 @@ const path = require("node:path");
 const readline = require("node:readline");
 const { spawn, spawnSync } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
+const http = require("node:http");
+const { URL } = require("node:url");
 
 const args = process.argv.slice(2);
 const has = (name) => args.includes(name);
@@ -271,10 +273,42 @@ function headless() {
   });
 }
 
-/** 和 Claude Code 一样：按配置启动 stdio 的 MCP server，握手后调用一个工具。env 在继承的环境上叠加配置里的，BUTLER_SESSION 就是这样传下去的。 */
-function callMcpTool(configPath, tool, input) {
+/** MCP Streamable HTTP 的一次 POST（共享 MCP，WS-M H）：JSON 进 JSON 出，通知回 202。 */
+function httpRpc(url, body) {
   return new Promise((resolve, reject) => {
-    const server = JSON.parse(fs.readFileSync(configPath, "utf8")).mcpServers["butler-sessions"];
+    const u = new URL(url);
+    const req = http.request(
+      { host: u.hostname, port: u.port, path: u.pathname, method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" } },
+      (res) => {
+        let data = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          if (res.statusCode === 202) resolve(null);
+          else if (res.statusCode !== 200) reject(new Error(`HTTP ${res.statusCode} ${data}`));
+          else resolve(JSON.parse(data));
+        });
+      },
+    );
+    req.on("error", reject);
+    req.end(JSON.stringify(body));
+  });
+}
+
+/**
+ * 和 Claude Code 一样调用 butler-sessions 的一个工具。stdio：按配置启动 server，握手后调用；env 在继承的环境上叠加配置里的，BUTLER_SESSION 就是这样传下去的。
+ * http（共享 MCP）：对配置里的 URL 握手、发 initialized、再调用。
+ */
+function callMcpTool(configPath, tool, input) {
+  const server = JSON.parse(fs.readFileSync(configPath, "utf8")).mcpServers["butler-sessions"];
+  if (server.type === "http") {
+    const rpc = (id, method, params) => httpRpc(server.url, { jsonrpc: "2.0", id, method, params });
+    return rpc(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake-claude", version: "1" } })
+      .then(() => httpRpc(server.url, { jsonrpc: "2.0", method: "notifications/initialized" }))
+      .then(() => rpc(2, "tools/call", { name: tool, arguments: input }))
+      .then((m) => m.result);
+  }
+  return new Promise((resolve, reject) => {
     const child = spawn(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
     const send = (id, method, params) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     child.on("error", reject);
@@ -316,7 +350,10 @@ function interactive() {
     try {
       const all = JSON.parse(fs.readFileSync(mcp, "utf8")).mcpServers || {};
       servers = Object.keys(all);
+      // 共享 MCP 的配置里只有 URL，看不出是不是 feature 总控：按 ticket 的 handoff 回答（用共享 MCP 的 e2e 不需要 feature 的）。
       featureCoordinator = Boolean(all["butler-sessions"]?.env?.BUTLER_FEATURE);
+      const types = [...new Set(Object.values(all).map((v) => v.type || "stdio"))];
+      if (types.length) log(`mcp transport ${types.join(",")}`);
     } catch (e) {
       servers = [`unreadable ${mcp}: ${e.message}`];
     }

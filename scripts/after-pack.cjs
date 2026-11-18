@@ -20,7 +20,7 @@ exports.default = async function afterPack(context) {
   const appPath = mac ? join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`) : context.appOutDir;
   const resources = mac ? join(appPath, "Contents", "Resources") : join(appPath, "resources");
   const hook = join(resources, "hook", mac ? "butler-hook" : "butler-hook.exe");
-  for (const f of [hook, join(resources, "memory-mcp", "statecore-mcp.cjs")]) {
+  for (const f of [hook, ...["statecore-mcp.cjs", "butler-sessions-mcp.cjs", "mcp-hub.cjs"].map((n) => join(resources, "memory-mcp", n))]) {
     if (!existsSync(f)) throw new Error(`missing ${f}: run pnpm build && pnpm build:hook before packaging`);
   }
   const pty = join(resources, "app.asar.unpacked", "node_modules", "node-pty");

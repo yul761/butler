@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { butlerMcpFile, epicMcpFile, featureMcpFile, memoryServers, removeEpicMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
+import { butlerMcpFile, epicMcpFile, featureMcpFile, hubRoutes, memoryServers, pruneTerminalMcpConfigs, removeEpicMcpConfig, removeTerminalMcpConfig, terminalMcpFile, writeTerminalMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
 
 const launcher = { command: "/Applications/Butler.app/Contents/MacOS/Butler", script: "/Applications/Butler.app/Contents/Resources/memory-mcp/statecore-mcp.cjs" };
 
@@ -227,5 +227,53 @@ describe("Butler 总控 config (BTL-190 5)", () => {
     expect(file).toBe(join(mcpDir, "butler.json"));
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpServers: servers });
     if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe("shared MCP config (WS-M H)", () => {
+  it("turns the stdio servers into hub routes: memory by scope, butler-sessions with its variables and the terminal as caller", () => {
+    const servers = {
+      ...memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "PROJ-1", featureId: 3 }),
+      ...sessionsServer({ launcher, scope: { ticketKey: "PROJ-1", member: true }, requestsDir: "/req", resultsDir: "/res" }),
+    };
+    expect(hubRoutes(servers, "term-1")).toEqual({
+      "butler-memory": { server: "memory", scope: "ticket:PROJ-1" },
+      "butler-workspace": { server: "memory", scope: "workspace" },
+      "butler-feature": { server: "memory", scope: "feature:3" },
+      "butler-sessions": {
+        server: "sessions",
+        from: "term-1",
+        env: { BUTLER_TICKET: "PROJ-1", BUTLER_MEMBER: "1", BUTLER_LANG: expect.any(String), BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" },
+      },
+    });
+  });
+
+  it("gives up on a server it does not know, so the terminal keeps stdio", () => {
+    expect(hubRoutes({ other: { type: "stdio", command: "x", args: [], env: {} } }, "t")).toBeNull();
+  });
+
+  it("writes one private config per terminal under mcp/terms and removes it again", () => {
+    const mcpDir = tempDir();
+    const servers = { "butler-workspace": { type: "http" as const, url: "http://127.0.0.1:4100/mcp/abc" } };
+    const file = writeTerminalMcpConfig({ mcpDir, termId: "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", servers });
+    expect(file).toBe(join(mcpDir, "terms", "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed.json"));
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpServers: servers });
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+    removeTerminalMcpConfig(mcpDir, "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed");
+    expect(existsSync(file)).toBe(false);
+    removeTerminalMcpConfig(mcpDir, "never-written");
+  });
+
+  it("keeps a terminal id with odd characters inside mcp/terms", () => {
+    expect(dirname(terminalMcpFile("/m", "../../etc/x"))).toBe(join("/m", "terms"));
+  });
+
+  it("clears the configs left from the last run at startup", () => {
+    const mcpDir = tempDir();
+    expect(pruneTerminalMcpConfigs(mcpDir)).toBe(0);
+    writeTerminalMcpConfig({ mcpDir, termId: "a", servers: {} });
+    writeTerminalMcpConfig({ mcpDir, termId: "b", servers: {} });
+    expect(pruneTerminalMcpConfigs(mcpDir)).toBe(2);
+    expect(readdirSync(join(mcpDir, "terms"))).toEqual([]);
   });
 });

@@ -8,11 +8,12 @@ export const LESSONS_FAILING_MIN = 3;
 /** 不算分析本身成败的运行：被限额打断、用户取消、退出时中断。 */
 const NEUTRAL: ReadonlySet<LessonRunStatus> = new Set(["limited", "cancelled", "aborted"]);
 
-/** 「现在」页顶上的提醒：Claude 限额或模型不可用、模型路由的撞限和降级、复盘手动暂停、复盘连续失败。最近的运行从新到旧。 */
+/** 「现在」页顶上的提醒：Claude 限额或模型不可用、模型路由的撞限和降级、共享 MCP 起不来、复盘手动暂停、复盘连续失败。最近的运行从新到旧。 */
 export function buildNotices(i: {
   availability: AvailabilityView;
   recentRuns: { status: LessonRunStatus }[];
   routing?: { limited: string[]; fallbacks: number } | null;
+  sharedMcpError?: string | null;
 }): NowNotice[] {
   const { current, retryAt, lessonsPause } = i.availability;
   const out: NowNotice[] = [];
@@ -29,6 +30,7 @@ export function buildNotices(i: {
     failed++;
   }
   if (failed >= LESSONS_FAILING_MIN) out.push({ kind: "lessons_failing", count: failed });
+  if (i.sharedMcpError) out.push({ kind: "shared_mcp_failed", error: i.sharedMcpError });
   return out;
 }
 

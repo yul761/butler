@@ -12,6 +12,8 @@ interface Deps {
   languageChanged?: () => void;
   /** 任何设置改了之后（在 notify 之前）：检查快照要跟着设置和语言重写。 */
   settingChanged?: (key: EditableSettingKey) => void;
+  /** 共享 MCP 开关保存或恢复默认之后（WS-M H）：启动或停掉 hub。 */
+  sharedMcpChanged?: () => void;
 }
 
 /**
@@ -36,6 +38,7 @@ export function settingsHandlers(d: Deps): {
     const memoryAfter = memoryOn(d.settings);
     if (k === "language") d.languageChanged?.();
     d.settingChanged?.(k);
+    if (k === "sharedMcp") d.sharedMcpChanged?.();
     d.notify();
     if (memoryAfter !== memoryBefore) d.memoryToggled(memoryAfter);
   };

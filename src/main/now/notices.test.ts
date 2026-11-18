@@ -49,6 +49,11 @@ describe("buildNotices", () => {
     expect(buildNotices({ availability: view(), recentRuns: runs("failed", "failed", "done", "failed") })).toEqual([]);
     expect(buildNotices({ availability: view(), recentRuns: runs("failed", "failed") })).toEqual([]);
   });
+
+  it("adds a notice while the shared MCP hub cannot start (WS-M H)", () => {
+    expect(buildNotices({ availability: view(), recentRuns: [], sharedMcpError: "exited (1)" })).toEqual([{ kind: "shared_mcp_failed", error: "exited (1)" }]);
+    expect(buildNotices({ availability: view(), recentRuns: [], sharedMcpError: null })).toEqual([]);
+  });
 });
 
 describe("ciNotices", () => {

@@ -630,6 +630,8 @@ export type NowNotice =
   | { kind: "model_unavailable"; hit: AvailabilityHit; retryAt: number | null }
   | { kind: "lessons_paused" }
   | { kind: "lessons_failing"; count: number }
+  /** 共享 MCP（WS-M H）开着但 hub 起不来：新开的 session 退回各自的 MCP 进程，Butler 按退避在重试。 */
+  | { kind: "shared_mcp_failed"; error: string }
   | { kind: "session_limited"; target: NowTarget; title: string | null; limit: LimitHit }
   /** 模型路由（3.0）：有模型撞限或不可用，或最近一小时有任务降级。只在配置了路由时出现。 */
   | { kind: "routing"; limited: string[]; fallbacks: number }
@@ -653,4 +655,6 @@ export interface NowView {
   merges: MergeEvent[];
   /** 内存卡片（WS-M A）：最近一次采样；监控关着或还没采到为 null 或缺省。 */
   mem?: MemorySnapshot | null;
+  /** 共享 MCP（WS-M H）开着没有：关着时内存卡片提示开了大约能省多少。 */
+  sharedMcp?: boolean;
 }
