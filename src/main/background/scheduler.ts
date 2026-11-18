@@ -33,7 +33,7 @@ export interface BackgroundSchedulerDeps {
   now: () => number;
   setInterval?: (fn: () => void, ms: number) => unknown;
   clearInterval?: (h: unknown) => void;
-  /** 让路和恢复（H 的 recordEvent 合并后接这里，契约 4.7）。 */
+  /** 让路和恢复（index.ts 接到 H 的 recordEvent，契约 4.7）。 */
   onEvent?: (kind: BgEventKind, refs: { kind: BgKind; reason?: string }) => void;
   log?: (msg: string, err?: unknown) => void;
 }

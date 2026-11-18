@@ -18,7 +18,7 @@
 | 活动监控 | `ActivityMonitor` 看的是 Claude session 在干什么，不是人 | 不当空闲判断；用来判断熔断暂停后 session 还在不在跑 |
 | 休眠 | M：`Hibernator`，`isHibernated`、`wake` | 休眠的 session 不算活跃；后台任务不能叫醒它（第 3.4 节） |
 | 现有后台任务 | 复盘分析队列 `LessonRunner`：队列在库里，重启时 running 回 queued；`origin` 有 merged / daily / backfill | 迁到调度器（第 3.3 节） |
-| H 的 `recordEvent` | 不在 main 上 | 留接入点 `CostEvents.onEvent` / `BackgroundScheduler.onEvent`（第 5 节） |
+| H 的 `recordEvent` | 已合（#46） | `CostBreaker.onEvent` / `BackgroundScheduler.onEvent` 经 `cost/metric-events.ts` 接上（第 5 节） |
 | W 的 #40 内存准入 | 不在 main 上；分支里是 `MemoryAdmission.admit(what) → { ok, release } \| { ok: false, reason }` | 调度器的 `SessionAdmission` 按同样形状定义，W 合并后直接把它的实例接进来 |
 | 4.8 外部动作 | 熔断和调度都不往外写（不碰 GitHub、tracker） | 不需要开关 |
 | 4.1 路由 | 熔断、调度本身不调模型 | 不新增任务 id |
@@ -153,7 +153,7 @@ session 的作用域按它所在 ticket 的仓库解析；一个 ticket 有多�
 
 ## 5. 日志和事件
 
-熔断的 warn / downgrade / pause / stop / resume / raise 和调度器的 yield / resume 都写日志、写 `cost_events`（熔断）表；并调可选的 `onEvent(kind, refs)`——H 的 `recordEvent` 合并以后在 index.ts 里接上即可。
+熔断的 warn / downgrade / pause / stop / resume / raise 和调度器的 yield / resume 都写日志、写 `cost_events`（熔断）表；并调 `onEvent(kind, refs)`：index.ts 用 `cost/metric-events.ts` 把它接到 H 的 `recordEvent`，记成 `cost.<步骤>`（ticket 的挂 ticketKey，session 的挂链的根 id）和 `background.yield` / `background.resume`。data 只放花费、上限、单位、任务种类和 Butler 自己写的短说明。
 
 ## 6. 设置
 
@@ -188,7 +188,7 @@ session 的作用域按它所在 ticket 的仓库解析；一个 ticket 有多�
 7. 一个 PR：调度器和熔断共用设置页、通知、事件接入点，拆开反而要重复接线。
 8. 「现有通知」= 「现在」页提醒、托盘提示的第二行、session 行上的条。应用里没有系统通知；要发系统 / 手机推送得走 B 的 `externalPushNotification` 开关（契约 4.8），这次不加。L 的动作全在本机（终端里的 Esc 和「接着做」、本机提醒），没有对外动作，不接 4.8 的开关。
 9. ticket 的标题按 `KEY 标题` 显示；session 用它的标题，没有标题时用 id。
-10. H 的 `recordEvent`：`CostBreaker` 的 `onEvent` 现在在 index.ts 里是空的，H 合并后接上。
+10. H 的 `recordEvent`（#46 已合）：熔断和调度器的 `onEvent` 都接上了；H 的 kind 表补了 `cost.takeover`。
 11. W 的 #40 已合：`index.ts` 把队列的 `admission` 接到 `MemoryAdmission`（它在后台队列 `start()` 之前建好），`ctx.admitSession` 不放行时任务延后、原因 `memory`；`queue.test.ts` 用真的 `MemoryAdmission` 测了这一条。
 12. session 行上的条：先看 session 自己的熔断，再看它的 ticket 的（ticket 只是 `warned` 时不在每一行上提醒，避免一个 ticket 的提醒铺满所有行）。
 13. 花费上限这一层的输入：空 = 继承，`none` = 这一层明确不限（`null`），和准入策略的「空 = 继承」一致，只多一个 `none`。

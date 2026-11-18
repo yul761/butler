@@ -35,6 +35,7 @@ export const METRIC_KINDS: Readonly<Record<string, MetricKindGroup>> = {
   "cost.downgrade": "other",
   "cost.pause": "other",
   "cost.stop": "other",
+  "cost.takeover": "other",
   "cost.resume": "other",
   "cost.raise": "other",
   "background.yield": "other",

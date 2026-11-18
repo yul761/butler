@@ -21,6 +21,7 @@ import { routingQuota } from "./background/routing-quota";
 import { BackgroundScheduler } from "./background/scheduler";
 import { CostBreaker, type CostSessionInfo } from "./cost/cost-breaker";
 import { CostPolicyService } from "./cost/cost-policy";
+import { backgroundMetricEvents, costMetricEvents } from "./cost/metric-events";
 import { parseThresholds } from "./routing/spend";
 import { CostPolicyError, type CostBreakerView } from "../shared/cost";
 import type { NowTarget } from "../shared/types";
@@ -663,8 +664,8 @@ async function bootstrap(): Promise<void> {
     quota: () => routingQuota(routing),
     costBlocked: (key) => (costBreaker ? !costBreaker.allowBackground(key) : false),
     now: Date.now,
-    // H 的 recordEvent 合并后接这里（契约 4.7）；现在只记日志。
-    onEvent: (kind, refs) => logger(`background: ${kind} ${refs.kind}${refs.reason ? ` (${refs.reason})` : ""}`),
+    // 让路和恢复记成 H 的度量事件（契约 4.7），日志照记。
+    onEvent: backgroundMetricEvents(recordEvent, logger),
     log: logger,
   });
   bgScheduler.subscribe(() => notify());
@@ -1415,8 +1416,8 @@ async function bootstrap(): Promise<void> {
     texts: () => ({ continueAfterDowngrade: M().cost.continueAfterDowngrade, continueAfterRaise: M().cost.continueAfterRaise }),
     now: Date.now,
     onChange: () => costChanged(),
-    // H 的 recordEvent 合并后接这里（契约 4.7）；cost_events 表和日志已经记了每一步。
-    onEvent: () => undefined,
+    // 每一步也记成 H 的度量事件（契约 4.7）；cost_events 表和日志照记。
+    onEvent: costMetricEvents(recordEvent),
     log: logger,
   });
   costBreaker = costBreakerInst;

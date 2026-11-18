@@ -68,7 +68,7 @@ export interface CostBreakerDeps {
   now: () => number;
   stopAfterMs?: number;
   onChange?: () => void;
-  /** 熔断的每一步（H 的 recordEvent 合并后接这里，契约 4.7）。 */
+  /** 熔断的每一步（index.ts 接到 H 的 recordEvent，契约 4.7）。 */
   onEvent?: (kind: CostEventKind, refs: { subjectKind: CostSubjectKind; subjectId: string; spent: number; cap: number | null; unit: CostUnit; detail?: string }) => void;
   log?: (msg: string, err?: unknown) => void;
 }
