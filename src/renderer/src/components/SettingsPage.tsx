@@ -3,6 +3,7 @@ import type { HealthReport } from "../../../shared/types";
 import { api } from "../api";
 import { S } from "../strings";
 import { PrivacySettings } from "./PrivacySettings";
+import { ExternalActionSettings } from "./ExternalActionSettings";
 import { GeneralSettings } from "./GeneralSettings";
 import { ScheduleSettings } from "./ScheduleSettings";
 import { LessonsSettings } from "./LessonsSettings";
@@ -93,6 +94,7 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
       <ScheduleSettings />
       <PrivacySettings />
       <LessonsSettings />
+      <ExternalActionSettings />
     </div>
   );
 }

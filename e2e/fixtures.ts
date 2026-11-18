@@ -62,6 +62,12 @@ export interface PrViewFixture extends BranchPrFixture {
   /** gh pr view <号> 给复盘分析的字段（prLessonData）。 */
   title?: string;
   body?: string;
+  /** 进度页（ws-b）用：叠放树、卡在谁手上、PR 表分组。 */
+  baseRefName?: string;
+  labels?: { name: string }[];
+  reviewRequests?: ({ login: string } | { slug: string })[];
+  mergeable?: string;
+  mergeStateStatus?: string;
 }
 
 /** 假 gh（e2e/fake-gh/fake-gh.cjs）的数据：branches 按分支名，prs 按 prUrlKey 形式的链接（小写、没有末尾斜杠；gh pr view <号> 取链接以 /pull/<号> 结尾的第一项）。 */

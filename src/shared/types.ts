@@ -679,3 +679,18 @@ export interface NowView {
   /** 共享 MCP（WS-M H）开着没有：关着时内存卡片提示开了大约能省多少。 */
   sharedMcp?: boolean;
 }
+
+/** Butler 总控用 send_message 发的一条消息和它的回复（ws-b）：list_inbox 的 messages、Butler 页的"回复"tab。时间是 ISO 字符串。 */
+export interface ButlerMessageView {
+  requestId: string;
+  /** 给人看的目标："feature X 的总控"之类。 */
+  target: string;
+  targetSession: string | null;
+  status: "sending" | "waiting" | "replied" | "delivered" | "failed" | "expired";
+  error: string | null;
+  text: string;
+  queuedAt: string;
+  reply: string | null;
+  repliedAt: string | null;
+  deliveredAt: string | null;
+}

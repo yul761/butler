@@ -9,9 +9,12 @@ import type { MemoryHistoryPoint } from "../../shared/mem-usage";
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc";
 import {
-  FOLLOWUP_STATUSES, type AutostartState, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr,
+  FOLLOWUP_STATUSES, type AutostartState, type ButlerMessageView, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr,
 } from "../../shared/types";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
+import type { ExternalActionEntry } from "../../shared/external";
+import type { ProgressFilter, ProgressView } from "../../shared/progress";
+import type { ExternalAuditRepo } from "../db/external-audit-repo";
 import type { EpicService } from "../epics/epic-service";
 import type { AuditRepo } from "../db/audit-repo";
 import type { MemoryService } from "../memory/memory-service";
@@ -51,7 +54,7 @@ import { toIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
-  addRepoArg, apiKeyArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, apiKeyArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg } from "./validate";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -125,6 +128,12 @@ export interface IpcDeps {
   keys: KeyStore;
   terms: TermsRepo;
   audit: AuditRepo;
+  /** 对外动作的审计（契约 4.8，ws-b）。 */
+  externalAudit: Pick<ExternalAuditRepo, "list">;
+  /** 进度页（ws-b）：和总控 progress_overview 同一份聚合。 */
+  progress: (filter: ProgressFilter) => ProgressView;
+  /** Butler 页"回复"tab（ws-b）。 */
+  butlerMessages: () => ButlerMessageView[];
   memory: Pick<MemoryService, "view" | "why">;
   autostart: { get(): AutostartState; set(on: boolean): AutostartState };
   /** 防休眠开关（只在内存里，启动时是关的）。 */
@@ -308,6 +317,8 @@ export function registerIpc(d: IpcDeps): void {
   });
 
   handle(IPC.butlerView, () => d.sessionService.butlerView());
+  handle(IPC.butlerMessages, (): ButlerMessageView[] => d.butlerMessages());
+  handle(IPC.progressGet, (raw: unknown): ProgressView => d.progress(progressFilterArg(raw)));
   handle(IPC.butlerOpenSession, async (raw: unknown) => {
     const r = await d.sessionService.openButler(openButlerArg(raw));
     d.notify();
@@ -514,6 +525,7 @@ export function registerIpc(d: IpcDeps): void {
   });
   handle(IPC.auditList, (beforeId: unknown): AuditPage =>
     auditPage({ settings: d.settings, keys: d.keys, audit: d.audit, now: d.now }, auditCursorArg(beforeId)));
+  handle(IPC.externalAuditList, (): ExternalActionEntry[] => d.externalAudit.list({ limit: 200 }));
 
   // StateCore 记忆（设计文档 8.4）：只读。
   const mem = memoryHandlers({ tickets: d.tickets, memory: d.memory, enabled: () => memoryOn(d.settings) });

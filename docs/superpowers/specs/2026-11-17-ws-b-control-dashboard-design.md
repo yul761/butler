@@ -129,11 +129,12 @@ export const EXTERNAL_ACTIONS = ["comment_reply", "comment_resolve", "pr_descrip
   "pr_title_edit", "force_push", "ci_rerun", "issue_post", "push_notification"] as const;
 export type ExternalActionKind = (typeof EXTERNAL_ACTIONS)[number];
 export interface ExternalScope { repoSlug?: string | null; productIds?: number[]; ticketKey?: string | null }
+export interface ExternalDetail { scope?: ExternalScope; target?: string | null; summary: string; payload?: string | null }
 export class ExternalActions {
   allowed(kind, scope?): boolean;
-  record(kind, detail: { scope?, target, summary, payload?, outcome: "done" | "failed" | "skipped", error? }): number;
-  /** 不允许时也记一笔 skipped，方便抽查 "本来会做什么"。 */
-  attempt(kind, scope, detail, run: () => Promise<T>): Promise<{ ran: false } | { ran: true; value: T }>;
+  record(kind, detail: ExternalDetail & { outcome: "done" | "failed" | "skipped"; error?: string | null }): number;
+  /** 不允许时也记一笔 skipped，方便抽查 "本来会做什么"。run 抛错时记 failed 再原样抛出。 */
+  attempt(kind, detail: ExternalDetail, run: () => Promise<T>): Promise<{ ran: false; auditId: number } | { ran: true; value: T; auditId: number }>;
 }
 ```
 
@@ -142,9 +143,24 @@ export class ExternalActions {
 - `record` 写 `external_action_audit`（时间、kind、仓库、ticket、目标 url、一句话、内容、结果、错误），审计页加一块"对外动作"列表。按 `auditRetentionDays` 清理。
 - B 只做框架和设置；没有任何调用方。I、K、J 等 workstream 接入时走 `attempt`。
 
+### 实现时的调整
+
+- `attempt` 的 scope 放进 `detail` 里（和 `record` 一致），不单独一个参数。返回值带 `auditId`，调用方可以在日志里引用那一行审计。
+- kind 列表、设置键的对照（`EXTERNAL_ACTION_SETTINGS`）和审计行的类型放在 `src/shared/external.ts`，界面和主进程共用；表的读写单独一个 `src/main/db/external-audit-repo.ts`。
+- `allowed` 只认 `"1"`；注入的分层 resolver 抛错时退回全局设置并写日志，不会因为 resolver 出错而放行。
+- 清理：启动时清一次，之后 `record` 里最多每小时清一次，截止时间和 LLM 审计同一个（`auditRetentionDays`，当月不清）。
+- 审计页的"对外动作"一节最多显示最近 200 条（IPC `externalAudit:list`）。
+
 ## 6. 跨平台
 
 全是数据和界面，没有新的子进程。路径只出现在仓库名的显示里（`basename` 已处理两种分隔符）。
+
+## 6.1 实现时的其他调整
+
+- 新的 IPC：`progress:get`（进度页和 PR 进度 tab 的"卡在谁手上"）、`butler:messages`（Butler 页新加的「回复」tab，列出 send_message 的消息、状态和回复）、`externalAudit:list`。`ButlerMessageView` 放在 `src/shared/types.ts`。
+- feature 页"整体进度"的过时提示用同一份进度数据（`featureGroups[].stale`），汇总下面写"PR 状态截至 …"（`prStatusAt`，没有时用汇总时间）。
+- feature / epic 的 PR 进度 tab 上的"卡在谁手上"带一个"在进度页里看"，跳到按这个 feature / epic 过滤的进度页。
+- `list_inbox` 多返回 `messages`（最近 30 条 send_message 的状态），总控不用另开工具就能查某个 `requestId`。
 
 ## 7. 测试
 

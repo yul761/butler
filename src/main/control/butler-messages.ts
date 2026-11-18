@@ -1,7 +1,7 @@
 // Butler 总控 send_message 的回复回流（设计文档 2026-11-17 ws-b 第 2 节）：目标停下来时把它最后一条回复送回发消息的总控。
 import { randomUUID } from "node:crypto";
 import { MESSAGE_LIMIT, sanitizeTask, TASK_LIMIT } from "../../shared/control";
-import type { Session } from "../../shared/types";
+import type { ButlerMessageView, Session } from "../../shared/types";
 import type { ButlerMessage, ButlerMessagesRepo } from "../db/butler-messages-repo";
 import type { DeliveryGuard } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
@@ -35,20 +35,6 @@ export interface ButlerMessagesDeps {
   now(): number;
   newId?: () => string;
   log(msg: string, err?: unknown): void;
-}
-
-/** list_inbox 里的一条。 */
-export interface ButlerMessageView {
-  requestId: string;
-  target: string;
-  targetSession: string | null;
-  status: ButlerMessage["status"];
-  error: string | null;
-  text: string;
-  queuedAt: string;
-  reply: string | null;
-  repliedAt: string | null;
-  deliveredAt: string | null;
 }
 
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t).toISOString());

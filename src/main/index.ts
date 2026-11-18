@@ -62,6 +62,8 @@ import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
 import { ButlerMessagesRepo } from "./db/butler-messages-repo";
 import { ButlerMessages } from "./control/butler-messages";
+import { ExternalAuditRepo } from "./db/external-audit-repo";
+import { ExternalActions } from "./external/actions";
 import { buildProgress } from "./progress/progress-view";
 import type { ProgressFilter, ProgressView } from "../shared/progress";
 import { EpicHistoryRepo } from "./db/epic-history-repo";
@@ -961,12 +963,24 @@ async function bootstrap(): Promise<void> {
     featureFollowup(featureId, handoffId, sessionId);
   };
   const audit = new AuditRepo(db);
+  // 对外动作（契约 4.8，ws-b）：开关和审计的框架；接入的 workstream 用 externalActions.attempt。
+  const externalAudit = new ExternalAuditRepo(db);
+  const externalActions = new ExternalActions({
+    repo: externalAudit,
+    setting: (key) => settings.get(key),
+    now: Date.now,
+    cutoff: (now) => auditCutoff(now, llmConfig(settings).retentionDays),
+    log: logger,
+  });
+  // 现在还没有调用方（I、K、J 接入时用）：先建好，开关和保留期从这里开始生效。
+  void externalActions;
   // 审计的启动收尾，先于一切读写审计的代码：上次退出时没发完的请求记为 failed（请求体保留，可能已经发出），
   // 再按保留期清理一次（不删本月的记录，预算要用；之后 gateway 每次调用前也会清理）。
   try {
     const stale = audit.failStalePending(M().auditStalePending, stalePendingCost(llmConfig(settings).prices));
     if (stale > 0) logger(`marked ${stale} audit row(s) left pending by the previous run as failed`);
     audit.prune(auditCutoff(Date.now(), llmConfig(settings).retentionDays));
+    externalAudit.prune(auditCutoff(Date.now(), llmConfig(settings).retentionDays));
   } catch (e) {
     logger("audit housekeeping at startup failed", e);
   }
@@ -1682,6 +1696,9 @@ async function bootstrap(): Promise<void> {
     autostart,
     tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, runner, featureRunner, scheduler, jobs, gateRepo,
     keys, terms, audit, memory,
+    externalAudit,
+    progress: (f) => progressView(f),
+    butlerMessages: () => butlerMessages.recent(),
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     usage: usageRepo, sessions,
     refreshSession: (id) => {

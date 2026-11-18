@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ExternalActionEntry } from "../../../shared/external";
 import type { AuditEntry, AuditPage as AuditPageData } from "../../../shared/llm";
 import { api } from "../api";
 import { auditSummary, blockedText, bodyHeading, bodyMaybeSent, prettyBody, prettyJson } from "../audit-view";
 import { reportError } from "../errors";
 import { formatUsd } from "../privacy-form";
 import { S } from "../strings";
+import { useStateRefetch } from "./useStateRefetch";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
@@ -120,6 +122,50 @@ export function AuditPage() {
         </details>
       ))}
       {hasMore && <button disabled={loadingMore} onClick={() => void more()}>{S.loadMore}</button>}
+      <ExternalAudit />
     </div>
+  );
+}
+
+/** 对外动作的记录（契约 4.8，ws-b）：做了、失败、开关关着跳过的都在这里。新的在前，最多 200 条。 */
+export function ExternalAuditList({ entries }: { entries: ExternalActionEntry[] }) {
+  if (entries.length === 0) return <p className="muted">{S.externalAuditNone}</p>;
+  const c = S.externalCols;
+  return (
+    <table className="ticket-table external-audit">
+      <thead>
+        <tr><th>{c.time}</th><th>{c.kind}</th><th>{c.where}</th><th>{c.target}</th><th>{c.summary}</th><th>{c.outcome}</th></tr>
+      </thead>
+      <tbody>
+        {entries.map((e) => (
+          <tr key={e.id} className={`outcome-${e.outcome}`}>
+            <td>{formatTime(e.ts)}</td>
+            <td>{S.externalActions[e.kind].label}</td>
+            <td>{[e.repoSlug, e.ticketKey].filter(Boolean).join(" · ") || "—"}</td>
+            <td>{e.target ?? "—"}</td>
+            <td>
+              {e.summary}
+              {e.payload && (
+                <details>
+                  <summary className="muted">{c.payload}</summary>
+                  <pre className="raw">{e.payload}</pre>
+                </details>
+              )}
+            </td>
+            <td className={e.outcome === "failed" ? "error" : undefined}>{e.error ? S.labelled(S.externalOutcome[e.outcome], e.error) : S.externalOutcome[e.outcome]}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function ExternalAudit() {
+  const entries = useStateRefetch("externalAudit", () => api.externalAudit());
+  return (
+    <section className="external-audit-section" data-testid="external-audit">
+      <h3>{S.externalAuditHeading}</h3>
+      {entries !== null && <ExternalAuditList entries={entries} />}
+    </section>
   );
 }

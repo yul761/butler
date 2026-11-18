@@ -12,12 +12,14 @@ import type { LessonAction, LessonActResult, LessonQueueRowView, LessonRunDetail
 import type { MemoryView, WhyEntry } from "../../shared/memory";
 import type { RoutingAction, RoutingView, SessionLimitView, SwitchModelResult } from "../../shared/model-routing";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
+import type { ExternalActionEntry } from "../../shared/external";
+import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
 import type {
   AutostartState, CiItemRef, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
-  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, OpenButlerSessionRequest, ButlerView, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView,
+  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, OpenButlerSessionRequest, ButlerView, ButlerMessageView, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView,
 } from "../../shared/types";
 
 declare global {
@@ -83,6 +85,8 @@ export const api = {
   unarchiveEpic: (id: number) => call<void>(IPC.epicsUnarchive, id),
   openEpicSession: (req: OpenEpicSessionRequest) => call<OpenSessionResult>(IPC.epicsOpenSession, req),
   butlerView: () => call<ButlerView>(IPC.butlerView),
+  butlerMessages: () => call<ButlerMessageView[]>(IPC.butlerMessages),
+  progress: (filter: ProgressFilter) => call<ProgressView>(IPC.progressGet, filter),
   openButlerSession: (req: OpenButlerSessionRequest) => call<OpenSessionResult>(IPC.butlerOpenSession, req),
   openFixSession: (req: OpenFixSessionRequest) => call<OpenSessionResult>(IPC.sessionOpenFix, req),
   scanRepos: (dir: string) => call<ScanResult>(IPC.reposScan, dir),
@@ -160,6 +164,7 @@ export const api = {
   terms: () => call<SensitiveTerm[]>(IPC.termsList),
   saveTerms: (terms: SensitiveTerm[]) => call<SensitiveTerm[]>(IPC.termsSave, terms),
   audit: (beforeId?: number) => call<AuditPage>(IPC.auditList, beforeId),
+  externalAudit: () => call<ExternalActionEntry[]>(IPC.externalAuditList),
   memoryView: (ticketKey: string) => call<MemoryView>(IPC.memoryView, ticketKey),
   autostart: () => call<AutostartState>(IPC.appAutostartGet),
   language: () => call<Lang>(IPC.appLanguage),
