@@ -222,6 +222,13 @@ export class BaselinesRepo {
       .run(patch.status ?? cur.status, patch.detail === undefined ? cur.detail : patch.detail, patch.prUrl === undefined ? cur.prUrl : patch.prUrl, now, id);
   }
 
+  /** 写完 worktree、提交之后补上结果。 */
+  finishExport(id: number, r: { worktree: string; diff: string; committed: boolean; status: ExportStatus; detail: string | null }, now: number): void {
+    this.db
+      .prepare("UPDATE check_exports SET worktree = ?, diff = ?, committed = ?, status = ?, detail = ?, updated_at = ? WHERE id = ?")
+      .run(r.worktree, r.diff.slice(0, 200_000), r.committed ? 1 : 0, r.status, r.detail, now, id);
+  }
+
   getExport(id: number): CheckExportView | null {
     const r = this.db.prepare("SELECT * FROM check_exports WHERE id = ?").get(id) as ExportRow | undefined;
     return r ? toExport(r) : null;
