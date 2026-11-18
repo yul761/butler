@@ -138,6 +138,8 @@ describe("node script agrees with evaluateBuiltin", () => {
     expect(got(r.stdout)).toEqual(["src/new.ts:1"]);
     const listed = run(root, process.execPath, ["../scripts/staged.mjs", "a.ts", "main/db.ts"], join(root, "src"));
     expect(got(listed.stdout)).toEqual(expected(c.check, "", ["src/a.ts", "src/main/db.ts"]));
+    const absolute = run(root, process.execPath, ["../scripts/staged.mjs", join(root, "src", "a.ts")], join(root, "src"));
+    expect(got(absolute.stdout)).toEqual(expected(c.check, "", ["src/a.ts"]));
     execFileSync("git", ["reset", "-q", "--", "src/new.ts"], { cwd: root });
     rmSync(join(root, "src/new.ts"));
   });
@@ -164,6 +166,14 @@ describe.runIf(HAS_PY)("python script agrees with evaluateBuiltin", () => {
     const r = run(root, "python3", ["scripts/bad.py", "--all"]);
     expect(r.status).toBe(2);
     expect(r.stderr).toContain("invalid pattern");
+  });
+  it("takes listed files relative to the cwd, or absolute", () => {
+    const s = pythonScript(checkData(CASES[0].check, ""), "scripts/listed.py");
+    if (!s.ok) throw new Error(s.reason);
+    write(root, "scripts/listed.py", s.content);
+    const sub = join(root, "src");
+    expect(got(run(root, "python3", ["../scripts/listed.py", "a.ts", "main/db.ts"], sub).stdout)).toEqual(expected(CASES[0].check, "", ["src/a.ts", "src/main/db.ts"]));
+    expect(got(run(root, "python3", ["../scripts/listed.py", join(sub, "a.ts")], sub).stdout)).toEqual(expected(CASES[0].check, "", ["src/a.ts"]));
   });
   it("staged mode reads the index", () => {
     const s = pythonScript(checkData(CASES[0].check, ""), "scripts/staged.py");

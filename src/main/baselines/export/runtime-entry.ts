@@ -2,8 +2,8 @@
 // 生成的文件里前面是 `const CHECK = {...}`。和 hook 用的是同一份规则代码，所以「编辑时」和「仓库 lint」结果一样。
 // 用法：没有参数 = 暂存的文件；--all = 所有跟踪的文件；或者列出文件。打印 file:line: message，有违规退出 1。
 import { execFileSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, posix, relative, resolve } from "node:path";
 import { evaluateBuiltin } from "../../../shared/check-rules";
 import { inScope, normalizePath } from "../../../shared/glob";
 
@@ -27,16 +27,29 @@ function git(args: string[], cwd: string): Buffer {
 function main(argv: string[]): number {
   const cwd = process.cwd();
   let root = cwd;
+  // 当前目录在仓库里的位置用 git 自己给的 --show-prefix，不拿 cwd 和 toplevel 去比：
+  // Windows 上 cwd 可能是短路径（C:\Users\RUNNER~1\...），toplevel 是长路径，一比就全算到仓库外面去了。
+  let prefix = "";
   try {
     root = git(["rev-parse", "--show-toplevel"], cwd).toString("utf8").trim() || cwd;
+    prefix = git(["rev-parse", "--show-prefix"], cwd).toString("utf8").trim();
   } catch {
     // 不在 git 仓库里：按当前目录算。
   }
+  // 绝对路径两边都取真实路径再比（macOS 的 /var → /private/var 软链、Windows 的短路径）。
+  const real = (p: string) => {
+    try {
+      return realpathSync.native(p);
+    } catch {
+      return p;
+    }
+  };
+  const inRepo = (f: string) => normalizePath(posix.normalize(prefix + normalizePath(isAbsolute(f) ? relative(real(cwd), real(f)) : f)));
   const all = argv.includes("--all");
   const listed = argv.filter((a) => a !== "--all" && a !== "--");
   let files: string[];
   let staged = false;
-  if (listed.length) files = listed.map((f) => normalizePath(relative(root, isAbsolute(f) ? f : resolve(cwd, f))));
+  if (listed.length) files = listed.map(inRepo);
   else if (all) files = git(["ls-files", "-z"], root).toString("utf8").split("\0").filter(Boolean);
   else {
     staged = true;

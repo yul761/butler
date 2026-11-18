@@ -2,7 +2,7 @@
 // 和 TS 版逐条对照写；export.test.ts 用同一批样例比对两边的结果（机器上有 python3 时）。
 // 前面加上 CHECK = {...}（JSON）就能跑；用户的正则已经在生成时翻成 Python 写法。
 export const PY_RUNTIME = String.raw`
-import json, os, re, subprocess, sys
+import json, os, posixpath, re, subprocess, sys
 
 MAX_BYTES = 1024 * 1024
 
@@ -299,6 +299,15 @@ def evaluate(check, content, path):
 def git(args, cwd):
     return subprocess.run(["git", "-c", "core.quotepath=off"] + args, cwd=cwd, check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
 
+def _from_cwd(f, cwd):
+    # 绝对路径两边都取真实路径再比（macOS 的 /var → /private/var 软链、Windows 的短路径）。
+    if not os.path.isabs(f):
+        return f
+    try:
+        return os.path.relpath(os.path.realpath(f), os.path.realpath(cwd))
+    except ValueError:
+        return f
+
 def main(argv):
     # Windows 上管道的默认编码不是 UTF-8：中文的提示会直接 UnicodeEncodeError。
     for stream in (sys.stdout, sys.stderr):
@@ -307,15 +316,18 @@ def main(argv):
         except Exception:
             pass
     cwd = os.getcwd()
+    # 当前目录在仓库里的位置用 git 的 --show-prefix，不拿 cwd 和 toplevel 去比（Windows 上一个可能是短路径，一个是长路径）。
+    prefix = ""
     try:
         root = git(["rev-parse", "--show-toplevel"], cwd).decode("utf-8").strip() or cwd
+        prefix = git(["rev-parse", "--show-prefix"], cwd).decode("utf-8").strip()
     except Exception:
         root = cwd
     all_files = "--all" in argv
     listed = [a for a in argv if a not in ("--all", "--")]
     staged = False
     if listed:
-        files = [normalize_path(os.path.relpath(os.path.abspath(f), root)) for f in listed]
+        files = [normalize_path(posixpath.normpath(prefix + normalize_path(_from_cwd(f, cwd)))) for f in listed]
     elif all_files:
         files = [f for f in git(["ls-files", "-z"], root).decode("utf-8").split("\0") if f]
     else:

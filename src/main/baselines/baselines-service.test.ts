@@ -16,7 +16,10 @@ import { writeRepo } from "./test-repo";
 import { listRepoFiles, type Listing } from "./listing";
 
 const roots: string[] = [];
-afterEach(() => {
+/** 每个测试建的 service 和它管的仓库：收尾时先等后台重扫跑完（Windows 上正在跑的 git 子进程占着目录，删不掉，EPERM）。 */
+const services: { svc: BaselineService; slugs: string[] }[] = [];
+afterEach(async () => {
+  for (const { svc, slugs } of services.splice(0)) await vi.waitFor(() => expect(slugs.filter((s) => svc.isRunning(s))).toEqual([]), { timeout: 10_000 });
   for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
 });
 const repoDir = (files: Record<string, string>, git = true) => {
@@ -51,6 +54,7 @@ function setup(o: { paths?: Record<string, string | null>; infer?: InferRunner; 
     db, lessons, checks, localPath: (slug) => paths[slug] ?? null, runner: inProcessRunner, infer: o.infer, config: () => cfg, lang: () => "en", now, list: o.list,
     onChanged: (s) => changed.push(s),
   });
+  services.push({ svc, slugs: Object.keys(paths) });
   return { db, lessons, checks, batches, svc, cfg, changed, advance: (ms: number) => (t += ms) };
 }
 

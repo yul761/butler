@@ -249,20 +249,27 @@ describe("in-process runner", () => {
   };
 
   it("cancelling a whole-repo command kills the command's process tree", async () => {
-    const root = writeRepo({ "a.txt": "x" });
+    // 子进程脚本写成文件再跑（不用 node -e '...'）：免得 Windows 上 Git Bash 的引号和 MSYS 参数转换把脚本改坏。
+    const root = writeRepo({ "a.txt": "x", "hold.js": 'require("fs").writeFileSync(require("path").join(__dirname, "pid.txt"), String(process.pid)); setTimeout(() => {}, 60000);\n' });
     roots.push(root);
     const pidFile = join(root, "pid.txt");
-    const script = `require("fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => {}, 60000)`;
     const job = {
       kind: "legacy" as const, root, files: ["a.txt"], ticketPattern: "", maxFiles: 10, timeoutMs: 60_000, env: process.env as Record<string, string>,
-      check: { type: "run_command" as const, params: { stage: "push", command: `node -e '${script}'` }, globs: [], excludeGlobs: [] },
+      check: { type: "run_command" as const, params: { stage: "push", command: "node hold.js" }, globs: [], excludeGlobs: [] },
     };
-    const h = inProcessRunner(job, () => {});
-    await vi.waitFor(() => expect(existsSync(pidFile) && readFileSync(pidFile, "utf8") !== "").toBe(true), { timeout: 10_000 });
+    const messages: JobMessage[] = [];
+    const h = inProcessRunner(job, (m) => messages.push(m));
+    let ended: unknown = null;
+    void h.done.then((r) => (ended = r));
+    await vi.waitFor(() => {
+      // 命令提前结束了就别干等：把结果和收到的消息打出来，好知道是怎么结束的。
+      if (ended) throw new Error(`command ended before writing its pid: ${JSON.stringify({ ended, messages })}`);
+      expect(existsSync(pidFile) && readFileSync(pidFile, "utf8") !== "").toBe(true);
+    }, { timeout: 15_000 });
     const pid = Number(readFileSync(pidFile, "utf8"));
     expect(alive(pid)).toBe(true);
     h.cancel();
     expect(await h.done).toEqual({ kind: "cancelled" });
     await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5_000 });
-  }, 20_000);
+  }, 30_000);
 });
