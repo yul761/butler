@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -71,7 +71,8 @@ describe("check export into a Butler worktree", () => {
     const r = await ex.run(CHECK.key, "acme/app");
     expect(r.ok).toBe(true);
     const e = (r as { export: { id: number; branch: string; worktree: string; base: string; committed: boolean; status: string; diff: string; files: string[]; target: string } }).export;
-    expect(e).toMatchObject({ branch: "butler/check-no-debugger-a1b2c3", base: "origin/main", committed: true, status: "ready", target: "script", files: ["scripts/butler-checks/no-debugger.sh"] });
+    expect(e).toMatchObject({ branch: "butler/check-no-debugger-a1b2c3", base: "origin/main", committed: true, status: "ready", target: "script", files: ["scripts/butler-checks/no-debugger.sh", ".gitattributes"] });
+    expect(readFileSync(join(e.worktree, ".gitattributes"), "utf8")).toBe("/scripts/butler-checks/no-debugger.sh text eol=lf\n");
     expect(e.worktree).toBe(join(home, "exports", String(e.id)));
     expect(git(e.worktree, "log", "-1", "--format=%s")).toBe('chore: add Butler check "No debugger" as a repo rule');
     expect(git(e.worktree, "ls-files", "-s", "scripts/butler-checks/no-debugger.sh")).toMatch(/^100755 /);
@@ -99,7 +100,7 @@ describe("check export into a Butler worktree", () => {
     const r = await ex.run(CHECK.key, "acme/app");
     if (!r.ok) throw new Error(r.message);
     expect(r.export).toMatchObject({ committed: false, status: "ready" });
-    expect(git(r.export!.worktree, "diff", "--cached", "--name-only")).toBe("scripts/butler-checks/no-debugger.sh");
+    expect(git(r.export!.worktree, "diff", "--cached", "--name-only")).toBe(".gitattributes\nscripts/butler-checks/no-debugger.sh");
     expect(r.message).toContain("user.name");
   });
 
@@ -151,5 +152,52 @@ describe("check export into a Butler worktree", () => {
     expect(git(root, "branch", "--list", e.branch)).toBe("");
     expect(repo.getExport(e.id)!.status).toBe("discarded");
     expect(await ex.act({ kind: "push", id: e.id })).toMatchObject({ ok: false });
+  });
+
+  it("removes the worktree and branch again when writing or committing fails", async () => {
+    const failAdd: GitRun = (cwd, args, o) => (args[0] === "add" ? Promise.resolve({ code: 128, stdout: "", stderr: "fatal: index.lock exists" }) : runGit(cwd, args, o));
+    const { root, home, ex, repo } = setup({ "go.mod": "" }, { git: failAdd });
+    const r = await ex.run(CHECK.key, "acme/app");
+    expect(r).toMatchObject({ ok: false });
+    expect(r.message).toContain("index.lock");
+    const e = repo.exports()[0];
+    expect(e.status).toBe("failed");
+    expect(existsSync(join(home, "exports", String(e.id)))).toBe(false);
+    expect(git(root, "branch", "--list", "butler/*")).toBe("");
+    expect(git(root, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1);
+  });
+
+  it("does not run the repo's own git hooks while exporting", async () => {
+    const { root, ex } = setup({ "go.mod": "" });
+    const hooks = git(root, "rev-parse", "--git-path", "hooks");
+    const marker = join(root, "..", `hook-ran-${Date.now()}`);
+    dirs.push(marker);
+    for (const h of ["post-checkout", "prepare-commit-msg", "post-commit", "pre-commit"]) {
+      const f = join(root, hooks, h);
+      writeFileSync(f, `#!/bin/sh\necho ${h} >> "${marker.split("\\").join("/")}"\n`);
+      chmodSync(f, 0o755);
+    }
+    const r = await ex.run(CHECK.key, "acme/app");
+    if (!r.ok) throw new Error(r.message);
+    expect(r.export!.committed).toBe(true);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("on startup cleans up an export that was interrupted half way, without touching live ones", async () => {
+    const { root, home, ex, repo } = setup({ "go.mod": "" });
+    const live = await ex.run(CHECK.key, "acme/app");
+    if (!live.ok) throw new Error(live.message);
+    // 上次跑到一半退出了：行还是「中断」，worktree 和分支已经建了
+    const id = repo.insertExport(
+      { checkId: null, checkKey: CHECK.key, slug: "acme/app", target: "script", branch: "butler/half-done", base: "main", worktree: "", files: [], diff: "", committed: false, status: "failed", detail: "interrupted", createdAt: 1 },
+      1,
+    );
+    const dir = join(home, "exports", String(id));
+    git(root, "worktree", "add", "-q", "-b", "butler/half-done", dir, "main");
+    await ex.recover();
+    expect(existsSync(dir)).toBe(false);
+    expect(git(root, "branch", "--list", "butler/half-done")).toBe("");
+    expect(existsSync(live.export!.worktree)).toBe(true);
+    expect(git(root, "branch", "--list", live.export!.branch)).not.toBe("");
   });
 });

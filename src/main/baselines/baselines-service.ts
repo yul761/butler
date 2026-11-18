@@ -1,4 +1,5 @@
 // 仓库现状（工作流 E2）的主进程服务：扫描（跳过的记原因）、历史、过期、给 D 的接口（设计 §4.1–4.3）、档案文字、标记文件表的三层。
+import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import type { Db } from "../db/database";
 import { BaselinesRepo } from "../db/baselines-repo";
@@ -55,6 +56,22 @@ export interface ScanResultLine {
   reason?: BaselineSkipReason | string;
 }
 
+/** 同时最多跑几个仓库的扫描。 */
+export const MAX_PARALLEL_SCANS = 3;
+
+interface ScanEntry {
+  handle: JobHandle | null;
+  cancelled: boolean;
+  opts: ScanOptions;
+  promise: Promise<ScanResultLine>;
+  /** 这次跑完以后还要再扫一次（要得比这次多的请求合起来）。 */
+  next?: ScanOptions;
+  after?: Promise<ScanResultLine>;
+}
+
+/** 正在跑的 a 是不是已经包含了 b 要的。 */
+const covers = (a: ScanOptions, b: ScanOptions): boolean => (a.infer || !b.infer) && (!!a.force || !b.force);
+
 export interface ScanOptions {
   /** 允许调模型补（还要看 baselineInfer 设置）；自动重扫永远是 false。 */
   infer: boolean;
@@ -79,7 +96,10 @@ type RuleDefs = Record<string, RuleLayerRow>;
 
 export class BaselineService {
   readonly repo: BaselinesRepo;
-  private readonly running = new Map<string, { handle: JobHandle | null; cancelled: boolean; promise: Promise<ScanResultLine> }>();
+  private readonly running = new Map<string, ScanEntry>();
+  /** 同时在跑的扫描数和排队的（「全部扫描」一次可能几百个仓库：每个都起 worker、git ls-files、模型调用）。 */
+  private active = 0;
+  private readonly waiting: (() => void)[] = [];
   private readonly lastAuto = new Map<string, number>();
   private readonly ruleResolver: LayeredResolver<RuleDefs>;
 
@@ -156,7 +176,7 @@ export class BaselineService {
     for (const c of b.checks) {
       if (!DRAFT_CATEGORIES.includes(c.category)) continue;
       const input = draftInput(c);
-      out.push({ id: c.id, input, confidence: c.confidence, needsConfirm: c.confidence === "low", exists: existing.has(String(input.params.command)) });
+      out.push({ id: c.id, input, confidence: c.confidence, needsConfirm: c.confidence === "low" || b.origin === "imported", exists: existing.has(String(input.params.command)) });
     }
     return out;
   }
@@ -203,12 +223,20 @@ export class BaselineService {
     return this.running.has(slug);
   }
 
-  /** 扫一个仓库。同一个仓库正在扫时返回那一次。 */
+  /**
+   * 扫一个仓库（最多同时 MAX_PARALLEL_SCANS 个，其余排队）。同一个仓库正在扫时：这次要的那一次已经包含了（比如都不调模型）就返回那一次；
+   * 要得更多（要调模型、要强制存）就在它之后再扫一次，免得用户点的「扫描」被正在跑的自动重扫吞掉（审查发现）。
+   */
   scan(slug: string, o: ScanOptions): Promise<ScanResultLine> {
     const cur = this.running.get(slug);
-    if (cur) return cur.promise;
-    const entry = { handle: null as JobHandle | null, cancelled: false, promise: Promise.resolve<ScanResultLine>({ slug, status: "skipped" }) };
-    entry.promise = this.doScan(slug, o, entry)
+    if (cur) {
+      if (covers(cur.opts, o)) return cur.promise;
+      cur.next = cur.next ? { infer: cur.next.infer || o.infer, force: !!(cur.next.force || o.force) } : { ...o };
+      cur.after ??= cur.promise.then(() => this.scan(slug, cur.next!));
+      return cur.after;
+    }
+    const entry: ScanEntry = { handle: null, cancelled: false, opts: o, promise: Promise.resolve<ScanResultLine>({ slug, status: "skipped" }) };
+    entry.promise = this.withSlot(() => this.doScan(slug, o, entry))
       .catch((e): ScanResultLine => {
         this.d.log?.(`baseline scan of ${slug} failed`, e);
         this.store(slug, { status: "failed", skipReason: "error", detail: String(e instanceof Error ? e.message : e).slice(0, 500) });
@@ -221,6 +249,19 @@ export class BaselineService {
     this.running.set(slug, entry);
     this.d.onChanged?.(slug);
     return entry.promise;
+  }
+
+  private async withSlot<T>(run: () => Promise<T>): Promise<T> {
+    if (this.active >= MAX_PARALLEL_SCANS) await new Promise<void>((r) => this.waiting.push(r));
+    else this.active++;
+    try {
+      return await run();
+    } finally {
+      const next = this.waiting.shift();
+      // 名额直接交给排队的下一个（active 不变）。
+      if (next) next();
+      else this.active--;
+    }
   }
 
   cancel(slug: string): boolean {
@@ -246,6 +287,8 @@ export class BaselineService {
       this.store(slug, { status: "skipped", skipReason: reason, detail, durationMs: this.d.now() - started });
       return { slug, status: "skipped", reason };
     };
+    // 排队的时候就被取消了。
+    if (entry.cancelled) return skip("cancelled", null);
     if (!root) return skip("not_cloned", null);
     const listing = await (this.d.list ?? listRepoFiles)(root);
     if (!listing.ok) return skip(listing.reason, listing.detail || null);
@@ -268,8 +311,9 @@ export class BaselineService {
     let out: ScanOutput = result;
 
     const prev = this.repo.latestUsable(slug);
-    // 输入、文件列表都没变（而且上次的模型补全不用重跑）：不重存。
-    if (!o.force && prev && prev.origin === "local" && prev.listingHash === out.listingHash && sameInputs(prev.inputs, out.inputs) && !(o.infer && prev.inferred === "failed")) {
+    // 输入、文件列表都没变（而且这次不用调模型：要补的上次已经补过，或者这次不让调）：不重存。
+    const wantsInference = o.infer && out.inferReasons.length > 0 && prev?.inferred !== "ran" && this.d.config().infer !== "off";
+    if (!o.force && prev && prev.origin === "local" && prev.listingHash === out.listingHash && sameInputs(prev.inputs, out.inputs) && !wantsInference) {
       if (prev.staleAt !== null) this.repo.setStale(prev.id, null);
       return { slug, status: "unchanged" };
     }
@@ -319,14 +363,16 @@ export class BaselineService {
     const b = this.latest(slug);
     if (!b) return false;
     if (b.staleAt !== null) return true;
-    const dir = root ?? this.d.localPath(slug);
+    const registered = this.d.localPath(slug);
+    const dir = root ?? registered;
     if (!dir || b.origin === "imported") return b.origin === "imported";
     const startedAt = Date.now();
     for (const input of b.inputs.slice(0, STALE_MAX_FILES)) {
       if (Date.now() - startedAt > STALE_BUDGET_MS) break;
       const text = readRepoFile(dir, input.path, STALE_READ_MAX);
       if (text === null || sha1(text) !== input.hash) {
-        this.repo.setStale(b.id, this.d.now());
+        // 只有登记的那份 checkout 改了才记在共用的扫描上；ticket 的 worktree 改了只影响这一次的说明（重扫读的是登记的路径）。
+        if (registered && samePath(dir, registered)) this.repo.setStale(b.id, this.d.now());
         return true;
       }
     }
@@ -361,9 +407,15 @@ export class BaselineService {
       if (seen.has(r.slug)) continue;
       seen.add(r.slug);
       try {
-        if (!this.latest(r.slug)) continue;
+        const b = this.latest(r.slug);
+        // 导入的扫描是别处的结果、没在本机核对过：命令不进 agent 的说明，等本机扫一次。
+        if (!b) continue;
+        if (b.origin === "imported") {
+          this.maybeRescan(r.slug);
+          continue;
+        }
         const stale = this.checkStale(r.slug, r.root);
-        if (stale) this.maybeRescan(r.slug);
+        if (stale && this.latest(r.slug)?.staleAt != null) this.maybeRescan(r.slug);
         texts.push(this.profileFor(r.slug, { stale, withPitfalls: !hasLessons }));
       } catch (e) {
         this.d.log?.(`baseline profile for ${r.slug} failed`, e);
@@ -461,6 +513,15 @@ export class BaselineService {
         return this.ruleRemove(a.scope, a.key);
     }
   }
+}
+
+/** 两个路径是不是同一个目录（Windows 上不分大小写）。 */
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => {
+    const r = resolve(p);
+    return process.platform === "win32" ? r.toLowerCase() : r;
+  };
+  return norm(a) === norm(b);
 }
 
 function sameScopeRef(a: ScopeRef, b: ScopeRef): boolean {

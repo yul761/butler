@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { join } from "node:path";
 import type { Worker } from "node:worker_threads";
 import { memDb } from "../test-utils";
 import { LessonsRepo } from "../db/lessons-repo";
@@ -10,7 +11,7 @@ import { checkAdapter, lessonAdapter, policyAdapter, productAdapter } from "../b
 import { ChecksService } from "../checks/checks-service";
 import { LegacyScanService } from "./legacy-service";
 import { inProcessRunner, workerRunner, type JobRunner } from "./runner";
-import { runJob, type JobMessage } from "./jobs";
+import { readRepoFile, runJob, type JobMessage } from "./jobs";
 import { legacyEvaluate } from "./legacy";
 import { writeRepo } from "./test-repo";
 import type { CheckInput } from "../../shared/checks";
@@ -200,4 +201,68 @@ describe("worker runner", () => {
     w2.emit("error", new Error("boom"));
     expect(await h2.done).toEqual({ kind: "crashed", message: "boom" });
   });
+
+  it("kills the check commands still running when it cancels, stalls or crashes, and not ones that ended", async () => {
+    const LEGACY = { kind: "legacy" as const, root: "/x", files: [], check: { type: "run_command" as const, params: { stage: "edit" }, globs: [], excludeGlobs: [] }, ticketPattern: "", maxFiles: 1, timeoutMs: 40, env: {} };
+    for (const [end, expected] of [
+      [(h: { cancel(): void }) => h.cancel(), "cancelled"],
+      [(_h: unknown, w: FakeWorker) => w.emit("error", new Error("boom")), "crashed"],
+      [() => undefined, "stalled"],
+    ] as const) {
+      const killed: number[] = [];
+      const w = new FakeWorker();
+      const got: JobMessage[] = [];
+      const h = workerRunner(() => w as unknown as Worker, 30, (pid) => killed.push(pid))(LEGACY, (m) => got.push(m));
+      w.emit("message", { type: "pid", pid: 101, alive: true });
+      w.emit("message", { type: "pid", pid: 102, alive: true });
+      w.emit("message", { type: "pid", pid: 101, alive: false });
+      end(h, w);
+      expect((await h.done).kind).toBe(expected);
+      expect(killed).toEqual([102]);
+      expect(got).toEqual([]);
+    }
+    // 卡住那一次要等过命令自己的超时（+5 秒）
+  }, 20_000);
+});
+
+describe("reading repo files", () => {
+  it.skipIf(process.platform === "win32")("follows symlinks only inside the repo", () => {
+    const root = writeRepo({ "a.txt": "inside" });
+    const outside = writeRepo({ "secret.txt": "outside" });
+    roots.push(root, outside);
+    symlinkSync(join(outside, "secret.txt"), join(root, "leak.txt"));
+    symlinkSync(join(root, "a.txt"), join(root, "b.txt"));
+    expect(readRepoFile(root, "leak.txt", 1000)).toBeNull();
+    expect(readRepoFile(root, "b.txt", 1000)).toBe("inside");
+    expect(readRepoFile(root, "a.txt", 1000)).toBe("inside");
+  });
+});
+
+describe("in-process runner", () => {
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it("cancelling a whole-repo command kills the command's process tree", async () => {
+    const root = writeRepo({ "a.txt": "x" });
+    roots.push(root);
+    const pidFile = join(root, "pid.txt");
+    const script = `require("fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => {}, 60000)`;
+    const job = {
+      kind: "legacy" as const, root, files: ["a.txt"], ticketPattern: "", maxFiles: 10, timeoutMs: 60_000, env: process.env as Record<string, string>,
+      check: { type: "run_command" as const, params: { stage: "push", command: `node -e '${script}'` }, globs: [], excludeGlobs: [] },
+    };
+    const h = inProcessRunner(job, () => {});
+    await vi.waitFor(() => expect(existsSync(pidFile) && readFileSync(pidFile, "utf8") !== "").toBe(true), { timeout: 10_000 });
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    expect(alive(pid)).toBe(true);
+    h.cancel();
+    expect(await h.done).toEqual({ kind: "cancelled" });
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5_000 });
+  }, 20_000);
 });

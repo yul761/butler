@@ -5,11 +5,12 @@ export type RegexTranslation = { ok: true; source: string } | { ok: false; reaso
  * 能翻的：命名组 (?<n>…) → (?P<n>…)，\k<n> → (?P=n)，\/ → /，\d \w \s \b 按 ASCII（脚本里用 re.ASCII，和 JS 不带 u 一样）。
  * 不能翻的：\p{…}、\u{…}、\c 控制字符、[^] / []、不定长的后行断言（Python 只收定长）。
  */
-export function jsRegexToPython(src: string): RegexTranslation {
-  if (/\\[pP]\{/.test(src)) return { ok: false, reason: "unicode_property" };
-  if (/\\u\{/.test(src)) return { ok: false, reason: "unicode_codepoint" };
-  if (/\\c[A-Za-z]/.test(src)) return { ok: false, reason: "control_escape" };
-  if (/(^|[^\\])\[\^?\]/.test(src)) return { ok: false, reason: "empty_class" };
+export function jsRegexToPython(input: string): RegexTranslation {
+  if (/\\[pP]\{/.test(input)) return { ok: false, reason: "unicode_property" };
+  if (/\\u\{/.test(input)) return { ok: false, reason: "unicode_codepoint" };
+  if (/\\c[A-Za-z]/.test(input)) return { ok: false, reason: "control_escape" };
+  if (/(^|[^\\])\[\^?\]/.test(input)) return { ok: false, reason: "empty_class" };
+  const src = escapeLiteralBraces(input);
   let out = "";
   let i = 0;
   let inClass = false;
@@ -70,6 +71,59 @@ export function jsRegexToPython(src: string): RegexTranslation {
   return { ok: true, source: out };
 }
 
+/**
+ * JS（不带 u）里不是合法量词的 { 就是字面的花括号（{,3}、{a}、x{）；Python 和新的 PCRE 却把 {,3} 读成 {0,3}。
+ * 统一转义成 \{，两边意思才一样（审查发现）。
+ */
+export function escapeLiteralBraces(src: string): string {
+  let out = "";
+  let cls = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === "\\") {
+      out += c + (src[i + 1] ?? "");
+      i++;
+      continue;
+    }
+    if (cls) {
+      if (c === "]") cls = false;
+      out += c;
+      continue;
+    }
+    if (c === "[") cls = true;
+    if (c === "{" && !/^\{\d+(,\d*)?\}/.test(src.slice(i))) {
+      out += "\\{";
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * 把字符类外面、没转义的 $ 换成 repl（pygrep 按字节读行，行尾的 \r 还在：$ 要能跳过它，和 Butler 按 \r?\n 分行一样）。
+ */
+export function replaceEndAnchors(src: string, repl: string): string {
+  let out = "";
+  let cls = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === "\\") {
+      out += c + (src[i + 1] ?? "");
+      i++;
+      continue;
+    }
+    if (cls) {
+      if (c === "]") cls = false;
+      out += c;
+      continue;
+    }
+    if (c === "[") cls = true;
+    out += c === "$" ? repl : c;
+  }
+  return out;
+}
+
 /** 从 i（一个 "("）到配对的 ")"（含）。 */
 function groupBody(src: string, i: number): string | null {
   let depth = 0;
@@ -103,5 +157,5 @@ export function escapeRegex(s: string): string {
 export function jsRegexToPcre(src: string): RegexTranslation {
   const py = jsRegexToPython(src);
   if (!py.ok) return py;
-  return { ok: true, source: src.replace(/(^|[^\\])((?:\\\\)*)\\u([0-9a-fA-F]{4})/g, (_m, a: string, b: string, h: string) => `${a}${b}\\x{${h}}`) };
+  return { ok: true, source: escapeLiteralBraces(src).replace(/(^|[^\\])((?:\\\\)*)\\u([0-9a-fA-F]{4})/g, (_m, a: string, b: string, h: string) => `${a}${b}\\x{${h}}`) };
 }

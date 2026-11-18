@@ -449,7 +449,7 @@ function expand(ctx: Ctx, words: string[], cwd: string, o: ClassifyOpts): Found[
       const def = s.get(n);
       if (!def) continue;
       any = true;
-      const inv = kind === "make" ? `make ${n}` : kind === "just" ? `just ${n}` : kind === "composer" ? `composer ${n}` : `tox -e ${n}`;
+      const inv = kind === "make" ? `make ${arg(n)}` : kind === "just" ? `just ${arg(n)}` : kind === "composer" ? `composer ${arg(n)}` : `tox -e ${arg(n)}`;
       out.push(...runScript(ctx, def, dir, inv, o));
     }
     return any ? out : null;
@@ -521,8 +521,8 @@ function preCommitHook(ctx: Ctx, h: NonNullable<Contribution["preCommitHooks"]>[
   return found.map((f) => ({
     ...f,
     cwd,
-    command: `pre-commit run ${h.id} --all-files`,
-    fileCommand: h.passFiles ? `pre-commit run ${h.id} --files {file}` : f.fileCommand,
+    command: `pre-commit run ${arg(h.id)} --all-files`,
+    fileCommand: h.passFiles ? `pre-commit run ${arg(h.id)} --files {file}` : f.fileCommand,
     passFiles: h.passFiles,
     rank: 2,
     evidence: [...f.evidence, h.evidence],
@@ -650,7 +650,7 @@ export function scanFiles(input: ScanInput): ScanOutput {
     for (const [dir, defs] of byDir) {
       for (const def of defs.values()) {
         if (!categoryOfName(ctx, def.name)) continue;
-        const inv = kind === "node" ? `${fill(ctx, dir, "{run}")} ${def.name}` : kind === "make" ? `make ${def.name}` : kind === "just" ? `just ${def.name}` : `composer ${def.name}`;
+        const inv = kind === "node" ? `${fill(ctx, dir, "{run}")} ${arg(def.name)}` : kind === "make" ? `make ${arg(def.name)}` : kind === "just" ? `just ${arg(def.name)}` : `composer ${arg(def.name)}`;
         for (const f of runScript(ctx, def, dir, inv, { depth: 0, seen: new Set() })) found.push({ f, origin: { stage: null, evidence: def.evidence, ci: false } });
       }
     }
@@ -745,6 +745,14 @@ const rankConf = (c: BaselineConfidence) => (c === "high" ? 3 : c === "medium" ?
 
 function quote(s: string): string {
   return /^[\w./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * 命令里的一个参数（脚本名、make / just 目标、pre-commit 的 hook id）：常见的 lint:fix、@scope/x 这类不加引号，
+ * 带空格或 shell 字符的才加（不然 "lint fix" 会变成两个参数）。
+ */
+function arg(s: string): string {
+  return /^[\w./:@+=,%-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`;
 }
 
 function absorb(ctx: Ctx, owner: string, fileDir: string, c: Contribution): void {

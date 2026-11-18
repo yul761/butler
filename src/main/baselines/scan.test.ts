@@ -97,6 +97,15 @@ describe("baseline scan: rules and platforms", () => {
     expect(r.advice).toEqual([{ dir: "", missing: ["lint"] }]);
     expect(find(r, "", "jest")!.command).toBe("npm run test");
   });
+  it("quotes script names that would split into several arguments, and leaves the usual ones bare", () => {
+    const one = (scripts: Record<string, string>) => {
+      const pkg = JSON.stringify({ packageManager: "pnpm@9.0.0", scripts, devDependencies: { eslint: "9" } });
+      return scan({ "package.json": pkg, "pnpm-lock.yaml": "", "src/a.ts": "" }).checks.find((c) => c.tool === "eslint")?.command;
+    };
+    expect(one({ "lint fix": "eslint --fix ." })).toBe("pnpm 'lint fix'");
+    expect(one({ "lint:all": "eslint ." })).toBe("pnpm lint:all");
+  });
+
   it("accepts Windows separators and marker names in other cases", () => {
     const repo: FixtureRepo = { "go.mod": "module x\n", makefile: "lint:\r\n\tgo vet ./...\r\n", "sub\\x.go": "package x" };
     const r = scanFiles({ files: Object.keys(repo), read: (p) => repo[p] ?? repo[p.replace(/\//g, "\\")] ?? null, rules: resolveRules([]) });

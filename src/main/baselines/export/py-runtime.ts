@@ -100,12 +100,8 @@ _rx_cache = {}
 def rx_test(pattern, flags, text):
     k = (flags, pattern)
     if k not in _rx_cache:
-        try:
-            _rx_cache[k] = re.compile(pattern, re.ASCII | (re.IGNORECASE if "i" in flags else 0))
-        except re.error:
-            _rx_cache[k] = None
-    r = _rx_cache[k]
-    return bool(r and r.search(text))
+        _rx_cache[k] = re.compile(pattern, re.ASCII | (re.IGNORECASE if "i" in flags else 0))
+    return bool(_rx_cache[k].search(text))
 
 def forbidden_pattern(p, content):
     out = []
@@ -304,6 +300,12 @@ def git(args, cwd):
     return subprocess.run(["git", "-c", "core.quotepath=off"] + args, cwd=cwd, check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
 
 def main(argv):
+    # Windows 上管道的默认编码不是 UTF-8：中文的提示会直接 UnicodeEncodeError。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     cwd = os.getcwd()
     try:
         root = git(["rev-parse", "--show-toplevel"], cwd).decode("utf-8").strip() or cwd
@@ -339,7 +341,13 @@ def main(argv):
         text = data.decode("utf-8", errors="replace")
         if text.startswith("\ufeff"):
             text = text[1:]
-        for line, detail in evaluate(CHECK, text, f):
+        try:
+            found = evaluate(CHECK, text, f)
+        except re.error as e:
+            # 正则编译不了：报错退出，不能当成「没有违规」放过去。
+            sys.stderr.write("%s: invalid pattern: %s\n" % (CHECK["name"], e))
+            return 2
+        for line, detail in found:
             count += 1
             d = re.sub(r"\s+", " ", detail)[:200]
             sys.stdout.write("%s:%d: %s%s\n" % (f, line, CHECK["message"] or CHECK["name"], " (" + d + ")" if d else ""))

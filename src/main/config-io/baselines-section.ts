@@ -36,6 +36,31 @@ function ruleValid(it: BaselineRuleItem): boolean {
   return !("error" in validateRule({ ...(base ?? {}), ...it.rule, key: it.key }));
 }
 
+/** 一条规则（这一层存的字段）里会被当成命令执行的文字：install、各工具的命令、关键词规则的单文件命令。 */
+function ruleCommands(rule: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const add = (v: unknown) => {
+    if (typeof v === "string" && v) out.push(v);
+  };
+  add(rule.install);
+  add(rule.fileCommand);
+  if (Array.isArray(rule.tools)) for (const t of rule.tools as Record<string, unknown>[]) if (t && typeof t === "object") [t.command, t.fileCommand, t.testOne].forEach(add);
+  return out;
+}
+
+const clip = (cmd: string) => (cmd.length > 200 ? `${cmd.slice(0, 200)}…` : cmd);
+
+/** 预览里的标签带上命令：导入前就看得到会执行什么（和 checks 部分一样）。 */
+const commandsLabel = (cmds: string[]): string => (cmds.length ? ` · $ ${clip(cmds.join(" ; "))}` : "");
+
+/**
+ * 导入的规则带着别处写的命令（扫描后会变成检查草稿和 session 说明里的命令）：命令是新的或变了的一律先停用，看过再打开（同 checks 部分）。
+ */
+const ruleNeedsReview = (incoming: Record<string, unknown>, local: Record<string, unknown> | null): boolean => {
+  const cmds = ruleCommands(incoming);
+  return cmds.length > 0 && (local === null || !same(cmds, ruleCommands(local)));
+};
+
 const parseRule = (raw: string): Record<string, unknown> => {
   try {
     const v = JSON.parse(raw) as unknown;
@@ -66,7 +91,7 @@ export const baselineRulesSection: ConfigSection<BaselineRuleItem> = {
       const fp = baselineRuleFingerprint(it.key, it.scope);
       if (seen.has(fp) || !ruleValid(it)) continue;
       seen.add(fp);
-      const label = `${it.key} · ${layerLabel(it.scope)}`;
+      const label = `${it.key} · ${layerLabel(it.scope)}${commandsLabel(ruleCommands(it.rule))}`;
       const scope = localScope(it.scope, ctx);
       const local = scope ? repo.rulesInLayer(scope).find((r) => r.key === it.key) : undefined;
       if (!local) {
@@ -125,7 +150,9 @@ export const baselineRulesSection: ConfigSection<BaselineRuleItem> = {
       }
       const before = repo.ruleId(scope, it.key);
       if (before !== null) ctx.batch.track("baseline_rule", before);
-      repo.upsertRule(scope, it.key, JSON.stringify(it.rule), it.enabled, ctx.now);
+      const localRow = repo.rulesInLayer(scope).find((r) => r.key === it.key);
+      const enabled = it.enabled && !ruleNeedsReview(it.rule, localRow ? parseRule(localRow.rule) : null);
+      repo.upsertRule(scope, it.key, JSON.stringify(it.rule), enabled, ctx.now);
       if (before === null) {
         ctx.batch.created("baseline_rule", repo.ruleId(scope, it.key)!);
         counts.added++;
@@ -137,26 +164,28 @@ export const baselineRulesSection: ConfigSection<BaselineRuleItem> = {
 
 // ---------------------------------------------------------------- 仓库现状
 
-const STR = z.string().max(1000);
-const DIR = z.string().max(500).refine((d) => !/^([a-zA-Z]:)?[\\/]/.test(d) && !d.split("/").includes(".."), "relative dir");
-const CMD = z.string().max(1000).nullable();
+/** 单行：这些文字会进检查草稿的命令和 agent 的说明，换行会多出一条命令或跳出反引号。 */
+const LINE = (max: number) => z.string().max(max).refine((v) => !/[\r\n\0]/.test(v), "single line");
+const STR = LINE(1000);
+const DIR = LINE(500).refine((d) => !/^([a-zA-Z]:)?[\\/]/.test(d) && !d.split("/").includes(".."), "relative dir");
+const CMD = LINE(1000).nullable();
 const CATEGORY = z.enum(BASELINE_CATEGORIES);
 
-const ProjectItem = z.object({ dir: DIR, langs: z.array(z.string().max(40)).max(20), markers: z.array(z.string().max(60)).max(60), pm: z.string().max(30).optional() });
+const ProjectItem = z.object({ dir: DIR, langs: z.array(LINE(40)).max(20), markers: z.array(LINE(60)).max(60), pm: LINE(30).optional() });
 const CheckItemSchema = z.object({
-  id: z.string().max(700), dir: DIR, category: CATEGORY, tool: z.string().max(60), command: STR, fileCommand: STR.optional(), testOne: STR.optional(),
+  id: LINE(700), dir: DIR, category: CATEGORY, tool: LINE(60), command: STR, fileCommand: STR.optional(), testOne: STR.optional(),
   stages: z.array(z.enum(REPO_STAGES)).max(3), changedFiles: z.boolean(), butlerStage: z.enum(["edit", "push"]),
   source: z.enum(["marker", "ci", "inferred"]), confidence: z.enum(["high", "medium", "low"]),
-  evidence: z.array(STR).max(30), facts: z.array(z.string().max(200)).max(500), exts: z.array(z.string().max(10)).max(30).optional(),
+  evidence: z.array(STR).max(30), facts: z.array(LINE(200)).max(500), exts: z.array(LINE(10)).max(30).optional(),
 });
 const ProfileProjectItem = z.object({
-  dir: DIR, langs: z.array(z.string().max(40)).max(20), install: CMD, build: CMD, testAll: CMD, testOne: CMD, fastest: CMD, lint: CMD, typecheck: CMD,
+  dir: DIR, langs: z.array(LINE(40)).max(20), install: CMD, build: CMD, testAll: CMD, testOne: CMD, fastest: CMD, lint: CMD, typecheck: CMD,
   inferred: z.array(z.string().max(30)).max(10),
 });
 
 export const BaselineItem = z.object({
   slug: z.string().regex(/^[^\s/]+\/[^\s/]+$/).max(300),
-  scannedAt: z.number().int().nonnegative(),
+  scannedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   status: z.enum(["ok", "partial"]),
   projects: z.array(ProjectItem).max(500),
   checks: z.array(CheckItemSchema).max(2000),
@@ -169,6 +198,22 @@ export const BaselineItem = z.object({
   inferred: z.enum(["none", "ran", "failed", "skipped_off"]),
 });
 export type BaselineItem = z.infer<typeof BaselineItem>;
+
+/**
+ * 导入的扫描时间不晚于导入的这一刻：文件里写个将来的时间，它就会一直排在本机扫描前面，本机扫描反倒被清掉（审查发现）。
+ */
+const importedAt = (it: BaselineItem, now: number): number => Math.min(it.scannedAt, now);
+
+/** 导入的扫描里会变成命令的文字（检查和档案），预览里给人看。 */
+function baselineCommands(it: BaselineItem): string[] {
+  const out = new Set<string>();
+  for (const c of it.checks) {
+    out.add(c.command);
+    if (c.fileCommand) out.add(c.fileCommand);
+  }
+  for (const p of it.profile.projects) for (const v of [p.install, p.build, p.testAll, p.testOne, p.fastest, p.lint, p.typecheck]) if (v) out.add(v);
+  return [...out].filter(Boolean);
+}
 
 export const baselineFingerprint = (slug: string): string => fingerprint({ t: "baseline", slug });
 
@@ -204,10 +249,11 @@ export const baselinesSection: ConfigSection<BaselineItem> = {
       if (seen.has(fp)) continue;
       seen.add(fp);
       const local = repo.latestUsable(it.slug);
-      const label = `${it.slug} · ${new Date(it.scannedAt).toISOString().slice(0, 10)}`;
+      const at = importedAt(it, ctx.now);
+      const label = `${it.slug} · ${new Date(at).toISOString().slice(0, 10)}${commandsLabel(baselineCommands(it))}`;
       if (!local) rows.push({ fingerprint: fp, label, status: "added", diffs: [], reasons: [], localId: null });
-      else if (it.scannedAt > local.scannedAt) {
-        rows.push({ fingerprint: fp, label, status: "changed", diffs: [{ field: "scannedAt", local: local.scannedAt, incoming: it.scannedAt }], reasons: [], localId: local.id });
+      else if (at > local.scannedAt) {
+        rows.push({ fingerprint: fp, label, status: "changed", diffs: [{ field: "scannedAt", local: local.scannedAt, incoming: at }], reasons: [], localId: local.id });
       } else rows.push({ fingerprint: fp, label, status: "unchanged", diffs: [], reasons: [], localId: local.id });
     }
     // 扫描结果不删：替换导入也不会因为文件里没有就删掉本机的扫描。
@@ -226,7 +272,7 @@ export const baselinesSection: ConfigSection<BaselineItem> = {
         continue;
       }
       const id = repo.insert({
-        slug: it.slug, scannedAt: it.scannedAt, status: it.status, skipReason: null, detail: null, origin: "imported",
+        slug: it.slug, scannedAt: importedAt(it, ctx.now), status: it.status, skipReason: null, detail: null, origin: "imported",
         projects: it.projects, checks: it.checks, advice: it.advice, profile: { ...it.profile, pitfalls: [] },
         inputs: [], listingHash: "", staleAt: ctx.now, inferred: it.inferred, inferDetail: null, durationMs: 0,
       });

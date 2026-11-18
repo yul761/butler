@@ -13,6 +13,7 @@ import type { InferRunner } from "./infer";
 import type { HeadlessExecResult } from "../handoff/headless-exec";
 import { CI_ONLY_REPO, JS_REPO, MONO_REPO, PY_REPO } from "./__fixtures__/repos";
 import { writeRepo } from "./test-repo";
+import { listRepoFiles, type Listing } from "./listing";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -34,7 +35,7 @@ const ANSWER = {
 };
 const inferOk: InferRunner = async () => ({ ok: true, value: ANSWER, rawText: "", result: {} as never, route: {} as never }) as HeadlessExecResult;
 
-function setup(o: { paths?: Record<string, string | null>; infer?: InferRunner; cfg?: Partial<BaselinesConfig> } = {}) {
+function setup(o: { paths?: Record<string, string | null>; infer?: InferRunner; cfg?: Partial<BaselinesConfig>; list?: (root: string) => Promise<Listing> } = {}) {
   const db = memDb();
   const lessons = new LessonsRepo(db);
   const recorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db)]);
@@ -47,7 +48,7 @@ function setup(o: { paths?: Record<string, string | null>; infer?: InferRunner; 
   const cfg: BaselinesConfig = { infer: "auto", autoRescan: true, guideChars: 1200, ...o.cfg };
   const changed: string[] = [];
   const svc = new BaselineService({
-    db, lessons, checks, localPath: (slug) => paths[slug] ?? null, runner: inProcessRunner, infer: o.infer, config: () => cfg, lang: () => "en", now,
+    db, lessons, checks, localPath: (slug) => paths[slug] ?? null, runner: inProcessRunner, infer: o.infer, config: () => cfg, lang: () => "en", now, list: o.list,
     onChanged: (s) => changed.push(s),
   });
   return { db, lessons, checks, batches, svc, cfg, changed, advance: (ms: number) => (t += ms) };
@@ -153,6 +154,56 @@ describe("BaselineService scanning", () => {
     expect(svc.maybeRescan("a/web")).toBe(true);
   });
 
+  it("runs at most three scans at a time when scanning many repos", async () => {
+    const paths: Record<string, string> = {};
+    for (let n = 0; n < 7; n++) paths[`a/r${n}`] = repoDir(JS_REPO);
+    let active = 0;
+    let peak = 0;
+    const gates: (() => void)[] = [];
+    const list = async (root: string) => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise<void>((r) => gates.push(r));
+      active--;
+      return listRepoFiles(root);
+    };
+    const { svc } = setup({ paths, list });
+    expect(svc.act({ kind: "scan", slugs: Object.keys(paths), infer: false })).toEqual({ ok: true });
+    for (const slug of Object.keys(paths)) expect(svc.isRunning(slug)).toBe(true);
+    while (Object.keys(paths).some((s) => svc.isRunning(s))) {
+      await new Promise((r) => setTimeout(r, 5));
+      gates.splice(0).forEach((g) => g());
+    }
+    expect(peak).toBe(3);
+    for (const slug of Object.keys(paths)) expect(svc.latest(slug)).not.toBeNull();
+  });
+
+  it("an explicit scan with inference during an automatic one runs again afterwards instead of being dropped", async () => {
+    const root = repoDir(CI_ONLY_REPO);
+    let calls = 0;
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    let first = true;
+    const list = async (r: string) => {
+      if (first) {
+        first = false;
+        await gate;
+      }
+      return listRepoFiles(r);
+    };
+    const { svc } = setup({ paths: { "a/ci": root }, list, infer: async (...a) => (calls++, inferOk(...a)) });
+    const auto = svc.scan("a/ci", { infer: false });
+    const asked = svc.scan("a/ci", { infer: true });
+    const same = svc.scan("a/ci", { infer: false });
+    expect(same).toBe(auto);
+    open();
+    await auto;
+    expect(calls).toBe(0);
+    expect(await asked).toMatchObject({ status: "ok" });
+    expect(calls).toBe(1);
+    expect(svc.latest("a/ci")!.inferred).toBe("ran");
+  });
+
   it("cancels a running scan", async () => {
     const root = repoDir(JS_REPO);
     const { svc } = setup({ paths: { "a/web": root } });
@@ -183,6 +234,32 @@ describe("BaselineService profile in the session guide", () => {
     expect(svc.guideProfile([{ slug: "a/web", root: web }], true)).toContain("Config files changed since this scan");
     cfg.guideChars = 200;
     expect(svc.guideProfile([{ slug: "a/web", root: web }, { slug: "a/py", root: py }], true).length).toBeLessThanOrEqual(400);
+  });
+
+  it("a ticket worktree's changed config marks only that guide stale, not the shared baseline", async () => {
+    const web = repoDir(JS_REPO);
+    const wt = repoDir(JS_REPO);
+    const { svc } = setup({ paths: { "a/web": web } });
+    await svc.scan("a/web", { infer: false });
+    writeFileSync(join(wt, "package.json"), JS_REPO["package.json"].replace('"lint"', '"lint:all"'));
+    expect(svc.guideProfile([{ slug: "a/web", root: wt }], true)).toContain("Config files changed since this scan");
+    expect(svc.latest("a/web")?.staleAt).toBeNull();
+    expect(svc.isRunning("a/web")).toBe(false);
+    expect(svc.guideProfile([{ slug: "a/web", root: web }], true)).not.toContain("Config files changed");
+  });
+
+  it("leaves an imported baseline out of the guide and asks to confirm every draft from it", async () => {
+    const web = repoDir(JS_REPO);
+    const { svc } = setup({ paths: { "a/web": web }, cfg: { autoRescan: false } });
+    await svc.scan("a/web", { infer: false });
+    const local = svc.latest("a/web")!;
+    svc.repo.insert({ ...local, scannedAt: local.scannedAt + 1, origin: "imported", inputs: [], staleAt: local.scannedAt + 1 });
+    expect(svc.latest("a/web")!.origin).toBe("imported");
+    expect(svc.guideProfile([{ slug: "a/web", root: web }], false)).toBe("");
+    const drafts = svc.suggestedChecks("a/web");
+    expect(drafts.length).toBeGreaterThan(0);
+    expect(drafts.every((d) => d.needsConfirm)).toBe(true);
+    expect(svc.adopt("a/web", [drafts[0].id], [])).toMatchObject({ ok: false });
   });
 });
 

@@ -93,6 +93,19 @@ describe("forbidden_pattern", () => {
     expect(p.wired).toEqual([]);
   });
 
+  it("pins generated shell files and husky hooks to LF in .gitattributes, keeping the file's own lines and EOL", () => {
+    const p = plan(check("forbidden_pattern", { pattern: "x" }), { "go.mod": "", ".gitattributes": "*.png binary\r\n" });
+    expect(file(p, ".gitattributes")!.content).toBe("*.png binary\r\n/scripts/butler-checks/no-console.sh text eol=lf\r\n");
+    expect(p.notes).toContain("sh_windows");
+    const h = plan(check("run_command", { command: "a && b {file}", stage: "edit" }, ["src/**"]), { "package.json": "{}\n" }, baseline(), ["pre-commit"]);
+    expect(file(h, ".gitattributes")!.content.split("\n").filter(Boolean).sort()).toEqual(["/.husky/pre-commit text eol=lf", "/scripts/butler-checks/no-console.sh text eol=lf"]);
+    // 已经有这一行：不重复
+    const again = plan(check("forbidden_pattern", { pattern: "x" }), { "go.mod": "", ".gitattributes": "/scripts/butler-checks/no-console.sh text eol=lf\n" });
+    expect(file(again, ".gitattributes")).toBeUndefined();
+    // Node 脚本不用
+    expect(file(plan(check("forbidden_pattern", { pattern: "x" }), { "package.json": "{}\n" }), ".gitattributes")).toBeUndefined();
+  });
+
   it("refuses a regex Python reads differently in a Python-only repo", () => {
     expect(refusal(check("forbidden_pattern", { pattern: "\\p{L}" }), { "setup.py": "" })).toMatchObject({ reason: "regex", detail: "unicode_property" });
     // pre-commit 接不了时退回脚本：Node 认 JS 正则

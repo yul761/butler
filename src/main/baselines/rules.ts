@@ -15,12 +15,15 @@ const JS_EXTS = ["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "vue", "s
 const TS_EXTS = ["ts", "tsx", "mts", "cts"];
 const CSS_EXTS = ["css", "scss", "sass", "less"];
 
+/** 命令一律单行：换行会在 session 说明里跳出反引号，也会在生成的脚本里多出一条命令。 */
+const commandText = (max: number) => z.string().min(1).max(max).refine((v) => !/[\r\n\0]/.test(v), "single line");
+
 const toolSchema = z.object({
   tool: z.string().min(1).max(60),
   category: z.enum(BASELINE_CATEGORIES),
-  command: z.string().min(1).max(300),
-  fileCommand: z.string().min(1).max(300).optional(),
-  testOne: z.string().min(1).max(300).optional(),
+  command: commandText(300),
+  fileCommand: commandText(300).optional(),
+  testOne: commandText(300).optional(),
   exts: z.array(z.string().min(1).max(10)).max(30).optional(),
 });
 
@@ -33,7 +36,7 @@ const markerSchema = z.object({
   requires: z.array(z.object({ file: z.string().max(120).optional(), contains: z.string().max(200).optional(), dep: z.string().max(100).optional() })).max(10).optional(),
   tools: z.array(toolSchema).max(10).optional(),
   extract: z.enum(EXTRACTORS).optional(),
-  install: z.string().min(1).max(200).optional(),
+  install: commandText(200).optional(),
   pm: z.string().min(1).max(30).optional(),
   priority: z.number().int().min(-1000).max(1000).optional(),
 });
@@ -51,7 +54,7 @@ const keywordSchema = z.object({
       return false;
     }
   }, "invalid regex"),
-  fileCommand: z.string().min(1).max(300).optional(),
+  fileCommand: commandText(300).optional(),
   exts: z.array(z.string().min(1).max(10)).max(30).optional(),
   priority: z.number().int().min(-1000).max(1000).optional(),
 });

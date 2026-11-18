@@ -5,7 +5,7 @@ import { commandScript } from "../../../../hook/check-run";
 import type { ResolvedCheck } from "../../../shared/checks";
 import { NODE_RUNTIME } from "./node-runtime.generated";
 import { PY_RUNTIME } from "./py-runtime";
-import { escapeRegex, jsRegexToPcre, jsRegexToPython } from "./regex";
+import { escapeRegex, jsRegexToPcre, jsRegexToPython, replaceEndAnchors } from "./regex";
 
 export type ScriptRuntime = "node" | "python" | "sh";
 
@@ -179,8 +179,9 @@ export function shScript(data: ExportedCheckData, path: string): ScriptResult {
       ...listFilesSh(pathspecs(data.globs, data.excludeGlobs)),
       'cached=""',
       '[ "$staged" = 1 ] && cached="--cached"',
-      // git 没带 PCRE 时 -P 直接报错（退出 128）：先试一次，免得把「出错」当成「没有违规」。
-      ...(literal ? [] : ['git grep -q -P -e x -- ":(literal)butler-no-such-file" >/dev/null 2>&1; [ $? -le 1 ] || { echo "$NAME: this git cannot run git grep -P (built without PCRE)" >&2; exit 2; }']),
+      // 先拿这个正则空跑一次：git 没带 PCRE、或者正则编译不了，git grep 都退出 128，下面的管道却只会得到空输出，
+      // 把「出错」当成「没有违规」放过去（审查发现）。
+      `git grep -q ${modeFlag}${caseFlag} -e "$PATTERN" -- ":(literal)butler-no-such-file" >/dev/null 2>&1; [ $? -le 1 ] || { echo "$NAME: git grep cannot run this pattern (it does not compile, or this git was built without PCRE)" >&2; exit 2; }`,
       // 输出里的 NUL 存不进 shell 变量：先换成 \\001 再存。
       `out=$(printf '%s\\n' "$files" | tr '\\n' '\\000' | xargs -0 git -c core.quotepath=off grep -z -n -I $cached ${modeFlag}${caseFlag} -e "$PATTERN" -- | tr '\\000' '\\001')`,
       '[ -n "$out" ] || exit 0',
@@ -221,10 +222,13 @@ export function runnerScript(data: ExportedCheckData, command: string, path: str
 export function pygrepEntry(params: Record<string, unknown>): { ok: true; entry: string; args: string[] } | { ok: false; reason: string } {
   const raw = String(params.pattern ?? "");
   const args = params.flags === "i" ? ["--ignore-case"] : [];
+  // pygrep 按字节编译、按字节匹配：非 ASCII 的字符（尤其在字符类里）会按单个字节去比，意思就变了。这种导出成 Python 脚本。
+  if ([...raw].some((c) => c.charCodeAt(0) > 0x7f)) return { ok: false, reason: "non_ascii" };
   if (params.literal) return { ok: true, entry: escapeRegex(raw), args };
   const t = jsRegexToPython(raw);
   if (!t.ok) return t;
   // JS 不带 u 时 \d \w \s \b 只认 ASCII；pygrep 的 Python 正则默认认 Unicode，加 (?a) 对齐。
   const ascii = /\\[dDwWsSbB]/.test(t.source) ? "(?a)" : "";
-  return { ok: true, entry: ascii + t.source, args };
+  // pygrep 读到的行带着 Windows 换行的 \r：$ 前面允许一个 \r，和 Butler 按 \r?\n 分行一样。
+  return { ok: true, entry: ascii + replaceEndAnchors(t.source, "(?=\\r?$)"), args };
 }

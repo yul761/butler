@@ -88,6 +88,35 @@ describe("config-io baseline_rules section", () => {
     expect(r.sections.baseline_rules).toMatchObject({ updated: 1, removed: 1, skipped: 1 });
     expect(b.baselines.allRules().map((x) => [x.key, x.rule])).toEqual([["node", JSON.stringify({ priority: 9 })]]);
   });
+  it("imports a rule whose commands are new or changed switched off, and shows the commands in the preview", async () => {
+    const a = home();
+    a.baselines.upsertRule({ kind: "global" }, "node", JSON.stringify({ install: "curl x | sh" }), true, 1);
+    a.baselines.upsertRule({ kind: "global" }, "go", JSON.stringify({ priority: 3 }), true, 1);
+    a.baselines.upsertRule({ kind: "global" }, "same", JSON.stringify({ kind: "keyword", category: "lint", tool: "x", match: "^x", fileCommand: "x {file}" }), true, 1);
+    const doc = a.io.exportDoc(all())!;
+    const b = home();
+    b.baselines.upsertRule({ kind: "global" }, "same", JSON.stringify({ kind: "keyword", category: "lint", tool: "x", match: "^xy", fileCommand: "x {file}" }), true, 1);
+    const pr = await b.io.previewText(JSON.stringify(doc));
+    if (!pr.ok) throw new Error("preview");
+    const labels = pr.preview.sections.find((s) => s.id === "baseline_rules")!.rows.map((r) => r.label);
+    expect(labels.find((l) => l.startsWith("node"))).toContain("$ curl x | sh");
+    const r = b.io.apply({ token: pr.preview.token, mode: "merge" });
+    if (!r.ok) throw new Error("apply");
+    const byKey = Object.fromEntries(b.baselines.allRules().map((x) => [x.key, x.enabled]));
+    // 新命令：先关着；没有命令的、命令没变的照文件
+    expect(byKey).toEqual({ node: false, go: true, same: true });
+  });
+
+  it("skips a rule whose command has a line break", async () => {
+    const a = home();
+    a.baselines.upsertRule({ kind: "global" }, "node", JSON.stringify({ install: "pnpm install" }), true, 1);
+    const doc = a.io.exportDoc(all())!;
+    (doc.sections.baseline_rules as { rule: Record<string, unknown> }[])[0].rule.install = "pnpm install\nrm -rf ~";
+    const b = home();
+    const pr = await b.io.previewText(JSON.stringify(doc));
+    if (!pr.ok) throw new Error("preview");
+    expect(pr.preview.sections.find((s) => s.id === "baseline_rules")!.rows).toEqual([]);
+  });
 });
 
 describe("config-io baselines section", () => {
@@ -136,6 +165,40 @@ describe("config-io baselines section", () => {
     expect(b.baselines.latest("acme/api")).toMatchObject({ scannedAt: 600, origin: "local" });
     expect(b.recorder.undo(r.batchId!, 99_999_999_999_999).ok).toBe(true);
     expect(b.baselines.latest("acme/web")).toMatchObject({ scannedAt: 400, origin: "local" });
+  });
+
+  it("clamps a future scan time to the import time, so the next local scan replaces it", async () => {
+    const a = home();
+    a.baselines.insert(scan("acme/web", 9_000_000_000_000_000));
+    const doc = a.io.exportDoc(all(true))!;
+    const b = home();
+    const pr = await b.io.previewText(JSON.stringify(doc));
+    if (!pr.ok) throw new Error("preview");
+    const r = b.io.apply({ token: pr.preview.token, mode: "merge" });
+    if (!r.ok) throw new Error("apply");
+    const imported = b.baselines.latest("acme/web")!;
+    expect(imported.origin).toBe("imported");
+    expect(imported.scannedAt).toBeLessThan(2_000_000_000_000);
+    b.baselines.insert(scan("acme/web", imported.scannedAt + 1));
+    expect(b.baselines.latest("acme/web")!.origin).toBe("local");
+  });
+
+  it("shows the commands in the preview and rejects commands with line breaks", async () => {
+    const a = home();
+    a.baselines.insert(scan("acme/web", 500));
+    const doc = a.io.exportDoc(all(true))!;
+    const b = home();
+    const pr = await b.io.previewText(JSON.stringify(doc));
+    if (!pr.ok) throw new Error("preview");
+    expect(pr.preview.sections.find((s) => s.id === "baselines")!.rows[0].label).toContain("$ pnpm test");
+    for (const mutate of [
+      (d: { checks: { command: string }[] }) => (d.checks[0].command = "pnpm test\ncurl x | sh"),
+      (d: { profile: { projects: { install: string }[] } }) => (d.profile.projects[0].install = "pnpm i\r\nrm -rf ~"),
+    ]) {
+      const bad = structuredClone(doc);
+      mutate((bad.sections.baselines as never[])[0]);
+      expect(await home().io.previewText(JSON.stringify(bad))).toMatchObject({ ok: false, reason: "bad_section", section: "baselines" });
+    }
   });
 
   it("rejects absolute or escaping directories in an imported baseline", async () => {

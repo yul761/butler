@@ -157,6 +157,14 @@ describe.runIf(HAS_PY)("python script agrees with evaluateBuiltin", () => {
       expect(r.status).toBe(want.length ? 1 : 0);
     });
   }
+  it("fails with exit 2 instead of passing when Python cannot compile the pattern", () => {
+    const s = pythonScript(checkData(check("forbidden_pattern", { pattern: "a\\8" }, ["src/**"]), ""), "scripts/bad.py");
+    if (!s.ok) throw new Error(s.reason);
+    write(root, "scripts/bad.py", s.content);
+    const r = run(root, "python3", ["scripts/bad.py", "--all"]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain("invalid pattern");
+  });
   it("staged mode reads the index", () => {
     const s = pythonScript(checkData(CASES[0].check, ""), "scripts/staged.py");
     if (!s.ok) throw new Error(s.reason);
@@ -197,6 +205,15 @@ describe.runIf(HAS_SH)("shell script agrees with evaluateBuiltin for forbidden p
   it("refuses other check types", () => {
     expect(shScript(checkData(CASES[3].check, ""), "x.sh").ok).toBe(false);
   });
+  it("fails with exit 2 instead of passing when git grep cannot compile the pattern", () => {
+    // JS 收的（\8 在不带 u 时是字面的 8），PCRE 不收
+    const s = shScript(checkData(check("forbidden_pattern", { pattern: "a\\8" }, ["src/**"]), ""), "scripts/bad.sh");
+    if (!s.ok) throw new Error(s.reason);
+    write(root, "scripts/bad.sh", s.content);
+    const r = run(root, "sh", ["scripts/bad.sh", "--all"]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain("cannot run this pattern");
+  });
 });
 
 describe.runIf(HAS_SH)("run_command runner", () => {
@@ -228,6 +245,17 @@ describe("regex translation", () => {
   it("PCRE keeps the source and rewrites \\u", () => {
     expect(jsRegexToPcre("a\\u00e9(?<n>b)")).toEqual({ ok: true, source: "a\\x{00e9}(?<n>b)" });
     expect(jsRegexToPcre("\\\\u0041")).toEqual({ ok: true, source: "\\\\u0041" });
+  });
+  it("keeps braces that are not a JS quantifier literal, for Python and PCRE", () => {
+    expect(jsRegexToPython("x{,3}")).toEqual({ ok: true, source: "x\\{,3}" });
+    expect(jsRegexToPython("a{2,}b{1}c{1,3}[{]")).toEqual({ ok: true, source: "a{2,}b{1}c{1,3}[{]" });
+    expect(jsRegexToPython("{a}\\{")).toEqual({ ok: true, source: "\\{a}\\{" });
+    expect(jsRegexToPcre("x{,3}")).toEqual({ ok: true, source: "x\\{,3}" });
+  });
+  it("pygrep entry refuses non-ASCII patterns and lets $ skip a trailing CR", () => {
+    expect(pygrepEntry({ pattern: "[é]" })).toEqual({ ok: false, reason: "non_ascii" });
+    expect(pygrepEntry({ pattern: "café", literal: true })).toEqual({ ok: false, reason: "non_ascii" });
+    expect(pygrepEntry({ pattern: "foo$|[$]\\$" })).toEqual({ ok: true, entry: "foo(?=\\r?$)|[$]\\$", args: [] });
   });
   it("pygrep entry escapes literals, adds ASCII mode and the case flag", () => {
     expect(pygrepEntry({ pattern: "a.b(", literal: true, flags: "i" })).toEqual({ ok: true, entry: "a\\.b\\(", args: ["--ignore-case"] });

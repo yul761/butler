@@ -459,7 +459,7 @@ Butler 可以替你判待确认的规矩。判的时候，对一个仓库、一�
 
 ## 仓库现状：每个仓库自己已经在查什么
 
-规矩页的**仓库现状**标签会读出一个仓库自己已经在查什么（lint、类型检查、测试、构建、安全和格式工具），以及每样在哪一步跑：提交时、推送时还是 CI。不点**扫描**或**全部扫描**就什么都不发生。扫描只读仓库，不改文件、不跑命令、不碰分支。
+规矩页的**仓库现状**标签会读出一个仓库自己已经在查什么（lint、类型检查、测试、构建、安全和格式工具），以及每样在哪一步跑：提交时、推送时还是 CI。不点**扫描**或**全部扫描**就什么都不发生。**全部扫描**一次扫三个仓库，其余排队。扫描只读仓库，不改文件、不跑命令、不碰分支。指到仓库外面的符号链接不读。
 
 - **怎么读。**先看标记文件（比如 `package.json`、`pyproject.toml`、`go.mod`、`.pre-commit-config.yaml`、ESLint 和 TypeScript 的配置），再按关键词看 CI 配置里的命令（GitHub Actions、GitLab CI 等）。这两步还不够、而且**认不出的仓库用模型补全**开着时，Butler 让模型来读仓库（只读工具，走模型路由的 `repo_scan_infer` 任务）。模型补上的标成**模型推断**，置信是**低**。
 - **monorepo。**每个项目目录（根目录下面的每个 `package.json`、`pyproject.toml`、`go.mod`……）分开列，每条检查归到自己的目录。
@@ -475,7 +475,7 @@ Butler 可以替你判待确认的规矩。判的时候，对一个仓库、一�
 **检查**标签里，一条检查下面的**存量 / 导出**对一个仓库有两个动作：
 
 - **扫描存量**用这条检查把仓库里所有受 git 管的文件扫一遍，显示**存量 N 处**和明细（每次 200 处）。在后台跑，可以停；最多看**存量扫描最多看多少个文件**个文件。`run_command` 检查只有点了按钮才扫，因为那会对每个文件跑一次命令。
-- **导出成仓库的规则**把检查变成仓库自己的规则，这样不只在 Butler 的 session 里跑，所有人都会跑。Butler 按仓库现状挑接法：`pre-commit` hook（禁用写法用 `pygrep`）、包名的 import 边界用 ESLint 的 `no-restricted-imports`、命令接到 lint-staged 或 husky，都不行就在仓库自己的运行环境里写一个小检查脚本（`scripts/butler-checks/<name>.mjs`、`scripts/butler_checks/<name>.py` 或 `scripts/butler-checks/<name>.sh`），接到上面有的那几个里，再加一个 `package.json` 脚本或 Makefile 目标。写在远端默认分支上新开的分支 `butler/check-<name>-<key>` 里，worktree 在 `<BUTLER_HOME>/exports/<id>`，本地提交（git 没有 `user.name` / `user.email` 时只暂存）。你自己的 checkout 从不碰。然后就停：你能看到分支、文件和改动。
+- **导出成仓库的规则**把检查变成仓库自己的规则，这样不只在 Butler 的 session 里跑，所有人都会跑。Butler 按仓库现状挑接法：`pre-commit` hook（禁用写法用 `pygrep`）、包名的 import 边界用 ESLint 的 `no-restricted-imports`、命令接到 lint-staged 或 husky，都不行就在仓库自己的运行环境里写一个小检查脚本（`scripts/butler-checks/<name>.mjs`、`scripts/butler_checks/<name>.py` 或 `scripts/butler-checks/<name>.sh`），接到上面有的那几个里，再加一个 `package.json` 脚本或 Makefile 目标。写在远端默认分支上新开的分支 `butler/check-<name>-<key>` 里，worktree 在 `<BUTLER_HOME>/exports/<id>`，本地提交（git 没有 `user.name` / `user.email` 时只暂存）。你自己的 checkout 从不碰，Butler 在那里提交时也不跑仓库自己的 git hook。生成的 `.sh` 文件和 husky hook 会写进 `.gitattributes`（`text eol=lf`），这样开了 `core.autocrlf` 的 Windows checkout 也不会把它们弄坏；在 Windows 上它们用 Git for Windows 自带的 `sh` 跑，git hook 本来就用它。然后就停：你能看到分支、文件和改动。导出做到一半 Butler 退出了的话，下次启动时会清掉没做完的 worktree 和分支。
 - **推送分支**和**开 PR**是另外的按钮，受对外动作开关控制，**默认关着**；每次尝试都写日志。**丢弃**删掉 worktree 和本地分支。
 - 不能导出时 Butler 会说明原因，什么都不建：仓库没有本地副本或还没扫描过；检查要用 Node 或 Python 而仓库两个都没有；正则用了目标工具写不出的语法（比如 `\p{…}`）；命令没有可以接的 hook 管理工具；仓库的 CI 已经在跑这条命令。
 
@@ -486,7 +486,7 @@ Butler 可以替你判待确认的规矩。判的时候，对一个仓库、一�
 | 每个仓库写进 session 说明的字数上限 | `baselineGuideChars` | `1200` | `200` 到 `4000` 的整数。 |
 | 存量扫描最多看多少个文件 | `legacyScanMaxFiles` | `50000` | `100` 到 `500000` 的整数。 |
 
-**导入导出：**标记文件表（`baseline_rules` 部分）跟着**全部**和**只导出检查**走；产品用名字，无效的规则跳过。仓库现状（`baselines` 部分）只有勾了**带上各仓库的现状扫描**才导出，不带本地路径、文件哈希和规矩文字。导入的现状只有比本机的新才收，标成导入、可能过时，本机第一次扫描就把它换掉。导入从不删除本机的仓库现状，替换导入也一样。
+**导入导出：**标记文件表（`baseline_rules` 部分）跟着**全部**和**只导出检查**走；产品用名字，无效的规则跳过。仓库现状（`baselines` 部分）只有勾了**带上各仓库的现状扫描**才导出，不带本地路径、文件哈希和规矩文字。导入的现状只有比本机的新才收（将来的时间按现在算），标成导入、可能过时，本机第一次扫描就把它换掉。在那之前它不写进 session 说明，从它起草的每条检查都要先勾**我看过这条命令，确认要用**才会建，因为这些命令来自别的机器。命令是新的或改过的标记规则导入后是停用的，你看过命令再启用；命令里有换行的直接不收。导入从不删除本机的仓库现状，替换导入也一样。
 
 ## 多家公司或多个配置
 

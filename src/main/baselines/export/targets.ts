@@ -296,6 +296,21 @@ function appendPkgLint(b: Builder, run: string): boolean {
   return true;
 }
 
+/**
+ * 写了 shell 脚本或 husky hook：在 .gitattributes 里把它们定成 LF。Windows 上 core.autocrlf=true 的人签出来是 CRLF，
+ * sh 会在 `set -u\r` 这种地方出错（审查发现）。返回有没有 shell 文件。
+ */
+function lfForShellFiles(b: Builder): boolean {
+  const shell = [...b.files.values()].filter((f) => f.path.endsWith(".sh") || f.path.startsWith(".husky/")).map((f) => f.path);
+  if (!shell.length) return false;
+  const text = current(b, ".gitattributes") ?? "";
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const have = new Set(text.split(/\r?\n/).map((l) => l.trim()));
+  const missing = shell.map((p) => `/${p} text eol=lf`).filter((l) => !have.has(l));
+  if (missing.length) put(b, ".gitattributes", `${text}${text && !text.endsWith("\n") ? eol : ""}${missing.join(eol)}${eol}`);
+  return shell.some((p) => p.endsWith(".sh"));
+}
+
 export function buildExport(i: ExportInput): ExportBuild {
   const { check, layout } = i;
   if (!i.baseline) return { ok: false, reason: "no_baseline" };
@@ -306,10 +321,10 @@ export function buildExport(i: ExportInput): ExportBuild {
   const notes: string[] = [];
   const id = `butler-${name}`;
   const data = checkData(check, i.ticketPattern);
-  const done = (target: ExportTarget, runtime: ScriptRuntime | null, script: string | null, runAll: string | null): ExportBuild => ({
-    ok: true,
-    plan: { target, runtime, script, runAll, name, files: [...b.files.values()], wired, notes },
-  });
+  const done = (target: ExportTarget, runtime: ScriptRuntime | null, script: string | null, runAll: string | null): ExportBuild => {
+    if (lfForShellFiles(b)) notes.push("sh_windows");
+    return { ok: true, plan: { target, runtime, script, runAll, name, files: [...b.files.values()], wired, notes } };
+  };
 
   if (check.type === "run_command") return runCommandExport(i, repo, b, name, id, wired, notes, done);
 

@@ -98,6 +98,16 @@ export function refusalText(reason: string, detail?: string): string {
   return typeof r === "function" ? r(t.regexWhy[detail ?? ""] ?? detail ?? "") : r;
 }
 
+/** 结果里的一条说明；pygrep 翻不过去的带上原因。 */
+function noteText(n: string): string {
+  const t = M().lintExport;
+  if (n.startsWith("pygrep_")) {
+    const why = t.regexWhy[n.slice("pygrep_".length)];
+    return why ? t.pygrepFallback(why) : "";
+  }
+  return t.notes[n] ?? "";
+}
+
 export class CheckExporter {
   private readonly git: GitRun;
   private readonly busy = new Set<string>();
@@ -151,16 +161,27 @@ export class CheckExporter {
         { checkId: check.checkId, checkKey, slug, target: plan.target, branch, base, worktree: "", files: plan.files.map((f) => f.path), diff: "", committed: false, status: "failed", detail: M().legacy.interrupted, createdAt: now },
         now,
       );
-      const dir = join(this.d.exportsDir, String(id));
+      const dir = this.dirOf(id);
       mkdirSync(this.d.exportsDir, { recursive: true });
-      const add = await this.git(root, ["worktree", "add", "-b", branch, dir, base], { timeoutMs: 120_000 });
+      const add = await this.git(root, [...this.noHooks(), "worktree", "add", "-b", branch, dir, base], { timeoutMs: 120_000 });
       if (add.code !== 0) {
+        await this.cleanup(root, dir, branch, slug);
         this.d.repo.updateExport(id, { status: "failed", detail: t.worktreeFailed(add.stderr.trim()) }, this.d.now());
         this.d.onChanged?.();
         return { ok: false, message: t.worktreeFailed(add.stderr.trim()) };
       }
-      const result = await this.writeAndCommit(dir, plan, check.name);
-      const notes = [...plan.notes.map((n) => t.notes[n]).filter(Boolean), ...(plan.notes.includes("pre_push_install") ? [t.prePushInstall] : [])];
+      let result: Awaited<ReturnType<CheckExporter["writeAndCommit"]>>;
+      try {
+        result = await this.writeAndCommit(dir, plan, check.name);
+      } catch (e) {
+        // 写文件 / git add 失败：worktree 和分支都收回去，不留下删不掉的半成品（审查发现）。
+        await this.cleanup(root, dir, branch, slug);
+        const why = e instanceof Error ? e.message : String(e);
+        this.d.repo.updateExport(id, { status: "failed", detail: t.gitFailed(why) }, this.d.now());
+        this.d.onChanged?.();
+        return { ok: false, message: t.gitFailed(why) };
+      }
+      const notes = [...plan.notes.map(noteText).filter(Boolean), ...(plan.notes.includes("pre_push_install") ? [t.prePushInstall] : [])];
       const detail = [t.summary({ branch, wired: plan.wired.map(wiredText), runAll: plan.runAll, committed: result.committed }), ...notes, ...(result.problem ? [result.problem] : [])].join("\n");
       this.d.repo.finishExport(id, { worktree: dir, diff: result.diff, committed: result.committed, status: "ready", detail }, this.d.now());
       this.d.onChanged?.();
@@ -203,7 +224,7 @@ export class CheckExporter {
 
   /** 生成时可能要读的文件。 */
   private async candidates(root: string, base: string, layout: RepoLayout): Promise<string[]> {
-    const want = /^(package\.json|\.pre-commit-config\.ya?ml|\.lintstagedrc(\.json)?|eslint\.config\.[cm]?[jt]s|\.eslintrc(\.json|\.ya?ml)?|GNUmakefile|Makefile|makefile)$/i;
+    const want = /^(\.gitattributes|package\.json|\.pre-commit-config\.ya?ml|\.lintstagedrc(\.json)?|eslint\.config\.[cm]?[jt]s|\.eslintrc(\.json|\.ya?ml)?|GNUmakefile|Makefile|makefile)$/i;
     const out = layout.files.filter((f) => want.test(f));
     for (const h of layout.huskyFiles) out.push(`.husky/${h}`);
     // 同名脚本已经存在时要知道（结果里说明覆盖了）。
@@ -244,13 +265,60 @@ export class CheckExporter {
     let problem: string | null = null;
     if (!nameSet || !email) problem = t.noIdentity;
     else {
-      // --no-verify：仓库自己的 hook 可能要装依赖、联网或等输入；这只是一个本地草稿提交，hook 在推送 / CI 时照样会跑。
-      const c = await this.git(dir, ["commit", "--no-verify", "-q", "-m", COMMIT_MESSAGE(name)], { timeoutMs: 60_000 });
+      // 不跑仓库自己的 hook（--no-verify 只管 pre-commit / commit-msg，prepare-commit-msg、post-commit 靠 hooksPath 指向空目录）：
+      // hook 可能要装依赖、联网或等输入；这只是一个本地草稿提交，hook 在推送 / CI 时照样会跑。
+      const c = await this.git(dir, [...this.noHooks(), "commit", "--no-verify", "-q", "-m", COMMIT_MESSAGE(name)], { timeoutMs: 60_000 });
       if (c.code === 0) committed = true;
       else problem = t.commitFailed(c.stderr.trim().split(/\r?\n/).slice(-3).join(" "));
     }
     const diff = committed ? (await this.git(dir, ["show", "--stat", "--patch", "--format=%s", "HEAD"])).stdout : (await this.git(dir, ["diff", "--cached", "--stat", "--patch"])).stdout;
     return { committed, diff, problem };
+  }
+
+  private dirOf(id: number): string {
+    return join(this.d.exportsDir, String(id));
+  }
+
+  /**
+   * 导出时不跑仓库自己的 git hook：worktree add 会触发 post-checkout（常见的是装依赖），提交会触发 prepare-commit-msg / post-commit
+   * （有的等终端输入，一直卡到超时）。core.hooksPath 指向 Butler 自己的一个空目录，只对这两条命令生效。
+   */
+  private noHooks(): string[] {
+    const empty = join(this.d.exportsDir, ".no-hooks");
+    mkdirSync(empty, { recursive: true });
+    return ["-c", `core.hooksPath=${empty}`];
+  }
+
+  /** 收回一次导出的 worktree 和分支（不管建到哪一步了；每一步失败都不要紧）。 */
+  private async cleanup(root: string, dir: string, branch: string, slug: string): Promise<void> {
+    if (existsSync(root)) {
+      await this.git(root, ["worktree", "remove", "--force", dir]);
+      if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+      await this.git(root, ["worktree", "prune"]);
+      if (branch && !this.d.repo.exports().some((x) => x.slug === slug && x.branch === branch && x.status !== "failed" && x.status !== "discarded" && x.worktree !== dir)) {
+        await this.git(root, ["branch", "-D", branch]);
+      }
+    } else if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  }
+
+  /**
+   * 启动时：上次跑到一半就退出的导出（行停在失败、没记下 worktree）把建了的 worktree 和分支收回去。
+   * 失败的导出不该留下任何东西，所以凡是失败的行，它的目录还在就清掉。
+   */
+  async recover(): Promise<void> {
+    for (const e of this.d.repo.exports()) {
+      if (e.status !== "failed") continue;
+      const dir = e.worktree || this.dirOf(e.id);
+      const root = this.d.localPath(e.slug);
+      const leftover = existsSync(dir) || (root && existsSync(root) && (await this.git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${e.branch}`])).code === 0);
+      if (!leftover) continue;
+      try {
+        if (root) await this.cleanup(root, dir, e.branch, e.slug);
+        else if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+      } catch (err) {
+        this.d.log?.(`check export: cleaning up interrupted export ${e.id} failed`, err);
+      }
+    }
   }
 
   private ready(id: number): CheckExportView | CheckExportResult {
@@ -263,12 +331,13 @@ export class CheckExporter {
     const e = this.ready(id);
     if ("ok" in e) return e;
     const root = this.d.localPath(e.slug);
+    const dir = e.worktree || this.dirOf(e.id);
     if (root && existsSync(root)) {
-      if (e.worktree) await this.git(root, ["worktree", "remove", "--force", e.worktree]);
+      await this.git(root, ["worktree", "remove", "--force", dir]);
       await this.git(root, ["worktree", "prune"]);
       await this.git(root, ["branch", "-D", e.branch]);
     }
-    if (e.worktree && existsSync(e.worktree)) rmSync(e.worktree, { recursive: true, force: true });
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
     this.d.repo.updateExport(id, { status: "discarded", detail: `${e.detail ?? ""}\n${M().lintExport.discarded}`.trim() }, this.d.now());
     this.d.onChanged?.();
     return { ok: true, export: this.d.repo.getExport(id) ?? undefined, message: M().lintExport.discarded };

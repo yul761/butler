@@ -697,6 +697,8 @@ async function bootstrap(): Promise<void> {
     outward: stubOutward((m) => logger(m)), ticketPattern: () => checksConfig(settings).ticketPattern, now: Date.now,
     openPr: (req) => createPr(req), openPath: (dir) => void shell.openPath(dir), onChanged: () => notify(), log: logger,
   });
+  // 上次跑到一半退出的导出：建了的 worktree 和分支收回去。
+  void checkExporter.recover().catch((e) => logger("check export: recovering interrupted exports failed", e));
   /** ticket session 的 guide 里的仓库档案：worktree 路径 → slug。 */
   const sessionProfile = (repoPaths: string[], hasLessons: boolean): string => {
     try {

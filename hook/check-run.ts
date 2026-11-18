@@ -90,6 +90,8 @@ export function runCommand(o: {
   env: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   shell?: string | null;
+  /** 起了 / 结束了一个 shell 进程（调用方要能在别处杀掉整棵树时用，比如 worker 被结束前）。 */
+  onPid?: (pid: number, alive: boolean) => void;
 }): Promise<CommandResult> {
   const platform = o.platform ?? process.platform;
   const shell = o.shell === undefined ? findShell(o.env, platform) : o.shell;
@@ -103,7 +105,10 @@ export function runCommand(o: {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      if (child?.pid) live.delete(child.pid);
+      if (child?.pid) {
+        live.delete(child.pid);
+        o.onPid?.(child.pid, false);
+      }
       child?.stdout?.destroy();
       child?.stderr?.destroy();
       resolve(r);
@@ -121,7 +126,10 @@ export function runCommand(o: {
       resolve({ kind: "unavailable", reason: e instanceof Error ? e.message : String(e) });
       return;
     }
-    if (child.pid) live.add(child.pid);
+    if (child.pid) {
+      live.add(child.pid);
+      o.onPid?.(child.pid, true);
+    }
     const timer = setTimeout(() => {
       timedOut = true;
       if (child.pid) killTree(child.pid, platform);
