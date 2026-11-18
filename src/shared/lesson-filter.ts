@@ -24,6 +24,11 @@ export interface LessonFilter {
   /** 正文或理由里包含（不分大小写）。 */
   text?: string;
   degraded?: boolean;
+  /**
+   * 只算 id 不大于它的（页面发批量动作时带上它看到的最大 id）：
+   * 点下去之前后台新分析出来的规矩不会被一起改掉。
+   */
+  maxId?: number;
 }
 
 export function matchesLessonFilter(l: Lesson, f: LessonFilter): boolean {
@@ -38,6 +43,7 @@ export function matchesLessonFilter(l: Lesson, f: LessonFilter): boolean {
   if (f.minScore !== undefined && (l.score === null || l.score < f.minScore)) return false;
   if (f.maxScore !== undefined && (l.score === null || l.score > f.maxScore)) return false;
   if (f.batchId !== undefined && l.batchId !== f.batchId) return false;
+  if (f.maxId !== undefined && l.id > f.maxId) return false;
   if (f.degraded !== undefined && l.degraded !== f.degraded) return false;
   if (f.text !== undefined && f.text.trim() !== "") {
     const q = f.text.trim().toLowerCase();
@@ -70,7 +76,7 @@ function listOf<T extends string>(v: unknown, allowed: readonly T[]): T[] {
 export function parseLessonFilter(v: unknown): LessonFilter {
   if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("invalid lesson filter");
   const o = v as Record<string, unknown>;
-  const allowedKeys = ["slug", "productId", "status", "admission", "checkability", "shelvedReason", "minHits", "minScore", "maxScore", "batchId", "text", "degraded"];
+  const allowedKeys = ["slug", "productId", "status", "admission", "checkability", "shelvedReason", "minHits", "minScore", "maxScore", "batchId", "text", "degraded", "maxId"];
   for (const k of Object.keys(o)) if (!allowedKeys.includes(k)) throw new Error("invalid lesson filter");
   const f: LessonFilter = {};
   if (o.slug !== undefined) {
@@ -89,6 +95,7 @@ export function parseLessonFilter(v: unknown): LessonFilter {
   if (o.minScore !== undefined) f.minScore = scoreIn(o.minScore);
   if (o.maxScore !== undefined) f.maxScore = scoreIn(o.maxScore);
   if (o.batchId !== undefined) f.batchId = intIn(o.batchId, 1);
+  if (o.maxId !== undefined) f.maxId = intIn(o.maxId, 0);
   if (o.text !== undefined) {
     if (typeof o.text !== "string" || o.text.length > FILTER_TEXT_LIMIT) throw new Error("invalid lesson filter");
     f.text = o.text;

@@ -313,6 +313,13 @@ export function lessonRunIdArg(v: unknown): number {
 
 /** 复盘规矩页的操作。 */
 /** 批量动作的目标：id 列表（1..5000 个正整数）或筛选条件，二者取一。 */
+/** 批量动作的 expect：没给就不检查。 */
+function expectArg(v: unknown): { expect?: number } {
+  if (v === undefined) return {};
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw new Error("invalid lesson action");
+  return { expect: v };
+}
+
 export function lessonTargetArg(v: unknown): LessonTarget {
   const o = v as Record<string, unknown> | null;
   if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("invalid lesson target");
@@ -332,9 +339,9 @@ export function lessonActionArg(v: unknown): LessonAction {
   switch (o.op) {
     case "bulk":
       if (typeof o.verb !== "string" || !LESSON_BULK_VERBS.includes(o.verb as LessonBulkVerb)) throw new Error("invalid lesson action");
-      return { op: "bulk", verb: o.verb as LessonBulkVerb, target: lessonTargetArg(o.target) };
+      return { op: "bulk", verb: o.verb as LessonBulkVerb, target: lessonTargetArg(o.target), ...expectArg(o.expect) };
     case "acceptRecommended":
-      return o.target === undefined ? { op: "acceptRecommended" } : { op: "acceptRecommended", target: lessonTargetArg(o.target) };
+      return { op: "acceptRecommended", ...(o.target === undefined ? {} : { target: lessonTargetArg(o.target) }), ...expectArg(o.expect) };
     case "undoBatch":
       return { op: "undoBatch", batchId: batchIdArg(o.batchId) };
     case "confirm":

@@ -3,7 +3,7 @@ import type { LessonFilter } from "../../../shared/lesson-filter";
 import { LESSON_ADMISSIONS, LESSON_BULK_VERBS, LESSON_CHECKABILITIES, type Lesson, type LessonActResult, type LessonAction, type LessonBulkVerb } from "../../../shared/lessons";
 import { api } from "../api";
 import { reportError } from "../errors";
-import { BULK_STATUSES, SHELVED_REASONS, bulkCounts, bulkFilter, EMPTY_BULK_FILTER, needsSecondClick, verbFilter, type BulkFilterUi, type LessonTag, type TagTone } from "../lessons-bulk-view";
+import { BULK_STATUSES, SHELVED_REASONS, bulkCounts, maxLessonId, bulkFilter, EMPTY_BULK_FILTER, needsSecondClick, verbFilter, type BulkFilterUi, type LessonTag, type TagTone } from "../lessons-bulk-view";
 import { S } from "../strings";
 
 export const TAG_PILL: Record<TagTone, string> = { ok: "approved", warn: "pending", info: "merged", none: "none" };
@@ -106,7 +106,12 @@ export function LessonBulkBar({ lessons, base, scopeLabel, onNotice }: {
     setArmed(null);
     setBusy(true);
     try {
-      const a: LessonAction = key === "accept_recommended" ? { op: "acceptRecommended", target: { filter: f } } : { op: "bulk", verb: key, target: { filter: verbFilter(key, f) } };
+      // 带上页面看到的最大 id 和按钮上的数：之后才出现的规矩不会被一起改；列表变了（会多改）就不动、让人重新看。
+      const seen = { ...f, maxId: maxLessonId(lessons) };
+      const a: LessonAction =
+        key === "accept_recommended"
+          ? { op: "acceptRecommended", target: { filter: seen }, expect: counts.recommended }
+          : { op: "bulk", verb: key, target: { filter: verbFilter(key, seen) }, expect: counts.verbs[key] };
       setError(await runBatch(a, key, onNotice));
     } finally {
       setBusy(false);

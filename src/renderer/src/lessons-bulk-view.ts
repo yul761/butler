@@ -118,6 +118,9 @@ export function lessonTags(l: Lesson, S: UiStrings): LessonTag[] {
   return tags;
 }
 
+/** 页面上看到的最大 id（一条都没有时 0）。 */
+export const maxLessonId = (lessons: Lesson[]): number => lessons.reduce((m, l) => Math.max(m, l.id), 0);
+
 /** 勾选里只留还在待确认列表里的。 */
 export const livePicked = (picked: number[], pending: Lesson[]): number[] => {
   const ids = new Set(pending.map((l) => l.id));
@@ -149,6 +152,16 @@ export function applyBulkResolution(preview: ImportPreview, mode: ImportMode, ch
   const out: Record<string, Resolution> = {};
   for (const s of preview.sections) for (const r of s.rows) if (r.status === "removed" && rowChoosable(r, mode)) out[resolutionKey(s.id, r.fingerprint)] = choice;
   return out;
+}
+
+/**
+ * 按现在的选择导入后，这条规矩会从没确认变成已确认（会开始进 session）：页面上要提醒一下。
+ * 只看规矩的状态冲突，并且这一行实际用的是导入的版本。
+ */
+export function confirmsLesson(sectionId: string, row: PreviewRow, choice: Resolution): boolean {
+  if (sectionId !== "lessons" || choice !== "imported" || row.localId === null) return false;
+  const d = row.diffs.find((x) => x.field === "status");
+  return !!d && d.incoming === "confirmed" && d.local !== "confirmed";
 }
 
 /** 预览里一个字段的值写成一行字。 */

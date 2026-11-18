@@ -139,7 +139,8 @@ export class LessonRunner {
   async backfill(slug: string): Promise<{ ok: true; enqueued: number } | { ok: false; reason: "no_gh" | "gh_failed" | "unknown_repo" }> {
     if (!this.d.gh.available()) return { ok: false, reason: "no_gh" };
     const row = this.d.repo.repo(slug);
-    if (!row) return { ok: false, reason: "unknown_repo" };
+    // 本地路径为空 = 导入来的、这台机器上没有克隆：没有仓库就没法在里面跑 gh（cwd 为空会落到 Butler 自己的目录）。
+    if (!row || !isCloned(row)) return { ok: false, reason: "unknown_repo" };
     const prs = await this.d.gh.mergedPrs(row.localPath, null, BACKFILL_LIMIT, LESSON_GH_TIMEOUT_MS);
     if (prs === null) return { ok: false, reason: "gh_failed" };
     this.warnIfTruncated(slug, prs);
@@ -163,7 +164,7 @@ export class LessonRunner {
     if (t.repoPath !== null && slug !== null) {
       this.d.repo.upsertRepo(slug, t.repoPath, this.d.now());
       this.d.repo.enqueue(slug, [prNumber], "merged", this.d.now());
-    } else if (this.d.repo.repo(t.slug)) {
+    } else if (isCloned(this.d.repo.repo(t.slug))) {
       this.d.repo.enqueue(t.slug, [prNumber], "merged", this.d.now());
     } else return;
     this.pump();
@@ -181,7 +182,7 @@ export class LessonRunner {
       let attempted = 0;
       let failed = 0;
       for (const row of this.d.repo.repos()) {
-        if (row.backfilledAt === null) continue;
+        if (row.backfilledAt === null || !isCloned(row)) continue;
         attempted++;
         try {
           const prs = await this.d.gh.mergedPrs(row.localPath, row.mergedCursor === null ? null : overlapped(row.mergedCursor), BACKFILL_LIMIT, LESSON_GH_TIMEOUT_MS);
@@ -324,7 +325,7 @@ export class LessonRunner {
     const { repo, gh } = this.d;
     const { item } = a;
     const row = repo.repo(item.slug);
-    if (!row) {
+    if (!row || !isCloned(row)) {
       this.settle(a, { status: "failed", reason: "unknown_repo" }, { finish: "failed", error: "unknown_repo" });
       return;
     }
@@ -417,3 +418,6 @@ export class LessonRunner {
     });
   }
 }
+
+/** 这台机器上有这个仓库的克隆吗（导入来的仓库本地路径为空）。 */
+export const isCloned = (row: { localPath: string } | null | undefined): boolean => !!row && row.localPath !== "";

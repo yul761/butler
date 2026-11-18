@@ -449,3 +449,18 @@ describe("LessonsService queue views", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 });
+
+describe("LessonsService bulk staleness", () => {
+  it("refuses a bulk action that would change more lessons than the page showed", async () => {
+    const { svc, add, repo } = setup();
+    const a = add("acme/web");
+    const b = add("acme/web");
+    expect(await svc.act({ op: "bulk", verb: "confirm", target: { filter: { slug: "acme/web" } }, expect: 1 })).toEqual({ ok: false, reason: "stale" });
+    expect([repo.get(a)?.status, repo.get(b)?.status]).toEqual(["pending", "pending"]);
+    expect(await svc.act({ op: "bulk", verb: "confirm", target: { filter: { slug: "acme/web", maxId: a } }, expect: 1 })).toMatchObject({ ok: true, affected: 1 });
+    expect(repo.get(b)?.status).toBe("pending");
+    repo.setFields(b, { admission: "auto" }, 5);
+    expect(await svc.act({ op: "acceptRecommended", expect: 0 })).toEqual({ ok: false, reason: "stale" });
+    expect(await svc.act({ op: "acceptRecommended", expect: 1 })).toMatchObject({ ok: true, affected: 1 });
+  });
+});

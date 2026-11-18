@@ -173,3 +173,93 @@ describe("calibration samples", () => {
     expect(verdictOf({ status: "disabled", admission: "manual" })).toBe("reject");
   });
 });
+
+/** 单条动作的结果里取批次号（失败就让测试失败）。 */
+const bid = (r: { ok: boolean; batchId?: number | null }): number => {
+  if (!r.ok || r.batchId == null) throw new Error("no batch");
+  return r.batchId;
+};
+
+describe("review fixes", () => {
+  it("deleting a kept lesson deletes the lessons merged into it, and undo brings both back merged", () => {
+    const { db, repo, svc, add } = setup();
+    const a = add("acme/web", "a");
+    const b = add("acme/web", "b");
+    repo.setStatus(a, "confirmed", 2);
+    repo.setStatus(b, "confirmed", 2);
+    expect(svc.mergeOne(a, b, "a+b")).toMatchObject({ ok: true });
+    const d = svc.deleteOne(a);
+    expect(d).toMatchObject({ ok: true, affected: 2 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM lessons").get()).toEqual({ n: 0 });
+    expect(svc.undo(bid(d))).toMatchObject({ ok: true, affected: 2, skipped: 0 });
+    expect(repo.get(a)).toMatchObject({ status: "confirmed", mergedInto: null, text: "a+b" });
+    expect(repo.get(b)).toMatchObject({ mergedInto: a });
+    expect(repo.lessons().map((l) => l.id)).toEqual([a]);
+  });
+
+  it("bulk delete also takes merged rows with it", () => {
+    const { repo, svc, add } = setup();
+    const a = add("acme/web", "a");
+    const b = add("acme/web", "b");
+    repo.setStatus(a, "confirmed", 2);
+    repo.setStatus(b, "confirmed", 2);
+    svc.mergeOne(a, b, "a+b");
+    const d = svc.bulk("delete", { filter: { slug: "acme/web" } });
+    expect(d).toMatchObject({ affected: 2 });
+    expect(repo.get(b)).toBeNull();
+    svc.undo(d.batchId!);
+    expect(repo.get(b)).toMatchObject({ mergedInto: a });
+  });
+
+  it("a merge is undone as a whole or not at all", () => {
+    const { db, repo, recorder, svc, add } = setup();
+    const a = add("acme/web", "a");
+    const b = add("acme/web", "b");
+    repo.setStatus(a, "confirmed", 2);
+    repo.setStatus(b, "confirmed", 2);
+    const m = svc.mergeOne(a, b, "a+b");
+    db.prepare("UPDATE lessons SET hits = hits + 1 WHERE id = ?").run(a);
+    expect(svc.undo(bid(m))).toEqual({ ok: false, reason: "conflict" });
+    expect(repo.get(b)).toMatchObject({ mergedInto: a });
+    expect(recorder.get(bid(m))).toMatchObject({ undoable: true, undoneAt: null });
+  });
+
+  it("a batch whose rows all changed since stays undoable", () => {
+    const { repo, recorder, svc, add } = setup();
+    const a = add();
+    const out = svc.bulk("confirm", { ids: [a] });
+    repo.setText(a, "changed", 999);
+    expect(svc.undo(out.batchId!)).toMatchObject({ ok: true, affected: 0, skipped: 1 });
+    expect(recorder.get(out.batchId!)).toMatchObject({ undoable: true });
+  });
+
+  it("deleting a product is one undoable batch with its lessons and policy layer, and bumps the policy version", () => {
+    const db0 = setup();
+    const { db, repo, recorder } = db0;
+    let bumped = 0;
+    let t = 500;
+    const svc = new LessonBatchService({ db, repo, recorder, now: () => ++t, onPolicyChanged: () => bumped++ });
+    const shop = repo.createProduct("shop", ["acme/web"], 1);
+    const l = repo.addLesson({ scope: { kind: "product", productId: shop }, text: "p", why: "w", at: 1, source: src });
+    db.prepare("INSERT INTO admission_policies (scope_kind, product_id, overrides, updated_at) VALUES ('product', ?, '{\"shadow.minPrs\":3}', 1)").run(shop);
+    const d = svc.deleteProduct(shop);
+    expect(d).toMatchObject({ ok: true, affected: 3 });
+    expect(bumped).toBe(1);
+    expect(repo.product(shop)).toBeNull();
+    expect(svc.undo(bid(d))).toMatchObject({ ok: true, affected: 3, skipped: 0 });
+    expect(bumped).toBe(2);
+    expect(repo.product(shop)).toMatchObject({ name: "shop", slugs: ["acme/web"] });
+    expect(repo.get(l)).toMatchObject({ text: "p" });
+    expect(db.prepare("SELECT overrides FROM admission_policies WHERE product_id = ?").get(shop)).toEqual({ overrides: '{"shadow.minPrs":3}' });
+  });
+
+  it("the filter's maxId leaves out lessons the page has not seen", () => {
+    const { svc, add } = setup();
+    const a = add();
+    const b = add();
+    expect(svc.preview("confirm", { filter: { maxId: a } })).toEqual({ matched: 1, changes: 1 });
+    expect(svc.bulk("confirm", { filter: { maxId: a } })).toMatchObject({ affected: 1 });
+    expect(svc.recommendedTargets()).toEqual([]);
+    expect(b).toBeGreaterThan(a);
+  });
+});

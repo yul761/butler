@@ -76,6 +76,8 @@ test("an export imports into another BUTLER_HOME with a diff preview, and the im
 
   // 4. 冲突那条选「用导入的」，合并导入。
   await conflict.locator("[data-testid^='io-pick-imported-']").check();
+  // 用导入的版本会把本地待确认的那条变成已确认：页面提醒一下。
+  await expect(conflict.locator("[data-testid^='io-confirms-']")).toHaveText(S.ioWillConfirm);
   await page.getByTestId("io-apply").click();
   await expect(page.getByTestId("io-result")).toBeVisible();
   await expect(page.getByTestId("lessons-notice-text")).toHaveText(S.ioApplied);

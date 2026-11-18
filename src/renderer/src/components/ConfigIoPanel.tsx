@@ -6,7 +6,7 @@ import { EXPORT_CONTENTS, PREVIEW_STATUSES } from "../../../shared/config-io";
 import type { LessonsState } from "../../../shared/lessons";
 import { api } from "../api";
 import { reportError } from "../errors";
-import { applyBulkResolution, backupKind, diffValue, effectiveResolution, formatKb, resolutionKey, rowChoosable } from "../lessons-bulk-view";
+import { applyBulkResolution, backupKind, confirmsLesson, diffValue, effectiveResolution, formatKb, resolutionKey, rowChoosable } from "../lessons-bulk-view";
 import { S } from "../strings";
 import { BatchNotice, type BatchNoticeState } from "./LessonBulkBar";
 import { useStateRefetch } from "./useStateRefetch";
@@ -109,6 +109,7 @@ function PreviewSection({ section, mode, bulk, resolutions, onResolve }: {
         <div className="lessons-row">
           <span className={`pill ${STATUS_PILL[r.status]}`}>{S.previewStatus[r.status]}</span>
           <span className="lesson-text">{r.label}</span>
+          {confirmsLesson(section.id, r, choice) && <span className="pill changes" data-testid={`io-confirms-${r.fingerprint}`} title={S.ioWillConfirmTitle}>{S.ioWillConfirm}</span>}
         </div>
         {r.diffs.length > 0 && (
           <ul className="config-io-diffs muted">

@@ -32,7 +32,8 @@ export interface ConfigIoDeps {
 
 /** 预览留着等应用：同时最多几个、多久过期。 */
 const MAX_PENDING = 5;
-const PENDING_TTL_MS = 30 * 60 * 1000;
+/** 预览留多久：逐行挑选可能要很久，给足时间；最多留 MAX_PENDING 份，内存有上限。 */
+const PENDING_TTL_MS = 6 * 60 * 60 * 1000;
 
 interface Pending {
   doc: ConfigDoc;
@@ -216,9 +217,12 @@ export class ConfigIoService {
     return p ? { product: p.name } : null;
   }
 
+  /** 取一个预览；每次用到（换目标、应用）都重新计时。 */
   private live(token: string): Pending | null {
     this.gc();
-    return this.pending.get(token) ?? null;
+    const p = this.pending.get(token) ?? null;
+    if (p) p.at = this.d.now();
+    return p;
   }
 
   private gc(): void {

@@ -5,6 +5,7 @@ import { parsePolicyOverrides, type AdmissionPolicyOverrides, type PolicyValue }
 import type { FileScope, PreviewDiff, PreviewRow } from "../../shared/config-io";
 import type { ScopeRef } from "../scope/layered";
 import { lessonFingerprint, policyFingerprint, productFingerprint, type LessonOwner, type PolicyLayerRef } from "./fingerprint";
+import { removeLessonTracked } from "../lessons/lesson-batches";
 import { emptyCounts, type ConfigSection, type DiffContext, type ExportSelection, type SectionEnv } from "./registry";
 
 const LESSON_TEXT_LIMIT = 2000;
@@ -100,6 +101,7 @@ export const productsSection: ConfigSection<ProductItem> = {
         if (layer !== null) batch.track("policy", layer);
         batch.track("product", row.localId);
         repo.deleteProduct(row.localId);
+        if (layer !== null) policies.bumpVersion();
         counts.removed++;
       } else if (row.status === "unchanged") {
         counts.kept++;
@@ -234,8 +236,9 @@ export const lessonsSection: ConfigSection<LessonItem> = {
     const local = localLessons(ctx);
     const byFp = new Map<string, LocalLesson>();
     for (const l of local) if (!byFp.has(l.fp)) byFp.set(l.fp, l);
+    // 文件范围是一个产品时，它覆盖的仓库只按文件里的成员算：本机这个产品多出来的仓库文件根本没导出，
+    // 不能因为文件里没有它们的规矩就在替换时删掉。
     const productRepos = new Map<string, Set<string>>();
-    for (const p of ctx.repo.products()) productRepos.set(p.name, new Set(p.slugs));
     for (const raw of ctx.doc.products ?? []) {
       const p = ProductItem.safeParse(raw);
       if (p.success) for (const s of p.data.repos) (productRepos.get(p.data.name) ?? productRepos.set(p.data.name, new Set()).get(p.data.name)!).add(s);
@@ -346,8 +349,7 @@ export const lessonsSection: ConfigSection<LessonItem> = {
           counts.kept++;
           continue;
         }
-        batch.track("lesson", row.localId);
-        repo.remove(row.localId);
+        removeLessonTracked(batch, repo, row.localId);
         counts.removed++;
       } else if (row.status === "unchanged") {
         counts.kept++;

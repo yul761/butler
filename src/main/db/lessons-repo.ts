@@ -406,6 +406,11 @@ export class LessonsRepo {
     this.db.prepare(`DELETE FROM lessons WHERE id = ?`).run(id);
   }
 
+  /** 合并进这一条的那些行的 id。 */
+  mergedIds(keepId: number): number[] {
+    return (this.db.prepare(`SELECT id FROM lessons WHERE merged_into = ? ORDER BY id`).all(keepId) as { id: number }[]).map((r) => Number(r.id));
+  }
+
   /** keep 收下 drop 的出处、hits 相加、last_seen_at 取大，text 换成新的；drop 不删，记 merged_into = keep（撤销用，列表里不再出现）。 */
   merge(keepId: number, dropId: number, text: string, now: number): void {
     withTransaction(this.db, () => {

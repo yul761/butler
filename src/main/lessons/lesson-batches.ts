@@ -23,6 +23,20 @@ export interface LessonBatchDeps {
   repo: LessonsRepo;
   recorder: BatchRecorder;
   now: () => number;
+  /** 准入策略的某一层被改了（撤销恢复了策略、删产品连带删了它的策略层）：策略版本要加一。 */
+  onPolicyChanged?: () => void;
+}
+
+/**
+ * 删一条规矩，连同合并进它的那些（merged_into 是 ON DELETE SET NULL：只删保留的那条，合并进去的会重新冒出来）。
+ * 合并进去的先记：撤销倒着恢复，保留的那条先回来，合并进去的再指回它。
+ */
+export function removeLessonTracked(ctx: BatchContext, repo: LessonsRepo, id: number): void {
+  const merged = repo.mergedIds(id);
+  for (const m of merged) ctx.track("lesson", m);
+  ctx.track("lesson", id);
+  for (const m of merged) repo.remove(m);
+  repo.remove(id);
 }
 
 const NOT_FOUND = { ok: false as const, reason: "not_found" };
@@ -104,7 +118,7 @@ export class LessonBatchService {
         r.setStatus(l.id, "confirmed", now);
         return;
       case "delete":
-        r.remove(l.id);
+        // 由调用方的 removeLessonTracked 删（要先记下合并进来的行）。
         return;
     }
   }
@@ -125,8 +139,11 @@ export class LessonBatchService {
             ctx.skip();
             continue;
           }
-          ctx.track("lesson", l.id);
-          this.change(verb, l, now, opts.keepAdmission ?? false);
+          if (verb === "delete") removeLessonTracked(ctx, this.repo, l.id);
+          else {
+            ctx.track("lesson", l.id);
+            this.change(verb, l, now, opts.keepAdmission ?? false);
+          }
           opts.extra?.(ctx, l);
           const human = this.humanVerdict(verb);
           if (human && (opts.origin ?? "manual") === "manual") cal.push(this.overridden(l, human));
@@ -139,13 +156,14 @@ export class LessonBatchService {
 
   /** 接受全部推荐：待确认而且流水线推荐（admission = auto）的全部确认，admission 留着 auto。target 再缩小范围。 */
   acceptRecommended(target?: LessonTarget): BatchOutcome {
-    const base: LessonFilter = { status: ["pending"], admission: ["auto"] };
-    const t: LessonTarget = !target ? { filter: base } : "ids" in target ? target : { filter: { ...target.filter, ...base } };
-    if ("ids" in t) {
-      const ids = this.resolve(t).filter((l) => l.status === "pending" && l.admission === "auto").map((l) => l.id);
-      return this.bulk("confirm", { ids }, { kind: "accept_recommended", keepAdmission: true });
-    }
+    const t = recommendedTarget(target);
+    if ("ids" in t) return this.bulk("confirm", { ids: this.recommendedTargets(target).map((l) => l.id) }, { kind: "accept_recommended", keepAdmission: true });
     return this.bulk("confirm", t, { kind: "accept_recommended", keepAdmission: true });
+  }
+
+  /** 「接受全部推荐」会确认的那些。 */
+  recommendedTargets(target?: LessonTarget): Lesson[] {
+    return this.resolve(recommendedTarget(target)).filter((l) => l.status === "pending" && l.admission === "auto");
   }
 
   /** 推荐了多少（按钮上的数）。 */
@@ -158,6 +176,7 @@ export class LessonBatchService {
     const now = this.d.now();
     const r = this.d.recorder.undo(batchId, now);
     if (!r.ok) return r;
+    if (r.restored.some((x) => x.entity === "policy")) this.d.onPolicyChanged?.();
     if (r.original.origin === "auto") {
       const cal: { lesson: Lesson; human: Verdict; auto: Verdict | null }[] = [];
       for (const x of r.restored) {
@@ -179,9 +198,9 @@ export class LessonBatchService {
     return l && l.mergedInto === null ? l : null;
   }
 
-  private single(kind: string, id: number, fn: (ctx: BatchContext) => void): LessonActResult {
-    const { outcome } = this.d.recorder.run({ kind, origin: "manual", entity: "lesson", scope: { ids: 1 }, now: this.d.now() }, (ctx) => {
-      ctx.track("lesson", id);
+  private single(kind: string, id: number, fn: (ctx: BatchContext) => void, summary?: Record<string, unknown>): LessonActResult {
+    const { outcome } = this.d.recorder.run({ kind, origin: "manual", entity: "lesson", scope: { ids: 1 }, summary, now: this.d.now() }, (ctx) => {
+      if (kind !== "delete") ctx.track("lesson", id);
       fn(ctx);
     });
     return { ok: true, batchId: outcome.batchId, affected: outcome.affected, skipped: outcome.skipped };
@@ -231,7 +250,7 @@ export class LessonBatchService {
     const l = this.live(id);
     if (!l) return NOT_FOUND;
     const now = this.d.now();
-    const r = this.single("delete", id, () => this.repo.remove(id));
+    const r = this.single("delete", id, (ctx) => removeLessonTracked(ctx, this.repo, id));
     this.calibrate([this.overridden(l, "reject")], r.ok ? (r.batchId ?? null) : null, now);
     return r;
   }
@@ -246,10 +265,38 @@ export class LessonBatchService {
     return this.single("merge", keepId, (ctx) => {
       ctx.track("lesson", dropId);
       // 已经合并进 drop 的那些也会改指向 keep：一起记下，撤销时改回来。
-      for (const m of this.repo.lessons({ includeMerged: true }).filter((x) => x.mergedInto === dropId)) ctx.track("lesson", m.id);
+      for (const m of this.repo.mergedIds(dropId)) ctx.track("lesson", m);
       this.repo.merge(keepId, dropId, text, now);
-    });
+      // 合并的两边要一起撤销：只撤一半会留下重复的规矩和加过的次数。
+    }, { atomic: true });
   }
+
+  /**
+   * 删一个产品（连同它的规矩、合并进去的行和它的策略层，外键会连带删掉）：一个批次，可以撤销。
+   * 先记规矩和策略层、最后记产品：撤销倒着恢复，产品先回来。
+   */
+  deleteProduct(productId: number): LessonActResult {
+    if (!this.repo.product(productId)) return NOT_FOUND;
+    const now = this.d.now();
+    let policy = false;
+    const { outcome } = this.d.recorder.run({ kind: "delete_product", origin: "manual", entity: "product", scope: { productId }, now }, (ctx) => {
+      for (const l of this.repo.lessons({ scope: { kind: "product", productId }, includeMerged: true })) ctx.track("lesson", l.id);
+      const layer = this.d.db.prepare(`SELECT id FROM admission_policies WHERE scope_kind = 'product' AND product_id = ?`).get(productId) as { id: number } | undefined;
+      if (layer) {
+        ctx.track("policy", Number(layer.id));
+        policy = true;
+      }
+      ctx.track("product", productId);
+      this.repo.deleteProduct(productId);
+    });
+    if (policy) this.d.onPolicyChanged?.();
+    return { ok: true, batchId: outcome.batchId, affected: outcome.affected, skipped: outcome.skipped };
+  }
+}
+
+function recommendedTarget(target?: LessonTarget): LessonTarget {
+  const base: LessonFilter = { status: ["pending"], admission: ["auto"] };
+  return !target ? { filter: base } : "ids" in target ? target : { filter: { ...target.filter, ...base } };
 }
 
 export const sameScope = (a: Lesson, b: Lesson): boolean =>

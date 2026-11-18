@@ -40,7 +40,7 @@ function home(opts: { backupDir?: string } = {}) {
     repo.setStatus(id, status, 6);
     return id;
   };
-  return { db, repo, recorder, policies, io, backupDir, lesson, version: () => version, exportedAt: () => exportedAt };
+  return { db, repo, recorder, policies, io, backupDir, lesson, version: () => version, exportedAt: () => exportedAt, advance: (ms: number) => (t += ms) };
 }
 
 const counts = (p: ImportPreview, id: string) => p.sections.find((s) => s.id === id)!.counts;
@@ -365,5 +365,58 @@ describe("backups", () => {
     expect(left.filter((n) => n.startsWith("auto-"))).toHaveLength(1);
     expect(left.some((n) => n.startsWith("before-replace-"))).toBe(true);
     expect(left).toContain("notes.txt");
+  });
+});
+
+describe("review fixes", () => {
+  it("replacing from a product file does not delete lessons of repos the file never covered", async () => {
+    const a = home();
+    a.repo.upsertRepo("acme/web", "/w", 1);
+    const shop = a.repo.createProduct("shop", ["acme/web"], 1);
+    a.lesson("acme/web", "Web rule");
+    const text = JSON.stringify(a.io.exportDoc({ scope: { kind: "product", productId: shop }, options: { content: "lessons", includeSourceUrls: false } }));
+    const b = home();
+    b.repo.upsertRepo("acme/web", "/w", 1);
+    b.repo.upsertRepo("acme/ops", "/o", 1);
+    b.repo.createProduct("shop", ["acme/web", "acme/ops"], 1);
+    b.lesson("acme/ops", "Ops rule never exported");
+    b.lesson("acme/web", "Web only here");
+    const pr = await b.io.previewText(text);
+    if (!pr.ok) throw new Error("preview failed");
+    expect(rows(pr.preview, "lessons").filter((r) => r.status === "removed").map((r) => r.label)).toEqual(["Web only here"]);
+    expect(b.io.apply({ token: pr.preview.token, mode: "replace" })).toMatchObject({ ok: true });
+    expect(b.repo.lessons().map((l) => l.text).sort()).toEqual(["Ops rule never exported", "Web rule"]);
+  });
+
+  it("undoing an import keeps a product it created once something else depends on it", async () => {
+    const { a } = seed();
+    const text = JSON.stringify(a.io.exportDoc(all));
+    const b = home();
+    const pr = await b.io.previewText(text);
+    if (!pr.ok) throw new Error("preview failed");
+    const res = b.io.apply({ token: pr.preview.token, mode: "merge" });
+    if (!res.ok) throw new Error("apply failed");
+    const shop = b.repo.products().find((p) => p.name === "shop")!.id;
+    const later = b.lesson({ productId: shop }, "Added after the import");
+    const u = b.recorder.undo(res.batchId!, 99_999);
+    expect(u).toMatchObject({ ok: true });
+    if (!u.ok) return;
+    expect(u.outcome.skipped).toBeGreaterThan(0);
+    expect(b.repo.product(shop)).not.toBeNull();
+    expect(b.repo.get(later)).toMatchObject({ text: "Added after the import" });
+  });
+
+  it("a preview stays usable for hours while rows are being resolved, then expires", async () => {
+    const { a } = seed();
+    const text = JSON.stringify(a.io.exportDoc(all));
+    const b = home();
+    const pr = await b.io.previewText(text);
+    if (!pr.ok) throw new Error("preview failed");
+    b.advance(5 * 60 * 60_000);
+    expect(b.io.apply({ token: pr.preview.token, mode: "merge" })).toMatchObject({ ok: true });
+    const again = await b.io.previewText(text);
+    if (!again.ok) throw new Error("preview failed");
+    b.advance(7 * 60 * 60_000);
+    expect(b.io.apply({ token: again.preview.token, mode: "merge" })).toEqual({ ok: false, reason: "expired" });
   });
 });

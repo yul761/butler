@@ -116,10 +116,11 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
           <button className="lessons-select" data-testid={`lessons-repo-${suffix}`} onClick={() => select({ kind: "repo", slug: r.slug })}>{r.slug}</button>
           <span className="muted">{r.lastAnalyzedAt === null ? S.lessonsNever : S.lessonsLastAnalyzed(formatTime(r.lastAnalyzedAt))}</span>
           <span className="muted">{S.lessonsCounts(r.analyzedCount, r.queued, r.failed, r.skipped)}</span>
+          {r.localPath === "" && <span className="pill none" data-testid={`lessons-not-cloned-${suffix}`} title={S.lessonsNotClonedTitle}>{S.lessonsNotCloned}</span>}
           <button
             data-testid={`lessons-backfill-${suffix}`}
-            disabled={!s.ghAvailable}
-            title={s.ghAvailable ? undefined : S.lessonsNoGh}
+            disabled={!s.ghAvailable || r.localPath === ""}
+            title={!s.ghAvailable ? S.lessonsNoGh : r.localPath === "" ? S.lessonsNotClonedTitle : undefined}
             onClick={() => void act(key, { op: "backfill", slug: r.slug })}
           >
             {S.lessonsBackfill}

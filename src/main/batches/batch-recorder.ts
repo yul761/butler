@@ -18,6 +18,11 @@ export interface EntityAdapter {
   stamp?(id: number, batchId: number): void;
   /** 页面上的一行：文字和状态。 */
   describe(s: Snapshot): { label: string; state: string };
+  /**
+   * 还有多少别的行依赖这一行（外键指向它）。撤销要把一行删掉（它是这一批新建的）时，
+   * 还有依赖就跳过：删了会连带删掉（或放出）这一批之后才有的东西。
+   */
+  dependents?(id: number): number;
 }
 
 export interface BatchMeta {
@@ -41,7 +46,10 @@ export interface BatchContext {
 
 export type UndoResult =
   | { ok: true; outcome: BatchOutcome; restored: { entity: string; id: number; before: Snapshot | null; after: Snapshot | null }[]; original: BatchView }
-  | { ok: false; reason: "not_found" | "not_undoable" };
+  | { ok: false; reason: "not_found" | "not_undoable" | "conflict" };
+
+/** 摘要里带 atomic: true 的批次（如合并）只能整批撤销：有一行之后又被改过就一行都不动。 */
+class AtomicConflict extends Error {}
 
 interface BatchRow {
   id: number; created_at: number; kind: string; origin: BatchOrigin; entity: string; scope: string; summary: string;
@@ -160,7 +168,10 @@ export class BatchRecorder {
     this.db.prepare(`UPDATE admission_batches SET summary = ? WHERE id = ?`).run(JSON.stringify(summary), batchId);
   }
 
-  /** 撤销一批：倒着恢复（先删后建的依赖顺序反过来）；自己也记成一个 undo 批次（不能再撤销）。 */
+  /**
+   * 撤销一批：倒着恢复（先删后建的依赖顺序反过来）；自己也记成一个 undo 批次（不能再撤销）。
+   * 之后又被改过的行、要删但还有别的行依赖的行跳过并计数。一行都没恢复时原批次保持可撤销。
+   */
   undo(batchId: number, now: number): UndoResult {
     return withTransaction(this.db, () => {
       const row = this.db.prepare(`SELECT * FROM admission_batches WHERE id = ?`).get(batchId) as BatchRow | undefined;
@@ -168,36 +179,47 @@ export class BatchRecorder {
       const original = toView(row);
       if (!original.undoable) return { ok: false as const, reason: "not_undoable" as const };
       const items = this.db.prepare(`SELECT entity, entity_id, before, after FROM admission_batch_items WHERE batch_id = ? ORDER BY rowid DESC`).all(batchId) as unknown as ItemRow[];
+      const atomic = original.summary.atomic === true;
       const restored: { entity: string; id: number; before: Snapshot | null; after: Snapshot | null }[] = [];
       let conflicts = 0;
-      const { outcome } = this.run(
-        { kind: "undo", origin: "manual", entity: row.entity, scope: { batchId }, summary: { undoOf: batchId, kind: row.kind }, now },
-        (ctx) => {
-          for (const it of items) {
-            const a = this.adapters.get(it.entity);
-            if (!a) {
-              conflicts++;
-              continue;
+      const conflict = () => {
+        if (atomic) throw new AtomicConflict();
+        conflicts++;
+      };
+      let outcome: BatchOutcome;
+      try {
+        ({ outcome } = this.run(
+          { kind: "undo", origin: "manual", entity: row.entity, scope: { batchId }, summary: { undoOf: batchId, kind: row.kind }, now },
+          (ctx) => {
+            for (const it of items) {
+              const a = this.adapters.get(it.entity);
+              if (!a) {
+                conflict();
+                continue;
+              }
+              const id = Number(it.entity_id);
+              const before = parseSnap(it.before);
+              const after = parseSnap(it.after);
+              if (!this.same(a, a.snapshot(id), after) || (before === null && (a.dependents?.(id) ?? 0) > 0)) {
+                conflict();
+                continue;
+              }
+              ctx.track(it.entity, id);
+              try {
+                withTransaction(this.db, () => a.restore(id, before));
+                restored.push({ entity: it.entity, id, before: after, after: before });
+              } catch {
+                conflict();
+              }
             }
-            const id = Number(it.entity_id);
-            const before = parseSnap(it.before);
-            const after = parseSnap(it.after);
-            if (!this.same(a, a.snapshot(id), after)) {
-              conflicts++;
-              continue;
-            }
-            ctx.track(it.entity, id);
-            try {
-              withTransaction(this.db, () => a.restore(id, before));
-              restored.push({ entity: it.entity, id, before: after, after: before });
-            } catch {
-              conflicts++;
-            }
-          }
-        },
-        { stamp: false, undoOf: batchId },
-      );
-      this.db.prepare(`UPDATE admission_batches SET undone_at = ? WHERE id = ?`).run(now, batchId);
+          },
+          { stamp: false, undoOf: batchId },
+        ));
+      } catch (e) {
+        if (!(e instanceof AtomicConflict)) throw e;
+        return { ok: false as const, reason: "conflict" as const };
+      }
+      if (restored.length > 0) this.db.prepare(`UPDATE admission_batches SET undone_at = ? WHERE id = ?`).run(now, batchId);
       return { ok: true as const, outcome: { ...outcome, skipped: conflicts }, restored, original };
     });
   }

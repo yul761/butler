@@ -208,8 +208,10 @@ export class LessonsService {
     const now = this.d.now();
     switch (a.op) {
       case "bulk":
+        if (a.expect !== undefined && this.d.batches.preview(a.verb, a.target).changes > a.expect) return { ok: false, reason: "stale" };
         return { ok: true, ...this.d.batches.bulk(a.verb, a.target) };
       case "acceptRecommended":
+        if (a.expect !== undefined && this.d.batches.recommendedTargets(a.target).length > a.expect) return { ok: false, reason: "stale" };
         return { ok: true, ...this.d.batches.acceptRecommended(a.target) };
       case "undoBatch":
         return this.d.batches.undo(a.batchId);
@@ -231,8 +233,7 @@ export class LessonsService {
         return { ok: true };
       case "deleteProduct":
         if (!repo.product(a.id)) return PRODUCT_NOT_FOUND;
-        repo.deleteProduct(a.id);
-        return { ok: true };
+        return this.d.batches.deleteProduct(a.id);
       case "addToProduct":
         if (!repo.product(a.id) || !repo.repo(a.slug)) return PRODUCT_NOT_FOUND;
         repo.addToProduct(a.id, a.slug);

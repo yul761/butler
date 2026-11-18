@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { LESSON_FIELD_DEFAULTS, type Lesson } from "../../shared/lessons";
 import type { ImportPreview, PreviewRow } from "../../shared/config-io";
 import {
+  confirmsLesson, maxLessonId,
   applyBulkResolution, backupKind, batchTitle, bulkCounts, bulkFilter, diffValue, effectiveResolution, EMPTY_BULK_FILTER, lessonTags, livePicked,
   needsSecondClick, rowChoosable, verbFilter,
 } from "./lessons-bulk-view";
@@ -127,5 +128,20 @@ describe("bulk filter numbers", () => {
   it("passes shelved reason, score range, minimum hits and batch through, ignoring bad input", () => {
     expect(bulkFilter({}, { ...EMPTY_BULK_FILTER, shelvedReason: ["conflict"], maxScore: "0.5", minHits: "3", batchId: "7" })).toEqual({ shelvedReason: ["conflict"], maxScore: 0.5, minHits: 3, batchId: 7 });
     expect(bulkFilter({}, { ...EMPTY_BULK_FILTER, minHits: "1.5", batchId: "0", maxScore: "-1" })).toEqual({});
+  });
+});
+
+describe("review fixes (renderer)", () => {
+  const row = (local: string, incoming: string): PreviewRow => ({ fingerprint: "0123456789abcdef", label: "x", status: "conflicting", diffs: [{ field: "status", local, incoming }], reasons: ["status"], localId: 3 });
+  it("flags an import that would confirm a lesson only when the imported version is used", () => {
+    expect(confirmsLesson("lessons", row("pending", "confirmed"), "imported")).toBe(true);
+    expect(confirmsLesson("lessons", row("rejected", "confirmed"), "imported")).toBe(true);
+    expect(confirmsLesson("lessons", row("pending", "confirmed"), "local")).toBe(false);
+    expect(confirmsLesson("lessons", row("confirmed", "disabled"), "imported")).toBe(false);
+    expect(confirmsLesson("products", row("pending", "confirmed"), "imported")).toBe(false);
+  });
+  it("maxLessonId is the largest id the page has seen", () => {
+    expect(maxLessonId([])).toBe(0);
+    expect(maxLessonId([{ id: 4 }, { id: 9 }, { id: 2 }] as Lesson[])).toBe(9);
   });
 });

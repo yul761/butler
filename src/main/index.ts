@@ -469,7 +469,8 @@ async function bootstrap(): Promise<void> {
   const lessonsRepo = new LessonsRepo(db);
   // 规矩、产品和准入策略的改动都记成可撤销的批次（契约 4.4）。
   const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db)]);
-  const lessonBatches = new LessonBatchService({ db, repo: lessonsRepo, recorder: batchRecorder, now: Date.now });
+  // admissionPolicies 在下面才建：回调到调用时才取它。
+  const lessonBatches = new LessonBatchService({ db, repo: lessonsRepo, recorder: batchRecorder, now: Date.now, onPolicyChanged: () => admissionPolicies.bumpVersion() });
   // 三层准入策略（契约 4.2）：版本存在设置 admissionPolicyVersion 里。
   const admissionPolicies = new AdmissionPolicyService({
     db, repo: lessonsRepo, recorder: batchRecorder, now: Date.now,

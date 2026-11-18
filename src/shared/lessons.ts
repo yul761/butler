@@ -219,9 +219,10 @@ export const MAX_TARGET_IDS = 5000;
 export type LessonTarget = { ids: number[] } | { filter: import("./lesson-filter").LessonFilter };
 
 export type LessonAction =
-  | { op: "bulk"; verb: LessonBulkVerb; target: LessonTarget }
+  /** expect：页面按钮上的数。真会改的比它多（列表在页面没刷新时变了）就什么都不改，返回 stale。 */
+  | { op: "bulk"; verb: LessonBulkVerb; target: LessonTarget; expect?: number }
   /** 接受全部推荐：待确认、admission = auto 的全部确认；target 可再缩小范围。 */
-  | { op: "acceptRecommended"; target?: LessonTarget }
+  | { op: "acceptRecommended"; target?: LessonTarget; expect?: number }
   | { op: "undoBatch"; batchId: number }
   | { op: "confirm"; id: number; text?: string }
   | { op: "reject"; id: number }

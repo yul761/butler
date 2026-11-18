@@ -226,6 +226,10 @@ describe("bulk lesson actions", () => {
     });
     expect(lessonActionArg({ op: "bulk", verb: "delete", target: { ids: [1, 2] } })).toEqual({ op: "bulk", verb: "delete", target: { ids: [1, 2] } });
     expect(lessonActionArg({ op: "acceptRecommended" })).toEqual({ op: "acceptRecommended" });
+    expect(lessonActionArg({ op: "bulk", verb: "confirm", target: { filter: { maxId: 40 } }, expect: 12 })).toEqual({ op: "bulk", verb: "confirm", target: { filter: { maxId: 40 } }, expect: 12 });
+    expect(lessonActionArg({ op: "acceptRecommended", expect: 0 })).toEqual({ op: "acceptRecommended", expect: 0 });
+    for (const bad of [-1, 1.5, "3", null]) expect(() => lessonActionArg({ op: "bulk", verb: "confirm", target: { ids: [1] }, expect: bad })).toThrow();
+    expect(() => lessonActionArg({ op: "bulk", verb: "confirm", target: { filter: { maxId: -1 } } })).toThrow();
     expect(lessonActionArg({ op: "acceptRecommended", target: { filter: {} } })).toEqual({ op: "acceptRecommended", target: { filter: {} } });
     expect(lessonActionArg({ op: "undoBatch", batchId: 3 })).toEqual({ op: "undoBatch", batchId: 3 });
     for (const bad of [

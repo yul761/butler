@@ -17,6 +17,8 @@ export interface TableAdapterSpec {
   volatile?: readonly string[];
   children?: readonly ChildTable[];
   stampColumn?: string;
+  /** 外键指向这张表的行（撤销时删不删这一行看它们）。 */
+  dependents?: readonly { table: string; fk: string }[];
   describe(s: Snapshot): { label: string; state: string };
 }
 
@@ -89,6 +91,9 @@ export function tableAdapter(db: Db, spec: TableAdapterSpec): EntityAdapter {
           db.prepare(`UPDATE ${spec.table} SET ${spec.stampColumn} = ? WHERE id = ?`).run(batchId, id);
         }
       : undefined,
+    dependents: spec.dependents?.length
+      ? (id) => spec.dependents!.reduce((n, d) => n + Number((db.prepare(`SELECT COUNT(*) AS n FROM ${d.table} WHERE ${d.fk} = ?`).get(id) as { n: number }).n), 0)
+      : undefined,
     describe: spec.describe,
   };
 }
@@ -101,6 +106,7 @@ export const lessonAdapter = (db: Db): EntityAdapter =>
     volatile: ["updated_at"],
     children: [{ table: "lesson_sources", fk: "lesson_id", orderBy: "id", nullable: ["run_id"] }],
     stampColumn: "batch_id",
+    dependents: [{ table: "lessons", fk: "merged_into" }],
     describe: (s) => ({ label: String(s.text ?? ""), state: s.merged_into !== null && s.merged_into !== undefined ? "merged" : String(s.status ?? "") }),
   });
 
@@ -110,6 +116,7 @@ export const productAdapter = (db: Db): EntityAdapter =>
     entity: "product",
     table: "lesson_products",
     children: [{ table: "lesson_product_repos", fk: "product_id", orderBy: "repo_slug" }],
+    dependents: [{ table: "lessons", fk: "product_id" }, { table: "admission_policies", fk: "product_id" }],
     describe: (s) => ({ label: String(s.name ?? ""), state: Array.isArray(s.$lesson_product_repos) ? `${s.$lesson_product_repos.length} repos` : "" }),
   });
 
