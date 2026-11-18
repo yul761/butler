@@ -124,6 +124,8 @@ export interface IpcDeps {
   recheckCleanup: (ticketKey: string) => Promise<CleanupOutcome[]>;
   /** language 设置保存或恢复默认之后：重新解析当前语言（设计文档 2026-10-26）。 */
   languageChanged?: () => void;
+  /** 任何设置保存或恢复默认之后（检查快照跟着重写）。 */
+  settingChanged?: (key: import("../../shared/settings").EditableSettingKey) => void;
   /** 退出已开始：后台任务的 IPC 直接返回。 */
   aborted: () => boolean;
 }

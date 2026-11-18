@@ -116,7 +116,7 @@ export const productAdapter = (db: Db): EntityAdapter =>
     entity: "product",
     table: "lesson_products",
     children: [{ table: "lesson_product_repos", fk: "product_id", orderBy: "repo_slug" }],
-    dependents: [{ table: "lessons", fk: "product_id" }, { table: "admission_policies", fk: "product_id" }],
+    dependents: [{ table: "lessons", fk: "product_id" }, { table: "admission_policies", fk: "product_id" }, { table: "checks", fk: "product_id" }],
     describe: (s) => ({ label: String(s.name ?? ""), state: Array.isArray(s.$lesson_product_repos) ? `${s.$lesson_product_repos.length} repos` : "" }),
   });
 
@@ -129,5 +129,18 @@ export const policyAdapter = (db: Db): EntityAdapter =>
     describe: (s) => ({
       label: s.scope_kind === "global" ? "global" : s.scope_kind === "product" ? `product #${String(s.product_id)}` : `repo ${String(s.repo_slug)}`,
       state: String(s.overrides ?? "{}"),
+    }),
+  });
+
+/** 确定性检查的一行（契约 4.5）；batch_id 记最近一次改动它的批次。 */
+export const checkAdapter = (db: Db): EntityAdapter =>
+  tableAdapter(db, {
+    entity: "check",
+    table: "checks",
+    volatile: ["updated_at"],
+    stampColumn: "batch_id",
+    describe: (s) => ({
+      label: String(s.name || s.type || ""),
+      state: `${String(s.mode ?? "")}/${String(s.severity ?? "")}${s.enabled === 0 ? " off" : ""}`,
     }),
   });

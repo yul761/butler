@@ -1,4 +1,5 @@
 import type { Session, SessionOrigin } from "../../shared/types";
+import type { CheckAbsenceReason } from "../../shared/checks";
 import { withTransaction, type Db } from "./database";
 
 interface SessionRow {
@@ -23,6 +24,7 @@ interface SessionRow {
   model: string | null;
   butler: number;
   lesson_run_id: number | null;
+  checks_absent: string | null;
 }
 
 function toSession(r: SessionRow): Session {
@@ -47,6 +49,7 @@ function toSession(r: SessionRow): Session {
     model: r.model,
     butler: r.butler === 1,
     lessonRunId: r.lesson_run_id === null ? null : Number(r.lesson_run_id),
+    checksAbsent: (r.checks_absent ?? null) as CheckAbsenceReason | null,
   };
 }
 
@@ -248,11 +251,28 @@ export class SessionsRepo {
              repo_id = COALESCE(repo_id, ${old("repo_id")}),
              spawned_by = COALESCE(spawned_by, ${old("spawned_by")}),
              model = COALESCE(model, ${old("model")}),
-             lesson_run_id = COALESCE(lesson_run_id, ${old("lesson_run_id")})${source === "resume" ? "" : role}
+             lesson_run_id = COALESCE(lesson_run_id, ${old("lesson_run_id")}),
+             checks_absent = COALESCE(checks_absent, ${old("checks_absent")})${source === "resume" ? "" : role}
            WHERE id = ?2 AND ticket_key IS ${old("ticket_key")}`,
         )
         .run(id, newId);
     });
+  }
+
+  /**
+   * 记下这个 session 为什么没有检查（null = 有检查，或者根本没有启用的检查；契约 4.5）。
+   * 沿着 /clear 的接替链一直写到当前的 head：hook 报上来的是启动时的终端 id。
+   */
+  setChecksAbsent(id: string, reason: CheckAbsenceReason | null): void {
+    let cur: string | null = id;
+    const seen = new Set<string>();
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const row = this.db.prepare(`SELECT replaced_by FROM sessions WHERE id = ?`).get(cur) as { replaced_by: string | null } | undefined;
+      if (!row) break;
+      this.db.prepare(`UPDATE sessions SET checks_absent = ? WHERE id = ?`).run(reason, cur);
+      cur = row.replaced_by;
+    }
   }
 
   /** 隐藏；at 是隐藏的时间（隐藏超过 14 天的自动删掉，BTL-190 第 8 点）。已经隐藏着的不改时间。 */

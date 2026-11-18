@@ -99,6 +99,7 @@ export const productsSection: ConfigSection<ProductItem> = {
         for (const l of repo.lessons({ scope: { kind: "product", productId: row.localId }, includeMerged: true })) batch.track("lesson", l.id);
         const layer = policies.rowId({ kind: "product", productId: row.localId });
         if (layer !== null) batch.track("policy", layer);
+        for (const c of ctx.db.prepare(`SELECT id FROM checks WHERE scope_kind = 'product' AND product_id = ?`).all(row.localId) as { id: number }[]) batch.track("check", Number(c.id));
         batch.track("product", row.localId);
         repo.deleteProduct(row.localId);
         if (layer !== null) policies.bumpVersion();

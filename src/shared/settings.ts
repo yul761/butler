@@ -25,6 +25,9 @@ export const EDITABLE_SETTINGS = [
   "configBackupIntervalDays",
   "configBackupKeep",
   "configExportReminderDays",
+  "checksEnabled",
+  "checksEditTimeoutSec",
+  "checksPushTimeoutSec",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

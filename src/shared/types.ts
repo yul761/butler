@@ -1,3 +1,4 @@
+import type { CheckAbsenceReason } from "./checks";
 import type { ActivityEvent, SessionActivity } from "./activity";
 import type { AvailabilityHit, LimitHit } from "./availability";
 import type { ReportKind } from "./control";
@@ -133,6 +134,8 @@ export interface Session {
   butler: boolean;
   /** 复盘分析 session：为了看哪一次复盘运行开的（null：不是）。没有 Butler 的工具，不判断卡住、不换新。 */
   lessonRunId: number | null;
+  /** 这个 session 启动时为什么没有检查（契约 4.5）；null = 有检查，或者根本没有启用的检查。 */
+  checksAbsent?: CheckAbsenceReason | null;
 }
 
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */

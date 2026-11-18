@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyGateCommand } from "./gate-command";
+import { classifyGateCommand, classifyPush } from "./gate-command";
 
 describe("classifyGateCommand", () => {
   it("recognises gh pr merge", () => {
@@ -59,5 +59,31 @@ describe("classifyGateCommand", () => {
       "gh pr view 12", "gh pr create", "echo 'git merge x'", "git log --merges", "",
     ])
       expect(classifyGateCommand(c), c).toBeNull();
+  });
+});
+
+describe("classifyPush", () => {
+  it("recognises pushes with or without a refspec", () => {
+    expect(classifyPush("git push")).toEqual({ dir: null });
+    expect(classifyPush("git push -u origin HEAD")).toEqual({ dir: null });
+    expect(classifyPush("git push origin feature/x --force-with-lease")).toEqual({ dir: null });
+    expect(classifyPush("GIT_TRACE=1 git -c core.x=1 push")).toEqual({ dir: null });
+  });
+  it("takes the directory from -C and cd", () => {
+    expect(classifyPush("git -C ../repo push")).toEqual({ dir: "../repo" });
+    expect(classifyPush("cd /work/repo && git push")).toEqual({ dir: "/work/repo" });
+    expect(classifyPush("cd /work && git -C repo push")).toEqual({ dir: "/work/repo" });
+  });
+  it("ignores dry runs, deletes and other commands", () => {
+    expect(classifyPush("git push --dry-run")).toBeNull();
+    expect(classifyPush("git push -n origin x")).toBeNull();
+    expect(classifyPush("git push origin --delete old")).toBeNull();
+    expect(classifyPush("git push origin :old")).toBeNull();
+    expect(classifyPush("git status && echo push")).toBeNull();
+    expect(classifyPush("git stash push")).toBeNull();
+    expect(classifyPush("echo 'git push'")).toBeNull();
+  });
+  it("finds the push in a later segment", () => {
+    expect(classifyPush("git add -A && git commit -m 'push it' && git push")).toEqual({ dir: null });
   });
 });
