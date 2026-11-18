@@ -110,3 +110,38 @@ describe("productSuggestions", () => {
     expect(productSuggestions(g, []).map((s) => [s.slugs.join(","), s.together])).toEqual([["c/1,c/2", 3], ["a/1,a/2", 2], ["b/1,b/2", 2]]);
   });
 });
+
+describe("sessionLessons: principles and the core guide (workstream D)", () => {
+  const principle = (repo: LessonsRepo, db: ReturnType<typeof memDb>, text: string, members: number[]) => {
+    const id = Number(db.prepare(`INSERT INTO lesson_principles (scope_kind, repo_slug, text, why, created_at, updated_at) VALUES ('repo', 'acme/web', ?, 'w', 1, 1)`).run(text).lastInsertRowid);
+    for (const m of members) repo.setFields(m, { principleId: id }, 1);
+    return id;
+  };
+  it("replaces the lessons of a principle by one principle line that carries them as cases", () => {
+    const db = memDb();
+    const repo = new LessonsRepo(db);
+    repo.upsertRepo("acme/web", "/acme_web", 1);
+    const a = add(repo, { kind: "repo", slug: "acme/web" }, "log errors", "confirmed", 30);
+    const b = add(repo, { kind: "repo", slug: "acme/web" }, "rethrow errors", "confirmed", 20);
+    add(repo, { kind: "repo", slug: "acme/web" }, "use tabs", "confirmed", 25);
+    principle(repo, db, "Never swallow errors", [a, b]);
+    expect(sessionLessons(repo, identity(), ["/acme_web"]).map((l) => l.text)).toEqual(["log errors", "use tabs", "rethrow errors"]);
+    expect(sessionLessons(repo, identity(), ["/acme_web"], 30, { principles: true })).toEqual([
+      { label: "acme/web", text: "Never swallow errors", cases: ["log errors", "rethrow errors"] },
+      { label: "acme/web", text: "use tabs" },
+    ]);
+  });
+
+  it("the core guide keeps at most 10, most violated after confirmation first", () => {
+    const db = memDb();
+    const repo = new LessonsRepo(db);
+    repo.upsertRepo("acme/web", "/acme_web", 1);
+    const ids = Array.from({ length: 12 }, (_, i) => add(repo, { kind: "repo", slug: "acme/web" }, `rule ${i}`, "confirmed", 10));
+    // rule 11 在确认以后又被 review 指出了两次。
+    repo.hit(ids[11], 50, { prNumber: 7, url: null, slug: "acme/web", runId: null });
+    repo.hit(ids[11], 60, { prNumber: 8, url: null, slug: "acme/web", runId: null });
+    const out = sessionLessons(repo, identity(), ["/acme_web"], 30, { core: true });
+    expect(out).toHaveLength(10);
+    expect(out[0].text).toBe("rule 11");
+  });
+});

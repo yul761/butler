@@ -5,6 +5,20 @@ import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksAc
 import type { ConfigIoFacade } from "../config-io/facade";
 import type { BatchDetail, BatchView } from "../../shared/batches";
 import type { AdmissionPolicyView } from "../../shared/admission-policy";
+import type {
+  AdmissionPageState, AdmissionScope, CalibrationAction, CalibrationActResult, CalibrationSample, CalibrationStatsView, RegroupResult, WizardAction, WizardActResult, WizardEstimate,
+} from "../../shared/lesson-admission";
+
+/** 规矩准入的页面接口（index.ts 拼起来）。 */
+export interface AdmissionFacade {
+  state(): AdmissionPageState;
+  estimate(scope: AdmissionScope): Promise<WizardEstimate>;
+  wizardAct(a: WizardAction): Promise<WizardActResult>;
+  calibrationSample(scope: AdmissionScope): CalibrationSample;
+  calibrationStats(since: number | null): CalibrationStatsView;
+  calibrationAct(a: CalibrationAction): CalibrationActResult;
+  regroupPrinciples(): Promise<RegroupResult>;
+}
 import type { ConfigIoStatus, ExportResult, ImportApplyResult, ImportPreviewResult } from "../../shared/config-io";
 import type { MemoryHistoryPoint } from "../../shared/mem-usage";
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
@@ -56,7 +70,7 @@ import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
   addRepoArg, apiKeyArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
-  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg } from "./validate";
+  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg } from "./validate";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
 import type { AvailabilityView } from "../../shared/availability";
@@ -88,6 +102,8 @@ export interface IpcDeps {
   lessons: Pick<LessonsService, "state" | "act" | "pendingCount" | "runs" | "run">;
   /** 批次历史（契约 4.4）。 */
   batches: Pick<BatchRecorder, "list" | "get">;
+  /** 规矩准入（工作流 D）：向导、校准页、原则。 */
+  admission: AdmissionFacade;
   /** 三层准入策略（契约 4.2）。 */
   policies: Pick<AdmissionPolicyService, "view" | "setLayer">;
   /** 导入导出（契约 4.3）。 */
@@ -429,6 +445,25 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.lessonsPending, (): number => d.lessons.pendingCount());
   handle(IPC.lessonsBatches, (raw: unknown): BatchView[] => d.batches.list(batchListArg(raw)));
   handle(IPC.lessonsBatch, (raw: unknown): BatchDetail | null => d.batches.get(batchIdArg(raw)));
+  handle(IPC.admissionState, (): AdmissionPageState => d.admission.state());
+  handle(IPC.wizardEstimate, (raw: unknown): Promise<WizardEstimate> => d.admission.estimate(admissionScopeArg(raw)));
+  handle(IPC.wizardAct, async (raw: unknown): Promise<WizardActResult> => {
+    const r = await d.admission.wizardAct(wizardActionArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.calibrationSample, (raw: unknown): CalibrationSample => d.admission.calibrationSample(admissionScopeArg(raw)));
+  handle(IPC.calibrationStats, (raw: unknown): CalibrationStatsView => d.admission.calibrationStats(calibrationSinceArg(raw)));
+  handle(IPC.calibrationAct, (raw: unknown): CalibrationActResult => {
+    const r = d.admission.calibrationAct(calibrationActionArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.principlesRegroup, async (): Promise<RegroupResult> => {
+    const r = await d.admission.regroupPrinciples();
+    d.notify();
+    return r;
+  });
   handle(IPC.policiesGet, (raw: unknown): AdmissionPolicyView => d.policies.view(policyScopeArg(raw)));
   handle(IPC.policiesSet, (raw: unknown) => {
     const { scope, overrides } = policySetArg(raw);

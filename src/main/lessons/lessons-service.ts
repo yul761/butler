@@ -257,8 +257,12 @@ export class LessonsService {
         if (!repo.product(a.id)) return PRODUCT_NOT_FOUND;
         repo.removeFromProduct(a.id, a.slug);
         return { ok: true };
-      case "backfill":
-        return this.d.runner.backfill(a.slug);
+      case "backfill": {
+        const r = await this.d.runner.backfill(a.slug);
+        if (!r.ok) return r;
+        // PR 号只给向导用，不送页面。
+        return { ok: true, enqueued: r.enqueued } as LessonActResult;
+      }
       case "retry":
         return fromRunner(this.d.runner.retry(a.queueId));
       case "retryFailed":

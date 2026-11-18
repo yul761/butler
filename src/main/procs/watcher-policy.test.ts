@@ -27,7 +27,7 @@ describe("watcher policy hook (WS-M I)", () => {
   it("puts the line into a ticket session's guide", () => {
     setWatcherPolicy(() => "end");
     const extra = watcherGuideLines("zh", ["/r/a"]);
-    expect(sessionGuide("zh", "ticket", [], extra)).toContain("不要让 watch 模式的命令");
+    expect(sessionGuide("zh", "ticket", [], { extra })).toContain("不要让 watch 模式的命令");
     expect(sessionGuide("zh", "ticket")).not.toContain("不要让 watch 模式的命令");
   });
 });

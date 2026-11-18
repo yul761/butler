@@ -661,6 +661,45 @@ export class LessonsRepo {
     return { queued: Number(r.queued), running: Number(r.running), failed: Number(r.failed), skipped: Number(r.skipped), cancelled: Number(r.cancelled) };
   }
 
+  /** 这几个 PR 在队列里的状态（向导等它们分析完）；不在队列里的没有。 */
+  queueStatusOf(slug: string, prs: readonly number[]): Map<number, { status: LessonQueueRow["status"]; attempts: number }> {
+    const out = new Map<number, { status: LessonQueueRow["status"]; attempts: number }>();
+    const want = new Set(prs);
+    for (const r of this.db.prepare(`SELECT pr_number, status, attempts FROM lesson_queue WHERE repo_slug = ?`).all(slug) as { pr_number: number; status: LessonQueueRow["status"]; attempts: number }[])
+      if (want.has(Number(r.pr_number))) out.set(Number(r.pr_number), { status: r.status, attempts: Number(r.attempts) });
+    return out;
+  }
+
+  /** 原则的正文（会话说明用）。 */
+  principleTexts(ids: readonly number[]): Map<number, { text: string; why: string }> {
+    const out = new Map<number, { text: string; why: string }>();
+    if (!ids.length) return out;
+    const q = this.db.prepare(`SELECT id, text, why FROM lesson_principles WHERE id = ?`);
+    for (const id of new Set(ids)) {
+      const r = q.get(id) as { id: number; text: string; why: string } | undefined;
+      if (r) out.set(Number(r.id), { text: r.text, why: r.why });
+    }
+    return out;
+  }
+
+  /**
+   * 确认以后又被违反了几次（核心说明的排序）：确认之后才来的出处（review 里又被指出），加上从它做出来的检查的 fail 命中。
+   */
+  violationCounts(ids: readonly number[]): Map<number, number> {
+    const out = new Map<number, number>();
+    if (!ids.length) return out;
+    const src = this.db.prepare(`SELECT COUNT(*) AS n FROM lesson_sources s JOIN lessons l ON l.id = s.lesson_id WHERE s.lesson_id = ? AND l.confirmed_at IS NOT NULL AND s.at > l.confirmed_at`);
+    const hits = this.db.prepare(`SELECT COUNT(*) AS n FROM check_hits h JOIN checks c ON c.id = h.check_id WHERE c.lesson_id = ? AND h.outcome = 'fail'`);
+    for (const id of new Set(ids)) out.set(id, Number((src.get(id) as { n: number }).n) + Number((hits.get(id) as { n: number }).n));
+    return out;
+  }
+
+  /** 分析一个 PR 平均要多久（向导的估算）；没有记录时为 null。 */
+  averageRunMs(): number | null {
+    const r = this.db.prepare(`SELECT AVG(duration_ms) AS ms FROM (SELECT duration_ms FROM lesson_runs WHERE status = 'done' AND duration_ms IS NOT NULL ORDER BY id DESC LIMIT 50)`).get() as { ms: number | null };
+    return r.ms === null ? null : Math.round(Number(r.ms));
+  }
+
   queueRows(slug: string): LessonQueueRow[] {
     const rows = this.db
       .prepare(`SELECT * FROM lesson_queue WHERE repo_slug = ? ORDER BY COALESCE(finished_at, enqueued_at) DESC, id DESC LIMIT 500`)

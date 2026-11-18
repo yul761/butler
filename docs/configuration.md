@@ -393,6 +393,27 @@ Judging only sets fields (admission, shelved reason, score); it is recorded as a
 
 `admissionCalibratedAt` records when you marked the score lines calibrated on the **Calibration** tab; it is not edited directly.
 
+### Setup wizard
+
+The **Setup wizard** tab on the Lessons page does the first pass for a repository, a product or everything. Before you start it shows, per repository, how many merged PRs there are and how many are already analysed, plus the expected number of model calls and an estimated time (from how long past analyses took). It then:
+
+1. scans the existing code (skipped until a scanner is available; the summary says so);
+2. analyses the merged PRs that are not analysed yet and fills in missing fields of older lessons;
+3. backtests (until backtesting is available the summary says **not backtested**, and scores of checkable lessons stay capped);
+4. judges every candidate as described above and waits for you.
+
+The wizard survives a restart: it picks up at the stage it was in, and items already done are not asked again. A call that fails is retried automatically after 1, 5 and 15 minutes; after that it waits for **Retry now**. A model limit only delays an item and does not use up an attempt. You do not have to wait for the retries: the summary is ready after the first pass and counts the unfinished items, and it is updated when a retry succeeds.
+
+The summary shows PRs analysed, failed and skipped, candidates, lessons recommended (as text or as checks), merged, shelved per reason and covered, the sample pass rate (and whether the review had to use the same model), and how many model calls the wizard made. **Accept all** confirms the recommended lessons in one batch that one **Undo** reverses; it is hidden, with the weakest metric named, when the sample review is past its floor. Shelved lessons are grouped by reason: pull one back or a whole group (each one becomes a calibration sample), or reject a group. After changing the lines in the admission policy, **Recalculate** re-scores and re-decides without analysing or asking the model again.
+
+### Calibration
+
+The **Calibration** tab draws up to five scored lessons from each band (at or above the admit line, between the lines, below the drop line) and asks whether each should be accepted. Every mark is recorded as a calibration sample next to the ones recorded when you override the pipeline; marking a lesson again in the same draw replaces your earlier mark. The page shows, per band, how many you marked and how many you would accept, the agreement with the pipeline for this draw and for all samples, and the score weights and lines, which you can edit in place. **Mark as calibrated** records the time in `admissionCalibratedAt` and removes the "not calibrated yet" note from the policy editor.
+
+### Principles and the core guide
+
+With `lessonsPrinciples` on, Butler asks the model once a day (or when you press **Group now** in Settings) which confirmed lessons of one repository or product share a principle; a principle needs at least three lessons. The grouping is one undoable batch. A principle whose lessons have not changed keeps its id, and answers are cached, so an unchanged set of lessons costs no call. In the session guide a principle replaces its lessons with one line, "principle (N cases)", and its cases go to a file next to the guide that the session reads when the principle is relevant. With `lessonsCoreGuide` on, the guide keeps at most 10 lessons, the ones broken most often since they were confirmed first.
+
 ### Export file
 
 **Import / export** on the Lessons page exports everything, one product or one repository, and either all content, lessons only (with products) or checks only (once checks exist). The file is JSON:

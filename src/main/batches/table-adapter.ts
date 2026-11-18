@@ -132,6 +132,17 @@ export const policyAdapter = (db: Db): EntityAdapter =>
     }),
   });
 
+/** 原则（工作流 D）：重新分组是一个能撤销的批次。 */
+export const principleAdapter = (db: Db): EntityAdapter =>
+  tableAdapter(db, {
+    entity: "principle",
+    table: "lesson_principles",
+    volatile: ["updated_at"],
+    stampColumn: "batch_id",
+    dependents: [{ table: "lessons", fk: "principle_id" }],
+    describe: (s) => ({ label: String(s.text ?? ""), state: s.scope_kind === "product" ? `product #${String(s.product_id)}` : `repo ${String(s.repo_slug)}` }),
+  });
+
 /** 确定性检查的一行（契约 4.5）；batch_id 记最近一次改动它的批次。 */
 export const checkAdapter = (db: Db): EntityAdapter =>
   tableAdapter(db, {

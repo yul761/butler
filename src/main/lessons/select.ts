@@ -1,4 +1,4 @@
-import { MAX_SESSION_LESSONS, type Lesson, type LessonProductSuggestion, type LessonProductView, type SessionLesson } from "../../shared/lessons";
+import { CORE_GUIDE_MAX, MAX_SESSION_LESSONS, type Lesson, type LessonProductSuggestion, type LessonProductView, type SessionLesson } from "../../shared/lessons";
 import type { LessonsRepo } from "../db/lessons-repo";
 import type { RepoIdentity } from "./repo-identity";
 
@@ -19,12 +19,44 @@ function confirmedFor(repo: LessonsRepo, slugs: string[]): { lesson: Lesson; lab
   return out.sort((a, b) => byRank(a.lesson, b.lesson));
 }
 
+/** 会话说明怎么挑规矩（工作流 D 的两个设置）。 */
+export interface GuideLessonOptions {
+  /** lessonsPrinciples：属于一个原则的规矩换成一行原则，规矩本身成了它的案例。 */
+  principles?: boolean;
+  /** lessonsCoreGuide：最多 CORE_GUIDE_MAX 条，确认以后又被违反最多的在前。 */
+  core?: boolean;
+}
+
 /** 这些仓库路径 → slug（去重、去掉解析不出的）→ 仓库的规矩和这些仓库所属产品的规矩，只要 confirmed；排序后取前 limit 条。 */
-export function sessionLessons(repo: LessonsRepo, identity: RepoIdentity, repoPaths: string[], limit = MAX_SESSION_LESSONS): SessionLesson[] {
+export function sessionLessons(repo: LessonsRepo, identity: RepoIdentity, repoPaths: string[], limit = MAX_SESSION_LESSONS, opts: GuideLessonOptions = {}): SessionLesson[] {
   const slugs = [...new Set(repoPaths.map((p) => identity.slugOf(p)).filter((s): s is string => !!s))];
-  return confirmedFor(repo, slugs)
-    .slice(0, limit)
-    .map(({ lesson, label }) => ({ label, text: lesson.text }));
+  let ranked = confirmedFor(repo, slugs);
+  if (opts.core) {
+    const v = repo.violationCounts(ranked.map((r) => r.lesson.id));
+    ranked = [...ranked].sort((a, b) => (v.get(b.lesson.id) ?? 0) - (v.get(a.lesson.id) ?? 0) || byRank(a.lesson, b.lesson));
+    limit = Math.min(limit, CORE_GUIDE_MAX);
+  }
+  if (!opts.principles) return ranked.slice(0, limit).map(({ lesson, label }) => ({ label, text: lesson.text }));
+  // 原则排在它排得最靠前的那条规矩的位置；案例是它在这些仓库里的全部规矩。
+  const texts = repo.principleTexts(ranked.flatMap((r) => (r.lesson.principleId === null ? [] : [r.lesson.principleId])));
+  const out: SessionLesson[] = [];
+  const at = new Map<number, SessionLesson>();
+  for (const { lesson, label } of ranked) {
+    const pid = lesson.principleId;
+    const p = pid === null ? undefined : texts.get(pid);
+    if (pid === null || !p) {
+      out.push({ label, text: lesson.text });
+      continue;
+    }
+    const prev = at.get(pid);
+    if (prev) prev.cases!.push(lesson.text);
+    else {
+      const row: SessionLesson = { label, text: p.text, cases: [lesson.text] };
+      at.set(pid, row);
+      out.push(row);
+    }
+  }
+  return out.slice(0, limit);
 }
 
 /** 只开这一个仓库时，已确认的规矩（仓库的加上所属产品的）超过 limit 的条数。 */
@@ -49,9 +81,9 @@ export function productSuggestions(groups: string[][], products: LessonProductVi
 }
 
 /** 送规矩出错（数据库、解析 slug）时只是这次不带规矩，不能连累整份 session 说明。 */
-export function safeSessionLessons(repo: LessonsRepo, identity: RepoIdentity, repoPaths: string[], log?: (msg: string, err?: unknown) => void): SessionLesson[] {
+export function safeSessionLessons(repo: LessonsRepo, identity: RepoIdentity, repoPaths: string[], log?: (msg: string, err?: unknown) => void, opts: GuideLessonOptions = {}): SessionLesson[] {
   try {
-    return sessionLessons(repo, identity, repoPaths);
+    return sessionLessons(repo, identity, repoPaths, MAX_SESSION_LESSONS, opts);
   } catch (e) {
     log?.("session lessons failed, guide goes without them", e);
     return [];

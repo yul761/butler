@@ -156,12 +156,16 @@ import { JudgmentCache } from "./lessons/admission/judgments";
 import { LessonEnricher } from "./lessons/enrich";
 import { AdmissionService } from "./lessons/admission/service";
 import { importConflictDetector } from "./lessons/admission/import-conflicts";
+import { WizardService } from "./lessons/admission/wizard";
+import { CalibrationService } from "./lessons/admission/calibration";
+import { PrinciplesService } from "./lessons/admission/principles";
+import type { AdmissionFacade } from "./ipc/register";
 import { OPEN_GATE } from "./lessons/admission/model-steps";
 import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
 import { LessonBatchService } from "./lessons/lesson-batches";
 import { BatchRecorder } from "./batches/batch-recorder";
-import { checkAdapter, lessonAdapter, policyAdapter, productAdapter } from "./batches/table-adapter";
+import { checkAdapter, lessonAdapter, policyAdapter, principleAdapter, productAdapter } from "./batches/table-adapter";
 import { ChecksService } from "./checks/checks-service";
 import { SnapshotWriter, readSnapshotState } from "./checks/snapshot-writer";
 import { HitIngest } from "./checks/hit-ingest";
@@ -617,7 +621,7 @@ async function bootstrap(): Promise<void> {
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
   // 规矩、产品和准入策略的改动都记成可撤销的批次（契约 4.4）。
-  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db)]);
+  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db)]);
   // 确定性检查（契约 4.5）：库里是三层的定义，hook 只读 Butler 写出来的快照（<BUTLER_HOME>/checks/snapshot.json）。
   // 检查、产品、设置、语言一变就重写快照（合并一小段时间里的改动）；内容没变不写。
   const checksService: ChecksService = new ChecksService({
@@ -730,12 +734,42 @@ async function bootstrap(): Promise<void> {
     autoAdmitEnabled: () => settings.get("lessonsAutoAdmit") === "1",
   });
   checksService.onLessonClassified((id, before, after, reason) => void lessonAdmission.onClassified(id, before, after, reason));
-  configIo.setLessonConflictDetector(
-    importConflictDetector(
-      () => ({ run: (req) => execHeadlessJson(judgeDeps, req), judgments: lessonJudgments, lang: () => currentLang(), now: Date.now, cwd: paths.home, gate: OPEN_GATE }),
-      () => Number(admissionPolicies.resolve({ kind: "global" }).value["dedupe.maxGroup"]),
-    ),
-  );
+  const admissionCtx = () => ({ run: (req: Parameters<typeof execHeadlessJson>[1]) => execHeadlessJson(judgeDeps, req), judgments: lessonJudgments, lang: () => currentLang(), now: Date.now, cwd: paths.home, gate: OPEN_GATE });
+  configIo.setLessonConflictDetector(importConflictDetector(admissionCtx, () => Number(admissionPolicies.resolve({ kind: "global" }).value["dedupe.maxGroup"])));
+  // 初始化向导、校准页、原则（工作流 D 第 3 部分）。
+  const lessonWizard = new WizardService({
+    db, repo: lessonsRepo, admission: lessonAdmission, runner: lessonRunner, enricher: lessonEnricher, bulk: (verb, target) => lessonBatches.bulk(verb, target),
+    now: Date.now, notify: () => notify(), log: logger, policyVersion: () => admissionPolicies.version(),
+  });
+  const calibration = new CalibrationService({
+    db, repo: lessonsRepo, policy: () => admissionPolicies.resolve({ kind: "global" }).value, now: Date.now,
+    calibratedAt: () => settings.get("admissionCalibratedAt"), setCalibratedAt: (v) => settings.set("admissionCalibratedAt", v),
+  });
+  const principles = new PrinciplesService({ db, repo: lessonsRepo, recorder: batchRecorder, pipeline: lessonAdmission.pipeline, ctx: admissionCtx, now: Date.now, log: logger });
+  let principlesRunning = false;
+  let principlesDailyAt = 0;
+  const regroupPrinciples = async () => {
+    principlesRunning = true;
+    notify();
+    try {
+      return await principles.regroup();
+    } finally {
+      principlesRunning = false;
+      notify();
+    }
+  };
+  const admissionFacade: AdmissionFacade = {
+    state: () => ({
+      runs: lessonWizard.list(),
+      principles: { count: Number((db.prepare(`SELECT COUNT(*) AS n FROM lesson_principles`).get() as { n: number }).n), running: principlesRunning },
+    }),
+    estimate: (scope) => lessonWizard.estimate(scope),
+    wizardAct: (a) => lessonWizard.act(a),
+    calibrationSample: (scope) => calibration.sample(scope),
+    calibrationStats: (since) => ({ ...calibration.stats(since), marks: since === null ? {} : calibration.marks(since) }),
+    calibrationAct: (a) => (a.op === "markCalibrated" ? { ok: true, calibratedAt: calibration.markCalibrated() } : calibration.mark(a.lessonId, a.mark, a.since)),
+    regroupPrinciples,
+  };
   // 复盘规矩页：仓库路径直接查表（已归档的 ticket、feature、epic 不算）；归组建议按 ticket 和 feature 各算一组。
   const repoPathRows = <T extends { repo_path: string }>(sql: string): T[] => db.prepare(sql).all() as unknown as T[];
   const lessonsService = new LessonsService({
@@ -888,7 +922,14 @@ async function bootstrap(): Promise<void> {
     },
     checksAbsence,
     guidePath: (kind, repoPaths) =>
-      writeSessionGuide(paths.mcp, currentLang(), kind, kind === "ticket" ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger) : [], kind === "ticket" ? watcherGuideLines(currentLang(), repoPaths) : []),
+      writeSessionGuide(
+        paths.mcp, currentLang(), kind,
+        kind === "ticket"
+          ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger, { principles: settings.get("lessonsPrinciples") === "1", core: settings.get("lessonsCoreGuide") === "1" })
+          : [],
+        // 预审（工作流 G）还没接进来：指南里那句「PR 前会自动预审」先不写；G 合进来后把这里换成它的开关。
+        { preReview: false, extra: kind === "ticket" ? watcherGuideLines(currentLang(), repoPaths) : [] },
+      ),
     featureMcpConfig,
     epicMcpConfig,
     butlerWorkspace: paths.butlerWorkspace,
@@ -1115,6 +1156,11 @@ async function bootstrap(): Promise<void> {
     void butlerPatrol.check();
     void lessonRunner.daily().catch((e: unknown) => logger("lessons: daily pull failed", e));
     void metricsGhJob?.daily().catch((e: unknown) => logger("metrics: daily gh job failed", e));
+    // 原则每天重新分组一次（设置 lessonsPrinciples）；规矩没变时读缓存，不调模型。
+    if (settings.get("lessonsPrinciples") === "1" && Date.now() - principlesDailyAt > 20 * 3600_000) {
+      principlesDailyAt = Date.now();
+      void regroupPrinciples().catch((e: unknown) => logger("lessons: principles regroup failed", e));
+    }
     if (configBackups.tick()) notify();
     return scheduler.check(trigger);
   };
@@ -1873,6 +1919,7 @@ async function bootstrap(): Promise<void> {
     lessons: lessonsService,
     batches: batchRecorder,
     policies: admissionPolicies,
+    admission: admissionFacade,
     checks: {
       act: (a) => checksService.act(a),
       view: (scope) => checksService.view(scope),
@@ -2103,7 +2150,9 @@ async function bootstrap(): Promise<void> {
   });
   void healthReady
     .then(() => {
-      if (!headlessAbort.signal.aborted) lessonRunner.start();
+      if (headlessAbort.signal.aborted) return;
+      lessonRunner.start();
+      lessonWizard.resume();
     })
     .catch((e: unknown) => logger("lessons: starting the runner failed", e));
   activityMonitor.start();
@@ -2194,6 +2243,7 @@ async function bootstrap(): Promise<void> {
     clearTimeout(rollupFirst);
     clearInterval(rollupTimer);
     lessonAdmission.stop();
+    lessonWizard.stop();
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     activityMonitor.stop();
     void procServices.stop();

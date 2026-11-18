@@ -159,3 +159,32 @@ describe("session guide", () => {
     });
   });
 });
+
+describe("session guide: principles and pre-review (workstream D)", () => {
+  it("writes principle lines with a case count and the cases into a sibling file", () => {
+    const dir = tempDir();
+    const lessons = [{ label: "acme/web", text: "Never swallow errors", cases: ["log errors", "rethrow errors"] }, { label: "acme/web", text: "use tabs" }];
+    const file = writeSessionGuide(dir, "en", "ticket", lessons);
+    const text = readFileSync(file, "utf8");
+    expect(text).toContain("- [acme/web] Never swallow errors (2 cases)");
+    expect(text).toContain("- [acme/web] use tabs");
+    const cases = /read its cases .* in (\S+lessons-cases-[0-9a-f]{12}\.md)\./.exec(text)?.[1];
+    expect(cases).toBeDefined();
+    expect(readFileSync(cases!, "utf8")).toContain("## [acme/web] Never swallow errors\n- log errors\n- rethrow errors");
+    expect(text).not.toContain("pre-review");
+  });
+
+  it("mentions the pre-review only when one is active", () => {
+    expect(sessionGuide("en", "ticket", [{ label: "r", text: "t" }], { preReview: true })).toContain("A pre-review runs automatically before a PR is opened");
+    expect(sessionGuide("zh", "ticket", [{ label: "r", text: "t" }], { preReview: false })).not.toContain("预审");
+  });
+
+  it("prunes old cases files with the guides", () => {
+    const dir = tempDir();
+    const f = join(dir, "lessons-cases-0123456789ab.md");
+    writeFileSync(f, "x");
+    utimesSync(f, 1, 1);
+    expect(pruneSessionGuides(dir, Date.now())).toBe(1);
+    expect(existsSync(f)).toBe(false);
+  });
+});

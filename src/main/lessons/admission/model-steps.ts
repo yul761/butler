@@ -479,3 +479,56 @@ export const samplePassed = (s: SampleJudgment): boolean => s.reasonable && s.fo
 
 /** 种类到判断缓存 kind 的对应（向导的工作单元用 StepKind）。 */
 export const JUDGMENT_OF: Record<StepKind, JudgmentKind> = { cluster: "same", conflict: "conflict", clarity: "clarity", classify: "classify", draft: "draft", sample: "sample" };
+
+// ------------------------------------------------------------------ 原则（lesson_cluster 的原则模式，addendum 第 10 节）
+
+export const PrinciplesSchema = z.object({
+  principles: z.array(z.object({ ids: z.array(z.number().int()).max(200), text: z.string().max(1000), why: z.string().max(2000) })).max(100),
+});
+export type PrinciplesAnswer = z.infer<typeof PrinciplesSchema>["principles"];
+/** 一个原则至少几条规矩。 */
+export const PRINCIPLE_MIN_CASES = 3;
+
+const PRINCIPLE_PROMPT = {
+  zh: (rules: string) => `${DATA_NOTE.zh}
+
+下面是同一范围里用户确认过的 code review 规矩。把背后是同一条原则的规矩归到一起：
+- principles 里每组至少 ${PRINCIPLE_MIN_CASES} 条，ids 用规矩的编号；一条规矩最多属于一组；归不进任何一组的不要列出来。
+- text 是一句话的原则（比各条更概括，但仍然能指导写代码）；why 一句话说为什么。用规矩原来的语言。
+- 只是话题相近、背后理由不同的，不要归到一起。
+
+规矩：
+${rules}`,
+  en: (rules: string) => `${DATA_NOTE.en}
+
+Below are code review rules the user confirmed for one scope. Group the rules that share one underlying principle:
+- Each group in principles has at least ${PRINCIPLE_MIN_CASES} rules, by their numbers in ids; a rule belongs to at most one group; leave out rules that fit no group.
+- text is the principle in one sentence (more general than its rules, still something to write code by); why says in one sentence why it matters. Use the rules' own language.
+- Rules on the same topic for different reasons do not belong together.
+
+Rules:
+${rules}`,
+};
+
+export const principlesHash = (ls: readonly StepLesson[]): string => inputHash([...ls].sort((a, b) => a.id - b.id).map((l) => [l.id, l.text, l.why]));
+
+/** 一个范围的已确认规矩交给模型分原则；结果按这组规矩的指纹缓存（规矩没变就不再问）。失败返回 null。 */
+export async function runPrinciples(ctx: StepCtx, key: string, lessons: readonly StepLesson[]): Promise<PrinciplesAnswer | null> {
+  const hash = principlesHash(lessons);
+  const hit = ctx.judgments.get<PrinciplesAnswer>("principle", key, hash);
+  if (hit) return hit.result;
+  const zh = ctx.lang() === "zh";
+  const o = await call(ctx, { task: "lesson_cluster", label: "lesson principles", schema: PrinciplesSchema, prompt: PRINCIPLE_PROMPT[zh ? "zh" : "en"](lessons.map((l) => line(l, zh)).join("\n")) });
+  if (!o.ok) return null;
+  const known = new Set(lessons.map((l) => l.id));
+  const used = new Set<number>();
+  const out: PrinciplesAnswer = [];
+  for (const p of o.value.principles) {
+    const ids = [...new Set(p.ids)].filter((id) => known.has(id) && !used.has(id));
+    if (ids.length < PRINCIPLE_MIN_CASES || !p.text.trim()) continue;
+    for (const id of ids) used.add(id);
+    out.push({ ids, text: p.text.trim(), why: p.why.trim() });
+  }
+  ctx.judgments.put("principle", key, hash, out, meta(ctx, o));
+  return out;
+}

@@ -94,6 +94,14 @@ export const IPC = {
   /** 批次历史（契约 4.4）：列表和一个批次的明细。撤销走 lessons:act 的 undoBatch。 */
   lessonsBatches: "lessons:batches",
   lessonsBatch: "lessons:batch",
+  /** 规矩准入（工作流 D）：向导的运行、估算和动作；校准页；原则重新分组。 */
+  admissionState: "admission:state",
+  wizardEstimate: "admission:wizard-estimate",
+  wizardAct: "admission:wizard-act",
+  calibrationSample: "admission:calibration-sample",
+  calibrationStats: "admission:calibration-stats",
+  calibrationAct: "admission:calibration-act",
+  principlesRegroup: "admission:principles-regroup",
   /** 三层准入策略（契约 4.2）。 */
   policiesGet: "policies:get",
   policiesSet: "policies:set",
@@ -168,7 +176,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionsPin, IPC.sessionsWake, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
-  IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget,
+  IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget, IPC.admissionState, IPC.wizardEstimate, IPC.wizardAct, IPC.calibrationSample, IPC.calibrationStats, IPC.calibrationAct, IPC.principlesRegroup,
   IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.ciResend, IPC.routingView, IPC.routingAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,

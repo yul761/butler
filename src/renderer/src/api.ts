@@ -8,6 +8,9 @@ import type { AvailabilityAction, AvailabilityView } from "../../shared/availabi
 import type { BatchDetail, BatchView } from "../../shared/batches";
 import type { AdmissionPolicyOverrides, AdmissionPolicyView, PolicyScope } from "../../shared/admission-policy";
 import type { ConfigIoStatus, ExportRequest, ExportResult, ImportApplyRequest, ImportApplyResult, ImportPreviewResult, StarterTarget } from "../../shared/config-io";
+import type {
+  AdmissionPageState, AdmissionScope, CalibrationAction, CalibrationActResult, CalibrationSample, CalibrationStatsView, RegroupResult, WizardAction, WizardActResult, WizardEstimate,
+} from "../../shared/lesson-admission";
 import type { LessonAction, LessonActResult, LessonQueueRowView, LessonRunDetail, LessonsState } from "../../shared/lessons";
 import type { MemoryView, WhyEntry } from "../../shared/memory";
 import type { RoutingAction, RoutingView, SessionLimitView, SwitchModelResult } from "../../shared/model-routing";
@@ -123,6 +126,13 @@ export const api = {
   lessonsPending: () => call<number>(IPC.lessonsPending),
   lessonsBatches: (opts?: { limit?: number; beforeId?: number }) => call<BatchView[]>(IPC.lessonsBatches, opts ?? {}),
   lessonsBatch: (id: number) => call<BatchDetail | null>(IPC.lessonsBatch, id),
+  admissionState: () => call<AdmissionPageState>(IPC.admissionState),
+  wizardEstimate: (scope: AdmissionScope) => call<WizardEstimate>(IPC.wizardEstimate, scope),
+  wizardAct: (a: WizardAction) => call<WizardActResult>(IPC.wizardAct, a),
+  calibrationSample: (scope: AdmissionScope) => call<CalibrationSample>(IPC.calibrationSample, scope),
+  calibrationStats: (since: number | null) => call<CalibrationStatsView>(IPC.calibrationStats, since),
+  calibrationAct: (a: CalibrationAction) => call<CalibrationActResult>(IPC.calibrationAct, a),
+  principlesRegroup: () => call<RegroupResult>(IPC.principlesRegroup),
   policiesGet: (scope: PolicyScope) => call<AdmissionPolicyView>(IPC.policiesGet, scope),
   policiesSet: (scope: PolicyScope, overrides: AdmissionPolicyOverrides) => call<{ batchId: number | null; version: number }>(IPC.policiesSet, { scope, overrides }),
   checksView: (scope: CheckScope) => call<ChecksView>(IPC.checksView, scope),

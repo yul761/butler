@@ -42,10 +42,11 @@ export class AdmissionService {
   }
 
   /** 判一个范围，写计划批次，再对被推荐的规矩抽查（seed 固定抽样，向导用运行 id）。 */
-  async judge(scope: AdmissionScope, opts: JudgeOptions & { seed?: number; review?: boolean } = {}): Promise<JudgeAndReview> {
+  async judge(scope: AdmissionScope, opts: JudgeOptions & { seed?: number; review?: boolean; reviewBatch?: number | null } = {}): Promise<JudgeAndReview> {
     const r = await this.pipeline.judge(scope, opts);
     let reviewId: number | null = null;
-    const batchId = r.planBatch ?? this.latestPlan();
+    // 这次什么都没变（没有新的计划批次）时，复核挂在调用方给的那个批次上（向导：这次运行上一个计划批次）。
+    const batchId = r.planBatch ?? opts.reviewBatch ?? null;
     if (opts.review !== false && batchId !== null) {
       reviewId = await this.reviews.review({
         batchId, ctx: r.ctx, admitted: r.admitted, producer: r.producer, verdicts: r.verdicts, policy: this.reviewPolicy(scope), seed: opts.seed ?? batchId,
@@ -62,11 +63,6 @@ export class AdmissionService {
   /** 线按范围的策略算：一个仓库、一个产品按它那层，全部按全局。 */
   reviewPolicy(scope: AdmissionScope) {
     return this.pipeline.policyOf(scope.kind === "all" ? { kind: "global" } : scope);
-  }
-
-  private latestPlan(): number | null {
-    const r = this.d.db.prepare(`SELECT id FROM admission_batches WHERE kind = 'admission_plan' AND undo_of IS NULL ORDER BY id DESC LIMIT 1`).get() as { id: number } | undefined;
-    return r ? Number(r.id) : null;
   }
 
   /** 全部接受（向导的「全部接受」和规矩页的「全部接受推荐」）。 */

@@ -277,4 +277,8 @@ export type LessonActResult =
 export interface SessionLesson {
   label: string;
   text: string;
+  /** 这一行是一个原则（工作流 D）：属于它的规矩，写进旁边的案例文件，说明里只写条数。 */
+  cases?: string[];
 }
+/** 核心说明（设置 lessonsCoreGuide）最多几条。 */
+export const CORE_GUIDE_MAX = 10;
