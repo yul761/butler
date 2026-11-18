@@ -229,9 +229,10 @@ export class RoutingRepo {
   unrecognized(limit = 100): UnrecognizedError[] {
     const rows = this.db.prepare(`SELECT * FROM unrecognized_errors ORDER BY status = 'open' DESC, last_seen DESC LIMIT ?`).all(limit) as unknown as UnrecRow[];
     return rows.map((r) => {
-      const u = toUnrec(r);
-      const { ruleId: _ruleId, ...view } = u;
-      return view;
+      const u: Partial<ReturnType<typeof toUnrec>> & UnrecognizedError = toUnrec(r);
+      // 规则 id 只在主进程里用。
+      delete u.ruleId;
+      return u;
     });
   }
 
