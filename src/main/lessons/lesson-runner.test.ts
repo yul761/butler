@@ -773,10 +773,21 @@ describe("LessonRunner backfill", () => {
       { number: 1, mergedAt: "2026-01-01T00:00:00Z", headRefName: "a" },
       { number: 2, mergedAt: "2026-01-03T00:00:00Z", headRefName: "b" },
     ]);
-    expect(await s.runner.backfill("acme/web")).toEqual({ ok: true, enqueued: 2 });
+    expect(await s.runner.backfill("acme/web")).toEqual({ ok: true, enqueued: 2, prs: [1, 2] });
     expect(s.gh.mergedPrs).toHaveBeenCalledWith("/w", null, BACKFILL_LIMIT, expect.any(Number));
     expect(s.repo.repo("acme/web")).toMatchObject({ backfilledAt: T0, mergedCursor: "2026-01-03T00:00:00Z" });
     expect(s.db.prepare(`SELECT DISTINCT origin FROM lesson_queue`).all()).toEqual([{ origin: "backfill" }]);
+  });
+
+  it("lists merged PR numbers for the wizard estimate without enqueuing anything", async () => {
+    const s = setup();
+    s.hold();
+    s.gh.mergedPrs.mockResolvedValue([{ number: 5, mergedAt: "2026-01-01T00:00:00Z", headRefName: "a" }]);
+    expect(await s.runner.mergedPrNumbers("acme/web")).toEqual([5]);
+    expect(await s.runner.mergedPrNumbers("acme/nope")).toBeNull();
+    s.gh.mergedPrs.mockResolvedValue(null);
+    expect(await s.runner.mergedPrNumbers("acme/web")).toBeNull();
+    expect(s.repo.queueCounts("acme/web").queued).toBe(0);
   });
 
   it("logs when the list hits the limit", async () => {

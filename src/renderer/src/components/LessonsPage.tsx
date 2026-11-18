@@ -14,6 +14,9 @@ import { ChecksPanel, type CheckDraftState } from "./ChecksPanel";
 import { draftErrorText } from "../checks-view";
 import type { LessonFilter } from "../../../shared/lesson-filter";
 import { useStateRefetch } from "./useStateRefetch";
+import { WizardPanel } from "./WizardPanel";
+import { CalibrationPanel } from "./CalibrationPanel";
+import { ScoreParts } from "./ScoreParts";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -35,7 +38,7 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
   const [newName, setNewName] = useState("");
   const [newSlugs, setNewSlugs] = useState<string[]>([]);
   /** 页面顶上的标签：规矩 / 批次历史 / 导入导出。 */
-  const [pageTab, setPageTab] = useState<"lessons" | "checks" | "batches" | "io">("lessons");
+  const [pageTab, setPageTab] = useState<"lessons" | "wizard" | "calibration" | "checks" | "batches" | "io">("lessons");
   /** 从规矩起草好的检查：交给检查标签页打开表单。 */
   const [checkDraft, setCheckDraft] = useState<CheckDraftState | null>(null);
   /** 正在起草检查的规矩（按钮显示「正在起草…」）。 */
@@ -361,6 +364,7 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
               <span className="lesson-text">{l.text}</span>
             </label>
             <LessonTags tags={lessonTags(l, S)} />
+            <ScoreParts lesson={l} />
             {l.why && <p className="muted">{S.lessonsWhy(l.why)}</p>}
             {sources(l)}
             {isEditing(l) ? editor(l) : (
@@ -416,6 +420,7 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
                 {l.status === "disabled" && <span className="pill none">{S.lessonsDisabledTag}</span>}
               </label>
               <LessonTags tags={lessonTags(l, S)} />
+              <ScoreParts lesson={l} />
               <p className="muted">{S.lessonsHits(l.hits)} · {S.lessonsLastSeen(formatTime(l.lastSeenAt))}</p>
               {sources(l)}
               {isEditing(l) ? editor(l) : (
@@ -452,7 +457,7 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
       <h2>{S.lessons}</h2>
       <p className="muted">{S.lessonsIntro}</p>
       <div className="lessons-tabs lessons-row" role="tablist">
-        {(["lessons", "checks", "batches", "io"] as const).map((t) => (
+        {(["lessons", "wizard", "calibration", "checks", "batches", "io"] as const).map((t) => (
           <button key={t} role="tab" aria-selected={pageTab === t} className={pageTab === t ? "primary" : undefined} data-testid={`lessons-page-tab-${t}`} onClick={() => setPageTab(t)}>
             {S.lessonsPageTab[t]}
           </button>
@@ -465,7 +470,11 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
           <button className="link" data-testid="lessons-export-reminder-open" onClick={() => setPageTab("io")}>{S.ioOpenTab}</button>
         </p>
       )}
-      {pageTab === "checks" ? (
+      {pageTab === "wizard" ? (
+        <WizardPanel lessons={s} onNotice={setNotice} />
+      ) : pageTab === "calibration" ? (
+        <CalibrationPanel lessons={s} />
+      ) : pageTab === "checks" ? (
         <ChecksPanel draft={checkDraft} onDraftTaken={() => setCheckDraft(null)} onNotice={setNotice} />
       ) : pageTab === "batches" ? (
         <LessonBatches />

@@ -15,6 +15,8 @@ export interface TableAdapterSpec {
   entity: string;
   table: string;
   volatile?: readonly string[];
+  /** 不进快照的列（撤销不改回它，比较时也不看）：由别的实体单独记（规矩的 principle_id）。 */
+  detached?: readonly string[];
   children?: readonly ChildTable[];
   stampColumn?: string;
   /** 外键指向这张表的行（撤销时删不删这一行看它们）。 */
@@ -38,8 +40,9 @@ export function tableAdapter(db: Db, spec: TableAdapterSpec): EntityAdapter {
     }
     return c;
   };
+  const detached = new Set(spec.detached ?? []);
   const known = (table: string, row: Record<string, unknown>): [string, Val][] =>
-    Object.entries(row).filter(([k]) => cols(table).has(k)).map(([k, v]) => [k, toVal(v)]);
+    Object.entries(row).filter(([k]) => cols(table).has(k) && !(table === spec.table && detached.has(k))).map(([k, v]) => [k, toVal(v)]);
 
   const insert = (table: string, entries: [string, Val][]): void => {
     db.prepare(`INSERT INTO ${table} (${entries.map(([k]) => k).join(", ")}) VALUES (${entries.map(() => "?").join(", ")})`).run(...entries.map(([, v]) => v));
@@ -58,11 +61,13 @@ export function tableAdapter(db: Db, spec: TableAdapterSpec): EntityAdapter {
 
   return {
     entity: spec.entity,
-    volatile: spec.volatile,
+    // 以前存下的快照可能还带着 detached 的列：比较时一起去掉。
+    volatile: [...(spec.volatile ?? []), ...detached],
     snapshot(id) {
       const row = db.prepare(`SELECT * FROM ${spec.table} WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
       if (!row) return null;
       const s: Snapshot = { ...row };
+      for (const k of detached) delete s[k];
       for (const c of spec.children ?? []) {
         s[`$${c.table}`] = db.prepare(`SELECT * FROM ${c.table} WHERE ${c.fk} = ? ORDER BY ${c.orderBy}`).all(id) as Record<string, unknown>[];
       }
@@ -104,6 +109,8 @@ export const lessonAdapter = (db: Db): EntityAdapter =>
     entity: "lesson",
     table: "lessons",
     volatile: ["updated_at"],
+    // 归到哪条原则由 lesson_principle 单独记：每天的重新分组不挡别的批次撤销，撤销别的批次也不动分组。
+    detached: ["principle_id"],
     children: [{ table: "lesson_sources", fk: "lesson_id", orderBy: "id", nullable: ["run_id"] }],
     stampColumn: "batch_id",
     dependents: [{ table: "lessons", fk: "merged_into" }],
@@ -131,6 +138,32 @@ export const policyAdapter = (db: Db): EntityAdapter =>
       state: String(s.overrides ?? "{}"),
     }),
   });
+
+/** 原则（工作流 D）：重新分组是一个能撤销的批次。 */
+export const principleAdapter = (db: Db): EntityAdapter =>
+  tableAdapter(db, {
+    entity: "principle",
+    table: "lesson_principles",
+    volatile: ["updated_at"],
+    stampColumn: "batch_id",
+    dependents: [{ table: "lessons", fk: "principle_id" }],
+    describe: (s) => ({ label: String(s.text ?? ""), state: s.scope_kind === "product" ? `product #${String(s.product_id)}` : `repo ${String(s.repo_slug)}` }),
+  });
+
+/** 规矩归到的原则（只有 principle_id 一列）：原则重新分组的批次里记这个，不记整条规矩。 */
+export const lessonPrincipleAdapter = (db: Db): EntityAdapter => ({
+  entity: "lesson_principle",
+  snapshot(id) {
+    const r = db.prepare(`SELECT principle_id FROM lessons WHERE id = ?`).get(id) as { principle_id: number | null } | undefined;
+    return r ? { principle_id: r.principle_id === null ? null : Number(r.principle_id) } : null;
+  },
+  restore(id, to) {
+    if (to === null) return; // 规矩本身不归这个实体管
+    const v = to.principle_id;
+    db.prepare(`UPDATE lessons SET principle_id = ? WHERE id = ?`).run(typeof v === "number" ? v : null, id);
+  },
+  describe: (s) => ({ label: s.principle_id === null || s.principle_id === undefined ? "—" : `principle #${String(s.principle_id)}`, state: "" }),
+});
 
 /** 确定性检查的一行（契约 4.5）；batch_id 记最近一次改动它的批次。 */
 export const checkAdapter = (db: Db): EntityAdapter =>

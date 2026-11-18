@@ -171,7 +171,15 @@ export class LessonRunner {
   }
 
   /** 页面的「分析历史」。没有 gh、解析不出 slug 时返回原因，不排队。 */
-  async backfill(slug: string): Promise<{ ok: true; enqueued: number } | { ok: false; reason: "no_gh" | "gh_failed" | "unknown_repo" }> {
+  /** 向导开始前的估算：这个仓库合并过的 PR 号（最多 BACKFILL_LIMIT 个），不排队。 */
+  async mergedPrNumbers(slug: string): Promise<number[] | null> {
+    const row = this.d.repo.repo(slug);
+    if (!this.d.gh.available() || !row || !isCloned(row)) return null;
+    const prs = await this.d.gh.mergedPrs(row.localPath, null, BACKFILL_LIMIT, LESSON_GH_TIMEOUT_MS);
+    return prs === null ? null : prs.map((p) => p.number);
+  }
+
+  async backfill(slug: string): Promise<{ ok: true; enqueued: number; prs: number[] } | { ok: false; reason: "no_gh" | "gh_failed" | "unknown_repo" }> {
     if (!this.d.gh.available()) return { ok: false, reason: "no_gh" };
     const row = this.d.repo.repo(slug);
     // 本地路径为空 = 导入来的、这台机器上没有克隆：没有仓库就没法在里面跑 gh（cwd 为空会落到 Butler 自己的目录）。
@@ -187,7 +195,7 @@ export class LessonRunner {
       return n;
     });
     this.pump();
-    return { ok: true, enqueued };
+    return { ok: true, enqueued, prs: prs.map((p) => p.number) };
   }
 
   /**

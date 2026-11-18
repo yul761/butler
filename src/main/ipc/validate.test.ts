@@ -431,3 +431,27 @@ describe("progressFilterArg", () => {
     for (const bad of ["x", [1], { epicId: 0 }, { featureId: 1.5 }, { featureId: "2" }]) expect(() => progressFilterArg(bad)).toThrow();
   });
 });
+
+describe("admission IPC arguments (workstream D)", () => {
+  it("checks the scope, wizard actions and calibration actions", async () => {
+    const { admissionScopeArg, wizardActionArg, calibrationActionArg, calibrationSinceArg } = await import("./validate");
+    expect(admissionScopeArg({ kind: "all" })).toEqual({ kind: "all" });
+    expect(admissionScopeArg({ kind: "repo", slug: "acme/web" })).toEqual({ kind: "repo", slug: "acme/web" });
+    expect(admissionScopeArg({ kind: "product", productId: 3 })).toEqual({ kind: "product", productId: 3 });
+    for (const bad of [null, {}, { kind: "repo" }, { kind: "product", productId: -1 }, { kind: "x" }]) expect(() => admissionScopeArg(bad)).toThrow();
+
+    expect(wizardActionArg({ op: "start", scope: { kind: "all" } })).toEqual({ op: "start", scope: { kind: "all" } });
+    expect(wizardActionArg({ op: "accept", runId: 4, extra: 1 })).toEqual({ op: "accept", runId: 4 });
+    expect(wizardActionArg({ op: "pullBack", runId: 4, lessonIds: [1, 2] })).toEqual({ op: "pullBack", runId: 4, lessonIds: [1, 2] });
+    for (const bad of [{ op: "accept" }, { op: "accept", runId: 0 }, { op: "pullBack", runId: 1, lessonIds: [] }, { op: "rejectGroup", runId: 1, lessonIds: ["a"] }, { op: "drop", runId: 1 }]) {
+      expect(() => wizardActionArg(bad)).toThrow();
+    }
+
+    expect(calibrationSinceArg(null)).toBeNull();
+    expect(calibrationSinceArg(5)).toBe(5);
+    expect(() => calibrationSinceArg(-1)).toThrow();
+    expect(calibrationActionArg({ op: "mark", lessonId: 2, mark: "good", since: 9 })).toEqual({ op: "mark", lessonId: 2, mark: "good", since: 9 });
+    expect(calibrationActionArg({ op: "markCalibrated" })).toEqual({ op: "markCalibrated" });
+    for (const bad of [{ op: "mark", lessonId: 2, mark: "great", since: 9 }, { op: "mark", lessonId: 2, mark: "good" }, { op: "other" }]) expect(() => calibrationActionArg(bad)).toThrow();
+  });
+});
