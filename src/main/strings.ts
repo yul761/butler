@@ -24,6 +24,28 @@ function ciLogBlocks(failed: Array<{ name: string; log?: string }>): string {
 }
 
 const ZH = {
+  routing: {
+    badModelName: "模型名只能用字母、数字和 . _ - : / @ [ ]，最长 100 个字符",
+    badTier: "档位只能是 high、mid、low",
+    badAccount: "账号标签要 1 到 60 个字符",
+    badPrice: "价格是每百万 token 0 到 10000 美元",
+    noteTooLong: "备注太长了（最多 200 字）",
+    alreadyRegistered: (name: string) => `${name} 已经登记过了`,
+    unknownModel: (name: string) => `没有登记这个模型：${name}`,
+    unknownTask: "没有这个任务",
+    notFound: "找不到这一条（可能已经处理过了）",
+    discoveryUnavailable: "现在不能做模型发现",
+    builtinOnlyOff: "内置规则只能停用，不能删除",
+    badRuleKind: "规则类型不对",
+    badPattern: "规则内容要 1 到 500 个字符",
+    pickCategory: "选一个类别",
+    badStatusRule: "状态码规则的写法是 \"403\" 或 \"403:要匹配的文字（正则）\"",
+    badFieldRule: "字段规则的写法是 \"error.type=取值\"",
+    badRegex: "这不是一个有效的正则表达式",
+    sessionUnknownModel: (name: string, valid: string) => `不认识的模型 “${name}”；用 high / mid / low，或者这些之一：${valid}`,
+    sessionBadModel: (name: string) => `模型参数不对：${name}`,
+    waiting: (until: string) => `能用的模型都在限额里，等到 ${until} 再跑`,
+  },
   /** 请 Claude 判断卡住时，用这些词告诉它 session 在做什么。 */
   activityKinds: {
     edit: "写代码", read: "看代码", rebase: "rebase 中", push: "跑 git push（pre-push hook）", ci: "监控 CI", test: "跑测试", command: "运行命令",
@@ -383,6 +405,28 @@ const ZH = {
 export type MainStrings = typeof ZH;
 
 const EN: MainStrings = {
+  routing: {
+    badModelName: "Model names use letters, digits and . _ - : / @ [ ] (at most 100 characters)",
+    badTier: "The tier must be high, mid or low",
+    badAccount: "The account label must be 1 to 60 characters",
+    badPrice: "Prices are 0 to 10000 USD per million tokens",
+    noteTooLong: "The note is too long (at most 200 characters)",
+    alreadyRegistered: (name: string) => `${name} is already registered`,
+    unknownModel: (name: string) => `This model is not registered: ${name}`,
+    unknownTask: "There is no such task",
+    notFound: "Not found (it may already have been handled)",
+    discoveryUnavailable: "Model discovery is not available right now",
+    builtinOnlyOff: "Built-in rules can only be turned off, not deleted",
+    badRuleKind: "Unknown rule kind",
+    badPattern: "The pattern must be 1 to 500 characters",
+    pickCategory: "Pick a category",
+    badStatusRule: 'Status rules look like "403" or "403:text to match (regex)"',
+    badFieldRule: 'Field rules look like "error.type=value"',
+    badRegex: "This is not a valid regular expression",
+    sessionUnknownModel: (name: string, valid: string) => `Unknown model "${name}"; use high / mid / low or one of: ${valid}`,
+    sessionBadModel: (name: string) => `Bad model value: ${name}`,
+    waiting: (until: string) => `Every usable model is at its limit; waiting until ${until}`,
+  },
   activityKinds: {
     edit: "writing code", read: "reading code", rebase: "rebasing", push: "running git push (pre-push hook)", ci: "watching CI", test: "running tests", command: "running a command",
     agent: "running a subagent", thinking: "thinking", approval: "waiting for approval", waiting: "waiting for a reply", idle: "idle",

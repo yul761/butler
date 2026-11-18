@@ -4,7 +4,8 @@ import { childLaunch, isCmdShim, spawnClaude } from "./launch";
 import type { LimitHit } from "../../shared/availability";
 import { RUN_MESSAGE_MAX } from "../../shared/lessons";
 import { M } from "../strings";
-import { classifyLimit, isPauseKind } from "./limits";
+import { classifyLimit, classifyLimitDetailed, isPauseKind } from "./limits";
+import type { DetailedHit } from "../routing/rules";
 import { usageCounts, type UsageCounts } from "../usage/usage-parse";
 
 export const HEADLESS_TIMEOUT_MS = 5 * 60 * 1000;
@@ -59,7 +60,14 @@ export type HeadlessFailure = "timeout" | "spawn_failed" | "exit_nonzero" | "bad
 
 export type HeadlessOutcome =
   | { ok: true; result: ClaudeResult }
-  | { ok: false; reason: HeadlessFailure; message: string; result: ClaudeResult | null; limit: LimitHit | null; stderr: string };
+  | {
+      ok: false; reason: HeadlessFailure; message: string; result: ClaudeResult | null; limit: LimitHit | null; stderr: string;
+      /** 认出限额的规则是不是账号级的（模型路由用来决定标一个模型还是整个账号）。 */
+      limitAccountLevel?: boolean;
+      /** 拿去识别的那段文字和 API 状态码（规则没认出时给通用信号和学习用）。 */
+      errorText?: string;
+      apiStatus?: number | null;
+    };
 
 export type HeadlessRun = (req: HeadlessRequest) => Promise<HeadlessOutcome>;
 
@@ -201,8 +209,13 @@ export const runHeadless: HeadlessRun = (req) =>
       child?.stdout?.destroy();
       child?.stderr?.destroy();
     };
-    const fail = (reason: HeadlessFailure, message: string, result: ClaudeResult | null = null, limit: LimitHit | null = null): HeadlessOutcome => ({
-      ok: false, reason, message, result, limit, stderr,
+    const fail = (
+      reason: HeadlessFailure, message: string, result: ClaudeResult | null = null, detailed: DetailedHit | null = null,
+      seen: { text: string; apiStatus: number | null } | null = null,
+    ): HeadlessOutcome => ({
+      ok: false, reason, message, result, limit: detailed?.hit ?? null, stderr,
+      ...(detailed && { limitAccountLevel: detailed.accountLevel }),
+      ...(seen && { errorText: seen.text, apiStatus: seen.apiStatus }),
     });
     const timeoutOutcome = (): HeadlessOutcome => fail("timeout", M().timedOutAfter(M().duration(timeoutMs)));
     const timer = setTimeout(() => {
@@ -261,14 +274,16 @@ export const runHeadless: HeadlessRun = (req) =>
       const now = Date.now();
       if (!result) {
         const message = (stderr.trim() || stdout.trim()).slice(0, MESSAGE_MAX) || `exit ${code}`;
-        const limit = classifyLimit({ text: `${stderr}\n${stdout}`, apiStatus: null, now });
-        finish(fail(failureReason(limit, code === 0 ? "bad_output" : "exit_nonzero"), message, null, limit));
+        const seen = { text: `${stderr}\n${stdout}`, apiStatus: null };
+        const limit = classifyLimitDetailed({ ...seen, now });
+        finish(fail(failureReason(limit?.hit ?? null, code === 0 ? "bad_output" : "exit_nonzero"), message, null, limit, seen));
         return;
       }
       if (result.isError || code !== 0 || result.subtype !== "success") {
         const message = (result.resultText || stderr || result.subtype || `exit ${code}`).slice(0, MESSAGE_MAX);
-        const limit = classifyLimit({ text: `${result.isError ? result.resultText : ""}\n${stderr}`, apiStatus: result.apiErrorStatus, now });
-        finish(fail(failureReason(limit, "claude_error"), message, result, limit));
+        const seen = { text: `${result.isError ? result.resultText : ""}\n${stderr}`, apiStatus: result.apiErrorStatus };
+        const limit = classifyLimitDetailed({ ...seen, now });
+        finish(fail(failureReason(limit?.hit ?? null, "claude_error"), message, result, limit, seen));
         return;
       }
       finish({ ok: true, result });

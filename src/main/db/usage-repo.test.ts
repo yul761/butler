@@ -34,6 +34,6 @@ describe("UsageRepo", () => {
     const r = new UsageRepo(memDb());
     r.record([row("a", { at: 100 }), row("b", { at: 200, source: "headless", sessionId: null, job: "summary", model: null })]);
     const got = r.since(150);
-    expect(got).toEqual([row("b", { at: 200, source: "headless", sessionId: null, job: "summary", model: null })]);
+    expect(got).toEqual([{ ...row("b", { at: 200, source: "headless", sessionId: null, job: "summary", model: null }), task: null, requestedTier: null, fallbackFrom: null, costUsd: null }]);
   });
 });

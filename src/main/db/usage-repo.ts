@@ -8,6 +8,26 @@ export interface UsageRow extends UsageTurn {
   agentId: string | null;
   source: UsageSource;
   job: string | null;
+  /** 后台调用的任务 id、要的档位、从哪个模型降下来、CLI 报的金额（模型路由，可省略）。 */
+  task?: string | null;
+  requestedTier?: string | null;
+  fallbackFrom?: string | null;
+  costUsd?: number | null;
+}
+
+/** 一段时间内按模型和任务汇总的用量（算配额用）。 */
+export interface SpendRow {
+  model: string | null;
+  task: string | null;
+  rows: number;
+  input: number;
+  output: number;
+  tokens: number;
+  costUsd: number;
+  /** 没有记录金额的行（要按价格估）的 input / output token。 */
+  unpricedInput: number;
+  unpricedOutput: number;
+  unpricedRows: number;
 }
 
 interface UsageDbRow {
@@ -24,11 +44,16 @@ interface UsageDbRow {
   cache_read: number;
   output: number;
   context: number;
+  task: string | null;
+  requested_tier: string | null;
+  fallback_from: string | null;
+  cost_usd: number | null;
 }
 
 const toRow = (r: UsageDbRow): UsageRow => ({
   messageId: r.message_id, sessionId: r.session_id, agentId: r.agent_id, source: r.source, job: r.job, at: r.at, model: r.model,
   input: r.input, cacheWrite5m: r.cache_write_5m, cacheWrite1h: r.cache_write_1h, cacheRead: r.cache_read, output: r.output, context: r.context,
+  task: r.task, requestedTier: r.requested_tier, fallbackFrom: r.fallback_from, costUsd: r.cost_usd === null ? null : Number(r.cost_usd),
 });
 
 /** 每轮 token 用量和 transcript 的增量读取位置。 */
@@ -38,12 +63,14 @@ export class UsageRepo {
   /** 已有的 messageId 忽略，返回新写入的行数；一次调用一个事务。 */
   record(rows: UsageRow[]): number {
     const stmt = this.db.prepare(
-      `INSERT OR IGNORE INTO session_usage (message_id, session_id, agent_id, source, job, at, model, input, cache_write_5m, cache_write_1h, cache_read, output, context) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO session_usage (message_id, session_id, agent_id, source, job, at, model, input, cache_write_5m, cache_write_1h, cache_read, output, context,
+         task, requested_tier, fallback_from, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     return withTransaction(this.db, () => {
       let n = 0;
       for (const r of rows) {
-        n += Number(stmt.run(r.messageId, r.sessionId, r.agentId, r.source, r.job, r.at, r.model, r.input, r.cacheWrite5m, r.cacheWrite1h, r.cacheRead, r.output, r.context).changes);
+        n += Number(stmt.run(r.messageId, r.sessionId, r.agentId, r.source, r.job, r.at, r.model, r.input, r.cacheWrite5m, r.cacheWrite1h, r.cacheRead, r.output, r.context,
+          r.task ?? null, r.requestedTier ?? null, r.fallbackFrom ?? null, r.costUsd ?? null).changes);
       }
       return n;
     });
@@ -71,5 +98,24 @@ export class UsageRepo {
   /** at >= sinceMs 的所有行。 */
   since(sinceMs: number): UsageRow[] {
     return (this.db.prepare(`SELECT * FROM session_usage WHERE at >= ? ORDER BY at`).all(sinceMs) as unknown as UsageDbRow[]).map(toRow);
+  }
+
+  /** at >= sinceMs 的用量按模型和任务汇总。input 含缓存写入和读取（都按 token 计）。 */
+  spendSince(sinceMs: number): SpendRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT model, task, COUNT(*) AS rows,
+           SUM(input + cache_write_5m + cache_write_1h + cache_read) AS input, SUM(output) AS output,
+           SUM(COALESCE(cost_usd, 0)) AS cost,
+           SUM(CASE WHEN cost_usd IS NULL THEN input + cache_write_5m + cache_write_1h + cache_read ELSE 0 END) AS u_in,
+           SUM(CASE WHEN cost_usd IS NULL THEN output ELSE 0 END) AS u_out,
+           SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS u_rows
+         FROM session_usage WHERE at >= ? GROUP BY model, task`,
+      )
+      .all(sinceMs) as unknown as { model: string | null; task: string | null; rows: number; input: number; output: number; cost: number; u_in: number; u_out: number; u_rows: number }[];
+    return rows.map((r) => ({
+      model: r.model, task: r.task, rows: Number(r.rows), input: Number(r.input), output: Number(r.output), tokens: Number(r.input) + Number(r.output),
+      costUsd: Number(r.cost), unpricedInput: Number(r.u_in), unpricedOutput: Number(r.u_out), unpricedRows: Number(r.u_rows),
+    }));
   }
 }
