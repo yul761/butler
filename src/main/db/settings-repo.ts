@@ -102,6 +102,8 @@ export const SETTING_DEFAULTS = {
   memoryPressureEnabled: "0",
   /** 内存紧张的线：可用内存低于百分之几（1–50）。回到这条线以上 5 个点才停。 */
   memoryPressureFreePercent: "10",
+  /** 共享 MCP（WS-M H）：所有 session 的 Butler 记忆和 butler-sessions 由一个 hub 进程经本机回环 HTTP 提供，不再每个 session 各起一组。1 开 0 关（默认关）。 */
+  sharedMcp: "0",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

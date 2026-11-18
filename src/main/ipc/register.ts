@@ -138,6 +138,8 @@ export interface IpcDeps {
   notify: () => void;
   /** 记忆开关真的变了之后调用（on 是新的状态）：通知记忆标签，打开时补同步一次。 */
   memoryToggled: (on: boolean) => void;
+  /** 共享 MCP 开关变了（WS-M H）。 */
+  sharedMcpChanged?: () => void;
   /** ticket 归档之后：清掉它留下的 MCP 配置文件。 */
   onArchived?: (ticketKey: string) => void;
   /** feature 归档之后：清掉 feature 总控的 MCP 配置文件。 */

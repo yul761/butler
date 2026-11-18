@@ -46,6 +46,7 @@ export const EDITABLE_SETTINGS = [
   "hibernateEndWatchers",
   "memoryPressureEnabled",
   "memoryPressureFreePercent",
+  "sharedMcp",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

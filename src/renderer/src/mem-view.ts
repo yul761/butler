@@ -37,6 +37,15 @@ export function butlerLines(s: MemorySnapshot, S: UiStrings): string[] {
   return parts;
 }
 
+/** 共享 MCP 的 hub 自己大约占多少（实测一个作用域 75 MB 左右，多算一点）。 */
+export const HUB_ESTIMATE_KB = 100 * 1024;
+
+/** 共享 MCP 关着时，开了大约能省多少 KB：各 session 的 Butler MCP 减去一个 hub；不到 50 MB 不值得提，返回 0。 */
+export function sharedMcpSavingKb(s: MemorySnapshot): number {
+  const save = s.butlerMcpKb - HUB_ESTIMATE_KB;
+  return s.sessions >= 2 && save >= 50 * 1024 ? save : 0;
+}
+
 /**
  * 历史的折线（Butler + session 加起来），画在 width × height 的框里，返回 SVG path 的 d；少于 2 个点为 null。
  * 纵轴从 0 到最大值，横轴按时间。

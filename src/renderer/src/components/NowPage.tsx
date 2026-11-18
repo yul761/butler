@@ -5,7 +5,7 @@ import { ciReasonText, noticeText, type NoticeAction } from "../availability-vie
 import { reportError } from "../errors";
 import { setWizardSkipped, wizardSkipped } from "../local-prefs";
 import { mergeEventText } from "../merge-events-view";
-import { butlerLines, formatKb, heavyMcp, peakKb, rowMemDetail, rowMemText, snapshotLine, sparkPath } from "../mem-view";
+import { butlerLines, formatKb, heavyMcp, peakKb, rowMemDetail, rowMemText, sharedMcpSavingKb, snapshotLine, sparkPath } from "../mem-view";
 import type { MemoryHistoryPoint, MemorySnapshot } from "../../../shared/mem-usage";
 import { groupSummary, needsYouText, needsYouTotal, prPill, rowKey, rowLabel, rowPlace, rowText, usageDetails, usageLine } from "../now-view";
 import { S } from "../strings";
@@ -291,6 +291,7 @@ function MemoryCard({ snap, view }: { snap: MemorySnapshot; view: NowView }) {
           <div>
             <h4>{S.perf.memButler}</h4>
             <ul>{butlerLines(snap, S).map((l) => <li key={l}>{l}</li>)}</ul>
+            {view.sharedMcp === false && sharedMcpSavingKb(snap) > 0 && <p className="muted">{S.perf.sharedMcpSave(formatKb(sharedMcpSavingKb(snap)))}</p>}
           </div>
           <div>
             <h4>{S.perf.memHistory}{history.length > 1 ? ` · ${formatKb(peakKb(history))}` : ""}</h4>

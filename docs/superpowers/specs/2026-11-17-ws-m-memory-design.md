@@ -246,3 +246,39 @@ Differences from the design above, and edge cases left as they are:
   - A ticket or feature archived while a session is hibernated: a later wake fails, and the failure path clears the hibernation.
   - A pane whose id no longer matches the head after `/clear` is not auto-woken. A hibernated session never sees `/clear`, so this only affects stale panes.
   - `openAndSend` can race an in-flight kill. The terminal stays reserved until the kill finishes, so the guard reports `busy` and the sender retries.
+
+## 15. As built in PR 3 (H, shared MCP)
+
+Differences from §8, and edge cases left as they are:
+
+- **Files.**
+  - `src/main/gateway/loopback-mcp.ts` is the listener.
+  - `memory-mcp/memory-tools.ts` holds the memory tool layer reproduced from statecore-mcp 1.1.0.
+  - `memory-mcp/hub.ts` handles routing and backend lifetime.
+  - `memory-mcp/hub-entry.ts` is the process.
+  - `src/main/memory/mcp-hub.ts` is Butler's side: start, restart and routes.
+  - `memory-mcp/sessions-options.ts` is shared by the stdio sessions server and the hub, so both read a scope the same way.
+- **Bundle.** esbuild would pick `statecore-mcp/lib`'s ESM build, which needs `import.meta.url`, and that is empty in CJS. The build script resolves that one import with the `require` condition instead. The bundle test starts the built `mcp-hub.cjs`, writes a fact over HTTP and reads it back with StateCore.
+- **Contract test** (`memory-mcp/hub-contract.test.ts`) compares the in-process memory server with the real `statecore-mcp` over stdio. It covers `initialize` for three protocol versions, `tools/list`, eleven tool calls (with ids and timestamps normalised), and the errors for methods it does not have.
+- **Per-terminal config.**
+  - The session service now chooses the terminal id before it writes the config, and passes it to every `mcpConfig` callback.
+  - With the setting on and the hub running, the config is `mcp/terms/<terminal>.json`. Otherwise it is the usual per-ticket, feature, epic or Butler file.
+  - Old `terms/` files are deleted at startup, because their tokens belonged to the previous hub. A terminal's file and routes are removed when it exits.
+- **Start.** The hub starts at launch, or when the setting is turned on, rather than on the first session open. This way the first sessions don't fall back to stdio while it starts.
+- **Restart.** The hub is restarted after 1 s, then 2 s, 4 s and so on up to 60 s; the delay resets once it has run for a minute. Each restart asks for the last port. If that port is taken, the hub listens on another one and Butler logs that sessions opened before cannot reach Butler's MCP until they are reopened. A hub that does not print its ready line within 15 s is killed and counts as a failure.
+- **Port change.** When the hub comes back on a different port, the old tokens are dropped and not sent to the new hub. During the gap, another local program could have taken the old port and seen them. If the setting was off and no terminal is left, the hub stops.
+- **Stop.** `stop()` closes the hub's stdin. If the hub has not exited 5 s later, it is killed, so a stuck hub can't stay behind holding the port and the data directory.
+- **Proxy.** When a proxy variable (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, in any case) is set, session environments get `127.0.0.1` added to `NO_PROXY`. Otherwise the loopback URLs, tokens included, could go to the proxy. The variable already present is extended in place, because Windows has no case-distinct duplicates.
+- **Packaging.** `mcp-hub.cjs` is in `electron-builder.yml`'s `extraResources`, and `after-pack.cjs` checks all three MCP bundles. A missing bundle is logged once, and sessions use stdio.
+- **Write failure.** If writing a terminal's config fails, its routes are removed and the session falls back to stdio.
+- **Turning it off** does not cut off sessions that are already using the hub. New sessions get stdio, and the hub stops after the last routed terminal exits. Quitting Butler stops it at once: closing its stdin makes it close its backends and exit.
+- **Notice.** `shared_mcp_failed` shows on the Now page while the setting is on and the hub's last start failed. It carries the reason, and the retry is automatic, so it has no button.
+- **Saving hint.** The hint is Butler's MCP total minus an estimated 100 MB for the hub. It is shown only with two or more sessions and at least 50 MB to save.
+- **Fake claude** speaks MCP Streamable HTTP (initialize, initialized, tools/call) when the config entry is `type: "http"`. The e2e turns the setting on, opens Butler control, checks that its config holds only loopback URLs, calls `list_sessions` and `list_features` through the hub, and checks that the config file is gone after exit. A real `claude` over HTTP is still untested, which is why the default stays off.
+- **Known edge cases**, not handled:
+  - A feature coordinator in the fake claude can't be detected from an HTTP config, so the fake answers as a ticket session. No shared-MCP e2e needs a feature coordinator.
+  - A hub restart that loses its port leaves earlier sessions without Butler's MCP until they are reopened (it is logged).
+  - It is untested whether real Claude Code keeps retrying an HTTP server after a connection error during a hub restart, or gives up on it for that session.
+  - All sessions' butler-sessions traffic shares one event loop. A synchronous file write stuck on a Windows lock stalls every session's tools, not only one.
+  - If `pty.open` throws after the routes are registered, they stay in the hub until Butler quits.
+  - The idle sweep removes a backend before its `close()` finishes, so a call in that window opens a second one on the same scope.

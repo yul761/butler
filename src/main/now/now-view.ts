@@ -28,6 +28,8 @@ export interface NowInput {
   /** 每个 head 最近一次的内存读数（WS-M A）；没有就省掉。 */
   sessionMemory?: (sessionId: string) => SessionMemory | null;
   memorySnapshot?: MemorySnapshot | null;
+  /** 共享 MCP（WS-M H）开着没有。 */
+  sharedMcp?: boolean;
 }
 
 /**
@@ -198,5 +200,5 @@ export function buildNowView(i: NowInput): NowView {
   const needsYou = all.filter((r) => r.needsYou !== null).sort(bySince);
   const decisions = [...i.decisions].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id);
   const limited: NowNotice[] = all.flatMap((r) => (r.activity?.limit ? [{ kind: "session_limited" as const, target: r.target, title: r.title, limit: r.activity.limit }] : []));
-  return { notices: [...i.notices, ...limited], needsYou, decisions, epics, butler, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges, mem: i.memorySnapshot ?? null };
+  return { notices: [...i.notices, ...limited], needsYou, decisions, epics, butler, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges, mem: i.memorySnapshot ?? null, ...(i.sharedMcp !== undefined && { sharedMcp: i.sharedMcp }) };
 }

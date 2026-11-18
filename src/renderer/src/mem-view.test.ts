@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { MemorySnapshot, SessionMemory } from "../../shared/mem-usage";
-import { butlerLines, formatKb, peakKb, rowMemDetail, rowMemText, snapshotLine, sparkPath } from "./mem-view";
+import { butlerLines, formatKb, peakKb, rowMemDetail, rowMemText, sharedMcpSavingKb, snapshotLine, sparkPath } from "./mem-view";
 import { S, setUiLang } from "./strings";
 
 afterEach(() => setUiLang("zh"));
@@ -36,6 +36,13 @@ describe("memory view", () => {
   it("summarises the snapshot", () => {
     expect(snapshotLine(snap, S)).toBe("Butler 400 MB · session ×2 2.9 GB · 系统可用 4.0 GB (25%)");
     expect(butlerLines(snap, S)).toEqual(["主进程: 100 MB", "界面: 300 MB", "Butler 的 MCP: 600 MB"]);
+  });
+
+  it("estimates what the shared MCP would save: Butler's MCP minus one hub, only when worth saying", () => {
+    expect(sharedMcpSavingKb(snap)).toBe(500 * 1024);
+    expect(S.perf.sharedMcpSave(formatKb(sharedMcpSavingKb(snap)))).toBe("开启共享 MCP 约可省 500 MB");
+    expect(sharedMcpSavingKb({ ...snap, butlerMcpKb: 120 * 1024 })).toBe(0);
+    expect(sharedMcpSavingKb({ ...snap, sessions: 1 })).toBe(0);
   });
 
   it("draws the history line", () => {

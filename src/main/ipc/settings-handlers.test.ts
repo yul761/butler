@@ -69,4 +69,16 @@ describe("settings IPC handlers", () => {
     h.reset("memoryEnabled");
     expect(toggled).toEqual([false, true]);
   });
+
+  it("tells the hub when the shared MCP switch is saved or reset (WS-M H)", () => {
+    const settings = new SettingsRepo(memDb());
+    const changed = vi.fn();
+    const h = settingsHandlers({ settings, notify: () => {}, memoryToggled: () => {}, sharedMcpChanged: changed });
+    h.set("nightlyTime", "08:00");
+    expect(changed).not.toHaveBeenCalled();
+    h.set("sharedMcp", "1");
+    h.reset("sharedMcp");
+    expect(changed).toHaveBeenCalledTimes(2);
+    expect(settings.get("sharedMcp")).toBe(SETTING_DEFAULTS.sharedMcp);
+  });
 });

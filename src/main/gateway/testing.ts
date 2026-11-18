@@ -2,7 +2,7 @@
  * 只给测试用的工具（不会被生产代码 import，所以不会打进主进程包）。
  * 放在 gateway 目录里：后面的假服务器要用 node:http，只有这里允许。
  */
-import { createServer, type IncomingHttpHeaders } from "node:http";
+import { createServer, request, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { PrivacyLevel } from "../../shared/llm";
 import { AuditRepo } from "../db/audit-repo";
@@ -173,4 +173,18 @@ export async function gatewayHarness(
     bodies: () => provider.requests.map((r) => r.body),
     close: () => provider.close(),
   };
+}
+
+/** 测试里向本机回环 MCP（共享 MCP 的 hub，WS-M H）POST 一条 JSON-RPC：状态码和 JSON 回复（不是 200 时 json 为 null）。 */
+export function postLoopback(port: number, path: string, body: object): Promise<{ status: number; json: unknown }> {
+  return new Promise((resolve, reject) => {
+    const req = request({ host: "127.0.0.1", port, path, method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" } }, (res) => {
+      let data = "";
+      res.setEncoding("utf8");
+      res.on("data", (c: string) => (data += c));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, json: res.statusCode === 200 ? JSON.parse(data) : null }));
+    });
+    req.on("error", reject);
+    req.end(JSON.stringify(body));
+  });
 }

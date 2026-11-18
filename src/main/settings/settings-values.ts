@@ -352,6 +352,7 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "hibernateEnabled":
     case "hibernateEndWatchers":
     case "memoryPressureEnabled":
+    case "sharedMcp":
       return normalizeFlag(value);
     case "hibernateYouMinutes":
     case "hibernateCiMinutes":
@@ -482,7 +483,7 @@ export const configExportReminderDays = (s: Pick<SettingsRepo, "get">) => config
 /** 开关读法：存成 "1" 才算开，其余（包括损坏的值）都按默认值。 */
 function flagOn(
   s: Pick<SettingsRepo, "get">,
-  key: "memoryMonitor" | "backgroundPriority" | "orphanCleanup" | "hibernateEnabled" | "hibernateEndWatchers" | "memoryPressureEnabled",
+  key: "memoryMonitor" | "backgroundPriority" | "orphanCleanup" | "hibernateEnabled" | "hibernateEndWatchers" | "memoryPressureEnabled" | "sharedMcp",
 ): boolean {
   const v = s.get(key).trim();
   return v === "0" || v === "1" ? v === "1" : SETTING_DEFAULTS[key] === "1";
@@ -501,6 +502,8 @@ export const hibernateOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn(s, 
 export const hibernateEndWatchersOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn(s, "hibernateEndWatchers");
 /** 内存紧张时休眠（WS-M C）开着没有。 */
 export const memoryPressureOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn(s, "memoryPressureEnabled");
+/** 共享 MCP（WS-M H）开着没有。 */
+export const sharedMcpOn = (s: Pick<SettingsRepo, "get">): boolean => flagOn(s, "sharedMcp");
 
 /** 休眠的分钟数：0 或者最多 5 位的整数。 */
 const HIBERNATE_MINUTES_RE = /^\d{1,5}$/;
