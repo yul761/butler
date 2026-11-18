@@ -35,6 +35,8 @@ const COMPARE_RETRY_MS = 5 * 60_000;
 export interface CommentLoopDeps {
   items: CommentItemsRepo;
   prs: Pick<TicketPrsRepo, "get" | "byTicket" | "byUrl">;
+  /** 栈式 PR（工作流 K）：这个 PR 是栈的一层时补一段话，追加在送进 session 的正文后面；不是就返回 null。 */
+  stackNote?(row: TicketPr): string | null;
   policy(slug: string | null): LoopPolicy;
   /** PR 行在哪个目录跑 gh（用户在界面上点「再回复一次」时用；observe 时用 PrWatcher 给的）。 */
   cwdOf(pr: TicketPr): string | null;
@@ -376,7 +378,8 @@ export class CommentLoop {
       question: i.category === "question",
     }));
     const counts = { copilot: items.filter((i) => i.who === "copilot").length, human: items.filter((i) => i.who !== "copilot").length };
-    const text = sanitizeTask(m.commentDelivery(m.ciWherePr(row.number), lines, counts));
+    const note = this.d.stackNote?.(row) ?? null;
+    const text = sanitizeTask(m.commentDelivery(m.ciWherePr(row.number), lines, counts) + (note ? `\n\n${note}` : ""));
     this.d.busy.add(to.sessionId);
     try {
       const result = await this.d.deliver(gate.termId, text, this.d.guard.recheckAfter(to.sessionId, gate));
@@ -389,6 +392,14 @@ export class CommentLoop {
     } finally {
       this.d.busy.delete(to.sessionId);
     }
+  }
+
+  /** 工作流 K：这个 PR（按记评论项的那一行）还有送进 session、还没核对的评论。K 等它变成 false 再 autosquash。 */
+  awaitingCheck(prId: number): boolean {
+    const row = this.d.prs.get(prId);
+    if (!row) return false;
+    const primary = primaryRow(this.d.prs.byUrl(row.url).concat(row));
+    return this.d.items.byPr(primary.id).some((i) => i.state === "delivered");
   }
 
   /** ticket 页「评论」标签。 */

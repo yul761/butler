@@ -181,6 +181,19 @@ describe("CommentLoop", () => {
     expect(s.calls.replies).toHaveLength(1);
   });
 
+  it("appends the stack note to the delivery and reports comments awaiting a check (workstream K)", async () => {
+    const s = setup();
+    s.loop["d"].stackNote = (row) => `stack note for #${row.number}`;
+    expect(s.loop.awaitingCheck(s.row.id)).toBe(false);
+    await s.observe();
+    const text = (s.deliver.mock.calls[0] as unknown as [string, string])[1];
+    expect(text.trimEnd().endsWith("stack note for #34")).toBe(true);
+    expect(s.loop.awaitingCheck(s.row.id)).toBe(true);
+    await s.observe({ headSha: "bbb2222" });
+    expect(s.loop.awaitingCheck(s.row.id)).toBe(false);
+    expect(s.loop.awaitingCheck(9999)).toBe(false);
+  });
+
   it("hides the Now notices while comments are off", async () => {
     const s = setup({}, { verdicts: () => null });
     s.setThreads([thread({ author: "alice", type: "User", body: "Hmm." })]);
