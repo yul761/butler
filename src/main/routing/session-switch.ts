@@ -26,6 +26,8 @@ export interface SessionSwitchDeps {
   now: () => number;
   sleep?: (ms: number) => Promise<void>;
   onChange?: () => void;
+  /** 换成功了（记进模型路由的事件记录）。 */
+  onSwitched?: (sessionId: string, from: string | null, to: string) => void;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -110,6 +112,7 @@ export class SessionModelSwitcher {
       }
       this.limited.delete(head.id);
       this.d.log?.(`routing: session ${head.id} switched ${head.model ?? "(default)"} → ${target}`);
+      this.d.onSwitched?.(head.id, head.model, target);
       return { ok: true, model: target, termId: r.termId };
     } finally {
       this.switching.delete(head.id);

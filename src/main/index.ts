@@ -762,6 +762,7 @@ async function bootstrap(): Promise<void> {
     nextModel: (m) => routing.nextModel(m),
     autoSwitch: () => routing.autoSwitch(),
     now: Date.now, onChange: () => notify(), log: logger,
+    onSwitched: (id, from, to) => routing.event("session_switch", { model: from, toModel: to, detail: id }),
   });
   // 上次退出时终端还开着（退出事件来得比关数据库晚）：那时没删掉的空 session 在这里补删。
   try {

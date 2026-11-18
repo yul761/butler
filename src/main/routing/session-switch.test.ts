@@ -31,6 +31,7 @@ function setup(over: Partial<SessionSwitchDeps> = {}) {
     autoSwitch: () => false,
     now: () => now,
     sleep: async () => undefined,
+    onSwitched: (id, from, to) => calls.push(`switched ${id} ${from} ${to}`),
     ...over,
   });
   return { sw, calls, row: () => row, tick: (ms: number) => void (now += ms) };
@@ -43,7 +44,7 @@ describe("SessionModelSwitcher", () => {
     expect(sw.views()).toEqual([expect.objectContaining({ sessionId: "s1", model: "H1", next: "M1", switching: false })]);
     expect(calls).toEqual([]);
     expect(await sw.switch("s1")).toEqual({ ok: true, model: "M1", termId: "s1" });
-    expect(calls).toEqual(["kill s1", "set M1", "reopen s1 M1"]);
+    expect(calls).toEqual(["kill s1", "set M1", "reopen s1 M1", "switched s1 H1 M1"]);
     expect(row().model).toBe("M1");
     expect(sw.views()).toEqual([]);
   });
@@ -52,7 +53,7 @@ describe("SessionModelSwitcher", () => {
     const { sw, calls } = setup({ autoSwitch: () => true });
     sw.noteLimit("s1", { kind: "rate_limit", resetsAt: null, message: "x" }, 1_000);
     await new Promise((r) => setTimeout(r, 0));
-    expect(calls).toEqual(["kill s1", "set M1", "reopen s1 M1"]);
+    expect(calls).toEqual(["kill s1", "set M1", "reopen s1 M1", "switched s1 H1 M1"]);
   });
 
   it("no next model, a terminal that will not exit, an expired hint", async () => {

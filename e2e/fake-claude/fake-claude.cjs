@@ -328,6 +328,8 @@ function interactive() {
   };
   register();
   log(`interactive ${has("--resume") ? "resume" : "new"} ${sessionId} mcp=${servers.join(",")} cwd=${cwd} adddirs=${flags("--add-dir").join("|")} guide=${flag("--append-system-prompt-file") || ""}`);
+  // 交互 session 的模型（3.0 模型路由）另起一行，不改上面那行的格式。
+  log(`interactive-model ${sessionId} ${flag("--model") || "-"}`);
   runHooks("SessionStart", { session_id: sessionId, cwd, source: has("--resume") ? "resume" : "startup", transcript_path: transcript });
   out(`fake claude ready (${sessionId.slice(0, 8)})\n`);
   if (mcp) out(`mcp: ${servers.join(", ")}\n`);
