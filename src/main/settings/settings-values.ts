@@ -353,6 +353,16 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "hibernateEndWatchers":
     case "memoryPressureEnabled":
     case "sharedMcp":
+    case "externalCommentReply":
+    case "externalCommentResolve":
+    case "externalPrDescriptionEdit":
+    case "externalPrLabel":
+    case "externalPrOpen":
+    case "externalPrTitleEdit":
+    case "externalForcePush":
+    case "externalCiRerun":
+    case "externalIssuePost":
+    case "externalPushNotification":
       return normalizeFlag(value);
     case "hibernateYouMinutes":
     case "hibernateCiMinutes":

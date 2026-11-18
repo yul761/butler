@@ -148,7 +148,7 @@ Butler 还会把正则和分支名模板放在一起检查。如果正则接受�
 
 这一节还有 **立即运行晚间 handoff** 按钮。
 
-晚间运行做完 ticket 之后，还会为每个自上次汇总以来总控 session 或 ticket 有新动静的 feature 写一份汇总。有总控 session 时，它会 fork 这个 session，并使用和 handoff 相同的只读参数。如果 ticket 那一轮被限流了，当晚不写 feature 汇总，留给早上的补跑。feature 页上还有 **立即更新**，它先为这个 feature 里有动静的 ticket 跑 handoff，再写汇总。在总控 session 里运行 `/handoff`，会直接根据对话本身写汇总。
+晚间运行做完 ticket 之后，还会为每个自上次汇总以来总控 session 或 ticket 有新动静的 feature 写一份汇总。有总控 session 时，它会 fork 这个 session，并使用和 handoff 相同的只读参数。如果 ticket 那一轮被限流了，当晚不写 feature 汇总，留给早上的补跑。feature 页上还有 **立即更新**，它先为这个 feature 里有动静的 ticket 跑 handoff，再写汇总。上次汇总之后 PR 的状态、CI、review 或能不能合并有变化，也算新动静，所以就算没人打字，汇总也会标成过时。每份汇总都写着读 PR 的时间（"PR 状态截至"）。在总控 session 里运行 `/handoff`，会直接根据对话本身写汇总。
 
 handoff 和刷新用这些参数启动 `claude`：
 
@@ -385,6 +385,25 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 | push 前检查的时间（秒） | `checksPushTimeoutSec` | `600` | `10` 到 `3600` 的整数。所有 push 阶段检查共用。 |
 
 检查跟着其它配置一起导出、导入（**只导出检查**或**全部**）。按 key 和层对应；行为上的改动（类型、参数、glob、严重程度、开关）算冲突，选了导入的就回到试运行；只改名字或提示语的，模式照旧。新来的或命令文字变了的 `run_command` 检查导入后是**关着**的，因为试运行也会执行命令：预览里能看到每条命令，看过再打开。只有检查的文件即使用替换导入也不会删掉你的产品。替换导入从不删除内置检查。
+
+## 对外动作
+
+之后的一些功能会让 Butler 代你在本机以外留下东西，比如在 PR 评论下回复。每一种动作在 **设置 → 对外动作** 里有自己的开关，默认全关。开关关着时 Butler 不做这个动作，只记一条"跳过"。做了的、失败的、跳过的动作都列在 **审计** 页的 **对外动作** 里，写着仓库、ticket、目标和发了什么，保留时间和 `auditRetentionDays` 一样。现在还没有功能用到这些开关。
+
+| 设置 | 键 | 默认值 | 允许做什么 |
+|------|----|--------|------------|
+| 回复 review 评论 | `externalCommentReply` | `0`（关） | 在 PR 的评论下以你的账号回复。 |
+| 标记评论已解决 | `externalCommentResolve` | `0`（关） | 把 PR 上的 review 讨论标成 resolved。 |
+| 改 PR 描述 | `externalPrDescriptionEdit` | `0`（关） | 改写 PR 的正文。 |
+| 加减 PR label | `externalPrLabel` | `0`（关） | 给 PR 加或去掉 label。 |
+| 开 PR | `externalPrOpen` | `0`（关） | 用 `gh` 新开 PR。 |
+| 改 PR 标题 | `externalPrTitleEdit` | `0`（关） | 改 PR 的标题。 |
+| 强推（force push） | `externalForcePush` | `0`（关） | 改写远端分支的历史。 |
+| 重跑 CI | `externalCiRerun` | `0`（关） | 重新触发失败的 CI。 |
+| 发 issue | `externalIssuePost` | `0`（关） | 在 tracker 或 GitHub 上建 issue、发评论。 |
+| 推送通知 | `externalPushNotification` | `0`（关） | 往外部服务（比如手机推送、聊天工具）发通知。 |
+
+每个开关填 `1` 或 `0`。
 
 ## 多家公司或多个配置
 
