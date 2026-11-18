@@ -9,8 +9,7 @@ import { CHECK_SEVERITIES, CHECK_TYPES, validateCheckInput, type CheckDraftResul
 import type { ChecksService } from "./checks-service";
 
 /**
- * 跑一次 check_draft（契约 4.1 的任务 id）。A 的路由合并之前，接线处把它交给现在的 execHeadlessJson（丢掉 task）；
- * 合并之后把 task 传给路由，这里不用改。
+ * 跑一次 check_draft（契约 4.1 的任务 id）：接线处交给 execHeadlessJson，按 task 走模型路由。
  */
 export type CheckDraftRunner = (req: { task: "check_draft"; label: string; args: string[]; prompt: string; cwd: string }) => Promise<HeadlessExecResult>;
 

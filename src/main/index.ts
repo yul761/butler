@@ -34,7 +34,6 @@ import { TermsRepo } from "./db/terms-repo";
 import { TicketsRepo } from "./db/tickets-repo";
 import { UsageRepo } from "./db/usage-repo";
 import { execHeadlessJson, jobOf } from "./handoff/headless-exec";
-import type { UsageCounts } from "./usage/usage-parse";
 import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
@@ -554,12 +553,12 @@ async function bootstrap(): Promise<void> {
   const configRegistry = defaultRegistry();
   const configIo = new ConfigIoService({
     db, repo: lessonsRepo, policies: admissionPolicies, recorder: batchRecorder, registry: configRegistry, butlerVersion: app.getVersion(),
-    backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), onApplied: () => checkSnapshots.schedule(), log: logger,
+    backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), onApplied: () => (checkSnapshots.schedule(), routing.reloadConfig()), log: logger,
   });
-  // 从规矩生成检查（任务 check_draft）。A 的模型路由合并前直接走 execHeadlessJson，task 先丢掉。
+  // 从规矩生成检查（任务 check_draft）：走模型路由（高档，撞限就等；没配置路由时和以前一样不带 --model）。
   const checkDrafter = new CheckDrafter({
     lessons: lessonsRepo, checks: checksService, fallbackCwd: () => paths.home,
-    run: ({ label, args, prompt, cwd }) => execHeadlessJson(judgeDeps, { label, args, prompt, cwd }),
+    run: (req) => execHeadlessJson(judgeDeps, req),
   });
   const configBackups = new ConfigBackups({
     io: configIo, registry: configRegistry, jobs, repo: lessonsRepo, backupDir: configBackupDir, now: Date.now, log: logger,

@@ -7,7 +7,8 @@ import { ChecksService } from "./checks-service";
 import { CheckDrafter, type CheckDraftRunner } from "./draft";
 import type { HeadlessExecResult } from "../handoff/headless-exec";
 
-const ok = (value: unknown): HeadlessExecResult => ({ ok: true, value, rawText: "", result: {} as never });
+const route = { task: "check_draft" as const, requestedTier: null, actualModel: null, fallbackFrom: null, degraded: false, sameModelReview: false };
+const ok = (value: unknown): HeadlessExecResult => ({ ok: true, value, rawText: "", result: {} as never, route });
 
 const setup = (answer: () => HeadlessExecResult) => {
   const db = memDb();
@@ -44,7 +45,7 @@ describe("CheckDrafter", () => {
   it("reports bad output and failures", async () => {
     expect(await setup(() => ok({ checkable: true, reason: "r", check: { type: "forbidden_pattern", name: "n", params: { pattern: "(" }, globs: [], severity: "block", message: "" } })).drafter.draft(1)).toMatchObject({ ok: false, reason: "bad_output" });
     expect(await setup(() => ok({ nope: 1 })).drafter.draft(1)).toMatchObject({ ok: false, reason: "bad_output" });
-    expect(await setup(() => ({ ok: false, reason: "rate_limited", message: "x", limit: null, stderr: "", result: null, rawText: null })).drafter.draft(1)).toMatchObject({ ok: false, reason: "rate_limited" });
+    expect(await setup(() => ({ ok: false, reason: "rate_limited", message: "x", limit: null, stderr: "", result: null, rawText: null, route })).drafter.draft(1)).toMatchObject({ ok: false, reason: "rate_limited" });
     expect(await setup(() => ok({})).drafter.draft(999)).toEqual({ ok: false, reason: "not_found" });
   });
 });

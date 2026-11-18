@@ -267,9 +267,9 @@ describe("import into another BUTLER_HOME", () => {
     const { a } = seed();
     const doc = a.io.exportDoc(all)!;
     const b = home();
-    const pr = await b.io.previewText(JSON.stringify({ ...doc, sections: { ...doc.sections, models: [] } }));
+    const pr = await b.io.previewText(JSON.stringify({ ...doc, sections: { ...doc.sections, baselines: [] } }));
     if (!pr.ok) throw new Error("preview");
-    expect(pr.preview.skippedSections.sort()).toEqual(["models"]);
+    expect(pr.preview.skippedSections.sort()).toEqual(["baselines"]);
     expect(await b.io.previewText(JSON.stringify({ ...doc, sections: { checks: [{ x: 1 }] } }))).toMatchObject({ ok: false, reason: "bad_section", section: "checks" });
     expect(await b.io.previewText(JSON.stringify({ ...doc, sections: { lessons: [{ text: "" }] } }))).toEqual({ ok: false, reason: "bad_section", section: "lessons" });
     expect(await b.io.previewText(JSON.stringify({ ...doc, sections: { policies: [{ layer: { kind: "global" }, overrides: { "score.admitLine": 7 } }] } }))).toMatchObject({ ok: false, section: "policies" });

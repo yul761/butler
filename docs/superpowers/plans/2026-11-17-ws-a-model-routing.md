@@ -32,7 +32,7 @@ Design: `docs/superpowers/specs/2026-11-17-ws-a-model-routing-design.md`. Every 
 ## Stage E: degraded re-runs and export
 
 16. **Upgrade re-run queue**: lesson runner sets `upgrade_pending` for degraded results; service requeues when the tier recovers; lessons page label; `degradedRunIds()` for D.
-17. **Export section** (`routing/config-section.ts` + test): export / preview / apply(merge | replace) for registry, chains, task routes, limit rules.
+17. **Export section** (`config-io/models-section.ts` + test, on C's section registry): export / diff / apply for registry, chains, task routes, limit rules.
 
 ## Finish
 

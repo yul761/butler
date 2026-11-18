@@ -20,7 +20,7 @@ Every background model call names a **task** (`TaskId`). A router turns the task
 | `src/main/routing/discovery.ts` | Model discovery: candidate names from env, Claude Code settings and `--help`; probe calls. |
 | `src/main/routing/learning.ts` | Unrecognised errors, "same model keeps failing while others succeed", turning an error into a rule. |
 | `src/main/routing/routing-service.ts` | Glue: repos + health + router + learning, used by `execHeadlessJson`, sessions, IPC and the UI. |
-| `src/main/routing/config-section.ts` | The `models` export / import section (contract 4.3). |
+| `src/main/config-io/models-section.ts` | The `models` export / import section (contract 4.3), registered in the config-io registry. |
 | `src/main/db/routing-repo.ts` | Tables below. |
 | `src/main/handoff/headless-exec.ts` | Runs a call through the router: picks the model, adds `--model`, falls back and retries, records what happened. |
 
@@ -94,12 +94,28 @@ Settings get two tabs, **General** (everything as today) and **Model routing**: 
 
 ## 12. Export / import
 
-`models` section (`routing/config-section.ts`, `ModelsConfigSection`): `registry` (without `enabled`), `chains`, `taskRoutes`, `rules` (user and learned; kind, pattern, category, account scope, source). Not exported: health, events, spend, unrecognised errors, built-in enabled overrides (machine-local tuning), and rule notes (a learned rule's note is a line of raw error text that can hold a path or a name).
+The `models` section (`config-io/models-section.ts`) is registered in C's section registry (`content: "config"`, order 60), so it is only in "all" exports and is not in starter packs. Each item has a `kind`:
+- `model`: the registry entry, without `enabled`.
+- `chain`: a tier's order. Empty chains are left out.
+- `task`: a task override.
+- `rule`: user and learned rules — kind, pattern, category, account scope and source.
 
-- `preview(incoming)`: per item `added` (no local item), `changed` (local is the default: a task with no override), `conflicting` (both sides have their own and they differ), `unchanged`, plus `invalid` entries (bad name, unknown tier / task / policy, a rule that does not compile, duplicates, a newer section version). One bad entry never fails the section.
-- `apply(incoming, "merge")`: writes added and changed, keeps local on conflicts. `apply(incoming, "replace")`: incoming wins every conflict and local models, chains, task overrides and user / learned rules that are not in the file are removed (the framework writes the backup first, per 4.3).
-- **Imported models and rules arrive disabled** (the 4.3 "pending" state): an import never changes routing behaviour by itself, and a machine with no routing stays on 2.1.0 behaviour until the user enables a model. A model that is already registered keeps its local enabled state. Imported rules get a stable id from kind + pattern (`imported:<hash>`), so importing the same file twice does not duplicate them.
-- Written against the 4.3 interface; C's framework is not on `main` yet, so the file carries a local copy of the interface (`ConfigSection`) and is not registered anywhere. Whichever of A and C merges second constructs `new ModelsConfigSection({ repo: routingRepo, now, onApplied: () => routing.reloadConfig() })` and registers it.
+Not exported:
+- health, events, spend and unrecognised errors (machine-local state);
+- built-in rule on/off overrides (machine-local tuning);
+- rule notes (a learned rule's note is a line of raw error text that can hold a path or a name).
+
+- **Fingerprints** come from identity only: the model name, the tier, the task, or a rule's kind + pattern.
+- **Diff.** A difference in a field that changes behaviour is `conflicting`:
+  - model: tier, account, prices;
+  - chain: its order;
+  - task: tier, min tier, policy, critical;
+  - rule: category, account scope.
+
+  A note-only or source-only difference is `changed`. Only a scope-`all` file marks local items it lacks as `removed`; they are deleted in replace mode unless the user keeps them.
+- **Validation.** Bad items are refused by the section schema (zod, plus `validateModel` / `validateRule`), so the framework rejects the file with `bad_section` before anything is written.
+- **Imported models and rules arrive disabled** (the 4.3 "pending" state). An import never changes routing behaviour by itself, and a machine with no routing stays on 2.1.0 behaviour until the user enables a model. A model or rule that already exists keeps its local enabled state. Imported rules get a stable id from kind + pattern (`imported:<hash>`), so importing the same file twice does not duplicate them.
+- **Undo.** The routing tables have no batch-undo adapter (4.4). A merge only adds disabled entries and keeps local versions by default, so there is little to undo; for a replace, the backup the framework writes first is the way back. After an import, `onApplied` calls `routing.reloadConfig()`.
 
 ## 13. Verified during development
 
@@ -134,4 +150,5 @@ Settings get two tabs, **General** (everything as today) and **Model routing**: 
 - **Quota waits wake at the period end.** With any quota set, a timer at the period end drops the spend cache and notifies, so waiting tasks, the lessons gate and upgrade re-runs look again; it re-arms at most a day at a time.
 - **A failed switch is undone.** If the reopen on the new model fails, the session's stored model goes back to the old one.
 - **Dismissing an unrecognised error clears only the suspicion it raised** (same first line), not suspicions from other errors on the same model.
+- **`check_draft` (E1) goes through the router** (high tier, `wait`; its legacy model is none, so with no registry it still runs without `--model`, as E1's interim wiring did).
 - **Probes use `--effort low`** unless an effort for `model_probe` is set (and only when `--effort` is supported).
