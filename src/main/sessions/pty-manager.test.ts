@@ -206,6 +206,46 @@ describe("PtyManager", () => {
     expect(spawned[0].pty.written).toHaveLength(2);
   });
 
+  it("holds the user's keys typed between the paste and its Enter, and writes them after the Enter (no merged line)", async () => {
+    // 回复送回 Butler 总控时用户正在打字：粘贴和回车之间打的字不能接在粘贴后面一起提交（Windows 回显慢，这段空档更长）。
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.markStarted("t1");
+    const p = mgr.deliver("t1", "【回复】收到", { idleMs: 800, settleMs: 300 });
+    spawned[0].pty.emit("ready");
+    await vi.advanceTimersByTimeAsync(900);
+    expect(spawned[0].pty.written).toEqual(["\x1b[200~【回复】收到\x1b[201~"]);
+    spawned[0].pty.emit("【回复】…"); // 回显还没安静
+    mgr.write("t1", "/fake");
+    mgr.write("t1", "\x1b[I"); // 终端自己的焦点报告照常直接写
+    mgr.write("t1", "-mcp\r");
+    expect(spawned[0].pty.written).toEqual(["\x1b[200~【回复】收到\x1b[201~", "\x1b[I"]);
+    expect(mgr.lastUserInputAt("t1")).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(spawned[0].pty.written).toEqual(["\x1b[200~【回复】收到\x1b[201~", "\x1b[I", "\r", "/fake", "-mcp\r"]);
+    // 之后的按键不再暂存。
+    mgr.write("t1", "x");
+    expect(spawned[0].pty.written.at(-1)).toBe("x");
+    mgr.markSubmitted("t1");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await p).toBe("sent");
+  });
+
+  it("a terminal that exits between the paste and the Enter drops the held keys", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.markStarted("t1");
+    const p = mgr.deliver("t1", "x", { idleMs: 800, settleMs: 300 });
+    spawned[0].pty.emit("ready");
+    await vi.advanceTimersByTimeAsync(900);
+    spawned[0].pty.emit("x…");
+    mgr.write("t1", "abc");
+    spawned[0].pty.emitExit(0);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(await p).toBe("exited");
+    expect(spawned[0].pty.written).toEqual(["\x1b[200~x\x1b[201~"]);
+  });
+
   it("deliver reports sent once Enter is written, even if the terminal exits while it waits for the confirmation", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);
