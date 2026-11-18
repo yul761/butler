@@ -116,8 +116,8 @@ export function computeRisk(input: RiskInput, policy: ResolvedPrPolicy["risk"]):
     }
   }
 
-  if (input.evidenceGaps.length && level !== "high") {
-    const raised = up(level);
+  if (input.evidenceGaps.length && (level as RiskLevel) !== "high") {
+    const raised = up(level as RiskLevel);
     reasons.push({ rule: "missing_evidence", level: raised, detail: input.evidenceGaps.map((g) => g.category).join(", ") });
     level = raised;
   } else if (input.evidenceGaps.length) {
