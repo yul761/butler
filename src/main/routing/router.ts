@@ -23,6 +23,8 @@ export type Plan =
       route: EffectiveRoute;
       requestedTier: Tier;
       candidates: Candidate[];
+      /** 没有限额和配额时会用的模型：实际用的不是它，结果就是降级来的（fallback_from）。 */
+      preferred: string;
       skipped: Skipped[];
       /** 评审任务没有别的模型可用，只能和产出方同模型。 */
       sameModelReview: boolean;
@@ -99,7 +101,7 @@ export function planTask(i: PlanInput): Plan {
       const until = i.recoversAt(model) ?? i.now;
       return { mode: "wait", route, requestedTier: tier, until, skipped: [{ model, tier, reason: "limited", until }] };
     }
-    return { mode: "routed", route, requestedTier: tier, candidates: [{ model, tier }], skipped: [], sameModelReview: false };
+    return { mode: "routed", route, requestedTier: tier, candidates: [{ model, tier }], preferred: model, skipped: [], sameModelReview: false };
   }
 
   if (!configured) return { mode: "legacy", model: route.legacy === "session" ? (i.sessionModel ?? null) : route.legacy, route, why: "unconfigured" };
@@ -135,7 +137,7 @@ export function planTask(i: PlanInput): Plan {
     }
     candidates.push(c);
   }
-  if (candidates.length > 0) return { mode: "routed", route, requestedTier: start, candidates, skipped, sameModelReview };
+  if (candidates.length > 0) return { mode: "routed", route, requestedTier: start, candidates, preferred: all[0]!.model, skipped, sameModelReview };
   const times = skipped.filter((s) => s.reason !== "producer").map((s) => s.until ?? i.now);
   return { mode: "wait", route, requestedTier: start, until: times.length > 0 ? Math.min(...times) : i.now, skipped };
 }

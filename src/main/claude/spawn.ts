@@ -8,12 +8,16 @@ export interface SpawnSpec {
   args: string[];
 }
 
-/** session 的模型：只有这两个别名，不写具体版本号。 */
-export type SessionModel = "opus" | "sonnet";
+/** session 的模型：别名（opus、sonnet、haiku）或模型路由里登记的名字。 */
+export type SessionModel = string;
 
-/** 记下的模型只认 opus / sonnet，别的值（老数据、手改）当没记。 */
-export function storedModel(s: { model: string | null }): SessionModel | null {
-  return s.model === "opus" || s.model === "sonnet" ? s.model : null;
+const ALIASES: ReadonlySet<string> = new Set(["opus", "sonnet", "haiku"]);
+
+/** 记下的模型：别名，或者 known 认得的名字（模型路由里登记的）；别的值（老数据、手改）当没记。 */
+export function storedModel(s: { model: string | null }, known?: (model: string) => boolean): SessionModel | null {
+  const m = s.model;
+  if (!m) return null;
+  return ALIASES.has(m) || known?.(m) ? m : null;
 }
 
 /** 子代理默认用 sonnet，省 token；用户环境里已有的值优先。 */

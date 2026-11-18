@@ -142,16 +142,16 @@ export class HandoffRunner {
     const addDirs = dirs.repoDirs.filter((d) => d !== cwd);
     const args = headlessArgs({
       schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(mcpCwd), addDirs,
-      // fork 换模型会让 prompt 缓存整个失效：沿用被 fork 的 session 自己的模型。
-      model: session ? storedModel(session) ?? undefined : undefined,
     });
+    // fork 换模型会让 prompt 缓存整个失效：沿用被 fork 的 session 自己的模型（路由不给 session 任务换模型）。
+    const sessionModel = session ? storedModel(session, this.d.routing?.knows) : null;
 
-    let attempt = await this.exec(key, args, prompt, cwd, session?.id);
+    let attempt = await this.exec(key, "handoff", args, prompt, cwd, session?.id, sessionModel);
     if (!attempt.ok) return attempt.outcome;
     let checked = validate(HandoffSchema, upgradeLegacyPr(attempt.value));
     if (!checked.ok) {
       this.d.log?.(`handoff ${key}: output failed validation, retrying once: ${checked.errors}`);
-      attempt = await this.exec(key, args, retryPrompt(prompt, checked.errors), cwd, session?.id);
+      attempt = await this.exec(key, "handoff", args, retryPrompt(prompt, checked.errors), cwd, session?.id, sessionModel);
       if (!attempt.ok) return attempt.outcome;
       checked = validate(HandoffSchema, upgradeLegacyPr(attempt.value));
     }
@@ -166,8 +166,8 @@ export class HandoffRunner {
     const ctx = this.context(t);
     const prompt = buildPrompt(this.d.settings.get("refreshPrompt"), ctx);
     const { cwd, addDirs } = this.d.dirs(t);
-    const args = headlessArgs({ schema: REFRESH_JSON_SCHEMA, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd), addDirs, model: "sonnet" });
-    const attempt = await this.exec(key, args, prompt, cwd);
+    const args = headlessArgs({ schema: REFRESH_JSON_SCHEMA, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(cwd), addDirs });
+    const attempt = await this.exec(key, "handoff_refresh", args, prompt, cwd);
     if (!attempt.ok) return attempt.outcome;
     const checked = validate(RefreshSchema, upgradeLegacyPr(attempt.value));
     // 刷新结果不完整就保留旧数据：不写入、不重试。
@@ -183,8 +183,8 @@ export class HandoffRunner {
     return { ticketKey: key, status: "stored", handoffId: r.handoffId, degraded: r.degraded };
   }
 
-  private async exec(key: string, args: string[], prompt: string, cwd: string, resumedId?: string): Promise<Exec> {
-    const r = await execHeadlessJson(this.d, { label: `handoff ${key}`, args, prompt, cwd, resumedId });
+  private async exec(key: string, task: "handoff" | "handoff_refresh", args: string[], prompt: string, cwd: string, resumedId?: string, sessionModel?: string | null): Promise<Exec> {
+    const r = await execHeadlessJson(this.d, { task, label: `handoff ${key}`, args, prompt, cwd, resumedId, sessionModel });
     if (r.ok) return r;
     if (r.reason === "rate_limited") return { ok: false, outcome: { ticketKey: key, status: "skipped", reason: "rate_limited" } };
     return { ok: false, outcome: failed(key, r.reason, r.message) };

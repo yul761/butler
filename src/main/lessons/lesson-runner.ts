@@ -394,6 +394,7 @@ export class LessonRunner {
     repo.markSpawned(item.id);
     const signals = [this.d.headless.signal, a.ctl.signal].filter((s): s is AbortSignal => s !== undefined);
     const r = await execHeadlessJson({ ...this.d.headless, signal: AbortSignal.any(signals) }, {
+      task: "lesson_analyze",
       label: "lessons",
       args: headlessArgs({ schema: toCliJsonSchema(AnalysisSchema), allowedTools: [] }),
       prompt,

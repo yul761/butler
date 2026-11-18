@@ -54,10 +54,10 @@ function prompt(reply: string): string {
   ].join("\n");
 }
 
-/** 请 Haiku 判断一条回复是不是在等用户。不给任何工具，只看回复的最后 1500 字；失败返回 null。 */
+/** 请低档模型（没配置路由时是 Haiku）判断一条回复是不是在等用户。不给任何工具，只看回复的最后 1500 字；失败返回 null。 */
 export async function judgeNeedsYou(d: HeadlessExecDeps, reply: string, cwd: string): Promise<NeedsYouVerdict | null> {
-  const args = headlessArgs({ schema: NEEDS_YOU_JSON_SCHEMA, allowedTools: [], model: "haiku" });
-  const r = await execHeadlessJson(d, { label: "needs-you judge", args, prompt: prompt(tail(reply, NEEDS_YOU_REPLY_CHARS)), cwd });
+  const args = headlessArgs({ schema: NEEDS_YOU_JSON_SCHEMA, allowedTools: [] });
+  const r = await execHeadlessJson(d, { task: "needs_you", label: "needs-you judge", args, prompt: prompt(tail(reply, NEEDS_YOU_REPLY_CHARS)), cwd });
   if (!r.ok) return null;
   const v = validate(AnswerSchema, r.value);
   // 理由会显示在「现在」页上：去掉混进来的标签，压成一行，最多 80 字（R34）。

@@ -163,6 +163,11 @@ export class RoutingService {
     return routingConfigured(this.config());
   }
 
+  /** 登记过、启用着的模型名。 */
+  knows = (model: string): boolean => this.config().registry.some((m) => m.enabled && m.name === model);
+
+  usable = (model: string): boolean => this.health.usable(model);
+
   private configChanged(): void {
     this.cfg = null;
     this.changed();
