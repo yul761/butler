@@ -1194,4 +1194,72 @@ export const MIGRATIONS: string[] = [
     batch_id INTEGER REFERENCES admission_batches(id) ON DELETE SET NULL, decided_at INTEGER);
   CREATE INDEX threshold_reviews_status ON threshold_reviews (status, at);
   `,
+  // 工作流 G（设计补充 2026-11-17-ws-g 第 2 节，契约 4.6）：预审、证据、就绪度、风险、简报、就绪和风险的三层策略、review 效果统计。
+  // 证据和简报可能早于 PR（栈的上层只 push 分支），所以 pr_id 可空，另带 (repo_slug, branch, head_sha)；就绪和风险每个 PR 一行。
+  `
+  CREATE TABLE pre_reviews (
+    id INTEGER PRIMARY KEY, ticket_key TEXT, session_id TEXT, repo_slug TEXT NOT NULL, cwd TEXT, branch TEXT NOT NULL, base TEXT,
+    head_sha TEXT NOT NULL, pr_id INTEGER REFERENCES ticket_prs(id) ON DELETE SET NULL,
+    trigger TEXT NOT NULL CHECK (trigger IN ('evidence','pr','manual')),
+    status TEXT NOT NULL CHECK (status IN ('queued','running','done','failed','skipped')),
+    job_id INTEGER, files TEXT NOT NULL DEFAULT '[]', lessons TEXT NOT NULL DEFAULT '[]', checks TEXT NOT NULL DEFAULT '{}',
+    violations TEXT NOT NULL DEFAULT '[]', summary TEXT,
+    verdict TEXT CHECK (verdict IS NULL OR verdict IN ('clean','violations','error')),
+    detail TEXT, model TEXT, delivered_at INTEGER, deliver_tries INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL, finished_at INTEGER);
+  CREATE INDEX pre_reviews_target ON pre_reviews (repo_slug, branch, head_sha);
+  CREATE INDEX pre_reviews_pr ON pre_reviews (pr_id);
+  CREATE INDEX pre_reviews_session ON pre_reviews (session_id, created_at);
+  CREATE TABLE pr_evidence (
+    id INTEGER PRIMARY KEY, pre_review_id INTEGER REFERENCES pre_reviews(id) ON DELETE CASCADE,
+    pr_id INTEGER REFERENCES ticket_prs(id) ON DELETE SET NULL, ticket_key TEXT, session_id TEXT,
+    repo_slug TEXT NOT NULL, branch TEXT NOT NULL, head_sha TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('check','acceptance','ui','not_run')),
+    category TEXT CHECK (category IS NULL OR category IN ('test','lint','typecheck','build','other')),
+    name TEXT NOT NULL DEFAULT '', command TEXT, claimed TEXT CHECK (claimed IS NULL OR claimed IN ('pass','fail')),
+    summary TEXT NOT NULL DEFAULT '',
+    verified TEXT NOT NULL DEFAULT 'pending' CHECK (verified IN ('pending','rerun_pass','rerun_fail','consistent','mismatch','unverifiable')),
+    verify_detail TEXT, rerun_output TEXT, created_at INTEGER NOT NULL, verified_at INTEGER);
+  CREATE INDEX pr_evidence_review ON pr_evidence (pre_review_id);
+  CREATE INDEX pr_evidence_pr ON pr_evidence (pr_id);
+  CREATE INDEX pr_evidence_target ON pr_evidence (repo_slug, branch, head_sha);
+  CREATE TABLE pr_readiness (
+    pr_id INTEGER PRIMARY KEY REFERENCES ticket_prs(id) ON DELETE CASCADE, head_sha TEXT,
+    ready INTEGER NOT NULL, conditions TEXT NOT NULL DEFAULT '[]', missing TEXT NOT NULL DEFAULT '[]', computed_at INTEGER NOT NULL);
+  CREATE TABLE pr_risk (
+    pr_id INTEGER PRIMARY KEY REFERENCES ticket_prs(id) ON DELETE CASCADE, head_sha TEXT,
+    level TEXT NOT NULL CHECK (level IN ('low','medium','high')), reasons TEXT NOT NULL DEFAULT '[]', inputs TEXT NOT NULL DEFAULT '{}',
+    rules_version INTEGER NOT NULL, computed_at INTEGER NOT NULL);
+  CREATE TABLE pr_briefs (
+    id INTEGER PRIMARY KEY, pr_id INTEGER REFERENCES ticket_prs(id) ON DELETE SET NULL,
+    pre_review_id INTEGER REFERENCES pre_reviews(id) ON DELETE SET NULL,
+    repo_slug TEXT NOT NULL, branch TEXT NOT NULL, head_sha TEXT NOT NULL, markdown TEXT NOT NULL,
+    summary_ok INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, posted_at INTEGER, posted_url TEXT, audit_id INTEGER);
+  CREATE INDEX pr_briefs_pr ON pr_briefs (pr_id, created_at);
+  CREATE INDEX pr_briefs_target ON pr_briefs (repo_slug, branch, created_at);
+  CREATE TABLE pr_policies (
+    id INTEGER PRIMARY KEY,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global','product','repo')),
+    product_id INTEGER REFERENCES lesson_products(id) ON DELETE CASCADE,
+    repo_slug TEXT,
+    overrides TEXT NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL,
+    CHECK ((scope_kind = 'global' AND product_id IS NULL AND repo_slug IS NULL)
+        OR (scope_kind = 'product' AND product_id IS NOT NULL AND repo_slug IS NULL)
+        OR (scope_kind = 'repo' AND product_id IS NULL AND repo_slug IS NOT NULL)));
+  CREATE UNIQUE INDEX pr_policies_layer ON pr_policies (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''));
+  CREATE TABLE review_effect_prs (
+    pr_id INTEGER PRIMARY KEY REFERENCES ticket_prs(id) ON DELETE CASCADE, repo_slug TEXT NOT NULL, number INTEGER NOT NULL,
+    butler INTEGER NOT NULL DEFAULT 0, opened_at INTEGER, merged_at INTEGER, files TEXT NOT NULL DEFAULT '[]',
+    comments_human INTEGER NOT NULL DEFAULT 0, comments_copilot INTEGER NOT NULL DEFAULT 0, avoidable INTEGER NOT NULL DEFAULT 0,
+    rounds INTEGER NOT NULL DEFAULT 0, first_review_ms INTEGER, submit_to_merge_ms INTEGER,
+    brief_posted INTEGER NOT NULL DEFAULT 0, retro_done INTEGER NOT NULL DEFAULT 0, computed_at INTEGER NOT NULL);
+  CREATE INDEX review_effect_prs_merged ON review_effect_prs (repo_slug, merged_at);
+  CREATE TABLE review_effect_comments (
+    id INTEGER PRIMARY KEY, pr_id INTEGER NOT NULL REFERENCES review_effect_prs(pr_id) ON DELETE CASCADE,
+    source_id INTEGER NOT NULL, lesson_id INTEGER, who TEXT NOT NULL CHECK (who IN ('human','copilot')), path TEXT,
+    lesson_confirmed_before INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+    UNIQUE (pr_id, source_id));
+  CREATE INDEX review_effect_comments_lesson ON review_effect_comments (lesson_id);
+  `,
 ];
