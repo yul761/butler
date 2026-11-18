@@ -189,6 +189,7 @@ interface Tracked {
   activity: SessionActivity | null;
   lastReply: string | null;
   lastReplyId: string | null;
+  lastReplyAt: number | null;
   /** 上一次看到的后台任务 id（排好序拼起来）：变了就重新问进程树。 */
   shellKey: string;
   /** 这些后台任务的命令（问进程树时用来认 shell）。 */
@@ -348,9 +349,9 @@ export class ActivityMonitor {
   }
 
   /** 最后一条 assistant 文字回复的全文和它的 message.id（“需要你”的判断用，调用方自己截）；没有回复或者回复没有 id 时为 null。 */
-  lastReplyOf(sessionId: string): { id: string; text: string } | null {
+  lastReplyOf(sessionId: string): { id: string; text: string; at: number | null } | null {
     const t = this.tracked.get(sessionId);
-    return t?.lastReply && t.lastReplyId ? { id: t.lastReplyId, text: t.lastReply } : null;
+    return t?.lastReply && t.lastReplyId ? { id: t.lastReplyId, text: t.lastReply, at: t.lastReplyAt } : null;
   }
 
   /** 用户点了“没事，忽略”：这一次不再提醒，直到 session 恢复活动后再次卡住。 */
@@ -424,6 +425,7 @@ export class ActivityMonitor {
     t.eligible = eligible;
     t.lastReply = state.lastReply;
     t.lastReplyId = state.lastReplyId;
+    t.lastReplyAt = state.lastReplyAt;
     if (grew) t.lastOutputAt = now;
     await this.sample(t, grew, now, probe);
     const next: SessionActivity = { sessionId: t.id, ...derived, lastOutputAt: t.lastOutputAt, ...this.verdict(t), lastOutput: output.lines, limit: state.apiError ? state.apiLimit : null };
@@ -500,7 +502,7 @@ export class ActivityMonitor {
   private track(id: string, termId: string): Tracked {
     const t: Tracked = {
       id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, fileSizes: new Map(), outputText: "", lastOutputAt: null,
-      eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null, lastReplyId: null,
+      eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null, lastReplyId: null, lastReplyAt: null,
       shellKey: "", shellCommands: [], shellAlive: null, shellCheckedAt: Number.NEGATIVE_INFINITY,
       watch: null, recent: [], eventsSince: this.d.now() - EVENT_SLACK_MS, restarts: 0, limitReportedAt: null, promptAt: null, promptSize: 0, turnStartAt: null, hooklessEndAt: null,
     };

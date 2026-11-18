@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, prLessonData, prLessonDataDetail, prStatus, prsForBranch, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
+import { applyGhResolution, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, prLessonData, prLessonDataDetail, prStatus, prsForBranch, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -97,8 +97,35 @@ describe.skipIf(process.platform === "win32")("prStatus / branchRuns / failedLog
       number: 5, url: "u", state: "OPEN", isDraft: true, review: "pending", headSha: "abc",
       checks: [{ name: "t", state: "passing", runId: 9 }], ci: "passing",
       headBranch: "", author: "", reviews: [], comments: [], firstCommitAt: null, createdAt: null, mergedAt: null, closedAt: null,
+      baseBranch: null, title: null, labels: [], reviewRequests: [], mergeable: null, mergeState: null,
     });
-    expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe("pr view feat --json number,url,state,isDraft,reviewDecision,headRefOid,headRefName,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt");
+    expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe(
+      "pr view feat --json number,url,state,isDraft,reviewDecision,headRefOid,headRefName,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt,baseRefName,title,labels,reviewRequests,mergeable,mergeStateStatus",
+    );
+  });
+
+  it("prStatus parses base, title, labels, review requests and merge state", async () => {
+    const json = {
+      number: 5, url: "u", state: "OPEN", isDraft: false, reviewDecision: "", headRefOid: "abc", statusCheckRollup: [],
+      baseRefName: "feat/lower", title: "[ui] Add page", labels: [{ name: "frontend" }, { name: "" }, { nope: 1 }, { name: "needs-docs" }],
+      reviewRequests: [{ __typename: "User", login: "alice" }, { __typename: "Team", name: "Core", slug: "core" }, { __typename: "Bot", login: "x[bot]" }, { junk: true }],
+      mergeable: "CONFLICTING", mergeStateStatus: "DIRTY",
+    };
+    const dir = fakeGh(`cat <<'JSON'\n${JSON.stringify(json)}\nJSON`);
+    const s = await prStatus(dir, "feat", 5000);
+    expect(s?.baseBranch).toBe("feat/lower");
+    expect(s?.title).toBe("[ui] Add page");
+    expect(s?.labels).toEqual(["frontend", "needs-docs"]);
+    expect(s?.reviewRequests).toEqual([{ kind: "user", name: "alice" }, { kind: "team", name: "core" }, { kind: "user", name: "x[bot]" }]);
+    expect(s?.mergeable).toBe("conflicting");
+    expect(s?.mergeState).toBe("dirty");
+  });
+
+  it("prStatus maps unknown mergeable / merge state values to unknown", async () => {
+    const dir = fakeGh(`echo '{"number":1,"url":"u","state":"OPEN","isDraft":false,"reviewDecision":"","headRefOid":"a","statusCheckRollup":[],"mergeable":"WHATEVER","mergeStateStatus":"NEW_THING"}'`);
+    const s = await prStatus(dir, "b", 5000);
+    expect(s?.mergeable).toBe("unknown");
+    expect(s?.mergeState).toBe("unknown");
   });
 
   it("prStatus maps empty reviewDecision to null and returns null when there is no PR", async () => {
@@ -463,5 +490,24 @@ describe.skipIf(process.platform === "win32")("compareFiles", () => {
   it("returns null when gh fails", async () => {
     const dir = fakeGh("exit 1");
     expect(await compareFiles(dir, "a", "b", 5000)).toBeNull();
+  });
+});
+
+describe("latestReviewers", () => {
+  const rv = (author: string, state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING", at: number) => ({ id: `${author}${at}`, author, state, body: "", submittedAt: at });
+  it("keeps each person's latest decisive state; later comments do not change it", () => {
+    expect(latestReviewers([rv("alice", "CHANGES_REQUESTED", 1), rv("alice", "APPROVED", 3), rv("alice", "COMMENTED", 5), rv("bob", "COMMENTED", 2)], "me")).toEqual([
+      { login: "bob", state: "commented", at: 2, bot: false },
+      { login: "alice", state: "approved", at: 5, bot: false },
+    ]);
+  });
+  it("skips the author, pending reviews and empty logins; marks bots and Copilot", () => {
+    expect(latestReviewers([rv("me", "APPROVED", 1), rv("x", "PENDING", 2), rv("", "APPROVED", 3), rv("copilot-pull-request-reviewer", "COMMENTED", 4), rv("ci[bot]", "APPROVED", 5)], "me")).toEqual([
+      { login: "copilot-pull-request-reviewer", state: "commented", at: 4, bot: true },
+      { login: "ci[bot]", state: "approved", at: 5, bot: true },
+    ]);
+  });
+  it("a dismissal replaces an approval; sorts input by time first", () => {
+    expect(latestReviewers([rv("a", "DISMISSED", 9), rv("a", "APPROVED", 1)], "me")).toEqual([{ login: "a", state: "dismissed", at: 9, bot: false }]);
   });
 });

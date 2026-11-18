@@ -1,9 +1,9 @@
 import type { BranchOwnersRepo } from "../db/branch-owners-repo";
 import type { BranchWatchRepo, BranchWatchRow } from "../db/branch-watch-repo";
 import type { PrStageRepo } from "../db/pr-stage-repo";
-import type { TicketPr, TicketPrsRepo } from "../db/ticket-prs-repo";
+import { prGivenUp, type TicketPr, type TicketPrsRepo } from "../db/ticket-prs-repo";
 import {
-  reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prStatus, type prsForBranch, type reviewAuthors,
+  latestReviewers, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prStatus, type prsForBranch, type reviewAuthors,
   type ReviewAuthors, type reviewComments,
 } from "../tickets/gh";
 import type { firstCommitAt } from "../tickets/git";
@@ -149,7 +149,11 @@ export class PrWatcher {
     const out: WatchedPr[] = prs.map((r) => ({
       ticketKey, prId: r.id, repoId: r.repoId, repoPath: r.repoId === null ? null : (this.d.repoOf(r.repoId)?.repoPath ?? null),
       branch: r.headBranch ?? "", number: r.number, url: r.url, state: r.state, review: r.review, ci: r.ci, headSha: r.headSha,
-      checkedAt: r.checkedAt, readError: r.readError,
+      checkedAt: r.checkedAt, readError: r.readError, ...(prGivenUp(r) && { gaveUp: true }),
+      detail: {
+        baseBranch: r.baseBranch, isDraft: r.isDraft, title: r.title, author: r.author, labels: r.labels, reviewRequests: r.reviewRequests, reviewers: r.reviewers,
+        mergeable: r.mergeable, mergeState: r.mergeState, statusChangedAt: r.statusChangedAt, slug: r.slug,
+      },
     }));
     for (const b of this.d.branches.all()) {
       if (b.ticketKey !== ticketKey || b.checkedAt === 0) continue;
@@ -320,9 +324,14 @@ export class PrWatcher {
     } catch (e) {
       this.d.log(`pr watch: recording the stages of ${r.url} for ${r.ticketKey} failed`, e);
     }
+    const detail = prDetailOf(pr);
+    // 状态最后一次变化（ws-b）：汇总新鲜度和"卡了多久"看它；第一次读到也算。标题、label 不算状态。
+    const statusChanged = prStatusChanged(r, { state, review: pr.review, ci: pr.ci, headSha: pr.headSha, ...detail }, first);
     this.d.prs.update(r.id, {
       state, review: pr.review, ci: pr.ci, headSha: pr.headSha, headBranch, failed, readError: false, readFailures: 0, readFailingSince: null, readRetryAt: null, checkedAt: now,
       openedAt: pr.createdAt ?? r.openedAt, mergedAt, closedAt,
+      ...detail, baseBranch: detail.baseBranch ?? r.baseBranch, title: detail.title ?? r.title, author: detail.author ?? r.author,
+      ...(statusChanged && { statusChangedAt: now }),
     });
     if (first || r.state !== state || r.review !== pr.review) marks.prChanged.add(r.ticketKey);
     if (first || added || r.readError || r.state !== state || r.review !== pr.review || r.ci !== pr.ci || r.headSha !== pr.headSha || !sameChecks(r.failed, failed)) {
@@ -544,4 +553,33 @@ export class PrWatcher {
       this.ghWaiting.shift()?.();
     }
   }
+}
+
+/** 一次读到的 PR 里 ws-b 要存的字段（reviewer 按 GitHub 的规则取每个人最新的态度）。 */
+export function prDetailOf(pr: PrStatus): Pick<TicketPr, "baseBranch" | "isDraft" | "title" | "author" | "labels" | "reviewRequests" | "reviewers" | "mergeable" | "mergeState"> {
+  return {
+    baseBranch: pr.baseBranch, isDraft: pr.isDraft, title: pr.title, author: pr.author || null, labels: pr.labels, reviewRequests: pr.reviewRequests,
+    reviewers: latestReviewers(pr.reviews, pr.author), mergeable: pr.mergeable, mergeState: pr.mergeState,
+  };
+}
+
+type StatusFields = Pick<TicketPr, "state" | "review" | "ci" | "headSha" | "isDraft" | "mergeable" | "mergeState" | "reviewers" | "reviewRequests">;
+
+/** 合并状态的"不知道"：GitHub 重新算的时候先给 UNKNOWN，升级前的行是 null。来回变不算状态变化。 */
+const knownMerge = (v: string | null): string | null => (v === null || v === "unknown" ? null : v);
+/** reviewer 只看人和态度，不看时间（同一个人又留了一条评论不算），也不看 bot。 */
+const reviewerKey = (r: TicketPr["reviewers"]): string => r.filter((x) => !x.bot).map((x) => `${x.login}:${x.state}`).sort().join(",");
+const requestKey = (r: TicketPr["reviewRequests"]): string => r.map((x) => `${x.kind}:${x.name}`).sort().join(",");
+
+/**
+ * 这一轮读到的 PR 状态和上一次比算不算"变了"（ws-b：汇总新鲜度、卡了多久）。第一次读到算。
+ * 升级前就有的行（读过、但 statusChangedAt 还是 null）这一次只比老字段：新字段是第一次有值，不是变了。
+ */
+export function prStatusChanged(prev: StatusFields & Pick<TicketPr, "statusChangedAt">, next: StatusFields, first: boolean): boolean {
+  if (first) return true;
+  if (prev.state !== next.state || prev.review !== next.review || prev.ci !== next.ci || prev.headSha !== next.headSha) return true;
+  if (prev.statusChangedAt === null) return false;
+  const merge = (a: string | null, b: string | null) => knownMerge(a) !== null && knownMerge(b) !== null && knownMerge(a) !== knownMerge(b);
+  return prev.isDraft !== next.isDraft || merge(prev.mergeable, next.mergeable) || merge(prev.mergeState, next.mergeState)
+    || reviewerKey(prev.reviewers) !== reviewerKey(next.reviewers) || requestKey(prev.reviewRequests) !== requestKey(next.reviewRequests);
 }

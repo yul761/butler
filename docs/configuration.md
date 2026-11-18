@@ -148,7 +148,7 @@ These settings are in **Settings → General → Memory and performance**. None 
 
 The section also has **Run the nightly handoff now**.
 
-After the tickets, the nightly run also writes a summary for every feature whose coordinator session or tickets had new activity since its last summary. It forks the coordinator session when there is one and uses the same read-only flags as a handoff. If the ticket run was rate limited, no feature summaries are written that night and the morning catch-up does them. A feature's page also has **Update now**, which first runs handoffs for the feature's tickets that had activity and then writes the summary. `/handoff` in a coordinator writes the summary from the conversation itself.
+After the tickets, the nightly run also writes a summary for every feature whose coordinator session or tickets had new activity since its last summary. It forks the coordinator session when there is one and uses the same read-only flags as a handoff. If the ticket run was rate limited, no feature summaries are written that night and the morning catch-up does them. A feature's page also has **Update now**, which first runs handoffs for the feature's tickets that had activity and then writes the summary. A change in a PR's state, CI, review or mergeability since the last summary also counts as new activity, so the summary is marked out of date even when nobody typed anything. Each summary shows "PR status as of" the time it read the PRs. `/handoff` in a coordinator writes the summary from the conversation itself.
 
 Handoffs and refreshes start `claude` with these flags:
 
@@ -385,6 +385,25 @@ A check is a rule Butler can test without a model: a forbidden pattern, an impor
 | Time for checks before a push (seconds) | `checksPushTimeoutSec` | `600` | A whole number from `10` to `3600`. Shared by all push-stage checks. |
 
 Checks are exported and imported with the other configuration (**Checks only** or **All**). They are matched by key and layer; a change in behaviour (type, parameters, globs, severity, on/off) is a conflict and, if imported, goes back to shadow mode; a change of name or message alone keeps your mode. A `run_command` check that is new or whose command changed arrives **switched off**, because even shadow mode runs the command: the preview shows each command, and you switch it on after reading it. A checks-only file never removes your products, even in replace mode. Replace never removes the built-in checks.
+
+## Outward actions
+
+Some later features will let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. No feature uses these switches yet.
+
+| Setting | Key | Default | What it allows |
+|---------|-----|---------|----------------|
+| Reply to review comments | `externalCommentReply` | `0` (off) | Replying under PR comments as you. |
+| Resolve comments | `externalCommentResolve` | `0` (off) | Marking review threads on a PR as resolved. |
+| Edit PR descriptions | `externalPrDescriptionEdit` | `0` (off) | Rewriting a PR's body. |
+| Add or remove PR labels | `externalPrLabel` | `0` (off) | Adding labels to a PR or removing them. |
+| Open PRs | `externalPrOpen` | `0` (off) | Opening a new PR with `gh`. |
+| Edit PR titles | `externalPrTitleEdit` | `0` (off) | Changing a PR's title. |
+| Force push | `externalForcePush` | `0` (off) | Rewriting a remote branch's history. |
+| Rerun CI | `externalCiRerun` | `0` (off) | Starting failed CI runs again. |
+| Post issues | `externalIssuePost` | `0` (off) | Creating issues or comments in your tracker or on GitHub. |
+| Push notifications | `externalPushNotification` | `0` (off) | Sending notifications to an outside service, such as phone push or chat. |
+
+Each switch is `1` or `0`.
 
 ## Several companies or profiles
 

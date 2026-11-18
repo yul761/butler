@@ -12,7 +12,7 @@ import type { LimitHit } from "../shared/availability";
 import { ClaudeAvailability } from "./claude/availability";
 import { buildNotices, ciNotices } from "./now/notices";
 import { AvailabilityRepo } from "./db/availability-repo";
-import type { Session } from "../shared/types";
+import type { Session, WatchedPr } from "../shared/types";
 import { APP_ID, shouldSetAppId } from "./app-id";
 import { runHeadless } from "./claude/headless";
 import { probeMcpTools } from "./claude/mcp-probe";
@@ -60,6 +60,12 @@ import { featureCommandFollowup, FeatureSummaryRunner } from "./handoff/feature-
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
+import { ButlerMessagesRepo } from "./db/butler-messages-repo";
+import { ButlerMessages } from "./control/butler-messages";
+import { ExternalAuditRepo } from "./db/external-audit-repo";
+import { ExternalActions } from "./external/actions";
+import { buildProgress } from "./progress/progress-view";
+import type { ProgressFilter, ProgressView } from "../shared/progress";
 import { EpicHistoryRepo } from "./db/epic-history-repo";
 import { EpicsRepo } from "./db/epics-repo";
 import { EpicDigestRunner } from "./epics/epic-digest";
@@ -932,6 +938,8 @@ async function bootstrap(): Promise<void> {
     claude: () => health.claude(),
     baseEnv: process.env,
     transcriptMtime,
+    // prWatcher 在下面才建：只在生成汇总、判断过期时（启动之后）才调。
+    livePrs: (key): WatchedPr[] => prWatcher.statusOf(key),
     now: Date.now,
     newRunId: randomUUID,
     projectMcp,
@@ -955,12 +963,24 @@ async function bootstrap(): Promise<void> {
     featureFollowup(featureId, handoffId, sessionId);
   };
   const audit = new AuditRepo(db);
+  // 对外动作（契约 4.8，ws-b）：开关和审计的框架；接入的 workstream 用 externalActions.attempt。
+  const externalAudit = new ExternalAuditRepo(db);
+  const externalActions = new ExternalActions({
+    repo: externalAudit,
+    setting: (key) => settings.get(key),
+    now: Date.now,
+    cutoff: (now) => auditCutoff(now, llmConfig(settings).retentionDays),
+    log: logger,
+  });
+  // 现在还没有调用方（I、K、J 接入时用）：先建好，开关和保留期从这里开始生效。
+  void externalActions;
   // 审计的启动收尾，先于一切读写审计的代码：上次退出时没发完的请求记为 failed（请求体保留，可能已经发出），
   // 再按保留期清理一次（不删本月的记录，预算要用；之后 gateway 每次调用前也会清理）。
   try {
     const stale = audit.failStalePending(M().auditStalePending, stalePendingCost(llmConfig(settings).prices));
     if (stale > 0) logger(`marked ${stale} audit row(s) left pending by the previous run as failed`);
     audit.prune(auditCutoff(Date.now(), llmConfig(settings).retentionDays));
+    externalAudit.prune(auditCutoff(Date.now(), llmConfig(settings).retentionDays));
   } catch (e) {
     logger("audit housekeeping at startup failed", e);
   }
@@ -1207,6 +1227,23 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     log: logger,
   });
+  // send_message 的回复回流（ws-b）：目标停下来时把它最后一条回复送回发消息的总控，和递汇报同一道 guard。
+  const butlerMessages = new ButlerMessages({
+    repo: new ButlerMessagesRepo(db),
+    head: (id) => sessions.head(id),
+    lastReply: (id) => activityMonitor.lastReplyOf(id),
+    termOf: gateTerm,
+    guard: deliveryGuard,
+    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
+    targetName: (m) => {
+      if (m.featureId !== null) return M().butlerTargetFeature(features.get(m.featureId)?.name ?? String(m.featureId));
+      if (m.epicId !== null) return M().butlerTargetEpic(epics.get(m.epicId)?.name ?? String(m.epicId));
+      return M().butlerTargetUnknown;
+    },
+    notify,
+    now: Date.now,
+    log: logger,
+  });
   // Butler 总控的每日巡检（BTL-190 第 5 点）：到点打开（或接着用）Butler 总控，发巡检消息；开着的先过 guard，忙就等下一次 check。
   const butlerPatrol = new ButlerPatrol({
     time: () => settings.get("butlerPatrolTime"),
@@ -1390,6 +1427,8 @@ async function bootstrap(): Promise<void> {
         needsYou.update();
         // 卡片上答好的回答、该送给总控的汇报也趁现在送（永不 reject）。
         void inboxService.flush();
+        // 它是总控 send_message 的目标：把这一轮的最后一条回复送回去；它是总控自己：送还没送回的回复（ws-b）。
+        void butlerMessages.targetStopped(stopped).then(() => butlerMessages.flush(), (e: unknown) => logger(`butler messages: ${stopped} stopped`, e));
         // 在等 Butler 总控停下来的巡检也趁现在送（BTL-190 第 5 点，永不 reject）。
         if (!headlessAbort.signal.aborted) void butlerPatrol.check();
         return flushCi();
@@ -1657,6 +1696,9 @@ async function bootstrap(): Promise<void> {
     autostart,
     tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, runner, featureRunner, scheduler, jobs, gateRepo,
     keys, terms, audit, memory,
+    externalAudit,
+    progress: (f) => progressView(f),
+    butlerMessages: () => butlerMessages.recent(),
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     usage: usageRepo, sessions,
     refreshSession: (id) => {
@@ -1775,6 +1817,38 @@ async function bootstrap(): Promise<void> {
     aborted: () => headlessAbort.signal.aborted,
   });
 
+  /**
+   * 汇总过时没有（ws-b）：hasNewActivity 要同步扫 transcript 目录，进度页每次 stateChanged 都会重取，所以按 feature 缓存一会儿。
+   * 新写了一份汇总（latest 的 id 变了）马上重算。
+   */
+  const STALE_TTL_MS = 20_000;
+  const staleCache = new Map<number, { summaryId: number | null; at: number; stale: boolean }>();
+  const summaryStale = (id: number): boolean => {
+    const summaryId = featureHandoffs.latest(id)?.id ?? null;
+    const now = Date.now();
+    const hit = staleCache.get(id);
+    if (hit && hit.summaryId === summaryId && now - hit.at < STALE_TTL_MS) return hit.stale;
+    const stale = featureRunner.hasNewActivity(id);
+    staleCache.set(id, { summaryId, at: now, stale });
+    return stale;
+  };
+  /** 进度页和总控 progress_overview 共用的聚合（ws-b）。 */
+  const progressView = (filter: ProgressFilter): ProgressView => {
+    const firstCommits = prStages.ticketsWith("first_commit");
+    const live = tickets.list();
+    return buildProgress({
+      now: Date.now(),
+      tickets: live,
+      features: features.list().map((f) => ({ id: f.id, name: f.name, epicId: f.epicId })),
+      epics: epics.list().map((e) => ({ id: e.id, name: e.name })),
+      prs: live.flatMap((t) => prWatcher.statusOf(t.key)),
+      summary: (id) => {
+        const rec = featureHandoffs.latestValid(id);
+        return { summary: rec?.payload?.summary ?? null, at: rec?.createdAt ?? null, prStatusAt: rec?.prStatusAt ?? null, stale: summaryStale(id) };
+      },
+      started: (key) => firstCommits.has(key) || sessions.listByTicket(key).length > 0,
+    }, filter);
+  };
   // 总控 session 开子 session 的请求（设计文档 2026-10-23 第二步）。
   const controlInbox = new ControlInbox({
     requestsDir: paths.controlRequests,
@@ -1798,6 +1872,15 @@ async function bootstrap(): Promise<void> {
         openHeads: openButlerHeads,
         needsYou: (id) => needsYou.reasons().get(id) ?? null,
         inbox: inboxService,
+        progress: progressView,
+        summaries: {
+          running: (id) => featureRunner.isRunning(id),
+          stale: (id) => summaryStale(id),
+          prStatusAt: (id) => featureHandoffs.latestValid(id)?.prStatusAt ?? null,
+          // 和 feature 页的"立即更新"一样：后台跑，完成后刷新界面。
+          refresh: (id) => void featureRunner.runManual(id).then(notify, (e: unknown) => logger(`control: refreshing the summary of feature ${id} failed`, e)),
+        },
+        messages: butlerMessages,
       },
       // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。
       kill: (termId) => pty.kill(termId),
@@ -1877,6 +1960,7 @@ async function bootstrap(): Promise<void> {
     hibernator?.tick();
     // 等着送的回答和汇报：Stop 那一刻没送成（用户在打字、有草稿）的，按这个节奏再试。
     void inboxService.flush();
+    void butlerMessages.flush();
   }, activityIntervals(process.env).tickMs);
 
   // 调度：启动（health 探测完成后）、唤醒、解锁时检查到期任务；每分钟 tick，覆盖 16:00 和整晚没锁屏的情况。

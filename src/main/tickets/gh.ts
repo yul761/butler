@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { MERGE_STATES, type PrMergeable, type PrMergeState, type PrReviewer, type PrReviewRequest } from "../../shared/progress";
 
 /**
  * 执行的 gh：启动时和登录 shell 的 PATH 读到之后各解析一次（resolveGh）；没找到就用裸 "gh"。
@@ -138,6 +139,14 @@ export interface PrStatus {
   createdAt: number | null;
   mergedAt: number | null;
   closedAt: number | null;
+  /** PR 的 base 分支；旧的假数据、读不到时为 null。 */
+  baseBranch: string | null;
+  title: string | null;
+  labels: string[];
+  /** 请了 review、还没给的人和团队。 */
+  reviewRequests: PrReviewRequest[];
+  mergeable: PrMergeable | null;
+  mergeState: PrMergeState | null;
 }
 export interface BranchPr {
   number: number;
@@ -285,6 +294,64 @@ function commentsOf(v: unknown): PrComment[] {
   return out;
 }
 
+function labelsOf(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.flatMap((x) => {
+    const n = str(obj(x)?.name).trim();
+    return n ? [n] : [];
+  });
+}
+
+/** reviewRequests：用户（和 bot）给 login，团队给 slug（没有 slug 用 name）。 */
+function reviewRequestsOf(v: unknown): PrReviewRequest[] {
+  if (!Array.isArray(v)) return [];
+  const out: PrReviewRequest[] = [];
+  for (const item of v) {
+    const r = obj(item);
+    if (!r) continue;
+    if (r.__typename === "Team") {
+      const name = str(r.slug) || str(r.name);
+      if (name) out.push({ kind: "team", name });
+    } else if (str(r.login)) out.push({ kind: "user", name: str(r.login) });
+  }
+  return out;
+}
+
+const MERGEABLE: Record<string, PrMergeable> = { MERGEABLE: "mergeable", CONFLICTING: "conflicting", UNKNOWN: "unknown" };
+
+function mergeableOf(v: unknown): PrMergeable | null {
+  if (typeof v !== "string" || v === "") return null;
+  return MERGEABLE[v] ?? "unknown";
+}
+
+function mergeStateOf(v: unknown): PrMergeState | null {
+  if (typeof v !== "string" || v === "") return null;
+  const l = v.toLowerCase();
+  return (MERGE_STATES as readonly string[]).includes(l) ? (l as PrMergeState) : "unknown";
+}
+
+const LATEST_STATE: Partial<Record<PrReview["state"], PrReviewer["state"]>> = {
+  APPROVED: "approved", CHANGES_REQUESTED: "changes_requested", DISMISSED: "dismissed", COMMENTED: "commented",
+};
+
+/**
+ * 纯函数：每个人（不是 PR 作者）最新的态度，和 GitHub 一样：有批准 / 要求修改 / 撤销的取最后一条这样的，之后只留评论不改变态度；
+ * 只留过评论的记 commented。PENDING（还没提交的 review）不算。bot、Copilot 标 bot。按最后动静从早到晚。
+ */
+export function latestReviewers(reviews: PrReview[], prAuthor: string): PrReviewer[] {
+  const by = new Map<string, PrReviewer>();
+  for (const r of [...reviews].sort((a, b) => a.submittedAt - b.submittedAt)) {
+    const state = LATEST_STATE[r.state];
+    if (!state || !r.author) continue;
+    const kind = reviewerKind(r.author, prAuthor);
+    if (kind === "author") continue;
+    const prev = by.get(r.author);
+    const keep = state === "commented" && prev !== undefined && prev.state !== "commented";
+    by.set(r.author, { login: r.author, state: keep ? prev.state : state, at: r.submittedAt, bot: kind !== "human" });
+  }
+  return [...by.values()].sort((a, b) => a.at - b.at);
+}
+
 function firstCommitOf(v: unknown): number | null {
   if (!Array.isArray(v)) return null;
   const times = v.map((c) => timeOf(obj(c)?.authoredDate)).filter((t): t is number => t !== null);
@@ -303,7 +370,9 @@ export function reviewerKind(login: string, prAuthor: string): "copilot" | "huma
 const REVIEWS = { REVIEW_REQUIRED: "pending", CHANGES_REQUESTED: "changes_requested", APPROVED: "approved" } as const;
 
 // 这些字段要 gh >= 2.18（headRefOid，2022-10）；更旧的 gh 报 Unknown JSON field，prStatus 返回 null。
-const PR_FIELDS = "number,url,state,isDraft,reviewDecision,headRefOid,headRefName,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt";
+// baseRefName、title、labels、reviewRequests、mergeable、mergeStateStatus 比 headRefOid 早，同一个下限（ws-b：叠放树、卡在谁手上）。
+const PR_FIELDS =
+  "number,url,state,isDraft,reviewDecision,headRefOid,headRefName,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt,baseRefName,title,labels,reviewRequests,mergeable,mergeStateStatus";
 
 /** gh pr view <ref>：ref 可以是分支名、PR 号或 PR 的 URL。没有 PR、gh 不可用、输出不对都返回 null。 */
 export async function prStatus(cwd: string, ref: string, timeoutMs: number): Promise<PrStatus | null> {
@@ -350,6 +419,12 @@ function parsePr(text: string | null): PrStatus | null {
     createdAt: timeOf(r.createdAt),
     mergedAt: timeOf(r.mergedAt),
     closedAt: timeOf(r.closedAt),
+    baseBranch: typeof r.baseRefName === "string" && r.baseRefName !== "" ? r.baseRefName : null,
+    title: typeof r.title === "string" && r.title !== "" ? r.title : null,
+    labels: labelsOf(r.labels),
+    reviewRequests: reviewRequestsOf(r.reviewRequests),
+    mergeable: mergeableOf(r.mergeable),
+    mergeState: mergeStateOf(r.mergeStateStatus),
   };
 }
 

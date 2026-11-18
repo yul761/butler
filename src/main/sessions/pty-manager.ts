@@ -43,6 +43,11 @@ interface Term {
   screen: TermScreen;
   /** 上一次 UserPromptSubmit 到的时间（markSubmitted）；0 = 还没有。deliver 回车以后等它确认送到。 */
   submittedAt: number;
+  /**
+   * deliver 粘贴之后、回车之前用户打的字（按顺序）：回车写进去以后再写，免得接在粘贴后面拼成一行一起提交。null = 不在这段空档里。
+   * 终端自己发的报告（焦点、鼠标、查询的回复）不暂存。
+   */
+  held: string[] | null;
 }
 
 /** 终端输出去掉 ANSI 控制序列后的纯文本（只用来认对话框）。 */
@@ -192,7 +197,7 @@ export class PtyManager {
     const cols = opts.cols ?? 120, rows = opts.rows ?? 32;
     const term: Term = {
       proc, buffer: "", cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draftLen: 0, openedAt: this.now(),
-      screen: new TermScreen(cols, rows), submittedAt: 0,
+      screen: new TermScreen(cols, rows), submittedAt: 0, held: null,
     };
     this.terms.set(termId, term);
     proc.onData((data) => {
@@ -261,8 +266,13 @@ export class PtyManager {
   write(termId: string, data: string): void {
     const t = this.terms.get(termId);
     if (t) {
-      if (isUserInput(data)) t.lastUserInputAt = this.now();
+      const user = isUserInput(data);
+      if (user) t.lastUserInputAt = this.now();
       t.draftLen = nextDraftLength(t.draftLen, data);
+      if (user && t.held) {
+        t.held.push(data);
+        return;
+      }
     }
     this.guard(termId, "write", () => t?.proc.write(data));
   }
@@ -392,19 +402,27 @@ export class PtyManager {
         // 粘贴里的换行按终端的惯例写成 \r（xterm 的粘贴也是这样）：Windows 的 ConPTY 会吞掉输入里的 \n。
         const body = o.singleLine ? text.replace(/\s*\r?\n\s*/g, " ") : text.replace(/\r?\n/g, "\r");
         this.guard(termId, "deliver paste", () => t.proc.write(`\x1b[200~${body}\x1b[201~`));
+        t.held = [];
         break;
       }
       if (now - start >= (o.timeoutMs ?? 300_000)) return "timeout";
       await new Promise((r) => setTimeout(r, 100));
     }
     // 长文本的回显（Windows 的 ConPTY 尤其慢）停下来之后再回车，免得提交半截。
+    // 这段空档里用户的按键先暂存（held），回车之后照原样写进去：最多暂存 settleCapMs。
     const pasted = this.now();
     for (;;) {
       const t = this.terms.get(termId);
-      if (!t || t.exited) return "exited";
+      if (!t || t.exited) {
+        if (t) t.held = null;
+        return "exited";
+      }
       const now = this.now();
       if ((now - Math.max(t.lastOutputAt, pasted) >= (o.settleMs ?? 300)) || now - pasted >= (o.settleCapMs ?? 5000)) {
         this.guard(termId, "deliver enter", () => t.proc.write("\r"));
+        const held = t.held ?? [];
+        t.held = null;
+        for (const d of held) this.guard(termId, "write held", () => t.proc.write(d));
         break;
       }
       await new Promise((r) => setTimeout(r, 50));

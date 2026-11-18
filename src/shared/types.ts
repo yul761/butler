@@ -4,6 +4,7 @@ import type { ActivityEvent, SessionActivity } from "./activity";
 import type { AvailabilityHit, LimitHit } from "./availability";
 import type { ReportKind } from "./control";
 import type { FeatureHandoff, Handoff, Pr } from "./handoff";
+import type { PrMergeable, PrMergeState, PrReviewer, PrReviewRequest } from "./progress";
 export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
 export type WorkMode = "worktree" | "branch";
@@ -400,6 +401,8 @@ export interface FeatureHandoffRecord {
   degraded: boolean;
   rawText: string | null;
   sourceRef: string | null;
+  /** 汇总读 PR 实时状态的时间（ws-b）；总控 /handoff 交上来的、或者升级前的为 null（按 createdAt 算）。 */
+  prStatusAt: number | null;
 }
 
 /** 一次 feature 汇总的结果。 */
@@ -480,6 +483,26 @@ export interface WatchedPr {
   checkedAt: number;
   /** 上一次 gh 读取失败：ci、state 是再上一次的。 */
   readError: boolean;
+  /** 放弃读了（一直读不到）：状态只是最后一次读到的，不再当真（ws-b 进度页不算它）。分支行没有。 */
+  gaveUp?: boolean;
+  /** PR 行的 base、draft、标题、reviewer 等（ws-b）；分支行没有。 */
+  detail?: PrDetail;
+}
+
+/** ticket_prs 里 ws-b 加的那些字段（叠放树、卡在谁手上、汇总新鲜度）。 */
+export interface PrDetail {
+  baseBranch: string | null;
+  isDraft: boolean;
+  title: string | null;
+  author: string | null;
+  labels: string[];
+  reviewRequests: PrReviewRequest[];
+  reviewers: PrReviewer[];
+  mergeable: PrMergeable | null;
+  mergeState: PrMergeState | null;
+  /** 状态最后一次变化的时间；没读过为 null。 */
+  statusChangedAt: number | null;
+  slug: string;
 }
 
 /** 「现在」页一行点开去哪：ticket 页、feature 页、epic 页或 Butler 总控页，sessionId 是要切到的终端（null：页面自己选）。 */
@@ -657,4 +680,19 @@ export interface NowView {
   mem?: MemorySnapshot | null;
   /** 共享 MCP（WS-M H）开着没有：关着时内存卡片提示开了大约能省多少。 */
   sharedMcp?: boolean;
+}
+
+/** Butler 总控用 send_message 发的一条消息和它的回复（ws-b）：list_inbox 的 messages、Butler 页的"回复"tab。时间是 ISO 字符串。 */
+export interface ButlerMessageView {
+  requestId: string;
+  /** 给人看的目标："feature X 的总控"之类。 */
+  target: string;
+  targetSession: string | null;
+  status: "sending" | "waiting" | "replied" | "delivered" | "failed" | "expired";
+  error: string | null;
+  text: string;
+  queuedAt: string;
+  reply: string | null;
+  repliedAt: string | null;
+  deliveredAt: string | null;
 }

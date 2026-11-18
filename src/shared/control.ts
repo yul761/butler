@@ -136,7 +136,11 @@ export type ButlerControlRequest =
   | { v: 1; butler: true; from: string | null; op: "session_activity"; session: string }
   | { v: 1; butler: true; from: string | null; op: "list_inbox" }
   | ({ v: 1; butler: true; from: string | null; op: "send_message"; text: string } & ButlerMessageTarget)
-  | { v: 1; butler: true; from: string | null; op: "refresh_session"; session: string };
+  | { v: 1; butler: true; from: string | null; op: "refresh_session"; session: string }
+  /** 后台给一个 feature 重新生成汇总（ws-b）：立刻返回，生成完 list_features 能看到新的 summaryAt。 */
+  | { v: 1; butler: true; from: string | null; op: "refresh_feature_summary"; feature: string }
+  /** 进度总览（ws-b）：和进度页同一份聚合，可以按 epic / feature 过滤。只读。 */
+  | { v: 1; butler: true; from: string | null; op: "progress_overview"; feature?: string; epic?: string };
 
 export type ControlRequest = TicketControlRequest | FeatureControlRequest | EpicControlRequest | ButlerControlRequest;
 
@@ -269,10 +273,14 @@ function parseButlerRequest(o: Record<string, unknown>, from: string | null): Bu
   if (o.op === "list_epics" || o.op === "list_features" || o.op === "list_prs" || o.op === "list_sessions" || o.op === "list_inbox") {
     return { ...base, op: o.op };
   }
-  if (o.op === "list_tickets") {
+  if (o.op === "list_tickets" || o.op === "progress_overview") {
     if (o.feature !== undefined && !okName(o.feature, 500)) return null;
     if (o.epic !== undefined && !okName(o.epic, 500)) return null;
-    return { ...base, op: "list_tickets", ...(o.feature !== undefined && { feature: o.feature as string }), ...(o.epic !== undefined && { epic: o.epic as string }) };
+    return { ...base, op: o.op, ...(o.feature !== undefined && { feature: o.feature as string }), ...(o.epic !== undefined && { epic: o.epic as string }) };
+  }
+  if (o.op === "refresh_feature_summary") {
+    if (!okName(o.feature, 500)) return null;
+    return { ...base, op: "refresh_feature_summary", feature: o.feature };
   }
   if (o.op === "session_activity" || o.op === "refresh_session") {
     if (!okName(o.session, 200)) return null;

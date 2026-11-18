@@ -45,6 +45,8 @@ export interface TranscriptState {
   lastReply: string | null;
   /** lastReply 所在那条 assistant 记录的 message.id（“需要你”按它只判断一次）；没有 id 时为 null。 */
   lastReplyId: string | null;
+  /** lastReply 那条记录的时间（ws-b：resume 之后第一次 Stop 看到的旧回复不算对新消息的回复）；没有为 null。 */
+  lastReplyAt: number | null;
   /** 还没被取走的事件，从旧到新，最多 MAX_PENDING_EVENTS 条。 */
   events: TranscriptEvent[];
   /** 最近一条 assistant 记录是 Claude Code 自己合成的错误（isApiErrorMessage / <synthetic>）：这一轮会以 turn_duration 结束，不会有 Stop。 */
@@ -56,7 +58,7 @@ export interface TranscriptState {
 }
 
 export function newTranscriptState(): TranscriptState {
-  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null, lastReplyId: null, events: [], apiError: false, apiLimit: null, apiErrorAt: null };
+  return { running: new Map(), background: new Map(), turnOpen: false, lastReply: null, lastReplyId: null, lastReplyAt: null, events: [], apiError: false, apiLimit: null, apiErrorAt: null };
 }
 
 function pushEvent(s: TranscriptState, e: TranscriptEvent): void {
@@ -176,6 +178,9 @@ export function applyEntry(s: TranscriptState, entry: unknown): void {
     if (text && !s.apiError) {
       s.lastReply = text;
       s.lastReplyId = typeof message.id === "string" && message.id ? message.id : null;
+      // 没有时间戳时为 null（不用 entryTime 的"现在"兜底：那会让旧回复看起来是新的）。
+      const at = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : NaN;
+      s.lastReplyAt = Number.isFinite(at) ? at : null;
     }
     for (const block of message.content) {
       if (!isObj(block) || block.type !== "tool_use" || typeof block.id !== "string") continue;

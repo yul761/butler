@@ -13,6 +13,7 @@ interface FeatureHandoffRow {
   degraded: number;
   raw_text: string | null;
   source_ref: string | null;
+  pr_status_at: number | null;
 }
 
 function parsePayload(text: string | null): FeatureHandoff | null {
@@ -37,6 +38,7 @@ function toRecord(r: FeatureHandoffRow): FeatureHandoffRecord {
     degraded: r.degraded === 1 || payload === null,
     rawText: r.raw_text,
     sourceRef: r.source_ref,
+    prStatusAt: r.pr_status_at ?? null,
   };
 }
 
@@ -50,6 +52,8 @@ export interface NewFeatureHandoff {
   rawText: string | null;
   /** /handoff 输出所在的 transcript 条目 uuid，用来去重。 */
   sourceRef?: string | null;
+  /** Butler 自己生成的汇总读 ticket_prs 的时间（ws-b）；总控 /handoff 交上来的没有。 */
+  prStatusAt?: number | null;
 }
 
 /** feature 汇总，和 handoffs 一样只追加（covers_until 例外，只从 NULL 写一次）。 */
@@ -60,10 +64,10 @@ export class FeatureHandoffsRepo {
   insert(h: NewFeatureHandoff): number | null {
     const r = this.db
       .prepare(
-        `INSERT OR IGNORE INTO feature_handoffs (feature_id, session_id, trigger, created_at, payload, degraded, raw_text, source_ref)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO feature_handoffs (feature_id, session_id, trigger, created_at, payload, degraded, raw_text, source_ref, pr_status_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(h.featureId, h.sessionId, h.trigger, h.createdAt, h.payload ? JSON.stringify(h.payload) : null, h.payload ? 0 : 1, h.rawText, h.sourceRef ?? null);
+      .run(h.featureId, h.sessionId, h.trigger, h.createdAt, h.payload ? JSON.stringify(h.payload) : null, h.payload ? 0 : 1, h.rawText, h.sourceRef ?? null, h.prStatusAt ?? null);
     return Number(r.changes) > 0 ? Number(r.lastInsertRowid) : null;
   }
 

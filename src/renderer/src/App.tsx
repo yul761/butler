@@ -13,6 +13,7 @@ import { NewEpicDialog } from "./components/NewEpicDialog";
 import { NewFeatureDialog } from "./components/NewFeatureDialog";
 import { NewTicketDialog } from "./components/NewTicketDialog";
 import { NowPage } from "./components/NowPage";
+import { ProgressPage } from "./components/ProgressPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
 import { TicketPage } from "./components/TicketPage";
@@ -33,6 +34,8 @@ export type Route =
   | { page: "epic"; id: number; focusSession?: string | null }
   /** Butler 总控（BTL-190 第 5 点）。 */
   | { page: "butler"; focusSession?: string | null }
+  /** 进度看板（ws-b）：从 feature / epic 的 PR 进度 tab 点过来时带着过滤条件。 */
+  | { page: "progress"; epicId?: number | null; featureId?: number | null }
   | { page: "unclaimed" }
   | { page: "archived" }
   /** section：从「现在」页的提醒跳来时要看的那一块。 */
@@ -199,6 +202,7 @@ export function App() {
                 onTicketCreated={goTicket}
                 focusSession={route.focusSession}
                 onOpenTarget={openTarget}
+                onOpenProgress={() => setRoute({ page: "progress", featureId: currentFeature.id })}
               />
             )}
             {route.page === "epic" && currentEpic && (
@@ -210,9 +214,19 @@ export function App() {
                 onFeatureCreated={goFeature}
                 focusSession={route.focusSession}
                 onOpenTarget={openTarget}
+                onOpenProgress={() => setRoute({ page: "progress", epicId: currentEpic.id })}
               />
             )}
             {route.page === "butler" && <ButlerPage key={route.focusSession ?? ""} focusSession={route.focusSession} onOpenTarget={openTarget} />}
+            {route.page === "progress" && (
+              <ProgressPage
+                key={`${route.epicId ?? ""}:${route.featureId ?? ""}`}
+                epicId={route.epicId}
+                featureId={route.featureId}
+                onOpenTicket={(key) => setRoute({ page: "ticket", key })}
+                onOpenFeature={(id) => setRoute({ page: "feature", id })}
+              />
+            )}
             {route.page === "unclaimed" && <UnclaimedPage tickets={allTickets} />}
             {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} onEpicRestored={goEpic} />}
             {route.page === "settings" && <SettingsPage section={route.section} onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}

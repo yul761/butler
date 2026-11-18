@@ -8,6 +8,7 @@ import { inboxTabs, useInbox } from "./InboxPanes";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { PageTabs } from "./PageTabs";
 import { FeaturePrStages } from "./PrStages";
+import { PrStuckBlock, useProgress } from "./ProgressPage";
 import { StuckPanel } from "./StuckPanel";
 import { activityText, useNow } from "./TicketActivity";
 import { useCollapsed } from "./useCollapsed";
@@ -24,6 +25,8 @@ interface Props {
   focusSession?: string | null;
   /** 「待你决定」卡片上的「去终端」：问题不是这个页面上的 session 提的（ticket 的 session）时跳过去。 */
   onOpenTarget: (t: NowTarget) => void;
+  /** PR 进度 tab 里「在进度页里看」：去进度页，只看这个 feature。 */
+  onOpenProgress?: () => void;
 }
 
 const errorText = (e: unknown) => (e instanceof ButlerError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
@@ -36,7 +39,7 @@ function formatTime(ms: number): string {
  * feature 页（设计文档 2026-10-26、2026-10-28）：从上到下是名字和工作区，一排 tab（整体进度、ticket 表、汇报、待你决定，
  * 一次只显示一块，各自滚动，不互相挤），然后是仓库、feature 总控 session 和它们的终端。
  */
-export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, focusSession, onOpenTarget }: Props) {
+export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, focusSession, onOpenTarget, onOpenProgress }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newTicket, setNewTicket] = useState(false);
   const showError = (e: unknown) => setError(errorText(e));
@@ -157,7 +160,13 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
               </section>
             ),
           },
-          { id: "stages", label: S.prStagesTab, content: <FeaturePrStages featureId={feature.id} onOpenTicket={onOpenTicket} /> },
+          { id: "stages", label: S.prStagesTab, content: (
+              <>
+                <PrStuckBlock featureId={feature.id} onOpenTicket={onOpenTicket} onOpenProgress={onOpenProgress} />
+                <FeaturePrStages featureId={feature.id} onOpenTicket={onOpenTicket} />
+              </>
+            ),
+          },
           ...inboxTabs(inbox, goTo),
         ]}
       />
@@ -197,6 +206,8 @@ function FeatureProgress({ feature, onOpenTicket }: { feature: FeatureView; onOp
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<{ text: string; bad: boolean } | null>(null);
   const summary = feature.summary;
+  // 汇总新不新（含 PR 状态变化）：和进度页同一份数据。
+  const stale = useProgress({ featureId: feature.id })?.featureGroups.find((g) => g.id === feature.id)?.stale ?? false;
   // 汇总里的 ticket 后来可能归档了：只有还在这个 feature 下的才能点。
   const keys = new Set(feature.tickets.map((t) => t.key));
 
@@ -249,10 +260,15 @@ function FeatureProgress({ feature, onOpenTicket }: { feature: FeatureView; onOp
         </div>
       )}
       <div className="summary-meta">
-        {summary && <span className="muted">{formatTime(summary.createdAt)} · {S.featureSummaryTrigger[summary.trigger]}</span>}
+        {summary && (
+          <span className="muted">
+            {formatTime(summary.createdAt)} · {S.featureSummaryTrigger[summary.trigger]} · {S.featureSummaryPrAsOf(formatTime(summary.prStatusAt ?? summary.createdAt))}
+          </span>
+        )}
         <button disabled={running} onClick={() => void runNow()}>{running ? S.featureSummaryRunning : S.runFeatureSummary}</button>
         {message && <span className={message.bad ? "error" : "muted"}>{message.text}</span>}
       </div>
+      {summary && stale && <p className="muted summary-stale" data-testid="summary-stale">{S.featureSummaryStale}</p>}
       {feature.brief && <FeatureBrief featureId={feature.id} brief={feature.brief} />}
     </section>
   );

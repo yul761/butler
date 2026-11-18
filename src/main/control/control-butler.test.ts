@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
 import type { ButlerControlRequest, ControlResult } from "../../shared/control";
-import type { EpicFeatureRow, InboxView, Session, SessionView, WatchedPr } from "../../shared/types";
+import type { EpicFeatureRow, InboxView, PrDetail, Session, SessionView, WatchedPr } from "../../shared/types";
 import { EpicsRepo } from "../db/epics-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
@@ -9,6 +9,9 @@ import { TicketsRepo } from "../db/tickets-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import { memDb } from "../test-utils";
+import { ButlerMessagesRepo } from "../db/butler-messages-repo";
+import type { ProgressFilter, ProgressView } from "../../shared/progress";
+import { ButlerMessages } from "./butler-messages";
 import { controlHandler } from "./control-handler";
 
 /** Butler 总控（BTL-190 第 5 点）：两个 epic（一个归档了）、三个 feature（一个不属于 epic）、两个 ticket（一个归档了）和各种 session。 */
@@ -71,6 +74,17 @@ function setup(o: { butlerDeps?: boolean } = {}) {
     { ticketKey: "BTL-3", prId: 2, repoId: null, repoPath: null, branch: "", number: 4, url: "https://x/4", state: "open", review: null, ci: "unknown", headSha: null, checkedAt: 0, readError: false },
   ];
   const inboxView: InboxView = { decisions: [], reports: [] };
+  const replies = new Map<string, { id: string; text: string; at: number | null }>();
+  let now = 1_000;
+  const messages = new ButlerMessages({
+    repo: new ButlerMessagesRepo(db), head: (id) => sessions.head(id), lastReply: (id) => replies.get(id) ?? null, termOf: (id) => (open.has(id) ? id : null),
+    guard: { check: (id) => guardCheck(id), recheckAfter: () => () => true }, deliver: async (termId, text) => (delivered.push([termId, text]), "sent" as DeliverResult),
+    targetName: (m) => (m.featureId !== null ? `feature ${m.featureId}` : `epic ${m.epicId}`), notify: () => {}, now: () => now, log: () => {},
+  });
+  const progressCalls: ProgressFilter[] = [];
+  const progressView = { filter: { epicId: null, featureId: null }, epics: [], features: [], counts: { merged: 0, blocked: 0, in_review: 0, in_progress: 0, not_started: 0, total: 0 },
+    stuck: [], stacks: [], groups: { byLabel: [], byPrefix: [] }, featureGroups: [], freshness: { generatedAt: 0, prsCheckedOldest: null, prsCheckedNewest: null, readErrors: 0, unread: 0, summaryOldest: null } } satisfies ProgressView;
+  const summaryState = { running: new Set<number>(), stale: new Set<number>(), prStatusAt: new Map<number, number>(), refreshed: [] as number[] };
   const asked: string[] = [];
   const handle = controlHandler({
     tickets, sessions, features, epics,
@@ -101,12 +115,21 @@ function setup(o: { butlerDeps?: boolean } = {}) {
         openHeads: () => [...open].map((id) => sessions.get(id)!),
         needsYou: (id) => needs.get(id) ?? null,
         inbox: { view: () => inboxView },
+        messages,
+        progress: (f) => (progressCalls.push(f), progressView),
+        summaries: {
+          running: (id) => summaryState.running.has(id), stale: (id) => summaryState.stale.has(id), prStatusAt: (id) => summaryState.prStatusAt.get(id) ?? null,
+          refresh: (id) => void summaryState.refreshed.push(id),
+        },
       },
     }),
   });
   const base = { v: 1 as const, butler: true as const, from: "bt" };
   const call = (req: Record<string, unknown>) => handle({ ...base, ...req } as ButlerControlRequest);
-  return { handle, call, base, shop, checkout, docs, sessions, features, open, activities, needs, delivered, refreshed, opened, submitted, inboxView, asked, setGuard: (f: typeof guardCheck) => (guardCheck = f) };
+  return {
+    handle, call, base, shop, checkout, docs, sessions, features, open, activities, needs, delivered, refreshed, opened, submitted, inboxView, asked, setGuard: (f: typeof guardCheck) => (guardCheck = f),
+    prs, replies, messages, progressCalls, summaryState, setNow: (t: number) => (now = t),
+  };
 }
 
 const value = <T,>(r: ControlResult) => {
@@ -163,6 +186,59 @@ describe("Butler 总控 read-only tools (BTL-190 5)", () => {
     expect(list[2]).toMatchObject({ ticket: "BTL-3", repo: null, number: 4 });
   });
 
+  it("list_prs adds the stack, review and merge fields and who the PR waits on (ws-b)", async () => {
+    const { call, prs } = setup();
+    const detail: PrDetail = {
+      baseBranch: "main", isDraft: false, title: "Checkout", author: "me", labels: ["ui"], reviewRequests: [], mergeable: "mergeable", mergeState: "clean", statusChangedAt: 86_400_000, slug: "o/r",
+      reviewers: [{ login: "ann", state: "approved", at: 0, bot: false }],
+    };
+    // 从没读成功过的（handoff 里给的链接）：不给 waitingOn 这些，和进度页一样不当 PR 算。
+    prs[0] = { ...prs[0], checkedAt: 0, detail };
+    expect(value<Record<string, unknown>[]>(await call({ op: "list_prs" }))[0]).not.toHaveProperty("waitingOn");
+    prs[0] = { ...prs[0], checkedAt: 1, detail };
+    const list = value<Record<string, unknown>[]>(await call({ op: "list_prs" }));
+    expect(list[0]).toMatchObject({
+      title: "Checkout", headBranch: "b-BTL-1", baseBranch: "main", draft: false, author: "me", labels: ["ui"], mergeable: "mergeable", mergeState: "clean",
+      reviewers: [{ login: "ann", state: "approved", at: null }], statusChangedAt: "1970-01-02T00:00:00.000Z", waitingOn: { who: "author", reason: "ci_failing", names: ["me"] },
+    });
+    // 分支行没有这些字段。
+    expect(list[1]).not.toHaveProperty("waitingOn");
+  });
+
+  it("list_features says when the summary read PR status and whether it is stale (ws-b)", async () => {
+    const { call, checkout, docs, summaryState } = setup();
+    summaryState.stale.add(checkout);
+    summaryState.prStatusAt.set(checkout, 86_400_000);
+    const list = value<Record<string, unknown>[]>(await call({ op: "list_features" }));
+    expect(list.find((f) => f.id === checkout)).toMatchObject({ prStatusAt: "1970-01-02T00:00:00.000Z", stale: true });
+    expect(list.find((f) => f.id === docs)).toMatchObject({ prStatusAt: null, stale: false });
+  });
+
+  it("progress_overview resolves the feature or epic by name and returns the aggregate (ws-b)", async () => {
+    const { call, progressCalls, checkout, shop } = setup();
+    expect(value(await call({ op: "progress_overview" }))).toMatchObject({ counts: { total: 0 }, prs: [] });
+    await call({ op: "progress_overview", feature: "checkout" });
+    await call({ op: "progress_overview", epic: "shop" });
+    expect(progressCalls).toEqual([{ featureId: null, epicId: null }, { featureId: checkout, epicId: null }, { featureId: null, epicId: shop }]);
+    expect(err(await call({ op: "progress_overview", feature: "gone" }))).toContain("checkout");
+    expect(err(await call({ op: "progress_overview", epic: "old" }))).toContain("shop");
+  });
+
+  it("refresh_feature_summary starts a background run once, only for the open Butler 总控 (ws-b)", async () => {
+    const { call, checkout, summaryState, open } = setup();
+    summaryState.stale.add(checkout);
+    expect(value(await call({ op: "refresh_feature_summary", feature: "checkout" }))).toMatchObject({
+      started: true, feature: { id: checkout, name: "checkout" }, lastSummaryAt: new Date(5).toISOString(), stale: true,
+    });
+    expect(summaryState.refreshed).toEqual([checkout]);
+    summaryState.running.add(checkout);
+    expect(value(await call({ op: "refresh_feature_summary", feature: "checkout" }))).toMatchObject({ started: false, running: true });
+    expect(summaryState.refreshed).toHaveLength(1);
+    expect(err(await call({ op: "refresh_feature_summary", feature: "nope" }))).toContain("nope");
+    open.delete("bt");
+    expect((await call({ op: "refresh_feature_summary", feature: "docs" })).ok).toBe(false);
+  });
+
   it("list_sessions lists every open session but itself, with its role, owners, needs-you and decisions", async () => {
     const { call, needs, inboxView, shop, checkout } = setup();
     needs.set("c1", "在问用哪个方案");
@@ -179,7 +255,7 @@ describe("Butler 总控 read-only tools (BTL-190 5)", () => {
     expect(value(await call({ op: "session_activity", session: "c1" }))).toMatchObject({ kind: "testing", output: "out" });
     expect(err(await call({ op: "session_activity", session: "nope" }))).toContain("nope");
     inboxView.reports.push({ id: 3, text: "done" } as never);
-    expect(value(await call({ op: "list_inbox" }))).toEqual(inboxView);
+    expect(value(await call({ op: "list_inbox" }))).toEqual({ ...inboxView, messages: [] });
   });
 
   it("refuses everything when Butler has no Butler 总控 here", async () => {
@@ -194,7 +270,35 @@ describe("Butler 总控 send_message and refresh_session (BTL-190 5)", () => {
     expect(value(await call({ op: "send_message", session: "ep", text: "先合 checkout" }))).toMatchObject({ sent: true, sessionId: "ep" });
     expect(value(await call({ op: "send_message", session: "fc", text: "接口改了" }))).toMatchObject({ sent: true });
     await new Promise((r) => setTimeout(r, 0));
-    expect(delivered).toEqual([["ep", "Butler 总控发来的消息：\n先合 checkout"], ["fc", "Butler 总控发来的消息：\n接口改了"]]);
+    expect(delivered).toEqual([["ep", "Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）：\n先合 checkout"], ["fc", "Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）：\n接口改了"]]);
+  });
+
+  it("returns a requestId and sends the target's next reply back to the Butler 总控 (ws-b)", async () => {
+    const { call, delivered, replies, messages, setNow } = setup();
+    replies.set("fc", { id: "r0", text: "earlier", at: 1 });
+    const out = value<{ requestId: string }>(await call({ op: "send_message", session: "fc", text: "进度？" }));
+    expect(out.requestId).toMatch(/^[0-9a-f-]{36}$/);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(messages.recent()[0]).toMatchObject({ requestId: out.requestId, status: "waiting", targetSession: "fc" });
+    setNow(2_000);
+    replies.set("fc", { id: "r1", text: "PR 都绿了", at: 2_000 });
+    await messages.targetStopped("fc");
+    expect(delivered.at(-1)?.[0]).toBe("bt");
+    expect(delivered.at(-1)?.[1]).toContain(out.requestId);
+    expect(delivered.at(-1)?.[1]).toContain("PR 都绿了");
+    const inbox = value<{ messages: { status: string }[] }>(await call({ op: "list_inbox" }));
+    expect(inbox.messages[0].status).toBe("delivered");
+  });
+
+  it("records a requestId for a message that went to a reopened terminal, and a failure when the guard says no (ws-b)", async () => {
+    const { call, messages, setGuard, setNow } = setup();
+    const out = value<{ requestId: string }>(await call({ op: "send_message", feature: "docs", text: "看一下" }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(messages.recent()[0]).toMatchObject({ requestId: out.requestId, status: "waiting", targetSession: "dc" });
+    setNow(2_000);
+    setGuard(() => ({ ok: false, block: "typing" }));
+    expect((await call({ op: "send_message", session: "fc", text: "t" })).ok).toBe(false);
+    expect(messages.recent()[0]).toMatchObject({ status: "failed" });
   });
 
   it("refuses ticket and fix sessions, itself, unknown ones and a blocked guard", async () => {
@@ -224,7 +328,7 @@ describe("Butler 总控 send_message and refresh_session (BTL-190 5)", () => {
     expect(value(await call({ op: "send_message", feature: "docs", text: "看一下 PR" }))).toMatchObject({ sent: true, sessionId: "dc", opened: "resumed" });
     expect(opened).toEqual([{ feature: docs, session: "dc" }]);
     await new Promise((r) => setTimeout(r, 0));
-    expect(submitted).toEqual([["dc", "Butler 总控发来的消息：\n看一下 PR"]]);
+    expect(submitted).toEqual([["dc", "Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）：\n看一下 PR"]]);
     expect(delivered).toEqual([]);
     // 给的是关着的 session：一样恢复它。
     const again = setup();

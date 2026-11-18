@@ -701,4 +701,49 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN wake_error TEXT;
   ALTER TABLE sessions ADD COLUMN wake_error_at INTEGER;
   `,
+  // ws-b（设计文档 2026-11-17 ws-b）：PR 的 base、draft、标题、作者、label、reviewer、合并状态和状态最后变化的时间；
+  // feature 汇总读 PR 状态的时间；send_message 的回复回流；对外动作的审计。
+  `
+  ALTER TABLE ticket_prs ADD COLUMN base_branch TEXT;
+  ALTER TABLE ticket_prs ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE ticket_prs ADD COLUMN title TEXT;
+  ALTER TABLE ticket_prs ADD COLUMN author TEXT;
+  ALTER TABLE ticket_prs ADD COLUMN labels TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE ticket_prs ADD COLUMN review_requests TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE ticket_prs ADD COLUMN reviewers TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE ticket_prs ADD COLUMN mergeable TEXT;
+  ALTER TABLE ticket_prs ADD COLUMN merge_state TEXT;
+  ALTER TABLE ticket_prs ADD COLUMN status_changed_at INTEGER;
+  ALTER TABLE feature_handoffs ADD COLUMN pr_status_at INTEGER;
+  CREATE TABLE butler_messages (
+    id TEXT PRIMARY KEY,
+    from_session TEXT NOT NULL,
+    target_session TEXT,
+    feature_id INTEGER,
+    epic_id INTEGER,
+    text TEXT NOT NULL,
+    base_reply_id TEXT,
+    status TEXT NOT NULL CHECK (status IN ('sending', 'waiting', 'replied', 'delivered', 'failed', 'expired')),
+    error TEXT,
+    queued_at INTEGER NOT NULL,
+    reply_id TEXT,
+    reply_text TEXT,
+    replied_at INTEGER,
+    delivered_at INTEGER
+  );
+  CREATE INDEX idx_butler_messages_status ON butler_messages (status);
+  CREATE TABLE external_action_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    repo_slug TEXT,
+    ticket_key TEXT,
+    target TEXT,
+    summary TEXT NOT NULL,
+    payload TEXT,
+    outcome TEXT NOT NULL CHECK (outcome IN ('done', 'failed', 'skipped')),
+    error TEXT
+  );
+  CREATE INDEX idx_external_action_audit_ts ON external_action_audit (ts);
+  `,
 ];

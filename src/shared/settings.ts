@@ -47,6 +47,17 @@ export const EDITABLE_SETTINGS = [
   "memoryPressureEnabled",
   "memoryPressureFreePercent",
   "sharedMcp",
+  // 对外动作的开关（契约 4.8，ws-b）：和 src/shared/external.ts 的 EXTERNAL_ACTION_SETTINGS 一一对应。
+  "externalCommentReply",
+  "externalCommentResolve",
+  "externalPrDescriptionEdit",
+  "externalPrLabel",
+  "externalPrOpen",
+  "externalPrTitleEdit",
+  "externalForcePush",
+  "externalCiRerun",
+  "externalIssuePost",
+  "externalPushNotification",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

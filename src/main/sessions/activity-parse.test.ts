@@ -415,6 +415,15 @@ describe("lastReply (task 11: end_session)", () => {
     expect(s.lastReply).toBe("没有 id");
     expect(s.lastReplyId).toBeNull();
   });
+
+  it("keeps the time of the last reply's entry, null when the entry has no timestamp", () => {
+    const s = newTranscriptState();
+    expect(s.lastReplyAt).toBeNull();
+    applyEntry(s, { type: "assistant", timestamp: "2026-11-17T10:00:00.000Z", message: { id: "m1", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "好" }] } });
+    expect(s.lastReplyAt).toBe(Date.parse("2026-11-17T10:00:00.000Z"));
+    applyEntry(s, { type: "assistant", message: { id: "m2", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "再说" }] } });
+    expect(s.lastReplyAt).toBeNull();
+  });
 });
 
 describe("events (BTL-190 7: the live window)", () => {
