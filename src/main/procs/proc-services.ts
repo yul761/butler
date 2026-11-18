@@ -8,7 +8,7 @@ import { MemoryMonitor, type AppMetric } from "./memory-monitor";
 import { MemoryRefresh } from "./memory-refresh";
 import { OrphanSweeper, platformKill } from "./orphans";
 import { platformBackend, PriorityManager } from "./priority";
-import { readProcTable } from "./proc-table";
+import { procTableReader } from "./proc-table";
 import { readSystemMemory } from "./system-memory";
 
 /**
@@ -55,6 +55,8 @@ export const idleActivity = (a: SessionActivity | null): boolean => a !== null &
 export function createProcServices(d: ProcServicesDeps): ProcServices {
   const platform = d.platform ?? process.platform;
   const visible = new Set<string>();
+  // 采样和孤儿清理共用一个：失败原因只记一次。
+  const readTable = procTableReader(platform, (m) => d.log(m));
   const monitor = new MemoryMonitor({
     terms: () =>
       d.pty.openIds().flatMap((termId) => {
@@ -64,7 +66,7 @@ export function createProcServices(d: ProcServicesDeps): ProcServices {
       }),
     appMetrics: d.appMetrics,
     mainPid: process.pid,
-    readTable: () => readProcTable(platform),
+    readTable,
     readSystem: () => readSystemMemory(platform),
     enabled: () => memoryMonitorOn(d.settings) || backgroundPriorityOn(d.settings) || orphanCleanupOn(d.settings),
     recordOn: () => memoryMonitorOn(d.settings),
@@ -76,7 +78,7 @@ export function createProcServices(d: ProcServicesDeps): ProcServices {
   });
   const orphans = new OrphanSweeper({
     enabled: () => orphanCleanupOn(d.settings),
-    readTable: () => readProcTable(platform),
+    readTable,
     liveRoots: () => d.pty.openIds().flatMap((t) => d.pty.pid(t) ?? []),
     kill: platformKill(platform, (cmd, args) => void execFile(cmd, args, { windowsHide: true }, () => undefined)),
     file: d.ownedFile,

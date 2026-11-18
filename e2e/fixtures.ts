@@ -194,8 +194,12 @@ function windowsPath(s: Sandbox): string {
 
 /** 原样传给 Butler 的变量（白名单，Ruling P5-PF5）：语言和显示。其余（token、云凭据、git 配置……）一律不传。 */
 const PASS_THROUGH = /^(LANG|LANGUAGE|LC_[A-Z_]+|DISPLAY)$/;
-/** Windows 上进程正常运行必需的系统变量。 */
-const WINDOWS_SYSTEM = ["SystemRoot", "windir", "ComSpec", "PATHEXT", "SystemDrive"];
+/**
+ * Windows 上进程正常运行必需的系统变量。PSModulePath 也算：真实的 Windows 进程都从资源管理器继承它，
+ * 没有它时 Windows PowerShell 5.1 一加载模块（Get-CimInstance、Add-Type）就卡住，直到 Butler 15 秒的超时把它杀掉，
+ * 内存采样和 EcoQoS 一次都成功不了（2026-11-18 在 windows-latest 上实测）。
+ */
+const WINDOWS_SYSTEM = ["SystemRoot", "windir", "ComSpec", "PATHEXT", "SystemDrive", "PSModulePath"];
 
 /** 启动给 Butler 的环境：只有白名单里的变量；HOME / 用户目录 / 临时目录 / PATH / SHELL / 数据目录全部指向沙盒。 */
 function sandboxEnv(s: Sandbox): Record<string, string> {

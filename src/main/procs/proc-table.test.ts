@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyTree, compareStart, parsePsTable, parseWinTable, powershellExe, readProcTable, summarize, treeOf, type ProcTable } from "./proc-table";
+import { classifyTree, compareStart, parsePsTable, parseWinTable, powershellExe, procTableReader, readProcTable, summarize, treeOf, type ProcTable } from "./proc-table";
 
 const PS = [
   "  100     1  50000 Mon Nov 17 09:00:00 2026 /Applications/Butler.app/Contents/MacOS/Butler",
@@ -175,6 +175,36 @@ describe("readProcTable", () => {
 
   it("returns null when the command fails", async () => {
     expect(await readProcTable("darwin", async () => Promise.reject(new Error("no ps")))).toBeNull();
+  });
+
+  it("says why a read failed: the exit code, a timeout and stderr, or output with no rows in it", async () => {
+    const reasons: string[] = [];
+    const fail = (r: string) => void reasons.push(r);
+    const exit = Object.assign(new Error("Command failed: powershell.exe -NoProfile …\nGet-CimInstance : Access denied"), { code: 1, killed: false, signal: null });
+    expect(await readProcTable("win32", async () => Promise.reject(exit), fail)).toBeNull();
+    const timeout = Object.assign(new Error("Command failed"), { code: null, killed: true, signal: "SIGTERM" });
+    expect(await readProcTable("win32", async () => Promise.reject(timeout), fail)).toBeNull();
+    expect(await readProcTable("win32", async () => "Get-CimInstance : not recognized\r\n", fail)).toBeNull();
+    expect(reasons[0]).toMatch(/powershell\.exe.*exit code 1.*Access denied/s);
+    expect(reasons[1]).toMatch(/killed \(SIGTERM\)/);
+    expect(reasons[2]).toMatch(/no process rows in 34 characters of output: Get-CimInstance : not recognized/);
+  });
+
+  it("logs a failure once until it changes, and logs when the table can be read again", async () => {
+    const logs: string[] = [];
+    let out: string | Error = new Error("boom");
+    const read = procTableReader("darwin", (m) => void logs.push(m), async () => (out instanceof Error ? Promise.reject(out) : out));
+    expect(await read()).toBeNull();
+    expect(await read()).toBeNull();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/^process table: ps failed: boom/);
+    out = PS;
+    expect((await read())?.size).toBe(12);
+    expect(await read()).not.toBeNull();
+    expect(logs).toEqual([logs[0], "process table: readable again (12 processes)"]);
+    out = new Error("boom");
+    await read();
+    expect(logs).toHaveLength(3);
   });
 
   it("reads this machine's real table (it has at least this process)", async () => {

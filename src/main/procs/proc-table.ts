@@ -84,14 +84,53 @@ export const runCommand: RunCommand = (cmd, args) =>
     );
   });
 
-/** 读整张进程表；命令失败返回 null（这一次采样跳过）。 */
-export async function readProcTable(platform: NodeJS.Platform = process.platform, run: RunCommand = runCommand): Promise<ProcTable | null> {
+/** execFile 的错误说成一句话：退出码或者被杀（超时）、错误信息（里面带着 stderr）。 */
+function describeRunError(e: unknown): string {
+  if (!(e instanceof Error)) return String(e);
+  const x = e as Error & { code?: unknown; killed?: boolean; signal?: unknown };
+  const how = x.killed ? `killed (${String(x.signal ?? "timeout")})` : typeof x.code === "number" ? `exit code ${x.code}` : x.code ? String(x.code) : "";
+  const msg = x.message.trim().slice(0, 600);
+  return how ? `${how}: ${msg}` : msg;
+}
+
+/**
+ * 读整张进程表；命令失败、或者输出里一行进程都读不出来，返回 null（这一次采样跳过），原因交给 fail。
+ * 一张空表不会是真的（至少有我们自己），当成失败。
+ */
+export async function readProcTable(platform: NodeJS.Platform = process.platform, run: RunCommand = runCommand, fail: (reason: string) => void = () => {}): Promise<ProcTable | null> {
+  const win = platform === "win32";
+  const cmd = win ? powershellExe() : "ps";
+  const args = win ? ["-NoProfile", "-NonInteractive", "-Command", WIN_SCRIPT] : ["-A", "-o", "pid=,ppid=,pgid=,rss=,lstart=,args="];
+  let out: string;
   try {
-    if (platform === "win32") return parseWinTable(await run(powershellExe(), ["-NoProfile", "-NonInteractive", "-Command", WIN_SCRIPT]));
-    return parsePsTable(await run("ps", ["-A", "-o", "pid=,ppid=,pgid=,rss=,lstart=,args="]));
-  } catch {
+    out = await run(cmd, args);
+  } catch (e) {
+    fail(`${cmd} failed: ${describeRunError(e)}`);
     return null;
   }
+  const table = win ? parseWinTable(out) : parsePsTable(out);
+  if (table.size === 0) {
+    fail(`no process rows in ${out.length} characters of output: ${out.trim().slice(0, 300)}`);
+    return null;
+  }
+  return table;
+}
+
+/** readProcTable 加上日志：同一个原因只记一次（每分钟采一次，坏着的话不刷屏），恢复了记一条。 */
+export function procTableReader(platform: NodeJS.Platform, log: (msg: string) => void, run: RunCommand = runCommand): () => Promise<ProcTable | null> {
+  let last: string | null = null;
+  return async () => {
+    let reason: string | null = null;
+    const t = await readProcTable(platform, run, (r) => void (reason = r));
+    if (reason !== null) {
+      if (reason !== last) log(`process table: ${reason}`);
+      last = reason;
+    } else if (t && last !== null) {
+      log(`process table: readable again (${t.size} processes)`);
+      last = null;
+    }
+    return t;
+  };
 }
 
 /**
