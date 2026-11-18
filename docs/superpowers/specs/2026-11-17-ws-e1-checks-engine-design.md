@@ -85,7 +85,8 @@ A text column: null = checks were active (or there are no enabled checks at all)
   "enabled": true,
   "editTimeoutMs": 8000,
   "pushTimeoutMs": 600000,
-  "strings": { "blockHeader": "…", "warnHeader": "…", "shadowTag": "…", "rootCause": "…", "timeout": "…", "unavailable": "…" },
+  "ticketPattern": "BTL-\\d+",
+  "strings": { "failHeader": "…{name}…{where}…", "shadowTag": "…", "warnTag": "…", "blockFooter": "…", "pushHeader": "…" },
   "global": [ResolvedCheck],
   "repos": { "owner/name": [ResolvedCheck] }
 }
@@ -158,7 +159,7 @@ At each launch (ticket, feature, epic and Butler workspace sessions) `SessionSer
 - the snapshot is missing or does not parse → `no_snapshot`;
 - otherwise null.
 
-The hook adds `snapshot_version` / `no_snapshot` later through the hit log. The session button shows a small "no checks" mark with the reason in its tooltip. For pre-review (G): `ChecksService.sessionCoverage(sessionIds)` returns `{ [id]: { absent: reason | null } }` and `ChecksService.hitsForSessions(ids)` returns the raw hits.
+The "event at session start" is a main-process log line (`session <id>: checks absent (<reason>)`) plus the row mark; the renderer refreshes on the usual state change. The hook adds `snapshot_version` / `no_snapshot` later through the hit log. The session button shows a small "no checks" mark with the reason in its tooltip. For pre-review (G): `ChecksService.sessionCoverage(sessionIds)` returns `{ [id]: { absent: reason | null } }` and `ChecksService.hitsForSessions(ids)` returns the raw hits.
 
 ## 8. UI (lessons page, new "Checks" tab)
 
@@ -170,7 +171,7 @@ The hook adds `snapshot_version` / `no_snapshot` later through the hit log. The 
 
 ## 9. Export / import (`checks` section, 4.3)
 
-Section id `checks`, order 40, content `checks`, not in the starter. Item: `{ key, scope: { kind, product?: name, repo?: slug }, type, name, params, globs, excludeGlobs, severity, mode, enabled, message }`. Fingerprint = key + scope. Preview statuses: added, changed, unchanged, removed (replace mode). Apply writes inside the import batch; **every imported check is set to shadow mode** (a check proven on another machine still has to prove itself here); the batch id is stamped on each row. The builtin comment check is exported like any other row.
+Section id `checks`, order 40, content `checks`, not in the starter. Item: `{ key, scope: { kind, product?: name, repo?: slug }, type, name, params, globs, excludeGlobs, severity, mode, enabled, message }`. Fingerprint = key + scope. Preview statuses: added, changed (name or message only), conflicting (a behaviour field differs: type, params, globs, excludeGlobs, severity, enabled), unchanged, removed (replace mode). Mode is not compared. Apply writes inside the import batch: a **new** check and a **conflicting** one taken from the file enter shadow mode (a check proven on another machine still has to prove itself here); a cosmetic-only change keeps the local mode; the batch id is stamped on each row. The builtin comment check is exported like any other row, but a replace import never deletes a `builtin:` row. "Checks only" exports also carry the products section, since product-layer checks need their product.
 
 ## 10. Settings
 
@@ -192,4 +193,10 @@ All three are on the checks tab and documented in `docs/configuration.md` and it
 6. No "pass" rows in `check_hits`: the log is about hits. Adoption is measured by `resolved`.
 7. "Checks absent" is only shown when at least one enabled check exists.
 8. `check_draft` produces a draft for the form; nothing is saved without the user pressing save (E1 is the manual path; automatic generation is F's).
-9. Imported checks always enter shadow mode.
+9. Imported checks enter shadow mode when they are new or their behaviour changed; a name / message-only change keeps the local mode.
+10. When the old content is unknown (no `originalFile`, `Write` of an existing file), the hook cannot tell new violations from old ones. It keeps a per-session `seen` set per `(key, file)` and only reports fingerprints it has not seen in that file before, so the first unknown-before edit reports what is there and later ones only what is new.
+11. The check hooks are registered for a session only when `checksEnabled` is on and the installed `butler-hook` is the current build (the same condition as the merge gate). A session started while either is false shows "no checks" with the reason.
+12. Snapshot `strings` are fixed to `failHeader` (with `{name}` and `{where}`), `shadowTag`, `warnTag`, `blockFooter` and `pushHeader`, localised at write time, so a language change rewrites the snapshot.
+13. A repo-layer scope must be an `owner/name` slug (same shape as remote parsing) at the IPC and import boundaries.
+14. Hits are kept for a year (`HIT_RETENTION_MS`), pruned at startup.
+15. The checks list in the hook is filtered after the layer merge; push-stage glob filtering uses the files changed between `@{upstream}` (then `origin/HEAD`) and `HEAD`, and runs the check when that cannot be computed.

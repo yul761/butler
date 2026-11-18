@@ -476,3 +476,14 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .policy-table td.policy-key code { font-size: 11px; }
 .policy-table input { width: 7em; }
 .policy-group { margin: 10px 0 2px; font-size: 12px; }
+
+/* 检查（工作流 E1） */
+.checks-panel .field { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.checks-panel .field textarea, .checks-panel .field input { width: 100%; box-sizing: border-box; }
+.checks-settings { margin: 8px 0; }
+.checks-settings summary { cursor: pointer; color: var(--muted); }
+.check-params code, .check-hit code { font-size: 11px; word-break: break-all; }
+.check-hits { list-style: none; padding: 0; margin: 6px 0 0 12px; }
+.check-hit { border-top: 1px solid var(--border); padding: 4px 0; }
+.check-hit-detail { margin: 2px 0; font-size: 11px; white-space: pre-wrap; word-break: break-all; color: var(--muted); }
+.session-no-checks { font-size: 10px; margin-left: 4px; }

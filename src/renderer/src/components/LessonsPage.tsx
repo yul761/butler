@@ -10,6 +10,8 @@ import { lessonTags, livePicked } from "../lessons-bulk-view";
 import { BatchNotice, LessonBulkBar, LessonTags, runBatch, type BatchNoticeState } from "./LessonBulkBar";
 import { LessonBatches } from "./LessonBatches";
 import { ConfigIoPanel } from "./ConfigIoPanel";
+import { ChecksPanel, type CheckDraftState } from "./ChecksPanel";
+import { draftErrorText } from "../checks-view";
 import type { LessonFilter } from "../../../shared/lesson-filter";
 import { useStateRefetch } from "./useStateRefetch";
 
@@ -33,7 +35,13 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
   const [newName, setNewName] = useState("");
   const [newSlugs, setNewSlugs] = useState<string[]>([]);
   /** 页面顶上的标签：规矩 / 批次历史 / 导入导出。 */
-  const [pageTab, setPageTab] = useState<"lessons" | "batches" | "io">("lessons");
+  const [pageTab, setPageTab] = useState<"lessons" | "checks" | "batches" | "io">("lessons");
+  /** 从规矩起草好的检查：交给检查标签页打开表单。 */
+  const [checkDraft, setCheckDraft] = useState<CheckDraftState | null>(null);
+  /** 正在起草检查的规矩（按钮显示「正在起草…」）。 */
+  const [drafting, setDrafting] = useState<number | null>(null);
+  /** 起草的结果说明（只能写成文字时的理由），按规矩存。 */
+  const [draftNote, setDraftNote] = useState<Record<number, string>>({});
   /** 待确认里勾选的（批量确认 / 拒绝选中的）。 */
   const [pendingPicked, setPendingPicked] = useState<number[]>([]);
   /** 最近一个批次的提示条（可以撤销）。 */
@@ -81,6 +89,64 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
     }
   };
   const err = (key: string) => errors[key] && <p className="error lessons-error" role="alert">{errors[key]}</p>;
+  const setErr = (key: string, text: string | null) =>
+    setErrors((e) => {
+      const next = { ...e };
+      if (text) next[key] = text;
+      else delete next[key];
+      return next;
+    });
+
+  /** 「做成检查」：让模型起草，草稿交给检查标签页；模型说只能写成文字就标上并说明理由。 */
+  const makeCheck = async (l: Lesson) => {
+    setDrafting(l.id);
+    try {
+      const r = await api.checksDraft(l.id);
+      if (!r.ok) return setErr(`lesson-${l.id}`, draftErrorText(r, S));
+      setErr(`lesson-${l.id}`, null);
+      if (r.kind === "prose") {
+        setDraftNote((n) => ({ ...n, [l.id]: S.lessonDraftProse(r.reason) }));
+        return;
+      }
+      setCheckDraft({ lessonId: l.id, scope: r.scope, input: r.draft, reason: r.reason });
+      setPageTab("checks");
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setDrafting(null);
+    }
+  };
+  /** 手动分类：可检查 / 只有文字 / 清掉。 */
+  const classify = async (l: Lesson, checkability: "checkable" | "prose" | null) => {
+    try {
+      const r = await api.checksAct({ op: "classify", lessonId: l.id, checkability });
+      setErr(`lesson-${l.id}`, r.ok ? null : S.checksError[r.reason] ?? S.checksErrorGeneric);
+      if (r.ok) setDraftNote((n) => {
+        const next = { ...n };
+        delete next[l.id];
+        return next;
+      });
+    } catch (e) {
+      reportError(e);
+    }
+  };
+  /** 已确认规矩上和检查有关的按钮。已经转成检查的不再起草。 */
+  const checkButtons = (l: Lesson) => (
+    <>
+      {l.checkability !== "converted" && l.checkability !== "prose" && (
+        <button data-testid={`lesson-make-check-${l.id}`} disabled={drafting !== null} onClick={() => void makeCheck(l)}>
+          {drafting === l.id ? S.lessonDrafting : S.lessonMakeCheck}
+        </button>
+      )}
+      {l.checkability !== "prose" && l.checkability !== "converted" && (
+        <button data-testid={`lesson-mark-prose-${l.id}`} onClick={() => void classify(l, "prose")}>{S.lessonMarkProse}</button>
+      )}
+      {l.checkability === "prose" && <button data-testid={`lesson-mark-checkable-${l.id}`} onClick={() => void classify(l, "checkable")}>{S.lessonMarkCheckable}</button>}
+      {(l.checkability === "prose" || l.checkability === "checkable") && (
+        <button className="link" data-testid={`lesson-clear-checkability-${l.id}`} onClick={() => void classify(l, null)}>{S.lessonClearCheckability}</button>
+      )}
+    </>
+  );
 
   if (!state) return <div className="page lessons-page" />;
   const s: LessonsState = state;
@@ -362,8 +428,10 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
                   >
                     {deleting ? S.lessonsDeleteConfirm : S.lessonsDelete}
                   </button>
+                  {checkButtons(l)}
                 </div>
               )}
+              {draftNote[l.id] && <p className="muted" data-testid={`lesson-draft-note-${l.id}`}>{draftNote[l.id]}</p>}
               {err(dkey)}
             </div>
           );
@@ -377,7 +445,7 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
       <h2>{S.lessons}</h2>
       <p className="muted">{S.lessonsIntro}</p>
       <div className="lessons-tabs lessons-row" role="tablist">
-        {(["lessons", "batches", "io"] as const).map((t) => (
+        {(["lessons", "checks", "batches", "io"] as const).map((t) => (
           <button key={t} role="tab" aria-selected={pageTab === t} className={pageTab === t ? "primary" : undefined} data-testid={`lessons-page-tab-${t}`} onClick={() => setPageTab(t)}>
             {S.lessonsPageTab[t]}
           </button>
@@ -390,7 +458,9 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
           <button className="link" data-testid="lessons-export-reminder-open" onClick={() => setPageTab("io")}>{S.ioOpenTab}</button>
         </p>
       )}
-      {pageTab === "batches" ? (
+      {pageTab === "checks" ? (
+        <ChecksPanel draft={checkDraft} onDraftTaken={() => setCheckDraft(null)} onNotice={setNotice} />
+      ) : pageTab === "batches" ? (
         <LessonBatches />
       ) : pageTab === "io" ? (
         <ConfigIoPanel s={s} />
