@@ -603,7 +603,7 @@ export class SessionService {
 
   /**
    * 修复 session（设计文档 2026-10-31）：在 feature 工作区里开一个 feature 级的 session，把卡住 session 的情况和规则作为任务发给它。
-   * 不是总控，不受运行数量上限限制；同一个卡住的 session 已经有修复 session 在跑时返回那一个。
+   * 不是总控，开之前不问内存（不是总控开的）；同一个卡住的 session 已经有修复 session 在跑时返回那一个。
    */
   async openFix(req: OpenFixSessionRequest): Promise<OpenSessionResult> {
     await this.d.ready();
@@ -826,7 +826,7 @@ export class SessionService {
   }
 
   /**
-   * 开着终端的 head 加上休眠着的 head（WS-M B）：任务数上限把休眠的也算成在跑，休眠不会让总控多开活。
+   * 开着终端的 head 加上休眠着的 head（WS-M B）：合并闸门和 PR watcher 把休眠的也算成在跑。
    * 同一个 head 只算一次。
    */
   private liveHeads(withHibernated = true): Session[] {
@@ -846,7 +846,7 @@ export class SessionService {
     return (h) => h.featureId === featureId || (h.ticketKey !== null && keys.has(h.ticketKey));
   }
 
-  /** 这个 ticket 正在运行的终端数，休眠的也算（总控开子 session 的上限用）。 */
+  /** 这个 ticket 正在运行的终端数，休眠的也算（合并闸门用）。开新 session 按内存放行，不看这个数（工作流 W）。 */
   openTerminalCount(ticketKey: string): number {
     return this.liveHeads().filter((h) => h.ticketKey === ticketKey).length;
   }
@@ -859,11 +859,6 @@ export class SessionService {
   /** 这个 ticket（给了 repoId 时同 hasOpenTerminal 的口径）有没有开着或者休眠着的 session：PR watcher 照样常看它的 CI。 */
   hasLiveSession(ticketKey: string, repoId?: number): boolean {
     return this.liveHeads().some((h) => h.ticketKey === ticketKey && (repoId === undefined || h.coordinator || h.repoId === null || h.repoId === repoId));
-  }
-
-  /** feature 的总控休眠着（epic 同时在跑的 feature 数也算它）。 */
-  hasHibernatedCoordinator(featureId: number): boolean {
-    return this.d.sessions.listHibernated().some((h) => h.featureId === featureId && h.ticketKey === null && h.fixesSession === null && h.coordinator);
   }
 
   /**

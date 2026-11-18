@@ -1,11 +1,12 @@
 import { basename } from "node:path";
-import { type ButlerControlRequest, type ControlResult, type InboxControlOp, MAX_RUNNING_PER_FEATURE, sanitizeTask, SUMMARY_LIMIT } from "../../shared/control";
+import { type ButlerControlRequest, type ControlResult, type InboxControlOp, sanitizeTask, SUMMARY_LIMIT } from "../../shared/control";
 import { waitingOnOf, type ProgressFilter, type ProgressView } from "../../shared/progress";
 import { effectiveStatus, type Epic, type EpicFeatureRow, type EpicView, type Feature, type OpenSessionResult, type Session, type Ticket, type WatchedPr } from "../../shared/types";
 import { roleOf, type InboxService } from "../inbox/inbox-service";
 import { progressOverview } from "../progress/progress-view";
 import { M } from "../strings";
 import type { ButlerMessages } from "./butler-messages";
+import { admitOrRefuse } from "./admission";
 import type { ControlHandlerDeps } from "./control-handler";
 
 /** Butler 总控（BTL-190 第 5 点）要的数据：index.ts 从 SessionService、PrWatcher、「需要你」和收件箱拿。 */
@@ -166,8 +167,6 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
         if (!resume && f.epicId !== null && f.brief?.trim() && f.briefSentAt === null) {
           return fail(M().ctlSendNotStarted(f.name, epicOf(f.epicId)?.name ?? String(f.epicId)));
         }
-        // 休眠着的总控已经算在里面了：叫醒它不多占名额。
-        if (!resume?.hibernatedAt && (svc.featureTerminalCount?.(f.id) ?? 0) >= MAX_RUNNING_PER_FEATURE) return fail(M().ctlFeatureLimit(MAX_RUNNING_PER_FEATURE));
         const openFeature = svc.openFeature.bind(svc);
         open = () => openFeature({ featureId: f.id, ...(resume && { sessionId: resume.id }) });
       } else {
@@ -185,14 +184,20 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
         return fail(message);
       };
       let r: OpenSessionResult;
+      let room: Awaited<ReturnType<typeof admitOrRefuse>> | null = null;
       try {
+        // 要新开一个终端：和 start_session 一样先按内存放行（工作流 W）。
+        room = await admitOrRefuse(d.admission, `send_message ${key}`);
+        if (!room.ok) return failed("no_memory", room.error);
         r = await open();
       } catch (err) {
+        if (room?.ok) room.release();
         d.log?.(`control: butler message: opening ${key} failed`, err);
         return failed("open_failed", (err as Error).message);
       } finally {
         opening.delete(key);
       }
+      if (!r.ok || r.alreadyOpen) room.release();
       if (!r.ok) return failed(r.reason, r.reason === "claude_missing" ? M().ctlClaudeMissing : M().ctlOpenFailed(r.reason));
       d.notify();
       // 查过没在跑、打开时却已经开着（和用户同时点开）：和在跑一样过 guard。

@@ -111,7 +111,10 @@ import { SessionCleanup, working } from "./sessions/session-cleanup";
 import { Hibernator } from "./sessions/hibernator";
 import { childrenWorking } from "./sessions/managed-by";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
+import { defaultReadDeps, readAvailableMemory } from "./sessions/available-memory";
+import { MemoryAdmission } from "./sessions/memory-admission";
 import { PtyManager } from "./sessions/pty-manager";
+import { execText } from "./util/exec";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
 import { judgeStuck } from "./sessions/stuck-judge";
@@ -120,7 +123,7 @@ import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } f
 import { buildNowView } from "./now/now-view";
 import {
   checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, llmConfig, memoryOn,
-  memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, SettingError, trackerTools,
+  memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, sessionAdmission, SettingError, trackerTools,
 } from "./settings/settings-values";
 import { watcherGuideLines } from "./procs/watcher-policy";
 import { createProcServices, type ProcServices } from "./procs/proc-services";
@@ -1849,6 +1852,17 @@ async function bootstrap(): Promise<void> {
       started: (key) => firstCommits.has(key) || sessions.listByTicket(key).length > 0,
     }, filter);
   };
+
+  // 开新 session 前按内存放行（工作流 W）：取代以前每 ticket、每 feature、每 epic 写死的上限。
+  // 实测的每个 session 占用（工作流 M 的采样）合进来以后接 measuredSessionsKb；现在用设置里的预估值。
+  const admission = new MemoryAdmission({
+    read: () => readAvailableMemory(defaultReadDeps((file, args) => execText(file, args, { timeoutMs: 2_000 }))),
+    settings: () => sessionAdmission(settings),
+    running: () => pty.openIds().length,
+    now: () => Date.now(),
+    log: logger,
+  });
+
   // 总控 session 开子 session 的请求（设计文档 2026-10-23 第二步）。
   const controlInbox = new ControlInbox({
     requestsDir: paths.controlRequests,
@@ -1898,6 +1912,7 @@ async function bootstrap(): Promise<void> {
       memoryEnabled: () => memoryOn(settings),
       ticketPattern: () => settings.get("ticketPattern"),
       sessionModel: (m) => routing.sessionModel(m),
+      admission,
       log: logger,
     }),
     log: logger,

@@ -46,6 +46,12 @@ export const SETTING_DEFAULTS = {
    * 「清理闲置」按钮不看它。
    */
   idleCloseMinutes: "180",
+  /** 总控开新 session 前按内存放行（工作流 W）：开完以后至少还要剩这么多 MB 可用内存。 */
+  sessionMemoryReserveMb: "2048",
+  /** 没有实测时，一个新 session（Claude 加它的 MCP server 和子进程）预计占多少 MB。 */
+  sessionMemoryEstimateMb: "1024",
+  /** 同时开着的终端最多几个，只当保险；0 = 不限（默认，只看内存）。 */
+  sessionMaxRunning: "0",
   /** 每天几点让 Butler 总控巡检一次（BTL-190 第 5 点），HH:MM；空 = 关（默认）。 */
   butlerPatrolTime: "",
   /** 界面和提示词的语言：auto | zh | en（设计文档 2026-10-26）。迁移 7 给老用户写 zh。 */

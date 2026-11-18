@@ -69,6 +69,18 @@ Before saving, Butler rejects a pattern that:
 
 Butler also checks the pattern and the branch template together. Changing either one is refused if a sample id that the pattern accepts (for example `-1`, `#1` or `..-1`) would produce an invalid branch name.
 
+## Parallel sessions
+
+How many sessions can run at once depends on this computer's memory, not on a fixed number. Before Butler opens a new terminal for `start_session`, `start_feature`, or a message from the Butler coordinator to a closed coordinator, it takes the memory available now, subtracts what a new session is expected to use, and opens it only if at least the reserve below is left. Sessions it opened in the last two minutes have not grown yet, so each of them is subtracted at the expected size too. While macOS reports memory pressure as critical, nothing new opens. When a session is refused, the coordinator is told how much is available, how much another one needs and how much stays free; the result of `start_session`, `start_feature` and `list_sessions` adds a line saying how many more can start now. If memory cannot be read, Butler opens the session anyway (only the optional cap applies) and logs it.
+
+Available memory on macOS is worked out from `vm_stat` the way Activity Monitor does: total minus wired, compressed and anonymous (minus purgeable) memory, so file cache counts as available. `os.freemem()` is not used there, because it counts only free pages and is often a few GB on a machine with tens of GB to spare. If `vm_stat` fails, Butler uses the free percentage from `memory_pressure -Q`, then `os.freemem()`. On Windows `os.freemem()` is the available physical memory (free plus standby), and on Linux it is `MemAvailable`, so it is used as is.
+
+| Setting | Key | Default | Accepted values and notes |
+|---------|-----|---------|---------------------------|
+| Memory to keep free after opening a session (MB) | `sessionMemoryReserveMb` | `2048` | A whole number of MB from `0` to `1048576`. A session opens only if available memory minus the expected size of a new session is at least this much. |
+| Memory a new session is expected to use (MB) | `sessionMemoryEstimateMb` | `1024` | A whole number of MB from `64` to `1048576`: Claude plus its MCP servers and child processes. Butler uses this number for now; once per-session memory measurement is connected, the measured average of the open sessions will be used when there is one. |
+| Most terminals open at once (0 = no limit) | `sessionMaxRunning` | `0` (no limit) | A whole number from `0` to `999`. Off by default and only a safety net: when set, no new terminal opens while Butler already has this many open, however much memory is free. |
+
 ## Memory (StateCore)
 
 | Setting | Key | Default | Accepted values and notes |

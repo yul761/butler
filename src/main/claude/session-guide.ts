@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { MAX_RUNNING_FEATURES_PER_EPIC } from "../../shared/control";
 import type { Lang } from "../../shared/i18n";
 import type { SessionLesson } from "../../shared/lessons";
 
@@ -54,9 +53,9 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       ? null
       : lang === "zh"
         ? "规划定下来、用户同意开工后，用 start_feature 打开 feature 的总控，它会收到规划并直接建 ticket、开子 session；建 feature 时带 start: true 等于建完马上 start_feature。" +
-          `用户还没同意开工时不要调用。一个 epic 同时最多 ${MAX_RUNNING_FEATURES_PER_EPIC} 个 feature 的总控在跑，按规划的先后顺序开；总控已经在跑时不会再开一个，要补充说明就带上 instructions。`
+          "用户还没同意开工时不要调用。按规划的先后顺序开；能同时开几个只看这台电脑的内存，内存不够时 start_feature 会说还剩多少、要多少，等前面的做完再开。总控已经在跑时不会再开一个，要补充说明就带上 instructions。"
         : "Once the plan is settled and the user agrees to start, open a feature's coordinator with start_feature: it gets the plan and goes on to create tickets and start child sessions. Passing start: true to create_feature is the same as calling start_feature right after creating. " +
-          `Do not call it before the user agrees to start. At most ${MAX_RUNNING_FEATURES_PER_EPIC} feature coordinators of an epic run at once, so open them in the order the plan sets; a coordinator that is already running is not opened again, and you can pass instructions to add to what it is doing.`,
+          "Do not call it before the user agrees to start. Open them in the order the plan sets; how many run at once depends only on this computer's memory, and when memory runs short start_feature says how much is left and how much is needed, so wait for earlier ones to finish. A coordinator that is already running is not opened again, and you can pass instructions to add to what it is doing.",
   // Butler 总控（BTL-190 第 5 点）：看全部，不建不删；跨 epic 协调用 send_message。
   (lang, kind) =>
     kind !== "butler"

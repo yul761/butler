@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { join } from "node:path";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
 import {
-  BRIEF_LIMIT, CONTEXT_LIMIT, CONTROL_VERSION, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, MAX_RUNNING_FEATURES_PER_EPIC, MAX_RUNNING_PER_FEATURE, OPTION_LIMIT, OPTIONS_MAX,
-  MESSAGE_LIMIT, QUESTION_LIMIT, REASON_LIMIT, REPORT_KINDS, REPORT_LIMIT, START_INSTRUCTIONS_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult, type ReportKind,
+  BRIEF_LIMIT, CONTEXT_LIMIT, CONTROL_VERSION, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, OPTION_LIMIT, OPTIONS_MAX,
+  MESSAGE_LIMIT, QUESTION_LIMIT, REASON_LIMIT, REPORT_KINDS, REPORT_LIMIT, START_INSTRUCTIONS_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult, type ReportKind, type SessionCapacity,
 } from "../src/shared/control";
 import type { Lang } from "../src/shared/i18n";
 import { isModelName, isTier } from "../src/shared/model-routing";
@@ -205,7 +205,7 @@ export const TOOLS = [
     name: "start_session",
     description:
       "在这个 ticket 的某个仓库里新开一个 Claude Code session，把 task 当作第一条消息发给它。新 session 会出现在 Butler 的同一个 ticket 下面，" +
-      "用户可以看到、接手，权限确认仍由用户处理。各个 session 共享这个 ticket 的记忆：要交代的背景和约定先写进记忆。task 里只写要做什么，背景、接口约定写进记忆，子 session 会自己读。返回新 session 的 id。",
+      "用户可以看到、接手，权限确认仍由用户处理。各个 session 共享这个 ticket 的记忆：要交代的背景和约定先写进记忆。task 里只写要做什么，背景、接口约定写进记忆，子 session 会自己读。返回新 session 的 id。能同时开几个只看这台电脑的内存：不够时返回错误，写明现在可用多少、再开一个要多少；结果和 list_sessions 都附一行「现在还能再开几个」。",
     inputSchema: {
       type: "object",
       properties: {
@@ -273,7 +273,7 @@ export const FEATURE_TOOLS = [
     description:
       "为这个 feature 下的某个 ticket 新开一个 Claude Code session，在那个 ticket 的仓库（worktree）里工作，把 task 当作第一条消息发给它。" +
       "新 session 出现在 Butler 里那个 ticket 下面，用户可以看到、接手，权限确认仍由用户处理。" +
-      "前后端之间的接口约定、共同的背景先写进 feature 记忆（butler-feature），每个 ticket 的 session 都能读到。task 里只写要做什么，背景、接口约定写进记忆，子 session 会自己读。返回新 session 的 id。",
+      "前后端之间的接口约定、共同的背景先写进 feature 记忆（butler-feature），每个 ticket 的 session 都能读到。task 里只写要做什么，背景、接口约定写进记忆，子 session 会自己读。返回新 session 的 id。能同时开几个只看这台电脑的内存：不够时返回错误，写明现在可用多少、再开一个要多少；结果和 list_sessions 都附一行「现在还能再开几个」。",
     inputSchema: {
       type: "object",
       properties: {
@@ -317,7 +317,7 @@ export const TOOLS_EN = [
     ...TOOLS[1],
     description:
       "Open a new Claude Code session in one of this ticket's repos and send it task as its first message. The new session appears under the same ticket in Butler, " +
-      "where the user can watch it and take over; the user still answers its permission prompts. All sessions share this ticket's memory: write the background and agreements to memory first. Put only what to do in task; background and interface agreements go in memory, and the child session reads them itself. Returns the new session's id.",
+      "where the user can watch it and take over; the user still answers its permission prompts. All sessions share this ticket's memory: write the background and agreements to memory first. Put only what to do in task; background and interface agreements go in memory, and the child session reads them itself. Returns the new session's id. How many can run at once depends only on this computer's memory: when it runs short you get an error saying how much is available and how much another one needs; the result and list_sessions both add a line saying how many more you can start now.",
     inputSchema: {
       ...TOOLS[1].inputSchema,
       properties: {
@@ -375,7 +375,7 @@ export const FEATURE_TOOLS_EN = [
     description:
       "Open a new Claude Code session for one of this feature's tickets, working in that ticket's repo (worktree), and send it task as its first message. " +
       "The new session appears under that ticket in Butler, where the user can watch it and take over; the user still answers its permission prompts. " +
-      "Write the API contract between frontend and backend and any shared background to the feature memory (butler-feature) first; every ticket's sessions can read it. Put only what to do in task; background and interface agreements go in memory, and the child session reads them itself. Returns the new session's id.",
+      "Write the API contract between frontend and backend and any shared background to the feature memory (butler-feature) first; every ticket's sessions can read it. Put only what to do in task; background and interface agreements go in memory, and the child session reads them itself. Returns the new session's id. How many can run at once depends only on this computer's memory: when it runs short you get an error saying how much is available and how much another one needs; the result and list_sessions both add a line saying how many more you can start now.",
     inputSchema: {
       ...FEATURE_TOOLS[3].inputSchema,
       properties: {
@@ -444,7 +444,7 @@ export const EPIC_TOOLS = [
     description:
       "打开这个 epic 下一个 feature 的总控，让它按规划开工：第一条消息是它的 brief、epic 的整体规划和其他 feature 的情况，并告诉它不用等用户确认，直接建 ticket、开子 session。" +
       "只在用户已经同意开工后调用。feature 用 list_features 里的名字或 id。" +
-      `一个 epic 同时最多 ${MAX_RUNNING_FEATURES_PER_EPIC} 个 feature 的总控在运行，到上限时返回错误；每个 feature 最多 ${MAX_RUNNING_PER_FEATURE} 个终端照旧。` +
+      "能同时开几个只看这台电脑的内存：内存不够时返回错误，写明现在可用多少、再开一个要多少。" +
       "总控已经在运行时不会再开一个：没给 instructions 就什么都不发，给了就把 instructions 发给它（它正在干活时返回错误，稍后再试）。" +
       "feature 没有 brief 时必须给 instructions。之后它做完或卡住时的汇报会自动送到你这里，不用盯着它。返回总控的 session id 和 started（opened、resumed、sent、already_running 或 starting）。",
     inputSchema: {
@@ -517,7 +517,7 @@ export const EPIC_TOOLS_EN = [
     description:
       "Open the coordinator of a feature in this epic and have it start work on the plan: its first message is the feature's brief, the epic's overall plan and how the other features stand, and tells it to create tickets and start child sessions without waiting for the user to confirm. " +
       "Only call it once the user has agreed to start. feature is a name or id from list_features. " +
-      `At most ${MAX_RUNNING_FEATURES_PER_EPIC} feature coordinators of an epic run at once; past that it returns an error. Each feature still has at most ${MAX_RUNNING_PER_FEATURE} terminals. ` +
+      "How many run at once depends only on this computer's memory: when it runs short you get an error saying how much is available and how much another one needs. " +
       "If the coordinator is already running, no second one is opened: without instructions nothing is sent; with instructions they are sent to it (if it is busy you get an error; try again later). " +
       "instructions are required when the feature has no brief. Its reports reach you automatically when it finishes or gets blocked, so there is no need to watch it. Returns the coordinator's session id and started (opened, resumed, sent, already_running or starting).",
     inputSchema: {
@@ -790,6 +790,9 @@ export const BUTLER_TOOLS_EN = [
   },
 ] as const;
 
+/** MB 写成「3.5 GB」（不到 1 GB 写 MB）。 */
+const mbText = (mb: number): string => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
+
 const TEXT = {
   zh: {
     noReplyFeature: "Butler 没有及时回应（可能没在运行，或者还在建工作区）。feature 也可能已经建好：重试之前先用 list_features 看一下。",
@@ -815,6 +818,13 @@ const TEXT = {
     needQuestion: `ask_user 需要字符串参数 question（不能为空，最多 ${QUESTION_LIMIT} 字符）；options 最多 ${OPTIONS_MAX} 个非空字符串、每个最多 ${OPTION_LIMIT} 字符；context 最多 ${CONTEXT_LIMIT} 字符`,
     needReport: `report 需要字符串参数 text（不能为空，最多 ${REPORT_LIMIT} 字符）；kind 只能是 progress、done 或 blocked`,
     noTool: (t: string) => `没有这个工具：${t}`,
+    capacity: (c: SessionCapacity) =>
+      c.canStart === null
+        ? "现在还能再开的 session：读不到内存，不限。"
+        : c.availableMb === null
+          ? `现在还能再开 ${c.canStart} 个 session（读不到内存，只按同时开着最多 ${c.maxRunning} 个的上限算）。`
+          : `现在还能再开 ${c.canStart} 个 session（按内存算${c.maxRunning !== null ? `，以及同时开着最多 ${c.maxRunning} 个的上限` : ""}）：` +
+            `可用 ${mbText(c.availableMb)}，每个按 ${mbText(c.sessionMb)} 算${c.estimate === "measured" ? "（实测）" : ""}，留 ${mbText(c.reserveMb)} 给系统。`,
     needMessage: `send_message 需要字符串参数 text（不能为空，最多 ${MESSAGE_LIMIT} 字符），以及 session、feature、epic 三者之一`,
     badTicketFilter: "list_tickets 的 feature、epic 必须是非空的名字或 id",
     badProgressFilter: "progress_overview 的 feature、epic 必须是非空的名字或 id",
@@ -844,6 +854,13 @@ const TEXT = {
     needQuestion: `ask_user needs a string argument, question (not empty, at most ${QUESTION_LIMIT} characters); options is at most ${OPTIONS_MAX} non-empty strings of at most ${OPTION_LIMIT} characters; context is at most ${CONTEXT_LIMIT} characters`,
     needReport: `report needs a string argument, text (not empty, at most ${REPORT_LIMIT} characters); kind must be progress, done or blocked`,
     noTool: (t: string) => `No such tool: ${t}`,
+    capacity: (c: SessionCapacity) =>
+      c.canStart === null
+        ? "Sessions you can still start: memory could not be read, no limit."
+        : c.availableMb === null
+          ? `You can start ${c.canStart} more session${c.canStart === 1 ? "" : "s"} now (memory could not be read, so only the cap of ${c.maxRunning} open at once counts).`
+          : `You can start ${c.canStart} more session${c.canStart === 1 ? "" : "s"} now (by memory${c.maxRunning !== null ? `, and the cap of ${c.maxRunning} open at once` : ""}): ` +
+            `${mbText(c.availableMb)} available, ${mbText(c.sessionMb)} per session${c.estimate === "measured" ? " (measured)" : ""}, ${mbText(c.reserveMb)} kept free.`,
     needMessage: `send_message needs a string text (not empty, at most ${MESSAGE_LIMIT} characters) and exactly one of session, feature and epic`,
     badTicketFilter: "feature and epic for list_tickets must be a non-empty name or id",
     badProgressFilter: "feature and epic for progress_overview must be a non-empty name or id",
@@ -947,7 +964,10 @@ export class SessionsServer {
       );
     }
     if (!result.ok) return toolError(result.error);
-    return { content: [{ type: "text", text: JSON.stringify(result.value, null, 2) }] };
+    const text = [{ type: "text" as const, text: JSON.stringify(result.value, null, 2) }];
+    // 还能再开几个（工作流 W）：start_session、start_feature、list_sessions 的结果带着它。
+    if (result.capacity) text.push({ type: "text", text: this.text.capacity(result.capacity) });
+    return { content: text };
   }
 
   private ticketRequest(ticketKey: string, tool: unknown, args: Record<string, unknown>): ControlRequest | ToolError {

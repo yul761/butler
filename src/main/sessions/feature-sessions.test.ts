@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:f
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
-import { MAX_RUNNING_PER_FEATURE } from "../../shared/control";
 import { EpicHistoryRepo } from "../db/epic-history-repo";
 import { EpicsRepo } from "../db/epics-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
@@ -843,9 +842,10 @@ describe("fix sessions (design 2026-10-31)", () => {
 
   it("is not limited by the running sessions of the feature", async () => {
     const { service, feature, req } = await stuckSetup();
-    while (service.featureTerminalCount(feature.id) < MAX_RUNNING_PER_FEATURE) await service.openFeature({ featureId: feature.id });
+    // 8 是以前每个 feature 的终端上限（工作流 W 去掉了，修复 session 本来就不受它限制）。
+    while (service.featureTerminalCount(feature.id) < 8) await service.openFeature({ featureId: feature.id });
     expect(await service.openFix(req)).toMatchObject({ ok: true, alreadyOpen: false });
-    expect(service.featureTerminalCount(feature.id)).toBe(MAX_RUNNING_PER_FEATURE + 1);
+    expect(service.featureTerminalCount(feature.id)).toBe(9);
   });
 
   it("returns the running fix session on a second click, without a second session or task", async () => {

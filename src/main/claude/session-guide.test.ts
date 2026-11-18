@@ -56,7 +56,7 @@ describe("session guide", () => {
     for (const lang of ["zh", "en"] as const) {
       const epic = sessionGuide(lang, "epic");
       expect(epic).toContain("start_feature");
-      expect(epic).toContain("4");
+      expect(epic).toMatch(/内存|memory/);
       expect(sessionGuide(lang, "coordinator")).not.toContain("start_feature");
       expect(sessionGuide(lang, "ticket")).not.toContain("start_feature");
     }

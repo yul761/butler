@@ -8,6 +8,12 @@ import { LanguagePicker } from "./LanguagePicker";
 
 const TEXT_FIELDS = ["claudePath", "branchTemplate", "ticketPattern"] as const;
 
+const SESSION_FIELDS = [
+  { k: "sessionMemoryReserveMb", help: "sessionMemoryReserveMbHelp", step: 256, min: 0 },
+  { k: "sessionMemoryEstimateMb", help: "sessionMemoryEstimateMbHelp", step: 128, min: 64 },
+  { k: "sessionMaxRunning", help: "sessionMaxRunningHelp", step: 1, min: 0 },
+] as const;
+
 export function GeneralSettings({ report, onHealth, onRerunWizard }: { report: HealthReport; onHealth: (r: HealthReport) => void; onRerunWizard: () => void }) {
   const [values, setValues] = useState<EditableSettings | null>(null);
   const [draft, setDraft] = useState<Partial<EditableSettings>>({});
@@ -139,6 +145,30 @@ export function GeneralSettings({ report, onHealth, onRerunWizard }: { report: H
         {S.autostart}
       </label>
       {autostart && !autostart.supported && <p className="muted">{S.autostartUnsupported}</p>}
+
+      {/* 按内存决定能同时开几个 session（工作流 W）。 */}
+      <h2>{S.sessionSettings}</h2>
+      {SESSION_FIELDS.map(({ k, help, step, min }) => (
+        <div key={k} className="field">
+          {S[k]}
+          <input
+            className="mono"
+            type="number"
+            min={min}
+            step={step}
+            value={value(k)}
+            onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))}
+            onBlur={() => {
+              if (draft[k] !== undefined && draft[k] !== current[k]) void save(k);
+              else clearDraft(k);
+            }}
+          />
+          <p className="muted">{S[help]}</p>
+          <div className="actions">
+            <button onClick={() => void reset(k)}>{S.resetDefault}</button>
+          </div>
+        </div>
+      ))}
 
       <h2>{S.memorySettings}</h2>
       <label className="inline">

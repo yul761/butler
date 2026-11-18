@@ -1,7 +1,9 @@
 import { mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_RUNNING_FEATURES_PER_EPIC, MAX_RUNNING_PER_FEATURE, SUMMARY_LIMIT, type ControlResult, type EpicControlRequest } from "../../shared/control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, SUMMARY_LIMIT, type ControlResult, type EpicControlRequest } from "../../shared/control";
+import { MemoryAdmission } from "../sessions/memory-admission";
+import type { ControlHandlerDeps } from "./control-handler";
 import type { SessionActivity } from "../../shared/activity";
 import type { EpicFeatureRow } from "../../shared/types";
 import type { EpicHistoryEntry } from "../db/epic-history-repo";
@@ -16,7 +18,20 @@ import { makeRepo, memDb, tempDir } from "../test-utils";
 import { FeatureService } from "../tickets/feature-service";
 import { controlHandler } from "./control-handler";
 
-async function setup() {
+/** 内存准入（工作流 W）：可用内存可以改，设置是保留 2048 MB、每个 1024 MB。 */
+function fakeAdmission(o: { availableMb: number; now?: () => number }) {
+  const mem = { availableMb: o.availableMb };
+  const admission = new MemoryAdmission({
+    read: async () => ({ totalKb: 64 * 1024 * 1024, availableKb: mem.availableMb * 1024, source: "vm_stat", pressure: "normal" }),
+    settings: () => ({ reserveMb: 2048, sessionMb: 1024, maxRunning: 0 }),
+    running: () => 0,
+    now: o.now ?? (() => 0),
+    log: () => undefined,
+  });
+  return { admission, mem };
+}
+
+async function setup(o: { admission?: ControlHandlerDeps["admission"] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -59,6 +74,7 @@ async function setup() {
     tickets, sessions, features, epics, featureService,
     refresher: { precheck: () => null, refresh: async (id) => (refreshed.push(id), "done" as const) },
     ticketService: undefined as never,
+    admission: o.admission,
     sessionService: {
       isRunning: (id: string) => open.has(id), termIdOf: (id: string) => (open.has(id) ? id : null),
       openFeature: async (req: { featureId: number; sessionId?: string }, extra: { start?: { instructions?: string | null } } = {}) => {
@@ -335,8 +351,8 @@ describe("sessions of an epic's features (task 11)", () => {
 
 describe("start_feature from an epic session (BTL-190 4)", () => {
   /** epic「shop」下有 checkout、cart（有 brief）和 bare（没有 brief），已归档的 old；epic 外有 lone。 */
-  async function withFeatures() {
-    const t = await setup();
+  async function withFeatures(o: Parameters<typeof setup>[0] = {}) {
+    const t = await setup(o);
     const make = (name: string, o: { brief?: string; epicId?: number | null } = {}) =>
       t.featureService.create({ name, repoPaths: [t.elsewhere], epicId: o.epicId === undefined ? t.epic.id : o.epicId ?? undefined, ...(o.brief !== undefined && { brief: o.brief }) });
     const checkout = await make("checkout", { brief: "做结账" });
@@ -401,40 +417,38 @@ describe("start_feature from an epic session (BTL-190 4)", () => {
     expect(opened).toEqual([{ featureId: bare.id, start: { instructions: "先读代码，规划好再建 ticket" } }]);
   });
 
-  it(`runs at most ${MAX_RUNNING_FEATURES_PER_EPIC} feature coordinators per epic`, async () => {
-    const { start, make, running, checkout, cart, opened, open } = await withFeatures();
+  it("has no per-epic cap on feature coordinators any more: a fifth one opens (workstream W)", async () => {
+    const { start, make, running, checkout, cart, opened, terminalsOf } = await withFeatures();
     const more = [await make("a", { brief: "b" }), await make("b", { brief: "b" }), await make("c", { brief: "b" })];
     running(checkout.id, "fc");
     running(more[0].id, "ac");
     running(more[1].id, "bc");
-    // 已经开着的那个不算新开：照样通过。
-    expect(await start("checkout")).toMatchObject({ ok: true, value: { started: "already_running" } });
-    expect((await start("c")).ok).toBe(true);
+    running(more[2].id, "cc");
+    // 以前每个 feature 最多 8 个终端：也不再看。
+    terminalsOf.set(cart.id, 8);
+    expect(await start("cart")).toMatchObject({ ok: true, value: { feature: "cart", started: "opened" } });
+    expect(opened.map((o) => o.featureId)).toEqual([cart.id]);
+  });
+
+  it("refuses start_feature when memory is short, says how much is left, and opens nothing; an already running one still takes instructions", async () => {
+    const { admission, mem } = fakeAdmission({ availableMb: 2500 });
+    const { start, running, checkout, opened } = await withFeatures({ admission });
     const r = await start("cart");
     expect(r.ok).toBe(false);
-    expect(err(r)).toContain(String(MAX_RUNNING_FEATURES_PER_EPIC));
-    expect(err(r)).toContain("checkout");
-    expect(opened.map((o) => o.featureId)).toEqual([more[2].id]);
-    // 关掉一个总控就又能开。
-    open.delete("fc");
-    expect(await start("cart")).toMatchObject({ ok: true, value: { feature: "cart", started: "opened" } });
-    expect(opened.map((o) => o.featureId)).toEqual([more[2].id, cart.id]);
-  });
-
-  it(`refuses when the feature already has ${MAX_RUNNING_PER_FEATURE} terminals open`, async () => {
-    const { start, checkout, terminalsOf, opened } = await withFeatures();
-    terminalsOf.set(checkout.id, MAX_RUNNING_PER_FEATURE);
-    const r = await start("checkout");
-    expect(r.ok).toBe(false);
-    expect(err(r)).toContain(String(MAX_RUNNING_PER_FEATURE));
+    expect(err(r)).toContain("内存不够");
+    expect(err(r)).toContain("2.4 GB");
     expect(opened).toEqual([]);
+    // 已经在跑的不算新开，不问内存。
+    running(checkout.id, "fc");
+    expect(await start("checkout")).toMatchObject({ ok: true, value: { started: "already_running" } });
+    mem.availableMb = 10_000;
+    expect(await start("cart")).toMatchObject({ ok: true, value: { started: "opened" }, capacity: { canStart: 6 } });
   });
 
-  it("wakes a hibernated coordinator even at the limit: it is already counted (WS-M B)", async () => {
-    const { start, checkout, terminalsOf, opened, sessions } = await withFeatures();
+  it("start_feature resumes a hibernated coordinator (WS-M B)", async () => {
+    const { start, checkout, opened, sessions } = await withFeatures();
     sessions.insertIfAbsent({ id: "fc", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, featureId: checkout.id, coordinator: true });
     sessions.setHibernated("fc", 5, "idle", null);
-    terminalsOf.set(checkout.id, MAX_RUNNING_PER_FEATURE);
     expect(await start("checkout")).toMatchObject({ ok: true });
     expect(opened).toEqual([expect.objectContaining({ featureId: checkout.id, sessionId: "fc" })]);
   });

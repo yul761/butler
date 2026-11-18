@@ -2,7 +2,6 @@ import { mkdirSync, renameSync } from "node:fs";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
-import { MAX_RUNNING_PER_FEATURE } from "../../shared/control";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
 import { SettingsRepo } from "../db/settings-repo";
@@ -127,17 +126,15 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(await handle({ ...base, featureId: 999, op: "list_tickets" })).toMatchObject({ ok: false });
   });
 
-  it("stops at the feature's terminal limit", async () => {
+  it("has no per-feature cap any more (workstream W: only memory decides)", async () => {
     const { handle, base, sessionService, feature } = await setup();
     await sessionService.openFeature({ featureId: feature.id });
-    // 单个 ticket 最多 6 个：分到两个 ticket 上，先碰到的是 feature 的上限。
-    for (let i = 1; i < MAX_RUNNING_PER_FEATURE; i++) {
-      const target = i <= 4 ? { ticket: "DMS-1" } : { ticket: "DMS-2", repo: "backend" };
+    // 以前每个 feature 最多 8 个终端（总控也算）：现在没接内存准入时一直放行。
+    for (let i = 1; i <= 9; i++) {
+      const target = i % 2 ? { ticket: "DMS-1" } : { ticket: "DMS-2", repo: "backend" };
       expect(await handle({ ...base, op: "start_session", ...target, task: `t${i}` }), String(i)).toMatchObject({ ok: true });
     }
-    expect(sessionService.featureTerminalCount(feature.id)).toBe(MAX_RUNNING_PER_FEATURE);
-    const r = await handle({ ...base, op: "start_session", ticket: "DMS-1", task: "one more" });
-    expect(!r.ok && r.error).toContain(`${MAX_RUNNING_PER_FEATURE} 个终端`);
+    expect(sessionService.featureTerminalCount(feature.id)).toBe(10);
   });
 
   it("records the spawner only when it is this feature's coordinator", async () => {
