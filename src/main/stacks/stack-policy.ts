@@ -50,6 +50,11 @@ export class StackPolicyService {
     return (this.d.db.prepare(`SELECT id, overrides FROM stack_policies WHERE ${w}`).get(...args) as { id: number; overrides: string } | undefined) ?? null;
   }
 
+  /** 这一层在 stack_policies 里的行 id（导入的批次记录用）。 */
+  rowId(ref: ScopeRef): number | null {
+    return this.row(ref)?.id ?? null;
+  }
+
   overrides(ref: ScopeRef): StackPolicyOverrides {
     const r = this.row(ref);
     return r ? sanitizeStackOverrides(parse(r.overrides)) : {};
@@ -67,10 +72,10 @@ export class StackPolicyService {
   }
 
   /** 把一层整个换成 overrides（校验过，不合法抛 StackPolicyError）。空的一层删掉。 */
-  setLayer(ref: ScopeRef, raw: unknown): void {
+  setLayer(ref: ScopeRef, raw: unknown, at?: number): void {
     const overrides = parseStackOverrides(raw);
     const json = JSON.stringify(Object.fromEntries(Object.entries(overrides).sort(([a], [b]) => (a < b ? -1 : 1))));
-    const now = this.d.now();
+    const now = at ?? this.d.now();
     const ex = this.row(ref);
     if (Object.keys(overrides).length === 0) {
       if (ex) this.d.db.prepare(`DELETE FROM stack_policies WHERE id = ?`).run(ex.id);

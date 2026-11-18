@@ -196,7 +196,7 @@ import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
 import { LessonBatchService } from "./lessons/lesson-batches";
 import { BatchRecorder } from "./batches/batch-recorder";
-import { baselineAdapter, baselineRuleAdapter, checkAdapter, lessonAdapter, lessonPrincipleAdapter, policyAdapter, principleAdapter, productAdapter } from "./batches/table-adapter";
+import { baselineAdapter, baselineRuleAdapter, checkAdapter, lessonAdapter, lessonPrincipleAdapter, policyAdapter, principleAdapter, productAdapter, stackPolicyAdapter } from "./batches/table-adapter";
 import { BaselineService } from "./baselines/baselines-service";
 import { LegacyScanService } from "./baselines/legacy-service";
 import { baselineWorkerRunner } from "./baselines/worker-host";
@@ -716,7 +716,7 @@ async function bootstrap(): Promise<void> {
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
   // 规矩、产品和准入策略的改动都记成可撤销的批次（契约 4.4）。
-  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db), lessonPrincipleAdapter(db), baselineRuleAdapter(db), baselineAdapter(db)]);
+  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db), lessonPrincipleAdapter(db), baselineRuleAdapter(db), baselineAdapter(db), stackPolicyAdapter(db)]);
   // 确定性检查（契约 4.5）：库里是三层的定义，hook 只读 Butler 写出来的快照（<BUTLER_HOME>/checks/snapshot.json）。
   // 检查、产品、设置、语言一变就重写快照（合并一小段时间里的改动）；内容没变不写。
   const checksService: ChecksService = new ChecksService({

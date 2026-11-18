@@ -47,6 +47,13 @@ export const METRIC_KINDS: Readonly<Record<string, MetricKindGroup>> = {
   stuck_fix_opened: "other",
   pr_risk_high: "other",
   pr_ready: "other",
+  // 工作流 K：栈式 PR。
+  "stack.rebase": "other",
+  "stack.autosquash": "other",
+  "stack.conflict": "other",
+  "stack.rollback": "other",
+  "stack.deferred": "other",
+  "stack.pr_open": "other",
 };
 
 /** 算人介入的 kind。 */

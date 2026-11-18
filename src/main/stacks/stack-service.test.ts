@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExternalActionKind } from "../../shared/external";
 import type { StackRunMode } from "../../shared/stacks";
+import { JOB_STACKS_DAILY, JobsRepo } from "../db/jobs-repo";
 import { StacksRepo } from "../db/stacks-repo";
 import type { ExternalDetail } from "../external/actions";
 import { makeRepo, memDb, tempDir } from "../test-utils";
@@ -502,6 +503,25 @@ describe("StackService restore", () => {
     w.advance(31 * 24 * 3600_000);
     await w.svc.daily();
     expect(g(w.repo, "for-each-ref", "refs/butler/stack-backup/")).toBe("");
+  });
+
+  it("runs the daily job once a day and retries a failure after 30 minutes", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const jobs = new JobsRepo(w.db);
+    w.deps.jobs = jobs;
+    const daily = vi.spyOn(w.svc, "daily");
+    expect(await w.svc.dailyJob()).toBe(true);
+    expect(await w.svc.dailyJob()).toBe(false);
+    expect(jobs.get(JOB_STACKS_DAILY).lastStatus).toBe("ok");
+    w.advance(24 * 3600_000);
+    daily.mockRejectedValueOnce(new Error("boom"));
+    expect(await w.svc.dailyJob()).toBe(true);
+    expect(jobs.get(JOB_STACKS_DAILY)).toMatchObject({ lastStatus: "failed", lastError: "boom" });
+    w.advance(10 * 60_000);
+    expect(await w.svc.dailyJob()).toBe(false);
+    w.advance(25 * 60_000);
+    expect(await w.svc.dailyJob()).toBe(true);
+    expect(daily).toHaveBeenCalledTimes(3);
   });
 });
 

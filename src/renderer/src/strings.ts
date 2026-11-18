@@ -1265,7 +1265,7 @@ const ZH = {
   ioSemanticFailed: "导入的规矩和本地规矩是否矛盾没有查完，有些冲突可能没显示出来。",
   ioStarterTarget: "导入到",
   ioStarterPick: "选择一个仓库或产品",
-  ioSection: { products: "产品", policies: "准入策略", lessons: "规矩", checks: "检查", models: "模型路由", baseline_rules: "标记文件表", baselines: "仓库现状" } as Record<string, string>,
+  ioSection: { products: "产品", policies: "准入策略", lessons: "规矩", checks: "检查", models: "模型路由", baseline_rules: "标记文件表", baselines: "仓库现状", stacks: "栈策略" } as Record<string, string>,
   previewStatus: { added: "新增", changed: "有改动", conflicting: "冲突", unchanged: "没变", removed: "本地有、文件里没有" } satisfies Record<PreviewStatus, string>,
   ioCount: (label: string, n: number) => `${label} ${n}`,
   ioShowUnchanged: (n: number) => `显示没变的 ${n} 条`,

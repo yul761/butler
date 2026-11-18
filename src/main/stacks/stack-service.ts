@@ -5,6 +5,7 @@ import type {
   StackActionResult, StackLayerMode, StackLayerView, StackNoticeInfo, StackPolicy, StackRunMode, StackRunView, StackTrigger,
   StackView, StacksFilter, StacksView,
 } from "../../shared/stacks";
+import { JOB_STACKS_DAILY, type JobsRepo } from "../db/jobs-repo";
 import type { LayerRow, NewLayer, RunDetail, RunRow, StackRow, StacksRepo } from "../db/stacks-repo";
 import type { AttemptResult, ExternalDetail } from "../external/actions";
 import { applyTips, deferText, deleteBackups, type ApplyLayer } from "./apply";
@@ -73,6 +74,8 @@ export interface StackServiceDeps {
   onChange?(): void;
   /** epic 名（总览标题用）。 */
   epicName?(id: number): string | null;
+  /** 每日任务的记录（jobs 表）。 */
+  jobs?: Pick<JobsRepo, "get" | "record">;
   /** 自动检测栈的仓库（Butler 管的仓库）。 */
   repos?(): string[];
   /** 测试用：强制逐层模式。 */
@@ -108,6 +111,7 @@ const CONFLICT_NOTICE_AFTER_MS = 30 * 60_000;
 const STUCK_AFTER_MS = 24 * 3600_000;
 export const BACKUP_KEEP_MS = 30 * 24 * 3600_000;
 const DAY_MS = 24 * 3600_000;
+const DAILY_RETRY_MS = 30 * 60_000;
 
 const dayOf = (t: number) => {
   const d = new Date(t);
@@ -877,6 +881,24 @@ export class StackService {
       return;
     }
     this.behindCache.set(s.id, await behind(s.repoPath, tip, trunk));
+  }
+
+  /** checkSchedule 每次调：今天已经跑过就什么都不做。 */
+  async dailyJob(): Promise<boolean> {
+    if (!this.d.jobs) return false;
+    const now = this.d.now();
+    const { lastRunAt, lastStatus } = this.d.jobs.get(JOB_STACKS_DAILY);
+    if (lastRunAt !== null && lastStatus === "ok" && dayOf(lastRunAt) === dayOf(now)) return false;
+    // 失败了 30 分钟后再试。
+    if (lastRunAt !== null && lastStatus === "failed" && now - lastRunAt < DAILY_RETRY_MS) return false;
+    try {
+      await this.daily();
+      this.d.jobs.record(JOB_STACKS_DAILY, now, "ok", null);
+    } catch (e) {
+      this.d.log("stacks: daily job failed", e);
+      this.d.jobs.record(JOB_STACKS_DAILY, now, "failed", e instanceof Error ? e.message : String(e));
+    }
+    return true;
   }
 
   /** 每日任务：删 30 天前的备份引用，清掉残留的临时 worktree。 */

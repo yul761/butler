@@ -1253,7 +1253,7 @@ export const EN: UiStrings = {
   ioSemanticFailed: "Checking imported lessons against local ones for contradictions did not finish; some conflicts may not be shown.",
   ioStarterTarget: "Import into",
   ioStarterPick: "Pick a repo or product",
-  ioSection: { products: "Products", policies: "Admission policy", lessons: "Lessons", checks: "Checks", models: "Model routing", baseline_rules: "Marker table", baselines: "Repo baselines" },
+  ioSection: { products: "Products", policies: "Admission policy", lessons: "Lessons", checks: "Checks", models: "Model routing", baseline_rules: "Marker table", baselines: "Repo baselines", stacks: "Stack policy" },
   previewStatus: { added: "New", changed: "Changed", conflicting: "Conflict", unchanged: "Unchanged", removed: "Only here, not in the file" },
   ioCount: (label: string, count: number) => `${label} ${count}`,
   ioShowUnchanged: (count: number) => `Show ${count} unchanged`,
