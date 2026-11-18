@@ -41,19 +41,15 @@ The commands run through `execText` with a 2 s timeout. The reading is behind `R
 
 **Why not M's free + inactive.** Workstream M shows system memory as free percentage on the Now page, which is fine for display. For admission, counting inactive pages as available overstates it: inactive anonymous pages have to be compressed or swapped out to be reused, and that is exactly the stall this check exists to avoid. The two numbers can differ on screen; the admission line in `list_sessions` states its own source.
 
-## 4. Using M's measurements (after #32 merges)
+## 4. Using M's measurements and hibernation
 
-`AdmissionDeps.measuredSessionsKb()` returns the whole-process-tree size of each open session. When it returns anything, the estimate is their **mean** (`estimate: "measured"`) instead of the setting. The mean is used rather than the max, so one session running a dev server does not make every new session look that big. It is also used rather than the median, so a few large sessions still pull the estimate up. Hookup in `index.ts` once `MemoryMonitor` is on main:
+`AdmissionDeps.measuredSessionsKb()` returns the whole-process-tree size of each open session. When it returns anything, the estimate is their **mean** (`estimate: "measured"`) instead of the setting. The mean is used rather than the max, so one session running a dev server does not make every new session look that big. It is also used rather than the median, so a few large sessions still pull the estimate up.
 
-```ts
-measuredSessionsKb: () => openButlerHeads().flatMap((h) => {
-  const m = memoryMonitor.memoryOf(h);
-  // A session younger than PENDING_MS has not grown yet: leave it out so it does not pull the estimate down.
-  return m && Date.now() - startedAt(h) >= PENDING_MS ? [m.totalKb] : [];
-}),
-```
+`index.ts` hooks it to workstream M's `procServices.monitor.memoryOf(head)` through `measuredOpenSessionsKb` (in `memory-admission.ts`). The function goes over the open terminals (`pty.openIds()` and their heads) and counts each head once. It leaves out terminals opened less than `PENDING_MS` ago, because they have not grown yet and would pull the mean down. It also leaves out heads with no reading: the monitor is off or has not sampled them yet. When nothing is left, the setting is used. With "Memory monitor" off, `memoryOf` returns null, so the setting is always used.
 
-Until then the setting is used, and nothing else changes.
+**What counts as running.** The admission reads real available memory, so only processes that exist are counted. A hibernated session (workstream M, B) has had its process tree ended. It holds no memory, is not in `pty.openIds()`, and counts neither toward `running` (the optional cap) nor toward the measured mean. The per-ticket, per-feature and per-epic counts that M had made count hibernated sessions are gone together with the fixed limits. `openTerminalCount` still counts hibernated sessions, but only for the merge gate.
+
+**Waking.** A wake (a message, CI result or user click for a hibernated session) is never refused for memory, because the delivery would be lost. `openHibernated` calls `admission.note()` once the terminal opens. The wake then counts as pending for `PENDING_MS`, so a `start_session` right after it does not see that memory as still free.
 
 ## 5. Why the per-epic limit goes too
 
@@ -63,7 +59,7 @@ The 4-coordinator limit per epic was there for the same reason as the others: to
 
 - `available-memory.test.ts`: the vm_stat formula against a real 48 GB sample, missing fields, the fallbacks, Windows and Linux use `os.freemem()` without running commands.
   It also covers the fixed e2e reading, the per-field detail, and the startup log line.
-- `memory-admission.test.ts`: admit, refuse on memory with the message's numbers, burst counting and the pending window, release, measured estimate, critical pressure, the cap on and off, read failure.
+- `memory-admission.test.ts`: admit, refuse on memory with the message's numbers, burst counting and the pending window, release, measured estimate, `measuredOpenSessionsKb` (young, unsampled and repeated heads left out; falls back to the setting), a wake counted as pending, critical pressure, the cap on and off, read failure.
 - Control layer: per-ticket, per-feature and per-epic caps are gone (more than the old numbers open), refusal with "not enough memory" opens no terminal, `capacity` on `start_session`, `start_feature` and `list_sessions`, an already running coordinator is not gated.
 - e2e: every sandbox sets `BUTLER_E2E_AVAILABLE_MB=65536` (`e2e/fixtures.ts`), so no spec depends on the CI machine's real memory. Only an unpackaged build reads the variable (`e2eFixedAvailableMb`). A packaged release ignores it even if it is set, and a unit test covers that. `features.spec.ts` "start_session is refused when memory is short" sets it to 1000. It checks that the refusal states what is available, what is needed and what must stay free, that no terminal opens, and that `list_sessions` says 0 more can start.
 

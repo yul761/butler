@@ -29,6 +29,30 @@ export interface AdmissionDeps {
 
 export type Capacity = SessionCapacity;
 
+/** 一个开着的终端：它的 head 和终端打开的时间。 */
+export interface OpenTerm {
+  head: string;
+  openedAt: number;
+}
+
+/**
+ * 给 AdmissionDeps.measuredSessionsKb 用（附录第 4 节）：开着的 session 每个整棵进程树的实测占用（KB，工作流 M 的 MemoryMonitor）。
+ * 终端开了不到 PENDING_MS 的不算：还没长大，会把平均拉低。监控关着、还没采到的没有读数，也不算。
+ * 同一个 head 只算一次。一个都没有时返回空数组，准入就用设置里的预估值。休眠的 session 没有终端，本来就不在里面。
+ */
+export function measuredOpenSessionsKb(terms: OpenTerm[], memoryOf: (head: string) => { totalKb: number } | null, now: number): number[] {
+  const seen = new Set<string>();
+  const out: number[] = [];
+  for (const t of terms) {
+    if (seen.has(t.head)) continue;
+    seen.add(t.head);
+    if (t.openedAt <= 0 || now - t.openedAt < PENDING_MS) continue;
+    const m = memoryOf(t.head);
+    if (m && Number.isFinite(m.totalKb) && m.totalKb > 0) out.push(m.totalKb);
+  }
+  return out;
+}
+
 export type Admission = { ok: true; capacity: Capacity; release: () => void } | { ok: false; reason: "memory" | "pressure" | "max_running"; capacity: Capacity };
 
 const mb = (kb: number) => Math.round(kb / 1024);
@@ -96,6 +120,17 @@ export class MemoryAdmission {
       reading,
       reserveAuto: s.reserveMb === null,
     };
+  }
+
+  /**
+   * 不问内存就开了一个终端（唤醒休眠的 session：要递的消息不能因为内存被拒）：照样记成刚开的，
+   * 之后 PENDING_MS 内按预估占用扣掉，紧接着的 start_session 不会以为这部分内存还空着。
+   */
+  note(what: string): void {
+    const now = this.d.now();
+    this.admitted = this.admitted.filter((a) => now - a.at < PENDING_MS);
+    this.admitted.push({ at: now });
+    this.d.log(`memory admission: ${what} opened without asking, counted as pending (${this.admitted.length} pending)`);
   }
 
   /** 要开一个新终端：放行就记下（之后 PENDING_MS 内按预估占用扣掉），不放行说明是哪一条。 */

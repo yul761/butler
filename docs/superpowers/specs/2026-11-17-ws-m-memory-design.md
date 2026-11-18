@@ -127,7 +127,7 @@ The session then behaves exactly like a closed 2.1.0 session: CI results aren't 
 | Butler patrol | `runningButler` | When the Butler session is hibernated, patrol's `open` resumes it (existing behaviour). |
 | User opens it | — | The renderer's existing resume (`open({ticketKey, sessionId})`). TerminalPane shows "已休眠" with a wake button, and wakes automatically when the user switches to a hibernated pane. |
 
-Task-count limits (`openTerminalCount`, `featureTerminalCount`, the coordinator's `MAX_RUNNING_*`) count hibernated sessions as running, so hibernating never lets a coordinator start more work than before.
+Task-count limits (`openTerminalCount`, `featureTerminalCount`, the coordinator's `MAX_RUNNING_*`) count hibernated sessions as running, so hibernating never lets a coordinator start more work than before. *(Superseded by workstream W: the fixed limits are gone and new sessions are admitted by available memory. A hibernated session holds no memory and is not counted; waking one is never refused but counts as just opened. See `2026-11-18-ws-w-memory-admission-design.md`, section 4. `openTerminalCount` still counts hibernated sessions for the merge gate.)*
 
 ## 4. C: memory pressure
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MemoryReading } from "./available-memory";
-import { autoReserveMb, MemoryAdmission, PENDING_MS, type AdmissionDeps, type AdmissionSettings } from "./memory-admission";
+import { autoReserveMb, measuredOpenSessionsKb, MemoryAdmission, PENDING_MS, type AdmissionDeps, type AdmissionSettings } from "./memory-admission";
 
 const MB = 1024;
 
@@ -150,5 +150,45 @@ describe("automatic reserve (setting left empty)", () => {
     expect((await setup({ totalMb: 8 * 1024, settings: { reserveMb: 0 } }).a.capacity()).reserveMb).toBe(0);
     // 读不到内存：按上限（反正只看硬上限）。
     expect((await setup({ readFails: true, settings: { reserveMb: null } }).a.capacity())).toMatchObject({ reserveMb: 2048, availableMb: null });
+  });
+});
+
+describe("measured per-session memory from workstream M (appendix section 4)", () => {
+  const t0 = 10_000_000;
+  const sizes: Record<string, number> = { old: 1800 * MB, older: 2200 * MB, young: 300 * MB };
+  const memoryOf = (head: string) => (head in sizes ? { totalKb: sizes[head] } : null);
+
+  it("uses open sessions that have had PENDING_MS to grow, once per head; skips young ones and ones without a reading", () => {
+    const terms = [
+      { head: "old", openedAt: t0 - PENDING_MS },
+      { head: "older", openedAt: t0 - 10 * PENDING_MS },
+      { head: "older", openedAt: t0 - 10 * PENDING_MS },
+      { head: "young", openedAt: t0 - 1_000 },
+      { head: "unsampled", openedAt: t0 - 10 * PENDING_MS },
+      { head: "gone", openedAt: 0 },
+    ];
+    expect(measuredOpenSessionsKb(terms, memoryOf, t0)).toEqual([1800 * MB, 2200 * MB]);
+    expect(measuredOpenSessionsKb([{ head: "young", openedAt: t0 - 1_000 }], memoryOf, t0)).toEqual([]);
+  });
+
+  it("admission takes the measured mean when there is one, and falls back to the setting when there is none", async () => {
+    let terms = [{ head: "old", openedAt: t0 - PENDING_MS }, { head: "older", openedAt: t0 - PENDING_MS }];
+    const s = setup({ availableMb: 8000 });
+    const a = new MemoryAdmission({ ...s.d, measuredSessionsKb: () => measuredOpenSessionsKb(terms, memoryOf, t0) });
+    // (1800 + 2200) / 2 = 2000；(8000 − 2048) / 2000 = 2.98 → 2 个
+    expect(await a.capacity()).toMatchObject({ sessionMb: 2000, estimate: "measured", canStart: 2 });
+    // 监控关着（memoryOf 返回 null）或者只有刚开的：退回设置里的 1024。
+    terms = [{ head: "young", openedAt: t0 - 1_000 }];
+    expect(await a.capacity()).toMatchObject({ sessionMb: 1024, estimate: "setting", canStart: 5 });
+  });
+
+  it("a wake is not refused but counts as pending, so the next start_session sees it", async () => {
+    const s = setup({ availableMb: 4000 });
+    // 不叫醒时 4000 − 1024 ≥ 2048，放得下；叫醒一个以后 4000 − 1024 = 2976，再开一个就低于保留线。
+    s.a.note("wake s-9");
+    expect(await s.a.admit("T-1")).toMatchObject({ ok: false, reason: "memory", capacity: { pending: 1, availableMb: 4000 - 1024 } });
+    expect(s.d.log).toHaveBeenCalledWith(expect.stringContaining("wake s-9 opened without asking"));
+    s.tick(PENDING_MS);
+    expect((await s.a.admit("T-1")).ok).toBe(true);
   });
 });
