@@ -330,15 +330,21 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 | `score.reviewerBonus` | `0.05` | 0–1 | 评审人亲自提过的加分 |
 | `score.recencyHalfLifeDays` | `180` | 1–3650 的整数 | 旧证据衰减的半衰期（天） |
 | `score.degradedPenalty` | `0.1` | 0–1 | 分析用的是降级模型时的扣分 |
+| `score.evidenceFullHits` | `5` | 1–1000 的整数 | 出现多少次时「出现次数」拿满分 |
+| `score.evidenceFullPrs` | `3` | 1–1000 的整数 | 在多少个不同的 PR 里出现时「覆盖面」拿满分 |
+| `score.minClarity` | `0.4` | 0–1 | 清晰度低于这个值就搁置 |
 | `batch.sampleSize` | `20` | 1–1000 的整数 | 自动批次抽查多少条 |
 | `batch.minSamplePassRate` | `0.8` | 0–1 | 抽查通过率至少多少 |
 | `batch.minCoverage` | `0.3` | 0–1 | 一批里至少多大比例要有结论 |
 | `batch.maxShelvedShare` | `0.7` | 0–1 | 一批里最多多大比例被搁置 |
 | `batch.minBacktestRecall` | `0.01` | 0–1 | 整批回测召回率至少多少 |
 | `batch.maxBacktestFalsePositiveRate` | `0.2` | 0–1 | 整批回测误报率最多多少 |
+| `dedupe.minSimilarity` | `0.35` | 0–1 | 文字相似度达到多少时，把两条规矩交给模型判断是不是重复 |
+| `dedupe.maxGroup` | `30` | 2–100 的整数 | 每次去重或查冲突的调用最多带几条规矩 |
 | `generality.minHits` | `2` | 0–1000 的整数 | 规矩至少出现几次 |
 | `generality.minPrs` | `2` | 0–1000 的整数 | 至少在几个不同的 PR 里出现 |
 | `generality.minReviewers` | `0` | 0–100 的整数 | 至少几个不同的评审人提过 |
+| `generality.allowSingleReviewer` | `true` | `true` / `false` | 同一个评审人在几个 PR 里反复提同一件事，算团队习惯 |
 | `backtest.recentPrs` | `50` | 1–1000 的整数 | 用最近多少个合并的 PR 回测 |
 | `backtest.minRecall` | `0.01` | 0–1 | 回测召回率至少多少 |
 | `backtest.maxFalsePositiveRate` | `0.2` | 0–1 | 回测误报率最多多少 |

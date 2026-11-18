@@ -3,8 +3,8 @@
  * 这些默认值还没校准过：校准界面出来之前页面上标「未校准的默认值」。
  */
 
-export type PolicyGroup = "score" | "batch" | "generality" | "backtest" | "shadow" | "conflict" | "demote" | "admission";
-export const POLICY_GROUPS: readonly PolicyGroup[] = ["score", "batch", "generality", "backtest", "shadow", "conflict", "demote", "admission"];
+export type PolicyGroup = "score" | "batch" | "dedupe" | "generality" | "backtest" | "shadow" | "conflict" | "demote" | "admission";
+export const POLICY_GROUPS: readonly PolicyGroup[] = ["score", "batch", "dedupe", "generality", "backtest", "shadow", "conflict", "demote", "admission"];
 
 export type PolicyKeyDef =
   | { key: string; group: PolicyGroup; kind: "number"; min: number; max: number; default: number }
@@ -29,15 +29,21 @@ export const ADMISSION_POLICY_KEYS = [
   n("score.reviewerBonus", "score", 0.05),
   i("score.recencyHalfLifeDays", "score", 180, 1, 3650),
   n("score.degradedPenalty", "score", 0.1),
+  i("score.evidenceFullHits", "score", 5, 1, 1000),
+  i("score.evidenceFullPrs", "score", 3, 1, 1000),
+  n("score.minClarity", "score", 0.4),
   i("batch.sampleSize", "batch", 20, 1, 1000),
   n("batch.minSamplePassRate", "batch", 0.8),
   n("batch.minCoverage", "batch", 0.3),
   n("batch.maxShelvedShare", "batch", 0.7),
   n("batch.minBacktestRecall", "batch", 0.01),
   n("batch.maxBacktestFalsePositiveRate", "batch", 0.2),
+  n("dedupe.minSimilarity", "dedupe", 0.35),
+  i("dedupe.maxGroup", "dedupe", 30, 2, 100),
   i("generality.minHits", "generality", 2, 0, 1000),
   i("generality.minPrs", "generality", 2, 0, 1000),
   i("generality.minReviewers", "generality", 0, 0, 100),
+  b("generality.allowSingleReviewer", "generality", true),
   i("backtest.recentPrs", "backtest", 50, 1, 1000),
   n("backtest.minRecall", "backtest", 0.01),
   n("backtest.maxFalsePositiveRate", "backtest", 0.2),

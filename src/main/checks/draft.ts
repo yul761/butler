@@ -5,8 +5,14 @@ import type { HeadlessExecResult } from "../handoff/headless-exec";
 import { toCliJsonSchema, validate } from "../handoff/schema";
 import type { LessonsRepo } from "../db/lessons-repo";
 import { M } from "../strings";
-import { CHECK_SEVERITIES, CHECK_TYPES, validateCheckInput, type CheckDraftResult, type CheckScope } from "../../shared/checks";
+import { CHECK_SEVERITIES, CHECK_TYPES, validateCheckInput, type CheckDraftResult, type CheckInput, type CheckScope } from "../../shared/checks";
 import type { ChecksService } from "./checks-service";
+
+/** generate() 的结果：草稿或「只能是文字」，加上实际用的模型；失败时带限流的恢复时间。 */
+export type DraftGeneration =
+  | { ok: true; kind: "draft"; draft: CheckInput; scope: CheckScope; reason: string; model: string | null; degraded: boolean }
+  | { ok: true; kind: "prose"; reason: string; model: string | null; degraded: boolean }
+  | { ok: false; reason: string; message: string; waitUntil: number | null };
 
 /**
  * 跑一次 check_draft（契约 4.1 的任务 id）：接线处交给 execHeadlessJson，按 task 走模型路由。
@@ -68,8 +74,22 @@ export class CheckDrafter {
   }
 
   private async run(lessonId: number): Promise<CheckDraftResult> {
+    const g = await this.generate(lessonId);
+    if (!g.ok) return g.reason === "not_found" ? { ok: false, reason: "not_found" } : { ok: false, reason: g.reason, message: g.message };
+    if (g.kind === "prose") {
+      const c = this.d.checks.classifyLesson(lessonId, "prose", { reason: g.reason });
+      return { ok: true, kind: "prose", reason: g.reason, batchId: c.ok ? c.batchId : null };
+    }
+    return { ok: true, kind: "draft", draft: g.draft, scope: g.scope, reason: g.reason };
+  }
+
+  /**
+   * 只问模型、不写任何东西：规矩准入（工作流 D）在评审时生成草稿，等用户接受汇总时才和确认一起写进同一个批次。
+   * 失败时 waitUntil 不为空说明是限流，到点再试。
+   */
+  async generate(lessonId: number): Promise<DraftGeneration> {
     const l = this.d.lessons.get(lessonId);
-    if (!l) return { ok: false, reason: "not_found" };
+    if (!l) return { ok: false, reason: "not_found", message: "", waitUntil: null };
     const scope: CheckScope = l.scope.kind === "repo" ? { kind: "repo", slug: l.scope.slug } : { kind: "product", productId: l.scope.productId };
     const slug = l.scope.kind === "repo" ? l.scope.slug : (this.d.lessons.product(l.scope.productId)?.slugs[0] ?? null);
     const local = slug ? this.d.lessons.repo(slug)?.localPath : undefined;
@@ -82,18 +102,19 @@ export class CheckDrafter {
       prompt: M().checks.draftPrompt(l.text, l.why, l.scopeGlobs, repoLabel),
       cwd,
     });
-    if (!r.ok) return { ok: false, reason: r.reason, message: r.message.slice(0, 500) };
-    const v = validate(CheckDraftSchema, r.value);
-    if (!v.ok) return { ok: false, reason: "bad_output", message: v.errors.slice(0, 500) };
-    const reason = v.value.reason.trim();
-    if (!v.value.checkable || !v.value.check) {
-      const c = this.d.checks.classifyLesson(lessonId, "prose", { reason });
-      return { ok: true, kind: "prose", reason, batchId: c.ok ? c.batchId : null };
+    if (!r.ok) {
+      const limited = r.reason === "rate_limited" || r.limit !== null || r.waitUntil !== undefined;
+      return { ok: false, reason: r.reason, message: r.message.slice(0, 500), waitUntil: limited ? (r.waitUntil ?? r.limit?.resetsAt ?? null) : null };
     }
+    const v = validate(CheckDraftSchema, r.value);
+    if (!v.ok) return { ok: false, reason: "bad_output", message: v.errors.slice(0, 500), waitUntil: null };
+    const reason = v.value.reason.trim();
+    const meta = { model: r.route.actualModel, degraded: r.route.degraded };
+    if (!v.value.checkable || !v.value.check) return { ok: true, kind: "prose", reason, ...meta };
     const c = v.value.check;
     // 生成的检查一律先试运行：要证明自己再强制（决定 8）。
     const input = validateCheckInput({ ...c, excludeGlobs: c.excludeGlobs ?? [], mode: "shadow", enabled: true });
-    if (!input.ok) return { ok: false, reason: "bad_output", message: input.error };
-    return { ok: true, kind: "draft", draft: input.value, scope, reason };
+    if (!input.ok) return { ok: false, reason: "bad_output", message: input.error, waitUntil: null };
+    return { ok: true, kind: "draft", draft: input.value, scope, reason, ...meta };
   }
 }

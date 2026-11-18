@@ -48,4 +48,12 @@ describe("CheckDrafter", () => {
     expect(await setup(() => ({ ok: false, reason: "rate_limited", message: "x", limit: null, stderr: "", result: null, rawText: null, route })).drafter.draft(1)).toMatchObject({ ok: false, reason: "rate_limited" });
     expect(await setup(() => ok({})).drafter.draft(999)).toEqual({ ok: false, reason: "not_found" });
   });
+
+  it("generate asks the model without writing anything and passes the limit's reset time on", async () => {
+    const { drafter, lessons, lid } = setup(() => ok({ checkable: false, reason: "needs judgement" }));
+    expect(await drafter.generate(lid)).toEqual({ ok: true, kind: "prose", reason: "needs judgement", model: null, degraded: false });
+    expect(lessons.get(lid)?.checkability).toBeNull();
+    const limited = setup(() => ({ ok: false, reason: "rate_limited", message: "x", limit: null, stderr: "", result: null, rawText: null, route, waitUntil: 77 }));
+    expect(await limited.drafter.generate(limited.lid)).toEqual({ ok: false, reason: "rate_limited", message: "x", waitUntil: 77 });
+  });
 });

@@ -330,15 +330,21 @@ The admission policy decides how the lesson pipeline scores, shelves, backtests,
 | `score.reviewerBonus` | `0.05` | 0–1 | Bonus when a human reviewer raised the rule |
 | `score.recencyHalfLifeDays` | `180` | whole number 1–3650 | Half-life in days for old evidence |
 | `score.degradedPenalty` | `0.1` | 0–1 | Penalty when the analysis ran on a fallback model |
+| `score.evidenceFullHits` | `5` | whole number 1–1000 | Hits that give full marks for how often a rule came up |
+| `score.evidenceFullPrs` | `3` | whole number 1–1000 | Distinct PRs that give full marks for how widely it came up |
+| `score.minClarity` | `0.4` | 0–1 | A rule whose clarity is below this is shelved |
 | `batch.sampleSize` | `20` | whole number 1–1000 | How many items of an automatic batch are sampled for review |
 | `batch.minSamplePassRate` | `0.8` | 0–1 | Lowest share of the sample that must pass |
 | `batch.minCoverage` | `0.3` | 0–1 | Lowest share of the batch that must get a verdict |
 | `batch.maxShelvedShare` | `0.7` | 0–1 | Highest share of a batch that may be shelved |
 | `batch.minBacktestRecall` | `0.01` | 0–1 | Lowest backtest recall for the batch as a whole |
 | `batch.maxBacktestFalsePositiveRate` | `0.2` | 0–1 | Highest backtest false-positive rate for the batch |
+| `dedupe.minSimilarity` | `0.35` | 0–1 | Text similarity at which two rules are sent to the model as possible duplicates |
+| `dedupe.maxGroup` | `30` | whole number 2–100 | Rules per duplicate or conflict check call |
 | `generality.minHits` | `2` | whole number 0–1000 | Times a rule must have come up |
 | `generality.minPrs` | `2` | whole number 0–1000 | Distinct PRs it must have come up in |
 | `generality.minReviewers` | `0` | whole number 0–100 | Distinct reviewers who must have raised it |
+| `generality.allowSingleReviewer` | `true` | `true` / `false` | One reviewer raising the same thing in several PRs counts as a team habit |
 | `backtest.recentPrs` | `50` | whole number 1–1000 | How many recent merged PRs a check is backtested on |
 | `backtest.minRecall` | `0.01` | 0–1 | Lowest recall in the backtest |
 | `backtest.maxFalsePositiveRate` | `0.2` | 0–1 | Highest false-positive rate in the backtest |

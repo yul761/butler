@@ -425,6 +425,31 @@ const ZH = {
         "reason 用一两句话说明你为什么这样判断。",
       ].join("\n"),
   },
+  /** 规矩准入（工作流 D）：评分分项和搁置的一句话理由、汇总里的说明。 */
+  admission: {
+    part: { evidence: "证据", clarity: "清晰度", consistency: "一致性", verifiability: "可验证性", performance: "实测表现" } as Record<"evidence" | "clarity" | "consistency" | "verifiability" | "performance", string>,
+    evidence: (hits: number, prs: number, reviewers: number, days: number) =>
+      `出现 ${hits} 次，${prs} 个 PR，${reviewers ? `${reviewers} 位评审人` : "评审人不详"}；最近一次在 ${days} 天前`,
+    degraded: (penalty: string) => `；由降级模型产出，扣 ${penalty}`,
+    clarity: { yes: "看这条规矩能判断代码对不对", partly: "只能部分判断代码对不对", no: "看这条规矩判断不了代码对不对" } as Record<"yes" | "partly" | "no", string>,
+    clarityScope: "；适用范围不清楚",
+    sep: "：",
+    consistencyNone: "没发现和别的规矩冲突",
+    consistencyConditional: (ref: number, reason: string) => `和 #${ref} 只在部分情况下冲突：${reason}`,
+    untested: "没回测：检查保持影子运行，不能自动变成拦截",
+    cap: (cap: string) => `给检查用的综合分封顶在 ${cap}`,
+    composite: (value: string, parts: string, line: string, prose: boolean) => `综合 ${value}（${parts}）；${prose ? "文字规矩" : "可检查的规矩"}的准入线是 ${line}`,
+    note: {
+      generality: (hits: number, prs: number, minHits: number, minPrs: number) => `出现 ${hits} 次，${prs} 个 PR（要求至少 ${minHits} 次、${minPrs} 个 PR）`,
+      reviewers: (reviewers: number, min: number) => `${reviewers} 位评审人（要求至少 ${min} 位）`,
+      lowScore: (value: string, line: string, part: string) => `综合 ${value}，没到准入线 ${line}；最弱的是${part}`,
+      belowDrop: (value: string, line: string) => `综合 ${value}，低于淘汰线 ${line}（留着，以后再出现会重新评）`,
+      clarity: (value: string, min: string, reason: string) => `清晰度 ${value} 低于 ${min}：${reason}`,
+      conflict: (ref: number, reason: string) => `和 #${ref} 冲突：${reason}`,
+      covered: (by: string) => `已经被 ${by} 覆盖`,
+      duplicate: (keeper: number) => `和 #${keeper} 是同一件事`,
+    },
+  },
 };
 
 export type MainStrings = typeof ZH;
@@ -800,6 +825,30 @@ const EN: MainStrings = {
         "If it can be checked, give one check: a short name; a message written for the agent that asks it to fix the root cause and not work around the check; globs as narrow as possible; severity block (must) or warn; use warn when false positives are likely.",
         "In reason, say in one or two sentences why you decided this.",
       ].join("\n"),
+  },
+  admission: {
+    part: { evidence: "evidence", clarity: "clarity", consistency: "consistency", verifiability: "verifiability", performance: "measured performance" },
+    evidence: (hits: number, prs: number, reviewers: number, days: number) =>
+      `came up ${hits} ${hits === 1 ? "time" : "times"} in ${prs} ${prs === 1 ? "PR" : "PRs"}, ${reviewers ? `from ${reviewers} ${reviewers === 1 ? "reviewer" : "reviewers"}` : "reviewers unknown"}; last seen ${days} ${days === 1 ? "day" : "days"} ago`,
+    degraded: (penalty: string) => `; produced by a fallback model, minus ${penalty}`,
+    clarity: { yes: "the rule tells right code from wrong code", partly: "the rule only partly tells right code from wrong code", no: "the rule does not tell right code from wrong code" },
+    clarityScope: "; its scope is unclear",
+    sep: ": ",
+    consistencyNone: "no conflict with other rules found",
+    consistencyConditional: (ref: number, reason: string) => `conflicts with #${ref} only in some cases: ${reason}`,
+    untested: "not backtested: the check stays in shadow mode and cannot be made blocking automatically",
+    cap: (cap: string) => `the score used for the check is capped at ${cap}`,
+    composite: (value: string, parts: string, line: string, prose: boolean) => `overall ${value} (${parts}); the admission line for ${prose ? "prose rules" : "checkable rules"} is ${line}`,
+    note: {
+      generality: (hits: number, prs: number, minHits: number, minPrs: number) => `came up ${hits} ${hits === 1 ? "time" : "times"} in ${prs} ${prs === 1 ? "PR" : "PRs"} (needs at least ${minHits} and ${minPrs})`,
+      reviewers: (reviewers: number, min: number) => `${reviewers} ${reviewers === 1 ? "reviewer" : "reviewers"} (needs at least ${min})`,
+      lowScore: (value: string, line: string, part: string) => `overall ${value}, below the admission line ${line}; weakest: ${part}`,
+      belowDrop: (value: string, line: string) => `overall ${value}, below the drop line ${line} (kept; it is scored again when it comes up again)`,
+      clarity: (value: string, min: string, reason: string) => `clarity ${value} is below ${min}: ${reason}`,
+      conflict: (ref: number, reason: string) => `conflicts with #${ref}: ${reason}`,
+      covered: (by: string) => `already covered by ${by}`,
+      duplicate: (keeper: number) => `the same thing as #${keeper}`,
+    },
   },
 };
 
