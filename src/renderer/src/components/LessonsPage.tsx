@@ -233,15 +233,20 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
     const picked = confirmed.filter((l) => checked.includes(l.id));
     const picks = livePicked(pendingPicked, pending);
     const togglePick = (id: number) => setPendingPicked((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]));
-    const pickedBatch = async (verb: "confirm" | "reject") => {
-      const message = await runBatch({ op: "bulk", verb, target: { ids: picks } }, verb, setNotice);
+    // 勾选的几条一起改（一个批次，可撤销）：待确认的确认 / 拒绝，已确认的停用 / 拒绝。
+    const pickedBatch = async (verb: "confirm" | "reject" | "disable", which: "pending" | "confirmed") => {
+      const ids = which === "pending" ? picks : picked.map((l) => l.id);
+      const key = `${which}-picked`;
+      const message = await runBatch({ op: "bulk", verb, target: { ids } }, verb, setNotice);
       setErrors((e) => {
         const next = { ...e };
-        if (message) next["pending-picked"] = message;
-        else delete next["pending-picked"];
+        if (message) next[key] = message;
+        else delete next[key];
         return next;
       });
-      if (!message) setPendingPicked([]);
+      if (message) return;
+      if (which === "pending") setPendingPicked([]);
+      else setChecked([]);
     };
     const startMerge = () => {
       const [a, b] = picked;
@@ -268,8 +273,8 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
             {picks.length > 0 && (
               <>
                 <span className="muted">{S.pendingSelected(picks.length)}</span>
-                <button className="primary" data-testid="pending-confirm-selected" onClick={() => void pickedBatch("confirm")}>{S.pendingConfirmSelected}</button>
-                <button data-testid="pending-reject-selected" onClick={() => void pickedBatch("reject")}>{S.pendingRejectSelected}</button>
+                <button className="primary" data-testid="pending-confirm-selected" onClick={() => void pickedBatch("confirm", "pending")}>{S.pendingConfirmSelected}</button>
+                <button data-testid="pending-reject-selected" onClick={() => void pickedBatch("reject", "pending")}>{S.pendingRejectSelected}</button>
               </>
             )}
             {err("pending-picked")}
@@ -296,8 +301,14 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
         ))}
         <h3>{S.lessonsConfirmedTitle}</h3>
         {confirmed.length === 0 && <p className="muted">{S.lessonsNoConfirmed}</p>}
-        {picked.length === 2 && !merging && (
-          <button data-testid="lessons-merge" onClick={startMerge}>{S.lessonsMerge}</button>
+        {picked.length > 0 && !merging && (
+          <div className="lessons-row" data-testid="confirmed-selection">
+            <span className="muted">{S.pendingSelected(picked.length)}</span>
+            {picked.length === 2 && <button data-testid="lessons-merge" onClick={startMerge}>{S.lessonsMerge}</button>}
+            <button data-testid="confirmed-disable-selected" onClick={() => void pickedBatch("disable", "confirmed")}>{S.confirmedDisableSelected}</button>
+            <button data-testid="confirmed-reject-selected" onClick={() => void pickedBatch("reject", "confirmed")}>{S.pendingRejectSelected}</button>
+            {err("confirmed-picked")}
+          </div>
         )}
         {merging && (
           <div className="lesson-editor">

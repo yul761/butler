@@ -67,9 +67,19 @@ test("pending lessons are confirmed by filter in one action and the batch is und
   await rows.first().click();
   await expect(page.getByTestId("batch-detail")).toContainText("日志里不能有令牌");
   await page.getByTestId("batch-undo").click();
+  await expect(page.getByTestId("batch-undo")).toHaveText(S.batchUndoArmed);
+  await page.getByTestId("batch-undo").click();
   await expect(page.getByTestId("batch-message")).toHaveText(S.bulkUndone(1, 0));
   await expect(page.getByTestId("batch-undo")).toHaveCount(0);
   await page.getByTestId("lessons-page-tab-lessons").click();
   await expect(pending).toHaveCount(1);
   await expect(page.getByTestId(`lesson-${ids[2]}`)).toBeVisible();
+
+  // 6. 已确认的勾两条，停用选中的。
+  await page.getByTestId(`lesson-check-${ids[0]}`).check();
+  await page.getByTestId(`lesson-check-${ids[3]}`).check();
+  await page.getByTestId("confirmed-disable-selected").click();
+  await expect(page.getByTestId("lessons-notice-text")).toHaveText(S.bulkDone.disable(2));
+  await expect(page.getByTestId(`lesson-${ids[0]}`)).toHaveClass(/disabled/);
+  await expect(page.getByTestId(`lesson-${ids[3]}`)).toHaveClass(/disabled/);
 });

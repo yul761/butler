@@ -15,7 +15,11 @@ const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "nume
 function BatchDetailView({ id, onBack }: { id: number; onBack(): void }) {
   const detail = useStateRefetch(`batch-${id}`, () => api.lessonsBatch(id));
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+  // 撤销整批要点两次：第一次只是「再点一次确认」。
+  const [armed, setArmed] = useState(false);
   const undo = async () => {
+    if (!armed) return setArmed(true);
+    setArmed(false);
     try {
       const r = await api.lessonsAct({ op: "undoBatch", batchId: id });
       setMessage(r.ok ? { text: S.bulkUndone(r.affected ?? 0, r.skipped ?? 0), error: false } : { text: S.batchError[r.reason] ?? S.lessonsErrorGeneric, error: true });
@@ -36,7 +40,7 @@ function BatchDetailView({ id, onBack }: { id: number; onBack(): void }) {
             {detail.undoneAt !== null && <> · {S.batchUndoneAt(formatTime(detail.undoneAt))}</>}
             {detail.undoOf !== null && <> · {S.batchUndoOf(detail.undoOf)}</>}
           </p>
-          {detail.undoable && <button data-testid="batch-undo" onClick={() => void undo()}>{S.batchUndo}</button>}
+          {detail.undoable && <button data-testid="batch-undo" className={armed ? "danger" : undefined} onClick={() => void undo()}>{armed ? S.batchUndoArmed : S.batchUndo}</button>}
           {message && <p className={message.error ? "error" : "muted"} role={message.error ? "alert" : "status"} data-testid="batch-message">{message.text}</p>}
           {detail.items.length === 0 ? (
             <p className="muted">{S.batchNoItems}</p>
