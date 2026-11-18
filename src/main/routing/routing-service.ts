@@ -171,6 +171,12 @@ export class RoutingService {
 
   usable = (model: string): boolean => this.health.usable(model);
 
+  /** 配置在别处写进了库（导入）：重新读配置和识别规则。 */
+  reloadConfig(): void {
+    this.refreshRules();
+    this.configChanged();
+  }
+
   private configChanged(): void {
     this.cfg = null;
     this.changed();
