@@ -192,6 +192,49 @@ Writing code, committing, testing and pushing your own branch never reach the co
 
 **What it doesn't do.** It only judges conflicts that git can see. Whether the merged code compiles or behaves correctly, such as one side renaming a field the other still uses, is left to CI. It doesn't rebase or resolve conflicts for you, and it ignores git you run in your own terminal.
 
+## Model routing
+
+Butler runs some work in the background with `claude -p`: needs-you and stuck checks, handoffs, feature summaries, epic digests and the lessons analysis. **Settings → Model routing** decides which model each of those calls uses, and what happens when a model hits a limit.
+
+**With nothing registered, nothing changes.** Until you register at least one enabled model, every call uses the same model as Butler 2.1.0 (haiku for the needs-you and stuck checks, sonnet for the handoff refresh and epic digests, your default model for the rest). Limits are handled as before: the whole account pauses. Generic signals (below) are only recorded on the page.
+
+**Tiers and chains.** Each model you register has a tier: `high`, `mid` or `low`. A model name can be an alias (`opus`), a full name (`claude-opus-5-5`) or a name your gateway knows; Butler passes it to `--model` as it is. Each tier has a chain, the order to try its models in. By default the chain is the tier's models in the order you registered them. Models with the same **account** label share a subscription or gateway: an account-wide limit on one marks the others of the same or a higher tier too.
+
+**First-time setup.** **Discover models** collects candidate names from `ANTHROPIC_MODEL` and related variables, the `model` in Claude Code's `settings.json`, models seen in recent usage and the CLI aliases, then sends each one a tiny test call. Only the ones that answer are offered, each with a suggested tier. Butler never assumes that opus, sonnet or haiku exist. A registered model that doesn't exist is marked unavailable and skipped.
+
+### Tasks and limits
+
+Every background call names its task. The table on the page shows each task's tier, its lowest allowed tier, what it does at a limit and whether it is critical. You can change any of these per task.
+
+- **fallback**: try the next model in the chain, then the tiers below, down to the lowest allowed tier.
+- **wait**: try the other models of the same tier, then wait until one recovers. Nothing is dropped.
+- **escalate**: stop after the first limit and report it.
+
+Handoffs and feature summaries keep the session's own model (switching would throw away the prompt cache).
+
+A result from a lower tier than the task asked for is marked as a fallback in usage, in the lesson run details and in the event log. A lessons analysis that ran on a lower tier is queued to run again on its own tier once that tier is healthy again. **Re-run now** on the page does that immediately.
+
+**Recognising limits.** Limits are recognised by rules: the built-in ones, rules you add (a regex, an HTTP status or a reset-time pattern) and rules learned from your confirmations. On top of those, Butler treats as a *suspected* limit an HTTP 429, 529 or 402, an error mentioning limit, quota, billing or credit, and a model that failed three times in a row while another model succeeded. A suspected limit is attributed to that model (or to the account, if the rule says so). If no reset time is known, Butler backs off and then probes the model with a tiny call. Errors it couldn't classify are listed under **Unrecognised errors**. **Is this a limit?** turns one into a learned rule, so the same error is recognised next time. **Not a limit** clears the suspicion.
+
+### Interactive sessions
+
+A coordinator's `start_session` takes a tier (`high`, `mid`, `low`) or a model name, and the old `opus` and `sonnet` still work. Butler picks a healthy model of that tier and returns the model it actually used. An unknown name is refused before any terminal opens. If your `claude` doesn't support `--model`, sessions open without it.
+
+When a session hits a limit, its row shows the limit and a **Switch to next tier and continue** button. The button ends the terminal and resumes the same conversation with `--resume` and the next model's `--model`. With `routingAutoSwitch` on, Butler switches right away.
+
+### Spending
+
+| Setting | Key | Default | Accepted values and notes |
+|---------|-----|---------|---------------------------|
+| Monthly quotas | `routingQuotas` | empty | A JSON list of `{"target": "tier:high" or "model:<name>", "unit": "usd" or "tokens", "monthly": <number>}`. Money comes from the cost Claude Code reports, or tokens × the model's registered prices. Empty means no quotas. |
+| Soft thresholds (%) | `routingThresholds` | `70,90` | Two whole numbers, the first lower than the second. Past the first threshold, tasks whose policy is fallback skip the model and drop to a lower tier. Past the second, only critical tasks still use it. Quotas never block a critical task. |
+| Period start day | `routingPeriodStartDay` | `1` | 1 to 28, the day of the month a quota period begins (local time). |
+| Effort | `routingEffort` | empty | A JSON object from a task id or a tier to `low`, `medium`, `high`, `xhigh` or `max`, passed as `--effort` when your `claude` supports it. A task entry wins over its tier's. |
+| Concurrency caps | `routingMaxConcurrent` | empty | A JSON object from a tier to a whole number of background calls that may run on it at once, for example `{"high": 1}`. |
+| Auto-switch sessions | `routingAutoSwitch` | `0` (off) | `1` or `0`. When on, a session that hits a limit switches to the next tier at once instead of showing the button. |
+
+Spend by model and by task, health per model and the fallback event log are on the same page. The **Now** page shows a model limit or a fallback while it lasts.
+
 ## Privacy and personal API
 
 The personal API is optional. It is used only at the **Full** level, to distil StateCore memory. Everything else works without it.

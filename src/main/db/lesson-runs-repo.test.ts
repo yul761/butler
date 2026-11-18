@@ -25,11 +25,13 @@ describe("LessonRunsRepo", () => {
     runs.finish(id, {
       status: "failed", reason: "claude_error", finishedAt: 200, message: "boom", stderrTail: "err", ghStderr: "gh", prTitle: "T", prUrl: "https://x/pull/7",
       material: "mat", rawOutput: "raw", findings: [{ a: 1 }], created: 1, hit: 2, dropped: 3, model: "opus", costUsd: 0.5, inputTokens: 10, outputTokens: 20, durationMs: 99,
+      requestedTier: "mid", actualModel: "corp-low", fallbackFrom: "corp-mid",
     });
     expect(runs.get(id)).toEqual({
       id, queueId: null, slug: "acme/app", prNumber: 7, origin: "daily", status: "failed", reason: "claude_error", message: "boom", stderrTail: "err", ghStderr: "gh",
       prTitle: "T", prUrl: "https://x/pull/7", material: "mat", rawOutput: "raw", findings: [{ a: 1 }], trimmed: false, created: 1, hit: 2, dropped: 3,
       model: "opus", costUsd: 0.5, inputTokens: 10, outputTokens: 20, durationMs: 99, startedAt: 100, finishedAt: 200,
+      requestedTier: "mid", actualModel: "corp-low", fallbackFrom: "corp-mid",
     });
     expect(runs.get(999)).toBeNull();
   });
