@@ -355,7 +355,7 @@ describe("LessonsService queue views", () => {
     expect(r.lastRun).toEqual({ id: live, status: "running", reason: null, startedAt: 30, finishedAt: null, created: 0, hit: 0, dropped: 0, costUsd: null, durationMs: null });
   });
 
-  const finding = { comment_url: "https://github.com/acme/web/pull/1#r1", summary: "s", avoidable: true, why_missed: "w", rule: { text: "r", why: "y", scope: "repo", product_id: null, same_as: null } };
+  const finding = { comment_url: "https://github.com/acme/web/pull/1#r1", summary: "s", avoidable: true, why_missed: "w", rule: { text: "r", why: "y", scope: "repo", product_id: null, same_as: null, globs: [], lang: null, layer: null, strength: "should", checkability: "prose", checkability_reason: "r" } };
   const finishRun = (runs: LessonRunsRepo, over: Parameters<LessonRunsRepo["finish"]>[1]) => {
     const id = runs.start({ queueId: null, slug: "acme/web", prNumber: 1, origin: "merged", startedAt: 1 });
     runs.finish(id, over);
@@ -462,5 +462,34 @@ describe("LessonsService bulk staleness", () => {
     repo.setFields(b, { admission: "auto" }, 5);
     expect(await svc.act({ op: "acceptRecommended", expect: 0 })).toEqual({ ok: false, reason: "stale" });
     expect(await svc.act({ op: "acceptRecommended", expect: 1 })).toMatchObject({ ok: true, affected: 1 });
+  });
+});
+
+describe("LessonsService enrich (workstream D)", () => {
+  it("reports how many lessons need enrichment and starts it once", async () => {
+    const a = setup();
+    let running = false;
+    let done: (() => void) | null = null;
+    const enricher = {
+      needing: () => a.repo.lessons(),
+      running: () => running,
+      start: (_s: unknown, d: () => void) => (running ? false : ((running = true), (done = d), true)),
+    };
+    const svc = new LessonsService({
+      repo: a.repo, batches: a.batches, runs: a.runs, availability: a.availability, identity: new RepoIdentity({ git: () => "", exists: () => false }), runner: a.runner, openRun: a.openRun,
+      knownRepoPaths: () => [], repoGroups: () => [], ghAvailable: () => true, openExternal: a.openExternal, now: () => 100, notify: a.notify, enricher,
+    });
+    a.add("acme/web");
+    expect(svc.state().enrich).toEqual({ needing: 1, running: false });
+    expect(await svc.act({ op: "enrich" })).toEqual({ ok: true });
+    expect(await svc.act({ op: "enrich" })).toEqual({ ok: false, reason: "busy" });
+    expect(svc.state().enrich.running).toBe(true);
+    running = false;
+    done!();
+    expect(a.notify).toHaveBeenCalled();
+  });
+
+  it("without an enricher the action is not available", async () => {
+    expect(await setup().svc.act({ op: "enrich" })).toEqual({ ok: false, reason: "not_found" });
   });
 });

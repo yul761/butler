@@ -251,6 +251,13 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
           {btn.toggle === "pause" ? S.lessonQueuePause : S.lessonQueueResume}
         </button>
         {btn.runNow && <button data-testid="lessons-queue-run-now" onClick={() => void act("queue", { op: "runNow" })}>{S.lessonQueueRunNow}</button>}
+        {s.enrich.running ? (
+          <span className="pill" data-testid="lessons-enrich-running">{S.lessonEnrichRunning}</span>
+        ) : (
+          s.enrich.needing > 0 && (
+            <button data-testid="lessons-enrich" title={S.lessonEnrichTitle} onClick={() => void act("queue", { op: "enrich" })}>{S.lessonEnrich(s.enrich.needing)}</button>
+          )
+        )}
         {err("queue")}
       </div>
     );

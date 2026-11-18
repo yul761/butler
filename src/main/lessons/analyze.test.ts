@@ -8,7 +8,7 @@ import type { Material } from "./material";
 type Finding = Analysis["findings"][number];
 const finding = (rule: Partial<NonNullable<Finding["rule"]>> | null, over: Partial<Finding> = {}): Finding => ({
   comment_url: "https://x/7#c1", summary: "s", avoidable: true, why_missed: "w",
-  rule: rule && { text: "rule text", why: "because", scope: "repo", product_id: null, same_as: null, ...rule },
+  rule: rule && { text: "rule text", why: "because", scope: "repo", product_id: null, same_as: null, globs: [], lang: null, layer: null, strength: "should", checkability: "prose", checkability_reason: "r", ...rule },
   ...over,
 });
 const setup = () => {
@@ -148,5 +148,49 @@ describe("analysisPrompt / schema", () => {
     expect(Object.keys(JSON.parse(toCliJsonSchema(AnalysisSchema)).properties)).toContain("findings");
     expect(validate(AnalysisSchema, { findings: [finding({})] }).ok).toBe(true);
     expect(validate(AnalysisSchema, { findings: [{ summary: 1 }] }).ok).toBe(false);
+  });
+});
+
+describe("applyAnalysis, scope and checkability (workstream D)", () => {
+  const items = [{ who: "human" as const, author: "rev1", body: "please use the logger", url: "https://x/7#c1", path: "src/api/a.ts", line: 12, at: "2026-01-01T00:00:00Z" }];
+
+  it("new lessons get globs, lang, layer, strength, checkability and source details", () => {
+    const { repo } = setup();
+    applyAnalysis(repo, "acme/web", 7, { findings: [finding({ globs: ["src/api/**", " "], lang: "ts", layer: "api", strength: "must", checkability: "checkable", checkability_reason: "a pattern" })] }, 100, { allowed: ALLOWED, prUrl: PR_URL }, null, { items });
+    const [l] = repo.lessons();
+    expect(l).toMatchObject({ scopeGlobs: ["src/api/**"], scopeLang: "ts", scopeLayer: "api", strength: "must", checkability: "checkable", checkabilityReason: "a pattern", enrichedAt: 100, degraded: false });
+    expect(l.sources[0]).toMatchObject({ reviewer: "rev1", path: "src/api/a.ts", line: 12 });
+    expect(repo.sourcesWithExcerpt(l.id)[0].excerpt).toBe("please use the logger");
+  });
+
+  it("a degraded run marks the lessons it creates", () => {
+    const { repo } = setup();
+    applyAnalysis(repo, "acme/web", 7, { findings: [finding({})] }, 100, { allowed: ALLOWED, prUrl: PR_URL }, null, { degradedFrom: "big-model" });
+    expect(repo.lessons()[0]).toMatchObject({ degraded: true, degradedFrom: "big-model" });
+  });
+
+  it("a hit fills only the empty fields of a lesson never enriched, and never touches an enriched one", () => {
+    const { repo } = setup();
+    const old = seed(repo, "confirmed");
+    repo.setFields(old, { checkability: "converted" }, 6);
+    apply(repo, finding({ same_as: old, globs: ["src/**"], strength: "must", checkability: "checkable" }, { comment_url: "u1" }));
+    expect(repo.get(old)).toMatchObject({ scopeGlobs: ["src/**"], strength: "must", checkability: "converted", enrichedAt: 100 });
+    apply(repo, finding({ same_as: old, globs: ["lib/**"], strength: "should" }, { comment_url: "u2" }));
+    expect(repo.get(old)).toMatchObject({ scopeGlobs: ["src/**"], strength: "must" });
+  });
+
+  it("the prompt explains the new fields in both languages", () => {
+    const m = { pr: { number: 7, title: "t", body: "", url: PR_URL, headRefName: "b", baseRefName: "main", mergedAt: "", reviews: [], comments: [], reviewThreads: [], commits: [] }, items: [], fixes: [], fixesNote: null, butler: null } as unknown as Material;
+    expect(analysisPrompt("zh", "acme/web", m, [], [])).toContain("rule.checkability");
+    expect(analysisPrompt("en", "acme/web", m, [], [])).toContain("rule.globs");
+  });
+});
+
+describe("stored findings", () => {
+  it("findings stored before workstream D (no scope fields) still parse", async () => {
+    const { StoredAnalysisSchema } = await import("./analyze");
+    const old = { findings: [{ comment_url: null, summary: "s", avoidable: true, why_missed: "w", rule: { text: "t", why: "y", scope: "repo", product_id: null, same_as: null } }] };
+    expect(StoredAnalysisSchema.safeParse(old).success).toBe(true);
+    expect(AnalysisSchema.safeParse(old).success).toBe(false);
   });
 });

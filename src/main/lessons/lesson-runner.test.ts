@@ -36,7 +36,7 @@ const fail = (reason: HeadlessFailure, over: Partial<{ message: string; result: 
 });
 const noFindings = result({ findings: [] });
 const newRule = result({
-  findings: [{ comment_url: null, summary: "s", avoidable: true, why_missed: "w", rule: { text: "Handle null", why: "crash", scope: "repo", product_id: null, same_as: null } }],
+  findings: [{ comment_url: null, summary: "s", avoidable: true, why_missed: "w", rule: { text: "Handle null", why: "crash", scope: "repo", product_id: null, same_as: null, globs: [], lang: null, layer: null, strength: "should", checkability: "prose", checkability_reason: "r" } }],
 });
 /** 素材里有 “## PR #n:” 这一行。 */
 const isPr = (req: { prompt: string }, n: number) => req.prompt.includes(`#${n}: PR ${n}`);

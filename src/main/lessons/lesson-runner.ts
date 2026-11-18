@@ -448,7 +448,9 @@ export class LessonRunner {
     repo.transaction(() => {
       const allowed = new Set<string>([pr.url]);
       for (const i of items) if (i.url) allowed.add(i.url);
-      const applied = applyAnalysis(repo, item.slug, item.prNumber, v.value, this.d.now(), { allowed, prUrl: pr.url }, a.runId);
+      const applied = applyAnalysis(repo, item.slug, item.prNumber, v.value, this.d.now(), { allowed, prUrl: pr.url }, a.runId, {
+        items, degradedFrom: r.route.degraded ? (r.route.fallbackFrom ?? r.route.requestedTier) : null,
+      });
       this.settle(a, { ...output, ...applied, status: "done", reason: null, findings: v.value.findings }, { finish: "done" });
       // 降了档跑的：要求的档位恢复后重跑一次（D 也会读 fallback_from 降低这次结果的权重）。
       if (r.route.degraded) repo.markUpgrade(item.id);

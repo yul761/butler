@@ -359,6 +359,8 @@ export function lessonActionArg(v: unknown): LessonAction {
       return { op: "acceptRecommended", ...(o.target === undefined ? {} : { target: lessonTargetArg(o.target) }), ...expectArg(o.expect) };
     case "undoBatch":
       return { op: "undoBatch", batchId: batchIdArg(o.batchId) };
+    case "enrich":
+      return { op: "enrich" };
     case "confirm":
       return o.text === undefined ? { op: "confirm", id: lessonIdArg(o.id) } : { op: "confirm", id: lessonIdArg(o.id), text: lessonTextArg(o.text) };
     case "reject":
