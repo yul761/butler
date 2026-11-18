@@ -263,6 +263,7 @@ export const EN: UiStrings = {
     screen: "the terminal is showing a prompt to answer",
     needs_you: "the session is waiting for you",
     closed: "the terminal is closed",
+    hibernated: "the session is hibernated; waking it",
   },
   ciDeliver: { timeout: "the input box never became ready", blocked: "it was held back right before pasting", exited: "the terminal exited" },
   ciReasonOther: (r: string) => `reason: ${r}`,

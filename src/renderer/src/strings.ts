@@ -272,6 +272,7 @@ const ZH = {
     screen: "终端里有要回答的提示",
     needs_you: "会话在等你",
     closed: "终端关了",
+    hibernated: "会话休眠着，正在叫醒",
   } satisfies Record<string, string>,
   ciDeliver: { timeout: "输入框一直没就绪", blocked: "粘贴前被拦下了", exited: "终端已退出" } satisfies Record<string, string>,
   ciReasonOther: (r: string) => `原因：${r}`,

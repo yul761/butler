@@ -3,7 +3,7 @@ import type { TicketPrsRepo } from "../db/ticket-prs-repo";
 import type { DeliveryGuard } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import type { CiCheck } from "../tickets/gh";
-import type { CiItemRef, CiUndelivered, CiUndeliveredReason } from "../../shared/types";
+import type { CiItemRef, CiUndelivered, CiUndeliveredReason, Session } from "../../shared/types";
 import { sanitizeTask } from "../../shared/control";
 import { M } from "../strings";
 import { CI_LOG_LINES } from "./pr-watcher";
@@ -62,6 +62,52 @@ export function pickRecipient(i: { owner: string | null; ownerOpen: boolean; ope
   if (i.owner !== null) return { ok: false, reason: "owner_closed" };
   if (onTicket && cands.length === 1 && cands[0].gitBranch === null) return { ok: true, sessionId: cands[0].id, via: "ticket" };
   return cands.length === 0 ? { ok: false, reason: "no_session" } : { ok: false, reason: "unowned", candidates: cands.map((c) => c.id), promised: onTicket };
+}
+
+/**
+ * CI 结论递给谁（index.ts 的 recipient）：pickRecipient，加上休眠着的 session（WS-M B）。
+ * 选中休眠的也没关系：递之前 DeliveryGuard.check 会叫醒它（返回 hibernated），醒来以后 flush 再递一次。
+ *
+ * 先后：分支的归属者（开着或者休眠着都算）> 开着终端的 > 休眠着的。
+ * 开着的能选出来就不看休眠的：多一个休眠的候选不能让本来认得出的分支变成「认不出是谁的」。
+ */
+export function ciRecipient(i: {
+  ticketKey: string;
+  repoId: number;
+  branch: string;
+  /** 开着终端的 head（同一个 head 可能出现多次，只算一次）。 */
+  openHeads: Session[];
+  /** 休眠着的 head。 */
+  hibernatedHeads: Session[];
+  /** branch_owners 记下的 session id（可能是链上的旧 id）；没有记过是 null。 */
+  ownerSessionId: string | null;
+  /** 链上任何一个 id 的 head。 */
+  headOf: (id: string) => Session | null;
+  /** 归属者开着终端。 */
+  ownerTermOpen: boolean;
+  /** ticket 仓库现在的分支。 */
+  ticketBranch: string | null;
+}): Recipient {
+  const seen = new Set<string>();
+  const pick = (heads: Session[]): RecipientCandidate[] => {
+    const out: RecipientCandidate[] = [];
+    for (const h of heads) {
+      if (seen.has(h.id) || h.ticketKey !== i.ticketKey || h.repoId !== i.repoId) continue;
+      seen.add(h.id);
+      out.push({ id: h.id, gitBranch: h.gitBranch, coordinator: h.coordinator });
+    }
+    return out;
+  };
+  const open = pick(i.openHeads);
+  const asleep = pick(i.hibernatedHeads);
+  const owner = i.ownerSessionId === null ? null : (i.headOf(i.ownerSessionId)?.id ?? i.ownerSessionId);
+  const ownerAsleep = owner !== null && i.hibernatedHeads.some((h) => h.id === owner);
+  const base = { owner, ticketBranch: i.ticketBranch, branch: i.branch };
+  const first = pickRecipient({ ...base, ownerOpen: i.ownerTermOpen || ownerAsleep, open });
+  if (first.ok || asleep.length === 0) return first;
+  const second = pickRecipient({ ...base, ownerOpen: false, open: [...open, ...asleep] });
+  // 开着的一个都没有时，带上休眠的候选给出的原因更有用（unowned 会列出它们）。
+  return second.ok || first.reason === "no_session" ? second : first;
 }
 
 /** 为什么没递（日志和「现在」页的提醒用）。delivered 是已经递过（resend 的返回值），不是失败。 */

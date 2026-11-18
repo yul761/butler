@@ -6,7 +6,7 @@ import { DeliveryGuard } from "../sessions/delivery-guard";
 import { deliveryNeedsYou, NeedsYouTracker, type NeedsYouVerdict } from "../sessions/needs-you";
 import { memDb } from "../test-utils";
 import type { Session } from "../../shared/types";
-import { CI_UNDELIVERED_MS, CiDelivery, deliveryKey, pickRecipient, type CiDeliveryDeps, type RecipientCandidate } from "./ci-delivery";
+import { CI_UNDELIVERED_MS, CiDelivery, ciRecipient, deliveryKey, pickRecipient, type CiDeliveryDeps, type RecipientCandidate } from "./ci-delivery";
 
 type Deliver = (term: string, text: string, recheck: () => boolean) => Promise<"sent" | "exited" | "timeout" | "blocked">;
 
@@ -375,5 +375,109 @@ describe("CiDelivery with the real guard and needs-you tracker (I1)", () => {
     await new Promise((res) => setTimeout(res, 0));
     await s.d.flush();
     expect(s.deliver).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ciRecipient (pickRecipient plus hibernated sessions, workstream M)", () => {
+  const head = (id: string, gitBranch: string | null = null, o: Partial<Session> = {}): Session =>
+    ({
+      id, ticketKey: "BTL-1", repoId: 1, gitBranch, coordinator: false, cwd: "/r", origin: "butler", firstPrompt: null, lastActivityAt: null,
+      waitingForInput: true, replacedBy: null, dismissed: false, createdAt: 0, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null,
+      ...o,
+    }) as Session;
+  const pick = (o: { open?: Session[]; asleep?: Session[]; owner?: string | null; ownerTermOpen?: boolean; chain?: Record<string, string>; branch?: string }) =>
+    ciRecipient({
+      ticketKey: "BTL-1", repoId: 1, branch: o.branch ?? "feat", ticketBranch: "main",
+      openHeads: o.open ?? [], hibernatedHeads: o.asleep ?? [],
+      ownerSessionId: o.owner ?? null, ownerTermOpen: o.ownerTermOpen ?? false,
+      headOf: (id) => {
+        const hid = o.chain?.[id] ?? id;
+        return [...(o.open ?? []), ...(o.asleep ?? [])].find((h) => h.id === hid) ?? null;
+      },
+    });
+
+  it("a hibernated owner gets it, ahead of an open session on the same branch", () => {
+    expect(pick({ owner: "o", asleep: [head("o", "feat")], open: [head("a", "feat")] })).toEqual({ ok: true, sessionId: "o", via: "owner" });
+  });
+
+  it("an owner recorded under an older id in the chain still matches its hibernated head", () => {
+    expect(pick({ owner: "o-old", chain: { "o-old": "o" }, asleep: [head("o", "feat")], open: [head("a", "feat")] })).toEqual({ ok: true, sessionId: "o", via: "owner" });
+  });
+
+  it("an open owner comes first; a hibernated session on the branch does not take it", () => {
+    expect(pick({ owner: "o", ownerTermOpen: true, open: [head("o", "feat")], asleep: [head("z", "feat")] })).toEqual({ ok: true, sessionId: "o", via: "owner" });
+  });
+
+  it("open sessions are tried alone first: one open and one hibernated on the same branch goes to the open one, on or off the ticket branch", () => {
+    expect(pick({ open: [head("a", "feat")], asleep: [head("z", "feat")] })).toEqual({ ok: true, sessionId: "a", via: "branch" });
+    expect(pick({ branch: "main", open: [head("a", "main")], asleep: [head("z", "main")] })).toEqual({ ok: true, sessionId: "a", via: "ticket" });
+  });
+
+  it("hibernated sessions join only when the open ones give no single pick", () => {
+    expect(pick({ asleep: [head("z", "feat")] })).toEqual({ ok: true, sessionId: "z", via: "branch" });
+    expect(pick({ open: [head("a", "other")], asleep: [head("z", "feat")] })).toEqual({ ok: true, sessionId: "z", via: "branch" });
+    // 归属者关了（不是休眠）：同一个分支上休眠着的那个顶上。
+    expect(pick({ owner: "o", asleep: [head("z", "feat")] })).toEqual({ ok: true, sessionId: "z", via: "branch" });
+  });
+
+  it("keeps pickRecipient's reasons when nobody fits", () => {
+    expect(pick({})).toEqual({ ok: false, reason: "no_session" });
+    expect(pick({ owner: "o", open: [head("a", "other")] })).toEqual({ ok: false, reason: "owner_closed" });
+    expect(pick({ asleep: [head("z", "other")] })).toEqual({ ok: false, reason: "unowned", candidates: ["z"], promised: false });
+  });
+
+  it("hibernated coordinators and heads of other tickets or repos are not candidates; a head open and hibernated counts once", () => {
+    const others = [head("k", "feat", { coordinator: true }), head("x", "feat", { ticketKey: "BTL-2" }), head("y", "feat", { repoId: 2 })];
+    expect(pick({ asleep: others })).toEqual({ ok: false, reason: "no_session" });
+    expect(pick({ open: [head("a", "feat"), head("a", "feat")], asleep: [head("a", "feat")] })).toEqual({ ok: true, sessionId: "a", via: "branch" });
+  });
+});
+
+describe("CiDelivery to a hibernated session", () => {
+  it("records guard:hibernated while it wakes, delivers once after it is back, and never again for the same result", async () => {
+    const s = { asleep: true, term: null as string | null, now: 1 };
+    const wake = vi.fn(() => {
+      s.asleep = false;
+      s.term = "t-new";
+    });
+    // DeliveryGuard 的样子：没有终端时 wakeIfHibernated 叫醒并返回 hibernated。
+    const check = (): ReturnType<DeliveryGuard["check"]> => {
+      if (s.term) return { ok: true, termId: s.term, headId: "o" };
+      if (s.asleep) wake();
+      return { ok: false, block: "hibernated" };
+    };
+    const t = setup({ guardImpl: { check, recheckAfter: () => () => true } });
+    const asleepHead = { id: "o", ticketKey: "BTL-1", repoId: t.repoId, gitBranch: "b", coordinator: false } as Session;
+    const d = new CiDelivery({
+      prs: t.prs, branches: t.branches, currentBranch: () => "b",
+      guard: { check, recheckAfter: () => () => true },
+      recipient: (key, rid, branch) =>
+        ciRecipient({
+          ticketKey: key, repoId: rid, branch, ticketBranch: "b", ownerSessionId: "o", headOf: () => asleepHead, ownerTermOpen: s.term !== null,
+          openHeads: s.term ? [asleepHead] : [], hibernatedHeads: s.asleep ? [asleepHead] : [],
+        }),
+      deliver: t.deliver, now: () => s.now, log: t.log,
+    });
+    const r = t.pr();
+
+    // 结论到的时候它在休眠：叫醒，先不递，记下原因。
+    await d.settled({ kind: "pr", id: r.id });
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(t.deliver).not.toHaveBeenCalled();
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining("not delivered: guard:hibernated"));
+    s.now = 1 + CI_UNDELIVERED_MS;
+    expect(d.undelivered().map((u) => u.reason)).toEqual(["guard:hibernated"]);
+
+    // 醒来以后的 flush（sessionStopped）：递给新终端，不再挂着。
+    await d.flush();
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+    expect((t.deliver.mock.calls[0] as unknown as [string])[0]).toBe("t-new");
+    expect(d.undelivered()).toEqual([]);
+
+    // 再 flush、PrWatcher 再报一次同一个结论：都不再递，也不再叫醒。
+    await d.flush();
+    await d.settled({ kind: "pr", id: r.id });
+    expect(t.deliver).toHaveBeenCalledTimes(1);
+    expect(wake).toHaveBeenCalledTimes(1);
   });
 });

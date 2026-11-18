@@ -40,7 +40,7 @@ import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
 import { BranchOwnership } from "./prwatch/branch-owners";
-import { CiDelivery, pickRecipient, type RecipientCandidate } from "./prwatch/ci-delivery";
+import { CiDelivery, ciRecipient } from "./prwatch/ci-delivery";
 import { prHandoff } from "./prwatch/pr-handoff";
 import { runPrBackfill } from "./prwatch/pr-backfill";
 import { ensureSkillTrackingSince, skillTrackingSince } from "./prwatch/skill-tracking";
@@ -1245,25 +1245,18 @@ async function bootstrap(): Promise<void> {
     branches: branchWatch,
     currentBranch: (repoId) => tickets.getRepo(repoId)?.branch ?? null,
     guard: deliveryGuard,
+    // 休眠着的（WS-M B）也算：guard 叫它醒，醒来以后 sessionStopped 里的 flushCi 再递。
     recipient: (key, repoId, branch) => {
-      const open: RecipientCandidate[] = [];
-      const seen = new Set<string>();
-      for (const t of pty.openIds()) {
-        const h = sessions.head(t);
-        if (!h || seen.has(h.id) || h.ticketKey !== key || h.repoId !== repoId) continue;
-        seen.add(h.id);
-        open.push({ id: h.id, gitBranch: h.gitBranch, coordinator: h.coordinator });
-      }
-      // 休眠着的（WS-M B）也算：guard 叫它醒，醒来以后 sessionStopped 里的 flushCi 再递。
-      for (const h of hibernatedHeads()) {
-        if (seen.has(h.id) || h.ticketKey !== key || h.repoId !== repoId) continue;
-        seen.add(h.id);
-        open.push({ id: h.id, gitBranch: h.gitBranch, coordinator: h.coordinator });
-      }
       const o = branchOwners.get(key, repoId, branch);
-      const owner = o ? (sessions.head(o.sessionId)?.id ?? o.sessionId) : null;
-      const ownerOpen = o !== null && (gateTerm(o.sessionId) !== null || (owner !== null && isHibernated(owner)));
-      return pickRecipient({ owner, ownerOpen, open, ticketBranch: tickets.getRepo(repoId)?.branch ?? null, branch });
+      return ciRecipient({
+        ticketKey: key, repoId, branch,
+        openHeads: pty.openIds().flatMap((t) => sessions.head(t) ?? []),
+        hibernatedHeads: hibernatedHeads(),
+        ownerSessionId: o?.sessionId ?? null,
+        headOf: (id) => sessions.head(id),
+        ownerTermOpen: o !== null && gateTerm(o.sessionId) !== null,
+        ticketBranch: tickets.getRepo(repoId)?.branch ?? null,
+      });
     },
     deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
     now: Date.now,
