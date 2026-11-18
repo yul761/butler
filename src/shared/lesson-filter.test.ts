@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { isEmptyLessonFilter, matchesLessonFilter, parseLessonFilter } from "./lesson-filter";
-import type { Lesson } from "./lessons";
+import { LESSON_FIELD_DEFAULTS, type Lesson } from "./lessons";
 
-export const lesson = (over: Partial<Lesson> = {}): Lesson => ({
+const lesson = (over: Partial<Lesson> = {}): Lesson => ({
   id: 1, scope: { kind: "repo", slug: "acme/web" }, text: "Use the logger", why: "Reviewers asked twice", status: "pending", hits: 1,
-  lastSeenAt: 1, createdAt: 1, sources: [], scopeGlobs: [], scopeLang: null, scopeLayer: null, strength: null, checkability: null,
-  admission: "pending", shelvedReason: null, shelvedRef: null, batchId: null, mergedInto: null, score: null, scoreParts: null,
-  scoredAt: null, scorePolicyVersion: null, degraded: false, degradedFrom: null, ...over,
+  lastSeenAt: 1, createdAt: 1, sources: [], ...LESSON_FIELD_DEFAULTS, scopeGlobs: [], ...over,
 });
 
 describe("matchesLessonFilter", () => {

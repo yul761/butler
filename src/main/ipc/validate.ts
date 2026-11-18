@@ -5,7 +5,8 @@ import type {
   AddRepoInput, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
 import type { PrStagesScope } from "../../shared/pr-stages";
-import type { LessonAction } from "../../shared/lessons";
+import { LESSON_BULK_VERBS, MAX_TARGET_IDS, type LessonAction, type LessonBulkVerb, type LessonTarget } from "../../shared/lessons";
+import { parseLessonFilter } from "../../shared/lesson-filter";
 import { EPIC_NAME_LIMIT } from "../epics/epic-service";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 import { M } from "../strings";
@@ -307,10 +308,31 @@ export function lessonRunIdArg(v: unknown): number {
 }
 
 /** 复盘规矩页的操作。 */
+/** 批量动作的目标：id 列表（1..5000 个正整数）或筛选条件，二者取一。 */
+export function lessonTargetArg(v: unknown): LessonTarget {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("invalid lesson target");
+  const keys = Object.keys(o);
+  if (keys.length !== 1) throw new Error("invalid lesson target");
+  if (keys[0] === "ids") {
+    if (!Array.isArray(o.ids) || o.ids.length > MAX_TARGET_IDS) throw new Error("invalid lesson target");
+    return { ids: o.ids.map(lessonIdArg) };
+  }
+  if (keys[0] === "filter") return { filter: parseLessonFilter(o.filter) };
+  throw new Error("invalid lesson target");
+}
+
 export function lessonActionArg(v: unknown): LessonAction {
   const o = v as Record<string, unknown> | null;
   if (!o || typeof o !== "object") throw new Error("invalid lesson action");
   switch (o.op) {
+    case "bulk":
+      if (typeof o.verb !== "string" || !LESSON_BULK_VERBS.includes(o.verb as LessonBulkVerb)) throw new Error("invalid lesson action");
+      return { op: "bulk", verb: o.verb as LessonBulkVerb, target: lessonTargetArg(o.target) };
+    case "acceptRecommended":
+      return o.target === undefined ? { op: "acceptRecommended" } : { op: "acceptRecommended", target: lessonTargetArg(o.target) };
+    case "undoBatch":
+      return { op: "undoBatch", batchId: batchIdArg(o.batchId) };
     case "confirm":
       return o.text === undefined ? { op: "confirm", id: lessonIdArg(o.id) } : { op: "confirm", id: lessonIdArg(o.id), text: lessonTextArg(o.text) };
     case "reject":
@@ -355,6 +377,27 @@ export function lessonActionArg(v: unknown): LessonAction {
     default:
       throw new Error("invalid lesson action");
   }
+}
+
+/** 批次 id：正整数。 */
+export function batchIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error("invalid batch id");
+  return v;
+}
+
+/** 批次历史的分页：limit 1..500，beforeId 是上一页最后一个的 id。 */
+export function batchListArg(v: unknown): { limit?: number; beforeId?: number } {
+  if (v === undefined || v === null) return {};
+  const o = v as Record<string, unknown>;
+  if (typeof o !== "object" || Array.isArray(o)) throw new Error("invalid batch list");
+  for (const k of Object.keys(o)) if (k !== "limit" && k !== "beforeId") throw new Error("invalid batch list");
+  const out: { limit?: number; beforeId?: number } = {};
+  if (o.limit !== undefined) {
+    if (typeof o.limit !== "number" || !Number.isSafeInteger(o.limit) || o.limit < 1 || o.limit > 500) throw new Error("invalid batch list");
+    out.limit = o.limit;
+  }
+  if (o.beforeId !== undefined) out.beforeId = batchIdArg(o.beforeId);
+  return out;
 }
 
 /** 可用状态页的操作：只有手动暂停 / 恢复复盘。 */

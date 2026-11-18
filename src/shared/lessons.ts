@@ -203,7 +203,26 @@ export interface LessonsState {
   queue: LessonQueueView;
 }
 
+/** 准入、范围、评分这些字段都还没填时的样子（迁移后的默认值）。 */
+export const LESSON_FIELD_DEFAULTS = {
+  scopeGlobs: [] as string[], scopeLang: null, scopeLayer: null, strength: null, checkability: null, admission: "pending",
+  shelvedReason: null, shelvedRef: null, batchId: null, mergedInto: null, score: null, scoreParts: null, scoredAt: null,
+  scorePolicyVersion: null, degraded: false, degradedFrom: null,
+} as const satisfies Omit<Lesson, "id" | "scope" | "text" | "why" | "status" | "hits" | "lastSeenAt" | "createdAt" | "sources">;
+
+/** 批量动作（契约 4.4）。 */
+export type LessonBulkVerb = "confirm" | "reject" | "disable" | "enable" | "delete";
+export const LESSON_BULK_VERBS: readonly LessonBulkVerb[] = ["confirm", "reject", "disable", "enable", "delete"];
+/** 一次批量动作按 id 给的上限（按筛选条件给的不设上限）。 */
+export const MAX_TARGET_IDS = 5000;
+/** 批量动作的目标：一串 id（最多 5000 个），或一个筛选条件（主进程在事务里按它找行）。 */
+export type LessonTarget = { ids: number[] } | { filter: import("./lesson-filter").LessonFilter };
+
 export type LessonAction =
+  | { op: "bulk"; verb: LessonBulkVerb; target: LessonTarget }
+  /** 接受全部推荐：待确认、admission = auto 的全部确认；target 可再缩小范围。 */
+  | { op: "acceptRecommended"; target?: LessonTarget }
+  | { op: "undoBatch"; batchId: number }
   | { op: "confirm"; id: number; text?: string }
   | { op: "reject"; id: number }
   | { op: "edit"; id: number; text: string }
@@ -225,7 +244,10 @@ export type LessonAction =
   /** 在一个看得见的 Claude session 里打开这次运行；成功时 sessionId 是它的终端 id。 */
   | { op: "openInClaude"; runId: number };
 
-export type LessonActResult = { ok: true; sessionId?: string } | { ok: false; reason: string };
+/** 改规矩的动作成功时带上它记成的批次（没有一行真变时 batchId 为 null）、改了几行、跳过几行。 */
+export type LessonActResult =
+  | { ok: true; sessionId?: string; batchId?: number | null; affected?: number; skipped?: number }
+  | { ok: false; reason: string };
 
 /** 送进 session 说明的一行。label 是仓库 slug 或产品名。 */
 export interface SessionLesson {

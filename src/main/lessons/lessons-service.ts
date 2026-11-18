@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import type {
-  Lesson, LessonAction, LessonActResult, LessonFinding, LessonProductView, LessonQueueRowStatus, LessonQueueRowView, LessonQueueView, LessonRepoView,
+  LessonAction, LessonActResult, LessonFinding, LessonProductView, LessonQueueRowStatus, LessonQueueRowView, LessonQueueView, LessonRepoView,
   LessonRunDetail, LessonRunSummary, LessonsState, LessonUnknownRepo,
 } from "../../shared/lessons";
 import type { ClaudeAvailability, LessonsGate } from "../claude/availability";
@@ -12,9 +12,12 @@ import type { OpenSessionResult } from "../../shared/types";
 import type { LessonRunner } from "./lesson-runner";
 import type { RepoIdentity } from "./repo-identity";
 import { overflowFor, productSuggestions } from "./select";
+import type { LessonBatchService } from "./lesson-batches";
 
 export interface LessonsServiceDeps {
   repo: LessonsRepo;
+  /** 改规矩的动作（单条和批量）都走它：每次改动一个可撤销的批次。 */
+  batches: LessonBatchService;
   identity: RepoIdentity;
   runs: LessonRunsRepo;
   availability: Pick<ClaudeAvailability, "lessonsGate" | "pauseLessons" | "resumeLessons">;
@@ -204,46 +207,24 @@ export class LessonsService {
     const { repo } = this.d;
     const now = this.d.now();
     switch (a.op) {
-      case "confirm": {
-        const l = repo.get(a.id);
-        if (!l) return NOT_FOUND;
-        // 只有待确认的能确认：已拒绝或已停用的不能靠这个翻回来。
-        if (l.status !== "pending") return { ok: false, reason: "bad_status" };
-        repo.transaction(() => {
-          if (a.text !== undefined) repo.setText(a.id, a.text, now);
-          repo.setStatus(a.id, "confirmed", now);
-        });
-        return { ok: true };
-      }
+      case "bulk":
+        return { ok: true, ...this.d.batches.bulk(a.verb, a.target) };
+      case "acceptRecommended":
+        return { ok: true, ...this.d.batches.acceptRecommended(a.target) };
+      case "undoBatch":
+        return this.d.batches.undo(a.batchId);
+      case "confirm":
+        return this.d.batches.confirmOne(a.id, a.text);
       case "reject":
-        if (!repo.get(a.id)) return NOT_FOUND;
-        repo.setStatus(a.id, "rejected", now);
-        return { ok: true };
+        return this.d.batches.rejectOne(a.id);
       case "edit":
-        if (!repo.get(a.id)) return NOT_FOUND;
-        repo.setText(a.id, a.text, now);
-        return { ok: true };
-      case "setDisabled": {
-        const l = repo.get(a.id);
-        if (!l) return NOT_FOUND;
-        // 只在已确认和停用之间切换：待确认的不能靠这个绕过确认。
-        if (l.status !== "confirmed" && l.status !== "disabled") return { ok: false, reason: "bad_status" };
-        repo.setStatus(a.id, a.disabled ? "disabled" : "confirmed", now);
-        return { ok: true };
-      }
+        return this.d.batches.editOne(a.id, a.text);
+      case "setDisabled":
+        return this.d.batches.setDisabledOne(a.id, a.disabled);
       case "delete":
-        if (!repo.get(a.id)) return NOT_FOUND;
-        repo.remove(a.id);
-        return { ok: true };
-      case "merge": {
-        if (a.keepId === a.dropId) return { ok: false, reason: "same_lesson" };
-        const keep = repo.get(a.keepId);
-        const drop = repo.get(a.dropId);
-        if (!keep || !drop) return NOT_FOUND;
-        if (!sameScope(keep, drop)) return { ok: false, reason: "scope_mismatch" };
-        repo.merge(a.keepId, a.dropId, a.text, now);
-        return { ok: true };
-      }
+        return this.d.batches.deleteOne(a.id);
+      case "merge":
+        return this.d.batches.mergeOne(a.keepId, a.dropId, a.text);
       case "createProduct":
         if (repo.products().some((p: LessonProductView) => p.name === a.name)) return { ok: false, reason: "name_taken" };
         repo.createProduct(a.name, a.slugs, now);
@@ -301,6 +282,3 @@ export class LessonsService {
     }
   }
 }
-
-const sameScope = (a: Lesson, b: Lesson): boolean =>
-  a.scope.kind === "repo" ? b.scope.kind === "repo" && a.scope.slug === b.scope.slug : b.scope.kind === "product" && a.scope.productId === b.scope.productId;

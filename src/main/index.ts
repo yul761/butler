@@ -118,6 +118,9 @@ import { RepoIdentity } from "./lessons/repo-identity";
 import { readTailLines, TRANSCRIPT_TAIL_BYTES } from "./lessons/tail";
 import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
+import { LessonBatchService } from "./lessons/lesson-batches";
+import { BatchRecorder } from "./batches/batch-recorder";
+import { lessonAdapter, policyAdapter, productAdapter } from "./batches/table-adapter";
 import { writeRunFile } from "./lessons/run-file";
 import type { HeadlessExecDeps } from "./handoff/headless-exec";
 import * as git from "./tickets/git";
@@ -460,6 +463,9 @@ async function bootstrap(): Promise<void> {
   };
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
+  // 规矩、产品和准入策略的改动都记成可撤销的批次（契约 4.4）。
+  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db)]);
+  const lessonBatches = new LessonBatchService({ db, repo: lessonsRepo, recorder: batchRecorder, now: Date.now });
   const lessonRuns = new LessonRunsRepo(db);
   const repoIdentity = new RepoIdentity();
   // 带 hash 的 session 说明文件每次规矩变了就多一份，启动时清掉 30 天没用过的。
@@ -495,7 +501,7 @@ async function bootstrap(): Promise<void> {
   // 复盘规矩页：仓库路径直接查表（已归档的 ticket、feature、epic 不算）；归组建议按 ticket 和 feature 各算一组。
   const repoPathRows = <T extends { repo_path: string }>(sql: string): T[] => db.prepare(sql).all() as unknown as T[];
   const lessonsService = new LessonsService({
-    repo: lessonsRepo, runs: lessonRuns, availability, identity: repoIdentity, runner: lessonRunner,
+    repo: lessonsRepo, batches: lessonBatches, runs: lessonRuns, availability, identity: repoIdentity, runner: lessonRunner,
     knownRepoPaths: () => [
       ...new Set(
         repoPathRows<{ repo_path: string }>(

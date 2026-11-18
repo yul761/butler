@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
+import { batchIdArg, batchListArg, lessonTargetArg } from "./validate";
 import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
@@ -215,6 +216,34 @@ describe("inbox IPC arguments (BTL-190 2+3)", () => {
     expect(prUrlArg("https://github.com/a/b/pull/1")).toBe("https://github.com/a/b/pull/1");
     expect(prUrlArg("x".repeat(2000))).toHaveLength(2000);
     for (const bad of [null, 3, {}, ["https://github.com/a/b/pull/1"], "x".repeat(2001)]) expect(() => prUrlArg(bad), JSON.stringify(bad)).toThrow();
+  });
+});
+
+describe("bulk lesson actions", () => {
+  it("validate the verb, the target and the batch id", () => {
+    expect(lessonActionArg({ op: "bulk", verb: "confirm", target: { filter: { slug: "acme/web", status: ["pending"] } } })).toEqual({
+      op: "bulk", verb: "confirm", target: { filter: { slug: "acme/web", status: ["pending"] } },
+    });
+    expect(lessonActionArg({ op: "bulk", verb: "delete", target: { ids: [1, 2] } })).toEqual({ op: "bulk", verb: "delete", target: { ids: [1, 2] } });
+    expect(lessonActionArg({ op: "acceptRecommended" })).toEqual({ op: "acceptRecommended" });
+    expect(lessonActionArg({ op: "acceptRecommended", target: { filter: {} } })).toEqual({ op: "acceptRecommended", target: { filter: {} } });
+    expect(lessonActionArg({ op: "undoBatch", batchId: 3 })).toEqual({ op: "undoBatch", batchId: 3 });
+    for (const bad of [
+      { op: "bulk", verb: "explode", target: { ids: [1] } },
+      { op: "bulk", verb: "confirm" },
+      { op: "bulk", verb: "confirm", target: { ids: [1], filter: {} } },
+      { op: "bulk", verb: "confirm", target: { ids: [0] } },
+      { op: "bulk", verb: "confirm", target: { ids: Array.from({ length: 5001 }, (_, i) => i + 1) } },
+      { op: "bulk", verb: "confirm", target: { filter: { status: ["nope"] } } },
+      { op: "bulk", verb: "confirm", target: { other: 1 } },
+      { op: "undoBatch", batchId: 0 },
+      { op: "undoBatch", batchId: "1" },
+    ]) expect(() => lessonActionArg(bad), JSON.stringify(bad).slice(0, 80)).toThrow();
+    expect(() => lessonTargetArg([])).toThrow();
+    expect(batchIdArg(1)).toBe(1);
+    expect(batchListArg(undefined)).toEqual({});
+    expect(batchListArg({ limit: 50, beforeId: 9 })).toEqual({ limit: 50, beforeId: 9 });
+    for (const bad of [{ limit: 0 }, { limit: 501 }, { beforeId: -1 }, { other: 1 }, []]) expect(() => batchListArg(bad)).toThrow();
   });
 });
 

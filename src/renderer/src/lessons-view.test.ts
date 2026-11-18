@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { Lesson, LessonRepoView, LessonsState } from "../../shared/lessons";
+import { LESSON_FIELD_DEFAULTS, type Lesson, type LessonRepoView, type LessonsState } from "../../shared/lessons";
 import { lessonsFor, lessonsTree, pruneLessonsUi, type LessonsSelection } from "./lessons-view";
 
 const repo = (slug: string): LessonRepoView => ({ slug, localPath: `/x/${slug}`, lastAnalyzedAt: null, analyzedCount: 0, queued: 0, failed: 0, running: 0, skipped: 0, cancelled: 0, backfilled: false, overflow: 0 });
 const lesson = (id: number, scope: Lesson["scope"], status: Lesson["status"], hits = 1, lastSeenAt = 1): Lesson => ({
-  id, scope, text: `t${id}`, why: "", status, hits, lastSeenAt, createdAt: 0, sources: [],
+  id, scope, text: `t${id}`, why: "", status, hits, lastSeenAt, createdAt: 0, sources: [], ...LESSON_FIELD_DEFAULTS, scopeGlobs: [],
 });
 const state = (over: Partial<LessonsState> = {}): LessonsState => ({
   repos: [], unknownRepos: [], products: [], suggestions: [], lessons: [], ghAvailable: true, queue: { running: [], queued: 0, pause: null }, ...over,
