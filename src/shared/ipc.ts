@@ -86,6 +86,11 @@ export const IPC = {
   policiesSet: "policies:set",
   /** 导入导出（契约 4.3）。文件选择框在主进程里开。 */
   configStatus: "config:status",
+  /** 确定性检查（契约 4.5）：某一层看到的检查、一条检查的命中、页面上的操作、从规矩生成草稿。 */
+  checksView: "checks:view",
+  checksHits: "checks:hits",
+  checksAct: "checks:act",
+  checksDraft: "checks:draft",
   configExport: "config:export",
   configImportPreview: "config:importPreview",
   configImportRetarget: "config:importRetarget",
@@ -140,7 +145,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
-  IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget,
+  IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget,
   IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,

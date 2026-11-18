@@ -53,7 +53,8 @@ describe("lessons foundation migration (workstream C)", () => {
 
   it("creates the batch, policy, review and calibration tables, but not checks, backtests or baselines", () => {
     const db = at21();
-    migrate(db);
+    // 只跑 C 这一条：后面的工作流（E1 的 checks 等）有自己的迁移。
+    db.exec(MIGRATIONS[FOUNDATION]);
     const tables = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((r) => r.name));
     for (const t of ["admission_batches", "admission_batch_items", "admission_policies", "batch_reviews", "score_calibration"]) expect(tables.has(t), t).toBe(true);
     for (const t of ["checks", "check_backtests", "repo_baselines"]) expect(tables.has(t), t).toBe(false);

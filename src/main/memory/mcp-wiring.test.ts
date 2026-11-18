@@ -51,8 +51,11 @@ describe("the ticket memory MCP only reaches interactive sessions (P4-R6)", () =
   });
 
   it("interactive sessions (ticket, feature, epic, fix all go through mcpSettings) pre-allow ask_user and report (BTL-190 2+3)", () => {
-    const line = indexSource.split("\n").find((l) => l.includes("mcpSettings: (dirs) => projectMcpApprovalSettings("));
-    expect(line).toContain("allowTools: SESSIONS_AUTO_ALLOW");
+    const at = indexSource.indexOf("mcpSettings: (dirs) =>");
+    expect(at).toBeGreaterThan(0);
+    const block = indexSource.slice(at, indexSource.indexOf("checksAbsence,", at));
+    expect(block).toContain("projectMcpApprovalSettings(");
+    expect(block).toContain("allowTools: SESSIONS_AUTO_ALLOW");
   });
 
   it("projectMcp never returns a file under mcp/tickets, even when ticket configs with look-alike keys sit next to it", () => {

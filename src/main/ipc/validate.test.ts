@@ -1,3 +1,4 @@
+import { checkKeyArg, checkLessonIdArg, checkScopeArg, checksActionArg } from "./validate";
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
@@ -371,5 +372,25 @@ describe("policy and config import / export arguments", () => {
     expect(importRetargetArg({ token: tok, target: { kind: "repo", slug: "o/web" } })).toEqual({ token: tok, target: { kind: "repo", slug: "o/web" } });
     expect(starterTargetArg({ kind: "product", productId: 4 })).toEqual({ kind: "product", productId: 4 });
     expect(() => starterTargetArg({ kind: "all" })).toThrow();
+  });
+});
+
+describe("checks IPC arguments", () => {
+  it("accepts well-formed actions and rejects the rest", () => {
+    expect(checkScopeArg({ kind: "repo", slug: "acme/web" })).toEqual({ kind: "repo", slug: "acme/web" });
+    expect(() => checkScopeArg({ kind: "repo", slug: "nope" })).toThrow();
+    expect(checkKeyArg("builtin:comment_policy")).toBe("builtin:comment_policy");
+    expect(() => checkKeyArg("a b")).toThrow();
+    expect(checksActionArg({ op: "save", scope: { kind: "global" }, id: null, input: { type: "forbidden_pattern" } })).toMatchObject({ op: "save", id: null, lessonId: null });
+    expect(() => checksActionArg({ op: "save", scope: { kind: "global" }, id: null, input: "x".repeat(70_000) })).toThrow();
+    expect(checksActionArg({ op: "bulk", ids: [1, 2], verb: "shadow" })).toEqual({ op: "bulk", ids: [1, 2], verb: "shadow" });
+    expect(() => checksActionArg({ op: "bulk", ids: [], verb: "shadow" })).toThrow();
+    expect(() => checksActionArg({ op: "bulk", ids: [1], verb: "explode" })).toThrow();
+    expect(checksActionArg({ op: "verdict", hitId: 3, verdict: null })).toEqual({ op: "verdict", hitId: 3, verdict: null });
+    expect(() => checksActionArg({ op: "verdict", hitId: 3, verdict: "maybe" })).toThrow();
+    expect(checksActionArg({ op: "classify", lessonId: 4, checkability: "prose" })).toEqual({ op: "classify", lessonId: 4, checkability: "prose" });
+    expect(() => checksActionArg({ op: "classify", lessonId: 4, checkability: "converted" })).toThrow();
+    expect(() => checksActionArg({ op: "nope" })).toThrow();
+    expect(() => checkLessonIdArg(0)).toThrow();
   });
 });

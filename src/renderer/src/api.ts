@@ -1,3 +1,4 @@
+import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
 import { IPC, type IpcResult } from "../../shared/ipc";
@@ -112,6 +113,10 @@ export const api = {
   lessonsBatch: (id: number) => call<BatchDetail | null>(IPC.lessonsBatch, id),
   policiesGet: (scope: PolicyScope) => call<AdmissionPolicyView>(IPC.policiesGet, scope),
   policiesSet: (scope: PolicyScope, overrides: AdmissionPolicyOverrides) => call<{ batchId: number | null; version: number }>(IPC.policiesSet, { scope, overrides }),
+  checksView: (scope: CheckScope) => call<ChecksView>(IPC.checksView, scope),
+  checksHits: (key: string) => call<CheckHitView[]>(IPC.checksHits, key),
+  checksAct: (a: ChecksAction) => call<ChecksActResult>(IPC.checksAct, a),
+  checksDraft: (lessonId: number) => call<CheckDraftResult>(IPC.checksDraft, lessonId),
   configStatus: () => call<ConfigIoStatus>(IPC.configStatus),
   configExport: (req: ExportRequest) => call<ExportResult>(IPC.configExport, req),
   configImportPreview: () => call<ImportPreviewResult>(IPC.configImportPreview),

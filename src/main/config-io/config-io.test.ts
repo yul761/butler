@@ -128,7 +128,8 @@ describe("export", () => {
     expect(repo.sections.policies).toEqual([]);
     const lessonsOnly = a.io.exportDoc({ ...all, options: { content: "lessons", includeSourceUrls: false } })!;
     expect(Object.keys(lessonsOnly.sections).sort()).toEqual(["lessons", "products"]);
-    expect(a.io.writeExport({ ...all, options: { content: "checks", includeSourceUrls: false } }, join(tmp(), "c.json"))).toEqual({ ok: false, reason: "no_checks" });
+    const checksOnly = a.io.exportDoc({ ...all, options: { content: "checks", includeSourceUrls: false } })!;
+    expect(Object.keys(checksOnly.sections).sort()).toEqual(["checks", "products"]);
     expect(a.io.exportDoc({ scope: { kind: "product", productId: 999 }, options: all.options })).toBeNull();
   });
 
@@ -266,9 +267,10 @@ describe("import into another BUTLER_HOME", () => {
     const { a } = seed();
     const doc = a.io.exportDoc(all)!;
     const b = home();
-    const pr = await b.io.previewText(JSON.stringify({ ...doc, sections: { ...doc.sections, checks: [{ x: 1 }], models: [] } }));
+    const pr = await b.io.previewText(JSON.stringify({ ...doc, sections: { ...doc.sections, models: [] } }));
     if (!pr.ok) throw new Error("preview");
-    expect(pr.preview.skippedSections.sort()).toEqual(["checks", "models"]);
+    expect(pr.preview.skippedSections.sort()).toEqual(["models"]);
+    expect(await b.io.previewText(JSON.stringify({ ...doc, sections: { checks: [{ x: 1 }] } }))).toMatchObject({ ok: false, reason: "bad_section", section: "checks" });
     expect(await b.io.previewText(JSON.stringify({ ...doc, sections: { lessons: [{ text: "" }] } }))).toEqual({ ok: false, reason: "bad_section", section: "lessons" });
     expect(await b.io.previewText(JSON.stringify({ ...doc, sections: { policies: [{ layer: { kind: "global" }, overrides: { "score.admitLine": 7 } }] } }))).toMatchObject({ ok: false, section: "policies" });
     expect(await b.io.previewText(JSON.stringify({ ...doc, formatVersion: 99 }))).toEqual({ ok: false, reason: "too_new" });

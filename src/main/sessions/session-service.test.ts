@@ -1,3 +1,4 @@
+import type { CheckAbsenceReason } from "../../shared/checks";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -34,6 +35,7 @@ async function setup(opts: {
   launchFs?: { read: (f: string) => string; exists: (p: string) => boolean };
   pathValue?: string;
   lessonsWorkspace?: string;
+  checksAbsence?: () => CheckAbsenceReason | null;
 } = {}) {
   const stateOf = (id: string): TranscriptState =>
     opts.transcriptState ?? (opts.transcripts === undefined || opts.transcripts.includes(id) ? "present" : "absent");
@@ -64,6 +66,7 @@ async function setup(opts: {
     dirBusy: opts.dirBusy,
     launchFs: opts.launchFs,
     lessonsWorkspace: opts.lessonsWorkspace,
+    checksAbsence: opts.checksAbsence,
     submit: async (termId, message) => (submitted.push([termId, message]), "sent"),
     log: (m) => logs.push(m),
   });
@@ -174,6 +177,18 @@ describe("SessionService.open", () => {
     sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1 });
     await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
     expect(spawned[1].args).toEqual(["--resume", "old", "--settings", "/b/mcp/approve-1.json"]);
+  });
+
+  it("records why checks cannot run on every launch, and clears it once they can (addendum 7)", async () => {
+    let reason: CheckAbsenceReason | null = "hook_outdated";
+    const { service, sessions, pty, logs } = await setup({ checksAbsence: () => reason });
+    const r = (await service.open({ ticketKey: "PROJ-1" })) as { termId: string };
+    expect(sessions.get(r.termId)?.checksAbsent).toBe("hook_outdated");
+    expect(logs.some((l) => l.includes("checks absent (hook_outdated)"))).toBe(true);
+    pty.kill(r.termId);
+    reason = null;
+    await service.open({ ticketKey: "PROJ-1", sessionId: r.termId });
+    expect(sessions.get(r.termId)?.checksAbsent).toBeNull();
   });
 
   it("opens the session without the approval settings when they cannot be written", async () => {

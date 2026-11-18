@@ -26,7 +26,8 @@ const sortedSlugs = (s: readonly string[]) => [...new Set(s)].sort();
 export const productsSection: ConfigSection<ProductItem> = {
   id: "products",
   order: 10,
-  content: "lessons",
+  // 产品层的规矩和检查都要先有产品。
+  content: ["lessons", "checks"],
   item: ProductItem,
   export(sel, { repo }) {
     if (sel.kind === "repo") return [];

@@ -194,6 +194,14 @@ export interface ChecksView {
 export type ChecksBulkOp = "enable" | "disable" | "shadow" | "enforce" | "block" | "warn" | "delete";
 export const CHECKS_BULK_OPS: readonly ChecksBulkOp[] = ["enable", "disable", "shadow", "enforce", "block", "warn", "delete"];
 
+/** 检查页上的操作（checks:act）。input 由服务端用 validateCheckInput 校验。 */
+export type ChecksAction =
+  | { op: "save"; scope: CheckScope; id: number | null; input: unknown; lessonId?: number | null }
+  | { op: "override"; scope: CheckScope; key: string }
+  | { op: "bulk"; ids: number[]; verb: ChecksBulkOp }
+  | { op: "verdict"; hitId: number; verdict: CheckVerdict | null }
+  | { op: "classify"; lessonId: number; checkability: "checkable" | "prose" | null };
+
 export type ChecksActResult = { ok: true; batchId: number | null; affected: number; id?: number } | { ok: false; reason: string; message?: string };
 
 /** 从一条规矩生成检查（check_draft）的结果：一份草稿，或者「只能写成文字」和理由。 */
@@ -281,7 +289,8 @@ export function parseCheckScope(raw: unknown): CheckScope | null {
   if (!isObj(raw)) return null;
   if (raw.kind === "global") return { kind: "global" };
   if (raw.kind === "product" && Number.isSafeInteger(raw.productId) && (raw.productId as number) > 0) return { kind: "product", productId: raw.productId as number };
-  if (raw.kind === "repo" && typeof raw.slug === "string" && raw.slug.trim() && raw.slug.length <= 300) return { kind: "repo", slug: raw.slug.trim() };
+  // 仓库层用 owner/name（和 remote 解析出来的一样）。
+  if (raw.kind === "repo" && typeof raw.slug === "string" && raw.slug.length <= 300 && /^[^\s/]+\/[^\s/]+$/.test(raw.slug.trim())) return { kind: "repo", slug: raw.slug.trim() };
   return null;
 }
 

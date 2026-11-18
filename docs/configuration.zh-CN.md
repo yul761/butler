@@ -296,6 +296,26 @@ Butler 自己从不和你的 tracker 通信。handoff 通过公司 Claude Code �
 - 导入的规矩先是**待确认**（文件里已拒绝的照样拒绝），整个导入是一个批次，可以在批次标签页撤销。这台机器上没有克隆的仓库会加进来，本地路径留空，标成**这台机器上没有克隆**；Butler 看到它的克隆之前不能分析它的历史。状态冲突会把一条本地没确认的规矩变成已确认时，那一行会注明。
 - **起步包**导出已确认的规矩，不带归属、状态、出现次数和出处。导入起步包时会问加到哪个仓库或产品。
 
+## 检查：每次编辑都跑的确定性规则
+
+检查是不用模型就能判断的规则：禁止的写法、import 边界、注释规则、要跑的命令。检查在规矩页的**检查**标签里，和准入策略一样分三层（全局、产品、仓库；越近的层越优先，仓库可以按 key 关掉或覆盖继承来的检查）。可以手写，也可以在一条规矩上点**做成检查**：Butler 用模型从规矩文字起草一条，你看过再保存。没法机械检查的规矩可以标成**只有文字**。
+
+- Butler 把打开的检查写到 `<BUTLER_HOME>/checks/snapshot.json`。Butler 的 session 里每次 `Edit`、`Write`、`MultiEdit` 之后，`butler-hook check` 只读这个文件（从不碰数据库）；agent 跑 `git push` 时，`butler-hook check-push` 跑 push 阶段的检查。Butler 之外的 session 不受影响，你自己的 Claude Code 配置从不改动。
+- hook 从文件所在的文件夹找仓库（它的 `origin` remote）。没有 remote 的文件夹、读不了的快照、别的 Butler 版本写的快照，一律放行，并在 session 上记**没有检查**。
+- 路径 glob（`globs`、`excludeGlobs`）匹配相对仓库根目录的路径，`/` 和 `\` 都行。
+- **类型。**`forbidden_pattern`：新写的行里不许出现的正则（或原样文字）。`import_boundary`：匹配 `forbid` 的 import（仓库路径 glob 或 `electron` 这样的包名）不许出现，匹配 `allow` 的除外。`comment_policy`：说代码是临时的注释（内置中英文关键词，比如 *temporary*、*workaround*、*TODO*、临时、先这样）要带一个符合 ticket 格式的 ticket 号；这条内置检查一开始就有，但是**关着**。`run_command`：一条 shell 命令（macOS、Linux 用 `/bin/sh`，Windows 用 Git Bash）；`{file}` 换成改动的文件，作为参数传进去，绝不拼进命令文字。编辑阶段的命令只对改动的文件跑；push 阶段的命令在 push 前跑一次。
+- **模式。**新建的检查、导入的检查都从**试运行**开始：命中只记录。命中列表看着对了再切到**强制**。强制的 `block` 检查用 hook 的 block 把失败告诉 agent（改动保留，要求它修根本原因）；强制的 `warn` 检查和所有试运行命中只加一条提示。只报这次编辑新引入的问题，每个只报一次。
+- 超时的命令连同整棵进程树一起被杀掉，记为**没能检查**，编辑放行。push 阶段的检查失败会拦下 `git push` 并说明原因。合并闸门不变。
+- 检查标签里每条检查显示命中次数、agent 之后改掉了多少（采纳）、你标了多少误报。超过一年的命中记录会删掉。
+
+| 设置 | 键 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| 在 session 里跑检查 | `checksEnabled` | `1` | `1` 或 `0`。关掉后新的 session 不挂 hook，已经在跑的 session 一律放行。 |
+| 每次编辑后检查的时间（秒） | `checksEditTimeoutSec` | `8` | `1` 到 `30` 的整数。一次编辑的所有编辑阶段检查共用。 |
+| push 前检查的时间（秒） | `checksPushTimeoutSec` | `600` | `10` 到 `3600` 的整数。所有 push 阶段检查共用。 |
+
+检查跟着其它配置一起导出、导入（**只导出检查**或**全部**）。按 key 和层对应；行为上的改动（类型、参数、glob、严重程度、开关）算冲突，选了导入的就回到试运行；只改名字或提示语的，模式照旧。替换导入从不删除内置检查。
+
 ## 多家公司或多个配置
 
 用不同的 `BUTLER_HOME` 启动 Butler。如果每家公司有自己的 Claude Code 登录，再设一个不同的 `CLAUDE_CONFIG_DIR`。每个 `BUTLER_HOME` 都是一个独立的 Butler，有自己的数据库、记忆、hook 程序、日志和设置，以及自己的 Electron 配置文件夹（`$BUTLER_HOME/electron`）。Butler 会把这两个变量传给它启动的 `claude` session，让它们的 hook 报告到正确的收件箱。

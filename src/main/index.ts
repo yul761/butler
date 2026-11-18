@@ -33,7 +33,7 @@ import { SettingsRepo } from "./db/settings-repo";
 import { TermsRepo } from "./db/terms-repo";
 import { TicketsRepo } from "./db/tickets-repo";
 import { UsageRepo } from "./db/usage-repo";
-import { jobOf } from "./handoff/headless-exec";
+import { execHeadlessJson, jobOf } from "./handoff/headless-exec";
 import type { UsageCounts } from "./usage/usage-parse";
 import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
@@ -107,7 +107,7 @@ import { judgeStuck } from "./sessions/stuck-judge";
 import { markTurnEndedWithoutStop } from "./sessions/turn-end";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
-import { configBackupIntervalDays, configBackupKeep, configExportReminderDays, idleCloseMinutes, llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
+import { checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, idleCloseMinutes, llmConfig, memoryOn, refreshThreshold, scheduleConfig, SettingError, trackerTools } from "./settings/settings-values";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
 import { pathKey } from "./util/env";
@@ -124,7 +124,13 @@ import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
 import { LessonBatchService } from "./lessons/lesson-batches";
 import { BatchRecorder } from "./batches/batch-recorder";
-import { lessonAdapter, policyAdapter, productAdapter } from "./batches/table-adapter";
+import { checkAdapter, lessonAdapter, policyAdapter, productAdapter } from "./batches/table-adapter";
+import { ChecksService } from "./checks/checks-service";
+import { SnapshotWriter, readSnapshotState } from "./checks/snapshot-writer";
+import { HitIngest } from "./checks/hit-ingest";
+import { CheckDrafter } from "./checks/draft";
+import { HIT_RETENTION_MS } from "./db/checks-repo";
+import { CHECKS_SNAPSHOT_VERSION, type CheckAbsenceReason } from "../shared/checks";
 import { writeRunFile } from "./lessons/run-file";
 import type { HeadlessExecDeps } from "./handoff/headless-exec";
 import * as git from "./tickets/git";
@@ -468,9 +474,34 @@ async function bootstrap(): Promise<void> {
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
   // 规矩、产品和准入策略的改动都记成可撤销的批次（契约 4.4）。
-  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db)]);
+  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db)]);
+  // 确定性检查（契约 4.5）：库里是三层的定义，hook 只读 Butler 写出来的快照（<BUTLER_HOME>/checks/snapshot.json）。
+  // 检查、产品、设置、语言一变就重写快照（合并一小段时间里的改动）；内容没变不写。
+  const checksService: ChecksService = new ChecksService({
+    db, lessons: lessonsRepo, recorder: batchRecorder, now: Date.now, config: () => checksConfig(settings),
+    onChanged: () => checkSnapshots.schedule(),
+    snapshotStatus: () => checkSnapshots.lastStatus(),
+  });
+  const checkSnapshots = new SnapshotWriter({ file: paths.checksSnapshot, build: () => checksService.snapshot(), log: logger });
+  checkSnapshots.start();
+  // hook 一次运行写一个命中文件：读进 check_hits，「没有检查」记到 session 行上。
+  const checkHits = new HitIngest({
+    dir: paths.checksHits,
+    insertHits: (rows) => checksService.repo.insertHits(rows),
+    markAbsent: (session, reason) => sessions.setChecksAbsent(session, reason),
+    onIngested: () => notify(),
+    log: logger,
+  });
+  checkHits.start();
+  try {
+    checksService.prune(HIT_RETENTION_MS);
+  } catch (e) {
+    logger("checks: pruning old hits failed", e);
+  }
   // admissionPolicies 在下面才建：回调到调用时才取它。
-  const lessonBatches = new LessonBatchService({ db, repo: lessonsRepo, recorder: batchRecorder, now: Date.now, onPolicyChanged: () => admissionPolicies.bumpVersion() });
+  const lessonBatches = new LessonBatchService({
+    db, repo: lessonsRepo, recorder: batchRecorder, now: Date.now, onPolicyChanged: () => admissionPolicies.bumpVersion(), onChecksChanged: () => checkSnapshots.schedule(),
+  });
   // 三层准入策略（契约 4.2）：版本存在设置 admissionPolicyVersion 里。
   const admissionPolicies = new AdmissionPolicyService({
     db, repo: lessonsRepo, recorder: batchRecorder, now: Date.now,
@@ -484,7 +515,12 @@ async function bootstrap(): Promise<void> {
   const configRegistry = defaultRegistry();
   const configIo = new ConfigIoService({
     db, repo: lessonsRepo, policies: admissionPolicies, recorder: batchRecorder, registry: configRegistry, butlerVersion: app.getVersion(),
-    backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), log: logger,
+    backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), onApplied: () => checkSnapshots.schedule(), log: logger,
+  });
+  // 从规矩生成检查（任务 check_draft）。A 的模型路由合并前直接走 execHeadlessJson，task 先丢掉。
+  const checkDrafter = new CheckDrafter({
+    lessons: lessonsRepo, checks: checksService, fallbackCwd: () => paths.home,
+    run: ({ label, args, prompt, cwd }) => execHeadlessJson(judgeDeps, { label, args, prompt, cwd }),
   });
   const configBackups = new ConfigBackups({
     io: configIo, registry: configRegistry, jobs, repo: lessonsRepo, backupDir: configBackupDir, now: Date.now, log: logger,
@@ -605,6 +641,16 @@ async function bootstrap(): Promise<void> {
   });
   /** 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。 */
   const submitTask = (termId: string, message: string) => pty.deliver(termId, message, { singleLine: process.platform === "win32" });
+  /** 装着的 butler-hook 是当前版本：只有这时才挂 gate / check hook。 */
+  const hookInstalled = () => health.hookBinCurrent() && existsSync(paths.hookBin);
+  /** 这次启动的 session 为什么跑不了检查（addendum 第 7 节）；没有打开的检查就不算缺。 */
+  const checksAbsence = (): CheckAbsenceReason | null => {
+    if (!checksService.anyEnabled()) return null;
+    if (!checksConfig(settings).enabled) return "disabled";
+    if (!hookInstalled()) return "hook_outdated";
+    const st = readSnapshotState(paths.checksSnapshot, CHECKS_SNAPSHOT_VERSION);
+    return st === "ok" ? null : st === "version" ? "snapshot_version" : "no_snapshot";
+  };
   const sessionService = new SessionService({
     tickets, sessions, settings, ticketService, pty,
     activity: (id) => activityMonitor.get(id),
@@ -624,7 +670,15 @@ async function bootstrap(): Promise<void> {
     baseEnv: process.env,
     mcpConfig: memoryMcpConfig,
     // 装着的 butler-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
-    mcpSettings: (dirs) => projectMcpApprovalSettings(dirs, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, allowTools: SESSIONS_AUTO_ALLOW, gateCommand: health.hookBinCurrent() && existsSync(paths.hookBin) ? hookCommand(paths.hookBin, process.platform) : undefined }),
+    mcpSettings: (dirs) => {
+      const cc = checksConfig(settings);
+      return projectMcpApprovalSettings(dirs, {
+        claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, allowTools: SESSIONS_AUTO_ALLOW,
+        gateCommand: hookInstalled() ? hookCommand(paths.hookBin, process.platform) : undefined,
+        checks: cc.enabled ? { editTimeoutSec: cc.editTimeoutSec, pushTimeoutSec: cc.pushTimeoutSec } : undefined,
+      });
+    },
+    checksAbsence,
     guidePath: (kind, repoPaths) =>
       writeSessionGuide(paths.mcp, currentLang(), kind, kind === "ticket" ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger) : []),
     featureMcpConfig,
@@ -1283,7 +1337,14 @@ async function bootstrap(): Promise<void> {
       removeTicketMcpConfigs(paths.mcp, key);
       inboxService.dismissScope({ ticketKey: key });
     },
-    languageChanged: applyLanguage,
+    // 快照里有给 agent 看的文字：换语言、改检查相关的设置都要重写。
+    languageChanged: () => {
+      applyLanguage();
+      checkSnapshots.schedule();
+    },
+    settingChanged: (key) => {
+      if (key === "checksEnabled" || key === "checksEditTimeoutSec" || key === "checksPushTimeoutSec" || key === "ticketPattern") checkSnapshots.schedule();
+    },
     onFeatureArchived: (id) => {
       removeFeatureMcpConfig(paths.mcp, id);
       inboxService.dismissScope({ featureId: id });
@@ -1305,6 +1366,12 @@ async function bootstrap(): Promise<void> {
     lessons: lessonsService,
     batches: batchRecorder,
     policies: admissionPolicies,
+    checks: {
+      act: (a) => checksService.act(a),
+      view: (scope) => checksService.view(scope),
+      hits: (key) => checksService.hits(key),
+      draft: (lessonId) => checkDrafter.draft(lessonId),
+    },
     configIo: configIoFacade({
       io: configIo, backups: configBackups, backupDir: configBackupDir, now: Date.now, notify, log: logger,
       openPath: (dir) => shell.openPath(dir),
@@ -1506,6 +1573,8 @@ async function bootstrap(): Promise<void> {
       logger("merge gate: could not remove alive.json", e);
     }
     gateInbox.stop();
+    checkHits.stop();
+    checkSnapshots.stop();
     holdWatcher.stop();
     prWatcher.stop();
     pty.killAll();

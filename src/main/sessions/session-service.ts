@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import type { SessionActivity } from "../../shared/activity";
 import { sanitizePrefill } from "../../shared/text";
 import type { Pr } from "../../shared/handoff";
+import type { CheckAbsenceReason } from "../../shared/checks";
 import {
   effectiveStatus,
   type Epic,
@@ -84,6 +85,11 @@ export interface SessionServiceDeps {
    * 返回 null 时不加 --settings。
    */
   mcpSettings?: (dirs: string[]) => string | null;
+  /**
+   * 这个 session 为什么跑不了确定性检查（addendum 第 7 节）；null = 能跑，或者根本没有打开的检查。
+   * 每次启动都记到 session 行上（新开和恢复都算）；不给就不记。
+   */
+  checksAbsence?: () => CheckAbsenceReason | null;
   /** Butler 的 session 说明文件（--append-system-prompt-file）；不给或返回 null 时不加。 */
   /** repoPaths：这个 session 涉及的仓库路径，用来挑要送进去的规矩。 */
   guidePath?: (kind: GuideKind, repoPaths: string[]) => string | null;
@@ -261,6 +267,7 @@ export class SessionService {
       if (insertedRow) this.d.sessions.delete(termId);
       throw e;
     }
+    this.noteChecks(termId);
     if (prefill) this.prefill(termId, prefill);
     return { ok: true, termId, alreadyOpen: false };
   }
@@ -711,7 +718,20 @@ export class SessionService {
       if (insertedRow) this.d.sessions.delete(termId);
       throw e;
     }
+    this.noteChecks(termId);
     return termId;
+  }
+
+  /** 启动时记下「没有检查」（或清掉上次的）：session 按钮上的标记、预审（G）的覆盖情况都读它。出错只写日志。 */
+  private noteChecks(termId: string): void {
+    if (!this.d.checksAbsence) return;
+    try {
+      const reason = this.d.checksAbsence();
+      this.d.sessions.setChecksAbsent(termId, reason);
+      if (reason) this.d.log?.(`session ${termId}: checks absent (${reason})`);
+    } catch (e) {
+      this.d.log?.(`session ${termId}: checks state not recorded (${e instanceof Error ? e.message : String(e)})`);
+    }
   }
 
   /** 工作区之外要另外加的目录（同样的存在、cmd.exe 检查）。 */

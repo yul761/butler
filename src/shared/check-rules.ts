@@ -195,7 +195,7 @@ export function commentsOf(content: string, path: string): { line: number; text:
   return out;
 }
 
-const CJK = /[　-鿿豈-﫿]/;
+const CJK = /[\u3000-\u9fff\uf900-\ufaff]/;
 
 function keywordMatcher(keywords: readonly string[]): (text: string) => string | null {
   const en = keywords.filter((k) => !CJK.test(k));

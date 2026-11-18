@@ -1,5 +1,6 @@
 import type { BatchRecorder } from "../batches/batch-recorder";
 import type { AdmissionPolicyService } from "../lessons/admission-policies";
+import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { ConfigIoFacade } from "../config-io/facade";
 import type { BatchDetail, BatchView } from "../../shared/batches";
 import type { AdmissionPolicyView } from "../../shared/admission-policy";
@@ -50,7 +51,7 @@ import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
   addRepoArg, apiKeyArg, availabilityActionArg, auditCursorArg, boolArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
-  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg } from "./validate";
+  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg } from "./validate";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
 import type { AvailabilityView } from "../../shared/availability";
@@ -84,6 +85,8 @@ export interface IpcDeps {
   policies: Pick<AdmissionPolicyService, "view" | "setLayer">;
   /** 导入导出（契约 4.3）。 */
   configIo: ConfigIoFacade;
+  /** 确定性检查（契约 4.5）：检查页的读、写和从规矩生成草稿。 */
+  checks: { act: (a: ChecksAction) => ChecksActResult; view: (scope: CheckScope) => ChecksView; hits: (key: string) => CheckHitView[]; draft: (lessonId: number) => Promise<CheckDraftResult> };
   /** Claude 可用状态；act 只有手动暂停 / 恢复复盘。 */
   availability: Pick<ClaudeAvailability, "view" | "pauseLessons" | "resumeLessons">;
   /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
@@ -381,6 +384,14 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
     return r;
   });
+  handle(IPC.checksView, (raw: unknown): ChecksView => d.checks.view(checkScopeArg(raw)));
+  handle(IPC.checksHits, (raw: unknown): CheckHitView[] => d.checks.hits(checkKeyArg(raw)));
+  handle(IPC.checksAct, (raw: unknown): ChecksActResult => {
+    const r = d.checks.act(checksActionArg(raw));
+    if (r.ok) d.notify();
+    return r;
+  });
+  handle(IPC.checksDraft, (raw: unknown): Promise<CheckDraftResult> => d.checks.draft(checkLessonIdArg(raw)));
   handle(IPC.configStatus, (): ConfigIoStatus => d.configIo.status());
   handle(IPC.configExport, (raw: unknown): Promise<ExportResult> => d.configIo.exportTo(exportRequestArg(raw)));
   handle(IPC.configImportPreview, (): Promise<ImportPreviewResult> => d.configIo.importPreview());

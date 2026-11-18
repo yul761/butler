@@ -186,3 +186,17 @@ describe("ChecksService", () => {
     expect(sessions.get("s1")?.checksAbsent).toBe("hook_outdated");
   });
 });
+
+describe("ChecksService.act", () => {
+  it("dispatches page actions", () => {
+    const { svc, lessons } = setup();
+    const r = svc.act({ op: "save", scope: { kind: "global" }, id: null, input: fp("x") }) as { ok: true; id: number };
+    expect(r.ok).toBe(true);
+    expect(svc.act({ op: "bulk", ids: [r.id], verb: "warn" })).toMatchObject({ ok: true, affected: 1 });
+    const key = svc.repo.get(r.id)!.key;
+    expect(svc.act({ op: "override", scope: { kind: "repo", slug: "acme/web" }, key })).toMatchObject({ ok: true });
+    const lid = lessons.addLesson({ scope: { kind: "repo", slug: "acme/web" }, text: "t", why: "w", at: 1, source: { prNumber: 1, url: null, slug: "acme/web", runId: null } });
+    expect(svc.act({ op: "classify", lessonId: lid, checkability: "checkable" })).toMatchObject({ ok: true, affected: 1 });
+    expect(svc.act({ op: "verdict", hitId: 999, verdict: "true_positive" })).toEqual({ ok: false, reason: "not_found" });
+  });
+});

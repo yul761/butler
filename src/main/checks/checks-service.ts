@@ -8,7 +8,7 @@ import { M } from "../strings";
 import {
   CHECKS_SNAPSHOT_VERSION, sameScope, validateCheckInput,
   type CheckAbsenceReason, type CheckEffectiveView, type CheckHitView, type CheckInput, type CheckRow, type CheckScope, type CheckSnapshot, type CheckVerdict,
-  type ChecksActResult, type ChecksBulkOp, type ChecksView, type ResolvedCheck,
+  type ChecksAction, type ChecksActResult, type ChecksBulkOp, type ChecksView, type ResolvedCheck,
 } from "../../shared/checks";
 import type { LessonCheckability } from "../../shared/lessons";
 import type { BatchOrigin } from "../../shared/batches";
@@ -294,6 +294,22 @@ export class ChecksService {
       },
     );
     return { ok: true, batchId: outcome.batchId, affected: outcome.affected };
+  }
+
+  /** 检查页上的一个操作（checks:act），参数已经过 IPC 校验。 */
+  act(a: ChecksAction): ChecksActResult {
+    switch (a.op) {
+      case "save":
+        return this.save(a.scope, a.id, a.input, { lessonId: a.lessonId ?? null });
+      case "override":
+        return this.override(a.scope, a.key);
+      case "bulk":
+        return this.bulk(a.ids, a.verb);
+      case "verdict":
+        return this.setVerdict(a.hitId, a.verdict);
+      case "classify":
+        return this.classifyLesson(a.lessonId, a.checkability);
+    }
   }
 
   /** 删掉超过保留期的命中记录。 */
