@@ -456,7 +456,7 @@ export class CostBreaker {
 
   /** 「现在」页、session 行、托盘：不是 ok 的状态。warned / downgraded 只显示开着的；暂停的一直显示到恢复。 */
   views(): CostBreakerView[] {
-    let rows: CostRow[] = [];
+    let rows: CostRow[];
     try {
       rows = this.d.repo.all();
     } catch (e) {
@@ -466,10 +466,10 @@ export class CostBreaker {
     const out: CostBreakerView[] = [];
     for (const r of rows) {
       if (r.state === "ok" || r.cap === null || r.unit === null) continue;
-      let sessionId: string | null = null;
-      let ticketKey: string | null = null;
-      let title = r.subjectId;
-      let open = false;
+      let sessionId: string | null;
+      let ticketKey: string | null;
+      let title: string;
+      let open: boolean;
       if (r.subjectKind === "session") {
         const s = this.d.session(r.subjectId);
         if (!s) continue;

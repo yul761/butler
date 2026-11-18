@@ -9,13 +9,14 @@ import { ScheduleSettings } from "./ScheduleSettings";
 import { LessonsSettings } from "./LessonsSettings";
 import { ClaudeAvailability } from "./ClaudeAvailability";
 import { RoutingSettings } from "./RoutingSettings";
+import { CostBackgroundSettings } from "./CostBackgroundSettings";
 
-type SettingsTab = "general" | "routing";
+type SettingsTab = "general" | "routing" | "cost";
 
-export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => void; section?: "health" | "routing" }) {
-  const [tab, setTab] = useState<SettingsTab>(section === "routing" ? "routing" : "general");
+export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => void; section?: "health" | "routing" | "cost" }) {
+  const [tab, setTab] = useState<SettingsTab>(section === "routing" || section === "cost" ? section : "general");
   useEffect(() => {
-    if (section) setTab(section === "routing" ? "routing" : "general");
+    if (section) setTab(section === "routing" || section === "cost" ? section : "general");
   }, [section]);
   const [report, setReport] = useState<HealthReport | null>(null);
   const [busy, setBusy] = useState(false);
@@ -50,13 +51,21 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
 
   const tabs = (
     <div className="settings-tabs" role="tablist">
-      {(["general", "routing"] as const).map((t) => (
+      {(["general", "routing", "cost"] as const).map((t) => (
         <button key={t} role="tab" data-testid={`settings-tab-${t}`} aria-selected={tab === t} className={tab === t ? "page-tab active" : "page-tab"} onClick={() => setTab(t)}>
           {S.settingsTabs[t]}
         </button>
       ))}
     </div>
   );
+  if (tab === "cost") {
+    return (
+      <div className="page">
+        {tabs}
+        <CostBackgroundSettings />
+      </div>
+    );
+  }
   if (tab === "routing") {
     return (
       <div className="page">

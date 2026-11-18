@@ -1,5 +1,6 @@
 import type { AvailabilityView, LimitHit } from "../../shared/availability";
 import type { NowNotice } from "../../shared/types";
+import { costBreakerText } from "./cost-view";
 import type { UiStrings } from "./strings";
 
 const pad = (n: number): string => String(n).padStart(2, "0");
@@ -19,7 +20,7 @@ export function limitLine(l: LimitHit, S: UiStrings, now: number): string {
   return l.resetsAt === null ? S.limitNoReset(kind) : S.limitUntil(kind, resetClock(l.resetsAt, now));
 }
 
-export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend";
+export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend" | "raise";
 
 /** CI 结论为什么没递出去，一句人话（工作流 W）。认不得的原样带上。 */
 export function ciReasonText(reason: string, S: UiStrings): string {
@@ -51,6 +52,12 @@ export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: str
       const c = n.ci;
       const what = c.number === null ? S.ciWhatBranch(c.ticketKey, c.branch) : S.ciWhatPr(c.ticketKey, c.number, c.branch);
       return { text: S.noticeCiUndelivered(what, Math.max(1, Math.floor((now - c.since) / 60_000)), ciReasonText(c.reason, S)), actions: ["resend", "open"] };
+    }
+    // 成本熔断（工作流 L）：快到上限只提醒；降档、暂停了可以一键继续并提高上限。
+    case "cost": {
+      const actions: NoticeAction[] = n.breaker.state === "warned" ? [] : ["raise"];
+      if (n.target) actions.push("open");
+      return { text: costBreakerText(n.breaker, S), actions };
     }
   }
 }

@@ -109,3 +109,16 @@ describe("ci_undelivered notice", () => {
     expect(ciReasonText("toString", S)).toBe("原因：toString");
   });
 });
+
+describe("cost notice (workstream L)", () => {
+  const breaker = {
+    subjectKind: "session" as const, subjectId: "r", sessionId: "h", ticketKey: "T-1", title: "fix", state: "paused" as const, spent: 12, cap: 10, unit: "usd" as const,
+    partial: false, pauseScope: "session" as const, fromModel: null, toModel: null, trippedAt: 1, pausedAt: 2, stoppedAt: null, takenOver: false,
+  };
+  const target = { page: "ticket" as const, key: "T-1", sessionId: "h" };
+  it("a tripped breaker offers continue-and-raise and open; a warning only opens", () => {
+    expect(noticeText({ kind: "cost", breaker, target }, STRINGS.zh, 0)).toEqual({ text: "session「fix」 花到了上限（$12.0 / $10.0），已暂停", actions: ["raise", "open"] });
+    expect(noticeText({ kind: "cost", breaker: { ...breaker, state: "warned" }, target }, STRINGS.en, 0).actions).toEqual(["open"]);
+    expect(noticeText({ kind: "cost", breaker, target: null }, STRINGS.en, 0).actions).toEqual(["raise"]);
+  });
+});

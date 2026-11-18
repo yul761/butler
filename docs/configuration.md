@@ -286,6 +286,46 @@ The **Effect** page (below **Progress** in the sidebar) shows what Butler's PRs 
 
 Numbers are rolled up from local events once an hour; opening the page rolls up again if the last run is more than 10 minutes old. Time a session spent while the computer slept is not counted as waiting.
 
+## Spend caps and background work
+
+**Settings → Spend & background** has two parts: spend caps for sessions and tickets, and when background work may run. With nothing changed, Butler behaves as 2.1.0 did: no caps, and background work runs at any time.
+
+### Spend caps
+
+A cap limits how much one **session** may spend (the whole chain, including the sessions `/clear` continues) or one **ticket** (all its sessions plus the background calls charged to it, such as its needs-you and stuck checks and its lessons analysis). Spending comes from the same usage Butler already meters. In dollars it uses the cost Claude Code reports, or tokens × the registered prices. In tokens it uses the same weights as the quotas under [Spending](#spending).
+
+Caps are set in layers, like the admission policy: **global**, then **product**, then **repo**. A repo's value beats its product's, which beats the global one. Leave a field empty to inherit; type `none` in a cap to make that layer explicitly unlimited. A ticket or session that spans several repos uses the strictest cap among them.
+
+| Field | Key | Default | Accepted values and notes |
+|-------|-----|---------|---------------------------|
+| Cap per session | `sessionCap` | none | A positive number in the unit below, or `none`. |
+| Cap per ticket | `ticketCap` | none | A positive number in the unit below, or `none`. |
+| Unit | `unit` | `usd` | `usd` or `tokens`. |
+| At the cap | `action` | `downgrade_then_pause` | `downgrade_then_pause`: switch to the next lower model through model routing, and pause if spending still passes the cap by the overshoot below. `pause`: pause right away. With no lower model, Butler pauses. |
+| What to pause | `pauseScope` | `session` | `session`: Butler interrupts the turn the session is running (as if you pressed Esc), sends it no more messages, and stops its background calls. `background`: only its background calls stop; the terminal keeps going. |
+| Overshoot after downgrading before pausing (%) | `graceAfterDowngradePercent` | `20` | 0 to 1000. |
+| How much "Continue and raise the cap" adds (%) | `raisePercent` | `50` | 1 to 1000. The new cap is what was already spent plus this share of the cap. |
+
+**What you see.** Past the first soft threshold of `routingThresholds` (70% by default) the **Now** page warns. At the cap, the **Now** page, the session's row and the tray tooltip say what happened. **Continue and raise the cap** clears the pause and raises the cap for that session or ticket only; changing the cap in settings resets that raise. A paused session that keeps spending for more than 90 seconds without you typing in it has its terminal ended; if you type in it yourself, Butler leaves it to you. A paused session is never woken from hibernation. Every warning, downgrade, pause, stop and resume is listed under **Recent events** on the same page.
+
+The spend caps don't replace the stuck judge: a stuck check still runs while a session is over its cap, and a stuck session is still reported even when it is within budget.
+
+### Background work
+
+Background work (lessons analysis and backfills, lesson admission, and the kinds later features add) comes after the sessions you are using. Each kind has a priority (`high`, `normal`, `low`) and may be limited to certain times. When it has to yield, it keeps its progress: an interrupted item goes back to the queue and picks up from where it stopped, also after a restart. Background work never wakes a hibernated session.
+
+| Setting | Key | Default | Accepted values and notes |
+|---------|-----|---------|---------------------------|
+| When to run | `bgWindow` | `anytime` | `anytime`, `idle` ("Only while I'm idle"), `hours` ("Only in these hours") or `idle_or_hours`. `high` priority kinds ignore this. |
+| These hours | `bgHours` | `22:00-07:00` | Comma-separated `HH:MM-HH:MM` ranges in local time; a range may cross midnight. |
+| Idle after (minutes) | `bgIdleMinutes` | `10` | 1 to 240. Minutes without keyboard or mouse input on macOS or Windows before you count as idle. A locked screen counts as idle at once. |
+| When it has to yield | `bgYield` | `finish` | `finish`: work already running finishes, nothing new starts. `interrupt`: work that can be stopped stops now and is requeued. |
+| When quota is tight | `bgQuotaOrder` | `pause_first` | `pause_first`: past the first soft threshold, low-priority background work pauses before any task is moved to a lower tier. `downgrade_first`: tasks move to a lower tier first, and low-priority work pauses only past the second threshold. |
+| Plentiful quota (%) | `bgPlentifulPercent` | empty | 1 to 99. While every quota is below this share, background work runs outside its hours too. Empty turns it off. |
+| Per-kind changes | `bgKinds` | empty | A JSON object from a kind to `{"priority": ..., "window": ..., "paused": true}`. The table on the page writes it for you. |
+
+The table on the page shows each kind, whether it may run now and why not (paused by you, spend breaker, quota, yielding to you, outside the hours, not enough memory), and how many items are queued and running. **Pause** stops one kind until you resume it.
+
 ## Privacy and personal API
 
 The personal API is optional. It is used only at the **Full** level, to distil StateCore memory. Everything else works without it.
