@@ -91,10 +91,12 @@ describe("butler-sessions MCP server", () => {
   });
 
   it("reports Butler's errors, bad arguments and a silent Butler as tool errors", async () => {
-    const { server, answer } = setup(200);
-    const failing = server.handle({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "list_repos" } });
-    await answer({ v: 1, ok: false, error: "找不到 ticket" });
+    // 有回答的那次用正常的超时（慢的 CI 机器上 200ms 可能来不及），只有「Butler 不回应」才用短超时。
+    const answered = setup();
+    const failing = answered.server.handle({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "list_repos" } });
+    await answered.answer({ v: 1, ok: false, error: "找不到 ticket" });
     expect(await failing).toMatchObject({ result: { isError: true, content: [{ text: "找不到 ticket" }] } });
+    const { server } = setup(200);
     expect(await server.handle({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "start_session", arguments: { repo: "api" } } })).toMatchObject({ result: { isError: true } });
     expect(await server.handle({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "rm_rf" } })).toMatchObject({ result: { isError: true } });
     expect(await server.handle({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "list_sessions" } })).toMatchObject({
