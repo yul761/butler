@@ -2108,6 +2108,7 @@ async function bootstrap(): Promise<void> {
     availability,
     routing, switcher,
     cost: {
+      breakers: () => costBreakerInst.views(),
       view: (scope) => ({ policy: costPolicy.view(scope), layers: costPolicy.layers(), breakers: costBreakerInst.views(), events: costRepoInst.events({ limit: 50 }) }),
       set: (scope, overrides) => {
         try {

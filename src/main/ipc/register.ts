@@ -6,7 +6,7 @@ import type { ConfigIoFacade } from "../config-io/facade";
 import type { BatchDetail, BatchView } from "../../shared/batches";
 import type { AdmissionPolicyView, PolicyScope } from "../../shared/admission-policy";
 import type { BackgroundAction, BackgroundStatusView } from "../../shared/background";
-import type { CostResumeResult, CostSetResult, CostSubjectKind, CostView } from "../../shared/cost";
+import type { CostBreakerView, CostResumeResult, CostSetResult, CostSubjectKind, CostView } from "../../shared/cost";
 import type {
   AdmissionPageState, AdmissionScope, CalibrationAction, CalibrationActResult, CalibrationSample, CalibrationStatsView, RegroupResult, WizardAction, WizardActResult, WizardEstimate,
 } from "../../shared/lesson-admission";
@@ -117,7 +117,7 @@ export interface IpcDeps {
   /** 模型路由（3.0）：设置页的整份数据和操作；act 返回错误文字，成功为 null。 */
   routing: { view(): RoutingView; act(a: RoutingAction): Promise<string | null> };
   /** 花费上限和成本熔断（工作流 L）。set 不合法时回错误文字（不抛）。 */
-  cost: { view(scope: PolicyScope): CostView; set(scope: PolicyScope, overrides: unknown): CostSetResult; resume(kind: CostSubjectKind, id: string): Promise<CostResumeResult> };
+  cost: { breakers(): CostBreakerView[]; view(scope: PolicyScope): CostView; set(scope: PolicyScope, overrides: unknown): CostSetResult; resume(kind: CostSubjectKind, id: string): Promise<CostResumeResult> };
   /** 后台调度（工作流 L）。 */
   background: { status(): BackgroundStatusView; act(a: BackgroundAction): void };
   /** session 撞限后换模型（SessionModelSwitcher）。 */
@@ -507,6 +507,7 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
     return r;
   });
+  handle(IPC.costBreakers, (): CostBreakerView[] => d.cost.breakers());
   handle(IPC.costView, (raw: unknown): CostView => d.cost.view(policyScopeArg(raw)));
   handle(IPC.costSet, (raw: unknown): CostSetResult => {
     const { scope, overrides } = costSetArg(raw);
