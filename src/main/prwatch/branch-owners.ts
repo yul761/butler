@@ -4,7 +4,6 @@ import { classifyShip, type ShipCommand } from "../../shared/gate-command";
 import { isHeadlessEnvelope, type HookEnvelope } from "../../shared/hook-envelope";
 import type { Ticket } from "../../shared/types";
 import type { BranchOwner, BranchOwnersRepo } from "../db/branch-owners-repo";
-import { samePath } from "../tickets/ticket-service";
 import type { PrLinker } from "./pr-links";
 
 /** hook 报上来的一次推送或开 PR（butler-hook 只为这两种 Bash 调用写信封）。 */
@@ -54,16 +53,25 @@ export function shipFromEnvelope(env: HookEnvelope): Shipped | null {
   return { sessionId, ticket: env.ticket, cwd, commands, prUrls };
 }
 
+/** Git Bash 的 `/c/Users/...` 换成 `C:\Users\...`（不换的话 win32.resolve 会得到 `C:\c\Users\...`）。 */
+const fromGitBash = (p: string): string => p.replace(/^\/([A-Za-z])(?=$|\/)/, (_m, letter: string) => `${letter.toUpperCase()}:\\`);
+const upperDrive = (p: string): string => p.replace(/^([a-z]):/, (_m, letter: string) => `${letter.toUpperCase()}:`);
+
 /**
- * 命令里的目录（`cd` / `git -C`）按 hook 的 cwd 解析成绝对路径。`~`、`$HOME` 展开成 home；
- * Windows 上 Git Bash 的 `/c/Users/...` 换成 `C:\Users\...`（不换的话 resolve 会得到 `C:\c\Users\...`）。
+ * 命令里的目录（`cd` / `git -C`）按 hook 的 cwd 解析成绝对路径。`~`、`$HOME` 展开成 home。
+ * Windows 上 cwd 和目录都可能是 Git Bash 的 `/c/...`、正斜杠的 `C:/...` 或小写盘符：统一成 `C:\...`。
  */
 export function resolveShipDir(cwd: string, dir: string | null, o: { home: string; win: boolean }): string {
-  const path = o.win ? win32 : posix;
-  if (dir === null) return path.resolve(cwd);
-  let d = dir.replace(/^(?:~|\$HOME|\$\{HOME\})(?=$|[/\\])/, o.home);
-  if (o.win) d = d.replace(/^\/([A-Za-z])(?=$|\/)/, (_m, letter: string) => `${letter.toUpperCase()}:\\`);
-  return path.resolve(cwd, d);
+  if (!o.win) return dir === null ? posix.resolve(cwd) : posix.resolve(cwd, dir.replace(/^(?:~|\$HOME|\$\{HOME\})(?=$|\/)/, o.home));
+  const base = fromGitBash(cwd);
+  if (dir === null) return upperDrive(win32.resolve(base));
+  const d = fromGitBash(dir.replace(/^(?:~|\$HOME|\$\{HOME\})(?=$|[/\\])/, o.home));
+  return upperDrive(win32.resolve(base, d));
+}
+
+/** 比较用的路径：Windows 上正反斜杠、盘符大小写、路径大小写都不算区别。按 deps 的 win，不按 process.platform。 */
+export function pathKey(p: string, win: boolean): string {
+  return win ? win32.resolve(fromGitBash(p)).toLowerCase() : posix.resolve(p);
 }
 
 /** 看起来像版本 tag 的名字（`git push origin v2.1.0` 推的是 tag，不是分支）。 */
@@ -99,7 +107,6 @@ const real = (p: string): string => {
   }
 };
 
-const same = (a: string, b: string): boolean => samePath(a, b) || samePath(real(a), real(b));
 
 /**
  * 记下分支是谁的（工作流 W）：CI 的结论递给推这个分支、在上面开 PR 的 session，不看共享检出现在在哪个分支上。
@@ -108,6 +115,11 @@ const same = (a: string, b: string): boolean => samePath(a, b) || samePath(real(
 export class BranchOwnership {
   constructor(private readonly d: BranchOwnershipDeps) {}
 
+  private same(a: string, b: string): boolean {
+    const k = (p: string) => pathKey(p, this.d.win);
+    return k(a) === k(b) || k(real(a)) === k(real(b));
+  }
+
   async handle(env: HookEnvelope): Promise<void> {
     const s = shipFromEnvelope(env);
     if (s) await this.record(s);
@@ -115,11 +127,11 @@ export class BranchOwnership {
 
   /** 目录在 ticket 的哪个仓库里：主仓库根对上 ticket 仓库的路径，或者对上 ticket 仓库（本身可能是个 worktree）的主仓库根。 */
   private async repoOf(t: Pick<Ticket, "repos">, root: string): Promise<Ticket["repos"][number] | null> {
-    const direct = t.repos.find((r) => same(r.repoPath, root));
+    const direct = t.repos.find((r) => this.same(r.repoPath, root));
     if (direct) return direct;
     for (const r of t.repos) {
       try {
-        if (same(await this.d.mainRepoRoot(r.repoPath), root)) return r;
+        if (this.same(await this.d.mainRepoRoot(r.repoPath), root)) return r;
       } catch {
         // 仓库目录没了：不是它。
       }

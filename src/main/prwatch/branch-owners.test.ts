@@ -1,11 +1,11 @@
-import { resolve } from "node:path";
+import { win32 } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { BranchOwnersRepo } from "../db/branch-owners-repo";
 import { TicketPrsRepo } from "../db/ticket-prs-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { memDb } from "../test-utils";
 import type { HookEnvelope } from "../../shared/hook-envelope";
-import { BranchOwnership, resolveShipDir, shipFromEnvelope, type BranchOwnershipDeps } from "./branch-owners";
+import { BranchOwnership, pathKey, resolveShipDir, shipFromEnvelope, type BranchOwnershipDeps } from "./branch-owners";
 import { PrLinker } from "./pr-links";
 
 const env = (command: string, o: { cwd?: string; ticket?: string | null; butlerSession?: string | null; prUrls?: string[]; event?: string; tool?: string } = {}): HookEnvelope => ({
@@ -40,6 +40,17 @@ describe("shipFromEnvelope", () => {
   });
 });
 
+describe("pathKey", () => {
+  it("ignores slashes, drive case and path case on Windows, and nothing on posix", () => {
+    const k = (p: string) => pathKey(p, true);
+    expect(k("C:\\Users\\me\\proj")).toBe(k("c:/users/ME/proj/"));
+    expect(k("/c/Users/me/proj")).toBe(k("C:\\Users\\me\\proj"));
+    expect(k("C:\\Users\\me\\proj")).not.toBe(k("D:\\Users\\me\\proj"));
+    expect(pathKey("/repo/", false)).toBe(pathKey("/repo", false));
+    expect(pathKey("/Repo", false)).not.toBe(pathKey("/repo", false));
+  });
+});
+
 describe("resolveShipDir", () => {
   it("expands ~ and $HOME, and maps Git Bash drive paths on Windows", () => {
     expect(resolveShipDir("/repo", null, { home: "/h", win: false })).toBe("/repo");
@@ -50,10 +61,14 @@ describe("resolveShipDir", () => {
     expect(resolveShipDir("C:\\Users\\me\\proj", "/d", { home: "C:\\Users\\me", win: true })).toBe("D:\\");
     expect(resolveShipDir("C:\\Users\\me\\proj", "~/wt", { home: "C:\\Users\\me", win: true })).toBe("C:\\Users\\me\\wt");
     expect(resolveShipDir("C:\\Users\\me\\proj", "../wt", { home: "C:\\Users\\me", win: true })).toBe("C:\\Users\\me\\wt");
+    // hook 的 cwd 是小写盘符或 Git Bash 路径，命令里是正斜杠：都统一成大写盘符、反斜杠。
+    expect(resolveShipDir("c:\\users\\me\\proj", "../wt", { home: "C:\\Users\\me", win: true })).toBe("C:\\users\\me\\wt");
+    expect(resolveShipDir("/c/Users/me/proj", null, { home: "C:\\Users\\me", win: true })).toBe("C:\\Users\\me\\proj");
+    expect(resolveShipDir("C:\\Users\\me\\proj", "d:/src/x", { home: "C:\\Users\\me", win: true })).toBe("D:\\src\\x");
   });
 });
 
-function setup(o: { branches?: Record<string, string>; roots?: Record<string, string>; repoPath?: string } = {}) {
+function setup(o: { branches?: Record<string, string>; roots?: Record<string, string>; repoPath?: string; win?: boolean; home?: string } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   tickets.insert({ key: "T-1", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null });
@@ -61,24 +76,27 @@ function setup(o: { branches?: Record<string, string>; roots?: Record<string, st
   const prs = new TicketPrsRepo(db);
   const owners = new BranchOwnersRepo(db);
   const linker = new PrLinker({ prs, tickets, slugOf: (p) => (p === "/repo" ? "o/r" : null), now: () => 9 });
-  // 实现里的目录都过 resolve（Windows 上是 D:\...）：这里的键也一样。
-  const keyed = (m: Record<string, string>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [resolve(k), v]));
-  const branches = keyed({ "/repo": "feature/T-1", "/wt/a": "feat/a", ...o.branches });
-  const roots = keyed({ "/repo": "/repo", "/wt/a": "/repo", ...o.roots });
+  // posix 用例的路径原样当键（deps.win 为 false 时实现走 posix，CI 的 Windows 上也一样）；
+  // Windows 用例像 git 一样不管斜杠和大小写。
+  const win = o.win ?? false;
+  const key = (d: string) => (win ? win32.resolve(d).toLowerCase() : d);
+  const keyed = (m: Record<string, string>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [key(k), v]));
+  const branches = win ? keyed({ ...o.branches }) : keyed({ "/repo": "feature/T-1", "/wt/a": "feat/a", ...o.branches });
+  const roots = win ? keyed({ ...o.roots }) : keyed({ "/repo": "/repo", "/wt/a": "/repo", ...o.roots });
   const deps = {
     tickets: { get: (k: string) => tickets.get(k) },
     sessionTicket: vi.fn<BranchOwnershipDeps["sessionTicket"]>(() => null),
     currentBranch: vi.fn(async (d: string) => {
-      if (!(d in branches)) throw new Error(`not a repo: ${d}`);
-      return branches[d];
+      if (!(key(d) in branches)) throw new Error(`not a repo: ${d}`);
+      return branches[key(d)];
     }),
     mainRepoRoot: vi.fn(async (d: string) => {
-      if (!(d in roots)) throw new Error(`not a repo: ${d}`);
-      return roots[d];
+      if (!(key(d) in roots)) throw new Error(`not a repo: ${d}`);
+      return roots[key(d)];
     }),
     owners, linker, soon: vi.fn<(repoId: number) => void>(), now: () => 100, log: vi.fn<(msg: string, err?: unknown) => void>(),
     isCoordinator: vi.fn<(id: string) => boolean>(() => false), isOpen: vi.fn<(id: string) => boolean>(() => true),
-    exists: vi.fn<(dir: string) => boolean>(() => true), home: "/h", win: false,
+    exists: vi.fn<(dir: string) => boolean>(() => true), home: o.home ?? "/h", win,
   } satisfies BranchOwnershipDeps;
   return { db, tickets, repoId, prs, owners, deps, b: new BranchOwnership(deps) };
 }
@@ -87,7 +105,7 @@ describe("BranchOwnership", () => {
   it("records the session that pushed a worktree branch (git -C / cd relative to cwd) and asks the watcher to look", async () => {
     const s = setup();
     await s.b.handle(env("cd ../wt/a && git push -u origin HEAD", { cwd: "/repo" }));
-    expect(s.owners.get("T-1", s.repoId, "feat/a")).toMatchObject({ sessionId: "b1", dir: resolve("/wt/a"), at: 100 });
+    expect(s.owners.get("T-1", s.repoId, "feat/a")).toMatchObject({ sessionId: "b1", dir: "/wt/a", at: 100 });
     expect(s.deps.soon).toHaveBeenCalledWith(s.repoId);
     await s.b.handle(env("git -C /wt/a push origin feat/a:feat/renamed", { butlerSession: "b2" }));
     expect(s.owners.get("T-1", s.repoId, "feat/renamed")).toMatchObject({ sessionId: "b2" });
@@ -126,9 +144,9 @@ describe("BranchOwnership", () => {
     await s.b.handle(env("git -C /wt/b push origin v2.1.0"));
     expect(s.owners.get("T-1", s.repoId, "v2.1.0")).toBeNull();
     // hook 的 cwd 已经是 cd 进去以后的目录：sub/sub 不存在，就用 cwd。
-    s.deps.exists.mockImplementation((d) => d !== resolve("/wt/b/b"));
+    s.deps.exists.mockImplementation((d) => d !== "/wt/b/b");
     await s.b.handle(env("cd b && git push origin feat/c", { cwd: "/wt/b" }));
-    expect(s.owners.get("T-1", s.repoId, "feat/c")).toMatchObject({ dir: resolve("/wt/b") });
+    expect(s.owners.get("T-1", s.repoId, "feat/c")).toMatchObject({ dir: "/wt/b" });
   });
 
   it("uses the session's ticket when BUTLER_TICKET is missing, and logs why it records nothing", async () => {
@@ -154,5 +172,23 @@ describe("BranchOwnership", () => {
     await s.b.handle(env("cd /other && git push"));
     expect(s.owners.since(0)).toEqual([]);
     expect(s.deps.log).toHaveBeenCalledWith(expect.stringMatching(/branch owner: .*other is not one of T-1's repos/));
+  });
+
+  it("on Windows, matches the ticket repo however the hook and git spell the path (slashes, drive case, Git Bash)", async () => {
+    // 票里的仓库是 C:\Users\me\proj；hook 的 cwd 是小写盘符；git 打出来的主仓库根是正斜杠。
+    const s = setup({
+      win: true, home: "C:\\Users\\me", repoPath: "C:\\Users\\me\\proj",
+      roots: { "C:\\Users\\me\\proj": "C:/Users/me/proj", "C:\\Users\\me\\wt\\a": "c:/users/ME/proj", "C:\\Users\\me\\wt\\b": "C:/Users/me/proj" },
+      branches: { "C:\\Users\\me\\proj": "feature/T-1", "C:\\Users\\me\\wt\\a": "feat/a", "C:\\Users\\me\\wt\\b": "feat/b" },
+    });
+    await s.b.handle(env("git -C C:/Users/me/wt/a push", { cwd: "c:\\users\\me\\proj" }));
+    expect(s.owners.get("T-1", s.repoId, "feat/a")).toMatchObject({ dir: "C:\\Users\\me\\wt\\a" });
+    await s.b.handle(env("cd /c/Users/me/wt/b && git push", { cwd: "C:\\Users\\me\\proj" }));
+    expect(s.owners.get("T-1", s.repoId, "feat/b")).toMatchObject({ dir: "C:\\Users\\me\\wt\\b" });
+    // hook 的 cwd 本身是 Git Bash 路径、命令里是 ~：都对得上。
+    await s.b.handle(env("git push origin feature/T-1", { cwd: "/c/Users/me/proj" }));
+    expect(s.owners.get("T-1", s.repoId, "feature/T-1")).toMatchObject({ dir: "C:\\Users\\me\\proj" });
+    await s.b.handle(env("cd ~/wt/a && git push origin feat/a2", { cwd: "C:\\Users\\me\\proj", butlerSession: "b3" }));
+    expect(s.owners.get("T-1", s.repoId, "feat/a2")).toMatchObject({ sessionId: "b3", dir: "C:\\Users\\me\\wt\\a" });
   });
 });
