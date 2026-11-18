@@ -687,3 +687,25 @@ export async function issueEvents(cwd: string, repo: string, number: number, tim
   }
   return out;
 }
+
+/**
+ * gh pr create（导出成 lint 的分支，工作流 E2）。只由对外动作开关放行后调用；body 走 stdin，不进命令行。
+ * 成功返回 PR 链接（stdout 最后一行）；失败抛错（带 gh 的报错）。
+ */
+export function createPr(o: { cwd: string; branch: string; base: string; title: string; body: string; timeoutMs?: number }): Promise<string> {
+  const bin = binary;
+  if (bin === null) return Promise.reject(new Error("gh not found"));
+  const args = ["pr", "create", "--head", o.branch, "--title", o.title, "--body-file", "-", ...(o.base ? ["--base", o.base] : [])];
+  return new Promise((done, fail) => {
+    const child = execFile(bin, args, { cwd: o.cwd, timeout: o.timeoutMs ?? 60_000, windowsHide: true, maxBuffer: 1024 * 1024, env: { ...process.env, GH_PROMPT_DISABLED: "1" } }, (err, stdout, stderr) => {
+      if (err) {
+        fail(new Error(String(stderr || err.message).trim().slice(0, 500)));
+        return;
+      }
+      const url = String(stdout).trim().split(/\r?\n/).pop() ?? "";
+      if (/^https?:\/\//.test(url)) done(url);
+      else fail(new Error(`unexpected gh output: ${url.slice(0, 200)}`));
+    });
+    child.stdin?.end(o.body);
+  });
+}

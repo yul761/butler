@@ -21,7 +21,7 @@ import type { JobMessage } from "./jobs";
 import type { ScanOutput } from "./scan";
 import { runInference, type InferRunner } from "./infer";
 import { coverageIn } from "./coverage";
-import { profileText } from "./profile-text";
+import { joinProfiles, profileText } from "./profile-text";
 import { readRepoFile } from "./jobs";
 
 export interface BaselinesConfig {
@@ -348,6 +348,28 @@ export class BaselineService {
     const b = this.latest(slug);
     if (!b) return "";
     return profileText(b, { lang: this.d.lang(), maxChars: o.maxChars ?? this.d.config().guideChars, stale: o.stale ?? b.staleAt !== null, pitfalls: o.withPitfalls ?? true });
+  }
+
+  /**
+   * session guide 里的仓库档案（7.8）：只给这个 ticket 的仓库，每个不超过 baselineGuideChars、合起来不超过两倍。
+   * 配置文件改过的标「过期」，开着自动重扫就在后台重扫一次；guide 里已经有规矩那一段时不重复踩过的坑。从不抛错。
+   */
+  guideProfile(repos: { slug: string; root: string | null }[], hasLessons: boolean): string {
+    const texts: string[] = [];
+    const seen = new Set<string>();
+    for (const r of repos) {
+      if (seen.has(r.slug)) continue;
+      seen.add(r.slug);
+      try {
+        if (!this.latest(r.slug)) continue;
+        const stale = this.checkStale(r.slug, r.root);
+        if (stale) this.maybeRescan(r.slug);
+        texts.push(this.profileFor(r.slug, { stale, withPitfalls: !hasLessons }));
+      } catch (e) {
+        this.d.log?.(`baseline profile for ${r.slug} failed`, e);
+      }
+    }
+    return joinProfiles(texts, 2 * this.d.config().guideChars);
   }
 
   /** 启动时：上次没跑完的存量扫描标成失败（由存量扫描服务调用也行，这里放一个入口）。 */

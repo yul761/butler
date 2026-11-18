@@ -56,7 +56,8 @@ import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import {
   addRepoArg, apiKeyArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
-  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg } from "./validate";
+  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg } from "./validate";
+import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
 import type { AvailabilityView } from "../../shared/availability";
@@ -94,6 +95,10 @@ export interface IpcDeps {
   configIo: ConfigIoFacade;
   /** 确定性检查（契约 4.5）：检查页的读、写和从规矩生成草稿。 */
   checks: { act: (a: ChecksAction) => ChecksActResult; view: (scope: CheckScope) => ChecksView; hits: (key: string) => CheckHitView[]; draft: (lessonId: number) => Promise<CheckDraftResult> };
+  /** 仓库现状（工作流 E2）：扫描结果、标记文件表、摘要；存量扫描；导出成 lint。 */
+  baselines: { view(): BaselinesView; act(a: BaselinesAction): BaselinesActResult; rulesView(scope: CheckScope): RuleRowView[]; summary(scope: CheckScope): BaselineSummary };
+  legacy: { views(): LegacyScanView[]; start(checkId: number, slug: string): { ok: true } | { ok: false; message: string }; cancel(scanId: number): boolean; violations(scanId: number, offset: number, limit: number): LegacyViolation[] };
+  checkExports: { list(): CheckExportView[]; act(a: CheckExportAction): Promise<CheckExportResult> };
   /** Claude 可用状态；act 只有手动暂停 / 恢复复盘。 */
   availability: Pick<ClaudeAvailability, "view" | "pauseLessons" | "resumeLessons">;
   /** 模型路由（3.0）：设置页的整份数据和操作；act 返回错误文字，成功为 null。 */
@@ -444,6 +449,32 @@ export function registerIpc(d: IpcDeps): void {
     return r;
   });
   handle(IPC.checksDraft, (raw: unknown): Promise<CheckDraftResult> => d.checks.draft(checkLessonIdArg(raw)));
+  handle(IPC.baselinesView, (): BaselinesView => d.baselines.view());
+  handle(IPC.baselinesAct, (raw: unknown): BaselinesActResult => {
+    const r = d.baselines.act(baselinesActionArg(raw));
+    if (r.ok) d.notify();
+    return r;
+  });
+  handle(IPC.baselinesRules, (raw: unknown): RuleRowView[] => d.baselines.rulesView(checkScopeArg(raw)));
+  handle(IPC.baselinesSummary, (raw: unknown): BaselineSummary => d.baselines.summary(checkScopeArg(raw)));
+  handle(IPC.legacyView, (): LegacyScanView[] => d.legacy.views());
+  handle(IPC.legacyAct, (raw: unknown): { ok: true } | { ok: false; message: string } => {
+    const a = legacyActionArg(raw);
+    if (a.kind === "cancel") return d.legacy.cancel(a.scanId) ? { ok: true } : { ok: false, message: "not running" };
+    const r = d.legacy.start(a.checkId, a.slug);
+    if (r.ok) d.notify();
+    return r;
+  });
+  handle(IPC.legacyViolations, (raw: unknown): LegacyViolation[] => {
+    const q = legacyViolationsArg(raw);
+    return d.legacy.violations(q.scanId, q.offset, q.limit);
+  });
+  handle(IPC.checkExportList, (): CheckExportView[] => d.checkExports.list());
+  handle(IPC.checkExportAct, async (raw: unknown): Promise<CheckExportResult> => {
+    const r = await d.checkExports.act(checkExportActionArg(raw));
+    d.notify();
+    return r;
+  });
   handle(IPC.configStatus, (): ConfigIoStatus => d.configIo.status());
   handle(IPC.configExport, (raw: unknown): Promise<ExportResult> => d.configIo.exportTo(exportRequestArg(raw)));
   handle(IPC.configImportPreview, (): Promise<ImportPreviewResult> => d.configIo.importPreview());

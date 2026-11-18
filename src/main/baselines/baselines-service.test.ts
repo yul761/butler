@@ -163,6 +163,29 @@ describe("BaselineService scanning", () => {
   });
 });
 
+describe("BaselineService profile in the session guide", () => {
+  it("gives one profile per ticket repo with a baseline, marks stale ones, and stays within twice the per-repo limit", async () => {
+    const web = repoDir(JS_REPO);
+    const py = repoDir(PY_REPO);
+    const { svc, cfg } = setup({ paths: { "a/web": web, "a/py": py, "a/none": null } });
+    await svc.scan("a/web", { infer: false });
+    await svc.scan("a/py", { infer: false });
+    const text = svc.guideProfile([{ slug: "a/web", root: web }, { slug: "a/py", root: py }, { slug: "a/none", root: null }, { slug: "a/web", root: web }], false);
+    expect(text).toContain("a/web");
+    expect(text).toContain("pnpm test");
+    expect(text).toContain("a/py");
+    expect(text).toContain("pytest");
+    expect(text).not.toContain("a/none");
+    expect(text.split("a/web").length).toBe(2);
+    expect(text).not.toContain("Config files changed");
+    // worktree 里的配置改了：标过期
+    writeFileSync(join(web, "package.json"), JS_REPO["package.json"].replace('"lint"', '"lint:all"'));
+    expect(svc.guideProfile([{ slug: "a/web", root: web }], true)).toContain("Config files changed since this scan");
+    cfg.guideChars = 200;
+    expect(svc.guideProfile([{ slug: "a/web", root: web }, { slug: "a/py", root: py }], true).length).toBeLessThanOrEqual(400);
+  });
+});
+
 describe("BaselineService for lessons and checks", () => {
   it("finds the checks that already cover a lesson, across a product's repos", async () => {
     const { svc, lessons } = setup({ paths: { "a/web": repoDir(JS_REPO), "a/svc": repoDir(PY_REPO) } });

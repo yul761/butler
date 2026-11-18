@@ -104,6 +104,18 @@ export const IPC = {
   checksHits: "checks:hits",
   checksAct: "checks:act",
   checksDraft: "checks:draft",
+  /** 仓库现状（工作流 E2）：页面数据、扫描 / 取消 / 建检查 / 标记文件表的改动、某一层的标记文件表、一个范围的摘要。 */
+  baselinesView: "baselines:view",
+  baselinesAct: "baselines:act",
+  baselinesRules: "baselines:rules",
+  baselinesSummary: "baselines:summary",
+  /** 存量扫描：列表、开始 / 取消、一次扫描的明细。 */
+  legacyView: "legacy:view",
+  legacyAct: "legacy:act",
+  legacyViolations: "legacy:violations",
+  /** 导出成 lint：导出记录、导出 / 丢弃 / 推送 / 开 PR / 打开 worktree。 */
+  checkExportList: "checkExport:list",
+  checkExportAct: "checkExport:act",
   configExport: "config:export",
   configImportPreview: "config:importPreview",
   configImportRetarget: "config:importRetarget",
@@ -168,7 +180,8 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionsPin, IPC.sessionsWake, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
-  IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget,
+  IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft,
+  IPC.baselinesView, IPC.baselinesAct, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyAct, IPC.legacyViolations, IPC.checkExportList, IPC.checkExportAct, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget,
   IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.ciResend, IPC.routingView, IPC.routingAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools,
