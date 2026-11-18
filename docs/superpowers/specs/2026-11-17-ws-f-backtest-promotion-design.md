@@ -151,7 +151,7 @@ The verdict note says which number decided ("recall 0 % on 12 comments", "false 
 
 - **Verifiability** (section 4) is stored in the lesson's `score_parts.verifiability` by the judging batch (D's `stamp`). Lesson filters gain `minVerifiability` / `maxVerifiability` and `untested` (the source plan's "filter by backtest score").
 - **Performance** (after launch) is computed per check on the review tick and stored in `check_scores`, never in `lessons` (it changes all the time and would break undo of the accept batch). Inputs, each 0..1 and present only with enough data (`shadow.minHits` fails): adoption `resolved / fails` (capped at 1); precision `1 − falsePositives / fails` using human verdicts on hits; bypass `1 − bypassRate` (enforce only); comment trend from G: `1` when `after.perPr < before.perPr`, scaled down to `0` when it did not drop (only with `after.prs ≥ demote.noReductionPrs` and `before.prs > 0`). Performance = mean of the present inputs; the reason lists them.
-- **Composite of a check** = `compositeOf({...lesson parts, verifiability, performance})` with the policy weights (`score.weight.performance` is 0 by default in C; F changes the default to 0.3: master design §6 left it for F and the parts are now real). Checks without a backtest get the cap `min(score, score.untestedCap)`.
+- **Composite of a check** = `compositeOf({...lesson parts, verifiability, performance})` with the policy weights (`score.weight.performance` is 0 by default in C; F sets it to 0.2 and scales the other four weights by 0.8 (0.24 / 0.16 / 0.16 / 0.24): the weights still sum to 1 and, because `compositeOf` renormalises over present parts, every lesson score without a performance part is unchanged). Checks without a backtest get the cap `min(score, score.untestedCap)`.
 - **Direction test** (acceptance): a test builds checks with high and low composite scores from realistic hit data and asserts high-score checks have higher adoption and lower false-positive rate; plus a property-style test that the composite is monotone in each input.
 
 ## 6. Promotion (gate 6)
@@ -237,7 +237,7 @@ D's batch review compares them with `batch.minCoverage`, `batch.minBacktestRecal
 | `review.intervalDays` | 7 (1–365) | how often thresholds are reviewed |
 | `review.minSamples` | 10 (1–1000) | new calibration samples needed for a review |
 
-Plus the default of `score.weight.performance` changes from 0 to 0.3. New group `review`. All go through the three layers (4.2), the `policies` config-io section and both configuration docs.
+Plus `score.weight.performance` 0 → 0.2 with the other weights scaled by 0.8 (section 5). New group `review`. All go through the three layers (4.2), the `policies` config-io section and both configuration docs.
 
 ## 12. UI
 
@@ -257,7 +257,7 @@ Plus the default of `score.weight.performance` changes from 0 to 0.3. New group 
 6. Bypass events get their own table.
 7. Performance and check composites live in `check_scores`, not on `checks` or `lessons`.
 8. No timers: the review tick is a self-rescheduling background job.
-9. `score.weight.performance` default 0.3.
+9. `score.weight.performance` default 0.2, other weights × 0.8 (same ratios, lesson scores unchanged).
 
 ## 14. Windows and macOS
 

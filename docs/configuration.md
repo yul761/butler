@@ -372,11 +372,11 @@ The admission policy decides how the lesson pipeline scores, shelves, backtests,
 
 | Key | Default | Values | What it does |
 |-----|---------|--------|--------------|
-| `score.weight.evidence` | `0.3` | 0–1 | Weight of evidence (hits, PRs, reviewers) in the score |
-| `score.weight.clarity` | `0.2` | 0–1 | Weight of clarity |
-| `score.weight.consistency` | `0.2` | 0–1 | Weight of consistency with the existing rules |
-| `score.weight.verifiability` | `0.3` | 0–1 | Weight of verifiability (can it become a check) |
-| `score.weight.performance` | `0` | 0–1 | Weight of measured performance in shadow mode |
+| `score.weight.evidence` | `0.24` | 0–1 | Weight of evidence (hits, PRs, reviewers) in the score |
+| `score.weight.clarity` | `0.16` | 0–1 | Weight of clarity |
+| `score.weight.consistency` | `0.16` | 0–1 | Weight of consistency with the existing rules |
+| `score.weight.verifiability` | `0.24` | 0–1 | Weight of verifiability (can it become a check) |
+| `score.weight.performance` | `0.2` | 0–1 | Weight of measured performance in shadow mode |
 | `score.admitLine` | `0.7` | 0–1 | A checkable rule scoring at least this is admitted |
 | `score.dropLine` | `0.3` | 0–1 | A rule scoring below this is shelved |
 | `score.proseAdmitLine` | `0.8` | 0–1 | Admission line for rules that can only stay as prose |
@@ -403,16 +403,22 @@ The admission policy decides how the lesson pipeline scores, shelves, backtests,
 | `backtest.minRecall` | `0.01` | 0–1 | Lowest recall in the backtest |
 | `backtest.maxFalsePositiveRate` | `0.2` | 0–1 | Highest false-positive rate in the backtest |
 | `backtest.allowUntestedShadow` | `true` | `true` / `false` | Rules that cannot be backtested may still run in shadow mode |
+| `backtest.lineTolerance` | `3` | whole number 0–50 | Lines between a backtest hit and a review comment that still count as the same place |
+| `backtest.judgeSample` | `20` | whole number 0–200 | Unmatched backtest hits a model checks per rule (0: every unmatched hit counts as a false positive) |
 | `shadow.minPrs` | `5` | whole number 0–1000 | PRs a rule must run on in shadow mode before promotion |
 | `shadow.minDays` | `7` | whole number 0–365 | Days in shadow mode before promotion |
 | `shadow.maxFalsePositiveRate` | `0.2` | 0–1 | Highest false-positive rate in shadow mode |
 | `shadow.minAdoption` | `0.6` | 0–1 | Lowest share of findings that were acted on |
 | `shadow.autoPromote` | `false` | `true` / `false` | Promote out of shadow mode automatically when the bars are met |
+| `shadow.minHits` | `3` | whole number 0–1000 | Findings a rule must have in shadow mode before promotion is considered |
 | `conflict.autoPickHigherHits` | `false` | `true` / `false` | Settle conflicting rules by keeping the one with more hits |
 | `demote.enabled` | `true` | `true` / `false` | Demote admitted rules that stop paying off |
 | `demote.maxBypassRate` | `0.3` | 0–1 | Demote when a rule is bypassed more often than this |
 | `demote.noReductionPrs` | `10` | whole number 1–1000 | Demote after this many PRs without fewer repeat comments |
 | `demote.to` | `shadow` | `shadow` / `review` | Where a demoted rule goes: shadow (shadow mode) or review (back to the queue) |
+| `demote.minEvents` | `5` | whole number 1–1000 | Blocks a rule must have before its bypass rate counts |
+| `review.intervalDays` | `7` | whole number 1–365 | Days between threshold reviews |
+| `review.minSamples` | `10` | whole number 1–1000 | New calibration samples needed before thresholds are reviewed |
 | `admission.autoConfirm` | `false` | `true` / `false` | Confirm rules that pass admission without asking |
 
 ### Automatic admission

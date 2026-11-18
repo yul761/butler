@@ -3,8 +3,8 @@
  * 这些默认值还没校准过：校准界面出来之前页面上标「未校准的默认值」。
  */
 
-export type PolicyGroup = "score" | "batch" | "dedupe" | "generality" | "backtest" | "shadow" | "conflict" | "demote" | "admission";
-export const POLICY_GROUPS: readonly PolicyGroup[] = ["score", "batch", "dedupe", "generality", "backtest", "shadow", "conflict", "demote", "admission"];
+export type PolicyGroup = "score" | "batch" | "dedupe" | "generality" | "backtest" | "shadow" | "conflict" | "demote" | "review" | "admission";
+export const POLICY_GROUPS: readonly PolicyGroup[] = ["score", "batch", "dedupe", "generality", "backtest", "shadow", "conflict", "demote", "review", "admission"];
 
 export type PolicyKeyDef =
   | { key: string; group: PolicyGroup; kind: "number"; min: number; max: number; default: number }
@@ -17,11 +17,11 @@ const i = (key: string, group: PolicyGroup, d: number, min: number, max: number)
 const b = (key: string, group: PolicyGroup, d: boolean): PolicyKeyDef => ({ key, group, kind: "bool", default: d });
 
 export const ADMISSION_POLICY_KEYS = [
-  n("score.weight.evidence", "score", 0.3),
-  n("score.weight.clarity", "score", 0.2),
-  n("score.weight.consistency", "score", 0.2),
-  n("score.weight.verifiability", "score", 0.3),
-  n("score.weight.performance", "score", 0),
+  n("score.weight.evidence", "score", 0.24),
+  n("score.weight.clarity", "score", 0.16),
+  n("score.weight.consistency", "score", 0.16),
+  n("score.weight.verifiability", "score", 0.24),
+  n("score.weight.performance", "score", 0.2),
   n("score.admitLine", "score", 0.7),
   n("score.dropLine", "score", 0.3),
   n("score.proseAdmitLine", "score", 0.8),
@@ -48,16 +48,22 @@ export const ADMISSION_POLICY_KEYS = [
   n("backtest.minRecall", "backtest", 0.01),
   n("backtest.maxFalsePositiveRate", "backtest", 0.2),
   b("backtest.allowUntestedShadow", "backtest", true),
+  i("backtest.lineTolerance", "backtest", 3, 0, 50),
+  i("backtest.judgeSample", "backtest", 20, 0, 200),
   i("shadow.minPrs", "shadow", 5, 0, 1000),
   i("shadow.minDays", "shadow", 7, 0, 365),
   n("shadow.maxFalsePositiveRate", "shadow", 0.2),
   n("shadow.minAdoption", "shadow", 0.6),
   b("shadow.autoPromote", "shadow", false),
+  i("shadow.minHits", "shadow", 3, 0, 1000),
   b("conflict.autoPickHigherHits", "conflict", false),
   b("demote.enabled", "demote", true),
   n("demote.maxBypassRate", "demote", 0.3),
   i("demote.noReductionPrs", "demote", 10, 1, 1000),
   { key: "demote.to", group: "demote", kind: "enum", options: ["shadow", "review"], default: "shadow" },
+  i("demote.minEvents", "demote", 5, 1, 1000),
+  i("review.intervalDays", "review", 7, 1, 365),
+  i("review.minSamples", "review", 10, 1, 1000),
   b("admission.autoConfirm", "admission", false),
 ] as const satisfies readonly PolicyKeyDef[];
 

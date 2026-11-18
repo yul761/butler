@@ -372,11 +372,11 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 
 | 键 | 默认值 | 取值 | 作用 |
 |----|--------|------|------|
-| `score.weight.evidence` | `0.3` | 0–1 | 评分里证据（出现次数、PR 数、评审人数）的权重 |
-| `score.weight.clarity` | `0.2` | 0–1 | 清晰度的权重 |
-| `score.weight.consistency` | `0.2` | 0–1 | 和已有规矩一致的权重 |
-| `score.weight.verifiability` | `0.3` | 0–1 | 可验证性（能不能变成检查）的权重 |
-| `score.weight.performance` | `0` | 0–1 | 影子运行实测表现的权重 |
+| `score.weight.evidence` | `0.24` | 0–1 | 评分里证据（出现次数、PR 数、评审人数）的权重 |
+| `score.weight.clarity` | `0.16` | 0–1 | 清晰度的权重 |
+| `score.weight.consistency` | `0.16` | 0–1 | 和已有规矩一致的权重 |
+| `score.weight.verifiability` | `0.24` | 0–1 | 可验证性（能不能变成检查）的权重 |
+| `score.weight.performance` | `0.2` | 0–1 | 影子运行实测表现的权重 |
 | `score.admitLine` | `0.7` | 0–1 | 可检查的规矩达到这个分数就准入 |
 | `score.dropLine` | `0.3` | 0–1 | 低于这个分数就搁置 |
 | `score.proseAdmitLine` | `0.8` | 0–1 | 只能写成文字的规矩的准入线 |
@@ -403,16 +403,22 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 | `backtest.minRecall` | `0.01` | 0–1 | 回测召回率至少多少 |
 | `backtest.maxFalsePositiveRate` | `0.2` | 0–1 | 回测误报率最多多少 |
 | `backtest.allowUntestedShadow` | `true` | `true` / `false` | 没法回测的规矩也可以先影子运行 |
+| `backtest.lineTolerance` | `3` | 0–50 的整数 | 回测命中离评审评论几行以内算同一处 |
+| `backtest.judgeSample` | `20` | 0–200 的整数 | 每条规矩回测里没对上评论的命中，抽多少条让模型判断（0：没对上的都算误报） |
 | `shadow.minPrs` | `5` | 0–1000 的整数 | 影子运行至少经过几个 PR 才转正 |
 | `shadow.minDays` | `7` | 0–365 的整数 | 影子运行至少几天才转正 |
 | `shadow.maxFalsePositiveRate` | `0.2` | 0–1 | 影子运行误报率最多多少 |
 | `shadow.minAdoption` | `0.6` | 0–1 | 发现的问题至少多大比例被采纳 |
 | `shadow.autoPromote` | `false` | `true` / `false` | 达标后自动转正 |
+| `shadow.minHits` | `3` | 0–1000 的整数 | 影子运行里至少发现多少次问题才考虑升级 |
 | `conflict.autoPickHigherHits` | `false` | `true` / `false` | 规矩冲突时自动留出现次数多的那条 |
 | `demote.enabled` | `true` | `true` / `false` | 不再起作用的已准入规矩自动降级 |
 | `demote.maxBypassRate` | `0.3` | 0–1 | 被绕过的比例超过这个就降级 |
 | `demote.noReductionPrs` | `10` | 1–1000 的整数 | 连续这么多个 PR 重复评论没减少就降级 |
 | `demote.to` | `shadow` | `shadow` / `review` | 降级到哪：shadow（影子运行）或 review（回到待审） |
+| `demote.minEvents` | `5` | 1–1000 的整数 | 至少拦截多少次之后才看绕过率 |
+| `review.intervalDays` | `7` | 1–365 的整数 | 每隔几天复查一次阈值 |
+| `review.minSamples` | `10` | 1–1000 的整数 | 攒够多少条新的校准样本才复查阈值 |
 | `admission.autoConfirm` | `false` | `true` / `false` | 通过准入的规矩自动确认，不再问 |
 
 ### 自动准入
