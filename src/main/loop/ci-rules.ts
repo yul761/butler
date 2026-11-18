@@ -3,7 +3,7 @@ import { compilePattern } from "../../shared/loop-policy";
 import type { RunInfo } from "../tickets/gh-loop";
 
 /**
- * CI 失败的确定性分类（工作流 I，设计补充第 4.2 节）：先看 job 信息，再看 flaky 名单，再看日志关键字（代码类优先于环境类），
+ * CI 失败的确定性分类（工作流 I，设计补充第 4.2 节）：先看 job 信息，再看名单上的测试，再看代码类关键字、名单上的检查、环境类关键字，
  * 再看失败的是不是装依赖这一步。都判断不了返回 null，交给后台模型（ci_classify）。纯函数，不调 gh、不调模型。
  */
 
@@ -20,8 +20,10 @@ export interface CiVerdict {
 export interface CiRuleConfig {
   envPatterns: readonly string[];
   codePatterns: readonly string[];
-  /** 手动维护的 + 自动列入的 flaky 名单（检查名或测试名，模式写法同 envPatterns）。 */
+  /** 策略里手写的 flaky 名单（ci.flakyTests：检查名或测试名，模式写法同 envPatterns）。 */
   flaky: readonly string[];
+  /** ci_flaky_list 里的名单（自动列入的和在 flaky 名单上手动加的）：按种类、整个名字精确匹配。 */
+  listed?: { checks: readonly string[]; tests: readonly string[] };
 }
 
 /** 一个失败的 run：哪些检查、日志尾巴（gh run view --log-failed）、job 信息（gh run view --json）。 */
@@ -146,15 +148,19 @@ export function jobVerdict(info: RunInfo | null): CiVerdict | null {
 export function classifyCiByRule(f: RunFailure, cfg: CiRuleConfig): CiVerdict | null {
   const job = jobVerdict(f.info);
   if (job) return job;
-  const flaky = matchers(cfg.flaky);
-  for (const name of [...f.checks, ...failedTests(f.log)]) {
-    const hit = flaky.find((m) => m.test(name));
-    if (hit) return { category: "flaky", source: "list", reason: `list:${name}` };
-  }
+  const user = matchers(cfg.flaky);
+  const listedTests = new Set(cfg.listed?.tests ?? []);
+  const listedChecks = new Set(cfg.listed?.checks ?? []);
+  // 认出了失败的测试：全都在名单上才算 flaky（有一个不在就是真的失败）；这时检查名在不在名单上不算数。
+  const tests = failedTests(f.log);
+  if (tests.length > 0 && tests.every((t) => listedTests.has(t) || user.some((m) => m.test(t)))) return { category: "flaky", source: "list", reason: `list:${tests[0]}` };
+  const checkHit = tests.length > 0 ? undefined : f.checks.find((c) => listedChecks.has(c) || user.some((m) => m.test(c)));
   const text = parseLog(f.log).map((l) => l.text).join("\n");
-  if (!text.trim()) return null;
+  if (!text.trim()) return checkHit ? { category: "flaky", source: "list", reason: `list:${checkHit}` } : null;
+  // 代码类关键字先于名单上的检查名：名单上的检查真出了类型错误、断言失败，按代码问题算。
   const code = firstHit(matchers([...cfg.codePatterns, ...BUILTIN_CODE_PATTERNS]), text);
   if (code) return { category: "code", source: "rule", reason: `code:${code}` };
+  if (checkHit) return { category: "flaky", source: "list", reason: `list:${checkHit}` };
   const env = firstHit(matchers([...cfg.envPatterns, ...BUILTIN_ENV_PATTERNS]), text);
   if (env) return { category: "env", source: "rule", reason: `env:${env}` };
   const step = failedStep(f);

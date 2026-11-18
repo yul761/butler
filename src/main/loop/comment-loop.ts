@@ -34,7 +34,7 @@ const COMPARE_RETRY_MS = 5 * 60_000;
 
 export interface CommentLoopDeps {
   items: CommentItemsRepo;
-  prs: Pick<TicketPrsRepo, "get" | "byTicket">;
+  prs: Pick<TicketPrsRepo, "get" | "byTicket" | "byUrl">;
   policy(slug: string | null): LoopPolicy;
   /** PR 行在哪个目录跑 gh（用户在界面上点「再回复一次」时用；observe 时用 PrWatcher 给的）。 */
   cwdOf(pr: TicketPr): string | null;
@@ -94,6 +94,9 @@ export function replyText(lang: "en" | "zh", sha: string, quote: string | null):
 
 type Where = { cwd: string; slug: string | null };
 
+/** 几个 ticket 链接同一个 PR 时，评论项记在 id 最小的那一行上。 */
+const primaryRow = (rows: TicketPr[]): TicketPr => rows.reduce((a, b) => (b.id < a.id ? b : a));
+
 export class CommentLoop {
   /** 每个 PR URL 上一次拉 thread 时的样子（review id、PR 评论 id、head sha）：没变就不再拉。 */
   private readonly lastSig = new Map<string, string>();
@@ -101,6 +104,8 @@ export class CommentLoop {
   /** 每个 PR 行最近一次 observe 的 cwd（用户点「再回复一次」时用）。 */
   private readonly whereOf = new Map<number, Where>();
   private readonly compareFailedAt = new Map<string, number>();
+  /** 正在回复的项：「再回复一次」连点两下不会发两条。 */
+  private readonly replying = new Set<number>();
 
   constructor(private readonly d: CommentLoopDeps) {}
 
@@ -130,7 +135,7 @@ export class CommentLoop {
     if (!policy["comments.enabled"]) return;
     for (const r of rows) this.whereOf.set(r.id, where);
     const sig = [pr.headSha, pr.reviews.map((r) => `${r.id}:${r.state}`).sort().join(","), pr.comments.map((c) => c.id).sort().join(",")].join("|");
-    const waiting = rows.some((r) => this.d.items.byPr(r.id).some((i) => i.state === "pending" || (i.state === "delivered" && i.deliveredSha !== pr.headSha && i.checkedSha !== pr.headSha)));
+    const waiting = [primaryRow(rows)].some((r) => this.d.items.byPr(r.id).some((i) => i.state === "pending" || (i.state === "delivered" && i.deliveredSha !== pr.headSha && i.checkedSha !== pr.headSha)));
     if (this.lastSig.get(url) === sig && !waiting) return;
     const threads = await this.d.gh.reviewThreads(where.cwd, pr.number, COMMENT_GH_TIMEOUT_MS, where.slug);
     if (!threads) {
@@ -139,11 +144,11 @@ export class CommentLoop {
     }
     this.lastSig.set(url, sig);
     const cands = candidates({ author: pr.author, reviews: pr.reviews, comments: pr.comments }, threads);
+    // 几个 ticket 链接同一个 PR：评论只记在 id 最小的那一行上（只分类、回复、resolve 一次），送给能送到的那个 session。
+    const primary = primaryRow(rows);
     let changed = false;
-    for (const r of rows) {
-      if (await this.classifyRow(r, pr, cands, policy, where)) changed = true;
-      if (await this.verifyRow(r, pr, threads, policy, where)) changed = true;
-    }
+    if (await this.classifyRow(primary, pr, cands, policy, where)) changed = true;
+    if (await this.verifyRow(primary, pr, threads, policy, where)) changed = true;
     if (changed) this.d.changed();
     await this.flush();
   }
@@ -185,11 +190,22 @@ export class CommentLoop {
         toModel.push({ item, cand: c });
       }
     }
+    // 还没分类、评论却已经不在了（删掉了）：收起来，不然 observe 会一直当成「有事要做」每轮都拉 thread。
+    const keys = new Set(cands.map((c) => c.key));
+    for (const i of this.d.items.byPr(row.id)) {
+      if (i.state === "pending" && !keys.has(i.key)) {
+        this.d.items.update(i.id, { state: "closed", reason: "gone" }, now);
+        changed = true;
+      }
+    }
     if (toModel.length > 0) {
       const batch = toModel.slice(0, COMMENT_MODEL_BATCH);
       const verdicts = await this.d.model(where.cwd, batch.map(({ item, cand }) => ({ id: String(item.id), who: item.who, path: item.path, line: item.line, body: item.body, followUps: cand.followUps })));
       const at = this.d.now();
-      for (const { item } of batch) {
+      for (const { item: before } of batch) {
+        // 模型要跑一会儿：这期间你在「评论」标签里改了分类或者忽略了，以你的为准。
+        const item = this.d.items.get(before.id);
+        if (!item || item.state !== "pending") continue;
         const v = verdicts?.get(String(item.id));
         if (v) this.route(item, v.category, "model", v.reason, policy, at);
         else this.route(item, "human", "model", "model_failed", policy, at);
@@ -264,6 +280,16 @@ export class CommentLoop {
 
   /** 回复（和行内评论的 resolve）。都过对外动作开关；失败只记，不重试。 */
   private async reply(item: CommentItem, row: TicketPr, sha: string, policy: LoopPolicy, where: Where): Promise<void> {
+    if (this.replying.has(item.id)) return;
+    this.replying.add(item.id);
+    try {
+      await this.replyInner(item, row, sha, policy, where);
+    } finally {
+      this.replying.delete(item.id);
+    }
+  }
+
+  private async replyInner(item: CommentItem, row: TicketPr, sha: string, policy: LoopPolicy, where: Where): Promise<void> {
     const scope = { repoSlug: where.slug ?? undefined, ticketKey: row.ticketKey };
     const place = item.path ? `${item.path}${item.line !== null ? `:${item.line}` : ""}` : item.kind;
     let replied = !policy["comments.reply"];
@@ -327,12 +353,21 @@ export class CommentLoop {
     if (!row || row.state !== "open" || row.repoId === null || row.headBranch === null || row.headSha === null) return "not_open";
     const policy = this.d.policy(row.slug);
     if (!policy["comments.enabled"]) return "disabled";
-    const to = this.d.recipient(row.ticketKey, row.repoId, row.headBranch);
+    // 收件的 session：先找这一行的 ticket，没有就找链接同一个 PR 的其他 ticket。
+    let to = this.d.recipient(row.ticketKey, row.repoId, row.headBranch);
+    for (const other of this.d.prs.byUrl(row.url)) {
+      if (to.ok) break;
+      if (other.id === row.id || other.state !== "open" || other.repoId === null || other.headBranch === null) continue;
+      const alt = this.d.recipient(other.ticketKey, other.repoId, other.headBranch);
+      if (alt.ok) to = alt;
+    }
     if (!to.ok) return to.reason;
     if (this.d.busy.has(to.sessionId)) return "busy_delivering";
     const gate = this.d.guard.check(to.sessionId);
     if (!gate.ok) return `guard:${gate.block}`;
-    const items = queued.slice(0, policy["comments.maxPerDelivery"]);
+    // 别的 flush 可能刚送过、你可能刚忽略了：按库里现在的状态再挑一遍。
+    const items = queued.map((i) => this.d.items.get(i.id)).filter((i): i is CommentItem => i !== null && i.state === "queued").slice(0, policy["comments.maxPerDelivery"]);
+    if (items.length === 0) return "nothing";
     const m = M();
     const lines = items.map((i) => ({
       where: i.path ? `${i.path}${i.line !== null ? `:${i.line}` : ""}` : m.commentWholePr,
@@ -347,7 +382,7 @@ export class CommentLoop {
       const result = await this.d.deliver(gate.termId, text, this.d.guard.recheckAfter(to.sessionId, gate));
       if (result !== "sent") return `deliver:${result}`;
       const now = this.d.now();
-      for (const i of items) this.d.items.update(i.id, { state: "delivered", deliveredAt: now, deliveredSha: row.headSha, deliveredSession: to.sessionId, unchanged: 0, checkedSha: null }, now);
+      for (const i of items) if (this.d.items.get(i.id)?.state === "queued") this.d.items.update(i.id, { state: "delivered", deliveredAt: now, deliveredSha: row.headSha, deliveredSession: to.sessionId, unchanged: 0, checkedSha: null }, now);
       this.d.log(`comment loop: sent ${items.length} comment(s) of ${row.url} to ${to.sessionId} (${to.via})`);
       this.d.changed();
       return "sent";
@@ -358,9 +393,10 @@ export class CommentLoop {
 
   /** ticket 页「评论」标签。 */
   list(ticketKey: string): PrCommentsView[] {
-    return this.d.prs.byTicket(ticketKey).map((r) => ({
-      prId: r.id, number: r.number, url: r.url, enabled: this.d.policy(r.slug)["comments.enabled"], items: this.d.items.byPr(r.id).map(commentView),
-    }));
+    return this.d.prs.byTicket(ticketKey).map((r) => {
+      const primary = primaryRow(this.d.prs.byUrl(r.url).filter((x) => x.state === r.state).concat(r));
+      return { prId: r.id, number: r.number, url: r.url, enabled: this.d.policy(r.slug)["comments.enabled"], items: this.d.items.byPr(primary.id).map(commentView) };
+    });
   }
 
   /** 用户在「评论」标签里点的。返回改过的项；不认识的项、不能做的操作返回 null。 */
@@ -384,7 +420,7 @@ export class CommentLoop {
         this.d.items.update(item.id, { state: "dismissed", queuedAt: null }, now);
         break;
       case "reply": {
-        if (item.state !== "addressed" || item.addressedSha === null) return null;
+        if (item.state !== "addressed" || item.addressedSha === null || item.repliedAt !== null || this.replying.has(item.id)) return null;
         const where = this.whereOf.get(row.id) ?? (() => {
           const cwd = this.d.cwdOf(row);
           return cwd === null ? null : { cwd, slug: row.slug };
@@ -410,7 +446,7 @@ export class CommentLoop {
       for (const i of items) (by.get(i.prId) ?? by.set(i.prId, []).get(i.prId)!).push(i);
       for (const [prId, list] of by) {
         const row = this.d.prs.get(prId);
-        if (!row || row.state !== "open") continue;
+        if (!row || row.state !== "open" || !this.d.policy(row.slug)["comments.enabled"]) continue;
         out.push({ reason, ticketKey: row.ticketKey, prId, number: row.number, count: list.length, since: Math.min(...list.map(since)) });
       }
     };

@@ -5,6 +5,7 @@ import { CiTriageRepo } from "../db/ci-triage-repo";
 import type { CiCheck } from "../tickets/gh";
 import type { RunInfo } from "../tickets/gh-loop";
 import { LOOP_POLICY_DEFAULTS, type LoopPolicy } from "../../shared/loop-policy";
+import { M } from "../strings";
 import { CiTriage, PASSED_GRACE_MS, RERUN_CHECK_MS, type CiTriageDeps } from "./ci-triage";
 
 const ITEM = { kind: "pr" as const, id: 1 };
@@ -111,6 +112,108 @@ describe("CiTriage", () => {
     expect(s.decide().action).toBe("deliver");
   });
 
+  it("delivers a failure that matches the previous commit's failure as code", async () => {
+    const s = setup({}, { allowed: false });
+    s.decide();
+    await settle();
+    // 重跑开关关着：记 skipped，照常递，并注明。
+    s.decide();
+    await settle();
+    const first = s.decide();
+    expect(first.action).toBe("deliver");
+    if (first.action === "deliver") first.onSent?.();
+    // 新的 commit，同样的失败：不再当环境问题重跑。
+    const next = { ...s.failing(), headSha: "def" };
+    expect(s.triage.decide(ITEM, next).action).toBe("hold");
+    await settle();
+    const d = s.triage.decide(ITEM, next);
+    expect(d).toMatchObject({ action: "deliver" });
+    expect(d.action === "deliver" ? d.note : "").toContain(M().ciTriageSameAsBefore("env:ETIMEDOUT", false).slice(0, 12));
+    expect(s.repo.atSha(ITEM, "def")[0]).toMatchObject({ state: "classified" });
+    expect(s.repo.atSha(ITEM, "def")[0].prevSignature).toBe(s.repo.atSha(ITEM, "def")[0].signature);
+  });
+
+  it("does not count a previous failure that passed after a rerun", async () => {
+    const s = setup();
+    s.decide();
+    await settle();
+    s.decide();
+    await settle();
+    s.setInfo(okRun(2));
+    s.advance(RERUN_CHECK_MS);
+    s.decide();
+    await settle();
+    expect(s.repo.atSha(ITEM, "abc")[0].state).toBe("passed");
+    s.setInfo(failRun(1));
+    const next = { ...s.failing(), headSha: "def" };
+    s.triage.decide(ITEM, next);
+    await settle();
+    expect(s.repo.atSha(ITEM, "def")[0].prevSignature).toBeNull();
+    expect(s.triage.decide(ITEM, next).action).toBe("hold");
+    await settle();
+    expect(s.calls.reruns).toBe(2);
+  });
+
+  it("reruns a run once when two PR rows (two tickets) share it", async () => {
+    const s = setup();
+    const other = { kind: "pr" as const, id: 2 };
+    s.triage.decide(ITEM, s.failing());
+    s.triage.decide(other, s.failing());
+    await settle();
+    s.triage.decide(ITEM, s.failing());
+    s.triage.decide(other, s.failing());
+    await settle();
+    expect(s.calls.reruns).toBe(1);
+    expect(s.repo.atSha(ITEM, "abc")[0]).toMatchObject({ state: "rerunning" });
+    expect(s.repo.atSha(other, "abc")[0]).toMatchObject({ state: "rerunning" });
+    // 那一轮跑完通过：两行都算通过。
+    s.setInfo(okRun(2));
+    s.advance(RERUN_CHECK_MS);
+    s.triage.decide(ITEM, s.failing());
+    s.triage.decide(other, s.failing());
+    await settle();
+    expect(s.repo.atSha(ITEM, "abc")[0].state).toBe("passed");
+    expect(s.repo.atSha(other, "abc")[0].state).toBe("passed");
+  });
+
+  it("waits for an attempt that is already running instead of rerunning again", async () => {
+    const s = setup();
+    s.decide();
+    await settle();
+    s.setInfo({ ...failRun(2), status: "in_progress", conclusion: "" });
+    s.decide();
+    await settle();
+    expect(s.calls.reruns).toBe(0);
+    expect(s.repo.atSha(ITEM, "abc")[0]).toMatchObject({ state: "rerunning", rerunAttempt: 1 });
+  });
+
+  it("says reruns are set to 0 instead of 'possibly flaky' when ci.maxReruns is 0", async () => {
+    const s = setup({ "ci.maxReruns": 0 });
+    s.decide();
+    await settle();
+    const d = s.decide();
+    expect(d.action).toBe("deliver");
+    expect(d.action === "deliver" ? d.note : "").toBe(M().ciTriageNoRerun("env:ETIMEDOUT", false));
+    expect(s.calls.reruns).toBe(0);
+  });
+
+  it("lists only the test names automatically when tests were recognised", async () => {
+    const log = "test\tRun tests\t2026-11-18T00:00:00Z  FAIL  src/a.test.ts > retries > waits";
+    const s = setup({ "ci.flakyTests": ["src/a.test.ts > retries > waits"], "ci.autoListThreshold": 1 }, { log });
+    s.decide();
+    await settle();
+    expect(s.repo.atSha(ITEM, "abc")[0]).toMatchObject({ category: "flaky" });
+    s.decide();
+    await settle();
+    s.setInfo(okRun(2));
+    s.advance(RERUN_CHECK_MS);
+    s.decide();
+    await settle();
+    expect(s.repo.atSha(ITEM, "abc")[0].state).toBe("passed");
+    expect(s.repo.flakyCount("o/r", "check", "test", 0)).toBe(1);
+    expect(s.repo.listed("o/r")).toEqual({ checks: [], tests: ["src/a.test.ts > retries > waits"] });
+  });
+
   it("delivers the same failure twice as code with a note", async () => {
     const s = setup();
     s.decide();
@@ -184,7 +287,7 @@ describe("CiTriage", () => {
     s.decide();
     await settle();
     s.decide({ headSha: "abc", ci: "passing", failed: [] });
-    expect(s.repo.listed("o/r")).toEqual(["test"]);
+    expect(s.repo.listed("o/r")).toEqual({ checks: ["test"], tests: [] });
     // 列入名单以后：新 sha 上同一个检查直接按 flaky 处理、重跑。
     s.triage.decide(ITEM, { headSha: "def", ci: "failing", failed: [{ name: "test", state: "failing", runId: 8, log: "test\tRun tests\t2026-11-18T00:00:00Z expected 1 to be 2" }] });
     await settle();

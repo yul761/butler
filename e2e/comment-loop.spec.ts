@@ -65,5 +65,10 @@ test("a Copilot comment reaches the session, and after the push it is replied to
   expect(reply.find((x) => x.startsWith("body="))).toContain("bbbb222");
   await expect(page.getByTestId("comment-row").getByTestId("comment-state")).toContainText(S.lp.state.addressed);
   await expect(page.getByTestId("comment-row").getByTestId("comment-state")).toContainText(S.lp.replied);
+  // 「效果」页的评论与 CI：自动处理 1 条（Copilot），回复 1 条、resolve 1 条。
+  await page.locator(".sidebar").getByRole("button", { name: S.effectNav, exact: true }).click();
+  const handled = page.getByTestId("effect-loop-handled");
+  await expect(handled).toContainText(S.effect.loopHandledSub(1, 0));
+  await expect(handled).toContainText(S.effect.loopReplied(1, 1));
   expect(unsupportedGhCalls(s)).toEqual([]);
 });

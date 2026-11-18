@@ -44,6 +44,21 @@ describe("classifyCiByRule", () => {
     expect(classifyCiByRule(run("x", null, ["e2e (macos)"]), { ...cfg, flaky: ["/^e2e/"] })?.category).toBe("flaky");
   });
 
+  it("matches the automatic list exactly and by kind, and lets code keywords beat a listed check", () => {
+    const listed = { checks: ["test"], tests: ["src/a.test.ts > retries > waits"] };
+    // 检查名 "test" 在名单上，但日志里是类型错误：代码问题。
+    expect(classifyCiByRule(run(gh("test", "src/b.ts(3,1): error TS2322: nope"), null, ["test"]), { ...cfg, listed })?.category).toBe("code");
+    // 名单上的是检查名 "test"，不是子串：检查 "unit-test" 不算。
+    expect(classifyCiByRule(run(gh("unit-test", "something odd"), null, ["unit-test"]), { ...cfg, listed })).toBeNull();
+    // 认出了失败的测试：只有全都在名单上才算 flaky，名单上的检查名不再算数。
+    const one = gh("test", " FAIL  src/a.test.ts > retries > waits");
+    expect(classifyCiByRule(run(one, null, ["test"]), { ...cfg, listed })).toEqual({ category: "flaky", source: "list", reason: "list:src/a.test.ts > retries > waits" });
+    const two = [one, gh("test", " FAIL  src/c.test.ts > real > bug")].join("\n");
+    expect(classifyCiByRule(run(two, null, ["test"]), { ...cfg, listed })?.category).not.toBe("flaky");
+    // 检查名在名单上、日志里没有代码类关键字：flaky。
+    expect(classifyCiByRule(run(gh("test", "something odd"), null, ["test"]), { ...cfg, listed })).toEqual({ category: "flaky", source: "list", reason: "list:test" });
+  });
+
   it("applies user patterns", () => {
     expect(classifyCiByRule(run(gh("Deploy", "quota hiccup")), { ...cfg, envPatterns: ["quota hiccup"] })?.reason).toBe("env:quota hiccup");
     expect(classifyCiByRule(run(gh("Deploy", "ETIMEDOUT but schema drift")), { ...cfg, codePatterns: ["schema drift"] })?.category).toBe("code");

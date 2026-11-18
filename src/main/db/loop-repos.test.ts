@@ -70,7 +70,7 @@ describe("CiTriageRepo", () => {
     expect(r.list("o/r", "check", "test", "auto", 300)).toBe(true);
     expect(r.list("o/r", "check", "test", "manual", 301)).toBe(false);
     expect(r.list("o/r", "check", "lint", "manual", 302)).toBe(true);
-    expect(r.listed("o/r")).toEqual(["test", "lint"]);
+    expect(r.listed("o/r")).toEqual({ checks: ["test", "lint"], tests: [] });
     expect(r.flakyEntries(0)).toEqual([
       { repoSlug: "o/r", kind: "check", name: "test", count: 2, wastedMs: 90_000, lastAt: 200, listed: "auto" },
       { repoSlug: "o/r", kind: "test", name: "a > b", count: 1, wastedMs: 30_000, lastAt: 200, listed: null },

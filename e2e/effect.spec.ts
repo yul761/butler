@@ -19,6 +19,10 @@ test("the Effect page shows the four cards and why sessions stopped", async ({ m
   await expect(page.getByTestId("effect-interrupts")).toContainText(S.effect.interruptNames.permission);
   await expect(page.getByTestId("effect-interrupts")).toContainText(S.effect.autoResolved(0));
   await expect(page.getByTestId("effect-page")).toContainText(S.effect.empty);
+  // 评论与 CI（工作流 I）：两个闭环都没开，数字都是 0。
+  await expect(page.getByTestId("effect-loop")).toContainText(S.effect.loop);
+  await expect(page.getByTestId("effect-loop-handled")).toContainText(S.effect.loopHandledSub(0, 0));
+  await expect(page.getByTestId("effect-loop-flaky")).toContainText(S.effect.loopFlakySub(0));
 
   const week = page.getByRole("button", { name: S.effect.days(7), exact: true });
   await week.click();

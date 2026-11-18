@@ -140,8 +140,9 @@ export class CiTriageRepo {
   }
 
   /** 这个仓库名单上的名字（分类规则用）。 */
-  listed(repoSlug: string): string[] {
-    return (this.db.prepare(`SELECT name FROM ci_flaky_list WHERE repo_slug = ? ORDER BY id`).all(repoSlug) as { name: string }[]).map((r) => r.name);
+  listed(repoSlug: string): { checks: string[]; tests: string[] } {
+    const rows = this.db.prepare(`SELECT kind, name FROM ci_flaky_list WHERE repo_slug = ? ORDER BY id`).all(repoSlug) as { kind: FlakyKind; name: string }[];
+    return { checks: rows.filter((r) => r.kind === "check").map((r) => r.name), tests: rows.filter((r) => r.kind === "test").map((r) => r.name) };
   }
 
   /** 设置页和效果页：名单上的和窗口内 flaky 过的，按次数从多到少。 */
@@ -174,7 +175,7 @@ export class CiTriageRepo {
       code: one(`SELECT COUNT(*) c FROM ci_triage WHERE category = 'code' AND first_failed_at ${range}`),
       reruns: one(`SELECT COALESCE(SUM(reruns), 0) c FROM ci_triage WHERE first_failed_at ${range}`),
       passed: one(`SELECT COUNT(*) c FROM ci_triage WHERE state = 'passed' AND passed_at ${range}`),
-      deliveredAsCode: one(`SELECT COUNT(*) c FROM ci_triage WHERE state = 'delivered' AND delivered_at ${range}`),
+      deliveredAsCode: one(`SELECT COUNT(*) c FROM ci_triage WHERE state = 'delivered' AND COALESCE(outcome, '') <> 'possibly_flaky' AND delivered_at ${range}`),
       possiblyFlaky: one(`SELECT COUNT(*) c FROM ci_triage WHERE outcome = 'possibly_flaky' AND delivered_at ${range}`),
       wastedMs: one(`SELECT COALESCE(SUM(wasted_ms), 0) c FROM ci_flaky_events WHERE kind = 'check' AND at ${range}`),
     };

@@ -74,6 +74,8 @@ export class CiTriage {
   private readonly checkedAt = new Map<number, number>();
   /** 已经排了定时器的行。 */
   private readonly timers = new Set<number>();
+  /** 正在调 gh run rerun 的 run（slug 或 cwd + run id）：两个 PR 行链接同一个 PR 时只重跑一次。 */
+  private readonly rerunsInFlight = new Set<string>();
 
   constructor(private readonly d: CiTriageDeps) {}
 
@@ -159,9 +161,14 @@ export class CiTriage {
         if (row.outcome === "rerun_failed") return { kind: "deliver", row, outcome: "rerun_failed", note: m.ciTriageRerunFailed(reason) };
         if (row.outcome === "rerun_lost") return { kind: "deliver", row, outcome: "rerun_lost", note: m.ciTriageRerunLost(row.reruns) };
         if (row.prevSignature !== null && row.signature === row.prevSignature) {
-          return { kind: "deliver", row, outcome: "same_twice", note: m.ciTriageSameTwice(reason, row.category === "flaky") };
+          // reruns > 0：Butler 自己重跑以后又是这样；否则是上一次（之前的 commit）就是同样的失败。
+          const note = row.reruns > 0 ? m.ciTriageSameTwice(reason, row.category === "flaky") : m.ciTriageSameAsBefore(reason, row.category === "flaky");
+          return { kind: "deliver", row, outcome: "same_twice", note };
         }
-        if (row.reruns >= policy["ci.maxReruns"]) return { kind: "deliver", row, outcome: "possibly_flaky", note: m.ciTriagePossiblyFlaky(reason, row.reruns) };
+        if (row.reruns >= policy["ci.maxReruns"]) {
+          if (row.reruns === 0) return { kind: "deliver", row, outcome: "no_rerun", note: m.ciTriageNoRerun(reason, row.category === "flaky") };
+          return { kind: "deliver", row, outcome: "possibly_flaky", note: m.ciTriagePossiblyFlaky(reason, row.reruns) };
+        }
         if (!this.inflight.has(row.id)) this.background(item, row.id, () => this.rerun(item, row, w));
         return { kind: "pending" };
       }
@@ -199,8 +206,8 @@ export class CiTriage {
     // 重跑以后的日志一定要重新取；第一次用 PrWatcher 这一轮取到的，没有才取。
     const log = after || rowLog === null ? await this.d.gh.failedLog(w.cwd, row.runId, CI_TRIAGE_LOG_LINES, CI_TRIAGE_GH_TIMEOUT_MS, w.slug) : rowLog;
     const f = { runId: row.runId, checks: row.checks, log, info };
-    const flaky = [...policy["ci.flakyTests"], ...(w.slug ? this.d.repo.listed(w.slug) : [])];
-    let verdict: CiVerdict | null = classifyCiByRule(f, { envPatterns: policy["ci.envPatterns"], codePatterns: policy["ci.codePatterns"], flaky });
+    const listed = w.slug ? this.d.repo.listed(w.slug) : { checks: [], tests: [] };
+    let verdict: CiVerdict | null = classifyCiByRule(f, { envPatterns: policy["ci.envPatterns"], codePatterns: policy["ci.codePatterns"], flaky: policy["ci.flakyTests"], listed });
     if (!verdict && policy["ci.useModel"] && log) {
       const m = await this.d.model({ cwd: w.cwd, checks: row.checks, step: failedStep(f), log });
       if (m) verdict = { category: m.category, source: "model", reason: m.reason };
@@ -209,14 +216,48 @@ export class CiTriage {
     const now = this.d.now();
     this.d.repo.update(row.id, {
       state: "classified", category: verdict.category, source: verdict.source, reason: verdict.reason, signature: failureSignature(row.checks, log),
-      prevSignature: after?.prevSignature ?? null, tests: failedTests(log), attempt: info?.attempt ?? row.attempt, outcome: null,
+      prevSignature: after ? after.prevSignature : this.previousSignature(item, row), tests: failedTests(log), attempt: info?.attempt ?? row.attempt, outcome: null,
     }, now);
     this.d.log(`ci triage ${itemKey(item)} run ${row.runId}: ${verdict.category} (${verdict.source}: ${verdict.reason})`);
     return true;
   }
 
-  /** 触发重跑（对外动作 ci_rerun，开关关着记 skipped）。 */
+  /**
+   * 同一组检查上一次（之前的 commit）失败的签名：一样的失败又来了，按代码问题递（设计补充 4.3）。
+   * 上一次重跑后通过了的不算（那次是偶发的），没有签名的不算。
+   */
+  private previousSignature(item: CiItem, row: TriageRow): string | null {
+    const prev = this.d.repo.previous(ref(item), row.id, row.checks);
+    return prev && prev.state !== "passed" ? prev.signature : null;
+  }
+
+  /**
+   * 触发重跑（对外动作 ci_rerun，开关关着记 skipped）。先重读 run：已经有新的一轮在跑（别的 PR 行刚重跑了同一个 run，或者有人手动重跑），
+   * 就等那一轮，不再重跑一次；正在为同一个 run 调 gh 的也一样。
+   */
   private async rerun(item: CiItem, row: TriageRow, w: TriageWhere): Promise<boolean> {
+    const runKey = `${w.slug ?? w.cwd}:${row.runId}`;
+    const info = this.rerunsInFlight.has(runKey) ? null : await this.d.gh.runInfo(w.cwd, row.runId, CI_TRIAGE_GH_TIMEOUT_MS, w.slug);
+    const join = (waitAfter: number): boolean => {
+      const now = this.d.now();
+      this.d.repo.update(row.id, { state: "rerunning", reruns: row.reruns + 1, rerunAttempt: waitAfter, rerunAt: now }, now);
+      this.checkedAt.set(row.id, now);
+      this.d.log(`ci triage ${itemKey(item)}: run ${row.runId} is already being rerun; waiting for that attempt`);
+      return true;
+    };
+    if (this.rerunsInFlight.has(runKey)) return join(row.attempt);
+    if (info && info.status !== "completed") return join(info.attempt - 1);
+    const attempt = info?.attempt ?? row.attempt;
+    if (this.rerunsInFlight.has(runKey)) return join(attempt);
+    this.rerunsInFlight.add(runKey);
+    try {
+      return await this.rerunNow(item, { ...row, attempt }, w);
+    } finally {
+      this.rerunsInFlight.delete(runKey);
+    }
+  }
+
+  private async rerunNow(item: CiItem, row: TriageRow, w: TriageWhere): Promise<boolean> {
     const detail = {
       scope: { repoSlug: w.slug ?? undefined, ticketKey: w.ticketKey },
       target: w.target ?? undefined,
@@ -271,9 +312,11 @@ export class CiTriage {
     const policy = this.d.policy(w.slug);
     const since = now - policy["ci.autoListDays"] * 86_400_000;
     const names: { kind: "check" | "test"; name: string }[] = [...row.checks.map((name) => ({ kind: "check" as const, name })), ...row.tests.map((name) => ({ kind: "test" as const, name }))];
+    // 认出了测试名时只自动列入测试名：列入整个检查（比如 "test"）会把这个检查以后真的失败也当成 flaky。
+    const listable = row.tests.length > 0 ? "test" : "check";
     for (const n of names) {
       this.d.repo.addFlaky({ repoSlug: slug, kind: n.kind, name: n.name, triageId: row.id, at: now, wastedMs: wasted });
-      if (this.d.repo.flakyCount(slug, n.kind, n.name, since) >= policy["ci.autoListThreshold"] && this.d.repo.list(slug, n.kind, n.name, "auto", now)) {
+      if (n.kind === listable && this.d.repo.flakyCount(slug, n.kind, n.name, since) >= policy["ci.autoListThreshold"] && this.d.repo.list(slug, n.kind, n.name, "auto", now)) {
         this.d.log(`ci triage: ${n.kind} ${n.name} in ${slug || "(unknown repo)"} is flaky; listed automatically`);
       }
     }

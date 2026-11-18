@@ -73,7 +73,7 @@ function setup(over: Partial<LoopPolicy> = {}, o: { verdicts?: (ids: string[]) =
     await loop.observe([prs.get(row0.id)!], s, { cwd: "/r", slug: "o/r" });
   };
   return {
-    loop, items, prs, row: row0, calls, deliver, guard, observe,
+    loop, items, prs, tickets, row: row0, calls, deliver, guard, observe, status,
     advance: (ms: number) => void (t += ms),
     setThreads: (x: ReviewThread[]) => void (threads = x),
     setPatch: (p: string) => void (patch = p),
@@ -123,6 +123,72 @@ describe("CommentLoop", () => {
     expect(s.calls.events).toEqual([{ kind: "comment_auto_handled", dedupeKey: `comment:${s.row.id}:101`, data: { who: "copilot", category: "fix", source: "model", verified: "patch" } }]);
     expect(it.repliedAt).not.toBeNull();
     expect(it.resolvedAt).not.toBeNull();
+  });
+
+  it("handles a PR linked to two tickets once: one delivery, one reply, one resolve", async () => {
+    const s = setup();
+    s.tickets.insert({ key: "T-2", title: null, status: "active", statusManual: null, createdAt: 2, archivedAt: null });
+    s.prs.link({ ticketKey: "T-2", url: "https://github.com/o/r/pull/34", slug: "o/r", repoId: s.row.repoId, number: 34, headBranch: "b", state: "open", source: "branch", linkedAt: 2 });
+    const rows = () => s.prs.byUrl("https://github.com/o/r/pull/34");
+    expect(rows()).toHaveLength(2);
+    await s.loop.observe(rows(), s.status(), { cwd: "/r", slug: "o/r" });
+    expect(s.deliver).toHaveBeenCalledTimes(1);
+    expect(s.items.byPr(rows()[1].id)).toHaveLength(0);
+    for (const r of rows()) s.prs.update(r.id, { headSha: "bbb2222" });
+    await s.loop.observe(rows(), s.status({ headSha: "bbb2222" }), { cwd: "/r", slug: "o/r" });
+    expect(s.calls.replies).toHaveLength(1);
+    expect(s.calls.resolves).toEqual(["T1"]);
+    // 两个 ticket 的「评论」标签都看得到这条。
+    expect(s.loop.list("T-1")[0].items).toHaveLength(1);
+    expect(s.loop.list("T-2")[0].items).toHaveLength(1);
+  });
+
+  it("keeps your choice when the model answers after you dismissed the comment", async () => {
+    let release: () => void = () => undefined;
+    const s = setup({}, {});
+    const slow = new Promise<void>((r) => (release = r));
+    const original = s.loop["d"].model;
+    s.loop["d"].model = async (cwd, list) => (await slow, original(cwd, list));
+    const run = s.observe();
+    await new Promise((r) => setImmediate(r));
+    const [it] = s.items.byPr(s.row.id);
+    expect(it.state).toBe("pending");
+    await s.loop.act({ op: "dismiss", id: it.id });
+    release();
+    await run;
+    expect(s.items.get(it.id)!.state).toBe("dismissed");
+    expect(s.deliver).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver twice when two flushes overlap", async () => {
+    const s = setup({ "comments.copilot": "review" });
+    await s.observe();
+    const [it] = s.items.byPr(s.row.id);
+    await s.loop.act({ op: "send", id: it.id });
+    await Promise.all([s.loop.flush(), s.loop.flush()]);
+    expect(s.deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reply twice when reply is clicked twice", async () => {
+    const s = setup({ "comments.reply": false });
+    await s.observe();
+    await s.observe({ headSha: "bbb2222" });
+    const [it] = s.items.byPr(s.row.id);
+    expect(it.state).toBe("addressed");
+    await Promise.all([s.loop.act({ op: "reply", id: it.id }), s.loop.act({ op: "reply", id: it.id })]);
+    expect(s.calls.replies).toHaveLength(1);
+    expect(await s.loop.act({ op: "reply", id: it.id })).toBeNull();
+    expect(s.calls.replies).toHaveLength(1);
+  });
+
+  it("hides the Now notices while comments are off", async () => {
+    const s = setup({}, { verdicts: () => null });
+    s.setThreads([thread({ author: "alice", type: "User", body: "Hmm." })]);
+    await s.observe();
+    expect(s.items.byPr(s.row.id)[0].state).toBe("review");
+    expect(s.loop.waiting()).toHaveLength(1);
+    s.loop["d"].policy = () => ({ ...LOOP_POLICY_DEFAULTS, "comments.enabled": false });
+    expect(s.loop.waiting()).toHaveLength(0);
   });
 
   it("shows people's comments to you first; send puts them into the session", async () => {
