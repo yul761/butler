@@ -80,8 +80,10 @@ export function rerunPlan(profile: RepoProfile | null, files: readonly string[],
       add("lint", p.lint, dir);
       add("test", p.testAll, dir);
     } else if (p.fastest) {
+      // 最快的命令只在它就是某一类的命令时才复跑：归不了类的结果没法拿去核对哪条证据。
       const f = p.fastest.trim();
-      add(f === p.lint?.trim() ? "lint" : f === p.testAll?.trim() ? "test" : f === p.typecheck?.trim() ? "typecheck" : "lint", f, dir);
+      const cat = f === p.lint?.trim() ? "lint" : f === p.testAll?.trim() ? "test" : f === p.typecheck?.trim() ? "typecheck" : null;
+      if (cat) add(cat, f, dir);
     }
   }
   return out;

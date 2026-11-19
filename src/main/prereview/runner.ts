@@ -1,5 +1,8 @@
 // 预审的后台处理函数（设计 §4.2）：取 diff → 选规矩 → 收检查结果 → 复跑 → 两次模型调用（并行）→ 写结果 → 评估和简报 → 递送。
 // 可打断：检查点存复跑做到哪、已经拿到的模型结果。
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { BgHandler, BgJobContext, BgJobResult } from "../background/queue";
 import type { PreReviewRepo, PreReviewRow, StoredEvidence } from "../db/prereview-repo";
 import type { Candidate } from "../routing/router";
@@ -89,106 +92,130 @@ export function makePreReviewHandler(d: RunnerDeps): BgHandler {
     if (!row) return { done: true };
     if (row.status !== "queued" && row.status !== "running") return { done: true };
     d.repo.update(row.id, { status: "running", jobId: ctx.id });
-    const cp: Checkpoint = (ctx.checkpoint as Checkpoint | null) ?? {};
-    const save = () => ctx.save(cp);
-    const finishFailed = async (detail: string): Promise<BgJobResult> => {
-      d.repo.update(row.id, { status: "failed", verdict: "error", detail: detail.slice(0, 500), finishedAt: d.now() });
-      await afterAndDeliver(d, row.id);
-      return { done: true };
-    };
-
-    let diff: PrDiff | null;
+    // 让路时放回 queued（新证据能取代它）；中途抛错收成 failed，不留一行永远「进行中」。
     try {
-      diff = await d.diff(row);
+      const r = await runOnce(d, ctx, row);
+      if ("defer" in r) d.repo.update(row.id, { status: "queued" });
+      return r;
     } catch (e) {
-      d.log(`pre-review ${row.id}: diff failed`, e);
-      diff = null;
-    }
-    if (ctx.signal.aborted) return { defer: true };
-    if (!diff) return finishFailed("diff unavailable");
-    const files: DiffFile[] = diff.files.slice(0, PRE_REVIEW_MAX_FILES);
-    const paths = files.map((f) => f.path);
-    const slug = row.target.repoSlug;
-    const policy = d.policy(slug);
-    const profile = d.profile(slug);
-    const { lessons, total } = d.lessons(slug, paths);
-    const checks = d.checks(row.sessionId);
-    const failing = summarizeHits(checks.hits);
-    d.repo.update(row.id, { base: diff.base ?? row.base, files, lessonIds: lessons.map((l) => l.id) });
-
-    // 1. 复跑（有检查类证据、有 worktree 时）。
-    let evidence = d.repo.evidenceOf(row.id);
-    let outcome: RerunOutcome | null = cp.rerunDone ?? null;
-    if (!outcome && row.cwd && evidence.some((e) => e.kind === "check")) {
-      const plan = rerunPlan(profile, paths, policy.evidence.rerun);
-      outcome = await rerunEvidence(
-        { cwd: row.cwd, sha: row.target.headSha, plan, timeoutSec: policy.evidence.rerunTimeoutSec, done: cp.rerun, onResult: (_r, all) => ((cp.rerun = all), save()) },
-        { ...d.rerun, signal: ctx.signal },
-      );
-      if (outcome.kind === "interrupted") {
-        cp.rerun = outcome.results;
-        save();
+      if (ctx.signal.aborted) {
+        d.repo.update(row.id, { status: "queued" });
         return { defer: true };
       }
-      cp.rerunDone = outcome;
-      save();
+      d.log(`pre-review ${row.id}: failed`, e);
+      d.repo.update(row.id, { status: "failed", verdict: "error", detail: `error: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500), finishedAt: d.now() });
+      await afterAndDeliver(d, row.id);
+      return { done: true };
     }
-    const at = d.now();
-    for (const v of applyRerun(evidence, outcome)) d.repo.setVerified(v.id, v.verified, v.detail, v.rerunOutput, at);
-    evidence = d.repo.evidenceOf(row.id);
-    const summary: CheckSummary = { absent: checks.absent, failing, ci: d.ci(row.prId), rerun: outcome?.kind === "ran" ? rerunSummary(outcome.results) : [] };
+  };
+}
 
-    // 2. 两次模型调用（互不依赖，并行）。
-    const lang = d.lang();
-    const producer = d.producer(row.sessionId);
-    const ticketTitle = d.ticketTitle(row.ticketKey);
-    const { text: diffText } = diffForModel(diff, policy.risk.paths.generated);
-    const pending = toVerify(evidence);
-    const [review, verify] = await Promise.all([
-      cp.review ??
-        preReviewByModel(d.exec, {
-          cwd: row.cwd ?? process.cwd(), addDirs: d.addDirs?.(row), ticketKey: row.ticketKey, ticketTitle, producer, files, diffText,
-          lessons: lessons.map((l) => ({ id: l.id, text: l.text, strength: l.strength, scopeGlobs: l.scopeGlobs })), lessonsTotal: total,
-          checks: summary, evidence, lang,
-        }).then((r) => {
-          if (!ctx.signal.aborted && r.ok) {
-            cp.review = r;
-            save();
-          }
-          return r;
-        }),
-      cp.verify ??
-        verifyEvidenceByModel(d.exec, { cwd: row.cwd ?? process.cwd(), ticketKey: row.ticketKey, ticketTitle, producer, items: pending, rerun: summary.rerun, files, lang }).then((r) => {
-          const stored: Checkpoint["verify"] = r.ok ? { ok: true, verdicts: [...r.verdicts], model: r.model } : r;
-          if (!ctx.signal.aborted && r.ok) {
-            cp.verify = stored;
-            save();
-          }
-          return stored;
-        }),
-    ]);
-    if (ctx.signal.aborted) return { defer: true };
+/** 没有 worktree 时给模型的目录：空的临时目录，免得它带着 Read/Grep 在 Butler 自己的工作目录里看。 */
+const emptyCwd = (): string => mkdtempSync(join(tmpdir(), "butler-prereview-"));
 
-    // 3. 证据核实结果：模型没定的、调用失败的记 unverifiable。
-    const verdicts = new Map(verify.ok ? verify.verdicts : []);
-    const at2 = d.now();
-    for (const e of pending) {
-      const v = verdicts.get(e.id);
-      d.repo.setVerified(e.id, v?.verified ?? "unverifiable", v?.detail ?? (verify.ok ? "not judged" : `cross-check failed: ${verify.detail}`), null, at2);
-    }
-
-    // 4. 结论。
-    if (!review.ok) {
-      d.repo.update(row.id, { checks: summary, status: "failed", verdict: "error", detail: review.detail, finishedAt: d.now() });
-    } else {
-      d.repo.update(row.id, {
-        checks: summary, violations: review.violations, summary: review.summary, verdict: verdictOf(review.violations, failing),
-        model: review.model, status: "done", detail: total > lessons.length ? `${total - lessons.length} rules left out` : null, finishedAt: d.now(),
-      });
-    }
+async function runOnce(d: RunnerDeps, ctx: BgJobContext, row: PreReviewRow): Promise<BgJobResult> {
+  const cp: Checkpoint = (ctx.checkpoint as Checkpoint | null) ?? {};
+  const save = () => ctx.save(cp);
+  const finishFailed = async (detail: string): Promise<BgJobResult> => {
+    d.repo.update(row.id, { status: "failed", verdict: "error", detail: detail.slice(0, 500), finishedAt: d.now() });
     await afterAndDeliver(d, row.id);
     return { done: true };
   };
+
+  let diff: PrDiff | null;
+  try {
+    diff = await d.diff(row);
+  } catch (e) {
+    d.log(`pre-review ${row.id}: diff failed`, e);
+    diff = null;
+  }
+  if (ctx.signal.aborted) return { defer: true };
+  if (!diff) return finishFailed("diff unavailable");
+  const files: DiffFile[] = diff.files.slice(0, PRE_REVIEW_MAX_FILES);
+  const paths = files.map((f) => f.path);
+  const slug = row.target.repoSlug;
+  const policy = d.policy(slug);
+  const profile = d.profile(slug);
+  const { lessons, total } = d.lessons(slug, paths);
+  const checks = d.checks(row.sessionId);
+  const failing = summarizeHits(checks.hits);
+  d.repo.update(row.id, { base: diff.base ?? row.base, files, lessonIds: lessons.map((l) => l.id) });
+
+  // 1. 复跑（有检查类证据、有 worktree 时）。
+  let evidence = d.repo.evidenceOf(row.id);
+  let outcome: RerunOutcome | null = cp.rerunDone ?? null;
+  if (!outcome && row.cwd && evidence.some((e) => e.kind === "check")) {
+    const plan = rerunPlan(profile, paths, policy.evidence.rerun);
+    outcome = await rerunEvidence(
+      { cwd: row.cwd, sha: row.target.headSha, plan, timeoutSec: policy.evidence.rerunTimeoutSec, done: cp.rerun, onResult: (_r, all) => ((cp.rerun = all), save()) },
+      { ...d.rerun, signal: ctx.signal },
+    );
+    if (outcome.kind === "interrupted") {
+      cp.rerun = outcome.results;
+      save();
+      return { defer: true };
+    }
+    cp.rerunDone = outcome;
+    save();
+  }
+  const at = d.now();
+  for (const v of applyRerun(evidence, outcome)) d.repo.setVerified(v.id, v.verified, v.detail, v.rerunOutput, at);
+  evidence = d.repo.evidenceOf(row.id);
+  const summary: CheckSummary = { absent: checks.absent, failing, ci: d.ci(row.prId), rerun: outcome?.kind === "ran" ? rerunSummary(outcome.results) : [] };
+
+  // 2. 两次模型调用（互不依赖，并行）。
+  const lang = d.lang();
+  const producer = d.producer(row.sessionId);
+  const ticketTitle = d.ticketTitle(row.ticketKey);
+  const { text: diffText } = diffForModel(diff, policy.risk.paths.generated);
+  const pending = toVerify(evidence);
+  const modelCwd = row.cwd ?? emptyCwd();
+  const [review, verify] = await Promise.all([
+    cp.review ??
+      preReviewByModel(d.exec, {
+        cwd: modelCwd, addDirs: d.addDirs?.(row), ticketKey: row.ticketKey, ticketTitle, producer, files, diffText,
+        lessons: lessons.map((l) => ({ id: l.id, text: l.text, strength: l.strength, scopeGlobs: l.scopeGlobs })), lessonsTotal: total,
+        checks: summary, evidence, lang,
+      }).then((r) => {
+        // 让路时模型调用不会停：拿到的结果照样存下，下次不用再调一遍。
+        if (r.ok) {
+          cp.review = r;
+          save();
+        }
+        return r;
+      }),
+    cp.verify ??
+      verifyEvidenceByModel(d.exec, { cwd: modelCwd, ticketKey: row.ticketKey, ticketTitle, producer, items: pending, rerun: summary.rerun, files, lang }).then((r) => {
+        const stored: Checkpoint["verify"] = r.ok ? { ok: true, verdicts: [...r.verdicts], model: r.model } : r;
+        if (r.ok) {
+          cp.verify = stored;
+          save();
+        }
+        return stored;
+      }),
+  ]);
+  if (!row.cwd) rmSync(modelCwd, { recursive: true, force: true });
+  if (ctx.signal.aborted) return { defer: true };
+
+  // 3. 证据核实结果：模型没定的、调用失败的记 unverifiable。
+  const verdicts = new Map(verify.ok ? verify.verdicts : []);
+  const at2 = d.now();
+  for (const e of pending) {
+    const v = verdicts.get(e.id);
+    d.repo.setVerified(e.id, v?.verified ?? "unverifiable", v?.detail ?? (verify.ok ? "not judged" : `cross-check failed: ${verify.detail}`), null, at2);
+  }
+
+  // 4. 结论。
+  if (!review.ok) {
+    d.repo.update(row.id, { checks: summary, status: "failed", verdict: "error", detail: review.detail, finishedAt: d.now() });
+  } else {
+    d.repo.update(row.id, {
+      checks: summary, violations: review.violations, summary: review.summary, verdict: verdictOf(review.violations, failing),
+      model: review.model, status: "done", detail: total > lessons.length ? `${total - lessons.length} rules left out` : null, finishedAt: d.now(),
+    });
+  }
+  await afterAndDeliver(d, row.id);
+  return { done: true };
 }
 
 async function afterAndDeliver(d: RunnerDeps, id: number): Promise<void> {

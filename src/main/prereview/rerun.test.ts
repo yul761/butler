@@ -32,6 +32,10 @@ describe("rerunPlan", () => {
   it("fast runs typecheck and the fastest check, classified by matching command", () => {
     expect(rerunPlan(full, ["src/a.ts"], "fast").map((c) => [c.category, c.command])).toEqual([["typecheck", "pnpm typecheck"], ["lint", "pnpm lint"]]);
   });
+  it("fast skips a fastest command that is none of lint, test or typecheck", () => {
+    const p = profile(proj("", { testAll: "pnpm test", lint: "pnpm lint", typecheck: "pnpm typecheck", fastest: "pnpm test -- --changed" }));
+    expect(rerunPlan(p, ["src/a.ts"], "fast").map((c) => c.category)).toEqual(["typecheck"]);
+  });
   it("off runs nothing; commands needing an argument are never run", () => {
     expect(rerunPlan(full, ["a.ts"], "off")).toEqual([]);
     const p = profile(proj("", { testAll: "jest {file}" }));

@@ -65,16 +65,20 @@ function notRunFor(item: EvidenceItem, c: RequirableCategory): boolean {
 }
 
 /**
- * 对照要的证据，列出缺口：一类有一条 rerun_pass / consistent 的 check 就算有效；
- * 有 rerun_fail / mismatch 的算不实（bad）；只写了没跑的原因算已说明（explained）；其余算缺（missing，含核实不了的）。
+ * 对照要的证据，列出缺口：一类有一条 rerun_pass / consistent、而且 session 没自己说失败的 check 就算有效；
+ * 有 rerun_fail / mismatch 的、或 session 自己说失败的，算不实（bad）；只写了没跑的原因算已说明（explained）；其余算缺（missing，含核实不了的）。
  * 验收条件：至少一条。
  */
+/** 一条 check 证据站得住：核实过，而且 session 报的不是失败（说失败、核对一致的也不算通过）。 */
+const checkOk = (i: EvidenceItem): boolean => isVerifiedOk(i.verified) && i.claimed !== "fail";
+const checkBad = (i: EvidenceItem): boolean => isVerifiedBad(i.verified) || i.claimed === "fail";
+
 export function evidenceStatus(items: readonly EvidenceItem[], required: readonly RequirableCategory[]): EvidenceGap[] {
   const gaps: EvidenceGap[] = [];
   for (const c of required) {
     const checks = items.filter((i) => i.kind === "check" && i.category === c);
-    if (checks.some((i) => isVerifiedOk(i.verified))) continue;
-    const bad = checks.find((i) => isVerifiedBad(i.verified));
+    if (checks.some(checkOk)) continue;
+    const bad = checks.find(checkBad);
     if (bad) {
       gaps.push({ category: c, state: "bad", detail: bad.verifyDetail?.trim() || bad.name });
       continue;
@@ -92,4 +96,4 @@ export function evidenceStatus(items: readonly EvidenceItem[], required: readonl
 }
 
 /** 有没有一条核实过的测试证据（低风险的必要条件）。 */
-export const hasVerifiedTest = (items: readonly EvidenceItem[]): boolean => items.some((i) => i.kind === "check" && i.category === "test" && isVerifiedOk(i.verified));
+export const hasVerifiedTest = (items: readonly EvidenceItem[]): boolean => items.some((i) => i.kind === "check" && i.category === "test" && checkOk(i));

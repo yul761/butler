@@ -73,3 +73,14 @@ describe("evidenceStatus", () => {
     expect(gaps).toEqual([{ category: "test", state: "missing", detail: "HEAD moved" }]);
   });
 });
+
+describe("a check the session itself reports as failed", () => {
+  it("never counts as evidence, even when the cross-check calls it consistent", () => {
+    const failed = item({ claimed: "fail", verified: "consistent", summary: "3 failed", verifyDetail: "output shows 3 failures as claimed" });
+    expect(evidenceStatus([failed, item({ kind: "acceptance", category: null, name: "AC", claimed: null, verified: "consistent" })], ["test"])).toEqual([
+      { category: "test", state: "bad", detail: "output shows 3 failures as claimed" },
+    ]);
+    expect(hasVerifiedTest([failed])).toBe(false);
+  });
+});
+

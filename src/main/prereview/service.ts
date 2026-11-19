@@ -188,7 +188,9 @@ export class PreReviewService {
   }
 
   /** 送进 session。只送 evidence 和 manual 触发的、还有 PR 触发但有 session 的；送不到留着，flush 再试。 */
-  async deliver(row: PreReviewRow): Promise<"sent" | string> {
+  async deliver(given: PreReviewRow): Promise<"sent" | string> {
+    // 重新读一遍：flush 手里的是一轮开始时的旧行，期间 runner 可能已经送过了。
+    const row = this.d.repo.get(given.id) ?? given;
     if (row.deliveredAt !== null) return "already";
     if (!row.sessionId) return "no_session";
     if (row.status !== "done" && !(row.status === "failed" && row.trigger === "evidence")) return "not_done";

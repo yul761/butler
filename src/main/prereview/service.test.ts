@@ -170,9 +170,46 @@ describe("pre-review runner and delivery", () => {
     const ctl = new AbortController();
     ctl.abort();
     expect(await s.handler(s.ctx(r.preReviewId, null, ctl.signal).c)).toEqual({ defer: true });
-    expect(s.repo.get(r.preReviewId)!.status).toBe("running");
+    // 让路后放回 queued：同一份代码再交证据时会取代它（不会两次都跑、都送）。
+    expect(s.repo.get(r.preReviewId)!.status).toBe("queued");
     expect(await s.handler(s.ctx(r.preReviewId).c)).toEqual({ done: true });
     expect(s.repo.get(r.preReviewId)!.status).toBe("done");
+  });
+  it("new evidence for the same commit replaces a pre-review that yielded", async () => {
+    const s = setup();
+    const a = await s.service.submitEvidence("s1", evidence);
+    if (!a.ok) throw new Error(a.message);
+    const ctl = new AbortController();
+    ctl.abort();
+    await s.handler(s.ctx(a.preReviewId, null, ctl.signal).c);
+    const b = await s.service.submitEvidence("s1", evidence);
+    if (!b.ok) throw new Error(b.message);
+    expect(s.repo.get(a.preReviewId)).toMatchObject({ status: "skipped", detail: "superseded" });
+    expect(s.cancelled).toEqual([1]);
+  });
+  it("a throw mid-run ends the pre-review as failed instead of leaving it running", async () => {
+    const s = setup();
+    const r = await s.service.submitEvidence("s1", evidence);
+    if (!r.ok) throw new Error(r.message);
+    const h = makePreReviewHandler({
+      ...({} as RunnerDeps), repo: s.repo, now: () => 1, log: () => undefined, after: async () => undefined, deliver: async () => undefined,
+      diff: async () => ({ base: "b", files: [], patches: new Map(), source: "git" }),
+      policy: () => defaultPrPolicy(), profile: () => null, lessons: () => { throw new Error("db locked"); },
+    });
+    expect(await h(s.ctx(r.preReviewId).c)).toEqual({ done: true });
+    expect(s.repo.get(r.preReviewId)).toMatchObject({ status: "failed", verdict: "error", detail: "error: db locked" });
+  });
+  it("flush retries a failed evidence pre-review and never sends a row twice", async () => {
+    const s = setup({ guardOk: false });
+    const r = await s.service.submitEvidence("s1", evidence);
+    if (!r.ok) throw new Error(r.message);
+    s.repo.update(r.preReviewId, { status: "failed", verdict: "error", detail: "diff unavailable", finishedAt: 1000 });
+    s.setGuard(true);
+    const stale = s.repo.get(r.preReviewId)!;
+    await s.service.flush();
+    expect(s.sent).toHaveLength(1);
+    expect(await s.service.deliver(stale)).toBe("already");
+    expect(s.sent).toHaveLength(1);
   });
   it("a failed diff ends the pre-review as an error", async () => {
     const s = setup();

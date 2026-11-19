@@ -788,9 +788,11 @@ async function bootstrap(): Promise<void> {
   // 导入导出（契约 4.3）：备份放在 <BUTLER_HOME>/backups。
   const configBackupDir = join(paths.home, "backups");
   const configRegistry = defaultRegistry();
+  /** 导入配置之后（PR 策略可能变了）：工作流 G 接好以后换成重算就绪和风险。 */
+  let afterConfigApplied = (): void => undefined;
   const configIo = new ConfigIoService({
     db, repo: lessonsRepo, policies: admissionPolicies, recorder: batchRecorder, registry: configRegistry, butlerVersion: app.getVersion(),
-    backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), onApplied: () => (checkSnapshots.schedule(), routing.reloadConfig()), log: logger,
+    backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), onApplied: () => (checkSnapshots.schedule(), routing.reloadConfig(), afterConfigApplied()), log: logger,
   });
   // 仓库现状（工作流 E2）：扫描在 worker 线程里跑；模型补全走路由的 repo_scan_infer（中档，撞限换下一个）。
   const repoLocalPath = (slug: string): string | null => lessonsRepo.repo(slug)?.localPath ?? null;
@@ -2189,6 +2191,7 @@ async function bootstrap(): Promise<void> {
   const openPrIds = (): number[] => ticketPrs.all().filter((p) => p.state === "open").map((p) => p.id);
   const reassessAll = (): void => void assessment.assessAll(openPrIds()).catch((e: unknown) => logger("assess: reassessing open PRs failed", e));
   prPolicies.onChange(reassessAll);
+  afterConfigApplied = reassessAll;
   const prWatcher = new PrWatcher({
     prs: ticketPrs,
     branches: branchWatch,
@@ -2967,6 +2970,7 @@ async function bootstrap(): Promise<void> {
     const j = bgRepo.get(jobId);
     return j !== null && (j.state === "queued" || j.state === "running");
   });
+  void preReview.flush().catch((e: unknown) => logger("pre-review: flush failed", e));
   void reviewCollector.backfill().catch((e: unknown) => logger("review effect: backfill failed", e));
   // 启动时看一遍：上次退出前暂停着的接着暂停，托盘和「现在」页马上显示。
   void costBreakerInst.check().then(() => costBreakerInst.views().length > 0 && costChanged()).catch((e: unknown) => logger("cost: the first check failed", e));

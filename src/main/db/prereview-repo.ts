@@ -197,7 +197,7 @@ export class PreReviewRepo {
     return (
       this.db
         .prepare(
-          `SELECT * FROM pre_reviews WHERE status = 'done' AND delivered_at IS NULL AND session_id IS NOT NULL AND finished_at >= ? ORDER BY id`,
+          `SELECT * FROM pre_reviews WHERE (status = 'done' OR (status = 'failed' AND "trigger" = 'evidence')) AND delivered_at IS NULL AND session_id IS NOT NULL AND finished_at >= ? ORDER BY id`,
         )
         .all(since) as Row[]
     ).map(toReview);
