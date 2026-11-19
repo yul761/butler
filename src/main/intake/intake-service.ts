@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import {
   INTAKE_DECISION_STATES, INTAKE_RULES_VERSION,
   type IncomingTicket, type IntakeActResult, type IntakeAction, type IntakeClassification, type IntakeClassifyEdit, type IntakeDim, type IntakeEffect,
-  type IntakeItemView, type IntakePolicy, type IntakeRecentEntry, type IntakeSourceKind, type IntakeState, type IntakeView, type IntakeWaitReason,
+  type IntakeItemView, type IntakeNoticeInfo, type IntakePolicy, type IntakeRecentEntry, type IntakeSourceKind, type IntakeState, type IntakeView, type IntakeWaitReason,
 } from "../../shared/intake";
 import type { ExternalActionKind } from "../../shared/external";
 import type { Tier } from "../../shared/model-routing";
@@ -542,7 +542,7 @@ export class IntakeService {
   }
 
   /** 「现在」页的提醒：要你决定的项（每项一条）。 */
-  notices(): { key: string; title: string; state: IntakeState; reason: IntakeWaitReason | null; detail: string | null; url: string | null }[] {
+  notices(): IntakeNoticeInfo[] {
     if (!this.active() && this.d.repo.byState(["needs_repo", "needs_clarification", "needs_decision", "failed", "waiting"]).length === 0) return [];
     return this.d.repo
       .byState(["needs_repo", "needs_clarification", "needs_decision", "failed", "waiting"])

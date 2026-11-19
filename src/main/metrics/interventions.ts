@@ -136,6 +136,8 @@ export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.stacksRebase, IPC.stacksRestore, IPC.stacksLayerMode,
   // 「重新预审」「贴到 PR」（工作流 G）：用户亲手推一步。
   IPC.preReviewRun, IPC.briefPost,
+  // 自动接活（工作流 N）：「现在拉一次」、手动开工、重试、允许并行、选仓库推动工作；「跳过」不算（recordInvoke 里按 op 分）。
+  IPC.intakePoll, IPC.intakeAct,
 ]);
 
 /** 记成别的人介入的通道（不再算手动触发）：卡片上回答、「不用了」是 needs_you_answer。 */
@@ -181,6 +183,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.interruptsAct, IPC.profilesScan,
   // 栈（工作流 K）：只读和策略、移出跟踪
   IPC.stacksList, IPC.stacksPolicyGet, IPC.stacksPolicyLayers, IPC.stacksPolicySet, IPC.stacksRemove,
+  // 自动接活（工作流 N）：只读、策略，改分类是校准规则（记进 intake_overrides，不推动工作）
+  IPC.intakeView, IPC.intakeEffect, IPC.intakePolicyGet, IPC.intakePolicySet, IPC.intakeClassify,
 ]);
 
 /** 这个通道算不算手动触发。 */
@@ -211,9 +215,14 @@ export function recordInvoke(record: RecordEvent, channel: string, args: readonl
     const op = first && typeof first === "object" ? (first as { op?: unknown }).op : undefined;
     if (op !== "send" && op !== "reply") return false;
   }
+  if (channel === IPC.intakeAct) {
+    const op = first && typeof first === "object" ? (first as { op?: unknown }).op : undefined;
+    if (op === "skip") return false;
+  }
   const sessionId = SESSION_ARG.has(channel) ? shortString(first) : undefined;
   let ticketKey = TICKET_ARG.has(channel) ? shortString(first) : undefined;
   if (channel === IPC.sessionsOpen && first && typeof first === "object") ticketKey = shortString((first as { ticketKey?: unknown }).ticketKey);
+  if (channel === IPC.intakeAct && first && typeof first === "object") ticketKey = shortString((first as { key?: unknown }).key);
   let resumedSession: string | undefined;
   if (channel === IPC.costResume && first && typeof first === "object") {
     // 熔断的对象是 ticket（key）或 session（链的根 id）。

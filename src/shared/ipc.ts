@@ -204,6 +204,14 @@ export const IPC = {
   stacksPolicyGet: "stacks:policyGet",
   stacksPolicySet: "stacks:policySet",
   stacksPolicyLayers: "stacks:policyLayers",
+  /** 自动接活（工作流 N）。 */
+  intakeView: "intake:view",
+  intakeEffect: "intake:effect",
+  intakePolicyGet: "intake:policyGet",
+  intakePolicySet: "intake:policySet",
+  intakeClassify: "intake:classify",
+  intakePoll: "intake:poll",
+  intakeAct: "intake:act",
   /** 「效果」页（ws-h）：和总控 metrics_overview 同一份。 */
   metricsView: "metrics:view",
   butlerMessages: "butler:messages",
@@ -240,6 +248,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.loopPolicyGet, IPC.loopPolicySet, IPC.loopCommentsList, IPC.loopCommentsAct, IPC.loopFlakyList, IPC.loopFlakyAct, IPC.loopEffect,
   IPC.interruptsState, IPC.interruptsAct, IPC.profilesGet, IPC.profilesScan,
   IPC.stacksList, IPC.stacksRebase, IPC.stacksLayerMode, IPC.stacksRestore, IPC.stacksRemove, IPC.stacksPolicyGet, IPC.stacksPolicySet, IPC.stacksPolicyLayers,
+  IPC.intakeView, IPC.intakeEffect, IPC.intakePolicyGet, IPC.intakePolicySet, IPC.intakeClassify, IPC.intakePoll, IPC.intakeAct,
   IPC.prAssessment, IPC.preReviewRun, IPC.briefRegenerate, IPC.briefPost, IPC.prPolicyGet, IPC.prPolicySet, IPC.reviewEffect, IPC.reviewQueue,
   IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,

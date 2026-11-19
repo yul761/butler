@@ -307,3 +307,13 @@ export interface IntakeEffect {
   overrideRate: number | null;
   byDim: { dim: IntakeDim; n: number }[];
 }
+
+/** 「现在」页的一条接活提醒（要你决定的项）。 */
+export interface IntakeNoticeInfo {
+  key: string;
+  title: string;
+  state: IntakeState;
+  reason: IntakeWaitReason | null;
+  detail: string | null;
+  url: string | null;
+}

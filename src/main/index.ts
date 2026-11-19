@@ -6,12 +6,12 @@ import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { sanitizeTask } from "../shared/control";
+import { sanitizeTask, taskMessage } from "../shared/control";
 import { parseGateRequest, type GateRequest, type GateResult } from "../shared/gate";
 import { IPC } from "../shared/ipc";
 import type { LimitHit } from "../shared/availability";
 import { ClaudeAvailability } from "./claude/availability";
-import { buildNotices, ciNotices, commentNotices, costNotices, stackNotices } from "./now/notices";
+import { buildNotices, ciNotices, commentNotices, costNotices, intakeNotices, stackNotices } from "./now/notices";
 import { BackgroundRepo } from "./db/background-repo";
 import { CostRepo } from "./db/cost-repo";
 import { readBgSettings } from "./background/bg-settings";
@@ -188,7 +188,18 @@ import { pathKey } from "./util/env";
 import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { openKnownPr } from "./util/github-url";
-import { TicketService, samePath } from "./tickets/ticket-service";
+import { TicketError, TicketService, samePath } from "./tickets/ticket-service";
+import { isValidTicketKey } from "./tickets/ticket-key";
+import type { IntakeSourceKind } from "../shared/intake";
+import { defaultPrPolicy } from "../shared/pr-policy";
+import { IntakeRepo } from "./db/intake-repo";
+import { IntakePolicyService } from "./intake/policy";
+import { IntakePolicyError } from "../shared/intake";
+import { IntakeService } from "./intake/intake-service";
+import { parseRepoMap } from "./intake/repo-map";
+import { fileSource, trackerSource, type IntakeSource } from "./intake/sources";
+import { classifyByModel } from "./intake/model";
+import { changedPaths } from "./intake/conflicts";
 import { classifyCiByModel } from "./loop/ci-model";
 import { CiTriage } from "./loop/ci-triage";
 import { CommentLoop } from "./loop/comment-loop";
@@ -561,6 +572,8 @@ async function bootstrap(): Promise<void> {
   const hibernatedHeads = (): Session[] => sessions.listHibernated();
   /** 这条链休眠着（正在休眠、正在唤醒的也算）。 */
   const isHibernated = (id: string): boolean => hibernator?.isHibernated(id) ?? false;
+  /** 自动接活建好以后才接上（session 结束时让它再试排着的）。 */
+  let intakeEnded: (() => void) | null = null;
   const pty = new PtyManager(nodePtyFactory, {
     data: (id, data) => safeSend(IPC.ptyData, id, data),
     exit: (id, code) => {
@@ -583,6 +596,8 @@ async function bootstrap(): Promise<void> {
       // 退出前最后一段 transcript 也要记上。
       if (exitedHead) void usageScanner.scanSession(exitedHead.id);
       if (exitedTicket) cleanupMerged(exitedTicket);
+      // 自动接活（工作流 N）：名额可能空出来了、栈的下一层可能能开了。
+      intakeEnded?.();
       notify();
     },
   }, Date.now, logger);
@@ -2267,6 +2282,139 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     log: logger,
   });
+  // 自动接活（工作流 N）：拉来源 → 分类（规则优先，判不了的经 intake_classify）→ 决定 → 后台队列 intake 开工。
+  // 总开关是 intake_policies 的 enabled（默认哪层都没开）：没开时不拉、不记、什么都不做，和以前一样。
+  const intakeRepo = new IntakeRepo(db);
+  const intakePolicies = new IntakePolicyService({
+    db, now: Date.now,
+    productsOf: (slug) => lessonsRepo.productsOf(slug),
+    productName: (id) => lessonsRepo.product(id)?.name ?? null,
+    onChange: () => notify(),
+  });
+  const intakeRepoMap = () => parseRepoMap(settings.get("intakeRepoMap")).rules;
+  const intakeSourceKind = (): IntakeSourceKind => {
+    const v = settings.get("intakeSource");
+    return v === "tracker" || v === "file" ? v : "none";
+  };
+  const intakeSource = (): IntakeSource | null => {
+    const kind = intakeSourceKind();
+    if (kind === "file") return settings.get("intakeFilePath") ? fileSource(settings.get("intakeFilePath")) : null;
+    if (kind === "tracker") {
+      return trackerSource(
+        prExec, () => settings.get("intakeTrackerDir") || (intakeRepoMap()[0]?.path ?? null), settings.get("intakeTrackerQuery"),
+        () => trackerTools(settings), () => currentLang(),
+      );
+    }
+    return null;
+  };
+  const intake = new IntakeService({
+    repo: intakeRepo,
+    policies: intakePolicies,
+    sourceKind: intakeSourceKind,
+    source: intakeSource,
+    repoMap: intakeRepoMap,
+    slugOf: async (p) => repoIdentity.slugOf(p),
+    riskPolicy: (slug) => (slug ? prPolicyFor(slug) : defaultPrPolicy()).risk,
+    validKey: (k) => isValidTicketKey(k, settings.get("ticketPattern")),
+    ticketExists: (k) => tickets.get(k) !== null,
+    classifyModel: (t, decided, cwd) => classifyByModel(prExec, cwd, t, decided, currentLang()),
+    lang: () => currentLang(),
+    preReviewOn: preReviewActive,
+    gateOpen: () => bgScheduler.gate("intake").run,
+    enqueue: (key) => {
+      bgQueue.enqueue("intake", { key }, { ticketKey: key, dedupeKey: `intake:${key}` });
+      bgQueue.wake("intake");
+    },
+    costAllows: (key) => costBreaker?.allowBackground(key) ?? true,
+    openTerminals: (key) => sessionService.openTerminalCount(key),
+    activeInRepo: async (repoPath) => {
+      const held = new Set(gateRepo.activeHolds().map((h) => h.ticketKey).filter((k): k is string => k !== null));
+      const out: { key: string; paths: string[] }[] = [];
+      for (const t of tickets.list()) {
+        const r = t.repos.find((x) => samePath(x.repoPath, repoPath));
+        if (!r || (sessionService.openTerminalCount(t.key) === 0 && !held.has(t.key))) continue;
+        out.push({ key: t.key, paths: await changedPaths(ticketService.workDir(r), git.git) });
+      }
+      return out;
+    },
+    sessionModel: (tier) => routing.sessionModel(tier),
+    createTicket: async (i) => {
+      try {
+        const t = await ticketService.create({
+          key: i.key, title: i.title, repoPath: i.repoPath, workMode: "worktree", ...(i.startPoint && { startPoints: [{ repoPath: i.repoPath, ref: i.startPoint }] }),
+        });
+        const r = t.repos[0];
+        if (!r) return { ok: false, exists: false, message: "no repo" };
+        notify();
+        return { ok: true, repoId: r.id, branch: r.branch };
+      } catch (e) {
+        if (e instanceof TicketError) return { ok: false, exists: e.code === "exists" || e.code === "archived", message: e.message };
+        return { ok: false, exists: false, message: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    ticketRepo: (key) => {
+      const r = tickets.listRepos(key)[0];
+      return r ? { repoId: r.id, branch: r.branch } : null;
+    },
+    openSession: async (key, repoId, model) => {
+      const r = await sessionService.open({ ticketKey: key, repoId }, { model: model ?? undefined });
+      if (!r.ok) return { ok: false, message: r.reason };
+      notify();
+      return { ok: true, termId: r.termId };
+    },
+    submit: (termId, text) => {
+      void submitTask(termId, taskMessage(sanitizeTask(text), currentLang(), memoryOn(settings) ? "ticket" : null)).then(
+        (res) => res === "sent" || logger(`intake: task for ${termId} not delivered (${res})`),
+        (e: unknown) => logger(`intake: task for ${termId} failed`, e),
+      );
+    },
+    stack: {
+      canStackOn: (repoPath, parentBranch) => stackService.canStackOn(repoPath, parentBranch),
+      stackOn: (p) => stackService.stackOn({ ...p, featureId: null, epicId: null }),
+    },
+    hasPr: (key) => ticketPrs.byTicket(key).length > 0,
+    prOf: (key) => {
+      const pr = ticketPrs.byTicket(key)[0];
+      if (!pr) return null;
+      const s = assessRepo.summaries([pr.id]).get(pr.id);
+      return { number: pr.number, url: pr.url, risk: s?.risk ?? null, ready: s?.ready ?? null };
+    },
+    external: {
+      allowed: (kind, scope) => externalActions.allowed(kind, scope),
+      record: (kind, r) => void externalActions.record(kind, { scope: r.scope, target: r.target, summary: r.summary, outcome: r.outcome, error: r.error ?? null }),
+    },
+    toCoordinator: async (text) => {
+      const b = sessionService.runningButler();
+      if (!b) return false;
+      const g = deliveryGuard.check(b.id);
+      if (!g.ok) return false;
+      return (await pty.deliver(g.termId, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck: deliveryGuard.recheckAfter(b.id, g) })) === "sent";
+    },
+    recordEvent,
+    metricEvents: (since, kinds) => metricsRepo.events(since, kinds),
+    knownRepos: () => {
+      const paths: string[] = [...IntakeService.mappedPaths(intakeRepoMap())];
+      for (const t of tickets.list()) for (const r of t.repos) if (!paths.some((p) => samePath(p, r.repoPath))) paths.push(r.repoPath);
+      return paths.slice(0, 200).map((path) => ({ path, slug: repoIdentity.slugOf(path) }));
+    },
+    now: Date.now,
+    log: logger,
+    onChange: () => notify(),
+  });
+  bgQueue.register("intake", (ctx) => intake.handle(ctx));
+  intakeEnded = () => intake.sessionEnded(() => bgQueue.wake("intake"));
+  // 定时拉：每分钟看一次到没到 intakePollMinutes；总开关关着、来源没配时 poll 直接返回。
+  let intakeLastPoll = 0;
+  const intakePollMs = (): number => Math.min(1440, Math.max(5, Number(settings.get("intakePollMinutes")) || 15)) * 60_000;
+  const intakeTick = (force = false): void => {
+    if (closing || headlessAbort.signal.aborted || !intake.active()) return;
+    if (!force && Date.now() - intakeLastPoll < intakePollMs()) return;
+    intakeLastPoll = Date.now();
+    void intake.poll().catch((e: unknown) => logger("intake: poll failed", e));
+  };
+  const intakePollSoon = (): void => {
+    setTimeout(() => intakeTick(true), 1_000);
+  };
   // hook 最多等 5 秒：轮询要快；超过 10 秒的请求那边早就放行了。handle 抛错也放行。排队的时间算进裁决期限（meta.ageMs）。
   const gateInbox = new ControlInbox<GateRequest, GateResult>({
     requestsDir: paths.gateRequests,
@@ -2586,6 +2734,8 @@ async function bootstrap(): Promise<void> {
       if ((key === "interruptChoiceRule" || key === "interruptChoiceDefaults" || key === "interruptSelfServe") && settings.get(key) === "1") markInterruptEffective(Date.now());
       // 预审开关变了：就绪条件跟着变（工作流 G）。
       if (key === "preReviewEnabled") reassessAll();
+      // 自动接活的来源和间隔（工作流 N）：改了马上按新的拉一次。
+      if (key.startsWith("intake")) intakePollSoon();
     },
     // 共享 MCP（WS-M H）：打开就启动 hub（之后开的 session 用它）；关掉时接着它的 session 退完了再停。
     sharedMcpChanged: () => {
@@ -2693,6 +2843,27 @@ async function bootstrap(): Promise<void> {
     },
     checkExports: { list: () => checkExporter.list(), act: (a) => checkExporter.act(a) },
     backtest: { view: () => backtest.view(), act: (a) => backtest.act(a) },
+    intake: {
+      view: () => intake.view(),
+      effect: (days) => intake.effect(days),
+      policyView: (scope) => intakePolicies.view(scope),
+      policySet: (scope, overrides) => {
+        try {
+          intakePolicies.setLayer(scope, overrides);
+          intakePollSoon();
+          return { ok: true };
+        } catch (e) {
+          if (e instanceof IntakePolicyError) return { ok: false, key: e.key, message: e.code };
+          throw e;
+        }
+      },
+      classify: (e) => intake.editClassification(e),
+      poll: async () => {
+        const r = await intake.poll({ manual: true });
+        return r.ok ? { ok: true } : r;
+      },
+      act: (a) => intake.act(a),
+    },
     configIo: configIoFacade({
       io: configIo, backups: configBackups, backupDir: configBackupDir, now: Date.now, notify, log: logger,
       openPath: (dir) => shell.openPath(dir),
@@ -2759,7 +2930,7 @@ async function bootstrap(): Promise<void> {
       // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
       const queued = new Set([...gateRepo.waitingSessionIds()].map((id) => sessions.head(id)?.id ?? id));
       const reasons = needsYou.reasons();
-      return buildNowView({
+      const view = buildNowView({
         tickets: sessionService.ticketViews(),
         features: sessionService.featureViews(),
         epics: sessionService.epicViews(),
@@ -2789,11 +2960,13 @@ async function bootstrap(): Promise<void> {
           ...commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
           ...stackNotices(stackService.notices()),
           ...backtest.notices(),
+          ...intakeNotices(intake.notices()),
         ],
         sessionMemory: (id) => procServices.monitor.memoryOf(id),
         memorySnapshot: procServices.monitor.snapshot(),
         sharedMcp: sharedMcpOn(settings),
       });
+      return intake.active() ? { ...view, intake: intake.recent() } : view;
     },
     rederive: (key) => {
       rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs }, key);
@@ -2980,6 +3153,8 @@ async function bootstrap(): Promise<void> {
   // 启动时补齐记忆：老数据、上次退出时没写完的。
   void memory.syncAll();
   const discoveryTimer = setInterval(() => void runDiscovery(), DISCOVERY_INTERVAL_MS);
+  const intakeTimer = setInterval(() => intakeTick(), 60_000);
+  void healthReady.then(() => intakeTick(true));
   // 自动换新也按活动的节奏再看一遍：活动没变时 activityMonitor 不 notify，而停着的 session 要等「需要你」判断完、
   // 用户 30 秒没打字之后才能换新，那时活动往往已经不变了。
   // 闲置关闭和删除过期的隐藏 session 也跟着这个节奏（BTL-190 第 8 点）。
@@ -3064,6 +3239,7 @@ async function bootstrap(): Promise<void> {
     mcpHub.stop();
     clearInterval(discoveryTimer);
     clearInterval(refreshTimer);
+    clearInterval(intakeTimer);
     clearInterval(scheduleTimer);
     if (stacksTimer) clearInterval(stacksTimer);
     availability.dispose();

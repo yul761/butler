@@ -8,6 +8,7 @@ import { queueFor, queueIndex, riskPill } from "../review-view";
 import { S } from "../strings";
 import { FeaturePrStages } from "./PrStages";
 import { ManagedStacks } from "./StacksPanel";
+import { IntakeQueue } from "./IntakeQueue";
 import { useStateRefetch } from "./useStateRefetch";
 
 const openPr = (url: string): void => void api.prOpen(url).catch(reportError);
@@ -346,6 +347,7 @@ export function ProgressPage({ epicId: initialEpic = null, featureId: initialFea
         </label>
       </header>
       <p className="muted">{S.progress.intro}</p>
+      <IntakeQueue onOpenTicket={onOpenTicket} />
       {view && <ProgressBody view={view} onOpenTicket={onOpenTicket} onOpenFeature={onOpenFeature} queue={queue} />}
     </div>
   );
