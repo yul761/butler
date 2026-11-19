@@ -258,15 +258,20 @@ async function rebaseWithRerere(
   wt: string, args: string[], pre: string[], env: Record<string, string>,
 ): Promise<{ files: string[]; commit: string | null } | null> {
   let r = await runGit(wt, args, { pre, env, timeoutMs: REBASE_TIMEOUT_MS });
-  for (let n = 0; n < 50; n++) {
+  // 栈不限层数（工作流 R，K8），一次 --update-refs 可能要停很多次：不按次数封顶，
+  // 而是每次 --continue 都得往前走（停下的提交变了）；停在同一个提交上就放弃。
+  let last: string | null | undefined;
+  for (;;) {
     if (r.code === 0 && !(await inRebase(wt))) return null;
     if (!(await inRebase(wt))) throw new Error(`git rebase failed: ${(r.stderr || r.stdout).trim()}`);
     const files = await unmergedFiles(wt);
+    const at = await revParse(wt, "REBASE_HEAD");
     if (files.length > 0) {
-      const commit = await revParse(wt, "REBASE_HEAD");
       await runGit(wt, ["rebase", "--abort"], { pre, env });
-      return { files, commit };
+      return { files, commit: at };
     }
+    if (at === last) break;
+    last = at;
     // rerere 已经解完并 add 了（rerere.autoUpdate）：接着走。
     r = await runGit(wt, ["rebase", "--continue"], { pre, env, timeoutMs: REBASE_TIMEOUT_MS });
   }
