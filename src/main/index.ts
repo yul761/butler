@@ -169,7 +169,7 @@ import { ReviewEffectRepo } from "./db/review-effect-repo";
 import { PrPolicies } from "./assess/policies";
 import { AssessmentService } from "./assess/assessment-service";
 import { BriefService } from "./assess/brief-service";
-import { setStackBriefProvider } from "./assess/stack-brief";
+import { setStackBriefProvider, stackBriefProvider } from "./assess/stack-brief";
 import { ReviewEffectCollector } from "./review-effect/collector";
 import { reviewEffect } from "./review-effect/stats";
 import type { DiffFile, ReviewTarget } from "../shared/prereview";
@@ -2030,6 +2030,8 @@ async function bootstrap(): Promise<void> {
     epicName: (id) => epics.get(id)?.name ?? null,
     jobs,
     repos: () => [...new Set(tickets.list().filter((t) => t.archivedAt === null).flatMap((t) => t.repos.map((r) => r.repoPath)))],
+    // 开栈底 PR 时的简报（工作流 G）：G 的 BriefService 建好后填进 stackBriefProvider；关着或没有时为 null。
+    briefProvider: stackBriefProvider,
   });
   // 预审、证据、就绪、风险、简报、review 效果（工作流 G）。模型走路由（pre_review、evidence_verify、brief_summary），
   // 对外动作（贴简报）过 4.8 的开关；预审在后台队列里跑，结论和 CI、评论走同一道递送。
