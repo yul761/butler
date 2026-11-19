@@ -446,9 +446,9 @@ Judging only sets fields (admission, shelved reason, score); it is recorded as a
 
 The **Setup wizard** tab on the Lessons page does the first pass for a repository, a product or everything. Before you start it shows, per repository, how many merged PRs there are and how many are already analysed, plus the expected number of model calls and an estimated time (from how long past analyses took). A repository that an accepted wizard already covered is marked **set up**. The list of merged PRs is fetched from GitHub at most once every 10 minutes. It then:
 
-1. scans the existing code (skipped until a scanner is available; the summary says so);
+1. scans the existing code (repositories without a local clone are skipped; the summary notes repositories that have no lint);
 2. analyses the merged PRs that are not analysed yet and fills in missing fields of older lessons;
-3. backtests (until backtesting is available the summary says **not backtested**, and scores of checkable lessons stay capped);
+3. backtests every repository in scope (see below; a repository without a local clone or `gh` makes the summary say **not backtested**, and scores of checkable lessons stay capped);
 4. judges every candidate as described above and waits for you.
 
 The wizard survives a restart: it picks up at the stage it was in, and items already done are not asked again. A call that fails is retried automatically after 1, 5 and 15 minutes; after that it waits for **Retry now**. A model limit only delays an item and does not use up an attempt. An item that a later pass no longer needs (its group changed, or the lesson is no longer a candidate) is dropped instead of retried. Failed PR analyses are retried from the analysis queue on the **Runs** tab, not here. **Cancel** is final: a pass that is still running writes nothing afterwards. You do not have to wait for the retries: the summary is ready after the first pass and counts the unfinished items, and it is updated when a retry succeeds.
@@ -458,6 +458,23 @@ The summary shows PRs analysed, failed and skipped, candidates, lessons recommen
 ### Calibration
 
 The **Calibration** tab draws up to five scored lessons from each band (at or above the admit line, between the lines, below the drop line) and asks whether each should be accepted; each lesson shows its score parts. A lesson exactly on the drop line counts as between the lines, and a high-scoring lesson whose clarity is below `score.minClarity` counts as shelved by the pipeline. Only lessons of the current draw can be marked. Every mark is recorded as a calibration sample next to the ones recorded when you override the pipeline; marking a lesson again in the same draw replaces your earlier mark. The page shows, per band, how many you marked and how many you would accept, the agreement with the pipeline for this draw and for all samples, and the score weights and lines, which you can edit in place. **Mark as calibrated** records the time in `admissionCalibratedAt` and removes the "not calibrated yet" note from the policy editor.
+
+### Backtests, promotion and demotion
+
+Before a checkable lesson is admitted, Butler backtests its draft check on the last `backtest.recentPrs` merged PRs of each repository in its scope. It fetches the diffs and inline review comments with `gh` from the local clone, keeps them in the database (a restart or a yield continues where it stopped) and runs the check on the lines each PR added. Nothing is run on the history: `run_command` checks are not backtested.
+
+- **Recall** is the share of the review comments the lesson came from that the check would have caught: the check runs on the file as the reviewer saw it, and a violation within `backtest.lineTolerance` lines of the comment counts as caught.
+- **False positives** are hits on lines a PR added that no inline review comment of that PR is near. Up to `backtest.judgeSample` of them per lesson go to the model (task `backtest_judge`), which says whether each is a real violation; with `0`, every unmatched hit counts as a false positive.
+- A lesson whose recall is below `backtest.minRecall` is shelved as `backtest_recall`; one whose false-positive rate is above `backtest.maxFalsePositiveRate` is shelved as `backtest_fp`. Otherwise both numbers become the **verifiability** part of the score.
+- A repository without a local clone, without `gh` or without usable PRs is not backtested. With `backtest.allowUntestedShadow` on, the lesson is still scored (verifiability left out, score capped); with it off, it is shelved as `untested`.
+
+The **Checks** tab shows, for each check, the backtest (PRs, hits, recall, false-positive rate and the existing violations in the current code), its score, how often it was bypassed or ignored, and **Backtest again**. The setup wizard backtests every repository in its scope after the analysis step, and the batch review uses the coverage and overall backtest numbers of the batch.
+
+**Promotion.** With `shadow.autoPromote` on, Butler reviews the checks once an hour. A shadow check is promoted to enforce when it is enabled, blocks (not just warns), passed its backtest, scores at least `score.admitLine`, ran for at least `shadow.minPrs` PRs or `shadow.minDays` days, failed at least `shadow.minHits` times, at least `shadow.minAdoption` of its findings were fixed and at most `shadow.maxFalsePositiveRate` of them were false positives (your verdicts on the hits, plus the model's on a sample). The Checks tab shows how far each shadow check is and what is still missing. All checks promoted in one review form one batch with its reasons; the **Now** page shows it with **Undo**.
+
+**Demotion.** With `demote.enabled` on, an enforced blocking check is demoted when, after at least `demote.minEvents` blocks, it was bypassed (suppression comments, `--no-verify`, hooks turned off, the snapshot changed) or ignored more often than `demote.maxBypassRate`, or when similar review comments did not drop over `demote.noReductionPrs` PRs after it was enforced. With `demote.to` set to `shadow`, a check that Butler promoted goes back to shadow mode in one undoable batch; any other check, or with `demote.to` set to `review`, is only flagged **Needs review** on the Checks tab (**Clear review flag** removes it). Notices stay on the Now page for 14 days.
+
+**Threshold review.** Undoing an automatic promotion or demotion, or changing a check's mode by hand within 14 days of one, is recorded as a calibration sample, and so is enforcing a shadow check by hand. Every `review.intervalDays` days, once there are `review.minSamples` new samples, Butler checks whether `score.admitLine`, `backtest.maxFalsePositiveRate`, `shadow.minAdoption`, `shadow.maxFalsePositiveRate` and `demote.maxBypassRate` would have agreed with you more often at a slightly different value (at most 0.05 away). Suggestions appear on the **Calibration** tab; **Apply** writes the global admission policy as an undoable batch. `backtestThresholdReviewAt` records the last review; it is not edited directly.
 
 ### Principles and the core guide
 
