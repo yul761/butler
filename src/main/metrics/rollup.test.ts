@@ -214,6 +214,9 @@ describe("computeDaily", () => {
 describe("readers", () => {
   it("reads G's pr_risk if it exists, from the first level-like column, and nothing otherwise", () => {
     const db = memDb();
+    // G's migration creates pr_risk; drop it to check the reader copes with the table missing or shaped differently.
+    expect(readRisk(db).size).toBe(0);
+    db.exec(`DROP TABLE pr_risk`);
     expect(readRisk(db).size).toBe(0);
     db.exec(`CREATE TABLE pr_risk (pr_id INTEGER, tier TEXT)`);
     db.exec(`INSERT INTO pr_risk VALUES (3, ' High '), (4, NULL)`);
