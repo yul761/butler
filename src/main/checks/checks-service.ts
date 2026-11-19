@@ -295,11 +295,12 @@ export class ChecksService {
   }
 
   /** 选中的几条一起改（启用、停用、试运行、强制、拦截、警告、删除），一个批次。 */
-  bulk(ids: number[], op: ChecksBulkOp, opts: { origin?: BatchOrigin } = {}): ChecksActResult {
+  bulk(ids: number[], op: ChecksBulkOp, opts: { origin?: BatchOrigin; kind?: string; summary?: Record<string, unknown> } = {}): ChecksActResult {
     const unique = [...new Set(ids)].slice(0, 1000);
     const now = this.d.now();
+    const before = new Map(unique.map((id) => [id, this.repo.get(id)?.mode ?? null]));
     const { outcome } = this.d.recorder.run(
-      { kind: `check_${op}`, origin: opts.origin ?? "manual", entity: "check", scope: { ids: unique.length }, now },
+      { kind: opts.kind ?? `check_${op}`, origin: opts.origin ?? "manual", entity: "check", scope: { ids: unique.length }, summary: opts.summary, now },
       (ctx) => {
         for (const id of unique) {
           const r = this.repo.get(id);
@@ -322,7 +323,21 @@ export class ChecksService {
         }
       },
     );
+    if (outcome.batchId !== null && (op === "shadow" || op === "enforce"))
+      for (const fn of this.bulkListeners) {
+        try {
+          fn({ ids: unique.filter((id) => before.get(id) !== null && before.get(id) !== op), mode: op, origin: opts.origin ?? "manual", batchId: outcome.batchId, at: now });
+        } catch {
+          // 监听方的错不影响这次改动。
+        }
+      }
     return this.changed({ ok: true, batchId: outcome.batchId, affected: outcome.affected });
+  }
+
+  private readonly bulkListeners: ((e: { ids: number[]; mode: "shadow" | "enforce"; origin: BatchOrigin; batchId: number; at: number }) => void)[] = [];
+  /** 检查的模式被批量改了（工作流 F：人把刚自动升级 / 降级的检查改回去，记校准样本）。 */
+  onModeChanged(fn: (e: { ids: number[]; mode: "shadow" | "enforce"; origin: BatchOrigin; batchId: number; at: number }) => void): void {
+    this.bulkListeners.push(fn);
   }
 
   /** 手动给规矩分类：能写成检查 / 只能是文字 / 清掉。一个批次。 */
