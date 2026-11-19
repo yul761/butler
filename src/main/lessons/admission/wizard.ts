@@ -135,6 +135,8 @@ export class WizardService {
   private readonly pending = new Map<number, unknown>();
   /** 每次运行一条队：推进、判、重试、重新计算一个接一个（不会两遍判同时写同一次运行）。 */
   private readonly tails = new Map<number, Promise<unknown>>();
+  /** 素材到了、已经排了重判还没开始的运行：再来的通知并进这一遍。 */
+  private readonly rejudge = new Set<number>();
   /** stop() 之后什么都不再排、不再写（退出时库要关了）。 */
   private stopped = false;
   /** 合并 PR 的列表（估算用；每个仓库一次 gh，10 分钟内不再拉）。 */
@@ -307,19 +309,36 @@ export class WizardService {
     this.pending.clear();
   }
 
-  /** 等现在在跑的推进结束（测试用）。 */
   /**
    * 回测素材拿到了（或者放弃了）：等接受、还有规矩没判完（多半在等这份素材）的运行再判一遍。缓存里有的不再问模型；
    * 范围不看仓库，重判一遍只花本地时间。
+   * 正在判的运行也要再判：这一遍可能在素材到之前就问过回测（没有 gh 时素材会立即放弃，常常比第一遍判完还早），
+   * 判完写下的「没判完」不会再有人来通知。重判排在这一遍后面（serial），那时运行已经进了等接受。
+   * 重判还没开始时再来的通知（一个产品的几个仓库先后拿到素材）并进同一遍；开始以后再来的另排一遍。
    */
   onMaterial(): void {
     if (this.stopped) return;
-    const ids = this.d.db
-      .prepare(`SELECT DISTINCT r.id AS id FROM lesson_wizard_runs r JOIN lesson_wizard_verdicts v ON v.run_id = r.id WHERE r.state = 'awaiting_accept' AND v.verdict = 'unfinished'`)
-      .all() as { id: number }[];
-    for (const { id } of ids) void this.serial(Number(id), () => this.retryPass(Number(id))).catch((e: unknown) => this.d.log?.(`lesson wizard ${id}: re-judging after backtest material failed`, e));
+    const waiting = new Set(
+      (
+        this.d.db
+          .prepare(`SELECT DISTINCT r.id AS id FROM lesson_wizard_runs r JOIN lesson_wizard_verdicts v ON v.run_id = r.id WHERE r.state = 'awaiting_accept' AND v.verdict = 'unfinished'`)
+          .all() as { id: number }[]
+      ).map((r) => Number(r.id)),
+    );
+    const runs = this.d.db.prepare(`SELECT id, state FROM lesson_wizard_runs WHERE state IN ('judging', 'awaiting_accept') ORDER BY id`).all() as { id: number; state: WizardState }[];
+    for (const r of runs) {
+      const id = Number(r.id);
+      if (r.state !== "judging" && !waiting.has(id) && !this.tails.has(id)) continue;
+      if (this.rejudge.has(id)) continue;
+      this.rejudge.add(id);
+      void this.serial(id, () => {
+        this.rejudge.delete(id);
+        return this.retryPass(id);
+      }).catch((e: unknown) => this.d.log?.(`lesson wizard ${id}: re-judging after backtest material failed`, e));
+    }
   }
 
+  /** 等现在在跑的推进结束（测试用）。 */
   async idle(): Promise<void> {
     while (this.driving.size || this.tails.size) await new Promise((r) => setTimeout(r, 1));
   }

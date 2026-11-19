@@ -34,6 +34,8 @@ export class AdmissionService {
   readonly pipeline: AdmissionPipeline;
   readonly reviews: BatchReviews;
   private busy = new Set<string>();
+  /** 自动准入跑的时候又被叫了的仓库：跑完再来一遍。 */
+  private again = new Set<string>();
   /** 判的每一遍排队一个一个来（向导、规矩页、自动准入、改分类后的重判不同时写同一批规矩）。 */
   private queue: Promise<unknown> = Promise.resolve();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -128,12 +130,28 @@ export class AdmissionService {
 
   /**
    * 自动准入：判那个仓库（计划批次 origin auto，只推荐）；策略 admission.autoConfirm 开着而且抽查没越线时，
-   * 再以 origin auto 接受这次推荐的。同一个仓库同时只跑一次。
+   * 再以 origin auto 接受这次推荐的。同一个仓库同时只跑一次；跑的时候又来了（分析刚完成、回测素材刚到或放弃），
+   * 这一遍可能已经读过旧的状态，跑完再判一遍（来几次都只多一遍）。
    */
   async autoAdmit(slug: string): Promise<void> {
     const key = `repo:${slug}`;
-    if (this.busy.has(key)) return;
+    if (this.busy.has(key)) {
+      this.again.add(key);
+      return;
+    }
     this.busy.add(key);
+    try {
+      do {
+        this.again.delete(key);
+        await this.autoAdmitOnce(slug);
+      } while (this.again.has(key));
+    } finally {
+      this.busy.delete(key);
+      this.again.delete(key);
+    }
+  }
+
+  private async autoAdmitOnce(slug: string): Promise<void> {
     try {
       const r = await this.judge({ kind: "repo", slug }, { origin: "auto" });
       const autoConfirm = this.pipeline.policyOf({ kind: "repo", slug })["admission.autoConfirm"] === true;
@@ -144,8 +162,6 @@ export class AdmissionService {
       }
     } catch (e) {
       this.d.log?.(`automatic admission for ${slug} failed`, e);
-    } finally {
-      this.busy.delete(key);
     }
   }
 }
