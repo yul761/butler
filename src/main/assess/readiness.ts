@@ -18,8 +18,8 @@ export interface ReadinessInput {
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
   /** 合并总控在让它等别人。 */
   waitingOnGate: boolean;
-  /** PR 描述原文（只在主进程里用）。 */
-  description: string | null;
+  /** PR 描述原文（只在主进程里用）；undefined = 还没读到。 */
+  description: string | null | undefined;
 }
 
 export type Lang = "en" | "zh";
@@ -34,7 +34,7 @@ const T = {
     commentsOk: "no open review comments", commentsOpen: (n: number) => `${n} open review comment${n === 1 ? "" : "s"}`, commentsUnknown: "review comments not read yet",
     mergeOk: "no conflicts", mergeConflict: "has merge conflicts", mergeUnknown: "mergeability not known yet", mergeWaiting: "waiting on the merge gate",
     descOk: "description covers what, why and how verified", descShort: (n: number, min: number) => `description too short (${n}/${min} chars)`,
-    descMissing: (parts: string[]) => `description lacks: ${parts.join(", ")}`, descNone: "no description",
+    descMissing: (parts: string[]) => `description lacks: ${parts.join(", ")}`, descNone: "no description", descUnknown: "description not read yet",
     parts: { what: "what changed", why: "why", verify: "how it was verified" },
     gap: (g: EvidenceGap) => (g.state === "missing" ? `missing ${CAT.en[g.category]}` : g.state === "explained" ? `${CAT.en[g.category]} not run: ${g.detail}` : `${CAT.en[g.category]} does not match: ${g.detail}`),
   },
@@ -47,7 +47,7 @@ const T = {
     commentsOk: "没有未处理的评论", commentsOpen: (n: number) => `${n} 条评论未处理`, commentsUnknown: "评论还没读到",
     mergeOk: "没有冲突", mergeConflict: "有合并冲突", mergeUnknown: "还不知道能不能合并", mergeWaiting: "合并总控让它等别人",
     descOk: "描述写了改了什么、为什么、怎么验证", descShort: (n: number, min: number) => `描述太短（${n}/${min} 字）`,
-    descMissing: (parts: string[]) => `描述缺少：${parts.join("、")}`, descNone: "没有描述",
+    descMissing: (parts: string[]) => `描述缺少：${parts.join("、")}`, descNone: "没有描述", descUnknown: "还没读到描述",
     parts: { what: "改了什么", why: "为什么", verify: "怎么验证" },
     gap: (g: EvidenceGap) => (g.state === "missing" ? `缺${CAT.zh[g.category]}` : g.state === "explained" ? `${CAT.zh[g.category]}没跑：${g.detail}` : `${CAT.zh[g.category]}对不上：${g.detail}`),
   },
@@ -117,7 +117,8 @@ export function computeReadiness(input: ReadinessInput, policy: ResolvedPrPolicy
   else conditions.push(cond("mergeable", "unknown", t.mergeUnknown));
 
   // 6. description
-  if (!input.description || !input.description.trim()) conditions.push(cond("description", "fail", t.descNone));
+  if (input.description === undefined) conditions.push(cond("description", "unknown", t.descUnknown));
+  else if (!input.description || !input.description.trim()) conditions.push(cond("description", "fail", t.descNone));
   else {
     const d = checkDescription(input.description, policy);
     if (d.ok) conditions.push(cond("description", "pass", t.descOk));

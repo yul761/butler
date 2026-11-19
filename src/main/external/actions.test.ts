@@ -18,7 +18,7 @@ function setup(o: { layered?: (key: string, scope: ExternalScope) => string | un
 
 describe("external action settings (contract 4.8)", () => {
   it("has one editable flag per kind, off by default", () => {
-    expect(EXTERNAL_ACTIONS).toHaveLength(11);
+    expect(EXTERNAL_ACTIONS).toHaveLength(12);
     expect(EXTERNAL_ACTION_SETTINGS.branch_push).toBe("externalBranchPush");
     for (const kind of EXTERNAL_ACTIONS) {
       const key = EXTERNAL_ACTION_SETTINGS[kind];
@@ -27,7 +27,7 @@ describe("external action settings (contract 4.8)", () => {
       expect(normalizeSetting(key, " 1 ")).toBe("1");
       expect(() => normalizeSetting(key, "yes")).toThrow();
     }
-    expect(new Set(Object.values(EXTERNAL_ACTION_SETTINGS)).size).toBe(11);
+    expect(new Set(Object.values(EXTERNAL_ACTION_SETTINGS)).size).toBe(12);
   });
 });
 

@@ -97,10 +97,10 @@ describe.skipIf(process.platform === "win32")("prStatus / branchRuns / failedLog
       number: 5, url: "u", state: "OPEN", isDraft: true, review: "pending", headSha: "abc",
       checks: [{ name: "t", state: "passing", runId: 9 }], ci: "passing",
       headBranch: "", author: "", reviews: [], comments: [], firstCommitAt: null, createdAt: null, mergedAt: null, closedAt: null,
-      baseBranch: null, title: null, labels: [], reviewRequests: [], mergeable: null, mergeState: null,
+      baseBranch: null, title: null, labels: [], reviewRequests: [], mergeable: null, mergeState: null, body: null,
     });
     expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe(
-      "pr view feat --json number,url,state,isDraft,reviewDecision,headRefOid,headRefName,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt,baseRefName,title,labels,reviewRequests,mergeable,mergeStateStatus",
+      "pr view feat --json number,url,state,isDraft,reviewDecision,headRefOid,headRefName,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt,baseRefName,title,labels,reviewRequests,mergeable,mergeStateStatus,body",
     );
   });
 

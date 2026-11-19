@@ -2053,6 +2053,7 @@ const ZH = {
     ci_rerun: { label: "重跑 CI", hint: "重新触发失败的 CI" },
     issue_post: { label: "发 issue", hint: "在 tracker 或 GitHub 上建 issue、发评论" },
     push_notification: { label: "推送通知", hint: "往外部服务（比如手机推送、聊天工具）发通知" },
+    pr_brief_post: { label: "贴 review 简报", hint: "预审完成后把 review 简报写进 PR 描述（整块替换 Butler 的简报块）" },
   } as Record<ExternalActionKind, { label: string; hint: string }>,
   externalAuditHeading: "对外动作",
   externalAuditNone: "还没有对外动作的记录。",

@@ -136,7 +136,7 @@ export function makePreReviewHandler(d: RunnerDeps): BgHandler {
     const at = d.now();
     for (const v of applyRerun(evidence, outcome)) d.repo.setVerified(v.id, v.verified, v.detail, v.rerunOutput, at);
     evidence = d.repo.evidenceOf(row.id);
-    const summary: CheckSummary = { absent: checks.absent, failing, ci: d.ci(row.prId), rerun: outcome ? rerunSummary(outcome.results) : [] };
+    const summary: CheckSummary = { absent: checks.absent, failing, ci: d.ci(row.prId), rerun: outcome?.kind === "ran" ? rerunSummary(outcome.results) : [] };
 
     // 2. 两次模型调用（互不依赖，并行）。
     const lang = d.lang();

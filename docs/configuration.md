@@ -543,6 +543,7 @@ Some features let Butler leave something outside your machine on your behalf, su
 | Rerun CI | `externalCiRerun` | `0` (off) | Starting failed CI runs again. |
 | Post issues | `externalIssuePost` | `0` (off) | Creating issues or comments in your tracker or on GitHub. |
 | Push notifications | `externalPushNotification` | `0` (off) | Sending notifications to an outside service, such as phone push or chat. |
+| Post review briefs | `externalPrBriefPost` | `0` (off) | Writing the review brief into the PR description after each pre-review. The "Post to PR" button works either way and is recorded in the audit log. |
 
 Each switch is `1` or `0`.
 

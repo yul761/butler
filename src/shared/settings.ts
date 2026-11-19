@@ -66,6 +66,7 @@ export const EDITABLE_SETTINGS = [
   "externalCiRerun",
   "externalIssuePost",
   "externalPushNotification",
+  "externalPrBriefPost",
   "lessonsAutoAdmit",
   "lessonsPrinciples",
   "lessonsCoreGuide",

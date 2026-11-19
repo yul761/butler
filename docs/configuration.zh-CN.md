@@ -543,6 +543,7 @@ Butler 可以替你判待确认的规矩。判的时候，对一个仓库、一�
 | 重跑 CI | `externalCiRerun` | `0`（关） | 重新触发失败的 CI。 |
 | 发 issue | `externalIssuePost` | `0`（关） | 在 tracker 或 GitHub 上建 issue、发评论。 |
 | 推送通知 | `externalPushNotification` | `0`（关） | 往外部服务（比如手机推送、聊天工具）发通知。 |
+| 贴 review 简报 | `externalPrBriefPost` | `0`（关） | 每次预审完成后把 review 简报写进 PR 描述。「贴到 PR」按钮不受这个开关影响，照样记进审计。 |
 
 每个开关填 `1` 或 `0`。
 

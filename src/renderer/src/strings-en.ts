@@ -2035,6 +2035,7 @@ export const EN: UiStrings = {
     ci_rerun: { label: "Rerun CI", hint: "Starts failed CI runs again" },
     issue_post: { label: "Post issues", hint: "Creates issues or comments in your tracker or on GitHub" },
     push_notification: { label: "Push notifications", hint: "Sends notifications to an outside service, such as phone push or chat" },
+    pr_brief_post: { label: "Post review briefs", hint: "Writes the review brief into the PR description after a pre-review, replacing Butler's brief block" },
   } as Record<ExternalActionKind, { label: string; hint: string }>,
   externalAuditHeading: "Outward actions",
   externalAuditNone: "No outward actions recorded yet.",
