@@ -36,6 +36,11 @@ export class BranchOwnersRepo {
     return r ? toOwner(r) : null;
   }
 
+  /** 推过这个分支的（任何 ticket、任何仓库），新的在前（工作流 K：栈的层是不是 Butler 的）。 */
+  byBranch(branch: string): BranchOwner[] {
+    return (this.db.prepare(`SELECT * FROM branch_owners WHERE branch = ? ORDER BY at DESC`).all(branch) as unknown as Row[]).map(toOwner);
+  }
+
   /** at >= since 的，新的在前。 */
   since(since: number): BranchOwner[] {
     return (this.db.prepare(`SELECT * FROM branch_owners WHERE at >= ? ORDER BY at DESC`).all(since) as unknown as Row[]).map(toOwner);

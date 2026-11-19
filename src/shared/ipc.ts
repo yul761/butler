@@ -183,6 +183,15 @@ export const IPC = {
   profilesGet: "profiles:get",
   profilesScan: "profiles:scan",
   progressGet: "progress:get",
+  /** 栈式 PR（工作流 K）。 */
+  stacksList: "stacks:list",
+  stacksRebase: "stacks:rebase",
+  stacksLayerMode: "stacks:layerMode",
+  stacksRestore: "stacks:restore",
+  stacksRemove: "stacks:remove",
+  stacksPolicyGet: "stacks:policyGet",
+  stacksPolicySet: "stacks:policySet",
+  stacksPolicyLayers: "stacks:policyLayers",
   /** 「效果」页（ws-h）：和总控 metrics_overview 同一份。 */
   metricsView: "metrics:view",
   butlerMessages: "butler:messages",
@@ -218,6 +227,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList, IPC.externalAuditList,
   IPC.loopPolicyGet, IPC.loopPolicySet, IPC.loopCommentsList, IPC.loopCommentsAct, IPC.loopFlakyList, IPC.loopFlakyAct, IPC.loopEffect,
   IPC.interruptsState, IPC.interruptsAct, IPC.profilesGet, IPC.profilesScan,
+  IPC.stacksList, IPC.stacksRebase, IPC.stacksLayerMode, IPC.stacksRestore, IPC.stacksRemove, IPC.stacksPolicyGet, IPC.stacksPolicySet, IPC.stacksPolicyLayers,
   IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,
 ];

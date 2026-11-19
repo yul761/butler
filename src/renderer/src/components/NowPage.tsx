@@ -71,6 +71,7 @@ export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup
 function noticeKey(n: NowNotice): string {
   if (n.kind === "cost") return `cost:${n.breaker.subjectKind}:${n.breaker.subjectId}`;
   if (n.kind === "comments_waiting") return `comments_waiting:${n.waiting.reason}:${n.waiting.prId}`;
+  if (n.kind === "stack") return `stack:${n.stack.reason}:${n.stack.stackId}:${n.stack.branch}`;
   if (n.kind === "ci_undelivered") return `ci_undelivered:${n.ci.item.kind}:${n.ci.item.kind === "pr" ? n.ci.item.id : n.ci.item.repoId}`;
   if (n.kind !== "session_limited") return n.kind;
   const t = n.target;
@@ -79,7 +80,7 @@ function noticeKey(n: NowNotice): string {
 
 function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: number; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
   const { text, actions } = noticeText(n, S, now);
-  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen, routing: S.rt.nowOpen, resend: S.noticeResend, raise: S.cs.raise, comments: S.lp.noticeOpen };
+  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen, routing: S.rt.nowOpen, resend: S.noticeResend, raise: S.cs.raise, comments: S.lp.noticeOpen, stacks: S.sk.noticeOpen };
   // 重发的结果（CI 结果未能送达）：送到了提醒会在下一次刷新时消失，没送到写上为什么。
   const [result, setResult] = useState<string | null>(null);
   const run = (a: NoticeAction): void => {
@@ -98,7 +99,9 @@ function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: numb
       saveTab(`ticket:${n.waiting.ticketKey}`, "comments");
       saveTabOpen(`ticket:${n.waiting.ticketKey}`, true);
       onOpen(n.target);
-    } else if (n.kind === "session_limited" || n.kind === "ci_undelivered") onOpen(n.target);
+    } else if (a === "stacks") onGo({ page: "progress" });
+    else if (n.kind === "session_limited" || n.kind === "ci_undelivered") onOpen(n.target);
+    else if (n.kind === "stack" && n.target) onOpen(n.target);
     else if (n.kind === "cost" && n.target) onOpen(n.target);
   };
   return (

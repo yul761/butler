@@ -18,6 +18,7 @@ import type { ExternalActionKind, ExternalOutcome } from "../../shared/external"
 import type { InterruptCategory } from "../../shared/metrics";
 import type { ProgressBucket, WaitingOn, WaitingReason } from "../../shared/progress";
 import type { ReportKind } from "../../shared/control";
+import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ButlerMessageView, EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
@@ -32,7 +33,7 @@ const ZH_STATUS: Record<TicketStatus, string> = {
 export const STATUS_ORDER: TicketStatus[] = ["merged_pending_followup", "active", "blocked", "in_review", "done"];
 
 const ZH = {
-  settingsTabs: { general: "常规", routing: "模型路由", cost: "花费与后台", loop: "评论与 CI", interrupts: "打断与通知" } as Record<"general" | "routing" | "cost" | "loop" | "interrupts", string>,
+  settingsTabs: { general: "常规", routing: "模型路由", cost: "花费与后台", loop: "评论与 CI", interrupts: "打断与通知", stacks: "栈" } as Record<"general" | "routing" | "cost" | "loop" | "interrupts" | "stacks", string>,
   /** 打断与通知（工作流 J）。 */
   ij: {
     heading: "打断与通知",
@@ -1265,7 +1266,7 @@ const ZH = {
   ioSemanticFailed: "导入的规矩和本地规矩是否矛盾没有查完，有些冲突可能没显示出来。",
   ioStarterTarget: "导入到",
   ioStarterPick: "选择一个仓库或产品",
-  ioSection: { products: "产品", policies: "准入策略", lessons: "规矩", checks: "检查", models: "模型路由", baseline_rules: "标记文件表", baselines: "仓库现状" } as Record<string, string>,
+  ioSection: { products: "产品", policies: "准入策略", lessons: "规矩", checks: "检查", models: "模型路由", baseline_rules: "标记文件表", baselines: "仓库现状", stacks: "栈策略" } as Record<string, string>,
   previewStatus: { added: "新增", changed: "有改动", conflicting: "冲突", unchanged: "没变", removed: "本地有、文件里没有" } satisfies Record<PreviewStatus, string>,
   ioCount: (label: string, n: number) => `${label} ${n}`,
   ioShowUnchanged: (n: number) => `显示没变的 ${n} 条`,
@@ -1875,6 +1876,60 @@ const ZH = {
   /** 设置里的「对外动作」（契约 4.8，ws-b）。 */
   externalHeading: "对外动作",
   externalIntro: "Butler 代你在 GitHub 或别的外部服务上留下东西的动作，每种一个开关，默认全关。关着时 Butler 不会做，只在审计页记一笔“跳过”。现在用到的是导出成仓库规则的「推送分支」和「开 PR」，以及评论与 CI 的「回复 review 评论」「标记评论已解决」和「重跑 CI」；其余的等之后的版本接入时才会生效。",
+  /** 栈式 PR（工作流 K）：进度页「栈」区块、设置页「栈」标签、「现在」页的栈提醒。 */
+  sk: {
+    title: "栈",
+    intro: "Butler 管的栈：只有栈底的 PR 给人 review，上面的层先是分支；栈底合并或 trunk 更新时 Butler 把整栈 rebase 到新的父层上，冲突交给那一层的 session。",
+    none: "还没有栈。feature 总控用 create_ticket 的 stack_on，或者 stack_define 把几个分支定成栈。",
+    noUpdateRefs: "这台电脑的 git 不支持 --update-refs（要 2.38 以上），Butler 会一层一层 rebase，慢一些。",
+    repoTrunk: (repo: string, trunk: string) => `${repo} · trunk ${trunk}`,
+    autoRebaseOff: "这个仓库没开「允许 Butler 自动 rebase 栈」：Butler 只看，不改分支。",
+    source: { mcp: "总控定的", ticket: "stack_on 建的", detected: "自动识别" } as Record<StackSource, string>,
+    state: { branch_only: "分支", draft: "draft PR", ready: "PR", merged: "已合并" } as Record<StackLayerState, string>,
+    bottom: "栈底",
+    behind: (n: number) => `落后 trunk ${n} 个提交`,
+    unpushed: "改写过，还没推",
+    lastRun: (outcome: string, trigger: string, when: string) => `最近一次：${outcome}（${trigger}，${when}）`,
+    outcome: { rebased: "rebase 好了", noop: "不用 rebase", conflict: "有冲突", deferred: "推迟了", failed: "失败了", rolled_back: "已回滚", restored: "已从备份恢复" } as Record<StackRunOutcome, string>,
+    trigger: { main_updated: "trunk 更新", bottom_merged: "栈底合并", layer_commits: "某层有新提交", daily: "每日", manual: "手动", autosquash: "autosquash", restore: "恢复" } as Record<StackTrigger, string>,
+    conflict: (branch: string, files: string) => `冲突在 ${branch}：${files}`,
+    unpushedList: (branches: string) => `「推送分支」开关关着，没推：${branches}`,
+    rebaseNow: "马上 rebase",
+    restore: "从备份恢复",
+    remove: "不再管这个栈",
+    removeConfirm: "确定不再管？（分支和 PR 不动）",
+    toDraft: "开成 draft PR",
+    toBranch: "降回分支",
+    done: "好了",
+    openTicket: "打开 ticket",
+    notice: {
+      conflict: (stack: string, branch: string, files: string) => `栈「${stack}」rebase 时在 ${branch} 冲突（${files}），冲突还没交到 session 手里`,
+      draft_stale: (stack: string, branch: string, days: number) => `栈「${stack}」的 ${branch} 当 draft 已经 ${days} 天了，不用跑 CI 的话可以降回分支`,
+      behind: (stack: string, commits: number, days: number) => `栈「${stack}」的栈底落后 trunk ${commits} 个提交（最早的是 ${days} 天前的）`,
+      stuck: (stack: string, detail: string) => `栈「${stack}」的 rebase 卡住了：${detail}`,
+    },
+    noticeOpen: "看栈",
+    settingsIntro: "栈式 PR 的策略，分三层：全局 → 产品 → 仓库，下层覆盖上层。「允许 Butler 自动 rebase 栈」默认关，开了 Butler 才会改这个仓库里栈的本地分支；推送、开 PR、贴总览 issue 另外受下面的对外动作开关控制，也都默认关。",
+    key: {
+      autoRebase: "允许 Butler 自动 rebase 栈",
+      mergeMethod: "栈底怎么合并",
+      rebaseOnMainUpdate: "trunk 更新时 rebase",
+      dailyRebase: "每天 rebase 一次",
+      autosquash: "评论处理完后 autosquash",
+      autoOpenBottomPr: "栈底合并后把下一层开成 PR",
+      conflictToSession: "冲突交给那一层的 session",
+      draftDemoteDays: "draft 几天后提醒降回分支",
+      behindCommits: "栈底落后几个提交时提醒",
+      behindDays: "栈底落后几天时提醒",
+      overview: "epic 总览",
+      draftLabel: "draft 层打的 label",
+    } as Record<StackPolicyKey, string>,
+    option: { auto: "按合并事件判断", squash: "squash", merge: "merge commit", off: "不贴", issue: "贴到一个 issue" } as Record<string, string>,
+    policyError: { unknown_key: "没有这个设置", bad_bool: "只能是开或关", bad_int: "超出范围", bad_enum: "不是可选的值", bad_label: "label 要 1–50 个字，不能有逗号和换行" } as Record<StackPolicyErrorCode, string>,
+    badValue: (key: string, why: string) => `${key}：${why}`,
+    externalTitle: "栈用到的对外动作",
+    externalIntro: "rebase 后推上去走「强推」，第一次推一层走「推送分支」，开 PR 和 draft 走「开 PR」，PR 标题里的栈位置和描述里的依赖行走「改 PR 标题」「改 PR 描述」，draft 的 label 走「加减 PR label」，epic 总览走「发 issue」。关着时 Butler 只改本地分支，在栈上标出没推的层。",
+  },
   lp: {
     title: "评论与 CI",
     intro: "PR 上的 review 评论自动分类、送进 session、改完后核对并回复；CI 失败先分类，环境问题自动重跑，代码问题才送进 session。两个总开关默认关，可以按全局 / 产品 / 仓库分别设置。",

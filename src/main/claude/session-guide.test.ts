@@ -21,6 +21,15 @@ describe("session guide", () => {
     expect(sessionGuide("en", "ticket")).not.toContain("start_session");
   });
 
+  it("feature 总控和 Butler 总控有栈的说明（工作流 K），stack_on 只给 feature 总控", () => {
+    for (const lang of ["zh", "en"] as const) {
+      expect(sessionGuide(lang, "coordinator")).toContain("stack_on");
+      expect(sessionGuide(lang, "butler")).toContain("stack_define");
+      expect(sessionGuide(lang, "butler")).not.toContain("stack_on");
+      for (const kind of ["ticket", "epic", "lessons"] as const) expect(sessionGuide(lang, kind)).not.toContain("stack_define");
+    }
+  });
+
   it("只有 ticket session 被告知自我 review 之后用 report 说明结果（PR 进度时间线）", () => {
     expect(sessionGuide("zh", "ticket")).toContain("自我 review");
     expect(sessionGuide("zh", "ticket")).toContain("进度时间线");

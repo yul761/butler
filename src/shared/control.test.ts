@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, MESSAGE_LIMIT, parseControlRequest, REASON_LIMIT, sanitizeTask, START_INSTRUCTIONS_LIMIT, taskMessage, TASK_LIMIT } from "./control";
+import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, MAX_STACK_LAYERS, MESSAGE_LIMIT, parseControlRequest, REASON_LIMIT, sanitizeTask, START_INSTRUCTIONS_LIMIT, taskMessage, TASK_LIMIT } from "./control";
 
 describe("parseControlRequest", () => {
   it("accepts the three operations", () => {
@@ -281,5 +281,38 @@ describe("parseControlRequest for the Butler 总控 (BTL-190 5)", () => {
     ]) {
       expect(parseControlRequest(bad), JSON.stringify(bad).slice(0, 80)).toBeNull();
     }
+  });
+});
+
+describe("parseControlRequest for stacks (workstream K)", () => {
+  it("accepts the four stack ops for a feature and Butler control", () => {
+    for (const base of [{ v: 1, featureId: 2 }, { v: 1, butler: true }] as const) {
+      expect(parseControlRequest({ ...base, op: "list_stacks" })).toEqual({ ...base, from: null, op: "list_stacks" });
+      expect(parseControlRequest({ ...base, op: "stack_define", branches: ["a", "b"], repo: "shop", name: "n", stack: 3 }))
+        .toEqual({ ...base, from: null, op: "stack_define", branches: ["a", "b"], repo: "shop", name: "n", stack: 3 });
+      expect(parseControlRequest({ ...base, op: "stack_rebase", stack: 3 })).toEqual({ ...base, from: null, op: "stack_rebase", stack: 3 });
+      expect(parseControlRequest({ ...base, op: "stack_layer_mode", stack: 3, branch: "b", mode: "draft" }))
+        .toEqual({ ...base, from: null, op: "stack_layer_mode", stack: 3, branch: "b", mode: "draft" });
+    }
+  });
+
+  it("rejects malformed stack requests", () => {
+    const base = { v: 1, featureId: 2 } as const;
+    expect(parseControlRequest({ ...base, op: "stack_define", branches: ["a"] })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "stack_define", branches: Array.from({ length: MAX_STACK_LAYERS + 1 }, (_, i) => `b${i}`) })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "stack_define", branches: ["a", ""] })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "stack_define", branches: ["a", "b"], stack: 0 })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "stack_rebase" })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "stack_rebase", stack: 1.5 })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "stack_layer_mode", stack: 1, branch: "b", mode: "ready" })).toBeNull();
+  });
+
+  it("gives an epic only list_stacks, and parses create_ticket's stack_on", () => {
+    expect(parseControlRequest({ v: 1, epicId: 4, op: "list_stacks" })).toEqual({ v: 1, epicId: 4, from: null, op: "list_stacks" });
+    expect(parseControlRequest({ v: 1, epicId: 4, op: "stack_rebase", stack: 1 })).toBeNull();
+    expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "list_stacks" })).toBeNull();
+    expect(parseControlRequest({ v: 1, featureId: 2, op: "create_ticket", ticket: "P-2", stack_on: "P-1" }))
+      .toEqual({ v: 1, featureId: 2, from: null, op: "create_ticket", ticket: "P-2", stack_on: "P-1" });
+    expect(parseControlRequest({ v: 1, featureId: 2, op: "create_ticket", ticket: "P-2", stack_on: 3 })).toBeNull();
   });
 });

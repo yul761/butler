@@ -5,6 +5,7 @@ import { reportError } from "../errors";
 import { flattenStack, prRef, segmentWidths, shortTime, sinceText, waitingText } from "../progress-ui";
 import { S } from "../strings";
 import { FeaturePrStages } from "./PrStages";
+import { ManagedStacks } from "./StacksPanel";
 import { useStateRefetch } from "./useStateRefetch";
 
 const openPr = (url: string): void => void api.prOpen(url).catch(reportError);
@@ -239,6 +240,7 @@ export function ProgressBody({ view, onOpenTicket, onOpenFeature }: { view: Prog
         <h3>{S.progress.stuckHeading}</h3>
         <StuckList stuck={view.stuck} now={view.freshness.generatedAt} onOpenTicket={onOpenTicket} />
       </section>
+      <ManagedStacks filter={view.filter} onOpenTicket={onOpenTicket} />
       <Stacks view={view} />
       <PrTable view={view} onOpenTicket={onOpenTicket} />
       <section className="progress-features" data-testid="progress-features">

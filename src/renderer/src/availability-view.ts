@@ -1,6 +1,7 @@
 import type { AvailabilityView, LimitHit } from "../../shared/availability";
 import type { NowNotice } from "../../shared/types";
 import { costBreakerText } from "./cost-view";
+import { stackNoticeText } from "./stack-view";
 import type { UiStrings } from "./strings";
 
 const pad = (n: number): string => String(n).padStart(2, "0");
@@ -20,7 +21,7 @@ export function limitLine(l: LimitHit, S: UiStrings, now: number): string {
   return l.resetsAt === null ? S.limitNoReset(kind) : S.limitUntil(kind, resetClock(l.resetsAt, now));
 }
 
-export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend" | "raise" | "comments";
+export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend" | "raise" | "comments" | "stacks";
 
 /** CI 结论为什么没递出去，一句人话（工作流 W）。认不得的原样带上。 */
 export function ciReasonText(reason: string, S: UiStrings): string {
@@ -65,6 +66,7 @@ export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: str
       const text = w.reason === "review" ? S.lp.noticeReview(pr, w.count) : S.lp.noticeUndelivered(pr, w.count, Math.max(1, Math.floor((now - w.since) / 60_000)));
       return { text, actions: ["comments"] };
     }
+    case "stack": return { text: stackNoticeText(n.stack, S), actions: n.target ? ["stacks", "open"] : ["stacks"] };
   }
 }
 

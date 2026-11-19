@@ -132,6 +132,8 @@ export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.costResume,
   // 评论：「送进 session」「再回复」推动工作；改分类、忽略不算（recordInvoke 里按 op 分）。
   IPC.loopCommentsAct,
+  // 栈（工作流 K）：「现在 rebase」「从备份恢复」推动工作；改层的模式（开 draft / 降级）也是。
+  IPC.stacksRebase, IPC.stacksRestore, IPC.stacksLayerMode,
 ]);
 
 /** 记成别的人介入的通道（不再算手动触发）：卡片上回答、「不用了」是 needs_you_answer。 */
@@ -170,6 +172,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.baselinesAct, IPC.legacyAct, IPC.checkExportAct,
   // 打断与通知的设置（工作流 J）：权限档案、默认答案、webhook、测试通知都是搭环境
   IPC.interruptsAct, IPC.profilesScan,
+  // 栈（工作流 K）：只读和策略、移出跟踪
+  IPC.stacksList, IPC.stacksPolicyGet, IPC.stacksPolicyLayers, IPC.stacksPolicySet, IPC.stacksRemove,
 ]);
 
 /** 这个通道算不算手动触发。 */

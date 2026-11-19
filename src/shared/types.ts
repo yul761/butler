@@ -1,5 +1,6 @@
 import type { CostBreakerView } from "./cost";
 import type { CommentsWaiting } from "./loop";
+import type { StackNoticeInfo } from "./stacks";
 import type { CheckAbsenceReason } from "./checks";
 import type { MemorySnapshot, SessionMemory } from "./mem-usage";
 import type { ActivityEvent, SessionActivity } from "./activity";
@@ -222,6 +223,8 @@ export interface CreateTicketInput {
   featureId?: number;
   workMode?: WorkMode;
   branch?: string;
+  /** 新分支从哪里开出来（按仓库；工作流 K 的 stack_on：从下面那层的分支开）。没给的仓库从当前 HEAD 开。 */
+  startPoints?: { repoPath: string; ref: string }[];
 }
 
 export interface CreateFeatureInput {
@@ -665,7 +668,9 @@ export type NowNotice =
   /** 成本熔断（工作流 L）：某个 session / ticket 的花费到了提醒线、降了档或者被暂停了。暂停的可以「继续并提高上限」。 */
   | { kind: "cost"; breaker: CostBreakerView; target: NowTarget | null }
   /** 评论闭环（工作流 I）：有评论等你看分类，或该送进 session 的评论超过 30 分钟没送出去。每个 PR 一条。 */
-  | { kind: "comments_waiting"; waiting: CommentsWaiting; target: NowTarget; title: string | null };
+  | { kind: "comments_waiting"; waiting: CommentsWaiting; target: NowTarget; title: string | null }
+  /** 栈式 PR（工作流 K）：冲突没交到 session、draft 太久、栈底落后 trunk 太多、rebase 卡住。每个栈每种原因一条。 */
+  | { kind: "stack"; stack: StackNoticeInfo; target: NowTarget | null };
 
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */

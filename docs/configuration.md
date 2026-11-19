@@ -15,7 +15,7 @@ The Settings page has these sections, in order:
 5. **Privacy and personal API**
 6. **Lessons** (automatic backups, the export reminder and the admission policy; see [Lessons: bulk actions, admission policy and import / export](#lessons-bulk-actions-admission-policy-and-import--export))
 
-Two more tabs sit at the top of the Settings page: **Model routing** (see [Model routing](#model-routing)) and **Comments & CI** (see [Comments and CI](#comments-and-ci)).
+Four more tabs sit at the top of the Settings page: **Model routing** (see [Model routing](#model-routing)), **Comments & CI** (see [Comments and CI](#comments-and-ci)), **Interruptions & notifications** (see [Interruptions and notifications](#interruptions-and-notifications)) and **Stacks** (see [Stacks](#stacks)).
 
 The merge coordinator and the `end_session` tool for coordinators are described under [Merge coordinator](#merge-coordinator) and in the [README](../README.md); neither has a setting.
 
@@ -505,7 +505,7 @@ Checks are exported and imported with the other configuration (**Checks only** o
 
 ## Outward actions
 
-Some features let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Today the repo rule export uses **Push branches** and **Open PRs**, and [Comments and CI](#comments-and-ci) uses **Reply to review comments**, **Resolve comments** and **Rerun CI**; the other switches take effect as later features start using them. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. **Push notifications** is used by [notifications](#notifications).
+Some features let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Today the repo rule export uses **Push branches** and **Open PRs**, and [Comments and CI](#comments-and-ci) uses **Reply to review comments**, **Resolve comments** and **Rerun CI**, and [Stacks](#stacks) use **Force push**, **Push branches**, **Open PRs**, **Edit PR titles**, **Edit PR descriptions**, **Add or remove PR labels** and **Post issues**; the other switches take effect as later features start using them. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. **Push notifications** is used by [notifications](#notifications).
 
 | Setting | Key | Default | What it allows |
 |---------|-----|---------|----------------|
@@ -666,6 +666,37 @@ Where the events come from: `decision_needed` is a new question that wasn't answ
 ### Before and after on the Effect page
 
 The **Effect** page compares equal windows of full days (up to 30 days each) before and after the first time one of these features took effect, leaving out that day itself because it is partly before and partly after: a permission rule confirmed, or the choice rule, default answers or "look before asking" switched on. Each side shows Butler PRs merged, human interventions and waiting time per PR, interrupts per day by kind, stops resolved automatically, and fix sessions opened for stuck sessions. Until one of them is on, the panel says the comparison starts then. Stops resolved by a permission profile are counted from the session's transcript when it stops, so the number is an upper bound: Claude Code might not have asked for every one of them.
+
+## Stacks
+
+A stack is a chain of Butler branches in one repository where each builds on the one below: the bottom branch is based on trunk, the next on the bottom, and so on. Only the bottom has a PR for people to review. The layers above stay plain branches until they reach the bottom, so reviewers see one small PR at a time.
+
+Stacks are made by coordinators. A feature coordinator passes `stack_on` to `create_ticket` to start the new ticket's branch from another ticket's branch and put it on top of that ticket's stack (a new stack if it has none). It can also call `stack_define` to turn existing branches into a stack. `list_stacks` shows the stacks, `stack_rebase` rebases one now, and `stack_layer_mode` opens a layer above the bottom as a draft PR when it needs CI, or closes that draft again. A feature coordinator sees a stack when one of its layers is the feature's ticket, but can only change stacks that belong to its feature or whose open layers are all its tickets. Butler control has the same tools and can only change stacks from its own open terminal; epic sessions only have `list_stacks`.
+
+When the bottom PR merges, or trunk moves, Butler rebases the whole stack onto the new base. It uses `git rebase --update-refs` (git 2.38 or later), or one layer at a time on an older git. The work happens in a separate worktree under `~/.butler/stack-work`, so open sessions are never disturbed. Butler only moves a branch when it is not checked out with uncommitted changes (or untracked files the new tip would overwrite), its session is not busy, and nobody pushed to it in the meantime; otherwise it tries again later. Before moving any branch it saves the old tips under `refs/butler/stack-backup/…`, and **Restore from backup** puts them back. On a conflict Butler stops, leaves everything as it was, and sends the conflicting files and the `git rebase --onto` command to run to the session of that layer's ticket the next time it is idle; the session is told to push its result only when **Force push** is on. The next rebase carries on from the session's resolution. A conflict nobody received for 30 minutes, or a rebase stuck or rolled back for a day, shows on the **Now** page.
+
+After the bottom merges, the next layer becomes the bottom: Butler retargets it to trunk and, when `autoOpenBottomPr` is on, opens it as a ready PR. Draft layers carry the `draftLabel` label and a title that says not to review them.
+
+The **Progress** page and the feature and epic **PR progress** tabs show a **Stacks** section: every layer from top to bottom with its state, PR, commits behind trunk and whether it was rewritten but not pushed, plus the latest rebase and buttons to rebase now, restore, open or close drafts, and stop managing the stack (branches and PRs stay as they are, and automatic detection does not bring it back).
+
+**Settings → Stacks** holds the policy, on the same global, product and repository layers as [Comments and CI](#comments-and-ci). `autoRebase` is the master switch and is off by default; with it off Butler only watches. Pushing rebased branches (with `--force-with-lease`) needs `externalForcePush`, pushing a layer for the first time needs `externalBranchPush`, opening PRs and drafts needs `externalPrOpen`, writing the stack position into PR titles and the depends line into descriptions needs `externalPrTitleEdit` and `externalPrDescriptionEdit`, the draft label needs `externalPrLabel`, and the overview issue needs `externalIssuePost`, all under [Outward actions](#outward-actions). With those off Butler changes only the local branches and marks the layers it did not push.
+
+| Key | Default | Values | What it does |
+|-----|---------|--------|--------------|
+| `autoRebase` | `false` | `true` / `false` | Let Butler rewrite the local branches of stacks in this repo |
+| `mergeMethod` | `auto` | `auto` / `squash` / `merge` | How the bottom PR is merged; `auto` detects it from the merge |
+| `rebaseOnMainUpdate` | `true` | `true` / `false` | Rebase when trunk moves |
+| `dailyRebase` | `true` | `true` / `false` | Rebase each stack once a day |
+| `autosquash` | `true` | `true` / `false` | Fold `fixup!` commits once a layer's review comments are handled |
+| `autoOpenBottomPr` | `true` | `true` / `false` | Open the new bottom as a ready PR after the old one merges |
+| `conflictToSession` | `true` | `true` / `false` | Send conflicts to the layer's session; off, they only show on the Now page |
+| `draftDemoteDays` | `14` | whole number 1–365 | Days a layer may stay a draft before the Now page suggests closing it |
+| `behindCommits` | `20` | whole number 1–10000 | Commits the bottom may fall behind trunk before a reminder |
+| `behindDays` | `3` | whole number 1–365 | Days the bottom may fall behind trunk before a reminder |
+| `overview` | `off` | `off` / `issue` | Keep an overview of an epic's stacks in one GitHub issue |
+| `draftLabel` | `stacked` | 1–50 characters, no commas | Label put on draft layers |
+
+The stack policy is part of [Backup and export settings](#backup-and-export-settings), like the other policies.
 
 ## Several companies or profiles
 

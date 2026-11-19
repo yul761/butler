@@ -17,6 +17,11 @@
 //     api repos/{owner}/{repo}/compare/<base>...<head> --jq …：compare 里每个文件一行 {filename, patch}，没有就是没有输出；
 //     run view <id> --json …：runs[<id>]，没有就退出 1；run view <id> --log-failed：logs[<id>]，没有就退出 1；
 //     run rerun <id> --failed：成功；
+//   栈（工作流 K）：
+//     pr list --state open …（不带 --head，自动检测栈）：fixture 的 open（pr view 字段的数组），没有就是 []；
+//     pr edit <号> --base/--title/--body-file/--add-label/--remove-label …、pr ready <号>、pr close <号> …、issue edit <号> …：成功
+//       （假 gh 不改 fixture，测试据 FAKE_GH_LOG 断言；要后续读到新状态就自己 setGh）；
+//     label create <名字> …：成功；issue create …：打印 fixture 的 issueCreated（没有就是 …/issues/900）；
 //   其余一律退出 1，并往 FAKE_GH_LOG 追加一行 {"unsupported": 参数}：测试结束时 unsupportedGhCalls 会把它们找出来，
 //   免得产品调了假 gh 不认的命令却被当成"gh 出错"悄悄吞掉。
 "use strict";
@@ -33,7 +38,7 @@ const flag = (name) => {
 };
 const fixture = () => {
   const f = JSON.parse(fs.readFileSync(process.env.FAKE_GH_FIXTURE, "utf8"));
-  return { branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null, threads: f.threads ?? {}, runs: f.runs ?? {}, logs: f.logs ?? {}, compare: f.compare ?? [] };
+  return { branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null, threads: f.threads ?? {}, runs: f.runs ?? {}, logs: f.logs ?? {}, compare: f.compare ?? [], open: f.open ?? [], issueCreated: f.issueCreated ?? "https://github.com/acme/app/issues/900" };
 };
 const out = (v) => process.stdout.write(`${JSON.stringify(v)}\n`);
 /** fixture 里没有：和真 gh 一样退出 1，是正常结果，不记 unsupported。 */
@@ -70,6 +75,18 @@ if (cmd === "--version") {
   out(pr);
 } else if (cmd === "pr" && sub === "create" && fixture().created) {
   process.stdout.write(`${fixture().created}\n`);
+} else if (cmd === "pr" && sub === "list" && flag("--head") === undefined && flag("--state") === "open") {
+  out(fixture().open);
+} else if (cmd === "pr" && sub === "edit" && /^\d+$/.test(ref ?? "") && ["--base", "--title", "--body-file", "--add-label", "--remove-label"].some((f) => args.includes(f))) {
+  process.stdout.write(`https://github.com/acme/app/pull/${ref}\n`);
+} else if (cmd === "pr" && (sub === "ready" || sub === "close") && /^\d+$/.test(ref ?? "")) {
+  // 成功：真 gh 打一行提示，Butler 不读。
+} else if (cmd === "label" && sub === "create" && ref !== undefined && !ref.startsWith("-")) {
+  // 成功
+} else if (cmd === "issue" && sub === "create" && args.includes("--title")) {
+  process.stdout.write(`${fixture().issueCreated}\n`);
+} else if (cmd === "issue" && sub === "edit" && /^\d+$/.test(ref ?? "")) {
+  process.stdout.write(`https://github.com/acme/app/issues/${ref}\n`);
 } else if (cmd === "run" && sub === "list" && flag("--branch") !== undefined) {
   out([]);
 } else if (cmd === "api" && API_PULL.test(sub ?? "")) {

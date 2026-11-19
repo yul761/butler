@@ -1073,4 +1073,69 @@ export const MIGRATIONS: string[] = [
     host TEXT, payload TEXT, error TEXT);
   CREATE INDEX notification_log_ts ON notification_log(ts);
   `,
+  // 工作流 K：栈式 PR（设计 2026-11-17-ws-k-stacks-design 第 2.1 节）。stacks：本地维护的栈；stack_layers：每层的分支、状态、
+  // 上次同步时的起点（base_sha）和顶端（tip_sha）；stack_runs：每次整栈 rebase 的记录（detail 是 JSON：新旧顶端、备份引用、冲突）；
+  // stack_policies：三层覆盖（契约 4.2）。
+  `
+  CREATE TABLE stacks (
+    id INTEGER PRIMARY KEY,
+    repo_path TEXT NOT NULL,
+    repo_slug TEXT,
+    trunk TEXT NOT NULL,
+    remote TEXT NOT NULL DEFAULT 'origin',
+    name TEXT NOT NULL,
+    epic_id INTEGER,
+    feature_id INTEGER,
+    source TEXT NOT NULL CHECK (source IN ('mcp','ticket','detected')),
+    merge_method TEXT CHECK (merge_method IN ('squash','merge')),
+    trunk_sha TEXT,
+    overview_number INTEGER,
+    overview_url TEXT,
+    overview_hash TEXT,
+    last_daily_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    removed_at INTEGER);
+  CREATE TABLE stack_layers (
+    id INTEGER PRIMARY KEY,
+    stack_id INTEGER NOT NULL REFERENCES stacks(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    branch TEXT NOT NULL,
+    ticket_key TEXT,
+    ticket_repo_id INTEGER,
+    mode TEXT NOT NULL DEFAULT 'branch' CHECK (mode IN ('branch','draft')),
+    state TEXT NOT NULL DEFAULT 'branch_only' CHECK (state IN ('branch_only','draft','ready','merged')),
+    pr_number INTEGER,
+    pr_url TEXT,
+    base_sha TEXT,
+    tip_sha TEXT,
+    remote_ok_sha TEXT,
+    merged_head TEXT,
+    draft_since INTEGER,
+    merged_at INTEGER,
+    last_rebase_at INTEGER,
+    conflict_key TEXT,
+    created_at INTEGER NOT NULL,
+    UNIQUE (stack_id, branch));
+  CREATE INDEX stack_layers_branch ON stack_layers (branch);
+  CREATE TABLE stack_runs (
+    id INTEGER PRIMARY KEY,
+    stack_id INTEGER NOT NULL REFERENCES stacks(id) ON DELETE CASCADE,
+    trigger TEXT NOT NULL,
+    mode TEXT,
+    outcome TEXT NOT NULL,
+    reason TEXT,
+    detail TEXT NOT NULL DEFAULT '{}',
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER);
+  CREATE INDEX stack_runs_stack ON stack_runs (stack_id, id);
+  CREATE TABLE stack_policies (
+    id INTEGER PRIMARY KEY,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global','product','repo')),
+    product_id INTEGER,
+    repo_slug TEXT,
+    overrides TEXT NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL);
+  CREATE UNIQUE INDEX stack_policies_scope ON stack_policies (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''));
+  `,
 ];

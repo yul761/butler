@@ -4,6 +4,7 @@ import { checksSection } from "./checks-section";
 import { modelsSection } from "./models-section";
 import { baselineRulesSection, baselinesSection } from "./baselines-section";
 import { permissionsSection } from "./permissions-section";
+import { stacksSection } from "./stacks-section";
 
 export { ConfigIoService, type ConfigIoDeps, type BackupKind } from "./service";
 export { SectionRegistry, type ConfigSection } from "./registry";
@@ -24,5 +25,7 @@ export function defaultRegistry(): SectionRegistry {
   r.register(baselinesSection);
   // J：权限档案（content: "config"）。导入的确认先进 pending。
   r.register(permissionsSection);
+  // K：栈策略的三层覆盖（content: "config"，只在「全部」里）。
+  r.register(stacksSection);
   return r;
 }

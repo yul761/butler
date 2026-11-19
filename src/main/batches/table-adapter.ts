@@ -194,3 +194,15 @@ export const baselineAdapter = (db: Db): EntityAdapter =>
     table: "repo_baselines",
     describe: (s) => ({ label: String(s.repo_slug ?? ""), state: String(s.origin ?? "") }),
   });
+
+/** 栈策略的一层（工作流 K）：导入能撤销。 */
+export const stackPolicyAdapter = (db: Db): EntityAdapter =>
+  tableAdapter(db, {
+    entity: "stack_policy",
+    table: "stack_policies",
+    volatile: ["updated_at"],
+    describe: (s) => ({
+      label: s.scope_kind === "global" ? "global" : s.scope_kind === "product" ? `product #${String(s.product_id)}` : String(s.repo_slug ?? ""),
+      state: String(s.overrides ?? ""),
+    }),
+  });

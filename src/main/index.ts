@@ -11,7 +11,7 @@ import { parseGateRequest, type GateRequest, type GateResult } from "../shared/g
 import { IPC } from "../shared/ipc";
 import type { LimitHit } from "../shared/availability";
 import { ClaudeAvailability } from "./claude/availability";
-import { buildNotices, ciNotices, commentNotices, costNotices } from "./now/notices";
+import { buildNotices, ciNotices, commentNotices, costNotices, stackNotices } from "./now/notices";
 import { BackgroundRepo } from "./db/background-repo";
 import { CostRepo } from "./db/cost-repo";
 import { readBgSettings } from "./background/bg-settings";
@@ -26,7 +26,8 @@ import { parseThresholds } from "./routing/spend";
 import { CostPolicyError, type CostBreakerView } from "../shared/cost";
 import type { NowTarget } from "../shared/types";
 import { AvailabilityRepo } from "./db/availability-repo";
-import type { Session, WatchedPr } from "../shared/types";
+import type { Session, TicketRepo, WatchedPr } from "../shared/types";
+import { StackPolicyError } from "../shared/stacks";
 import { APP_ID, shouldSetAppId } from "./app-id";
 import { runHeadless } from "./claude/headless";
 import { probeMcpTools } from "./claude/mcp-probe";
@@ -167,10 +168,14 @@ import { pathKey } from "./util/env";
 import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { openKnownPr } from "./util/github-url";
-import { TicketService } from "./tickets/ticket-service";
+import { TicketService, samePath } from "./tickets/ticket-service";
 import { classifyCiByModel } from "./loop/ci-model";
 import { CiTriage } from "./loop/ci-triage";
 import { CommentLoop } from "./loop/comment-loop";
+import { StacksRepo } from "./db/stacks-repo";
+import { StackPolicyService } from "./stacks/stack-policy";
+import { StackService, type OwnedBranch } from "./stacks/stack-service";
+import { StackControl } from "./control/stack-control";
 import { classifyCommentsByModel } from "./loop/comment-model";
 import { LoopPolicies } from "./loop/policies";
 import { effectDays, LoopStats } from "./loop/stats";
@@ -196,7 +201,7 @@ import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
 import { LessonBatchService } from "./lessons/lesson-batches";
 import { BatchRecorder } from "./batches/batch-recorder";
-import { baselineAdapter, baselineRuleAdapter, checkAdapter, lessonAdapter, lessonPrincipleAdapter, policyAdapter, principleAdapter, productAdapter } from "./batches/table-adapter";
+import { baselineAdapter, baselineRuleAdapter, checkAdapter, lessonAdapter, lessonPrincipleAdapter, policyAdapter, principleAdapter, productAdapter, stackPolicyAdapter } from "./batches/table-adapter";
 import { BaselineService } from "./baselines/baselines-service";
 import { LegacyScanService } from "./baselines/legacy-service";
 import { baselineWorkerRunner } from "./baselines/worker-host";
@@ -716,7 +721,7 @@ async function bootstrap(): Promise<void> {
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
   // 规矩、产品和准入策略的改动都记成可撤销的批次（契约 4.4）。
-  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db), lessonPrincipleAdapter(db), baselineRuleAdapter(db), baselineAdapter(db)]);
+  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db), lessonPrincipleAdapter(db), baselineRuleAdapter(db), baselineAdapter(db), stackPolicyAdapter(db)]);
   // 确定性检查（契约 4.5）：库里是三层的定义，hook 只读 Butler 写出来的快照（<BUTLER_HOME>/checks/snapshot.json）。
   // 检查、产品、设置、语言一变就重写快照（合并一小段时间里的改动）；内容没变不写。
   const checksService: ChecksService = new ChecksService({
@@ -1334,6 +1339,9 @@ async function bootstrap(): Promise<void> {
     void butlerPatrol.check();
     void lessonRunner.daily().catch((e: unknown) => logger("lessons: daily pull failed", e));
     void metricsGhJob?.daily().catch((e: unknown) => logger("metrics: daily gh job failed", e));
+    // 栈（工作流 K）：每分钟看一遍要不要 fetch、rebase；每天一次清备份、对总览。
+    void stackService.tick().catch((e: unknown) => logger("stacks: tick failed", e));
+    void stackService.dailyJob().catch((e: unknown) => logger("stacks: daily job failed", e));
     // 原则每天重新分组一次（设置 lessonsPrinciples）；规矩没变时读缓存，不调模型。
     if (settings.get("lessonsPrinciples") === "1" && Date.now() - (Number(settings.get("lessonsPrinciplesRegroupedAt")) || 0) > 20 * 3600_000) {
       settings.set("lessonsPrinciplesRegroupedAt", String(Date.now()));
@@ -1849,6 +1857,8 @@ async function bootstrap(): Promise<void> {
     guard: deliveryGuard,
     deliver: loopDeliver,
     busy: deliveringTo,
+    // stackService 在下面才建好：递评论时才用。
+    stackNote: (row): string | null => stackService.stackNote(row.url, row.headBranch),
     recordEvent,
     changed: () => notify(),
     now: Date.now,
@@ -1882,6 +1892,65 @@ async function bootstrap(): Promise<void> {
   // 评论闭环排着队的评论跟在 CI 后面递（同一个时机；CI 递出去了 session 就忙了，评论等它下次停下来）。
   const flushCi = (): Promise<void> => ciDelivery.flush().then(ciStuckChanged).catch((e: unknown) => logger("ci delivery: flush failed", e))
     .then(() => commentLoop.flush()).catch((e: unknown) => logger("comment loop: flush failed", e));
+  // 栈式 PR（工作流 K）：三层策略（契约 4.2），对外动作只经 4.8 的开关（branch_push、pr_open、issue_post）。
+  const stackPolicy = new StackPolicyService({
+    db, productsOf: (slug) => lessonsRepo.productsOf(slug), productName: (id) => lessonsRepo.product(id)?.name ?? null, now: Date.now, onChange: () => notify(),
+  });
+  /** 这个仓库里的这个分支是哪个 ticket 的：ticket 仓库的分支优先，其次是 hook 记下的推送（branch_owners）。 */
+  const stackOwned = (repoPath: string, branch: string): OwnedBranch | null => {
+    const own = (r: TicketRepo): OwnedBranch => ({
+      ticketKey: r.ticketKey, ticketRepoId: r.id, ticketTitle: tickets.get(r.ticketKey)?.title ?? null,
+      worktree: r.workMode === "worktree" && r.worktreePath && r.worktreeRemovedAt === null && existsSync(r.worktreePath) ? r.worktreePath : null,
+    });
+    // 只认没归档的 ticket；分支名被重复用过时取最新的那个
+    const live = (r: TicketRepo): boolean => { const t = tickets.get(r.ticketKey); return t !== null && t.archivedAt === null; };
+    const direct = tickets.reposByBranch(branch).filter((r) => samePath(r.repoPath, repoPath) && live(r)).at(-1);
+    if (direct) return own(direct);
+    for (const o of branchOwners.byBranch(branch)) {
+      const r = tickets.getRepo(o.repoId);
+      if (r && samePath(r.repoPath, repoPath) && live(r)) return { ...own(r), worktree: null };
+    }
+    return null;
+  };
+  const stackService = new StackService({
+    repo: new StacksRepo(db, Date.now),
+    policy: stackPolicy,
+    external: externalActions,
+    workRoot: join(paths.home, "stack-work"),
+    execPath: process.execPath,
+    now: Date.now,
+    log: logger,
+    owned: stackOwned,
+    slugOf: async (path) => repoIdentity.slugOf(path),
+    // 开着终端、在这个目录里、正在干活的 session（同一个 head 只看一次）。
+    sessionBusy: (path) => pty.openIds().some((t) => {
+      const h = sessions.head(t);
+      return h !== null && h !== undefined && samePath(h.cwd, path) && working(activityMonitor.get(h.id) ?? null);
+    }),
+    gateHeld: (repoPath, branch) => gateRepo.activeHold(repoPath, branch) !== null,
+    trunkBusy: (repoPath, trunk, ignore) => gateRepo.activeHolds().some((h) => samePath(h.repoPath, repoPath) && h.target === trunk && !ignore.includes(h.branch)),
+    awaitingCheck: (url): boolean => ticketPrs.byUrl(url).some((r): boolean => commentLoop.awaitingCheck(r.id)),
+    // 和 CI、评论走同一个收件人、同一道 guard，同一个 session 同时只递一条。
+    deliver: async (to, text) => {
+      const repoId = to.ticketRepoId ?? tickets.listRepos(to.ticketKey).find((r) => r.branch === to.branch)?.id ?? null;
+      if (repoId === null) return false;
+      const rcpt = loopRecipient(to.ticketKey, repoId, to.branch);
+      if (!rcpt.ok || deliveringTo.has(rcpt.sessionId)) return false;
+      const gate = deliveryGuard.check(rcpt.sessionId);
+      if (!gate.ok) return false;
+      deliveringTo.add(rcpt.sessionId);
+      try {
+        return (await loopDeliver(gate.termId, sanitizeTask(text), deliveryGuard.recheckAfter(rcpt.sessionId, gate))) === "sent";
+      } finally {
+        deliveringTo.delete(rcpt.sessionId);
+      }
+    },
+    record: recordEvent,
+    onChange: () => notify(),
+    epicName: (id) => epics.get(id)?.name ?? null,
+    jobs,
+    repos: () => [...new Set(tickets.list().filter((t) => t.archivedAt === null).flatMap((t) => t.repos.map((r) => r.repoPath)))],
+  });
   const prWatcher = new PrWatcher({
     prs: ticketPrs,
     branches: branchWatch,
@@ -1897,7 +1966,11 @@ async function bootstrap(): Promise<void> {
     git: { firstCommitAt: git.firstCommitAt },
     stages: prStages,
     owners: branchOwners,
-    onMerged: (pr, repoPath) => lessonRunner.merged({ repoPath, slug: pr.slug }, pr.number),
+    onMerged: (pr, repoPath) => {
+      // 栈底合并了：整栈 rebase、下一层升成栈底（工作流 K；失败只记日志，不让 lessons 那边重来）。
+      lessonRunner.merged({ repoPath, slug: pr.slug }, pr.number);
+      if (repoPath) void stackService.onMerged({ url: pr.url, number: pr.number, headSha: pr.headSha, headBranch: pr.headBranch }, repoPath).catch((e: unknown) => logger(`stacks: after ${pr.url} merged failed`, e));
+    },
     // PR 的状态或 review 变了：在最新的 handoff 上换掉 prs，存成一条 refresh。ticket 状态、PR 标签、合并后清理 worktree 都照旧走 ingest。
     onPrChanged: (key) => {
       // 归档 ticket 的补链接行读一次也会走到这里：不为它们写 refresh handoff、不同步记忆。
@@ -1975,6 +2048,8 @@ async function bootstrap(): Promise<void> {
       });
     // 这个 ticket 的 PR 都马上查一次；feature 总控查它所有 ticket 的；别的按仓库。
     const head = sessions.head(stopped);
+    // 栈（工作流 K）：这一层有新提交就 rebase 上面的层；没递进去的冲突趁现在补送。
+    if (head?.ticketKey) void stackService.sessionStopped(head.ticketKey).catch((e: unknown) => logger(`stacks: after ${stopped} stopped failed`, e));
     if (head?.ticketKey) prWatcher.soonTicket(head.ticketKey);
     else if (head?.coordinator && head.featureId != null) for (const t of tickets.listByFeature(head.featureId)) prWatcher.soonTicket(t.key);
     else if (head?.repoId != null) prWatcher.soon(head.repoId);
@@ -2303,6 +2378,24 @@ async function bootstrap(): Promise<void> {
         return loopStats.summary({ since: until - effectDays(days) * 86_400_000, until });
       },
     },
+    stacks: {
+      view: (filter) => stackService.view(filter),
+      rebaseNow: (id) => stackService.rebaseNow(id),
+      setLayerMode: (id, mode) => stackService.setLayerMode(id, mode),
+      restore: (id) => stackService.restore(id),
+      remove: (id) => stackService.remove(id),
+      policyView: (scope) => stackPolicy.view(scope),
+      policySet: (scope, overrides) => {
+        try {
+          stackPolicy.setLayer(scope, overrides);
+          return { ok: true };
+        } catch (e) {
+          if (e instanceof StackPolicyError) return { ok: false, key: e.key, message: e.code };
+          throw e;
+        }
+      },
+      policyLayers: () => stackPolicy.layers(),
+    },
     checks: {
       act: (a) => checksService.act(a),
       view: (scope) => checksService.view(scope),
@@ -2411,6 +2504,7 @@ async function bootstrap(): Promise<void> {
           ...ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
           ...costNotices(costBreaker?.views() ?? [], costTargetOf),
           ...commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
+          ...stackNotices(stackService.notices()),
         ],
         sessionMemory: (id) => procServices.monitor.memoryOf(id),
         memorySnapshot: procServices.monitor.snapshot(),
@@ -2519,6 +2613,7 @@ async function bootstrap(): Promise<void> {
       ticketPattern: () => settings.get("ticketPattern"),
       sessionModel: (m) => routing.sessionModel(m),
       admission,
+      stacks: new StackControl({ service: stackService, tickets: () => tickets.list(), features }),
       log: logger,
     }),
     log: logger,
@@ -2591,6 +2686,12 @@ async function bootstrap(): Promise<void> {
   }, activityIntervals(process.env).tickMs);
 
   // 调度：启动（health 探测完成后）、唤醒、解锁时检查到期任务；每分钟 tick，覆盖 16:00 和整晚没锁屏的情况。
+  // 上次没收拾掉的栈临时 worktree（崩溃、强退）启动时清掉。
+  try {
+    stackService.cleanupWork();
+  } catch (e) {
+    logger("stacks: cleaning up work dirs failed", e);
+  }
   void healthReady.then(() => checkSchedule("startup"));
   powerMonitor.on("resume", () => {
     // 睡着的时间不算闲置（BTL-190 第 8 点）：不然一开盖子所有 session 一起被关。
@@ -2609,6 +2710,9 @@ async function bootstrap(): Promise<void> {
   // 共享 MCP 开着就现在启动 hub，免得第一批 session 还在等它起来、先用了 stdio（WS-M H）。
   if (sharedMcpOn(settings) && existsSync(bundledHubPath())) mcpHub.start();
   const scheduleTimer = setInterval(() => void checkSchedule("tick"), TICK_MS);
+  // e2e 用：栈的 tick 另外按 BUTLER_STACKS_TICK_MS 跑（不用等整分钟的 schedule；没设时不跑）。
+  const stacksTickMs = Number(process.env.BUTLER_STACKS_TICK_MS) || 0;
+  const stacksTimer = stacksTickMs > 0 ? setInterval(() => void stackService.tick().catch((e: unknown) => logger("stacks: tick failed", e)), stacksTickMs) : null;
   // 度量汇总（ws-h）：启动一分钟后一次，之后每小时一次；整窗重算，幂等。
   const metricsRollup = new MetricsRollup({
     db, repo: metricsRepo, holds: gateRepo, registry: () => routing.config().registry, record: recordEvent,
@@ -2653,6 +2757,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(discoveryTimer);
     clearInterval(refreshTimer);
     clearInterval(scheduleTimer);
+    if (stacksTimer) clearInterval(stacksTimer);
     availability.dispose();
     notifier?.dispose();
     lessonsGate.dispose();

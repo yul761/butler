@@ -24,6 +24,7 @@ import type { ExternalActionEntry } from "../../shared/external";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import type { MetricsOverview } from "../../shared/metrics";
 import type { InterruptsAction, InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
+import type { StackActionResult, StackLayerMode, StackPolicyLayer, StackPolicyOverrides, StackPolicySetResult, StackPolicyView, StacksFilter, StacksView } from "../../shared/stacks";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
 import type {
   AutostartState, CiItemRef, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
@@ -145,6 +146,14 @@ export const api = {
   loopPolicySet: (scope: LoopScope, overrides: LoopPolicyOverrides) => call<void>(IPC.loopPolicySet, { scope, overrides }),
   loopComments: (ticketKey: string) => call<PrCommentsView[]>(IPC.loopCommentsList, ticketKey),
   loopCommentsAct: (a: CommentAction) => call<CommentItemView | null>(IPC.loopCommentsAct, a),
+  stacks: (filter: StacksFilter) => call<StacksView>(IPC.stacksList, filter),
+  stacksRebase: (stackId: number) => call<StackActionResult>(IPC.stacksRebase, stackId),
+  stacksLayerMode: (layerId: number, mode: StackLayerMode) => call<StackActionResult>(IPC.stacksLayerMode, { layerId, mode }),
+  stacksRestore: (stackId: number) => call<StackActionResult>(IPC.stacksRestore, stackId),
+  stacksRemove: (stackId: number) => call<StackActionResult>(IPC.stacksRemove, stackId),
+  stacksPolicyGet: (scope: PolicyScope) => call<StackPolicyView>(IPC.stacksPolicyGet, scope),
+  stacksPolicySet: (scope: PolicyScope, overrides: StackPolicyOverrides) => call<StackPolicySetResult>(IPC.stacksPolicySet, { scope, overrides }),
+  stacksPolicyLayers: () => call<StackPolicyLayer[]>(IPC.stacksPolicyLayers),
   loopFlaky: () => call<FlakyEntry[]>(IPC.loopFlakyList),
   loopFlakyAct: (a: FlakyAction) => call<boolean>(IPC.loopFlakyAct, a),
   /** 给「效果」页（工作流 H）：最近 days 天（1–365，默认 30）评论闭环和 CI 分类做了什么。 */

@@ -14,8 +14,11 @@ export const JOB_PR_BACKFILL = "pr_backfill";
 export const JOB_CONFIG_BACKUP = "config_backup";
 /** 度量（ws-h）：每天一次读 gh，记 revert、重开，回填基线 PR。 */
 export const JOB_METRICS_GH = "metrics_gh";
+/** 栈（ws-k）：每天一次删 30 天前的备份引用、清残留的临时 worktree。 */
+export const JOB_STACKS_DAILY = "stacks_daily";
 export type JobName =
-  | typeof JOB_NIGHTLY | typeof JOB_MORNING | typeof JOB_PATROL | typeof JOB_LESSONS_DAILY | typeof JOB_PR_BACKFILL | typeof JOB_CONFIG_BACKUP | typeof JOB_METRICS_GH;
+  | typeof JOB_NIGHTLY | typeof JOB_MORNING | typeof JOB_PATROL | typeof JOB_LESSONS_DAILY | typeof JOB_PR_BACKFILL | typeof JOB_CONFIG_BACKUP | typeof JOB_METRICS_GH
+  | typeof JOB_STACKS_DAILY;
 
 export type JobState = JobStateView;
 
