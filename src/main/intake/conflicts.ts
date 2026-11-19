@@ -7,8 +7,8 @@ const norm = (p: string, ci: boolean): string => {
   return ci ? s.toLowerCase() : s;
 };
 
-/** 两条路径重叠：同一个文件，或一个是另一个的目录前缀（`src/` 和 `src/a.ts`）。Windows 上不分大小写。 */
-export function pathsOverlap(a: string, b: string, caseInsensitive = process.platform === "win32"): boolean {
+/** 两条路径重叠：同一个文件，或一个是另一个的目录前缀（`src/` 和 `src/a.ts`）。Windows 和 macOS（默认文件系统不分大小写）上不分大小写。 */
+export function pathsOverlap(a: string, b: string, caseInsensitive = process.platform === "win32" || process.platform === "darwin"): boolean {
   const x = norm(a, caseInsensitive).replace(/\/+$/, "");
   const y = norm(b, caseInsensitive).replace(/\/+$/, "");
   if (!x || !y) return false;

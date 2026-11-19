@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { fileSource, mapRepo, normalizeIncoming, normalizeList, parseRepoMap } from "./sources";
+import { describe, expect, it, vi } from "vitest";
+import { fileSource, mapRepo, normalizeIncoming, normalizeList, parseRepoMap, trackerSource } from "./sources";
 
 const read = (text: string) => async () => text;
 
@@ -58,5 +58,14 @@ describe("repo map", () => {
     expect(mapRepo({ ...t, key: "OTHER-1" }, rules.slice(0, 3))).toBeNull();
     expect(mapRepo({ ...t, repo: "/explicit" }, rules)).toBe("/explicit");
     expect(mapRepo({ ...t, repo: "relative" }, rules)).toBe("/work/app");
+  });
+});
+
+describe("trackerSource", () => {
+  it("does not run without a directory or a query", async () => {
+    const exec = vi.fn();
+    expect(await trackerSource(exec as never, () => null, "mine", () => [], () => "en").fetch()).toEqual({ ok: false, message: "no tracker dir" });
+    expect(await trackerSource(exec as never, () => "/work/web", "  ", () => [], () => "en").fetch()).toEqual({ ok: false, message: "no tracker query" });
+    expect(exec).not.toHaveBeenCalled();
   });
 });

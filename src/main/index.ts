@@ -2402,6 +2402,7 @@ async function bootstrap(): Promise<void> {
     onChange: () => notify(),
   });
   bgQueue.register("intake", (ctx) => intake.handle(ctx));
+  intake.resume();
   intakeEnded = () => intake.sessionEnded(() => bgQueue.wake("intake"));
   // 定时拉：每分钟看一次到没到 intakePollMinutes；总开关关着、来源没配时 poll 直接返回。
   let intakeLastPoll = 0;
@@ -2413,7 +2414,8 @@ async function bootstrap(): Promise<void> {
     void intake.poll().catch((e: unknown) => logger("intake: poll failed", e));
   };
   const intakePollSoon = (): void => {
-    setTimeout(() => intakeTick(true), 1_000);
+    // 搁着的项按新设置重新决定（内容没变的拉取不碰它们），然后拉一次。
+    setTimeout(() => void intake.reevaluate().catch((e: unknown) => logger("intake: re-deciding failed", e)).finally(() => intakeTick(true)), 1_000);
   };
   // hook 最多等 5 秒：轮询要快；超过 10 秒的请求那边早就放行了。handle 抛错也放行。排队的时间算进裁决期限（meta.ageMs）。
   const gateInbox = new ControlInbox<GateRequest, GateResult>({
@@ -2733,7 +2735,10 @@ async function bootstrap(): Promise<void> {
       // 打断减少的开关第一次打开：Effect 页前后对比从这里分界（ws-j）。
       if ((key === "interruptChoiceRule" || key === "interruptChoiceDefaults" || key === "interruptSelfServe") && settings.get(key) === "1") markInterruptEffective(Date.now());
       // 预审开关变了：就绪条件跟着变（工作流 G）。
-      if (key === "preReviewEnabled") reassessAll();
+      if (key === "preReviewEnabled") {
+        reassessAll();
+        intakePollSoon();
+      }
       // 自动接活的来源和间隔（工作流 N）：改了马上按新的拉一次。
       if (key.startsWith("intake")) intakePollSoon();
     },

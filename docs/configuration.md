@@ -742,6 +742,8 @@ The stack policy is part of [Backup and export settings](#backup-and-export-sett
 
 Automatic intake pulls new tickets from your tracker or a JSON file, sorts each one by size, risk and whether it has enough information, picks a model tier, and opens a session for it when the conditions below are met. It only calls you when it can't decide for you. It is off by default: nothing is pulled, stored or started until a source is set **and** a policy layer turns `enabled` on.
 
+Anyone who can write a ticket in the source can shape what an automatic session is asked to do. Butler hands the ticket text to the session fenced off as a description, not as instructions, and every PR still goes through pre-review, but turn intake on only for sources whose authors you trust, and keep `maxRisk` low where that is not certain.
+
 ### Source
 
 **Settings → Automatic intake** holds the source settings. They are global.
@@ -749,7 +751,7 @@ Automatic intake pulls new tickets from your tracker or a JSON file, sorts each 
 | Setting | Key | Default | What it does |
 |---------|-----|---------|--------------|
 | Pull from | `intakeSource` | `none` | `none`, `tracker` or `file`. |
-| Tracker query | `intakeTrackerQuery` | empty | With `tracker`: what to list, in your words or the tracker's query language, for example "tickets assigned to me in To Do". Butler runs a background `claude -p` that may only use the read-only tools in `trackerTools`; Butler itself never talks to the tracker. |
+| Tracker query | `intakeTrackerQuery` | empty | With `tracker`, required (nothing is pulled while it is empty): what to list, in your words or the tracker's query language, for example "tickets assigned to me in To Do". Butler runs a background `claude -p` that may only use the read-only tools in `trackerTools`; Butler itself never talks to the tracker. |
 | Repository to query from | `intakeTrackerDir` | empty | With `tracker`: the absolute path the query runs in, so your project-level tracker MCP is found. Empty uses the first path in the repo map. |
 | JSON file | `intakeFilePath` | empty | With `file`: an absolute path to `{"tickets": [...]}` or a bare array. Each ticket needs `key` and `title`, and may have `description`, `type`, `labels`, `priority`, `url`, `storyPoints`, `components`, `subtasks` (`[{key, title}]`) and `repo` (an absolute path). Useful for your own export scripts. |
 | Pull every | `intakePollMinutes` | `15` | Minutes between pulls, 5–1440. **Pull now** on the queue pulls at once. Pulls wait while background work is paused. |
@@ -770,9 +772,9 @@ Every decision lists its reasons in the queue. You can change size, risk and mis
 
 ### Starting and queueing
 
-A ticket that is complete and within the limits is queued as background work of kind `intake`. When it comes up, Butler checks in order: the cost breaker, the parallel limit (only tickets intake started and whose session is still open count; your own sessions never do), paths shared with work in progress in the same repository, and memory. When all pass it creates the ticket in a worktree, opens a session with the model the tier maps to through [model routing](#model-routing), and sends the task. When a session ends, waiting tickets are tried again at once.
+A ticket that is complete and within the limits is queued as background work of kind `intake`. When it comes up, Butler checks in order: the cost breaker, the parallel limit (only tickets intake started and whose session is still open count; your own sessions never do), paths shared with work in progress in the same repository, and memory. When all pass it creates the ticket in a worktree, opens a session with the model the tier maps to through [model routing](#model-routing), and sends the task. When a session ends, waiting tickets are tried again at once. Held tickets are decided again when you change the policy, the intake settings or pre-review.
 
-A large ticket with two or more subtasks becomes a [stack](#stacks) when `stackSubtasks` is on: one layer per subtask, each started on the branch of the one below once that one has a PR or its session ended.
+A large ticket with two or more subtasks becomes a [stack](#stacks) when `stackSubtasks` is on: one layer per subtask, each started on the branch of the one below once that one has a PR or its session ended. A ticket is split only when every subtask key is valid and new to Butler. If a lower layer is skipped or can't start, the layer above asks you; starting it by hand starts it from the default branch.
 
 Starting automatically also needs pre-review on (`preReviewEnabled`). With it off, tickets are sorted and held, and you can start them from the queue.
 

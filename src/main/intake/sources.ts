@@ -97,6 +97,8 @@ export function trackerSource(exec: ExecRun, cwd: () => string | null, query: st
     fetch: async () => {
       const dir = cwd();
       if (!dir) return { ok: false, message: "no tracker dir" };
+      // 没写查询就不拉：不然模型会随便挑它看得到的 ticket，可能直接被自动开工。
+      if (!query.trim()) return { ok: false, message: "no tracker query" };
       const r = await fetchFromTracker(exec, dir, query, tools(), lang());
       return r.ok ? { ok: true, tickets: normalizeList(r.tickets) } : r;
     },

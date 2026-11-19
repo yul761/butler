@@ -347,7 +347,6 @@ function MemoryCard({ snap, view }: { snap: MemorySnapshot; view: NowView }) {
   );
 }
 
-/** 最近合并（默认收起）：一行一条；已归档或不存在的 ticket 只显示文字。 */
 /** 自动接活（工作流 N）最近 24 小时自动做了什么：不用你管的那些，收起着。 */
 function IntakeRecent({ entries, onGo }: { entries: IntakeRecentEntry[]; onGo: (r: Route) => void }) {
   const [open, toggle] = useCollapsed("now:intake");
@@ -375,6 +374,7 @@ function IntakeRecent({ entries, onGo }: { entries: IntakeRecentEntry[]; onGo: (
   );
 }
 
+/** 最近合并（默认收起）：一行一条；已归档或不存在的 ticket 只显示文字。 */
 function RecentMerges({ merges, onOpenTicket, liveTickets }: { merges: MergeEvent[]; onOpenTicket: (key: string) => void; liveTickets: Set<string> }) {
   // 这个记号在存储里的意思是“展开了”。
   const [open, toggle] = useCollapsed("now:merges");

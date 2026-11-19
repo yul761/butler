@@ -746,6 +746,8 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 
 自动接活从 tracker 或一个 JSON 文件拉新 ticket，按大小、风险、信息全不全给每个分好类，挑一个模型档位，满足下面的条件就给它开 session 开工。只有它替你定不了时才叫你。默认关着：来源配好**并且**策略里有一层打开 `enabled` 之前，不拉、不存、不开工。
 
+能在来源里写 ticket 的人，就能影响自动开的 session 被要求做什么。Butler 把 ticket 原文围起来、当作描述而不是指令交给 session，每个 PR 也照样过预审；但只对你信得过写 ticket 的人的来源打开，拿不准的地方把 `maxRisk` 压低。
+
 ### 来源
 
 **设置 → 自动接活**里是来源的设置，全局生效。
@@ -753,7 +755,7 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 | 设置 | 键 | 默认 | 作用 |
 |------|----|------|------|
 | 从哪里拉 | `intakeSource` | `none` | `none`、`tracker` 或 `file`。 |
-| tracker 查询 | `intakeTrackerQuery` | 空 | `tracker` 时列什么：一句话或 tracker 的查询语法，例如「分给我的、待办状态的 ticket」。Butler 跑一个后台 `claude -p`，只能用 `trackerTools` 里的只读工具；Butler 自己不连 tracker。 |
+| tracker 查询 | `intakeTrackerQuery` | 空 | `tracker` 时必填（空着不拉）：列什么：一句话或 tracker 的查询语法，例如「分给我的、待办状态的 ticket」。Butler 跑一个后台 `claude -p`，只能用 `trackerTools` 里的只读工具；Butler 自己不连 tracker。 |
 | 在哪个仓库里查 | `intakeTrackerDir` | 空 | `tracker` 时查询在哪个绝对路径里跑，这样能找到你项目级的 tracker MCP。空着用仓库映射的第一个路径。 |
 | JSON 文件 | `intakeFilePath` | 空 | `file` 时文件的绝对路径，内容是 `{"tickets": [...]}` 或一个数组。每个 ticket 要有 `key` 和 `title`，可以有 `description`、`type`、`labels`、`priority`、`url`、`storyPoints`、`components`、`subtasks`（`[{key, title}]`）和 `repo`（绝对路径）。可以配合你自己的导出脚本用。 |
 | 每隔几分钟拉 | `intakePollMinutes` | `15` | 两次拉取之间的分钟数，5–1440。队列上的「现在拉一次」立刻拉。后台任务暂停时不拉。 |
@@ -774,9 +776,9 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 
 ### 开工和排队
 
-信息全、在上限以内的 ticket 排进后台任务 `intake`。轮到它时 Butler 依次看：花费熔断、并行上限（只数由接活开的、session 还开着的 ticket；你自己开的从来不算）、和同仓库正在做的工作有没有改同样的路径、内存。都过了就在 worktree 里建 ticket，按档位经[模型路由](#模型路由)选模型开 session，递任务说明。有 session 结束时，等着的马上再试一次。
+信息全、在上限以内的 ticket 排进后台任务 `intake`。轮到它时 Butler 依次看：花费熔断、并行上限（只数由接活开的、session 还开着的 ticket；你自己开的从来不算）、和同仓库正在做的工作有没有改同样的路径、内存。都过了就在 worktree 里建 ticket，按档位经[模型路由](#模型路由)选模型开 session，递任务说明。有 session 结束时，等着的马上再试一次。改了策略、接活设置或预审开关时，搁着的按新条件重新决定。
 
-`stackSubtasks` 开着时，有两个以上子任务的大 ticket 拆成[栈](#栈)：一个子任务一层，下面那层有了 PR 或 session 结束后，上一层从它的分支开工。
+`stackSubtasks` 开着时，有两个以上子任务的大 ticket 拆成[栈](#栈)：一个子任务一层，下面那层有了 PR 或 session 结束后，上一层从它的分支开工。每个子任务的号都合法、Butler 里都还没有时才拆。下面那层不做了或开不成时，上面那层叫你决定；你手动开工的话从默认分支开。
 
 自动开工还要求预审开着（`preReviewEnabled`）。关着时只分类、搁着，你可以在队列里手动开工。
 
