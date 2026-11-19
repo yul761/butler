@@ -539,6 +539,13 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .progress-stuck .waiting-reason.ci_failing, .progress-stuck .waiting-reason.changes_requested, .progress-stuck .waiting-reason.conflicts, .progress-stuck .waiting-reason.ticket_blocked { color: var(--danger); }
 .progress-stuck .waiting-reason.ready_to_merge { color: var(--ok); }
 .progress-stack { list-style: none; margin: 0; padding: 0; }
+/* 栈式 PR（工作流 K）：进度页的「栈」区块。 */
+.stack-card { border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
+.stack-head { overflow-wrap: anywhere; }
+.stack-layers { list-style: none; margin: 6px 0; padding: 0; }
+.stack-layer { padding: 3px 0; overflow-wrap: anywhere; }
+.stack-layer.state-merged { opacity: 0.7; }
+.stack-layer-action { margin-inline-start: 8px; }
 .progress-stack li { padding: 2px 0; overflow-wrap: anywhere; }
 .progress-pr-group table { width: 100%; }
 .ci-failing { color: var(--danger); }

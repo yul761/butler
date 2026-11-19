@@ -131,3 +131,11 @@ describe("comments_waiting notice", () => {
     expect(noticeText({ kind: "comments_waiting", waiting: { ...w, reason: "undelivered" }, target, title: null }, S, 45 * 60_000).text).toBe(S.lp.noticeUndelivered(S.lp.noticePr("T-3", 12), 2, 45));
   });
 });
+
+describe("stack notice (workstream K)", () => {
+  it("goes to the stacks, and to the ticket when there is one", () => {
+    const stack = { reason: "stuck" as const, stackId: 1, stackName: "pay", branch: "b1", detail: "gate held" };
+    expect(noticeText({ kind: "stack", stack, target: null }, S, 0)).toEqual({ text: S.sk.notice.stuck("pay", "gate held"), actions: ["stacks"] });
+    expect(noticeText({ kind: "stack", stack, target: { page: "ticket", key: "T-1", sessionId: null } }, STRINGS.en, 0).actions).toEqual(["stacks", "open"]);
+  });
+});

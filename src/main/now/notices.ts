@@ -3,6 +3,7 @@ import type { LessonRunStatus } from "../../shared/lessons";
 import type { CostBreakerView } from "../../shared/cost";
 import type { CiUndelivered, NowNotice, NowTarget } from "../../shared/types";
 import type { CommentsWaiting } from "../../shared/loop";
+import type { StackNoticeInfo } from "../../shared/stacks";
 
 /** 连续这么多次分析失败才提醒。 */
 export const LESSONS_FAILING_MIN = 3;
@@ -52,4 +53,9 @@ export function costNotices(views: readonly CostBreakerView[], targetOf: (v: Cos
 /** 评论闭环（工作流 I）：等你看的、该送没送出去的评论，每个 PR 一条，点开去 ticket。 */
 export function commentNotices(list: CommentsWaiting[], title: (ticketKey: string) => string | null): NowNotice[] {
   return list.map((w) => ({ kind: "comments_waiting" as const, waiting: w, title: title(w.ticketKey), target: { page: "ticket" as const, key: w.ticketKey, sessionId: null } }));
+}
+
+/** 栈的提醒（工作流 K）：有 ticket 的层带上「打开 ticket」。 */
+export function stackNotices(list: StackNoticeInfo[]): NowNotice[] {
+  return list.map((n) => ({ kind: "stack" as const, stack: n, target: n.ticketKey ? { page: "ticket" as const, key: n.ticketKey, sessionId: null } : null }));
 }

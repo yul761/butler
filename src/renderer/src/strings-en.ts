@@ -12,6 +12,7 @@ import type { ExternalActionKind, ExternalOutcome } from "../../shared/external"
 import type { InterruptCategory } from "../../shared/metrics";
 import type { ProgressBucket, WaitingOn, WaitingReason } from "../../shared/progress";
 import type { ReportKind } from "../../shared/control";
+import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ButlerMessageView, EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 
@@ -28,7 +29,7 @@ export const EN_STATUS: Record<TicketStatus, string> = {
 };
 
 export const EN: UiStrings = {
-  settingsTabs: { general: "General", routing: "Model routing", cost: "Spend & background", loop: "Comments & CI", interrupts: "Interruptions & notifications" } as Record<"general" | "routing" | "cost" | "loop" | "interrupts", string>,
+  settingsTabs: { general: "General", routing: "Model routing", cost: "Spend & background", loop: "Comments & CI", interrupts: "Interruptions & notifications", stacks: "Stacks" } as Record<"general" | "routing" | "cost" | "loop" | "interrupts" | "stacks", string>,
   ij: {
     heading: "Interruptions & notifications",
     intro: "Lets sessions stop for you less often, and tells you when one really needs you. Everything here is off, or has no effect, until you set it up.",
@@ -1858,6 +1859,59 @@ export const EN: UiStrings = {
   prStagesOpenProgress: "Open in Progress",
   externalHeading: "Outward actions",
   externalIntro: "Actions where Butler leaves something on GitHub or another outside service on your behalf. Each has its own switch, all off by default. While a switch is off Butler does not act and only records a skip on the Audit page. For now Push branches and Open PRs are used by the repo rule export, and Reply to review comments, Resolve comments and Rerun CI by Comments & CI; the others take effect as later versions start using them.",
+  sk: {
+    title: "Stacks",
+    intro: "Stacks Butler manages: only the bottom PR is for human review, and the layers above stay branches. When the bottom merges or trunk moves, Butler rebases the whole stack onto the new parents and hands conflicts to that layer's session.",
+    none: "No stacks yet. A feature coordinator makes one with create_ticket's stack_on, or turns branches into a stack with stack_define.",
+    noUpdateRefs: "This computer's git has no --update-refs (it needs 2.38 or later), so Butler rebases one layer at a time, which is slower.",
+    repoTrunk: (repo: string, trunk: string) => `${repo} · trunk ${trunk}`,
+    autoRebaseOff: "\"Let Butler rebase stacks\" is off for this repo: Butler only watches and does not change the branches.",
+    source: { mcp: "set by a coordinator", ticket: "made with stack_on", detected: "detected" } as Record<StackSource, string>,
+    state: { branch_only: "branch", draft: "draft PR", ready: "PR", merged: "merged" } as Record<StackLayerState, string>,
+    bottom: "bottom",
+    behind: (count: number) => `${n(count, "commit")} behind trunk`,
+    unpushed: "rewritten, not pushed yet",
+    lastRun: (outcome: string, trigger: string, when: string) => `Latest: ${outcome} (${trigger}, ${when})`,
+    outcome: { rebased: "rebased", noop: "nothing to rebase", conflict: "conflict", deferred: "deferred", failed: "failed", rolled_back: "rolled back", restored: "restored from backup" } as Record<StackRunOutcome, string>,
+    trigger: { main_updated: "trunk moved", bottom_merged: "bottom merged", layer_commits: "new commits on a layer", daily: "daily", manual: "manual", autosquash: "autosquash", restore: "restore" } as Record<StackTrigger, string>,
+    conflict: (branch: string, files: string) => `Conflict on ${branch}: ${files}`,
+    unpushedList: (branches: string) => `"Push branches" is off, not pushed: ${branches}`,
+    rebaseNow: "Rebase now",
+    restore: "Restore from backup",
+    remove: "Stop managing this stack",
+    removeConfirm: "Stop managing it? (Branches and PRs stay as they are)",
+    toDraft: "Open as draft PR",
+    toBranch: "Back to a branch",
+    done: "Done",
+    openTicket: "Open ticket",
+    notice: {
+      conflict: (stack: string, branch: string, files: string) => `Stack "${stack}" hit a conflict on ${branch} while rebasing (${files}), and no session has it yet`,
+      draft_stale: (stack: string, branch: string, days: number) => `${branch} in stack "${stack}" has been a draft for ${n(days, "day")}; turn it back into a branch if it no longer needs CI`,
+      behind: (stack: string, commits: number, days: number) => `The bottom of stack "${stack}" is ${n(commits, "commit")} behind trunk (the oldest from ${n(days, "day")} ago)`,
+      stuck: (stack: string, detail: string) => `Rebasing stack "${stack}" is stuck: ${detail}`,
+    },
+    noticeOpen: "View stacks",
+    settingsIntro: "Policy for stacked PRs, in three layers: global → product → repo, each overriding the one above. \"Let Butler rebase stacks\" is off by default; only with it on does Butler change the local branches of stacks in that repo. Pushing, opening PRs and posting the overview issue also need the outward-action switches below, all off by default.",
+    key: {
+      autoRebase: "Let Butler rebase stacks",
+      mergeMethod: "How the bottom merges",
+      rebaseOnMainUpdate: "Rebase when trunk moves",
+      dailyRebase: "Rebase once a day",
+      autosquash: "Autosquash once comments are handled",
+      autoOpenBottomPr: "Open the next layer as a PR after the bottom merges",
+      conflictToSession: "Hand conflicts to that layer's session",
+      draftDemoteDays: "Days before suggesting a draft go back to a branch",
+      behindCommits: "Commits behind trunk before a reminder",
+      behindDays: "Days behind trunk before a reminder",
+      overview: "Epic overview",
+      draftLabel: "Label on draft layers",
+    } as Record<StackPolicyKey, string>,
+    option: { auto: "detect from the merge", squash: "squash", merge: "merge commit", off: "don't post", issue: "post to an issue" } as Record<string, string>,
+    policyError: { unknown_key: "no such setting", bad_bool: "must be on or off", bad_int: "out of range", bad_enum: "not one of the choices", bad_label: "a label needs 1–50 characters with no commas or line breaks" } as Record<StackPolicyErrorCode, string>,
+    badValue: (key: string, why: string) => `${key}: ${why}`,
+    externalTitle: "Outward actions stacks use",
+    externalIntro: "Force pushes go through \"Push branches\", PRs and drafts through \"Open PRs\", the stack position in PR titles and the depends line in descriptions through \"Edit PR titles\" and \"Edit PR descriptions\", and the epic overview through \"Post issues\". With them off, Butler only changes local branches and marks the layers it did not push.",
+  },
   lp: {
     title: "Comments & CI",
     intro: "Review comments on PRs are classified, sent to the session, checked after the fix and replied to. CI failures are classified first: environment failures are rerun automatically, and only code failures reach the session. Both master switches are off by default and can be set globally, per product or per repo.",

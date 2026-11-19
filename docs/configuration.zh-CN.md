@@ -15,7 +15,7 @@ Butler 没有配置文件。所有设置都在 **设置** 页里改，存在 `~/
 5. **隐私与个人 API**
 6. **复盘规矩**（自动备份、导出提醒和准入策略，见[复盘规矩：批量操作、准入策略和导入导出](#复盘规矩批量操作准入策略和导入导出)）
 
-设置页顶上还有两个标签：**模型路由**（见[模型路由](#模型路由)）和 **评论与 CI**（见[评论与 CI](#评论与-ci)）。
+设置页顶上还有四个标签：**模型路由**（见[模型路由](#模型路由)）、**评论与 CI**（见[评论与 CI](#评论与-ci)）、**打断与通知**（见[打断与通知](#打断与通知)）和 **栈**（见[栈](#栈)）。
 
 合并总控，以及给总控 session 用的 `end_session` 工具，见[合并总控](#合并总控)和 [README](../README.zh-CN.md)，两者都没有设置项。
 
@@ -670,6 +670,37 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 ### 效果页上的前后对比
 
 **效果** 页以这些功能第一次生效的时间为界（确认了一条权限规则，或者打开了选推荐项、默认答案、先查再问），比较前后各一段相同长度的整天（每段最多 30 天）；生效当天一半在前一半在后，不算在任何一边。每一边列出：合并的 Butler PR、每个 PR 的人介入次数和等人的时间、每天各类打断的次数、自动解决的打断、为卡住的 session 开的修复 session。一个都还没打开时，面板会说明从打开那天开始比较。权限档案自动解决的打断是在 session 停下时从它的 transcript 里数的，是一个上限：其中有些 Claude Code 本来也不会问。
+
+## 栈
+
+栈是同一个仓库里一串互相依赖的 Butler 分支：栈底基于 trunk，往上每一层基于下面那层。只有栈底开 PR 给人 review；上面的层在轮到它当栈底之前都只是分支，所以 reviewer 一次只看一个小 PR。
+
+栈由总控建。feature 总控调用 `create_ticket` 时带上 `stack_on`，新 ticket 的分支就从另一个 ticket 的分支开出来，并接到那个 ticket 所在栈的顶上（它不在栈里就新建一个）；也可以用 `stack_define` 把已有的分支定成栈。`list_stacks` 看栈，`stack_rebase` 马上 rebase 一次，`stack_layer_mode` 在上面某层要跑 CI 时把它开成 draft PR，或者把 draft 关掉。Butler 总控也有这几个工具，但只接受它自己开着的终端发来的改动；epic session 只有 `list_stacks`。
+
+栈底的 PR 合并或者 trunk 更新时，Butler 把整栈 rebase 到新的基础上：git 2.38 以上用 `git rebase --update-refs`，旧的 git 一层一层来。rebase 在 `~/.butler/stack-work` 下单独的 worktree 里做，不碰开着的 session。只有分支没在别处签出着未提交的改动、它的 session 不在忙、远端也没人推过时，Butler 才挪动它，否则稍后再试。挪动之前先把旧的位置存到 `refs/butler/stack-backup/…`，「从备份恢复」可以放回去。有冲突时 Butler 停下、原样复原，等那一层 ticket 的 session 空下来时把冲突文件交给它。冲突 30 分钟没交出去、或者 rebase 卡了一天，「现在」页会提醒。
+
+栈底合并后，下一层成了新的栈底：Butler 把它的 base 改成 trunk，`autoOpenBottomPr` 开着时把它开成 ready 的 PR。draft 层打上 `draftLabel` 的 label，标题注明不用 review。
+
+「进度」页和 feature、epic 的「PR 进度」标签里有「栈」一块：从上到下列出每一层的状态、PR、落后 trunk 几个提交、有没有改写过还没推，还有最近一次 rebase 的结果，以及马上 rebase、从备份恢复、开或关 draft、不再管这个栈（分支和 PR 不动）这几个按钮。
+
+策略在「设置 → 栈」，和[评论与 CI](#评论与-ci)一样分全局、产品、仓库三层。`autoRebase` 是总开关，默认关；关着时 Butler 只看不动。推送改写过的分支（用 `--force-with-lease`）要[对外动作](#对外动作)里的 `externalBranchPush`，开 PR 和 draft 要 `externalPrOpen`，往 PR 标题里写栈的位置、往描述里写依赖行要 `externalPrTitleEdit` 和 `externalPrDescriptionEdit`，总览 issue 要 `externalIssuePost`。这些关着时 Butler 只改本地分支，并标出没推的层。
+
+| 键 | 默认 | 取值 | 作用 |
+|----|------|------|------|
+| `autoRebase` | `false` | `true` / `false` | 允许 Butler 改这个仓库里栈的本地分支 |
+| `mergeMethod` | `auto` | `auto` / `squash` / `merge` | 栈底 PR 怎么合并；`auto` 按合并结果判断 |
+| `rebaseOnMainUpdate` | `true` | `true` / `false` | trunk 更新时 rebase |
+| `dailyRebase` | `true` | `true` / `false` | 每个栈每天 rebase 一次 |
+| `autosquash` | `true` | `true` / `false` | 某层的 review 评论处理完后把 `fixup!` 提交合进去 |
+| `autoOpenBottomPr` | `true` | `true` / `false` | 旧栈底合并后把新栈底开成 ready 的 PR |
+| `conflictToSession` | `true` | `true` / `false` | 冲突交给那一层的 session；关着只在「现在」页提醒 |
+| `draftDemoteDays` | `14` | 1–365 的整数 | 一层当 draft 超过这么多天，「现在」页建议关掉 |
+| `behindCommits` | `20` | 1–10000 的整数 | 栈底落后 trunk 这么多个提交时提醒 |
+| `behindDays` | `3` | 1–365 的整数 | 栈底落后 trunk 这么多天时提醒 |
+| `overview` | `off` | `off` / `issue` | 把一个 epic 的栈的总览放在一个 GitHub issue 里 |
+| `draftLabel` | `stacked` | 1–50 个字，不能有逗号 | draft 层打的 label |
+
+栈的策略和别的策略一样，包含在[备份和导出设置](#备份和导出设置)里。
 
 ## 多家公司或多个配置
 

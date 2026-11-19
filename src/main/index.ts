@@ -11,7 +11,7 @@ import { parseGateRequest, type GateRequest, type GateResult } from "../shared/g
 import { IPC } from "../shared/ipc";
 import type { LimitHit } from "../shared/availability";
 import { ClaudeAvailability } from "./claude/availability";
-import { buildNotices, ciNotices, commentNotices, costNotices } from "./now/notices";
+import { buildNotices, ciNotices, commentNotices, costNotices, stackNotices } from "./now/notices";
 import { BackgroundRepo } from "./db/background-repo";
 import { CostRepo } from "./db/cost-repo";
 import { readBgSettings } from "./background/bg-settings";
@@ -2502,6 +2502,7 @@ async function bootstrap(): Promise<void> {
           ...ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
           ...costNotices(costBreaker?.views() ?? [], costTargetOf),
           ...commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
+          ...stackNotices(stackService.notices()),
         ],
         sessionMemory: (id) => procServices.monitor.memoryOf(id),
         memorySnapshot: procServices.monitor.snapshot(),

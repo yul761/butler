@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AvailabilityHit, AvailabilityView } from "../../shared/availability";
 import type { LessonRunStatus } from "../../shared/lessons";
 import type { CostBreakerView } from "../../shared/cost";
-import { buildNotices, ciNotices, commentNotices, costNotices } from "./notices";
+import { buildNotices, ciNotices, commentNotices, costNotices, stackNotices } from "./notices";
 
 const hit = (kind: AvailabilityHit["kind"]): AvailabilityHit => ({ kind, resetsAt: 5000, message: "m", at: 1, source: "headless", job: "lessons", sessionId: null });
 const view = (over: Partial<AvailabilityView> = {}): AvailabilityView => ({ state: "ok", current: null, lastHit: null, retryAt: null, lessonsPause: null, ...over });
@@ -81,5 +81,16 @@ describe("commentNotices", () => {
   it("makes one notice per waiting PR that opens the ticket", () => {
     const w = { reason: "review" as const, ticketKey: "T-2", prId: 4, number: 9, count: 3, since: 1 };
     expect(commentNotices([w], () => null)).toEqual([{ kind: "comments_waiting", waiting: w, title: null, target: { page: "ticket", key: "T-2", sessionId: null } }]);
+  });
+});
+
+describe("stackNotices (workstream K)", () => {
+  it("links the layer's ticket when it has one", () => {
+    const withTicket = { reason: "conflict" as const, stackId: 1, stackName: "pay", branch: "b2", files: ["a.ts"], ticketKey: "T-2" };
+    const without = { reason: "behind" as const, stackId: 2, stackName: "x", branch: "b1", commits: 30, days: 4, ticketKey: null };
+    expect(stackNotices([withTicket, without])).toEqual([
+      { kind: "stack", stack: withTicket, target: { page: "ticket", key: "T-2", sessionId: null } },
+      { kind: "stack", stack: without, target: null },
+    ]);
   });
 });
