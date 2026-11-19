@@ -94,7 +94,11 @@ export type TicketControlRequest =
   /** 结束一个停下来在等输入的 session（和用户点 × 一样，之后能恢复）。 */
   | { v: 1; ticketKey: string; from: string | null; op: "end_session"; session: string; reason: string }
   /** 让 Butler 给一个停下来的 session 换新上下文（计划 16）：handoff → /clear → 从记忆里接上。 */
-  | { v: 1; ticketKey: string; from: string | null; op: "refresh_session"; session: string };
+  | { v: 1; ticketKey: string; from: string | null; op: "refresh_session"; session: string }
+  /** 开发 session 交完成证据（工作流 G）：参数原样带过来，主进程按 parseSubmitEvidence 验。 */
+  | { v: 1; ticketKey: string; from: string | null; op: "submit_evidence"; evidence: Record<string, unknown> }
+  /** 开发 session 取自己最近一次预审的结果（工作流 G）。只读。 */
+  | { v: 1; ticketKey: string; from: string | null; op: "pre_review_result" };
 
 /** epic session 建 feature 时 brief 最多这么多字符，超出直接拒绝。 */
 export const BRIEF_LIMIT = 4000;
@@ -177,7 +181,9 @@ export type ButlerControlRequest =
   /** 进度总览（ws-b）：和进度页同一份聚合，可以按 epic / feature 过滤。只读。 */
   | { v: 1; butler: true; from: string | null; op: "progress_overview"; feature?: string; epic?: string }
   /** 效果总览（ws-h）：和「效果」页同一份 MetricsOverview。只读。 */
-  | { v: 1; butler: true; from: string | null; op: "metrics_overview"; days?: number };
+  | { v: 1; butler: true; from: string | null; op: "metrics_overview"; days?: number }
+  /** 一个 PR 的就绪条件、风险理由、预审和简报（ws-g）。pr 是 ticket_prs 的 id 或 PR 链接。只读。 */
+  | { v: 1; butler: true; from: string | null; op: "pr_assessment"; pr: string };
 
 export type ControlRequest = TicketControlRequest | FeatureControlRequest | EpicControlRequest | ButlerControlRequest;
 
@@ -329,6 +335,12 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   if (o.op === "list_repos") return { ...base, op: "list_repos" };
   if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
   if (isSessionOp(o.op)) return sessionOp(base, o);
+  if (o.op === "pre_review_result") return { ...base, op: "pre_review_result" };
+  if (o.op === "submit_evidence") {
+    const e = o.evidence;
+    if (!e || typeof e !== "object" || Array.isArray(e)) return null;
+    return { ...base, op: "submit_evidence", evidence: e as Record<string, unknown> };
+  }
   if (o.op === "start_session") {
     if (!okName(o.repo, 4096) || !okTask(o.task) || !okModel(o.model)) return null;
     return { ...base, op: "start_session", repo: o.repo, task: o.task, ...(o.model !== undefined && { model: o.model as StartModel }) };
@@ -354,6 +366,10 @@ function parseButlerRequest(o: Record<string, unknown>, from: string | null): Bu
     if (o.days === undefined) return { ...base, op: "metrics_overview" };
     if (typeof o.days !== "number" || !Number.isInteger(o.days) || o.days < 1 || o.days > 365) return null;
     return { ...base, op: "metrics_overview", days: o.days };
+  }
+  if (o.op === "pr_assessment") {
+    if (!okName(o.pr, 500)) return null;
+    return { ...base, op: "pr_assessment", pr: o.pr };
   }
   if (o.op === "refresh_feature_summary") {
     if (!okName(o.feature, 500)) return null;

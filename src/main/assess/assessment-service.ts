@@ -7,7 +7,7 @@ import type { RecordEvent } from "../metrics/events";
 import type { PrReview, PrStatus } from "../tickets/gh";
 import type { CheckHitView } from "../../shared/checks";
 import type { ResolvedPrPolicy } from "../../shared/pr-policy";
-import { RISK_RULES_VERSION, type CheckSummary, type DiffFile, type EvidenceGap, type Readiness, type Risk } from "../../shared/prereview";
+import { RISK_RULES_VERSION, type BriefView, type CheckSummary, type DiffFile, type EvidenceGap, type PrAssessmentView, type PreReviewView, type Readiness, type Risk } from "../../shared/prereview";
 import { hasVerifiedTest } from "../prereview/evidence";
 import { summarizeHits } from "../prereview/runner";
 import { computeReadiness, type Lang, type ReadinessInput } from "./readiness";
@@ -28,6 +28,8 @@ export interface AssessmentDeps {
   repo: AssessRepo;
   /** 预审的证据缺口（PreReviewService.gaps）。 */
   gaps(row: PreReviewRow): EvidenceGap[];
+  /** 预审给界面、总控看的样子（PreReviewService.view）。 */
+  preReviewView(row: PreReviewRow): PreReviewView;
   preReviewEnabled(): boolean;
   policy(slug: string): ResolvedPrPolicy;
   /** session 的检查情况（和预审同一个来源）。 */
@@ -93,6 +95,28 @@ export class AssessmentService {
       if (cur) return cur;
     }
     return this.d.preReviews.latestForPr(pr.id);
+  }
+
+  /** 一个 PR 的全部评估（ticket 页的 Review tab、总控的 pr_assessment）：表里存的就绪、风险，最新的预审和简报。 */
+  view(pr: TicketPr): PrAssessmentView {
+    const readiness = this.d.repo.readiness(pr.id);
+    const risk = this.d.repo.risk(pr.id);
+    const row = this.latestPreReview(pr);
+    const stored = (pr.headSha && pr.headBranch ? this.d.repo.latestBriefFor({ repoSlug: pr.slug, branch: pr.headBranch, headSha: pr.headSha }) : null) ?? this.d.repo.latestBriefForPr(pr.id);
+    const brief: BriefView | null = stored && {
+      id: stored.id, prId: stored.prId, preReviewId: stored.preReviewId, target: stored.target, markdown: stored.markdown, summaryOk: stored.summaryOk,
+      createdAt: stored.createdAt, postedAt: stored.postedAt, postedUrl: stored.postedUrl,
+    };
+    return {
+      prId: pr.id, url: pr.url, number: pr.number, title: pr.title, state: pr.state, draft: pr.isDraft,
+      target: pr.headSha && pr.headBranch ? { repoSlug: pr.slug, branch: pr.headBranch, headSha: pr.headSha } : null,
+      readiness: readiness && { ready: readiness.ready, conditions: readiness.conditions, missing: readiness.missing, headSha: readiness.headSha, computedAt: readiness.computedAt },
+      risk: risk && { level: risk.level, reasons: risk.reasons, headSha: risk.headSha, computedAt: risk.computedAt, rulesVersion: risk.rulesVersion },
+      preReview: row ? this.d.preReviewView(row) : null,
+      brief,
+      preReviewEnabled: this.d.preReviewEnabled(),
+      canPost: pr.state === "open" && brief !== null,
+    };
   }
 
   /** 风险的输入（简报也用：没有 PR 的分支传 pr = null）。 */

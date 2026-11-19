@@ -5,6 +5,7 @@ import { effectiveStatus, type Epic, type EpicFeatureRow, type EpicView, type Fe
 import { roleOf, type InboxService } from "../inbox/inbox-service";
 import { progressOverview } from "../progress/progress-view";
 import type { MetricsOverview } from "../../shared/metrics";
+import type { PrAssessmentView, Readiness, RiskLevel } from "../../shared/prereview";
 import { M } from "../strings";
 import type { ButlerMessages } from "./butler-messages";
 import { admitOrRefuse } from "./admission";
@@ -36,6 +37,12 @@ export interface ButlerControlDeps {
     prStatusAt(featureId: number): number | null;
     /** 后台跑 runManual，不等。 */
     refresh(featureId: number): void;
+  };
+  /** 就绪、风险（ws-g）：list_prs 带上 risk / ready / missing，pr_assessment 给一个 PR 的全部评估。 */
+  assessment?: {
+    summaries(prIds: number[]): Map<number, { risk: RiskLevel | null; ready: boolean | null; missing: Readiness["missing"] }>;
+    /** ticket_prs 的 id 或 PR 链接；找不到为 null。 */
+    view(ref: string): PrAssessmentView | null;
   };
   /** send_message 的回复回流（ws-b）。 */
   messages?: Pick<ButlerMessages, "begin" | "settled" | "failed" | "ensureRunning" | "recent">;
@@ -251,11 +258,15 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
           repos: t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), branch: r.branch })),
         })));
       }
-      case "list_prs":
-        return ok(b.prs().map((p) => {
+      case "list_prs": {
+        const prs = b.prs();
+        const assessed = b.assessment?.summaries(prs.flatMap((p) => (p.prId !== null ? [p.prId] : []))) ?? new Map();
+        return ok(prs.map((p) => {
           const t = d.tickets.get(p.ticketKey);
           const x = p.detail;
+          const a = p.prId !== null ? assessed.get(p.prId) : undefined;
           return {
+            prId: p.prId,
             ticket: p.ticketKey, repo: p.repoPath === null ? null : basename(p.repoPath), branch: p.branch, number: p.number, url: p.url, state: p.state, review: p.review, ci: p.ci,
             checkedAt: p.checkedAt ? new Date(p.checkedAt).toISOString() : null, ...(t ? ticketOwners(t) : { feature: null, epic: null }),
             // ws-b：叠放、卡在谁手上要的字段。分支行（还没有 PR）没有。
@@ -264,8 +275,16 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
               reviewRequests: x.reviewRequests, reviewers: x.reviewers.map((r) => ({ ...r, at: iso(r.at) })), mergeable: x.mergeable, mergeState: x.mergeState,
               statusChangedAt: iso(x.statusChangedAt), waitingOn: waitingOnOf({ ...x, state: p.state, ci: p.ci, review: p.review }),
             }),
+            // ws-g：只是读表（还没评估过为 null）。
+            ...(b.assessment && p.prId !== null && { risk: a?.risk ?? null, ready: a?.ready ?? null, missing: (a?.missing ?? []).map((m: Readiness["missing"][number]) => m.detail) }),
           };
         }));
+      }
+      case "pr_assessment": {
+        if (!b.assessment) return fail(M().ctlPreReviewUnavailable);
+        const v = b.assessment.view(req.pr);
+        return v ? ok(v) : fail(M().ctlNoSuchPr(req.pr));
+      }
       case "list_sessions": {
         const decisions = new Map<string, number>();
         for (const x of b.inbox.view({ all: true }).decisions) decisions.set(x.sessionId, (decisions.get(x.sessionId) ?? 0) + 1);

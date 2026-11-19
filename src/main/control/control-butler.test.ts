@@ -17,7 +17,7 @@ import type { ControlHandlerDeps } from "./control-handler";
 import { controlHandler } from "./control-handler";
 
 /** Butler 总控（BTL-190 第 5 点）：两个 epic（一个归档了）、三个 feature（一个不属于 epic）、两个 ticket（一个归档了）和各种 session。 */
-function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admission"]; noMetrics?: boolean; stacks?: ControlHandlerDeps["stacks"] } = {}) {
+function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admission"]; noMetrics?: boolean; stacks?: ControlHandlerDeps["stacks"]; assessment?: boolean } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -123,6 +123,12 @@ function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admiss
         messages,
         progress: (f) => (progressCalls.push(f), progressView),
         ...(!o.noMetrics && { metrics: (days: number | undefined) => (metricsCalls.push(days), { days: days ?? 30 } as never) }),
+        ...(o.assessment && {
+          assessment: {
+            summaries: (ids: number[]) => new Map(ids.filter((id) => id === 1).map((id) => [id, { risk: "high" as const, ready: false, missing: [{ key: "evidence" as const, state: "fail" as const, detail: "missing test output" }] }])),
+            view: (ref: string) => (ref === "1" || ref === "https://x/12" ? ({ prId: 1, url: "https://x/12" } as never) : null),
+          },
+        }),
         summaries: {
           running: (id) => summaryState.running.has(id), stale: (id) => summaryState.stale.has(id), prStatusAt: (id) => summaryState.prStatusAt.get(id) ?? null,
           refresh: (id) => void summaryState.refreshed.push(id),
@@ -190,6 +196,20 @@ describe("Butler 总控 read-only tools (BTL-190 5)", () => {
     expect(list[1]).toMatchObject({ ticket: "BTL-3", number: null, feature: null, epic: null });
     // 不是 ticket 仓库的 PR：没有仓库名。
     expect(list[2]).toMatchObject({ ticket: "BTL-3", repo: null, number: 4 });
+  });
+
+  it("list_prs adds risk, ready and missing when Butler assessed the PR, and pr_assessment gives one PR (ws-g)", async () => {
+    const plain = setup();
+    expect(value<Record<string, unknown>[]>(await plain.call({ op: "list_prs" }))[0]).not.toHaveProperty("risk");
+    expect(err(await plain.call({ op: "pr_assessment", pr: "1" }))).toContain("预审");
+    const { call } = setup({ assessment: true });
+    const list = value<Record<string, unknown>[]>(await call({ op: "list_prs" }));
+    expect(list[0]).toMatchObject({ prId: 1, risk: "high", ready: false, missing: ["missing test output"] });
+    // 分支行没有 prId，也就没有评估；评估过以外的 PR 是 null。
+    expect(list[1]).not.toHaveProperty("risk");
+    expect(list[2]).toMatchObject({ prId: 2, risk: null, ready: null, missing: [] });
+    expect(value(await call({ op: "pr_assessment", pr: "https://x/12" }))).toEqual({ prId: 1, url: "https://x/12" });
+    expect(err(await call({ op: "pr_assessment", pr: "99" }))).toContain("99");
   });
 
   it("list_prs adds the stack, review and merge fields and who the PR waits on (ws-b)", async () => {

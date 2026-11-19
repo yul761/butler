@@ -45,7 +45,7 @@ function setup(o: { allowed?: boolean; withTest?: boolean } = {}) {
   pre.setVerified(a, "consistent", "matches the diff", null, 3);
   pre.addEvidence({ ...base, kind: "not_run", category: "build", name: "build", command: null, claimed: null, summary: "no build step for this change" });
   const service = new AssessmentService({
-    prs, preReviews: pre, repo: assess, gaps, preReviewEnabled: () => true, policy, checks: () => ({ absent: null, hits: [] }), sessionOf: () => "s1",
+    prs, preReviews: pre, repo: assess, gaps, preReviewView: (row) => ({ ...row, evidence: pre.evidenceOf(row.id), missingEvidence: gaps(row) }), preReviewEnabled: () => true, policy, checks: () => ({ absent: null, hits: [] }), sessionOf: () => "s1",
     openCommentItems: () => null, waitingOnGate: () => false, files: async () => null,
     recordEvent: (kind, refs) => (events.push({ kind, key: refs?.dedupeKey }), true), lang: () => "en", changed: () => undefined, now: () => 10, log: () => undefined,
   });

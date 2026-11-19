@@ -1,5 +1,5 @@
 // 预审结果送进开发 session 的正文（设计 §4.5）：只有违规清单和证据缺口，不附规矩全文。
-import type { EvidenceGap, Violation } from "../../shared/prereview";
+import type { EvidenceGap, PreReviewView, Violation } from "../../shared/prereview";
 import { CAT } from "../assess/readiness";
 import type { Lang } from "./model";
 
@@ -61,4 +61,25 @@ export function deliveryText(i: DeliveryInput): string {
   }
   lines.push("", en ? "Fix these, commit, then call submit_evidence again." : "改完、提交以后再调一次 submit_evidence。");
   return lines.join("\n");
+}
+
+/**
+ * MCP pre_review_result 给开发 session 的结果：结论、违规清单、证据核实结果、缺的证据。
+ * 和递送一样不带规矩原文（lessonText、lessonId），也不带文件清单。
+ */
+export function resultForSession(v: PreReviewView, lang: Lang): Record<string, unknown> {
+  return {
+    id: v.id,
+    commit: v.target.headSha.slice(0, 7),
+    branch: v.target.branch,
+    status: v.status,
+    verdict: v.verdict,
+    error: v.status === "failed" ? v.detail : null,
+    violations: v.violations.map((x) => ({ where: where(x), severity: x.severity, what: x.what, fix: x.fix || null })),
+    evidence: v.evidence.map((e) => ({
+      kind: e.kind, ...(e.category ? { category: e.category } : {}), name: e.name, verified: e.verified, ...(e.verifyDetail ? { detail: cut(e.verifyDetail, WHAT_CHARS) } : {}),
+    })),
+    missing: v.missingEvidence.map((g) => gapLine(g, lang)),
+    finishedAt: v.finishedAt ? new Date(v.finishedAt).toISOString() : null,
+  };
 }

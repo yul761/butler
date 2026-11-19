@@ -15,6 +15,8 @@ import { M } from "../strings";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { SessionModelChoice } from "../routing/routing-service";
 import type { TicketsRepo } from "../db/tickets-repo";
+import type { PreReviewView } from "../../shared/prereview";
+import { resultForSession } from "../prereview/delivery";
 import { admitOrRefuse, type AdmissionGate } from "./admission";
 import type { StackControl } from "./stack-control";
 import { butlerControl, type ButlerControlDeps } from "./butler-control";
@@ -74,6 +76,11 @@ export interface ControlHandlerDeps {
   inbox?: Pick<InboxService, "ask" | "report">;
   /** Butler 总控的请求（BTL-190 第 5 点）；不给就拒绝。 */
   butler?: ButlerControlDeps;
+  /** 开发 session 的 submit_evidence、pre_review_result（工作流 G）；不给就拒绝。 */
+  preReview?: {
+    submit(sessionId: string, raw: unknown): Promise<{ ok: boolean; message: string }>;
+    latest(sessionId: string): PreReviewView | null;
+  };
   /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
   ticketPattern?: () => string;
   /** set_epic_plan 记下的时间（不给用 Date.now）。 */
@@ -590,6 +597,20 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     return ok({ id: r.id, note: r.noCoordinator ? M().ctlReportNoCoordinator : r.queued ? M().ctlReportQueued : M().ctlReportStored });
   };
 
+  /** 证据和预审结果（工作流 G）：调用的必须是这个 ticket 的 session（和 ask_user 一样核对 from），按它自己的 head 记。 */
+  const preReviewRequest = async (req: Extract<ControlRequest, { op: "submit_evidence" | "pre_review_result" }>, t: Ticket): Promise<ControlResult> => {
+    if (!d.preReview) return fail(M().ctlPreReviewUnavailable);
+    const h = req.from ? d.sessions.head(req.from) : null;
+    if (!h) return fail(M().ctlInboxNoSession);
+    if (h.ticketKey !== t.key) return fail(M().ctlInboxNotYours);
+    if (req.op === "pre_review_result") {
+      const v = d.preReview.latest(h.id);
+      return v ? ok(resultForSession(v, currentLang())) : fail(M().ctlNoPreReview);
+    }
+    const r = await d.preReview.submit(h.id, req.evidence);
+    return r.ok ? ok({ note: r.message }) : fail(r.message);
+  };
+
   // Butler 总控（BTL-190 第 5 点）。
   const butlerRequest = butlerControl(d, { sessionActivity, refreshSession, listedActivity, lastReply });
 
@@ -600,6 +621,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if ("featureId" in req) return featureRequest(req);
     const t = d.tickets.get(req.ticketKey);
     if (!t || t.archivedAt !== null) return fail(M().ctlTicketGone(req.ticketKey));
+    if (req.op === "submit_evidence" || req.op === "pre_review_result") return preReviewRequest(req, t);
     // 这些请求本该只有这个 ticket 的总控发（BTL-190 第 2+3 点，加固）。先只记一笔、照常处理：没有 BUTLER_SESSION 的调用 from 是 null，
     // 总控终端里 /resume 到别的 session 以后 head 也不再是总控，直接拒绝会误伤。
     const caller = req.from ? d.sessions.head(req.from) : null;
