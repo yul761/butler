@@ -185,6 +185,15 @@ export const IPC = {
   interruptsAct: "interrupts:act",
   profilesGet: "profiles:get",
   profilesScan: "profiles:scan",
+  /** 预审、就绪、风险、简报、review 效果（工作流 G）。 */
+  prAssessment: "review:assessment",
+  preReviewRun: "review:run",
+  briefRegenerate: "review:brief:regenerate",
+  briefPost: "review:brief:post",
+  prPolicyGet: "review:policy:get",
+  prPolicySet: "review:policy:set",
+  reviewEffect: "review:effect",
+  reviewQueue: "review:queue",
   progressGet: "progress:get",
   /** 栈式 PR（工作流 K）。 */
   stacksList: "stacks:list",
@@ -231,6 +240,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.loopPolicyGet, IPC.loopPolicySet, IPC.loopCommentsList, IPC.loopCommentsAct, IPC.loopFlakyList, IPC.loopFlakyAct, IPC.loopEffect,
   IPC.interruptsState, IPC.interruptsAct, IPC.profilesGet, IPC.profilesScan,
   IPC.stacksList, IPC.stacksRebase, IPC.stacksLayerMode, IPC.stacksRestore, IPC.stacksRemove, IPC.stacksPolicyGet, IPC.stacksPolicySet, IPC.stacksPolicyLayers,
+  IPC.prAssessment, IPC.preReviewRun, IPC.briefRegenerate, IPC.briefPost, IPC.prPolicyGet, IPC.prPolicySet, IPC.reviewEffect, IPC.reviewQueue,
   IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,
 ];

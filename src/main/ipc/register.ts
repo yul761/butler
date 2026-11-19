@@ -23,6 +23,9 @@ export interface AdmissionFacade {
   regroupPrinciples(): Promise<RegroupResult>;
 }
 import type { LoopPolicyOverrides, LoopPolicyView, LoopScope } from "../../shared/loop-policy";
+import type { PrPolicyView, PrScope } from "../../shared/pr-policy";
+import type { ReviewActResult, ReviewQueueItem, TicketAssessmentView } from "../../shared/prereview";
+import type { ReviewEffectView } from "../../shared/review-effect";
 import type { CommentAction, CommentItemView, FlakyAction, FlakyEntry, LoopEffect, PrCommentsView } from "../../shared/loop";
 import type { ConfigIoStatus, ExportResult, ImportApplyResult, ImportPreviewResult } from "../../shared/config-io";
 import type { MemoryHistoryPoint } from "../../shared/mem-usage";
@@ -79,7 +82,7 @@ import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../sh
 import {
   addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
-  stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg } from "./validate";
+  stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -138,6 +141,17 @@ export interface IpcDeps {
     policyView(scope: PolicyScope): StackPolicyView;
     policySet(scope: PolicyScope, overrides: Record<string, unknown>): StackPolicySetResult;
     policyLayers(): StackPolicyLayer[];
+  };
+  /** 预审、就绪、风险、简报、review 效果（工作流 G）。 */
+  review: {
+    ticket(ticketKey: string): TicketAssessmentView;
+    run(prId: number): ReviewActResult;
+    regenerate(prId: number): Promise<ReviewActResult>;
+    post(prId: number): Promise<ReviewActResult>;
+    policyView(scope: PrScope): PrPolicyView;
+    policySet(scope: PrScope, overrides: Record<string, unknown>): void;
+    effect(days: unknown): ReviewEffectView;
+    queue(): ReviewQueueItem[];
   };
   /** 导入导出（契约 4.3）。 */
   configIo: ConfigIoFacade;
@@ -571,6 +585,30 @@ export function registerIpc(d: IpcDeps): void {
   });
   handle(IPC.profilesGet, (): ProfileScan => d.interrupts.profiles());
   handle(IPC.profilesScan, (raw: unknown): Promise<ProfileScan> => d.interrupts.scan(!!(raw && typeof raw === "object" && (raw as { explain?: unknown }).explain === true)));
+  handle(IPC.prAssessment, (raw: unknown): TicketAssessmentView => d.review.ticket(ticketKeyArg(raw)));
+  handle(IPC.preReviewRun, (raw: unknown): ReviewActResult => {
+    const r = d.review.run(prIdArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.briefRegenerate, async (raw: unknown): Promise<ReviewActResult> => {
+    const r = await d.review.regenerate(prIdArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.briefPost, async (raw: unknown): Promise<ReviewActResult> => {
+    const r = await d.review.post(prIdArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.prPolicyGet, (raw: unknown): PrPolicyView => d.review.policyView(policyScopeArg(raw)));
+  handle(IPC.prPolicySet, (raw: unknown): void => {
+    const { scope, overrides } = prPolicySetArg(raw);
+    d.review.policySet(scope, overrides);
+    d.notify();
+  });
+  handle(IPC.reviewEffect, (raw: unknown): ReviewEffectView => d.review.effect(raw));
+  handle(IPC.reviewQueue, (): ReviewQueueItem[] => d.review.queue());
   handle(IPC.checksView, (raw: unknown): ChecksView => d.checks.view(checkScopeArg(raw)));
   handle(IPC.checksHits, (raw: unknown): CheckHitView[] => d.checks.hits(checkKeyArg(raw)));
   handle(IPC.checksAct, (raw: unknown): ChecksActResult => {

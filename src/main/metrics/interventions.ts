@@ -134,6 +134,8 @@ export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.loopCommentsAct,
   // 栈（工作流 K）：「现在 rebase」「从备份恢复」推动工作；改层的模式（开 draft / 降级）也是。
   IPC.stacksRebase, IPC.stacksRestore, IPC.stacksLayerMode,
+  // 「重新预审」「贴到 PR」（工作流 G）：用户亲手推一步。
+  IPC.preReviewRun, IPC.briefPost,
 ]);
 
 /** 记成别的人介入的通道（不再算手动触发）：卡片上回答、「不用了」是 needs_you_answer。 */
@@ -151,6 +153,7 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.clipboardRead, IPC.admissionState, IPC.wizardEstimate, IPC.calibrationSample, IPC.calibrationStats,
   IPC.costView, IPC.costBreakers, IPC.backgroundStatus,
   IPC.clipboardRead, IPC.loopPolicyGet, IPC.loopCommentsList, IPC.loopFlakyList, IPC.loopEffect,
+  IPC.prAssessment, IPC.prPolicyGet, IPC.reviewEffect, IPC.reviewQueue,
   IPC.baselinesView, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyViolations, IPC.checkExportList, IPC.backtestView,
   IPC.interruptsState, IPC.profilesGet,
   // 建立、整理、归档
@@ -168,6 +171,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   // 花费上限、手动停 / 恢复一种后台任务（工作流 L）
   IPC.costSet, IPC.backgroundAct,
   IPC.loopPolicySet, IPC.loopFlakyAct,
+  // 预审和就绪的策略（工作流 G）；重新生成简报只是换一份给人看的摘要，不推动工作。
+  IPC.prPolicySet, IPC.briefRegenerate,
   // 仓库现状和检查的整理（扫描、采用、存量扫描、导出成 lint）：搭检查，和 checksAct、reposScan 一样不算推动一次工作。
   IPC.baselinesAct, IPC.legacyAct, IPC.checkExportAct,
   // 回测、清除复查、撤销自动升降级、阈值复查（工作流 F）：整理检查

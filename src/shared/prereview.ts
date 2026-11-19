@@ -214,6 +214,11 @@ export interface TicketAssessmentView {
   branches: PrAssessmentView[];
 }
 
+/** 页面上「重新预审」「重新生成简报」「贴到 PR」的结果。 */
+export type ReviewActResult =
+  | { ok: true; url?: string }
+  | { ok: false; reason: "no_pr" | "not_open" | "no_brief" | "off" | "failed" | "no_head" | "no_pre_review"; detail?: string };
+
 /** 「进度」页的待 review 清单一行（设计 §10）。 */
 export interface ReviewQueueItem {
   prId: number;

@@ -1,13 +1,13 @@
 // 就绪度和风险（设计 §7.1、§9）：读 PR 行、最新预审和证据、检查、评论、闸门、策略 → 算 → 写表（内容没变不写）→ 判定变化时发事件。
 // 只对 open 的 PR 算；合并、关闭以后留着最后一次的结果。
-import type { AssessRepo } from "../db/assess-repo";
+import type { AssessRepo, StoredBrief } from "../db/assess-repo";
 import type { PreReviewRepo, PreReviewRow } from "../db/prereview-repo";
 import type { TicketPr } from "../db/ticket-prs-repo";
 import type { RecordEvent } from "../metrics/events";
 import type { PrReview, PrStatus } from "../tickets/gh";
 import type { CheckHitView } from "../../shared/checks";
 import type { ResolvedPrPolicy } from "../../shared/pr-policy";
-import { RISK_RULES_VERSION, type BriefView, type CheckSummary, type DiffFile, type EvidenceGap, type PrAssessmentView, type PreReviewView, type Readiness, type Risk } from "../../shared/prereview";
+import { RISK_RULES_VERSION, type BriefView, type CheckSummary, type DiffFile, type EvidenceGap, type PrAssessmentView, type PreReviewView, type Readiness, type ReviewQueueItem, type Risk, type TicketAssessmentView, reviewQueueOrder } from "../../shared/prereview";
 import { hasVerifiedTest } from "../prereview/evidence";
 import { summarizeHits } from "../prereview/runner";
 import { computeReadiness, type Lang, type ReadinessInput } from "./readiness";
@@ -23,8 +23,8 @@ interface Seen {
 }
 
 export interface AssessmentDeps {
-  prs: { get(id: number): TicketPr | null; byTicket(key: string): TicketPr[] };
-  preReviews: Pick<PreReviewRepo, "latestFor" | "latestForPr" | "evidenceOf">;
+  prs: { get(id: number): TicketPr | null; byTicket(key: string): TicketPr[]; all(): TicketPr[] };
+  preReviews: Pick<PreReviewRepo, "latestFor" | "latestForPr" | "evidenceOf" | "latestWithoutPr">;
   repo: AssessRepo;
   /** 预审的证据缺口（PreReviewService.gaps）。 */
   gaps(row: PreReviewRow): EvidenceGap[];
@@ -103,10 +103,7 @@ export class AssessmentService {
     const risk = this.d.repo.risk(pr.id);
     const row = this.latestPreReview(pr);
     const stored = (pr.headSha && pr.headBranch ? this.d.repo.latestBriefFor({ repoSlug: pr.slug, branch: pr.headBranch, headSha: pr.headSha }) : null) ?? this.d.repo.latestBriefForPr(pr.id);
-    const brief: BriefView | null = stored && {
-      id: stored.id, prId: stored.prId, preReviewId: stored.preReviewId, target: stored.target, markdown: stored.markdown, summaryOk: stored.summaryOk,
-      createdAt: stored.createdAt, postedAt: stored.postedAt, postedUrl: stored.postedUrl,
-    };
+    const brief = this.briefView(stored);
     return {
       prId: pr.id, url: pr.url, number: pr.number, title: pr.title, state: pr.state, draft: pr.isDraft,
       target: pr.headSha && pr.headBranch ? { repoSlug: pr.slug, branch: pr.headBranch, headSha: pr.headSha } : null,
@@ -117,6 +114,46 @@ export class AssessmentService {
       preReviewEnabled: this.d.preReviewEnabled(),
       canPost: pr.state === "open" && brief !== null,
     };
+  }
+
+  private briefView(stored: StoredBrief | null): BriefView | null {
+    return stored && {
+      id: stored.id, prId: stored.prId, preReviewId: stored.preReviewId, target: stored.target, markdown: stored.markdown, summaryOk: stored.summaryOk,
+      createdAt: stored.createdAt, postedAt: stored.postedAt, postedUrl: stored.postedUrl,
+    };
+  }
+
+  /** ticket 页的 Review tab：每个 PR 一块；还没有 PR 的分支（栈的上层）显示最近的预审和简报。 */
+  ticketView(ticketKey: string): TicketAssessmentView {
+    const prs = this.d.prs.byTicket(ticketKey);
+    const withPr = new Set(prs.filter((p) => p.headBranch).map((p) => `${p.slug}\0${p.headBranch}`));
+    const branches = this.d.preReviews
+      .latestWithoutPr(ticketKey)
+      .filter((r) => !withPr.has(`${r.target.repoSlug}\0${r.target.branch}`))
+      .map(
+        (r): PrAssessmentView => ({
+          prId: null, url: null, number: null, title: null, state: null, draft: false, target: r.target, readiness: null, risk: null,
+          preReview: this.d.preReviewView(r),
+          brief: this.briefView(this.d.repo.latestBriefFor(r.target) ?? this.d.repo.latestBriefForBranch(r.target.repoSlug, r.target.branch)),
+          preReviewEnabled: this.d.preReviewEnabled(), canPost: false,
+        }),
+      );
+    return { ticketKey, prs: prs.map((p) => this.view(p)), branches };
+  }
+
+  /** 「进度」页的待 review：开着、非草稿的 PR，按 未就绪 → 风险高 → 等得久 排。 */
+  queue(): ReviewQueueItem[] {
+    const open = this.d.prs.all().filter((p) => p.state === "open" && !p.isDraft);
+    const sums = this.d.repo.summaries(open.map((p) => p.id));
+    return open
+      .map((p): ReviewQueueItem => {
+        const s = sums.get(p.id);
+        return {
+          prId: p.id, ticketKey: p.ticketKey, url: p.url, number: p.number, title: p.title, repoSlug: p.slug, risk: s?.risk ?? null,
+          ready: s?.ready ?? null, missing: s?.missing ?? [], openedAt: p.openedAt,
+        };
+      })
+      .sort(reviewQueueOrder);
   }
 
   /** 风险的输入（简报也用：没有 PR 的分支传 pr = null）。 */

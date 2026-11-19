@@ -116,6 +116,27 @@ describe("AssessmentService", () => {
     await s.service.assess(s.pr.id);
     expect(s.assess.readiness(s.pr.id)!.ready).toBe(true);
   });
+  it("ticketView lists each PR and branches without a PR; queue puts not-ready and high risk first", async () => {
+    const s = setup({ withTest: false });
+    await s.service.observe([s.pr], s.status);
+    const upper = { repoSlug: "o/app", branch: "feat/x-2", headSha: "b".repeat(40) };
+    const id2 = s.pre.insert({ ticketKey: "T-1", sessionId: "s2", target: upper, cwd: "/w2", base: "feat/x", prId: null, trigger: "evidence", createdAt: 5 });
+    s.pre.insert({ ticketKey: "T-1", sessionId: "s1", target: { ...T, headSha: "c".repeat(40) }, cwd: "/w", base: "main", prId: null, trigger: "evidence", createdAt: 6 });
+    const v = s.service.ticketView("T-1");
+    expect(v.prs.map((p) => p.prId)).toEqual([s.pr.id]);
+    expect(v.prs[0].readiness?.ready).toBe(false);
+    expect(v.branches.map((b) => [b.prId, b.target?.branch, b.preReview?.id, b.canPost])).toEqual([[null, "feat/x-2", id2, false]]);
+
+    const other = s.prs.link({ ticketKey: "T-1", url: "https://github.com/o/app/pull/5", slug: "o/app", repoId: null, number: 5, headBranch: "feat/y", state: "open", source: "branch", linkedAt: 1 }).pr;
+    s.prs.update(other.id, { isDraft: false });
+    s.assess.setReadiness(other.id, null, { ready: true, conditions: [], missing: [] }, 1);
+    const draft = s.prs.link({ ticketKey: "T-1", url: "https://github.com/o/app/pull/6", slug: "o/app", repoId: null, number: 6, headBranch: "feat/z", state: "open", source: "branch", linkedAt: 1 }).pr;
+    s.prs.update(draft.id, { isDraft: true });
+    const q = s.service.queue();
+    expect(q.map((x) => x.prId)).toEqual([s.pr.id, other.id]);
+    expect(q[0]).toMatchObject({ ready: false, number: 4 });
+    expect(q[0].missing.length).toBeGreaterThan(0);
+  });
   it("openChangeRequests ignores the author and bots and lets a later approval win", () => {
     const r = (author: string, state: string, at: number) => ({ id: String(at), author, state, body: "", submittedAt: at }) as never;
     expect(openChangeRequests([r("me", "CHANGES_REQUESTED", 1), r("copilot-pull-request-reviewer[bot]", "CHANGES_REQUESTED", 2), r("bob", "CHANGES_REQUESTED", 3), r("bob", "APPROVED", 4), r("amy", "CHANGES_REQUESTED", 5)], "me")).toBe(1);

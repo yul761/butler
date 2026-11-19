@@ -639,6 +639,13 @@ export async function compareFiles(cwd: string, base: string, head: string, time
   return out;
 }
 
+/** 一个 PR 改了哪些文件（gh api pulls/N/files，合并后也能读）：只要文件名，最多 GitHub 给的 3000 个。失败返回 null。 */
+export async function prFileNames(cwd: string, number: number, timeoutMs: number, repo?: string | null): Promise<string[] | null> {
+  const out = await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/files`, "--paginate", "--jq", ".[].filename"], timeoutMs, 8 * 1024 * 1024, repoEnv(repo));
+  if (out === null) return null;
+  return out.split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
 /** 度量（ws-h）的 gh 调用：revert 扫描、基线回填、重开。 */
 export const METRICS_GH_TIMEOUT_MS = 20_000;
 

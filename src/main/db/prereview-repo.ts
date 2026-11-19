@@ -164,6 +164,19 @@ export class PreReviewRepo {
     return r ? toReview(r) : null;
   }
 
+  /** 这个 ticket 还没有 PR 的分支（栈的上层）：每个（仓库, 分支）最近的一次预审，最多 20 个。 */
+  latestWithoutPr(ticketKey: string): PreReviewRow[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM pre_reviews p WHERE ticket_key = ? AND pr_id IS NULL
+             AND id = (SELECT MAX(id) FROM pre_reviews x WHERE x.repo_slug = p.repo_slug AND x.branch = p.branch)
+           ORDER BY id DESC LIMIT 20`,
+        )
+        .all(ticketKey) as Row[]
+    ).map(toReview);
+  }
+
   latestForSession(sessionId: string): PreReviewRow | null {
     const r = this.db.prepare(`SELECT * FROM pre_reviews WHERE session_id = ? ORDER BY id DESC LIMIT 1`).get(sessionId) as Row | undefined;
     return r ? toReview(r) : null;

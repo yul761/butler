@@ -10,6 +10,9 @@ import type { AvailabilityAction, AvailabilityView } from "../../shared/availabi
 import type { BatchDetail, BatchView } from "../../shared/batches";
 import type { AdmissionPolicyOverrides, AdmissionPolicyView, PolicyScope } from "../../shared/admission-policy";
 import type { LoopPolicyOverrides, LoopPolicyView, LoopScope } from "../../shared/loop-policy";
+import type { PrPolicyOverrides, PrPolicyView, PrScope } from "../../shared/pr-policy";
+import type { ReviewActResult, ReviewQueueItem, TicketAssessmentView } from "../../shared/prereview";
+import type { ReviewEffectView } from "../../shared/review-effect";
 import type { CommentAction, CommentItemView, FlakyAction, FlakyEntry, LoopEffect, PrCommentsView } from "../../shared/loop";
 import type { ConfigIoStatus, ExportRequest, ExportResult, ImportApplyRequest, ImportApplyResult, ImportPreviewResult, StarterTarget } from "../../shared/config-io";
 import type {
@@ -163,6 +166,14 @@ export const api = {
   interruptsAct: (a: InterruptsAction) => call<InterruptsActResult>(IPC.interruptsAct, a),
   profilesGet: () => call<ProfileScan>(IPC.profilesGet),
   profilesScan: (explain = false) => call<ProfileScan>(IPC.profilesScan, { explain }),
+  prAssessment: (ticketKey: string) => call<TicketAssessmentView>(IPC.prAssessment, ticketKey),
+  preReviewRun: (prId: number) => call<ReviewActResult>(IPC.preReviewRun, prId),
+  briefRegenerate: (prId: number) => call<ReviewActResult>(IPC.briefRegenerate, prId),
+  briefPost: (prId: number) => call<ReviewActResult>(IPC.briefPost, prId),
+  prPolicyGet: (scope: PrScope) => call<PrPolicyView>(IPC.prPolicyGet, scope),
+  prPolicySet: (scope: PrScope, overrides: PrPolicyOverrides) => call<void>(IPC.prPolicySet, { scope, overrides }),
+  reviewEffect: (days?: number) => call<ReviewEffectView>(IPC.reviewEffect, days ?? 30),
+  reviewQueue: () => call<ReviewQueueItem[]>(IPC.reviewQueue),
   checksView: (scope: CheckScope) => call<ChecksView>(IPC.checksView, scope),
   checksHits: (key: string) => call<CheckHitView[]>(IPC.checksHits, key),
   checksAct: (a: ChecksAction) => call<ChecksActResult>(IPC.checksAct, a),

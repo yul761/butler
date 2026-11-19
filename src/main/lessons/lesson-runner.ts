@@ -49,6 +49,8 @@ export interface LessonRunnerDeps {
   upgradeReady?: () => boolean;
   /** 一次分析加了或命中了规矩（工作流 D 的自动准入接在这里）。在事务之外调用。 */
   onLessonsChanged?: (slug: string) => void;
+  /** 一个 PR 复盘完了（工作流 G 的 review 效果统计接在这里）。在事务之外调用，抛错只记日志。 */
+  onRunDone?: (slug: string, prNumber: number) => void;
   log?: (msg: string, e?: unknown) => void;
 }
 
@@ -371,6 +373,13 @@ export class LessonRunner {
       if ("defer" in q) repo.defer(a.item.id, q.notBefore ?? now, q.linkRun ? a.runId : undefined);
       else repo.finish(a.item.id, q.finish, now, q.error, { message: q.message ?? null, runId: a.runId });
     });
+    if (!("defer" in q) && q.finish === "done" && this.d.onRunDone) {
+      try {
+        this.d.onRunDone(a.item.slug, a.item.prNumber);
+      } catch (e) {
+        this.d.log?.("lessons: onRunDone failed", e);
+      }
+    }
   }
 
   /** 让路：这次记 aborted（yielded），队列项马上回到 queued（闸门再开时接着分析这一项），不算失败。 */

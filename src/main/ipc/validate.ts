@@ -890,3 +890,17 @@ export function stackPolicySetArg(v: unknown): { scope: PolicyScope; overrides: 
   if (typeof o.overrides !== "object" || o.overrides === null || Array.isArray(o.overrides)) throw new Error("invalid stack policy overrides");
   return { scope: policyScopeArg(o.scope), overrides: o.overrides as Record<string, unknown> };
 }
+
+// ---- 预审和就绪（工作流 G）
+
+/** ticket_prs.id。 */
+export function prIdArg(v: unknown): number {
+  return posInt(v, "pr id");
+}
+
+/** 改一层就绪 / 风险策略：键和值在 PrPolicies.setLayer 里再校验。 */
+export function prPolicySetArg(v: unknown): { scope: PolicyScope; overrides: Record<string, unknown> } {
+  const o = objArg(v, "pr policy change", ["scope", "overrides"]);
+  if (!o.overrides || typeof o.overrides !== "object" || Array.isArray(o.overrides)) throw new Error("invalid pr policy change");
+  return { scope: policyScopeArg(o.scope), overrides: o.overrides as Record<string, unknown> };
+}
