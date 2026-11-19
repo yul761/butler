@@ -2,7 +2,9 @@ import { useState } from "react";
 import { PROGRESS_BUCKETS, type ProgressFeature, type ProgressPr, type ProgressStuck, type ProgressView } from "../../../shared/progress";
 import { api } from "../api";
 import { reportError } from "../errors";
+import type { ReviewQueueItem } from "../../../shared/prereview";
 import { flattenStack, prRef, segmentWidths, shortTime, sinceText, waitingText } from "../progress-ui";
+import { queueFor, queueIndex, riskPill } from "../review-view";
 import { S } from "../strings";
 import { FeaturePrStages } from "./PrStages";
 import { ManagedStacks } from "./StacksPanel";
@@ -134,7 +136,43 @@ function Stacks({ view }: { view: ProgressView }) {
   );
 }
 
-function PrTable({ view, onOpenTicket }: { view: ProgressView; onOpenTicket: (key: string) => void }) {
+/** 一个 PR 的风险和就绪徽标（工作流 G）；没评估过的不显示。 */
+function ReviewBadges({ item }: { item: ReviewQueueItem | undefined }) {
+  if (!item) return <>—</>;
+  return (
+    <span data-testid="progress-review-badges">
+      {item.risk && <span className={`pill ${riskPill(item.risk)}`}>{S.rv.riskBadge(S.rv.level[item.risk])}</span>}
+      {item.ready !== null && <span className={item.ready ? "pill approved" : "pill pending"}>{item.ready ? S.rv.ready : S.rv.notReady}</span>}
+    </span>
+  );
+}
+
+/** 待 review（工作流 G，设计 §10）：未就绪在前 → 风险高在前 → 等得久在前。 */
+function ReviewQueueList({ items, onOpenTicket }: { items: ReviewQueueItem[]; onOpenTicket: (key: string) => void }) {
+  return (
+    <section className="progress-review-queue" data-testid="progress-review-queue">
+      <h3>{S.rv.queueTitle}</h3>
+      <p className="muted">{S.rv.queueIntro}</p>
+      {items.length === 0 ? <p className="muted">{S.rv.queueNone}</p> : (
+        <table className="ticket-table">
+          <tbody>
+            {items.map((i) => (
+              <tr key={i.prId} data-testid={`review-queue-${i.number}`}>
+                <td><button className="pr-link link" title={i.url} onClick={() => openPr(i.url)}>{`${i.repoSlug}#${i.number}`}</button></td>
+                <td>{i.title ?? ""}</td>
+                <td><TicketLink ticketKey={i.ticketKey} onOpenTicket={onOpenTicket} /></td>
+                <td><ReviewBadges item={i} /></td>
+                <td className="muted">{i.missing.length > 0 ? S.rv.missing(i.missing.map((m) => S.rv.cond[m.key]).join(", ")) : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+function PrTable({ view, onOpenTicket, queue }: { view: ProgressView; onOpenTicket: (key: string) => void; queue: Map<number, ReviewQueueItem> }) {
   const [by, setBy] = useState<"label" | "prefix">("label");
   const groups = by === "label" ? view.groups.byLabel : view.groups.byPrefix;
   return (
@@ -162,6 +200,7 @@ function PrTable({ view, onOpenTicket }: { view: ProgressView; onOpenTicket: (ke
                   <th>{S.progress.colCi}</th>
                   <th>{S.progress.colReview}</th>
                   <th>{S.progress.colWho}</th>
+                  <th>{S.rv.colReview}</th>
                 </tr>
               </thead>
               <tbody>
@@ -174,6 +213,7 @@ function PrTable({ view, onOpenTicket }: { view: ProgressView; onOpenTicket: (ke
                     <td className={`ci-${p.ci}`}>{p.ci}</td>
                     <td>{p.review ?? "—"}</td>
                     <td>{p.waitingOn ? `${waitingText(p.waitingOn)} · ${S.progress.reasons[p.waitingOn.reason]}` : "—"}</td>
+                    <td><ReviewBadges item={queue.get(p.prId)} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -232,7 +272,13 @@ function Freshness({ view }: { view: ProgressView }) {
 }
 
 /** 整页的内容（不取数据，便于测试）。 */
-export function ProgressBody({ view, onOpenTicket, onOpenFeature }: { view: ProgressView; onOpenTicket: (key: string) => void; onOpenFeature?: (id: number) => void }) {
+export function ProgressBody({ view, onOpenTicket, onOpenFeature, queue = null }: {
+  view: ProgressView; onOpenTicket: (key: string) => void; onOpenFeature?: (id: number) => void;
+  /** 待 review（工作流 G）；null = 还没取到，不显示这一块。 */
+  queue?: ReviewQueueItem[] | null;
+}) {
+  const prIds = new Set(view.groups.byLabel.flatMap((g) => g.prs.map((p) => p.prId)));
+  const shown = queue === null ? null : queueFor(queue, prIds);
   return (
     <>
       <SummaryBar view={view} />
@@ -242,7 +288,8 @@ export function ProgressBody({ view, onOpenTicket, onOpenFeature }: { view: Prog
       </section>
       <ManagedStacks filter={view.filter} onOpenTicket={onOpenTicket} />
       <Stacks view={view} />
-      <PrTable view={view} onOpenTicket={onOpenTicket} />
+      {shown && <ReviewQueueList items={shown} onOpenTicket={onOpenTicket} />}
+      <PrTable view={view} onOpenTicket={onOpenTicket} queue={queueIndex(shown)} />
       <section className="progress-features" data-testid="progress-features">
         <h3>{S.progress.featuresHeading}</h3>
         {view.featureGroups.length === 0 ? (
@@ -268,6 +315,7 @@ export function ProgressPage({ epicId: initialEpic = null, featureId: initialFea
   const [epicId, setEpicId] = useState<number | null>(initialEpic);
   const [featureId, setFeatureId] = useState<number | null>(initialFeature);
   const view = useProgress({ epicId, featureId });
+  const queue = useStateRefetch("review-queue", api.reviewQueue);
   const features = (view?.features ?? []).filter((f) => epicId === null || f.epicId === epicId);
   return (
     <div className="ticket-page progress-page" data-testid="progress-page">
@@ -298,7 +346,7 @@ export function ProgressPage({ epicId: initialEpic = null, featureId: initialFea
         </label>
       </header>
       <p className="muted">{S.progress.intro}</p>
-      {view && <ProgressBody view={view} onOpenTicket={onOpenTicket} onOpenFeature={onOpenFeature} />}
+      {view && <ProgressBody view={view} onOpenTicket={onOpenTicket} onOpenFeature={onOpenFeature} queue={queue} />}
     </div>
   );
 }

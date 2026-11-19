@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { LoopEffect } from "../../../shared/loop";
+import type { ReviewEffectView, ReviewGroupStats } from "../../../shared/review-effect";
 import { INTERRUPT_CATEGORIES, type CompareSide, type GroupMetrics, type KeyCount, type MetricsOverview, type TrendPoint } from "../../../shared/metrics";
 import { api } from "../api";
 import {
@@ -7,6 +8,7 @@ import {
   groupName, interventionName, interventionRows, lineGeometry, spendName,
 } from "../effect-view";
 import { shortTime } from "../progress-ui";
+import { dayString, enoughSample } from "../review-view";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 
@@ -70,8 +72,10 @@ const CHART_H = 96;
 const CHART_PAD = 8;
 
 /** 一个小图：一条线（单一序列，标题就是名字，不要图例）；悬停一个点显示数值。 */
-function TrendChart({ title, points, value, format }: {
-  title: string; points: TrendPoint[]; value: (p: TrendPoint) => number | null; format: (v: number | null) => string;
+function TrendChart<P extends Pick<TrendPoint, "start" | "prs">>({ title, points, value, format, readout }: {
+  title: string; points: P[]; value: (p: P) => number | null; format: (v: number | null) => string;
+  /** 悬停读数的写法（默认是按天的趋势）。 */
+  readout?: (day: string, v: string, prs: number) => string;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const values = points.map(value);
@@ -84,7 +88,7 @@ function TrendChart({ title, points, value, format }: {
       <figcaption>
         <span>{title}</span>
         <span className="muted effect-trend-readout">
-          {shown === null ? DASH : E().trendPoint(fmtDay(points[shown].start), format(values[shown]), points[shown].prs)}
+          {shown === null ? DASH : (readout ?? E().trendPoint)(fmtDay(points[shown].start), format(values[shown]), points[shown].prs)}
         </span>
       </figcaption>
       <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} role="img" aria-label={title} onMouseLeave={() => setHover(null)}>
@@ -362,11 +366,78 @@ export function LoopEffectSection({ e }: { e: LoopEffect }) {
   );
 }
 
+const RV = () => S.rv;
+
+function ReviewGroupRow({ label, g }: { label: string; g: ReviewGroupStats }) {
+  const ok = enoughSample(g);
+  return (
+    <tr>
+      <th scope="row">{label}</th>
+      <td>{fmtNumber(g.prs, 0)}</td>
+      {ok ? (
+        <>
+          <td>{fmtNumber(g.humanComments)}</td>
+          <td>{fmtNumber(g.rounds)}</td>
+          <td>{fmtDuration(g.firstReviewMs)}</td>
+          <td>{fmtDuration(g.submitToMergeMs)}</td>
+        </>
+      ) : <td colSpan={4} className="muted">{RV().effSmall}</td>}
+    </tr>
+  );
+}
+
+/** Review 效果（工作流 G）：每 PR 的可避免评论按周、Butler 和其他 PR / 带不带简报的对比、规矩上线前后、评论落点。 */
+export function ReviewEffectSection({ v }: { v: ReviewEffectView }) {
+  const points = v.weeks.map((w) => ({ start: dayString(w.weekStart), prs: w.prs, perPr: w.perPr }));
+  const cols = RV().effCols;
+  return (
+    <section className="effect-section" data-testid="effect-review">
+      <h3>{RV().effTitle}</h3>
+      <p className="muted">{RV().effIntro}</p>
+      <div className="effect-trends">
+        <TrendChart title={RV().effWeeks} points={points} value={(p) => p.perPr} format={(x) => fmtNumber(x)} readout={RV().effWeekPoint} />
+      </div>
+      <h4>{RV().effGroups}</h4>
+      <table className="ticket-table" data-testid="effect-review-groups">
+        <thead>
+          <tr><th>{cols.group}</th><th>{cols.prs}</th><th>{cols.comments}</th><th>{cols.rounds}</th><th>{cols.firstReview}</th><th>{cols.toMerge}</th></tr>
+        </thead>
+        <tbody>
+          <ReviewGroupRow label={RV().effGroup.butler} g={v.butler} />
+          <ReviewGroupRow label={RV().effGroup.others} g={v.others} />
+          <ReviewGroupRow label={RV().effGroup.withBrief} g={v.withBrief} />
+          <ReviewGroupRow label={RV().effGroup.withoutBrief} g={v.withoutBrief} />
+        </tbody>
+      </table>
+      <h4>{RV().effLessons}</h4>
+      {v.lessons.length === 0 ? <p className="muted">{RV().effLessonsNone}</p> : (
+        <table className="ticket-table" data-testid="effect-review-lessons">
+          <thead>
+            <tr><th>{RV().effLessonCols.text}</th><th>{RV().effLessonCols.confirmed}</th><th>{RV().effLessonCols.before}</th><th>{RV().effLessonCols.after}</th></tr>
+          </thead>
+          <tbody>
+            {v.lessons.map((l) => (
+              <tr key={l.lessonId}>
+                <td>{l.text}</td>
+                <td>{new Date(l.confirmedAt).toLocaleDateString()}</td>
+                <td>{fmtNumber(l.before.perPr)} <span className="muted">({l.before.prs})</span></td>
+                <td>{fmtNumber(l.after.perPr)} <span className="muted">({l.after.prs})</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p className="muted" data-testid="effect-review-landing">{RV().effLanding(v.landing.confirmedBefore, v.landing.notYet, v.landing.unattributed)}</p>
+    </section>
+  );
+}
+
 /** 「效果」页（ws-h）：和总控 metrics_overview 同一份数据，stateChanged 时重取。 */
 export function EffectPage() {
   const [days, setDays] = useState<number>(30);
   const o = useStateRefetch(`metrics:${days}`, () => api.metrics(days));
   const loop = useStateRefetch(`loop-effect:${days}`, () => api.loopEffect(days));
+  const review = useStateRefetch(`review-effect:${days}`, () => api.reviewEffect(days));
   return (
     <div className="page effect-page" data-testid="effect-page">
       <h2>{E().title}</h2>
@@ -385,6 +456,7 @@ export function EffectPage() {
       </div>
       {o && <EffectBody o={o} />}
       {loop && <LoopEffectSection e={loop} />}
+      {review && <ReviewEffectSection v={review} />}
     </div>
   );
 }

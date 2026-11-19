@@ -13,8 +13,9 @@ import { CostBackgroundSettings } from "./CostBackgroundSettings";
 import { LoopSettings } from "./LoopSettings";
 import { InterruptSettings } from "./InterruptSettings";
 import { StackSettings } from "./StacksPanel";
+import { ReviewSettings } from "./ReviewSettings";
 
-type SettingsTab = "general" | "routing" | "cost" | "loop" | "interrupts" | "stacks";
+type SettingsTab = "general" | "routing" | "cost" | "loop" | "interrupts" | "stacks" | "review";
 
 export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => void; section?: "health" | "routing" | "cost" }) {
   const [tab, setTab] = useState<SettingsTab>(section === "routing" || section === "cost" ? section : "general");
@@ -54,7 +55,7 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
 
   const tabs = (
     <div className="settings-tabs" role="tablist">
-      {(["general", "routing", "cost", "loop", "interrupts", "stacks"] as const).map((t) => (
+      {(["general", "routing", "cost", "loop", "interrupts", "stacks", "review"] as const).map((t) => (
         <button key={t} role="tab" data-testid={`settings-tab-${t}`} aria-selected={tab === t} className={tab === t ? "page-tab active" : "page-tab"} onClick={() => setTab(t)}>
           {S.settingsTabs[t]}
         </button>
@@ -82,6 +83,14 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
       <div className="page">
         {tabs}
         <StackSettings />
+      </div>
+    );
+  }
+  if (tab === "review") {
+    return (
+      <div className="page">
+        {tabs}
+        <ReviewSettings />
       </div>
     );
   }

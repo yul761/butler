@@ -147,6 +147,8 @@ export interface PrStatus {
   reviewRequests: PrReviewRequest[];
   mergeable: PrMergeable | null;
   mergeState: PrMergeState | null;
+  /** PR 描述原文（工作流 G：就绪度的「描述完整」）；只在主进程里用，不存库、不发给页面。旧的假数据没有。 */
+  body?: string | null;
 }
 export interface BranchPr {
   number: number;
@@ -372,7 +374,7 @@ const REVIEWS = { REVIEW_REQUIRED: "pending", CHANGES_REQUESTED: "changes_reques
 // 这些字段要 gh >= 2.18（headRefOid，2022-10）；更旧的 gh 报 Unknown JSON field，prStatus 返回 null。
 // baseRefName、title、labels、reviewRequests、mergeable、mergeStateStatus 比 headRefOid 早，同一个下限（ws-b：叠放树、卡在谁手上）。
 const PR_FIELDS =
-  "number,url,state,isDraft,reviewDecision,headRefOid,headRefName,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt,baseRefName,title,labels,reviewRequests,mergeable,mergeStateStatus";
+  "number,url,state,isDraft,reviewDecision,headRefOid,headRefName,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt,baseRefName,title,labels,reviewRequests,mergeable,mergeStateStatus,body";
 
 /** gh pr view <ref>：ref 可以是分支名、PR 号或 PR 的 URL。没有 PR、gh 不可用、输出不对都返回 null。 */
 export async function prStatus(cwd: string, ref: string, timeoutMs: number): Promise<PrStatus | null> {
@@ -425,6 +427,7 @@ function parsePr(text: string | null): PrStatus | null {
     reviewRequests: reviewRequestsOf(r.reviewRequests),
     mergeable: mergeableOf(r.mergeable),
     mergeState: mergeStateOf(r.mergeStateStatus),
+    body: typeof r.body === "string" ? r.body : null,
   };
 }
 
@@ -636,6 +639,13 @@ export async function compareFiles(cwd: string, base: string, head: string, time
   return out;
 }
 
+/** 一个 PR 改了哪些文件（gh api pulls/N/files，合并后也能读）：只要文件名，最多 GitHub 给的 3000 个。失败返回 null。 */
+export async function prFileNames(cwd: string, number: number, timeoutMs: number, repo?: string | null): Promise<string[] | null> {
+  const out = await runGh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/files`, "--paginate", "--jq", ".[].filename"], timeoutMs, 8 * 1024 * 1024, repoEnv(repo));
+  if (out === null) return null;
+  return out.split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
 /** 度量（ws-h）的 gh 调用：revert 扫描、基线回填、重开。 */
 export const METRICS_GH_TIMEOUT_MS = 20_000;
 
@@ -705,6 +715,29 @@ export function createPr(o: { cwd: string; branch: string; base: string; title: 
       const url = String(stdout).trim().split(/\r?\n/).pop() ?? "";
       if (/^https?:\/\//.test(url)) done(url);
       else fail(new Error(`unexpected gh output: ${url.slice(0, 200)}`));
+    });
+    child.stdin?.end(o.body);
+  });
+}
+
+/** PR 的描述原文（工作流 G：贴简报前取当前描述）。读不到返回 null。ref 可以是 PR 号或链接。 */
+export async function prBody(cwd: string, ref: string, timeoutMs = 30_000): Promise<string | null> {
+  const j = parseJson(await runGh(cwd, ["pr", "view", ref, "--json", "body"], timeoutMs, 4 * 1024 * 1024));
+  if (typeof j !== "object" || j === null) return null;
+  const b = (j as Record<string, unknown>).body;
+  return typeof b === "string" ? b : null;
+}
+
+/**
+ * gh pr edit --body-file -（工作流 G：把简报块写进描述）。只由对外动作放行后调用；正文走 stdin。失败抛错（带 gh 的报错）。
+ */
+export function editPrBody(o: { cwd: string; ref: string; body: string; timeoutMs?: number }): Promise<void> {
+  const bin = binary;
+  if (bin === null) return Promise.reject(new Error("gh not found"));
+  return new Promise((done, fail) => {
+    const child = execFile(bin, ["pr", "edit", o.ref, "--body-file", "-"], { cwd: o.cwd, timeout: o.timeoutMs ?? 60_000, windowsHide: true, maxBuffer: 1024 * 1024, env: { ...process.env, GH_PROMPT_DISABLED: "1" } }, (err, _stdout, stderr) => {
+      if (err) fail(new Error(String(stderr || err.message).trim().slice(0, 500)));
+      else done();
     });
     child.stdin?.end(o.body);
   });

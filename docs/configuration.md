@@ -526,6 +526,20 @@ A check is a rule Butler can test without a model: a forbidden pattern, an impor
 
 Checks are exported and imported with the other configuration (**Checks only** or **All**). They are matched by key and layer; a change in behaviour (type, parameters, globs, severity, on/off) is a conflict and, if imported, goes back to shadow mode; a change of name or message alone keeps your mode. A `run_command` check that is new or whose command changed arrives **switched off**, because even shadow mode runs the command: the preview shows each command, and you switch it on after reading it. A checks-only file never removes your products, even in replace mode. Replace never removes the built-in checks.
 
+## Pre-review, readiness and risk
+
+Butler can check a change before you review it. Everything here is off or read-only by default: with nothing configured, you only see each PR's readiness and risk on the ticket page and the Progress page.
+
+| Setting | Key | Default | Accepted values and notes |
+|---------|-----|---------|---------------------------|
+| Pre-review | `preReviewEnabled` | `0` (off) | `1` or `0`. When on: the dev session's guide asks it to hand in completion evidence (`submit_evidence`: checks with commands and output, how each acceptance criterion is met, screenshots for UI changes, checks not run and why) and says a pre-review runs before the PR; Butler reruns the repo profile's commands at that commit, cross-checks the evidence, compares the diff with the repo's confirmed lessons and check results, and sends the violations back into the session; new PRs and new commits on Butler PRs get a pre-review too; a review brief is written after each pre-review. |
+
+Each PR gets a **readiness** (six conditions: CI and blocking checks, pre-review clean, evidence complete, no open review comments, mergeable, a description that says what, why and how it was verified) and a **risk level** (low, medium, high, with the reasons: migrations, auth, public API, config, CI config, large diffs, several repos, check warnings, missing evidence, ticket type). Both are computed without a model and never act on GitHub: they only explain and sort the "Needs review" list. When pre-review is off, the pre-review and evidence conditions show as off and do not count.
+
+The **review brief** is one page (what changed and why, risk, verified evidence, pre-review findings, files worth a close look, trade-offs). It stays in Butler; **Post to PR** writes it into the PR description inside a `<!-- butler:brief -->` block (the rest of the description is left alone) and is recorded in the audit log. Posting it automatically after each pre-review is the outward action `externalPrBriefPost` (below).
+
+Readiness conditions, evidence requirements and risk rules are a three-layer policy (global, product, repository) edited on the **Pre-review and readiness** settings tab and exported with the configuration: `readiness.<condition>.enabled`, `readiness.descriptionMinChars` (80), `evidence.require.<test|lint|typecheck|build>` (`auto` follows the repo profile), `evidence.rerun` (`all`, `fast` or `off`), `evidence.rerunTimeoutSec` (600), `risk.paths.<class>` (extra globs, added to the built-in list across layers; `risk.paths.<class>.builtin = false` drops the built-in list, except for migrations), `risk.size.*` and `risk.types.*` (`label=type`, `prefix=type`, `type=level`).
+
 ## Outward actions
 
 Some features let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Today the repo rule export uses **Push branches** and **Open PRs**, and [Comments and CI](#comments-and-ci) uses **Reply to review comments**, **Resolve comments** and **Rerun CI**, and [Stacks](#stacks) use **Force push**, **Push branches**, **Open PRs**, **Edit PR titles**, **Edit PR descriptions**, **Add or remove PR labels** and **Post issues**; the other switches take effect as later features start using them. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. **Push notifications** is used by [notifications](#notifications).
@@ -543,6 +557,7 @@ Some features let Butler leave something outside your machine on your behalf, su
 | Rerun CI | `externalCiRerun` | `0` (off) | Starting failed CI runs again. |
 | Post issues | `externalIssuePost` | `0` (off) | Creating issues or comments in your tracker or on GitHub. |
 | Push notifications | `externalPushNotification` | `0` (off) | Sending notifications to an outside service, such as phone push or chat. |
+| Post review briefs | `externalPrBriefPost` | `0` (off) | Writing the review brief into the PR description after each pre-review. The "Post to PR" button works either way and is recorded in the audit log. |
 
 Each switch is `1` or `0`.
 

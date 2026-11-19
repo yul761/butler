@@ -7,6 +7,7 @@ import { sessionLabel, splitSessions } from "../sessions";
 import { S, STATUS_LABEL } from "../strings";
 import { PageTabs } from "./PageTabs";
 import { TicketComments } from "./TicketComments";
+import { TicketReview } from "./TicketReview";
 import { TicketPrStages } from "./PrStages";
 import { RepoDialog } from "./RepoDialog";
 import { EndSessionButton } from "./EndSessionButton";
@@ -215,6 +216,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         tabs={[
           { id: "stages", label: S.prStagesTab, content: <TicketPrStages ticketKey={ticket.key} /> },
           { id: "comments", label: S.lp.tab, content: <TicketComments ticketKey={ticket.key} /> },
+          { id: "review", label: S.rv.tab, content: <TicketReview ticketKey={ticket.key} /> },
         ]}
       />
 

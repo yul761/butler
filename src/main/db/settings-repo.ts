@@ -137,6 +137,10 @@ export const SETTING_DEFAULTS = {
   externalCiRerun: "0",
   externalIssuePost: "0",
   externalPushNotification: "0",
+  /** 工作流 G：预审完成后自动把 review 简报贴进 PR 描述。 */
+  externalPrBriefPost: "0",
+  /** 工作流 G：开发 session 交证据、提 PR 前后台预审（复跑、对照规矩、核对证据），结果送回 session：1 开 0 关。 */
+  preReviewEnabled: "0",
   /** 工作流 D：一次分析加了或命中了规矩以后自动判那个仓库（只推荐，除非 admission.autoConfirm）：1 开 0 关。 */
   lessonsAutoAdmit: "0",
   /** 工作流 D：每天把已确认的规矩归成原则，session 说明里写原则 + 案例文件：1 开 0 关。 */

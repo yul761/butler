@@ -39,6 +39,7 @@
 //       没有这个文件或 ok → 回 { findings: [] }，带花费、时长和 modelUsage；
 //       fail → stdout 一个 is_error 的结果（result 是 boom，带花费），stderr 一行 fake lessons stderr: boom，退出 1；
 //       limit:<秒级时间戳> → stdout 一个 is_error 的结果“Claude AI usage limit reached|<时间戳>”（CLI 撞额度的格式），退出 1；
+//     预审（schema 里有 violations）：没有违规；证据核对（items）：每条 consistent；简报摘要（只有 summary）：一句固定的话；
 //     仓库现状的模型补全（schema 里有 inferred_checks）：回一条测试命令和一条 lint 命令，记一行 repo scan infer；FAKE_CLAUDE_INFER=fail 时失败退出；
 //     FAKE_CLAUDE_SUMMARY_GATE 指向的文件存在时，feature 汇总等到文件被删掉才回答：e2e 用它控制归档前要等多久。
 "use strict";
@@ -288,6 +289,25 @@ function headless() {
       const out = { [admissionKey]: answer };
       log(`admission ${admissionKey} ${ids.length}`);
       process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `admission-${Date.now()}`, result: JSON.stringify(out), structured_output: out, permission_denials: [], total_cost_usd: 0 })}\n`);
+      return;
+    }
+    // 预审三步（工作流 G）：预审（schema 里有 violations）回「没有违规」；交叉核对（items）每条都 consistent；
+    // 简报摘要（只有 summary）回一句固定的话。运行记录各记一行。
+    const reply = (tag, out) => process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `${tag}-${Date.now()}`, result: JSON.stringify(out), structured_output: out, permission_denials: [], total_cost_usd: 0 })}\n`);
+    if (props.violations) {
+      log(`pre-review files=${(input.match(/^- \S+ \(\+\d+ -\d+\)$/gm) || []).length}`);
+      reply("prereview", { violations: [], summary: "Fake pre-review: no rule is broken." });
+      return;
+    }
+    if (props.items && !props.summary) {
+      const ids = [...input.matchAll(/^### id=(\d+) /gm)].map((m) => Number(m[1]));
+      log(`evidence verify ${ids.length}`);
+      reply("verify", { items: ids.map((id) => ({ id, verdict: "consistent", reason: "fake: matches the diff" })) });
+      return;
+    }
+    if (props.summary && Object.keys(props).length === 1) {
+      log("brief summary");
+      reply("brief", { summary: "Fake brief: adds a greeting to the app." });
       return;
     }
     if (props.inferred_checks) {

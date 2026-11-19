@@ -13,6 +13,7 @@ export const EXTERNAL_ACTIONS = [
   "ci_rerun",
   "issue_post",
   "push_notification",
+  "pr_brief_post",
 ] as const;
 export type ExternalActionKind = (typeof EXTERNAL_ACTIONS)[number];
 
@@ -29,6 +30,7 @@ export const EXTERNAL_ACTION_SETTINGS = {
   ci_rerun: "externalCiRerun",
   issue_post: "externalIssuePost",
   push_notification: "externalPushNotification",
+  pr_brief_post: "externalPrBriefPost",
 } as const satisfies Record<ExternalActionKind, string>;
 export type ExternalActionSetting = (typeof EXTERNAL_ACTION_SETTINGS)[ExternalActionKind];
 

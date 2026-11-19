@@ -110,7 +110,7 @@ export function readRisk(db: Db): Map<number, string> {
   return out;
 }
 
-function avoidableCount(json: string | null): number {
+export function avoidableCount(json: string | null): number {
   try {
     const v = JSON.parse(json ?? "[]") as unknown;
     const list = Array.isArray(v) ? v : Array.isArray((v as { findings?: unknown })?.findings) ? (v as { findings: unknown[] }).findings : [];

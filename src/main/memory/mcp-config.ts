@@ -16,7 +16,7 @@ export const FEATURE_SERVER = "butler-feature";
 export const EPIC_SERVER = "butler-epic";
 /**
  * 总控 session：开子 session、列出仓库和 session（设计文档 2026-10-23 第二步）。
- * 普通 ticket session 也挂，但作用域是 member，只有 ask_user 和 report（BTL-190 第 2+3 点）。
+ * 普通 ticket session 也挂，但作用域是 member，只有 ask_user、report（BTL-190 第 2+3 点）和 submit_evidence、pre_review_result（工作流 G）。
  */
 export const SESSIONS_SERVER = "butler-sessions";
 /**
@@ -28,6 +28,8 @@ export const SESSIONS_SERVER = "butler-sessions";
 export const SESSIONS_AUTO_ALLOW: readonly string[] = [
   "ask_user", "report",
   "list_epics", "list_features", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "progress_overview", "metrics_overview", "list_stacks",
+  // 工作流 G：交证据（只在 Butler 里排一次预审）、取预审结果、看一个 PR 的评估。
+  "submit_evidence", "pre_review_result", "pr_assessment",
 ].map((tool) => `mcp__${SESSIONS_SERVER}__${tool}`);
 
 /** 怎么启动打包好的 StateCore MCP：command 是 Butler 自己的 Electron（process.execPath），script 是 bundle。 */
@@ -81,7 +83,7 @@ export function memoryServers(o: {
 export function sessionsServer(o: {
   launcher: MemoryMcpLauncher;
   /**
-   * epic: feature 总控的 feature 属于某个 epic（多出 epic_context 工具）。member: 普通 ticket session（只有 ask_user、report）。
+   * epic: feature 总控的 feature 属于某个 epic（多出 epic_context 工具）。member: 普通 ticket session（只有 ask_user、report、submit_evidence、pre_review_result）。
    * butler: Butler 总控（BTL-190 第 5 点），全局一个。
    */
   scope: { ticketKey: string; member?: boolean } | { featureId: number; epic?: boolean } | { epicId: number } | { butler: true };

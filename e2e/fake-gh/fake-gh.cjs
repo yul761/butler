@@ -15,6 +15,7 @@
 //     api graphql -f id=<thread> -f query=mutation…resolveReviewThread…：成功（调用记在 FAKE_GH_LOG 里，测试据此断言）；
 //     api repos/{owner}/{repo}/pulls/<n>/comments/<id>/replies、…/issues/<n>/comments（-f body=…）：打印 {html_url}；
 //     api repos/{owner}/{repo}/compare/<base>...<head> --jq …：compare 里每个文件一行 {filename, patch}，没有就是没有输出；
+//     api repos/{owner}/{repo}/pulls/<n>/files --paginate --jq .[].filename：files[<n>] 每个文件名一行，没有就是没有输出；
 //     run view <id> --json …：runs[<id>]，没有就退出 1；run view <id> --log-failed：logs[<id>]，没有就退出 1；
 //     run rerun <id> --failed：成功；
 //   栈（工作流 K）：
@@ -38,7 +39,7 @@ const flag = (name) => {
 };
 const fixture = () => {
   const f = JSON.parse(fs.readFileSync(process.env.FAKE_GH_FIXTURE, "utf8"));
-  return { branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null, threads: f.threads ?? {}, runs: f.runs ?? {}, logs: f.logs ?? {}, compare: f.compare ?? [], open: f.open ?? [], issueCreated: f.issueCreated ?? "https://github.com/acme/app/issues/900" };
+  return { branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null, threads: f.threads ?? {}, runs: f.runs ?? {}, logs: f.logs ?? {}, compare: f.compare ?? [], files: f.files ?? {}, open: f.open ?? [], issueCreated: f.issueCreated ?? "https://github.com/acme/app/issues/900" };
 };
 const out = (v) => process.stdout.write(`${JSON.stringify(v)}\n`);
 /** fixture 里没有：和真 gh 一样退出 1，是正常结果，不记 unsupported。 */
@@ -54,7 +55,8 @@ const unsupported = () => {
 };
 const API_PULL = /^repos\/\{owner\}\/\{repo\}\/pulls\/\d+\/(comments|reviews)$/;
 const API_REPLY = /^repos\/\{owner\}\/\{repo\}\/(pulls\/\d+\/comments\/\d+\/replies|issues\/\d+\/comments)$/;
-const API_COMPARE = /^repos\/\{owner\}\/\{repo\}\/compare\/[^/]+\.\.\.[^/]+$/;
+const API_PR_FILES = /^repos\/\{owner\}\/\{repo\}\/pulls\/(\d+)\/files$/;
+const API_COMPARE = /^repos\/\{owner\}\/\{repo\}\/compare\/\S+\.\.\.\S+$/; // 分支名可以带 /（feature/x）
 /** -f / -F 传的 key=value。 */
 const field = (key) => {
   for (let i = 0; i < args.length - 1; i++) if ((args[i] === "-f" || args[i] === "-F") && args[i + 1].startsWith(`${key}=`)) return args[i + 1].slice(key.length + 1);
@@ -97,6 +99,9 @@ if (cmd === "--version") {
   out({ data: { resolveReviewThread: { thread: { id: field("id"), isResolved: true } } } });
 } else if (cmd === "api" && API_REPLY.test(sub ?? "") && field("body") !== undefined) {
   out({ html_url: "https://github.com/acme/app/pull/0#fake-reply" });
+} else if (cmd === "api" && API_PR_FILES.test(sub ?? "")) {
+  // review 效果（工作流 G）：PR 合并后取改了哪些文件。
+  for (const f of fixture().files[API_PR_FILES.exec(sub)[1]] ?? []) process.stdout.write(`${f}\n`);
 } else if (cmd === "api" && API_COMPARE.test(sub ?? "")) {
   for (const f of fixture().compare) out({ filename: f.filename, patch: f.patch ?? "" });
 } else if (cmd === "run" && sub === "view" && /^\d+$/.test(ref ?? "") && args.includes("--log-failed")) {

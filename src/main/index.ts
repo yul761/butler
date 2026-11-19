@@ -4,7 +4,7 @@ import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveB
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { sanitizeTask } from "../shared/control";
 import { parseGateRequest, type GateRequest, type GateResult } from "../shared/gate";
@@ -157,6 +157,26 @@ import {
   baselinesConfig, checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, llmConfig, memoryOn,
   memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, sessionAdmission, SettingError, trackerTools,
 } from "./settings/settings-values";
+import { evidenceGuideLines, type GuideRepo } from "./prereview/guide-lines";
+import { PreReviewService } from "./prereview/service";
+import { makePreReviewHandler } from "./prereview/runner";
+import { defaultBase, fromCompare, prDiff } from "./prereview/diff";
+import { relevantLessons } from "./prereview/lessons";
+import type { ExecRun } from "./prereview/model";
+import { PreReviewRepo } from "./db/prereview-repo";
+import { AssessRepo } from "./db/assess-repo";
+import { ReviewEffectRepo } from "./db/review-effect-repo";
+import { PrPolicies } from "./assess/policies";
+import { AssessmentService } from "./assess/assessment-service";
+import { BriefService } from "./assess/brief-service";
+import { setStackBriefProvider, stackBriefProvider } from "./assess/stack-brief";
+import { ReviewEffectCollector } from "./review-effect/collector";
+import { reviewEffect } from "./review-effect/stats";
+import type { DiffFile, ReviewTarget } from "../shared/prereview";
+import type { RepoProfile } from "../shared/baselines";
+import type { CheckHitView } from "../shared/checks";
+import type { TicketPr } from "./db/ticket-prs-repo";
+import { registryTier } from "./routing/router";
 import { watcherGuideLines } from "./procs/watcher-policy";
 import { createProcServices, type ProcServices } from "./procs/proc-services";
 import { platformKill } from "./procs/orphans";
@@ -183,7 +203,7 @@ import { CiTriageRepo } from "./db/ci-triage-repo";
 import { CommentItemsRepo } from "./db/comment-items-repo";
 import { commentOnPr, replyToReviewComment, rerunFailed, resolveReviewThread, reviewThreads, runInfo } from "./tickets/gh-loop";
 import type { CiItem } from "./prwatch/ci-delivery";
-import { applyGhResolution, branchRuns, createPr, ghAvailable, probeGh, compareFiles, failedLog, mergedPrs, prInfo, prLessonDataDetail, prsForBranch, prStatus, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
+import { applyGhResolution, branchRuns, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, mergedPrs, prBody, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prStatus, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
 import { LessonsRepo } from "./db/lessons-repo";
 import { LessonRunsRepo } from "./db/lesson-runs-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
@@ -768,9 +788,11 @@ async function bootstrap(): Promise<void> {
   // 导入导出（契约 4.3）：备份放在 <BUTLER_HOME>/backups。
   const configBackupDir = join(paths.home, "backups");
   const configRegistry = defaultRegistry();
+  /** 导入配置之后（PR 策略可能变了）：工作流 G 接好以后换成重算就绪和风险。 */
+  let afterConfigApplied = (): void => undefined;
   const configIo = new ConfigIoService({
     db, repo: lessonsRepo, policies: admissionPolicies, recorder: batchRecorder, registry: configRegistry, butlerVersion: app.getVersion(),
-    backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), onApplied: () => (checkSnapshots.schedule(), routing.reloadConfig()), log: logger,
+    backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), onApplied: () => (checkSnapshots.schedule(), routing.reloadConfig(), afterConfigApplied()), log: logger,
   });
   // 仓库现状（工作流 E2）：扫描在 worker 线程里跑；模型补全走路由的 repo_scan_infer（中档，撞限换下一个）。
   const repoLocalPath = (slug: string): string | null => lessonsRepo.repo(slug)?.localPath ?? null;
@@ -812,6 +834,20 @@ async function bootstrap(): Promise<void> {
   });
   // 上次跑到一半退出的导出：建了的 worktree 和分支收回去。
   void checkExporter.recover().catch((e) => logger("check export: recovering interrupted exports failed", e));
+  /** 预审（工作流 G）开着吗。 */
+  const preReviewActive = (): boolean => settings.get("preReviewEnabled") === "1";
+  /** 「完成前交证据」那一段的仓库：worktree 目录名和档案（导入的、没扫过的没有档案）。 */
+  const guideRepos = (repoPaths: string[]): GuideRepo[] =>
+    repoPaths.map((root) => {
+      try {
+        const slug = repoIdentity.slugOf(root);
+        const b = slug ? baselineService.latest(slug) : null;
+        return { name: basename(root), profile: b && b.origin !== "imported" ? b.profile : null };
+      } catch (e) {
+        logger("session guide: evidence profile failed", e);
+        return { name: basename(root), profile: null };
+      }
+    });
   /** ticket session 的 guide 里的仓库档案：worktree 路径 → slug。 */
   const sessionProfile = (repoPaths: string[], hasLessons: boolean): string => {
     try {
@@ -872,6 +908,8 @@ async function bootstrap(): Promise<void> {
       return { decisions: ps.flatMap((p) => p.decisions.map((d) => d.statement)), learnings: ps.flatMap((p) => p.learnings), transcripts };
     },
     lang: () => currentLang(), now: Date.now, notify: () => notify(), log: logger,
+    // 复盘完了：review 效果里这个 PR 的评论来源归类（工作流 G）。reviewCollector 在下面才建好：回调里才用到。
+    onRunDone: (slug, n) => void reviewCollector.retroDone(slug, n).catch((e: unknown) => logger("review effect: after a retro failed", e)),
     // lessonAdmission 在下面才建：分析完成时（启动之后）才用到。
     onLessonsChanged: (slug) => lessonAdmission.scheduleAuto(slug),
   });
@@ -1138,11 +1176,13 @@ async function bootstrap(): Promise<void> {
       const lessons = kind === "ticket"
         ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger, { principles: settings.get("lessonsPrinciples") === "1", core: settings.get("lessonsCoreGuide") === "1" })
         : [];
+      const preReview = kind === "ticket" && preReviewActive();
       return writeSessionGuide(paths.mcp, currentLang(), kind, lessons, {
-        // 预审（工作流 G）还没接进来：指南里那句「PR 前会自动预审」先不写；G 合进来后把这里换成它的开关。
-        preReview: false,
+        // 预审（工作流 G）打开时：规矩段那句「PR 前会自动预审」，加上「完成前交证据」一段（按仓库档案列命令）。
+        preReview,
         extra: [
           ...(kind === "ticket" ? watcherGuideLines(currentLang(), repoPaths) : []),
+          ...(kind === "ticket" && preReview ? evidenceGuideLines(currentLang(), guideRepos(repoPaths)) : []),
           ...interruptGuideLines(currentLang(), kind, { choiceRule: settings.get("interruptChoiceRule") === "1", selfServe: settings.get("interruptSelfServe") === "1" }),
         ],
         profile: kind === "ticket" ? sessionProfile(repoPaths, lessons.length > 0) : "",
@@ -1990,7 +2030,170 @@ async function bootstrap(): Promise<void> {
     epicName: (id) => epics.get(id)?.name ?? null,
     jobs,
     repos: () => [...new Set(tickets.list().filter((t) => t.archivedAt === null).flatMap((t) => t.repos.map((r) => r.repoPath)))],
+    // 开栈底 PR 时的简报（工作流 G）：G 的 BriefService 建好后填进 stackBriefProvider；关着或没有时为 null。
+    briefProvider: stackBriefProvider,
   });
+  // 预审、证据、就绪、风险、简报、review 效果（工作流 G）。模型走路由（pre_review、evidence_verify、brief_summary），
+  // 对外动作（贴简报）过 4.8 的开关；预审在后台队列里跑，结论和 CI、评论走同一道递送。
+  const prPolicies = new PrPolicies({ db, products: { productsOf: (slug) => lessonsRepo.productsOf(slug), product: (id) => lessonsRepo.product(id) }, now: Date.now });
+  const preReviewRepo = new PreReviewRepo(db);
+  const assessRepo = new AssessRepo(db);
+  const reviewEffectRepo = new ReviewEffectRepo(db);
+  const prPolicyFor = (slug: string) => prPolicies.forSlug(slug);
+  const prProfile = (slug: string): RepoProfile | null => {
+    const b = baselineService.latest(slug);
+    return b && b.origin !== "imported" ? b.profile : null;
+  };
+  const prExec: ExecRun = (o) => execHeadlessJson(judgeDeps, o);
+  const ticketTitle = (key: string | null): string | null => (key ? (tickets.get(key)?.title ?? null) : null);
+  const prRecipient = (pr: TicketPr): string | null => {
+    if (pr.repoId === null || !pr.headBranch) return null;
+    const r = loopRecipient(pr.ticketKey, pr.repoId, pr.headBranch);
+    return r.ok ? r.sessionId : null;
+  };
+  const sessionChecks = (id: string | null): { absent: string | null; hits: CheckHitView[] } =>
+    id ? { absent: checksService.sessionCoverage([id])[id]?.absent ?? null, hits: checksService.hitsForSessions([id]) } : { absent: null, hits: [] };
+  /** PR 的改动：本地仓库里算（有这个提交时），不行就走 GitHub compare。 */
+  const prFilesOf = async (pr: TicketPr): Promise<DiffFile[] | null> => {
+    if (!pr.headSha || !pr.baseBranch) return null;
+    const cwd = prGhDir(pr);
+    const local = await prDiff(cwd, pr.headSha, pr.baseBranch).catch(() => null);
+    if (local) return local.files;
+    const rows = await compareFiles(cwd, pr.baseBranch, pr.headSha, 60_000, pr.slug);
+    return rows ? fromCompare(rows).files : null;
+  };
+  /** 这份代码（仓库 + 分支）开着的 PR：交证据、预审取 diff 时用。 */
+  const openPrFor = (ticketKey: string | null, target: ReviewTarget): TicketPr | null =>
+    (ticketKey ? ticketPrs.byTicket(ticketKey) : ticketPrs.all()).find((p) => p.state === "open" && p.slug === target.repoSlug && p.headBranch === target.branch) ?? null;
+  const preReview = new PreReviewService({
+    repo: preReviewRepo,
+    queue: bgQueue,
+    enabled: preReviewActive,
+    place: (id) => {
+      const s = sessions.get(id);
+      const cwd = sessions.head(id)?.cwd ?? null;
+      if (!s || !cwd) return null;
+      const repo = s.repoId !== null ? tickets.getRepo(s.repoId) : null;
+      return { cwd, ticketKey: s.ticketKey ?? null, slug: repoIdentity.slugOf(repo?.repoPath ?? cwd) };
+    },
+    git: git.git,
+    recipient: prRecipient,
+    cwdOf: (pr, sessionId) => (sessionId ? (sessions.head(sessionId)?.cwd ?? null) : null) ?? (pr.repoId !== null ? (tickets.getRepo(pr.repoId)?.repoPath ?? null) : null),
+    // 和度量的 butler_made 同一个口径（分支的主人、合并占位、在这个分支上干活的 session 是 Butler 开的）；度量还没算到的现场看。
+    isButlerPr: (pr) => {
+      const o = pr.repoId !== null && pr.headBranch ? branchOwners.get(pr.ticketKey, pr.repoId, pr.headBranch) : null;
+      if (o && sessions.get(o.sessionId)?.butler) return true;
+      return pr.headBranch !== null && sessions.listByTicket(pr.ticketKey).some((s) => s.butler && s.gitBranch === pr.headBranch);
+    },
+    openPrFor,
+    profile: prProfile,
+    policy: prPolicyFor,
+    guard: deliveryGuard,
+    deliver: loopDeliver,
+    busy: deliveringTo,
+    lang: () => currentLang(),
+    changed: () => notify(),
+    now: Date.now,
+    log: logger,
+  });
+  const assessment = new AssessmentService({
+    prs: ticketPrs,
+    preReviews: preReviewRepo,
+    repo: assessRepo,
+    gaps: (row) => preReview.gaps(row),
+    preReviewView: (row) => preReview.view(row),
+    preReviewEnabled: preReviewActive,
+    policy: prPolicyFor,
+    checks: sessionChecks,
+    sessionOf: prRecipient,
+    openCommentItems: (prId) => {
+      const pr = ticketPrs.get(prId);
+      if (!pr || !loopPolicyFor(pr.slug)["comments.enabled"]) return null;
+      return commentItems.byPr(prId).filter((c) => c.state === "pending" || c.state === "review" || c.state === "queued" || c.state === "delivered").length;
+    },
+    waitingOnGate: (pr) =>
+      pr.headBranch !== null && gateRepo.activeHolds().some((h) => gateRepo.waitersOf(h.id).some((w) => w.ticketKey === pr.ticketKey && w.branch === pr.headBranch)),
+    files: prFilesOf,
+    recordEvent,
+    lang: () => currentLang(),
+    changed: () => notify(),
+    now: Date.now,
+    log: logger,
+  });
+  const briefs = new BriefService({
+    repo: assessRepo,
+    preReviews: preReviewRepo,
+    prs: ticketPrs,
+    assessment,
+    gaps: (row) => preReview.gaps(row),
+    policy: prPolicyFor,
+    ticketTitle,
+    exec: prExec,
+    external: externalActions,
+    ghCwd: (pr) => prGhDir(pr),
+    gh: { body: (cwd, ref) => prBody(cwd, ref), edit: (o) => editPrBody(o) },
+    lang: () => currentLang(),
+    changed: () => notify(),
+    now: Date.now,
+    log: logger,
+  });
+  setStackBriefProvider(briefs.briefProvider);
+  bgQueue.register("pre_review", makePreReviewHandler({
+    repo: preReviewRepo,
+    diff: async (row) => {
+      const pr = row.prId !== null ? ticketPrs.get(row.prId) : openPrFor(row.ticketKey, row.target);
+      // 交证据早于开 PR：没有 base 就用仓库的默认分支。
+      const base = row.base ?? pr?.baseBranch ?? (row.cwd ? await defaultBase(row.cwd).catch(() => null) : null);
+      if (row.cwd && base) {
+        const local = await prDiff(row.cwd, row.target.headSha, base).catch(() => null);
+        if (local) return local;
+      }
+      if (!pr?.baseBranch) return null;
+      const rows = await compareFiles(prGhDir(pr), pr.baseBranch, row.target.headSha, 60_000, pr.slug);
+      return rows ? fromCompare(rows) : null;
+    },
+    lessons: (slug, files) => relevantLessons(lessonsRepo, [slug], files),
+    checks: sessionChecks,
+    ci: (prId) => {
+      const ci = prId !== null ? ticketPrs.get(prId)?.ci : null;
+      return ci === "pending" || ci === "passing" || ci === "failing" ? ci : null;
+    },
+    profile: prProfile,
+    policy: prPolicyFor,
+    ticketTitle,
+    producer: (id) => {
+      const model = id ? sessions.get(id)?.model : null;
+      const tier = model ? registryTier(routing.config(), model) : null;
+      return model && tier ? { model, tier } : null;
+    },
+    exec: prExec,
+    rerun: { git: git.git },
+    addDirs: (row) => (row.ticketKey ? tickets.listRepos(row.ticketKey).map((r) => r.repoPath).filter((p) => p !== row.cwd) : []),
+    lang: () => currentLang(),
+    after: async (row) => {
+      if (row.prId !== null) await assessment.assess(row.prId);
+      await briefs.generate(row);
+    },
+    deliver: async (row) => {
+      await preReview.deliver(row);
+    },
+    now: Date.now,
+    log: logger,
+  }));
+  const reviewCollector = new ReviewEffectCollector({
+    db,
+    repo: reviewEffectRepo,
+    files: (pr) => {
+      const repo = pr.repoId !== null ? tickets.getRepo(pr.repoId) : null;
+      return prFileNames(repo ? ticketService.ghWorkDir(repo) : homedir(), pr.number, 60_000, pr.slug);
+    },
+    now: Date.now,
+    log: logger,
+  });
+  const openPrIds = (): number[] => ticketPrs.all().filter((p) => p.state === "open").map((p) => p.id);
+  const reassessAll = (): void => void assessment.assessAll(openPrIds()).catch((e: unknown) => logger("assess: reassessing open PRs failed", e));
+  prPolicies.onChange(reassessAll);
+  afterConfigApplied = reassessAll;
   const prWatcher = new PrWatcher({
     prs: ticketPrs,
     branches: branchWatch,
@@ -2010,6 +2213,7 @@ async function bootstrap(): Promise<void> {
       // 栈底合并了：整栈 rebase、下一层升成栈底（工作流 K；失败只记日志，不让 lessons 那边重来）。
       lessonRunner.merged({ repoPath, slug: pr.slug }, pr.number);
       if (repoPath) void stackService.onMerged({ url: pr.url, number: pr.number, headSha: pr.headSha, headBranch: pr.headBranch }, repoPath).catch((e: unknown) => logger(`stacks: after ${pr.url} merged failed`, e));
+      void reviewCollector.collect(pr.id).catch((e: unknown) => logger("review effect: collecting failed", e));
     },
     // PR 的状态或 review 变了：在最新的 handoff 上换掉 prs，存成一条 refresh。ticket 状态、PR 标签、合并后清理 worktree 都照旧走 ingest。
     onPrChanged: (key) => {
@@ -2027,13 +2231,26 @@ async function bootstrap(): Promise<void> {
       });
     },
     onCiSettled: (item) => void ciDelivery.settled(item).catch((e: unknown) => logger("ci delivery: handing over a CI result failed", e)),
-    onPrRead: (rows, pr, where) => commentLoop.observe(rows, pr, where),
+    onPrRead: (rows, pr, where) => {
+      for (const r of rows) {
+        try {
+          preReview.onPrSeen(r);
+        } catch (e) {
+          logger("pre-review: queuing for a PR failed", e);
+        }
+      }
+      void assessment.observe(rows, pr).catch((e: unknown) => logger("assess: observing a PR failed", e));
+      return commentLoop.observe(rows, pr, where);
+    },
     onHumanComment: (ticketKey, prNumber, count) => {
       for (let i = 0; i < count; i++) notifier?.emit("review_comment", { ticketKey, prNumber });
     },
     notify,
     // 每轮之后再递一遍：session 停着但当时用户在打字、有草稿的，安静下来之后在这里递出去。
-    roundDone: () => void flushCi(),
+    roundDone: () => {
+      void flushCi();
+      void preReview.flush().catch((e: unknown) => logger("pre-review: flush failed", e));
+    },
     now: Date.now,
     log: logger,
   });
@@ -2367,6 +2584,8 @@ async function bootstrap(): Promise<void> {
       if (key === "routingThresholds" || key === "routingQuotas") costCheckSoon();
       // 打断减少的开关第一次打开：Effect 页前后对比从这里分界（ws-j）。
       if ((key === "interruptChoiceRule" || key === "interruptChoiceDefaults" || key === "interruptSelfServe") && settings.get(key) === "1") markInterruptEffective(Date.now());
+      // 预审开关变了：就绪条件跟着变（工作流 G）。
+      if (key === "preReviewEnabled") reassessAll();
     },
     // 共享 MCP（WS-M H）：打开就启动 hub（之后开的 session 用它）；关掉时接着它的 session 退完了再停。
     sharedMcpChanged: () => {
@@ -2435,6 +2654,29 @@ async function bootstrap(): Promise<void> {
         }
       },
       policyLayers: () => stackPolicy.layers(),
+    },
+    review: {
+      ticket: (key) => assessment.ticketView(key),
+      run: (prId) => {
+        const pr = ticketPrs.get(prId);
+        if (!pr) return { ok: false, reason: "no_pr" };
+        return preReview.manual(pr) === null ? { ok: false, reason: "no_head" } : { ok: true };
+      },
+      regenerate: async (prId) => {
+        const pr = ticketPrs.get(prId);
+        if (!pr) return { ok: false, reason: "no_pr" };
+        const row = assessment.latestPreReview(pr);
+        if (!row) return { ok: false, reason: "no_pre_review" };
+        return (await briefs.generate(row)) ? { ok: true } : { ok: false, reason: "failed" };
+      },
+      post: async (prId) => {
+        const r = await briefs.post(prId, true);
+        return r.ok ? { ok: true, url: r.url } : r;
+      },
+      policyView: (scope) => prPolicies.view(scope),
+      policySet: (scope, overrides) => prPolicies.setLayer(scope, overrides),
+      effect: (days) => reviewEffect(db, effectDays(days), Date.now()),
+      queue: () => assessment.queue(),
     },
     checks: {
       act: (a) => checksService.act(a),
@@ -2637,6 +2879,18 @@ async function bootstrap(): Promise<void> {
           refresh: (id) => void featureRunner.runManual(id).then(notify, (e: unknown) => logger(`control: refreshing the summary of feature ${id} failed`, e)),
         },
         messages: butlerMessages,
+        assessment: {
+          summaries: (ids) => assessRepo.summaries(ids),
+          view: (ref) => {
+            const id = /^\d+$/.test(ref.trim()) ? Number(ref.trim()) : null;
+            const pr = id !== null ? ticketPrs.get(id) : (ticketPrs.byUrl(ref.trim())[0] ?? null);
+            return pr ? assessment.view(pr) : null;
+          },
+        },
+      },
+      preReview: {
+        submit: (id, raw) => preReview.submitEvidence(id, raw),
+        latest: (id) => preReview.latestForSession(id),
       },
       // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。
       kill: (termId) => pty.kill(termId),
@@ -2713,6 +2967,13 @@ async function bootstrap(): Promise<void> {
     logger("backtest: scheduling the review failed", e);
   }
   bgQueue.start();
+  // 预审（工作流 G）：上次没跑完、任务已经不在了的收尾；review 效果补上漏掉的已合并 PR。
+  preReview.sweep((jobId) => {
+    const j = bgRepo.get(jobId);
+    return j !== null && (j.state === "queued" || j.state === "running");
+  });
+  void preReview.flush().catch((e: unknown) => logger("pre-review: flush failed", e));
+  void reviewCollector.backfill().catch((e: unknown) => logger("review effect: backfill failed", e));
   // 启动时看一遍：上次退出前暂停着的接着暂停，托盘和「现在」页马上显示。
   void costBreakerInst.check().then(() => costBreakerInst.views().length > 0 && costChanged()).catch((e: unknown) => logger("cost: the first check failed", e));
   void runDiscovery();

@@ -57,7 +57,7 @@ export const BACKGROUND_KINDS: Record<BgKind, BgKindDef> = {
   lesson_backfill: def("lesson_backfill", "C", "low", "lesson_analyze", { concurrency: 2 }),
   lesson_admission: def("lesson_admission", "D", "normal", "lesson_classify"),
   backtest: def("backtest", "F", "low", "backtest_judge"),
-  pre_review: def("pre_review", "G", "normal", "pre_review"),
+  pre_review: def("pre_review", "G", "high", "pre_review", { idleEligible: false }),
   repo_scan: def("repo_scan", "wizard", "low", "repo_scan_infer"),
   intake: def("intake", "N", "high", "intake_classify", { idleEligible: false, interruptible: false, opensSession: true }),
 };

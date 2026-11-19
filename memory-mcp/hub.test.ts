@@ -94,7 +94,7 @@ describe("Hub", () => {
     const hub = new Hub({ backend: (s) => fakeBackend(s, []) });
     hub.apply({ op: "add", token: T1, route: { server: "sessions", env: { BUTLER_TICKET: "A", BUTLER_MEMBER: "1", BUTLER_CONTROL_REQUESTS: "/r", BUTLER_CONTROL_RESULTS: "/s" }, from: "t" } });
     const r = (await hub.handler(T1)!({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-    expect(r.result.tools.map((t) => t.name)).toEqual(["ask_user", "report"]);
+    expect(r.result.tools.map((t) => t.name)).toEqual(["submit_evidence", "pre_review_result", "ask_user", "report"]);
     // 少了控制目录：不建，也不报错。
     hub.apply({ op: "add", token: T2, route: { server: "sessions", env: { BUTLER_TICKET: "A" }, from: null } });
     expect(hub.handler(T2)).toBeNull();

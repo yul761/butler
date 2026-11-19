@@ -5,6 +5,7 @@ import { modelsSection } from "./models-section";
 import { baselineRulesSection, baselinesSection } from "./baselines-section";
 import { permissionsSection } from "./permissions-section";
 import { stacksSection } from "./stacks-section";
+import { prPoliciesSection } from "./pr-policies-section";
 
 export { ConfigIoService, type ConfigIoDeps, type BackupKind } from "./service";
 export { SectionRegistry, type ConfigSection } from "./registry";
@@ -27,5 +28,7 @@ export function defaultRegistry(): SectionRegistry {
   r.register(permissionsSection);
   // K：栈策略的三层覆盖（content: "config"，只在「全部」里）。
   r.register(stacksSection);
+  // G：就绪度、证据、风险的三层策略。
+  r.register(prPoliciesSection);
   return r;
 }

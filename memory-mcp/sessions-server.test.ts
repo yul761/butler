@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
 import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MESSAGE_LIMIT, REASON_LIMIT, START_INSTRUCTIONS_LIMIT } from "../src/shared/control";
 import {
-  BUTLER_TOOLS, BUTLER_TOOLS_EN, EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, LIST_STACKS_TOOL, STACK_TOOLS, STACK_TOOLS_EN, SessionsServer, serveStdio, TOOLS, TOOLS_EN,
+  BUTLER_TOOLS, BUTLER_TOOLS_EN, EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, LIST_STACKS_TOOL, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, STACK_TOOLS_EN, SessionsServer, serveStdio, TOOLS, TOOLS_EN,
   type SessionsServerOptions,
 } from "./sessions-server";
 
@@ -516,15 +516,39 @@ describe("refresh_session (plan 16)", () => {
 });
 
 describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
-  it("a member (normal ticket session) only has ask_user and report, in both languages", async () => {
-    expect(await tools(setup(2000, { ticketKey: "P-1", member: true }).server)).toEqual([...INBOX_TOOLS]);
+  it("a member (normal ticket session) has submit_evidence, pre_review_result, ask_user and report, in both languages", async () => {
+    expect(await tools(setup(2000, { ticketKey: "P-1", member: true }).server)).toEqual([...MEMBER_TOOLS, ...INBOX_TOOLS]);
     const en = await tools(setup(2000, { ticketKey: "P-1", member: true }, "en").server);
-    expect(en).toEqual([...INBOX_TOOLS_EN]);
+    expect(en).toEqual([...MEMBER_TOOLS_EN, ...INBOX_TOOLS_EN]);
+    expect(MEMBER_TOOLS_EN.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]))
+      .toEqual(MEMBER_TOOLS.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]));
+    for (const t of MEMBER_TOOLS) expect(t.description).toMatch(/[\u4e00-\u9fff]/);
     expect(/[一-鿿]/.test(JSON.stringify(en))).toBe(false);
     // 英文版名字和必填参数一样；描述告诉模型「要我继续吗」这类不要用 ask_user。
     expect(INBOX_TOOLS_EN.map((t) => [t.name, t.inputSchema.required])).toEqual(INBOX_TOOLS.map((t) => [t.name, t.inputSchema.required]));
     expect(INBOX_TOOLS[0].description).toContain("要我继续吗");
     expect(INBOX_TOOLS_EN[0].description).toContain("shall I continue?");
+  });
+
+  it("a member sends submit_evidence cleaned up, and pre_review_result (ws-g)", async () => {
+    const { server, answer, requestsDir } = setup(2000, { ticketKey: "P-1", member: true });
+    const base = { v: 1, ticketKey: "P-1", from: "boss" };
+    const sub = callTool(server, "submit_evidence", {
+      checks: [{ name: "unit", category: "test", command: "pnpm test", result: "pass", output: "12 passed" }, { name: "junk" }],
+      acceptance: [{ criterion: "AC1", how: "added a branch" }],
+    });
+    expect(await answer({ v: 1, ok: true, value: { note: "queued" } })).toEqual({
+      ...base, op: "submit_evidence",
+      evidence: { checks: [{ name: "unit", category: "test", command: "pnpm test", result: "pass", output: "12 passed" }], acceptance: [{ criterion: "AC1", how: "added a branch" }] },
+    });
+    await sub;
+    const res = callTool(server, "pre_review_result");
+    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "pre_review_result" });
+    await res;
+    // 什么成形的都没有：不发。
+    const bad = (await callTool(server, "submit_evidence", { checks: [{ name: "x" }], acceptance: [] })) as { result: { isError?: boolean } };
+    expect(bad.result.isError).toBe(true);
+    expect(existsSync(requestsDir) ? readdirSync(requestsDir) : []).toEqual([]);
   });
 
   it("a member cannot call coordinator tools; nothing is sent", async () => {
@@ -579,7 +603,7 @@ describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
 });
 
 describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
-  const NAMES = ["list_epics", "list_features", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "send_message", "refresh_session", "progress_overview", "refresh_feature_summary", "metrics_overview"];
+  const NAMES = ["list_epics", "list_features", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "send_message", "refresh_session", "progress_overview", "refresh_feature_summary", "metrics_overview", "pr_assessment"];
 
   it("lists only read tools, send_message and refresh_session, plus ask_user and report, in both languages", async () => {
     expect(await tools(setup(2000, { butler: true }).server)).toEqual([...BUTLER_TOOLS, ...STACK_TOOLS, ...INBOX_TOOLS]);
@@ -613,6 +637,9 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
     const b = callTool(server, "list_tickets");
     expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ ...base, op: "list_tickets" });
     await b;
+    const pa = callTool(server, "pr_assessment", { pr: 12 });
+    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "pr_assessment", pr: "12" });
+    await pa;
     const c = callTool(server, "session_activity", { session: "e1" });
     expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "session_activity", session: "e1" });
     await c;

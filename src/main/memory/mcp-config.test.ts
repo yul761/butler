@@ -186,6 +186,7 @@ describe("sessions tools allowed without a prompt (BTL-190 2+3)", () => {
       "mcp__butler-sessions__list_prs", "mcp__butler-sessions__list_sessions", "mcp__butler-sessions__session_activity",
       "mcp__butler-sessions__list_inbox", "mcp__butler-sessions__progress_overview", "mcp__butler-sessions__metrics_overview",
       "mcp__butler-sessions__list_stacks",
+      "mcp__butler-sessions__submit_evidence", "mcp__butler-sessions__pre_review_result", "mcp__butler-sessions__pr_assessment",
     ]);
     // 会动别的终端或建东西的不在里面。
     for (const t of ["start_session", "end_session", "send_message", "refresh_session", "refresh_feature_summary", "create_ticket", "create_feature", "start_feature", "stack_define", "stack_rebase", "stack_layer_mode"]) {

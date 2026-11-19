@@ -133,3 +133,26 @@ describe("outward actions audit", () => {
     expect(html).toContain(S.externalOutcome.skipped);
   });
 });
+
+describe("review badges and queue on the Progress page (ws-g)", () => {
+  const q = (prId: number, o: Partial<import("../../../shared/prereview").ReviewQueueItem> = {}) => ({
+    prId, ticketKey: "T-1", url: `u${prId}`, number: prId, title: `PR ${prId}`, repoSlug: "o/app", risk: "high" as const, ready: false,
+    missing: [{ key: "evidence" as const, state: "fail" as const, detail: "" }], openedAt: 1, ...o,
+  });
+
+  it("hides the queue until it is read, then lists only PRs in this view with badges", () => {
+    const none = renderToStaticMarkup(createElement(ProgressBody, { view: view(), onOpenTicket: noop }));
+    expect(none).not.toContain('data-testid="progress-review-queue"');
+    const html = renderToStaticMarkup(createElement(ProgressBody, { view: view(), onOpenTicket: noop, queue: [q(1), q(99)] }));
+    expect(html).toContain('data-testid="progress-review-queue"');
+    expect(html).toContain('data-testid="review-queue-1"');
+    expect(html).not.toContain('data-testid="review-queue-99"');
+    expect(html).toContain(S.rv.riskBadge(S.rv.level.high));
+    expect(html).toContain(S.rv.missing(S.rv.cond.evidence));
+  });
+
+  it("says so when nothing waits for review", () => {
+    const html = renderToStaticMarkup(createElement(ProgressBody, { view: view(), onOpenTicket: noop, queue: [] }));
+    expect(html).toContain(S.rv.queueNone);
+  });
+});
