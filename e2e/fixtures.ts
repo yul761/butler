@@ -83,6 +83,8 @@ export interface FakeGhFixture {
   logs?: Record<string, string>;
   /** gh api …/compare/<base>...<head> 的文件。 */
   compare?: { filename: string; patch?: string }[];
+  /** gh api …/pulls/<n>/files 的文件名（review 效果，工作流 G），键是 PR 号。 */
+  files?: Record<string, string[]>;
   /** 栈（工作流 K）：gh pr list --state open（自动检测栈）的结果；gh issue create 打印的链接。 */
   open?: PrViewFixture[];
   issueCreated?: string;
