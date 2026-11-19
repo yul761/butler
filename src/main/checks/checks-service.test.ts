@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { BacktestRepo } from "../db/backtest-repo";
 import { memDb } from "../test-utils";
 import { LessonsRepo } from "../db/lessons-repo";
 import { SessionsRepo } from "../db/sessions-repo";
@@ -198,5 +199,29 @@ describe("ChecksService.act", () => {
     const lid = lessons.addLesson({ scope: { kind: "repo", slug: "acme/web" }, text: "t", why: "w", at: 1, source: { prNumber: 1, url: null, slug: "acme/web", runId: null } });
     expect(svc.act({ op: "classify", lessonId: lid, checkability: "checkable" })).toMatchObject({ ok: true, affected: 1 });
     expect(svc.act({ op: "verdict", hitId: 999, verdict: "true_positive" })).toEqual({ ok: false, reason: "not_found" });
+  });
+});
+
+describe("bypass and ignored-block stats (workstream F)", () => {
+  const DAY = 24 * 3600_000;
+  it("counts blocks nobody fixed within a day, and bypass records by key", () => {
+    const { db, svc } = setup();
+    svc.repo.insertHits([
+      { key: "h:0", rec: hit({ file: "src/a.ts", at: 1000 }) },
+      { key: "h:1", rec: hit({ file: "src/a.ts", outcome: "resolved", blocked: false, at: 2000 }) },
+      { key: "h:2", rec: hit({ file: "src/b.ts", at: 1000 }) },
+      { key: "h:3", rec: hit({ file: "src/c.ts", at: 1000, session: "s2" }) },
+      { key: "h:4", rec: hit({ file: "src/c.ts", outcome: "resolved", blocked: false, at: 3000, session: "s3" }) },
+      { key: "h:5", rec: hit({ file: "src/d.ts", blocked: false, at: 1000 }) },
+    ]);
+    expect(svc.repo.stats(5000).get("builtin:comment_policy")).toMatchObject({ ignored: 0, bypassed: 0 });
+    // b 没人改；c 是别的 session 改的，不算这个 session 改了。d 没拦，不算。
+    expect(svc.repo.stats(1000 + DAY + 1).get("builtin:comment_policy")).toMatchObject({ ignored: 2 });
+    const bt = new BacktestRepo(db);
+    const by = { kind: "bypass" as const, checkId: 1, checkKey: "builtin:comment_policy", slug: "acme/web", file: "", line: null, how: "no_verify" as const, detail: "git commit --no-verify", session: "s1", at: 4000 };
+    expect(bt.insertBypassLogs([{ key: "b:0", rec: by }, { key: "b:1", rec: { ...by, checkId: 999, how: "tamper" } }])).toBe(2);
+    expect(bt.insertBypassLogs([{ key: "b:0", rec: by }])).toBe(0);
+    expect(svc.repo.stats(5000).get("builtin:comment_policy")?.bypassed).toBe(2);
+    expect(bt.bypasses(1, 0)).toEqual({ total: 1, how: { no_verify: 1 } });
   });
 });

@@ -59,13 +59,16 @@ export const where = (s: CheckScope): [string, (string | number)[]] =>
       : [`scope_kind = 'repo' AND repo_slug = ?`, [s.slug]];
 
 export const emptyStats = (): CheckStats => ({
-  fails: 0, blocked: 0, resolved: 0, timeouts: 0, unavailable: 0, errors: 0, falsePositives: 0, truePositives: 0, sessions: 0, lastHitAt: null, lastUnavailable: null,
+  fails: 0, blocked: 0, resolved: 0, timeouts: 0, unavailable: 0, errors: 0, falsePositives: 0, truePositives: 0, sessions: 0, lastHitAt: null, lastUnavailable: null, bypassed: 0, ignored: 0,
 });
 
 /** 命中记录最多保留这么久（毫秒）。 */
 export const HIT_RETENTION_MS = 365 * 24 * 3600 * 1000;
 
 /** checks 和 check_hits 的读写（契约 4.5）。批次由调用方（ChecksService）开。 */
+/** 拦下以后这么久还没改掉就算「没理会」。 */
+export const IGNORED_AFTER_MS = 24 * 3600_000;
+
 export class ChecksRepo {
   constructor(private readonly db: Db) {}
 
@@ -167,8 +170,8 @@ export class ChecksRepo {
     return n;
   }
 
-  /** 每个 key 的原始命中数据。 */
-  stats(): Map<string, CheckStats> {
+  /** 每个 key 的原始命中数据。now 用来判断拦下的失败过没过一天（算「没理会」）。 */
+  stats(now = Date.now()): Map<string, CheckStats> {
     const out = new Map<string, CheckStats>();
     const rows = this.db
       .prepare(
@@ -184,8 +187,17 @@ export class ChecksRepo {
       out.set(String(r.check_key), {
         fails: Number(r.fails ?? 0), blocked: Number(r.blocked ?? 0), resolved: Number(r.resolved ?? 0), timeouts: Number(r.timeouts ?? 0),
         unavailable: Number(r.unavailable ?? 0), errors: Number(r.errors ?? 0), falsePositives: Number(r.fp ?? 0), truePositives: Number(r.tp ?? 0),
-        sessions: Number(r.sessions ?? 0), lastHitAt: r.last === null ? null : Number(r.last), lastUnavailable: null,
+        sessions: Number(r.sessions ?? 0), lastHitAt: r.last === null ? null : Number(r.last), lastUnavailable: null, bypassed: 0, ignored: 0,
       });
+    }
+    for (const [key, n] of this.ignoredBlocks({ now })) {
+      const s = out.get(key);
+      if (s) s.ignored = n;
+    }
+    const by = this.db.prepare(`SELECT check_key, COUNT(*) AS n FROM check_bypasses GROUP BY check_key`).all() as { check_key: string; n: number }[];
+    for (const b of by) {
+      const s = out.get(b.check_key);
+      if (s) s.bypassed = Number(b.n);
     }
     const un = this.db
       .prepare(`SELECT check_key, at, detail FROM check_hits h WHERE outcome = 'unavailable' AND at = (SELECT MAX(at) FROM check_hits WHERE check_key = h.check_key AND outcome = 'unavailable')`)
@@ -195,6 +207,23 @@ export class ChecksRepo {
       if (s) s.lastUnavailable = { at: Number(u.at), detail: u.detail };
     }
     return out;
+  }
+
+  /**
+   * 「没理会」的拦截（工作流 F 第 7.1 节）：拦下的失败过了一天，同一个 session 在同一个文件上还没有这条检查的 resolved。
+   * 按 key 计数；since 只数这之后的失败；checkKey 只看一条。
+   */
+  ignoredBlocks(q: { now: number; since?: number; checkKey?: string }): Map<string, number> {
+    const rows = this.db
+      .prepare(
+        `SELECT h.check_key AS check_key, COUNT(*) AS n FROM check_hits h
+         WHERE h.outcome = 'fail' AND h.blocked = 1 AND h.at <= ? AND h.at >= ? AND (? IS NULL OR h.check_key = ?)
+           AND NOT EXISTS (SELECT 1 FROM check_hits r WHERE r.check_key = h.check_key AND r.file = h.file AND r.outcome = 'resolved'
+                           AND r.at >= h.at AND r.session_id IS h.session_id)
+         GROUP BY h.check_key`,
+      )
+      .all(q.now - IGNORED_AFTER_MS, q.since ?? 0, q.checkKey ?? null, q.checkKey ?? null) as { check_key: string; n: number }[];
+    return new Map(rows.map((r) => [r.check_key, Number(r.n)]));
   }
 
   hits(q: { checkKey?: string; sessionIds?: string[]; limit?: number }): CheckHitView[] {

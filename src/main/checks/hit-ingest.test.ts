@@ -56,3 +56,28 @@ describe("HitIngest", () => {
     expect(readdirSync(dir)).toEqual(["2.jsonl"]);
   });
 });
+
+describe("bypass records (workstream F)", () => {
+  const bypass = { kind: "bypass", checkId: 3, checkKey: "ck_1", slug: "a/b", file: "src/x.ts", line: 4, how: "suppress", detail: "// eslint-disable-next-line", session: "s1", at: 9 };
+
+  it("parses bypass records and rejects unknown ways", () => {
+    expect(parseCheckLogRecord(JSON.stringify(bypass))).toEqual(bypass);
+    expect(parseCheckLogRecord(JSON.stringify({ ...bypass, file: "", line: null, how: "no_verify" }))).toMatchObject({ how: "no_verify", line: null });
+    expect(parseCheckLogRecord(JSON.stringify({ ...bypass, how: "sneaky" }))).toBeNull();
+    expect(parseCheckLogRecord(JSON.stringify({ ...bypass, checkKey: "" }))).toBeNull();
+  });
+
+  it("hands bypasses to insertBypasses with their own keys, separately from hits", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "butler-hits-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "3.jsonl"), [JSON.stringify(hit), JSON.stringify(bypass)].join("\n"));
+    const hits: string[] = [];
+    const bys: string[] = [];
+    const ing = new HitIngest({
+      dir, insertHits: (r) => (hits.push(...r.map((x) => x.key)), r.length), insertBypasses: (r) => (bys.push(...r.map((x) => `${x.key}:${x.rec.how}`)), r.length), markAbsent: () => {},
+    });
+    expect(await ing.drain()).toBe(2);
+    expect(hits).toEqual(["3.jsonl:0"]);
+    expect(bys).toEqual(["3.jsonl:1:suppress"]);
+  });
+});

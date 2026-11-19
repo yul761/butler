@@ -5,8 +5,10 @@ import {
   CHECK_ABSENCE_REASONS, CHECK_MODES, CHECK_OUTCOMES, CHECK_SEVERITIES,
   type CheckAbsenceReason, type CheckLogRecord,
 } from "../../shared/checks";
+import { BYPASS_HOWS } from "../../shared/backtest";
 
 type Hit = Extract<CheckLogRecord, { kind: "hit" }>;
+export type BypassLog = Extract<CheckLogRecord, { kind: "bypass" }>;
 
 const isStr = (v: unknown, max = 2000): v is string => typeof v === "string" && v.length <= max;
 const inList = <T extends string>(list: readonly T[], v: unknown): v is T => typeof v === "string" && (list as readonly string[]).includes(v);
@@ -28,6 +30,15 @@ export function parseCheckLogRecord(line: string): CheckLogRecord | null {
     return inList(CHECK_ABSENCE_REASONS, r.reason) ? { kind: "absent", reason: r.reason as CheckAbsenceReason, session, at: r.at } : null;
   }
   if (r.kind === "present") return { kind: "present", session, at: r.at };
+  if (r.kind === "bypass") {
+    if (!Number.isSafeInteger(r.checkId) || !isStr(r.checkKey, 200) || !r.checkKey || !isStr(r.slug, 300) || !isStr(r.file, 2000) || !inList(BYPASS_HOWS, r.how)) return null;
+    const ln = r.line === null || r.line === undefined ? null : Number.isSafeInteger(r.line) && (r.line as number) > 0 ? (r.line as number) : undefined;
+    if (ln === undefined) return null;
+    return {
+      kind: "bypass", checkId: r.checkId as number, checkKey: r.checkKey, slug: r.slug, file: r.file, line: ln, how: r.how,
+      detail: typeof r.detail === "string" ? r.detail.slice(0, 300) : "", session, at: r.at,
+    };
+  }
   if (r.kind !== "hit") return null;
   if (!Number.isSafeInteger(r.checkId) || !isStr(r.checkKey, 200) || !r.checkKey || !isStr(r.slug, 300) || !isStr(r.file, 2000)) return null;
   const line_ = r.line === null || r.line === undefined ? null : Number.isSafeInteger(r.line) && (r.line as number) > 0 ? (r.line as number) : undefined;
@@ -43,6 +54,8 @@ export function parseCheckLogRecord(line: string): CheckLogRecord | null {
 export interface HitIngestOptions {
   dir: string;
   insertHits: (rows: { key: string; rec: Hit }[]) => number;
+  /** 绕过记录（工作流 F）：没给就丢掉。 */
+  insertBypasses?: (rows: { key: string; rec: BypassLog }[]) => number;
   /** reason 为 null：又检查上了，清掉标记。 */
   markAbsent: (session: string, reason: CheckAbsenceReason | null) => void;
   /** 有新的命中写进库之后（页面刷新）。 */
@@ -104,11 +117,13 @@ export class HitIngest {
     let n = 0;
     if (text.length <= MAX_FILE) {
       const hits: { key: string; rec: Hit }[] = [];
+      const bypasses: { key: string; rec: BypassLog }[] = [];
       text.split("\n").forEach((line, i) => {
         if (!line.trim()) return;
         const rec = parseCheckLogRecord(line);
         if (!rec) return;
         if (rec.kind === "hit") hits.push({ key: `${name}:${i}`, rec });
+        else if (rec.kind === "bypass") bypasses.push({ key: `${name}:${i}`, rec });
         else if (rec.session) {
           try {
             this.o.markAbsent(rec.session, rec.kind === "absent" ? rec.reason : null);
@@ -119,6 +134,7 @@ export class HitIngest {
       });
       // 写库失败（库忙之类）就留着文件下次再来；ingest_key 保证不会重复。
       n = this.o.insertHits(hits);
+      if (bypasses.length && this.o.insertBypasses) n += this.o.insertBypasses(bypasses);
     } else this.o.log?.(`checks: ${name} is too large, dropped`);
     try {
       await unlink(path);

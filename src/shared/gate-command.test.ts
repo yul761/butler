@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyGateCommand, classifyPush, classifyShip } from "./gate-command";
+import { classifyBypass, classifyGateCommand, classifyPush, classifyShip } from "./gate-command";
 
 describe("classifyGateCommand", () => {
   it("recognises gh pr merge", () => {
@@ -127,5 +127,47 @@ describe("classifyShip", () => {
     expect(classifyShip("git stash push")).toEqual([]);
     expect(classifyShip("gh pr view 3")).toEqual([]);
     expect(classifyShip("echo 'gh pr create'")).toEqual([]);
+  });
+});
+
+describe("classifyBypass", () => {
+  const hows = (c: string) => classifyBypass(c).map((b) => b.how);
+
+  it("recognises --no-verify and commit -n", () => {
+    expect(hows("git commit --no-verify -m wip")).toEqual(["no_verify"]);
+    expect(hows("git commit -nm wip")).toEqual(["no_verify"]);
+    expect(hows("cd repo && git push --no-verify origin HEAD")).toEqual(["no_verify"]);
+    expect(hows("git -C repo merge --no-verify main")).toEqual(["no_verify"]);
+    expect(hows("git commit -m 'no verify needed'")).toEqual([]);
+    expect(hows("git push -n origin main")).toEqual([]);
+  });
+
+  it("recognises turning git hooks off", () => {
+    expect(hows("git -c core.hooksPath=/dev/null commit -m x")).toEqual(["hooks_off"]);
+    expect(hows("git config core.hooksPath /tmp/empty")).toEqual(["hooks_off"]);
+    expect(hows("git config --get core.hooksPath")).toEqual([]);
+    expect(hows("git config core.hooksPath")).toEqual([]);
+    expect(hows("HUSKY=0 git commit -m x")).toEqual(["hooks_off"]);
+    expect(hows("SKIP=lint git commit -m x")).toEqual(["hooks_off"]);
+    expect(hows("export HUSKY=0; git commit -m x")).toEqual(["hooks_off"]);
+    expect(hows("HUSKY=1 git commit -m x")).toEqual([]);
+  });
+
+  it("recognises tampering with Butler's checks or Claude's hook settings, not reading them", () => {
+    expect(hows("rm ~/.butler/checks/snapshot.json")).toEqual(["tamper"]);
+    expect(hows("echo '{}' > ~/.butler/checks/snapshot.json")).toEqual(["tamper"]);
+    expect(hows("sed -i '' 's/enforce/warn/' ~/.butler/checks/snapshot.json")).toEqual(["tamper"]);
+    expect(hows("cp /tmp/s.json .claude/settings.local.json".replace(".claude", "/x/.claude"))).toEqual(["tamper"]);
+    expect(hows("BUTLER_HOME=/tmp/elsewhere git commit -m x")).toEqual(["tamper"]);
+    expect(hows("unset BUTLER_SESSION")).toEqual(["tamper"]);
+    expect(hows("cat ~/.butler/checks/snapshot.json")).toEqual([]);
+    expect(hows("grep enforce ~/.butler/checks/snapshot.json 2>/dev/null")).toEqual([]);
+    expect(hows("rm -rf node_modules")).toEqual([]);
+  });
+
+  it("reports each kind once and handles ordinary commands", () => {
+    expect(hows("HUSKY=0 git commit --no-verify -m x && git push --no-verify")).toEqual(["hooks_off", "no_verify"]);
+    expect(hows("pnpm test && git commit -m ok")).toEqual([]);
+    expect(classifyBypass("git commit --no-verify -m x")[0].detail).toBe("git commit --no-verify");
   });
 });

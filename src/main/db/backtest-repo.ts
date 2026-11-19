@@ -6,6 +6,7 @@ import type {
   ThresholdReviewView,
 } from "../../shared/backtest";
 import type { CommentAnchor, FileAt } from "../backtest/gh-backtest";
+import type { CheckLogRecord } from "../../shared/checks";
 
 const json = <T>(raw: unknown, fallback: T): T => {
   if (typeof raw !== "string") return fallback;
@@ -310,6 +311,17 @@ export class BacktestRepo {
     let n = 0;
     for (const r of rs) n += Number(ins.run(r.checkId, r.checkKey, r.slug, r.file, r.line, r.how, r.detail.slice(0, 300), r.sessionId, r.at, r.ingestKey).changes);
     return n;
+  }
+
+  /** hook 写的绕过记录（HitIngest）：检查已经删了就 check_id 记空，按 key 还数得到。 */
+  insertBypassLogs(rows: readonly { key: string; rec: Extract<CheckLogRecord, { kind: "bypass" }> }[]): number {
+    const known = this.db.prepare(`SELECT 1 FROM checks WHERE id = ?`);
+    return this.insertBypasses(
+      rows.map(({ key, rec }) => ({
+        checkId: known.get(rec.checkId) ? rec.checkId : null, checkKey: rec.checkKey, slug: rec.slug || null, file: rec.file, line: rec.line, how: rec.how,
+        detail: rec.detail, sessionId: rec.session, at: rec.at, ingestKey: key,
+      })),
+    );
   }
 
   bypasses(checkId: number, since: number): { total: number; how: Partial<Record<BypassHow, number>> } {

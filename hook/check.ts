@@ -7,7 +7,7 @@ import { checksLayout, dirFromEnv } from "../src/main/paths";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
 import { pathKey } from "../src/main/util/env";
 import { GIT_SAFE_ARGS, resolveGit } from "../src/main/util/git-path";
-import { classifyPush } from "../src/shared/gate-command";
+import { classifyBypass, classifyPush } from "../src/shared/gate-command";
 import { inScope, normalizePath } from "../src/shared/glob";
 import { parseRemoteSlug } from "../src/shared/repo-slug";
 import {
@@ -29,6 +29,15 @@ const MAX_REPORTED = 20;
 const OUTPUT_TAIL = 3000;
 /** 用户正则最多跑这么久（再受编辑预算限制）：剩下的时间留给命令检查。 */
 const REGEX_BUDGET_MS = 2000;
+/** Bash 里的绕过算到这段时间内拦过的检查头上（工作流 F 第 7.1 节）。 */
+const BYPASS_WINDOW_MS = 30 * 60_000;
+/** 拦过的记录留这么久（状态文件不无限长）。 */
+const BLOCKED_KEEP_MS = 24 * 3600_000;
+/** 压制注释离违规几行以内算压制它。 */
+const SUPPRESS_DISTANCE = 2;
+/** 常见的压制写法：检查不认这些，加了说明 agent 想压掉而不是改掉。 */
+const SUPPRESSION_MARKER =
+  /eslint-disable|@ts-ignore|@ts-expect-error|@ts-nocheck|\bnoqa\b|\bnolint\b|#\[allow\(|@SuppressWarnings|pylint:\s*disable|rubocop:\s*disable|NOSONAR|butler-ignore|biome-ignore|prettier-ignore/;
 
 type Hit = Extract<CheckLogRecord, { kind: "hit" }>;
 
@@ -40,6 +49,8 @@ export interface CheckState {
   cmd: Record<string, string>;
   slugs: Record<string, string>;
   absent: CheckAbsenceReason | null;
+  /** 这个 session 里拦过的检查（key → 最后一次拦的时间）：Bash 里的 --no-verify 之类算到它们头上。 */
+  blocked: Record<string, { id: number; slug: string; at: number }>;
 }
 
 export interface CheckHookDeps {
@@ -62,7 +73,7 @@ export interface CheckHookDeps {
 
 export type RemoteLookup = { kind: "url"; url: string } | { kind: "none" } | { kind: "error" };
 
-const emptyState = (): CheckState => ({ reported: {}, seen: {}, cmd: {}, slugs: {}, absent: null });
+const emptyState = (): CheckState => ({ reported: {}, seen: {}, cmd: {}, slugs: {}, absent: null, blocked: {} });
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -104,6 +115,10 @@ function loadState(d: CheckHookDeps, file: string): CheckState {
   if (isObj(v.cmd)) for (const [k, x] of Object.entries(v.cmd)) if (typeof x === "string") s.cmd[k] = x;
   if (isObj(v.slugs)) for (const [k, x] of Object.entries(v.slugs)) if (typeof x === "string") s.slugs[k] = x;
   if (typeof v.absent === "string") s.absent = v.absent as CheckAbsenceReason;
+  if (isObj(v.blocked))
+    for (const [k, x] of Object.entries(v.blocked)) {
+      if (isObj(x) && Number.isSafeInteger(x.id) && typeof x.slug === "string" && typeof x.at === "number") s.blocked[k] = { id: x.id as number, slug: x.slug, at: x.at };
+    }
   return s;
 }
 
@@ -170,6 +185,38 @@ function render(snap: CheckSnapshot, fails: Failure[]): string {
 }
 
 const enforced = (c: ResolvedCheck) => c.mode === "enforce" && c.severity === "block";
+
+/** 这次编辑新加的行（从 1 数）：编辑参数给得出就用它，否则和编辑前的内容逐行比；都没有返回 null。 */
+export function addedLines(edited: Set<number> | null, before: string | null, lines: readonly string[]): Set<number> | null {
+  if (edited) return edited;
+  if (before === null) return null;
+  const left = new Map<string, number>();
+  for (const l of before.split("\n")) left.set(l, (left.get(l) ?? 0) + 1);
+  const out = new Set<number>();
+  lines.forEach((l, i) => {
+    const n = left.get(l) ?? 0;
+    if (n > 0) left.set(l, n - 1);
+    else out.add(i + 1);
+  });
+  return out;
+}
+
+/** 新加的行里的压制注释：targets 是违规所在的行（null = 整个文件都算，命令检查用），离它不超过两行。返回记在哪一行和那行的文字。 */
+export function suppressionNear(added: ReadonlySet<number>, lines: readonly string[], targets: readonly number[] | null): { line: number; text: string } | null {
+  for (const n of [...added].sort((a, b) => a - b)) {
+    const t = lines[n - 1];
+    if (t === undefined || !SUPPRESSION_MARKER.test(t)) continue;
+    if (targets === null) return { line: n, text: t.trim().slice(0, 200) };
+    const hit = targets.find((x) => Math.abs(x - n) <= SUPPRESS_DISTANCE);
+    if (hit !== undefined) return { line: hit, text: t.trim().slice(0, 200) };
+  }
+  return null;
+}
+
+/** 记下拦过这条检查（Bash 里的绕过要用）。 */
+function noteBlocked(state: CheckState, c: ResolvedCheck, slug: string, at: number): void {
+  state.blocked[c.key] = { id: c.id, slug, at };
+}
 
 const regexKey = (pattern: string, flags: string) => `${flags}\u0000${pattern}`;
 
@@ -315,6 +362,9 @@ export async function runCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHo
   const before = after.length <= MAX_CONTENT ? reconstructBefore(tool, input, payload.tool_response, after) : null;
   const edited = editedLines(tool, input, after);
   const lines = after.split("\n");
+  const added = addedLines(edited, before, lines);
+  const bypass = (c: ResolvedCheck, at: { line: number; text: string }) =>
+    records.push({ kind: "bypass", checkId: c.id, checkKey: c.key, slug, file: rel, line: at.line, how: "suppress", detail: at.text, session, at: started });
   const base0 = { path: rel, ticketPattern: snap.ticketPattern };
   const builtins = after.length <= MAX_CONTENT ? checks.filter((c) => c.type !== "run_command") : [];
   const regexBudget = Math.min(REGEX_BUDGET_MS, budgetMs - (d.now() - started));
@@ -326,6 +376,9 @@ export async function runCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHo
     touched.add(sk);
     try {
       if (c.type === "run_command") {
+        // 这条命令上次在这个文件上拦过，这次编辑加了压制注释：记一次绕过（命令照样跑）。
+        const sup = enforced(c) && state.cmd[sk] && added ? suppressionNear(added, lines, null) : null;
+        if (sup) bypass(c, sup);
         const budget = budgetMs - (d.now() - started);
         const own = typeof c.params.timeoutMs === "number" ? c.params.timeoutMs : budget;
         const r = await d.run({ command: String(c.params.command ?? ""), file: rel, cwd: root, timeoutMs: Math.min(budget, own), env });
@@ -341,6 +394,7 @@ export async function runCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHo
           const detail = tail(r.output.trim());
           fails.push({ check: c, where: rel, detail });
           records.push(rec(c, { line: null, outcome: "fail", blocked: enforced(c), detail }));
+          if (enforced(c)) noteBlocked(state, c, slug, started);
         } else if (r.kind === "timeout") records.push(rec(c, { line: null, outcome: "timeout", blocked: false, detail: tail(r.output.trim(), 500) }));
         else records.push(rec(c, { line: null, outcome: "unavailable", blocked: false, detail: r.reason }));
         continue;
@@ -359,6 +413,11 @@ export async function runCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHo
       const isFresh = new Set(fresh);
       const freshFps = new Set(now.flatMap((v, i) => (isFresh.has(v) ? [nowFps[i]] : [])));
       const reportedBefore = new Set(state.reported[sk] ?? []);
+      // 这条检查在这个文件上拦过，这次编辑在违规旁边（或同一行）加了压制注释：记一次绕过。
+      if (enforced(c) && reportedBefore.size && added && now.length) {
+        const sup = suppressionNear(added, lines, now.map((v) => v.line));
+        if (sup) bypass(c, sup);
+      }
       for (const fpr of reportedBefore) {
         if (!nowFps.includes(fpr)) records.push(rec(c, { line: null, outcome: "resolved", blocked: false, detail: fpr.replace(/#\d+$/, "").slice(0, 500) }));
       }
@@ -372,6 +431,7 @@ export async function runCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHo
         const detail = c.type === "import_boundary" ? `${lineText}  ← ${v.detail}` : lineText;
         fails.push({ check: c, where: `${rel}:${v.line}`, detail });
         records.push(rec(c, { line: v.line, outcome: "fail", blocked: enforced(c), detail }));
+        if (enforced(c)) noteBlocked(state, c, slug, started);
       }
       const reportedNow = new Set(freshList.slice(0, MAX_REPORTED).map((v) => nowFps[now.indexOf(v)]));
       const keep = nowFps.filter((f) => reportedBefore.has(f) || reportedNow.has(f));
@@ -409,6 +469,9 @@ function safeWrite(d: CheckHookDeps, file: string, state: CheckState, touched: R
       else delete fresh.cmd[k];
     }
     Object.assign(fresh.slugs, state.slugs);
+    const now = d.now();
+    for (const [k, b] of Object.entries(state.blocked)) if (!fresh.blocked[k] || fresh.blocked[k].at < b.at) fresh.blocked[k] = b;
+    for (const [k, b] of Object.entries(fresh.blocked)) if (now - b.at > BLOCKED_KEEP_MS) delete fresh.blocked[k];
     if (clearAbsent) fresh.absent = null;
     d.writeAtomic(file, JSON.stringify(fresh));
   } catch {
@@ -437,9 +500,10 @@ export async function runPushCheck(stdin: string, env: NodeJS.ProcessEnv, d: Che
   const input = isObj(payload.tool_input) ? payload.tool_input : {};
   const command = typeof input.command === "string" ? input.command : "";
   const push = classifyPush(command);
-  if (!push) return "";
+  const bypasses = classifyBypass(command);
+  if (!push && !bypasses.length) return "";
   const cwd = typeof payload.cwd === "string" && payload.cwd ? payload.cwd : process.cwd();
-  const dir = push.dir ? path.resolve(cwd, push.dir) : cwd;
+  const dir = push?.dir ? path.resolve(cwd, push.dir) : cwd;
   const l = layoutOf(env);
   const session = sessionOf(env);
   const sr = readSnapshot(d, l.snapshot);
@@ -456,8 +520,15 @@ export async function runPushCheck(stdin: string, env: NodeJS.ProcessEnv, d: Che
   const slug = slugOf(d, state, root, env);
   const records: CheckLogRecord[] = [];
   const cleared = presentAgain(d, state, session, records);
+  if (slug && session) {
+    // 绕过：算到这个 session 最近 30 分钟在这个仓库拦过的每条检查头上，一条检查一种手法记一条。
+    for (const [key, b] of Object.entries(state.blocked)) {
+      if (b.slug !== slug || started - b.at > BYPASS_WINDOW_MS || started < b.at) continue;
+      for (const x of bypasses) records.push({ kind: "bypass", checkId: b.id, checkKey: key, slug, file: "", line: null, how: x.how, detail: x.detail, session, at: started });
+    }
+  }
   safeWrite(d, sfile, state, new Set(), cleared);
-  if (!slug) {
+  if (!slug || !push) {
     flushHits(d, l, records);
     return "";
   }
@@ -469,6 +540,7 @@ export async function runPushCheck(stdin: string, env: NodeJS.ProcessEnv, d: Che
   const changed = checks.some((c) => (c.globs ?? []).length > 0) ? d.pushedFiles(root, env) : null;
   if (changed) checks = checks.filter((c) => !(c.globs ?? []).length || changed.some((f) => inScope(f, c.globs, c.excludeGlobs ?? [])));
   const fails: Failure[] = [];
+  let blockedNow = false;
   for (const c of checks) {
     const budget = budgetOf(snap.pushTimeoutMs, opts) - (d.now() - started);
     const own = typeof c.params.timeoutMs === "number" ? c.params.timeoutMs : budget;
@@ -479,10 +551,15 @@ export async function runPushCheck(stdin: string, env: NodeJS.ProcessEnv, d: Che
       const detail = tail(r.output.trim());
       fails.push({ check: c, where: "git push", detail });
       records.push({ ...base, outcome: "fail", blocked: enforced(c), detail: detail.slice(0, 2000) });
+      if (enforced(c)) {
+        noteBlocked(state, c, slug, started);
+        blockedNow = true;
+      }
     } else if (r.kind === "timeout") records.push({ ...base, outcome: "timeout", blocked: false, detail: tail(r.output.trim(), 500) });
     else records.push({ ...base, outcome: "unavailable", blocked: false, detail: r.reason.slice(0, 2000) });
   }
   flushHits(d, l, records);
+  if (blockedNow) safeWrite(d, sfile, state);
   if (!fails.length) return "";
   const text = render(snap, fails);
   if (fails.some((f) => enforced(f.check))) {
