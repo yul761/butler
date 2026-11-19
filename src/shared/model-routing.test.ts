@@ -12,7 +12,7 @@ describe("task registry", () => {
       lesson_classify: ["low", "fallback"], check_draft: ["high", "wait"], repo_scan_infer: ["mid", "fallback"],
       backtest_judge: ["mid", "fallback"], pre_review: ["high", "wait"], evidence_verify: ["high", "wait"],
       pr_brief: ["mid", "fallback"], comment_classify: ["mid", "fallback"], ci_classify: ["low", "fallback"],
-      permission_profile: ["low", "fallback"], intake_classify: ["mid", "fallback"], model_probe: ["low", "fallback"],
+      permission_profile: ["low", "fallback"], intake_classify: ["mid", "fallback"], intake_fetch: ["low", "fallback"], model_probe: ["low", "fallback"],
     };
     expect([...TASK_IDS].sort()).toEqual(Object.keys(table).sort());
     for (const [id, [tier, policy]] of Object.entries(table)) {

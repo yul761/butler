@@ -30,7 +30,7 @@ export const TASK_IDS = [
   "check_draft", "repo_scan_infer", "backtest_judge",
   "pre_review", "evidence_verify", "pr_brief",
   "comment_classify", "ci_classify",
-  "permission_profile", "intake_classify",
+  "permission_profile", "intake_classify", "intake_fetch",
   "model_probe",
 ] as const;
 export type TaskId = (typeof TASK_IDS)[number];
@@ -91,6 +91,7 @@ export const TASKS: Readonly<Record<TaskId, TaskDef>> = Object.fromEntries(
     t("ci_classify", "low", "fallback"),
     t("permission_profile", "low", "fallback"),
     t("intake_classify", "mid", "fallback"),
+    t("intake_fetch", "low", "fallback"),
     t("model_probe", "low", "fallback"),
   ].map((d) => [d.id, d]),
 ) as Record<TaskId, TaskDef>;

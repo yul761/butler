@@ -1262,4 +1262,54 @@ export const MIGRATIONS: string[] = [
     UNIQUE (pr_id, source_id));
   CREATE INDEX review_effect_comments_lesson ON review_effect_comments (lesson_id);
   `,
+  // 工作流 N（设计补充 2026-11-17-ws-n 第 7 节）：自动接活的接活项、用户改分类的记录（校准用）、接活策略的三层覆盖（契约 4.2）。
+  // 开工前的风险是预估，存在 intake_items 里，不写 G 的 pr_risk。
+  `
+  CREATE TABLE intake_items (
+    key TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    url TEXT,
+    content_hash TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    repo_path TEXT,
+    repo_slug TEXT,
+    state TEXT NOT NULL CHECK (state IN ('needs_repo','needs_clarification','needs_decision','held','queued','waiting','started','split','skipped','exists','failed')),
+    wait_reason TEXT,
+    detail TEXT,
+    classification TEXT NOT NULL DEFAULT '{}',
+    user_dims TEXT NOT NULL DEFAULT '[]',
+    tier TEXT,
+    model TEXT,
+    allow_parallel INTEGER NOT NULL DEFAULT 0,
+    force_start INTEGER NOT NULL DEFAULT 0,
+    parent_key TEXT,
+    layer INTEGER,
+    ticket_key TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    alerted_at INTEGER,
+    first_seen_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    started_at INTEGER);
+  CREATE INDEX intake_items_state ON intake_items (state, updated_at);
+  CREATE INDEX intake_items_parent ON intake_items (parent_key) WHERE parent_key IS NOT NULL;
+  CREATE TABLE intake_overrides (
+    id INTEGER PRIMARY KEY,
+    item_key TEXT NOT NULL,
+    dim TEXT NOT NULL CHECK (dim IN ('size','risk','clarify')),
+    from_value TEXT,
+    to_value TEXT NOT NULL,
+    rules_version INTEGER NOT NULL,
+    class_source TEXT NOT NULL,
+    at INTEGER NOT NULL);
+  CREATE INDEX intake_overrides_at ON intake_overrides (at);
+  CREATE TABLE intake_policies (
+    id INTEGER PRIMARY KEY,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global','product','repo')),
+    product_id INTEGER,
+    repo_slug TEXT,
+    overrides TEXT NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL);
+  CREATE UNIQUE INDEX intake_policies_scope ON intake_policies (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''));
+  `,
 ];
