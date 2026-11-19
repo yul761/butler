@@ -1,10 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeRepo, tempDir } from "../test-utils";
 import { isAncestor, parseGitVersion, parseWorktreeList, refsUnder, supportsUpdateRefs } from "./git-stack";
 import { runEngine, type EngineLayer } from "./rebase-engine";
+
+// 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够
+vi.setConfig({ testTimeout: 30_000 });
 
 const g = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
@@ -44,6 +47,32 @@ async function chained(repo: string, trunk: string, tips: { newTip: string }[]) 
     expect(await isAncestor(repo, parent, t.newTip)).toBe(true);
     parent = t.newTip;
   }
+}
+
+/** 照冲突提示在那一层自己的 worktree 里 rebase，冲突的文件写成 content 再接着走。返回新的顶端。 */
+function resolveAsSession(repo: string, branch: string, onto: string, upstream: string, file: string, content: string): string {
+  const wt = join(tempDir(), `wt-${branch}`);
+  g(repo, "worktree", "add", "-q", wt, branch);
+  const env = { ...process.env, GIT_EDITOR: "true" };
+  let done = false;
+  try {
+    execFileSync("git", ["rebase", "-q", "--onto", onto, upstream], { cwd: wt, stdio: "ignore", env });
+    done = true;
+  } catch {
+    // 冲突
+  }
+  for (let n = 0; n < 5 && !done; n++) {
+    writeFileSync(join(wt, file), content);
+    g(wt, "add", file);
+    try {
+      execFileSync("git", ["rebase", "--continue"], { cwd: wt, stdio: "ignore", env });
+      done = true;
+    } catch {
+      // 下一个提交又冲突
+    }
+  }
+  expect(done).toBe(true);
+  return g(wt, "rev-parse", "HEAD");
 }
 
 describe("git-stack parsing", () => {
@@ -115,6 +144,78 @@ describe.each(["update_refs", "per_layer"] as const)("runEngine (%s)", (mode) =>
     expect(r).toMatchObject({ kind: "conflict", branch: "c", position: 2, files: ["c.txt"] });
     for (const b of ["a", "b", "c", "d"]) expect(g(repo, "rev-parse", b)).toBe(tips[b]);
     expect(await refsUnder(repo, "refs/heads/butler-stack")).toEqual([]);
+  });
+
+  it("gives a middle layer a command onto its parent's new tip, and the next run picks up the session's resolution", async () => {
+    const { repo, tips } = fourLayers();
+    const trunk = commit(repo, "c.txt", "main's c\n", "main edits c");
+    const r = await runEngine(input(repo, { mode, layers: layers(repo, ["a", "b", "c", "d"]), trunk }));
+    expect(r.kind).toBe("conflict");
+    if (r.kind !== "conflict") return;
+    // onto 是 b rebase 到新 main 上之后的顶端（不是 b 的旧顶端），upstream 是 b 的旧顶端：只重放 c 自己的两个提交
+    expect(r.upstream).toBe(tips.b);
+    expect(r.onto).not.toBe(tips.b);
+    expect(await isAncestor(repo, trunk, r.onto)).toBe(true);
+    expect(g(repo, "rev-list", "--count", `${trunk}..${r.onto}`)).toBe("4");
+    // session 照提示在自己的 worktree 里做
+    const resolved = resolveAsSession(repo, "c", r.onto, r.upstream, "c.txt", "c1\n");
+    expect(g(repo, "rev-list", "--count", `${r.onto}..${resolved}`)).toBe("2");
+    const ls = layers(repo, ["a", "b", "c", "d"]);
+    ls[2]!.base = tips.b!;
+    ls[2]!.conflictOnto = r.onto;
+    ls[3]!.base = tips.c!;
+    const again = await runEngine(input(repo, { mode, layers: ls, trunk, runId: 2 }));
+    expect(again.kind).toBe("rebased");
+    if (again.kind !== "rebased") return;
+    await chained(repo, trunk, again.tips);
+    expect(g(repo, "rev-list", "--count", `${again.tips[1]!.newTip}..${again.tips[2]!.newTip}`)).toBe("2");
+    expect(g(repo, "rev-list", "--count", `${again.tips[2]!.newTip}..${again.tips[3]!.newTip}`)).toBe("2");
+    expect(g(repo, "show", `${again.tips[2]!.newTip}:c.txt`)).toBe("c1\nc2");
+  });
+
+  it("after a squash merge, a bottom the session already moved onto main is kept and the layers above follow it", async () => {
+    const { repo, tips } = fourLayers();
+    g(repo, "merge", "-q", "--squash", "a");
+    g(repo, "commit", "-q", "-m", "a (#1)");
+    const trunk = commit(repo, "b.txt", "main's b\n", "main edits b");
+    const r = await runEngine(input(repo, { mode, layers: layers(repo, ["b", "c", "d"], 1), trunk, bottomOldParent: tips.a! }));
+    expect(r).toMatchObject({ kind: "conflict", branch: "b", onto: trunk, upstream: tips.a });
+    if (r.kind !== "conflict") return;
+    const resolved = resolveAsSession(repo, "b", r.onto, r.upstream, "b.txt", "b1\n");
+    const ls = layers(repo, ["b", "c", "d"], 1);
+    ls[0]!.conflictOnto = r.onto;
+    ls[1]!.base = tips.b!;
+    ls[2]!.base = tips.c!;
+    const again = await runEngine(input(repo, { mode, layers: ls, trunk, bottomOldParent: tips.a!, runId: 2 }));
+    expect(again.kind).toBe("rebased");
+    if (again.kind !== "rebased") return;
+    expect(again.tips[0]!.newTip).toBe(resolved);
+    await chained(repo, trunk, again.tips);
+    expect(g(repo, "rev-list", "--count", `${resolved}..${again.tips[1]!.newTip}`)).toBe("2");
+  });
+
+  it("leaves other branches alone even with rebase.abbreviateCommands on", async () => {
+    const { repo, tips } = fourLayers();
+    g(repo, "config", "rebase.abbreviateCommands", "true");
+    g(repo, "config", "rebase.updateRefs", "true");
+    g(repo, "branch", "bystander", tips.b!);
+    const trunk = commit(repo, "main.txt", "m\n", "main moves");
+    const r = await runEngine(input(repo, { mode, layers: layers(repo, ["a", "b", "c", "d"]), trunk }));
+    expect(r.kind).toBe("rebased");
+    for (const b of ["a", "b", "c", "d"]) expect(g(repo, "rev-parse", b)).toBe(tips[b]);
+    expect(g(repo, "rev-parse", "bystander")).toBe(tips.b);
+  });
+
+  it("treats a merged head that was never fetched as unknown instead of failing", async () => {
+    const { repo } = fourLayers();
+    g(repo, "merge", "-q", "--squash", "a");
+    const trunk = (g(repo, "commit", "-q", "-m", "a (#1)"), g(repo, "rev-parse", "HEAD"));
+    const ls = layers(repo, ["b", "c", "d"], 1);
+    ls[0]!.base = g(repo, "rev-parse", "a");
+    const r = await runEngine(input(repo, { mode, layers: ls, trunk, bottomOldParent: "1234567890abcdef1234567890abcdef12345678" }));
+    expect(r.kind).toBe("rebased");
+    if (r.kind !== "rebased") return;
+    expect(g(repo, "rev-list", "--count", `${trunk}..${r.tips[0]!.newTip}`)).toBe("2");
   });
 });
 

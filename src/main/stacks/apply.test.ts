@@ -6,6 +6,9 @@ import { makeRepo, tempDir } from "../test-utils";
 import { applyTips, backupRef, type ApplyLayer } from "./apply";
 import { pushBranch } from "./git-stack";
 
+// 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够
+vi.setConfig({ testTimeout: 30_000 });
+
 const g = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
 function commit(repo: string, file: string, text: string, msg: string): string {
@@ -76,6 +79,10 @@ describe("applyTips", () => {
       writeFileSync(join(wt, "b.txt"), "edited\n");
     }, "dirty"],
     ["a remote with commits we do not have", (s: ReturnType<typeof setup>) => (s.layers[0]!.remoteTip = s.b2), "remote_ahead"],
+    ["an untracked file the new tip would overwrite", (s: ReturnType<typeof setup>, wt: string) => {
+      s.layers[1]!.checkout = { path: wt, managed: true };
+      writeFileSync(join(wt, "m.txt"), "mine\n");
+    }, "untracked"],
   ])("defers without changing anything on %s", async (_n, arrange, code) => {
     const s = setup();
     const wt = join(tempDir(), "wt");

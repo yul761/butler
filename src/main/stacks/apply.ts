@@ -1,5 +1,5 @@
 import type { RunLayerDetail } from "../db/stacks-repo";
-import { gitOk, isAncestor, revParse, runGit, trackedDirty, updateRefCas } from "./git-stack";
+import { gitOk, isAncestor, revParse, runGit, trackedDirty, untrackedInTheWay, updateRefCas } from "./git-stack";
 
 /**
  * 把引擎算出来的新顶端落到真分支上（设计 3.4 节）：先全部预检，再写备份引用、逐层 CAS，
@@ -36,6 +36,7 @@ export interface ApplyInput {
 export type DeferReason =
   | { code: "checked_out"; branch: string; path: string }
   | { code: "dirty"; branch: string; path: string }
+  | { code: "untracked"; branch: string; path: string; files: string[] }
   | { code: "head_moved"; branch: string }
   | { code: "session_busy"; branch: string; path: string }
   | { code: "remote_ahead"; branch: string };
@@ -53,6 +54,8 @@ export function deferText(r: DeferReason): string {
       return `${r.branch} is checked out in ${r.path}`;
     case "dirty":
       return `${r.branch} has uncommitted changes in ${r.path}`;
+    case "untracked":
+      return `untracked files in ${r.path} would be overwritten: ${r.files.slice(0, 5).join(", ")}`;
     case "head_moved":
       return `${r.branch} moved during the run`;
     case "session_busy":
@@ -71,6 +74,8 @@ export async function preflight(i: Pick<ApplyInput, "repo" | "layers" | "session
       if (!l.checkout.managed) return { code: "checked_out", branch: l.branch, path: l.checkout.path };
       if (i.sessionBusy(l.checkout.path)) return { code: "session_busy", branch: l.branch, path: l.checkout.path };
       if (await trackedDirty(l.checkout.path)) return { code: "dirty", branch: l.branch, path: l.checkout.path };
+      const inTheWay = await untrackedInTheWay(l.checkout.path, l.oldTip, l.newTip);
+      if (inTheWay.length > 0) return { code: "untracked", branch: l.branch, path: l.checkout.path, files: inTheWay };
       if ((await revParse(l.checkout.path, "HEAD")) !== l.oldTip) return { code: "head_moved", branch: l.branch };
     }
     if (l.remoteTip && l.remoteTip !== l.remoteOkSha && !(await isAncestor(i.repo, l.remoteTip, l.oldTip))) {
@@ -119,7 +124,7 @@ export async function applyTips(i: ApplyInput): Promise<ApplyResult> {
       try {
         await move(i.repo, l, l.newTip, l.oldTip);
       } catch (e2) {
-        // 改不回来：备份引用还在，界面上可以「从备份恢复」。
+        // 改不回来：备份引用（refs/butler/stack-backup/…）还在，可以照它手动改回。
         log(`stack ${i.stackId} run ${i.runId}: could not restore ${l.branch}: ${(e2 as Error).message}`);
       }
     }

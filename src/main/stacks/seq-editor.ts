@@ -3,15 +3,17 @@ import { join } from "node:path";
 
 /**
  * `git rebase -i --update-refs` 的 sequence editor（设计 3.2 节）：todo 里只留 Butler 临时分支的 `update-ref` 行，
- * 其他分支（真的层分支、用户自己的分支）不让 git 改；其余的行原样保留。
+ * 其他分支（真的层分支、用户自己的分支）不让 git 改；其余的行原样保留。缩写的 `u <ref>` 也认（rebase.abbreviateCommands）。
  * 用 node 跑（Electron 里是 process.execPath + ELECTRON_RUN_AS_NODE=1，和 MCP 服务一样），两个平台都行。
  */
 const SCRIPT = `const fs = require("fs");
 const file = process.argv[process.argv.length - 1];
-const keep = "update-ref " + process.env.BUTLER_STACK_KEEP;
+const keep = process.env.BUTLER_STACK_KEEP;
 const text = fs.readFileSync(file, "utf8");
 const eol = text.includes("\\r\\n") ? "\\r\\n" : "\\n";
-const out = text.split(/\\r?\\n/).filter((l) => !l.startsWith("update-ref ") || l.startsWith(keep));
+// rebase.abbreviateCommands 时写成 "u <ref>"：两种写法都认
+const ref = (l) => { const m = /^\\s*(?:update-ref|u)\\s+(\\S+)/.exec(l); return m ? m[1] : null; };
+const out = text.split(/\\r?\\n/).filter((l) => { const r = ref(l); return r === null || r.startsWith(keep); });
 fs.writeFileSync(file, out.join(eol));
 `;
 

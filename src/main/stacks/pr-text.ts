@@ -30,10 +30,12 @@ const ZH = {
   footer: "_这段由 Butler 维护。_",
   overviewTitle: (name: string, epic: string | null) => `[stack] ${name}${epic ? `（${epic}）` : ""}`,
   overviewIntro: "按 review 顺序列出这个栈的各层。从标出来的那一层开始看；它合并后 Butler 会把下一层 rebase 好并开成可以 review 的 PR。",
-  conflict: (p: { branch: string; files: string[]; onto: string; upstream: string; above: string[] }) =>
+  conflict: (p: { branch: string; files: string[]; onto: string; upstream: string; above: string[]; push: boolean }) =>
     `Butler：给栈做 rebase 时，分支 ${p.branch} 有冲突（${p.files.join("、")}）。真分支都没改。请在这个 worktree 里执行：\n\n` +
     `git rebase --onto ${p.onto} ${p.upstream}\n\n` +
-    `解决冲突（两边的意图都要保留），git rebase --continue，然后 git push --force-with-lease。rerere 已经打开，你解过的冲突 Butler 下次会自动套用。` +
+    `解决冲突（两边的意图都要保留），git rebase --continue，` +
+    (p.push ? "然后 git push --force-with-lease。" : "先不要推（Butler 的「强推」开关关着，推不推由用户决定）。") +
+    `rerere 已经打开，你解过的冲突 Butler 下次会自动套用。` +
     (p.above.length ? `上面的层（${p.above.join("、")}）不要自己动，Butler 会接着处理。` : "") +
     `做完以后结束这一轮。`,
   errors: {
@@ -48,6 +50,7 @@ const ZH = {
     autoRebaseOff: "这个仓库的「允许 Butler 自动 rebase 栈」没开（设置 → 栈）",
     busy: "这个栈正在处理，稍后再试",
     isBottom: "栈底就是要 review 的那层，不用开 draft",
+    readyPr: "这一层的 PR 已经可以 review 了，不能改回纯分支",
     merged: "这一层已经合并了",
     nothingToRestore: "没有可以恢复的备份",
     restoreMoved: (b: string) => `${b} 在那次 rebase 之后又变过，不能直接恢复`,
@@ -87,7 +90,9 @@ const EN: StackTexts = {
   conflict: (p) =>
     `Butler: rebasing the stack hit a conflict on branch ${p.branch} (${p.files.join(", ")}). No real branch was changed. In this worktree, run:\n\n` +
     `git rebase --onto ${p.onto} ${p.upstream}\n\n` +
-    `Resolve the conflict (keep the intent of both sides), git rebase --continue, then git push --force-with-lease. rerere is on, so Butler reuses your resolution next time.` +
+    `Resolve the conflict (keep the intent of both sides) and git rebase --continue` +
+    (p.push ? ", then git push --force-with-lease." : ". Don't push (Butler's Force push switch is off; pushing is up to the user).") +
+    ` rerere is on, so Butler reuses your resolution next time.` +
     (p.above.length ? ` Leave the layers above (${p.above.join(", ")}) alone; Butler handles them next.` : "") +
     ` End the turn when done.`,
   errors: {
@@ -102,6 +107,7 @@ const EN: StackTexts = {
     autoRebaseOff: "\"Let Butler rebase stacks\" is off for this repository (Settings → Stacks)",
     busy: "This stack is being processed; try again shortly",
     isBottom: "The bottom layer is the one to review; it doesn't need a draft",
+    readyPr: "This layer's PR is already open for review; it can't go back to a plain branch",
     merged: "This layer is already merged",
     nothingToRestore: "There is no backup to restore",
     restoreMoved: (b) => `${b} changed after that rebase, so it can't be restored directly`,

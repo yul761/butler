@@ -120,6 +120,17 @@ const dayOf = (t: number) => {
 
 const sha7 = (s: string | null) => (s ? s.slice(0, 7) : "");
 
+/** conflictKey 是 `${branch}:${onto}:${upstream}:${trunk,各层顶端}`（分支名里不会有冒号）：取 onto。 */
+export function conflictOnto(key: string | null): string | null {
+  return key ? (key.split(":")[1] ?? null) : null;
+}
+
+/** conflictKey 里判断「同一个冲突」的部分：分支和这次 run 的输入。 */
+function conflictInputs(key: string): string {
+  const p = key.split(":");
+  return `${p[0]}:${p[3] ?? ""}`;
+}
+
 export class StackService {
   private readonly running = new Set<number>();
   /** 等某个栈跑完的（onMerged 碰上 tick 正在跑时）。 */
@@ -133,6 +144,8 @@ export class StackService {
   /** 栈底落后 trunk 多少（tick 里算，界面和提醒用）。 */
   private readonly behindCache = new Map<number, { commits: number; oldestAt: number | null }>();
   private ticking = false;
+  /** 每个栈上次试 autosquash 时各层的顶端。 */
+  private readonly autosquashTried = new Map<number, string>();
 
   constructor(private readonly d: StackServiceDeps) {}
 
@@ -215,7 +228,8 @@ export class StackService {
     const slug = await this.d.slugOf(repoPath).catch(() => null);
     const prs = await gh.openPrs(repoPath, slug);
     if (!prs) return [];
-    const mine = prs.filter((p) => this.d.owned(repoPath, p.head) && !this.d.repo.findBranch(repoPath, p.head));
+    // 用户删掉过的栈里的分支不再自动建回来
+    const mine = prs.filter((p) => this.d.owned(repoPath, p.head) && !this.d.repo.findBranch(repoPath, p.head) && !this.d.repo.inRemovedStack(repoPath, p.head));
     const byHead = new Map(mine.map((p) => [p.head, p]));
     const childOf = new Map<string, gh.PrSnapshot>();
     for (const p of mine) if (byHead.has(p.base)) childOf.set(p.base, p);
@@ -316,7 +330,7 @@ export class StackService {
     for (const l of open) {
       const tip = await revParse(repo, `refs/heads/${l.branch}`);
       if (!tip) return this.defer(stack, trigger, `branch ${l.branch} is missing`, "failed");
-      engineLayers.push({ position: l.position, branch: l.branch, tip, base: l.baseSha });
+      engineLayers.push({ position: l.position, branch: l.branch, tip, base: l.baseSha, conflictOnto: conflictOnto(l.conflictKey) });
     }
 
     const bottom = open[0]!;
@@ -340,11 +354,14 @@ export class StackService {
       this.d.repo.finishRun(runId, { outcome: "failed", reason: res.reason });
       return this.d.repo.run(runId);
     }
-    if (res.kind === "conflict") return this.onConflict(stack, open, runId, res, policy);
+    if (res.kind === "conflict") return this.onConflict(stack, open, runId, res, policy, [trunkSha, ...engineLayers.map((l) => l.tip)].join(","));
 
     if (res.kind === "noop") {
-      this.syncRecords(stack, open, res.tips, trunkSha, false);
-      if (trigger === "layer_commits" || trigger === "main_updated") {
+      this.syncRecords(stack, open, res.tips, trunkSha, false, bottomOldParent !== null);
+      // 上一次是冲突、回滚、推迟或失败时这次的 noop 要留下来：它说明问题没了（比如 session 照提示解完了冲突）
+      const prev = this.d.repo.lastRun(stack.id, runId);
+      const settledBefore = !prev || prev.outcome === "rebased" || prev.outcome === "noop" || prev.outcome === "restored";
+      if (settledBefore && (trigger === "layer_commits" || trigger === "main_updated")) {
         // 没变化的自动触发不留 run，免得每分钟一行。
         this.d.repo.deleteRun(runId);
         await this.afterRun(stack, trigger);
@@ -383,10 +400,16 @@ export class StackService {
     }
     if (applied.kind === "rolled_back") {
       this.d.repo.finishRun(runId, { outcome: "rolled_back", reason: applied.reason, detail: { layers: applied.layers } });
+      // 真分支都改回去了：记下现在的顶端和 trunk，同一个触发不再每分钟重来一次（等人看，或者有新提交）
+      for (const t of res.tips) {
+        const l = open.find((x) => x.branch === t.branch);
+        if (l) this.d.repo.updateLayer(l.id, { tipSha: t.oldTip });
+      }
+      this.d.repo.updateStack(stack.id, { trunkSha });
       this.d.record?.("stack.rollback", { trigger, layers: changed.length });
       return this.d.repo.run(runId);
     }
-    this.syncRecords(stack, open, res.tips, trunkSha, true);
+    this.syncRecords(stack, open, res.tips, trunkSha, true, bottomOldParent !== null);
     for (const t of changed) {
       const l = open.find((x) => x.branch === t.branch)!;
       const at = applyLayers.find((x) => x.branch === t.branch)!;
@@ -428,14 +451,18 @@ export class StackService {
     return this.d.repo.lastRun(stack.id);
   }
 
-  /** 记下各层新的起点和顶端；changed = 这次真的改写过。 */
-  private syncRecords(stack: StackRow, open: LayerRow[], tips: NewTip[], trunkSha: string, changed: boolean): void {
+  /**
+   * 记下各层新的起点和顶端；changed = 这次真的改写过。走到这里就没有冲突了：冲突记号都清掉。
+   * bottomDone = 这次处理了合并掉的栈底（squash 后的 --onto）：新栈底记一次 lastRebaseAt，下次不再按旧父层算。
+   */
+  private syncRecords(stack: StackRow, open: LayerRow[], tips: NewTip[], trunkSha: string, changed: boolean, bottomDone = false): void {
     const at = this.d.now();
     for (const t of tips) {
       const l = open.find((x) => x.branch === t.branch);
       if (!l) continue;
       const moved = t.newTip !== t.oldTip;
-      this.d.repo.updateLayer(l.id, { tipSha: t.newTip, baseSha: t.newBase, ...(moved && changed ? { lastRebaseAt: at, conflictKey: null } : {}) });
+      const stamp = (moved && changed) || (bottomDone && l.id === open[0]!.id);
+      this.d.repo.updateLayer(l.id, { tipSha: t.newTip, baseSha: t.newBase, conflictKey: null, ...(stamp ? { lastRebaseAt: at } : {}) });
     }
     // 引擎没列出来的层（noop 时它只列到第一层要动的为止）：顶端照实记
     this.d.repo.updateStack(stack.id, { trunkSha });
@@ -457,13 +484,16 @@ export class StackService {
   private async onConflict(
     stack: StackRow, open: LayerRow[], runId: number,
     res: { position: number; branch: string; files: string[]; commit: string | null; onto: string; upstream: string }, policy: StackPolicy,
+    inputs: string,
   ): Promise<RunRow | null> {
     const detail: RunDetail = { conflict: { branch: res.branch, files: res.files, commit: res.commit, onto: res.onto, upstream: res.upstream } };
     this.d.repo.finishRun(runId, { outcome: "conflict", reason: `${res.branch}: ${res.files.join(", ")}`, detail });
     this.d.record?.("stack.conflict", { files: res.files.length });
     const layer = open.find((l) => l.branch === res.branch)!;
-    const key = `${res.branch}:${res.onto}:${res.upstream}`;
-    if (layer.conflictKey === key) return this.d.repo.run(runId);
+    // onto 是下面那层重新 rebase 出来的顶端，每次 run 都不一样（提交时间）：是不是同一个冲突按这次的输入（trunk 和各层顶端）判断
+    const key = `${res.branch}:${res.onto}:${res.upstream}:${inputs}`;
+    // 同一个冲突：记号不动（session 照着的是送给它的那条命令里的 onto）
+    if (layer.conflictKey && conflictInputs(layer.conflictKey) === `${res.branch}:${inputs}`) return this.d.repo.run(runId);
     this.d.repo.updateLayer(layer.id, { conflictKey: key });
     if (policy.conflictToSession) await this.deliverConflict(stack, runId);
     return this.d.repo.run(runId);
@@ -478,7 +508,8 @@ export class StackService {
     const layer = layers.find((l) => l.branch === c.branch);
     if (!layer?.ticketKey) return;
     const above = layers.filter((l) => l.position > layer.position).map((l) => l.branch);
-    const text = T().conflict({ branch: c.branch, files: c.files, onto: c.onto, upstream: c.upstream, above });
+    const push = this.d.external.allowed("force_push", { repoSlug: stack.repoSlug, ticketKey: layer.ticketKey });
+    const text = T().conflict({ branch: c.branch, files: c.files, onto: c.onto, upstream: c.upstream, above, push });
     let ok = false;
     try {
       ok = await this.d.deliver({ ticketKey: layer.ticketKey, ticketRepoId: layer.ticketRepoId, branch: layer.branch }, text);
@@ -515,7 +546,8 @@ export class StackService {
       const run = await this.run(this.d.repo.get(stack.id)!, "bottom_merged");
       if (run && run.outcome !== "rebased" && run.outcome !== "noop") return;
     }
-    if (policy.autoOpenBottomPr) await this.promoteBottom(this.d.repo.get(stack.id)!);
+    // autoRebase 关着时新栈底没 rebase（squash 合并后它还带着合并掉的提交）：不开成可以 review 的 PR
+    if (policy.autoRebase && policy.autoOpenBottomPr) await this.promoteBottom(this.d.repo.get(stack.id)!);
     await this.syncDrafts(this.d.repo.get(stack.id)!);
     await this.syncOverview(this.d.repo.get(stack.id)!);
     this.changed();
@@ -647,6 +679,8 @@ export class StackService {
     const slug = stack.repoSlug;
     try {
       if (mode === "branch") {
+        // 已经可以 review 的 PR（包括栈底）不能悄悄丢掉 PR 号：不然 promoteBottom 每轮都去 gh pr create
+        if (layer.prNumber && layer.state === "ready") return { ok: false, message: t.readyPr };
         if (layer.prNumber && layer.state === "draft") {
           const n = layer.prNumber;
           const r = await this.d.external.attempt("pr_open", { scope, target: layer.prUrl, summary: `close draft #${n} (back to a plain branch)` }, () => gh.prClose(repo, slug, n, T().demoteComment));
@@ -833,7 +867,12 @@ export class StackService {
       if (l.prUrl && this.d.awaitingCheck?.(l.prUrl)) return;
       if (await hasFixups(s.repoPath, l.baseSha, l.tipSha).catch(() => false)) any = true;
     }
-    if (any) await this.run(s, "autosquash", { autosquash: true });
+    if (!any) return;
+    // 同样的顶端试过一次（比如 fixup 的目标不在这一段里，结果是 noop）就不再每分钟重试
+    const key = open.map((l) => l.tipSha).join(",");
+    if (this.autosquashTried.get(s.id) === key) return;
+    this.autosquashTried.set(s.id, key);
+    await this.run(s, "autosquash", { autosquash: true });
   }
 
   /** 上一次因为开关关着没做完的提升 / 总览：开关打开后补做（关着时不试，免得审计里每分钟一笔 skipped）。 */
@@ -943,7 +982,8 @@ export class StackService {
   /** 启动时和每天：上次没清掉的临时目录（Butler 中途退出）。 */
   cleanupWork(): void {
     if (!existsSync(this.d.workRoot)) return;
-    if (this.running.size > 0) return;
+    // tick 正要开始一次 run 时也不清（running 还没记上）
+    if (this.running.size > 0 || this.ticking) return;
     for (const name of readdirSync(this.d.workRoot)) {
       try {
         rmSync(resolve(this.d.workRoot, name), { recursive: true, force: true });
@@ -1024,7 +1064,7 @@ export class StackService {
           out.push({ reason: "conflict", stackId: s.id, stackName: s.name, branch: lr.detail.conflict.branch, files: lr.detail.conflict.files, ticketKey: l?.ticketKey ?? null, prNumber: l?.prNumber ?? null });
         }
       }
-      if (lr && (lr.outcome === "deferred" || lr.outcome === "failed") && now - lr.startedAt >= STUCK_AFTER_MS) {
+      if (lr && (lr.outcome === "deferred" || lr.outcome === "failed" || lr.outcome === "rolled_back") && now - lr.startedAt >= STUCK_AFTER_MS) {
         out.push({ reason: "stuck", stackId: s.id, stackName: s.name, branch: open[0]!.branch, detail: lr.reason, ticketKey: open[0]!.ticketKey });
       }
       for (const l of open) {

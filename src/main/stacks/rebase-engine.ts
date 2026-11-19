@@ -18,6 +18,11 @@ export interface EngineLayer {
   tip: string;
   /** 记录的起点（上次同步时父层的顶端）。 */
   base: string | null;
+  /**
+   * 上次冲突时让 session 叠上去的那个提交（session 照做以后这一层就在它上面）。
+   * 也是起点的候选：不然 session 解完冲突后，下一次会从很早的分叉点算起、把别的提交也重放一遍。
+   */
+  conflictOnto?: string | null;
 }
 
 export interface EngineInput {
@@ -63,13 +68,21 @@ interface Planned {
   upstream: string;
 }
 
+type SegResult =
+  | { kind: "ok"; tips: NewTip[] }
+  | { kind: "conflict"; ownerIdx: number; files: string[]; commit: string | null }
+  | { kind: "failed"; reason: string };
+
+/** 本地没有这个提交（比如合并时的 head 没 fetch 到）时当成「不是祖先」，不抛。 */
+const ancestor = (repo: string, a: string, b: string): Promise<boolean> => isAncestor(repo, a, b).catch(() => false);
+
 /** 在 candidates 里取是 tip 祖先的、最新的那个（一个是另一个的祖先时取后代）。 */
-async function newestAncestor(repo: string, tip: string, candidates: (string | null)[]): Promise<string | null> {
+async function newestAncestor(repo: string, tip: string, candidates: (string | null | undefined)[]): Promise<string | null> {
   const ok: string[] = [];
-  for (const c of candidates) if (c && !ok.includes(c) && (await isAncestor(repo, c, tip))) ok.push(c);
+  for (const c of candidates) if (c && !ok.includes(c) && (await ancestor(repo, c, tip))) ok.push(c);
   let best: string | null = null;
   for (const c of ok) {
-    if (best === null || (await isAncestor(repo, best, c))) best = c;
+    if (best === null || (await ancestor(repo, best, c))) best = c;
   }
   return best;
 }
@@ -82,13 +95,15 @@ async function upstreams(i: EngineInput): Promise<Planned[] | string> {
     let up: string | null;
     if (k === 0) {
       if (i.bottomOldParent) {
-        up = (await newestAncestor(i.repo, l.tip, [i.bottomOldParent, l.base])) ?? (await mergeBase(i.repo, l.tip, i.bottomOldParent));
+        // 已经叠在 trunk 上（比如 session 照冲突提示做过了）时 trunk 本身就是起点
+        up = (await newestAncestor(i.repo, l.tip, [i.bottomOldParent, l.base, l.conflictOnto, i.trunk]))
+          ?? (await mergeBase(i.repo, l.tip, i.bottomOldParent)) ?? (await mergeBase(i.repo, l.tip, i.trunk));
       } else {
         up = await mergeBase(i.repo, l.tip, i.trunk);
       }
     } else {
       const parentOld = i.layers[k - 1]!.tip;
-      up = (await newestAncestor(i.repo, l.tip, [parentOld, l.base])) ?? (await mergeBase(i.repo, l.tip, parentOld));
+      up = (await newestAncestor(i.repo, l.tip, [parentOld, l.base, l.conflictOnto])) ?? (await mergeBase(i.repo, l.tip, parentOld));
     }
     if (!up) return `no base for ${l.branch}`;
     out.push({ layer: l, upstream: up });
@@ -133,7 +148,7 @@ export async function runEngine(i: EngineInput): Promise<EngineResult> {
       start = 0;
       break;
     }
-    if (!(await isAncestor(i.repo, parent, p.layer.tip)) || (k === 0 && i.bottomOldParent !== null)) {
+    if (!(await ancestor(i.repo, parent, p.layer.tip)) || (k === 0 && i.bottomOldParent !== null)) {
       start = k;
       break;
     }
@@ -148,7 +163,10 @@ export async function runEngine(i: EngineInput): Promise<EngineResult> {
   const wt = join(work, "wt");
   const hooks = join(work, "hooks");
   mkdirSync(hooks, { recursive: true });
-  const pre = ["-c", `core.hooksPath=${hooks.replace(/\\/g, "/")}`, "-c", "rerere.enabled=true", "-c", "rerere.autoUpdate=true"];
+  // abbreviateCommands 关掉：sequence editor 认的是完整的 update-ref 行（它也认缩写，双保险）
+  const pre = [
+    "-c", `core.hooksPath=${hooks.replace(/\\/g, "/")}`, "-c", "rerere.enabled=true", "-c", "rerere.autoUpdate=true", "-c", "rebase.abbreviateCommands=false",
+  ];
   const env = sequenceEditorEnv(work, i.execPath, tmpPrefix(i.runId));
   try {
     await gitOk(i.repo, ["worktree", "add", "--detach", "--force", wt, i.trunk], { pre });
@@ -156,40 +174,67 @@ export async function runEngine(i: EngineInput): Promise<EngineResult> {
 
     // autosquash 不挪栈底：第一段叠回它自己原来的起点。
     let newParent = i.autosquash ? planned[0]!.upstream : parent;
-    for (const seg of segments(planned, start, i.mode)) {
+    const rebaseSeg = async (seg: Planned[], onto: string): Promise<SegResult> => {
       const top = seg[seg.length - 1]!;
       const first = seg[0]!;
-      const onto = newParent;
-      const args = ["rebase"];
-      if (i.mode === "update_refs") args.push("-i", "--update-refs");
+      // 总是 -i：sequence editor 才会跑（rebase.updateRefs 配置下也挡得住真分支），老 git 上 --autosquash 也才生效
+      const args = ["rebase", "-i"];
+      if (i.mode === "update_refs" && seg.length > 1) args.push("--update-refs");
       args.push(i.autosquash ? "--autosquash" : "--no-autosquash", "--empty=drop", "--onto", onto, first.upstream, tmpName(i.runId, top.layer.position));
       log(`stack run ${i.runId}: git ${args.join(" ")}`);
       const conflict = await rebaseWithRerere(wt, args, pre, env);
       if (conflict) {
-        const files = conflict.files;
-        const commit = conflict.commit;
-        let owner = top;
-        if (commit) {
-          for (const p of seg) {
-            if (await isAncestor(i.repo, commit, p.layer.tip)) {
-              owner = p;
+        let ownerIdx = seg.length - 1;
+        if (conflict.commit) {
+          for (let k = 0; k < seg.length; k++) {
+            if (await ancestor(i.repo, conflict.commit, seg[k]!.layer.tip)) {
+              ownerIdx = k;
               break;
             }
           }
         }
-        // owner 那一层要在自己的 worktree 里做的那一条：它的新父是 owner 下面那层的新顶端。
-        const ownerIdx = seg.indexOf(owner);
-        const ownerOnto = ownerIdx === 0 ? onto : (await revParse(i.repo, tmpRef(i.runId, seg[ownerIdx - 1]!.layer.position))) ?? onto;
-        return { kind: "conflict", position: owner.layer.position, branch: owner.layer.branch, files, commit, onto: ownerOnto, upstream: owner.upstream };
+        return { kind: "conflict", ownerIdx, files: conflict.files, commit: conflict.commit };
       }
+      const out: NewTip[] = [];
       let below = onto;
       for (const p of seg) {
         const t = await revParse(i.repo, tmpRef(i.runId, p.layer.position));
         if (!t) return { kind: "failed", reason: `lost ${p.layer.branch}` };
-        tips.push({ position: p.layer.position, branch: p.layer.branch, oldTip: p.layer.tip, newTip: t, newBase: below });
+        out.push({ position: p.layer.position, branch: p.layer.branch, oldTip: p.layer.tip, newTip: t, newBase: below });
         below = t;
       }
-      newParent = below;
+      return { kind: "ok", tips: out };
+    };
+    for (const seg0 of segments(planned, start, i.mode)) {
+      let r = await rebaseSeg(seg0, newParent);
+      let seg = seg0;
+      if (r.kind === "conflict" && r.ownerIdx > 0) {
+        // 一段里不是第一层冲突：--update-refs 只在整段做完时才写临时分支，冲突那层下面的新顶端拿不到。
+        // 改成一层一层地重做这一段，冲突那条命令的 onto 就是它下面那层真正的新顶端。
+        for (const p of seg0) await gitOk(i.repo, ["update-ref", tmpRef(i.runId, p.layer.position), p.layer.tip]);
+        const acc: NewTip[] = [];
+        let onto = newParent;
+        r = { kind: "ok", tips: acc };
+        for (const p of seg0) {
+          const one = await rebaseSeg([p], onto);
+          if (one.kind !== "ok") {
+            r = one;
+            seg = [p];
+            newParent = onto;
+            break;
+          }
+          acc.push(...one.tips);
+          onto = one.tips[0]!.newTip;
+        }
+      }
+      if (r.kind === "failed") return { kind: "failed", reason: r.reason };
+      if (r.kind === "conflict") {
+        // owner 那一层要在自己的 worktree 里做的那一条：它的新父是 owner 下面那层的新顶端（段首就是这段的 onto）。
+        const owner = seg[r.ownerIdx]!;
+        return { kind: "conflict", position: owner.layer.position, branch: owner.layer.branch, files: r.files, commit: r.commit, onto: newParent, upstream: owner.upstream };
+      }
+      tips.push(...r.tips);
+      newParent = r.tips[r.tips.length - 1]!.newTip;
     }
 
     if (i.autosquash) {

@@ -675,13 +675,13 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 
 栈是同一个仓库里一串互相依赖的 Butler 分支：栈底基于 trunk，往上每一层基于下面那层。只有栈底开 PR 给人 review；上面的层在轮到它当栈底之前都只是分支，所以 reviewer 一次只看一个小 PR。
 
-栈由总控建。feature 总控调用 `create_ticket` 时带上 `stack_on`，新 ticket 的分支就从另一个 ticket 的分支开出来，并接到那个 ticket 所在栈的顶上（它不在栈里就新建一个）；也可以用 `stack_define` 把已有的分支定成栈。`list_stacks` 看栈，`stack_rebase` 马上 rebase 一次，`stack_layer_mode` 在上面某层要跑 CI 时把它开成 draft PR，或者把 draft 关掉。Butler 总控也有这几个工具，但只接受它自己开着的终端发来的改动；epic session 只有 `list_stacks`。
+栈由总控建。feature 总控调用 `create_ticket` 时带上 `stack_on`，新 ticket 的分支就从另一个 ticket 的分支开出来，并接到那个 ticket 所在栈的顶上（它不在栈里就新建一个）；也可以用 `stack_define` 把已有的分支定成栈。`list_stacks` 看栈，`stack_rebase` 马上 rebase 一次，`stack_layer_mode` 在上面某层要跑 CI 时把它开成 draft PR，或者把 draft 关掉。feature 总控看得到有一层是它的 ticket 的栈，但只能改属于它这个 feature、或者没合并的层都是它的 ticket 的栈。Butler 总控也有这几个工具，但只接受它自己开着的终端发来的改动；epic session 只有 `list_stacks`。
 
-栈底的 PR 合并或者 trunk 更新时，Butler 把整栈 rebase 到新的基础上：git 2.38 以上用 `git rebase --update-refs`，旧的 git 一层一层来。rebase 在 `~/.butler/stack-work` 下单独的 worktree 里做，不碰开着的 session。只有分支没在别处签出着未提交的改动、它的 session 不在忙、远端也没人推过时，Butler 才挪动它，否则稍后再试。挪动之前先把旧的位置存到 `refs/butler/stack-backup/…`，「从备份恢复」可以放回去。有冲突时 Butler 停下、原样复原，等那一层 ticket 的 session 空下来时把冲突文件交给它。冲突 30 分钟没交出去、或者 rebase 卡了一天，「现在」页会提醒。
+栈底的 PR 合并或者 trunk 更新时，Butler 把整栈 rebase 到新的基础上：git 2.38 以上用 `git rebase --update-refs`，旧的 git 一层一层来。rebase 在 `~/.butler/stack-work` 下单独的 worktree 里做，不碰开着的 session。只有分支没在别处签出着未提交的改动（或者会被新顶端覆盖的未跟踪文件）、它的 session 不在忙、远端也没人推过时，Butler 才挪动它，否则稍后再试。挪动之前先把旧的位置存到 `refs/butler/stack-backup/…`，「从备份恢复」可以放回去。有冲突时 Butler 停下、原样复原，等那一层 ticket 的 session 空下来时把冲突文件和要执行的 `git rebase --onto` 命令交给它；只有「强推」开着时才让 session 把结果推上去。下一次 rebase 接着 session 解好的结果做。冲突 30 分钟没交出去、或者 rebase 卡住或回滚了一天，「现在」页会提醒。
 
 栈底合并后，下一层成了新的栈底：Butler 把它的 base 改成 trunk，`autoOpenBottomPr` 开着时把它开成 ready 的 PR。draft 层打上 `draftLabel` 的 label，标题注明不用 review。
 
-「进度」页和 feature、epic 的「PR 进度」标签里有「栈」一块：从上到下列出每一层的状态、PR、落后 trunk 几个提交、有没有改写过还没推，还有最近一次 rebase 的结果，以及马上 rebase、从备份恢复、开或关 draft、不再管这个栈（分支和 PR 不动）这几个按钮。
+「进度」页和 feature、epic 的「PR 进度」标签里有「栈」一块：从上到下列出每一层的状态、PR、落后 trunk 几个提交、有没有改写过还没推，还有最近一次 rebase 的结果，以及马上 rebase、从备份恢复、开或关 draft、不再管这个栈（分支和 PR 不动，自动检测也不会再把它建回来）这几个按钮。
 
 策略在「设置 → 栈」，和[评论与 CI](#评论与-ci)一样分全局、产品、仓库三层。`autoRebase` 是总开关，默认关；关着时 Butler 只看不动。rebase 后推上去（用 `--force-with-lease`）要[对外动作](#对外动作)里的 `externalForcePush`，第一次推一层要 `externalBranchPush`，开 PR 和 draft 要 `externalPrOpen`，往 PR 标题里写栈的位置、往描述里写依赖行要 `externalPrTitleEdit` 和 `externalPrDescriptionEdit`，draft 的 label 要 `externalPrLabel`，总览 issue 要 `externalIssuePost`。这些关着时 Butler 只改本地分支，并标出没推的层。
 

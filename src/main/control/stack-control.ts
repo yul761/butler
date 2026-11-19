@@ -46,11 +46,16 @@ export class StackControl {
     return all.filter((t) => t.featureId !== null && fids.has(t.featureId));
   }
 
-  private belongs(scope: StackScope, s: StackView, keys: Set<string>): boolean {
+  /**
+   * 看：栈是它的（feature / epic 对得上），或者有一层是它的 ticket。
+   * 改（write）：栈是它的，或者每一层都是它的 ticket——别的 feature 的层不能借一层共有的就被 rebase、force push。
+   */
+  private belongs(scope: StackScope, s: StackView, keys: Set<string>, write = false): boolean {
     if (scope.kind === "butler") return true;
     if (scope.kind === "feature" && s.featureId === scope.featureId) return true;
-    if (scope.kind === "epic" && s.epicId === scope.epicId) return true;
-    return s.layers.some((l) => l.ticketKey !== null && keys.has(l.ticketKey));
+    if (scope.kind === "epic" && s.epicId === scope.epicId) return !write;
+    const mine = (l: StackView["layers"][number]) => l.ticketKey !== null && keys.has(l.ticketKey);
+    return write ? s.layers.filter((l) => l.state !== "merged").every(mine) : s.layers.some(mine);
   }
 
   private async mine(scope: StackScope): Promise<StackView[]> {
@@ -59,12 +64,13 @@ export class StackControl {
     return v.stacks.filter((s) => this.belongs(scope, s, keys));
   }
 
+  /** 要改的那个栈（只有改的操作用它）。 */
   private async one(scope: StackScope, id: number): Promise<StackView | string> {
     const all = await this.d.service.view({ epicId: null, featureId: null });
     const s = all.stacks.find((x) => x.id === id);
     if (!s) return T().errors.notFound;
     const keys = new Set(this.scopeTickets(scope).map((t) => t.key));
-    return this.belongs(scope, s, keys) ? s : T().errors.notYours;
+    return this.belongs(scope, s, keys, true) ? s : T().errors.notYours;
   }
 
   async handle(scope: StackScope, req: StackControlOp): Promise<ControlResult> {
@@ -134,8 +140,10 @@ export class StackControl {
         layerTickets.push(t);
       } else {
         const b = raw.trim();
-        branches.push(b);
         const owner = tickets.find((x) => x.repos.some((r) => r.branch === b && samePath(r.repoPath, repoPath!)));
+        // feature 总控只能用自己 feature 的 ticket 的分支（Butler 总控可以用任何 Butler 分支，service 会再核对）
+        if (!owner && scope.kind === "feature") return fail(e.notYours);
+        branches.push(b);
         if (owner) layerTickets.push(owner);
       }
     }

@@ -12,6 +12,9 @@ import type { CreatePr, PrSnapshot } from "./gh-stack";
 import { StackPolicyService } from "./stack-policy";
 import { StackService, type StackServiceDeps } from "./stack-service";
 
+// 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够
+vi.setConfig({ testTimeout: 30_000 });
+
 /** 假的 GitHub：只记 PR 和调用，不联网。git 部分是真的（临时仓库 + 本地 bare 远端）。 */
 const fake = vi.hoisted(() => ({
   prs: new Map<number, PrSnapshot>(),
@@ -230,6 +233,9 @@ describe("StackService.define", () => {
     expect(ids).toHaveLength(1);
     const layers = w.repoT.layers(ids[0]!);
     expect(layers.map((l) => [l.branch, l.prNumber, l.state])).toEqual([["a", 10, "ready"], ["b", 11, "draft"], ["c", 12, "draft"], ["d", 13, "draft"]]);
+    expect(await w.svc.detect(w.repo)).toEqual([]);
+    // 用户删掉的栈不会被自动检测建回来
+    expect(w.svc.remove(ids[0]!).ok).toBe(true);
     expect(await w.svc.detect(w.repo)).toEqual([]);
   });
 });
@@ -453,6 +459,42 @@ describe("StackService triggers", () => {
     expect(g(w.repo, "worktree", "list").split("\n")).toHaveLength(1);
   });
 
+  it("after the session follows the conflict instructions, the next run carries on from its resolution", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "conflict" });
+    const cmd = /git rebase --onto (\S+) (\S+)/.exec(w.delivered[0]!.text)!;
+    // session 在自己的 worktree 里照做、解决冲突（这里做完把 worktree 拿掉，免得算成 Butler 不管的检出）
+    const wt = join(tempDir(), "wt-b");
+    g(w.repo, "worktree", "add", "-q", wt, "b");
+    try {
+      g(wt, "rebase", "-q", "--onto", cmd[1]!, cmd[2]!);
+    } catch {
+      writeFileSync(join(wt, "b.txt"), "b\n");
+      g(wt, "add", "b.txt");
+      execFileSync("git", ["rebase", "--continue"], { cwd: wt, stdio: "ignore", env: { ...process.env, GIT_EDITOR: "true" } });
+    }
+    g(wt, "push", "-q", "--force-with-lease", "origin", "b");
+    g(w.repo, "worktree", "remove", "--force", wt);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "layer_commits", outcome: "rebased" });
+    expect(shape(w, "b")).toEqual({ count: 2, onTrunk: true });
+    expect(shape(w, "c")).toEqual({ count: 3, onTrunk: true });
+    expect(shape(w, "d")).toEqual({ count: 4, onTrunk: true });
+    expect(w.repoT.layers(id).map((l) => l.conflictKey)).toEqual([null, null, null, null]);
+    expect(w.svc.notices().filter((n) => n.reason === "conflict")).toEqual([]);
+  });
+
+  it("tells the session not to push when Force push is off", async () => {
+    const w = world({ policy: { dailyRebase: false }, allow: (k) => k !== "force_push" });
+    await defineAll(w);
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    expect(w.delivered[0]!.text).not.toContain("git push");
+  });
+
   it("shows the conflict on the Now page when it should not go to the session", async () => {
     const w = world({ policy: { dailyRebase: false, conflictToSession: false } });
     await defineAll(w);
@@ -483,6 +525,17 @@ describe("StackService triggers", () => {
     expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "autosquash", outcome: "rebased" });
     expect(g(w.repo, "log", "--format=%s", "main..b")).toBe("b one\na one");
     expect(g(w.repo, "log", "--format=%s", "main..d")).toBe("d one\nc one\nb one\na one");
+  });
+
+  it("tries an autosquash that changes nothing only once", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    await w.svc.tick();
+    g(w.repo, "checkout", "-q", "b");
+    commit(w.repo, "b-fix.txt", "fix\n", "fixup! something outside the stack");
+    g(w.repo, "checkout", "-q", "main");
+    for (let n = 0; n < 4; n++) await w.svc.tick();
+    expect(w.repoT.runs(id, 50).filter((r) => r.trigger === "autosquash")).toHaveLength(1);
   });
 
   it("does not autosquash while comments are being checked", async () => {

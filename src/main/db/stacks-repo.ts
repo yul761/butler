@@ -235,6 +235,13 @@ export class StacksRepo {
     return { stack: this.get(Number(r.sid))!, layer: this.layer(Number(r.lid))! };
   }
 
+  /** 这个仓库里删掉过的栈有没有这个分支（自动检测不把用户删掉的栈再建回来）。 */
+  inRemovedStack(repoPath: string, branch: string): boolean {
+    return this.db
+      .prepare(`SELECT 1 AS x FROM stack_layers l JOIN stacks s ON s.id = l.stack_id WHERE s.removed_at IS NOT NULL AND s.repo_path = ? AND l.branch = ? LIMIT 1`)
+      .get(repoPath, branch) !== undefined;
+  }
+
   /** 按分支名找（不知道仓库路径的写法不同时用）：所有没删的栈里叫这个名字的层。 */
   findBranchAnyRepo(branch: string): { stack: StackRow; layer: LayerRow }[] {
     const rows = this.db
@@ -333,8 +340,11 @@ export class StacksRepo {
     return r ? toRun(r) : null;
   }
 
-  lastRun(stackId: number): RunRow | null {
-    const r = this.db.prepare(`SELECT * FROM stack_runs WHERE stack_id = ? ORDER BY id DESC LIMIT 1`).get(stackId) as Raw | undefined;
+  /** 最近的一次 run；给了 before 时是 id 比它小的那次（正在跑的那次之前的）。 */
+  lastRun(stackId: number, before?: number): RunRow | null {
+    const r = (before === undefined
+      ? this.db.prepare(`SELECT * FROM stack_runs WHERE stack_id = ? ORDER BY id DESC LIMIT 1`).get(stackId)
+      : this.db.prepare(`SELECT * FROM stack_runs WHERE stack_id = ? AND id < ? ORDER BY id DESC LIMIT 1`).get(stackId, before)) as Raw | undefined;
     return r ? toRun(r) : null;
   }
 

@@ -127,6 +127,16 @@ export async function trackedDirty(cwd: string): Promise<boolean> {
   return out.length > 0;
 }
 
+/**
+ * 把检出从 from 换到 to 时会被盖掉的未跟踪文件（reset --keep 会拒绝）：from..to 之间改动过的路径里、这个目录下没被跟踪的。
+ */
+export async function untrackedInTheWay(cwd: string, from: string, to: string): Promise<string[]> {
+  const changed = new Set((await gitOk(cwd, ["diff", "--name-only", "--no-renames", from, to])).split(/\r?\n/).filter(Boolean));
+  if (changed.size === 0) return [];
+  const untracked = (await gitOk(cwd, ["ls-files", "--others", "--exclude-standard", "--full-name"])).split(/\r?\n/).filter(Boolean);
+  return untracked.filter((f) => changed.has(f));
+}
+
 export async function treeOf(cwd: string, commit: string): Promise<string> {
   return gitOk(cwd, ["rev-parse", `${commit}^{tree}`]);
 }

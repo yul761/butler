@@ -1902,11 +1902,13 @@ async function bootstrap(): Promise<void> {
       ticketKey: r.ticketKey, ticketRepoId: r.id, ticketTitle: tickets.get(r.ticketKey)?.title ?? null,
       worktree: r.workMode === "worktree" && r.worktreePath && r.worktreeRemovedAt === null && existsSync(r.worktreePath) ? r.worktreePath : null,
     });
-    const direct = tickets.reposByBranch(branch).find((r) => samePath(r.repoPath, repoPath));
+    // 只认没归档的 ticket；分支名被重复用过时取最新的那个
+    const live = (r: TicketRepo): boolean => { const t = tickets.get(r.ticketKey); return t !== null && t.archivedAt === null; };
+    const direct = tickets.reposByBranch(branch).filter((r) => samePath(r.repoPath, repoPath) && live(r)).at(-1);
     if (direct) return own(direct);
     for (const o of branchOwners.byBranch(branch)) {
       const r = tickets.getRepo(o.repoId);
-      if (r && samePath(r.repoPath, repoPath)) return { ...own(r), worktree: null };
+      if (r && samePath(r.repoPath, repoPath) && live(r)) return { ...own(r), worktree: null };
     }
     return null;
   };

@@ -99,8 +99,25 @@ describe("StackControl (workstream K)", () => {
     expect(await c.handle({ kind: "feature", featureId: 1 }, { op: "stack_define", branches: ["A-1", "A-2"], repo: "api" })).toMatchObject({ ok: false });
     expect(await c.handle({ kind: "feature", featureId: 1 }, { op: "stack_define", branches: ["x", "y"], repo: "nowhere" })).toMatchObject({ ok: false });
     expect(service.define).not.toHaveBeenCalled();
-    await c.handle({ kind: "feature", featureId: 1 }, { op: "stack_define", branches: ["x", "y"], repo: "SHOP" });
-    expect(service.define).toHaveBeenCalledWith(expect.objectContaining({ repoPath: repo, branches: ["x", "y"] }));
+    await c.handle({ kind: "feature", featureId: 1 }, { op: "stack_define", branches: ["a1", "a2"], repo: "SHOP" });
+    expect(service.define).toHaveBeenCalledWith(expect.objectContaining({ repoPath: repo, branches: ["a1", "a2"] }));
+  });
+
+  it("lets a feature coordinator change only stacks whose open layers are all its own", async () => {
+    // 栈不记 feature；有一层是 B-1（feature 2），另一层不是任何 ticket 的
+    const mixed = stack(2, {}, [["x", null], ["b1", "B-1"]]);
+    const { c, service } = setup([mixed]);
+    // 看得到（有一层是它的），改不了
+    expect((value(await c.handle({ kind: "feature", featureId: 2 }, { op: "list_stacks" })) as { id: number }[]).map((s) => s.id)).toEqual([2]);
+    expect(await c.handle({ kind: "feature", featureId: 2 }, { op: "stack_rebase", stack: 2 })).toMatchObject({ ok: false });
+    expect(await c.handle({ kind: "feature", featureId: 2 }, { op: "stack_layer_mode", stack: 2, branch: "b1", mode: "draft" })).toMatchObject({ ok: false });
+    expect(service.rebaseNow).not.toHaveBeenCalled();
+    expect(service.setLayerMode).not.toHaveBeenCalled();
+    // 别的 feature 的分支不能放进自己的栈
+    expect(await c.handle({ kind: "feature", featureId: 1 }, { op: "stack_define", branches: ["a1", "b1"], repo: "shop" })).toMatchObject({ ok: false });
+    expect(service.define).not.toHaveBeenCalled();
+    // Butler 总控都行
+    expect(await c.handle({ kind: "butler" }, { op: "stack_rebase", stack: 2 })).toMatchObject({ ok: true });
   });
 
   it("records the feature for a Butler-control stack only when every ticket shares it", async () => {
