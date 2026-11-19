@@ -31,6 +31,32 @@ export function predictConflicts(expected: readonly string[], running: readonly 
   return out;
 }
 
+export interface ActiveInRepoDeps<R extends { repoPath: string }> {
+  tickets(): readonly { key: string; repos: readonly R[] }[];
+  openTerminalCount(key: string): number;
+  /** 拿着合并闸门的 ticket（null 是不属于 ticket 的占位）。 */
+  heldTickets(): Iterable<string | null>;
+  workDir(r: R): string;
+  changedPaths(cwd: string): Promise<string[]>;
+  samePath(a: string, b: string): boolean;
+}
+
+/**
+ * 这个仓库里在跑的 ticket（开着终端或者拿着合并闸门）和它们的 worktree 相对主干改过的文件：给冲突预判用。
+ * 一个 ticket 有几个仓库时，只看在这个仓库里的那一个。
+ */
+export async function activeInRepo<R extends { repoPath: string }>(repoPath: string, d: ActiveInRepoDeps<R>): Promise<RunningWork[]> {
+  const held = new Set<string>();
+  for (const k of d.heldTickets()) if (k !== null) held.add(k);
+  const out: RunningWork[] = [];
+  for (const t of d.tickets()) {
+    const r = t.repos.find((x) => d.samePath(x.repoPath, repoPath));
+    if (!r || (d.openTerminalCount(t.key) === 0 && !held.has(t.key))) continue;
+    out.push({ key: t.key, paths: await d.changedPaths(d.workDir(r)) });
+  }
+  return out;
+}
+
 /** 一个 worktree 相对主干改过的文件（已提交 + 没提交的 + 没跟踪的）。拿不到为 []。 */
 export async function changedPaths(cwd: string, run: GitRun): Promise<string[]> {
   try {
