@@ -222,6 +222,8 @@ export interface CreateTicketInput {
   featureId?: number;
   workMode?: WorkMode;
   branch?: string;
+  /** 新分支从哪里开出来（按仓库；工作流 K 的 stack_on：从下面那层的分支开）。没给的仓库从当前 HEAD 开。 */
+  startPoints?: { repoPath: string; ref: string }[];
 }
 
 export interface CreateFeatureInput {

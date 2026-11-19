@@ -1,4 +1,5 @@
-import { mkdirSync, renameSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
@@ -12,8 +13,11 @@ import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import { FeatureService } from "../tickets/feature-service";
 import { TicketService } from "../tickets/ticket-service";
 import { controlHandler } from "./control-handler";
+import { StackControl, type StackControlDeps } from "./stack-control";
 
-async function setup() {
+const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+
+async function setup(opts: { stacks?: (d: { tickets: TicketsRepo; features: FeaturesRepo }) => StackControl } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -54,6 +58,7 @@ async function setup() {
     kill: (termId) => void killed.push(termId),
     screenNeedsUser: (termId) => needsUser.has(termId),
     lastReply: (id) => replies.get(id) ?? null,
+    ...(opts.stacks && { stacks: opts.stacks({ tickets, features }) }),
     log: (m) => void logs.push(m),
   });
   const parent = join(tempDir("butler-code-"), "shop");
@@ -188,6 +193,36 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     const { handle, other } = await setup();
     const r = await handle({ v: 1, featureId: other.id, from: null, op: "create_ticket", ticket: "OTH-2", branch: "oth/two" });
     expect(r).toMatchObject({ ok: true, value: { key: "OTH-2", repos: [{ name: "frontend", branch: "oth/two" }] } });
+  });
+
+  it("stacks a new ticket on another: the branch starts from the parent's branch (workstream K)", async () => {
+    const calls: { canStackOn: [string, string][]; stackOn: object[] } = { canStackOn: [], stackOn: [] };
+    const service = {
+      canStackOn: (repoPath: string, branch: string) => (calls.canStackOn.push([repoPath, branch]), { ok: true as const }),
+      stackOn: async (p: object) => (calls.stackOn.push(p), { ok: true as const }),
+    } as unknown as StackControlDeps["service"];
+    const { handle, base, feature, frontend } = await setup({ stacks: (d) => new StackControl({ service, tickets: () => d.tickets.list(), features: d.features }) });
+    // 父 ticket 的分支上先有一个提交
+    const parentDir = join(feature.workspaceDir, "frontend-dms-1");
+    writeFileSync(join(parentDir, "cart.txt"), "cart");
+    git(parentDir, "add", ".");
+    git(parentDir, "commit", "-qm", "cart");
+    const parentHead = git(parentDir, "rev-parse", "HEAD");
+    const r = await handle({ ...base, op: "create_ticket", ticket: "DMS-5", repos: ["frontend"], stack_on: "dms-1" });
+    expect(r).toMatchObject({ ok: true, value: { key: "DMS-5", stacked: true } });
+    expect(git(join(feature.workspaceDir, "frontend-dms-5"), "rev-parse", "HEAD")).toBe(parentHead);
+    expect(calls.canStackOn).toEqual([[frontend, "feature/DMS-1"]]);
+    expect(calls.stackOn).toEqual([{ repoPath: frontend, parentBranch: "feature/DMS-1", branch: "feature/DMS-5", featureId: feature.id, epicId: null }]);
+    // 父 ticket 不在这个 feature、或者没有这个仓库：什么都不建
+    expect(await handle({ ...base, op: "create_ticket", ticket: "DMS-6", repos: ["frontend"], stack_on: "OTH-1" })).toMatchObject({ ok: false });
+    expect(await handle({ ...base, op: "create_ticket", ticket: "DMS-6", repos: ["backend"], stack_on: "DMS-1" })).toMatchObject({ ok: false });
+  });
+
+  it("says stacks are not available when the handler has none", async () => {
+    const { handle, base, tickets } = await setup();
+    expect(await handle({ ...base, op: "create_ticket", ticket: "DMS-7", repos: ["frontend"], stack_on: "DMS-1" })).toMatchObject({ ok: false });
+    expect(await handle({ ...base, op: "list_stacks" })).toMatchObject({ ok: false });
+    expect(tickets.get("DMS-7")).toBeNull();
   });
 
   it("explains what is wrong instead of creating anything", async () => {

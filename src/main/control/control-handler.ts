@@ -16,6 +16,7 @@ import type { SessionsRepo } from "../db/sessions-repo";
 import type { SessionModelChoice } from "../routing/routing-service";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { admitOrRefuse, type AdmissionGate } from "./admission";
+import type { StackControl } from "./stack-control";
 import { butlerControl, type ButlerControlDeps } from "./butler-control";
 import type { InboxService } from "../inbox/inbox-service";
 import type { DeliveryGuard } from "../sessions/delivery-guard";
@@ -87,6 +88,8 @@ export interface ControlHandlerDeps {
    * Butler 总控打开关着的总控都先问它；list_sessions 带上还能再开几个。不给时一律放行。
    */
   admission?: AdmissionGate;
+  /** 栈式 PR（工作流 K）：list_stacks、stack_define、stack_rebase、stack_layer_mode 和 create_ticket 的 stack_on。不给时这些都报「没开」。 */
+  stacks?: StackControl;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -297,11 +300,20 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
         if (!picked.includes(r)) picked.push(r);
       }
     }
+    // stack_on（工作流 K）：建 worktree 之前先核对能不能接，新分支从下面那层的分支开出来。
+    let startPoints: { repoPath: string; ref: string }[] | undefined;
+    if (req.stack_on !== undefined) {
+      if (!d.stacks) return fail(M().ctlStacksOff);
+      const prep = d.stacks.prepareStackOn(f.id, req.stack_on, picked.map((r) => r.repoPath));
+      if ("error" in prep) return fail(prep.error);
+      startPoints = prep.startPoints;
+    }
     let t: Ticket;
     try {
       t = await d.ticketService.create({
         key: req.ticket, title: req.title, featureId: f.id, workMode: "worktree",
         repoPaths: picked.map((r) => r.repoPath), ...(req.branch !== undefined && { branch: req.branch }),
+        ...(startPoints && { startPoints }),
       });
     } catch (e) {
       if (e instanceof TicketError && e.code === "invalid_key") return fail(M().ctlInvalidKey(req.ticket, d.ticketPattern?.() ?? DEFAULT_TICKET_PATTERN));
@@ -309,11 +321,13 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       d.log?.(`control: create_ticket ${req.ticket} failed`, e);
       return fail((e as Error).message);
     }
+    const stackProblems = startPoints && d.stacks ? await d.stacks.finishStackOn(f, t, startPoints).catch((e: unknown) => [(e as Error).message]) : [];
     d.notify();
     return ok({
       key: t.key, title: t.title,
       repos: t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), branch: r.branch })),
       note: M().ctlTicketCreated,
+      ...(startPoints && { stacked: stackProblems.length === 0, ...(stackProblems.length > 0 && { stackProblems }) }),
     });
   };
 
@@ -467,6 +481,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (!e || e.archivedAt !== null) return fail(M().ctlEpicGone);
     if (req.op === "list_repos") return ok(e.repos.map((r) => ({ name: name(r), path: r.repoPath })));
     if (req.op === "list_features") return ok((d.epicRows?.(e.id) ?? []).map(rowOut));
+    if (req.op === "list_stacks") return d.stacks ? d.stacks.handle({ kind: "epic", epicId: e.id }, req) : fail(M().ctlStacksOff);
     if (req.op === "create_feature") return createAndStart(e, req);
     if (req.op === "set_epic_plan") return setEpicPlan(e, req.plan);
     if (req.op === "start_feature") {
@@ -512,6 +527,9 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     }
 
     if (req.op === "create_ticket") return createTicket(f, req);
+    if (req.op === "list_stacks" || req.op === "stack_define" || req.op === "stack_rebase" || req.op === "stack_layer_mode") {
+      return d.stacks ? d.stacks.handle({ kind: "feature", featureId: f.id }, req) : fail(M().ctlStacksOff);
+    }
 
     if (req.op === "session_activity") {
       const keys = new Set(own.map((t) => t.key));

@@ -71,6 +71,19 @@ export type InboxControlOp =
   | { op: "ask_user"; question: string; options?: string[]; context?: string; recommended?: number }
   | { op: "report"; text: string; kind: ReportKind };
 
+/** stack_define 一次最多几层。 */
+export const MAX_STACK_LAYERS = 30;
+
+/**
+ * 栈式 PR（工作流 K）：feature 总控和 Butler 总控有全部四个，epic session 只有 list_stacks。
+ * stack_define 的 branches 从下到上，每一项是分支名或 ticket 号；stack 给了就整个换掉那个栈的层。
+ */
+export type StackControlOp =
+  | { op: "list_stacks" }
+  | { op: "stack_define"; branches: string[]; repo?: string; name?: string; stack?: number }
+  | { op: "stack_rebase"; stack: number }
+  | { op: "stack_layer_mode"; stack: number; branch: string; mode: "draft" | "branch" };
+
 /** ticket 总控的请求（设计文档 2026-10-23）。 */
 export type TicketControlRequest =
   | ({ v: 1; ticketKey: string; from: string | null } & InboxControlOp)
@@ -104,9 +117,10 @@ export const MAX_CREATE_REPOS = 20;
  */
 export type FeatureControlRequest =
   | ({ v: 1; featureId: number; from: string | null } & InboxControlOp)
+  | ({ v: 1; featureId: number; from: string | null } & StackControlOp)
   | { v: 1; featureId: number; from: string | null; op: "list_tickets" }
   | { v: 1; featureId: number; from: string | null; op: "list_repos" }
-  | { v: 1; featureId: number; from: string | null; op: "create_ticket"; ticket: string; title?: string; repos?: string[]; branch?: string }
+  | { v: 1; featureId: number; from: string | null; op: "create_ticket"; ticket: string; title?: string; repos?: string[]; branch?: string; stack_on?: string }
   | { v: 1; featureId: number; from: string | null; op: "list_sessions" }
   | { v: 1; featureId: number; from: string | null; op: "session_activity"; session: string }
   | { v: 1; featureId: number; from: string | null; op: "start_session"; ticket: string; repo?: string; task: string; model?: StartModel }
@@ -121,6 +135,7 @@ export type FeatureControlRequest =
  */
 export type EpicControlRequest =
   | ({ v: 1; epicId: number; from: string | null } & InboxControlOp)
+  | { v: 1; epicId: number; from: string | null; op: "list_stacks" }
   | { v: 1; epicId: number; from: string | null; op: "list_features" }
   | { v: 1; epicId: number; from: string | null; op: "list_repos" }
   | { v: 1; epicId: number; from: string | null; op: "create_feature"; name: string; repos?: string[]; brief: string; start?: true }
@@ -147,6 +162,7 @@ export type ButlerMessageTarget = { session: string; feature?: undefined; epic?:
 
 export type ButlerControlRequest =
   | ({ v: 1; butler: true; from: string | null } & InboxControlOp)
+  | ({ v: 1; butler: true; from: string | null } & StackControlOp)
   | { v: 1; butler: true; from: string | null; op: "list_epics" }
   | { v: 1; butler: true; from: string | null; op: "list_features" }
   | { v: 1; butler: true; from: string | null; op: "list_tickets"; feature?: string; epic?: string }
@@ -210,6 +226,33 @@ function inboxOp<B extends object>(base: B, o: Record<string, unknown>): (B & In
 }
 const isInboxOp = (op: unknown) => op === "ask_user" || op === "report";
 
+export const isStackOp = (op: unknown): op is StackControlOp["op"] => op === "list_stacks" || op === "stack_define" || op === "stack_rebase" || op === "stack_layer_mode";
+
+const okId = (x: unknown): x is number => typeof x === "number" && Number.isSafeInteger(x) && x > 0;
+
+function stackOp<B extends object>(base: B, o: Record<string, unknown>): (B & StackControlOp) | null {
+  if (o.op === "list_stacks") return { ...base, op: "list_stacks" };
+  if (o.op === "stack_define") {
+    if (!Array.isArray(o.branches) || o.branches.length < 2 || o.branches.length > MAX_STACK_LAYERS || !o.branches.every((b) => okName(b, 250))) return null;
+    if (o.repo !== undefined && !okName(o.repo, 4096)) return null;
+    if (o.name !== undefined && (typeof o.name !== "string" || o.name.length > 200)) return null;
+    if (o.stack !== undefined && !okId(o.stack)) return null;
+    return {
+      ...base, op: "stack_define", branches: o.branches as string[],
+      ...(o.repo !== undefined && { repo: o.repo as string }),
+      ...(typeof o.name === "string" && o.name.trim() && { name: o.name }),
+      ...(o.stack !== undefined && { stack: o.stack as number }),
+    };
+  }
+  if (!okId(o.stack)) return null;
+  if (o.op === "stack_rebase") return { ...base, op: "stack_rebase", stack: o.stack };
+  if (o.op === "stack_layer_mode") {
+    if (!okName(o.branch, 250) || (o.mode !== "draft" && o.mode !== "branch")) return null;
+    return { ...base, op: "stack_layer_mode", stack: o.stack, branch: o.branch, mode: o.mode };
+  }
+  return null;
+}
+
 const isSessionOp = (op: unknown) => op === "session_activity" || op === "end_session" || op === "refresh_session";
 
 /** 主进程按运行时类型检查请求（文件谁都能写）：不合规返回 null。ticketKey 和 featureId 必须正好有一个。 */
@@ -223,6 +266,7 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     const base = { v: 1 as const, epicId: o.epicId as number, from };
     if (isInboxOp(o.op)) return inboxOp(base, o);
     if (o.op === "list_features") return { ...base, op: "list_features" };
+    if (o.op === "list_stacks") return { ...base, op: "list_stacks" };
     if (o.op === "list_repos") return { ...base, op: "list_repos" };
     if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
     if (isSessionOp(o.op)) return sessionOp(base, o);
@@ -253,16 +297,19 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
     if (o.op === "epic_context") return { ...base, op: "epic_context" };
     if (isSessionOp(o.op)) return sessionOp(base, o);
+    if (isStackOp(o.op)) return stackOp(base, o);
     if (o.op === "create_ticket") {
       if (!okName(o.ticket, 200)) return null;
       if (o.title !== undefined && (typeof o.title !== "string" || o.title.length > 500)) return null;
       if (o.branch !== undefined && !okName(o.branch, 250)) return null;
+      if (o.stack_on !== undefined && !okName(o.stack_on, 200)) return null;
       if (o.repos !== undefined && (!Array.isArray(o.repos) || o.repos.length > MAX_CREATE_REPOS || !o.repos.every((r) => okName(r, 4096)))) return null;
       return {
         ...base, op: "create_ticket", ticket: o.ticket,
         ...(o.title !== undefined && { title: o.title as string }),
         ...(o.repos !== undefined && { repos: o.repos as string[] }),
         ...(o.branch !== undefined && { branch: o.branch as string }),
+        ...(o.stack_on !== undefined && { stack_on: o.stack_on as string }),
       };
     }
     if (o.op === "start_session") {
@@ -294,6 +341,7 @@ function parseButlerRequest(o: Record<string, unknown>, from: string | null): Bu
   if (o.butler !== true || "ticketKey" in o || "featureId" in o || "epicId" in o) return null;
   const base = { v: 1 as const, butler: true as const, from };
   if (isInboxOp(o.op)) return inboxOp(base, o);
+  if (isStackOp(o.op)) return stackOp(base, o);
   if (o.op === "list_epics" || o.op === "list_features" || o.op === "list_prs" || o.op === "list_sessions" || o.op === "list_inbox") {
     return { ...base, op: o.op };
   }

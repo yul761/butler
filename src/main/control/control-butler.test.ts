@@ -17,7 +17,7 @@ import type { ControlHandlerDeps } from "./control-handler";
 import { controlHandler } from "./control-handler";
 
 /** Butler 总控（BTL-190 第 5 点）：两个 epic（一个归档了）、三个 feature（一个不属于 epic）、两个 ticket（一个归档了）和各种 session。 */
-function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admission"]; noMetrics?: boolean } = {}) {
+function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admission"]; noMetrics?: boolean; stacks?: ControlHandlerDeps["stacks"] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -111,6 +111,7 @@ function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admiss
     submit: async (termId, text) => (submitted.push([termId, text]), "sent" as const),
     notify: () => {},
     admission: o.admission,
+    stacks: o.stacks,
     ...(o.butlerDeps !== false && {
       butler: {
         epicViews: () => [{ id: shop, name: "shop", sessions: [view("ep"), view("closed-ep")], waiting: true, stuck: false, features: rows.filter((r) => r.epicId === shop) }],
@@ -250,6 +251,22 @@ describe("Butler 总控 read-only tools (BTL-190 5)", () => {
     expect(err(await call({ op: "refresh_feature_summary", feature: "nope" }))).toContain("nope");
     open.delete("bt");
     expect((await call({ op: "refresh_feature_summary", feature: "docs" })).ok).toBe(false);
+  });
+
+  it("stack tools go to the stacks with the Butler scope; writes only from the open Butler 总控 (workstream K)", async () => {
+    const seen: [unknown, string][] = [];
+    const stacks = { handle: async (scope: unknown, req: { op: string }) => (seen.push([scope, req.op]), { v: 1 as const, ok: true as const, value: [] }) } as never;
+    const { call, open } = setup({ stacks });
+    expect((await call({ op: "list_stacks" })).ok).toBe(true);
+    expect((await call({ op: "stack_rebase", stack: 1 })).ok).toBe(true);
+    expect(seen).toEqual([[{ kind: "butler" }, "list_stacks"], [{ kind: "butler" }, "stack_rebase"]]);
+    open.delete("bt");
+    expect((await call({ op: "list_stacks" })).ok).toBe(true);
+    for (const req of [{ op: "stack_rebase", stack: 1 }, { op: "stack_define", branches: ["a", "b"] }, { op: "stack_layer_mode", stack: 1, branch: "b", mode: "draft" }]) {
+      expect((await call(req)).ok).toBe(false);
+    }
+    expect(seen).toHaveLength(3);
+    expect((await setup().call({ op: "list_stacks" })).ok).toBe(false);
   });
 
   it("list_sessions lists every open session but itself, with its role, owners, needs-you and decisions", async () => {

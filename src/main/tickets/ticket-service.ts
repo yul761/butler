@@ -147,7 +147,8 @@ export class TicketService {
     const paths = (input.repoPaths ?? (input.repoPath ? [input.repoPath] : [])).map((p) => p.trim()).filter(Boolean);
     const repos: Awaited<ReturnType<TicketService["prepareRepo"]>>[] = [];
     for (const repoPath of paths) {
-      repos.push(await this.prepareRepo(key, repos, { repoPath, workMode: input.workMode ?? "worktree", branch: input.branch, title: input.title }, featureId));
+      const start = input.startPoints?.find((sp) => samePath(sp.repoPath, repoPath))?.ref;
+      repos.push(await this.prepareRepo(key, repos, { repoPath, workMode: input.workMode ?? "worktree", branch: input.branch, title: input.title, start }, featureId));
     }
     const [first, ...rest] = repos.map((r) => ({ ...r, ticketKey: key, createdAt: now }));
     this.d.tickets.insert(
@@ -183,7 +184,7 @@ export class TicketService {
   private async prepareRepo(
     key: string,
     existing: Pick<TicketRepo, "repoPath">[],
-    input: { repoPath: string; workMode: WorkMode; branch?: string; title?: string | null },
+    input: { repoPath: string; workMode: WorkMode; branch?: string; title?: string | null; start?: string },
     featureId: number | null,
   ): Promise<Pick<TicketRepo, "repoPath" | "workMode" | "worktreePath" | "branch">> {
     let root: string;
@@ -204,14 +205,14 @@ export class TicketService {
       const leftover = this.worktreePath(key, featureId, root);
       if (input.workMode === "worktree") {
         // 以前移除（或改成分支模式）时留下的 worktree：干净的就接着用。
-        worktreePath = await this.attachWorktree(root, leftover, branch, exists);
+        worktreePath = await this.attachWorktree(root, leftover, branch, exists, input.start);
       } else {
         // 留下的 worktree 还占着这个分支：先让它离开，主仓库之后才能检出（没有改动、没有游离提交时）。
         if (exists && existsSync(leftover) && (await isWorktreeOf(root, leftover)) && (await currentBranch(leftover)) === branch) {
           if (await isDirty(leftover)) throw new TicketError("dirty", M().worktreeDirty(leftover));
           await detachHead(leftover);
         }
-        if (!exists) await createBranch(root, branch);
+        if (!exists) await createBranch(root, branch, input.start);
       }
     } catch (e) {
       throw asTicketError(e);

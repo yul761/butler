@@ -52,6 +52,13 @@ const ZH = {
     nothingToRestore: "没有可以恢复的备份",
     restoreMoved: (b: string) => `${b} 在那次 rebase 之后又变过，不能直接恢复`,
     switchOff: (what: string) => `对外动作「${what}」没开（设置 → 通用 → 对外动作），这一步没做`,
+    needRepo: (names: string) => `要给 repo（这几个仓库里的一个）：${names}`,
+    noSuchRepo: (wanted: string, names: string) => `没有仓库 ${wanted}。可以用的：${names}`,
+    ticketNoRepo: (key: string, repo: string) => `ticket ${key} 没有仓库 ${repo}`,
+    notYours: "这个栈不在你管的范围里",
+    stackOnNoTicket: (key: string) => `stack_on：这个 feature 下没有 ticket ${key}`,
+    stackOnRepo: (key: string, repo: string) => `stack_on：ticket ${key} 没有仓库 ${repo}，新 ticket 的仓库都要是它有的`,
+    stackOnFailed: (msg: string) => `ticket 建好了，但没接进栈：${msg}`,
   },
   note: (p: { k: number; n: number; above: string[] }) =>
     `这个 PR 是栈的第 ${p.k}/${p.n} 层` +
@@ -99,6 +106,13 @@ const EN: StackTexts = {
     nothingToRestore: "There is no backup to restore",
     restoreMoved: (b) => `${b} changed after that rebase, so it can't be restored directly`,
     switchOff: (what) => `The outward action "${what}" is off (Settings → General → Outward actions), so this step was not done`,
+    needRepo: (names) => `Give repo (one of these repositories): ${names}`,
+    noSuchRepo: (wanted, names) => `There is no repository ${wanted}. Available: ${names}`,
+    ticketNoRepo: (key, repo) => `Ticket ${key} has no repository ${repo}`,
+    notYours: "This stack is outside what you manage",
+    stackOnNoTicket: (key) => `stack_on: this feature has no ticket ${key}`,
+    stackOnRepo: (key, repo) => `stack_on: ticket ${key} has no repository ${repo}; every repository of the new ticket must be one it has`,
+    stackOnFailed: (msg) => `The ticket was created but not added to the stack: ${msg}`,
   },
   note: (p) =>
     `This PR is layer ${p.k}/${p.n} of a stack` +

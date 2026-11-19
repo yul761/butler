@@ -319,6 +319,14 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
         if (!b.metrics) return fail(M().ctlMetricsUnavailable);
         return ok(b.metrics(req.days));
       }
+      case "list_stacks":
+        return d.stacks ? d.stacks.handle({ kind: "butler" }, req) : fail(M().ctlStacksOff);
+      case "stack_define":
+      case "stack_rebase":
+      case "stack_layer_mode":
+        // 改本地分支、可能推送：和 refresh_session 一样只接受开着的 Butler 总控自己发的。
+        if (!fromOpenButler) return fail(M().ctlInboxNotYours);
+        return d.stacks ? d.stacks.handle({ kind: "butler" }, req) : fail(M().ctlStacksOff);
       case "refresh_feature_summary": {
         // 会花额度：和 refresh_session 一样只接受开着的 Butler 总控自己发的。
         if (!fromOpenButler) return fail(M().ctlInboxNotYours);

@@ -175,6 +175,7 @@ import { CommentLoop } from "./loop/comment-loop";
 import { StacksRepo } from "./db/stacks-repo";
 import { StackPolicyService } from "./stacks/stack-policy";
 import { StackService, type OwnedBranch } from "./stacks/stack-service";
+import { StackControl } from "./control/stack-control";
 import { classifyCommentsByModel } from "./loop/comment-model";
 import { LoopPolicies } from "./loop/policies";
 import { effectDays, LoopStats } from "./loop/stats";
@@ -2609,6 +2610,7 @@ async function bootstrap(): Promise<void> {
       ticketPattern: () => settings.get("ticketPattern"),
       sessionModel: (m) => routing.sessionModel(m),
       admission,
+      stacks: new StackControl({ service: stackService, tickets: () => tickets.list(), features }),
       log: logger,
     }),
     log: logger,
