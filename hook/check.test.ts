@@ -129,6 +129,14 @@ describe("butler-hook check (PostToolUse)", () => {
     expect(t.hits()).toMatchObject([{ kind: "hit", outcome: "timeout", blocked: false }]);
   }, 15_000);
 
+  it("lets the edit through and logs an error for each check when reading the file throws (workstream R)", async () => {
+    const t = setup([check({ type: "forbidden_pattern", name: "no foo", params: { pattern: "foo\\(" } })]);
+    const stdin = t.write("src/a.ts", "foo(1)\n");
+    const broken = { ...realCheckDeps, readText: (f: string) => (f.endsWith("a.ts") ? (() => { throw new Error("EIO"); })() : realCheckDeps.readText(f)) };
+    expect(await runCheck(stdin, t.env, broken)).toBe("");
+    expect(t.hits()).toMatchObject([{ kind: "hit", outcome: "error", blocked: false, detail: "EIO" }]);
+  });
+
   it("records a command that cannot run as unavailable", async () => {
     const t = setup([check({ type: "run_command", name: "missing", params: { command: "definitely-not-a-command-xyz", stage: "edit" } })]);
     expect(await runCheck(t.write("src/a.ts", "x\n"), t.env, realCheckDeps)).toBe("");
@@ -146,6 +154,21 @@ describe("butler-hook check-push (PreToolUse Bash)", () => {
     expect(j.hookSpecificOutput.permissionDecisionReason).toContain("PUSH BLOCKED");
     expect(j.hookSpecificOutput.permissionDecisionReason).toContain("2 tests failed");
     expect(t.hits()).toMatchObject([{ kind: "hit", stage: "push", outcome: "fail", blocked: true }]);
+  });
+
+  it("lets the push through and logs an error when running a check throws, and still runs the others (workstream R)", async () => {
+    const t = setup([
+      check({ type: "run_command", name: "boom", params: { command: "exit 0", stage: "push" }, globs: [] }),
+      check({ id: 2, key: "ck_2", type: "run_command", name: "tests", params: { command: "exit 1", stage: "push" }, mode: "shadow", globs: [] }),
+    ]);
+    let n = 0;
+    const broken = { ...realCheckDeps, run: (o: Parameters<typeof realCheckDeps.run>[0]) => (n++ === 0 ? Promise.reject(new Error("spawn exploded")) : realCheckDeps.run(o)) };
+    const j = JSON.parse(await runPushCheck(bash(t.repo, "git push"), t.env, broken));
+    expect(j.hookSpecificOutput.permissionDecision).toBeUndefined();
+    expect(t.hits()).toMatchObject([
+      { kind: "hit", stage: "push", outcome: "error", blocked: false, detail: "spawn exploded" },
+      { kind: "hit", stage: "push", outcome: "fail", blocked: false },
+    ]);
   });
 
   it("does nothing for commands that are not a real push", async () => {
