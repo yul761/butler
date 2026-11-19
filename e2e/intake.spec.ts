@@ -16,7 +16,7 @@ function interactiveModels(s: Sandbox): string[] {
 }
 
 /**
- * 工作流 N 验收：设置页「自动接活」配一个 JSON 文件来源、仓库映射，全局一层打开总开关、最多同时 1 个；预审打开。
+ * 工作流 N 验收：设置页「自动接活」配一个 JSON 文件来源、仓库映射（总开关关着时什么都不发生），再在全局一层打开总开关、最多同时 1 个；预审打开。
  * 文件里三个 ticket，规则就能分完（不调模型）：
  * - E2E-31 文档类、信息全 → 小、低风险，自动开 session；
  * - E2E-32 功能、没写验收标准 → 只提醒（「现在」页一条），不开 session；
@@ -50,16 +50,10 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   await page.getByTestId("review-enabled").check();
   await expect(page.getByTestId("review-enabled")).toBeChecked();
 
-  // 2. 「自动接活」：策略先开（全局，最多 1 个），再配来源；来源一配好就拉一次。
+  // 2. 「自动接活」：先配来源和仓库映射，总开关还关着——什么都不拉、不开 session、进度页没有队列（工作流 R）。
   await page.getByTestId("settings-tab-intake").click();
   await expect(page.getByTestId("intake-policy")).toBeVisible();
   await expect(page.getByTestId("intake-effective-enabled")).toHaveText(S.policyBool(false));
-  await page.getByTestId("intake-input-enabled").selectOption("true");
-  await page.getByTestId("intake-input-maxParallel").fill("1");
-  await page.getByTestId("intake-policy-save").click();
-  await expect(page.getByTestId("intake-policy-message")).toHaveText(S.policySaved);
-  await expect(page.getByTestId("intake-effective-enabled")).toHaveText(S.policyBool(true));
-
   const map = page.getByTestId("setting-intakeRepoMap");
   await map.fill(`* => ${s.repo}`);
   await map.blur();
@@ -68,8 +62,22 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   await path.fill(file);
   await path.blur();
   await expect(page.getByTestId("intake-setting-error")).toHaveCount(0);
+  // 改设置后 1 秒会试着拉一次（总开关关着就不拉）；多等一会儿再看。
+  await page.waitForTimeout(3000);
+  await sidebar(page, S.progressNav).click();
+  await expect(page.getByTestId("progress-intake")).toHaveCount(0);
+  expect(interactiveModels(s)).toEqual([]);
 
-  // 3. 进度页的队列：E2E-31 开工了，E2E-32 缺信息，E2E-33 等名额。
+  // 3. 再打开总开关（全局，最多 1 个）：一保存就拉一次。
+  await sidebar(page, S.settings).click();
+  await page.getByTestId("settings-tab-intake").click();
+  await page.getByTestId("intake-input-enabled").selectOption("true");
+  await page.getByTestId("intake-input-maxParallel").fill("1");
+  await page.getByTestId("intake-policy-save").click();
+  await expect(page.getByTestId("intake-policy-message")).toHaveText(S.policySaved);
+  await expect(page.getByTestId("intake-effective-enabled")).toHaveText(S.policyBool(true));
+
+  // 4. 进度页的队列：E2E-31 开工了，E2E-32 缺信息，E2E-33 等名额。
   await sidebar(page, S.progressNav).click();
   const queue = page.getByTestId("intake-queue");
   await expect(queue).toBeVisible({ timeout: 20_000 });
@@ -82,20 +90,20 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   await expect(page.getByTestId("intake-row-E2E-31")).toContainText("mid · claude-fake-mid");
   await expect.poll(() => interactiveModels(s)).toEqual(["claude-fake-mid"]);
 
-  // 4. 「现在」页只为 E2E-32 提醒（缺验收标准）；E2E-33 只是在排队，不提醒。
+  // 5. 「现在」页只为 E2E-32 提醒（缺验收标准）；E2E-33 只是在排队，不提醒。
   await sidebar(page, S.nowTitle).click();
   const notice = page.getByTestId("now-notice-intake");
   await expect(notice).toHaveCount(1);
   await expect(notice).toContainText("E2E-32");
   await expect(notice).toContainText(S.ik.missing.acceptance_criteria!);
 
-  // 5. 改 E2E-33 的规模：记成一次改分类，状态不变（还是等名额）。
+  // 6. 改 E2E-33 的规模：记成一次改分类，状态不变（还是等名额）。
   await sidebar(page, S.progressNav).click();
   await page.getByTestId("intake-size-E2E-33").selectOption("medium");
   await expect(page.getByTestId("intake-row-E2E-33")).toContainText(S.ik.edited);
   await expect(page.getByTestId("intake-row-E2E-33")).toHaveAttribute("data-state", "waiting");
 
-  // 6. 关掉 E2E-31 的 session：名额空了，E2E-33 自动开工（中等规模 → 中档）。
+  // 7. 关掉 E2E-31 的 session：名额空了，E2E-33 自动开工（中等规模 → 中档）。
   await page.locator(".sidebar .ticket .key").getByText("E2E-31", { exact: true }).click();
   const end = page.getByTitle(S.endSession, { exact: true });
   await end.click();
@@ -107,7 +115,7 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   // E2E-32 一直没开 session。
   await expect(page.getByTestId("intake-row-E2E-32")).toHaveAttribute("data-state", "needs_clarification");
 
-  // 7. 效果页：分类 3 个，自动开工 2 个，改了 1 个（33%）。
+  // 8. 效果页：分类 3 个，自动开工 2 个，改了 1 个（33%）。
   await sidebar(page, S.effectNav).click();
   const card = page.getByTestId("effect-intake");
   await expect(card).toBeVisible();
