@@ -3139,11 +3139,7 @@ async function bootstrap(): Promise<void> {
   procServices.start();
   usageScanner.start(usageScanMs(process.env));
   bgScheduler.start();
-  try {
-    backtest.start();
-  } catch (e) {
-    logger("backtest: scheduling the review failed", e);
-  }
+  const stopBacktestReview = backtest.keepReviewing();
   bgQueue.start();
   // 预审（工作流 G）：上次没跑完、任务已经不在了的收尾；review 效果补上漏掉的已合并 PR。
   preReview.sweep((jobId) => {
@@ -3245,6 +3241,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(discoveryTimer);
     clearInterval(refreshTimer);
     clearInterval(intakeTimer);
+    stopBacktestReview();
     clearInterval(scheduleTimer);
     if (stacksTimer) clearInterval(stacksTimer);
     availability.dispose();

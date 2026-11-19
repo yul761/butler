@@ -224,7 +224,25 @@ export function createBacktestStack(d: BacktestStackDeps) {
   /** 启动：排上复查（已经排着就不重复）。 */
   const start = () => d.queue.enqueue("backtest", { op: "review" }, { dedupeKey: "review", notBefore: d.now() + 5 * 60_000 });
 
-  return { repo, service, lifecycle, thresholds, metrics, view, act, notices, start, handler: service.handler };
+  /**
+   * 复查靠自己延后来一直排着；被取消、失败（处理函数之外出的错）的那一刻就断了，原来要等重启才接上（工作流 R，F3）。
+   * 这里排上，之后每小时再排一次：还排着或在跑时按 dedupeKey 不重复，断了就接上。返回停掉它的函数。
+   */
+  const keepReviewing = (): (() => void) => {
+    const arm = () => {
+      try {
+        start();
+      } catch (e) {
+        d.log?.("backtest: scheduling the review failed", e);
+      }
+    };
+    arm();
+    const timer = setInterval(arm, REVIEW_INTERVAL_MS);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  };
+
+  return { repo, service, lifecycle, thresholds, metrics, view, act, notices, start, keepReviewing, handler: service.handler };
 }
 
 export type BacktestStack = ReturnType<typeof createBacktestStack>;

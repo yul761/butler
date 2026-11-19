@@ -49,6 +49,23 @@ describe("backtest stack", () => {
     expect(t.queue.enqueue).toHaveBeenCalledWith("backtest", { op: "review" }, expect.objectContaining({ dedupeKey: "review" }));
   });
 
+  it("keeps the review queued: a review that was cancelled or failed is queued again within the hour (workstream R, F3)", () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup();
+      const stop = t.stack.keepReviewing();
+      expect(t.queue.enqueue).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(REVIEW_INTERVAL_MS);
+      expect(t.queue.enqueue).toHaveBeenCalledTimes(2);
+      expect(t.queue.enqueue).toHaveBeenLastCalledWith("backtest", { op: "review" }, expect.objectContaining({ dedupeKey: "review" }));
+      stop();
+      vi.advanceTimersByTime(REVIEW_INTERVAL_MS * 3);
+      expect(t.queue.enqueue).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-arms the review within the hour", async () => {
     const t = setup();
     const r = await t.stack.handler({ id: 1, kind: "backtest", payload: { op: "review" }, checkpoint: null, ticketKey: null, attempts: 1, signal: new AbortController().signal, save: () => {} } as never);
