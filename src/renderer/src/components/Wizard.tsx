@@ -8,6 +8,7 @@ import { S } from "../strings";
 import { LanguagePicker } from "./LanguagePicker";
 import { canAdvance, nextStep, prevStep, stepNumber, type WizardStep } from "../wizard";
 import { PrivacySettings } from "./PrivacySettings";
+import { ProfileCandidates } from "./ProfileCandidates";
 import { TrackerToolPicker } from "./TrackerToolPicker";
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -155,6 +156,14 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           <h3>{S.wizardPrivacyTitle}</h3>
           <p className="muted">{S.wizardPrivacyHelp}</p>
           <PrivacySettings />
+        </section>
+      )}
+
+      {step === "permissions" && (
+        <section className="settings-section" data-testid="wizard-permissions">
+          <h3>{S.wizardPermissionsTitle}</h3>
+          <p className="muted">{S.wizardPermissionsHelp}</p>
+          <ProfileCandidates />
         </section>
       )}
 

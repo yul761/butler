@@ -23,6 +23,7 @@ import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { ExternalActionEntry } from "../../shared/external";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import type { MetricsOverview } from "../../shared/metrics";
+import type { InterruptsAction, InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
 import type {
   AutostartState, CiItemRef, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
@@ -148,6 +149,10 @@ export const api = {
   loopFlakyAct: (a: FlakyAction) => call<boolean>(IPC.loopFlakyAct, a),
   /** 给「效果」页（工作流 H）：最近 days 天（1–365，默认 30）评论闭环和 CI 分类做了什么。 */
   loopEffect: (days?: number) => call<LoopEffect>(IPC.loopEffect, days ?? 30),
+  interruptsState: () => call<InterruptsState>(IPC.interruptsState),
+  interruptsAct: (a: InterruptsAction) => call<InterruptsActResult>(IPC.interruptsAct, a),
+  profilesGet: () => call<ProfileScan>(IPC.profilesGet),
+  profilesScan: (explain = false) => call<ProfileScan>(IPC.profilesScan, { explain }),
   checksView: (scope: CheckScope) => call<ChecksView>(IPC.checksView, scope),
   checksHits: (key: string) => call<CheckHitView[]>(IPC.checksHits, key),
   checksAct: (a: ChecksAction) => call<ChecksActResult>(IPC.checksAct, a),

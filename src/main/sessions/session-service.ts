@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync } from "node:fs";
+import type { RecordEvent } from "../metrics/events";
 import type { SessionActivity } from "../../shared/activity";
 import { sanitizePrefill } from "../../shared/text";
 import type { Pr } from "../../shared/handoff";
@@ -87,7 +88,8 @@ export interface SessionServiceDeps {
    * 交互 session 的 --settings 文件：直接启用仓库 .mcp.json 里的 server，不停在选择对话框上（用户在 dirs 里禁用过的照旧禁用）。
    * 返回 null 时不加 --settings。
    */
-  mcpSettings?: (dirs: string[]) => string | null;
+  /** sessionId：这份 settings 给哪个 session（权限档案按它记启动时给了哪些规则）。 */
+  mcpSettings?: (dirs: string[], sessionId: string) => string | null;
   /**
    * 这个 session 为什么跑不了确定性检查（addendum 第 7 节）；null = 能跑，或者根本没有打开的检查。
    * 每次启动都记到 session 行上（新开和恢复都算）；不给就不记。
@@ -127,6 +129,8 @@ export interface SessionServiceDeps {
   opened?: (termId: string) => void;
   /** 休眠着的 session 不再算休眠（Hibernator.forget）：被隐藏了，或者被另开的 Butler 总控取代了。 */
   hidden?: (headId: string) => void;
+  /** 度量（契约 4.7）：开了修复 session 记一条 stuck_fix_opened（ws-j 设计 5）。 */
+  recordEvent?: RecordEvent;
 }
 
 /** 规划最多等后台汇总这么久：总控开着，用户在等，过了这个时间就用已有的内容发。 */
@@ -246,7 +250,7 @@ export class SessionService {
     // 终端 id 先定下来：共享 MCP 的配置按终端写（WS-M H）。恢复时就是 head 的 id。
     const termId = head ? head.id : this.d.newId();
     const mcpConfigPath = this.configPath(ticket.key, () => this.d.mcpConfig?.(ticket.key, { coordinator, featureId: ticket.featureId, epicId }, termId) ?? null, claudePath, launch.viaCmd);
-    const settingsPath = this.configPath(ticket.key, () => this.d.mcpSettings?.([cwd, ...ticket.repos.map((r) => r.repoPath)]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
+    const settingsPath = this.configPath(ticket.key, () => this.d.mcpSettings?.([cwd, ...ticket.repos.map((r) => r.repoPath)], termId) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
     const guidePath = this.configPath(ticket.key, () => this.d.guidePath?.(coordinator ? "coordinator" : "ticket", coordinator ? [] : ticket.repos.map((r) => r.repoPath)) ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs = coordinator ? this.addDirsFor(ticket, claudePath, launch.viaCmd) : [];
     let args: string[];
@@ -626,6 +630,7 @@ export class SessionService {
     if (opened) return { ok: true, termId: opened, alreadyOpen: true };
 
     const termId = this.startInFeature(feature, { path: claude.path, pathValue: claude.pathValue }, { fixes: stuck.id });
+    this.d.recordEvent?.("stuck_fix_opened", { sessionId: stuck.id, ticketKey: ticket.key, dedupeKey: `fix:${termId}`, data: { kind: activity.kind } });
     const message = fixTaskMessage({
       ticket: ticket.title ? `${ticket.key} ${ticket.title}` : ticket.key, sessionId: stuck.id, sessionName, coordinatorName,
       coordinatorDir: coordinator ? feature.workspaceDir : null, cwd: stuck.cwd,
@@ -711,7 +716,7 @@ export class SessionService {
     const launch = resolveLaunch(claudePath, [], this.d.platform, { ...this.d.launchFs, pathValue });
     const termId = head ? head.id : this.d.newId();
     const mcpConfigPath = this.configPath(target.label, () => target.mcpConfig(termId), claudePath, launch.viaCmd);
-    const settingsPath = this.configPath(target.label, () => this.d.mcpSettings?.([cwd, ...target.repoPaths]) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
+    const settingsPath = this.configPath(target.label, () => this.d.mcpSettings?.([cwd, ...target.repoPaths], termId) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
     const guidePath = this.configPath(target.label, () => this.d.guidePath?.(target.guideKind, target.guideRepoPaths) ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs = this.workspaceAddDirs(target, claudePath, launch.viaCmd);
     let args: string[];

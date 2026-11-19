@@ -107,11 +107,19 @@ import { InboxRepo } from "./db/inbox-repo";
 import { PrStagesService } from "./prwatch/pr-stages-service";
 import { InboxService } from "./inbox/inbox-service";
 import { MetricsRepo } from "./db/metrics-repo";
-import { Metrics } from "./metrics/events";
+import { Metrics, type RecordEvent } from "./metrics/events";
+import { AutoChoicesRepo, ChoiceDefaultsRepo, NotificationLogRepo, PermissionProfileRepo } from "./db/interrupts-repo";
+import { ChoiceService } from "./interrupts/choices";
+import { InterruptsFacade } from "./interrupts/facade";
+import { interruptGuideLines } from "./interrupts/guide";
+import { Notifier, notifyFromMetric } from "./notify/notifier";
+import { WebhookStore } from "./notify/webhook-store";
+import { ProfileHitCounter } from "./permissions/hits";
+import { PermissionProfileService } from "./permissions/profile-service";
 import { classifyQuestion, InterruptRecorder } from "./metrics/interrupts";
 import { isDialogKey, promptOnTerminalChain, questionToolShowing, recordInvoke, TerminalInputMeter } from "./metrics/interventions";
 import { MetricsGhJob } from "./metrics/gh-job";
-import { buildOverview, clampDays, overviewFromDay } from "./metrics/overview";
+import { buildOverview, clampDays, compareFromDay, overviewFromDay } from "./metrics/overview";
 import { MetricsRollup } from "./metrics/rollup";
 import { baselineCutoffOf, ensureMetricsSince, metricsSince } from "./metrics/since";
 import { TOUCH_MS as WAIT_TOUCH_MS, WaitTracker, type WaitHead } from "./metrics/wait-tracker";
@@ -465,7 +473,17 @@ async function bootstrap(): Promise<void> {
   const usageRepo = new UsageRepo(db);
   // 度量（ws-h，契约 4.7）：人介入、打断、等人时间记成事件和等待段，每小时汇总进 metrics_daily。
   const metricsRepo = new MetricsRepo(db);
-  const recordEvent = new Metrics({ repo: metricsRepo, now: Date.now, log: logger }).recordEvent;
+  const recordMetric = new Metrics({ repo: metricsRepo, now: Date.now, log: logger }).recordEvent;
+  // 外部通知（ws-j 设计 7）：熔断（L）、高风险 / 就绪的 PR（G）都是度量事件；记下了（去重后）才推。notifier 在 gateway 建好后才有。
+  let notifier: Notifier | null = null;
+  const recordEvent: RecordEvent = (kind, refs) => {
+    const recorded = recordMetric(kind, refs);
+    if (recorded) {
+      const n = notifyFromMetric(kind, refs);
+      if (n) notifier?.emit(n.event, n.ref);
+    }
+    return recorded;
+  };
   ensureMetricsSince(settings, Date.now());
   /** 某个 session（取 head）最近一轮的上下文大小：计划 16 的自动换新看它。 */
   const contextOf = (sessionId: string): number | null => usageRepo.latestContext(sessions.head(sessionId)?.id ?? sessionId);
@@ -1024,6 +1042,20 @@ async function bootstrap(): Promise<void> {
     const st = readSnapshotState(paths.checksSnapshot, CHECKS_SNAPSHOT_VERSION);
     return st === "ok" ? null : st === "version" ? "snapshot_version" : "no_snapshot";
   };
+  // 打断减少（ws-j）：第一次有功能生效的时间，Effect 页前后对比的分界。只写一次。
+  const markInterruptEffective = (at: number): void => {
+    if (!settings.get("interruptReductionSince").trim()) settings.set("interruptReductionSince", String(at));
+  };
+  // 权限档案（ws-j 设计 2）：从本机的 transcript 算候选，确认过的只读规则写进 session 的 --settings。
+  const profiles = new PermissionProfileService({
+    repo: new PermissionProfileRepo(db), projectsDir: paths.claudeProjects, slugOf: (p) => repoIdentity.slugOf(p), exec: judgeDeps,
+    workDir: () => paths.home, setting: (k) => settings.get(k), now: Date.now, markEffective: markInterruptEffective, log: logger,
+  });
+  const profileHits = new ProfileHitCounter({
+    transcriptOf: (id) => findTranscript(paths.claudeProjects, id),
+    builtIn: SESSIONS_AUTO_ALLOW,
+    recordEvent,
+  });
   const sessionService = new SessionService({
     knownModel: routing.registered,
     tickets, sessions, settings, ticketService, pty,
@@ -1044,10 +1076,14 @@ async function bootstrap(): Promise<void> {
     baseEnv: process.env,
     mcpConfig: memoryMcpConfig,
     // 装着的 butler-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
-    mcpSettings: (dirs) => {
+    mcpSettings: (dirs, sessionId) => {
       const cc = checksConfig(settings);
+      // 给这个 session 的档案规则记下来：省掉了几次确认只按这些、只从现在起算。
+      const profileRules = profiles.rulesForDirs(dirs);
+      profileHits.spawned(sessionId, profileRules, Date.now());
       return projectMcpApprovalSettings(dirs, {
         claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, allowTools: SESSIONS_AUTO_ALLOW,
+        profileRules,
         gateCommand: hookInstalled() ? hookCommand(paths.hookBin, process.platform) : undefined,
         checks: cc.enabled ? { editTimeoutSec: cc.editTimeoutSec, pushTimeoutSec: cc.pushTimeoutSec } : undefined,
       });
@@ -1060,7 +1096,10 @@ async function bootstrap(): Promise<void> {
       return writeSessionGuide(paths.mcp, currentLang(), kind, lessons, {
         // 预审（工作流 G）还没接进来：指南里那句「PR 前会自动预审」先不写；G 合进来后把这里换成它的开关。
         preReview: false,
-        extra: kind === "ticket" ? watcherGuideLines(currentLang(), repoPaths) : [],
+        extra: [
+          ...(kind === "ticket" ? watcherGuideLines(currentLang(), repoPaths) : []),
+          ...interruptGuideLines(currentLang(), kind, { choiceRule: settings.get("interruptChoiceRule") === "1", selfServe: settings.get("interruptSelfServe") === "1" }),
+        ],
         profile: kind === "ticket" ? sessionProfile(repoPaths, lessons.length > 0) : "",
       });
     },
@@ -1074,6 +1113,7 @@ async function bootstrap(): Promise<void> {
     syncMemory: (key) => void memory.syncTicket(key),
     opened: (termId) => hibernator?.opened(termId),
     hidden: (id) => hibernator?.forget(id),
+    recordEvent,
     log: logger,
   });
   // 交互 session 撞限后「换下一档继续」（3.0 模型路由）：按 session 的种类用 --resume 重新打开。
@@ -1225,6 +1265,20 @@ async function bootstrap(): Promise<void> {
     settings, audit, keys, now: Date.now,
     log: logger,
   });
+  // 外部通知（ws-j 设计 7）：开关是对外动作 push_notification，默认关；地址加密存，只有 gateway 发。
+  const webhookStore = new WebhookStore({ secrets: new SecretsRepo(db), box: electronSecretBox, now: Date.now, log: logger });
+  const notificationLog = new NotificationLogRepo(db);
+  notifier = new Notifier({
+    actions: externalActions, log: notificationLog, webhook: webhookStore, post: (r) => gateway.postWebhook(r),
+    setting: (k) => settings.get(k), now: Date.now, cutoff: (now) => auditCutoff(now, llmConfig(settings).retentionDays),
+    changed: notify, logError: logger,
+  });
+  // 选择（ws-j 设计 3）：session 按规则自己做的选择、按默认答案替你答的，都存着等你事后看。
+  const choices = new ChoiceService({
+    choices: new AutoChoicesRepo(db), defaults: new ChoiceDefaultsRepo(db), setting: (k) => settings.get(k), recordEvent, now: Date.now,
+    markEffective: markInterruptEffective, notify,
+  });
+  const interruptsFacade = new InterruptsFacade({ profiles, choices, webhook: webhookStore, notifier, log: notificationLog });
   // 同时只跑一次蒸馏；退出时 headlessAbort 让 gateway 拒绝 / 中止调用，蒸馏在下一个 scope 之前停下。
   const distiller = new BackgroundRunner({
     name: "memory distill",
@@ -1581,12 +1635,15 @@ async function bootstrap(): Promise<void> {
     // 换新输入的 /handoff 和接着做的话也会触发 UserPromptSubmit：那不是用户在终端里回答。
     refreshing: (id) => refresher.isRefreshing(id),
     recordEvent,
+    choices,
     onAsked: (q) => {
+      notifier?.emit("decision_needed", { ticketKey: q.ticketKey });
       // 先 asked（又问一遍的那种同步就定了类别），再 sync：sync 会清掉已经结束的条目的类别，包括刚被顶掉的那条。
       const classified = interrupts.asked(q);
       waitTracker.sync();
       void classified.then(() => waitTracker.sync(), (e: unknown) => logger("metrics: classifying a question failed", e));
     },
+    onSuperseded: () => waitTracker.sync(),
     notify,
     now: Date.now,
     log: logger,
@@ -1858,6 +1915,9 @@ async function bootstrap(): Promise<void> {
     },
     onCiSettled: (item) => void ciDelivery.settled(item).catch((e: unknown) => logger("ci delivery: handing over a CI result failed", e)),
     onPrRead: (rows, pr, where) => commentLoop.observe(rows, pr, where),
+    onHumanComment: (ticketKey, prNumber, count) => {
+      for (let i = 0; i < count; i++) notifier?.emit("review_comment", { ticketKey, prNumber });
+    },
     notify,
     // 每轮之后再递一遍：session 停着但当时用户在打字、有草稿的，安静下来之后在这里递出去。
     roundDone: () => void flushCi(),
@@ -1896,6 +1956,8 @@ async function bootstrap(): Promise<void> {
    */
   const sessionStopped = (stopped: string): void => {
     void holdWatcher.sessionIdle(stopped);
+    // 权限档案省掉了几次确认（ws-j）：只读 transcript 新增的部分。
+    void profileHits.sessionStopped(stopped).catch((e: unknown) => logger("permission profile: counting hits failed", e));
     // 熔断压着的「接着做」（降档、提高上限以后）趁现在递（工作流 L）。
     void costBreaker?.sessionStopped(stopped).catch((e: unknown) => logger("cost: nudging after Stop failed", e));
     // 活动没变时 activityMonitor 不会 notify：停下来以后的「需要你」判断在这里补一次。
@@ -2188,6 +2250,8 @@ async function bootstrap(): Promise<void> {
       // 后台调度的设置（工作流 L）：马上按新的时段、空闲、额度重算，该让路的让路。提醒线跟着路由阈值。
       if (key.startsWith("bg")) bgScheduler.tick();
       if (key === "routingThresholds" || key === "routingQuotas") costCheckSoon();
+      // 打断减少的开关第一次打开：Effect 页前后对比从这里分界（ws-j）。
+      if ((key === "interruptChoiceRule" || key === "interruptChoiceDefaults" || key === "interruptSelfServe") && settings.get(key) === "1") markInterruptEffective(Date.now());
     },
     // 共享 MCP（WS-M H）：打开就启动 hub（之后开的 session 用它）；关掉时接着它的 session 退完了再停。
     sharedMcpChanged: () => {
@@ -2226,6 +2290,7 @@ async function bootstrap(): Promise<void> {
     batches: batchRecorder,
     policies: admissionPolicies,
     admission: admissionFacade,
+    interrupts: interruptsFacade,
     loop: {
       policyView: (scope) => loopPolicies.view(scope),
       policySet: (scope, overrides) => loopPolicies.setLayer(scope, overrides),
@@ -2558,9 +2623,12 @@ async function bootstrap(): Promise<void> {
     metricsRollup.runIfStale(METRICS_VIEW_STALE_MS);
     const now = Date.now();
     const d = clampDays(days ?? METRICS_DAYS_DEFAULT);
+    // 打断减少（ws-j）：生效前后各最多 30 天的对比，要读到生效前 30 天。
+    const since = Number(settings.get("interruptReductionSince")) || null;
+    const fromDay = [overviewFromDay(now, d), ...(since ? [compareFromDay(since)] : [])].sort()[0]!;
     return buildOverview({
-      daily: metricsRepo.daily(overviewFromDay(now, d)), baseline: metricsRepo.baselinePrs(), cutoff: metricsCutoff(), now, days: d,
-      rolledUpAt: metricsRollup.lastRun > 0 ? metricsRollup.lastRun : null,
+      daily: metricsRepo.daily(fromDay), baseline: metricsRepo.baselinePrs(), cutoff: metricsCutoff(), now, days: d,
+      rolledUpAt: metricsRollup.lastRun > 0 ? metricsRollup.lastRun : null, compareSince: since,
     });
   };
   // 每天一次读 gh（ws-h）：revert、重开、基线回填；只读，和别的调度任务一样在 checkSchedule 里触发。
@@ -2586,6 +2654,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(refreshTimer);
     clearInterval(scheduleTimer);
     availability.dispose();
+    notifier?.dispose();
     lessonsGate.dispose();
     routing.dispose();
     clearInterval(upgradeTimer);

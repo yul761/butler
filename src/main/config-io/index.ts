@@ -3,6 +3,7 @@ import { lessonsSection, policiesSection, productsSection } from "./sections";
 import { checksSection } from "./checks-section";
 import { modelsSection } from "./models-section";
 import { baselineRulesSection, baselinesSection } from "./baselines-section";
+import { permissionsSection } from "./permissions-section";
 
 export { ConfigIoService, type ConfigIoDeps, type BackupKind } from "./service";
 export { SectionRegistry, type ConfigSection } from "./registry";
@@ -21,5 +22,7 @@ export function defaultRegistry(): SectionRegistry {
   // E2：标记文件表的用户层，和（勾选时）各仓库的现状扫描。
   r.register(baselineRulesSection);
   r.register(baselinesSection);
+  // J：权限档案（content: "config"）。导入的确认先进 pending。
+  r.register(permissionsSection);
   return r;
 }

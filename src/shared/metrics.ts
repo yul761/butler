@@ -106,6 +106,29 @@ export interface MetricsOverview {
   rework: { prs: number; ciFailures: number; reopens: number; reverts: number };
   /** 不算人介入、也不是打断的事件（熔断、后台让路等）。 */
   otherEvents: KeyCount[];
+  /** 打断减少（ws-j 设计 6）的前后对比；还没有哪个功能生效过为 null。 */
+  interruptCompare: InterruptCompare | null;
+}
+
+/** 前后对比的一边：同样长的几天。人介入、等人时间是每个合并的 PR 的平均；打断是每天的平均。 */
+export interface CompareSide {
+  from: string;
+  to: string;
+  days: number;
+  prs: number;
+  interventions: number | null;
+  waitHumanMs: number | null;
+  interruptsPerDay: Record<InterruptCategory, number>;
+  autoResolved: number;
+  stuckFixes: number;
+}
+
+export interface InterruptCompare {
+  /** 第一个打断减少功能生效的时间。 */
+  since: number;
+  /** 生效那天前后各算多少天；生效当天前后都有，不算在任何一边。两边同为 null：还在生效当天，没有完整的「之后」。 */
+  before: CompareSide | null;
+  after: CompareSide | null;
 }
 
 export const METRICS_DAYS_DEFAULT = 30;

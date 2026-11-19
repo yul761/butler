@@ -1044,4 +1044,33 @@ export const MIGRATIONS: string[] = [
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
   CREATE INDEX check_exports_key ON check_exports (check_key, created_at);
   `,
+  // 打断与通知（工作流 J）：每个仓库确认过的权限档案规则；session 自己做的选择和按默认答案自动答的选择（可复查）；
+  // 用户设的默认答案；外部通知的发送记录（只记事件种类、数量和结果）。
+  `
+  CREATE TABLE permission_profiles (
+    slug TEXT NOT NULL, rule TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('confirmed','dismissed','pending')),
+    source TEXT NOT NULL CHECK (source IN ('history','import','manual')),
+    runs INTEGER NOT NULL DEFAULT 0, sessions INTEGER NOT NULL DEFAULT 0,
+    decided_at INTEGER NOT NULL,
+    PRIMARY KEY (slug, rule));
+  CREATE TABLE auto_choices (
+    id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL CHECK (source IN ('rule','default')),
+    session_id TEXT, ticket_key TEXT, decision_id INTEGER, default_id INTEGER,
+    text TEXT NOT NULL,
+    created_at INTEGER NOT NULL, reviewed_at INTEGER);
+  CREATE INDEX auto_choices_created ON auto_choices(created_at);
+  CREATE TABLE choice_defaults (
+    id INTEGER PRIMARY KEY,
+    pattern TEXT NOT NULL, answer TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL);
+  CREATE TABLE notification_log (
+    id INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL, event TEXT NOT NULL, count INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('sent','failed','quiet','filtered')),
+    host TEXT, payload TEXT, error TEXT);
+  CREATE INDEX notification_log_ts ON notification_log(ts);
+  `,
 ];

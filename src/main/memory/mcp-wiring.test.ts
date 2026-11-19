@@ -51,7 +51,7 @@ describe("the ticket memory MCP only reaches interactive sessions (P4-R6)", () =
   });
 
   it("interactive sessions (ticket, feature, epic, fix all go through mcpSettings) pre-allow ask_user and report (BTL-190 2+3)", () => {
-    const at = indexSource.indexOf("mcpSettings: (dirs) =>");
+    const at = indexSource.indexOf("mcpSettings: (dirs, sessionId) =>");
     expect(at).toBeGreaterThan(0);
     const block = indexSource.slice(at, indexSource.indexOf("checksAbsence,", at));
     expect(block).toContain("projectMcpApprovalSettings(");

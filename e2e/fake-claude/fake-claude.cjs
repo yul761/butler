@@ -25,6 +25,7 @@
 //       再写 system / turn_duration 结束这一轮，不跑 Stop（真的 CLI 这时触发的是 StopFailure）；
 //     输入 /clear 时像 Claude Code：换一个新的 session id 和新的 transcript，跑 SessionStart（source=clear），停在空的输入框上（没有 Stop）；
 //     每条 assistant 记录都带 usage：上下文是 FAKE_CLAUDE_CONTEXT_TOKENS（e2e 用它撑过换新的阈值），/clear 之后从头算，回到 CLEARED_CONTEXT；
+//     交互日志另有 interactive-allow <id> <JSON>：--settings 文件里 permissions.allow 的内容；
 //     交互日志 interactive new/resume 行末尾带 guide=<--append-system-prompt-file 的路径>（没有就是空）；
 //     输入 /fake-recall 时把 transcript 里用户说过的话列出来（日志 fake-recall <JSON>）：--resume 以后看得出原来的对话还在；
 //     其余输入回“收到：<输入>”并结束这一轮；每条输入都在运行记录里记一行 prompt <JSON 字符串>；
@@ -419,6 +420,14 @@ function interactive() {
   log(`interactive ${has("--resume") ? "resume" : "new"} ${sessionId} mcp=${servers.join(",")} cwd=${cwd} adddirs=${flags("--add-dir").join("|")} guide=${flag("--append-system-prompt-file") || ""}`);
   // 交互 session 的模型（3.0 模型路由）另起一行，不改上面那行的格式。
   log(`interactive-model ${sessionId} ${flag("--model") || "-"}`);
+  // --settings 里放行的工具（ws-j 权限档案）也另起一行。
+  let allow = [];
+  try {
+    if (flag("--settings")) allow = JSON.parse(fs.readFileSync(flag("--settings"), "utf8")).permissions?.allow ?? [];
+  } catch {
+    // 读不到就当没有放行的工具。
+  }
+  log(`interactive-allow ${sessionId} ${JSON.stringify(allow)}`);
   runHooks("SessionStart", { session_id: sessionId, cwd, source: has("--resume") ? "resume" : "startup", transcript_path: transcript });
   out(`fake claude ready (${sessionId.slice(0, 8)})\n`);
   if (mcp) out(`mcp: ${servers.join(", ")}\n`);

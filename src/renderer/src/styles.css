@@ -608,3 +608,12 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .effect-sublist { list-style: none; padding-left: 16px; margin: 2px 0 0; font-size: 12px; }
 .effect-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
 .effect-group { margin-top: 6px; }
+
+/* 打断与通知（ws-j） */
+ul.plain { list-style: none; padding-left: 0; margin: 4px 0; }
+ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
+.profile-repo { margin: 8px 0 12px; }
+.interrupt-settings .field-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
+.auto-choices .pre-wrap { white-space: pre-wrap; }
+.notify-log td { padding: 2px 8px 2px 0; vertical-align: top; overflow-wrap: anywhere; }
+.notify-log tr.notify-quiet, .notify-log tr.notify-filtered { color: var(--muted); }

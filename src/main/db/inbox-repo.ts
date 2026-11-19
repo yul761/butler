@@ -80,7 +80,7 @@ export class InboxRepo {
   }
 
   /** status：pending 还要送给总控；dismissed 不用送（这时 resolvedAt 就是 createdAt）。 */
-  addReport(o: InboxOwner & { text: string; kind: ReportKind; status: "pending" | "dismissed"; createdAt: number }): number {
+  addReport(o: InboxOwner & { text: string; kind: Exclude<ReportKind, "choice">; status: "pending" | "dismissed"; createdAt: number }): number {
     const r = this.db
       .prepare(
         `INSERT INTO inbox_items (kind, session_id, ticket_key, feature_id, epic_id, text, report_kind, status, created_at, resolved_at)

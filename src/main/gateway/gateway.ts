@@ -5,6 +5,7 @@ import { auditCutoff, checkBudget, costUsd, estimateTokens, monthStart, sentWith
 import type { KeyStore } from "./key-store";
 import { chatBody, chatCompletion, ProviderError, scrub, type ChatCall, type ChatMessage, type ChatResponse } from "./provider";
 import type { StatecoreChatModel } from "./types";
+import { sendWebhook, type WebhookRequest, type WebhookResult } from "./webhook";
 import { M } from "../strings";
 
 
@@ -35,6 +36,8 @@ export interface GatewayDeps {
   keys: Pick<KeyStore, "get" | "saved">;
   /** 默认是真正的 chatCompletion；测试也用它（连本地假服务器）。 */
   chat?: ChatCall;
+  /** webhook 用的 fetch；不给用 Electron 的 net.fetch。 */
+  webhookFetch?: typeof fetch;
   now: () => number;
   log?: (msg: string, err?: unknown) => void;
 }
@@ -75,6 +78,14 @@ export class PrivacyGateway {
   private lastStatecoreRefusal: StatecoreRefusal | null = null;
 
   constructor(private readonly d: GatewayDeps) {}
+
+  /**
+   * 外部通知的 webhook（ws-j 设计 7）：网络只从这里出去。调用方（notify/notifier）已经过了对外动作的开关、记了审计；
+   * 这里只发，不进 LLM 的串行队列，也不记 LLM 的审计和预算。
+   */
+  postWebhook(r: Omit<WebhookRequest, "fetch">): Promise<WebhookResult> {
+    return sendWebhook({ ...r, fetch: this.d.webhookFetch });
+  }
 
   /** 串行队列：预算检查、发送、记账一次只有一个调用在进行。 */
   private serial<T>(fn: () => Promise<T>): Promise<T> {

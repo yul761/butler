@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { INTERRUPT_CATEGORIES, type MetricAverages, type MetricsOverview, type TrendPoint } from "../../shared/metrics";
+import { INTERRUPT_CATEGORIES, type CompareSide, type MetricAverages, type MetricsOverview, type TrendPoint } from "../../shared/metrics";
 import { EffectBody } from "./components/EffectPage";
 import {
   barWidths, compare, comparisonText, fmtDuration, fmtNumber, fmtTokens, fmtUsd, groupName, interventionName, interventionRows, lineGeometry, spendName,
@@ -100,6 +100,7 @@ const overview = (o: Partial<MetricsOverview> = {}): MetricsOverview => ({
   spend: { byModel: [{ key: "(default)", n: 3, total: 1_500_000 }], byTask: [{ key: "(interactive)", n: 3, total: 1_500_000 }] },
   rework: { prs: 4, ciFailures: 2, reopens: 0, reverts: 1 },
   otherEvents: [],
+  interruptCompare: null,
   ...o,
 });
 
@@ -132,5 +133,21 @@ describe("EffectBody (ws-h)", () => {
     const html = renderToStaticMarkup(createElement(EffectBody, { o: overview({ otherEvents: [{ key: "cost.warn", n: 2, total: 2 }] }) }));
     expect(html).toContain('data-testid="effect-other-events"');
     expect(html).toContain("cost.warn");
+  });
+});
+
+describe("EffectBody before/after (ws-j)", () => {
+  const side = (o: Partial<CompareSide>): CompareSide => ({
+    from: "2026-10-01", to: "2026-10-10", days: 10, prs: 2, interventions: 3, waitHumanMs: H, autoResolved: 0, stuckFixes: 1,
+    interruptsPerDay: Object.fromEntries(INTERRUPT_CATEGORIES.map((c) => [c, 0])) as CompareSide["interruptsPerDay"], ...o,
+  });
+  it("says the comparison starts later until a feature is on, then shows both sides", () => {
+    expect(renderToStaticMarkup(createElement(EffectBody, { o: overview() }))).toContain(S.effect.compareNotYet);
+    const html = renderToStaticMarkup(createElement(EffectBody, {
+      o: overview({ interruptCompare: { since: new Date(2026, 9, 11).getTime(), before: side({ interventions: 3 }), after: side({ from: "2026-10-11", to: "2026-10-20", interventions: 1.5, autoResolved: 7 }) } }),
+    }));
+    expect(html).toContain('data-testid="effect-compare-interventions"');
+    expect(html).toMatch(/effect-compare-interventions"><td>[^<]+<\/td><td>3<\/td><td>1.5<\/td>/);
+    expect(html).toContain(">7<");
   });
 });

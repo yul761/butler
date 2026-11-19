@@ -11,8 +11,9 @@ import { ClaudeAvailability } from "./ClaudeAvailability";
 import { RoutingSettings } from "./RoutingSettings";
 import { CostBackgroundSettings } from "./CostBackgroundSettings";
 import { LoopSettings } from "./LoopSettings";
+import { InterruptSettings } from "./InterruptSettings";
 
-type SettingsTab = "general" | "routing" | "cost" | "loop";
+type SettingsTab = "general" | "routing" | "cost" | "loop" | "interrupts";
 
 export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => void; section?: "health" | "routing" | "cost" }) {
   const [tab, setTab] = useState<SettingsTab>(section === "routing" || section === "cost" ? section : "general");
@@ -52,7 +53,7 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
 
   const tabs = (
     <div className="settings-tabs" role="tablist">
-      {(["general", "routing", "cost", "loop"] as const).map((t) => (
+      {(["general", "routing", "cost", "loop", "interrupts"] as const).map((t) => (
         <button key={t} role="tab" data-testid={`settings-tab-${t}`} aria-selected={tab === t} className={tab === t ? "page-tab active" : "page-tab"} onClick={() => setTab(t)}>
           {S.settingsTabs[t]}
         </button>
@@ -64,6 +65,14 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
       <div className="page">
         {tabs}
         <CostBackgroundSettings />
+      </div>
+    );
+  }
+  if (tab === "interrupts") {
+    return (
+      <div className="page">
+        {tabs}
+        <InterruptSettings />
       </div>
     );
   }

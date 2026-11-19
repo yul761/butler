@@ -76,6 +76,15 @@ export const EDITABLE_SETTINGS = [
   "bgQuotaOrder",
   "bgPlentifulPercent",
   "bgKinds",
+  // 打断与通知（工作流 J）。
+  "permissionProfiles",
+  "interruptChoiceRule",
+  "interruptChoiceDefaults",
+  "interruptSelfServe",
+  "notifyFormat",
+  "notifyEvents",
+  "notifyDetails",
+  "notifyQuietHours",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

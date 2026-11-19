@@ -6,6 +6,7 @@ import { PRIVACY_LEVELS, TERM_CATEGORIES, type PrivacyLevel, type SensitiveTerm,
 import type { EditableSettingKey } from "../../shared/settings";
 import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
 import { M } from "../strings";
+import { NOTIFY_EVENTS, NOTIFY_FORMATS } from "../../shared/interrupts";
 import { normalizeRoutingSetting, RoutingSettingError } from "../routing/routing-settings";
 import { BgSettingError, normalizeBgSetting } from "../background/bg-settings";
 
@@ -53,6 +54,25 @@ export function parseToolList(v: string): string[] {
 
 /** tracker 工具只能是 MCP 工具名（mcp__server 或 mcp__server__tool）：Bash、带参数的规则、以 - 开头的 flag 一律不是。 */
 export const TRACKER_TOOL_RE = /^mcp__[A-Za-z0-9_-]+(__[A-Za-z0-9_-]+)?$/;
+
+/** 外部通知的事件（ws-j）：逗号分隔，去重，按固定顺序；空 = 一个都不推。 */
+export function normalizeNotifyEvents(value: string): string {
+  const parts = value.split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.some((p) => !(NOTIFY_EVENTS as readonly string[]).includes(p))) throw new SettingError(M().interrupts.notifyEvents);
+  return NOTIFY_EVENTS.filter((e) => parts.includes(e)).join(",");
+}
+
+/** 安静时段（ws-j）：HH:MM-HH:MM，可以跨午夜；空 = 没有。开始和结束一样也不算（不会全天安静）。 */
+export function normalizeQuietHours(value: string): string {
+  const t = value.trim();
+  if (!t) return "";
+  const m = /^(\S+)\s*-\s*(\S+)$/.exec(t);
+  const a = m ? parseTime(m[1]!) : null;
+  const b = m ? parseTime(m[2]!) : null;
+  if (!a || !b || (a.h === b.h && a.m === b.m)) throw new SettingError(M().interrupts.quietHours);
+  const f = (x: { h: number; m: number }) => `${String(x.h).padStart(2, "0")}:${String(x.m).padStart(2, "0")}`;
+  return `${f(a)}-${f(b)}`;
+}
 
 /** 开关类设置：只接受 0 / 1。 */
 export function normalizeFlag(value: string): string {
@@ -369,7 +389,21 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "lessonsPrinciples":
     case "lessonsCoreGuide":
     case "baselineAutoRescan":
+    case "permissionProfiles":
+    case "interruptChoiceRule":
+    case "interruptChoiceDefaults":
+    case "interruptSelfServe":
+    case "notifyDetails":
       return normalizeFlag(value);
+    case "notifyFormat": {
+      const t = value.trim();
+      if (!(NOTIFY_FORMATS as readonly string[]).includes(t)) throw new SettingError(M().interrupts.notifyFormat);
+      return t;
+    }
+    case "notifyEvents":
+      return normalizeNotifyEvents(value);
+    case "notifyQuietHours":
+      return normalizeQuietHours(value);
     case "hibernateYouMinutes":
     case "hibernateCiMinutes":
     case "hibernateReviewMinutes":

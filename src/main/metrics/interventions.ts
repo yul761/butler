@@ -150,6 +150,7 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.costView, IPC.costBreakers, IPC.backgroundStatus,
   IPC.clipboardRead, IPC.loopPolicyGet, IPC.loopCommentsList, IPC.loopFlakyList, IPC.loopEffect,
   IPC.baselinesView, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyViolations, IPC.checkExportList,
+  IPC.interruptsState, IPC.profilesGet,
   // 建立、整理、归档
   IPC.ticketsCreate, IPC.ticketsArchive, IPC.ticketsUpdate, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
   IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive, IPC.featuresUnarchive, IPC.featuresMove,
@@ -167,6 +168,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.loopPolicySet, IPC.loopFlakyAct,
   // 仓库现状和检查的整理（扫描、采用、存量扫描、导出成 lint）：搭检查，和 checksAct、reposScan 一样不算推动一次工作。
   IPC.baselinesAct, IPC.legacyAct, IPC.checkExportAct,
+  // 打断与通知的设置（工作流 J）：权限档案、默认答案、webhook、测试通知都是搭环境
+  IPC.interruptsAct, IPC.profilesScan,
 ]);
 
 /** 这个通道算不算手动触发。 */
