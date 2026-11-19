@@ -43,7 +43,8 @@ export interface BaselineScanner {
 }
 /** F 的回测（第 3 阶段）；没接进来时记「未回测」。 */
 export interface BacktestRunner {
-  run(scope: AdmissionScope, onCall: () => void): Promise<{ backtested: boolean }>;
+  /** live：向导还在跑（取消了就不再等素材）。 */
+  run(scope: AdmissionScope, onCall: () => void, live?: () => boolean): Promise<{ backtested: boolean }>;
 }
 
 export interface Timers {
@@ -479,7 +480,7 @@ export class WizardService {
       this.patchDetail(run.id, (dt) => ({ ...dt, notes: [...dt.notes.filter((n) => n.kind !== "notBacktested"), { kind: "notBacktested" }] }));
       return;
     }
-    const r = await this.d.backtest.run(scopeOf(run), () => this.addCalls(run.id, 1));
+    const r = await this.d.backtest.run(scopeOf(run), () => this.addCalls(run.id, 1), () => !this.stopped && this.isState(run.id, WIZARD_LIVE_STATES));
     this.patchDetail(run.id, (dt) => ({ ...dt, backtested: r.backtested }));
   }
 
