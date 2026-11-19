@@ -1205,7 +1205,7 @@ export const MIGRATIONS: string[] = [
     job_id INTEGER, files TEXT NOT NULL DEFAULT '[]', lessons TEXT NOT NULL DEFAULT '[]', checks TEXT NOT NULL DEFAULT '{}',
     violations TEXT NOT NULL DEFAULT '[]', summary TEXT,
     verdict TEXT CHECK (verdict IS NULL OR verdict IN ('clean','violations','error')),
-    detail TEXT, model TEXT, delivered_at INTEGER, deliver_tries INTEGER NOT NULL DEFAULT 0,
+    detail TEXT, model TEXT, notes TEXT, delivered_at INTEGER, deliver_tries INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL, finished_at INTEGER);
   CREATE INDEX pre_reviews_target ON pre_reviews (repo_slug, branch, head_sha);
   CREATE INDEX pre_reviews_pr ON pre_reviews (pr_id);

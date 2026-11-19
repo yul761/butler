@@ -24,6 +24,8 @@ export interface PreReviewRow {
   verdict: PreReviewVerdict | null;
   detail: string | null;
   model: string | null;
+  /** 证据里的 notes（已知取舍、没做的事）。 */
+  notes: string | null;
   deliveredAt: number | null;
   deliverTries: number;
   createdAt: number;
@@ -38,6 +40,7 @@ export interface NewPreReview {
   base: string | null;
   prId: number | null;
   trigger: PreReviewTrigger;
+  notes?: string | null;
   createdAt: number;
 }
 
@@ -83,7 +86,7 @@ function toReview(r: Row): PreReviewRow {
     cwd: s(r.cwd), base: s(r.base), prId: n(r.pr_id), trigger: r.trigger as PreReviewTrigger, status: r.status as PreReviewStatus,
     jobId: n(r.job_id), files: json<DiffFile[]>(r.files, []), lessonIds: json<number[]>(r.lessons, []),
     checks: "failing" in checks ? (checks as CheckSummary) : null, violations: json<Violation[]>(r.violations, []),
-    summary: s(r.summary), verdict: (r.verdict as PreReviewVerdict | null) ?? null, detail: s(r.detail), model: s(r.model),
+    summary: s(r.summary), verdict: (r.verdict as PreReviewVerdict | null) ?? null, detail: s(r.detail), model: s(r.model), notes: s(r.notes),
     deliveredAt: n(r.delivered_at), deliverTries: Number(r.deliver_tries ?? 0), createdAt: Number(r.created_at), finishedAt: n(r.finished_at),
   };
 }
@@ -115,10 +118,10 @@ export class PreReviewRepo {
   insert(r: NewPreReview): number {
     const res = this.db
       .prepare(
-        `INSERT INTO pre_reviews (ticket_key, session_id, repo_slug, cwd, branch, base, head_sha, pr_id, trigger, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+        `INSERT INTO pre_reviews (ticket_key, session_id, repo_slug, cwd, branch, base, head_sha, pr_id, trigger, status, notes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
       )
-      .run(r.ticketKey, r.sessionId, r.target.repoSlug, r.cwd, r.target.branch, r.base, r.target.headSha, r.prId, r.trigger, r.createdAt);
+      .run(r.ticketKey, r.sessionId, r.target.repoSlug, r.cwd, r.target.branch, r.base, r.target.headSha, r.prId, r.trigger, r.notes ?? null, r.createdAt);
     return Number(res.lastInsertRowid);
   }
 

@@ -1,6 +1,6 @@
 // 复跑证据里的检查（设计 §3.4 第 1 条、§13）：只跑仓库档案里的命令，不跑 session 自己写的命令。
 // worktree 干净、HEAD = sha 才跑；跑完再核对一次，变了就作废。
-import { runCommand, type CommandResult } from "../../../hook/check-run";
+import { killTree, runCommand, type CommandResult } from "../../../hook/check-run";
 import type { RepoProfile } from "../../shared/baselines";
 import type { RerunMode } from "../../shared/pr-policy";
 import type { CheckSummary, EvidenceItem, EvidenceVerified, RequirableCategory } from "../../shared/prereview";
@@ -34,9 +34,23 @@ export type RerunOutcome =
   /** 被打断（后台让路）：results 是已经跑完的，下次从这里接着。 */
   | { kind: "interrupted"; results: RerunResult[] };
 
-export type RunFn = (o: { command: string; cwd: string; timeoutMs: number; env: NodeJS.ProcessEnv }) => Promise<CommandResult>;
+export type RunFn = (o: { command: string; cwd: string; timeoutMs: number; env: NodeJS.ProcessEnv; signal?: AbortSignal }) => Promise<CommandResult>;
 
-const defaultRun: RunFn = (o) => runCommand({ command: o.command, file: null, cwd: o.cwd, timeoutMs: o.timeoutMs, env: o.env });
+/** hook 的 runCommand；signal abort 时整棵进程树杀掉（后台让路、退出）。 */
+const defaultRun: RunFn = (o) => {
+  let pid: number | null = null;
+  const kill = () => {
+    if (pid !== null) killTree(pid, process.platform);
+  };
+  o.signal?.addEventListener("abort", kill, { once: true });
+  return runCommand({
+    command: o.command, file: null, cwd: o.cwd, timeoutMs: o.timeoutMs, env: o.env,
+    onPid: (p, alive) => {
+      pid = alive ? p : null;
+      if (alive && o.signal?.aborted) kill();
+    },
+  }).finally(() => o.signal?.removeEventListener("abort", kill));
+};
 
 const tail = (s: string): string => (s.length > RERUN_OUTPUT_CHARS ? s.slice(s.length - RERUN_OUTPUT_CHARS) : s);
 /** 要参数的命令（单个测试、单个文件）不能整仓库跑。 */
@@ -78,8 +92,8 @@ export interface RerunDeps {
   run?: RunFn;
   env?: () => NodeJS.ProcessEnv;
   now?: () => number;
-  /** 两条命令之间问一次：true 就停下（后台让路）。 */
-  shouldStop?: () => boolean;
+  /** abort 时停下（后台让路）：正在跑的命令杀掉、结果不要，已经跑完的留给下次。 */
+  signal?: AbortSignal;
 }
 
 /** worktree 干净（不算没跟踪的文件）而且 HEAD 是这个 sha；不是就返回原因。 */
@@ -111,10 +125,11 @@ export async function rerunEvidence(
   const run = d.run ?? defaultRun;
   const now = d.now ?? Date.now;
   for (let i = results.length; i < o.plan.length; i++) {
-    if (d.shouldStop?.()) return { kind: "interrupted", results };
+    if (d.signal?.aborted) return { kind: "interrupted", results };
     const c = o.plan[i]!;
     const t0 = now();
-    const r = await run({ command: c.command, cwd: joinDir(o.cwd, c.dir), timeoutMs: o.timeoutSec * 1000, env: d.env?.() ?? { ...process.env } });
+    const r = await run({ command: c.command, cwd: joinDir(o.cwd, c.dir), timeoutMs: o.timeoutSec * 1000, env: d.env?.() ?? { ...process.env }, signal: d.signal });
+    if (d.signal?.aborted) return { kind: "interrupted", results };
     const res: RerunResult = {
       ...c,
       ok: r.kind === "pass",

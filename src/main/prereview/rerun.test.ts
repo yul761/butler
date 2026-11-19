@@ -78,8 +78,8 @@ describe("rerunEvidence", () => {
       n++;
       return { kind: "pass" };
     };
-    let stop = false;
-    const first = await rerunEvidence({ cwd: "/w", sha: SHA, plan, timeoutSec: 5, onResult: () => (stop = true) }, { git: fakeGit([SHA]).git, run, shouldStop: () => stop });
+    const ctl = new AbortController();
+    const first = await rerunEvidence({ cwd: "/w", sha: SHA, plan, timeoutSec: 5, onResult: () => ctl.abort() }, { git: fakeGit([SHA]).git, run, signal: ctl.signal });
     expect(first.kind).toBe("interrupted");
     expect(first.results).toHaveLength(1);
     const second = await rerunEvidence({ cwd: "/w", sha: SHA, plan, timeoutSec: 5, done: first.results }, { git: fakeGit([SHA]).git, run });
@@ -87,6 +87,16 @@ describe("rerunEvidence", () => {
     expect(second.results).toHaveLength(3);
     expect(n).toBe(3);
     expect(rerunVerdict(second)).toBe("passed");
+  });
+  it("drops the result of a command that was running when the job was told to stop", async () => {
+    const ctl = new AbortController();
+    const run: RunFn = async (o) => {
+      ctl.abort();
+      expect(o.signal?.aborted).toBe(true);
+      return { kind: "fail", code: null, output: "killed" };
+    };
+    const r = await rerunEvidence({ cwd: "/w", sha: SHA, plan, timeoutSec: 5 }, { git: fakeGit([SHA]).git, run, signal: ctl.signal });
+    expect(r).toEqual({ kind: "interrupted", results: [] });
   });
   it("a timeout is a non-result, not a failure", async () => {
     const run: RunFn = async () => ({ kind: "timeout", output: "" });
