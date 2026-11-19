@@ -147,3 +147,20 @@
 - 同仓库改同一批路径的两个 ticket 不会同时开工（单测）。
 - 用户改分类有记录，「效果」页能看到（单测 + e2e）。
 - 每个新开关有单测；e2e 走完「来源 → 分类 → 开工或进队列 → 提醒」。
+
+## 11. 实现时的决定（补记）
+
+- **队列的唤醒**：L 的 `BackgroundQueue` 加了 `wake(kind)`，把这一种还没到点的延后任务提前到现在、马上跑一轮。入队后、session 结束时（pty 退出）、改了接活设置时都叫一次，名额空出来不用等下一次重试。
+- **描述长度按字算**：中日韩字符按 2 算（`textWeight`），40 个字符的门槛对中文描述不至于太严。
+- **手动「开工」越过搁置和并行上限**（`force_start`）：你点了就是你决定了；花费熔断和内存准入照常。
+- **同一个大 ticket 拆出来的层互相不算冲突**：下一层本来就从上一层的分支开。
+- **开不成（`failed`）的项内容没变时不重新拉起**：只有你点「重试」，或来源里的内容变了才再试，免得每次拉取都提醒一次。
+- **策略没开的仓库**：已经记下的项（比如总开关后来关了）停在 `held`（原因 `auto_off`），不删、不提醒。
+- **仓库映射单独一个模块**（`intake/repo-map.ts`，不依赖别的）：设置校验（`settings-values`）和来源都要用，避免设置模块拉进来源的依赖。
+- **接活建的 ticket 一律 worktree 模式**：不动用户主工作区里的分支和改动。
+- **缺信息时开的提问 session 不占并行名额**：它只回 tracker 提问然后停下，不写代码。
+- **干预计数**：`intake:poll`、`intake:act` 是人推动的工作（`MANUAL_TRIGGERS`），但 `act` 的「不做」（skip）不算一次干预；`intake:policyGet`、`intake:policySet`、`intake:classify`、`intake:view`、`intake:effect` 不算（`NOT_TRIGGERS`）。
+- **`intakeTrackerDir` 空着**用仓库映射里第一个路径；映射也空时 tracker 来源报「没有可以查的目录」，不拉。
+- **通知**：J 的 `notifyFromMetric` 把 `intake.decision` 映射成 `intake_decision`，所以要你决定的提醒和别的通知走同一条路（免打扰、合并、`notifyDetails`）。
+- **「现在」页**：要你决定的每个 ticket 一条 `intake` 提醒（按钮：开工 / 不做 / 照样并行 / 看队列，按状态给）；不用你管的记在 `NowView.intake`（最近 24 小时，默认收起），总开关关着时这个字段缺省。
+- **e2e**：沙盒里登记中、高两档假模型，验证小 ticket 带中档的 `--model` 开 session；关掉第一个 session 后排着的第二个自动开工。

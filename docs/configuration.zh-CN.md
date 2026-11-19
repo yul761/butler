@@ -558,6 +558,8 @@ Butler 能在你 review 之前先把一遍关。默认全是关着的或只读�
 | 发 issue | `externalIssuePost` | `0`（关） | 在 tracker 或 GitHub 上建 issue、发评论。 |
 | 推送通知 | `externalPushNotification` | `0`（关） | 往外部服务（比如手机推送、聊天工具）发通知。 |
 | 贴 review 简报 | `externalPrBriefPost` | `0`（关） | 每次预审完成后把 review 简报写进 PR 描述。「贴到 PR」按钮不受这个开关影响，照样记进审计。 |
+| 自动接活：到 tracker 提问 | `externalIntakeTrackerComment` | `0`（关） | [自动接活](#自动接活)发现 ticket 缺信息时，让 session 或总控在 tracker 的 ticket 上留言问。 |
+| 自动接活：改 ticket 状态 | `externalIntakeTrackerStatus` | `0`（关） | 自动接活开的 session 先把 tracker 上的 ticket 改成进行中。 |
 
 每个开关填 `1` 或 `0`。
 
@@ -697,7 +699,7 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 | 设置 | 键 | 默认值 | 作用 |
 |------|----|--------|------|
 | 格式 | `notifyFormat` | `json` | `json` 发 `{"text", "content", "title", "event", "count"}`，聊天工具的 webhook 都认；`ntfy` 发纯文本，带 `Title` 头。 |
-| 事件 | `notifyEvents` | 全部五种 | 逗号分隔：`decision_needed`（session 问了你一件事）、`pr_high_risk`（高风险 PR 等你 review）、`pr_ready`（PR 可以提交了）、`cost_breaker`（花费熔断暂停或停止了工作）、`review_comment`（同事在 PR 上留了评论）。 |
+| 事件 | `notifyEvents` | 全部六种 | 逗号分隔：`decision_needed`（session 问了你一件事）、`pr_high_risk`（高风险 PR 等你 review）、`pr_ready`（PR 可以提交了）、`cost_breaker`（花费熔断暂停或停止了工作）、`review_comment`（同事在 PR 上留了评论）、`intake_decision`（[自动接活](#自动接活)有个 ticket 要你决定）。 |
 | 带上编号 | `notifyDetails` | `0`（关） | 消息里加上 ticket 号和 PR 号。 |
 | 安静时段 | `notifyQuietHours` | 空 | `HH:MM-HH:MM`，本地时间，可以跨午夜，比如 `22:00-08:00`。这段时间里的事件不推。 |
 
@@ -739,6 +741,73 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 | `draftLabel` | `stacked` | 1–50 个字，不能有逗号 | draft 层打的 label |
 
 栈的策略和别的策略一样，包含在[备份和导出设置](#备份和导出设置)里。
+
+## 自动接活
+
+自动接活从 tracker 或一个 JSON 文件拉新 ticket，按大小、风险、信息全不全给每个分好类，挑一个模型档位，满足下面的条件就给它开 session 开工。只有它替你定不了时才叫你。默认关着：来源配好**并且**策略里有一层打开 `enabled` 之前，不拉、不存、不开工。
+
+### 来源
+
+**设置 → 自动接活**里是来源的设置，全局生效。
+
+| 设置 | 键 | 默认 | 作用 |
+|------|----|------|------|
+| 从哪里拉 | `intakeSource` | `none` | `none`、`tracker` 或 `file`。 |
+| tracker 查询 | `intakeTrackerQuery` | 空 | `tracker` 时列什么：一句话或 tracker 的查询语法，例如「分给我的、待办状态的 ticket」。Butler 跑一个后台 `claude -p`，只能用 `trackerTools` 里的只读工具；Butler 自己不连 tracker。 |
+| 在哪个仓库里查 | `intakeTrackerDir` | 空 | `tracker` 时查询在哪个绝对路径里跑，这样能找到你项目级的 tracker MCP。空着用仓库映射的第一个路径。 |
+| JSON 文件 | `intakeFilePath` | 空 | `file` 时文件的绝对路径，内容是 `{"tickets": [...]}` 或一个数组。每个 ticket 要有 `key` 和 `title`，可以有 `description`、`type`、`labels`、`priority`、`url`、`storyPoints`、`components`、`subtasks`（`[{key, title}]`）和 `repo`（绝对路径）。可以配合你自己的导出脚本用。 |
+| 每隔几分钟拉 | `intakePollMinutes` | `15` | 两次拉取之间的分钟数，5–1440。队列上的「现在拉一次」立刻拉。后台任务暂停时不拉。 |
+| 仓库映射 | `intakeRepoMap` | 空 | 每行一条 `匹配 => /绝对/路径`，先匹配的算：`PROJ`（号的前缀）、`label:前端`、`component:文档` 或 `*`。ticket 自己带的 `repo` 优先于映射。哪条都对不上的等你选仓库。 |
+
+不符合 `ticketPattern` 的号跳过。已经是 Butler ticket 的号（包括归档的）不动。同一个号再拉到时，内容变了、还没开工才重新分类；你改过的维度保留你的值。
+
+### 分类
+
+先用规则，规则定不了的才问模型（路由任务 `intake_classify`）。
+
+- **缺信息**：描述不到 40 个字符、bug 没有复现步骤、功能没有验收标准。
+- **大小**：故事点（≤2 小、≤5 中、更多大）、三个以上子任务（大）、`small`、`typo`、`epic` 这类标签、文档和杂务类型（小）。
+- **风险**：ticket 里提到的路径按这个仓库[预审](#预审就绪和风险)的风险路径匹配；migration、auth、payment 这类关键词和 ticket 类型的下限往上抬；文档、杂务类型，或提到的路径全是低风险的，往下放。
+- **拿不准**：模型调用失败，或者它的把握低于 `uncertainBelow`。
+
+每个决定的理由都列在队列里。规模、风险、缺不缺信息都可以在那里改；每次改都带着规则版本记下来，在效果页上计数，用来校准规则。
+
+### 开工和排队
+
+信息全、在上限以内的 ticket 排进后台任务 `intake`。轮到它时 Butler 依次看：花费熔断、并行上限（只数由接活开的、session 还开着的 ticket；你自己开的从来不算）、和同仓库正在做的工作有没有改同样的路径、内存。都过了就在 worktree 里建 ticket，按档位经[模型路由](#模型路由)选模型开 session，递任务说明。有 session 结束时，等着的马上再试一次。
+
+`stackSubtasks` 开着时，有两个以上子任务的大 ticket 拆成[栈](#栈)：一个子任务一层，下面那层有了 PR 或 session 结束后，上一层从它的分支开工。
+
+自动开工还要求预审开着（`preReviewEnabled`）。关着时只分类、搁着，你可以在队列里手动开工。
+
+### 什么时候叫你
+
+只有这几种，每个 ticket 每进入一次这种状态叫一次：分类拿不准、缺信息、不知道是哪个仓库、建不成 ticket、和别的工作改同样的路径在排队。它们是**现在**页上的一条提醒，开了通知时还是 `intake_decision` 事件。其余的（已开工、排队、等名额或内存、搁着、拆成栈）不打扰你，在现在页的「自动接活」里留 24 小时，在**进度**页的队列里能看到。
+
+`clarifyMode` 设成 `session` 或 `coordinator` 时，Butler 让一个小 session 或总控到 tracker 上问缺的信息，这要[对外动作](#对外动作)里的「自动接活：到 tracker 提问」开着；关着时只告诉你。
+
+### 策略
+
+策略分全局、产品、仓库三层，和别的策略一样。
+
+| 键 | 默认 | 取值 | 作用 |
+|----|------|------|------|
+| `enabled` | `false` | `true` / `false` | 映射到这一层的 ticket 的总开关 |
+| `autoStart` | `true` | `true` / `false` | 自动开工；关着时只分类、搁着等你 |
+| `maxSize` | `large` | `small` / `medium` / `large` | 自动开工的最大规模 |
+| `maxRisk` | `high` | `low` / `medium` / `high` | 自动开工的最高风险 |
+| `maxParallel` | `2` | 整数 1–50 | 由接活开的、session 还开着的 ticket 最多几个 |
+| `conflictAction` | `serialize` | `serialize` / `parallel` | 同仓库同路径：排队串行，或照样并行只记一笔 |
+| `clarifyMode` | `notify` | `notify` / `session` / `coordinator` | 缺信息时谁去问 |
+| `uncertainBelow` | `0.6` | 0–1 | 模型的把握低于这个算拿不准 |
+| `stackSubtasks` | `true` | `true` / `false` | 有子任务的大 ticket 拆成栈 |
+| `tierSmall` | `mid` | `high` / `mid` / `low` | 小 ticket 的档位 |
+| `tierMedium` | `mid` | `high` / `mid` / `low` | 中 ticket 的档位 |
+| `tierLarge` | `high` | `high` / `mid` / `low` | 大 ticket 的档位 |
+| `tierMediumRisk` | `mid` | `high` / `mid` / `low` | 中风险至少用这一档 |
+| `tierHighRisk` | `high` | `high` / `mid` / `low` | 高风险至少用这一档 |
+
+最后用的档位是规模档位和风险档位里高的那个。**效果**页有一张「自动接活」卡片：分类了多少、自动开了多少、你手动开了多少、叫了你几次，以及你改过分类的 ticket 占多少。
 
 ## 多家公司或多个配置
 
