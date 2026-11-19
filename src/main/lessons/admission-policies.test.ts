@@ -18,12 +18,14 @@ const setup = () => {
 
 describe("admission policy keys", () => {
   it("cover the plan's settings with the master-design defaults", () => {
-    expect(ADMISSION_POLICY_KEYS).toHaveLength(42);
+    expect(ADMISSION_POLICY_KEYS).toHaveLength(48);
     expect(ADMISSION_POLICY_DEFAULTS).toMatchObject({
       "score.admitLine": 0.7, "score.proseAdmitLine": 0.8, "generality.minHits": 2, "generality.minPrs": 2, "backtest.minRecall": 0.01,
       "backtest.maxFalsePositiveRate": 0.2, "shadow.minPrs": 5, "shadow.minDays": 7, "shadow.minAdoption": 0.6,
       "shadow.autoPromote": false, "admission.autoConfirm": false, "demote.to": "shadow",
       "dedupe.minSimilarity": 0.35, "dedupe.maxGroup": 30, "generality.allowSingleReviewer": true, "score.evidenceFullHits": 5, "score.evidenceFullPrs": 3, "score.minClarity": 0.4,
+      "backtest.lineTolerance": 3, "backtest.judgeSample": 20, "shadow.minHits": 3, "demote.minEvents": 5, "review.intervalDays": 7, "review.minSamples": 10,
+      "score.weight.performance": 0.2,
     });
     const w = ["evidence", "clarity", "consistency", "verifiability", "performance"].reduce((s, k) => s + Number(ADMISSION_POLICY_DEFAULTS[`score.weight.${k}` as "score.weight.evidence"]), 0);
     expect(w).toBeCloseTo(1);

@@ -20,6 +20,11 @@ export interface LessonFilter {
   minHits?: number;
   minScore?: number;
   maxScore?: number;
+  /** 可验证性分项（F 的回测）的范围；没有这一项的不命中。 */
+  minVerifiability?: number;
+  maxVerifiability?: number;
+  /** true：可检查、但没有回测结果（分数封顶的）；false：有回测结果的。 */
+  untested?: boolean;
   batchId?: number;
   /** 正文或理由里包含（不分大小写）。 */
   text?: string;
@@ -42,6 +47,13 @@ export function matchesLessonFilter(l: Lesson, f: LessonFilter): boolean {
   if (f.minHits !== undefined && l.hits < f.minHits) return false;
   if (f.minScore !== undefined && (l.score === null || l.score < f.minScore)) return false;
   if (f.maxScore !== undefined && (l.score === null || l.score > f.maxScore)) return false;
+  const v = l.scoreParts?.verifiability?.value;
+  if (f.minVerifiability !== undefined && (v === undefined || v < f.minVerifiability)) return false;
+  if (f.maxVerifiability !== undefined && (v === undefined || v > f.maxVerifiability)) return false;
+  if (f.untested !== undefined) {
+    const checkable = l.checkability === "checkable" || l.checkability === "converted";
+    if (f.untested ? !(checkable && v === undefined) : v === undefined) return false;
+  }
   if (f.batchId !== undefined && l.batchId !== f.batchId) return false;
   if (f.maxId !== undefined && l.id > f.maxId) return false;
   if (f.degraded !== undefined && l.degraded !== f.degraded) return false;
@@ -76,7 +88,7 @@ function listOf<T extends string>(v: unknown, allowed: readonly T[]): T[] {
 export function parseLessonFilter(v: unknown): LessonFilter {
   if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("invalid lesson filter");
   const o = v as Record<string, unknown>;
-  const allowedKeys = ["slug", "productId", "status", "admission", "checkability", "shelvedReason", "minHits", "minScore", "maxScore", "batchId", "text", "degraded", "maxId"];
+  const allowedKeys = ["slug", "productId", "status", "admission", "checkability", "shelvedReason", "minHits", "minScore", "maxScore", "minVerifiability", "maxVerifiability", "untested", "batchId", "text", "degraded", "maxId"];
   for (const k of Object.keys(o)) if (!allowedKeys.includes(k)) throw new Error("invalid lesson filter");
   const f: LessonFilter = {};
   if (o.slug !== undefined) {
@@ -94,6 +106,12 @@ export function parseLessonFilter(v: unknown): LessonFilter {
   if (o.minHits !== undefined) f.minHits = intIn(o.minHits, 0);
   if (o.minScore !== undefined) f.minScore = scoreIn(o.minScore);
   if (o.maxScore !== undefined) f.maxScore = scoreIn(o.maxScore);
+  if (o.minVerifiability !== undefined) f.minVerifiability = scoreIn(o.minVerifiability);
+  if (o.maxVerifiability !== undefined) f.maxVerifiability = scoreIn(o.maxVerifiability);
+  if (o.untested !== undefined) {
+    if (typeof o.untested !== "boolean") throw new Error("invalid lesson filter");
+    f.untested = o.untested;
+  }
   if (o.batchId !== undefined) f.batchId = intIn(o.batchId, 1);
   if (o.maxId !== undefined) f.maxId = intIn(o.maxId, 0);
   if (o.text !== undefined) {

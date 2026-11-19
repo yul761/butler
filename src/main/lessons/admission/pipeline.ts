@@ -13,6 +13,8 @@ import type { Candidate } from "../../routing/router";
 import type { ScopeRef } from "../../scope/layered";
 import { M } from "../../strings";
 import type { AdmissionPolicyService } from "../admission-policies";
+import { gate5 } from "../../backtest/gate";
+import type { AssessInput, GateAnswer } from "../../backtest/service";
 import type { AdmissionRunner } from "./call";
 import type { JudgmentCache } from "./judgments";
 import {
@@ -64,6 +66,13 @@ export interface PipelineDeps {
   now: () => number;
   fallbackCwd: () => string;
   coverage?: CoverageProvider | null;
+  /** 第 5 关（工作流 F）：回测草稿。没接时可检查的规矩照 D 原来的方式评（没有可验证性，封顶）。 */
+  backtest?: BacktestGate | null;
+}
+
+/** F 的回测：pending 是素材还没拿到（F 排了任务，拿到后再跑一次准入）。 */
+export interface BacktestGate {
+  assess(input: AssessInput): Promise<GateAnswer>;
 }
 
 export interface JudgeOptions {
@@ -476,7 +485,26 @@ export class AdmissionPipeline {
           if (d.kind === "prose") {
             s = scoreLesson(r.parts, false, r.x.policy);
             categoryPatch = { checkability: "prose", checkabilityReason: d.reason };
-          } else check = true;
+          } else {
+            check = true;
+            if (this.d.backtest) {
+              // 第 5 关：回测草稿，可验证性进分数；召回低、误报多、没回测（策略不许）的搁置。
+              const a = await this.d.backtest.assess({
+                lessonId: k.id, ruleText: r.x.step.text, draft: d.draft, slugs: this.reposOf(k),
+                sources: r.x.g.members.flatMap((m) => m.sources), onCall: ctx.onCall,
+              });
+              if (a.kind === "pending") {
+                unfinished.add(k.id);
+                continue;
+              }
+              const g5 = gate5(a, r.parts, r.x.policy);
+              if (g5.kind === "shelve") {
+                set(k.id, { verdict: "shelved", reason: g5.reason, ref: null, note: g5.note, score: null }, { ...categoryPatch, ...shelve(k.id, g5.reason, null, g5.note) });
+                continue;
+              }
+              s = g5.s;
+            }
+          }
         }
         const patch: LessonFieldsPatch = { ...categoryPatch, ...stamp(s) };
         if (s.outcome === "admit") {

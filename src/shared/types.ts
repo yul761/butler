@@ -670,7 +670,11 @@ export type NowNotice =
   /** 评论闭环（工作流 I）：有评论等你看分类，或该送进 session 的评论超过 30 分钟没送出去。每个 PR 一条。 */
   | { kind: "comments_waiting"; waiting: CommentsWaiting; target: NowTarget; title: string | null }
   /** 栈式 PR（工作流 K）：冲突没交到 session、draft 太久、栈底落后 trunk 太多、rebase 卡住。每个栈每种原因一条。 */
-  | { kind: "stack"; stack: StackNoticeInfo; target: NowTarget | null };
+  | { kind: "stack"; stack: StackNoticeInfo; target: NowTarget | null }
+  /** 影子运行的检查自动升级成强制（工作流 F）：一批一条，可撤销。 */
+  | { kind: "check_promoted"; eventId: number; batchId: number | null; names: string[]; at: number }
+  /** 强制的检查被自动降回影子（batchId 有值，可撤销），或者只标了待复查（flagged）。 */
+  | { kind: "check_demoted"; eventId: number; batchId: number | null; names: string[]; reason: "bypassed" | "no_reduction" | null; flagged: boolean; at: number };
 
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */

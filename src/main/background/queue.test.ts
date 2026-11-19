@@ -285,6 +285,17 @@ describe("background queue", () => {
     expect(repo.take("backtest", 2, allow)).toBeNull();
   });
 
+  it("lists queued and running jobs of one kind", () => {
+    const repo = new BackgroundRepo(memDb());
+    const a = repo.enqueue({ kind: "backtest", payload: { op: "check", checkId: 1 }, now: 1 });
+    const b = repo.enqueue({ kind: "backtest", payload: { op: "check", checkId: 2 }, now: 1 });
+    const done = repo.enqueue({ kind: "backtest", now: 1 });
+    repo.enqueue({ kind: "intake", now: 1 });
+    repo.finish(done, "done", 2);
+    repo.take("backtest", 2, () => true);
+    expect(repo.active("backtest").map((j) => [j.id, j.state, j.payload])).toEqual([[a, "running", { op: "check", checkId: 1 }], [b, "queued", { op: "check", checkId: 2 }]]);
+  });
+
   it("prunes finished jobs older than the cutoff and leaves queued ones", () => {
     const repo = new BackgroundRepo(memDb());
     const old = repo.enqueue({ kind: "backtest", now: 1 });

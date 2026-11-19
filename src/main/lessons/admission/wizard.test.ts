@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { setLang } from "../../i18n";
 import type { DraftGeneration } from "../../checks/draft";
+import type { GateAnswer } from "../../backtest/service";
 import { failed, fakeRunner, setupAdmission, type FakeAnswer } from "./__fixtures__/setup";
 import { AdmissionService } from "./service";
 import { WIZARD_MAX_ATTEMPTS, WIZARD_POLL_MS, WIZARD_RETRY_MS, WizardService, type Timers } from "./wizard";
@@ -25,7 +26,7 @@ function manualTimers() {
   return t;
 }
 
-function build(o: { cluster?: FakeAnswer; review?: FakeAnswer; clarity?: FakeAnswer; prs?: number[] } = {}) {
+function build(o: { cluster?: FakeAnswer; review?: FakeAnswer; clarity?: FakeAnswer; prs?: number[]; backtest?: { assess(): Promise<GateAnswer> } } = {}) {
   setLang("en");
   const s = setupAdmission();
   const fake = fakeRunner({
@@ -49,7 +50,7 @@ function build(o: { cluster?: FakeAnswer; review?: FakeAnswer; clarity?: FakeAns
   };
   const admission = new AdmissionService({
     db: s.db, repo: s.repo, recorder: s.recorder, policies: s.policies, judgments: s.judgments, runs: s.runs, checks: s.checks, drafter, run: fake.run, batches: s.batches,
-    lang: () => "en", now: () => s.clock.now, fallbackCwd: () => "/home",
+    lang: () => "en", now: () => s.clock.now, fallbackCwd: () => "/home", backtest: o.backtest ?? null,
   });
   const prs = o.prs ?? [1, 2];
   const runner = {
@@ -150,6 +151,24 @@ describe("WizardService", () => {
     expect(v.failed).toEqual([]);
     expect(v.summary).toMatchObject({ unfinished: 0, merged: 1 });
     expect(v.verdicts.find((x) => x.lessonId === a)).toMatchObject({ verdict: "admit" });
+  });
+
+  it("judges again when backtest material arrives for a run waiting on it", async () => {
+    let answer: GateAnswer = { kind: "pending" };
+    const s = build({ backtest: { assess: async () => answer } });
+    const c = s.lesson("no console calls in src", { sources: [{}, {}] });
+    const id = s.wizard.start({ kind: "repo", slug: "acme/web" });
+    await s.wizard.idle();
+    s.finishQueue();
+    await s.timers.fire();
+    await s.wizard.idle();
+    expect(s.wizard.view(id)!.summary).toMatchObject({ unfinished: 1 });
+    // 素材没了着落（gh 不能用）：回测答「没回测」，向导接着判完。
+    answer = { kind: "untested", reason: "no_gh" };
+    s.wizard.onMaterial();
+    await s.wizard.idle();
+    expect(s.wizard.view(id)!.summary).toMatchObject({ unfinished: 0 });
+    expect(s.wizard.verdicts(id).find((v) => v.lessonId === c)!.verdict).not.toBe("unfinished");
   });
 
   it("stops retrying after the last attempt and lets the user retry by hand", async () => {

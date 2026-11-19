@@ -22,7 +22,7 @@ import { ScoreParts } from "./ScoreParts";
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 /** 只有界面状态放在这里；数据都等 stateChanged 之后重取。 */
-export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void }) {
+export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(id: string): void; tab?: "checks" }) {
   const state = useStateRefetch("lessons", api.lessonsState);
   // 「该导出了」的提醒在规矩标签页也显示（导入导出标签页里另有一条）。
   const ioStatus = useStateRefetch("lessons-io-status", api.configStatus);
@@ -39,7 +39,10 @@ export function LessonsPage({ onOpenSession }: { onOpenSession(id: string): void
   const [newName, setNewName] = useState("");
   const [newSlugs, setNewSlugs] = useState<string[]>([]);
   /** 页面顶上的标签：规矩 / 批次历史 / 导入导出。 */
-  const [pageTab, setPageTab] = useState<"lessons" | "wizard" | "calibration" | "checks" | "baselines" | "batches" | "io">("lessons");
+  const [pageTab, setPageTab] = useState<"lessons" | "wizard" | "calibration" | "checks" | "baselines" | "batches" | "io">(initialTab ?? "lessons");
+  useEffect(() => {
+    if (initialTab) setPageTab(initialTab);
+  }, [initialTab]);
   /** 从规矩起草好的检查：交给检查标签页打开表单。 */
   const [checkDraft, setCheckDraft] = useState<CheckDraftState | null>(null);
   /** 正在起草检查的规矩（按钮显示「正在起草…」）。 */

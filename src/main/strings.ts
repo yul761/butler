@@ -490,6 +490,9 @@ const ZH = {
     consistencyNone: "没发现和别的规矩冲突",
     consistencyConditional: (ref: number, reason: string) => `和 #${ref} 只在部分情况下冲突：${reason}`,
     untested: "没回测：检查保持影子运行，不能自动变成拦截",
+    verifiability: (recall: string | null, comments: number, fp: string | null, hits: number, prs: number) =>
+      `回测 ${prs} 个 PR：${recall === null ? "出处评论没法回放，召回不详" : `出处评论抓到 ${recall}（共 ${comments} 条）`}；${fp === null ? "没有命中" : `${hits} 处命中，误报率 ${fp}`}`,
+    skip: { not_cloned: "仓库没有本地副本", no_gh: "gh 不能用（拿不到 PR）", run_command: "运行命令的检查不在历史上回放", no_material: "没有可回放的 PR 和出处评论" } as Record<"not_cloned" | "no_gh" | "run_command" | "no_material", string>,
     cap: (cap: string) => `给检查用的综合分封顶在 ${cap}`,
     composite: (value: string, parts: string, line: string, prose: boolean) => `综合 ${value}（${parts}）；${prose ? "文字规矩" : "可检查的规矩"}的准入线是 ${line}`,
     note: {
@@ -501,6 +504,9 @@ const ZH = {
       conflict: (ref: number, reason: string) => `和 #${ref} 冲突：${reason}`,
       covered: (by: string) => `已经被 ${by} 覆盖`,
       duplicate: (keeper: number) => `和 #${keeper} 是同一件事`,
+      backtestRecall: (recall: string, comments: number, min: string) => `回测召回 ${recall}（${comments} 条出处评论），低于要求的 ${min}`,
+      backtestFp: (fp: string, max: string) => `回测误报率 ${fp}，高于上限 ${max}`,
+      untested: (why: string) => `没法回测（${why}），策略不允许没回测的检查进影子模式`,
     },
   },
   /** 仓库现状（工作流 E2）：模型补全的提示词、session guide 里的仓库档案、导出成 lint 的提交说明和拒绝理由。 */
@@ -1077,6 +1083,9 @@ const EN: MainStrings = {
     consistencyNone: "no conflict with other rules found",
     consistencyConditional: (ref: number, reason: string) => `conflicts with #${ref} only in some cases: ${reason}`,
     untested: "not backtested: the check stays in shadow mode and cannot be made blocking automatically",
+    verifiability: (recall: string | null, comments: number, fp: string | null, hits: number, prs: number) =>
+      `backtested on ${prs} ${prs === 1 ? "PR" : "PRs"}: ${recall === null ? "the source comments could not be replayed, recall unknown" : `caught ${recall} of ${comments} source ${comments === 1 ? "comment" : "comments"}`}; ${fp === null ? "no hits" : `${hits} ${hits === 1 ? "hit" : "hits"}, false-positive rate ${fp}`}`,
+    skip: { not_cloned: "the repo has no local copy", no_gh: "gh is not available (no PRs)", run_command: "command checks are not replayed on history", no_material: "no PRs or source comments to replay" },
     cap: (cap: string) => `the score used for the check is capped at ${cap}`,
     composite: (value: string, parts: string, line: string, prose: boolean) => `overall ${value} (${parts}); the admission line for ${prose ? "prose rules" : "checkable rules"} is ${line}`,
     note: {
@@ -1088,6 +1097,9 @@ const EN: MainStrings = {
       conflict: (ref: number, reason: string) => `conflicts with #${ref}: ${reason}`,
       covered: (by: string) => `already covered by ${by}`,
       duplicate: (keeper: number) => `the same thing as #${keeper}`,
+      backtestRecall: (recall: string, comments: number, min: string) => `backtest recall ${recall} (${comments} source ${comments === 1 ? "comment" : "comments"}), below the required ${min}`,
+      backtestFp: (fp: string, max: string) => `backtest false-positive rate ${fp}, above the limit ${max}`,
+      untested: (why: string) => `could not be backtested (${why}) and the policy does not let untested checks into shadow mode`,
     },
   },
   legacy: {

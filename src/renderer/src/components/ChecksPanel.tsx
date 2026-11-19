@@ -9,6 +9,8 @@ import { S } from "../strings";
 import type { BatchNoticeState } from "./LessonBulkBar";
 import { useStateRefetch } from "./useStateRefetch";
 import { CheckRepoTools } from "./CheckRepoTools";
+import type { BacktestAction, CheckF } from "../../../shared/backtest";
+import { backtestLines, btError, canClearReview, lifecycleLine, progressLines } from "../backtest-view";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -211,6 +213,26 @@ function ChecksSettings({ settings }: { settings: { enabled: boolean; editTimeou
   );
 }
 
+/** 一条检查的回测、分数、影子进度、上次自动升降级（工作流 F），带重新回测和清除复查标记。 */
+function CheckFView({ f, running, onAct }: { f: CheckF; running: boolean; onAct(a: BacktestAction): void }) {
+  const life = lifecycleLine(f.lifecycle, S);
+  const lines = [...backtestLines(f.backtest, running, S), ...progressLines(f.progress, S)];
+  return (
+    <div className="check-f" data-testid={`check-f-${f.checkId}`}>
+      {lines.map((l, i) => <p key={i} className="muted">{l}</p>)}
+      <p className="muted">
+        {f.score?.score != null && <>{S.bt.score(f.score.score.toFixed(2))} · </>}
+        {S.bt.bypassStats(f.bypassed, f.ignored)}
+      </p>
+      {life && <p className={f.lifecycle?.needsReview ? "error" : "muted"} data-testid={`check-life-${f.checkId}`}>{life}</p>}
+      <div className="lessons-row">
+        <button data-testid={`check-rerun-${f.checkId}`} disabled={running} onClick={() => onAct({ op: "rerun", checkId: f.checkId })}>{S.bt.rerun}</button>
+        {canClearReview(f) && <button data-testid={`check-clear-review-${f.checkId}`} onClick={() => onAct({ op: "clearReview", checkId: f.checkId })}>{S.bt.clearReview}</button>}
+      </div>
+    </div>
+  );
+}
+
 /** 规矩页的「检查」标签（addendum 第 8 节）：一层的有效检查、命中统计、命中记录、编辑和批量操作。 */
 export function ChecksPanel({ draft, onDraftTaken, onNotice }: { draft: CheckDraftState | null; onDraftTaken(): void; onNotice(n: BatchNoticeState): void }) {
   const [layer, setLayer] = useState("global");
@@ -218,6 +240,11 @@ export function ChecksPanel({ draft, onDraftTaken, onNotice }: { draft: CheckDra
   const fetched = useStateRefetch(`checks-${layer}`, () => api.checksView(scope));
   // 换层以后、新的一层取回来之前不显示上一层的行。
   const view = fetched && scopeKey(fetched.scope) === layer ? fetched : null;
+  const bt = useStateRefetch("backtest", () => api.backtestView());
+  const fOf = new Map((bt?.checks ?? []).map((f) => [f.checkId, f]));
+  const btAct = (a: BacktestAction) => {
+    void api.backtestAct(a).then((r) => setError(r.ok ? null : btError(r.error, S)), reportError);
+  };
   const [editing, setEditing] = useState<Editing | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [picked, setPicked] = useState<number[]>([]);
@@ -299,6 +326,7 @@ export function ChecksPanel({ draft, onDraftTaken, onNotice }: { draft: CheckDra
           <span className={`pill ${k.mode === "enforce" ? "approved" : "none"}`} data-testid={`check-mode-${c.key}`}>{S.checksModeLabel[k.mode]}</span>
           <span className={`pill ${k.severity === "block" ? "changes" : "pending"}`}>{S.checksSeverityLabel[k.severity]}</span>
           {!k.enabled && <span className="pill none">{S.checksOffTag}</span>}
+          {fOf.get(k.id)?.lifecycle?.needsReview && <span className="pill changes" data-testid={`check-needs-review-${c.key}`}>{S.bt.needsReview}</span>}
           {!own && <span className="muted">{S.checksInherited(c.originLabel)}</span>}
         </div>
         <p className="muted check-params"><code>{paramsSummary(k.type, k.params, S)}</code>{k.globs.length > 0 && <> · {k.globs.join(", ")}</>}</p>
@@ -309,6 +337,7 @@ export function ChecksPanel({ draft, onDraftTaken, onNotice }: { draft: CheckDra
           {c.stats.lastHitAt !== null && <> · {S.checksLastHit(formatTime(c.stats.lastHitAt))}</>}
         </p>
         {c.stats.lastUnavailable && <p className="muted">{S.checksLastUnavailable(c.stats.lastUnavailable.detail)}</p>}
+        {fOf.has(k.id) && <CheckFView f={fOf.get(k.id)!} running={bt?.running.includes(k.id) ?? false} onAct={btAct} />}
         <div className="lessons-row">
           {own ? (
             <button data-testid={`check-edit-${c.key}`} onClick={() => {

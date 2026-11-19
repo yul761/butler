@@ -1,4 +1,5 @@
 // 确定性检查（契约 4.5）：类型、快照格式、命中记录、页面用的视图和输入校验。纯数据，不引 Node 模块。
+import type { BypassHow } from "./backtest";
 
 /** 快照格式的版本：hook 和 Butler 用同一个常量构建；hook 看到别的版本就当作「没有检查」放行并记录。 */
 export const CHECKS_SNAPSHOT_VERSION = 1;
@@ -130,7 +131,20 @@ export type CheckLogRecord =
     }
   | { kind: "absent"; reason: CheckAbsenceReason; session: string | null; at: number }
   /** 记过「没有检查」的 session 后来又检查上了（快照恢复了）：清掉 session 上的标记。 */
-  | { kind: "present"; session: string | null; at: number };
+  | { kind: "present"; session: string | null; at: number }
+  /** 绕过一条拦过的检查（工作流 F 第 7.1 节）：在拦下的地方加压制注释、--no-verify、关掉 git hook、改 Butler 的检查文件。 */
+  | {
+      kind: "bypass";
+      checkId: number;
+      checkKey: string;
+      slug: string;
+      file: string;
+      line: number | null;
+      how: BypassHow;
+      detail: string;
+      session: string | null;
+      at: number;
+    };
 
 export type CheckVerdict = "false_positive" | "true_positive";
 
@@ -149,6 +163,10 @@ export interface CheckStats {
   lastHitAt: number | null;
   /** 最近一次「跑不起来」的原因（run_command）。 */
   lastUnavailable: { at: number; detail: string } | null;
+  /** 绕过次数（工作流 F：压制注释、--no-verify、关 hook、改检查文件）。 */
+  bypassed: number;
+  /** 拦下以后一天内同一个 session 没改掉的次数（工作流 F 第 7.1 节）。 */
+  ignored: number;
 }
 
 export interface CheckHitView {

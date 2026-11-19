@@ -254,3 +254,64 @@ describe("review fixes", () => {
     expect(realCheckDeps.pushedFiles(repo, process.env)).toEqual(["src/中文.ts"]);
   });
 });
+
+describe("bypass detection (workstream F)", () => {
+  const bash = (repo: string, command: string) => JSON.stringify({ hook_event_name: "PreToolUse", cwd: repo, tool_name: "Bash", tool_input: { command } });
+  const bypasses = (t: { hits: () => CheckLogRecord[] }) => t.hits().filter((h) => h.kind === "bypass");
+
+  it("records a suppression marker added next to a blocked violation", async () => {
+    const t = setup([check({})]);
+    expect(JSON.parse(await runCheck(t.write("src/a.ts", "ok\nfoo(1)\n"), t.env, realCheckDeps)).decision).toBe("block");
+    await runCheck(t.write("src/a.ts", "ok\n// eslint-disable-next-line\nfoo(1)\n", "ok\nfoo(1)\n"), t.env, realCheckDeps);
+    expect(bypasses(t)).toMatchObject([{ kind: "bypass", checkId: 1, checkKey: "ck_1", slug: SLUG, file: "src/a.ts", line: 3, how: "suppress", session: "sess-1" }]);
+    expect((bypasses(t)[0] as { detail: string }).detail).toContain("eslint-disable");
+  });
+
+  it("records a marker on the violating line itself", async () => {
+    const t = setup([check({})]);
+    await runCheck(t.write("src/a.ts", "foo(1)\n"), t.env, realCheckDeps);
+    await runCheck(t.write("src/a.ts", "foo(1) // @ts-ignore\n", "foo(1)\n"), t.env, realCheckDeps);
+    expect(bypasses(t)).toMatchObject([{ how: "suppress", line: 1 }]);
+  });
+
+  it("ignores markers far away, markers without an earlier block, and shadow checks", async () => {
+    const far = setup([check({})]);
+    await runCheck(far.write("src/a.ts", "foo(1)\n"), far.env, realCheckDeps);
+    await runCheck(far.write("src/a.ts", "foo(1)\na\nb\nc\n// noqa\n", "foo(1)\n"), far.env, realCheckDeps);
+    expect(bypasses(far)).toEqual([]);
+    const fresh = setup([check({})]);
+    await runCheck(fresh.write("src/a.ts", "ok\n", "ok\n"), fresh.env, realCheckDeps);
+    await runCheck(fresh.write("src/a.ts", "// eslint-disable-next-line\nok\n", "ok\n"), fresh.env, realCheckDeps);
+    expect(bypasses(fresh)).toEqual([]);
+    const shadow = setup([check({ mode: "shadow" })]);
+    await runCheck(shadow.write("src/a.ts", "foo(1)\n"), shadow.env, realCheckDeps);
+    await runCheck(shadow.write("src/a.ts", "// eslint-disable-next-line\nfoo(1)\n", "foo(1)\n"), shadow.env, realCheckDeps);
+    expect(bypasses(shadow)).toEqual([]);
+  });
+
+  it("attributes --no-verify to checks that blocked in this session in the last 30 minutes", async () => {
+    let now = 1_000_000;
+    const d: CheckHookDeps = { ...realCheckDeps, now: () => now };
+    const t = setup([check({}), check({ id: 2, key: "ck_2", name: "other", params: { pattern: "bar\\(" } })]);
+    await runCheck(t.write("src/a.ts", "foo(1)\n"), t.env, d);
+    now += 60_000;
+    expect(await runPushCheck(bash(t.repo, "git commit --no-verify -m wip"), t.env, d)).toBe("");
+    expect(bypasses(t)).toMatchObject([{ kind: "bypass", checkId: 1, checkKey: "ck_1", how: "no_verify", detail: "git commit --no-verify", session: "sess-1", slug: SLUG }]);
+    now += 31 * 60_000;
+    await runPushCheck(bash(t.repo, "HUSKY=0 git commit -m wip"), t.env, d);
+    expect(bypasses(t)).toHaveLength(1);
+  });
+
+  it("attributes a bypass after a blocked push to the push check", async () => {
+    const t = setup([check({ type: "run_command", name: "tests", params: { command: "echo failed; exit 1", stage: "push" }, globs: [] })]);
+    await runPushCheck(bash(t.repo, "git push origin HEAD"), t.env, realCheckDeps);
+    await runPushCheck(bash(t.repo, "git -c core.hooksPath=/dev/null push origin HEAD"), t.env, realCheckDeps);
+    expect(bypasses(t)).toMatchObject([{ checkKey: "ck_1", how: "hooks_off" }]);
+  });
+
+  it("records nothing for a bypass-looking command without an earlier block", async () => {
+    const t = setup([check({})]);
+    await runPushCheck(bash(t.repo, "git commit --no-verify -m wip"), t.env, realCheckDeps);
+    expect(bypasses(t)).toEqual([]);
+  });
+});

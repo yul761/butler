@@ -1,4 +1,5 @@
 import type { MetricsOverview } from "../../shared/metrics";
+import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
 import type { BatchRecorder } from "../batches/batch-recorder";
 import type { AdmissionPolicyService } from "../lessons/admission-policies";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
@@ -78,7 +79,7 @@ import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../sh
 import {
   addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
-  stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg } from "./validate";
+  stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -146,6 +147,8 @@ export interface IpcDeps {
   baselines: { view(): BaselinesView; act(a: BaselinesAction): BaselinesActResult; rulesView(scope: CheckScope): RuleRowView[]; summary(scope: CheckScope): BaselineSummary };
   legacy: { views(): LegacyScanView[]; start(checkId: number, slug: string): { ok: true } | { ok: false; message: string }; cancel(scanId: number): boolean; violations(scanId: number, offset: number, limit: number): LegacyViolation[] };
   checkExports: { list(): CheckExportView[]; act(a: CheckExportAction): Promise<CheckExportResult> };
+  /** 回测和自动升降级（工作流 F）。 */
+  backtest: { view(): BacktestView; act(a: BacktestAction): BacktestActResult };
   /** Claude 可用状态；act 只有手动暂停 / 恢复复盘。 */
   availability: Pick<ClaudeAvailability, "view" | "pauseLessons" | "resumeLessons">;
   /** 模型路由（3.0）：设置页的整份数据和操作；act 返回错误文字，成功为 null。 */
@@ -595,6 +598,12 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.legacyViolations, (raw: unknown): LegacyViolation[] => {
     const q = legacyViolationsArg(raw);
     return d.legacy.violations(q.scanId, q.offset, q.limit);
+  });
+  handle(IPC.backtestView, (): BacktestView => d.backtest.view());
+  handle(IPC.backtestAct, (raw: unknown): BacktestActResult => {
+    const r = d.backtest.act(backtestActionArg(raw));
+    if (r.ok) d.notify();
+    return r;
   });
   handle(IPC.checkExportList, (): CheckExportView[] => d.checkExports.list());
   handle(IPC.checkExportAct, async (raw: unknown): Promise<CheckExportResult> => {

@@ -1,5 +1,6 @@
 // 识别合并总控要审核的 Bash 命令。纯函数，不引 Node 模块（渲染进程也会打包 shared）。
 // 认不准的一律返回 null：宁可漏审，也不误拦普通命令。
+import type { BypassHow } from "./backtest";
 
 export type GateAction =
   | { kind: "pr_merge"; dir: string | null; pr: string | null }
@@ -259,6 +260,71 @@ function shipTokens(tokens: string[]): string[] {
     }
     t = t.replace(/[)`]+$/, "");
     if (t !== "") out.push(t);
+  }
+  return out;
+}
+
+/** Bash 里绕过检查的手法（工作流 F 第 7.1 节；suppress 是编辑里加的压制注释，由 hook 的编辑检查认）。 */
+export type BashBypass = Exclude<BypassHow, "suppress">;
+
+/** 动 Butler 的检查文件或 Claude Code 的 hook 设置。 */
+const TAMPER_TARGET = /[\\/]\.butler[\\/]checks\b|[\\/]\.claude[\\/]settings(\.local)?\.json\b/;
+/** 会写东西的命令或重定向（只读的 cat / grep 不算）。 */
+const WRITES = /(^|[\s;&|(])(rm|mv|cp|sed\s+-i|perl\s+-[a-z]*i|tee|truncate|chmod|ln|dd)\b|[^<>&0-9]>{1,2}\s*\S/;
+
+/** git commit 的一组短选项里有没有 -n：带值的选项（-m、-F、-C、-c、-t、-u、-S）之后的字母是它的值，不再看。 */
+function commitShortN(a: string): boolean {
+  if (!/^-[a-zA-Z]+$/.test(a)) return false;
+  for (const ch of a.slice(1)) {
+    if (ch === "n") return true;
+    if ("mFCctuS".includes(ch)) return false;
+  }
+  return false;
+}
+
+/**
+ * 一条 Bash 命令里绕过检查的写法：`git commit/push/merge … --no-verify`（commit 的 `-n`）、关掉 git hook
+ * （`-c core.hooksPath=`、`git config core.hooksPath …`、HUSKY=0、SKIP=…）、改 Butler 的检查文件或 Claude 的 hook 设置、
+ * 把 BUTLER_HOME 指到别处。只认出手法；算到哪条检查头上由调用方看这个 session 最近被拦过什么。纯字符串，不跑 shell。
+ */
+export function classifyBypass(command: string): { how: BashBypass; detail: string }[] {
+  const out: { how: BashBypass; detail: string }[] = [];
+  const add = (how: BashBypass, detail: string) => {
+    if (!out.some((o) => o.how === how)) out.push({ how, detail: detail.slice(0, 200) });
+  };
+  if (TAMPER_TARGET.test(command) && WRITES.test(command)) add("tamper", command);
+  for (const tokens of splitSegments(command)) {
+    let i = 0;
+    for (; i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]); i++) {
+      const t = tokens[i];
+      if (/^(HUSKY=0|HUSKY_SKIP_HOOKS=1|LEFTHOOK=0|SKIP=.+)$/.test(t)) add("hooks_off", t);
+      else if (/^BUTLER_HOME=/.test(t)) add("tamper", t);
+    }
+    if (tokens[i] === "export" || tokens[i] === "unset") {
+      for (const t of tokens.slice(i + 1)) {
+        if (/^(HUSKY=0|HUSKY_SKIP_HOOKS=1|LEFTHOOK=0|SKIP=.+)$/.test(t)) add("hooks_off", `${tokens[i]} ${t}`);
+        else if (/^BUTLER_(HOME=.*|SESSION)$/.test(t)) add("tamper", `${tokens[i]} ${t}`);
+      }
+      continue;
+    }
+    if (tokens[i] !== "git") continue;
+    i++;
+    while (i < tokens.length && isOption(tokens[i])) {
+      if (tokens[i] === "-c" && i + 1 < tokens.length) {
+        if (/^core\.hooksPath=/i.test(tokens[i + 1])) add("hooks_off", `git -c ${tokens[i + 1]}`);
+        i += 2;
+      } else if (tokens[i] === "-C") i += 2;
+      else i++;
+    }
+    const sub = tokens[i];
+    const args = tokens.slice(i + 1);
+    if (sub === "config" && args.some((a) => /^core\.hooksPath$/i.test(a)) && !args.some((a) => a === "--get" || a === "--get-all" || a === "--unset" || a === "--list" || a === "-l")) {
+      // 只读（--get、只写键名）不算：至少要有一个值。
+      const pos = args.filter((a) => !a.startsWith("-"));
+      if (pos.length >= 2) add("hooks_off", `git config ${args.join(" ")}`);
+    }
+    if ((sub === "commit" || sub === "push" || sub === "merge" || sub === "rebase" || sub === "am" || sub === "cherry-pick") && args.includes("--no-verify")) add("no_verify", `git ${sub} --no-verify`);
+    else if (sub === "commit" && args.some(commitShortN)) add("no_verify", "git commit -n");
   }
   return out;
 }

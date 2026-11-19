@@ -1138,4 +1138,60 @@ export const MIGRATIONS: string[] = [
     updated_at INTEGER NOT NULL);
   CREATE UNIQUE INDEX stack_policies_scope ON stack_policies (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''));
   `,
+  // 回测、影子模式自动升级、自动降级（工作流 F）：回测素材（合并 PR 的 diff、行内评论指向的提交、某个提交上的文件）、
+  // 回测结果（按检查定义的哈希存，草稿和存下来的检查共用）、hook 记的绕过、检查的综合分、降级 / 待复审的原因、
+  // 自动升降级的事件（Now 上的通知和撤回从这里来）、定期阈值复查的建议。
+  `
+  CREATE TABLE backtest_prs (
+    repo_slug TEXT NOT NULL, pr_number INTEGER NOT NULL, merged_at INTEGER,
+    status TEXT NOT NULL CHECK (status IN ('pending','ok','failed','too_large')), attempts INTEGER NOT NULL DEFAULT 0,
+    diff TEXT, fetched_at INTEGER, comments_at INTEGER,
+    PRIMARY KEY (repo_slug, pr_number));
+  CREATE TABLE backtest_repos (
+    repo_slug TEXT PRIMARY KEY, status TEXT NOT NULL CHECK (status IN ('ok','no_gh','failed')), attempts INTEGER NOT NULL DEFAULT 0,
+    window TEXT NOT NULL DEFAULT '[]', fetched_at INTEGER NOT NULL, error TEXT);
+  CREATE TABLE backtest_comments (
+    repo_slug TEXT NOT NULL, pr_number INTEGER NOT NULL, comment_id INTEGER NOT NULL,
+    author TEXT, path TEXT, line INTEGER, original_line INTEGER, original_commit TEXT, fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (repo_slug, pr_number, comment_id));
+  CREATE TABLE backtest_files (
+    repo_slug TEXT NOT NULL, sha TEXT NOT NULL, path TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('ok','missing','too_large','binary','failed')), content TEXT, fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (repo_slug, sha, path));
+  CREATE TABLE check_backtests (
+    id INTEGER PRIMARY KEY, def_hash TEXT NOT NULL, sources_hash TEXT NOT NULL DEFAULT '', material_key TEXT NOT NULL DEFAULT '',
+    lesson_id INTEGER REFERENCES lessons(id) ON DELETE SET NULL, check_key TEXT, repo_slug TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('done','skipped','failed')), skip_reason TEXT,
+    prs INTEGER NOT NULL DEFAULT 0, hits INTEGER NOT NULL DEFAULT 0, matched_hits INTEGER NOT NULL DEFAULT 0,
+    judged INTEGER NOT NULL DEFAULT 0, judged_fp INTEGER NOT NULL DEFAULT 0, false_positives REAL NOT NULL DEFAULT 0, fp_rate REAL,
+    comments INTEGER NOT NULL DEFAULT 0, comments_matched INTEGER NOT NULL DEFAULT 0, recall REAL,
+    legacy INTEGER, legacy_scan_id INTEGER, samples TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL);
+  CREATE INDEX check_backtests_def ON check_backtests (def_hash, repo_slug, created_at);
+  CREATE INDEX check_backtests_key ON check_backtests (check_key, repo_slug, created_at);
+  CREATE TABLE check_bypasses (
+    id INTEGER PRIMARY KEY, check_id INTEGER REFERENCES checks(id) ON DELETE SET NULL, check_key TEXT NOT NULL, repo_slug TEXT,
+    file TEXT NOT NULL DEFAULT '', line INTEGER,
+    how TEXT NOT NULL CHECK (how IN ('suppress','no_verify','hooks_off','tamper')), detail TEXT NOT NULL DEFAULT '',
+    session_id TEXT, at INTEGER NOT NULL, ingest_key TEXT NOT NULL UNIQUE);
+  CREATE INDEX check_bypasses_check ON check_bypasses (check_id, at);
+  CREATE INDEX check_bypasses_key ON check_bypasses (check_key, at);
+  CREATE TABLE check_scores (
+    check_id INTEGER PRIMARY KEY REFERENCES checks(id) ON DELETE CASCADE,
+    score REAL, score_parts TEXT NOT NULL DEFAULT '{}', scored_at INTEGER NOT NULL, policy_version INTEGER);
+  CREATE TABLE check_lifecycle (
+    check_id INTEGER PRIMARY KEY REFERENCES checks(id) ON DELETE CASCADE,
+    needs_review INTEGER NOT NULL DEFAULT 0, reason TEXT, reason_data TEXT NOT NULL DEFAULT '{}',
+    last_action TEXT CHECK (last_action IS NULL OR last_action IN ('promote','demote','flag','cleared')),
+    last_batch_id INTEGER REFERENCES admission_batches(id) ON DELETE SET NULL, updated_at INTEGER NOT NULL);
+  CREATE TABLE check_lifecycle_events (
+    id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('promote','demote','flag')),
+    batch_id INTEGER REFERENCES admission_batches(id) ON DELETE SET NULL,
+    checks TEXT NOT NULL DEFAULT '[]', at INTEGER NOT NULL, dismissed_at INTEGER, undone_at INTEGER);
+  CREATE INDEX check_lifecycle_events_at ON check_lifecycle_events (at);
+  CREATE TABLE threshold_reviews (
+    id INTEGER PRIMARY KEY, at INTEGER NOT NULL, key TEXT NOT NULL, current REAL NOT NULL, suggested REAL NOT NULL,
+    basis TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL CHECK (status IN ('open','applied','dismissed')),
+    batch_id INTEGER REFERENCES admission_batches(id) ON DELETE SET NULL, decided_at INTEGER);
+  CREATE INDEX threshold_reviews_status ON threshold_reviews (status, at);
+  `,
 ];

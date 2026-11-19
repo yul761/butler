@@ -2,6 +2,7 @@ import type { AvailabilityView, LimitHit } from "../../shared/availability";
 import type { NowNotice } from "../../shared/types";
 import { costBreakerText } from "./cost-view";
 import { stackNoticeText } from "./stack-view";
+import { btNoticeText } from "./backtest-view";
 import type { UiStrings } from "./strings";
 
 const pad = (n: number): string => String(n).padStart(2, "0");
@@ -21,7 +22,7 @@ export function limitLine(l: LimitHit, S: UiStrings, now: number): string {
   return l.resetsAt === null ? S.limitNoReset(kind) : S.limitUntil(kind, resetClock(l.resetsAt, now));
 }
 
-export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend" | "raise" | "comments" | "stacks";
+export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend" | "raise" | "comments" | "stacks" | "undo" | "checks" | "dismiss";
 
 /** CI 结论为什么没递出去，一句人话（工作流 W）。认不得的原样带上。 */
 export function ciReasonText(reason: string, S: UiStrings): string {
@@ -67,6 +68,10 @@ export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: str
       return { text, actions: ["comments"] };
     }
     case "stack": return { text: stackNoticeText(n.stack, S), actions: n.target ? ["stacks", "open"] : ["stacks"] };
+    // 检查自动升降级（工作流 F）：撤销、看检查、知道了。
+    case "check_promoted":
+    case "check_demoted":
+      return btNoticeText(n, S);
   }
 }
 

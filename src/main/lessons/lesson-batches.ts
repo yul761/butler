@@ -3,7 +3,7 @@ import type { LessonsRepo } from "../db/lessons-repo";
 import { BatchRecorder, type BatchContext, type Snapshot } from "../batches/batch-recorder";
 import { matchesLessonFilter, type LessonFilter } from "../../shared/lesson-filter";
 import { MAX_TARGET_IDS, type Lesson, type LessonActResult, type LessonBulkVerb, type LessonTarget } from "../../shared/lessons";
-import type { BatchOrigin, BatchOutcome } from "../../shared/batches";
+import type { BatchOrigin, BatchOutcome, BatchView } from "../../shared/batches";
 
 export { MAX_TARGET_IDS };
 
@@ -174,6 +174,12 @@ export class LessonBatchService {
     return this.repo.lessons({ status: ["pending"] }).filter((l) => l.admission === "auto" && matchesLessonFilter(l, filter)).length;
   }
 
+  private readonly undoListeners: ((original: BatchView, restored: { entity: string; id: number }[]) => void)[] = [];
+  /** 撤销完一个批次（工作流 F：撤销自动升级 / 降级记校准样本）。 */
+  onUndone(fn: (original: BatchView, restored: { entity: string; id: number }[]) => void): void {
+    this.undoListeners.push(fn);
+  }
+
   /** 整批撤销。撤销的是自动批次时，每条恢复的规矩记一个校准样本（人推翻了流水线）。 */
   undo(batchId: number): LessonActResult {
     const now = this.d.now();
@@ -181,6 +187,13 @@ export class LessonBatchService {
     if (!r.ok) return r;
     if (r.restored.some((x) => x.entity === "policy")) this.d.onPolicyChanged?.();
     if (r.restored.some((x) => x.entity === "check" || x.entity === "product")) this.d.onChecksChanged?.();
+    for (const fn of this.undoListeners) {
+      try {
+        fn(r.original, r.restored.map((x) => ({ entity: x.entity, id: x.id })));
+      } catch {
+        // 监听方的错不影响撤销。
+      }
+    }
     if (r.original.origin === "auto") {
       const cal: { lesson: Lesson; human: Verdict; auto: Verdict | null }[] = [];
       for (const x of r.restored) {

@@ -16,15 +16,19 @@ export interface BulkFilterUi {
   maxScore: string;
   minHits: string;
   batchId: string;
+  /** 可验证性（0..1，F 的回测）。 */
+  minVerifiability: string;
+  maxVerifiability: string;
   degradedOnly: boolean;
+  untestedOnly: boolean;
 }
 
 export const EMPTY_BULK_FILTER: BulkFilterUi = {
-  status: [], admission: [], checkability: [], shelvedReason: [], text: "", minScore: "", maxScore: "", minHits: "", batchId: "", degradedOnly: false,
+  status: [], admission: [], checkability: [], shelvedReason: [], text: "", minScore: "", maxScore: "", minHits: "", batchId: "", minVerifiability: "", maxVerifiability: "", degradedOnly: false, untestedOnly: false,
 };
 
 /** 搁置原因的筛选项（流水线会写的那几种）。 */
-export const SHELVED_REASONS = ["conflict", "generality", "low_score", "clarity", "backtest_fp", "covered", "duplicate", "below_drop"] as const;
+export const SHELVED_REASONS = ["conflict", "generality", "low_score", "clarity", "backtest_fp", "backtest_recall", "untested", "covered", "duplicate", "below_drop"] as const;
 
 const scoreInput = (raw: string): number | undefined => {
   const v = raw.trim() === "" ? NaN : Number(raw);
@@ -54,7 +58,12 @@ export function bulkFilter(base: LessonFilter, ui: BulkFilterUi): LessonFilter {
   if (minHits !== undefined) f.minHits = minHits;
   const batchId = intInput(ui.batchId, 1);
   if (batchId !== undefined) f.batchId = batchId;
+  const minV = scoreInput(ui.minVerifiability);
+  if (minV !== undefined) f.minVerifiability = minV;
+  const maxV = scoreInput(ui.maxVerifiability);
+  if (maxV !== undefined) f.maxVerifiability = maxV;
   if (ui.degradedOnly) f.degraded = true;
+  if (ui.untestedOnly) f.untested = true;
   return f;
 }
 

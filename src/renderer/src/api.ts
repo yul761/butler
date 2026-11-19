@@ -1,4 +1,5 @@
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
+import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
 import type { MemoryHistoryPoint } from "../../shared/mem-usage";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyAction, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import type { ActivityEvent } from "../../shared/activity";
@@ -166,6 +167,8 @@ export const api = {
   checksHits: (key: string) => call<CheckHitView[]>(IPC.checksHits, key),
   checksAct: (a: ChecksAction) => call<ChecksActResult>(IPC.checksAct, a),
   checksDraft: (lessonId: number) => call<CheckDraftResult>(IPC.checksDraft, lessonId),
+  backtestView: () => call<BacktestView>(IPC.backtestView),
+  backtestAct: (a: BacktestAction) => call<BacktestActResult>(IPC.backtestAct, a),
   baselinesView: () => call<BaselinesView>(IPC.baselinesView),
   baselinesAct: (a: BaselinesAction) => call<BaselinesActResult>(IPC.baselinesAct, a),
   baselinesRules: (scope: CheckScope) => call<RuleRowView[]>(IPC.baselinesRules, scope),

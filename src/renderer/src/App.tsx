@@ -43,7 +43,8 @@ export type Route =
   /** section：从「现在」页的提醒跳来时要看的那一块。 */
   | { page: "settings"; section?: "health" | "routing" }
   | { page: "audit" }
-  | { page: "lessons" };
+  /** tab：从「现在」页的检查升降级提醒跳来时直接打开检查标签。 */
+  | { page: "lessons"; tab?: "checks" };
 
 export function App() {
   const [route, setRoute] = useState<Route>({ page: "home" });
@@ -234,7 +235,7 @@ export function App() {
             {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} onEpicRestored={goEpic} />}
             {route.page === "settings" && <SettingsPage section={route.section} onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "audit" && <AuditPage />}
-            {route.page === "lessons" && <LessonsPage onOpenSession={(id) => setRoute({ page: "butler", focusSession: id })} />}
+            {route.page === "lessons" && <LessonsPage tab={route.tab} onOpenSession={(id) => setRoute({ page: "butler", focusSession: id })} />}
           </>
         )}
       </main>

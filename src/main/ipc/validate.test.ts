@@ -1,4 +1,4 @@
-import { baselinesActionArg, checkExportActionArg, checkKeyArg, checkLessonIdArg, checkScopeArg, checksActionArg, legacyActionArg, legacyViolationsArg } from "./validate";
+import { backtestActionArg, baselinesActionArg, checkExportActionArg, checkKeyArg, checkLessonIdArg, checkScopeArg, checksActionArg, legacyActionArg, legacyViolationsArg } from "./validate";
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
@@ -391,6 +391,19 @@ describe("checks IPC arguments", () => {
     expect(checksActionArg({ op: "save", scope: { kind: "global" }, id: null, input: { type: "forbidden_pattern" } })).toMatchObject({ op: "save", id: null, lessonId: null });
     expect(() => checksActionArg({ op: "save", scope: { kind: "global" }, id: null, input: "x".repeat(70_000) })).toThrow();
     expect(checksActionArg({ op: "bulk", ids: [1, 2], verb: "shadow" })).toEqual({ op: "bulk", ids: [1, 2], verb: "shadow" });
+  });
+
+  it("accepts only known backtest actions with positive ids", () => {
+    expect(backtestActionArg({ op: "rerun", checkId: 3 })).toEqual({ op: "rerun", checkId: 3 });
+    expect(backtestActionArg({ op: "clearReview", checkId: 3, extra: 1 })).toEqual({ op: "clearReview", checkId: 3 });
+    expect(backtestActionArg({ op: "undo", batchId: 9 })).toEqual({ op: "undo", batchId: 9 });
+    expect(backtestActionArg({ op: "dismissNotice", eventId: 2 })).toEqual({ op: "dismissNotice", eventId: 2 });
+    expect(backtestActionArg({ op: "applyThreshold", id: 1 })).toEqual({ op: "applyThreshold", id: 1 });
+    expect(backtestActionArg({ op: "dismissThreshold", id: 1 })).toEqual({ op: "dismissThreshold", id: 1 });
+    expect(() => backtestActionArg({ op: "rerun", checkId: -1 })).toThrow();
+    expect(() => backtestActionArg({ op: "undo", batchId: "1" })).toThrow();
+    expect(() => backtestActionArg({ op: "drop" })).toThrow();
+    expect(() => backtestActionArg(null)).toThrow();
     expect(() => checksActionArg({ op: "bulk", ids: [], verb: "shadow" })).toThrow();
     expect(() => checksActionArg({ op: "bulk", ids: [1], verb: "explode" })).toThrow();
     expect(checksActionArg({ op: "verdict", hitId: 3, verdict: null })).toEqual({ op: "verdict", hitId: 3, verdict: null });

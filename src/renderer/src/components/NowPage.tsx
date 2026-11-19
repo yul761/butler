@@ -10,6 +10,7 @@ import { butlerLines, formatKb, heavyMcp, peakKb, rowMemDetail, rowMemText, shar
 import type { MemoryHistoryPoint, MemorySnapshot } from "../../../shared/mem-usage";
 import { groupSummary, needsYouText, needsYouTotal, prPill, rowKey, rowLabel, rowPlace, rowText, usageDetails, usageLine } from "../now-view";
 import { S } from "../strings";
+import { btError } from "../backtest-view";
 import type { Route } from "../App";
 import { DecisionCard } from "./InboxPanes";
 import { LiveWindow } from "./LiveWindow";
@@ -72,6 +73,7 @@ function noticeKey(n: NowNotice): string {
   if (n.kind === "cost") return `cost:${n.breaker.subjectKind}:${n.breaker.subjectId}`;
   if (n.kind === "comments_waiting") return `comments_waiting:${n.waiting.reason}:${n.waiting.prId}`;
   if (n.kind === "stack") return `stack:${n.stack.reason}:${n.stack.stackId}:${n.stack.branch}`;
+  if (n.kind === "check_promoted" || n.kind === "check_demoted") return `${n.kind}:${n.eventId}`;
   if (n.kind === "ci_undelivered") return `ci_undelivered:${n.ci.item.kind}:${n.ci.item.kind === "pr" ? n.ci.item.id : n.ci.item.repoId}`;
   if (n.kind !== "session_limited") return n.kind;
   const t = n.target;
@@ -80,7 +82,7 @@ function noticeKey(n: NowNotice): string {
 
 function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: number; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
   const { text, actions } = noticeText(n, S, now);
-  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen, routing: S.rt.nowOpen, resend: S.noticeResend, raise: S.cs.raise, comments: S.lp.noticeOpen, stacks: S.sk.noticeOpen };
+  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen, routing: S.rt.nowOpen, resend: S.noticeResend, raise: S.cs.raise, comments: S.lp.noticeOpen, stacks: S.sk.noticeOpen, undo: S.bt.undo, checks: S.bt.open, dismiss: S.bt.dismiss };
   // 重发的结果（CI 结果未能送达）：送到了提醒会在下一次刷新时消失，没送到写上为什么。
   const [result, setResult] = useState<string | null>(null);
   const run = (a: NoticeAction): void => {
@@ -99,6 +101,13 @@ function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: numb
       saveTab(`ticket:${n.waiting.ticketKey}`, "comments");
       saveTabOpen(`ticket:${n.waiting.ticketKey}`, true);
       onOpen(n.target);
+    } else if (n.kind === "check_promoted" || n.kind === "check_demoted") {
+      // 撤销：恢复成升降级之前的模式（提醒随之消失）；知道了：只关提醒。
+      if (a === "checks") onGo({ page: "lessons", tab: "checks" });
+      else if (a === "undo" && n.batchId !== null) {
+        setResult(null);
+        void api.backtestAct({ op: "undo", batchId: n.batchId }).then((r) => setResult(r.ok ? S.bt.undone : btError(r.error, S)), reportError);
+      } else if (a === "dismiss") void api.backtestAct({ op: "dismissNotice", eventId: n.eventId }).catch(reportError);
     } else if (a === "stacks") onGo({ page: "progress" });
     else if (n.kind === "session_limited" || n.kind === "ci_undelivered") onOpen(n.target);
     else if (n.kind === "stack" && n.target) onOpen(n.target);
