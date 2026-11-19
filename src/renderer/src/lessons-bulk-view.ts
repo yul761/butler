@@ -24,7 +24,7 @@ export const EMPTY_BULK_FILTER: BulkFilterUi = {
 };
 
 /** 搁置原因的筛选项（流水线会写的那几种）。 */
-export const SHELVED_REASONS = ["conflict", "generality", "low_score", "clarity", "backtest_fp", "covered", "duplicate", "below_drop"] as const;
+export const SHELVED_REASONS = ["conflict", "generality", "low_score", "clarity", "backtest_fp", "backtest_recall", "untested", "covered", "duplicate", "below_drop"] as const;
 
 const scoreInput = (raw: string): number | undefined => {
   const v = raw.trim() === "" ? NaN : Number(raw);

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { MAIN_STRINGS } from "../../strings";
 import { setLang } from "../../i18n";
 import { failed, fakeRunner, setupAdmission, type FakeAnswer } from "./__fixtures__/setup";
-import { AdmissionPipeline, type CoverageProvider } from "./pipeline";
+import { AdmissionPipeline, type BacktestGate, type CoverageProvider } from "./pipeline";
+import type { GateAnswer } from "../../backtest/service";
+import { ADMISSION_POLICY_DEFAULTS } from "../../../shared/admission-policy";
 import type { DraftGeneration } from "../../checks/draft";
 
 /** 从提示词里读出规矩：#id [scope] (globs) text */
@@ -35,7 +37,7 @@ const draft = (id: number): DraftGeneration => ({
   draft: { type: "forbidden_pattern", name: `no console ${id}`, params: { pattern: "console\\.log" }, globs: ["src/**"], excludeGlobs: [], severity: "block", mode: "shadow", enabled: true, message: "m" },
 });
 
-function build(o: { answers?: Record<string, FakeAnswer>; coverage?: CoverageProvider; draftKind?: "draft" | "prose" } = {}) {
+function build(o: { answers?: Record<string, FakeAnswer>; coverage?: CoverageProvider; draftKind?: "draft" | "prose"; backtest?: BacktestGate } = {}) {
   setLang("en");
   const s = setupAdmission();
   const fake = fakeRunner(answers(o.answers));
@@ -45,7 +47,7 @@ function build(o: { answers?: Record<string, FakeAnswer>; coverage?: CoveragePro
   };
   const pipeline = new AdmissionPipeline({
     repo: s.repo, recorder: s.recorder, policies: s.policies, judgments: s.judgments, runs: s.runs, checks: s.checks, drafter, run: fake.run,
-    lang: () => "en", now: () => s.clock.now, fallbackCwd: () => "/home", coverage: o.coverage ?? null,
+    lang: () => "en", now: () => s.clock.now, fallbackCwd: () => "/home", coverage: o.coverage ?? null, backtest: o.backtest ?? null,
   });
   const two = () => [{}, {}];
   return { ...s, fake, pipeline, drafted, two };
@@ -185,5 +187,52 @@ describe("AdmissionPipeline.judge", () => {
     s2.lesson("schema changes need a migration", { slug: "acme/api" });
     const only = await s2.pipeline.judge({ kind: "repo", slug: "acme/web" });
     expect(only.verdicts).toEqual([expect.objectContaining({ lessonId: c, verdict: "shelved", reason: "generality" })]);
+  });
+});
+
+describe("gate 5 (workstream F backtest)", () => {
+  const tested = (o: Partial<Extract<GateAnswer, { kind: "tested" }>> = {}): GateAnswer => ({ kind: "tested", recall: 1, fpRate: 0, hits: 3, comments: 2, commentsMatched: 2, falsePositives: 0, prs: 50, skipped: [], ...o });
+  const gate = (answer: GateAnswer) => {
+    const calls: { lessonId: number | null; slugs: readonly string[]; sources: number }[] = [];
+    return { calls, assess: async (i: { lessonId: number | null; slugs: readonly string[]; sources: readonly unknown[] }) => (calls.push({ lessonId: i.lessonId, slugs: i.slugs, sources: i.sources.length }), answer) };
+  };
+
+  it("a tested draft gets a verifiability part, no cap, and is admitted", async () => {
+    const g = gate(tested());
+    const s = build({ backtest: g });
+    const id = s.lesson("no console calls in src", { sources: s.two() });
+    const r = await s.pipeline.judge({ kind: "repo", slug: "acme/web" });
+    expect(r.verdicts.find((v) => v.lessonId === id)).toMatchObject({ verdict: "admit", check: true });
+    expect(g.calls).toEqual([{ lessonId: id, slugs: ["acme/web"], sources: 2 }]);
+    const parts = s.repo.get(id)!.scoreParts!;
+    expect(parts.verifiability!.value).toBe(1);
+    expect(parts.cap).toBeUndefined();
+  });
+
+  it("shelves on recall, false positives, and untested when the policy says so", async () => {
+    for (const [answer, reason] of [[tested({ recall: 0 }), "backtest_recall"], [tested({ fpRate: 0.5 }), "backtest_fp"]] as const) {
+      const s = build({ backtest: gate(answer) });
+      const id = s.lesson("no console calls in src", { sources: s.two() });
+      const r = await s.pipeline.judge({ kind: "repo", slug: "acme/web" });
+      expect(r.verdicts.find((v) => v.lessonId === id)).toMatchObject({ verdict: "shelved", reason });
+      expect(s.repo.get(id)).toMatchObject({ admission: "shelved", shelvedReason: reason });
+    }
+    const s = build({ backtest: gate({ kind: "untested", reason: "not_cloned" }) });
+    s.policies.setLayer({ kind: "global" }, { ...ADMISSION_POLICY_DEFAULTS, "backtest.allowUntestedShadow": false });
+    const id = s.lesson("no console calls in src", { sources: s.two() });
+    const r = await s.pipeline.judge({ kind: "repo", slug: "acme/web" });
+    expect(r.verdicts.find((v) => v.lessonId === id)).toMatchObject({ verdict: "shelved", reason: "untested", note: T.note.untested(T.skip.not_cloned) });
+  });
+
+  it("untested is admitted to shadow with the cap when allowed; pending leaves the lesson unfinished", async () => {
+    const s = build({ backtest: gate({ kind: "untested", reason: "no_gh" }) });
+    const id = s.lesson("no console calls in src", { sources: s.two() });
+    const r = await s.pipeline.judge({ kind: "repo", slug: "acme/web" });
+    expect(r.verdicts.find((v) => v.lessonId === id)).toMatchObject({ verdict: "admit", check: true });
+    expect(s.repo.get(id)!.scoreParts!.cap!.value).toBe(0.69);
+    const p = build({ backtest: gate({ kind: "pending" }) });
+    const pid = p.lesson("no console calls in src", { sources: p.two() });
+    const pr = await p.pipeline.judge({ kind: "repo", slug: "acme/web" });
+    expect(pr.verdicts.find((v) => v.lessonId === pid)).toMatchObject({ verdict: "unfinished" });
   });
 });

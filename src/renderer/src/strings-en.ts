@@ -1052,7 +1052,7 @@ export const EN: UiStrings = {
   admissionLabel: { pending: "Not assessed", auto: "Recommended", manual: "Decided by hand", shelved: "Shelved" },
   checkabilityLabel: { checkable: "Checkable", prose: "Prose only", converted: "Turned into a check", covered: "Covered by a check", unclassified: "Unclassified" },
   strengthLabel: { must: "Must", should: "Should" },
-  shelvedReasonLabel: { conflict: "Conflict", generality: "Not general enough", low_score: "Low score", clarity: "Unclear", backtest_fp: "Backtest false positives", covered: "Covered by a check", duplicate: "Duplicate", below_drop: "Below the drop line" },
+  shelvedReasonLabel: { conflict: "Conflict", generality: "Not general enough", low_score: "Low score", clarity: "Unclear", backtest_fp: "Backtest false positives", backtest_recall: "Low backtest recall", untested: "Not backtested", covered: "Covered by a check", duplicate: "Duplicate", below_drop: "Below the drop line" },
   lessonScoreTag: (score: string) => `Score ${score}`,
   // ---------------------------------------------------------------- Score parts, setup wizard, calibration, principles (workstream D)
   lessonScoreParts: "Show parts",

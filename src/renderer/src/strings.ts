@@ -1065,7 +1065,7 @@ const ZH = {
   admissionLabel: { pending: "待评估", auto: "推荐", manual: "人工决定", shelved: "已搁置" } satisfies Record<LessonAdmission, string>,
   checkabilityLabel: { checkable: "可检查", prose: "只能写成文字", converted: "已转成检查", covered: "已有检查覆盖", unclassified: "未分类" } satisfies Record<LessonCheckabilityFilter, string>,
   strengthLabel: { must: "必须", should: "建议" } satisfies Record<LessonStrength, string>,
-  shelvedReasonLabel: { conflict: "冲突", generality: "不够普遍", low_score: "分数低", clarity: "不够清楚", backtest_fp: "回测误报", covered: "已有检查覆盖", duplicate: "重复", below_drop: "低于淘汰线" } as Record<string, string>,
+  shelvedReasonLabel: { conflict: "冲突", generality: "不够普遍", low_score: "分数低", clarity: "不够清楚", backtest_fp: "回测误报", backtest_recall: "回测召回低", untested: "没法回测", covered: "已有检查覆盖", duplicate: "重复", below_drop: "低于淘汰线" } as Record<string, string>,
   lessonScoreTag: (score: string) => `分数 ${score}`,
   // ---------------------------------------------------------------- 评分分项、初始化向导、校准页、原则（工作流 D）
   lessonScoreParts: "看分项",

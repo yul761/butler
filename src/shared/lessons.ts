@@ -33,7 +33,7 @@ export type LessonCheckability = "checkable" | "prose" | "converted" | "covered"
 export const LESSON_CHECKABILITIES: readonly LessonCheckability[] = ["checkable", "prose", "converted", "covered"];
 export const LESSON_STATUSES: readonly LessonStatus[] = ["pending", "confirmed", "disabled", "rejected"];
 /** 搁置原因；流水线以后可能加别的，所以页面对不认识的原因显示原文。 */
-export type LessonShelvedReason = "conflict" | "generality" | "low_score" | "clarity" | "backtest_fp" | "covered" | "duplicate" | "below_drop" | (string & {});
+export type LessonShelvedReason = "conflict" | "generality" | "low_score" | "clarity" | "backtest_fp" | "backtest_recall" | "untested" | "covered" | "duplicate" | "below_drop" | (string & {});
 /** 评分的一个分项：0..1 的值和一句理由；还没有数据时整个分项不出现。 */
 export interface LessonScorePart { value: number; reason: string }
 export interface LessonScoreParts {
