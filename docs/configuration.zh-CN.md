@@ -542,7 +542,7 @@ Butler 能在你 review 之前先把一遍关。默认全是关着的或只读�
 
 **review 简报**是一页（改了什么、为什么，风险，核实过的证据，预审结论，建议重点看的文件，已知取舍）。默认只在 Butler 里看；「贴到 PR」把它写进 PR 描述的 `<!-- butler:brief -->` 块里（块以外的描述不动），记进审计。每次预审后自动贴是对外动作 `externalPrBriefPost`（见下一节）。
 
-就绪条件、证据要求和风险规则是三层策略（全局、产品、仓库），在设置页「预审和就绪」里改，跟着配置一起导出：`readiness.<条件>.enabled`、`readiness.descriptionMinChars`（80）、`evidence.require.<test|lint|typecheck|build>`（`auto` = 按仓库档案）、`evidence.rerun`（`all`、`fast` 或 `off`）、`evidence.rerunTimeoutSec`（600）、`risk.paths.<类别>`（额外的 glob，各层取并集加在内置列表上；`risk.paths.<类别>.builtin = false` 去掉内置列表，迁移类除外）、`risk.size.*` 和 `risk.types.*`（`label=类型`、`前缀=类型`、`类型=等级`）。
+就绪条件、证据要求和风险规则是三层策略（全局、产品、仓库），在设置页「预审和就绪」里改，跟着配置一起导出：`readiness.<条件>.enabled`、`readiness.descriptionMinChars`（80）、`readiness.shouldBlocks`（`false`；打开时预审干净但有「应该改」的发现也算预审没过）、`readiness.whatWords`、`readiness.whyWords` 和 `readiness.verifyWords`（另外算作讲了做什么、为什么、怎么验证的词，加在内置的词后面）、`evidence.require.<test|lint|typecheck|build>`（`auto` = 按仓库档案）、`evidence.rerun`（`all`、`fast` 或 `off`）、`evidence.rerunTimeoutSec`（600）、`risk.paths.<类别>`（额外的 glob，各层取并集加在内置列表上；`risk.paths.<类别>.builtin = false` 去掉内置列表，迁移类除外）、`risk.size.*` 和 `risk.types.*`（`label=类型`、`前缀=类型`、`类型=等级`）。
 
 ## 对外动作
 
