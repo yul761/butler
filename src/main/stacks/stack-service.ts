@@ -236,10 +236,13 @@ export class StackService {
     const created: number[] = [];
     for (const p of mine) {
       if (byHead.has(p.base)) continue; // 不是链底
+      // 不限层数；记下走过的分支，万一 base 绕成一圈也不会一直走下去。
       const chain = [p];
+      const seen = new Set([p.head]);
       let cur = p;
-      while (childOf.has(cur.head) && chain.length < 50) {
+      while (childOf.has(cur.head) && !seen.has(childOf.get(cur.head)!.head)) {
         cur = childOf.get(cur.head)!;
+        seen.add(cur.head);
         chain.push(cur);
       }
       if (chain.length < 2) continue;

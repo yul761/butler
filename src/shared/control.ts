@@ -71,8 +71,8 @@ export type InboxControlOp =
   | { op: "ask_user"; question: string; options?: string[]; context?: string; recommended?: number }
   | { op: "report"; text: string; kind: ReportKind };
 
-/** stack_define 一次最多几层。 */
-export const MAX_STACK_LAYERS = 30;
+/** stack_define 一次最多传几个分支：只是请求大小的上限（防止一次传进来几万个分支），不是栈的层数限制：栈不限层数（工作流 R，K8）。 */
+export const MAX_STACK_LAYERS = 1000;
 
 /**
  * 栈式 PR（工作流 K）：feature 总控和 Butler 总控有全部四个，epic session 只有 list_stacks。
