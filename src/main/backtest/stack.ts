@@ -19,7 +19,7 @@ import { lessonCommentTrend } from "../review-effect/stats";
 import { BacktestService, type BacktestPayload } from "./service";
 import type { Evaluator } from "./evaluator";
 import type { BacktestGh, SourceRef } from "./material";
-import { judgeHits } from "./judge";
+import { cachedJudgments, judgeHits } from "./judge";
 import { Lifecycle } from "./lifecycle";
 import { ThresholdReview } from "./thresholds";
 import { backtestBatchMetrics } from "./batch-metrics";
@@ -124,6 +124,7 @@ export function createBacktestStack(d: BacktestStackDeps) {
     lessonText: (row) => lessonOf(row)?.text ?? row.message,
     trend: (row, since) => (row.lessonId === null ? null : lessonCommentTrend(d.db, { lessonId: row.lessonId, checkId: row.id, since })),
     judge: (rule, hits) => judgeHits({ run: d.run, judgments: d.judgments, lang: d.lang, cwd: d.fallbackCwd, now: d.now }, "shadow_fp", rule, hits),
+    judgeCached: (rule, hits) => cachedJudgments(d.judgments, "shadow_fp", rule, hits),
     record: d.record,
     onChanged: () => {
       d.onChecksChanged?.();
@@ -150,7 +151,7 @@ export function createBacktestStack(d: BacktestStackDeps) {
   const checkF = (row: CheckRow, stats: { bypassed: number; ignored: number }): CheckF => {
     let progress: CheckF["progress"] = null;
     try {
-      progress = lifecycle.assess(row).progress;
+      progress = lifecycle.assessForView(row).progress;
     } catch (e) {
       d.log?.(`backtest: progress of check ${row.id} failed`, e);
     }

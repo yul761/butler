@@ -21,7 +21,7 @@ const tested: BacktestSummary = {
   tested: true, skipped: [], prs: 20, hits: 5, falsePositives: 0, fpRate: 0, comments: 5, commentsMatched: 3, recall: 0.6, legacy: null, samples: [], at: T0,
 };
 
-function setup(o: { policy?: Partial<AdmissionPolicy>; backtest?: BacktestSummary | null; judge?: (n: number) => JudgeResult; trend?: LessonCommentTrend | null } = {}) {
+function setup(o: { policy?: Partial<AdmissionPolicy>; backtest?: BacktestSummary | null; judge?: (n: number) => JudgeResult; judgeCached?: (n: number) => JudgeResult | null; trend?: LessonCommentTrend | null } = {}) {
   const db = memDb();
   const lessons = new LessonsRepo(db);
   lessons.upsertRepo("acme/web", "/w", 1);
@@ -33,9 +33,10 @@ function setup(o: { policy?: Partial<AdmissionPolicy>; backtest?: BacktestSummar
   const policy = { ...ADMISSION_POLICY_DEFAULTS, "shadow.autoPromote": true, "backtest.judgeSample": 0, ...o.policy } as AdmissionPolicy;
   const events: string[] = [];
   const judge = o.judge ? vi.fn(async (_r: unknown, hits: unknown[]) => o.judge!(hits.length)) : undefined;
+  const judgeCached = o.judgeCached ? vi.fn((_r: unknown, hits: unknown[]) => o.judgeCached!(hits.length)) : undefined;
   const life = new Lifecycle({
     db, repo, checks, policy: () => policy, backtestOf: () => (o.backtest === undefined ? tested : o.backtest), lessonParts: () => null, lessonText: () => "rule",
-    trend: () => o.trend ?? null, judge, record: (k) => events.push(k), now: () => now,
+    trend: () => o.trend ?? null, judge, judgeCached, record: (k) => events.push(k), now: () => now,
   });
   const save = (over: Partial<CheckInput> = {}): CheckRow => {
     const input: CheckInput = { type: "forbidden_pattern", name: "no foo", params: { pattern: "foo\\(" }, globs: [], excludeGlobs: [], severity: "block", mode: "shadow", enabled: true, message: "m", ...over };
@@ -58,7 +59,7 @@ function setup(o: { policy?: Partial<AdmissionPolicy>; backtest?: BacktestSummar
     if (judged) db.prepare(`UPDATE check_hits SET verdict = 'true_positive' WHERE check_id = ? AND outcome = 'fail' AND verdict IS NULL`).run(row.id);
   };
   return {
-    db, checks, batches, repo, life, save, hits, events, judge,
+    db, checks, batches, repo, life, save, hits, events, judge, judgeCached,
     advance: (ms: number) => (now += ms),
     now: () => now,
   };
@@ -183,6 +184,26 @@ describe("promotion (gate 6)", () => {
     for (const id of ids) t.checks.setVerdict(id, "false_positive");
     expect((await t.life.tick()).promoted).toEqual([]);
     expect(t.life.assess(row).fpRate).toBeCloseTo(2 / 6);
+  });
+
+  it("the Checks page uses the model's cached verdicts for the shadow false-positive rate (workstream R, F1)", () => {
+    const cached: JudgeResult = { judged: 3, falsePositives: 1, verdicts: new Map(), incomplete: false, waitUntil: null };
+    const t = setup({ policy: { "backtest.judgeSample": 3 }, judge: () => cached, judgeCached: () => cached });
+    const row = t.save();
+    t.hits(row, 6, 5, {}, false);
+    expect(t.life.assess(row).fpRate).toBeNull();
+    const v = t.life.assessForView(row);
+    expect(v.fpRate).toBeCloseTo(2 / 6);
+    expect(v.progress!.fpRate).toBeCloseTo(2 / 6);
+    expect(t.judgeCached).toHaveBeenCalledTimes(1);
+    expect((t.judgeCached!.mock.calls[0] as unknown[])[1]).toHaveLength(3);
+    expect(t.judge).not.toHaveBeenCalled();
+
+    // 缓存里一条都没有：还是「没算」，不当作通过。
+    const none = setup({ policy: { "backtest.judgeSample": 3 }, judgeCached: () => ({ ...cached, judged: 0, falsePositives: 0, incomplete: true }) });
+    const r2 = none.save();
+    none.hits(r2, 6, 5, {}, false);
+    expect(none.life.assessForView(r2).fpRate).toBeNull();
   });
 
   it("asks the judge about unjudged shadow fails only when everything else passes", async () => {

@@ -65,16 +65,35 @@ function prompt(lang: "zh" | "en", rule: string, message: string, hits: { id: nu
     : `A team rule was turned into an automatic check. Below are hits the check reports in code that was already merged without any reviewer pointing at them. For each one decide: it really breaks the rule (the reviewers just missed it) → violation; the rule is not meant to cover this and the check fired wrongly → false_positive.\n\nRule: ${rule}\nCheck message: ${message}\n\n${list}\n\nGive id, verdict and a one-sentence reason for each.`;
 }
 
-/** 判一批候选：先查缓存，剩下的分批调模型。 */
-export async function judgeHits(d: JudgeDeps, kind: Extract<JudgmentKind, "backtest_fp" | "shadow_fp">, rule: { text: string; message: string }, hits: JudgeHit[]): Promise<JudgeResult> {
+type FpKind = Extract<JudgmentKind, "backtest_fp" | "shadow_fp">;
+const hashOf = (rule: { text: string; message: string }, h: JudgeHit) => inputHash({ rule: rule.text, message: rule.message, path: h.path, text: h.text, context: h.context });
+
+function fromCache(judgments: JudgmentCache, kind: FpKind, rule: { text: string; message: string }, hits: JudgeHit[]) {
   const verdicts = new Map<string, { verdict: HitVerdict; reason: string }>();
-  const hashOf = (h: JudgeHit) => inputHash({ rule: rule.text, message: rule.message, path: h.path, text: h.text, context: h.context });
   const todo: JudgeHit[] = [];
   for (const h of hits) {
-    const c = d.judgments.get<{ verdict: HitVerdict; reason: string }>(kind, h.key, hashOf(h));
+    const c = judgments.get<{ verdict: HitVerdict; reason: string }>(kind, h.key, hashOf(rule, h));
     if (c) verdicts.set(h.key, c.result);
     else todo.push(h);
   }
+  return { verdicts, todo };
+}
+
+function countFalsePositives(verdicts: Map<string, { verdict: HitVerdict }>): number {
+  let n = 0;
+  for (const v of verdicts.values()) if (v.verdict === "false_positive") n++;
+  return n;
+}
+
+/** 只看缓存（页面用，不调模型）：判过的算进来，没判过的记成 incomplete。 */
+export function cachedJudgments(judgments: JudgmentCache, kind: FpKind, rule: { text: string; message: string }, hits: JudgeHit[]): JudgeResult {
+  const { verdicts, todo } = fromCache(judgments, kind, rule, hits);
+  return { judged: verdicts.size, falsePositives: countFalsePositives(verdicts), verdicts, incomplete: todo.length > 0, waitUntil: null };
+}
+
+/** 判一批候选：先查缓存，剩下的分批调模型。 */
+export async function judgeHits(d: JudgeDeps, kind: FpKind, rule: { text: string; message: string }, hits: JudgeHit[]): Promise<JudgeResult> {
+  const { verdicts, todo } = fromCache(d.judgments, kind, rule, hits);
   let incomplete = false;
   let waitUntil: number | null = null;
   for (let i = 0; i < todo.length; i += BATCH) {
@@ -90,13 +109,11 @@ export async function judgeHits(d: JudgeDeps, kind: Extract<JudgmentKind, "backt
       if (!p || verdicts.has(p.h.key)) continue;
       const v = { verdict: it.verdict, reason: it.reason };
       verdicts.set(p.h.key, v);
-      d.judgments.put(kind, p.h.key, hashOf(p.h), v, { model: r.model, degraded: r.degraded, at: d.now() });
+      d.judgments.put(kind, p.h.key, hashOf(rule, p.h), v, { model: r.model, degraded: r.degraded, at: d.now() });
     }
     if (part.some((p) => !verdicts.has(p.h.key))) incomplete = true;
   }
-  let falsePositives = 0;
-  for (const v of verdicts.values()) if (v.verdict === "false_positive") falsePositives++;
-  return { judged: verdicts.size, falsePositives, verdicts, incomplete, waitUntil };
+  return { judged: verdicts.size, falsePositives: countFalsePositives(verdicts), verdicts, incomplete, waitUntil };
 }
 
 /** 误报估计：判过的按比例外推到全部候选；一个都没判成就全部算误报。 */
