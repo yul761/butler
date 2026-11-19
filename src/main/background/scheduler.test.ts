@@ -163,4 +163,10 @@ describe("background scheduler changes", () => {
     expect(row).toMatchObject({ queued: 3, running: 1, window: "idle", priority: "low", gate: { run: false, reason: "user_active" } });
     expect(v.idle).toEqual({ idle: false, idleSeconds: 0, locked: false });
   });
+
+  it("does not list the repo scan, which only runs when you start it, so no row suggests the gate holds it (workstream R, L5)", () => {
+    const kinds = setup().s.status().kinds.map((k) => k.kind);
+    expect(kinds).not.toContain("repo_scan");
+    expect(kinds).toContain("lesson_admission");
+  });
 });

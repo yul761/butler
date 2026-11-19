@@ -327,7 +327,7 @@ Background work (lessons analysis and backfills, lesson admission, and the kinds
 | Plentiful quota (%) | `bgPlentifulPercent` | empty | 1 to 99. While every quota is below this share, background work runs outside its hours and while you are active too. Empty turns it off. |
 | Per-kind changes | `bgKinds` | empty | A JSON object from a kind to `{"priority": ..., "window": ..., "paused": true}`. The table on the page writes it for you. |
 
-The table on the page shows each kind, whether it may run now and why not (paused by you, spend breaker, quota, yielding to you, outside the hours), and how many items are queued and running. A kind that opens a session also asks the memory admission check first and waits while it refuses. **Pause** stops one kind until you resume it.
+The table on the page shows each kind, whether it may run now and why not (paused by you, spend breaker, quota, yielding to you, outside the hours), and how many items are queued and running. A kind that opens a session also asks the memory admission check first and waits while it refuses. **Pause** stops one kind until you resume it. Lesson admission covers both automatic admission (`lessonsAutoAdmit`) and the daily principles regroup (`lessonsPrinciples`): while its row may not run, they wait and try again later. A repository scan runs only when you start one (or during setup), so it is not in the table and these settings don't hold it.
 
 ## Privacy and personal API
 

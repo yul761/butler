@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { setLang } from "../../i18n";
 import type { DraftGeneration } from "../../checks/draft";
 import { fakeRunner, setupAdmission } from "./__fixtures__/setup";
-import { AdmissionService } from "./service";
+import { AUTO_ADMIT_DEBOUNCE_MS, AUTO_ADMIT_GATE_RETRY_MS, AdmissionService } from "./service";
 
 const ids = (prompt: string) => [...prompt.matchAll(/^#(\d+) \[[^\]]*\] \([^)]*\) (.*)$/gm)].map((m) => ({ id: Number(m[1]), text: m[2] }));
 
-function build() {
+function build(o: { gateOpen?: () => boolean } = {}) {
   setLang("en");
   const s = setupAdmission();
   const fake = fakeRunner({
@@ -29,6 +29,7 @@ function build() {
   const service = new AdmissionService({
     db: s.db, repo: s.repo, recorder: s.recorder, policies: s.policies, judgments: s.judgments, runs: s.runs, checks: s.checks, drafter, run: fake.run, batches: s.batches,
     lang: () => "en", now: () => s.clock.now, fallbackCwd: () => "/home", notify: () => notified++,
+    autoAdmitEnabled: () => true, gateOpen: o.gateOpen,
   });
   return { ...s, fake, service, notified: () => notified };
 }
@@ -91,6 +92,27 @@ describe("automatic admission", () => {
     await s.service.autoAdmit("acme/web");
     expect(s.repo.get(c)).toMatchObject({ status: "confirmed" });
     expect(s.recorder.list({ limit: 5 })[0]).toMatchObject({ kind: "accept_recommended", origin: "auto" });
+  });
+
+  it("automatic admission waits while its background gate is closed and runs once it opens (workstream R, L5)", async () => {
+    vi.useFakeTimers();
+    try {
+      let open = false;
+      const s = build({ gateOpen: () => open });
+      const auto = vi.spyOn(s.service, "autoAdmit").mockResolvedValue();
+      s.service.scheduleAuto("acme/web");
+      vi.advanceTimersByTime(AUTO_ADMIT_DEBOUNCE_MS);
+      expect(auto).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(AUTO_ADMIT_GATE_RETRY_MS);
+      expect(auto).not.toHaveBeenCalled();
+      open = true;
+      vi.advanceTimersByTime(AUTO_ADMIT_GATE_RETRY_MS);
+      expect(auto).toHaveBeenCalledTimes(1);
+      expect(auto).toHaveBeenCalledWith("acme/web");
+      s.service.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a trigger that arrives while the repository is being judged runs one more pass afterwards", async () => {

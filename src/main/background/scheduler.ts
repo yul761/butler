@@ -231,7 +231,7 @@ export class BackgroundScheduler {
     const ratio = quota?.maxRatio() ?? null;
     let level: SpendLevel = "ok";
     if (quota) for (const k of BG_KINDS) if (rank(quota.level(BACKGROUND_KINDS[k].task)) > rank(level)) level = quota.level(BACKGROUND_KINDS[k].task);
-    const kinds: BgKindStatus[] = BG_KINDS.map((k) => {
+    const kinds: BgKindStatus[] = BG_KINDS.filter((k) => BACKGROUND_KINDS[k].listed).map((k) => {
       const def = BACKGROUND_KINDS[k];
       return {
         kind: k, owner: def.owner, priority: this.priorityOf(k, s), window: this.windowOf(k, s),

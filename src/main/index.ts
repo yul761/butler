@@ -974,6 +974,7 @@ async function bootstrap(): Promise<void> {
     },
     lang: () => currentLang(), now: Date.now, fallbackCwd: () => paths.home, notify: () => notify(), log: logger,
     autoAdmitEnabled: () => settings.get("lessonsAutoAdmit") === "1",
+    gateOpen: () => bgScheduler.gate("lesson_admission").run,
   });
   checksService.onLessonClassified((id, before, after, reason) => void lessonAdmission.onClassified(id, before, after, reason));
   const admissionCtx = () => ({ run: (req: Parameters<typeof execHeadlessJson>[1]) => execHeadlessJson(judgeDeps, req), judgments: lessonJudgments, lang: () => currentLang(), now: Date.now, cwd: paths.home, gate: OPEN_GATE });
@@ -1439,7 +1440,8 @@ async function bootstrap(): Promise<void> {
     void stackService.tick().catch((e: unknown) => logger("stacks: tick failed", e));
     void stackService.dailyJob().catch((e: unknown) => logger("stacks: daily job failed", e));
     // 原则每天重新分组一次（设置 lessonsPrinciples）；规矩没变时读缓存，不调模型。
-    if (settings.get("lessonsPrinciples") === "1" && Date.now() - (Number(settings.get("lessonsPrinciplesRegroupedAt")) || 0) > 20 * 3600_000) {
+    // 走「规矩准入」的后台闸门：闸门关着这次不分，下一轮再看。
+    if (settings.get("lessonsPrinciples") === "1" && Date.now() - (Number(settings.get("lessonsPrinciplesRegroupedAt")) || 0) > 20 * 3600_000 && bgScheduler.gate("lesson_admission").run) {
       settings.set("lessonsPrinciplesRegroupedAt", String(Date.now()));
       void regroupPrinciples().catch((e: unknown) => logger("lessons: principles regroup failed", e));
     }

@@ -21,10 +21,14 @@ export interface AdmissionServiceDeps extends PipelineDeps {
   log?: (msg: string, err?: unknown) => void;
   /** 设置 lessonsAutoAdmit。 */
   autoAdmitEnabled?: () => boolean;
+  /** 后台闸门（「规矩准入」这种后台任务：时段、额度、熔断、停用）。关着时自动准入等一会儿再看。 */
+  gateOpen?: () => boolean;
 }
 
 /** 一个仓库连着分析好几个 PR 时，等最后一个之后这么久再判一次。 */
 export const AUTO_ADMIT_DEBOUNCE_MS = 60_000;
+/** 后台闸门关着时，自动准入隔这么久再看一次。 */
+export const AUTO_ADMIT_GATE_RETRY_MS = 5 * 60_000;
 
 export interface JudgeAndReview extends JudgeResult {
   reviewId: number | null;
@@ -117,7 +121,8 @@ export class AdmissionService {
     if (prev) clearTimeout(prev);
     const t = setTimeout(() => {
       this.timers.delete(slug);
-      void this.autoAdmit(slug);
+      if (this.d.gateOpen && !this.d.gateOpen()) this.scheduleAuto(slug, AUTO_ADMIT_GATE_RETRY_MS);
+      else void this.autoAdmit(slug);
     }, delayMs);
     t.unref?.();
     this.timers.set(slug, t);
