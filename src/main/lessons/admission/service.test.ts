@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { setLang } from "../../i18n";
 import type { DraftGeneration } from "../../checks/draft";
 import { fakeRunner, setupAdmission } from "./__fixtures__/setup";
@@ -91,5 +91,17 @@ describe("automatic admission", () => {
     await s.service.autoAdmit("acme/web");
     expect(s.repo.get(c)).toMatchObject({ status: "confirmed" });
     expect(s.recorder.list({ limit: 5 })[0]).toMatchObject({ kind: "accept_recommended", origin: "auto" });
+  });
+
+  it("a trigger that arrives while the repository is being judged runs one more pass afterwards", async () => {
+    const s = build();
+    s.lesson("no console calls in src", { sources: [{}, {}] });
+    const judge = vi.spyOn(s.service, "judge");
+    // 第二次在第一次判的过程中到（比如回测素材刚放弃）：不能丢，第一次判完再判一遍；再来几次也只多判一遍。
+    const first = s.service.autoAdmit("acme/web");
+    await s.service.autoAdmit("acme/web");
+    await s.service.autoAdmit("acme/web");
+    await first;
+    expect(judge).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { setLang } from "../../i18n";
 import type { DraftGeneration } from "../../checks/draft";
 import type { GateAnswer } from "../../backtest/service";
@@ -169,6 +169,36 @@ describe("WizardService", () => {
     await s.wizard.idle();
     expect(s.wizard.view(id)!.summary).toMatchObject({ unfinished: 0 });
     expect(s.wizard.verdicts(id).find((v) => v.lessonId === c)!.verdict).not.toBe("unfinished");
+  });
+
+  it("judges again when the material arrives while the run is still judging", async () => {
+    // 回测答「还在等」的那一刻素材就到了（Windows 上没有 gh 时拿素材立即失败）：运行还没进等接受，这次通知不能丢。
+    let answer: GateAnswer = { kind: "pending" };
+    let wizard: WizardService | null = null;
+    const s = build({
+      backtest: {
+        assess: async () => {
+          const now = answer;
+          if (now.kind === "pending") {
+            answer = { kind: "untested", reason: "no_gh" };
+            // 几个仓库先后放弃：并进同一遍重判。
+            for (let i = 0; i < 3; i++) wizard!.onMaterial();
+          }
+          return now;
+        },
+      },
+    });
+    wizard = s.wizard;
+    const judge = vi.spyOn(s.admission, "judge");
+    const c = s.lesson("no console calls in src", { sources: [{}, {}] });
+    const id = s.wizard.start({ kind: "repo", slug: "acme/web" });
+    await s.wizard.idle();
+    s.finishQueue();
+    await s.timers.fire();
+    await s.wizard.idle();
+    expect(s.wizard.view(id)).toMatchObject({ state: "awaiting_accept", summary: { unfinished: 0 } });
+    expect(s.wizard.verdicts(id).find((v) => v.lessonId === c)!.verdict).not.toBe("unfinished");
+    expect(judge).toHaveBeenCalledTimes(2);
   });
 
   it("stops retrying after the last attempt and lets the user retry by hand", async () => {
