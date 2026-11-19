@@ -54,7 +54,7 @@ const unsupported = () => {
 };
 const API_PULL = /^repos\/\{owner\}\/\{repo\}\/pulls\/\d+\/(comments|reviews)$/;
 const API_REPLY = /^repos\/\{owner\}\/\{repo\}\/(pulls\/\d+\/comments\/\d+\/replies|issues\/\d+\/comments)$/;
-const API_COMPARE = /^repos\/\{owner\}\/\{repo\}\/compare\/[^/]+\.\.\.[^/]+$/;
+const API_COMPARE = /^repos\/\{owner\}\/\{repo\}\/compare\/\S+\.\.\.\S+$/; // 分支名可以带 /（feature/x）
 /** -f / -F 传的 key=value。 */
 const field = (key) => {
   for (let i = 0; i < args.length - 1; i++) if ((args[i] === "-f" || args[i] === "-F") && args[i + 1].startsWith(`${key}=`)) return args[i + 1].slice(key.length + 1);
