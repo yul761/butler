@@ -1,5 +1,6 @@
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
+import type { IntakeActResult, IntakeAction, IntakeClassifyEdit, IntakeEffect, IntakePolicyOverrides, IntakePolicySetResult, IntakePolicyView, IntakeView } from "../../shared/intake";
 import type { MemoryHistoryPoint } from "../../shared/mem-usage";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyAction, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import type { ActivityEvent } from "../../shared/activity";
@@ -179,6 +180,13 @@ export const api = {
   checksAct: (a: ChecksAction) => call<ChecksActResult>(IPC.checksAct, a),
   checksDraft: (lessonId: number) => call<CheckDraftResult>(IPC.checksDraft, lessonId),
   backtestView: () => call<BacktestView>(IPC.backtestView),
+  intakeView: () => call<IntakeView>(IPC.intakeView),
+  intakeEffect: (days?: number) => call<IntakeEffect>(IPC.intakeEffect, days ?? 30),
+  intakePolicyGet: (scope: PolicyScope) => call<IntakePolicyView>(IPC.intakePolicyGet, scope),
+  intakePolicySet: (scope: PolicyScope, overrides: IntakePolicyOverrides) => call<IntakePolicySetResult>(IPC.intakePolicySet, { scope, overrides }),
+  intakeClassify: (e: IntakeClassifyEdit) => call<IntakeActResult>(IPC.intakeClassify, e),
+  intakePoll: () => call<IntakeActResult>(IPC.intakePoll),
+  intakeAct: (a: IntakeAction) => call<IntakeActResult>(IPC.intakeAct, a),
   backtestAct: (a: BacktestAction) => call<BacktestActResult>(IPC.backtestAct, a),
   baselinesView: () => call<BaselinesView>(IPC.baselinesView),
   baselinesAct: (a: BaselinesAction) => call<BaselinesActResult>(IPC.baselinesAct, a),

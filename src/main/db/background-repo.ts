@@ -112,6 +112,11 @@ export class BackgroundRepo {
     this.db.prepare(`UPDATE background_jobs SET state = 'queued', not_before = ?, error = COALESCE(?, error) WHERE id = ?`).run(notBefore, error ?? null, id);
   }
 
+  /** 这一种里延后着的都提前到现在（工作流 N：名额空出来了，不用等到点）。返回改了几条。 */
+  wake(kind: BgKind): number {
+    return Number(this.db.prepare(`UPDATE background_jobs SET not_before = NULL WHERE kind = ? AND state = 'queued' AND not_before IS NOT NULL`).run(kind).changes);
+  }
+
   cancel(id: number, now: number): boolean {
     return Number(this.db.prepare(`UPDATE background_jobs SET state = 'cancelled', finished_at = ? WHERE id = ? AND state = 'queued'`).run(now, id).changes) > 0;
   }

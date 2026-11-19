@@ -11,6 +11,8 @@ import type { MemoryHistoryPoint, MemorySnapshot } from "../../../shared/mem-usa
 import { groupSummary, needsYouText, needsYouTotal, prPill, rowKey, rowLabel, rowPlace, rowText, usageDetails, usageLine } from "../now-view";
 import { S } from "../strings";
 import { btError } from "../backtest-view";
+import { intakeActError, intakeRecentText } from "../intake-view";
+import type { IntakeRecentEntry } from "../../../shared/intake";
 import type { Route } from "../App";
 import { DecisionCard } from "./InboxPanes";
 import { LiveWindow } from "./LiveWindow";
@@ -63,6 +65,7 @@ export function NowPage({ view, onOpen, onOpenTicket, liveTickets, onResumeSetup
       )}
       {view.epics.map((e) => <EpicBlock key={e.id ?? "none"} epic={e} now={now} onOpen={onOpen} />)}
       <RecentMerges merges={view.merges} onOpenTicket={onOpenTicket} liveTickets={liveTickets} />
+      {view.intake && <IntakeRecent entries={view.intake} onGo={onGo} />}
       {usage && <UsageLine usage={usage} />}
     </div>
   );
@@ -74,6 +77,7 @@ function noticeKey(n: NowNotice): string {
   if (n.kind === "comments_waiting") return `comments_waiting:${n.waiting.reason}:${n.waiting.prId}`;
   if (n.kind === "stack") return `stack:${n.stack.reason}:${n.stack.stackId}:${n.stack.branch}`;
   if (n.kind === "check_promoted" || n.kind === "check_demoted") return `${n.kind}:${n.eventId}`;
+  if (n.kind === "intake") return `intake:${n.item.key}`;
   if (n.kind === "ci_undelivered") return `ci_undelivered:${n.ci.item.kind}:${n.ci.item.kind === "pr" ? n.ci.item.id : n.ci.item.repoId}`;
   if (n.kind !== "session_limited") return n.kind;
   const t = n.target;
@@ -82,7 +86,9 @@ function noticeKey(n: NowNotice): string {
 
 function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: number; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
   const { text, actions } = noticeText(n, S, now);
-  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen, routing: S.rt.nowOpen, resend: S.noticeResend, raise: S.cs.raise, comments: S.lp.noticeOpen, stacks: S.sk.noticeOpen, undo: S.bt.undo, checks: S.bt.open, dismiss: S.bt.dismiss };
+  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: S.noticeOpen, routing: S.rt.nowOpen, resend: S.noticeResend, raise: S.cs.raise, comments: S.lp.noticeOpen, stacks: S.sk.noticeOpen, undo: S.bt.undo, checks: S.bt.open, dismiss: S.bt.dismiss,
+    intake: S.ik.noticeOpen, intakeStart: S.ik.actions.start, intakeSkip: S.ik.actions.skip, intakeParallel: S.ik.actions.allowParallel,
+  };
   // 重发的结果（CI 结果未能送达）：送到了提醒会在下一次刷新时消失，没送到写上为什么。
   const [result, setResult] = useState<string | null>(null);
   const run = (a: NoticeAction): void => {
@@ -108,7 +114,11 @@ function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: numb
         setResult(null);
         void api.backtestAct({ op: "undo", batchId: n.batchId }).then((r) => setResult(r.ok ? S.bt.undone : btError(r.error, S)), reportError);
       } else if (a === "dismiss") void api.backtestAct({ op: "dismissNotice", eventId: n.eventId }).catch(reportError);
-    } else if (a === "stacks") onGo({ page: "progress" });
+    } else if (n.kind === "intake" && a !== "intake") {
+      setResult(null);
+      const op = a === "intakeStart" ? "start" : a === "intakeSkip" ? "skip" : "allowParallel";
+      void api.intakeAct({ op, key: n.item.key }).then((r) => r.ok || setResult(intakeActError(r.message, S)), reportError);
+    } else if (a === "stacks" || a === "intake") onGo({ page: "progress" });
     else if (n.kind === "session_limited" || n.kind === "ci_undelivered") onOpen(n.target);
     else if (n.kind === "stack" && n.target) onOpen(n.target);
     else if (n.kind === "cost" && n.target) onOpen(n.target);
@@ -332,6 +342,33 @@ function MemoryCard({ snap, view }: { snap: MemorySnapshot; view: NowView }) {
             </div>
           )}
         </div>
+      )}
+    </section>
+  );
+}
+
+/** 自动接活（工作流 N）最近 24 小时自动做了什么：不用你管的那些，收起着。 */
+function IntakeRecent({ entries, onGo }: { entries: IntakeRecentEntry[]; onGo: (r: Route) => void }) {
+  const [open, toggle] = useCollapsed("now:intake");
+  if (entries.length === 0) return null;
+  return (
+    <section className="now-merges" data-testid="now-intake">
+      <h3>
+        <GroupToggle open={open} onToggle={toggle}>
+          {S.ik.recentTitle}
+          <span className="now-summary">{entries.length}</span>
+        </GroupToggle>
+      </h3>
+      {open && (
+        <>
+          {entries.map((e) => (
+            <div key={`${e.key}:${e.at}`} className="merge-event" data-testid="now-intake-entry">
+              <span className="muted">{new Date(e.at).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+              <span className="text">{intakeRecentText(e, S)}</span>
+            </div>
+          ))}
+          <div className="actions"><button onClick={() => onGo({ page: "progress" })}>{S.ik.noticeOpen}</button></div>
+        </>
       )}
     </section>
   );

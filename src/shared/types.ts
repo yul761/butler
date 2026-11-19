@@ -1,3 +1,4 @@
+import type { IntakeNoticeInfo, IntakeRecentEntry } from "./intake";
 import type { CostBreakerView } from "./cost";
 import type { CommentsWaiting } from "./loop";
 import type { StackNoticeInfo } from "./stacks";
@@ -674,7 +675,9 @@ export type NowNotice =
   /** 影子运行的检查自动升级成强制（工作流 F）：一批一条，可撤销。 */
   | { kind: "check_promoted"; eventId: number; batchId: number | null; names: string[]; at: number }
   /** 强制的检查被自动降回影子（batchId 有值，可撤销），或者只标了待复查（flagged）。 */
-  | { kind: "check_demoted"; eventId: number; batchId: number | null; names: string[]; reason: "bypassed" | "no_reduction" | null; flagged: boolean; at: number };
+  | { kind: "check_demoted"; eventId: number; batchId: number | null; names: string[]; reason: "bypassed" | "no_reduction" | null; flagged: boolean; at: number }
+  /** 自动接活（工作流 N）：拿不准、缺信息、没映射到仓库、开不成、同路径冲突在排队。每个 ticket 一条。 */
+  | { kind: "intake"; item: IntakeNoticeInfo };
 
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */
@@ -695,6 +698,8 @@ export interface NowView {
   mem?: MemorySnapshot | null;
   /** 共享 MCP（WS-M H）开着没有：关着时内存卡片提示开了大约能省多少。 */
   sharedMcp?: boolean;
+  /** 自动接活（工作流 N）开着时：最近 24 小时自动做了什么（开工、排队、等着、搁着、拆栈）。关着为缺省。 */
+  intake?: IntakeRecentEntry[];
 }
 
 /** Butler 总控用 send_message 发的一条消息和它的回复（ws-b）：list_inbox 的 messages、Butler 页的"回复"tab。时间是 ISO 字符串。 */

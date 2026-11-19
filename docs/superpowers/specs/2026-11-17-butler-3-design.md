@@ -88,6 +88,7 @@ These are fixed. A workstream addendum may extend them, not change them.
   | `ci_classify` | low | fallback | I |
   | `permission_profile` | low | fallback | J |
   | `intake_classify` | mid | fallback | N |
+  | `intake_fetch` | low | fallback | N |
   | `model_probe` | low | fallback | A |
 
 - Every headless call passes `task: TaskId` to `execHeadlessJson` (or its successor). The router resolves tier → model chain → first healthy model, adds `--model` only when a mapping exists, and records `requested_tier`, `actual_model`, `fallback_from` on usage and run records. **With no routing configured the router returns today's choice for each call site**, so 2.1.0 behaviour is unchanged.

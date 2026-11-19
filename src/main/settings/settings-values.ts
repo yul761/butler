@@ -7,6 +7,8 @@ import type { EditableSettingKey } from "../../shared/settings";
 import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
 import { M } from "../strings";
 import { NOTIFY_EVENTS, NOTIFY_FORMATS } from "../../shared/interrupts";
+import { INTAKE_SOURCES } from "../../shared/intake";
+import { isAbsolutePath, parseRepoMap } from "../intake/repo-map";
 import { normalizeRoutingSetting, RoutingSettingError } from "../routing/routing-settings";
 import { BgSettingError, normalizeBgSetting } from "../background/bg-settings";
 
@@ -386,6 +388,8 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "externalIssuePost":
     case "externalPushNotification":
     case "externalPrBriefPost":
+    case "externalIntakeTrackerComment":
+    case "externalIntakeTrackerStatus":
     case "preReviewEnabled":
     case "lessonsAutoAdmit":
     case "lessonsPrinciples":
@@ -510,6 +514,31 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
         if (e instanceof BgSettingError) throw new SettingError(e.message);
         throw e;
       }
+    case "intakeSource": {
+      const t = value.trim();
+      if (!(INTAKE_SOURCES as readonly string[]).includes(t)) throw new SettingError(M().intake.source);
+      return t;
+    }
+    case "intakeTrackerQuery":
+      if (value.length > 1000) throw new SettingError(M().intake.query);
+      return value.trim();
+    case "intakeTrackerDir":
+    case "intakeFilePath": {
+      const t = value.trim();
+      if (t && !isAbsolutePath(t)) throw new SettingError(M().intake.absolute);
+      return t;
+    }
+    case "intakePollMinutes": {
+      const t = value.trim();
+      if (!/^\d{1,4}$/.test(t) || Number(t) < 5 || Number(t) > 1440) throw new SettingError(M().intake.pollMinutes);
+      return String(Number(t));
+    }
+    case "intakeRepoMap": {
+      if (value.length > 20_000) throw new SettingError(M().intake.repoMapTooLong);
+      const { errors } = parseRepoMap(value);
+      if (errors.length > 0) throw new SettingError(M().intake.repoMap(errors.slice(0, 5).join(", ")));
+      return value.replace(/\r\n/g, "\n").trim();
+    }
     default: {
       // IPC 层已经用 isEditableSetting 拦过；这里再兜一次，免得以后新增的调用方绕过。
       const unknown: never = key;

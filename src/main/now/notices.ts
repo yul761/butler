@@ -1,3 +1,4 @@
+import type { IntakeNoticeInfo } from "../../shared/intake";
 import type { AvailabilityView } from "../../shared/availability";
 import type { LessonRunStatus } from "../../shared/lessons";
 import type { CostBreakerView } from "../../shared/cost";
@@ -58,4 +59,9 @@ export function commentNotices(list: CommentsWaiting[], title: (ticketKey: strin
 /** 栈的提醒（工作流 K）：有 ticket 的层带上「打开 ticket」。 */
 export function stackNotices(list: StackNoticeInfo[]): NowNotice[] {
   return list.map((n) => ({ kind: "stack" as const, stack: n, target: n.ticketKey ? { page: "ticket" as const, key: n.ticketKey, sessionId: null } : null }));
+}
+
+/** 自动接活（工作流 N）：要你决定的 ticket，每个一条。 */
+export function intakeNotices(list: IntakeNoticeInfo[]): NowNotice[] {
+  return list.map((item) => ({ kind: "intake" as const, item }));
 }

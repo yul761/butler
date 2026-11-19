@@ -11,6 +11,7 @@ import { shortTime } from "../progress-ui";
 import { dayString, enoughSample } from "../review-view";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
+import { IntakeEffectSection } from "./IntakeQueue";
 
 const E = () => S.effect;
 
@@ -438,6 +439,7 @@ export function EffectPage() {
   const o = useStateRefetch(`metrics:${days}`, () => api.metrics(days));
   const loop = useStateRefetch(`loop-effect:${days}`, () => api.loopEffect(days));
   const review = useStateRefetch(`review-effect:${days}`, () => api.reviewEffect(days));
+  const intake = useStateRefetch(`intake-effect:${days}`, () => api.intakeEffect(days));
   return (
     <div className="page effect-page" data-testid="effect-page">
       <h2>{E().title}</h2>
@@ -457,6 +459,7 @@ export function EffectPage() {
       {o && <EffectBody o={o} />}
       {loop && <LoopEffectSection e={loop} />}
       {review && <ReviewEffectSection v={review} />}
+      {intake && <IntakeEffectSection e={intake} />}
     </div>
   );
 }

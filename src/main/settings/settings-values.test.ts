@@ -347,3 +347,29 @@ describe("session admission settings (workstream W)", () => {
     expect(() => normalizeSetting("sessionMemoryEstimateMb", "32")).toThrow(SettingError);
   });
 });
+
+describe("intake settings (workstream N)", () => {
+  it("defaults are off and the outward switches are flags", () => {
+    const s = new SettingsRepo(memDb());
+    expect(s.get("intakeSource")).toBe("none");
+    expect(s.get("externalIntakeTrackerComment")).toBe("0");
+    expect(s.get("externalIntakeTrackerStatus")).toBe("0");
+    expect(s.get("notifyEvents").split(",")).toContain("intake_decision");
+    expect(normalizeSetting("externalIntakeTrackerStatus", "1")).toBe("1");
+  });
+
+  it("validates source, paths, interval and the repo map", () => {
+    expect(normalizeSetting("intakeSource", " file ")).toBe("file");
+    expect(() => normalizeSetting("intakeSource", "jira")).toThrow(SettingError);
+    expect(normalizeSetting("intakeFilePath", "")).toBe("");
+    expect(normalizeSetting("intakeFilePath", "/tmp/tickets.json")).toBe("/tmp/tickets.json");
+    expect(normalizeSetting("intakeTrackerDir", "C:\\work")).toBe("C:\\work");
+    expect(() => normalizeSetting("intakeFilePath", "tickets.json")).toThrow(SettingError);
+    expect(normalizeSetting("intakePollMinutes", "030")).toBe("30");
+    for (const v of ["4", "1441", "x", ""]) expect(() => normalizeSetting("intakePollMinutes", v), v).toThrow(SettingError);
+    expect(normalizeSetting("intakeRepoMap", "PROJ => /work/app\r\n* => /work/misc\n")).toBe("PROJ => /work/app\n* => /work/misc");
+    expect(() => normalizeSetting("intakeRepoMap", "PROJ => relative")).toThrow(/line 1|第 1 行/);
+    expect(() => normalizeSetting("intakeTrackerQuery", "x".repeat(1001))).toThrow(SettingError);
+    expect(normalizeSetting("notifyEvents", "intake_decision")).toBe("intake_decision");
+  });
+});

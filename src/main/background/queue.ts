@@ -80,6 +80,16 @@ export class BackgroundQueue {
     return id;
   }
 
+  /** 这一种延后着的马上再试一次（比如自动接活：session 结束、名额空出来了）。 */
+  wake(kind: BgKind): void {
+    try {
+      if (this.d.repo.wake(kind) > 0) this.d.onChange?.();
+    } catch (e) {
+      this.d.log?.(`background: waking ${kind} jobs failed`, e);
+    }
+    this.pump();
+  }
+
   cancel(id: number): boolean {
     const l = this.live.get(id);
     if (l) {

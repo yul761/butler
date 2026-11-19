@@ -17,6 +17,8 @@ import type { BaselinesAction, CheckExportAction, LegacyAction } from "../../sha
 import { parseLoopOverrides, type LoopPolicyOverrides, type LoopScope } from "../../shared/loop-policy";
 import { COMMENT_CATEGORIES, type CommentAction, type CommentCategory, type FlakyAction } from "../../shared/loop";
 import type { StackLayerMode, StacksFilter } from "../../shared/stacks";
+import { INTAKE_RISKS, INTAKE_SIZES, type IntakeAction, type IntakeClassifyEdit } from "../../shared/intake";
+import { isAbsolutePath } from "../intake/repo-map";
 import {
   EXPORT_CONTENTS, type ExportContent, type ExportRequest, type ExportScopeArg, type ImportApplyRequest, type Resolution, type StarterTarget,
 } from "../../shared/config-io";
@@ -902,5 +904,55 @@ export function prIdArg(v: unknown): number {
 export function prPolicySetArg(v: unknown): { scope: PolicyScope; overrides: Record<string, unknown> } {
   const o = objArg(v, "pr policy change", ["scope", "overrides"]);
   if (!o.overrides || typeof o.overrides !== "object" || Array.isArray(o.overrides)) throw new Error("invalid pr policy change");
+  return { scope: policyScopeArg(o.scope), overrides: o.overrides as Record<string, unknown> };
+}
+
+// ---- 自动接活（工作流 N）
+
+const intakeKey = (v: unknown): string => {
+  if (typeof v !== "string" || v.length === 0 || v.length > 64) throw new Error("invalid intake key");
+  return v;
+};
+
+export function intakeActionArg(v: unknown): IntakeAction {
+  const o = objOf(v, "intake action");
+  const key = intakeKey(o.key);
+  switch (o.op) {
+    case "start":
+    case "skip":
+    case "allowParallel":
+    case "clarified":
+    case "retry":
+      return { op: o.op, key };
+    case "setRepo":
+      if (typeof o.repoPath !== "string" || o.repoPath.length > 1000 || !isAbsolutePath(o.repoPath)) throw new Error("invalid intake repo");
+      return { op: "setRepo", key, repoPath: o.repoPath };
+  }
+  throw new Error("invalid intake action");
+}
+
+export function intakeClassifyArg(v: unknown): IntakeClassifyEdit {
+  const o = objArg(v, "intake classification", ["key", "size", "risk", "clarify"]);
+  const out: IntakeClassifyEdit = { key: intakeKey(o.key) };
+  if (o.size !== undefined) {
+    if (!(INTAKE_SIZES as readonly unknown[]).includes(o.size)) throw new Error("invalid intake size");
+    out.size = o.size as IntakeClassifyEdit["size"];
+  }
+  if (o.risk !== undefined) {
+    if (!(INTAKE_RISKS as readonly unknown[]).includes(o.risk)) throw new Error("invalid intake risk");
+    out.risk = o.risk as IntakeClassifyEdit["risk"];
+  }
+  if (o.clarify !== undefined) {
+    if (typeof o.clarify !== "boolean") throw new Error("invalid intake clarify");
+    out.clarify = o.clarify;
+  }
+  if (out.size === undefined && out.risk === undefined && out.clarify === undefined) throw new Error("invalid intake classification");
+  return out;
+}
+
+/** 改一层自动接活的策略：值在 IntakePolicyService.setLayer 里再校验。 */
+export function intakePolicySetArg(v: unknown): { scope: PolicyScope; overrides: Record<string, unknown> } {
+  const o = objArg(v, "intake policy change", ["scope", "overrides"]);
+  if (typeof o.overrides !== "object" || o.overrides === null || Array.isArray(o.overrides)) throw new Error("invalid intake policy overrides");
   return { scope: policyScopeArg(o.scope), overrides: o.overrides as Record<string, unknown> };
 }

@@ -558,6 +558,8 @@ Some features let Butler leave something outside your machine on your behalf, su
 | Post issues | `externalIssuePost` | `0` (off) | Creating issues or comments in your tracker or on GitHub. |
 | Push notifications | `externalPushNotification` | `0` (off) | Sending notifications to an outside service, such as phone push or chat. |
 | Post review briefs | `externalPrBriefPost` | `0` (off) | Writing the review brief into the PR description after each pre-review. The "Post to PR" button works either way and is recorded in the audit log. |
+| Intake: ask on the tracker | `externalIntakeTrackerComment` | `0` (off) | Letting a session or the coordinator ask for missing information on the tracker ticket when [automatic intake](#automatic-intake) finds it incomplete. |
+| Intake: change ticket status | `externalIntakeTrackerStatus` | `0` (off) | Telling a session that automatic intake started to move its tracker ticket to In Progress first. |
 
 Each switch is `1` or `0`.
 
@@ -693,7 +695,7 @@ Butler can push to one HTTPS webhook when something needs you: `ntfy`-style topi
 | Setting | Key | Default | What it does |
 |---------|-----|---------|--------------|
 | Format | `notifyFormat` | `json` | `json` posts `{"text", "content", "title", "event", "count"}`, which chat webhooks accept. `ntfy` posts plain text with a `Title` header. |
-| Events | `notifyEvents` | all five | Comma-separated: `decision_needed` (a session asked you something), `pr_high_risk` (a high-risk PR waits for your review), `pr_ready` (a PR is ready to submit), `cost_breaker` (the cost breaker paused or stopped work), `review_comment` (a colleague commented on a PR). |
+| Events | `notifyEvents` | all six | Comma-separated: `decision_needed` (a session asked you something), `pr_high_risk` (a high-risk PR waits for your review), `pr_ready` (a PR is ready to submit), `cost_breaker` (the cost breaker paused or stopped work), `review_comment` (a colleague commented on a PR), `intake_decision` ([automatic intake](#automatic-intake) needs you to decide about a ticket). |
 | Include references | `notifyDetails` | `0` (off) | Add the ticket key and PR number to the message. |
 | Quiet hours | `notifyQuietHours` | empty | `HH:MM-HH:MM` in local time, may cross midnight, for example `22:00-08:00`. Events in this window are not pushed. |
 
@@ -735,6 +737,75 @@ The **Progress** page and the feature and epic **PR progress** tabs show a **Sta
 | `draftLabel` | `stacked` | 1–50 characters, no commas | Label put on draft layers |
 
 The stack policy is part of [Backup and export settings](#backup-and-export-settings), like the other policies.
+
+## Automatic intake
+
+Automatic intake pulls new tickets from your tracker or a JSON file, sorts each one by size, risk and whether it has enough information, picks a model tier, and opens a session for it when the conditions below are met. It only calls you when it can't decide for you. It is off by default: nothing is pulled, stored or started until a source is set **and** a policy layer turns `enabled` on.
+
+Anyone who can write a ticket in the source can shape what an automatic session is asked to do. Butler hands the ticket text to the session fenced off as a description, not as instructions, and every PR still goes through pre-review, but turn intake on only for sources whose authors you trust, and keep `maxRisk` low where that is not certain.
+
+### Source
+
+**Settings → Automatic intake** holds the source settings. They are global.
+
+| Setting | Key | Default | What it does |
+|---------|-----|---------|--------------|
+| Pull from | `intakeSource` | `none` | `none`, `tracker` or `file`. |
+| Tracker query | `intakeTrackerQuery` | empty | With `tracker`, required (nothing is pulled while it is empty): what to list, in your words or the tracker's query language, for example "tickets assigned to me in To Do". Butler runs a background `claude -p` that may only use the read-only tools in `trackerTools`; Butler itself never talks to the tracker. |
+| Repository to query from | `intakeTrackerDir` | empty | With `tracker`: the absolute path the query runs in, so your project-level tracker MCP is found. Empty uses the first path in the repo map. |
+| JSON file | `intakeFilePath` | empty | With `file`: an absolute path to `{"tickets": [...]}` or a bare array. Each ticket needs `key` and `title`, and may have `description`, `type`, `labels`, `priority`, `url`, `storyPoints`, `components`, `subtasks` (`[{key, title}]`) and `repo` (an absolute path). Useful for your own export scripts. |
+| Pull every | `intakePollMinutes` | `15` | Minutes between pulls, 5–1440. **Pull now** on the queue pulls at once. Pulls wait while background work is paused. |
+| Repo map | `intakeRepoMap` | empty | One rule per line, `match => /absolute/path`, first match wins: `PROJ` (key prefix), `label:frontend`, `component:Docs`, or `*`. A ticket's own `repo` wins over the map. A ticket that maps nowhere waits for you to pick a repository. |
+
+Keys that don't fit `ticketPattern` are skipped. Keys that are already Butler tickets, archived ones included, are left alone. A ticket pulled again is only sorted again when its content changed and it hasn't started; the dimensions you changed keep your value.
+
+### Sorting
+
+Rules come first; the model (routing task `intake_classify`) is asked only for what the rules can't decide.
+
+- **Missing information.** A description under 40 characters, a bug with no steps to reproduce, or a feature with no acceptance criteria.
+- **Size.** Story points (≤2 small, ≤5 medium, more large), three or more subtasks (large), labels such as `small`, `typo` or `epic`, docs and chore types (small).
+- **Risk.** Paths mentioned in the ticket are matched against the repository's [pre-review](#pre-review-readiness-and-risk) risk paths; keywords such as migration, auth or payment and the ticket type floors raise it; docs and chore types, or paths that are all low-risk, lower it.
+- **Uncertain.** The model failed, or its confidence is below `uncertainBelow`.
+
+Every decision lists its reasons in the queue. You can change size, risk and missing information there; each change is recorded with the rules version and counted on the Effect page, so the rules can be tuned.
+
+### Starting and queueing
+
+A ticket that is complete and within the limits is queued as background work of kind `intake`. When it comes up, Butler checks in order: the cost breaker, the parallel limit (only tickets intake started and whose session is still open count; your own sessions never do), paths shared with work in progress in the same repository, and memory. When all pass it creates the ticket in a worktree, opens a session with the model the tier maps to through [model routing](#model-routing), and sends the task. When a session ends, waiting tickets are tried again at once. Held tickets are decided again when you change the policy, the intake settings or pre-review.
+
+A large ticket with two or more subtasks becomes a [stack](#stacks) when `stackSubtasks` is on: one layer per subtask, each started on the branch of the one below once that one has a PR or its session ended. A ticket is split only when every subtask key is valid and new to Butler. If a lower layer is skipped or can't start, the layer above asks you; starting it by hand starts it from the default branch.
+
+Starting automatically also needs pre-review on (`preReviewEnabled`). With it off, tickets are sorted and held, and you can start them from the queue.
+
+### When it calls you
+
+Only for these, once each time a ticket reaches the state: the classification is uncertain, information is missing, no repository is known, the ticket could not be created, or it waits because it touches the same paths as other work. They show as a notice on the **Now** page and, when notifications are on, as the `intake_decision` event. Everything else, started, queued, waiting for a slot or memory, held or split, is listed quietly under **Automatic intake** on the Now page for 24 hours and in the queue on the **Progress** page.
+
+With `clarifyMode` set to `session` or `coordinator`, Butler asks for the missing information on the tracker through a small session or the coordinator, which needs **Intake: ask on the tracker** under [Outward actions](#outward-actions); with that off it only tells you.
+
+### Policy
+
+The policy has global, product and repository layers, like the other policies.
+
+| Key | Default | Values | What it does |
+|-----|---------|--------|--------------|
+| `enabled` | `false` | `true` / `false` | Master switch for tickets that map to this layer |
+| `autoStart` | `true` | `true` / `false` | Start automatically; off, tickets are sorted and held for you |
+| `maxSize` | `large` | `small` / `medium` / `large` | Largest size started automatically |
+| `maxRisk` | `high` | `low` / `medium` / `high` | Highest risk started automatically |
+| `maxParallel` | `2` | whole number 1–50 | Tickets intake started with a session still open |
+| `conflictAction` | `serialize` | `serialize` / `parallel` | Same repository and paths: queue one after another, or run in parallel and only note it |
+| `clarifyMode` | `notify` | `notify` / `session` / `coordinator` | Who asks for missing information |
+| `uncertainBelow` | `0.6` | 0–1 | Model confidence under this is uncertain |
+| `stackSubtasks` | `true` | `true` / `false` | Split large tickets with subtasks into a stack |
+| `tierSmall` | `mid` | `high` / `mid` / `low` | Tier for small tickets |
+| `tierMedium` | `mid` | `high` / `mid` / `low` | Tier for medium tickets |
+| `tierLarge` | `high` | `high` / `mid` / `low` | Tier for large tickets |
+| `tierMediumRisk` | `mid` | `high` / `mid` / `low` | Lowest tier for medium risk |
+| `tierHighRisk` | `high` | `high` / `mid` / `low` | Lowest tier for high risk |
+
+The tier used is the higher of the size tier and the risk tier. The **Effect** page has an **Automatic intake** card: tickets sorted, started automatically and by you, how often you were called, and the share of tickets whose classification you changed.
 
 ## Several companies or profiles
 

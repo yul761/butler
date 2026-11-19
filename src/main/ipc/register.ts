@@ -1,5 +1,6 @@
 import type { MetricsOverview } from "../../shared/metrics";
 import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
+import type { IntakeActResult, IntakeAction, IntakeClassifyEdit, IntakeEffect, IntakePolicySetResult, IntakePolicyView, IntakeView } from "../../shared/intake";
 import type { BatchRecorder } from "../batches/batch-recorder";
 import type { AdmissionPolicyService } from "../lessons/admission-policies";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
@@ -82,7 +83,7 @@ import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../sh
 import {
   addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
-  stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg } from "./validate";
+  stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -163,6 +164,16 @@ export interface IpcDeps {
   checkExports: { list(): CheckExportView[]; act(a: CheckExportAction): Promise<CheckExportResult> };
   /** 回测和自动升降级（工作流 F）。 */
   backtest: { view(): BacktestView; act(a: BacktestAction): BacktestActResult };
+  /** 自动接活（工作流 N）。 */
+  intake: {
+    view(): IntakeView;
+    effect(days: number): IntakeEffect;
+    policyView(scope: PolicyScope): IntakePolicyView;
+    policySet(scope: PolicyScope, overrides: Record<string, unknown>): IntakePolicySetResult;
+    classify(e: IntakeClassifyEdit): Promise<IntakeActResult>;
+    poll(): Promise<IntakeActResult>;
+    act(a: IntakeAction): Promise<IntakeActResult>;
+  };
   /** Claude 可用状态；act 只有手动暂停 / 恢复复盘。 */
   availability: Pick<ClaudeAvailability, "view" | "pauseLessons" | "resumeLessons">;
   /** 模型路由（3.0）：设置页的整份数据和操作；act 返回错误文字，成功为 null。 */
@@ -641,6 +652,30 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.backtestAct, (raw: unknown): BacktestActResult => {
     const r = d.backtest.act(backtestActionArg(raw));
     if (r.ok) d.notify();
+    return r;
+  });
+  handle(IPC.intakeView, (): IntakeView => d.intake.view());
+  handle(IPC.intakeEffect, (raw: unknown): IntakeEffect => d.intake.effect(typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= 365 ? raw : 30));
+  handle(IPC.intakePolicyGet, (raw: unknown): IntakePolicyView => d.intake.policyView(policyScopeArg(raw)));
+  handle(IPC.intakePolicySet, (raw: unknown): IntakePolicySetResult => {
+    const { scope, overrides } = intakePolicySetArg(raw);
+    const r = d.intake.policySet(scope, overrides);
+    if (r.ok) d.notify();
+    return r;
+  });
+  handle(IPC.intakeClassify, async (raw: unknown): Promise<IntakeActResult> => {
+    const r = await d.intake.classify(intakeClassifyArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.intakePoll, async (): Promise<IntakeActResult> => {
+    const r = await d.intake.poll();
+    d.notify();
+    return r;
+  });
+  handle(IPC.intakeAct, async (raw: unknown): Promise<IntakeActResult> => {
+    const r = await d.intake.act(intakeActionArg(raw));
+    d.notify();
     return r;
   });
   handle(IPC.checkExportList, (): CheckExportView[] => d.checkExports.list());

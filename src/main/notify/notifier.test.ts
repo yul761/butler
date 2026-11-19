@@ -144,6 +144,7 @@ describe("notifyFromMetric", () => {
     expect(notifyFromMetric("cost.stop")?.event).toBe("cost_breaker");
     expect(notifyFromMetric("pr_risk_high", { data: { prNumber: 12 } })).toEqual({ event: "pr_high_risk", ref: { ticketKey: null, prNumber: 12 } });
     expect(notifyFromMetric("pr_ready", { data: { number: "7" } })?.ref.prNumber).toBeNull();
+    expect(notifyFromMetric("intake.decision", { ticketKey: "T-3", data: { state: "needs_decision" } })).toEqual({ event: "intake_decision", ref: { ticketKey: "T-3", prNumber: null } });
     expect(notifyFromMetric("interrupt")).toBeNull();
     expect(notifyFromMetric("pr_merged")).toBeNull();
   });
