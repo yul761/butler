@@ -4,6 +4,9 @@ import { ReviewEffectRepo } from "../db/review-effect-repo";
 import { TicketPrsRepo } from "../db/ticket-prs-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { ReviewEffectCollector, countRounds } from "./collector";
+import { ADMISSION_POLICY_DEFAULTS, type AdmissionPolicy } from "../../shared/admission-policy";
+import type { CheckRow } from "../../shared/checks";
+import { demotionOf } from "../backtest/lifecycle";
 import { lessonCommentTrend, reviewEffect, weekStart } from "./stats";
 
 const DAY = 86_400_000;
@@ -128,6 +131,26 @@ describe("lesson comment trend for F (ws-g §11.2)", () => {
     expect(lessonCommentTrend(s.db, { checkId: check, since: 50_000 })!.lessonId).toBe(l);
     expect(lessonCommentTrend(s.db, { lessonId: l, since: 50_000, repo: "x/y" })!.before.prs).toBe(0);
     expect(lessonCommentTrend(s.db, { lessonId: 9999, since: 1 })).toBeNull();
+  });
+  it("feeds F's no_reduction demotion: flags a rule whose comments did not drop, not one whose comments did", async () => {
+    const P = { ...ADMISSION_POLICY_DEFAULTS, "demote.noReductionPrs": 2 } as AdmissionPolicy;
+    const row = { enabled: true, mode: "enforce", severity: "block" } as CheckRow;
+    const stats = { fails: 0, editFails: 0, resolved: 0, blocked: 0, falsePositives: 0, truePositives: 0, ignored: 0, prs: 0, bypasses: 0, bypassHow: {} };
+    const run = async (perPr: [number, number]) => {
+      const s = setup();
+      const l = s.lesson({ confirmedAt: 50_000, globs: ["src/**"] });
+      let n = 0;
+      for (const [merged, comments] of [[10_000, perPr[0]], [20_000, perPr[0]], [60_000, perPr[1]], [70_000, perPr[1]]] as const) {
+        n++;
+        const id = s.pr(n, { opened: merged - 100, merged, files: ["src/x.ts"] });
+        for (let i = 0; i < comments; i++) s.source(l, n, merged - 50 + i, "alice");
+        s.retro(n, []);
+        await s.collector.collect(id);
+      }
+      return demotionOf(row, stats, lessonCommentTrend(s.db, { lessonId: l, since: 50_000 }), P);
+    };
+    expect(await run([1, 2])).toEqual({ reason: "no_reduction", data: { kind: "no_reduction", beforePerPr: 1, afterPerPr: 2, afterPrs: 2 } });
+    expect(await run([2, 0])).toBeNull();
   });
 });
 
