@@ -6,6 +6,7 @@ import { admissionScopeFromKey, admissionScopeKey, bandAgreement, pct } from "..
 import { reportError } from "../errors";
 import { formatScore } from "../lessons-bulk-view";
 import { S } from "../strings";
+import { btError } from "../backtest-view";
 import { PolicyEditor } from "./LessonsSettings";
 import { ScoreParts } from "./ScoreParts";
 import { useStateRefetch } from "./useStateRefetch";
@@ -20,7 +21,7 @@ function CheckThresholds() {
   const [error, setError] = useState<string | null>(null);
   if (!bt) return null;
   const act = (op: "applyThreshold" | "dismissThreshold", id: number) => {
-    void api.backtestAct({ op, id }).then((r) => setError(r.ok ? null : r.error), reportError);
+    void api.backtestAct({ op, id }).then((r) => setError(r.ok ? null : btError(r.error, S)), reportError);
   };
   const open = bt.reviews.filter((r) => r.status === "open");
   const c = bt.calibration;

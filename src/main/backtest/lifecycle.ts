@@ -45,10 +45,14 @@ export interface WindowHit {
   detail: string;
   session: string | null;
   at: number;
+  /** push 前的命令检查没有「改好了」的记录（下次 push 通过不写行）：不算采纳率，也不算没理会。 */
+  stage: "edit" | "push";
 }
 
 export interface WindowStats {
   fails: number;
+  /** 编辑时的失败（采纳率的分母）。 */
+  editFails: number;
   resolved: number;
   blocked: number;
   falsePositives: number;
@@ -89,14 +93,18 @@ export class LifecycleQueries {
         return null;
       }
     };
-    for (const it of items) {
-      if (modeOf(it.before) === modeOf(it.after)) continue;
-      const undoneKind = summaryKind(it.summary);
+    const changes = items.filter((it) => modeOf(it.before) !== modeOf(it.after));
+    const first = changes[0];
+    if (first) {
+      const undoneKind = summaryKind(first.summary);
+      // 人自己把刚自动升上去的检查改回影子，和撤销一样是说了不。
+      const prev = changes[1];
+      const setBack = first.origin !== "auto" && modeOf(first.after) === "shadow" && prev !== undefined && prev.kind === "check_promote" && prev.origin === "auto";
       return {
-        since: Number(it.at),
-        autoPromoted: it.kind === "check_promote" && it.origin === "auto",
-        autoDemoted: it.kind === "check_demote" && it.origin === "auto",
-        promotionUndone: it.kind === "undo" && undoneKind === "check_promote",
+        since: Number(first.at),
+        autoPromoted: first.kind === "check_promote" && first.origin === "auto",
+        autoDemoted: first.kind === "check_demote" && first.origin === "auto",
+        promotionUndone: (first.kind === "undo" && undoneKind === "check_promote") || setBack,
       };
     }
     return { since: row.createdAt, autoPromoted: false, autoDemoted: false, promotionUndone: false };
@@ -105,13 +113,14 @@ export class LifecycleQueries {
   hits(checkId: number, since: number): WindowHit[] {
     const rows = this.db
       .prepare(
-        `SELECT id, file, line, outcome, blocked, verdict, detail, session_id, at FROM check_hits
+        `SELECT id, file, line, stage, outcome, blocked, verdict, detail, session_id, at FROM check_hits
          WHERE check_id = ? AND at >= ? AND outcome IN ('fail', 'resolved') ORDER BY at, id LIMIT 20000`,
       )
-      .all(checkId, since) as { id: number; file: string; line: number | null; outcome: string; blocked: number; verdict: string | null; detail: string; session_id: string | null; at: number }[];
+      .all(checkId, since) as { id: number; file: string; line: number | null; stage: string; outcome: string; blocked: number; verdict: string | null; detail: string; session_id: string | null; at: number }[];
     return rows.map((r) => ({
       id: Number(r.id), file: r.file, line: r.line === null ? null : Number(r.line), outcome: r.outcome, blocked: Number(r.blocked) === 1,
       verdict: r.verdict === "false_positive" || r.verdict === "true_positive" ? r.verdict : null, detail: r.detail, session: r.session_id, at: Number(r.at),
+      stage: r.stage === "push" ? "push" : "edit",
     }));
   }
 
@@ -134,6 +143,7 @@ export class LifecycleQueries {
 /** 窗口里的数：拦下以后一天内同一个 session 在同一个文件上没改掉的算「没理会」。 */
 export function windowStats(hits: readonly WindowHit[], now: number, extra: { prs: number; bypasses: number; bypassHow: Partial<Record<BypassHow, number>> }): WindowStats {
   let fails = 0;
+  let editFails = 0;
   let resolved = 0;
   let blocked = 0;
   let falsePositives = 0;
@@ -145,15 +155,16 @@ export function windowStats(hits: readonly WindowHit[], now: number, extra: { pr
       continue;
     }
     fails++;
+    if (h.stage === "edit") editFails++;
     if (h.verdict === "false_positive") falsePositives++;
     if (h.verdict === "true_positive") truePositives++;
     if (!h.blocked) continue;
     blocked++;
-    if (now - h.at < IGNORED_AFTER_MS) continue;
+    if (h.stage !== "edit" || now - h.at < IGNORED_AFTER_MS) continue;
     const fixed = hits.some((r) => r.outcome === "resolved" && r.file === h.file && r.session === h.session && r.at >= h.at);
     if (!fixed) ignored++;
   }
-  return { fails, resolved, blocked, falsePositives, truePositives, ignored, ...extra };
+  return { fails, editFails, resolved, blocked, falsePositives, truePositives, ignored, ...extra };
 }
 
 export interface LifecycleDeps {
@@ -243,7 +254,7 @@ export function promotionProgress(
   const { row, stats } = a;
   const blockers: PromotionBlocker[] = [];
   const days = Math.max(0, (now - a.window.since) / DAY);
-  const adoption = stats.fails > 0 ? round(Math.min(1, stats.resolved / stats.fails)) : null;
+  const adoption = stats.editFails > 0 ? round(Math.min(1, stats.resolved / stats.editFails)) : null;
   const admitLine = num(p, "score.admitLine");
   if (p["shadow.autoPromote"] !== true) blockers.push("auto_off");
   if (!row.enabled) blockers.push("disabled");
@@ -275,13 +286,13 @@ export class Lifecycle {
   /** 一条检查的现状（页面和复查共用）。不调模型：影子误报只用人标的和缓存里判过的。 */
   assess(row: CheckRow, now = this.d.now(), judged?: JudgeResult | null): CheckAssessment {
     const p = this.d.policy(row);
-    const window = this.q.window(row);
+    const window = this.reviewedWindow(row);
     const hits = this.q.hits(row.id, window.since);
     const by = this.d.repo.bypasses(row.id, window.since);
     const stats = windowStats(hits, now, { prs: this.q.prsTouched(row.id, window.since), bypasses: by.total, bypassHow: by.how });
     const trend = this.d.trend(row, window.since);
     const performance = performanceOf(
-      { fails: stats.fails, resolved: stats.resolved, falsePositives: stats.falsePositives, enforce: row.mode === "enforce", blocked: stats.blocked, bypasses: stats.bypasses, ignored: stats.ignored, trend },
+      { fails: stats.fails, editFails: stats.editFails, resolved: stats.resolved, falsePositives: stats.falsePositives, enforce: row.mode === "enforce", blocked: stats.blocked, bypasses: stats.bypasses, ignored: stats.ignored, trend },
       p,
     );
     const backtest = this.d.backtestOf(row);
@@ -299,7 +310,9 @@ export class Lifecycle {
     if (s.fails === 0) return null;
     const unjudged = hits.filter((h) => h.outcome === "fail" && h.verdict === null).length;
     const sample = num(p, "backtest.judgeSample");
-    if (unjudged === 0 || sample <= 0) return round(s.falsePositives / s.fails);
+    if (unjudged === 0) return round(s.falsePositives / s.fails);
+    // 不抽样判：没人标的都算误报（和回测一样保守）。
+    if (sample <= 0) return round((s.falsePositives + unjudged) / s.fails);
     if (!judged) return null;
     return round((s.falsePositives + estimateFalsePositives(unjudged, judged.judged, judged.falsePositives)) / s.fails);
   }
@@ -407,6 +420,8 @@ export class Lifecycle {
       this.d.repo.clearLifecycle(x.id);
       n++;
     }
+    // 全部冲突、什么都没恢复：批次还能撤销，通知留着。
+    if (n === 0) return 0;
     this.d.repo.markUndone(original.id, now);
     this.d.onChanged?.();
     return n;
@@ -451,10 +466,22 @@ export class Lifecycle {
 
   /** 人看过了：清掉待复查（原因留在历史里）。 */
   clearReview(checkId: number): boolean {
+    const row = this.d.checks.repo.get(checkId);
+    if (!row) return false;
     const life = this.d.repo.lifecycle(checkId);
-    if (!life?.needsReview) return false;
-    this.d.repo.setLifecycle(checkId, { needsReview: false, reason: null, data: { kind: "none" }, lastAction: life.lastAction, lastBatchId: life.lastBatchId }, this.d.now());
+    const w = this.reviewedWindow(row);
+    if (!life?.needsReview && !w.promotionUndone && !w.autoDemoted) return false;
+    // 从现在重新看：之前的绕过、撤销不再算（不然下一次复查又标回来）。
+    this.d.repo.setLifecycle(checkId, { needsReview: false, reason: null, data: { kind: "none" }, lastAction: "cleared", lastBatchId: null }, this.d.now());
     this.d.onChanged?.();
     return true;
+  }
+
+  /** 改模式的窗口；人清除过复查标记的，从清除那一刻开始，撤销和自动降级不再挡着。 */
+  private reviewedWindow(row: CheckRow): ModeWindow {
+    const w = this.q.window(row);
+    const life = this.d.repo.lifecycle(row.id);
+    if (life?.lastAction !== "cleared" || life.at <= w.since) return w;
+    return { since: life.at, autoPromoted: w.autoPromoted, autoDemoted: false, promotionUndone: false };
   }
 }

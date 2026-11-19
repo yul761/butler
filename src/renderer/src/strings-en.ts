@@ -2070,7 +2070,9 @@ export const EN: UiStrings = {
     lifecycleBypassed: (bypasses: number, ignored: number, blocked: number, rate: string, max: string) =>
       `Blocked ${blocked} times, bypassed ${bypasses}, ignored ${ignored}; bypass rate ${rate} (limit ${max})`,
     lifecycleNoReduction: (before: string, after: string, prs: number) => `${before} similar comments per PR before, ${after} after (${prs} PRs)`,
-    lifecycleAction: { promote: "Promoted automatically", demote: "Demoted automatically", flag: "Flagged for review" } as Record<"promote" | "demote" | "flag", string>,
+    lifecycleAction: { promote: "Promoted automatically", demote: "Demoted automatically", flag: "Flagged for review", cleared: "Review flag cleared; counting again from then" } as Record<"promote" | "demote" | "flag" | "cleared", string>,
+    actError: { not_found: "It is no longer there; refresh to see", conflict: "Changed since this batch; nothing was undone", not_undoable: "This batch cannot be undone" } as Record<string, string>,
+    actFailed: (code: string) => `Did not work (${code})`,
     needsReview: "Needs review",
     clearReview: "Clear review flag",
     bypassStats: (b: number, i: number) => `bypassed ${b} · ignored ${i}`,

@@ -272,6 +272,16 @@ const TAMPER_TARGET = /[\\/]\.butler[\\/]checks\b|[\\/]\.claude[\\/]settings(\.l
 /** 会写东西的命令或重定向（只读的 cat / grep 不算）。 */
 const WRITES = /(^|[\s;&|(])(rm|mv|cp|sed\s+-i|perl\s+-[a-z]*i|tee|truncate|chmod|ln|dd)\b|[^<>&0-9]>{1,2}\s*\S/;
 
+/** git commit 的一组短选项里有没有 -n：带值的选项（-m、-F、-C、-c、-t、-u、-S）之后的字母是它的值，不再看。 */
+function commitShortN(a: string): boolean {
+  if (!/^-[a-zA-Z]+$/.test(a)) return false;
+  for (const ch of a.slice(1)) {
+    if (ch === "n") return true;
+    if ("mFCctuS".includes(ch)) return false;
+  }
+  return false;
+}
+
 /**
  * 一条 Bash 命令里绕过检查的写法：`git commit/push/merge … --no-verify`（commit 的 `-n`）、关掉 git hook
  * （`-c core.hooksPath=`、`git config core.hooksPath …`、HUSKY=0、SKIP=…）、改 Butler 的检查文件或 Claude 的 hook 设置、
@@ -314,7 +324,7 @@ export function classifyBypass(command: string): { how: BashBypass; detail: stri
       if (pos.length >= 2) add("hooks_off", `git config ${args.join(" ")}`);
     }
     if ((sub === "commit" || sub === "push" || sub === "merge" || sub === "rebase" || sub === "am" || sub === "cherry-pick") && args.includes("--no-verify")) add("no_verify", `git ${sub} --no-verify`);
-    else if (sub === "commit" && args.some((a) => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(a))) add("no_verify", "git commit -n");
+    else if (sub === "commit" && args.some(commitShortN)) add("no_verify", "git commit -n");
   }
   return out;
 }

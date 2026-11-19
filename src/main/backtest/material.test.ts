@@ -61,6 +61,14 @@ describe("backtest material", () => {
     expect(materialState(repo, "x/y", []).kind).toBe("no_gh");
   });
 
+  it("gives up at once when gh is not installed", async () => {
+    const repo = new BacktestRepo(memDb());
+    const gh = fakeGh({ mergedPrs: async () => null, available: async () => false });
+    const r = await prefetchRepo({ repo, gh, now: () => 1 }, { slug: "o/r", cwd: "/x", recentPrs: 1, sources: [] }, live());
+    expect(r).toEqual({ kind: "failed", gaveUp: true });
+    expect(materialState(repo, "o/r", []).kind).toBe("no_gh");
+  });
+
   it("matches source comments by path, reviewer and line", () => {
     const as = [anchor(1, "src/a.ts", 4, "rev"), anchor(2, "src/a.ts", 9, "rev"), anchor(3, "src\\a.ts", 4, "other")];
     expect(anchorsFor({ id: 1, prNumber: 1, path: "src/a.ts", line: 4, reviewer: "REV" }, as).map((a) => a.id)).toEqual([1]);

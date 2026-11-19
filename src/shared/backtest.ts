@@ -73,7 +73,8 @@ export interface CheckLifecycleView {
   reason: CheckLifecycleReason | null;
   /** 原因的数字（页面拼句子）。 */
   data: LifecycleReasonData;
-  lastAction: "promote" | "demote" | "flag" | null;
+  /** cleared：人清除了复查标记，从那一刻重新看。 */
+  lastAction: "promote" | "demote" | "flag" | "cleared" | null;
   lastBatchId: number | null;
   at: number;
 }

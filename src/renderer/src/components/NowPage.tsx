@@ -10,6 +10,7 @@ import { butlerLines, formatKb, heavyMcp, peakKb, rowMemDetail, rowMemText, shar
 import type { MemoryHistoryPoint, MemorySnapshot } from "../../../shared/mem-usage";
 import { groupSummary, needsYouText, needsYouTotal, prPill, rowKey, rowLabel, rowPlace, rowText, usageDetails, usageLine } from "../now-view";
 import { S } from "../strings";
+import { btError } from "../backtest-view";
 import type { Route } from "../App";
 import { DecisionCard } from "./InboxPanes";
 import { LiveWindow } from "./LiveWindow";
@@ -105,7 +106,7 @@ function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: numb
       if (a === "checks") onGo({ page: "lessons", tab: "checks" });
       else if (a === "undo" && n.batchId !== null) {
         setResult(null);
-        void api.backtestAct({ op: "undo", batchId: n.batchId }).then((r) => setResult(r.ok ? S.bt.undone : r.error), reportError);
+        void api.backtestAct({ op: "undo", batchId: n.batchId }).then((r) => setResult(r.ok ? S.bt.undone : btError(r.error, S)), reportError);
       } else if (a === "dismiss") void api.backtestAct({ op: "dismissNotice", eventId: n.eventId }).catch(reportError);
     } else if (a === "stacks") onGo({ page: "progress" });
     else if (n.kind === "session_limited" || n.kind === "ci_undelivered") onOpen(n.target);

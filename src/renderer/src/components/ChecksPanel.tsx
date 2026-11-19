@@ -10,7 +10,7 @@ import type { BatchNoticeState } from "./LessonBulkBar";
 import { useStateRefetch } from "./useStateRefetch";
 import { CheckRepoTools } from "./CheckRepoTools";
 import type { BacktestAction, CheckF } from "../../../shared/backtest";
-import { backtestLines, lifecycleLine, progressLines } from "../backtest-view";
+import { backtestLines, btError, canClearReview, lifecycleLine, progressLines } from "../backtest-view";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -227,7 +227,7 @@ function CheckFView({ f, running, onAct }: { f: CheckF; running: boolean; onAct(
       {life && <p className={f.lifecycle?.needsReview ? "error" : "muted"} data-testid={`check-life-${f.checkId}`}>{life}</p>}
       <div className="lessons-row">
         <button data-testid={`check-rerun-${f.checkId}`} disabled={running} onClick={() => onAct({ op: "rerun", checkId: f.checkId })}>{S.bt.rerun}</button>
-        {f.lifecycle?.needsReview && <button data-testid={`check-clear-review-${f.checkId}`} onClick={() => onAct({ op: "clearReview", checkId: f.checkId })}>{S.bt.clearReview}</button>}
+        {canClearReview(f) && <button data-testid={`check-clear-review-${f.checkId}`} onClick={() => onAct({ op: "clearReview", checkId: f.checkId })}>{S.bt.clearReview}</button>}
       </div>
     </div>
   );
@@ -243,7 +243,7 @@ export function ChecksPanel({ draft, onDraftTaken, onNotice }: { draft: CheckDra
   const bt = useStateRefetch("backtest", () => api.backtestView());
   const fOf = new Map((bt?.checks ?? []).map((f) => [f.checkId, f]));
   const btAct = (a: BacktestAction) => {
-    void api.backtestAct(a).then((r) => setError(r.ok ? null : r.error), reportError);
+    void api.backtestAct(a).then((r) => setError(r.ok ? null : btError(r.error, S)), reportError);
   };
   const [editing, setEditing] = useState<Editing | null>(null);
   const [formError, setFormError] = useState<string | null>(null);

@@ -43,8 +43,8 @@ function setup(o: { policy?: Partial<AdmissionPolicy>; backtest?: BacktestSummar
     return checks.repo.get(r.id)!;
   };
   let seq = 0;
-  /** n 次失败（各在不同 session），其中 resolved 条后来改掉了。 */
-  const hits = (row: CheckRow, n: number, resolved: number, over: Partial<Hit> = {}) => {
+  /** n 次失败（各在不同 session），其中 resolved 条后来改掉了；judged 时失败都标成真问题（不用模型判）。 */
+  const hits = (row: CheckRow, n: number, resolved: number, over: Partial<Hit> = {}, judged = true) => {
     const rows: { key: string; rec: Hit }[] = [];
     for (let i = 0; i < n; i++) {
       const base: Hit = {
@@ -55,6 +55,7 @@ function setup(o: { policy?: Partial<AdmissionPolicy>; backtest?: BacktestSummar
       if (i < resolved) rows.push({ key: `h${seq++}`, rec: { ...base, outcome: "resolved", blocked: false, at: base.at + 1 } });
     }
     checks.repo.insertHits(rows);
+    if (judged) db.prepare(`UPDATE check_hits SET verdict = 'true_positive' WHERE check_id = ? AND outcome = 'fail' AND verdict IS NULL`).run(row.id);
   };
   return {
     db, checks, batches, repo, life, save, hits, events, judge,
@@ -64,13 +65,18 @@ function setup(o: { policy?: Partial<AdmissionPolicy>; backtest?: BacktestSummar
 }
 
 describe("windowStats", () => {
-  const h = (over: Partial<WindowHit>): WindowHit => ({ id: 1, file: "a", line: 1, outcome: "fail", blocked: true, verdict: null, detail: "", session: "s", at: 0, ...over });
+  const h = (over: Partial<WindowHit>): WindowHit => ({ id: 1, file: "a", line: 1, outcome: "fail", blocked: true, verdict: null, detail: "", session: "s", at: 0, stage: "edit", ...over });
   it("counts ignored blocks only after a day without a fix in the same session and file", () => {
     const hits = [h({ at: 0 }), h({ id: 2, file: "b", at: 0 }), h({ id: 3, outcome: "resolved", blocked: false, at: 5 }), h({ id: 4, file: "c", at: 0, blocked: false })];
     expect(windowStats(hits, 10, { prs: 1, bypasses: 0, bypassHow: {} }).ignored).toBe(0);
     const s = windowStats(hits, DAY + 1, { prs: 1, bypasses: 0, bypassHow: {} });
     expect(s).toMatchObject({ fails: 3, resolved: 1, blocked: 2, ignored: 1 });
     expect(bypassRate({ ...s, bypasses: 1 })).toBe(1);
+  });
+
+  it("never counts a push-stage block as ignored or as a missed fix", () => {
+    const s = windowStats([h({ stage: "push", file: "" }), h({ id: 2, stage: "push", file: "" })], 3 * DAY, { prs: 1, bypasses: 0, bypassHow: {} });
+    expect(s).toMatchObject({ fails: 2, editFails: 0, blocked: 2, ignored: 0 });
   });
 });
 
@@ -141,6 +147,34 @@ describe("promotion (gate 6)", () => {
     expect((await t.life.tick()).promoted).toEqual([row.id]);
   });
 
+  it("counts unmarked shadow fails as false positives when nothing is judged", async () => {
+    const t = setup({ policy: { "backtest.judgeSample": 0 } });
+    const row = t.save();
+    t.hits(row, 6, 5, {}, false);
+    expect((await t.life.tick()).promoted).toEqual([]);
+    expect(t.life.assess(row).fpRate).toBe(1);
+  });
+
+  it("does not promote again a check a person set back to shadow after an automatic promotion", async () => {
+    const t = setup();
+    const row = t.save();
+    t.hits(row, 6, 5);
+    expect((await t.life.tick()).promoted).toEqual([row.id]);
+    t.advance(1000);
+    t.checks.bulk([row.id], "shadow");
+    t.advance(30 * DAY);
+    t.hits(t.checks.repo.get(row.id)!, 6, 6);
+    expect((await t.life.tick()).promoted).toEqual([]);
+    expect(t.life.assess(t.checks.repo.get(row.id)!).progress?.blockers).toContain("needs_review");
+    // 人清除了标记：从这一刻重新看，够了再升。
+    expect(t.life.clearReview(row.id)).toBe(true);
+    expect(t.life.assess(t.checks.repo.get(row.id)!).progress?.blockers).not.toContain("needs_review");
+    t.advance(1000);
+    t.hits(t.checks.repo.get(row.id)!, 6, 6);
+    t.advance(8 * DAY);
+    expect((await t.life.tick()).promoted).toEqual([row.id]);
+  });
+
   it("uses human verdicts for the false-positive rate", async () => {
     const t = setup({ policy: { "shadow.maxFalsePositiveRate": 0.2 } });
     const row = t.save();
@@ -155,25 +189,25 @@ describe("promotion (gate 6)", () => {
     const clean: JudgeResult = { judged: 3, falsePositives: 0, verdicts: new Map(), incomplete: false, waitUntil: null };
     const t = setup({ policy: { "backtest.judgeSample": 3 }, judge: () => clean });
     const row = t.save();
-    t.hits(row, 6, 5);
+    t.hits(row, 6, 5, {}, false);
     expect((await t.life.tick()).promoted).toEqual([row.id]);
     expect(t.judge).toHaveBeenCalledTimes(1);
     expect((t.judge!.mock.calls[0] as unknown[])[1]).toHaveLength(3);
 
     const noisy = setup({ policy: { "backtest.judgeSample": 3 }, judge: () => ({ ...clean, falsePositives: 2 }) });
     const r2 = noisy.save();
-    noisy.hits(r2, 6, 5);
+    noisy.hits(r2, 6, 5, {}, false);
     expect((await noisy.life.tick()).promoted).toEqual([]);
 
     const limited = setup({ policy: { "backtest.judgeSample": 3 }, judge: () => ({ ...clean, judged: 0, incomplete: true, waitUntil: T0 + 5000 }) });
     const r3 = limited.save();
-    limited.hits(r3, 6, 5);
+    limited.hits(r3, 6, 5, {}, false);
     const res = await limited.life.tick();
     expect(res.promoted).toEqual([]);
     expect(res.waitUntil).toBe(T0 + 5000);
 
     const early = setup({ policy: { "backtest.judgeSample": 3, "shadow.minHits": 50 }, judge: () => clean });
-    early.hits(early.save(), 6, 5);
+    early.hits(early.save(), 6, 5, {}, false);
     await early.life.tick();
     expect(early.judge).not.toHaveBeenCalled();
   });
@@ -221,8 +255,15 @@ describe("demotion (gate 7)", () => {
     expect(t.checks.repo.get(row.id)?.mode).toBe("enforce");
     expect(t.repo.lifecycle(row.id)).toMatchObject({ needsReview: true, reason: "bypassed", lastAction: "flag" });
     expect((await t.life.tick()).flagged).toEqual([]);
+    t.advance(1000);
     expect(t.life.clearReview(row.id)).toBe(true);
     expect(t.repo.lifecycle(row.id)?.needsReview).toBe(false);
+    // 清除以后从那一刻重新看：旧的绕过不会让下一次复查又标回来，新的才会。
+    t.advance(1000);
+    expect((await t.life.tick()).flagged).toEqual([]);
+    t.hits(row, 6, 6);
+    bypass(t, row, 4, "suppress");
+    expect((await t.life.tick()).flagged).toEqual([row.id]);
 
     const { t: t2, row: r2 } = await promoted({ policy: { "demote.to": "review" } });
     t2.hits(r2, 6, 6);
@@ -242,7 +283,7 @@ describe("demotion (gate 7)", () => {
   it("flags or demotes when similar comments did not drop", () => {
     const P = { ...ADMISSION_POLICY_DEFAULTS, "demote.noReductionPrs": 10 } as AdmissionPolicy;
     const row = { enabled: true, mode: "enforce", severity: "block" } as CheckRow;
-    const s = { fails: 0, resolved: 0, blocked: 0, falsePositives: 0, truePositives: 0, ignored: 0, prs: 0, bypasses: 0, bypassHow: {} };
+    const s = { fails: 0, editFails: 0, resolved: 0, blocked: 0, falsePositives: 0, truePositives: 0, ignored: 0, prs: 0, bypasses: 0, bypassHow: {} };
     const side = (prs: number, perPr: number) => ({ prs, comments: prs * perPr, perPr, byWho: { human: 0, copilot: 0 } });
     expect(demotionOf(row, s, { lessonId: 1, before: side(10, 0.8), after: side(12, 0.9) }, P)).toEqual({
       reason: "no_reduction", data: { kind: "no_reduction", beforePerPr: 0.8, afterPerPr: 0.9, afterPrs: 12 },
@@ -281,6 +322,21 @@ describe("calibration samples (8.1)", () => {
     expect(samples(t)[0].score).toBeGreaterThan(0);
     expect(t.repo.openEvents(0)).toEqual([]);
     expect(t.repo.lifecycle(a.id)).toBeNull();
+  });
+
+  it("keeps the notice open when undo restored nothing because every check changed since", async () => {
+    const t = setup();
+    wire(t);
+    const a = t.save();
+    t.hits(a, 6, 5);
+    const r = await t.life.tick();
+    t.advance(1000);
+    const cur = t.checks.repo.get(a.id)!;
+    t.checks.save(cur.scope, a.id, { type: cur.type, name: cur.name, params: cur.params, globs: cur.globs, excludeGlobs: cur.excludeGlobs, severity: cur.severity, mode: cur.mode, enabled: cur.enabled, message: "changed" });
+    t.batches.undo(r.promoteBatch!);
+    expect(t.checks.repo.get(a.id)?.mode).toBe("enforce");
+    expect(t.repo.openEvents(0)).toHaveLength(1);
+    expect(samples(t)).toEqual([]);
   });
 
   it("records a sample when an auto demotion is undone", async () => {

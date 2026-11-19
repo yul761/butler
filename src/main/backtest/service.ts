@@ -160,7 +160,8 @@ export class BacktestService {
   private async backtestOn(slug: string, input: AssessInput): Promise<StoredResult | "pending"> {
     const def = checkDef(input.draft);
     const dh = defHash(def);
-    const sources = input.sources.filter((s) => s.slug === null || s.slug === slug);
+    // 没写仓库的出处（旧数据）不算：预取只拿 slug 对得上的，算进来就永远等不到素材。
+    const sources = input.sources.filter((s) => s.slug === slug);
     const sh = sourcesHash(sources);
     const base = { defHash: dh, sourcesHash: sh, lessonId: input.lessonId, checkKey: input.checkKey ?? null, slug };
     const cwd = this.d.localPath(slug);
@@ -235,7 +236,9 @@ export class BacktestService {
 
   /** 一条检查最新的回测（各仓库合起来）；没有为 null。 */
   summaryOf(row: CheckRow): BacktestSummary | null {
-    const rs = this.d.repo.latestAll(defHash(checkDef(row)));
+    // 只看检查范围里的仓库：同样的定义在别的仓库上的结果（和跳过）不算它的。
+    const slugs = new Set(this.d.checks.slugsOf(row.scope));
+    const rs = this.d.repo.latestAll(defHash(checkDef(row))).filter((r) => slugs.has(r.slug));
     return rs.length ? summarize(rs) : null;
   }
 

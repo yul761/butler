@@ -2089,7 +2089,9 @@ const ZH = {
     lifecycleBypassed: (bypasses: number, ignored: number, blocked: number, rate: string, max: string) =>
       `拦下 ${blocked} 次，被绕过 ${bypasses} 次、无视 ${ignored} 次，绕过率 ${rate}（上限 ${max}）`,
     lifecycleNoReduction: (before: string, after: string, prs: number) => `上线前每个 PR ${before} 条同类评论，上线后 ${after} 条（${prs} 个 PR）`,
-    lifecycleAction: { promote: "自动升级", demote: "自动降级", flag: "标了待复查" } as Record<"promote" | "demote" | "flag", string>,
+    lifecycleAction: { promote: "自动升级", demote: "自动降级", flag: "标了待复查", cleared: "复查标记已清除，从清除时重新统计" } as Record<"promote" | "demote" | "flag" | "cleared", string>,
+    actError: { not_found: "已经不在了，刷新看看", conflict: "这批之后又改过，没有撤销", not_undoable: "这一批不能撤销" } as Record<string, string>,
+    actFailed: (code: string) => `没做成（${code}）`,
     needsReview: "待复查",
     clearReview: "清除复查标记",
     bypassStats: (b: number, i: number) => `绕过 ${b} · 无视 ${i}`,

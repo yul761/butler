@@ -126,13 +126,15 @@ export class BacktestRepo {
   }
 
   /** ok：清零重试次数、记下窗口；no_gh / failed：次数加一。 */
-  setRepoState(slug: string, status: RepoMaterialState["status"], window: readonly number[] | null, now: number, error: string | null = null): void {
+  /** attempts 给了就直接设成它（gh 没装：一次就当放弃）。 */
+  setRepoState(slug: string, status: RepoMaterialState["status"], window: readonly number[] | null, now: number, error: string | null = null, attempts?: number): void {
+    const fixed = attempts ?? null;
     this.db
       .prepare(`INSERT INTO backtest_repos (repo_slug, status, attempts, window, fetched_at, error) VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT (repo_slug) DO UPDATE SET status = excluded.status, fetched_at = excluded.fetched_at, error = excluded.error,
-                  attempts = CASE WHEN excluded.status = 'ok' THEN 0 ELSE backtest_repos.attempts + 1 END,
+                  attempts = CASE WHEN excluded.status = 'ok' THEN 0 WHEN ${fixed === null ? "0" : "1"} THEN excluded.attempts ELSE backtest_repos.attempts + 1 END,
                   window = CASE WHEN excluded.status = 'ok' THEN excluded.window ELSE backtest_repos.window END`)
-      .run(slug, status, status === "ok" ? 0 : 1, JSON.stringify(window ?? []), now, error);
+      .run(slug, status, status === "ok" ? 0 : (fixed ?? 1), JSON.stringify(window ?? []), now, error);
   }
 
   /** 最近合并的 PR（窗口里的）：没有的行加上，等着拿 diff。 */

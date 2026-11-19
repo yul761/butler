@@ -77,15 +77,37 @@ export function createBacktestStack(d: BacktestStackDeps) {
 
   /** 复查（lifecycle、thresholds 在下面建，任务跑起来时才用）：升降级，然后看要不要阈值复查；完了推到下一个小时（同一个任务一直排着）。 */
   const onReview = async (ctx: BgJobContext): Promise<BgJobResult> => {
-    const r = await lifecycle.tick(ctx.signal);
+    // 出错也要排下一次：失败的任务不会再跑，复查就停到重启。
+    let waitUntil: number | null = null;
+    try {
+      waitUntil = (await lifecycle.tick(ctx.signal)).waitUntil;
+    } catch (e) {
+      d.log?.("backtest: review failed", e);
+    }
     if (ctx.signal.aborted) return { defer: true };
     try {
       thresholds.run();
     } catch (e) {
       d.log?.("backtest: threshold review failed", e);
     }
+    try {
+      queueMissing();
+    } catch (e) {
+      d.log?.("backtest: queueing backtests failed", e);
+    }
     const next = d.now() + REVIEW_INTERVAL_MS;
-    return { defer: true, notBefore: r.waitUntil !== null ? Math.min(next, Math.max(r.waitUntil, d.now() + 60_000)) : next, reason: "next review" };
+    return { defer: true, notBefore: waitUntil !== null ? Math.min(next, Math.max(waitUntil, d.now() + 60_000)) : next, reason: "next review" };
+  };
+
+  /** 启用着、还没有当前定义回测结果的检查（手写的、导入的、改过的）：排上回测（同一条检查只排一个）。 */
+  const queueMissing = (): number => {
+    let n = 0;
+    for (const row of d.checks.repo.all()) {
+      if (!row.enabled || row.type === "run_command" || service.summaryOf(row) !== null) continue;
+      service.enqueueCheck(row.id);
+      n++;
+    }
+    return n;
   };
 
   const service = new BacktestService({

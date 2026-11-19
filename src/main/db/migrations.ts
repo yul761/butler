@@ -1181,7 +1181,7 @@ export const MIGRATIONS: string[] = [
   CREATE TABLE check_lifecycle (
     check_id INTEGER PRIMARY KEY REFERENCES checks(id) ON DELETE CASCADE,
     needs_review INTEGER NOT NULL DEFAULT 0, reason TEXT, reason_data TEXT NOT NULL DEFAULT '{}',
-    last_action TEXT CHECK (last_action IS NULL OR last_action IN ('promote','demote','flag')),
+    last_action TEXT CHECK (last_action IS NULL OR last_action IN ('promote','demote','flag','cleared')),
     last_batch_id INTEGER REFERENCES admission_batches(id) ON DELETE SET NULL, updated_at INTEGER NOT NULL);
   CREATE TABLE check_lifecycle_events (
     id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('promote','demote','flag')),

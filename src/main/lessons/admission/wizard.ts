@@ -308,6 +308,18 @@ export class WizardService {
   }
 
   /** 等现在在跑的推进结束（测试用）。 */
+  /**
+   * 回测素材拿到了（或者放弃了）：等接受、还有规矩没判完（多半在等这份素材）的运行再判一遍。缓存里有的不再问模型；
+   * 范围不看仓库，重判一遍只花本地时间。
+   */
+  onMaterial(): void {
+    if (this.stopped) return;
+    const ids = this.d.db
+      .prepare(`SELECT DISTINCT r.id AS id FROM lesson_wizard_runs r JOIN lesson_wizard_verdicts v ON v.run_id = r.id WHERE r.state = 'awaiting_accept' AND v.verdict = 'unfinished'`)
+      .all() as { id: number }[];
+    for (const { id } of ids) void this.serial(Number(id), () => this.retryPass(Number(id))).catch((e: unknown) => this.d.log?.(`lesson wizard ${id}: re-judging after backtest material failed`, e));
+  }
+
   async idle(): Promise<void> {
     while (this.driving.size || this.tails.size) await new Promise((r) => setTimeout(r, 1));
   }

@@ -2,7 +2,7 @@
 // 全部缓存在库里（backtest_prs / backtest_comments / backtest_files / backtest_repos），库就是断点：让路或重启以后接着拿没拿到的。
 import type { BacktestRepo } from "../db/backtest-repo";
 import { fileAt, prDiff, reviewCommentAnchors, type CommentAnchor, type FileAt } from "./gh-backtest";
-import { mergedPrs, LESSON_GH_TIMEOUT_MS } from "../tickets/gh";
+import { mergedPrs, probeGh, LESSON_GH_TIMEOUT_MS } from "../tickets/gh";
 import { normalizePath } from "../../shared/glob";
 
 /** 一个仓库拿素材失败几次以后当作 gh 不可用（这个仓库的回测记成跳过）。 */
@@ -14,6 +14,8 @@ export interface BacktestGh {
   prDiff(cwd: string, n: number): Promise<string | null>;
   anchors(cwd: string, n: number): Promise<CommentAnchor[] | null>;
   fileAt(cwd: string, sha: string, path: string): Promise<FileAt>;
+  /** gh 装着能执行吗（只在调用失败后问）：没装就不再重试。 */
+  available?(): Promise<boolean>;
 }
 
 /** 真的 gh：cwd 是本地 clone，gh 自己认出仓库。 */
@@ -26,6 +28,7 @@ export function realBacktestGh(): BacktestGh {
     prDiff: (cwd, n) => prDiff(cwd, n, null),
     anchors: (cwd, n) => reviewCommentAnchors(cwd, n, null),
     fileAt: (cwd, sha, path) => fileAt(cwd, null, sha, path),
+    available: () => probeGh(LESSON_GH_TIMEOUT_MS),
   };
 }
 
@@ -73,7 +76,8 @@ export async function prefetchRepo(d: PrefetchDeps, input: PrefetchInput, signal
   const { slug, cwd } = input;
   const list = await d.gh.mergedPrs(cwd, input.recentPrs);
   if (list === null) {
-    d.repo.setRepoState(slug, "failed", null, d.now(), "gh pr list failed");
+    const missing = d.gh.available ? !(await d.gh.available()) : false;
+    d.repo.setRepoState(slug, "failed", null, d.now(), missing ? "gh not available" : "gh pr list failed", missing ? MAX_REPO_ATTEMPTS : undefined);
     const st = d.repo.repoState(slug);
     return { kind: "failed", gaveUp: (st?.attempts ?? 0) >= MAX_REPO_ATTEMPTS };
   }

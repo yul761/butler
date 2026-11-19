@@ -898,8 +898,11 @@ async function bootstrap(): Promise<void> {
       get: () => Number.parseInt(settings.get("backtestThresholdReviewAt"), 10) || null,
       set: (at) => settings.set("backtestThresholdReviewAt", String(at)),
     },
-    // 素材拿到了：那个仓库排一次自动判（等着回测的规矩接着判）。lessonAdmission 在下面才建，回调时才用。
-    onMaterial: (slug) => lessonAdmission.scheduleAuto(slug),
+    // 素材拿到了（或放弃了）：那个仓库排一次自动判，等接受的向导也重判（等着回测的规矩接着判）。两个都在下面才建，回调时才用。
+    onMaterial: (slug) => {
+      lessonAdmission.scheduleAuto(slug);
+      lessonWizard.onMaterial();
+    },
     record: (kind, data) => void recordEvent(kind, { data }),
     onChanged: () => notify(), onChecksChanged: () => checkSnapshots.schedule(),
     fallbackCwd: paths.home, now: Date.now, log: logger,

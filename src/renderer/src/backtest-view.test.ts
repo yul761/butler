@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BacktestSummary, CheckLifecycleView, PromotionProgress } from "../../shared/backtest";
 import type { NowNotice } from "../../shared/types";
 import { STRINGS } from "./strings";
-import { backtestLines, btNoticeText, lifecycleLine, pct, progressLines } from "./backtest-view";
+import { backtestLines, btError, btNoticeText, canClearReview, lifecycleLine, pct, progressLines } from "./backtest-view";
 
 const S = STRINGS.en;
 
@@ -52,6 +52,15 @@ describe("backtest view text", () => {
       .toBe(`${S.bt.lifecycleAction.demote}: ${S.bt.lifecycleNoReduction("1.5", "1.25", 8)}`);
     expect(lifecycleLine({ ...l, lastAction: "promote", reason: null, data: { kind: "none" } }, S)).toBe(S.bt.lifecycleAction.promote);
     expect(lifecycleLine(null, S)).toBeNull();
+  });
+
+  it("words action errors and says when a review flag can be cleared", () => {
+    expect(btError("conflict", S)).toBe(S.bt.actError.conflict);
+    expect(btError("weird", S)).toBe(S.bt.actFailed("weird"));
+    expect(STRINGS.zh.bt.actError.conflict).toBeTruthy();
+    expect(canClearReview({ lifecycle: null, progress: progress({ blockers: ["needs_review"] }) })).toBe(true);
+    expect(canClearReview({ lifecycle: null, progress: progress() })).toBe(false);
+    expect(lifecycleLine({ needsReview: false, reason: null, lastAction: "cleared", lastBatchId: null, at: 1, data: { kind: "none" } }, S)).toBe(S.bt.lifecycleAction.cleared);
   });
 
   it("words the promotion and demotion notices with undo only when there is a batch", () => {

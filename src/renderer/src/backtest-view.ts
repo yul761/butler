@@ -42,6 +42,16 @@ export function lifecycleLine(l: CheckLifecycleView | null, S: UiStrings): strin
   return head;
 }
 
+/** 动作失败的错误码 → 一句话。 */
+export function btError(code: string, S: UiStrings): string {
+  return S.bt.actError[code] ?? S.bt.actFailed(code);
+}
+
+/** 复查标记能不能清：标着待复查，或者影子进度被「撤销过 / 自动降级过」挡着。 */
+export function canClearReview(f: { lifecycle: CheckLifecycleView | null; progress: PromotionProgress | null }): boolean {
+  return f.lifecycle?.needsReview === true || (f.progress?.blockers.includes("needs_review") ?? false);
+}
+
 export type BtNoticeAction = "undo" | "checks" | "dismiss";
 
 /** 「现在」页的升降级提醒：有批次才能撤销。 */

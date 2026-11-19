@@ -466,13 +466,13 @@ Butler 可以替你判待确认的规矩。判的时候，对一个仓库、一�
 - **召回**：规矩出处的那些评审评论里，检查能抓到的比例：在评审人当时看的那版文件上跑检查，评论那一行前后 `backtest.lineTolerance` 行内有违规就算抓到。
 - **误报**：PR 新加的行上、离这个 PR 的任何行内评论都不近的命中。每条规矩最多 `backtest.judgeSample` 个交给模型（任务 `backtest_judge`）判是不是真的违规；设成 `0` 时没对上评论的命中都算误报。
 - 召回低于 `backtest.minRecall` 的规矩搁置为 `backtest_recall`，误报率高于 `backtest.maxFalsePositiveRate` 的搁置为 `backtest_fp`；否则两个数一起变成分数里的**可验证性**。
-- 没有本地 clone、`gh` 不能用、没有可用 PR 的仓库不回测。`backtest.allowUntestedShadow` 开着时规矩照样打分（不算可验证性，分数封顶），关着时搁置为 `untested`。
+- 没有本地 clone、`gh` 不能用（没装：马上；一直失败：试三次以后）、没有可用 PR 的仓库不回测。检查的回测只算它范围里的仓库。`backtest.allowUntestedShadow` 开着时规矩照样打分（不算可验证性，分数封顶），关着时搁置为 `untested`。
 
-**检查**标签页上每条检查显示回测结果（PR 数、命中、召回、误报率、当前代码里的存量违规）、分数、被绕过和被无视的次数，以及**重新回测**。初始化向导在分析之后回测范围里的每个仓库；批次抽查会用到这一批的覆盖率和总体回测数字。
+**检查**标签页上每条检查显示回测结果（PR 数、命中、召回、误报率、当前代码里的存量违规）、分数、被绕过和被无视的次数，以及**重新回测**。每小时的复查也会给当前定义还没有回测结果的启用检查（手写的、导入的、改过的）排上回测。初始化向导在分析之后回测范围里的每个仓库；批次抽查会用到这一批的覆盖率和总体回测数字。
 
-**自动升级。** `shadow.autoPromote` 开着时，Butler 每小时复查一次检查。影子运行的检查满足这些条件就升为强制：启用着、是拦截级别（不只是提醒）、回测通过、分数不低于 `score.admitLine`、运行了至少 `shadow.minPrs` 个 PR 或 `shadow.minDays` 天、失败至少 `shadow.minHits` 次、发现的问题至少 `shadow.minAdoption` 被改掉、误报（你对命中的判断，加上模型对抽样的判断）不超过 `shadow.maxFalsePositiveRate`。检查标签页上显示每条影子检查到了哪一步、还差什么。一次复查升级的检查合成一个带理由的批次，**现在**页上会提醒，可以**撤销**。
+**自动升级。** `shadow.autoPromote` 开着时，Butler 每小时复查一次检查。影子运行的检查满足这些条件就升为强制：启用着、是拦截级别（不只是提醒）、回测通过、分数不低于 `score.admitLine`、运行了至少 `shadow.minPrs` 个 PR 或 `shadow.minDays` 天、失败至少 `shadow.minHits` 次、发现的问题至少 `shadow.minAdoption` 被改掉、误报（你对命中的判断，加上模型对抽样的判断；`backtest.judgeSample` 是 `0` 时没人标的命中都算误报）不超过 `shadow.maxFalsePositiveRate`。采纳率只看编辑时的命中：push 前跑的检查没有「改好了」的记录，不会自动升级。检查标签页上显示每条影子检查到了哪一步、还差什么。一次复查升级的检查合成一个带理由的批次，**现在**页上会提醒，可以**撤销**。批次里的检查之后都改过的话，撤销什么都不恢复，提醒留着。你撤销过升级、或者自己改回影子的检查，在你清除复查标记以前不会再自动升级。
 
-**自动降级。** `demote.enabled` 开着时，强制的拦截检查在拦下至少 `demote.minEvents` 次以后，被绕过（压制注释、`--no-verify`、关掉 hook、改了快照）或被无视的比例超过 `demote.maxBypassRate`，或者强制以后 `demote.noReductionPrs` 个 PR 里同类评审评论没有减少，就会降级。`demote.to` 是 `shadow` 时，Butler 自动升上去的检查降回影子模式，是一个可撤销的批次；别的检查，或者 `demote.to` 是 `review` 时，只在检查标签页上标**待复查**（**清除复查标记**去掉）。提醒在现在页上留 14 天。
+**自动降级。** `demote.enabled` 开着时，强制的拦截检查在拦下至少 `demote.minEvents` 次以后，被绕过（压制注释、`--no-verify`、关掉 hook、改了快照）或被无视（只有编辑时的拦截才算）的比例达到 `demote.maxBypassRate`，就会降级。另一个理由是强制以后 `demote.noReductionPrs` 个 PR 里同类评审评论没有减少，它要用评审评论的趋势，Butler 现在还不记，所以暂时不会触发。`demote.to` 是 `shadow` 时，Butler 自动升上去的检查降回影子模式，是一个可撤销的批次；别的检查，或者 `demote.to` 是 `review` 时，只在检查标签页上标**待复查**。**清除复查标记**去掉它，Butler 从那一刻重新统计拦截、绕过和修复。提醒在现在页上留 14 天。
 
 **阈值复查。** 撤销自动升级或降级、在自动升降级之后 14 天内手动改回模式，都记成校准样本；手动把影子检查改成强制也算一个。每 `review.intervalDays` 天、新样本够 `review.minSamples` 个时，Butler 看 `score.admitLine`、`backtest.maxFalsePositiveRate`、`shadow.minAdoption`、`shadow.maxFalsePositiveRate`、`demote.maxBypassRate` 稍微改一点（最多差 0.05）会不会更常和你一致。建议出现在**校准**标签页上，**采用**会写进全局准入策略，是一个可撤销的批次。`backtestThresholdReviewAt` 记的是上一次复查的时间，不直接编辑。
 

@@ -140,6 +140,10 @@ describe("classifyBypass", () => {
     expect(hows("git -C repo merge --no-verify main")).toEqual(["no_verify"]);
     expect(hows("git commit -m 'no verify needed'")).toEqual([]);
     expect(hows("git push -n origin main")).toEqual([]);
+    // 带值的短选项后面的字母是值：-uno 是 untracked-files=no，-mn 是提交说明 "n"。
+    expect(hows("git commit -uno -m x")).toEqual([]);
+    expect(hows("git commit -mn")).toEqual([]);
+    expect(hows("git commit -anm x")).toEqual(["no_verify"]);
   });
 
   it("recognises turning git hooks off", () => {

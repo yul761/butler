@@ -13,6 +13,8 @@ const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 /** 一条检查从 modeSince 起的数据。 */
 export interface PerformanceInput {
   fails: number;
+  /** 编辑时的失败（采纳率的分母；push 检查没有「改好了」的记录）。没给就用 fails。 */
+  editFails?: number;
   resolved: number;
   /** 人标的误报。 */
   falsePositives: number;
@@ -48,7 +50,8 @@ export function trendValue(t: LessonCommentTrend | null, p: AdmissionPolicy): nu
 export function performanceOf(i: PerformanceInput, p: AdmissionPolicy): PerformanceResult | null {
   const inputs: PerformanceResult["inputs"] = {};
   if (i.fails >= Math.max(1, num(p, "shadow.minHits"))) {
-    inputs.adoption = round(Math.min(1, i.resolved / i.fails));
+    const adoptable = i.editFails ?? i.fails;
+    if (adoptable > 0) inputs.adoption = round(Math.min(1, i.resolved / adoptable));
     inputs.precision = round(clamp01(1 - i.falsePositives / i.fails));
     if (i.enforce && i.blocked > 0) inputs.bypass = round(clamp01(1 - (i.bypasses + i.ignored) / i.blocked));
   }

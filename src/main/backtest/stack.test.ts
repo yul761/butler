@@ -10,6 +10,8 @@ import { memDb } from "../test-utils";
 import type { CheckInput } from "../../shared/checks";
 import { inProcessEvaluator } from "./evaluator";
 import { createBacktestStack, NOTICE_DAYS, REVIEW_INTERVAL_MS } from "./stack";
+import { defHash } from "./evaluate";
+import { checkDef } from "./service";
 
 const T0 = Date.UTC(2026, 10, 1);
 
@@ -54,6 +56,27 @@ describe("backtest stack", () => {
     const at = (r as { notBefore: number }).notBefore;
     expect(at).toBeGreaterThan(T0);
     expect(at).toBeLessThanOrEqual(T0 + REVIEW_INTERVAL_MS);
+  });
+
+  it("keeps re-arming when the review throws, and queues backtests for checks without a result", async () => {
+    const t = setup();
+    const id = t.save();
+    const ctx = { id: 1, kind: "backtest", payload: { op: "review" }, checkpoint: null, ticketKey: null, attempts: 1, signal: new AbortController().signal, save: () => {} } as never;
+    vi.spyOn(t.stack.lifecycle, "tick").mockRejectedValueOnce(new Error("boom"));
+    expect(await t.stack.handler(ctx)).toMatchObject({ defer: true });
+    expect(t.queue.enqueue).toHaveBeenCalledWith("backtest", { op: "check", checkId: id }, expect.objectContaining({ dedupeKey: `check:${id}` }));
+  });
+
+  it("counts only results from repos in the check's scope", () => {
+    const t = setup();
+    const id = t.save();
+    const row = t.checks.repo.get(id)!;
+    const hash = defHash(checkDef(row));
+    const put = (slug: string, status: "done" | "skipped", reason: string | null) =>
+      t.db.prepare(`INSERT INTO check_backtests (def_hash, repo_slug, status, skip_reason, prs, hits, comments, comments_matched, recall, fp_rate, created_at) VALUES (?, ?, ?, ?, 10, 1, 1, 1, 1, 0, 1)`).run(hash, slug, status, reason);
+    put("acme/web", "done", null);
+    put("other/repo", "skipped", "no_gh");
+    expect(t.stack.service.summaryOf(row)).toMatchObject({ tested: true, skipped: [] });
   });
 
   it("reruns a backtest for a known check and refuses an unknown one", () => {
