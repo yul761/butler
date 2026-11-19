@@ -1,3 +1,4 @@
+import type { BacktestSkipReason, CheckLifecycleReason, PromotionBlocker } from "../../shared/backtest";
 import type { LoopKeyView, LoopPolicyGroup, LoopPolicyKey } from "../../shared/loop-policy";
 import type { CommentCategory, CommentSource, CommentState, CommentVerified, CommentWho, FlakyKind } from "../../shared/loop";
 import type { AvailabilityView } from "../../shared/availability";
@@ -2039,4 +2040,49 @@ export const EN: UiStrings = {
   externalAuditNone: "No outward actions recorded yet.",
   externalOutcome: { done: "Done", failed: "Failed", skipped: "Skipped (switch off)" } as Record<ExternalOutcome, string>,
   externalCols: { time: "Time", kind: "Action", where: "Where", target: "Target", summary: "What", outcome: "Result", payload: "Details" },
+  bt: {
+    noticePromoted: (names: string) => `Shadow checks promoted to enforce automatically: ${names}`,
+    noticeDemoted: (names: string, reason: string) => `Enforced checks moved back to shadow automatically (${reason}): ${names}`,
+    noticeFlagged: (names: string, reason: string) => `Enforced checks need your review (${reason}): ${names}`,
+    reason: { bypassed: "often bypassed", no_reduction: "similar review comments did not drop" } as Record<CheckLifecycleReason, string>,
+    reasonUnknown: "unknown reason",
+    undo: "Undo",
+    open: "Open checks",
+    dismiss: "Dismiss",
+    undone: "Undone",
+    backtestNone: "Not backtested yet",
+    backtestRunning: "Backtesting…",
+    backtestLine: (prs: number, recall: string, fp: string, hits: number) => `Backtest: last ${prs} PRs, ${hits} hits, recall ${recall}, false positive rate ${fp}`,
+    legacy: (n: number) => `${n} existing violations`,
+    skipped: { not_cloned: "no local clone", no_gh: "gh unavailable", run_command: "command checks are not backtested on history", no_material: "no usable material" } as Record<BacktestSkipReason, string>,
+    skippedLine: (items: string) => `Not backtested: ${items}`,
+    score: (s: string) => `Score ${s}`,
+    rerun: "Backtest again",
+    progressReady: "Shadow run meets the promotion bar; it is promoted at the next review",
+    progressLine: (prs: number, minPrs: number, days: number, minDays: number, fails: number, minHits: number) =>
+      `Shadow run: ${prs}/${minPrs} PRs or ${days}/${minDays} days · ${fails}/${minHits} hits`,
+    progressRates: (adoption: string, minAdoption: string, fp: string, maxFp: string) => `adoption ${adoption} (at least ${minAdoption}) · false positive rate ${fp} (at most ${maxFp})`,
+    blockersLine: (items: string) => `Still missing: ${items}`,
+    blocker: {
+      auto_off: "auto promotion off", not_shadow: "not in shadow mode", disabled: "check disabled", warn: "warn severity only", untested: "not backtested", no_backtest: "backtest did not pass",
+      score: "score too low", time: "not run long enough", hits: "too few hits", fp: "too many false positives", adoption: "adoption too low", needs_review: "waiting for your review",
+    } as Record<PromotionBlocker, string>,
+    lifecycleBypassed: (bypasses: number, ignored: number, blocked: number, rate: string, max: string) =>
+      `Blocked ${blocked} times, bypassed ${bypasses}, ignored ${ignored}; bypass rate ${rate} (limit ${max})`,
+    lifecycleNoReduction: (before: string, after: string, prs: number) => `${before} similar comments per PR before, ${after} after (${prs} PRs)`,
+    lifecycleAction: { promote: "Promoted automatically", demote: "Demoted automatically", flag: "Flagged for review" } as Record<"promote" | "demote" | "flag", string>,
+    needsReview: "Needs review",
+    clearReview: "Clear review flag",
+    bypassStats: (b: number, i: number) => `bypassed ${b} · ignored ${i}`,
+    reviewsTitle: "Threshold review",
+    reviewsIntro: "Based on automatic promotions and demotions you undid and on your own mode changes, these thresholds could move a little (at most 0.05 at a time). Applying writes the global admission policy and can be undone from the batches.",
+    reviewsNone: "No suggestions for now.",
+    reviewLine: (key: string, current: string, suggested: string) => `${key}: ${current} → ${suggested}`,
+    reviewBasis: (samples: number, now: string, next: string) => `${samples} samples, agreement now ${now}, after the change ${next}`,
+    reviewStatus: { open: "Open", applied: "Applied", dismissed: "Dismissed" } as Record<"open" | "applied" | "dismissed", string>,
+    apply: "Apply",
+    reject: "Dismiss",
+    calibTitle: "Automatic check promotion and demotion",
+    calibStats: (p: number, pu: number, d: number, du: number) => `${p} automatic promotions (${pu} undone) · ${d} automatic demotions (${du} undone)`,
+  },
 };

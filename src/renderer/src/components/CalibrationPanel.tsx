@@ -12,6 +12,38 @@ import { useStateRefetch } from "./useStateRefetch";
 
 const MARKS: readonly CalibrationMark[] = ["good", "bad", "skip"];
 
+const fmt = (x: number): string => String(Math.round(x * 1000) / 1000);
+
+/** 检查的阈值复查（工作流 F）：根据自动升降级被撤回、人工改判的样本给出的小幅调整建议，采用 / 不采用；下面是升降级的统计。 */
+function CheckThresholds() {
+  const bt = useStateRefetch("backtest-calibration", () => api.backtestView());
+  const [error, setError] = useState<string | null>(null);
+  if (!bt) return null;
+  const act = (op: "applyThreshold" | "dismissThreshold", id: number) => {
+    void api.backtestAct({ op, id }).then((r) => setError(r.ok ? null : r.error), reportError);
+  };
+  const open = bt.reviews.filter((r) => r.status === "open");
+  const c = bt.calibration;
+  return (
+    <div className="calibration-thresholds" data-testid="threshold-reviews">
+      <h3>{S.bt.reviewsTitle}</h3>
+      <p className="muted">{S.bt.reviewsIntro}</p>
+      {open.length === 0 && <p className="muted">{S.bt.reviewsNone}</p>}
+      {open.map((r) => (
+        <div key={r.id} className="lessons-row" data-testid={`threshold-review-${r.id}`}>
+          <span>{S.bt.reviewLine(S.policyKey[r.key as keyof typeof S.policyKey] ?? r.key, fmt(r.current), fmt(r.suggested))}</span>
+          <span className="muted">{S.bt.reviewBasis(r.basis.samples, pct(r.basis.agreeNow), pct(r.basis.agreeSuggested))}</span>
+          <button className="primary" data-testid={`threshold-apply-${r.id}`} onClick={() => act("applyThreshold", r.id)}>{S.bt.apply}</button>
+          <button data-testid={`threshold-dismiss-${r.id}`} onClick={() => act("dismissThreshold", r.id)}>{S.bt.reject}</button>
+        </div>
+      ))}
+      {error && <p className="error" role="alert">{error}</p>}
+      <h3>{S.bt.calibTitle}</h3>
+      <p className="muted" data-testid="check-calibration-stats">{S.bt.calibStats(c.promotions, c.promotionsUndone, c.demotions, c.demotionsUndone)}</p>
+    </div>
+  );
+}
+
 /**
  * 校准页（addendum 第 9 节）：每个分数段抽几条让人判该不该接受，判的结果记成 score_calibration 样本；
  * 下面是各段的一致率、全部样本的一致率、评分的权重和线（就地改），以及「记为已校准」。
@@ -121,6 +153,7 @@ export function CalibrationPanel({ lessons }: { lessons: LessonsState }) {
         </div>
       )}
       <PolicyEditor groups={["score"]} title={S.calibrationWeightsTitle} />
+      <CheckThresholds />
     </div>
   );
 }

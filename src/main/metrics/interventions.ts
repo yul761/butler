@@ -151,7 +151,7 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.clipboardRead, IPC.admissionState, IPC.wizardEstimate, IPC.calibrationSample, IPC.calibrationStats,
   IPC.costView, IPC.costBreakers, IPC.backgroundStatus,
   IPC.clipboardRead, IPC.loopPolicyGet, IPC.loopCommentsList, IPC.loopFlakyList, IPC.loopEffect,
-  IPC.baselinesView, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyViolations, IPC.checkExportList,
+  IPC.baselinesView, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyViolations, IPC.checkExportList, IPC.backtestView,
   IPC.interruptsState, IPC.profilesGet,
   // 建立、整理、归档
   IPC.ticketsCreate, IPC.ticketsArchive, IPC.ticketsUpdate, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
@@ -170,6 +170,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.loopPolicySet, IPC.loopFlakyAct,
   // 仓库现状和检查的整理（扫描、采用、存量扫描、导出成 lint）：搭检查，和 checksAct、reposScan 一样不算推动一次工作。
   IPC.baselinesAct, IPC.legacyAct, IPC.checkExportAct,
+  // 回测、清除复查、撤销自动升降级、阈值复查（工作流 F）：整理检查
+  IPC.backtestAct,
   // 打断与通知的设置（工作流 J）：权限档案、默认答案、webhook、测试通知都是搭环境
   IPC.interruptsAct, IPC.profilesScan,
   // 栈（工作流 K）：只读和策略、移出跟踪

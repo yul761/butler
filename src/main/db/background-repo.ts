@@ -58,6 +58,12 @@ export class BackgroundRepo {
     });
   }
 
+  /** 这一种里还在排队或在跑的（页面显示「正在回测」用）。 */
+  active(kind: BgKind, limit = 200): BgJob[] {
+    const rows = this.db.prepare(`SELECT * FROM background_jobs WHERE kind = ? AND state IN ('queued','running') ORDER BY id LIMIT ?`).all(kind, limit) as unknown as Row[];
+    return rows.map(toJob);
+  }
+
   get(id: number): BgJob | null {
     const r = this.db.prepare(`SELECT * FROM background_jobs WHERE id = ?`).get(id) as unknown as Row | undefined;
     return r ? toJob(r) : null;

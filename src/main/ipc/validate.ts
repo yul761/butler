@@ -10,6 +10,7 @@ import type { PrStagesScope } from "../../shared/pr-stages";
 import { LESSON_BULK_VERBS, MAX_TARGET_IDS, type LessonAction, type LessonBulkVerb, type LessonTarget } from "../../shared/lessons";
 import { parseLessonFilter } from "../../shared/lesson-filter";
 import type { AdmissionScope, CalibrationAction, WizardAction } from "../../shared/lesson-admission";
+import type { BacktestAction } from "../../shared/backtest";
 import { CHECKS_BULK_OPS, parseCheckScope, type CheckScope, type ChecksAction, type ChecksBulkOp } from "../../shared/checks";
 import { parsePolicyOverrides, type AdmissionPolicyOverrides, type PolicyScope } from "../../shared/admission-policy";
 import type { BaselinesAction, CheckExportAction, LegacyAction } from "../../shared/baselines";
@@ -820,6 +821,24 @@ export function checkExportActionArg(v: unknown): CheckExportAction {
   if (o.kind === "run") return { kind: "run", checkKey: checkKeyArg(o.checkKey), slug: slugArg(o.slug) };
   if (o.kind === "discard" || o.kind === "push" || o.kind === "pr" || o.kind === "open") return { kind: o.kind, id: positiveId(o.id, "export id") };
   throw new Error("invalid export action");
+}
+
+/** 回测页的操作（工作流 F）。 */
+export function backtestActionArg(v: unknown): BacktestAction {
+  const o = objOf(v, "backtest action");
+  switch (o.op) {
+    case "rerun":
+    case "clearReview":
+      return { op: o.op, checkId: positiveId(o.checkId, "check id") };
+    case "undo":
+      return { op: "undo", batchId: positiveId(o.batchId, "batch id") };
+    case "dismissNotice":
+      return { op: "dismissNotice", eventId: positiveId(o.eventId, "event id") };
+    case "applyThreshold":
+    case "dismissThreshold":
+      return { op: o.op, id: positiveId(o.id, "review id") };
+  }
+  throw new Error("invalid backtest action");
 }
 
 /** 改花费上限的一层（工作流 L）：覆盖整个换掉，值在 CostPolicyService 里按键校验（不合法的回 CostSetResult）。 */

@@ -205,6 +205,10 @@ import { baselineAdapter, baselineRuleAdapter, checkAdapter, lessonAdapter, less
 import { BaselineService } from "./baselines/baselines-service";
 import { LegacyScanService } from "./baselines/legacy-service";
 import { baselineWorkerRunner } from "./baselines/worker-host";
+import { BacktestRepo } from "./db/backtest-repo";
+import { createBacktestStack } from "./backtest/stack";
+import { realBacktestGh } from "./backtest/material";
+import { backtestWorkerEvaluator } from "./backtest/eval-worker-host";
 import { CheckExporter } from "./baselines/export/exporter";
 import { BaselinesRepo } from "./db/baselines-repo";
 import { ChecksService } from "./checks/checks-service";
@@ -731,10 +735,12 @@ async function bootstrap(): Promise<void> {
   });
   const checkSnapshots = new SnapshotWriter({ file: paths.checksSnapshot, build: () => checksService.snapshot(), log: logger });
   checkSnapshots.start();
-  // hook 一次运行写一个命中文件：读进 check_hits，「没有检查」记到 session 行上。
+  // hook 一次运行写一个命中文件：读进 check_hits，「没有检查」记到 session 行上；绕过记录（工作流 F 的自动降级用）进 check_bypasses。
+  const backtestRepo = new BacktestRepo(db);
   const checkHits = new HitIngest({
     dir: paths.checksHits,
     insertHits: (rows) => checksService.repo.insertHits(rows),
+    insertBypasses: (rows) => backtestRepo.insertBypassLogs(rows),
     markAbsent: (session, reason) => sessions.setChecksAbsent(session, reason),
     onIngested: () => notify(),
     log: logger,
@@ -881,10 +887,34 @@ async function bootstrap(): Promise<void> {
     gh: { prLessonDataDetail, available: () => ghAvailable() },
     lang: () => currentLang(), now: Date.now, fallbackCwd: () => paths.home, log: logger,
   });
-  // 准入流水线：判（四道闸门 + 打分 + 抽查）、全部接受、改了分类以后重判；分析加了或命中了规矩时按设置自动判。
+  // 回测、影子自动升级、自动降级、阈值复查（工作流 F）：后台队列的 backtest 任务；判误报走路由的 backtest_judge。
+  const backtest = createBacktestStack({
+    db, repo: backtestRepo, lessons: lessonsRepo, checks: checksService, batches: lessonBatches, policies: admissionPolicies,
+    queue: bgQueue, jobs: bgRepo, gh: realBacktestGh(), evaluate: backtestWorkerEvaluator,
+    run: (req) => execHeadlessJson(judgeDeps, req), judgments: lessonJudgments, lang: () => currentLang(),
+    localPath: repoLocalPath, ticketPattern: () => checksConfig(settings).ticketPattern,
+    legacy: { run: (checkId, slug) => legacyScans.run(checkId, slug) },
+    lastReview: {
+      get: () => Number.parseInt(settings.get("backtestThresholdReviewAt"), 10) || null,
+      set: (at) => settings.set("backtestThresholdReviewAt", String(at)),
+    },
+    // 素材拿到了：那个仓库排一次自动判（等着回测的规矩接着判）。lessonAdmission 在下面才建，回调时才用。
+    onMaterial: (slug) => lessonAdmission.scheduleAuto(slug),
+    record: (kind, data) => void recordEvent(kind, { data }),
+    onChanged: () => notify(), onChecksChanged: () => checkSnapshots.schedule(),
+    fallbackCwd: paths.home, now: Date.now, log: logger,
+  });
+  bgQueue.register("backtest", backtest.handler);
+  // 准入流水线：判（四道闸门 + 打分 + 抽查 + 回测）、全部接受、改了分类以后重判；分析加了或命中了规矩时按设置自动判。
   const lessonAdmission = new AdmissionService({
     db, repo: lessonsRepo, recorder: batchRecorder, policies: admissionPolicies, judgments: lessonJudgments, runs: lessonRuns,
     checks: checksService, drafter: checkDrafter, batches: lessonBatches, run: (req) => execHeadlessJson(judgeDeps, req),
+    backtest: backtest.service, metrics: backtest.metrics,
+    // 仓库现有的检查（E2）：低置信的只算弱覆盖，不能单凭它搁置成「已覆盖」。
+    coverage: {
+      coveredBy: (q) => baselineService.coveredBy(q).map((c) => ({ label: `${c.slug}${c.dir ? `/${c.dir}` : ""}: ${c.check.tool}`, strength: c.check.confidence === "low" ? "weak" : c.strength })),
+      describeForPrompt: (slugs, maxChars) => baselineService.describeForPrompt(slugs, maxChars),
+    },
     lang: () => currentLang(), now: Date.now, fallbackCwd: () => paths.home, notify: () => notify(), log: logger,
     autoAdmitEnabled: () => settings.get("lessonsAutoAdmit") === "1",
   });
@@ -894,6 +924,13 @@ async function bootstrap(): Promise<void> {
   // 初始化向导、校准页、原则（工作流 D 第 3 部分）。
   const lessonWizard = new WizardService({
     db, repo: lessonsRepo, admission: lessonAdmission, runner: lessonRunner, enricher: lessonEnricher, bulk: (verb, target) => lessonBatches.bulk(verb, target),
+    backtest: backtest.service.wizardRunner,
+    scanner: {
+      scan: async (slug) => {
+        const r = await baselineService.scan(slug, { infer: false });
+        return r.status === "ok" || r.status === "partial" || r.status === "unchanged" ? { noLint: baselineService.checksByCategory(slug, "lint").length === 0 } : null;
+      },
+    },
     now: Date.now, notify: () => notify(), log: logger, policyVersion: () => admissionPolicies.version(),
   });
   const calibration = new CalibrationService({
@@ -2410,6 +2447,7 @@ async function bootstrap(): Promise<void> {
       violations: (id, offset, limit) => legacyScans.violations(id, offset, limit),
     },
     checkExports: { list: () => checkExporter.list(), act: (a) => checkExporter.act(a) },
+    backtest: { view: () => backtest.view(), act: (a) => backtest.act(a) },
     configIo: configIoFacade({
       io: configIo, backups: configBackups, backupDir: configBackupDir, now: Date.now, notify, log: logger,
       openPath: (dir) => shell.openPath(dir),
@@ -2505,6 +2543,7 @@ async function bootstrap(): Promise<void> {
           ...costNotices(costBreaker?.views() ?? [], costTargetOf),
           ...commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
           ...stackNotices(stackService.notices()),
+          ...backtest.notices(),
         ],
         sessionMemory: (id) => procServices.monitor.memoryOf(id),
         memorySnapshot: procServices.monitor.snapshot(),
@@ -2665,6 +2704,11 @@ async function bootstrap(): Promise<void> {
   procServices.start();
   usageScanner.start(usageScanMs(process.env));
   bgScheduler.start();
+  try {
+    backtest.start();
+  } catch (e) {
+    logger("backtest: scheduling the review failed", e);
+  }
   bgQueue.start();
   // 启动时看一遍：上次退出前暂停着的接着暂停，托盘和「现在」页马上显示。
   void costBreakerInst.check().then(() => costBreakerInst.views().length > 0 && costChanged()).catch((e: unknown) => logger("cost: the first check failed", e));

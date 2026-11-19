@@ -147,6 +147,8 @@ export const SETTING_DEFAULTS = {
   admissionCalibratedAt: "",
   /** 原则上一次每日重新分组的时间（毫秒）；重启以后也不会当天再分一次。 */
   lessonsPrinciplesRegroupedAt: "",
+  /** 工作流 F：上一次阈值复查的时间（毫秒）；复查按 review.intervalDays 隔开。不在设置页上。 */
+  backtestThresholdReviewAt: "",
   /** 后台任务（工作流 L）什么时候跑：anytime（随时，默认）、idle（只在空闲时）、hours（只在 bgHours 里）、idle_or_hours。 */
   bgWindow: "anytime",
   /** 后台任务可以跑的小时（本地时间，可以跨午夜，逗号分开写几段）。 */

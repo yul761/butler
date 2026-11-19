@@ -1,3 +1,4 @@
+import type { BacktestSkipReason, CheckLifecycleReason, PromotionBlocker } from "../../shared/backtest";
 import type { LoopKeyView, LoopPolicyGroup, LoopPolicyKey } from "../../shared/loop-policy";
 import type { CommentCategory, CommentSource, CommentState, CommentVerified, CommentWho, FlakyKind } from "../../shared/loop";
 import type { AvailabilityView } from "../../shared/availability";
@@ -2057,6 +2058,52 @@ const ZH = {
   externalAuditNone: "还没有对外动作的记录。",
   externalOutcome: { done: "做了", failed: "失败", skipped: "跳过（开关关着）" } as Record<ExternalOutcome, string>,
   externalCols: { time: "时间", kind: "动作", where: "位置", target: "目标", summary: "内容", outcome: "结果", payload: "详细内容" },
+  /** 回测、影子自动升级、自动降级、阈值复查（工作流 F）。 */
+  bt: {
+    noticePromoted: (names: string) => `影子运行的检查已自动升为强制：${names}`,
+    noticeDemoted: (names: string, reason: string) => `强制检查已自动降回影子（${reason}）：${names}`,
+    noticeFlagged: (names: string, reason: string) => `强制检查需要你复查（${reason}）：${names}`,
+    reason: { bypassed: "常被绕过", no_reduction: "上线后同类评论没有减少" } as Record<CheckLifecycleReason, string>,
+    reasonUnknown: "原因不明",
+    undo: "撤销",
+    open: "看检查",
+    dismiss: "知道了",
+    undone: "已撤销",
+    backtestNone: "还没回测",
+    backtestRunning: "正在回测…",
+    backtestLine: (prs: number, recall: string, fp: string, hits: number) => `回测：最近 ${prs} 个 PR，命中 ${hits} 处，召回 ${recall}，误报率 ${fp}`,
+    legacy: (n: number) => `存量违规 ${n} 处`,
+    skipped: { not_cloned: "没有本地 clone", no_gh: "gh 不可用", run_command: "运行命令类不在历史上回测", no_material: "没有可用的素材" } as Record<BacktestSkipReason, string>,
+    skippedLine: (items: string) => `未回测：${items}`,
+    score: (s: string) => `分数 ${s}`,
+    rerun: "重新回测",
+    progressReady: "影子运行已满足升级条件，下次复查时自动升为强制",
+    progressLine: (prs: number, minPrs: number, days: number, minDays: number, fails: number, minHits: number) =>
+      `影子运行：${prs}/${minPrs} 个 PR 或 ${days}/${minDays} 天 · 命中 ${fails}/${minHits}`,
+    progressRates: (adoption: string, minAdoption: string, fp: string, maxFp: string) => `采纳率 ${adoption}（至少 ${minAdoption}）· 误报率 ${fp}（至多 ${maxFp}）`,
+    blockersLine: (items: string) => `还差：${items}`,
+    blocker: {
+      auto_off: "自动升级已关", not_shadow: "不在影子模式", disabled: "检查已停用", warn: "只是提醒级别", untested: "还没回测", no_backtest: "回测没通过",
+      score: "分数不够", time: "运行时间不够", hits: "命中不够", fp: "误报率太高", adoption: "采纳率太低", needs_review: "等你复查",
+    } as Record<PromotionBlocker, string>,
+    lifecycleBypassed: (bypasses: number, ignored: number, blocked: number, rate: string, max: string) =>
+      `拦下 ${blocked} 次，被绕过 ${bypasses} 次、无视 ${ignored} 次，绕过率 ${rate}（上限 ${max}）`,
+    lifecycleNoReduction: (before: string, after: string, prs: number) => `上线前每个 PR ${before} 条同类评论，上线后 ${after} 条（${prs} 个 PR）`,
+    lifecycleAction: { promote: "自动升级", demote: "自动降级", flag: "标了待复查" } as Record<"promote" | "demote" | "flag", string>,
+    needsReview: "待复查",
+    clearReview: "清除复查标记",
+    bypassStats: (b: number, i: number) => `绕过 ${b} · 无视 ${i}`,
+    reviewsTitle: "阈值复查建议",
+    reviewsIntro: "根据自动升降级被撤回、人工改判的样本，建议把这些阈值微调一点（每次最多 0.05）。采用后写进全局准入策略，可以在批次里撤销。",
+    reviewsNone: "暂时没有建议。",
+    reviewLine: (key: string, current: string, suggested: string) => `${key}：${current} → ${suggested}`,
+    reviewBasis: (samples: number, now: string, next: string) => `${samples} 个样本，现在一致 ${now}，调整后 ${next}`,
+    reviewStatus: { open: "待处理", applied: "已采用", dismissed: "不采用" } as Record<"open" | "applied" | "dismissed", string>,
+    apply: "采用",
+    reject: "不采用",
+    calibTitle: "检查的自动升降级",
+    calibStats: (p: number, pu: number, d: number, du: number) => `自动升级 ${p} 次（被撤回 ${pu} 次）· 自动降级 ${d} 次（被撤回 ${du} 次）`,
+  },
 };
 
 export type UiStrings = typeof ZH;
