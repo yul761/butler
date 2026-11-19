@@ -289,6 +289,8 @@ The **Effect** page (below **Progress** in the sidebar) shows what Butler's PRs 
 
 Numbers are rolled up from local events once an hour; opening the page rolls up again if the last run is more than 10 minutes old. Time a session spent while the computer slept is not counted as waiting.
 
+Three internal keys hold the dates these comparisons start from; none is edited directly. `metricsSince` is when Butler started recording metrics, `metricsBaselineCutoff` is the fixed baseline cutoff (your first Butler session), and `skillTrackingSince` is when the hook started recording review and design skill use, so PRs from before then are not counted as skipping them.
+
 ## Spend caps and background work
 
 **Settings → Spend & background** has two parts: spend caps for sessions and tickets, and when background work may run. With nothing changed, Butler behaves as 2.1.0 did: no caps, and background work runs at any time.
@@ -366,9 +368,11 @@ Old lessons that you had already confirmed, disabled or rejected keep their stat
 | Automatic backups to keep | `configBackupKeep` | `10` | A whole number from `1` to `999`. Only the newest automatic backups are kept; backups written before a replace import and backups you start with **Back up now** are never removed. |
 | Remind me to export after this many days (0 = off) | `configExportReminderDays` | `30` | A whole number from `0` (off) to `365`. When you have confirmed lessons and neither an export nor a backup has happened in this many days (counted from your first confirmed lesson if there has never been one), the Import / export tab and the Lessons tab say so. |
 
+`configLastExportAt` records when you last exported, for that reminder; it is not edited directly.
+
 ### Admission policy
 
-The admission policy decides how the lesson pipeline scores, shelves, backtests, shadows and demotes rules. Every key can be set on three layers: **global**, **product** and **repository**. A repository uses its own value for a key, else the value of a product it belongs to, else the global value, else the default; the layers are merged key by key. When a repository belongs to several products that set the same key differently, the product whose name sorts last wins and **Settings → Lessons → Admission policy** shows a warning. Each change is an undoable batch and raises the policy version (scores record the version they were computed with). The defaults have not been calibrated yet; the page says so.
+The admission policy decides how the lesson pipeline scores, shelves, backtests, shadows and demotes rules. Every key can be set on three layers: **global**, **product** and **repository**. A repository uses its own value for a key, else the value of a product it belongs to, else the global value, else the default; the layers are merged key by key. When a repository belongs to several products that set the same key differently, the product whose name sorts last wins and **Settings → Lessons → Admission policy** shows a warning. Each change is an undoable batch and raises the policy version (scores record the version they were computed with; the current version is kept in `admissionPolicyVersion`, which is not edited directly). The defaults have not been calibrated yet; the page says so.
 
 | Key | Default | Values | What it does |
 |-----|---------|--------|--------------|
@@ -550,7 +554,7 @@ Some features let Butler leave something outside your machine on your behalf, su
 | Resolve comments | `externalCommentResolve` | `0` (off) | Marking review threads on a PR as resolved. |
 | Edit PR descriptions | `externalPrDescriptionEdit` | `0` (off) | Rewriting a PR's body. |
 | Add or remove PR labels | `externalPrLabel` | `0` (off) | Adding labels to a PR or removing them. |
-| Open PRs | `externalPrOpen` | `0` (off) | Opening a new PR with `gh`. |
+| Open PRs | `externalPrOpen` | `0` (off) | Opening a new PR with `gh`. In a stack it also covers moving a PR's base to the trunk, marking a PR ready for review and closing a draft that goes back to a plain branch. |
 | Push branches | `externalBranchPush` | `0` (off) | Pushing a branch Butler made, such as a repo rule export, to the remote. |
 | Edit PR titles | `externalPrTitleEdit` | `0` (off) | Changing a PR's title. |
 | Force push | `externalForcePush` | `0` (off) | Rewriting a remote branch's history. |
@@ -705,7 +709,7 @@ Where the events come from: `decision_needed` is a new question that wasn't answ
 
 ### Before and after on the Effect page
 
-The **Effect** page compares equal windows of full days (up to 30 days each) before and after the first time one of these features took effect, leaving out that day itself because it is partly before and partly after: a permission rule confirmed, or the choice rule, default answers or "look before asking" switched on. Each side shows Butler PRs merged, human interventions and waiting time per PR, interrupts per day by kind, stops resolved automatically, and fix sessions opened for stuck sessions. Until one of them is on, the panel says the comparison starts then. Stops resolved by a permission profile are counted from the session's transcript when it stops, so the number is an upper bound: Claude Code might not have asked for every one of them.
+The **Effect** page compares equal windows of full days (up to 30 days each) before and after the first time one of these features took effect, leaving out that day itself because it is partly before and partly after: a permission rule confirmed, or the choice rule, default answers or "look before asking" switched on. Each side shows Butler PRs merged, human interventions and waiting time per PR, interrupts per day by kind, stops resolved automatically, and fix sessions opened for stuck sessions. Until one of them is on, the panel says the comparison starts then. That first time is stored once in `interruptReductionSince` (not edited directly). Stops resolved by a permission profile are counted from the session's transcript when it stops, so the number is an upper bound: Claude Code might not have asked for every one of them.
 
 ## Stacks
 
