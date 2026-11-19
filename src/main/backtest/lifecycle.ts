@@ -418,6 +418,15 @@ export class Lifecycle {
     let n = 0;
     for (const id of e.ids) {
       const life = this.d.repo.lifecycle(id);
+      if (e.mode === "enforce" && life?.lastAction !== "demote") {
+        // 人自己把影子检查改成强制：规则当时没升（hold）。有表现数据才记，给阈值复查看「规则是不是太严」。
+        const parts = this.d.repo.score(id)?.parts ?? {};
+        if (typeof parts.adoption === "number" || typeof parts.precision === "number") {
+          this.sample(id, "hold", "enforce", null, e.at);
+          n++;
+        }
+        continue;
+      }
       if (!life || life.lastBatchId === null || e.at - life.at > MANUAL_OVERRIDE_MS) continue;
       const overturned = (life.lastAction === "promote" && e.mode === "shadow") || (life.lastAction === "demote" && e.mode === "enforce");
       if (!overturned) continue;
@@ -429,7 +438,7 @@ export class Lifecycle {
     return n;
   }
 
-  private sample(checkId: number, auto: "promote" | "demote", human: "shadow" | "enforce", batchId: number, at: number): void {
+  private sample(checkId: number, auto: "promote" | "demote" | "hold", human: "shadow" | "enforce", batchId: number | null, at: number): void {
     const row = this.d.checks.repo.get(checkId);
     const sc = this.d.repo.score(checkId);
     this.d.db

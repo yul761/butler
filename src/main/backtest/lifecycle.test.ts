@@ -329,3 +329,17 @@ describe("calibration samples (8.1)", () => {
     expect(samples(t)).toEqual([]);
   });
 });
+
+describe("manual promotion sample", () => {
+  it("records hold → enforce when a person promotes a scored shadow check", async () => {
+    const t = setup({ policy: { "shadow.autoPromote": false } });
+    t.checks.onModeChanged((e) => t.life.modeChanged(e));
+    const row = t.save();
+    t.hits(row, 6, 4);
+    await t.life.tick();
+    t.checks.bulk([row.id], "enforce");
+    const r = t.db.prepare(`SELECT auto_verdict, human_verdict, score_parts FROM score_calibration WHERE entity = 'check'`).all() as { auto_verdict: string; human_verdict: string; score_parts: string }[];
+    expect(r).toMatchObject([{ auto_verdict: "hold", human_verdict: "enforce" }]);
+    expect(JSON.parse(r[0].score_parts)).toMatchObject({ adoption: expect.closeTo(0.667, 2) });
+  });
+});
