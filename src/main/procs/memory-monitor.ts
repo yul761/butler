@@ -9,6 +9,8 @@ export const SAMPLE_INTERVAL_MS = 60_000;
 export const HISTORY_EVERY = 5;
 /** 历史留多久。 */
 export const HISTORY_KEEP_MS = 14 * 24 * 3600_000;
+/** 开了或关了一个终端以后多久补采一次（给 claude 起子进程的时间）。 */
+export const SOON_MS = 3_000;
 /** 每几次采样清一次过期历史（大约一小时）。 */
 const PRUNE_EVERY = 60;
 
@@ -86,6 +88,9 @@ export class MemoryMonitor {
   /** stop() 以后：还在跑的那次采样读完表就停，不再写库、不再调 hook（退出时数据库可能已经关了）。 */
   private stopped = false;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private soonTimer: ReturnType<typeof setTimeout> | null = null;
+  /** soon() 到点时正好有一次采样在跑：它可能是在终端开之前读的表，跑完再采一次。 */
+  private again = false;
   private readonly hooks: SampleHook[] = [];
 
   constructor(private readonly d: MemoryMonitorDeps) {}
@@ -105,6 +110,23 @@ export class MemoryMonitor {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.soonTimer) clearTimeout(this.soonTimer);
+    this.soonTimer = null;
+    this.again = false;
+  }
+
+  /**
+   * 开了或关了一个终端：过 delayMs 补采一次，「现在」页的 session 数和读数不用等到下一分钟（每分钟一次的采样
+   * 可能正好在终端开之前）。连着来的几次只采一次。
+   */
+  soon(delayMs = SOON_MS): void {
+    if (this.stopped || this.soonTimer) return;
+    this.soonTimer = setTimeout(() => {
+      this.soonTimer = null;
+      if (this.running) this.again = true;
+      else void this.tick();
+    }, delayMs);
+    this.soonTimer.unref?.();
   }
 
   /** 这个 head 最近一次的读数；监控关着或没采到为 null。 */
@@ -140,6 +162,10 @@ export class MemoryMonitor {
       return null;
     } finally {
       this.running = false;
+      if (this.again) {
+        this.again = false;
+        void this.tick();
+      }
     }
   }
 

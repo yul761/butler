@@ -199,7 +199,7 @@ import { IntakeService } from "./intake/intake-service";
 import { parseRepoMap } from "./intake/repo-map";
 import { fileSource, trackerSource, type IntakeSource } from "./intake/sources";
 import { classifyByModel } from "./intake/model";
-import { changedPaths } from "./intake/conflicts";
+import { activeInRepo, changedPaths } from "./intake/conflicts";
 import { classifyCiByModel } from "./loop/ci-model";
 import { CiTriage } from "./loop/ci-triage";
 import { CommentLoop } from "./loop/comment-loop";
@@ -576,6 +576,7 @@ async function bootstrap(): Promise<void> {
   let intakeEnded: (() => void) | null = null;
   const pty = new PtyManager(nodePtyFactory, {
     data: (id, data) => safeSend(IPC.ptyData, id, data),
+    opened: (id) => procs?.terminalOpened(id),
     exit: (id, code) => {
       safeSend(IPC.ptyExit, id, code);
       if (closing) return;
@@ -2327,16 +2328,15 @@ async function bootstrap(): Promise<void> {
     },
     costAllows: (key) => costBreaker?.allowBackground(key) ?? true,
     openTerminals: (key) => sessionService.openTerminalCount(key),
-    activeInRepo: async (repoPath) => {
-      const held = new Set(gateRepo.activeHolds().map((h) => h.ticketKey).filter((k): k is string => k !== null));
-      const out: { key: string; paths: string[] }[] = [];
-      for (const t of tickets.list()) {
-        const r = t.repos.find((x) => samePath(x.repoPath, repoPath));
-        if (!r || (sessionService.openTerminalCount(t.key) === 0 && !held.has(t.key))) continue;
-        out.push({ key: t.key, paths: await changedPaths(ticketService.workDir(r), git.git) });
-      }
-      return out;
-    },
+    activeInRepo: (repoPath) =>
+      activeInRepo(repoPath, {
+        tickets: () => tickets.list(),
+        openTerminalCount: (key) => sessionService.openTerminalCount(key),
+        heldTickets: () => gateRepo.activeHolds().map((h) => h.ticketKey),
+        workDir: (r) => ticketService.workDir(r),
+        changedPaths: (cwd) => changedPaths(cwd, git.git),
+        samePath,
+      }),
     sessionModel: (tier) => routing.sessionModel(tier),
     createTicket: async (i) => {
       try {

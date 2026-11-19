@@ -19,6 +19,8 @@ export type PtyFactory = (
 export interface PtyEvents {
   data(termId: string, data: string): void;
   exit(termId: string, exitCode: number): void;
+  /** 终端开起来了（进程已经 spawn）。 */
+  opened?(termId: string): void;
 }
 
 /** 每个终端保留的回放缓冲，切回 ticket 页面时重放。 */
@@ -219,6 +221,7 @@ export class PtyManager {
       while (this.exited.size > EXITED_LIMIT) this.exited.delete(this.exited.keys().next().value as string);
       this.events.exit(termId, exitCode);
     });
+    this.guard(termId, "opened hook", () => this.events.opened?.(termId));
   }
 
   isOpen(termId: string): boolean {

@@ -564,4 +564,13 @@ describe("PtyManager.hasDraft", () => {
     expect(await p).toBe(true);
     expect(mgr.hasDraft("t1")).toBe(true);
   });
+
+  it("tells the owner when a terminal opens", () => {
+    const { factory } = fakePtyFactory();
+    const opened: string[] = [];
+    const mgr = new PtyManager(factory, { data: () => undefined, exit: () => undefined, opened: (id) => opened.push(id) });
+    mgr.open("t1", spec, opts);
+    expect(opened).toEqual(["t1"]);
+    expect(mgr.isOpen("t1")).toBe(true);
+  });
 });
