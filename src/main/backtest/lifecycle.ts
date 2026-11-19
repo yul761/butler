@@ -8,6 +8,8 @@ import type {
   BacktestSummary, BypassHow, CheckLifecycleReason, LifecycleReasonData, PromotionBlocker, PromotionProgress,
 } from "../../shared/backtest";
 import type { CheckRow } from "../../shared/checks";
+import type { BatchView } from "../../shared/batches";
+import type { CheckModeChange } from "../checks/checks-service";
 import type { LessonScoreParts } from "../../shared/lessons";
 import type { LessonCommentTrend } from "../review-effect/stats";
 import { IGNORED_AFTER_MS } from "../db/checks-repo";
@@ -16,6 +18,8 @@ import { checkScore, performanceOf, type PerformanceResult } from "./scores";
 import { verifiabilityValue } from "./gate";
 
 const DAY = 86_400_000;
+/** 自动升级 / 降级以后这么久之内人手动改回去，算推翻了它（记校准样本）。 */
+export const MANUAL_OVERRIDE_MS = 14 * DAY;
 const num = (p: AdmissionPolicy, k: AdmissionPolicyKey) => Number(p[k]);
 const round = (v: number) => Math.round(v * 1000) / 1000;
 
@@ -24,6 +28,8 @@ export interface ModeWindow {
   since: number;
   /** 最近一次改模式的批次是自动升级。 */
   autoPromoted: boolean;
+  /** 最近一次改模式的批次是自动降级：在人改模式以前不再自动升级。 */
+  autoDemoted: boolean;
   /** 最近一次改模式是撤销了一次自动升级（人说了不）：不再自动升级，直到人自己改。 */
   promotionUndone: boolean;
 }
@@ -89,10 +95,11 @@ export class LifecycleQueries {
       return {
         since: Number(it.at),
         autoPromoted: it.kind === "check_promote" && it.origin === "auto",
+        autoDemoted: it.kind === "check_demote" && it.origin === "auto",
         promotionUndone: it.kind === "undo" && undoneKind === "check_promote",
       };
     }
-    return { since: row.createdAt, autoPromoted: false, promotionUndone: false };
+    return { since: row.createdAt, autoPromoted: false, autoDemoted: false, promotionUndone: false };
   }
 
   hits(checkId: number, since: number): WindowHit[] {
@@ -250,7 +257,7 @@ export function promotionProgress(
   if (stats.fails < num(p, "shadow.minHits")) blockers.push("hits");
   if (a.fpRate === null || a.fpRate > num(p, "shadow.maxFalsePositiveRate")) blockers.push("fp");
   if (adoption === null || adoption < num(p, "shadow.minAdoption")) blockers.push("adoption");
-  if (a.needsReview || a.window.promotionUndone) blockers.push("needs_review");
+  if (a.needsReview || a.window.promotionUndone || a.window.autoDemoted) blockers.push("needs_review");
   return {
     eligible: blockers.length === 0, blockers, since: a.window.since, prs: stats.prs, minPrs: num(p, "shadow.minPrs"), days: Math.floor(days),
     minDays: num(p, "shadow.minDays"), fails: stats.fails, minHits: num(p, "shadow.minHits"), adoption, minAdoption: num(p, "shadow.minAdoption"),
@@ -282,7 +289,7 @@ export class Lifecycle {
     const { score } = checkScore({ lessonParts: this.d.lessonParts(row), verifiability: tested, performance }, p);
     const life = this.d.repo.lifecycle(row.id);
     const fpRate = this.shadowFpRate(hits, stats, judged ?? null, p);
-    const progress = row.mode === "shadow" ? promotionProgress({ row, window, stats, score, backtest, fpRate, needsReview: (life?.needsReview ?? false) || life?.lastAction === "demote" }, p, now) : null;
+    const progress = row.mode === "shadow" ? promotionProgress({ row, window, stats, score, backtest, fpRate, needsReview: life?.needsReview ?? false }, p, now) : null;
     const demotion = demotionOf(row, stats, trend, p);
     return { row, window, stats, score, performance, progress, fpRate, demotion };
   }
@@ -386,6 +393,51 @@ export class Lifecycle {
     }
     if (promote.length || demote.length || flag.length) this.d.onChanged?.();
     return res;
+  }
+
+  /** 撤销了一个自动升级 / 降级批次：每条恢复的检查记一个校准样本，清掉原因，通知消失。 */
+  batchUndone(original: BatchView, restored: readonly { entity: string; id: number }[]): number {
+    if (original.origin !== "auto" || (original.kind !== "check_promote" && original.kind !== "check_demote")) return 0;
+    const now = this.d.now();
+    const auto = original.kind === "check_promote" ? "promote" : "demote";
+    let n = 0;
+    for (const x of restored) {
+      if (x.entity !== "check") continue;
+      this.sample(x.id, auto, auto === "promote" ? "shadow" : "enforce", original.id, now);
+      this.d.repo.clearLifecycle(x.id);
+      n++;
+    }
+    this.d.repo.markUndone(original.id, now);
+    this.d.onChanged?.();
+    return n;
+  }
+
+  /** 人手动改了模式：刚被自动升级的改回影子、刚被自动降级的改回强制（14 天内），记校准样本。 */
+  modeChanged(e: CheckModeChange): number {
+    if (e.origin !== "manual") return 0;
+    let n = 0;
+    for (const id of e.ids) {
+      const life = this.d.repo.lifecycle(id);
+      if (!life || life.lastBatchId === null || e.at - life.at > MANUAL_OVERRIDE_MS) continue;
+      const overturned = (life.lastAction === "promote" && e.mode === "shadow") || (life.lastAction === "demote" && e.mode === "enforce");
+      if (!overturned) continue;
+      this.sample(id, life.lastAction as "promote" | "demote", e.mode, life.lastBatchId, e.at);
+      this.d.repo.clearLifecycle(id);
+      n++;
+    }
+    if (n) this.d.onChanged?.();
+    return n;
+  }
+
+  private sample(checkId: number, auto: "promote" | "demote", human: "shadow" | "enforce", batchId: number, at: number): void {
+    const row = this.d.checks.repo.get(checkId);
+    const sc = this.d.repo.score(checkId);
+    this.d.db
+      .prepare(
+        `INSERT INTO score_calibration (entity, lesson_id, entity_id, auto_verdict, human_verdict, score, score_parts, batch_id, at, source)
+         VALUES ('check', ?, ?, ?, ?, ?, ?, ?, ?, 'override')`,
+      )
+      .run(row?.lessonId ?? null, checkId, auto, human, sc?.score ?? null, JSON.stringify(sc?.parts ?? {}), batchId, at);
   }
 
   /** 人看过了：清掉待复查（原因留在历史里）。 */

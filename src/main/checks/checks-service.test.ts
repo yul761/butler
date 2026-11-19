@@ -225,3 +225,19 @@ describe("bypass and ignored-block stats (workstream F)", () => {
     expect(bt.bypasses(1, 0)).toEqual({ total: 1, how: { no_verify: 1 } });
   });
 });
+
+describe("mode change and undo listeners (workstream F)", () => {
+  it("reports real mode changes from bulk and edit, and every undo", () => {
+    const { svc, batches } = setup();
+    const seen: string[] = [];
+    svc.onModeChanged((e) => seen.push(`${e.mode}:${e.ids.join(",")}:${e.origin}`));
+    batches.onUndone((o, r) => seen.push(`undo:${o.kind}:${r.map((x) => x.id).join(",")}`));
+    const a = svc.save({ kind: "repo", slug: "acme/web" }, null, fp("foo", { mode: "shadow" })) as { ok: true; id: number };
+    const b = svc.save({ kind: "repo", slug: "acme/web" }, null, fp("bar", { mode: "enforce" })) as { ok: true; id: number };
+    const r = svc.bulk([a.id, b.id], "enforce", { origin: "auto", kind: "check_promote", summary: { n: 1 } });
+    svc.save({ kind: "repo", slug: "acme/web" }, b.id, fp("bar", { mode: "shadow" }));
+    svc.save({ kind: "repo", slug: "acme/web" }, b.id, fp("bar2", { mode: "shadow" }));
+    batches.undo(r.ok ? r.batchId! : 0);
+    expect(seen).toEqual([`enforce:${a.id}:auto`, `shadow:${b.id}:manual`, `undo:check_promote:${a.id}`]);
+  });
+});

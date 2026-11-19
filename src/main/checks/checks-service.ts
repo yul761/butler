@@ -52,6 +52,15 @@ const NOT_FOUND = { ok: false as const, reason: "not_found" };
 const newKey = () => `ck_${randomBytes(6).toString("hex")}`;
 
 /** checks 表的规范层（契约 4.2：全局 → 产品 → 仓库）和对它的所有改动（契约 4.4：每次一个可撤销的批次）。 */
+/** 检查的模式改了（工作流 F 的校准监听）。 */
+export interface CheckModeChange {
+  ids: number[];
+  mode: "shadow" | "enforce";
+  origin: BatchOrigin;
+  batchId: number;
+  at: number;
+}
+
 export class ChecksService {
   readonly repo: ChecksRepo;
   readonly resolver: LayeredResolver<Defs>;
@@ -213,6 +222,8 @@ export class ChecksService {
       (ctx) => this.saveIn(ctx, scope, id, v.value, { lessonId: opts.lessonId ?? null }),
     );
     if (typeof result !== "number") return result;
+    if (existing && outcome.batchId !== null && existing.mode !== v.value.mode)
+      this.emitMode({ ids: [existing.id], mode: v.value.mode, origin: opts.origin ?? "manual", batchId: outcome.batchId, at: now });
     return this.changed({ ok: true, batchId: outcome.batchId, affected: outcome.affected, id: result });
   }
 
@@ -324,20 +335,25 @@ export class ChecksService {
       },
     );
     if (outcome.batchId !== null && (op === "shadow" || op === "enforce"))
-      for (const fn of this.bulkListeners) {
-        try {
-          fn({ ids: unique.filter((id) => before.get(id) !== null && before.get(id) !== op), mode: op, origin: opts.origin ?? "manual", batchId: outcome.batchId, at: now });
-        } catch {
-          // 监听方的错不影响这次改动。
-        }
-      }
+      this.emitMode({ ids: unique.filter((id) => before.get(id) !== null && before.get(id) !== op), mode: op, origin: opts.origin ?? "manual", batchId: outcome.batchId, at: now });
     return this.changed({ ok: true, batchId: outcome.batchId, affected: outcome.affected });
   }
 
-  private readonly bulkListeners: ((e: { ids: number[]; mode: "shadow" | "enforce"; origin: BatchOrigin; batchId: number; at: number }) => void)[] = [];
-  /** 检查的模式被批量改了（工作流 F：人把刚自动升级 / 降级的检查改回去，记校准样本）。 */
-  onModeChanged(fn: (e: { ids: number[]; mode: "shadow" | "enforce"; origin: BatchOrigin; batchId: number; at: number }) => void): void {
-    this.bulkListeners.push(fn);
+  private readonly modeListeners: ((e: CheckModeChange) => void)[] = [];
+  /** 检查的模式被改了（批量或编辑；工作流 F：人把刚自动升级 / 降级的检查改回去，记校准样本）。 */
+  onModeChanged(fn: (e: CheckModeChange) => void): void {
+    this.modeListeners.push(fn);
+  }
+
+  private emitMode(e: CheckModeChange): void {
+    if (!e.ids.length) return;
+    for (const fn of this.modeListeners) {
+      try {
+        fn(e);
+      } catch {
+        // 监听方的错不影响这次改动。
+      }
+    }
   }
 
   /** 手动给规矩分类：能写成检查 / 只能是文字 / 清掉。一个批次。 */

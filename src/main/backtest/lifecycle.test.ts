@@ -253,3 +253,79 @@ describe("demotion (gate 7)", () => {
     expect(demotionOf({ ...row, mode: "shadow" }, s, { lessonId: 1, before: side(10, 0.8), after: side(12, 0.9) }, P)).toBeNull();
   });
 });
+
+describe("calibration samples (8.1)", () => {
+  const samples = (t: ReturnType<typeof setup>) =>
+    t.db.prepare(`SELECT entity, entity_id, auto_verdict, human_verdict, batch_id, source, score FROM score_calibration WHERE entity = 'check' ORDER BY entity_id, id`).all() as
+      { entity: string; entity_id: number; auto_verdict: string; human_verdict: string; batch_id: number | null; source: string; score: number | null }[];
+  const wire = (t: ReturnType<typeof setup>) => {
+    t.batches.onUndone((o, r) => t.life.batchUndone(o, r));
+    t.checks.onModeChanged((e) => t.life.modeChanged(e));
+  };
+
+  it("records a sample per check when an auto promotion is undone, and closes the notice", async () => {
+    const t = setup();
+    wire(t);
+    const a = t.save();
+    const b = t.save({ name: "no bar", params: { pattern: "bar" } });
+    t.hits(a, 6, 5);
+    t.hits(b, 6, 5);
+    const r = await t.life.tick();
+    expect(r.promoted).toHaveLength(2);
+    t.advance(1000);
+    t.batches.undo(r.promoteBatch!);
+    expect(samples(t)).toMatchObject([
+      { entity_id: a.id, auto_verdict: "promote", human_verdict: "shadow", batch_id: r.promoteBatch, source: "override" },
+      { entity_id: b.id, auto_verdict: "promote", human_verdict: "shadow" },
+    ]);
+    expect(samples(t)[0].score).toBeGreaterThan(0);
+    expect(t.repo.openEvents(0)).toEqual([]);
+    expect(t.repo.lifecycle(a.id)).toBeNull();
+  });
+
+  it("records a sample when an auto demotion is undone", async () => {
+    const t = setup();
+    wire(t);
+    const row = t.save();
+    t.hits(row, 6, 5);
+    await t.life.tick();
+    t.advance(1000);
+    const enforced = t.checks.repo.get(row.id)!;
+    t.hits(enforced, 6, 6);
+    t.repo.insertBypassLogs([0, 1, 2].map((i) => ({ key: `b${i}`, rec: { kind: "bypass" as const, checkId: row.id, checkKey: row.key, slug: "acme/web", file: "", line: null, how: "no_verify" as const, detail: "", session: "s", at: t.now() } })));
+    const r = await t.life.tick();
+    expect(r.demoted).toEqual([row.id]);
+    t.advance(1000);
+    t.batches.undo(r.demoteBatch!);
+    expect(samples(t)).toMatchObject([{ entity_id: row.id, auto_verdict: "demote", human_verdict: "enforce", batch_id: r.demoteBatch }]);
+    expect(t.checks.repo.get(row.id)?.mode).toBe("enforce");
+    // 撤销以后窗口从头算，不会马上又降。
+    expect((await t.life.tick()).demoted).toEqual([]);
+  });
+
+  it("records a sample when a person sets a promoted check back to shadow within 14 days, not later", async () => {
+    const t = setup();
+    wire(t);
+    const a = t.save();
+    const b = t.save({ name: "no bar", params: { pattern: "bar" } });
+    t.hits(a, 6, 5);
+    t.hits(b, 6, 5);
+    const r = await t.life.tick();
+    t.advance(3 * DAY);
+    t.checks.bulk([a.id], "shadow");
+    expect(samples(t)).toMatchObject([{ entity_id: a.id, auto_verdict: "promote", human_verdict: "shadow", batch_id: r.promoteBatch }]);
+    t.advance(20 * DAY);
+    t.checks.bulk([b.id], "shadow");
+    expect(samples(t)).toHaveLength(1);
+  });
+
+  it("ignores undo of other batches and auto mode changes", async () => {
+    const t = setup();
+    wire(t);
+    const row = t.save();
+    const r = t.checks.bulk([row.id], "enforce");
+    t.batches.undo(r.ok ? r.batchId! : 0);
+    t.checks.bulk([row.id], "enforce", { origin: "auto" });
+    expect(samples(t)).toEqual([]);
+  });
+});
