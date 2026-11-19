@@ -106,7 +106,7 @@ export const SETTING_DEFAULTS = {
   /** 定时清理 Butler 自己的 session 留下的孤儿进程（WS-M F）：1 开 0 关。 */
   orphanCleanup: "1",
   /** claude 进程的内存超过这么多 MB 就在下一个空闲点换新（WS-M G）；0 = 关。 */
-  refreshMemoryMb: "2048",
+  refreshMemoryMb: "0",
   /** 停着的 session 过一阵就休眠（WS-M B）：结束 claude 进程，有事要递时再 --resume。1 开 0 关（默认关）。 */
   hibernateEnabled: "0",
   /** 在等你（需要你、有没回答的 ask_user）多少分钟后休眠；0 = 这种不休眠。 */

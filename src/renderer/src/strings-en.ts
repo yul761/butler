@@ -1594,7 +1594,7 @@ export const EN: UiStrings = {
     orphanCleanup: "Clean up processes that sessions leave behind",
     orphanCleanupHelp: "Child processes (MCP, shells, watchers, dev servers and so on) that are still alive after their session ended are stopped and logged, but only ones Butler saw under its own sessions. Processes started by anything else are never touched. Leftovers from a Butler crash are cleaned up at the next start.",
     refreshMemoryMb: "Refresh a session when its claude process exceeds this many MB (0 = off)",
-    refreshMemoryMbHelp: "When the claude process itself (not MCP or other children) uses more than this, Butler refreshes the session the next time it stops: handoff, /clear, carry on. The minimum is 256.",
+    refreshMemoryMbHelp: "When the claude process itself (not MCP or other children) uses more than this, Butler refreshes the session the next time it stops: handoff, /clear, carry on. The minimum is 256. Off (0) by default; 2048 is a reasonable value.",
     tipsTitle: "Tips outside Butler's control",
     tips: {
       darwin: [

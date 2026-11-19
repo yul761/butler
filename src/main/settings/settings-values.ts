@@ -677,7 +677,7 @@ const MEMORY_MB_RE = /^\d{1,6}$/;
 /** 按内存换新的最低阈值：再低的话刚开的 claude 就超了。 */
 const MIN_REFRESH_MEMORY_MB = 256;
 
-/** 按内存换新的阈值（refreshMemoryMb，WS-M G）：0 = 关；存的值不合法时用默认的 2048。 */
+/** 按内存换新的阈值（refreshMemoryMb，WS-M G）：0 = 关（默认，工作流 R：什么都不配置时和 2.1.0 一样）；存的值不合法时用默认值。 */
 export function refreshMemoryMb(s: Pick<SettingsRepo, "get">): number {
   const t = s.get("refreshMemoryMb").trim();
   const n = Number(t);
