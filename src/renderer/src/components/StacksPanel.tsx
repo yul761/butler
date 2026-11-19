@@ -84,8 +84,8 @@ function StackCard({ stack: s, onOpenTicket }: { stack: StackView; onOpenTicket:
   );
 }
 
-/** 栈用到的对外动作（契约 4.8）：force push 走推送分支，开 PR 和 draft 走开 PR，改 PR 标题和描述（栈的位置、依赖行），总览走发 issue。 */
-const STACK_ACTIONS = ["branch_push", "pr_open", "pr_title_edit", "pr_description_edit", "issue_post"] as const;
+/** 栈用到的对外动作：rebase 后强推，第一次推一层，开 PR 和 draft，改 PR 标题和描述（栈的位置、依赖行），draft 的 label，总览发 issue。 */
+const STACK_ACTIONS = ["force_push", "branch_push", "pr_open", "pr_title_edit", "pr_description_edit", "pr_label", "issue_post"] as const;
 
 /** 设置 →「栈」：三层策略和用到的对外动作开关。 */
 export function StackSettings() {

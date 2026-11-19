@@ -266,6 +266,26 @@ describe.each<[string, StackRunMode | undefined]>([["--update-refs", undefined],
   });
 });
 
+describe("StackService bottom merged during a run", () => {
+  it("waits for the run in flight instead of promoting an un-rebased layer", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const head = w.mergeOnHub("a", "squash");
+    // tick 的 rebase 正在跑（还没看到合并）时 PR 合并了
+    const ticking = w.svc.rebaseNow(id);
+    await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+    await ticking;
+    expect(shape(w, "b")).toEqual({ count: 1, onTrunk: true });
+    // 合并后自己又跑了一次（正在跑的那次已经把 b 挪到了新的 main 上时是 noop），然后才开 PR
+    const last = w.repoT.lastRun(id)!;
+    expect(last.trigger).toBe("bottom_merged");
+    expect(["rebased", "noop"]).toContain(last.outcome);
+    const create = fake.calls.find((c) => c.fn === "prCreate")!.args[0] as CreatePr;
+    expect(create).toMatchObject({ base: "main", head: "b" });
+    expect(w.remoteTip("b")).toBe(w.tip("b"));
+  });
+});
+
 describe("StackService draft layers", () => {
   it("opens drafts with the prefix, label and depends line, and promotes them when their turn comes", async () => {
     const w = world();

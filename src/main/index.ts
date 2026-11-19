@@ -2708,6 +2708,9 @@ async function bootstrap(): Promise<void> {
   // 共享 MCP 开着就现在启动 hub，免得第一批 session 还在等它起来、先用了 stdio（WS-M H）。
   if (sharedMcpOn(settings) && existsSync(bundledHubPath())) mcpHub.start();
   const scheduleTimer = setInterval(() => void checkSchedule("tick"), TICK_MS);
+  // e2e 用：栈的 tick 另外按 BUTLER_STACKS_TICK_MS 跑（不用等整分钟的 schedule；没设时不跑）。
+  const stacksTickMs = Number(process.env.BUTLER_STACKS_TICK_MS) || 0;
+  const stacksTimer = stacksTickMs > 0 ? setInterval(() => void stackService.tick().catch((e: unknown) => logger("stacks: tick failed", e)), stacksTickMs) : null;
   // 度量汇总（ws-h）：启动一分钟后一次，之后每小时一次；整窗重算，幂等。
   const metricsRollup = new MetricsRollup({
     db, repo: metricsRepo, holds: gateRepo, registry: () => routing.config().registry, record: recordEvent,
@@ -2752,6 +2755,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(discoveryTimer);
     clearInterval(refreshTimer);
     clearInterval(scheduleTimer);
+    if (stacksTimer) clearInterval(stacksTimer);
     availability.dispose();
     notifier?.dispose();
     lessonsGate.dispose();

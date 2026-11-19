@@ -1928,7 +1928,7 @@ const ZH = {
     policyError: { unknown_key: "没有这个设置", bad_bool: "只能是开或关", bad_int: "超出范围", bad_enum: "不是可选的值", bad_label: "label 要 1–50 个字，不能有逗号和换行" } as Record<StackPolicyErrorCode, string>,
     badValue: (key: string, why: string) => `${key}：${why}`,
     externalTitle: "栈用到的对外动作",
-    externalIntro: "force push 走「推送分支」，开 PR 和 draft 走「开 PR」，PR 标题里的栈位置和描述里的依赖行走「改 PR 标题」「改 PR 描述」，epic 总览走「发 issue」。关着时 Butler 只改本地分支，在栈上标出没推的层。",
+    externalIntro: "rebase 后推上去走「强推」，第一次推一层走「推送分支」，开 PR 和 draft 走「开 PR」，PR 标题里的栈位置和描述里的依赖行走「改 PR 标题」「改 PR 描述」，draft 的 label 走「加减 PR label」，epic 总览走「发 issue」。关着时 Butler 只改本地分支，在栈上标出没推的层。",
   },
   lp: {
     title: "评论与 CI",

@@ -505,7 +505,7 @@ Butler 可以替你判待确认的规矩。判的时候，对一个仓库、一�
 
 ## 对外动作
 
-有些功能会让 Butler 代你在本机以外留下东西，比如在 PR 评论下回复。现在用到的是导出成仓库规则的**推送分支**和**开 PR**，以及[评论与 CI](#评论与-ci) 的**回复 review 评论**、**标记评论已解决**和**重跑 CI**，其余的开关等之后的功能接入时才生效。每一种动作在 **设置 → 对外动作** 里有自己的开关，默认全关。开关关着时 Butler 不做这个动作，只记一条"跳过"。做了的、失败的、跳过的动作都列在 **审计** 页的 **对外动作** 里，写着仓库、ticket、目标和发了什么，保留时间和 `auditRetentionDays` 一样。**推送通知** 由[通知](#通知)使用。
+有些功能会让 Butler 代你在本机以外留下东西，比如在 PR 评论下回复。现在用到的是导出成仓库规则的**推送分支**和**开 PR**，以及[评论与 CI](#评论与-ci) 的**回复 review 评论**、**标记评论已解决**和**重跑 CI**，[栈](#栈)的**强推（force push）**、**推送分支**、**开 PR**、**改 PR 标题**、**改 PR 描述**、**加减 PR label**和**发 issue**，其余的开关等之后的功能接入时才生效。每一种动作在 **设置 → 对外动作** 里有自己的开关，默认全关。开关关着时 Butler 不做这个动作，只记一条"跳过"。做了的、失败的、跳过的动作都列在 **审计** 页的 **对外动作** 里，写着仓库、ticket、目标和发了什么，保留时间和 `auditRetentionDays` 一样。**推送通知** 由[通知](#通知)使用。
 
 | 设置 | 键 | 默认值 | 允许做什么 |
 |------|----|--------|------------|
@@ -683,7 +683,7 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 
 「进度」页和 feature、epic 的「PR 进度」标签里有「栈」一块：从上到下列出每一层的状态、PR、落后 trunk 几个提交、有没有改写过还没推，还有最近一次 rebase 的结果，以及马上 rebase、从备份恢复、开或关 draft、不再管这个栈（分支和 PR 不动）这几个按钮。
 
-策略在「设置 → 栈」，和[评论与 CI](#评论与-ci)一样分全局、产品、仓库三层。`autoRebase` 是总开关，默认关；关着时 Butler 只看不动。推送改写过的分支（用 `--force-with-lease`）要[对外动作](#对外动作)里的 `externalBranchPush`，开 PR 和 draft 要 `externalPrOpen`，往 PR 标题里写栈的位置、往描述里写依赖行要 `externalPrTitleEdit` 和 `externalPrDescriptionEdit`，总览 issue 要 `externalIssuePost`。这些关着时 Butler 只改本地分支，并标出没推的层。
+策略在「设置 → 栈」，和[评论与 CI](#评论与-ci)一样分全局、产品、仓库三层。`autoRebase` 是总开关，默认关；关着时 Butler 只看不动。rebase 后推上去（用 `--force-with-lease`）要[对外动作](#对外动作)里的 `externalForcePush`，第一次推一层要 `externalBranchPush`，开 PR 和 draft 要 `externalPrOpen`，往 PR 标题里写栈的位置、往描述里写依赖行要 `externalPrTitleEdit` 和 `externalPrDescriptionEdit`，draft 的 label 要 `externalPrLabel`，总览 issue 要 `externalIssuePost`。这些关着时 Butler 只改本地分支，并标出没推的层。
 
 | 键 | 默认 | 取值 | 作用 |
 |----|------|------|------|

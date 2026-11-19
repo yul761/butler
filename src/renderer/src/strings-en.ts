@@ -1910,7 +1910,7 @@ export const EN: UiStrings = {
     policyError: { unknown_key: "no such setting", bad_bool: "must be on or off", bad_int: "out of range", bad_enum: "not one of the choices", bad_label: "a label needs 1–50 characters with no commas or line breaks" } as Record<StackPolicyErrorCode, string>,
     badValue: (key: string, why: string) => `${key}: ${why}`,
     externalTitle: "Outward actions stacks use",
-    externalIntro: "Force pushes go through \"Push branches\", PRs and drafts through \"Open PRs\", the stack position in PR titles and the depends line in descriptions through \"Edit PR titles\" and \"Edit PR descriptions\", and the epic overview through \"Post issues\". With them off, Butler only changes local branches and marks the layers it did not push.",
+    externalIntro: "Pushing after a rebase goes through \"Force push\", pushing a layer for the first time through \"Push branches\", PRs and drafts through \"Open PRs\", the stack position in PR titles and the depends line in descriptions through \"Edit PR titles\" and \"Edit PR descriptions\", the draft label through \"Add or remove PR labels\", and the epic overview through \"Post issues\". With them off, Butler only changes local branches and marks the layers it did not push.",
   },
   lp: {
     title: "Comments & CI",

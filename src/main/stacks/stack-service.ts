@@ -122,6 +122,10 @@ const sha7 = (s: string | null) => (s ? s.slice(0, 7) : "");
 
 export class StackService {
   private readonly running = new Set<number>();
+  /** 等某个栈跑完的（onMerged 碰上 tick 正在跑时）。 */
+  private readonly idleWaiters = new Map<number, (() => void)[]>();
+  /** 「远端还没更新，先不开」已经记过日志的（层 id:本地:远端），每个 tick 都会重试，不重复记。 */
+  private readonly notPromotedLogged = new Set<string>();
   private readonly fetching = new Map<string, Promise<void>>();
   private readonly lastFetch = new Map<string, number>();
   private lastDetect = 0;
@@ -277,9 +281,21 @@ export class StackService {
       this.d.repo.recordRepeatable(stack.id, trigger, "failed", (e as Error).message);
       return this.d.repo.lastRun(stack.id);
     } finally {
-      this.running.delete(stack.id);
+      this.release(stack.id);
       this.changed();
     }
+  }
+
+  private release(id: number): void {
+    this.running.delete(id);
+    const w = this.idleWaiters.get(id);
+    this.idleWaiters.delete(id);
+    for (const f of w ?? []) f();
+  }
+
+  /** 这个栈正在跑（tick 的 rebase、恢复）：等它跑完。 */
+  private async whenIdle(id: number): Promise<void> {
+    while (this.running.has(id)) await new Promise<void>((r) => this.idleWaiters.set(id, [...(this.idleWaiters.get(id) ?? []), r]));
   }
 
   private async runLocked(stack0: StackRow, trigger: StackTrigger, o: RunOpts): Promise<RunRow | null> {
@@ -494,6 +510,8 @@ export class StackService {
     const trunkSha = (await remoteTip(stack.repoPath, stack.remote, stack.trunk)) ?? null;
     if (trunkSha) await this.mergeMethodOf(this.d.repo.get(stack.id)!, pr.headSha ?? layer.tipSha ?? "", trunkSha, policy, true);
     if (policy.autoRebase) {
+      // tick 正在跑这个栈时 run 会直接返回 null：先等它跑完，不然下一层没 rebase 就被开成 PR。
+      await this.whenIdle(stack.id);
       const run = await this.run(this.d.repo.get(stack.id)!, "bottom_merged");
       if (run && run.outcome !== "rebased" && run.outcome !== "noop") return;
     }
@@ -531,7 +549,11 @@ export class StackService {
     const remote = await remoteTip(repo, stack.remote, layer.branch);
     if (remote && tip && remote !== tip) {
       // 改写后还没推上去（force_push 关着）：远端的内容不对，先不开
-      this.d.log(`stacks: not promoting ${layer.branch}: the remote branch is not up to date`);
+      const k = `${layer.id}:${tip}:${remote}`;
+      if (!this.notPromotedLogged.has(k)) {
+        this.notPromotedLogged.add(k);
+        this.d.log(`stacks: not promoting ${layer.branch}: the remote branch is not up to date`);
+      }
       return;
     }
     const all = this.d.repo.layers(stack.id);
@@ -714,7 +736,7 @@ export class StackService {
       this.d.repo.finishRun(runId, { outcome: "restored", detail: { layers: res.layers, pushed: res.pushed, unpushed: res.unpushed, restoredFrom: from.id } });
       return { ok: true };
     } finally {
-      this.running.delete(stackId);
+      this.release(stackId);
       this.changed();
     }
   }
