@@ -68,3 +68,28 @@ describe("parseLessonFilter", () => {
     expect(isEmptyLessonFilter({ minHits: 0 })).toBe(false);
   });
 });
+
+describe("verifiability and untested filters (workstream F)", () => {
+  const part = (value: number) => ({ value, reason: "" });
+  const tested = lesson({ checkability: "checkable", scoreParts: { verifiability: part(0.8) } });
+  const untested = lesson({ checkability: "checkable", scoreParts: { cap: part(0.69) } });
+  const prose = lesson({ checkability: "prose" });
+
+  it("filters on the verifiability part and on having a backtest", () => {
+    expect(matchesLessonFilter(tested, { minVerifiability: 0.7 })).toBe(true);
+    expect(matchesLessonFilter(tested, { minVerifiability: 0.9 })).toBe(false);
+    expect(matchesLessonFilter(tested, { maxVerifiability: 0.5 })).toBe(false);
+    expect(matchesLessonFilter(untested, { minVerifiability: 0 })).toBe(false);
+    expect(matchesLessonFilter(untested, { untested: true })).toBe(true);
+    expect(matchesLessonFilter(tested, { untested: true })).toBe(false);
+    expect(matchesLessonFilter(prose, { untested: true })).toBe(false);
+    expect(matchesLessonFilter(tested, { untested: false })).toBe(true);
+    expect(matchesLessonFilter(untested, { untested: false })).toBe(false);
+  });
+
+  it("parses the new keys and rejects bad values", () => {
+    expect(parseLessonFilter({ minVerifiability: 0.2, maxVerifiability: 1, untested: true })).toEqual({ minVerifiability: 0.2, maxVerifiability: 1, untested: true });
+    expect(() => parseLessonFilter({ minVerifiability: 2 })).toThrow();
+    expect(() => parseLessonFilter({ untested: "yes" })).toThrow();
+  });
+});

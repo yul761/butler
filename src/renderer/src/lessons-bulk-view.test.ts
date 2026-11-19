@@ -29,6 +29,7 @@ describe("bulk filter and counts", () => {
     expect(bulkFilter({ slug: "o/web" }, EMPTY_BULK_FILTER)).toEqual({ slug: "o/web" });
     expect(bulkFilter({}, { ...EMPTY_BULK_FILTER, status: ["pending"], text: "  x ", minScore: "0.4", degradedOnly: true })).toEqual({ status: ["pending"], text: "x", minScore: 0.4, degraded: true });
     expect(bulkFilter({}, { ...EMPTY_BULK_FILTER, minScore: "2" })).toEqual({});
+    expect(bulkFilter({}, { ...EMPTY_BULK_FILTER, minVerifiability: "0.5", maxVerifiability: "x", untestedOnly: true })).toEqual({ minVerifiability: 0.5, untested: true });
     expect(bulkFilter({}, { ...EMPTY_BULK_FILTER, minScore: "abc" })).toEqual({});
   });
 

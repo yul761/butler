@@ -161,6 +161,12 @@ export function LessonBulkBar({ lessons, base, scopeLabel, onNotice }: {
         <input aria-label={S.bulkFilterMaxScore} placeholder={S.bulkFilterMaxScore} inputMode="decimal" className="bulk-score" data-testid="bulk-max-score" value={ui.maxScore} onChange={(e) => edit({ maxScore: e.target.value })} />
         <input aria-label={S.bulkFilterMinHits} placeholder={S.bulkFilterMinHits} inputMode="numeric" className="bulk-score" data-testid="bulk-min-hits" value={ui.minHits} onChange={(e) => edit({ minHits: e.target.value })} />
         <input aria-label={S.bulkFilterBatch} placeholder={S.bulkFilterBatch} inputMode="numeric" className="bulk-score" data-testid="bulk-batch" value={ui.batchId} onChange={(e) => edit({ batchId: e.target.value })} />
+        <input aria-label={S.bulkFilterMinVerifiability} placeholder={S.bulkFilterMinVerifiability} inputMode="decimal" className="bulk-score" data-testid="bulk-min-verifiability" value={ui.minVerifiability} onChange={(e) => edit({ minVerifiability: e.target.value })} />
+        <input aria-label={S.bulkFilterMaxVerifiability} placeholder={S.bulkFilterMaxVerifiability} inputMode="decimal" className="bulk-score" data-testid="bulk-max-verifiability" value={ui.maxVerifiability} onChange={(e) => edit({ maxVerifiability: e.target.value })} />
+        <label className="inline">
+          <input type="checkbox" data-testid="bulk-untested" checked={ui.untestedOnly} onChange={(e) => edit({ untestedOnly: e.target.checked })} />
+          {S.bulkFilterUntested}
+        </label>
         <label className="inline">
           <input type="checkbox" data-testid="bulk-degraded" checked={ui.degradedOnly} onChange={(e) => edit({ degradedOnly: e.target.checked })} />
           {S.bulkFilterDegraded}
