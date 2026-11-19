@@ -133,7 +133,7 @@ macOS 上的可用内存按 Activity Monitor 的算法从 `vm_stat` 算：总量
 | 记录每个 session 用了多少内存 | `memoryMonitor` | `1`（开） | `1` 或 `0`。Butler 每分钟读一次进程表（macOS 用 `ps`，Windows 用 `Get-CimInstance Win32_Process`，不调用任何模型），把每个开着的 session 的整棵进程树（claude、它的 MCP server、shell、watcher、dev server）和 Butler 自己的进程加起来，再读系统还有多少可用内存。**现在**页每一行上显示最近一次的读数（悬停看明细），最上面有一行**内存**：Butler、session、系统可用、Butler 的 MCP，展开后有最近 24 小时的曲线。每 5 分钟往 Butler 的数据库存一个点，保留 14 天。只读，不动任何进程。 |
 | 降低看不见又停着的 session 的优先级 | `backgroundPriority` | `0`（关） | `1` 或 `0`。macOS 上，不在屏幕上、又停着的 session，整棵进程树被设成后台（`taskpolicy -b`）。Windows 上，看不见的 session 设成 `BelowNormal`，又停着的再打开 EcoQoS。终端出现在屏幕上、你在里面打字、或者 session 又开始干活，马上恢复；退出 Butler 时全部恢复。macOS 上正在干活的 session 不降：后台优先级会把编译和测试拖得很慢。 |
 | 清理 session 留下的孤儿进程 | `orphanCleanup` | `1`（开） | `1` 或 `0`。Butler 记着它在每个 session 下面见过哪些进程（`~/.butler/procs/owned.json`，带启动时间和命令行）。session 的终端结束 5 秒后，其中还活着、又不在任何开着的 session 下面的，会被结束：先正常结束，5 秒后还在就强制结束（Windows 上先 `taskkill`，再 `taskkill /F`；每个进程单独核对、单独结束，不用 `/T`）。启动时也会清掉 Butler 上次异常退出留下的。启动时间或命令行对不上的（比如 pid 被别的程序重用了）绝不碰。每结束一个都写进日志。 |
-| claude 进程超过多少 MB 就换新（0 = 关） | `refreshMemoryMb` | `2048` | `0` 关掉，否则是不小于 256 的整数 MB（最多 6 位）。只算 claude 进程自己，不算它的 MCP server 和别的子进程。超过以后，Butler 在这个 session 下一次停下来的时候换新，检查和步骤和 `refreshThresholdTokens` 一样（所以要开着记忆）。换新以后 claude 还在阈值的 80% 以上，Butler 写进日志；6 小时以后再试。 |
+| claude 进程超过多少 MB 就换新（0 = 关） | `refreshMemoryMb` | `0` | 默认关，session 只按 `refreshThresholdTokens` 换新，和 2.1.0 一样；想打开的话 `2048` 是个合适的值。`0` 关掉，否则是不小于 256 的整数 MB（最多 6 位）。只算 claude 进程自己，不算它的 MCP server 和别的子进程。超过以后，Butler 在这个 session 下一次停下来的时候换新，检查和步骤和 `refreshThresholdTokens` 一样（所以要开着记忆）。换新以后 claude 还在阈值的 80% 以上，Butler 写进日志；6 小时以后再试。 |
 | 停着的 session 休眠 | `hibernateEnabled` | `0`（关） | `1` 或 `0`。Butler 开的 session 停够了下面的分钟数，Butler 就结束它的整棵进程树（claude、MCP server、shell，`hibernateEndWatchers` 开着时还有 watcher），只留下对话记录，按钮上显示「休眠」。有东西要送进去时它用 `claude --resume` 醒来，原来的对话都在：CI 的结论、合并通知、给总控的汇报、你对 `ask_user` 的回答。点开它、切到它的终端也会唤醒。下面这些情况不休眠：正在干活或者有后台命令、屏幕上有权限确认或对话框、输入框里有草稿、30 秒内在终端里打过字、正在换新或者正在给它递东西、是你正在看的终端、是总控而它管的子 session 在干活、2 分钟内刚打开或者 10 分钟内刚唤醒、没有对话记录、被钉住（按钮上的 📌）。修复 session 和复盘分析 session 不休眠。休眠的 session 照样算进每个 ticket、每个 feature 的 session 上限，照样显示在「现在」页，照样算在等你。唤醒失败的，按钮上有个 **!**（原因在悬停提示里），并且一直留在「现在」页，直到你点开或者隐藏它。会过去的失败（ticket 正忙、找不到 claude、仓库在别的分支上）保留休眠，10 分钟后再自动唤醒；别的失败（claude 还没起来就退出了，或者 60 秒没起来）变成普通的关着的 session。你自己点开总会再试一次。不限制同时开的 session 数。 |
 | 等你的 session 多少分钟后休眠 | `hibernateYouMinutes` | `30` | `0`（不休眠）或不小于 `5` 的整数（最多 5 位）。「等你」是「现在」页说它需要你，或者有没回答的 `ask_user`。 |
 | 等 CI 的 session 多少分钟后休眠 | `hibernateCiMinutes` | `20` | 同上。等 CI：它的 PR（或者分支）的 CI 在跑，或者排在合并总控里。 |
@@ -289,6 +289,8 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 
 数字每小时从本地事件汇总一次；打开页面时，上次汇总超过 10 分钟就再汇总一次。电脑睡着的时间不算等待。
 
+这些对比从哪天算起存在三个内部键里，都不直接编辑：`metricsSince` 是 Butler 开始记度量的时间，`metricsBaselineCutoff` 是固定下来的基线截止点（你第一个 Butler session 的时间），`skillTrackingSince` 是 hook 开始记 review 和 design 这类 skill 的时间，之前的 PR 不算没做。
+
 ## 花费上限与后台任务
 
 **设置 → 花费与后台**有两部分：session 和 ticket 的花费上限，以及后台任务什么时候可以跑。什么都不改时和 2.1.0 一样：没有上限，后台任务随时跑。
@@ -327,7 +329,7 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 | 额度充裕（%） | `bgPlentifulPercent` | 空 | 1 到 99。每个配额都用了不到这个比例时，后台任务在时段外、你在用电脑时也跑。空 = 不用。 |
 | 按种类改 | `bgKinds` | 空 | JSON 对象，种类 → `{"priority": ..., "window": ..., "paused": true}`。页面上的表格会替你写。 |
 
-页面上的表格列出每种后台任务、现在能不能跑和为什么不能（你停了、花费熔断、额度、给你让路、不在时段内），以及排队和在跑的数量。会开 session 的种类开之前还要过内存准入，不放行时就等着。**停用**让这一种停下，直到你恢复。
+页面上的表格列出每种后台任务、现在能不能跑和为什么不能（你停了、花费熔断、额度、给你让路、不在时段内），以及排队和在跑的数量。会开 session 的种类开之前还要过内存准入，不放行时就等着。**停用**让这一种停下，直到你恢复。「复盘准入」管自动准入（`lessonsAutoAdmit`）和每天的原则重新分组（`lessonsPrinciples`）：这一行不能跑时它们等着，过一会儿再看。仓库扫描只在你点了（或引导里）才跑，所以不在表里，这些设置也管不到它。
 
 ## 隐私与个人 API
 
@@ -366,9 +368,11 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 | 自动备份保留几个 | `configBackupKeep` | `10` | `1` 到 `999` 的整数。只留最新的几个自动备份；替换导入之前写的备份和**现在备份**按钮写的备份从不删除。 |
 | 多少天没导出就提醒（0 = 不提醒） | `configExportReminderDays` | `30` | `0`（不提醒）到 `365` 的整数。有已确认的规矩、而且这么多天里既没导出也没备份（从没有过就从第一条已确认规矩算起）时，导入导出标签页和规矩标签页会提醒。 |
 
+`configLastExportAt` 记的是上一次导出的时间，给这个提醒用；不直接编辑。
+
 ### 准入策略
 
-准入策略决定复盘流水线怎么给规矩打分、搁置、回测、影子运行和降级。每个键都能在三层设置：**全局**、**产品**、**仓库**。一个仓库先用自己的值，没有就用它所属产品的值，再没有用全局的值，最后用默认值；逐个键合并。一个仓库属于几个产品、这几个产品对同一个键设了不同的值时，名字排在最后的产品生效，**设置 → 复盘规矩 → 准入策略**会提示。每次改动都是一个可撤销的批次，并把策略版本加一（评分会记下用的是哪个版本）。这些默认值还没校准过，页面上会注明。
+准入策略决定复盘流水线怎么给规矩打分、搁置、回测、影子运行和降级。每个键都能在三层设置：**全局**、**产品**、**仓库**。一个仓库先用自己的值，没有就用它所属产品的值，再没有用全局的值，最后用默认值；逐个键合并。一个仓库属于几个产品、这几个产品对同一个键设了不同的值时，名字排在最后的产品生效，**设置 → 复盘规矩 → 准入策略**会提示。每次改动都是一个可撤销的批次，并把策略版本加一（评分会记下用的是哪个版本；当前版本存在 `admissionPolicyVersion` 里，不直接编辑）。这些默认值还没校准过，页面上会注明。
 
 | 键 | 默认值 | 取值 | 作用 |
 |----|--------|------|------|
@@ -538,7 +542,7 @@ Butler 能在你 review 之前先把一遍关。默认全是关着的或只读�
 
 **review 简报**是一页（改了什么、为什么，风险，核实过的证据，预审结论，建议重点看的文件，已知取舍）。默认只在 Butler 里看；「贴到 PR」把它写进 PR 描述的 `<!-- butler:brief -->` 块里（块以外的描述不动），记进审计。每次预审后自动贴是对外动作 `externalPrBriefPost`（见下一节）。
 
-就绪条件、证据要求和风险规则是三层策略（全局、产品、仓库），在设置页「预审和就绪」里改，跟着配置一起导出：`readiness.<条件>.enabled`、`readiness.descriptionMinChars`（80）、`evidence.require.<test|lint|typecheck|build>`（`auto` = 按仓库档案）、`evidence.rerun`（`all`、`fast` 或 `off`）、`evidence.rerunTimeoutSec`（600）、`risk.paths.<类别>`（额外的 glob，各层取并集加在内置列表上；`risk.paths.<类别>.builtin = false` 去掉内置列表，迁移类除外）、`risk.size.*` 和 `risk.types.*`（`label=类型`、`前缀=类型`、`类型=等级`）。
+就绪条件、证据要求和风险规则是三层策略（全局、产品、仓库），在设置页「预审和就绪」里改，跟着配置一起导出：`readiness.<条件>.enabled`、`readiness.descriptionMinChars`（80）、`readiness.shouldBlocks`（`false`；打开时预审干净但有「应该改」的发现也算预审没过）、`readiness.whatWords`、`readiness.whyWords` 和 `readiness.verifyWords`（另外算作讲了做什么、为什么、怎么验证的词，加在内置的词后面）、`evidence.require.<test|lint|typecheck|build>`（`auto` = 按仓库档案）、`evidence.rerun`（`all`、`fast` 或 `off`）、`evidence.rerunTimeoutSec`（600）、`risk.paths.<类别>`（额外的 glob，各层取并集加在内置列表上；`risk.paths.<类别>.builtin = false` 去掉内置列表，迁移类除外）、`risk.size.*` 和 `risk.types.*`（`label=类型`、`前缀=类型`、`类型=等级`）。
 
 ## 对外动作
 
@@ -550,7 +554,7 @@ Butler 能在你 review 之前先把一遍关。默认全是关着的或只读�
 | 标记评论已解决 | `externalCommentResolve` | `0`（关） | 把 PR 上的 review 讨论标成 resolved。 |
 | 改 PR 描述 | `externalPrDescriptionEdit` | `0`（关） | 改写 PR 的正文。 |
 | 加减 PR label | `externalPrLabel` | `0`（关） | 给 PR 加或去掉 label。 |
-| 开 PR | `externalPrOpen` | `0`（关） | 用 `gh` 新开 PR。 |
+| 开 PR | `externalPrOpen` | `0`（关） | 用 `gh` 新开 PR。栈里把 PR 的 base 改到 trunk、把 PR 标成 ready for review、把退回成普通分支的 draft 关掉，也归它管。 |
 | 推送分支 | `externalBranchPush` | `0`（关） | 把 Butler 建的分支（比如导出成仓库规则的分支）推到远端。 |
 | 改 PR 标题 | `externalPrTitleEdit` | `0`（关） | 改 PR 的标题。 |
 | 强推（force push） | `externalForcePush` | `0`（关） | 改写远端分支的历史。 |
@@ -709,7 +713,7 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 
 ### 效果页上的前后对比
 
-**效果** 页以这些功能第一次生效的时间为界（确认了一条权限规则，或者打开了选推荐项、默认答案、先查再问），比较前后各一段相同长度的整天（每段最多 30 天）；生效当天一半在前一半在后，不算在任何一边。每一边列出：合并的 Butler PR、每个 PR 的人介入次数和等人的时间、每天各类打断的次数、自动解决的打断、为卡住的 session 开的修复 session。一个都还没打开时，面板会说明从打开那天开始比较。权限档案自动解决的打断是在 session 停下时从它的 transcript 里数的，是一个上限：其中有些 Claude Code 本来也不会问。
+**效果** 页以这些功能第一次生效的时间为界（确认了一条权限规则，或者打开了选推荐项、默认答案、先查再问），比较前后各一段相同长度的整天（每段最多 30 天）；生效当天一半在前一半在后，不算在任何一边。每一边列出：合并的 Butler PR、每个 PR 的人介入次数和等人的时间、每天各类打断的次数、自动解决的打断、为卡住的 session 开的修复 session。一个都还没打开时，面板会说明从打开那天开始比较。第一次生效的时间只存一次，在 `interruptReductionSince` 里（不直接编辑）。权限档案自动解决的打断是在 session 停下时从它的 transcript 里数的，是一个上限：其中有些 Claude Code 本来也不会问。
 
 ## 栈
 

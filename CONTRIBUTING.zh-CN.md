@@ -73,6 +73,7 @@ E2E 测试是沙箱化的。每个测试都有自己的临时 `BUTLER_HOME`、`C
 - **测试从不调用真实的 LLM 服务商或真实的 `claude`，也从不读写真实的 `~/.butler` 或 `~/.claude`。** 用进程内的假服务商（`src/main/gateway/testing.ts`）、假 `claude` 的辅助工具（`src/main/test-utils.ts`、`e2e/fake-claude`）和临时文件夹。
 - **永远不要通过代码或测试改用户的 Claude Code 配置**，用户亲手点的 hook 安装除外。也就是说，不许 `claude mcp add`，不许 `claude config set`，诸如此类。记忆 MCP server 通过 `--mcp-config` 按 session 传入。
 - **数据库迁移只能追加**（`src/main/db/migrations.ts`）。
+- **新行为在用户打开之前都是关着的。**什么设置都不改的用户，看到的应该和上一个版本一样。往 GitHub 或别的外部服务写东西的，一律经过 `ExternalActions.attempt`（`src/main/external/actions.ts`），有自己的 `external*` 开关，默认关；每次尝试都记进审计日志。`src/main/db/settings-defaults-3.test.ts` 和 `e2e/defaults.spec.ts` 会检查。
 - **给用户看的文案**放在 `src/renderer/src/strings.ts`（中文界面）、`src/renderer/src/strings-en.ts`（英文界面）和 `src/main/strings.ts`（主进程，两种语言都在里面）。每条新文案都要两种语言都加上。
 - **文档成对出现。** `README.md`、`CONTRIBUTING.md` 和 `docs/configuration.md` 是英文的，每份都有一份文件名以 `.zh-CN.md` 结尾的中文版。在同一个 pull request 里两份一起改，并保持标题顺序一致。英文文档引用英文界面的标签，中文文档引用中文界面的标签，和文案表里写的完全一致。
 - 依赖的版本要精确锁定。

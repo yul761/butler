@@ -201,6 +201,59 @@ describe("WizardService", () => {
     expect(judge).toHaveBeenCalledTimes(2);
   });
 
+  it("judges again after a restart when the material came after stop() (or never got its pass)", async () => {
+    // 工作流 R（X1）：素材在 stop() 之后才到，或者重判之前 app 退出了：resume() 要把「没判完」的再判一遍，不能只看失败项。
+    let answer: GateAnswer = { kind: "pending" };
+    const s = build({ backtest: { assess: async () => answer } });
+    const c = s.lesson("no console calls in src", { sources: [{}, {}] });
+    const id = s.wizard.start({ kind: "repo", slug: "acme/web" });
+    await s.wizard.idle();
+    s.finishQueue();
+    await s.timers.fire();
+    await s.wizard.idle();
+    expect(s.wizard.view(id)).toMatchObject({ state: "awaiting_accept", summary: { unfinished: 1 } });
+
+    s.wizard.stop();
+    answer = { kind: "untested", reason: "no_gh" };
+    s.wizard.onMaterial(); // 停了以后到的通知没人接
+    const again = s.make();
+    again.resume();
+    await again.idle();
+    expect(again.view(id)).toMatchObject({ state: "awaiting_accept", summary: { unfinished: 0 } });
+    expect(again.verdicts(id).find((v) => v.lessonId === c)!.verdict).not.toBe("unfinished");
+  });
+
+  it("judges again after a restart even when the run has a failure that used up its retries", async () => {
+    let answer: GateAnswer = { kind: "pending" };
+    const s = build({ cluster: () => failed(), backtest: { assess: async () => answer } });
+    s.lesson("add a migration when the schema changes", { sources: [{}, {}] });
+    s.lesson("schema changes need a migration", { sources: [{}, {}] });
+    const c = s.lesson("no console calls in src", { sources: [{}, {}] });
+    s.finishQueue();
+    const id = s.wizard.start({ kind: "repo", slug: "acme/web" });
+    await s.wizard.idle();
+    s.finishQueue();
+    await s.timers.fire();
+    await s.wizard.idle();
+    for (let i = 0; i < WIZARD_MAX_ATTEMPTS; i++) {
+      s.clock.now += WIZARD_RETRY_MS[i];
+      await s.timers.fire();
+      await s.wizard.idle();
+    }
+    expect(s.wizard.view(id)).toMatchObject({ state: "awaiting_accept", failed: [{ retryAt: null }] });
+    expect(s.wizard.verdicts(id).find((v) => v.lessonId === c)!.verdict).toBe("unfinished");
+    const calls = s.fake.of("lesson_cluster").length;
+
+    s.wizard.stop();
+    answer = { kind: "untested", reason: "no_gh" };
+    const again = s.make();
+    again.resume();
+    await again.idle();
+    expect(again.verdicts(id).find((v) => v.lessonId === c)!.verdict).not.toBe("unfinished");
+    // 用完重试次数的那一项不会因为这一遍再调一次模型。
+    expect(s.fake.of("lesson_cluster")).toHaveLength(calls);
+  });
+
   it("stops retrying after the last attempt and lets the user retry by hand", async () => {
     const s = build({ cluster: () => failed() });
     s.lesson("add a migration when the schema changes", { sources: [{}, {}] });

@@ -23,6 +23,31 @@
 
 Butler 只支持 Claude Code。
 
+## 3.0.0 新增
+
+3.0.0 加了很多东西，几乎都要你打开才生效。升级后什么设置都不改，Butler 和 2.1.0 一样工作，只有两点不同：同时开几个 session 按剩余内存决定；另外多了几个只读的新页面。新功能都不会自己往 GitHub 写东西。每一项都链到[配置 Butler](docs/configuration.zh-CN.md)里对应的设置。
+
+- **模型路由**（[详情](docs/configuration.zh-CN.md#模型路由)）。你把模型登记成三档，Butler 的后台任务各用自己需要的那一档。一个模型撞了限额，任务就换下一个模型接着跑。用量配额和自动切换交互 session 的模型都是关着的。
+- **对外动作**（[详情](docs/configuration.zh-CN.md#对外动作)）。新增的会往 GitHub 写东西的动作各有一个开关，全都关着。每次尝试不管做没做，都记在审计页上。
+- **靠得住的复盘规矩**（[详情](docs/configuration.zh-CN.md#复盘规矩批量操作准入策略和导入导出)）：
+  - 能撤销的批量操作；
+  - 导入导出；
+  - 分全局、产品、仓库三层的准入策略；
+  - 评分和初始化向导；
+  - 用你过去的 PR 回测；
+  - 影子运行的检查，按证据升级或降级。
+  自动准入和自动升级都是关着的。
+- **检查**（[详情](docs/configuration.zh-CN.md#检查每次编辑都跑的确定性规则)）。每次编辑和 push 之前跑确定性规则。新检查先以影子模式运行，只提示。Butler 自己出了错时，编辑或 push 照样放行。
+- **仓库现状**（[详情](docs/configuration.zh-CN.md#仓库现状每个仓库自己已经在查什么)）。Butler 查出每个仓库自己已经在查什么，扫描现有代码，还能把一条规则导出成 lint。导出之后推上去、开 PR，要先打开对应的对外动作。
+- **预审、就绪和风险**（[详情](docs/configuration.zh-CN.md#预审就绪和风险)）。每个 PR 显示就绪情况和风险等级，只读。预审、完成证据和 review 简报都是关着的。
+- **效果页**（[详情](docs/configuration.zh-CN.md#效果页)）。只读的页面，把 Butler 的 PR 和基线比：周期、评论、人介入、花费、返工。
+- **评论与 CI**（[详情](docs/configuration.zh-CN.md#评论与-ci)）。Butler 可以把 review 评论送回 session，给 CI 失败分类，偶发的失败重跑一次。两样都是关着的。
+- **少打断你**（[详情](docs/configuration.zh-CN.md#打断与通知)）。权限档案、选推荐项的规则、默认答案、先查再问、详细通知，全都关着。
+- **栈**（[详情](docs/configuration.zh-CN.md#栈)）。一串分支，只有最底下那个有 PR。自动 rebase 关着；关着时 Butler 只看不动。
+- **花费上限与后台任务**（[详情](docs/configuration.zh-CN.md#花费上限与后台任务)）。每个 session、每个 ticket 的花费上限，以及后台任务能在什么时候跑。默认没有上限，后台任务随时都跑。
+- **内存与性能**（[详情](docs/configuration.zh-CN.md#内存与性能)）。Butler 记下每个 session 用了多少内存。休眠空闲的 session、内存紧张时让路、多个 session 共用 MCP 服务器、session 太大时刷新，全都关着。
+- **自动接活**（[详情](docs/configuration.zh-CN.md#自动接活)）。Butler 可以从来源拉 ticket，分类以后自动开工又小又清楚的那些。默认关着，也没有配来源。
+
 ## 功能
 
 - **以 ticket 为中心。** 每个 ticket 有自己的 worktree 或分支、自己的 Claude Code session（内嵌终端）、PR 状态和合并后的跟进事项。最近 7 天里你在 Butler 之外开的 session 会出现在 **未认领 session** 下，可以把它们挂到某个 ticket 上。一个 ticket 可以跨几个仓库（比如一个前端加一个后端）：建 ticket 时可以选仓库也可以不选，之后在 ticket 页上再加。每个仓库有自己的工作方式和分支，之后可以用 **编辑** 修改。新建 session 时会问你在哪个仓库里工作。正在运行的 session（包括总控开的）按钮旁边有个 ×：点两下就结束这个 session。它的对话会保留，再点按钮就能重新打开。没在运行的 session 也可以用同一个 × 隐藏，它只是从列表里拿掉（对话仍在），**已隐藏** 能把它找回来。Butler 开的 session 不会卡在 Claude Code 询问"要启用仓库 `.mcp.json` 里哪些 server"那一步：Butler 会替你启用，你之前在这个仓库里关掉的除外。**总控** session 运行在 ticket 的工作区文件夹（`~/.butler/workspaces/<ticket>`）里，通过 `--add-dir` 能看到所有仓库。一个 ticket 的所有 session 共享它的记忆。总控还有一个 `butler-sessions` MCP server，提供五个工具：

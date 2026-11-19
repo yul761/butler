@@ -184,6 +184,8 @@ export interface LifecycleDeps {
   trend(row: CheckRow, since: number): LessonCommentTrend | null;
   /** 影子期没人标的失败交给模型判（shadow_fp，按命中 id 缓存）；没给就只看人标的。 */
   judge?: (rule: { text: string; message: string }, hits: JudgeHit[]) => Promise<JudgeResult>;
+  /** 同一批样本只查缓存、不调模型（检查页用）；没给就只看人标的。 */
+  judgeCached?: (rule: { text: string; message: string }, hits: JudgeHit[]) => JudgeResult | null;
   /** 度量（H：check.promote / check.demote）。 */
   record?: (kind: string, data: Record<string, unknown>) => void;
   onChanged?: () => void;
@@ -305,6 +307,26 @@ export class Lifecycle {
     return { row, window, stats, score, performance, progress, fpRate, demotion };
   }
 
+  /**
+   * 检查页看的现状：和 assess 一样，只是影子误报率没算出来时，用复查判过、存在缓存里的模型判断（同一批样本）补上，
+   * 不再显示「—」和一个其实已经有答案的 fp 卡点（工作流 R，F1）。缓存里一条都没有就照旧是「没算」。不调模型。
+   */
+  assessForView(row: CheckRow, now = this.d.now()): CheckAssessment {
+    const a = this.assess(row, now);
+    if (a.fpRate !== null || !a.progress || !this.d.judgeCached || a.stats.fails === 0) return a;
+    const picked = this.shadowSample(row, a.window.since);
+    if (!picked.length) return a;
+    const j = this.d.judgeCached({ text: this.d.lessonText(row), message: row.message }, picked);
+    return j && j.judged > 0 ? this.assess(row, now, j) : a;
+  }
+
+  /** 没人标的影子失败里按种子抽的那 judgeSample 条（复查和检查页抽到的一样，缓存才对得上）。 */
+  private shadowSample(row: CheckRow, since: number): JudgeHit[] {
+    const fails = this.q.hits(row.id, since).filter((h) => h.outcome === "fail" && h.verdict === null);
+    const picked = seededSample(fails, num(this.d.policy(row), "backtest.judgeSample"), `${row.id}:${since}`);
+    return picked.map((h) => ({ key: `hit:${h.id}`, path: h.file, line: h.line ?? 0, text: h.detail, context: h.detail }));
+  }
+
   /** 影子误报率：人标的误报 + 没人标的失败按模型判的比例外推；要判却没判成的全算误报（保守）。 */
   private shadowFpRate(hits: readonly WindowHit[], s: WindowStats, judged: JudgeResult | null, p: AdmissionPolicy): number | null {
     if (s.fails === 0) return null;
@@ -320,14 +342,9 @@ export class Lifecycle {
   /** 没人标的影子失败：按种子抽 judgeSample 条，交给模型（缓存命中就不调）。 */
   private async judgeShadow(row: CheckRow, a: CheckAssessment): Promise<JudgeResult | null> {
     if (!this.d.judge) return null;
-    const p = this.d.policy(row);
-    const fails = this.q.hits(row.id, a.window.since).filter((h) => h.outcome === "fail" && h.verdict === null);
-    const picked = seededSample(fails, num(p, "backtest.judgeSample"), `${row.id}:${a.window.since}`);
+    const picked = this.shadowSample(row, a.window.since);
     if (!picked.length) return null;
-    return this.d.judge(
-      { text: this.d.lessonText(row), message: row.message },
-      picked.map((h) => ({ key: `hit:${h.id}`, path: h.file, line: h.line ?? 0, text: h.detail, context: h.detail })),
-    );
+    return this.d.judge({ text: this.d.lessonText(row), message: row.message }, picked);
   }
 
   /** 复查一次：重算分数、升级、降级 / 标记。 */

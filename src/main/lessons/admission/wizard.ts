@@ -293,13 +293,25 @@ export class WizardService {
     return { ok: true, runId: run.id, batchId: out.batchId, affected: out.affected };
   }
 
-  /** 启动时：做到一半的单元放回队列，没结束的运行接着做；等接受的有该重试的就排上。 */
+  /**
+   * 启动时：做到一半的单元放回队列，没结束的运行接着做；等接受的有该重试的就排上。
+   * 等接受、还有规矩没判完的（多半在等回测素材）：上次退出前素材可能已经到了、通知没人接（stop() 之后到的，
+   * 或者重判还没跑 app 就退了），这里再判一遍；素材还没有的话回测会再去拿，拿到后照常 onMaterial。
+   * 有还会重试的失败项的不在这里判：按退避排的那一遍会重判。重试次数用完的失败项不会再排，不挡这一遍。
+   */
   resume(): void {
     this.d.db.prepare(`UPDATE lesson_wizard_items SET status = 'queued' WHERE status = 'running'`).run();
     const live = WIZARD_LIVE_STATES.map(() => "?").join(",");
+    const unfinished = this.d.db.prepare(
+      `SELECT 1 FROM lesson_wizard_verdicts WHERE run_id = ?1 AND verdict = 'unfinished'
+         AND NOT EXISTS (SELECT 1 FROM lesson_wizard_items WHERE run_id = ?1 AND status = 'failed' AND kind <> 'pr'
+                           AND not_before IS NOT NULL AND attempts <= ?2) LIMIT 1`,
+    );
     for (const r of this.d.db.prepare(`SELECT id, state FROM lesson_wizard_runs WHERE state IN (${live}) ORDER BY id`).all(...WIZARD_LIVE_STATES) as { id: number; state: WizardState }[]) {
-      if (r.state === "awaiting_accept") this.scheduleRetry(Number(r.id));
-      else this.kick(Number(r.id));
+      const id = Number(r.id);
+      if (r.state !== "awaiting_accept") this.kick(id);
+      else if (unfinished.get(id, WIZARD_MAX_ATTEMPTS)) void this.serial(id, () => this.retryPass(id)).catch((e: unknown) => this.d.log?.(`lesson wizard ${id}: re-judging after a restart failed`, e));
+      else this.scheduleRetry(id);
     }
   }
 

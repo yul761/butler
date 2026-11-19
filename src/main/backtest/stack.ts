@@ -19,7 +19,7 @@ import { lessonCommentTrend } from "../review-effect/stats";
 import { BacktestService, type BacktestPayload } from "./service";
 import type { Evaluator } from "./evaluator";
 import type { BacktestGh, SourceRef } from "./material";
-import { judgeHits } from "./judge";
+import { cachedJudgments, judgeHits } from "./judge";
 import { Lifecycle } from "./lifecycle";
 import { ThresholdReview } from "./thresholds";
 import { backtestBatchMetrics } from "./batch-metrics";
@@ -124,6 +124,7 @@ export function createBacktestStack(d: BacktestStackDeps) {
     lessonText: (row) => lessonOf(row)?.text ?? row.message,
     trend: (row, since) => (row.lessonId === null ? null : lessonCommentTrend(d.db, { lessonId: row.lessonId, checkId: row.id, since })),
     judge: (rule, hits) => judgeHits({ run: d.run, judgments: d.judgments, lang: d.lang, cwd: d.fallbackCwd, now: d.now }, "shadow_fp", rule, hits),
+    judgeCached: (rule, hits) => cachedJudgments(d.judgments, "shadow_fp", rule, hits),
     record: d.record,
     onChanged: () => {
       d.onChecksChanged?.();
@@ -150,7 +151,7 @@ export function createBacktestStack(d: BacktestStackDeps) {
   const checkF = (row: CheckRow, stats: { bypassed: number; ignored: number }): CheckF => {
     let progress: CheckF["progress"] = null;
     try {
-      progress = lifecycle.assess(row).progress;
+      progress = lifecycle.assessForView(row).progress;
     } catch (e) {
       d.log?.(`backtest: progress of check ${row.id} failed`, e);
     }
@@ -224,7 +225,25 @@ export function createBacktestStack(d: BacktestStackDeps) {
   /** 启动：排上复查（已经排着就不重复）。 */
   const start = () => d.queue.enqueue("backtest", { op: "review" }, { dedupeKey: "review", notBefore: d.now() + 5 * 60_000 });
 
-  return { repo, service, lifecycle, thresholds, metrics, view, act, notices, start, handler: service.handler };
+  /**
+   * 复查靠自己延后来一直排着；被取消、失败（处理函数之外出的错）的那一刻就断了，原来要等重启才接上（工作流 R，F3）。
+   * 这里排上，之后每小时再排一次：还排着或在跑时按 dedupeKey 不重复，断了就接上。返回停掉它的函数。
+   */
+  const keepReviewing = (): (() => void) => {
+    const arm = () => {
+      try {
+        start();
+      } catch (e) {
+        d.log?.("backtest: scheduling the review failed", e);
+      }
+    };
+    arm();
+    const timer = setInterval(arm, REVIEW_INTERVAL_MS);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  };
+
+  return { repo, service, lifecycle, thresholds, metrics, view, act, notices, start, keepReviewing, handler: service.handler };
 }
 
 export type BacktestStack = ReturnType<typeof createBacktestStack>;

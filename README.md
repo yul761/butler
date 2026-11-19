@@ -23,6 +23,31 @@ Running several Claude Code sessions side by side, each in its own git worktree,
 
 Butler works with Claude Code only.
 
+## New in 3.0.0
+
+3.0.0 adds a lot, and almost all of it is off until you turn it on. If you change no settings after upgrading, Butler works as 2.1.0 did, with two exceptions: it decides how many sessions may run at once from the free memory, and it shows some new read-only pages. Nothing new writes to GitHub on its own. Each item links to its settings in [Configuring Butler](docs/configuration.md).
+
+- **Model routing** ([details](docs/configuration.md#model-routing)). You register models in three tiers, and Butler's background tasks use the tier each task needs. When a model hits a limit, the task moves on to the next model. Usage quotas and switching interactive sessions automatically are both off.
+- **Outward actions** ([details](docs/configuration.md#outward-actions)). Anything new that would write to GitHub has its own switch, and every switch is off. Butler records each attempt, run or not, on the Audit page.
+- **Lessons you can trust** ([details](docs/configuration.md#lessons-bulk-actions-admission-policy-and-import--export)):
+  - bulk actions you can undo;
+  - export and import;
+  - an admission policy with global, product and repository layers;
+  - scores and a setup wizard;
+  - backtests on your past PRs;
+  - shadow checks that are promoted or demoted on evidence.
+  Automatic admission and automatic promotion are off.
+- **Checks** ([details](docs/configuration.md#checks-deterministic-rules-on-every-edit)). Deterministic rules run at each edit and before a push. New checks start in shadow mode, which only hints. If Butler itself fails, the edit or push goes through.
+- **Repo baseline** ([details](docs/configuration.md#repo-baseline-what-each-repository-already-checks)). Butler finds out what each repository already checks, scans existing code and can export a rule as lint. Pushing the export or opening a PR for it needs the matching outward action.
+- **Pre-review, readiness and risk** ([details](docs/configuration.md#pre-review-readiness-and-risk)). Each PR shows its readiness and risk level, read-only. Pre-review, completion evidence and the review brief are off.
+- **Effect page** ([details](docs/configuration.md#effect-page)). A read-only page that compares Butler's PRs with a baseline, covering cycle time, comments, interventions, cost and rework.
+- **Comments and CI** ([details](docs/configuration.md#comments-and-ci)). Butler can send review comments back to the session and sort CI failures, rerunning flaky ones. Both are off.
+- **Fewer interruptions** ([details](docs/configuration.md#interruptions-and-notifications)). A permission profile, a rule for picking the recommended option, default answers, "look before asking" and detailed notifications. All are off.
+- **Stacks** ([details](docs/configuration.md#stacks)). Chains of branches where only the bottom one has a PR. Automatic rebase is off; with it off, Butler only watches.
+- **Spend caps and background work** ([details](docs/configuration.md#spend-caps-and-background-work)). Caps per session and per ticket, and limits on when background work may run. By default there are no caps and background work runs at any time.
+- **Memory and performance** ([details](docs/configuration.md#memory-and-performance)). Butler records the memory each session uses. Hibernating idle sessions, reacting to memory pressure, sharing MCP servers between sessions and refreshing a session when it grows large are all off.
+- **Automatic intake** ([details](docs/configuration.md#automatic-intake)). Butler can pull tickets from a source, sort them and start the small, clear ones. It is off and has no source.
+
 ## What it does
 
 - **Tickets first.** Each ticket has its worktree or branch, its Claude Code sessions (embedded terminals), its PR state and its after-merge follow-ups. Sessions you started outside Butler in the last 7 days show up under **Unclaimed sessions**, so you can attach them to a ticket. A ticket can span several repos (say, a frontend and a backend): create it with or without a repo, then add more on the ticket page. Each repo has its own work mode and branch, and **Edit** changes them later. A new session asks which repo to work in. A running session, including one a coordinator started, has an × next to its button: click it twice to end that session. Its conversation is kept, and clicking the button opens it again. A session that is not running can be hidden with the same ×. It only leaves the list (its conversation is kept), and **Hidden** brings it back. Sessions that Butler opens do not stop at Claude Code's question about which servers from a repo's `.mcp.json` to enable: Butler enables them, except the ones you turned off in that repo before. A **coordinator** session runs in the ticket's workspace folder (`~/.butler/workspaces/<ticket>`) and sees every repo through `--add-dir`. All sessions of a ticket share its memory. The coordinator also gets a `butler-sessions` MCP server with five tools:

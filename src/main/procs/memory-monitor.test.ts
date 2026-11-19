@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MemorySamplesRepo } from "../db/memory-samples-repo";
 import { memDb } from "../test-utils";
 import { MemoryMonitor, type MemoryMonitorDeps, type MonitorSample } from "./memory-monitor";
@@ -154,5 +154,41 @@ describe("MemoryMonitor", () => {
     expect(await first).not.toBeNull();
     expect(calls).toBe(1);
     expect(logs).toContain("memory sample hook failed");
+  });
+
+  it("samples again shortly after a terminal opens or exits, once for a burst, and after a sample that was running", async () => {
+    vi.useFakeTimers();
+    try {
+      let release: () => void = () => {};
+      let gate: Promise<void> | null = null;
+      let reads = 0;
+      const { m } = setup({ readTable: async () => { reads++; if (gate) await gate; return parsePsTable(PS); } });
+      m.soon(3_000);
+      m.soon(3_000);
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(reads).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(reads).toBe(1);
+      expect(m.snapshot()?.sessions).toBe(2);
+      // 一次采样正在跑（比如每分钟那次刚开始读进程表）：它可能在终端开之前就读了表，所以跑完再补一次。
+      gate = new Promise<void>((r) => (release = r));
+      const running = m.tick();
+      await vi.advanceTimersByTimeAsync(0);
+      m.soon(10);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(reads).toBe(2);
+      gate = null;
+      release();
+      await running;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reads).toBe(3);
+      // 停了以后不再补采。
+      m.soon(10);
+      m.stop();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(reads).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

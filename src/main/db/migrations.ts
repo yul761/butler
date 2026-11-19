@@ -1312,4 +1312,10 @@ export const MIGRATIONS: string[] = [
     updated_at INTEGER NOT NULL);
   CREATE UNIQUE INDEX intake_policies_scope ON intake_policies (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''));
   `,
+  // 工作流 R：外部通知「推哪些事件」存过的人（工作流 J 加了这个设置，N 后来加了 intake_decision）也收到新事件。
+  // 存的是空串表示一个都不要，不动；没存过的走默认值，也不动。
+  `
+  UPDATE settings SET value = value || ',intake_decision'
+    WHERE key = 'notifyEvents' AND value <> '' AND (',' || value || ',') NOT LIKE '%,intake_decision,%';
+  `,
 ];

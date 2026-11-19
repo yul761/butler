@@ -50,7 +50,9 @@ export interface ProcServices {
   terminalActive(termId: string): void;
   /** 主窗口又出现在屏幕上（show / restore）：看得见的终端马上恢复优先级。 */
   windowShown(): void;
-  /** 终端结束：清它留下的孤儿。 */
+  /** 终端开了：过一会儿补采一次内存（「现在」页的 session 数马上对上）。 */
+  terminalOpened(termId: string): void;
+  /** 终端结束：清它留下的孤儿，过一会儿补采一次内存。 */
   terminalExited(termId: string): void;
   /** 渲染进程里看得见这个终端（不管主窗口在不在屏幕上：休眠只看它）。 */
   isVisible(termId: string): boolean;
@@ -134,9 +136,11 @@ export function createProcServices(d: ProcServicesDeps): ProcServices {
       for (const termId of visible) restore(termId);
     },
     isVisible: (termId) => visible.has(termId),
+    terminalOpened: () => monitor.soon(),
     terminalExited: (termId) => {
       visible.delete(termId);
       void orphans.termExited(termId).catch((e: unknown) => d.log("orphan cleanup failed", e));
+      monitor.soon();
     },
     start: () => {
       void orphans.sweepAtStartup().catch((e: unknown) => d.log("orphan startup sweep failed", e));

@@ -199,7 +199,7 @@ import { IntakeService } from "./intake/intake-service";
 import { parseRepoMap } from "./intake/repo-map";
 import { fileSource, trackerSource, type IntakeSource } from "./intake/sources";
 import { classifyByModel } from "./intake/model";
-import { changedPaths } from "./intake/conflicts";
+import { activeInRepo, changedPaths } from "./intake/conflicts";
 import { classifyCiByModel } from "./loop/ci-model";
 import { CiTriage } from "./loop/ci-triage";
 import { CommentLoop } from "./loop/comment-loop";
@@ -576,6 +576,7 @@ async function bootstrap(): Promise<void> {
   let intakeEnded: (() => void) | null = null;
   const pty = new PtyManager(nodePtyFactory, {
     data: (id, data) => safeSend(IPC.ptyData, id, data),
+    opened: (id) => procs?.terminalOpened(id),
     exit: (id, code) => {
       safeSend(IPC.ptyExit, id, code);
       if (closing) return;
@@ -973,6 +974,7 @@ async function bootstrap(): Promise<void> {
     },
     lang: () => currentLang(), now: Date.now, fallbackCwd: () => paths.home, notify: () => notify(), log: logger,
     autoAdmitEnabled: () => settings.get("lessonsAutoAdmit") === "1",
+    gateOpen: () => bgScheduler.gate("lesson_admission").run,
   });
   checksService.onLessonClassified((id, before, after, reason) => void lessonAdmission.onClassified(id, before, after, reason));
   const admissionCtx = () => ({ run: (req: Parameters<typeof execHeadlessJson>[1]) => execHeadlessJson(judgeDeps, req), judgments: lessonJudgments, lang: () => currentLang(), now: Date.now, cwd: paths.home, gate: OPEN_GATE });
@@ -1438,7 +1440,8 @@ async function bootstrap(): Promise<void> {
     void stackService.tick().catch((e: unknown) => logger("stacks: tick failed", e));
     void stackService.dailyJob().catch((e: unknown) => logger("stacks: daily job failed", e));
     // 原则每天重新分组一次（设置 lessonsPrinciples）；规矩没变时读缓存，不调模型。
-    if (settings.get("lessonsPrinciples") === "1" && Date.now() - (Number(settings.get("lessonsPrinciplesRegroupedAt")) || 0) > 20 * 3600_000) {
+    // 走「规矩准入」的后台闸门：闸门关着这次不分，下一轮再看。
+    if (settings.get("lessonsPrinciples") === "1" && Date.now() - (Number(settings.get("lessonsPrinciplesRegroupedAt")) || 0) > 20 * 3600_000 && bgScheduler.gate("lesson_admission").run) {
       settings.set("lessonsPrinciplesRegroupedAt", String(Date.now()));
       void regroupPrinciples().catch((e: unknown) => logger("lessons: principles regroup failed", e));
     }
@@ -2327,16 +2330,15 @@ async function bootstrap(): Promise<void> {
     },
     costAllows: (key) => costBreaker?.allowBackground(key) ?? true,
     openTerminals: (key) => sessionService.openTerminalCount(key),
-    activeInRepo: async (repoPath) => {
-      const held = new Set(gateRepo.activeHolds().map((h) => h.ticketKey).filter((k): k is string => k !== null));
-      const out: { key: string; paths: string[] }[] = [];
-      for (const t of tickets.list()) {
-        const r = t.repos.find((x) => samePath(x.repoPath, repoPath));
-        if (!r || (sessionService.openTerminalCount(t.key) === 0 && !held.has(t.key))) continue;
-        out.push({ key: t.key, paths: await changedPaths(ticketService.workDir(r), git.git) });
-      }
-      return out;
-    },
+    activeInRepo: (repoPath) =>
+      activeInRepo(repoPath, {
+        tickets: () => tickets.list(),
+        openTerminalCount: (key) => sessionService.openTerminalCount(key),
+        heldTickets: () => gateRepo.activeHolds().map((h) => h.ticketKey),
+        workDir: (r) => ticketService.workDir(r),
+        changedPaths: (cwd) => changedPaths(cwd, git.git),
+        samePath,
+      }),
     sessionModel: (tier) => routing.sessionModel(tier),
     createTicket: async (i) => {
       try {
@@ -3139,11 +3141,7 @@ async function bootstrap(): Promise<void> {
   procServices.start();
   usageScanner.start(usageScanMs(process.env));
   bgScheduler.start();
-  try {
-    backtest.start();
-  } catch (e) {
-    logger("backtest: scheduling the review failed", e);
-  }
+  const stopBacktestReview = backtest.keepReviewing();
   bgQueue.start();
   // 预审（工作流 G）：上次没跑完、任务已经不在了的收尾；review 效果补上漏掉的已合并 PR。
   preReview.sweep((jobId) => {
@@ -3245,6 +3243,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(discoveryTimer);
     clearInterval(refreshTimer);
     clearInterval(intakeTimer);
+    stopBacktestReview();
     clearInterval(scheduleTimer);
     if (stacksTimer) clearInterval(stacksTimer);
     availability.dispose();

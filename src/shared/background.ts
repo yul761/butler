@@ -40,6 +40,10 @@ export interface BgKindDef {
   task: TaskId | null;
   /** 同时最多跑几个（通用队列用；复盘队列有自己的并发）。 */
   concurrency: number;
+  /**
+   * 设置页的后台任务表里列不列。只在你点了才跑的（仓库扫描）不列：时段、停用对它不起作用，列出来会让人以为能管住它。
+   */
+  listed: boolean;
 }
 
 const def = (kind: BgKind, owner: string, priority: BgPriority, task: TaskId | null, o: Partial<BgKindDef> = {}): BgKindDef => ({
@@ -49,6 +53,7 @@ const def = (kind: BgKind, owner: string, priority: BgPriority, task: TaskId | n
   resumable: o.resumable ?? true,
   opensSession: o.opensSession ?? false,
   concurrency: o.concurrency ?? 1,
+  listed: o.listed ?? true,
 });
 
 /** 后台任务登记表（设计 addendum 第 3.1 节）。新的后台任务在这里加一条，再用 BackgroundQueue.register 接上处理函数。 */
@@ -58,7 +63,8 @@ export const BACKGROUND_KINDS: Record<BgKind, BgKindDef> = {
   lesson_admission: def("lesson_admission", "D", "normal", "lesson_classify"),
   backtest: def("backtest", "F", "low", "backtest_judge"),
   pre_review: def("pre_review", "G", "high", "pre_review", { idleEligible: false }),
-  repo_scan: def("repo_scan", "wizard", "low", "repo_scan_infer"),
+  // 仓库扫描只在你点了（或引导里）才跑，不经后台闸门（工作流 R，L5）。
+  repo_scan: def("repo_scan", "wizard", "low", "repo_scan_infer", { listed: false }),
   intake: def("intake", "N", "high", "intake_classify", { idleEligible: false, interruptible: false, opensSession: true }),
 };
 

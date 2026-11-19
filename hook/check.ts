@@ -303,6 +303,7 @@ export function parseCheckArgs(argv: readonly string[]): CheckRunOptions {
   return Number.isFinite(n) && n > 0 ? { budgetMs: n } : {};
 }
 
+const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e)).slice(0, 2000);
 const budgetOf = (snapMs: number, o: CheckRunOptions) => (o.budgetMs === undefined ? snapMs : Math.min(snapMs, o.budgetMs));
 
 /**
@@ -352,105 +353,119 @@ export async function runCheck(stdin: string, env: NodeJS.ProcessEnv, d: CheckHo
   if (!rel || rel.startsWith("../")) return finishQuiet();
   const checks = checksFor(snap, slug).filter((c) => stageOf(c) === "edit" && inScope(rel, c.globs ?? [], c.excludeGlobs ?? []));
   if (!checks.length) return finishQuiet();
-  const after = d.isFile(file) ? d.readText(file) : null;
-  if (after === null) return finishQuiet();
-  const fails: Failure[] = [];
   const base = { slug, file: rel, stage: "edit" as const, session, at: started };
   const rec = (c: ResolvedCheck, r: Pick<Hit, "line" | "outcome" | "blocked" | "detail">): Hit => ({
     kind: "hit", checkId: c.id, checkKey: c.key, mode: c.mode, severity: c.severity, ...base, ...r, detail: r.detail.slice(0, 2000),
   });
-  const before = after.length <= MAX_CONTENT ? reconstructBefore(tool, input, payload.tool_response, after) : null;
-  const edited = editedLines(tool, input, after);
-  const lines = after.split("\n");
-  const added = addedLines(edited, before, lines);
-  const bypass = (c: ResolvedCheck, at: { line: number; text: string }) =>
-    records.push({ kind: "bypass", checkId: c.id, checkKey: c.key, slug, file: rel, line: at.line, how: "suppress", detail: at.text, session, at: started });
-  const base0 = { path: rel, ticketPattern: snap.ticketPattern };
-  const builtins = after.length <= MAX_CONTENT ? checks.filter((c) => c.type !== "run_command") : [];
-  const regexBudget = Math.min(REGEX_BUDGET_MS, budgetMs - (d.now() - started));
-  const test = builtins.length ? await precomputeRegexes(d, builtins, before === null ? [after] : [after, before], base0, regexBudget) : undefined;
-  const regexTimedOut = test === null;
-  const ctx = { ...base0, test: test ?? undefined };
-  for (const c of checks) {
-    const sk = `${c.key}\u0000${rel}`;
-    touched.add(sk);
-    try {
-      if (c.type === "run_command") {
-        // 这条命令上次在这个文件上拦过，这次编辑加了压制注释：记一次绕过（命令照样跑）。
-        const sup = enforced(c) && state.cmd[sk] && added ? suppressionNear(added, lines, null) : null;
-        if (sup) bypass(c, sup);
-        const budget = budgetMs - (d.now() - started);
-        const own = typeof c.params.timeoutMs === "number" ? c.params.timeoutMs : budget;
-        const r = await d.run({ command: String(c.params.command ?? ""), file: rel, cwd: root, timeoutMs: Math.min(budget, own), env });
-        if (r.kind === "pass") {
-          if (state.cmd[sk]) {
-            records.push(rec(c, { line: null, outcome: "resolved", blocked: false, detail: "" }));
-            delete state.cmd[sk];
-          }
-        } else if (r.kind === "fail") {
-          const h = createHash("sha256").update(r.output).digest("hex").slice(0, 16);
-          if (state.cmd[sk] === h) continue;
-          state.cmd[sk] = h;
-          const detail = tail(r.output.trim());
-          fails.push({ check: c, where: rel, detail });
-          records.push(rec(c, { line: null, outcome: "fail", blocked: enforced(c), detail }));
+  let flushed = false;
+  const editChecks = async (): Promise<string> => {
+    const after = d.isFile(file) ? d.readText(file) : null;
+    if (after === null) return finishQuiet();
+    const fails: Failure[] = [];
+    const before = after.length <= MAX_CONTENT ? reconstructBefore(tool, input, payload.tool_response, after) : null;
+    const edited = editedLines(tool, input, after);
+    const lines = after.split("\n");
+    const added = addedLines(edited, before, lines);
+    const bypass = (c: ResolvedCheck, at: { line: number; text: string }) =>
+      records.push({ kind: "bypass", checkId: c.id, checkKey: c.key, slug, file: rel, line: at.line, how: "suppress", detail: at.text, session, at: started });
+    const base0 = { path: rel, ticketPattern: snap.ticketPattern };
+    const builtins = after.length <= MAX_CONTENT ? checks.filter((c) => c.type !== "run_command") : [];
+    const regexBudget = Math.min(REGEX_BUDGET_MS, budgetMs - (d.now() - started));
+    const test = builtins.length ? await precomputeRegexes(d, builtins, before === null ? [after] : [after, before], base0, regexBudget) : undefined;
+    const regexTimedOut = test === null;
+    const ctx = { ...base0, test: test ?? undefined };
+    for (const c of checks) {
+      const sk = `${c.key}\u0000${rel}`;
+      touched.add(sk);
+      try {
+        if (c.type === "run_command") {
+          // 这条命令上次在这个文件上拦过，这次编辑加了压制注释：记一次绕过（命令照样跑）。
+          const sup = enforced(c) && state.cmd[sk] && added ? suppressionNear(added, lines, null) : null;
+          if (sup) bypass(c, sup);
+          const budget = budgetMs - (d.now() - started);
+          const own = typeof c.params.timeoutMs === "number" ? c.params.timeoutMs : budget;
+          const r = await d.run({ command: String(c.params.command ?? ""), file: rel, cwd: root, timeoutMs: Math.min(budget, own), env });
+          if (r.kind === "pass") {
+            if (state.cmd[sk]) {
+              records.push(rec(c, { line: null, outcome: "resolved", blocked: false, detail: "" }));
+              delete state.cmd[sk];
+            }
+          } else if (r.kind === "fail") {
+            const h = createHash("sha256").update(r.output).digest("hex").slice(0, 16);
+            if (state.cmd[sk] === h) continue;
+            state.cmd[sk] = h;
+            const detail = tail(r.output.trim());
+            fails.push({ check: c, where: rel, detail });
+            records.push(rec(c, { line: null, outcome: "fail", blocked: enforced(c), detail }));
+            if (enforced(c)) noteBlocked(state, c, slug, started);
+          } else if (r.kind === "timeout") records.push(rec(c, { line: null, outcome: "timeout", blocked: false, detail: tail(r.output.trim(), 500) }));
+          else records.push(rec(c, { line: null, outcome: "unavailable", blocked: false, detail: r.reason }));
+          continue;
+        }
+        if (after.length > MAX_CONTENT) continue;
+        if (regexTimedOut && regexNeeds(c, [], base0)) {
+          // 正则跑太久（多半是嵌套量词）：这次没检查成，放行，页面上算「没能检查」。
+          records.push(rec(c, { line: null, outcome: "timeout", blocked: false, detail: "regex took too long" }));
+          continue;
+        }
+        const now = evaluateBuiltin(c, after, ctx);
+        const was = before === null ? null : evaluateBuiltin(c, before, ctx);
+        const fresh = newViolations(was, now, before === null ? edited : null);
+        const nowFps = fingerprints(now);
+        // newViolations 返回的是 now 里的元素本身：按对象认出哪些是这次新增的，指纹用它们在当前文件里的那个。
+        const isFresh = new Set(fresh);
+        const freshFps = new Set(now.flatMap((v, i) => (isFresh.has(v) ? [nowFps[i]] : [])));
+        const reportedBefore = new Set(state.reported[sk] ?? []);
+        // 这条检查在这个文件上拦过，这次编辑在违规旁边（或同一行）加了压制注释：记一次绕过。
+        if (enforced(c) && reportedBefore.size && added && now.length) {
+          const sup = suppressionNear(added, lines, now.map((v) => v.line));
+          if (sup) bypass(c, sup);
+        }
+        for (const fpr of reportedBefore) {
+          if (!nowFps.includes(fpr)) records.push(rec(c, { line: null, outcome: "resolved", blocked: false, detail: fpr.replace(/#\d+$/, "").slice(0, 500) }));
+        }
+        const toReport: Violation[] = [];
+        const seenBefore = new Set(state.seen[sk] ?? []);
+        const freshList = now.filter((v, i) => freshFps.has(nowFps[i]) && !reportedBefore.has(nowFps[i]) && (before !== null || !seenBefore.has(nowFps[i])));
+        for (const v of freshList.slice(0, MAX_REPORTED)) toReport.push(v);
+        for (const v of toReport) {
+          // 给 agent 看原样的那一行；导入边界再标出是哪个导入越界了。
+          const lineText = (lines[v.line - 1] ?? v.text).trim().slice(0, 300);
+          const detail = c.type === "import_boundary" ? `${lineText}  ← ${v.detail}` : lineText;
+          fails.push({ check: c, where: `${rel}:${v.line}`, detail });
+          records.push(rec(c, { line: v.line, outcome: "fail", blocked: enforced(c), detail }));
           if (enforced(c)) noteBlocked(state, c, slug, started);
-        } else if (r.kind === "timeout") records.push(rec(c, { line: null, outcome: "timeout", blocked: false, detail: tail(r.output.trim(), 500) }));
-        else records.push(rec(c, { line: null, outcome: "unavailable", blocked: false, detail: r.reason }));
-        continue;
+        }
+        const reportedNow = new Set(freshList.slice(0, MAX_REPORTED).map((v) => nowFps[now.indexOf(v)]));
+        const keep = nowFps.filter((f) => reportedBefore.has(f) || reportedNow.has(f));
+        if (keep.length) state.reported[sk] = keep;
+        else delete state.reported[sk];
+        if (nowFps.length) state.seen[sk] = nowFps.slice(0, 500);
+        else delete state.seen[sk];
+      } catch (e) {
+        records.push(rec(c, { line: null, outcome: "error", blocked: false, detail: errorText(e) }));
       }
-      if (after.length > MAX_CONTENT) continue;
-      if (regexTimedOut && regexNeeds(c, [], base0)) {
-        // 正则跑太久（多半是嵌套量词）：这次没检查成，放行，页面上算「没能检查」。
-        records.push(rec(c, { line: null, outcome: "timeout", blocked: false, detail: "regex took too long" }));
-        continue;
-      }
-      const now = evaluateBuiltin(c, after, ctx);
-      const was = before === null ? null : evaluateBuiltin(c, before, ctx);
-      const fresh = newViolations(was, now, before === null ? edited : null);
-      const nowFps = fingerprints(now);
-      // newViolations 返回的是 now 里的元素本身：按对象认出哪些是这次新增的，指纹用它们在当前文件里的那个。
-      const isFresh = new Set(fresh);
-      const freshFps = new Set(now.flatMap((v, i) => (isFresh.has(v) ? [nowFps[i]] : [])));
-      const reportedBefore = new Set(state.reported[sk] ?? []);
-      // 这条检查在这个文件上拦过，这次编辑在违规旁边（或同一行）加了压制注释：记一次绕过。
-      if (enforced(c) && reportedBefore.size && added && now.length) {
-        const sup = suppressionNear(added, lines, now.map((v) => v.line));
-        if (sup) bypass(c, sup);
-      }
-      for (const fpr of reportedBefore) {
-        if (!nowFps.includes(fpr)) records.push(rec(c, { line: null, outcome: "resolved", blocked: false, detail: fpr.replace(/#\d+$/, "").slice(0, 500) }));
-      }
-      const toReport: Violation[] = [];
-      const seenBefore = new Set(state.seen[sk] ?? []);
-      const freshList = now.filter((v, i) => freshFps.has(nowFps[i]) && !reportedBefore.has(nowFps[i]) && (before !== null || !seenBefore.has(nowFps[i])));
-      for (const v of freshList.slice(0, MAX_REPORTED)) toReport.push(v);
-      for (const v of toReport) {
-        // 给 agent 看原样的那一行；导入边界再标出是哪个导入越界了。
-        const lineText = (lines[v.line - 1] ?? v.text).trim().slice(0, 300);
-        const detail = c.type === "import_boundary" ? `${lineText}  ← ${v.detail}` : lineText;
-        fails.push({ check: c, where: `${rel}:${v.line}`, detail });
-        records.push(rec(c, { line: v.line, outcome: "fail", blocked: enforced(c), detail }));
-        if (enforced(c)) noteBlocked(state, c, slug, started);
-      }
-      const reportedNow = new Set(freshList.slice(0, MAX_REPORTED).map((v) => nowFps[now.indexOf(v)]));
-      const keep = nowFps.filter((f) => reportedBefore.has(f) || reportedNow.has(f));
-      if (keep.length) state.reported[sk] = keep;
-      else delete state.reported[sk];
-      if (nowFps.length) state.seen[sk] = nowFps.slice(0, 500);
-      else delete state.seen[sk];
-    } catch (e) {
-      records.push(rec(c, { line: null, outcome: "error", blocked: false, detail: e instanceof Error ? e.message : String(e) }));
     }
+    flushHits(d, l, records);
+    flushed = true;
+    safeWrite(d, sfile, state, touched, cleared);
+    if (!fails.length) return "";
+    const text = render(snap, fails);
+    if (fails.some((f) => enforced(f.check))) {
+      return JSON.stringify({ decision: "block", reason: `${text}\n\n${snap.strings.blockFooter}` });
+    }
+    return JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: text } });
+  };
+  // 逐条检查的错在循环里记；循环外（读文件、还原编辑前的内容、预编译正则、拼提示）出的错：放行，没记下结果的检查各记一条 error。
+  try {
+    return await editChecks();
+  } catch (e) {
+    if (flushed) return ""; // 结果已经记下了，是之后拼提示出的错
+    const detail = errorText(e);
+    const done = new Set(records.flatMap((r) => (r.kind === "hit" ? [r.checkId] : [])));
+    for (const c of checks) if (!done.has(c.id)) records.push(rec(c, { line: null, outcome: "error", blocked: false, detail }));
+    return finishQuiet();
   }
-  flushHits(d, l, records);
-  safeWrite(d, sfile, state, touched, cleared);
-  if (!fails.length) return "";
-  const text = render(snap, fails);
-  if (fails.some((f) => enforced(f.check))) {
-    return JSON.stringify({ decision: "block", reason: `${text}\n\n${snap.strings.blockFooter}` });
-  }
-  return JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: text } });
 }
 
 /**
@@ -544,8 +559,15 @@ export async function runPushCheck(stdin: string, env: NodeJS.ProcessEnv, d: Che
   for (const c of checks) {
     const budget = budgetOf(snap.pushTimeoutMs, opts) - (d.now() - started);
     const own = typeof c.params.timeoutMs === "number" ? c.params.timeoutMs : budget;
-    const r = await d.run({ command: String(c.params.command ?? ""), file: null, cwd: root, timeoutMs: Math.min(budget, own), env });
     const base = { kind: "hit" as const, checkId: c.id, checkKey: c.key, slug, file: "", line: null, stage: "push" as const, mode: c.mode, severity: c.severity, session, at: started };
+    let r: Awaited<ReturnType<CheckHookDeps["run"]>>;
+    try {
+      r = await d.run({ command: String(c.params.command ?? ""), file: null, cwd: root, timeoutMs: Math.min(budget, own), env });
+    } catch (e) {
+      // 跑这条检查本身出错：放行、记一条 error，接着跑别的。
+      records.push({ ...base, outcome: "error", blocked: false, detail: errorText(e).slice(0, 2000) });
+      continue;
+    }
     if (r.kind === "pass") continue;
     if (r.kind === "fail") {
       const detail = tail(r.output.trim());

@@ -75,14 +75,15 @@ function commit(repo: string, file: string, text: string, msg: string): string {
 const BRANCHES = ["a", "b", "c", "d"];
 
 /** 4 层的栈 a ← b ← c ← d，每层一个提交、各改各的文件；全部推到远端。另有一个「GitHub」克隆用来合并。 */
-function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind) => boolean; autoRebase?: boolean; policy?: Record<string, unknown> } = {}) {
+function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind) => boolean; autoRebase?: boolean; policy?: Record<string, unknown>; branches?: string[] } = {}) {
+  const branches = o.branches ?? BRANCHES;
   const remote = tempDir("butler-remote-");
   g(remote, "init", "-q", "--bare", "-b", "main");
   const repo = makeRepo();
   g(repo, "remote", "add", "origin", remote);
   g(repo, "push", "-q", "origin", "main");
   let prev = "main";
-  for (const b of BRANCHES) {
+  for (const b of branches) {
     g(repo, "checkout", "-q", "-b", b, prev);
     commit(repo, `${b}.txt`, `${b}\n`, `${b} one`);
     g(repo, "push", "-q", "origin", b);
@@ -121,7 +122,7 @@ function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind) => bool
     execPath: process.execPath,
     now: () => clock,
     log: () => undefined,
-    owned: (_r, b) => (BRANCHES.includes(b) || b === "e" ? { ticketKey: b.toUpperCase(), ticketRepoId: 1, ticketTitle: `title ${b}`, worktree: null } : null),
+    owned: (_r, b) => (branches.includes(b) || b === "e" ? { ticketKey: b.toUpperCase(), ticketRepoId: 1, ticketTitle: `title ${b}`, worktree: null } : null),
     slugOf: async () => "acme/app",
     sessionBusy: () => false,
     gateHeld: () => false,
@@ -270,6 +271,19 @@ describe.each<[string, StackRunMode | undefined]>([["--update-refs", undefined],
     expect(layers.map((l) => l.state)).toEqual(["merged", "ready", "branch_only", "branch_only"]);
     expect(layers[1]!.prNumber).toBe(100);
   });
+});
+
+describe("StackService depth", () => {
+  it("has no layer limit: a 40-layer stack is defined, and after the bottom merges every layer above is rebased (workstream R, K8)", async () => {
+    const branches = Array.from({ length: 40 }, (_, i) => `l${String(i).padStart(2, "0")}`);
+    const w = world({ mode: "per_layer", branches });
+    const r = await w.svc.define({ repoPath: w.repo, branches, source: "mcp" });
+    expect(r.ok).toBe(true);
+    const head = w.mergeOnHub(branches[0]!, "squash");
+    await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: branches[0]! }, w.repo);
+    for (const [i, b] of branches.slice(1).entries()) expect(shape(w, b)).toEqual({ count: i + 1, onTrunk: true });
+    expect(w.repoT.lastRun(r.stackId!)).toMatchObject({ trigger: "bottom_merged", outcome: "rebased" });
+  }, 120_000);
 });
 
 describe("StackService bottom merged during a run", () => {

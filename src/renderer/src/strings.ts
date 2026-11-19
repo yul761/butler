@@ -1605,7 +1605,7 @@ const ZH = {
     orphanCleanup: "清理 session 留下的孤儿进程",
     orphanCleanupHelp: "session 结束后还活着的子进程（MCP、shell、watcher、dev server 等），只要 Butler 之前看到它在自己的 session 下面，就会被结束，并写进日志。别的程序起的进程不会碰。Butler 上次异常退出留下的也会在启动时清掉。",
     refreshMemoryMb: "claude 进程超过多少 MB 就换新（0 = 关）",
-    refreshMemoryMbHelp: "claude 进程（不算 MCP 和别的子进程）的内存超过这个值，Butler 就在它下一次停下来的时候换新：写 handoff、/clear、接着做。最小 256。",
+    refreshMemoryMbHelp: "claude 进程（不算 MCP 和别的子进程）的内存超过这个值，Butler 就在它下一次停下来的时候换新：写 handoff、/clear、接着做。最小 256。默认 0（关）；想打开的话 2048 是个合适的值。",
     tipsTitle: "Butler 管不了、但很有用的建议",
     tips: {
       darwin: [
