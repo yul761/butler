@@ -164,7 +164,7 @@ butler-sessions 新加两个工具（ticket 和 fix session 有，成员 session
 
 - `readiness.<条件>.enabled`：六个条件各一个开关（默认全开）。`readiness.shouldBlocks`（否）。`readiness.descriptionMinChars`（80）、`readiness.descriptionSections`（三组关键词，见第 7 节）。
 - `evidence.require.<类别>`（`auto` / `on` / `off`，默认 `auto` = 按档案）、`evidence.rerun`（`all`）、`evidence.rerunTimeoutSec`（600）。
-- `paths.migration`、`paths.auth`、`paths.publicApi`、`paths.config`、`paths.ci`、`paths.lowRisk`、`paths.generated`、`paths.ui`：glob 列表。窄层**追加**到宽层（列表按并集；给 `paths.<类>.replace = true` 才整份替换），因为风险路径往往是「这个仓库还多一个目录」。`paths.migration` 只能追加。
+- `risk.paths.migration`、`risk.paths.auth`、`risk.paths.publicApi`、`risk.paths.config`、`risk.paths.ci`、`risk.paths.lowRisk`、`risk.paths.generated`、`risk.paths.ui`：额外的 glob 列表，各层**取并集**加在内置列表上，因为风险路径往往是「这个仓库还多一个目录」。`risk.paths.<类>.builtin = false` 去掉内置列表；迁移类没有这个键，只能追加。
 - `size.smallLines`、`size.smallFiles`、`size.largeLines`、`size.largeFiles`。
 - `ticketTypes`：`{ labels: Record<label, type>, branchPrefixes: Record<prefix, type>, floors: Record<type, level> }`。
 

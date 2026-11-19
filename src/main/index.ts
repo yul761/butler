@@ -4,7 +4,7 @@ import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveB
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { sanitizeTask } from "../shared/control";
 import { parseGateRequest, type GateRequest, type GateResult } from "../shared/gate";
@@ -157,6 +157,7 @@ import {
   baselinesConfig, checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, llmConfig, memoryOn,
   memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, sessionAdmission, SettingError, trackerTools,
 } from "./settings/settings-values";
+import { evidenceGuideLines, type GuideRepo } from "./prereview/guide-lines";
 import { watcherGuideLines } from "./procs/watcher-policy";
 import { createProcServices, type ProcServices } from "./procs/proc-services";
 import { platformKill } from "./procs/orphans";
@@ -812,6 +813,20 @@ async function bootstrap(): Promise<void> {
   });
   // 上次跑到一半退出的导出：建了的 worktree 和分支收回去。
   void checkExporter.recover().catch((e) => logger("check export: recovering interrupted exports failed", e));
+  /** 预审（工作流 G）开着吗。 */
+  const preReviewActive = (): boolean => settings.get("preReviewEnabled") === "1";
+  /** 「完成前交证据」那一段的仓库：worktree 目录名和档案（导入的、没扫过的没有档案）。 */
+  const guideRepos = (repoPaths: string[]): GuideRepo[] =>
+    repoPaths.map((root) => {
+      try {
+        const slug = repoIdentity.slugOf(root);
+        const b = slug ? baselineService.latest(slug) : null;
+        return { name: basename(root), profile: b && b.origin !== "imported" ? b.profile : null };
+      } catch (e) {
+        logger("session guide: evidence profile failed", e);
+        return { name: basename(root), profile: null };
+      }
+    });
   /** ticket session 的 guide 里的仓库档案：worktree 路径 → slug。 */
   const sessionProfile = (repoPaths: string[], hasLessons: boolean): string => {
     try {
@@ -1138,11 +1153,13 @@ async function bootstrap(): Promise<void> {
       const lessons = kind === "ticket"
         ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger, { principles: settings.get("lessonsPrinciples") === "1", core: settings.get("lessonsCoreGuide") === "1" })
         : [];
+      const preReview = kind === "ticket" && preReviewActive();
       return writeSessionGuide(paths.mcp, currentLang(), kind, lessons, {
-        // 预审（工作流 G）还没接进来：指南里那句「PR 前会自动预审」先不写；G 合进来后把这里换成它的开关。
-        preReview: false,
+        // 预审（工作流 G）打开时：规矩段那句「PR 前会自动预审」，加上「完成前交证据」一段（按仓库档案列命令）。
+        preReview,
         extra: [
           ...(kind === "ticket" ? watcherGuideLines(currentLang(), repoPaths) : []),
+          ...(kind === "ticket" && preReview ? evidenceGuideLines(currentLang(), guideRepos(repoPaths)) : []),
           ...interruptGuideLines(currentLang(), kind, { choiceRule: settings.get("interruptChoiceRule") === "1", selfServe: settings.get("interruptSelfServe") === "1" }),
         ],
         profile: kind === "ticket" ? sessionProfile(repoPaths, lessons.length > 0) : "",
