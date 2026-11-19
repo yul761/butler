@@ -161,6 +161,24 @@ export const SETTING_DEFAULTS = {
   bgPlentifulPercent: "",
   /** 每种后台任务的优先级、时段、停用：JSON 对象 { "backtest": { "priority": "low", "window": "idle", "paused": true } }。 */
   bgKinds: "",
+  /** 工作流 J：确认过的权限档案规则写进 session 的 --settings：1 开 0 关。没确认过规则时和 2.1.0 一样。 */
+  permissionProfiles: "1",
+  /** 工作流 J：session 说明里加「没特别理由就选推荐项，用 report(kind: choice) 记下」：1 开 0 关。 */
+  interruptChoiceRule: "0",
+  /** 工作流 J：选择题按用户设的默认答案自动答：1 开 0 关。 */
+  interruptChoiceDefaults: "0",
+  /** 工作流 J：session 说明里加「缺信息先自己查（ticket、代码、记忆、总控），查不到再问」：1 开 0 关。 */
+  interruptSelfServe: "0",
+  /** 工作流 J：外部通知的格式：json（聊天工具的 webhook）或 ntfy。开关是 externalPushNotification。 */
+  notifyFormat: "json",
+  /** 工作流 J：推哪些事件，逗号分隔。 */
+  notifyEvents: "decision_needed,pr_high_risk,pr_ready,cost_breaker,review_comment",
+  /** 工作流 J：通知里带上 ticket 号和 PR 号：1 开 0 关（默认只有事件种类和数量）。 */
+  notifyDetails: "0",
+  /** 工作流 J：安静时段 HH:MM-HH:MM（本地时间，可以跨午夜）；空 = 没有。这段时间里的事件不推。 */
+  notifyQuietHours: "",
+  /** 工作流 J：第一次有减少打断的功能生效的时间（毫秒）；Effect 页前后对比的分界。不在设置页上。 */
+  interruptReductionSince: "",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

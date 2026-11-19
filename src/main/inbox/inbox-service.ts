@@ -1,6 +1,7 @@
 import { sanitizeTask, TASK_LIMIT, type ReportKind } from "../../shared/control";
 import type { InboxItemView, InboxRole, InboxScope, InboxView, NowTarget, Session, Ticket } from "../../shared/types";
 import type { InboxArchiveScope, InboxFilter, InboxItem, InboxOwner, InboxRepo } from "../db/inbox-repo";
+import type { ChoiceService } from "../interrupts/choices";
 import type { RecordEvent } from "../metrics/events";
 import type { DeliveryGuard } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
@@ -43,8 +44,12 @@ export interface InboxServiceDeps {
   log(msg: string, err?: unknown): void;
   /** 度量（ws-h）：卡片上回答、「不用了」记一条 needs_you_answer。 */
   recordEvent?: RecordEvent;
-  /** 度量（ws-h）：记下一条「待你决定」之后调（打断原因的分类）。 */
+  /** 度量（ws-h）：记下一条「待你决定」之后调（打断原因的分类）。按默认答案自动答了的不调（不算打断，也不通知）。 */
   onAsked?(q: AskedQuestion): void;
+  /** 默认答案答掉的问题顶掉了旧条目（ws-j）：不算打断，但旧条目的等待要结束。 */
+  onSuperseded?(ids: number[]): void;
+  /** 选择（ws-j）：report kind choice 存进「替你做的选择」；ask_user 先看有没有匹配的默认答案。 */
+  choices?: Pick<ChoiceService, "recordRule" | "match" | "recordDefault">;
 }
 
 /** 刚记下的一条 ask_user。 */
@@ -111,13 +116,22 @@ export class InboxService {
   }
 
   /** ask_user：记一条「待你决定」。同一个 session 还没决的同一个问题被这条顶掉（superseded）。s 是提问的 session 的 head。 */
-  ask(s: Session, q: { question: string; options?: string[]; context?: string }): number {
+  ask(s: Session, q: { question: string; options?: string[]; context?: string; recommended?: number }): number {
     const now = this.d.now();
     const supersedes: number[] = [];
     for (const old of this.d.repo.pendingDecisions()) {
       if (old.text === q.question && this.headId(old.sessionId) === s.id && this.d.repo.resolve(old.id, "superseded", now)) supersedes.push(old.id);
     }
     const id = this.d.repo.addDecision({ ...this.owner(s), question: q.question, options: q.options ?? [], context: q.context ?? null, createdAt: now });
+    // 默认答案（ws-j）：匹配上就马上记下答案、等 session 停下来送进去；不算打断、不通知，记进「替你做的选择」。
+    const auto = this.d.choices?.match({ question: q.question, options: q.options ?? [], recommended: q.recommended }) ?? null;
+    if (auto && this.d.repo.setAnswer(id, M().interrupts.autoAnswered(auto.answer))) {
+      this.d.choices?.recordDefault({ sessionId: s.id, ticketKey: s.ticketKey }, id, auto.defaultId, q.question, auto.answer);
+      this.d.notify();
+      void this.flushAnswers(s.id);
+      if (supersedes.length > 0) this.d.onSuperseded?.(supersedes);
+      return id;
+    }
     this.d.notify();
     this.d.onAsked?.({ id, sessionId: s.id, ticketKey: s.ticketKey, question: q.question, options: q.options ?? [], context: q.context ?? null, supersedes });
     return id;
@@ -129,6 +143,9 @@ export class InboxService {
    * 以及 Butler 总控没开着时的 epic session），只存。
    */
   report(s: Session, text: string, kind: ReportKind): { id: number; queued: boolean; noCoordinator: boolean } {
+    // choice（ws-j）：不进汇报、不送总控，存进「替你做的选择」。没接选择服务时当 progress 存。
+    if (kind === "choice" && this.d.choices) return { id: this.d.choices.recordRule({ sessionId: s.id, ticketKey: s.ticketKey }, text), queued: false, noCoordinator: false };
+    if (kind === "choice") kind = "progress";
     const owner = this.owner(s);
     const noCoordinator = kind !== "progress" && !this.hasCoordinator(s, owner);
     const queued = kind !== "progress" && !noCoordinator;

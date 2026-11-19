@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { isSafeRule } from "../permissions/classify";
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
@@ -255,7 +256,11 @@ export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
  */
 export function projectMcpApprovalSettings(
   dirs: string[],
-  p: ProjectMcpPaths & { gateCommand?: string; allowTools?: readonly string[]; checks?: { editTimeoutSec: number; pushTimeoutSec: number } },
+  p: ProjectMcpPaths & {
+    gateCommand?: string; allowTools?: readonly string[]; checks?: { editTimeoutSec: number; pushTimeoutSec: number };
+    /** 权限档案（ws-j）确认过的只读规则：再过一遍 isSafeRule，排在 allowTools 后面。 */
+    profileRules?: readonly string[];
+  },
 ): string | null {
   try {
     sweepStaleTmp(p.mcpDir);
@@ -263,7 +268,8 @@ export function projectMcpApprovalSettings(
     const disabled = new Set<string>();
     for (const dir of new Set(dirs)) for (const n of approvals(dir, claudeJson, p).disabled) disabled.add(n);
     const content: Record<string, unknown> = { enableAllProjectMcpServers: true, disabledMcpjsonServers: [...disabled].sort() };
-    if (p.allowTools && p.allowTools.length > 0) content.permissions = { allow: [...p.allowTools] };
+    const allow = [...new Set([...(p.allowTools ?? []), ...(p.profileRules ?? []).filter((r) => isSafeRule(r))])];
+    if (allow.length > 0) content.permissions = { allow };
     // 合并总控的 gate hook 只写进这份 session 专用的 settings，不碰用户全局的 settings.json
     if (p.gateCommand) {
       const group = [{ matcher: "Bash", hooks: [{ type: "command", command: `${p.gateCommand} gate`, timeout: 10 }] }];

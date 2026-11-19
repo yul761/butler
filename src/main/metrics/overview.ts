@@ -4,6 +4,8 @@ import {
   METRICS_DAYS_DEFAULT,
   METRICS_DAYS_MAX,
   type BaselineAverages,
+  type CompareSide,
+  type InterruptCompare,
   type GroupMetrics,
   type KeyCount,
   type MetricAverages,
@@ -25,6 +27,45 @@ export interface OverviewInput {
   now: number;
   days: number;
   rolledUpAt: number | null;
+  /** 打断减少功能第一次生效的时间（设置 interruptReductionSince）；没有为 null。 */
+  compareSince?: number | null;
+}
+
+/** 前后对比每边最多几天。 */
+export const COMPARE_DAYS_MAX = 30;
+
+/** 前后对比要读的 metrics_daily 从哪天开始。 */
+export function compareFromDay(since: number): string {
+  return dayOf(addDays(since, -COMPARE_DAYS_MAX));
+}
+
+function compareSide(rows: readonly DailyRow[], from: string, to: string, days: number): CompareSide {
+  const side = rows.filter((r) => r.groupKind === "all" && r.day >= from && r.day <= to);
+  const butler = totalsOf(side.filter((r) => r.butler));
+  const any = totalsOf(side);
+  const a = averagesOf(butler);
+  const interruptsPerDay = Object.fromEntries(INTERRUPT_CATEGORIES.map((c) => [c, butler.total(`interrupt:${c}`) / days])) as CompareSide["interruptsPerDay"];
+  return {
+    from, to, days, prs: a.prs, interventions: a.interventions, waitHumanMs: a.waitHumanMs, interruptsPerDay,
+    autoResolved: butler.total("event:interrupt_auto_resolved"), stuckFixes: any.total("event:stuck_fix_opened"),
+  };
+}
+
+/**
+ * 打断减少的前后对比（ws-j 设计 6）：生效第二天起最多 30 天（到今天为止）算「之后」，生效前一天往前同样多天算「之前」。
+ * 生效当天一半在前一半在后，两边都不算；还在当天时两边为 null。生效时间在今天之后（时钟不对）为 null。
+ */
+export function interruptCompare(rows: readonly DailyRow[], since: number, now: number): InterruptCompare | null {
+  const today = dayOf(now);
+  if (dayOf(since) > today) return null;
+  const start = dayOf(addDays(since, 1));
+  if (start > today) return { since, before: null, after: null };
+  let days = 1;
+  while (days < COMPARE_DAYS_MAX && dayOf(addDays(since, days + 1)) <= today) days++;
+  const afterTo = dayOf(addDays(since, days));
+  const beforeFrom = dayOf(addDays(since, -days));
+  const beforeTo = dayOf(addDays(since, -1));
+  return { since, before: compareSide(rows, beforeFrom, beforeTo, days), after: compareSide(rows, start, afterTo, days) };
 }
 
 /** 天数夹在 1–365 之间；不是数字的用默认 30。 */
@@ -244,5 +285,6 @@ export function buildOverview(input: OverviewInput): MetricsOverview {
     },
     rework: { prs: butlerAll.total("pr_merged"), ciFailures: butlerAll.total("ci_failures"), reopens: butlerAll.total("reopens"), reverts: butlerAll.total("reverts") },
     otherEvents,
+    interruptCompare: input.compareSince ? interruptCompare(input.daily, input.compareSince, input.now) : null,
   };
 }

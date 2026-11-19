@@ -507,6 +507,19 @@ describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
     }
   });
 
+  it("passes a valid recommended option and choice reports, and drops an out-of-range recommendation (ws-j)", async () => {
+    const { server, answer } = setup(2000, { ticketKey: "P-1", member: true });
+    const ask = callTool(server, "ask_user", { question: "Which?", options: ["A", "B"], recommended: 1 });
+    expect(await answer({ v: 1, ok: true, value: { id: 1 } })).toEqual({ v: 1, ticketKey: "P-1", from: "boss", op: "ask_user", question: "Which?", options: ["A", "B"], recommended: 1 });
+    await ask;
+    const bad = callTool(server, "ask_user", { question: "Which?", options: ["A", "B"], recommended: 2 });
+    expect(await answer({ v: 1, ok: true, value: { id: 2 } })).toEqual({ v: 1, ticketKey: "P-1", from: "boss", op: "ask_user", question: "Which?", options: ["A", "B"] });
+    await bad;
+    const rep = callTool(server, "report", { text: "picked A", kind: "choice" });
+    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, ticketKey: "P-1", from: "boss", op: "report", text: "picked A", kind: "choice" });
+    await rep;
+  });
+
   it("refuses bad ask_user and report arguments without asking Butler", async () => {
     const { server, requestsDir } = setup(200);
     for (const [name, args] of [

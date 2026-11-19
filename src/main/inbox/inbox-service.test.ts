@@ -6,7 +6,9 @@ import type { DeliverResult } from "../sessions/pty-manager";
 import { memDb } from "../test-utils";
 import { TASK_LIMIT } from "../../shared/control";
 import type { RecordEvent } from "../metrics/events";
-import { ANSWERING_TTL_MS, InboxService, REPORT_DELIVERY_MAX_AGE_MS, roleOf, type AskedQuestion } from "./inbox-service";
+import { AutoChoicesRepo, ChoiceDefaultsRepo } from "../db/interrupts-repo";
+import { ChoiceService } from "../interrupts/choices";
+import { ANSWERING_TTL_MS, InboxService, REPORT_DELIVERY_MAX_AGE_MS, roleOf, type AskedQuestion, type InboxServiceDeps } from "./inbox-service";
 
 const session = (id: string, o: Partial<Session> = {}): Session => ({
   id, ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: true, replacedBy: null,
@@ -17,7 +19,7 @@ const ticket = (key: string, featureId: number | null, repos: { id: number; repo
   ({ key, featureId, repos, title: null } as unknown as Ticket);
 
 /** 链：chains 里 old → new 的映射，head 沿着走到底。 */
-function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<number, number>; open?: string[]; epicNames?: Record<number, string>; recordEvent?: RecordEvent; onAsked?: (q: AskedQuestion) => void }) {
+function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<number, number>; open?: string[]; epicNames?: Record<number, string>; recordEvent?: RecordEvent; onAsked?: (q: AskedQuestion) => void; choices?: InboxServiceDeps["choices"] }) {
   const repo = new InboxRepo(memDb());
   const sessions = new Map(o.sessions.map((s) => [s.id, s]));
   const replaced = new Map<string, string>();
@@ -49,7 +51,7 @@ function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<num
     epicName: (id) => o.epicNames?.[id] ?? null,
     refreshing: (id) => state.refreshing.has(head(id)?.id ?? id),
     answerGuard: gate("answerGate"), reportGuard: gate("reportGate"), deliver, notify, now: () => state.now, log: () => {},
-    recordEvent: o.recordEvent, onAsked: o.onAsked,
+    recordEvent: o.recordEvent, onAsked: o.onAsked, choices: o.choices,
   });
   const replace = (from: string, to: Session) => {
     sessions.set(to.id, to);
@@ -541,5 +543,61 @@ describe("InboxService metrics (ws-h)", () => {
     inbox.answer(a, "yes");
     expect(inbox.unansweredAsksByHead().get("s1")).toEqual([b]);
     expect(inbox.unansweredAsksByHead().get("other")).toBeUndefined();
+  });
+});
+
+describe("InboxService choices (ws-j)", () => {
+  function withChoices(enabled = "1") {
+    const db = memDb();
+    const events: { kind: string; data?: Record<string, unknown> }[] = [];
+    const recordEvent: RecordEvent = (kind, refs) => (events.push({ kind, data: refs?.data }), true);
+    const choices = new ChoiceService({
+      choices: new AutoChoicesRepo(db), defaults: new ChoiceDefaultsRepo(db), setting: () => enabled, recordEvent, now: () => 5, markEffective: () => {},
+    });
+    return { choices, events };
+  }
+
+  it("stores a choice report for review instead of the report list, and counts it as auto-resolved", () => {
+    const s = session("s1", { ticketKey: "BTL-1" });
+    const { choices, events } = withChoices();
+    const { inbox, repo } = setup({ sessions: [s], tickets: [ticket("BTL-1", 3)], choices });
+    const r = inbox.report(s, "picked rebase", "choice");
+    expect(r).toMatchObject({ queued: false, noCoordinator: false });
+    expect(repo.reportsForTicket("BTL-1")).toEqual([]);
+    expect(choices.list()).toEqual([expect.objectContaining({ source: "rule", sessionId: "s1", ticketKey: "BTL-1", text: "picked rebase" })]);
+    expect(events).toEqual([{ kind: "interrupt_auto_resolved", data: { category: "choice", via: "rule" } }]);
+  });
+
+  it("answers a matching question with the default right away, without counting an interrupt", async () => {
+    const s = session("s1", { ticketKey: "BTL-1" });
+    const { choices, events } = withChoices();
+    choices.saveDefault({ id: null, pattern: "rebase|merge", answer: "", enabled: true });
+    const onAsked = vi.fn();
+    const { inbox, repo, deliver } = setup({ sessions: [s], tickets: [ticket("BTL-1", null)], choices, onAsked });
+    const id = inbox.ask(s, { question: "Rebase or merge main?", options: ["Rebase", "Merge"], recommended: 0 });
+    await settle();
+    expect(onAsked).not.toHaveBeenCalled();
+    expect(deliver.mock.calls[0]![1]).toContain("Rebase");
+    expect(repo.get(id)?.status).toBe("answered");
+    expect(choices.list()[0]).toMatchObject({ source: "default" });
+    expect(events.map((e) => e.data?.via)).toEqual(["default"]);
+  });
+
+  it("leaves questions alone when the switch is off, nothing matches, there are no options, or no recommended option for an empty answer", () => {
+    const s = session("s1", { ticketKey: "BTL-1" });
+    for (const [enabled, q] of [
+      ["0", { question: "Rebase?", options: ["Rebase", "Merge"], recommended: 0 }],
+      ["1", { question: "Which colour?", options: ["Red", "Blue"], recommended: 0 }],
+      ["1", { question: "Rebase?" }],
+      ["1", { question: "Rebase?", options: ["Rebase", "Merge"] }],
+    ] as const) {
+      const { choices } = withChoices(enabled);
+      choices.saveDefault({ id: null, pattern: "rebase", answer: "", enabled: true });
+      const onAsked = vi.fn();
+      const { inbox, repo } = setup({ sessions: [s], tickets: [ticket("BTL-1", null)], choices, onAsked });
+      const id = inbox.ask(s, { ...q, options: "options" in q ? [...q.options] : undefined });
+      expect(repo.get(id)?.answer).toBeNull();
+      expect(onAsked).toHaveBeenCalledTimes(1);
+    }
   });
 });

@@ -72,6 +72,8 @@ import { currentLang } from "../i18n";
 import { meteredIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
+import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
+import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
   addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg } from "./validate";
@@ -121,6 +123,8 @@ export interface IpcDeps {
     flakyAct(a: FlakyAction): boolean;
     effect(days: unknown): LoopEffect;
   };
+  /** 打断与通知（工作流 J）。 */
+  interrupts: Pick<InterruptsFacade, "state" | "act" | "profiles" | "scan">;
   /** 导入导出（契约 4.3）。 */
   configIo: ConfigIoFacade;
   /** 确定性检查（契约 4.5）：检查页的读、写和从规矩生成草稿。 */
@@ -513,6 +517,14 @@ export function registerIpc(d: IpcDeps): void {
     return r;
   });
   handle(IPC.loopEffect, (raw: unknown): LoopEffect => d.loop.effect(raw));
+  handle(IPC.interruptsState, (): InterruptsState => d.interrupts.state());
+  handle(IPC.interruptsAct, async (raw: unknown): Promise<InterruptsActResult> => {
+    const r = await d.interrupts.act(interruptsActionArg(raw));
+    d.notify();
+    return r;
+  });
+  handle(IPC.profilesGet, (): ProfileScan => d.interrupts.profiles());
+  handle(IPC.profilesScan, (raw: unknown): Promise<ProfileScan> => d.interrupts.scan(!!(raw && typeof raw === "object" && (raw as { explain?: unknown }).explain === true)));
   handle(IPC.checksView, (raw: unknown): ChecksView => d.checks.view(checkScopeArg(raw)));
   handle(IPC.checksHits, (raw: unknown): CheckHitView[] => d.checks.hits(checkKeyArg(raw)));
   handle(IPC.checksAct, (raw: unknown): ChecksActResult => {

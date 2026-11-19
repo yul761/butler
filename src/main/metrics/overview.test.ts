@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BaselinePr, DailyRow } from "../db/metrics-repo";
-import { baselineAverages, buildOverview, clampDays, monthStart, overviewFromDay, weekStart, windowFromDay } from "./overview";
+import { baselineAverages, buildOverview, clampDays, compareFromDay, interruptCompare, monthStart, overviewFromDay, weekStart, windowFromDay } from "./overview";
 import { dayOf } from "./rollup";
 
 const H = 3_600_000;
@@ -143,5 +143,41 @@ describe("buildOverview", () => {
 describe("baseline", () => {
   it("clamps negative cycles to zero", () => {
     expect(baselineAverages([base({ openedAt: 30 * H, mergedAt: 20 * H, firstCommitAt: 25 * H })], 100 * H)).toMatchObject({ cycleOpenMs: 0, cycleTicketMs: 0 });
+  });
+});
+
+describe("interruptCompare (ws-j)", () => {
+  const D = 24 * H;
+  it("compares equal windows before and after the cutoff, up to 30 days each", () => {
+    const since = NOW - 10 * D;
+    const after = dayOf(NOW - 3 * D);
+    const before = dayOf(NOW - 15 * D);
+    const c = interruptCompare([
+      ...prRows(after, { interventions: 1 }),
+      ...prRows(before, { interventions: 4 }),
+      ...prRows(before, { interventions: 2 }),
+      row({ day: after, metric: "wait_human_ms", total: 10 }),
+      row({ day: before, metric: "interrupt:permission", total: 22 }),
+      row({ day: after, metric: "interrupt:permission", total: 11 }),
+      row({ day: after, metric: "event:interrupt_auto_resolved", total: 5 }),
+      row({ day: after, metric: "event:stuck_fix_opened", total: 1, butler: false }),
+      row({ day: dayOf(NOW - 25 * D), metric: "interrupt:permission", total: 99 }),
+      // 生效当天的不算在任何一边。
+      row({ day: dayOf(since), metric: "interrupt:permission", total: 50 }),
+    ], since, NOW)!;
+    expect(c.after).toMatchObject({ from: dayOf(since + D), to: TODAY, days: 10, prs: 1, interventions: 1, waitHumanMs: 10, autoResolved: 5, stuckFixes: 1 });
+    expect(c.before).toMatchObject({ from: dayOf(since - 10 * D), to: dayOf(since - D), days: 10, prs: 2, interventions: 3, autoResolved: 0 });
+    expect(c.after!.interruptsPerDay.permission).toBe(1.1);
+    expect(c.before!.interruptsPerDay.permission).toBe(2.2);
+  });
+
+  it("caps each side at 30 days, has no sides yet on the day itself, and is absent without a cutoff", () => {
+    expect(interruptCompare([], NOW - 100 * D, NOW)!.after!.days).toBe(30);
+    expect(interruptCompare([], NOW - 100 * D, NOW)!.after!.to).toBe(dayOf(NOW - 70 * D));
+    expect(interruptCompare([], NOW - D, NOW)!.before).toMatchObject({ days: 1, from: dayOf(NOW - 2 * D), to: dayOf(NOW - 2 * D) });
+    expect(interruptCompare([], NOW, NOW)).toMatchObject({ since: NOW, before: null, after: null });
+    expect(interruptCompare([], NOW + 2 * D, NOW)).toBeNull();
+    expect(overview([]).interruptCompare).toBeNull();
+    expect(compareFromDay(NOW)).toBe(dayOf(NOW - 30 * D));
   });
 });

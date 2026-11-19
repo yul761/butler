@@ -43,6 +43,10 @@ export const METRIC_KINDS: Readonly<Record<string, MetricKindGroup>> = {
   "cost.raise": "other",
   "background.yield": "other",
   "background.resume": "other",
+  // ws-j：卡住时开了修复 session；G（契约 4.6）记的高风险 PR、可以提交的 PR（通知用）。
+  stuck_fix_opened: "other",
+  pr_risk_high: "other",
+  pr_ready: "other",
 };
 
 /** 算人介入的 kind。 */

@@ -69,6 +69,28 @@ afterEach(() => {
 });
 
 describe("PrWatcher: reading PRs", () => {
+  it("reports new comments and reviews from colleagues, but not history on the first read, bots or the author (ws-j)", async () => {
+    const s = setup();
+    const onHumanComment = vi.fn();
+    const w = new PrWatcher({ ...s.deps, onHumanComment });
+    s.link();
+    const c = (id: string, author: string) => ({ id, author, body: "x", createdAt: 6, url: null, path: null, line: null, reviewId: null });
+    s.gh.prStatus.mockResolvedValue(pr({ comments: [c("C1", "alice")] }));
+    await w.check();
+    expect(onHumanComment).not.toHaveBeenCalled();
+    s.advance(PR_SLOW_MS);
+    s.gh.prStatus.mockResolvedValue(pr({
+      comments: [c("C1", "alice"), c("C2", "bob"), c("C3", "me"), c("C4", "ci-bot[bot]")],
+      reviews: [{ id: "R1", author: "carol", state: "COMMENTED" as const, body: "", submittedAt: 9 }],
+    }));
+    await w.check();
+    expect(onHumanComment).toHaveBeenCalledTimes(1);
+    expect(onHumanComment).toHaveBeenCalledWith("BTL-1", 7, 2);
+    s.advance(PR_SLOW_MS);
+    await w.check();
+    expect(onHumanComment).toHaveBeenCalledTimes(1);
+  });
+
   it("reads a linked PR by its URL and stores it with lower-case state", async () => {
     const s = setup();
     const row = s.link();

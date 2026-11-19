@@ -49,9 +49,12 @@ function okModel(v: unknown): boolean {
   return v === undefined || isTier(v) || isModelName(v);
 }
 
-/** report 的种类（BTL-190 第 2+3 点）：progress 只存不送；done、blocked 还送进所属总控的终端。 */
-export type ReportKind = "progress" | "done" | "blocked";
-export const REPORT_KINDS: readonly ReportKind[] = ["progress", "done", "blocked"];
+/**
+ * report 的种类（BTL-190 第 2+3 点）：progress 只存不送；done、blocked 还送进所属总控的终端。
+ * choice（ws-j）：session 按「选推荐项」的规则自己做了选择，存进「替你做的选择」等用户事后看，不进汇报、不送。
+ */
+export type ReportKind = "progress" | "done" | "blocked" | "choice";
+export const REPORT_KINDS: readonly ReportKind[] = ["progress", "done", "blocked", "choice"];
 /** ask_user 的问题最多这么多字符；context 最多 CONTEXT_LIMIT；选项最多 OPTIONS_MAX 个、每个最多 OPTION_LIMIT。 */
 export const QUESTION_LIMIT = 1000;
 export const CONTEXT_LIMIT = 4000;
@@ -65,7 +68,7 @@ export const REPORT_LIMIT = 4000;
  * 三种作用域的请求都带它们；普通 ticket session 的 butler-sessions 只有这两个工具（member 作用域）。
  */
 export type InboxControlOp =
-  | { op: "ask_user"; question: string; options?: string[]; context?: string }
+  | { op: "ask_user"; question: string; options?: string[]; context?: string; recommended?: number }
   | { op: "report"; text: string; kind: ReportKind };
 
 /** ticket 总控的请求（设计文档 2026-10-23）。 */
@@ -189,10 +192,13 @@ function inboxOp<B extends object>(base: B, o: Record<string, unknown>): (B & In
     }
     const options = o.options as string[] | undefined;
     const context = typeof o.context === "string" && o.context.trim() ? o.context : undefined;
+    // recommended（ws-j）：推荐的是第几个选项（从 0 数）；没有选项或越界就不合规。
+    if (o.recommended !== undefined && (!Number.isInteger(o.recommended) || (o.recommended as number) < 0 || (o.recommended as number) >= (options?.length ?? 0))) return null;
     return {
       ...base, op: "ask_user", question: o.question,
       ...(options !== undefined && options.length > 0 && { options }),
       ...(context !== undefined && { context }),
+      ...(o.recommended !== undefined && { recommended: o.recommended as number }),
     };
   }
   if (o.op === "report") {

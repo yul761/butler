@@ -114,6 +114,7 @@ export const ASK_USER_TOOL = {
         description: `可选：给用户点的选项，最多 ${OPTIONS_MAX} 个，每个最长 ${OPTION_LIMIT} 字符。用户也可以不选、自己打字回答。`,
       },
       context: { type: "string", description: `可选：背景，为什么要问、各个选项的利弊，最长 ${CONTEXT_LIMIT} 字符` },
+      recommended: { type: "integer", minimum: 0, description: "可选：你推荐第几个选项（从 0 数）。有推荐就给；用户设了默认答案时 Butler 可能直接替用户选它。" },
     },
     required: ["question"],
     additionalProperties: false,
@@ -136,6 +137,10 @@ export const ASK_USER_TOOL_EN = {
         description: `optional: choices for the user to click, at most ${OPTIONS_MAX}, each at most ${OPTION_LIMIT} characters. The user can also type an answer instead.`,
       },
       context: { type: "string", description: `optional: background, why you ask and the trade-offs of each option, at most ${CONTEXT_LIMIT} characters` },
+      recommended: {
+        ...ASK_USER_TOOL.inputSchema.properties.recommended,
+        description: "optional: which option you recommend (counted from 0). Give it when you have one; if the user set a default answer, Butler may pick it for them right away.",
+      },
     },
   },
 } as const;
@@ -151,7 +156,7 @@ export const REPORT_TOOL = {
     type: "object",
     properties: {
       text: { type: "string", description: `汇报内容：做了什么、结果、还剩什么，最长 ${REPORT_LIMIT} 字符` },
-      kind: { type: "string", enum: [...REPORT_KINDS], description: "progress（默认）、done 或 blocked" },
+      kind: { type: "string", enum: [...REPORT_KINDS], description: "progress（默认）、done、blocked，或 choice（按规则自己选了推荐项时记一笔，存进「替你做的选择」，不送总控）" },
     },
     required: ["text"],
     additionalProperties: false,
@@ -168,7 +173,7 @@ export const REPORT_TOOL_EN = {
     ...REPORT_TOOL.inputSchema,
     properties: {
       text: { type: "string", description: `the report: what you did, the result, what is left, at most ${REPORT_LIMIT} characters` },
-      kind: { ...REPORT_TOOL.inputSchema.properties.kind, description: "progress (default), done or blocked" },
+      kind: { ...REPORT_TOOL.inputSchema.properties.kind, description: "progress (default), done, blocked, or choice (you picked the recommended option yourself under the rule; stored under \"Choices made for you\", not delivered)" },
     },
   },
 } as const;
@@ -1162,7 +1167,7 @@ export class SessionsServer {
     base: { v: 1; from: string | null } & ({ ticketKey: string } | { featureId: number } | { epicId: number } | { butler: true }), tool: unknown, args: Record<string, unknown>,
   ): ControlRequest | ToolError | null {
     if (tool === "ask_user") {
-      const { question, options, context } = args;
+      const { question, options, context, recommended } = args;
       const okOptions = options === undefined
         || (Array.isArray(options) && options.length <= OPTIONS_MAX && options.every((x) => typeof x === "string" && x.trim() && x.length <= OPTION_LIMIT));
       if (typeof question !== "string" || !question.trim() || question.length > QUESTION_LIMIT || !okOptions) return toolError(this.text.needQuestion);
@@ -1171,6 +1176,8 @@ export class SessionsServer {
         ...base, op: "ask_user", question,
         ...(Array.isArray(options) && options.length > 0 && { options: options as string[] }),
         ...(typeof context === "string" && context.trim() && { context }),
+        // 推荐项不对（不是整数、越界）就不带：问题照样记下，只是不能按默认答案选推荐项。
+        ...(Number.isInteger(recommended) && (recommended as number) >= 0 && Array.isArray(options) && (recommended as number) < options.length && { recommended }),
       } as ControlRequest;
     }
     if (tool === "report") {

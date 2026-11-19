@@ -59,6 +59,7 @@ async function setup() {
   let submit: (termId: string, message: string) => Promise<"sent" | "exited" | "timeout"> = async (termId, message) => (submitted.push([termId, message]), "sent");
   let epicRefresh: (epicId: number) => Promise<void> | undefined = () => undefined;
   let n = 0;
+  const events: Record<string, unknown>[] = [];
   const service = new SessionService({
     tickets, sessions, settings, ticketService, pty, features, epics, featureHandoffs, handoffs, epicHistory,
     epicRefresh: (id) => epicRefresh(id),
@@ -82,9 +83,10 @@ async function setup() {
     butlerMcpConfig: () => "/mcp/butler.json",
     guidePath: (kind, paths) => (guidesAsked.push([kind, paths]), null),
     hidden: (id) => void retired.push(id),
+    recordEvent: (kind, refs) => (events.push({ kind, ...refs }), true),
   });
   return {
-    retired,
+    retired, events,
     service, featureService, ticketService, featureHandoffs, handoffs, epicHistory, sessions, tickets, features, epics, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, featureMcpAsked, epicMcpAsked, settingsAsked,
     guidesAsked, butlerWorkspace, activities, names, namesAsked, submitted, claude, logs, setSubmit: (f: typeof submit) => (submit = f),
     setEpicRefresh: (f: typeof epicRefresh) => (epicRefresh = f),
@@ -776,6 +778,13 @@ describe("fix sessions (design 2026-10-31)", () => {
     expect(sessions.get("new-2")?.model).toBe("sonnet");
     expect(s.opts.env.BUTLER_TICKET).toBeUndefined();
     expect(s.opts.env.BUTLER_SESSION).toBe("new-2");
+  });
+
+  it("records stuck_fix_opened once per fix session (ws-j)", async () => {
+    const { service, events, req, stuckId } = await stuckSetup();
+    await service.openFix(req);
+    await service.openFix(req);
+    expect(events).toEqual([expect.objectContaining({ kind: "stuck_fix_opened", sessionId: stuckId, ticketKey: "DMS-1" })]);
   });
 
   it("asks the guide as a ticket session with the stuck ticket's repos, also when resumed after closing", async () => {

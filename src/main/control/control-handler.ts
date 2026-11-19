@@ -565,7 +565,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       if (!t || t.archivedAt !== null) return fail(M().ctlTicketGone(req.ticketKey));
     }
     if (req.op === "ask_user") {
-      const id = d.inbox.ask(h, { question: req.question, options: req.options, context: req.context });
+      const id = d.inbox.ask(h, { question: req.question, options: req.options, context: req.context, recommended: req.recommended });
       return ok({ id, note: M().ctlAskNote });
     }
     const r = d.inbox.report(h, req.text, req.kind);

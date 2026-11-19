@@ -1,8 +1,8 @@
 import type { EditableSettings } from "../../shared/settings";
 import type { HealthReport } from "../../shared/types";
 
-/** 设计文档第 9 节的顺序：自检 claude → hook 和 /handoff → tracker MCP → 隐私档位与个人 API → 完成。 */
-export const WIZARD_STEPS = ["claude", "hooks", "tracker", "privacy", "done"] as const;
+/** 设计文档第 9 节的顺序：自检 claude → hook 和 /handoff → tracker MCP → 隐私档位与个人 API → 权限档案（ws-j）→ 完成。 */
+export const WIZARD_STEPS = ["claude", "hooks", "tracker", "privacy", "permissions", "done"] as const;
 export type WizardStep = (typeof WIZARD_STEPS)[number];
 
 /** 第一步必须找到能用的 claude（设计文档第 10 节）；其余步骤都可以先跳过，之后在设置页补。 */

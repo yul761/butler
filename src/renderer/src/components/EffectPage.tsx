@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { LoopEffect } from "../../../shared/loop";
-import type { GroupMetrics, KeyCount, MetricsOverview, TrendPoint } from "../../../shared/metrics";
+import { INTERRUPT_CATEGORIES, type CompareSide, type GroupMetrics, type KeyCount, type MetricsOverview, type TrendPoint } from "../../../shared/metrics";
 import { api } from "../api";
 import {
   barWidths, compare, comparisonText, DAY_CHOICES, DASH, fmtDay, fmtDuration, fmtNumber, fmtTokens, fmtUsd,
@@ -165,6 +165,51 @@ function Interrupts({ o }: { o: MetricsOverview }) {
       <p className="muted">{E().interruptsIntro}</p>
       <Bars rows={rows} />
       <p className="muted">{E().autoResolved(o.autoResolved)} · {E().waitTotals(fmtDuration(o.waitHumanMs), fmtDuration(o.waitIdleMs))}</p>
+    </section>
+  );
+}
+
+/** 打断减少（ws-j 设计 6）：第一个功能生效前后同样多天的对比。 */
+function InterruptCompareTable({ o }: { o: MetricsOverview }) {
+  const c = o.interruptCompare;
+  const before = c?.before ?? null;
+  const after = c?.after ?? null;
+  if (!c || !before || !after) {
+    return (
+      <section className="effect-section" data-testid="effect-compare">
+        <h3>{E().compare}</h3>
+        <p className="muted">{c ? E().compareStarting(shortTime(c.since)) : E().compareNotYet}</p>
+      </section>
+    );
+  }
+  const row = (label: string, f: (x: CompareSide) => string, testId?: string) => (
+    <tr key={label} data-testid={testId}>
+      <td>{label}</td>
+      <td>{f(before)}</td>
+      <td>{f(after)}</td>
+    </tr>
+  );
+  return (
+    <section className="effect-section" data-testid="effect-compare">
+      <h3>{E().compare}</h3>
+      <p className="muted">{E().compareIntro(shortTime(c.since), after.days)}</p>
+      <table className="ticket-table effect-table">
+        <thead>
+          <tr>
+            <th />
+            <th>{E().compareBefore(fmtDay(before.from), fmtDay(before.to))}</th>
+            <th>{E().compareAfter(fmtDay(after.from), fmtDay(after.to))}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {row(E().colPrs, (x) => String(x.prs))}
+          {row(E().compareInterventions, (x) => fmtNumber(x.interventions), "effect-compare-interventions")}
+          {row(E().compareWait, (x) => fmtDuration(x.waitHumanMs))}
+          {INTERRUPT_CATEGORIES.map((k) => row(E().comparePerDay(E().interruptNames[k]), (x) => fmtNumber(x.interruptsPerDay[k])))}
+          {row(E().compareAuto, (x) => String(x.autoResolved))}
+          {row(E().compareStuckFixes, (x) => String(x.stuckFixes))}
+        </tbody>
+      </table>
     </section>
   );
 }
@@ -354,6 +399,7 @@ export function EffectBody({ o }: { o: MetricsOverview }) {
       </p>
       {o.butler.prs === 0 && <p className="muted">{E().empty}</p>}
       <Interrupts o={o} />
+      <InterruptCompareTable o={o} />
       <Trend o={o} />
       <Interventions items={o.interventions} />
       <Groups o={o} />

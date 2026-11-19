@@ -184,6 +184,15 @@ describe("parseControlRequest for ask_user and report (BTL-190 2+3)", () => {
     }
   });
 
+  it("keeps a recommended option index within range and accepts the choice report kind (ws-j)", () => {
+    const base = { v: 1, ticketKey: "BTL-1", from: "s1", op: "ask_user", question: "Which?" };
+    expect(parseControlRequest({ ...base, options: ["A", "B"], recommended: 0 })).toMatchObject({ options: ["A", "B"], recommended: 0 });
+    expect(parseControlRequest({ ...base, options: ["A", "B"], recommended: 2 })).toBeNull();
+    expect(parseControlRequest({ ...base, recommended: 0 })).toBeNull();
+    expect(parseControlRequest({ ...base, options: ["A", "B"], recommended: 0.5 })).toBeNull();
+    expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: "s1", op: "report", text: "picked A", kind: "choice" })).toMatchObject({ kind: "choice" });
+  });
+
   it("rejects ask_user without a question, with too many or bad options, or an over-long context", () => {
     const base = { v: 1, ticketKey: "BTL-1", from: "s1", op: "ask_user" };
     expect(parseControlRequest({ ...base, question: " " })).toBeNull();

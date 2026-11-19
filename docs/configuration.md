@@ -481,6 +481,7 @@ With `lessonsPrinciples` on, Butler asks the model once a day (or when you press
 - Imported lessons arrive **pending** (lessons the file had rejected stay rejected), in one batch you can undo from the Batches tab. Repositories this machine has not cloned are added without a local path and marked **not cloned on this machine**; their history cannot be analysed until Butler sees a clone. When a status conflict would confirm a lesson that is not confirmed here, the row says so.
 - A **starter pack** exports your confirmed lessons without owner, status, hits or sources. Importing one asks which repository or product to add them to.
 - **Model routing** (section `models`) is only in a full export of everything: registered models (name, tier, account, prices, note), each tier's chain, task overrides and your own and learned limit rules. Health, spend, events, unrecognised errors and rule notes stay on this machine. Imported models and rules arrive **disabled**, so an import never changes which model runs until you enable them on **Settings → Model routing**; ones you already have keep their on/off state. A different tier, account, price, chain order or task setting is a conflict. The routing tables are not part of batch undo: remove what you do not want on the routing page, or restore the backup a replace import writes first.
+- **Permission profiles** (section `permissions`): each repository's confirmed and dismissed rules, by repository name. Rules still waiting for you are not exported. Every rule is checked again on import, and a rule that isn't read-only is refused. An imported confirmation waits on **Settings → Interruptions & notifications** until you confirm it on this machine; an imported dismissal applies right away. A different status for the same rule is a conflict.
 
 ## Checks: deterministic rules on every edit
 
@@ -504,7 +505,7 @@ Checks are exported and imported with the other configuration (**Checks only** o
 
 ## Outward actions
 
-Some features let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Today the repo rule export uses **Push branches** and **Open PRs**, and [Comments and CI](#comments-and-ci) uses **Reply to review comments**, **Resolve comments** and **Rerun CI**; the other switches take effect as later features start using them. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. No feature uses these switches yet.
+Some features let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Today the repo rule export uses **Push branches** and **Open PRs**, and [Comments and CI](#comments-and-ci) uses **Reply to review comments**, **Resolve comments** and **Rerun CI**; the other switches take effect as later features start using them. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. **Push notifications** is used by [notifications](#notifications).
 
 | Setting | Key | Default | What it allows |
 |---------|-----|---------|----------------|
@@ -613,6 +614,58 @@ Lists take one entry per line in the editor. An entry wrapped in `/…/` is a re
 | `ci.flakyTests` | none | list | Checks or tests known to be flaky |
 | `ci.autoListThreshold` | `3` | whole number 1–100 | Passes after a rerun before a name is listed as flaky |
 | `ci.autoListDays` | `30` | whole number 1–365 | Days counted for flaky stats and auto-listing |
+
+## Interruptions and notifications
+
+**Settings → Interruptions & notifications** collects what lets sessions stop for you less often, and what tells you when one really needs you. Everything here is off, or has no effect, until you set it up.
+
+### Permission profile
+
+Butler reads the Claude Code transcripts of the last 30 days on this machine (they never leave it). It counts, per repository, the commands and MCP tools that ran successfully, and offers those that ran at least 3 times in at least 2 sessions as candidates. A rule you confirm goes into the `--settings` file of every Butler session in that repository, next to Butler's own tools, so the session doesn't stop to ask. Your own Claude Code settings are not changed.
+
+Only read-only commands qualify. The check is fixed and runs again before every session starts:
+
+- Allowed: `gh pr view` and similar read-only subcommands, `git log` without `--output`, and `gh api` without a method or fields.
+- Never: anything that writes, deletes, pushes or runs other programs, chains with `&&`, `|` or `;`, or uses redirects, `$`, backticks or globs, or runs the repository's own scripts.
+
+A command you rejected once in a repository is never offered there. **Explain** asks the low-tier model (task `permission_profile`) for a one-line note per candidate. It can't add rules; candidates it marks as risky start unticked, and so do MCP tools, since only their names can be checked. The first-run wizard has the same step. Rules can be removed at any time. Imported rules wait for you to confirm them.
+
+| Setting | Key | Default | What it does |
+|---------|-----|---------|--------------|
+| Use permission profiles | `permissionProfiles` | `1` (on) | Write confirmed rules into sessions. With no confirmed rule, nothing changes. |
+
+### Choices and missing information
+
+| Setting | Key | Default | What it does |
+|---------|-----|---------|--------------|
+| Pick the recommended option | `interruptChoiceRule` | `0` (off) | Ticket sessions and coordinators are told: when one option is recommended and nothing special applies (irreversible or outward actions, cost, going beyond the ticket, a preference you stated), pick it, carry on, and record it with `report(kind: "choice")`. |
+| Default answers | `interruptChoiceDefaults` | `0` (off) | A question with options that contains one of your keywords is answered right away with your answer, or with the option the session recommended. The session is told the answer came from your default. |
+| Look before asking | `interruptSelfServe` | `0` (off) | Before asking you for a fact, sessions check the ticket through the tracker, the code and docs, memory, and (ticket sessions) their coordinator. |
+
+Every choice made this way is listed under **Choices made for you**, newest first, until you mark it as reviewed. It does not count as a human intervention on the **Effect** page; it counts as an automatically resolved stop.
+
+### Notifications
+
+Butler can push to one HTTPS webhook when something needs you: `ntfy`-style topics or a chat tool's incoming webhook. The switch is **Push notifications** (`externalPushNotification`) under outward actions. While it is off, nothing is sent and the notification log stays empty.
+
+- **The address** is stored encrypted, like the API key. Only its host is shown, and it is never exported.
+- **What is sent.** By default a message names only the kind of event and how many there were, for example "2 things need your decision". Events of the same kind within a minute are sent together. Question text, comment text, paths and repository names are never sent.
+- **Log.** Every message sent, failed, held back by quiet hours or left out is listed under **Notification log** and kept as long as `auditRetentionDays`.
+
+| Setting | Key | Default | What it does |
+|---------|-----|---------|--------------|
+| Format | `notifyFormat` | `json` | `json` posts `{"text", "content", "title", "event", "count"}`, which chat webhooks accept. `ntfy` posts plain text with a `Title` header. |
+| Events | `notifyEvents` | all five | Comma-separated: `decision_needed` (a session asked you something), `pr_high_risk` (a high-risk PR waits for your review), `pr_ready` (a PR is ready to submit), `cost_breaker` (the cost breaker paused or stopped work), `review_comment` (a colleague commented on a PR). |
+| Include references | `notifyDetails` | `0` (off) | Add the ticket key and PR number to the message. |
+| Quiet hours | `notifyQuietHours` | empty | `HH:MM-HH:MM` in local time, may cross midnight, for example `22:00-08:00`. Events in this window are not pushed. |
+
+**Send a test** sends one message to the saved address. While the switch is off it sends nothing, says so, and the outward-action audit records it as skipped.
+
+Where the events come from: `decision_needed` is a new question that wasn't answered by a default; `pr_high_risk` and `pr_ready` come from the PR risk and stage checks; `cost_breaker` from the cost breaker pausing or stopping work; `review_comment` from the PR watcher seeing a new comment or review from someone other than the PR's author or a bot. Comments already on a PR when Butler first reads it are not pushed.
+
+### Before and after on the Effect page
+
+The **Effect** page compares equal windows of full days (up to 30 days each) before and after the first time one of these features took effect, leaving out that day itself because it is partly before and partly after: a permission rule confirmed, or the choice rule, default answers or "look before asking" switched on. Each side shows Butler PRs merged, human interventions and waiting time per PR, interrupts per day by kind, stops resolved automatically, and fix sessions opened for stuck sessions. Until one of them is on, the panel says the comparison starts then. Stops resolved by a permission profile are counted from the session's transcript when it stops, so the number is an upper bound: Claude Code might not have asked for every one of them.
 
 ## Several companies or profiles
 

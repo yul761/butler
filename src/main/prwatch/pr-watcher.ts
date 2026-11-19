@@ -68,6 +68,8 @@ export interface PrWatcherDeps {
   onCiSettled(item: CiItem): void;
   /** 读成功一个 PR、写完所有行以后（工作流 I 的评论闭环）：不等它，不让它拖慢这一轮。rows 是更新后的行。 */
   onPrRead?(rows: TicketPr[], pr: PrStatus, where: { cwd: string; slug: string }): Promise<void>;
+  /** 新看到同事（不是 PR 作者、不是 bot）的评论或 review（ws-j 的外部通知）；第一次读到的 PR 不算（那是历史）。抛错只记日志。 */
+  onHumanComment?(ticketKey: string, prNumber: number, count: number): void;
   notify(): void;
   /** 每一轮结束后（不管查没查、成没成）：主进程用它再递一遍还没递出去的 CI 结论（session 刚安静下来）。 */
   roundDone?(): void;
@@ -326,7 +328,19 @@ export class PrWatcher {
       const obs = prObservations(
         this.scopeOf(r, headBranch), r, next, { ...pr, mergedAt, closedAt }, inline, now, bots, this.d.stages.lastCi(r.id), this.firstCommitFallback(r, state, headBranch),
       );
-      for (const o of obs) if (this.d.stages.add(o.event, o.dedupeKey)) added = true;
+      let human = 0;
+      for (const o of obs) {
+        if (!this.d.stages.add(o.event, o.dedupeKey)) continue;
+        added = true;
+        if ((o.event.kind === "comment" || o.event.kind === "review") && o.event.data.who === "human") human++;
+      }
+      if (human > 0 && !first) {
+        try {
+          this.d.onHumanComment?.(r.ticketKey, r.number, human);
+        } catch (e) {
+          this.d.log(`pr watch: notifying about comments on ${r.url}`, e);
+        }
+      }
     } catch (e) {
       this.d.log(`pr watch: recording the stages of ${r.url} for ${r.ticketKey} failed`, e);
     }
