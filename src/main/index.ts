@@ -160,7 +160,7 @@ import {
 import { evidenceGuideLines, type GuideRepo } from "./prereview/guide-lines";
 import { PreReviewService } from "./prereview/service";
 import { makePreReviewHandler } from "./prereview/runner";
-import { fromCompare, prDiff } from "./prereview/diff";
+import { defaultBase, fromCompare, prDiff } from "./prereview/diff";
 import { relevantLessons } from "./prereview/lessons";
 import type { ExecRun } from "./prereview/model";
 import { PreReviewRepo } from "./db/prereview-repo";
@@ -172,7 +172,7 @@ import { BriefService } from "./assess/brief-service";
 import { setStackBriefProvider } from "./assess/stack-brief";
 import { ReviewEffectCollector } from "./review-effect/collector";
 import { reviewEffect } from "./review-effect/stats";
-import type { DiffFile } from "../shared/prereview";
+import type { DiffFile, ReviewTarget } from "../shared/prereview";
 import type { RepoProfile } from "../shared/baselines";
 import type { CheckHitView } from "../shared/checks";
 import type { TicketPr } from "./db/ticket-prs-repo";
@@ -2058,6 +2058,9 @@ async function bootstrap(): Promise<void> {
     const rows = await compareFiles(cwd, pr.baseBranch, pr.headSha, 60_000, pr.slug);
     return rows ? fromCompare(rows).files : null;
   };
+  /** 这份代码（仓库 + 分支）开着的 PR：交证据、预审取 diff 时用。 */
+  const openPrFor = (ticketKey: string | null, target: ReviewTarget): TicketPr | null =>
+    (ticketKey ? ticketPrs.byTicket(ticketKey) : ticketPrs.all()).find((p) => p.state === "open" && p.slug === target.repoSlug && p.headBranch === target.branch) ?? null;
   const preReview = new PreReviewService({
     repo: preReviewRepo,
     queue: bgQueue,
@@ -2078,6 +2081,7 @@ async function bootstrap(): Promise<void> {
       if (o && sessions.get(o.sessionId)?.butler) return true;
       return pr.headBranch !== null && sessions.listByTicket(pr.ticketKey).some((s) => s.butler && s.gitBranch === pr.headBranch);
     },
+    openPrFor,
     profile: prProfile,
     policy: prPolicyFor,
     guard: deliveryGuard,
@@ -2133,11 +2137,13 @@ async function bootstrap(): Promise<void> {
   bgQueue.register("pre_review", makePreReviewHandler({
     repo: preReviewRepo,
     diff: async (row) => {
-      if (row.cwd && row.base) {
-        const local = await prDiff(row.cwd, row.target.headSha, row.base).catch(() => null);
+      const pr = row.prId !== null ? ticketPrs.get(row.prId) : openPrFor(row.ticketKey, row.target);
+      // 交证据早于开 PR：没有 base 就用仓库的默认分支。
+      const base = row.base ?? pr?.baseBranch ?? (row.cwd ? await defaultBase(row.cwd).catch(() => null) : null);
+      if (row.cwd && base) {
+        const local = await prDiff(row.cwd, row.target.headSha, base).catch(() => null);
         if (local) return local;
       }
-      const pr = row.prId !== null ? ticketPrs.get(row.prId) : null;
       if (!pr?.baseBranch) return null;
       const rows = await compareFiles(prGhDir(pr), pr.baseBranch, row.target.headSha, 60_000, pr.slug);
       return rows ? fromCompare(rows) : null;

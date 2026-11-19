@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffForModel, fromCompare, parseNumstatZ, prDiff, splitPatch } from "./diff";
+import { defaultBase, diffForModel, fromCompare, parseNumstatZ, prDiff, splitPatch } from "./diff";
 import { lessonApplies } from "./lessons";
 
 describe("diff parsing", () => {
@@ -46,5 +46,19 @@ describe("lessonApplies", () => {
     expect(lessonApplies({ scopeGlobs: [], scopeLang: "ts" }, ["a.tsx"])).toBe(true);
     expect(lessonApplies({ scopeGlobs: [], scopeLang: "ts" }, ["a.py"])).toBe(false);
     expect(lessonApplies({ scopeGlobs: [], scopeLang: null }, [])).toBe(false);
+  });
+});
+
+describe("defaultBase", () => {
+  const gitWith = (refs: Record<string, string>) => async (_cwd: string, args: string[]) => {
+    const key = args.join(" ");
+    if (key in refs) return refs[key]!;
+    throw new Error(`no ${key}`);
+  };
+  it("uses origin/HEAD, then main or master locally or on origin, else null", async () => {
+    expect(await defaultBase("/w", gitWith({ "symbolic-ref --quiet --short refs/remotes/origin/HEAD": "origin/develop\n" }))).toBe("develop");
+    expect(await defaultBase("/w", gitWith({ "rev-parse --verify --quiet refs/heads/main": "abc" }))).toBe("main");
+    expect(await defaultBase("/w", gitWith({ "rev-parse --verify --quiet refs/remotes/origin/master": "abc" }))).toBe("master");
+    expect(await defaultBase("/w", gitWith({}))).toBeNull();
   });
 });

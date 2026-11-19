@@ -39,6 +39,7 @@ function setup(o: { enabled?: boolean; dirty?: string; guardOk?: boolean; review
     recipient: () => "s1",
     cwdOf: () => "/w",
     isButlerPr: () => true,
+    openPrFor: (k, t) => prs.byTicket(k ?? "").find((p) => p.state === "open" && p.slug === t.repoSlug && p.headBranch === t.branch) ?? null,
     profile: () => ({ projects: [proj], dirs: [], ci: [], pitfalls: [] }),
     policy: () => defaultPrPolicy(),
     guard: { check: () => (guardOk ? { ok: true, termId: "t1", headId: "s1" } : { ok: false, block: "busy" }), recheckAfter: () => () => true },
@@ -92,6 +93,15 @@ describe("PreReviewService.submitEvidence", () => {
     expect(row).toMatchObject({ trigger: "evidence", status: "queued", target: { repoSlug: "o/app", branch: "feat/x", headSha: SHA }, jobId: 1 });
     expect(s.repo.evidenceOf(row.id).map((e) => [e.kind, e.category, e.claimed])).toEqual([["check", "test", "pass"], ["acceptance", null, null]]);
     expect(s.jobs[0]!.dedupeKey).toBe(`session:s1:${SHA}:${row.id}`);
+  });
+  it("ties evidence to an already open PR on the same branch (PR id and base)", async () => {
+    const s = setup();
+    const open = s.prs.link({ ticketKey: "T-1", url: "https://github.com/o/app/pull/9", slug: "o/app", repoId: null, number: 9, headBranch: "feat/x", state: "open", source: "branch", linkedAt: 1 }).pr;
+    s.db.prepare("UPDATE ticket_prs SET base_branch = 'develop' WHERE id = ?").run(open.id);
+    const r = await s.service.submitEvidence("s1", evidence);
+    if (!r.ok) throw new Error(r.message);
+    expect(s.repo.get(r.preReviewId)).toMatchObject({ prId: open.id, base: "develop" });
+    expect(s.repo.evidenceOf(r.preReviewId).every((e) => e.prId === open.id)).toBe(true);
   });
   it("refuses a dirty worktree, an unknown session, junk evidence, and does nothing when pre-review is off", async () => {
     expect((await setup({ dirty: " M a.ts" }).service.submitEvidence("s1", evidence)).message).toMatch(/uncommitted/);

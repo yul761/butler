@@ -94,6 +94,29 @@ export async function prDiff(cwd: string, sha: string, base: string, run: GitRun
   }
 }
 
+/**
+ * 还没有 PR 时拿什么当 base（交证据早于开 PR）：origin 的默认分支，没有就看 main、master 在不在。都没有为 null。
+ */
+export async function defaultBase(cwd: string, run: GitRun = realGit): Promise<string | null> {
+  try {
+    const head = (await run(cwd, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])).trim();
+    if (head.startsWith("origin/") && head.length > 7) return head.slice(7);
+  } catch {
+    // 没有 origin/HEAD：往下猜。
+  }
+  for (const name of ["main", "master"]) {
+    for (const ref of [`refs/remotes/origin/${name}`, `refs/heads/${name}`]) {
+      try {
+        await run(cwd, ["rev-parse", "--verify", "--quiet", ref]);
+        return name;
+      } catch {
+        // 换下一个。
+      }
+    }
+  }
+  return null;
+}
+
 /** GitHub compare 的结果（`compareFiles`）转成同样的形状：行数从 patch 里数。 */
 export function fromCompare(rows: { filename: string; patch: string }[]): PrDiff {
   const files: DiffFile[] = [];

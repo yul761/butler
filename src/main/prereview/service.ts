@@ -36,6 +36,8 @@ export interface PreReviewServiceDeps {
   cwdOf(pr: TicketPr, sessionId: string | null): string | null;
   /** Butler 开的 session 做的 PR（不是用户自己手开的）。 */
   isButlerPr(pr: TicketPr): boolean;
+  /** 这份代码（仓库 + 分支）已经开着的 PR；交证据时据此补上 pr_id 和 base，没有为 null。 */
+  openPrFor(ticketKey: string | null, target: ReviewTarget): TicketPr | null;
   profile(slug: string): RepoProfile | null;
   policy(slug: string): ResolvedPrPolicy;
   guard: Pick<DeliveryGuard, "check" | "recheckAfter">;
@@ -117,9 +119,11 @@ export class PreReviewService {
     }
     if (!/^[0-9a-f]{40,64}$/.test(head) || !branch || branch === "HEAD") return { ok: false, message: m.noGit };
     const target: ReviewTarget = { repoSlug: place.slug, branch, headSha: head };
-    const id = this.enqueue(this.blank({ ticketKey: place.ticketKey, sessionId, target, cwd: place.cwd, base: null, prId: null, trigger: "evidence", notes: args.notes ?? null }), `session:${sessionId}:${head}`);
+    const pr = this.d.openPrFor(place.ticketKey, target);
+    const prId = pr?.id ?? null;
+    const id = this.enqueue(this.blank({ ticketKey: place.ticketKey, sessionId, target, cwd: place.cwd, base: pr?.baseBranch ?? null, prId, trigger: "evidence", notes: args.notes ?? null }), `session:${sessionId}:${head}`);
     const now = this.d.now();
-    const base = { preReviewId: id, prId: null, ticketKey: place.ticketKey, sessionId, target, createdAt: now };
+    const base = { preReviewId: id, prId, ticketKey: place.ticketKey, sessionId, target, createdAt: now };
     for (const c of args.checks) this.d.repo.addEvidence({ ...base, kind: "check", category: c.category, name: c.name, command: c.command || null, claimed: c.result, summary: c.output });
     for (const a of args.acceptance) this.d.repo.addEvidence({ ...base, kind: "acceptance", category: null, name: a.criterion, command: null, claimed: null, summary: a.how });
     for (const u of args.ui ?? []) this.d.repo.addEvidence({ ...base, kind: "ui", category: null, name: u.path, command: null, claimed: null, summary: u.note ?? "" });
