@@ -187,12 +187,12 @@ export class Notifier {
 }
 
 /**
- * 度量事件 → 要推的事件（设计 7 的表）：cost.pause / cost.stop（L）、pr_risk_high / pr_ready（G，契约 4.6）。别的都不推。
+ * 度量事件 → 要推的事件（设计 7 的表）：cost.pause / cost.stop（L）、pr_risk_high / pr_ready（G，契约 4.6）、intake.decision（N：自动接活要你决定）。别的都不推。
  * data 里只看 PR 号（prNumber 或 number），不看别的字段。
  */
 export function notifyFromMetric(kind: string, refs: { ticketKey?: string | null; data?: Record<string, unknown> } = {}): { event: NotifyEvent; ref: NotifyRef } | null {
   const event: NotifyEvent | null =
-    kind === "cost.pause" || kind === "cost.stop" ? "cost_breaker" : kind === "pr_risk_high" ? "pr_high_risk" : kind === "pr_ready" ? "pr_ready" : null;
+    kind === "cost.pause" || kind === "cost.stop" ? "cost_breaker" : kind === "pr_risk_high" ? "pr_high_risk" : kind === "pr_ready" ? "pr_ready" : kind === "intake.decision" ? "intake_decision" : null;
   if (!event) return null;
   const n = refs.data?.prNumber ?? refs.data?.number;
   return { event, ref: { ticketKey: refs.ticketKey ?? null, prNumber: typeof n === "number" && Number.isInteger(n) && n > 0 ? n : null } };

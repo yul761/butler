@@ -154,6 +154,20 @@ describe("background queue", () => {
     expect(t.repo.get(a)?.state).toBe("queued");
   });
 
+  it("wake brings deferred jobs of one kind forward (workstream N)", async () => {
+    const t = setup({ idleSeconds: 3600 });
+    let n = 0;
+    t.queue.register("intake", async () => (++n === 1 ? { defer: true, reason: "parallel" } : { done: true }));
+    t.queue.start();
+    const id = t.queue.enqueue("intake", {});
+    await flush();
+    expect(t.repo.get(id)).toMatchObject({ state: "queued", error: "parallel" });
+    expect(t.repo.get(id)!.notBefore).not.toBeNull();
+    t.queue.wake("intake");
+    await flush();
+    expect(t.repo.get(id)).toMatchObject({ state: "done" });
+  });
+
   describe("session admission (workstream W)", () => {
     /** 和 W 的 MemoryAdmission 同样的记账：放行一个记一个，release 只还自己的。 */
     function fakeAdmission(capacity: number) {

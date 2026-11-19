@@ -58,7 +58,7 @@ export interface ChoiceDefault {
   createdAt: number;
 }
 
-export const NOTIFY_EVENTS = ["decision_needed", "pr_high_risk", "pr_ready", "cost_breaker", "review_comment"] as const;
+export const NOTIFY_EVENTS = ["decision_needed", "pr_high_risk", "pr_ready", "cost_breaker", "review_comment", "intake_decision"] as const;
 export type NotifyEvent = (typeof NOTIFY_EVENTS)[number];
 export const NOTIFY_FORMATS = ["json", "ntfy"] as const;
 export type NotifyFormat = (typeof NOTIFY_FORMATS)[number];

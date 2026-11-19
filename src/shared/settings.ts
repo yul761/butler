@@ -67,6 +67,8 @@ export const EDITABLE_SETTINGS = [
   "externalIssuePost",
   "externalPushNotification",
   "externalPrBriefPost",
+  "externalIntakeTrackerComment",
+  "externalIntakeTrackerStatus",
   "preReviewEnabled",
   "lessonsAutoAdmit",
   "lessonsPrinciples",
@@ -87,6 +89,13 @@ export const EDITABLE_SETTINGS = [
   "notifyEvents",
   "notifyDetails",
   "notifyQuietHours",
+  // 自动接活（工作流 N）。
+  "intakeSource",
+  "intakeTrackerQuery",
+  "intakeTrackerDir",
+  "intakeFilePath",
+  "intakePollMinutes",
+  "intakeRepoMap",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

@@ -14,6 +14,9 @@ export const EXTERNAL_ACTIONS = [
   "issue_post",
   "push_notification",
   "pr_brief_post",
+  // 工作流 N：自动接活在 tracker 上的动作（经用户的 tracker MCP，由 session 或总控去做）。
+  "intake_tracker_comment",
+  "intake_tracker_status",
 ] as const;
 export type ExternalActionKind = (typeof EXTERNAL_ACTIONS)[number];
 
@@ -31,6 +34,8 @@ export const EXTERNAL_ACTION_SETTINGS = {
   issue_post: "externalIssuePost",
   push_notification: "externalPushNotification",
   pr_brief_post: "externalPrBriefPost",
+  intake_tracker_comment: "externalIntakeTrackerComment",
+  intake_tracker_status: "externalIntakeTrackerStatus",
 } as const satisfies Record<ExternalActionKind, string>;
 export type ExternalActionSetting = (typeof EXTERNAL_ACTION_SETTINGS)[ExternalActionKind];
 

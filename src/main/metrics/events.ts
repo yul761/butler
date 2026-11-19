@@ -54,6 +54,14 @@ export const METRIC_KINDS: Readonly<Record<string, MetricKindGroup>> = {
   "stack.rollback": "other",
   "stack.deferred": "other",
   "stack.pr_open": "other",
+  // 工作流 N：自动接活。
+  "intake.classified": "other",
+  "intake.queued": "other",
+  "intake.started": "other",
+  "intake.split": "other",
+  "intake.clarify": "other",
+  "intake.decision": "other",
+  "intake.overridden": "other",
 };
 
 /** 算人介入的 kind。 */

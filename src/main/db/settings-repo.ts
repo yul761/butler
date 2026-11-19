@@ -139,6 +139,9 @@ export const SETTING_DEFAULTS = {
   externalPushNotification: "0",
   /** 工作流 G：预审完成后自动把 review 简报贴进 PR 描述。 */
   externalPrBriefPost: "0",
+  /** 工作流 N：自动接活缺信息时到 tracker 上提问；开工时把 ticket 改成进行中。 */
+  externalIntakeTrackerComment: "0",
+  externalIntakeTrackerStatus: "0",
   /** 工作流 G：开发 session 交证据、提 PR 前后台预审（复跑、对照规矩、核对证据），结果送回 session：1 开 0 关。 */
   preReviewEnabled: "0",
   /** 工作流 D：一次分析加了或命中了规矩以后自动判那个仓库（只推荐，除非 admission.autoConfirm）：1 开 0 关。 */
@@ -178,13 +181,25 @@ export const SETTING_DEFAULTS = {
   /** 工作流 J：外部通知的格式：json（聊天工具的 webhook）或 ntfy。开关是 externalPushNotification。 */
   notifyFormat: "json",
   /** 工作流 J：推哪些事件，逗号分隔。 */
-  notifyEvents: "decision_needed,pr_high_risk,pr_ready,cost_breaker,review_comment",
+  notifyEvents: "decision_needed,pr_high_risk,pr_ready,cost_breaker,review_comment,intake_decision",
   /** 工作流 J：通知里带上 ticket 号和 PR 号：1 开 0 关（默认只有事件种类和数量）。 */
   notifyDetails: "0",
   /** 工作流 J：安静时段 HH:MM-HH:MM（本地时间，可以跨午夜）；空 = 没有。这段时间里的事件不推。 */
   notifyQuietHours: "",
   /** 工作流 J：第一次有减少打断的功能生效的时间（毫秒）；Effect 页前后对比的分界。不在设置页上。 */
   interruptReductionSince: "",
+  /** 工作流 N：自动接活从哪拉 ticket：none（不拉，默认）、tracker（经 intake_fetch 用 trackerTools）、file（读 intakeFilePath 的 JSON）。 */
+  intakeSource: "none",
+  /** 工作流 N：tracker 来源的查询（自然语言或 tracker 自己的查询语法），比如「分配给我、待办的」。 */
+  intakeTrackerQuery: "",
+  /** 工作流 N：拉 tracker 时在哪个目录跑（tracker MCP 配在那里）；空 = 仓库映射里的第一个仓库。 */
+  intakeTrackerDir: "",
+  /** 工作流 N：file 来源的 JSON 文件（绝对路径）。 */
+  intakeFilePath: "",
+  /** 工作流 N：多少分钟拉一次（5–1440）。 */
+  intakePollMinutes: "15",
+  /** 工作流 N：ticket → 仓库，一行一条 `匹配 => 绝对路径`（见 src/main/intake/sources.ts 的 parseRepoMap）。 */
+  intakeRepoMap: "",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
