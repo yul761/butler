@@ -12,7 +12,7 @@ export interface ReviewEffectPr {
   files: string[];
   commentsHuman: number;
   commentsCopilot: number;
-  /** 归到某条（PR 打开前已确认的）规矩的评论数：本可以避免的。 */
+  /** 复盘里 avoidable 的评论数（最新一次 done 的复盘，和 H 的 readAvoidable 同口径）。 */
   avoidable: number;
   rounds: number;
   firstReviewMs: number | null;
