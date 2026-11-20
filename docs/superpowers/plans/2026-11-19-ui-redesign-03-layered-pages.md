@@ -144,7 +144,7 @@
   - `progressLine`：`{total:15, merged:9, youCount:2}` → `15 个里合了 9 个 · 2 件轮到你`；`youCount: 0` → `15 个里合了 9 个 · 没有事轮到你`；`total: 0` → `还没有 ticket`。英文对应 `9 of 15 merged · 2 waiting on you` / `… · nothing waiting on you` / `No tickets yet`。
   - `slowestLine("收尾 R/X", S)` → `最慢的是「收尾 R/X」。`；`null` → `没有明显落后的。`
   - `barSegments({done:9,agent:3,you:2,external:1,idle:0}, 15)`：百分比之和 100（用最大余数法取整），`idle: 0` 的段不出现；`total: 0` → `[]`。
-  - `whoLabel`：`you` → `你`，`agent` → `agent`，`external` → `names.join("、")`，`names` 为空 → `外部`，`done` → `合了`，`idle` → `没开始`。
+  - `whoLabel`：`you` → `你`，`agent` → `agent`，`external` 走 `externalWho`（同首页「进行中」）：`stack_below` → `栈的下一层`，有 `names` → `names.join("、")`，没有 `names` 时 `ci_running` → `CI`、其余 → `外部`；`done` → `合了`，`idle` → `没开始`。全部工作页单独 ticket 的「谁该动」也用它（按主进程标了 `ticketLevel` 的那条 item 的轮次），`scopeWho` 只给 epic / feature 汇总行。
 - [ ] **Step 2: 运行**：`pnpm vitest run src/renderer/src/scope-view.test.ts`，预期 FAIL。
 - [ ] **Step 3: 实现 `scope-view.ts`**。`ticketRows` 用 `ticketTurn(prTurns, sessionTurn)` 取 `{turn, others}`，`item` 取 `items` 里 `turn` 引用相同的那条；不重新判断任何 PR 状态。
 - [ ] **Step 4: 实现 `useTurnBoard`**：和 `useStateRefetch` 同样的防抖重取，但订阅 `api.onTurnChanged`，key 是 `JSON.stringify(filter)`；没取到返回 `null`。

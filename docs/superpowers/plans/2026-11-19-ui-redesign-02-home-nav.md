@@ -27,7 +27,7 @@
 
 1. **首页没有任何工作时**：`HomePage` 有一个 `noWork: boolean` 和 `firstRun: ReactNode` 的约定。`noWork` 为真（`tickets`、`features`、`epics` 三个列表全空）时，首页整个主体换成 `firstRun`；**第 6 层**提供 `<FirstRunHome onNewTicket onNewFeature onNewEpic onOpenSettings />` 并在 `App.tsx` 里传进来。本层 `App` 传的是 `firstRun={<NoWorkLine/>}`（一句 `S.hm.noWork` 加三个新建按钮，约 15 行，写在 `HomePage.tsx` 里），第 6 层把它换掉并删除 `NoWorkLine`。`noWork` 为假但 0 件轮到你时，不显示 `firstRun`，显示「没有事轮到你」加下面的小表。
 2. **「现在」页上不属于 spec 首页的几块**（实况窗口、内存卡、最近合并、自动接活最近 24 小时、用量一行）：不删功能，整块搬进首页最底部一个默认折起来的「运行情况」（`HomeMore.tsx`，代码原样搬）。它们读的仍是 `api.nowView()`，所以 `App` 继续取 `NowView`，但只给这一块和总控页用。第 3 层处理「Butler 自己」各页时可以把其中的内存卡、用量搬到「效果与花费」。
-3. **进度页**：`route.page === "progress"`、侧栏入口、`ProgressPage` 组件删除。进度页独有的「栈」（`ManagedStacks`）和「自动接活队列」（`IntakeQueue`）挪到「全部工作」页底部默认折起来的「栈与自动接活」。`ProgressBody`、PR 表、待 review 队列、`progress-ui.ts`、`progress-render.test.ts` **留给第 3 层**（它们要并进 epic/feature/ticket 页的 tab，第 3 层并完后整份删除；`PrStuckBlock` 和 `useProgress` 仍被 `FeaturePage`、`EpicPage` 使用）。这是本层唯一有意留下的过渡，在文件头加注释写明。
+3. **进度页**：`route.page === "progress"`、侧栏入口、`ProgressPage` 组件删除。进度页独有的「栈」（`ManagedStacks`）和「自动接活队列」（`IntakeQueue`）挪到「全部工作」页底部默认折起来的「栈与自动接活」。`ProgressBody`、PR 表、待 review 队列、`progress-ui.ts`、`progress-render.test.ts` **留给第 3 层**（PR 表和 feature 分组并进 epic/feature/ticket 页的 tab；待 review 队列不进 epic/feature 页，放在「全部工作」页底部的「更多」里，和栈、自动接活放一起；第 3 层并完后整份删除；`PrStuckBlock` 和 `useProgress` 仍被 `FeaturePage`、`EpicPage` 使用）。这是本层唯一有意留下的过渡，在文件头加注释写明。
 4. **「卡住了」卡的「开修复 session」**：`api.openFixSession` 需要 `featureId` 和 `stuckSessionId`，所以只有 `item.featureId !== null` 且 `turn.sessionId !== null` 才出现这个按钮；成功后跳到那个 feature 页（修复 session 的终端在那里已经开着）。
 5. **`unattended`（没人推进）的颜色用紫色**，和「卡住了」同色：都是「没有人在动，要你拿主意」。排序：answer、review、stuck、unattended、merge、butler，同类里先来的在前。
 
@@ -390,7 +390,7 @@ export function AllWorkPage(p: AllWorkBodyProps): JSX.Element;  // 直接渲染 
   - `onFix(featureId, sessionId)` → `api.openFixSession({featureId, stuckSessionId: sessionId})`；`ok` 时 `setRoute({page:"feature", id: featureId})`，失败 `reportError(new Error(S.openErrors[r.reason] ?? r.reason))`。
   - 渲染：`home` → `<HomePage .../>`（`noWork={allTickets.length + epics.length + features.length === 0}`，`firstRun={<NoWorkLine .../>}`）；`all` → `<AllWorkPage .../>`；删掉 `progress` 分支和 `ProgressPage`、`NowPage`、`needsYouTotal` 的 import；`Sidebar` 去掉 `onNew*`、`unclaimedCount`、`needsYouCount` 三个旧 props，传新的。新建对话框的开关（`showNew`、`showNewFeature`、`showNewEpic`）仍在 `App`，通过 `AllWorkPage` 的回调打开。
   - `FeaturePage`、`EpicPage` 删掉 `onOpenProgress` prop 和传给 `PrStuckBlock` 的那个值；`PrStuckBlock` 去掉「去进度页」按钮和 `onOpenProgress` prop；`strings` 里的 `prStagesOpenProgress` 若零引用则删。
-  - `ProgressPage.tsx`：删 `ProgressPage` 函数、`Props`、与它独占的 import（`ManagedStacks`、`IntakeQueue`、`useState`、`useStateRefetch` 若不再用）；`ProgressBody` 里的 `<ManagedStacks>` 一并去掉（它已搬到全部工作页）；文件头加注释：`// 第 3 层接手：PR 表、待 review 队列、feature 分组并进 epic/feature/ticket 页后，整份文件和 progress-ui.ts 一起删。` 同步改 `progress-render.test.ts` 里依赖 `ManagedStacks` 的断言（如有）。
+  - `ProgressPage.tsx`：删 `ProgressPage` 函数、`Props`、与它独占的 import（`ManagedStacks`、`IntakeQueue`、`useState`、`useStateRefetch` 若不再用）；`ProgressBody` 里的 `<ManagedStacks>` 一并去掉（它已搬到全部工作页）；文件头加注释：`// 第 3 层接手：PR 表、feature 分组并进 epic/feature/ticket 页、待 review 队列挪到全部工作页的「更多」后，整份文件和 progress-ui.ts 一起删。` 同步改 `progress-render.test.ts` 里依赖 `ManagedStacks` 的断言（如有）。
 
 - [ ] **Step 5: 跑测试和类型检查。** `pnpm vitest run` 全量 → PASS；`pnpm typecheck` → 无错误；`pnpm lint` → 无错误（没有残留的未使用 import）。
 
@@ -429,7 +429,7 @@ export async function openArchived(page: Page): Promise<void>;
   - 侧栏里的 `.stuck-mark`（`epics.spec.ts` 471-472、`features.spec.ts` 613）→ `.turn-dot.turn-stuck` 或 `.turn-dot.turn-ask`，看那个场景下第 1 层算出来的是哪种（跑一遍看实际状态再定）；feature、epic **页面里**的 `.stuck-mark` 属第 3 层，不动。
   - `epics.spec.ts:115` 的 `.sidebar .ticket-groups section h3` 断言（原来是 Epic/Feature 小标题）→ 去掉那条（小标题已删）。
   - `.nav.home .needs-you-badge`（`features.spec.ts:620`、原 `now.spec.ts`）保持有效，期望数字按第 1 层的口径跑一遍确认。
-  - `progress.spec.ts`：第一个用例（进度页每一块都在）整个删除；第二个用例（对外动作默认全关、审计页、Butler 回复 tab）的前半段若依赖 `openProgress` 则改为不经过进度页，保留设置和审计的断言；第三个用例（PR 等谁、栈、feature tab 的 stuck 块）里栈的部分改成 `openAllWork` 后展开「栈与自动接活」断言 `managed-stacks`，`openProgress` 删除。`stacks.spec.ts`、`intake.spec.ts`、`prereview.spec.ts` 里同样的 `openProgress`/`S.progressNav` 用法照此处理（`prereview` 的待 review 队列在第 3 层之前没有入口：把相关断言用 `test.fixme` 标上并写明「第 3 层恢复」，不要删）。
+  - `progress.spec.ts`：第一个用例（进度页每一块都在）整个删除；第二个用例（对外动作默认全关、审计页、Butler 回复 tab）的前半段若依赖 `openProgress` 则改为不经过进度页，保留设置和审计的断言；第三个用例（PR 等谁、栈、feature tab 的 stuck 块）里栈的部分改成 `openAllWork` 后展开「栈与自动接活」断言 `managed-stacks`，`openProgress` 删除。`stacks.spec.ts`、`intake.spec.ts`、`prereview.spec.ts` 里同样的 `openProgress`/`S.progressNav` 用法照此处理（`prereview` 的待 review 队列在第 3 层之前没有入口：把相关断言用 `test.fixme` 标上并写明「第 3 层恢复」，不要删；第 3 层从全部工作页的「更多」进去恢复）。
 - [ ] **Step 2: 写 `e2e/home.spec.ts`。** 用假 claude 的 `/fake-ask`（见 `now.spec.ts` 的 `ASK_REPLY`、`typeLine`、`openSession`，从那里搬需要的小函数，ticket 号带数字，如 `HOME-1`）：
   1. 「要你回答」：session 问了问题 → 首页标题是 `S.hm.title(1)`，一张 `.turn-card` 带 `S.hm.kind.answer`，侧栏 `.nav.home .needs-you-badge` 是 `1`，`aria-describedby` 描述是 `S.nowNeedsYouBadge(1)`；点「去看看」落在那个 ticket 页且终端可见；回到首页点选项后卡片显示 `S.hm.act.answered(...)`。
   2. 0 件：没有任何问题时标题是 `S.hm.titleZero`，没有徽标，`aria-describedby` 不存在；「各个 epic」小表里有那个 feature。
