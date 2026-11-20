@@ -90,6 +90,10 @@ describe("ScopeTicketTable", () => {
     expect(h).toContain("#52 #53");
     expect(h).toContain("另有 1 个 PR");
   });
+  it("ticket key is a button so the row opens from the keyboard", () => {
+    const h = html([{ name: null, merged: 0, total: 1, rows: [mk("A-1", [])] }]);
+    expect(h).toMatch(/<button type="button" class="key">A-1<\/button>/);
+  });
   it("empty groups", () => {
     const h = html([]);
     expect(h).toContain("EMPTY");

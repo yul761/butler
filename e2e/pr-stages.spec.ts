@@ -60,7 +60,7 @@ test("a skill call in a session moves the design step to active; the timeline st
   await expect(page.locator(".pr-stages")).toHaveCount(0);
 });
 
-test("a ticket row in the epic's all-tickets tab opens its ticket", async ({ makeSandbox, launch }) => {
+test("a ticket row in the epic's all-tickets tab opens its ticket (mouse and keyboard)", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const shop = join(s.dir, "shop");
   const { page } = await launch(s);
@@ -73,17 +73,22 @@ test("a ticket row in the epic's all-tickets tab opens its ticket", async ({ mak
   await newTicket(page, "EP-1", "frontend", "backend");
 
   // epic 页的「全部 ticket」按 feature 分组；点这一行的哪一格都去 ticket 页。
-  const openFromEpic = async (pick: (row: Locator) => Locator) => {
+  const openFromEpic = async (activate: (row: Locator) => Promise<void>) => {
     await page.locator(".sidebar .epic-group > .feature-row .ticket").click();
     await expect(page.getByRole("heading", { name: "shop-epic", exact: true })).toBeVisible();
     await openTab(page, S.lay.tabTickets);
     const table = page.locator(".epic-page .ticket-table");
     await expect(table.locator("tr.group-row")).toHaveText(S.lay.groupHeader("pay", 0, 1));
-    await pick(table.locator("tbody tr:not(.group-row)").filter({ hasText: "EP-1" })).click();
+    await activate(table.locator("tbody tr:not(.group-row)").filter({ hasText: "EP-1" }));
     await expect(page.getByRole("heading", { name: "EP-1", exact: true })).toBeVisible();
   };
-  await openFromEpic((row) => row.locator(".key"));
-  await openFromEpic((row) => row.locator("td").last());
+  await openFromEpic((row) => row.locator(".key").click());
+  await openFromEpic((row) => row.locator("td").last().click());
+  // 键盘：ticket 号是按钮，聚焦后按回车。
+  await openFromEpic(async (row) => {
+    await row.getByRole("button", { name: "EP-1", exact: true }).focus();
+    await page.keyboard.press("Enter");
+  });
 });
 
 /** 假 gh 的一个 PR：已合并，CI、review 都没有。pr list 的那一份（list）和 pr view 的那一份（view）。 */

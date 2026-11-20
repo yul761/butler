@@ -94,8 +94,9 @@ export function ScopeTicketTable(p: {
             {g.name !== null && <tr className="group-row"><th colSpan={4}>{S.lay.groupHeader(g.name, g.merged, g.total)}</th></tr>}
             {g.rows.length === 0 && <tr><td colSpan={4} className="muted">{S.lay.noTicketsInGroup}</td></tr>}
             {g.rows.map((r) => (
+              // 点这一行哪儿都去 ticket 页；ticket 号是按钮，键盘 Tab 到它按回车也行（点击冒泡到这一行）。
               <tr key={r.key} onClick={() => p.onOpenTicket(r.key)}>
-                <td><span className="key">{r.key}</span>{r.title && <span className="muted"> {r.title}</span>}</td>
+                <td><button type="button" className="key">{r.key}</button>{r.title && <span className="muted"> {r.title}</span>}</td>
                 <td><WhoTag turn={r.turn} /></td>
                 <td>{turnSentence(r.turn, r.item, S)}{r.others > 0 && <span className="muted"> · {S.lay.morePrs(r.others)}</span>}</td>
                 <td>{r.prs.length === 0 ? "—" : r.prs.map((x) => x.tag).join(" ")}</td>

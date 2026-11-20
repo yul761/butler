@@ -131,6 +131,7 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .ticket-table tr:hover { background: var(--panel); }
 .ticket-table td { padding: 5px 6px; border-top: 1px solid var(--border); vertical-align: top; }
 .ticket-table .chip { padding: 0; border: none; white-space: nowrap; }
+.ticket-table button.key { padding: 0; border: none; background: none; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
 .pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; margin: 0 4px 2px 0; white-space: nowrap; }
 .pill.merged { background: var(--pill-merged-bg); color: var(--pill-merged); }
 .pill.approved { background: var(--pill-approved-bg); color: var(--pill-approved); }
