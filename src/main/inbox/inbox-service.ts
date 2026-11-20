@@ -42,7 +42,7 @@ export interface InboxServiceDeps {
   notify(): void;
   now(): number;
   log(msg: string, err?: unknown): void;
-  /** 度量（ws-h）：卡片上回答、「不用了」记一条 needs_you_answer。 */
+  /** 度量（ws-h）：卡片上回答记一条 needs_you_answer。 */
   recordEvent?: RecordEvent;
   /** 度量（ws-h）：记下一条「待你决定」之后调（打断原因的分类）。按默认答案自动答了的不调（不算打断，也不通知）。 */
   onAsked?(q: AskedQuestion): void;

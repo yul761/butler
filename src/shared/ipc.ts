@@ -161,7 +161,6 @@ export const IPC = {
   inboxList: "inbox:list",
   /** 在卡片上回答一条「待你决定」：记下答案，等提问的 session 停下来送进去。 */
   inboxAnswer: "inbox:answer",
-  /** 「不用了」：结束一条「待你决定」，什么都不送。 */
   followupsList: "followups:list",
   followupsSetStatus: "followups:setStatus",
   handoffsList: "handoffs:list",

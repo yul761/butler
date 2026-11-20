@@ -759,7 +759,7 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.turnBoard, (raw: unknown): TurnBoard => d.turnBoard(turnFilterArg(raw)));
   handle(IPC.turnSendToAgent, (raw: unknown) => d.turnSendToAgent(turnSendArg(raw)));
   handle(IPC.turnHomeOpened, (): void => d.turnHomeOpened());
-  // 答了、不用了都由 InboxService 自己 notify。
+  // 答了由 InboxService 自己 notify。
   handle(IPC.inboxList, (raw: unknown): InboxView => d.inbox.view(inboxScopeArg(raw)));
   handle(IPC.inboxAnswer, (id: unknown, text: unknown): boolean => d.inbox.answer(inboxIdArg(id), inboxAnswerArg(text)));
 
