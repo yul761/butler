@@ -4,6 +4,7 @@ import { isModelName, isTaskId, isTier, POLICIES, type LimitPolicy, type LimitRu
 import type { SensitiveTerm } from "../../shared/llm";
 import { CONTEXT_LIMIT } from "../../shared/control";
 import { CONV_LIST_MAX, CONV_QUERY_MAX, type ConvListOpts } from "../../shared/conversation";
+import type { TurnFilter } from "../../shared/turn";
 import type {
   AddRepoInput, CiItemRef, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
@@ -983,4 +984,32 @@ export function intakePolicySetArg(v: unknown): { scope: PolicyScope; overrides:
   const o = objArg(v, "intake policy change", ["scope", "overrides"]);
   if (typeof o.overrides !== "object" || o.overrides === null || Array.isArray(o.overrides)) throw new Error("invalid intake policy overrides");
   return { scope: policyScopeArg(o.scope), overrides: o.overrides as Record<string, unknown> };
+}
+
+const plainObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const turnPosInt = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n > 0;
+const shortStr = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 200;
+
+/** turn:board 的范围（UI 重做第 1 层）：undefined / null → null；只认 epicId、featureId（正整数）、ticketKey（1–200 字符），最多给一个。 */
+export function turnFilterArg(v: unknown): TurnFilter | null {
+  if (v === undefined || v === null) return null;
+  if (!plainObj(v)) throw new Error("invalid turn filter");
+  const keys = Object.keys(v);
+  if (keys.length === 0) return null;
+  if (keys.length > 1) throw new Error("invalid turn filter");
+  if (keys[0] === "epicId" && turnPosInt(v.epicId)) return { epicId: v.epicId };
+  if (keys[0] === "featureId" && turnPosInt(v.featureId)) return { featureId: v.featureId };
+  if (keys[0] === "ticketKey" && shortStr(v.ticketKey)) return { ticketKey: v.ticketKey };
+  throw new Error("invalid turn filter");
+}
+
+/** turn:send-to-agent：{ ticketKey, pr: { repo, number } }，不许多余的键。 */
+export function turnSendArg(v: unknown): { ticketKey: string; pr: { repo: string; number: number } } {
+  if (plainObj(v) && Object.keys(v).sort().join(",") === "pr,ticketKey" && shortStr(v.ticketKey)) {
+    const pr = v.pr;
+    if (plainObj(pr) && Object.keys(pr).sort().join(",") === "number,repo" && shortStr(pr.repo) && turnPosInt(pr.number)) {
+      return { ticketKey: v.ticketKey, pr: { repo: pr.repo, number: pr.number } };
+    }
+  }
+  throw new Error("invalid turn send target");
 }

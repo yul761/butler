@@ -1,3 +1,4 @@
+import type { TurnBoard, TurnFilter, TurnSendReason } from "../../shared/turn";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
 import type { IntakeActResult, IntakeAction, IntakeClassifyEdit, IntakeEffect, IntakePolicyOverrides, IntakePolicySetResult, IntakePolicyView, IntakeView } from "../../shared/intake";
@@ -224,6 +225,10 @@ export const api = {
   sessionLimits: () => call<SessionLimitView[]>(IPC.sessionsLimits),
   ciResend: (item: CiItemRef) => call<string>(IPC.ciResend, item),
   nowView: () => call<NowView>(IPC.nowView),
+  /** 「谁该动」看板（UI 重做第 1 层）：不带 filter 是首页。 */
+  turnBoard: (filter?: TurnFilter) => call<TurnBoard>(IPC.turnBoard, filter ?? null),
+  turnSendToAgent: (item: { ticketKey: string; pr: { repo: string; number: number } }) =>
+    call<{ ok: boolean; reason?: TurnSendReason }>(IPC.turnSendToAgent, item),
   inbox: (scope: InboxScope) => call<InboxView>(IPC.inboxList, scope),
   answerInbox: (id: number, text: string) => call<boolean>(IPC.inboxAnswer, id, text),
   dismissInbox: (id: number) => call<boolean>(IPC.inboxDismiss, id),
@@ -261,6 +266,7 @@ export const api = {
   onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),
   onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),
   onStateChanged: (cb: () => void) => window.butler.on(IPC.stateChanged, cb),
+  onTurnChanged: (cb: () => void) => window.butler.on(IPC.turnChanged, cb),
   onKeepAwakeChanged: (cb: (on: boolean) => void) => window.butler.on(IPC.appKeepAwakeChanged, cb),
   /** 实况窗口（BTL-190 第 7 点）：开着的 session 新的一次工具调用、记忆读写、回合开始 / 结束。 */
   onActivityEvent: (cb: (e: ActivityEvent) => void) => window.butler.on(IPC.activityEvent, cb),

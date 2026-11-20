@@ -1,3 +1,4 @@
+import { turnFilterArg, turnSendArg } from "./validate";
 import { backtestActionArg, baselinesActionArg, checkExportActionArg, checkKeyArg, checkLessonIdArg, checkScopeArg, checksActionArg, legacyActionArg, legacyViolationsArg } from "./validate";
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
@@ -561,5 +562,28 @@ describe("conversation store arguments (UI redesign layer 4)", () => {
     expect(convRootArg("a-1")).toBe("a-1");
     expect(() => convRootArg("../x")).toThrow();
     expect(() => convRootArg(undefined)).toThrow();
+  });
+});
+
+describe("turn args (UI redesign layer 1)", () => {
+  it("turnFilterArg: null for nothing, one key at most", () => {
+    expect(turnFilterArg(undefined)).toBeNull();
+    expect(turnFilterArg(null)).toBeNull();
+    expect(turnFilterArg({ epicId: 2 })).toEqual({ epicId: 2 });
+    expect(turnFilterArg({ featureId: 5 })).toEqual({ featureId: 5 });
+    expect(turnFilterArg({ ticketKey: "BTL-1" })).toEqual({ ticketKey: "BTL-1" });
+    for (const bad of [{ epicId: 0 }, { epicId: 1.5 }, { epicId: 1, featureId: 2 }, { foo: 1 }, { ticketKey: "" }, { ticketKey: "x".repeat(201) }, [], "x", 3]) {
+      expect(() => turnFilterArg(bad), JSON.stringify(bad)).toThrow();
+    }
+  });
+  it("turnSendArg: ticketKey and pr {repo, number}, nothing else", () => {
+    const ok = { ticketKey: "BTL-1", pr: { repo: "o/r", number: 3 } };
+    expect(turnSendArg(ok)).toEqual(ok);
+    for (const bad of [
+      { ticketKey: "BTL-1" }, { ...ok, pr: { repo: "o/r", number: 1.5 } }, { ...ok, extra: 1 }, { ...ok, pr: { repo: "o/r", number: 3, x: 1 } },
+      { ...ok, pr: { repo: "", number: 3 } }, { ...ok, ticketKey: "" }, null, [],
+    ]) {
+      expect(() => turnSendArg(bad), JSON.stringify(bad)).toThrow();
+    }
   });
 });

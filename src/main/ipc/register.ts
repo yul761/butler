@@ -1,3 +1,4 @@
+import type { TurnBoard, TurnFilter, TurnSendReason } from "../../shared/turn";
 import type { MetricsOverview } from "../../shared/metrics";
 import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
 import type { IntakeActResult, IntakeAction, IntakeClassifyEdit, IntakeEffect, IntakePolicySetResult, IntakePolicyView, IntakeView } from "../../shared/intake";
@@ -85,7 +86,7 @@ import type { FeaturePolicyState } from "../../shared/feature-rows";
 import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
-  addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
   stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
@@ -200,6 +201,10 @@ export interface IpcDeps {
   memoryHistory?: (since: number) => MemoryHistoryPoint[];
   /** 「现在」页：session、活动、PR、合并排队和「需要你」拼成的一份（buildNowView），merges 是“最近合并”。 */
   nowView: (merges: MergeEvent[]) => NowView;
+  /** 「谁该动」看板（UI 重做第 1 层）；filter 为 null 是首页。 */
+  turnBoard: (filter: TurnFilter | null) => TurnBoard;
+  /** 首页「发给 agent」：只有 you/unattended 且 canSend 时才走现有的递送路径。 */
+  turnSendToAgent: (item: { ticketKey: string; pr: { repo: string; number: number } }) => Promise<{ ok: boolean; reason?: TurnSendReason }>;
   /** 重发一条递不出去的 CI 结论（工作流 W）。 */
   ciResend: (item: CiItemRef) => Promise<string>;
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）。 */
@@ -745,6 +750,8 @@ export function registerIpc(d: IpcDeps): void {
   });
   handle(IPC.nowView, (): NowView => d.nowView(recentMerges()));
   handle(IPC.ciResend, (raw: unknown): Promise<string> => d.ciResend(ciItemArg(raw)));
+  handle(IPC.turnBoard, (raw: unknown): TurnBoard => d.turnBoard(turnFilterArg(raw)));
+  handle(IPC.turnSendToAgent, (raw: unknown) => d.turnSendToAgent(turnSendArg(raw)));
   // 答了、不用了都由 InboxService 自己 notify。
   handle(IPC.inboxList, (raw: unknown): InboxView => d.inbox.view(inboxScopeArg(raw)));
   handle(IPC.inboxAnswer, (id: unknown, text: unknown): boolean => d.inbox.answer(inboxIdArg(id), inboxAnswerArg(text)));

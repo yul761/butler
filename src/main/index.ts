@@ -25,7 +25,7 @@ import { CostPolicyService } from "./cost/cost-policy";
 import { backgroundMetricEvents, costMetricEvents } from "./cost/metric-events";
 import { parseThresholds } from "./routing/spend";
 import { CostPolicyError, type CostBreakerView } from "../shared/cost";
-import type { NowTarget } from "../shared/types";
+import type { NowNotice, NowTarget } from "../shared/types";
 import { AvailabilityRepo } from "./db/availability-repo";
 import type { Session, TicketRepo, WatchedPr } from "../shared/types";
 import { StackPolicyError } from "../shared/stacks";
@@ -159,6 +159,9 @@ import { judgeStuck } from "./sessions/stuck-judge";
 import { markTurnEndedWithoutStop } from "./sessions/turn-end";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
+import { TurnService } from "./turn/turn-service";
+import { ReviewRequestsRepo } from "./db/review-requests-repo";
+import { REVIEW_AWAY_IDLE_SECONDS, ReviewRequestPoller } from "./prwatch/review-requests";
 import {
   baselinesConfig, checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, llmConfig, memoryOn,
   memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, sessionAdmission, SettingError, trackerTools,
@@ -220,7 +223,7 @@ import { CiTriageRepo } from "./db/ci-triage-repo";
 import { CommentItemsRepo } from "./db/comment-items-repo";
 import { commentOnPr, replyToReviewComment, rerunFailed, resolveReviewThread, reviewThreads, runInfo } from "./tickets/gh-loop";
 import type { CiItem } from "./prwatch/ci-delivery";
-import { applyGhResolution, branchRuns, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, mergedPrs, prBody, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prStatus, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
+import { applyGhResolution, branchRuns, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prStatus, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
 import { LessonsRepo } from "./db/lessons-repo";
 import { LessonRunsRepo } from "./db/lesson-runs-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
@@ -500,7 +503,12 @@ async function bootstrap(): Promise<void> {
     }
   };
   const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath(), log: logger, onHookBinCurrent: seedSkillTracking });
-  const notify = () => safeSend(IPC.stateChanged);
+  // 「谁该动」看板（UI 重做第 1 层）跟着 stateChanged 一起防抖推 turn:changed；TurnService 在下面才建好。
+  let turnChanged: (() => void) | null = null;
+  const notify = () => {
+    safeSend(IPC.stateChanged);
+    turnChanged?.();
+  };
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
   // 同时把升级后还是旧版本的 butler-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
   // Butler 旧版本装的 /handoff 也先换成当前版本再探测（C1），健康页报告的是换完的状态。syncHandoffCommand 不抛错。
@@ -2742,6 +2750,93 @@ async function bootstrap(): Promise<void> {
     },
     log: logger,
   });
+  /** 「现在」页和「谁该动」看板共用的一份 Butler 提醒。 */
+  const currentNotices = (): NowNotice[] => [
+    ...buildNotices({
+      availability: availability.view(),
+      recentRuns: lessonRuns.recentFinished(20),
+      routing: routing.attention(),
+      sharedMcpError: sharedMcpOn(settings) && mcpHub.status().state === "failed" ? mcpHub.status().error : null,
+    }),
+    ...ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
+    ...costNotices(costBreaker?.views() ?? [], costTargetOf),
+    ...commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
+    ...stackNotices(stackService.notices()),
+    ...backtest.notices(),
+    ...intakeNotices(intake.notices()),
+  ];
+  // 请你 review 的 PR（UI 重做第 1 层，计划 R9）：gh search 的结果整体替换进 review_requests。
+  const reviewRequests = new ReviewRequestsRepo(db);
+  const reviewPoller = new ReviewRequestPoller({
+    fetch: () => reviewRequestedPrs(REVIEW_SEARCH_TIMEOUT_MS),
+    repo: reviewRequests,
+    away: () => idleSignal.locked() || idleSignal.idleSeconds() >= REVIEW_AWAY_IDLE_SECONDS,
+    ghAvailable: () => ghAvailable(),
+    changed: () => turnService.changed(),
+    now: Date.now,
+    log: logger,
+  });
+  /** 总控 session（feature、epic 的总控和 Butler 总控）的 head：开着终端或休眠着的。 */
+  const turnCoordinators = () => {
+    const alive = (s: Session & { termId?: string | null }): boolean => (!!s.termId || !!s.hibernatedAt || !!s.wakeError) && s.replacedBy === null;
+    const hib = hibernatedHeads();
+    const out: { session: Session; featureId: number | null; epicId: number | null; target: NowTarget; title: string | null }[] = [];
+    const seen = new Set<string>();
+    const push = (session: Session, featureId: number | null, epicId: number | null, target: NowTarget, title: string | null) => {
+      if (seen.has(session.id) || !alive(session)) return;
+      seen.add(session.id);
+      out.push({ session, featureId, epicId, target, title });
+    };
+    for (const f of sessionService.featureViews()) {
+      const own = [...f.sessions, ...hib.filter((h) => h.featureId === f.id && h.ticketKey === null)];
+      for (const x of own) if (x.fixesSession === null) push(x, f.id, null, { page: "feature", id: f.id, sessionId: x.id }, f.name);
+    }
+    for (const e of sessionService.epicViews()) {
+      const own = [...e.sessions, ...hib.filter((h) => h.epicId === e.id && h.ticketKey === null && h.featureId === null)];
+      for (const x of own) push(x, null, e.id, { page: "epic", id: e.id, sessionId: x.id }, e.name);
+    }
+    const b = sessionService.runningButler() ?? hib.find((h) => h.butler && h.ticketKey === null) ?? null;
+    if (b) push(b, null, null, { page: "butler", sessionId: b.id }, null);
+    return out;
+  };
+  const turnService = new TurnService({
+    tickets: () => sessionService.ticketViews(),
+    features: () => sessionService.featureViews(),
+    epics: () => sessionService.epicViews(),
+    hibernatedHeads,
+    coordinators: turnCoordinators,
+    head: (id) => sessions.head(id),
+    prs: (key) => prWatcher.statusOf(key),
+    prRow: (id) => ticketPrs.get(id),
+    recipient: loopRecipient,
+    activity: (id) => activityMonitor.get(id),
+    lastReplyAt: (id) => activityMonitor.lastReplyOf(id)?.at ?? null,
+    needsYou: () => ({ reasons: needsYou.reasons(), categories: needsYou.categories() }),
+    decisions: () => inboxRepo.pendingDecisions(),
+    lastReport: (key) => inboxRepo.lastReport(key),
+    refreshing: (id) => refresher.stepOf(id) !== null,
+    // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对。
+    mergeQueued: (id) => [...gateRepo.waitingSessionIds()].some((w) => (sessions.head(w)?.id ?? w) === id),
+    risk: (prId, headSha) => {
+      const r = assessRepo.risk(prId);
+      return r && r.headSha === headSha ? r.level : null;
+    },
+    ciUndelivered: () => ciDelivery.undelivered(),
+    comments: commentLoop,
+    ciResend: async (item) => {
+      const r = await ciDelivery.resend(item);
+      ciStuckChanged();
+      return r;
+    },
+    notices: currentNotices,
+    reviews: () => reviewRequests.list(),
+    reviewScope: () => (settings.get("reviewRequestScope") === "registered" ? "registered" : "all"),
+    registeredSlugs: () => [...lessonsRepo.repos().map((r) => r.slug), ...ticketPrs.slugs()],
+    homeOpened: () => reviewPoller.catchUp(),
+    emit: () => safeSend(IPC.turnChanged),
+    now: Date.now,
+  });
+  turnChanged = () => turnService.changed();
   const keepAwakeSwitch = keepAwake;
   registerIpc({
     conv,
@@ -2959,6 +3054,8 @@ async function bootstrap(): Promise<void> {
     terminalKeys: meterTerminalKeys,
     onInvoked: (channel, args, result) => void recordInvoke(recordEvent, channel, args, result),
     memoryHistory: (since) => procServices.monitor.history(since),
+    turnBoard: (filter) => turnService.board(filter),
+    turnSendToAgent: (item) => turnService.sendToAgent(item),
     nowView: (merges) => {
       // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
       const queued = new Set([...gateRepo.waitingSessionIds()].map((id) => sessions.head(id)?.id ?? id));
@@ -2981,20 +3078,7 @@ async function bootstrap(): Promise<void> {
         decisions: inboxService.pendingDecisionViews(),
         recent: (id) => activityMonitor.recent(id),
         memory: activityMonitor.memoryLog(),
-        notices: [
-          ...buildNotices({
-            availability: availability.view(),
-            recentRuns: lessonRuns.recentFinished(20),
-            routing: routing.attention(),
-            sharedMcpError: sharedMcpOn(settings) && mcpHub.status().state === "failed" ? mcpHub.status().error : null,
-          }),
-          ...ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
-          ...costNotices(costBreaker?.views() ?? [], costTargetOf),
-          ...commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
-          ...stackNotices(stackService.notices()),
-          ...backtest.notices(),
-          ...intakeNotices(intake.notices()),
-        ],
+        notices: currentNotices(),
         sessionMemory: (id) => procServices.monitor.memoryOf(id),
         memorySnapshot: procServices.monitor.snapshot(),
         sharedMcp: sharedMcpOn(settings),
@@ -3138,6 +3222,9 @@ async function bootstrap(): Promise<void> {
   void healthReady.then(() => {
     if (headlessAbort.signal.aborted) return;
     prWatcher.start();
+    reviewPoller.start();
+    // 窗口切到前台：请你 review 的离上次超过 1 分钟就补查（R9）。
+    app.on("browser-window-focus", () => reviewPoller.catchUp());
     // 一次性补链接所有 ticket（含归档）的 PR；后台跑，失败下次启动重试。
     void runPrBackfill({
       tickets: () => tickets.list({ includeArchived: true }),
@@ -3306,6 +3393,8 @@ async function bootstrap(): Promise<void> {
     checkSnapshots.stop();
     holdWatcher.stop();
     prWatcher.stop();
+    reviewPoller.stop();
+    turnService.dispose();
     pty.killAll();
     keepAwakeSwitch.set(false);
     tray?.destroy();
