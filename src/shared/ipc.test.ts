@@ -30,6 +30,16 @@ describe("IPC whitelist", () => {
     expect(INVOKE_CHANNELS).toContain(IPC.convSearch);
   });
 
+  it("exposes the fork, conv:send and report-page channels as invokes and fork:changed as an event only (UI redesign layer 5)", () => {
+    for (const c of [IPC.forkAsk, IPC.forkSendConclusion, IPC.forkReaskFull, IPC.forkList, IPC.forkRemember, IPC.convSend, IPC.inboxReports]) {
+      expect(INVOKE_CHANNELS).toContain(c);
+      expect(EVENT_CHANNELS).not.toContain(c);
+    }
+    expect(EVENT_CHANNELS).toContain(IPC.forkChanged);
+    expect(INVOKE_CHANNELS).not.toContain(IPC.forkChanged);
+    expect(SEND_CHANNELS).not.toContain(IPC.forkChanged);
+  });
+
   it("exposes the memory-changed notification as an event only (final review 4)", () => {
     expect(EVENT_CHANNELS).toContain(IPC.memoryChanged);
     expect(INVOKE_CHANNELS).not.toContain(IPC.memoryChanged);

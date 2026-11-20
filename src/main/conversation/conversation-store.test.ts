@@ -94,6 +94,23 @@ describe("ConversationStore.list refresh marks", () => {
     expect(e.store.list("a", { limit: 10, before: first.id })).toEqual({ messages: [], refreshMarks: [], hasMore: false });
   });
 
+  it("treats a before id it does not know, or one from another conversation, as no cursor (layer 4 carry-over R3)", () => {
+    const e = env();
+    e.turn("问1", "答1", 100);
+    e.turn("问2", "答2", 200);
+    const latest = e.store.list("c", { limit: 3 });
+    expect(latest.messages).toHaveLength(3);
+    expect(e.store.list("c", { limit: 3, before: 99_999 })).toEqual(latest);
+    // 别的对话里的一条（时间比 a 的都早）：不能拿它的时间去截 a 的对话。
+    const t = e.repo.openTurn({ rootSessionId: "z", sessionId: "z", sourceKey: "zk", forkId: null, kind: "user", at: 50, asked: true });
+    const foreign = e.repo.addMessage({ turnId: t, rootSessionId: "z", sessionId: "z", role: "user", text: "别处", at: 50, forkId: null, sourceKey: "zm" });
+    expect(foreign).not.toBeNull();
+    expect(e.store.list("c", { limit: 3, before: foreign!.id })).toEqual(latest);
+    // 空对话加不认识的 before：换新标记照样全给（跟不带 before 一样）。
+    const empty = env();
+    expect(empty.store.list("a", { limit: 10, before: 12_345 })).toEqual(empty.store.list("a", { limit: 10 }));
+  });
+
   it("clamps the limit to 1..CONV_LIST_MAX", () => {
     const e = env();
     for (let i = 0; i < 110; i++) e.turn(`问${i}`, `答${i}`, 10 + i * 2);

@@ -5,6 +5,9 @@ import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
 import { backgroundActionArg, costSetArg, costSubjectArg } from "./validate";
 import { convListOptsArg, convQueryArg, convRootArg } from "./validate";
+import { devMessageArg, forkIdArg, forkQuestionArg, reportsPageArg } from "./validate";
+import { TASK_LIMIT } from "../../shared/control";
+import { FORK_QUESTION_MAX } from "../fork/fork-service";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
@@ -592,5 +595,38 @@ describe("turn args (UI redesign layer 1)", () => {
     ]) {
       expect(() => turnSendArg(bad), JSON.stringify(bad)).toThrow();
     }
+  });
+
+});
+
+describe("fork and report args (UI redesign layer 5)", () => {
+  it("forkIdArg takes only a positive integer", () => {
+    expect(forkIdArg(1)).toBe(1);
+    expect(forkIdArg(42)).toBe(42);
+    for (const bad of [0, -1, 1.5, "1", null, undefined, Number.NaN, 2 ** 60]) expect(() => forkIdArg(bad), String(bad)).toThrow();
+  });
+
+  it("forkQuestionArg trims, refuses blank and over-long questions", () => {
+    expect(forkQuestionArg("  为什么用 sqlite？ ")).toBe("为什么用 sqlite？");
+    expect(forkQuestionArg("问".repeat(FORK_QUESTION_MAX))).toHaveLength(FORK_QUESTION_MAX);
+    // 按字算：emoji 是两个 UTF-16 单元，也只算一个字。
+    expect([...forkQuestionArg("😀".repeat(FORK_QUESTION_MAX))]).toHaveLength(FORK_QUESTION_MAX);
+    for (const bad of ["  ", "", "x".repeat(FORK_QUESTION_MAX + 1), 5, null, undefined, ["q"]]) {
+      expect(() => forkQuestionArg(bad), typeof bad === "string" ? `len ${bad.length}` : String(bad)).toThrow();
+    }
+  });
+
+  it("reportsPageArg takes limit 1–100 and an optional positive before", () => {
+    expect(reportsPageArg({ limit: 1 })).toEqual({ limit: 1 });
+    expect(reportsPageArg({ limit: 100, before: 1_700_000_000_000 })).toEqual({ limit: 100, before: 1_700_000_000_000 });
+    for (const bad of [{ limit: 0 }, { limit: 101 }, { limit: 1.5 }, { limit: "10" }, { limit: 10, before: 0 }, { limit: 10, before: -5 }, { limit: 10, before: 1.5 }, { limit: 10, before: "1" }, {}, null, "x", []]) {
+      expect(() => reportsPageArg(bad), JSON.stringify(bad)).toThrow();
+    }
+  });
+
+  it("devMessageArg keeps the text as typed; refuses blank and longer than TASK_LIMIT", () => {
+    expect(devMessageArg(" 先别合 \n等 CI ")).toBe(" 先别合 \n等 CI ");
+    expect(devMessageArg("x".repeat(TASK_LIMIT))).toHaveLength(TASK_LIMIT);
+    for (const bad of [" \n ", "", "x".repeat(TASK_LIMIT + 1), 1, null, undefined]) expect(() => devMessageArg(bad)).toThrow();
   });
 });

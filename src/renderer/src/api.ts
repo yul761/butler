@@ -5,6 +5,7 @@ import type { BacktestActResult, BacktestAction, BacktestView } from "../../shar
 import type { IntakeActResult, IntakeAction, IntakeClassifyEdit, IntakeEffect, IntakePolicyOverrides, IntakePolicySetResult, IntakePolicyView, IntakeView } from "../../shared/intake";
 import type { MemoryHistoryPoint } from "../../shared/mem-usage";
 import type { ConvListOpts, ConvMessage, ConvPage } from "../../shared/conversation";
+import type { DevSendResult, ForkView, RememberResult } from "../../shared/fork";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyAction, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
@@ -39,7 +40,7 @@ import type {
   AutostartState, CiItemRef, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
-  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, OpenButlerSessionRequest, ButlerView, ButlerMessageView, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView,
+  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, OpenButlerSessionRequest, ButlerView, ButlerMessageView, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView, InboxItemView,
 } from "../../shared/types";
 
 declare global {
@@ -281,4 +282,13 @@ export const api = {
   convList: (sessionId: string, opts: ConvListOpts) => call<ConvPage>(IPC.convList, sessionId, opts),
   convSearch: (sessionId: string | null, query: string) => call<ConvMessage[]>(IPC.convSearch, sessionId, query),
   onConvAppended: (cb: (rootSessionId: string) => void) => window.butler.on(IPC.convAppended, cb),
+  /** 对话 tab（UI 重做第 5 层）：forkId 为 null 开一个新的分叉讨论，数字接着问那个分叉。 */
+  forkAsk: (rootSessionId: string, forkId: number | null, question: string) => call<{ forkId: number }>(IPC.forkAsk, rootSessionId, forkId, question),
+  forkSendConclusion: (forkId: number) => call<DevSendResult>(IPC.forkSendConclusion, forkId),
+  forkReaskFull: (forkId: number) => call<{ forkId: number }>(IPC.forkReaskFull, forkId),
+  forkList: (anyId: string) => call<ForkView[]>(IPC.forkList, anyId),
+  forkRemember: (forkId: number) => call<{ result: RememberResult }>(IPC.forkRemember, forkId),
+  convSend: (anyId: string, text: string) => call<DevSendResult>(IPC.convSend, anyId, text),
+  inboxReports: (scope: InboxScope, o: { before?: number; limit: number }) => call<{ reports: InboxItemView[]; hasMore: boolean }>(IPC.inboxReports, scope, o),
+  onForkChanged: (cb: (rootSessionId: string) => void) => window.butler.on(IPC.forkChanged, cb),
 };

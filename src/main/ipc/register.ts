@@ -81,6 +81,9 @@ import { meteredIpcResult } from "./result";
 import type { ConversationStore } from "../conversation/conversation-store";
 import { memoryHandlers } from "./memory-handlers";
 import { convHandlers } from "./conv-handlers";
+import { forkHandlers } from "./fork-handlers";
+import type { ForkService } from "../fork/fork-service";
+import type { DevSender } from "../fork/dev-send";
 import { settingsHandlers } from "./settings-handlers";
 import { featurePolicyHandlers, featurePolicyLayers } from "./feature-policy-handlers";
 import type { FeaturePolicyState } from "../../shared/feature-rows";
@@ -89,7 +92,7 @@ import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../sh
 import {
   addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
-  stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg } from "./validate";
+  stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -213,7 +216,7 @@ export interface IpcDeps {
   /** 重发一条递不出去的 CI 结论（工作流 W）。 */
   ciResend: (item: CiItemRef) => Promise<string>;
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）。 */
-  inbox: Pick<InboxService, "view" | "answer">;
+  inbox: Pick<InboxService, "view" | "answer" | "reportsPage">;
   /** 界面上的“换新”按钮（计划 16）：马上回答，换新在后台跑。 */
   refreshSession: (sessionId: string) => RefreshSessionResult;
   /** 「清理闲置」按钮（BTL-190 第 8 点）：把这些 session 里闲置的关掉，返回开始关的个数（关闭在后台跑）。 */
@@ -242,6 +245,10 @@ export interface IpcDeps {
   memory: Pick<MemoryService, "view" | "why">;
   /** 对话另存（UI 重做第 4 层）：只读。 */
   conv: Pick<ConversationStore, "list" | "search">;
+  /** 对话 tab 的分叉讨论（UI 重做第 5 层）。 */
+  fork: Pick<ForkService, "ask" | "reaskFull" | "list" | "sendConclusion" | "remember">;
+  /** 对话 tab 的输入框选「开发 session」时发进去（和送结论同一个 DevSender）。 */
+  devSend: Pick<DevSender, "send">;
   autostart: { get(): AutostartState; set(on: boolean): AutostartState };
   /** 防休眠开关（只在内存里，启动时是关的）。 */
   keepAwake: { isOn(): boolean; set(on: boolean): void };
@@ -762,6 +769,7 @@ export function registerIpc(d: IpcDeps): void {
   // 答了由 InboxService 自己 notify。
   handle(IPC.inboxList, (raw: unknown): InboxView => d.inbox.view(inboxScopeArg(raw)));
   handle(IPC.inboxAnswer, (id: unknown, text: unknown): boolean => d.inbox.answer(inboxIdArg(id), inboxAnswerArg(text)));
+  handle(IPC.inboxReports, (scope: unknown, o: unknown) => d.inbox.reportsPage(inboxScopeArg(scope), reportsPageArg(o)));
 
   handle(IPC.followupsList, (ticketKey: string) => d.followups.listByTicket(ticketKey));
   handle(IPC.followupsSetStatus, (id: string, status: FollowupStatus) => {
@@ -832,6 +840,14 @@ export function registerIpc(d: IpcDeps): void {
   const cv = convHandlers({ conv: d.conv });
   handle(IPC.convList, cv.list);
   handle(IPC.convSearch, cv.search);
+  // 对话 tab（UI 重做第 5 层）：分叉讨论、送结论、发给开发 session。
+  const fk = forkHandlers({ fork: d.fork, devSend: d.devSend });
+  handle(IPC.forkAsk, fk.ask);
+  handle(IPC.forkSendConclusion, fk.sendConclusion);
+  handle(IPC.forkReaskFull, fk.reaskFull);
+  handle(IPC.forkList, fk.list);
+  handle(IPC.forkRemember, fk.remember);
+  handle(IPC.convSend, fk.convSend);
   // 内存历史（WS-M A）：最近 hours 小时（1 到 336），默认 24。
   handle(IPC.memUsageHistory, (hours: unknown): MemoryHistoryPoint[] => {
     const h = typeof hours === "number" && Number.isFinite(hours) ? Math.min(336, Math.max(1, hours)) : 24;

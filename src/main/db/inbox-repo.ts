@@ -133,13 +133,14 @@ export class InboxRepo {
     return (this.db.prepare(`SELECT * FROM inbox_items WHERE kind = 'report' AND status = 'pending' ORDER BY created_at, id`).all() as unknown as Row[]).map(toItem);
   }
 
-  /** 最近的汇报，从新到旧，最多 limit 条。 */
-  recentReports(filter: InboxFilter, limit: number): InboxItem[] {
+  /** 最近的汇报，从新到旧，最多 limit 条。给了 before（时间）只要 created_at 早于它的（总控对话区往前翻页，UI 重做第 5 层）。 */
+  recentReports(filter: InboxFilter, limit: number, before?: number): InboxItem[] {
     const w = where(filter);
+    const b = before === undefined ? "" : " AND created_at < ?";
     return (
       this.db
-        .prepare(`SELECT * FROM inbox_items WHERE kind = 'report'${w.sql} ORDER BY created_at DESC, id DESC LIMIT ?`)
-        .all(...w.args, limit) as unknown as Row[]
+        .prepare(`SELECT * FROM inbox_items WHERE kind = 'report'${w.sql}${b} ORDER BY created_at DESC, id DESC LIMIT ?`)
+        .all(...w.args, ...(before === undefined ? [] : [before]), limit) as unknown as Row[]
     ).map(toItem);
   }
 

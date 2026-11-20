@@ -416,6 +416,28 @@ describe("InboxService views", () => {
     expect(inbox.pendingDecisionViews()[0].open).toBe(false);
   });
 
+  it("pages reports for the control conversation: newest first, before is a time, one extra row tells hasMore", () => {
+    const fc = session("fc", { featureId: 3 });
+    const { inbox, repo, state } = setup({ sessions: [fc], epicOf: { 3: 2 } });
+    for (const [text, at] of [["r1", 10], ["r2", 20], ["r3", 30], ["r4", 40]] as const) {
+      state.now = at;
+      inbox.report(fc, text, "progress");
+    }
+    repo.addReport({ sessionId: "other", ticketKey: null, featureId: 9, epicId: null, text: "elsewhere", kind: "progress", status: "dismissed", createdAt: 35 });
+    const first = inbox.reportsPage({ featureId: 3 }, { limit: 2 });
+    expect(first.reports.map((x) => x.text)).toEqual(["r4", "r3"]);
+    expect(first.hasMore).toBe(true);
+    expect(first.reports[0]).toEqual(inbox.view({ featureId: 3 }).reports[0]);
+    const second = inbox.reportsPage({ featureId: 3 }, { limit: 2, before: first.reports[1].createdAt });
+    expect(second.reports.map((x) => x.text)).toEqual(["r2", "r1"]);
+    expect(second.hasMore).toBe(false);
+    expect(inbox.reportsPage({ featureId: 3 }, { limit: 10, before: 10 })).toEqual({ reports: [], hasMore: false });
+    expect(inbox.reportsPage({ all: true }, { limit: 3 }).reports.map((x) => x.text)).toEqual(["r4", "elsewhere", "r3"]);
+    expect(inbox.reportsPage({ epicId: 2 }, { limit: 4 })).toMatchObject({ hasMore: false });
+    // 原来的 view 不受影响。
+    expect(inbox.view({ featureId: 3 }).reports.map((x) => x.text)).toEqual(["r4", "r3", "r2", "r1"]);
+  });
+
   it("roleOf", () => {
     expect(roleOf(session("x", { ticketKey: "A", coordinator: true }))).toBe("ticket_coordinator");
     expect(roleOf(session("x", { ticketKey: "A" }))).toBe("ticket");

@@ -229,6 +229,15 @@ export const IPC = {
   convList: "conv:list",
   convSearch: "conv:search",
   convAppended: "conv:appended",
+  /** 对话 tab（UI 重做第 5 层）：分叉讨论、发给开发 session、总控对话区的汇报分页；fork:changed 推的是链根。 */
+  forkAsk: "fork:ask",
+  forkSendConclusion: "fork:send-conclusion",
+  forkReaskFull: "fork:reask-full",
+  forkList: "fork:list",
+  forkRemember: "fork:remember",
+  convSend: "conv:send",
+  inboxReports: "inbox:reports",
+  forkChanged: "fork:changed",
   appAutostartGet: "app:autostartGet",
   appLanguage: "app:language",
   appAutostartSet: "app:autostartSet",
@@ -262,11 +271,12 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.intakeView, IPC.intakeEffect, IPC.intakePolicyGet, IPC.intakePolicySet, IPC.intakeClassify, IPC.intakePoll, IPC.intakeAct,
   IPC.prAssessment, IPC.preReviewRun, IPC.briefRegenerate, IPC.briefPost, IPC.prPolicyGet, IPC.prPolicySet, IPC.reviewEffect, IPC.reviewQueue,
   IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory, IPC.convList, IPC.convSearch,
+  IPC.forkAsk, IPC.forkSendConclusion, IPC.forkReaskFull, IPC.forkList, IPC.forkRemember, IPC.convSend, IPC.inboxReports,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible];
 /** 主进程 → 渲染进程。 */
-export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.activityEvent, IPC.memoryChanged, IPC.appKeepAwakeChanged, IPC.convAppended, IPC.turnChanged];
+export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.activityEvent, IPC.memoryChanged, IPC.appKeepAwakeChanged, IPC.convAppended, IPC.turnChanged, IPC.forkChanged];
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };

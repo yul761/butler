@@ -401,4 +401,11 @@ export class InboxService {
       reports: this.d.repo.recentReports(filter, RECENT_REPORTS_LIMIT).map((x) => this.itemView(x)),
     };
   }
+
+  /** 总控对话区的汇报，一页 limit 条、从新到旧；before 是上一页最早一条的 createdAt。多取一条判断还有没有更早的。 */
+  reportsPage(scope: InboxScope, o: { before?: number; limit: number }): { reports: InboxItemView[]; hasMore: boolean } {
+    const filter: InboxFilter = "all" in scope ? null : scope;
+    const rows = this.d.repo.recentReports(filter, o.limit + 1, o.before);
+    return { reports: rows.slice(0, o.limit).map((x) => this.itemView(x)), hasMore: rows.length > o.limit };
+  }
 }

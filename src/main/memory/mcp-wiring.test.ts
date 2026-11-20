@@ -36,9 +36,11 @@ describe("the ticket memory MCP only reaches interactive sessions (P4-R6)", () =
     );
     expect(importers).toEqual(["src/main/index.ts"]);
 
-    // memoryMcpConfig：一处定义、一处传给 SessionService，别的地方（HandoffRunner、MCP 探测、定时任务）都拿不到。
-    expect(indexSource.match(/\bmemoryMcpConfig\b/g)).toHaveLength(2);
+    // memoryMcpConfig：一处定义、一处传给 SessionService，再一处给完整分叉（UI 重做第 5 层：跟开发 session 同一组 server，
+    // 只读 hook 只放行 recall/facts/why）；别的地方（HandoffRunner、MCP 探测、定时任务）都拿不到。
+    expect(indexSource.match(/\bmemoryMcpConfig\b/g)).toHaveLength(3);
     expect(block("const sessionService = new SessionService({")).toContain("mcpConfig: memoryMcpConfig,");
+    expect(block("const forkMcpConfig = (dev: DevLaunch, runId: string)", "\n  };")).toMatch(/memoryMcpConfig\(s\.ticketKey, [^\n]*, termId\)/);
     expect(indexSource.match(/\bwriteTicketMcpConfig\(/g)).toHaveLength(1);
     expect(block("const memoryMcpConfig =", "\n  };")).toContain("writeTicketMcpConfig(");
 

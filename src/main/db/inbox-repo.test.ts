@@ -54,6 +54,12 @@ describe("InboxRepo (BTL-190 2+3)", () => {
     expect(repo.recentReports({ featureId: 3 }, 10).map((r) => r.id)).toEqual([r2, r1]);
     expect(repo.recentReports({ epicId: 2 }, 2).map((r) => r.id)).toEqual([r3, r2]);
     expect(repo.recentReports(null, 10).map((r) => r.id)).toEqual([r3, r2, r1]);
+    // 翻页（UI 重做第 5 层）：只要 created_at 早于 before 的。
+    expect(repo.recentReports(null, 10, 7).map((r) => r.id)).toEqual([r2, r1]);
+    expect(repo.recentReports(null, 1, 7).map((r) => r.id)).toEqual([r2]);
+    expect(repo.recentReports({ epicId: 2 }, 10, 6).map((r) => r.id)).toEqual([r1]);
+    expect(repo.recentReports(null, 10, 5)).toEqual([]);
+    expect(repo.recentReports(null, 10, undefined).map((r) => r.id)).toEqual([r3, r2, r1]);
     expect(repo.pendingReports().map((r) => r.id)).toEqual([r2, r3]);
     // 汇报不算「待你决定」。
     expect(repo.pendingDecisions({ featureId: 3 }).map((d) => d.id)).toEqual([a]);
