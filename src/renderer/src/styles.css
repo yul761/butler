@@ -23,6 +23,9 @@
   --live-need: #d4a017;
   --live-wire: #b9b9b3;
   --live-grain: #e4e4e0;
+  /* 谁该动（UI 重做 §5.1）：颜色只表示谁该动，不表示严重程度。 */
+  --turn-ask: #b91c1c; --turn-merge: #166534; --turn-stuck: #6d28d9; --turn-butler: #92400e;
+  --turn-agent: #1d4ed8; --turn-external: #5f5f5a; --turn-done: #276b42; --turn-idle: #66665f;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -48,6 +51,8 @@
     --live-need: #e2b84a;
     --live-wire: #55554f;
     --live-grain: #2e2e2b;
+    --turn-ask: #f87171; --turn-merge: #4ade80; --turn-stuck: #c4b5fd; --turn-butler: #fbbf24;
+    --turn-agent: #6b9cf0; --turn-external: #9b9b96; --turn-done: #86d9a6; --turn-idle: var(--muted);
   }
 }
 * { box-sizing: border-box; }
@@ -660,3 +665,33 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .auto-choices .pre-wrap { white-space: pre-wrap; }
 .notify-log td { padding: 2px 8px 2px 0; vertical-align: top; overflow-wrap: anywhere; }
 .notify-log tr.notify-quiet, .notify-log tr.notify-filtered { color: var(--muted); }
+
+/* 谁该动的标签、圆点和进度条（UI 重做 §5.1）。 */
+.turn-tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+.turn-tag.turn-ask { color: var(--turn-ask); background: color-mix(in srgb, var(--turn-ask) 14%, var(--bg)); }
+.turn-tag.turn-merge { color: var(--turn-merge); background: color-mix(in srgb, var(--turn-merge) 14%, var(--bg)); }
+.turn-tag.turn-stuck { color: var(--turn-stuck); background: color-mix(in srgb, var(--turn-stuck) 14%, var(--bg)); }
+.turn-tag.turn-butler { color: var(--turn-butler); background: color-mix(in srgb, var(--turn-butler) 14%, var(--bg)); }
+.turn-tag.turn-agent { color: var(--turn-agent); background: color-mix(in srgb, var(--turn-agent) 14%, var(--bg)); }
+.turn-tag.turn-external { color: var(--turn-external); background: color-mix(in srgb, var(--turn-external) 14%, var(--bg)); }
+.turn-tag.turn-done { color: var(--turn-done); background: color-mix(in srgb, var(--turn-done) 14%, var(--bg)); }
+.turn-tag.turn-idle { color: var(--turn-idle); background: color-mix(in srgb, var(--turn-idle) 14%, var(--bg)); }
+.turn-dot { display: inline-block; flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; }
+.turn-dot.turn-ask { background: var(--turn-ask); }
+.turn-dot.turn-merge { background: var(--turn-merge); }
+.turn-dot.turn-stuck { background: var(--turn-stuck); }
+.turn-dot.turn-butler { background: var(--turn-butler); }
+.turn-dot.turn-agent { background: var(--turn-agent); }
+.turn-dot.turn-external { background: var(--turn-external); }
+.turn-dot.turn-done { background: var(--turn-done); }
+.turn-dot.turn-idle { background: var(--turn-idle); }
+.turn-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--border); }
+.turn-bar > i { display: block; height: 100%; }
+.turn-bar > i.turn-ask { background: var(--turn-ask); }
+.turn-bar > i.turn-merge { background: var(--turn-merge); }
+.turn-bar > i.turn-stuck { background: var(--turn-stuck); }
+.turn-bar > i.turn-butler { background: var(--turn-butler); }
+.turn-bar > i.turn-agent { background: var(--turn-agent); }
+.turn-bar > i.turn-external { background: var(--turn-external); }
+.turn-bar > i.turn-done { background: var(--turn-done); }
+.turn-bar > i.turn-idle { background: var(--turn-idle); }
