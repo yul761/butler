@@ -716,3 +716,13 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .all-work-table .row-name { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: none; background: transparent; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .all-work-table .row-name:hover { text-decoration: underline; }
 .all-work-more { margin-top: 20px; }
+
+/* 首页卡片（UI 重做第 2 层）：标签、一句话和位置、按钮一行排开；位置单行省略，窄窗口时按钮换到下一行。 */
+.turn-card { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); margin-bottom: 8px; }
+.turn-card-body { flex: 1 1 260px; min-width: 0; }
+.turn-card .sentence { margin: 0; }
+.turn-card .notice { margin: 0; padding: 0; border: none; background: transparent; }
+.turn-card .where { display: flex; gap: 8px; margin: 2px 0 0; font-size: 12px; min-width: 0; }
+.turn-card .where .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.turn-card .where .age { flex-shrink: 0; }
+.turn-card > .actions { flex-shrink: 0; }

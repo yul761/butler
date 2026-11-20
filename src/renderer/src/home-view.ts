@@ -5,6 +5,7 @@ import { mostUrgent, YOU_KIND_RANK, type ScopeTurnRow, type Turn, type TurnBoard
 import type { Route } from "./App";
 import { formatDuration } from "./components/TicketActivity";
 import type { UiStrings } from "./strings";
+import { turnSentence } from "./turn-text";
 import type { TurnTone } from "./turn-tone";
 
 export { turnTone, type TurnTone } from "./turn-tone";
@@ -133,4 +134,22 @@ export function scopeWho(row: ScopeTurnRow, S: UiStrings): { tone: TurnTone | nu
 /** 一个 ticket 里最急的那一项（第 1 层的 mostUrgent）。 */
 export function topItem(items: TurnItem[], ticketKey: string): TurnItem | null {
   return mostUrgent(items.filter((i) => i.ticketKey === ticketKey));
+}
+
+export interface RunningRow { key: string; ticketKey: string | null; owner: "agent" | "external"; who: string; sentence: string; age: string }
+
+/** 「进行中」：agent 和外部在推进的项，等得久的在前。 */
+export function runningRows(items: TurnItem[], S: UiStrings, now: number): RunningRow[] {
+  const rows: (RunningRow & { since: number })[] = [];
+  for (const i of items) {
+    const t = i.turn;
+    if (t.owner !== "agent" && t.owner !== "external") continue;
+    const who = t.owner === "agent" ? S.hm.whoAgent : t.names.length > 0 ? t.names.join(", ") : t.kind === "ci_running" ? S.hm.whoCi : S.hm.whoExternal;
+    const pr = i.pr ? `${i.pr.repo}#${i.pr.number}` : "";
+    rows.push({
+      key: `${i.ticketKey ?? ""}|${pr}|${t.kind}`, ticketKey: i.ticketKey, owner: t.owner, who,
+      sentence: turnSentence(t, i, S), age: i.since > 0 ? S.hm.ago(formatDuration(now - i.since, S)) : "", since: i.since,
+    });
+  }
+  return rows.sort((a, b) => a.since - b.since).map(({ since: _s, ...r }) => r);
 }

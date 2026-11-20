@@ -371,6 +371,7 @@ const ZH = {
       answerGone: "这个问题已经没了",
       sendNot: (reason: string) => `没送出去：${reason}`,
       fixNot: (reason: string) => `没开成修复 session：${reason}`,
+      sendReason: { not_found: "这个 PR 已经不在了", not_sendable: "现在送不了", no_comments: "没有要送的评论" },
     },
     ago: (d: string) => `${d}前`,
     reviewAgo: (d: string) => `请你 ${d} 了`,

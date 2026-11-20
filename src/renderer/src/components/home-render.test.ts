@@ -2,7 +2,9 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { EpicView, FeatureView, NowNotice, NowView, TicketView } from "../../../shared/types";
-import type { ScopeTurnRow, TurnBoard } from "../../../shared/turn";
+import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../../shared/turn";
+import type { NameCtx } from "../home-view";
+import { turnSentence } from "../turn-text";
 import { dotKey, type Dot } from "../sidebar-view";
 import { S } from "../strings";
 import { AllWorkBody, type AllWorkBodyProps } from "./AllWorkPage";
@@ -10,6 +12,7 @@ import { HomeMore } from "./HomeMore";
 import { NoWorkLine } from "./NoWorkLine";
 import { Notice, noticeKey } from "./Notice";
 import { Sidebar } from "./Sidebar";
+import { TurnCard } from "./TurnCard";
 
 // UI 重做第 2 层：侧栏、卡片、首页、全部工作的渲染测试（renderToStaticMarkup，不调 api）。
 
@@ -167,5 +170,61 @@ describe("NoWorkLine (until the first-run home lands)", () => {
     const html = renderToStaticMarkup(createElement(NoWorkLine, { onNewTicket: () => {}, onNewFeature: () => {}, onNewEpic: () => {} }));
     expect(html).toContain(S.hm.noWork);
     for (const t of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, `+ ${S.newEpic}`]) expect(html).toContain(t);
+  });
+});
+
+describe("TurnCard", () => {
+  const ctx: NameCtx = { epics: new Map([[1, "Epic名"]]), features: new Map([[11, "Feature名"]]), tickets: new Map([["BTL-1", "t"]]) };
+  const item = (turn: Turn, o: Partial<TurnItem> = {}): TurnItem =>
+    ({ ticketKey: "BTL-1", pr: null, epicId: 1, featureId: 11, turn, since: 1, others: 0, ...o });
+  const render = (i: TurnItem) => renderToStaticMarkup(createElement(TurnCard, {
+    item: i, ctx, now: 60_001, onFix: () => {}, onOpen: () => {}, onGo: () => {}, onChanged: () => {},
+  }));
+  const pr = { repo: "acme/app", number: 12, title: "PR", url: "https://github.com/acme/app/pull/12" };
+
+  it("an answer card offers the options and a look", () => {
+    const turn: Turn = { owner: "you", kind: "answer", question: "要不要先回测？", options: ["可以", "不行，先回测"], askId: 7, sessionId: "s" };
+    const html = render(item(turn));
+    expect(html).toContain('class="turn-tag turn-ask"');
+    expect(html).toContain(S.hm.kind.answer);
+    expect(html).toContain(">可以</button>");
+    expect(html).toContain(">不行，先回测</button>");
+    expect(html).toContain(`>${S.hm.act.look}</button>`);
+    expect(html).toContain(turnSentence(turn, item(turn), S));
+    expect(html).toContain("Epic名 › Feature名 › BTL-1");
+    expect(render(item({ ...turn, askId: null }))).not.toContain(">可以</button>");
+  });
+
+  it("a merge card opens the PR", () => {
+    const html = render(item({ owner: "you", kind: "merge", risk: null }, { pr }));
+    expect(html).toContain(`>${S.hm.act.openPr}</button>`);
+    expect(html).toContain('class="turn-tag turn-merge"');
+  });
+
+  it("a review card shows the repo and author, with no look", () => {
+    const html = render(item({ owner: "you", kind: "review", author: "bob", title: "PR", url: pr.url }, { ticketKey: null, epicId: null, featureId: null, pr }));
+    expect(html).toContain("acme/app#12 · bob");
+    expect(html).not.toContain(S.hm.act.look);
+  });
+
+  it("a stuck card offers a fix session only inside a feature", () => {
+    const turn: Turn = { owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s" };
+    expect(render(item(turn))).toContain(`>${S.hm.act.fix}</button>`);
+    expect(render(item(turn, { featureId: null }))).not.toContain(S.hm.act.fix);
+  });
+
+  it("a Butler card renders the notice with its own buttons", () => {
+    const html = render(item({ owner: "you", kind: "butler", notice: { kind: "lessons_paused" } }, { ticketKey: null, epicId: null, featureId: null }));
+    expect(html).toContain('data-testid="now-notice-lessons_paused"');
+    expect(html).toContain(S.hm.kind.butler);
+    expect(html).not.toContain(S.hm.act.look);
+  });
+
+  it("puts the full location in a title", () => {
+    const long = "z".repeat(200);
+    const html = renderToStaticMarkup(createElement(TurnCard, {
+      item: item({ owner: "you", kind: "merge", risk: null }), ctx: { ...ctx, epics: new Map([[1, long]]) }, now: 1, onFix: () => {}, onOpen: () => {}, onGo: () => {}, onChanged: () => {},
+    }));
+    expect(html).toContain(`title="${long} › Feature名 › BTL-1"`);
   });
 });

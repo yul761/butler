@@ -3,8 +3,10 @@ import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../shared/turn"
 import { STRINGS } from "./strings";
 import {
   HOME_CARD_CAP, YOU_KIND_ORDER, barSegments, capCards, cardActions, homeLede, homeTitle, locationOf, lookTarget, prUrl,
-  scopeLine, scopeRoute, scopeWho, topItem, turnTone, visibleScopes, youCards, type NameCtx,
+  runningRows, scopeLine, scopeRoute, scopeWho, topItem, turnTone, visibleScopes, youCards, type NameCtx,
 } from "./home-view";
+import { formatDuration } from "./components/TicketActivity";
+import { turnSentence } from "./turn-text";
 
 const S = STRINGS.zh;
 const MIN = 60_000;
@@ -200,3 +202,25 @@ describe("topItem", () => {
 // 编译期检查：TurnBoard 的 counts 能直接给 homeLede
 const _c: TurnBoard["counts"] = { you: 0, agent: 0, external: 0, mergedToday: 0 };
 void homeLede(_c, S);
+
+describe("runningRows", () => {
+  const it0 = (turn: Turn, o: Partial<TurnItem> = {}): TurnItem => ({ ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, turn, since: 1000, others: 0, ...o });
+  it("lists agent and external work, longest wait first, with who and the sentence", () => {
+    const agent = it0({ owner: "agent", kind: "fixing_ci", sessionId: "s" }, { ticketKey: "BTL-2", since: 5000 });
+    const ci = it0({ owner: "external", kind: "ci_running", names: [] }, { ticketKey: "BTL-3", since: 2000 });
+    const review = it0({ owner: "external", kind: "awaiting_review", names: ["bob", "amy"] }, { ticketKey: "BTL-4", since: 3000 });
+    const rows = runningRows([
+      it0({ owner: "you", kind: "merge", risk: null }), it0({ owner: "done", kind: "merged" }), it0({ owner: "idle", kind: "not_started" }), agent, ci, review,
+    ], S, 65_000);
+    expect(rows.map((r) => r.ticketKey)).toEqual(["BTL-3", "BTL-4", "BTL-2"]);
+    expect(rows.map((r) => r.who)).toEqual([S.hm.whoCi, "bob, amy", S.hm.whoAgent]);
+    expect(rows.map((r) => r.owner)).toEqual(["external", "external", "agent"]);
+    expect(rows[2].sentence).toBe(turnSentence(agent.turn, agent, S));
+    expect(rows[0].age).toBe(S.hm.ago(formatDuration(63_000, S)));
+    expect(new Set(rows.map((r) => r.key)).size).toBe(3);
+  });
+
+  it("names a waiting merge queue as others", () => {
+    expect(runningRows([it0({ owner: "external", kind: "merge_queue", names: [] })], S, 2000)[0].who).toBe(S.hm.whoExternal);
+  });
+});

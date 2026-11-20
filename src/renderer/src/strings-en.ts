@@ -363,6 +363,7 @@ export const EN: UiStrings = {
       answerGone: "This question is gone",
       sendNot: (reason: string) => `Not sent: ${reason}`,
       fixNot: (reason: string) => `Fix session not opened: ${reason}`,
+      sendReason: { not_found: "this PR is gone", not_sendable: "it cannot be sent right now", no_comments: "there are no comments to send" },
     },
     ago: (d: string) => `${d} ago`,
     reviewAgo: (d: string) => `asked ${d} ago`,
