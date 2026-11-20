@@ -654,6 +654,7 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .turn-card { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); margin-bottom: 8px; }
 .turn-card-body { flex: 1 1 260px; min-width: 0; }
 .turn-card .sentence { margin: 0; }
+.turn-card .stuck-action { margin: 2px 0 0; }
 .turn-card .notice { margin: 0; padding: 0; border: none; background: transparent; }
 .turn-card .where { display: flex; gap: 8px; margin: 2px 0 0; font-size: 12px; min-width: 0; }
 .turn-card .where .path { display: flex; min-width: 0; white-space: nowrap; }

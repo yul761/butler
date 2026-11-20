@@ -20,7 +20,8 @@ export type Turn =
   | { owner: "you"; kind: "answer"; question: string; options: string[]; askId: number | null; sessionId: string }
   | { owner: "you"; kind: "merge"; risk: "low" | "medium" | "high" | null }
   | { owner: "you"; kind: "review"; author: string; title: string; url: string }
-  | { owner: "you"; kind: "stuck"; source: "needs_you" | "blocked_report" | "silent" | "ticket_blocked"; detail: string | null; sessionId: string | null }
+  // action：卡住裁判建议你怎么做（只有 silent 有，卡片上原因下面一行）；没有为 null 或不写。
+  | { owner: "you"; kind: "stuck"; source: "needs_you" | "blocked_report" | "silent" | "ticket_blocked"; detail: string | null; action?: string | null; sessionId: string | null }
   | { owner: "you"; kind: "unattended"; why: UnattendedWhy; canSend: boolean; sessionId: string | null }
   | { owner: "you"; kind: "butler"; notice: NowNotice }
   | { owner: "agent"; kind: "fixing_ci" | "addressing_review" | "rebasing" | "working"; sessionId: string }
@@ -231,7 +232,7 @@ export interface SessionTurnInput {
   sessionId: string;
   target: NowTarget;
   title: string | null;
-  activity: Pick<SessionActivity, "kind" | "stuck" | "reason" | "startedAt" | "lastOutputAt" | "limit"> | null;
+  activity: (Pick<SessionActivity, "kind" | "stuck" | "reason" | "startedAt" | "lastOutputAt" | "limit"> & Partial<Pick<SessionActivity, "action">>) | null;
   /** 这个 session 最早一条没回答的 ask_user（inbox_items.id）。 */
   ask: { id: number; question: string; options: string[]; at: number } | null;
   needsYou: { reason: string; category: InterruptCategory } | null;
@@ -258,7 +259,7 @@ export function sessionTurn(i: SessionTurnInput): TimedTurn {
   }
   if (a?.limit) return { turn: { owner: "you", kind: "butler", notice: { kind: "session_limited", target: i.target, title: i.title, limit: a.limit } }, since: i.now };
   if (a?.stuck === true) {
-    return { turn: { owner: "you", kind: "stuck", source: "silent", detail: a.reason, sessionId }, since: a.lastOutputAt ?? a.startedAt ?? i.now };
+    return { turn: { owner: "you", kind: "stuck", source: "silent", detail: a.reason, action: a.action ?? null, sessionId }, since: a.lastOutputAt ?? a.startedAt ?? i.now };
   }
   const r = i.lastReport;
   if (r && r.kind === "blocked" && !working && (i.stoppedAt === null || i.stoppedAt <= r.at + REPORT_STOP_SLACK_MS)) {

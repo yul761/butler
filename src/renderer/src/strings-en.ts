@@ -354,6 +354,7 @@ export const EN: UiStrings = {
       `Agents are on ${agent}, ${external} ${external === 1 ? "is" : "are"} waiting on CI or someone else, ${merged} merged today.`,
     ledeIdle: "Nothing is running right now.",
     kind: { answer: "Needs an answer", merge: "Ready to merge", review: "Review requested", stuck: "Stuck", unattended: "Nobody on it", butler: "Butler needs a click" } as Record<YouKind, string>,
+    stuckAction: (a: string) => `Suggested: ${a}`,
     act: {
       openPr: "Open PR",
       look: "Take a look",

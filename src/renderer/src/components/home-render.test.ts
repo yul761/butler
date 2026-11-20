@@ -240,6 +240,14 @@ describe("TurnCard", () => {
     expect(render(item({ ...silent, source: "needs_you", detail: "卡在权限上" }))).not.toContain(`>${S.hm.act.ignore}</button>`);
   });
 
+  it("a silent stuck card shows the judge's suggestion on a line after the reason", () => {
+    const silent: Turn = { owner: "you", kind: "stuck", source: "silent", detail: "在等锁", action: "结束进程再重跑", sessionId: "s" };
+    const html = render(item(silent));
+    expect(html).toMatch(/在等锁<\/p><p class="stuck-action">/);
+    expect(html).toContain(`<p class="stuck-action">${S.hm.stuckAction("结束进程再重跑")}</p>`);
+    expect(render(item({ ...silent, action: null }))).not.toContain("stuck-action");
+  });
+
   it("a Butler card renders the notice with its own buttons", () => {
     const html = render(item({ owner: "you", kind: "butler", notice: { kind: "lessons_paused" } }, { ticketKey: null, epicId: null, featureId: null }));
     expect(html).toContain('data-testid="now-notice-lessons_paused"');

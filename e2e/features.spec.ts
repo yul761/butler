@@ -493,6 +493,7 @@ const LONG_COMMAND = "pnpm test --filter @acme/checkout-frontend --run --reporte
 /** 假 claude 写进输出文件的内容。 */
 const COMMAND_OUTPUT = Array.from({ length: 8 }, (_, i) => `step ${i + 1} of 8`);
 const VERDICT_REASON = { zh: "测试进程在等一个不会来的信号", en: "The test process is waiting for a signal that will not come" };
+const VERDICT_ACTION = { zh: "确认测试进程没有在动，再决定要不要杀掉重跑", en: "Check that the test process is idle, then decide whether to kill and rerun it" };
 const STUCK_CHECK_MS = 1000;
 
 const resizeWindow = (app: ElectronApplication, width: number, height: number) =>
@@ -596,6 +597,8 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await expect(card).toHaveAttribute("data-kind", "stuck");
   await expect(card.locator(".turn-tag")).toHaveText(S.hm.kind.stuck);
   await expect(card.locator(".sentence")).toContainText(VERDICT_REASON.zh);
+  // 裁判的建议动作在原因下面一行。
+  await expect(card.locator(".stuck-action")).toHaveText(S.hm.stuckAction(VERDICT_ACTION.zh));
   await expect(pageTab(page, S.lay.tabOverview)).toHaveClass(/\battention\b/);
   await shot(page, "live-status-zh.png", "light");
   await shot(page, "live-status-zh-dark.png", "dark");
@@ -736,6 +739,7 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   const enFeatureCard = en.locator(".feature-page .scope-you").getByTestId("turn-card").filter({ has: en.locator(".where .key", { hasText: /^DMS-2$/ }) });
   await expect(enFeatureCard.locator(".turn-tag")).toHaveText(E.hm.kind.stuck);
   await expect(enFeatureCard.locator(".sentence")).toContainText(VERDICT_REASON.en);
+  await expect(enFeatureCard.locator(".stuck-action")).toHaveText(E.hm.stuckAction(VERDICT_ACTION.en));
   await expect(enFeatureCard.getByRole("button", { name: E.hm.act.fix, exact: true })).toBeVisible();
   await expect(enFeatureCard.getByRole("button", { name: E.hm.act.ignore, exact: true })).toBeVisible();
   await shot(en, "live-status-en.png", "light");

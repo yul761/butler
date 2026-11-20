@@ -158,6 +158,9 @@ describe("sessionTurn", () => {
   it("only the four sources are stuck", () => {
     expect(sessionTurn(ses({ needsYou: { reason: "缺 API key", category: "missing_info" } })).turn).toMatchObject({ kind: "stuck", source: "needs_you", detail: "缺 API key" });
     expect(sessionTurn(ses({ activity: act({ kind: "command", stuck: true, reason: "20 分钟没输出" }) })).turn).toMatchObject({ kind: "stuck", source: "silent" });
+    // 裁判的建议动作跟着走（卡片上原因下面一行）；其他来源没有。
+    expect(sessionTurn(ses({ activity: act({ kind: "command", stuck: true, reason: "在等锁", action: "结束进程再重跑" }) })).turn).toMatchObject({ kind: "stuck", source: "silent", detail: "在等锁", action: "结束进程再重跑" });
+    expect(sessionTurn(ses({ activity: act({ kind: "command", stuck: true, reason: "在等锁" }) })).turn).toMatchObject({ kind: "stuck", source: "silent", action: null });
     expect(sessionTurn(ses({ lastReport: { kind: "blocked", text: "测试环境挂了", at: N - 200 }, stoppedAt: N - 150 })).turn).toMatchObject({ kind: "stuck", source: "blocked_report" });
     // 不是卡住：普通提问、发完 blocked 又干了很久才停
     expect(sessionTurn(ses({ needsYou: { reason: "要不要拆 PR？", category: "question" } })).turn).toMatchObject({ kind: "answer", askId: null, options: [] });

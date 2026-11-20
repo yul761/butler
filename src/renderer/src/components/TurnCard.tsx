@@ -56,6 +56,7 @@ export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: Tur
       <span className={`turn-tag turn-${turnTone(t)}`}>{S.hm.kind[t.kind]}</span>
       <div className="turn-card-body">
         {butler ? <Notice notice={t.notice} now={now} onOpen={onOpen} onGo={onGo} /> : <p className="sentence">{turnSentence(t, item, S)}</p>}
+        {t.kind === "stuck" && t.action && <p className="stuck-action">{S.hm.stuckAction(t.action)}</p>}
         {(where || age) && (
           <p className="where muted">
             {where && <span className="path" title={where}><span className="scope">{scope}</span>{key !== null && <span className="key">{key}</span>}</span>}

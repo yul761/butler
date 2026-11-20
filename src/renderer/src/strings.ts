@@ -360,6 +360,7 @@ const ZH = {
     lede: (agent: number, external: number, merged: number) => `agent 在处理 ${agent} 个，在等 CI 或别人 ${external} 个，今天合了 ${merged} 个。`,
     ledeIdle: "现在没有在跑的事。",
     kind: { answer: "要你回答", merge: "可以合并", review: "要你 review", stuck: "卡住了", unattended: "没人推进", butler: "Butler 要你点一下" } as Record<YouKind, string>,
+    stuckAction: (a: string) => `建议：${a}`,
     act: {
       openPr: "打开 PR",
       look: "去看看",
