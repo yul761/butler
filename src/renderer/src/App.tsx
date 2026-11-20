@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 import type { EpicView, FeatureView, NowTarget, NowView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
-import type { NameCtx } from "./home-view";
+import { isNoWork, type NameCtx } from "./home-view";
 import { routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
@@ -207,7 +207,7 @@ export function App() {
           <>
             {route.page === "home" && (
               <HomePage
-                state={turn} noWork={allTickets.length + epics.length + features.length === 0}
+                state={turn} noWork={isNoWork(allTickets.length + epics.length + features.length, turn.board?.items ?? null)}
                 firstRun={<NoWorkLine onNewTicket={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)} onNewEpic={() => setShowNewEpic(true)} />}
                 ctx={ctx} nowView={nowView} liveTickets={new Set(allTickets.map((t) => t.key))}
                 onFix={openFix} onOpen={openTarget} onGo={setRoute} onOpenTicket={(key) => openTicket(key)} onChanged={turn.reload}

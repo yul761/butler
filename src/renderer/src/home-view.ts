@@ -17,6 +17,11 @@ export const HOME_SCOPE_CAP = 8;
 
 const youRank = (t: Turn) => (t.owner === "you" ? YOU_KIND_RANK[t.kind] : 99);
 
+/** 工作区里什么都没有（ticket、feature、epic 都是 0），轮到你的板上也空着：首页只放空状态。板上有 Butler 自己的提醒时照常显示。 */
+export function isNoWork(workCount: number, items: TurnItem[] | null): boolean {
+  return workCount === 0 && (items ?? []).length === 0;
+}
+
 export function youCards(items: TurnItem[]): TurnItem[] {
   return items.filter((i) => i.turn.owner === "you").sort((a, b) => youRank(a.turn) - youRank(b.turn) || a.since - b.since);
 }

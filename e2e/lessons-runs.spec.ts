@@ -184,11 +184,10 @@ test("a session that hits a limit shows the badge, the notice and the Health ent
   await page.keyboard.press("Enter");
   await expect.poll(() => terminalText(page)).toContain("hit your limit");
 
-  // 2. 「现在」页：这一行标红，写着用量已达上限；有一条这个 session 的提醒，点“打开会话”回到它。
+  // 2. 首页：一张「Butler 要你点一下」的卡片，是这个 session 的用量提醒，点“打开会话”回到它。
   await homeButton(page).click();
-  const row = page.locator(".now-butler .now-row");
-  await expect(row).toHaveClass(/\bdanger\b/);
-  await expect(row).toContainText(S.limitKind.usage_limit);
+  const card = page.getByTestId("turn-card").filter({ has: page.getByTestId("now-notice-session_limited") });
+  await expect(card.locator(".turn-tag")).toHaveText(S.hm.kind.butler);
   const sessionNotice = page.getByTestId("now-notice-session_limited");
   await expect(sessionNotice).toContainText(S.limitKind.usage_limit);
   await sessionNotice.getByRole("button", { name: S.noticeOpen, exact: true }).click();

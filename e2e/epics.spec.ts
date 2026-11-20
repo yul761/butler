@@ -183,6 +183,8 @@ test("an epic from planning to archive: features from the epic session, the plan
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.locator(".modal .error")).toHaveText(S.epicErrors.workspace_taken);
   await page.getByRole("button", { name: S.cancel, exact: true }).click();
+  // 新建按钮在全部工作页上：取消之后回到 epic 页。
+  await goToEpic();
 
   // 3. epic session：在 epic 的工作区里打开，每个仓库一个 --add-dir，挂 epic 记忆和 epic 模式的 butler-sessions。它不是总控。
   await page.locator(".epic-page").getByRole("button", { name: `+ ${S.newEpicSession}`, exact: true }).click();
@@ -347,30 +349,30 @@ test("an epic from planning to archive: features from the epic session, the plan
   await expect.poll(() => terminalText(page)).toContain("收到：still planning");
   await exitSession(page);
 
-  // 12. 等待标记往上传：现在什么都没在等。logs 的 DMS-1 开 session（刚启动就算在等）再说一句话，真的 Stop hook：ticket → feature → epic，epic 折叠时也看得到。
-  await expect(epicRow.locator(".badge")).toHaveCount(0);
+  // 12. 侧栏的状态点往上传（UI 重做第 2 层：点的颜色是下面最急的那一项）：现在什么都没在等。logs 的 DMS-1 开 session（刚启动就算在等）再说一句话，真的 Stop hook：ticket → feature → epic，epic 折叠时也看得到。
+  await expect(epicRow.locator(".turn-dot")).toHaveCount(0);
   await goToFeature("logs");
   await newTicket(page, "DMS-1", "audit", "metrics");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   expect(interactiveRuns(s).at(-1)).toContain("butler-epic");
   // 刚打开、还没人打字的 session 也算停着在等输入（1.9.0 起，总控才能往里发），等待标记同样往上传。
-  await expect(sidebarTicket("DMS-1").locator(".badge")).toBeVisible();
-  await expect(epicRow.locator(".badge")).toBeVisible();
-  await expect(featureRow("payment").locator(".badge")).toHaveCount(0);
+  await expect(sidebarTicket("DMS-1").locator(".turn-dot")).toBeVisible();
+  await expect(epicRow.locator(".turn-dot")).toBeVisible();
+  await expect(featureRow("payment").locator(".turn-dot")).toHaveCount(0);
   await typeLine(page, "hello");
   await expect.poll(() => terminalText(page)).toContain("收到：hello");
-  await expect(sidebarTicket("DMS-1").locator(".badge")).toBeVisible();
-  await expect(featureRow("logs").locator(".badge")).toBeVisible();
-  await expect(epicRow.locator(".badge")).toBeVisible();
-  await expect(featureRow("payment").locator(".badge")).toHaveCount(0);
+  await expect(sidebarTicket("DMS-1").locator(".turn-dot")).toBeVisible();
+  await expect(featureRow("logs").locator(".turn-dot")).toBeVisible();
+  await expect(epicRow.locator(".turn-dot")).toBeVisible();
+  await expect(featureRow("payment").locator(".turn-dot")).toHaveCount(0);
   await goToEpic();
   await expect(row("logs").locator(".status")).toContainText(S.epicStatus.waiting);
   await expect(row("logs").locator(".badge")).toBeVisible();
   await shot(page, "epic-waiting.png");
   await collapseEpic();
   await expect(sidebarFeatures).toHaveCount(0);
-  await expect(epicRow.locator(".badge")).toBeVisible();
+  await expect(epicRow.locator(".turn-dot")).toBeVisible();
   await collapseEpic();
 
   // 13. 又拒绝归档：这次开着的是 epic 下面 ticket 的终端。
@@ -386,9 +388,9 @@ test("an epic from planning to archive: features from the epic session, the plan
   await sidebarTicket("DMS-1").click();
   await onPage("DMS-1");
   await exitSession(page);
-  await expect(sidebarTicket("DMS-1").locator(".badge")).toHaveCount(0);
-  await expect(featureRow("logs").locator(".badge")).toHaveCount(0);
-  await expect(epicRow.locator(".badge")).toHaveCount(0);
+  await expect(sidebarTicket("DMS-1").locator(".turn-dot")).toHaveCount(0);
+  await expect(featureRow("logs").locator(".turn-dot")).toHaveCount(0);
+  await expect(epicRow.locator(".turn-dot")).toHaveCount(0);
 
   // 15. 归档 epic：连同 feature 和 ticket，MCP 配置都清掉。
   const configs = [mcpFile("epics", "1.json"), mcpFile("features", "2.json"), mcpFile("features", "3.json"), mcpFile("tickets", "DMS-1.json")];
@@ -469,8 +471,8 @@ test("a stuck ticket marks its feature and epic", async ({ makeSandbox, launch }
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await typeLine(page, `/fake-bash ${LONG_COMMAND}`);
 
-  await expect(epicRow.locator(".stuck-mark")).toBeVisible();
-  await expect(featureRow("logs").locator(".stuck-mark")).toBeVisible();
+  await expect(epicRow.locator(".turn-dot.turn-stuck")).toBeVisible();
+  await expect(featureRow("logs").locator(".turn-dot.turn-stuck")).toBeVisible();
   await goToEpic();
   await openTab(page, S.features);
   await expect(row("logs").locator(".status")).toContainText(S.epicStatus.stuck);
@@ -495,7 +497,7 @@ test("a stuck ticket marks its feature and epic", async ({ makeSandbox, launch }
   // 折叠 epic：看的是 epic 页，下面的 feature 收起，红点还在。
   await collapseEpic();
   await expect(sidebarFeatures).toHaveCount(0);
-  await expect(epicRow.locator(".stuck-mark")).toBeVisible();
+  await expect(epicRow.locator(".turn-dot.turn-stuck")).toBeVisible();
   await collapseEpic();
 
   // 折叠 epic 时，正在看的 feature 还留着。
@@ -522,16 +524,16 @@ test("ending a waiting session with × clears the mark at every level", async ({
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await typeLine(page, "hello");
   await expect.poll(() => terminalText(page)).toContain("收到：hello");
-  await expect(sidebarTicket("DMS-1").locator(".badge")).toBeVisible();
-  await expect(featureRow("logs").locator(".badge")).toBeVisible();
-  await expect(epicRow.locator(".badge")).toBeVisible();
+  await expect(sidebarTicket("DMS-1").locator(".turn-dot")).toBeVisible();
+  await expect(featureRow("logs").locator(".turn-dot")).toBeVisible();
+  await expect(epicRow.locator(".turn-dot")).toBeVisible();
 
   const end = page.getByTitle(S.endSession, { exact: true });
   await end.click();
   await end.click();
   await expect(end).toHaveCount(0);
-  await expect(sidebarTicket("DMS-1").locator(".badge")).toHaveCount(0);
-  await expect(featureRow("logs").locator(".badge")).toHaveCount(0);
+  await expect(sidebarTicket("DMS-1").locator(".turn-dot")).toHaveCount(0);
+  await expect(featureRow("logs").locator(".turn-dot")).toHaveCount(0);
   await expect(epicRow.locator(".badge")).toHaveCount(0);
   await goToEpic();
   await openTab(page, S.features);

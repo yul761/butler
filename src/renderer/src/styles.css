@@ -675,7 +675,7 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .all-work-more { margin-top: 20px; }
 
 /* 首页卡片（UI 重做第 2 层）：标签、一句话和位置、按钮一行排开；位置单行省略，窄窗口时按钮换到下一行。 */
-.turn-card { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); margin-bottom: 8px; }
+.turn-card { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); margin-bottom: 8px; }
 .turn-card-body { flex: 1 1 260px; min-width: 0; }
 .turn-card .sentence { margin: 0; }
 .turn-card .notice { margin: 0; padding: 0; border: none; background: transparent; }

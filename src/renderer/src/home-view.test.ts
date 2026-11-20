@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../shared/turn";
 import { STRINGS } from "./strings";
 import {
-  HOME_CARD_CAP, YOU_KIND_ORDER, barSegments, capCards, cardActions, homeLede, homeTitle, locationOf, lookTarget, prUrl,
+  HOME_CARD_CAP, YOU_KIND_ORDER, barSegments, capCards, cardActions, homeLede, homeTitle, isNoWork, locationOf, lookTarget, prUrl,
   runningRows, scopeLine, scopeRoute, scopeWho, topItem, turnTone, visibleScopes, youCards, type NameCtx,
 } from "./home-view";
 import { formatDuration } from "./components/TicketActivity";
@@ -222,5 +222,15 @@ describe("runningRows", () => {
 
   it("names a waiting merge queue as others", () => {
     expect(runningRows([it0({ owner: "external", kind: "merge_queue", names: [] })], S, 2000)[0].who).toBe(S.hm.whoExternal);
+  });
+});
+
+describe("isNoWork", () => {
+  it("is the empty workspace only while nothing is on the turn board either", () => {
+    expect(isNoWork(0, [])).toBe(true);
+    expect(isNoWork(0, null)).toBe(true);
+    expect(isNoWork(1, [])).toBe(false);
+    // Butler 自己的提醒（用量受限、复盘暂停）不属于任何 ticket：工作区空着也要能看到。
+    expect(isNoWork(0, [item(butler, { ticketKey: null })])).toBe(false);
   });
 });

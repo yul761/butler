@@ -99,9 +99,11 @@ test("merge coordinator: a conflicting merge waits for the holder, is told when 
   await expect.poll(() => terminalText(page)).toContain("denied:");
   expect(git(backend, "rev-parse", "main")).toBe(mainBefore);
 
-  // 5. 「现在」页的“最近合并”（默认收起）展开后有这一行。
+  // 5. 首页「运行情况」里的“最近合并”（默认收起）展开后有这一行。
   await page.getByRole("button", { name: S.home, exact: true }).click();
-  const section = page.locator("section.now-merges");
+  const more = page.locator(".home-more-fold > h3 .section-toggle");
+  if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
+  const section = page.locator("section.now-merges:not([data-testid])");
   const toggle = section.locator(".section-toggle");
   await expect(toggle).toContainText(S.nowRecentMerges);
   await expect(toggle).toHaveAttribute("aria-expanded", "false");

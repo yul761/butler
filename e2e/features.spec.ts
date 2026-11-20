@@ -606,18 +606,18 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await expect.poll(() => terminalText(page)).toContain("收到：hello with the panel open");
   await expect(panel).toBeVisible();
 
-  // 9. 点这一行的其他位置和“看终端”都进 ticket 页。在别的页面上，侧栏的 feature 行也有红点。
-  //    「现在」页的需要你里有这一行（写着卡住和理由），侧栏的“现在”后面是 1。回来时面板还开着。
+  // 9. 点这一行的其他位置和“看终端”都进 ticket 页。在别的页面上，侧栏的 feature 行也是「卡住了」的点。
+  //    首页有一张 DMS-1「卡住了」的卡片（写着理由）；feature 总控回完话停着，也是一张「没人推进」，所以侧栏的“轮到你”后面是 2。回来时面板还开着。
   await row("DMS-1").locator(".status").click();
   await onTicketPage("DMS-1");
-  await expect(page.locator(".sidebar .feature-group .stuck-mark")).toBeVisible();
+  await expect(page.locator(".sidebar .feature-group > .feature-row .turn-dot")).toHaveClass(/\bturn-stuck\b/);
   await page.getByRole("button", { name: S.home, exact: true }).click();
-  const need = page.locator(".now-needs .now-need");
-  await expect(need).toHaveCount(1);
-  await expect(need.locator(".now-key")).toHaveText("DMS-1");
-  await expect(need.locator(".name")).toHaveText("checkout");
-  await expect(need.locator(".why")).toHaveText(S.nowStuckWith(VERDICT_REASON.zh));
-  await expect(page.locator(".sidebar .nav.home .needs-you-badge")).toHaveText("1");
+  await expect(page.getByTestId("turn-card")).toHaveCount(2);
+  const need = page.getByTestId("turn-card").filter({ has: page.locator(".where .path", { hasText: /DMS-1$/ }) });
+  await expect(need.locator(".turn-tag")).toHaveText(S.hm.kind.stuck);
+  await expect(need.locator(".where .path")).toHaveText("checkout › DMS-1");
+  await expect(need.locator(".sentence")).toContainText(VERDICT_REASON.zh);
+  await expect(page.locator(".sidebar .nav.home .needs-you-badge")).toHaveText("2");
   await featurePage();
   await expect(panel).toBeVisible();
   // 面板是记住的状态，不是这次点开的：回到这一页不滚动。
@@ -683,10 +683,10 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   // 数 session（.session-wrap）：session 栏里的「清理闲置」「已隐藏」按钮也带 .session 样式。
   await expect(page.locator(".feature-page .sessions-bar .session-wrap")).toHaveCount(2);
 
-  // 16. 在别的页面上从「现在」页点需要你里的 DMS-1：进 DMS-1 的 ticket 页，当前终端是卡住的那个 session。
+  // 16. 在别的页面上从首页点 DMS-1 卡片的「去看看」：进 DMS-1 的 ticket 页，当前终端是卡住的那个 session。
   await ticketPage("DMS-2");
   await page.getByRole("button", { name: S.home, exact: true }).click();
-  await page.locator(".now-needs .now-need").filter({ has: page.locator(".now-key", { hasText: /^DMS-1$/ }) }).click();
+  await page.getByTestId("turn-card").filter({ has: page.locator(".where .path", { hasText: /DMS-1$/ }) }).getByRole("button", { name: S.hm.act.look, exact: true }).click();
   await onTicketPage("DMS-1");
   await expect(page.locator(".sessions-bar .session.active")).toHaveAttribute("title", new RegExp(`\\n${stuckId}$`));
   // 卡住的 session 的终端：命令还在跑。
@@ -729,11 +729,11 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await expect(enPanel.getByRole("button", { name: E.stuckFix, exact: true })).toBeVisible();
   await shot(en, "live-status-en.png", "light");
   await shot(en, "live-status-en-dark.png", "dark");
-  // 英文的「现在」页：需要你里是 DMS-2，写着卡住和英文的理由。
+  // 英文的首页：一张 DMS-2 的「卡住了」卡片，写着英文的理由。
   await en.getByRole("button", { name: E.home, exact: true }).click();
-  await expect(en.locator(".now-needs h3")).toHaveText(`${E.nowNeedsYou}1`);
-  await expect(en.locator(".now-needs .now-need .now-key")).toHaveText(["DMS-2"]);
-  await expect(en.locator(".now-needs .now-need .why")).toHaveText(E.nowStuckWith(VERDICT_REASON.en));
+  const enCard = en.getByTestId("turn-card").filter({ has: en.locator(".where .path", { hasText: /DMS-2$/ }) });
+  await expect(enCard.locator(".turn-tag")).toHaveText(E.hm.kind.stuck);
+  await expect(enCard.locator(".sentence")).toContainText(VERDICT_REASON.en);
 });
 
 /**
