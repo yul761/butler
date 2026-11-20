@@ -71,6 +71,7 @@ export const pathForFile = (file: File): string => window.butler.pathForFile(fil
 
 export const api = {
   listTickets: () => call<TicketView[]>(IPC.ticketsList),
+  ticketGlance: (key: string) => call<TicketGlance>(IPC.ticketsGlance, key),
   createTicket: (input: CreateTicketInput) => call<Ticket>(IPC.ticketsCreate, input),
   setStatus: (key: string, status: TicketStatus | null) => call<void>(IPC.ticketsSetStatus, key, status),
   archive: (key: string) => call<void>(IPC.ticketsArchive, key),
@@ -227,7 +228,6 @@ export const api = {
   ciResend: (item: CiItemRef) => call<string>(IPC.ciResend, item),
   nowView: () => call<NowView>(IPC.nowView),
   /** 「谁该动」看板（UI 重做第 1 层）：不带 filter 是首页。 */
-  ticketGlance: (key: string) => call<TicketGlance>(IPC.ticketsGlance, key),
   // filter 先规整成一个键（ticketKey > featureId > epicId，值为 undefined 的不算），和主进程的校验一致。
   turnBoard: (filter?: TurnFilter) => call<TurnBoard>(IPC.turnBoard, normTurnFilter(filter)),
   /** 切到首页时调一次：补查请你 review 的 PR。turnBoard 本身不触发查询，收到 turn:changed 重取时不用管它。 */

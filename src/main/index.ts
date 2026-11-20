@@ -1,4 +1,3 @@
-import { ticketGlance } from "./tickets/ticket-glance";
 import { METRICS_DAYS_DEFAULT, type MetricsOverview } from "../shared/metrics";
 import { execFile } from "node:child_process";
 import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, shell, Tray } from "electron";
@@ -94,6 +93,7 @@ import { pruneSessionGuides, writeSessionGuide } from "./claude/session-guide";
 import { safeSessionLessons } from "./lessons/select";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
+import { ticketGlance } from "./tickets/ticket-glance";
 import { HandoffRunner } from "./handoff/runner";
 import { hookCommand } from "./hooks/installer";
 import { HealthService } from "./hooks/health";
@@ -3045,8 +3045,7 @@ async function bootstrap(): Promise<void> {
     memoryHistory: (since) => procServices.monitor.history(since),
     turnBoard: (filter) => turnService.board(filter),
     ticketGlance: (key) => ticketGlance(key, {
-      // 和 TicketView.sessions 同一份：listByTicket（最近活动在前），去掉已被换新的和隐藏的。
-      headsOf: (k) => sessions.listByTicket(k).filter((s) => !s.replacedBy && !s.dismissed),
+      headsOf: (k) => sessionService.ticketHeads(k),
       rootOf: (id) => sessions.rootOf(id),
       lastReplyOf: (id) => activityMonitor.lastReplyOf(id),
       contextOf,
