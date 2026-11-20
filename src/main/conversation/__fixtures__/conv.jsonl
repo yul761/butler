@@ -1,0 +1,17 @@
+{"type": "user", "uuid": "c1", "parentUuid": null, "timestamp": "2026-11-19T10:00:01.000Z", "message": {"role": "user", "content": "<system-reminder>记得用中文</system-reminder>\n换新阈值是多少？"}}
+{"type": "assistant", "uuid": "c2", "parentUuid": "c1", "timestamp": "2026-11-19T10:00:02.000Z", "message": {"role": "assistant", "stop_reason": "tool_use", "content": [{"type": "thinking", "thinking": "想一下"}, {"type": "text", "text": "我看一下"}, {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/repo/src/main/sessions/session-refresher.ts"}}]}}
+{"type": "user", "uuid": "c3", "parentUuid": "c2", "timestamp": "2026-11-19T10:00:03.000Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "const REFRESH_TOKENS = 150_000"}]}}
+{"type": "assistant", "uuid": "c4", "parentUuid": "c3", "timestamp": "2026-11-19T10:00:04.000Z", "message": {"role": "assistant", "stop_reason": "end_turn", "content": [{"type": "text", "text": "150k。"}]}}
+{"type": "user", "uuid": "c5", "parentUuid": "c4", "timestamp": "2026-11-19T10:00:05.000Z", "message": {"role": "user", "content": "把按钮改成蓝色"}}
+{"type": "assistant", "uuid": "c6", "parentUuid": "c5", "timestamp": "2026-11-19T10:00:06.000Z", "message": {"role": "assistant", "stop_reason": "tool_use", "content": [{"type": "tool_use", "id": "t2", "name": "Edit", "input": {"file_path": "/repo/a.tsx", "old_string": "red", "new_string": "blue"}}]}}
+{"type": "user", "uuid": "c7", "parentUuid": "c6", "timestamp": "2026-11-19T10:00:07.000Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": "ok"}]}}
+{"type": "assistant", "uuid": "c8", "parentUuid": "c7", "timestamp": "2026-11-19T10:00:08.000Z", "message": {"role": "assistant", "stop_reason": "end_turn", "content": [{"type": "text", "text": "改好了"}]}}
+{"type": "user", "uuid": "c9", "parentUuid": "c8", "timestamp": "2026-11-19T10:00:09.000Z", "message": {"role": "user", "content": "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>"}}
+{"type": "user", "uuid": "c10", "parentUuid": "c9", "timestamp": "2026-11-19T10:00:10.000Z", "message": {"role": "user", "content": "<local-command-stdout>Set model to sonnet</local-command-stdout>"}}
+{"type": "user", "uuid": "c11", "parentUuid": "c10", "timestamp": "2026-11-19T10:00:11.000Z", "message": {"role": "user", "content": "Butler：PROJ-1 的 CI 全部通过（abc1234）。可以继续下一步。"}}
+{"type": "assistant", "uuid": "c12", "parentUuid": "c11", "timestamp": "2026-11-19T10:00:12.000Z", "message": {"role": "assistant", "stop_reason": "end_turn", "content": [{"type": "text", "text": "收到"}]}}
+{"type":"user",
+{"type": "assistant", "uuid": "c13", "parentUuid": "c12", "isSidechain": true, "timestamp": "2026-11-19T10:00:13.000Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "子代理的话"}]}}
+{"type": "user", "uuid": "c14", "parentUuid": "c12", "timestamp": "2026-11-19T10:00:14.000Z", "message": {"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}]}}
+{"type": "summary", "summary": "x", "leafUuid": "c14"}
+{"type": "assistant", "parentUuid": "c14", "timestamp": "2026-11-19T10:00:16.000Z", "message": {"role": "assistant", "stop_reason": "end_turn", "content": [{"type": "text", "text": "这是一张截图"}]}}
