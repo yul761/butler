@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../shared/turn";
 import { STRINGS } from "./strings";
 import {
-  HOME_CARD_CAP, YOU_KIND_ORDER, barSegments, capCards, cardActions, homeLede, homeTitle, isNoWork, locationOf, lookTarget, prUrl,
+  HOME_CARD_CAP, YOU_KIND_ORDER, barSegments, capCards, cardActions, cardKey, homeLede, homeTitle, isNoWork, locationOf, lookTarget, prUrl,
   runningRows, scopeLine, scopeRoute, scopeWho, topItem, turnTone, visibleScopes, youCards, type NameCtx,
 } from "./home-view";
 import { formatDuration } from "./components/TicketActivity";
@@ -128,6 +128,10 @@ describe("locationOf", () => {
     const l = locationOf(item(merge, { epicId: 1, featureId: 2 }), ctx, now, S);
     expect(l.path).toBe("Epic名 › Feature名 › BTL-1");
     expect(l.age).toBe(S.hm.ago(S.durationMinutes(12)));
+    // 名字太长时省略的是前面的 epic、feature，ticket 号单独放、不省略。
+    expect(l.scope).toBe("Epic名 › Feature名 › ");
+    expect(l.key).toBe("BTL-1");
+    expect(locationOf(item(merge, { ticketKey: null, featureId: 2 }), ctx, now, S)).toMatchObject({ scope: "Feature名", key: null });
   });
   it("a loose ticket is just its key; a missing epic is skipped", () => {
     expect(locationOf(item(merge), ctx, now, S).path).toBe("BTL-1");
@@ -232,5 +236,25 @@ describe("isNoWork", () => {
     expect(isNoWork(1, [])).toBe(false);
     // Butler 自己的提醒（用量受限、复盘暂停）不属于任何 ticket：工作区空着也要能看到。
     expect(isNoWork(0, [item(butler, { ticketKey: null })])).toBe(false);
+  });
+});
+
+describe("cardKey", () => {
+  it("tells apart cards that share ticket, PR and kind", () => {
+    // 同一个 session 接连问了两句（第二句在 moreAsks 里），总控的两句（ticketKey 是 null），同一类的两条 Butler 提醒。
+    const keys = [
+      item(answer({ askId: 7 })), item(answer({ askId: 8 })),
+      item(answer({ askId: 9, sessionId: "c1" }), { ticketKey: null }), item(answer({ askId: 10, sessionId: "c1" }), { ticketKey: null }),
+      item(answer({ askId: null, sessionId: "s2" })), item(answer({ askId: null, sessionId: "s3" })),
+      item({ owner: "you", kind: "butler", notice: { kind: "intake", item: { key: "a" } } as never }, { ticketKey: null }),
+      item({ owner: "you", kind: "butler", notice: { kind: "intake", item: { key: "b" } } as never }, { ticketKey: null }),
+      item(stuck("s4")), item(stuck("s5")),
+      item(merge, { pr }), item(merge, { pr: { ...pr, number: 13 } }),
+    ].map(cardKey);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("stays the same for the same card across reloads", () => {
+    expect(cardKey(item(answer({ askId: 7 }), { since: 1 }))).toBe(cardKey(item(answer({ askId: 7 }), { since: 2 })));
   });
 });

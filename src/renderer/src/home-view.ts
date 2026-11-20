@@ -1,6 +1,6 @@
 // 首页（轮到你）和全部工作页的纯函数（UI 重做第 2 层，spec §5.3）。
 // 状态由第 1 层的 turn:board 给出，这里只排序、截断、取位置和按钮，不自己算状态，也不拼状态文案。
-import type { NowTarget } from "../../shared/types";
+import type { NowNotice, NowTarget } from "../../shared/types";
 import { mostUrgent, YOU_KIND_RANK, type ScopeTurnRow, type Turn, type TurnBoard, type TurnItem, type YouKind } from "../../shared/turn";
 import type { Route } from "./App";
 import { formatDuration } from "./components/TicketActivity";
@@ -20,6 +20,38 @@ const youRank = (t: Turn) => (t.owner === "you" ? YOU_KIND_RANK[t.kind] : 99);
 /** 工作区里什么都没有（ticket、feature、epic 都是 0），轮到你的板上也空着：首页只放空状态。板上有 Butler 自己的提醒时照常显示。 */
 export function isNoWork(workCount: number, items: TurnItem[] | null): boolean {
   return workCount === 0 && (items ?? []).length === 0;
+}
+
+/** 一条提醒是哪一条（同一类可以有好几条：两个 intake 决定、两个 session 的权限确认）。 */
+export function noticeKey(n: NowNotice): string {
+  if (n.kind === "cost") return `cost:${n.breaker.subjectKind}:${n.breaker.subjectId}`;
+  if (n.kind === "comments_waiting") return `comments_waiting:${n.waiting.reason}:${n.waiting.prId}`;
+  if (n.kind === "stack") return `stack:${n.stack.reason}:${n.stack.stackId}:${n.stack.branch}`;
+  if (n.kind === "check_promoted" || n.kind === "check_demoted") return `${n.kind}:${n.eventId}`;
+  if (n.kind === "intake") return `intake:${n.item.key}`;
+  if (n.kind === "ci_undelivered") return `ci_undelivered:${n.ci.item.kind}:${n.ci.item.kind === "pr" ? n.ci.item.id : n.ci.item.repoId}`;
+  if (n.kind !== "session_limited" && n.kind !== "approval") return n.kind;
+  const t = n.target;
+  return `${n.kind}:${t.page}:${"key" in t ? t.key : "id" in t ? t.id : ""}:${t.sessionId ?? ""}`;
+}
+
+/**
+ * 卡片的 React key：认的是这一件事本身（哪一问、哪一条提醒、哪个 session），不只是 ticket + PR + 类别——
+ * 同一个 session 接连问两句、总控的几句、同类的几条提醒都同在一个 ticket（或都不在）下，key 一样会让
+ * 答完的上一张卡的「已回答」留到下一张上。
+ */
+export function cardKey(item: TurnItem): string {
+  const t = item.turn;
+  const base = `${item.ticketKey ?? ""}|${item.pr ? `${item.pr.repo}#${item.pr.number}` : ""}|${t.owner}:${t.kind}`;
+  if (t.owner !== "you") return base;
+  switch (t.kind) {
+    case "answer": return `${base}|${t.askId ?? `s:${t.sessionId ?? ""}`}`;
+    case "stuck":
+    case "unattended": return `${base}|${t.sessionId ?? ""}`;
+    case "butler": return `${base}|${noticeKey(t.notice)}`;
+    case "review": return `${base}|${t.url}`;
+    case "merge": return base;
+  }
 }
 
 export function youCards(items: TurnItem[]): TurnItem[] {
@@ -85,21 +117,26 @@ export function lookTarget(item: TurnItem): NowTarget | null {
 
 export interface NameCtx { epics: Map<number, string>; features: Map<number, string>; tickets: Map<string, string | null> }
 
-export function locationOf(item: TurnItem, ctx: NameCtx, now: number, S: UiStrings): { path: string; age: string } {
+/** path 是整行（放进 title）；显示时 scope 可以省略，key（ticket 号）单独放、不省略。 */
+export function locationOf(item: TurnItem, ctx: NameCtx, now: number, S: UiStrings): { path: string; scope: string; key: string | null; age: string } {
   const d = item.since > 0 ? formatDuration(now - item.since, S) : null;
   const t = item.turn;
   if (t.owner === "you" && t.kind === "review") {
     const where = item.pr ? `${item.pr.repo}#${item.pr.number}` : t.title;
-    return { path: `${where} · ${t.author}`, age: d === null ? "" : S.hm.reviewAgo(d) };
+    const path = `${where} · ${t.author}`;
+    return { path, scope: path, key: null, age: d === null ? "" : S.hm.reviewAgo(d) };
   }
   const parts: string[] = [];
   const epic = item.epicId === null ? undefined : ctx.epics.get(item.epicId);
   const feature = item.featureId === null ? undefined : ctx.features.get(item.featureId);
   if (epic) parts.push(epic);
   if (feature) parts.push(feature);
-  if (item.ticketKey !== null) parts.push(item.ticketKey);
-  if (parts.length === 0 && item.epicId === null && item.featureId === null) parts.push(S.butlerNav);
-  return { path: parts.join(" › "), age: d === null ? "" : S.hm.ago(d) };
+  if (parts.length === 0 && item.ticketKey === null && item.epicId === null && item.featureId === null) parts.push(S.butlerNav);
+  const scope = parts.join(" › ");
+  const key = item.ticketKey;
+  const age = d === null ? "" : S.hm.ago(d);
+  if (key === null) return { path: scope, scope, key, age };
+  return { path: scope ? `${scope} › ${key}` : key, scope: scope ? `${scope} › ` : "", key, age };
 }
 
 const allMerged = (r: ScopeTurnRow) => r.total > 0 && r.merged === r.total;

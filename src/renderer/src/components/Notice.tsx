@@ -10,20 +10,11 @@ import { intakeActError } from "../intake-view";
 import { saveTab, saveTabOpen } from "../local-prefs";
 import { S } from "../strings";
 import type { Route } from "../App";
+import { noticeKey } from "../home-view";
+
+export { noticeKey };
 
 /** 顶上的一条提醒：一句话加几个按钮；恢复、重试都是让复盘队列重新开始。 */
-export function noticeKey(n: NowNotice): string {
-  if (n.kind === "cost") return `cost:${n.breaker.subjectKind}:${n.breaker.subjectId}`;
-  if (n.kind === "comments_waiting") return `comments_waiting:${n.waiting.reason}:${n.waiting.prId}`;
-  if (n.kind === "stack") return `stack:${n.stack.reason}:${n.stack.stackId}:${n.stack.branch}`;
-  if (n.kind === "check_promoted" || n.kind === "check_demoted") return `${n.kind}:${n.eventId}`;
-  if (n.kind === "intake") return `intake:${n.item.key}`;
-  if (n.kind === "ci_undelivered") return `ci_undelivered:${n.ci.item.kind}:${n.ci.item.kind === "pr" ? n.ci.item.id : n.ci.item.repoId}`;
-  if (n.kind !== "session_limited" && n.kind !== "approval") return n.kind;
-  const t = n.target;
-  return `${n.kind}:${t.page}:${"key" in t ? t.key : "id" in t ? t.id : ""}:${t.sessionId ?? ""}`;
-}
-
 export function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: number; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
   const { text, actions } = noticeText(n, S, now);
   // 权限确认（第 1 层补的 approval）的按钮叫「去看看」，落到那个 session 的终端。

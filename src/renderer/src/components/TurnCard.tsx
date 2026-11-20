@@ -37,7 +37,7 @@ export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: Tur
   const [result, setResult] = useState<string | null>(null);
   const [answered, setAnswered] = useState<string | null>(null);
   if (t.owner !== "you") return null;
-  const { path, age } = locationOf(item, ctx, now, S);
+  const { path, scope, key, age } = locationOf(item, ctx, now, S);
   const butler = t.kind === "butler";
   // 不挂在任何地方的 Butler 提醒没有位置可写。
   const where = butler && item.ticketKey === null && item.epicId === null && item.featureId === null ? "" : path;
@@ -84,7 +84,7 @@ export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: Tur
         {butler ? <Notice notice={t.notice} now={now} onOpen={onOpen} onGo={onGo} /> : <p className="sentence">{turnSentence(t, item, S)}</p>}
         {(where || age) && (
           <p className="where muted">
-            {where && <span className="path" title={where}>{where}</span>}
+            {where && <span className="path" title={where}><span className="scope">{scope}</span>{key !== null && <span className="key">{key}</span>}</span>}
             {age && <span className="age">{age}</span>}
           </p>
         )}

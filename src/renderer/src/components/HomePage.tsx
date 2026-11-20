@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 import type { NowView } from "../../../shared/types";
 import type { Route } from "../App";
 import {
-  barSegments, capCards, homeLede, homeTitle, runningRows, scopeLine, scopeRoute, visibleScopes, youCards, type NameCtx,
+  barSegments, capCards, cardKey, homeLede, homeTitle, runningRows, scopeLine, scopeRoute, visibleScopes, youCards, type NameCtx,
 } from "../home-view";
 import { S } from "../strings";
 import { HomeMore, GroupToggle, SetupSkipped } from "./HomeMore";
@@ -90,7 +90,7 @@ function Cards({ cards, ctx, now, onFix, onOpen, onGo, onChanged }: { cards: Ret
   return (
     <section className="home-cards">
       {shown.map((item) => (
-        <TurnCard key={`${item.ticketKey ?? ""}|${item.pr ? `${item.pr.repo}#${item.pr.number}` : ""}|${item.turn.kind}|${item.turn.owner === "you" && item.turn.kind === "butler" ? item.turn.notice.kind : ""}`}
+        <TurnCard key={cardKey(item)}
           item={item} ctx={ctx} now={now} onFix={onFix} onOpen={onOpen} onGo={onGo} onChanged={onChanged} />
       ))}
       {hidden > 0 && <button className="link" onClick={() => setExpanded(true)}>{S.hm.showAll(cards.length)}</button>}

@@ -385,6 +385,7 @@ const ZH = {
     whoIdle: "没开始",
     running: (n: number) => `进行中 ${n}`,
     moreHeading: "运行情况",
+    infoNotices: "Butler 的其他提醒",
     showAll: (n: number) => `显示全部 ${n} 件`,
     boardFailed: "取不到「轮到你」的数据",
     boardStale: "数据可能不是最新的",

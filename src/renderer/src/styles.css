@@ -680,7 +680,9 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .turn-card .sentence { margin: 0; }
 .turn-card .notice { margin: 0; padding: 0; border: none; background: transparent; }
 .turn-card .where { display: flex; gap: 8px; margin: 2px 0 0; font-size: 12px; min-width: 0; }
-.turn-card .where .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.turn-card .where .path { display: flex; min-width: 0; white-space: nowrap; }
+.turn-card .where .path .scope { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.turn-card .where .path .key { flex-shrink: 0; }
 .turn-card .where .age { flex-shrink: 0; }
 .turn-card > .actions { flex-shrink: 0; }
 

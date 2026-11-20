@@ -102,6 +102,17 @@ describe("HomeMore (the old Now page's run-status blocks)", () => {
     expect(html).toContain('data-testid="now-intake"');
   });
 
+  it("lists Butler's tell-you-only notices; the ones that need you are cards, not here", () => {
+    const html = render(view({ notices: [
+      { kind: "check_promoted", eventId: 3, batchId: null, names: ["lint"], at: 1 },
+      { kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: null } as NowNotice,
+    ] }));
+    expect(html).toContain(S.hm.infoNotices);
+    expect(html).toContain('data-testid="now-notice-check_promoted"');
+    expect(html).not.toContain('data-testid="now-notice-approval"');
+    expect(render(view({ notices: [{ kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: null } as NowNotice] }))).not.toContain(S.hm.infoNotices);
+  });
+
   it("leaves out empty blocks", () => {
     const html = render(view());
     expect(html).not.toContain(S.nowRecentMerges);
@@ -201,7 +212,7 @@ describe("TurnCard", () => {
     expect(html).toContain(">不行，先回测</button>");
     expect(html).toContain(`>${S.hm.act.look}</button>`);
     expect(html).toContain(turnSentence(turn, item(turn), S));
-    expect(html).toContain("Epic名 › Feature名 › BTL-1");
+    expect(html).toContain('<span class="path" title="Epic名 › Feature名 › BTL-1"><span class="scope">Epic名 › Feature名 › </span><span class="key">BTL-1</span></span>');
     expect(render(item({ ...turn, askId: null }))).not.toContain(">可以</button>");
   });
 

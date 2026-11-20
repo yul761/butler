@@ -1,6 +1,7 @@
 // 首页「运行情况」折叠里的东西（UI 重做第 2 层）：从原来的「现在」页原样搬来——实况窗口、内存、最近合并、自动接活、用量。
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import type { MemoryHistoryPoint, MemorySnapshot } from "../../../shared/mem-usage";
+import { noticeNeedsYou } from "../../../shared/turn";
 import type { IntakeRecentEntry } from "../../../shared/intake";
 import type { MergeEvent, NowTarget, NowView, UsageSummary } from "../../../shared/types";
 import { api } from "../api";
@@ -13,6 +14,8 @@ import { mergeEventText } from "../merge-events-view";
 import { usageDetails, usageLine } from "../now-view";
 import { S } from "../strings";
 import { LiveWindow } from "./LiveWindow";
+import { Notice, noticeKey } from "./Notice";
+import { useNow } from "./TicketActivity";
 import { useCollapsed } from "./useCollapsed";
 
 export interface HomeMoreProps {
@@ -30,12 +33,29 @@ export function HomeMore({ view, onOpen, onOpenTicket, liveTickets, onGo }: Home
   const usage = useUsage();
   return (
     <div className="home-more">
+      <InfoNotices view={view} onOpen={onOpen} onGo={onGo} />
       {view.mem && <MemoryCard snap={view.mem} view={view} />}
       <LiveWindow view={view} onOpen={onOpen} />
       <RecentMerges merges={view.merges} onOpenTicket={onOpenTicket} liveTickets={liveTickets} />
       {view.intake && <IntakeRecent entries={view.intake} onGo={onGo} />}
       {usage && <UsageLine usage={usage} />}
     </div>
+  );
+}
+
+/**
+ * 只是告诉你一声的 Butler 提醒（检查自动升级了可以撤销、复盘暂停了、共享 MCP 起不来……）：要你动手的那些是首页的卡片，这里不重复。
+ * spec 说它们以后放进「Butler 自己」相应页面的主层；那些页面做好之前先放在这里，免得哪儿都看不到。
+ */
+function InfoNotices({ view, onOpen, onGo }: { view: NowView; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
+  const now = useNow();
+  const info = view.notices.filter((n) => !noticeNeedsYou(n));
+  if (info.length === 0) return null;
+  return (
+    <section className="home-info-notices">
+      <h3>{S.hm.infoNotices}</h3>
+      {info.map((n) => <Notice key={noticeKey(n)} notice={n} now={now} onOpen={onOpen} onGo={onGo} />)}
+    </section>
   );
 }
 

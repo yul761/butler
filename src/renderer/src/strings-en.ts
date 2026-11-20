@@ -379,6 +379,7 @@ export const EN: UiStrings = {
     whoIdle: "Not started",
     running: (n: number) => `In progress ${n}`,
     moreHeading: "How it is running",
+    infoNotices: "Other notes from Butler",
     showAll: (n: number) => `Show all ${n}`,
     boardFailed: "Could not load what needs you",
     boardStale: "This may be out of date",
