@@ -24,7 +24,7 @@ export const CONV_TICK_MS = 10_000;
 export const CONV_JUDGE_MAX_AGE_MS = 24 * 3600_000;
 /** 一直没 stop 的轮，静止这么久算结束。 */
 export const CONV_STALE_TURN_MS = 30 * 60_000;
-/** 花费熔断暂停了某个 ticket 的判断：这么久之内不再为它问模型（别的 ticket 照常判）。 */
+/** 某个 ticket 的判断一时问不了模型（花费熔断、限流、超时……）：这么久之内不再为它问（别的 ticket 照常判）。 */
 export const CONV_PAUSE_RETRY_MS = CONV_SWEEP_MS;
 const JUDGE_BATCH = 20;
 
@@ -140,9 +140,10 @@ export class ConvIngester {
         }
       }
       if (this.stopped) return;
-      this.d.repo.endStale(this.d.now() - CONV_STALE_TURN_MS);
-      // 没开着的 session 不会再交错写入，uuid → 轮的映射不用留在内存里（14 天的补读会碰到上百段）。
+      // 终端还开着的不结束：一次工具调用可以跑很久，中间一句话都没有（PR #60 review 5）。关掉以后下一次 sweep 再结束。
       const open = new Set(this.d.openHeads());
+      this.d.repo.endStale(this.d.now() - CONV_STALE_TURN_MS, [...open]);
+      // 没开着的 session 不会再交错写入，uuid → 轮的映射不用留在内存里（14 天的补读会碰到上百段）。
       for (const id of [...this.parents.keys()]) if (!open.has(id)) this.parents.delete(id);
     } catch (e) {
       this.d.log?.(`conv sweep: ${e instanceof Error ? e.message : String(e)}`);
@@ -159,8 +160,8 @@ export class ConvIngester {
 
   /**
    * 判断队列：串行，一次一个；正在跑就直接返回。
-   * 规则能定的、太旧的当场写；要问模型的按 ticket 走：某个 ticket 被花费熔断暂停了，它的轮留着
-   * （CONV_PAUSE_RETRY_MS 之后再试），后面别的 ticket 的轮照常判。
+   * 规则能定的、太旧的当场写；要问模型的按 ticket 走：某个 ticket 一时问不了（花费熔断、限流、超时……），它的轮留着
+   * （CONV_PAUSE_RETRY_MS 之后再试，结束超过 CONV_JUDGE_MAX_AGE_MS 记 no / old），后面别的 ticket 的轮照常判。
    */
   async runJudges(): Promise<void> {
     if (this.stopped || this.judging) return;
@@ -211,16 +212,18 @@ export class ConvIngester {
     }
   }
 
-  /** 太旧的记 no / old，规则能定的写规则结论；写了返回 true，要问模型返回 false。 */
+  /** 规则能定的写规则结论（不看新旧：规则不花钱）；要问模型但太旧的记 no / old。写了返回 true，要问模型返回 false。 */
   private ruleVerdict(t: ConvTurn): boolean {
+    const rule = ruleQa({ asked: t.asked, mutated: t.mutated, otherTools: t.otherTools, answerChars: [...this.qaText(t.id).answer].length });
+    if (rule !== "judge") {
+      this.verdict(t.id, rule, "rule");
+      return true;
+    }
     if ((t.endedAt ?? 0) < this.d.now() - CONV_JUDGE_MAX_AGE_MS) {
       this.verdict(t.id, "no", "old");
       return true;
     }
-    const rule = ruleQa({ asked: t.asked, mutated: t.mutated, otherTools: t.otherTools, answerChars: [...this.qaText(t.id).answer].length });
-    if (rule === "judge") return false;
-    this.verdict(t.id, rule, "rule");
-    return true;
+    return false;
   }
 
   private qaText(turnId: number): { question: string; answer: string } {
@@ -292,16 +295,16 @@ export class ConvIngester {
 
   private async readAll(id: string, touched: Set<string>): Promise<void> {
     const { repo } = this.d;
-    const file = this.d.transcriptOf(id);
-    if (!file) return;
     const root = this.d.sessions.rootOf(id) ?? id;
     let cursor = repo.cursor(id);
     if (cursor && cursor.rootSessionId !== root) {
-      // 先读到、后连上 replaced_by：整段搬到链根下。
+      // 先读到、后连上 replaced_by：整段搬到链根下。transcript 已经没了也要搬（PR #60 review 4）。
       repo.reroot(id, root);
       touched.add(root);
       cursor = repo.cursor(id);
     }
+    const file = this.d.transcriptOf(id);
+    if (!file) return;
     let openTurnId = cursor?.openTurnId ?? null;
     let from = { ino: cursor?.ino ?? null, offset: cursor?.offset ?? 0 };
     for (;;) {

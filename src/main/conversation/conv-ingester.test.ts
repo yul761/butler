@@ -49,7 +49,7 @@ function env(extra: Partial<ConvIngesterDeps> = {}) {
   const turns = () =>
     db.prepare(`SELECT kind, asked, mutated, other_tools AS otherTools, qa, qa_by AS qaBy FROM conv_turns ORDER BY id`).all() as unknown as
       { kind: string; asked: number; mutated: number; otherTools: number; qa: string; qaBy: string | null }[];
-  return { db, sessions, repo, file, make, clock, appended, logs, said, turns, judge };
+  return { db, sessions, repo, files, file, make, clock, appended, logs, said, turns, judge };
 }
 
 describe("ConvIngester.ingest", () => {
@@ -186,6 +186,18 @@ describe("ConvIngester.ingest", () => {
     expect(e.said("s1").map(([, t]) => t)).toEqual(["后来的问题？", "后来的回答"]);
     expect(e.said("s2")).toEqual([]);
     expect(e.appended).toEqual(["s1"]);
+  });
+
+  it("moves a segment to the chain root even after its transcript is gone (PR #60 review 4)", async () => {
+    const e = env();
+    e.file("s2", jsonl(user("v1", null, "后来的问题？", 3), reply("b1", "v1", "后来的回答", 4)));
+    const ing = e.make();
+    await ing.ingest("s2");
+    e.files.delete("s2");
+    e.sessions.setReplacedBy("s1", "s2");
+    await ing.ingest("s2");
+    expect(e.said("s1").map(([, t]) => t)).toEqual(["后来的问题？", "后来的回答"]);
+    expect(e.said("s2")).toEqual([]);
   });
 
   it("files interleaved replies under the turn they answer", async () => {
@@ -453,6 +465,31 @@ describe("ConvIngester scheduling", () => {
       expect(e.judge).not.toHaveBeenCalled();
     });
 
+    it("an old turn the rules can decide still gets the rule verdict (PR #60 review 1)", async () => {
+      const e = env();
+      e.clock.now = Date.parse(ts(3)) + CONV_JUDGE_MAX_AGE_MS + 3600_000;
+      e.file("s1", turn("这是什么？", "是个函数"));
+      const ing = e.make();
+      await ing.ingest("s1");
+      await ing.runJudges();
+      expect(e.turns()[0]).toMatchObject({ qa: "yes", qaBy: "rule" });
+      expect(e.judge).not.toHaveBeenCalled();
+    });
+
+    it("a turn left for later gives up once it is too old (PR #60 review 3)", async () => {
+      const e = env();
+      e.judge.mockResolvedValue("paused");
+      e.file("s1", turn("讲讲换新的流程", "先写 handoff，再开新会话"));
+      const ing = e.make();
+      await ing.ingest("s1");
+      await ing.runJudges();
+      expect(e.turns()[0]).toMatchObject({ qa: "pending" });
+      e.clock.now = Date.parse(ts(3)) + CONV_JUDGE_MAX_AGE_MS + 1;
+      await ing.runJudges();
+      expect(e.turns()[0]).toMatchObject({ qa: "no", qaBy: "old" });
+      expect(e.judge).toHaveBeenCalledTimes(1);
+    });
+
     it("ends a turn that never stopped once it has been quiet long enough, then judges it", async () => {
       const e = env();
       e.judge.mockResolvedValue(true);
@@ -465,6 +502,23 @@ describe("ConvIngester scheduling", () => {
       e.clock.now += CONV_STALE_TURN_MS;
       await ing.sweep();
       expect(e.turns().at(-1)).toMatchObject({ qa: "yes", qaBy: "judge" });
+    });
+
+    it("does not end a quiet turn while its terminal is still open (PR #60 review 5)", async () => {
+      const e = env();
+      e.judge.mockResolvedValue(true);
+      e.sessions.insertIfAbsent({ id: "h", ticketKey: null, cwd: "/w", origin: "butler", createdAt: e.clock.now, lastActivityAt: e.clock.now });
+      e.clock.now = Date.parse(ts(3)) + CONV_STALE_TURN_MS + 60_000;
+      // 一次很长的工具调用：开了头，还没回来。
+      e.file("h", jsonl(user("u1", null, "跑一下全量 e2e", 1), tool("t1", "u1", "Bash", { command: "pnpm e2e" }, 2)));
+      let open = ["h"];
+      const ing = e.make({ openHeads: () => open });
+      await ing.sweep();
+      const turnId = e.repo.cursor("h")!.openTurnId!;
+      expect(e.repo.turn(turnId)?.endedAt).toBeNull();
+      open = [];
+      await ing.sweep();
+      expect(e.repo.turn(turnId)?.endedAt).not.toBeNull();
     });
 
     it("re-checks the turn after the model answers: a file change in the meantime wins", async () => {

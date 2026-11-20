@@ -62,7 +62,18 @@ describe("judgeConvQa", () => {
   it("returns null on malformed answers and failed runs", async () => {
     expect(await judgeConvQa(deps(ok({ qa: "yes" })), { question: "q", answer: "a" }, "/r")).toBeNull();
     expect(await judgeConvQa(deps(ok(null)), { question: "q", answer: "a" }, "/r")).toBeNull();
-    expect(await judgeConvQa(deps({ ok: false, reason: "timeout", message: "x", result: null, limit: null, stderr: "" }), { question: "q", answer: "a" }, "/r")).toBeNull();
+    expect(await judgeConvQa(deps({ ok: false, reason: "bad_output", message: "x", result: null, limit: null, stderr: "" }), { question: "q", answer: "a" }, "/r")).toBeNull();
+  });
+
+  it.each(["timeout", "rate_limited", "model_unavailable", "aborted", "spawn_failed", "exit_nonzero", "claude_error"] as const)(
+    "a passing failure (%s) leaves the turn for later instead of giving up (PR #60 review 3)",
+    async (reason) => {
+      expect(await judgeConvQa(deps({ ok: false, reason, message: "x", result: null, limit: null, stderr: "" }), { question: "q", answer: "a" }, "/r")).toBe("paused");
+    },
+  );
+
+  it("no claude command yet is also for later (PR #60 review 3)", async () => {
+    expect(await judgeConvQa(deps(ok({ qa: true }), [], { claude: () => ({ path: null, pathValue: "" }) }), { question: "q", answer: "a" }, "/r")).toBe("paused");
   });
 
   it("returns paused when the cost breaker stops background work", async () => {

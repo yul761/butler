@@ -83,7 +83,10 @@ describe("ConvRepo turns", () => {
     expect(repo.pendingEnded(10).map((t) => t.id)).toEqual([b, a]);
     repo.touchTurn(d, { at: 100 });
     expect(repo.endStale(50)).toBe(0);
-    expect(repo.endStale(101)).toBe(1);
+    // 终端还开着的 session 不结束（PR #60 review 5：长工具调用）。
+    expect(repo.endStale(101, ["s"])).toBe(0);
+    expect(repo.turn(d)?.endedAt).toBeNull();
+    expect(repo.endStale(101, ["other"])).toBe(1);
     expect(repo.turn(d)?.endedAt).toBe(100);
     expect(repo.pendingEnded(1).map((t) => t.id)).toEqual([b]);
     // 接着上一批往后取（final review 1：判不了的轮不挡住后面的）。

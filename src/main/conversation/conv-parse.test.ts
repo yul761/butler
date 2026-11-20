@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { setLang } from "../i18n";
+import { deliveryText } from "../prereview/delivery";
 import { M } from "../strings";
 import { capText, cleanUserText, CONV_TEXT_MAX, convEntriesOf, toolEffect, type ConvEntry } from "./conv-parse";
 
@@ -121,6 +122,26 @@ describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
     // 只是开头像，没有「用户的回答」那一段：照常是用户说的话。
     const pre = M().inboxAnswer("\u0000", "").split("\u0000")[0];
     expect(openOf(`${pre}x 之后呢`)).toBe("user");
+  });
+
+  it("messages Butler types into the terminal are silent (PR #60 review 2)", () => {
+    setLang(lang);
+    const m = M();
+    expect(openOf(`${m.butlerMessagePrefix}\n帮我看看 PR #60 为什么红了？`)).toBe("silent");
+    expect(openOf(m.butlerReplyLine("BTL-1", ["m1"], "要不要先合？"))).toBe("silent");
+    expect(openOf(m.butlerPatrolMessage)).toBe("silent");
+    expect(openOf(m.cost.continueAfterDowngrade("haiku"))).toBe("silent");
+    expect(openOf(m.cost.continueAfterRaise("$5"))).toBe("silent");
+    const pre = { shortSha: "abc1234", violations: [], gaps: [], error: "boom", lang };
+    expect(openOf(deliveryText({ ...pre, verdict: "error" }))).toBe("silent");
+    expect(openOf(deliveryText({ ...pre, verdict: "clean" }))).toBe("silent");
+    expect(openOf(deliveryText({ ...pre, verdict: "violations", violations: [{ lessonId: null, checkKey: null, severity: "must", file: "a.ts", line: 1, what: "x", fix: "y" }] }))).toBe("silent");
+  });
+
+  it("the user talking about Butler is still the user", () => {
+    expect(openOf("Butler 对话页为什么是空的？")).toBe("user");
+    expect(openOf("Butler is slow, why?")).toBe("user");
+    expect(openOf("【回顾】这周做了什么？")).toBe("user");
   });
 
   it("plain speech is user", () => {

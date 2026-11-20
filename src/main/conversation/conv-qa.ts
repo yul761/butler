@@ -45,7 +45,10 @@ export function ruleQa(t: { asked: boolean; mutated: boolean; otherTools: boolea
   return "judge";
 }
 
-/** true / false：模型的结论；"paused"：花费熔断，这一轮留着下次再判；null：其它失败（调用方记 no / judge_failed）。 */
+/**
+ * true / false：模型的结论；"paused"：一时判不了（花费熔断、限流、超时……），这一轮留着以后再判（太旧了调用方记 no / old）；
+ * null：模型的答案不能用（bad_output、校验没过），调用方记 no / judge_failed。
+ */
 export type ConvQaVerdict = boolean | "paused" | null;
 
 const AnswerSchema = z.object({ qa: z.boolean() });
@@ -98,7 +101,8 @@ export async function judgeConvQa(d: HeadlessExecDeps, turn: { question: string;
     cwd,
     ticketKey,
   });
-  if (!r.ok) return r.reason === "cost_paused" ? "paused" : null;
+  // 只有模型给的答案不能用才算判不了；其余失败（熔断、限流、超时、没装 claude、退出时中断……）都是一时的，留到以后再判。
+  if (!r.ok) return r.reason === "bad_output" ? null : "paused";
   const v = validate(AnswerSchema, r.value);
   return v.ok ? v.value.qa : null;
 }

@@ -195,9 +195,10 @@ export class ConvRepo {
     return rows.map(toTurn);
   }
 
-  /** 一直没结束、lastAt 早于 before 的轮写上 endedAt = lastAt；返回条数。 */
-  endStale(before: number): number {
-    return Number(this.db.prepare(`UPDATE conv_turns SET ended_at = last_at WHERE ended_at IS NULL AND last_at < ?`).run(before).changes);
+  /** 一直没结束、lastAt 早于 before 的轮写上 endedAt = lastAt；keep 里的 session（终端还开着）不动。返回条数。 */
+  endStale(before: number, keep: readonly string[] = []): number {
+    const not = keep.length > 0 ? ` AND session_id NOT IN (${keep.map(() => "?").join(", ")})` : "";
+    return Number(this.db.prepare(`UPDATE conv_turns SET ended_at = last_at WHERE ended_at IS NULL AND last_at < ?${not}`).run(before, ...keep).changes);
   }
 
   // ---- 消息 ----
