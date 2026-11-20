@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -102,6 +104,14 @@ describe("ControlSplit / ControlFeed", () => {
   const rep = (id: number, createdAt: number, text: string): InboxItemView => ({
     id, kind: "report", sessionId: "s", role: "ticket", ticketKey: "T-1", featureId: null, epicId: null, repo: null, text,
     options: [], context: null, reportKind: "done", answer: null, createdAt, open: true, target: {} as never,
+  });
+  it("a long conversation scrolls in its own column instead of stretching the terminal past the window (wide layout)", () => {
+    const css = readFileSync(join(__dirname, "..", "styles.css"), "utf8");
+    const wide = /@media \(min-width: 901px\)\s*\{([^@]*?)\}\s*\}/.exec(css)?.[1] ?? "";
+    const right = /\.control-right\s*\{([^}]*)/.exec(wide)?.[1] ?? "";
+    // contain: size：右栏不参与这一行的高度，行高只看左栏（终端那一半）；右栏在这个高度里自己滚动。
+    expect(right).toMatch(/contain:\s*size/);
+    expect(right).toMatch(/overflow-y:\s*auto/);
   });
   it("split renders both sides", () => {
     const h = renderToStaticMarkup(createElement(ControlSplit, { left: "LEFT", right: "RIGHT" }));
