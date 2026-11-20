@@ -7,6 +7,7 @@ import { dotKey, type Dot } from "../sidebar-view";
 import { S } from "../strings";
 import { AllWorkBody, type AllWorkBodyProps } from "./AllWorkPage";
 import { HomeMore } from "./HomeMore";
+import { NoWorkLine } from "./NoWorkLine";
 import { Notice, noticeKey } from "./Notice";
 import { Sidebar } from "./Sidebar";
 
@@ -158,5 +159,13 @@ describe("AllWorkBody", () => {
     const fold = (open: boolean) => new RegExp(`aria-expanded="${open}"[^>]*>(?:(?!</button>).)*${S.hm.all.moreHeading}`);
     expect(render({ focusMore: "stacks" })).toMatch(fold(true));
     expect(render()).toMatch(fold(false));
+  });
+});
+
+describe("NoWorkLine (until the first-run home lands)", () => {
+  it("says there is no work and offers the three create buttons", () => {
+    const html = renderToStaticMarkup(createElement(NoWorkLine, { onNewTicket: () => {}, onNewFeature: () => {}, onNewEpic: () => {} }));
+    expect(html).toContain(S.hm.noWork);
+    for (const t of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, `+ ${S.newEpic}`]) expect(html).toContain(t);
   });
 });
