@@ -82,6 +82,8 @@ function setup(o: { plan?: FullForkPlan; launch?: boolean; lastTurnAgo?: number 
     onLimit: vi.fn(),
     registry: () => o.registry ?? [],
     changed: vi.fn(),
+    send: vi.fn<ForkDeps["send"]>(async () => ({ ok: true, at: 5 })),
+    remember: vi.fn<ForkDeps["remember"]>(async () => "written"),
     plan: o.plan ?? PLAN,
     now,
     newRunId: () => `run-${++runN}`,
@@ -698,5 +700,109 @@ describe("writeForkSettings", () => {
     const p = writeForkSettings({ dir, devSettingsPath: join(dir, "missing.json"), guardCommand: '"/b/butler-hook"' })!;
     expect(JSON.parse(readFileSync(p, "utf8"))).toEqual(forkSettings(null, '"/b/butler-hook"'));
     expect(writeForkSettings({ dir, devSettingsPath: null, guardCommand: null })).toBeNull();
+  });
+});
+
+describe("ForkService 发给开发 session / 记进记忆", () => {
+  async function withFork(s: ReturnType<typeof setup>) {
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    return forkId;
+  }
+
+  it("没有结论先要结论，再发给 root；成功后记下发送时间并通知", async () => {
+    const s = setup();
+    const forkId = await withFork(s);
+    s.queue.push(ok({ resultText: "结论：改 A。" }));
+    s.deps.changed.mockClear();
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5 });
+    expect(s.deps.send).toHaveBeenCalledWith("root-1", M().fork.conclusionForDev("结论：改 A。"));
+    expect(s.repo.get(forkId)!.summarySentAt).not.toBeNull();
+    expect(s.deps.changed).toHaveBeenCalledWith("root-1");
+  });
+
+  it("send 被挡（draft）：summary_sent_at 不变，结论留着，下次不再要结论", async () => {
+    const s = setup();
+    const forkId = await withFork(s);
+    s.queue.push(ok({ resultText: "结论：改 A。" }));
+    s.deps.send.mockResolvedValueOnce({ ok: false, reason: "draft" });
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: false, reason: "draft" });
+    expect(s.repo.get(forkId)!.summarySentAt).toBeNull();
+    expect(s.repo.get(forkId)!.conclusion).toBe("结论：改 A。");
+    const runs = s.deps.run.mock.calls.length;
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5 });
+    expect(s.deps.run).toHaveBeenCalledTimes(runs);
+  });
+
+  it("分叉正在跑：fork_busy；要结论失败：no_conclusion；不认识：not_found", async () => {
+    const s = setup();
+    s.queue.push("hold");
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: false, reason: "fork_busy" });
+    await tick();
+    s.held[0].release(ok());
+    await s.svc.idle();
+    s.queue.push({ ok: false, reason: "exit_nonzero", message: "", limit: null, stderr: "", result: null });
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: false, reason: "no_conclusion" });
+    expect(await s.svc.sendConclusion(999)).toEqual({ ok: false, reason: "not_found" });
+    expect(s.deps.send).not.toHaveBeenCalled();
+  });
+
+  it("连点两次：第二次 in_flight", async () => {
+    const s = setup();
+    const forkId = await withFork(s);
+    s.queue.push("hold");
+    const first = s.svc.sendConclusion(forkId);
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: false, reason: "in_flight" });
+    await tick();
+    s.held[0].release(ok({ resultText: "c" }));
+    expect(await first).toEqual({ ok: true, at: 5 });
+    expect(s.deps.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("changed 抛错不影响返回", async () => {
+    const s = setup();
+    const forkId = await withFork(s);
+    s.queue.push(ok({ resultText: "c" }));
+    s.deps.changed.mockImplementation(() => {
+      throw new Error("x");
+    });
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5 });
+  });
+
+  it("remember：用结论调 rememberText(ticket scope)，返回 written / full", async () => {
+    const s = setup();
+    const forkId = await withFork(s);
+    s.queue.push(ok({ resultText: "结论：改 A。" }));
+    expect(await s.svc.remember(forkId)).toBe("written");
+    expect(s.deps.remember).toHaveBeenCalledWith("ticket:BTL-1", "结论：改 A。");
+    s.deps.remember.mockResolvedValueOnce("full");
+    expect(await s.svc.remember(forkId)).toBe("full");
+  });
+
+  it("remember：连点 busy；没有 ticket 也没有 feature：disabled，不写", async () => {
+    const s = setup();
+    const forkId = await withFork(s);
+    s.queue.push(ok({ resultText: "c" }));
+    let release!: (r: "written") => void;
+    s.deps.remember.mockImplementationOnce(() => new Promise((res) => (release = res)));
+    const first = s.svc.remember(forkId);
+    await tick();
+    expect(await s.svc.remember(forkId)).toBe("busy");
+    release("written");
+    expect(await first).toBe("written");
+
+    const n = setup({ head: { ticketKey: null } });
+    const id2 = await withFork(n);
+    expect(await n.svc.remember(id2)).toBe("disabled");
+    expect(n.deps.remember).not.toHaveBeenCalled();
+  });
+
+  it("remember：没有结论 no_conclusion；分叉在跑 fork_busy 也算没有结论", async () => {
+    const s = setup();
+    const forkId = await withFork(s);
+    s.queue.push({ ok: false, reason: "exit_nonzero", message: "", limit: null, stderr: "", result: null });
+    expect(await s.svc.remember(forkId)).toBe("no_conclusion");
+    expect(s.deps.remember).not.toHaveBeenCalled();
   });
 });

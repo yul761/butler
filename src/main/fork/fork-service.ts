@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join } from "node:path";
 import type { LimitHit } from "../../shared/availability";
 import type { ConvMessage } from "../../shared/conversation";
-import { ForkError, type ForkErrorCode, type ForkMode, type ForkView } from "../../shared/fork";
+import { ForkError, type DevSendResult, type ForkErrorCode, type ForkMode, type ForkView, type RememberResult } from "../../shared/fork";
 import { featureScope, ticketScope } from "../../shared/memory";
 import type { RegistryModel } from "../../shared/model-routing";
 import type { Session } from "../../shared/types";
@@ -39,6 +39,10 @@ export interface ForkDeps {
   onUsage: (r: UsageReport) => void;
   onLimit: (hit: LimitHit, job: string) => void;
   registry: () => readonly RegistryModel[];
+  /** 发给开发 session（DevSender.send）。 */
+  send: (anyId: string, text: string) => Promise<DevSendResult>;
+  /** 写进记忆（MemoryService.rememberText）。 */
+  remember: (scope: string, text: string) => Promise<Exclude<RememberResult, "busy" | "no_conclusion">>;
   /** 推 fork:changed。 */
   changed: (rootSessionId: string) => void;
   /** FULL_FORK。 */
@@ -134,6 +138,11 @@ export class ForkService {
   /** 原分叉 id → 正在跑的完整重问。 */
   private readonly reasking = new Map<number, number>();
 
+  /** 正在发给开发 session 的分叉。 */
+  private readonly sending = new Set<number>();
+  /** 正在写进记忆的分叉。 */
+  private readonly remembering = new Set<number>();
+
   constructor(private readonly d: ForkDeps) {}
 
   /** 立刻写入用户的问题、返回 forkId，回答异步写进对话存储。anyId 可以是链上任意 id。 */
@@ -186,6 +195,46 @@ export class ForkService {
     if (!answer) return { ok: false, reason: "fork_busy" };
     const r = await answer;
     return r.ok ? { ok: true, text: r.text } : { ok: false, reason: "no_conclusion" };
+  }
+
+  /** 把结论（没有就先要）发给开发 session；成功才记发送时间。没递出去的结论留着，下次不再重新要。 */
+  async sendConclusion(forkId: number): Promise<DevSendResult> {
+    if (this.sending.has(forkId)) return { ok: false, reason: "in_flight" };
+    this.sending.add(forkId);
+    try {
+      const row = this.d.repo.get(forkId);
+      if (!row) return { ok: false, reason: "not_found" };
+      const c = await this.conclusion(forkId);
+      if (!c.ok) return { ok: false, reason: c.reason };
+      const r = await this.d.send(row.rootSessionId, M().fork.conclusionForDev(c.text));
+      if (r.ok) {
+        this.d.repo.markSent(forkId, r.at);
+        this.hook("changed", () => this.d.changed(row.rootSessionId));
+      }
+      return r;
+    } finally {
+      this.sending.delete(forkId);
+    }
+  }
+
+  /** 把结论（没有就先要）记进这个 ticket / feature 的记忆。都没有就不记（disabled）。 */
+  async remember(forkId: number): Promise<RememberResult> {
+    if (this.remembering.has(forkId)) return "busy";
+    this.remembering.add(forkId);
+    try {
+      const row = this.d.repo.get(forkId);
+      if (!row) return "failed";
+      const scope = row.ticketKey ? ticketScope(row.ticketKey) : row.featureId !== null ? featureScope(row.featureId) : null;
+      if (!scope) return "disabled";
+      const c = await this.conclusion(forkId);
+      if (!c.ok) return c.reason === "fork_busy" ? "busy" : c.reason === "not_found" ? "failed" : "no_conclusion";
+      return await this.d.remember(scope, c.text);
+    } catch (e) {
+      this.d.log(`fork ${forkId}: remember failed`, e);
+      return "failed";
+    } finally {
+      this.remembering.delete(forkId);
+    }
   }
 
   /** 启动时调用：上次没跑完的标成 interrupted。 */
