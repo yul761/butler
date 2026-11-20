@@ -1,10 +1,11 @@
 import type { AvailabilityView, LimitHit } from "../../shared/availability";
-import type { NowNotice } from "../../shared/types";
+import type { NowNotice, NowTarget } from "../../shared/types";
 import { costBreakerText } from "./cost-view";
 import { stackNoticeText } from "./stack-view";
 import { btNoticeText } from "./backtest-view";
 import { intakeNoticeActions, intakeNoticeText } from "./intake-view";
 import type { UiStrings } from "./strings";
+import type { TicketTab } from "./ticket-tabs";
 
 const pad = (n: number): string => String(n).padStart(2, "0");
 
@@ -107,4 +108,13 @@ export function availabilityRows(v: AvailabilityView, S: UiStrings, now: number)
 /** 按钮：有暂停或当前受限时能恢复；没手动暂停时能暂停。 */
 export function availabilityButtons(v: AvailabilityView): { resume: boolean; pause: boolean } {
   return { resume: v.lessonsPause !== null || v.current !== null, pause: v.lessonsPause?.reason !== "manual" };
+}
+
+/**
+ * 「去处理评论」：评论在 ticket 页的「PR 详情」页签里。先把这个 ticket 页记着的页签设成它，再打开 ticket 页；
+ * 不带 session 打开：带着 session 进 ticket 页是打开请求，会被拉到「终端」。
+ */
+export function openCommentsNotice(n: Extract<NowNotice, { kind: "comments_waiting" }>, d: { saveTab: (page: string, tab: TicketTab) => void; onOpen: (t: NowTarget) => void }): void {
+  d.saveTab(`ticket:${n.waiting.ticketKey}`, "pr");
+  d.onOpen({ page: "ticket", key: n.waiting.ticketKey, sessionId: null });
 }

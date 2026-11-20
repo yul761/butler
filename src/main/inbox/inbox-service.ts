@@ -42,7 +42,7 @@ export interface InboxServiceDeps {
   notify(): void;
   now(): number;
   log(msg: string, err?: unknown): void;
-  /** 度量（ws-h）：卡片上回答、「不用了」记一条 needs_you_answer。 */
+  /** 度量（ws-h）：卡片上回答记一条 needs_you_answer。 */
   recordEvent?: RecordEvent;
   /** 度量（ws-h）：记下一条「待你决定」之后调（打断原因的分类）。按默认答案自动答了的不调（不算打断，也不通知）。 */
   onAsked?(q: AskedQuestion): void;
@@ -178,17 +178,8 @@ export class InboxService {
     return true;
   }
 
-  /** 「不用了」：结束这一条，什么都不送。 */
-  dismiss(id: number): boolean {
-    const item = this.d.repo.get(id);
-    if (!item || item.kind !== "decision" || !this.d.repo.resolve(id, "dismissed", this.d.now())) return false;
-    this.recordAnswer(item, "dismiss");
-    this.d.notify();
-    return true;
-  }
-
-  /** 人介入（ws-h）：卡片上回答或者「不用了」。同一条只记一次（改答案不算又一次）。 */
-  private recordAnswer(item: InboxItem, via: "card" | "dismiss"): void {
+  /** 人介入（ws-h）：卡片上回答（提问只能回答，没有「不用了」）。同一条只记一次（改答案不算又一次）。 */
+  private recordAnswer(item: InboxItem, via: "card"): void {
     this.d.recordEvent?.("needs_you_answer", {
       sessionId: this.headId(item.sessionId), ticketKey: item.ticketKey, dedupeKey: `answer:${item.id}`,
       data: { via, options: item.options.length },

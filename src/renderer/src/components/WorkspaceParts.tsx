@@ -69,6 +69,13 @@ export function useSessionPanes(sessions: SessionView[], { openSession, openFail
     setActive(termId);
   }
 
+  /** 看这个 session 的终端：开着就切过去，关着就打开。 */
+  function reveal(sessionId: string) {
+    const termId = sessions.find((s) => s.id === sessionId)?.termId;
+    if (termId) show(termId);
+    else void open(sessionId);
+  }
+
   function close(id: string) {
     const rest = panesRef.current.filter((p) => p !== id);
     panesRef.current = rest;
@@ -76,7 +83,7 @@ export function useSessionPanes(sessions: SessionView[], { openSession, openFail
     setActive((cur) => (cur === id ? (rest[0] ?? null) : cur));
   }
 
-  return { panes, active, setActive, open, show, close };
+  return { panes, active, setActive, open, show, reveal, close };
 }
 
 interface HeaderProps {

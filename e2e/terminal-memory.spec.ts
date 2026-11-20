@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, terminalText, test, newButton } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, terminalText, test, newButton, openTicketTab } from "./fixtures";
 
 async function typeLine(page: Page, line: string): Promise<void> {
   await page.locator(".terminal-wrap:visible .xterm").click();
@@ -37,11 +37,13 @@ test("only the visible terminal keeps an xterm, switching back rebuilds it from 
   await expect(page.locator(".ticket-page")).toBeVisible();
 
   const xterms = page.locator(".terminals .xterm");
+  await openTicketTab(page, "terminal");
   await page.locator(".ticket-page").getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await typeLine(page, "first terminal says hello");
   await expect.poll(() => terminalText(page)).toContain("收到：first terminal says hello");
 
+  await openTicketTab(page, "terminal");
   await page.locator(".ticket-page").getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect(page.locator(".terminals .terminal-wrap")).toHaveCount(2);
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");

@@ -423,6 +423,23 @@ describe("SessionService views", () => {
     expect(view.sessions.map((s) => [s.id, s.rootId])).toEqual([["new-1", "new-1"], ["c2", "old"]]);
   });
 
+  it("ticketHeads matches ticketViews().sessions: dismissed with an open terminal stays, dismissed without goes", async () => {
+    const { service, sessions } = await setup();
+    await service.open({ ticketKey: "PROJ-1" });
+    sessions.insertIfAbsent({ id: "gone", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    sessions.setReplacedBy("old", "c2");
+    sessions.dismiss("gone", 5);
+    sessions.dismiss("new-1", 5);
+    const ids = service.ticketHeads("PROJ-1").map((s) => s.id);
+    expect(ids).toContain("new-1");
+    expect(ids).not.toContain("gone");
+    expect(ids).not.toContain("old");
+    expect(ids).toEqual(service.ticketViews()[0].sessions.map((s) => s.id));
+    expect(service.ticketHeads("NOPE")).toEqual([]);
+  });
+
   it("unclaimed suggests tickets and claim/dismiss work", async () => {
     const { service, sessions } = await setup();
     sessions.insertIfAbsent({ id: "u1", ticketKey: null, cwd: "/w", origin: "discovered", gitBranch: "feature/proj-1-x", lastActivityAt: 900, createdAt: 900 });

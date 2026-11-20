@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
+import type { IntakeEffect } from "../../../shared/intake";
 import type { LoopEffect } from "../../../shared/loop";
 import type { ReviewEffectView, ReviewGroupStats } from "../../../shared/review-effect";
 import { INTERRUPT_CATEGORIES, type CompareSide, type GroupMetrics, type KeyCount, type MetricsOverview, type TrendPoint } from "../../../shared/metrics";
@@ -7,11 +8,13 @@ import {
   barWidths, compare, comparisonText, DAY_CHOICES, DASH, fmtDay, fmtDuration, fmtNumber, fmtTokens, fmtUsd,
   groupName, interventionName, interventionRows, lineGeometry, spendName,
 } from "../effect-view";
+import { EFFECT_TABS, type EffectTabId } from "../butler-self-view";
 import { shortTime } from "../progress-ui";
 import { dayString, enoughSample } from "../review-view";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 import { IntakeEffectSection } from "./IntakeQueue";
+import { PageTabs, type PageTab } from "./PageTabs";
 
 const E = () => S.effect;
 
@@ -38,7 +41,7 @@ function Card({ testId, title, value, sub, extra, mine, base }: {
   );
 }
 
-function Cards({ o }: { o: MetricsOverview }) {
+export function Cards({ o }: { o: MetricsOverview }) {
   const b = o.butler;
   const base = o.baseline;
   const comments = b.commentsHuman === null ? null : b.commentsHuman + (b.commentsCopilot ?? 0);
@@ -433,17 +436,82 @@ export function ReviewEffectSection({ v }: { v: ReviewEffectView }) {
   );
 }
 
-/** 「效果」页（ws-h）：和总控 metrics_overview 同一份数据，stateChanged 时重取。 */
+/** 概况 tab：基线说明；一个 Butler 的 PR 都没有时的空状态。 */
+export function EffectOverview({ o }: { o: MetricsOverview }) {
+  return (
+    <>
+      <p className="muted effect-baseline-note">
+        {o.baseline ? E().baselineNote(o.baseline.prs, new Date(o.baseline.cutoff).toLocaleDateString()) : E().baselineMissing}
+      </p>
+      {o.butler.prs === 0 && <p className="muted">{E().empty}</p>}
+    </>
+  );
+}
+
+/** 趋势 tab。 */
+export function EffectTrendTab({ o }: { o: MetricsOverview }) {
+  return (
+    <>
+      <Interrupts o={o} />
+      <InterruptCompareTable o={o} />
+      <Trend o={o} />
+    </>
+  );
+}
+
+/** 花费明细 tab。 */
+export function EffectSpendTab({ o }: { o: MetricsOverview }) {
+  return (
+    <>
+      <Spend o={o} />
+      <Groups o={o} />
+    </>
+  );
+}
+
+/** 返工 tab。 */
+export function EffectReworkTab({ o }: { o: MetricsOverview }) {
+  return (
+    <>
+      <Rework o={o} />
+      <Interventions items={o.interventions} />
+      <OtherEvents items={o.otherEvents} />
+    </>
+  );
+}
+
+/** 自动化的效果 tab：自动改、review、接单三块，谁的数据到了就先显示谁；都还没到就是「加载中」。 */
+export function EffectAutomationTab({ loop, review, intake }: { loop: LoopEffect | null; review: ReviewEffectView | null; intake: IntakeEffect | null }) {
+  if (!loop && !review && !intake) return <p className="empty">{S.loading}</p>;
+  return (
+    <>
+      {loop && <LoopEffectSection e={loop} />}
+      {review && <ReviewEffectSection v={review} />}
+      {intake && <IntakeEffectSection e={intake} />}
+    </>
+  );
+}
+
+/** 「效果」页（ws-h）：和总控 metrics_overview 同一份数据，stateChanged 时重取。四张卡在上面，其余按 tab 分开。 */
 export function EffectPage() {
   const [days, setDays] = useState<number>(30);
   const o = useStateRefetch(`metrics:${days}`, () => api.metrics(days));
   const loop = useStateRefetch(`loop-effect:${days}`, () => api.loopEffect(days));
   const review = useStateRefetch(`review-effect:${days}`, () => api.reviewEffect(days));
   const intake = useStateRefetch(`intake-effect:${days}`, () => api.intakeEffect(days));
+  const loading = <p className="empty">{S.loading}</p>;
+  const content: Record<EffectTabId, ReactNode> = {
+    overview: o ? <EffectOverview o={o} /> : loading,
+    trend: o ? <EffectTrendTab o={o} /> : loading,
+    spend: o ? <EffectSpendTab o={o} /> : loading,
+    rework: o ? <EffectReworkTab o={o} /> : loading,
+    automation: <EffectAutomationTab loop={loop} review={review} intake={intake} />,
+  };
+  const tabs: PageTab[] = EFFECT_TABS.map((id) => ({ id, label: S.lay.effectTabs[id], content: content[id] }));
   return (
     <div className="page effect-page" data-testid="effect-page">
       <h2>{E().title}</h2>
-      <p className="muted">{E().intro}</p>
+      <p className="muted">{S.lay.effectLede(days)}</p>
       <div className="effect-toolbar">
         <div className="segmented" role="group" aria-label={E().range}>
           {DAY_CHOICES.map((d) => (
@@ -456,31 +524,8 @@ export function EffectPage() {
           </span>
         )}
       </div>
-      {o && <EffectBody o={o} />}
-      {loop && <LoopEffectSection e={loop} />}
-      {review && <ReviewEffectSection v={review} />}
-      {intake && <IntakeEffectSection e={intake} />}
+      {o && <Cards o={o} />}
+      <PageTabs page="effect" tabs={tabs} defaultTab="overview" />
     </div>
-  );
-}
-
-/** 页面主体（不含时间范围切换）；单独导出好做渲染测试。 */
-export function EffectBody({ o }: { o: MetricsOverview }) {
-  return (
-    <>
-      <Cards o={o} />
-      <p className="muted effect-baseline-note">
-        {o.baseline ? E().baselineNote(o.baseline.prs, new Date(o.baseline.cutoff).toLocaleDateString()) : E().baselineMissing}
-      </p>
-      {o.butler.prs === 0 && <p className="muted">{E().empty}</p>}
-      <Interrupts o={o} />
-      <InterruptCompareTable o={o} />
-      <Trend o={o} />
-      <Interventions items={o.interventions} />
-      <Groups o={o} />
-      <Spend o={o} />
-      <Rework o={o} />
-      <OtherEvents items={o.otherEvents} />
-    </>
   );
 }

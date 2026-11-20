@@ -1,7 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { saveTab, saveTabOpen, savedTab, savedTabOpen } from "../local-prefs";
-import { clickTab, readTabState, toggleTabs, type TabState } from "../page-tabs";
-import { S } from "../strings";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { saveTab, savedTab } from "../local-prefs";
+import { landingDue, landingKey, pickTab, resolveTab } from "../page-tabs";
 
 export interface PageTab {
   id: string;
@@ -13,48 +12,52 @@ export interface PageTab {
 }
 
 /**
- * feature 页、epic 页、Butler 总控页终端上面的部分：一个 tab 一块，同一时间只显示一块，内容多了在自己的框里滚动，
- * 不挤掉别的块，也不挤占终端（终端至少占窗口一半高）。默认收起，让终端尽量大；点 tab 或右边的「展开」按钮展开，再点一下当前 tab 或「收起」按钮收起。每个页面记着展开还是收起、最近停在哪个 tab。
+ * 页面上半部分的 tab：一个 tab 一块，同一时间只显示一块，永远有一个选中，内容多了在自己的框里滚动。
+ * 每个页面记着最近停在哪个 tab；forceTab 是落点（比如从「去看看」进来），变化时选中它并记住。
+ * forceSeq：同一个 forceTab 要再落一次时（比如概况里的按钮又点了一次「去终端」），调用方把它加一。
  * actions：放在 tab 条右边、不管停在哪个 tab 都点得到的按钮（新建 ticket、新建 feature）。
  */
-export function PageTabs({ page, tabs, defaultTab, actions }: { page: string; tabs: PageTab[]; defaultTab: string; actions?: ReactNode }) {
+export function PageTabs({ page, tabs, defaultTab, forceTab, forceSeq, actions }: {
+  page: string; tabs: PageTab[]; defaultTab: string; forceTab?: string | null; forceSeq?: number; actions?: ReactNode;
+}) {
   const panelId = `page-tabs-panel-${page.replace(/[^A-Za-z0-9_-]/g, "-")}`;
   const ids = tabs.map((t) => t.id);
-  const read = () => ({ saved: savedTab(page), flag: savedTabOpen(page) });
-  const [mem, setMem] = useState(read);
-  useEffect(() => setMem(read()), [page]);
-  const state: TabState = readTabState(mem.saved, mem.flag, ids, defaultTab);
-  const tab = state.open ? tabs.find((t) => t.id === state.tab) : undefined;
-  const apply = (next: TabState) => {
-    saveTab(page, next.tab);
-    saveTabOpen(page, next.open);
-    setMem({ saved: next.tab, flag: next.open ? "1" : null });
+  const [saved, setSaved] = useState<string | null>(() => resolveTab(savedTab(page), forceTab, ids, defaultTab));
+  useEffect(() => setSaved(savedTab(page)), [page]);
+  const land = `${page}|${landingKey(forceTab, forceSeq)}`;
+  /** 已经落过的那一次（页面 + 落点）：目标 tab 后出现时补落，落过的不再落。 */
+  const landed = useRef<string | null>(null);
+  const idsKey = ids.join(",");
+  useEffect(() => {
+    // 落点撤掉了：下次同一个落点再来时照样落（同以前按 land 变化触发）。
+    if (forceTab == null) landed.current = null;
+    if (forceTab == null || !landingDue(forceTab, ids, land, landed.current)) return;
+    landed.current = land;
+    saveTab(page, forceTab);
+    setSaved(forceTab);
+  }, [page, land, idsKey]);
+  // forceTab 只在变化时落点一次（上面的 effect 把它存进 saved），之后用户点哪个就是哪个。
+  const current = pickTab(saved, ids, defaultTab);
+  const tab = tabs.find((t) => t.id === current);
+  const pick = (id: string) => {
+    saveTab(page, id);
+    setSaved(id);
   };
   return (
-    <div className={tab ? "page-tabs" : "page-tabs collapsed"}>
+    <div className="page-tabs">
       <div className="page-tabs-bar" role="tablist">
         {tabs.map((t) => (
           <button
             key={t.id}
             role="tab"
-            aria-selected={!!tab && t.id === state.tab}
-            className={["page-tab", `tab-${t.id}`, tab && t.id === state.tab ? "active" : "", t.className ?? ""].filter(Boolean).join(" ")}
-            title={tab && t.id === state.tab ? S.tabCollapseHint : undefined}
-            onClick={() => apply(clickTab(state, t.id))}
+            aria-selected={t.id === current}
+            aria-controls={t.id === current ? panelId : undefined}
+            className={["page-tab", `tab-${t.id}`, t.id === current ? "active" : "", t.className ?? ""].filter(Boolean).join(" ")}
+            onClick={() => pick(t.id)}
           >
             {t.label}
           </button>
         ))}
-        <button
-          type="button"
-          className="page-tabs-toggle"
-          aria-expanded={!!tab}
-          aria-controls={tab ? panelId : undefined}
-          title={tab ? S.tabToggleCollapseHint : S.tabToggleExpandHint}
-          onClick={() => apply(toggleTabs(state))}
-        >
-          {tab ? `▾ ${S.tabCollapse}` : `▸ ${S.tabExpand}`}
-        </button>
         {actions && <span className="page-tabs-actions">{actions}</span>}
       </div>
       {tab && (

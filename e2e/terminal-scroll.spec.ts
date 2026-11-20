@@ -39,6 +39,8 @@ test("the coordinator terminal still scrolls after its output outgrows the repla
   await expect(page.getByRole("heading", { name: "DMS-1", exact: true })).toBeVisible();
   await page.locator(".feature-link").getByRole("button", { name: "checkout", exact: true }).click();
 
+  // feature 的终端在「总控」页签里。
+  await openTab(page, S.lay.tabControl);
   await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await typeLine(page, "/fake-fullscreen");
@@ -59,10 +61,12 @@ test("the coordinator terminal still scrolls after its output outgrows the repla
   await scrollUp();
   await expect.poll(wheels).toBe(1);
 
-  await openTab(page, S.featureTickets);
-  await page.locator(".feature-page .ticket-table").getByRole("button", { name: "DMS-1", exact: true }).click();
+  // 「全部 ticket」里点这一行（行本身可点）去 ticket 页，再回来：页签记着「全部 ticket」，切回「总控」时终端重建。
+  await openTab(page, S.lay.tabTickets);
+  await page.locator(".feature-page .ticket-table tbody tr").filter({ hasText: "DMS-1" }).click();
   await expect(page.getByRole("heading", { name: "DMS-1", exact: true })).toBeVisible();
   await page.locator(".feature-link").getByRole("button", { name: "checkout", exact: true }).click();
+  await openTab(page, S.lay.tabControl);
   await expect.poll(() => terminalText(page)).toContain("flood line 4000");
   await scrollUp();
   await expect.poll(wheels).toBe(2);

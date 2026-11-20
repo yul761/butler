@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, type FakeGhFixture, ghCalls, makeGitRepo, newButton, openAllWorkMore, openSettingsGroup, type PrViewFixture, terminalText, test, unsupportedGhCalls } from "./fixtures";
+import { completeWizard, expect, type FakeGhFixture, ghCalls, makeGitRepo, newButton, openAllWorkMore, openSettingsGroup, type PrViewFixture, terminalText, test, unsupportedGhCalls, openTicketTab } from "./fixtures";
 
 const git = (cwd: string, ...a: string[]): string =>
   execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "-c", "commit.gpgsign=false", ...a], { cwd, encoding: "utf8" }).trim();
@@ -90,6 +90,7 @@ test("when the bottom of a stack merges, the stack is rebased and the next layer
   await newTicket(page, "E2E-2", repo);
   await newTicket(page, "E2E-1", repo);
   // E2E-1 开一个 session：合并后它一停下，PR watcher 就马上去读它的 PR（不用等 5 分钟一轮）。
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await enableStacks(page, ["force_push", "pr_open"]);

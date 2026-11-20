@@ -71,7 +71,6 @@ describe("UI strings in two languages (design 2026-10-26 i18n)", () => {
 
   it("has the feature summary strings in both languages", () => {
     for (const s of [STRINGS.zh, STRINGS.en]) {
-      expect(s.featureProgress).toBeTruthy();
       expect(s.featureSummaryNone).toBeTruthy();
       expect(s.featureSummaryDegraded).toBeTruthy();
       expect(s.runFeatureSummary).toBeTruthy();

@@ -3,7 +3,7 @@ import type { EpicView, FeatureView, NowTarget, NowView, OpenSessionRequest, Tic
 import { api } from "./api";
 import { onError, reportError } from "./errors";
 import { firstRunProps, homeOpenedSignal, isNoWork, type NameCtx } from "./home-view";
-import { routeGone } from "./route-view";
+import { fixLanding, missingTicket, routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
 import { ButlerPage } from "./components/ButlerPage";
@@ -27,15 +27,20 @@ import { Wizard } from "./components/Wizard";
 import { S } from "./strings";
 import { onboardingReducer } from "./wizard";
 import type { SettingsSection } from "../../shared/settings-layout";
+import type { Turn } from "../../shared/turn";
 
 /** 状态变化事件合并的时间窗。 */
 const STATE_DEBOUNCE_MS = 80;
 
 export type Route =
   | { page: "home" }
-  | { page: "ticket"; key: string }
-  /** focusSession：从「现在」页点进来时先切到的那个 session 的终端。 */
-  | { page: "feature"; id: number; focusSession?: string | null }
+  /** landing：从卡片的「去看看」进来时那张卡片的轮次，TicketPage 按它落到对应的页签（landingTab）。 */
+  | { page: "ticket"; key: string; landing?: Turn }
+  /**
+   * focusSession：从「现在」页点进来时先切到的那个 session 的终端。
+   * landing "control"：刚开好修复 session（fixLanding），落到「总控」页签看 focusTerm 那个终端；landingSeq 每次开都递增，页面已经开着也会再落一次。
+   */
+  | { page: "feature"; id: number; focusSession?: string | null; landing?: "control"; focusTerm?: string | null; landingSeq?: number }
   | { page: "epic"; id: number; focusSession?: string | null }
   /** Butler 总控（BTL-190 第 5 点）。 */
   | { page: "butler"; focusSession?: string | null }
@@ -144,12 +149,18 @@ export function App() {
   /** 跳到 ticket 页；req 是到了那里要打开（已经开着就切过去）的 session。 */
   const openTicket = (key: string, req?: OpenSessionRequest) => {
     // 要去的 ticket 可能已经归档：不跳到空白页，也不留下悬空的打开请求。
-    if (!allTickets.some((t) => t.key === key)) {
+    if (missingTicket({ page: "ticket", key }, allTickets) !== null) {
       reportError(new Error(S.ticketMissing(key)));
       return;
     }
     setPendingOpen(req ?? null);
     setRoute({ page: "ticket", key });
+  };
+  /** 卡片的「去看看」等跳转：去 ticket 页时同 openTicket，先看它还在不在。 */
+  const go = (r: Route) => {
+    const gone = missingTicket(r, allTickets);
+    if (gone !== null) reportError(new Error(S.ticketMissing(gone)));
+    else setRoute(r);
   };
 
   /** 「现在」页的一行点开：ticket 走 openTicket（切到那个终端）；feature、epic 页打开时先看那个 session 的终端。 */
@@ -180,10 +191,11 @@ export function App() {
     features: new Map(features.map((f) => [f.id, f.name])),
     tickets: new Map(allTickets.map((t) => [t.key, t.title])),
   };
-  /** 首页「开修复 session」：开好了去 feature 页（修复 session 在那里），失败报到全局错误条。 */
+  /** 「开修复 session」（首页、ticket 页、epic / feature 页的卡片）：开好了去 feature 页的「总控」看它的终端（修复 session 在那里），失败报到全局错误条。 */
+  const fixSeq = useRef(0);
   const openFix = (featureId: number, stuckSessionId: string) => {
     api.openFixSession({ featureId, stuckSessionId }).then((r) => {
-      if (r.ok) setRoute({ page: "feature", id: featureId });
+      if (r.ok) setRoute(fixLanding(featureId, r.termId, ++fixSeq.current));
       else reportError(new Error(S.openErrors[r.reason] ?? r.reason));
     }, reportError);
   };
@@ -213,9 +225,9 @@ export function App() {
             {route.page === "home" && (
               <HomePage
                 state={turn} noWork={isNoWork(allTickets.length + epics.length + features.length, turn.board?.items ?? null, nowView?.notices.length ?? 0)}
-                firstRun={<FirstRunHome {...firstRunProps({ onNewTicket: () => setShowNew(true), onNewFeature: () => setShowNewFeature(true), onNewEpic: () => setShowNewEpic(true), onGo: setRoute })} />}
+                firstRun={<FirstRunHome {...firstRunProps({ onNewTicket: () => setShowNew(true), onNewFeature: () => setShowNewFeature(true), onNewEpic: () => setShowNewEpic(true), onGo: go })} />}
                 ctx={ctx} nowView={nowView} liveTickets={new Set(allTickets.map((t) => t.key))}
-                onFix={openFix} onOpen={openTarget} onGo={setRoute} onOpenTicket={(key) => openTicket(key)} onChanged={turn.reload}
+                onFix={openFix} onOpen={openTarget} onGo={go} onOpenTicket={(key) => openTicket(key)} onChanged={turn.reload}
                 onResumeSetup={() => dispatchOnboarding({ type: "rerun" })}
               />
             )}
@@ -225,6 +237,8 @@ export function App() {
                 ticket={current}
                 initialOpen={pendingOpen?.ticketKey === current.key ? pendingOpen : null}
                 onInitialOpenDone={() => setPendingOpen(null)}
+                landing={route.landing}
+                onFix={openFix}
                 onArchived={() => setRoute({ page: "home" })}
                 feature={featureOf(current)}
                 onOpenFeature={(id) => setRoute({ page: "feature", id })}
@@ -235,24 +249,34 @@ export function App() {
                 key={currentFeature.id}
                 feature={currentFeature}
                 epics={epics}
-                onOpenTicket={(key) => setRoute({ page: "ticket", key })}
+                onOpenTicket={(key) => openTicket(key)}
                 onTicketCreated={goTicket}
                 focusSession={route.focusSession}
+                landing={route.landing}
+                focusTerm={route.focusTerm}
+                landingSeq={route.landingSeq}
                 onOpenTarget={openTarget}
+                ctx={ctx}
+                onFix={openFix}
+                onGo={go}
               />
             )}
             {route.page === "epic" && currentEpic && (
               <EpicPage
                 key={currentEpic.id}
                 epic={currentEpic}
+                features={features.filter((f) => f.epicId === currentEpic.id && f.archivedAt === null)}
                 onOpenFeature={(id) => setRoute({ page: "feature", id })}
-                onOpenTicket={(key) => setRoute({ page: "ticket", key })}
+                onOpenTicket={(key) => openTicket(key)}
                 onFeatureCreated={goFeature}
                 focusSession={route.focusSession}
                 onOpenTarget={openTarget}
+                ctx={ctx}
+                onFix={openFix}
+                onGo={go}
               />
             )}
-            {route.page === "butler" && <ButlerPage key={route.focusSession ?? ""} focusSession={route.focusSession} onOpenTarget={openTarget} />}
+            {route.page === "butler" && <ButlerPage key={route.focusSession ?? ""} focusSession={route.focusSession} />}
             {route.page === "all" && (
               <AllWorkPage
                 key={route.section ?? ""}
@@ -266,8 +290,8 @@ export function App() {
                 onNewTicket={() => setShowNew(true)}
                 onNewFeature={() => setShowNewFeature(true)}
                 onNewEpic={() => setShowNewEpic(true)}
-                onGo={setRoute}
-                onOpenTicket={(key) => setRoute({ page: "ticket", key })}
+                onGo={go}
+                onOpenTicket={(key) => openTicket(key)}
               />
             )}
             {route.page === "effect" && <EffectPage />}

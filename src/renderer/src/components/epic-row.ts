@@ -1,18 +1,6 @@
-import type { EpicFeatureRow, EpicView, FeatureView } from "../../../shared/types";
+import type { EpicView, FeatureView } from "../../../shared/types";
 import { ButlerError } from "../api";
-import { firstSentence } from "../feature-summary-view";
 import type { UiStrings } from "../strings";
-
-export { firstSentence };
-
-/** epic 页的一行：一句进度（汇总的第一句）、状态文字，以及要不要标成卡住。 */
-export function epicRowText(row: EpicFeatureRow, S: UiStrings): { progress: string; status: string; stuck: boolean } {
-  return {
-    progress: firstSentence(row.summary ?? "") || S.epicNoSummary,
-    status: S.epicStatus[row.status],
-    stuck: row.status === "stuck",
-  };
-}
 
 /** epic session 打不开时的提示：openEpic 借用了 no_ticket、no_repo 这两个原因，不能显示 ticket 的说法。 */
 export function epicOpenError(reason: string, S: UiStrings): string {

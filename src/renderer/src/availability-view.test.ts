@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { S, STRINGS } from "./strings";
-import { availabilityButtons, availabilityRows, ciReasonText, limitLine, noticeText, resetClock } from "./availability-view";
+import { availabilityButtons, availabilityRows, ciReasonText, limitLine, noticeText, openCommentsNotice, resetClock } from "./availability-view";
+import { pickTab } from "./page-tabs";
+import { TICKET_TABS } from "./ticket-tabs";
 
 describe("availability view", () => {
   it("resetClock same day and other day", () => {
@@ -129,6 +131,18 @@ describe("comments_waiting notice", () => {
     const w = { reason: "review" as const, ticketKey: "T-3", prId: 1, number: 12, count: 2, since: 0 };
     expect(noticeText({ kind: "comments_waiting", waiting: w, target, title: null }, S, 0)).toEqual({ text: S.lp.noticeReview(S.lp.noticePr("T-3", 12), 2), actions: ["comments"] });
     expect(noticeText({ kind: "comments_waiting", waiting: { ...w, reason: "undelivered" }, target, title: null }, S, 45 * 60_000).text).toBe(S.lp.noticeUndelivered(S.lp.noticePr("T-3", 12), 2, 45));
+  });
+  it("opening it lands the ticket page on PR details (where the comments are now), not on the terminal", () => {
+    const w = { reason: "review" as const, ticketKey: "T-3", prId: 1, number: 12, count: 2, since: 0 };
+    const saved = new Map<string, string>();
+    const opened: unknown[] = [];
+    // 就算 target 带着 session，也不能带进去：带 session 进 ticket 页会被打开请求拉到终端。
+    openCommentsNotice({ kind: "comments_waiting", waiting: w, target: { ...target, sessionId: "s-1" }, title: null }, {
+      saveTab: (page, tab) => saved.set(page, tab), onOpen: (t) => opened.push(t),
+    });
+    expect(saved.get("ticket:T-3")).toBe("pr");
+    expect(pickTab(saved.get("ticket:T-3") ?? null, TICKET_TABS, "overview")).toBe("pr");
+    expect(opened).toEqual([{ page: "ticket", key: "T-3", sessionId: null }]);
   });
 });
 

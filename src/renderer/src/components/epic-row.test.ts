@@ -1,57 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { EpicFeatureRow, EpicFeatureStatus, EpicView, FeatureView } from "../../../shared/types";
+import type { EpicView, FeatureView } from "../../../shared/types";
 import { ButlerError } from "../api";
 import { STRINGS } from "../strings";
-import { epicErrorText, epicOpenError, epicRowText, featuresOutsideEpics, firstSentence } from "./epic-row";
-
-const row = (over: Partial<EpicFeatureRow> = {}): EpicFeatureRow => ({
-  id: 1, name: "支付方式", status: "active", archivedAt: null, summaryAt: null, summary: null, blockers: [], decisions: [], openQuestions: [], ...over,
-});
-
-describe("firstSentence", () => {
-  it("stops at a Chinese or an English full stop", () => {
-    expect(firstSentence("前后端都合并了。只剩回归")).toBe("前后端都合并了。");
-    expect(firstSentence("Both sides merged. Only the regression is left")).toBe("Both sides merged.");
-  });
-
-  it("keeps the whole text when there is no full stop", () => {
-    expect(firstSentence("接口写完，前端联调中")).toBe("接口写完，前端联调中");
-  });
-
-  it("gives an empty string for an empty summary", () => {
-    expect(firstSentence("")).toBe("");
-    expect(firstSentence("   ")).toBe("");
-  });
-});
-
-describe("epicRowText", () => {
-  const cases: [EpicFeatureStatus, string, string][] = [
-    ["stuck", "有 ticket 卡住", "A ticket is stuck"],
-    ["waiting", "等你回话", "Waiting for you"],
-    ["not_started", "未开始", "Not started"],
-    ["active", "进行中", "In progress"],
-    ["archived", "已归档", "Archived"],
-  ];
-
-  it.each(cases)("names the status %s in both languages", (status, zh, en) => {
-    expect(epicRowText(row({ status }), STRINGS.zh).status).toBe(zh);
-    expect(epicRowText(row({ status }), STRINGS.en).status).toBe(en);
-  });
-
-  it("marks only a stuck feature as stuck", () => {
-    expect(cases.filter(([status]) => epicRowText(row({ status }), STRINGS.zh).stuck).map(([status]) => status)).toEqual(["stuck"]);
-  });
-
-  it("shows the first sentence of the summary as the progress", () => {
-    expect(epicRowText(row({ summary: "接口写完。前端联调中。" }), STRINGS.zh).progress).toBe("接口写完。");
-  });
-
-  it("says there is no summary yet when there is none, or it is blank", () => {
-    expect(epicRowText(row(), STRINGS.zh).progress).toBe("还没有汇总");
-    expect(epicRowText(row(), STRINGS.en).progress).toBe("No summary yet");
-    expect(epicRowText(row({ summary: "  " }), STRINGS.zh).progress).toBe("还没有汇总");
-  });
-});
+import { epicErrorText, epicOpenError, featuresOutsideEpics } from "./epic-row";
 
 describe("epic wording for errors", () => {
   it("does not reuse the ticket wording when an epic session cannot open", () => {

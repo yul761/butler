@@ -2,7 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, newButton, openAllWork, ROOT, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, newButton, openAllWork, ROOT, terminalText, test, type Sandbox, openTicketTab } from "./fixtures";
 
 /**
  * 首页「轮到你」和「全部工作」（UI 重做第 2 层）。状态来自第 1 层的 turn:board：
@@ -59,6 +59,7 @@ async function activeSessionId(page: Page): Promise<string | undefined> {
 /** 在当前 ticket 页开一个新 session，等假 claude 就绪；返回它的 session id。 */
 async function openSession(page: Page): Promise<string> {
   const before = await page.locator(".sessions-bar .session-wrap").count();
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect(page.locator(".sessions-bar .session-wrap")).toHaveCount(before + 1);
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");

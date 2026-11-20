@@ -1,17 +1,16 @@
-import { useState } from "react";
-import { PR_STAGES, type PrStageCell, type PrStagesTicket, type PrStagesView } from "../../../shared/pr-stages";
+import type { PrStageCell, PrStagesView } from "../../../shared/pr-stages";
 import { api } from "../api";
 import { reportError } from "../errors";
-import { cellLabel, cellText, epicPrSummary, newestRow, timelineText, usePrStages } from "../pr-stages-view";
+import { cellLabel, cellText, timelineText, usePrStages } from "../pr-stages-view";
 import { S } from "../strings";
 import { useCollapsed } from "./useCollapsed";
 
-function Cell({ cell, named }: { cell: PrStageCell; named: boolean }) {
+function Cell({ cell }: { cell: PrStageCell }) {
   const symbol = cell.state === "done" || cell.state === "failed" || cell.state === "todo";
   const label = cellLabel(cell);
   return (
     <span className={`pr-cell pr-${cell.state}`} title={symbol ? label : undefined} aria-label={symbol ? label : undefined}>
-      {named && <span className="pr-cell-name">{S.prStage[cell.id]}</span>}
+      <span className="pr-cell-name">{S.prStage[cell.id]}</span>
       <span className="pr-cell-state">{cellText(cell)}</span>
     </span>
   );
@@ -34,7 +33,7 @@ function RepoStages({ row, showName }: { row: PrStagesView; showName: boolean })
     <section className="pr-repo">
       <div className="pr-steps">
         {name !== null && <span className="pr-repo-name">{name}</span>}
-        {row.stages.map((c) => <Cell key={c.id} cell={c} named />)}
+        {row.stages.map((c) => <Cell key={c.id} cell={c} />)}
         {row.noPr && <span className="pr-no-pr muted">{S.prNoPrYet}</span>}
         {prUrl && <button className="pr-link link" title={prUrl} onClick={() => openPr(prUrl)}>{row.prNumber === null ? "PR" : `#${row.prNumber}`}</button>}
         {row.closed && <span className="pr-closed">{S.prClosed}</span>}
@@ -71,93 +70,4 @@ export function TicketPrStages({ ticketKey }: { ticketKey: string }) {
   const tickets = usePrStages({ ticketKey });
   if (tickets === null) return null;
   return <TicketPrRows rows={tickets[0]?.rows ?? []} />;
-}
-
-/** 一张表：一行一个 ticket（含已归档的），六列是它最新那一行的进度；已合并的 ticket 有标记，没有仓库的写一句。整行可点，打开 ticket。 */
-function TicketsTable({ tickets, onOpenTicket }: { tickets: PrStagesTicket[]; onOpenTicket: (key: string) => void }) {
-  return (
-    <table className="pr-table">
-      <thead>
-        <tr>
-          <th />
-          {PR_STAGES.map((id) => <th key={id}>{S.prStage[id]}</th>)}
-        </tr>
-      </thead>
-      <tbody>
-        {tickets.map((t) => {
-          const r = newestRow(t);
-          const prs = t.rows.filter((x) => x.prId !== null).length;
-          return (
-            <tr key={t.ticketKey} className="clickable" onClick={() => onOpenTicket(t.ticketKey)}>
-              <td className="pr-row-name">
-                <button className="chip" onClick={(ev) => (ev.stopPropagation(), onOpenTicket(t.ticketKey))}>{t.ticketKey}</button>
-                {prs > 1 && <span className="muted"> {S.prCount(prs)}</span>}
-                {t.merged && <span className="pill merged">{S.prPill.merged}</span>}
-                {t.archived && <span className="pr-archived">{S.prArchived}</span>}
-                {r?.closed && <span className="pr-closed">{S.prClosed}</span>}
-              </td>
-              {/* 看有没有行而不是 hasRepos：没有仓库、只有别的仓库的 PR 的 ticket 照样显示进度。 */}
-              {r === null
-                ? <td className="muted" colSpan={PR_STAGES.length}>{S.prTicketNoRepos}</td>
-                : r.stages.map((c) => <td key={c.id}><Cell cell={c} named={false} /></td>)}
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
-
-/** feature 的 PR 进度表（不取数据，便于测试）。 */
-export function FeaturePrRows({ tickets, onOpenTicket }: { tickets: PrStagesTicket[]; onOpenTicket: (key: string) => void }) {
-  if (tickets.length === 0) return <p className="muted">{S.prNoTickets}</p>;
-  return <TicketsTable tickets={tickets} onOpenTicket={onOpenTicket} />;
-}
-
-export function FeaturePrStages({ featureId, onOpenTicket }: { featureId: number; onOpenTicket: (key: string) => void }) {
-  const tickets = usePrStages({ featureId });
-  if (tickets === null) return null;
-  return <FeaturePrRows tickets={tickets} onOpenTicket={onOpenTicket} />;
-}
-
-interface EpicProps {
-  features: { id: number; name: string }[];
-  onOpenTicket: (key: string) => void;
-}
-
-/** epic 的 PR 进度：一行一个 feature，按 ticket 数的进度条和「m/n 已合并」；点开是这个 feature 的 ticket 表（不取数据，便于测试）。 */
-export function EpicPrRows({ tickets, features, onOpenTicket }: EpicProps & { tickets: PrStagesTicket[] }) {
-  const [open, setOpen] = useState<number | null>(null);
-  const summary = epicPrSummary(tickets);
-  return (
-    <div className="pr-epic">
-      {features.map((f) => {
-        const s = summary.get(f.id);
-        const total = s?.total ?? 0;
-        const pct = (n: number) => (total === 0 ? 0 : (n / total) * 100);
-        const mine = tickets.filter((t) => t.featureId === f.id);
-        return (
-          <div key={f.id}>
-            <div className="pr-epic-row clickable" onClick={() => setOpen(open === f.id ? null : f.id)}>
-              <button className="chip pr-epic-name" aria-expanded={open === f.id} onClick={(ev) => (ev.stopPropagation(), setOpen(open === f.id ? null : f.id))}>{f.name}</button>
-              <span className="pr-bar">
-                <span className="pr-seg pr-done" style={{ width: `${pct(s?.merged ?? 0)}%` }} />
-                <span className="pr-seg pr-active" style={{ width: `${pct(s?.active ?? 0)}%` }} />
-                <span className="pr-seg pr-failed" style={{ width: `${pct(s?.failed ?? 0)}%` }} />
-                <span className="pr-seg pr-todo" style={{ width: `${pct(s?.notStarted ?? 0)}%` }} />
-              </span>
-              <span className="muted">{total === 0 ? S.prNoTickets : S.prMergedOf(s?.merged ?? 0, total)}</span>
-            </div>
-            {open === f.id && <FeaturePrRows tickets={mine} onOpenTicket={onOpenTicket} />}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-export function EpicPrStages({ epicId, features, onOpenTicket }: EpicProps & { epicId: number }) {
-  const tickets = usePrStages({ epicId });
-  if (tickets === null) return null;
-  return <EpicPrRows tickets={tickets} features={features} onOpenTicket={onOpenTicket} />;
 }

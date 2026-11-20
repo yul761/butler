@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ExternalActionEntry } from "../../../shared/external";
 import type { AuditEntry, AuditPage as AuditPageData } from "../../../shared/llm";
 import { api } from "../api";
+import { auditIsEmpty } from "../butler-self-view";
 import { auditSummary, blockedText, bodyHeading, bodyMaybeSent, prettyBody, prettyJson } from "../audit-view";
 import { reportError } from "../errors";
 import { formatUsd } from "../privacy-form";
 import { S } from "../strings";
+import { PageTabs, type PageTab } from "./PageTabs";
 import { useStateRefetch } from "./useStateRefetch";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -37,6 +39,7 @@ export function AuditPage() {
   const [open, setOpen] = useState<Set<number>>(new Set());
 
   const [failed, setFailed] = useState(false);
+  const external = useStateRefetch("externalAudit", () => api.externalAudit());
   /** 每次重新加载就加一；翻页请求回来时发现变了就丢弃。 */
   const gen = useRef(0);
 
@@ -91,9 +94,8 @@ export function AuditPage() {
       <p className="empty">{S.loading}</p>
     );
   }
-  return (
-    <div className="page">
-      <h2>{S.audit}</h2>
+  const llmTab = (
+    <>
       <p className="muted">{S.auditIntro}</p>
       <p>{S.monthSpend(formatUsd(page.monthCostUsd), formatUsd(page.budgetUsd))}</p>
       {entries.length === 0 && <p className="empty">{S.auditEmpty}</p>}
@@ -122,9 +124,25 @@ export function AuditPage() {
         </details>
       ))}
       {hasMore && <button disabled={loadingMore} onClick={() => void more()}>{S.loadMore}</button>}
-      <ExternalAudit />
+    </>
+  );
+  const tabs: PageTab[] = [
+    { id: "external", label: S.lay.auditTabs.external, content: <ExternalAudit entries={external} /> },
+    { id: "llm", label: S.lay.auditTabs.llm, content: llmTab },
+  ];
+  return (
+    <div className="page">
+      <h2>{S.audit}</h2>
+      <p className="muted">{S.lay.auditLede}</p>
+      {external !== null && auditIsEmpty({ llmEntries: entries.length, externalEntries: external.length }) && <AuditEmptyNote />}
+      <PageTabs page="audit" tabs={tabs} defaultTab="external" />
     </div>
   );
+}
+
+/** 一条记录都没有时的说明：Butler 默认不对外做事，所以空是正常的。 */
+export function AuditEmptyNote() {
+  return <p className="muted" data-testid="audit-empty-note">{S.lay.auditEmpty}</p>;
 }
 
 /** 对外动作的记录（契约 4.8，ws-b）：做了、失败、开关关着跳过的都在这里。新的在前，最多 200 条。 */
@@ -160,8 +178,7 @@ export function ExternalAuditList({ entries }: { entries: ExternalActionEntry[] 
   );
 }
 
-function ExternalAudit() {
-  const entries = useStateRefetch("externalAudit", () => api.externalAudit());
+export function ExternalAudit({ entries }: { entries: ExternalActionEntry[] | null }) {
   return (
     <section className="external-audit-section" data-testid="external-audit">
       <h3>{S.externalAuditHeading}</h3>

@@ -1,5 +1,5 @@
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, newButton } from "./fixtures";
+import { completeWizard, expect, terminalText, test, newButton, openTicketTab } from "./fixtures";
 
 /**
  * 用户反馈（2026-11-01）：输入拼音时拼音框往前窜一格挡住字；在 session 右边缘打字时拼音把整个 UI 往右撑开。
@@ -14,6 +14,7 @@ test("the pinyin box stays on the cursor and inside the terminal", async ({ make
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "IME-1", exact: true })).toBeVisible();
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await page.locator(".terminal-wrap:visible .xterm").click();

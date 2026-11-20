@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import type { ButlerMessageView, ButlerView, InboxItemView, NowTarget, OpenSessionResult } from "../../../shared/types";
+import type { ReactNode } from "react";
+import type { ButlerMessageView, ButlerView, OpenSessionResult } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
 import { epicErrorText } from "./epic-row";
-import { inboxTabs, useInbox } from "./InboxPanes";
-import { PageTabs } from "./PageTabs";
+import { ControlConversation } from "./ControlConversation";
+import { ControlSplit } from "./ScopeParts";
 import { SessionArea, SessionButton, useSessionPanes } from "./WorkspaceParts";
 import { useStateRefetch } from "./useStateRefetch";
 
@@ -38,10 +39,8 @@ function useButlerView(): ButlerView | null {
 }
 
 interface Props {
-  /** 打开时先切到这个 session 的终端（从「现在」页或「待你决定」点进来时）。 */
+  /** 打开时先切到这个 session 的终端（从首页卡片点进来时）。 */
   focusSession?: string | null;
-  /** 「待你决定」卡片上的「去终端」：问题不是 Butler 总控提的时跳到提问的 session 的页面。 */
-  onOpenTarget: (t: NowTarget) => void;
 }
 
 /**
@@ -56,21 +55,34 @@ async function openLessonSession(runId: number): Promise<OpenSessionResult> {
   throw new Error(reason === "not_found" ? S.lessonSessionGone : reason === "claude_missing" ? S.openErrors.claude_missing : S.lessonsErrorGeneric);
 }
 
+/** 总控页的版面：标题 + 一句话说明 + 左终端右对话。没有 tab。 */
+export function ButlerLayout(p: { title: string; lede: string; meta?: ReactNode; left: ReactNode; right: ReactNode }) {
+  return (
+    <div className="ticket-page butler-page">
+      <header className="ticket-header">
+        <h2>{p.title}</h2>
+        {p.meta}
+      </header>
+      <p className="muted butler-intro">{p.lede}</p>
+      <ControlSplit left={p.left} right={p.right} />
+    </div>
+  );
+}
+
 /**
- * Butler 总控页（BTL-190 第 5 点）：上面是所有范围的「汇报 / 待你决定」两个 tab，下面是 Butler 总控的 session 和终端。
+ * Butler 总控页：左边是 Butler 总控的 session 和终端，右边是所有范围的汇报对话。
  * 没有仓库条：Butler 总控在自己的工作目录里，只读不改代码。
  */
-export function ButlerPage({ focusSession, onOpenTarget }: Props) {
+export function ButlerPage({ focusSession }: Props) {
   const view = useButlerView();
   // 取到数据再建终端面板：面板一开始就要知道哪些终端开着。
   if (!view) return <div className="ticket-page butler-page" />;
-  return <ButlerArea view={view} focusSession={focusSession} onOpenTarget={onOpenTarget} />;
+  return <ButlerArea view={view} focusSession={focusSession} />;
 }
 
-function ButlerArea({ view, focusSession, onOpenTarget }: Props & { view: ButlerView }) {
+function ButlerArea({ view, focusSession }: Props & { view: ButlerView }) {
   const [error, setError] = useState<string | null>(null);
   const errorText = (e: unknown) => epicErrorText(e, S);
-  const inbox = useInbox({ all: true });
   // 复盘分析 session 和 Butler 总控的共用一组终端：从复盘页「在 Claude 里打开」跳过来时，focusSession 是复盘分析 session。
   const panes = useSessionPanes([...view.sessions, ...view.lessonSessions], {
     openSession: (sessionId) => {
@@ -83,53 +95,48 @@ function ButlerArea({ view, focusSession, onOpenTarget }: Props & { view: Butler
     initialActive: focusSession,
   });
 
-  /** 「去终端」：Butler 总控自己的问题就地切过去，终端关着就打开；别的 session 跳到它的页面。 */
-  function goTo(item: InboxItemView) {
-    const t = item.target;
-    if (t.page !== "butler") return onOpenTarget(t);
-    const termId = view.sessions.find((s) => s.id === item.sessionId)?.termId;
-    if (termId) panes.show(termId);
-    else void panes.open(item.sessionId);
-  }
-
   return (
-    <div className="ticket-page butler-page">
-      <header className="ticket-header">
-        <h2>{S.butlerTitle}</h2>
-        <span className="muted" title={view.workspaceDir}>{S.labelled(S.butlerWorkspace, view.workspaceDir)}</span>
-      </header>
-      <p className="muted butler-intro">{S.butlerIntro}</p>
-
-      {/* 这一页就是来回答问题的：默认停在「待你决定」。 */}
-      <PageTabs page="butler" defaultTab="decisions" tabs={[...inboxTabs(inbox, goTo), { id: "replies", label: S.butlerRepliesTab, content: <ButlerReplies /> }]} />
-
-      <SessionArea
-        sessions={view.sessions}
-        hiddenSessions={view.hiddenSessions}
-        panes={panes}
-        placeOf={() => S.butlerSession}
-        noSessions={S.noButlerSessions}
-        newSession={S.newButlerSession}
-        newSessionHint={S.butlerSessionHint}
-        error={error}
-        onError={(e) => setError(errorText(e))}
-      >
-        {view.lessonSessions.length > 0 && (
-          <section className="lesson-sessions">
-            <h3>{S.lessonSessionsHeading}</h3>
-            <div className="sessions-bar">
-              {view.lessonSessions.map((s) => <SessionButton key={s.id} s={s} panes={panes} place={S.lessonSession} />)}
-            </div>
-          </section>
-        )}
-      </SessionArea>
-    </div>
+    <ButlerLayout
+      title={S.butlerTitle}
+      lede={S.butlerIntro}
+      meta={<span className="muted" title={view.workspaceDir}>{S.labelled(S.butlerWorkspace, view.workspaceDir)}</span>}
+      left={
+        <SessionArea
+          sessions={view.sessions}
+          hiddenSessions={view.hiddenSessions}
+          panes={panes}
+          placeOf={() => S.butlerSession}
+          noSessions={S.noButlerSessions}
+          newSession={S.newButlerSession}
+          newSessionHint={S.butlerSessionHint}
+          error={error}
+          onError={(e) => setError(errorText(e))}
+        >
+          {view.lessonSessions.length > 0 && (
+            <section className="lesson-sessions">
+              <h3>{S.lessonSessionsHeading}</h3>
+              <div className="sessions-bar">
+                {view.lessonSessions.map((s) => <SessionButton key={s.id} s={s} panes={panes} place={S.lessonSession} />)}
+              </div>
+            </section>
+          )}
+        </SessionArea>
+      }
+      right={
+        <ControlConversation
+          scope={{ all: true }}
+          rootSessionId={null}
+          sessions={view.sessions.map((s) => ({ id: s.id, label: S.butlerSession }))}
+          footer={<ButlerReplies />}
+        />
+      }
+    />
   );
 }
 
 const shortTime = (iso: string) => new Date(iso).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
-/** 「回复」tab（ws-b）：总控用 send_message 发出去的消息，送到没有，收到的回复送回总控没有。新的在前。 */
+/** 总控用 send_message 发出去的消息（ws-b）：送到没有，收到的回复送回总控没有。新的在前。 */
 export function ButlerRepliesList({ messages }: { messages: ButlerMessageView[] }) {
   if (messages.length === 0) return <p className="muted">{S.butlerRepliesNone}</p>;
   return (
@@ -155,8 +162,18 @@ export function ButlerRepliesList({ messages }: { messages: ButlerMessageView[] 
   );
 }
 
+/** 对话下面默认折起的「总控发出的消息（N）」；还没取到消息时整块不显示。 */
+export function ButlerRepliesSummary({ messages }: { messages: ButlerMessageView[] | null }) {
+  if (messages === null) return null;
+  return (
+    <details className="butler-sent">
+      <summary>{S.lay.butlerSent(messages.length)}</summary>
+      <ButlerRepliesList messages={messages} />
+    </details>
+  );
+}
+
 function ButlerReplies() {
   const messages = useStateRefetch("butler:messages", () => api.butlerMessages());
-  if (messages === null) return null;
-  return <ButlerRepliesList messages={messages} />;
+  return <ButlerRepliesSummary messages={messages} />;
 }

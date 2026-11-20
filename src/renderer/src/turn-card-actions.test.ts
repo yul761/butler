@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Turn, TurnItem } from "../../shared/turn";
 import { ciReasonText } from "./availability-view";
 import { STRINGS } from "./strings";
+import { landingTab } from "./ticket-tabs";
 import { runCardAction, type CardDeps } from "./turn-card-actions";
 
 const S = STRINGS.zh;
@@ -19,6 +20,8 @@ function deps(o: Partial<CardDeps> = {}): CardDeps & { [K in keyof CardDeps]: Re
     prOpen: vi.fn(async () => ({ ok: true as const })),
     turnSendToAgent: vi.fn(async () => ({ ok: true })),
     onOpen: vi.fn(),
+    onGo: vi.fn(),
+    dismissActivity: vi.fn(async () => undefined),
     onFix: vi.fn(),
     onChanged: vi.fn(),
     ...o,
@@ -80,9 +83,26 @@ describe("runCardAction", () => {
     expect(c.onFix).not.toHaveBeenCalled();
   });
 
-  it("look: lands on the ticket's session", async () => {
+  it("look: a ticket card goes to the ticket page and lands by the card's own turn", async () => {
     const d = deps();
     await runCardAction({ id: "look", primary: true }, item(stuck), d, S);
-    expect(d.onOpen).toHaveBeenCalledWith({ page: "ticket", key: "BTL-1", sessionId: "s1" });
+    expect(d.onGo).toHaveBeenCalledWith({ page: "ticket", key: "BTL-1", landing: stuck });
+    expect(d.onOpen).not.toHaveBeenCalled();
+    // 一个 PR 的卡片（「PR#2 待合」）落到它自己的页签，不看这个 ticket 别的 PR 或 session。
+    const merge: Turn = { owner: "you", kind: "merge", risk: null };
+    const m = deps();
+    await runCardAction({ id: "look", primary: false }, item(merge, { pr }), m, S);
+    expect(m.onGo).toHaveBeenCalledWith({ page: "ticket", key: "BTL-1", landing: merge });
+    expect(landingTab(merge)).toBe("overview");
+  });
+
+  it("ignore: dismisses the stuck session's activity, then refetches", async () => {
+    const d = deps();
+    expect(await runCardAction({ id: "ignore", primary: false }, item(stuck), d, S)).toBeNull();
+    expect(d.dismissActivity).toHaveBeenCalledWith("s1");
+    expect(d.onChanged).toHaveBeenCalled();
+    const none = deps();
+    await runCardAction({ id: "ignore", primary: false }, item({ ...stuck, sessionId: null } as Turn), none, S);
+    expect(none.dismissActivity).not.toHaveBeenCalled();
   });
 });

@@ -347,7 +347,7 @@ const ZH = {
   },
   /** 「待你决定」的回答送进提问的 session（BTL-190 第 2+3 点）。几条回答一起送时一条一段。 */
   inboxAnswer: (question: string, answer: string) => `你问的『${question}』，用户的回答：${answer}`,
-  /** 用户在卡片上点「不用了」时不送任何东西；这句只在几条回答一起送时开头用。 */
+  /** 几条回答一起送时开头的那句。 */
   inboxAnswersIntro: "Butler 转来用户对你提的问题的回答：",
   /** 一条回答单独就超出一条消息的上限时，截掉后面的部分，接上这句。 */
   inboxAnswerCut: "……（回答太长，后面的部分截掉了）",

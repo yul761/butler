@@ -3,6 +3,9 @@ import type { Lesson, LessonAction, LessonRepoView, LessonsState } from "../../.
 import { api } from "../api";
 import { reportError } from "../errors";
 import { queueBarButtons, queueBarText, sourceLabel, TONE_PILL } from "../lesson-runs-view";
+import { firstPendingSelection, pendingLessons } from "../butler-self-view";
+import { saveTab, savedTab } from "../local-prefs";
+import { pickTab } from "../page-tabs";
 import { lessonsFor, lessonsTree, pruneLessonsUi, type LessonsSelection } from "../lessons-view";
 import { S } from "../strings";
 import { LessonRuns } from "./LessonRuns";
@@ -20,6 +23,20 @@ import { CalibrationPanel } from "./CalibrationPanel";
 import { ScoreParts } from "./ScoreParts";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+const PAGE_TABS = ["lessons", "wizard", "calibration", "checks", "baselines", "batches", "io"] as const;
+type PageTabId = (typeof PAGE_TABS)[number];
+
+/** 有新规矩待确认时放在页面最上面的一张卡：数量 + 「逐条看」。 */
+export function LessonsAttention({ count, onOpen }: { count: number; onOpen(): void }) {
+  if (count <= 0) return null;
+  return (
+    <p className="lessons-suggest" role="status" data-testid="lessons-attention">
+      <span>{S.lay.lessonsAttention(count)}</span>
+      <button data-testid="lessons-attention-open" onClick={onOpen}>{S.lay.lessonsReview}</button>
+    </p>
+  );
+}
 
 /** 只有界面状态放在这里；数据都等 stateChanged 之后重取。 */
 export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(id: string): void; tab?: "checks" }) {
@@ -39,7 +56,12 @@ export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(
   const [newName, setNewName] = useState("");
   const [newSlugs, setNewSlugs] = useState<string[]>([]);
   /** 页面顶上的标签：规矩 / 批次历史 / 导入导出。 */
-  const [pageTab, setPageTab] = useState<"lessons" | "wizard" | "calibration" | "checks" | "baselines" | "batches" | "io">(initialTab ?? "lessons");
+  const [pageTab, setPageTabRaw] = useState<PageTabId>(() => initialTab ?? (pickTab(savedTab("lessons"), PAGE_TABS, "lessons") as PageTabId));
+  /** 换页面顶上的标签，同时记住（下次进来还停在这里）。 */
+  const setPageTab = (t: PageTabId) => {
+    saveTab("lessons", t);
+    setPageTabRaw(t);
+  };
   useEffect(() => {
     if (initialTab) setPageTab(initialTab);
   }, [initialTab]);
@@ -459,9 +481,17 @@ export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(
   return (
     <div className="page lessons-page">
       <h2>{S.lessons}</h2>
-      <p className="muted">{S.lessonsIntro}</p>
+      <p className="muted">{S.lay.lessonsLede}</p>
+      <LessonsAttention
+        count={pendingLessons(s)}
+        onOpen={() => {
+          setPageTab("lessons");
+          const first = firstPendingSelection(s);
+          if (first) select(first);
+        }}
+      />
       <div className="lessons-tabs lessons-row" role="tablist">
-        {(["lessons", "wizard", "calibration", "checks", "baselines", "batches", "io"] as const).map((t) => (
+        {PAGE_TABS.map((t) => (
           <button key={t} role="tab" aria-selected={pageTab === t} className={pageTab === t ? "primary" : undefined} data-testid={`lessons-page-tab-${t}`} onClick={() => setPageTab(t)}>
             {S.lessonsPageTab[t]}
           </button>

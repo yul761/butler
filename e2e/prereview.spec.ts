@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { CAT } from "../src/main/assess/readiness";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, FAKE_GH_ORIGIN, type FakeGhFixture, makeGitRepo, newButton, openSettingsGroup, openTab, type Sandbox, terminalText, test, unsupportedGhCalls } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, type FakeGhFixture, makeGitRepo, newButton, openAllWorkMore, openSettingsGroup, type Sandbox, terminalText, test, unsupportedGhCalls, openTicketTab, openTab } from "./fixtures";
 
 const BRANCH = "feature/E2E-7";
 const url = "https://github.com/acme/app/pull/51";
@@ -78,13 +78,14 @@ test("evidence goes through pre-review into readiness, risk and a review brief",
   await page.getByRole("radio", { name: S.branch, exact: true }).check();
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E-7", exact: true })).toBeVisible();
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
 
   // 1. 只交验收条件：预审做完，证据缺测试输出 → 没就绪。
   const first = await callTool(page, s, "submit_evidence", { acceptance: [{ criterion: "greets the user", how: "src/greet.ts returns Hello, <name>" }] });
   expect(first.error, first.text).toBe(false);
-  await openTab(page, S.rv.tab);
+  await openTicketTab(page, "pr");
   const card = page.getByTestId("review-pr-51");
   await expect(card.getByTestId("review-prereview")).toHaveAttribute("data-status", "done", { timeout: 90_000 });
   const evidenceCond = card.getByTestId("review-conditions").locator('li[data-state]').filter({ hasText: S.rv.cond.evidence });
@@ -93,12 +94,14 @@ test("evidence goes through pre-review into readiness, risk and a review brief",
   await expect(card.getByTestId("review-ready-badge")).toHaveText(S.rv.notReady);
   await expect(card.getByTestId("review-gaps")).toBeVisible();
 
-  // 2. 补上测试输出：核对一致 → 六个条件都满足，就绪；有风险等级和简报。
+  // 2. 补上测试输出：核对一致 → 六个条件都满足，就绪；有风险等级和简报。工具在「终端」页签的 session 里调，结果回「PR 详情」看。
+  await openTicketTab(page, "terminal");
   const second = await callTool(page, s, "submit_evidence", {
     checks: [{ name: "unit tests", category: "test", command: "node src/greet.test.ts", result: "pass", output: "1 passed" }],
     acceptance: [{ criterion: "greets the user", how: "src/greet.ts returns Hello, <name>" }],
   });
   expect(second.error, second.text).toBe(false);
+  await openTicketTab(page, "pr");
   await expect(card.getByTestId("review-ready-badge")).toHaveText(S.rv.ready, { timeout: 90_000 });
   await expect(card.getByTestId("review-conditions").locator('li[data-state="fail"], li[data-state="unknown"]')).toHaveCount(0);
   await expect(card.getByTestId("review-evidence").locator('tr[data-verified="consistent"]')).toHaveCount(2);
@@ -106,15 +109,18 @@ test("evidence goes through pre-review into readiness, risk and a review brief",
   await expect(card.getByTestId("review-brief")).toContainText("Fake brief: adds a greeting to the app.");
   expect(fakeLog(s)).toMatch(/ pre-review files=\d+/);
 
-  // 「待 review」队列原来在进度页上；UI 重做第 2 层拆掉进度页后，它要等第 3 层并进 epic、feature 页才有入口。
-  // 第 3 层恢复：在新的入口上断言 review-queue-51 可见、带 S.rv.ready。
+  // 「待 review」队列：原来在进度页上，现在在全部工作页的「更多」里。
+  await openAllWorkMore(page);
+  const queued = page.getByTestId("review-queue").getByTestId("review-queue-51");
+  await expect(queued).toBeVisible();
+  await expect(queued).toContainText(S.rv.ready);
+  await expect(queued).toContainText("E2E-7");
 
   // 效果页：Review 效果区块在。
   await page.locator(".sidebar").getByRole("button", { name: S.effectNav, exact: true }).click();
+  // 评论与 CI、Review、intake 的效果在「自动化的效果」页签里。
+  await openTab(page, S.lay.effectTabs.automation);
   await expect(page.getByTestId("effect-review")).toBeVisible();
   await expect(page.getByTestId("effect-review-groups")).toBeVisible();
   expect(unsupportedGhCalls(s)).toEqual([]);
 });
-
-// 第 3 层恢复：「待 review」队列（review-queue-<pr>，带 S.rv.ready）随进度页一起没了入口，第 3 层把它并进 epic、feature 页后补回这条断言。
-test.fixme("the pending-review queue shows the PR as ready (restored in UI redesign layer 3)", () => {});

@@ -20,7 +20,8 @@ export type Turn =
   | { owner: "you"; kind: "answer"; question: string; options: string[]; askId: number | null; sessionId: string }
   | { owner: "you"; kind: "merge"; risk: "low" | "medium" | "high" | null }
   | { owner: "you"; kind: "review"; author: string; title: string; url: string }
-  | { owner: "you"; kind: "stuck"; source: "needs_you" | "blocked_report" | "silent" | "ticket_blocked"; detail: string | null; sessionId: string | null }
+  // action：卡住裁判建议你怎么做（只有 silent 有，卡片上原因下面一行）；没有为 null 或不写。
+  | { owner: "you"; kind: "stuck"; source: "needs_you" | "blocked_report" | "silent" | "ticket_blocked"; detail: string | null; action?: string | null; sessionId: string | null }
   | { owner: "you"; kind: "unattended"; why: UnattendedWhy; canSend: boolean; sessionId: string | null }
   | { owner: "you"; kind: "butler"; notice: NowNotice }
   | { owner: "agent"; kind: "fixing_ci" | "addressing_review" | "rebasing" | "working"; sessionId: string }
@@ -43,6 +44,12 @@ export interface TurnItem {
   since: number;
   /** 这个 ticket 除了显示的这个 PR，还有几个别的 PR（owner 不是 done）；没有为 0。 */
   others: number;
+  /**
+   * 这一条带着这个 ticket 自己的轮次（主进程 ticketTurn 选中的那条，others 是别的 PR 个数）。
+   * 不带 filter 时就是 ticket 的那一条；带 filter 时是按 PR 拆开的、session 级的几条里被选中的那条。
+   * 多出来的提问（moreAsks）、请你 review 的 PR、不属于 ticket 的都不带。前端拿它当 ticket 的状态，不自己再选一遍。
+   */
+  ticketLevel?: true;
 }
 
 export interface ScopeTurnRow {
@@ -231,7 +238,7 @@ export interface SessionTurnInput {
   sessionId: string;
   target: NowTarget;
   title: string | null;
-  activity: Pick<SessionActivity, "kind" | "stuck" | "reason" | "startedAt" | "lastOutputAt" | "limit"> | null;
+  activity: (Pick<SessionActivity, "kind" | "stuck" | "reason" | "startedAt" | "lastOutputAt" | "limit"> & Partial<Pick<SessionActivity, "action">>) | null;
   /** 这个 session 最早一条没回答的 ask_user（inbox_items.id）。 */
   ask: { id: number; question: string; options: string[]; at: number } | null;
   needsYou: { reason: string; category: InterruptCategory } | null;
@@ -258,7 +265,7 @@ export function sessionTurn(i: SessionTurnInput): TimedTurn {
   }
   if (a?.limit) return { turn: { owner: "you", kind: "butler", notice: { kind: "session_limited", target: i.target, title: i.title, limit: a.limit } }, since: i.now };
   if (a?.stuck === true) {
-    return { turn: { owner: "you", kind: "stuck", source: "silent", detail: a.reason, sessionId }, since: a.lastOutputAt ?? a.startedAt ?? i.now };
+    return { turn: { owner: "you", kind: "stuck", source: "silent", detail: a.reason, action: a.action ?? null, sessionId }, since: a.lastOutputAt ?? a.startedAt ?? i.now };
   }
   const r = i.lastReport;
   if (r && r.kind === "blocked" && !working && (i.stoppedAt === null || i.stoppedAt <= r.at + REPORT_STOP_SLACK_MS)) {

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, terminalText, test, unsupportedGhCalls, type FakeGhFixture, newButton } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, terminalText, test, unsupportedGhCalls, type FakeGhFixture, newButton, openTicketTab } from "./fixtures";
 
 const url = "https://github.com/acme/app/pull/43";
 const SHA = "dddd4444dddd";
@@ -68,6 +68,7 @@ test("a fresh install that changes no settings behaves like 2.1.0 and leaves not
   await page.getByRole("radio", { name: S.branch, exact: true }).check();
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E-10", exact: true })).toBeVisible();
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
 

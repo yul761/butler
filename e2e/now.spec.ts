@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, ROOT, terminalText, test, type Sandbox, newButton } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, ROOT, terminalText, test, type Sandbox, newButton, openTicketTab } from "./fixtures";
 
 /**
  * 首页「运行情况」里的实况窗口（BTL-190 第 7 点）。首页其余部分（轮到你的卡片、小表）在 home.spec.ts。
@@ -51,6 +51,7 @@ async function activeSessionId(page: Page): Promise<string | undefined> {
 /** 在当前 ticket 页开一个新 session，等假 claude 就绪；返回它的 session id。 */
 async function openSession(page: Page): Promise<string> {
   const before = await page.locator(".sessions-bar .session-wrap").count();
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect(page.locator(".sessions-bar .session-wrap")).toHaveCount(before + 1);
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");

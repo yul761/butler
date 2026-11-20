@@ -93,6 +93,7 @@ import { pruneSessionGuides, writeSessionGuide } from "./claude/session-guide";
 import { safeSessionLessons } from "./lessons/select";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
+import { ticketGlance } from "./tickets/ticket-glance";
 import { HandoffRunner } from "./handoff/runner";
 import { hookCommand } from "./hooks/installer";
 import { HealthService } from "./hooks/health";
@@ -3043,6 +3044,13 @@ async function bootstrap(): Promise<void> {
     onInvoked: (channel, args, result) => void recordInvoke(recordEvent, channel, args, result),
     memoryHistory: (since) => procServices.monitor.history(since),
     turnBoard: (filter) => turnService.board(filter),
+    ticketGlance: (key) => ticketGlance(key, {
+      headsOf: (k) => sessionService.ticketHeads(k),
+      rootOf: (id) => sessions.rootOf(id),
+      lastReplyOf: (id) => activityMonitor.lastReplyOf(id),
+      contextOf,
+      threshold: () => refreshThreshold(settings),
+    }),
     turnSendToAgent: (item) => turnService.sendToAgent(item),
     turnHomeOpened: () => turnService.homeOpened(),
     nowView: (merges) => {

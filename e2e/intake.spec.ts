@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, openAllWorkMore, openSettingsGroup, type Sandbox, test } from "./fixtures";
+import { completeWizard, expect, openAllWorkMore, openSettingsGroup, type Sandbox, test, openTab, openTicketTab } from "./fixtures";
 
 const sidebar = (page: Page, name: string) => page.locator(".sidebar").getByRole("button", { name, exact: true });
 
@@ -75,7 +75,7 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   await expect(page.getByTestId("intake-policy-message")).toHaveText(S.policySaved);
   await expect(page.getByTestId("intake-effective-enabled")).toHaveText(S.policyBool(true));
 
-  // 4. 全部工作页「栈与自动接活」里的队列：E2E-31 开工了，E2E-32 缺信息，E2E-33 等名额。
+  // 4. 全部工作页「更多」里的自动接活队列：E2E-31 开工了，E2E-32 缺信息，E2E-33 等名额。
   await openAllWorkMore(page);
   const queue = page.getByTestId("intake-queue");
   await expect(queue).toBeVisible({ timeout: 20_000 });
@@ -103,6 +103,7 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
 
   // 7. 关掉 E2E-31 的 session：名额空了，E2E-33 自动开工（中等规模 → 中档）。
   await page.locator(".sidebar .ticket .key").getByText("E2E-31", { exact: true }).click();
+  await openTicketTab(page, "terminal");
   const end = page.getByTitle(S.endSession, { exact: true });
   await end.click();
   await end.click();
@@ -115,6 +116,8 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
 
   // 8. 效果页：分类 3 个，自动开工 2 个，改了 1 个（33%）。
   await sidebar(page, S.effectNav).click();
+  // 评论与 CI、Review、intake 的效果在「自动化的效果」页签里。
+  await openTab(page, S.lay.effectTabs.automation);
   const card = page.getByTestId("effect-intake");
   await expect(card).toBeVisible();
   await expect(page.getByTestId("effect-intake-classified")).toContainText("3");

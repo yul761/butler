@@ -1,3 +1,4 @@
+import type { TicketGlance } from "../../shared/ticket-glance";
 import { normTurnFilter, type TurnBoard, type TurnFilter, type TurnSendReason } from "../../shared/turn";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
@@ -70,6 +71,7 @@ export const pathForFile = (file: File): string => window.butler.pathForFile(fil
 
 export const api = {
   listTickets: () => call<TicketView[]>(IPC.ticketsList),
+  ticketGlance: (key: string) => call<TicketGlance>(IPC.ticketsGlance, key),
   createTicket: (input: CreateTicketInput) => call<Ticket>(IPC.ticketsCreate, input),
   setStatus: (key: string, status: TicketStatus | null) => call<void>(IPC.ticketsSetStatus, key, status),
   archive: (key: string) => call<void>(IPC.ticketsArchive, key),
@@ -235,7 +237,6 @@ export const api = {
     call<{ ok: boolean; reason?: TurnSendReason }>(IPC.turnSendToAgent, { ticketKey: item.ticketKey, pr: { repo: item.pr.repo, number: item.pr.number } }),
   inbox: (scope: InboxScope) => call<InboxView>(IPC.inboxList, scope),
   answerInbox: (id: number, text: string) => call<boolean>(IPC.inboxAnswer, id, text),
-  dismissInbox: (id: number) => call<boolean>(IPC.inboxDismiss, id),
   followups: (ticketKey: string) => call<Followup[]>(IPC.followupsList, ticketKey),
   setFollowupStatus: (id: string, status: FollowupStatus) => call<void>(IPC.followupsSetStatus, id, status),
   handoffs: (ticketKey: string) => call<HandoffRecord[]>(IPC.handoffsList, ticketKey),

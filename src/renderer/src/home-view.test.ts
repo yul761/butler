@@ -6,7 +6,7 @@ import {
   homeOpenedSignal,
   ticketNowText,
   HOME_CARD_CAP, YOU_KIND_ORDER, barSegments, capCards, cardActions, cardKey, homeLede, homeTitle, isNoWork, locationOf, lookTarget, prUrl,
-  runningRows, scopeLine, scopeRoute, scopeWho, topItem, turnTone, visibleScopes, youCards, type NameCtx,
+  runningRows, scopeLine, scopeRoute, scopeWho, ticketItem, turnTone, visibleScopes, youCards, type NameCtx,
 } from "./home-view";
 import { formatDuration } from "./components/TicketActivity";
 import { turnSentence } from "./turn-text";
@@ -97,11 +97,14 @@ describe("cardActions", () => {
     expect(ids(item(merge, { pr }))).toEqual(["openPr*", "look"]);
     expect(ids(item(merge))).toEqual(["look*"]);
     expect(ids(item(review, { ticketKey: null, pr }))).toEqual(["openPr*"]);
-    expect(ids(item(stuck("s"), { featureId: 3 }))).toEqual(["look*", "fix"]);
-    expect(ids(item(stuck("s")))).toEqual(["look*"]);
+    // 「没动静」判的卡住可能是误判（比如在跑很长的测试）：多一个「忽略」；别的来源（session 自己说卡住、blocked 汇报）没有。
+    expect(ids(item(stuck("s"), { featureId: 3 }))).toEqual(["look*", "fix", "ignore"]);
+    expect(ids(item(stuck("s")))).toEqual(["look*", "ignore"]);
     expect(ids(item(stuck(null), { featureId: 3 }))).toEqual(["look*"]);
-    // 总控卡住了（loose 里，ticketKey 为 null）：修复 session 要找 ticket，点了只会 no_session，所以不给按钮。
-    expect(ids(item(stuck("s"), { featureId: 3, ticketKey: null }))).toEqual(["look*"]);
+    // 总控卡住了（loose 里，ticketKey 为 null）：修复 session 要找 ticket，点了只会 no_session，所以不给「修复」；「忽略」照样有。
+    expect(ids(item(stuck("s"), { featureId: 3, ticketKey: null }))).toEqual(["look*", "ignore"]);
+    expect(ids(item({ owner: "you", kind: "stuck", source: "needs_you", detail: "x", sessionId: "s" }, { featureId: 3 }))).toEqual(["look*", "fix"]);
+    expect(ids(item({ owner: "you", kind: "stuck", source: "blocked_report", detail: "x", sessionId: "s" }))).toEqual(["look*"]);
     expect(ids(item(unattended(true), { pr }))).toEqual(["send*", "look"]);
     expect(ids(item(unattended(true)))).toEqual(["look*"]);
     expect(ids(item(unattended(false), { pr }))).toEqual(["look*"]);
@@ -200,11 +203,12 @@ describe("scope rows", () => {
   });
 });
 
-describe("topItem", () => {
-  it("takes the most urgent item of a ticket", () => {
-    const items = [item(agent), item(merge, { pr }), item(ci, { ticketKey: "BTL-2" })];
-    expect(topItem(items, "BTL-1")?.turn.kind).toBe("merge");
-    expect(topItem(items, "BTL-3")).toBeNull();
+describe("ticketItem", () => {
+  it("takes the item main marked as the ticket's own turn, not a more urgent extra question", () => {
+    const own = item(agent, { ticketLevel: true });
+    const items = [item(answer({ askId: 3 })), own, item(ci, { ticketKey: "BTL-2", ticketLevel: true })];
+    expect(ticketItem(items, "BTL-1")).toBe(own);
+    expect(ticketItem(items, "BTL-3")).toBeNull();
   });
 });
 
@@ -222,11 +226,24 @@ describe("runningRows", () => {
       it0({ owner: "you", kind: "merge", risk: null }), it0({ owner: "done", kind: "merged" }), it0({ owner: "idle", kind: "not_started" }), agent, ci, review,
     ], S, 65_000);
     expect(rows.map((r) => r.ticketKey)).toEqual(["BTL-3", "BTL-4", "BTL-2"]);
-    expect(rows.map((r) => r.who)).toEqual([S.hm.whoCi, "bob, amy", S.hm.whoAgent]);
+    expect(rows.map((r) => r.who)).toEqual([S.hm.whoCi, `bob${S.lay.nameSep}amy`, S.hm.whoAgent]);
     expect(rows.map((r) => r.owner)).toEqual(["external", "external", "agent"]);
     expect(rows[2].sentence).toBe(turnSentence(agent.turn, agent, S));
     expect(rows[0].age).toBe(S.hm.ago(formatDuration(63_000, S)));
     expect(new Set(rows.map((r) => r.key)).size).toBe(3);
+  });
+
+  it("says when the ticket has other PRs too (spec §5.1)", () => {
+    const i = it0({ owner: "external", kind: "awaiting_review", names: ["amy"] }, { others: 2 });
+    expect(runningRows([i], S, 2000)[0].sentence).toBe(`${turnSentence(i.turn, i, S)} · ${S.lay.morePrs(2)}`);
+    expect(runningRows([{ ...i, others: 0 }], S, 2000)[0].sentence).toBe(turnSentence(i.turn, i, S));
+  });
+
+  it("two coordinators working on one page get different keys", () => {
+    const loose = (sessionId: string, featureId: number | null) => it0({ owner: "agent", kind: "working", sessionId }, { ticketKey: null, epicId: 1, featureId });
+    const rows = runningRows([loose("epic-ctl", null), loose("feature-ctl", 10)], S, 2000);
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.key)).size).toBe(2);
   });
 
   it("names a waiting merge queue as others", () => {
@@ -288,13 +305,17 @@ describe("homeOpenedSignal (layer 1's turn:home-opened contract)", () => {
 describe("ticketNowText (All work ticket rows)", () => {
   const s1 = (o: Partial<ScopeTurnRow>) => scope({ kind: "ticket", id: "BTL-1", total: 1, merged: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 }, ...o });
   it("a live item gives its sentence", () => {
-    const i = item(merge, { pr });
+    const i = item(merge, { pr, ticketLevel: true });
     expect(ticketNowText([i], s1({ bar: { done: 0, agent: 0, you: 1, external: 0, idle: 0 } }), "BTL-1", S)).toBe(turnSentence(i.turn, i, S));
   });
   it("without a live item: merged or not started, said as a ticket, never the scope line", () => {
     expect(ticketNowText([], s1({ merged: 1, bar: { done: 1, agent: 0, you: 0, external: 0, idle: 0 } }), "BTL-1", S)).toBe(S.turn.done);
     expect(ticketNowText([], s1({ bar: { done: 0, agent: 0, you: 0, external: 0, idle: 1 } }), "BTL-1", S)).toBe(S.turn.idle);
     expect(ticketNowText([], s1({ merged: 1, bar: { done: 1, agent: 0, you: 0, external: 0, idle: 0 } }), "BTL-1", S)).not.toBe(S.hm.scopeLine(1, 1, null));
+  });
+  it("says when the ticket has other PRs too, like the running tab and the scope pages (spec §5.1)", () => {
+    const i = item(merge, { pr, ticketLevel: true, others: 1 });
+    expect(ticketNowText([i], s1({}), "BTL-1", S)).toBe(`${turnSentence(i.turn, i, S)} · ${S.lay.morePrs(1)}`);
   });
   it("nothing known gives a dash", () => {
     expect(ticketNowText([], null, "BTL-1", S)).toBe("—");

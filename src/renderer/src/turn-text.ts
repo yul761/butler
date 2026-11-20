@@ -56,3 +56,13 @@ export function turnSentence(turn: Turn, _item: TurnItem, s: UiStrings): string 
   }
   return "";
 }
+
+/**
+ * 外部在推进时「谁」那几个字：首页和范围页的「进行中」、「全部 ticket」表格共用一份。
+ * 栈的上层等的是下一层（分支名写在那一句里，不当成人名）；有名字写名字；CI 在跑写 CI；其余写「外部」。
+ */
+export function externalWho(turn: Extract<Turn, { owner: "external" }>, s: UiStrings): string {
+  if (turn.kind === "stack_below") return s.hm.whoStackBelow;
+  if (turn.names.length > 0) return turn.names.join(s.lay.nameSep);
+  return turn.kind === "ci_running" ? s.hm.whoCi : s.hm.whoExternal;
+}

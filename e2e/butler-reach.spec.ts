@@ -65,6 +65,7 @@ test("Butler control messages a feature coordinator by name, reopening it when i
   const side = page.locator(".sidebar");
   await create(page, await newButton(page, "newFeature"), S.featureName, "payment", shop);
   const workspace = join(s.dir, "shop-features", "payment");
+  await openTab(page, S.lay.tabControl);
   await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
   await expect.poll(() => sessionsIn(s, workspace).length).toBe(1);
   const [coordinator] = sessionsIn(s, workspace);
@@ -116,6 +117,7 @@ test("Butler control messages an open epic session nobody has typed into", async
   const side = page.locator(".sidebar");
   await create(page, await newButton(page, "newEpic"), S.epicName, "checkout-revamp", shop);
   const workspace = join(s.dir, "shop-epics", "checkout-revamp");
+  await openTab(page, S.lay.tabControl);
   await page.locator(".epic-page").getByRole("button", { name: `+ ${S.newEpicSession}`, exact: true }).click();
   await expect.poll(() => sessionsIn(s, workspace).length).toBe(1);
   const [epicSession] = sessionsIn(s, workspace);
@@ -133,13 +135,13 @@ test("Butler control messages an open epic session nobody has typed into", async
   await expect.poll(() => flat(messagesIn(s, workspace)[epicSession]?.at(-1))).toBe("Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）： 先看一下规划");
   expect(sessionsIn(s, workspace)).toEqual([epicSession]);
 
-  // 回复回流（ws-b）：epic session 这一轮做完，它最后一段回复带着 requestId 输入回 Butler 总控；「回复」tab 里记着已送回。
+  // 回复回流（ws-b）：epic session 这一轮做完，它最后一段回复带着 requestId 输入回 Butler 总控；「总控发出的消息」里记着已送回。
   const { requestId } = JSON.parse(sent.text) as { requestId: string };
   expect(requestId).toMatch(/\S/);
   const butlerWorkspace = join(s.butlerHome, "workspaces", "_butler");
   const back = () => Object.values(messagesIn(s, butlerWorkspace)).flat().map(flat).find((m) => m.startsWith("【回复】"));
   await expect.poll(back, { timeout: 30_000 }).toContain(requestId);
   expect(back()).toContain("收到：");
-  await openTab(page, S.butlerRepliesTab);
+  await page.locator(".butler-sent > summary").click();
   await expect(page.getByTestId("butler-replies")).toContainText(S.butlerMessageStatus.delivered);
 });

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, openTab, setLoopPolicy, terminalText, test, unsupportedGhCalls, type FakeGhFixture, type PrViewFixture, newButton } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, setLoopPolicy, terminalText, test, unsupportedGhCalls, type FakeGhFixture, type PrViewFixture, newButton, openTicketTab, openTab } from "./fixtures";
 
 const url = "https://github.com/acme/app/pull/41";
 const view = (sha: string): PrViewFixture => ({
@@ -46,13 +46,14 @@ test("a Copilot comment reaches the session, and after the push it is replied to
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E-8", exact: true })).toBeVisible();
 
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
 
   // watcher 每 15 秒一轮：先从分支找到 PR，下一轮读它、拉评论、送进 session。
   await expect.poll(() => terminalText(page), { timeout: 90_000 }).toContain("Prefer a const here.");
   expect(await terminalText(page)).toContain("src/a.ts:3");
-  await openTab(page, S.lp.tab);
+  await openTicketTab(page, "pr");
   await expect(page.getByTestId("comment-row").getByTestId("comment-state")).toContainText(S.lp.state.delivered);
 
   // session「push 了」：新的 head，评论位置过时。下一轮核对：已处理，回复并 resolve。
@@ -67,6 +68,8 @@ test("a Copilot comment reaches the session, and after the push it is replied to
   await expect(page.getByTestId("comment-row").getByTestId("comment-state")).toContainText(S.lp.replied);
   // 「效果」页的评论与 CI：自动处理 1 条（Copilot），回复 1 条、resolve 1 条。
   await page.locator(".sidebar").getByRole("button", { name: S.effectNav, exact: true }).click();
+  // 评论与 CI、Review、intake 的效果在「自动化的效果」页签里。
+  await openTab(page, S.lay.effectTabs.automation);
   const handled = page.getByTestId("effect-loop-handled");
   await expect(handled).toContainText(S.effect.loopHandledSub(1, 0));
   await expect(handled).toContainText(S.effect.loopReplied(1, 1));

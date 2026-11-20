@@ -142,13 +142,13 @@ export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.turnSendToAgent,
 ]);
 
-/** 记成别的人介入的通道（不再算手动触发）：卡片上回答、「不用了」是 needs_you_answer。 */
-export const COUNTED_ELSEWHERE: ReadonlySet<string> = new Set([IPC.inboxAnswer, IPC.inboxDismiss]);
+/** 记成别的人介入的通道（不再算手动触发）：卡片上回答是 needs_you_answer。 */
+export const COUNTED_ELSEWHERE: ReadonlySet<string> = new Set([IPC.inboxAnswer]);
 
 /** 不算人介入：只读的、配置和整理（搭环境，不是推动一次工作）。 */
 export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   // 只读
-  IPC.ticketsList, IPC.ticketsArchived, IPC.featuresList, IPC.featuresArchived, IPC.epicsList, IPC.epicsArchived, IPC.butlerView,
+  IPC.ticketsList, IPC.ticketsGlance, IPC.ticketsArchived, IPC.featuresList, IPC.featuresArchived, IPC.epicsList, IPC.epicsArchived, IPC.butlerView,
   IPC.butlerMessages, IPC.progressGet, IPC.metricsView, IPC.sessionsUnclaimed, IPC.usageSummary, IPC.ptySnapshot, IPC.healthGet, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsRuns, IPC.lessonsPending, IPC.lessonsBatches,
   IPC.lessonsBatch, IPC.policiesGet, IPC.checksView, IPC.checksHits, IPC.configStatus, IPC.availabilityGet, IPC.routingView,

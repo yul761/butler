@@ -1,15 +1,15 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Locator } from "@playwright/test";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PR_STAGES, type PrStageId } from "../src/shared/pr-stages";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newTicket, openTab, pageTab, terminalText, test, unsupportedGhCalls, type BranchPrFixture, type PrViewFixture, type Sandbox, newButton } from "./fixtures";
+import { completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newTicket, openArchived, openTab, openTicketTab, pageTab, terminalText, test, unsupportedGhCalls, type BranchPrFixture, type PrViewFixture, type Sandbox, newButton } from "./fixtures";
 
 /**
  * PR 进度（设计文档 2026-11-15 第 1 部分）：假 claude 里输入 /fake-skill，走真实的路径：
- * 假 claude → matcher 为 Skill 的 PostToolUse hook → butler-hook → HookInbox → stageEventFromHook → PrStagesService → ticket 页的「PR 进度」tab。
+ * 假 claude → matcher 为 Skill 的 PostToolUse hook → butler-hook → HookInbox → stageEventFromHook → PrStagesService → ticket 页「PR 详情」页签的阶段。
  */
-test("a skill call in a session moves the design step to active; tab and timeline collapse and stay collapsed", async ({ makeSandbox, launch }) => {
+test("a skill call in a session moves the design step to active; the timeline stays collapsed and the page keeps its tab", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
@@ -20,13 +20,13 @@ test("a skill call in a session moves the design step to active; tab and timelin
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
 
-  // tab 默认收起，先展开。
-  const tab = pageTab(page, S.prStagesTab);
-  await expect(tab).toHaveAttribute("aria-selected", "false");
-  await openTab(page, S.prStagesTab);
+  // 阶段在「PR 详情」页签（ticket 页默认停在「概况」）。
+  await expect(pageTab(page, S.lay.tabPr)).toHaveAttribute("aria-selected", "false");
+  await openTicketTab(page, "pr");
   const design = page.locator(".pr-stages .pr-cell").filter({ hasText: S.prStage.design });
   await expect(design).toHaveClass(/pr-todo/);
 
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await page.locator(".terminal-wrap:visible .xterm").click();
@@ -35,9 +35,10 @@ test("a skill call in a session moves the design step to active; tab and timelin
   await expect.poll(() => terminalText(page)).toContain("skill superpowers:brainstorming");
 
   // 设计那一格进行中（还没有 PR，也没有第一次提交）。
+  await openTicketTab(page, "pr");
   await expect(design).toHaveClass(/pr-active/);
 
-  // 时间线：收起后消失；刷新页面后仍然是收起的。
+  // 时间线：收起后消失；刷新页面后仍然是收起的，页面也还停在「PR 详情」。
   const timeline = page.locator(".pr-timeline");
   await expect(timeline).toBeVisible();
   await page.getByRole("button", { name: S.prTimelineHide, exact: true }).click();
@@ -45,20 +46,21 @@ test("a skill call in a session moves the design step to active; tab and timelin
   await page.reload();
   await page.locator(".sidebar .ticket .key").getByText("E2E-1", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
+  await expect(pageTab(page, S.lay.tabPr)).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("button", { name: S.prTimelineShow, exact: true })).toBeVisible();
   await expect(page.locator(".pr-timeline")).toHaveCount(0);
 
-  // 点 tab 收起整个面板；刷新后仍然是收起的。
-  await tab.click();
+  // 切到「概况」：阶段不显示；刷新后还停在「概况」（页签不会收起，只会换）。
+  await openTicketTab(page, "overview");
   await expect(page.locator(".pr-stages")).toHaveCount(0);
   await page.reload();
   await page.locator(".sidebar .ticket .key").getByText("E2E-1", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
-  await expect(pageTab(page, S.prStagesTab)).toHaveAttribute("aria-selected", "false");
+  await expect(pageTab(page, S.lay.tabOverview)).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".pr-stages")).toHaveCount(0);
 });
 
-test("an expanded feature in the epic's stages tab opens its ticket (mouse and keyboard)", async ({ makeSandbox, launch }) => {
+test("a ticket row in the epic's all-tickets tab opens its ticket (mouse and keyboard)", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const shop = join(s.dir, "shop");
   const { page } = await launch(s);
@@ -70,19 +72,21 @@ test("an expanded feature in the epic's stages tab opens its ticket (mouse and k
   await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "pay", shop);
   await newTicket(page, "EP-1", "frontend", "backend");
 
-  const openFromEpic = async (activate: (chip: Locator) => Promise<void>) => {
+  // epic 页的「全部 ticket」按 feature 分组；点这一行的哪一格都去 ticket 页。
+  const openFromEpic = async (activate: (row: Locator) => Promise<void>) => {
     await page.locator(".sidebar .epic-group > .feature-row .ticket").click();
     await expect(page.getByRole("heading", { name: "shop-epic", exact: true })).toBeVisible();
-    const tab = pageTab(page, S.prStagesTab);
-    if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
-    await page.locator(".pr-epic").getByRole("button", { name: "pay", exact: true }).click();
-    await activate(page.locator(".pr-table").getByRole("button", { name: "EP-1", exact: true }));
+    await openTab(page, S.lay.tabTickets);
+    const table = page.locator(".epic-page .ticket-table");
+    await expect(table.locator("tr.group-row")).toHaveText(S.lay.groupHeader("pay", 0, 1));
+    await activate(table.locator("tbody tr:not(.group-row)").filter({ hasText: "EP-1" }));
     await expect(page.getByRole("heading", { name: "EP-1", exact: true })).toBeVisible();
   };
-  await openFromEpic((chip) => chip.click());
-  await openFromEpic((chip) => chip.locator("xpath=ancestor::tr").locator("td").last().click());
-  await openFromEpic(async (chip) => {
-    await chip.focus();
+  await openFromEpic((row) => row.locator(".key").click());
+  await openFromEpic((row) => row.locator("td").last().click());
+  // 键盘：ticket 号是按钮，聚焦后按回车。
+  await openFromEpic(async (row) => {
+    await row.getByRole("button", { name: "EP-1", exact: true }).focus();
     await page.keyboard.press("Enter");
   });
 });
@@ -105,13 +109,9 @@ function makeShop(s: Sandbox): string {
   return shop;
 }
 
-/** feature 的 PR 进度表里这个 ticket 的那一行，和这一行里某一步的格子（列的顺序同 PR_STAGES，第一列是 ticket）。 */
-const featureRow = (page: Page, key: string) => page.locator(".pr-table tbody tr").filter({ has: page.getByRole("button", { name: key, exact: true }) });
-const stageCell = (row: Locator, id: PrStageId) => row.locator("td").nth(PR_STAGES.indexOf(id) + 1).locator(".pr-cell");
-
 /**
  * 每个 PR 一行（计划 2026-11-16）：分支 feature/DMS-1 上先后合并了 #1、#2（gh pr list 找到），#3 在另一个分支上、只在 handoff 里报过。
- * ticket 页三行，新的在前；feature 页这个 ticket 一行，写着 3 个 PR、已合并；epic 页 1/1 已合并。
+ * ticket 页三行，新的在前、都已合并；feature 页「全部 ticket」这个 ticket 一行，三个 PR 都列着；epic 页概况里这个 feature 有一个 ticket。
  * Windows 上跳过：resolveGh 只认 gh.exe，假 gh 是 sh 包装。
  */
 test("three PRs: two sequential on the branch and one on another branch linked by handoff", async ({ makeSandbox, launch }) => {
@@ -137,6 +137,7 @@ test("three PRs: two sequential on the branch and one on another branch linked b
   await newTicket(page, "DMS-1", "app", "api");
 
   // 2. ticket session 里 /handoff：报的 PR 只有 #3。
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await page.locator(".terminal-wrap:visible .xterm").click();
@@ -144,31 +145,37 @@ test("three PRs: two sequential on the branch and one on another branch linked b
   await page.keyboard.press("Enter");
   await expect.poll(() => terminalText(page)).toContain("next_steps");
 
-  // 3. ticket 页：三行，新的在前。watcher 每 15 秒一轮，分支上找到的 PR 下一轮才读。
-  await openTab(page, S.prStagesTab);
+  // 3. ticket 页「PR 详情」：三行，新的在前。watcher 每 15 秒一轮，分支上找到的 PR 下一轮才读。
+  await openTicketTab(page, "pr");
   const links = page.locator(".pr-stages .pr-repo .pr-link");
   await expect(links).toHaveText(["#3", "#2", "#1"], { timeout: 60_000 });
+  // 三个 PR 都已合并：每行的「合并」一格是 done。
+  const merge = page.locator(".pr-stages .pr-repo").locator(".pr-cell").filter({ hasText: S.prStage.merge });
+  await expect(merge).toHaveCount(3);
+  for (let i = 0; i < 3; i++) await expect(merge.nth(i)).toHaveClass(/\bpr-done\b/);
 
-  // 4. feature 页：这个 ticket 一行，3 个 PR、已合并。
+  // 4. feature 页「全部 ticket」：这个 ticket 一行，三个 PR 都列着。
   await page.locator(".feature-link").getByRole("button", { name: "app", exact: true }).click();
   await expect(page.getByRole("heading", { name: "app", exact: true })).toBeVisible();
-  await openTab(page, S.prStagesTab);
-  const row = featureRow(page, "DMS-1");
-  await expect(page.locator(".pr-table tbody tr")).toHaveCount(1);
-  await expect(row).toContainText(S.prCount(3));
-  await expect(row.locator(".pill.merged")).toHaveText(S.prPill.merged);
+  await openTab(page, S.lay.tabTickets);
+  const rows = page.locator(".feature-page .ticket-table tbody tr");
+  await expect(rows).toHaveCount(1);
+  const row = rows.filter({ hasText: "DMS-1" });
+  await expect(row.locator("td").last()).toHaveText("#1 #2 #3");
 
-  // 5. epic 页：这个 feature 1/1 已合并。
+  // 5. epic 页概况：这个 feature 有一个 ticket。「合了」数的是标成完成的 ticket；session 里的 /handoff 没把它标成完成，
+  //    所以是 0/1（PR 合没合看 ticket 的「PR 详情」，上面已经看过）。
   await page.locator(".sidebar .epic-group > .feature-row .ticket").click();
   await expect(page.getByRole("heading", { name: "shop", exact: true })).toBeVisible();
-  await openTab(page, S.prStagesTab);
-  await expect(page.locator(".pr-epic-row").filter({ hasText: "app" })).toContainText(S.prMergedOf(1, 1));
+  await openTab(page, S.lay.tabOverview);
+  await expect(page.locator(".epic-page .scope-row").filter({ hasText: "app" })).toContainText(S.lay.featureCard(0, 1));
   expect(unsupportedGhCalls(s)).toEqual([]);
 });
 
 /**
  * 一次性补链接（计划 2026-11-16）：归档了的老 ticket，下次启动时从 gh pr list 找回它分支上 2025 年合并的 #9（开、合并时间都取自 pr list 那一项）。
- * 归档的 ticket 打不开 ticket 页：在 feature 的 PR 进度表里看它那一行。合并完成；设计、自我 review 未知（那时 hook 还没在记 skill），带“已归档”。
+ * 归档的 ticket 打不开 ticket 页（feature 页也不再有带归档行的 PR 进度表）：从「已归档」恢复它，在「PR 详情」里看。
+ * 合并完成；设计、自我 review 未知（那时 hook 还没在记 skill）。
  */
 test("backfill of an old merged ticket", async ({ makeSandbox, launch }) => {
   test.skip(process.platform === "win32", "the fake gh is an sh wrapper; resolveGh only accepts gh.exe on Windows");
@@ -191,18 +198,17 @@ test("backfill of an old merged ticket", async ({ makeSandbox, launch }) => {
 
   launched = await launch(s);
   page = launched.page;
-  await page.locator(".sidebar .ticket.feature").filter({ hasText: "legacy" }).click();
-  await expect(page.getByRole("heading", { name: "legacy", exact: true })).toBeVisible();
-  await openTab(page, S.prStagesTab);
-  const row = featureRow(page, "OLD-1");
-  await expect(page.locator(".pr-table tbody tr")).toHaveCount(1);
-  await expect(row.locator(".pr-archived")).toHaveText(S.prArchived);
+  await openArchived(page);
+  await page.locator(".table tr").filter({ hasText: "OLD-1" }).getByRole("button", { name: S.unarchive, exact: true }).click();
+  await expect(page.getByRole("heading", { name: "OLD-1", exact: true })).toBeVisible();
+  await openTicketTab(page, "pr");
+  // 只有一个 PR：#9。
+  await expect(page.locator(".pr-stages .pr-repo")).toHaveCount(1);
+  await expect(page.locator(".pr-stages .pr-link")).toHaveText(["#9"]);
   // 链上 #9 才有它 2025 年的开 PR 时间（pr list 的 createdAt）：在那之前开发开始算 ticket 创建的时候，设计不会是未知。
-  await expect(stageCell(row, "design")).toHaveClass(/pr-unknown/, { timeout: 60_000 });
-  await expect(stageCell(row, "self_review")).toHaveClass(/pr-unknown/);
-  await expect(stageCell(row, "merge")).toHaveClass(/pr-done/);
-  // 只有一个 PR：多于一个时 ticket 号后面才写“n 个 PR”。
-  await expect(row.locator(".pr-row-name .muted")).toHaveCount(0);
-  await expect(row.locator(".pill.merged")).toHaveText(S.prPill.merged);
+  const cell = (id: PrStageId) => page.locator(".pr-stages .pr-cell").nth(PR_STAGES.indexOf(id));
+  await expect(cell("design")).toHaveClass(/pr-unknown/, { timeout: 60_000 });
+  await expect(cell("self_review")).toHaveClass(/pr-unknown/);
+  await expect(cell("merge")).toHaveClass(/pr-done/);
   expect(unsupportedGhCalls(s)).toEqual([]);
 });

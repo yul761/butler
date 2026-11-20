@@ -142,9 +142,9 @@ describe("review badges and queue on the Progress page (ws-g)", () => {
 
   it("hides the queue until it is read, then lists only PRs in this view with badges", () => {
     const none = renderToStaticMarkup(createElement(ProgressBody, { view: view(), onOpenTicket: noop }));
-    expect(none).not.toContain('data-testid="progress-review-queue"');
+    expect(none).not.toContain('data-testid="review-queue"');
     const html = renderToStaticMarkup(createElement(ProgressBody, { view: view(), onOpenTicket: noop, queue: [q(1), q(99)] }));
-    expect(html).toContain('data-testid="progress-review-queue"');
+    expect(html).toContain('data-testid="review-queue"');
     expect(html).toContain('data-testid="review-queue-1"');
     expect(html).not.toContain('data-testid="review-queue-99"');
     expect(html).toContain(S.rv.riskBadge(S.rv.level.high));

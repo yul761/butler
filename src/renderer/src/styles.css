@@ -64,7 +64,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 input, select { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
 .muted { color: var(--muted); }
-.error { color: var(--danger); }
+.error, .board-error { color: var(--danger); }
 .ok { color: var(--ok); }
 .badge { color: var(--accent); margin: 0 4px; }
 
@@ -90,9 +90,9 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .section-toggle .twisty { width: auto; }
 /* feature、epic、Butler 总控页终端上面的部分：一排 tab，一次只显示一块（整体进度、ticket 表、汇报、待你决定……）。
    tab 条不缩；内容框在空间不够时先缩、自己滚动，不挤掉 tab 条，也不挤占终端（终端区至少占窗口一半高，见 .terminals）。 */
-.page-tabs { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); }
+.page-tabs { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); }
 .page-tabs-bar { flex-shrink: 0; display: flex; gap: 2px; padding: 0 12px; overflow-x: auto; }
-.page-tabs:not(.collapsed) .page-tabs-bar { border-bottom: 1px solid var(--border); }
+.page-tabs .page-tabs-bar { border-bottom: 1px solid var(--border); }
 .page-tab { display: inline-flex; gap: 6px; align-items: baseline; flex-shrink: 0; padding: 7px 10px 5px; border: none; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .page-tab:hover { color: var(--text); }
 .page-tab.active { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
@@ -100,14 +100,24 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .page-tab .blocker { color: var(--danger); font-weight: normal; }
 .page-tab.attention, .page-tab.attention .count { color: var(--danger); }
 .page-tab.attention.active { border-bottom-color: var(--danger); }
-.page-tabs-toggle { margin-left: auto; flex-shrink: 0; align-self: center; padding: 2px 8px; border: none; background: transparent; color: var(--muted); font-size: 12px; }
-.page-tabs-toggle:hover { color: var(--text); }
-.page-tabs-toggle + .page-tabs-actions { margin-left: 0; }
 .page-tabs-actions { margin-left: auto; padding-left: 12px; display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .page-tabs-actions button { padding: 2px 8px; font-size: 12px; }
-.page-tabs-panel { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: 8px 16px 10px; }
+.page-tabs-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 16px 10px; }
 .page-tabs-panel h3 { display: flex; gap: 8px; align-items: baseline; margin: 6px 0 4px; font-size: 12px; color: var(--muted); }
 .page-tabs-panel h3 .section-toggle { flex-shrink: 0; }
+.control-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
+@media (max-width: 900px) { .control-split { grid-template-columns: 1fr; } }
+/* epic、feature「总控」页签：左边是仓库条、session 条和终端（贴边，同 ticket「终端」页签），右边是对话。 */
+.page-tabs-panel.tab-panel-control { display: flex; flex-direction: column; padding: 0; }
+.tab-panel-control .control-split { flex: 1 0 auto; }
+.control-lede { flex: 0 0 auto; margin: 0; padding: 8px 16px 4px; }
+.control-left { display: flex; flex-direction: column; min-width: 0; }
+.control-left > * { flex-shrink: 0; }
+.control-right { min-width: 0; padding: 8px 16px 8px 0; }
+/* 并排时右栏不撑高这一行（contain: size）：行高只看左栏，终端保住它那一半、底边不出窗口；对话多了在右栏里自己滚。 */
+@media (min-width: 901px) {
+  .control-right { contain: size; overflow-y: auto; }
+}
 .feature-summary { background: var(--panel); border-left: 3px solid var(--accent); border-radius: 4px; padding: 8px 12px; margin: 0 0 6px; overflow-wrap: anywhere; }
 .feature-summary p { margin: 0 0 6px; }
 .feature-summary .blocker { color: var(--danger); }
@@ -122,32 +132,13 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .ticket-table tr:hover { background: var(--panel); }
 .ticket-table td { padding: 5px 6px; border-top: 1px solid var(--border); vertical-align: top; }
 .ticket-table .chip { padding: 0; border: none; white-space: nowrap; }
-.ticket-table .status { white-space: nowrap; }
-.ticket-table .activity { display: block; white-space: normal; }
-.ticket-table .activity .main { color: var(--text); font-weight: 500; }
-.ticket-table .activity small { display: block; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; }
-.ticket-table tr.stuck td { background: color-mix(in srgb, #dc2626 8%, transparent); }
-/* 卡住时最要紧的是“已 N 分钟没有新输出”，在这段文字的最后：折行显示，不截断。 */
-.ticket-table tr.stuck .activity small { color: var(--danger); white-space: normal; overflow: visible; overflow-wrap: anywhere; }
-/* epic 页（设计文档 2026-11-01，草图 A）：一行一个 feature，一句进度放不下时折行。 */
-.epic-features .name, .epic-archived .name { font-weight: 600; white-space: nowrap; }
-.epic-features .progress, .epic-archived .progress { width: 100%; overflow-wrap: anywhere; }
-.epic-features .status.stuck { color: var(--danger); }
-.ticket-table tr.archived { cursor: default; }
-.ticket-table tr.archived:hover { background: none; }
-.stuck-mark, .stuck-dot { color: #dc2626; margin: 0 4px; }
-.stuck-dot { border: none; background: none; padding: 0 2px; cursor: pointer; }
-.ticket-table tr.stuck-panel-row { cursor: default; }
-.ticket-table tr.stuck-panel-row:hover { background: none; }
-.stuck-panel { padding: 4px 6px 8px; }
-.stuck-panel p { margin: 4px 0; }
-.stuck-log { margin: 4px 0 8px; padding: 6px 8px; background: var(--panel); border-radius: 5px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ticket-table button.key { padding: 0; border: none; background: none; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
 .pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; margin: 0 4px 2px 0; white-space: nowrap; }
 .pill.merged { background: var(--pill-merged-bg); color: var(--pill-merged); }
 .pill.approved { background: var(--pill-approved-bg); color: var(--pill-approved); }
 .pill.changes { background: var(--pill-changes-bg); color: var(--pill-changes); }
 .pill.pending { background: var(--pill-pending-bg); color: var(--pill-pending); }
-.pill.closed, .pill.none { background: rgba(128, 128, 128, 0.15); color: var(--muted); }
+.pill.none { background: rgba(128, 128, 128, 0.15); color: var(--muted); }
 .sub-repos { display: flex; flex-wrap: wrap; gap: 8px; }
 .feature-link { margin: -4px 0 6px; }
 button.link { border: none; background: transparent; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; }
@@ -160,8 +151,8 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .card { width: 100%; display: flex; gap: 10px; text-align: left; padding: 10px 12px; }
 
 .ticket-page { display: flex; flex-direction: column; height: 100%; }
-/* 空间不够时只有概览（feature、epic、Butler 页的 tab，ticket 的 follow-up 面板）缩小、自己滚动；标题、仓库、session 栏保持原高。 */
-.ticket-page > :not(.page-tabs):not(.overview) { flex-shrink: 0; }
+/* 空间不够时只有页签（feature、epic、Butler、ticket 页的 tab）缩小、自己滚动；标题栏保持原高。 */
+.ticket-page > :not(.page-tabs) { flex-shrink: 0; }
 .ticket-header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 .ticket-header h2 { margin: 0; font-size: 15px; }
 .ticket-header .muted { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -194,6 +185,11 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .notice { margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 /* 上面的内容再多，终端（claude code session）也至少占窗口一半高；上面能缩的部分（feature 概览）自己滚动。 */
 .terminals { flex: 1 0 50vh; min-height: 50vh; display: flex; }
+/* ticket「终端」页签：仓库条、session 条贴边（自带边距和分隔线），下面终端占满；内容超出时整个页签滚动，各条不被压扁。 */
+.page-tabs-panel.tab-panel-terminal { display: flex; flex-direction: column; padding: 0; }
+.tab-panel-terminal > * { flex-shrink: 0; }
+/* ticket「PR 详情」页签：阶段、CI · review · 风险 · 就绪、未处理的评论上下排。 */
+.ticket-pr section + section { margin-top: 12px; }
 .terminal-wrap { flex: 1; min-width: 0; flex-direction: column; background: #000; overflow: clip; }
 /* Chromium 默认会把 ，。（ 等标点量窄，实际却占满一格，后面的字和拼音框就错位；space-all 让它们按整格量。 */
 .terminal { flex: 1; min-height: 0; padding: 4px; text-spacing-trim: space-all; }
@@ -310,12 +306,12 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .day-list { margin: 4px 0 10px; padding-left: 20px; }
 textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; width: 100%; resize: vertical; }
 .mono { font-family: Menlo, Consolas, "Cascadia Mono", monospace; font-size: 12px; }
-.overview { flex: 0 1 auto; min-height: 0; overflow-y: auto; border-bottom: 1px solid var(--border); }
-.overview-bar { display: flex; gap: 8px; align-items: center; padding: 6px 16px; flex-wrap: wrap; }
-.overview-bar .active { border-color: var(--accent); color: var(--accent); }
-.overview-panel { max-height: 40vh; overflow-y: auto; padding: 4px 16px 10px; }
-.followup { display: flex; gap: 10px; align-items: center; padding: 4px 0; }
-.followup .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* ticket「记录」页签：待跟进、交接记录、记忆三个小节并排，窄了改成上下。 */
+.ticket-log { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 900px) { .ticket-log { grid-template-columns: 1fr; } }
+/* 记录页签是三栏，一栏只有三百来像素：放不下时说明和按钮换到下一行，正文至少留 10em，不会被挤没。 */
+.followup { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 4px 0; }
+.followup .text { flex: 1 1 10em; min-width: 0; overflow-wrap: anywhere; }
 .followup.closed .text { color: var(--muted); text-decoration: line-through; }
 .handoff-entry { padding: 8px 0; border-top: 1px solid var(--border); }
 .raw { white-space: pre-wrap; font-size: 12px; background: var(--panel); padding: 8px; border-radius: 6px; }
@@ -339,9 +335,9 @@ label.inline { display: inline-flex; gap: 6px; align-items: center; }
 /* 语言选择（设计文档 2026-10-26）。 */
 .language-picker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 12px; }
 .language-picker .muted { flex-basis: 100%; }
-/* 「待你决定」和汇报（BTL-190 第 2+3 点）：feature、epic、Butler 总控页终端上面的两个 tab；「现在」页「需要你」里的卡片。 */
+/* 汇报列表（ReportFeed，BTL-190 第 3 点）：子 session 用 report 送上来的进展。 */
 ul.inbox-reports { list-style: none; margin: 0; padding: 0; }
-p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
+p.inbox-reports { margin: 2px 0; }
 .inbox-report { padding: 4px 0; border-bottom: 1px solid var(--border); }
 .inbox-report p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .inbox-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 12px; }
@@ -349,15 +345,10 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .inbox-kind { border-radius: 4px; padding: 0 6px; background: var(--pill-pending-bg); color: var(--pill-pending); }
 .inbox-kind.done { background: var(--pill-approved-bg); color: var(--pill-approved); }
 .inbox-kind.blocked { background: var(--pill-changes-bg); color: var(--pill-changes); }
-.inbox-card { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; margin-bottom: 8px; background: var(--bg); border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); border-radius: 8px; }
-.inbox-question { margin: 0; font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
-.inbox-context { margin: 0; max-height: 8em; overflow-y: auto; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
-.inbox-options { display: flex; flex-wrap: wrap; gap: 6px; }
-.inbox-answer { display: flex; gap: 6px; align-items: flex-end; }
-.inbox-queued { margin: 0; color: var(--ok); }
-.inbox-card .actions { display: flex; gap: 6px; }
 /* Butler 总控页（BTL-190 第 5 点）。 */
 .butler-intro { margin: 0; padding: 0 16px 8px; }
+.butler-sent { margin-top: 12px; }
+.butler-sent > summary { cursor: pointer; color: var(--muted); }
 .lesson-sessions h3 { margin: 8px 16px 0; font-size: 12px; font-weight: 600; color: var(--muted); }
 
 /* PR 进度 tab：边框和底色用 --ok / --accent / --danger，字用 --stage-*（浅色更深，styles-contrast.test.ts 查对比度）。 */
@@ -373,24 +364,10 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .pr-cell.pr-unknown { background: var(--panel); color: var(--stage-muted); border-style: dashed; font-style: italic; }
 .pr-link, .pr-no-pr { margin-left: auto; font-size: 12px; }
 .pr-closed { margin-left: 6px; padding: 1px 6px; border-radius: 6px; font-size: 12px; border: 1px solid var(--danger); color: var(--stage-danger); background: color-mix(in srgb, var(--danger) 12%, var(--bg)); }
-.pr-row-name .pill { margin: 0 0 0 6px; }
-.pr-archived { margin-left: 6px; padding: 1px 6px; border-radius: 6px; font-size: 12px; border: 1px solid var(--border); color: var(--stage-muted); }
 .pr-timeline-toggle { font-size: 12px; margin-top: 4px; }
 .pr-timeline { list-style: none; margin: 4px 0 0; padding: 0 0 0 8px; border-left: 2px solid var(--border); font-size: 12px; }
 .pr-timeline li { padding: 1px 0; }
 .pr-timeline li.pr-back { color: var(--danger); }
-.pr-table { border-collapse: collapse; width: 100%; }
-.pr-table th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 2px 6px; }
-.pr-table td { padding: 3px 6px; border-top: 1px solid var(--border); }
-.pr-table tr.clickable, .pr-epic-row.clickable { cursor: pointer; }
-.pr-table tr.clickable:hover, .pr-epic-row.clickable:hover { background: var(--panel); }
-.pr-epic-row { display: flex; gap: 12px; align-items: center; padding: 5px 6px; border-top: 1px solid var(--border); }
-.pr-epic-name { flex: 0 0 220px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pr-bar { flex: 1; display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--panel); border: 1px solid var(--border); }
-.pr-seg.pr-done { background: var(--ok); }
-.pr-seg.pr-active { background: var(--accent); }
-.pr-seg.pr-failed { background: var(--danger); }
-.pr-seg.pr-todo { background: var(--border); }
 
 /* review 经验页 */
 .lessons-page h3 { margin: 14px 0 6px; font-size: 12px; color: var(--muted); }
@@ -559,8 +536,6 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .bucket-chip.bucket-blocked { border-color: var(--danger); }
 .bucket-chip.bucket-in_review, .bucket-chip.bucket-in_progress { border-color: var(--accent); }
 .progress-freshness { margin-top: 18px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; }
-.pr-stuck-block { margin-bottom: 14px; }
-.summary-stale { margin: 4px 0; }
 
 /* Butler 页「回复」tab（ws-b）。 */
 .butler-replies { list-style: none; margin: 0; padding: 0; }
@@ -681,6 +656,7 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .turn-card { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); margin-bottom: 8px; }
 .turn-card-body { flex: 1 1 260px; min-width: 0; }
 .turn-card .sentence { margin: 0; }
+.turn-card .stuck-action { margin: 2px 0 0; }
 .turn-card .notice { margin: 0; padding: 0; border: none; background: transparent; }
 .turn-card .where { display: flex; gap: 8px; margin: 2px 0 0; font-size: 12px; min-width: 0; }
 .turn-card .where .path { display: flex; min-width: 0; white-space: nowrap; }
@@ -701,3 +677,10 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .home-run { display: grid; grid-template-columns: 90px auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 4px 8px; background: transparent; border: none; border-radius: 0; }
 .home-run .sentence { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 @media (max-width: 640px) { .home-scope { grid-template-columns: minmax(0, 1fr) 80px; } .home-scope .line, .home-scope .who { display: none; } }
+.ticket-home { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.ticket-home-state { display: flex; align-items: baseline; gap: 8px; margin: 0; }
+.ticket-home h3 { margin: 0 0 4px; font-size: 12px; color: var(--muted); }
+.ticket-home .said { margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ticket-home .kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
+.ticket-home .kv dt { color: var(--muted); }
+.ticket-home .kv dd { margin: 0; overflow-wrap: anywhere; }

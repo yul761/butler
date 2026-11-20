@@ -77,3 +77,32 @@ describe("buildTurnBoard", () => {
     expect(solo).toMatchObject({ kind: "ticket", total: 1, merged: 0, bar: { idle: 1 }, youCount: 0, slowest: null });
   });
 });
+
+describe("the item that carries a ticket's own turn", () => {
+  // K-1：PR 在等 review，session 在干活，还有一条孤儿提问（它的 head 已经不在 known 里，进了 moreAsks）。
+  const review: Turn = { owner: "external", kind: "awaiting_review", names: ["amy"] };
+  const orphan = (): BoardInput => ({
+    ...input(),
+    tickets: [tk("K-1", 10, { prs: [prOf(5, review)], others: [{ turn: agent, since: NOW - 50 }], moreAsks: [{ turn: ask(3), since: NOW - 4 }] })],
+  });
+  const own = (items: { ticketKey: string | null; ticketLevel?: true }[]) => items.filter((i) => i.ticketLevel === true);
+  it("no filter: the ticket's item is marked, its extra questions are not", () => {
+    const b = buildTurnBoard(orphan(), null);
+    expect(own(b.items)).toMatchObject([{ ticketKey: "K-1", pr: null, turn: agent, others: 1 }]);
+    expect(b.items.find((i) => i.turn.kind === "answer")?.ticketLevel).toBeUndefined();
+  });
+  it("with a filter: of the per-PR and session items, the one the ticket's turn came from is marked, with the other PRs counted", () => {
+    for (const f of [{ featureId: 10 }, { epicId: 1 }, { ticketKey: "K-1" }]) {
+      const b = buildTurnBoard(orphan(), f);
+      expect(own(b.items), JSON.stringify(f)).toMatchObject([{ ticketKey: "K-1", pr: null, turn: agent, others: 1 }]);
+      // 按 PR 拆开的那条照旧在，不带标记。
+      expect(b.items.find((i) => i.pr?.number === 5)).toMatchObject({ turn: review, others: 0 });
+      expect(b.items.find((i) => i.pr?.number === 5)?.ticketLevel).toBeUndefined();
+    }
+  });
+  it("with a filter, a PR's turn is marked when the ticket takes it", () => {
+    const b = buildTurnBoard(input(), { featureId: 10 });
+    expect(own(b.items).find((i) => i.ticketKey === "PAY-1")).toMatchObject({ pr: { number: 1 }, turn: merge, others: 1 });
+    expect(own(b.items).find((i) => i.ticketKey === "PAY-2")).toMatchObject({ pr: null, turn: agent, others: 0 });
+  });
+});

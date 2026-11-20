@@ -70,13 +70,9 @@ export function setCollapsed(id: string, on: boolean, defaultCollapsed = false):
 }
 
 /**
- * 页面上半部分的 tab（feature、epic、Butler 总控页）：每个页面记着最近停在哪个 tab（收起时也记着）。
+ * 页面上半部分的 tab（feature、epic、Butler 总控页）：每个页面记着最近停在哪个 tab。
  * 没有记录时返回 null，用页面自己的默认 tab。
  */
 const tabKey = (page: string) => `butler.tab:${page}`;
 export const savedTab = (page: string): string | null => get(tabKey(page));
 export const saveTab = (page: string, tab: string) => set(tabKey(page), tab);
-/** 展开标记：记着 "1" 是展开，没有记录是收起（默认收起，tab 本身记在上面那个键里）。 */
-const tabOpenKey = (page: string) => `butler.tabOpen:${page}`;
-export const savedTabOpen = (page: string): string | null => get(tabOpenKey(page));
-export const saveTabOpen = (page: string, open: boolean) => set(tabOpenKey(page), open ? "1" : null);

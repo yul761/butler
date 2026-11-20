@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox, newButton } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox, newButton, openTicketTab } from "./fixtures";
 
 /** 在当前显示的终端里输入一行并回车。 */
 async function typeLine(page: Page, line: string): Promise<void> {
@@ -90,6 +90,7 @@ test("merge coordinator: a conflicting merge waits for the holder, is told when 
 
   // 4. DMS-1 的 session 里合并：被拦下，理由说等 DMS-2，main 没动。
   await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   const mainBefore = git(backend, "rev-parse", "main");

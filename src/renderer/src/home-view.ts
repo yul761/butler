@@ -1,12 +1,12 @@
 // 首页（轮到你）和全部工作页的纯函数（UI 重做第 2 层，spec §5.3）。
 // 状态由第 1 层的 turn:board 给出，这里只排序、截断、取位置和按钮，不自己算状态，也不拼状态文案。
 import type { NowNotice, NowTarget } from "../../shared/types";
-import { mostUrgent, YOU_KIND_RANK, type ScopeTurnRow, type Turn, type TurnBoard, type TurnItem, type YouKind } from "../../shared/turn";
+import { YOU_KIND_RANK, type ScopeTurnRow, type Turn, type TurnBoard, type TurnItem, type YouKind } from "../../shared/turn";
 import type { Route } from "./App";
 import type { FirstRunHomeProps } from "./components/FirstRunHome";
 import { formatDuration } from "./components/TicketActivity";
 import type { UiStrings } from "./strings";
-import { turnSentence } from "./turn-text";
+import { externalWho, turnSentence } from "./turn-text";
 import type { TurnTone } from "./turn-tone";
 
 export { turnTone, type TurnTone } from "./turn-tone";
@@ -75,7 +75,7 @@ export function homeLede(c: TurnBoard["counts"], S: UiStrings): string {
   return c.agent === 0 && c.external === 0 && c.mergedToday === 0 ? S.hm.ledeIdle : S.hm.lede(c.agent, c.external, c.mergedToday);
 }
 
-export type CardAction = { id: "answer"; option: string; primary: boolean } | { id: "openPr" | "look" | "fix" | "send"; primary: boolean };
+export type CardAction = { id: "answer"; option: string; primary: boolean } | { id: "openPr" | "look" | "fix" | "send" | "ignore"; primary: boolean };
 
 /** 卡片上的 1–3 个按钮；butler 卡用 Notice 自己的按钮，这里给空。 */
 export function cardActions(item: TurnItem): CardAction[] {
@@ -89,8 +89,14 @@ export function cardActions(item: TurnItem): CardAction[] {
     }
     case "merge": return item.pr?.url ? [{ id: "openPr", primary: true }, look(false)] : [look(true)];
     case "review": return [{ id: "openPr", primary: true }];
-    // 修复 session 开在卡住的 ticket 上（session-service 要它属于这个 feature）：总控卡住时 ticketKey 为 null，不给这个按钮。
-    case "stuck": return item.featureId !== null && item.ticketKey !== null && t.sessionId !== null ? [look(true), { id: "fix", primary: false }] : [look(true)];
+    case "stuck": {
+      if (t.sessionId === null) return [look(true)];
+      // 修复 session 开在卡住的 ticket 上（session-service 要它属于这个 feature）：总控卡住时 ticketKey 为 null，不给这个按钮。
+      const fix: CardAction[] = item.featureId !== null && item.ticketKey !== null ? [{ id: "fix", primary: false }] : [];
+      // 只有「很久没输出」判的卡住可能是误判（比如在跑很长的测试），给一个「忽略」：这一次不再提醒，直到它又动起来再卡住。
+      const ignore: CardAction[] = t.source === "silent" ? [{ id: "ignore", primary: false }] : [];
+      return [look(true), ...fix, ...ignore];
+    }
     case "unattended": return t.canSend && item.ticketKey !== null && item.pr !== null ? [{ id: "send", primary: true }, look(false)] : [look(true)];
     case "butler": return [];
   }
@@ -170,6 +176,7 @@ export function scopeLine(row: ScopeTurnRow, S: UiStrings): string {
   return row.total === 0 ? S.hm.scopeEmpty : S.hm.scopeLine(row.total, row.merged, row.slowest);
 }
 
+/** epic、feature 汇总行的「谁该动」（看 scope 行的计数）。单独的 ticket 不用它：ticket 行的 bar 按 PR 计，看不出 session 在干活，用 ticketWhoTurn。 */
 export function scopeWho(row: ScopeTurnRow, S: UiStrings): { tone: TurnTone | null; text: string } {
   if (row.youCount > 0) return { tone: "ask", text: S.hm.whoYou(row.youCount) };
   if (row.bar.agent > 0) return { tone: "agent", text: S.hm.whoAgent };
@@ -178,19 +185,33 @@ export function scopeWho(row: ScopeTurnRow, S: UiStrings): { tone: TurnTone | nu
   return { tone: "idle", text: S.hm.whoIdle };
 }
 
-/** 一个 ticket 里最急的那一项（第 1 层的 mostUrgent）。 */
-export function topItem(items: TurnItem[], ticketKey: string): TurnItem | null {
-  return mostUrgent(items.filter((i) => i.ticketKey === ticketKey));
+/**
+ * 一个 ticket 自己的那一项：主进程标了 ticketLevel 的那条（它的 ticketTurn 选的，首页、范围页的表格都是它）。
+ * 多出来的提问再急也不是 ticket 的状态。不在板上（合了、没开始的不在不带 filter 的板上）为 null。
+ */
+export function ticketItem(items: TurnItem[], ticketKey: string): TurnItem | null {
+  return items.find((i) => i.ticketKey === ticketKey && i.ticketLevel === true) ?? null;
 }
 
 /**
- * 全部工作里一个单独 ticket 的「现在怎么样」：板上有它在动的项就写那一项的一句话；
+ * 全部工作里一个单独 ticket 的「谁该动」：ticket 自己的轮次（同首页「进行中」、范围页的表格，用 whoLabel 说）；
+ * 不在板上时按它自己的 scope 行是合了还是没开始；什么都不知道为 null（写「—」）。
+ */
+export function ticketWhoTurn(items: TurnItem[], scope: ScopeTurnRow | null, ticketKey: string): Turn | null {
+  const own = ticketItem(items, ticketKey);
+  if (own) return own.turn;
+  if (scope === null || scope.total === 0) return null;
+  return scope.merged >= scope.total ? { owner: "done", kind: "merged" } : { owner: "idle", kind: "not_started" };
+}
+
+/**
+ * 全部工作里一个单独 ticket 的「现在怎么样」：板上有它自己的那一项就写那一项的一句话；
  * 没有（合了、还没开始的不在不带 filter 的板上）就按它自己的 scope 行说「合了」「还没开始」，什么都不知道写「—」。
  * 不写 scope 级的「1 个里合了 1 个」。
  */
 export function ticketNowText(items: TurnItem[], scope: ScopeTurnRow | null, ticketKey: string, S: UiStrings): string {
-  const top = topItem(items, ticketKey);
-  if (top) return turnSentence(top.turn, top, S);
+  const own = ticketItem(items, ticketKey);
+  if (own) return own.others > 0 ? `${turnSentence(own.turn, own, S)} · ${S.lay.morePrs(own.others)}` : turnSentence(own.turn, own, S);
   if (scope === null || scope.total === 0) return "—";
   if (scope.merged >= scope.total) return S.turn.done;
   if (scope.bar.idle > 0) return S.turn.idle;
@@ -199,19 +220,18 @@ export function ticketNowText(items: TurnItem[], scope: ScopeTurnRow | null, tic
 
 export interface RunningRow { key: string; ticketKey: string | null; owner: "agent" | "external"; who: string; sentence: string; age: string }
 
-/** 「进行中」：agent 和外部在推进的项，等得久的在前。 */
+/** 「进行中」：agent 和外部在推进的项，等得久的在前。ticket 还有别的 PR 时那句话后面加「另有 N 个 PR」（spec §5.1）。 */
 export function runningRows(items: TurnItem[], S: UiStrings, now: number): RunningRow[] {
   const rows: { since: number; row: RunningRow }[] = [];
   for (const i of items) {
     const t = i.turn;
     if (t.owner !== "agent" && t.owner !== "external") continue;
-    const who = t.owner === "agent" ? S.hm.whoAgent
-      : t.kind === "stack_below" ? S.hm.whoStackBelow
-      : t.names.length > 0 ? t.names.join(", ") : t.kind === "ci_running" ? S.hm.whoCi : S.hm.whoExternal;
+    const who = t.owner === "agent" ? S.hm.whoAgent : externalWho(t, S);
     const pr = i.pr ? `${i.pr.repo}#${i.pr.number}` : "";
     rows.push({ since: i.since, row: {
-      key: `${i.ticketKey ?? ""}|${pr}|${t.kind}`, ticketKey: i.ticketKey, owner: t.owner, who,
-      sentence: turnSentence(t, i, S), age: i.since > 0 ? S.hm.ago(formatDuration(now - i.since, S)) : "",
+      // 不属于 ticket 的（epic、feature 的总控）同页可以有好几个在干活：key 带上 session。
+      key: `${i.ticketKey ?? ""}|${pr}|${t.kind}${i.ticketKey === null ? `|${sessionOf(t) ?? ""}` : ""}`, ticketKey: i.ticketKey, owner: t.owner, who,
+      sentence: i.others > 0 ? `${turnSentence(t, i, S)} · ${S.lay.morePrs(i.others)}` : turnSentence(t, i, S), age: i.since > 0 ? S.hm.ago(formatDuration(now - i.since, S)) : "",
     } });
   }
   return rows.sort((a, b) => a.since - b.since).map((r) => r.row);

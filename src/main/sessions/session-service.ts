@@ -901,6 +901,11 @@ export class SessionService {
     });
   }
 
+  /** 一个 ticket 的 session head：和 TicketView.sessions 同一份（最近活动在前，去掉已换新的和没开终端的隐藏项）。 */
+  ticketHeads(ticketKey: string): SessionView[] {
+    return this.split(this.d.sessions.listByTicket(ticketKey), this.openHeads()).sessions;
+  }
+
   /** 单独的 ticket（属于未归档 feature 的在 featureViews 里）。 */
   ticketViews(): TicketView[] {
     const active = new Set((this.d.features?.list() ?? []).map((f) => f.id));
