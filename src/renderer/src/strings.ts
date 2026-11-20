@@ -38,6 +38,19 @@ const ZH_STATUS: Record<TicketStatus, string> = {
 export const STATUS_ORDER: TicketStatus[] = ["merged_pending_followup", "active", "blocked", "in_review", "done"];
 
 const ZH = {
+  /** 首页空状态（UI 重做 spec §5.5）：组件 FirstRunHome，首页接线在第 2 层。 */
+  firstRun: {
+    title: "欢迎用 Butler",
+    lede: "Butler 替你看着一堆 Claude Code session：谁在干活、谁卡住了、哪个 PR 能合了。需要你的时候，就会出现在这一页。",
+    empty: "现在还没有活。选一种方式开始第一件事：",
+    stepTicket: { title: "一个小活", desc: "新建 ticket：一个分支、一个 Claude session，做完开 PR。", button: "新建 ticket" },
+    stepFeature: { title: "一组相关的活", desc: "新建 feature：一个总控 session 帮你拆成几个 ticket 并行做。", button: "新建 feature" },
+    stepEpic: { title: "一个大项目", desc: "新建 epic：先和总控规划，它会建 feature 和 ticket。", button: "新建 epic" },
+    flow: ["ticket 开工", "agent 写代码、开 PR", "CI / review", "可以合并 → 轮到你"] as [string, string, string, string],
+    flowNote: "失败自动送回 agent",
+    defaultsOff: "Butler 默认什么都不替你对外做（不发评论、不合并）。",
+    openFeatureSettings: "想让它多做点，去 设置 › 功能 里一个个打开",
+  },
   /** 设置页（UI 重做第 6 层）：四个 tab、高级里的分组、健康检查。 */
   set: {
     tabs: { basic: "基本", features: "功能", advanced: "高级", health: "健康检查" } as Record<SettingsTabId, string>,
@@ -1606,7 +1619,7 @@ const ZH = {
   wizardPrivacyTitle: "隐私档位与个人 API（可选）",
   wizardPrivacyHelp: "个人 API 只在完整档位下用来做记忆蒸馏，其他档位不调用。不想用就选“关闭”或者什么都不填。",
   wizardDoneTitle: "准备好了",
-  wizardDoneHelp: "点左侧“新建 ticket”开始。每晚 Butler 会为有活动的 ticket 生成 handoff。这些设置之后都能在设置页修改，也可以从设置页重新运行这个向导。",
+  wizardDoneHelp: "点“开始使用”进入首页，从那里选一种方式开始第一件事；3.0 的各个功能在 设置 › 功能 里，默认都关着。每晚 Butler 会为有活动的 ticket 生成 handoff。这些设置之后都能在设置页修改，也可以从设置页重新运行这个向导。",
   prStagesTab: "PR 进度",
   prStage: { design: "设计", dev: "开发", self_review: "自我 review", ci: "CI", peer_review: "peer review", merge: "合并" } as Record<PrStageId, string>,
   prClosed: "已关闭",

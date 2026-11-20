@@ -34,6 +34,18 @@ export const EN_STATUS: Record<TicketStatus, string> = {
 };
 
 export const EN: UiStrings = {
+  firstRun: {
+    title: "Welcome to Butler",
+    lede: "Butler keeps an eye on your Claude Code sessions: who is working, who is stuck, and which PR can be merged. When it needs you, it shows up on this page.",
+    empty: "There is no work yet. Pick a way to start the first thing:",
+    stepTicket: { title: "A small task", desc: "New ticket: one branch and one Claude session, with a PR at the end.", button: "New ticket" },
+    stepFeature: { title: "A few related tasks", desc: "New feature: a lead session splits it into tickets that run side by side.", button: "New feature" },
+    stepEpic: { title: "A big project", desc: "New epic: plan it with the lead first, and it creates the features and tickets.", button: "New epic" },
+    flow: ["Ticket starts", "Agent writes code, opens a PR", "CI / review", "Ready to merge → your turn"] as [string, string, string, string],
+    flowNote: "Failures go back to the agent",
+    defaultsOff: "By default Butler does nothing outside on your behalf (no comments, no merges).",
+    openFeatureSettings: "To let it do more, turn features on one by one in Settings › Features",
+  },
   set: {
     tabs: { basic: "Basics", features: "Features", advanced: "Advanced", health: "Health check" } as Record<SettingsTabId, string>,
     groups: {
@@ -1594,7 +1606,7 @@ export const EN: UiStrings = {
   wizardPrivacyTitle: "Privacy level and personal API (optional)",
   wizardPrivacyHelp: "The personal API is used only at the full level, for memory distillation; the other levels never call it. If you don't want it, choose Off or leave everything empty.",
   wizardDoneTitle: "All set",
-  wizardDoneHelp: "Click “New ticket” on the left to start. Every night Butler writes a handoff for each ticket with activity. You can change all of this in Settings later, and rerun this wizard from there.",
+  wizardDoneHelp: "Click “Get started” to go to the home page and pick a way to start the first thing there. The 3.0 features are under Settings › Features and all start off. Every night Butler writes a handoff for each ticket with activity. You can change all of this in Settings later, and rerun this wizard from there.",
   prStagesTab: "PR progress",
   prStage: { design: "Design", dev: "Develop", self_review: "Self-review", ci: "CI", peer_review: "Peer review", merge: "Merge" } as Record<PrStageId, string>,
   prClosed: "Closed",

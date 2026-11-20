@@ -524,6 +524,23 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .feature-partial { color: var(--muted); font-size: 12px; }
 .feature-actions { display: inline-flex; gap: 6px; margin-left: auto; }
 .feature-elsewhere { color: var(--danger); font-size: 12px; }
+/* 首页空状态（FirstRunHome）：三种开工方式和主流程。 */
+.first-run { max-width: 760px; }
+.first-run h1 { margin: 0 0 8px; font-size: 22px; }
+.first-run-lede { margin: 0 0 4px; font-size: 14px; }
+.first-run-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 12px 0 20px; }
+.first-run-step { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 14px 14px 12px 40px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.first-run-step h3 { margin: 0; font-size: 14px; }
+.first-run-step p { margin: 0; flex: 1; }
+.first-run-step button { align-self: flex-start; }
+.first-run-num { position: absolute; left: 12px; top: 14px; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: var(--bg); font-size: 12px; line-height: 20px; text-align: center; }
+.first-run-flow { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 0 0 16px; padding: 0; list-style: none; }
+.first-run-node { position: relative; display: flex; flex-direction: column; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+.first-run-node + .first-run-node::before { content: "→"; position: absolute; left: -20px; top: 6px; color: var(--muted); }
+.first-run-node.you { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.first-run-note { color: var(--muted); font-size: 11px; font-weight: normal; }
+.first-run-defaults { font-size: 13px; }
+.first-run-defaults button.link { color: var(--accent); }
 .routing-settings section { margin: 14px 0; }
 .routing-settings th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 6px; }
 .routing-settings .ticket-table tr { cursor: default; }
