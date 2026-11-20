@@ -85,6 +85,33 @@ describe("butler-hook entry check modes", () => {
   });
 });
 
+describe("butler-hook entry readonly mode", () => {
+  const run = (input: string, home = tempDir()) => ({ home, r: spawnSync(process.execPath, [bundle, "readonly"], { input, env: { ...process.env, BUTLER_HOME: home }, timeout: 10_000, encoding: "utf8" }) });
+
+  it("denies a write tool and exits 0", () => {
+    const { r } = run('{"hook_event_name":"PreToolUse","tool_name":"Edit"}');
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).hookSpecificOutput).toMatchObject({ hookEventName: "PreToolUse", permissionDecision: "deny" });
+  });
+
+  it("writes nothing for a read tool", () => {
+    const { r } = run('{"hook_event_name":"PreToolUse","tool_name":"Read"}');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  it("fails closed on bad JSON", () => {
+    const { r } = run("{{");
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
+  it("never writes an inbox envelope", () => {
+    const { home } = run('{"hook_event_name":"PreToolUse","tool_name":"Edit"}');
+    expect(existsSync(join(home, "inbox")) ? readdirSync(join(home, "inbox")).filter((n) => n.endsWith(".json")) : []).toHaveLength(0);
+  });
+});
+
 describe("build:hook toolchain check", () => {
   it("pins a Node version in .node-version", () => {
     expect(readFileSync(join(root, ".node-version"), "utf8").trim()).toMatch(/^\d+\.\d+\.\d+$/);

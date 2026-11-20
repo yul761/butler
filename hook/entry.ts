@@ -2,6 +2,7 @@ import { main, readStdin } from "./butler-hook";
 import { parseCheckArgs, realCheckDeps, runCheck, runPushCheck } from "./check";
 import { killLiveCommands } from "./check-run";
 import { realGateDeps, runGate } from "./gate";
+import { runReadonly } from "./readonly";
 
 // 设计文档 4.3：任何异常都以退出码 0 静默结束，绝不阻塞 Claude Code。
 process.on("uncaughtException", () => process.exit(0));
@@ -25,13 +26,29 @@ async function answer(run: (stdin: string) => Promise<string>): Promise<void> {
   if (out) await new Promise<void>((resolve) => process.stdout.write(out, () => resolve()));
 }
 
+/**
+ * readonly：分叉讨论的只读保证。
+ * 与其他模式「出错就放行」正好相反：分叉是用户要求的只读讨论，宁可错拒，也不能错放，所以读 stdin 失败也写 deny。
+ */
+async function readonlyAnswer(): Promise<void> {
+  let out: string;
+  try {
+    out = runReadonly(await readStdin());
+  } catch {
+    out = runReadonly("");
+  }
+  if (out) await new Promise<void>((resolve) => process.stdout.write(out, () => resolve()));
+}
+
 const mode = process.argv[2];
 const opts = parseCheckArgs(process.argv.slice(3));
 // gate：合并闸门；check：编辑后的确定性检查；check-push：push 前的检查（契约 4.5）；其余照旧写收件箱。
 const job =
   mode === "gate"
     ? answer((s) => runGate(s, process.env, realGateDeps))
-    : mode === "check"
+    : mode === "readonly"
+      ? readonlyAnswer()
+      : mode === "check"
       ? answer((s) => runCheck(s, process.env, realCheckDeps, opts))
       : mode === "check-push"
         ? answer((s) => runPushCheck(s, process.env, realCheckDeps, opts))
