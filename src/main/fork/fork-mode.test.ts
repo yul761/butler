@@ -86,6 +86,29 @@ describe("turnCost", () => {
     expect(r.cli).toBe(r.usd);
     expect(turnCost(run(0.01), "resumed", 0.03, registry)).toEqual({ usd: 0, partial: false, cli: 0, seenTotal: 0.01 });
   });
+  // modelUsage 和 total 一样是累计的：这一轮的份额 = total × w(usage) / Σ w(modelUsage)
+  const raw = { input_tokens: 100, cache_read_input_tokens: 9000, cache_creation_input_tokens: 0, output_tokens: 50 };
+  const runW = 100 + 900 + 250;
+  const cumulative = { "claude-opus-5": { inputTokens: 100 * 50, outputTokens: 50 * 50, cacheReadInputTokens: 9000 * 50, cacheCreationInputTokens: 0 } };
+  const withCumulative = (costUsd: number | null) => ({ ...run(costUsd), usageRaw: raw, modelUsage: cumulative });
+  it("a fork of another session with modelUsage: this run's exact share of the total, not partial", () => {
+    const r = turnCost(withCumulative(1.02), "forked", null, registry);
+    expect(r.usd).toBeCloseTo((1.02 * runW) / (runW * 50), 12);
+    expect(r).toMatchObject({ partial: false, seenTotal: 1.02 });
+    expect(r.cli).toBe(r.usd);
+  });
+  it("a resumed fork with no total seen yet but with modelUsage: the share too", () => {
+    const r = turnCost(withCumulative(1.04), "resumed", null, registry);
+    expect(r.usd).toBeCloseTo(1.04 / 50, 12);
+    expect(r).toMatchObject({ partial: false, cli: r.usd, seenTotal: 1.04 });
+  });
+  it("a resumed fork with a total seen still takes the difference, not the share", () => {
+    const r = turnCost(withCumulative(1.04), "resumed", 1.02, registry);
+    expect(r.usd).toBeCloseTo(0.02, 10);
+  });
+  it("modelUsage with nothing in it falls back to the estimate", () => {
+    expect(turnCost({ ...run(5), usageRaw: raw, modelUsage: {} }, "forked", null, registry)).toEqual({ usd: 22.5, partial: false, cli: null, seenTotal: 5 });
+  });
   it("a resumed fork with no total seen yet falls back to the estimate", () => {
     expect(turnCost(run(5.02), "resumed", null, registry)).toEqual({ usd: 22.5, partial: false, cli: null, seenTotal: 5.02 });
   });

@@ -67,7 +67,7 @@ describe("parseClaudeJson", () => {
     expect(parseClaudeJson(`${JSON.stringify(OBSERVED)}\n`)).toEqual({
       sessionId: "a861b9bd-25a8-481b-a01a-3fca83dd069f", isError: false, subtype: "success", resultText: '{"word":"hello","count":3}',
       structured: { word: "hello", count: 3 }, permissionDenials: [], apiErrorStatus: null, costUsd: 0.23302,
-      usage: null, model: null, durationMs: null,
+      usage: null, model: null, durationMs: null, usageRaw: null, modelUsage: null,
     });
   });
 
@@ -79,6 +79,14 @@ describe("parseClaudeJson", () => {
     }));
     expect(r?.usage).toEqual({ input: 2, cacheWrite5m: 10, cacheWrite1h: 20, cacheRead: 11, output: 6 });
     expect(r?.model).toBe("claude-sonnet-5-5");
+  });
+
+  it("keeps the raw usage and the cumulative modelUsage so a run's share of the total can be worked out", () => {
+    const usage = { input_tokens: 2, cache_creation_input_tokens: 10649, cache_read_input_tokens: 15039, output_tokens: 3 };
+    const modelUsage = { "claude-haiku-5": { inputTokens: 4, outputTokens: 6, cacheReadInputTokens: 26881, cacheCreationEphemeral1hInputTokens: 24369, costUSD: 0.00514601 } };
+    const r = parseClaudeJson(JSON.stringify({ ...OBSERVED, usage, modelUsage }));
+    expect(r?.usageRaw).toEqual(usage);
+    expect(r?.modelUsage).toEqual(modelUsage);
   });
 
   it("lists denied tools, accepts a message array, rejects garbage", () => {

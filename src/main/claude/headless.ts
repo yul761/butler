@@ -54,6 +54,10 @@ export interface ClaudeResult {
   model: string | null;
   /** duration_ms；没有为 null。 */
   durationMs: number | null;
+  /** 原样的 usage（这一轮的；拆累计金额时要 5m/1h 分档原样）。只有解析出来的结果才有。 */
+  usageRaw?: unknown;
+  /** 原样的 modelUsage（续 session 时是整个 session 的累计）。只有解析出来的结果才有。 */
+  modelUsage?: unknown;
 }
 
 export type HeadlessFailure = "timeout" | "spawn_failed" | "exit_nonzero" | "bad_output" | "rate_limited" | "claude_error" | "model_unavailable" | "aborted";
@@ -132,6 +136,8 @@ export function parseClaudeJson(stdout: string): ClaudeResult | null {
     usage: usageCounts(o.usage),
     model: firstKey(o.modelUsage),
     durationMs: typeof o.duration_ms === "number" ? o.duration_ms : null,
+    usageRaw: o.usage ?? null,
+    modelUsage: o.modelUsage ?? null,
   };
 }
 

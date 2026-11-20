@@ -778,6 +778,38 @@ describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
     expect(s.deps.onUsage.mock.calls[1][0].costUsd).toBeCloseTo(0.02, 10);
   });
 
+  // 真 CLI 的 modelUsage 和 total 一样是累计的：这一轮的份额 = total × w(usage) / Σ w(modelUsage)
+  const usageRaw = { input_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 20, output_tokens: 30 };
+  const runW = 10 + 0.1 * 1000 + 2 * 20 + 5 * 30;
+  const cumulative = (times: number) => ({ "claude-opus-5-5": { inputTokens: 10 * times, outputTokens: 30 * times, cacheReadInputTokens: 1000 * times, cacheCreationEphemeral1hInputTokens: 20 * times } });
+
+  it("完整分叉第一轮带 modelUsage（累计 5.00，这一轮占 1/250）：按份额算准，不算不全，用量行同一个数", async () => {
+    const s = setup();
+    s.queue.push(ok({ costUsd: 5, usageRaw, modelUsage: cumulative(250) }), ok({ costUsd: 5.02, usageRaw, modelUsage: cumulative(251) }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.mode).toBe("full");
+    expect(runW).toBe(300);
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(5 / 250, 12);
+    expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costSeenTotal: 5 });
+    expect(s.deps.onUsage.mock.calls[0][0].costUsd).toBeCloseTo(5 / 250, 12);
+    s.svc.ask("root-1", forkId, "q2");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.04, 10);
+    expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costSeenTotal: 5.02 });
+    expect(s.deps.onUsage.mock.calls[1][0].costUsd).toBeCloseTo(0.02, 10);
+  });
+
+  it("CLI 没分叉但带 modelUsage：费用按份额记、仍标不全，累计不动，不记用量行", async () => {
+    const s = setup();
+    s.queue.push(ok({ sessionId: "head-2", costUsd: 5, usageRaw, modelUsage: cumulative(250) }));
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.02, 12);
+    expect(s.repo.get(forkId)).toMatchObject({ errorCode: "not_forked", costPartial: true, costSeenTotal: null });
+    expect(s.deps.onUsage).not.toHaveBeenCalled();
+  });
+
   it("中间一轮没有结果：累计不变、费用不全；下一轮按上次见到的累计取差", async () => {
     const s = setup({ head: { waitingForInput: false } });
     s.queue.push(ok({ costUsd: 0.01 }), { ok: false, reason: "timeout", message: "t", limit: null, stderr: "", result: null }, ok({ costUsd: 0.05 }));

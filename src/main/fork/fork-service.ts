@@ -427,7 +427,7 @@ export class ForkService {
       if (unforked) cost = { ...cost, partial: true, seenTotal: seen };
       if (r?.usage && !unforked) {
         const usage = r.usage;
-        // 用量行记这一轮自己的金额；估出来的不带（null），由用量统计按价格表估。
+        // 用量行记这一轮自己的金额（精确、差值或按 modelUsage 拆的份额）；估出来的不带（null），由用量统计按价格表估。
         const costUsd = cost.cli;
         this.hook("onUsage", () => this.d.onUsage({ runId: o.runId, label: FORK_JOB, at, model: r.model, usage, costUsd, ticketKey: row.ticketKey }));
       }
