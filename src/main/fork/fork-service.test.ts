@@ -72,6 +72,7 @@ function setup(o: { plan?: FullForkPlan; launch?: boolean; lastTurnAgo?: number 
     devLaunchOf: vi.fn((id: string) => (o.launch === false ? null : id === heads.get("root-1")?.id ? launchOf(id) : null)),
     transcriptExists: vi.fn<(id: string) => boolean>(() => true),
     devRunning: vi.fn<(id: string) => boolean>(() => true),
+    hookReady: vi.fn<() => boolean>(() => true),
     lastTurnAt: vi.fn<(id: string) => number | null>(() => (lastTurnAgo === null ? null : t - lastTurnAgo)),
     recall: vi.fn(async (scope: string, max: number) => `RECALL(${scope},${max})`),
     files: { settings: vi.fn<(devSettingsPath: string | null) => string | null>(() => "/m/fork-settings.json"), mcp: vi.fn((_d: DevLaunch, runId: string): string | null => `/m/fork-mcp-${runId}.json`) },
@@ -603,6 +604,21 @@ describe("ForkService 失败", () => {
     expect(s.repo.get(forkId)!.status).toBe("idle");
   });
 
+  it("只读 hook 后来不可用了：接着问、完整重问、新分叉都报 no_claude，不起跑；行不动", async () => {
+    const s = setup();
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    s.deps.hookReady.mockReturnValue(false);
+    const n = s.msgs.length;
+    forkErr(() => s.svc.ask("root-1", forkId, "q2"), "no_claude");
+    forkErr(() => s.svc.reaskFull(forkId), "no_claude");
+    forkErr(() => s.svc.ask("root-1", null, "q3"), "no_claude");
+    expect(s.repo.get(forkId)!.status).toBe("idle");
+    expect(s.repo.listByRoot("root-1")).toHaveLength(1);
+    expect(s.msgs).toHaveLength(n);
+    expect(s.deps.run).toHaveBeenCalledTimes(1);
+  });
+
   it("问题不合法：bad_question；不认识的 id / 分叉：not_found", () => {
     const s = setup();
     forkErr(() => s.svc.ask("root-1", null, "   "), "bad_question");
@@ -660,6 +676,16 @@ describe("ForkService 结论", () => {
     s.queue.push({ ok: false, reason: "exit_nonzero", message: "", limit: null, stderr: "", result: null });
     expect(await s.svc.conclusion(forkId)).toEqual({ ok: false, reason: "no_conclusion" });
     expect(s.repo.get(forkId)!.conclusion).toBeNull();
+  });
+
+  it("要结论时只读 hook 不可用：no_conclusion，不起跑", async () => {
+    const s = setup();
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    s.deps.hookReady.mockReturnValue(false);
+    expect(await s.svc.conclusion(forkId)).toEqual({ ok: false, reason: "no_conclusion" });
+    expect(s.deps.run).toHaveBeenCalledTimes(1);
+    expect(s.repo.get(forkId)!.status).toBe("idle");
   });
 
   it("要结论时 claude 找不到：no_conclusion，写日志", async () => {

@@ -32,6 +32,8 @@ export interface ForkDeps {
   recall: (scope: string, maxChars: number) => Promise<string>;
   /** 写分叉 settings / MCP 配置到 paths.mcp；hook 没装（readonly 不可用）时 settings 返回 null → 不起跑，报 no_claude。 */
   files: { settings(devSettingsPath: string | null): string | null; mcp(dev: DevLaunch, forkRunId: string): string | null };
+  /** 只读 hook 现在可用（装好、是当前版本）。接着问、要结论用的是行里存的 settings，不再经过 files.settings，每一轮都要看它。 */
+  hookReady: () => boolean;
   run: HeadlessRun;
   claude: () => { path: string | null; pathValue: string };
   baseEnv: NodeJS.ProcessEnv;
@@ -192,6 +194,10 @@ export class ForkService {
       this.d.log(`fork ${forkId}: no conclusion, claude was not found`);
       return { ok: false, reason: "no_conclusion" };
     }
+    if (!this.d.hookReady()) {
+      this.d.log(`fork ${forkId}: no conclusion, the readonly hook is not ready`);
+      return { ok: false, reason: "no_conclusion" };
+    }
     const ask = M().fork.conclusionAsk;
     const answer = this.continueTurn(row, ask, path, pathValue, true);
     if (!answer) return { ok: false, reason: "fork_busy" };
@@ -304,7 +310,8 @@ export class ForkService {
       }
     }
     const { path, pathValue } = this.d.claude();
-    if (!path) throw new ForkError("no_claude");
+    // 只读 hook 不可用时不跑：参数里那份 settings 的 readonly hook 会失效。
+    if (!path || !this.d.hookReady()) throw new ForkError("no_claude");
     if (!this.continueTurn(row, q, path, pathValue, false)) throw new ForkError("fork_busy");
     return { forkId };
   }
@@ -325,13 +332,13 @@ export class ForkService {
     return this.track(row.id, { row, sessionId, args, prompt, runId: this.d.newRunId(), claudePath, pathValue, conclude });
   }
 
-  /** 新开一个分叉：建行、写入问题、起跑。claude 找不到、只读 settings 写不出来时报 no_claude，什么都不建。 */
+  /** 新开一个分叉：建行、写入问题、起跑。claude 找不到、只读 hook 不可用、只读 settings 写不出来时报 no_claude，什么都不建。 */
   private open(
     root: string, head: Session, launch: DevLaunch | null, mode: ForkMode, userText: string, prompt: (row: ForkRow) => Promise<string> | string,
     reaskOf: number | null, settled: () => void,
   ): number {
     const { path, pathValue } = this.d.claude();
-    if (!path) throw new ForkError("no_claude");
+    if (!path || !this.d.hookReady()) throw new ForkError("no_claude");
     const settingsPath = this.d.files.settings(launch?.settingsPath ?? null);
     if (!settingsPath) throw new ForkError("no_claude");
     const runId = this.d.newRunId();

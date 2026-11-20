@@ -1859,6 +1859,8 @@ async function bootstrap(): Promise<void> {
       },
       mcp: forkMcpConfig,
     },
+    // 接着问、要结论不再写 settings：每一轮都看一次 hook 还在不在。
+    hookReady: hookInstalled,
     run: runHeadless,
     claude: () => health.claude(),
     // 跟交互 session 一样的 process.env：CLAUDE_EFFORT 之类原样带过去（forkEnv 补上 sessionEnv 的默认值）。
