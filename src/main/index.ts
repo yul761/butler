@@ -125,6 +125,7 @@ import { MetricsRollup } from "./metrics/rollup";
 import { baselineCutoffOf, ensureMetricsSince, metricsSince } from "./metrics/since";
 import { TOUCH_MS as WAIT_TOUCH_MS, WaitTracker, type WaitHead } from "./metrics/wait-tracker";
 import { registerIpc } from "./ipc/register";
+import { readFeaturePolicy } from "./settings/feature-policy";
 import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
@@ -2981,6 +2982,7 @@ async function bootstrap(): Promise<void> {
       void memory.syncTicket(key);
     },
     detectTrackerTools,
+    featurePolicy: () => readFeaturePolicy(db, (id) => lessonsRepo.product(id)?.name ?? null),
     window: () => win,
     now: Date.now,
     notify,

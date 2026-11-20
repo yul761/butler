@@ -31,6 +31,7 @@ import type { MetricsOverview } from "../../shared/metrics";
 import type { InterruptsAction, InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import type { StackActionResult, StackLayerMode, StackPolicyLayer, StackPolicyOverrides, StackPolicySetResult, StackPolicyView, StacksFilter, StacksView } from "../../shared/stacks";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
+import type { FeaturePolicyState, PolicyFamily } from "../../shared/feature-rows";
 import type {
   AutostartState, CiItemRef, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
@@ -235,6 +236,10 @@ export const api = {
   setSetting: (key: EditableSettingKey, value: string) => call<void>(IPC.settingsSet, key, value),
   resetSetting: (key: EditableSettingKey) => call<void>(IPC.settingsReset, key),
   detectTrackerTools: () => call<McpProbe>(IPC.settingsDetectTrackerTools),
+  /** 设置 › 功能：全局策略值和仓库、产品层的覆盖（一次读完）。 */
+  featurePolicy: () => call<FeaturePolicyState>(IPC.settingsFeaturePolicy),
+  /** 改全局那一层的一个功能开关，同层其他覆盖保留。 */
+  policyPatch: (p: { family: PolicyFamily; key: string; value: boolean }) => call<void>(IPC.settingsPolicyPatch, p),
   llmStatus: () => call<LlmStatus>(IPC.llmStatus),
   /** key 只发这一次；之后界面只能拿到打码形式。 */
   saveApiKey: (key: string) => call<LlmStatus>(IPC.llmKeySave, key),
