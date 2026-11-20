@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../shared/turn";
 import { STRINGS } from "./strings";
 import {
+  homeOpenedSignal,
   HOME_CARD_CAP, YOU_KIND_ORDER, barSegments, capCards, cardActions, cardKey, homeLede, homeTitle, isNoWork, locationOf, lookTarget, prUrl,
   runningRows, scopeLine, scopeRoute, scopeWho, topItem, turnTone, visibleScopes, youCards, type NameCtx,
 } from "./home-view";
@@ -266,5 +267,18 @@ describe("cardKey", () => {
 
   it("stays the same for the same card across reloads", () => {
     expect(cardKey(item(answer({ askId: 7 }), { since: 1 }))).toBe(cardKey(item(answer({ askId: 7 }), { since: 2 })));
+  });
+});
+
+describe("homeOpenedSignal (layer 1's turn:home-opened contract)", () => {
+  it("fires when the route switches to home, not again while it stays there", () => {
+    const sig = homeOpenedSignal();
+    expect(sig.observe("home")).toBe(true); // 启动就在首页
+    // 停在首页时又看到一次 home（turn:changed 重取、StrictMode 再跑一次 effect）都不算再打开。
+    expect(sig.observe("home")).toBe(false);
+    expect(sig.observe("ticket")).toBe(false);
+    expect(sig.observe("all")).toBe(false);
+    expect(sig.observe("home")).toBe(true);
+    expect(sig.observe("home")).toBe(false);
   });
 });

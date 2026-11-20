@@ -368,6 +368,7 @@ const ZH = {
       answered: (text: string) => `已回答：${text}，等 session 停下来后送进去`,
       answerGone: "这个问题已经没了",
       sendNot: (reason: string) => `没送出去：${reason}`,
+      prOpenNot: "这个 PR 链接打不开",
       fixNot: (reason: string) => `没开成修复 session：${reason}`,
       sendReason: { not_found: "这个 PR 已经不在了", not_sendable: "现在送不了", no_comments: "没有要送的评论" },
     },

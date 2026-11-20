@@ -1,14 +1,14 @@
 // 首页的一张「轮到你」卡片（UI 重做第 2 层，spec §5.3）：类型标签、一句话（第 1 层的 turnSentence）、位置和多久、一到三个按钮。
 // Butler 要你点一下的那类直接放原来的 Notice，按钮也是它自己的。
 import { useState } from "react";
-import type { TurnItem, TurnSendReason } from "../../../shared/turn";
+import type { TurnItem } from "../../../shared/turn";
 import type { NowTarget } from "../../../shared/types";
 import { api } from "../api";
 import type { Route } from "../App";
-import { ciReasonText } from "../availability-view";
 import { reportError } from "../errors";
-import { cardActions, locationOf, lookTarget, prUrl, turnTone, type CardAction, type NameCtx } from "../home-view";
+import { cardActions, locationOf, lookTarget, turnTone, type CardAction, type NameCtx } from "../home-view";
 import { S } from "../strings";
+import { runCardAction } from "../turn-card-actions";
 import { turnSentence } from "../turn-text";
 import { Notice } from "./Notice";
 
@@ -25,12 +25,6 @@ export interface TurnCardProps {
   onChanged: () => void;
 }
 
-function sendReasonText(reason: TurnSendReason | undefined): string {
-  if (reason === undefined) return "";
-  const own = S.hm.act.sendReason as Record<string, string>;
-  return Object.prototype.hasOwnProperty.call(own, reason) ? own[reason] : ciReasonText(reason, S);
-}
-
 export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: TurnCardProps) {
   const t = item.turn;
   const [busy, setBusy] = useState(false);
@@ -44,37 +38,17 @@ export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: Tur
   const target = lookTarget(item);
   const actions = cardActions(item).filter((a) => a.id !== "look" || target !== null);
 
-  const run = (work: () => Promise<void>) => {
+  const act = (a: CardAction) => {
     setBusy(true);
     setResult(null);
-    work().catch(reportError).finally(() => setBusy(false));
-  };
-  const act = (a: CardAction) => {
-    if (a.id === "answer") {
-      if (t.kind !== "answer" || t.askId === null) return;
-      const id = t.askId;
-      run(async () => {
-        if (await api.answerInbox(id, a.option)) setAnswered(a.option);
-        else {
-          setResult(S.hm.act.answerGone);
-          onChanged();
-        }
-      });
-    } else if (a.id === "openPr") {
-      const url = prUrl(item);
-      if (url) run(async () => void (await api.prOpen(url)));
-    } else if (a.id === "look") {
-      if (target) onOpen(target);
-    } else if (a.id === "fix") {
-      if (t.kind === "stuck" && item.featureId !== null && item.ticketKey !== null && t.sessionId !== null) onFix(item.featureId, t.sessionId);
-    } else if (item.ticketKey !== null && item.pr !== null) {
-      const req = { ticketKey: item.ticketKey, pr: { repo: item.pr.repo, number: item.pr.number } };
-      run(async () => {
-        const r = await api.turnSendToAgent(req);
-        if (r.ok) onChanged();
-        else setResult(S.hm.act.sendNot(sendReasonText(r.reason)));
-      });
-    }
+    runCardAction(a, item, { ...api, onOpen, onFix, onChanged }, S)
+      .then((r) => {
+        if (r === null) return;
+        if ("answered" in r) setAnswered(r.answered);
+        else setResult(r.message);
+      })
+      .catch(reportError)
+      .finally(() => setBusy(false));
   };
 
   return (

@@ -201,3 +201,19 @@ export function runningRows(items: TurnItem[], S: UiStrings, now: number): Runni
   }
   return rows.sort((a, b) => a.since - b.since).map((r) => r.row);
 }
+
+/**
+ * 第 1 层的 turn:home-opened：路由从别的页切到首页（含启动就在首页）时发一次，停在首页时不再发。
+ * App 在 route.page 变化的 effect 里问它；turn:changed 引起的重取不改路由，所以不会走到这里。
+ * 记的是上一次看到的页面，所以 StrictMode 下 effect 多跑一遍也不会发两次。
+ */
+export function homeOpenedSignal(): { observe: (page: string) => boolean } {
+  let last: string | null = null;
+  return {
+    observe(page) {
+      const opened = page === "home" && last !== "home";
+      last = page;
+      return opened;
+    },
+  };
+}

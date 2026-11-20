@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 import type { EpicView, FeatureView, NowTarget, NowView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
-import { isNoWork, type NameCtx } from "./home-view";
+import { homeOpenedSignal, isNoWork, type NameCtx } from "./home-view";
 import { routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
@@ -53,6 +53,11 @@ export type Route =
 
 export function App() {
   const [route, setRoute] = useState<Route>({ page: "home" });
+  // 切到首页时告诉第 1 层一次（它按需补查「请你 review」）；规则和测试在 homeOpenedSignal。失败第 1 层自己记日志，这里不提示。
+  const homeOpened = useRef(homeOpenedSignal());
+  useEffect(() => {
+    if (homeOpened.current.observe(route.page)) api.turnHomeOpened().catch(() => undefined);
+  }, [route.page]);
   /** 单独的 ticket；feature 下的 ticket 在 features[].tickets 里。 */
   const [tickets, setTickets] = useState<TicketView[]>([]);
   const [features, setFeatures] = useState<FeatureView[]>([]);
