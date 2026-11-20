@@ -373,3 +373,11 @@ describe("intake settings (workstream N)", () => {
     expect(normalizeSetting("notifyEvents", "intake_decision")).toBe("intake_decision");
   });
 });
+
+describe("reviewRequestScope setting (UI redesign layer 1)", () => {
+  it("accepts all or registered, trimmed", () => {
+    expect(normalizeSetting("reviewRequestScope", "all")).toBe("all");
+    expect(normalizeSetting("reviewRequestScope", " registered ")).toBe("registered");
+    for (const bad of ["ALL", "", "mine"]) expect(() => normalizeSetting("reviewRequestScope", bad), bad).toThrow(SettingError);
+  });
+});

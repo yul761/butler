@@ -192,6 +192,7 @@ const ZH = {
   memoryPressureFreePercent: "内存紧张的线是 1 到 50 之间的整数（可用内存的百分比）",
   claudePathAbsolute: "claude 路径必须是绝对路径，例如 /usr/local/bin/claude；留空则自动查找",
   language: "语言只能是 auto、zh 或 en",
+  reviewRequestScope: "请你 review 的范围只能是 all 或 registered",
   settingNotEditable: (key: string) => `这个设置不能在这里修改：${key}`,
   // API key、个人 API、审计
   apiKeyFormat: "API key 格式不对",
@@ -831,6 +832,7 @@ const EN: MainStrings = {
   memoryPressureFreePercent: "The memory pressure line must be a whole number from 1 to 50 (percent of memory free)",
   claudePathAbsolute: "The claude path must be absolute, for example /usr/local/bin/claude; leave it empty to find it automatically",
   language: "The language can only be auto, zh or en",
+  reviewRequestScope: "The review request scope can only be all or registered",
   settingNotEditable: (key: string) => `This setting can't be changed here: ${key}`,
   apiKeyFormat: "Invalid API key",
   apiKeyFormatLong: "Invalid API key: 8–512 printable ASCII characters, with no spaces, line breaks or other characters",
