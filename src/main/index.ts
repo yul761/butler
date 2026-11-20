@@ -1983,6 +1983,7 @@ async function bootstrap(): Promise<void> {
     stackNote: (row): string | null => stackService.stackNote(row.url, row.headBranch),
     recordEvent,
     changed: () => notify(),
+    headOf: (id) => sessions.head(id)?.id ?? null,
     now: Date.now,
     log: logger,
   });

@@ -120,4 +120,13 @@ describe("InboxRepo (BTL-190 2+3)", () => {
       { at: 4, text: "no session row", repoId: null, branch: null },
     ]);
   });
+
+  it("lastReport is the latest report of a ticket (UI redesign layer 1)", () => {
+    const repo = new InboxRepo(memDb());
+    repo.addReport({ ...owner("s1", { ticketKey: "X-1" }), text: "p", kind: "progress", status: "dismissed", createdAt: 1 });
+    repo.addReport({ ...owner("s1", { ticketKey: "X-1" }), text: "b", kind: "blocked", status: "pending", createdAt: 2 });
+    repo.addReport({ ...owner("s2", { ticketKey: "X-2" }), text: "d", kind: "done", status: "pending", createdAt: 3 });
+    expect(repo.lastReport("X-1")).toEqual({ kind: "blocked", text: "b", at: 2, sessionId: "s1" });
+    expect(repo.lastReport("X-9")).toBeNull();
+  });
 });

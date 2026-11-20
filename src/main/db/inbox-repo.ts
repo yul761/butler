@@ -118,6 +118,16 @@ export class InboxRepo {
     return rows.map((r) => ({ at: Number(r.at), text: r.text, repoId: r.repo_id === null ? null : Number(r.repo_id), branch: r.branch }));
   }
 
+  /** 这个 ticket 最近的一条 report；没有为 null（UI 重做第 1 层：停在 blocked 汇报上算「卡住了」）。 */
+  lastReport(ticketKey: string): { kind: ReportKind; text: string; at: number; sessionId: string } | null {
+    const r = this.db
+      .prepare(`SELECT * FROM inbox_items WHERE kind = 'report' AND ticket_key = ? ORDER BY created_at DESC, id DESC LIMIT 1`)
+      .get(ticketKey) as unknown as Row | undefined;
+    if (!r) return null;
+    const i = toItem(r);
+    return i.reportKind === null ? null : { kind: i.reportKind, text: i.text, at: i.createdAt, sessionId: i.sessionId };
+  }
+
   /** 还要送给总控的汇报，从早到晚。 */
   pendingReports(): InboxItem[] {
     return (this.db.prepare(`SELECT * FROM inbox_items WHERE kind = 'report' AND status = 'pending' ORDER BY created_at, id`).all() as unknown as Row[]).map(toItem);

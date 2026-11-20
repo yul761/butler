@@ -59,7 +59,7 @@ function setup(over: Partial<LoopPolicy> = {}, o: { verdicts?: (ids: string[]) =
     guard: { check: () => (guard.ok ? { ok: true, termId: "t1", headId: "h1" } : { ok: false, block: "working" }) as ReturnType<CommentLoopDeps["guard"]["check"]>, recheckAfter: () => () => true },
     deliver, busy: new Set(),
     recordEvent: (kind, refs) => (calls.events.push({ kind, dedupeKey: refs?.dedupeKey, data: refs?.data }), true),
-    changed: () => undefined, now: () => t, log: () => undefined,
+    changed: () => undefined, now: () => t, log: () => undefined, headOf: (id) => (id === "old-h1" ? "h1" : id),
   };
   const loop = new CommentLoop(d);
   const status = (o2: Partial<PrStatus> = {}): PrStatus => ({
@@ -217,6 +217,33 @@ describe("CommentLoop", () => {
     await s.loop.flush();
     expect(s.deliver).toHaveBeenCalledTimes(1);
     expect(s.items.get(it.id)!.state).toBe("delivered");
+  });
+
+  it("sendAll queues every comment waiting for you and delivers them; sendable says whether there is any (UI redesign layer 1)", async () => {
+    const s = setup();
+    s.setThreads([
+      thread({ id: "T1", dbId: 101, author: "alice", type: "User", body: "Split this." }),
+      thread({ id: "T2", dbId: 102, author: "bob", type: "User", body: "Rename that.", path: "src/b.ts" }),
+    ]);
+    await s.observe();
+    expect(s.items.byPr(s.row.id).map((i) => i.state)).toEqual(["review", "review"]);
+    expect(s.loop.sendable(s.row.id)).toBe(true);
+    expect(await s.loop.sendAll(s.row.id)).toBe(2);
+    expect(s.deliver).toHaveBeenCalledTimes(1);
+    expect(s.items.byPr(s.row.id).map((i) => i.state)).toEqual(["delivered", "delivered"]);
+    expect(s.loop.sendable(s.row.id)).toBe(false);
+    expect(await s.loop.sendAll(s.row.id)).toBe(0);
+  });
+
+  it("deliveredAt is the latest delivery to that session's chain (UI redesign layer 1)", async () => {
+    const s = setup();
+    await s.observe();
+    expect(s.items.byPr(s.row.id)[0]).toMatchObject({ state: "delivered", deliveredSession: "h1", deliveredAt: 1000 });
+    expect(s.loop.deliveredAt(s.row.id, "h1")).toBe(1000);
+    expect(s.loop.deliveredAt(s.row.id, "h2")).toBeNull();
+    // 记下的 session 换新了：按 head 比
+    s.items.update(s.items.byPr(s.row.id)[0].id, { deliveredSession: "old-h1" }, 1000);
+    expect(s.loop.deliveredAt(s.row.id, "h1")).toBe(1000);
   });
 
   it("never asks the model for what the rules settle, and files model failures as needing you", async () => {
