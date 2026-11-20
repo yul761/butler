@@ -785,7 +785,7 @@ describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
   const runW = 10 + 0.1 * 1000 + 2 * 20 + 5 * 30;
   const cumulative = (times: number) => ({ "claude-opus-5-5": { inputTokens: 10 * times, outputTokens: 30 * times, cacheReadInputTokens: 1000 * times, cacheCreationEphemeral1hInputTokens: 20 * times } });
 
-  it("完整分叉第一轮带 modelUsage（累计 5.00，这一轮占 1/250）：按份额拆，不算不全但只是约数（各模型读缓存的价格比不一样），用量行同一个数", async () => {
+  it("完整分叉第一轮带 modelUsage（累计 5.00，这一轮占 1/250）：按份额拆，不算不全但只是约数（各模型读缓存的价格比不一样）；用量行没有约数标记，不带金额", async () => {
     const s = setup();
     s.queue.push(ok({ costUsd: 5, usageRaw, modelUsage: cumulative(250) }), ok({ costUsd: 5.02, usageRaw, modelUsage: cumulative(251) }));
     const { forkId } = s.svc.ask("root-1", null, "q1");
@@ -794,7 +794,8 @@ describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
     expect(runW).toBe(300);
     expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(5 / 250, 12);
     expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costApprox: true, costSeenTotal: 5 });
-    expect(s.deps.onUsage.mock.calls[0][0].costUsd).toBeCloseTo(5 / 250, 12);
+    // 份额是约数：用量行记 null，由用量统计按价格表估，不把约数当准数显示。
+    expect(s.deps.onUsage.mock.calls[0][0].costUsd).toBeNull();
     s.svc.ask("root-1", forkId, "q2");
     await s.svc.idle();
     expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.04, 10);
