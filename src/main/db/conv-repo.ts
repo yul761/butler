@@ -184,11 +184,14 @@ export class ConvRepo {
     return this.db.prepare(`UPDATE conv_turns SET qa = ?, qa_by = ? WHERE id = ? AND (qa <> ? OR qa_by IS NOT ?)`).run(qa, by, id, qa, by).changes > 0;
   }
 
-  /** kind='user'、qa='pending'、已结束的轮，最早结束的在前。 */
-  pendingEnded(limit: number): ConvTurn[] {
-    const rows = this.db
-      .prepare(`SELECT * FROM conv_turns WHERE qa = 'pending' AND kind = 'user' AND ended_at IS NOT NULL ORDER BY ended_at, id LIMIT ?`)
-      .all(limit) as unknown as TurnRow[];
+  /** kind='user'、qa='pending'、已结束的轮，最早结束的在前；给了 after 就从它后面接着取（按 ended_at、id）。 */
+  pendingEnded(limit: number, after?: { endedAt: number; id: number }): ConvTurn[] {
+    const base = `SELECT * FROM conv_turns WHERE qa = 'pending' AND kind = 'user' AND ended_at IS NOT NULL`;
+    const rows = (
+      after
+        ? this.db.prepare(`${base} AND (ended_at > ? OR (ended_at = ? AND id > ?)) ORDER BY ended_at, id LIMIT ?`).all(after.endedAt, after.endedAt, after.id, limit)
+        : this.db.prepare(`${base} ORDER BY ended_at, id LIMIT ?`).all(limit)
+    ) as unknown as TurnRow[];
     return rows.map(toTurn);
   }
 

@@ -114,6 +114,15 @@ describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
     expect((e as { text: string }).text).toContain(M().inboxAnswer("q", "a"));
   });
 
+  it("a single relayed answer (no intro line) is a relay too (final review 3)", () => {
+    setLang(lang);
+    expect(openOf(M().inboxAnswer("要不要改成每天跑？", "要"))).toBe("relay");
+    expect(openOf(M().inboxAnswer("Run it daily?", "yes"))).toBe("relay");
+    // 只是开头像，没有「用户的回答」那一段：照常是用户说的话。
+    const pre = M().inboxAnswer("\u0000", "").split("\u0000")[0];
+    expect(openOf(`${pre}x 之后呢`)).toBe("user");
+  });
+
   it("plain speech is user", () => {
     expect(openOf("这个怎么做？")).toBe("user");
   });

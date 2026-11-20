@@ -86,6 +86,9 @@ describe("ConvRepo turns", () => {
     expect(repo.endStale(101)).toBe(1);
     expect(repo.turn(d)?.endedAt).toBe(100);
     expect(repo.pendingEnded(1).map((t) => t.id)).toEqual([b]);
+    // 接着上一批往后取（final review 1：判不了的轮不挡住后面的）。
+    const first = repo.turn(b)!;
+    expect(repo.pendingEnded(10, { endedAt: first.endedAt!, id: first.id }).map((t) => t.id)).toEqual([a, d]);
   });
 });
 

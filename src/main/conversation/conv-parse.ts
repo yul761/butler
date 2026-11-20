@@ -66,6 +66,12 @@ const BUTLER_NOTICE = /^Butler(：|: )/;
 const heads = (pick: (s: (typeof MAIN_STRINGS)["zh"]) => string, n: number): string[] => Object.values(MAIN_STRINGS).map((s) => pick(s).slice(0, n));
 const HANDOFF_HEADS = [...heads((s) => s.refreshEpicHandoff, 24), ...heads((s) => s.idleCloseEpicHandoff, 24)];
 const RELAY_HEADS = heads((s) => s.inboxAnswersIntro, Number.MAX_SAFE_INTEGER);
+/** 只转一条回答时没有 intro，整条就是 inboxAnswer(问题, 回答)：认开头和中间「用户的回答」那一段。 */
+const RELAY_SINGLE = Object.values(MAIN_STRINGS).map((s) => {
+  const [pre, rest = ""] = s.inboxAnswer("\u0000", "\u0001").split("\u0000");
+  return { pre, mid: rest.split("\u0001")[0] };
+});
+const isSingleRelay = (t: string): boolean => RELAY_SINGLE.some(({ pre, mid }) => t.startsWith(pre) && t.indexOf(mid, pre.length) > 0);
 const SILENT_HEADS = [...heads((s) => s.refreshResume("ticket", "X-1", null), 16), ...heads((s) => s.inboxReportsIntro, 16)];
 
 /** 去掉提醒和 IDE 上下文块，再 trim。 */
@@ -86,7 +92,7 @@ function rawUserText(content: unknown): string {
 export function userOpenOf(content: unknown, cleaned: string): UserOpen | "noise" {
   if (!cleaned || NOISE_HEAD.test(cleaned)) return "noise";
   if (isHandoffInvocation(content) || HANDOFF_HEADS.some((h) => cleaned.startsWith(h))) return "handoff";
-  if (RELAY_HEADS.some((h) => cleaned.startsWith(h))) return "relay";
+  if (RELAY_HEADS.some((h) => cleaned.startsWith(h)) || isSingleRelay(cleaned)) return "relay";
   if (COMMAND_NAME.test(cleaned) || BUTLER_NOTICE.test(cleaned) || SILENT_HEADS.some((h) => cleaned.startsWith(h))) return "silent";
   return "user";
 }

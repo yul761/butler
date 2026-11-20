@@ -24,6 +24,8 @@ export const CONV_TICK_MS = 10_000;
 export const CONV_JUDGE_MAX_AGE_MS = 24 * 3600_000;
 /** 一直没 stop 的轮，静止这么久算结束。 */
 export const CONV_STALE_TURN_MS = 30 * 60_000;
+/** 花费熔断暂停了某个 ticket 的判断：这么久之内不再为它问模型（别的 ticket 照常判）。 */
+export const CONV_PAUSE_RETRY_MS = CONV_SWEEP_MS;
 const JUDGE_BATCH = 20;
 
 /** 和 SessionsRepo.listConvTargets 的条件一致（不看活动时间）。 */
@@ -58,6 +60,8 @@ export class ConvIngester {
   private intervals: ReturnType<typeof setInterval>[] = [];
   private stopped = false;
   private judging = false;
+  /** ticketKey（没有 ticket 是 ""）→ 到这个时间之前不再问模型。 */
+  private readonly pausedUntil = new Map<string, number>();
   private sweeping: Promise<void> | null = null;
 
   constructor(private readonly d: ConvIngesterDeps) {}
@@ -137,6 +141,9 @@ export class ConvIngester {
       }
       if (this.stopped) return;
       this.d.repo.endStale(this.d.now() - CONV_STALE_TURN_MS);
+      // 没开着的 session 不会再交错写入，uuid → 轮的映射不用留在内存里（14 天的补读会碰到上百段）。
+      const open = new Set(this.d.openHeads());
+      for (const id of [...this.parents.keys()]) if (!open.has(id)) this.parents.delete(id);
     } catch (e) {
       this.d.log?.(`conv sweep: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -150,17 +157,34 @@ export class ConvIngester {
     for (const id of chain.length > 0 ? chain.reverse() : [sessionId]) await this.ingest(id);
   }
 
-  /** 判断队列：串行，一次一个；正在跑就直接返回。花费熔断暂停时这一轮留着，下次再试。 */
+  /**
+   * 判断队列：串行，一次一个；正在跑就直接返回。
+   * 规则能定的、太旧的当场写；要问模型的按 ticket 走：某个 ticket 被花费熔断暂停了，它的轮留着
+   * （CONV_PAUSE_RETRY_MS 之后再试），后面别的 ticket 的轮照常判。
+   */
   async runJudges(): Promise<void> {
     if (this.stopped || this.judging) return;
     this.judging = true;
     try {
+      let after: { endedAt: number; id: number } | undefined;
       for (;;) {
-        const batch = this.d.repo.pendingEnded(JUDGE_BATCH);
+        const batch = this.d.repo.pendingEnded(JUDGE_BATCH, after);
         if (batch.length === 0) return;
         for (const t of batch) {
           if (this.stopped) return;
-          if ((await this.judgeOne(t)) === "paused") return;
+          after = { endedAt: t.endedAt ?? 0, id: t.id };
+          if (this.ruleVerdict(t)) continue;
+          const s = this.d.sessions.get(t.sessionId);
+          if (!s) {
+            this.verdict(t.id, "no", "judge_failed");
+            continue;
+          }
+          const key = s.ticketKey ?? "";
+          if ((this.pausedUntil.get(key) ?? 0) > this.d.now()) continue;
+          if ((await this.judgeOne(t, s)) === "paused") {
+            if (this.stopped) return;
+            this.pausedUntil.set(key, this.d.now() + CONV_PAUSE_RETRY_MS);
+          }
         }
       }
     } catch (e) {
@@ -170,19 +194,48 @@ export class ConvIngester {
     }
   }
 
-  private async judgeOne(t: ConvTurn): Promise<"done" | "paused"> {
+  /** 只做不用问模型的那部分（同步）：每次读完就跑，模型判断正在跑也不耽误规则结论（换新前的恢复提示要用）。 */
+  private applyRules(): void {
+    try {
+      let after: { endedAt: number; id: number } | undefined;
+      for (;;) {
+        const batch = this.d.repo.pendingEnded(JUDGE_BATCH, after);
+        if (batch.length === 0) return;
+        for (const t of batch) {
+          after = { endedAt: t.endedAt ?? 0, id: t.id };
+          this.ruleVerdict(t);
+        }
+      }
+    } catch (e) {
+      this.d.log?.(`conv rules: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** 太旧的记 no / old，规则能定的写规则结论；写了返回 true，要问模型返回 false。 */
+  private ruleVerdict(t: ConvTurn): boolean {
+    if ((t.endedAt ?? 0) < this.d.now() - CONV_JUDGE_MAX_AGE_MS) {
+      this.verdict(t.id, "no", "old");
+      return true;
+    }
+    const rule = ruleQa({ asked: t.asked, mutated: t.mutated, otherTools: t.otherTools, answerChars: [...this.qaText(t.id).answer].length });
+    if (rule === "judge") return false;
+    this.verdict(t.id, rule, "rule");
+    return true;
+  }
+
+  private qaText(turnId: number): { question: string; answer: string } {
+    const msgs = this.d.repo.turnMessages(turnId);
+    return {
+      question: msgs.filter((m) => m.role === "user").map((m) => m.text).join("\n\n"),
+      answer: msgs.filter((m) => m.role === "assistant").map((m) => m.text).join("\n\n"),
+    };
+  }
+
+  private async judgeOne(t: ConvTurn, s: Session): Promise<"done" | "paused"> {
     const { repo } = this.d;
-    if ((t.endedAt ?? 0) < this.d.now() - CONV_JUDGE_MAX_AGE_MS) return this.verdict(t.id, "no", "old");
-    const msgs = repo.turnMessages(t.id);
-    const question = msgs.filter((m) => m.role === "user").map((m) => m.text).join("\n\n");
-    const answer = msgs.filter((m) => m.role === "assistant").map((m) => m.text).join("\n\n");
-    const rule = ruleQa({ asked: t.asked, mutated: t.mutated, otherTools: t.otherTools, answerChars: [...answer].length });
-    if (rule !== "judge") return this.verdict(t.id, rule, "rule");
-    const s = this.d.sessions.get(t.sessionId);
-    if (!s) return this.verdict(t.id, "no", "judge_failed");
     let v: ConvQaVerdict;
     try {
-      v = await this.d.judge({ question, answer }, { cwd: s.cwd, ticketKey: s.ticketKey });
+      v = await this.d.judge(this.qaText(t.id), { cwd: s.cwd, ticketKey: s.ticketKey });
     } catch (e) {
       this.d.log?.(`conv judge ${t.id}: ${e instanceof Error ? e.message : String(e)}`);
       v = null;
@@ -232,6 +285,7 @@ export class ConvIngester {
       this.parents.delete(id);
       this.d.log?.(`conv ingest ${id}: ${e instanceof Error ? e.message : String(e)}`);
     }
+    if (!this.stopped) this.applyRules();
     for (const root of touched) this.appended(root);
     void this.runJudges();
   }
@@ -254,6 +308,11 @@ export class ConvIngester {
       if (this.stopped) return;
       const chunk = await readChunk(file, from, { chunkBytes: this.d.chunkBytes, maxLineBytes: this.d.maxLineBytes });
       if (!chunk || this.stopped) return;
+      if (chunk.reset) {
+        // 文件换了或变短了，从头重读：游标里记的「打开的轮」不能拿来结束（第一行 user 会把它按文件开头的时间结束掉）。
+        openTurnId = null;
+        this.parents.delete(id);
+      }
       if (chunk.skipped > 0) this.d.log?.(`conv ingest ${id}: skipped ${chunk.skipped} line(s) over the size limit at byte ${chunk.start}`);
       if (chunk.lines.length === 0 && chunk.skipped === 0) return;
       let changed = false;

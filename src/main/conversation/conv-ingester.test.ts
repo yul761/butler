@@ -7,7 +7,7 @@ import { M } from "../strings";
 import { memDb, tempDir } from "../test-utils";
 import { CONV_TEXT_MAX } from "./conv-parse";
 import {
-  CONV_BACKFILL_MS, CONV_JUDGE_MAX_AGE_MS, CONV_STALE_TURN_MS, CONV_SWEEP_MS, CONV_TICK_MS, ConvIngester, type ConvIngesterDeps,
+  CONV_BACKFILL_MS, CONV_JUDGE_MAX_AGE_MS, CONV_PAUSE_RETRY_MS, CONV_STALE_TURN_MS, CONV_SWEEP_MS, CONV_TICK_MS, ConvIngester, type ConvIngesterDeps,
 } from "./conv-ingester";
 import type { ConvQaVerdict } from "./conv-qa";
 
@@ -115,6 +115,21 @@ describe("ConvIngester.ingest", () => {
     await ing.ingest("s1");
     await ing.ingest("s1");
     expect(e.said("s1")).toEqual([["user", "这是什么？"]]);
+  });
+
+  it("a replaced file does not end the turn that is still open (final review 2)", async () => {
+    const e = env();
+    const base = jsonl(user("u1", null, "第一问？", 1), reply("a1", "u1", "第一答", 2), user("u2", "a1", "第二问？", 3));
+    const f = e.file("s1", base);
+    const ing = e.make();
+    await ing.ingest("s1");
+    const other = join(tempDir("butler-conv-"), "n.jsonl");
+    writeFileSync(other, base + jsonl(tool("t1", "u2", "Read", { file_path: "/x" }, 4)));
+    renameSync(other, f);
+    await ing.ingest("s1");
+    const open = e.repo.turn(e.repo.page("s1", { limit: 10 }).messages.at(-1)!.turnId);
+    expect(open?.endedAt).toBeNull();
+    expect(e.turns().at(-1)).toMatchObject({ qa: "pending" });
   });
 
   it("handles a replaced file and a shortened file without duplicates or deletions", async () => {
@@ -376,8 +391,38 @@ describe("ConvIngester scheduling", () => {
       await ing.runJudges();
       expect(e.turns()[0]).toMatchObject({ qa: "pending" });
       const calls = e.judge.mock.calls.length;
+      // 暂停期间不是每次 ingest 都去碰一次熔断（final review 1）。
+      await ing.runJudges();
+      expect(e.judge.mock.calls.length).toBe(calls);
+      e.clock.now += CONV_PAUSE_RETRY_MS;
       await ing.runJudges();
       expect(e.judge.mock.calls.length).toBe(calls + 1);
+    });
+
+    it("one paused ticket does not hold back other sessions' turns (final review 1)", async () => {
+      const e = env();
+      e.db.prepare(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES ('PROJ-1', '/r', 'branch', 'b', 1)`).run();
+      e.sessions.insertIfAbsent({ id: "p1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+      const judge = vi.fn(async (_t: unknown, s: { ticketKey: string | null }): Promise<ConvQaVerdict> => (s.ticketKey === "PROJ-1" ? "paused" : true));
+      e.file("p1", turn("讲讲换新的流程", "先写 handoff，再开新会话"));
+      e.file("s1", jsonl(user("u1", null, "讲讲合并的流程", 5), reply("a1", "u1", "等 CI 过了再合", 6), user("u2", "a1", "这是什么？", 7), reply("a2", "u2", "是个函数", 8)));
+      const ing = e.make({ judge });
+      await ing.ingest("p1");
+      await ing.ingest("s1");
+      await ing.runJudges();
+      await vi.waitFor(() => expect(e.turns().map((t) => [t.qa, t.qaBy])).toEqual([["pending", null], ["yes", "judge"], ["yes", "rule"]]));
+    });
+
+    it("rule verdicts land right after the read even while a model judge is in flight (final review 8)", async () => {
+      const e = env();
+      e.judge.mockImplementation(() => new Promise<ConvQaVerdict>(() => undefined));
+      const f = e.file("s1", turn("讲讲换新的流程", "先写 handoff，再开新会话"));
+      const ing = e.make();
+      await ing.ingest("s1");
+      await vi.waitFor(() => expect(e.judge).toHaveBeenCalledTimes(1));
+      appendFileSync(f, jsonl(user("u2", "a1", "这是什么？", 5), reply("a2", "u2", "是个函数", 6)));
+      await ing.syncNow("s1");
+      expect(e.turns().map((t) => [t.qa, t.qaBy])).toEqual([["pending", null], ["yes", "rule"]]);
     });
 
     it("runs one judge at a time", async () => {
@@ -435,6 +480,18 @@ describe("ConvIngester scheduling", () => {
       release(true);
       await vi.waitFor(() => expect(e.turns()[0]).toMatchObject({ qa: "no", qaBy: "rule" }));
     });
+  });
+
+  it("drops the in-memory parent maps of sessions that are not open after a sweep (final review 6)", async () => {
+    const e = env();
+    e.sessions.insertIfAbsent({ id: "h1", ticketKey: null, cwd: "/w", origin: "butler", createdAt: e.clock.now, lastActivityAt: e.clock.now });
+    e.sessions.insertIfAbsent({ id: "h2", ticketKey: null, cwd: "/w", origin: "butler", createdAt: e.clock.now, lastActivityAt: e.clock.now });
+    e.file("h1", jsonl(user("u1", null, "第一问？", 1), reply("a1", "u1", "第一答", 2)));
+    e.file("h2", jsonl(user("v1", null, "第二问？", 1), reply("b1", "v1", "第二答", 2)));
+    const ing = e.make({ openHeads: () => ["h2"] });
+    await ing.sweep();
+    const parents = (ing as unknown as { parents: Map<string, unknown> }).parents;
+    expect([...parents.keys()]).toEqual(["h2"]);
   });
 
   it("syncNow reads the whole chain up to now without a watch", async () => {
