@@ -1729,7 +1729,7 @@ export const EN: UiStrings = {
   perf: {
     section: "Memory and performance",
     memoryMonitor: "Record how much memory each session uses",
-    memoryMonitorHelp: "Once a minute Butler reads the process table and adds up each session's whole process tree (claude, MCP, shells, watchers, dev servers) and Butler's own processes. The numbers show on the Now page, and 14 days of history are kept. Read-only: no process is touched.",
+    memoryMonitorHelp: "Once a minute Butler reads the process table and adds up each session's whole process tree (claude, MCP, shells, watchers, dev servers) and Butler's own processes. The numbers show under How it is running on the Your turn home page, and 14 days of history are kept. Read-only: no process is touched.",
     backgroundPriority: "Lower the priority of sessions you can't see that are stopped",
     backgroundPriorityHelp: {
       darwin: "A session you can't see that has stopped gets its whole process tree set to background (taskpolicy -b). It goes back to normal when you switch to it or it starts working. Working sessions are left alone, because background priority makes builds and tests very slow. Pinned sessions are left alone.",

@@ -1741,7 +1741,7 @@ const ZH = {
   perf: {
     section: "内存与性能",
     memoryMonitor: "记录每个 session 用了多少内存",
-    memoryMonitorHelp: "每分钟读一次进程表，把每个 session 的整棵进程树（claude、MCP、shell、watcher、dev server）和 Butler 自己的内存加起来，显示在「现在」页，并保留 14 天的历史。只读，不动任何进程。",
+    memoryMonitorHelp: "每分钟读一次进程表，把每个 session 的整棵进程树（claude、MCP、shell、watcher、dev server）和 Butler 自己的内存加起来，显示在首页「运行情况」里，并保留 14 天的历史。只读，不动任何进程。",
     backgroundPriority: "降低看不见又停着的 session 的优先级",
     backgroundPriorityHelp: {
       darwin: "你看不见、又停着的 session，它的整棵进程树会被设成后台（taskpolicy -b），切回来或者它开始干活就恢复。正在干活的 session 不降：后台优先级会把编译和测试拖得很慢。钉住的 session 不降。",

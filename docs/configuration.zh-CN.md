@@ -131,25 +131,25 @@ macOS 上的可用内存按 Activity Monitor 的算法从 `vm_stat` 算：总量
 
 | 设置 | 键 | 默认 | 可填的值和说明 |
 |------|----|------|----------------|
-| 记录每个 session 用了多少内存 | `memoryMonitor` | `1`（开） | `1` 或 `0`。Butler 每分钟读一次进程表（macOS 用 `ps`，Windows 用 `Get-CimInstance Win32_Process`，不调用任何模型），把每个开着的 session 的整棵进程树（claude、它的 MCP server、shell、watcher、dev server）和 Butler 自己的进程加起来，再读系统还有多少可用内存。**现在**页每一行上显示最近一次的读数（悬停看明细），最上面有一行**内存**：Butler、session、系统可用、Butler 的 MCP，展开后有最近 24 小时的曲线。每 5 分钟往 Butler 的数据库存一个点，保留 14 天。只读，不动任何进程。 |
+| 记录每个 session 用了多少内存 | `memoryMonitor` | `1`（开） | `1` 或 `0`。Butler 每分钟读一次进程表（macOS 用 `ps`，Windows 用 `Get-CimInstance Win32_Process`，不调用任何模型），把每个开着的 session 的整棵进程树（claude、它的 MCP server、shell、watcher、dev server）和 Butler 自己的进程加起来，再读系统还有多少可用内存。**轮到你**页的「运行情况」里有一张**内存**卡片：Butler、session、系统可用、Butler 的 MCP，展开后有最近 24 小时的曲线。每 5 分钟往 Butler 的数据库存一个点，保留 14 天。只读，不动任何进程。 |
 | 降低看不见又停着的 session 的优先级 | `backgroundPriority` | `0`（关） | `1` 或 `0`。macOS 上，不在屏幕上、又停着的 session，整棵进程树被设成后台（`taskpolicy -b`）。Windows 上，看不见的 session 设成 `BelowNormal`，又停着的再打开 EcoQoS。终端出现在屏幕上、你在里面打字、或者 session 又开始干活，马上恢复；退出 Butler 时全部恢复。macOS 上正在干活的 session 不降：后台优先级会把编译和测试拖得很慢。 |
 | 清理 session 留下的孤儿进程 | `orphanCleanup` | `1`（开） | `1` 或 `0`。Butler 记着它在每个 session 下面见过哪些进程（`~/.butler/procs/owned.json`，带启动时间和命令行）。session 的终端结束 5 秒后，其中还活着、又不在任何开着的 session 下面的，会被结束：先正常结束，5 秒后还在就强制结束（Windows 上先 `taskkill`，再 `taskkill /F`；每个进程单独核对、单独结束，不用 `/T`）。启动时也会清掉 Butler 上次异常退出留下的。启动时间或命令行对不上的（比如 pid 被别的程序重用了）绝不碰。每结束一个都写进日志。 |
 | claude 进程超过多少 MB 就换新（0 = 关） | `refreshMemoryMb` | `0` | 默认关，session 只按 `refreshThresholdTokens` 换新，和 2.1.0 一样；想打开的话 `2048` 是个合适的值。`0` 关掉，否则是不小于 256 的整数 MB（最多 6 位）。只算 claude 进程自己，不算它的 MCP server 和别的子进程。超过以后，Butler 在这个 session 下一次停下来的时候换新，检查和步骤和 `refreshThresholdTokens` 一样（所以要开着记忆）。换新以后 claude 还在阈值的 80% 以上，Butler 写进日志；6 小时以后再试。 |
-| 停着的 session 休眠 | `hibernateEnabled` | `0`（关） | `1` 或 `0`。Butler 开的 session 停够了下面的分钟数，Butler 就结束它的整棵进程树（claude、MCP server、shell，`hibernateEndWatchers` 开着时还有 watcher），只留下对话记录，按钮上显示「休眠」。有东西要送进去时它用 `claude --resume` 醒来，原来的对话都在：CI 的结论、合并通知、给总控的汇报、你对 `ask_user` 的回答。点开它、切到它的终端也会唤醒。下面这些情况不休眠：正在干活或者有后台命令、屏幕上有权限确认或对话框、输入框里有草稿、30 秒内在终端里打过字、正在换新或者正在给它递东西、是你正在看的终端、是总控而它管的子 session 在干活、2 分钟内刚打开或者 10 分钟内刚唤醒、没有对话记录、被钉住（按钮上的 📌）。修复 session 和复盘分析 session 不休眠。休眠的 session 照样算进每个 ticket、每个 feature 的 session 上限，照样显示在「现在」页，照样算在等你。唤醒失败的，按钮上有个 **!**（原因在悬停提示里），并且一直留在「现在」页，直到你点开或者隐藏它。会过去的失败（ticket 正忙、找不到 claude、仓库在别的分支上）保留休眠，10 分钟后再自动唤醒；别的失败（claude 还没起来就退出了，或者 60 秒没起来）变成普通的关着的 session。你自己点开总会再试一次。不限制同时开的 session 数。 |
-| 等你的 session 多少分钟后休眠 | `hibernateYouMinutes` | `30` | `0`（不休眠）或不小于 `5` 的整数（最多 5 位）。「等你」是「现在」页说它需要你，或者有没回答的 `ask_user`。 |
+| 停着的 session 休眠 | `hibernateEnabled` | `0`（关） | `1` 或 `0`。Butler 开的 session 停够了下面的分钟数，Butler 就结束它的整棵进程树（claude、MCP server、shell，`hibernateEndWatchers` 开着时还有 watcher），只留下对话记录，按钮上显示「休眠」。有东西要送进去时它用 `claude --resume` 醒来，原来的对话都在：CI 的结论、合并通知、给总控的汇报、你对 `ask_user` 的回答。点开它、切到它的终端也会唤醒。下面这些情况不休眠：正在干活或者有后台命令、屏幕上有权限确认或对话框、输入框里有草稿、30 秒内在终端里打过字、正在换新或者正在给它递东西、是你正在看的终端、是总控而它管的子 session 在干活、2 分钟内刚打开或者 10 分钟内刚唤醒、没有对话记录、被钉住（按钮上的 📌）。修复 session 和复盘分析 session 不休眠。休眠的 session 照样算进每个 ticket、每个 feature 的 session 上限，照样显示在「轮到你」页，照样算在等你。唤醒失败的，按钮上有个 **!**（原因在悬停提示里），并且一直留在「轮到你」页，直到你点开或者隐藏它。会过去的失败（ticket 正忙、找不到 claude、仓库在别的分支上）保留休眠，10 分钟后再自动唤醒；别的失败（claude 还没起来就退出了，或者 60 秒没起来）变成普通的关着的 session。你自己点开总会再试一次。不限制同时开的 session 数。 |
+| 等你的 session 多少分钟后休眠 | `hibernateYouMinutes` | `30` | `0`（不休眠）或不小于 `5` 的整数（最多 5 位）。「等你」是「轮到你」页说它需要你，或者有没回答的 `ask_user`。 |
 | 等 CI 的 session 多少分钟后休眠 | `hibernateCiMinutes` | `20` | 同上。等 CI：它的 PR（或者分支）的 CI 在跑，或者排在合并总控里。 |
 | 等 review 的 session 多少分钟后休眠 | `hibernateReviewMinutes` | `30` | 同上。PR 开着、CI 跑完了、review 还没批准。 |
 | 闲置的 session 多少分钟后休眠 | `hibernateIdleMinutes` | `60` | 同上。别的停着的情况。 |
 | 休眠时也结束 watcher 和 dev server | `hibernateEndWatchers` | `1`（开） | `1` 或 `0`。关掉的话，session 休眠期间 watcher（`tsc --watch`、`vite` 等）和 dev server 照样跑，它醒来、被隐藏或者 Butler 重启时再结束。 |
 | 内存紧张时休眠闲得最久的 session | `memoryPressureEnabled` | `0`（关） | `1` 或 `0`。系统可用内存低于 `memoryPressureFreePercent` 时，每次采样（每分钟一次）休眠一个 session：闲得最久、至少闲了 5 分钟、上面的规则都通过的那个。可用内存回到线以上 5 个百分点就停。`hibernateEnabled` 关着也照样生效。 |
 | 可用内存低于百分之多少算紧张 | `memoryPressureFreePercent` | `10` | `1` 到 `50` 的整数。 |
-| 共享 MCP | `sharedMcp` | `0`（关） | `1` 或 `0`。开着时，一个后台进程（MCP hub）经本机回环 HTTP（只监听 `127.0.0.1`，每个 session、每个 server 一个随机 token）给所有 session 提供 Butler 的记忆 server 和 `butler-sessions`，不再每个 session 各起一组进程。开着的 session 越多省的内存越多；关着时「现在」页的内存卡片会估算能省多少。只影响之后打开的 session。hub 还在启动或者起不来的时候，新开的 session 照旧用各自的进程；一直起不来时「现在」页有提醒。关掉以后，已经接上 hub 的 session 照常用到它退出。你自己 Claude 配置里的 MCP server 不受影响。 |
+| 共享 MCP | `sharedMcp` | `0`（关） | `1` 或 `0`。开着时，一个后台进程（MCP hub）经本机回环 HTTP（只监听 `127.0.0.1`，每个 session、每个 server 一个随机 token）给所有 session 提供 Butler 的记忆 server 和 `butler-sessions`，不再每个 session 各起一组进程。开着的 session 越多省的内存越多；关着时「轮到你」页「运行情况」里的内存卡片会估算能省多少。只影响之后打开的 session。hub 还在启动或者起不来的时候，新开的 session 照旧用各自的进程；一直起不来时「轮到你」页「运行情况」的「Butler 的其他提醒」里有提示。关掉以后，已经接上 hub 的 session 照常用到它退出。你自己 Claude 配置里的 MCP server 不受影响。 |
 
 ### Butler 管不了、但很有用的建议
 
 - **Windows：**在 Windows 安全中心给 Defender 加排除：放 worktree 的目录、`node_modules`、`.git` 和 `%USERPROFILE%\.butler`。很多 node 和 git 进程一起跑时，实时扫描开销很大。确认页面文件够大：设成**系统管理的大小**，或者至少是内存的 1.5 倍。
 - **macOS：**把放 worktree 的目录加进「聚焦」的隐私列表（系统设置 → Siri 与聚焦 → 聚焦隐私），免得每次 `pnpm install` 都被重新索引。装了第三方杀毒软件的话，同样排除这些目录。macOS 自己管交换空间：磁盘至少留 15%～20% 的空闲，它才有地方换出。
-- **两边都是：**你自己的 Claude 配置里装的每个 MCP server，每个 session 都会再起一份。**现在**页的**内存**那一行会列出你装的 MCP 里占内存最多的。不常用的可以从你的 Claude 配置里去掉；Butler 不会替你改这个配置。
+- **两边都是：**你自己的 Claude 配置里装的每个 MCP server，每个 session 都会再起一份。**轮到你**页「运行情况」里的**内存**卡片会列出你装的 MCP 里占内存最多的。不常用的可以从你的 Claude 配置里去掉；Butler 不会替你改这个配置。
 
 ## 调度与 handoff
 
@@ -229,7 +229,7 @@ Butler 自己从不和你的 tracker 通信。handoff 通过公司 Claude Code �
 
 **出错时放行。** 如果 Butler 没在运行、5 秒内没响应，或者 hook 本身出错，命令照常执行。总控只是一道保险，永远不会成为 session 合并不了的原因。
 
-**你会看到什么。** 它发现的每一次冲突（一次拒绝，或者一次允许外加之后的 rebase）都会在 **现在** 页的 **最近合并** 里加一条记录（哪个仓库、哪些 ticket、它定下的顺序）。不发系统通知。没有冲突的合并不加记录，Butler 只是锁到它合完为止。这些记录、锁和待做的 rebase 重启后都还在。
+**你会看到什么。** 它发现的每一次冲突（一次拒绝，或者一次允许外加之后的 rebase）都会在 **轮到你** 页「运行情况」的 **最近合并** 里加一条记录（哪个仓库、哪些 ticket、它定下的顺序）。不发系统通知。没有冲突的合并不加记录，Butler 只是锁到它合完为止。这些记录、锁和待做的 rebase 重启后都还在。
 
 **要求。** git 2.38 或更新（为了 `git merge-tree --write-tree`）。`gh` 是可选的，只用于 PR 合并。
 
@@ -276,11 +276,11 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 | 并发上限 | `routingMaxConcurrent` | 空 | JSON 对象，键是档位，值是同时最多跑几个后台调用的整数，比如 `{"high": 1}`。 |
 | session 自动切换 | `routingAutoSwitch` | `0`（关） | `1` 或 `0`。打开时撞限的 session 马上换下一档，不再显示按钮。 |
 
-同一页上还有按模型和按任务的花费、每个模型的健康状态和降级事件记录。**现在**页在模型撞限或降级期间显示提示。
+同一页上还有按模型和按任务的花费、每个模型的健康状态和降级事件记录。**轮到你**页在模型撞限或降级期间显示提示。
 
 ## 效果页
 
-**效果** 页（侧栏 **进度** 下面）显示 Butler 做的 PR 要你付出多少、和之前比怎么样。Butler 总控的 `metrics_overview` 返回同一份数据，可以看 1 到 365 天（默认 30 天）。没有要设置的。
+**效果** 页（在侧栏「Butler 自己」一组里，**复盘与规矩** 下面）显示 Butler 做的 PR 要你付出多少、和之前比怎么样。Butler 总控的 `metrics_overview` 返回同一份数据，可以看 1 到 365 天（默认 30 天）。没有要设置的。
 
 - **四张卡**：每个合并了的 Butler PR 平均的周期（开 PR → 合并，以及 ticket 开始 → 合并）、评论（人和 Copilot，以及复盘标成可避免的有几条）、人介入（以及 session 等了你多久）和花费（加权 token；也折成美元，用 Claude Code 报的金额，没有的按模型登记的价格估）。周期和评论和基线比；另外两张没有可比的，写"之前 —"。
 - **基线**：Butler 每天从 GitHub 读一次你自己开的、在第一个 Butler session 之前 180 天里合并的 PR（每个仓库最多 100 个，链接到 ticket 的不算），记下周期和评论数。bot 的评论不算，和 Butler 的 PR 一样。这些 PR 的"ticket 开始"用第一个 commit 的时间近似。截止点在第一个 Butler session 出现时定下，之后不再变。还没读到这样的 PR 时（比如 gh 用不了），页面上写还没有基线。
@@ -312,7 +312,7 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 | 降档后再超出多少（%）才暂停 | `graceAfterDowngradePercent` | `20` | 0 到 1000。 |
 | 「继续并提高上限」一次加多少（%） | `raisePercent` | `50` | 1 到 1000。新上限 = 已经花了的 + 上限的这个比例。 |
 
-**你会看到什么。** 过了 `routingThresholds` 的第一档（默认 70%），「现在」页提醒。到上限时，「现在」页、session 那一行和托盘提示都会说发生了什么。**继续并提高上限**解除暂停，只给这个 session 或 ticket 提高上限；在设置里改了上限，这次提高就作废。暂停 90 秒后还在跑、而且又花了钱的 session，只要你没往里打字，Butler 会结束它的终端；你自己打了字，Butler 就交给你。暂停的 session 不会被从休眠里叫醒。每次提醒、降档、暂停、结束和解除都列在同一页的**最近的记录**里。
+**你会看到什么。** 过了 `routingThresholds` 的第一档（默认 70%），「轮到你」页「运行情况」的「Butler 的其他提醒」里提醒。到上限时，「轮到你」页、session 那一行和托盘提示都会说发生了什么。**继续并提高上限**解除暂停，只给这个 session 或 ticket 提高上限；在设置里改了上限，这次提高就作废。暂停 90 秒后还在跑、而且又花了钱的 session，只要你没往里打字，Butler 会结束它的终端；你自己打了字，Butler 就交给你。暂停的 session 不会被从休眠里叫醒。每次提醒、降档、暂停、结束和解除都列在同一页的**最近的记录**里。
 
 花费上限不代替卡死判断：超了上限的 session 或 ticket 照样做卡死判断和「需要你」判断，没超预算的 session 卡住了也照样上报。
 
@@ -475,9 +475,9 @@ Butler 可以替你判待确认的规矩。判的时候，对一个仓库、一�
 
 **检查**标签页上每条检查显示回测结果（PR 数、命中、召回、误报率、当前代码里的存量违规）、分数、被绕过和被无视的次数，以及**重新回测**。每小时的复查也会给当前定义还没有回测结果的启用检查（手写的、导入的、改过的）排上回测。初始化向导在分析之后回测范围里的每个仓库；批次抽查会用到这一批的覆盖率和总体回测数字。
 
-**自动升级。** `shadow.autoPromote` 开着时，Butler 每小时复查一次检查。影子运行的检查满足这些条件就升为强制：启用着、是拦截级别（不只是提醒）、回测通过、分数不低于 `score.admitLine`、运行了至少 `shadow.minPrs` 个 PR 或 `shadow.minDays` 天、失败至少 `shadow.minHits` 次、发现的问题至少 `shadow.minAdoption` 被改掉、误报（你对命中的判断，加上模型对抽样的判断；`backtest.judgeSample` 是 `0` 时没人标的命中都算误报）不超过 `shadow.maxFalsePositiveRate`。采纳率只看编辑时的命中：push 前跑的检查没有「改好了」的记录，不会自动升级。检查标签页上显示每条影子检查到了哪一步、还差什么。一次复查升级的检查合成一个带理由的批次，**现在**页上会提醒，可以**撤销**。批次里的检查之后都改过的话，撤销什么都不恢复，提醒留着。你撤销过升级、或者自己改回影子的检查，在你清除复查标记以前不会再自动升级。
+**自动升级。** `shadow.autoPromote` 开着时，Butler 每小时复查一次检查。影子运行的检查满足这些条件就升为强制：启用着、是拦截级别（不只是提醒）、回测通过、分数不低于 `score.admitLine`、运行了至少 `shadow.minPrs` 个 PR 或 `shadow.minDays` 天、失败至少 `shadow.minHits` 次、发现的问题至少 `shadow.minAdoption` 被改掉、误报（你对命中的判断，加上模型对抽样的判断；`backtest.judgeSample` 是 `0` 时没人标的命中都算误报）不超过 `shadow.maxFalsePositiveRate`。采纳率只看编辑时的命中：push 前跑的检查没有「改好了」的记录，不会自动升级。检查标签页上显示每条影子检查到了哪一步、还差什么。一次复查升级的检查合成一个带理由的批次，**轮到你**页「运行情况」的「Butler 的其他提醒」里会提醒，可以**撤销**。批次里的检查之后都改过的话，撤销什么都不恢复，提醒留着。你撤销过升级、或者自己改回影子的检查，在你清除复查标记以前不会再自动升级。
 
-**自动降级。** `demote.enabled` 开着时，强制的拦截检查在拦下至少 `demote.minEvents` 次以后，被绕过（压制注释、`--no-verify`、关掉 hook、改了快照）或被无视（只有编辑时的拦截才算）的比例达到 `demote.maxBypassRate`，就会降级。另一个理由是强制以后 `demote.noReductionPrs` 个 PR 里同类评审评论没有减少，它要用评审评论的趋势，Butler 现在还不记，所以暂时不会触发。`demote.to` 是 `shadow` 时，Butler 自动升上去的检查降回影子模式，是一个可撤销的批次；别的检查，或者 `demote.to` 是 `review` 时，只在检查标签页上标**待复查**。**清除复查标记**去掉它，Butler 从那一刻重新统计拦截、绕过和修复。提醒在现在页上留 14 天。
+**自动降级。** `demote.enabled` 开着时，强制的拦截检查在拦下至少 `demote.minEvents` 次以后，被绕过（压制注释、`--no-verify`、关掉 hook、改了快照）或被无视（只有编辑时的拦截才算）的比例达到 `demote.maxBypassRate`，就会降级。另一个理由是强制以后 `demote.noReductionPrs` 个 PR 里同类评审评论没有减少，它要用评审评论的趋势，Butler 现在还不记，所以暂时不会触发。`demote.to` 是 `shadow` 时，Butler 自动升上去的检查降回影子模式，是一个可撤销的批次；别的检查，或者 `demote.to` 是 `review` 时，只在检查标签页上标**待复查**。**清除复查标记**去掉它，Butler 从那一刻重新统计拦截、绕过和修复。提醒在「Butler 的其他提醒」里留 14 天。
 
 **阈值复查。** 撤销自动升级或降级、在自动升降级之后 14 天内手动改回模式，都记成校准样本；手动把影子检查改成强制也算一个。每 `review.intervalDays` 天、新样本够 `review.minSamples` 个时，Butler 看 `score.admitLine`、`backtest.maxFalsePositiveRate`、`shadow.minAdoption`、`shadow.maxFalsePositiveRate`、`demote.maxBypassRate` 稍微改一点（最多差 0.05）会不会更常和你一致。建议出现在**校准**标签页上，**采用**会写进全局准入策略，是一个可撤销的批次。`backtestThresholdReviewAt` 记的是上一次复查的时间，不直接编辑。
 
@@ -533,7 +533,7 @@ Butler 可以替你判待确认的规矩。判的时候，对一个仓库、一�
 
 ## 预审、就绪和风险
 
-Butler 能在你 review 之前先把一遍关。默认全是关着的或只读的：什么都不配置时，只在 ticket 页和「进度」页看到每个 PR 的就绪情况和风险。
+Butler 能在你 review 之前先把一遍关。默认全是关着的或只读的：什么都不配置时，只在 ticket 页和 feature、epic 页看到每个 PR 的就绪情况和风险。
 
 | 设置 | 键 | 默认 | 取值和说明 |
 |------|-----|------|-----------|
@@ -614,7 +614,7 @@ Butler 能在你 review 之前先把一遍关。默认全是关着的或只读�
 
 先用规则：已经 resolve 的 thread、你自己的评论和其他机器人的评论跳过，带 ```` ```suggestion ```` 的算要改，上面那几种情况算可忽略。规则判断不了的，`comments.useModel` 开着时经模型路由的 `comment_classify` 任务交给模型；模型也给不出结果的，或者模型关着时规则判断不了的，都算需要人判断。
 
-Copilot 和人的评论分开设置（`comments.copilot`、`comments.human`）。设成 `auto` 时，要改的（`comments.questions` 是 `session` 时还有提问）送进这个 PR 分支所属的 session，也就是 CI 结论送去的那个 session。Butler 等它停下来才送，不会打断它；一次最多送 `comments.maxPerDelivery` 条，带文件、行号和原文，同一个 session 同时只送一样东西（和 CI 结论共用）。设成 `review`（人的评论默认这样）时，评论在 ticket 的 **评论** 标签里等你看，**现在** 页会有提醒。该送进 session 却等了 30 分钟还没送出去的评论也会提醒。设成 `off` 就不处理。
+Copilot 和人的评论分开设置（`comments.copilot`、`comments.human`）。设成 `auto` 时，要改的（`comments.questions` 是 `session` 时还有提问）送进这个 PR 分支所属的 session，也就是 CI 结论送去的那个 session。Butler 等它停下来才送，不会打断它；一次最多送 `comments.maxPerDelivery` 条，带文件、行号和原文，同一个 session 同时只送一样东西（和 CI 结论共用）。设成 `review`（人的评论默认这样）时，评论在 ticket 的 **评论** 标签里等你看，**轮到你** 页会有一张卡片。该送进 session 却等了 30 分钟还没送出去的评论也会有卡片。设成 `off` 就不处理。
 
 push 之后，Butler 在新的 head 上核对送出去的每条评论：行内评论的 thread 在别处 resolve 了、位置过时或没了，或者这次的改动碰到了它那几行（前后 3 行以内），就算已处理；review 正文和 PR 评论有新提交就算已处理。push 两次还没改到的，交回给你。已处理的评论，`comments.reply` 开着时 Butler 回复"已在 <提交> 中修改。"（标明是 Butler 的自动回复），`comments.resolve` 开着时 resolve 这个 thread。这两件事还要各自打开[对外动作](#对外动作)里的开关（`externalCommentReply`、`externalCommentResolve`），每次尝试都记在审计页上。
 
@@ -722,11 +722,11 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 
 栈由总控建。feature 总控调用 `create_ticket` 时带上 `stack_on`，新 ticket 的分支就从另一个 ticket 的分支开出来，并接到那个 ticket 所在栈的顶上（它不在栈里就新建一个）；也可以用 `stack_define` 把已有的分支定成栈。`list_stacks` 看栈，`stack_rebase` 马上 rebase 一次，`stack_layer_mode` 在上面某层要跑 CI 时把它开成 draft PR，或者把 draft 关掉。feature 总控看得到有一层是它的 ticket 的栈，但只能改属于它这个 feature、或者没合并的层都是它的 ticket 的栈。Butler 总控也有这几个工具，但只接受它自己开着的终端发来的改动；epic session 只有 `list_stacks`。
 
-栈底的 PR 合并或者 trunk 更新时，Butler 把整栈 rebase 到新的基础上：git 2.38 以上用 `git rebase --update-refs`，旧的 git 一层一层来。rebase 在 `~/.butler/stack-work` 下单独的 worktree 里做，不碰开着的 session。只有分支没在别处签出着未提交的改动（或者会被新顶端覆盖的未跟踪文件）、它的 session 不在忙、远端也没人推过时，Butler 才挪动它，否则稍后再试。挪动之前先把旧的位置存到 `refs/butler/stack-backup/…`，「从备份恢复」可以放回去。有冲突时 Butler 停下、原样复原，等那一层 ticket 的 session 空下来时把冲突文件和要执行的 `git rebase --onto` 命令交给它；只有「强推」开着时才让 session 把结果推上去。下一次 rebase 接着 session 解好的结果做。冲突 30 分钟没交出去、或者 rebase 卡住或回滚了一天，「现在」页会提醒。
+栈底的 PR 合并或者 trunk 更新时，Butler 把整栈 rebase 到新的基础上：git 2.38 以上用 `git rebase --update-refs`，旧的 git 一层一层来。rebase 在 `~/.butler/stack-work` 下单独的 worktree 里做，不碰开着的 session。只有分支没在别处签出着未提交的改动（或者会被新顶端覆盖的未跟踪文件）、它的 session 不在忙、远端也没人推过时，Butler 才挪动它，否则稍后再试。挪动之前先把旧的位置存到 `refs/butler/stack-backup/…`，「从备份恢复」可以放回去。有冲突时 Butler 停下、原样复原，等那一层 ticket 的 session 空下来时把冲突文件和要执行的 `git rebase --onto` 命令交给它；只有「强推」开着时才让 session 把结果推上去。下一次 rebase 接着 session 解好的结果做。冲突 30 分钟没交出去、或者 rebase 卡住或回滚了一天，「轮到你」页会提醒。
 
 栈底合并后，下一层成了新的栈底：Butler 把它的 base 改成 trunk，`autoOpenBottomPr` 开着时把它开成 ready 的 PR。draft 层打上 `draftLabel` 的 label，标题注明不用 review。
 
-「进度」页和 feature、epic 的「PR 进度」标签里有「栈」一块：从上到下列出每一层的状态、PR、落后 trunk 几个提交、有没有改写过还没推，还有最近一次 rebase 的结果，以及马上 rebase、从备份恢复、开或关 draft、不再管这个栈（分支和 PR 不动，自动检测也不会再把它建回来）这几个按钮。
+「全部工作」页底部的「栈与自动接活」折叠里有管理中的栈：从上到下列出每一层的状态、PR、落后 trunk 几个提交、有没有改写过还没推，还有最近一次 rebase 的结果，以及马上 rebase、从备份恢复、开或关 draft、不再管这个栈（分支和 PR 不动，自动检测也不会再把它建回来）这几个按钮。
 
 策略在「设置 → 栈」，和[评论与 CI](#评论与-ci)一样分全局、产品、仓库三层。`autoRebase` 是总开关，默认关；关着时 Butler 只看不动。rebase 后推上去（用 `--force-with-lease`）要[对外动作](#对外动作)里的 `externalForcePush`，第一次推一层要 `externalBranchPush`，开 PR 和 draft 要 `externalPrOpen`，往 PR 标题里写栈的位置、往描述里写依赖行要 `externalPrTitleEdit` 和 `externalPrDescriptionEdit`，draft 的 label 要 `externalPrLabel`，总览 issue 要 `externalIssuePost`。这些关着时 Butler 只改本地分支，并标出没推的层。
 
@@ -738,8 +738,8 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 | `dailyRebase` | `true` | `true` / `false` | 每个栈每天 rebase 一次 |
 | `autosquash` | `true` | `true` / `false` | 某层的 review 评论处理完后把 `fixup!` 提交合进去 |
 | `autoOpenBottomPr` | `true` | `true` / `false` | 旧栈底合并后把新栈底开成 ready 的 PR |
-| `conflictToSession` | `true` | `true` / `false` | 冲突交给那一层的 session；关着只在「现在」页提醒 |
-| `draftDemoteDays` | `14` | 1–365 的整数 | 一层当 draft 超过这么多天，「现在」页建议关掉 |
+| `conflictToSession` | `true` | `true` / `false` | 冲突交给那一层的 session；关着只在「轮到你」页提醒 |
+| `draftDemoteDays` | `14` | 1–365 的整数 | 一层当 draft 超过这么多天，「Butler 的其他提醒」里建议关掉 |
 | `behindCommits` | `20` | 1–10000 的整数 | 栈底落后 trunk 这么多个提交时提醒 |
 | `behindDays` | `3` | 1–365 的整数 | 栈底落后 trunk 这么多天时提醒 |
 | `overview` | `off` | `off` / `issue` | 把一个 epic 的栈的总览放在一个 GitHub issue 里 |
@@ -789,7 +789,7 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 
 ### 什么时候叫你
 
-只有这几种，每个 ticket 每进入一次这种状态叫一次：分类拿不准、缺信息、不知道是哪个仓库、建不成 ticket、和别的工作改同样的路径在排队。它们是**现在**页上的一条提醒，开了通知时还是 `intake_decision` 事件。其余的（已开工、排队、等名额或内存、搁着、拆成栈）不打扰你，在现在页的「自动接活」里留 24 小时，在**进度**页的队列里能看到。
+只有这几种，每个 ticket 每进入一次这种状态叫一次：分类拿不准、缺信息、不知道是哪个仓库、建不成 ticket、和别的工作改同样的路径在排队。它们是**轮到你**页上的一张卡片，开了通知时还是 `intake_decision` 事件。其余的（已开工、排队、等名额或内存、搁着、拆成栈）不打扰你，在**轮到你**页「运行情况」的「自动接活」里留 24 小时，在「全部工作」页「栈与自动接活」的队列里能看到。
 
 `clarifyMode` 设成 `session` 或 `coordinator` 时，Butler 让一个小 session 或总控到 tracker 上问缺的信息，这要[对外动作](#对外动作)里的「自动接活：到 tracker 提问」开着；关着时只告诉你。
 
