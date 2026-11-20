@@ -82,7 +82,8 @@ export function copyRepo(src: string, prefix = "butler-repo-"): string {
 export function setOriginUrl(repo: string, url: string): void {
   const config = join(repo, existsSync(join(repo, ".git")) ? ".git" : "", "config");
   const text = readFileSync(config, "utf8");
-  const next = text.replace(/(\[remote "origin"\][^[]*?^\s*url\s*=).*$/m, `$1 ${url.replace(/\\/g, "/")}`);
+  // 用函数替换：路径里的 $ 不会被当成 $1 / $& 这类替换符
+  const next = text.replace(/(\[remote "origin"\][^[]*?^\s*url\s*=).*$/m, (_m, head: string) => `${head} ${url.replace(/\\/g, "/")}`);
   if (next === text) throw new Error(`no origin url in ${config}`);
   writeFileSync(config, next);
 }
