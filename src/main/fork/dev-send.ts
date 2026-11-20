@@ -42,7 +42,8 @@ export class DevSender {
       });
       return result === "sent" ? { ok: true, at: this.d.now() } : { ok: false, reason: result };
     } catch (e) {
-      this.d.log(`fork: sending the conclusion to ${head.id} failed`, e);
+      // 输入框的话（conv:send）和分叉的结论都走这里。
+      this.d.log(`fork: sending to the dev session ${head.id} failed`, e);
       return { ok: false, reason: "blocked" };
     } finally {
       this.inFlight.delete(head.id);

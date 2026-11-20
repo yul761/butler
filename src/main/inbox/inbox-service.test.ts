@@ -416,7 +416,7 @@ describe("InboxService views", () => {
     expect(inbox.pendingDecisionViews()[0].open).toBe(false);
   });
 
-  it("pages reports for the control conversation: newest first, before is a time, one extra row tells hasMore", () => {
+  it("pages reports for the control conversation: newest first, before is the oldest shown report's id, one extra row tells hasMore", () => {
     const fc = session("fc", { featureId: 3 });
     const { inbox, repo, state } = setup({ sessions: [fc], epicOf: { 3: 2 } });
     for (const [text, at] of [["r1", 10], ["r2", 20], ["r3", 30], ["r4", 40]] as const) {
@@ -428,10 +428,12 @@ describe("InboxService views", () => {
     expect(first.reports.map((x) => x.text)).toEqual(["r4", "r3"]);
     expect(first.hasMore).toBe(true);
     expect(first.reports[0]).toEqual(inbox.view({ featureId: 3 }).reports[0]);
-    const second = inbox.reportsPage({ featureId: 3 }, { limit: 2, before: first.reports[1].createdAt });
+    const second = inbox.reportsPage({ featureId: 3 }, { limit: 2, before: first.reports[1].id });
     expect(second.reports.map((x) => x.text)).toEqual(["r2", "r1"]);
     expect(second.hasMore).toBe(false);
-    expect(inbox.reportsPage({ featureId: 3 }, { limit: 10, before: 10 })).toEqual({ reports: [], hasMore: false });
+    expect(inbox.reportsPage({ featureId: 3 }, { limit: 10, before: second.reports[1].id })).toEqual({ reports: [], hasMore: false });
+    // 不认识的 id 当没给：第一页。
+    expect(inbox.reportsPage({ featureId: 3 }, { limit: 2, before: 99_999 })).toEqual(first);
     expect(inbox.reportsPage({ all: true }, { limit: 3 }).reports.map((x) => x.text)).toEqual(["r4", "elsewhere", "r3"]);
     expect(inbox.reportsPage({ epicId: 2 }, { limit: 4 })).toMatchObject({ hasMore: false });
     // 原来的 view 不受影响。

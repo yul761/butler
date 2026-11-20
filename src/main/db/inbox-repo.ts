@@ -133,14 +133,23 @@ export class InboxRepo {
     return (this.db.prepare(`SELECT * FROM inbox_items WHERE kind = 'report' AND status = 'pending' ORDER BY created_at, id`).all() as unknown as Row[]).map(toItem);
   }
 
-  /** 最近的汇报，从新到旧，最多 limit 条。给了 before（时间）只要 created_at 早于它的（总控对话区往前翻页，UI 重做第 5 层）。 */
+  /**
+   * 最近的汇报，从新到旧（created_at, id），最多 limit 条。before 是上一页最早一条汇报的 id（总控对话区往前翻页，UI 重做第 5 层）：
+   * 只要排在它后面的，同一时间的按 id 接着排，翻页不漏。不认识的 id、不是汇报、不在这个范围里的都当没给（和 conv:list 一样）。
+   */
   recentReports(filter: InboxFilter, limit: number, before?: number): InboxItem[] {
     const w = where(filter);
-    const b = before === undefined ? "" : " AND created_at < ?";
+    const c =
+      before === undefined
+        ? undefined
+        : (this.db.prepare(`SELECT created_at AS at, id FROM inbox_items WHERE id = ? AND kind = 'report'${w.sql}`).get(before, ...w.args) as
+            | { at: number; id: number }
+            | undefined);
+    const b = c ? " AND (created_at < ? OR (created_at = ? AND id < ?))" : "";
     return (
       this.db
         .prepare(`SELECT * FROM inbox_items WHERE kind = 'report'${w.sql}${b} ORDER BY created_at DESC, id DESC LIMIT ?`)
-        .all(...w.args, ...(before === undefined ? [] : [before]), limit) as unknown as Row[]
+        .all(...w.args, ...(c ? [c.at, c.at, c.id] : []), limit) as unknown as Row[]
     ).map(toItem);
   }
 

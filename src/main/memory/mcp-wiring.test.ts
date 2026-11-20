@@ -41,6 +41,20 @@ describe("the ticket memory MCP only reaches interactive sessions (P4-R6)", () =
     expect(indexSource.match(/\bmemoryMcpConfig\b/g)).toHaveLength(3);
     expect(block("const sessionService = new SessionService({")).toContain("mcpConfig: memoryMcpConfig,");
     expect(block("const forkMcpConfig = (dev: DevLaunch, runId: string)", "\n  };")).toMatch(/memoryMcpConfig\(s\.ticketKey, [^\n]*, termId\)/);
+  });
+
+  it("forks never go through the shared MCP hub: every builder they call takes termId null, which writes the fork's own stdio file (Task 8 review I1)", () => {
+    const fork = block("const forkMcpConfig = (dev: DevLaunch, runId: string)", "\n  };");
+    expect(fork).toContain("const termId = null;");
+    expect(fork).not.toMatch(/sharedMcpConfig|mcpHub|writeTerminalMcpConfig/);
+    for (const name of ["memoryMcpConfig", "featureMcpConfig", "epicMcpConfig", "butlerMcpConfig"]) {
+      expect(fork, name).toMatch(new RegExp(`\\b${name}\\([^\\n]*termId\\)`));
+      // 每个配置函数都经 placeMcp 决定写到哪。
+      expect(block(`const ${name} = (`, "\n  };"), name).toMatch(/return placeMcp\(termId, servers, /);
+    }
+    // termId 是 null：直接写分叉自己的文件，不碰 hub（sharedMcpConfig 里才 route）。
+    const place = block("const placeMcp = (", "\n  };");
+    expect(place).toMatch(/termId === null\s*\?\s*writeForkMcpConfig\(\{ mcpDir: paths\.mcp, servers \}\)\s*:\s*\(sharedMcpConfig\(termId, servers\) \?\? stdio\(\)\)/);
     expect(indexSource.match(/\bwriteTicketMcpConfig\(/g)).toHaveLength(1);
     expect(block("const memoryMcpConfig =", "\n  };")).toContain("writeTicketMcpConfig(");
 

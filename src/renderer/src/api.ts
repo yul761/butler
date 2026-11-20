@@ -289,6 +289,7 @@ export const api = {
   forkList: (anyId: string) => call<ForkView[]>(IPC.forkList, anyId),
   forkRemember: (forkId: number) => call<{ result: RememberResult }>(IPC.forkRemember, forkId),
   convSend: (anyId: string, text: string) => call<DevSendResult>(IPC.convSend, anyId, text),
+  /** 总控对话区的汇报分页：before 是上一页最早一条汇报的 id（不是时间），不给是最新一页。 */
   inboxReports: (scope: InboxScope, o: { before?: number; limit: number }) => call<{ reports: InboxItemView[]; hasMore: boolean }>(IPC.inboxReports, scope, o),
   onForkChanged: (cb: (rootSessionId: string) => void) => window.butler.on(IPC.forkChanged, cb),
 };

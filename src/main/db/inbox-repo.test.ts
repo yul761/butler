@@ -54,15 +54,28 @@ describe("InboxRepo (BTL-190 2+3)", () => {
     expect(repo.recentReports({ featureId: 3 }, 10).map((r) => r.id)).toEqual([r2, r1]);
     expect(repo.recentReports({ epicId: 2 }, 2).map((r) => r.id)).toEqual([r3, r2]);
     expect(repo.recentReports(null, 10).map((r) => r.id)).toEqual([r3, r2, r1]);
-    // 翻页（UI 重做第 5 层）：只要 created_at 早于 before 的。
-    expect(repo.recentReports(null, 10, 7).map((r) => r.id)).toEqual([r2, r1]);
-    expect(repo.recentReports(null, 1, 7).map((r) => r.id)).toEqual([r2]);
-    expect(repo.recentReports({ epicId: 2 }, 10, 6).map((r) => r.id)).toEqual([r1]);
-    expect(repo.recentReports(null, 10, 5)).toEqual([]);
+    // 翻页（UI 重做第 5 层）：before 是上一页最早一条汇报的 id，只要排在它后面的（created_at, id 都更旧）。
+    expect(repo.recentReports(null, 10, r3).map((r) => r.id)).toEqual([r2, r1]);
+    expect(repo.recentReports(null, 1, r3).map((r) => r.id)).toEqual([r2]);
+    expect(repo.recentReports({ epicId: 2 }, 10, r2).map((r) => r.id)).toEqual([r1]);
+    expect(repo.recentReports(null, 10, r1)).toEqual([]);
     expect(repo.recentReports(null, 10, undefined).map((r) => r.id)).toEqual([r3, r2, r1]);
+    // 不认识的 id、不是汇报的 id、这个范围以外的汇报都当没给（和 conv:list 的 R3 一样）。
+    expect(repo.recentReports(null, 10, 99_999).map((r) => r.id)).toEqual([r3, r2, r1]);
+    expect(repo.recentReports(null, 10, a).map((r) => r.id)).toEqual([r3, r2, r1]);
+    expect(repo.recentReports({ featureId: 3 }, 10, r3).map((r) => r.id)).toEqual([r2, r1]);
     expect(repo.pendingReports().map((r) => r.id)).toEqual([r2, r3]);
     // 汇报不算「待你决定」。
     expect(repo.pendingDecisions({ featureId: 3 }).map((d) => d.id)).toEqual([a]);
+  });
+
+  it("pages reports with the same created_at across a page boundary without skipping any (Task 8 review M1)", () => {
+    const repo = new InboxRepo(memDb());
+    const ids = [1, 2, 3, 4].map((i) => repo.addReport({ ...owner("s1", { featureId: 3 }), text: `t${i}`, kind: "progress", status: "dismissed", createdAt: 50 }));
+    const first = repo.recentReports(null, 2);
+    expect(first.map((r) => r.id)).toEqual([ids[3], ids[2]]);
+    expect(repo.recentReports(null, 2, first[1].id).map((r) => r.id)).toEqual([ids[1], ids[0]]);
+    expect(repo.recentReports(null, 2, ids[0])).toEqual([]);
   });
 
   it("resolve with the delivered answer only ends the item while that is still its answer", () => {

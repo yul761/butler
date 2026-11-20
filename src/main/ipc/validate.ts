@@ -181,7 +181,7 @@ export function inboxAnswerArg(v: unknown): string {
   return v;
 }
 
-/** 总控对话区汇报的一页（UI 重做第 5 层）：limit 1–100；before 是时间（上一页最早一条的 createdAt），正整数或不给。 */
+/** 总控对话区汇报的一页（UI 重做第 5 层）：limit 1–100；before 是上一页最早一条汇报的 id，正整数或不给。 */
 export function reportsPageArg(v: unknown): { before?: number; limit: number } {
   if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("invalid reports page");
   const o = v as { limit?: unknown; before?: unknown };

@@ -100,7 +100,7 @@ import { hookCommand } from "./hooks/installer";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { hubRoutes, memoryServers, pruneTerminalMcpConfigs, removeEpicMcpConfig, removeFeatureMcpConfig, removeTerminalMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, type StdioServerSpec, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTerminalMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { hubRoutes, memoryServers, pruneTerminalMcpConfigs, removeEpicMcpConfig, writeForkMcpConfig, removeFeatureMcpConfig, removeTerminalMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, type StdioServerSpec, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTerminalMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { McpHub, spawnHub } from "./memory/mcp-hub";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
@@ -678,29 +678,35 @@ async function bootstrap(): Promise<void> {
       return null;
     }
   };
-  /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。什么都不挂时返回 null。 */
-  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }, termId: string): string | null => {
+  /**
+   * 这组 server 的 --mcp-config 写到哪。termId 是交互终端：共享 MCP 开着走 hub，否则写 stdio 文件（stdio()）。
+   * termId 是 null（完整分叉，没有终端）：从不走 hub（没人撤它的路由、重启后 mcp/terms 也被清掉），写分叉自己的 stdio 文件，server 组一样。
+   */
+  const placeMcp = (termId: string | null, servers: Record<string, StdioServerSpec>, stdio: () => string): string =>
+    termId === null ? writeForkMcpConfig({ mcpDir: paths.mcp, servers }) : (sharedMcpConfig(termId, servers) ?? stdio());
+  /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。什么都不挂时返回 null。termId null 见 placeMcp。 */
+  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }, termId: string | null): string | null => {
     const servers = mcpServers({ ticketKey, featureId: opts.featureId, epicId: opts.epicId }, opts.coordinator ? { ticketKey } : { ticketKey, member: true });
     if (Object.keys(servers).length === 0) return null;
-    return sharedMcpConfig(termId, servers) ?? writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator });
+    return placeMcp(termId, servers, () => writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator }));
   };
   /** feature 总控：feature 记忆、全局记忆和 feature 模式的 butler-sessions；feature 属于 epic 时加 epic 记忆。 */
-  const featureMcpConfig = (featureId: number, epicId: number | null, termId: string): string | null => {
+  const featureMcpConfig = (featureId: number, epicId: number | null, termId: string | null): string | null => {
     const servers = mcpServers({ featureId, epicId }, { featureId, epic: epicId !== null });
     if (Object.keys(servers).length === 0) return null;
-    return sharedMcpConfig(termId, servers) ?? writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers });
+    return placeMcp(termId, servers, () => writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers }));
   };
   /** epic session：epic 记忆、全局记忆和 epic 模式的 butler-sessions（list_features、list_repos、create_feature，以及各 feature 的 session）。 */
-  const epicMcpConfig = (epicId: number, termId: string): string | null => {
+  const epicMcpConfig = (epicId: number, termId: string | null): string | null => {
     const servers = mcpServers({ epicId }, { epicId });
     if (Object.keys(servers).length === 0) return null;
-    return sharedMcpConfig(termId, servers) ?? writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers });
+    return placeMcp(termId, servers, () => writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers }));
   };
   /** Butler 总控（BTL-190 第 5 点）：只有全局记忆（butler-workspace）和 Butler 模式的 butler-sessions。 */
-  const butlerMcpConfig = (termId: string): string | null => {
+  const butlerMcpConfig = (termId: string | null): string | null => {
     const servers = mcpServers({}, { butler: true });
     if (Object.keys(servers).length === 0) return null;
-    return sharedMcpConfig(termId, servers) ?? writeButlerMcpConfig({ mcpDir: paths.mcp, servers });
+    return placeMcp(termId, servers, () => writeButlerMcpConfig({ mcpDir: paths.mcp, servers }));
   };
   const availability = new ClaudeAvailability({ repo: new AvailabilityRepo(db, logger), now: Date.now, onChange: notify, log: logger });
   /** headless 运行报告限流 / 成功给可用状态。 */
@@ -1805,14 +1811,15 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   /**
-   * 完整分叉自己的 --mcp-config：跟开发 session 打开时同一个配置函数、同一组 server，只是终端 id 换成 fork-<runId>
-   * （共享 MCP 开着时是 hub 上单独的路由；关着时就是开发 session 那份 stdio 配置，内容一样）。开发 session 没有 MCP 配置时返回 null（沿用开发参数）。
+   * 完整分叉自己的 --mcp-config：跟开发 session 打开时同一个配置函数、同一组 server，但 termId 是 null——
+   * 分叉从不走共享 MCP 的 hub，总是写 mcp/forks/ 下自己的 stdio 文件（见 placeMcp、writeForkMcpConfig；Task 8 review I1）。
+   * 开发 session 没有 MCP 配置时返回 null（沿用开发参数）。
    */
   const forkMcpConfig = (dev: DevLaunch, runId: string): string | null => {
     if (!dev.mcpConfigPath) return null;
     const s = sessions.get(dev.sessionId);
     if (!s) return null;
-    const termId = `fork-${runId}`;
+    const termId = null;
     try {
       if (s.ticketKey !== null) {
         const featureId = tickets.get(s.ticketKey)?.featureId ?? null;
@@ -1824,7 +1831,7 @@ async function bootstrap(): Promise<void> {
       if (s.butler) return butlerMcpConfig(termId);
       return null;
     } catch (e) {
-      logger(`fork: writing the MCP config for ${dev.sessionId} failed; the fork uses the dev session's`, e);
+      logger(`fork: writing the MCP config for ${dev.sessionId} (run ${runId}) failed; the fork uses the dev session's`, e);
       return null;
     }
   };

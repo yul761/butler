@@ -82,7 +82,8 @@ describe("DevSender", () => {
     const err = new Error("boom");
     s.deliver.mockRejectedValueOnce(err);
     expect(await s.sender.send("root-1", "x")).toEqual({ ok: false, reason: "blocked" });
-    expect(s.log).toHaveBeenCalledWith(expect.any(String), err);
+    // 输入框的话和分叉的结论都走这里：日志不说「结论」（Task 8 review M6）。
+    expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/^fork: sending to the dev session .* failed$/), err);
     expect(await s.sender.send("root-1", "x")).toEqual({ ok: true, at: 42 });
   });
 });

@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { butlerMcpFile, epicMcpFile, featureMcpFile, hubRoutes, memoryServers, pruneTerminalMcpConfigs, removeEpicMcpConfig, removeTerminalMcpConfig, terminalMcpFile, writeTerminalMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
+import { butlerMcpFile, epicMcpFile, featureMcpFile, hubRoutes, memoryServers, pruneTerminalMcpConfigs, writeForkMcpConfig, FORK_MCP_SUBDIR, removeEpicMcpConfig, removeTerminalMcpConfig, terminalMcpFile, writeTerminalMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
 
 const launcher = { command: "/Applications/Butler.app/Contents/MacOS/Butler", script: "/Applications/Butler.app/Contents/Resources/memory-mcp/statecore-mcp.cjs" };
 
@@ -277,5 +277,30 @@ describe("shared MCP config (WS-M H)", () => {
     writeTerminalMcpConfig({ mcpDir, termId: "b", servers: {} });
     expect(pruneTerminalMcpConfigs(mcpDir)).toBe(2);
     expect(readdirSync(join(mcpDir, "terms"))).toEqual([]);
+  });
+});
+
+describe("fork MCP config (Task 8 review I1)", () => {
+  const servers = memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "PROJ-1", featureId: 3 });
+
+  it("writes the stdio servers to a private file under mcp/forks named by content, so the same set reuses one file", () => {
+    const mcpDir = tempDir();
+    const file = writeForkMcpConfig({ mcpDir, servers });
+    expect(dirname(file)).toBe(join(mcpDir, FORK_MCP_SUBDIR));
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpServers: servers });
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(writeForkMcpConfig({ mcpDir, servers })).toBe(file);
+    // 换了 server 组（比如记忆关了）写到另一个文件，之前分叉接着问时用的那份不动。
+    const other = writeForkMcpConfig({ mcpDir, servers: {} });
+    expect(other).not.toBe(file);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpServers: servers });
+  });
+
+  it("survives the startup prune of terminal configs, so a follow-up after a restart still finds it", () => {
+    const mcpDir = tempDir();
+    const file = writeForkMcpConfig({ mcpDir, servers });
+    writeTerminalMcpConfig({ mcpDir, termId: "fork-run-1", servers: {} });
+    expect(pruneTerminalMcpConfigs(mcpDir)).toBe(1);
+    expect(existsSync(file)).toBe(true);
   });
 });
