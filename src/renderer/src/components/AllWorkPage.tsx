@@ -5,12 +5,13 @@ import { useState } from "react";
 import type { ScopeTurnRow, TurnBoard } from "../../../shared/turn";
 import type { EpicView, FeatureView, TicketView } from "../../../shared/types";
 import type { Route } from "../App";
-import { barSegments, scopeLine, scopeRoute, scopeWho, ticketNowText } from "../home-view";
+import { barSegments, scopeLine, scopeRoute, scopeWho, ticketNowText, ticketWhoTurn } from "../home-view";
 import { S } from "../strings";
 import { featuresOutsideEpics } from "./epic-row";
 import { GroupToggle } from "./HomeMore";
 import { IntakeQueue } from "./IntakeQueue";
 import { ReviewQueue } from "./ReviewQueue";
+import { WhoTag } from "./ScopeParts";
 import { ManagedStacks } from "./StacksPanel";
 
 export interface AllWorkBodyProps {
@@ -55,6 +56,15 @@ export function AllWorkBody(p: AllWorkBodyProps) {
     if (r.kind === "ticket") return ticketNowText(p.board?.items ?? [], s, String(r.id), S);
     return s ? scopeLine(s, S) : DASH;
   };
+  /** 谁该动：单独的 ticket 按它自己的轮次（同首页「进行中」、范围页的表格）；epic、feature 按汇总行。 */
+  const whoCell = (r: Row, s: ScopeTurnRow | null) => {
+    if (r.kind === "ticket") {
+      const t = ticketWhoTurn(p.board?.items ?? [], s, String(r.id));
+      return t ? <WhoTag turn={t} /> : DASH;
+    }
+    const who = s ? scopeWho(s, S) : null;
+    return who ? <span className={`turn-tag turn-${who.tone ?? "idle"}`}>{who.text}</span> : DASH;
+  };
   const open = (r: Row) => (r.kind === "ticket" ? p.onOpenTicket(String(r.id)) : p.onGo(scopeRoute({ kind: r.kind, id: r.id } as ScopeTurnRow)));
   return (
     <div className="page all-work">
@@ -78,14 +88,13 @@ export function AllWorkBody(p: AllWorkBodyProps) {
           <tbody>
             {rows.map((r) => {
               const s = r.scope;
-              const who = s ? scopeWho(s, S) : null;
               const bar = s ? barSegments(s.bar, s.total) : [];
               return (
                 <tr key={`${r.kind}:${r.id}`} data-testid={`all-work-row-${r.kind}-${r.id}`}>
                   <td className="name"><button className="row-name" title={r.name} aria-label={r.name} onClick={() => open(r)}>
                     {r.kind === "ticket" ? <><span className="key">{r.id}</span>{r.title && <span className="title">{r.title}</span>}</> : <span className="title">{r.name}</span>}
                   </button></td>
-                  <td>{who ? <span className={`turn-tag turn-${who.tone ?? "idle"}`}>{who.text}</span> : DASH}</td>
+                  <td>{whoCell(r, s)}</td>
                   <td>{nowText(r, s)}</td>
                   <td>
                     {s && bar.length > 0 ? (

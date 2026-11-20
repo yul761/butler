@@ -6,7 +6,7 @@ import {
   homeOpenedSignal,
   ticketNowText,
   HOME_CARD_CAP, YOU_KIND_ORDER, barSegments, capCards, cardActions, cardKey, homeLede, homeTitle, isNoWork, locationOf, lookTarget, prUrl,
-  runningRows, scopeLine, scopeRoute, scopeWho, topItem, turnTone, visibleScopes, youCards, type NameCtx,
+  runningRows, scopeLine, scopeRoute, scopeWho, ticketItem, turnTone, visibleScopes, youCards, type NameCtx,
 } from "./home-view";
 import { formatDuration } from "./components/TicketActivity";
 import { turnSentence } from "./turn-text";
@@ -203,11 +203,12 @@ describe("scope rows", () => {
   });
 });
 
-describe("topItem", () => {
-  it("takes the most urgent item of a ticket", () => {
-    const items = [item(agent), item(merge, { pr }), item(ci, { ticketKey: "BTL-2" })];
-    expect(topItem(items, "BTL-1")?.turn.kind).toBe("merge");
-    expect(topItem(items, "BTL-3")).toBeNull();
+describe("ticketItem", () => {
+  it("takes the item main marked as the ticket's own turn, not a more urgent extra question", () => {
+    const own = item(agent, { ticketLevel: true });
+    const items = [item(answer({ askId: 3 })), own, item(ci, { ticketKey: "BTL-2", ticketLevel: true })];
+    expect(ticketItem(items, "BTL-1")).toBe(own);
+    expect(ticketItem(items, "BTL-3")).toBeNull();
   });
 });
 
@@ -291,7 +292,7 @@ describe("homeOpenedSignal (layer 1's turn:home-opened contract)", () => {
 describe("ticketNowText (All work ticket rows)", () => {
   const s1 = (o: Partial<ScopeTurnRow>) => scope({ kind: "ticket", id: "BTL-1", total: 1, merged: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 }, ...o });
   it("a live item gives its sentence", () => {
-    const i = item(merge, { pr });
+    const i = item(merge, { pr, ticketLevel: true });
     expect(ticketNowText([i], s1({ bar: { done: 0, agent: 0, you: 1, external: 0, idle: 0 } }), "BTL-1", S)).toBe(turnSentence(i.turn, i, S));
   });
   it("without a live item: merged or not started, said as a ticket, never the scope line", () => {

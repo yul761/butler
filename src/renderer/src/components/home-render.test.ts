@@ -3,7 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { EpicView, FeatureView, NowNotice, NowView, TicketView } from "../../../shared/types";
 import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../../shared/turn";
-import type { NameCtx } from "../home-view";
+import { buildTurnBoard } from "../../../main/turn/turn-board";
+import { runningRows, type NameCtx } from "../home-view";
+import { whoLabel } from "../scope-view";
 import { turnSentence } from "../turn-text";
 import { dotKey, type Dot } from "../sidebar-view";
 import { S } from "../strings";
@@ -166,13 +168,41 @@ describe("AllWorkBody", () => {
     expect(render()).toContain("Epic 1");
   });
 
-  it("a single ticket's row says where its most urgent item stands", () => {
+  it("a single ticket's row says where the ticket's own item stands", () => {
     const turn: Turn = { owner: "external", kind: "ci_running", names: [] };
-    const it9: TurnItem = { ticketKey: "BTL-9", pr: null, epicId: null, featureId: null, turn, since: 1, others: 0 };
+    const it9: TurnItem = { ticketKey: "BTL-9", pr: null, epicId: null, featureId: null, turn, since: 1, others: 0, ticketLevel: true };
     const html = render({ board: { ...board([scope("ticket", "BTL-9", { total: 1, merged: 0 })]), items: [it9] } });
     const row = /<tr[^>]*all-work-row-ticket-BTL-9(?:(?!<\/tr>).)*<\/tr>/.exec(html)![0];
     expect(row).toContain(turnSentence(turn, it9, S));
     expect(row).not.toContain(S.hm.scopeLine(1, 0, null));
+  });
+
+  describe("a single ticket's who says it the same way as the home page's running tab and the scope pages", () => {
+    // 主进程不带 filter 的看板（App 给全部工作页的就是它）：BTL-9 单独一个，有一个 PR。
+    const NOW = 1_000_000;
+    const homeBoard = (prTurn: Turn, sessionTurn: Turn): TurnBoard => buildTurnBoard({
+      epics: [], features: [], loose: [], reviews: [], dayStart: 0, now: NOW,
+      tickets: [{
+        key: "BTL-9", name: "BTL-9", featureId: null, moreAsks: [], others: [{ turn: sessionTurn, since: NOW - 5 }],
+        prs: [{ repo: "acme/app", number: 5, title: "t", url: "u", turn: prTurn, since: NOW - 9, mergedAt: null }],
+      }],
+    }, null);
+    const whoCell = (b: TurnBoard) => /<tr[^>]*all-work-row-ticket-BTL-9[^>]*>(?:(?!<\/td>).)*<\/td><td>((?:(?!<\/td>).)*)<\/td>/.exec(render({ board: b }))![1];
+    it("the PR waits for amy's review while the session works: agent, not external", () => {
+      const b = homeBoard({ owner: "external", kind: "awaiting_review", names: ["amy"] }, { owner: "agent", kind: "working", sessionId: "s" });
+      const run = runningRows(b.items, S, NOW);
+      expect(run.map((r) => r.who)).toEqual([S.hm.whoAgent]);
+      expect(whoCell(b)).toContain(`>${S.hm.whoAgent}</span>`);
+      expect(whoCell(b)).toContain("turn-agent");
+      expect(whoCell(b)).not.toContain(S.hm.whoExternal);
+    });
+    it("CI is running while the session is stopped: CI, like the running tab", () => {
+      const b = homeBoard({ owner: "external", kind: "ci_running", names: [] }, { owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s" });
+      const run = runningRows(b.items, S, NOW);
+      expect(run.map((r) => r.who)).toEqual([S.hm.whoCi]);
+      expect(whoCell(b)).toContain(`>${whoLabel(b.items[0].turn, S)}</span>`);
+      expect(whoCell(b)).toContain(`>${S.hm.whoCi}</span>`);
+    });
   });
 
   it("says so when there is no work, keeping the create buttons", () => {

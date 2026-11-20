@@ -2,7 +2,7 @@
 // 状态一律取自第 1 层：ticket 的轮次是主进程标了 ticketLevel 的那条，这里不重新判断任何 PR 或 ticket 的状态。
 import type { ScopeTurnRow, Turn, TurnItem } from "../../shared/turn";
 import type { TicketView } from "../../shared/types";
-import { runningRows, youCards, type RunningRow } from "./home-view";
+import { runningRows, ticketItem, youCards, type RunningRow } from "./home-view";
 import type { UiStrings } from "./strings";
 import { externalWho } from "./turn-text";
 
@@ -24,23 +24,19 @@ export function prTag(pr: { repo: string; number: number }, multiRepo: boolean):
 const NOT_STARTED: Turn = { owner: "idle", kind: "not_started" };
 
 /**
- * 一个 ticket 在看板里的那几条（带 filter 时按 PR 拆开的、session 级的、多出来的提问）里，主进程标了 ticketLevel 的那一条：
+ * 一个 ticket 在看板里的那几条（带 filter 时按 PR 拆开的、session 级的、多出来的提问）里，主进程标了 ticketLevel 的那一条（ticketItem）：
  * 主进程用 ticketTurn 选好的 ticket 级轮次（首页也是它），前端不再自己选（spec「不并存两套状态算法」）。
- * 没有这一条（没开始：板上不出 idle）时为 null。
+ * 没有这一条（没开始：板上不出 idle）时 item 为 null。
  */
-export function ticketItem(mine: TurnItem[]): TurnItem | null {
-  return mine.find((i) => i.ticketLevel === true) ?? null;
-}
-
-function ticketPick(mine: TurnItem[]): { turn: Turn; others: number; item: TurnItem | null } {
-  const item = ticketItem(mine);
+function ticketPick(key: string, mine: TurnItem[]): { turn: Turn; others: number; item: TurnItem | null } {
+  const item = ticketItem(mine, key);
   return item === null ? { turn: NOT_STARTED, others: 0, item: null } : { turn: item.turn, others: item.others, item };
 }
 
 export function ticketRows(tickets: Pick<TicketView, "key" | "title" | "featureId" | "effectiveStatus">[], items: TurnItem[]): TicketRow[] {
   return tickets.map((t) => {
     const mine = items.filter((i) => i.ticketKey === t.key);
-    const { turn, others, item: picked } = ticketPick(mine);
+    const { turn, others, item: picked } = ticketPick(t.key, mine);
     const item: TurnItem = picked ?? {
       ticketKey: t.key, pr: null, epicId: null, featureId: t.featureId, since: 0, others,
       turn: t.effectiveStatus === "done" ? { owner: "done", kind: "merged" } : turn,
@@ -66,8 +62,8 @@ export function scopeBoardView(items: TurnItem[], S: UiStrings, now: number): { 
     if (i.ticketKey === null) out.push(i);
     else byTicket.set(i.ticketKey, [...(byTicket.get(i.ticketKey) ?? []), i]);
   }
-  for (const mine of byTicket.values()) {
-    const item = ticketItem(mine);
+  for (const [key, mine] of byTicket) {
+    const item = ticketItem(mine, key);
     if (item === null) continue;
     out.push(item);
     for (const i of mine) if (i !== item && i.pr === null && i.turn.owner === "you" && i.turn.kind === "answer") out.push(i);
