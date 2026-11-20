@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScopeTurnRow, Turn, TurnItem } from "../../shared/turn";
-import { flatGroup, groupByFeature, prTag, progressLine, scopeBoardView, scopeTotal, slowestLine, ticketRows, whoLabel } from "./scope-view";
+import { flatGroup, groupByFeature, prTag, progressLine, scopeBoardView, scopeRowLine, scopeTotal, slowestLine, ticketRows, ticketsWithPr, whoLabel } from "./scope-view";
 import { STRINGS } from "./strings";
 
 const S = STRINGS.zh;
@@ -158,5 +158,16 @@ describe("scopeBoardView (epic / feature overview and running tab)", () => {
     ];
     const v = scopeBoardView(items, S, 1000);
     expect(v.running.map((r) => [r.ticketKey, r.owner])).toEqual([["K-1", "agent"]]);
+  });
+});
+
+describe("scopeRowLine / ticketsWithPr", () => {
+  it("a ticket with no PR says so; tickets with PRs and feature rows count merged", () => {
+    const withPr = ticketsWithPr([item("K-2", ext, { repo: "app", number: 1 }), item("K-3", agent, null), { ...item("K-4", ext, null), ticketKey: null }]);
+    expect([...withPr]).toEqual(["K-2"]);
+    expect(scopeRowLine({ kind: "ticket", id: "K-3", merged: 0, total: 1 }, withPr, S)).toBe("还没开 PR");
+    expect(scopeRowLine({ kind: "ticket", id: "K-2", merged: 0, total: 1 }, withPr, S)).toBe("0/1 合了");
+    expect(scopeRowLine({ kind: "feature", id: 3, merged: 1, total: 2 }, withPr, S)).toBe("1/2 合了");
+    expect(scopeRowLine({ kind: "ticket", id: "K-3", merged: 0, total: 1 }, withPr, SE)).toBe("No PR yet");
   });
 });

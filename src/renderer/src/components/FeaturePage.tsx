@@ -4,7 +4,7 @@ import type { Route } from "../App";
 import { api, ButlerError } from "../api";
 import { summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary-view";
 import type { NameCtx } from "../home-view";
-import { flatGroup, scopeBoardView, scopeTotal, ticketRows } from "../scope-view";
+import { flatGroup, scopeBoardView, scopeTotal, ticketRows, ticketsWithPr } from "../scope-view";
 import { S } from "../strings";
 import { conversationSessions } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
@@ -130,6 +130,7 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
                 rows={b.scopes.filter((r) => r.kind === "ticket")}
                 total={scopeTotal(b.scopes, "feature", feature.id)}
                 youItems={youItems}
+                ticketsWithPr={ticketsWithPr(b.items)}
                 kind="feature"
                 emptyText={S.noFeatureTickets}
                 cards={{ ctx, now, onFix, onOpen: openTarget, onGo, onChanged: turn.reload }}

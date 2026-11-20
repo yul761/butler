@@ -2,7 +2,7 @@
 import { Fragment, type ReactNode } from "react";
 import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../../shared/turn";
 import { barSegments, cardKey, type RunningRow } from "../home-view";
-import { progressLine, slowestLine, whoLabel, type TicketRow } from "../scope-view";
+import { progressLine, scopeRowLine, slowestLine, whoLabel, type TicketRow } from "../scope-view";
 import { S } from "../strings";
 import { turnSentence } from "../turn-text";
 import { turnTone } from "../turn-tone";
@@ -34,6 +34,8 @@ export function RunRow({ row, onOpenTicket }: { row: RunningRow; onOpenTicket: (
 export function ScopeOverview(p: {
   rows: ScopeTurnRow[]; total: ScopeTurnRow | null; youItems: TurnItem[]; kind: "epic" | "feature"; emptyText: string;
   cards: Omit<TurnCardProps, "item">; onOpenRow?: (id: number | string) => void; onCreate?: () => void;
+  /** feature 页：有 PR 的 ticket（ticketsWithPr）。没有 PR 的 ticket 行写「还没开 PR」，不写「0/1 合了」。 */
+  ticketsWithPr?: ReadonlySet<string>;
 }) {
   const you = (
     <section className="scope-you">
@@ -63,7 +65,7 @@ export function ScopeOverview(p: {
           {p.rows.map((r) => (
             <div key={`${r.kind}:${r.id}`} className="scope-row">
               <button className="name" title={r.name} onClick={() => p.onOpenRow?.(r.id)}>{r.name}</button>
-              <span className="line muted">{S.lay.featureCard(r.merged, r.total)}</span>
+              <span className="line muted">{scopeRowLine(r, p.ticketsWithPr, S)}</span>
               <ScopeBar bar={r.bar} total={r.total} />
             </div>
           ))}

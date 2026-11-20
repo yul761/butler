@@ -102,6 +102,17 @@ export function scopeTotal(scopes: ScopeTurnRow[], kind: "epic" | "feature", id:
   return sum;
 }
 
+/** 看板里有 PR 的 ticket（带 filter 的看板按 PR 拆开，merged 的也在）。 */
+export function ticketsWithPr(items: TurnItem[]): Set<string> {
+  return new Set(items.flatMap((i) => (i.pr !== null && i.ticketKey !== null ? [i.ticketKey] : [])));
+}
+
+/** 概况里一行的那句：feature 行和有 PR 的 ticket 行是「合了几个」；ticket 还没有 PR 时说还没开（不写「0/1 合了」）。 */
+export function scopeRowLine(r: Pick<ScopeTurnRow, "kind" | "id" | "merged" | "total">, withPr: ReadonlySet<string> | undefined, S: UiStrings): string {
+  if (r.kind === "ticket" && withPr !== undefined && !withPr.has(String(r.id))) return S.lay.noPrYet;
+  return S.lay.featureCard(r.merged, r.total);
+}
+
 export function progressLine(r: Pick<ScopeTurnRow, "total" | "merged" | "youCount">, S: UiStrings): string {
   return S.lay.progressLine(r.merged, r.total, r.youCount);
 }

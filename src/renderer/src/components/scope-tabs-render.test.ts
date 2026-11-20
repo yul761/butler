@@ -57,6 +57,13 @@ describe("ScopeOverview", () => {
     expect(html).not.toContain("EMPTY");
     expect(html).not.toContain("turn-bar");
   });
+  it("a feature's ticket rows: a ticket with no PR says so instead of 0/1 merged", () => {
+    const tRow = (id: string, merged: number): ScopeTurnRow => ({ kind: "ticket", id, name: id, total: 1, merged, bar: { ...bar, done: merged }, youCount: 0, slowest: null });
+    const html = overview({ kind: "feature", rows: [tRow("K-1", 0), tRow("K-2", 0)], ticketsWithPr: new Set(["K-2"]) });
+    const line = (key: string) => new RegExp(`title="${key}">${key}</button><span class="line muted">([^<]*)</span>`).exec(html)?.[1];
+    expect(line("K-1")).toBe("还没开 PR");
+    expect(line("K-2")).toBe("0/1 合了");
+  });
   it("no you items says so", () => {
     expect(overview({ youItems: [] })).toContain("这里没有事轮到你");
   });
