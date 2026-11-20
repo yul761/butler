@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { EpicView, FeatureView, NowTarget, NowView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
-import { needsYouTotal } from "./now-view";
+import { firstRunProps, homeOpenedSignal, isNoWork, type NameCtx } from "./home-view";
 import { routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
@@ -12,11 +12,14 @@ import { FeaturePage } from "./components/FeaturePage";
 import { NewEpicDialog } from "./components/NewEpicDialog";
 import { NewFeatureDialog } from "./components/NewFeatureDialog";
 import { NewTicketDialog } from "./components/NewTicketDialog";
-import { NowPage } from "./components/NowPage";
+import { AllWorkPage } from "./components/AllWorkPage";
+import { HomePage } from "./components/HomePage";
+import { FirstRunHome } from "./components/FirstRunHome";
+import { useTurnBoard } from "./components/useTurnBoard";
 import { EffectPage } from "./components/EffectPage";
-import { ProgressPage } from "./components/ProgressPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
+import { scopeDots } from "./sidebar-view";
 import { TicketPage } from "./components/TicketPage";
 import { LessonsPage } from "./components/LessonsPage";
 import { UnclaimedPage } from "./components/UnclaimedPage";
@@ -37,11 +40,12 @@ export type Route =
   /** Butler 总控（BTL-190 第 5 点）。 */
   | { page: "butler"; focusSession?: string | null }
   /** 进度看板（ws-b）：从 feature / epic 的 PR 进度 tab 点过来时带着过滤条件。 */
-  | { page: "progress"; epicId?: number | null; featureId?: number | null }
   | { page: "effect" }
+  /** 全部工作（UI 重做第 2 层）；section：从提醒跳来时要展开的那一块。 */
+  | { page: "all"; section?: "stacks" | "intake" }
   | { page: "unclaimed" }
   | { page: "archived" }
-  /** section：要看的那个 tab 或高级里的分组（「现在」页的提醒跳来时用 health / routing）。 */
+  /** section：要看的那个 tab 或高级里的分组（首页的提醒跳来时用 health / routing）。 */
   | { page: "settings"; section?: SettingsSection }
   | { page: "audit" }
   /** tab：从「现在」页的检查升降级提醒跳来时直接打开检查标签。 */
@@ -49,6 +53,11 @@ export type Route =
 
 export function App() {
   const [route, setRoute] = useState<Route>({ page: "home" });
+  // 切到首页时告诉第 1 层一次（它按需补查「请你 review」）；规则和测试在 homeOpenedSignal。失败第 1 层自己记日志，这里不提示。
+  const homeOpened = useRef(homeOpenedSignal());
+  useEffect(() => {
+    if (homeOpened.current.observe(route.page)) api.turnHomeOpened().catch(() => undefined);
+  }, [route.page]);
   /** 单独的 ticket；feature 下的 ticket 在 features[].tickets 里。 */
   const [tickets, setTickets] = useState<TicketView[]>([]);
   const [features, setFeatures] = useState<FeatureView[]>([]);
@@ -65,6 +74,8 @@ export function App() {
   const [pendingOpen, setPendingOpen] = useState<OpenSessionRequest | null>(null);
 
   const [onboarding, dispatchOnboarding] = useReducer(onboardingReducer, null);
+  /** 首页、侧栏、全部工作共用的一份「谁该动」（第 1 层的 turn:board）。 */
+  const turn = useTurnBoard();
 
   useEffect(() => onError(setError), []);
   // 防休眠开关：托盘菜单里改了、或者合上盖子自动关掉，主进程都会通知。
@@ -162,11 +173,25 @@ export function App() {
   const goFeature = (id: number) => void refresh().then(() => setRoute({ page: "feature", id }));
   const goEpic = (id: number) => void refresh().then(() => setRoute({ page: "epic", id }));
 
+  const featureEpic = useMemo(() => new Map(features.map((f) => [f.id, f.epicId] as const)), [features]);
+  const dots = useMemo(() => scopeDots(turn.board?.items ?? [], featureEpic), [turn.board, featureEpic]);
+  const ctx: NameCtx = {
+    epics: new Map(epics.map((e) => [e.id, e.name])),
+    features: new Map(features.map((f) => [f.id, f.name])),
+    tickets: new Map(allTickets.map((t) => [t.key, t.title])),
+  };
+  /** 首页「开修复 session」：开好了去 feature 页（修复 session 在那里），失败报到全局错误条。 */
+  const openFix = (featureId: number, stuckSessionId: string) => {
+    api.openFixSession({ featureId, stuckSessionId }).then((r) => {
+      if (r.ok) setRoute({ page: "feature", id: featureId });
+      else reportError(new Error(S.openErrors[r.reason] ?? r.reason));
+    }, reportError);
+  };
+
   return (
     <div className="app">
       <Sidebar
-        tickets={tickets} features={features} epics={epics} unclaimedCount={unclaimedCount} needsYouCount={needsYouTotal(nowView)} route={route} onNavigate={setRoute}
-        onNew={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)} onNewEpic={() => setShowNewEpic(true)}
+        tickets={tickets} features={features} epics={epics} youCount={turn.board?.counts.you ?? null} dots={dots} route={route} onNavigate={setRoute}
         keepAwake={keepAwake} onKeepAwake={(on) => api.setKeepAwake(on).then(setKeepAwake, reportError)}
       />
       <main className="main">
@@ -185,7 +210,15 @@ export function App() {
           />
         ) : (
           <>
-            {route.page === "home" && <NowPage view={nowView} onOpen={openTarget} onOpenTicket={(key) => openTicket(key)} liveTickets={new Set(allTickets.map((t) => t.key))} onResumeSetup={() => dispatchOnboarding({ type: "rerun" })} onGo={setRoute} />}
+            {route.page === "home" && (
+              <HomePage
+                state={turn} noWork={isNoWork(allTickets.length + epics.length + features.length, turn.board?.items ?? null, nowView?.notices.length ?? 0)}
+                firstRun={<FirstRunHome {...firstRunProps({ onNewTicket: () => setShowNew(true), onNewFeature: () => setShowNewFeature(true), onNewEpic: () => setShowNewEpic(true), onGo: setRoute })} />}
+                ctx={ctx} nowView={nowView} liveTickets={new Set(allTickets.map((t) => t.key))}
+                onFix={openFix} onOpen={openTarget} onGo={setRoute} onOpenTicket={(key) => openTicket(key)} onChanged={turn.reload}
+                onResumeSetup={() => dispatchOnboarding({ type: "rerun" })}
+              />
+            )}
             {route.page === "ticket" && current && (
               <TicketPage
                 key={current.key}
@@ -206,7 +239,6 @@ export function App() {
                 onTicketCreated={goTicket}
                 focusSession={route.focusSession}
                 onOpenTarget={openTarget}
-                onOpenProgress={() => setRoute({ page: "progress", featureId: currentFeature.id })}
               />
             )}
             {route.page === "epic" && currentEpic && (
@@ -218,17 +250,24 @@ export function App() {
                 onFeatureCreated={goFeature}
                 focusSession={route.focusSession}
                 onOpenTarget={openTarget}
-                onOpenProgress={() => setRoute({ page: "progress", epicId: currentEpic.id })}
               />
             )}
             {route.page === "butler" && <ButlerPage key={route.focusSession ?? ""} focusSession={route.focusSession} onOpenTarget={openTarget} />}
-            {route.page === "progress" && (
-              <ProgressPage
-                key={`${route.epicId ?? ""}:${route.featureId ?? ""}`}
-                epicId={route.epicId}
-                featureId={route.featureId}
+            {route.page === "all" && (
+              <AllWorkPage
+                key={route.section ?? ""}
+                board={turn.board}
+                epics={epics}
+                features={features}
+                tickets={tickets}
+                unclaimedCount={unclaimedCount}
+                now={Date.now()}
+                focusMore={route.section}
+                onNewTicket={() => setShowNew(true)}
+                onNewFeature={() => setShowNewFeature(true)}
+                onNewEpic={() => setShowNewEpic(true)}
+                onGo={setRoute}
                 onOpenTicket={(key) => setRoute({ page: "ticket", key })}
-                onOpenFeature={(id) => setRoute({ page: "feature", id })}
               />
             )}
             {route.page === "effect" && <EffectPage />}

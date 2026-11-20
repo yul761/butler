@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { prUrlKey } from "../../shared/pr-url";
-import { isAllowedGithubUrl, openKnownPr } from "./github-url";
+import { isAllowedGithubUrl, knownPrLookup, openKnownPr } from "./github-url";
 
 describe("isAllowedGithubUrl", () => {
   it("accepts github.com over https", () => {
@@ -82,5 +82,30 @@ describe("openKnownPr", () => {
     const { open, openExternal } = setup(["http://github.com/a/b/pull/1"], ["a/b"]);
     expect(open("http://github.com/a/b/pull/1")).toEqual({ ok: false, reason: "bad_url" });
     expect(openExternal).not.toHaveBeenCalled();
+  });
+});
+
+describe("knownPrLookup (UI redesign layer 2: the review card's 打开 PR)", () => {
+  const open = (url: string, ticketPrs: string[], reviews: string[], trusted: string[] = []) => {
+    const openExternal = vi.fn();
+    const prs = knownPrLookup({ byUrl: (u) => ticketPrs.filter((k) => prUrlKey(k) === prUrlKey(u)) }, () => reviews.map((url) => ({ url })));
+    return { r: openKnownPr(url, { prs, trustedSlugs: () => trusted, openExternal, log: vi.fn() }), openExternal };
+  };
+
+  it("opens a PR someone asked you to review, though no ticket links it", () => {
+    const { r, openExternal } = open("https://github.com/Other/Lib/pull/40/", [], ["https://github.com/other/lib/pull/40"]);
+    expect(r).toEqual({ ok: true });
+    expect(openExternal).toHaveBeenCalledWith("https://github.com/Other/Lib/pull/40/");
+  });
+
+  it("still opens ticket PRs, and refuses a PR neither knows", () => {
+    expect(open("https://github.com/a/b/pull/1", ["https://github.com/a/b/pull/1"], []).r).toEqual({ ok: true });
+    expect(open("https://github.com/a/b/pull/2", ["https://github.com/a/b/pull/1"], ["https://github.com/c/d/pull/2"]).r).toEqual({ ok: false, reason: "bad_url" });
+  });
+
+  it("a review request on an untrusted host is still refused", () => {
+    const url = "https://evil.example/x/y/pull/1";
+    expect(open(url, [], [url], ["a/b"]).r).toEqual({ ok: false, reason: "bad_url" });
+    expect(open("https://ghe.acme.io/t/a/pull/3", [], ["https://ghe.acme.io/t/a/pull/3"], ["ghe.acme.io/t/a"]).r).toEqual({ ok: true });
   });
 });

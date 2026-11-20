@@ -67,8 +67,11 @@ test("backtest: a shadow check that passed its backtest is promoted by the revie
   expect(Number(moved.changes)).toBe(1);
   const { page } = await launch(s);
 
-  // 3. 复查把检查升为强制，「现在」页提醒。
+  // 3. 复查把检查升为强制，首页「运行情况」里的「Butler 的其他提醒」写着（只是告知，不是轮到你的卡片）。
   await expect.poll(() => modeOf(s, checkId), { timeout: 30_000 }).toBe("enforce");
+  const more = page.locator(".home-more-fold > h3 .section-toggle");
+  if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
+  await expect(page.locator(".home-info-notices h3")).toHaveText(S.hm.infoNotices);
   const notice = page.getByTestId("now-notice-check_promoted");
   await expect(notice).toContainText(S.bt.noticePromoted("No console.log"));
 

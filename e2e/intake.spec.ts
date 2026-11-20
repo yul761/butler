@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, openSettingsGroup, type Sandbox, test } from "./fixtures";
+import { completeWizard, expect, openAllWorkMore, openSettingsGroup, type Sandbox, test } from "./fixtures";
 
 const sidebar = (page: Page, name: string) => page.locator(".sidebar").getByRole("button", { name, exact: true });
 
@@ -63,7 +63,7 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   await expect(page.getByTestId("intake-setting-error")).toHaveCount(0);
   // 改设置后 1 秒会试着拉一次（总开关关着就不拉）；多等一会儿再看。
   await page.waitForTimeout(3000);
-  await sidebar(page, S.progressNav).click();
+  await openAllWorkMore(page);
   await expect(page.getByTestId("progress-intake")).toHaveCount(0);
   expect(interactiveModels(s)).toEqual([]);
 
@@ -75,8 +75,8 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   await expect(page.getByTestId("intake-policy-message")).toHaveText(S.policySaved);
   await expect(page.getByTestId("intake-effective-enabled")).toHaveText(S.policyBool(true));
 
-  // 4. 进度页的队列：E2E-31 开工了，E2E-32 缺信息，E2E-33 等名额。
-  await sidebar(page, S.progressNav).click();
+  // 4. 全部工作页「栈与自动接活」里的队列：E2E-31 开工了，E2E-32 缺信息，E2E-33 等名额。
+  await openAllWorkMore(page);
   const queue = page.getByTestId("intake-queue");
   await expect(queue).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("intake-row-E2E-31")).toHaveAttribute("data-state", "started", { timeout: 20_000 });
@@ -88,15 +88,15 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   await expect(page.getByTestId("intake-row-E2E-31")).toContainText("mid · claude-fake-mid");
   await expect.poll(() => interactiveModels(s)).toEqual(["claude-fake-mid"]);
 
-  // 5. 「现在」页只为 E2E-32 提醒（缺验收标准）；E2E-33 只是在排队，不提醒。
-  await sidebar(page, S.nowTitle).click();
+  // 5. 首页只为 E2E-32 提醒（缺验收标准）；E2E-33 只是在排队，不提醒。
+  await sidebar(page, S.home).click();
   const notice = page.getByTestId("now-notice-intake");
   await expect(notice).toHaveCount(1);
   await expect(notice).toContainText("E2E-32");
   await expect(notice).toContainText(S.ik.missing.acceptance_criteria!);
 
   // 6. 改 E2E-33 的规模：记成一次改分类，状态不变（还是等名额）。
-  await sidebar(page, S.progressNav).click();
+  await openAllWorkMore(page);
   await page.getByTestId("intake-size-E2E-33").selectOption("medium");
   await expect(page.getByTestId("intake-row-E2E-33")).toContainText(S.ik.edited);
   await expect(page.getByTestId("intake-row-E2E-33")).toHaveAttribute("data-state", "waiting");
@@ -107,7 +107,7 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   await end.click();
   await end.click();
   await expect(end).toHaveCount(0);
-  await sidebar(page, S.progressNav).click();
+  await openAllWorkMore(page);
   await expect(page.getByTestId("intake-row-E2E-33")).toHaveAttribute("data-state", "started", { timeout: 20_000 });
   await expect.poll(() => interactiveModels(s)).toEqual(["claude-fake-mid", "claude-fake-mid"]);
   // E2E-32 一直没开 session。

@@ -23,6 +23,9 @@
   --live-need: #d4a017;
   --live-wire: #b9b9b3;
   --live-grain: #e4e4e0;
+  /* 谁该动（UI 重做 §5.1）：颜色只表示谁该动，不表示严重程度。 */
+  --turn-ask: #b91c1c; --turn-merge: #166534; --turn-stuck: #6d28d9; --turn-butler: #92400e;
+  --turn-agent: #1d4ed8; --turn-external: #5f5f5a; --turn-done: #276b42; --turn-idle: #66665f;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -48,6 +51,8 @@
     --live-need: #e2b84a;
     --live-wire: #55554f;
     --live-grain: #2e2e2b;
+    --turn-ask: #f87171; --turn-merge: #4ade80; --turn-stuck: #c4b5fd; --turn-butler: #fbbf24;
+    --turn-agent: #6b9cf0; --turn-external: #9b9b96; --turn-done: #86d9a6; --turn-idle: var(--muted);
   }
 }
 * { box-sizing: border-box; }
@@ -215,51 +220,9 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .merge-event .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .merge-event .chip { padding: 0 2px; border: none; color: var(--accent); }
 .notice-line { color: var(--muted); margin: 4px 0; }
-/* 首页「现在」（计划 14）：颜色只用上面的变量（浅色、深色主题都看得清），底色用 color-mix 从变量调淡。 */
-.now-page { max-width: 960px; }
-.now-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 10px; }
-.now-top h2 { margin: 0; font-size: 16px; }
-.now-top .muted { font-size: 12px; }
-.now-needs { background: color-mix(in srgb, var(--danger) 9%, var(--bg)); border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; }
-.now-needs h3 { display: flex; gap: 6px; align-items: baseline; margin: 0 0 4px; font-size: 13px; color: var(--danger); }
-.now-needs h3 .count { font-weight: normal; }
-.now-need { display: flex; gap: 10px; align-items: baseline; width: 100%; padding: 3px 0; border: none; border-radius: 0; background: transparent; text-align: left; }
-/* 淡红底上 --muted 和 --accent 不到 4.5:1（浅色主题）：这一块的文字都用 --text，“打开”用 --danger。 */
-.now-need .now-key { color: var(--text); }
-.now-need .name { color: var(--text); white-space: nowrap; }
-.now-need .why { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
-.now-need .since { color: var(--text); white-space: nowrap; }
-.now-need .go { color: var(--danger); white-space: nowrap; }
-.now-need:hover .go { text-decoration: underline; }
-.now-epic { margin: 2px 0 8px; }
-.now-epic > h3, .now-feature > h4 { margin: 0; padding: 4px; border-radius: 6px; }
-.now-epic > h3:hover, .now-feature > h4:hover { background: var(--panel); }
-.now-epic > h3 { font-size: 14px; }
-.now-butler > h3:hover { background: none; }
-.now-feature { margin-left: 16px; }
-.now-feature > h4 { font-size: 13px; }
+/* 首页「运行情况」里搬来的旧块（最近合并、接活记录、用量）：颜色只用上面的变量。 */
 .now-summary { margin-left: 4px; color: var(--muted); font-size: 12px; font-weight: normal; }
-.now-rows { margin-left: 22px; }
-.now-row { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto auto 72px; gap: 8px; align-items: center; width: 100%; padding: 4px 6px; border: none; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; text-align: left; font-size: 12.5px; }
-.now-row:hover { background: var(--panel); }
-.now-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; }
-.now-key small { margin-left: 6px; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
-.now-what { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
-.now-what .main { color: var(--text); overflow-wrap: anywhere; }
-.now-what small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11.5px; }
-.now-dot { flex-shrink: 0; align-self: center; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-.now-row.ok .now-dot { background: var(--ok); }
-.now-row.warn .now-dot { background: var(--pill-pending); }
-.now-row.danger .now-dot { background: var(--danger); }
-.now-row.danger .main { color: var(--danger); }
-.now-row.muted .main { color: var(--muted); }
-.now-prs { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
-.now-prs .pill { margin: 0; }
-.now-since { color: var(--muted); text-align: right; white-space: nowrap; }
-/* 行上的内存（WS-M A）：小字，悬停看明细；没读数时是空的一格。 */
-.now-mem { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
 .mem-spark { display: block; color: var(--accent, currentColor); }
-.now-idle > .section-toggle { padding: 4px 6px; color: var(--muted); font-size: 12px; }
 .now-merges, .now-usage { margin-top: 14px; }
 .now-merges h3 { margin: 0 0 4px; font-size: 13px; }
 .now-usage > .section-toggle { color: var(--muted); font-size: 12px; text-align: left; }
@@ -343,7 +306,7 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .sidebar .nav.home { display: flex; align-items: center; gap: 6px; }
 /* 只给读屏的文字：看不见，但在可访问性树里。 */
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-.needs-you-badge { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
+.needs-you-badge { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--turn-ask); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
 .day-list { margin: 4px 0 10px; padding-left: 20px; }
 textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; width: 100%; resize: vertical; }
 .mono { font-family: Menlo, Consolas, "Cascadia Mono", monospace; font-size: 12px; }
@@ -393,7 +356,6 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .inbox-answer { display: flex; gap: 6px; align-items: flex-end; }
 .inbox-queued { margin: 0; color: var(--ok); }
 .inbox-card .actions { display: flex; gap: 6px; }
-.now-decisions { display: flex; flex-direction: column; margin: 4px 0 6px; }
 /* Butler 总控页（BTL-190 第 5 点）。 */
 .butler-intro { margin: 0; padding: 0 16px 8px; }
 .lesson-sessions h3 { margin: 8px 16px 0; font-size: 12px; font-weight: 600; color: var(--muted); }
@@ -660,3 +622,82 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .auto-choices .pre-wrap { white-space: pre-wrap; }
 .notify-log td { padding: 2px 8px 2px 0; vertical-align: top; overflow-wrap: anywhere; }
 .notify-log tr.notify-quiet, .notify-log tr.notify-filtered { color: var(--muted); }
+
+/* 谁该动的标签、圆点和进度条（UI 重做 §5.1）。 */
+.turn-tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+.turn-tag.turn-ask { color: var(--turn-ask); background: color-mix(in srgb, var(--turn-ask) 14%, var(--bg)); }
+.turn-tag.turn-merge { color: var(--turn-merge); background: color-mix(in srgb, var(--turn-merge) 14%, var(--bg)); }
+.turn-tag.turn-stuck { color: var(--turn-stuck); background: color-mix(in srgb, var(--turn-stuck) 14%, var(--bg)); }
+.turn-tag.turn-butler { color: var(--turn-butler); background: color-mix(in srgb, var(--turn-butler) 14%, var(--bg)); }
+.turn-tag.turn-agent { color: var(--turn-agent); background: color-mix(in srgb, var(--turn-agent) 14%, var(--bg)); }
+.turn-tag.turn-external { color: var(--turn-external); background: color-mix(in srgb, var(--turn-external) 14%, var(--bg)); }
+.turn-tag.turn-done { color: var(--turn-done); background: color-mix(in srgb, var(--turn-done) 14%, var(--bg)); }
+.turn-tag.turn-idle { color: var(--turn-idle); background: color-mix(in srgb, var(--turn-idle) 14%, var(--bg)); }
+.turn-dot { display: inline-block; flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; }
+.turn-dot.turn-ask { background: var(--turn-ask); }
+.turn-dot.turn-merge { background: var(--turn-merge); }
+.turn-dot.turn-stuck { background: var(--turn-stuck); }
+.turn-dot.turn-butler { background: var(--turn-butler); }
+.turn-dot.turn-agent { background: var(--turn-agent); }
+.turn-dot.turn-external { background: var(--turn-external); }
+.turn-dot.turn-done { background: var(--turn-done); }
+.turn-dot.turn-idle { background: var(--turn-idle); }
+.turn-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--border); }
+.turn-bar > i { display: block; height: 100%; }
+.turn-bar > i.turn-ask { background: var(--turn-ask); }
+.turn-bar > i.turn-merge { background: var(--turn-merge); }
+.turn-bar > i.turn-stuck { background: var(--turn-stuck); }
+.turn-bar > i.turn-butler { background: var(--turn-butler); }
+.turn-bar > i.turn-agent { background: var(--turn-agent); }
+.turn-bar > i.turn-external { background: var(--turn-external); }
+.turn-bar > i.turn-done { background: var(--turn-done); }
+.turn-bar > i.turn-idle { background: var(--turn-idle); }
+
+/* 侧栏（UI 重做第 2 层）：树在自己的区域里滚动，「总控」「Butler 自己」和防休眠始终看得见；点和数字靠右。 */
+.sidebar .ticket-groups { min-height: 0; }
+.sidebar .ticket .key { flex-shrink: 0; }
+.sidebar .ticket.feature .key { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar .ticket .turn-dot { margin-left: auto; align-self: center; }
+.sidebar .ticket .cnt { flex-shrink: 0; font-size: 11px; font-weight: 600; color: var(--turn-ask); }
+.sidebar h3.nav-group { margin: 10px 4px 2px; }
+
+/* 全部工作（UI 重做第 2 层）：名字单行省略，完整的在 title 里；进度条占满一格。 */
+.all-work-actions { margin: 8px 0 12px; }
+.all-work-actions .spacer { flex: 1; }
+.all-work-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.all-work-table th { text-align: left; font-weight: 600; font-size: 12px; color: var(--muted); padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.all-work-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.all-work-table th:nth-child(1) { width: 34%; }
+.all-work-table th:nth-child(2) { width: 14%; }
+.all-work-table th:nth-child(4) { width: 18%; }
+/* ticket 行：key 不缩，只截标题（和侧栏、卡片位置行一样）。 */
+.all-work-table .row-name .key { flex-shrink: 0; }
+.all-work-table .row-name .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.all-work-table .row-name { display: flex; gap: 0.4em; max-width: 100%; overflow: hidden; white-space: nowrap; border: none; background: transparent; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.all-work-table .row-name:hover { text-decoration: underline; }
+.all-work-more { margin-top: 20px; }
+
+/* 首页卡片（UI 重做第 2 层）：标签、一句话和位置、按钮一行排开；位置单行省略，窄窗口时按钮换到下一行。 */
+.turn-card { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); margin-bottom: 8px; }
+.turn-card-body { flex: 1 1 260px; min-width: 0; }
+.turn-card .sentence { margin: 0; }
+.turn-card .notice { margin: 0; padding: 0; border: none; background: transparent; }
+.turn-card .where { display: flex; gap: 8px; margin: 2px 0 0; font-size: 12px; min-width: 0; }
+.turn-card .where .path { display: flex; min-width: 0; white-space: nowrap; }
+.turn-card .where .path .scope { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.turn-card .where .path .key { flex-shrink: 0; }
+.turn-card .where .age { flex-shrink: 0; }
+.turn-card > .actions { flex-shrink: 0; }
+
+/* 首页「轮到你」（UI 重做第 2 层）。 */
+.home-top h2 { margin-bottom: 2px; }
+.home-top p { margin-top: 0; }
+.home-failed { padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.home-cards { margin: 12px 0 20px; }
+.home-scopes, .home-running, .home-more-fold { margin-top: 16px; }
+.home-scope { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr) minmax(80px, 1fr) auto; align-items: center; gap: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.home-scope > button.name { background: transparent; border: none; padding: 0; text-align: left; font-weight: 600; cursor: pointer; }
+.home-scope .name, .home-scope .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.home-run { display: grid; grid-template-columns: 90px auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 4px 8px; background: transparent; border: none; border-radius: 0; }
+.home-run .sentence { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+@media (max-width: 640px) { .home-scope { grid-template-columns: minmax(0, 1fr) 80px; } .home-scope .line, .home-scope .who { display: none; } }

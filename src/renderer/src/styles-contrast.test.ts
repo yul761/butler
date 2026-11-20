@@ -92,3 +92,33 @@ describe("PR stage text contrast (D-14)", () => {
     });
   }
 });
+
+// UI 重做 §5.1：颜色只表示谁该动。每个 --turn-* 在面板和页面底色上都要到 4.5:1，
+// 标签 .turn-tag.turn-<tone> 的字在它自己混出来的底色上也要到 4.5:1。
+const TURN_TOKENS = ["--turn-agent", "--turn-ask", "--turn-butler", "--turn-done", "--turn-external", "--turn-idle", "--turn-merge", "--turn-stuck"];
+const turnTags = rules.filter((r) => /^\.turn-tag\.turn-\w+$/.test(r.selector))
+  .map((r) => ({ selector: r.selector, color: decl(r.body, "color")!, background: decl(r.body, "background")! }));
+
+describe("turn colours (UI redesign §5.1)", () => {
+  it("finds the turn tokens", () => {
+    expect([...light.keys()].filter((k) => k.startsWith("--turn-")).sort()).toEqual(TURN_TOKENS);
+    expect(turnTags).toHaveLength(8);
+  });
+
+  for (const [theme, vars] of [["light", light], ["dark", dark]] as const) {
+    it(`${theme}: every --turn-* token reaches 4.5:1 on --panel and --bg`, () => {
+      for (const k of TURN_TOKENS) {
+        for (const bg of ["var(--panel)", "var(--bg)"]) {
+          expect(contrast(resolve(`var(${k})`, vars), resolve(bg, vars)), `${k} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    });
+
+    it(`${theme}: every .turn-tag reaches 4.5:1 on its own background`, () => {
+      expect(turnTags).toHaveLength(8);
+      for (const r of turnTags) {
+        expect(contrast(resolve(r.color, vars), resolve(r.background, vars)), r.selector).toBeGreaterThanOrEqual(4.5);
+      }
+    });
+  }
+});

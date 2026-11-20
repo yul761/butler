@@ -43,7 +43,7 @@ test("cost breaker: a session over its cap is paused, and continue-and-raise cle
   await expect(row.getByTestId("session-cost-raise")).toHaveText(S.cs.raise);
 
   // 4. 「现在」页：暂停的提醒，点「继续并提高上限」。
-  await sidebar(page, S.nowTitle).click();
+  await sidebar(page, S.home).click();
   const notice = page.getByTestId("now-notice-cost");
   await expect(notice).toBeVisible();
   await notice.getByTestId("now-notice-cost-raise").click();

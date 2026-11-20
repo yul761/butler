@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox, newButton } from "./fixtures";
 
 /** 在当前显示的终端里输入一行并回车。 */
 async function typeLine(page: Page, line: string): Promise<void> {
@@ -56,7 +56,7 @@ test("merge coordinator: a conflicting merge waits for the holder, is told when 
   const shop = join(s.dir, "shop");
   makeGitRepo(join(shop, "frontend"));
   makeGitRepo(join(shop, "backend"));
-  await page.getByRole("button", { name: `+ ${S.newFeature}`, exact: true }).click();
+  await (await newButton(page, "newFeature")).click();
   await page.getByLabel(S.featureName, { exact: true }).fill("checkout");
   const dir = page.getByRole("textbox", { name: `${S.repo} ${S.pick}`, exact: true });
   await dir.fill(shop);
@@ -99,9 +99,11 @@ test("merge coordinator: a conflicting merge waits for the holder, is told when 
   await expect.poll(() => terminalText(page)).toContain("denied:");
   expect(git(backend, "rev-parse", "main")).toBe(mainBefore);
 
-  // 5. 「现在」页的“最近合并”（默认收起）展开后有这一行。
+  // 5. 首页「运行情况」里的“最近合并”（默认收起）展开后有这一行。
   await page.getByRole("button", { name: S.home, exact: true }).click();
-  const section = page.locator("section.now-merges");
+  const more = page.locator(".home-more-fold > h3 .section-toggle");
+  if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
+  const section = page.locator("section.now-merges:not([data-testid])");
   const toggle = section.locator(".section-toggle");
   await expect(toggle).toContainText(S.nowRecentMerges);
   await expect(toggle).toHaveAttribute("aria-expanded", "false");

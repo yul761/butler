@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, openSettingsTab, type Sandbox, terminalText, test } from "./fixtures";
+import { completeWizard, expect, newButton, openSettingsTab, type Sandbox, terminalText, test } from "./fixtures";
 
 /**
  * 上下文换新（计划 16 任务 7）：假 claude 的每条回复都带 usage（上下文是 FAKE_CLAUDE_CONTEXT_TOKENS，/clear 之后从头算），
@@ -34,7 +34,7 @@ async function typeLine(page: Page, line: string): Promise<void> {
 
 /** 新建一个单独的 ticket（worktree 方式），建完停在 ticket 页。 */
 async function newTicket(page: Page, s: Sandbox, key: string): Promise<void> {
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill(key);
   // 这个 label 里还包着“选择…”按钮，输入框的可访问名是两段文字连起来。
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);

@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { CI_ONLY_REPO, JS_REPO, type FixtureRepo } from "../src/main/baselines/__fixtures__/repos";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox, newButton } from "./fixtures";
 
 const git = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
 
@@ -93,7 +93,7 @@ test("baselines: scan, adopt, profile in the ticket guide, inferred fallback, le
   await expect(ci.getByTestId("baseline-msg-acme-ci")).toHaveText(S.bl.adopted(1));
 
   // 4. ticket session（只在 acme/web 上）：说明里有 acme/web 的档案和测试命令，没有 acme/ci。
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("BAS-1");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
   await page.getByRole("button", { name: S.create, exact: true }).click();

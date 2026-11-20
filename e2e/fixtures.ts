@@ -464,6 +464,32 @@ export async function terminalText(page: Page): Promise<string> {
   return page.locator(".terminal-wrap:visible .xterm-rows").innerText();
 }
 
+/** 点侧栏「全部工作」，等页面出来（UI 重做第 2 层：新建按钮、已归档、未认领 session 都在这一页上）。 */
+export async function openAllWork(page: Page, T: UiStrings = S): Promise<void> {
+  await page.locator(".sidebar").getByRole("button", { name: T.allWork, exact: true }).click();
+  await expect(page.locator(".all-work").getByRole("heading", { name: T.allWork, exact: true })).toBeVisible();
+}
+
+/** 先去全部工作页，再返回「+ 新建 ticket / feature / epic」按钮（给 create() 用，或者直接 click）。 */
+export async function newButton(page: Page, which: "newTicket" | "newFeature" | "newEpic", T: UiStrings = S): Promise<Locator> {
+  await openAllWork(page, T);
+  return page.locator(".all-work").getByRole("button", { name: `+ ${T[which]}`, exact: true });
+}
+
+/** 去全部工作页，展开下面的「栈与自动接活」（原来在进度页上的托管栈和自动接活队列）。 */
+export async function openAllWorkMore(page: Page, T: UiStrings = S): Promise<void> {
+  await openAllWork(page, T);
+  const fold = page.locator(".all-work-more").getByRole("button", { name: T.hm.all.moreHeading });
+  if ((await fold.getAttribute("aria-expanded")) !== "true") await fold.click();
+  await expect(fold).toHaveAttribute("aria-expanded", "true");
+}
+
+/** 去全部工作页点「已归档」。 */
+export async function openArchived(page: Page, T: UiStrings = S): Promise<void> {
+  await openAllWork(page, T);
+  await page.locator(".all-work").getByRole("button", { name: T.archived, exact: true }).click();
+}
+
 /** 点 open 打开新建对话框（epic 或 feature），选上一层目录，下面的两个仓库都用。建好后停在新页面上。 */
 export async function create(page: Page, open: Locator, label: string, name: string, dir: string, T: UiStrings = S): Promise<void> {
   await open.click();

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { CAT } from "../src/main/assess/readiness";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, FAKE_GH_ORIGIN, type FakeGhFixture, makeGitRepo, openSettingsGroup, openTab, type Sandbox, terminalText, test, unsupportedGhCalls } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, type FakeGhFixture, makeGitRepo, newButton, openSettingsGroup, openTab, type Sandbox, terminalText, test, unsupportedGhCalls } from "./fixtures";
 
 const BRANCH = "feature/E2E-7";
 const url = "https://github.com/acme/app/pull/51";
@@ -72,7 +72,7 @@ test("evidence goes through pre-review into readiness, risk and a review brief",
   await expect(enabled).toBeChecked();
   await expect(page.getByTestId("review-row-evidence.require.test")).toBeVisible();
 
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-7");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(repo);
   await page.getByRole("radio", { name: S.branch, exact: true }).check();
@@ -106,10 +106,8 @@ test("evidence goes through pre-review into readiness, risk and a review brief",
   await expect(card.getByTestId("review-brief")).toContainText("Fake brief: adds a greeting to the app.");
   expect(fakeLog(s)).toMatch(/ pre-review files=\d+/);
 
-  // 进度页：PR 表有徽标，「待 review」里有这个 PR。
-  await page.locator(".sidebar").getByRole("button", { name: S.progressNav, exact: true }).click();
-  await expect(page.getByTestId("progress-review-queue").getByTestId("review-queue-51")).toBeVisible();
-  await expect(page.getByTestId("progress-review-queue").getByTestId("review-queue-51")).toContainText(S.rv.ready);
+  // 「待 review」队列原来在进度页上；UI 重做第 2 层拆掉进度页后，它要等第 3 层并进 epic、feature 页才有入口。
+  // 第 3 层恢复：在新的入口上断言 review-queue-51 可见、带 S.rv.ready。
 
   // 效果页：Review 效果区块在。
   await page.locator(".sidebar").getByRole("button", { name: S.effectNav, exact: true }).click();
@@ -117,3 +115,6 @@ test("evidence goes through pre-review into readiness, risk and a review brief",
   await expect(page.getByTestId("effect-review-groups")).toBeVisible();
   expect(unsupportedGhCalls(s)).toEqual([]);
 });
+
+// 第 3 层恢复：「待 review」队列（review-queue-<pr>，带 S.rv.ready）随进度页一起没了入口，第 3 层把它并进 epic、feature 页后补回这条断言。
+test.fixme("the pending-review queue shows the PR as ready (restored in UI redesign layer 3)", () => {});

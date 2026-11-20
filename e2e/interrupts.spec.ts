@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { expect, FAKE_GH_ORIGIN, kvValue, openSettingsGroup, type Sandbox, terminalText, test } from "./fixtures";
+import { expect, FAKE_GH_ORIGIN, kvValue, newButton, openSettingsGroup, type Sandbox, terminalText, test } from "./fixtures";
 
 /** 沙盒的 Claude Code 记录里放几次在这个仓库里跑过的命令：只读的跑够次数，写的也跑了（不能成为候选）。 */
 function seedHistory(s: Sandbox): void {
@@ -73,7 +73,7 @@ test("the wizard's permission step offers read-only commands from history and co
   await expect(page.getByTestId("notify-test")).toBeDisabled();
 
   // 4. 在这个仓库开 session：--settings 里放行了 gh pr view，没有任何写操作。
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("PERM-1");
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "PERM-1", exact: true })).toBeVisible();

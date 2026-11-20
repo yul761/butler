@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ActivityEvent, SessionActivity } from "../../shared/activity";
 import type { InboxItemView, NowRow, NowView, UsageSummary, WatchedPr } from "../../shared/types";
 import {
-  groupSummary, inboxWho, liveMemoryLine, liveNeeds, livePill, liveRows, mergeEvents, needsYouText, needsYouTotal, prPill, rowLabel, wirePath, rowPlace, rowText, usageDetails, usageLine,
+  inboxWho, liveMemoryLine, liveNeeds, livePill, liveRows, mergeEvents, prPill, rowLabel, wirePath, usageDetails, usageLine,
 } from "./now-view";
 import { S, setUiLang } from "./strings";
 
@@ -30,91 +30,6 @@ const usage = (over: Partial<UsageSummary> = {}): UsageSummary => ({
 });
 
 afterEach(() => setUiLang("zh"));
-
-describe("rowText", () => {
-  it("hibernated rows say why; a failed wake is danger (WS-M B)", () => {
-    const stopped = { activity: act({ kind: "waiting" }), working: false };
-    expect(rowText(row({ ...stopped, hibernated: "review" }), S, NOW)).toEqual({ main: S.hib.now, sub: S.hib.reason.review, tone: "muted" });
-    expect(rowText(row({ ...stopped, wakeError: "boom" }), S, NOW)).toEqual({ main: S.hib.wakeFailedNow, sub: "boom", tone: "danger" });
-  });
-
-  it("rowText of a limited row is danger", () => {
-    const limit = { kind: "usage_limit" as const, resetsAt: null, message: "hit your limit" };
-    expect(rowText(row({ activity: act({ kind: "waiting", limit }), working: false }), S, NOW)).toEqual({ main: "用量已达上限", sub: "hit your limit", tone: "danger" });
-  });
-
-  it("needs-you rows read 等你 with the reason", () => {
-    const r = rowText(row({ needsYou: "问要不要拆 PR", activity: act({ kind: "waiting" }) }), S, NOW);
-    expect(r).toMatchObject({ main: "等你：问要不要拆 PR", tone: "danger" });
-  });
-
-  it("a row with a pending ask_user reads 等你决定 (BTL-190 2+3)", () => {
-    expect(rowText(row({ decisions: 2, activity: act({ kind: "waiting" }) }), S, NOW)).toMatchObject({ main: "等你决定", tone: "danger" });
-    // 停在确认上的照样先说确认。
-    expect(rowText(row({ decisions: 1, needsYou: "等你确认", activity: act({ kind: "approval" }) }), S, NOW).main).toBe("等你：等你确认");
-    setUiLang("en");
-    expect(rowText(row({ decisions: 1, activity: act({ kind: "waiting" }) }), S, NOW).main).toBe("Waiting for your decision");
-  });
-
-  it("stuck rows read 卡住 with the reason, or 卡住了 when there is none", () => {
-    expect(rowText(row({ needsYou: "测试 20 分钟没有输出", activity: act({ kind: "test", stuck: true }) }), S, NOW)).toMatchObject({ main: "卡住：测试 20 分钟没有输出", tone: "danger" });
-    expect(rowText(row({ needsYou: "", activity: act({ kind: "test", stuck: true }) }), S, NOW)).toMatchObject({ main: "卡住了", tone: "danger" });
-  });
-
-  it("rows without a session read from their PR and CI", () => {
-    const bare = (prs: WatchedPr[]) => rowText(row({ sessionId: null, activity: null, since: null, prs }), S, NOW);
-    expect(bare([pr({ ci: "failing" })])).toEqual({ main: "CI 失败", sub: null, tone: "danger" });
-    expect(bare([pr({ ci: "pending" })])).toEqual({ main: "等 CI", sub: null, tone: "warn" });
-    expect(bare([pr({ state: null, number: null, url: null, prId: null, review: null, ci: "pending" })])).toEqual({ main: "等 CI", sub: null, tone: "warn" });
-    // 合并了的 PR 留着最后一次读到的 CI：不算还在等。
-    expect(bare([pr({ state: "merged", ci: "pending" })])).toEqual({ main: "已停下", sub: null, tone: "muted" });
-    expect(bare([pr({ review: "pending" })])).toEqual({ main: "等 review", sub: null, tone: "muted" });
-    expect(bare([pr({ review: "changes_requested" })])).toEqual({ main: "要修改", sub: null, tone: "muted" });
-    expect(bare([pr({ review: "approved" })])).toEqual({ main: "已批准", sub: null, tone: "muted" });
-  });
-
-  it("a refreshing row reads 换新中 / Refreshing (plan 16)", () => {
-    for (const step of ["handoff", "clear", "resume"] as const) {
-      expect(rowText(row({ refreshing: step, activity: act({ kind: "thinking" }) }), S, NOW)).toEqual({ main: "换新中", sub: null, tone: "warn" });
-      expect(rowText(row({ refreshing: step, mergeQueued: true, activity: act({ kind: "test", stuck: true }) }), S, NOW).main).toBe("换新中");
-    }
-    // Butler 的 /handoff 停在权限确认上：显示确认，不显示换新中。
-    expect(rowText(row({ refreshing: "handoff", needsYou: "等你确认", activity: act({ kind: "approval" }) }), S, NOW)).toMatchObject({ main: "等你：等你确认", tone: "danger" });
-    setUiLang("en");
-    expect(rowText(row({ refreshing: "clear" }), S, NOW).main).toBe("Refreshing");
-  });
-
-  it("a session being closed for idling reads 闲置，正在关闭 / Idle, closing (BTL-190)", () => {
-    expect(rowText(row({ refreshing: "close", activity: act({ kind: "thinking" }) }), S, NOW)).toEqual({ main: "闲置，正在关闭", sub: null, tone: "warn" });
-    setUiLang("en");
-    expect(rowText(row({ refreshing: "close" }), S, NOW).main).toBe("Idle, closing");
-  });
-
-  it("merge queue beats the plain activity", () => {
-    expect(rowText(row({ mergeQueued: true, activity: act({ kind: "rebase", detail: null }) }), S, NOW)).toMatchObject({ main: "合并排队", tone: "warn" });
-    expect(rowText(row({ mergeQueued: true, needsYou: "问要不要拆 PR" }), S, NOW).main).toBe("等你：问要不要拆 PR");
-  });
-
-  it("reads the plain activity, and a stopped session as stopped", () => {
-    expect(rowText(row(), S, NOW)).toEqual({ main: "写代码", sub: "notify.ts · 3 分钟", tone: "ok" });
-    expect(rowText(row({ activity: act({ kind: "waiting" }), idle: true }), S, NOW)).toEqual({ main: "已停下", sub: null, tone: "muted" });
-    expect(rowText(row({ activity: null, idle: true }), S, NOW)).toEqual({ main: "已停下", sub: null, tone: "muted" });
-  });
-
-  it("works in English", () => {
-    setUiLang("en");
-    expect(rowText(row({ needsYou: "split the PR?" }), S, NOW).main).toBe("Waiting on you: split the PR?");
-    expect(rowText(row({ needsYou: "", activity: act({ stuck: true }) }), S, NOW).main).toBe("stuck");
-  });
-});
-
-describe("needsYouText", () => {
-  it("is the reason, or the stuck label for a stuck row", () => {
-    expect(needsYouText(row({ needsYou: "问要不要拆 PR" }), S)).toBe("问要不要拆 PR");
-    expect(needsYouText(row({ needsYou: "测试没有输出", activity: act({ stuck: true }) }), S)).toBe("卡住：测试没有输出");
-    expect(needsYouText(row({ needsYou: "", activity: act({ stuck: true }) }), S)).toBe("卡住了");
-  });
-});
 
 describe("prPill", () => {
   it("colours a failing CI like requested changes and a running one like pending", () => {
@@ -146,14 +61,6 @@ describe("prPill", () => {
   });
 });
 
-describe("groupSummary", () => {
-  it("groupSummary skips zero counts", () => {
-    expect(groupSummary({ active: 3, needsYou: 1, stuck: 0 }, S)).toBe("3 个在干活 · 1 需要你");
-    expect(groupSummary({ active: 2, needsYou: 0, stuck: 1 }, S)).toBe("2 个在干活 · 1 卡住");
-    expect(groupSummary({ active: 0, needsYou: 0, stuck: 0 }, S)).toBe("没人在干活");
-  });
-});
-
 describe("usageLine", () => {
   it("usageLine formats tokens and shares", () => {
     expect(usageLine(usage(), S)).toBe("近 7 天：12.3M token · 缓存读取占 66% · 上下文超过 20 万的轮次占 63%");
@@ -166,27 +73,6 @@ describe("usageLine", () => {
       byKind: ["ticket session 50%", "总控 30%", "子 agent 15%", "后台任务 5%"],
       byModel: ["claude-opus 90%", "claude-haiku 10%"],
     });
-  });
-});
-
-describe("rowPlace", () => {
-  it("names the ticket or 总控 and the feature or epic the row sits in", () => {
-    const ticket = row();
-    const coord = row({ sessionId: "c1", ticketKey: null, title: null, coordinator: true, target: { page: "feature", id: 7, sessionId: "c1" } });
-    const epicRow = row({ sessionId: "e1", ticketKey: null, title: null, coordinator: true, target: { page: "epic", id: 3, sessionId: "e1" } });
-    const loose = row({ sessionId: "s9", ticketKey: "BTL-9", title: "独立的 ticket" });
-    const counts = { active: 1, needsYou: 0, stuck: 0 };
-    const view: NowView = {
-      needsYou: [], decisions: [], butler: null, running: 4, merges: [], memory: [], notices: [],
-      epics: [
-        { id: 3, name: "结账改版", rows: [epicRow], counts, features: [{ id: 7, name: "支付重构", rows: [coord, ticket], counts }] },
-        { id: null, name: "", rows: [], counts, features: [{ id: null, name: "", rows: [loose], counts }] },
-      ],
-    };
-    expect(rowPlace(view, ticket, S)).toEqual({ label: "BTL-1", name: "支付重构" });
-    expect(rowPlace(view, coord, S)).toEqual({ label: "总控", name: "支付重构" });
-    expect(rowPlace(view, epicRow, S)).toEqual({ label: "总控", name: "结账改版" });
-    expect(rowPlace(view, loose, S)).toEqual({ label: "BTL-9", name: "独立的 ticket" });
   });
 });
 
@@ -206,12 +92,6 @@ describe("inbox helpers (BTL-190 2+3)", () => {
     expect(inboxWho(item({ role: "epic", ticketKey: null }), S)).toBe("Epic session");
   });
 
-  it("counts every pending decision as one more thing that needs you", () => {
-    expect(needsYouTotal(null)).toBe(0);
-    expect(needsYouTotal({ needsYou: [row()], decisions: [item(), item({ id: 2 })], epics: [], butler: null, running: 1, merges: [], memory: [], notices: [] })).toBe(3);
-    // 已经在卡片上答了、等着送进去的不算。
-    expect(needsYouTotal({ needsYou: [], decisions: [item(), item({ id: 2, answer: "A" })], epics: [], butler: null, running: 1, merges: [], memory: [], notices: [] })).toBe(1);
-  });
 });
 
 describe("the live window (BTL-190 7)", () => {
@@ -232,7 +112,7 @@ describe("the live window (BTL-190 7)", () => {
     // Butler 总控在最前，卡片上写「Butler 总控」。
     const butler = row({ sessionId: "b", ticketKey: null, title: null, coordinator: true, working: false, activity: act({ kind: "waiting" }), needsYou: "在问你", target: { page: "butler", sessionId: "b" } });
     expect(liveRows(view([working], [], butler)).map((r) => r.sessionId)).toEqual(["b", "w"]);
-    expect(rowLabel(butler, S)).toBe("Butler 总控");
+    expect(rowLabel(butler, S)).toBe(S.butlerNav);
     expect(liveRows(view([], [stopped]))).toEqual([]);
   });
 

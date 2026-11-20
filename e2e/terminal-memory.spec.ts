@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, terminalText, test } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, terminalText, test, newButton } from "./fixtures";
 
 async function typeLine(page: Page, line: string): Promise<void> {
   await page.locator(".terminal-wrap:visible .xterm").click();
@@ -20,7 +20,7 @@ test("only the visible terminal keeps an xterm, switching back rebuilds it from 
   const shop = join(s.dir, "shop");
   makeGitRepo(join(shop, "frontend"));
   makeGitRepo(join(shop, "backend"));
-  await page.getByRole("button", { name: `+ ${S.newFeature}`, exact: true }).click();
+  await (await newButton(page, "newFeature")).click();
   await page.getByLabel(S.featureName, { exact: true }).fill("checkout");
   const dir = page.getByRole("textbox", { name: `${S.repo} ${S.pick}`, exact: true });
   await dir.fill(shop);
@@ -58,11 +58,10 @@ test("only the visible terminal keeps an xterm, switching back rebuilds it from 
   await typeLine(page, "after rebuild");
   await expect.poll(() => terminalText(page)).toContain("收到：after rebuild");
 
-  // WS-M A：两个 session 的整棵进程树都被量到，「现在」页的行上有读数，顶上有内存那一行。
+  // WS-M A：两个 session 的整棵进程树都被量到：首页「运行情况」里有内存那一行（UI 重做第 2 层起没有逐行的读数）。
   await page.locator(".sidebar").getByRole("button", { name: S.home, exact: true }).click();
+  await page.locator(".home-more-fold > h3 .section-toggle").click();
   await expect(page.locator(".now-mem-card")).toContainText(S.perf.memTitle, { timeout: 30_000 });
   await expect(page.locator(".now-mem-card")).toContainText("×2");
-  // 两个都停着：收在「空闲」里，展开看行上的读数。
-  await page.getByRole("button", { name: `▸ ${S.nowIdle(2)}`, exact: true }).click();
-  await expect(page.locator(".now-row .now-mem").first()).toHaveText(/\d+ (MB|GB)/);
+  await expect(page.locator(".now-mem-card")).toContainText(/\d+ (MB|GB)/);
 });

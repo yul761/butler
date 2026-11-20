@@ -1,3 +1,4 @@
+import { prUrlKey } from "../../shared/pr-url";
 /** 解析一次；不允许时返回 null。isAllowedGithubUrl 和 openKnownPr 用的是同一个解析结果。 */
 function allowedGithubUrl(url: string, knownSlugs: readonly string[]): URL | null {
   let u: URL;
@@ -26,7 +27,25 @@ export function isAllowedGithubUrl(url: string, knownSlugs: readonly string[]): 
 export type PrOpenResult = { ok: true } | { ok: false; reason: "bad_url" };
 
 /**
- * 打开 PR 链接：只开某个 ticket 链接过的 PR，主机要过 isAllowedGithubUrl。
+ * openKnownPr 认的 PR：某个 ticket 链接过的（ticket_prs），或者别人请你 review 的（review_requests，首页的「请你 review」卡片）。
+ * 都按 prUrlKey 比较。主机检查不在这里，仍由 openKnownPr 按 trustedSlugs 做。
+ */
+export function knownPrLookup(
+  ticketPrs: { byUrl(url: string): readonly unknown[] },
+  reviewRequests: () => readonly { url: string }[],
+): { byUrl(url: string): readonly unknown[] } {
+  return {
+    byUrl(url) {
+      const linked = ticketPrs.byUrl(url);
+      if (linked.length > 0) return linked;
+      const key = prUrlKey(url);
+      return reviewRequests().filter((r) => prUrlKey(r.url) === key);
+    },
+  };
+}
+
+/**
+ * 打开 PR 链接：只开 prs 认得的 PR（index.ts 传 knownPrLookup：ticket 链接过的，或者请你 review 的），主机要过 isAllowedGithubUrl。
  * 允许的主机只来自 trustedSlugs（git remote 认出来的仓库），不来自 ticket_prs：那里的 slug 是从 PR 链接本身算的。
  * 交给浏览器的是检查过的那次解析的 href，不是原始输入。
  */

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, terminalText, test, unsupportedGhCalls, type FakeGhFixture } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, terminalText, test, unsupportedGhCalls, type FakeGhFixture, newButton } from "./fixtures";
 
 const url = "https://github.com/acme/app/pull/43";
 const SHA = "dddd4444dddd";
@@ -62,7 +62,7 @@ test("a fresh install that changes no settings behaves like 2.1.0 and leaves not
   const { page } = await launch(s);
   await completeWizard(page, s);
 
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-10");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(repo);
   await page.getByRole("radio", { name: S.branch, exact: true }).check();

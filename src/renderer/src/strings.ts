@@ -23,6 +23,8 @@ import type { ExternalActionKind, ExternalOutcome } from "../../shared/external"
 import type { InterruptCategory } from "../../shared/metrics";
 import type { ProgressBucket, WaitingOn, WaitingReason } from "../../shared/progress";
 import type { ReportKind } from "../../shared/control";
+import type { YouKind } from "../../shared/turn";
+import type { TurnTone } from "./turn-tone";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ButlerMessageView, EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
@@ -34,8 +36,6 @@ const ZH_STATUS: Record<TicketStatus, string> = {
   done: "完成",
 };
 
-/** 侧栏分组顺序：最容易被遗忘的放最上面。 */
-export const STATUS_ORDER: TicketStatus[] = ["merged_pending_followup", "active", "blocked", "in_review", "done"];
 
 const ZH = {
   /** 首页空状态（UI 重做 spec §5.5）：组件 FirstRunHome，首页接线在第 2 层。 */
@@ -350,7 +350,60 @@ const ZH = {
     nowFallbacks: (n: number) => `最近一小时有 ${n} 次降级`,
     nowOpen: "查看模型路由",
   },
-  home: "现在",
+  home: "轮到你",
+  allWork: "全部工作",
+  selfGroup: "Butler 自己",
+  /** 首页「轮到你」和全部工作页（UI 重做第 2 层）。 */
+  hm: {
+    title: (n: number) => `${n} 件事轮到你`,
+    titleZero: "没有事轮到你",
+    lede: (agent: number, external: number, merged: number) => `agent 在处理 ${agent} 个，在等 CI 或别人 ${external} 个，今天合了 ${merged} 个。`,
+    ledeIdle: "现在没有在跑的事。",
+    kind: { answer: "要你回答", merge: "可以合并", review: "要你 review", stuck: "卡住了", unattended: "没人推进", butler: "Butler 要你点一下" } as Record<YouKind, string>,
+    act: {
+      openPr: "打开 PR",
+      look: "去看看",
+      fix: "开修复 session",
+      send: "送给 agent",
+      answered: (text: string) => `已回答：${text}，等 session 停下来后送进去`,
+      answerGone: "这个问题已经没了",
+      sendNot: (reason: string) => `没送出去：${reason}`,
+      prOpenNot: "这个 PR 链接打不开",
+      fixNot: (reason: string) => `没开成修复 session：${reason}`,
+      sendReason: { not_found: "这个 PR 已经不在了", not_sendable: "现在送不了", no_comments: "没有要送的评论" },
+    },
+    ago: (d: string) => `${d}前`,
+    reviewAgo: (d: string) => `请你 ${d} 了`,
+    scopesHeading: "各个 epic",
+    scopeLine: (total: number, merged: number, slowest: string | null) => `${total} 个里合了 ${merged} 个${slowest === null ? "" : ` · 最慢的是「${slowest}」`}`,
+    scopeEmpty: "还没有 ticket",
+    scopeMore: (n: number) => `全部工作里看全部 ${n} 个`,
+    whoYou: (n: number) => `你 ${n}`,
+    whoAgent: "agent",
+    whoCi: "CI",
+    whoExternal: "外部",
+    whoStackBelow: "栈的下一层",
+    whoDone: "合了",
+    whoIdle: "没开始",
+    running: (n: number) => `进行中 ${n}`,
+    moreHeading: "运行情况",
+    infoNotices: "Butler 的其他提醒",
+    showAll: (n: number) => `显示全部 ${n} 件`,
+    boardFailed: "取不到「轮到你」的数据",
+    boardStale: "数据可能不是最新的",
+    retry: "重试",
+    all: {
+      lede: (epics: number, loose: number) => `${epics} 个 epic、${loose} 个单独的 ticket。`,
+      colName: "名字",
+      colWho: "谁该动",
+      colNow: "现在怎么样",
+      colProgress: "进度",
+      empty: "还没有任何工作，先新建一个。",
+      unclaimedBtn: (n: number) => (n > 0 ? `未认领 session · ${n}` : "未认领 session"),
+      moreHeading: "栈与自动接活",
+    },
+    dotTitle: { ask: "要你回答或 review", merge: "可以合并", stuck: "卡住了或没人推进", butler: "Butler 要你点一下", agent: "agent 在处理", external: "在等 CI 或别人", done: "合了", idle: "没开始" } as Record<TurnTone, string>,
+  },
   language: "语言 / Language",
   languageOptions: { auto: "跟随系统", zh: "中文", en: "English" } as Record<string, string>,
   languageHint: "界面、Butler 的提示和发给 claude 的默认提示词都会切换；你自己改过的提示词不变，以前生成的内容不会翻译。切换之后，设置 → 环境检查里的 /handoff 命令会显示需要更新：点“安装 / 修复”，session 里的 /handoff 也会换成新语言。",
@@ -371,7 +424,7 @@ const ZH = {
   epicSessionHint: "epic session 在 epic 的工作区里运行，能读所有仓库。在这里规划下一个 feature，定下来后让它建好。",
   noEpicSessions: "还没有 epic session。",
   // Butler 总控（BTL-190 第 5 点）
-  butlerNav: "Butler 总控",
+  butlerNav: "总控",
   butlerTitle: "Butler 总控",
   butlerIntro: "全局的总控：能看所有 epic、feature、ticket、PR 和 session，能给 epic session 和 feature 总控发消息，不能建、删、结束任何东西。epic session 的完成和卡住汇报会送到这里。",
   butlerWorkspace: "工作目录",
@@ -738,31 +791,12 @@ const ZH = {
   loading: "加载中…",
   itemActions: { done: "完成", snooze: "推迟到明天", ignore: "忽略" } as Record<string, string>,
   // 「现在」页（计划 14）。
-  nowTitle: "现在",
-  nowRunning: (n: number) => `${n} 个 session 在干活`,
-  nowNeedsYou: "需要你",
   nowNeedsYouBadge: (n: number) => `${n} 个需要你`,
-  nowOpen: "打开 →",
-  nowNoEpic: "不属于任何 epic",
-  nowNoFeature: "不属于任何 feature",
-  nowWaitingFor: (reason: string) => `等你：${reason}`,
   nowStuck: "卡住",
-  nowStuckWith: (reason: string) => `卡住：${reason}`,
-  nowStuckNoReason: "卡住了",
-  nowMergeQueued: "合并排队",
-  nowRefreshing: "换新中",
-  nowClosing: "闲置，正在关闭",
-  nowStopped: "已停下",
-  nowWaitCi: "等 CI",
   nowCiFailed: "CI 失败",
   nowCiRunning: "CI 跑中",
   nowPrUnavailable: "PR 状态不可用",
-  nowWaitReview: "等 review",
-  nowChangesRequested: "要修改",
-  nowApproved: "已批准",
   nowPr: (n: number | null, state: string) => `PR${n === null ? "" : ` #${n}`} ${state}`,
-  nowActive: (n: number) => `${n} 个在干活`,
-  nowNeedsYouCount: (n: number) => `${n} 需要你`,
   nowWaitingDecision: "等你决定",
   // 「待你决定」和汇报（BTL-190 第 2+3 点）。
   inboxReports: "汇报",
@@ -788,8 +822,6 @@ const ZH = {
   inboxDismiss: "不用了",
   inboxQueued: (answer: string) => `已回答「${answer}」，等它停下来再送进去。`,
   inboxTerminalClosed: "终端关着",
-  nowStuckCount: (n: number) => `${n} 卡住`,
-  nowNoneActive: "没人在干活",
   // 实况窗口（BTL-190 第 7 点）
   liveTitle: "实况",
   liveEmpty: "现在没有正在进行的工作",
@@ -802,7 +834,6 @@ const ZH = {
   liveWrote: "写入",
   liveRead: "读取",
   liveMore: (n: number) => `还有 ${n} 个没摆出来，见下面的列表`,
-  nowIdle: (n: number) => `空闲 ${n}`,
   nowRecentMerges: "最近合并",
   nowUsage: (tokens: string, cacheRead: string, over200k: string) => `近 7 天：${tokens} token · 缓存读取占 ${cacheRead} · 上下文超过 20 万的轮次占 ${over200k}`,
   nowUsageKind: { ticket: "ticket session", coordinator: "总控", subagent: "子 agent", headless: "后台任务" } as Record<UsageKind, string>,
@@ -913,7 +944,7 @@ const ZH = {
   llmZeroBudget: "每月预算是 $0：不会调用个人 API。",
   llmOverBudget: (spent: string, budget: string) => `本月已花 ${spent}，达到预算 ${budget}：本月不再调用。`,
   llmFullWarning: "完整档位下，StateCore 记忆蒸馏会把真实的 ticket 号、原始对话片段、已有的记忆（决策、follow-up、笔记、跨 ticket 的经验、上一次的摘要）和已遗忘条目的原文发给服务商，不替换也不做敏感信息扫描，但都记进审计页、计入月预算。",
-  lessons: "review 经验",
+  lessons: "复盘与规矩",
   lessonsIntro: "从历史 PR 的 review 评论里提炼出来的规矩。你确认后，会送进 Butler 开的 ticket session 和修复 session；没确认的不会送。",
   lessonsPendingTitle: "待确认",
   lessonsConfirmedTitle: "已确认",
@@ -1709,7 +1740,7 @@ const ZH = {
   perf: {
     section: "内存与性能",
     memoryMonitor: "记录每个 session 用了多少内存",
-    memoryMonitorHelp: "每分钟读一次进程表，把每个 session 的整棵进程树（claude、MCP、shell、watcher、dev server）和 Butler 自己的内存加起来，显示在「现在」页，并保留 14 天的历史。只读，不动任何进程。",
+    memoryMonitorHelp: "每分钟读一次进程表，把每个 session 的整棵进程树（claude、MCP、shell、watcher、dev server）和 Butler 自己的内存加起来，显示在首页「运行情况」里，并保留 14 天的历史。只读，不动任何进程。",
     backgroundPriority: "降低看不见又停着的 session 的优先级",
     backgroundPriorityHelp: {
       darwin: "你看不见、又停着的 session，它的整棵进程树会被设成后台（taskpolicy -b），切回来或者它开始干活就恢复。正在干活的 session 不降：后台优先级会把编译和测试拖得很慢。钉住的 session 不降。",
@@ -1804,7 +1835,6 @@ const ZH = {
     },
   },
   /** 进度页（ws-b）。 */
-  progressNav: "进度",
   progress: {
     title: "进度",
     intro: "所有 ticket 和 PR 走到哪了、卡在谁手上。和 Butler 总控的 progress_overview 是同一份数据；PR 状态来自后台轮询。",
@@ -1877,7 +1907,7 @@ const ZH = {
     unknownSince: "—",
   },
   /** 「效果」页（ws-h）。 */
-  effectNav: "效果",
+  effectNav: "效果与花费",
   effect: {
     title: "效果",
     intro: "Butler 做的 PR 有多快、评论多少、要你插手几次、花多少，和 Butler 之前比。和 Butler 总控的 metrics_overview 是同一份数据，每小时汇总一次。",
@@ -1999,7 +2029,6 @@ const ZH = {
   featureSummaryPrAsOf: (t: string) => `PR 状态截至 ${t}`,
   featureSummaryStale: "汇总之后又有新活动（含 PR 状态变化），可以点“立即更新”。",
   prStagesStuck: "卡在谁手上",
-  prStagesOpenProgress: "在进度页里看",
   /** 设置里的「对外动作」（契约 4.8，ws-b）。 */
   externalHeading: "对外动作",
   externalIntro: "Butler 代你在 GitHub 或别的外部服务上留下东西的动作，每种一个开关，默认全关。关着时 Butler 不会做，只在审计页记一笔“跳过”。现在用到的是导出成仓库规则的「推送分支」和「开 PR」，以及评论与 CI 的「回复 review 评论」「标记评论已解决」和「重跑 CI」；其余的等之后的版本接入时才会生效。",

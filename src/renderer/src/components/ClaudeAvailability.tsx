@@ -13,7 +13,7 @@ const SCROLL_SETTLE_MS = 2000;
 
 export function ClaudeAvailability({ scrollIntoView = false }: { scrollIntoView?: boolean }) {
   const view = useStateRefetch("availability", api.availability);
-  // 从「现在」页的提醒跳来：内容出现后滚到这里，只滚一次。
+  // 从首页的提醒跳来：内容出现后滚到这里，只滚一次。
   const scrolled = useRef(false);
   const ready = view !== null && view !== undefined;
   useEffect(() => {

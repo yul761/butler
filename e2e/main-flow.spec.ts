@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CSP_VIOLATION_LOG_PREFIX, isCspViolationMessage } from "../src/main/csp-log";
-import { S, STATUS_LABEL } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test } from "./fixtures";
+import { S } from "../src/renderer/src/strings";
+import { completeWizard, expect, terminalText, test, newButton, openAllWork } from "./fixtures";
 
 /**
  * 设计文档 11 节的主流程（计划 5 任务 9）：真实的主进程、preload、React 界面、node-pty、butler-hook（经 shell 执行）、
@@ -18,7 +18,7 @@ test("new ticket → session → hook → handoff → memory → Now page → ba
     await completeWizard(page, s);
 
     // 1. 新建 ticket（worktree 模式，默认）。
-    await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+    await (await newButton(page, "newTicket")).click();
     await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-1");
     // 这个 label 里还包着“选择…”按钮，输入框的可访问名是两段文字连起来。
     await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
@@ -35,15 +35,17 @@ test("new ticket → session → hook → handoff → memory → Now page → ba
     await page.keyboard.type("hello");
     await page.keyboard.press("Enter");
     await expect.poll(() => terminalText(page)).toContain("收到：hello");
-    await expect(page.locator(".sidebar .ticket .badge")).toBeVisible();
-    await expect(page.locator(".sidebar .ticket .badge")).toHaveAttribute("title", S.waiting);
+    // 回完话停着、没人推进：侧栏 ticket 后面是「卡住了或没人推进」的点，带一个轮到你的数。
+    await expect(page.locator(".sidebar .ticket .turn-dot")).toHaveClass(/\bturn-stuck\b/);
+    await expect(page.locator(".sidebar .ticket .turn-dot")).toHaveAttribute("title", S.hm.dotTitle.stuck);
+    await expect(page.locator(".sidebar .ticket .cnt")).toHaveText("1");
 
     // 4. 立即 handoff（假 claude 的 -p 模式，不挂记忆）：合并后任务入库，ticket 变成“已合并·待收尾”。
     await page.getByRole("button", { name: S.runHandoff, exact: true }).click();
     await page.getByRole("button", { name: S.followupsTab(1), exact: true }).click();
     await expect(page.locator(".followup .text").getByText("改 staging 配置", { exact: true })).toBeVisible();
-    const pending = page.locator(".sidebar section").filter({ has: page.getByRole("heading", { name: STATUS_LABEL.merged_pending_followup, exact: true }) });
-    await expect(pending.locator(".ticket .key")).toHaveText(["E2E-1"]);
+    // 侧栏不再按状态分组（UI 重做第 2 层）：ticket 还在树里。
+    await expect(page.locator(".sidebar .ticket .key")).toHaveText(["E2E-1"]);
 
     // 5. 记忆标签：handoff 入库后同步进 StateCore，标签收到 memory:changed 后重读。决策、follow-up 和交接都在。
     await page.getByRole("button", { name: S.memoryTab, exact: true }).click();
@@ -61,20 +63,14 @@ test("new ticket → session → hook → handoff → memory → Now page → ba
     await expect(chain.locator("li.why-current")).toContainText("用 PostgreSQL");
     await expect(chain.locator("li.why-current")).toContainText(S.whyState.current);
 
-    // 6. 「现在」页：这个 session 回完话停着，是“空闲”里的一行（空闲默认收起）；点它回到 ticket 页的同一个终端。
+    // 6. handoff 之后 ticket 已合并·待收尾：首页没有事轮到你。「全部工作」里点这一行回到 ticket 页的同一个终端。
     const sessionTitle = await page.locator(".sessions-bar .session.active").getAttribute("title");
     const screen = await terminalText(page);
     await page.getByRole("button", { name: S.home, exact: true }).click();
-    await expect(page.getByRole("heading", { name: S.nowTitle, exact: true })).toBeVisible();
-    await expect(page.locator(".now-needs")).toHaveCount(0);
-    const idle = page.locator(".now-idle");
-    const idleToggle = idle.locator(":scope > .section-toggle");
-    await expect(idleToggle).toContainText(S.nowIdle(1));
-    await expect(idleToggle).toHaveAttribute("aria-expanded", "false");
-    await idleToggle.click();
-    const row = idle.locator(".now-row").filter({ has: page.locator(".now-key", { hasText: /^E2E-1$/ }) });
-    await expect(row.locator(".main")).toHaveText(S.nowStopped);
-    await row.click();
+    await expect(page.locator(".home-top h2")).toHaveText(S.hm.titleZero);
+    await expect(page.getByTestId("turn-card")).toHaveCount(0);
+    await openAllWork(page);
+    await page.getByTestId("all-work-row-ticket-E2E-1").locator(".row-name").click();
     await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
     await expect(page.locator(".terminal-wrap")).toHaveCount(1);
     await expect(page.locator(".sessions-bar .session.active")).toHaveAttribute("title", sessionTitle!);
