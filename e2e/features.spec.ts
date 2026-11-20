@@ -607,17 +607,17 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await expect(panel).toBeVisible();
 
   // 9. 点这一行的其他位置和“看终端”都进 ticket 页。在别的页面上，侧栏的 feature 行也是「卡住了」的点。
-  //    首页有一张 DMS-1「卡住了」的卡片（写着理由）；feature 总控回完话停着，也是一张「没人推进」，所以侧栏的“轮到你”后面是 2。回来时面板还开着。
+  //    首页有一张 DMS-1「卡住了」的卡片（写着理由）；feature 总控回完话停在提示符上不算轮到你（第 1 层 c7038adb），所以侧栏的“轮到你”后面是 1。回来时面板还开着。
   await row("DMS-1").locator(".status").click();
   await onTicketPage("DMS-1");
   await expect(page.locator(".sidebar .feature-group > .feature-row .turn-dot")).toHaveClass(/\bturn-stuck\b/);
   await page.getByRole("button", { name: S.home, exact: true }).click();
-  await expect(page.getByTestId("turn-card")).toHaveCount(2);
+  await expect(page.getByTestId("turn-card")).toHaveCount(1);
   const need = page.getByTestId("turn-card").filter({ has: page.locator(".where .path", { hasText: /DMS-1$/ }) });
   await expect(need.locator(".turn-tag")).toHaveText(S.hm.kind.stuck);
   await expect(need.locator(".where .path")).toHaveText("checkout › DMS-1");
   await expect(need.locator(".sentence")).toContainText(VERDICT_REASON.zh);
-  await expect(page.locator(".sidebar .nav.home .needs-you-badge")).toHaveText("2");
+  await expect(page.locator(".sidebar .nav.home .needs-you-badge")).toHaveText("1");
   await featurePage();
   await expect(panel).toBeVisible();
   // 面板是记住的状态，不是这次点开的：回到这一页不滚动。
