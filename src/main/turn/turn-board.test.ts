@@ -106,3 +106,27 @@ describe("the item that carries a ticket's own turn", () => {
     expect(own(b.items).find((i) => i.ticketKey === "PAY-2")).toMatchObject({ pr: null, turn: agent, others: 0 });
   });
 });
+
+describe("several sessions under one ticket each asked", () => {
+  const askBy = (id: number, sid: string): Turn => ({ owner: "you", kind: "answer", question: `q${id}`, options: [], askId: id, sessionId: sid });
+  const two = (extra: Partial<BoardTicket> = {}): BoardInput => ({
+    ...input(), loose: [], reviews: [],
+    tickets: [tk("K-1", 10, { others: [{ turn: askBy(1, "a"), since: NOW - 9 }, { turn: askBy(2, "b"), since: NOW - 3 }], ...extra })],
+  });
+  const answers = (items: { turn: Turn }[]) => items.flatMap((i) => (i.turn.kind === "answer" ? [i.turn.askId] : [])).sort();
+  it("every head's question is an item; the ticket's own item is unchanged", () => {
+    const b = buildTurnBoard(two(), null);
+    expect(answers(b.items)).toEqual([1, 2]);
+    expect(b.items.filter((i) => i.ticketLevel === true)).toHaveLength(1);
+    expect(b.counts.you).toBe(2);
+    expect(buildTurnBoard(two(), { ticketKey: "K-1" }).scopes.find((s) => s.id === "K-1")?.youCount).toBe(2);
+  });
+  it("with a filter too, and a PR on the ticket does not hide either question", () => {
+    for (const f of [{ ticketKey: "K-1" }, { featureId: 10 }]) {
+      expect(answers(buildTurnBoard(two({ prs: [prOf(5, merge)] }), f).items)).toEqual([1, 2]);
+    }
+    const b = buildTurnBoard(two({ prs: [prOf(5, merge)] }), null);
+    expect(answers(b.items)).toEqual([1, 2]);
+    expect(b.counts.you).toBe(2);
+  });
+});
