@@ -491,13 +491,13 @@ export interface WatchedPr {
   checkedAt: number;
   /** 上一次 gh 读取失败：ci、state 是再上一次的。 */
   readError: boolean;
-  /** 放弃读了（一直读不到）：状态只是最后一次读到的，不再当真（ws-b 进度页不算它）。分支行没有。 */
+  /** 放弃读了（一直读不到）：状态只是最后一次读到的，不再当真（progress_overview 不算它）。分支行没有。 */
   gaveUp?: boolean;
   /** PR 行的 base、draft、标题、reviewer 等（ws-b）；分支行没有。 */
   detail?: PrDetail;
 }
 
-/** ticket_prs 里 ws-b 加的那些字段（叠放树、卡在谁手上、汇总新鲜度）。 */
+/** ticket_prs 里 ws-b 加的那些字段（叠放树、轮到谁、汇总新鲜度）。 */
 export interface PrDetail {
   baseBranch: string | null;
   isDraft: boolean;

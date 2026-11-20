@@ -146,7 +146,6 @@ function countRows(rows: NowRow[]): NowCounts {
   };
 }
 
-
 const nowFeature = (id: number | null, name: string, rows: NowRow[]): NowFeature => ({ id, name, rows, counts: countRows(rows) });
 
 function nowEpic(id: number | null, name: string, rows: NowRow[], features: NowFeature[]): NowEpic | null {

@@ -315,9 +315,9 @@ describe("TurnService.prTurns", () => {
     })).prTurns();
     expect(of(URL3, "BTL-1")).toMatchObject({ owner: "you", kind: "unattended" });
     expect(of(URL3, "BTL-2")).toMatchObject({ owner: "agent", kind: "fixing_ci", sessionId: "s2" });
-    // 不给 ticket（或 ticket 不认识这个 PR）时落回第一个 ticket 的。
+    // 不给 ticket 时落回第一个 ticket 的；给了但那个 ticket 不认识这个 PR（比如归档了）时是 null，不借别的 ticket 的推的人。
     expect(of(URL3)).toEqual(of(URL3, "BTL-1"));
-    expect(of(URL3, "BTL-9")).toEqual(of(URL3, "BTL-1"));
+    expect(of(URL3, "BTL-9")).toBeNull();
   });
   it("a closed PR has no turn", () => {
     const of = new TurnService(failingPr({ prs: () => [watched({ state: "closed" })] })).prTurns();

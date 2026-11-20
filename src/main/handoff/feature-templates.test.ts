@@ -79,7 +79,7 @@ describe("feature summary prompt", () => {
 
 describe("turnLabel", () => {
   it("says whose turn it is with the reason or the names", () => {
-    expect(turnLabel({ owner: "you", kind: "unattended", why: "conflicts", canSend: false, sessionId: null })).toBe("you (unattended: conflicts)");
+    expect(turnLabel({ owner: "you", kind: "unattended", why: "conflicts", canSend: false, sessionId: null })).toBe("user (unattended: conflicts)");
     expect(turnLabel({ owner: "external", kind: "awaiting_review", names: ["amy", "core"] })).toBe("external (awaiting_review: amy, core)");
     expect(turnLabel({ owner: "external", kind: "ci_running", names: [] })).toBe("external (ci_running)");
     expect(turnLabel({ owner: "agent", kind: "fixing_ci", sessionId: "s" })).toBe("agent (fixing_ci)");

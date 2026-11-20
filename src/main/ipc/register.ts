@@ -137,7 +137,7 @@ export interface IpcDeps {
   };
   /** 打断与通知（工作流 J）。 */
   interrupts: Pick<InterruptsFacade, "state" | "act" | "profiles" | "scan">;
-  /** 栈式 PR（工作流 K）：进度页的栈、手动操作和三层策略。 */
+  /** 栈式 PR（工作流 K）：全部工作页「更多」里的栈、手动操作和三层策略。 */
   stacks: {
     view(filter: StacksFilter): Promise<StacksView>;
     rebaseNow(stackId: number): Promise<StackActionResult>;

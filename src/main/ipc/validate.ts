@@ -882,7 +882,7 @@ export function backgroundActionArg(v: unknown): BackgroundAction {
 
 // ---- 栈（工作流 K）
 
-/** 进度页的范围：epic / feature 都可以是 null。 */
+/** 栈区块的范围：epic / feature 都可以是 null。 */
 export function stacksFilterArg(v: unknown): StacksFilter {
   if (v === undefined || v === null) return { epicId: null, featureId: null };
   const o = objArg(v, "stacks filter", ["epicId", "featureId"]);

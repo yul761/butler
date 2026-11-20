@@ -20,7 +20,7 @@ export const MERGE_STATES = ["clean", "blocked", "behind", "dirty", "draft", "un
 export type PrMergeState = (typeof MERGE_STATES)[number];
 
 /** prTurn 要看的 PR 字段（WatchedPr 的子集）。 */
-export interface WaitingInput {
+export interface PrStatusInput {
   state: "open" | "merged" | "closed" | null;
   isDraft: boolean;
   ci: "none" | "pending" | "passing" | "failing" | "unknown";

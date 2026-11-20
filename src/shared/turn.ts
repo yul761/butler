@@ -3,7 +3,7 @@
 // 这里只放纯函数和类型；名字和类型逐字照 docs/superpowers/plans/2026-11-19-ui-redesign-00-index.md 的「第 1 层产出」。
 import type { CiUndeliveredReason, NowNotice, NowTarget } from "./types";
 import { INTAKE_DECISION_STATES } from "./intake";
-import type { WaitingInput } from "./progress";
+import type { PrStatusInput } from "./progress";
 import { isWorking, type SessionActivity } from "./activity";
 import type { InterruptCategory } from "./metrics";
 import type { ReportKind } from "./control";
@@ -164,7 +164,7 @@ export function noticeNeedsYou(n: NowNotice): boolean {
 
 export interface Pusher { sessionId: string; working: boolean; stoppedAt: number | null }
 
-export interface PrTurnInput extends Omit<WaitingInput, "author"> {
+export interface PrTurnInput extends Omit<PrStatusInput, "author"> {
   mergeQueued: boolean;
   risk: "low" | "medium" | "high" | null;
   /** 结论该递给的 session（ciRecipient 为 ok）；没有为 null。 */

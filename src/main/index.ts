@@ -3102,7 +3102,7 @@ async function bootstrap(): Promise<void> {
   });
 
   /**
-   * 汇总过时没有（ws-b）：hasNewActivity 要同步扫 transcript 目录，进度页每次 stateChanged 都会重取，所以按 feature 缓存一会儿。
+   * 汇总过时没有（ws-b）：hasNewActivity 要同步扫 transcript 目录，总控的 progress_overview 和 list_features 每次都给每个 feature 算一遍，所以按 feature 缓存一会儿。
    * 新写了一份汇总（latest 的 id 变了）马上重算。
    */
   const STALE_TTL_MS = 20_000;

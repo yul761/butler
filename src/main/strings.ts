@@ -395,7 +395,7 @@ const ZH = {
   ctlSendNotStarted: (feature: string, epic: string) => `feature ${feature} 还没开工：它的规划要由 epic ${epic} 的 epic session 用 start_feature 发出去。把要它做的事发给那个 epic session。`,
   butlerMessagePrefix: "Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）：",
   butlerPatrolMessage:
-    "【每日巡检】请做一次巡检：1. progress_overview 看整体进度和每个 PR 卡在谁手上，列出 CI 失败、要修改、可以合并的；2. list_inbox 看待你决定和最近的汇报；" +
+    "【每日巡检】请做一次巡检：1. progress_overview 看整体进度和每个 PR 轮到谁，列出 CI 失败、要修改、可以合并的；2. list_inbox 看待你决定和最近的汇报；" +
     "3. list_epics、list_features、list_sessions 看有没有卡住、在等用户、很久没动的。需要 epic session 或 feature 总控跟进的，用 send_message 告诉它。" +
     "最后用 ask_user 列出需要用户亲自做的事（每件一行，带上 ticket 号或 PR 链接）；没有要用户做的，用 report 说一句一切正常。",
   /** 进件缺信息时让 session 或总控去 tracker 上问（intake-service）；conv-parse 靠它认出这是 Butler 在问。标题已经 JSON.stringify。 */
@@ -1014,7 +1014,7 @@ const EN: MainStrings = {
   ctlSendNotStarted: (feature: string, epic: string) => `Feature ${feature} has not started yet: its plan goes out when the epic session of ${epic} calls start_feature. Send what it should do to that epic session.`,
   butlerMessagePrefix: "Message from Butler control (the last reply you write when you finish this turn goes back to it):",
   butlerPatrolMessage:
-    "[Daily patrol] Please do a patrol: 1. progress_overview for the overall progress and who each PR is waiting on, and list those with failing CI, requested changes, or ready to merge; 2. list_inbox for pending decisions and recent reports; " +
+    "[Daily patrol] Please do a patrol: 1. progress_overview for the overall progress and whose turn each PR is, and list those with failing CI, requested changes, or ready to merge; 2. list_inbox for pending decisions and recent reports; " +
     "3. list_epics, list_features and list_sessions for anything stuck, waiting on the user or idle for long. Where an epic session or feature coordinator should follow up, tell it with send_message. " +
     "Finally use ask_user to list what the user must do themselves (one line each, with the ticket key or PR link); if there is nothing, say all is well with report.",
   intakeClarify: (ref: string, title: string, questions: string, session: boolean) =>

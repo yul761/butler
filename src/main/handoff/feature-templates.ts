@@ -163,10 +163,14 @@ function prLabel(p: Pr): string {
   return `${repo}#${p.number} ${p.state}${p.review ? ` (${p.review})` : ""}`;
 }
 
-/** 一个 PR 轮到谁，写给 claude 看：owner (kind: 原因或点名)，例如 you (unattended: ci_failing)、external (awaiting_review: amy)。 */
+/**
+ * 一个 PR 轮到谁，写给 claude 看：owner (kind: 原因或点名)，例如 user (unattended: ci_failing)、external (awaiting_review: amy)。
+ * owner 的 you 写成 user：读这段的是模型，prompt 里的「you」指它自己，不能拿来指用户。
+ */
 export function turnLabel(t: Turn): string {
   const detail = t.owner === "you" && t.kind === "unattended" ? t.why : t.owner === "external" && t.names.length > 0 ? t.names.join(", ") : null;
-  return `${t.owner} (${t.kind}${detail ? `: ${detail}` : ""})`;
+  const owner = t.owner === "you" ? "user" : t.owner;
+  return `${owner} (${t.kind}${detail ? `: ${detail}` : ""})`;
 }
 
 /** 实时 PR 写成"仓库名#号 状态 [draft]，CI x，review y，轮到：谁（为什么）"；合了的不写轮到谁。 */

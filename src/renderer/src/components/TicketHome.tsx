@@ -16,7 +16,7 @@ import { landingTab, type TicketTab } from "../ticket-tabs";
 import { clipSaid, contextLine, mainActions, prStageLine, prUrlOf, type MainAction } from "../ticket-view";
 import { turnSentence } from "../turn-text";
 import { WhoTag } from "./ScopeParts";
-import { runCardAction, sendReasonText } from "../turn-card-actions";
+import { runCardAction, sendReasonText, type CardOutcome } from "../turn-card-actions";
 import { useStateRefetch } from "./useStateRefetch";
 import { useTurnBoard } from "./useTurnBoard";
 
@@ -32,6 +32,10 @@ export interface TicketHomeProps {
   canFix: boolean;
   /** 「送给 agent」没送成时的一句话。 */
   notice: string | null;
+  /** 在这一页答过、还没送进去的提问：askId -> 回答。这一行改成「已回答…」，不再出选项（和首页卡片一样只记在页面上）。 */
+  answered: Readonly<Record<number, string>>;
+  /** 提问的回答正在送：提问行的按钮先禁用，免得连点覆盖答案。 */
+  busy: boolean;
   onGoTab: (t: TicketTab) => void;
   onOpenPr: (url: string) => void;
   onSend: () => void;
@@ -43,14 +47,14 @@ export interface TicketHomeProps {
 const noop = () => {};
 
 /**
- * 提问行按钮的动作，走首页卡片那条路（runCardAction）：选项经 inbox 回答，发问的 session 已经结束也能送到；
- * 「去看看」落到这张卡片的轮次对应的页签。返回要显示的一句话，没有为 null。
+ * 提问行按钮的动作，走首页卡片那条路（runCardAction）：选项经 inbox 回答，回答先存下来，等发问的 session 下次停下来
+ * （session 结束了就等它恢复以后）再送进去；「去看看」落到这张卡片的轮次对应的页签。返回和首页卡片一样的结果。
  */
 export async function runTicketAsk(
   a: CardAction, item: TurnItem,
   d: { answerInbox: (id: number, text: string) => Promise<boolean>; onGoTab: (t: TicketTab) => void; onChanged: () => void }, s: UiStrings,
-): Promise<string | null> {
-  const r = await runCardAction(a, item, {
+): Promise<CardOutcome> {
+  return runCardAction(a, item, {
     answerInbox: d.answerInbox,
     prOpen: () => Promise.resolve({ ok: true }),
     turnSendToAgent: () => Promise.resolve({ ok: false }),
@@ -61,11 +65,9 @@ export async function runTicketAsk(
     // 回答以后板子随 turn:changed 自己重取；问题已经不在了（别处答过）时没有 turn:changed，要自己重取，和首页一样。
     onChanged: d.onChanged,
   }, s);
-  if (r === null) return null;
-  return "answered" in r ? s.hm.act.answered(r.answered) : r.message;
 }
 
-export function TicketHome({ ticket, row, glance, stages, canFix, notice, onGoTab, onOpenPr, onSend, onFix, onAsk }: TicketHomeProps) {
+export function TicketHome({ ticket, row, glance, stages, canFix, notice, answered, busy, onGoTab, onOpenPr, onSend, onFix, onAsk }: TicketHomeProps) {
   if (row === null) return <div className="ticket-home ticket-home-skeleton" aria-busy="true"><p className="muted">…</p></div>;
   const url = prUrlOf(row.item.pr, stages);
   const actions = mainActions(row.turn, { hasPr: url !== null, canFix }, S);
@@ -92,17 +94,20 @@ export function TicketHome({ ticket, row, glance, stages, canFix, notice, onGoTa
       )}
       {row.asks.length > 0 && (
         <section className="ticket-home-asks">
-          {row.asks.map((a, n) => (
-            <p key={a.turn.kind === "answer" ? a.turn.askId : n} className="ticket-home-state">
-              <WhoTag turn={a.turn} />
-              <span className="sentence">{turnSentence(a.turn, a, S)}</span>
-              {cardActions(a).map((c) => (
-                <button key={c.id === "answer" ? `answer:${c.option}` : c.id} className={c.primary ? "primary" : undefined} onClick={() => onAsk(c, a)}>
-                  {c.id === "answer" ? c.option : S.hm.act[c.id]}
-                </button>
-              ))}
-            </p>
-          ))}
+          {row.asks.map((a, n) => {
+            const done = a.turn.kind === "answer" && a.turn.askId !== null ? answered[a.turn.askId] : undefined;
+            return (
+              <p key={a.turn.kind === "answer" ? a.turn.askId : n} className="ticket-home-state">
+                <WhoTag turn={a.turn} />
+                <span className="sentence">{turnSentence(a.turn, a, S)}</span>
+                {done !== undefined ? <span className="muted" role="status">{S.hm.act.answered(done)}</span> : cardActions(a).map((c) => (
+                  <button key={c.id === "answer" ? `answer:${c.option}` : c.id} className={c.primary ? "primary" : undefined} disabled={busy} onClick={() => onAsk(c, a)}>
+                    {c.id === "answer" ? c.option : S.hm.act[c.id]}
+                  </button>
+                ))}
+              </p>
+            );
+          })}
         </section>
       )}
       {notice && <p className="muted" role="status">{notice}</p>}
@@ -138,6 +143,8 @@ export function TicketHomeTab({ ticket, onGoTab, onFix }: TicketHomeTabProps) {
   const glance = useStateRefetch(`glance:${key}`, () => api.ticketGlance(key));
   const stages = usePrStages({ ticketKey: key })?.find((t) => t.ticketKey === key) ?? null;
   const [notice, setNotice] = useState<string | null>(null);
+  const [answered, setAnswered] = useState<Record<number, string>>({});
+  const [busy, setBusy] = useState(false);
   const row = board === null ? null : (ticketRows([ticket], board.items)[0] ?? null);
   const turn = row?.turn;
   const stuckSession = turn?.owner === "you" && turn.kind === "stuck" ? turn.sessionId : null;
@@ -145,7 +152,7 @@ export function TicketHomeTab({ ticket, onGoTab, onFix }: TicketHomeTabProps) {
   const pr = row?.item.pr ?? null;
   return (
     <TicketHome
-      ticket={ticket} row={row} glance={glance} stages={stages} canFix={canFix} notice={notice} onGoTab={onGoTab}
+      ticket={ticket} row={row} glance={glance} stages={stages} canFix={canFix} notice={notice} answered={answered} busy={busy} onGoTab={onGoTab}
       onOpenPr={(url) => api.prOpen(url).catch(reportError)}
       onSend={() => {
         if (pr === null) return;
@@ -158,8 +165,16 @@ export function TicketHomeTab({ ticket, onGoTab, onFix }: TicketHomeTabProps) {
         if (ticket.featureId !== null && stuckSession !== null) onFix(ticket.featureId, stuckSession);
       }}
       onAsk={(a, item) => {
+        if (busy) return;
         setNotice(null);
-        runTicketAsk(a, item, { answerInbox: api.answerInbox, onGoTab, onChanged: reload }, S).then(setNotice, reportError);
+        setBusy(true);
+        runTicketAsk(a, item, { answerInbox: api.answerInbox, onGoTab, onChanged: reload }, S).then((r) => {
+          if (r !== null && "answered" in r) {
+            const askId = item.turn.kind === "answer" ? item.turn.askId : null;
+            if (askId !== null) setAnswered((m) => ({ ...m, [askId]: r.answered }));
+            else setNotice(S.hm.act.answered(r.answered));
+          } else setNotice(r?.message ?? null);
+        }, reportError).finally(() => setBusy(false));
       }}
     />
   );
