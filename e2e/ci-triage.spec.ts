@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, setLoopPolicy, terminalText, test, unsupportedGhCalls, type FakeGhFixture } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, setLoopPolicy, terminalText, test, unsupportedGhCalls, type FakeGhFixture, newButton } from "./fixtures";
 
 const url = "https://github.com/acme/app/pull/42";
 const SHA = "cccc3333cccc";
@@ -38,7 +38,7 @@ test("a network timeout in CI is rerun and passes without the failure reaching t
   await completeWizard(page, s);
   await setLoopPolicy(page, { "ci.enabled": "true" }, ["ci_rerun"]);
 
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-9");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(repo);
   await page.getByRole("radio", { name: S.branch, exact: true }).check();

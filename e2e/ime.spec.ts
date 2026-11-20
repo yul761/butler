@@ -1,5 +1,5 @@
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test } from "./fixtures";
+import { completeWizard, expect, terminalText, test, newButton } from "./fixtures";
 
 /**
  * 用户反馈（2026-11-01）：输入拼音时拼音框往前窜一格挡住字；在 session 右边缘打字时拼音把整个 UI 往右撑开。
@@ -9,7 +9,7 @@ test("the pinyin box stays on the cursor and inside the terminal", async ({ make
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("IME-1");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
   await page.getByRole("button", { name: S.create, exact: true }).click();

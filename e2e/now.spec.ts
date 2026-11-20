@@ -2,7 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, ROOT, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, ROOT, terminalText, test, type Sandbox, newButton } from "./fixtures";
 
 /**
  * 首页「现在」（计划 14 任务 6）。假 claude 的 /fake-ask 回一句以“？”结尾的问话；假 claude 的需要你判断（headless）认出这句、
@@ -21,7 +21,7 @@ async function typeLine(page: Page, line: string): Promise<void> {
 
 /** 新建一个单独的 ticket（worktree 方式），建完停在 ticket 页。 */
 async function newTicket(page: Page, s: Sandbox, key: string): Promise<void> {
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill(key);
   // 这个 label 里还包着“选择…”按钮，输入框的可访问名是两段文字连起来。
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
@@ -34,7 +34,7 @@ async function checkoutFeature(page: Page, s: Sandbox, keys: string[]): Promise<
   const shop = join(s.dir, "shop");
   makeGitRepo(join(shop, "frontend"));
   makeGitRepo(join(shop, "backend"));
-  await page.getByRole("button", { name: `+ ${S.newFeature}`, exact: true }).click();
+  await (await newButton(page, "newFeature")).click();
   await page.getByLabel(S.featureName, { exact: true }).fill("checkout");
   const dir = page.getByRole("textbox", { name: `${S.repo} ${S.pick}`, exact: true });
   await dir.fill(shop);

@@ -1,5 +1,5 @@
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test } from "./fixtures";
+import { completeWizard, expect, terminalText, test, newButton, openArchived } from "./fixtures";
 
 /**
  * 真机反馈（2026-10-23，Windows）：
@@ -13,7 +13,7 @@ test("edit the work mode, archive and restore the ticket, paste into the termina
   await completeWizard(page, s);
 
   // 1. 建成 worktree 模式（默认），再改成分支模式。
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-2");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
   await page.getByRole("button", { name: S.create, exact: true }).click();
@@ -29,10 +29,10 @@ test("edit the work mode, archive and restore the ticket, paste into the termina
   // 2. 归档后同一个号建不了，但可以直接恢复；“已归档”页里也找得到。
   await page.getByRole("button", { name: S.archive, exact: true }).click();
   await expect(page.locator(".sidebar .ticket .key")).toHaveCount(0);
-  await page.getByRole("button", { name: S.archived, exact: true }).click();
+  await openArchived(page);
   await expect(page.locator(".table td").getByText("E2E-2", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("e2e-2");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
   await page.getByRole("button", { name: S.create, exact: true }).click();

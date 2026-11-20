@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, terminalText, test, type Sandbox, newButton } from "./fixtures";
 
 /** 在当前显示的终端里输入一行并回车。 */
 async function typeLine(page: Page, line: string): Promise<void> {
@@ -54,7 +54,7 @@ test("checks: an enforced pattern blocks the edit and is recorded, shadow only r
   // 1. 沙盒仓库带 GitHub remote（检查按 slug 找）；push 的地址被改写到一个不存在的本地路径（只改 push，hook 读的 origin 不变）：就算没被拦住也不会连网。
   execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/web.git"], { cwd: s.repo });
   execFileSync("git", ["config", `url.${join(s.dir, "no-such-remote")}/.pushInsteadOf`, "https://github.com/"], { cwd: s.repo });
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("CHK-1");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
   await page.getByRole("button", { name: S.create, exact: true }).click();

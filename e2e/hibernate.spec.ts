@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, openSettingsGroup, type Sandbox, terminalText, test } from "./fixtures";
+import { completeWizard, expect, newButton, openSettingsGroup, type Sandbox, terminalText, test } from "./fixtures";
 
 const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const fakeLog = (s: Sandbox) => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
@@ -44,7 +44,7 @@ test("a hibernated coordinator wakes for a report, gets it, and still has its co
   await expect(page.getByLabel(S.hib.settings.enabled, { exact: true })).toBeChecked();
 
   // ticket 带一个 worktree 仓库：一个总控、一个普通 session。
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("HIB-1");
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "HIB-1", exact: true })).toBeVisible();

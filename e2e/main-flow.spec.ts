@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CSP_VIOLATION_LOG_PREFIX, isCspViolationMessage } from "../src/main/csp-log";
-import { S, STATUS_LABEL } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test } from "./fixtures";
+import { S } from "../src/renderer/src/strings";
+import { completeWizard, expect, terminalText, test, newButton } from "./fixtures";
 
 /**
  * 设计文档 11 节的主流程（计划 5 任务 9）：真实的主进程、preload、React 界面、node-pty、butler-hook（经 shell 执行）、
@@ -18,7 +18,7 @@ test("new ticket → session → hook → handoff → memory → Now page → ba
     await completeWizard(page, s);
 
     // 1. 新建 ticket（worktree 模式，默认）。
-    await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+    await (await newButton(page, "newTicket")).click();
     await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-1");
     // 这个 label 里还包着“选择…”按钮，输入框的可访问名是两段文字连起来。
     await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
@@ -42,8 +42,8 @@ test("new ticket → session → hook → handoff → memory → Now page → ba
     await page.getByRole("button", { name: S.runHandoff, exact: true }).click();
     await page.getByRole("button", { name: S.followupsTab(1), exact: true }).click();
     await expect(page.locator(".followup .text").getByText("改 staging 配置", { exact: true })).toBeVisible();
-    const pending = page.locator(".sidebar section").filter({ has: page.getByRole("heading", { name: STATUS_LABEL.merged_pending_followup, exact: true }) });
-    await expect(pending.locator(".ticket .key")).toHaveText(["E2E-1"]);
+    // 侧栏不再按状态分组（UI 重做第 2 层）：ticket 还在树里。
+    await expect(page.locator(".sidebar .ticket .key")).toHaveText(["E2E-1"]);
 
     // 5. 记忆标签：handoff 入库后同步进 StateCore，标签收到 memory:changed 后重读。决策、follow-up 和交接都在。
     await page.getByRole("button", { name: S.memoryTab, exact: true }).click();

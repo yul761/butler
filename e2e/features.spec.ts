@@ -5,14 +5,14 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { S, STRINGS } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, openTab, pageTab, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, openTab, pageTab, terminalText, test, type Sandbox, newButton } from "./fixtures";
 
 /** 在沙盒里建 shop/frontend、shop/backend 两个仓库，选上一层目录建 feature「checkout」（两个仓库默认都勾上）。 */
 async function createCheckoutFeature(page: Page, s: Sandbox): Promise<void> {
   const shop = join(s.dir, "shop");
   makeGitRepo(join(shop, "frontend"));
   makeGitRepo(join(shop, "backend"));
-  await page.getByRole("button", { name: `+ ${S.newFeature}`, exact: true }).click();
+  await (await newButton(page, "newFeature")).click();
   await page.getByLabel(S.featureName, { exact: true }).fill("checkout");
   const dir = page.getByRole("textbox", { name: `${S.repo} ${S.pick}`, exact: true });
   await dir.fill(shop);

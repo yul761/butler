@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { S, STRINGS, type UiStrings } from "../src/renderer/src/strings";
-import { completeWizard, create, expect, makeGitRepo, newTicket, openTab, pageTab, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, create, expect, makeGitRepo, newTicket, openTab, pageTab, terminalText, test, type Sandbox, newButton, openArchived } from "./fixtures";
 
 /** 假 claude 跑的命令：第一个词让它归类成“跑测试”。 */
 const LONG_COMMAND = "pnpm test --filter @acme/checkout-frontend --run --reporter=verbose";
@@ -112,7 +112,8 @@ function places(page: Page) {
     featureRow,
     /** 侧栏 epic 下面的 feature 名字。 */
     sidebarFeatures: page.locator(".sidebar .epic-group .feature-tickets .ticket.feature .key"),
-    sections: page.locator(".sidebar .ticket-groups section h3"),
+    /** 侧栏里不在 epic 下的 feature（UI 重做第 2 层去掉了 Epic/Feature 小标题，树是平的）。 */
+    looseFeatures: page.locator(".sidebar .ticket-groups > .feature-group:not(.epic-group) > .feature-row .ticket.feature .key"),
     sidebarTicket: (key: string) => page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: key }).last(),
     /** epic 页上的一行。 */
     row: (name: string) => page.locator(".epic-features .ticket-table tr").filter({ hasText: name }),
@@ -148,17 +149,17 @@ test("an epic from planning to archive: features from the epic session, the plan
   makeGitRepo(join(other, "audit"));
   makeGitRepo(join(other, "metrics"));
   const side = page.locator(".sidebar");
-  const newFeature = side.getByRole("button", { name: `+ ${S.newFeature}`, exact: true });
-  const newEpic = side.getByRole("button", { name: `+ ${S.newEpic}`, exact: true });
-  const { epicRow, featureRow, sidebarFeatures, sections, sidebarTicket, row, goToEpic, goToFeature, moveTo, collapseEpic, archiveEpic } = places(page);
+  const newFeature = () => newButton(page, "newFeature");
+  const newEpic = () => newButton(page, "newEpic");
+  const { epicRow, featureRow, sidebarFeatures, looseFeatures, sidebarTicket, row, goToEpic, goToFeature, moveTo, collapseEpic, archiveEpic } = places(page);
   const onPage = (name: string) => expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
 
   // 1. 还没有 epic：feature 页没有移动控件。logs 的仓库不在后面建的 epic 里。
-  await create(page, newFeature, S.featureName, "logs", other);
+  await create(page, await newFeature(), S.featureName, "logs", other);
   await expect(moveTo).toHaveCount(0);
 
   // 2. 建 epic：名字全是空格、工作区被占时是 epic 的说法。
-  await newEpic.click();
+  await (await newEpic()).click();
   await page.getByLabel(S.epicName, { exact: true }).fill("   ");
   const box = page.getByRole("textbox", { name: `${S.repo} ${S.pick}`, exact: true });
   await box.fill(shop);
@@ -168,13 +169,13 @@ test("an epic from planning to archive: features from the epic session, the plan
   await expect(page.locator(".modal .error")).toHaveText(S.epicErrors.invalid_name);
   await page.getByRole("button", { name: S.cancel, exact: true }).click();
 
-  await create(page, newEpic, S.epicName, "checkout-revamp", shop);
-  await expect(sections).toHaveText([S.epics, S.features]);
+  await create(page, await newEpic(), S.epicName, "checkout-revamp", shop);
+  await expect(looseFeatures).toHaveText(["logs"]);
   await expect(page.locator(".epic-page .repos-bar .repo .name")).toHaveText(["backend", "frontend"]);
   await openTab(page, S.features);
   await expect(page.locator(".epic-page")).toContainText(S.noEpicFeatures);
 
-  await newEpic.click();
+  await (await newEpic()).click();
   await page.getByLabel(S.epicName, { exact: true }).fill("checkout-revamp");
   await box.fill(shop);
   await box.blur();
@@ -303,19 +304,19 @@ test("an epic from planning to archive: features from the epic session, the plan
   expect(plansIn(s, paymentWorkspace, PLAN_HEAD.zh)).toBe(1);
   await exitSession(page);
 
-  // 9. 把 logs 移进 epic：侧栏的 Feature 分组消失，只列在 epic 下面；epic 没有的仓库自动加进来。工作区不动。
+  // 9. 把 logs 移进 epic：侧栏里不再单独列出，只列在 epic 下面；epic 没有的仓库自动加进来。工作区不动。
   await side.locator(".ticket.feature").filter({ hasText: "logs" }).click();
   await onPage("logs");
   await expect(moveTo).toHaveValue("");
   await moveTo.selectOption({ label: "checkout-revamp" });
-  await expect(sections).toHaveText([S.epics]);
+  await expect(looseFeatures).toHaveCount(0);
   await expect(sidebarFeatures).toHaveText(["refunds", "payment", "logs"]);
   await expect(page.locator(".feature-page .ticket-header .muted").first()).toContainText(join(s.dir, "other-features", "logs"));
-  // 移出再移回：回到 Feature 分组，仓库留在 epic 里。
+  // 移出再移回：又单独列出，仓库留在 epic 里。
   await moveTo.selectOption({ label: S.noEpic });
-  await expect(sections).toHaveText([S.epics, S.features]);
+  await expect(looseFeatures).toHaveText(["logs"]);
   await moveTo.selectOption({ label: "checkout-revamp" });
-  await expect(sections).toHaveText([S.epics]);
+  await expect(looseFeatures).toHaveCount(0);
 
   // 10. epic 页显示每个 feature 的一句进度和状态；终端至少占窗口一半高，窗口缩到最小也一样。
   await goToEpic();
@@ -401,7 +402,7 @@ test("an epic from planning to archive: features from the epic session, the plan
   expect(archivedAt().every((r) => r.at !== null)).toBe(true);
 
   // 16. 恢复：一起归档的都回来，epic session 能再打开，配置重新写好。
-  await side.getByRole("button", { name: S.archived, exact: true }).click();
+  await openArchived(page);
   await expect(page.getByRole("heading", { name: S.archivedEpics, exact: true })).toBeVisible();
   await shot(page, "epic-archived-page.png");
   await page.locator("table").last().getByRole("button", { name: S.unarchive, exact: true }).click();
@@ -442,7 +443,7 @@ test("an epic from planning to archive: features from the epic session, the plan
   await goToEpic();
   await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "ui-made", shop);
   await expect(moveTo).toHaveValue("1");
-  await expect(sections).toHaveText([S.epics]);
+  await expect(looseFeatures).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 
@@ -461,7 +462,7 @@ test("a stuck ticket marks its feature and epic", async ({ makeSandbox, launch }
   makeGitRepo(join(shop, "backend"));
   const { epicRow, featureRow, sidebarFeatures, row, goToEpic, goToFeature, collapseEpic } = places(page);
 
-  await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "checkout-revamp", shop);
+  await create(page, await newButton(page, "newEpic"), S.epicName, "checkout-revamp", shop);
   await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "logs", shop);
   await newTicket(page, "DMS-1", "frontend", "backend");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
@@ -514,7 +515,7 @@ test("ending a waiting session with × clears the mark at every level", async ({
   makeGitRepo(join(shop, "backend"));
   const { epicRow, featureRow, sidebarTicket, row, goToEpic } = places(page);
 
-  await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "checkout-revamp", shop);
+  await create(page, await newButton(page, "newEpic"), S.epicName, "checkout-revamp", shop);
   await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "logs", shop);
   await newTicket(page, "DMS-1", "frontend", "backend");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
@@ -557,7 +558,7 @@ test("the plan waits for the summaries create_feature started", async ({ makeSan
   makeGitRepo(join(shop, "backend"));
   const { row, goToEpic } = places(page);
 
-  await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "epic-a", shop);
+  await create(page, await newButton(page, "newEpic"), S.epicName, "epic-a", shop);
   await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "pay", shop);
   await newCoordinator(page, s, payWorkspace);
   await typeLine(page, "note");
@@ -614,8 +615,8 @@ test("archiving waits for fresh summaries, and the user can walk away meanwhile"
   const epicGone = () => expect(side.locator(".epic-group")).toHaveCount(0);
   const waitingButton = page.locator(".ticket-header button:disabled");
 
-  await create(page, side.getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "outside", shop);
-  await create(page, side.getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "epic-a", shop);
+  await create(page, await newButton(page, "newFeature"), S.featureName, "outside", shop);
+  await create(page, await newButton(page, "newEpic"), S.epicName, "epic-a", shop);
   await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "pay", shop);
   await newTicket(page, "DMS-1", "frontend", "backend");
 
@@ -634,7 +635,7 @@ test("archiving waits for fresh summaries, and the user can walk away meanwhile"
     await expect(page.locator(".feature-page .terminal-wrap")).toHaveCount(0);
   }
   async function restoreEpic() {
-    await side.getByRole("button", { name: S.archived, exact: true }).click();
+    await openArchived(page);
     await page.locator("table").last().getByRole("button", { name: S.unarchive, exact: true }).click();
     await onPage("epic-a");
   }
@@ -758,7 +759,7 @@ test("an epic in English: the page, the tools' errors and the plan", async ({ ma
   const { page } = await launch(s);
   const row = (name: string) => page.locator(".epic-features .ticket-table tr").filter({ hasText: name });
 
-  await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${E.newEpic}`, exact: true }), E.epicName, "checkout-revamp", shop, E);
+  await create(page, await newButton(page, "newEpic", E), E.epicName, "checkout-revamp", shop, E);
   await page.locator(".epic-page").getByRole("button", { name: `+ ${E.newEpicSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await callTool(page, s, "create_feature", { name: "payment", repos: ["frontend"], brief: "Accept cards first." });

@@ -2,7 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, openTab, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, openTab, terminalText, test, type Sandbox, newButton } from "./fixtures";
 
 const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const fakeLog = (s: Sandbox) => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
@@ -63,7 +63,7 @@ test("Butler control messages a feature coordinator by name, reopening it when i
   makeGitRepo(join(shop, "frontend"));
   makeGitRepo(join(shop, "backend"));
   const side = page.locator(".sidebar");
-  await create(page, side.getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "payment", shop);
+  await create(page, await newButton(page, "newFeature"), S.featureName, "payment", shop);
   const workspace = join(s.dir, "shop-features", "payment");
   await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
   await expect.poll(() => sessionsIn(s, workspace).length).toBe(1);
@@ -114,7 +114,7 @@ test("Butler control messages an open epic session nobody has typed into", async
   makeGitRepo(join(shop, "frontend"));
   makeGitRepo(join(shop, "backend"));
   const side = page.locator(".sidebar");
-  await create(page, side.getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "checkout-revamp", shop);
+  await create(page, await newButton(page, "newEpic"), S.epicName, "checkout-revamp", shop);
   const workspace = join(s.dir, "shop-epics", "checkout-revamp");
   await page.locator(".epic-page").getByRole("button", { name: `+ ${S.newEpicSession}`, exact: true }).click();
   await expect.poll(() => sessionsIn(s, workspace).length).toBe(1);

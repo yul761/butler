@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test } from "./fixtures";
+import { completeWizard, expect, terminalText, test, newButton } from "./fixtures";
 
 /**
  * review 经验（计划 Task 10）：页面上确认 / 驳回 / 停用 → 开 ticket session 时送进 --append-system-prompt-file 的说明文件。
@@ -16,7 +16,7 @@ test("confirmed lessons reach a ticket session's guide file; rejected and disabl
 
   // 1. 沙盒仓库带 GitHub remote，建一个用它的 ticket。
   execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/web.git"], { cwd: s.repo });
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("LES-1");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
   await page.getByRole("button", { name: S.create, exact: true }).click();

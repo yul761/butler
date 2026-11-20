@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, type FakeGhFixture, ghCalls, makeGitRepo, openSettingsGroup, type PrViewFixture, terminalText, test, unsupportedGhCalls } from "./fixtures";
+import { completeWizard, expect, type FakeGhFixture, ghCalls, makeGitRepo, newButton, openAllWorkMore, openSettingsGroup, type PrViewFixture, terminalText, test, unsupportedGhCalls } from "./fixtures";
 
 const git = (cwd: string, ...a: string[]): string =>
   execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "-c", "commit.gpgsign=false", ...a], { cwd, encoding: "utf8" }).trim();
@@ -34,7 +34,7 @@ const fixture = (sha1: string, sha2: string, mergedAt: string | null): FakeGhFix
 
 /** 不开 feature，直接建一个 worktree 模式的 ticket（分支 feature/<key> 已经在仓库里了，就用它）。 */
 async function newTicket(page: Page, key: string, repo: string): Promise<void> {
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill(key);
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(repo);
   await page.getByRole("radio", { name: S.worktree, exact: true }).check();
@@ -94,7 +94,7 @@ test("when the bottom of a stack merges, the stack is rebased and the next layer
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await enableStacks(page, ["force_push", "pr_open"]);
 
-  await page.locator(".sidebar").getByRole("button", { name: S.progressNav, exact: true }).click();
+  await openAllWorkMore(page);
   const stacks = page.getByTestId("managed-stacks");
   await expect(stacks.getByTestId(`stack-layer-${B1}-state`)).toHaveText(S.sk.state.ready, { timeout: 60_000 });
   await expect(stacks.getByTestId(`stack-layer-${B2}-state`)).toHaveText(S.sk.state.draft);
@@ -114,7 +114,7 @@ test("when the bottom of a stack merges, the stack is rebased and the next layer
   await page.locator(".terminal-wrap:visible .xterm").click();
   await page.keyboard.type("merged?");
   await page.keyboard.press("Enter");
-  await page.locator(".sidebar").getByRole("button", { name: S.progressNav, exact: true }).click();
+  await openAllWorkMore(page);
 
   // E2E-2 rebase 到新的 main 上（只剩自己的一个提交），推上去了。
   await expect.poll(() => git(bare, "rev-parse", `${B2}~1`), { timeout: 60_000 }).toBe(main);

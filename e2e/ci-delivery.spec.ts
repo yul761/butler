@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, FAKE_GH_ORIGIN, makeGitRepo, terminalText, test, unsupportedGhCalls } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, makeGitRepo, terminalText, test, unsupportedGhCalls, newButton } from "./fixtures";
 
 /**
  * 工作流 W：session 在自己的 worktree 里推了一个不是 ticket 分支的分支、开了 PR，CI 的结论递回这个 session。
@@ -39,7 +39,7 @@ test("a PR opened from a worktree branch gets its CI result delivered to the ses
 
   const { page } = await launch(s);
   await completeWizard(page, s);
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-7");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(repo);
   // 和出问题的场景一样：ticket 在原目录用分支，子 session 在别的 worktree 里推自己的分支。

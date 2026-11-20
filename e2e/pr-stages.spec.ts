@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PR_STAGES, type PrStageId } from "../src/shared/pr-stages";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newTicket, openTab, pageTab, terminalText, test, unsupportedGhCalls, type BranchPrFixture, type PrViewFixture, type Sandbox } from "./fixtures";
+import { completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newTicket, openTab, pageTab, terminalText, test, unsupportedGhCalls, type BranchPrFixture, type PrViewFixture, type Sandbox, newButton } from "./fixtures";
 
 /**
  * PR 进度（设计文档 2026-11-15 第 1 部分）：假 claude 里输入 /fake-skill，走真实的路径：
@@ -14,7 +14,7 @@ test("a skill call in a session moves the design step to active; tab and timelin
   const { page } = await launch(s);
   await completeWizard(page, s);
 
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-1");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
   await page.getByRole("button", { name: S.create, exact: true }).click();
@@ -66,7 +66,7 @@ test("an expanded feature in the epic's stages tab opens its ticket (mouse and k
   makeGitRepo(join(shop, "frontend"));
   makeGitRepo(join(shop, "backend"));
 
-  await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "shop-epic", shop);
+  await create(page, await newButton(page, "newEpic"), S.epicName, "shop-epic", shop);
   await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "pay", shop);
   await newTicket(page, "EP-1", "frontend", "backend");
 
@@ -132,7 +132,7 @@ test("three PRs: two sequential on the branch and one on another branch linked b
 
   // 1. epic 和它下面的 feature 用 shop 的两个仓库；ticket DMS-1 只用 app。
   const shop = makeShop(s);
-  await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newEpic}`, exact: true }), S.epicName, "shop", shop);
+  await create(page, await newButton(page, "newEpic"), S.epicName, "shop", shop);
   await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "app", shop);
   await newTicket(page, "DMS-1", "app", "api");
 
@@ -176,7 +176,7 @@ test("backfill of an old merged ticket", async ({ makeSandbox, launch }) => {
   let launched = await launch(s);
   let page = launched.page;
   await completeWizard(page, s);
-  await create(page, page.locator(".sidebar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "legacy", makeShop(s));
+  await create(page, await newButton(page, "newFeature"), S.featureName, "legacy", makeShop(s));
   await newTicket(page, "OLD-1", "app", "api");
   await page.getByRole("button", { name: S.archive, exact: true }).click();
   await expect(page.locator(".sidebar .ticket .key").getByText("OLD-1", { exact: true })).toHaveCount(0);

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, openTab, setLoopPolicy, terminalText, test, unsupportedGhCalls, type FakeGhFixture, type PrViewFixture } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, openTab, setLoopPolicy, terminalText, test, unsupportedGhCalls, type FakeGhFixture, type PrViewFixture, newButton } from "./fixtures";
 
 const url = "https://github.com/acme/app/pull/41";
 const view = (sha: string): PrViewFixture => ({
@@ -39,7 +39,7 @@ test("a Copilot comment reaches the session, and after the push it is replied to
   await completeWizard(page, s);
   await setLoopPolicy(page, { "comments.enabled": "true" }, ["comment_reply", "comment_resolve"]);
 
-  await page.getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-8");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(repo);
   await page.getByRole("radio", { name: S.branch, exact: true }).check();

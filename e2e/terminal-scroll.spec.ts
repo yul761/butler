@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, openTab, terminalText, test } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, openTab, terminalText, test, newButton } from "./fixtures";
 
 async function typeLine(page: Page, line: string): Promise<void> {
   await page.locator(".terminal-wrap:visible .xterm").click();
@@ -24,7 +24,7 @@ test("the coordinator terminal still scrolls after its output outgrows the repla
   const shop = join(s.dir, "shop");
   makeGitRepo(join(shop, "frontend"));
   makeGitRepo(join(shop, "backend"));
-  await page.getByRole("button", { name: `+ ${S.newFeature}`, exact: true }).click();
+  await (await newButton(page, "newFeature")).click();
   await page.getByLabel(S.featureName, { exact: true }).fill("checkout");
   const dir = page.getByRole("textbox", { name: `${S.repo} ${S.pick}`, exact: true });
   await dir.fill(shop);
