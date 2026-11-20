@@ -533,7 +533,6 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .bucket-chip.bucket-blocked { border-color: var(--danger); }
 .bucket-chip.bucket-in_review, .bucket-chip.bucket-in_progress { border-color: var(--accent); }
 .progress-freshness { margin-top: 18px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; }
-.pr-stuck-block { margin-bottom: 14px; }
 
 /* Butler 页「回复」tab（ws-b）。 */
 .butler-replies { list-style: none; margin: 0; padding: 0; }

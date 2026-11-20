@@ -18,7 +18,7 @@ import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
-import type { ButlerMessageView, EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { ButlerMessageView, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
 import type { FeatureId } from "../../shared/feature-rows";
@@ -406,7 +406,6 @@ export const EN: UiStrings = {
   withSample: (what: string, sample: string) => `${what} (${sample})`,
   newTicket: "New ticket",
   newFeature: "New feature",
-  features: "Features",
   newEpic: "New epic",
   epics: "Epics",
   epicName: "Epic name",
@@ -430,7 +429,6 @@ export const EN: UiStrings = {
   } as Record<string, string>,
   noEpicFeatures: "No features yet. Plan one in an epic session, or click “New feature”.",
   epicNoSummary: "No summary yet",
-  epicStatus: { stuck: "A ticket is stuck", waiting: "Waiting for you", not_started: "Not started", active: "In progress", archived: "Archived" } as Record<EpicFeatureStatus, string>,
   archiveEpic: "Archive epic (with its features)",
   archiving: "Archiving…",
   archivingSummaries: "Archiving. Updating summaries first, up to 2 minutes…",
@@ -455,13 +453,11 @@ export const EN: UiStrings = {
   featureWorkspace: "Workspace",
   featureRepos: "Repos",
   featureReposHint: "New tickets in this feature pick their repos from these. Removing one only affects future choices.",
-  featureTickets: "Tickets",
   noFeatureTickets: "No tickets yet. Click “New ticket”.",
   expand: "Expand",
   collapse: "Collapse",
   featureCoordinatorHint: "The feature coordinator runs in the workspace, sees every ticket's worktree and can open sessions in the tickets.",
   noFeatureSessions: "No coordinator session yet.",
-  featureProgress: "Overall progress",
   featureBlockedCount: (n: number) => (n === 1 ? "1 blocker" : `${n} blockers`),
   featureSummaryNone: "No summary yet. One is made automatically in the evening, or click “Update now”.",
   featureSummaryDegraded: "Incomplete summary: claude's output did not pass validation. The original text is below.",
@@ -613,14 +609,9 @@ export const EN: UiStrings = {
   noticeLessons: "Open lessons",
   noticeOpen: "Open session",
   activityBackground: (main: string) => `Background · ${main}`,
-  activitySilent: (d: string) => `no new output for ${d}`,
   durationNow: "just now",
   durationMinutes: (m: number) => `${m} min`,
   durationHours: (h: number, m: number) => (m === 0 ? `${h} ${h === 1 ? "hour" : "hours"}` : `${h} ${h === 1 ? "hour" : "hours"} ${m} min`),
-  stuckDot: "May be stuck",
-  stuckFix: "Open a new session to fix it",
-  stuckViewTerminal: "View terminal",
-  stuckDismiss: "It's fine, ignore",
   fixSessionFor: (ticket: string | null) => (ticket ? `Fix ${ticket}` : "Fix"),
   unclaimed: "Unclaimed sessions",
   settings: "Settings",
@@ -781,10 +772,7 @@ export const EN: UiStrings = {
   nowPrUnavailable: "PR status unavailable",
   nowPr: (num: number | null, state: string) => `PR${num === null ? "" : ` #${num}`} ${state}`,
   nowWaitingDecision: "Waiting for your decision",
-  inboxReports: "Reports",
-  inboxDecisions: "Decisions for you",
   inboxNoReports: "No reports yet.",
-  inboxNoDecisions: "Nothing to decide.",
   inboxReportKinds: { progress: "Progress", done: "Done", blocked: "Blocked", choice: "Choice" } as Record<ReportKind, string>,
   inboxWho: (role: InboxRole, ticketKey: string | null, repo: string | null) =>
     role === "ticket" ? `${ticketKey ?? ""}${repo ? ` (${repo})` : ""}`
@@ -815,8 +803,6 @@ export const EN: UiStrings = {
     rebase: (who: string) => `${who} needs to rebase before merging`,
     dir_busy: (who: string, other: string) => `${who} wants to switch branches, but ${other} is using the directory`,
   },
-  followupsTab: (n: number) => `Follow-ups (${n})`,
-  historyTab: (n: number) => `Handoff history (${n})`,
   runHandoff: "Hand off now",
   handoffRunning: "Handing off…",
   noFollowups: "No open follow-ups.",
@@ -841,7 +827,6 @@ export const EN: UiStrings = {
   nextSteps: "Next steps",
   blockers: "Blockers",
   openQuestions: "Open questions",
-  prLine: (name: string, state: string, review: string | null) => `PR ${name} · ${state}${review ? ` · ${review}` : ""}`,
   schedule: "Schedule and handoffs",
   scheduleNote: "Background summaries inherit the commands you allowed in ~/.claude",
   nightlyTime: "Nightly handoff time",
@@ -1599,7 +1584,6 @@ export const EN: UiStrings = {
   auditMaybeSentNote: "This call did not finish, so the content below may already have reached the provider.",
   auditDeclined: "You chose not to send it in the confirmation dialog (or the dialog timed out)",
   auditLoadFailed: "The audit records could not be loaded.",
-  memoryTab: "Memory",
   memoryHint: "In a new session for the same ticket, Claude reads these with recall: the latest handoff, decisions, open follow-ups and what it noted itself.",
   memoryOff: "Memory is off (Settings → Memory).",
   memoryEmpty: "This ticket has no memory yet. Progress, decisions and open follow-ups appear after a handoff.",
@@ -1669,7 +1653,6 @@ export const EN: UiStrings = {
   wizardPrivacyHelp: "The personal API is used only at the full level, for memory distillation; the other levels never call it. If you don't want it, choose Off or leave everything empty.",
   wizardDoneTitle: "All set",
   wizardDoneHelp: "Click “Get started” to go to the home page and pick a way to start the first thing there. The 3.0 features are under Settings › Features and all start off. Every night Butler writes a handoff for each ticket with activity. You can change all of this in Settings later, and rerun this wizard from there.",
-  prStagesTab: "PR progress",
   prStage: { design: "Design", dev: "Develop", self_review: "Self-review", ci: "CI", peer_review: "Peer review", merge: "Merge" } as Record<PrStageId, string>,
   prClosed: "Closed",
   prStageSkipped: "Skipped",
@@ -1682,11 +1665,8 @@ export const EN: UiStrings = {
   prRound: (n: number) => `Round ${n}`,
   prTimelineShow: "Show timeline",
   prTimelineHide: "Hide timeline",
-  prMergedOf: (m: number, n: number) => `${m}/${n} merged`,
   prNoRepos: "No repos yet",
   prNoPrYet: "In progress, no PR yet",
-  prArchived: "Archived",
-  prCount: (n: number) => `${n} PRs`,
   prBackToDev: "→ back to dev",
   prTimeline: {
     design_skill: (d) => (d ? `skill ${d}` : "skill"),
@@ -1975,7 +1955,6 @@ export const EN: UiStrings = {
     loopFlakyText: (n: number, wasted: string) => `${n} × · ${wasted}`,
     loopListed: " (listed)",
   },
-  butlerRepliesTab: "Replies",
   butlerRepliesNone: "Butler control has not sent any message with send_message yet.",
   butlerMessageStatus: {
     sending: "Sending",
@@ -1988,7 +1967,6 @@ export const EN: UiStrings = {
   butlerMessageSent: "Sent",
   butlerMessageReply: "Reply",
   featureSummaryPrAsOf: (t: string) => `PR status as of ${t}`,
-  prStagesStuck: "Waiting on whom",
   externalHeading: "Outward actions",
   externalIntro: "Actions where Butler leaves something on GitHub or another outside service on your behalf. Each has its own switch, all off by default. While a switch is off Butler does not act and only records a skip on the Audit page. For now Push branches and Open PRs are used by the repo rule export, and Reply to review comments, Resolve comments and Rerun CI by Comments & CI; the others take effect as later versions start using them.",
   sk: {
@@ -2113,7 +2091,6 @@ export const EN: UiStrings = {
     effectReruns: (reruns: number, passed: number, wasted: string) => `Reran ${reruns} times; ${passed} passed after a rerun. Flaky runs wasted ${wasted}.`,
     effectDelivered: (code: number, maybe: number) => `Sent ${code} code failures to the session, ${maybe} of them as "possibly flaky".`,
     duration: (ms: number) => (ms < 60_000 ? "under a minute" : ms < 3_600_000 ? `${Math.round(ms / 60_000)} min` : `${(ms / 3_600_000).toFixed(1)} h`),
-    tab: "Comments",
     commentsOff: "The comment loop is off for this PR's repo (Settings → Comments & CI).",
     commentsNone: "No comments read yet.",
     pr: (n: number) => `PR #${n}`,
@@ -2198,7 +2175,6 @@ export const EN: UiStrings = {
     typesHint: "Type mappings are one key=value per line, such as hotfix=hotfix, hotfix/=hotfix or hotfix=high.",
     externalTitle: "Post briefs automatically",
     externalIntro: "After a pre-review, write the brief into the PR description (as your gh account). When off, you can still click \"Post to PR\" on the ticket page.",
-    tab: "Review",
     colon: ": ",
     none: "This ticket has no PR yet, and no branch has handed in evidence.",
     noPr: "No PR yet",

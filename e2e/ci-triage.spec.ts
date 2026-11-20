@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, setLoopPolicy, terminalText, test, unsupportedGhCalls, type FakeGhFixture, newButton } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, setLoopPolicy, terminalText, test, unsupportedGhCalls, type FakeGhFixture, newButton, openTicketTab, openTab } from "./fixtures";
 
 const url = "https://github.com/acme/app/pull/42";
 const SHA = "cccc3333cccc";
@@ -44,6 +44,7 @@ test("a network timeout in CI is rerun and passes without the failure reaching t
   await page.getByRole("radio", { name: S.branch, exact: true }).check();
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E-9", exact: true })).toBeVisible();
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
 
@@ -62,6 +63,8 @@ test("a network timeout in CI is rerun and passes without the failure reaching t
   expect(ghCalls(s).filter((a) => a[0] === "run" && a[1] === "rerun")).toHaveLength(1);
   // 「效果」页的评论与 CI：flaky 1 次，自动重跑 1 次；名字出现在最常 flaky 的列表里。
   await page.locator(".sidebar").getByRole("button", { name: S.effectNav, exact: true }).click();
+  // 评论与 CI、Review、intake 的效果在「自动化的效果」页签里。
+  await openTab(page, S.lay.effectTabs.automation);
   await expect(page.getByTestId("effect-loop-flaky")).toContainText(S.effect.loopFlakySub(1));
   await expect(page.getByTestId("effect-loop-flaky").locator(".effect-card-value")).toHaveText("1");
   await expect(page.getByTestId("effect-loop-top-flaky")).toContainText("test");

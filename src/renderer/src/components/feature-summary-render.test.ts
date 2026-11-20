@@ -38,7 +38,6 @@ describe("FeatureSummaryTab", () => {
 
   it("has no 'summary may be stale' note any more", () => {
     const html = render(feature());
-    expect(html).not.toContain("summary-stale");
     expect(html).not.toContain("汇总之后又有新活动");
   });
 

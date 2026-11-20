@@ -4,8 +4,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
-import { S, STRINGS } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, openTab, pageTab, terminalText, test, type Sandbox, newButton } from "./fixtures";
+import { S, STRINGS, type UiStrings } from "../src/renderer/src/strings";
+import { completeWizard, expect, makeGitRepo, openTab, openTicketTab, pageTab, terminalText, test, type Sandbox, newButton } from "./fixtures";
 
 /** 在沙盒里建 shop/frontend、shop/backend 两个仓库，选上一层目录建 feature「checkout」（两个仓库默认都勾上）。 */
 async function createCheckoutFeature(page: Page, s: Sandbox): Promise<void> {
@@ -22,7 +22,20 @@ async function createCheckoutFeature(page: Page, s: Sandbox): Promise<void> {
   await expect(page.getByRole("checkbox", { name: "backend", exact: true })).toBeChecked();
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "checkout", exact: true })).toBeVisible();
+  // 新 feature 停在「概况」；仓库条在「总控」页签里。
+  await expect(pageTab(page, S.lay.tabOverview)).toHaveAttribute("aria-selected", "true");
+  await openTab(page, S.lay.tabControl);
   await expect(page.locator(".feature-page .repos-bar .repo .name")).toHaveText(["backend", "frontend"]);
+}
+
+/** feature 页「全部 ticket」里的一行（按 ticket 号认）。 */
+const ticketRow = (page: Page, key: string) =>
+  page.locator(".feature-page .ticket-table tbody tr").filter({ has: page.locator(".key", { hasText: new RegExp(`^${escapeRe(key)}$`) }) });
+
+/** 在当前 feature 页的「总控」页签新开一个总控。 */
+async function newCoordinator(page: Page, T: UiStrings = S): Promise<void> {
+  await openTab(page, T.lay.tabControl);
+  await page.locator(".feature-page").getByRole("button", { name: `+ ${T.newCoordinator}`, exact: true }).click();
 }
 
 /** 在当前打开的 feature 页上建一个 ticket，只勾 repo 这一个仓库；建完停在 ticket 页。 */
@@ -111,7 +124,7 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
 
   // 3. feature 总控：在工作区里打开（worktree 都在里面，不需要 --add-dir），挂 feature 记忆和 feature 模式的 butler-sessions。
   await page.locator(".sidebar .ticket.feature").click();
-  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
+  await newCoordinator(page);
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await expect.poll(fakeLog).toContain(`mcp=butler-workspace,butler-feature,butler-sessions cwd=${workspace} adddirs= guide=`);
   const coordinatorId = /interactive new (\S+) mcp=butler-workspace,butler-feature,butler-sessions/.exec(fakeLog())![1];
@@ -141,8 +154,9 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
   // 子 session 是 DMS-1 的普通 session：在它的 worktree 里，挂 ticket 记忆和 feature 记忆，没有 butler-sessions。
   await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-feature,butler-sessions cwd=${feWorktree} adddirs= guide=`);
 
-  // 5. 在 DMS-1 里看到子 session，等任务提交后用按钮旁的 × 结束它（点两次；这个仓库自己的终端在跑时不会清理）。
+  // 5. 在 DMS-1 的「终端」页签里看到子 session，等任务提交后用按钮旁的 × 结束它（点两次；这个仓库自己的终端在跑时不会清理）。
   await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
+  await openTicketTab(page, "terminal");
   const childWrap = page.locator(".sessions-bar .session-wrap").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
   const childButton = childWrap.locator(".session");
   await expect(childButton).toBeVisible();
@@ -177,8 +191,10 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
     // 已经结束的再结束一次：Butler 说它已经结束了。
     await expect.poll(async () => (await boss.call("end_session", { session: second.sessionId, reason: "again" })).content[0].text).toContain("已经结束");
 
-    // 6. handoff：假 claude 报告 PR 已合并 → worktree 被删掉（分支保留），仓库一行标着“已清理”。总控还开着也不拦。
+    // 6. handoff（「记录」页签）：假 claude 报告 PR 已合并 → worktree 被删掉（分支保留），仓库一行标着“已清理”。总控还开着也不拦。
+    await openTicketTab(page, "log");
     await page.getByRole("button", { name: S.runHandoff, exact: true }).click();
+    await openTicketTab(page, "terminal");
     await expect(page.locator(".repos-bar").getByText(S.worktreeRemoved, { exact: true })).toBeVisible();
     expect(existsSync(feWorktree)).toBe(false);
     expect(existsSync(beWorktree)).toBe(true);
@@ -186,6 +202,7 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
     // 6b. 正在跑命令的 session：end_session 被拒绝（正在干活），终端还在。
     const busy = JSON.parse((await boss.call("start_session", { ticket: "DMS-2", task: "busy-task" })).content[0].text) as { sessionId: string };
     await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-2" }).click();
+    await openTicketTab(page, "terminal");
     const busyWrap = page.locator(".sessions-bar .session-wrap").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
     await busyWrap.locator(".session").click();
     await expect.poll(() => terminalText(page)).toContain("收到：总控 session 交给你的任务：");
@@ -203,6 +220,7 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
 
   // 7. feature 总控说过话、退出之后可以从列表里隐藏，也能在 feature 页上恢复。
   await page.locator(".sidebar .ticket.feature").click();
+  await openTab(page, S.lay.tabControl);
   const coordinator = page.locator(".feature-page .sessions-bar .session-wrap");
   await coordinator.locator(".session").click();
   await typeLine(page, "plan the api");
@@ -239,7 +257,7 @@ test("start_session is refused when memory is short, with how much is available 
   await createCheckoutFeature(page, s);
   await newFeatureTicket(page, "DMS-1", "frontend");
   await page.locator(".sidebar .ticket.feature").click();
-  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
+  await newCoordinator(page);
   await expect.poll(fakeLog).toContain("mcp=butler-workspace,butler-feature,butler-sessions");
   const coordinatorId = /interactive new (\S+) mcp=butler-workspace,butler-feature,butler-sessions/.exec(fakeLog())![1];
   const config = JSON.parse(readFileSync(join(s.butlerHome, "mcp", "features", "1.json"), "utf8")) as { mcpServers: Record<string, McpServerConfig> };
@@ -283,6 +301,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
 
   // 1. DMS-1：在自己的 session 里 /handoff（ticket 的 butler-handoff 代码块，PR 还开着、已 approve）。
   await ticketPage("DMS-1");
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await typeLine(page, "/handoff");
@@ -290,6 +309,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
 
   // 2. DMS-2：session 里有新的对话（之后算“有活动”），还没有 handoff。
   await ticketPage("DMS-2");
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await typeLine(page, "build the order api");
@@ -297,38 +317,34 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   const dms2Session = sessionIn(beWorktree)!;
   expect(dms2Session).toBeTruthy();
 
-  // 还没有汇总（默认停在「整体进度」tab）；ticket tab 里 DMS-1 已有 PR（只有一个 PR，标签不带仓库名），DMS-2 还没有。
+  // 「AI 总结」里还没有汇总；「全部 ticket」里 DMS-1 已有 PR（只有一个 PR，标签不带仓库名），DMS-2 还没有（PR 一列是 —）。
   await featurePage();
   const progress = page.locator(".feature-page .feature-progress");
-  const row = (key: string) => page.locator(".feature-page .ticket-table tr").filter({ hasText: key });
-  await openTab(page, S.featureProgress);
-  await expect(pageTab(page, S.featureProgress)).toHaveAttribute("aria-selected", "true");
+  const row = (key: string) => ticketRow(page, key);
+  const prCell = (key: string) => row(key).locator("td").last();
+  await openTab(page, S.lay.tabSummary);
   await expect(progress.getByText(S.featureSummaryNone, { exact: true })).toBeVisible();
-  await openTab(page, S.featureTickets);
+  await openTab(page, S.lay.tabTickets);
   await expect(progress).toHaveCount(0);
-  await expect(row("DMS-1").locator(".pill")).toHaveText([`#12 ${S.prPill.approved}`]);
-  await expect(row("DMS-2").locator(".pill")).toHaveText([S.noPr]);
-  // 停在哪个 tab 记着：离开再回来还是 ticket 表。再点一下当前 tab 收起，离开再回来还是收起的；再展开。
+  await expect(prCell("DMS-1")).toHaveText("#12");
+  await expect(prCell("DMS-2")).toHaveText("—");
+  // 停在哪个 tab 记着：离开再回来还是 ticket 表。再点一下当前 tab 不会收起；「新建 ticket」一直在 tab 条上。
   await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
   await featurePage();
+  await expect(pageTab(page, S.lay.tabTickets)).toHaveAttribute("aria-selected", "true");
   await expect(row("DMS-1")).toBeVisible();
-  await pageTab(page, S.featureTickets).click();
-  await expect(page.locator(".feature-page .page-tabs-panel")).toHaveCount(0);
-  await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
-  await featurePage();
-  await expect(page.locator(".feature-page .page-tabs-panel")).toHaveCount(0);
-  // 收起时「新建 ticket」还在 tab 条上。
+  await pageTab(page, S.lay.tabTickets).click();
+  await expect(page.locator(".feature-page .page-tabs-panel")).toHaveCount(1);
+  await expect(row("DMS-1")).toBeVisible();
   await expect(page.locator(".feature-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newTicket}`, exact: true })).toBeVisible();
-  await openTab(page, S.featureTickets);
-  await expect(row("DMS-1")).toBeVisible();
 
   // 3. 总控里 /handoff：输出 butler-feature-handoff，存成 feature 汇总。
-  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
+  await newCoordinator(page);
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   const coordinatorId = sessionIn(workspace)!;
   expect(coordinatorId).toBeTruthy();
   await typeLine(page, "/handoff");
-  await openTab(page, S.featureProgress);
+  await openTab(page, S.lay.tabSummary);
   const summary = progress.locator(".feature-summary");
   await expect(summary.locator("p").first()).toHaveText("结账页前端（DMS-1）已提 PR 等合并；后端下单接口（DMS-2）还在写，两边还没联调。");
   await expect(summary.locator(".blocker")).toHaveText([S.labelled(S.featureBlocked, "DMS-2 等支付网关的测试账号")]);
@@ -339,10 +355,11 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await expect(progress.locator(".summary-meta .muted").first()).toContainText(S.featureSummaryTrigger.command);
 
   // 4. /handoff 之后后台给有活动的 DMS-2 跑了 handoff（fork 它的 session）：PR 已合并。DMS-1 没有新活动，不跑。
-  //    整个 feature 有两个 PR 了，标签带上仓库名。
-  await openTab(page, S.featureTickets);
-  await expect(row("DMS-2").locator(".pill")).toHaveText([`backend#7 ${S.prPill.merged}`]);
-  await expect(row("DMS-1").locator(".pill")).toHaveText([`frontend#12 ${S.prPill.approved}`]);
+  //    每个 ticket 的 PR 都在一个仓库里，标签不带仓库名（只有一个 ticket 跨仓库开了 PR 才带）；DMS-2 合了，谁该动是「做完了」。
+  await openTab(page, S.lay.tabTickets);
+  await expect(prCell("DMS-2")).toHaveText("#7");
+  await expect(prCell("DMS-1")).toHaveText("#12");
+  await expect(row("DMS-2").locator(".who")).toHaveText(S.hm.whoDone);
   expect(headlessLines()).toHaveLength(1);
   expect(headlessLines()[0]).toContain(`--resume ${dms2Session} --fork-session`);
   expect(headlessLines()[0]).toContain(`cwd=${beWorktree}`);
@@ -350,7 +367,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   expect(headlessLines().filter((l) => l.includes(`cwd=${feWorktree}`))).toEqual([]);
 
   // 5. “立即更新”：子 ticket 都没有新活动，直接 fork 总控生成汇总；来源变成“手动更新”。
-  await openTab(page, S.featureProgress);
+  await openTab(page, S.lay.tabSummary);
   await progress.getByRole("button", { name: S.runFeatureSummary, exact: true }).click();
   await expect(progress.getByText(S.featureSummaryStored, { exact: true })).toBeVisible();
   await expect(summary.locator("p").first()).toHaveText("后端下单接口（DMS-2）已合并；前端结账页（DMS-1）的 PR 已 approve，合并后就能联调。");
@@ -360,50 +377,19 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   expect(headlessLines()).toHaveLength(2);
   expect(headlessLines()[1]).toContain(`--resume ${coordinatorId} --fork-session`);
 
-  // 「整体进度」tab 上标着卡住的条数，不用打开也看得到。再点一下收起，离开再回来还是收起的；终端至少占窗口一半高。再展开。
-  const progressTab = pageTab(page, S.featureProgress);
-  await expect(progressTab.locator(".blocker")).toHaveText(S.featureBlockedCount(1));
-  await progressTab.click();
-  await expect(summary).toHaveCount(0);
+  // 「AI 总结」tab 上标着卡住的条数，不用打开也看得到。离开再回来还停在它上面；「总控」里终端至少占窗口一半高。
+  const summaryTab = pageTab(page, S.lay.tabSummary);
+  await expect(summaryTab.locator(".blocker")).toHaveText(S.featureBlockedCount(1));
   await ticketPage("DMS-1");
   await featurePage();
-  await expect(summary).toHaveCount(0);
-  const heights = await page.evaluate(() => ({ terminals: document.querySelector(".feature-page .terminals")!.getBoundingClientRect().height, window: window.innerHeight }));
-  expect(heights.terminals).toBeGreaterThanOrEqual(heights.window / 2 - 1);
-  await openTab(page, S.featureProgress);
+  await expect(summaryTab).toHaveAttribute("aria-selected", "true");
   await expect(summary.locator("p").first()).toBeVisible();
   if (shots) {
     mkdirSync(shots, { recursive: true });
     await page.screenshot({ path: join(shots, "feature-page-zh.png") });
   }
-
-  // 汇报和「待你决定」又多又长（以前它们在两栏里不缩，把整体进度挤没了、还盖住终端）：现在各是一个 tab，
-  // 内容在自己的框里滚动，tab 条一直看得到，终端至少占窗口一半高。汇报已处理过（dismissed），不会送进总控。
-  const long = "很长的一段汇报，".repeat(40);
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
-  const [{ id: featureId }] = db.prepare("SELECT id FROM features WHERE name = 'checkout'").all() as { id: number }[];
-  const insert = db.prepare("INSERT INTO inbox_items (kind, session_id, feature_id, text, context, report_kind, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-  for (let n = 0; n < 12; n++) insert.run("report", coordinatorId, featureId, `${n} ${long}`, null, "done", "dismissed", Date.now() - n);
-  insert.run("decision", coordinatorId, featureId, `要不要先联调？${long}`, long, null, "pending", Date.now());
-  db.close();
-  await ticketPage("DMS-1");
-  await featurePage();
-  await expect(pageTab(page, S.inboxDecisions)).toHaveClass(/attention/);
-  const panel = page.locator(".feature-page .page-tabs-panel");
-  for (const name of [S.inboxReports, S.inboxDecisions]) {
-    await openTab(page, name);
-    await expect(panel).toContainText(long.slice(0, 20));
-    await expect(pageTab(page, S.featureProgress)).toBeInViewport();
-    expect(await panel.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
-    await expectTerminalsKeepHalf(page);
-    if (shots) await page.screenshot({ path: join(shots, `feature-page-long-${name === S.inboxReports ? "reports" : "decisions"}.png`) });
-  }
-  await openTab(page, S.featureProgress);
-  await expect(summary.locator("p").first()).toBeVisible();
+  await openTab(page, S.lay.tabControl);
   await expectTerminalsKeepHalf(page);
-  const cleanup = new DatabaseSync(join(s.butlerHome, "app.db"));
-  cleanup.prepare("DELETE FROM inbox_items WHERE feature_id = ?").run(featureId);
-  cleanup.close();
 
   // 6. 切到英文（同 language.spec：不设 BUTLER_LANG 重启，在设置里选 English，窗口重新加载）后再更新一次。
   await app.close();
@@ -415,15 +401,91 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await expect(en.locator(".sidebar button.nav").filter({ hasText: new RegExp(`^${E.settings}$`) })).toBeVisible();
   await en.locator(".sidebar .ticket.feature").click();
   const enProgress = en.locator(".feature-page .feature-progress");
-  await openTab(en, E.featureProgress);
+  await openTab(en, E.lay.tabSummary);
   await enProgress.getByRole("button", { name: E.runFeatureSummary, exact: true }).click();
   await expect(enProgress.getByText(E.featureSummaryStored, { exact: true })).toBeVisible();
   await expect(enProgress.locator(".feature-summary p").first()).toContainText("The backend order API (DMS-2) is merged");
   await expect(enProgress.locator(".blocker")).toHaveText([E.labelled(E.featureBlocked, "DMS-1 is waiting for the design review of the payment form")]);
   await expect(enProgress.locator(".summary-meta .muted").first()).toContainText(E.featureSummaryTrigger.manual);
   if (shots) await en.screenshot({ path: join(shots, "feature-page-en.png") });
-  await openTab(en, E.featureTickets);
-  await expect(en.locator(".feature-page .ticket-table tr").filter({ hasText: "DMS-2" }).locator(".pill")).toHaveText([`backend#7 ${E.prPill.merged}`]);
+  // 「全部 ticket」的英文：DMS-2 的 PR 标签、谁该动和那句话。
+  await openTab(en, E.lay.tabTickets);
+  const enRow = ticketRow(en, "DMS-2");
+  await expect(enRow.locator("td").last()).toHaveText("#7");
+  await expect(enRow.locator(".who")).toHaveText(E.hm.whoDone);
+  await expect(enRow.locator("td").nth(2)).toHaveText(E.turn.done);
+});
+
+/**
+ * 总控页签的右栏（UI 重做第 3 层）：总控和子 session 的汇报按时间排开，又多又长时在右栏里，不挤掉左边的终端。
+ * 汇报已处理过（dismissed），不会送进总控。
+ */
+test("the feature's control tab: reports on the right, the terminal keeps its half", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const workspace = join(s.dir, "shop-features", "checkout");
+  const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await createCheckoutFeature(page, s);
+  // 还没有汇报：右栏说还没有对话。
+  await expect(page.locator(".feature-page .control-right .control-feed")).toContainText(S.lay.ctlEmpty);
+  await newCoordinator(page);
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+  const coordinatorId = new RegExp(`interactive new (\\S+) mcp=\\S* cwd=${escapeRe(workspace)} `).exec(fakeLog())![1];
+
+  const long = "很长的一段汇报，".repeat(40);
+  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const [{ id: featureId }] = db.prepare("SELECT id FROM features WHERE name = 'checkout'").all() as { id: number }[];
+  const insert = db.prepare("INSERT INTO inbox_items (kind, session_id, feature_id, text, context, report_kind, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+  const at = Date.now();
+  for (let n = 0; n < 12; n++) insert.run("report", coordinatorId, featureId, `${n} ${long}`, null, "done", "dismissed", at - n * 1000);
+  db.close();
+  // 重新进 feature 页（汇报是直接写进数据库的，没有通知）：页面记着停在「总控」。
+  await page.getByRole("button", { name: S.home, exact: true }).click();
+  await page.locator(".sidebar .ticket.feature").click();
+  await expect(pageTab(page, S.lay.tabControl)).toHaveAttribute("aria-selected", "true");
+  const reports = page.locator(".feature-page .control-right .inbox-report");
+  await expect(reports).toHaveCount(12);
+  // 从早到晚：最早的（n = 11）在最上面。
+  await expect(reports.first().locator("p")).toHaveText(`11 ${long}`);
+  await expect(reports.last().locator("p")).toHaveText(`0 ${long}`);
+  // tab 条一直看得到，终端区至少占窗口一半高、整个在窗口里。
+  await expect(pageTab(page, S.lay.tabOverview)).toBeInViewport();
+  await expectTerminalsKeepHalf(page);
+  await expect(page.locator(".feature-page .terminal-wrap:visible")).toBeInViewport();
+});
+
+/**
+ * 待你决定（UI 重做第 3 层）：不再是 feature 页的一个 tab。总控 ask_user 的问题是 feature「概况」里一张「轮到你」的卡片，
+ * 「概况」页签标着要你看；首页也有这张卡片。
+ */
+test("a coordinator's question is a turn card on the feature overview", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const workspace = join(s.dir, "shop-features", "checkout");
+  const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await createCheckoutFeature(page, s);
+  await newCoordinator(page);
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+  const coordinatorId = new RegExp(`interactive new (\\S+) mcp=\\S* cwd=${escapeRe(workspace)} `).exec(fakeLog())![1];
+
+  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const [{ id: featureId }] = db.prepare("SELECT id FROM features WHERE name = 'checkout'").all() as { id: number }[];
+  db.prepare("INSERT INTO inbox_items (kind, session_id, feature_id, text, context, report_kind, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run("decision", coordinatorId, featureId, "要不要先联调？", null, null, "pending", Date.now());
+  db.close();
+  await page.getByRole("button", { name: S.home, exact: true }).click();
+  const homeCard = page.getByTestId("turn-card").filter({ hasText: "要不要先联调？" });
+  await expect(homeCard).toHaveAttribute("data-kind", "answer");
+  await page.locator(".sidebar .ticket.feature").click();
+  await expect(pageTab(page, S.lay.tabOverview)).toHaveClass(/\battention\b/);
+  await openTab(page, S.lay.tabOverview);
+  const card = page.locator(".feature-page .scope-you").getByTestId("turn-card");
+  await expect(card).toHaveCount(1);
+  await expect(card).toHaveAttribute("data-kind", "answer");
+  await expect(card.locator(".turn-tag")).toHaveText(S.hm.kind.answer);
+  await expect(card.locator(".sentence")).toContainText("要不要先联调？");
 });
 
 /** 假 claude 跑的命令：够长，状态列放不下；第一个词让它归类成“跑测试”。 */
@@ -431,7 +493,6 @@ const LONG_COMMAND = "pnpm test --filter @acme/checkout-frontend --run --reporte
 /** 假 claude 写进输出文件的内容。 */
 const COMMAND_OUTPUT = Array.from({ length: 8 }, (_, i) => `step ${i + 1} of 8`);
 const VERDICT_REASON = { zh: "测试进程在等一个不会来的信号", en: "The test process is waiting for a signal that will not come" };
-const VERDICT_ACTION = { zh: "确认测试进程没有在动，再决定要不要杀掉重跑", en: "Check that the test process is idle, then decide whether to kill and rerun it" };
 const STUCK_CHECK_MS = 1000;
 
 const resizeWindow = (app: ElectronApplication, width: number, height: number) =>
@@ -458,10 +519,11 @@ function dbRows<T>(s: Sandbox, sql: string, ...params: string[]): T[] {
 }
 
 /**
- * 设计文档 2026-10-31（ticket 实时状态）：假 claude 写 transcript 和真实位置的 tasks/<id>.output → feature 页显示活动
- * → 本地检查（真的 ps、真的 pty pid）判定可疑，真的 headless 判断 stuck: true → 红点 → 面板展开、缩回、再打开内容还在，
- * 终端区至少占一半高，终端能输入 →「现在」页的需要你里有它 → 忽略 → 恢复活动红点消失、再次卡住 → 开修复 session，收到四条规则，不算总控
- * → 从「现在」页点它回到卡住的终端 → 重启后换成英文再卡住一次。
+ * 设计文档 2026-10-31（ticket 实时状态）+ UI 重做第 3 层：假 claude 写 transcript 和真实位置的 tasks/<id>.output
+ * → feature「进行中」里有它 → 本地检查（真的 ps、真的 pty pid）判定可疑，真的 headless 判断 stuck: true
+ * → feature「概况」和首页各一张「卡住了」的卡片（写着理由），「全部 ticket」里那一行是卡住的颜色
+ * → 首页卡片「没事，忽略」→ 卡片消失、恢复活动后再次卡住 → 卡片「开修复 session」落到「总控」，修复 session 收到四条规则，不算总控
+ * → 从首页卡片「去看看」回到卡住的终端 → 重启后换成英文再卡住一次。
  * 设了 BUTLER_E2E_SHOTS_DIR 时截图存到那里，文件名 live-status-*.png（CI 不设）。
  */
 test("live status and stuck handling on the feature page", async ({ makeSandbox, launch }) => {
@@ -492,26 +554,26 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await newFeatureTicket(page, "DMS-2", "backend");
   const ticketPage = (key: string) => page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: key }).click();
   const featurePage = () => page.locator(".sidebar .ticket.feature").click();
-  const onFeaturePage = () => expect(page.getByRole("heading", { name: "checkout", exact: true })).toBeVisible();
+  const home = () => page.getByRole("button", { name: S.home, exact: true }).click();
   const onTicketPage = (key: string) => expect(page.getByRole("heading", { name: key, exact: true })).toBeVisible();
-  const row = (key: string) => page.locator(".feature-page .ticket-table tr").filter({ hasText: key });
-  // ticket 表所在的 tab 内容框：内容多时它自己滚动。
-  const overview = page.locator(".feature-page .page-tabs-panel");
-  const overviewScroll = () => overview.evaluate((e) => e.scrollTop);
-  const scrollOverviewToTop = () => overview.evaluate((e) => void (e.scrollTop = 0));
+  const row = (key: string) => ticketRow(page, key);
+  /** 某个 ticket 的「轮到你」卡片：在首页，或者在 feature 页「概况」里。 */
+  const cardOf = (key: string) => page.getByTestId("turn-card").filter({ has: page.locator(".where .key", { hasText: new RegExp(`^${key}$`) }) });
+  const featureCard = (key: string) => page.locator(".feature-page .scope-you").getByTestId("turn-card").filter({ has: page.locator(".where .key", { hasText: new RegExp(`^${key}$`) }) });
 
-  // 1. 总控开着，并且有一份汇总：概览区的内容比较多，修复 session 的任务里也要写上总控的名字。
+  // 1. 总控开着，并且有一份汇总：修复 session 的任务里也要写上总控的名字。
   await featurePage();
-  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
+  await newCoordinator(page);
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   const coordinatorId = sessionIn(workspace)!;
   expect(coordinatorId).toBeTruthy();
   await typeLine(page, "/handoff");
-  await openTab(page, S.featureProgress);
+  await openTab(page, S.lay.tabSummary);
   await expect(page.locator(".feature-summary p").first()).toBeVisible();
 
   // 2. DMS-1 的 session 开始跑一个命令，这一轮不结束。
   await ticketPage("DMS-1");
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   const stuckId = sessionIn(worktree)!;
@@ -520,21 +582,27 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   await expect.poll(fakeLog).toContain(" task output ");
   const outputFile = /task output (.+)/.exec(fakeLog())![1];
 
-  // 3. 状态列显示这个 session 此刻在干什么；没有运行中 session 的 DMS-2 还是原来的 ticket 状态。
+  // 3. 「进行中」里 DMS-1 是 agent 在干活；没有运行中 session 的 DMS-2 不在里面。
   await featurePage();
-  await openTab(page, S.featureTickets);
-  const activity = row("DMS-1").locator(".status .activity");
-  await expect(activity.locator(".main")).toHaveText(S.activity.test);
-  await expect(activity.locator("small")).toContainText(LONG_COMMAND.slice(0, 40));
-  await expect(row("DMS-2").locator(".status")).not.toHaveText("");
-  await expect(row("DMS-2").locator(".status .activity")).toHaveCount(0);
+  await openTab(page, S.lay.tabRunning);
+  const running = page.locator(".feature-page .home-run").filter({ has: page.locator(".key", { hasText: /^DMS-1$/ }) });
+  await expect(running.locator(".turn-tag")).toHaveText(S.hm.whoAgent);
+  await expect(page.locator(".feature-page .home-run").filter({ has: page.locator(".key", { hasText: /^DMS-2$/ }) })).toHaveCount(0);
 
-  // 4. 两次检查没变化 → 真的 headless 判断 stuck: true → 红点和淡红底色（不再弹系统通知）。点红点之前面板是关着的。
-  const dot = row("DMS-1").getByRole("button", { name: `DMS-1 ${S.stuckDot}`, exact: true });
-  const panel = page.locator(".stuck-panel");
-  await expect(dot).toBeVisible();
-  await expect(row("DMS-1")).toHaveClass(/stuck/);
-  await expect(panel).toHaveCount(0);
+  // 4. 两次检查没变化 → 真的 headless 判断 stuck: true（不再弹系统通知）：
+  //    「概况」里一张「卡住了」的卡片写着理由，页签标着要你看；「全部 ticket」里 DMS-1 轮到你、卡住的颜色。
+  await openTab(page, S.lay.tabOverview);
+  const card = featureCard("DMS-1");
+  await expect(card).toHaveAttribute("data-kind", "stuck");
+  await expect(card.locator(".turn-tag")).toHaveText(S.hm.kind.stuck);
+  await expect(card.locator(".sentence")).toContainText(VERDICT_REASON.zh);
+  await expect(pageTab(page, S.lay.tabOverview)).toHaveClass(/\battention\b/);
+  await shot(page, "live-status-zh.png", "light");
+  await shot(page, "live-status-zh-dark.png", "dark");
+  await openTab(page, S.lay.tabTickets);
+  await expect(row("DMS-1").locator(".who")).toHaveText(S.lay.whoYou);
+  await expect(row("DMS-1").locator(".who")).toHaveClass(/\bturn-stuck\b/);
+  if (shots) await row("DMS-1").screenshot({ path: join(shots, "live-status-row.png") });
 
   // 判断用的 prompt 证明这些都是真的读到的：transcript、tasks 目录的输出文件、ps 读到的子进程 CPU（读不到时写的是“未知”）。
   expect(judgePrompts()).toHaveLength(1);
@@ -544,119 +612,61 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   // headless 自己的 session 不进“未认领”。
   expect(dbRows(s, "SELECT cwd, dismissed FROM sessions WHERE id LIKE 'judge-%'")).toEqual([{ cwd: worktree, dismissed: 1 }]);
 
-  // “已 N 分钟没有新输出”完整显示，不会被截掉；鼠标放上去也能看到全文。
-  const sub = activity.locator("small");
-  await expect(sub).toContainText(S.activitySilent(S.durationMinutes(1)));
-  await expect(sub).toHaveAttribute("title", (await sub.textContent())!);
-  expect(await sub.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
-  if (shots) await row("DMS-1").screenshot({ path: join(shots, "live-status-row.png") });
-
-  // 5. 点红点展开面板，不进 ticket 页。概览区内容多时自己滚到面板，按钮看得到。面板只显示最后 6 行。
-  const fix = panel.getByRole("button", { name: S.stuckFix, exact: true });
-  await dot.click();
-  await expect(fix).toBeInViewport();
-  await onFeaturePage();
-  await expect(panel).toContainText(VERDICT_REASON.zh);
-  await expect(panel).toContainText(VERDICT_ACTION.zh);
-  await expect(panel.locator(".stuck-log")).toHaveText(COMMAND_OUTPUT.slice(-6).join("\n"));
-  await shot(page, "live-status-zh.png", "light");
-  await shot(page, "live-status-zh-dark.png", "dark");
-
-  // 6. 缩回再打开，内容还在。
-  const content = await panel.innerText();
-  await dot.click();
-  await expect(panel).toHaveCount(0);
-  await onFeaturePage();
-  await dot.click();
-  await expect(fix).toBeInViewport();
-  expect(await panel.innerText()).toBe(content);
-
-  // 面板里的“收起”：红点可能已经滚出视野，不用先滚回去。收起后这一行又看得到，面板记成关着。
-  await panel.getByRole("button", { name: S.collapse, exact: true }).click();
-  await expect(panel).toHaveCount(0);
-  await onFeaturePage();
-  await expect(dot).toBeInViewport();
-  await expect(dot).toHaveAttribute("aria-expanded", "false");
-  await dot.click();
-  await expect(fix).toBeInViewport();
-
-  // 7. 面板开着：终端区至少占窗口一半高，窗口缩到最小也一样，这时概览区自己滚动，面板的按钮还够得着。
+  // 5. 「总控」里终端区至少占窗口一半高，窗口缩到最小也一样；终端能输入，也有回复。
+  await openTab(page, S.lay.tabControl);
   await expectTerminalsKeepHalf(page);
   await resizeWindow(app, 900, 600);
   await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeLessThanOrEqual(600);
   await expectTerminalsKeepHalf(page);
-  // 窗口矮、面板比概览区还高时，点红点后按钮（含“收起”）也要都看得到，不靠测试自己去滚。
-  const collapse = panel.getByRole("button", { name: S.collapse, exact: true });
-  await dot.click();
-  await expect(panel).toHaveCount(0);
-  await dot.click();
-  await expect(panel).toBeVisible();
-  const heights = await page.evaluate(() => ({
-    panel: document.querySelector(".stuck-panel")!.getBoundingClientRect().height,
-    overview: document.querySelector(".page-tabs-panel")!.clientHeight,
-  }));
-  expect(heights.panel, JSON.stringify(heights)).toBeGreaterThan(heights.overview);
-  await expect(fix).toBeInViewport({ ratio: 1 });
-  await expect(collapse).toBeInViewport({ ratio: 1 });
   await resizeWindow(app, 1280, 820);
   await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeGreaterThan(600);
+  await typeLine(page, "hello from the control tab");
+  await expect.poll(() => terminalText(page)).toContain("收到：hello from the control tab");
 
-  // 8. 面板开着，按键照样到终端，也有回复。
-  await typeLine(page, "hello with the panel open");
-  await expect.poll(() => terminalText(page)).toContain("收到：hello with the panel open");
-  await expect(panel).toBeVisible();
-
-  // 9. 点这一行的其他位置和“看终端”都进 ticket 页。在别的页面上，侧栏的 feature 行也是「卡住了」的点。
-  //    首页有一张 DMS-1「卡住了」的卡片（写着理由）；feature 总控回完话停在提示符上不算轮到你（第 1 层 c7038adb），所以侧栏的“轮到你”后面是 1。回来时面板还开着。
-  await row("DMS-1").locator(".status").click();
-  await onTicketPage("DMS-1");
+  // 6. 在别的页面上，侧栏的 feature 行也是「卡住了」的点。首页有一张 DMS-1「卡住了」的卡片（写着理由）；
+  //    feature 总控回完话停在提示符上不算轮到你（第 1 层 c7038adb），所以侧栏的“轮到你”后面是 1。
+  await ticketPage("DMS-2");
   await expect(page.locator(".sidebar .feature-group > .feature-row .turn-dot")).toHaveClass(/\bturn-stuck\b/);
-  await page.getByRole("button", { name: S.home, exact: true }).click();
+  await home();
   await expect(page.getByTestId("turn-card")).toHaveCount(1);
-  const need = page.getByTestId("turn-card").filter({ has: page.locator(".where .path", { hasText: /DMS-1$/ }) });
+  const need = cardOf("DMS-1");
   await expect(need.locator(".turn-tag")).toHaveText(S.hm.kind.stuck);
   await expect(need.locator(".where .path")).toHaveText("checkout › DMS-1");
   await expect(need.locator(".sentence")).toContainText(VERDICT_REASON.zh);
   await expect(page.locator(".sidebar .nav.home .needs-you-badge")).toHaveText("1");
-  await featurePage();
-  await expect(panel).toBeVisible();
-  // 面板是记住的状态，不是这次点开的：回到这一页不滚动。
-  expect(await overviewScroll()).toBe(0);
-  await panel.getByRole("button", { name: S.stuckViewTerminal, exact: true }).click();
-  await onTicketPage("DMS-1");
-  await featurePage();
 
-  // 10. “没事，忽略”（activity:dismiss）：红点消失；没有新动静就不再判断、不再提醒。
-  await panel.getByRole("button", { name: S.stuckDismiss, exact: true }).click();
-  await expect(dot).toHaveCount(0);
-  await expect(panel).toHaveCount(0);
+  // 7. 首页卡片「没事，忽略」（很久没输出判的卡住才有，activity:dismiss）：卡片消失；没有新动静就不再判断、不再提醒。
+  await need.getByRole("button", { name: S.hm.act.ignore, exact: true }).click();
+  await expect(need).toHaveCount(0);
   await page.waitForTimeout(4 * STUCK_CHECK_MS);
-  await expect(dot).toHaveCount(0);
+  await expect(need).toHaveCount(0);
   expect(judgePrompts()).toHaveLength(1);
+  await featurePage();
+  await openTab(page, S.lay.tabOverview);
+  await expect(featureCard("DMS-1")).toHaveCount(0);
 
-  // 11. 命令又有输出之后再卡住：再判断一次，面板显示新的输出。面板记着开，这次是自己出现的，不滚动。
-  await scrollOverviewToTop();
+  // 8. 命令又有输出之后再卡住：再判断一次，卡片又出现。
   appendFileSync(outputFile, "step 9 of 8\n");
-  await expect(dot).toBeVisible();
+  await expect(featureCard("DMS-1")).toHaveAttribute("data-kind", "stuck");
   expect(judgePrompts()).toHaveLength(2);
-  await expect(panel.locator(".stuck-log")).toContainText("step 9 of 8");
-  expect(await overviewScroll()).toBe(0);
+  expect(judgePrompts()[1]).toContain("step 9 of 8");
 
-  // 12. 还卡着的时候有了新输出：红点自己消失，不用等下一次判断。之后再卡住一次，给后面的步骤用。
+  // 9. 还卡着的时候有了新输出：卡片自己消失，不用等下一次判断。之后再卡住一次，给后面的步骤用。
   appendFileSync(outputFile, "step 10 of 8\n");
-  await expect(dot).toHaveCount(0);
-  await expect(dot).toBeVisible();
+  await expect(featureCard("DMS-1")).toHaveCount(0);
+  await expect(featureCard("DMS-1")).toHaveAttribute("data-kind", "stuck");
   expect(judgePrompts()).toHaveLength(3);
 
-  // 13. “开新 session 解决”（session:openFix）：feature 页上多一个“修复 DMS-1”的 session，切到它的终端。
-  await fix.click();
+  // 10. 「概况」卡片的「开修复 session」（session:openFix）：落到「总控」，多一个“修复 DMS-1”的 session，切到它的终端。
+  await featureCard("DMS-1").getByRole("button", { name: S.hm.act.fix, exact: true }).click();
+  await expect(pageTab(page, S.lay.tabControl)).toHaveAttribute("aria-selected", "true");
   const fixButton = page.locator(".feature-page .sessions-bar .session").filter({ hasText: S.fixSessionFor("DMS-1") });
   await expect(fixButton).toHaveClass(/active/);
   const fixId = (await fixButton.getAttribute("title"))!.split("\n")[1];
   expect(fixId).toBeTruthy();
   expect(fixId).not.toBe(coordinatorId);
 
-  // 14. 新 session 收到任务：四条规则、两个 session 的名字（登记文件里查到的）、卡住 session 的资料。
+  // 11. 新 session 收到任务：四条规则、两个 session 的名字（登记文件里查到的）、卡住 session 的资料。
   const fixTranscript = join(s.claudeConfigDir, "projects", workspace.replace(/[^A-Za-z0-9]/g, "-"), `${fixId}.jsonl`);
   const firstMessage = () => {
     if (!existsSync(fixTranscript)) return "";
@@ -676,57 +686,58 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   expect(task).toContain("step 10 of 8");
   await expect.poll(() => terminalText(page)).toContain("step 10 of 8");
 
-  // 15. 不存成总控；原 session 不受影响，还是卡住的。同一个卡住的 session 再点一次，回到同一个修复 session。
+  // 12. 不存成总控；原 session 不受影响，还是卡住的。同一个卡住的 session 再点一次，回到同一个修复 session。
   expect(dbRows(s, "SELECT coordinator, fixes_session AS fixes, ticket_key AS ticket FROM sessions WHERE id = ?", fixId)).toEqual([{ coordinator: 0, fixes: stuckId, ticket: null }]);
-  await expect(dot).toBeVisible();
-  await fix.click();
+  await openTab(page, S.lay.tabOverview);
+  await expect(featureCard("DMS-1")).toHaveAttribute("data-kind", "stuck");
+  await featureCard("DMS-1").getByRole("button", { name: S.hm.act.fix, exact: true }).click();
+  await expect(pageTab(page, S.lay.tabControl)).toHaveAttribute("aria-selected", "true");
+  await expect(fixButton).toHaveClass(/active/);
   // 数 session（.session-wrap）：session 栏里的「清理闲置」「已隐藏」按钮也带 .session 样式。
   await expect(page.locator(".feature-page .sessions-bar .session-wrap")).toHaveCount(2);
 
-  // 16. 在别的页面上从首页点 DMS-1 卡片的「去看看」：进 DMS-1 的 ticket 页，当前终端是卡住的那个 session。
+  // 13. 在别的页面上从首页点 DMS-1 卡片的「去看看」：进 DMS-1 的 ticket 页、落在「终端」，当前终端是卡住的那个 session。
   await ticketPage("DMS-2");
-  await page.getByRole("button", { name: S.home, exact: true }).click();
-  await page.getByTestId("turn-card").filter({ has: page.locator(".where .path", { hasText: /DMS-1$/ }) }).getByRole("button", { name: S.hm.act.look, exact: true }).click();
+  await home();
+  await cardOf("DMS-1").getByRole("button", { name: S.hm.act.look, exact: true }).click();
   await onTicketPage("DMS-1");
+  await expect(pageTab(page, S.lay.tabTerminal)).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".sessions-bar .session.active")).toHaveAttribute("title", new RegExp(`\\n${stuckId}$`));
   // 卡住的 session 的终端：命令还在跑。
   await expect.poll(() => terminalText(page)).toContain("running");
 
-  // 17. 修复 session 比总控新，但 feature 汇总还是 fork 总控：它不会被选成总控。
+  // 14. 修复 session 比总控新，但 feature 汇总还是 fork 总控：它不会被选成总控。
   await featurePage();
-  await openTab(page, S.featureProgress);
+  await openTab(page, S.lay.tabSummary);
   const progress = page.locator(".feature-page .feature-progress");
   await progress.getByRole("button", { name: S.runFeatureSummary, exact: true }).click();
   await expect(progress.getByText(S.featureSummaryStored, { exact: true })).toBeVisible();
   expect(fakeLog()).toContain(`--resume ${coordinatorId} --fork-session`);
   expect(fakeLog()).not.toContain(`--resume ${fixId}`);
 
-  // 18. 卡住的 session 还在被监视时退出：监视先停，数据库才关，日志里没有错误。
+  // 15. 卡住的 session 还在被监视时退出：监视先停，数据库才关，日志里没有错误。
   expect(pageErrors).toEqual([]);
   await app.close();
   const log = () => readFileSync(join(s.butlerHome, "logs", "main.log"), "utf8");
   expect(log()).not.toMatch(/activity tick failed|activity of session|stuck judge/);
 
-  // 19. 重启后是英文：卡住状态不留，DMS-2 新跑的命令重新判断，判断结果和界面都是英文。
+  // 16. 重启后是英文：卡住状态不留，DMS-2 新跑的命令重新判断，判断结果和界面都是英文。
   s.lang = "en";
   const E = STRINGS.en;
   const english = await launch(s);
   const en = english.page;
   await en.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-2" }).click();
+  await openTab(en, E.lay.tabTerminal);
   await en.getByRole("button", { name: `+ ${E.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(en)).toContain("fake claude ready");
   await typeLine(en, "/fake-bash git push origin feature/checkout");
   await en.locator(".sidebar .ticket.feature").click();
-  await openTab(en, E.featureTickets);
-  const enRow = en.locator(".feature-page .ticket-table tr").filter({ hasText: "DMS-2" });
-  await expect(enRow.locator(".activity .main")).toHaveText(E.activity.push);
-  await expect(enRow.getByRole("button", { name: `DMS-2 ${E.stuckDot}`, exact: true })).toBeVisible();
-  await expect(enRow.locator(".activity small")).toContainText(E.activitySilent(E.durationMinutes(1)));
-  await enRow.getByRole("button", { name: `DMS-2 ${E.stuckDot}`, exact: true }).click();
-  const enPanel = en.locator(".stuck-panel");
-  await expect(enPanel).toContainText(VERDICT_REASON.en);
-  await expect(enPanel).toContainText(VERDICT_ACTION.en);
-  await expect(enPanel.getByRole("button", { name: E.stuckFix, exact: true })).toBeVisible();
+  await openTab(en, E.lay.tabOverview);
+  const enFeatureCard = en.locator(".feature-page .scope-you").getByTestId("turn-card").filter({ has: en.locator(".where .key", { hasText: /^DMS-2$/ }) });
+  await expect(enFeatureCard.locator(".turn-tag")).toHaveText(E.hm.kind.stuck);
+  await expect(enFeatureCard.locator(".sentence")).toContainText(VERDICT_REASON.en);
+  await expect(enFeatureCard.getByRole("button", { name: E.hm.act.fix, exact: true })).toBeVisible();
+  await expect(enFeatureCard.getByRole("button", { name: E.hm.act.ignore, exact: true })).toBeVisible();
   await shot(en, "live-status-en.png", "light");
   await shot(en, "live-status-en-dark.png", "dark");
   // 英文的首页：一张 DMS-2 的「卡住了」卡片，写着英文的理由。
@@ -737,8 +748,8 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
 });
 
 /**
- * 设计文档 2026-10-31：这一轮结束了但后台命令还在跑，session 在等命令，不是等用户，状态列显示命令并标“后台”；
- * 完成通知之后回到“等你回话”。检查间隔保持 3 分钟，这个测试不会走到卡住判断。
+ * 设计文档 2026-10-31：这一轮结束了但后台命令还在跑，session 在等命令，不是等用户：feature「进行中」里是 agent 在干活；
+ * 完成通知之后回到“等你回话”（轮到你）。检查间隔保持 3 分钟，这个测试不会走到卡住判断。
  */
 test("live status: a background command stays on the row after its turn ends", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
@@ -747,22 +758,27 @@ test("live status: a background command stays on the row after its turn ends", a
   await completeWizard(page, s);
   await createCheckoutFeature(page, s);
   await newFeatureTicket(page, "DMS-1", "frontend");
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await typeLine(page, "/fake-bg git push origin feature/checkout");
   await expect.poll(() => terminalText(page)).toContain("收到：/fake-bg git push");
 
+  // 后台命令还在跑：「进行中」里 DMS-1 是 agent 在干活，「全部 ticket」里不是轮到你。
   await page.locator(".sidebar .ticket.feature").click();
-  await openTab(page, S.featureTickets);
-  const row = page.locator(".feature-page .ticket-table tr").filter({ hasText: "DMS-1" });
-  await expect(row.locator(".activity .main")).toHaveText(S.activityBackground(S.activity.push));
-  // 没有卡住的行也带完整文字的提示：这一列放不下时靠它看全。
-  await expect(row.locator(".activity small")).toHaveAttribute("title", S.durationNow);
-  await expect(row.locator(".badge")).toBeVisible();
+  const run = page.locator(".feature-page .home-run").filter({ has: page.locator(".key", { hasText: /^DMS-1$/ }) });
+  await openTab(page, S.lay.tabRunning);
+  await expect(run.locator(".turn-tag")).toHaveText(S.hm.whoAgent);
+  await openTab(page, S.lay.tabTickets);
+  await expect(ticketRow(page, "DMS-1").locator(".who")).toHaveText(S.hm.whoAgent);
 
+  // 完成通知之后：停下来等你回话，「进行中」里没有它了，「全部 ticket」里轮到你。
   await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
+  await openTicketTab(page, "terminal");
   await typeLine(page, "/fake-bg-done");
   await page.locator(".sidebar .ticket.feature").click();
-  await expect(row.locator(".activity .main")).toHaveText(S.activity.waiting);
-  await expect(row.locator(".stuck-dot")).toHaveCount(0);
+  await expect(pageTab(page, S.lay.tabTickets)).toHaveAttribute("aria-selected", "true");
+  await expect(ticketRow(page, "DMS-1").locator(".who")).toHaveText(S.lay.whoYou);
+  await openTab(page, S.lay.tabRunning);
+  await expect(run).toHaveCount(0);
 });

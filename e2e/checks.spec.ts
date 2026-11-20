@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, type Sandbox, newButton } from "./fixtures";
+import { completeWizard, expect, terminalText, test, type Sandbox, newButton, openTicketTab } from "./fixtures";
 
 /** 在当前显示的终端里输入一行并回车。 */
 async function typeLine(page: Page, line: string): Promise<void> {
@@ -92,6 +92,7 @@ test("checks: an enforced pattern blocks the edit and is recorded, shadow only r
 
   // 3. ticket session 里写一个带 console.log( 的文件：hook 拦下，agent 拿到检查的说明和「从根上修好」。
   await page.locator(".sidebar .ticket .key").getByText("CHK-1", { exact: true }).click();
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await typeLine(page, `/fake-edit src/a.ts ${JSON.stringify('console.log("debug");\n')}`);

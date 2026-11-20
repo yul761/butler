@@ -26,7 +26,7 @@ import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
-import type { ButlerMessageView, EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { ButlerMessageView, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "已合并·待收尾",
@@ -413,7 +413,6 @@ const ZH = {
   withSample: (what: string, sample: string) => `${what}（${sample}）`,
   newTicket: "新建 ticket",
   newFeature: "新建 feature",
-  features: "Feature",
   // epic（设计文档 2026-11-01）
   newEpic: "新建 epic",
   epics: "Epic",
@@ -439,7 +438,6 @@ const ZH = {
   } as Record<string, string>,
   noEpicFeatures: "还没有 feature。在 epic session 里规划，或者点“新建 feature”。",
   epicNoSummary: "还没有汇总",
-  epicStatus: { stuck: "有 ticket 卡住", waiting: "等你回话", not_started: "未开始", active: "进行中", archived: "已归档" } as Record<EpicFeatureStatus, string>,
   archiveEpic: "归档 epic（连同下面的 feature）",
   archiving: "归档中…",
   archivingSummaries: "归档中，先更新汇总，最多两分钟…",
@@ -465,14 +463,12 @@ const ZH = {
   featureWorkspace: "工作区",
   featureRepos: "仓库",
   featureReposHint: "在这个 feature 下建 ticket 时从这些仓库里选。移除只影响以后的选项。",
-  featureTickets: "Ticket",
   noFeatureTickets: "还没有 ticket。点“新建 ticket”。",
   expand: "展开",
   collapse: "收起",
   featureCoordinatorHint: "feature 总控在工作区里运行，能看到所有 ticket 的 worktree，可以给各个 ticket 开子 session。",
   noFeatureSessions: "还没有总控 session。",
   // feature 汇总（设计文档 2026-10-28）
-  featureProgress: "整体进度",
   featureBlockedCount: (n: number) => `${n} 处卡住`,
   featureSummaryNone: "还没有汇总。晚上会自动生成，也可以点“立即更新”。",
   featureSummaryDegraded: "汇总不完整：claude 的输出没有通过校验，下面是原文。",
@@ -625,14 +621,9 @@ const ZH = {
   noticeLessons: "打开复盘",
   noticeOpen: "打开会话",
   activityBackground: (main: string) => `后台 · ${main}`,
-  activitySilent: (d: string) => `已 ${d}没有新输出`,
   durationNow: "刚刚",
   durationMinutes: (m: number) => `${m} 分钟`,
   durationHours: (h: number, m: number) => (m === 0 ? `${h} 小时` : `${h} 小时 ${m} 分钟`),
-  stuckDot: "可能卡住了",
-  stuckFix: "开新 session 解决",
-  stuckViewTerminal: "看终端",
-  stuckDismiss: "没事，忽略",
   fixSessionFor: (ticket: string | null) => (ticket ? `修复 ${ticket}` : "修复"),
   unclaimed: "未认领 session",
   settings: "设置",
@@ -793,11 +784,8 @@ const ZH = {
   nowPrUnavailable: "PR 状态不可用",
   nowPr: (n: number | null, state: string) => `PR${n === null ? "" : ` #${n}`} ${state}`,
   nowWaitingDecision: "等你决定",
-  // 「待你决定」和汇报（BTL-190 第 2+3 点）。
-  inboxReports: "汇报",
-  inboxDecisions: "待你决定",
+  // 汇报（BTL-190 第 2+3 点）。
   inboxNoReports: "还没有汇报。",
-  inboxNoDecisions: "没有要你决定的。",
   inboxReportKinds: { progress: "进展", done: "完成", blocked: "卡住", choice: "自己选了" } as Record<ReportKind, string>,
   inboxWho: (role: InboxRole, ticketKey: string | null, repo: string | null) =>
     role === "ticket" ? `${ticketKey ?? ""}${repo ? `（${repo}）` : ""}`
@@ -829,8 +817,6 @@ const ZH = {
     rebase: (who: string) => `${who} 要先 rebase 再合`,
     dir_busy: (who: string, other: string) => `${who} 想切 branch，目录正被 ${other} 用着`,
   },
-  followupsTab: (n: number) => `Follow-ups（${n}）`,
-  historyTab: (n: number) => `Handoff 历史（${n}）`,
   runHandoff: "立即 handoff",
   handoffRunning: "handoff 进行中…",
   noFollowups: "没有未完成的 follow-up。",
@@ -855,7 +841,6 @@ const ZH = {
   nextSteps: "下一步",
   blockers: "阻塞",
   openQuestions: "待确认",
-  prLine: (name: string, state: string, review: string | null) => `PR ${name} · ${state}${review ? ` · ${review}` : ""}`,
   schedule: "调度与 handoff",
   scheduleNote: "后台总结会继承你在 ~/.claude 里允许的命令",
   nightlyTime: "晚间 handoff 时间",
@@ -1611,7 +1596,6 @@ const ZH = {
   auditMaybeSentNote: "这次调用没有成功完成，下面的内容可能已经发给了服务商。",
   auditDeclined: "你在确认框里选择了不发送（或确认超时）",
   auditLoadFailed: "审计记录加载失败。",
-  memoryTab: "记忆",
   memoryHint: "同一个 ticket 的新 session 里，Claude 会用 recall 读到这些：最近一次交接、决策、未完成的 follow-up，以及它自己记下的内容。",
   memoryOff: "记忆已关闭（设置 → 记忆）。",
   memoryEmpty: "这个 ticket 还没有记忆。handoff 之后会出现进度、决策和未完成的 follow-up。",
@@ -1681,7 +1665,6 @@ const ZH = {
   wizardPrivacyHelp: "个人 API 只在完整档位下用来做记忆蒸馏，其他档位不调用。不想用就选“关闭”或者什么都不填。",
   wizardDoneTitle: "准备好了",
   wizardDoneHelp: "点“开始使用”进入首页，从那里选一种方式开始第一件事；3.0 的各个功能在 设置 › 功能 里，默认都关着。每晚 Butler 会为有活动的 ticket 生成 handoff。这些设置之后都能在设置页修改，也可以从设置页重新运行这个向导。",
-  prStagesTab: "PR 进度",
   prStage: { design: "设计", dev: "开发", self_review: "自我 review", ci: "CI", peer_review: "peer review", merge: "合并" } as Record<PrStageId, string>,
   prClosed: "已关闭",
   prStageSkipped: "跳过",
@@ -1694,11 +1677,8 @@ const ZH = {
   prRound: (n: number) => `第 ${n} 轮`,
   prTimelineShow: "展开时间线",
   prTimelineHide: "收起时间线",
-  prMergedOf: (m: number, n: number) => `${m}/${n} 已合并`,
   prNoRepos: "还没有仓库",
   prNoPrYet: "进行中，还没有 PR",
-  prArchived: "已归档",
-  prCount: (n: number) => `${n} 个 PR`,
   prBackToDev: "→ 回到开发",
   prTimeline: {
     design_skill: (d) => (d ? `skill ${d}` : "skill"),
@@ -1990,8 +1970,6 @@ const ZH = {
     loopFlakyText: (n: number, wasted: string) => `${n} 次 · ${wasted}`,
     loopListed: "（在名单上）",
   },
-  /** Butler 页"回复"tab（ws-b）：Butler 总控用 send_message 发的消息和收到的回复。 */
-  butlerRepliesTab: "回复",
   butlerRepliesNone: "Butler 总控还没用 send_message 发过消息。",
   butlerMessageStatus: {
     sending: "在送",
@@ -2005,7 +1983,6 @@ const ZH = {
   butlerMessageReply: "回复",
   /** feature 页整体进度（ws-b）。 */
   featureSummaryPrAsOf: (t: string) => `PR 状态截至 ${t}`,
-  prStagesStuck: "卡在谁手上",
   /** 设置里的「对外动作」（契约 4.8，ws-b）。 */
   externalHeading: "对外动作",
   externalIntro: "Butler 代你在 GitHub 或别的外部服务上留下东西的动作，每种一个开关，默认全关。关着时 Butler 不会做，只在审计页记一笔“跳过”。现在用到的是导出成仓库规则的「推送分支」和「开 PR」，以及评论与 CI 的「回复 review 评论」「标记评论已解决」和「重跑 CI」；其余的等之后的版本接入时才会生效。",
@@ -2132,7 +2109,6 @@ const ZH = {
     effectReruns: (reruns: number, passed: number, wasted: string) => `自动重跑 ${reruns} 次，重跑后通过 ${passed} 次；flaky 浪费了 ${wasted}。`,
     effectDelivered: (code: number, maybe: number) => `送进 session 的代码问题 ${code} 次，其中「可能是 flaky」${maybe} 次。`,
     duration: (ms: number) => (ms < 60_000 ? "不到 1 分钟" : ms < 3_600_000 ? `${Math.round(ms / 60_000)} 分钟` : `${(ms / 3_600_000).toFixed(1)} 小时`),
-    tab: "评论",
     commentsOff: "这个 PR 的仓库没开评论闭环（设置 → 评论与 CI）。",
     commentsNone: "还没有读到评论。",
     pr: (n: number) => `PR #${n}`,
@@ -2217,7 +2193,6 @@ const ZH = {
     typesHint: "类型映射一行一条「键=值」，比如 hotfix=hotfix、hotfix/=hotfix、hotfix=high。",
     externalTitle: "自动贴简报",
     externalIntro: "预审完以后把简报自动写进 PR 描述（以你的 gh 账号）。关着时只能在 ticket 页手动点「贴到 PR」。",
-    tab: "Review",
     colon: "：",
     none: "这个 ticket 还没有 PR，也没有交过证据的分支。",
     noPr: "还没开 PR",

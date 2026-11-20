@@ -1,5 +1,5 @@
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, newButton, openArchived } from "./fixtures";
+import { completeWizard, expect, terminalText, test, newButton, openArchived, openTicketTab } from "./fixtures";
 
 /**
  * 真机反馈（2026-10-23，Windows）：
@@ -20,6 +20,8 @@ test("edit the work mode, archive and restore the ticket, paste into the termina
   const header = page.locator(".ticket-header .muted");
   await expect(header).toContainText("-worktrees");
 
+  // 仓库条在「终端」页签里（ticket 页默认停在「概况」）。
+  await openTicketTab(page, "terminal");
   await page.locator(".repos-bar").getByRole("button", { name: S.edit, exact: true }).click();
   await page.getByRole("radio", { name: S.branch, exact: true }).check();
   await expect(page.getByText(S.editModeHint.toBranch, { exact: true })).toBeVisible();
@@ -43,6 +45,7 @@ test("edit the work mode, archive and restore the ticket, paste into the termina
 
   // 3. 粘贴（Windows / Linux）。分支模式：仓库还在 main 上，先切到 ticket 的分支。
   if (process.platform === "darwin") return;
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await page.getByRole("button", { name: S.switchAndOpen, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");

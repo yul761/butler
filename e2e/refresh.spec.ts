@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, newButton, openSettingsTab, type Sandbox, terminalText, test } from "./fixtures";
+import { completeWizard, expect, newButton, openSettingsTab, openTicketTab, type Sandbox, terminalText, test } from "./fixtures";
 
 /**
  * 上下文换新（计划 16 任务 7）：假 claude 的每条回复都带 usage（上下文是 FAKE_CLAUDE_CONTEXT_TOKENS，/clear 之后从头算），
@@ -47,8 +47,9 @@ async function activeSessionId(page: Page): Promise<string | undefined> {
   return (await page.locator(".sessions-bar .session.active").getAttribute("title"))?.split("\n")[1];
 }
 
-/** 在当前 ticket 页开一个新 session，等假 claude 就绪；返回它的 session id。 */
+/** 在当前 ticket 页的「终端」页签开一个新 session，等假 claude 就绪；返回它的 session id。 */
 async function openSession(page: Page): Promise<string> {
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   const id = await activeSessionId(page);
@@ -78,14 +79,13 @@ async function setThreshold(page: Page, tokens: string): Promise<void> {
   await expect(page.locator(".field").filter({ hasText: S.refreshThreshold }).locator("input")).toHaveValue(tokens);
 }
 
-/** 换新完成之后：ticket 页的 handoff 历史里多了一条 /handoff 的，记忆里有这份交接。 */
+/** 换新完成之后：ticket 页「记录」页签的交接记录里多了一条 /handoff 的，记忆里有这份交接。 */
 async function expectHandoffStored(page: Page): Promise<void> {
-  await page.getByRole("button", { name: S.historyTab(1), exact: true }).click();
+  await openTicketTab(page, "log");
   const entry = page.locator(".handoff-entry");
   await expect(entry).toHaveCount(1);
   await expect(entry.locator(".muted").first()).toHaveText(S.handoffTrigger.command);
   await expect(entry).toContainText(HANDOFF_DONE);
-  await page.getByRole("button", { name: S.memoryTab, exact: true }).click();
   await expect(page.locator(".memory-handoff pre")).toContainText(HANDOFF_DONE);
 }
 

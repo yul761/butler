@@ -420,8 +420,8 @@ export const test = base.extend<{ e2eCleanup: Tracker; makeSandbox: (opts?: Sand
 export { expect };
 
 /**
- * feature、epic、Butler 总控页上面的 tab：名字开头是 name 的那个（后面跟着数量和记号）。
- * openTab 只在它没选中时点：再点一下当前 tab 会收起。
+ * 页面上面的 tab（ticket、feature、epic、效果、复盘、审计页）：名字开头是 name 的那个（后面跟着数量和记号）。
+ * tab 永远有一个选中，页面记着上次停在哪个；openTab 已选中就不点，点完等它选中。
  */
 export const pageTab = (page: Page, name: string) =>
   page.locator(".page-tabs-bar").getByRole("tab", { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) });
@@ -429,6 +429,15 @@ export async function openTab(page: Page, name: string): Promise<void> {
   const tab = pageTab(page, name);
   if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
   await expect(tab).toHaveAttribute("aria-selected", "true");
+}
+
+/** ticket 页的页签（UI 重做第 3 层）：id 对应的中文名；ticket 页默认停在「概况」，终端只在「终端」页签里。 */
+const TICKET_TAB_LABEL = {
+  overview: S.lay.tabOverview, conversation: S.lay.tabConversation, terminal: S.lay.tabTerminal, pr: S.lay.tabPr, log: S.lay.tabLog,
+} as const;
+export async function openTicketTab(page: Page, tab: keyof typeof TICKET_TAB_LABEL): Promise<void> {
+  await expect(page.locator(".ticket-page:not(.feature-page):not(.epic-page)")).toBeVisible();
+  await openTab(page, TICKET_TAB_LABEL[tab]);
 }
 
 /** 名字正好是 term 的 <dt> 后面那个 <dd>（健康检查的键值表）。 */

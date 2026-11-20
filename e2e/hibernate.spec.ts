@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, newButton, openSettingsGroup, type Sandbox, terminalText, test } from "./fixtures";
+import { completeWizard, expect, newButton, openSettingsGroup, openTicketTab, type Sandbox, terminalText, test } from "./fixtures";
 
 const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const fakeLog = (s: Sandbox) => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
@@ -48,6 +48,8 @@ test("a hibernated coordinator wakes for a report, gets it, and still has its co
   await page.getByLabel(S.ticketKey, { exact: true }).fill("HIB-1");
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "HIB-1", exact: true })).toBeVisible();
+  // 仓库条、session 条和终端都在 ticket 页的「终端」页签里（默认停在「概况」）。
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.addRepo}`, exact: true }).click();
   await page.getByRole("textbox", { name: `${S.repo} ${S.pick}`, exact: true }).fill(s.repo);
   await page.getByRole("radio", { name: S.worktree, exact: true }).check();

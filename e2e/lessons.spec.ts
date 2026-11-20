@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, newButton } from "./fixtures";
+import { completeWizard, expect, terminalText, test, newButton, openTicketTab } from "./fixtures";
 
 /**
  * review 经验（计划 Task 10）：页面上确认 / 驳回 / 停用 → 开 ticket session 时送进 --append-system-prompt-file 的说明文件。
@@ -54,6 +54,7 @@ test("confirmed lessons reach a ticket session's guide file; rejected and disabl
   };
   const openSession = async () => {
     await page.locator(".sidebar .ticket .key").getByText("LES-1", { exact: true }).click();
+    await openTicketTab(page, "terminal");
     await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
     await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   };

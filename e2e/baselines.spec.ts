@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { CI_ONLY_REPO, JS_REPO, type FixtureRepo } from "../src/main/baselines/__fixtures__/repos";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox, newButton } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox, newButton, openTicketTab } from "./fixtures";
 
 const git = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
 
@@ -98,6 +98,7 @@ test("baselines: scan, adopt, profile in the ticket guide, inferred fallback, le
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "BAS-1", exact: true })).toBeVisible();
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   const launchLine = fakeLog().split("\n").find((l) => l.includes("interactive new"))!;

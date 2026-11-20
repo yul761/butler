@@ -33,7 +33,6 @@ describe("TicketLogTab", () => {
     expect(html).toContain(`>${S.lay.logHandoffs}<`);
     expect(html).toContain(`>${S.lay.logMemory}<`);
     expect([S.lay.logFollowups, S.lay.logHandoffs, S.lay.logMemory]).toEqual(["待跟进", "交接记录", "记忆"]);
-    expect(html).not.toContain("overview-bar");
     expect(html).not.toContain("overview-panel");
     expect(html).toContain(S.noFollowups);
     expect(html).toContain(S.noHandoffs);

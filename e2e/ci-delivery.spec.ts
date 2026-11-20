@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, FAKE_GH_ORIGIN, makeGitRepo, terminalText, test, unsupportedGhCalls, newButton } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, makeGitRepo, terminalText, test, unsupportedGhCalls, newButton, openTicketTab } from "./fixtures";
 
 /**
  * 工作流 W：session 在自己的 worktree 里推了一个不是 ticket 分支的分支、开了 PR，CI 的结论递回这个 session。
@@ -47,6 +47,7 @@ test("a PR opened from a worktree branch gets its CI result delivered to the ses
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E-7", exact: true })).toBeVisible();
 
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await page.locator(".terminal-wrap:visible .xterm").click();

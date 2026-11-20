@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CSP_VIOLATION_LOG_PREFIX, isCspViolationMessage } from "../src/main/csp-log";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, newButton, openAllWork } from "./fixtures";
+import { completeWizard, expect, terminalText, test, newButton, openAllWork, openTicketTab } from "./fixtures";
 
 /**
  * 设计文档 11 节的主流程（计划 5 任务 9）：真实的主进程、preload、React 界面、node-pty、butler-hook（经 shell 执行）、
@@ -26,6 +26,8 @@ test("new ticket → session → hook → handoff → memory → Now page → ba
     await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
 
     // 2. 新 session：假 claude 在 PTY（xterm，生产 CSP 下）里启动，--mcp-config 带着两个记忆 server（路径里有空格）。
+    //    ticket 页默认停在「概况」，终端在「终端」页签里。
+    await openTicketTab(page, "terminal");
     await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
     await expect.poll(() => terminalText(page)).toContain("fake claude ready");
     await expect.poll(() => terminalText(page)).toContain("mcp: butler-memory, butler-workspace");
@@ -41,14 +43,18 @@ test("new ticket → session → hook → handoff → memory → Now page → ba
     await expect(page.locator(".sidebar .ticket .cnt")).toHaveText("1");
 
     // 4. 立即 handoff（假 claude 的 -p 模式，不挂记忆）：合并后任务入库，ticket 变成“已合并·待收尾”。
+    //    立即交接、待跟进、记忆都在「记录」页签里，三个小节一起显示。
+    // title 是「名字\nsession id」；名字会从「新对话」换成第一句话，只认 id。
+    const sessionId = (await page.locator(".sessions-bar .session.active").getAttribute("title"))!.split("\n")[1];
+    const screen = await terminalText(page);
+    await openTicketTab(page, "log");
     await page.getByRole("button", { name: S.runHandoff, exact: true }).click();
-    await page.getByRole("button", { name: S.followupsTab(1), exact: true }).click();
+    await expect(page.locator(".ticket-log-followups h3 .count")).toHaveText("1");
     await expect(page.locator(".followup .text").getByText("改 staging 配置", { exact: true })).toBeVisible();
     // 侧栏不再按状态分组（UI 重做第 2 层）：ticket 还在树里。
     await expect(page.locator(".sidebar .ticket .key")).toHaveText(["E2E-1"]);
 
-    // 5. 记忆标签：handoff 入库后同步进 StateCore，标签收到 memory:changed 后重读。决策、follow-up 和交接都在。
-    await page.getByRole("button", { name: S.memoryTab, exact: true }).click();
+    // 5. 记忆小节：handoff 入库后同步进 StateCore，收到 memory:changed 后重读。决策、follow-up 和交接都在。
     const decision = page.locator(".memory-item").filter({ has: page.getByText("用 PostgreSQL", { exact: true }) });
     await expect(decision).toBeVisible();
     await expect(page.locator(".memory-item .text").getByText("改 staging 配置（配置，合并后）", { exact: true })).toBeVisible();
@@ -64,16 +70,16 @@ test("new ticket → session → hook → handoff → memory → Now page → ba
     await expect(chain.locator("li.why-current")).toContainText(S.whyState.current);
 
     // 6. handoff 之后 ticket 已合并·待收尾：首页没有事轮到你。「全部工作」里点这一行回到 ticket 页的同一个终端。
-    const sessionTitle = await page.locator(".sessions-bar .session.active").getAttribute("title");
-    const screen = await terminalText(page);
     await page.getByRole("button", { name: S.home, exact: true }).click();
     await expect(page.locator(".home-top h2")).toHaveText(S.hm.titleZero);
     await expect(page.getByTestId("turn-card")).toHaveCount(0);
     await openAllWork(page);
     await page.getByTestId("all-work-row-ticket-E2E-1").locator(".row-name").click();
     await expect(page.getByRole("heading", { name: "E2E-1", exact: true })).toBeVisible();
+    // 页签记着上次停在「记录」：回到「终端」。
+    await openTicketTab(page, "terminal");
     await expect(page.locator(".terminal-wrap")).toHaveCount(1);
-    await expect(page.locator(".sessions-bar .session.active")).toHaveAttribute("title", sessionTitle!);
+    await expect(page.locator(".sessions-bar .session.active")).toHaveAttribute("title", new RegExp(`\n${sessionId}$`));
     // 终端重新挂上之后回放之前的输出：还是这个 session 的就绪行和刚才的回复。
     const ready = /fake claude ready \([0-9a-f]+\)/.exec(screen)![0];
     await expect.poll(() => terminalText(page)).toContain(ready);

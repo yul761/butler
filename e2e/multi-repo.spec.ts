@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, newButton } from "./fixtures";
+import { completeWizard, expect, terminalText, test, newButton, openTicketTab } from "./fixtures";
 
 /**
  * 设计文档 2026-10-23（多仓库 ticket）：不带仓库建 ticket → 添加两个仓库 → 各自开 session → 总控看得到两个仓库（第一步）
@@ -21,6 +21,8 @@ test("a ticket over two repos: a session per repo and a coordinator that sees bo
   await page.getByLabel(S.ticketKey, { exact: true }).fill("FULL-1");
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "FULL-1", exact: true })).toBeVisible();
+  // 仓库条和 session 条在「终端」页签里（ticket 页默认停在「概况」）。
+  await openTicketTab(page, "terminal");
   await expect(page.getByText(S.noRepos, { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: `+ ${S.newSession}`, exact: true })).toHaveCount(0);
 

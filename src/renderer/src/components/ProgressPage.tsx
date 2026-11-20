@@ -294,23 +294,3 @@ export function ProgressBody({ view, onOpenTicket, onOpenFeature, queue = null }
     </>
   );
 }
-
-/**
- * feature / epic 的 PR 进度 tab 顶上的「卡在谁手上」：和进度页同一份数据，只取这个 feature / epic 的。
- */
-export function PrStuckBlock({ epicId = null, featureId = null, onOpenTicket }: {
-  epicId?: number | null;
-  featureId?: number | null;
-  onOpenTicket: (key: string) => void;
-}) {
-  const view = useProgress({ epicId, featureId });
-  if (view === null) return null;
-  return (
-    <section className="pr-stuck-block" data-testid="pr-stuck-block">
-      <div className="progress-section-head">
-        <h3>{S.prStagesStuck}</h3>
-      </div>
-      <StuckList stuck={view.stuck} now={view.freshness.generatedAt} onOpenTicket={onOpenTicket} />
-    </section>
-  );
-}
