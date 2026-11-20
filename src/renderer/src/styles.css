@@ -107,6 +107,12 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .page-tabs-panel h3 .section-toggle { flex-shrink: 0; }
 .control-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
 @media (max-width: 900px) { .control-split { grid-template-columns: 1fr; } }
+/* epic、feature「总控」页签：左边是仓库条、session 条和终端（贴边，同 ticket「终端」页签），右边是对话。 */
+.page-tabs-panel.tab-panel-control { display: flex; flex-direction: column; padding: 0; }
+.tab-panel-control .control-split { flex: 1 0 auto; }
+.control-left { display: flex; flex-direction: column; min-width: 0; }
+.control-left > * { flex-shrink: 0; }
+.control-right { min-width: 0; padding: 8px 16px 8px 0; }
 .feature-summary { background: var(--panel); border-left: 3px solid var(--accent); border-radius: 4px; padding: 8px 12px; margin: 0 0 6px; overflow-wrap: anywhere; }
 .feature-summary p { margin: 0 0 6px; }
 .feature-summary .blocker { color: var(--danger); }
@@ -128,11 +134,6 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .ticket-table tr.stuck td { background: color-mix(in srgb, #dc2626 8%, transparent); }
 /* 卡住时最要紧的是“已 N 分钟没有新输出”，在这段文字的最后：折行显示，不截断。 */
 .ticket-table tr.stuck .activity small { color: var(--danger); white-space: normal; overflow: visible; overflow-wrap: anywhere; }
-/* epic 页（设计文档 2026-11-01，草图 A）：一行一个 feature，一句进度放不下时折行。 */
-.epic-features .name, .epic-archived .name { font-weight: 600; white-space: nowrap; }
-.epic-features .progress, .epic-archived .progress { width: 100%; overflow-wrap: anywhere; }
-.epic-features .status.stuck { color: var(--danger); }
-.ticket-table tr.archived { cursor: default; }
 .ticket-table tr.archived:hover { background: none; }
 .stuck-mark, .stuck-dot { color: #dc2626; margin: 0 4px; }
 .stuck-dot { border: none; background: none; padding: 0 2px; cursor: pointer; }
@@ -385,15 +386,8 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .pr-table { border-collapse: collapse; width: 100%; }
 .pr-table th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 2px 6px; }
 .pr-table td { padding: 3px 6px; border-top: 1px solid var(--border); }
-.pr-table tr.clickable, .pr-epic-row.clickable { cursor: pointer; }
-.pr-table tr.clickable:hover, .pr-epic-row.clickable:hover { background: var(--panel); }
-.pr-epic-row { display: flex; gap: 12px; align-items: center; padding: 5px 6px; border-top: 1px solid var(--border); }
-.pr-epic-name { flex: 0 0 220px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pr-bar { flex: 1; display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--panel); border: 1px solid var(--border); }
-.pr-seg.pr-done { background: var(--ok); }
-.pr-seg.pr-active { background: var(--accent); }
-.pr-seg.pr-failed { background: var(--danger); }
-.pr-seg.pr-todo { background: var(--border); }
+.pr-table tr.clickable { cursor: pointer; }
+.pr-table tr.clickable:hover { background: var(--panel); }
 
 /* review 经验页 */
 .lessons-page h3 { margin: 14px 0 6px; font-size: 12px; color: var(--muted); }

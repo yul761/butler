@@ -1,8 +1,7 @@
-import { useState } from "react";
 import { PR_STAGES, type PrStageCell, type PrStagesTicket, type PrStagesView } from "../../../shared/pr-stages";
 import { api } from "../api";
 import { reportError } from "../errors";
-import { cellLabel, cellText, epicPrSummary, newestRow, timelineText, usePrStages } from "../pr-stages-view";
+import { cellLabel, cellText, newestRow, timelineText, usePrStages } from "../pr-stages-view";
 import { S } from "../strings";
 import { useCollapsed } from "./useCollapsed";
 
@@ -118,46 +117,4 @@ export function FeaturePrStages({ featureId, onOpenTicket }: { featureId: number
   const tickets = usePrStages({ featureId });
   if (tickets === null) return null;
   return <FeaturePrRows tickets={tickets} onOpenTicket={onOpenTicket} />;
-}
-
-interface EpicProps {
-  features: { id: number; name: string }[];
-  onOpenTicket: (key: string) => void;
-}
-
-/** epic 的 PR 进度：一行一个 feature，按 ticket 数的进度条和「m/n 已合并」；点开是这个 feature 的 ticket 表（不取数据，便于测试）。 */
-export function EpicPrRows({ tickets, features, onOpenTicket }: EpicProps & { tickets: PrStagesTicket[] }) {
-  const [open, setOpen] = useState<number | null>(null);
-  const summary = epicPrSummary(tickets);
-  return (
-    <div className="pr-epic">
-      {features.map((f) => {
-        const s = summary.get(f.id);
-        const total = s?.total ?? 0;
-        const pct = (n: number) => (total === 0 ? 0 : (n / total) * 100);
-        const mine = tickets.filter((t) => t.featureId === f.id);
-        return (
-          <div key={f.id}>
-            <div className="pr-epic-row clickable" onClick={() => setOpen(open === f.id ? null : f.id)}>
-              <button className="chip pr-epic-name" aria-expanded={open === f.id} onClick={(ev) => (ev.stopPropagation(), setOpen(open === f.id ? null : f.id))}>{f.name}</button>
-              <span className="pr-bar">
-                <span className="pr-seg pr-done" style={{ width: `${pct(s?.merged ?? 0)}%` }} />
-                <span className="pr-seg pr-active" style={{ width: `${pct(s?.active ?? 0)}%` }} />
-                <span className="pr-seg pr-failed" style={{ width: `${pct(s?.failed ?? 0)}%` }} />
-                <span className="pr-seg pr-todo" style={{ width: `${pct(s?.notStarted ?? 0)}%` }} />
-              </span>
-              <span className="muted">{total === 0 ? S.prNoTickets : S.prMergedOf(s?.merged ?? 0, total)}</span>
-            </div>
-            {open === f.id && <FeaturePrRows tickets={mine} onOpenTicket={onOpenTicket} />}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-export function EpicPrStages({ epicId, features, onOpenTicket }: EpicProps & { epicId: number }) {
-  const tickets = usePrStages({ epicId });
-  if (tickets === null) return null;
-  return <EpicPrRows tickets={tickets} features={features} onOpenTicket={onOpenTicket} />;
 }

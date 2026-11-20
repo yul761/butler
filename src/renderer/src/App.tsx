@@ -248,11 +248,15 @@ export function App() {
               <EpicPage
                 key={currentEpic.id}
                 epic={currentEpic}
+                features={features.filter((f) => f.epicId === currentEpic.id && f.archivedAt === null)}
                 onOpenFeature={(id) => setRoute({ page: "feature", id })}
                 onOpenTicket={(key) => setRoute({ page: "ticket", key })}
                 onFeatureCreated={goFeature}
                 focusSession={route.focusSession}
                 onOpenTarget={openTarget}
+                ctx={ctx}
+                onFix={openFix}
+                onGo={setRoute}
               />
             )}
             {route.page === "butler" && <ButlerPage key={route.focusSession ?? ""} focusSession={route.focusSession} onOpenTarget={openTarget} />}

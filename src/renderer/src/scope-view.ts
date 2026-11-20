@@ -46,6 +46,22 @@ export function groupByFeature(rows: TicketRow[], features: { id: number; name: 
   });
 }
 
+/** 范围自己那一行（epic / feature 的总数）；看板里没有时把它下面的行（feature / ticket）加起来，最慢的不算。 */
+export function scopeTotal(scopes: ScopeTurnRow[], kind: "epic" | "feature", id: number): ScopeTurnRow {
+  const own = scopes.find((r) => r.kind === kind && r.id === id);
+  if (own) return own;
+  const child = kind === "epic" ? "feature" : "ticket";
+  const sum: ScopeTurnRow = { kind, id, name: "", total: 0, merged: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 }, youCount: 0, slowest: null };
+  for (const r of scopes) {
+    if (r.kind !== child) continue;
+    sum.total += r.total;
+    sum.merged += r.merged;
+    sum.youCount += r.youCount;
+    for (const k of Object.keys(sum.bar) as (keyof ScopeTurnRow["bar"])[]) sum.bar[k] += r.bar[k];
+  }
+  return sum;
+}
+
 export function progressLine(r: Pick<ScopeTurnRow, "total" | "merged" | "youCount">, S: UiStrings): string {
   return S.lay.progressLine(r.merged, r.total, r.youCount);
 }

@@ -2,21 +2,6 @@ import type { Pr } from "../../shared/handoff";
 import type { FeatureHandoffOutcome } from "../../shared/types";
 import { S } from "./strings";
 
-/** 只放一句话，太长就截断。 */
-const SENTENCE_MAX = 80;
-
-/**
- * 汇总的第一句话（epic 页的 feature 行用）：到第一个句末标点（含）或换行为止，最长 80 个字符。
- * 英文的 . ! ? 后面要跟空白或结尾才算句末，免得在 api.ts、v1.2 这种地方截断。
- */
-export function firstSentence(text: string): string {
-  const t = text.trim();
-  const m = /[。！？]|[.!?](?=\s|$)|\n/.exec(t);
-  const s = m ? t.slice(0, m[0] === "\n" ? m.index : m.index + 1).trimEnd() : t;
-  const chars = Array.from(s);
-  return chars.length > SENTENCE_MAX ? `${chars.slice(0, SENTENCE_MAX - 1).join("")}…` : s;
-}
-
 export type PrPill = "merged" | "approved" | "changes" | "pending" | "closed";
 
 /** PR 标签的种类（feature 页 ticket 表的颜色和文字）。 */

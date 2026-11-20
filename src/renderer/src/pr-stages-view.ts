@@ -43,14 +43,6 @@ export function timelineText(e: PrTimelineEntry): string {
   const text = e.kind === "report" ? body : `${S.prStage[e.stage]} ${body}`;
   return e.back ? `${text} ${S.prBackToDev}` : text;
 }
-export interface EpicPrRow {
-  featureId: number;
-  merged: number;
-  active: number;
-  failed: number;
-  notStarted: number;
-  total: number;
-}
 
 /** 一行最后有动静的时间：时间线和格子上最晚的时间；什么都没有为 -Infinity。 */
 const lastAt = (r: PrStagesView): number =>
@@ -64,26 +56,4 @@ const newer = (r: PrStagesView, best: PrStagesView): boolean =>
 export function newestRow(t: PrStagesTicket): PrStagesView | null {
   const live = t.rows.filter((r) => !r.closed);
   return (live.length > 0 ? live : t.rows).reduce<PrStagesView | null>((best, r) => (best === null || newer(r, best) ? r : best), null);
-}
-
-/**
- * 按 feature 数 ticket（不是行，含已归档的）：ticket.merged → merged；其余看最新的一行：
- * 没有行或 PR 全关了 → notStarted；有 failed 的 cell → failed；dev 还是 todo → notStarted；其余 active。
- */
-export function epicPrSummary(tickets: PrStagesTicket[]): Map<number, EpicPrRow> {
-  const out = new Map<number, EpicPrRow>();
-  for (const t of tickets) {
-    const featureId = t.featureId;
-    if (featureId === null) continue;
-    const e = out.get(featureId) ?? { featureId, merged: 0, active: 0, failed: 0, notStarted: 0, total: 0 };
-    const r = newestRow(t);
-    if (t.merged) e.merged++;
-    else if (r === null || r.closed) e.notStarted++;
-    else if (r.stages.some((c) => c.state === "failed")) e.failed++;
-    else if (r.stages.find((c) => c.id === "dev")?.state === "todo") e.notStarted++;
-    else e.active++;
-    e.total++;
-    out.set(featureId, e);
-  }
-  return out;
 }

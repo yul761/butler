@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Turn, TurnItem } from "../../shared/turn";
-import { groupByFeature, prTag, progressLine, slowestLine, ticketRows, whoLabel } from "./scope-view";
+import type { ScopeTurnRow, Turn, TurnItem } from "../../shared/turn";
+import { groupByFeature, prTag, progressLine, scopeTotal, slowestLine, ticketRows, whoLabel } from "./scope-view";
 import { STRINGS } from "./strings";
 
 const S = STRINGS.zh;
@@ -80,5 +80,19 @@ describe("lines and labels", () => {
   it("prTag", () => {
     expect(prTag({ repo: "app", number: 52 }, false)).toBe("#52");
     expect(prTag({ repo: "app", number: 52 }, true)).toBe("app#52");
+  });
+});
+
+describe("scopeTotal", () => {
+  const bar = (done: number, you: number): ScopeTurnRow["bar"] => ({ done, agent: 0, you, external: 0, idle: 0 });
+  const f1: ScopeTurnRow = { kind: "feature", id: 1, name: "a", total: 3, merged: 1, bar: bar(1, 2), youCount: 2, slowest: "a" };
+  const f2: ScopeTurnRow = { kind: "feature", id: 2, name: "b", total: 2, merged: 2, bar: bar(2, 0), youCount: 1, slowest: null };
+  it("is the scope's own row when the board has it", () => {
+    const own: ScopeTurnRow = { ...f1, kind: "epic", id: 9, name: "E", total: 5 };
+    expect(scopeTotal([f1, own, f2], "epic", 9)).toBe(own);
+  });
+  it("otherwise adds up the rows under it, with no slowest", () => {
+    expect(scopeTotal([f1, f2], "epic", 9)).toEqual({ kind: "epic", id: 9, name: "", total: 5, merged: 3, bar: bar(3, 2), youCount: 3, slowest: null });
+    expect(scopeTotal([], "epic", 9).total).toBe(0);
   });
 });

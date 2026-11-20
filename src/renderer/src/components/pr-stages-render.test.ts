@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrStageCell, PrStageId, PrStagesTicket, PrStagesView } from "../../../shared/pr-stages";
 import { S } from "../strings";
-import { EpicPrRows, FeaturePrRows, TicketPrRows } from "./PrStages";
+import { FeaturePrRows, TicketPrRows } from "./PrStages";
 
 const IDS: PrStageId[] = ["design", "dev", "self_review", "ci", "peer_review", "merge"];
 const stages: PrStageCell[] = IDS.map((id) => ({ id, state: "done", round: 1, at: null }));
@@ -48,10 +48,8 @@ describe("the ticket tab's PR rows", () => {
 const ticket = (key: string, rows: PrStagesView[], o: Partial<PrStagesTicket> = {}): PrStagesTicket =>
   ({ ticketKey: key, featureId: 1, title: null, archived: false, merged: false, hasRepos: true, rows, ...o });
 const renderFeature = (tickets: PrStagesTicket[]): string => renderToStaticMarkup(createElement(FeaturePrRows, { tickets, onOpenTicket: () => {} }));
-const renderEpic = (tickets: PrStagesTicket[], features: { id: number; name: string }[]): string =>
-  renderToStaticMarkup(createElement(EpicPrRows, { tickets, features, onOpenTicket: () => {} }));
 
-describe("the feature and epic PR tables", () => {
+describe("the feature PR table", () => {
   it("a feature with no tickets does not say 还没有仓库", () => {
     const html = renderFeature([]);
     expect(html).toContain(S.prNoTickets);
@@ -85,12 +83,5 @@ describe("the feature and epic PR tables", () => {
     const html = renderFeature([ticket("T-1", [live, closed])]);
     expect(html).toContain("pr-cell pr-active");
     expect(html).not.toContain(S.prClosed);
-  });
-
-  it("an epic feature with no tickets says so instead of 0/0", () => {
-    const html = renderEpic([ticket("T-1", [prRow(1)], { merged: true })], [{ id: 1, name: "pay" }, { id: 2, name: "ship" }]);
-    expect(html).toContain(S.prMergedOf(1, 1));
-    expect(html).toContain(S.prNoTickets);
-    expect(html).not.toContain(S.prMergedOf(0, 0));
   });
 });

@@ -1,34 +1,45 @@
-import { useState } from "react";
-import type { EpicFeatureRow, EpicView, InboxItemView, NowTarget } from "../../../shared/types";
+import { useState, type ReactNode } from "react";
+import type { TurnBoard } from "../../../shared/turn";
+import type { EpicView, FeatureView, NowTarget } from "../../../shared/types";
+import type { Route } from "../App";
 import { api } from "../api";
+import { summaryOutcomeMessage } from "../feature-summary-view";
+import { runningRows, youCards, type NameCtx } from "../home-view";
+import { groupByFeature, scopeTotal, ticketRows } from "../scope-view";
 import { S } from "../strings";
-import { epicErrorText, epicOpenError, epicRowText } from "./epic-row";
-import { inboxTabs, useInbox } from "./InboxPanes";
+import { conversationSessions } from "../ticket-view";
+import { ControlConversation } from "./ControlConversation";
+import { EpicSummaryTab } from "./EpicSummaryTab";
+import { epicErrorText, epicOpenError } from "./epic-row";
 import { NewFeatureDialog } from "./NewFeatureDialog";
 import { PageTabs } from "./PageTabs";
-import { EpicPrStages } from "./PrStages";
-import { PrStuckBlock } from "./ProgressPage";
-import { useCollapsed } from "./useCollapsed";
+import { ControlSplit, ScopeOverview, ScopeRunning, ScopeTicketTable } from "./ScopeParts";
+import { useTurnBoard } from "./useTurnBoard";
 import { SessionArea, useSessionPanes, WorkspaceHeader } from "./WorkspaceParts";
 
 interface Props {
   epic: EpicView;
+  /** 这个 epic 下没归档的 feature（App 传）：「全部 ticket」按它们分组。 */
+  features: FeatureView[];
   onOpenFeature: (id: number) => void;
-  /** PR 进度表里点 ticket：打开它的页面。 */
   onOpenTicket: (key: string) => void;
   /** 新建的 feature：重读列表后跳过去。 */
   onFeatureCreated: (id: number) => void;
-  /** 打开时先切到这个 session 的终端（从「现在」页点进来时）。 */
+  /** 打开时先切到「总控」页签、看这个 session 的终端（从首页点进来时）。 */
   focusSession?: string | null;
-  /** 「待你决定」卡片上的「去终端」：问题不是 epic session 提的时跳到提问的 session 的页面。 */
+  /** 概况里的卡片「去看看」：落到那一页的那个 session。 */
   onOpenTarget: (t: NowTarget) => void;
+  /** 概况里的卡片要的名字、开修复 session 和跳转（同首页）。 */
+  ctx: NameCtx;
+  onFix: (featureId: number, sessionId: string) => void;
+  onGo: (r: Route) => void;
 }
 
 /**
- * epic 页（设计文档 2026-11-01，草图 A）：从上到下是名字和工作区，一排 tab（feature 列表：一行一个 feature，一句进度和状态，
- * 不列 ticket；汇报；待你决定），然后是仓库、epic session 和它们的终端，布局和 feature 页一样。
+ * epic 页（UI 重做第 3 层，spec §5.2）：标题栏下五个页签——概况、进行中、全部 ticket、总控（终端和对话）、AI 总结。
+ * 前三个共用一份 turn:board（只按这个 epic 取）。
  */
-export function EpicPage({ epic, onOpenFeature, onOpenTicket, onFeatureCreated, focusSession, onOpenTarget }: Props) {
+export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatureCreated, focusSession, onOpenTarget, ctx, onFix, onGo }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newFeature, setNewFeature] = useState(false);
   const errorText = (e: unknown) => epicErrorText(e, S);
@@ -40,19 +51,33 @@ export function EpicPage({ epic, onOpenFeature, onOpenTicket, onFeatureCreated, 
     setError,
     initialActive: focusSession,
   });
-
-  /** 「去终端」：epic session 就地切过去，终端关着就打开；feature、ticket 的 session 跳到它的页面。 */
-  function goTo(item: InboxItemView) {
-    const t = item.target;
-    if (t.page !== "epic" || t.id !== epic.id) return onOpenTarget(t);
-    const termId = epic.sessions.find((s) => s.id === item.sessionId)?.termId;
+  /** 落到「总控」页签：n 递增，同一个页签也能再落一次。点进来要看某个 epic session 时先落一次（useSessionPanes 已经切到它的终端）。 */
+  const [control, setControl] = useState<number | null>(() => (focusSession && epic.sessions.some((s) => s.id === focusSession) ? 0 : null));
+  /** 概况卡片「去看看」：这个 epic 自己的 session 就地切到「总控」看它的终端（终端关着就打开）；别的 session 跳到它的页面。 */
+  const openTarget = (t: NowTarget) => {
+    if (t.page !== "epic" || t.id !== epic.id || t.sessionId === null) return onOpenTarget(t);
+    setControl((n) => (n ?? 0) + 1);
+    const termId = epic.sessions.find((s) => s.id === t.sessionId)?.termId;
     if (termId) panes.show(termId);
-    else void panes.open(item.sessionId);
-  }
-
-  const inbox = useInbox({ epicId: epic.id });
+    else void panes.open(t.sessionId);
+  };
+  const turn = useTurnBoard({ epicId: epic.id });
+  const board = turn.board;
   const live = epic.features.filter((f) => f.status !== "archived");
-  const archived = epic.features.filter((f) => f.status === "archived");
+  const now = Date.now();
+  const running = board === null ? null : runningRows(board.items, S, now);
+  const tickets = features.flatMap((f) => f.tickets);
+  const youItems = board === null ? [] : youCards(board.items);
+
+  /** 看板还没取到时是骨架（不闪空状态）；取不到就说为什么。 */
+  const withBoard = (render: (b: TurnBoard) => ReactNode): ReactNode => {
+    if (board !== null) return render(board);
+    if (turn.error !== null) return <p className="error">{turn.error}</p>;
+    return <div className="scope-overview" aria-busy="true"><p className="muted">…</p></div>;
+  };
+
+  const runSummary = (featureId: number): Promise<string> =>
+    api.runFeatureSummary(featureId).then(summaryOutcomeMessage, (e: unknown) => errorText(e));
 
   return (
     <div className="ticket-page epic-page">
@@ -66,48 +91,73 @@ export function EpicPage({ epic, onOpenFeature, onOpenTicket, onFeatureCreated, 
         onArchive={() => api.archiveEpic(epic.id)}
         onError={showError}
       />
+      {/* 页面的错误（改名、归档、打开 session）放在页签外面：停在哪个页签都看得到。 */}
+      {error && <p className="error">{error}</p>}
 
       <PageTabs
         page={`epic:${epic.id}`}
-        defaultTab="features"
+        defaultTab="overview"
+        forceTab={control === null ? null : "control"}
+        forceSeq={control ?? undefined}
         actions={<button onClick={() => setNewFeature(true)}>+ {S.newFeature}</button>}
         tabs={[
           {
-            id: "features",
-            // tab 上留着数量和等待、卡住的记号，和 feature 页的 ticket tab 一样。
-            label: (
-              <>
-                {S.features}
-                <span className="muted">{live.length}</span>
-                {live.some((f) => f.status === "waiting") && <span className="badge" title={S.waiting}>●</span>}
-                {live.some((f) => f.status === "stuck") && <span className="stuck-mark" title={S.stuckDot}>●</span>}
-              </>
-            ),
+            id: "overview", label: S.lay.tabOverview, className: youItems.length > 0 ? "attention" : undefined,
+            content: withBoard((b) => (
+              <ScopeOverview
+                rows={b.scopes.filter((r) => r.kind === "feature")}
+                total={scopeTotal(b.scopes, "epic", epic.id)}
+                youItems={youItems}
+                kind="epic"
+                emptyText={S.noEpicFeatures}
+                cards={{ ctx, now, onFix, onOpen: openTarget, onGo, onChanged: turn.reload }}
+                onOpenRow={(id) => onOpenFeature(Number(id))}
+                onCreate={() => setNewFeature(true)}
+              />
+            )),
+          },
+          {
+            id: "running",
+            label: <>{S.lay.tabRunning}{running && <span className="muted">{running.length}</span>}</>,
+            content: withBoard(() => <ScopeRunning rows={running ?? []} onOpenTicket={onOpenTicket} />),
+          },
+          {
+            id: "tickets",
+            label: <>{S.lay.tabTickets}<span className="muted">{tickets.length}</span></>,
+            content: withBoard((b) => (
+              <ScopeTicketTable
+                groups={groupByFeature(ticketRows(tickets, b.items), features).map((g) => ({ name: g.feature.name, merged: g.merged, total: g.rows.length, rows: g.rows }))}
+                onOpenTicket={onOpenTicket}
+                emptyText={S.noEpicFeatures}
+              />
+            )),
+          },
+          {
+            id: "control", label: S.lay.tabControl,
             content: (
-              <>
-                <section className="epic-features">
-                  {live.length === 0 ? (
-                    <p className="muted">{S.noEpicFeatures}</p>
-                  ) : (
-                    <table className="ticket-table">
-                      <tbody>
-                        {live.map((f) => <FeatureRow key={f.id} row={f} onOpen={() => onOpenFeature(f.id)} />)}
-                      </tbody>
-                    </table>
-                  )}
-                </section>
-                {archived.length > 0 && <ArchivedFeatures epicId={epic.id} rows={archived} />}
-              </>
+              <ControlSplit
+                left={
+                  <SessionArea
+                    repos={epic.repos}
+                    reposHint={S.epicReposHint}
+                    onAddRepo={(path) => api.addEpicRepo(epic.id, path)}
+                    onRemoveRepo={(id) => api.removeEpicRepo(id)}
+                    sessions={epic.sessions}
+                    hiddenSessions={epic.hiddenSessions}
+                    panes={panes}
+                    placeOf={() => S.epicSession}
+                    noSessions={S.noEpicSessions}
+                    newSession={S.newEpicSession}
+                    newSessionHint={S.epicSessionHint}
+                    error={null}
+                    onError={showError}
+                  />
+                }
+                right={<ControlConversation scope={{ epicId: epic.id }} rootSessionId={null} sessions={conversationSessions(epic.sessions, S)} />}
+              />
             ),
           },
-          { id: "stages", label: S.prStagesTab, content: (
-              <>
-                <PrStuckBlock epicId={epic.id} onOpenTicket={onOpenTicket} />
-                <EpicPrStages epicId={epic.id} features={live.map((f) => ({ id: f.id, name: f.name }))} onOpenTicket={onOpenTicket} />
-              </>
-            ),
-          },
-          ...inboxTabs(inbox, goTo),
+          { id: "summary", label: S.lay.tabSummary, content: <EpicSummaryTab rows={live} onRun={runSummary} /> },
         ]}
       />
       {newFeature && (
@@ -117,61 +167,6 @@ export function EpicPage({ epic, onOpenFeature, onOpenTicket, onFeatureCreated, 
           onCreated={(id) => (setNewFeature(false), onFeatureCreated(id))}
         />
       )}
-
-      <SessionArea
-        repos={epic.repos}
-        reposHint={S.epicReposHint}
-        onAddRepo={(path) => api.addEpicRepo(epic.id, path)}
-        onRemoveRepo={(id) => api.removeEpicRepo(id)}
-        sessions={epic.sessions}
-        hiddenSessions={epic.hiddenSessions}
-        panes={panes}
-        placeOf={() => S.epicSession}
-        noSessions={S.noEpicSessions}
-        newSession={S.newEpicSession}
-        newSessionHint={S.epicSessionHint}
-        error={error}
-        onError={showError}
-      />
     </div>
-  );
-}
-
-/** 已归档的 feature 没有 feature 页，所以点不进去：不给 onOpen。 */
-function FeatureRow({ row, onOpen }: { row: EpicFeatureRow; onOpen?: () => void }) {
-  const text = epicRowText(row, S);
-  return (
-    <tr className={onOpen ? undefined : "archived"} onClick={onOpen}>
-      <td className="name">{onOpen ? <button className="chip">{row.name}</button> : row.name}</td>
-      <td className="progress muted">{text.progress}</td>
-      <td className={text.stuck ? "status stuck" : "status"}>
-        {text.stuck && <span className="stuck-mark">●</span>}
-        {row.status === "waiting" && <span className="badge">●</span>}
-        {text.status}
-      </td>
-    </tr>
-  );
-}
-
-/** 默认收起：这里的“收起”记号在存储里的意思是“展开了”（和 TicketRow 的面板一样）。 */
-function ArchivedFeatures({ epicId, rows }: { epicId: number; rows: EpicFeatureRow[] }) {
-  const [open, toggle] = useCollapsed(`epic-archived-open:${epicId}`);
-  return (
-    <section className="epic-archived">
-      <h3>
-        <button className="section-toggle" aria-expanded={open} onClick={toggle}>
-          <span className="twisty">{open ? "▾" : "▸"}</span>
-          {S.archived}
-          <span className="muted">{rows.length}</span>
-        </button>
-      </h3>
-      {open && (
-        <table className="ticket-table">
-          <tbody>
-            {rows.map((f) => <FeatureRow key={f.id} row={f} />)}
-          </tbody>
-        </table>
-      )}
-    </section>
   );
 }
