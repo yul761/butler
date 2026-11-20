@@ -537,7 +537,8 @@ describe("StackService triggers", () => {
     expect(shape(w, "d")).toEqual({ count: 4, onTrunk: true });
     expect(w.repoT.layers(id).map((l) => l.conflictKey)).toEqual([null, null, null, null]);
     expect(w.svc.notices().filter((n) => n.reason === "conflict")).toEqual([]);
-  });
+    // 两次整栈 rebase 加一次解冲突，全是真 git 调用：Windows CI 上贴着 30 秒的默认上限，放宽到 120 秒
+  }, 120_000);
 
   it("tells the session not to push when Force push is off", async () => {
     const w = world({ policy: { dailyRebase: false }, allow: (k) => k !== "force_push" });
