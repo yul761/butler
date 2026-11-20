@@ -43,7 +43,7 @@ describe("Sidebar", () => {
       expect(i, s).toBeGreaterThan(at);
       at = i;
     }
-    for (const gone of [S.newTicket, S.progressNav, S.unclaimed, S.archived]) expect(html).not.toContain(gone);
+    for (const gone of [S.newTicket, "进度", S.unclaimed, S.archived]) expect(html).not.toContain(gone);
   });
 
   it("shows the your-turn badge only above zero, with the count described for screen readers", () => {

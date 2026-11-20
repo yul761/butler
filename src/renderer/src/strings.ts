@@ -36,8 +36,6 @@ const ZH_STATUS: Record<TicketStatus, string> = {
   done: "完成",
 };
 
-/** 侧栏分组顺序：最容易被遗忘的放最上面。 */
-export const STATUS_ORDER: TicketStatus[] = ["merged_pending_followup", "active", "blocked", "in_review", "done"];
 
 const ZH = {
   /** 首页空状态（UI 重做 spec §5.5）：组件 FirstRunHome，首页接线在第 2 层。 */
@@ -791,20 +789,12 @@ const ZH = {
   loading: "加载中…",
   itemActions: { done: "完成", snooze: "推迟到明天", ignore: "忽略" } as Record<string, string>,
   // 「现在」页（计划 14）。
-  nowTitle: "现在",
-  nowRunning: (n: number) => `${n} 个 session 在干活`,
-  nowNeedsYou: "需要你",
   nowNeedsYouBadge: (n: number) => `${n} 个需要你`,
-  nowNoEpic: "不属于任何 epic",
-  nowWaitingFor: (reason: string) => `等你：${reason}`,
   nowStuck: "卡住",
-  nowStuckWith: (reason: string) => `卡住：${reason}`,
-  nowStopped: "已停下",
   nowCiFailed: "CI 失败",
   nowCiRunning: "CI 跑中",
   nowPrUnavailable: "PR 状态不可用",
   nowPr: (n: number | null, state: string) => `PR${n === null ? "" : ` #${n}`} ${state}`,
-  nowActive: (n: number) => `${n} 个在干活`,
   nowWaitingDecision: "等你决定",
   // 「待你决定」和汇报（BTL-190 第 2+3 点）。
   inboxReports: "汇报",
@@ -842,7 +832,6 @@ const ZH = {
   liveWrote: "写入",
   liveRead: "读取",
   liveMore: (n: number) => `还有 ${n} 个没摆出来，见下面的列表`,
-  nowIdle: (n: number) => `空闲 ${n}`,
   nowRecentMerges: "最近合并",
   nowUsage: (tokens: string, cacheRead: string, over200k: string) => `近 7 天：${tokens} token · 缓存读取占 ${cacheRead} · 上下文超过 20 万的轮次占 ${over200k}`,
   nowUsageKind: { ticket: "ticket session", coordinator: "总控", subagent: "子 agent", headless: "后台任务" } as Record<UsageKind, string>,
@@ -1844,7 +1833,6 @@ const ZH = {
     },
   },
   /** 进度页（ws-b）。 */
-  progressNav: "进度",
   progress: {
     title: "进度",
     intro: "所有 ticket 和 PR 走到哪了、卡在谁手上。和 Butler 总控的 progress_overview 是同一份数据；PR 状态来自后台轮询。",
@@ -2039,7 +2027,6 @@ const ZH = {
   featureSummaryPrAsOf: (t: string) => `PR 状态截至 ${t}`,
   featureSummaryStale: "汇总之后又有新活动（含 PR 状态变化），可以点“立即更新”。",
   prStagesStuck: "卡在谁手上",
-  prStagesOpenProgress: "在进度页里看",
   /** 设置里的「对外动作」（契约 4.8，ws-b）。 */
   externalHeading: "对外动作",
   externalIntro: "Butler 代你在 GitHub 或别的外部服务上留下东西的动作，每种一个开关，默认全关。关着时 Butler 不会做，只在审计页记一笔“跳过”。现在用到的是导出成仓库规则的「推送分支」和「开 PR」，以及评论与 CI 的「回复 review 评论」「标记评论已解决」和「重跑 CI」；其余的等之后的版本接入时才会生效。",
