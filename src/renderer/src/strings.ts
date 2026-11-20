@@ -23,6 +23,7 @@ import type { ExternalActionKind, ExternalOutcome } from "../../shared/external"
 import type { InterruptCategory } from "../../shared/metrics";
 import type { ProgressBucket, WaitingOn, WaitingReason } from "../../shared/progress";
 import type { ReportKind } from "../../shared/control";
+import type { YouKind } from "../../shared/turn";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ButlerMessageView, EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
@@ -351,6 +352,43 @@ const ZH = {
     nowOpen: "查看模型路由",
   },
   home: "现在",
+  /** 首页「轮到你」和全部工作页（UI 重做第 2 层）。 */
+  hm: {
+    title: (n: number) => `${n} 件事轮到你`,
+    titleZero: "没有事轮到你",
+    lede: (agent: number, external: number, merged: number) => `agent 在处理 ${agent} 个，在等 CI 或别人 ${external} 个，今天合了 ${merged} 个。`,
+    ledeIdle: "现在没有在跑的事。",
+    kind: { answer: "要你回答", merge: "可以合并", review: "要你 review", stuck: "卡住了", unattended: "没人推进", butler: "Butler 要你点一下" } as Record<YouKind, string>,
+    act: {
+      openPr: "打开 PR",
+      look: "去看看",
+      fix: "开修复 session",
+      send: "送给 agent",
+      answered: (text: string) => `已回答：${text}，等 session 停下来后送进去`,
+      answerGone: "这个问题已经没了",
+      sendNot: (reason: string) => `没送出去：${reason}`,
+      fixNot: (reason: string) => `没开成修复 session：${reason}`,
+    },
+    ago: (d: string) => `${d}前`,
+    reviewAgo: (d: string) => `请你 ${d} 了`,
+    scopesHeading: "各个 epic",
+    scopeLine: (total: number, merged: number, slowest: string | null) => `${total} 个里合了 ${merged} 个${slowest === null ? "" : ` · 最慢的是「${slowest}」`}`,
+    scopeEmpty: "还没有 ticket",
+    scopeMore: (n: number) => `全部工作里看全部 ${n} 个`,
+    whoYou: (n: number) => `你 ${n}`,
+    whoAgent: "agent",
+    whoCi: "CI",
+    whoExternal: "外部",
+    whoDone: "合了",
+    whoIdle: "没开始",
+    running: (n: number) => `进行中 ${n}`,
+    moreHeading: "运行情况",
+    showAll: (n: number) => `显示全部 ${n} 件`,
+    boardFailed: "取不到「轮到你」的数据",
+    boardStale: "数据可能不是最新的",
+    retry: "重试",
+    noWork: "还没有任何工作。",
+  },
   language: "语言 / Language",
   languageOptions: { auto: "跟随系统", zh: "中文", en: "English" } as Record<string, string>,
   languageHint: "界面、Butler 的提示和发给 claude 的默认提示词都会切换；你自己改过的提示词不变，以前生成的内容不会翻译。切换之后，设置 → 环境检查里的 /handoff 命令会显示需要更新：点“安装 / 修复”，session 里的 /handoff 也会换成新语言。",

@@ -15,6 +15,7 @@ import type { ExternalActionKind, ExternalOutcome } from "../../shared/external"
 import type { InterruptCategory } from "../../shared/metrics";
 import type { ProgressBucket, WaitingOn, WaitingReason } from "../../shared/progress";
 import type { ReportKind } from "../../shared/control";
+import type { YouKind } from "../../shared/turn";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ButlerMessageView, EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
@@ -343,6 +344,43 @@ export const EN: UiStrings = {
     nowOpen: "Open model routing",
   },
   home: "Now",
+  hm: {
+    title: (n: number) => (n === 1 ? "1 thing needs you" : `${n} things need you`),
+    titleZero: "Nothing needs you",
+    lede: (agent: number, external: number, merged: number) =>
+      `Agents are on ${agent}, ${external} ${external === 1 ? "is" : "are"} waiting on CI or someone else, ${merged} merged today.`,
+    ledeIdle: "Nothing is running right now.",
+    kind: { answer: "Needs an answer", merge: "Ready to merge", review: "Review requested", stuck: "Stuck", unattended: "Nobody on it", butler: "Butler needs a click" } as Record<YouKind, string>,
+    act: {
+      openPr: "Open PR",
+      look: "Take a look",
+      fix: "Open a fix session",
+      send: "Send to agent",
+      answered: (text: string) => `Answered: ${text}. It goes in when the session stops.`,
+      answerGone: "This question is gone",
+      sendNot: (reason: string) => `Not sent: ${reason}`,
+      fixNot: (reason: string) => `Fix session not opened: ${reason}`,
+    },
+    ago: (d: string) => `${d} ago`,
+    reviewAgo: (d: string) => `asked ${d} ago`,
+    scopesHeading: "Epics",
+    scopeLine: (total: number, merged: number, slowest: string | null) => `${merged} of ${total} merged${slowest === null ? "" : ` · slowest: "${slowest}"`}`,
+    scopeEmpty: "No tickets yet",
+    scopeMore: (n: number) => `See all ${n} in All work`,
+    whoYou: (n: number) => `You ${n}`,
+    whoAgent: "Agent",
+    whoCi: "CI",
+    whoExternal: "Others",
+    whoDone: "Merged",
+    whoIdle: "Not started",
+    running: (n: number) => `In progress ${n}`,
+    moreHeading: "How it is running",
+    showAll: (n: number) => `Show all ${n}`,
+    boardFailed: "Could not load what needs you",
+    boardStale: "This may be out of date",
+    retry: "Retry",
+    noWork: "No work yet.",
+  },
   language: "语言 / Language",
   languageOptions: { auto: "Follow the system", zh: "中文", en: "English" } as Record<string, string>,
   languageHint: "Switches the interface, Butler's messages and the default prompts sent to claude. Prompts you edited yourself are kept, and content generated earlier is not translated. Afterwards, Settings → Environment check shows the /handoff command as needing an update: click “Install / repair” so /handoff in your sessions also uses the new language.",
