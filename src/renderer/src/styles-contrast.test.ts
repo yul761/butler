@@ -122,3 +122,14 @@ describe("turn colours (UI redesign §5.1)", () => {
     });
   }
 });
+
+// 对话 tab 的黄框（UI 重做第 5 层）：标题字在黄框底色上、正文和灰字在黄框底色上、「讨论」标记在页面底色上，都要到 4.5:1。
+describe("fork box colours (UI redesign layer 5)", () => {
+  for (const [theme, vars] of [["light", light], ["dark", dark]] as const) {
+    it(`${theme}: text in the fork box reaches 4.5:1`, () => {
+      for (const [fg, bg] of [["--fork-head", "--fork-bg"], ["--text", "--fork-bg"], ["--muted", "--fork-bg"], ["--fork-head", "--bg"]]) {
+        expect(contrast(resolve(`var(${fg})`, vars), resolve(`var(${bg})`, vars)), `${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+      }
+    });
+  }
+});

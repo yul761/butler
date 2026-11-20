@@ -2,7 +2,6 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { S } from "../strings";
-import { ConversationPlaceholder } from "./ConversationPlaceholder";
 import { TicketPrRows } from "./PrStages";
 import { TicketLogTab } from "./TicketLogTab";
 import { TicketPrBody } from "./TicketPrTab";
@@ -42,16 +41,5 @@ describe("TicketLogTab", () => {
     const handoffs = html.indexOf(S.lay.logHandoffs);
     expect(handoffs).toBeLessThan(html.indexOf(S.runHandoff));
     expect(html.indexOf(S.runHandoff)).toBeLessThan(html.indexOf(S.lay.logMemory));
-  });
-});
-
-describe("ConversationPlaceholder", () => {
-  it("explains the tab and lists every session", () => {
-    const html = renderToStaticMarkup(
-      createElement(ConversationPlaceholder, { rootSessionId: "root", sessions: [{ id: "a", label: "主 session" }, { id: "b", label: "修复 · 别的" }] }),
-    );
-    expect(html).toContain(S.lay.convPlaceholder);
-    expect(html).toContain("主 session");
-    expect(html).toContain("修复 · 别的");
   });
 });

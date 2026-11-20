@@ -8,6 +8,7 @@ import { buildPrompt, retryPrompt } from "./handoff/prompt";
 import { DEFAULT_HANDOFF_PROMPT, defaultHandoffPrompt, defaultRefreshPrompt, handoffCommandBody } from "./handoff/templates";
 import { setLang } from "./i18n";
 import { followupNote, handoffSummaryFor } from "./memory/notes";
+import { M } from "./strings";
 import { memDb, tempDir } from "./test-utils";
 
 const hasChinese = (s: string) => /[一-鿿]/.test(s);
@@ -98,5 +99,16 @@ describe("prompts follow the language (design 2026-10-26 i18n)", () => {
     const f = { id: "f1", ticketKey: "A-1", kind: "config" as const, description: "raise the TTL", trigger: "after_merge" as const, dueDate: null, status: "open" as const, snoozedUntil: null, source: "session" as const, createdAt: 1, doneAt: null };
     expect(followupNote(f).body).toBe("raise the TTL (config, after merge)");
     expect(handoffSummaryFor({ status: "done", done_today: ["a", "b"] })).toBe("Status: done. Done: a; b");
+  });
+
+  it("writes the fork discussion prompts in English", () => {
+    setLang("en");
+    const f = M().fork;
+    expect(hasChinese(f.lightPrompt({ recall: "Notes: x", qa: "# Recent", question: "why?" }))).toBe(false);
+    expect(hasChinese(f.lightPrompt({ recall: "", qa: "", question: "why?" }))).toBe(false);
+    expect(hasChinese(f.conclusionAsk)).toBe(false);
+    expect(hasChinese(f.fullPrompt("why?"))).toBe(false);
+    expect(hasChinese(f.reaskPrompt(["a?", "b?"]))).toBe(false);
+    expect(hasChinese(f.conclusionForDev("do x"))).toBe(false);
   });
 });

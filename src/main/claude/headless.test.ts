@@ -67,7 +67,7 @@ describe("parseClaudeJson", () => {
     expect(parseClaudeJson(`${JSON.stringify(OBSERVED)}\n`)).toEqual({
       sessionId: "a861b9bd-25a8-481b-a01a-3fca83dd069f", isError: false, subtype: "success", resultText: '{"word":"hello","count":3}',
       structured: { word: "hello", count: 3 }, permissionDenials: [], apiErrorStatus: null, costUsd: 0.23302,
-      usage: null, model: null, durationMs: null,
+      usage: null, model: null, durationMs: null, usageRaw: null, modelUsage: null,
     });
   });
 
@@ -79,6 +79,38 @@ describe("parseClaudeJson", () => {
     }));
     expect(r?.usage).toEqual({ input: 2, cacheWrite5m: 10, cacheWrite1h: 20, cacheRead: 11, output: 6 });
     expect(r?.model).toBe("claude-sonnet-5-5");
+  });
+
+  // 续 session 时 modelUsage 是累计的：第一个键是那个 session 最早用的模型，不一定是这一轮的。
+  describe("model is this run's own, not the first key of the cumulative modelUsage", () => {
+    const usage = { input_tokens: 2, cache_creation_input_tokens: 63, cache_read_input_tokens: 25701, output_tokens: 3 };
+    const big = { inputTokens: 9000, outputTokens: 9000, cacheReadInputTokens: 900_000, cacheCreationInputTokens: 90_000, costUSD: 1 };
+    const fork = ["-p", "--resume", "dev-1", "--fork-session"];
+    it("the one model whose running totals can hold this run's usage", () => {
+      const modelUsage = { "claude-haiku-5-5": { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 10, cacheCreationInputTokens: 0, costUSD: 0.001 }, "claude-opus-5-5": big };
+      expect(parseClaudeJson(JSON.stringify({ ...OBSERVED, usage, modelUsage }), fork)?.model).toBe("claude-opus-5-5");
+    });
+    it("several could: the --model this run was started with picks one (an alias works)", () => {
+      const modelUsage = { "claude-haiku-5-5": big, "claude-opus-5-5": big };
+      expect(parseClaudeJson(JSON.stringify({ ...OBSERVED, usage, modelUsage }), [...fork, "--model", "opus"])?.model).toBe("claude-opus-5-5");
+      expect(parseClaudeJson(JSON.stringify({ ...OBSERVED, usage, modelUsage }), [...fork, "--model", "claude-opus-5-5[1m]"])?.model).toBe("claude-opus-5-5");
+    });
+    it("a resumed run that can't tell → null, not a guess", () => {
+      const modelUsage = { "claude-haiku-5-5": big, "claude-opus-5-5": big };
+      expect(parseClaudeJson(JSON.stringify({ ...OBSERVED, usage, modelUsage }), fork)?.model).toBeNull();
+    });
+    it("a fresh run that can't tell: every model in it is this run's, so the costliest", () => {
+      const modelUsage = { "claude-haiku-5-5": { ...big, costUSD: 0.2 }, "claude-opus-5-5": big };
+      expect(parseClaudeJson(JSON.stringify({ ...OBSERVED, usage, modelUsage }), ["-p"])?.model).toBe("claude-opus-5-5");
+    });
+  });
+
+  it("keeps the raw usage and the cumulative modelUsage so a run's share of the total can be worked out", () => {
+    const usage = { input_tokens: 2, cache_creation_input_tokens: 10649, cache_read_input_tokens: 15039, output_tokens: 3 };
+    const modelUsage = { "claude-haiku-5": { inputTokens: 4, outputTokens: 6, cacheReadInputTokens: 26881, cacheCreationEphemeral1hInputTokens: 24369, costUSD: 0.00514601 } };
+    const r = parseClaudeJson(JSON.stringify({ ...OBSERVED, usage, modelUsage }));
+    expect(r?.usageRaw).toEqual(usage);
+    expect(r?.modelUsage).toEqual(modelUsage);
   });
 
   it("lists denied tools, accepts a message array, rejects garbage", () => {

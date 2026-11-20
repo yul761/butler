@@ -140,6 +140,8 @@ export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.intakePoll, IPC.intakeAct,
   // 「谁该动」（UI 重做第 1 层）：从看板上把 CI 结论或评论送给 agent，和 ciResend 一样推动工作；被拒（ok: false）不算。
   IPC.turnSendToAgent,
+  // 对话 tab（UI 重做第 5 层）：把分叉的结论、输入框里的话送进开发 session，推动工作；被挡下（ok: false）不算。
+  IPC.forkSendConclusion, IPC.convSend,
 ]);
 
 /** 记成别的人介入的通道（不再算手动触发）：卡片上回答是 needs_you_answer。 */
@@ -157,6 +159,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.clipboardRead, IPC.admissionState, IPC.wizardEstimate, IPC.calibrationSample, IPC.calibrationStats,
   IPC.costView, IPC.costBreakers, IPC.backgroundStatus,
   IPC.convList, IPC.convSearch,
+  // 分叉讨论（UI 重做第 5 层）：只读的旁路讨论，问、重问、写进记忆都不推动开发 session；汇报分页只读。
+  IPC.forkAsk, IPC.forkReaskFull, IPC.forkList, IPC.forkRemember, IPC.inboxReports,
   IPC.clipboardRead, IPC.loopPolicyGet, IPC.loopCommentsList, IPC.loopFlakyList, IPC.loopEffect,
   IPC.prAssessment, IPC.prPolicyGet, IPC.reviewEffect, IPC.reviewQueue,
   IPC.baselinesView, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyViolations, IPC.checkExportList, IPC.backtestView,

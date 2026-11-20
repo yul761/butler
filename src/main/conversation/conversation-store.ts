@@ -39,11 +39,13 @@ export class ConversationStore {
   list(sessionId: string, opts: ConvListOpts): ConvPage {
     const root = this.rootOf(sessionId);
     const limit = Math.min(CONV_LIST_MAX, Math.max(1, Math.floor(Number(opts.limit) || 0)));
-    const page = this.d.repo.page(root, { ...opts, limit });
+    // 不认识的 before、别的对话里的 before 都当没给（第 4 层遗留 R3）：跟 repo.page 的判断一致。
+    const cursor = opts.before !== undefined ? this.d.repo.message(opts.before) : null;
+    const beforeAt = cursor && cursor.rootSessionId === root ? cursor.at : undefined;
+    const page = this.d.repo.page(root, { ...opts, before: beforeAt !== undefined ? opts.before : undefined, limit });
     const marks = this.refreshMarks(root);
-    const beforeAt = opts.before !== undefined ? this.d.repo.message(opts.before)?.at : undefined;
     let refreshMarks: ConvPage["refreshMarks"];
-    if (page.messages.length === 0) refreshMarks = opts.before !== undefined ? [] : marks;
+    if (page.messages.length === 0) refreshMarks = beforeAt !== undefined ? [] : marks;
     else {
       const lower = page.hasMore ? page.messages[0].at : -Infinity;
       const upper = beforeAt ?? Infinity;

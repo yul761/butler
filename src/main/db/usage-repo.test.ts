@@ -21,6 +21,20 @@ describe("UsageRepo", () => {
     expect(r.latestContext("nope")).toBeNull();
   });
 
+  it("lastSessionTurnAt only looks at this session's own turns", () => {
+    const r = new UsageRepo(memDb());
+    expect(r.lastSessionTurnAt("s1")).toBeNull();
+    r.record([
+      row("a", { at: 100 }), row("b", { at: 200 }),
+      row("c", { at: 900, source: "subagent", agentId: "ag" }),
+      row("d", { at: 800, source: "headless", sessionId: "s1" }),
+      row("e", { at: 700, sessionId: "other" }),
+    ]);
+    expect(r.lastSessionTurnAt("s1")).toBe(200);
+    expect(r.lastSessionTurnAt("other")).toBe(700);
+    expect(r.lastSessionTurnAt("nope")).toBeNull();
+  });
+
   it("stores and reads cursors", () => {
     const r = new UsageRepo(memDb());
     expect(r.cursor("/f")).toBeNull();

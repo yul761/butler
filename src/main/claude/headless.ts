@@ -7,6 +7,7 @@ import { M } from "../strings";
 import { classifyLimit, classifyLimitDetailed, isPauseKind } from "./limits";
 import type { DetailedHit } from "../routing/rules";
 import { usageCounts, type UsageCounts } from "../usage/usage-parse";
+import { runModel } from "../../shared/run-cost";
 
 export const HEADLESS_TIMEOUT_MS = 5 * 60 * 1000;
 const STDOUT_LIMIT = 20 * 1024 * 1024;
@@ -50,10 +51,17 @@ export interface ClaudeResult {
   apiErrorStatus: number | null;
   costUsd: number | null;
   usage: UsageCounts | null;
-  /** modelUsage 里的第一个键；没有为 null。 */
+  /**
+   * 这一轮的主模型（modelUsage 的键，见 runModel）。续 session（--resume）时 modelUsage 是累计的，定不下来就是 null；
+   * 没续的话 modelUsage 里的都是这一轮的，定不下来取花得最多的那个。没有 modelUsage 为 null。
+   */
   model: string | null;
   /** duration_ms；没有为 null。 */
   durationMs: number | null;
+  /** 原样的 usage（这一轮的；拆累计金额时要 5m/1h 分档原样）。只有解析出来的结果才有。 */
+  usageRaw?: unknown;
+  /** 原样的 modelUsage（续 session 时是整个 session 的累计）。只有解析出来的结果才有。 */
+  modelUsage?: unknown;
 }
 
 export type HeadlessFailure = "timeout" | "spawn_failed" | "exit_nonzero" | "bad_output" | "rate_limited" | "claude_error" | "model_unavailable" | "aborted";
@@ -92,13 +100,31 @@ export function headlessArgs(o: { schema: string; resumeSessionId?: string; allo
   return args;
 }
 
-/** 对象的第一个键；不是对象或为空时返回 null。 */
-const firstKey = (v: unknown): string | null => (v && typeof v === "object" && !Array.isArray(v) ? (Object.keys(v)[0] ?? null) : null);
+/** modelUsage 里 costUSD 最大的键；不是对象或为空时返回 null。 */
+function costliest(v: unknown): string | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  let best: string | null = null;
+  let max = -Infinity;
+  for (const [k, m] of Object.entries(v)) {
+    const c = typeof (m as { costUSD?: unknown } | null)?.costUSD === "number" ? (m as { costUSD: number }).costUSD : 0;
+    if (c > max) [best, max] = [k, c];
+  }
+  return best;
+}
+
+/** 参数里某个 flag 后面的值。 */
+const flagValue = (args: readonly string[], flag: string): string | null => {
+  const i = args.indexOf(flag);
+  return i >= 0 && i + 1 < args.length ? args[i + 1] : null;
+};
 
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 
-/** 解析 `--output-format json` 的输出：一个 type=result 的对象（防御性地也接受消息数组）。 */
-export function parseClaudeJson(stdout: string): ClaudeResult | null {
+/**
+ * 解析 `--output-format json` 的输出：一个 type=result 的对象（防御性地也接受消息数组）。
+ * args 是这一轮的启动参数：用 --model 和有没有 --resume 推这一轮的主模型（结果里没写）。
+ */
+export function parseClaudeJson(stdout: string, args: readonly string[] = []): ClaudeResult | null {
   const parse = (t: string): unknown => {
     try {
       return JSON.parse(t.trim());
@@ -130,8 +156,10 @@ export function parseClaudeJson(stdout: string): ClaudeResult | null {
     apiErrorStatus: typeof o.api_error_status === "number" ? o.api_error_status : null,
     costUsd: typeof o.total_cost_usd === "number" ? o.total_cost_usd : null,
     usage: usageCounts(o.usage),
-    model: firstKey(o.modelUsage),
+    model: runModel(o.modelUsage, o.usage, flagValue(args, "--model")) ?? (args.includes("--resume") ? null : costliest(o.modelUsage)),
     durationMs: typeof o.duration_ms === "number" ? o.duration_ms : null,
+    usageRaw: o.usage ?? null,
+    modelUsage: o.modelUsage ?? null,
   };
 }
 
@@ -270,7 +298,7 @@ export const runHeadless: HeadlessRun = (req) =>
         finish(timeoutOutcome());
         return;
       }
-      const result = parseClaudeJson(stdout);
+      const result = parseClaudeJson(stdout, req.args);
       const now = Date.now();
       if (!result) {
         const message = (stderr.trim() || stdout.trim()).slice(0, MESSAGE_MAX) || `exit ${code}`;

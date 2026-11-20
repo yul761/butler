@@ -4,6 +4,7 @@ import type { ButlerMessageView, ButlerView, OpenSessionResult } from "../../../
 import { api } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
+import { defaultConvRoot } from "../ticket-view";
 import { epicErrorText } from "./epic-row";
 import { ControlConversation } from "./ControlConversation";
 import { ControlSplit } from "./ScopeParts";
@@ -125,8 +126,8 @@ function ButlerArea({ view, focusSession }: Props & { view: ButlerView }) {
       right={
         <ControlConversation
           scope={{ all: true }}
-          rootSessionId={null}
-          sessions={view.sessions.map((s) => ({ id: s.id, label: S.butlerSession }))}
+          rootSessionId={defaultConvRoot(view.sessions)}
+          sessions={view.sessions.map((s) => ({ id: s.rootId, label: S.butlerSession }))}
           footer={<ButlerReplies />}
         />
       }

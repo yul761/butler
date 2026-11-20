@@ -3,7 +3,7 @@ import { api } from "../api";
 import { reportError } from "../errors";
 
 /** hook 事件一来一串：合并成一次重读（和 App 的刷新一样）。 */
-const STATE_DEBOUNCE_MS = 80;
+export const STATE_DEBOUNCE_MS = 80;
 
 /**
  * 打开时取一次，之后每次 stateChanged 重取（防抖）。还没取到时为 null。

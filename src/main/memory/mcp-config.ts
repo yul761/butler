@@ -1,5 +1,5 @@
-import { randomBytes } from "node:crypto";
-import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { epicScope, featureScope, ticketScope, WORKSPACE_SCOPE } from "../../shared/memory";
 import { currentLang } from "../i18n";
@@ -241,6 +241,19 @@ export function removeTerminalMcpConfig(mcpDir: string, termId: string): void {
   } catch {
     // 本来就没有（这个终端用的是 stdio）。
   }
+}
+
+/**
+ * 完整分叉自己的 --mcp-config（UI 重做第 5 层，Task 8 review I1）：分叉不走共享 MCP 的 hub（没有终端、没人撤路由），
+ * 总是 stdio，跟开发 session 同一组 server。放在 mcp/forks/ 下、按内容起名：同一组 server 共用一个文件，
+ * 换了 server 组写新文件，之前分叉接着问用的那份不动；启动时 pruneTerminalMcpConfigs 只清 mcp/terms，这里留着，重启后接着问照样能用。
+ */
+export const FORK_MCP_SUBDIR = "forks";
+
+export function writeForkMcpConfig(o: { mcpDir: string; servers: Record<string, McpServerSpec> }): string {
+  const hash = createHash("sha1").update(JSON.stringify(o.servers)).digest("hex").slice(0, 16);
+  const file = join(o.mcpDir, FORK_MCP_SUBDIR, `${hash}.json`);
+  return existsSync(file) ? file : writeConfig(file, o.servers);
 }
 
 /** 启动时：上次留下的终端配置都没用了（hub 是新的，token 全失效）。返回删掉的个数。 */

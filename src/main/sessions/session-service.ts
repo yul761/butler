@@ -31,6 +31,7 @@ import type { GuideKind } from "../claude/session-guide";
 import { claudeArgs, cmdShimSafe, sessionEnv, storedModel, type SessionModel } from "../claude/spawn";
 import type { EpicHistoryRepo } from "../db/epic-history-repo";
 import type { EpicsRepo } from "../db/epics-repo";
+import type { DevLaunch } from "../fork/fork-args";
 import { epicBriefMessage, epicStartMessage } from "../epics/epic-brief";
 import { EPIC_HISTORY_READ_ENTRIES } from "../epics/epic-history-view";
 import { epicFeatureRows, type LiveFeature } from "../epics/epic-info";
@@ -191,6 +192,8 @@ function mostUrgent(activities: SessionActivity[]): SessionActivity | undefined 
 export class SessionService {
   /** 规划正在投递的 feature：投递要等输入框就绪，这期间 briefSentAt 还是空的，再开一个总控不能再发一遍。 */
   private readonly briefsSending = new Set<number>();
+  /** 每个开着的终端这次启动时的 claude 参数（分叉讨论照抄它们）；key 是终端 id，退出时删。 */
+  private readonly launches = new Map<string, DevLaunch>();
 
   constructor(private readonly d: SessionServiceDeps) {}
 
@@ -254,12 +257,15 @@ export class SessionService {
     const guidePath = this.configPath(ticket.key, () => this.d.guidePath?.(coordinator ? "coordinator" : "ticket", coordinator ? [] : ticket.repos.map((r) => r.repoPath)) ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs = coordinator ? this.addDirsFor(ticket, claudePath, launch.viaCmd) : [];
     let args: string[];
+    let model: SessionModel | null | undefined;
     let insertedRow = false;
     if (head) {
       // claude --resume 只能在 session 当初的项目目录里找到它；没发过消息的 session 没有记录，用同一个 id 重新开
-      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath, model: storedModel(head, this.d.knownModel) });
+      model = storedModel(head, this.d.knownModel);
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath, model });
     } else {
-      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath, model: extra.model });
+      model = extra.model;
+      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath, model });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
         id: termId, model: extra.model ?? null, ticketKey: ticket.key, cwd, origin: "butler", lastActivityAt: now, createdAt: now,
@@ -278,6 +284,7 @@ export class SessionService {
       if (insertedRow) this.d.sessions.delete(termId);
       throw e;
     }
+    this.launches.set(termId, { sessionId: termId, cwd, claudeArgs: args, mcpConfigPath: mcpConfigPath ?? null, settingsPath: settingsPath ?? null, addDirs, model: model ?? null });
     this.noteChecks(termId);
     this.d.opened?.(termId);
     if (prefill) this.prefill(termId, prefill);
@@ -722,11 +729,14 @@ export class SessionService {
     const guidePath = this.configPath(target.label, () => this.d.guidePath?.(target.guideKind, target.guideRepoPaths) ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs = this.workspaceAddDirs(target, claudePath, launch.viaCmd);
     let args: string[];
+    let model: SessionModel | null | undefined;
     let insertedRow = false;
     if (head) {
-      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath, model: storedModel(head, this.d.knownModel) });
+      model = storedModel(head, this.d.knownModel);
+      args = claudeArgs({ mode: this.d.transcriptExists(head.id) ? "resume" : "new", sessionId: head.id, mcpConfigPath, settingsPath, addDirs, guidePath, model });
     } else {
-      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath, model: target.row.model });
+      model = target.row.model;
+      args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath, model });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
         id: termId, ticketKey: null, cwd, origin: "butler", lastActivityAt: now, createdAt: now, ...target.row,
@@ -739,9 +749,18 @@ export class SessionService {
       if (insertedRow) this.d.sessions.delete(termId);
       throw e;
     }
+    this.launches.set(termId, { sessionId: termId, cwd, claudeArgs: args, mcpConfigPath: mcpConfigPath ?? null, settingsPath: settingsPath ?? null, addDirs, model: model ?? null });
     this.noteChecks(termId);
     this.d.opened?.(termId);
     return termId;
+  }
+
+  /** 开发 session 这次启动时的 claude 参数；只有这个 Butler 进程里开过、终端还开着的 head 才有（/clear 之后的新 head 不认，参数指向旧对话）。 */
+  devLaunchOf(sessionId: string): DevLaunch | null {
+    const termId = this.openHeads().get(sessionId);
+    const l = termId ? this.launches.get(termId) : undefined;
+    // /clear 之后终端 id 不变、head 换了：启动参数里的 --session-id 指向清掉之前的对话，不能拿来分叉。
+    return l && l.sessionId === sessionId ? l : null;
   }
 
   /** 启动时记下「没有检查」（或清掉上次的）：session 按钮上的标记、预审（G）的覆盖情况都读它。出错只写日志。 */
@@ -772,6 +791,7 @@ export class SessionService {
    * Butler 新建、但用户一句话都没说就退出的 session 没有 transcript，也不能 --resume；留着只会多出一个空的“新对话”按钮，删掉。
    */
   handleExit(termId: string): void {
+    this.launches.delete(termId);
     const head = this.d.sessions.head(termId);
     // 休眠（WS-M B）：进程是 Butler 结束的，session 还在等（等你、等 CI……），等待标记留着；它有 transcript，也不删。
     if (head?.hibernatedAt) return;

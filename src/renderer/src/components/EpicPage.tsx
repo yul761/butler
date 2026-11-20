@@ -6,7 +6,7 @@ import { summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary
 import type { NameCtx } from "../home-view";
 import { groupByFeature, scopeBoardView, scopeTotal, ticketRows } from "../scope-view";
 import { S } from "../strings";
-import { conversationSessions } from "../ticket-view";
+import { conversationSessions, defaultConvRoot } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
 import { EpicSummaryTab, type SummaryRunMessage } from "./EpicSummaryTab";
 import { epicErrorText, epicOpenError } from "./epic-row";
@@ -149,7 +149,7 @@ export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatur
                     onError={showError}
                   />
                 }
-                right={<ControlConversation scope={{ epicId: epic.id }} rootSessionId={null} sessions={conversationSessions(epic.sessions, S)} />}
+                right={<ControlConversation scope={{ epicId: epic.id }} rootSessionId={defaultConvRoot(epic.sessions)} sessions={conversationSessions(epic.sessions, S)} />}
               />
             ),
           },

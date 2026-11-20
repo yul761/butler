@@ -230,7 +230,8 @@ export class ConvRepo {
     const where = [`m.root_session_id = ?`];
     const args: (string | number)[] = [rootSessionId];
     if (opts.before !== undefined) {
-      const b = this.db.prepare(`SELECT at, id FROM conv_messages WHERE id = ?`).get(opts.before) as { at: number; id: number } | undefined;
+      // 别的对话里的 id 跟不认识的一样当没给（不能拿它的时间截这个对话）。
+      const b = this.db.prepare(`SELECT at, id FROM conv_messages WHERE id = ? AND root_session_id = ?`).get(opts.before, rootSessionId) as { at: number; id: number } | undefined;
       if (b) {
         where.push(`(m.at < ? OR (m.at = ? AND m.id < ?))`);
         args.push(b.at, b.at, b.id);

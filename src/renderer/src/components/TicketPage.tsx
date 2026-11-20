@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Turn } from "../../../shared/turn";
 import { TICKET_STATUSES, type Feature, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api } from "../api";
@@ -7,13 +7,15 @@ import { repoWhere } from "../repos";
 import { ticketRows } from "../scope-view";
 import { S, STATUS_LABEL } from "../strings";
 import type { TicketTab } from "../ticket-tabs";
-import { conversationSessions, ticketLanding } from "../ticket-view";
-import { ConversationPlaceholder } from "./ConversationPlaceholder";
+import { convFocusRoot, conversationSessions, ticketLanding } from "../ticket-view";
+import { ConversationTab } from "./ConversationTab";
+import { hibernationOf } from "./HibernateParts";
 import { PageTabs } from "./PageTabs";
 import { TicketHomeTab } from "./TicketHome";
 import { TicketLogTab } from "./TicketLogTab";
 import { TicketPrTab } from "./TicketPrTab";
-import { TicketTerminalTab, useTicketTerminals } from "./TicketTerminalTab";
+import { TerminalPane } from "./TerminalPane";
+import { TicketTerminalTab, useTicketTerminals, type TicketTerminals } from "./TicketTerminalTab";
 import { TitleDialog } from "./TitleDialog";
 import { useStateRefetch } from "./useStateRefetch";
 import { useTurnBoard } from "./useTurnBoard";
@@ -49,6 +51,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   const row = board === null ? null : (ticketRows([ticket], board.items)[0] ?? null);
   /** 落点只算一次：之后用户自己切页签不再被拉回；带着打开请求进来时落在终端，不再看卡片的轮次。 */
   const landed = useRef(false);
+  /** 落在对话时要选中的 session（轮到你的那个）；n 递增，让已经开着的对话 tab 也换过去。 */
+  const [convFocus, setConvFocus] = useState<{ sessionId: string; n: number } | null>(null);
 
   // 从别的页面跳进来时的打开请求：恢复 session 并预填提示，切到终端页签，只执行一次。
   useEffect(() => {
@@ -63,7 +67,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   useEffect(() => {
     if (!landing || landed.current) return;
     landed.current = true;
-    const { tab, terminal: to } = ticketLanding(landing, ticket.sessions, term.panesRef.current);
+    const { tab, terminal: to, conversation } = ticketLanding(landing, ticket.sessions, term.panesRef.current);
+    if (conversation !== null) setConvFocus((f) => ({ sessionId: conversation, n: (f?.n ?? 0) + 1 }));
     goTab(tab);
     // 落在终端：顺手切到（或恢复）轮到你的那个 session。
     if (to === null) return;
@@ -107,7 +112,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
           },
           {
             id: "conversation", label: S.lay.tabConversation,
-            content: <ConversationSlot ticket={ticket} />,
+            content: <ConversationSlot ticket={ticket} focus={convFocus} renderTerminal={(id) => <SideTerminal ticket={ticket} term={term} sessionId={id} onGoTab={goTab} />} />,
           },
           { id: "terminal", label: S.lay.tabTerminal, content: <TicketTerminalTab ticket={ticket} term={term} /> },
           { id: "pr", label: S.lay.tabPr, content: <TicketPrTab ticketKey={ticket.key} /> },
@@ -118,10 +123,44 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   );
 }
 
-/** 「对话」页签：只在停在这个页签时取链根。第 5 层把 ConversationPlaceholder 换成 ConversationTab，props 一致，只改这一行。 */
-function ConversationSlot({ ticket }: { ticket: TicketView }) {
+/** 「对话」页签：只在停在这个页签时取链根。 */
+function ConversationSlot({ ticket, focus, renderTerminal }: {
+  ticket: TicketView; focus: { sessionId: string; n: number } | null; renderTerminal: (sessionId: string) => ReactNode;
+}) {
   const glance = useStateRefetch(`glance:${ticket.key}`, () => api.ticketGlance(ticket.key));
   if (glance === null) return null;
-  const rootSessionId = glance.rootSessionId;
-  return rootSessionId ? <ConversationPlaceholder rootSessionId={rootSessionId} sessions={conversationSessions(ticket.sessions, S)} /> : <p className="muted">{S.lay.convNoSession}</p>;
+  if (!glance.rootSessionId) return <p className="muted">{S.lay.convNoSession}</p>;
+  // 从卡片落进来：选中轮到你的那个 session 的链；否则是 ticket 的主链。
+  const rootSessionId = convFocusRoot(ticket.sessions, focus?.sessionId ?? null, glance.rootSessionId);
+  return (
+    <ConversationTab
+      rootSessionId={rootSessionId} focusKey={focus?.n} sessions={conversationSessions(ticket.sessions, S)}
+      renderTerminal={renderTerminal} page={`ticket:${ticket.key}`}
+    />
+  );
+}
+
+/**
+ * 对话 tab「并排显示终端」的左边：同一个 TerminalPane（同终端 tab 一样的 termId、休眠、关闭和恢复），状态是 TicketPage 已有的那份。
+ * sessionId 是链上任意一段（对话 tab 用链根）；没开着就说一句，给个按钮去终端 tab 打开。
+ */
+function SideTerminal({ ticket, term, sessionId, onGoTab }: { ticket: TicketView; term: TicketTerminals; sessionId: string; onGoTab: (tab: TicketTab) => void }) {
+  const s = ticket.sessions.find((x) => x.id === sessionId) ?? ticket.sessions.find((x) => x.rootId === sessionId);
+  const termId = s?.termId ?? null;
+  if (termId === null) {
+    return (
+      <div className="conv-term-closed">
+        <p className="muted">{S.conv.termClosed}</p>
+        <button onClick={() => onGoTab("terminal")}>{S.conv.openInTerminalTab}</button>
+      </div>
+    );
+  }
+  return (
+    <div className="terminals">
+      <TerminalPane
+        key={termId} termId={termId} visible hibernated={hibernationOf(ticket.sessions, termId)}
+        onClose={() => term.closePane(termId)} onResume={() => void term.open({ ticketKey: ticket.key, sessionId: termId })}
+      />
+    </div>
+  );
 }

@@ -9,6 +9,8 @@ import type { NameCtx, RunningRow } from "../home-view";
 import type { TicketRow } from "../scope-view";
 import { S, STRINGS } from "../strings";
 import { ControlFeed } from "./ControlConversation";
+import { ConversationFeed } from "./ConversationTab";
+import { buildTimeline } from "../conversation-view";
 import { ControlSplit, ScopeBoard, ScopeOverview, ScopeRunning, ScopeTicketTable } from "./ScopeParts";
 
 const noop = () => {};
@@ -138,12 +140,20 @@ describe("ControlSplit / ControlFeed", () => {
     expect(h).toContain("LEFT");
     expect(h).toContain("RIGHT");
   });
-  it("feed is oldest first and keeps footer", () => {
+  it("the conversation feed puts the reports in time order, oldest first", () => {
+    const reports = [rep(2, 200, "NEWER"), rep(1, 100, "OLDER")];
+    const items = buildTimeline({ messages: [], refreshMarks: [], convHasMore: false, forks: [], reports, reportsHasMore: false, filter: "all" });
+    const actions = { followUp: async () => true, sendConclusion: noop, remember: noop, reaskFull: noop, retry: noop, pending: {}, notice: {}, memoryOn: true, canRemember: true };
+    const h = renderToStaticMarkup(createElement(ConversationFeed, { items, hasOlder: false, onOlder: noop, actions, now: 1000 }));
+    expect(h.indexOf("OLDER")).toBeLessThan(h.indexOf("NEWER"));
+    expect(h).toContain("inbox-report");
+    expect(reports[0].id).toBe(2);
+  });
+  it("without a control session the feed still lists reports oldest first and keeps the footer", () => {
     const reports = [rep(2, 200, "NEWER"), rep(1, 100, "OLDER")];
     const h = renderToStaticMarkup(createElement(ControlFeed, { reports, footer: createElement("i", null, "FOOT") }));
     expect(h.indexOf("OLDER")).toBeLessThan(h.indexOf("NEWER"));
     expect(h).toContain("<i>FOOT</i>");
-    expect(reports[0].id).toBe(2);
   });
   it("empty feed", () => {
     expect(renderToStaticMarkup(createElement(ControlFeed, { reports: [] }))).toContain("子 session 的完成和卡住汇报会按时间出现在这里");

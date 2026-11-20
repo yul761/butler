@@ -2,7 +2,7 @@ import type { AvailabilityAction, LimitKind } from "../../shared/availability";
 import { isBgKind, type BackgroundAction } from "../../shared/background";
 import { isModelName, isTaskId, isTier, POLICIES, type LimitPolicy, type LimitRuleKind, type RegistryModel, type RoutingAction, type Tier } from "../../shared/model-routing";
 import type { SensitiveTerm } from "../../shared/llm";
-import { CONTEXT_LIMIT } from "../../shared/control";
+import { CONTEXT_LIMIT, TASK_LIMIT } from "../../shared/control";
 import { CONV_LIST_MAX, CONV_QUERY_MAX, type ConvListOpts } from "../../shared/conversation";
 import { normTurnFilter, type TurnFilter } from "../../shared/turn";
 import type {
@@ -25,6 +25,7 @@ import {
   EXPORT_CONTENTS, type ExportContent, type ExportRequest, type ExportScopeArg, type ImportApplyRequest, type Resolution, type StarterTarget,
 } from "../../shared/config-io";
 import { EPIC_NAME_LIMIT } from "../epics/epic-service";
+import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 import { M } from "../strings";
 import { TicketError } from "../tickets/ticket-service";
@@ -177,6 +178,36 @@ export function inboxIdArg(v: unknown): number {
 /** 卡片上的回答：非空，最多 CONTEXT_LIMIT 字（送进 session 时还会按 sanitizeTask 清理）。 */
 export function inboxAnswerArg(v: unknown): string {
   if (typeof v !== "string" || v.trim().length === 0 || v.length > CONTEXT_LIMIT) throw new Error("invalid answer");
+  return v;
+}
+
+/** 总控对话区汇报的一页（UI 重做第 5 层）：limit 1–100；before 是上一页最早一条汇报的 id，正整数或不给。 */
+export function reportsPageArg(v: unknown): { before?: number; limit: number } {
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("invalid reports page");
+  const o = v as { limit?: unknown; before?: unknown };
+  const posInt = (x: unknown): x is number => typeof x === "number" && Number.isSafeInteger(x) && x > 0;
+  if (!posInt(o.limit) || o.limit > 100) throw new Error("invalid reports page size");
+  if (o.before !== undefined && !posInt(o.before)) throw new Error("invalid reports cursor");
+  return { limit: o.limit, ...(o.before !== undefined && { before: o.before }) };
+}
+
+/** 分叉讨论的 id：正整数。 */
+export function forkIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) throw new Error("invalid fork id");
+  return v;
+}
+
+/** 问分叉的问题：trim 后非空，最多 FORK_QUESTION_MAX 字（按字算，和 ForkService 一样）。返回 trim 过的。 */
+export function forkQuestionArg(v: unknown): string {
+  if (typeof v !== "string" || v.length > FORK_QUESTION_MAX * 2) throw new Error("invalid fork question");
+  const q = v.trim();
+  if (!q || [...q].length > FORK_QUESTION_MAX) throw new Error("invalid fork question");
+  return q;
+}
+
+/** 对话 tab 输入框发给开发 session 的话：非空白，最多 TASK_LIMIT 字（送进去时还会按 sanitizeTask 清理），原样返回。 */
+export function devMessageArg(v: unknown): string {
+  if (typeof v !== "string" || v.trim().length === 0 || v.length > TASK_LIMIT) throw new Error("invalid message");
   return v;
 }
 

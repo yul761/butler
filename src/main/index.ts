@@ -51,7 +51,8 @@ import { SettingsRepo } from "./db/settings-repo";
 import { TermsRepo } from "./db/terms-repo";
 import { TicketsRepo } from "./db/tickets-repo";
 import { UsageRepo } from "./db/usage-repo";
-import { execHeadlessJson, jobOf } from "./handoff/headless-exec";
+import { execHeadlessJson } from "./handoff/headless-exec";
+import { headlessUsageRow } from "./usage/headless-usage";
 import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
@@ -100,7 +101,7 @@ import { hookCommand } from "./hooks/installer";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { hubRoutes, memoryServers, pruneTerminalMcpConfigs, removeEpicMcpConfig, removeFeatureMcpConfig, removeTerminalMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, type StdioServerSpec, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTerminalMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { hubRoutes, memoryServers, pruneTerminalMcpConfigs, removeEpicMcpConfig, writeForkMcpConfig, removeFeatureMcpConfig, removeTerminalMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, type StdioServerSpec, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTerminalMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { McpHub, spawnHub } from "./memory/mcp-hub";
 import { MemoryService, nightlyDistill } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
@@ -146,6 +147,11 @@ import { ConvRepo } from "./db/conv-repo";
 import { ConvIngester } from "./conversation/conv-ingester";
 import { judgeConvQa } from "./conversation/conv-qa";
 import { ConversationStore, RECENT_QA_CHARS, withRecentQa } from "./conversation/conversation-store";
+import { ForkDiscussionsRepo } from "./db/fork-discussions-repo";
+import { DevSender } from "./fork/dev-send";
+import type { DevLaunch } from "./fork/fork-args";
+import { FULL_FORK } from "./fork/fork-cache";
+import { ForkService, writeForkSettings } from "./fork/fork-service";
 import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
 import { SessionCleanup, working } from "./sessions/session-cleanup";
 import { Hibernator } from "./sessions/hibernator";
@@ -557,14 +563,10 @@ async function bootstrap(): Promise<void> {
     }, 2000);
     costCheckTimer.unref?.();
   };
-  const recordHeadlessUsage = ({ runId, label, at, model, usage, task, requestedTier, fallbackFrom, costUsd, ticketKey }: UsageReport) => {
+  const recordHeadlessUsage = (r: UsageReport) => {
     try {
-      usageRepo.record([{
-        messageId: `headless:${runId}`, sessionId: null, agentId: null, source: "headless", job: jobOf(label), at, model, ...usage, ticketKey: ticketKey ?? null,
-        context: usage.input + usage.cacheWrite5m + usage.cacheWrite1h + usage.cacheRead,
-        ...(task !== undefined && { task, requestedTier: requestedTier ?? null, fallbackFrom: fallbackFrom ?? null, costUsd: costUsd ?? null }),
-      }]);
-      if (ticketKey) costCheckSoon();
+      usageRepo.record([headlessUsageRow(r)]);
+      if (r.ticketKey) costCheckSoon();
     } catch (e) {
       logger("recording headless usage failed", e);
     }
@@ -677,29 +679,35 @@ async function bootstrap(): Promise<void> {
       return null;
     }
   };
-  /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。什么都不挂时返回 null。 */
-  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }, termId: string): string | null => {
+  /**
+   * 这组 server 的 --mcp-config 写到哪。termId 是交互终端：共享 MCP 开着走 hub，否则写 stdio 文件（stdio()）。
+   * termId 是 null（完整分叉，没有终端）：从不走 hub（没人撤它的路由、重启后 mcp/terms 也被清掉），写分叉自己的 stdio 文件，server 组一样。
+   */
+  const placeMcp = (termId: string | null, servers: Record<string, StdioServerSpec>, stdio: () => string): string =>
+    termId === null ? writeForkMcpConfig({ mcpDir: paths.mcp, servers }) : (sharedMcpConfig(termId, servers) ?? stdio());
+  /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。什么都不挂时返回 null。termId null 见 placeMcp。 */
+  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }, termId: string | null): string | null => {
     const servers = mcpServers({ ticketKey, featureId: opts.featureId, epicId: opts.epicId }, opts.coordinator ? { ticketKey } : { ticketKey, member: true });
     if (Object.keys(servers).length === 0) return null;
-    return sharedMcpConfig(termId, servers) ?? writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator });
+    return placeMcp(termId, servers, () => writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator }));
   };
   /** feature 总控：feature 记忆、全局记忆和 feature 模式的 butler-sessions；feature 属于 epic 时加 epic 记忆。 */
-  const featureMcpConfig = (featureId: number, epicId: number | null, termId: string): string | null => {
+  const featureMcpConfig = (featureId: number, epicId: number | null, termId: string | null): string | null => {
     const servers = mcpServers({ featureId, epicId }, { featureId, epic: epicId !== null });
     if (Object.keys(servers).length === 0) return null;
-    return sharedMcpConfig(termId, servers) ?? writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers });
+    return placeMcp(termId, servers, () => writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers }));
   };
   /** epic session：epic 记忆、全局记忆和 epic 模式的 butler-sessions（list_features、list_repos、create_feature，以及各 feature 的 session）。 */
-  const epicMcpConfig = (epicId: number, termId: string): string | null => {
+  const epicMcpConfig = (epicId: number, termId: string | null): string | null => {
     const servers = mcpServers({ epicId }, { epicId });
     if (Object.keys(servers).length === 0) return null;
-    return sharedMcpConfig(termId, servers) ?? writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers });
+    return placeMcp(termId, servers, () => writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers }));
   };
   /** Butler 总控（BTL-190 第 5 点）：只有全局记忆（butler-workspace）和 Butler 模式的 butler-sessions。 */
-  const butlerMcpConfig = (termId: string): string | null => {
+  const butlerMcpConfig = (termId: string | null): string | null => {
     const servers = mcpServers({}, { butler: true });
     if (Object.keys(servers).length === 0) return null;
-    return sharedMcpConfig(termId, servers) ?? writeButlerMcpConfig({ mcpDir: paths.mcp, servers });
+    return placeMcp(termId, servers, () => writeButlerMcpConfig({ mcpDir: paths.mcp, servers }));
   };
   const availability = new ClaudeAvailability({ repo: new AvailabilityRepo(db, logger), now: Date.now, onChange: notify, log: logger });
   /** headless 运行报告限流 / 成功给可用状态。 */
@@ -1173,6 +1181,8 @@ async function bootstrap(): Promise<void> {
     builtIn: SESSIONS_AUTO_ALLOW,
     recordEvent,
   });
+  /** 这个 session 有 transcript（SessionService 判断能不能 --resume、ForkService 判断能不能完整分叉共用）。 */
+  const transcriptExists = (id: string): boolean => transcriptState(paths.claudeProjects, id) !== "absent";
   const sessionService = new SessionService({
     knownModel: routing.registered,
     tickets, sessions, settings, ticketService, pty,
@@ -1184,7 +1194,7 @@ async function bootstrap(): Promise<void> {
     // mergeGate 也在后面才建好。
     dirBusy: (repo): Promise<{ ticket: string; branch: string } | null> => mergeGate.dirBusy(repo),
     ready: () => healthReady,
-    transcriptExists: (id) => transcriptState(paths.claudeProjects, id) !== "absent",
+    transcriptExists,
     transcriptState: (id) => transcriptState(paths.claudeProjects, id),
     claude: () => health.claude(),
     newId: randomUUID,
@@ -1762,6 +1772,8 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   // 「待你决定」和汇报（BTL-190 第 2+3 点）。递回答不看「需要你」（未决的 ask_user 本身就算），别的检查照常；递汇报和 CI 结果同一道 guard。
+  // 递用户自己的话（卡片上的回答、对话 tab 发给开发 session 的话和分叉的结论）共用这一道：在换新的挡，「需要你」不挡。
+  const answerGuard = new DeliveryGuard({ ...guardDeps, refreshing: (id) => refresher.isRefreshing(id) });
   const inboxRepo = new InboxRepo(db);
   const inboxService: InboxService = new InboxService({
     repo: inboxRepo,
@@ -1771,7 +1783,7 @@ async function bootstrap(): Promise<void> {
     epicName: (id) => epics.get(id)?.name ?? null,
     termOf: gateTerm,
     openHeads: liveButlerHeads,
-    answerGuard: new DeliveryGuard({ ...guardDeps, refreshing: (id) => refresher.isRefreshing(id) }),
+    answerGuard,
     reportGuard: deliveryGuard,
     deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
     // 换新输入的 /handoff 和接着做的话也会触发 UserPromptSubmit：那不是用户在终端里回答。
@@ -1790,6 +1802,91 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     log: logger,
   });
+  // 对话 tab（UI 重做第 5 层）：发给开发 session（输入框、分叉的结论），和卡片上的回答同一道 guard、同一种投递。
+  const devSender = new DevSender({
+    sessions,
+    guard: answerGuard,
+    deliver: (termId, text, o) => pty.deliver(termId, text, o),
+    sanitize: sanitizeTask,
+    platform: process.platform,
+    now: Date.now,
+    log: logger,
+  });
+  /**
+   * 完整分叉自己的 --mcp-config：跟开发 session 打开时同一个配置函数、同一组 server，但 termId 是 null——
+   * 分叉从不走共享 MCP 的 hub，总是写 mcp/forks/ 下自己的 stdio 文件（见 placeMcp、writeForkMcpConfig；Task 8 review I1）。
+   * 开发 session 没有 MCP 配置时返回 null（沿用开发参数）。
+   */
+  const forkMcpConfig = (dev: DevLaunch, runId: string): string | null => {
+    if (!dev.mcpConfigPath) return null;
+    const s = sessions.get(dev.sessionId);
+    if (!s) return null;
+    const termId = null;
+    try {
+      if (s.ticketKey !== null) {
+        const featureId = tickets.get(s.ticketKey)?.featureId ?? null;
+        const epicId = featureId === null ? null : (features.get(featureId)?.epicId ?? null);
+        return memoryMcpConfig(s.ticketKey, { coordinator: s.coordinator, featureId, epicId }, termId);
+      }
+      if (s.featureId !== null) return featureMcpConfig(s.featureId, features.get(s.featureId)?.epicId ?? null, termId);
+      if (s.epicId !== null) return epicMcpConfig(s.epicId, termId);
+      if (s.butler) return butlerMcpConfig(termId);
+      return null;
+    } catch (e) {
+      logger(`fork: writing the MCP config for ${dev.sessionId} (run ${runId}) failed; the fork uses the dev session's`, e);
+      return null;
+    }
+  };
+  const forkService = new ForkService({
+    repo: new ForkDiscussionsRepo(db),
+    conv,
+    recentQa: (root, maxChars) => conv.recentQa(root, maxChars),
+    sessions,
+    // 下面三个 ForkService 都用链上现在的 head id 调。
+    devLaunchOf: (id) => sessionService.devLaunchOf(id),
+    transcriptExists,
+    // 开着终端（gateTerm 按 head 找终端，/clear 之后也找得到）；休眠的没有终端，不算在跑。
+    devRunning: (id) => gateTerm(id) !== null,
+    lastTurnAt: (id) => usageRepo.lastSessionTurnAt(id),
+    recall: (scope, maxChars) => memory.recallText(scope, maxChars),
+    files: {
+      // 只读 hook 和 gate hook 是同一个 butler-hook 命令（forkSettings 在后面加 readonly）；hook 没装好 → null → ForkService 报 no_claude。
+      settings: (devSettingsPath) => {
+        try {
+          return writeForkSettings({ dir: paths.mcp, devSettingsPath, guardCommand: hookInstalled() ? hookCommand(paths.hookBin, process.platform) : null });
+        } catch (e) {
+          logger("fork: writing the fork settings failed", e);
+          return null;
+        }
+      },
+      mcp: forkMcpConfig,
+    },
+    // 接着问、要结论不再写 settings：每一轮都看一次 hook 还在不在。
+    hookReady: hookInstalled,
+    run: runHeadless,
+    claude: () => health.claude(),
+    // 跟交互 session 一样的 process.env：CLAUDE_EFFORT 之类原样带过去（forkEnv 补上 sessionEnv 的默认值）。
+    baseEnv: process.env,
+    recordHeadless: (id, cwd, at) => sessions.recordHeadless(id, cwd, at),
+    onUsage: recordHeadlessUsage,
+    onLimit: availabilityHooks.onLimit,
+    registry: () => routing.config().registry,
+    send: (anyId, text) => devSender.send(anyId, text),
+    remember: (scope, text) => memory.rememberText(scope, text),
+    memoryEnabled: () => memoryOn(settings),
+    changed: (root) => safeSend(IPC.forkChanged, root),
+    plan: FULL_FORK,
+    now: Date.now,
+    newRunId: randomUUID,
+    signal: headlessAbort.signal,
+    log: logger,
+  });
+  // 上次退出时还在跑的分叉讨论记成 interrupted。
+  try {
+    forkService.recover();
+  } catch (e) {
+    logger("fork: recovering interrupted discussions failed", e);
+  }
   // 等人时间（ws-h）：开着终端的 Butler head（复盘分析 session 除外）此刻在等什么。休眠的没有终端，不算。
   const waitHeads = (): WaitHead[] => {
     const categories = needsYou.categories();
@@ -2831,6 +2928,9 @@ async function bootstrap(): Promise<void> {
   const keepAwakeSwitch = keepAwake;
   registerIpc({
     conv,
+    fork: forkService,
+    devSend: devSender,
+    forkReady: () => healthReady,
     keepAwake: keepAwakeSwitch,
     onArchived: (key) => {
       removeTicketMcpConfigs(paths.mcp, key);
