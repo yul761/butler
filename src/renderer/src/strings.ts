@@ -929,7 +929,6 @@ const ZH = {
   llmOverBudget: (spent: string, budget: string) => `本月已花 ${spent}，达到预算 ${budget}：本月不再调用。`,
   llmFullWarning: "完整档位下，StateCore 记忆蒸馏会把真实的 ticket 号、原始对话片段、已有的记忆（决策、follow-up、笔记、跨 ticket 的经验、上一次的摘要）和已遗忘条目的原文发给服务商，不替换也不做敏感信息扫描，但都记进审计页、计入月预算。",
   lessons: "复盘与规矩",
-  lessonsIntro: "从历史 PR 的 review 评论里提炼出来的规矩。你确认后，会送进 Butler 开的 ticket session 和修复 session；没确认的不会送。",
   lessonsPendingTitle: "待确认",
   lessonsConfirmedTitle: "已确认",
   lessonsNoPending: "没有待确认的规矩。",
@@ -1890,7 +1889,6 @@ const ZH = {
   effectNav: "效果与花费",
   effect: {
     title: "效果",
-    intro: "Butler 做的 PR 有多快、评论多少、要你插手几次、花多少，和 Butler 之前比。和 Butler 总控的 metrics_overview 是同一份数据，每小时汇总一次。",
     days: (n: number) => `最近 ${n} 天`,
     rolledUp: (when: string) => `汇总于 ${when}`,
     notRolledUp: "还没汇总过",
@@ -2449,6 +2447,14 @@ const ZH = {
     noTicketsInGroup: "这一组还没有 ticket。",
     ctlEmpty: "子 session 的完成和卡住汇报会按时间出现在这里。",
     butlerSent: (n: number) => `总控发出的消息（${n}）`,
+    lessonsLede: "Butler 从合了的 PR 里总结出来的规矩。确认过的会在以后的 session 里提醒 agent。",
+    lessonsAttention: (n: number) => `${n} 条新规矩等你看一眼`,
+    lessonsReview: "逐条看",
+    effectLede: (days: number) => `最近 ${days} 天 Butler 替你省了多少事、花了多少钱。`,
+    effectTabs: { overview: "概况", trend: "趋势", spend: "花费明细", rework: "返工", automation: "自动化的效果" },
+    auditLede: "Butler 自己调过的模型和替你做过的对外动作，一条一条可查。",
+    auditEmpty: "Butler 默认不替你对外做任何事（发评论、改 PR 都默认关着），所以这里还没有记录。",
+    auditTabs: { external: "对外动作", llm: "模型调用" },
   },
   /** 回测、影子自动升级、自动降级、阈值复查（工作流 F）。 */
   bt: {

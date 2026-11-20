@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { INTERRUPT_CATEGORIES, type CompareSide, type MetricAverages, type MetricsOverview, type TrendPoint } from "../../shared/metrics";
-import { EffectBody } from "./components/EffectPage";
+import { Cards, EffectOverview, EffectReworkTab, EffectSpendTab, EffectTrendTab } from "./components/EffectPage";
 import {
   barWidths, compare, comparisonText, fmtDuration, fmtNumber, fmtTokens, fmtUsd, groupName, interventionName, interventionRows, lineGeometry, spendName,
 } from "./effect-view";
@@ -103,6 +103,10 @@ const overview = (o: Partial<MetricsOverview> = {}): MetricsOverview => ({
   interruptCompare: null,
   ...o,
 });
+
+/** 页面上所有 tab 的内容加上面的四张卡，拼在一起渲染（页面里是按 tab 分开显示的）。 */
+const EffectBody = ({ o }: { o: MetricsOverview }) =>
+  createElement("div", null, createElement(Cards, { o }), createElement(EffectOverview, { o }), createElement(EffectTrendTab, { o }), createElement(EffectSpendTab, { o }), createElement(EffectReworkTab, { o }));
 
 describe("EffectBody (ws-h)", () => {
   it("shows the four cards against the baseline, interrupt shares and the breakdowns", () => {
