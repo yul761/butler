@@ -22,7 +22,6 @@ interface Props {
   focusSession?: string | null;
   /** 「待你决定」卡片上的「去终端」：问题不是 epic session 提的时跳到提问的 session 的页面。 */
   onOpenTarget: (t: NowTarget) => void;
-  /** PR 进度 tab 里「在进度页里看」：去进度页，只看这个 epic。 */
 }
 
 /**
