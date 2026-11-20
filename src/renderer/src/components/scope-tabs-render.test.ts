@@ -143,7 +143,7 @@ describe("ControlSplit / ControlFeed", () => {
   it("the conversation feed puts the reports in time order, oldest first", () => {
     const reports = [rep(2, 200, "NEWER"), rep(1, 100, "OLDER")];
     const items = buildTimeline({ messages: [], refreshMarks: [], convHasMore: false, forks: [], reports, reportsHasMore: false, filter: "all" });
-    const actions = { followUp: async () => true, sendConclusion: noop, remember: noop, reaskFull: noop, retry: noop, pending: {}, notice: {}, memoryOn: true };
+    const actions = { followUp: async () => true, sendConclusion: noop, remember: noop, reaskFull: noop, retry: noop, pending: {}, notice: {}, memoryOn: true, canRemember: true };
     const h = renderToStaticMarkup(createElement(ConversationFeed, { items, hasOlder: false, onOlder: noop, actions, now: 1000 }));
     expect(h.indexOf("OLDER")).toBeLessThan(h.indexOf("NEWER"));
     expect(h).toContain("inbox-report");

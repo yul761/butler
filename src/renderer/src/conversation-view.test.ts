@@ -5,7 +5,7 @@ import type { InboxItemView } from "../../shared/types";
 import { resetClock } from "./availability-view";
 import { TASK_LIMIT } from "../../shared/control";
 import { FORK_QUESTION_MAX } from "../../shared/fork";
-import { buildTimeline, costText, draftCheck, errorText, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, modeText, refusalText, rememberText, refusesMemory, sendBlockText, turnBlocks, type TimelineInput } from "./conversation-view";
+import { buildTimeline, canRememberIn, costText, draftCheck, errorText, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, modeText, refusalText, rememberText, refusesMemory, sendBlockText, turnBlocks, type TimelineInput } from "./conversation-view";
 import { STRINGS } from "./strings";
 
 const T = STRINGS.zh;
@@ -302,5 +302,13 @@ describe("latestOnly", () => {
     expect(b()).toBe(true);
     next();
     expect(b()).toBe(false);
+  });
+});
+
+describe("canRememberIn", () => {
+  it("only a feature's control page has something to remember under; Butler and epic pages don't", () => {
+    expect(canRememberIn({ featureId: 3 })).toBe(true);
+    expect(canRememberIn({ epicId: 2 })).toBe(false);
+    expect(canRememberIn({ all: true })).toBe(false);
   });
 });

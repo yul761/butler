@@ -19,6 +19,8 @@ export interface ForkActions {
   notice: Record<number, string | undefined>;
   /** 记忆开着（设置里的开关，且这个范围能记）；关着时「记进记忆」不能点。 */
   memoryOn: boolean;
+  /** 这一页有 ticket 或 feature 可记（ticket 页、feature 总控页）；没有（Butler 页、epic 页）时不出「记进记忆」。 */
+  canRemember: boolean;
 }
 
 /** 「接着问」：问出去了才清掉并收起小输入框；被挡下时那句话留着，改一改还能再发。 */
@@ -59,9 +61,11 @@ export function ForkBox({ fork, actions, now }: { fork: ForkView; actions: ForkA
       {notice && <p className="fork-notice">{notice}</p>}
       <div className="acts">
         <button disabled={locked || dead} onClick={() => actions.sendConclusion(id)}>{pending === "send" ? S.conv.sending : S.conv.actSend}</button>
-        <button disabled={locked || dead || !actions.memoryOn} title={actions.memoryOn ? undefined : S.conv.memoryOff} onClick={() => actions.remember(id)}>
-          {S.conv.actRemember}
-        </button>
+        {actions.canRemember && (
+          <button disabled={locked || dead || !actions.memoryOn} title={actions.memoryOn ? undefined : S.conv.memoryOff} onClick={() => actions.remember(id)}>
+            {S.conv.actRemember}
+          </button>
+        )}
         <button disabled={locked || dead} aria-expanded={asking} onClick={() => setAsking(!asking)}>{S.conv.actFollowUp}</button>
         {fork.mode === "light" && <button disabled={busy} onClick={() => actions.reaskFull(id)}>{S.conv.actReaskFull}</button>}
         {fork.status === "failed" && lastQuestion(fork) !== null && <button disabled={busy} onClick={() => actions.retry(id)}>{S.conv.actRetry}</button>}

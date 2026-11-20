@@ -2,7 +2,7 @@
 // 还没有总控 session 时只有汇报，照旧按时间排开，不丢。两种情况都用 conversation-view 的同一种排法。
 import type { ReactNode } from "react";
 import type { InboxItemView, InboxScope } from "../../../shared/types";
-import { buildTimeline } from "../conversation-view";
+import { buildTimeline, canRememberIn } from "../conversation-view";
 import { S } from "../strings";
 import { ConversationTab } from "./ConversationTab";
 import { ReportFeed, useInbox } from "./InboxPanes";
@@ -30,7 +30,7 @@ export function ControlConversation(p: { scope: InboxScope; rootSessionId: strin
   // footer（ButlerReplies）放进对话 tab，在输入框上面。
   return (
     <div className="control-feed">
-      <ConversationTab rootSessionId={root} sessions={p.sessions} reportScope={p.scope} footer={p.footer} />
+      <ConversationTab rootSessionId={root} sessions={p.sessions} reportScope={p.scope} footer={p.footer} canRemember={canRememberIn(p.scope)} />
     </div>
   );
 }

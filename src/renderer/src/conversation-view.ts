@@ -2,7 +2,7 @@
 import { TASK_LIMIT } from "../../shared/control";
 import type { ConvMessage, ConvPage } from "../../shared/conversation";
 import { FORK_QUESTION_MAX, type DevSendBlock, type ForkMode, type ForkView, type RememberResult } from "../../shared/fork";
-import type { InboxItemView } from "../../shared/types";
+import type { InboxItemView, InboxScope } from "../../shared/types";
 import { resetClock } from "./availability-view";
 import type { UiStrings } from "./strings";
 
@@ -118,6 +118,11 @@ export function rememberText(r: RememberResult, t: UiStrings): string {
 }
 
 /** 记进记忆回了这个就关掉按钮：只有记忆整体关着（disabled）；没有 ticket / feature 可记（no_scope）不是记忆没开。 */
+/** 总控页上分叉的结论有没有地方记：只有 feature 总控页有 feature；Butler 页和 epic 页没有 ticket 也没有 feature，不出「记进记忆」。 */
+export function canRememberIn(scope: InboxScope): boolean {
+  return "featureId" in scope;
+}
+
 export function refusesMemory(r: RememberResult): boolean {
   return r === "disabled";
 }

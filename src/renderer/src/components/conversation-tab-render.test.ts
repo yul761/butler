@@ -28,7 +28,7 @@ const report = (id: number): InboxItemView => ({
   text: `汇报${id}`, options: [], context: null, reportKind: "done", answer: null, createdAt: AT, open: true, target: {} as never,
 });
 const actions = (over: Partial<ForkActions> = {}): ForkActions => ({
-  followUp: async () => true, sendConclusion: noop, remember: noop, reaskFull: noop, retry: noop, pending: {}, notice: {}, memoryOn: true, ...over,
+  followUp: async () => true, sendConclusion: noop, remember: noop, reaskFull: noop, retry: noop, pending: {}, notice: {}, memoryOn: true, canRemember: true, ...over,
 });
 const box = (f: Partial<ForkView>, a: Partial<ForkActions> = {}) => renderToStaticMarkup(createElement(ForkBox, { fork: fork(f), actions: actions(a), now: NOW }));
 
@@ -96,6 +96,12 @@ describe("ForkBox", () => {
 
   it("memory off: save to memory is disabled", () => {
     expect(isDisabled(box({}, { memoryOn: false }), "记进记忆")).toBe(true);
+  });
+
+  it("no ticket or feature to remember under (Butler, epic pages): save to memory isn't shown at all", () => {
+    expect(box({}, { canRemember: false })).not.toContain(S.conv.actRemember);
+    expect(box({}, { canRemember: false })).toContain(S.conv.actSend);
+    expect(box({}, { canRemember: true })).toContain(S.conv.actRemember);
   });
 });
 
