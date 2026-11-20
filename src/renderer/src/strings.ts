@@ -427,7 +427,7 @@ const ZH = {
   // Butler 总控（BTL-190 第 5 点）
   butlerNav: "总控",
   butlerTitle: "Butler 总控",
-  butlerIntro: "全局的总控：能看所有 epic、feature、ticket、PR 和 session，能给 epic session 和 feature 总控发消息，不能建、删、结束任何东西。epic session 的完成和卡住汇报会送到这里。",
+  butlerIntro: "管所有 epic 的那个 session：每天早上巡检、跨 epic 协调。子 session 的汇报都送到这里。",
   butlerWorkspace: "工作目录",
   butlerSession: "Butler 总控",
   newButlerSession: "Butler 总控",
@@ -806,12 +806,6 @@ const ZH = {
     : role === "fix" ? "修复 session"
     : role === "butler" ? "Butler 总控"
     : "epic session",
-  inboxAnswerPlaceholder: "输入回答（⌘/Ctrl+Enter 发送）",
-  inboxSend: "回答",
-  inboxGoTerminal: "去终端",
-  inboxDismiss: "不用了",
-  inboxQueued: (answer: string) => `已回答「${answer}」，等它停下来再送进去。`,
-  inboxTerminalClosed: "终端关着",
   // 实况窗口（BTL-190 第 7 点）
   liveTitle: "实况",
   liveEmpty: "现在没有正在进行的工作",
@@ -2454,6 +2448,7 @@ const ZH = {
     groupHeader: (name: string, merged: number, total: number) => `${name} · ${merged}/${total} 合了`,
     noTicketsInGroup: "这一组还没有 ticket。",
     ctlEmpty: "子 session 的完成和卡住汇报会按时间出现在这里。",
+    butlerSent: (n: number) => `总控发出的消息（${n}）`,
   },
   /** 回测、影子自动升级、自动降级、阈值复查（工作流 F）。 */
   bt: {

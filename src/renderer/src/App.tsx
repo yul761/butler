@@ -269,7 +269,7 @@ export function App() {
                 onGo={setRoute}
               />
             )}
-            {route.page === "butler" && <ButlerPage key={route.focusSession ?? ""} focusSession={route.focusSession} onOpenTarget={openTarget} />}
+            {route.page === "butler" && <ButlerPage key={route.focusSession ?? ""} focusSession={route.focusSession} />}
             {route.page === "all" && (
               <AllWorkPage
                 key={route.section ?? ""}

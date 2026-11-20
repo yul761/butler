@@ -418,7 +418,7 @@ export const EN: UiStrings = {
   noEpicSessions: "No epic session yet.",
   butlerNav: "Overseer",
   butlerTitle: "Butler control",
-  butlerIntro: "The global control session: it can see every epic, feature, ticket, PR and session, and message epic sessions and feature coordinators. It cannot create, delete or end anything. Done and blocked reports from epic sessions come here.",
+  butlerIntro: "The session that oversees every epic: a morning sweep and cross-epic coordination. Reports from child sessions arrive here.",
   butlerWorkspace: "Working directory",
   butlerSession: "Butler control",
   newButlerSession: "Butler control",
@@ -793,12 +793,6 @@ export const EN: UiStrings = {
     : role === "fix" ? "Fix session"
     : role === "butler" ? "Butler control"
     : "Epic session",
-  inboxAnswerPlaceholder: "Type an answer (⌘/Ctrl+Enter to send)",
-  inboxSend: "Answer",
-  inboxGoTerminal: "Go to terminal",
-  inboxDismiss: "Not needed",
-  inboxQueued: (answer: string) => `Answered "${answer}"; it will be sent when the session stops.`,
-  inboxTerminalClosed: "Terminal closed",
   liveTitle: "Live",
   liveEmpty: "Nothing is being worked on right now",
   liveWorking: "working",
@@ -2434,6 +2428,7 @@ export const EN: UiStrings = {
     groupHeader: (name: string, merged: number, total: number) => `${name} · ${merged}/${total} merged`,
     noTicketsInGroup: "No tickets in this group yet.",
     ctlEmpty: "Reports from child sessions (done or blocked) show up here in time order.",
+    butlerSent: (n: number) => `Messages sent by control (${n})`,
   },
   bt: {
     noticePromoted: (names: string) => `Shadow checks promoted to enforce automatically: ${names}`,
