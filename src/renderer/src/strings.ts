@@ -1,3 +1,4 @@
+import type { DevSendBlock, ForkRefusal } from "../../shared/fork";
 import type { BacktestSkipReason, CheckLifecycleReason, PromotionBlocker } from "../../shared/backtest";
 import type { PrPolicyGroup, PrPolicyKey } from "../../shared/pr-policy";
 import type { ConditionState, EvidenceKind, EvidenceVerified, PreReviewStatus, PreReviewTrigger, PreReviewVerdict, ReadinessKey, RiskLevel, RiskRule } from "../../shared/prereview";
@@ -2480,6 +2481,58 @@ const ZH = {
     reject: "不采用",
     calibTitle: "检查的自动升降级",
     calibStats: (p: number, pu: number, d: number, du: number) => `自动升级 ${p} 次（被撤回 ${pu} 次）· 自动降级 ${d} 次（被撤回 ${du} 次）`,
+  },
+  conv: {
+    filterAll: "全部", filterForks: "只看讨论", filterSearch: "搜索", searchPlaceholder: "搜对话…",
+    sideTerminal: "并排显示终端", hideTerminal: "收起终端", termClosed: "这个 session 没开着。", openInTerminalTab: "到终端 tab 打开",
+    you: "你：", older: "更早的", empty: "还没有对话。",
+    refreshSep: (time: string) => `${time} 换新了上下文 · handoff 已保存 · 对话已另存`,
+    forkHead: "讨论 · 从开发 session 分出来，只读，不影响它",
+    modeFull: "完整上下文", modeLight: "精简上下文",
+    costPending: "在算…", costUnknown: "费用未知", costAtLeast: (usd: string) => `至少 ${usd}`, costUnder: "<$0.01",
+    actSend: "按这个改 → 发给 session", actRemember: "记进记忆", actFollowUp: "接着问", actReaskFull: "用完整上下文重问", actRetry: "再问一次",
+    sending: "正在发…", sentAt: (time: string) => `已发给 session · ${time}`,
+    remembered: "已记下", memoryFull: "记忆满了，先清掉几条", memoryOff: "记忆没开", memoryFailed: "没记上，稍后再试", memoryBusy: "上一条还在记，等一下",
+    sendTo: "发给：", toDev: "开发 session", toFork: "只问不改（分叉讨论）", askPlaceholder: "问点什么…", send: "发送",
+    block: {
+      closed: "session 没开着，先到终端 tab 打开它",
+      hibernated: "session 睡着了，先唤醒",
+      busy: "session 正忙或正在换新，稍后再发",
+      screen: "终端里开着别的界面，先关掉",
+      needs_you: "session 在等你回答，先回答它",
+      typing: "你正在终端里打字，等一下再发",
+      draft: "你在终端里打了半句，先发完或清掉",
+      cost_paused: "花费超了，已暂停",
+      refreshing: "正在换新，等一下再发",
+      exited: "session 退出了",
+      timeout: "等了一分钟没发出去",
+      blocked: "没发出去",
+      in_flight: "上一条还在发",
+      fork_busy: "讨论还在回答，等它答完",
+      no_conclusion: "没拿到结论，再试一次",
+      not_found: "找不到这个 session",
+    } as Record<DevSendBlock, string>,
+    refusal: {
+      fork_busy: "这个讨论还在回答",
+      dev_busy: "开发 session 正在跑，等它停下再用完整上下文",
+      no_transcript: "这个 session 还没有对话记录，只能用精简上下文",
+      no_claude: "找不到 claude，或 butler-hook 没装好（只读保护要靠它）",
+      not_found: "找不到这个讨论",
+      bad_question: "问题是空的或太长",
+      not_forked: "命令行没有分叉出新对话，这个讨论不能接着问了，请重新开一个",
+      internal: "内容不符合要求（可能太长了），改一下再试",
+      other: "出错了，再试一次",
+    } as Record<ForkRefusal | "internal" | "other", string>,
+    error: {
+      rate_limited: (time: string | null) => (time === null ? "撞到用量限额了" : `撞到用量限额了，${time} 恢复`),
+      interrupted: "Butler 退出时还没答完",
+      no_answer: "答完了，但是是空的",
+      timeout: "等太久没答完",
+      model_unavailable: "这个模型现在用不了",
+      not_forked: "命令行没有分叉出新对话，这个讨论不能接着问了，请重新开一个",
+      other: "没答上来",
+    },
+    forkTag: "讨论",
   },
 };
 
