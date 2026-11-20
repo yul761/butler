@@ -135,6 +135,18 @@ describe("ForkDiscussionsRepo", () => {
     expect(repo.failRunning("interrupted", 4000)).toBe(0);
   });
 
+  it("failRunning marks the cost partial (a run killed mid-turn may have spent tokens) and keeps the known part", () => {
+    const { repo } = setup();
+    const a = repo.create(base);
+    repo.finish(a.id, { at: 1100, addCost: 0.02, partial: false });
+    expect(repo.start(a.id, 1200)).toBe(true);
+    const idle = repo.create({ ...base, at: 2000 });
+    repo.finish(idle.id, { at: 2100, addCost: 0.01, partial: false });
+    repo.failRunning("interrupted", 3000);
+    expect(repo.get(a.id)).toMatchObject({ status: "failed", costUsd: 0.02, costPartial: true });
+    expect(repo.get(idle.id)).toMatchObject({ costUsd: 0.01, costPartial: false });
+  });
+
   it("listByRoot returns only that root, oldest first", () => {
     const { repo } = setup();
     const late = repo.create({ ...base, at: 3000 });

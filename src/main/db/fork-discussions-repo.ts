@@ -139,10 +139,12 @@ export class ForkDiscussionsRepo {
     this.db.prepare(`UPDATE fork_discussions SET summary_sent_at = ? WHERE id = ?`).run(at, id);
   }
 
-  /** 启动时用：上次退出时还在跑的，标成失败。返回改了几行。 */
+  /** 启动时用：上次退出时还在跑的，标成失败；跑到一半被杀的那一轮可能已经花了钱，费用记成一部分不知道。返回改了几行。 */
   failRunning(code: "interrupted", at: number): number {
     return Number(
-      this.db.prepare(`UPDATE fork_discussions SET status = 'failed', error_code = ?, error_reset_at = NULL, last_at = ? WHERE status = 'running'`).run(code, at).changes,
+      this.db
+        .prepare(`UPDATE fork_discussions SET status = 'failed', error_code = ?, error_reset_at = NULL, last_at = ?, cost_partial = 1 WHERE status = 'running'`)
+        .run(code, at).changes,
     );
   }
 }
