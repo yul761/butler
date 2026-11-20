@@ -207,7 +207,7 @@ export function App() {
           <>
             {route.page === "home" && (
               <HomePage
-                state={turn} noWork={isNoWork(allTickets.length + epics.length + features.length, turn.board?.items ?? null)}
+                state={turn} noWork={isNoWork(allTickets.length + epics.length + features.length, turn.board?.items ?? null, nowView?.notices.length ?? 0)}
                 firstRun={<NoWorkLine onNewTicket={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)} onNewEpic={() => setShowNewEpic(true)} />}
                 ctx={ctx} nowView={nowView} liveTickets={new Set(allTickets.map((t) => t.key))}
                 onFix={openFix} onOpen={openTarget} onGo={setRoute} onOpenTicket={(key) => openTicket(key)} onChanged={turn.reload}

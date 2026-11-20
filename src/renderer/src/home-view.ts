@@ -17,9 +17,12 @@ export const HOME_SCOPE_CAP = 8;
 
 const youRank = (t: Turn) => (t.owner === "you" ? YOU_KIND_RANK[t.kind] : 99);
 
-/** 工作区里什么都没有（ticket、feature、epic 都是 0），轮到你的板上也空着：首页只放空状态。板上有 Butler 自己的提醒时照常显示。 */
-export function isNoWork(workCount: number, items: TurnItem[] | null): boolean {
-  return workCount === 0 && (items ?? []).length === 0;
+/**
+ * 工作区里什么都没有（ticket、feature、epic 都是 0），轮到你的板上也空着，也没有别的 Butler 提醒：首页只放空状态。
+ * 板上有 Butler 自己的提醒、或者有只是告知的提醒（noticeCount，放在「运行情况」里）时照常显示。
+ */
+export function isNoWork(workCount: number, items: TurnItem[] | null, noticeCount = 0): boolean {
+  return workCount === 0 && (items ?? []).length === 0 && noticeCount === 0;
 }
 
 /** 一条提醒是哪一条（同一类可以有好几条：两个 intake 决定、两个 session 的权限确认）。 */

@@ -236,6 +236,8 @@ describe("isNoWork", () => {
     expect(isNoWork(1, [])).toBe(false);
     // Butler 自己的提醒（用量受限、复盘暂停）不属于任何 ticket：工作区空着也要能看到。
     expect(isNoWork(0, [item(butler, { ticketKey: null })])).toBe(false);
+    // 只是告知的提醒（检查自动升级了，可以撤销）不在板上，在「运行情况」里：有它也不算空。
+    expect(isNoWork(0, [], 1)).toBe(false);
   });
 });
 
