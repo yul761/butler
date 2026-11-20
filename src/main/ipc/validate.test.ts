@@ -1,3 +1,4 @@
+import { turnFilterArg, turnSendArg } from "./validate";
 import { backtestActionArg, baselinesActionArg, checkExportActionArg, checkKeyArg, checkLessonIdArg, checkScopeArg, checksActionArg, legacyActionArg, legacyViolationsArg } from "./validate";
 import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
@@ -561,5 +562,35 @@ describe("conversation store arguments (UI redesign layer 4)", () => {
     expect(convRootArg("a-1")).toBe("a-1");
     expect(() => convRootArg("../x")).toThrow();
     expect(() => convRootArg(undefined)).toThrow();
+  });
+});
+
+describe("turn args (UI redesign layer 1)", () => {
+  it("turnFilterArg: null for nothing, one key at most", () => {
+    expect(turnFilterArg(undefined)).toBeNull();
+    expect(turnFilterArg(null)).toBeNull();
+    expect(turnFilterArg({ epicId: 2 })).toEqual({ epicId: 2 });
+    expect(turnFilterArg({ featureId: 5 })).toEqual({ featureId: 5 });
+    expect(turnFilterArg({ ticketKey: "BTL-1" })).toEqual({ ticketKey: "BTL-1" });
+    // 和 TurnFilter 类型、normTurnFilter 一致：值为 undefined 的键不算；几个都给时按 ticketKey > featureId > epicId 取一个；别的键不看
+    expect(turnFilterArg({ ticketKey: "BTL-1", epicId: undefined })).toEqual({ ticketKey: "BTL-1" });
+    expect(turnFilterArg({ epicId: 1, featureId: 2 })).toEqual({ featureId: 2 });
+    expect(turnFilterArg({ epicId: 1, featureId: 2, ticketKey: "K" })).toEqual({ ticketKey: "K" });
+    expect(turnFilterArg({ foo: 1 })).toBeNull();
+    expect(turnFilterArg({ epicId: undefined })).toBeNull();
+    for (const bad of [{ epicId: 0 }, { epicId: 1.5 }, { ticketKey: "K", epicId: "x" }, { ticketKey: "" }, { ticketKey: "x".repeat(201) }, [], "x", 3]) {
+      expect(() => turnFilterArg(bad), JSON.stringify(bad)).toThrow();
+    }
+  });
+  it("turnSendArg: picks ticketKey and pr {repo, number}; a TurnItem's pr with title and url is fine", () => {
+    const ok = { ticketKey: "BTL-1", pr: { repo: "o/r", number: 3 } };
+    expect(turnSendArg(ok)).toEqual(ok);
+    expect(turnSendArg({ ...ok, pr: { ...ok.pr, title: "T", url: "u" }, extra: 1 })).toEqual(ok);
+    for (const bad of [
+      { ticketKey: "BTL-1" }, { ...ok, pr: { repo: "o/r", number: 1.5 } }, { ...ok, pr: { repo: "o/r" } },
+      { ...ok, pr: { repo: "", number: 3 } }, { ...ok, ticketKey: "" }, null, [],
+    ]) {
+      expect(() => turnSendArg(bad), JSON.stringify(bad)).toThrow();
+    }
   });
 });

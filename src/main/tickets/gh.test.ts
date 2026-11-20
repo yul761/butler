@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, prLessonData, prLessonDataDetail, prStatus, prsForBranch, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
+import { applyGhResolution, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prStatus, prsForBranch, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -509,5 +509,20 @@ describe("latestReviewers", () => {
   });
   it("a dismissal replaces an approval; sorts input by time first", () => {
     expect(latestReviewers([rv("a", "DISMISSED", 9), rv("a", "APPROVED", 1)], "me")).toEqual([{ login: "a", state: "dismissed", at: 9, bot: false }]);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("reviewRequestedPrs", () => {
+  it("passes the search args and parses items, enterprise hosts keep their host in the slug", async () => {
+    const dir = fakeGh(`echo "$@" >> "$(dirname "$0")/args.txt"\necho '[{"number":7,"title":"Fix","url":"https://github.com/o/r/pull/7","repository":{"nameWithOwner":"o/r"},"author":{"login":"amy"},"updatedAt":"2026-11-19T00:00:00Z"},{"number":8,"title":"X","url":"https://ghe.co/o/r/pull/8","repository":{"nameWithOwner":"o/r"},"author":{"login":"bob"},"updatedAt":"2026-11-19T00:00:00Z"},{"number":9,"title":"bad","url":"nope","repository":{},"author":{}}]'`);
+    expect(await reviewRequestedPrs(5000)).toEqual([
+      { url: "https://github.com/o/r/pull/7", slug: "o/r", number: 7, title: "Fix", author: "amy" },
+      { url: "https://ghe.co/o/r/pull/8", slug: "ghe.co/o/r", number: 8, title: "X", author: "bob" },
+    ]);
+    expect(readFileSync(join(dir, "args.txt"), "utf8")).toContain("search prs --review-requested=@me --state=open");
+  });
+  it("returns null when gh fails", async () => {
+    fakeGh("exit 1");
+    expect(await reviewRequestedPrs(5000)).toBeNull();
   });
 });

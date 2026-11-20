@@ -25,6 +25,7 @@ export const EDITABLE_SETTINGS = [
   "butlerPatrolTime",
   "onboardingDone",
   "language",
+  "reviewRequestScope",
   "configBackupIntervalDays",
   "configBackupKeep",
   "configExportReminderDays",

@@ -537,7 +537,8 @@ describe("StackService triggers", () => {
     expect(shape(w, "d")).toEqual({ count: 4, onTrunk: true });
     expect(w.repoT.layers(id).map((l) => l.conflictKey)).toEqual([null, null, null, null]);
     expect(w.svc.notices().filter((n) => n.reason === "conflict")).toEqual([]);
-  });
+    // 两次整栈 rebase 加一次解冲突，全是真 git 调用：Windows CI 上贴着 30 秒的默认上限，放宽到 120 秒
+  }, 120_000);
 
   it("tells the session not to push when Force push is off", async () => {
     const w = world({ policy: { dailyRebase: false }, allow: (k) => k !== "force_push" });
@@ -659,6 +660,33 @@ describe("StackService for other workstreams", () => {
     expect(note).toMatch(/2\/4/);
     expect(note).toContain("--fixup");
     expect(w.svc.stackNote("https://github.com/acme/app/pull/9", "zzz")).toBeNull();
+  });
+
+  it("stackBelow names the nearest unmerged layer below, for the turn board (UI redesign layer 1)", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const layers = w.repoT.layers(id);
+    w.repoT.updateLayer(layers[2]!.id, { prUrl: "https://github.com/acme/app/pull/8", prNumber: 8 });
+    expect(w.svc.stackBelow("https://github.com/Acme/App/pull/8", layers[2]!.branch)).toBe(layers[1]!.branch);
+    w.repoT.updateLayer(layers[1]!.id, { state: "merged" });
+    expect(w.svc.stackBelow("https://github.com/acme/app/pull/8", layers[2]!.branch)).toBe(layers[0]!.branch);
+    w.repoT.updateLayer(layers[0]!.id, { state: "merged" });
+    expect(w.svc.stackBelow("https://github.com/acme/app/pull/8", layers[2]!.branch)).toBeNull();
+    expect(w.svc.stackBelow("https://github.com/acme/app/pull/1", layers[0]!.branch)).toBeNull();
+    expect(w.svc.stackBelow("https://github.com/acme/app/pull/9", "zzz")).toBeNull();
+  });
+
+  it("stackBelow by branch name alone only matches a layer with no PR yet, in the same repo", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const layers = w.repoT.layers(id);
+    // 还没记 PR 的层：同仓库按分支兜底
+    expect(w.svc.stackBelow("https://github.com/acme/app/pull/8", layers[2]!.branch)).toBe(layers[1]!.branch);
+    // 多仓库 ticket 在别的仓库起了同名分支：不在栈里
+    expect(w.svc.stackBelow("https://github.com/acme/other/pull/3", layers[2]!.branch)).toBeNull();
+    // 这一层已经记了别的 PR：同名分支的另一个 PR 不是它
+    w.repoT.updateLayer(layers[2]!.id, { prUrl: "https://github.com/acme/app/pull/8", prNumber: 8 });
+    expect(w.svc.stackBelow("https://github.com/acme/app/pull/30", layers[2]!.branch)).toBeNull();
   });
 
   it("posts the epic overview as an issue only when asked to", async () => {

@@ -17,7 +17,7 @@ const ev = (o: Partial<StageEvent> = {}): StageEvent => ({
 const prRow = (o: Partial<TicketPr>): TicketPr => ({
   id: 1, ticketKey: "A-1", url: "https://github.com/o/r/pull/1", slug: "o/r", repoId: 5, number: 1, headBranch: "feat", state: "open", review: null,
   ci: "passing", readError: false, headSha: "a", failed: [], openedAt: 100, mergedAt: null, closedAt: null, source: "branch", linkedAt: 100,
-  checkedAt: 100, deliveredKey: null, mergedHandledAt: null, readFailures: 0, readFailingSince: null, readRetryAt: null, baseBranch: null, isDraft: false, title: null, author: null, labels: [], reviewRequests: [], reviewers: [], mergeable: null, mergeState: null, statusChangedAt: null, ...o,
+  checkedAt: 100, deliveredKey: null, deliveredAt: null, deliveredTo: null, mergedHandledAt: null, readFailures: 0, readFailingSince: null, readRetryAt: null, baseBranch: null, isDraft: false, title: null, author: null, labels: [], reviewRequests: [], reviewers: [], mergeable: null, mergeState: null, statusChangedAt: null, ...o,
 });
 
 function make(o: {

@@ -1,3 +1,4 @@
+import { normTurnFilter, type TurnBoard, type TurnFilter, type TurnSendReason } from "../../shared/turn";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
 import type { IntakeActResult, IntakeAction, IntakeClassifyEdit, IntakeEffect, IntakePolicyOverrides, IntakePolicySetResult, IntakePolicyView, IntakeView } from "../../shared/intake";
@@ -224,6 +225,14 @@ export const api = {
   sessionLimits: () => call<SessionLimitView[]>(IPC.sessionsLimits),
   ciResend: (item: CiItemRef) => call<string>(IPC.ciResend, item),
   nowView: () => call<NowView>(IPC.nowView),
+  /** 「谁该动」看板（UI 重做第 1 层）：不带 filter 是首页。 */
+  // filter 先规整成一个键（ticketKey > featureId > epicId，值为 undefined 的不算），和主进程的校验一致。
+  turnBoard: (filter?: TurnFilter) => call<TurnBoard>(IPC.turnBoard, normTurnFilter(filter)),
+  /** 切到首页时调一次：补查请你 review 的 PR。turnBoard 本身不触发查询，收到 turn:changed 重取时不用管它。 */
+  turnHomeOpened: () => call<void>(IPC.turnHomeOpened),
+  // 可以直接传 TurnItem.pr（带 title、url）：只发 repo 和 number。
+  turnSendToAgent: (item: { ticketKey: string; pr: { repo: string; number: number } }) =>
+    call<{ ok: boolean; reason?: TurnSendReason }>(IPC.turnSendToAgent, { ticketKey: item.ticketKey, pr: { repo: item.pr.repo, number: item.pr.number } }),
   inbox: (scope: InboxScope) => call<InboxView>(IPC.inboxList, scope),
   answerInbox: (id: number, text: string) => call<boolean>(IPC.inboxAnswer, id, text),
   dismissInbox: (id: number) => call<boolean>(IPC.inboxDismiss, id),
@@ -261,6 +270,7 @@ export const api = {
   onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),
   onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),
   onStateChanged: (cb: () => void) => window.butler.on(IPC.stateChanged, cb),
+  onTurnChanged: (cb: () => void) => window.butler.on(IPC.turnChanged, cb),
   onKeepAwakeChanged: (cb: (on: boolean) => void) => window.butler.on(IPC.appKeepAwakeChanged, cb),
   /** 实况窗口（BTL-190 第 7 点）：开着的 session 新的一次工具调用、记忆读写、回合开始 / 结束。 */
   onActivityEvent: (cb: (e: ActivityEvent) => void) => window.butler.on(IPC.activityEvent, cb),

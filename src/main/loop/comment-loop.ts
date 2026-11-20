@@ -58,6 +58,8 @@ export interface CommentLoopDeps {
   recordEvent: RecordEvent;
   /** 评论项变了（界面刷新）。 */
   changed(): void;
+  /** 一个 session 现在的 head（沿 replaced_by 走到底）；不认识为 null。比较「递给了谁」用。 */
+  headOf(id: string): string | null;
   now(): number;
   log(msg: string, err?: unknown): void;
 }
@@ -95,6 +97,9 @@ export function replyText(lang: "en" | "zh", sha: string, quote: string | null):
 }
 
 type Where = { cwd: string; slug: string | null };
+
+/** 「发给 agent」一键送出的：等你看的和该送还没送的。 */
+const SENDABLE: readonly CommentItem["state"][] = ["review", "pending"];
 
 /** 几个 ticket 链接同一个 PR 时，评论项记在 id 最小的那一行上。 */
 const primaryRow = (rows: TicketPr[]): TicketPr => rows.reduce((a, b) => (b.id < a.id ? b : a));
@@ -402,6 +407,58 @@ export class CommentLoop {
     return this.d.items.byPr(primary.id).some((i) => i.state === "delivered");
   }
 
+  /** 「送进 session」：把一条改成 queued（act 的 send 和 sendAll 共用）。状态不在 from 里不改，返回 false。 */
+  private queueForSend(item: CommentItem, from: readonly CommentItem["state"][], now: number): boolean {
+    if (!from.includes(item.state)) return false;
+    this.d.items.update(item.id, { state: "queued", queuedAt: now, category: item.category ?? "fix", source: item.category ? item.source : "user" }, now);
+    return true;
+  }
+
+  /** 记评论项的那一行的 id（几个 ticket 链接同一个 PR 时取 id 最小的，和 list() 一致）；行不在为 null。 */
+  private primaryId(prId: number): number | null {
+    const row = this.d.prs.get(prId);
+    if (!row) return null;
+    return primaryRow(this.d.prs.byUrl(row.url).filter((x) => x.state === row.state).concat(row)).id;
+  }
+
+  /** UI 重做第 1 层：这个 PR 已经送进 session（head 是 sessionId 的）的评论里，最晚的送达时间；没有为 null。 */
+  deliveredAt(prId: number, sessionId: string): number | null {
+    const id = this.primaryId(prId);
+    if (id === null) return null;
+    let best: number | null = null;
+    for (const i of this.d.items.byPr(id)) {
+      if (i.state !== "delivered" || i.deliveredAt === null || i.deliveredSession === null) continue;
+      if (this.d.headOf(i.deliveredSession) !== sessionId) continue;
+      if (best === null || i.deliveredAt > best) best = i.deliveredAt;
+    }
+    return best;
+  }
+
+  /** 有没有可以一键送出的评论：state 是 review 或 pending。 */
+  sendable(prId: number): boolean {
+    const id = this.primaryId(prId);
+    return id !== null && this.enabled(id) && this.d.items.byPr(id).some((i) => SENDABLE.includes(i.state));
+  }
+
+  /** 这个 PR 的仓库开着 comments.enabled：关着时 deliverPr 什么都不递，一键送出也就不能算数。 */
+  private enabled(prId: number): boolean {
+    const row = this.d.prs.get(prId);
+    return !!row && this.d.policy(row.slug)["comments.enabled"];
+  }
+
+  /** 首页「发给 agent」：review / pending 的条目都按 send 的规则改成 queued，再 flush 一次；返回排上的条数。 */
+  async sendAll(prId: number): Promise<number> {
+    const id = this.primaryId(prId);
+    if (id === null || !this.enabled(id)) return 0;
+    const now = this.d.now();
+    let n = 0;
+    for (const i of this.d.items.byPr(id)) if (this.queueForSend(i, SENDABLE, now)) n++;
+    if (n === 0) return 0;
+    this.d.changed();
+    await this.flush();
+    return n;
+  }
+
   /** ticket 页「评论」标签。 */
   list(ticketKey: string): PrCommentsView[] {
     return this.d.prs.byTicket(ticketKey).map((r) => {
@@ -419,8 +476,7 @@ export class CommentLoop {
     const now = this.d.now();
     switch (a.op) {
       case "send":
-        if (!["review", "ignored", "dismissed", "pending"].includes(item.state)) return null;
-        this.d.items.update(item.id, { state: "queued", queuedAt: now, category: item.category ?? "fix", source: item.category ? item.source : "user" }, now);
+        if (!this.queueForSend(item, ["review", "ignored", "dismissed", "pending"], now)) return null;
         break;
       case "categorize":
         if (["delivered", "addressed", "closed"].includes(item.state)) return null;

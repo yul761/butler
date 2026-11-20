@@ -4,6 +4,7 @@ import { isModelName, isTaskId, isTier, POLICIES, type LimitPolicy, type LimitRu
 import type { SensitiveTerm } from "../../shared/llm";
 import { CONTEXT_LIMIT } from "../../shared/control";
 import { CONV_LIST_MAX, CONV_QUERY_MAX, type ConvListOpts } from "../../shared/conversation";
+import { normTurnFilter, type TurnFilter } from "../../shared/turn";
 import type {
   AddRepoInput, CiItemRef, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
@@ -983,4 +984,39 @@ export function intakePolicySetArg(v: unknown): { scope: PolicyScope; overrides:
   const o = objArg(v, "intake policy change", ["scope", "overrides"]);
   if (typeof o.overrides !== "object" || o.overrides === null || Array.isArray(o.overrides)) throw new Error("invalid intake policy overrides");
   return { scope: policyScopeArg(o.scope), overrides: o.overrides as Record<string, unknown> };
+}
+
+const plainObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const turnPosInt = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n > 0;
+const shortStr = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 200;
+
+/**
+ * turn:board 的范围（UI 重做第 1 层）：undefined / null → null。只看 epicId、featureId（正整数）、ticketKey（1–200 字符），
+ * 别的键不看；值为 undefined 的键当没给；给了的键类型不对就拒；几个都给时和 normTurnFilter 一样按 ticketKey > featureId > epicId 取一个。
+ */
+export function turnFilterArg(v: unknown): TurnFilter | null {
+  if (v === undefined || v === null) return null;
+  if (!plainObj(v)) throw new Error("invalid turn filter");
+  const f: TurnFilter = {};
+  if (v.epicId !== undefined) {
+    if (!turnPosInt(v.epicId)) throw new Error("invalid turn filter");
+    f.epicId = v.epicId;
+  }
+  if (v.featureId !== undefined) {
+    if (!turnPosInt(v.featureId)) throw new Error("invalid turn filter");
+    f.featureId = v.featureId;
+  }
+  if (v.ticketKey !== undefined) {
+    if (!shortStr(v.ticketKey)) throw new Error("invalid turn filter");
+    f.ticketKey = v.ticketKey;
+  }
+  return normTurnFilter(f);
+}
+
+/** turn:send-to-agent：取 ticketKey 和 pr 的 repo、number（TurnItem.pr 带着的 title、url 等别的键不看）。 */
+export function turnSendArg(v: unknown): { ticketKey: string; pr: { repo: string; number: number } } {
+  if (plainObj(v) && shortStr(v.ticketKey) && plainObj(v.pr) && shortStr(v.pr.repo) && turnPosInt(v.pr.number)) {
+    return { ticketKey: v.ticketKey, pr: { repo: v.pr.repo, number: v.pr.number } };
+  }
+  throw new Error("invalid turn send target");
 }

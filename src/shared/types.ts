@@ -664,6 +664,8 @@ export type NowNotice =
   /** 共享 MCP（WS-M H）开着但 hub 起不来：新开的 session 退回各自的 MCP 进程，Butler 按退避在重试。 */
   | { kind: "shared_mcp_failed"; error: string }
   | { kind: "session_limited"; target: NowTarget; title: string | null; limit: LimitHit }
+  /** 终端停在权限确认上（第 1 层的 you/butler 用）。 */
+  | { kind: "approval"; target: NowTarget; title: string | null }
   /** 模型路由（3.0）：有模型撞限或不可用，或最近一小时有任务降级。只在配置了路由时出现。 */
   | { kind: "routing"; limited: string[]; fallbacks: number }
   /** CI 结论超过半小时没递出去（工作流 W）：可以重发、打开 ticket。 */

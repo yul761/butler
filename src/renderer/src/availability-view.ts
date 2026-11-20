@@ -51,6 +51,7 @@ export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: str
       const line = limitLine(n.limit, S, now);
       return { text: n.title === null ? line : S.noticeSessionLimited(n.title, line), actions: ["open"] };
     }
+    case "approval": return { text: S.noticeApproval(n.title), actions: ["open"] };
     case "ci_undelivered": {
       const c = n.ci;
       const what = c.number === null ? S.ciWhatBranch(c.ticketKey, c.branch) : S.ciWhatPr(c.ticketKey, c.number, c.branch);

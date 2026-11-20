@@ -63,6 +63,8 @@ export const SETTING_DEFAULTS = {
   butlerPatrolTime: "",
   /** 界面和提示词的语言：auto | zh | en（设计文档 2026-10-26）。迁移 7 给老用户写 zh。 */
   language: "auto",
+  /** 请你 review 的查询：all = 账号能看到的所有仓库，registered = 只看 Butler 登记过的（UI 重做第 1 层）。 */
+  reviewRequestScope: "all",
   /** 准入策略的版本：每次改策略（任一层）加一，评分时写进 score_policy_version。不在设置页上。 */
   admissionPolicyVersion: "1",
   /** 每隔几天自动备份一次全部配置到 <BUTLER_HOME>/backups（契约 4.3）；0 = 关（默认）。 */

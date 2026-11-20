@@ -39,6 +39,9 @@ export interface TicketPr {
   /** 0 = 从没读过。 */
   checkedAt: number;
   deliveredKey: string | null;
+  /** CI 结论递出去的时间和收件 session（UI 重做第 1 层）；旧行和没递过的为 null。 */
+  deliveredAt: number | null;
+  deliveredTo: string | null;
   mergedHandledAt: number | null;
   /** 连续读失败的次数；读成功清零。 */
   readFailures: number;
@@ -109,6 +112,8 @@ interface Row {
   linked_at: number;
   checked_at: number;
   delivered_key: string | null;
+  delivered_at: number | null;
+  delivered_to: string | null;
   merged_handled_at: number | null;
   read_failures: number;
   read_failing_since: number | null;
@@ -142,7 +147,7 @@ const toPr = (r: Row): TicketPr => ({
   id: Number(r.id), ticketKey: r.ticket_key, url: r.url, slug: r.slug, repoId: num(r.repo_id), number: Number(r.number),
   headBranch: r.head_branch, state: r.state, review: r.review, ci: r.ci, readError: Number(r.read_error) !== 0, headSha: r.head_sha,
   failed: JSON.parse(r.failed) as CiCheck[], openedAt: num(r.opened_at), mergedAt: num(r.merged_at), closedAt: num(r.closed_at),
-  source: r.source, linkedAt: Number(r.linked_at), checkedAt: Number(r.checked_at), deliveredKey: r.delivered_key,
+  source: r.source, linkedAt: Number(r.linked_at), checkedAt: Number(r.checked_at), deliveredKey: r.delivered_key, deliveredAt: num(r.delivered_at), deliveredTo: r.delivered_to ?? null,
   mergedHandledAt: num(r.merged_handled_at), readFailures: Number(r.read_failures), readFailingSince: num(r.read_failing_since), readRetryAt: num(r.read_retry_at),
   baseBranch: r.base_branch, isDraft: Number(r.is_draft) !== 0, title: r.title, author: r.author, labels: jsonList<string>(r.labels),
   reviewRequests: jsonList<PrReviewRequest>(r.review_requests), reviewers: jsonList<PrReviewer>(r.reviewers),
@@ -269,8 +274,10 @@ export class TicketPrsRepo {
     return { failures: Number(r.read_failures), gaveUp: before.readRetryAt === null && r.read_retry_at !== null };
   }
 
-  setDelivered(id: number, key: string | null): void {
-    this.db.prepare(`UPDATE ticket_prs SET delivered_key = ? WHERE id = ?`).run(key, id);
+  /** key 为 null 或没给 to 时，delivered_at 和 delivered_to 写 null。 */
+  setDelivered(id: number, key: string | null, to?: { sessionId: string; at: number }): void {
+    const t = key === null ? undefined : to;
+    this.db.prepare(`UPDATE ticket_prs SET delivered_key = ?, delivered_at = ?, delivered_to = ? WHERE id = ?`).run(key, t?.at ?? null, t?.sessionId ?? null, id);
   }
 
   setMergedHandled(id: number, at: number): void {

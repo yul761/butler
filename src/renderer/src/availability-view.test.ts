@@ -139,3 +139,9 @@ describe("stack notice (workstream K)", () => {
     expect(noticeText({ kind: "stack", stack, target: { page: "ticket", key: "T-1", sessionId: null } }, STRINGS.en, 0).actions).toEqual(["stacks", "open"]);
   });
 });
+
+describe("approval notice (UI redesign layer 1)", () => {
+  it("asks you to confirm the permission prompt and opens the session", () => {
+    expect(noticeText({ kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录" }, S, 0)).toEqual({ text: S.noticeApproval("登录"), actions: ["open"] });
+  });
+});

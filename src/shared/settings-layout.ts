@@ -89,6 +89,8 @@ export const SETTING_PLACEMENT: Record<EditableSettingKey, Placement> = {
   bgKinds: adv("cost"),
   // 高级 › 预审和就绪
   preReviewEnabled: adv("review"),
+  // UI 重做第 1 层：首页「请你 review」只看登记过的仓库还是全部
+  reviewRequestScope: adv("review"),
   // 高级 › 自动接活
   intakeSource: adv("intake"),
   intakeTrackerQuery: adv("intake"),

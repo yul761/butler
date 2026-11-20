@@ -484,6 +484,11 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!/^\d{1,6}$/.test(t) || Number(t) < lo || Number(t) > hi) throw new SettingError(key === "baselineGuideChars" ? M().baselineGuideChars : M().legacyScanMaxFiles);
       return String(Number(t));
     }
+    case "reviewRequestScope": {
+      const t = value.trim();
+      if (t !== "all" && t !== "registered") throw new SettingError(M().reviewRequestScope);
+      return t;
+    }
     case "language": {
       const t = value.trim();
       if (!(LANG_SETTINGS as readonly string[]).includes(t)) throw new SettingError(M().language);
