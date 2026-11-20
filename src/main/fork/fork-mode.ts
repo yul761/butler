@@ -33,15 +33,15 @@ export function fullBlock(i: { transcriptExists: boolean; devIdle: boolean }): "
   return null;
 }
 
-/** 按 CLI 给的金额，否则按价格表估；都没有 → { usd: null, partial: true }。金额是不是这一轮的由 turnCost 判断。 */
+/** 按 CLI 给的金额，否则按价格表估（approx）；都没有 → { usd: null, partial: true }。金额是不是这一轮的由 turnCost 判断。 */
 export function costOf(
   r: { costUsd: number | null; usage: UsageCounts | null; model: string | null },
   registry: readonly RegistryModel[],
-): { usd: number | null; partial: boolean } {
-  if (r.costUsd !== null) return { usd: r.costUsd, partial: false };
-  if (!r.usage) return { usd: null, partial: true };
+): { usd: number | null; partial: boolean; approx: boolean } {
+  if (r.costUsd !== null) return { usd: r.costUsd, partial: false, approx: false };
+  if (!r.usage) return { usd: null, partial: true, approx: false };
   const est = usdOf({ ...r.usage, sessionId: null, at: 0, model: r.model, task: null, source: "headless", costUsd: null }, registry);
-  return est.partial ? { usd: null, partial: true } : { usd: est.usd, partial: false };
+  return est.partial ? { usd: null, partial: true, approx: false } : { usd: est.usd, partial: false, approx: true };
 }
 
 /** 一轮怎么起的：fresh 没带 --resume（全新 session）；forked 带 --fork-session（从别的 session 分出来）；resumed 续分叉自己的 session。 */
@@ -54,8 +54,11 @@ export function runStart(args: readonly string[]): RunStart {
 
 /** turnCost 要的那部分结果。 */
 type TurnRun = { costUsd: number | null; usage: UsageCounts | null; model: string | null; usageRaw?: unknown; modelUsage?: unknown };
-/** 一轮的花费（见 turnCost）。 */
-export type TurnCost = { usd: number | null; partial: boolean; cli: number | null; seenTotal: number | null };
+/**
+ * 一轮的花费（见 turnCost）。partial：有一部分没算进去（只会偏低）；approx：是约数，可能偏高也可能偏低——
+ * 按份额从累计里拆的（run-cost 的价格比只是近似）和按价格表估的都是。只有 fresh 的 total 和续 session 的差值是准数。
+ */
+export type TurnCost = { usd: number | null; partial: boolean; approx: boolean; cli: number | null; seenTotal: number | null };
 
 /** total 比上次见到的小多少算浮点误差。 */
 const TOTAL_EPS = 1e-9;
@@ -96,17 +99,17 @@ function turnCostOf(
     const est = estimate();
     return { ...est, cli: null, seenTotal: start === "resumed" && est.usd === null ? seenTotal : null };
   }
-  if (start === "fresh") return { usd: total, partial: false, cli: total, seenTotal: total };
+  if (start === "fresh") return { usd: total, partial: false, approx: false, cli: total, seenTotal: total };
   const share = runCostFromCumulative(total, r.usageRaw, r.modelUsage, r.model);
   if (start === "resumed" && seenTotal !== null) {
     const lost = total < seenTotal - TOTAL_EPS || cumulativeIsThisRun(r.usageRaw, r.modelUsage);
     if (!lost) {
       const diff = Math.max(0, total - seenTotal);
-      return { usd: diff, partial: false, cli: diff, seenTotal: total };
+      return { usd: diff, partial: false, approx: false, cli: diff, seenTotal: total };
     }
-    if (share !== null) return { usd: share.usd, partial: true, cli: share.usd, seenTotal: total };
+    if (share !== null) return { usd: share.usd, partial: true, approx: true, cli: share.usd, seenTotal: total };
     return { ...estimate(), partial: true, cli: null, seenTotal: total };
   }
-  if (share !== null) return { usd: share.usd, partial: share.partial, cli: share.usd, seenTotal: total };
+  if (share !== null) return { usd: share.usd, partial: share.partial, approx: true, cli: share.usd, seenTotal: total };
   return { ...estimate(), cli: null, seenTotal: total };
 }

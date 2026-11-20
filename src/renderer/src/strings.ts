@@ -2488,7 +2488,7 @@ const ZH = {
     refreshSep: (time: string) => `${time} 换新了上下文 · handoff 已保存 · 对话已另存`,
     forkHead: "讨论 · 从开发 session 分出来，只读，不影响它",
     modeFull: "完整上下文", modeLight: "精简上下文",
-    costPending: "在算…", costUnknown: "费用未知", costAtLeast: (usd: string) => `至少 ${usd}`, costUnder: "<$0.01",
+    costPending: "在算…", costUnknown: "费用未知", costAtLeast: (usd: string) => `至少 ${usd}`, costApprox: (usd: string, partial: boolean) => `约 ${usd}${partial ? "（不全）" : ""}`, costUnder: "<$0.01",
     actSend: "按这个改 → 发给 session", actRemember: "记进记忆", actFollowUp: "接着问", actReaskFull: "用完整上下文重问", actRetry: "再问一次",
     sending: "正在发…", sentAt: (time: string) => `已发给 session · ${time}`,
     remembered: "已记下", memoryFull: "记忆满了，先清掉几条", memoryOff: "记忆没开", memoryFailed: "没记上，稍后再试", memoryBusy: "上一条还在记，等一下",

@@ -77,9 +77,11 @@ export function turnBlocks(items: TimelineItem[]): TurnBlock[] {
 
 const usd = (v: number) => `$${v.toFixed(2)}`;
 
-export function costText(f: Pick<ForkView, "costUsd" | "costPartial" | "status">, t: UiStrings): string {
+/** 约数（approx）可能偏高也可能偏低，所以不说「至少」；约数又不全时两样都标上。 */
+export function costText(f: Pick<ForkView, "costUsd" | "costPartial" | "costApprox" | "status">, t: UiStrings): string {
   const v = f.costUsd;
   if (v === null || !Number.isFinite(v) || v < 0) return f.status === "running" ? t.conv.costPending : t.conv.costUnknown;
+  if (f.costApprox) return t.conv.costApprox(v < 0.01 ? t.conv.costUnder : usd(v), f.costPartial);
   if (f.costPartial) return t.conv.costAtLeast(usd(v));
   return v < 0.01 ? t.conv.costUnder : usd(v);
 }

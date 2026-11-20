@@ -19,7 +19,7 @@ const msg = (id: number, over: Partial<ConvMessage> = {}): ConvMessage => ({
   id, rootSessionId: "r", sessionId: "s1", role: "assistant", text: `m${id}`, at: AT + id, forkId: null, qa: true, turnId: id, ...over,
 });
 const fork = (over: Partial<ForkView> = {}): ForkView => ({
-  id: 7, rootSessionId: "r", mode: "light", status: "idle", costUsd: null, costPartial: false, startedAt: AT, lastAt: AT,
+  id: 7, rootSessionId: "r", mode: "light", status: "idle", costUsd: null, costPartial: false, costApprox: false, startedAt: AT, lastAt: AT,
   summarySentAt: null, conclusion: null, reaskOf: null, error: null,
   messages: [msg(20, { role: "user", text: "为什么？", forkId: 7, turnId: 0 }), msg(21, { text: "因为如此", forkId: 7, turnId: 0 })], ...over,
 });

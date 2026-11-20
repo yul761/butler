@@ -18,6 +18,8 @@ export interface ForkView {
   status: ForkStatus;
   costUsd: number | null;
   costPartial: boolean;
+  /** 费用是约数（可能偏高也可能偏低），显示成「约 $X」。 */
+  costApprox: boolean;
   startedAt: number;
   lastAt: number;
   summarySentAt: number | null;

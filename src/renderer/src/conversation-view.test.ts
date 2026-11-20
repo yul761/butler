@@ -14,7 +14,7 @@ const msg = (id: number, at: number, over: Partial<ConvMessage> = {}): ConvMessa
   id, rootSessionId: "r", sessionId: "s1", role: "assistant", text: `m${id}`, at, forkId: null, qa: true, turnId: id, ...over,
 });
 const fork = (id: number, startedAt: number, over: Partial<ForkView> = {}): ForkView => ({
-  id, rootSessionId: "r", mode: "light", status: "idle", costUsd: null, costPartial: false, startedAt, lastAt: startedAt,
+  id, rootSessionId: "r", mode: "light", status: "idle", costUsd: null, costPartial: false, costApprox: false, startedAt, lastAt: startedAt,
   summarySentAt: null, conclusion: null, reaskOf: null, error: null, messages: [], ...over,
 });
 const report = (id: number, createdAt: number, reportKind: InboxItemView["reportKind"] = "done"): InboxItemView => ({
@@ -97,7 +97,7 @@ describe("buildTimeline", () => {
 });
 
 describe("costText", () => {
-  const c = (costUsd: number | null, costPartial: boolean, status: ForkView["status"] = "idle") => costText({ costUsd, costPartial, status }, T);
+  const c = (costUsd: number | null, costPartial: boolean, status: ForkView["status"] = "idle", costApprox = false) => costText({ costUsd, costPartial, costApprox, status }, T);
   it("covers the brief's examples", () => {
     expect(c(null, false, "running")).toBe(T.conv.costPending);
     expect(c(null, true, "idle")).toBe(T.conv.costUnknown);
@@ -106,10 +106,19 @@ describe("costText", () => {
     expect(c(0.004, true)).toBe("至少 $0.00");
     expect(c(1.2, false)).toBe("$1.20");
   });
+  // 按份额拆的、按价格表估的：可能偏高也可能偏低，所以是「约」，不是「至少」。
+  it("an approximate cost reads as an estimate, never as exact or as a lower bound", () => {
+    expect(c(0.0312, false, "idle", true)).toBe("约 $0.03");
+    expect(c(0.004, false, "idle", true)).toBe("约 <$0.01");
+    expect(c(0.0312, true, "idle", true)).toBe("约 $0.03（不全）");
+    const en = (p: boolean) => costText({ costUsd: 0.0312, costPartial: p, costApprox: true, status: "idle" }, STRINGS.en);
+    expect(en(false)).toBe("≈ $0.03");
+    expect(en(true)).toBe("≈ $0.03 (incomplete)");
+  });
   it("never gives NaN or empty", () => {
     for (const [u, p, s] of [[null, false, "idle"], [null, true, "running"], [NaN, false, "idle"], [Infinity, true, "failed"], [0, false, "idle"], [-1, false, "idle"]] as const) {
       for (const t of [STRINGS.zh, STRINGS.en]) {
-        const r = costText({ costUsd: u, costPartial: p, status: s }, t);
+        const r = costText({ costUsd: u, costPartial: p, costApprox: p, status: s }, t);
         expect(r).not.toBe("");
         expect(r).not.toContain("NaN");
       }

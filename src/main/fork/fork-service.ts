@@ -122,8 +122,8 @@ function forkedFrom(args: readonly string[]): string | null {
 
 /** 没有结果的一轮：起不来（spawn_failed）、被限额挡在门外（rate_limited）、模型不可用（model_unavailable）没花 token；别的（超时、中途退出）可能花了，记成一部分不知道。 */
 const NO_SPEND: ReadonlySet<string> = new Set(["spawn_failed", "rate_limited", "model_unavailable"]);
-function noResultCost(out: HeadlessOutcome): { usd: null; partial: boolean } {
-  return { usd: null, partial: out.ok ? false : !NO_SPEND.has(out.reason) };
+function noResultCost(out: HeadlessOutcome): { usd: null; partial: boolean; approx: false } {
+  return { usd: null, partial: out.ok ? false : !NO_SPEND.has(out.reason), approx: false };
 }
 
 /** 各种语言的「要结论」那句：重问时不算用户的问题。 */
@@ -413,7 +413,7 @@ export class ForkService {
     // 失败的那一轮也照记已经算出的费用（记答案出错时也不丢）；什么都没算出来就当一部分不知道。
     // CLI 的 total_cost_usd 是累计的：按这一轮怎么起的、上次见到的累计算出这一轮自己的（turnCost）。
     // 还没算出来就出错：费用不全，见过的累计不动（seenTotal 为 null 会把它忘掉）。
-    const unknown: TurnCost = { usd: null, partial: true, cli: null, seenTotal: null };
+    const unknown: TurnCost = { usd: null, partial: true, approx: false, cli: null, seenTotal: null };
     let cost = unknown;
     try {
       const at = this.d.now();
@@ -446,13 +446,13 @@ export class ForkService {
       }
       const error = !out.ok ? failure(out.reason, out.limit?.resetsAt ?? null) : unforked ? failure("not_forked") : text ? null : failure("no_answer");
       if (!out.ok) this.d.log(`fork ${row.id}: ${out.reason}: ${out.message.slice(0, 500)}`);
-      this.d.repo.finish(row.id, { at, ...(out.ok && sid && !unforked ? { forkSessionId: sid } : {}), addCost: cost.usd, partial: cost.partial, seenTotal: cost.seenTotal, error });
+      this.d.repo.finish(row.id, { at, ...(out.ok && sid && !unforked ? { forkSessionId: sid } : {}), addCost: cost.usd, partial: cost.partial, approx: cost.approx, seenTotal: cost.seenTotal, error });
       this.hook("changed", () => this.d.changed(row.rootSessionId));
       return text ? { ok: true, text } : { ok: false };
     } catch (e) {
       this.d.log(`fork ${row.id}: recording the answer failed`, e);
       try {
-        this.d.repo.finish(row.id, { at: this.d.now(), addCost: cost.usd, partial: cost.partial, ...(cost !== unknown && { seenTotal: cost.seenTotal }), error: failure("bad_output") });
+        this.d.repo.finish(row.id, { at: this.d.now(), addCost: cost.usd, partial: cost.partial, approx: cost.approx, ...(cost !== unknown && { seenTotal: cost.seenTotal }), error: failure("bad_output") });
         this.hook("changed", () => this.d.changed(row.rootSessionId));
       } catch (e2) {
         this.d.log(`fork ${row.id}: marking it failed failed too`, e2);
@@ -463,7 +463,7 @@ export class ForkService {
 
   private view(r: ForkRow): ForkView {
     return {
-      id: r.id, rootSessionId: r.rootSessionId, mode: r.mode, status: r.status, costUsd: r.costUsd, costPartial: r.costPartial, startedAt: r.startedAt, lastAt: r.lastAt,
+      id: r.id, rootSessionId: r.rootSessionId, mode: r.mode, status: r.status, costUsd: r.costUsd, costPartial: r.costPartial, costApprox: r.costApprox, startedAt: r.startedAt, lastAt: r.lastAt,
       summarySentAt: r.summarySentAt, conclusion: r.conclusion, reaskOf: r.reaskOf,
       error: r.status === "failed" && r.errorCode ? { code: r.errorCode, resetAt: r.errorResetAt } : null,
       messages: this.d.conv.byFork(r.id),

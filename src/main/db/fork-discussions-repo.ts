@@ -12,6 +12,8 @@ export interface ForkRow {
   costUsd: number | null;
   /** 有一轮算不出钱。 */
   costPartial: boolean;
+  /** 有一轮的钱是约数（按份额拆或按价格表估的）。 */
+  costApprox: boolean;
   /** CLI 上次报的 total_cost_usd（续 session 时是累计的，下一轮按它取差）；还没报过为 null。 */
   costSeenTotal: number | null;
   startedAt: number;
@@ -37,6 +39,7 @@ interface Row {
   mode: ForkMode;
   cost_usd: number | null;
   cost_partial: number;
+  cost_approx: number;
   cost_seen_total: number | null;
   started_at: number;
   last_at: number;
@@ -57,7 +60,7 @@ const num = (v: number | bigint | null): number | null => (v === null ? null : N
 
 const toFork = (r: Row): ForkRow => ({
   id: Number(r.id), rootSessionId: r.root_session_id, forkSessionId: r.fork_session_id, mode: r.mode, costUsd: num(r.cost_usd),
-  costPartial: Number(r.cost_partial) === 1, costSeenTotal: num(r.cost_seen_total), startedAt: Number(r.started_at), lastAt: Number(r.last_at), summarySentAt: num(r.summary_sent_at),
+  costPartial: Number(r.cost_partial) === 1, costApprox: Number(r.cost_approx) === 1, costSeenTotal: num(r.cost_seen_total), startedAt: Number(r.started_at), lastAt: Number(r.last_at), summarySentAt: num(r.summary_sent_at),
   ticketKey: r.ticket_key, featureId: num(r.feature_id), cwd: r.cwd, launchArgs: JSON.parse(r.launch_args) as string[], status: r.status,
   errorCode: r.error_code, errorResetAt: num(r.error_reset_at), conclusion: r.conclusion, conclusionAt: num(r.conclusion_at), reaskOf: num(r.reask_of),
 });
@@ -80,6 +83,8 @@ export interface ForkFinish {
   /** 这一轮的费用；算不出来传 null。 */
   addCost: number | null;
   partial: boolean;
+  /** 这一轮的钱是约数；不传当准数。一旦有一轮是约数，整个分叉的合计就一直是约数。 */
+  approx?: boolean;
   /** 这一轮之后 CLI 报的累计 total_cost_usd：不传就留着上一次的；null 是忘掉它（下一轮不能再拿它取差）。 */
   seenTotal?: number | null;
   error?: { code: ForkErrorCode; resetAt: number | null } | null;
@@ -127,12 +132,13 @@ export class ForkDiscussionsRepo {
            fork_session_id = COALESCE(?, fork_session_id),
            cost_usd = CASE WHEN ? IS NULL THEN cost_usd ELSE COALESCE(cost_usd, 0) + ? END,
            cost_partial = MAX(cost_partial, ?),
+           cost_approx = MAX(cost_approx, ?),
            cost_seen_total = CASE WHEN ? THEN ? ELSE cost_seen_total END,
            error_code = ?, error_reset_at = ?
          WHERE id = ?`,
       )
       .run(
-        o.error ? "failed" : "idle", o.at, o.forkSessionId ?? null, o.addCost, o.addCost, o.partial ? 1 : 0, o.seenTotal !== undefined ? 1 : 0, o.seenTotal ?? null,
+        o.error ? "failed" : "idle", o.at, o.forkSessionId ?? null, o.addCost, o.addCost, o.partial ? 1 : 0, o.approx ? 1 : 0, o.seenTotal !== undefined ? 1 : 0, o.seenTotal ?? null,
         o.error?.code ?? null, o.error?.resetAt ?? null, id,
       );
   }

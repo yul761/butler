@@ -108,8 +108,8 @@ test("a forked discussion answers, continues, sends its conclusion, is remembere
     expect(run1).toContain("--fork-session");
     expect(resumeOf(run1)).not.toBeNull();
     // 花费：CLI 的 total_cost_usd 和 modelUsage 是累计的。完整的（--fork-session）带着开发 session 以前的花费（假 claude 当它花过 1.00），
-    // 按这一轮 usage 占累计 modelUsage 的份额拆出来正好 0.02，是准数，绝不能显示成 $1.02。
-    await expect(box.locator(".conv-mode")).toContainText("$0.02");
+    // 按这一轮 usage 占累计 modelUsage 的份额拆出来正好 0.02，绝不能显示成 $1.02。份额只是约数（各模型的价格比不一样），所以显示「约 $0.02」。
+    await expect(box.locator(".conv-mode")).toContainText(S.conv.costApprox("$0.02", false));
     await expect(box.locator(".conv-mode")).not.toContainText(S.conv.costUnknown);
     await expect(box.locator(".conv-mode")).not.toContainText("$1.02");
     expect(run1).not.toContain("--no-session-persistence");
@@ -123,8 +123,8 @@ test("a forked discussion answers, continues, sends its conclusion, is remembere
     await box.locator(".fork-ask textarea").fill("还有呢？");
     await box.locator(".fork-ask").getByRole("button", { name: S.conv.send, exact: true }).click();
     await expect(box.locator(".msg-a")).toHaveText(["分叉回答：为什么？", "分叉回答：还有呢？"]);
-    // 接着问只加这一轮的 0.02（跟上次见到的累计取差），不是 CLI 报的累计。
-    await expect(box.locator(".conv-mode")).toContainText("$0.04");
+    // 接着问只加这一轮的 0.02（跟上次见到的累计取差，准数），不是 CLI 报的累计。合计里有第一轮的约数，所以仍是「约」，不是「至少」。
+    await expect(box.locator(".conv-mode")).toContainText(S.conv.costApprox("$0.04", false));
     await expect(box.locator(".conv-mode")).not.toContainText(S.conv.costAtLeast("$0.04"));
     await expect(boxes).toHaveCount(1);
     expect(forkRuns(s)).toHaveLength(2);

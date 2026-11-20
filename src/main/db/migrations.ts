@@ -1412,4 +1412,8 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE fork_discussions ADD COLUMN cost_seen_total REAL;
   `,
+  // UI 重做第 5 层：分叉的费用有一轮是约数（完整分叉第一轮按份额从累计里拆、或按价格表估），界面显示成「约 $X」。
+  `
+  ALTER TABLE fork_discussions ADD COLUMN cost_approx INTEGER NOT NULL DEFAULT 0;
+  `,
 ];

@@ -18,7 +18,7 @@ describe("fork_discussions 表", () => {
     expect(cols).toEqual([
       "id", "root_session_id", "fork_session_id", "mode", "cost_usd", "cost_partial", "started_at", "last_at", "summary_sent_at",
       "ticket_key", "feature_id", "cwd", "launch_args", "status", "error_code", "error_reset_at", "conclusion", "conclusion_at", "reask_of",
-      "cost_seen_total",
+      "cost_seen_total", "cost_approx",
     ]);
   });
 
@@ -89,6 +89,29 @@ describe("ForkDiscussionsRepo", () => {
     expect(row.costPartial).toBe(false);
     expect(row.status).toBe("idle");
     expect(row.lastAt).toBe(2);
+  });
+
+  it("finish marks the cost approximate once any turn is, and an exact turn after it doesn't clear that", () => {
+    const { repo } = setup();
+    const { id } = repo.create(base);
+    expect(repo.get(id)?.costApprox).toBe(false);
+    repo.finish(id, { at: 1, addCost: 0.02, partial: false });
+    expect(repo.get(id)?.costApprox).toBe(false);
+    repo.finish(id, { at: 2, addCost: 0.02, partial: false, approx: true });
+    expect(repo.get(id)?.costApprox).toBe(true);
+    repo.finish(id, { at: 3, addCost: 0.02, partial: false, approx: false });
+    expect(repo.get(id)).toMatchObject({ costApprox: true, costPartial: false });
+  });
+
+  it("adds cost_approx to an existing fork_discussions table, old rows not approximate", () => {
+    const n = MIGRATIONS.findIndex((m) => m.includes("ADD COLUMN cost_approx"));
+    expect(n).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes("ADD COLUMN cost_seen_total")));
+    const db = new DatabaseSync(":memory:");
+    for (let i = 0; i < n; i++) db.exec(MIGRATIONS[i]);
+    db.exec(`PRAGMA user_version = ${n}`);
+    db.prepare("INSERT INTO fork_discussions (root_session_id, mode, cost_usd, started_at, last_at, cwd, launch_args) VALUES ('r', 'light', 0.5, 1, 1, '/w', '[]')").run();
+    migrate(db);
+    expect(new ForkDiscussionsRepo(db).get(1)).toMatchObject({ costUsd: 0.5, costApprox: false });
   });
 
   it("finish keeps cost NULL while no turn is priced and flags partial", () => {

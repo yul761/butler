@@ -769,7 +769,7 @@ describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
     await s.svc.idle();
     expect(s.repo.get(forkId)!.mode).toBe("full");
     expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(est, 12);
-    expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costSeenTotal: 5 });
+    expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costApprox: true, costSeenTotal: 5 });
     // 估的那一轮用量行不带金额（由用量统计按价格表估），绝不写成 5.00。
     expect(s.deps.onUsage.mock.calls[0][0].costUsd).toBeNull();
     s.svc.ask("root-1", forkId, "q2");
@@ -784,7 +784,7 @@ describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
   const runW = 10 + 0.1 * 1000 + 2 * 20 + 5 * 30;
   const cumulative = (times: number) => ({ "claude-opus-5-5": { inputTokens: 10 * times, outputTokens: 30 * times, cacheReadInputTokens: 1000 * times, cacheCreationEphemeral1hInputTokens: 20 * times } });
 
-  it("完整分叉第一轮带 modelUsage（累计 5.00，这一轮占 1/250）：按份额算准，不算不全，用量行同一个数", async () => {
+  it("完整分叉第一轮带 modelUsage（累计 5.00，这一轮占 1/250）：按份额拆，不算不全但只是约数（各模型读缓存的价格比不一样），用量行同一个数", async () => {
     const s = setup();
     s.queue.push(ok({ costUsd: 5, usageRaw, modelUsage: cumulative(250) }), ok({ costUsd: 5.02, usageRaw, modelUsage: cumulative(251) }));
     const { forkId } = s.svc.ask("root-1", null, "q1");
@@ -792,12 +792,13 @@ describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
     expect(s.repo.get(forkId)!.mode).toBe("full");
     expect(runW).toBe(300);
     expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(5 / 250, 12);
-    expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costSeenTotal: 5 });
+    expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costApprox: true, costSeenTotal: 5 });
     expect(s.deps.onUsage.mock.calls[0][0].costUsd).toBeCloseTo(5 / 250, 12);
     s.svc.ask("root-1", forkId, "q2");
     await s.svc.idle();
     expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.04, 10);
-    expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costSeenTotal: 5.02 });
+    // 后面的差值是准的，但合计里有第一轮的约数，整个分叉仍是约数。
+    expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costApprox: true, costSeenTotal: 5.02 });
     expect(s.deps.onUsage.mock.calls[1][0].costUsd).toBeCloseTo(0.02, 10);
   });
 

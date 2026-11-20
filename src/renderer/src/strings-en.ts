@@ -2468,7 +2468,7 @@ export const EN: UiStrings = {
     refreshSep: (time: string) => `${time} context refreshed · handoff saved · conversation kept`,
     forkHead: "Discussion · forked from the dev session, read-only, doesn't touch it",
     modeFull: "Full context", modeLight: "Light context",
-    costPending: "Calculating…", costUnknown: "Cost unknown", costAtLeast: (usd: string) => `at least ${usd}`, costUnder: "<$0.01",
+    costPending: "Calculating…", costUnknown: "Cost unknown", costAtLeast: (usd: string) => `at least ${usd}`, costApprox: (usd: string, partial: boolean) => `≈ ${usd}${partial ? " (incomplete)" : ""}`, costUnder: "<$0.01",
     actSend: "Do this → send to session", actRemember: "Save to memory", actFollowUp: "Ask more", actReaskFull: "Ask again with full context", actRetry: "Try again",
     sending: "Sending…", sentAt: (time: string) => `Sent to session · ${time}`,
     remembered: "Saved", memoryFull: "Memory is full; clear some first", memoryOff: "Memory is off", memoryFailed: "Couldn't save; try again later", memoryBusy: "The last one is still saving; wait a moment",
