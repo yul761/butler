@@ -3,6 +3,7 @@ import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../shared/turn"
 import { STRINGS } from "./strings";
 import {
   homeOpenedSignal,
+  ticketNowText,
   HOME_CARD_CAP, YOU_KIND_ORDER, barSegments, capCards, cardActions, cardKey, homeLede, homeTitle, isNoWork, locationOf, lookTarget, prUrl,
   runningRows, scopeLine, scopeRoute, scopeWho, topItem, turnTone, visibleScopes, youCards, type NameCtx,
 } from "./home-view";
@@ -280,5 +281,22 @@ describe("homeOpenedSignal (layer 1's turn:home-opened contract)", () => {
     expect(sig.observe("all")).toBe(false);
     expect(sig.observe("home")).toBe(true);
     expect(sig.observe("home")).toBe(false);
+  });
+});
+
+describe("ticketNowText (All work ticket rows)", () => {
+  const s1 = (o: Partial<ScopeTurnRow>) => scope({ kind: "ticket", id: "BTL-1", total: 1, merged: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 }, ...o });
+  it("a live item gives its sentence", () => {
+    const i = item(merge, { pr });
+    expect(ticketNowText([i], s1({ bar: { done: 0, agent: 0, you: 1, external: 0, idle: 0 } }), "BTL-1", S)).toBe(turnSentence(i.turn, i, S));
+  });
+  it("without a live item: merged or not started, said as a ticket, never the scope line", () => {
+    expect(ticketNowText([], s1({ merged: 1, bar: { done: 1, agent: 0, you: 0, external: 0, idle: 0 } }), "BTL-1", S)).toBe(S.turn.done);
+    expect(ticketNowText([], s1({ bar: { done: 0, agent: 0, you: 0, external: 0, idle: 1 } }), "BTL-1", S)).toBe(S.turn.idle);
+    expect(ticketNowText([], s1({ merged: 1, bar: { done: 1, agent: 0, you: 0, external: 0, idle: 0 } }), "BTL-1", S)).not.toBe(S.hm.scopeLine(1, 1, null));
+  });
+  it("nothing known gives a dash", () => {
+    expect(ticketNowText([], null, "BTL-1", S)).toBe("—");
+    expect(ticketNowText([], s1({ total: 0 }), "BTL-1", S)).toBe("—");
   });
 });

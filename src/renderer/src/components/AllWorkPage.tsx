@@ -4,8 +4,7 @@ import { useState } from "react";
 import type { ScopeTurnRow, TurnBoard } from "../../../shared/turn";
 import type { EpicView, FeatureView, TicketView } from "../../../shared/types";
 import type { Route } from "../App";
-import { barSegments, scopeLine, scopeRoute, scopeWho, topItem } from "../home-view";
-import { turnSentence } from "../turn-text";
+import { barSegments, scopeLine, scopeRoute, scopeWho, ticketNowText } from "../home-view";
 import { S } from "../strings";
 import { featuresOutsideEpics } from "./epic-row";
 import { GroupToggle } from "./HomeMore";
@@ -29,17 +28,18 @@ export interface AllWorkBodyProps {
   onOpenTicket: (key: string) => void;
 }
 
-interface Row { kind: ScopeTurnRow["kind"]; id: number | string; name: string; scope: ScopeTurnRow | null }
+/** title：ticket 的标题（name 是 key 加标题，用来排序和 title 提示）；epic、feature 为 null。 */
+interface Row { kind: ScopeTurnRow["kind"]; id: number | string; name: string; title: string | null; scope: ScopeTurnRow | null }
 
 const DASH = "—";
 
 function rowsOf(p: AllWorkBodyProps): Row[] {
   const scopes = new Map((p.board?.scopes ?? []).map((s) => [`${s.kind}:${s.id}`, s]));
-  const row = (kind: Row["kind"], id: number | string, name: string): Row => ({ kind, id, name, scope: scopes.get(`${kind}:${id}`) ?? null });
+  const row = (kind: Row["kind"], id: number | string, name: string, title: string | null = null): Row => ({ kind, id, name, title, scope: scopes.get(`${kind}:${id}`) ?? null });
   const rows = [
     ...p.epics.map((e) => row("epic", e.id, e.name)),
     ...featuresOutsideEpics(p.features, p.epics).map((f) => row("feature", f.id, f.name)),
-    ...p.tickets.map((t) => row("ticket", t.key, t.title ? `${t.key} ${t.title}` : t.key)),
+    ...p.tickets.map((t) => row("ticket", t.key, t.title ? `${t.key} ${t.title}` : t.key, t.title || null)),
   ];
   // 轮到你多的在前，再按名字。
   return rows.sort((a, b) => (b.scope?.youCount ?? 0) - (a.scope?.youCount ?? 0) || a.name.localeCompare(b.name));
@@ -48,12 +48,9 @@ function rowsOf(p: AllWorkBodyProps): Row[] {
 export function AllWorkBody(p: AllWorkBodyProps) {
   const [moreOpen, setMoreOpen] = useState(p.focusMore !== undefined);
   const rows = rowsOf(p);
-  /** 单独的 ticket 写它最急的那一项的一句话；epic、feature 写合了几个、最慢的是谁。 */
+  /** 单独的 ticket 写它自己的状态（ticketNowText）；epic、feature 写合了几个、最慢的是谁。 */
   const nowText = (r: Row, s: ScopeTurnRow | null): string => {
-    if (r.kind === "ticket" && p.board) {
-      const top = topItem(p.board.items, String(r.id));
-      if (top) return turnSentence(top.turn, top, S);
-    }
+    if (r.kind === "ticket") return ticketNowText(p.board?.items ?? [], s, String(r.id), S);
     return s ? scopeLine(s, S) : DASH;
   };
   const open = (r: Row) => (r.kind === "ticket" ? p.onOpenTicket(String(r.id)) : p.onGo(scopeRoute({ kind: r.kind, id: r.id } as ScopeTurnRow)));
@@ -83,7 +80,9 @@ export function AllWorkBody(p: AllWorkBodyProps) {
               const bar = s ? barSegments(s.bar, s.total) : [];
               return (
                 <tr key={`${r.kind}:${r.id}`} data-testid={`all-work-row-${r.kind}-${r.id}`}>
-                  <td className="name"><button className="row-name" title={r.name} onClick={() => open(r)}>{r.name}</button></td>
+                  <td className="name"><button className="row-name" title={r.name} aria-label={r.name} onClick={() => open(r)}>
+                    {r.kind === "ticket" ? <><span className="key">{r.id}</span>{r.title && <span className="title">{r.title}</span>}</> : <span className="title">{r.name}</span>}
+                  </button></td>
                   <td>{who ? <span className={`turn-tag turn-${who.tone ?? "idle"}`}>{who.text}</span> : DASH}</td>
                   <td>{nowText(r, s)}</td>
                   <td>

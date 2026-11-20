@@ -670,7 +670,10 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .all-work-table th:nth-child(1) { width: 34%; }
 .all-work-table th:nth-child(2) { width: 14%; }
 .all-work-table th:nth-child(4) { width: 18%; }
-.all-work-table .row-name { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: none; background: transparent; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+/* ticket 行：key 不缩，只截标题（和侧栏、卡片位置行一样）。 */
+.all-work-table .row-name .key { flex-shrink: 0; }
+.all-work-table .row-name .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.all-work-table .row-name { display: flex; gap: 0.4em; max-width: 100%; overflow: hidden; white-space: nowrap; border: none; background: transparent; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .all-work-table .row-name:hover { text-decoration: underline; }
 .all-work-more { margin-top: 20px; }
 

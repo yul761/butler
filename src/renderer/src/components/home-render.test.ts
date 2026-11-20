@@ -144,6 +144,15 @@ describe("AllWorkBody", () => {
     expect(html.indexOf("Epic 1")).toBeLessThan(html.indexOf("Epic 2"));
   });
 
+  it("a ticket row keeps its key whole and says the ticket's own state, not a scope count", () => {
+    const merged = scope("ticket", "BTL-9", { total: 1, merged: 1, bar: { done: 1, agent: 0, you: 0, external: 0, idle: 0 } });
+    const html = render({ board: board([merged]) });
+    expect(html).toContain('<span class="key">BTL-9</span><span class="title">BTL-9 title</span>');
+    expect(html).toContain('title="BTL-9 BTL-9 title"');
+    expect(html).toContain(`<td>${S.turn.done}</td>`);
+    expect(html).not.toContain(S.hm.scopeLine(1, 1, null));
+  });
+
   it("counts unclaimed sessions on the button", () => {
     expect(S.hm.all.unclaimedBtn(0)).not.toMatch(/\d/);
     expect(render({ unclaimedCount: 1 })).toContain(S.hm.all.unclaimedBtn(1));

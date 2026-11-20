@@ -182,6 +182,20 @@ export function topItem(items: TurnItem[], ticketKey: string): TurnItem | null {
   return mostUrgent(items.filter((i) => i.ticketKey === ticketKey));
 }
 
+/**
+ * 全部工作里一个单独 ticket 的「现在怎么样」：板上有它在动的项就写那一项的一句话；
+ * 没有（合了、还没开始的不在不带 filter 的板上）就按它自己的 scope 行说「合了」「还没开始」，什么都不知道写「—」。
+ * 不写 scope 级的「1 个里合了 1 个」。
+ */
+export function ticketNowText(items: TurnItem[], scope: ScopeTurnRow | null, ticketKey: string, S: UiStrings): string {
+  const top = topItem(items, ticketKey);
+  if (top) return turnSentence(top.turn, top, S);
+  if (scope === null || scope.total === 0) return "—";
+  if (scope.merged >= scope.total) return S.turn.done;
+  if (scope.bar.idle > 0) return S.turn.idle;
+  return "—";
+}
+
 export interface RunningRow { key: string; ticketKey: string | null; owner: "agent" | "external"; who: string; sentence: string; age: string }
 
 /** 「进行中」：agent 和外部在推进的项，等得久的在前。 */
