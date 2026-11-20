@@ -9,7 +9,7 @@ import { runEngine, type EngineLayer } from "./rebase-engine";
 // 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够
 vi.setConfig({ testTimeout: 30_000 });
 
-const g = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+const g = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 function commit(repo: string, file: string, text: string, msg: string): string {
   writeFileSync(join(repo, file), text);
