@@ -100,6 +100,12 @@ describe("butler-hook entry readonly mode", () => {
     expect(r.stdout).toBe("");
   });
 
+  it("fails closed on empty stdin", () => {
+    const { r } = run("");
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
   it("fails closed on bad JSON", () => {
     const { r } = run("{{");
     expect(r.status).toBe(0);

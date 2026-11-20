@@ -2,11 +2,23 @@ import { main, readStdin } from "./butler-hook";
 import { parseCheckArgs, realCheckDeps, runCheck, runPushCheck } from "./check";
 import { killLiveCommands } from "./check-run";
 import { realGateDeps, runGate } from "./gate";
+import { writeSync } from "node:fs";
 import { runReadonly } from "./readonly";
 
 // 设计文档 4.3：任何异常都以退出码 0 静默结束，绝不阻塞 Claude Code。
-process.on("uncaughtException", () => process.exit(0));
-process.on("unhandledRejection", () => process.exit(0));
+// 例外：readonly 模式出错必须拒绝（见 readonlyAnswer），所以这里同步写出 deny 再退出。
+const bail = () => {
+  if (process.argv[2] === "readonly") {
+    try {
+      writeSync(1, runReadonly(""));
+    } catch {
+      // stdout 已不可写：无能为力。
+    }
+  }
+  process.exit(0);
+};
+process.on("uncaughtException", bail);
+process.on("unhandledRejection", bail);
 // Claude Code 到点会杀掉 hook：先把还在跑的检查命令（各自的进程组）一起杀掉，别留下孤儿。
 for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
   process.on(sig, () => {

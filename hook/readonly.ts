@@ -3,15 +3,15 @@ export type ReadonlyDecision = { allow: true } | { allow: false; reason: string 
 /** 记忆类 MCP 工具（任何 server）只要名字以这些后缀结尾就是只读。 */
 export const READONLY_MCP_SUFFIXES: readonly string[] = ["__recall", "__facts", "__why"];
 /** butler-sessions 里只读的工具：所有 list_* 加 session_activity（精确匹配，不含 report / ask_user 等写操作）。 */
-export const READONLY_SESSIONS_TOOLS: readonly string[] = ["list_epics", "list_features", "list_tickets", "list_prs", "list_sessions", "list_inbox", "list_stacks", "session_activity"];
+export const READONLY_SESSIONS_TOOLS: readonly string[] = ["list_epics", "list_features", "list_tickets", "list_prs", "list_repos", "list_sessions", "list_inbox", "list_stacks", "session_activity"];
 
 const SESSIONS_PREFIX = "mcp__butler-sessions__";
-const PLAIN_TOOLS = new Set(["Read", "Grep", "Glob", "TodoWrite"]);
+const PLAIN_TOOLS = new Set(["Read", "Grep", "Glob", "TodoWrite", "ToolSearch"]);
 // 链接、重定向、命令替换、换行、--output（git diff/log 带它会写文件）一律不放。
 const BAD_SHELL = /[;&|<>`\n\r]|\$\(|--output/;
 const READ_GIT = /^git (status|diff|log|show)(\s|$)/;
 
-const DENY: ReadonlyDecision = { allow: false, reason: "This is a read-only discussion: it cannot modify files, run commands that change anything, or call tools that write." };
+const DENY: ReadonlyDecision = Object.freeze({ allow: false, reason: "This is a read-only forked discussion: only Read, Grep, Glob and git status/diff/log/show are allowed; nothing may be changed." });
 
 /** 分叉讨论的只读白名单；不认识的一律拒绝。 */
 export function readonlyDecision(input: unknown): ReadonlyDecision {

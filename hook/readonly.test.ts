@@ -10,9 +10,9 @@ const denied = (input: unknown) => {
 };
 
 describe("readonlyDecision", () => {
-  it.each(["Read", "Grep", "Glob", "TodoWrite"])("allows %s", (t) => allowed({ tool_name: t }));
+  it.each(["Read", "Grep", "Glob", "TodoWrite", "ToolSearch"])("allows %s", (t) => allowed({ tool_name: t }));
 
-  it.each(["git status", "git diff HEAD~1 -- src", "git log --oneline -5", "git show abc123:src/a.ts"])("allows Bash %s", (c) => allowed(bash(c)));
+  it.each(["git status", "git diff HEAD~1 -- src", "git log --oneline -5", "git show abc123:src/a.ts", "git status\t-s"])("allows Bash %s", (c) => allowed(bash(c)));
 
   it.each([
     "git diff --output=x.patch",
@@ -29,6 +29,7 @@ describe("readonlyDecision", () => {
     "git checkout .",
     "npm test",
     "ls",
+    " git status",
   ])("denies Bash %s", (c) => denied(bash(c)));
 
   it("denies Bash without a string command", () => {
@@ -42,7 +43,7 @@ describe("readonlyDecision", () => {
 
   it.each(["mcp__butler-ticket__remember", "mcp__butler-sessions__report", "mcp__butler-sessions__ask_user", "mcp__butler-sessions__submit_evidence", "mcp__butler-sessions__pre_review_result", "mcp__butler-sessions__progress_overview", "mcp__vercel__list_projects"])("denies %s", (t) => denied({ tool_name: t }));
 
-  it.each(["mcp__butler-sessions__list_tickets", "mcp__butler-sessions__session_activity"])("allows sessions read %s", (t) => allowed({ tool_name: t }));
+  it.each(["mcp__butler-sessions__list_tickets", "mcp__butler-sessions__list_repos", "mcp__butler-sessions__session_activity"])("allows sessions read %s", (t) => allowed({ tool_name: t }));
 
   it.each([null, "x", {}, { tool_name: 3 }])("denies malformed input %j", (i) => denied(i));
 });
