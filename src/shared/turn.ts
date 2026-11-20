@@ -179,7 +179,8 @@ function pushing(p: Pusher | null, deliveredAt: number | null): boolean {
 function yourSide(i: PrTurnInput, why: UnattendedWhy): Turn {
   const ci = why === "ci_failing" || why === "ci_undelivered";
   const deliveredAt = ci ? i.ciDeliveredAt : why === "changes_requested" ? i.commentsDeliveredAt : null;
-  if (i.pusher !== null && pushing(i.pusher, deliveredAt)) {
+  // 半小时没递进去：结论根本没到 agent 手里，它在忙的是别的事，不能说成「在修 CI」。
+  if (why !== "ci_undelivered" && i.pusher !== null && pushing(i.pusher, deliveredAt)) {
     const kind = ci ? "fixing_ci" : why === "changes_requested" ? "addressing_review" : why === "conflicts" || why === "behind" ? "rebasing" : "working";
     return { owner: "agent", kind, sessionId: i.pusher.sessionId };
   }

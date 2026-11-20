@@ -80,6 +80,22 @@ describe("TurnService.board", () => {
     expect(theirs.board(null).items[0].turn).toMatchObject({ owner: "you", kind: "unattended" });
   });
 
+  it("CI already delivered and the pusher stopped again: unattended, but nothing left to send", () => {
+    const s = new TurnService(failingPr({ prRow: () => row({ deliveredKey: "abc:failing", deliveredAt: 300, deliveredTo: "s1" }), lastReplyAt: () => 400 }));
+    expect(s.board(null).items[0].turn).toEqual({ owner: "you", kind: "unattended", why: "ci_failing", canSend: false, sessionId: "s1" });
+  });
+
+  it("a blocked report only makes its own session stuck on a multi-repo ticket", () => {
+    const s = new TurnService(fakeDeps({
+      tickets: () => [ticket("BTL-1", { sessions: [sv("s1"), sv("s2", { repoId: 2 })] })],
+      lastReport: () => ({ kind: "blocked", text: "等接口", at: 300, sessionId: "s2" }),
+      lastReplyAt: () => 250,
+    }));
+    const b = s.board({ ticketKey: "BTL-1" });
+    const stuck = b.items.filter((i) => i.turn.kind === "stuck");
+    expect(stuck.map((i) => i.turn)).toEqual([{ owner: "you", kind: "stuck", source: "blocked_report", detail: "等接口", sessionId: "s2" }]);
+  });
+
   it("a coordinator's ask_user is a loose you/answer with the inbox id", () => {
     const c = sv("c1", { ticketKey: null, featureId: 3, coordinator: true });
     const s = new TurnService(fakeDeps({
@@ -93,7 +109,7 @@ describe("TurnService.board", () => {
     expect(b.items).toContainEqual(expect.objectContaining({
       ticketKey: null, featureId: 3, epicId: 1, turn: { owner: "you", kind: "answer", question: "q7", options: ["a", "b"], askId: 7, sessionId: "c1" }, since: 57,
     }));
-    // 总控停着（agent_stopped）也是 you：总控没人推进要你说话
+    // 只有那条 ask：总控停着本身不算要你动手
     expect(b.counts.you).toBe(1);
   });
 
@@ -104,6 +120,13 @@ describe("TurnService.board", () => {
       activity: () => act("edit"),
     }));
     expect(working.board(null).items).toEqual([]);
+    // 停在提示符等输入的总控（Butler、feature、epic 的）不占一张「轮到你」
+    const idle = new TurnService(fakeDeps({
+      coordinators: () => [{ session: c, featureId: null, epicId: null, target: { page: "butler", sessionId: "c1" }, title: null }],
+      activity: () => act("idle"), lastReplyAt: () => 500,
+    }));
+    expect(idle.board(null).items).toEqual([]);
+    expect(idle.board(null).counts.you).toBe(0);
   });
 
   it("two asks on one ticket: the ticket item answers the first, the second is its own item", () => {

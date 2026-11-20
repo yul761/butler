@@ -235,6 +235,18 @@ describe("CommentLoop", () => {
     expect(await s.loop.sendAll(s.row.id)).toBe(0);
   });
 
+  it("with comments.enabled turned off later, nothing is sendable and sendAll queues nothing (UI redesign layer 1)", async () => {
+    const s = setup();
+    s.setThreads([thread({ id: "T1", dbId: 101, author: "alice", type: "User", body: "Split this." })]);
+    await s.observe();
+    expect(s.loop.sendable(s.row.id)).toBe(true);
+    s.loop["d"].policy = () => ({ ...LOOP_POLICY_DEFAULTS, "comments.enabled": false });
+    expect(s.loop.sendable(s.row.id)).toBe(false);
+    expect(await s.loop.sendAll(s.row.id)).toBe(0);
+    expect(s.items.byPr(s.row.id).map((i) => i.state)).toEqual(["review"]);
+    expect(s.deliver).not.toHaveBeenCalled();
+  });
+
   it("deliveredAt is the latest delivery to that session's chain (UI redesign layer 1)", async () => {
     const s = setup();
     await s.observe();

@@ -40,7 +40,7 @@ export interface TurnServiceDeps {
   needsYou(): { reasons: Map<string, string>; categories: Map<string, InterruptCategory> };
   /** inboxRepo.pendingDecisions() */
   decisions(): InboxItem[];
-  lastReport(ticketKey: string): { kind: ReportKind; text: string; at: number } | null;
+  lastReport(ticketKey: string): { kind: ReportKind; text: string; at: number; sessionId: string | null } | null;
   /** refresher.stepOf(id) !== null */
   refreshing(id: string): boolean;
   /** gateRepo.waitingSessionIds() 换成 head 后 */
@@ -211,7 +211,8 @@ export class TurnService {
       ciDeliveredAt,
       commentsDeliveredAt: pusher ? this.d.comments.deliveredAt(w.prId, pusher.sessionId) : null,
       ciUndelivered: s.undeliveredPrs.has(w.prId),
-      canResendCi: w.ci === "failing" && pusher !== null,
+      // 这次结论已经递过（标记相同）时 ciResend 只会回 delivered：没有能再发的东西。
+      canResendCi: w.ci === "failing" && pusher !== null && row.deliveredKey !== deliveryKey(row),
       canSendComments: pusher !== null && this.d.comments.sendable(w.prId),
     });
     if (turn === null) return null;
@@ -298,9 +299,12 @@ export class TurnService {
         if (p) bt.prs.push(p);
       }
       const report = heads.length > 0 ? this.d.lastReport(t.key) : null;
+      // 最近一条 report 只算在交它的那条链上：多仓库 ticket 里别的 session 不跟着「报告做不下去」。
+      const reportHead = report && report.sessionId !== null ? this.headId(report.sessionId) : null;
       for (const s of heads) {
         const [first, ...rest] = asks.get(s.id) ?? [];
-        bt.others.push(this.sessionInput(s, { page: "ticket", key: t.key, sessionId: s.id }, t.title, first ?? null, report, snap));
+        const own = report !== null && (reportHead === null ? heads.length === 1 : reportHead === s.id) ? report : null;
+        bt.others.push(this.sessionInput(s, { page: "ticket", key: t.key, sessionId: s.id }, t.title, first ?? null, own, snap));
         for (const a of rest) bt.moreAsks.push(askTurn(a, s.id));
       }
       // R4：ticket 级的
@@ -317,7 +321,8 @@ export class TurnService {
     for (const c of coords) {
       const [first, ...rest] = asks.get(c.session.id) ?? [];
       const tt = this.sessionInput(c.session, c.target, c.title, first ?? null, null, snap);
-      if (tt.turn.owner === "you") loose.push({ ...tt, featureId: c.featureId, epicId: c.epicId });
+      // 总控停在提示符等输入是常态，不算要你动手：只有问你、卡住和 Butler 提醒进 loose。
+      if (tt.turn.owner === "you" && tt.turn.kind !== "unattended") loose.push({ ...tt, featureId: c.featureId, epicId: c.epicId });
       for (const a of rest) loose.push({ ...askTurn(a, c.session.id), featureId: c.featureId, epicId: c.epicId });
     }
 

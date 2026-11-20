@@ -94,6 +94,11 @@ describe("prTurn", () => {
   it("undelivered for 30 min → ci_undelivered", () => {
     expect(prTurn(pr({ ci: "failing", ciUndelivered: true }))).toMatchObject({ kind: "unattended", why: "ci_undelivered", canSend: true });
   });
+  it("undelivered for 30 min stays yours even while the pusher is busy with something else", () => {
+    expect(prTurn(pr({ ci: "failing", ciUndelivered: true, pusher: { sessionId: "s", working: true, stoppedAt: null } }))).toEqual({
+      owner: "you", kind: "unattended", why: "ci_undelivered", canSend: true, sessionId: "s",
+    });
+  });
   it("changes requested: comments decide delivery and sendability", () => {
     const human = { login: "amy", state: "changes_requested" as const, at: 1, bot: false };
     expect(prTurn(pr({ reviewers: [human], canSendComments: false }))).toMatchObject({ why: "changes_requested", canSend: false });

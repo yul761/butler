@@ -437,13 +437,19 @@ export class CommentLoop {
   /** 有没有可以一键送出的评论：state 是 review 或 pending。 */
   sendable(prId: number): boolean {
     const id = this.primaryId(prId);
-    return id !== null && this.d.items.byPr(id).some((i) => SENDABLE.includes(i.state));
+    return id !== null && this.enabled(id) && this.d.items.byPr(id).some((i) => SENDABLE.includes(i.state));
+  }
+
+  /** 这个 PR 的仓库开着 comments.enabled：关着时 deliverPr 什么都不递，一键送出也就不能算数。 */
+  private enabled(prId: number): boolean {
+    const row = this.d.prs.get(prId);
+    return !!row && this.d.policy(row.slug)["comments.enabled"];
   }
 
   /** 首页「发给 agent」：review / pending 的条目都按 send 的规则改成 queued，再 flush 一次；返回排上的条数。 */
   async sendAll(prId: number): Promise<number> {
     const id = this.primaryId(prId);
-    if (id === null) return 0;
+    if (id === null || !this.enabled(id)) return 0;
     const now = this.d.now();
     let n = 0;
     for (const i of this.d.items.byPr(id)) if (this.queueForSend(i, SENDABLE, now)) n++;
