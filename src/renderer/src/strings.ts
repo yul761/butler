@@ -15,6 +15,7 @@ import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason,
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { Lang } from "../../shared/i18n";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
+import type { FeatureId } from "../../shared/feature-rows";
 import type { CheckAbsenceReason, CheckMode, CheckOutcome, CheckSeverity, CheckStage, CheckType, CheckVerdict, ChecksBulkOp } from "../../shared/checks";
 import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
@@ -54,6 +55,32 @@ const ZH = {
       privacy: "隐私与个人 API",
       external: "对外动作",
     } as Record<AdvancedGroupId, string>,
+    feat: {
+      ci_triage: { title: "CI 失败分诊", desc: "CI 挂了先判断是环境抖动还是代码问题，代码问题把日志送回 session。重跑 CI 要另开「对外动作 › 重跑 CI」。" },
+      review_comments: { title: "PR 评论转给 session", desc: "有人在 PR 上提意见，分类后转给 session 去改。不对外发任何东西：回复、标 resolved 要另开对外动作。" },
+      stacks: { title: "栈自动 rebase", desc: "底下的 PR 合了，自动把上面的分支 rebase 好。" },
+      prereview: { title: "开 PR 前预审", desc: "开 PR 前让另一个 agent 先审一遍，算出风险和还差什么。" },
+      intake: { title: "自动接活", desc: "从 tracker 或文件里领活、建 ticket。还要在高级里选来源。" },
+      lessons_auto: { title: "规矩自动整理", desc: "复盘出来的规矩自动判断收不收、每天归成原则、session 说明里只留核心规矩。" },
+      fewer_interrupts: { title: "少打断你", desc: "让 session 少停下来问你：选择题按推荐项选，缺信息先自己查。" },
+      hibernate: { title: "休眠闲着的 session", desc: "没事做的 session 先关掉省内存，需要时原样接上。" },
+      routing_switch: { title: "撞上限换模型", desc: "撞到用量上限时换一个档位的模型接着干。" },
+      mem_relief: { title: "内存紧张时让路", desc: "内存紧张时让看不见的 session 让路：降优先级、休眠最闲的。" },
+      shared_mcp: { title: "共用 MCP 进程", desc: "所有 session 共用一组记忆和 Butler MCP 进程，省内存。" },
+    } as Record<FeatureId, { title: string; desc: string }>,
+    featuresIntro: "3.0 的新功能默认都关着。这里每行是一个功能的总开关，和「高级」里对应的设置是同一个；这里只改全局，仓库、产品自己的设置不动。",
+    new3: "3.0",
+    partial: (on: number, total: number) => `部分开着 ${on}/${total}`,
+    allOn: "全开",
+    allOff: "全关",
+    otherRepos: (n: number) => `${n} 个仓库另有设置`,
+    otherProducts: (n: number) => `${n} 个产品另有设置`,
+    offButElsewhere: (n: number) => `已关，但 ${n} 个仓库或产品自己开着`,
+    onButElsewhere: (n: number) => `已开，但 ${n} 个仓库或产品自己关着`,
+    openAdvanced: "在高级里看",
+    needsIntakeSource: "还没选来源，开着也不会领活：到高级 › 自动接活里选。",
+    featuresFailed: "读不到当前设置，先不显示开关。",
+    retry: "重试",
     advancedIntro: "原来各组的细项，按功能分组，点开再看。「功能」页里的开关在这里也有，是同一个设置。",
     health: {
       gh: "gh（GitHub 命令行）",

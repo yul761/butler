@@ -6,6 +6,7 @@ import { savedTab, saveTab } from "../local-prefs";
 import { S } from "../strings";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { BasicSettings } from "./BasicSettings";
+import { FeatureSettings } from "./FeatureSettings";
 import { HealthSettings } from "./HealthSettings";
 
 /** 没有 section 时回到上次看的 tab；记录不对就是「基本」。 */
@@ -61,6 +62,13 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
     setOpenGroup(null);
     saveTab("settings", t);
   }
+  /** 功能页「N 个仓库另有设置」：到高级，展开那一组。 */
+  function openAdvanced(group: AdvancedGroupId) {
+    setTab("advanced");
+    setOpenGroup(group);
+    saveTab("settings", "advanced");
+  }
+
   return (
     <div className="page">
       <div className="settings-tabs" role="tablist">
@@ -72,7 +80,7 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
       </div>
       {tab === "basic" &&
         (report ? <BasicSettings report={report} onHealth={applyHealth} onRerunWizard={onRerunWizard} /> : <p className="empty">{error ?? S.loading}</p>)}
-      {tab === "features" && <p className="empty">{S.loading}</p>}
+      {tab === "features" && <FeatureSettings onOpenAdvanced={openAdvanced} />}
       {tab === "advanced" && <AdvancedSettings openGroup={openGroup} />}
       {tab === "health" && (
         <HealthSettings

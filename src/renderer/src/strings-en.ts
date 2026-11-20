@@ -19,6 +19,7 @@ import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOut
 import type { ButlerMessageView, EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
+import type { FeatureId } from "../../shared/feature-rows";
 
 /** "1 ticket", "2 tickets". */
 const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
@@ -49,6 +50,32 @@ export const EN: UiStrings = {
       privacy: "Privacy & personal API",
       external: "Outward actions",
     } as Record<AdvancedGroupId, string>,
+    feat: {
+      ci_triage: { title: "CI failure triage", desc: "When CI fails, decide whether it is a flaky environment or a code problem, and send code problems back to the session with the log. Rerunning CI needs its own outward action (Rerun CI)." },
+      review_comments: { title: "PR comments to the session", desc: "When someone comments on a PR, sort the comments and pass them to the session to fix. It does not post anything outside: replying and resolving need their own outward actions." },
+      stacks: { title: "Stack auto-rebase", desc: "When a lower PR merges, rebase the branches above it." },
+      prereview: { title: "Pre-review before a PR", desc: "Before a PR opens, another agent reviews it and works out the risk and what is still missing." },
+      intake: { title: "Automatic intake", desc: "Pick up work from a tracker or a file and create tickets. You also need to choose a source under Advanced." },
+      lessons_auto: { title: "Rules tidy themselves", desc: "Rules from retrospectives are admitted automatically, grouped into principles every day, and only the core rules go into session instructions." },
+      fewer_interrupts: { title: "Fewer interruptions", desc: "Sessions stop to ask you less: they take the recommended option and look up missing facts themselves first." },
+      hibernate: { title: "Hibernate idle sessions", desc: "Sessions with nothing to do are closed to save memory and resumed as they were when needed." },
+      routing_switch: { title: "Switch model at the limit", desc: "When a usage limit is hit, carry on with a model from another tier." },
+      mem_relief: { title: "Make room when memory is tight", desc: "When memory is tight, sessions you cannot see make room: lower priority, and the idlest one hibernates." },
+      shared_mcp: { title: "Shared MCP processes", desc: "All sessions share one set of memory and Butler MCP processes to save memory." },
+    } as Record<FeatureId, { title: string; desc: string }>,
+    featuresIntro: "New 3.0 features start off. Each row is the main switch for one feature and is the same setting as the one under Advanced. This changes only the global value: settings of a repo or a product stay as they are.",
+    new3: "3.0",
+    partial: (on: number, total: number) => `Partly on ${on}/${total}`,
+    allOn: "All on",
+    allOff: "All off",
+    otherRepos: (n: number) => (n === 1 ? "1 repo has its own setting" : `${n} repos have their own setting`),
+    otherProducts: (n: number) => (n === 1 ? "1 product has its own setting" : `${n} products have their own setting`),
+    offButElsewhere: (n: number) => (n === 1 ? "Off, but 1 repo or product turns it on" : `Off, but ${n} repos or products turn it on`),
+    onButElsewhere: (n: number) => (n === 1 ? "On, but 1 repo or product turns it off" : `On, but ${n} repos or products turn it off`),
+    openAdvanced: "See in Advanced",
+    needsIntakeSource: "No source chosen yet, so nothing is picked up: choose one under Advanced > Automatic intake.",
+    featuresFailed: "Could not read the current settings, so no switches are shown.",
+    retry: "Retry",
     advancedIntro: "The detailed settings, grouped by feature. Open a group to see it. Switches on the Features tab also appear here: they are the same settings.",
     health: {
       gh: "gh (GitHub CLI)",

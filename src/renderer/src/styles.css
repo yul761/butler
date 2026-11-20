@@ -512,6 +512,18 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .adv-group-head:hover { background: var(--panel); }
 .adv-group-caret { color: var(--muted); width: 1em; }
 .adv-group-body { padding: 0 4px 16px 24px; }
+/* 设置 › 功能：每个 3.0 功能一行。 */
+.feature-list { display: flex; flex-direction: column; }
+.feature-row { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.feature-row > p { margin: 4px 0 0 24px; }
+.feature-row > button.link { margin: 4px 0 0 24px; color: var(--accent); font-size: 12px; }
+.feature-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.feature-title { font-weight: 600; }
+.feature-head > span.feature-title { padding-left: 24px; }
+.feature-new { padding: 0 6px; border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 11px; }
+.feature-partial { color: var(--muted); font-size: 12px; }
+.feature-actions { display: inline-flex; gap: 6px; margin-left: auto; }
+.feature-elsewhere { color: var(--danger); font-size: 12px; }
 .routing-settings section { margin: 14px 0; }
 .routing-settings th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 6px; }
 .routing-settings .ticket-table tr { cursor: default; }
