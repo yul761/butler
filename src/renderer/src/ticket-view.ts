@@ -80,11 +80,6 @@ export function prUrlOf(pr: { repo: string; number: number; url: string } | null
   return same.find((r) => r.prUrl === pr.url || urlSlug(r.prUrl) === repo || r.slug?.toLowerCase() === repo)?.prUrl ?? null;
 }
 
-/** 主 session：sessions 已按最近活动排序；先找不是修复、也不是总控开的最近一个，没有就取第一个。 */
-export function primarySession(sessions: SessionView[]): SessionView | null {
-  return sessions.find((s) => s.fixesSession === null && s.spawnedBy === null) ?? sessions[0] ?? null;
-}
-
 export function conversationSessions(sessions: SessionView[], S: UiStrings): { id: string; label: string }[] {
   return sessions.map((s) => {
     const label = sessionLabel(s, S.newSession);

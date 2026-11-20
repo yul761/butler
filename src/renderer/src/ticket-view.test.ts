@@ -3,7 +3,7 @@ import type { PrStageCell, PrStagesView } from "../../shared/pr-stages";
 import type { Turn } from "../../shared/turn";
 import type { SessionView } from "../../shared/types";
 import { STRINGS } from "./strings";
-import { clipSaid, contextLine, conversationSessions, mainActions, prStageLine, primarySession, prUrlOf, terminalLanding, ticketLanding } from "./ticket-view";
+import { clipSaid, contextLine, conversationSessions, mainActions, prStageLine, prUrlOf, terminalLanding, ticketLanding } from "./ticket-view";
 
 const S = STRINGS.zh;
 const ids = (t: Turn, o = { hasPr: true, canFix: false }) => mainActions(t, o, S).map((a) => a.id);
@@ -92,15 +92,7 @@ describe("prStageLine", () => {
 const sess = (id: string, o: Partial<SessionView> = {}): SessionView =>
   ({ id, firstPrompt: `prompt ${id}`, fixesSession: null, spawnedBy: null, ...o }) as SessionView;
 
-describe("primarySession / conversationSessions", () => {
-  it("prefers the newest session that is neither a fix nor spawned", () => {
-    const list = [sess("fix", { fixesSession: "x" }), sess("child", { spawnedBy: "p" }), sess("main"), sess("old")];
-    expect(primarySession(list)?.id).toBe("main");
-  });
-  it("falls back to the first, or null", () => {
-    expect(primarySession([sess("f1", { fixesSession: "x" }), sess("f2", { fixesSession: "x" })])?.id).toBe("f1");
-    expect(primarySession([])).toBeNull();
-  });
+describe("conversationSessions", () => {
   it("labels fix sessions with a prefix", () => {
     expect(conversationSessions([sess("a"), sess("b", { fixesSession: "a" })], S)).toEqual([
       { id: "a", label: "prompt a" },
