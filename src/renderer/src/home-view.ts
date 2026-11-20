@@ -211,7 +211,7 @@ export function ticketWhoTurn(items: TurnItem[], scope: ScopeTurnRow | null, tic
  */
 export function ticketNowText(items: TurnItem[], scope: ScopeTurnRow | null, ticketKey: string, S: UiStrings): string {
   const own = ticketItem(items, ticketKey);
-  if (own) return turnSentence(own.turn, own, S);
+  if (own) return own.others > 0 ? `${turnSentence(own.turn, own, S)} · ${S.lay.morePrs(own.others)}` : turnSentence(own.turn, own, S);
   if (scope === null || scope.total === 0) return "—";
   if (scope.merged >= scope.total) return S.turn.done;
   if (scope.bar.idle > 0) return S.turn.idle;

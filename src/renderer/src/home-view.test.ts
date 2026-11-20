@@ -313,6 +313,10 @@ describe("ticketNowText (All work ticket rows)", () => {
     expect(ticketNowText([], s1({ bar: { done: 0, agent: 0, you: 0, external: 0, idle: 1 } }), "BTL-1", S)).toBe(S.turn.idle);
     expect(ticketNowText([], s1({ merged: 1, bar: { done: 1, agent: 0, you: 0, external: 0, idle: 0 } }), "BTL-1", S)).not.toBe(S.hm.scopeLine(1, 1, null));
   });
+  it("says when the ticket has other PRs too, like the running tab and the scope pages (spec §5.1)", () => {
+    const i = item(merge, { pr, ticketLevel: true, others: 1 });
+    expect(ticketNowText([i], s1({}), "BTL-1", S)).toBe(`${turnSentence(i.turn, i, S)} · ${S.lay.morePrs(1)}`);
+  });
   it("nothing known gives a dash", () => {
     expect(ticketNowText([], null, "BTL-1", S)).toBe("—");
     expect(ticketNowText([], s1({ total: 0 }), "BTL-1", S)).toBe("—");
