@@ -211,7 +211,7 @@ export class ConvRepo {
     return this.message(Number(r.lastInsertRowid));
   }
 
-  private message(id: number): ConvMessage | null {
+  message(id: number): ConvMessage | null {
     const r = this.db.prepare(`SELECT ${MESSAGE_COLS} ${FROM_MESSAGES} WHERE m.id = ?`).get(id) as MessageRow | undefined;
     return r ? toMessage(r) : null;
   }
