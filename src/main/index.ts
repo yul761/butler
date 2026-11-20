@@ -152,7 +152,7 @@ import { DevSender } from "./fork/dev-send";
 import type { DevLaunch } from "./fork/fork-args";
 import { FULL_FORK } from "./fork/fork-cache";
 import { ForkService, writeForkSettings } from "./fork/fork-service";
-import { readCostBase } from "./fork/cost-base";
+import { transcriptCostBase } from "./fork/cost-base";
 import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
 import { SessionCleanup, working } from "./sessions/session-cleanup";
 import { Hibernator } from "./sessions/hibernator";
@@ -1314,6 +1314,8 @@ async function bootstrap(): Promise<void> {
   });
   const projectMcp = (cwd: string): string[] =>
     projectMcpConfigs(cwd, { claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger });
+  /** 一个 session 存下的累计花费（BTL-239）：分叉讨论的第一轮、handoff、feature 汇总都是从开发 session 分出来的，记 T1 − 它。 */
+  const costBase = (id: string) => transcriptCostBase(paths.claudeProjects, id);
   const runner = new HandoffRunner({
     tickets, sessions, handoffs, followups, settings, ingest,
     dirs: (t) => ticketService.headlessDirs(t),
@@ -1330,6 +1332,7 @@ async function bootstrap(): Promise<void> {
     ...availabilityHooks,
     routing,
     costGate,
+    costBase,
     log: logger,
   });
   /** feature 有新汇总时，它所在的 epic 重新渲染 handoff（异步，失败只记日志）。 */
@@ -1364,6 +1367,7 @@ async function bootstrap(): Promise<void> {
     onUsage: recordHeadlessUsage,
     ...availabilityHooks,
     routing,
+    costBase,
     log: logger,
   });
   /**
@@ -1847,7 +1851,7 @@ async function bootstrap(): Promise<void> {
     devLaunchOf: (id) => sessionService.devLaunchOf(id),
     transcriptExists,
     // 分叉第一轮的准数：被分叉的开发 session 存下的累计（BTL-239）。
-    costBase: (id) => readCostBase(findTranscript(paths.claudeProjects, id), id),
+    costBase,
     // 开着终端（gateTerm 按 head 找终端，/clear 之后也找得到）；休眠的没有终端，不算在跑。
     devRunning: (id) => gateTerm(id) !== null,
     lastTurnAt: (id) => usageRepo.lastSessionTurnAt(id),

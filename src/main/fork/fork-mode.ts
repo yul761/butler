@@ -1,7 +1,7 @@
 import type { RegistryModel } from "../../shared/model-routing";
 import type { ForkMode } from "../../shared/fork";
-import { cumulativeIsThisRun, cumulativeWeight, runCostFromCumulative, runWeight, type RunStart } from "../../shared/run-cost";
-import type { CostBase } from "./cost-base";
+import { cumulativeIsThisRun, runCostFromCumulative, type RunStart } from "../../shared/run-cost";
+import { costSinceBase, type CostBase } from "./cost-base";
 import { usdOf } from "../metrics/rollup";
 import type { UsageCounts } from "../usage/usage-parse";
 
@@ -74,7 +74,7 @@ export interface TurnCostOpts {
  * fresh 的 total 就是这一轮；forked 有 base 就取 T1 − base；resumed 知道上次见到的累计就取差；
  * 其余（forked 没有 base，或 resumed 但不知道上次的累计）有 modelUsage 就按份额拆（runCostFromCumulative：只看这一轮的模型 r.model 那一项；
  * 定不下模型而且累计里有好几个模型时按全部模型的权重拆，标 partial），没有再按价格表估。
- * forked 的 base 用不上、退回份额的情形：base 比 T1 还大（超过浮点误差），或者核对不上 CLI 真的从 base 接着记（baseRestored）。
+ * forked 的 base 用不上、退回份额的情形见 costSinceBase：base 比 T1 还大、核对不上 CLI 真的从 base 接着记、或者减出来比份额少得离谱。
  * resumed 取差之前先看 CLI 有没有读回费用状态：total 比上次见到的小，或者累计里只有这一轮（cumulativeIsThisRun），说明它从 0 记起了，
  * 差值是错的（会悄悄记成 0 或少算），改按份额拆（拆不出再估），标 partial。
  * cli：从 CLI 金额算出的这一轮（精确、差值或份额；估出来的为 null）；seenTotal：这一轮之后该记下的累计，null 是不知道（下一轮按份额拆）。
@@ -90,20 +90,6 @@ export function turnCost(
   const c = turnCostOf(r, start, seenTotal, registry, o.base ?? null);
   return o.failed && seenTotal !== null && c.seenTotal !== null && c.seenTotal < seenTotal ? { ...c, seenTotal } : c;
 }
-
-/**
- * CLI 真的从 base 接着记了：这一轮的累计（modelUsage）装得下 base 的累计加上这一轮（Σw(modelUsage) ≥ w(base) + w(usage)，差在浮点误差以内）。
- * 没读回（CLI 的校验比 readCostBase 严，或者退回了更早的一条）时累计会比这小；这一轮里有 subagent、compaction 之类的额外调用只会更大，不碍事。
- * 结果里没有 modelUsage 或 usage 就核对不了，不算准数。
- */
-function baseRestored(r: TurnRun, base: CostBase): boolean {
-  const all = cumulativeWeight(r.modelUsage);
-  const run = runWeight(r.usageRaw);
-  return all !== null && run !== null && run > 0 && all >= (base.weight + run) * (1 - WEIGHT_EPS);
-}
-
-/** 累计权重比 base 加这一轮少多少算浮点误差。 */
-const WEIGHT_EPS = 1e-9;
 
 function turnCostOf(
   r: TurnRun,
@@ -121,10 +107,8 @@ function turnCostOf(
     return { ...est, cli: null, seenTotal: start === "resumed" && est.usd === null ? seenTotal : null };
   }
   if (start === "fresh") return { usd: total, partial: false, approx: false, cli: total, seenTotal: total };
-  if (start === "forked" && base !== null && base.totalUsd <= total + TOTAL_EPS && baseRestored(r, base)) {
-    const diff = Math.max(0, total - base.totalUsd);
-    return { usd: diff, partial: false, approx: false, cli: diff, seenTotal: total };
-  }
+  const exact = start === "forked" ? costSinceBase(r, base) : null;
+  if (exact !== null) return { usd: exact, partial: false, approx: false, cli: exact, seenTotal: total };
   const share = runCostFromCumulative(total, r.usageRaw, r.modelUsage, r.model);
   if (start === "resumed" && seenTotal !== null) {
     const lost = total < seenTotal - TOTAL_EPS || cumulativeIsThisRun(r.usageRaw, r.modelUsage);

@@ -16,6 +16,8 @@ import { continueArgs, devForkArgs, forkSettings, strictForkArgs, type DevLaunch
 import { sameBase, type CostBase } from "./cost-base";
 import type { FullForkPlan } from "./fork-cache";
 import { LIGHT_QA_CHARS, LIGHT_RECALL_CHARS, chooseMode, fullBlock, runStart, turnCost, type TurnCost } from "./fork-mode";
+// forkedFrom：带 --fork-session 的参数里 --resume 后面的那个（被分叉的开发 session）；返回的 session id 等于它时绝不能记成 headless。
+import { forkedFrom } from "../../shared/run-cost";
 
 /** 用量和限额里的 job 名（成本统计、效果页按它汇总）。 */
 export const FORK_JOB = "fork discussion";
@@ -118,13 +120,6 @@ interface TurnOpts {
 }
 
 const failure = (code: ForkErrorCode, resetAt: number | null = null) => ({ code, resetAt });
-
-/** 带 --fork-session 的参数里 --resume 后面的那个（被分叉的开发 session）；返回的 session id 等于它时绝不能记成 headless。 */
-function forkedFrom(args: readonly string[]): string | null {
-  if (!args.includes("--fork-session")) return null;
-  const at = args.indexOf("--resume");
-  return at >= 0 ? (args[at + 1] ?? null) : null;
-}
 
 /** 没有结果的一轮：起不来（spawn_failed）、被限额挡在门外（rate_limited）、模型不可用（model_unavailable）没花 token；别的（超时、中途退出）可能花了，记成一部分不知道。 */
 const NO_SPEND: ReadonlySet<string> = new Set(["spawn_failed", "rate_limited", "model_unavailable"]);

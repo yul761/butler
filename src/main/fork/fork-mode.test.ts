@@ -197,8 +197,11 @@ describe("turnCost with the dev session's saved total (base)", () => {
     expect(r.usd).toBeCloseTo(0.03, 12);
     expect(r.approx).toBe(false);
   });
-  it("a base equal to T1 is a zero-cost turn, still exact", () => {
-    expect(turnCost(forked(5), "forked", null, registry, { base })).toMatchObject({ usd: 0, approx: false, partial: false });
+  // 这一轮有 token 却一分钱没加：CLI 接的不是这个 base（退回了更早的一条，subagent 又把累计撑大），减出来的 0 是少算。
+  it("a base equal to T1 (or T1 − base far below the share): not believed, the share split, approximate", () => {
+    expect(turnCost(forked(5), "forked", null, registry, { base })).toMatchObject({ approx: true, partial: false });
+    expect(turnCost(forked(5), "forked", null, registry, { base }).usd).toBeCloseTo(5 / 50, 12);
+    expect(turnCost(forked(5.005), "forked", null, registry, { base }).approx).toBe(true);
   });
   it("no base (transcript missing, no cost-state line, or it changed during the run): the share split, approximate, as before", () => {
     const r = turnCost(forked(5.02), "forked", null, registry, { base: null });

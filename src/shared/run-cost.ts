@@ -6,9 +6,9 @@
  * 0.05（opus-5-5、sonnet-5-5）或 0.025（fable-5-2），haiku-5-5 过 100k token 后单价 ×5，fast 模式另有一套价格。
  * 这一轮的 token 构成跟累计的平均构成差得越多，拆出来的偏差越大：按真实历史试算，完整分叉第一轮会偏 −17% 到 +38%；只有像测试样本那样
  * 小 prompt 的 haiku 正好对得上。能取差的地方就别用它：续 session 取两次 total 的差；分叉的第一轮取 T1 − 开发 session transcript 最后一条
- * cost-state 的 totalCostUSD（fork-mode 的 turnCost，BTL-239）。
+ * cost-state 的 totalCostUSD（cost-base 的 costSinceBase，BTL-239；分叉讨论和 handoff、feature 汇总都这样记）。
  * 跨模型更不行：opus 和 haiku 的单价差好几倍，所以只拿这一轮的主模型那一项来拆，不把各模型的权重加在一起。
- * 纯函数，不依赖分叉或 main 的任何东西（分叉讨论、handoff、feature 汇总的用量行都用它）。
+ * 纯函数，不依赖分叉或 main 的任何东西。分叉讨论在取不到准数时用它的约数（标 approx）；handoff、feature 汇总的用量行没有约数标记，取不到准数就不记金额。
  */
 
 /** 一轮怎么起的：fresh 没带 --resume（全新 session）；forked 带 --fork-session（从别的 session 分出来）；resumed 续一个已有的 session。 */
@@ -17,6 +17,13 @@ export type RunStart = "fresh" | "forked" | "resumed";
 export function runStart(args: readonly string[]): RunStart {
   if (!args.includes("--resume")) return "fresh";
   return args.includes("--fork-session") ? "forked" : "resumed";
+}
+
+/** forked 的一轮是从哪个 session 分出来的（--resume 后面那个 id）；不是 forked 为 null。 */
+export function forkedFrom(args: readonly string[]): string | null {
+  if (!args.includes("--fork-session")) return null;
+  const at = args.indexOf("--resume");
+  return at >= 0 ? (args[at + 1] ?? null) : null;
 }
 
 /** 和用量页同一套权重（input 为 1）。只是一套固定的近似，不是哪个模型真实的价格比（见文件头）；写缓存哪部分算 5m、哪部分算 1h 见 writes。 */
