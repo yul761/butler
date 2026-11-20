@@ -118,11 +118,19 @@ ticket：BTL-235，叠在 BTL-233（第 3 层）上。开工前 BTL-234（第 4 
    - 算法：
      - `total_cost_usd` 和 `modelUsage` 是被续的那个 session 的**累计**（`--fork-session` 时还带着被分叉 session 以前的全部花费），`usage` 才是这一轮的。行里记着 CLI 上次报的累计（`cost_seen_total`），这一轮的费用（`turnCost`）：
        - 没带 `--resume`（精简的第一轮，全新 session）：就是 `total_cost_usd`；
-       - 续分叉自己的 session（接着问、要结论）且知道 `cost_seen_total`：取差（不小于 0）；
-       - 其余（带 `--fork-session` 的完整第一轮，或续的时候不知道 `cost_seen_total`）：按份额拆，`total_cost_usd × w(usage) / Σ_模型 w(modelUsage[m])`，w(x) = input + 0.1·读缓存 + 1.25·写 5m + 2·写 1h + 5·output；这一轮的 `usage` 有 `cache_creation.ephemeral_5m/1h` 分档就按分档，没有全部当 1h；modelUsage 用 `cacheCreationEphemeral5m/1hInputTokens`。算出来是准数，不算不全。纯函数在 `src/shared/run-cost.ts`（`runCostFromCumulative`），handoff 的用量行以后也用它；
+       - 续分叉自己的 session（接着问、要结论）且知道 `cost_seen_total`：取差。但 CLI 读不回分叉 session 存的费用状态时会从 0 记起，所以先查：`total_cost_usd` 比 `cost_seen_total` 小，或者累计里只有这一轮（`cumulativeIsThisRun`：Σ w(modelUsage) ≈ w(usage)），就不取差，改按下面的份额拆（拆不出再估），标不全；
+       - 其余（带 `--fork-session` 的完整第一轮，或续的时候不知道 `cost_seen_total`）：按份额拆（`runCostFromCumulative`）：
+         - 这一轮的主模型 m（`runModel`：累计装得下这一轮 usage 的模型只有一个就是它；有好几个时用这一轮的 `--model` 在里面挑，全名、别名、带 `[1m]` 都认；定不下来为 null）：`modelUsage[m].costUSD × w(usage) / w(modelUsage[m])`，准数。不同模型单价不同，不能把各模型的权重加在一起；
+         - 定不下 m、或者 m 没有 costUSD：退回 `total_cost_usd × w(usage) / Σ_模型 w(modelUsage)`，只有一个模型有权重时一样准，有好几个时标不全（不退回价格表：那也要知道模型，默认价格表也没价格）；
+         - w(x) = input + 0.1·读缓存 + 1.25·写 5m + 2·写 1h + 5·output。写缓存照 CLI 自己的计价：只有明确记成 1h 的按 2，其余（5m、分档加起来不到总写入的余量、完全没有分档时的全部）按 1.25。这一轮的 `usage` 和 modelUsage 用同一条规则；
+         - 这一轮比累计还重（数对不上）：算不出来，不夹到累计金额；
+         - 纯函数在 `src/shared/run-cost.ts`，handoff、feature 汇总的用量行（BTL-239）以后也用它；
+         - 已知限制：CLI 的 `usage` 只有主循环（"MAIN AGENT LOOP ONLY — excludes Task subagent, sidechain, and auxiliary model calls"），而 costUSD 和 total 含 subagent、compaction 之类的辅助调用和 web search（按次计价，不在 token 权重里）。这一轮里的这些花费拆不出来，份额偏小；差值那条路没有这个问题。只有 stream-json 才有的 `model_usage_since_last_result` 能直接给出这一轮的每模型金额，`--output-format json` 不给；
        - 没有 `modelUsage` 或 w 为 0：按 `usage` 用价格表估；
-       - CLI 没给金额：`cost_seen_total` 不变，按下面的估法；
+       - CLI 没给金额：按下面的估法。估了价的话 `cost_seen_total` 清掉（这一轮仍在 CLI 的累计里，留着下一轮的差值会再算它一遍），下一轮按份额拆；什么都没记就不变（下一轮的差值正好补上）；fresh、forked 是新 session，之前见过的是别的 session 的，也清掉；
+       - 出错的那一轮：`cost_seen_total` 只往上走，不往回拉（启动就出错时 CLI 可能报 0）；
        - CLI 没分叉（返回的就是开发 session）：有份额就记份额，仍标不全，`cost_seen_total` 不变，不记用量行；
+     - 用量行的模型是这一轮自己的（`runModel`），不是累计 modelUsage 的第一个键；续 session 又定不下来时为 null，没续的取花得最多的那个；
      - 用量行（`onUsage`）记同一个这一轮的金额（精确、差值或份额）；只有估出来的不带金额（由用量统计按价格表估）；
      - 没有金额就用价格表按 `usdOf` 估一个；
      - 价格表里也没有这个模型，费用记为未知，`cost_partial = 1`。
