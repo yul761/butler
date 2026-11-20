@@ -12,8 +12,10 @@ import type { CreatePr, PrSnapshot } from "./gh-stack";
 import { StackPolicyService } from "./stack-policy";
 import { StackService, type StackServiceDeps } from "./stack-service";
 
-// 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够
-vi.setConfig({ testTimeout: 30_000 });
+// 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够。
+// 夹具已经按文件共享（BTL-240），剩下的是被测代码自己的 git 调用（一个用例几十到上百个进程）：Windows runner 上
+// 起一个进程是 macOS 的好几倍、整套并行跑时再翻倍，这里的用例那边常要 10～20 秒，偶尔贴着 30 秒，所以只在 Windows 上给 60 秒。
+vi.setConfig({ testTimeout: process.platform === "win32" ? 60_000 : 30_000 });
 
 /** 假的 GitHub：只记 PR 和调用，不联网。git 部分是真的（临时仓库 + 本地 bare 远端）。 */
 const fake = vi.hoisted(() => ({
@@ -345,7 +347,8 @@ describe("StackService depth", () => {
     await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: branches[0]! }, w.repo);
     expect(chainShape(w, branches.slice(1))).toEqual(branches.slice(1).map((_, i) => ({ count: i + 1, onTrunk: true })));
     expect(w.repoT.lastRun(r.stackId!)).toMatchObject({ trigger: "bottom_merged", outcome: "rebased" });
-  }, 120_000);
+    // 39 层逐层 rebase，上千个 git 进程：Windows CI 上通常 70 秒左右，负载高时到过 135 秒（BTL-240）
+  }, process.platform === "win32" ? 240_000 : 120_000);
 });
 
 describe("StackService bottom merged during a run", () => {
