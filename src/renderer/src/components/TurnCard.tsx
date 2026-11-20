@@ -66,7 +66,7 @@ export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: Tur
     } else if (a.id === "look") {
       if (target) onOpen(target);
     } else if (a.id === "fix") {
-      if (t.kind === "stuck" && item.featureId !== null && t.sessionId !== null) onFix(item.featureId, t.sessionId);
+      if (t.kind === "stuck" && item.featureId !== null && item.ticketKey !== null && t.sessionId !== null) onFix(item.featureId, t.sessionId);
     } else if (item.ticketKey !== null && item.pr !== null) {
       const req = { ticketKey: item.ticketKey, pr: { repo: item.pr.repo, number: item.pr.number } };
       run(async () => {

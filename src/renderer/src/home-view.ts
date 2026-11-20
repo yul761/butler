@@ -88,7 +88,8 @@ export function cardActions(item: TurnItem): CardAction[] {
     }
     case "merge": return item.pr?.url ? [{ id: "openPr", primary: true }, look(false)] : [look(true)];
     case "review": return [{ id: "openPr", primary: true }];
-    case "stuck": return item.featureId !== null && t.sessionId !== null ? [look(true), { id: "fix", primary: false }] : [look(true)];
+    // 修复 session 开在卡住的 ticket 上（session-service 要它属于这个 feature）：总控卡住时 ticketKey 为 null，不给这个按钮。
+    case "stuck": return item.featureId !== null && item.ticketKey !== null && t.sessionId !== null ? [look(true), { id: "fix", primary: false }] : [look(true)];
     case "unattended": return t.canSend && item.ticketKey !== null && item.pr !== null ? [{ id: "send", primary: true }, look(false)] : [look(true)];
     case "butler": return [];
   }

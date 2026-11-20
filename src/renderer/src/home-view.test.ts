@@ -97,6 +97,8 @@ describe("cardActions", () => {
     expect(ids(item(stuck("s"), { featureId: 3 }))).toEqual(["look*", "fix"]);
     expect(ids(item(stuck("s")))).toEqual(["look*"]);
     expect(ids(item(stuck(null), { featureId: 3 }))).toEqual(["look*"]);
+    // 总控卡住了（loose 里，ticketKey 为 null）：修复 session 要找 ticket，点了只会 no_session，所以不给按钮。
+    expect(ids(item(stuck("s"), { featureId: 3, ticketKey: null }))).toEqual(["look*"]);
     expect(ids(item(unattended(true), { pr }))).toEqual(["send*", "look"]);
     expect(ids(item(unattended(true)))).toEqual(["look*"]);
     expect(ids(item(unattended(false), { pr }))).toEqual(["look*"]);
