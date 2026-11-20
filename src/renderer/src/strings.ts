@@ -24,7 +24,7 @@ import type { InterruptCategory } from "../../shared/metrics";
 import type { ProgressBucket, WaitingOn, WaitingReason } from "../../shared/progress";
 import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
-import type { TurnTone } from "./home-view";
+import type { TurnTone } from "./turn-tone";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ButlerMessageView, EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 

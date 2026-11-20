@@ -5,21 +5,9 @@ import { mostUrgent, YOU_KIND_RANK, type ScopeTurnRow, type Turn, type TurnBoard
 import type { Route } from "./App";
 import { formatDuration } from "./components/TicketActivity";
 import type { UiStrings } from "./strings";
+import { turnTone, type TurnTone } from "./turn-tone";
 
-export type TurnTone = "ask" | "merge" | "stuck" | "butler" | "agent" | "external" | "done" | "idle";
-
-/** 颜色只表示谁该动（spec §5.1 的表）。 */
-export function turnTone(turn: Turn): TurnTone {
-  if (turn.owner !== "you") return turn.owner;
-  switch (turn.kind) {
-    case "answer":
-    case "review": return "ask";
-    case "merge": return "merge";
-    case "stuck":
-    case "unattended": return "stuck";
-    case "butler": return "butler";
-  }
-}
+export { turnTone, type TurnTone } from "./turn-tone";
 
 /** 「你」这一类的顺序，和第 1 层 mostUrgent 用的是同一份（YOU_KIND_RANK），不另起一套。 */
 export const YOU_KIND_ORDER: readonly YouKind[] = (Object.keys(YOU_KIND_RANK) as YouKind[]).sort((a, b) => YOU_KIND_RANK[a] - YOU_KIND_RANK[b]);

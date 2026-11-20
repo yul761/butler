@@ -39,6 +39,8 @@ export type Route =
   /** 进度看板（ws-b）：从 feature / epic 的 PR 进度 tab 点过来时带着过滤条件。 */
   | { page: "progress"; epicId?: number | null; featureId?: number | null }
   | { page: "effect" }
+  /** 全部工作（UI 重做第 2 层）；section：从提醒跳来时要展开的那一块。 */
+  | { page: "all"; section?: "stacks" | "intake" }
   | { page: "unclaimed" }
   | { page: "archived" }
   /** section：要看的那个 tab 或高级里的分组（「现在」页的提醒跳来时用 health / routing）。 */

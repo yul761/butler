@@ -1,9 +1,10 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { EpicView, FeatureView, TicketView } from "../../../shared/types";
+import type { EpicView, FeatureView, NowNotice, TicketView } from "../../../shared/types";
 import { dotKey, type Dot } from "../sidebar-view";
 import { S } from "../strings";
+import { Notice, noticeKey } from "./Notice";
 import { Sidebar } from "./Sidebar";
 
 // UI 重做第 2 层：侧栏、卡片、首页、全部工作的渲染测试（renderToStaticMarkup，不调 api）。
@@ -58,5 +59,21 @@ describe("Sidebar", () => {
     const html = render(null);
     expect(html).toContain(`title="BTL-9 ${long}"`);
     expect(html).toContain('<span class="key">BTL-9</span>');
+  });
+});
+
+describe("Notice (moved out of the Now page)", () => {
+  it("keeps the notice keys", () => {
+    expect(noticeKey({ kind: "lessons_paused" } as NowNotice)).toBe("lessons_paused");
+    expect(noticeKey({ kind: "cost", breaker: { subjectKind: "ticket", subjectId: "BTL-1" } } as unknown as NowNotice)).toBe("cost:ticket:BTL-1");
+  });
+
+  it("an approval notice has a Take-a-look button", () => {
+    const n: NowNotice = { kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录" };
+    const html = renderToStaticMarkup(createElement(Notice, { notice: n, now: 0, onOpen: () => {}, onGo: () => {} }));
+    expect(html).toContain('data-testid="now-notice-approval"');
+    expect(html).toContain(S.noticeApproval("登录"));
+    expect(html).toContain(`>${S.hm.act.look}</button>`);
+    expect(noticeKey(n)).toBe("approval:ticket:BTL-1:s");
   });
 });
