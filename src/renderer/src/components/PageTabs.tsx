@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { saveTab, savedTab } from "../local-prefs";
-import { resolveTab } from "../page-tabs";
+import { pickTab, resolveTab } from "../page-tabs";
 
 export interface PageTab {
   id: string;
@@ -19,7 +19,7 @@ export interface PageTab {
 export function PageTabs({ page, tabs, defaultTab, forceTab, actions }: { page: string; tabs: PageTab[]; defaultTab: string; forceTab?: string | null; actions?: ReactNode }) {
   const panelId = `page-tabs-panel-${page.replace(/[^A-Za-z0-9_-]/g, "-")}`;
   const ids = tabs.map((t) => t.id);
-  const [saved, setSaved] = useState(() => savedTab(page));
+  const [saved, setSaved] = useState<string | null>(() => resolveTab(savedTab(page), forceTab, ids, defaultTab));
   useEffect(() => setSaved(savedTab(page)), [page]);
   useEffect(() => {
     if (forceTab != null && ids.includes(forceTab)) {
@@ -27,7 +27,8 @@ export function PageTabs({ page, tabs, defaultTab, forceTab, actions }: { page: 
       setSaved(forceTab);
     }
   }, [page, forceTab]);
-  const current = resolveTab(saved, forceTab, ids, defaultTab);
+  // forceTab 只在变化时落点一次（上面的 effect 把它存进 saved），之后用户点哪个就是哪个。
+  const current = pickTab(saved, ids, defaultTab);
   const tab = tabs.find((t) => t.id === current);
   const pick = (id: string) => {
     saveTab(page, id);

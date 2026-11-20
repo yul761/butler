@@ -28,3 +28,13 @@ describe("resolveTab", () => {
   it("a landing tab that does not exist counts as none", () => expect(resolveTab(null, "nope", t, "overview")).toBe("overview"));
   it("no tabs gives empty", () => expect(resolveTab("", null, [], "x")).toBe(""));
 });
+
+describe("forceTab is a one-shot landing", () => {
+  const ids = ["progress", "reports", "archived"];
+  it("lands on the forced tab first, then the user's pick wins even if forceTab is still passed", () => {
+    let saved: string | null = resolveTab(null, "reports", ids, "progress"); // initial state
+    expect(pickTab(saved, ids, "progress")).toBe("reports");
+    saved = "archived"; // user clicks another tab; PageTabs renders with pickTab only
+    expect(pickTab(saved, ids, "progress")).toBe("archived");
+  });
+});

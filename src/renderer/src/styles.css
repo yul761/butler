@@ -105,13 +105,6 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .page-tabs-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 16px 10px; }
 .page-tabs-panel h3 { display: flex; gap: 8px; align-items: baseline; margin: 6px 0 4px; font-size: 12px; color: var(--muted); }
 .page-tabs-panel h3 .section-toggle { flex-shrink: 0; }
-.who { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 11px; font-weight: 600; white-space: nowrap; }
-.who-you { color: var(--turn-ask); }
-.who-agent { color: var(--turn-agent); }
-.who-external { color: var(--turn-external); }
-.who-done { color: var(--turn-done); }
-.who-idle { color: var(--turn-idle); }
-.scope-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; }
 .control-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
 @media (max-width: 900px) { .control-split { grid-template-columns: 1fr; } }
 .feature-summary { background: var(--panel); border-left: 3px solid var(--accent); border-radius: 4px; padding: 8px 12px; margin: 0 0 6px; overflow-wrap: anywhere; }
