@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NowNotice } from "./types";
 import type { SessionActivity } from "./activity";
-import { mostUrgent, noticeNeedsYou, prTurn, REPORT_STOP_SLACK_MS, sessionTurn, type SessionTurnInput, ticketTurn, TURN_PRIORITY, type PrTurnInput, type Turn } from "./turn";
+import { mostUrgent, noticeNeedsYou, prTurn, REPORT_STOP_SLACK_MS, sessionTurn, slowestOf, type SessionTurnInput, ticketTurn, TURN_PRIORITY, type PrTurnInput, type Turn } from "./turn";
 
 const merge: Turn = { owner: "you", kind: "merge", risk: null };
 const ask: Turn = { owner: "you", kind: "answer", question: "q", options: [], askId: 1, sessionId: "s" };
@@ -30,6 +30,13 @@ describe("ticketTurn", () => {
   });
   it("keeps the index order of TURN_PRIORITY", () => {
     expect(TURN_PRIORITY).toEqual({ you: 0, agent: 1, external: 2, idle: 3, done: 4 });
+  });
+});
+
+describe("slowestOf", () => {
+  it("slowestOf picks the oldest active member, null below two", () => {
+    expect(slowestOf([{ name: "A", owner: "agent", progressAt: 5 }, { name: "B", owner: "you", progressAt: 3 }, { name: "C", owner: "done", progressAt: 1 }])).toBe("B");
+    expect(slowestOf([{ name: "A", owner: "agent", progressAt: 5 }, { name: "C", owner: "idle", progressAt: 1 }])).toBeNull();
   });
 });
 

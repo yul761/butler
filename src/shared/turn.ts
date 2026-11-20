@@ -254,3 +254,17 @@ export function sessionTurn(i: SessionTurnInput): TimedTurn {
   if (working) return { turn: { owner: "agent", kind: "working", sessionId }, since: a?.startedAt ?? i.now };
   return { turn: { owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId }, since: stopped };
 }
+
+// ---------- 进度行的「最慢的那一组」（R8） ----------
+
+/**
+ * 活跃成员（非 done / idle）里最久没有进展（progressAt 最早）的那个的名字；并列取先出现的。
+ * 活跃成员少于 2 个为 null：只有一组时说「最慢的是它」没有信息量。
+ */
+export function slowestOf(members: { name: string; owner: TurnOwner; progressAt: number }[]): string | null {
+  const active = members.filter((m) => m.owner !== "done" && m.owner !== "idle");
+  if (active.length < 2) return null;
+  let best = active[0];
+  for (const m of active) if (m.progressAt < best.progressAt) best = m;
+  return best.name;
+}
