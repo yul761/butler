@@ -136,7 +136,7 @@ function ButlerArea({ view, focusSession }: Props & { view: ButlerView }) {
 
 const shortTime = (iso: string) => new Date(iso).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
-/** 总控用 send_message 发出去的消息（ws-b）：总控用 send_message 发出去的消息，送到没有，收到的回复送回总控没有。新的在前。 */
+/** 总控用 send_message 发出去的消息（ws-b）：送到没有，收到的回复送回总控没有。新的在前。 */
 export function ButlerRepliesList({ messages }: { messages: ButlerMessageView[] }) {
   if (messages.length === 0) return <p className="muted">{S.butlerRepliesNone}</p>;
   return (

@@ -27,8 +27,13 @@ describe("ButlerRepliesSummary", () => {
     expect(renderToStaticMarkup(createElement(ButlerRepliesSummary, { messages: null }))).toBe("");
     const html = renderToStaticMarkup(createElement(ButlerRepliesSummary, { messages: [msg, msg] }));
     expect(html).toContain("<details");
-    expect(html).not.toContain("open");
+    expect(html).not.toMatch(/<details[^>]*\sopen/);
     expect(html).toContain(S.lay.butlerSent(2));
     expect(html).toContain("butler-replies");
+  });
+  it("shows (0) and the empty line when nothing has been sent", () => {
+    const html = renderToStaticMarkup(createElement(ButlerRepliesSummary, { messages: [] }));
+    expect(html).toContain(S.lay.butlerSent(0));
+    expect(html).toContain(S.butlerRepliesNone);
   });
 });

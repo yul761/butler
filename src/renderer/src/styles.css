@@ -328,7 +328,7 @@ label.inline { display: inline-flex; gap: 6px; align-items: center; }
 /* 语言选择（设计文档 2026-10-26）。 */
 .language-picker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 12px; }
 .language-picker .muted { flex-basis: 100%; }
-/* 「待你决定」和汇报（BTL-190 第 2+3 点）：feature、epic、Butler 总控页终端上面的两个 tab；「现在」页「需要你」里的卡片。 */
+/* 汇报列表（ReportFeed，BTL-190 第 3 点）：子 session 用 report 送上来的进展。 */
 ul.inbox-reports { list-style: none; margin: 0; padding: 0; }
 p.inbox-reports { margin: 2px 0; }
 .inbox-report { padding: 4px 0; border-bottom: 1px solid var(--border); }
