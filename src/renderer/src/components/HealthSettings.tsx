@@ -4,8 +4,12 @@ import { api } from "../api";
 import { S } from "../strings";
 import { ClaudeAvailability } from "./ClaudeAvailability";
 
-/** gh 和用量两行：读不到时 gh 显示「未知」（不当成没装），用量那一行省略。 */
-function useExtraHealth(): { gh: boolean | null; cachePct: number | null } {
+/**
+ * gh 和用量两行：读不到时 gh 显示「未知」（不当成没装），用量那一行省略。
+ * 跟着 report 重取：点「重新检测」拿到新的 report 时，gh 那一行也一起更新。
+ * 不用 useStateRefetch：它把每次读失败都弹成错误，而这里读不到只该显示「未知」。
+ */
+function useExtraHealth(report: HealthReport | null): { gh: boolean | null; cachePct: number | null } {
   const [gh, setGh] = useState<boolean | null>(null);
   const [cachePct, setCachePct] = useState<number | null>(null);
   useEffect(() => {
@@ -15,7 +19,7 @@ function useExtraHealth(): { gh: boolean | null; cachePct: number | null } {
     return () => {
       live = false;
     };
-  }, []);
+  }, [report]);
   return { gh, cachePct };
 }
 
@@ -31,7 +35,7 @@ export function HealthSettings({
   onUninstall(): void;
   scrollToAvailability: boolean;
 }) {
-  const { gh, cachePct } = useExtraHealth();
+  const { gh, cachePct } = useExtraHealth(report);
   if (!report) return <p className="empty">{error ?? S.loading}</p>;
   const { claude } = report;
   return (

@@ -22,6 +22,15 @@ function rowHtml(html: string, id: string): string {
 }
 
 describe("settings › features", () => {
+  it("disables every row's controls while any row is writing", () => {
+    // lessons_auto 连写 3 个键时去点别的行：别的行也禁用，不会点了弹回原样。
+    const rows = patch("ci_triage", { state: "partial", on: 1, total: 2 });
+    const html = renderToStaticMarkup(createElement(FeatureList, { rows, busyId: "lessons_auto", onToggle: () => undefined, onOpenAdvanced: () => undefined }));
+    const controls = html.match(/<(input|button)[^>]*data-testid="feature-(toggle|all-on|all-off)-[^"]*"[^>]*>/g) ?? [];
+    expect(controls.length).toBeGreaterThanOrEqual(11);
+    for (const c of controls) expect(c).toContain('disabled=""');
+  });
+
   it("renders 11 rows, all switches off, each with the 3.0 mark", () => {
     const html = render(defaults());
     for (const id of FEATURE_IDS) {
@@ -70,10 +79,8 @@ describe("settings › features", () => {
     expect(render(defaults())).not.toContain("feature-setup-");
   });
 
-  it("disables the row that is being written", () => {
-    const html = renderToStaticMarkup(createElement(FeatureList, { rows: defaults(), busyId: "hibernate", onToggle: () => undefined, onOpenAdvanced: () => undefined }));
-    expect(rowHtml(html, "hibernate")).toMatch(/data-testid="feature-toggle-hibernate"[^>]*disabled|disabled=""[^>]*data-testid="feature-toggle-hibernate"/);
-    expect(rowHtml(html, "shared_mcp")).not.toContain("disabled");
+  it("leaves every row enabled when nothing is being written", () => {
+    expect(render(defaults())).not.toContain("disabled");
   });
 
   it("has no text in the row state: titles come from S", () => {

@@ -50,12 +50,12 @@ function FeatureRowView({ row, busy, onToggle, onOpenAdvanced }: { row: FeatureR
   );
 }
 
-/** 功能页的纯视图（测试直接渲染它）。busyId：正在写的那一行，控件禁用。 */
+/** 功能页的纯视图（测试直接渲染它）。busyId：正在写的那一行；写的期间所有行的控件都禁用，免得别的行点了弹回原样。 */
 export function FeatureList({ rows, busyId, onToggle, onOpenAdvanced }: { rows: FeatureRow[]; busyId: FeatureId | null; onToggle(id: FeatureId, on: boolean): void; onOpenAdvanced(group: AdvancedGroupId): void }) {
   return (
     <div className="feature-list">
       {rows.map((r) => (
-        <FeatureRowView key={r.id} row={r} busy={busyId === r.id} onToggle={onToggle} onOpenAdvanced={onOpenAdvanced} />
+        <FeatureRowView key={r.id} row={r} busy={busyId !== null} onToggle={onToggle} onOpenAdvanced={onOpenAdvanced} />
       ))}
     </div>
   );
