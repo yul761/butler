@@ -500,7 +500,6 @@ const ZH = {
   archiveFeature: "归档 feature（连同下面的 ticket）",
   archivedFeatures: "已归档的 feature",
   colFeature: "Feature",
-  waiting: "等你输入",
   activity: {
     edit: "写代码",
     read: "看代码",
@@ -625,7 +624,6 @@ const ZH = {
   noticeLessons: "打开复盘",
   noticeOpen: "打开会话",
   activityBackground: (main: string) => `后台 · ${main}`,
-  activityStoppedAgo: (d: string) => `${d}前停下`,
   activitySilent: (d: string) => `已 ${d}没有新输出`,
   durationNow: "刚刚",
   durationMinutes: (m: number) => `${m} 分钟`,

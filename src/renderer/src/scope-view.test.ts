@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScopeTurnRow, Turn, TurnItem } from "../../shared/turn";
-import { groupByFeature, prTag, progressLine, scopeTotal, slowestLine, ticketRows, whoLabel } from "./scope-view";
+import { flatGroup, groupByFeature, prTag, progressLine, scopeTotal, slowestLine, ticketRows, whoLabel } from "./scope-view";
 import { STRINGS } from "./strings";
 
 const S = STRINGS.zh;
@@ -103,5 +103,15 @@ describe("scopeTotal", () => {
     // 另一个 feature 的行不算它自己的；feature 行也不算进 ticket 的和里。
     expect(scopeTotal([f1, t1, t2], "feature", 4)).toEqual({ kind: "feature", id: 4, name: "", total: 3, merged: 1, bar: bar(1, 1), youCount: 1, slowest: null });
     expect(scopeTotal([f1], "feature", 4).total).toBe(0);
+  });
+});
+
+describe("flatGroup", () => {
+  it("is one unnamed group with the same merged count as groupByFeature, or nothing when there are no rows", () => {
+    const rows = ticketRows([tk("K-1"), tk("K-2", 10, "done"), tk("K-3")], [item("K-1", agent, null)]);
+    const [byFeature] = groupByFeature(rows, [{ id: 10, name: "F" }]);
+    expect(flatGroup(rows)).toEqual([{ name: null, merged: byFeature.merged, total: 3, rows }]);
+    expect(byFeature.merged).toBe(1);
+    expect(flatGroup([])).toEqual([]);
   });
 });

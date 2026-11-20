@@ -38,12 +38,20 @@ export function ticketRows(tickets: Pick<TicketView, "key" | "title" | "featureI
   });
 }
 
+/** 一组里合了几个。 */
+const mergedOf = (rows: TicketRow[]): number => rows.filter((r) => r.turn.owner === "done").length;
+
 /** 按传入的 feature 顺序分组；没有 feature 的行忽略；feature 下没有 ticket 也返回该组。 */
 export function groupByFeature(rows: TicketRow[], features: { id: number; name: string }[]): { feature: { id: number; name: string }; rows: TicketRow[]; merged: number }[] {
   return features.map((feature) => {
     const mine = rows.filter((r) => r.featureId === feature.id);
-    return { feature, rows: mine, merged: mine.filter((r) => r.turn.owner === "done").length };
+    return { feature, rows: mine, merged: mergedOf(mine) };
   });
+}
+
+/** 不分组（feature 页）：一组、没有组名；没有行时没有组（表格显示空状态）。 */
+export function flatGroup(rows: TicketRow[]): { name: null; merged: number; total: number; rows: TicketRow[] }[] {
+  return rows.length === 0 ? [] : [{ name: null, merged: mergedOf(rows), total: rows.length, rows }];
 }
 
 /** 范围自己那一行（epic / feature 的总数）；看板里没有时把它下面的行（feature / ticket）加起来，最慢的不算。 */

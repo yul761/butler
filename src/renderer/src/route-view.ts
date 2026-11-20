@@ -8,3 +8,8 @@ export function routeGone(route: Route, tickets: TicketView[], features: Feature
   if (route.page === "epic") return !epics.some((e) => e.id === route.id);
   return false;
 }
+
+/** 开好修复 session 后去的地方：feature 页的「总控」，看它的终端。seq 每次递增：同一个修复 session 再开一次时路由也不一样，页面会再落一次。 */
+export function fixLanding(featureId: number, termId: string | null, seq: number): Route {
+  return { page: "feature", id: featureId, landing: "control", focusTerm: termId, landingSeq: seq };
+}

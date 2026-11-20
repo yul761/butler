@@ -3,7 +3,7 @@ import type { EpicView, FeatureView, NowTarget, NowView, OpenSessionRequest, Tic
 import { api } from "./api";
 import { onError, reportError } from "./errors";
 import { firstRunProps, homeOpenedSignal, isNoWork, type NameCtx } from "./home-view";
-import { routeGone } from "./route-view";
+import { fixLanding, routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
 import { ButlerPage } from "./components/ButlerPage";
@@ -35,8 +35,11 @@ export type Route =
   | { page: "home" }
   /** landing：从「去看看」进来时，按这个 ticket 轮到谁落到对应的页签（TicketPage 读它）。 */
   | { page: "ticket"; key: string; landing?: boolean }
-  /** focusSession：从「现在」页点进来时先切到的那个 session 的终端。landing "control"：刚开好修复 session，落到「总控」页签（focusSession 是它的终端）。 */
-  | { page: "feature"; id: number; focusSession?: string | null; landing?: "control" }
+  /**
+   * focusSession：从「现在」页点进来时先切到的那个 session 的终端。
+   * landing "control"：刚开好修复 session（fixLanding），落到「总控」页签看 focusTerm 那个终端；landingSeq 每次开都递增，页面已经开着也会再落一次。
+   */
+  | { page: "feature"; id: number; focusSession?: string | null; landing?: "control"; focusTerm?: string | null; landingSeq?: number }
   | { page: "epic"; id: number; focusSession?: string | null }
   /** Butler 总控（BTL-190 第 5 点）。 */
   | { page: "butler"; focusSession?: string | null }
@@ -182,9 +185,10 @@ export function App() {
     tickets: new Map(allTickets.map((t) => [t.key, t.title])),
   };
   /** 「开修复 session」（首页、ticket 页、epic / feature 页的卡片）：开好了去 feature 页的「总控」看它的终端（修复 session 在那里），失败报到全局错误条。 */
+  const fixSeq = useRef(0);
   const openFix = (featureId: number, stuckSessionId: string) => {
     api.openFixSession({ featureId, stuckSessionId }).then((r) => {
-      if (r.ok) setRoute({ page: "feature", id: featureId, landing: "control", focusSession: r.termId });
+      if (r.ok) setRoute(fixLanding(featureId, r.termId, ++fixSeq.current));
       else reportError(new Error(S.openErrors[r.reason] ?? r.reason));
     }, reportError);
   };
@@ -242,6 +246,8 @@ export function App() {
                 onTicketCreated={goTicket}
                 focusSession={route.focusSession}
                 landing={route.landing}
+                focusTerm={route.focusTerm}
+                landingSeq={route.landingSeq}
                 onOpenTarget={openTarget}
                 ctx={ctx}
                 onFix={openFix}

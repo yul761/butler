@@ -489,7 +489,6 @@ export const EN: UiStrings = {
   archiveFeature: "Archive feature (with its tickets)",
   archivedFeatures: "Archived features",
   colFeature: "Feature",
-  waiting: "Waiting for you",
   activity: {
     edit: "Writing code",
     read: "Reading code",
@@ -613,7 +612,6 @@ export const EN: UiStrings = {
   noticeLessons: "Open lessons",
   noticeOpen: "Open session",
   activityBackground: (main: string) => `Background · ${main}`,
-  activityStoppedAgo: (d: string) => `stopped ${d} ago`,
   activitySilent: (d: string) => `no new output for ${d}`,
   durationNow: "just now",
   durationMinutes: (m: number) => `${m} min`,

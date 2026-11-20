@@ -1,12 +1,13 @@
 // 范围页（epic / feature）共用的展示件：只吃 props，不调 api。
 import { Fragment, type ReactNode } from "react";
-import type { ScopeTurnRow, Turn, TurnItem } from "../../../shared/turn";
+import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../../shared/turn";
 import { barSegments, cardKey, type RunningRow } from "../home-view";
 import { progressLine, slowestLine, whoLabel, type TicketRow } from "../scope-view";
 import { S } from "../strings";
 import { turnSentence } from "../turn-text";
 import { turnTone } from "../turn-tone";
 import { TurnCard, type TurnCardProps } from "./TurnCard";
+import type { TurnBoardState } from "./useTurnBoard";
 
 export function WhoTag({ turn }: { turn: Turn }) {
   return <span className={`who turn-tag turn-${turnTone(turn)}`}>{whoLabel(turn, S)}</span>;
@@ -104,4 +105,11 @@ export function ScopeTicketTable(p: {
 
 export function ControlSplit(p: { left: ReactNode; right: ReactNode }) {
   return <div className="control-split"><div className="control-left">{p.left}</div><div className="control-right">{p.right}</div></div>;
+}
+
+/** 范围页的页签内容要看板：还没取到时是骨架（不闪空状态）；取不到就说为什么（board-error：和页面的 .error 分开，不会同时被找到）。 */
+export function ScopeBoard({ turn, children }: { turn: Pick<TurnBoardState, "board" | "error">; children: (b: TurnBoard) => ReactNode }) {
+  if (turn.board !== null) return <>{children(turn.board)}</>;
+  if (turn.error !== null) return <p className="board-error">{turn.error}</p>;
+  return <div className="scope-overview" aria-busy="true"><p className="muted">…</p></div>;
 }

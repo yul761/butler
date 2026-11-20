@@ -6,7 +6,7 @@ import type { ScopeTurnRow, TurnItem } from "../../../shared/turn";
 import type { NameCtx, RunningRow } from "../home-view";
 import type { TicketRow } from "../scope-view";
 import { ControlFeed } from "./ControlConversation";
-import { ControlSplit, ScopeOverview, ScopeRunning, ScopeTicketTable } from "./ScopeParts";
+import { ControlSplit, ScopeBoard, ScopeOverview, ScopeRunning, ScopeTicketTable } from "./ScopeParts";
 
 const noop = () => {};
 const ctx: NameCtx = { epics: new Map(), features: new Map(), tickets: new Map([["T-1", "one"]]) };
@@ -108,5 +108,16 @@ describe("ControlSplit / ControlFeed", () => {
   });
   it("empty feed", () => {
     expect(renderToStaticMarkup(createElement(ControlFeed, { reports: [] }))).toContain("子 session 的完成和卡住汇报会按时间出现在这里");
+  });
+});
+
+describe("ScopeBoard", () => {
+  const board = { items: [], counts: { you: 0 }, scopes: [], generatedAt: 0 } as never;
+  const render = (turn: { board: unknown; error: string | null }) =>
+    renderToStaticMarkup(createElement(ScopeBoard, { turn: turn as never, children: () => createElement("p", null, "BODY") }));
+  it("shows a skeleton while loading, the board error with its own class, then the content", () => {
+    expect(render({ board: null, error: null })).toBe('<div class="scope-overview" aria-busy="true"><p class="muted">…</p></div>');
+    expect(render({ board: null, error: "boom" })).toBe('<p class="board-error">boom</p>');
+    expect(render({ board, error: "stale" })).toBe("<p>BODY</p>");
   });
 });

@@ -1,5 +1,4 @@
-import { useState, type ReactNode } from "react";
-import type { TurnBoard } from "../../../shared/turn";
+import { useState } from "react";
 import type { EpicView, FeatureView, NowTarget } from "../../../shared/types";
 import type { Route } from "../App";
 import { api } from "../api";
@@ -13,7 +12,7 @@ import { EpicSummaryTab, type SummaryRunMessage } from "./EpicSummaryTab";
 import { epicErrorText, epicOpenError } from "./epic-row";
 import { NewFeatureDialog } from "./NewFeatureDialog";
 import { PageTabs } from "./PageTabs";
-import { ControlSplit, ScopeOverview, ScopeRunning, ScopeTicketTable } from "./ScopeParts";
+import { ControlSplit, ScopeBoard, ScopeOverview, ScopeRunning, ScopeTicketTable } from "./ScopeParts";
 import { useTurnBoard } from "./useTurnBoard";
 import { SessionArea, useSessionPanes, WorkspaceHeader } from "./WorkspaceParts";
 
@@ -57,9 +56,7 @@ export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatur
   const openTarget = (t: NowTarget) => {
     if (t.page !== "epic" || t.id !== epic.id || t.sessionId === null) return onOpenTarget(t);
     setControl((n) => (n ?? 0) + 1);
-    const termId = epic.sessions.find((s) => s.id === t.sessionId)?.termId;
-    if (termId) panes.show(termId);
-    else void panes.open(t.sessionId);
+    panes.reveal(t.sessionId);
   };
   const turn = useTurnBoard({ epicId: epic.id });
   const board = turn.board;
@@ -68,13 +65,6 @@ export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatur
   const running = board === null ? null : runningRows(board.items, S, now);
   const tickets = features.flatMap((f) => f.tickets);
   const youItems = board === null ? [] : youCards(board.items);
-
-  /** 看板还没取到时是骨架（不闪空状态）；取不到就说为什么（board-error：和页面的 .error 分开，不会同时被找到）。 */
-  const withBoard = (render: (b: TurnBoard) => ReactNode): ReactNode => {
-    if (board !== null) return render(board);
-    if (turn.error !== null) return <p className="board-error">{turn.error}</p>;
-    return <div className="scope-overview" aria-busy="true"><p className="muted">…</p></div>;
-  };
 
   const runSummary = (featureId: number): Promise<SummaryRunMessage> =>
     api.runFeatureSummary(featureId).then(
@@ -106,7 +96,7 @@ export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatur
         tabs={[
           {
             id: "overview", label: S.lay.tabOverview, className: youItems.length > 0 ? "attention" : undefined,
-            content: withBoard((b) => (
+            content: <ScopeBoard turn={turn}>{(b) => (
               <ScopeOverview
                 rows={b.scopes.filter((r) => r.kind === "feature")}
                 total={scopeTotal(b.scopes, "epic", epic.id)}
@@ -117,23 +107,23 @@ export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatur
                 onOpenRow={(id) => onOpenFeature(Number(id))}
                 onCreate={() => setNewFeature(true)}
               />
-            )),
+            )}</ScopeBoard>,
           },
           {
             id: "running",
             label: <>{S.lay.tabRunning}{running && <span className="muted">{running.length}</span>}</>,
-            content: withBoard(() => <ScopeRunning rows={running ?? []} onOpenTicket={onOpenTicket} />),
+            content: <ScopeBoard turn={turn}>{() => <ScopeRunning rows={running ?? []} onOpenTicket={onOpenTicket} />}</ScopeBoard>,
           },
           {
             id: "tickets",
             label: <>{S.lay.tabTickets}<span className="muted">{tickets.length}</span></>,
-            content: withBoard((b) => (
+            content: <ScopeBoard turn={turn}>{(b) => (
               <ScopeTicketTable
                 groups={groupByFeature(ticketRows(tickets, b.items), features).map((g) => ({ name: g.feature.name, merged: g.merged, total: g.rows.length, rows: g.rows }))}
                 onOpenTicket={onOpenTicket}
                 emptyText={S.noEpicFeatures}
               />
-            )),
+            )}</ScopeBoard>,
           },
           {
             id: "control", label: S.lay.tabControl,
