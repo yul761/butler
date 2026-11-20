@@ -239,6 +239,13 @@ describe("runningRows", () => {
     expect(runningRows([{ ...i, others: 0 }], S, 2000)[0].sentence).toBe(turnSentence(i.turn, i, S));
   });
 
+  it("two coordinators working on one page get different keys", () => {
+    const loose = (sessionId: string, featureId: number | null) => it0({ owner: "agent", kind: "working", sessionId }, { ticketKey: null, epicId: 1, featureId });
+    const rows = runningRows([loose("epic-ctl", null), loose("feature-ctl", 10)], S, 2000);
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.key)).size).toBe(2);
+  });
+
   it("names a waiting merge queue as others", () => {
     expect(runningRows([it0({ owner: "external", kind: "merge_queue", names: [] })], S, 2000)[0].who).toBe(S.hm.whoExternal);
   });

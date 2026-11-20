@@ -229,7 +229,8 @@ export function runningRows(items: TurnItem[], S: UiStrings, now: number): Runni
     const who = t.owner === "agent" ? S.hm.whoAgent : externalWho(t, S);
     const pr = i.pr ? `${i.pr.repo}#${i.pr.number}` : "";
     rows.push({ since: i.since, row: {
-      key: `${i.ticketKey ?? ""}|${pr}|${t.kind}`, ticketKey: i.ticketKey, owner: t.owner, who,
+      // 不属于 ticket 的（epic、feature 的总控）同页可以有好几个在干活：key 带上 session。
+      key: `${i.ticketKey ?? ""}|${pr}|${t.kind}${i.ticketKey === null ? `|${sessionOf(t) ?? ""}` : ""}`, ticketKey: i.ticketKey, owner: t.owner, who,
       sentence: i.others > 0 ? `${turnSentence(t, i, S)} · ${S.lay.morePrs(i.others)}` : turnSentence(t, i, S), age: i.since > 0 ? S.hm.ago(formatDuration(now - i.since, S)) : "",
     } });
   }
