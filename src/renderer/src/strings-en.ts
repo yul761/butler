@@ -2391,6 +2391,14 @@ export const EN: UiStrings = {
     effOverride: "You changed the classification",
     effOverrideSub: (items: number, size: number, risk: number, clarify: number) => `${items} tickets · size ${size} · risk ${risk} · info ${clarify}`,
   },
+  lay: {
+    progressLine: (merged: number, total: number, you: number) =>
+      total === 0 ? "No tickets yet" : `${merged} of ${total} merged · ${you === 0 ? "nothing waiting on you" : `${you} waiting on you`}`,
+    slowest: (name: string) => `Slowest: "${name}".`,
+    noSlowest: "Nothing is clearly behind.",
+    whoYou: "You",
+    nameSep: ", ",
+  },
   bt: {
     noticePromoted: (names: string) => `Shadow checks promoted to enforce automatically: ${names}`,
     noticeDemoted: (names: string, reason: string) => `Enforced checks moved back to shadow automatically (${reason}): ${names}`,

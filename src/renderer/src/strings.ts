@@ -2410,6 +2410,15 @@ const ZH = {
     effOverride: "你改了分类",
     effOverrideSub: (items: number, size: number, risk: number, clarify: number) => `${items} 个 ticket · 规模 ${size} · 风险 ${risk} · 信息 ${clarify}`,
   },
+  /** 范围页（epic / feature）共用的文案（UI 重做第 3 层）。 */
+  lay: {
+    progressLine: (merged: number, total: number, you: number) =>
+      total === 0 ? "还没有 ticket" : `${total} 个里合了 ${merged} 个 · ${you === 0 ? "没有事轮到你" : `${you} 件轮到你`}`,
+    slowest: (name: string) => `最慢的是「${name}」。`,
+    noSlowest: "没有明显落后的。",
+    whoYou: "你",
+    nameSep: "、",
+  },
   /** 回测、影子自动升级、自动降级、阈值复查（工作流 F）。 */
   bt: {
     noticePromoted: (names: string) => `影子运行的检查已自动升为强制：${names}`,
