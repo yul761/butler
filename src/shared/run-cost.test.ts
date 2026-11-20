@@ -29,7 +29,7 @@ describe("runWeight / cumulativeWeight", () => {
     const u = { ...T2_USAGE, cache_creation: { ephemeral_5m_input_tokens: 649, ephemeral_1h_input_tokens: 10000 } };
     expect(runWeight(u)).toBeCloseTo(2 + 1503.9 + 1.25 * 649 + 2 * 10000 + 15, 6);
   });
-  it("sums every model; a model without the split counts all its cache writes at 5m", () => {
+  it("cumulativeWeight adds up every model (only the fallback uses it); a model without the split counts all its cache writes at 5m", () => {
     const mu = {
       a: { inputTokens: 10, outputTokens: 1, cacheReadInputTokens: 100, cacheCreationEphemeral5mInputTokens: 4, cacheCreationEphemeral1hInputTokens: 8 },
       b: { inputTokens: 1, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 3 },
@@ -44,31 +44,52 @@ describe("runWeight / cumulativeWeight", () => {
 });
 
 describe("runCostFromCumulative", () => {
-  it("splits the cumulative total by this run's share of the weighted tokens (live t2)", () => {
-    const usd = runCostFromCumulative(T2.total_cost_usd, T2.usage, T2.modelUsage);
-    expect(usd).toBeCloseTo((T2.total_cost_usd * 22818.9) / 51460.1, 12);
-    expect(usd).toBeCloseTo(0.0022819, 6);
+  it("splits this run's model's cumulative cost by its share of that model's weighted tokens (live t2): exact", () => {
+    const r = runCostFromCumulative(T2.total_cost_usd, T2.usage, T2.modelUsage, null);
+    expect(r?.usd).toBeCloseTo((0.00514601 * 22818.9) / 51460.1, 12);
+    expect(r?.usd).toBeCloseTo(0.0022819, 6);
+    expect(r?.partial).toBe(false);
   });
   it("matches each live run's real cost (the difference of the totals): t2, t3, the fork f1 and its follow-up f2", () => {
     for (const [run, before] of [[T2, T1], [T3, T2], [F1, T3], [F2, F1]] as const) {
-      expect(runCostFromCumulative(run.total_cost_usd, run.usage, run.modelUsage)).toBeCloseTo(run.total_cost_usd - before.total_cost_usd, 9);
+      expect(runCostFromCumulative(run.total_cost_usd, run.usage, run.modelUsage, null)?.usd).toBeCloseTo(run.total_cost_usd - before.total_cost_usd, 9);
     }
   });
-  it("is the whole total when this run is the whole session", () => {
+  // 单价跨模型不一样：opus 每单位权重 5 倍于 haiku。历史里两个模型权重一样多，这一轮是 opus，真实 0.02。
+  // 把所有模型的权重加起来按 total 拆会得到 1.22 × 4000 / 404000 ≈ 0.0121，少四成。
+  const run = { input_tokens: 4000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 };
+  const opus = { inputTokens: 204_000, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 1.02 };
+  const haiku = { inputTokens: 200_000, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.2 };
+  it("several models: only this run's model counts, priced at its own rate, not summed across models", () => {
+    const r = runCostFromCumulative(1.22, run, { "claude-haiku-5-5": haiku, "claude-opus-5-5": opus }, "opus");
+    expect(r?.usd).toBeCloseTo(0.02, 12);
+    expect(r?.partial).toBe(false);
+  });
+  it("several models and only one can hold this run's usage: that one, with no hint", () => {
+    const small = { ...haiku, inputTokens: 100 };
+    expect(runCostFromCumulative(1.22, run, { "claude-haiku-5-5": small, "claude-opus-5-5": opus }, null)?.usd).toBeCloseTo(0.02, 12);
+  });
+  it("this run's model can't be told apart: the share of every model's weight, marked partial", () => {
+    const r = runCostFromCumulative(1.22, run, { "claude-haiku-5-5": haiku, "claude-opus-5-5": opus }, null);
+    expect(r?.usd).toBeCloseTo((1.22 * 4000) / 404_000, 12);
+    expect(r?.partial).toBe(true);
+  });
+  it("the model has no costUSD: the share of the total; exact when it is the only model", () => {
     const mu = { m: { inputTokens: 2, outputTokens: 3, cacheReadInputTokens: 15039, cacheCreationInputTokens: 10649 } };
-    expect(runCostFromCumulative(0.01, T2_USAGE, mu)).toBeCloseTo(0.01, 12);
+    expect(runCostFromCumulative(0.01, T2_USAGE, mu, null)).toEqual({ usd: 0.01, partial: false });
   });
   // 这一轮比累计还大说明数对不上（比如累计没算全）：夹到 total 等于把以前的花费全算到这一轮头上，所以算不出来。
   it("this run weighing more than the cumulative → null, not clamped to the total", () => {
     const mu = { m: { inputTokens: 2, outputTokens: 3, cacheReadInputTokens: 15039, cacheCreationInputTokens: 0 } };
-    expect(runCostFromCumulative(5.02, T2_USAGE, mu)).toBeNull();
+    expect(runCostFromCumulative(5.02, T2_USAGE, mu, null)).toBeNull();
+    expect(runCostFromCumulative(5.02, T2_USAGE, { m: { ...mu.m, costUSD: 5.02 } }, "m")).toBeNull();
   });
-  it("can't tell → null: no total, no usage, no modelUsage, or a zero weight", () => {
-    expect(runCostFromCumulative(null, T2.usage, T2.modelUsage)).toBeNull();
-    expect(runCostFromCumulative(T2.total_cost_usd, null, T2.modelUsage)).toBeNull();
-    expect(runCostFromCumulative(T2.total_cost_usd, T2.usage, undefined)).toBeNull();
-    expect(runCostFromCumulative(T2.total_cost_usd, T2.usage, {})).toBeNull();
-    expect(runCostFromCumulative(T2.total_cost_usd, T2.usage, { m: { inputTokens: 0 } })).toBeNull();
+  it("can't tell → null: no usage, no modelUsage, a zero weight, or neither a costUSD nor a total", () => {
+    expect(runCostFromCumulative(T2.total_cost_usd, null, T2.modelUsage, null)).toBeNull();
+    expect(runCostFromCumulative(T2.total_cost_usd, T2.usage, undefined, null)).toBeNull();
+    expect(runCostFromCumulative(T2.total_cost_usd, T2.usage, {}, null)).toBeNull();
+    expect(runCostFromCumulative(T2.total_cost_usd, T2.usage, { m: { inputTokens: 0 } }, null)).toBeNull();
+    expect(runCostFromCumulative(null, T2_USAGE, { m: { inputTokens: 2, outputTokens: 3, cacheReadInputTokens: 15039, cacheCreationInputTokens: 10649 } }, null)).toBeNull();
   });
 });
 

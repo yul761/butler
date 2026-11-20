@@ -106,6 +106,21 @@ describe("turnCost", () => {
     const r = turnCost(withCumulative(1.04), "resumed", 1.02, registry);
     expect(r.usd).toBeCloseTo(0.02, 10);
   });
+  // 开发 session 常有好几个模型（subagent 走 sonnet/haiku）：只拿这一轮的模型那一项拆，按它自己的单价。
+  const opusHistory = { inputTokens: 100 * 51, outputTokens: 50 * 51, cacheReadInputTokens: 9000 * 51, cacheCreationInputTokens: 0, costUSD: 1.02 };
+  const haikuHistory = { ...opusHistory, costUSD: 0.2 };
+  const twoModels = { "claude-haiku-5": haikuHistory, "claude-opus-5": opusHistory };
+  it("several models in the cumulative: this run's model's own cost and weight, exact", () => {
+    const r = turnCost({ ...run(1.22), usageRaw: raw, modelUsage: twoModels }, "forked", null, registry);
+    expect(r.usd).toBeCloseTo(1.02 / 51, 12);
+    expect(r).toMatchObject({ partial: false, seenTotal: 1.22 });
+  });
+  it("several models and this run's model unknown: the share of every model's weight, partial", () => {
+    const r = turnCost({ ...run(1.22), model: null, usageRaw: raw, modelUsage: twoModels }, "forked", null, registry);
+    expect(r.usd).toBeCloseTo(1.22 / 102, 12);
+    expect(r).toMatchObject({ partial: true, seenTotal: 1.22 });
+    expect(r.cli).toBe(r.usd);
+  });
   it("modelUsage with nothing in it falls back to the estimate", () => {
     expect(turnCost({ ...run(5), usageRaw: raw, modelUsage: {} }, "forked", null, registry)).toEqual({ usd: 22.5, partial: false, cli: null, seenTotal: 5 });
   });
