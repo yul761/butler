@@ -4,7 +4,7 @@ import { TASK_IDS, TASKS, effectiveRoute, isModelName, isTaskId, routingConfigur
 describe("task registry", () => {
   it("registers every task id of the master design table with its tier and policy", () => {
     const table: Record<string, [string, string]> = {
-      needs_you: ["low", "fallback"], stuck_judge: ["low", "fallback"],
+      needs_you: ["low", "fallback"], stuck_judge: ["low", "fallback"], conv_qa: ["low", "fallback"],
       handoff: ["session", "wait"], feature_summary: ["session", "wait"],
       handoff_refresh: ["mid", "fallback"], epic_digest: ["mid", "fallback"],
       lesson_analyze: ["mid", "fallback"], lesson_enrich: ["mid", "fallback"], lesson_cluster: ["mid", "fallback"],
@@ -25,6 +25,7 @@ describe("task registry", () => {
   it("keeps today's model for every existing call site", () => {
     expect(TASKS.needs_you.legacy).toBe("haiku");
     expect(TASKS.stuck_judge.legacy).toBe("haiku");
+    expect(TASKS.conv_qa.legacy).toBe("haiku");
     expect(TASKS.handoff_refresh.legacy).toBe("sonnet");
     expect(TASKS.epic_digest.legacy).toBe("sonnet");
     expect(TASKS.lesson_analyze.legacy).toBeNull();
