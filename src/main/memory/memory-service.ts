@@ -1,4 +1,5 @@
 import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
+import type { RememberResult } from "../../shared/fork";
 import type { Handoff } from "../../shared/handoff";
 import {
   epicScope, featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, plainNoteBody, ticketScope, truncateUnits, WORKSPACE_SCOPE,
@@ -443,8 +444,8 @@ export class MemoryService {
   }
 
   /**
-   * 精简分叉用：这个范围的交接摘要加记忆条目拼成文本，最多 maxChars 个字符。
-   * 记忆关着、读失败（记日志）时返回 ""；永不 reject。和 view 一样只读，不进写入队列。
+   * 精简分叉用：这个范围的记忆条目在前、交接摘要在后，各带一个短标签，拼成文本，最多 maxChars 个字符
+   * （交接再长也挤不掉记忆条目）。记忆关着、读失败（记日志）时返回 ""；永不 reject。和 view 一样只读，不进写入队列。
    */
   async recallText(scope: string, maxChars: number): Promise<string> {
     if (!this.d.enabled()) return "";
@@ -452,7 +453,10 @@ export class MemoryService {
       const text = await withScope({ dataDir: this.d.dataDir, scope }, async (s) => {
         const handoff = await s.activeHandoff();
         const items = await s.facts();
-        return [handoff?.content ?? "", ...items.map((i) => i.text)].filter(Boolean).join("\n");
+        const parts: string[] = [];
+        if (items.length > 0) parts.push(`${currentLang() === "en" ? "Notes" : "记忆"}：\n${items.map((i) => i.text).join("\n")}`);
+        if (handoff?.content) parts.push(`${currentLang() === "en" ? "Handoff" : "交接"}：\n${handoff.content}`);
+        return parts.join("\n\n");
       });
       return truncateUnits(text, maxChars);
     } catch (e) {
@@ -463,20 +467,28 @@ export class MemoryService {
 
   /**
    * 把一段纯文本记进这个范围（不带 Butler 的 kind:id 前缀，所以 reconcile 不认它，也就不会删它）。
-   * 先过 slotGuard：没有空位就不写（不挤掉别的条目），返回 "full"。正文压空白、截到 NOTE_BODY_LIMIT。
+   * 每次写之前过 slotGuard：没有空位就不写（不挤掉别的条目），返回 "full"。正文压空白、截到 NOTE_BODY_LIMIT。
+   * 和已遗忘的条目一字不差时 StateCore 会永久隐藏它（见 writeVisible）：写完看不见就加 " #2"…" #5" 再写，
+   * 到 MAX_NOTE_VARIANT 还是看不见就返回 "failed"。
    * 走写入队列，永不 reject：失败只写日志，返回 "failed"。
    */
-  rememberText(scope: string, text: string): Promise<"written" | "full" | "disabled" | "failed"> {
-    return this.enqueue<"written" | "full" | "disabled" | "failed">(
+  rememberText(scope: string, text: string): Promise<Exclude<RememberResult, "busy" | "no_conclusion">> {
+    return this.enqueue<Exclude<RememberResult, "busy" | "no_conclusion">>(
       `memory rememberText ${scope}`,
       async () => {
         if (!this.d.enabled()) return "disabled";
         const body = plainNoteBody(text);
         if (!body) return "failed";
         return withScope({ dataDir: this.d.dataDir, scope }, async (s) => {
-          if (!(await slotGuard(s).take())) return "full";
-          await s.remember(body);
-          return "written";
+          const slots = slotGuard(s);
+          for (let v = 1; v <= MAX_NOTE_VARIANT; v++) {
+            if (!(await slots.take())) return "full";
+            const t = v === 1 ? body : `${body} #${v}`;
+            await s.remember(t);
+            if ((await s.facts()).some((i) => i.text === t)) return "written";
+          }
+          this.log(`memory rememberText ${scope}: stays hidden after ${MAX_NOTE_VARIANT} variants`);
+          return "failed";
         });
       },
       "failed",

@@ -649,6 +649,44 @@ describe("MemoryService.rememberText and recallText (fork light mode)", () => {
     expect(t.logs.some((l) => l.includes("boom"))).toBe(true);
   });
 
+  it("rejects blank text without writing", async () => {
+    const t = setup();
+    expect(await t.memory.rememberText("ticket:PROJ-1", "   ")).toBe("failed");
+    expect(await t.texts()).toEqual([]);
+  });
+
+  it("still ends up visible when the text equals a forgotten note (StateCore hides those)", async () => {
+    const t = setup();
+    await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
+      await s.remember("结论甲");
+      const [it] = await s.facts();
+      await s.forget(it.factKey);
+    });
+    expect(await t.texts()).toEqual([]);
+    expect(await t.memory.rememberText("ticket:PROJ-1", "结论甲")).toBe("written");
+    expect(await t.texts()).toHaveLength(1);
+  });
+
+  it("returns failed instead of written when the text never becomes visible", async () => {
+    const t = setup();
+    wrapScopes(() => true, (s) => ({ ...s, remember: async () => ({ superseded: null }) as Awaited<ReturnType<ScopeHandle["remember"]>> }));
+    expect(await t.memory.rememberText("ticket:PROJ-1", "看不见")).toBe("failed");
+  });
+
+  it("recallText does not wait for the write queue", async () => {
+    const t = setup();
+    t.addHandoff(payload({ done_today: ["做完了"] }));
+    await t.memory.syncTicket("PROJ-1");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    wrapScopes(() => true, (s) => ({ ...s, remember: async (x: string) => (await gate, s.remember(x)) }));
+    const write = t.memory.rememberText("ticket:PROJ-1", "排着队");
+    const got = await Promise.race([t.memory.recallText("ticket:PROJ-1", 1000), new Promise<string>((r) => setTimeout(() => r("TIMEOUT"), 2000))]);
+    expect(got).toContain("做完了");
+    release();
+    expect(await write).toBe("written");
+  });
+
   it("recallText joins the handoff and the notes, capped at maxChars", async () => {
     const t = setup();
     t.addHandoff(payload({ done_today: ["做完了登录页"], decisions: [{ key: "db", statement: "用 PostgreSQL" }] }));
@@ -656,9 +694,14 @@ describe("MemoryService.rememberText and recallText (fork light mode)", () => {
     const all = await t.memory.recallText("ticket:PROJ-1", 10_000);
     expect(all).toContain("做完了登录页");
     expect(all).toContain("用 PostgreSQL");
-    const cut = await t.memory.recallText("ticket:PROJ-1", 20);
-    expect(cut.length).toBeLessThanOrEqual(20);
-    expect(cut.length).toBeGreaterThan(0);
+    expect(all.indexOf("用 PostgreSQL")).toBeLessThan(all.indexOf("做完了登录页"));
+    const cut = await t.memory.recallText("ticket:PROJ-1", 40);
+    expect(cut.length).toBeLessThanOrEqual(40);
+    expect(cut).toContain("用 PostgreSQL");
+    // 交接很长时，记忆条目也不会被挤出预算
+    t.addHandoff(payload({ done_today: ["长".repeat(5000)] }));
+    await t.memory.syncTicket("PROJ-1");
+    expect(await t.memory.recallText("ticket:PROJ-1", 300)).toContain("用 PostgreSQL");
   });
 
   it("recallText is empty when memory is off or the read fails", async () => {
