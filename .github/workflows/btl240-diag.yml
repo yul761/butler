@@ -1,0 +1,36 @@
+# TEMPORARY (BTL-240): Windows runner diagnostics; removed before merge.
+name: BTL-240 diag
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  diag:
+    runs-on: windows-latest
+    steps:
+      - name: Defender and CPU
+        shell: pwsh
+        run: |
+          Get-MpComputerStatus | Select-Object AMServiceEnabled,RealTimeProtectionEnabled,OnAccessProtectionEnabled,IoavProtectionEnabled,BehaviorMonitorEnabled | Format-List
+          (Get-MpPreference).ExclusionPath
+          (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+          node -e "console.log(require('os').availableParallelism(), require('os').totalmem()/2**30)"
+          git --version
+      - name: Spawn latency
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/spawn.js" <<'JS'
+          const { execFileSync } = require("child_process");
+          const fs = require("fs"), os = require("os"), path = require("path");
+          const t = (label, n, f) => { const s = performance.now(); for (let i = 0; i < n; i++) f(i); console.log(label, ((performance.now() - s) / n).toFixed(1), "ms"); };
+          t("git --version", 30, () => execFileSync("git", ["--version"]));
+          t("node -e 0", 10, () => execFileSync(process.execPath, ["-e", "0"]));
+          const base = fs.mkdtempSync(path.join(os.tmpdir(), "spawn-"));
+          let tpl;
+          t("makeRepo (6 git)", 10, (i) => { const d = path.join(base, "r" + i); fs.mkdirSync(d); const g = (...a) => execFileSync("git", a, { cwd: d, stdio: "ignore" });
+            g("init", "-b", "main"); g("config", "user.email", "t@e.com"); g("config", "user.name", "T"); g("config", "commit.gpgsign", "false"); fs.writeFileSync(path.join(d, "README.md"), "x\n"); g("add", "."); g("commit", "-m", "i"); tpl = d; });
+          t("copy + refresh", 10, (i) => { const d = path.join(base, "c" + i); fs.cpSync(tpl, d, { recursive: true, preserveTimestamps: true }); execFileSync("git", ["update-index", "-q", "--refresh"], { cwd: d, stdio: "ignore" }); });
+          t("copy only", 10, (i) => { const d = path.join(base, "o" + i); fs.cpSync(tpl, d, { recursive: true }); });
+          JS
+          node "$RUNNER_TEMP/spawn.js"
+          echo "--- 3 in parallel"
+          node "$RUNNER_TEMP/spawn.js" & node "$RUNNER_TEMP/spawn.js" & node "$RUNNER_TEMP/spawn.js"; wait
