@@ -6,6 +6,7 @@ import type { TurnItem } from "../../../shared/turn";
 import type { TicketView } from "../../../shared/types";
 import type { TicketRow } from "../scope-view";
 import { S } from "../strings";
+import { turnSentence } from "../turn-text";
 import { TicketHome, type TicketHomeProps } from "./TicketHome";
 
 const noop = () => {};
@@ -15,7 +16,7 @@ const merge: TicketItemTurn = { owner: "you", kind: "merge", risk: null };
 type TicketItemTurn = TurnItem["turn"];
 const mkRow = (turn: TicketItemTurn = merge, others = 0): TicketRow => {
   const item: TurnItem = { ticketKey: "BTL-1", pr, epicId: null, featureId: null, turn, since: 0, others };
-  return { key: "BTL-1", title: "T", featureId: null, turn, others, item, since: 0, prs: [{ tag: "#52", number: 52, repo: "r" }] };
+  return { key: "BTL-1", title: "T", featureId: null, turn, others, item, since: 0, prs: [{ tag: "#52", number: 52, repo: "r" }], asks: [] };
 };
 const stageRow: PrStagesView = {
   ticketKey: "BTL-1", featureId: null, repoId: 1, repoName: "r", prId: 1, slug: null, noPr: false, prNumber: 52, prUrl: "https://x/pr/52", closed: false,
@@ -83,6 +84,21 @@ describe("TicketHome", () => {
     const button = findButton(el, S.hm.act.openPr);
     button.props.onClick();
     expect(opened).toEqual(["https://github.com/acme/api/pull/52"]);
+  });
+  it("an orphan question shows under the ticket's own state, with a way to answer it", () => {
+    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
+      turn: { owner: "you", kind: "answer", question: "用哪个库？", options: [], askId: 3, sessionId: "s" } };
+    const row = { ...mkRow(), asks: [ask] };
+    const h = html({ row });
+    expect(h).toContain("ticket-home-asks");
+    expect(h).toContain(turnSentence(ask.turn, ask, S));
+    const went: string[] = [];
+    const el = TicketHome({ ...props({ row }), onGoTab: (t) => went.push(t) });
+    findButton(el, S.lay.actAnswer).props.onClick();
+    expect(went).toEqual(["terminal"]);
+  });
+  it("no orphan questions: no questions section", () => {
+    expect(html()).not.toContain("ticket-home-asks");
   });
   it("several PRs", () => {
     expect(html({ row: mkRow(merge, 1) })).toContain("另有 1 个 PR");

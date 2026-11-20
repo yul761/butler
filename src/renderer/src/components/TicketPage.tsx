@@ -98,7 +98,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         forceSeq={force?.n}
         tabs={[
           {
-            id: "overview", label: S.lay.tabOverview, className: row?.turn.owner === "you" ? "attention" : undefined,
+            id: "overview", label: S.lay.tabOverview, className: row !== null && (row.turn.owner === "you" || row.asks.length > 0) ? "attention" : undefined,
             content: <TicketHomeTab ticket={ticket} onGoTab={goTab} onFix={onFix} />,
           },
           {

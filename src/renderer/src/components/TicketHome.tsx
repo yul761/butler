@@ -61,6 +61,17 @@ export function TicketHome({ ticket, row, glance, stages, canFix, notice, onGoTa
           {actions.map((a) => <button key={a.id} className={a.primary ? "primary" : undefined} onClick={() => run(a)}>{a.label}</button>)}
         </div>
       )}
+      {row.asks.length > 0 && (
+        <section className="ticket-home-asks">
+          {row.asks.map((a, n) => (
+            <p key={a.turn.kind === "answer" ? a.turn.askId : n} className="ticket-home-state">
+              <WhoTag turn={a.turn} />
+              <span className="sentence">{turnSentence(a.turn, a, S)}</span>
+              <button className="primary" onClick={() => onGoTab("terminal")}>{S.lay.actAnswer}</button>
+            </p>
+          ))}
+        </section>
+      )}
       {notice && <p className="muted" role="status">{notice}</p>}
       {glance !== null && (
         <section className="ticket-home-said">

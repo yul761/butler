@@ -86,7 +86,7 @@ describe("ScopeRunning", () => {
 describe("ScopeTicketTable", () => {
   const mk = (key: string, prs: TicketRow["prs"], others = 0): TicketRow => ({
     key, title: "标题", featureId: 3, turn: { owner: "external", kind: "awaiting_review", names: [] }, others,
-    item: { ...youItem, turn: { owner: "external", kind: "awaiting_review", names: [] } }, since: 0, prs,
+    item: { ...youItem, turn: { owner: "external", kind: "awaiting_review", names: [] } }, since: 0, prs, asks: [],
   });
   const html = (groups: Parameters<typeof ScopeTicketTable>[0]["groups"], emptyText = "EMPTY") => renderToStaticMarkup(createElement(ScopeTicketTable, { groups, onOpenTicket: noop, emptyText }));
   it("groups, columns, PR cells", () => {

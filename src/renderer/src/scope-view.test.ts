@@ -223,3 +223,34 @@ describe("the renderer takes the ticket's turn from main (one state algorithm)",
     expect(v.youItems.map((i) => i.turn)).toEqual([ask]);
   });
 });
+
+describe("an orphan question on a ticket with nothing else going (no PR, no live session)", () => {
+  // 发问的 session 已经结束（提问进了 moreAsks），也没有别的活 session：ticket 自己的轮次是没开始，主进程不出 ticketLevel 那条。
+  const NOW = 1_000_000;
+  const ask: Turn = { owner: "you", kind: "answer", question: "q", options: [], askId: 3, sessionId: "s" };
+  const input: BoardInput = {
+    epics: [{ id: 1, name: "E" }], features: [{ id: 10, name: "F", epicId: 1 }],
+    tickets: [{ key: "K-1", name: "K-1", featureId: 10, prs: [], others: [], moreAsks: [{ turn: ask, since: NOW - 4 }] }],
+    loose: [], reviews: [], dayStart: 0, now: NOW,
+  };
+  it("the home page has the card, and so do the feature and epic pages, with the overview flagged", () => {
+    const home = buildTurnBoard(input, null);
+    expect(home.items.filter((i) => i.turn.kind === "answer")).toHaveLength(1);
+    for (const f of [{ featureId: 10 }, { epicId: 1 }]) {
+      const v = scopeBoardView(buildTurnBoard(input, f).items, S, NOW);
+      expect(v.youItems.map((i) => i.turn), JSON.stringify(f)).toEqual([ask]);
+      expect(v.attention).toBe(true);
+    }
+  });
+  it("the ticket row keeps the ticket's own turn and carries the question, so the ticket page can show it", () => {
+    const [row] = ticketRows([tk("K-1")], buildTurnBoard(input, { ticketKey: "K-1" }).items);
+    expect(row.turn.owner).toBe("idle");
+    expect(row.asks.map((i) => i.turn)).toEqual([ask]);
+  });
+  it("a ticket whose own turn is the question does not list it again", () => {
+    const one: BoardInput = { ...input, tickets: [{ key: "K-1", name: "K-1", featureId: 10, prs: [], others: [{ turn: ask, since: NOW - 4 }], moreAsks: [] }] };
+    const [row] = ticketRows([tk("K-1")], buildTurnBoard(one, { ticketKey: "K-1" }).items);
+    expect(row.turn).toEqual(ask);
+    expect(row.asks).toEqual([]);
+  });
+});

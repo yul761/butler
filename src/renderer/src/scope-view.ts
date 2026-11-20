@@ -15,6 +15,8 @@ export interface TicketRow {
   item: TurnItem;
   since: number;
   prs: { tag: string; number: number; repo: string }[];
+  /** 这个 ticket 多出来的没回答的提问（发问的 session 不在了，不算 ticket 的轮次，首页照样各出一张卡）。 */
+  asks: TurnItem[];
 }
 
 export function prTag(pr: { repo: string; number: number }, multiRepo: boolean): string {
@@ -22,6 +24,11 @@ export function prTag(pr: { repo: string; number: number }, multiRepo: boolean):
 }
 
 const NOT_STARTED: Turn = { owner: "idle", kind: "not_started" };
+
+/** 一个 ticket 的那几条里，除了它自己那条以外没回答的提问（ticket 自己的轮次不是活的时候也要出）。 */
+function extraAsks(mine: TurnItem[], own: TurnItem | null): TurnItem[] {
+  return mine.filter((i) => i !== own && i.pr === null && i.turn.owner === "you" && i.turn.kind === "answer");
+}
 
 /**
  * 一个 ticket 在看板里的那几条（带 filter 时按 PR 拆开的、session 级的、多出来的提问）里，主进程标了 ticketLevel 的那一条（ticketItem）：
@@ -46,7 +53,7 @@ export function ticketRows(tickets: Pick<TicketView, "key" | "title" | "featureI
     const list = [...seen.values()];
     const multi = new Set(list.map((p) => p.repo)).size > 1;
     const prs = list.sort((a, b) => a.number - b.number).map((p) => ({ tag: prTag(p, multi), number: p.number, repo: p.repo }));
-    return { key: t.key, title: t.title, featureId: t.featureId, turn: item.turn, others, item, since: item.since, prs };
+    return { key: t.key, title: t.title, featureId: t.featureId, turn: item.turn, others, item, since: item.since, prs, asks: extraAsks(mine, picked) };
   });
 }
 
@@ -64,9 +71,9 @@ export function scopeBoardView(items: TurnItem[], S: UiStrings, now: number): { 
   }
   for (const [key, mine] of byTicket) {
     const item = ticketItem(mine, key);
-    if (item === null) continue;
-    out.push(item);
-    for (const i of mine) if (i !== item && i.pr === null && i.turn.owner === "you" && i.turn.kind === "answer") out.push(i);
+    // ticket 自己的轮次不在板上（没开始）时，多出来的提问照样出卡。
+    if (item !== null) out.push(item);
+    out.push(...extraAsks(mine, item));
   }
   const youItems = youCards(out);
   return { youItems, running: runningRows(out, S, now), attention: youItems.length > 0 };
