@@ -1,28 +1,29 @@
 import { useEffect, useRef, useState } from "react";
+import { isSettingsTab, sectionTarget, SETTINGS_TABS, type AdvancedGroupId, type SettingsSection, type SettingsTabId } from "../../../shared/settings-layout";
 import type { HealthReport } from "../../../shared/types";
 import { api } from "../api";
+import { savedTab, saveTab } from "../local-prefs";
 import { S } from "../strings";
-import { PrivacySettings } from "./PrivacySettings";
-import { ExternalActionSettings } from "./ExternalActionSettings";
+import { AdvancedSettings } from "./AdvancedSettings";
 import { BasicSettings } from "./BasicSettings";
-import { SessionPerfSettings } from "./SessionPerfSettings";
-import { ScheduleSettings } from "./ScheduleSettings";
-import { LessonsSettings } from "./LessonsSettings";
-import { ClaudeAvailability } from "./ClaudeAvailability";
-import { RoutingSettings } from "./RoutingSettings";
-import { CostBackgroundSettings } from "./CostBackgroundSettings";
-import { LoopSettings } from "./LoopSettings";
-import { InterruptSettings } from "./InterruptSettings";
-import { StackSettings } from "./StacksPanel";
-import { ReviewSettings } from "./ReviewSettings";
-import { IntakeSettings } from "./IntakeSettings";
+import { HealthSettings } from "./HealthSettings";
 
-type SettingsTab = "general" | "routing" | "cost" | "loop" | "interrupts" | "stacks" | "review" | "intake";
+/** 没有 section 时回到上次看的 tab；记录不对就是「基本」。 */
+function initialTab(section: SettingsSection | undefined): SettingsTabId {
+  if (section) return sectionTarget(section).tab;
+  const saved = savedTab("settings");
+  return isSettingsTab(saved) ? saved : "basic";
+}
 
-export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => void; section?: "health" | "routing" | "cost" }) {
-  const [tab, setTab] = useState<SettingsTab>(section === "routing" || section === "cost" ? section : "general");
+/** 设置页（UI 重做 spec §5.3）：基本 / 功能 / 高级 / 健康检查。 */
+export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => void; section?: SettingsSection }) {
+  const [tab, setTab] = useState<SettingsTabId>(() => initialTab(section));
+  const [openGroup, setOpenGroup] = useState<AdvancedGroupId | null>(() => sectionTarget(section).group);
   useEffect(() => {
-    if (section) setTab(section === "routing" || section === "cost" ? section : "general");
+    if (!section) return;
+    const t = sectionTarget(section);
+    setTab(t.tab);
+    setOpenGroup(t.group);
   }, [section]);
   const [report, setReport] = useState<HealthReport | null>(null);
   const [busy, setBusy] = useState(false);
@@ -55,102 +56,35 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
     void run(api.health);
   }, []);
 
-  const tabs = (
-    <div className="settings-tabs" role="tablist">
-      {(["general", "routing", "cost", "loop", "interrupts", "stacks", "review", "intake"] as const).map((t) => (
-        <button key={t} role="tab" data-testid={`settings-tab-${t}`} aria-selected={tab === t} className={tab === t ? "page-tab active" : "page-tab"} onClick={() => setTab(t)}>
-          {S.settingsTabs[t]}
-        </button>
-      ))}
-    </div>
-  );
-  if (tab === "cost") {
-    return (
-      <div className="page">
-        {tabs}
-        <CostBackgroundSettings />
-      </div>
-    );
+  function choose(t: SettingsTabId) {
+    setTab(t);
+    setOpenGroup(null);
+    saveTab("settings", t);
   }
-  if (tab === "interrupts") {
-    return (
-      <div className="page">
-        {tabs}
-        <InterruptSettings />
-      </div>
-    );
-  }
-  if (tab === "stacks") {
-    return (
-      <div className="page">
-        {tabs}
-        <StackSettings />
-      </div>
-    );
-  }
-  if (tab === "intake") {
-    return (
-      <div className="page">
-        {tabs}
-        <IntakeSettings />
-      </div>
-    );
-  }
-  if (tab === "review") {
-    return (
-      <div className="page">
-        {tabs}
-        <ReviewSettings />
-      </div>
-    );
-  }
-  if (tab === "loop") {
-    return (
-      <div className="page">
-        {tabs}
-        <LoopSettings />
-      </div>
-    );
-  }
-  if (tab === "routing") {
-    return (
-      <div className="page">
-        {tabs}
-        <RoutingSettings />
-      </div>
-    );
-  }
-  if (!report) return <div className="page">{tabs}<p className="empty">{error ?? S.loading}</p></div>;
-  const { claude } = report;
-
   return (
     <div className="page">
-      {tabs}
-      <h2>{S.health}</h2>
-      <dl className="kv">
-        <dt>{S.claudePath}</dt><dd>{claude.path ?? <span className="error">{S.notFound}</span>}</dd>
-        <dt>{S.claudeVersion}</dt><dd>{claude.version ?? "—"}</dd>
-        {claude.missingFlags.length > 0 && (<><dt>{S.missingFlags}</dt><dd className="error">{claude.missingFlags.join(" ")}</dd></>)}
-        {claude.error && claude.error !== "claude_not_found" && (<><dt /><dd className="error">{claude.error}</dd></>)}
-        <dt>{S.hooks}</dt><dd className={report.hooks === "installed" ? "ok" : "error"}>{S.hookStatus[report.hooks]}</dd>
-        <dt>{S.handoffCommand}</dt><dd className={report.handoffCommand === "installed" ? "ok" : "error"}>{S.handoffCommandStatus[report.handoffCommand]}</dd>
-        <dt>{S.butlerHome}</dt><dd>{report.butlerHome}</dd>
-        <dt>{S.claudeSettings}</dt><dd>{report.claudeSettingsPath}</dd>
-      </dl>
-      <ClaudeAvailability scrollIntoView={section === "health"} />
-      <p className="muted">{S.hookExplain}</p>
-      {error && <p className="error">{error}</p>}
-      <div className="actions">
-        <button disabled={busy} onClick={() => void run(api.health)}>{S.recheck}</button>
-        <button className="primary" disabled={busy || report.hooks === "settings_invalid"} onClick={() => void run(api.installHooks)}>{S.installHooks}</button>
-        <button disabled={busy || report.hooks === "missing"} onClick={() => void run(api.uninstallHooks)}>{S.uninstallHooks}</button>
+      <div className="settings-tabs" role="tablist">
+        {SETTINGS_TABS.map((t) => (
+          <button key={t} role="tab" data-testid={`settings-tab-${t}`} aria-selected={tab === t} className={tab === t ? "page-tab active" : "page-tab"} onClick={() => choose(t)}>
+            {S.set.tabs[t]}
+          </button>
+        ))}
       </div>
-      <BasicSettings report={report} onHealth={applyHealth} onRerunWizard={onRerunWizard} />
-      <SessionPerfSettings />
-      <ScheduleSettings />
-      <PrivacySettings />
-      <LessonsSettings />
-      <ExternalActionSettings />
+      {tab === "basic" &&
+        (report ? <BasicSettings report={report} onHealth={applyHealth} onRerunWizard={onRerunWizard} /> : <p className="empty">{error ?? S.loading}</p>)}
+      {tab === "features" && <p className="empty">{S.loading}</p>}
+      {tab === "advanced" && <AdvancedSettings openGroup={openGroup} />}
+      {tab === "health" && (
+        <HealthSettings
+          report={report}
+          busy={busy}
+          error={error}
+          onRecheck={() => void run(api.health)}
+          onInstall={() => void run(api.installHooks)}
+          onUninstall={() => void run(api.uninstallHooks)}
+          scrollToAvailability={section === "health"}
+        />
+      )}
     </div>
   );
 }

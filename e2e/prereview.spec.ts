@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { CAT } from "../src/main/assess/readiness";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, FAKE_GH_ORIGIN, makeGitRepo, openTab, terminalText, test, unsupportedGhCalls, type FakeGhFixture, type Sandbox } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, type FakeGhFixture, makeGitRepo, openSettingsGroup, openTab, type Sandbox, terminalText, test, unsupportedGhCalls } from "./fixtures";
 
 const BRANCH = "feature/E2E-7";
 const url = "https://github.com/acme/app/pull/51";
@@ -66,8 +66,7 @@ test("evidence goes through pre-review into readiness, risk and a review brief",
   const { page } = await launch(s);
   await completeWizard(page, s);
   // 设置 →「预审和就绪」：打开预审。
-  await page.locator(".sidebar").getByRole("button", { name: S.settings, exact: true }).click();
-  await page.getByTestId("settings-tab-review").click();
+  await openSettingsGroup(page, "review");
   const enabled = page.getByTestId("review-enabled");
   await enabled.check();
   await expect(enabled).toBeChecked();

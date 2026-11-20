@@ -177,7 +177,7 @@ function IntakePolicyEditor() {
 export function IntakeSettings() {
   return (
     <section className="settings-section" data-testid="intake-settings">
-      <h2>{S.settingsTabs.intake}</h2>
+      <h2>{S.set.groups.intake}</h2>
       <p className="muted">{S.ik.intro}</p>
       <IntakeSource />
       <IntakePolicyEditor />

@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { join } from "node:path";
 import { EXTERNAL_ACTIONS } from "../src/shared/external";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newTicket, openTab, test, unsupportedGhCalls, type BranchPrFixture, type PrViewFixture } from "./fixtures";
+import { type BranchPrFixture, completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newTicket, openSettingsGroup, openTab, type PrViewFixture, test, unsupportedGhCalls } from "./fixtures";
 
 /** 侧栏的「进度」。 */
 const openProgress = async (page: Page) => {
@@ -43,14 +43,14 @@ test("the Progress page shows every block, and outward actions are off by defaul
   await expect(page.getByRole("heading", { name: "PG-1", exact: true })).toBeVisible();
 
   // 设置：十个开关，默认全关；打开一个，重新进设置页还是开着。
-  await page.locator(".sidebar").getByRole("button", { name: S.settings, exact: true }).click();
+  await openSettingsGroup(page, "external");
   const block = page.getByTestId("external-actions");
   await expect(block).toBeVisible();
   for (const kind of EXTERNAL_ACTIONS) await expect(block.getByTestId(`external-${kind}`)).not.toBeChecked();
   await block.getByTestId("external-ci_rerun").click();
   await expect(block.getByTestId("external-ci_rerun")).toBeChecked();
   await openProgress(page);
-  await page.locator(".sidebar").getByRole("button", { name: S.settings, exact: true }).click();
+  await openSettingsGroup(page, "external");
   await expect(page.getByTestId("external-ci_rerun")).toBeChecked();
 
   // 审计页的「对外动作」一节；Butler 页的「回复」tab。

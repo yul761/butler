@@ -253,7 +253,7 @@ function BackgroundSettings() {
 export function CostBackgroundSettings() {
   return (
     <section className="settings-section" data-testid="cost-background-settings">
-      <h2>{S.settingsTabs.cost}</h2>
+      <h2>{S.set.groups.cost}</h2>
       <CostCaps />
       <BackgroundSettings />
     </section>

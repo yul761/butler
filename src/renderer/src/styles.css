@@ -505,6 +505,13 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 
 /* 设置页的 tab（常规 / 模型路由）和模型路由页（3.0）。 */
 .settings-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+/* 设置 › 高级：默认收起的分组。 */
+.adv-groups > .muted { margin-bottom: 8px; }
+.adv-group { border-bottom: 1px solid var(--border); }
+.adv-group-head { display: flex; gap: 8px; align-items: baseline; width: 100%; padding: 10px 4px; border: none; border-radius: 0; background: transparent; color: var(--text); font-size: 14px; font-weight: 600; text-align: left; }
+.adv-group-head:hover { background: var(--panel); }
+.adv-group-caret { color: var(--muted); width: 1em; }
+.adv-group-body { padding: 0 4px 16px 24px; }
 .routing-settings section { margin: 14px 0; }
 .routing-settings th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 6px; }
 .routing-settings .ticket-table tr { cursor: default; }

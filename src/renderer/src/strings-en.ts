@@ -18,6 +18,7 @@ import type { ReportKind } from "../../shared/control";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ButlerMessageView, EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
+import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
 
 /** "1 ticket", "2 tickets". */
 const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
@@ -32,7 +33,32 @@ export const EN_STATUS: Record<TicketStatus, string> = {
 };
 
 export const EN: UiStrings = {
-  settingsTabs: { general: "General", routing: "Model routing", cost: "Spend & background", loop: "Comments & CI", interrupts: "Interruptions & notifications", stacks: "Stacks", review: "Pre-review & readiness", intake: "Automatic intake" } as Record<"general" | "routing" | "cost" | "loop" | "interrupts" | "stacks" | "review" | "intake", string>,
+  set: {
+    tabs: { basic: "Basics", features: "Features", advanced: "Advanced", health: "Health check" } as Record<SettingsTabId, string>,
+    groups: {
+      schedule: "Schedule & handoff",
+      sessions: "Sessions & memory",
+      routing: "Model routing",
+      cost: "Spend & background",
+      loop: "Comments & CI",
+      review: "Pre-review & readiness",
+      stacks: "Stacks",
+      intake: "Automatic intake",
+      interrupts: "Interruptions & notifications",
+      lessons: "Rules & backups",
+      privacy: "Privacy & personal API",
+      external: "Outward actions",
+    } as Record<AdvancedGroupId, string>,
+    advancedIntro: "The detailed settings, grouped by feature. Open a group to see it. Switches on the Features tab also appear here: they are the same settings.",
+    health: {
+      gh: "gh (GitHub CLI)",
+      ghOk: "Installed",
+      ghMissing: "Not found: PR, CI and review features will not work",
+      usage: "Usage",
+      usageValue: (pct: number) => `Recent cache hit rate ${pct}%`,
+      unknown: "Unknown",
+    },
+  },
   ij: {
     heading: "Interruptions & notifications",
     intro: "Lets sessions stop for you less often, and tells you when one really needs you. Everything here is off, or has no effect, until you set it up.",

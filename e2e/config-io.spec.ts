@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { ElectronApplication } from "@playwright/test";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, test } from "./fixtures";
+import { completeWizard, expect, openSettingsGroup, test } from "./fixtures";
 
 /** 文件选择框换成固定的路径（主进程里开的系统对话框 e2e 点不到，也不能抢焦点）。 */
 async function stubDialogs(app: ElectronApplication, file: string): Promise<void> {
@@ -30,7 +30,7 @@ test("an export imports into another BUTLER_HOME with a diff preview, and the im
   db.close();
   await first.page.reload();
 
-  await first.page.getByRole("button", { name: S.settings, exact: true }).click();
+  await openSettingsGroup(first.page, "lessons");
   const editor = first.page.getByTestId("policy-editor");
   await expect(editor.getByTestId("policy-uncalibrated")).toBeVisible();
   await editor.getByTestId("policy-input-score.admitLine").fill("0.8");

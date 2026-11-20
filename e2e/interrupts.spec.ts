@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { expect, FAKE_GH_ORIGIN, kvValue, terminalText, test, type Sandbox } from "./fixtures";
+import { expect, FAKE_GH_ORIGIN, kvValue, openSettingsGroup, type Sandbox, terminalText, test } from "./fixtures";
 
 /** 沙盒的 Claude Code 记录里放几次在这个仓库里跑过的命令：只读的跑够次数，写的也跑了（不能成为候选）。 */
 function seedHistory(s: Sandbox): void {
@@ -64,8 +64,7 @@ test("the wizard's permission step offers read-only commands from history and co
   await expect(page.getByTestId("wizard")).toHaveCount(0);
 
   // 3. 设置 →「打断与通知」里能看到这条确认过的规则；webhook 默认没设置，推送开关关着。
-  await page.getByRole("button", { name: S.settings, exact: true }).click();
-  await page.getByTestId("settings-tab-interrupts").click();
+  await openSettingsGroup(page, "interrupts");
   const rule = page.getByTestId("profile-rule-Bash(gh pr view:*)");
   await expect(rule).toContainText("acme/app");
   await expect(rule).toContainText(S.ij.statusLabel.confirmed);

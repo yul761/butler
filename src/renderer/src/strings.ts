@@ -14,6 +14,7 @@ import type { ExportContent, FileScope, PreviewStatus, SectionApplyCounts } from
 import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason, LessonRunStatus } from "../../shared/lessons";
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { Lang } from "../../shared/i18n";
+import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
 import type { CheckAbsenceReason, CheckMode, CheckOutcome, CheckSeverity, CheckStage, CheckType, CheckVerdict, ChecksBulkOp } from "../../shared/checks";
 import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
@@ -36,7 +37,33 @@ const ZH_STATUS: Record<TicketStatus, string> = {
 export const STATUS_ORDER: TicketStatus[] = ["merged_pending_followup", "active", "blocked", "in_review", "done"];
 
 const ZH = {
-  settingsTabs: { general: "常规", routing: "模型路由", cost: "花费与后台", loop: "评论与 CI", interrupts: "打断与通知", stacks: "栈", review: "预审和就绪", intake: "自动接活" } as Record<"general" | "routing" | "cost" | "loop" | "interrupts" | "stacks" | "review" | "intake", string>,
+  /** 设置页（UI 重做第 6 层）：四个 tab、高级里的分组、健康检查。 */
+  set: {
+    tabs: { basic: "基本", features: "功能", advanced: "高级", health: "健康检查" } as Record<SettingsTabId, string>,
+    groups: {
+      schedule: "定时与 handoff",
+      sessions: "Session 与内存",
+      routing: "模型路由",
+      cost: "花费与后台",
+      loop: "评论与 CI",
+      review: "预审和就绪",
+      stacks: "栈",
+      intake: "自动接活",
+      interrupts: "打断与通知",
+      lessons: "规矩与备份",
+      privacy: "隐私与个人 API",
+      external: "对外动作",
+    } as Record<AdvancedGroupId, string>,
+    advancedIntro: "原来各组的细项，按功能分组，点开再看。「功能」页里的开关在这里也有，是同一个设置。",
+    health: {
+      gh: "gh（GitHub 命令行）",
+      ghOk: "已安装",
+      ghMissing: "没找到：PR、CI 和 review 相关的功能用不了",
+      usage: "用量",
+      usageValue: (pct: number) => `近期 cache 命中 ${pct}%`,
+      unknown: "未知",
+    },
+  },
   /** 打断与通知（工作流 J）。 */
   ij: {
     heading: "打断与通知",

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, test } from "./fixtures";
+import { completeWizard, expect, openSettingsTab, test } from "./fixtures";
 
 test("first run: the wizard finds claude, installs hooks into the given config dir and lands on the Now page", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
@@ -61,7 +61,7 @@ test("Settings → rerun shows the wizard again at once, with the saved claude p
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
-  await page.getByRole("button", { name: S.settings, exact: true }).click();
+  await openSettingsTab(page, "basic");
   await page.getByRole("button", { name: S.rerunWizard, exact: true }).click();
   await expect(page.getByTestId("wizard")).toBeVisible();
   await expect(page.getByText(S.wizardStep(1, 5), { exact: true })).toBeVisible();

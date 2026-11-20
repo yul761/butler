@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, ghCalls, makeGitRepo, terminalText, test, unsupportedGhCalls, type FakeGhFixture, type PrViewFixture } from "./fixtures";
+import { completeWizard, expect, type FakeGhFixture, ghCalls, makeGitRepo, openSettingsGroup, type PrViewFixture, terminalText, test, unsupportedGhCalls } from "./fixtures";
 
 const git = (cwd: string, ...a: string[]): string =>
   execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "-c", "commit.gpgsign=false", ...a], { cwd, encoding: "utf8" }).trim();
@@ -44,8 +44,7 @@ async function newTicket(page: Page, key: string, repo: string): Promise<void> {
 
 /** 设置 →「栈」：全局这一层打开 autoRebase，再打开栈要用的对外动作。 */
 async function enableStacks(page: Page, external: readonly string[]): Promise<void> {
-  await page.locator(".sidebar").getByRole("button", { name: S.settings, exact: true }).click();
-  await page.getByTestId("settings-tab-stacks").click();
+  await openSettingsGroup(page, "stacks");
   const editor = page.getByTestId("stack-policy-editor");
   await editor.getByTestId("stack-input-autoRebase").selectOption("true");
   await editor.getByTestId("stack-save").click();

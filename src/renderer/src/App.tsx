@@ -23,6 +23,7 @@ import { UnclaimedPage } from "./components/UnclaimedPage";
 import { Wizard } from "./components/Wizard";
 import { S } from "./strings";
 import { onboardingReducer } from "./wizard";
+import type { SettingsSection } from "../../shared/settings-layout";
 
 /** 状态变化事件合并的时间窗。 */
 const STATE_DEBOUNCE_MS = 80;
@@ -40,8 +41,8 @@ export type Route =
   | { page: "effect" }
   | { page: "unclaimed" }
   | { page: "archived" }
-  /** section：从「现在」页的提醒跳来时要看的那一块。 */
-  | { page: "settings"; section?: "health" | "routing" }
+  /** section：要看的那个 tab 或高级里的分组（「现在」页的提醒跳来时用 health / routing）。 */
+  | { page: "settings"; section?: SettingsSection }
   | { page: "audit" }
   /** tab：从「现在」页的检查升降级提醒跳来时直接打开检查标签。 */
   | { page: "lessons"; tab?: "checks" };
