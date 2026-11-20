@@ -103,16 +103,18 @@ describe("TicketHome", () => {
     // 点选项走 inbox 回答（发问的 session 已经结束，终端里答不了）。
     const answered: [number, string][] = [];
     const went: string[] = [];
-    const deps = { answerInbox: async (id: number, text: string) => (answered.push([id, text]), true), onGoTab: (t: string) => went.push(t) };
+    const deps = { answerInbox: async (id: number, text: string) => (answered.push([id, text]), true), onGoTab: (t: string) => went.push(t), onChanged: noop };
     expect(await runTicketAsk(clicked[0][0], ask, deps, S)).toBe(S.hm.act.answered("zod"));
     expect(answered).toEqual([[3, "zod"]]);
     expect(went).toEqual([]);
   });
-  it("an answer that no longer exists says so", async () => {
+  it("an answer that no longer exists says so and reloads the board", async () => {
     const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
       turn: { owner: "you", kind: "answer", question: "q", options: ["a"], askId: 3, sessionId: "s" } };
-    const deps = { answerInbox: async () => false, onGoTab: noop };
+    let reloaded = 0;
+    const deps = { answerInbox: async () => false, onGoTab: noop, onChanged: () => void reloaded++ };
     expect(await runTicketAsk({ id: "answer", option: "a", primary: true }, ask, deps, S)).toBe(S.hm.act.answerGone);
+    expect(reloaded).toBe(1);
   });
   it("a question without options only offers a look, landing where the home card would", async () => {
     const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
@@ -122,7 +124,7 @@ describe("TicketHome", () => {
     findButton(el, S.hm.act.look).props.onClick();
     expect(clicked).toEqual([{ id: "look", primary: true }]);
     const went: string[] = [];
-    expect(await runTicketAsk(clicked[0], ask, { answerInbox: async () => true, onGoTab: (t) => went.push(t) }, S)).toBeNull();
+    expect(await runTicketAsk(clicked[0], ask, { answerInbox: async () => true, onGoTab: (t) => went.push(t), onChanged: noop }, S)).toBeNull();
     expect(went).toEqual([landingTab(ask.turn)]);
   });
   it("no orphan questions: no questions section", () => {

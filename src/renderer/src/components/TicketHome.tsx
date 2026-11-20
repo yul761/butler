@@ -47,7 +47,8 @@ const noop = () => {};
  * 「去看看」落到这张卡片的轮次对应的页签。返回要显示的一句话，没有为 null。
  */
 export async function runTicketAsk(
-  a: CardAction, item: TurnItem, d: { answerInbox: (id: number, text: string) => Promise<boolean>; onGoTab: (t: TicketTab) => void }, s: UiStrings,
+  a: CardAction, item: TurnItem,
+  d: { answerInbox: (id: number, text: string) => Promise<boolean>; onGoTab: (t: TicketTab) => void; onChanged: () => void }, s: UiStrings,
 ): Promise<string | null> {
   const r = await runCardAction(a, item, {
     answerInbox: d.answerInbox,
@@ -57,8 +58,8 @@ export async function runTicketAsk(
     onOpen: noop,
     onGo: (r) => d.onGoTab(r.page === "ticket" && r.landing ? landingTab(r.landing) : "overview"),
     onFix: noop,
-    // 回答以后板子随 turn:changed 自己重取。
-    onChanged: noop,
+    // 回答以后板子随 turn:changed 自己重取；问题已经不在了（别处答过）时没有 turn:changed，要自己重取，和首页一样。
+    onChanged: d.onChanged,
   }, s);
   if (r === null) return null;
   return "answered" in r ? s.hm.act.answered(r.answered) : r.message;
@@ -133,7 +134,7 @@ export interface TicketHomeTabProps {
 
 export function TicketHomeTab({ ticket, onGoTab, onFix }: TicketHomeTabProps) {
   const key = ticket.key;
-  const { board } = useTurnBoard({ ticketKey: key });
+  const { board, reload } = useTurnBoard({ ticketKey: key });
   const glance = useStateRefetch(`glance:${key}`, () => api.ticketGlance(key));
   const stages = usePrStages({ ticketKey: key })?.find((t) => t.ticketKey === key) ?? null;
   const [notice, setNotice] = useState<string | null>(null);
@@ -158,7 +159,7 @@ export function TicketHomeTab({ ticket, onGoTab, onFix }: TicketHomeTabProps) {
       }}
       onAsk={(a, item) => {
         setNotice(null);
-        runTicketAsk(a, item, { answerInbox: api.answerInbox, onGoTab }, S).then(setNotice, reportError);
+        runTicketAsk(a, item, { answerInbox: api.answerInbox, onGoTab, onChanged: reload }, S).then(setNotice, reportError);
       }}
     />
   );
