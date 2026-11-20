@@ -7,6 +7,7 @@ import type { InboxItemView } from "../../../shared/types";
 import type { ScopeTurnRow, TurnItem } from "../../../shared/turn";
 import type { NameCtx, RunningRow } from "../home-view";
 import type { TicketRow } from "../scope-view";
+import { S, STRINGS } from "../strings";
 import { ControlFeed } from "./ControlConversation";
 import { ControlSplit, ScopeBoard, ScopeOverview, ScopeRunning, ScopeTicketTable } from "./ScopeParts";
 
@@ -123,6 +124,13 @@ describe("ControlSplit / ControlFeed", () => {
     // contain: size：右栏不参与这一行的高度，行高只看左栏（终端那一半）；右栏在这个高度里自己滚动。
     expect(right).toMatch(/contain:\s*size/);
     expect(right).toMatch(/overflow-y:\s*auto/);
+  });
+  it("the control tab starts with a one-line lede above the split", () => {
+    const h = renderToStaticMarkup(createElement(ControlSplit, { lede: S.lay.ctlLede, left: "LEFT", right: "RIGHT" }));
+    expect(S.lay.ctlLede).toBe("总控是帮你拆活、协调各个 ticket 的 session。左边是终端，右边是对话。");
+    expect(STRINGS.en.lay.ctlLede).toBe("The control session splits up work and coordinates the tickets. Terminal on the left, conversation on the right.");
+    expect(h).toContain(`<p class="muted control-lede">${S.lay.ctlLede}</p>`);
+    expect(h.indexOf(S.lay.ctlLede)).toBeLessThan(h.indexOf("control-split"));
   });
   it("split renders both sides", () => {
     const h = renderToStaticMarkup(createElement(ControlSplit, { left: "LEFT", right: "RIGHT" }));

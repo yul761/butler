@@ -131,6 +131,7 @@ export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatur
             id: "control", label: S.lay.tabControl,
             content: (
               <ControlSplit
+                lede={S.lay.ctlLede}
                 left={
                   <SessionArea
                     repos={epic.repos}

@@ -111,8 +111,14 @@ export function ScopeTicketTable(p: {
   );
 }
 
-export function ControlSplit(p: { left: ReactNode; right: ReactNode }) {
-  return <div className="control-split"><div className="control-left">{p.left}</div><div className="control-right">{p.right}</div></div>;
+/** 「总控」页签：上面一句说明（lede，可不给），下面左终端、右对话。 */
+export function ControlSplit(p: { lede?: string; left: ReactNode; right: ReactNode }) {
+  return (
+    <>
+      {p.lede && <p className="muted control-lede">{p.lede}</p>}
+      <div className="control-split"><div className="control-left">{p.left}</div><div className="control-right">{p.right}</div></div>
+    </>
+  );
 }
 
 /** 范围页的页签内容要看板：还没取到时是骨架（不闪空状态）；取不到就说为什么（board-error：和页面的 .error 分开，不会同时被找到）。 */

@@ -110,6 +110,7 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 /* epic、feature「总控」页签：左边是仓库条、session 条和终端（贴边，同 ticket「终端」页签），右边是对话。 */
 .page-tabs-panel.tab-panel-control { display: flex; flex-direction: column; padding: 0; }
 .tab-panel-control .control-split { flex: 1 0 auto; }
+.control-lede { flex: 0 0 auto; margin: 0; padding: 8px 16px 4px; }
 .control-left { display: flex; flex-direction: column; min-width: 0; }
 .control-left > * { flex-shrink: 0; }
 .control-right { min-width: 0; padding: 8px 16px 8px 0; }

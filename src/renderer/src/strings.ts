@@ -2421,6 +2421,7 @@ const ZH = {
     colPr: "PR",
     groupHeader: (name: string, merged: number, total: number) => `${name} · ${merged}/${total} 合了`,
     noTicketsInGroup: "这一组还没有 ticket。",
+    ctlLede: "总控是帮你拆活、协调各个 ticket 的 session。左边是终端，右边是对话。",
     ctlEmpty: "子 session 的完成和卡住汇报会按时间出现在这里。",
     butlerSent: (n: number) => `总控发出的消息（${n}）`,
     lessonsLede: "Butler 从合了的 PR 里总结出来的规矩。确认过的会在以后的 session 里提醒 agent。",
