@@ -503,6 +503,7 @@ const ZH = {
       ci_running: "在等 CI",
       awaitingReview: (names: string[]) => (names.length === 0 ? "在等 review" : `在等 ${names.join("、")} review`),
       merge_queue: "在合并队列里",
+      stackBelow: (names: string[]) => `在等栈的下一层 ${names.join("、")} 合并`,
     },
     done: "合了",
     idle: "还没开始",

@@ -205,6 +205,8 @@ export interface IpcDeps {
   turnBoard: (filter: TurnFilter | null) => TurnBoard;
   /** 首页「发给 agent」：只有 you/unattended 且 canSend 时才走现有的递送路径。 */
   turnSendToAgent: (item: { ticketKey: string; pr: { repo: string; number: number } }) => Promise<{ ok: boolean; reason?: TurnSendReason }>;
+  /** 切到首页：补查请你 review 的 PR（turn:board 本身不触发查询）。 */
+  turnHomeOpened: () => void;
   /** 重发一条递不出去的 CI 结论（工作流 W）。 */
   ciResend: (item: CiItemRef) => Promise<string>;
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）。 */
@@ -752,6 +754,7 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.ciResend, (raw: unknown): Promise<string> => d.ciResend(ciItemArg(raw)));
   handle(IPC.turnBoard, (raw: unknown): TurnBoard => d.turnBoard(turnFilterArg(raw)));
   handle(IPC.turnSendToAgent, (raw: unknown) => d.turnSendToAgent(turnSendArg(raw)));
+  handle(IPC.turnHomeOpened, (): void => d.turnHomeOpened());
   // 答了、不用了都由 InboxService 自己 notify。
   handle(IPC.inboxList, (raw: unknown): InboxView => d.inbox.view(inboxScopeArg(raw)));
   handle(IPC.inboxAnswer, (id: unknown, text: unknown): boolean => d.inbox.answer(inboxIdArg(id), inboxAnswerArg(text)));

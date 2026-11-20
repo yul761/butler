@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { PR_SLOW_MS } from "./pr-schedule";
-import { REVIEW_AWAY_MS, REVIEW_CATCHUP_MS, ReviewRequestPoller, reviewCatchUpDue, reviewPollDue, scopeReviews } from "./review-requests";
+import { REVIEW_AWAY_MS, REVIEW_CATCHUP_MS, ReviewRequestPoller, bindFocusCatchUp, reviewCatchUpDue, reviewPollDue, scopeReviews } from "./review-requests";
 
 describe("review request schedule", () => {
   it("polls every PR_SLOW_MS, every 15 min when away", () => {
@@ -66,6 +66,28 @@ describe("ReviewRequestPoller", () => {
     poller.catchUp();
     expect(d.fetch).toHaveBeenCalledTimes(2);
     release([]);
+  });
+  it("catchUp is skipped while you are away, and after stop", async () => {
+    const { d, poller, advance } = make(async () => []);
+    await poller.tick();
+    advance(REVIEW_CATCHUP_MS + 1);
+    d.away = () => true;
+    poller.catchUp();
+    expect(d.fetch).toHaveBeenCalledTimes(1);
+    d.away = () => false;
+    poller.stop();
+    poller.catchUp();
+    expect(d.fetch).toHaveBeenCalledTimes(1);
+  });
+  it("a window coming to the front catches up; unbinding stops it", () => {
+    const handlers = new Map<string, () => void>();
+    const app = { on: vi.fn((e: string, f: () => void) => void handlers.set(e, f)), removeListener: vi.fn((e: string) => void handlers.delete(e)) };
+    const poller = { catchUp: vi.fn() };
+    const unbind = bindFocusCatchUp(app, poller);
+    handlers.get("browser-window-focus")!();
+    expect(poller.catchUp).toHaveBeenCalledTimes(1);
+    unbind();
+    expect(handlers.has("browser-window-focus")).toBe(false);
   });
   it("skips when gh is not available", async () => {
     const { d, poller } = make(async () => []);

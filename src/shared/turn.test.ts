@@ -69,7 +69,7 @@ const T = 1_000_000;
 const pr = (o: Partial<PrTurnInput> = {}): PrTurnInput => ({
   state: "open", isDraft: false, ci: "passing", review: null, reviewers: [], reviewRequests: [], mergeable: "mergeable", mergeState: "blocked",
   mergeQueued: false, risk: null, pusher: { sessionId: "s", working: false, stoppedAt: T - 10 }, ciDeliveredAt: null, commentsDeliveredAt: null,
-  ciUndelivered: false, canResendCi: true, canSendComments: false, ...o,
+  ciUndelivered: false, canResendCi: true, canSendComments: false, stackBelow: null, ...o,
 });
 
 describe("prTurn", () => {
@@ -103,6 +103,17 @@ describe("prTurn", () => {
     const human = { login: "amy", state: "changes_requested" as const, at: 1, bot: false };
     expect(prTurn(pr({ reviewers: [human], canSendComments: false }))).toMatchObject({ why: "changes_requested", canSend: false });
     expect(prTurn(pr({ reviewers: [human], commentsDeliveredAt: T }))).toEqual({ owner: "agent", kind: "addressing_review", sessionId: "s" });
+  });
+  it("a failing CI on a draft is still a CI turn, undelivered included", () => {
+    expect(prTurn(pr({ isDraft: true, ci: "failing" }))).toMatchObject({ owner: "you", why: "ci_failing", canSend: true });
+    expect(prTurn(pr({ isDraft: true, ci: "failing", ciUndelivered: true }))).toMatchObject({ owner: "you", why: "ci_undelivered" });
+    expect(prTurn(pr({ isDraft: true, ci: "failing", pusher: { sessionId: "s", working: true, stoppedAt: null } }))).toEqual({ owner: "agent", kind: "fixing_ci", sessionId: "s" });
+  });
+  it("an upper stack layer kept as a draft waits on the layer below; its failing CI still counts", () => {
+    expect(prTurn(pr({ isDraft: true, stackBelow: "feature/E2E-1" }))).toEqual({ owner: "external", kind: "stack_below", names: ["feature/E2E-1"] });
+    expect(prTurn(pr({ isDraft: true, stackBelow: "feature/E2E-1", ci: "failing" }))).toMatchObject({ owner: "you", why: "ci_failing" });
+    // 不是 draft（已经改成 ready）时照常判
+    expect(prTurn(pr({ stackBelow: "feature/E2E-1", reviewRequests: [{ kind: "user", name: "amy" }] }))).toMatchObject({ owner: "external", kind: "awaiting_review" });
   });
   it("draft / conflicts / behind map to their whys; conflicts with a working agent → rebasing", () => {
     expect(prTurn(pr({ isDraft: true }))).toMatchObject({ why: "draft", canSend: false });

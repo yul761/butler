@@ -661,6 +661,20 @@ describe("StackService for other workstreams", () => {
     expect(w.svc.stackNote("https://github.com/acme/app/pull/9", "zzz")).toBeNull();
   });
 
+  it("stackBelow names the nearest unmerged layer below, for the turn board (UI redesign layer 1)", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const layers = w.repoT.layers(id);
+    w.repoT.updateLayer(layers[2]!.id, { prUrl: "https://github.com/acme/app/pull/8", prNumber: 8 });
+    expect(w.svc.stackBelow("https://github.com/Acme/App/pull/8", layers[2]!.branch)).toBe(layers[1]!.branch);
+    w.repoT.updateLayer(layers[1]!.id, { state: "merged" });
+    expect(w.svc.stackBelow("https://github.com/acme/app/pull/8", layers[2]!.branch)).toBe(layers[0]!.branch);
+    w.repoT.updateLayer(layers[0]!.id, { state: "merged" });
+    expect(w.svc.stackBelow("https://github.com/acme/app/pull/8", layers[2]!.branch)).toBeNull();
+    expect(w.svc.stackBelow("https://github.com/acme/app/pull/1", layers[0]!.branch)).toBeNull();
+    expect(w.svc.stackBelow("https://github.com/acme/app/pull/9", "zzz")).toBeNull();
+  });
+
   it("posts the epic overview as an issue only when asked to", async () => {
     const w = world({ policy: { overview: "issue", dailyRebase: false } });
     await defineAll(w);

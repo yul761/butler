@@ -58,7 +58,10 @@ export interface TurnServiceDeps {
   /** lessonsRepo.repos() 的 slug ∪ ticket_prs 里出现过的 slug */
   registeredSlugs(): string[];
   /** 不带 filter 的 board（首页）被取时调，做 R9 的补查。 */
+  /** 切到首页时（turn:home-opened）：补查一次请你 review 的 PR。 */
   homeOpened(): void;
+  /** 这个 PR 是 Butler 管的栈里、下面还有没合的层时，最近那层的分支（StackService.stackBelow）。 */
+  stackBelow(prUrl: string, branch: string | null): string | null;
   /** 推 turn:changed。 */
   emit(): void;
   now(): number;
@@ -77,7 +80,6 @@ export function localDayStart(now: number): number {
 const live = (s: Session & { termId?: string | null }): boolean =>
   (!!s.termId || !!s.hibernatedAt || !!s.wakeError) && s.origin === "butler" && s.replacedBy === null;
 
-const isEmptyFilter = (f: TurnFilter | null): boolean => !f || (f.epicId === undefined && f.featureId === undefined && f.ticketKey === undefined);
 
 /** 一次 board / sendToAgent 里取齐的快照：needsYou、decisions、notices、ciUndelivered 只调一次接口。 */
 interface Snap {
@@ -104,9 +106,14 @@ export class TurnService {
 
   constructor(private readonly d: TurnServiceDeps) {}
 
+  /** 只算看板，不触发任何查询：第 2 层每次收到 turn:changed 都会重取。 */
   board(filter: TurnFilter | null): TurnBoard {
-    if (isEmptyFilter(filter)) this.d.homeOpened();
     return buildTurnBoard(this.input(), filter);
+  }
+
+  /** 切到首页（turn:home-opened）：补查请你 review 的 PR（离开时、一分钟内查过时由 poller 跳过）。 */
+  homeOpened(): void {
+    this.d.homeOpened();
   }
 
   /** 首页「发给 agent」：重新算这个 PR 的 turn，只有 you/unattended 且 canSend 时才走现有的递送路径。 */
@@ -188,7 +195,11 @@ export class TurnService {
       const rec = this.d.recipient(ticketKey, w.repoId, w.branch || row.headBranch || "");
       if (rec.ok) {
         const id = this.headId(rec.sessionId);
-        pusher = { sessionId: id, working: isWorking(this.d.activity(id)), stoppedAt: this.d.lastReplyAt(id) };
+        const head = this.d.head(id);
+        // 休眠了、唤醒失败的 pusher 不在干任何事；休眠后最后一次回话的记录被删了，不能当成「递了还没停」。
+        pusher = head?.hibernatedAt || head?.wakeError
+          ? { sessionId: id, working: false, stoppedAt: s.now }
+          : { sessionId: id, working: isWorking(this.d.activity(id)), stoppedAt: this.d.lastReplyAt(id) };
       }
     }
     // R2：当前 head 的 CI 结论递给了 pusher（旧行 delivered_to 为 null 时不比）
@@ -214,6 +225,7 @@ export class TurnService {
       // 这次结论已经递过（标记相同）时 ciResend 只会回 delivered：没有能再发的东西。
       canResendCi: w.ci === "failing" && pusher !== null && row.deliveredKey !== deliveryKey(row),
       canSendComments: pusher !== null && this.d.comments.sendable(w.prId),
+      stackBelow: this.d.stackBelow(w.url ?? row.url, w.branch || row.headBranch || null),
     });
     if (turn === null) return null;
     const since = turn.owner === "done" ? (row.mergedAt ?? w.checkedAt) : (det?.statusChangedAt ?? row.statusChangedAt ?? row.openedAt ?? w.checkedAt);
@@ -273,7 +285,13 @@ export class TurnService {
     };
     for (const [h, list] of asks) if (!known.has(h)) for (const a of list) orphanAsk(a, h);
 
-    // R5：要你动手的提醒挂到 ticket 上，或者进 loose
+    // R5：要你动手的提醒挂到 ticket 上，或者进 loose。评论等着的提醒等 PR 算完再挂（见下）。
+    const placeNotice = (n: NowNotice, tt: TimedTurn, key: string | null, target: NowTarget | null) => {
+      const bt = key !== null ? board.get(key) : undefined;
+      if (bt) bt.others.push(tt);
+      else loose.push({ ...tt, featureId: target?.page === "feature" ? target.id : null, epicId: target?.page === "epic" ? target.id : null });
+    };
+    const commentNotices: { n: Extract<NowNotice, { kind: "comments_waiting" }>; tt: TimedTurn }[] = [];
     for (const n of this.d.notices()) {
       if (!noticeNeedsYou(n) || n.kind === "session_limited") continue;
       if (n.kind === "ci_undelivered" && n.ci.item.kind === "pr") continue;
@@ -284,11 +302,12 @@ export class TurnService {
         : n.kind === "comments_waiting" ? n.waiting.ticketKey
         : n.kind === "stack" ? (n.stack.ticketKey ?? null)
         : target?.page === "ticket" ? target.key : null;
-      const bt = key !== null ? board.get(key) : undefined;
-      if (bt) bt.others.push(tt);
-      else loose.push({ ...tt, featureId: target?.page === "feature" ? target.id : null, epicId: target?.page === "epic" ? target.id : null });
+      if (n.kind === "comments_waiting") commentNotices.push({ n, tt });
+      else placeNotice(n, tt, key, target);
     }
 
+    // 「要求修改、没人在改」的 PR（可以一键发评论）：同一个 PR 的评论等着的提醒就不再单独挂一条
+    const reviewUnattended = new Set<string>();
     for (const t of tickets) {
       const bt = board.get(t.key)!;
       const heads = headsOf.get(t.key) ?? [];
@@ -297,6 +316,7 @@ export class TurnService {
         const row = w.prId !== null ? this.d.prRow(w.prId) : null;
         const p = row ? this.prInput(t.key, w, row, headIds, snap) : null;
         if (p) bt.prs.push(p);
+        if (p && p.turn.owner === "you" && p.turn.kind === "unattended" && p.turn.why === "changes_requested") reviewUnattended.add(`${t.key}#${p.number}`);
       }
       const report = heads.length > 0 ? this.d.lastReport(t.key) : null;
       // 最近一条 report 只算在交它的那条链上：多仓库 ticket 里别的 session 不跟着「报告做不下去」。
@@ -315,6 +335,10 @@ export class TurnService {
       if (bt.prs.length === 0 && (t.effectiveStatus === "done" || t.effectiveStatus === "merged_pending_followup")) {
         bt.others.push({ turn: { owner: "done", kind: "merged" }, since: now });
       }
+    }
+
+    for (const { n, tt } of commentNotices) {
+      if (!reviewUnattended.has(`${n.waiting.ticketKey}#${n.waiting.number}`)) placeNotice(n, tt, n.waiting.ticketKey, n.target);
     }
 
     // R6：总控 session 要你的才进 loose

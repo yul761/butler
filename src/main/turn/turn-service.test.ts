@@ -40,7 +40,7 @@ function fakeDeps(over: Partial<TurnServiceDeps> = {}): TurnServiceDeps {
     lastReport: () => null, refreshing: () => false, mergeQueued: () => false, risk: () => null, ciUndelivered: () => [],
     comments: { deliveredAt: () => null, sendable: () => false, sendAll: vi.fn(async () => 0) },
     ciResend: vi.fn(async () => "sent" as const), notices: () => [], reviews: () => [], reviewScope: () => "all", registeredSlugs: () => [],
-    homeOpened: vi.fn(), emit: vi.fn(), now: () => NOW, ...over,
+    homeOpened: vi.fn(), emit: vi.fn(), now: () => NOW, stackBelow: () => null, ...over,
   };
 }
 
@@ -83,6 +83,60 @@ describe("TurnService.board", () => {
   it("CI already delivered and the pusher stopped again: unattended, but nothing left to send", () => {
     const s = new TurnService(failingPr({ prRow: () => row({ deliveredKey: "abc:failing", deliveredAt: 300, deliveredTo: "s1" }), lastReplyAt: () => 400 }));
     expect(s.board(null).items[0].turn).toEqual({ owner: "you", kind: "unattended", why: "ci_failing", canSend: false, sessionId: "s1" });
+  });
+
+  it("a hibernated or wake-failed pusher is not fixing anything, whatever was delivered to it", () => {
+    const delivered = row({ deliveredKey: "abc:failing", deliveredAt: 500, deliveredTo: "s1" });
+    for (const state of [{ hibernatedAt: 600 }, { wakeError: "boom" }]) {
+      const s = new TurnService(failingPr({ prRow: () => delivered, head: (id) => ({ id, ...state }) as never, lastReplyAt: () => null }));
+      expect(s.board(null).items[0].turn, JSON.stringify(state)).toMatchObject({ owner: "you", kind: "unattended", why: "ci_failing" });
+    }
+    const human = { login: "amy", state: "changes_requested" as const, at: 1, bot: false };
+    const reviewed = new TurnService(failingPr({
+      prs: () => [watched({ ci: "passing" })], prRow: () => row({ ci: "passing", reviewers: [human] }),
+      head: (id) => ({ id, hibernatedAt: 600 }) as never, lastReplyAt: () => null,
+      comments: { deliveredAt: () => 500, sendable: () => true, sendAll: vi.fn(async () => 1) },
+    }));
+    expect(reviewed.board(null).items[0].turn).toMatchObject({ owner: "you", kind: "unattended", why: "changes_requested", canSend: true });
+  });
+
+  it("a draft whose CI failed and never reached the agent still shows the undelivered CI", () => {
+    const prCi = { item: { kind: "pr", id: 1 }, ticketKey: "BTL-1", number: 3, branch: "feat", reason: "no_session", since: 77, sessionId: null } as const;
+    const s = new TurnService(failingPr({
+      prRow: () => row({ isDraft: true }),
+      ciUndelivered: () => [prCi],
+      notices: () => [{ kind: "ci_undelivered", ci: prCi, target: { page: "ticket", key: "BTL-1", sessionId: null }, title: null }],
+    }));
+    const b = s.board(null);
+    expect(b.items.map((i) => i.turn)).toEqual([{ owner: "you", kind: "unattended", why: "ci_undelivered", canSend: true, sessionId: "s1" }]);
+  });
+
+  it("an upper stack layer kept as a draft waits on the layer below, not on you", () => {
+    const stackBelow = vi.fn(() => "feature/a");
+    const s = new TurnService(failingPr({ prs: () => [watched({ ci: "passing" })], prRow: () => row({ ci: "passing", isDraft: true }), stackBelow }));
+    const b = s.board(null);
+    expect(b.items[0].turn).toEqual({ owner: "external", kind: "stack_below", names: ["feature/a"] });
+    expect(b.counts).toMatchObject({ you: 0, external: 1 });
+    expect(stackBelow).toHaveBeenCalledWith(URL3, "feat");
+  });
+
+  it("comments waiting on a PR that is already sendable as changes requested are not a second item", () => {
+    const human = { login: "amy", state: "changes_requested" as const, at: 1, bot: false };
+    const waiting = { reason: "review" as const, ticketKey: "BTL-1", prId: 1, number: 3, count: 2, since: 40 };
+    const s = new TurnService(failingPr({
+      prs: () => [watched({ ci: "passing" })], prRow: () => row({ ci: "passing", reviewers: [human] }),
+      comments: { deliveredAt: () => null, sendable: () => true, sendAll: vi.fn(async () => 2) },
+      notices: () => [{ kind: "comments_waiting", waiting, target: { page: "ticket", key: "BTL-1", sessionId: null }, title: null }],
+    }));
+    const b = s.board({ ticketKey: "BTL-1" });
+    expect(b.items.some((i) => i.turn.kind === "butler")).toBe(false);
+    expect(b.items.find((i) => i.pr?.number === 3)?.turn).toMatchObject({ kind: "unattended", why: "changes_requested", canSend: true });
+    // PR 不在「没人在改」时（比如 agent 在改），提醒照旧挂着
+    const busy = new TurnService(failingPr({
+      prs: () => [watched({ ci: "passing" })], prRow: () => row({ ci: "passing", reviewers: [human] }), activity: (id) => (id === "s1" ? act("edit") : null),
+      notices: () => [{ kind: "comments_waiting", waiting, target: { page: "ticket", key: "BTL-1", sessionId: null }, title: null }],
+    }));
+    expect(busy.board({ ticketKey: "BTL-1" }).items.some((i) => i.turn.kind === "butler")).toBe(true);
   });
 
   it("a blocked report only makes its own session stuck on a multi-repo ticket", () => {
@@ -193,7 +247,7 @@ describe("TurnService.board", () => {
     expect(b.items).toHaveLength(2);
   });
 
-  it("review scope registered drops unknown repos, and the home board triggers a catch-up", () => {
+  it("review scope registered drops unknown repos; only opening the home page triggers a catch-up, not refetching the board", () => {
     const rv = (slug: string, n: number) => ({ url: `https://github.com/${slug}/pull/${n}`, slug, number: n, title: `t${n}`, author: "amy", firstSeenAt: 9, lastSeenAt: 9 });
     const d = fakeDeps({ reviews: () => [rv("o/a", 1), rv("o/b", 2)], reviewScope: () => "registered", registeredSlugs: () => ["O/B"] });
     const s = new TurnService(d);
@@ -202,10 +256,13 @@ describe("TurnService.board", () => {
       ticketKey: null, pr: { repo: "o/b", number: 2, title: "t2", url: "https://github.com/o/b/pull/2" }, epicId: null, featureId: null,
       turn: { owner: "you", kind: "review", author: "amy", title: "t2", url: "https://github.com/o/b/pull/2" }, since: 9, others: 0,
     }]);
-    expect(d.homeOpened).toHaveBeenCalledTimes(1);
+    // 第 2 层每次收到 turn:changed 都会不带 filter 重取：不能每次都去补查
     s.board({ ticketKey: "BTL-1" });
     s.board({});
-    expect(d.homeOpened).toHaveBeenCalledTimes(2);
+    s.board(null);
+    expect(d.homeOpened).not.toHaveBeenCalled();
+    s.homeOpened();
+    expect(d.homeOpened).toHaveBeenCalledTimes(1);
   });
 });
 

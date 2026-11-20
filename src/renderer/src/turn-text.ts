@@ -46,7 +46,9 @@ export function turnSentence(turn: Turn, _item: TurnItem, s: UiStrings): string 
     case "agent":
       return t.agent[turn.kind];
     case "external":
-      return turn.kind === "awaiting_review" ? t.external.awaitingReview(turn.names) : t.external[turn.kind];
+      if (turn.kind === "awaiting_review") return t.external.awaitingReview(turn.names);
+      if (turn.kind === "stack_below") return t.external.stackBelow(turn.names);
+      return t.external[turn.kind];
     case "done":
       return t.done;
     case "idle":

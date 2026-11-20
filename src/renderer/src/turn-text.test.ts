@@ -30,6 +30,7 @@ describe("turnSentence", () => {
       [{ owner: "external", kind: "awaiting_review", names: [] }, "在等 review"],
       [{ owner: "external", kind: "ci_running", names: [] }, "在等 CI"],
       [{ owner: "external", kind: "merge_queue", names: [] }, "在合并队列里"],
+      [{ owner: "external", kind: "stack_below", names: ["feature/a"] }, "在等栈的下一层 feature/a 合并"],
       [{ owner: "done", kind: "merged" }, "合了"],
       [{ owner: "idle", kind: "not_started" }, "还没开始"],
     ];
@@ -52,6 +53,7 @@ describe("turnSentence", () => {
     expect(say({ owner: "you", kind: "merge", risk: "low" })).toBe("Ready to merge — low risk");
     expect(say({ owner: "external", kind: "awaiting_review", names: ["bob", "amy"] })).toBe("Waiting for review from bob, amy");
     expect(say({ owner: "agent", kind: "addressing_review", sessionId: "s" })).toBe("The agent is addressing review");
+    expect(say({ owner: "external", kind: "stack_below", names: ["feature/a"] })).toBe("Waiting for the layer below (feature/a) to merge");
   });
 
   it("butler sentences come from the notice kind", () => {

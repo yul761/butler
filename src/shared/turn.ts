@@ -24,7 +24,8 @@ export type Turn =
   | { owner: "you"; kind: "unattended"; why: UnattendedWhy; canSend: boolean; sessionId: string | null }
   | { owner: "you"; kind: "butler"; notice: NowNotice }
   | { owner: "agent"; kind: "fixing_ci" | "addressing_review" | "rebasing" | "working"; sessionId: string }
-  | { owner: "external"; kind: "ci_running" | "awaiting_review" | "merge_queue"; names: string[] }
+  // stack_below：Butler 管的栈里、下面一层还没合的 draft（names 是下面那层的分支），等它合了 Butler 自己 rebase 并改成 ready。
+  | { owner: "external"; kind: "ci_running" | "awaiting_review" | "merge_queue" | "stack_below"; names: string[] }
   | { owner: "done"; kind: "merged" }
   | { owner: "idle"; kind: "not_started" };
 
@@ -78,6 +79,15 @@ export type CiSendSkip = CiUndeliveredReason | "delivered" | "not_open" | "not_s
 export type TurnSendReason = "not_found" | "not_sendable" | "no_comments" | CiSendSkip;
 
 export type TurnFilter = { epicId?: number; featureId?: number; ticketKey?: string };
+
+/** filter 为 null 或空对象（值都是 undefined）时不带 filter。几个字段都给了时，按 ticketKey > featureId > epicId 取一个。 */
+export function normTurnFilter(f: TurnFilter | null | undefined): TurnFilter | null {
+  if (!f) return null;
+  if (f.ticketKey !== undefined) return { ticketKey: f.ticketKey };
+  if (f.featureId !== undefined) return { featureId: f.featureId };
+  if (f.epicId !== undefined) return { epicId: f.epicId };
+  return null;
+}
 
 export type YouKind = Extract<Turn, { owner: "you" }>["kind"];
 /** 同为 you 时的急的顺序：先回答、再卡住、再提醒…… */
@@ -160,6 +170,8 @@ export interface PrTurnInput extends Omit<WaitingInput, "author"> {
   ciUndelivered: boolean;
   canResendCi: boolean;
   canSendComments: boolean;
+  /** 这个 PR 是 Butler 管的栈里的一层、下面还有没合的层时，最近的那层的分支；不在栈里或是栈底为 null。 */
+  stackBelow: string | null;
 }
 
 /** 有人要求修改：照 waitingOnOf 的判断（不 import 它，它会在第 3 层删掉）。 */
@@ -192,9 +204,10 @@ function yourSide(i: PrTurnInput, why: UnattendedWhy): Turn {
 export function prTurn(i: PrTurnInput): Turn | null {
   if (i.state === "merged") return { owner: "done", kind: "merged" };
   if (i.state !== "open") return null;
-  // 你这边：ready for review 之前
-  if (i.isDraft) return yourSide(i, "draft");
+  // 你这边：ready for review 之前。CI 挂了先于 draft：栈的上层都是 draft，挂了的 CI 不能被盖住。
   if (i.ci === "failing") return yourSide(i, i.ciUndelivered ? "ci_undelivered" : "ci_failing");
+  if (i.isDraft && i.stackBelow !== null) return { owner: "external", kind: "stack_below", names: [i.stackBelow] };
+  if (i.isDraft) return yourSide(i, "draft");
   if (changesRequested(i)) return yourSide(i, "changes_requested");
   if (i.mergeable === "conflicting" || i.mergeState === "dirty") return yourSide(i, "conflicts");
   if (i.mergeState === "behind") return yourSide(i, "behind");

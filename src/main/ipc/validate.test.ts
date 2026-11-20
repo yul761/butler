@@ -572,15 +572,22 @@ describe("turn args (UI redesign layer 1)", () => {
     expect(turnFilterArg({ epicId: 2 })).toEqual({ epicId: 2 });
     expect(turnFilterArg({ featureId: 5 })).toEqual({ featureId: 5 });
     expect(turnFilterArg({ ticketKey: "BTL-1" })).toEqual({ ticketKey: "BTL-1" });
-    for (const bad of [{ epicId: 0 }, { epicId: 1.5 }, { epicId: 1, featureId: 2 }, { foo: 1 }, { ticketKey: "" }, { ticketKey: "x".repeat(201) }, [], "x", 3]) {
+    // 和 TurnFilter 类型、normTurnFilter 一致：值为 undefined 的键不算；几个都给时按 ticketKey > featureId > epicId 取一个；别的键不看
+    expect(turnFilterArg({ ticketKey: "BTL-1", epicId: undefined })).toEqual({ ticketKey: "BTL-1" });
+    expect(turnFilterArg({ epicId: 1, featureId: 2 })).toEqual({ featureId: 2 });
+    expect(turnFilterArg({ epicId: 1, featureId: 2, ticketKey: "K" })).toEqual({ ticketKey: "K" });
+    expect(turnFilterArg({ foo: 1 })).toBeNull();
+    expect(turnFilterArg({ epicId: undefined })).toBeNull();
+    for (const bad of [{ epicId: 0 }, { epicId: 1.5 }, { ticketKey: "K", epicId: "x" }, { ticketKey: "" }, { ticketKey: "x".repeat(201) }, [], "x", 3]) {
       expect(() => turnFilterArg(bad), JSON.stringify(bad)).toThrow();
     }
   });
-  it("turnSendArg: ticketKey and pr {repo, number}, nothing else", () => {
+  it("turnSendArg: picks ticketKey and pr {repo, number}; a TurnItem's pr with title and url is fine", () => {
     const ok = { ticketKey: "BTL-1", pr: { repo: "o/r", number: 3 } };
     expect(turnSendArg(ok)).toEqual(ok);
+    expect(turnSendArg({ ...ok, pr: { ...ok.pr, title: "T", url: "u" }, extra: 1 })).toEqual(ok);
     for (const bad of [
-      { ticketKey: "BTL-1" }, { ...ok, pr: { repo: "o/r", number: 1.5 } }, { ...ok, extra: 1 }, { ...ok, pr: { repo: "o/r", number: 3, x: 1 } },
+      { ticketKey: "BTL-1" }, { ...ok, pr: { repo: "o/r", number: 1.5 } }, { ...ok, pr: { repo: "o/r" } },
       { ...ok, pr: { repo: "", number: 3 } }, { ...ok, ticketKey: "" }, null, [],
     ]) {
       expect(() => turnSendArg(bad), JSON.stringify(bad)).toThrow();

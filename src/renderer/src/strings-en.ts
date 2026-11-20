@@ -489,6 +489,7 @@ export const EN: UiStrings = {
       ci_running: "Waiting for CI",
       awaitingReview: (names: string[]) => (names.length === 0 ? "Waiting for review" : `Waiting for review from ${names.join(", ")}`),
       merge_queue: "In the merge queue",
+      stackBelow: (names: string[]) => `Waiting for the layer below (${names.join(", ")}) to merge`,
     },
     done: "Merged",
     idle: "Not started",

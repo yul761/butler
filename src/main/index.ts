@@ -162,7 +162,7 @@ import { buildNowView } from "./now/now-view";
 import { TurnService } from "./turn/turn-service";
 import { turnCoordinators as turnCoordinatorsOf } from "./turn/coordinators";
 import { ReviewRequestsRepo } from "./db/review-requests-repo";
-import { REVIEW_AWAY_IDLE_SECONDS, ReviewRequestPoller } from "./prwatch/review-requests";
+import { REVIEW_AWAY_IDLE_SECONDS, ReviewRequestPoller, bindFocusCatchUp } from "./prwatch/review-requests";
 import {
   baselinesConfig, checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, llmConfig, memoryOn,
   memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, sessionAdmission, SettingError, trackerTools,
@@ -2768,6 +2768,7 @@ async function bootstrap(): Promise<void> {
   ];
   // 请你 review 的 PR（UI 重做第 1 层，计划 R9）：gh search 的结果整体替换进 review_requests。
   const reviewRequests = new ReviewRequestsRepo(db);
+  let unbindReviewFocus: (() => void) | null = null;
   const reviewPoller = new ReviewRequestPoller({
     fetch: () => reviewRequestedPrs(REVIEW_SEARCH_TIMEOUT_MS),
     repo: reviewRequests,
@@ -2819,6 +2820,7 @@ async function bootstrap(): Promise<void> {
     reviewScope: () => (settings.get("reviewRequestScope") === "registered" ? "registered" : "all"),
     registeredSlugs: () => [...lessonsRepo.repos().map((r) => r.slug), ...ticketPrs.slugs()],
     homeOpened: () => reviewPoller.catchUp(),
+    stackBelow: (url, branch) => stackService.stackBelow(url, branch),
     emit: () => safeSend(IPC.turnChanged),
     now: Date.now,
   });
@@ -3042,6 +3044,7 @@ async function bootstrap(): Promise<void> {
     memoryHistory: (since) => procServices.monitor.history(since),
     turnBoard: (filter) => turnService.board(filter),
     turnSendToAgent: (item) => turnService.sendToAgent(item),
+    turnHomeOpened: () => turnService.homeOpened(),
     nowView: (merges) => {
       // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
       const queued = new Set([...gateRepo.waitingSessionIds()].map((id) => sessions.head(id)?.id ?? id));
@@ -3210,7 +3213,7 @@ async function bootstrap(): Promise<void> {
     prWatcher.start();
     reviewPoller.start();
     // 窗口切到前台：请你 review 的离上次超过 1 分钟就补查（R9）。
-    app.on("browser-window-focus", () => reviewPoller.catchUp());
+    unbindReviewFocus = bindFocusCatchUp(app, reviewPoller);
     // 一次性补链接所有 ticket（含归档）的 PR；后台跑，失败下次启动重试。
     void runPrBackfill({
       tickets: () => tickets.list({ includeArchived: true }),
@@ -3379,7 +3382,9 @@ async function bootstrap(): Promise<void> {
     checkSnapshots.stop();
     holdWatcher.stop();
     prWatcher.stop();
+    unbindReviewFocus?.();
     reviewPoller.stop();
+    turnChanged = null;
     turnService.dispose();
     pty.killAll();
     keepAwakeSwitch.set(false);

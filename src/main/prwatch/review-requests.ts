@@ -44,11 +44,13 @@ export class ReviewRequestPoller {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running: Promise<void> | null = null;
   private lastAt: number | null = null;
+  private stopped = false;
 
   constructor(private readonly d: ReviewPollerDeps) {}
 
   start(tickMs = REVIEW_TICK_MS): void {
     this.stop();
+    this.stopped = false;
     this.timer = setInterval(() => void this.tick(), tickMs);
     this.timer.unref?.();
     void this.tick();
@@ -57,6 +59,7 @@ export class ReviewRequestPoller {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.stopped = true;
   }
 
   /** 定时器调：reviewPollDue 才查。 */
@@ -65,9 +68,9 @@ export class ReviewRequestPoller {
     await this.run();
   }
 
-  /** 窗口切到前台、打开首页时调：reviewCatchUpDue 才查。不等结果。 */
+  /** 窗口切到前台、打开首页时调：reviewCatchUpDue 才查；人离开时、停了以后不查（离开时交给 15 分钟一次的定时器）。不等结果。 */
   catchUp(): void {
-    if (!reviewCatchUpDue(this.lastAt, this.d.now())) return;
+    if (this.stopped || this.d.away() || !reviewCatchUpDue(this.lastAt, this.d.now())) return;
     void this.run();
   }
 
@@ -82,6 +85,7 @@ export class ReviewRequestPoller {
           this.d.log("review requests: gh search failed, keeping the last list");
           return;
         }
+        if (this.stopped) return; // 关闭时还在跑的查询：数据库可能已经关了
         const before = fingerprint(this.d.repo.list());
         this.d.repo.replaceAll(list, this.d.now());
         if (fingerprint(this.d.repo.list()) !== before) this.d.changed();
@@ -94,4 +98,14 @@ export class ReviewRequestPoller {
     })();
     return this.running;
   }
+}
+
+/** 窗口切到前台时补查一次；返回解绑的函数（退出时调）。 */
+export function bindFocusCatchUp(
+  app: { on(event: "browser-window-focus", f: () => void): unknown; removeListener(event: "browser-window-focus", f: () => void): unknown },
+  poller: { catchUp(): void },
+): () => void {
+  const f = () => poller.catchUp();
+  app.on("browser-window-focus", f);
+  return () => void app.removeListener("browser-window-focus", f);
 }

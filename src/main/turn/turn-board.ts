@@ -1,6 +1,6 @@
 // 「谁该动」看板（UI 重做第 1 层，计划 R8）：把 TurnService 拼好的输入算成 items、counts、scopes。纯函数。
 import {
-  mostUrgent, slowestOf, ticketTurn,
+  mostUrgent, normTurnFilter, slowestOf, ticketTurn,
   type ScopeTurnRow, type TimedTurn, type Turn, type TurnBoard, type TurnFilter, type TurnItem, type TurnOwner,
 } from "../../shared/turn";
 
@@ -56,14 +56,7 @@ function calcTicket(t: BoardTicket, epicId: number | null): TicketCalc {
   return { t, epicId, turn: r.turn, pr, since, others: r.others, youCount };
 }
 
-/** filter 为 null 或空对象时不带 filter。几个字段都给了时，按 ticketKey > featureId > epicId 取一个。 */
-function normFilter(f: TurnFilter | null): TurnFilter | null {
-  if (!f) return null;
-  if (f.ticketKey !== undefined) return { ticketKey: f.ticketKey };
-  if (f.featureId !== undefined) return { featureId: f.featureId };
-  if (f.epicId !== undefined) return { epicId: f.epicId };
-  return null;
-}
+const normFilter = normTurnFilter;
 
 export function buildTurnBoard(input: BoardInput, rawFilter: TurnFilter | null): TurnBoard {
   const filter = normFilter(rawFilter);

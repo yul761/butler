@@ -161,6 +161,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.prAssessment, IPC.prPolicyGet, IPC.reviewEffect, IPC.reviewQueue,
   IPC.baselinesView, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyViolations, IPC.checkExportList, IPC.backtestView,
   IPC.interruptsState, IPC.profilesGet, IPC.turnBoard,
+  // 切到首页时的补查：和打开页面一样不算推动工作
+  IPC.turnHomeOpened,
   // 建立、整理、归档
   IPC.ticketsCreate, IPC.ticketsArchive, IPC.ticketsUpdate, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
   IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive, IPC.featuresUnarchive, IPC.featuresMove,

@@ -1,4 +1,4 @@
-import type { TurnBoard, TurnFilter, TurnSendReason } from "../../shared/turn";
+import { normTurnFilter, type TurnBoard, type TurnFilter, type TurnSendReason } from "../../shared/turn";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
 import type { IntakeActResult, IntakeAction, IntakeClassifyEdit, IntakeEffect, IntakePolicyOverrides, IntakePolicySetResult, IntakePolicyView, IntakeView } from "../../shared/intake";
@@ -226,9 +226,13 @@ export const api = {
   ciResend: (item: CiItemRef) => call<string>(IPC.ciResend, item),
   nowView: () => call<NowView>(IPC.nowView),
   /** 「谁该动」看板（UI 重做第 1 层）：不带 filter 是首页。 */
-  turnBoard: (filter?: TurnFilter) => call<TurnBoard>(IPC.turnBoard, filter ?? null),
+  // filter 先规整成一个键（ticketKey > featureId > epicId，值为 undefined 的不算），和主进程的校验一致。
+  turnBoard: (filter?: TurnFilter) => call<TurnBoard>(IPC.turnBoard, normTurnFilter(filter)),
+  /** 切到首页时调一次：补查请你 review 的 PR。turnBoard 本身不触发查询，收到 turn:changed 重取时不用管它。 */
+  turnHomeOpened: () => call<void>(IPC.turnHomeOpened),
+  // 可以直接传 TurnItem.pr（带 title、url）：只发 repo 和 number。
   turnSendToAgent: (item: { ticketKey: string; pr: { repo: string; number: number } }) =>
-    call<{ ok: boolean; reason?: TurnSendReason }>(IPC.turnSendToAgent, item),
+    call<{ ok: boolean; reason?: TurnSendReason }>(IPC.turnSendToAgent, { ticketKey: item.ticketKey, pr: { repo: item.pr.repo, number: item.pr.number } }),
   inbox: (scope: InboxScope) => call<InboxView>(IPC.inboxList, scope),
   answerInbox: (id: number, text: string) => call<boolean>(IPC.inboxAnswer, id, text),
   dismissInbox: (id: number) => call<boolean>(IPC.inboxDismiss, id),

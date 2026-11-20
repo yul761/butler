@@ -85,6 +85,8 @@ export const IPC = {
   /** 「谁该动」看板（UI 重做第 1 层）。 */
   turnBoard: "turn:board",
   turnSendToAgent: "turn:send-to-agent",
+  /** 切到首页时调一次：补查请你 review 的 PR（turn:board 不触发查询）。 */
+  turnHomeOpened: "turn:home-opened",
   turnChanged: "turn:changed",
   /** PR 进度（六步进度条和时间线）：一个 ticket、feature 或 epic 范围内每个仓库一行。 */
   prStages: "prStages:list",
@@ -251,7 +253,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
   IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft,
   IPC.baselinesView, IPC.baselinesAct, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyAct, IPC.legacyViolations, IPC.checkExportList, IPC.checkExportAct, IPC.backtestView, IPC.backtestAct, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget, IPC.admissionState, IPC.wizardEstimate, IPC.wizardAct, IPC.calibrationSample, IPC.calibrationStats, IPC.calibrationAct, IPC.principlesRegroup,
-  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.ciResend, IPC.routingView, IPC.routingAct, IPC.costView, IPC.costSet, IPC.costResume, IPC.costBreakers, IPC.backgroundStatus, IPC.backgroundAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.turnBoard, IPC.turnSendToAgent, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
+  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.ciResend, IPC.routingView, IPC.routingAct, IPC.costView, IPC.costSet, IPC.costResume, IPC.costBreakers, IPC.backgroundStatus, IPC.backgroundAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.turnBoard, IPC.turnSendToAgent, IPC.turnHomeOpened, IPC.inboxList, IPC.inboxAnswer, IPC.inboxDismiss,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools, IPC.settingsFeaturePolicy, IPC.settingsPolicyPatch,
   IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList, IPC.externalAuditList,
