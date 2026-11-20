@@ -6,6 +6,7 @@ import type { CiCheck } from "../tickets/gh";
 import type { TriageDecision } from "../loop/ci-triage";
 import type { CiItemRef, CiUndelivered, CiUndeliveredReason, Session } from "../../shared/types";
 import { sanitizeTask } from "../../shared/control";
+import type { CiSendSkip } from "../../shared/turn";
 import { M } from "../strings";
 import { CI_LOG_LINES } from "./pr-watcher";
 
@@ -116,7 +117,7 @@ export function ciRecipient(i: {
 }
 
 /** 为什么没递（日志和「现在」页的提醒用）。delivered 是已经递过（resend 的返回值），不是失败。 */
-export type CiSkipReason = CiUndeliveredReason | "delivered" | "not_open" | "not_settled" | "triage";
+export type CiSkipReason = CiSendSkip;
 
 /** 递一条要用的：哪个 ticket 的哪个仓库哪个分支、通知里写什么、递完记到哪。 */
 interface Pending { ticketKey: string; repoId: number; branch: string; number: number | null; label: string; key: string; text: () => string; mark: () => void }

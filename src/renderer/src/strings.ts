@@ -476,6 +476,7 @@ const ZH = {
   noticeLessonsFailing: (n: number) => `复盘连续 ${n} 次分析失败`,
   noticeSharedMcpFailed: (err: string) => `共享 MCP 起不来（${err}），新开的 session 先用各自的 MCP 进程，Butler 会自己重试`,
   noticeSessionLimited: (title: string, line: string) => `${title}：${line}`,
+  noticeApproval: (title: string | null) => (title === null ? "在终端里确认权限" : `「${title}」在终端里等你确认权限`),
   noticeCiUndelivered: (what: string, minutes: number, why: string) => `CI 结果未能送达：${what}，已等 ${minutes} 分钟（${why}）`,
   ciWhatPr: (key: string, n: number, branch: string) => `${key} PR #${n}（${branch}）`,
   ciWhatBranch: (key: string, branch: string) => `${key} 分支 ${branch}`,

@@ -463,6 +463,7 @@ export const EN: UiStrings = {
   noticeLessonsFailing: (n: number) => `${n} lesson analyses failed in a row`,
   noticeSharedMcpFailed: (err: string) => `The shared MCP could not start (${err}). New sessions use their own MCP processes until Butler's retry succeeds`,
   noticeSessionLimited: (title: string, line: string) => `${title}: ${line}`,
+  noticeApproval: (title: string | null) => (title === null ? "Confirm the permission prompt in the terminal" : `"${title}" is waiting for you to confirm a permission prompt`),
   noticeCiUndelivered: (what: string, minutes: number, why: string) => `CI result not delivered: ${what}, waiting ${minutes} min (${why})`,
   ciWhatPr: (key: string, n: number, branch: string) => `${key} PR #${n} (${branch})`,
   ciWhatBranch: (key: string, branch: string) => `${key} branch ${branch}`,
