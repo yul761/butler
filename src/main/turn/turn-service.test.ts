@@ -129,6 +129,18 @@ describe("TurnService.board", () => {
     expect(idle.board(null).counts.you).toBe(0);
   });
 
+  it("the Butler session hitting its usage limit is a loose you/butler session_limited", () => {
+    const c = sv("b1", { ticketKey: null, butler: true, coordinator: true });
+    const limit = { kind: "usage_limit" as const, resetsAt: null, message: "limit" };
+    const s = new TurnService(fakeDeps({
+      coordinators: () => [{ session: c, featureId: null, epicId: null, target: { page: "butler", sessionId: "b1" }, title: null }],
+      activity: () => act("idle", { sessionId: "b1", limit } as never), lastReplyAt: () => 500,
+    }));
+    const b = s.board(null);
+    expect(b.items.map((i) => i.turn)).toEqual([{ owner: "you", kind: "butler", notice: { kind: "session_limited", target: { page: "butler", sessionId: "b1" }, title: null, limit } }]);
+    expect(b.counts.you).toBe(1);
+  });
+
   it("two asks on one ticket: the ticket item answers the first, the second is its own item", () => {
     const s = new TurnService(fakeDeps({
       tickets: () => [ticket("BTL-1", { sessions: [sv("s1")] })],

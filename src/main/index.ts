@@ -160,6 +160,7 @@ import { markTurnEndedWithoutStop } from "./sessions/turn-end";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
 import { TurnService } from "./turn/turn-service";
+import { turnCoordinators as turnCoordinatorsOf } from "./turn/coordinators";
 import { ReviewRequestsRepo } from "./db/review-requests-repo";
 import { REVIEW_AWAY_IDLE_SECONDS, ReviewRequestPoller } from "./prwatch/review-requests";
 import {
@@ -2777,28 +2778,13 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   /** 总控 session（feature、epic 的总控和 Butler 总控）的 head：开着终端或休眠着的。 */
-  const turnCoordinators = () => {
-    const alive = (s: Session & { termId?: string | null }): boolean => (!!s.termId || !!s.hibernatedAt || !!s.wakeError) && s.replacedBy === null;
-    const hib = hibernatedHeads();
-    const out: { session: Session; featureId: number | null; epicId: number | null; target: NowTarget; title: string | null }[] = [];
-    const seen = new Set<string>();
-    const push = (session: Session, featureId: number | null, epicId: number | null, target: NowTarget, title: string | null) => {
-      if (seen.has(session.id) || !alive(session)) return;
-      seen.add(session.id);
-      out.push({ session, featureId, epicId, target, title });
-    };
-    for (const f of sessionService.featureViews()) {
-      const own = [...f.sessions, ...hib.filter((h) => h.featureId === f.id && h.ticketKey === null)];
-      for (const x of own) if (x.fixesSession === null) push(x, f.id, null, { page: "feature", id: f.id, sessionId: x.id }, f.name);
-    }
-    for (const e of sessionService.epicViews()) {
-      const own = [...e.sessions, ...hib.filter((h) => h.epicId === e.id && h.ticketKey === null && h.featureId === null)];
-      for (const x of own) push(x, null, e.id, { page: "epic", id: e.id, sessionId: x.id }, e.name);
-    }
-    const b = sessionService.runningButler() ?? hib.find((h) => h.butler && h.ticketKey === null) ?? null;
-    if (b) push(b, null, null, { page: "butler", sessionId: b.id }, null);
-    return out;
-  };
+  const turnCoordinators = () =>
+    turnCoordinatorsOf({
+      featureViews: () => sessionService.featureViews(),
+      epicViews: () => sessionService.epicViews(),
+      runningButler: () => sessionService.runningButler(),
+      hibernatedHeads,
+    });
   const turnService = new TurnService({
     tickets: () => sessionService.ticketViews(),
     features: () => sessionService.featureViews(),

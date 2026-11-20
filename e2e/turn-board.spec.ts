@@ -1,7 +1,8 @@
 import type { Page } from "@playwright/test";
 import { IPC } from "../src/shared/ipc";
 import type { TurnBoard } from "../src/shared/turn";
-import { completeWizard, expect, test, unsupportedGhCalls } from "./fixtures";
+import { S } from "../src/renderer/src/strings";
+import { completeWizard, expect, terminalText, test, unsupportedGhCalls } from "./fixtures";
 
 const board = (page: Page, filter?: unknown) =>
   page.evaluate(
@@ -32,4 +33,24 @@ test("a PR someone asked you to review shows up on the turn board", async ({ mak
   expect(b.counts.you).toBe(b.items.filter((i) => i.turn.owner === "you").length);
   expect((await board(page, { ticketKey: "E2E-7" })).value.items.some((i) => i.turn.kind === "review")).toBe(false);
   expect(unsupportedGhCalls(s)).toEqual([]);
+});
+
+/** Butler 总控撞了用量上限：turn:board 里有一条不属于 ticket 的 you/butler session_limited（首页的「Butler 要你点一下」）。 */
+test("the Butler session hitting its usage limit is on the turn board", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
+  await page.locator(".butler-page").getByRole("button", { name: `+ ${S.newButlerSession}`, exact: true }).click();
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+  await page.locator(".terminal-wrap:visible .xterm").click();
+  await page.keyboard.type("/fake-limit You've hit your limit · resets 3pm (UTC)");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => terminalText(page)).toContain("hit your limit");
+  const limited = async () => (await board(page)).value.items.find((i) => i.turn.kind === "butler" && i.turn.notice.kind === "session_limited");
+  await expect.poll(async () => (await limited())?.turn, { timeout: 20_000 }).toMatchObject({
+    owner: "you", kind: "butler", notice: { kind: "session_limited", target: { page: "butler" }, limit: { kind: "usage_limit" } },
+  });
+  expect(await limited()).toMatchObject({ ticketKey: null, pr: null });
 });
