@@ -1,7 +1,7 @@
 import {
   checkPrValue, PR_POLICY_GROUPS, prKeyDef, type PrKeyView, type PrPolicyGroup, type PrPolicyKeyDef, type PrPolicyOverrides, type PrPolicyView, type PrValue,
 } from "../../shared/pr-policy";
-import type { PrAssessmentView, ReviewQueueItem, RiskLevel } from "../../shared/prereview";
+import type { PrAssessmentView, RiskLevel } from "../../shared/prereview";
 import { REVIEW_EFFECT_MIN_SAMPLE, type ReviewGroupStats } from "../../shared/review-effect";
 
 /** 「预审和就绪」编辑器的草稿：键 → 输入框里的字（列表一行一条）。"" = 继承。没出现的键 = 没改。 */
@@ -70,16 +70,6 @@ export function prGroups(view: PrPolicyView): { group: PrPolicyGroup; keys: (PrK
 export function pathClassOf(key: string): string | null {
   const m = /^risk\.paths\.([A-Za-z]+)$/.exec(key);
   return m ? m[1]! : null;
-}
-
-/** 进度页的 PR 表：prId → 风险和就绪。 */
-export function queueIndex(items: readonly ReviewQueueItem[] | null): Map<number, ReviewQueueItem> {
-  return new Map((items ?? []).map((i) => [i.prId, i]));
-}
-
-/** 只留属于这些 PR 的（进度页按 epic / feature 过滤时，待 review 跟着过滤）。 */
-export function queueFor(items: readonly ReviewQueueItem[] | null, prIds: ReadonlySet<number>): ReviewQueueItem[] {
-  return (items ?? []).filter((i) => prIds.has(i.prId));
 }
 
 /** 一组 PR 的统计够不够看（样本太少时页面上说明，不给数）。 */

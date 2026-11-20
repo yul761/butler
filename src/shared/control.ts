@@ -178,7 +178,7 @@ export type ButlerControlRequest =
   | { v: 1; butler: true; from: string | null; op: "refresh_session"; session: string }
   /** 后台给一个 feature 重新生成汇总（ws-b）：立刻返回，生成完 list_features 能看到新的 summaryAt。 */
   | { v: 1; butler: true; from: string | null; op: "refresh_feature_summary"; feature: string }
-  /** 进度总览（ws-b）：和进度页同一份聚合，可以按 epic / feature 过滤。只读。 */
+  /** 进度总览（ws-b）：buildProgress 的聚合，PR 轮到谁和看板同一套算法，可以按 epic / feature 过滤。只读。 */
   | { v: 1; butler: true; from: string | null; op: "progress_overview"; feature?: string; epic?: string }
   /** 效果总览（ws-h）：和「效果」页同一份 MetricsOverview。只读。 */
   | { v: 1; butler: true; from: string | null; op: "metrics_overview"; days?: number }

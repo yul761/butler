@@ -816,7 +816,7 @@ export const BUTLER_TOOLS = [
       "列出 Butler 在盯的所有 PR：仓库、编号、链接、状态（open、merged、closed）、review（pending、changes_requested、approved）、CI（pending、passing、failing、none、unknown）、" +
       "属于哪个 ticket、feature 和 epic，以及最后检查的时间。有 PR 的还带标题、head / base 分支（叠放的 PR 的 base 是另一个 PR 的 head）、是否草稿（draft）、作者、label、" +
       "被请 review 还没给的人（reviewRequests）、每个 reviewer 最新的态度（reviewers）、能否合并（mergeable、mergeState）、状态最后一次变化的时间，" +
-      "以及轮到谁（turn：owner 是 you、agent、external、done 或 idle，kind 说为什么，和 Butler 首页同一套算法）。数据来自 Butler 后台的轮询，不用你自己去查 gh。" +
+      "以及轮到谁（turn：owner 是 you、agent、external 或 done，kind 说为什么，和 Butler 首页同一套算法；关了的 PR 为 null）。数据来自 Butler 后台的轮询，不用你自己去查 gh。" +
       "Butler 评估过的 PR 还带 prId、风险等级（risk：low、medium、high）、是否就绪（ready）和没满足的就绪条件（missing）；详情用 pr_assessment。",
     inputSchema: EMPTY_SCHEMA,
   },
@@ -952,7 +952,7 @@ export const BUTLER_TOOLS_EN = [
       "List every PR Butler watches: repo, number, link, state (open, merged, closed), review (pending, changes_requested, approved), CI (pending, passing, failing, none, unknown), " +
       "the ticket, feature and epic it belongs to, and when it was last checked. PRs also carry the title, head and base branch (a stacked PR's base is another PR's head), whether it is a draft, the author, labels, " +
       "who was asked to review and has not yet (reviewRequests), each reviewer's latest state (reviewers), whether it can merge (mergeable, mergeState), when its status last changed, " +
-      "and whose turn it is (turn: owner is you, agent, external, done or idle, kind says why; the same algorithm as Butler's home page). The data comes from Butler's background polling, so you do not need to query gh yourself. " +
+      "and whose turn it is (turn: owner is you, agent, external or done, kind says why; the same algorithm as Butler's home page; null for a closed PR). The data comes from Butler's background polling, so you do not need to query gh yourself. " +
       "PRs Butler has assessed also carry prId, the risk level (risk: low, medium, high), whether it is ready (ready) and the readiness conditions not met (missing); use pr_assessment for the details.",
   },
   {
