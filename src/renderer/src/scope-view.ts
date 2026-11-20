@@ -4,6 +4,7 @@ import { mostUrgent, ticketTurn, type ScopeTurnRow, type Turn, type TurnItem } f
 import type { TicketView } from "../../shared/types";
 import { runningRows, youCards, type RunningRow } from "./home-view";
 import type { UiStrings } from "./strings";
+import { externalWho } from "./turn-text";
 
 export interface TicketRow {
   key: string;
@@ -125,7 +126,7 @@ export function whoLabel(turn: Turn, S: UiStrings): string {
   switch (turn.owner) {
     case "you": return S.lay.whoYou;
     case "agent": return S.hm.whoAgent;
-    case "external": return turn.names.length > 0 ? turn.names.join(S.lay.nameSep) : S.hm.whoExternal;
+    case "external": return externalWho(turn, S);
     case "done": return S.hm.whoDone;
     case "idle": return S.hm.whoIdle;
   }

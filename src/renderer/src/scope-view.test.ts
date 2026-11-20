@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ScopeTurnRow, Turn, TurnItem } from "../../shared/turn";
 import { flatGroup, groupByFeature, prTag, progressLine, scopeBoardView, scopeRowLine, scopeTotal, slowestLine, ticketRows, ticketsWithPr, whoLabel } from "./scope-view";
+import { runningRows } from "./home-view";
 import { STRINGS } from "./strings";
 
 const S = STRINGS.zh;
@@ -76,6 +77,16 @@ describe("lines and labels", () => {
     expect(whoLabel({ owner: "external", kind: "awaiting_review", names: [] }, S)).toBe("外部");
     expect(whoLabel({ owner: "done", kind: "merged" }, S)).toBe("合了");
     expect(whoLabel({ owner: "idle", kind: "not_started" }, S)).toBe("没开始");
+  });
+  it("whoLabel says who the same way as the running tab: CI, the layer below, or the names", () => {
+    expect(whoLabel({ owner: "external", kind: "ci_running", names: [] }, S)).toBe("CI");
+    expect(whoLabel({ owner: "external", kind: "stack_below", names: ["feature/BTL-0"] }, S)).toBe("栈的下一层");
+    const ext = (t: Turn) => ({ ticketKey: "K-1", pr: null, epicId: null, featureId: null, turn: t, since: 1, others: 0 });
+    const turns: Turn[] = [
+      { owner: "external", kind: "ci_running", names: [] }, { owner: "external", kind: "merge_queue", names: [] },
+      { owner: "external", kind: "stack_below", names: ["b"] }, { owner: "external", kind: "awaiting_review", names: ["bob", "amy"] },
+    ];
+    for (const lang of [S, SE]) for (const t of turns) expect(runningRows([ext(t)], lang, 2)[0].who).toBe(whoLabel(t, lang));
   });
   it("prTag", () => {
     expect(prTag({ repo: "app", number: 52 }, false)).toBe("#52");

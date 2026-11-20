@@ -6,7 +6,7 @@ import type { Route } from "./App";
 import type { FirstRunHomeProps } from "./components/FirstRunHome";
 import { formatDuration } from "./components/TicketActivity";
 import type { UiStrings } from "./strings";
-import { turnSentence } from "./turn-text";
+import { externalWho, turnSentence } from "./turn-text";
 import type { TurnTone } from "./turn-tone";
 
 export { turnTone, type TurnTone } from "./turn-tone";
@@ -211,9 +211,7 @@ export function runningRows(items: TurnItem[], S: UiStrings, now: number): Runni
   for (const i of items) {
     const t = i.turn;
     if (t.owner !== "agent" && t.owner !== "external") continue;
-    const who = t.owner === "agent" ? S.hm.whoAgent
-      : t.kind === "stack_below" ? S.hm.whoStackBelow
-      : t.names.length > 0 ? t.names.join(", ") : t.kind === "ci_running" ? S.hm.whoCi : S.hm.whoExternal;
+    const who = t.owner === "agent" ? S.hm.whoAgent : externalWho(t, S);
     const pr = i.pr ? `${i.pr.repo}#${i.pr.number}` : "";
     rows.push({ since: i.since, row: {
       key: `${i.ticketKey ?? ""}|${pr}|${t.kind}`, ticketKey: i.ticketKey, owner: t.owner, who,

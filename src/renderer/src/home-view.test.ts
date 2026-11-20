@@ -225,7 +225,7 @@ describe("runningRows", () => {
       it0({ owner: "you", kind: "merge", risk: null }), it0({ owner: "done", kind: "merged" }), it0({ owner: "idle", kind: "not_started" }), agent, ci, review,
     ], S, 65_000);
     expect(rows.map((r) => r.ticketKey)).toEqual(["BTL-3", "BTL-4", "BTL-2"]);
-    expect(rows.map((r) => r.who)).toEqual([S.hm.whoCi, "bob, amy", S.hm.whoAgent]);
+    expect(rows.map((r) => r.who)).toEqual([S.hm.whoCi, `bob${S.lay.nameSep}amy`, S.hm.whoAgent]);
     expect(rows.map((r) => r.owner)).toEqual(["external", "external", "agent"]);
     expect(rows[2].sentence).toBe(turnSentence(agent.turn, agent, S));
     expect(rows[0].age).toBe(S.hm.ago(formatDuration(63_000, S)));
