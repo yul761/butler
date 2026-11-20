@@ -5,25 +5,32 @@
  * 纯函数，不依赖分叉或 main 的任何东西（handoff 的用量行以后也用它）。
  */
 
-/** 和用量页同一套权重（input 为 1）。 */
+/** 和用量页同一套权重（input 为 1）；写缓存哪部分算 5m、哪部分算 1h 见 writes。 */
 const W = { input: 1, cacheRead: 0.1, cacheWrite5m: 1.25, cacheWrite1h: 2, output: 5 } as const;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
 
-/** 缓存写入：有 5m/1h 分档就按分档；没有就全部按 1h 算（开发 session 用的是 1h 缓存）。 */
-const writes = (split5m: unknown, split1h: unknown, total: unknown, hasSplit: boolean): number =>
-  hasSplit ? W.cacheWrite5m * num(split5m) + W.cacheWrite1h * num(split1h) : W.cacheWrite1h * num(total);
+/**
+ * 缓存写入，照 CLI 自己给 costUSD 计价的规则：明确记成 1h 的按 1h 价，其余一律按 5m 价——包括分档加起来不到总写入的余量
+ * （CLI 的说明：不报写入活多久的回复两档都不进；旧版 CLI 跑的那段没记分档），以及完全没有分档时的全部写入（usage-parse 也是这样）。
+ * 分子（这一轮的 usage 没有 cache_creation 对象）和分母（modelUsage 没有分档字段）用的是同一条规则：份额要跟 costUSD 实际怎么累加起来的一致，
+ * 而 CLI 对不知道 TTL 的写入记的就是 5m 价，所以两边都按 5m，比按开发 session 常用的 1h 去猜更准。总写入取 total 和分档之和里大的那个（字段缺了也不丢）。
+ */
+const writes = (total: unknown, split1h: unknown, split5m: unknown): number => {
+  const h = num(split1h);
+  const all = Math.max(num(total), h + num(split5m));
+  return W.cacheWrite1h * h + W.cacheWrite5m * (all - h);
+};
 
 /** 这一轮 usage（API 的 snake_case 形状）的加权 token；不是对象为 null。 */
 export function runWeight(usage: unknown): number | null {
   if (!isObj(usage)) return null;
-  const cc = usage.cache_creation;
-  const split = isObj(cc);
+  const cc = isObj(usage.cache_creation) ? usage.cache_creation : {};
   return (
     W.input * num(usage.input_tokens) +
     W.cacheRead * num(usage.cache_read_input_tokens) +
-    writes(split ? cc.ephemeral_5m_input_tokens : 0, split ? cc.ephemeral_1h_input_tokens : 0, usage.cache_creation_input_tokens, split) +
+    writes(usage.cache_creation_input_tokens, cc.ephemeral_1h_input_tokens, cc.ephemeral_5m_input_tokens) +
     W.output * num(usage.output_tokens)
   );
 }
@@ -34,24 +41,27 @@ export function cumulativeWeight(modelUsage: unknown): number | null {
   let sum = 0;
   for (const m of Object.values(modelUsage)) {
     if (!isObj(m)) continue;
-    const split = "cacheCreationEphemeral5mInputTokens" in m || "cacheCreationEphemeral1hInputTokens" in m;
     sum +=
       W.input * num(m.inputTokens) +
       W.cacheRead * num(m.cacheReadInputTokens) +
-      writes(m.cacheCreationEphemeral5mInputTokens, m.cacheCreationEphemeral1hInputTokens, m.cacheCreationInputTokens, split) +
+      writes(m.cacheCreationInputTokens, m.cacheCreationEphemeral1hInputTokens, m.cacheCreationEphemeral5mInputTokens) +
       W.output * num(m.outputTokens);
   }
   return sum;
 }
 
+/** 这一轮的权重比累计还大多少算浮点误差。 */
+const OVER = 1e-9;
+
 /**
  * 这一轮的美元 = 累计金额 × w(这一轮 usage) / Σ w(modelUsage)。
- * 缺累计金额、usage 或 modelUsage，或累计权重为 0 → null（算不出来）。不会超过累计金额。
+ * 缺累计金额、usage 或 modelUsage，或累计权重为 0 → null（算不出来）。
+ * 这一轮比累计还重（超过浮点误差）说明数对不上，也是 null：夹到累计金额等于把以前的花费全算到这一轮头上。
  */
 export function runCostFromCumulative(totalUsd: number | null, runUsage: unknown, modelUsage: unknown): number | null {
   if (totalUsd === null || !Number.isFinite(totalUsd)) return null;
   const run = runWeight(runUsage);
   const all = cumulativeWeight(modelUsage);
-  if (run === null || all === null || all <= 0) return null;
+  if (run === null || all === null || all <= 0 || run > all * (1 + OVER)) return null;
   return Math.max(0, totalUsd * Math.min(1, run / all));
 }

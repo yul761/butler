@@ -779,7 +779,8 @@ describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
   });
 
   // 真 CLI 的 modelUsage 和 total 一样是累计的：这一轮的份额 = total × w(usage) / Σ w(modelUsage)
-  const usageRaw = { input_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 20, output_tokens: 30 };
+  // 写缓存记成 1h，和累计里的分档一致（分子分母同一条规则）。
+  const usageRaw = { input_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 20, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 20 }, output_tokens: 30 };
   const runW = 10 + 0.1 * 1000 + 2 * 20 + 5 * 30;
   const cumulative = (times: number) => ({ "claude-opus-5-5": { inputTokens: 10 * times, outputTokens: 30 * times, cacheReadInputTokens: 1000 * times, cacheCreationEphemeral1hInputTokens: 20 * times } });
 
