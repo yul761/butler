@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { saveTab, savedTab } from "../local-prefs";
-import { landingKey, pickTab, resolveTab } from "../page-tabs";
+import { landingDue, landingKey, pickTab, resolveTab } from "../page-tabs";
 
 export interface PageTab {
   id: string;
@@ -24,13 +24,18 @@ export function PageTabs({ page, tabs, defaultTab, forceTab, forceSeq, actions }
   const ids = tabs.map((t) => t.id);
   const [saved, setSaved] = useState<string | null>(() => resolveTab(savedTab(page), forceTab, ids, defaultTab));
   useEffect(() => setSaved(savedTab(page)), [page]);
-  const land = landingKey(forceTab, forceSeq);
+  const land = `${page}|${landingKey(forceTab, forceSeq)}`;
+  /** 已经落过的那一次（页面 + 落点）：目标 tab 后出现时补落，落过的不再落。 */
+  const landed = useRef<string | null>(null);
+  const idsKey = ids.join(",");
   useEffect(() => {
-    if (forceTab != null && ids.includes(forceTab)) {
-      saveTab(page, forceTab);
-      setSaved(forceTab);
-    }
-  }, [page, land]);
+    // 落点撤掉了：下次同一个落点再来时照样落（同以前按 land 变化触发）。
+    if (forceTab == null) landed.current = null;
+    if (forceTab == null || !landingDue(forceTab, ids, land, landed.current)) return;
+    landed.current = land;
+    saveTab(page, forceTab);
+    setSaved(forceTab);
+  }, [page, land, idsKey]);
   // forceTab 只在变化时落点一次（上面的 effect 把它存进 saved），之后用户点哪个就是哪个。
   const current = pickTab(saved, ids, defaultTab);
   const tab = tabs.find((t) => t.id === current);

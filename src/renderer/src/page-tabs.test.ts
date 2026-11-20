@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { landingKey, pickTab, resolveTab } from "./page-tabs";
+import { landingDue, landingKey, pickTab, resolveTab } from "./page-tabs";
 
 describe("page tabs", () => {
   const ids = ["progress", "tickets", "reports", "decisions"];
@@ -51,5 +51,19 @@ describe("landingKey (forceSeq re-fires the same tab)", () => {
   it("without a sequence it only changes with the tab (existing callers)", () => {
     expect(landingKey("pr")).toBe(landingKey("pr"));
     expect(landingKey("pr")).not.toBe(landingKey("log"));
+  });
+});
+
+describe("landingDue (a landing waits for its tab to appear)", () => {
+  it("lands once the target tab is there, even if it shows up after the landing was asked for", () => {
+    const key = landingKey("archived", 1);
+    // 目标 tab 还没出现：先不落，也不算落过。
+    expect(landingDue("archived", ["a", "b"], "p|" + key, null)).toBe(false);
+    // tab 后出现：补落。
+    expect(landingDue("archived", ["a", "b", "archived"], "p|" + key, null)).toBe(true);
+    // 落过了：tab 列表再变也不再拉回去。
+    expect(landingDue("archived", ["a", "archived"], "p|" + key, "p|" + key)).toBe(false);
+    // 没有落点。
+    expect(landingDue(null, ["a"], "p|null", null)).toBe(false);
   });
 });

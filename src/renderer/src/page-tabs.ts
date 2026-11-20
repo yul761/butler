@@ -17,3 +17,11 @@ export function resolveTab(saved: string | null, forced: string | null | undefin
 export function landingKey(forced: string | null | undefined, seq?: number): string | null {
   return forced == null ? null : `${forced}#${seq ?? 0}`;
 }
+
+/**
+ * 这一次落点（key = 页面 + landingKey）该不该现在执行：目标 tab 在列表里、这一次还没落过。
+ * 目标 tab 可能后出现（比如内容晚到才有的 tab）：那时再补落；落过以后 tab 列表再变也不再拉回去。
+ */
+export function landingDue(forced: string | null | undefined, ids: readonly string[], key: string, done: string | null): boolean {
+  return forced != null && ids.includes(forced) && key !== done;
+}
