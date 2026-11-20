@@ -1369,4 +1369,17 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE ticket_prs ADD COLUMN delivered_at INTEGER;
   ALTER TABLE ticket_prs ADD COLUMN delivered_to TEXT;
   `,
+  // UI 重做第 1 层：别人请你 review 的 PR（gh search prs --review-requested=@me 的结果，整体替换）。
+  `
+  CREATE TABLE review_requests (
+    url_key TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    author TEXT NOT NULL,
+    first_seen_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL
+  );
+  `,
 ];

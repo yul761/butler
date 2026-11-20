@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { homedir } from "node:os";
+import { prUrlParts } from "../../shared/pr-url";
 import { MERGE_STATES, type PrMergeable, type PrMergeState, type PrReviewer, type PrReviewRequest } from "../../shared/progress";
 
 /**
@@ -558,6 +560,29 @@ export async function mergedPrs(cwd: string, after: string | null, limit: number
     out.push({ number: r.number, mergedAt: r.mergedAt, headRefName: str(r.headRefName) });
   }
   return out.sort((a, b) => Date.parse(a.mergedAt) - Date.parse(b.mergedAt));
+}
+
+/** 别人请你 review 的一个 PR（UI 重做第 1 层）。slug 是 prUrlParts 的形式：企业版主机带 host 前缀。 */
+export interface ReviewRequestedPr { url: string; slug: string; number: number; title: string; author: string }
+export const REVIEW_SEARCH_TIMEOUT_MS = 30_000;
+
+/**
+ * gh search prs --review-requested=@me --state=open：一次调用覆盖账号能看到的所有仓库（只查 gh 的默认主机）。cwd 用 home。
+ * 失败返回 null，从不抛错。slug、number 从 url 取；解析不了的项跳过。
+ */
+export async function reviewRequestedPrs(timeoutMs: number): Promise<ReviewRequestedPr[] | null> {
+  const args = ["search", "prs", "--review-requested=@me", "--state=open", "--limit", "100", "--json", "number,title,url,repository,author,updatedAt"];
+  const j = parseJson(await runGh(homedir(), args, timeoutMs, 8 * 1024 * 1024));
+  if (!Array.isArray(j)) return null;
+  const out: ReviewRequestedPr[] = [];
+  for (const item of j) {
+    const r = obj(item);
+    if (!r || typeof r.url !== "string") continue;
+    const parts = prUrlParts(r.url);
+    if (!parts) continue;
+    out.push({ url: r.url, slug: parts.slug, number: parts.number, title: str(r.title), author: str(obj(r.author)?.login) });
+  }
+  return out;
 }
 
 export interface PrCommit {
