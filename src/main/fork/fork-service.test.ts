@@ -482,7 +482,9 @@ describe("ForkService 失败", () => {
     const { forkId } = s.svc.ask("root-1", null, "q");
     await s.svc.idle();
     expect(s.calls[0].args).toContain("--fork-session");
-    expect(s.repo.get(forkId)).toMatchObject({ status: "failed", errorCode: "not_forked", forkSessionId: null, costUsd: 0.05 });
+    // 这一轮写进了开发 session 自己的 transcript，用量扫描会按开发 session 记：不再记一行 headless 用量（否则记两遍），费用标成不全。
+    expect(s.repo.get(forkId)).toMatchObject({ status: "failed", errorCode: "not_forked", forkSessionId: null, costPartial: true });
+    expect(s.deps.onUsage).not.toHaveBeenCalled();
     expect(s.deps.recordHeadless).not.toHaveBeenCalled();
     expect(s.msgs.map((m) => m.role)).toEqual(["user"]);
     expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("instead of forking"));
@@ -499,8 +501,9 @@ describe("ForkService 失败", () => {
     s.queue.push({ ok: false, reason: "rate_limited", message: "limit", limit, stderr: "", result: result({ sessionId: "head-2", isError: true, resultText: "limit" }) });
     const { forkId } = s.svc.ask("root-1", null, "q");
     await s.svc.idle();
-    expect(s.repo.get(forkId)).toMatchObject({ status: "failed", errorCode: "rate_limited", errorResetAt: 77, forkSessionId: null });
+    expect(s.repo.get(forkId)).toMatchObject({ status: "failed", errorCode: "rate_limited", errorResetAt: 77, forkSessionId: null, costPartial: true });
     expect(s.deps.recordHeadless).not.toHaveBeenCalled();
+    expect(s.deps.onUsage).not.toHaveBeenCalled();
     expect(s.deps.log).not.toHaveBeenCalledWith(expect.stringContaining("instead of forking"));
   });
 

@@ -416,7 +416,13 @@ export class ForkService {
       const at = this.d.now();
       const r = out.result;
       cost = r ? costOf(r, this.d.registry()) : noResultCost(out);
-      if (r?.usage) {
+      const sid = r?.sessionId ?? null;
+      // 返回的就是 --resume 的那个开发 session：CLI 没分叉出来，这一轮写进了开发 session 自己的对话。不记成 headless、不存成分叉 id
+      // （否则接着问会直接续上正在用的开发 session）。跑成功的这一轮记 not_forked；本来就失败的保留真正的原因（限额的 resetAt 也在）。
+      // 它的用量也在开发 session 的 transcript 里、由用量扫描记在开发 session 名下：不再记一行 headless 用量（否则记两遍），费用标成不全。
+      const unforked = sid !== null && sid === forkedFrom(o.args);
+      if (unforked) cost = { ...cost, partial: true };
+      if (r?.usage && !unforked) {
         const usage = r.usage;
         this.hook("onUsage", () => this.d.onUsage({ runId: o.runId, label: FORK_JOB, at, model: r.model, usage, costUsd: r.costUsd, ticketKey: row.ticketKey }));
       }
@@ -424,10 +430,6 @@ export class ForkService {
         const hit = out.limit;
         this.hook("onLimit", () => this.d.onLimit(hit, FORK_JOB));
       }
-      const sid = r?.sessionId ?? null;
-      // 返回的就是 --resume 的那个开发 session：CLI 没分叉出来，这一轮写进了开发 session 自己的对话。不记成 headless、不存成分叉 id
-      // （否则接着问会直接续上正在用的开发 session）。跑成功的这一轮记 not_forked；本来就失败的保留真正的原因（限额的 resetAt 也在）。
-      const unforked = sid !== null && sid === forkedFrom(o.args);
       if (unforked && out.ok) this.d.log(`fork ${row.id}: the CLI resumed the dev session ${sid} instead of forking it`);
       if (sid && !unforked) this.hook("recordHeadless", () => this.d.recordHeadless(sid, row.cwd, at));
       const text = out.ok && !unforked ? out.result.resultText.trim() : "";
