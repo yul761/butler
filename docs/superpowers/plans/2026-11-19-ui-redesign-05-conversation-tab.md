@@ -90,8 +90,8 @@ ticket：BTL-235，叠在 BTL-233（第 3 层）上。开工前 BTL-234（第 4 
 ## Review Focus
 
 1. **开发 session 正在跑时分叉。**
-   - `chooseMode` 只在开发 session 停在输入框（`waitingForInput`）时才选完整模式。开发 session 正在跑，它的 transcript 可能停在一个没有结果的 `tool_use` 上，这时分叉出来的对话是半截的，所以这种情况一律走精简模式。
-   - 用户这时点「用完整上下文重问」，返回 `dev_busy`，框里写「开发 session 正在跑，等它停下再用完整上下文」。
+   - `chooseMode` 只在开发 session 空着时才选完整模式：`devIdle = waitingForInput || 没在跑`（`devRunning(headId)`：这个 head 开着终端；终端退出了的、休眠的都不算在跑。终端退出时 `handleExit` 会把 `waitingForInput` 清成 false，光看它会把关着的 session 当成在跑）。开发 session 正在跑，它的 transcript 可能停在一个没有结果的 `tool_use` 上，这时分叉出来的对话是半截的，所以这种情况一律走精简模式。
+   - 用户这时点「用完整上下文重问」，返回 `dev_busy`，框里写「开发 session 正在跑，等它停下再用完整上下文」。关着的开发 session 不报 `dev_busy`，只剩 transcript 那一关（`no_transcript`）。
    - 测试位置：Task 5 的 `chooseMode` 和 `fullBlock`，Task 6 的 `reaskFull`。
 2. **分叉进行中开发 session 被换新。**
    - 分叉行按 `root_session_id` 存。接着问用的是行里存的 `fork_session_id`、`cwd` 和 `launch_args`，不再去看开发 session 现在的状态。
@@ -116,8 +116,13 @@ ticket：BTL-235，叠在 BTL-233（第 3 层）上。开工前 BTL-234（第 4 
    - 测试位置：Task 6、Task 7、Task 10。
 5. **费用显示为空。**
    - 算法：
-     - 有 `total_cost_usd` 就用它；
-     - 没有就用价格表按 `usdOf` 估一个；
+     - `total_cost_usd` 是被续的那个 session 的**累计**（`--fork-session` 时还带着被分叉 session 以前的全部花费），`usage` 才是这一轮的。行里记着 CLI 上次报的累计（`cost_seen_total`），这一轮的费用（`turnCost`）：
+       - 没带 `--resume`（精简的第一轮，全新 session）：就是 `total_cost_usd`；
+       - 带 `--fork-session`（完整的第一轮，基数不知道）：按 `usage` 用价格表估；
+       - 续分叉自己的 session（接着问、要结论）：知道 `cost_seen_total` 就取差（不小于 0），不知道也按 `usage` 估；
+       - CLI 没给金额：`cost_seen_total` 不变，按下面的估法；
+     - 用量行（`onUsage`）记同一个这一轮的金额，估出来的不带金额（由用量统计按价格表估）；
+     - 没有金额就用价格表按 `usdOf` 估一个；
      - 价格表里也没有这个模型，费用记为未知，`cost_partial = 1`。
    - 显示：
      - 正在跑、还没有任何费用：「在算…」；
@@ -418,6 +423,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
     mode TEXT NOT NULL CHECK (mode IN ('full','light')),
     cost_usd REAL,                              -- 已知部分的合计；一轮都不知道时为 NULL
     cost_partial INTEGER NOT NULL DEFAULT 0,    -- 有一轮算不出钱
+    -- cost_seen_total REAL：CLI 上次报的累计 total_cost_usd（后加的迁移，ALTER TABLE 追加在表末尾）
     started_at INTEGER NOT NULL,
     last_at INTEGER NOT NULL,
     summary_sent_at INTEGER,
@@ -439,9 +445,9 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
   import type { ConvMessage } from "./conversation";
   export type ForkMode = "full" | "light";
   export type ForkStatus = "running" | "idle" | "failed";
-  /** 失败原因：HeadlessFailure 的取值，加上 interrupted（app 退出时还在跑）、no_answer（跑完了但回答是空的）。 */
+  /** 失败原因：HeadlessFailure 的取值，加上 interrupted（app 退出时还在跑）、no_answer（跑完了但回答是空的）、not_forked（CLI 续了开发 session 而没有分叉）。 */
   export type ForkErrorCode = "timeout" | "spawn_failed" | "exit_nonzero" | "bad_output" | "rate_limited" | "claude_error"
-    | "model_unavailable" | "aborted" | "interrupted" | "no_answer";
+    | "model_unavailable" | "aborted" | "interrupted" | "no_answer" | "not_forked";
   export interface ForkView {
     id: number; rootSessionId: string; mode: ForkMode; status: ForkStatus;
     costUsd: number | null; costPartial: boolean; startedAt: number; lastAt: number;
@@ -451,13 +457,14 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
     messages: ConvMessage[];
   }
   /** IPC 拒绝时的 code（经 toIpcResult 变成 { ok:false, code }）。 */
-  export type ForkRefusal = "fork_busy" | "dev_busy" | "no_transcript" | "no_claude" | "not_found" | "bad_question";
+  export type ForkRefusal = "fork_busy" | "dev_busy" | "no_transcript" | "no_claude" | "not_found" | "bad_question" | "not_forked";
   export class ForkError extends Error { constructor(readonly code: ForkRefusal, message?: string); }
   /** 发给开发 session 被挡下的原因：DeliveryBlock 的取值加上 refreshing、投递结果和本层自己的几种。 */
   export type DevSendBlock = "closed" | "hibernated" | "busy" | "screen" | "needs_you" | "typing" | "draft" | "cost_paused"
     | "refreshing" | "exited" | "timeout" | "blocked" | "in_flight" | "fork_busy" | "no_conclusion" | "not_found";
   export type DevSendResult = { ok: true; at: number } | { ok: false; reason: DevSendBlock };
-  export type RememberResult = "written" | "full" | "disabled" | "failed" | "busy" | "no_conclusion";
+  /** disabled：记忆关着；no_scope：没有 ticket 也没有 feature（Butler、epic 页面）。 */
+  export type RememberResult = "written" | "full" | "disabled" | "failed" | "busy" | "no_conclusion" | "no_scope";
   ```
   ```ts
   // src/main/db/fork-discussions-repo.ts
@@ -471,11 +478,11 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
     listByRoot(rootSessionId: string): ForkRow[];          // started_at 从旧到新
     runningReaskOf(id: number): ForkRow | null;
     start(id: number, at: number): boolean;               // 只有不是 running 时才改成 running；返回改没改（连点的原子判断）
-    finish(id: number, o: { at: number; forkSessionId?: string | null; addCost: number | null; partial: boolean;
-      error?: { code: ForkErrorCode; resetAt: number | null } | null }): void;   // status 变成 idle 或 failed
+    finish(id: number, o: { at: number; forkSessionId?: string | null; addCost: number | null; partial: boolean; seenTotal?: number | null;
+      error?: { code: ForkErrorCode; resetAt: number | null } | null }): void;   // status 变成 idle 或 failed；seenTotal 不传就留着上一次的
     setConclusion(id: number, text: string, at: number): void;
     markSent(id: number, at: number): void;
-    failRunning(code: "interrupted", at: number): number;  // 启动时用
+    failRunning(code: "interrupted", at: number): number;  // 启动时用；跑到一半被杀的可能花了钱，cost_partial 置 1
   }
   ```
 
@@ -490,7 +497,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
     - 再来一次 `addCost: 0.01`，读回 0.01、`costPartial` 仍为 true。
   - **`finish` 带 `error`**：`status = failed`。下一次 `finish` 不带 `error`，会把 `error_code` 清空。
   - **`forkSessionId`**：只在传了时才写，后面不传不会被清掉。
-  - **`failRunning`**：只改 running 的行，返回改了几行。
+  - **`failRunning`**：只改 running 的行，返回改了几行；改过的行 `costPartial` 为 true。
   - **`listByRoot`**：只返回这个根下的行，顺序对。
 - [ ] **Step 2: 运行确认失败。** 跑 `pnpm test src/main/db/fork-discussions-repo.test.ts`。
 - [ ] **Step 3: 实现。**
@@ -603,10 +610,12 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
     sessions: { rootOf(id: string): string | null; head(id: string): Session | null };
     devLaunchOf: (sessionId: string) => DevLaunch | null;
     transcriptExists: (sessionId: string) => boolean;
+    devRunning: (headId: string) => boolean;   // 开着终端（index.ts：gateTerm(id) !== null）；休眠的、退出了的不算
     lastTurnAt: (sessionId: string) => number | null;
     recall: (scope: string, maxChars: number) => Promise<string>;
     /** 写分叉 settings / MCP 配置到 paths.mcp；hook 没装（readonly 不可用）时返回 null → 不起跑，报 no_claude。 */
     files: { settings(devSettingsPath: string | null): string | null; mcp(dev: DevLaunch, forkRunId: string): string | null };
+    hookReady: () => boolean;   // 只读 hook 现在可用（index.ts：hookInstalled）；接着问、重问不可用报 no_claude，要结论返回 no_conclusion
     run: HeadlessRun;
     claude: () => { path: string | null; pathValue: string };
     baseEnv: NodeJS.ProcessEnv;
@@ -660,7 +669,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
   - **接着问**：对上面那个 `forkId` 再 `ask`。
     - `args` 等于 `continueArgs(launch_args, forkSessionId)`，`cwd` 用行里存的；
     - 回答写进同一个 `forkId`。
-  - **开发 session 正在跑时分叉**：`head.waitingForInput = false`，`chooseMode` 选 `light`；`reaskFull` 抛 `ForkError("dev_busy")`。
+  - **开发 session 正在跑时分叉**：`head.waitingForInput = false` 且开着终端（`devRunning` 为 true），`chooseMode` 选 `light`；`reaskFull` 抛 `ForkError("dev_busy")`。`devIdle = waitingForInput || !devRunning(head.id)`：关着的开发 session（`waitingForInput = false`、没在跑）照样能完整重问（严格参数续 head）。
   - **分叉进行中开发 session 被换新**：第一轮还在跑时，把 `sessions.head("root-1")` 换成 `head-3`。
     - 接着问照样用行里的 `fork_session_id`、`cwd`，不看 `head-3`；
     - `list("head-3")` 能列出这个分叉。
@@ -768,7 +777,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
     - 用结论（先确保有）调 `rememberText(scope, 结论)`，返回 `"written"`；
     - 槽满返回 `"full"`；
     - 连点返回 `"busy"`；
-    - ticket 和 feature 都没有时返回 `"disabled"`，不调用 `rememberText`。
+    - ticket 和 feature 都没有时返回 `"no_scope"`，不要结论、不调用 `rememberText`（界面提示「这里的结论没有 ticket 或 feature 可记」，不当成记忆没开）。
 - [ ] **Step 2: 运行确认失败。** 跑 `pnpm test src/main/fork/dev-send.test.ts src/main/fork/fork-service.test.ts`。
 - [ ] **Step 3: 实现。** `DevSender.send` 照 `src/main/inbox/inbox-service.ts`（约 281 行）的回答投递写：先 `guard.check(head.id)`，通过后调 `deliver(g.termId, sanitize(text), { singleLine: platform === "win32", timeoutMs: 60_000, recheck: guard.recheckAfter(head.id, g) })`。在途标记用 `Set<headId>`，放在 `finally` 里清掉。
 - [ ] **Step 4: 运行。** 跑同上的命令，再跑 `pnpm typecheck`，预期 PASS。
@@ -1032,7 +1041,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
   - `.msg-u`、`.msg-a`；
   - `.sep`：虚线，居中；
   - `.fork`：`border: 1px solid var(--fork-border)`，`background: var(--fork-bg)`。浅色时这两个变量取 `#f0c36d` 和 `#fffaf0`，暗色另外给一套；
-  - `.fork .h`：`color: var(--fork-head)`，浅色取 `#a46a00`；
+  - `.fork .h`：`color: var(--fork-head)`，浅色取 `#9c6400`（对比度）；
   - `.fork .acts`、`.conv-input`、`.conv-mode`、`.conv-switch`；
   - `.conv-split`：`display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0`，窗口窄于 900px 时改成单列。
 
@@ -1106,7 +1115,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
 | `sendTo` / `toDev` / `toFork` / `askPlaceholder` / `send` | 发给： / 开发 session / 只问不改（分叉讨论） / 问点什么… / 发送 | Send to: / Dev session / Ask only (forked discussion) / Ask something… / Send |
 | `block.closed` / `hibernated` / `busy` / `screen` / `needs_you` / `typing` / `draft` / `cost_paused` / `refreshing` / `exited` / `timeout` / `blocked` / `in_flight` / `fork_busy` / `no_conclusion` / `not_found` | session 没开着，先到终端 tab 打开它 / session 睡着了，先唤醒 / session 正在跑，等它停下再发 / 终端里开着别的界面，先关掉 / session 在等你回答，先回答它 / 你正在终端里打字，等一下再发 / 你在终端里打了半句，先发完或清掉 / 花费超了，已暂停 / 正在换新，等一下再发 / session 退出了 / 等了一分钟没发出去 / 没发出去 / 上一条还在发 / 讨论还在回答，等它答完 / 没拿到结论，再试一次 / 找不到这个 session | The session isn't open; open it in the Terminal tab / The session is asleep; wake it first / The session is working; send when it stops / Another screen is open in the terminal; close it first / The session is waiting for your answer; answer it first / You're typing in the terminal; send in a moment / There's a half-typed line in the terminal; send or clear it first / Spending is over the limit and paused / Refreshing; send in a moment / The session exited / Couldn't send within a minute / Not sent / The last one is still sending / The discussion is still answering; wait for it / Didn't get a conclusion; try again / Can't find this session |
 | `refusal.fork_busy` / `dev_busy` / `no_transcript` / `no_claude` / `not_found` / `bad_question` / `other` | 这个讨论还在回答 / 开发 session 正在跑，等它停下再用完整上下文 / 这个 session 还没有对话记录，只能用精简上下文 / 找不到 claude，或 butler-hook 没装好（只读保护要靠它） / 找不到这个讨论 / 问题是空的或太长 / 出错了，再试一次 | This discussion is still answering / The dev session is working; use full context once it stops / This session has no transcript yet; only light context is possible / Can't find claude, or butler-hook isn't installed (read-only protection needs it) / Can't find this discussion / The question is empty or too long / Something went wrong; try again |
-| `error.rate_limited(time\|null)` / `interrupted` / `no_answer` / `timeout` / `other` | `撞到用量限额了，{time} 后恢复` / 撞到用量限额了 / Butler 退出时还没答完 / 答完了，但是是空的 / 等太久没答完 / 没答上来 | `Hit the usage limit; back at {time}` / Hit the usage limit / Butler quit before it finished / It finished with an empty answer / Took too long / Couldn't answer |
+| `error.rate_limited(time\|null)` / `interrupted` / `no_answer` / `timeout` / `other` | `撞到用量限额了，{time} 恢复` / 撞到用量限额了 / Butler 退出时还没答完 / 答完了，但是是空的 / 等太久没答完 / 没答上来 | `Hit the usage limit; back at {time}` / Hit the usage limit / Butler quit before it finished / It finished with an empty answer / Took too long / Couldn't answer |
 | `forkTag` | 讨论 | Discussion |
 
 ---
