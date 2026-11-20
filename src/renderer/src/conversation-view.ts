@@ -113,7 +113,13 @@ export function rememberText(r: RememberResult, t: UiStrings): string {
     case "failed": return t.conv.memoryFailed;
     case "busy": return t.conv.memoryBusy;
     case "no_conclusion": return t.conv.block.no_conclusion;
+    case "no_scope": return t.conv.memoryNoScope;
   }
+}
+
+/** 记进记忆回了这个就关掉按钮：只有记忆整体关着（disabled）；没有 ticket / feature 可记（no_scope）不是记忆没开。 */
+export function refusesMemory(r: RememberResult): boolean {
+  return r === "disabled";
 }
 
 /** ButlerError.code → 句子；不认识的给通用的。 */

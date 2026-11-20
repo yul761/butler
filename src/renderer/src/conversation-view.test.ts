@@ -5,7 +5,7 @@ import type { InboxItemView } from "../../shared/types";
 import { resetClock } from "./availability-view";
 import { TASK_LIMIT } from "../../shared/control";
 import { FORK_QUESTION_MAX } from "../../shared/fork";
-import { buildTimeline, costText, draftCheck, errorText, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, modeText, refusalText, rememberText, sendBlockText, turnBlocks, type TimelineInput } from "./conversation-view";
+import { buildTimeline, costText, draftCheck, errorText, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, modeText, refusalText, rememberText, refusesMemory, sendBlockText, turnBlocks, type TimelineInput } from "./conversation-view";
 import { STRINGS } from "./strings";
 
 const T = STRINGS.zh;
@@ -160,12 +160,18 @@ describe("sendBlockText / rememberText / refusalText", () => {
     expect(sendBlockText("busy", T)).toContain("换新");
   });
   it("covers every RememberResult", () => {
-    const all: RememberResult[] = ["written", "full", "disabled", "failed", "busy", "no_conclusion"];
+    const all: RememberResult[] = ["written", "full", "disabled", "failed", "busy", "no_conclusion", "no_scope"];
     for (const t of [STRINGS.zh, STRINGS.en]) {
       const texts = all.map((r) => rememberText(r, t));
       expect(texts.every((x) => x !== "")).toBe(true);
       expect(new Set(texts).size).toBe(all.length);
     }
+    expect(rememberText("no_scope", T)).toBe("这里的结论没有 ticket 或 feature 可记");
+    expect(rememberText("no_scope", STRINGS.en)).toBe("There's no ticket or feature here to remember this under");
+  });
+  it("only disabled (memory off) turns the remember button off; no_scope (Butler / epic pages) does not say memory is off", () => {
+    expect(refusesMemory("disabled")).toBe(true);
+    for (const r of ["no_scope", "written", "full", "failed", "busy", "no_conclusion"] as const) expect(refusesMemory(r), r).toBe(false);
   });
   it("covers every ForkRefusal, internal, and unknown codes", () => {
     const all: (ForkRefusal | "internal")[] = ["fork_busy", "dev_busy", "no_transcript", "no_claude", "not_found", "bad_question", "not_forked", "internal"];

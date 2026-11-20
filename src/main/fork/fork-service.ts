@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join } from "node:path";
 import type { LimitHit } from "../../shared/availability";
 import type { ConvMessage } from "../../shared/conversation";
-import { FORK_QUESTION_MAX, ForkError, type DevSendResult, type ForkErrorCode, type ForkMode, type ForkView, type RememberResult } from "../../shared/fork";
+import { FORK_QUESTION_MAX, ForkError, type DevSendResult, type ForkErrorCode, type ForkMode, type ForkView, type RememberResult, type RememberWriteResult } from "../../shared/fork";
 import { featureScope, ticketScope } from "../../shared/memory";
 import type { RegistryModel } from "../../shared/model-routing";
 import type { Session } from "../../shared/types";
@@ -44,7 +44,7 @@ export interface ForkDeps {
   /** 发给开发 session（DevSender.send）。 */
   send: (anyId: string, text: string) => Promise<DevSendResult>;
   /** 写进记忆（MemoryService.rememberText）。 */
-  remember: (scope: string, text: string) => Promise<Exclude<RememberResult, "busy" | "no_conclusion">>;
+  remember: (scope: string, text: string) => Promise<RememberWriteResult>;
   /** 记忆功能整体开着（关着时 remember 直接 disabled，不为它花一轮要结论）。 */
   memoryEnabled: () => boolean;
   /** 推 fork:changed。 */
@@ -236,7 +236,7 @@ export class ForkService {
     }
   }
 
-  /** 把结论（没有就先要）记进这个 ticket / feature 的记忆。都没有就不记（disabled）。 */
+  /** 把结论（没有就先要）记进这个 ticket / feature 的记忆。都没有（Butler、epic 页面）就不记（no_scope），也不为它要结论。 */
   async remember(forkId: number): Promise<RememberResult> {
     if (this.remembering.has(forkId)) return "busy";
     if (!this.d.memoryEnabled()) return "disabled";
@@ -245,7 +245,7 @@ export class ForkService {
       const row = this.d.repo.get(forkId);
       if (!row) return "failed";
       const scope = row.ticketKey ? ticketScope(row.ticketKey) : row.featureId !== null ? featureScope(row.featureId) : null;
-      if (!scope) return "disabled";
+      if (!scope) return "no_scope";
       const c = await this.conclusion(forkId);
       if (!c.ok) return c.reason === "fork_busy" ? "busy" : c.reason === "not_found" ? "failed" : "no_conclusion";
       return await this.d.remember(scope, c.text);

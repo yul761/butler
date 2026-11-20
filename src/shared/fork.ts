@@ -43,4 +43,7 @@ export class ForkError extends Error {
 export type DevSendBlock = "closed" | "hibernated" | "busy" | "screen" | "needs_you" | "typing" | "draft" | "cost_paused"
   | "refreshing" | "exited" | "timeout" | "blocked" | "in_flight" | "fork_busy" | "no_conclusion" | "not_found";
 export type DevSendResult = { ok: true; at: number } | { ok: false; reason: DevSendBlock };
-export type RememberResult = "written" | "full" | "disabled" | "failed" | "busy" | "no_conclusion";
+/** disabled：记忆关着；no_scope：这个 session 没有 ticket 也没有 feature（Butler、epic 页面），没处可记。 */
+export type RememberResult = "written" | "full" | "disabled" | "failed" | "busy" | "no_conclusion" | "no_scope";
+/** 真去写记忆（MemoryService.rememberText）时可能的结果。 */
+export type RememberWriteResult = Exclude<RememberResult, "busy" | "no_conclusion" | "no_scope">;

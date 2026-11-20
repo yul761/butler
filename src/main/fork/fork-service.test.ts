@@ -930,7 +930,7 @@ describe("ForkService 发给开发 session / 记进记忆", () => {
     expect(await s.svc.remember(forkId)).toBe("full");
   });
 
-  it("remember：连点 busy；没有 ticket 也没有 feature：disabled，不写", async () => {
+  it("remember：连点 busy；没有 ticket 也没有 feature（Butler、epic 页面）：no_scope，不要结论也不写", async () => {
     const s = setup();
     const forkId = await withFork(s);
     s.queue.push(ok({ resultText: "c" }));
@@ -944,7 +944,9 @@ describe("ForkService 发给开发 session / 记进记忆", () => {
 
     const n = setup({ head: { ticketKey: null } });
     const id2 = await withFork(n);
-    expect(await n.svc.remember(id2)).toBe("disabled");
+    const runs = n.deps.run.mock.calls.length;
+    expect(await n.svc.remember(id2)).toBe("no_scope");
+    expect(n.deps.run).toHaveBeenCalledTimes(runs);
     expect(n.deps.remember).not.toHaveBeenCalled();
   });
 

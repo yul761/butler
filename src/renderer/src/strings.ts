@@ -2492,6 +2492,7 @@ const ZH = {
     actSend: "按这个改 → 发给 session", actRemember: "记进记忆", actFollowUp: "接着问", actReaskFull: "用完整上下文重问", actRetry: "再问一次",
     sending: "正在发…", sentAt: (time: string) => `已发给 session · ${time}`,
     remembered: "已记下", memoryFull: "记忆满了，先清掉几条", memoryOff: "记忆没开", memoryFailed: "没记上，稍后再试", memoryBusy: "上一条还在记，等一下",
+    memoryNoScope: "这里的结论没有 ticket 或 feature 可记",
     sendTo: "发给：", toDev: "开发 session", toFork: "只问不改（分叉讨论）", askPlaceholder: "问点什么…", send: "发送",
     tooLong: (max: number) => `太长了，最多 ${max} 字`, noMatch: "没搜到。",
     block: {

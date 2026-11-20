@@ -1,5 +1,5 @@
 import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
-import type { RememberResult } from "../../shared/fork";
+import type { RememberWriteResult } from "../../shared/fork";
 import type { Handoff } from "../../shared/handoff";
 import {
   epicScope, featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, plainNoteBody, ticketScope, truncateUnits, WORKSPACE_SCOPE,
@@ -472,8 +472,8 @@ export class MemoryService {
    * 到 MAX_NOTE_VARIANT 还是看不见就返回 "failed"。
    * 走写入队列，永不 reject：失败只写日志，返回 "failed"。
    */
-  rememberText(scope: string, text: string): Promise<Exclude<RememberResult, "busy" | "no_conclusion">> {
-    return this.enqueue<Exclude<RememberResult, "busy" | "no_conclusion">>(
+  rememberText(scope: string, text: string): Promise<RememberWriteResult> {
+    return this.enqueue<RememberWriteResult>(
       `memory rememberText ${scope}`,
       async () => {
         if (!this.d.enabled()) return "disabled";

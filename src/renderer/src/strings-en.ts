@@ -2472,6 +2472,7 @@ export const EN: UiStrings = {
     actSend: "Do this → send to session", actRemember: "Save to memory", actFollowUp: "Ask more", actReaskFull: "Ask again with full context", actRetry: "Try again",
     sending: "Sending…", sentAt: (time: string) => `Sent to session · ${time}`,
     remembered: "Saved", memoryFull: "Memory is full; clear some first", memoryOff: "Memory is off", memoryFailed: "Couldn't save; try again later", memoryBusy: "The last one is still saving; wait a moment",
+    memoryNoScope: "There's no ticket or feature here to remember this under",
     sendTo: "Send to:", toDev: "Dev session", toFork: "Ask only (forked discussion)", askPlaceholder: "Ask something…", send: "Send",
     tooLong: (max: number) => `Too long: ${max} characters at most`, noMatch: "No matches.",
     block: {

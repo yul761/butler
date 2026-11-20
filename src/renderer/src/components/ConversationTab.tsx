@@ -6,7 +6,7 @@ import type { ForkView } from "../../../shared/fork";
 import type { InboxScope } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import {
-  buildTimeline, draftCheck, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, refusalText, rememberText, sendBlockText, turnBlocks,
+  buildTimeline, draftCheck, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, refusalText, refusesMemory, rememberText, sendBlockText, turnBlocks,
   type ConvFilter, type ConvLoaded, type ReportsLoaded, type TimelineItem,
 } from "../conversation-view";
 import { reportError } from "../errors";
@@ -155,7 +155,7 @@ export function ConversationTab(p: {
   const pendingRef = useRef(pending);
   const [forkNotice, setForkNotice] = useState<ForkActions["notice"]>({});
   const memorySetting = useMemoryOn();
-  /** 这个范围记不了（remember 回了 disabled：记忆关着，或者没有 ticket / feature 可记）。 */
+  /** 记忆关着（remember 回了 disabled）。没有 ticket / feature 可记（no_scope）只提示，不关按钮。 */
   const [memoryRefused, setMemoryRefused] = useState(false);
   // 设置里重新打开了记忆：之前回过 disabled 的也再给一次机会。
   useEffect(() => {
@@ -289,7 +289,7 @@ export function ConversationTab(p: {
     }),
     remember: (id) => void act(id, "remember", async () => {
       const { result } = await api.forkRemember(id);
-      if (result === "disabled") setMemoryRefused(true);
+      if (refusesMemory(result)) setMemoryRefused(true);
       return rememberText(result, S);
     }),
     reaskFull: (id) => void act(id, "reask", async () => {
