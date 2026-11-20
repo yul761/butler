@@ -3,13 +3,13 @@ import type { TurnBoard } from "../../../shared/turn";
 import type { EpicView, FeatureView, NowTarget } from "../../../shared/types";
 import type { Route } from "../App";
 import { api } from "../api";
-import { summaryOutcomeMessage } from "../feature-summary-view";
+import { summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary-view";
 import { runningRows, youCards, type NameCtx } from "../home-view";
 import { groupByFeature, scopeTotal, ticketRows } from "../scope-view";
 import { S } from "../strings";
 import { conversationSessions } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
-import { EpicSummaryTab } from "./EpicSummaryTab";
+import { EpicSummaryTab, type SummaryRunMessage } from "./EpicSummaryTab";
 import { epicErrorText, epicOpenError } from "./epic-row";
 import { NewFeatureDialog } from "./NewFeatureDialog";
 import { PageTabs } from "./PageTabs";
@@ -76,8 +76,11 @@ export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatur
     return <div className="scope-overview" aria-busy="true"><p className="muted">…</p></div>;
   };
 
-  const runSummary = (featureId: number): Promise<string> =>
-    api.runFeatureSummary(featureId).then(summaryOutcomeMessage, (e: unknown) => errorText(e));
+  const runSummary = (featureId: number): Promise<SummaryRunMessage> =>
+    api.runFeatureSummary(featureId).then(
+      (o) => ({ text: summaryOutcomeMessage(o), bad: summaryOutcomeIsError(o) }),
+      (e: unknown) => ({ text: errorText(e), bad: true }),
+    );
 
   return (
     <div className="ticket-page epic-page">

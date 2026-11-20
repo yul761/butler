@@ -8,7 +8,7 @@ import { EpicSummaryTab } from "./EpicSummaryTab";
 const row = (over: Partial<EpicFeatureRow> = {}): EpicFeatureRow => ({
   id: 1, name: "支付方式", status: "active", archivedAt: null, summaryAt: null, summary: null, blockers: [], decisions: [], openQuestions: [], ...over,
 });
-const render = (rows: EpicFeatureRow[]) => renderToStaticMarkup(createElement(EpicSummaryTab, { rows, onRun: async () => "" }));
+const render = (rows: EpicFeatureRow[]) => renderToStaticMarkup(createElement(EpicSummaryTab, { rows, onRun: async () => ({ text: "", bad: false }) }));
 const at = new Date(2026, 10, 3, 9, 5).getTime();
 const when = new Date(at).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
