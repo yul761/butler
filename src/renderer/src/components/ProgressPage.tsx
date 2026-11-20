@@ -7,7 +7,6 @@ import type { ReviewQueueItem } from "../../../shared/prereview";
 import { flattenStack, prRef, segmentWidths, shortTime, sinceText, waitingText } from "../progress-ui";
 import { queueFor, queueIndex, riskPill } from "../review-view";
 import { S } from "../strings";
-import { FeaturePrStages } from "./PrStages";
 import { useStateRefetch } from "./useStateRefetch";
 
 const openPr = (url: string): void => void api.prOpen(url).catch(reportError);
@@ -226,8 +225,6 @@ function PrTable({ view, onOpenTicket, queue }: { view: ProgressView; onOpenTick
 }
 
 function FeatureGroupView({ g, onOpenTicket, onOpenFeature }: { g: ProgressFeature; onOpenTicket: (key: string) => void; onOpenFeature?: (id: number) => void }) {
-  // 展开成 feature 页那张 PR 进度表；展开了才取数据。
-  const [table, setTable] = useState(false);
   return (
     <div className="progress-feature">
       <div className="progress-feature-head">
@@ -236,9 +233,6 @@ function FeatureGroupView({ g, onOpenTicket, onOpenFeature }: { g: ProgressFeatu
           {PROGRESS_BUCKETS.filter((b) => g.counts[b] > 0).map((b) => `${S.progress.buckets[b]} ${g.counts[b]}`).join(" · ")}
         </span>
         {g.stale && <span className="badge stale" title={S.progress.staleHint}>{S.progress.stale}</span>}
-        {g.id !== null && (
-          <button className="link" aria-expanded={table} onClick={() => setTable(!table)}>{table ? S.progress.hidePrTable : S.progress.showPrTable}</button>
-        )}
       </div>
       {g.id !== null && (
         <p className="progress-feature-line">
@@ -256,7 +250,6 @@ function FeatureGroupView({ g, onOpenTicket, onOpenFeature }: { g: ProgressFeatu
           </li>
         ))}
       </ul>
-      {table && g.id !== null && <FeaturePrStages featureId={g.id} onOpenTicket={onOpenTicket} />}
     </div>
   );
 }

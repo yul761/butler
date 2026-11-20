@@ -35,8 +35,8 @@ export type Route =
   | { page: "home" }
   /** landing：从「去看看」进来时，按这个 ticket 轮到谁落到对应的页签（TicketPage 读它）。 */
   | { page: "ticket"; key: string; landing?: boolean }
-  /** focusSession：从「现在」页点进来时先切到的那个 session 的终端。 */
-  | { page: "feature"; id: number; focusSession?: string | null }
+  /** focusSession：从「现在」页点进来时先切到的那个 session 的终端。landing "control"：刚开好修复 session，落到「总控」页签（focusSession 是它的终端）。 */
+  | { page: "feature"; id: number; focusSession?: string | null; landing?: "control" }
   | { page: "epic"; id: number; focusSession?: string | null }
   /** Butler 总控（BTL-190 第 5 点）。 */
   | { page: "butler"; focusSession?: string | null }
@@ -181,10 +181,10 @@ export function App() {
     features: new Map(features.map((f) => [f.id, f.name])),
     tickets: new Map(allTickets.map((t) => [t.key, t.title])),
   };
-  /** 首页「开修复 session」：开好了去 feature 页（修复 session 在那里），失败报到全局错误条。 */
+  /** 「开修复 session」（首页、ticket 页、epic / feature 页的卡片）：开好了去 feature 页的「总控」看它的终端（修复 session 在那里），失败报到全局错误条。 */
   const openFix = (featureId: number, stuckSessionId: string) => {
     api.openFixSession({ featureId, stuckSessionId }).then((r) => {
-      if (r.ok) setRoute({ page: "feature", id: featureId });
+      if (r.ok) setRoute({ page: "feature", id: featureId, landing: "control", focusSession: r.termId });
       else reportError(new Error(S.openErrors[r.reason] ?? r.reason));
     }, reportError);
   };
@@ -241,7 +241,11 @@ export function App() {
                 onOpenTicket={(key) => setRoute({ page: "ticket", key })}
                 onTicketCreated={goTicket}
                 focusSession={route.focusSession}
+                landing={route.landing}
                 onOpenTarget={openTarget}
+                ctx={ctx}
+                onFix={openFix}
+                onGo={setRoute}
               />
             )}
             {route.page === "epic" && currentEpic && (

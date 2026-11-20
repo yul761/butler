@@ -95,4 +95,13 @@ describe("scopeTotal", () => {
     expect(scopeTotal([f1, f2], "epic", 9)).toEqual({ kind: "epic", id: 9, name: "", total: 5, merged: 3, bar: bar(3, 2), youCount: 3, slowest: null });
     expect(scopeTotal([], "epic", 9).total).toBe(0);
   });
+  it("for a feature, uses the feature's own row, or else adds up only its ticket rows", () => {
+    const own: ScopeTurnRow = { ...f1, id: 4 };
+    const t1: ScopeTurnRow = { kind: "ticket", id: "K-1", name: "K-1", total: 2, merged: 1, bar: bar(1, 1), youCount: 1, slowest: "K-1" };
+    const t2: ScopeTurnRow = { kind: "ticket", id: "K-2", name: "K-2", total: 1, merged: 0, bar: bar(0, 0), youCount: 0, slowest: null };
+    expect(scopeTotal([own, t1, t2], "feature", 4)).toBe(own);
+    // 另一个 feature 的行不算它自己的；feature 行也不算进 ticket 的和里。
+    expect(scopeTotal([f1, t1, t2], "feature", 4)).toEqual({ kind: "feature", id: 4, name: "", total: 3, merged: 1, bar: bar(1, 1), youCount: 1, slowest: null });
+    expect(scopeTotal([f1], "feature", 4).total).toBe(0);
+  });
 });

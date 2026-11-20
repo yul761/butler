@@ -631,10 +631,6 @@ const ZH = {
   durationMinutes: (m: number) => `${m} 分钟`,
   durationHours: (h: number, m: number) => (m === 0 ? `${h} 小时` : `${h} 小时 ${m} 分钟`),
   stuckDot: "可能卡住了",
-  stuckHeading: "可能卡住了：",
-  stuckNoReason: "这个 session 一段时间没有新输出。",
-  stuckLastOutput: "最后输出",
-  stuckWhatToDo: "要做什么：",
   stuckFix: "开新 session 解决",
   stuckViewTerminal: "看终端",
   stuckDismiss: "没事，忽略",
@@ -1710,8 +1706,6 @@ const ZH = {
   prNoRepos: "还没有仓库",
   prNoPrYet: "进行中，还没有 PR",
   prArchived: "已归档",
-  prNoTickets: "还没有 ticket",
-  prTicketNoRepos: "这个 ticket 还没有仓库",
   prCount: (n: number) => `${n} 个 PR`,
   prBackToDev: "→ 回到开发",
   prTimeline: {
@@ -1891,8 +1885,6 @@ const ZH = {
     prStatusAt: (t: string) => `PR 状态截至 ${t}`,
     openPrs: (n: number, total: number) => `${n}/${total} 个 PR 开着`,
     noTickets: "这里没有 ticket。",
-    showPrTable: "展开 PR 进度表",
-    hidePrTable: "收起 PR 进度表",
     freshness: (generated: string) => `数据生成于 ${generated}`,
     freshnessChecked: (oldest: string, newest: string) => `PR 最早检查于 ${oldest}，最新 ${newest}`,
     freshnessUnread: (n: number) => `${n} 个 PR 还没读过`,
@@ -2022,7 +2014,6 @@ const ZH = {
   butlerMessageReply: "回复",
   /** feature 页整体进度（ws-b）。 */
   featureSummaryPrAsOf: (t: string) => `PR 状态截至 ${t}`,
-  featureSummaryStale: "汇总之后又有新活动（含 PR 状态变化），可以点“立即更新”。",
   prStagesStuck: "卡在谁手上",
   /** 设置里的「对外动作」（契约 4.8，ws-b）。 */
   externalHeading: "对外动作",

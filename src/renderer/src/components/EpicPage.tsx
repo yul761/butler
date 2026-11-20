@@ -69,10 +69,10 @@ export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatur
   const tickets = features.flatMap((f) => f.tickets);
   const youItems = board === null ? [] : youCards(board.items);
 
-  /** 看板还没取到时是骨架（不闪空状态）；取不到就说为什么。 */
+  /** 看板还没取到时是骨架（不闪空状态）；取不到就说为什么（board-error：和页面的 .error 分开，不会同时被找到）。 */
   const withBoard = (render: (b: TurnBoard) => ReactNode): ReactNode => {
     if (board !== null) return render(board);
-    if (turn.error !== null) return <p className="error">{turn.error}</p>;
+    if (turn.error !== null) return <p className="board-error">{turn.error}</p>;
     return <div className="scope-overview" aria-busy="true"><p className="muted">…</p></div>;
   };
 

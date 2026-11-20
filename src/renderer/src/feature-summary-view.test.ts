@@ -1,32 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { Pr } from "../../shared/handoff";
-import { prLabel, prPill, summaryOutcomeIsError, summaryOutcomeMessage } from "./feature-summary-view";
+import { summaryOutcomeIsError, summaryOutcomeMessage } from "./feature-summary-view";
 import { STRINGS, setUiLang } from "./strings";
 
-const pr = (state: Pr["state"], review: Pr["review"], number = 1, url = "https://github.com/o/r/pull/1"): Pr => ({ number, url, state, review });
-
 afterEach(() => setUiLang("zh"));
-
-describe("prPill", () => {
-  it("covers the five kinds", () => {
-    expect(prPill(pr("merged", "approved"))).toBe("merged");
-    expect(prPill(pr("closed", null))).toBe("closed");
-    expect(prPill(pr("open", "approved"))).toBe("approved");
-    expect(prPill(pr("open", "changes_requested"))).toBe("changes");
-    expect(prPill(pr("open", "pending"))).toBe("pending");
-    expect(prPill(pr("open", null))).toBe("pending");
-  });
-});
-
-describe("prLabel", () => {
-  it("is #number for one PR and repo#number when there are several", () => {
-    const a = pr("open", null, 812, "https://github.com/o/backend/pull/812");
-    const b = pr("open", null, 455, "https://github.com/o/frontend/pull/455");
-    expect(prLabel(a, [a])).toBe("#812");
-    expect(prLabel(a, [a, b])).toBe("backend#812");
-    expect(prLabel(pr("open", null, 3, "https://gitlab.example/x/-/merge_requests/3"), [a, b])).toBe("#3");
-  });
-});
 
 describe("summaryOutcomeMessage", () => {
   it("explains skips and failures in plain words, in both languages", () => {
