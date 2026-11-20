@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
 import { completeWizard, expect, openSettingsTab, test } from "./fixtures";
 
-test("first run: the wizard finds claude, installs hooks into the given config dir and lands on the Now page", async ({ makeSandbox, launch }) => {
+test("first run: the wizard finds claude, installs hooks into the given config dir and lands on the first-run home", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
@@ -44,7 +44,7 @@ test("the wizard does not let the user continue without a working claude", async
 });
 
 // 计划 4 遗留（Ruling P5-PF7）：onboardingDone 写进了数据库，启动时只读一次。
-test("after the wizard is finished, a relaunch goes straight to the Now page", async ({ makeSandbox, launch }) => {
+test("after the wizard is finished, a relaunch goes straight to the home page", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const first = await launch(s);
   await completeWizard(first.page, s);
