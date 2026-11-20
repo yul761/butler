@@ -699,12 +699,16 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   // 数 session（.session-wrap）：session 栏里的「清理闲置」「已隐藏」按钮也带 .session 样式。
   await expect(page.locator(".feature-page .sessions-bar .session-wrap")).toHaveCount(2);
 
-  // 13. 在别的页面上从首页点 DMS-1 卡片的「去看看」：进 DMS-1 的 ticket 页、落在「终端」，当前终端是卡住的那个 session。
+  // 13. 在别的页面上从首页点 DMS-1 卡片的「去看看」：进 DMS-1 的 ticket 页、落在「对话」，看到的是卡住的那个 session（只有它一个，没有切换条）。
+  // 再切到「终端」：当前终端是卡住的那个 session。
   await ticketPage("DMS-2");
   await home();
   await cardOf("DMS-1").getByRole("button", { name: S.hm.act.look, exact: true }).click();
   await onTicketPage("DMS-1");
-  await expect(pageTab(page, S.lay.tabTerminal)).toHaveAttribute("aria-selected", "true");
+  await expect(pageTab(page, S.lay.tabConversation)).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".conv .conv-switch")).toHaveCount(0);
+  await expect(page.locator(".conv .feed .msg-u").first()).toContainText("/fake-bash");
+  await openTicketTab(page, "terminal");
   await expect(page.locator(".sessions-bar .session.active")).toHaveAttribute("title", new RegExp(`\\n${stuckId}$`));
   // 卡住的 session 的终端：命令还在跑。
   await expect.poll(() => terminalText(page)).toContain("running");

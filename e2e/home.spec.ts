@@ -2,7 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, newButton, openAllWork, ROOT, terminalText, test, type Sandbox, openTicketTab } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, newButton, openAllWork, ROOT, terminalText, test, type Sandbox, openTicketTab, pageTab } from "./fixtures";
 
 /**
  * 首页「轮到你」和「全部工作」（UI 重做第 2 层）。状态来自第 1 层的 turn:board：
@@ -77,7 +77,7 @@ test("a question for you is a card that opens its terminal and takes an answer",
   const { page } = await launch(s);
   await completeWizard(page, s);
   await newTicket(page, s, "HOME-1");
-  const asking = await openSession(page);
+  await openSession(page);
   await typeLine(page, `/fake-mcp ask_user ${JSON.stringify({ question: QUESTION, options: ["可以", "不行，先回测"] })}`);
   // 第二个 session 是当前的终端：「去看看」要切回问话的那个。
   await openSession(page);
@@ -95,10 +95,14 @@ test("a question for you is a card that opens its terminal and takes an answer",
   await expect(home).toHaveAccessibleDescription(S.nowNeedsYouBadge(1));
   await expect(page.locator(".sidebar .ticket").filter({ hasText: "HOME-1" }).locator(".turn-dot")).toHaveClass(/\bturn-ask\b/);
 
-  // 「去看看」：落到 ticket 页，当前终端是问话的那个 session。
+  // 「去看看」：落到 ticket 页的「对话」tab，切换条上选中的是问话的那个 session（落在对话 tab 时不动终端的当前 session）。
   await card.getByRole("button", { name: S.hm.act.look, exact: true }).click();
   await expect(page.getByRole("heading", { name: "HOME-1", exact: true })).toBeVisible();
-  await expect.poll(() => activeSessionId(page)).toBe(asking);
+  await expect(pageTab(page, S.lay.tabConversation)).toHaveAttribute("aria-selected", "true");
+  const pressed = page.locator(".conv .conv-switch button[aria-pressed=\"true\"]");
+  await expect(page.locator(".conv .conv-switch button")).toHaveCount(2);
+  await expect(pressed).toHaveCount(1);
+  await expect(pressed).toContainText("/fake-mcp ask_user");
 
   // 回到首页点选项：卡片说已回答。
   await goHome(page);

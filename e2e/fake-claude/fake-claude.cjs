@@ -42,6 +42,10 @@
 //     预审（schema 里有 violations）：没有违规；证据核对（items）：每条 consistent；简报摘要（只有 summary）：一句固定的话；
 //     仓库现状的模型补全（schema 里有 inferred_checks）：回一条测试命令和一条 lint 命令，记一行 repo scan infer；FAKE_CLAUDE_INFER=fail 时失败退出；
 //     FAKE_CLAUDE_SUMMARY_GATE 指向的文件存在时，feature 汇总等到文件被删掉才回答：e2e 用它控制归档前要等多久。
+//   -p 不带 --json-schema：分叉讨论（UI 重做第 5 层）。运行记录写 fork-run <参数 JSON> 和 fork-session <回的 id>；
+//     回「分叉回答：<prompt 的最后一行>」，最后一行提到「结论」（conclusionAsk）时回「结论：把 X 改成 Y」；
+//     --fork-session 或者没有 --resume 时 session_id 是新的，只有 --resume X 时就是 X；usage 读了缓存，total_cost_usd 0.02；
+//     FAKE_CLAUDE_FORK=limit[:<秒级时间戳>] 时照复盘分析 limit: 的写法回撞额度（没给时间就是一小时后），退出 1。
 "use strict";
 const fs = require("node:fs");
 const os = require("node:os");
@@ -217,6 +221,34 @@ function lessonsAnalysis() {
   }
 }
 
+/** 分叉讨论的用量：一轮读了开发 session 的缓存。 */
+const FORK_USAGE = { input_tokens: 100, cache_read_input_tokens: 9000, cache_creation_input_tokens: 0, output_tokens: 50 };
+/** 分叉讨论里要结论（prompt 的最后一行提到「结论」，即 conclusionAsk）时的回答。 */
+const FORK_CONCLUSION = "结论：把 X 改成 Y";
+
+/**
+ * 分叉讨论（-p 不带 --json-schema）：运行记录写 fork-run <参数 JSON> 和 fork-session <回的 id>。
+ * --fork-session 或者没有 --resume：一个新 id；只有 --resume X：接着 X（和真的 CLI 一样）。
+ * FAKE_CLAUDE_FORK=limit[:<秒级时间戳>]：照复盘分析 limit: 的写法回撞额度（没给时间就是一小时后），退出 1。
+ */
+function forkRun(input) {
+  log(`fork-run ${JSON.stringify(args)}`);
+  const mode = process.env.FAKE_CLAUDE_FORK || "";
+  const limit = /^limit(?::(\d+))?$/.exec(mode);
+  if (limit) {
+    const at = limit[1] || String(Math.floor(Date.now() / 1000) + 3600);
+    log(`fork-limit ${at}`);
+    process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: true, result: `Claude AI usage limit reached|${at}`, session_id: "fork-limit" })}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const sessionId = has("--fork-session") || !has("--resume") ? randomUUID() : flag("--resume");
+  log(`fork-session ${sessionId}`);
+  const last = input.trimEnd().split("\n").pop().trim();
+  const result = last.includes("结论") ? FORK_CONCLUSION : `分叉回答：${last}`;
+  process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: sessionId, result, usage: FORK_USAGE, total_cost_usd: 0.02, permission_denials: [] })}\n`);
+}
+
 function headless() {
   let input = "";
   process.stdin.setEncoding("utf8");
@@ -225,6 +257,10 @@ function headless() {
     log(`headless ${args.filter((a) => !a.startsWith("{")).join(" ")} prompt=${input.length} cwd=${process.cwd()}`);
     if (flag("--output-format") === "stream-json") {
       process.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", session_id: "probe", mcp_servers: [], tools: [] })}\n`);
+      return;
+    }
+    if (flag("--json-schema") === undefined) {
+      forkRun(input);
       return;
     }
     let schema = {};
