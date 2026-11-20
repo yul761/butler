@@ -1,6 +1,8 @@
 import type { ConvMessage } from "./conversation";
 
 export type ForkMode = "full" | "light";
+/** 一个问题最多这么多字（按字算，trim 以后；ForkService、IPC 校验和对话 tab 的输入框用同一个数）。 */
+export const FORK_QUESTION_MAX = 20_000;
 export type ForkStatus = "running" | "idle" | "failed";
 /**
  * 失败原因：HeadlessFailure 的取值，加上 interrupted（app 退出时还在跑）、no_answer（跑完了但回答是空的）、

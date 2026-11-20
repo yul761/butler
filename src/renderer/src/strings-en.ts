@@ -2390,7 +2390,6 @@ export const EN: UiStrings = {
     logFollowups: "Follow-ups",
     logHandoffs: "Handoffs",
     logMemory: "Memory",
-    convPlaceholder: "Everything said will be listed here in time order and kept across refreshes. For now, use the Terminal tab.",
     convNoSession: "This ticket has no session yet.",
     youHere: "Waiting on you here",
     noYouHere: "Nothing here is waiting on you.",
@@ -2474,6 +2473,7 @@ export const EN: UiStrings = {
     sending: "Sending…", sentAt: (time: string) => `Sent to session · ${time}`,
     remembered: "Saved", memoryFull: "Memory is full; clear some first", memoryOff: "Memory is off", memoryFailed: "Couldn't save; try again later", memoryBusy: "The last one is still saving; wait a moment",
     sendTo: "Send to:", toDev: "Dev session", toFork: "Ask only (forked discussion)", askPlaceholder: "Ask something…", send: "Send",
+    tooLong: (max: number) => `Too long: ${max} characters at most`, noMatch: "No matches.",
     block: {
       closed: "The session isn't open; open it in the Terminal tab",
       hibernated: "The session was asleep and is waking up; click again in a moment",

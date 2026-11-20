@@ -1,6 +1,7 @@
 // 对话 tab 的纯函数：把主流消息、黄框、汇报、换新分隔线排成一条时间线，以及各种状态的文案。
+import { TASK_LIMIT } from "../../shared/control";
 import type { ConvMessage, ConvPage } from "../../shared/conversation";
-import type { DevSendBlock, ForkMode, ForkView, RememberResult } from "../../shared/fork";
+import { FORK_QUESTION_MAX, type DevSendBlock, type ForkMode, type ForkView, type RememberResult } from "../../shared/fork";
 import type { InboxItemView } from "../../shared/types";
 import { resetClock } from "./availability-view";
 import type { UiStrings } from "./strings";
@@ -119,4 +120,51 @@ export function rememberText(r: RememberResult, t: UiStrings): string {
 export function refusalText(code: string, t: UiStrings): string {
   const m = t.conv.refusal as Record<string, string>;
   return Object.prototype.hasOwnProperty.call(m, code) ? m[code] : t.conv.refusal.other;
+}
+
+export interface ConvLoaded { messages: ConvMessage[]; refreshMarks: ConvPage["refreshMarks"]; hasMore: boolean }
+
+const byAtId = <T extends { id: number }>(at: (x: T) => number) => (a: T, b: T) => at(a) - at(b) || a.id - b.id;
+
+/** 按 id 合并（新取的那份盖住旧的），按时间从旧到新排。 */
+function unionById<T extends { id: number }>(cur: T[], next: T[], at: (x: T) => number): T[] {
+  const m = new Map(cur.map((x) => [x.id, x]));
+  for (const x of next) m.set(x.id, x);
+  return [...m.values()].sort(byAtId(at));
+}
+
+/**
+ * 把新取的一页对话并进已经载入的：按 id 去重。older 为 true 时这一页是往前翻的（before 是已载入最早那条的 id），
+ * 还有没有更早的跟它走；重取最新一页时已载入的更早部分不动，hasMore 不变（第一页除外）。
+ */
+export function mergeConvPage(cur: ConvLoaded | null, page: ConvPage, older: boolean): ConvLoaded {
+  const marks = new Map([...(cur?.refreshMarks ?? []), ...page.refreshMarks].map((m) => [`${m.at}-${m.sessionId}`, m]));
+  return {
+    messages: unionById(cur?.messages ?? [], page.messages, (m) => m.at),
+    refreshMarks: [...marks.values()].sort((a, b) => a.at - b.at),
+    hasMore: cur === null || older ? page.hasMore : cur.hasMore,
+  };
+}
+
+export interface ReportsLoaded { reports: InboxItemView[]; hasMore: boolean }
+
+/** 同 mergeConvPage，汇报这一路（inbox:reports 的 before 也是 id）。 */
+export function mergeReportPage(cur: ReportsLoaded | null, page: ReportsLoaded, older: boolean): ReportsLoaded {
+  return { reports: unionById(cur?.reports ?? [], page.reports, (r) => r.createdAt), hasMore: cur === null || older ? page.hasMore : cur.hasMore };
+}
+
+/** 这个分叉里最后一个问题（「再问一次」重发它）；一个都没有时为 null。 */
+export function lastQuestion(f: Pick<ForkView, "messages">): string | null {
+  for (let i = f.messages.length - 1; i >= 0; i--) if (f.messages[i].role === "user") return f.messages[i].text;
+  return null;
+}
+
+/**
+ * 输入框能不能发：空白不能发；太长不能发（不偷偷截断），max 是给人看的上限。
+ * 跟 IPC 校验一样算：发给开发 session 按原文长度 ≤ TASK_LIMIT；问分叉 trim 后按字算 ≤ FORK_QUESTION_MAX（原文不超过它的两倍）。
+ */
+export function draftCheck(target: "dev" | "fork", text: string): { blank: boolean; over: boolean; max: number } {
+  const blank = text.trim().length === 0;
+  if (target === "dev") return { blank, over: text.length > TASK_LIMIT, max: TASK_LIMIT };
+  return { blank, over: text.length > FORK_QUESTION_MAX * 2 || [...text.trim()].length > FORK_QUESTION_MAX, max: FORK_QUESTION_MAX };
 }

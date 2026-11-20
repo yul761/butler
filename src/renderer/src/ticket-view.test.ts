@@ -90,7 +90,7 @@ describe("prStageLine", () => {
 });
 
 const sess = (id: string, o: Partial<SessionView> = {}): SessionView =>
-  ({ id, firstPrompt: `prompt ${id}`, fixesSession: null, spawnedBy: null, ...o }) as SessionView;
+  ({ id, rootId: id, firstPrompt: `prompt ${id}`, fixesSession: null, spawnedBy: null, ...o }) as SessionView;
 
 describe("conversationSessions", () => {
   it("labels fix sessions with a prefix", () => {
@@ -98,6 +98,9 @@ describe("conversationSessions", () => {
       { id: "a", label: "prompt a" },
       { id: "b", label: "修复 · prompt b" },
     ]);
+  });
+  it("uses the chain root as the id, so a refreshed session stays the same entry", () => {
+    expect(conversationSessions([sess("head", { rootId: "root" })], S)).toEqual([{ id: "root", label: "prompt head" }]);
   });
 });
 
@@ -140,10 +143,14 @@ describe("ticketLanding", () => {
   it("lands by the card's own turn: a PR waiting to be merged stays on the overview, even if the ticket's session is stuck", () => {
     expect(ticketLanding({ owner: "you", kind: "merge", risk: null }, sessions, ["t1"])).toEqual({ tab: "overview", terminal: null });
   });
-  it("a failing-CI card lands on PR details; a stuck card on the terminal of its own session", () => {
+  it("a failing-CI card lands on PR details; a stopped agent on the terminal of its own session", () => {
     expect(ticketLanding({ owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "pr", terminal: null });
-    expect(ticketLanding({ owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "terminal", terminal: { activate: "t1" } });
-    expect(ticketLanding({ owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s2" }, sessions, ["t1"])).toEqual({ tab: "terminal", terminal: { open: "s2" } });
+    expect(ticketLanding({ owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "terminal", terminal: { activate: "t1" } });
+    expect(ticketLanding({ owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s2" }, sessions, ["t1"])).toEqual({ tab: "terminal", terminal: { open: "s2" } });
+  });
+  it("a stuck or answer card lands on the conversation and leaves the terminals alone", () => {
+    expect(ticketLanding({ owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "conversation", terminal: null });
+    expect(ticketLanding({ owner: "you", kind: "answer", question: "q", options: [], askId: null, sessionId: "s2" }, sessions, ["t1"])).toEqual({ tab: "conversation", terminal: null });
   });
 });
 

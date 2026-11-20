@@ -26,6 +26,8 @@
   /* 谁该动（UI 重做 §5.1）：颜色只表示谁该动，不表示严重程度。 */
   --turn-ask: #b91c1c; --turn-merge: #166534; --turn-stuck: #6d28d9; --turn-butler: #92400e;
   --turn-agent: #1d4ed8; --turn-external: #5f5f5a; --turn-done: #276b42; --turn-idle: #66665f;
+  /* 对话 tab 的黄框（分叉讨论，UI 重做第 5 层）：边框、底色、标题字。 */
+  --fork-border: #f0c36d; --fork-bg: #fffaf0; --fork-head: #9c6400;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -53,6 +55,7 @@
     --live-grain: #2e2e2b;
     --turn-ask: #f87171; --turn-merge: #4ade80; --turn-stuck: #c4b5fd; --turn-butler: #fbbf24;
     --turn-agent: #6b9cf0; --turn-external: #9b9b96; --turn-done: #86d9a6; --turn-idle: var(--muted);
+    --fork-border: #7a5c1e; --fork-bg: #2a251a; --fork-head: #f0c36d;
   }
 }
 * { box-sizing: border-box; }
@@ -684,3 +687,43 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .ticket-home .kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
 .ticket-home .kv dt { color: var(--muted); }
 .ticket-home .kv dd { margin: 0; overflow-wrap: anywhere; }
+
+/* 对话 tab（UI 重做第 5 层）：一条时间线，上面是筛选，下面是输入框；黄框是分叉讨论。费用和模式只用文字，不另外上色。 */
+.conv { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.conv .tools, .conv-switch { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.conv .tools button, .conv-switch button { padding: 2px 8px; font-size: 12px; }
+.conv .tools button.active, .conv-switch button.active { border-color: var(--accent); color: var(--accent); }
+.conv .tools .conv-side { margin-left: auto; }
+.conv .feed { display: flex; flex-direction: column; gap: 6px; }
+.conv .feed > .older { align-self: center; font-size: 12px; }
+.conv .feed > .inbox-report { padding: 4px 0; }
+.msg-u, .msg-a { white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg-u { align-self: flex-end; max-width: 85%; padding: 6px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); }
+.msg-a p { margin: 0 0 4px; }
+.msg-a p:last-child { margin-bottom: 0; }
+.conv .sep { display: flex; align-items: center; gap: 8px; margin: 6px 0; color: var(--muted); font-size: 12px; text-align: center; }
+.conv .sep::before, .conv .sep::after { content: ""; flex: 1; border-top: 1px dashed var(--border); }
+.fork { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--fork-border); background: var(--fork-bg); border-radius: 8px; padding: 8px 10px; }
+.fork .h { color: var(--fork-head); font-size: 12px; font-weight: 600; }
+.fork .msg-u { align-self: stretch; max-width: none; background: transparent; border: none; padding: 0; }
+.fork p { margin: 0; }
+.fork .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.fork .acts button { padding: 2px 8px; font-size: 12px; }
+.fork-ask { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-end; }
+.fork-ask textarea { flex: 1; min-width: 0; }
+.fork-ask .error { flex-basis: 100%; }
+.conv-mode { font-size: 12px; }
+.fork-tag { margin-right: 6px; padding: 0 4px; border: 1px solid var(--fork-border); border-radius: 4px; color: var(--fork-head); font-size: 11px; }
+.conv-search input { width: 100%; }
+.conv-input { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.conv-input textarea, .fork-ask textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; resize: vertical; }
+.conv-target { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.conv-target [role="radiogroup"] { display: inline-flex; gap: 4px; }
+.conv-target [role="radio"][aria-checked="true"] { border-color: var(--accent); color: var(--accent); }
+.conv-target .primary { margin-left: auto; }
+.conv-input .error, .fork .error { margin: 0; }
+/* 并排显示终端：左边终端、右边对话；窄窗口上下排。 */
+.conv-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
+@media (max-width: 900px) { .conv-split { grid-template-columns: 1fr; } }
+.conv-term { display: flex; flex-direction: column; min-width: 0; }
+.conv-term-closed { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }

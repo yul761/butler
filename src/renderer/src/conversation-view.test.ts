@@ -3,7 +3,9 @@ import type { ConvMessage } from "../../shared/conversation";
 import type { DevSendBlock, ForkErrorCode, ForkRefusal, ForkView, RememberResult } from "../../shared/fork";
 import type { InboxItemView } from "../../shared/types";
 import { resetClock } from "./availability-view";
-import { buildTimeline, costText, errorText, modeText, refusalText, rememberText, sendBlockText, turnBlocks, type TimelineInput } from "./conversation-view";
+import { TASK_LIMIT } from "../../shared/control";
+import { FORK_QUESTION_MAX } from "../../shared/fork";
+import { buildTimeline, costText, draftCheck, errorText, lastQuestion, mergeConvPage, mergeReportPage, modeText, refusalText, rememberText, sendBlockText, turnBlocks, type TimelineInput } from "./conversation-view";
 import { STRINGS } from "./strings";
 
 const T = STRINGS.zh;
@@ -194,5 +196,67 @@ describe("turnBlocks", () => {
       reports: [report(1, 2)], refreshMarks: [{ at: 4, sessionId: "s2" }],
     })));
     expect(ids(b)).toEqual(["t[1]", "r1", "t[2]", expect.stringMatching(/^s/), "t[3]", "m4", "t[5]"]);
+  });
+});
+
+describe("mergeConvPage", () => {
+  const page = (ids: number[], hasMore: boolean, marks: { at: number; sessionId: string }[] = []) =>
+    ({ messages: ids.map((id) => msg(id, id * 10)), refreshMarks: marks, hasMore });
+  it("the first page sets hasMore", () => {
+    expect(mergeConvPage(null, page([1, 2], true), false)).toMatchObject({ hasMore: true });
+  });
+  it("an older page goes in front and decides hasMore; duplicates by id are dropped", () => {
+    const cur = mergeConvPage(null, page([3, 4], true, [{ at: 35, sessionId: "s2" }]), false);
+    const out = mergeConvPage(cur, page([1, 2, 3], false, [{ at: 15, sessionId: "s1" }, { at: 35, sessionId: "s2" }]), true);
+    expect(out.messages.map((m) => m.id)).toEqual([1, 2, 3, 4]);
+    expect(out.refreshMarks).toEqual([{ at: 15, sessionId: "s1" }, { at: 35, sessionId: "s2" }]);
+    expect(out.hasMore).toBe(false);
+  });
+  it("re-reading the latest page keeps what is loaded, adds new ones, keeps hasMore, takes the newer copy of a message", () => {
+    const cur = mergeConvPage(mergeConvPage(null, page([3, 4], true), false), page([1, 2], false), true);
+    const latest = page([4, 5], true);
+    latest.messages[0] = { ...latest.messages[0], text: "changed" };
+    const out = mergeConvPage(cur, latest, false);
+    expect(out.messages.map((m) => m.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(out.messages[3].text).toBe("changed");
+    expect(out.hasMore).toBe(false);
+  });
+});
+
+describe("mergeReportPage", () => {
+  it("orders by time, dedupes by id; older pages decide hasMore", () => {
+    const cur = mergeReportPage(null, { reports: [report(3, 30), report(4, 40)], hasMore: true }, false);
+    expect(cur.hasMore).toBe(true);
+    const out = mergeReportPage(cur, { reports: [report(2, 20), report(3, 30)], hasMore: false }, true);
+    expect(out.reports.map((r) => r.id)).toEqual([2, 3, 4]);
+    expect(out.hasMore).toBe(false);
+    const again = mergeReportPage(out, { reports: [report(4, 40), report(5, 50)], hasMore: true }, false);
+    expect(again.reports.map((r) => r.id)).toEqual([2, 3, 4, 5]);
+    expect(again.hasMore).toBe(false);
+  });
+});
+
+describe("lastQuestion", () => {
+  it("is the last user message of the fork, or null", () => {
+    const f = fork(7, 1, { messages: [msg(1, 1, { role: "user", text: "q1" }), msg(2, 2), msg(3, 3, { role: "user", text: "q2" }), msg(4, 4)] });
+    expect(lastQuestion(f)).toBe("q2");
+    expect(lastQuestion(fork(8, 1))).toBeNull();
+  });
+});
+
+describe("draftCheck", () => {
+  it("blank text cannot be sent", () => {
+    for (const t of ["dev", "fork"] as const) expect(draftCheck(t, " \n ").blank).toBe(true);
+    expect(draftCheck("dev", "hi")).toEqual({ blank: false, over: false, max: TASK_LIMIT });
+  });
+  it("dev: at most TASK_LIMIT characters, as IPC checks it", () => {
+    expect(draftCheck("dev", "x".repeat(TASK_LIMIT)).over).toBe(false);
+    expect(draftCheck("dev", "x".repeat(TASK_LIMIT + 1)).over).toBe(true);
+  });
+  it("fork: at most FORK_QUESTION_MAX characters after trimming, counting emoji as one (as IPC checks it)", () => {
+    expect(draftCheck("fork", "x")).toEqual({ blank: false, over: false, max: FORK_QUESTION_MAX });
+    expect(draftCheck("fork", "😀".repeat(FORK_QUESTION_MAX)).over).toBe(false);
+    expect(draftCheck("fork", `  ${"x".repeat(FORK_QUESTION_MAX)}  `).over).toBe(false);
+    expect(draftCheck("fork", "问".repeat(FORK_QUESTION_MAX + 1)).over).toBe(true);
   });
 });

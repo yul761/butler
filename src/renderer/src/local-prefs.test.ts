@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isCollapsed, onCollapsedChange, setCollapsed, setWizardSkipped, wizardSkipped } from "./local-prefs";
+import { isCollapsed, onCollapsedChange, saveConvSplit, savedConvSplit, saveSendTarget, savedSendTarget, setCollapsed, setWizardSkipped, wizardSkipped } from "./local-prefs";
 
 function fakeStorage(): Storage {
   const m = new Map<string, string>();
@@ -118,5 +118,38 @@ describe("skipped wizard (the Now page's setup reminder)", () => {
     vi.unstubAllGlobals();
     expect(wizardSkipped()).toBe(false);
     expect(() => setWizardSkipped(true)).not.toThrow();
+  });
+});
+
+describe("conversation tab prefs", () => {
+  beforeEach(() => vi.stubGlobal("localStorage", fakeStorage()));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("send target defaults to ask-only and remembers the last pick", () => {
+    expect(savedSendTarget()).toBe("fork");
+    saveSendTarget("dev");
+    expect(savedSendTarget()).toBe("dev");
+    saveSendTarget("fork");
+    expect(savedSendTarget()).toBe("fork");
+    localStorage.setItem("butler.sendTarget", "garbage");
+    expect(savedSendTarget()).toBe("fork");
+  });
+
+  it("side terminal is remembered per page", () => {
+    expect(savedConvSplit("ticket:A-1")).toBe(false);
+    saveConvSplit("ticket:A-1", true);
+    expect(savedConvSplit("ticket:A-1")).toBe(true);
+    expect(savedConvSplit("ticket:B-2")).toBe(false);
+    expect(localStorage.getItem("butler.convSplit:ticket:A-1")).toBe("1");
+    saveConvSplit("ticket:A-1", false);
+    expect(savedConvSplit("ticket:A-1")).toBe(false);
+    expect(localStorage.getItem("butler.convSplit:ticket:A-1")).toBeNull();
+  });
+
+  it("storage that throws counts as no record", () => {
+    vi.stubGlobal("localStorage", { getItem: () => { throw new Error("off"); }, setItem: () => { throw new Error("off"); }, removeItem: () => { throw new Error("off"); } });
+    expect(savedSendTarget()).toBe("fork");
+    expect(() => saveSendTarget("dev")).not.toThrow();
+    expect(savedConvSplit("p")).toBe(false);
   });
 });

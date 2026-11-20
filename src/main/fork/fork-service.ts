@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join } from "node:path";
 import type { LimitHit } from "../../shared/availability";
 import type { ConvMessage } from "../../shared/conversation";
-import { ForkError, type DevSendResult, type ForkErrorCode, type ForkMode, type ForkView, type RememberResult } from "../../shared/fork";
+import { FORK_QUESTION_MAX, ForkError, type DevSendResult, type ForkErrorCode, type ForkMode, type ForkView, type RememberResult } from "../../shared/fork";
 import { featureScope, ticketScope } from "../../shared/memory";
 import type { RegistryModel } from "../../shared/model-routing";
 import type { Session } from "../../shared/types";
@@ -18,8 +18,6 @@ import { LIGHT_QA_CHARS, LIGHT_RECALL_CHARS, chooseMode, costOf, fullBlock } fro
 
 /** 用量和限额里的 job 名（成本统计、效果页按它汇总）。 */
 export const FORK_JOB = "fork discussion";
-/** 一个问题最多这么多字（IPC 校验用同一个数）。 */
-export const FORK_QUESTION_MAX = 20_000;
 
 export interface ForkDeps {
   repo: ForkDiscussionsRepo;

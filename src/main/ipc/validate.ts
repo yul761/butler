@@ -25,7 +25,7 @@ import {
   EXPORT_CONTENTS, type ExportContent, type ExportRequest, type ExportScopeArg, type ImportApplyRequest, type Resolution, type StarterTarget,
 } from "../../shared/config-io";
 import { EPIC_NAME_LIMIT } from "../epics/epic-service";
-import { FORK_QUESTION_MAX } from "../fork/fork-service";
+import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 import { M } from "../strings";
 import { TicketError } from "../tickets/ticket-service";

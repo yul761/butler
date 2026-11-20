@@ -83,7 +83,8 @@ export function prUrlOf(pr: { repo: string; number: number; url: string } | null
 export function conversationSessions(sessions: SessionView[], S: UiStrings): { id: string; label: string }[] {
   return sessions.map((s) => {
     const label = sessionLabel(s, S.newSession);
-    return { id: s.id, label: s.fixesSession === null ? label : `${S.lay.fixPrefix}${label}` };
+    // id 用链根：换新以后 head 变了，这一项还是同一项（对话、分叉、发话都按链上任意 id 解析）。
+    return { id: s.rootId, label: s.fixesSession === null ? label : `${S.lay.fixPrefix}${label}` };
   });
 }
 
@@ -95,7 +96,7 @@ export function clipSaid(text: string, max = 280): string {
 
 /**
  * 落在终端页签时顺手打开 turn 所在的 session：它的终端已经开着就切过去，没开就恢复它；turn 不带 session 就什么都不做。
- * 落点取自 landingTab：answer、stuck、unattended(agent_stopped) 会落到终端，它们都可能带 sessionId。
+ * 落点取自 landingTab：只有 unattended(agent_stopped) 落到终端（answer、stuck 落在对话），它可能带 sessionId。
  */
 export function terminalLanding(turn: Turn, sessions: Pick<SessionView, "id" | "termId">[], panes: readonly string[]): { activate: string } | { open: string } | null {
   const sessionId = "sessionId" in turn ? turn.sessionId : null;

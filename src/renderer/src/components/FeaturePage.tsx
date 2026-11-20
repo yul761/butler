@@ -175,7 +175,7 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
                     onError={showError}
                   />
                 }
-                right={<ControlConversation scope={{ featureId: feature.id }} rootSessionId={null} sessions={conversationSessions(feature.sessions, S)} />}
+                right={<ControlConversation scope={{ featureId: feature.id }} rootSessionId={feature.sessions[0]?.rootId ?? null} sessions={conversationSessions(feature.sessions, S)} />}
               />
             ),
           },

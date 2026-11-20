@@ -76,3 +76,13 @@ export function setCollapsed(id: string, on: boolean, defaultCollapsed = false):
 const tabKey = (page: string) => `butler.tab:${page}`;
 export const savedTab = (page: string): string | null => get(tabKey(page));
 export const saveTab = (page: string, tab: string) => set(tabKey(page), tab);
+
+/** 对话 tab 输入框「发给」上次选的是哪个：开发 session 还是只问不改（分叉讨论）。没有记录时默认只问不改。 */
+const SEND_TARGET_KEY = "butler.sendTarget";
+export const savedSendTarget = (): "dev" | "fork" => (get(SEND_TARGET_KEY) === "dev" ? "dev" : "fork");
+export const saveSendTarget = (t: "dev" | "fork") => set(SEND_TARGET_KEY, t);
+
+/** 对话 tab 的「并排显示终端」，按页面记（比如 `ticket:BTL-7`）。 */
+const convSplitKey = (page: string) => `butler.convSplit:${page}`;
+export const savedConvSplit = (page: string): boolean => get(convSplitKey(page)) === "1";
+export const saveConvSplit = (page: string, on: boolean) => set(convSplitKey(page), on ? "1" : null);

@@ -5,10 +5,10 @@ import { landingTab } from "./ticket-tabs";
 const unattended = (why: UnattendedWhy): Turn => ({ owner: "you", kind: "unattended", why, canSend: false, sessionId: null });
 
 describe("landingTab", () => {
-  it("answer and stuck land on the terminal", () => {
-    expect(landingTab({ owner: "you", kind: "answer", question: "q", options: [], askId: null, sessionId: "s" })).toBe("terminal");
+  it("answer and stuck (any source) land on the conversation", () => {
+    expect(landingTab({ owner: "you", kind: "answer", question: "q", options: [], askId: null, sessionId: "s" })).toBe("conversation");
     for (const source of ["needs_you", "blocked_report", "silent", "ticket_blocked"] as const)
-      expect(landingTab({ owner: "you", kind: "stuck", source, detail: null, sessionId: null })).toBe("terminal");
+      expect(landingTab({ owner: "you", kind: "stuck", source, detail: null, sessionId: null })).toBe("conversation");
   });
   it("unattended agent_stopped lands on the terminal", () => expect(landingTab(unattended("agent_stopped"))).toBe("terminal"));
   it("other unattended reasons land on the PR", () => {

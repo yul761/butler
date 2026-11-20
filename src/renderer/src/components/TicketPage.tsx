@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Turn } from "../../../shared/turn";
 import { TICKET_STATUSES, type Feature, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api } from "../api";
@@ -8,12 +8,14 @@ import { ticketRows } from "../scope-view";
 import { S, STATUS_LABEL } from "../strings";
 import type { TicketTab } from "../ticket-tabs";
 import { conversationSessions, ticketLanding } from "../ticket-view";
-import { ConversationPlaceholder } from "./ConversationPlaceholder";
+import { ConversationTab } from "./ConversationTab";
+import { hibernationOf } from "./HibernateParts";
 import { PageTabs } from "./PageTabs";
 import { TicketHomeTab } from "./TicketHome";
 import { TicketLogTab } from "./TicketLogTab";
 import { TicketPrTab } from "./TicketPrTab";
-import { TicketTerminalTab, useTicketTerminals } from "./TicketTerminalTab";
+import { TerminalPane } from "./TerminalPane";
+import { TicketTerminalTab, useTicketTerminals, type TicketTerminals } from "./TicketTerminalTab";
 import { TitleDialog } from "./TitleDialog";
 import { useStateRefetch } from "./useStateRefetch";
 import { useTurnBoard } from "./useTurnBoard";
@@ -103,7 +105,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
           },
           {
             id: "conversation", label: S.lay.tabConversation,
-            content: <ConversationSlot ticket={ticket} />,
+            content: <ConversationSlot ticket={ticket} renderTerminal={(id) => <SideTerminal ticket={ticket} term={term} sessionId={id} onGoTab={goTab} />} />,
           },
           { id: "terminal", label: S.lay.tabTerminal, content: <TicketTerminalTab ticket={ticket} term={term} /> },
           { id: "pr", label: S.lay.tabPr, content: <TicketPrTab ticketKey={ticket.key} /> },
@@ -114,10 +116,37 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   );
 }
 
-/** 「对话」页签：只在停在这个页签时取链根。第 5 层把 ConversationPlaceholder 换成 ConversationTab，props 一致，只改这一行。 */
-function ConversationSlot({ ticket }: { ticket: TicketView }) {
+/** 「对话」页签：只在停在这个页签时取链根。 */
+function ConversationSlot({ ticket, renderTerminal }: { ticket: TicketView; renderTerminal: (sessionId: string) => ReactNode }) {
   const glance = useStateRefetch(`glance:${ticket.key}`, () => api.ticketGlance(ticket.key));
   if (glance === null) return null;
   const rootSessionId = glance.rootSessionId;
-  return rootSessionId ? <ConversationPlaceholder rootSessionId={rootSessionId} sessions={conversationSessions(ticket.sessions, S)} /> : <p className="muted">{S.lay.convNoSession}</p>;
+  return rootSessionId
+    ? <ConversationTab rootSessionId={rootSessionId} sessions={conversationSessions(ticket.sessions, S)} renderTerminal={renderTerminal} page={`ticket:${ticket.key}`} />
+    : <p className="muted">{S.lay.convNoSession}</p>;
+}
+
+/**
+ * 对话 tab「并排显示终端」的左边：同一个 TerminalPane（同终端 tab 一样的 termId、休眠、关闭和恢复），状态是 TicketPage 已有的那份。
+ * sessionId 是链上任意一段（对话 tab 用链根）；没开着就说一句，给个按钮去终端 tab 打开。
+ */
+function SideTerminal({ ticket, term, sessionId, onGoTab }: { ticket: TicketView; term: TicketTerminals; sessionId: string; onGoTab: (tab: TicketTab) => void }) {
+  const s = ticket.sessions.find((x) => x.id === sessionId) ?? ticket.sessions.find((x) => x.rootId === sessionId);
+  const termId = s?.termId ?? null;
+  if (termId === null) {
+    return (
+      <div className="conv-term-closed">
+        <p className="muted">{S.conv.termClosed}</p>
+        <button onClick={() => onGoTab("terminal")}>{S.conv.openInTerminalTab}</button>
+      </div>
+    );
+  }
+  return (
+    <div className="terminals">
+      <TerminalPane
+        key={termId} termId={termId} visible hibernated={hibernationOf(ticket.sessions, termId)}
+        onClose={() => term.closePane(termId)} onResume={() => void term.open({ ticketKey: ticket.key, sessionId: termId })}
+      />
+    </div>
+  );
 }

@@ -7,7 +7,7 @@ import { backgroundActionArg, costSetArg, costSubjectArg } from "./validate";
 import { convListOptsArg, convQueryArg, convRootArg } from "./validate";
 import { devMessageArg, forkIdArg, forkQuestionArg, reportsPageArg } from "./validate";
 import { TASK_LIMIT } from "../../shared/control";
-import { FORK_QUESTION_MAX } from "../fork/fork-service";
+import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";

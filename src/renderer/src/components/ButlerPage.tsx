@@ -125,8 +125,8 @@ function ButlerArea({ view, focusSession }: Props & { view: ButlerView }) {
       right={
         <ControlConversation
           scope={{ all: true }}
-          rootSessionId={null}
-          sessions={view.sessions.map((s) => ({ id: s.id, label: S.butlerSession }))}
+          rootSessionId={view.sessions[0]?.rootId ?? null}
+          sessions={view.sessions.map((s) => ({ id: s.rootId, label: S.butlerSession }))}
           footer={<ButlerReplies />}
         />
       }

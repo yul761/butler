@@ -149,7 +149,7 @@ export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatur
                     onError={showError}
                   />
                 }
-                right={<ControlConversation scope={{ epicId: epic.id }} rootSessionId={null} sessions={conversationSessions(epic.sessions, S)} />}
+                right={<ControlConversation scope={{ epicId: epic.id }} rootSessionId={epic.sessions[0]?.rootId ?? null} sessions={conversationSessions(epic.sessions, S)} />}
               />
             ),
           },

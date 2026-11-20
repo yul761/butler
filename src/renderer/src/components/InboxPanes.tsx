@@ -17,14 +17,23 @@ export function ReportFeed({ reports }: { reports: InboxItemView[] }) {
     <ul className="inbox-reports">
       {reports.map((r) => (
         <li key={r.id} className={`inbox-report ${r.reportKind ?? "progress"}`}>
-          <div className="inbox-head">
-            <span className="who">{inboxWho(r, S)}</span>
-            <span className={`inbox-kind ${r.reportKind ?? "progress"}`}>{S.inboxReportKinds[r.reportKind ?? "progress"]}</span>
-            <span className="muted">{timeOf(r.createdAt)}</span>
-          </div>
-          <p>{r.text}</p>
+          <ReportBody r={r} />
         </li>
       ))}
     </ul>
+  );
+}
+
+/** 一条汇报的内容：谁、哪种、什么时候，加上正文（汇报列表和对话 tab 共用）。 */
+export function ReportBody({ r }: { r: InboxItemView }) {
+  return (
+    <>
+      <div className="inbox-head">
+        <span className="who">{inboxWho(r, S)}</span>
+        <span className={`inbox-kind ${r.reportKind ?? "progress"}`}>{S.inboxReportKinds[r.reportKind ?? "progress"]}</span>
+        <span className="muted">{timeOf(r.createdAt)}</span>
+      </div>
+      <p>{r.text}</p>
+    </>
   );
 }

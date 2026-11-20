@@ -2409,7 +2409,6 @@ const ZH = {
     logFollowups: "待跟进",
     logHandoffs: "交接记录",
     logMemory: "记忆",
-    convPlaceholder: "所有说过的话会按时间排在这里，换新也不会丢。现在先到「终端」看。",
     convNoSession: "这个 ticket 还没有 session。",
     youHere: "这个范围里轮到你的",
     noYouHere: "这里没有事轮到你。",
@@ -2494,6 +2493,7 @@ const ZH = {
     sending: "正在发…", sentAt: (time: string) => `已发给 session · ${time}`,
     remembered: "已记下", memoryFull: "记忆满了，先清掉几条", memoryOff: "记忆没开", memoryFailed: "没记上，稍后再试", memoryBusy: "上一条还在记，等一下",
     sendTo: "发给：", toDev: "开发 session", toFork: "只问不改（分叉讨论）", askPlaceholder: "问点什么…", send: "发送",
+    tooLong: (max: number) => `太长了，最多 ${max} 字`, noMatch: "没搜到。",
     block: {
       closed: "session 没开着，先到终端 tab 打开它",
       hibernated: "session 睡着了，正在叫醒，醒了再点一次",
