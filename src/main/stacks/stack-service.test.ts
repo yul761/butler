@@ -74,6 +74,23 @@ function commit(repo: string, file: string, text: string, msg: string): string {
 
 const BRANCHES = ["a", "b", "c", "d"];
 
+/**
+ * 从 main 起一条链：每个分支在上一个后面加一个提交（文件 <b>.txt，内容 "<b>\n"，信息 "<b> one"）。
+ * 用一次 git fast-import 建完，不 checkout：层数多时（40 层的用例）每层 checkout、add、commit 在 Windows 上要起很多进程。
+ */
+function chain(repo: string, branches: readonly string[]): void {
+  const when = `${Math.floor(Date.now() / 1000)} +0000`;
+  const data = (text: string) => `data ${Buffer.byteLength(text)}\n${text}\n`;
+  let from = g(repo, "rev-parse", "main");
+  let script = "";
+  for (const [i, b] of branches.entries()) {
+    script += `commit refs/heads/${b}\nmark :${i + 1}\nauthor Test <test@example.com> ${when}\ncommitter Test <test@example.com> ${when}\n`;
+    script += data(`${b} one`) + `from ${from}\nM 100644 inline ${b}.txt\n` + data(`${b}\n`);
+    from = `:${i + 1}`;
+  }
+  execFileSync("git", ["fast-import", "--quiet"], { cwd: repo, input: script, stdio: ["pipe", "ignore", "pipe"] });
+}
+
 /** 4 层的栈 a ← b ← c ← d，每层一个提交、各改各的文件；全部推到远端。另有一个「GitHub」克隆用来合并。 */
 function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind) => boolean; autoRebase?: boolean; policy?: Record<string, unknown>; branches?: string[] } = {}) {
   const branches = o.branches ?? BRANCHES;
@@ -81,15 +98,9 @@ function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind) => bool
   g(remote, "init", "-q", "--bare", "-b", "main");
   const repo = makeRepo();
   g(repo, "remote", "add", "origin", remote);
-  g(repo, "push", "-q", "origin", "main");
-  let prev = "main";
-  for (const b of branches) {
-    g(repo, "checkout", "-q", "-b", b, prev);
-    commit(repo, `${b}.txt`, `${b}\n`, `${b} one`);
-    g(repo, "push", "-q", "origin", b);
-    prev = b;
-  }
-  g(repo, "checkout", "-q", "main");
+  chain(repo, branches);
+  // 一次推完：每次 push 都要起好几个进程，40 层的栈在 Windows 上一层一次推会慢很多。
+  g(repo, "push", "-q", "origin", "main", ...branches);
   g(repo, "fetch", "-q", "origin");
   const hub = tempDir("butler-hub-");
   g(hub, "clone", "-q", remote, ".");
@@ -164,6 +175,33 @@ function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind) => bool
 }
 
 type World = ReturnType<typeof world>;
+
+/**
+ * 一条栈整体的形状：fetch 一次、git 两次（不随层数增长）。返回每层的 shape()（从 trunk 数起几个提交、是不是接在 trunk 上），
+ * 前提是每层都是上一层（第一层是 origin/main）后面直接跟的单父提交；不是的层 count 记 -1、onTrunk 记 false。
+ */
+function chainShape(w: World, branches: readonly string[]) {
+  g(w.repo, "fetch", "-q", "origin");
+  const trunk = g(w.repo, "rev-parse", "origin/main");
+  const tips = new Map(
+    g(w.repo, "for-each-ref", "--format=%(refname:short) %(objectname)", ...branches.map((b) => `refs/heads/${b}`))
+      .split("\n").map((l) => l.split(" ") as [string, string]),
+  );
+  const parents = new Map(
+    g(w.repo, "rev-list", "--parents", ...branches.map((b) => tips.get(b) ?? b), "^origin/main")
+      .split("\n").filter(Boolean).map((l) => { const [c, ...ps] = l.split(" "); return [c!, ps] as const; }),
+  );
+  let below = trunk;
+  let count = 0;
+  return branches.map((b) => {
+    const tip = tips.get(b);
+    const ps = tip === undefined ? undefined : parents.get(tip);
+    if (count < 0 || tip === undefined || ps === undefined || ps.length !== 1 || ps[0] !== below) count = -1;
+    else count++;
+    below = tip ?? below;
+    return count < 0 ? { count: -1, onTrunk: false } : { count, onTrunk: true };
+  });
+}
 
 async function defineAll(w: World) {
   const r = await w.svc.define({ repoPath: w.repo, branches: BRANCHES, source: "mcp" });
@@ -281,7 +319,7 @@ describe("StackService depth", () => {
     expect(r.ok).toBe(true);
     const head = w.mergeOnHub(branches[0]!, "squash");
     await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: branches[0]! }, w.repo);
-    for (const [i, b] of branches.slice(1).entries()) expect(shape(w, b)).toEqual({ count: i + 1, onTrunk: true });
+    expect(chainShape(w, branches.slice(1))).toEqual(branches.slice(1).map((_, i) => ({ count: i + 1, onTrunk: true })));
     expect(w.repoT.lastRun(r.stackId!)).toMatchObject({ trigger: "bottom_merged", outcome: "rebased" });
   }, 120_000);
 });
