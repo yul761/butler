@@ -116,12 +116,14 @@ ticket：BTL-235，叠在 BTL-233（第 3 层）上。开工前 BTL-234（第 4 
    - 测试位置：Task 6、Task 7、Task 10。
 5. **费用显示为空。**
    - 算法：
-     - `total_cost_usd` 是被续的那个 session 的**累计**（`--fork-session` 时还带着被分叉 session 以前的全部花费），`usage` 才是这一轮的。行里记着 CLI 上次报的累计（`cost_seen_total`），这一轮的费用（`turnCost`）：
+     - `total_cost_usd` 和 `modelUsage` 是被续的那个 session 的**累计**（`--fork-session` 时还带着被分叉 session 以前的全部花费），`usage` 才是这一轮的。行里记着 CLI 上次报的累计（`cost_seen_total`），这一轮的费用（`turnCost`）：
        - 没带 `--resume`（精简的第一轮，全新 session）：就是 `total_cost_usd`；
-       - 带 `--fork-session`（完整的第一轮，基数不知道）：按 `usage` 用价格表估；
-       - 续分叉自己的 session（接着问、要结论）：知道 `cost_seen_total` 就取差（不小于 0），不知道也按 `usage` 估；
+       - 续分叉自己的 session（接着问、要结论）且知道 `cost_seen_total`：取差（不小于 0）；
+       - 其余（带 `--fork-session` 的完整第一轮，或续的时候不知道 `cost_seen_total`）：按份额拆，`total_cost_usd × w(usage) / Σ_模型 w(modelUsage[m])`，w(x) = input + 0.1·读缓存 + 1.25·写 5m + 2·写 1h + 5·output；这一轮的 `usage` 有 `cache_creation.ephemeral_5m/1h` 分档就按分档，没有全部当 1h；modelUsage 用 `cacheCreationEphemeral5m/1hInputTokens`。算出来是准数，不算不全。纯函数在 `src/shared/run-cost.ts`（`runCostFromCumulative`），handoff 的用量行以后也用它；
+       - 没有 `modelUsage` 或 w 为 0：按 `usage` 用价格表估；
        - CLI 没给金额：`cost_seen_total` 不变，按下面的估法；
-     - 用量行（`onUsage`）记同一个这一轮的金额，估出来的不带金额（由用量统计按价格表估）；
+       - CLI 没分叉（返回的就是开发 session）：有份额就记份额，仍标不全，`cost_seen_total` 不变，不记用量行；
+     - 用量行（`onUsage`）记同一个这一轮的金额（精确、差值或份额）；只有估出来的不带金额（由用量统计按价格表估）；
      - 没有金额就用价格表按 `usdOf` 估一个；
      - 价格表里也没有这个模型，费用记为未知，`cost_partial = 1`。
    - 显示：
@@ -777,7 +779,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
     - 用结论（先确保有）调 `rememberText(scope, 结论)`，返回 `"written"`；
     - 槽满返回 `"full"`；
     - 连点返回 `"busy"`；
-    - ticket 和 feature 都没有时返回 `"no_scope"`，不要结论、不调用 `rememberText`（界面提示「这里的结论没有 ticket 或 feature 可记」，不当成记忆没开）。
+    - ticket 和 feature 都没有时返回 `"no_scope"`，不要结论、不调用 `rememberText`（界面提示「这里的结论没有 ticket 或 feature 可记」，不当成记忆没开）。这只是兜底：Butler 页和 epic 页本来就不出「记进记忆」（`ControlConversation` 按 `canRememberIn(scope)` 传 `canRemember`，ticket 页默认有）。
 - [ ] **Step 2: 运行确认失败。** 跑 `pnpm test src/main/fork/dev-send.test.ts src/main/fork/fork-service.test.ts`。
 - [ ] **Step 3: 实现。** `DevSender.send` 照 `src/main/inbox/inbox-service.ts`（约 281 行）的回答投递写：先 `guard.check(head.id)`，通过后调 `deliver(g.termId, sanitize(text), { singleLine: platform === "win32", timeoutMs: 60_000, recheck: guard.recheckAfter(head.id, g) })`。在途标记用 `Set<headId>`，放在 `finally` 里清掉。
 - [ ] **Step 4: 运行。** 跑同上的命令，再跑 `pnpm typecheck`，预期 PASS。
