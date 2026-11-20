@@ -79,7 +79,7 @@ describe("ScopeRunning", () => {
     expect(html).toContain("3 分钟前");
   });
   it("empty", () => {
-    expect(renderToStaticMarkup(createElement(ScopeRunning, { rows: [], onOpenTicket: noop }))).toContain("现在没有 agent 或 CI 在处理的事");
+    expect(renderToStaticMarkup(createElement(ScopeRunning, { rows: [], onOpenTicket: noop }))).toContain("现在没有 agent、CI 或别人在处理的事");
   });
 });
 

@@ -15,7 +15,7 @@ export interface TicketRow {
   item: TurnItem;
   since: number;
   prs: { tag: string; number: number; repo: string }[];
-  /** 这个 ticket 多出来的没回答的提问（发问的 session 不在了，不算 ticket 的轮次，首页照样各出一张卡）。 */
+  /** 这个 ticket 多出来的没回答的提问：同一 session 的后续提问，或发问的 session 已经不在的孤儿提问。不算 ticket 的轮次，首页照样各出一张卡。 */
   asks: TurnItem[];
 }
 

@@ -65,7 +65,7 @@ export class PrStageRepo {
     return this.db.prepare(`SELECT 1 FROM pr_stage_events WHERE dedupe_key = ?`).get(dedupeKey) !== undefined;
   }
 
-  /** 有过这种事件的 ticket（进度页的"开工过"用 first_commit，ws-b）。 */
+  /** 有过这种事件的 ticket（progress_overview 的"开工过"用 first_commit，ws-b）。 */
   ticketsWith(kind: StageEventKind): Set<string> {
     const rows = this.db.prepare(`SELECT DISTINCT ticket_key FROM pr_stage_events WHERE kind = ?`).all(kind) as { ticket_key: string }[];
     return new Set(rows.map((r) => r.ticket_key));

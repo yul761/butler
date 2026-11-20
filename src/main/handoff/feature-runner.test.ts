@@ -78,6 +78,7 @@ function setup() {
     baseEnv: { HOME: "/h" },
     transcriptMtime: (id) => mtimes[id] ?? null,
     livePrs: (key) => live[key] ?? [],
+    prTurns: () => (url) => (url === "https://github.com/o/web/pull/12" ? { owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: "s1" } : null),
     now: () => clock,
     newRunId: () => "run-1",
     log: (m) => logs.push(m),
@@ -229,7 +230,7 @@ describe("FeatureSummaryRunner: PR status counts as activity (ws-b)", () => {
     expect(runner.isRunning(featureId)).toBe(false);
     const prompt = calls[0].prompt;
     expect(prompt).toContain(`PR 状态截至 ${new Date(60_000).toISOString()}`);
-    expect(prompt).toContain("web#12 open，CI failing，review pending，在等：me (ci_failing)");
+    expect(prompt).toContain("web#12 open，CI failing，review pending，轮到：user (unattended: ci_failing)");
     expect(prompt).toContain("api#3 merged（handoff 里记的）");
     expect(prompt).not.toContain("web#12 open (pending)");
     expect(featureHandoffs.latestValid(featureId)?.prStatusAt).toBe(60_000);

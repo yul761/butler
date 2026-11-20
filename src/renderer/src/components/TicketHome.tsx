@@ -3,18 +3,20 @@
 import { useState } from "react";
 import type { PrStagesTicket } from "../../../shared/pr-stages";
 import type { TicketGlance } from "../../../shared/ticket-glance";
+import type { TurnItem } from "../../../shared/turn";
 import type { TicketView } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
+import { cardActions, type CardAction } from "../home-view";
 import { usePrStages } from "../pr-stages-view";
 import type { TicketRow } from "../scope-view";
 import { ticketRows } from "../scope-view";
-import { S } from "../strings";
-import type { TicketTab } from "../ticket-tabs";
+import { S, type UiStrings } from "../strings";
+import { landingTab, type TicketTab } from "../ticket-tabs";
 import { clipSaid, contextLine, mainActions, prStageLine, prUrlOf, type MainAction } from "../ticket-view";
 import { turnSentence } from "../turn-text";
 import { WhoTag } from "./ScopeParts";
-import { sendReasonText } from "../turn-card-actions";
+import { runCardAction, sendReasonText, type CardOutcome } from "../turn-card-actions";
 import { useStateRefetch } from "./useStateRefetch";
 import { useTurnBoard } from "./useTurnBoard";
 
@@ -30,13 +32,42 @@ export interface TicketHomeProps {
   canFix: boolean;
   /** 「送给 agent」没送成时的一句话。 */
   notice: string | null;
+  /** 在 ticket 页答过、还没送进去的提问：askId -> 回答。这一行改成「已回答…」，不再出选项（记在 TicketPage 上，切页签不丢；离开这个 ticket 就没了）。 */
+  answered: Readonly<Record<number, string>>;
+  /** 提问的回答正在送：提问行的按钮先禁用，免得连点覆盖答案。 */
+  busy: boolean;
   onGoTab: (t: TicketTab) => void;
   onOpenPr: (url: string) => void;
   onSend: () => void;
   onFix: () => void;
+  /** 提问行上的按钮（和首页卡片同一套 cardActions）：由 TicketHomeTab 交给 runTicketAsk。 */
+  onAsk: (a: CardAction, item: TurnItem) => void;
 }
 
-export function TicketHome({ ticket, row, glance, stages, canFix, notice, onGoTab, onOpenPr, onSend, onFix }: TicketHomeProps) {
+const noop = () => {};
+
+/**
+ * 提问行按钮的动作，走首页卡片那条路（runCardAction）：选项经 inbox 回答，回答先存下来，等发问的 session 下次停下来
+ * （session 结束了就等它恢复以后）再送进去；「去看看」落到这张卡片的轮次对应的页签。返回和首页卡片一样的结果。
+ */
+export async function runTicketAsk(
+  a: CardAction, item: TurnItem,
+  d: { answerInbox: (id: number, text: string) => Promise<boolean>; onGoTab: (t: TicketTab) => void; onChanged: () => void }, s: UiStrings,
+): Promise<CardOutcome> {
+  return runCardAction(a, item, {
+    answerInbox: d.answerInbox,
+    prOpen: () => Promise.resolve({ ok: true }),
+    turnSendToAgent: () => Promise.resolve({ ok: false }),
+    dismissActivity: () => Promise.resolve(),
+    onOpen: noop,
+    onGo: (r) => d.onGoTab(r.page === "ticket" && r.landing ? landingTab(r.landing) : "overview"),
+    onFix: noop,
+    // 回答以后板子随 turn:changed 自己重取；问题已经不在了（别处答过）时没有 turn:changed，要自己重取，和首页一样。
+    onChanged: d.onChanged,
+  }, s);
+}
+
+export function TicketHome({ ticket, row, glance, stages, canFix, notice, answered, busy, onGoTab, onOpenPr, onSend, onFix, onAsk }: TicketHomeProps) {
   if (row === null) return <div className="ticket-home ticket-home-skeleton" aria-busy="true"><p className="muted">…</p></div>;
   const url = prUrlOf(row.item.pr, stages);
   const actions = mainActions(row.turn, { hasPr: url !== null, canFix }, S);
@@ -63,13 +94,20 @@ export function TicketHome({ ticket, row, glance, stages, canFix, notice, onGoTa
       )}
       {row.asks.length > 0 && (
         <section className="ticket-home-asks">
-          {row.asks.map((a, n) => (
-            <p key={a.turn.kind === "answer" ? a.turn.askId : n} className="ticket-home-state">
-              <WhoTag turn={a.turn} />
-              <span className="sentence">{turnSentence(a.turn, a, S)}</span>
-              <button className="primary" onClick={() => onGoTab("terminal")}>{S.lay.actAnswer}</button>
-            </p>
-          ))}
+          {row.asks.map((a, n) => {
+            const done = a.turn.kind === "answer" && a.turn.askId !== null ? answered[a.turn.askId] : undefined;
+            return (
+              <p key={a.turn.kind === "answer" ? a.turn.askId : n} className="ticket-home-state">
+                <WhoTag turn={a.turn} />
+                <span className="sentence">{turnSentence(a.turn, a, S)}</span>
+                {done !== undefined ? <span className="muted" role="status">{S.hm.act.answered(done)}</span> : cardActions(a).map((c) => (
+                  <button key={c.id === "answer" ? `answer:${c.option}` : c.id} className={c.primary ? "primary" : undefined} disabled={busy} onClick={() => onAsk(c, a)}>
+                    {c.id === "answer" ? c.option : S.hm.act[c.id]}
+                  </button>
+                ))}
+              </p>
+            );
+          })}
         </section>
       )}
       {notice && <p className="muted" role="status">{notice}</p>}
@@ -97,11 +135,17 @@ export interface TicketHomeTabProps {
   onGoTab: (t: TicketTab) => void;
   /** 开修复 session 并导航由页面做，失败也由页面报。 */
   onFix: (featureId: number, stuckSessionId: string) => void;
+  /** 答过的提问由 TicketPage 记着：页签切走时这一块会卸载，状态放这里会丢，再回来又能点选项悄悄换掉答案。 */
+  answered: Readonly<Record<number, string>>;
+  onAnswered: (askId: number, text: string) => void;
+  /** 回答请求还没回来：也放在 TicketPage 上，请求途中切走再切回，按钮照样禁用，不会再答一次。 */
+  busy: boolean;
+  onBusy: (busy: boolean) => void;
 }
 
-export function TicketHomeTab({ ticket, onGoTab, onFix }: TicketHomeTabProps) {
+export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered, busy, onBusy }: TicketHomeTabProps) {
   const key = ticket.key;
-  const { board } = useTurnBoard({ ticketKey: key });
+  const { board, reload } = useTurnBoard({ ticketKey: key });
   const glance = useStateRefetch(`glance:${key}`, () => api.ticketGlance(key));
   const stages = usePrStages({ ticketKey: key })?.find((t) => t.ticketKey === key) ?? null;
   const [notice, setNotice] = useState<string | null>(null);
@@ -112,7 +156,7 @@ export function TicketHomeTab({ ticket, onGoTab, onFix }: TicketHomeTabProps) {
   const pr = row?.item.pr ?? null;
   return (
     <TicketHome
-      ticket={ticket} row={row} glance={glance} stages={stages} canFix={canFix} notice={notice} onGoTab={onGoTab}
+      ticket={ticket} row={row} glance={glance} stages={stages} canFix={canFix} notice={notice} answered={answered} busy={busy} onGoTab={onGoTab}
       onOpenPr={(url) => api.prOpen(url).catch(reportError)}
       onSend={() => {
         if (pr === null) return;
@@ -123,6 +167,17 @@ export function TicketHomeTab({ ticket, onGoTab, onFix }: TicketHomeTabProps) {
       }}
       onFix={() => {
         if (ticket.featureId !== null && stuckSession !== null) onFix(ticket.featureId, stuckSession);
+      }}
+      onAsk={(a, item) => {
+        if (busy) return;
+        setNotice(null);
+        onBusy(true);
+        runTicketAsk(a, item, { answerInbox: api.answerInbox, onGoTab, onChanged: reload }, S).then((r) => {
+          if (r === null) return;
+          if ("message" in r) setNotice(r.message);
+          // 有回答就一定有 askId（runCardAction 对没有 askId 的提问不回答）。
+          else if (item.turn.kind === "answer" && item.turn.askId !== null) onAnswered(item.turn.askId, r.answered);
+        }, reportError).finally(() => onBusy(false));
       }}
     />
   );

@@ -374,7 +374,7 @@ export function reviewerKind(login: string, prAuthor: string): "copilot" | "huma
 const REVIEWS = { REVIEW_REQUIRED: "pending", CHANGES_REQUESTED: "changes_requested", APPROVED: "approved" } as const;
 
 // 这些字段要 gh >= 2.18（headRefOid，2022-10）；更旧的 gh 报 Unknown JSON field，prStatus 返回 null。
-// baseRefName、title、labels、reviewRequests、mergeable、mergeStateStatus 比 headRefOid 早，同一个下限（ws-b：叠放树、卡在谁手上）。
+// baseRefName、title、labels、reviewRequests、mergeable、mergeStateStatus 比 headRefOid 早，同一个下限（ws-b：叠放树、轮到谁）。
 const PR_FIELDS =
   "number,url,state,isDraft,reviewDecision,headRefOid,headRefName,statusCheckRollup,author,reviews,comments,commits,createdAt,mergedAt,closedAt,baseRefName,title,labels,reviewRequests,mergeable,mergeStateStatus,body";
 

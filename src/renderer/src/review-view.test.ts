@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PrPolicyView } from "../../shared/pr-policy";
-import type { ReviewQueueItem } from "../../shared/prereview";
-import { assessmentTitle, enoughSample, parsePrInput, pathClassOf, prGroups, prInputValue, prOverridesFromDraft, queueFor, queueIndex } from "./review-view";
+import { assessmentTitle, enoughSample, parsePrInput, pathClassOf, prGroups, prInputValue, prOverridesFromDraft } from "./review-view";
 
 const view = (overrides: Record<string, unknown>): PrPolicyView => ({
   scope: { kind: "global" },
@@ -13,7 +12,6 @@ const view = (overrides: Record<string, unknown>): PrPolicyView => ({
   })) as unknown as PrPolicyView["keys"],
 });
 
-const item = (prId: number): ReviewQueueItem => ({ prId, ticketKey: "T-1", url: `u${prId}`, number: prId, title: null, repoSlug: "o/r", risk: "low", ready: true, missing: [], openedAt: 1 });
 
 describe("pre-review policy editor", () => {
   it("parses each kind of input", () => {
@@ -46,12 +44,6 @@ describe("pre-review policy editor", () => {
 });
 
 describe("review queue and effect helpers", () => {
-  it("indexes and filters the queue by PR", () => {
-    expect(queueIndex([item(1), item(2)]).get(2)?.number).toBe(2);
-    expect(queueIndex(null).size).toBe(0);
-    expect(queueFor([item(1), item(2), item(3)], new Set([1, 3])).map((i) => i.prId)).toEqual([1, 3]);
-  });
-
   it("needs five PRs before showing a group and titles PRs or branches", () => {
     expect(enoughSample({ prs: 4, humanComments: 1, rounds: 1, firstReviewMs: 1, submitToMergeMs: 1 })).toBe(false);
     expect(enoughSample({ prs: 5, humanComments: 1, rounds: 1, firstReviewMs: 1, submitToMergeMs: 1 })).toBe(true);

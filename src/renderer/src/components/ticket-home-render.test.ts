@@ -7,7 +7,9 @@ import type { TicketView } from "../../../shared/types";
 import type { TicketRow } from "../scope-view";
 import { S } from "../strings";
 import { turnSentence } from "../turn-text";
-import { TicketHome, type TicketHomeProps } from "./TicketHome";
+import type { CardAction } from "../home-view";
+import { landingTab } from "../ticket-tabs";
+import { runTicketAsk, TicketHome, type TicketHomeProps } from "./TicketHome";
 
 const noop = () => {};
 const ticket = { key: "BTL-1", title: "T", repos: [{ branch: "feat/btl-1" }], sessions: [] } as unknown as TicketView;
@@ -24,13 +26,13 @@ const stageRow: PrStagesView = {
 };
 const stages = (rows: PrStagesView[]): PrStagesTicket => ({ ticketKey: "BTL-1", title: null, featureId: null, archived: false, merged: false, hasRepos: true, rows });
 const props = (o: Partial<TicketHomeProps> = {}): TicketHomeProps => ({
-  ticket, row: mkRow(), canFix: false, notice: null,
+  ticket, row: mkRow(), canFix: false, notice: null, answered: {}, busy: false,
   glance: { rootSessionId: "s", lastSaid: { text: "测试都过了", at: 1 }, context: { tokens: 148000, threshold: 150000 } },
-  stages: stages([stageRow]), onGoTab: noop, onOpenPr: noop, onSend: noop, onFix: noop, ...o,
+  stages: stages([stageRow]), onGoTab: noop, onOpenPr: noop, onSend: noop, onFix: noop, onAsk: noop, ...o,
 });
 const html = (o?: Partial<TicketHomeProps>) => renderToStaticMarkup(createElement(TicketHome, props(o)));
 /** 在 TicketHome 返回的元素树里找文字是 label 的按钮（只有原生元素，不用渲染）。 */
-type El = { type: unknown; props: { children?: unknown; onClick?: () => void } };
+type El = { type: unknown; props: { children?: unknown; onClick?: () => void; disabled?: boolean } };
 function findButton(node: unknown, label: string): El & { props: { onClick: () => void } } {
   const walk = (n: unknown): El | null => {
     if (Array.isArray(n)) { for (const c of n) { const f = walk(c); if (f) return f; } return null; }
@@ -85,17 +87,62 @@ describe("TicketHome", () => {
     button.props.onClick();
     expect(opened).toEqual(["https://github.com/acme/api/pull/52"]);
   });
-  it("an orphan question shows under the ticket's own state, with a way to answer it", () => {
+  it("an orphan question shows under the ticket's own state, with a way to answer it", async () => {
     const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
-      turn: { owner: "you", kind: "answer", question: "用哪个库？", options: [], askId: 3, sessionId: "s" } };
+      turn: { owner: "you", kind: "answer", question: "用哪个库？", options: ["zod", "valibot"], askId: 3, sessionId: "s" } };
     const row = { ...mkRow(), asks: [ask] };
     const h = html({ row });
     expect(h).toContain("ticket-home-asks");
     expect(h).toContain(turnSentence(ask.turn, ask, S));
+    // 按钮和首页卡片一样：两个选项 + 去看看。
+    const clicked: [CardAction, TurnItem][] = [];
+    const el = TicketHome({ ...props({ row }), onAsk: (a, item) => clicked.push([a, item]) });
+    findButton(el, "zod").props.onClick();
+    expect(clicked).toEqual([[{ id: "answer", option: "zod", primary: true }, ask]]);
+    expect(() => findButton(el, S.hm.act.look)).not.toThrow();
+    // 点选项走 inbox 回答（发问的 session 已经结束，终端里答不了）。
+    const answered: [number, string][] = [];
     const went: string[] = [];
-    const el = TicketHome({ ...props({ row }), onGoTab: (t) => went.push(t) });
-    findButton(el, S.lay.actAnswer).props.onClick();
-    expect(went).toEqual(["terminal"]);
+    const deps = { answerInbox: async (id: number, text: string) => (answered.push([id, text]), true), onGoTab: (t: string) => went.push(t), onChanged: noop };
+    expect(await runTicketAsk(clicked[0][0], ask, deps, S)).toEqual({ answered: "zod" });
+    expect(answered).toEqual([[3, "zod"]]);
+    expect(went).toEqual([]);
+  });
+  it("a question answered here but not yet delivered says so instead of offering the options again", () => {
+    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
+      turn: { owner: "you", kind: "answer", question: "用哪个库？", options: ["zod", "valibot"], askId: 3, sessionId: "s" } };
+    const row = { ...mkRow(), asks: [ask] };
+    const h = html({ row, answered: { 3: "zod" } });
+    expect(h).toContain(S.hm.act.answered("zod"));
+    expect(() => findButton(TicketHome({ ...props({ row, answered: { 3: "zod" } }) }), "valibot")).toThrow();
+    // 别的提问不受影响。
+    expect(() => findButton(TicketHome({ ...props({ row, answered: { 4: "x" } }) }), "valibot")).not.toThrow();
+  });
+  it("the question buttons are disabled while an answer is on its way", () => {
+    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
+      turn: { owner: "you", kind: "answer", question: "q", options: ["a"], askId: 3, sessionId: "s" } };
+    const row = { ...mkRow(), asks: [ask] };
+    expect(findButton(TicketHome({ ...props({ row, busy: true }) }), "a").props.disabled).toBe(true);
+    expect(findButton(TicketHome({ ...props({ row }) }), "a").props.disabled).toBe(false);
+  });
+  it("an answer that no longer exists says so and reloads the board", async () => {
+    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
+      turn: { owner: "you", kind: "answer", question: "q", options: ["a"], askId: 3, sessionId: "s" } };
+    let reloaded = 0;
+    const deps = { answerInbox: async () => false, onGoTab: noop, onChanged: () => void reloaded++ };
+    expect(await runTicketAsk({ id: "answer", option: "a", primary: true }, ask, deps, S)).toEqual({ message: S.hm.act.answerGone });
+    expect(reloaded).toBe(1);
+  });
+  it("a question without options only offers a look, landing where the home card would", async () => {
+    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
+      turn: { owner: "you", kind: "answer", question: "q", options: [], askId: 3, sessionId: "s" } };
+    const clicked: CardAction[] = [];
+    const el = TicketHome({ ...props({ row: { ...mkRow(), asks: [ask] } }), onAsk: (a) => clicked.push(a) });
+    findButton(el, S.hm.act.look).props.onClick();
+    expect(clicked).toEqual([{ id: "look", primary: true }]);
+    const went: string[] = [];
+    expect(await runTicketAsk(clicked[0], ask, { answerInbox: async () => true, onGoTab: (t) => went.push(t), onChanged: noop }, S)).toBeNull();
+    expect(went).toEqual([landingTab(ask.turn)]);
   });
   it("no orphan questions: no questions section", () => {
     expect(html()).not.toContain("ticket-home-asks");

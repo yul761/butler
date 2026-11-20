@@ -299,6 +299,32 @@ describe("TurnService.board", () => {
   });
 });
 
+describe("TurnService.prTurns", () => {
+  it("looks up each open PR's turn by link, whatever the case, from the same algorithm as the board", () => {
+    const of = new TurnService(failingPr()).prTurns();
+    expect(of(URL3)).toEqual({ owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: "s1" });
+    expect(of(URL3.toLowerCase())).toEqual(of(URL3));
+    expect(of("https://github.com/O/r/pull/9")).toBeNull();
+  });
+  it("a PR linked to two tickets gets each ticket's own turn when the ticket is given", () => {
+    const of = new TurnService(failingPr({
+      tickets: () => [ticket("BTL-1", { sessions: [sv("s1")] }), ticket("BTL-2", { sessions: [sv("s2")] })],
+      prs: (key) => [watched({ ticketKey: key })],
+      recipient: (key) => ({ ok: true, sessionId: key === "BTL-1" ? "s1" : "s2", via: "owner" }),
+      activity: (id) => (id === "s2" ? act("edit") : null),
+    })).prTurns();
+    expect(of(URL3, "BTL-1")).toMatchObject({ owner: "you", kind: "unattended" });
+    expect(of(URL3, "BTL-2")).toMatchObject({ owner: "agent", kind: "fixing_ci", sessionId: "s2" });
+    // 不给 ticket 时落回第一个 ticket 的；给了但那个 ticket 不认识这个 PR（比如归档了）时是 null，不借别的 ticket 的推的人。
+    expect(of(URL3)).toEqual(of(URL3, "BTL-1"));
+    expect(of(URL3, "BTL-9")).toBeNull();
+  });
+  it("a closed PR has no turn", () => {
+    const of = new TurnService(failingPr({ prs: () => [watched({ state: "closed" })] })).prTurns();
+    expect(of(URL3)).toBeNull();
+  });
+});
+
 describe("TurnService.sendToAgent", () => {
   const target = { ticketKey: "BTL-1", pr: { repo: "o/r", number: 3 } };
 

@@ -167,7 +167,7 @@ ticket 号对应：BTL-231 是第 1 层，BTL-232 第 2 层，BTL-233 第 3 层�
      - 不带 filter 时，一个 ticket 一条 item，`counts` 等于 items 按 owner 计数的结果。
      - 带 filter 时，items 按 PR 拆开，`counts` 仍按 ticket 计。
      - 一个 ticket 的轮次取主进程标了 `ticketLevel` 的那条 item（不带和带 filter 都标），前端不再用 mostUrgent / ticketTurn 自己选，只留一套状态算法。没有这一条（ticket 没开始：板上不出 idle）时按没开始显示。
-     - 同一个 ticket 里 `pr` 为 null、轮次是 `answer`、又不是 `ticketLevel` 的 item，是发问的 session 已经不在的孤儿提问。它不参与 ticket 的轮次，但首页、epic/feature 概况和 ticket 页都要显示成卡片或提问行，ticket 自己的轮次不是活的时候也要显示。
+     - 同一个 ticket 里 `pr` 为 null、轮次是 `answer`、又不是 `ticketLevel` 的 item，是多出来的提问：同一 session 的后续提问（第一条以后的 ask_user），或发问的 session 已经不在的孤儿提问。它不参与 ticket 的轮次，但首页、epic/feature 概况和 ticket 页都要显示成卡片或提问行，ticket 自己的轮次不是活的时候也要显示。
      - `ticketKey` 和 `pr` 都为 null 的 item 是总控的提问或全局提醒，首页照常显示成卡片。
   3. 不带 filter 时，`scopes` 里还要包括不属于任何 epic 的 feature。
   4. 剩下的 `waitingOnOf` 调用点：`butler-control` 的 progress_overview、`feature-templates`、`src/main/progress`。由第 3 层的最后一个任务改成用 turn 模型，然后删掉 `waitingOnOf`，不留两套。第 3 层删 `ProgressBody` 的同时做。

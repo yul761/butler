@@ -1103,7 +1103,7 @@ export class StackService {
     return out;
   }
 
-  /** 进度页的「栈」区块。 */
+  /** 全部工作页「更多」里的「栈」区块。 */
   async view(filter: StacksFilter): Promise<StacksView> {
     const stacks: StackView[] = [];
     for (const s of this.d.repo.list()) {

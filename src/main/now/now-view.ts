@@ -65,7 +65,7 @@ function childDecision(i: NowInput, s: SessionView, scope: Scope): boolean {
 
 /**
  * 一个开着的 session 的行，「需要你」按优先级（BTL-190 第 2+3 点）：确认 → 未决的 ask_user → 真的卡住 → Haiku 的判断。
- * - 有未决 ask_user 的：needsYou 为 null，decisions 记还没答的条数，卡片在 NowView.decisions 里（每条一张，说的就是那个问题）；行不折起来。
+ * - 有未决 ask_user 的：needsYou 为 null，decisions 记还没答的条数（卡片由 TurnService 从 inbox 出，每条一张）；行不折起来。
  *   已经在卡片上答了、还没送进去的不算进 decisions（不再等你），但 needsYou 照样为 null、行照样不折起来。
  * - 总控所管范围里有子 session 的未决条目时，总控的 Haiku 判断不算（needsYouReason 不问）。
  * 已停的 session 不因为有 PR 开着就不算空闲（BTL-190 第 7 点）：PR 和 CI 只显示在行上。
@@ -146,14 +146,6 @@ function countRows(rows: NowRow[]): NowCounts {
   };
 }
 
-/** 从早到晚，since 为 null 的排在最后。 */
-function bySince(a: NowRow, b: NowRow): number {
-  if (a.since === b.since) return 0;
-  if (a.since === null) return 1;
-  if (b.since === null) return -1;
-  return a.since - b.since;
-}
-
 const nowFeature = (id: number | null, name: string, rows: NowRow[]): NowFeature => ({ id, name, rows, counts: countRows(rows) });
 
 function nowEpic(id: number | null, name: string, rows: NowRow[], features: NowFeature[]): NowEpic | null {
@@ -197,8 +189,6 @@ export function buildNowView(i: NowInput): NowView {
     ? sessionRow(i, i.butler, { ticketKey: null, title: null, repo: null, where: null, coordinator: true, prs: [], target: { page: "butler", sessionId: i.butler.id } })
     : null;
   const all = [...(butler ? [butler] : []), ...epics.flatMap((e) => [...e.rows, ...e.features.flatMap((f) => f.rows)])];
-  const needsYou = all.filter((r) => r.needsYou !== null).sort(bySince);
-  const decisions = [...i.decisions].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id);
   const limited: NowNotice[] = all.flatMap((r) => (r.activity?.limit ? [{ kind: "session_limited" as const, target: r.target, title: r.title, limit: r.activity.limit }] : []));
-  return { notices: [...i.notices, ...limited], needsYou, decisions, epics, butler, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges, mem: i.memorySnapshot ?? null, ...(i.sharedMcp !== undefined && { sharedMcp: i.sharedMcp }) };
+  return { notices: [...i.notices, ...limited], epics, butler, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges, mem: i.memorySnapshot ?? null, ...(i.sharedMcp !== undefined && { sharedMcp: i.sharedMcp }) };
 }

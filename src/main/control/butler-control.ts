@@ -1,6 +1,7 @@
 import { basename } from "node:path";
 import { type ButlerControlRequest, type ControlResult, type InboxControlOp, sanitizeTask, SUMMARY_LIMIT } from "../../shared/control";
-import { waitingOnOf, type ProgressFilter, type ProgressView } from "../../shared/progress";
+import type { ProgressFilter, ProgressView } from "../../shared/progress";
+import type { Turn } from "../../shared/turn";
 import { effectiveStatus, type Epic, type EpicFeatureRow, type EpicView, type Feature, type OpenSessionResult, type Session, type Ticket, type WatchedPr } from "../../shared/types";
 import { roleOf, type InboxService } from "../inbox/inbox-service";
 import { progressOverview } from "../progress/progress-view";
@@ -19,12 +20,14 @@ export interface ButlerControlDeps {
   featureRows: () => (EpicFeatureRow & { epicId: number | null })[];
   /** Butler 在盯的所有 PR（PrWatcher.statusOf）。 */
   prs: () => WatchedPr[];
+  /** 每个 PR 轮到谁，按链接查（TurnService.prTurns，和看板同一套算法）；没有为 null。 */
+  prTurns: () => (url: string, ticketKey?: string) => Turn | null;
   /** 开着终端的 Butler session 的 head。 */
   openHeads: () => Session[];
   /** 「需要你」的理由；不需要为 null。 */
   needsYou: (sessionId: string) => string | null;
   inbox: Pick<InboxService, "view">;
-  /** 进度聚合（buildProgress，和进度页同一份，ws-b）。 */
+  /** 进度聚合（buildProgress，ws-b）。 */
   progress?: (filter: ProgressFilter) => ProgressView;
   /** 效果总览（ws-h，和「效果」页同一份）。 */
   metrics?: (days: number | undefined) => MetricsOverview;
@@ -260,6 +263,7 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
       }
       case "list_prs": {
         const prs = b.prs();
+        const turnOf = b.prTurns();
         const assessed = b.assessment?.summaries(prs.flatMap((p) => (p.prId !== null ? [p.prId] : []))) ?? new Map();
         return ok(prs.map((p) => {
           const t = d.tickets.get(p.ticketKey);
@@ -269,11 +273,11 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
             prId: p.prId,
             ticket: p.ticketKey, repo: p.repoPath === null ? null : basename(p.repoPath), branch: p.branch, number: p.number, url: p.url, state: p.state, review: p.review, ci: p.ci,
             checkedAt: p.checkedAt ? new Date(p.checkedAt).toISOString() : null, ...(t ? ticketOwners(t) : { feature: null, epic: null }),
-            // ws-b：叠放、卡在谁手上要的字段。分支行（还没有 PR）没有。
+            // ws-b：叠放、轮到谁要的字段。分支行（还没有 PR）没有。
             ...(x && p.checkedAt > 0 && {
               title: x.title, headBranch: p.branch || null, baseBranch: x.baseBranch, draft: x.isDraft, author: x.author, labels: x.labels,
               reviewRequests: x.reviewRequests, reviewers: x.reviewers.map((r) => ({ ...r, at: iso(r.at) })), mergeable: x.mergeable, mergeState: x.mergeState,
-              statusChangedAt: iso(x.statusChangedAt), waitingOn: waitingOnOf({ ...x, state: p.state, ci: p.ci, review: p.review }),
+              statusChangedAt: iso(x.statusChangedAt), turn: p.url ? turnOf(p.url, p.ticketKey) : null,
             }),
             // ws-g：只是读表（还没评估过为 null）。
             ...(b.assessment && p.prId !== null && { risk: a?.risk ?? null, ready: a?.ready ?? null, missing: (a?.missing ?? []).map((m: Readiness["missing"][number]) => m.detail) }),

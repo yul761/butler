@@ -21,7 +21,6 @@ import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
 import type { ExternalActionKind, ExternalOutcome } from "../../shared/external";
 import type { InterruptCategory } from "../../shared/metrics";
-import type { ProgressBucket, WaitingOn, WaitingReason } from "../../shared/progress";
 import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
@@ -1796,76 +1795,6 @@ const ZH = {
       pressureFree: "可用内存低于百分之多少算紧张（1～50）",
     },
   },
-  /** 进度页（ws-b）。 */
-  progress: {
-    title: "进度",
-    intro: "所有 ticket 和 PR 走到哪了、卡在谁手上。和 Butler 总控的 progress_overview 是同一份数据；PR 状态来自后台轮询。",
-    epic: "epic",
-    feature: "feature",
-    allEpics: "全部 epic",
-    allFeatures: "全部 feature",
-    total: (n: number) => `共 ${n} 个 ticket`,
-    buckets: { merged: "已合并", blocked: "卡住", in_review: "review 中", in_progress: "进行中", not_started: "未开始" } as Record<ProgressBucket, string>,
-    bucketDefs: {
-      merged: "PR 都合了（至少一个），或者 ticket 标成了完成",
-      blocked: "ticket 标成阻塞，或者有开着的 PR CI 失败、被要求修改、有冲突",
-      in_review: "有开着的、不是草稿的 PR",
-      in_progress: "有草稿 PR，或者开工过（有 session 或提交），还没有开着的 PR",
-      not_started: "还没开工",
-    } as Record<ProgressBucket, string>,
-    definitions: "各格的定义",
-    stuckHeading: "现在卡在谁手上",
-    stuckNone: "没有开着的 PR 在等人。",
-    colTicket: "ticket",
-    colPr: "PR",
-    colWho: "在等",
-    colReason: "原因",
-    colSince: "多久",
-    colTitle: "标题",
-    colState: "状态",
-    colCi: "CI",
-    colReview: "review",
-    who: { author: "作者", ci: "CI", reviewers: "reviewer", ticket: "ticket" } as Record<WaitingOn["who"], string>,
-    reasons: {
-      draft: "还是草稿",
-      ci_failing: "CI 失败",
-      changes_requested: "被要求修改",
-      conflicts: "有冲突",
-      behind: "落后于 base 分支",
-      ci_pending: "CI 在跑",
-      ready_to_merge: "可以合并",
-      review_requested: "等 review",
-      no_reviewer: "没请 reviewer",
-      ticket_blocked: "ticket 标成阻塞，没有开着的 PR",
-    } as Record<WaitingReason, string>,
-    stacksHeading: "PR 叠放",
-    stacksNone: "没有叠放的 PR（base 分支是另一个 PR 的 head 才算）。",
-    stackSingles: (n: number) => `另有 ${n} 个单独的 PR`,
-    tableHeading: "PR 表",
-    byLabel: "按 label",
-    byPrefix: "按标题前缀",
-    noLabel: "没有 label",
-    noPrefix: "没有前缀",
-    tableNone: "没有开着或合了的 PR。",
-    draft: "草稿",
-    prState: { open: "开着", merged: "已合并", closed: "关了" } as Record<"open" | "merged" | "closed", string>,
-    featuresHeading: "ticket（按 feature）",
-    loose: "不属于 feature 的 ticket",
-    noSummary: "还没有汇总",
-    stale: "汇总过时",
-    staleHint: "汇总之后又有新活动（包括 PR、CI、review 的变化）",
-    summaryAt: (t: string) => `汇总 ${t}`,
-    prStatusAt: (t: string) => `PR 状态截至 ${t}`,
-    openPrs: (n: number, total: number) => `${n}/${total} 个 PR 开着`,
-    noTickets: "这里没有 ticket。",
-    freshness: (generated: string) => `数据生成于 ${generated}`,
-    freshnessChecked: (oldest: string, newest: string) => `PR 最早检查于 ${oldest}，最新 ${newest}`,
-    freshnessUnread: (n: number) => `${n} 个 PR 还没读过`,
-    freshnessErrors: (n: number) => `${n} 个 PR 上次读取失败`,
-    freshnessSummary: (t: string) => `最旧的汇总 ${t}`,
-    durationDays: (d: number, h: number) => (h === 0 ? `${d} 天` : `${d} 天 ${h} 小时`),
-    unknownSince: "—",
-  },
   /** 「效果」页（ws-h）。 */
   effectNav: "效果与花费",
   effect: {
@@ -1987,7 +1916,7 @@ const ZH = {
   /** 设置里的「对外动作」（契约 4.8，ws-b）。 */
   externalHeading: "对外动作",
   externalIntro: "Butler 代你在 GitHub 或别的外部服务上留下东西的动作，每种一个开关，默认全关。关着时 Butler 不会做，只在审计页记一笔“跳过”。现在用到的是导出成仓库规则的「推送分支」和「开 PR」，以及评论与 CI 的「回复 review 评论」「标记评论已解决」和「重跑 CI」；其余的等之后的版本接入时才会生效。",
-  /** 栈式 PR（工作流 K）：进度页「栈」区块、设置页「栈」标签、「现在」页的栈提醒。 */
+  /** 栈式 PR（工作流 K）：全部工作页的「栈」区块、设置页「栈」标签、「现在」页的栈提醒。 */
   sk: {
     title: "栈",
     intro: "Butler 管的栈：只有栈底的 PR 给人 review，上面的层先是分支；栈底合并或 trunk 更新时 Butler 把整栈 rebase 到新的父层上，冲突交给那一层的 session。",
@@ -2414,7 +2343,7 @@ const ZH = {
     noYouHere: "这里没有事轮到你。",
     featuresHeading: "各个 feature",
     featureCard: (merged: number, total: number) => `${merged}/${total} 合了`,
-    runningEmpty: "现在没有 agent 或 CI 在处理的事。",
+    runningEmpty: "现在没有 agent、CI 或别人在处理的事。",
     colTicket: "ticket",
     colWho: "谁该动",
     colNow: "现在怎么样",

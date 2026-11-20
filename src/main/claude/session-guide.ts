@@ -31,7 +31,7 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : lang === "zh"
         ? "用 start_session 开子 session 时按任务选 model：范围小、目标明确的用 sonnet，需要判断的用 opus，拿不准就用 opus。"
         : "When you open a child session with start_session, pick the model by task: sonnet for small, well-defined work, opus for work that needs judgment, and opus when unsure.",
-  // 「待你决定」和汇报（BTL-190 第 2+3 点）：有 butler-sessions 的 session 都有 ask_user 和 report；Butler 总控的写在它自己那一段里，复盘分析 session 没有这些工具。
+  // 提问和汇报（BTL-190 第 2+3 点）：有 butler-sessions 的 session 都有 ask_user 和 report；Butler 总控的写在它自己那一段里，复盘分析 session 没有这些工具。
   (lang, kind) =>
     kind === "butler" || kind === "lessons"
       ? null
@@ -61,15 +61,15 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
     kind !== "butler"
       ? null
       : lang === "zh"
-        ? "你是 Butler 总控：全局只有一个，看得到所有 epic、feature、ticket、PR 和 session（list_epics、list_features、list_tickets、list_prs、list_sessions、session_activity、list_inbox）；要整体进度、每个 PR 卡在谁手上，先用 progress_overview，一次就够；用户问 Butler 的效果（PR 周期、评论、人介入、花费，和 Butler 之前比）时用 metrics_overview。" +
+        ? "你是 Butler 总控：全局只有一个，看得到所有 epic、feature、ticket、PR 和 session（list_epics、list_features、list_tickets、list_prs、list_sessions、session_activity、list_inbox）；要整体进度、每个 PR 轮到谁，先用 progress_overview，一次就够；用户问 Butler 的效果（PR 周期、评论、人介入、花费，和 Butler 之前比）时用 metrics_overview。" +
           "除了栈（见下）你不能建、删、结束任何东西；要哪个 epic、feature 做什么，用 send_message 发给它（feature 或 epic 填名字或 id），它的终端关着时 Butler 会接着它最近的对话打开再发，它正忙时稍后再试。" +
           "它这一轮做完时的回复会以【回复】自动送回给你，不用轮询。feature 汇总过时（list_features 的 stale）时用 refresh_feature_summary 在后台重新生成。" +
-          "各 epic session done / blocked 的汇报会在你停下来时自动送到。list_inbox 里的「待你决定」已经摆在用户面前，不要再问一遍；需要用户自己做的事（合 PR、回答问题、处理红了的 CI）用 ask_user 列出来，然后结束这一轮。" +
+          "各 epic session done / blocked 的汇报会在你停下来时自动送到。list_inbox 里未决的提问已经摆在用户面前，不要再问一遍；需要用户自己做的事（合 PR、回答问题、处理红了的 CI）用 ask_user 列出来，然后结束这一轮。" +
           "report 只存下来，不会送给任何人。"
-        : "You are Butler control: there is only one, and it sees every epic, feature, ticket, PR and session (list_epics, list_features, list_tickets, list_prs, list_sessions, session_activity, list_inbox); for the overall progress and who each PR waits on, start with progress_overview, one call is enough; when the user asks how well Butler is doing (PR cycle time, comments, human interventions, cost, compared with before Butler), use metrics_overview. " +
+        : "You are Butler control: there is only one, and it sees every epic, feature, ticket, PR and session (list_epics, list_features, list_tickets, list_prs, list_sessions, session_activity, list_inbox); for the overall progress and whose turn each PR is, start with progress_overview, one call is enough; when the user asks how well Butler is doing (PR cycle time, comments, human interventions, cost, compared with before Butler), use metrics_overview. " +
           "Apart from stacks (below) you cannot create, delete or end anything; when an epic or feature needs to do something, tell it with send_message (feature or epic by name or id). If its terminal is closed, Butler reopens its latest conversation and sends it; if it is busy, try again later. " +
           "Its reply when it finishes that turn comes back to you automatically as [Reply], so do not poll. When a feature summary is stale (stale in list_features), regenerate it in the background with refresh_feature_summary. " +
-          "Done and blocked reports from the epic sessions are delivered to you automatically when you stop. Pending decisions in list_inbox are already in front of the user, so do not ask them again; list what the user has to do themselves (merge PRs, answer questions, deal with failing CI) with ask_user, then end your turn. " +
+          "Done and blocked reports from the epic sessions are delivered to you automatically when you stop. Pending questions in list_inbox are already in front of the user, so do not ask them again; list what the user has to do themselves (merge PRs, answer questions, deal with failing CI) with ask_user, then end your turn. " +
           "report is only stored and is not sent to anyone.",
   // 栈式 PR（工作流 K）：feature 总控用 stack_on / stack_define，Butler 总控只有 stack_define 这几个。
   (lang, kind) =>

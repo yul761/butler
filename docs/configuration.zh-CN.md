@@ -112,7 +112,7 @@ macOS 上的可用内存按 Activity Monitor 的算法从 `vm_stat` 算：总量
 
   Butler 在启动时和你为某个 ticket 打开 session 时也会同步这个 ticket。你完成、忽略或重新打开它的某条 follow-up 时，也会再同步一次。
 - **30 条笔记的上限。** StateCore 每个 scope 最多保留 30 条有效笔记。从 statecore-mcp 1.1 起，被遗忘的笔记（做完的 follow-up、被替换的决定）会让出位置，蒸馏出来的笔记也不会把 Butler 或 Claude 的 `remember` 写的笔记挤出去。每次写入前，Butler 会数还剩几个空位。一个都不剩时，它跳过这次写入，而不是让 StateCore 淘汰最旧的一条，所以 Butler 从不淘汰自己的笔记。空位不够时，先写未完成的 follow-up，再写决定。跳过的条目仍然在 Butler 自己的数据库里和 ticket 页上，一有空位就会写进去。在 `workspace` scope 里，笔记满 30 条后，StateCore 会淘汰最旧的经验。
-- **ticket 页上的 记忆 tab** 显示最新的 handoff、决定、未完成的 follow-up 和其他笔记。点某条上的 **来历** 可以看它的版本链。这个 tab 在 Butler 每次同步后刷新，Claude 在 session 里写记忆时不会实时更新。
+- **ticket 页 记录 tab 里的 记忆 一节** 显示最新的 handoff、决定、未完成的 follow-up 和其他笔记。点某条上的 **来历** 可以看它的版本链。这一节在 Butler 每次同步后刷新，Claude 在 session 里写记忆时不会实时更新。
 - **蒸馏。** 只在隐私档位为 **完整**、并且关掉了 **发送前确认** 时才会发生。它在每次晚间 handoff 之后在后台运行，包括补跑和 **立即运行晚间 handoff**。对每个有待处理事件的 scope，StateCore 会调用一次或多次你的个人 API，把事件整理成笔记。这些调用合起来会发送：
   - scope 的名字，ticket 的 scope 名里就是真实的 ticket 号（`ticket:<KEY>`）
   - 这个 scope 最近的原始事件，包括 Claude 用 `remember(consolidate: true)` 存下的内容
@@ -156,7 +156,7 @@ macOS 上的可用内存按 Activity Monitor 的算法从 `vm_stat` 算：总量
 | 设置 | 键 | 默认值 | 可填的值和说明 |
 |------|----|--------|----------------|
 | 晚间 handoff 时间 | `nightlyTime` | `16:00` | `HH:MM`，本地时间。如果到点时 Butler 没开、电脑在睡眠或锁屏，会在下次启动、唤醒或解锁时补跑，排在早间刷新之前。 |
-| 每天几点让 Butler 总控巡检一次 | `butlerPatrolTime` | 空（关） | `HH:MM`，本地时间；空 = 关。到点时 Butler 打开（或接着用最近的）Butler 总控，让它看一遍 PR、CI 和待你决定的事，用 `ask_user` 列出要你亲自做的事。Butler 总控正忙就等它停下来；到点时电脑在睡眠或 Butler 没开，当天醒来、解锁或启动时补一次，过了零点不补。如果在当天的巡检时间过了之后才打开这项设置，会马上巡检一次。巡检每天最多开一次 session。上一次巡检列出的待你决定还没处理时，下一次会等你处理完。Butler 总控不会被自动换新，也不会因为闲置被自动关闭。 |
+| 每天几点让 Butler 总控巡检一次 | `butlerPatrolTime` | 空（关） | `HH:MM`，本地时间；空 = 关。到点时 Butler 打开（或接着用最近的）Butler 总控，让它看一遍 PR、CI 和未决的提问，用 `ask_user` 列出要你亲自做的事。Butler 总控正忙就等它停下来；到点时电脑在睡眠或 Butler 没开，当天醒来、解锁或启动时补一次，过了零点不补。如果在当天的巡检时间过了之后才打开这项设置，会马上巡检一次。巡检每天最多开一次 session。上一次巡检列出的提问还没处理时，下一次会等你处理完。Butler 总控不会被自动换新，也不会因为闲置被自动关闭。 |
 | 工作日（只在这些天跑晚间 handoff） | `workingDays` | `1,2,3,4,5`（周一到周五） | 界面上是复选框。存的值是用逗号分隔的 `0`–`6`，`0` 是周日。晚间 handoff 和早间刷新只在这些天运行。 |
 | tracker MCP 工具（handoff 只能调用这些，一行一个） | `trackerTools` | 空 | 一行一个 MCP 工具名，格式是 `mcp__<server>__<tool>`。只写 `mcp__<server>` 会放开这个 server 的所有工具，除非 server 是只读的，否则别这么写。其他内容，例如 `Bash(...)` 规则或命令行参数，都会被拒绝。handoff 和刷新可以调用这些工具，加上 `Read`、`Grep`、`Glob`、`gh pr view`、`gh pr checks`、`git log` 和 `git status`，再加上你用户级或托管（policy）的 Claude Code 设置允许的工具（见下文）。 |
 | 后台 handoff 也加载本地级的 MCP… | `headlessProjectMcp` | `0`（关） | `1` 或 `0`。见[接入你的 tracker](#接入你的-tracker)。 |

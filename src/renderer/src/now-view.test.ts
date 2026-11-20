@@ -98,7 +98,7 @@ describe("the live window (BTL-190 7)", () => {
   const ev = (at: number, label: string, over: Partial<ActivityEvent> = {}): ActivityEvent => ({ sessionId: "s1", at, kind: "tool", label, ...over });
   const counts = { active: 0, needsYou: 0, stuck: 0 };
   const view = (rows: NowRow[], featureRows: NowRow[] = [], butler: NowRow | null = null): NowView => ({
-    needsYou: [], decisions: [], butler, running: 0, merges: [], memory: [], notices: [],
+    butler, running: 0, merges: [], memory: [], notices: [],
     epics: [{ id: 1, name: "e", rows, counts, features: [{ id: 2, name: "f", rows: featureRows, counts }] }],
   });
 

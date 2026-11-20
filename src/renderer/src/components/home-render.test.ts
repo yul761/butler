@@ -89,7 +89,7 @@ describe("Notice (moved out of the Now page)", () => {
 
 describe("HomeMore (the old Now page's run-status blocks)", () => {
   const view = (o: Partial<NowView> = {}): NowView => ({
-    notices: [], needsYou: [], decisions: [], epics: [], butler: null, running: 0, memory: [], merges: [], ...o,
+    notices: [], epics: [], butler: null, running: 0, memory: [], merges: [], ...o,
   });
   const render = (v: NowView) => renderToStaticMarkup(createElement(HomeMore, { view: v, onOpen: () => {}, onOpenTicket: () => {}, liveTickets: new Set<string>(), onGo: () => {} }));
 
@@ -303,7 +303,7 @@ describe("HomeBody", () => {
   });
   const counts = { you: 0, agent: 2, external: 1, mergedToday: 3 };
   const board = (items: TurnItem[], scopes: ScopeTurnRow[] = [scope(1, { youCount: 2 })]): TurnBoard => ({ items, counts, scopes, generatedAt: 1 });
-  const nowView: NowView = { notices: [], needsYou: [], decisions: [], epics: [], butler: null, running: 0, memory: [], merges: [], mem: { lines: [], updatedAt: 1 } as unknown as NowView["mem"] };
+  const nowView: NowView = { notices: [], epics: [], butler: null, running: 0, memory: [], merges: [], mem: { lines: [], updatedAt: 1 } as unknown as NowView["mem"] };
   const render = (o: Partial<HomeBodyProps> = {}) => renderToStaticMarkup(createElement(HomeBody, {
     board: null, error: null, noWork: false, firstRun: createElement("div", { "data-testid": "first-run" }), ctx, now: 10_000, nowView,
     liveTickets: new Set<string>(), onRetry: () => {}, onFix: () => {}, onOpen: () => {}, onGo: () => {}, onOpenTicket: () => {}, onChanged: () => {}, onResumeSetup: () => {}, ...o,

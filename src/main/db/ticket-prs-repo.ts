@@ -49,7 +49,7 @@ export interface TicketPr {
   readFailingSince: number | null;
   /** 放弃读以后下次再试的时间；null = 没放弃。 */
   readRetryAt: number | null;
-  /** 以下是 ws-b 加的（叠放树、卡在谁手上）；没读过时是空值。 */
+  /** 以下是 ws-b 加的（叠放树、轮到谁）；没读过时是空值。 */
   baseBranch: string | null;
   isDraft: boolean;
   title: string | null;

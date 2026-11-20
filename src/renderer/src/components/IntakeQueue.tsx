@@ -7,7 +7,7 @@ import { shortTime } from "../progress-ui";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 
-/** 进度页的「自动接活」队列（工作流 N）：拉来的 ticket、分类、状态和操作。总开关关着、也没拉来过东西时不显示。 */
+/** 全部工作页「更多」里的「自动接活」队列（工作流 N）：拉来的 ticket、分类、状态和操作。总开关关着、也没拉来过东西时不显示。 */
 export function IntakeQueue({ onOpenTicket }: { onOpenTicket: (key: string) => void }) {
   const view = useStateRefetch("intake-view", api.intakeView);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);

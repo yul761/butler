@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityEvent, SessionActivity } from "../../shared/activity";
-import type { EpicView, FeatureView, InboxItemView, MergeEvent, SessionView, TicketRepo, TicketView, WatchedPr } from "../../shared/types";
+import type { EpicView, FeatureView, InboxItemView, MergeEvent, NowRow, NowView, SessionView, TicketRepo, TicketView, WatchedPr } from "../../shared/types";
 import { buildNowView, type NowInput } from "./now-view";
 
 function session(id: string, over: Partial<SessionView> = {}): SessionView {
@@ -115,6 +115,11 @@ function decision(sessionId: string, over: Partial<InboxItemView> = {}): InboxIt
 }
 
 const ids = (rows: { sessionId: string | null }[]) => rows.map((r) => r.sessionId);
+/** 所有需要你的行（总控、epic、feature 下的），按 since 从早到晚，since 为 null 的排最后。 */
+const needing = (v: NowView): NowRow[] =>
+  [...(v.butler ? [v.butler] : []), ...v.epics.flatMap((e) => [...e.rows, ...e.features.flatMap((f) => f.rows)])]
+    .filter((r) => r.needsYou !== null)
+    .sort((a, b) => (a.since ?? Infinity) - (b.since ?? Infinity));
 
 describe("buildNowView", () => {
   it("keeps hibernated sessions and ones whose wake failed, without a memory reading (WS-M B)", () => {
@@ -156,7 +161,7 @@ describe("buildNowView", () => {
     const b = session("s-b", { butler: true });
     const v = buildNowView(input({ butler: b, needsYouReason: (id) => (id === "s-b" ? "在问你先合哪个" : null) }));
     expect(v.butler).toMatchObject({ sessionId: "s-b", coordinator: true, needsYou: "在问你先合哪个", target: { page: "butler", sessionId: "s-b" } });
-    expect(ids(v.needsYou)).toEqual(["s-b"]);
+    expect(ids(needing(v))).toEqual(["s-b"]);
     const busy = buildNowView(input({ butler: b, activity: (id) => (id === "s-b" ? act("s-b") : null) }));
     expect(busy.running).toBe(1);
     expect(buildNowView(input({ butler: { ...b, termId: null } })).butler).toBeNull();
@@ -254,7 +259,7 @@ describe("buildNowView", () => {
       needsYouReason: (id) => (asked.push(id), id === "s-asks" || id === "s-approve" ? "问你：要不要拆 PR" : null),
     }));
 
-    expect(v.needsYou.map((r) => [r.sessionId, r.needsYou, r.since])).toEqual([
+    expect(needing(v).map((r) => [r.sessionId, r.needsYou, r.since])).toEqual([
       ["s-asks", "问你：要不要拆 PR", 100],
       ["s-stuck", "测试没有输出", 200],
       ["s-approve", "等你确认", 300],
@@ -291,7 +296,7 @@ describe("buildNowView", () => {
       ["s-quiet", "clear", null, false],
     ]);
     expect(asked).toEqual([]);
-    expect(v.needsYou.map((r) => r.sessionId)).toEqual(["s-approve"]);
+    expect(needing(v).map((r) => r.sessionId)).toEqual(["s-approve"]);
   });
 
   it("marks quiet rows idle and counts per group", () => {
@@ -364,8 +369,7 @@ describe("buildNowView with ask_user decisions (BTL-190 2+3)", () => {
     expect(rows.find((r) => r.sessionId === "s1")).toMatchObject({ needsYou: null, decisions: 1, idle: false });
     expect(rows.find((r) => r.sessionId === "s2")).toMatchObject({ needsYou: "haiku", decisions: 0 });
     expect(asked).toEqual(["s2"]);
-    expect(ids(v.needsYou)).toEqual(["s2"]);
-    expect(v.decisions).toEqual([d]);
+    expect(ids(needing(v))).toEqual(["s2"]);
     // 每条未决的条目算一件需要你。
     expect(v.epics[0].counts.needsYou).toBe(2);
   });
@@ -376,14 +380,12 @@ describe("buildNowView with ask_user decisions (BTL-190 2+3)", () => {
     const v = buildNowView(input({ tickets: [t], decisions: [answered], activity: (id) => act(id, { kind: "waiting" }), needsYouReason: () => "haiku" }));
     expect(v.epics[0].features[0].rows[0]).toMatchObject({ sessionId: "s1", needsYou: null, decisions: 0, idle: false });
     expect(v.epics[0].counts.needsYou).toBe(0);
-    // 卡片照样在（显示「已回答，等它停下来再送」）。
-    expect(v.decisions).toEqual([answered]);
   });
 
   it("approval still wins over a pending decision", () => {
     const t = ticket("A-1", null, [session("s1", { ticketKey: "A-1" })]);
     const v = buildNowView(input({ tickets: [t], decisions: [decision("s1")], activity: (id) => act(id, { kind: "approval" }) }));
-    expect(v.needsYou[0]).toMatchObject({ sessionId: "s1", needsYou: "等你确认", decisions: 1 });
+    expect(needing(v)[0]).toMatchObject({ sessionId: "s1", needsYou: "等你确认", decisions: 1 });
   });
 
   it("drops a coordinator's Haiku row when a session in its scope has a pending decision, but keeps it when stuck", () => {
@@ -399,23 +401,15 @@ describe("buildNowView with ask_user decisions (BTL-190 2+3)", () => {
       activity: (id: string) => act(id, { kind: "waiting" }), needsYouReason: () => "haiku",
     };
     const v = buildNowView(input({ ...base, decisions: [decision("c", { ticketKey: "A-1", featureId: 10, epicId: 1 })] }));
-    expect(ids(v.needsYou).sort()).toEqual(["o"]);
+    expect(ids(needing(v)).sort()).toEqual(["o"]);
     // 子 session 没有未决条目时总控照常。
-    expect(ids(buildNowView(input(base)).needsYou).sort()).toEqual(["boss", "c", "ep", "fc", "o"]);
+    expect(ids(needing(buildNowView(input(base)))).sort()).toEqual(["boss", "c", "ep", "fc", "o"]);
     // 总控自己提的不算子 session 的：它的卡片在，Haiku 行不在（因为它自己有未决条目）。
     const own = buildNowView(input({ ...base, decisions: [decision("fc", { featureId: 10, epicId: 1, role: "feature_coordinator" })] }));
-    expect(ids(own.needsYou).sort()).toEqual(["boss", "c", "o"]);
+    expect(ids(needing(own)).sort()).toEqual(["boss", "c", "o"]);
     // 卡住照样显示。
     const stuck = buildNowView(input({ ...base, activity: (id) => act(id, { kind: "waiting", stuck: id === "fc", reason: "卡住" }), decisions: [decision("c", { ticketKey: "A-1", featureId: 10, epicId: 1 })] }));
-    expect(ids(stuck.needsYou).sort()).toEqual(["fc", "o"]);
-  });
-
-  it("lists decisions of sessions whose terminal is closed, oldest first", () => {
-    const late = decision("gone", { createdAt: 50 });
-    const early = decision("gone2", { createdAt: 10, open: false });
-    const v = buildNowView(input({ decisions: [late, early] }));
-    expect(v.decisions.map((d) => d.sessionId)).toEqual(["gone2", "gone"]);
-    expect(v.epics).toEqual([]);
+    expect(ids(needing(stuck)).sort()).toEqual(["fc", "o"]);
   });
 
   it("counts only sessions that are working (thinking, running a tool, a background command) as running (BTL-190 7)", () => {

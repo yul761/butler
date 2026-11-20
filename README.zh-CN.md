@@ -17,7 +17,7 @@
 
 - **管的是工作，不只是 session。** session 属于 ticket，ticket 属于 feature，feature 属于 epic。在 epic session 里定下的计划，会连同前面几个 feature 的进展、决定和待解决的问题，一起交给下一个 feature 的总控。
 - **记忆比 session 活得久。** 每个 session 都能 `recall` 同一个 ticket、feature 或 epic 里之前的 session 记下的东西，所以不用写文档留给下一个 session 读。上下文太长的 session 会先写交接、清空，再从记忆里接着干。
-- **你始终在回路里。** **轮到你** 页给每件等你的事一张卡片，而且只有真要你拍板的事才算"需要你"。session 把这些问题放进 **待你决定** 列表，而不是埋在终端里。停住不动的 session 会被标出来，附上可能的原因，你不点就不会去修。
+- **你始终在回路里。** **轮到你** 页给每件等你的事一张卡片，只有真要你拍板的事才有卡片。session 问你的问题会变成这里的一张卡片，也出现在它所在 epic 或 feature 的 **概况** tab 的 **这个范围里轮到你的** 下面，而不是埋在终端里。停住不动的 session 也会有一张卡片，附上可能的原因，你不点就不会去修。
 - **少撞车。** 同一个仓库里，一个合并会和另一个 ticket 的分支冲突时，合并总控会先拦下它。
 - **交接自动写好。** 每天晚上，以及你输入 `/handoff` 时，Butler 会让你自己的 `claude` 为每个 ticket 写一份结构化的交接，为每个 feature 写一份进度汇总。
 
@@ -57,7 +57,7 @@ Butler 只支持 Claude Code。
 - `session_activity` 显示某个 session 的动态和它最后一条命令的输出（最多 4 KB）。
 - `end_session` 关掉这个 ticket 里一个已经完成的 session，效果和点它的 × 一样。正在工作的、正显示等你回应的提示的、没在运行的 session，以及调用者自己，它都会拒绝。休眠的 session（Butler 为了省内存结束了它的进程，`list_sessions` 里标着 `hibernated`）仍然算在 session 上限里；对它调用 `end_session`，Butler 就不再唤醒它，名额也空出来。
 
-Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕，所以不会在信任对话框或权限确认上按回车；交完之后还会确认任务真的提交了。Butler 开的其他 session（包括 ticket 的 session）也有同一个 `butler-sessions` server，但只有 `ask_user` 和 `report` 两个工具（见下面的 **待你决定和汇报**）。
+Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕，所以不会在信任对话框或权限确认上按回车；交完之后还会确认任务真的提交了。Butler 开的其他 session（包括 ticket 的 session）也有同一个 `butler-sessions` server，但只有 `ask_user` 和 `report` 两个工具（见下面的 **提问和汇报**）。
 
 有几条刻意设下的限制：
 - **通信：** 总控不能往别的 session 里打字。session 之间靠共享的 ticket 记忆协作。
@@ -73,17 +73,16 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
 
   它的所有 session 还共享一份 feature 记忆 `butler-feature`，用来记前后端之间的 API 约定这类东西。你自己在工作区文件夹里开的 `claude` 也算这个 feature 的总控。归档 feature 时它的 ticket 一起归档；恢复时一起归档的 ticket 也会恢复。
 
-  feature 页最上面是 **整体进度**：跨 feature 里所有 ticket 的汇总，写着卡在哪里、下一步做什么。ticket 和它们 PR 的表格在旁边的 **Ticket** tab 里。汇总由晚间任务为有新动静的 feature 生成，或者在总控里输入 `/handoff`，或者点 **立即更新**。它从不显示完成百分比。终端上面的部分是一排 tab（**整体进度**、**Ticket**、**汇报**、**待你决定**），同一时间只显示一个。内容多的 tab 在自己的框里滚动。tab 默认是收起的，把空间留给 session：点一个 tab 或右边的 **展开** 按钮就打开，再点一下当前的 tab 或 **收起** 按钮就关上。每个页面记着是展开还是收起、上次停在哪个 tab；收起时 tab 上的数量和红标记照样显示。tab 上会显示有几件事卡着、等你回话和卡住的圆点以及数量，**待你决定** 有内容时会标红。不管上面内容有多少，终端至少占窗口一半的高度。
+  feature 页有五个 tab：**概况**、**进行中**、**全部 ticket**、**总控** 和 **AI 总结**。同一时间只显示一个，都不会收起，页面记着上次停在哪个 tab。**概况** 先是一行进度（合了几个 ticket、几件事轮到你）和最慢的 ticket，然后是 **这个范围里轮到你的** 下的卡片，再往下每个 ticket 一行，写着它的 PR 合了几个（或者 **还没开 PR**），还有一条按每个 PR 轮到谁上色的进度条。有卡片在等你时，**概况** 这个 tab 名会标红。**进行中** 列出此刻不用你动手、正在往前走的事：agent 在干活，或者在等 CI、某位 reviewer、合并队列、栈里下面那层 PR，写明是谁、这样多久了。**全部 ticket** 是下面说的表格。**总控** 左边是仓库、总控 session 和终端，右边是这个 feature 里 session 的汇报。**AI 总结** 里是跨 feature 里所有 ticket 的汇总，写着卡在哪里、下一步做什么，还有 epic session 建这个 feature 时写的 **规划**。汇总由晚间任务为有新动静的 feature 生成，或者在总控里输入 `/handoff`，或者点 **立即更新**。它从不显示完成百分比。
 
-  ticket 表格的状态列显示每个 ticket 正在运行的 session 此刻在做什么，每 10 秒刷新一次：写代码（以及哪个文件）、读代码、运行带 pre-push hook 的 `git push`、盯 CI、跑测试或其他命令（以及跑了多久）、思考、等你批准，或者等你回话。一轮对话结束后还在跑的命令标为 **后台**；已经被停掉的、或终端重新打开之前就开始的后台命令，不会再显示成在跑。没有运行中 session 的 ticket 显示它平常的状态；有好几个的，显示最需要你的那个。不在 feature 里的 ticket 暂时还没有这一列。
+  **全部 ticket** 每个 ticket 一行：谁该动（你、agent，或者外面的人和事，比如 CI 或点了名的 reviewer），**现在怎么样**（这一轮的那句话，比如"agent 在修 CI"或"在等某某 review"），以及它的 PR。每行显示这个 ticket 的轮次（见下面的 **PR 进度**），ticket 还有别的开着的 PR 时后面跟着"· 另有 N 个 PR"。点一行打开这个 ticket。
 
-  **卡住的 session。** 没有固定的超时，所以一个还在干活的慢 pre-push hook 不会被打扰。Butler 每 3 分钟看一次 feature 里每个 ticket 的运行中 session。如果 transcript、命令输出和 session 子进程的 CPU 占用连续两次都没变化，Butler 会用你自己的 `claude`（不带任何工具）问一次：这个 session 是不是真卡住了。它会发送当前动态、最后一条命令的输出和终端末尾的内容。如果答案是"是"，ticket 那一行和侧栏里的 feature 上会出现一个红点。不会弹系统通知。点红点会在这一行下面展开一个面板，写着可能的原因、最后的输出和该怎么办：
-  - **开新 session 解决** 在 feature 的工作区里开一个新 session，把详情交给它。卡住的 session 保持运行，两者共用它的 worktree，所以新 session 的任务里写明：切分支或停进程前先告诉卡住的 session，杀任何东西前先问你，问题解决后告诉总控。
-  - **看终端** 跳到 ticket 页。
-  - **没事，忽略** 清掉红点。只有当这个 session 再动起来、然后又卡住时，红点才会回来。
-  - **收起** 关掉面板。红点还在，再点一下就重新打开面板。
+  **卡住的 session。** 没有固定的超时，所以一个还在干活的慢 pre-push hook 不会被打扰。Butler 每 3 分钟看一次 feature 里每个 ticket 的运行中 session。如果 transcript、命令输出和 session 子进程的 CPU 占用连续两次都没变化，Butler 会用你自己的 `claude`（不带任何工具）问一次：这个 session 是不是真卡住了。它会发送当前动态、最后一条命令的输出和终端末尾的内容。如果答案是"是"，**轮到你** 页和它所在 feature、epic 的 **这个范围里轮到你的** 里会出现一张 **卡住了** 卡片，侧栏里这个 ticket、它的 feature 和 epic 也会显示卡住的圆点。不会弹系统通知。卡片写着哪里不对，有建议时也写上建议怎么做，按钮有：
+  - **去看看** 打开 ticket 页，落在卡住的 session 的终端上。
+  - **开修复 session** 在 feature 的工作区里开一个新 session，把详情交给它。卡住的 session 保持运行，两者共用它的 worktree，所以新 session 的任务里写明：切分支或停进程前先告诉卡住的 session，杀任何东西前先问你，问题解决后告诉总控。
+  - **没事，忽略** 拿掉这张卡片。只有当这个 session 再动起来、然后又卡住时，卡片才会回来。只有因为"很久没输出"判成卡住时才有这个按钮，因为只有这种可能是误判（比如在跑很长的测试）。
 
-  session 有新动态时红点也会自己消失。不经你点击，什么都不会去修；卡住标记只存在内存里，所以 Butler 重启后会重新检查。
+  session 有新动态时卡片也会自己消失。不经你点击，什么都不会去修；卡住标记只存在内存里，所以 Butler 重启后会重新检查。
 - **Epic：几个 feature，一份规划。** 一个 epic 把相关的 feature 归在一起，把进展、决定和待解决的问题从一个 feature 传到下一个，不需要哪个 session 专门写文档给下一个读。feature 不一定要属于某个 epic。用 **+ 新建 epic** 创建，填上名字和它的仓库。它的工作区默认是仓库旁边的 `<上层>-epics/<epic 名>`。feature 保留各自的工作区。
 
   从规划到开工：
@@ -97,7 +96,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
 
   **从 epic 一路开工。** 你同意开工之后，epic session 可以直接打开某个 feature 的总控并让它开工，不用你点进 feature。它调用 `start_feature`，或者调用带 `start` 的 `create_feature`。总控的第一条消息带着规划和 epic 里其他 feature 的数据，并告诉它不用等你确认，按规划建 ticket、在每个 ticket 里开 session；需要你决定的事用 `ask_user`，做完或卡住了用 `report` 汇报。如果这个 feature 的总控已经开着，`start_feature` 不会再开第二个：给了额外的 `instructions` 就在总控空下来时转给它，没给就只说明总控正在运行。feature 没有规划时，epic session 必须给 `instructions`。能同时跑几个总控只看内存。`create_feature` 建好了 feature 但总控开不了（比如内存不够）时，feature 照样建好，epic session 会被告知原因。
 
-  epic 页终端上面有 **Feature**、**汇报**、**待你决定** 三个 tab，默认收起，点开才展开。**Feature** 里每个 feature 一行：汇总的第一句话和一个状态（有 ticket 卡住、等你回话、未开始或进行中）。点一行看详情；ticket 只在 feature 页上列出。归档的 feature 折叠在 **已归档** 下。tab 下面是仓库、epic session，以及一个至少占窗口一半高度的终端。侧栏里 Epic 分组在 Feature 上面，每个 epic 都能折叠。等待标记和红点会从 ticket 传到 feature 再传到 epic，epic 折叠时也看得见。
+  epic 页也是这五个 tab。**概况** 里是进度那一行和最慢的 feature、**这个范围里轮到你的** 下的卡片，以及 **各个 feature** 列表：每个 feature 一行，写着合了几个 ticket，还有一条按每个 ticket 轮到谁上色的进度条。点 feature 的名字打开它。归档的 feature 不列出。**进行中** 和 **全部 ticket** 覆盖这个 epic 下所有 feature 的 ticket，**全部 ticket** 按 feature 分组，组头写着 feature 名和合了几个 ticket。**总控** 左边是 epic 的仓库、epic session 和终端，右边是汇报。**AI 总结** 每个 feature 一节，有最新的汇总、生成时间、卡在哪里和它自己的 **立即更新**；没有整个 epic 的总结。侧栏里 Epic 分组在 Feature 上面，每个 epic 都能折叠。侧栏里每个 ticket、feature 和 epic 都有一个按轮到谁上色的圆点和轮到你的件数，从 ticket 加到 feature 再加到 epic，epic 折叠时也看得见。
 
   feature 页头部的 **移到 epic** 可以把已有的 feature 移进某个 epic、移出来，或移到另一个 epic。只改归属：工作区和 worktree 都不动。epic 还没有的仓库会加到 epic 上，移出 feature 时不会删 epic 的仓库。已经在运行的 session 要重新打开后才能看到 epic 的记忆。
 
@@ -110,27 +109,27 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
   - **epic session 调用 `create_feature` 时。** epic 里其他未归档的 feature 会在后台做同样的刷新。`create_feature` 不等它完成。
 
   发给总控的第一条消息也会在总控一打开时就开始一轮对话。
-- **待你决定和汇报。** Butler 开的每个 session 都有两个工具，`ask_user` 和 `report`，所以你不用再在终端里翻找正在等你的那个问题。
+- **提问和汇报。** Butler 开的每个 session 都有两个工具，`ask_user` 和 `report`，所以你不用再在终端里翻找正在等你的那个问题。
   - `ask_user` 记下一件要你拍板的事，可以带选项和背景，然后这一轮结束。
   - `report` 把进展交给 session 上面的总控和你。类型是 `progress`（进展）、`done`（完成）或 `blocked`（卡住）。`done` 和 `blocked` 的汇报会在最近一个开着的总控停下来、你也没在打字时，输入到它的终端里：ticket 的 session 先找它的 ticket 总控，再找 feature 总控，再找 epic session；epic 里 feature 的总控找 epic session；epic 的 `done`、`blocked` 汇报在 Butler 总控开着时送给它。`progress` 只存不送。上面没有谁能收到时，汇报只存下来，并告诉 session。
-  - epic 页和 feature 页在终端上面有对应的两个 tab。**汇报** 按时间倒序列出 session 的汇报，标明是谁、什么时候。**待你决定** 每个问题一张卡片，有背景、选项、回答框、**去终端** 和 **不用了**。**轮到你** 页也显示同样的卡片。
-  - 在卡片上选一个选项或打字回答，或者直接在终端里回答都行。卡片上的回答要等 session 停下来才送，送的时候是"你问的『…』，用户的回答：…"，卡片上会写明在等它停下。如果你先在终端里回答了，卡片自己关掉。点 **不用了** 不会送任何东西。
-  - **需要你** 现在只算真要你拍板的事：屏幕上的权限确认、提问或退出计划模式的确认，未决的 `ask_user`，真的卡住的 session，以及确实在请你决定的回复。"要我继续吗？""还有别的吗？"这类回复不算，总控也不会为子 session 已经提过的事再出现一行。侧栏的数字是这些行加上未决的待你决定。
+  - epic 或 feature 的 **总控** tab 右边按时间顺序（旧的在前）列出它的 session 的汇报，标明是谁、什么时候；Butler 总控页显示所有地方最近的 30 条汇报。未决的 `ask_user` 问题在 **轮到你** 页和它所在 epic 或 feature 的 **这个范围里轮到你的** 下是一张卡片，显示问题、最多两个选项按钮和 **去看看**（打开那个 session 的终端）。在 ticket 的 **概况** tab 里，还开着的 session 问的问题就是这个 ticket 的轮次，占最上面一行，只有一个 **去回答** 按钮，点了切到 **终端** tab。别的提问（同一个 session 后来又问的，或者发问的 session 已经结束了的）在下面各占一行，带最多两个选项按钮和 **去看看**；这里的 **去看看** 只切到 **终端** tab，不会换到发问的那个 session。没有回答框：第三个及以后的选项，或者想用自己的话回答，都在终端里答。
+  - 点按钮的回答要等 session 停下来才送，送的时候是"你问的『…』，用户的回答：…"。点完以后，卡片或那一行会写明在等它停下。ticket **概况** 里的提问行切到别的 tab 再回来，这个状态还在；送进去之前离开这个 ticket 再回来，问题会重新出现，再答一次会换掉之前的回答。如果你先在终端里回答了，卡片自己消失。
+  - session 这边，只有真要你拍板的事才有卡片：屏幕上的权限确认、提问或退出计划模式的确认，未决的 `ask_user`，真的卡住的 session，以及确实在请你决定的回复。"要我继续吗？""还有别的吗？"这类回复不算，总控也不会为子 session 已经提过的事再出现一张。PR 也会出卡片（**可以合并**、**要你 review**，以及 **没人推进**，比如 CI 挂了没有 session 在修），需要你的 Butler 提醒也是（**Butler 要你点一下**，见下面的 **首页**）。侧栏 **轮到你** 旁边的数字是所有这些卡片的个数。
   - 这两个工具在 Butler 给 session 写的设置里是放行的，第一次用不会弹权限确认；同一个 server 的其他工具照样要确认。
-- **PR 进度。** epic 或 feature 的 **PR 进度** tab 显示它的每个开着的 PR 在等谁（作者、CI 还是 reviewer）、等了多久，以及每个 PR 的就绪情况和风险；ticket 页对它自己的 PR 显示同样的内容。每个仓库里叠放的 PR 和接活队列在 **全部工作** 页底部的 **栈与自动接活** 折叠里。
-- **Butler 总控。** 一个在所有 epic 之上的全局 session，从侧栏的 **Butler 总控** 打开。它的工作目录是 `~/.butler/workspaces/_butler`，用的是 workspace 记忆。同一时间只有一个：已经开着时，点按钮会切到它，想换另一段对话要先在终端里退出。它的页面在终端上面有同样的两个 tab，显示全部内容，默认收起，展开后先看到 **待你决定**。
-  - **它能看**所有 epic、feature 和 ticket，每个 PR 的 review 和 CI 状态，每个开着的 session 在做什么、是不是需要你，以及未决的待你决定和最近的汇报（`list_epics`、`list_features`、`list_tickets`、`list_prs`、`list_sessions`、`session_activity`、`list_inbox`）。`list_prs` 还带着每个 PR 的 base 和 head 分支、是不是草稿、请了谁 review、谁 review 过、能不能合并和 label。`progress_overview` 一次返回整个进度总览：各格数字、每个开着的 PR 在等谁、等了多久、PR 叠放、PR 表和每个 feature 的一句进度。`metrics_overview` 返回 **效果** 页：每个 Butler PR 的周期、评论、人介入和花费，和你在 Butler 之前自己合并的 PR 比；session 停下来等你的原因；钱花在哪。
-  - **它能做的**只有说话：`send_message` 给 feature 总控或 epic session 带一句话，用 feature、epic 或 session id 指定。它的终端关着（闲置时被自动关掉了，或者 Butler 重启过）时，Butler 接着它最近的对话打开（feature 从没开过总控就新开一个），再把话交进去。开着的只在它停下来、你也没在打字时送进去，否则让 Butler 总控稍后再试。属于 epic、还没开工的 feature 留给 epic session 用 `start_feature` 开工。每条消息有一个 `requestId`；对方这一轮做完时，它最后一段回复会以 **【回复】** 开头、写明 `requestId`，输入回 Butler 总控，总控页面的 **回复** tab 列出所有消息和回复。`refresh_feature_summary` 在后台重写一份 feature 汇总，和 **立即更新** 一样。`refresh_session` 给某个 session 换新。`ask_user` 和 `report` 和别的 session 一样；它自己的汇报只存着。
+- **PR 进度。** 每个 ticket 有一个轮次：在它开着的 PR 的轮次和它的 session 的轮次里取最急的那个，轮到你、agent 还是别人（点名）。有 PR 开着时，停下来或空闲的 session 不算，ticket 跟着 PR 走；但 session 提的问题还是排最前。这个轮次显示在 **轮到你** 页，以及 epic 或 feature 的 **概况**、**进行中** 和 **全部 ticket** tab 里。ticket 以一行出现的地方（**进行中**、**全部 ticket**、**全部工作** 的表格，以及 ticket 自己 **概况** 的最上面一行），它还有别的开着的 PR 时后面跟着"· 另有 N 个 PR"；卡片上不带。其余的都在 ticket 的 **PR 详情** tab 里，按 PR 一个个列：阶段（见下面的 **PR 阶段**）、CI、review、风险和就绪，以及未处理的评论。每个仓库里叠放的 PR、接活队列和等你 review 的 PR 在 **全部工作** 页底部的 **栈、自动接活和待 review** 折叠里。
+- **Butler 总控。** 一个在所有 epic 之上的全局 session，从侧栏的 **总控** 打开。它的工作目录是 `~/.butler/workspaces/_butler`，用的是 workspace 记忆。同一时间只有一个：已经开着时，点按钮会切到它，想换另一段对话要先在终端里退出。它的页面 **Butler 总控** 没有 tab：左边是这个 session 和它的终端，右边按时间顺序（旧的在前）列出所有 epic、feature 和 ticket 的汇报，下面是折叠的 **总控发出的消息（N）**。
+  - **它能看**所有 epic、feature 和 ticket，每个 PR 的 review 和 CI 状态，每个开着的 session 在做什么、是不是需要你，以及未决的提问和最近的汇报（`list_epics`、`list_features`、`list_tickets`、`list_prs`、`list_sessions`、`session_activity`、`list_inbox`）。`list_prs` 还带着每个 PR 的 base 和 head 分支、是不是草稿、请了谁 review、谁 review 过、能不能合并和 label。`progress_overview` 一次返回整个进度总览：各格数字、每个开着的 PR 轮到谁、等了多久、PR 叠放、PR 表和每个 feature 的一句进度。`metrics_overview` 返回 **效果与花费** 页：每个 Butler PR 的周期、评论、人介入和花费，和你在 Butler 之前自己合并的 PR 比；session 停下来等你的原因；钱花在哪。
+  - **它能做的**只有说话：`send_message` 给 feature 总控或 epic session 带一句话，用 feature、epic 或 session id 指定。它的终端关着（闲置时被自动关掉了，或者 Butler 重启过）时，Butler 接着它最近的对话打开（feature 从没开过总控就新开一个），再把话交进去。开着的只在它停下来、你也没在打字时送进去，否则让 Butler 总控稍后再试。属于 epic、还没开工的 feature 留给 epic session 用 `start_feature` 开工。每条消息有一个 `requestId`；对方这一轮做完时，它最后一段回复会以 **【回复】** 开头、写明 `requestId`，输入回 Butler 总控，总控页面上的 **总控发出的消息（N）** 列出最近 30 条消息（新的在前），写明送到没有、回复送回来没有。`refresh_feature_summary` 在后台重写一份 feature 汇总，和 **立即更新** 一样。`refresh_session` 给某个 session 换新。`ask_user` 和 `report` 和别的 session 一样；它自己的汇报只存着。
   - **它不能**建、删或结束任何东西，也不能为别的事开 session。这些留给 epic 和 feature 总控。
   - 只读的工具在 Butler 给它写的设置里是放行的，巡检时不会每个工具都停下来等确认；`send_message` 和 `refresh_session` 照样要确认。
-  - **每天巡检。** 设置 **每天几点让 Butler 总控巡检一次**（`butlerPatrolTime`，默认关），到点时 Butler 打开（或接着用）Butler 总控，让它看一遍 PR、CI 和待你决定的事，需要的话提醒 epic 和 feature 总控，并用 `ask_user` 列出要你亲自做的事。Butler 总控正忙就等它停下来。因为电脑睡眠或 Butler 没开而错过的巡检，当天下一次醒来、解锁或启动时补一次。它每天最多开一次 session。详见[配置 Butler](docs/configuration.zh-CN.md#调度与-handoff)。
+  - **每天巡检。** 设置 **每天几点让 Butler 总控巡检一次**（`butlerPatrolTime`，默认关），到点时 Butler 打开（或接着用）Butler 总控，让它看一遍 PR、CI 和未决的提问，需要的话提醒 epic 和 feature 总控，并用 `ask_user` 列出要你亲自做的事。Butler 总控正忙就等它停下来。因为电脑睡眠或 Butler 没开而错过的巡检，当天下一次醒来、解锁或启动时补一次。它每天最多开一次 session。详见[配置 Butler](docs/configuration.zh-CN.md#调度与-handoff)。
   - Butler 总控开着时只在 **轮到你** 页的 **运行情况** 里有自己的实况卡片，不在 **进行中** 里占一行。它停下来等你回话时在该页有一张卡片：这时 epic 的汇报和巡检都等着送给它。
   - Butler 总控不会被自动换新，也不会因为闲置被自动关闭。
 - **合并总控。** 同一个仓库里的两个 ticket 快要撞车时，Butler 会在合并前介入。它盯着自己开的 session，不管属于哪个 epic、feature 或 ticket，只检查合并进目标分支，以及在共用文件夹里切分支这两类操作。它用 git 判断分支是否冲突，冲突的那个先合进去之前，会先拦下这次合并。详见[配置 Butler](docs/configuration.zh-CN.md#合并总控)。
 - **关掉已完成的 session。** 总控或 epic session 可以用 `end_session` 关掉一个已经停下、在等输入的 session。正在工作的、在等你回答的，以及它自己，它都会拒绝。
 - **清理 session。** 开着不用的终端每个要占几百 MB。session 闲置超过 `idleCloseMinutes`（默认 180 分钟，`0` 关掉，最短 10）后，Butler 会让它先写 handoff，再结束终端。session 仍留在列表里，可以恢复。有要你决定的事、有后台任务、在等合并或 CI 结果，或者（总控）它管的子 session 还在干活时都不会关。电脑睡着的时间不算闲置。隐藏超过 14 天的 session 会从 Butler 里删掉，对话记录文件留着。session 栏的 **清理闲置** 会立刻关掉闲置 5 分钟以上的 session，**已隐藏** 列表里有 **全部删除**。详见[配置 Butler](docs/configuration.zh-CN.md#记忆statecore)。
 - **换新不丢对话。** session 换新时（↻ 按钮、总控的 `refresh_session`，或者上下文太长时自动换新），Butler 先让它写 handoff，等记忆真的存好，同时把最近几轮对话存到 `~/.butler/refresh/<session>.md`，不调用模型。`/clear` 之后 session 会 recall 那份 handoff、读这个文件，然后接着做换新前在做的事；如果当时在等什么，就说一句在等什么并继续等。不会再停住等你的下一条指令。
-- **PR 进度。** ticket 页、feature 页和 epic 页都有一个 **PR 进度** tab。ticket 的每个仓库一条，分六步：设计、开发、自我 review、CI、peer review、合并。做完的是绿色，当前这一步是蓝色，失败或被打回的是红色，还没到的是灰色。每一步都由 Butler 自己判断：这个 ticket 的 session 调用了设计类 skill（比如 brainstorming、writing-plans）时设计开始，分支上出现第一个 commit 时结束，没调用过就显示 **跳过**（设计在 feature 或 epic 层完成的算已完成）；开发从第一个 commit 开始；session 调用了 review 类 skill（比如 code-review、simplify）时自我 review 开始，下一次 push 或开了 PR 时结束，没调用过就显示 **跳过**；开了 PR 以后开始 CI，CI 失败会回到开发；CI 通过后开始 peer review，有一个人（不是 PR 作者、不是 bot、也不是 Copilot）批准时结束，有人要求修改就回到开发，下一轮记作第 2 轮，没有人批准就合并了显示 **跳过**；PR 合并时合并这一步结束，关闭但没合并会标成 **已关闭**。Butler 看的是 PR 拉回来的 review 列表，不是 `reviewDecision`，所以没开“必须 review”的仓库也能判断。hook 程序不是当前版本时，设计和自我 review 显示 **未知**，不显示 **跳过**。升级前就开始的 session 和更早的 ticket，即使做过设计或 review，也可能显示 **跳过**，因为那些 session 没有被记录：skill 记录只对升级后启动的 session 生效（Skill hook 在 session 启动时才加进它的设置）。人的批准后来被撤销（dismiss）的，不再算 peer review。步骤下面是时间线：skill 调用、第一个 commit、CI 结果、Copilot 和 peer review 的评论，以及这个 ticket 的 session 发的 `report`，比如自我 review 之后的那一句说明。**收起时间线** 能把它收起来，tab（默认收起，带 展开/收起 按钮）能显示或收起整个面板，两者都记在这台电脑上。feature 页是一张表，每个 ticket 的每个仓库一行；epic 页每个 feature 一条进度条，写着已合并多少个 PR。
+- **PR 阶段。** 阶段在 ticket 的 **PR 详情** tab 最上面的 **阶段** 一节里；ticket 的 **概况** tab 只写最新那个 PR 走完了几个阶段。ticket 的每个仓库一条，分六步：设计、开发、自我 review、CI、peer review、合并。做完的是绿色，当前这一步是蓝色，失败或被打回的是红色，还没到的是灰色。每一步都由 Butler 自己判断：这个 ticket 的 session 调用了设计类 skill（比如 brainstorming、writing-plans）时设计开始，分支上出现第一个 commit 时结束，没调用过就显示 **跳过**（设计在 feature 或 epic 层完成的算已完成）；开发从第一个 commit 开始；session 调用了 review 类 skill（比如 code-review、simplify）时自我 review 开始，下一次 push 或开了 PR 时结束，没调用过就显示 **跳过**；开了 PR 以后开始 CI，CI 失败会回到开发；CI 通过后开始 peer review，有一个人（不是 PR 作者、不是 bot、也不是 Copilot）批准时结束，有人要求修改就回到开发，下一轮记作第 2 轮，没有人批准就合并了显示 **跳过**；PR 合并时合并这一步结束，关闭但没合并会标成 **已关闭**。Butler 看的是 PR 拉回来的 review 列表，不是 `reviewDecision`，所以没开“必须 review”的仓库也能判断。hook 程序不是当前版本时，设计和自我 review 显示 **未知**，不显示 **跳过**。升级前就开始的 session 和更早的 ticket，即使做过设计或 review，也可能显示 **跳过**，因为那些 session 没有被记录：skill 记录只对升级后启动的 session 生效（Skill hook 在 session 启动时才加进它的设置）。人的批准后来被撤销（dismiss）的，不再算 peer review。步骤下面是时间线：skill 调用、第一个 commit、CI 结果、Copilot 和 peer review 的评论，以及这个 ticket 的 session 发的 `report`，比如自我 review 之后的那一句说明。**收起时间线** 能把它收起来，每一条各自记在这台电脑上。
 - **合并后清理 worktree。** 一旦 handoff 报告某个 ticket 的 PR 已合并，Butler 就用 `git worktree remove` 删掉这个 ticket 的 worktree。分支保留，在那里再开 session 时会重建 worktree。有未提交改动或未跟踪文件的 worktree，或者自己的 session 还在终端里运行的，Butler 不会删。这时 ticket 页会说明原因，并给一个 **重新检查** 按钮，那个终端退出时 Butler 也会再试一次。被 `.gitignore` 忽略的文件（`node_modules`、本地的 `.env`）会随 worktree 一起删掉。
 - **review 经验。** Butler 会读你已合并 PR 上的 review 评论（经 `gh` 和你自己的 `claude`），为每个仓库提炼出规矩，比如“改 schema 要加迁移”。在侧栏打开 **review 经验** 查看：新规矩先放在 **待确认** 里，等你确认、编辑后确认或驳回，侧栏上的数字是待确认的条数。在某个仓库上点 **分析历史**，会回头分析它过去的 PR，之后新合并的 PR 会自动接着分析。相关的仓库可以归成一个产品，产品的规矩对它的所有仓库都生效。只有你确认过的规矩才会送出去，而且只送给 Butler 开的 ticket session 和修复 session，放在 session 说明里（每个 session 最多 30 条，出现次数多的优先）。规矩改了以后，下一次打开或恢复 session 时才生效，已经开着的 session 不受影响。规矩只存在 Butler 里，不会写进你的仓库（不写 `CLAUDE.md`，也不写 `.github/copilot-instructions.md`）。
 - **晚间 handoff。** 在你选定的时间，Butler 让你自己登录好的 `claude` 为每个有动静的 ticket 写一份结构化的 handoff。
@@ -140,9 +139,9 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
   - 这些运行并不是严格只读的。如果你的设置允许了比如 `Bash(npm:*)` 或一个能写的 MCP 工具，它们也能用。
 
   在 session 里你也可以输入 `/handoff`。在 feature 的总控里，`/handoff` 写的是 feature 的汇总而不是 ticket handoff，之后 Butler 会在后台为自上次 handoff 以来有动静的 ticket 补写 handoff。
-- **首页。** **轮到你** 页是侧栏的第一项，入口会显示有几件事等你。每件要你处理的事在最上面有一张卡片：等一个确认、一件待你决定的事、一条请你决定的回复或真的卡住了的 session，以及需要你的 Butler 提醒（暂停的花费上限，带 **继续并提高上限**；Claude 限额；30 分钟没送出去的 CI 结果；等你分类的评审评论；栈冲突；要你决定的自动接活）。下面是折叠的 **进行中** 列表，列出每个在跑的 session 在做什么、它的 PR 和 CI，以及已经做了多久；点一行打开它的终端。最下面折叠的 **运行情况** 里有 **Butler 的其他提醒**（只告诉你一声的提醒）、内存卡片、最近合并、最近 24 小时的自动接活记录、用量一行和 **实况**。**实况** 把正在干活的 session 画成 Butler 卡片四周的小终端卡片：每张卡片有 ticket 号、仓库、状态药丸和最近 3 次工具调用，session 写记忆时一个蓝色光点沿虚线流向 Butler，读记忆时一个绿色光点从 Butler 流回 session。在等你的卡片边框变黄并写着 **需要你**。最多画 8 张卡片，没人在干活时会这样写。页面和分组里的"在干活"数字只算真在干活的 session（思考中、跑工具、后台命令）；停下来但开着 PR 的 session 算空闲。动画遵循系统的"减少动态效果"设置。同一个折叠里有一行显示最近 7 天的 token 用量：总量、缓存读取的占比，以及上下文达到 20 万 token 以上的轮次占比。它统计 Butler 开的 session、它们的子 agent，以及 Butler 在后台启动的 `claude` 运行（handoff、feature 汇总、卡住检测），数据读自你本机上 Claude Code 的 transcript。点这一行能看到按类别（**ticket session**、**总控**、**子 agent**、**后台任务**）和按模型的拆分。占比按相对价格加权，只用于比较；Butler 不会换算成钱。
+- **首页。** **轮到你** 页是侧栏的第一项，入口会显示有几件事等你。每件要你处理的事在最上面有一张卡片：等一个确认、一个未决的提问、一条请你决定的回复或真的卡住了的 session，可以合并的 PR、请你 review 的 PR、没人推进的 PR，以及需要你的 Butler 提醒（暂停的花费上限，带 **继续并提高上限**；Claude 限额；30 分钟没送出去的 CI 结果；等你分类的评审评论；栈冲突；要你决定的自动接活）。下面是折叠的 **进行中** 列表，列出每个在跑的 session 在做什么、它的 PR 和 CI，以及已经做了多久；点一行打开它的终端。最下面折叠的 **运行情况** 里有 **Butler 的其他提醒**（只告诉你一声的提醒）、内存卡片、最近合并、最近 24 小时的自动接活记录、用量一行和 **实况**。**实况** 把正在干活的 session 画成 Butler 卡片四周的小终端卡片：每张卡片有 ticket 号、仓库、状态药丸和最近 3 次工具调用，session 写记忆时一个蓝色光点沿虚线流向 Butler，读记忆时一个绿色光点从 Butler 流回 session。在等你的卡片边框变黄并写着 **需要你**。最多画 8 张卡片，没人在干活时会这样写。页面和分组里的"在干活"数字只算真在干活的 session（思考中、跑工具、后台命令）；停下来但开着 PR 的 session 算空闲。动画遵循系统的"减少动态效果"设置。同一个折叠里有一行显示最近 7 天的 token 用量：总量、缓存读取的占比，以及上下文达到 20 万 token 以上的轮次占比。它统计 Butler 开的 session、它们的子 agent，以及 Butler 在后台启动的 `claude` 运行（handoff、feature 汇总、卡住检测），数据读自你本机上 Claude Code 的 transcript。点这一行能看到按类别（**ticket session**、**总控**、**子 agent**、**后台任务**）和按模型的拆分。占比按相对价格加权，只用于比较；Butler 不会换算成钱。
 - **防止休眠。** 想在你离开、盖子开着的时候让 session 继续跑，就勾上侧栏底部或托盘菜单里的 **防止休眠**。开着时电脑空闲也不会睡眠，屏幕保持亮着。取消勾选、电脑睡眠（合上盖子）或 Butler 退出时它会关掉，Butler 每次启动时它都是关的。合上盖子照样会让 Mac 睡眠；Windows 上取决于你的合盖设置。
-- **记忆。** 进展、决定、未完成的跟进和跨 ticket 的经验都存进本地的 [StateCore](https://github.com/yul761/StateCore)。Butler 开的每个 session 都能 `recall` 它们。ticket 页有个 **记忆** 标签页，能看到每条记录的历史。
+- **记忆。** 进展、决定、未完成的跟进和跨 ticket 的经验都存进本地的 [StateCore](https://github.com/yul761/StateCore)。Butler 开的每个 session 都能 `recall` 它们。ticket 页的 **记录** tab 里有一节 **记忆**，能看到每条记录的历史。
 - **可选的个人 LLM API。** 在"完整"隐私档位下，Butler 会在每次晚间任务之后，用一个你自己付费的、兼容 OpenAI 的 API 来蒸馏 StateCore 记忆。每次调用都经过隐私网关，有审计页和每月预算。在你配置服务商并选择"完整"档位之前，什么都不会发出去；见[隐私模型](#隐私模型)。
 
 ## Butler 不会碰的东西

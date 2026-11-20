@@ -44,7 +44,7 @@ export type Route =
   | { page: "epic"; id: number; focusSession?: string | null }
   /** Butler 总控（BTL-190 第 5 点）。 */
   | { page: "butler"; focusSession?: string | null }
-  /** 进度看板（ws-b）：从 feature / epic 的 PR 进度 tab 点过来时带着过滤条件。 */
+  /** 效果与花费页。 */
   | { page: "effect" }
   /** 全部工作（UI 重做第 2 层）；section：从提醒跳来时要展开的那一块。 */
   | { page: "all"; section?: "stacks" | "intake" }

@@ -63,7 +63,7 @@ export interface PrViewFixture extends BranchPrFixture {
   /** gh pr view <号> 给复盘分析的字段（prLessonData）。 */
   title?: string;
   body?: string;
-  /** 进度页（ws-b）用：叠放树、卡在谁手上、PR 表分组。 */
+  /** 叠放树、轮到谁、PR 分组（ws-b）用。 */
   baseRefName?: string;
   labels?: { name: string }[];
   reviewRequests?: ({ login: string } | { slug: string })[];

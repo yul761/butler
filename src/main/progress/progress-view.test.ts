@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Turn } from "../../shared/turn";
 import type { PrDetail, Ticket, WatchedPr } from "../../shared/types";
 import { bucketOf, buildProgress, buildStacks, firstSentence, progressOverview, type ProgressInput } from "./progress-view";
 
@@ -16,8 +17,9 @@ const pr = (ticketKey: string, n: number, o: Partial<WatchedPr> = {}, d: Partial
   review: "pending", ci: "passing", headSha: "s", checkedAt: 500, readError: false, detail: detail(d), ...o,
 });
 
+const waiting: Turn = { owner: "external", kind: "awaiting_review", names: [] };
 const input = (o: Partial<ProgressInput> = {}): ProgressInput => ({
-  now: 1000, tickets: [], features: [], epics: [], prs: [], summary: () => null, started: () => false, ...o,
+  now: 1000, tickets: [], features: [], epics: [], prs: [], summary: () => null, started: () => false, turnOf: () => waiting, ...o,
 });
 
 describe("firstSentence", () => {
@@ -66,8 +68,12 @@ describe("buildProgress", () => {
     { ...pr("D", 1, { review: "pending" }, { reviewRequests: [{ kind: "user", name: "alice" }], statusChangedAt: 300, labels: ["ui"], title: "[auth] login" }) },
     { ticketKey: "D", prId: null, repoId: 1, repoPath: "/code/app", branch: "x", number: null, url: null, state: null, review: null, ci: "none", headSha: null, checkedAt: 1, readError: false },
   ] satisfies WatchedPr[];
+  const turns = new Map<string, Turn>([
+    ["https://github.com/o/app/pull/1", { owner: "external", kind: "awaiting_review", names: ["alice"] }],
+    ["https://github.com/o/app/pull/3", { owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: "s1" }],
+  ]);
   const base = input({
-    tickets, features, epics: [{ id: 10, name: "Q4" }], prs, started: (k) => k === "C",
+    tickets, features, epics: [{ id: 10, name: "Q4" }], prs, started: (k) => k === "C", turnOf: (url) => turns.get(url) ?? null,
     summary: (id) => (id === 1 ? { summary: "Login works. Signup next.", at: 50, prStatusAt: 60, stale: true } : null),
   });
 
@@ -76,13 +82,22 @@ describe("buildProgress", () => {
     expect(v.counts).toEqual({ merged: 0, blocked: 2, in_review: 2, in_progress: 1, not_started: 0, total: 5 });
   });
 
-  it("lists who each PR waits on, longest-stuck first, plus blocked tickets with no open PR", () => {
+  it("lists whose turn each open PR is (the board's turn), longest-stuck first, plus blocked tickets with no open PR", () => {
     const v = buildProgress(base);
-    expect(v.stuck.map((s) => [s.ticketKey, s.pr?.number ?? null, s.waitingOn.who, s.waitingOn.reason, s.waitingOn.names])).toEqual([
-      ["B", 3, "author", "ci_failing", ["me"]],
-      ["A", 1, "reviewers", "review_requested", ["alice"]],
-      ["E", null, "ticket", "ticket_blocked", []],
+    expect(v.stuck.map((s) => [s.ticketKey, s.pr?.number ?? null, s.turn])).toEqual([
+      ["B", 3, turns.get("https://github.com/o/app/pull/3")],
+      ["A", 1, turns.get("https://github.com/o/app/pull/1")],
+      ["E", null, { owner: "you", kind: "stuck", source: "ticket_blocked", detail: null, sessionId: null }],
     ]);
+    expect(v.groups.byLabel.flatMap((g) => g.prs).find((p) => p.number === 2)?.turn).toBeNull();
+  });
+
+  it("asks for each PR's turn with its own ticket, and leaves out an open PR the board has no turn for", () => {
+    const asked: [string, string][] = [];
+    const v = buildProgress({ ...base, turnOf: (url, key) => (asked.push([url, key]), url.endsWith("/3") ? null : (turns.get(url) ?? null)) });
+    expect(asked).toContainEqual(["https://github.com/o/app/pull/3", "B"]);
+    expect(asked).toContainEqual(["https://github.com/o/app/pull/1", "A"]);
+    expect(v.stuck.map((s) => s.pr?.number ?? null)).toEqual([1, null]);
   });
 
   it("builds a stack from base/head branches and keeps singles apart", () => {
