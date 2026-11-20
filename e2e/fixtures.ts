@@ -89,6 +89,8 @@ export interface FakeGhFixture {
   /** 栈（工作流 K）：gh pr list --state open（自动检测栈）的结果；gh issue create 打印的链接。 */
   open?: PrViewFixture[];
   issueCreated?: string;
+  /** gh search prs --review-requested=@me 的结果（UI 重做第 1 层）；没有就是 []。 */
+  reviewRequested?: { number: number; title: string; url: string; repository: { nameWithOwner: string }; author: { login: string }; updatedAt: string }[];
 }
 
 /** 假 gh 的调用记录（每行一次调用的参数）。 */
