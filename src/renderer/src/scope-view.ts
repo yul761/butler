@@ -1,6 +1,6 @@
 // 范围页（epic / feature）的纯函数（UI 重做第 3 层）：ticket 一行、按 feature 分组、进度那一句、谁该动的字。
-// 状态一律取自第 1 层的 ticketTurn / mostUrgent，这里不重新判断任何 PR 的状态。
-import { mostUrgent, ticketTurn, type ScopeTurnRow, type Turn, type TurnItem } from "../../shared/turn";
+// 状态一律取自第 1 层：ticket 的轮次是主进程标了 ticketLevel 的那条，这里不重新判断任何 PR 或 ticket 的状态。
+import type { ScopeTurnRow, Turn, TurnItem } from "../../shared/turn";
 import type { TicketView } from "../../shared/types";
 import { runningRows, youCards, type RunningRow } from "./home-view";
 import type { UiStrings } from "./strings";
@@ -21,15 +21,20 @@ export function prTag(pr: { repo: string; number: number }, multiRepo: boolean):
   return multiRepo ? `${pr.repo}#${pr.number}` : `#${pr.number}`;
 }
 
+const NOT_STARTED: Turn = { owner: "idle", kind: "not_started" };
+
 /**
- * 一个 ticket 在带 filter 的看板里的那几条（按 PR 拆开的、session 级的、多出来的提问）收成 ticket 级的一条：
- * 和主进程不带 filter 时（首页）同一个 ticketTurn。item 是选中的那条；全都不参与时为 null。
+ * 一个 ticket 在看板里的那几条（带 filter 时按 PR 拆开的、session 级的、多出来的提问）里，主进程标了 ticketLevel 的那一条：
+ * 主进程用 ticketTurn 选好的 ticket 级轮次（首页也是它），前端不再自己选（spec「不并存两套状态算法」）。
+ * 没有这一条（没开始：板上不出 idle）时为 null。
  */
+export function ticketItem(mine: TurnItem[]): TurnItem | null {
+  return mine.find((i) => i.ticketLevel === true) ?? null;
+}
+
 function ticketPick(mine: TurnItem[]): { turn: Turn; others: number; item: TurnItem | null } {
-  const prTurns = mine.filter((i) => i.pr !== null).map((i) => i.turn);
-  const sessionTurn = mostUrgent(mine.filter((i) => i.pr === null))?.turn ?? null;
-  const { turn, others } = ticketTurn(prTurns, sessionTurn);
-  return { turn, others, item: mine.find((i) => i.turn === turn) ?? null };
+  const item = ticketItem(mine);
+  return item === null ? { turn: NOT_STARTED, others: 0, item: null } : { turn: item.turn, others: item.others, item };
 }
 
 export function ticketRows(tickets: Pick<TicketView, "key" | "title" | "featureId" | "effectiveStatus">[], items: TurnItem[]): TicketRow[] {
@@ -51,7 +56,7 @@ export function ticketRows(tickets: Pick<TicketView, "key" | "title" | "featureI
 
 /**
  * epic / feature 页的「轮到你」卡片、概况页签的标红和「进行中」：和首页、全部 ticket 表格、进度那一句同一口径（spec「不并存两套状态算法」）。
- * 每个 ticket 一条（ticketPick 选的那条，带上别的 PR 个数）；再加这个 ticket 多出来的没回答的提问（首页也各出一张），
+ * 每个 ticket 一条（主进程标了 ticketLevel 的那条，带着别的 PR 个数）；再加这个 ticket 多出来的没回答的提问（首页也各出一张），
  * 和不属于 ticket 的（总控 session、Butler 提醒）。被 ticket 级口径排除的 session 级那条（有 PR 时 session 停着）不出。
  */
 export function scopeBoardView(items: TurnItem[], S: UiStrings, now: number): { youItems: TurnItem[]; running: RunningRow[]; attention: boolean } {
@@ -62,9 +67,9 @@ export function scopeBoardView(items: TurnItem[], S: UiStrings, now: number): { 
     else byTicket.set(i.ticketKey, [...(byTicket.get(i.ticketKey) ?? []), i]);
   }
   for (const mine of byTicket.values()) {
-    const { others, item } = ticketPick(mine);
+    const item = ticketItem(mine);
     if (item === null) continue;
-    out.push(others === item.others ? item : { ...item, others });
+    out.push(item);
     for (const i of mine) if (i !== item && i.pr === null && i.turn.owner === "you" && i.turn.kind === "answer") out.push(i);
   }
   const youItems = youCards(out);

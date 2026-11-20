@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ScopeTurnRow, Turn, TurnItem } from "../../shared/turn";
 import { flatGroup, groupByFeature, prTag, progressLine, scopeBoardView, scopeRowLine, scopeTotal, slowestLine, ticketRows, ticketsWithPr, whoLabel } from "./scope-view";
 import { runningRows } from "./home-view";
+import { buildTurnBoard, type BoardInput, type BoardPr, type BoardTicket, type LooseItem } from "../../main/turn/turn-board";
 import { STRINGS } from "./strings";
 
 const S = STRINGS.zh;
@@ -17,9 +18,9 @@ const tk = (key: string, featureId: number | null = 10, effectiveStatus: "done" 
   ({ key, title: `T ${key}`, featureId, effectiveStatus }) as never;
 
 describe("ticketRows", () => {
-  it("picks the most urgent PR turn and the item it came from", () => {
+  it("takes the item main marked as the ticket's own turn (with its other-PR count) and lists every PR", () => {
     const a = item("K-1", ext, { repo: "app", number: 52 });
-    const b = item("K-1", you, { repo: "app", number: 51 });
+    const b = item("K-1", you, { repo: "app", number: 51 }, { ticketLevel: true, others: 1 });
     const s = item("K-1", agent, null);
     const [row] = ticketRows([tk("K-1")], [a, b, s]);
     expect(row.turn.owner).toBe("you");
@@ -28,11 +29,11 @@ describe("ticketRows", () => {
     expect(row.prs.map((p) => p.number)).toEqual([51, 52]);
     expect(row.prs[0].tag).toBe("#51");
   });
-  it("uses the most urgent session-level item, not the first", () => {
-    const first = item("K-1", { owner: "external", kind: "awaiting_review", names: [] }, null);
-    const urgent = item("K-1", agent, null);
-    const [row] = ticketRows([tk("K-1")], [first, urgent]);
-    expect(row.item).toBe(urgent);
+  it("an item main did not mark never becomes the ticket's turn, however urgent", () => {
+    const marked = item("K-1", { owner: "external", kind: "awaiting_review", names: [] }, { repo: "app", number: 5 }, { ticketLevel: true });
+    const urgent = item("K-1", you, null);
+    const [row] = ticketRows([tk("K-1")], [urgent, marked]);
+    expect(row.item).toBe(marked);
   });
   it("tags PRs with the repo when there are several repos", () => {
     const [row] = ticketRows([tk("K-1")], [item("K-1", ext, { repo: "app", number: 52 }), item("K-1", ext, { repo: "api", number: 7 })]);
@@ -128,10 +129,16 @@ describe("flatGroup", () => {
 });
 
 describe("scopeBoardView (epic / feature overview and running tab)", () => {
+  // 看板由主进程按 feature 取（同 FeaturePage），前端只看它标的那条。
   const stopped: Turn = { owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s1" };
   const review: Turn = { owner: "external", kind: "awaiting_review", names: ["amy"] };
+  const pr = (n: number, turn: Turn): BoardPr => ({ repo: "app", number: n, title: "t", url: `u${n}`, turn, since: n, mergedAt: null });
+  const bt = (key: string, o: Partial<BoardTicket>): BoardTicket => ({ key, name: key, featureId: 10, prs: [], others: [], moreAsks: [], ...o });
+  const featureBoard = (tickets: BoardTicket[], loose: LooseItem[] = []) => buildTurnBoard({
+    epics: [{ id: 1, name: "E" }], features: [{ id: 10, name: "F", epicId: 1 }], tickets, loose, reviews: [], dayStart: 0, now: 1000,
+  }, { featureId: 10 }).items;
   it("an open PR waiting for review and a stopped session: no card is your turn, the tab is not flagged", () => {
-    const items = [item("K-1", review, { repo: "app", number: 5 }), item("K-1", stopped, null)];
+    const items = featureBoard([bt("K-1", { prs: [pr(5, review)], others: [{ turn: stopped, since: 1 }] })]);
     const v = scopeBoardView(items, S, 1000);
     expect(v.youItems).toEqual([]);
     expect(v.attention).toBe(false);
@@ -139,34 +146,32 @@ describe("scopeBoardView (epic / feature overview and running tab)", () => {
     expect(ticketRows([tk("K-1")], items)[0].turn.owner).toBe("external");
   });
   it("a stopped session with no PR is still your turn", () => {
-    const v = scopeBoardView([item("K-1", stopped, null)], S, 1000);
+    const v = scopeBoardView(featureBoard([bt("K-1", { others: [{ turn: stopped, since: 1 }] })]), S, 1000);
     expect(v.youItems.map((i) => i.turn)).toEqual([stopped]);
     expect(v.attention).toBe(true);
   });
   it("one card per ticket (the ticket's own turn, with the other PRs counted), plus its extra questions and loose items", () => {
     const merge: Turn = { owner: "you", kind: "merge", risk: null };
     const ask = (id: number): Turn => ({ owner: "you", kind: "answer", question: `q${id}`, options: [], askId: id, sessionId: "s1" });
-    const loose: TurnItem = { ticketKey: null, pr: null, epicId: 1, featureId: 10, turn: ask(9), since: 1, others: 0 };
-    const items = [
-      item("K-1", merge, { repo: "app", number: 5 }), item("K-1", merge, { repo: "app", number: 6 }),
-      item("K-2", ask(1), null), item("K-2", ask(2), null), item("K-2", review, { repo: "app", number: 7 }),
-      loose,
-    ];
+    const items = featureBoard([
+      bt("K-1", { prs: [pr(5, merge), pr(6, merge)] }),
+      bt("K-2", { others: [{ turn: ask(1), since: 1 }], moreAsks: [{ turn: ask(2), since: 2 }], prs: [pr(7, review)] }),
+    ], [{ turn: ask(9), since: 1, epicId: 1, featureId: 10 }]);
     const v = scopeBoardView(items, S, 1000);
     const k1 = v.youItems.filter((i) => i.ticketKey === "K-1");
     expect(k1).toHaveLength(1);
     expect(k1[0].others).toBe(1);
     expect(v.youItems.filter((i) => i.ticketKey === "K-2").map((i) => i.turn)).toEqual([ask(1), ask(2)]);
-    expect(v.youItems).toContain(loose);
+    expect(v.youItems.filter((i) => i.ticketKey === null).map((i) => i.turn)).toEqual([ask(9)]);
   });
   it("running lists each ticket once, by the ticket's own turn", () => {
     const ci: Turn = { owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: null };
-    const items = [
+    const items = featureBoard([
       // K-1：一个 PR 在等 review、session 在干活 → 整个 ticket 是 agent 在推进，一行。
-      item("K-1", review, { repo: "app", number: 5 }), item("K-1", agent, null),
+      bt("K-1", { prs: [pr(5, review)], others: [{ turn: agent, since: 1 }] }),
       // K-2：一个 PR 挂了 CI 轮到你，另一个在等 review → 这个 ticket 轮到你，不进「进行中」。
-      item("K-2", ci, { repo: "app", number: 6 }), item("K-2", review, { repo: "app", number: 7 }),
-    ];
+      bt("K-2", { prs: [pr(6, ci), pr(7, review)] }),
+    ]);
     const v = scopeBoardView(items, S, 1000);
     expect(v.running.map((r) => [r.ticketKey, r.owner])).toEqual([["K-1", "agent"]]);
   });
@@ -180,5 +185,36 @@ describe("scopeRowLine / ticketsWithPr", () => {
     expect(scopeRowLine({ kind: "ticket", id: "K-2", merged: 0, total: 1 }, withPr, S)).toBe("0/1 合了");
     expect(scopeRowLine({ kind: "feature", id: 3, merged: 1, total: 2 }, withPr, S)).toBe("1/2 合了");
     expect(scopeRowLine({ kind: "ticket", id: "K-3", merged: 0, total: 1 }, withPr, SE)).toBe("No PR yet");
+  });
+});
+
+describe("the renderer takes the ticket's turn from main (one state algorithm)", () => {
+  // PR 在等 review、session 在干活、还有一条孤儿提问（head 已经不在 known 里，主进程放在 moreAsks）。
+  const NOW = 1_000_000;
+  const review: Turn = { owner: "external", kind: "awaiting_review", names: ["amy"] };
+  const ask: Turn = { owner: "you", kind: "answer", question: "q", options: [], askId: 3, sessionId: "s" };
+  const input: BoardInput = {
+    epics: [{ id: 1, name: "E" }], features: [{ id: 10, name: "F", epicId: 1 }],
+    tickets: [{
+      key: "K-1", name: "K-1", featureId: 10,
+      prs: [{ repo: "acme/app", number: 5, title: "t", url: "u", turn: review, since: NOW - 9, mergedAt: null }],
+      others: [{ turn: agent, since: NOW - 50 }], moreAsks: [{ turn: ask, since: NOW - 4 }],
+    }],
+    loose: [], reviews: [], dayStart: 0, now: NOW,
+  };
+  const home = buildTurnBoard(input, null);
+  const feature = buildTurnBoard(input, { featureId: 10 });
+  const mainTurn = home.items.find((i) => i.ticketKey === "K-1" && i.turn.kind !== "answer")!.turn;
+  it("the ticket table says what main says (agent), not the orphan question", () => {
+    expect(mainTurn.owner).toBe("agent");
+    const [row] = ticketRows([tk("K-1")], feature.items);
+    expect(row.turn).toEqual(mainTurn);
+    expect(row.others).toBe(1);
+  });
+  it("the feature page's running tab lists the ticket like the home page does, and the question is still a card", () => {
+    const v = scopeBoardView(feature.items, S, NOW);
+    expect(v.running.map((r) => [r.ticketKey, r.owner])).toEqual(runningRows(home.items, S, NOW).map((r) => [r.ticketKey, r.owner]));
+    expect(v.running.map((r) => r.ticketKey)).toEqual(["K-1"]);
+    expect(v.youItems.map((i) => i.turn)).toEqual([ask]);
   });
 });

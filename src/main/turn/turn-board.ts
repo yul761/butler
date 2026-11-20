@@ -89,7 +89,7 @@ export function buildTurnBoard(input: BoardInput, rawFilter: TurnFilter | null):
   const items: TurnItem[] = [];
   if (filter === null) {
     for (const c of scoped) {
-      items.push({ ticketKey: c.t.key, pr: c.pr ? prRef(c.pr) : null, epicId: c.epicId, featureId: c.t.featureId, turn: c.turn, since: c.since, others: c.others });
+      items.push({ ticketKey: c.t.key, pr: c.pr ? prRef(c.pr) : null, epicId: c.epicId, featureId: c.t.featureId, turn: c.turn, since: c.since, others: c.others, ticketLevel: true });
       for (const a of c.t.moreAsks) items.push(askItem(c, a));
     }
     for (const l of loose) items.push(looseItem(l));
@@ -100,11 +100,13 @@ export function buildTurnBoard(input: BoardInput, rawFilter: TurnFilter | null):
       });
     }
   } else {
-    // 带 filter：按 PR 拆开，再加 ticket 级的那条；出 done（ticket 页要显示「合了」），不出 idle，不含请你 review 的 PR
+    // 带 filter：按 PR 拆开，再加 session 级的那条；出 done（ticket 页要显示「合了」），不出 idle，不含请你 review 的 PR。
+    // ticket 的轮次是从哪一条来的（calcTicket 按引用选的），那一条标上 ticketLevel、带上别的 PR 个数：前端照它显示，不再自己选。
+    const own = (c: TicketCalc, turn: Turn) => (turn === c.turn ? { others: c.others, ticketLevel: true as const } : { others: 0 });
     for (const c of scoped) {
-      for (const p of c.t.prs) items.push({ ticketKey: c.t.key, pr: prRef(p), epicId: c.epicId, featureId: c.t.featureId, turn: p.turn, since: p.since, others: 0 });
+      for (const p of c.t.prs) items.push({ ticketKey: c.t.key, pr: prRef(p), epicId: c.epicId, featureId: c.t.featureId, turn: p.turn, since: p.since, ...own(c, p.turn) });
       const s = mostUrgent(c.t.others);
-      if (s) items.push({ ticketKey: c.t.key, pr: null, epicId: c.epicId, featureId: c.t.featureId, turn: s.turn, since: s.since, others: 0 });
+      if (s) items.push({ ticketKey: c.t.key, pr: null, epicId: c.epicId, featureId: c.t.featureId, turn: s.turn, since: s.since, ...own(c, s.turn) });
       for (const a of c.t.moreAsks) items.push(askItem(c, a));
     }
     for (const l of loose) items.push(looseItem(l));

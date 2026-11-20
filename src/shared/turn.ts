@@ -44,6 +44,12 @@ export interface TurnItem {
   since: number;
   /** 这个 ticket 除了显示的这个 PR，还有几个别的 PR（owner 不是 done）；没有为 0。 */
   others: number;
+  /**
+   * 这一条带着这个 ticket 自己的轮次（主进程 ticketTurn 选中的那条，others 是别的 PR 个数）。
+   * 不带 filter 时就是 ticket 的那一条；带 filter 时是按 PR 拆开的、session 级的几条里被选中的那条。
+   * 多出来的提问（moreAsks）、请你 review 的 PR、不属于 ticket 的都不带。前端拿它当 ticket 的状态，不自己再选一遍。
+   */
+  ticketLevel?: true;
 }
 
 export interface ScopeTurnRow {
