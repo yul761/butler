@@ -11,7 +11,7 @@ const cols = (db: DatabaseSync, t: string) => (db.prepare(`PRAGMA table_info(${t
 const hasTable = (db: DatabaseSync, t: string) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t) !== undefined;
 
 describe("turn migrations (UI redesign layer 1)", () => {
-  it("come after the layer-4 conversation store and sit right after the layer-4 conversation store", () => {
+  it("sit right after the layer-4 conversation store", () => {
     expect(C).toBeGreaterThan(0);
     expect(D).toBe(C + 1);
     expect(MIGRATIONS[D + 1]).toContain("CREATE TABLE review_requests");
