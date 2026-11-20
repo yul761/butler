@@ -2,12 +2,14 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { makeRepo, tempDir } from "../test-utils";
+import { copyRepo, makeRepo, tempDir } from "../test-utils";
 import { isAncestor, parseGitVersion, parseWorktreeList, refsUnder, supportsUpdateRefs } from "./git-stack";
 import { runEngine, type EngineLayer } from "./rebase-engine";
 
-// 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够
-vi.setConfig({ testTimeout: 30_000 });
+// 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够。
+// 夹具已经按文件共享（BTL-240），剩下的是被测代码自己的 git 调用（一个用例几十到上百个进程）：Windows runner 上
+// 起一个进程是 macOS 的好几倍、整套并行跑时再翻倍，这里的用例那边常要 10～20 秒，偶尔贴着 30 秒，所以只在 Windows 上给 60 秒。
+vi.setConfig({ testTimeout: process.platform === "win32" ? 60_000 : 30_000 });
 
 const g = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
@@ -18,19 +20,28 @@ function commit(repo: string, file: string, text: string, msg: string): string {
   return g(repo, "rev-parse", "HEAD");
 }
 
-/** main ← a ← b ← c ← d，每层两个提交、各改自己的文件。 */
+let fourLayersTemplate: { repo: string; tips: Record<string, string> } | null = null;
+
+/**
+ * main ← a ← b ← c ← d，每层两个提交、各改自己的文件。
+ * 每个测试文件只真的建一次（近 30 个 git 进程），之后复制（copyRepo）：Windows runner 上这些进程是这个文件
+ * 30 秒超时的一大块（BTL-240）。复制出来的提交 SHA 和模板一样，tips 照用。
+ */
 function fourLayers() {
-  const repo = makeRepo();
-  const tips: Record<string, string> = {};
-  let parent = "main";
-  for (const b of ["a", "b", "c", "d"]) {
-    g(repo, "checkout", "-q", "-b", b, parent);
-    commit(repo, `${b}.txt`, `${b}1\n`, `${b} one`);
-    tips[b] = commit(repo, `${b}.txt`, `${b}1\n${b}2\n`, `${b} two`);
-    parent = b;
+  if (!fourLayersTemplate) {
+    const repo = makeRepo();
+    const tips: Record<string, string> = {};
+    let parent = "main";
+    for (const b of ["a", "b", "c", "d"]) {
+      g(repo, "checkout", "-q", "-b", b, parent);
+      commit(repo, `${b}.txt`, `${b}1\n`, `${b} one`);
+      tips[b] = commit(repo, `${b}.txt`, `${b}1\n${b}2\n`, `${b} two`);
+      parent = b;
+    }
+    g(repo, "checkout", "-q", "main");
+    fourLayersTemplate = { repo, tips };
   }
-  g(repo, "checkout", "-q", "main");
-  return { repo, tips };
+  return { repo: copyRepo(fourLayersTemplate.repo), tips: { ...fourLayersTemplate.tips } };
 }
 
 const layers = (repo: string, names: string[], start = 0): EngineLayer[] =>

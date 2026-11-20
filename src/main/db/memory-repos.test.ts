@@ -1,6 +1,3 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { insertTicket, memDb } from "../test-utils";
@@ -12,8 +9,9 @@ import { SettingsRepo } from "./settings-repo";
 import { TicketsRepo } from "./tickets-repo";
 
 function v3db(withTicket: boolean): DatabaseSync {
-  const dir = mkdtempSync(join(tmpdir(), "butler-up4-"));
-  const db = new DatabaseSync(join(dir, "v3.db"));
+  // 内存库：迁移的结果和磁盘上一样，但磁盘上 90 多次迁移各自 COMMIT（每次建删 journal、fsync），Windows runner
+  // 上偶尔要几十秒，撞 30 秒超时（BTL-240）。
+  const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON;");
   for (const m of MIGRATIONS.slice(0, 3)) db.exec(m);
   db.exec("PRAGMA user_version = 3");

@@ -7,7 +7,7 @@ import type { GateRequest } from "../../shared/gate";
 import type { MergeEvent, Ticket, TicketRepo, WorkMode } from "../../shared/types";
 import { MergeGateRepo } from "../db/merge-gate-repo";
 import { M } from "../strings";
-import { makeRepo, memDb } from "../test-utils";
+import { copyRepo, makeRepo, memDb } from "../test-utils";
 import * as git from "../tickets/git";
 import type { PrInfo } from "../tickets/gh";
 import { commandDir, MergeGate, type MergeGateDeps } from "./merge-gate";
@@ -19,16 +19,25 @@ const commitFile = (repo: string, file: string, text: string, msg: string) => {
   run(repo, "commit", "-m", msg);
 };
 
-/** main 上有 app.txt；dms-1、dms-2 改它同一行，dms-3 改别的文件。当前分支 main。 */
+let scenarioTemplate: string | null = null;
+
+/**
+ * main 上有 app.txt；dms-1、dms-2 改它同一行，dms-3 改别的文件。当前分支 main。
+ * 每个测试文件只真的建一次（十几个 git 进程），之后复制（copyRepo）：Windows runner 上这些进程会把用例
+ * 推到 30 秒超时（BTL-240）。
+ */
 function makeScenarioRepo(): string {
-  const repo = makeRepo();
-  commitFile(repo, "app.txt", "base\n", "app");
-  for (const [branch, file, text] of [["dms-1", "app.txt", "one\n"], ["dms-2", "app.txt", "two\n"], ["dms-3", "other.txt", "three\n"]]) {
-    run(repo, "checkout", "-q", "-b", branch, "main");
-    commitFile(repo, file, text, branch);
+  if (scenarioTemplate === null) {
+    const repo = makeRepo();
+    commitFile(repo, "app.txt", "base\n", "app");
+    for (const [branch, file, text] of [["dms-1", "app.txt", "one\n"], ["dms-2", "app.txt", "two\n"], ["dms-3", "other.txt", "three\n"]]) {
+      run(repo, "checkout", "-q", "-b", branch, "main");
+      commitFile(repo, file, text, branch);
+    }
+    run(repo, "checkout", "-q", "main");
+    scenarioTemplate = repo;
   }
-  run(repo, "checkout", "-q", "main");
-  return repo;
+  return copyRepo(scenarioTemplate);
 }
 
 function ticket(key: string, repoPath: string, branch: string, workMode: WorkMode = "worktree"): Ticket {

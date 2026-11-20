@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { WorkMode } from "../shared/types";
-import { openDatabase, type Db } from "./db/database";
+import { migrate, openDatabase, type Db } from "./db/database";
 import type { NewTicket, TicketsRepo } from "./db/tickets-repo";
 import type { PtyFactory, PtyProcess } from "./sessions/pty-manager";
 
@@ -31,8 +32,24 @@ export async function waitUntilDead(pid: number, ms: number): Promise<boolean> {
   }
 }
 
+let migratedDb: Uint8Array | null = null;
+
+/**
+ * 迁移到最新版本的内存库。每个测试文件（每个 worker）只真的跑一次全部迁移，之后从它的快照（serialize）载入：
+ * 90 多个迁移每次要 20 毫秒左右，Windows runner 上要几倍，一个文件几十上百次（BTL-240）。快照里带着 user_version，
+ * migrate() 只核对版本；连接级的 PRAGMA 不在快照里，照 openDatabase 重新设。没有 serialize 的旧 Node 照旧每次迁移。
+ */
 export function memDb(): Db {
-  return openDatabase(":memory:");
+  if (migratedDb === null) {
+    const db = openDatabase(":memory:");
+    if (typeof db.serialize === "function") migratedDb = db.serialize();
+    return db;
+  }
+  const db = new DatabaseSync(":memory:");
+  db.deserialize(migratedDb);
+  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+  migrate(db);
+  return db;
 }
 
 /**
@@ -44,18 +61,54 @@ export function tempDir(prefix = "butler-test-"): string {
   return realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
 }
 
-/** 一个带初始提交、当前分支为 main 的临时 git 仓库。 */
-export function makeRepo(): string {
-  const dir = tempDir("butler-repo-");
-  const g = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
-  g("init", "-b", "main");
-  g("config", "user.email", "test@example.com");
-  g("config", "user.name", "Test");
-  g("config", "commit.gpgsign", "false");
-  writeFileSync(join(dir, "README.md"), "hello\n");
-  g("add", ".");
-  g("commit", "-m", "init");
+/**
+ * 复制一个建好的 git 目录（带工作区的仓库或 bare 远端），代替每个用例重新 init / commit / push。
+ * Windows runner 上起一个 git 进程要 0.1 秒以上，整套并行跑、负载高时好几倍；git 重的用例一个就要起几十上百个，
+ * 偶尔就撞上 30 秒超时（BTL-240）。复制出来的内容、配置、提交 SHA 都和模板一样。
+ * 复制会改掉工作区文件的 inode/ctime，index 里记的 stat 对不上；diff-index 这类不刷新 index 的命令会把它们当成
+ * 改过，所以有 index 的就跑一次 update-index --refresh（1 个进程）。模板里不能有链接的 worktree（它们记的是绝对路径）。
+ */
+export function copyRepo(src: string, prefix = "butler-repo-"): string {
+  const dir = tempDir(prefix);
+  cpSync(src, dir, { recursive: true, preserveTimestamps: true });
+  if (existsSync(join(dir, ".git", "index"))) execFileSync("git", ["update-index", "-q", "--refresh"], { cwd: dir, stdio: "ignore" });
   return dir;
+}
+
+/**
+ * 把复制出来的仓库的 origin 指到 url，不起 git 进程（见 copyRepo）。git 配置里反斜杠是转义符，
+ * 所以 Windows 路径一律写成正斜杠，git 两种都认。
+ */
+export function setOriginUrl(repo: string, url: string): void {
+  const config = join(repo, existsSync(join(repo, ".git")) ? ".git" : "", "config");
+  const text = readFileSync(config, "utf8");
+  // 用函数替换：路径里的 $ 不会被当成 $1 / $& 这类替换符
+  const next = text.replace(/(\[remote "origin"\][^[]*?^\s*url\s*=).*$/m, (_m, head: string) => `${head} ${url.replace(/\\/g, "/")}`);
+  if (next === text) throw new Error(`no origin url in ${config}`);
+  writeFileSync(config, next);
+}
+
+let repoTemplate: string | null = null;
+
+/**
+ * 一个带初始提交、当前分支为 main 的临时 git 仓库。
+ * 每个测试文件（每个 worker）只真的 init + commit 一次（6 个 git 进程），之后都复制那个模板（见 copyRepo），
+ * 所以同一个文件里各仓库的初始提交 SHA 相同。
+ */
+export function makeRepo(): string {
+  if (repoTemplate === null) {
+    const tpl = tempDir("butler-repo-template-");
+    const g = (...args: string[]) => execFileSync("git", args, { cwd: tpl, stdio: "ignore" });
+    g("init", "-b", "main");
+    g("config", "user.email", "test@example.com");
+    g("config", "user.name", "Test");
+    g("config", "commit.gpgsign", "false");
+    writeFileSync(join(tpl, "README.md"), "hello\n");
+    g("add", ".");
+    g("commit", "-m", "init");
+    repoTemplate = tpl;
+  }
+  return copyRepo(repoTemplate);
 }
 
 export class FakePty implements PtyProcess {
