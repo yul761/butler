@@ -1843,6 +1843,8 @@ async function bootstrap(): Promise<void> {
     // 下面三个 ForkService 都用链上现在的 head id 调。
     devLaunchOf: (id) => sessionService.devLaunchOf(id),
     transcriptExists,
+    // 开着终端（gateTerm 按 head 找终端，/clear 之后也找得到）；休眠的没有终端，不算在跑。
+    devRunning: (id) => gateTerm(id) !== null,
     lastTurnAt: (id) => usageRepo.lastSessionTurnAt(id),
     recall: (scope, maxChars) => memory.recallText(scope, maxChars),
     files: {

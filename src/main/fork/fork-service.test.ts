@@ -71,6 +71,7 @@ function setup(o: { plan?: FullForkPlan; launch?: boolean; lastTurnAgo?: number 
     sessions: { rootOf: (id: string) => chain.get(id) ?? null, head: (id: string) => heads.get(chain.get(id) ?? id) ?? null },
     devLaunchOf: vi.fn((id: string) => (o.launch === false ? null : id === heads.get("root-1")?.id ? launchOf(id) : null)),
     transcriptExists: vi.fn<(id: string) => boolean>(() => true),
+    devRunning: vi.fn<(id: string) => boolean>(() => true),
     lastTurnAt: vi.fn<(id: string) => number | null>(() => (lastTurnAgo === null ? null : t - lastTurnAgo)),
     recall: vi.fn(async (scope: string, max: number) => `RECALL(${scope},${max})`),
     files: { settings: vi.fn<(devSettingsPath: string | null) => string | null>(() => "/m/fork-settings.json"), mcp: vi.fn((_d: DevLaunch, runId: string): string | null => `/m/fork-mcp-${runId}.json`) },
@@ -247,6 +248,47 @@ describe("ForkService 开发 session 正在跑 / 被换新", () => {
     expect(s.repo.get(forkId)!.mode).toBe("light");
     await s.svc.idle();
     forkErr(() => s.svc.reaskFull(forkId), "dev_busy");
+  });
+
+  it("开发 session 关着（终端退出后 waitingForInput 被清掉）：不算在跑，用完整上下文重问照样起跑，严格参数续 head", async () => {
+    const s = setup({ head: { waitingForInput: false }, launch: false });
+    s.deps.devRunning.mockReturnValue(false);
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    const re = s.svc.reaskFull(forkId);
+    await s.svc.idle();
+    expect(s.deps.devRunning).toHaveBeenCalledWith("head-2");
+    expect(s.repo.get(re.forkId)).toMatchObject({ mode: "full", reaskOf: forkId, status: "idle" });
+    expect(s.calls[1].args).toEqual(strictForkArgs({ resumeSessionId: "head-2", model: "opus", addDirs: [], forkSettingsPath: "/m/fork-settings.json" }));
+  });
+
+  it("开着终端、没停在输入框：照样 dev_busy", async () => {
+    const s = setup({ head: { waitingForInput: false } });
+    s.deps.devRunning.mockReturnValue(true);
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    forkErr(() => s.svc.reaskFull(forkId), "dev_busy");
+  });
+
+  it("自动选档：关着的开发 session 算空着（别的条件满足就完整）", async () => {
+    const s = setup({ head: { waitingForInput: false } });
+    s.deps.devRunning.mockReturnValue(false);
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    expect(s.repo.get(forkId)!.mode).toBe("full");
+    await s.svc.idle();
+  });
+
+  it("休眠的开发 session（没有终端）：能完整重问；没有 transcript 照样 no_transcript", async () => {
+    const s = setup({ head: { waitingForInput: true, hibernatedAt: 5 }, launch: false });
+    s.deps.devRunning.mockReturnValue(false);
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    s.deps.transcriptExists.mockReturnValue(false);
+    forkErr(() => s.svc.reaskFull(forkId), "no_transcript");
+    s.deps.transcriptExists.mockReturnValue(true);
+    const re = s.svc.reaskFull(forkId);
+    await s.svc.idle();
+    expect(s.repo.get(re.forkId)).toMatchObject({ mode: "full", status: "idle" });
   });
 
   it("没有 transcript：重问报 no_transcript", async () => {
@@ -469,6 +511,11 @@ describe("ForkService 失败", () => {
     expect(s.repo.get(forkId)).toMatchObject({ mode: "full", status: "failed", errorCode: "timeout", forkSessionId: null });
     s.heads.set("root-1", session("head-2", { waitingForInput: false }));
     forkErr(() => s.svc.ask("root-1", forkId, "q again"), "dev_busy");
+    // 开发 session 关了（不在终端里跑）：不再算在跑，只剩 transcript 那一关。
+    s.deps.devRunning.mockReturnValue(false);
+    s.deps.transcriptExists.mockReturnValueOnce(false);
+    forkErr(() => s.svc.ask("root-1", forkId, "q again"), "no_transcript");
+    s.deps.devRunning.mockReturnValue(true);
     s.heads.set("root-1", session("head-2"));
     s.deps.transcriptExists.mockReturnValue(false);
     forkErr(() => s.svc.ask("root-1", forkId, "q again"), "no_transcript");

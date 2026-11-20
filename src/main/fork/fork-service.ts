@@ -26,6 +26,8 @@ export interface ForkDeps {
   sessions: { rootOf(id: string): string | null; head(id: string): Session | null };
   devLaunchOf: (sessionId: string) => DevLaunch | null;
   transcriptExists: (sessionId: string) => boolean;
+  /** 这个 head 开着终端在跑（休眠的、终端退出了的都不算）。不在跑的开发 session 不会和分叉抢，跟停在输入框一样算空着。 */
+  devRunning: (headId: string) => boolean;
   lastTurnAt: (sessionId: string) => number | null;
   recall: (scope: string, maxChars: number) => Promise<string>;
   /** 写分叉 settings / MCP 配置到 paths.mcp；hook 没装（readonly 不可用）时 settings 返回 null → 不起跑，报 no_claude。 */
@@ -162,7 +164,7 @@ export class ForkService {
     if (existing) return { forkId: existing.id };
     const head = this.d.sessions.head(row.rootSessionId);
     if (!head) throw new ForkError("not_found");
-    const block = fullBlock({ transcriptExists: this.d.transcriptExists(head.id), devIdle: head.waitingForInput });
+    const block = fullBlock({ transcriptExists: this.d.transcriptExists(head.id), devIdle: this.devIdle(head) });
     if (block) throw new ForkError(block);
     const questions = this.d.conv.byFork(forkId).filter((m) => m.role === "user" && !CONCLUSION_ASKS.has(m.text)).map((m) => m.text);
     if (questions.length === 0) throw new ForkError("bad_question");
@@ -260,6 +262,11 @@ export class ForkService {
     while (this.running.size > 0) await Promise.all([...this.running.values()]);
   }
 
+  /** 开发 session 空着：停在输入框，或者根本没在终端里跑（终端退出时 handleExit 会清掉 waitingForInput）。 */
+  private devIdle(head: Session): boolean {
+    return head.waitingForInput || !this.d.devRunning(head.id);
+  }
+
   private rootOf(anyId: string): string {
     return this.d.sessions.rootOf(anyId) ?? anyId;
   }
@@ -274,7 +281,7 @@ export class ForkService {
     // 都按 head 查：用量行、transcript、启动参数都是 head 的（/clear 之后的 head 没有启动参数 → 精简）。
     const launch = this.d.devLaunchOf(head.id);
     const mode = chooseMode({
-      cacheOk: this.d.plan.cacheOk, launchKnown: launch !== null, transcriptExists: this.d.transcriptExists(head.id), devIdle: head.waitingForInput,
+      cacheOk: this.d.plan.cacheOk, launchKnown: launch !== null, transcriptExists: this.d.transcriptExists(head.id), devIdle: this.devIdle(head),
       lastTurnAt: this.d.lastTurnAt(head.id), now: this.d.now(),
     });
     const id = this.open(root, head, launch, mode, q, mode === "full" ? () => M().fork.fullPrompt(q) : (row) => this.lightPrompt(row, q), null, () => this.asking.delete(key));
@@ -292,7 +299,7 @@ export class ForkService {
       if (row.mode === "full") {
         const head = this.d.sessions.head(row.rootSessionId);
         if (!head) throw new ForkError("not_found");
-        const block = fullBlock({ transcriptExists: this.d.transcriptExists(head.id), devIdle: head.waitingForInput });
+        const block = fullBlock({ transcriptExists: this.d.transcriptExists(head.id), devIdle: this.devIdle(head) });
         if (block) throw new ForkError(block);
       }
     }
