@@ -3,18 +3,20 @@
 import { useState } from "react";
 import type { PrStagesTicket } from "../../../shared/pr-stages";
 import type { TicketGlance } from "../../../shared/ticket-glance";
+import type { TurnItem } from "../../../shared/turn";
 import type { TicketView } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
+import { cardActions, type CardAction } from "../home-view";
 import { usePrStages } from "../pr-stages-view";
 import type { TicketRow } from "../scope-view";
 import { ticketRows } from "../scope-view";
-import { S } from "../strings";
-import type { TicketTab } from "../ticket-tabs";
+import { S, type UiStrings } from "../strings";
+import { landingTab, type TicketTab } from "../ticket-tabs";
 import { clipSaid, contextLine, mainActions, prStageLine, prUrlOf, type MainAction } from "../ticket-view";
 import { turnSentence } from "../turn-text";
 import { WhoTag } from "./ScopeParts";
-import { sendReasonText } from "../turn-card-actions";
+import { runCardAction, sendReasonText } from "../turn-card-actions";
 import { useStateRefetch } from "./useStateRefetch";
 import { useTurnBoard } from "./useTurnBoard";
 
@@ -34,9 +36,35 @@ export interface TicketHomeProps {
   onOpenPr: (url: string) => void;
   onSend: () => void;
   onFix: () => void;
+  /** 提问行上的按钮（和首页卡片同一套 cardActions）：由 TicketHomeTab 交给 runTicketAsk。 */
+  onAsk: (a: CardAction, item: TurnItem) => void;
 }
 
-export function TicketHome({ ticket, row, glance, stages, canFix, notice, onGoTab, onOpenPr, onSend, onFix }: TicketHomeProps) {
+const noop = () => {};
+
+/**
+ * 提问行按钮的动作，走首页卡片那条路（runCardAction）：选项经 inbox 回答，发问的 session 已经结束也能送到；
+ * 「去看看」落到这张卡片的轮次对应的页签。返回要显示的一句话，没有为 null。
+ */
+export async function runTicketAsk(
+  a: CardAction, item: TurnItem, d: { answerInbox: (id: number, text: string) => Promise<boolean>; onGoTab: (t: TicketTab) => void }, s: UiStrings,
+): Promise<string | null> {
+  const r = await runCardAction(a, item, {
+    answerInbox: d.answerInbox,
+    prOpen: () => Promise.resolve({ ok: true }),
+    turnSendToAgent: () => Promise.resolve({ ok: false }),
+    dismissActivity: () => Promise.resolve(),
+    onOpen: noop,
+    onGo: (r) => d.onGoTab(r.page === "ticket" && r.landing ? landingTab(r.landing) : "overview"),
+    onFix: noop,
+    // 回答以后板子随 turn:changed 自己重取。
+    onChanged: noop,
+  }, s);
+  if (r === null) return null;
+  return "answered" in r ? s.hm.act.answered(r.answered) : r.message;
+}
+
+export function TicketHome({ ticket, row, glance, stages, canFix, notice, onGoTab, onOpenPr, onSend, onFix, onAsk }: TicketHomeProps) {
   if (row === null) return <div className="ticket-home ticket-home-skeleton" aria-busy="true"><p className="muted">…</p></div>;
   const url = prUrlOf(row.item.pr, stages);
   const actions = mainActions(row.turn, { hasPr: url !== null, canFix }, S);
@@ -67,7 +95,11 @@ export function TicketHome({ ticket, row, glance, stages, canFix, notice, onGoTa
             <p key={a.turn.kind === "answer" ? a.turn.askId : n} className="ticket-home-state">
               <WhoTag turn={a.turn} />
               <span className="sentence">{turnSentence(a.turn, a, S)}</span>
-              <button className="primary" onClick={() => onGoTab("terminal")}>{S.lay.actAnswer}</button>
+              {cardActions(a).map((c) => (
+                <button key={c.id === "answer" ? `answer:${c.option}` : c.id} className={c.primary ? "primary" : undefined} onClick={() => onAsk(c, a)}>
+                  {c.id === "answer" ? c.option : S.hm.act[c.id]}
+                </button>
+              ))}
             </p>
           ))}
         </section>
@@ -123,6 +155,10 @@ export function TicketHomeTab({ ticket, onGoTab, onFix }: TicketHomeTabProps) {
       }}
       onFix={() => {
         if (ticket.featureId !== null && stuckSession !== null) onFix(ticket.featureId, stuckSession);
+      }}
+      onAsk={(a, item) => {
+        setNotice(null);
+        runTicketAsk(a, item, { answerInbox: api.answerInbox, onGoTab }, S).then(setNotice, reportError);
       }}
     />
   );
