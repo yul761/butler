@@ -11,11 +11,12 @@ const cols = (db: DatabaseSync, t: string) => (db.prepare(`PRAGMA table_info(${t
 const hasTable = (db: DatabaseSync, t: string) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t) !== undefined;
 
 describe("turn migrations (UI redesign layer 1)", () => {
-  it("come after the layer-4 conversation store and are the last two", () => {
+  it("come after the layer-4 conversation store and are followed only by the layer-5 fork table", () => {
     expect(C).toBeGreaterThan(0);
     expect(D).toBe(C + 1);
     expect(MIGRATIONS[D + 1]).toContain("CREATE TABLE review_requests");
-    expect(MIGRATIONS).toHaveLength(D + 2);
+    expect(MIGRATIONS[D + 2]).toContain("CREATE TABLE fork_discussions");
+    expect(MIGRATIONS).toHaveLength(D + 3);
   });
 
   it("upgrade a database that stopped at the conversation store", () => {

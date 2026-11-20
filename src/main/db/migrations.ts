@@ -1382,4 +1382,29 @@ export const MIGRATIONS: string[] = [
     last_seen_at INTEGER NOT NULL
   );
   `,
+  // UI 重做第 5 层：对话 tab 的「问一问」分叉讨论（一行一个分叉，费用逐轮累计）。
+  `
+  CREATE TABLE fork_discussions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    root_session_id TEXT NOT NULL,
+    fork_session_id TEXT,
+    mode TEXT NOT NULL CHECK (mode IN ('full','light')),
+    cost_usd REAL,
+    cost_partial INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER NOT NULL,
+    last_at INTEGER NOT NULL,
+    summary_sent_at INTEGER,
+    ticket_key TEXT,
+    feature_id INTEGER,
+    cwd TEXT NOT NULL,
+    launch_args TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','idle','failed')),
+    error_code TEXT,
+    error_reset_at INTEGER,
+    conclusion TEXT,
+    conclusion_at INTEGER,
+    reask_of INTEGER REFERENCES fork_discussions(id)
+  );
+  CREATE INDEX fork_discussions_root ON fork_discussions(root_session_id, started_at);
+  `,
 ];
