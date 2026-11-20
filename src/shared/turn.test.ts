@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NowNotice } from "./types";
-import { mostUrgent, noticeNeedsYou, prTurn, ticketTurn, TURN_PRIORITY, type PrTurnInput, type Turn } from "./turn";
+import type { SessionActivity } from "./activity";
+import { mostUrgent, noticeNeedsYou, prTurn, REPORT_STOP_SLACK_MS, sessionTurn, type SessionTurnInput, ticketTurn, TURN_PRIORITY, type PrTurnInput, type Turn } from "./turn";
 
 const merge: Turn = { owner: "you", kind: "merge", risk: null };
 const ask: Turn = { owner: "you", kind: "answer", question: "q", options: [], askId: 1, sessionId: "s" };
@@ -110,5 +111,38 @@ describe("prTurn", () => {
   });
   it("nobody asked to review → no_reviewer", () => {
     expect(prTurn(pr({ review: "pending" }))).toMatchObject({ owner: "you", kind: "unattended", why: "no_reviewer", canSend: false });
+  });
+});
+
+const N = 5_000_000;
+const act = (o: Partial<SessionActivity> = {}) => ({ kind: "waiting", stuck: null, reason: null, startedAt: null, lastOutputAt: null, ...o }) as SessionTurnInput["activity"];
+const ses = (o: Partial<SessionTurnInput> = {}): SessionTurnInput => ({
+  sessionId: "s", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录", activity: act(), ask: null, needsYou: null,
+  lastReport: null, refreshing: false, stoppedAt: N - 100, now: N, ...o,
+});
+
+describe("sessionTurn", () => {
+  it("ask_user → answer with the inbox id, since = asked at", () => {
+    expect(sessionTurn(ses({ ask: { id: 7, question: "用哪个库？", options: ["a", "b"], at: N - 50 } }))).toEqual({
+      turn: { owner: "you", kind: "answer", question: "用哪个库？", options: ["a", "b"], askId: 7, sessionId: "s" }, since: N - 50,
+    });
+  });
+  it("permission prompt → butler approval notice", () => {
+    expect(sessionTurn(ses({ activity: act({ kind: "approval" }) })).turn).toEqual({
+      owner: "you", kind: "butler", notice: { kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录" },
+    });
+  });
+  it("only the four sources are stuck", () => {
+    expect(sessionTurn(ses({ needsYou: { reason: "缺 API key", category: "missing_info" } })).turn).toMatchObject({ kind: "stuck", source: "needs_you", detail: "缺 API key" });
+    expect(sessionTurn(ses({ activity: act({ kind: "command", stuck: true, reason: "20 分钟没输出" }) })).turn).toMatchObject({ kind: "stuck", source: "silent" });
+    expect(sessionTurn(ses({ lastReport: { kind: "blocked", text: "测试环境挂了", at: N - 200 }, stoppedAt: N - 150 })).turn).toMatchObject({ kind: "stuck", source: "blocked_report" });
+    // 不是卡住：普通提问、发完 blocked 又干了很久才停
+    expect(sessionTurn(ses({ needsYou: { reason: "要不要拆 PR？", category: "question" } })).turn).toMatchObject({ kind: "answer", askId: null, options: [] });
+    expect(sessionTurn(ses({ lastReport: { kind: "blocked", text: "x", at: N - REPORT_STOP_SLACK_MS - 200 }, stoppedAt: N - 100 })).turn).toMatchObject({ kind: "unattended", why: "agent_stopped" });
+  });
+  it("working or refreshing → agent working; stopped → unattended agent_stopped", () => {
+    expect(sessionTurn(ses({ activity: act({ kind: "edit", startedAt: N - 9 }) }))).toEqual({ turn: { owner: "agent", kind: "working", sessionId: "s" }, since: N - 9 });
+    expect(sessionTurn(ses({ refreshing: true })).turn).toEqual({ owner: "agent", kind: "working", sessionId: "s" });
+    expect(sessionTurn(ses({ activity: null }))).toEqual({ turn: { owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s" }, since: N - 100 });
   });
 });

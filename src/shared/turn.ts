@@ -1,9 +1,12 @@
 // 「谁该动」状态模型（UI 重做第 1 层，spec §5.1、§7）。
 // 每个 PR、ticket、总控 session、要你动手的 Butler 提醒和「别人请你 review 的 PR」都算成一个 Turn。
 // 这里只放纯函数和类型；名字和类型逐字照 docs/superpowers/plans/2026-11-19-ui-redesign-00-index.md 的「第 1 层产出」。
-import type { CiUndeliveredReason, NowNotice } from "./types";
+import type { CiUndeliveredReason, NowNotice, NowTarget } from "./types";
 import { INTAKE_DECISION_STATES } from "./intake";
 import type { WaitingInput } from "./progress";
+import { isWorking, type SessionActivity } from "./activity";
+import type { InterruptCategory } from "./metrics";
+import type { ReportKind } from "./control";
 
 /** 谁该动。done = 合了；idle = 没开始。 */
 export type TurnOwner = "you" | "agent" | "external" | "done" | "idle";
@@ -203,4 +206,51 @@ export function prTurn(i: PrTurnInput): Turn | null {
   // 不要求 review、可以直接合
   if (i.review === null && i.mergeState === "clean") return { owner: "you", kind: "merge", risk: i.risk };
   return yourSide(i, "no_reviewer");
+}
+
+// ---------- 一个 session 的 turn（R3、R7），不看 PR ----------
+
+/** 发完 blocked 汇报以后，这么久之内停下的还算「就停在那份汇报上」。 */
+export const REPORT_STOP_SLACK_MS = 5 * 60_000;
+
+export interface SessionTurnInput {
+  sessionId: string;
+  target: NowTarget;
+  title: string | null;
+  activity: Pick<SessionActivity, "kind" | "stuck" | "reason" | "startedAt" | "lastOutputAt" | "limit"> | null;
+  /** 这个 session 最早一条没回答的 ask_user（inbox_items.id）。 */
+  ask: { id: number; question: string; options: string[]; at: number } | null;
+  needsYou: { reason: string; category: InterruptCategory } | null;
+  /** 这个 ticket 最近的一条 report；总控为 null。 */
+  lastReport: { kind: ReportKind; text: string; at: number } | null;
+  refreshing: boolean;
+  stoppedAt: number | null;
+  now: number;
+}
+
+/** R3 + R7。「卡住了」只有 needs-you 的 stuck / missing_info、长时间没动静、停在 blocked 汇报上（加上 ticket 级的 ticket_blocked）。 */
+export function sessionTurn(i: SessionTurnInput): TimedTurn {
+  const a = i.activity;
+  const sessionId = i.sessionId;
+  const stopped = i.stoppedAt ?? i.now;
+  const working = isWorking(a);
+  if (i.ask) return { turn: { owner: "you", kind: "answer", question: i.ask.question, options: i.ask.options, askId: i.ask.id, sessionId }, since: i.ask.at };
+  if (a?.kind === "approval" || i.needsYou?.category === "permission") {
+    return { turn: { owner: "you", kind: "butler", notice: { kind: "approval", target: i.target, title: i.title } }, since: i.now };
+  }
+  if (i.refreshing) return { turn: { owner: "agent", kind: "working", sessionId }, since: a?.startedAt ?? i.now };
+  if (i.needsYou && (i.needsYou.category === "stuck" || i.needsYou.category === "missing_info")) {
+    return { turn: { owner: "you", kind: "stuck", source: "needs_you", detail: i.needsYou.reason, sessionId }, since: stopped };
+  }
+  if (a?.limit) return { turn: { owner: "you", kind: "butler", notice: { kind: "session_limited", target: i.target, title: i.title, limit: a.limit } }, since: i.now };
+  if (a?.stuck === true) {
+    return { turn: { owner: "you", kind: "stuck", source: "silent", detail: a.reason, sessionId }, since: a.lastOutputAt ?? a.startedAt ?? i.now };
+  }
+  const r = i.lastReport;
+  if (r && r.kind === "blocked" && !working && (i.stoppedAt === null || i.stoppedAt <= r.at + REPORT_STOP_SLACK_MS)) {
+    return { turn: { owner: "you", kind: "stuck", source: "blocked_report", detail: r.text, sessionId }, since: r.at };
+  }
+  if (i.needsYou) return { turn: { owner: "you", kind: "answer", question: i.needsYou.reason, options: [], askId: null, sessionId }, since: stopped };
+  if (working) return { turn: { owner: "agent", kind: "working", sessionId }, since: a?.startedAt ?? i.now };
+  return { turn: { owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId }, since: stopped };
 }

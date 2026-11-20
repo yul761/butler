@@ -35,6 +35,6 @@ export interface ActivityEvent {
 }
 
 /** 在干活：思考中、跑工具、后台命令。等你批准、等你回话、空闲、还没读到都不算。 */
-export function isWorking(a: SessionActivity | null): boolean {
+export function isWorking(a: Pick<SessionActivity, "kind"> | null): boolean {
   return a !== null && a.kind !== "approval" && a.kind !== "waiting" && a.kind !== "idle";
 }
