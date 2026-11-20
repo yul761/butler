@@ -36,6 +36,7 @@ async function setup(opts: {
   pathValue?: string;
   lessonsWorkspace?: string;
   checksAbsence?: () => CheckAbsenceReason | null;
+  butlerWorkspace?: string;
 } = {}) {
   const stateOf = (id: string): TranscriptState =>
     opts.transcriptState ?? (opts.transcripts === undefined || opts.transcripts.includes(id) ? "present" : "absent");
@@ -67,6 +68,7 @@ async function setup(opts: {
     launchFs: opts.launchFs,
     lessonsWorkspace: opts.lessonsWorkspace,
     checksAbsence: opts.checksAbsence,
+    butlerWorkspace: opts.butlerWorkspace,
     submit: async (termId, message) => (submitted.push([termId, message]), "sent"),
     log: (m) => logs.push(m),
   });
@@ -117,6 +119,39 @@ describe("SessionService and cleaned-up worktrees (design 2026-10-26)", () => {
     expect(service.hasRepoTerminal("PROJ-1", repoId)).toBe(false);
     await service.open({ ticketKey: "PROJ-1" });
     expect(service.hasRepoTerminal("PROJ-1", repoId)).toBe(true);
+  });
+});
+
+describe("SessionService.devLaunchOf", () => {
+  it("records the claude args of a ticket session, without the launch prefix, and forgets them on exit", async () => {
+    const { service, spawned } = await setup({
+      mcpConfig: () => "/m.json", mcpSettings: () => "/s.json", guidePath: () => "/g.md", platform: "win32", claudePath: "C:\\bin\\claude.exe",
+    });
+    await service.open({ ticketKey: "PROJ-1" }, { model: "sonnet" });
+    const dev = service.devLaunchOf("new-1");
+    expect(dev).toMatchObject({ sessionId: "new-1", cwd: spawned[0].opts.cwd, mcpConfigPath: "/m.json", settingsPath: "/s.json", model: "sonnet", addDirs: [] });
+    expect(dev?.claudeArgs).toEqual(["--session-id", "new-1", "--mcp-config", "/m.json", "--settings", "/s.json", "--append-system-prompt-file", "/g.md", "--model", "sonnet"]);
+    expect(spawned[0].args.slice(-dev!.claudeArgs.length)).toEqual(dev!.claudeArgs);
+    service.handleExit("new-1");
+    expect(service.devLaunchOf("new-1")).toBeNull();
+  });
+
+  it("is null once the terminal is gone, and for an id that never opened", async () => {
+    const { service, pty } = await setup();
+    await service.open({ ticketKey: "PROJ-1" });
+    expect(service.devLaunchOf("new-1")).not.toBeNull();
+    pty.kill("new-1");
+    expect(service.devLaunchOf("new-1")).toBeNull();
+    expect(service.devLaunchOf("nope")).toBeNull();
+  });
+
+  it("records the args of a workspace session too (butler)", async () => {
+    const ws = join(tempDir("butler-home-"), "_butler");
+    const { service, spawned } = await setup({ butlerWorkspace: ws });
+    expect(await service.openButler({})).toMatchObject({ ok: true });
+    const dev = service.devLaunchOf("new-1");
+    expect(dev).toMatchObject({ sessionId: "new-1", cwd: ws, mcpConfigPath: null, settingsPath: null, model: null });
+    expect(dev?.claudeArgs).toEqual(spawned[0].args);
   });
 });
 
