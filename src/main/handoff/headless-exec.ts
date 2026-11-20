@@ -1,5 +1,6 @@
 import type { LimitHit } from "../../shared/availability";
 import { TASKS, tierRank, type EffortLevel, type RouteEventKind, type SpendLevel, type TaskId, type Tier } from "../../shared/model-routing";
+import { runCostFromCumulative, runStart } from "../../shared/run-cost";
 import type { ClaudeResult, HeadlessFailure, HeadlessOutcome, HeadlessRun } from "../claude/headless";
 import { headlessEnv } from "../claude/spawn";
 import type { SessionsRepo } from "../db/sessions-repo";
@@ -45,6 +46,7 @@ export interface UsageReport {
   task?: TaskId;
   requestedTier?: Tier | null;
   fallbackFrom?: string | null;
+  /** 这一次运行自己的金额（runUsd；分叉讨论传 turnCost 算出的）。不是 CLI 的累计 total。null 是没有，由用量统计按价格表估。 */
   costUsd?: number | null;
   /** 归到哪个 ticket（成本熔断按 ticket 汇总，工作流 L）；不归 ticket 为 null。 */
   ticketKey?: string | null;
@@ -126,6 +128,18 @@ export function withModel(args: string[], model: string | null, effort: EffortLe
   return out;
 }
 
+/**
+ * 这一次运行自己的金额。CLI 的 total_cost_usd 是被续的那个 session 的累计：没带 --resume 的就是这一次；
+ * 带了的（handoff、feature 汇总都是 --resume <开发 session> --fork-session）连开发 session 以前的全部花费都算在里面（BTL-239），
+ * 按 modelUsage 拆出这一次的份额（runCostFromCumulative，约数）；拆不出来 → null，由用量统计按价格表估，绝不记成累计。
+ */
+export function runUsd(args: readonly string[], res: ClaudeResult | null | undefined, model: string | null): number | null {
+  const total = res?.costUsd ?? null;
+  if (!res || total === null) return null;
+  if (runStart(args) === "fresh") return total;
+  return runCostFromCumulative(total, res.usageRaw, res.modelUsage, res.model ?? model)?.usd ?? null;
+}
+
 const NO_RETRY: ReadonlySet<HeadlessFailure> = new Set(["timeout", "spawn_failed", "aborted", "bad_output"]);
 const LEARN_FROM: ReadonlySet<HeadlessFailure> = new Set(["claude_error", "exit_nonzero"]);
 
@@ -181,7 +195,7 @@ export async function execHeadlessJson(d: HeadlessExecDeps, o: ExecOptions): Pro
     const usage = out.result?.usage;
     if (usage) {
       const u: UsageReport = { runId, label: o.label, at: d.now(), model: out.result?.model ?? null, usage, ...(o.ticketKey && { ticketKey: o.ticketKey }) };
-      if (r) Object.assign(u, { task: o.task, costUsd: out.result?.costUsd ?? null, ...extra });
+      if (r) Object.assign(u, { task: o.task, costUsd: runUsd(args, out.result, model), ...extra });
       hook("onUsage", () => d.onUsage?.(u));
     }
     const sid = out.result?.sessionId;

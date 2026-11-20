@@ -8,6 +8,8 @@ import { RoutingRepo } from "../db/routing-repo";
 import { UsageRepo } from "../db/usage-repo";
 import { RoutingService } from "../routing/routing-service";
 import { execHeadlessJson, jobOf, withModel, type HeadlessExecDeps } from "./headless-exec";
+import { F1, T1, T3 } from "../../shared/__fixtures__/cli-cost";
+import { parseClaudeJson } from "../claude/headless";
 
 const USAGE = { input: 1, cacheWrite5m: 2, cacheWrite1h: 3, cacheRead: 4, output: 5 };
 const result = (over: Partial<ClaudeResult> = {}): ClaudeResult => ({
@@ -259,6 +261,38 @@ describe("execHeadlessJson routing", () => {
       ["-p"],
     ]);
     expect(reports[0]).toEqual({ runId: "r", label: "lessons", at: 1000, model: "claude-sonnet-5-5", usage: USAGE, task: "needs_you", costUsd: 0, requestedTier: null, fallbackFrom: null });
+  });
+
+  // BTL-239：--resume X --fork-session 时 CLI 的 total_cost_usd 带着 X 以前的全部花费，用量行要记的是这一轮自己的。
+  it("a forked run (handoff, feature summary) records this run's share of the cumulative total, not the total", async () => {
+    const args = ["-p", "--resume", "dev-1", "--fork-session", "--output-format", "json"];
+    const forked = parseClaudeJson(JSON.stringify(F1), args)!;
+    const { d, reports } = routed([], () => ({ ok: true, result: forked }));
+    await execHeadlessJson(d, { ...o, args, resumedId: "dev-1" });
+    const cost = (reports[0] as { costUsd: number }).costUsd;
+    // 准数是 F1 − T3（这个 haiku 小样本里份额正好对得上）；绝不是累计的 0.0057。
+    expect(cost).toBeCloseTo(F1.total_cost_usd - T3.total_cost_usd, 6);
+    expect(cost).toBeLessThan(F1.total_cost_usd / 10);
+  });
+  it("a fresh run's total is this run's cost and is recorded as is", async () => {
+    const args = ["-p", "--output-format", "json"];
+    const fresh = parseClaudeJson(JSON.stringify(T1), args)!;
+    const { d, reports } = routed([], () => ({ ok: true, result: fresh }));
+    await execHeadlessJson(d, { ...lo, args });
+    expect((reports[0] as { costUsd: number }).costUsd).toBe(T1.total_cost_usd);
+  });
+  it("a forked run whose share can't be split (no modelUsage): no amount (the usage page estimates it), never the cumulative total", async () => {
+    const args = ["-p", "--resume", "dev-1", "--fork-session"];
+    const { d, reports } = routed([], () => ({ ok: true, result: result({ costUsd: 5 }) }));
+    await execHeadlessJson(d, { ...o, args, resumedId: "dev-1" });
+    expect(reports[0]).toMatchObject({ costUsd: null });
+  });
+  it("a failed forked run is split the same way", async () => {
+    const args = ["-p", "--resume", "dev-1", "--fork-session"];
+    const forked = { ...parseClaudeJson(JSON.stringify(F1), args)!, isError: true };
+    const { d, reports } = routed([], () => ({ ok: false, reason: "claude_error", message: "x", limit: null, stderr: "", result: forked }));
+    await execHeadlessJson(d, { ...o, args, resumedId: "dev-1" });
+    expect((reports[0] as { costUsd: number }).costUsd).toBeLessThan(F1.total_cost_usd / 10);
   });
 
   it("no routing configured: a limit goes to the account-wide hooks and nothing retries", async () => {

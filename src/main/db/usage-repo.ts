@@ -9,7 +9,7 @@ export interface UsageRow extends UsageTurn {
   agentId: string | null;
   source: UsageSource;
   job: string | null;
-  /** 后台调用的任务 id、要的档位、从哪个模型降下来、CLI 报的金额（模型路由，可省略）。 */
+  /** 后台调用的任务 id、要的档位、从哪个模型降下来、这一次运行自己的金额（从 CLI 报的金额算出，不是续 session 时的累计；模型路由，可省略）。 */
   task?: string | null;
   requestedTier?: string | null;
   fallbackFrom?: string | null;
