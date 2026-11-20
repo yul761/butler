@@ -117,12 +117,12 @@ export function rememberText(r: RememberResult, t: UiStrings): string {
   }
 }
 
-/** 记进记忆回了这个就关掉按钮：只有记忆整体关着（disabled）；没有 ticket / feature 可记（no_scope）不是记忆没开。 */
 /** 总控页上分叉的结论有没有地方记：只有 feature 总控页有 feature；Butler 页和 epic 页没有 ticket 也没有 feature，不出「记进记忆」。 */
 export function canRememberIn(scope: InboxScope): boolean {
   return "featureId" in scope;
 }
 
+/** 记进记忆回了这个就关掉按钮：只有记忆整体关着（disabled）；没有 ticket / feature 可记（no_scope）不是记忆没开。 */
 export function refusesMemory(r: RememberResult): boolean {
   return r === "disabled";
 }
