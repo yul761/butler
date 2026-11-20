@@ -1,3 +1,4 @@
+// 第 3 层接手：PR 表、待 review 队列、feature 分组并进 epic/feature/ticket 页后，整份文件和 progress-ui.ts 一起删。
 import { useState } from "react";
 import { PROGRESS_BUCKETS, type ProgressFeature, type ProgressPr, type ProgressStuck, type ProgressView } from "../../../shared/progress";
 import { api } from "../api";
@@ -7,8 +8,6 @@ import { flattenStack, prRef, segmentWidths, shortTime, sinceText, waitingText }
 import { queueFor, queueIndex, riskPill } from "../review-view";
 import { S } from "../strings";
 import { FeaturePrStages } from "./PrStages";
-import { ManagedStacks } from "./StacksPanel";
-import { IntakeQueue } from "./IntakeQueue";
 import { useStateRefetch } from "./useStateRefetch";
 
 const openPr = (url: string): void => void api.prOpen(url).catch(reportError);
@@ -287,7 +286,6 @@ export function ProgressBody({ view, onOpenTicket, onOpenFeature, queue = null }
         <h3>{S.progress.stuckHeading}</h3>
         <StuckList stuck={view.stuck} now={view.freshness.generatedAt} onOpenTicket={onOpenTicket} />
       </section>
-      <ManagedStacks filter={view.filter} onOpenTicket={onOpenTicket} />
       <Stacks view={view} />
       {shown && <ReviewQueueList items={shown} onOpenTicket={onOpenTicket} />}
       <PrTable view={view} onOpenTicket={onOpenTicket} queue={queueIndex(shown)} />
@@ -304,64 +302,13 @@ export function ProgressBody({ view, onOpenTicket, onOpenFeature, queue = null }
   );
 }
 
-interface Props {
-  epicId?: number | null;
-  featureId?: number | null;
-  onOpenTicket: (key: string) => void;
-  onOpenFeature: (id: number) => void;
-}
-
-/** 进度页（ws-b）：全局的进度看板，可以按 epic、feature 过滤。 */
-export function ProgressPage({ epicId: initialEpic = null, featureId: initialFeature = null, onOpenTicket, onOpenFeature }: Props) {
-  const [epicId, setEpicId] = useState<number | null>(initialEpic);
-  const [featureId, setFeatureId] = useState<number | null>(initialFeature);
-  const view = useProgress({ epicId, featureId });
-  const queue = useStateRefetch("review-queue", api.reviewQueue);
-  const features = (view?.features ?? []).filter((f) => epicId === null || f.epicId === epicId);
-  return (
-    <div className="ticket-page progress-page" data-testid="progress-page">
-      <header className="ticket-header">
-        <h2>{S.progress.title}</h2>
-        <label className="progress-filter">
-          {S.progress.epic}
-          <select
-            data-testid="progress-epic"
-            value={epicId ?? ""}
-            onChange={(e) => {
-              const id = e.target.value === "" ? null : Number(e.target.value);
-              setEpicId(id);
-              // 换了 epic：原来选的 feature 不在里面就清掉。
-              if (id !== null && featureId !== null && view?.features.find((f) => f.id === featureId)?.epicId !== id) setFeatureId(null);
-            }}
-          >
-            <option value="">{S.progress.allEpics}</option>
-            {(view?.epics ?? []).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-          </select>
-        </label>
-        <label className="progress-filter">
-          {S.progress.feature}
-          <select data-testid="progress-feature" value={featureId ?? ""} onChange={(e) => setFeatureId(e.target.value === "" ? null : Number(e.target.value))}>
-            <option value="">{S.progress.allFeatures}</option>
-            {features.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-          </select>
-        </label>
-      </header>
-      <p className="muted">{S.progress.intro}</p>
-      <IntakeQueue onOpenTicket={onOpenTicket} />
-      {view && <ProgressBody view={view} onOpenTicket={onOpenTicket} onOpenFeature={onOpenFeature} queue={queue} />}
-    </div>
-  );
-}
-
 /**
  * feature / epic 的 PR 进度 tab 顶上的「卡在谁手上」：和进度页同一份数据，只取这个 feature / epic 的。
- * onOpenProgress：去进度页看完整的（带着同样的过滤）。
  */
-export function PrStuckBlock({ epicId = null, featureId = null, onOpenTicket, onOpenProgress }: {
+export function PrStuckBlock({ epicId = null, featureId = null, onOpenTicket }: {
   epicId?: number | null;
   featureId?: number | null;
   onOpenTicket: (key: string) => void;
-  onOpenProgress?: () => void;
 }) {
   const view = useProgress({ epicId, featureId });
   if (view === null) return null;
@@ -369,7 +316,6 @@ export function PrStuckBlock({ epicId = null, featureId = null, onOpenTicket, on
     <section className="pr-stuck-block" data-testid="pr-stuck-block">
       <div className="progress-section-head">
         <h3>{S.prStagesStuck}</h3>
-        {onOpenProgress && <button className="link" onClick={onOpenProgress}>{S.prStagesOpenProgress}</button>}
       </div>
       <StuckList stuck={view.stuck} now={view.freshness.generatedAt} onOpenTicket={onOpenTicket} />
     </section>

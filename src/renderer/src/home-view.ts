@@ -5,7 +5,7 @@ import { mostUrgent, YOU_KIND_RANK, type ScopeTurnRow, type Turn, type TurnBoard
 import type { Route } from "./App";
 import { formatDuration } from "./components/TicketActivity";
 import type { UiStrings } from "./strings";
-import { turnTone, type TurnTone } from "./turn-tone";
+import type { TurnTone } from "./turn-tone";
 
 export { turnTone, type TurnTone } from "./turn-tone";
 

@@ -26,7 +26,6 @@ interface Props {
   /** 「待你决定」卡片上的「去终端」：问题不是这个页面上的 session 提的（ticket 的 session）时跳过去。 */
   onOpenTarget: (t: NowTarget) => void;
   /** PR 进度 tab 里「在进度页里看」：去进度页，只看这个 feature。 */
-  onOpenProgress?: () => void;
 }
 
 const errorText = (e: unknown) => (e instanceof ButlerError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
@@ -39,7 +38,7 @@ function formatTime(ms: number): string {
  * feature 页（设计文档 2026-10-26、2026-10-28）：从上到下是名字和工作区，一排 tab（整体进度、ticket 表、汇报、待你决定，
  * 一次只显示一块，各自滚动，不互相挤），然后是仓库、feature 总控 session 和它们的终端。
  */
-export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, focusSession, onOpenTarget, onOpenProgress }: Props) {
+export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, focusSession, onOpenTarget }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newTicket, setNewTicket] = useState(false);
   const showError = (e: unknown) => setError(errorText(e));
@@ -162,7 +161,7 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
           },
           { id: "stages", label: S.prStagesTab, content: (
               <>
-                <PrStuckBlock featureId={feature.id} onOpenTicket={onOpenTicket} onOpenProgress={onOpenProgress} />
+                <PrStuckBlock featureId={feature.id} onOpenTicket={onOpenTicket} />
                 <FeaturePrStages featureId={feature.id} onOpenTicket={onOpenTicket} />
               </>
             ),
