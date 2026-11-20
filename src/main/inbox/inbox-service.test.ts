@@ -131,17 +131,6 @@ describe("InboxService ask_user (BTL-190 2+3)", () => {
     expect(repo.pendingDecisions()).toEqual([]);
   });
 
-  it("dismiss sends nothing", async () => {
-    const s = session("s1");
-    const { inbox, repo, deliver } = setup({ sessions: [s] });
-    const id = inbox.ask(s, { question: "q" });
-    expect(inbox.dismiss(id)).toBe(true);
-    expect(inbox.dismiss(id)).toBe(false);
-    await inbox.flush();
-    expect(repo.get(id)?.status).toBe("dismissed");
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
   it("a UserPromptSubmit in the asking session (any id on its chain) answers its unanswered items, but not other sessions'", async () => {
     const s = session("s1");
     const t = session("t1");
@@ -501,17 +490,6 @@ describe("InboxService metrics (ws-h)", () => {
     inbox.answer(id, "A");
     expect(recordEvent).toHaveBeenCalledWith("needs_you_answer", { sessionId: "s1", ticketKey: "BTL-1", dedupeKey: `answer:${id}`, data: { via: "card", options: 2 } });
     expect(inbox.answer(id, "   ")).toBe(false);
-    expect(recordEvent).toHaveBeenCalledTimes(1);
-  });
-
-  it("records needs_you_answer for 「不用了」", () => {
-    const s = session("s1");
-    const recordEvent = vi.fn<RecordEvent>(() => true);
-    const { inbox } = setup({ sessions: [s], recordEvent });
-    const id = inbox.ask(s, { question: "q?" });
-    expect(inbox.dismiss(id)).toBe(true);
-    expect(recordEvent).toHaveBeenCalledWith("needs_you_answer", expect.objectContaining({ data: { via: "dismiss", options: 0 } }));
-    expect(inbox.dismiss(id)).toBe(false);
     expect(recordEvent).toHaveBeenCalledTimes(1);
   });
 

@@ -213,7 +213,7 @@ export interface IpcDeps {
   /** 重发一条递不出去的 CI 结论（工作流 W）。 */
   ciResend: (item: CiItemRef) => Promise<string>;
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）。 */
-  inbox: Pick<InboxService, "view" | "answer" | "dismiss">;
+  inbox: Pick<InboxService, "view" | "answer">;
   /** 界面上的“换新”按钮（计划 16）：马上回答，换新在后台跑。 */
   refreshSession: (sessionId: string) => RefreshSessionResult;
   /** 「清理闲置」按钮（BTL-190 第 8 点）：把这些 session 里闲置的关掉，返回开始关的个数（关闭在后台跑）。 */
@@ -762,7 +762,6 @@ export function registerIpc(d: IpcDeps): void {
   // 答了、不用了都由 InboxService 自己 notify。
   handle(IPC.inboxList, (raw: unknown): InboxView => d.inbox.view(inboxScopeArg(raw)));
   handle(IPC.inboxAnswer, (id: unknown, text: unknown): boolean => d.inbox.answer(inboxIdArg(id), inboxAnswerArg(text)));
-  handle(IPC.inboxDismiss, (id: unknown): boolean => d.inbox.dismiss(inboxIdArg(id)));
 
   handle(IPC.followupsList, (ticketKey: string) => d.followups.listByTicket(ticketKey));
   handle(IPC.followupsSetStatus, (id: string, status: FollowupStatus) => {

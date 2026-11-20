@@ -237,7 +237,6 @@ export const api = {
     call<{ ok: boolean; reason?: TurnSendReason }>(IPC.turnSendToAgent, { ticketKey: item.ticketKey, pr: { repo: item.pr.repo, number: item.pr.number } }),
   inbox: (scope: InboxScope) => call<InboxView>(IPC.inboxList, scope),
   answerInbox: (id: number, text: string) => call<boolean>(IPC.inboxAnswer, id, text),
-  dismissInbox: (id: number) => call<boolean>(IPC.inboxDismiss, id),
   followups: (ticketKey: string) => call<Followup[]>(IPC.followupsList, ticketKey),
   setFollowupStatus: (id: string, status: FollowupStatus) => call<void>(IPC.followupsSetStatus, id, status),
   handoffs: (ticketKey: string) => call<HandoffRecord[]>(IPC.handoffsList, ticketKey),
