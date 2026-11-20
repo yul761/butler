@@ -1,7 +1,7 @@
 import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
 import type { Handoff } from "../../shared/handoff";
 import {
-  epicScope, featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, plainNoteBody, ticketScope, WORKSPACE_SCOPE,
+  epicScope, featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, plainNoteBody, ticketScope, truncateUnits, WORKSPACE_SCOPE,
   type ButlerNote, type MemoryItem, type MemoryView, type WhyEntry,
 } from "../../shared/memory";
 import type { EpicFeatureRow } from "../../shared/types";
@@ -440,6 +440,47 @@ export class MemoryService {
       this.log(`memory view ${key} failed`, e);
       return { enabled: true, scope, handoff: null, items: [], error: errorText(e) };
     }
+  }
+
+  /**
+   * 精简分叉用：这个范围的交接摘要加记忆条目拼成文本，最多 maxChars 个字符。
+   * 记忆关着、读失败（记日志）时返回 ""；永不 reject。和 view 一样只读，不进写入队列。
+   */
+  async recallText(scope: string, maxChars: number): Promise<string> {
+    if (!this.d.enabled()) return "";
+    try {
+      const text = await withScope({ dataDir: this.d.dataDir, scope }, async (s) => {
+        const handoff = await s.activeHandoff();
+        const items = await s.facts();
+        return [handoff?.content ?? "", ...items.map((i) => i.text)].filter(Boolean).join("\n");
+      });
+      return truncateUnits(text, maxChars);
+    } catch (e) {
+      this.log(`memory recallText ${scope} failed`, e);
+      return "";
+    }
+  }
+
+  /**
+   * 把一段纯文本记进这个范围（不带 Butler 的 kind:id 前缀，所以 reconcile 不认它，也就不会删它）。
+   * 先过 slotGuard：没有空位就不写（不挤掉别的条目），返回 "full"。正文压空白、截到 NOTE_BODY_LIMIT。
+   * 走写入队列，永不 reject：失败只写日志，返回 "failed"。
+   */
+  rememberText(scope: string, text: string): Promise<"written" | "full" | "disabled" | "failed"> {
+    return this.enqueue<"written" | "full" | "disabled" | "failed">(
+      `memory rememberText ${scope}`,
+      async () => {
+        if (!this.d.enabled()) return "disabled";
+        const body = plainNoteBody(text);
+        if (!body) return "failed";
+        return withScope({ dataDir: this.d.dataDir, scope }, async (s) => {
+          if (!(await slotGuard(s).take())) return "full";
+          await s.remember(body);
+          return "written";
+        });
+      },
+      "failed",
+    );
   }
 
   /**

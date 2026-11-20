@@ -105,6 +105,12 @@ export class UsageRepo {
     return r ? Number(r.context) : null;
   }
 
+  /** 这个 session 自己最后一轮的时间（按 at 取最大）；只看 source='session'，没有记录时为 null。 */
+  lastSessionTurnAt(sessionId: string): number | null {
+    const r = this.db.prepare(`SELECT MAX(at) AS at FROM session_usage WHERE session_id = ? AND source = 'session'`).get(sessionId) as { at: number | null };
+    return r.at === null ? null : Number(r.at);
+  }
+
   /** at >= sinceMs 的所有行。 */
   since(sinceMs: number): UsageRow[] {
     return (this.db.prepare(`SELECT * FROM session_usage WHERE at >= ? ORDER BY at`).all(sinceMs) as unknown as UsageDbRow[]).map(toRow);

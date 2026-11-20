@@ -608,6 +608,70 @@ describe("MemoryService.epicProgress (plan 16 R29: refreshing an epic session)",
   });
 });
 
+describe("MemoryService.rememberText and recallText (fork light mode)", () => {
+  it("writes a plain note that view shows, and reconcile leaves alone", async () => {
+    const t = setup();
+    t.addHandoff(payload({ decisions: [{ key: "db", statement: "用 PostgreSQL" }] }));
+    expect(await t.memory.rememberText("ticket:PROJ-1", "结论：先改接口再改界面")).toBe("written");
+    expect((await t.memory.view("PROJ-1")).items.map((i) => i.text)).toContain("结论：先改接口再改界面");
+    await t.memory.syncTicket("PROJ-1");
+    const texts = await t.texts();
+    expect(texts).toContain("结论：先改接口再改界面");
+    expect(texts).toContain("[decision:db] 用 PostgreSQL");
+  });
+
+  it("cuts the text to NOTE_BODY_LIMIT", async () => {
+    const t = setup();
+    expect(await t.memory.rememberText("ticket:PROJ-1", "字".repeat(NOTE_BODY_LIMIT + 50))).toBe("written");
+    expect(await t.texts()).toEqual(["字".repeat(NOTE_BODY_LIMIT)]);
+  });
+
+  it("returns full when no slot is left, without pushing anything out", async () => {
+    const t = setup();
+    await withScope({ dataDir: t.dataDir, scope: "ticket:PROJ-1" }, async (s) => {
+      for (let i = 0; i < NOTES_CAP; i++) await s.remember(`已有 ${distinct(i)}`);
+    });
+    const before = await t.texts();
+    expect(await t.memory.rememberText("ticket:PROJ-1", "新的一条")).toBe("full");
+    expect(await t.texts()).toEqual(before);
+  });
+
+  it("returns disabled when memory is off", async () => {
+    const t = setup({ enabled: false });
+    expect(await t.memory.rememberText("ticket:PROJ-1", "x")).toBe("disabled");
+    expect(await t.texts()).toEqual([]);
+  });
+
+  it("returns failed instead of rejecting when StateCore throws", async () => {
+    const t = setup();
+    vi.mocked(withScope).mockRejectedValueOnce(new Error("boom"));
+    await expect(t.memory.rememberText("ticket:PROJ-1", "x")).resolves.toBe("failed");
+    expect(t.logs.some((l) => l.includes("boom"))).toBe(true);
+  });
+
+  it("recallText joins the handoff and the notes, capped at maxChars", async () => {
+    const t = setup();
+    t.addHandoff(payload({ done_today: ["做完了登录页"], decisions: [{ key: "db", statement: "用 PostgreSQL" }] }));
+    await t.memory.syncTicket("PROJ-1");
+    const all = await t.memory.recallText("ticket:PROJ-1", 10_000);
+    expect(all).toContain("做完了登录页");
+    expect(all).toContain("用 PostgreSQL");
+    const cut = await t.memory.recallText("ticket:PROJ-1", 20);
+    expect(cut.length).toBeLessThanOrEqual(20);
+    expect(cut.length).toBeGreaterThan(0);
+  });
+
+  it("recallText is empty when memory is off or the read fails", async () => {
+    const t = setup();
+    t.addHandoff(payload({ done_today: ["x"] }));
+    await t.memory.syncTicket("PROJ-1");
+    vi.mocked(withScope).mockRejectedValueOnce(new Error("boom"));
+    expect(await t.memory.recallText("ticket:PROJ-1", 1000)).toBe("");
+    t.setEnabled(false);
+    expect(await t.memory.recallText("ticket:PROJ-1", 1000)).toBe("");
+  });
+});
+
 describe("handoffSummary", () => {
   it("states the status and what was done", () => {
     expect(handoffSummary(payload({ status: "in_review", done_today: ["写完接口", " ", "补测试"] }))).toBe("状态：in_review。完成：写完接口；补测试");
