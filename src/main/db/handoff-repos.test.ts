@@ -1,6 +1,3 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { Followup } from "../../shared/types";
@@ -196,8 +193,9 @@ describe("withTransaction", () => {
 
 describe("upgrade from schema v1", () => {
   it("keeps old rows and reads new columns as unknown", () => {
-    const dir = mkdtempSync(join(tmpdir(), "butler-up-"));
-    const db = new DatabaseSync(join(dir, "v1.db"));
+    // 内存库：迁移的结果和磁盘上一样，但磁盘上 90 多次迁移各自 COMMIT（每次建删 journal、fsync），Windows runner
+    // 上偶尔要几十秒，撞 30 秒超时（BTL-240）。
+    const db = new DatabaseSync(":memory:");
     db.exec("PRAGMA foreign_keys = ON;");
     db.exec(MIGRATIONS[0]);
     db.exec("PRAGMA user_version = 1");

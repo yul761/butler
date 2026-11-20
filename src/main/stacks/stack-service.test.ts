@@ -7,7 +7,7 @@ import type { StackRunMode } from "../../shared/stacks";
 import { JOB_STACKS_DAILY, JobsRepo } from "../db/jobs-repo";
 import { StacksRepo } from "../db/stacks-repo";
 import type { ExternalDetail } from "../external/actions";
-import { makeRepo, memDb, tempDir } from "../test-utils";
+import { copyRepo, makeRepo, memDb, setOriginUrl, tempDir } from "../test-utils";
 import type { CreatePr, PrSnapshot } from "./gh-stack";
 import { StackPolicyService } from "./stack-policy";
 import { StackService, type StackServiceDeps } from "./stack-service";
@@ -91,22 +91,46 @@ function chain(repo: string, branches: readonly string[]): void {
   execFileSync("git", ["fast-import", "--quiet"], { cwd: repo, input: script, stdio: ["pipe", "ignore", "pipe"] });
 }
 
+/** 每种层的组合只真的建一次仓库：git 部分见 gitWorld。 */
+const worldTemplates = new Map<string, { remote: string; repo: string; hub: string }>();
+
+/**
+ * 栈的 git 部分：bare 远端、推好全部分支的本地仓库、「GitHub」克隆。每种层的组合在每个测试文件里只建一次，
+ * 之后每个用例复制一份（copyRepo）再把 origin 指到自己的远端：建一次要十几个 git 进程，push / clone 自己还要再起
+ * 好几个，Windows runner 上这些加起来是这个文件 30 秒超时的一大块（BTL-240）。
+ */
+function gitWorld(branches: readonly string[]) {
+  const key = branches.join(",");
+  let t = worldTemplates.get(key);
+  if (!t) {
+    const remote = tempDir("butler-remote-");
+    g(remote, "init", "-q", "--bare", "-b", "main");
+    const repo = makeRepo();
+    g(repo, "remote", "add", "origin", remote);
+    chain(repo, branches);
+    // 一次推完：每次 push 都要起好几个进程，40 层的栈在 Windows 上一层一次推会慢很多。
+    g(repo, "push", "-q", "origin", "main", ...branches);
+    g(repo, "fetch", "-q", "origin");
+    const hub = tempDir("butler-hub-");
+    g(hub, "clone", "-q", remote, ".");
+    g(hub, "config", "user.email", "hub@example.com");
+    g(hub, "config", "user.name", "Hub");
+    g(hub, "config", "commit.gpgsign", "false");
+    t = { remote, repo, hub };
+    worldTemplates.set(key, t);
+  }
+  const remote = copyRepo(t.remote, "butler-remote-");
+  const repo = copyRepo(t.repo);
+  const hub = copyRepo(t.hub, "butler-hub-");
+  setOriginUrl(repo, remote);
+  setOriginUrl(hub, remote);
+  return { remote, repo, hub };
+}
+
 /** 4 层的栈 a ← b ← c ← d，每层一个提交、各改各的文件；全部推到远端。另有一个「GitHub」克隆用来合并。 */
 function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind) => boolean; autoRebase?: boolean; policy?: Record<string, unknown>; branches?: string[] } = {}) {
   const branches = o.branches ?? BRANCHES;
-  const remote = tempDir("butler-remote-");
-  g(remote, "init", "-q", "--bare", "-b", "main");
-  const repo = makeRepo();
-  g(repo, "remote", "add", "origin", remote);
-  chain(repo, branches);
-  // 一次推完：每次 push 都要起好几个进程，40 层的栈在 Windows 上一层一次推会慢很多。
-  g(repo, "push", "-q", "origin", "main", ...branches);
-  g(repo, "fetch", "-q", "origin");
-  const hub = tempDir("butler-hub-");
-  g(hub, "clone", "-q", remote, ".");
-  g(hub, "config", "user.email", "hub@example.com");
-  g(hub, "config", "user.name", "Hub");
-  g(hub, "config", "commit.gpgsign", "false");
+  const { remote, repo, hub } = gitWorld(branches);
 
   const db = memDb();
   let clock = Date.parse("2026-11-18T10:00:00");

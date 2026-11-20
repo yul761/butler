@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { makeRepo, tempDir } from "../test-utils";
+import { copyRepo, makeRepo, tempDir } from "../test-utils";
 import { isAncestor, parseGitVersion, parseWorktreeList, refsUnder, supportsUpdateRefs } from "./git-stack";
 import { runEngine, type EngineLayer } from "./rebase-engine";
 
@@ -18,19 +18,28 @@ function commit(repo: string, file: string, text: string, msg: string): string {
   return g(repo, "rev-parse", "HEAD");
 }
 
-/** main ← a ← b ← c ← d，每层两个提交、各改自己的文件。 */
+let fourLayersTemplate: { repo: string; tips: Record<string, string> } | null = null;
+
+/**
+ * main ← a ← b ← c ← d，每层两个提交、各改自己的文件。
+ * 每个测试文件只真的建一次（近 30 个 git 进程），之后复制（copyRepo）：Windows runner 上这些进程是这个文件
+ * 30 秒超时的一大块（BTL-240）。复制出来的提交 SHA 和模板一样，tips 照用。
+ */
 function fourLayers() {
-  const repo = makeRepo();
-  const tips: Record<string, string> = {};
-  let parent = "main";
-  for (const b of ["a", "b", "c", "d"]) {
-    g(repo, "checkout", "-q", "-b", b, parent);
-    commit(repo, `${b}.txt`, `${b}1\n`, `${b} one`);
-    tips[b] = commit(repo, `${b}.txt`, `${b}1\n${b}2\n`, `${b} two`);
-    parent = b;
+  if (!fourLayersTemplate) {
+    const repo = makeRepo();
+    const tips: Record<string, string> = {};
+    let parent = "main";
+    for (const b of ["a", "b", "c", "d"]) {
+      g(repo, "checkout", "-q", "-b", b, parent);
+      commit(repo, `${b}.txt`, `${b}1\n`, `${b} one`);
+      tips[b] = commit(repo, `${b}.txt`, `${b}1\n${b}2\n`, `${b} two`);
+      parent = b;
+    }
+    g(repo, "checkout", "-q", "main");
+    fourLayersTemplate = { repo, tips };
   }
-  g(repo, "checkout", "-q", "main");
-  return { repo, tips };
+  return { repo: copyRepo(fourLayersTemplate.repo), tips: { ...fourLayersTemplate.tips } };
 }
 
 const layers = (repo: string, names: string[], start = 0): EngineLayer[] =>
