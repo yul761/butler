@@ -107,6 +107,7 @@ describe("prompts follow the language (design 2026-10-26 i18n)", () => {
     expect(hasChinese(f.lightPrompt({ recall: "Notes: x", qa: "# Recent", question: "why?" }))).toBe(false);
     expect(hasChinese(f.lightPrompt({ recall: "", qa: "", question: "why?" }))).toBe(false);
     expect(hasChinese(f.conclusionAsk)).toBe(false);
+    expect(hasChinese(f.fullPrompt("why?"))).toBe(false);
     expect(hasChinese(f.reaskPrompt(["a?", "b?"]))).toBe(false);
     expect(hasChinese(f.conclusionForDev("do x"))).toBe(false);
   });

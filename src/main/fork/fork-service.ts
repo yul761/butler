@@ -112,6 +112,11 @@ function forkedFrom(args: readonly string[]): string | null {
   return at >= 0 ? (args[at + 1] ?? null) : null;
 }
 
+/** 没有结果的一轮：起不来（spawn_failed）、被限额挡在门外（rate_limited）没花 token；别的（超时、中途退出）可能花了，记成一部分不知道。 */
+function noResultCost(out: HeadlessOutcome): { usd: null; partial: boolean } {
+  return { usd: null, partial: out.ok ? false : out.reason !== "spawn_failed" && out.reason !== "rate_limited" };
+}
+
 /** 各种语言的「要结论」那句：重问时不算用户的问题。 */
 const CONCLUSION_ASKS: ReadonlySet<string> = new Set(Object.values(MAIN_STRINGS).map((s) => s.fork.conclusionAsk));
 
@@ -151,7 +156,7 @@ export class ForkService {
     if (block) throw new ForkError(block);
     const questions = this.d.conv.byFork(forkId).filter((m) => m.role === "user" && !CONCLUSION_ASKS.has(m.text)).map((m) => m.text);
     if (questions.length === 0) throw new ForkError("bad_question");
-    const id = this.open(row.rootSessionId, head, this.d.devLaunchOf(head.id), "full", questions.join("\n\n"), () => M().fork.reaskPrompt(questions), forkId, () =>
+    const id = this.open(row.rootSessionId, head, this.d.devLaunchOf(head.id), "full", questions.join("\n\n"), () => M().fork.fullPrompt(M().fork.reaskPrompt(questions)), forkId, () =>
       this.reasking.delete(forkId),
     );
     this.reasking.set(forkId, id);
@@ -171,7 +176,10 @@ export class ForkService {
     if (row.conclusion !== null && row.conclusionAt !== null && row.conclusionAt >= last) return { ok: true, text: row.conclusion };
     if (!row.forkSessionId) return { ok: false, reason: "no_conclusion" };
     const { path, pathValue } = this.d.claude();
-    if (!path) return { ok: false, reason: "no_conclusion" };
+    if (!path) {
+      this.d.log(`fork ${forkId}: no conclusion, claude was not found`);
+      return { ok: false, reason: "no_conclusion" };
+    }
     const ask = M().fork.conclusionAsk;
     const answer = this.continueTurn(row, ask, path, pathValue, true);
     if (!answer) return { ok: false, reason: "fork_busy" };
@@ -207,7 +215,7 @@ export class ForkService {
       cacheOk: this.d.plan.cacheOk, launchKnown: launch !== null, transcriptExists: this.d.transcriptExists(head.id), devIdle: head.waitingForInput,
       lastTurnAt: this.d.lastTurnAt(head.id), now: this.d.now(),
     });
-    const id = this.open(root, head, launch, mode, q, mode === "full" ? () => q : (row) => this.lightPrompt(row, q), null, () => this.asking.delete(key));
+    const id = this.open(root, head, launch, mode, q, mode === "full" ? () => M().fork.fullPrompt(q) : (row) => this.lightPrompt(row, q), null, () => this.asking.delete(key));
     this.asking.set(key, id);
     return { forkId: id };
   }
@@ -223,17 +231,18 @@ export class ForkService {
   }
 
   /**
-   * 在已有的分叉里跑一轮：有分叉 session 就 continueArgs 续它；第一轮就失败了（还没有）就按第一轮的参数原样重跑，精简的照样带上下文。
+   * 在已有的分叉里跑一轮：有分叉 session 就 continueArgs 续它；第一轮就失败了（还没有）就按第一轮的参数原样重跑，提示词照第一轮的样子拼。
    * cwd、参数都用行里存的，不看开发 session 现在的样子。库里已经是 running 时返回 null（连点）。
    */
   private continueTurn(row: ForkRow, q: string, claudePath: string, pathValue: string, conclude: boolean): Promise<Answer> | null {
     if (!this.d.repo.start(row.id, this.d.now())) return null;
     const sessionId = this.d.sessions.head(row.rootSessionId)?.id ?? row.rootSessionId;
     this.appendUser(row, sessionId, q);
-    this.d.changed(row.rootSessionId);
+    this.hook("changed", () => this.d.changed(row.rootSessionId));
     const fresh = row.forkSessionId === null;
     const args = fresh ? row.launchArgs : continueArgs(row.launchArgs, row.forkSessionId!);
-    const prompt = fresh && row.mode === "light" ? () => this.lightPrompt(row, q) : () => q;
+    // 第一轮（第一轮失败后重跑）才带开头那段说明：精简的带上下文，完整的带只读说明；续上的分叉里已经有了，要结论那句也不加。
+    const prompt = !fresh || conclude ? () => q : row.mode === "light" ? () => this.lightPrompt(row, q) : () => M().fork.fullPrompt(q);
     return this.track(row.id, { row, sessionId, args, prompt, runId: this.d.newRunId(), claudePath, pathValue, conclude });
   }
 
@@ -251,7 +260,7 @@ export class ForkService {
     const at = this.d.now();
     const row = this.d.repo.create({ rootSessionId: root, mode, ticketKey: head.ticketKey, featureId: head.featureId, cwd: launch?.cwd ?? head.cwd, launchArgs: args, at, reaskOf });
     this.appendUser(row, head.id, userText);
-    this.d.changed(root);
+    this.hook("changed", () => this.d.changed(root));
     void this.track(row.id, { row, sessionId: head.id, args, prompt: () => prompt(row), runId, claudePath: path, pathValue }).finally(settled);
     return row.id;
   }
@@ -315,10 +324,12 @@ export class ForkService {
       this.d.log(`fork ${row.id}: aborted by quit`);
       return { ok: false };
     }
+    // 失败的那一轮也照记已经算出的费用（记答案出错时也不丢）；什么都没算出来就当一部分不知道。
+    let cost: { usd: number | null; partial: boolean } = { usd: null, partial: true };
     try {
       const at = this.d.now();
       const r = out.result;
-      const cost = r ? costOf(r, this.d.registry()) : { usd: null, partial: false };
+      cost = r ? costOf(r, this.d.registry()) : noResultCost(out);
       if (r?.usage) {
         const usage = r.usage;
         this.hook("onUsage", () => this.d.onUsage({ runId: o.runId, label: FORK_JOB, at, model: r.model, usage, costUsd: r.costUsd, ticketKey: row.ticketKey }));
@@ -328,21 +339,25 @@ export class ForkService {
         this.hook("onLimit", () => this.d.onLimit(hit, FORK_JOB));
       }
       const sid = r?.sessionId ?? null;
-      if (sid && sid !== forkedFrom(o.args)) this.hook("recordHeadless", () => this.d.recordHeadless(sid, row.cwd, at));
-      const text = out.ok ? out.result.resultText.trim() : "";
+      // 返回的就是 --resume 的那个开发 session：CLI 没分叉出来，这一轮写进了开发 session 自己的对话。不记成 headless、不存成分叉 id
+      // （否则接着问会直接续上正在用的开发 session），这一轮按 bad_output 算失败。
+      const unforked = sid !== null && sid === forkedFrom(o.args);
+      if (unforked) this.d.log(`fork ${row.id}: the CLI resumed the dev session ${sid} instead of forking it`);
+      if (sid && !unforked) this.hook("recordHeadless", () => this.d.recordHeadless(sid, row.cwd, at));
+      const text = out.ok && !unforked ? out.result.resultText.trim() : "";
       if (text) {
         this.d.conv.append({ rootSessionId: row.rootSessionId, sessionId: o.sessionId, role: "assistant", text, at, forkId: row.id, qa: false, turnId: 0 });
         if (o.conclude) this.d.repo.setConclusion(row.id, text, at);
       }
-      const error = out.ok ? (text ? null : failure("no_answer")) : failure(out.reason, out.limit?.resetsAt ?? null);
+      const error = unforked ? failure("bad_output") : out.ok ? (text ? null : failure("no_answer")) : failure(out.reason, out.limit?.resetsAt ?? null);
       if (!out.ok) this.d.log(`fork ${row.id}: ${out.reason}: ${out.message.slice(0, 500)}`);
-      this.d.repo.finish(row.id, { at, ...(out.ok && sid ? { forkSessionId: sid } : {}), addCost: cost.usd, partial: cost.partial, error });
+      this.d.repo.finish(row.id, { at, ...(out.ok && sid && !unforked ? { forkSessionId: sid } : {}), addCost: cost.usd, partial: cost.partial, error });
       this.hook("changed", () => this.d.changed(row.rootSessionId));
       return text ? { ok: true, text } : { ok: false };
     } catch (e) {
       this.d.log(`fork ${row.id}: recording the answer failed`, e);
       try {
-        this.d.repo.finish(row.id, { at: this.d.now(), addCost: null, partial: false, error: failure("bad_output") });
+        this.d.repo.finish(row.id, { at: this.d.now(), addCost: cost.usd, partial: cost.partial, error: failure("bad_output") });
         this.hook("changed", () => this.d.changed(row.rootSessionId));
       } catch (e2) {
         this.d.log(`fork ${row.id}: marking it failed failed too`, e2);

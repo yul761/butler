@@ -428,6 +428,9 @@ const ZH = {
         ...(p.qa ? [p.qa.trimEnd()] : []),
         `# 用户的问题\n\n${p.question}`,
       ].join("\n\n"),
+    /** 完整分叉第一轮：问题前面加一段只读说明（在缓存的前缀之后，不影响缓存）。 */
+    fullPrompt: (question: string) =>
+      `（这是从开发 session 分叉出来的一次只读讨论：不要修改任何文件，不要运行会改动东西的命令，也不要 commit、push 或对外发任何东西；只回答下面的问题。）\n\n${question}`,
     reaskPrompt: (questions: string[]) =>
       questions.length === 1
         ? questions[0]
@@ -1062,6 +1065,8 @@ const EN: MainStrings = {
         ...(p.qa ? [p.qa.trimEnd()] : []),
         `# The user's question\n\n${p.question}`,
       ].join("\n\n"),
+    fullPrompt: (question: string) =>
+      `(This is a read-only side discussion forked from the development session: do not modify any file, do not run commands that change anything, and do not commit, push or send anything outside; only answer the question below.)\n\n${question}`,
     reaskPrompt: (questions: string[]) =>
       questions.length === 1
         ? questions[0]

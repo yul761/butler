@@ -68,7 +68,10 @@ export function continueArgs(first: readonly string[], forkSessionId: string): s
   return args;
 }
 
-/** 分叉用的 settings：开发那份除 permissions、hooks 以外原样保留（工具集合才不变）；allow 清空，hook 只剩只读那一个。 */
+/**
+ * 分叉用的 settings：开发那份除 permissions、hooks 以外原样保留（工具集合才不变）；allow 清空，hook 只剩只读那一个。
+ * disableAllHooks 固定为 false：用户级（或开发那份）设了 true 也关不掉只读 hook。
+ */
 export function forkSettings(dev: Record<string, unknown> | null, guardCommand: string): Record<string, unknown> {
   const rest = { ...dev };
   delete rest.permissions;
@@ -76,6 +79,7 @@ export function forkSettings(dev: Record<string, unknown> | null, guardCommand: 
   return {
     ...rest,
     permissions: { allow: [] },
+    disableAllHooks: false,
     hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: `${guardCommand} readonly`, timeout: 10 }] }] },
   };
 }

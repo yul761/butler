@@ -111,6 +111,7 @@ interface Settings {
   disabledMcpjsonServers: string[];
   permissions: { allow: string[] };
   hooks: { PreToolUse: { matcher: string; hooks: { command: string }[] }[] };
+  disableAllHooks: boolean;
 }
 
 describe("forkSettings", () => {
@@ -118,6 +119,7 @@ describe("forkSettings", () => {
     enableAllProjectMcpServers: true,
     disabledMcpjsonServers: ["x"],
     permissions: { allow: ["Bash(*)"], deny: [] },
+    disableAllHooks: true,
     hooks: { PreToolUse: [{ matcher: "Skill", hooks: [{ type: "command", command: "gate" }] }], Stop: [] },
   };
   it("keeps everything but permissions and hooks", () => {
@@ -129,10 +131,13 @@ describe("forkSettings", () => {
     expect(s.hooks.PreToolUse).toHaveLength(1);
     expect(s.hooks.PreToolUse[0].hooks[0].command.endsWith(" readonly")).toBe(true);
     expect(JSON.stringify(s)).not.toContain("gate");
+    // 用户级（或开发那份）的 disableAllHooks 关不掉只读 hook。
+    expect(s.disableAllHooks).toBe(false);
   });
   it("works without dev settings", () => {
     const s = forkSettings(null, "g") as unknown as Settings;
-    expect(Object.keys(s).sort()).toEqual(["hooks", "permissions"]);
+    expect(Object.keys(s).sort()).toEqual(["disableAllHooks", "hooks", "permissions"]);
+    expect(s.disableAllHooks).toBe(false);
     expect(s.hooks.PreToolUse[0]).toEqual({ matcher: "*", hooks: [{ type: "command", command: "g readonly", timeout: 10 }] });
   });
 });

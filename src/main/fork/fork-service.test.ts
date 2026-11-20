@@ -10,10 +10,10 @@ import { ForkDiscussionsRepo } from "../db/fork-discussions-repo";
 import { setLang } from "../i18n";
 import { M } from "../strings";
 import { memDb, tempDir } from "../test-utils";
+import { FORK_JOB, ForkService, forkEnv, writeForkSettings, type ForkDeps } from "./fork-service";
 import { continueArgs, devForkArgs, forkSettings, strictForkArgs, type DevLaunch } from "./fork-args";
 import type { FullForkPlan } from "./fork-cache";
 import { LIGHT_QA_CHARS, LIGHT_RECALL_CHARS } from "./fork-mode";
-import { FORK_JOB, ForkService, writeForkSettings, type ForkDeps } from "./fork-service";
 
 afterEach(() => setLang("zh"));
 
@@ -193,7 +193,8 @@ describe("ForkService 新分叉（完整）", () => {
     expect(req.args).toContain("/m/fork-mcp-run-1.json");
     expect(s.deps.files.mcp).toHaveBeenCalledWith(launchOf("head-2"), "run-1");
     expect(req.cwd).toBe("/dev");
-    expect(req.prompt).toBe("为什么这么改？");
+    expect(req.prompt).toBe(M().fork.fullPrompt("为什么这么改？"));
+    expect(req.prompt.endsWith("为什么这么改？")).toBe(true);
     expect(s.repo.get(forkId)).toMatchObject({ mode: "full", cwd: "/dev" });
     expect(s.deps.recall).not.toHaveBeenCalled();
     expect(s.deps.lastTurnAt).toHaveBeenCalledWith("head-2");
@@ -327,7 +328,7 @@ describe("ForkService 连点", () => {
     await s.svc.idle();
     expect(s.deps.run).toHaveBeenCalledTimes(3);
     expect(s.repo.get(a.forkId)).toMatchObject({ mode: "full", reaskOf: forkId, status: "idle" });
-    expect(s.calls[2].prompt).toBe(M().fork.reaskPrompt(["第一问", "第二问"]));
+    expect(s.calls[2].prompt).toBe(M().fork.fullPrompt(M().fork.reaskPrompt(["第一问", "第二问"])));
     expect(s.calls[2].args).toEqual(devForkArgs(launchOf("head-2"), { forkSettingsPath: "/m/fork-settings.json", forkMcpConfigPath: "/m/fork-mcp-run-3.json", plan: PLAN }));
     expect(s.msgs.filter((m) => m.forkId === a.forkId && m.role === "user")).toHaveLength(1);
   });
@@ -410,6 +411,62 @@ describe("ForkService 失败", () => {
     await s.svc.idle();
     expect(s.calls[3].args).toEqual(continueArgs(first, "fork-1"));
     expect(s.calls[3].prompt).toBe("q3");
+  });
+
+  it("没有结果的一轮：超时之类可能花了钱，记成 partial；起不来、被限额挡住的不算", async () => {
+    const s = setup();
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    s.queue.push({ ok: false, reason: "timeout", message: "t", limit: null, stderr: "", result: null });
+    s.svc.ask("root-1", forkId, "q2");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)).toMatchObject({ status: "failed", errorCode: "timeout", costUsd: 0.05, costPartial: true });
+    for (const reason of ["spawn_failed", "rate_limited"] as const) {
+      const n = setup();
+      n.queue.push({ ok: false, reason, message: "", limit: null, stderr: "", result: null });
+      const f = n.svc.ask("root-1", null, "q");
+      await n.svc.idle();
+      expect(n.repo.get(f.forkId)).toMatchObject({ costUsd: null, costPartial: false });
+    }
+  });
+
+  it("CLI 没分叉（返回的就是 --resume 的开发 session）：不存成分叉 id、不记 headless、这一轮 bad_output，接着问不会续开发 session", async () => {
+    const s = setup();
+    s.queue.push(ok({ sessionId: "head-2" }));
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    expect(s.calls[0].args).toContain("--fork-session");
+    expect(s.repo.get(forkId)).toMatchObject({ status: "failed", errorCode: "bad_output", forkSessionId: null, costUsd: 0.05 });
+    expect(s.deps.recordHeadless).not.toHaveBeenCalled();
+    expect(s.msgs.map((m) => m.role)).toEqual(["user"]);
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("instead of forking"));
+    s.svc.ask("root-1", forkId, "q2");
+    await s.svc.idle();
+    expect(s.calls[1].args).toEqual(s.repo.get(forkId)!.launchArgs);
+    expect(s.calls[1].args).toContain("--fork-session");
+  });
+
+  it("记回答出错：已经算出的费用照记，行标 bad_output", async () => {
+    const s = setup();
+    s.deps.conv.append.mockImplementationOnce((m) => ({ ...m, id: 1 })).mockImplementationOnce(() => {
+      throw new Error("disk");
+    });
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)).toMatchObject({ status: "failed", errorCode: "bad_output", costUsd: 0.05, costPartial: false });
+  });
+
+  it("changed 抛错不会让行一直挂在 running", async () => {
+    const s = setup();
+    s.deps.changed.mockImplementation(() => {
+      throw new Error("ipc");
+    });
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.status).toBe("idle");
+    s.svc.ask("root-1", forkId, "q2");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.status).toBe("idle");
   });
 
   it("跑完但回答是空的：no_answer，不写 assistant 消息", async () => {
@@ -526,6 +583,15 @@ describe("ForkService 结论", () => {
     expect(s.repo.get(forkId)!.conclusion).toBeNull();
   });
 
+  it("要结论时 claude 找不到：no_conclusion，写日志", async () => {
+    const s = setup();
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    s.deps.claude.mockReturnValue({ path: null, pathValue: "" });
+    expect(await s.svc.conclusion(forkId)).toEqual({ ok: false, reason: "no_conclusion" });
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("claude was not found"));
+  });
+
   it("要结论的那一轮在跑时再问：fork_busy", async () => {
     const s = setup();
     const { forkId } = s.svc.ask("root-1", null, "q");
@@ -572,6 +638,17 @@ describe("ForkService list", () => {
     expect(v).toMatchObject({ id: forkId, rootSessionId: "root-1", mode: "full", status: "idle", error: null, reaskOf: null, summarySentAt: null });
     expect(v.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
     expect(s.svc.list("nobody")).toEqual([]);
+  });
+});
+
+describe("forkEnv", () => {
+  it("设了代理时把 127.0.0.1 加进 NO_PROXY（共享 MCP 是本机回环）；没设代理不动", () => {
+    const withProxy = forkEnv({ HTTPS_PROXY: "http://p:8080", NO_PROXY: "corp.local", CLAUDE_EFFORT: "high" }, { pathValue: "/bin", runId: "r" });
+    expect(withProxy.NO_PROXY.split(",")).toEqual(["corp.local", "127.0.0.1"]);
+    expect(withProxy.CLAUDE_EFFORT).toBe("high");
+    const none = forkEnv({ CLAUDE_EFFORT: "high" }, { pathValue: "/bin", runId: "r" });
+    expect(none.NO_PROXY).toBeUndefined();
+    expect(none.no_proxy).toBeUndefined();
   });
 });
 
