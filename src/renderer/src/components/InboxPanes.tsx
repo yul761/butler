@@ -25,7 +25,7 @@ export function inboxTabs(view: InboxView | null, onGo: (item: InboxItemView) =>
     {
       id: "reports",
       label: <>{S.inboxReports}{view && <span className="muted">{reports.length}</span>}</>,
-      content: <InboxReports reports={reports} />,
+      content: <ReportFeed reports={reports} />,
     },
     {
       id: "decisions",
@@ -36,7 +36,7 @@ export function inboxTabs(view: InboxView | null, onGo: (item: InboxItemView) =>
   ];
 }
 
-function InboxReports({ reports }: { reports: InboxItemView[] }) {
+export function ReportFeed({ reports }: { reports: InboxItemView[] }) {
   if (reports.length === 0) return <p className="muted inbox-reports">{S.inboxNoReports}</p>;
   return (
     <ul className="inbox-reports">

@@ -2448,6 +2448,18 @@ const ZH = {
     logMemory: "记忆",
     convPlaceholder: "所有说过的话会按时间排在这里，换新也不会丢。现在先到「终端」看。",
     convNoSession: "这个 ticket 还没有 session。",
+    youHere: "这个范围里轮到你的",
+    noYouHere: "这里没有事轮到你。",
+    featuresHeading: "各个 feature",
+    featureCard: (merged: number, total: number) => `${merged}/${total} 合了`,
+    runningEmpty: "现在没有 agent 或 CI 在处理的事。",
+    colTicket: "ticket",
+    colWho: "谁该动",
+    colNow: "现在怎么样",
+    colPr: "PR",
+    groupHeader: (name: string, merged: number, total: number) => `${name} · ${merged}/${total} 合了`,
+    noTicketsInGroup: "这一组还没有 ticket。",
+    ctlEmpty: "子 session 的完成和卡住汇报会按时间出现在这里。",
   },
   /** 回测、影子自动升级、自动降级、阈值复查（工作流 F）。 */
   bt: {

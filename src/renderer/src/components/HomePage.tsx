@@ -9,6 +9,7 @@ import {
 import { S } from "../strings";
 import { HomeMore, GroupToggle, SetupSkipped } from "./HomeMore";
 import { useNow } from "./TicketActivity";
+import { RunRow } from "./ScopeParts";
 import { TurnCard, type TurnCardProps } from "./TurnCard";
 import type { TurnBoardState } from "./useTurnBoard";
 import { useCollapsed } from "./useCollapsed";
@@ -127,12 +128,7 @@ function Running({ board, now, onOpenTicket }: { board: TurnBoard; now: number; 
     <section className="home-running">
       <h3><GroupToggle open={open} onToggle={toggle}>{S.hm.running(rows.length)}</GroupToggle></h3>
       {open && rows.map((r) => (
-        <button key={r.key} className="home-run" disabled={r.ticketKey === null} onClick={() => r.ticketKey !== null && onOpenTicket(r.ticketKey)}>
-          <span className="key">{r.ticketKey ?? ""}</span>
-          <span className={`turn-tag turn-${r.owner}`}>{r.who}</span>
-          <span className="sentence">{r.sentence}</span>
-          <span className="age muted">{r.age}</span>
-        </button>
+        <RunRow key={r.key} row={r} onOpenTicket={onOpenTicket} />
       ))}
     </section>
   );
