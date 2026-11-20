@@ -22,7 +22,8 @@ describe("fork_discussions 表", () => {
   });
 
   it("upgrades an old database without losing data", () => {
-    const n = MIGRATIONS.length;
+    const n = MIGRATIONS.findIndex((m) => m.includes("CREATE TABLE fork_discussions")) + 1;
+    expect(n).toBeGreaterThan(0);
     const db = new DatabaseSync(":memory:");
     for (let i = 0; i < n - 1; i++) db.exec(MIGRATIONS[i]);
     db.exec(`PRAGMA user_version = ${n - 1}`);
@@ -56,6 +57,14 @@ describe("ForkDiscussionsRepo", () => {
     expect(repo.start(id, 1300)).toBe(true);
     expect(repo.get(id)?.status).toBe("running");
     expect(repo.get(id)?.lastAt).toBe(1300);
+  });
+
+  it("start on a failed row restarts it and clears the old error", () => {
+    const { repo } = setup();
+    const { id } = repo.create(base);
+    repo.finish(id, { at: 1, addCost: null, partial: true, error: { code: "timeout", resetAt: 9 } });
+    expect(repo.start(id, 2)).toBe(true);
+    expect(repo.get(id)).toMatchObject({ status: "running", errorCode: null, errorResetAt: null });
   });
 
   it("finish accumulates cost", () => {

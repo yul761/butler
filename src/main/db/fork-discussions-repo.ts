@@ -110,7 +110,7 @@ export class ForkDiscussionsRepo {
 
   /** 只有不是 running 时才改成 running；返回改没改（连点的原子判断）。 */
   start(id: number, at: number): boolean {
-    return Number(this.db.prepare(`UPDATE fork_discussions SET status = 'running', last_at = ? WHERE id = ? AND status != 'running'`).run(at, id).changes) > 0;
+    return Number(this.db.prepare(`UPDATE fork_discussions SET status = 'running', last_at = ?, error_code = NULL, error_reset_at = NULL WHERE id = ? AND status != 'running'`).run(at, id).changes) > 0;
   }
 
   /** 一轮跑完：累计费用，status 变成 idle 或 failed；不带 error 会清掉上一次的错误。 */
