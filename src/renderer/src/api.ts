@@ -2,6 +2,7 @@ import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksAc
 import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
 import type { IntakeActResult, IntakeAction, IntakeClassifyEdit, IntakeEffect, IntakePolicyOverrides, IntakePolicySetResult, IntakePolicyView, IntakeView } from "../../shared/intake";
 import type { MemoryHistoryPoint } from "../../shared/mem-usage";
+import type { ConvListOpts, ConvMessage, ConvPage } from "../../shared/conversation";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyAction, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
@@ -265,4 +266,8 @@ export const api = {
   onActivityEvent: (cb: (e: ActivityEvent) => void) => window.butler.on(IPC.activityEvent, cb),
   /** 记忆写进了 StateCore（ticketKey），或记忆开关变了（null：所有 ticket）。 */
   onMemoryChanged: (cb: (ticketKey: string | null) => void) => window.butler.on(IPC.memoryChanged, cb),
+  /** 对话另存（UI 重做第 4 层）：sessionId 可以是链上任意一段；推送的永远是链根（拿 SessionView.rootId 比对）。 */
+  convList: (sessionId: string, opts: ConvListOpts) => call<ConvPage>(IPC.convList, sessionId, opts),
+  convSearch: (sessionId: string | null, query: string) => call<ConvMessage[]>(IPC.convSearch, sessionId, query),
+  onConvAppended: (cb: (rootSessionId: string) => void) => window.butler.on(IPC.convAppended, cb),
 };

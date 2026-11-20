@@ -539,6 +539,16 @@ describe("SessionRefresher (plan 16)", () => {
     expect(t.typed.some((x) => x.termId === "busy" || x.termId === "fix")).toBe(false);
   });
 
+  // spec §5.4：换新不等用户看完最后一个回答——用户的问答已经由对话另存（UI 重做第 4 层）存下，恢复提示里也带着最近的问答。
+  // 这个测试一写好就能通过（现有代码本来就不等），它是防止以后有人加回「等用户看完」的 guard。
+  it("auto refresh does not wait for the user to read the last answer", async () => {
+    const t = setup();
+    t.addTerm("s1", { context: 160_000 });
+    t.r.autoCheck();
+    await t.settle();
+    expect(t.typed[0]?.text).toBe("/handoff");
+  });
+
   it("autoCheck is off at threshold 0", async () => {
     const t = setup({ threshold: 0 });
     t.addTerm("s1", { context: 900_000 });

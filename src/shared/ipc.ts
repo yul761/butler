@@ -220,6 +220,10 @@ export const IPC = {
   memoryView: "memory:view",
   memoryWhy: "memory:why",
   memoryChanged: "memory:changed",
+  /** 对话另存（UI 重做第 4 层）：一页对话、搜索、有新内容的推送（推的永远是链根）。 */
+  convList: "conv:list",
+  convSearch: "conv:search",
+  convAppended: "conv:appended",
   appAutostartGet: "app:autostartGet",
   appLanguage: "app:language",
   appAutostartSet: "app:autostartSet",
@@ -252,12 +256,12 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.stacksList, IPC.stacksRebase, IPC.stacksLayerMode, IPC.stacksRestore, IPC.stacksRemove, IPC.stacksPolicyGet, IPC.stacksPolicySet, IPC.stacksPolicyLayers,
   IPC.intakeView, IPC.intakeEffect, IPC.intakePolicyGet, IPC.intakePolicySet, IPC.intakeClassify, IPC.intakePoll, IPC.intakeAct,
   IPC.prAssessment, IPC.preReviewRun, IPC.briefRegenerate, IPC.briefPost, IPC.prPolicyGet, IPC.prPolicySet, IPC.reviewEffect, IPC.reviewQueue,
-  IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory,
+  IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory, IPC.convList, IPC.convSearch,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible];
 /** 主进程 → 渲染进程。 */
-export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.activityEvent, IPC.memoryChanged, IPC.appKeepAwakeChanged];
+export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.activityEvent, IPC.memoryChanged, IPC.appKeepAwakeChanged, IPC.convAppended];
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };

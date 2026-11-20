@@ -22,6 +22,14 @@ describe("IPC whitelist", () => {
     }
   });
 
+  it("exposes conv:appended as an event only, and conv:list / conv:search as invokes (UI redesign layer 4)", () => {
+    expect(EVENT_CHANNELS).toContain(IPC.convAppended);
+    expect(INVOKE_CHANNELS).not.toContain(IPC.convAppended);
+    expect(SEND_CHANNELS).not.toContain(IPC.convAppended);
+    expect(INVOKE_CHANNELS).toContain(IPC.convList);
+    expect(INVOKE_CHANNELS).toContain(IPC.convSearch);
+  });
+
   it("exposes the memory-changed notification as an event only (final review 4)", () => {
     expect(EVENT_CHANNELS).toContain(IPC.memoryChanged);
     expect(INVOKE_CHANNELS).not.toContain(IPC.memoryChanged);

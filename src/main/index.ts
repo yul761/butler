@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, shell, Tray } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -139,6 +140,10 @@ import { ActivityMonitor, activityIntervals } from "./sessions/activity-monitor"
 import { sessionRegistryName } from "./sessions/activity-sources";
 import { DeliveryGuard, USER_TYPING_QUIET_MS, type DeliveryGuardDeps } from "./sessions/delivery-guard";
 import { writeRefreshTail } from "./sessions/refresh-tail";
+import { ConvRepo } from "./db/conv-repo";
+import { ConvIngester } from "./conversation/conv-ingester";
+import { judgeConvQa } from "./conversation/conv-qa";
+import { ConversationStore, RECENT_QA_CHARS, withRecentQa } from "./conversation/conversation-store";
 import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
 import { SessionCleanup, working } from "./sessions/session-cleanup";
 import { Hibernator } from "./sessions/hibernator";
@@ -1677,6 +1682,18 @@ async function bootstrap(): Promise<void> {
     for (const h of hibernatedHeads()) if (h.origin === "butler" && !heads.has(h.id)) heads.set(h.id, h);
     return [...heads.values()];
   };
+  // 对话另存（UI 重做第 4 层）：只存双方说的话，按 replaced_by 链根存；问答规则判不了的交给低档模型（conv_qa）。
+  // 判断在 session 的目录里跑；worktree 已经清掉时用 Butler 自己的数据目录（headless 不能在不存在的 cwd 里启动）。
+  const convRepo = new ConvRepo(db);
+  const convAppended = (root: string): void => safeSend(IPC.convAppended, root);
+  const conv = new ConversationStore({ repo: convRepo, sessions, onAppended: convAppended, now: Date.now });
+  const convIngester = new ConvIngester({
+    repo: convRepo, sessions, onAppended: convAppended, now: Date.now, log: (m) => logger(m),
+    transcriptOf: (id) => findTranscript(paths.claudeProjects, id),
+    // 开着终端的 head；不是对话另存 target 的（没认领的外部 session）由 ConvIngester 自己跳过。
+    openHeads: () => [...new Set(pty.openIds().map((t) => sessions.head(t)?.id).filter((id): id is string => !!id))],
+    judge: (turn, s) => judgeConvQa({ ...judgeDeps, timeoutMs: 60_000 }, turn, existsSync(s.cwd) ? s.cwd : paths.home, s.ticketKey),
+  });
   // 上下文换新（计划 16）。它自己的两道 guard 不带 refreshing（R25），否则换新会挡住自己的下一步。
   // 自动换新还要等「需要你」的判断出结论：刚停下来问了问题的 session，结论出来之前不能当作不需要你。
   // 已经在换新的不等（R33）：/handoff 的回复还没判断完时照样往下走，真判断出需要你才停。
@@ -1712,8 +1729,14 @@ async function bootstrap(): Promise<void> {
     // handoff 收进来时 ingest 已经把记忆同步排进队列（syncTicket / syncFeature）：/clear 之前等它写完（BTL-190 第 6 点）。
     memoryIdle: () => memory.idle(),
     // 换新前的对话尾巴：读旧 head 的 transcript，按终端的 id 存（同一个终端下一次换新覆盖它）。
-    writeTail: (oldHeadId, termId, kind) =>
-      writeRefreshTail({ transcript: findTranscript(paths.claudeProjects, oldHeadId), out: refreshTailPath(paths, termId), sessionId: oldHeadId, kind }),
+    // 后面再追加 Butler 存下的最近问答（UI 重做第 4 层）：换新前先把旧 session 读到最新，最多等 3 秒（不能让换新卡住）。
+    // 只有问答、没有尾巴时文件里就只有问答；refreshResume 的「再读一下这个文件」照样成立。
+    writeTail: async (oldHeadId, termId, kind) => {
+      await Promise.race([convIngester.syncNow(oldHeadId), delay(3000, undefined, { ref: false })]).catch(() => undefined);
+      const out = refreshTailPath(paths, termId);
+      const tail = await writeRefreshTail({ transcript: findTranscript(paths.claudeProjects, oldHeadId), out, sessionId: oldHeadId, kind });
+      return withRecentQa(out, tail, conv.recentQa(oldHeadId, RECENT_QA_CHARS));
+    },
     notify,
     now: Date.now,
     // /clear 之后没有 Stop：每一步输入之前先重读活动（R28）。
@@ -2720,6 +2743,7 @@ async function bootstrap(): Promise<void> {
   });
   const keepAwakeSwitch = keepAwake;
   registerIpc({
+    conv,
     keepAwake: keepAwakeSwitch,
     onArchived: (key) => {
       removeTicketMcpConfigs(paths.mcp, key);
@@ -2943,7 +2967,7 @@ async function bootstrap(): Promise<void> {
         features: sessionService.featureViews(),
         epics: sessionService.epicViews(),
         // 休眠着的 Butler 总控照样算（WS-M B）。
-        butler: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id) } : null))(
+        butler: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id), rootId: sessions.rootOf(b.id) ?? b.id } : null))(
           sessionService.runningButler() ?? hibernatedHeads().find((h) => h.butler && h.ticketKey === null) ?? null,
         ),
         activity: (id) => activityMonitor.get(id),
@@ -3140,6 +3164,7 @@ async function bootstrap(): Promise<void> {
     })
     .catch((e: unknown) => logger("lessons: starting the runner failed", e));
   activityMonitor.start();
+  convIngester.start();
   procServices.start();
   usageScanner.start(usageScanMs(process.env));
   bgScheduler.start();
@@ -3260,6 +3285,7 @@ async function bootstrap(): Promise<void> {
     lessonWizard.stop();
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     activityMonitor.stop();
+    convIngester.stop();
     void procServices.stop();
     usageScanner.stop();
     if (costCheckTimer) clearTimeout(costCheckTimer);

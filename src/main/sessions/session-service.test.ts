@@ -413,6 +413,16 @@ describe("SessionService views", () => {
     expect(view.sessions.map((s) => [s.id, s.termId])).toEqual([["new-1", "new-1"], ["c2", null]]);
   });
 
+  it("views carry the chain root id", async () => {
+    const { service, sessions } = await setup();
+    await service.open({ ticketKey: "PROJ-1" });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    sessions.setReplacedBy("old", "c2");
+    const [view] = service.ticketViews();
+    expect(view.sessions.map((s) => [s.id, s.rootId])).toEqual([["new-1", "new-1"], ["c2", "old"]]);
+  });
+
   it("unclaimed suggests tickets and claim/dismiss work", async () => {
     const { service, sessions } = await setup();
     sessions.insertIfAbsent({ id: "u1", ticketKey: null, cwd: "/w", origin: "discovered", gitBranch: "feature/proj-1-x", lastActivityAt: 900, createdAt: 900 });
@@ -785,6 +795,12 @@ describe("SessionService.openLessonRun (lessons visibility task 7)", () => {
     expect(spawned).toHaveLength(1);
     await new Promise((r) => setImmediate(r));
     expect(submitted).toHaveLength(1);
+  });
+
+  it("butlerView lesson sessions carry their root id", async () => {
+    const { service, sessions, runId } = await lessonSetup();
+    sessions.insertIfAbsent({ id: "l1", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1, lessonRunId: runId });
+    expect(service.butlerView().lessonSessions.map((s) => [s.id, s.rootId])).toEqual([["l1", "l1"]]);
   });
 
   it("openLessonRun reopens a closed session without submitting", async () => {

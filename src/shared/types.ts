@@ -163,6 +163,8 @@ export type HibernateReason = "you" | "ci" | "review" | "idle" | "pressure" | "m
 /** termId 非空表示这个 session 当前有一个打开的终端（termId 是该终端启动时用的 session id）。 */
 export interface SessionView extends Session {
   termId: string | null;
+  /** replaced_by 链的根 session id（第 4 层对话按它存）；换新、/clear 以后不变。没有更早的段时等于 id。 */
+  rootId: string;
 }
 
 export interface TicketView extends Ticket {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { memDb } from "../test-utils";
 import { SessionsRepo } from "./sessions-repo";
 
@@ -140,6 +140,24 @@ describe("SessionsRepo hibernation (WS-M B)", () => {
   });
 });
 
+describe("SessionsRepo.rootsOf", () => {
+  it("maps a batch of ids to their chain roots; unknown ids map to themselves", () => {
+    const { repo } = setup();
+    for (const [id, at] of [["a", 1], ["b", 2], ["c", 3], ["x", 4]] as const) repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: at });
+    repo.setReplacedBy("a", "b", "clear");
+    repo.setReplacedBy("b", "c", "resume");
+    expect(repo.rootsOf(["c", "b", "x", "nope"])).toEqual(new Map([["c", "a"], ["b", "a"], ["x", "x"], ["nope", "nope"]]));
+    for (const id of ["a", "b", "c", "x"]) expect(repo.rootsOf([id]).get(id)).toBe(repo.rootOf(id));
+  });
+
+  it("returns an empty map for no ids without querying", () => {
+    const { repo, db } = setup();
+    const spy = vi.spyOn(db, "prepare");
+    expect(repo.rootsOf([])).toEqual(new Map());
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
 describe("SessionsRepo.rootOf (workstream L)", () => {
   it("finds the oldest id of a chain from any id on it", () => {
     const { repo } = setup();
@@ -158,5 +176,29 @@ describe("SessionsRepo.rootOf (workstream L)", () => {
     db.prepare(`UPDATE sessions SET replaced_by = 'b' WHERE id = 'a'`).run();
     db.prepare(`UPDATE sessions SET replaced_by = 'a' WHERE id = 'b'`).run();
     expect(["a", "b"]).toContain(repo.rootOf("a"));
+  });
+});
+
+describe("SessionsRepo.listConvTargets (UI redesign layer 4)", () => {
+  it("picks heads that Butler opened or that belong somewhere, active since the cutoff", () => {
+    const { db, repo, run } = setup();
+    const feature = Number(db.prepare(`INSERT INTO features (name, workspace_dir, created_at) VALUES ('f', '/w', 1)`).run().lastInsertRowid);
+    const epic = Number(db.prepare(`INSERT INTO epics (name, workspace_dir, created_at) VALUES ('e', '/e', 1)`).run().lastInsertRowid);
+    for (const k of ["PROJ-1", "PROJ-2", "PROJ-3"]) db.prepare(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES (?, '/r', 'branch', 'b', 1)`).run(k);
+    const add = (id: string, extra: Partial<Parameters<SessionsRepo["insertIfAbsent"]>[0]> = {}) =>
+      repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 100, lastActivityAt: 100, ...extra });
+    add("butler-origin", { origin: "butler" });
+    add("ticket", { ticketKey: "PROJ-1" });
+    add("feature", { featureId: feature });
+    add("epic", { epicId: epic });
+    add("controller", { butler: true });
+    add("stray");
+    repo.recordHeadless("headless", "/w", 100);
+    add("lesson", { origin: "butler", lessonRunId: run() });
+    add("old-segment", { ticketKey: "PROJ-2" });
+    add("new-segment", { ticketKey: "PROJ-2" });
+    repo.setReplacedBy("old-segment", "new-segment");
+    add("stale", { ticketKey: "PROJ-3", createdAt: 10, lastActivityAt: 10 });
+    expect(repo.listConvTargets(50).map((s) => s.id).sort()).toEqual(["butler-origin", "controller", "epic", "feature", "new-segment", "ticket"]);
   });
 });

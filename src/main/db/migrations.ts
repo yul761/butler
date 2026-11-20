@@ -1318,4 +1318,50 @@ export const MIGRATIONS: string[] = [
   UPDATE settings SET value = value || ',intake_decision'
     WHERE key = 'notifyEvents' AND value <> '' AND (',' || value || ',') NOT LIKE '%,intake_decision,%';
   `,
+  // 第 4 层对话另存（BTL-234）：只存双方说的话；按 replaced_by 链根存，换新、/clear 以后不变。
+  // fork_id 不加外键（fork_discussions 是第 5 层建的表）；全文索引不进迁移，由 ConvRepo 探测 FTS5 后建。
+  `
+  CREATE TABLE conv_turns (
+    id INTEGER PRIMARY KEY,
+    root_session_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    source_key TEXT,
+    fork_id INTEGER,
+    kind TEXT NOT NULL CHECK (kind IN ('user','silent','handoff','fork','orphan')),
+    started_at INTEGER NOT NULL,
+    last_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    asked INTEGER NOT NULL DEFAULT 0,
+    mutated INTEGER NOT NULL DEFAULT 0,
+    other_tools INTEGER NOT NULL DEFAULT 0,
+    qa TEXT NOT NULL DEFAULT 'pending' CHECK (qa IN ('pending','yes','no')),
+    qa_by TEXT CHECK (qa_by IN ('rule','judge','fork','judge_failed','old')));
+  CREATE UNIQUE INDEX conv_turns_source ON conv_turns (root_session_id, source_key) WHERE source_key IS NOT NULL;
+  CREATE INDEX conv_turns_pending ON conv_turns (ended_at) WHERE qa = 'pending';
+  CREATE INDEX conv_turns_root ON conv_turns (root_session_id, qa, started_at);
+  CREATE INDEX conv_turns_session ON conv_turns (session_id);
+  CREATE TABLE conv_messages (
+    id INTEGER PRIMARY KEY,
+    turn_id INTEGER NOT NULL REFERENCES conv_turns(id) ON DELETE CASCADE,
+    root_session_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('user','assistant')),
+    text TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    fork_id INTEGER,
+    source_key TEXT);
+  CREATE UNIQUE INDEX conv_messages_source ON conv_messages (root_session_id, source_key) WHERE source_key IS NOT NULL;
+  CREATE INDEX conv_messages_root_at ON conv_messages (root_session_id, at, id);
+  CREATE INDEX conv_messages_turn ON conv_messages (turn_id, at, id);
+  CREATE INDEX conv_messages_fork ON conv_messages (fork_id, at, id) WHERE fork_id IS NOT NULL;
+  CREATE INDEX conv_messages_session ON conv_messages (session_id);
+  CREATE TABLE conv_cursors (
+    session_id TEXT PRIMARY KEY,
+    root_session_id TEXT NOT NULL,
+    file TEXT NOT NULL,
+    ino INTEGER NOT NULL,
+    byte_offset INTEGER NOT NULL,
+    open_turn_id INTEGER,
+    updated_at INTEGER NOT NULL);
+  `,
 ];

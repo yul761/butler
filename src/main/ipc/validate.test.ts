@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { TERMS_LIMIT } from "../settings/settings-values";
 import type { LessonAction } from "../../shared/lessons";
 import { backgroundActionArg, costSetArg, costSubjectArg } from "./validate";
+import { convListOptsArg, convQueryArg, convRootArg } from "./validate";
+import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
 import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, progressFilterArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
@@ -535,5 +537,29 @@ describe("comment and CI loop arguments", () => {
     for (const bad of [{ op: "add", repoSlug: "o/r", kind: "job", name: "a" }, { op: "add", repoSlug: "", kind: "test", name: "a" }, { op: "add", repoSlug: "o/r", kind: "test", name: " " }]) {
       expect(() => flakyActionArg(bad)).toThrow();
     }
+  });
+});
+
+describe("conversation store arguments (UI redesign layer 4)", () => {
+  it("convListOptsArg keeps valid options and caps the limit", () => {
+    expect(convListOptsArg({ limit: 50 })).toEqual({ limit: 50 });
+    expect(convListOptsArg({ limit: 500 })).toEqual({ limit: CONV_LIST_MAX });
+    expect(convListOptsArg({ limit: 20, before: 7, qaOnly: true })).toEqual({ limit: 20, before: 7, qaOnly: true });
+    for (const bad of [{ limit: 0 }, { limit: 1.5 }, { limit: 10, before: -1 }, { limit: 10, before: 1.5 }, { limit: 10, qaOnly: "y" }, null, "x", { limit: "10" }]) {
+      expect(() => convListOptsArg(bad), JSON.stringify(bad)).toThrow();
+    }
+  });
+
+  it("convQueryArg cuts long queries and refuses non-strings", () => {
+    expect([...convQueryArg("搜".repeat(300))]).toHaveLength(CONV_QUERY_MAX);
+    expect(convQueryArg("lint")).toBe("lint");
+    expect(() => convQueryArg(42)).toThrow();
+  });
+
+  it("convRootArg takes null or a session id", () => {
+    expect(convRootArg(null)).toBeNull();
+    expect(convRootArg("a-1")).toBe("a-1");
+    expect(() => convRootArg("../x")).toThrow();
+    expect(() => convRootArg(undefined)).toThrow();
   });
 });

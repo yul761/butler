@@ -353,6 +353,23 @@ export class SessionsRepo {
     return rows.map(toSession);
   }
 
+  /**
+   * 对话另存要读的 head（UI 重做第 4 层）：没被替换、Butler 开的或已认领到 ticket / feature / epic / Butler 总控、
+   * 不是复盘分析、since 之后有活动。recordHeadless 记的行是 discovered 且没有归属，不会被选中。
+   */
+  listConvTargets(sinceMs: number): Session[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM sessions
+         WHERE replaced_by IS NULL AND lesson_run_id IS NULL
+           AND (origin = 'butler' OR ticket_key IS NOT NULL OR feature_id IS NOT NULL OR epic_id IS NOT NULL OR butler = 1)
+           AND ${RECENCY} >= ?
+         ORDER BY id`,
+      )
+      .all(sinceMs) as unknown as SessionRow[];
+    return rows.map(toSession);
+  }
+
   /** 这个 head 的整条链：head 自己和所有沿 replaced_by 走到它的旧 id（/clear、compact 之前的段）。 */
   chainOf(headId: string): string[] {
     const rows = this.db
@@ -427,6 +444,23 @@ export class SessionsRepo {
       )
       .get(head.id) as { id: string } | undefined;
     return row?.id ?? head.id;
+  }
+
+  /** 一次查完一批 id 的链根（视图每次刷新都要算，不能每行一条递归查询）；不认识的 id 映射到它自己。 */
+  rootsOf(ids: readonly string[]): Map<string, string> {
+    const out = new Map<string, string>();
+    if (ids.length === 0) return out;
+    const rows = this.db
+      .prepare(
+        `WITH RECURSIVE chain(start, id, depth) AS (
+           SELECT value, value, 0 FROM json_each(?)
+           UNION SELECT c.start, s.id, c.depth + 1 FROM sessions s JOIN chain c ON s.replaced_by = c.id WHERE c.depth < ${ROOT_MAX_DEPTH}
+         )
+         SELECT start, id FROM chain ORDER BY start, depth DESC, id`,
+      )
+      .all(JSON.stringify(ids)) as { start: string; id: string }[];
+    for (const r of rows) if (!out.has(r.start)) out.set(r.start, r.id);
+    return out;
   }
 
   head(id: string): Session | null {

@@ -76,7 +76,9 @@ import { TicketError, type TicketService } from "../tickets/ticket-service";
 import type { CleanupOutcome } from "../tickets/worktree-cleanup";
 import { currentLang } from "../i18n";
 import { meteredIpcResult } from "./result";
+import type { ConversationStore } from "../conversation/conversation-store";
 import { memoryHandlers } from "./memory-handlers";
+import { convHandlers } from "./conv-handlers";
 import { settingsHandlers } from "./settings-handlers";
 import { featurePolicyHandlers, featurePolicyLayers } from "./feature-policy-handlers";
 import type { FeaturePolicyState } from "../../shared/feature-rows";
@@ -228,6 +230,8 @@ export interface IpcDeps {
   /** Butler 页"回复"tab（ws-b）。 */
   butlerMessages: () => ButlerMessageView[];
   memory: Pick<MemoryService, "view" | "why">;
+  /** 对话另存（UI 重做第 4 层）：只读。 */
+  conv: Pick<ConversationStore, "list" | "search">;
   autostart: { get(): AutostartState; set(on: boolean): AutostartState };
   /** 防休眠开关（只在内存里，启动时是关的）。 */
   keepAwake: { isOn(): boolean; set(on: boolean): void };
@@ -811,6 +815,10 @@ export function registerIpc(d: IpcDeps): void {
   const mem = memoryHandlers({ tickets: d.tickets, memory: d.memory, enabled: () => memoryOn(d.settings) });
   handle(IPC.memoryView, mem.view);
   handle(IPC.memoryWhy, mem.why);
+  // 对话另存（UI 重做第 4 层）：只读。
+  const cv = convHandlers({ conv: d.conv });
+  handle(IPC.convList, cv.list);
+  handle(IPC.convSearch, cv.search);
   // 内存历史（WS-M A）：最近 hours 小时（1 到 336），默认 24。
   handle(IPC.memUsageHistory, (hours: unknown): MemoryHistoryPoint[] => {
     const h = typeof hours === "number" && Number.isFinite(hours) ? Math.min(336, Math.max(1, hours)) : 24;
