@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NowNotice } from "./types";
 import type { SessionActivity } from "./activity";
-import { mostUrgent, noticeNeedsYou, prTurn, REPORT_STOP_SLACK_MS, sessionTurn, slowestOf, type SessionTurnInput, ticketTurn, TURN_PRIORITY, type PrTurnInput, type Turn } from "./turn";
+import { mostUrgent, noticeNeedsYou, prChangesRequested, prTurn, REPORT_STOP_SLACK_MS, sessionTurn, slowestOf, type SessionTurnInput, ticketTurn, TURN_PRIORITY, type PrTurnInput, type Turn } from "./turn";
 
 const merge: Turn = { owner: "you", kind: "merge", risk: null };
 const ask: Turn = { owner: "you", kind: "answer", question: "q", options: [], askId: 1, sessionId: "s" };
@@ -170,5 +170,19 @@ describe("sessionTurn", () => {
     expect(sessionTurn(ses({ activity: act({ kind: "edit", startedAt: N - 9 }) }))).toEqual({ turn: { owner: "agent", kind: "working", sessionId: "s" }, since: N - 9 });
     expect(sessionTurn(ses({ refreshing: true })).turn).toEqual({ owner: "agent", kind: "working", sessionId: "s" });
     expect(sessionTurn(ses({ activity: null }))).toEqual({ turn: { owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s" }, since: N - 100 });
+  });
+});
+
+describe("prChangesRequested", () => {
+  const r = (login: string, state: "approved" | "changes_requested", bot = false) => ({ login, state, at: 1, bot });
+  it("a human asking for changes counts, even after someone else approved", () => {
+    expect(prChangesRequested({ review: null, reviewers: [r("a", "changes_requested"), r("b", "approved")] })).toBe(true);
+  });
+  it("review changes_requested with nobody approving counts; with a human approval it does not", () => {
+    expect(prChangesRequested({ review: "changes_requested", reviewers: [] })).toBe(true);
+    expect(prChangesRequested({ review: "changes_requested", reviewers: [r("b", "approved")] })).toBe(false);
+  });
+  it("bots and Copilot are not people asking for changes", () => {
+    expect(prChangesRequested({ review: null, reviewers: [r("copilot", "changes_requested", true)] })).toBe(false);
   });
 });

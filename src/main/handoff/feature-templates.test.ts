@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FeatureHandoffSchema, type Handoff } from "../../shared/handoff";
-import { defaultFeatureHandoffPrompt, featureHandoffExample, renderFeatureTickets, type FeatureTicketContext } from "./feature-templates";
+import { defaultFeatureHandoffPrompt, featureHandoffExample, renderFeatureTickets, turnLabel, type FeatureTicketContext } from "./feature-templates";
 import { emptyHandoff } from "./schema";
 
 const hasChinese = (s: string) => /[一-鿿]/.test(s);
@@ -72,5 +72,14 @@ describe("feature summary prompt", () => {
 
   it("ships examples that pass the schema", () => {
     for (const l of ["zh", "en"] as const) expect(FeatureHandoffSchema.safeParse(JSON.parse(featureHandoffExample(l))).success).toBe(true);
+  });
+});
+
+describe("turnLabel", () => {
+  it("says whose turn it is with the reason or the names", () => {
+    expect(turnLabel({ owner: "you", kind: "unattended", why: "conflicts", canSend: false, sessionId: null })).toBe("you (unattended: conflicts)");
+    expect(turnLabel({ owner: "external", kind: "awaiting_review", names: ["amy", "core"] })).toBe("external (awaiting_review: amy, core)");
+    expect(turnLabel({ owner: "external", kind: "ci_running", names: [] })).toBe("external (ci_running)");
+    expect(turnLabel({ owner: "agent", kind: "fixing_ci", sessionId: "s" })).toBe("agent (fixing_ci)");
   });
 });

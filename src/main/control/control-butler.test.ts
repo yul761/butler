@@ -117,6 +117,7 @@ function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admiss
         epicViews: () => [{ id: shop, name: "shop", sessions: [view("ep"), view("closed-ep")], waiting: true, stuck: false, features: rows.filter((r) => r.epicId === shop) }],
         featureRows: () => rows,
         prs: () => prs,
+        prTurns: () => (url) => (url === "https://x/12" ? { owner: "agent", kind: "fixing_ci", sessionId: "s1" } : null),
         openHeads: () => [...open].map((id) => sessions.get(id)!),
         needsYou: (id) => needs.get(id) ?? null,
         inbox: { view: () => inboxView },
@@ -212,23 +213,24 @@ describe("Butler 总控 read-only tools (BTL-190 5)", () => {
     expect(err(await call({ op: "pr_assessment", pr: "99" }))).toContain("99");
   });
 
-  it("list_prs adds the stack, review and merge fields and who the PR waits on (ws-b)", async () => {
+  it("list_prs adds the stack, review and merge fields and whose turn the PR is (ws-b, turn model)", async () => {
     const { call, prs } = setup();
     const detail: PrDetail = {
       baseBranch: "main", isDraft: false, title: "Checkout", author: "me", labels: ["ui"], reviewRequests: [], mergeable: "mergeable", mergeState: "clean", statusChangedAt: 86_400_000, slug: "o/r",
       reviewers: [{ login: "ann", state: "approved", at: 0, bot: false }],
     };
-    // 从没读成功过的（handoff 里给的链接）：不给 waitingOn 这些，和进度页一样不当 PR 算。
+    // 从没读成功过的（handoff 里给的链接）：不给 turn 这些，和看板一样不当 PR 算。
     prs[0] = { ...prs[0], checkedAt: 0, detail };
-    expect(value<Record<string, unknown>[]>(await call({ op: "list_prs" }))[0]).not.toHaveProperty("waitingOn");
+    expect(value<Record<string, unknown>[]>(await call({ op: "list_prs" }))[0]).not.toHaveProperty("turn");
     prs[0] = { ...prs[0], checkedAt: 1, detail };
     const list = value<Record<string, unknown>[]>(await call({ op: "list_prs" }));
     expect(list[0]).toMatchObject({
       title: "Checkout", headBranch: "b-BTL-1", baseBranch: "main", draft: false, author: "me", labels: ["ui"], mergeable: "mergeable", mergeState: "clean",
-      reviewers: [{ login: "ann", state: "approved", at: null }], statusChangedAt: "1970-01-02T00:00:00.000Z", waitingOn: { who: "author", reason: "ci_failing", names: ["me"] },
+      reviewers: [{ login: "ann", state: "approved", at: null }], statusChangedAt: "1970-01-02T00:00:00.000Z", turn: { owner: "agent", kind: "fixing_ci", sessionId: "s1" },
     });
+    expect(list[0]).not.toHaveProperty("waitingOn");
     // 分支行没有这些字段。
-    expect(list[1]).not.toHaveProperty("waitingOn");
+    expect(list[1]).not.toHaveProperty("turn");
   });
 
   it("list_features says when the summary read PR status and whether it is stale (ws-b)", async () => {

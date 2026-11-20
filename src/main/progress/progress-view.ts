@@ -1,8 +1,10 @@
-// 进度页和总控 progress_overview 共用的聚合（设计文档 2026-11-17 ws-b 第 4 节）：纯函数，输入是已经读好的数据。
+// 总控 progress_overview 的聚合（设计文档 2026-11-17 ws-b 第 4 节）：纯函数，输入是已经读好的数据。
+// 每个 PR 轮到谁取自 turn 模型（TurnService.prTurns），和首页、epic/feature/ticket 页同一套算法。
 import {
-  PROGRESS_BUCKETS, titlePrefix, waitingOnOf, type ProgressBucket, type ProgressFeature, type ProgressFilter, type ProgressPr, type ProgressPrGroup,
-  type ProgressStackNode, type ProgressStackRepo, type ProgressStuck, type ProgressTicket, type ProgressView, type WaitingOn,
+  PROGRESS_BUCKETS, titlePrefix, type ProgressBucket, type ProgressFeature, type ProgressFilter, type ProgressPr, type ProgressPrGroup,
+  type ProgressStackNode, type ProgressStackRepo, type ProgressStuck, type ProgressTicket, type ProgressView,
 } from "../../shared/progress";
+import { prChangesRequested, type Turn } from "../../shared/turn";
 import { effectiveStatus, type Ticket, type WatchedPr } from "../../shared/types";
 
 /** 一个 feature 最新的汇总（featureRowsAll 加上 ws-b 的新鲜度）。 */
@@ -26,6 +28,8 @@ export interface ProgressInput {
   summary: (featureId: number) => ProgressSummary | null;
   /** 开工过：有过 session，或者 PR 进度里记过第一个 commit。 */
   started: (ticketKey: string) => boolean;
+  /** 这个 PR 轮到谁（TurnService.prTurns）；关了的、看板上没有的为 null。 */
+  turnOf: (url: string) => Turn | null;
 }
 
 /** 汇总的第一句：截到第一个句末标点（英文句号要跟空白或结尾），最多这么多字。 */
@@ -45,31 +49,27 @@ const repoName = (path: string): string => path.split(/[\\/]/).filter(Boolean).a
 /** slug 从 PR url 里取（github.com/o/r/pull/1 → o/r）；拿不到为 null。 */
 const slugOfUrl = (url: string): string | null => /github\.com\/([^/]+\/[^/]+)\/pull\//.exec(url)?.[1] ?? null;
 
-function toProgressPr(p: WatchedPr): ProgressPr | null {
+function toProgressPr(p: WatchedPr, turnOf: (url: string) => Turn | null): ProgressPr | null {
   if (p.prId === null || p.number === null || p.url === null || p.state === null) return null;
   const d = p.detail;
   const slug = d?.slug ?? slugOfUrl(p.url);
-  const base = {
+  return {
     state: p.state, isDraft: d?.isDraft ?? false, ci: p.ci, review: p.review, author: d?.author ?? null, reviewers: d?.reviewers ?? [],
     reviewRequests: d?.reviewRequests ?? [], mergeable: d?.mergeable ?? null, mergeState: d?.mergeState ?? null,
-  };
-  return {
-    ...base, ticketKey: p.ticketKey, prId: p.prId, repo: p.repoPath !== null ? repoName(p.repoPath) : (slug ?? "?"), slug, number: p.number, url: p.url,
+    ticketKey: p.ticketKey, prId: p.prId, repo: p.repoPath !== null ? repoName(p.repoPath) : (slug ?? "?"), slug, number: p.number, url: p.url,
     title: d?.title ?? null, headBranch: p.branch || null, baseBranch: d?.baseBranch ?? null, labels: d?.labels ?? [],
-    waitingOn: waitingOnOf(base), checkedAt: p.checkedAt, statusChangedAt: d?.statusChangedAt ?? null, readError: p.readError,
+    turn: turnOf(p.url), checkedAt: p.checkedAt, statusChangedAt: d?.statusChangedAt ?? null, readError: p.readError,
   };
 }
 
-/** 让 ticket 落进"阻塞"的 PR 情况。 */
-const BLOCKING: ReadonlySet<WaitingOn["reason"]> = new Set(["ci_failing", "changes_requested", "conflicts"]);
+/** 让 ticket 落进"阻塞"的 PR 情况：CI 挂了、有人要求修改、有冲突。draft 也一样看（turn 对 draft 先给 draft，会盖住冲突和要求修改）。 */
+const blocking = (p: ProgressPr): boolean => p.ci === "failing" || prChangesRequested(p) || p.mergeable === "conflicting" || p.mergeState === "dirty";
 
 /** 汇总条的格子：按顺序判断（定义见设计文档第 4 节）。prs 是这个 ticket 读到过的 PR。 */
 export function bucketOf(t: Pick<Ticket, "status" | "statusManual">, prs: ProgressPr[], started: boolean): ProgressBucket {
   const status = effectiveStatus(t);
   const open = prs.filter((p) => p.state === "open");
   if (status === "done" || status === "merged_pending_followup" || (open.length === 0 && prs.some((p) => p.state === "merged"))) return "merged";
-  // draft 也一样看：waitingOn 对 draft 先给 draft，冲突、要求修改会被盖住，所以按非 draft 再判一次。
-  const blocking = (p: ProgressPr): boolean => BLOCKING.has(waitingOnOf({ ...p, isDraft: false })?.reason ?? "draft");
   if (status === "blocked" || open.some(blocking)) return "blocked";
   if (open.some((p) => !p.isDraft)) return "in_review";
   if (open.length > 0 || started) return "in_progress";
@@ -152,7 +152,7 @@ export function buildProgress(input: ProgressInput, filter: ProgressFilter = {})
   // 从没读成功过的行（checkedAt 0）只是链接时的说法（handoff 里的 URL 可能是编的），和 PR 进度 tab 一样不当 PR 算。
   // 放弃读了的也不算：它的"开着"不再当真（和 PR 监视里一样不再挡 ticket），只在新鲜度里算读取失败。
   const givenUp = watched.filter((p) => p.checkedAt > 0 && p.gaveUp === true).length;
-  const read = watched.filter((p) => p.checkedAt > 0 && p.gaveUp !== true).map(toProgressPr).filter((p): p is ProgressPr => p !== null);
+  const read = watched.filter((p) => p.checkedAt > 0 && p.gaveUp !== true).map((p) => toProgressPr(p, input.turnOf)).filter((p): p is ProgressPr => p !== null);
   const prsOf = new Map<string, ProgressPr[]>();
   for (const p of read) prsOf.set(p.ticketKey, [...(prsOf.get(p.ticketKey) ?? []), p]);
   // 同一个 PR 链接在两个 ticket 上：表、树里只出现一次（先出现的那个 ticket）。
@@ -172,13 +172,14 @@ export function buildProgress(input: ProgressInput, filter: ProgressFilter = {})
   const ticketByKey = new Map(tickets.map((t) => [t.key, t]));
   const stuck: ProgressStuck[] = [];
   for (const p of unique) {
-    if (!p.waitingOn) continue;
+    if (p.state !== "open" || p.turn === null) continue;
     const t = ticketByKey.get(p.ticketKey);
-    stuck.push({ ticketKey: p.ticketKey, ticketTitle: t?.title ?? null, featureId: t?.featureId ?? null, pr: p, waitingOn: p.waitingOn, since: p.statusChangedAt });
+    stuck.push({ ticketKey: p.ticketKey, ticketTitle: t?.title ?? null, featureId: t?.featureId ?? null, pr: p, turn: p.turn, since: p.statusChangedAt });
   }
   for (const t of tickets) {
     if (effectiveStatus(t) !== "blocked" || (ticketRows.get(t.key)?.openPrs ?? 0) > 0) continue;
-    stuck.push({ ticketKey: t.key, ticketTitle: t.title, featureId: t.featureId, pr: null, waitingOn: { who: "ticket", names: [], reason: "ticket_blocked" }, since: null });
+    const turn: Turn = { owner: "you", kind: "stuck", source: "ticket_blocked", detail: null, sessionId: null };
+    stuck.push({ ticketKey: t.key, ticketTitle: t.title, featureId: t.featureId, pr: null, turn, since: null });
   }
   // 卡得最久的在最上面；不知道从什么时候起的放最后。
   stuck.sort((a, b) => (a.since ?? Infinity) - (b.since ?? Infinity) || a.ticketKey.localeCompare(b.ticketKey));

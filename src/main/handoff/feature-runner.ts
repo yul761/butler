@@ -1,4 +1,5 @@
 import { FeatureHandoffSchema } from "../../shared/handoff";
+import type { Turn } from "../../shared/turn";
 import { effectiveStatus, type FeatureHandoffOutcome, type FeatureHandoffTrigger, type HandoffOutcome, type Ticket, type WatchedPr } from "../../shared/types";
 import { storedModel } from "../claude/spawn";
 import { headlessArgs, READ_ONLY_TOOLS } from "../claude/headless";
@@ -42,6 +43,8 @@ export interface FeatureRunnerDeps extends HeadlessExecDeps {
   projectMcp?: (cwd: string) => string[];
   /** Butler 实时读到的这个 ticket 的 PR（PrWatcher.statusOf，ws-b）：汇总的 prompt 用它，PR 状态变化也算新活动。 */
   livePrs?: (ticketKey: string) => WatchedPr[];
+  /** 实时 PR 轮到谁（TurnService.prTurns：一次算好，按链接查），写进汇总 prompt；不给就不写。 */
+  prTurns?: () => (url: string) => Turn | null;
 }
 
 type Exec = { ok: true; value: unknown; rawText: string } | { ok: false; outcome: FeatureHandoffOutcome };
@@ -245,6 +248,7 @@ export class FeatureSummaryRunner {
   }
 
   private ticketContexts(tickets: Ticket[]): FeatureTicketContext[] {
+    const turnOf = this.d.prTurns?.();
     return tickets.map((t) => ({
       key: t.key,
       title: t.title,
@@ -253,6 +257,7 @@ export class FeatureSummaryRunner {
       prs: this.d.handoffs.knownPrs(t.key),
       latest: this.d.handoffs.latestValidFull(t.key)?.payload ?? null,
       ...(this.d.livePrs && { live: this.d.livePrs(t.key) }),
+      ...(turnOf && { turnOf }),
     }));
   }
 

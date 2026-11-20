@@ -213,19 +213,6 @@ export function dirArg(v: unknown): string {
 }
 
 /** feature 的 id：正整数。 */
-/** 进度页的过滤（ws-b）：epicId、featureId 是正整数或 null / 不给。 */
-export function progressFilterArg(v: unknown): { epicId: number | null; featureId: number | null } {
-  if (v === undefined || v === null) return { epicId: null, featureId: null };
-  if (typeof v !== "object" || Array.isArray(v)) throw new Error("invalid progress filter");
-  const o = v as Record<string, unknown>;
-  const id = (x: unknown, what: string): number | null => {
-    if (x === undefined || x === null) return null;
-    if (typeof x !== "number" || !Number.isSafeInteger(x) || x <= 0) throw new Error(`invalid ${what} id`);
-    return x;
-  };
-  return { epicId: id(o.epicId, "epic"), featureId: id(o.featureId, "feature") };
-}
-
 export function featureIdArg(v: unknown): number {
   if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) throw new Error("invalid feature id");
   return v;

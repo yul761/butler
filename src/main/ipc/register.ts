@@ -40,7 +40,6 @@ import {
 } from "../../shared/types";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { ExternalActionEntry } from "../../shared/external";
-import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import type { ExternalAuditRepo } from "../db/external-audit-repo";
 import type { EpicService } from "../epics/epic-service";
 import type { AuditRepo } from "../db/audit-repo";
@@ -87,7 +86,7 @@ import type { FeaturePolicyState } from "../../shared/feature-rows";
 import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
-  addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, progressFilterArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
   stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
@@ -233,8 +232,6 @@ export interface IpcDeps {
   audit: AuditRepo;
   /** 对外动作的审计（契约 4.8，ws-b）。 */
   externalAudit: Pick<ExternalAuditRepo, "list">;
-  /** 进度页（ws-b）：和总控 progress_overview 同一份聚合。 */
-  progress: (filter: ProgressFilter) => ProgressView;
   /** 「效果」页（ws-h）：和总控 metrics_overview 同一份。 */
   metrics: (days: number | undefined) => MetricsOverview;
   /** Butler 页"回复"tab（ws-b）。 */
@@ -427,7 +424,6 @@ export function registerIpc(d: IpcDeps): void {
 
   handle(IPC.butlerView, () => d.sessionService.butlerView());
   handle(IPC.butlerMessages, (): ButlerMessageView[] => d.butlerMessages());
-  handle(IPC.progressGet, (raw: unknown): ProgressView => d.progress(progressFilterArg(raw)));
   handle(IPC.metricsView, (raw: unknown): MetricsOverview => d.metrics(typeof raw === "number" ? raw : undefined));
   handle(IPC.butlerOpenSession, async (raw: unknown) => {
     const r = await d.sessionService.openButler(openButlerArg(raw));

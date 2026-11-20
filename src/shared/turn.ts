@@ -181,8 +181,8 @@ export interface PrTurnInput extends Omit<WaitingInput, "author"> {
   stackBelow: string | null;
 }
 
-/** 有人要求修改：照 waitingOnOf 的判断（不 import 它，它会在第 3 层删掉）。 */
-function changesRequested(i: PrTurnInput): boolean {
+/** 有人要求修改：人的 reviewer 里有 changes_requested；或者 review 是 changes_requested、又没有人 approve。bot 不算人。 */
+export function prChangesRequested(i: Pick<PrTurnInput, "reviewers" | "review">): boolean {
   const humans = i.reviewers.filter((r) => !r.bot);
   return humans.some((r) => r.state === "changes_requested") || (i.review === "changes_requested" && humans.every((r) => r.state !== "approved"));
 }
@@ -215,7 +215,7 @@ export function prTurn(i: PrTurnInput): Turn | null {
   if (i.ci === "failing") return yourSide(i, i.ciUndelivered ? "ci_undelivered" : "ci_failing");
   if (i.isDraft && i.stackBelow !== null) return { owner: "external", kind: "stack_below", names: [i.stackBelow] };
   if (i.isDraft) return yourSide(i, "draft");
-  if (changesRequested(i)) return yourSide(i, "changes_requested");
+  if (prChangesRequested(i)) return yourSide(i, "changes_requested");
   if (i.mergeable === "conflicting" || i.mergeState === "dirty") return yourSide(i, "conflicts");
   if (i.mergeState === "behind") return yourSide(i, "behind");
   // ready for review 之后

@@ -1,6 +1,6 @@
 import type { FeatureHandoff, Handoff, Pr } from "../../shared/handoff";
 import type { Lang } from "../../shared/i18n";
-import { waitingOnOf } from "../../shared/progress";
+import type { Turn } from "../../shared/turn";
 import type { TicketStatus, WatchedPr } from "../../shared/types";
 
 /** feature 汇总 prompt 里一个 ticket 的情况（设计文档 2026-10-28）。 */
@@ -13,6 +13,8 @@ export interface FeatureTicketContext {
   latest: Handoff | null;
   /** Butler 实时读到的 PR（ticket_prs，ws-b）；给了就优先用它，handoff 里提到、没在这里的 PR 照旧列出。 */
   live?: WatchedPr[];
+  /** 实时 PR 轮到谁（TurnService.prTurns，和看板同一套算法）；没有为 null。 */
+  turnOf?: (url: string) => Turn | null;
 }
 
 /** 给 claude 看的字段说明，和 src/shared/handoff.ts 的 FeatureHandoffSchema 一一对应。 */
@@ -131,7 +133,7 @@ const FILL = {
     draft: " draft",
     ci: (c: string) => `，CI ${c}`,
     review: (r: string) => `，review ${r}`,
-    waiting: (w: string) => `，在等：${w}`,
+    turn: (w: string) => `，轮到：${w}`,
   },
   en: {
     noTickets: "(this feature has no tickets yet)",
@@ -151,7 +153,7 @@ const FILL = {
     draft: " draft",
     ci: (c: string) => `, CI ${c}`,
     review: (r: string) => `, review ${r}`,
-    waiting: (w: string) => `, waiting on: ${w}`,
+    turn: (w: string) => `, whose turn: ${w}`,
   },
 };
 
@@ -161,14 +163,20 @@ function prLabel(p: Pr): string {
   return `${repo}#${p.number} ${p.state}${p.review ? ` (${p.review})` : ""}`;
 }
 
-/** 实时 PR 写成"仓库名#号 状态 [draft]，CI x，review y，在等：谁（原因）"。 */
-function livePrLabel(p: WatchedPr, l: Lang): string {
+/** 一个 PR 轮到谁，写给 claude 看：owner (kind: 原因或点名)，例如 you (unattended: ci_failing)、external (awaiting_review: amy)。 */
+export function turnLabel(t: Turn): string {
+  const detail = t.owner === "you" && t.kind === "unattended" ? t.why : t.owner === "external" && t.names.length > 0 ? t.names.join(", ") : null;
+  return `${t.owner} (${t.kind}${detail ? `: ${detail}` : ""})`;
+}
+
+/** 实时 PR 写成"仓库名#号 状态 [draft]，CI x，review y，轮到：谁（为什么）"；合了的不写轮到谁。 */
+function livePrLabel(p: WatchedPr, l: Lang, turnOf: ((url: string) => Turn | null) | undefined): string {
   const f = FILL[l];
   const d = p.detail;
   const repo = d?.slug.split("/").pop() ?? (p.url ? /github\.com\/[^/]+\/([^/]+)\/pull\//.exec(p.url)?.[1] : null) ?? "";
-  const w = d ? waitingOnOf({ ...d, state: p.state, ci: p.ci, review: p.review }) : null;
-  const who = w ? `${w.names.length > 0 ? w.names.join(", ") : w.who} (${w.reason})` : null;
-  return `${repo}#${p.number} ${p.state}${d?.isDraft ? f.draft : ""}${f.ci(p.ci)}${p.review ? f.review(p.review) : ""}${who ? f.waiting(who) : ""}`;
+  const t = p.url && turnOf ? turnOf(p.url) : null;
+  const who = t && t.owner !== "done" ? turnLabel(t) : null;
+  return `${repo}#${p.number} ${p.state}${d?.isDraft ? f.draft : ""}${f.ci(p.ci)}${p.review ? f.review(p.review) : ""}${who ? f.turn(who) : ""}`;
 }
 
 /**
@@ -183,7 +191,7 @@ export function renderFeatureTickets(rows: FeatureTicketContext[], l: Lang, prSt
     if (!r.live) return r.prs.map(prLabel);
     const live = r.live.filter((p) => p.prId !== null && p.checkedAt > 0);
     const urls = new Set(live.map((p) => p.url));
-    return [...live.map((p) => livePrLabel(p, l)), ...r.prs.filter((p) => !urls.has(p.url)).map((p) => `${prLabel(p)}${f.fromHandoff}`)];
+    return [...live.map((p) => livePrLabel(p, l, r.turnOf)), ...r.prs.filter((p) => !urls.has(p.url)).map((p) => `${prLabel(p)}${f.fromHandoff}`)];
   };
   const head = prStatusAt !== undefined && rows.some((r) => r.live) ? [f.asOf(new Date(prStatusAt).toISOString())] : [];
   return [...head, ...rows

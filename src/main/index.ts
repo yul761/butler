@@ -82,6 +82,7 @@ import { ExternalAuditRepo } from "./db/external-audit-repo";
 import { ExternalActions } from "./external/actions";
 import { buildProgress } from "./progress/progress-view";
 import type { ProgressFilter, ProgressView } from "../shared/progress";
+import type { Turn } from "../shared/turn";
 import { EpicHistoryRepo } from "./db/epic-history-repo";
 import { EpicsRepo } from "./db/epics-repo";
 import { EpicDigestRunner } from "./epics/epic-digest";
@@ -1342,8 +1343,9 @@ async function bootstrap(): Promise<void> {
     claude: () => health.claude(),
     baseEnv: process.env,
     transcriptMtime,
-    // prWatcher 在下面才建：只在生成汇总、判断过期时（启动之后）才调。
+    // prWatcher、turnService 在下面才建：只在生成汇总、判断过期时（启动之后）才调。
     livePrs: (key): WatchedPr[] => prWatcher.statusOf(key),
+    prTurns: (): ((url: string) => Turn | null) => turnService.prTurns(),
     now: Date.now,
     newRunId: randomUUID,
     projectMcp,
@@ -2870,7 +2872,6 @@ async function bootstrap(): Promise<void> {
     tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, runner, featureRunner, scheduler, jobs, gateRepo,
     keys, terms, audit, memory,
     externalAudit,
-    progress: (f) => progressView(f),
     metrics: (days) => metricsView(days),
     butlerMessages: () => butlerMessages.recent(),
     llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
@@ -3115,7 +3116,7 @@ async function bootstrap(): Promise<void> {
     staleCache.set(id, { summaryId, at: now, stale });
     return stale;
   };
-  /** 进度页和总控 progress_overview 共用的聚合（ws-b）。 */
+  /** 总控 progress_overview 的聚合（ws-b）。 */
   const progressView = (filter: ProgressFilter): ProgressView => {
     const firstCommits = prStages.ticketsWith("first_commit");
     const live = tickets.list();
@@ -3130,6 +3131,7 @@ async function bootstrap(): Promise<void> {
         return { summary: rec?.payload?.summary ?? null, at: rec?.createdAt ?? null, prStatusAt: rec?.prStatusAt ?? null, stale: summaryStale(id) };
       },
       started: (key) => firstCommits.has(key) || sessions.listByTicket(key).length > 0,
+      turnOf: turnService.prTurns(),
     }, filter);
   };
 
@@ -3154,6 +3156,7 @@ async function bootstrap(): Promise<void> {
         epicViews: () => sessionService.epicViews(),
         featureRows: () => sessionService.featureRowsAll(),
         prs: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
+        prTurns: () => turnService.prTurns(),
         openHeads: openButlerHeads,
         needsYou: (id) => needsYou.reasons().get(id) ?? null,
         inbox: inboxService,

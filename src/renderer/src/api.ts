@@ -29,7 +29,6 @@ import type { BackgroundAction, BackgroundStatusView } from "../../shared/backgr
 import type { CostBreakerView, CostPolicyOverrides, CostResumeResult, CostSetResult, CostSubjectKind, CostView } from "../../shared/cost";
 import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { ExternalActionEntry } from "../../shared/external";
-import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import type { MetricsOverview } from "../../shared/metrics";
 import type { InterruptsAction, InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import type { StackActionResult, StackLayerMode, StackPolicyLayer, StackPolicyOverrides, StackPolicySetResult, StackPolicyView, StacksFilter, StacksView } from "../../shared/stacks";
@@ -107,7 +106,6 @@ export const api = {
   openEpicSession: (req: OpenEpicSessionRequest) => call<OpenSessionResult>(IPC.epicsOpenSession, req),
   butlerView: () => call<ButlerView>(IPC.butlerView),
   butlerMessages: () => call<ButlerMessageView[]>(IPC.butlerMessages),
-  progress: (filter: ProgressFilter) => call<ProgressView>(IPC.progressGet, filter),
   metrics: (days?: number) => call<MetricsOverview>(IPC.metricsView, days),
   openButlerSession: (req: OpenButlerSessionRequest) => call<OpenSessionResult>(IPC.butlerOpenSession, req),
   openFixSession: (req: OpenFixSessionRequest) => call<OpenSessionResult>(IPC.sessionOpenFix, req),

@@ -8,7 +8,7 @@ import { convListOptsArg, convQueryArg, convRootArg } from "./validate";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
-import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, progressFilterArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
+import { availabilityActionArg, apiKeyArg, boolArg, auditCursorArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, termsArg, ticketKeyArg, TERMS_INPUT_LIMIT, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("IPC argument validation", () => {
   it("accepts only a string of bounded length as an API key", () => {
@@ -438,15 +438,6 @@ describe("routingActionArg", () => {
     expect(switchModelArg(undefined)).toBeUndefined();
     expect(switchModelArg("corp-x")).toBe("corp-x");
     expect(() => switchModelArg("bad name!")).toThrow();
-  });
-});
-
-describe("progressFilterArg", () => {
-  it("accepts no filter, either id or both, and rejects anything else", () => {
-    expect(progressFilterArg(undefined)).toEqual({ epicId: null, featureId: null });
-    expect(progressFilterArg({ epicId: 3 })).toEqual({ epicId: 3, featureId: null });
-    expect(progressFilterArg({ epicId: null, featureId: 7 })).toEqual({ epicId: null, featureId: 7 });
-    for (const bad of ["x", [1], { epicId: 0 }, { featureId: 1.5 }, { featureId: "2" }]) expect(() => progressFilterArg(bad)).toThrow();
   });
 });
 

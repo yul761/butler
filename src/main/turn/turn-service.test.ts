@@ -299,6 +299,19 @@ describe("TurnService.board", () => {
   });
 });
 
+describe("TurnService.prTurns", () => {
+  it("looks up each open PR's turn by link, whatever the case, from the same algorithm as the board", () => {
+    const of = new TurnService(failingPr()).prTurns();
+    expect(of(URL3)).toEqual({ owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: "s1" });
+    expect(of(URL3.toLowerCase())).toEqual(of(URL3));
+    expect(of("https://github.com/O/r/pull/9")).toBeNull();
+  });
+  it("a closed PR has no turn", () => {
+    const of = new TurnService(failingPr({ prs: () => [watched({ state: "closed" })] })).prTurns();
+    expect(of(URL3)).toBeNull();
+  });
+});
+
 describe("TurnService.sendToAgent", () => {
   const target = { ticketKey: "BTL-1", pr: { repo: "o/r", number: 3 } };
 

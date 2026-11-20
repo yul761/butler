@@ -1,4 +1,5 @@
-// 进度页和总控 progress_overview 共用的类型，以及"卡在谁手上"的纯函数（设计文档 2026-11-17 ws-b 第 1、4 节）。
+// 总控 progress_overview 的类型（设计文档 2026-11-17 ws-b 第 1、4 节）。PR 轮到谁用 turn 模型（shared/turn.ts）。
+import type { Turn } from "./turn";
 
 /** 请了 review、还没给的人或团队（gh 的 reviewRequests）。 */
 export interface PrReviewRequest {
@@ -18,27 +19,7 @@ export type PrMergeable = "mergeable" | "conflicting" | "unknown";
 export const MERGE_STATES = ["clean", "blocked", "behind", "dirty", "draft", "unstable", "has_hooks", "unknown"] as const;
 export type PrMergeState = (typeof MERGE_STATES)[number];
 
-export type WaitingReason =
-  | "draft"
-  | "ci_failing"
-  | "changes_requested"
-  | "conflicts"
-  | "behind"
-  | "ci_pending"
-  | "ready_to_merge"
-  | "review_requested"
-  | "no_reviewer"
-  | "ticket_blocked";
-
-/** 卡在谁手上：作者、CI、被请的 reviewer，或者 ticket 本身（标成了阻塞、没有开着的 PR）。 */
-export interface WaitingOn {
-  who: "author" | "ci" | "reviewers" | "ticket";
-  /** 点名：作者的 login、被请的人和团队、提修改要求的人；不知道是谁时为空。 */
-  names: string[];
-  reason: WaitingReason;
-}
-
-/** waitingOnOf 要看的 PR 字段（WatchedPr 的子集）。 */
+/** prTurn 要看的 PR 字段（WatchedPr 的子集）。 */
 export interface WaitingInput {
   state: "open" | "merged" | "closed" | null;
   isDraft: boolean;
@@ -49,30 +30,6 @@ export interface WaitingInput {
   reviewRequests: PrReviewRequest[];
   mergeable: PrMergeable | null;
   mergeState: PrMergeState | null;
-}
-
-const authorNames = (p: WaitingInput): string[] => (p.author ? [p.author] : []);
-
-/** 开着的 PR 卡在谁手上；没开着（合了、关了、还没有 PR）为 null。规则的顺序见设计文档第 4 节的表。 */
-export function waitingOnOf(p: WaitingInput): WaitingOn | null {
-  if (p.state !== "open") return null;
-  const author = (reason: WaitingReason, names = authorNames(p)): WaitingOn => ({ who: "author", names, reason });
-  if (p.isDraft) return author("draft");
-  if (p.ci === "failing") return author("ci_failing");
-  const humans = p.reviewers.filter((r) => !r.bot);
-  const changes = humans.filter((r) => r.state === "changes_requested");
-  if (changes.length > 0 || (p.review === "changes_requested" && humans.every((r) => r.state !== "approved"))) {
-    return { who: "author", names: changes.map((r) => r.login), reason: "changes_requested" };
-  }
-  if (p.mergeable === "conflicting" || p.mergeState === "dirty") return author("conflicts");
-  if (p.mergeState === "behind") return author("behind");
-  if (p.ci === "pending") return { who: "ci", names: [], reason: "ci_pending" };
-  const approved = humans.some((r) => r.state === "approved") || p.review === "approved";
-  // 有人批准了、GitHub 不再要求更多批准（reviewDecision 不是 REVIEW_REQUIRED）：可以合了，还被请着的人不用再等。
-  if (approved && p.review !== "pending") return author("ready_to_merge");
-  if (p.reviewRequests.length > 0) return { who: "reviewers", names: p.reviewRequests.map((r) => r.name), reason: "review_requested" };
-  // 没人被请着：作者得去请人（批准数还不够时也一样）。
-  return author("no_reviewer");
 }
 
 /**
@@ -126,7 +83,8 @@ export interface ProgressPr {
   reviewRequests: PrReviewRequest[];
   mergeable: PrMergeable | null;
   mergeState: PrMergeState | null;
-  waitingOn: WaitingOn | null;
+  /** 轮到谁（turn 模型，和看板同一份）；关了的、看板上没有的为 null。 */
+  turn: Turn | null;
   checkedAt: number;
   statusChangedAt: number | null;
   readError: boolean;
@@ -138,7 +96,7 @@ export interface ProgressStuck {
   featureId: number | null;
   /** 没有 PR（ticket 标成阻塞）时为 null。 */
   pr: ProgressPr | null;
-  waitingOn: WaitingOn;
+  turn: Turn;
   /** 从什么时候起是这个状态（PR 状态最后一次变化）；不知道为 null。 */
   since: number | null;
 }

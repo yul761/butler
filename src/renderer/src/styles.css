@@ -489,53 +489,16 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .session-limit { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .perf-tips { margin: 4px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; }
 .perf-tips li { margin: 3px 0; }
-/* 进度页（ws-b）。五格的颜色：合并=ok，卡住=danger，review 中=accent，进行中=淡 accent，未开始=border。 */
-.progress-page h3 { margin: 18px 0 6px; font-size: 14px; }
-.progress-page h4 { margin: 10px 0 4px; font-size: 13px; }
-.progress-filter { display: inline-flex; gap: 6px; align-items: center; margin-left: 12px; }
-.progress-summary { margin: 8px 0 4px; }
-.progress-counts { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
-.progress-count { display: inline-flex; gap: 4px; align-items: center; }
-.progress-count .swatch { width: 9px; height: 9px; border-radius: 2px; }
-.progress-bar { display: flex; height: 10px; margin: 8px 0 4px; border-radius: 5px; overflow: hidden; background: var(--panel); border: 1px solid var(--border); }
-.bucket-merged .swatch, .progress-seg.bucket-merged { background: var(--ok); }
-.bucket-blocked .swatch, .progress-seg.bucket-blocked { background: var(--danger); }
-.bucket-in_review .swatch, .progress-seg.bucket-in_review { background: var(--accent); }
-.bucket-in_progress .swatch, .progress-seg.bucket-in_progress { background: color-mix(in srgb, var(--accent) 45%, var(--bg)); }
-.bucket-not_started .swatch, .progress-seg.bucket-not_started { background: var(--border); }
-.progress-defs { margin: 4px 0; display: grid; gap: 2px; }
-.progress-defs div { display: flex; gap: 8px; }
-.progress-defs dt { font-weight: 600; min-width: 6em; }
-.progress-defs dd { margin: 0; }
-.progress-section-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .segmented button { border: none; border-radius: 0; background: transparent; padding: 2px 10px; }
 .segmented button.active { background: var(--accent); color: var(--bg); }
-.progress-stuck .waiting-reason.ci_failing, .progress-stuck .waiting-reason.changes_requested, .progress-stuck .waiting-reason.conflicts, .progress-stuck .waiting-reason.ticket_blocked { color: var(--danger); }
-.progress-stuck .waiting-reason.ready_to_merge { color: var(--ok); }
-.progress-stack { list-style: none; margin: 0; padding: 0; }
-/* 栈式 PR（工作流 K）：进度页的「栈」区块。 */
+/* 栈式 PR（工作流 K）。 */
 .stack-card { border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
 .stack-head { overflow-wrap: anywhere; }
 .stack-layers { list-style: none; margin: 6px 0; padding: 0; }
 .stack-layer { padding: 3px 0; overflow-wrap: anywhere; }
 .stack-layer.state-merged { opacity: 0.7; }
 .stack-layer-action { margin-inline-start: 8px; }
-.progress-stack li { padding: 2px 0; overflow-wrap: anywhere; }
-.progress-pr-group table { width: 100%; }
-.ci-failing { color: var(--danger); }
-.ci-passing { color: var(--ok); }
-.progress-feature { margin: 8px 0 12px; }
-.progress-feature-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
-.progress-feature-line { margin: 2px 0 4px; }
-.badge.stale { color: var(--danger); }
-.progress-tickets { list-style: none; margin: 0; padding: 0; }
-.progress-tickets li { padding: 2px 0; display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }
-.bucket-chip { font-size: 11px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--border); color: var(--text); white-space: nowrap; }
-.bucket-chip.bucket-merged { border-color: var(--ok); }
-.bucket-chip.bucket-blocked { border-color: var(--danger); }
-.bucket-chip.bucket-in_review, .bucket-chip.bucket-in_progress { border-color: var(--accent); }
-.progress-freshness { margin-top: 18px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; }
 
 /* Butler 页「回复」tab（ws-b）。 */
 .butler-replies { list-style: none; margin: 0; padding: 0; }
