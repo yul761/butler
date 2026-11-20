@@ -309,8 +309,9 @@ textarea { font: inherit; color: inherit; background: var(--bg); border: 1px sol
 /* ticket「记录」页签：待跟进、交接记录、记忆三个小节并排，窄了改成上下。 */
 .ticket-log { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 @media (max-width: 900px) { .ticket-log { grid-template-columns: 1fr; } }
-.followup { display: flex; gap: 10px; align-items: center; padding: 4px 0; }
-.followup .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* 记录页签是三栏，一栏只有三百来像素：放不下时说明和按钮换到下一行，正文至少留 10em，不会被挤没。 */
+.followup { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 4px 0; }
+.followup .text { flex: 1 1 10em; min-width: 0; overflow-wrap: anywhere; }
 .followup.closed .text { color: var(--muted); text-decoration: line-through; }
 .handoff-entry { padding: 8px 0; border-top: 1px solid var(--border); }
 .raw { white-space: pre-wrap; font-size: 12px; background: var(--panel); padding: 8px; border-radius: 6px; }
