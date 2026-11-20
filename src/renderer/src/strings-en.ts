@@ -375,6 +375,7 @@ export const EN: UiStrings = {
     whoAgent: "Agent",
     whoCi: "CI",
     whoExternal: "Others",
+    whoStackBelow: "Layer below",
     whoDone: "Merged",
     whoIdle: "Not started",
     running: (n: number) => `In progress ${n}`,

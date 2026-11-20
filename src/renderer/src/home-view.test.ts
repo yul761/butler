@@ -227,6 +227,12 @@ describe("runningRows", () => {
   it("names a waiting merge queue as others", () => {
     expect(runningRows([it0({ owner: "external", kind: "merge_queue", names: [] })], S, 2000)[0].who).toBe(S.hm.whoExternal);
   });
+
+  it("a stacked draft waits on the layer below; the branch is in the sentence, not in who", () => {
+    const row = runningRows([it0({ owner: "external", kind: "stack_below", names: ["feature/BTL-0"] })], S, 2000)[0];
+    expect(row.who).toBe(S.hm.whoStackBelow);
+    expect(row.sentence).toContain("feature/BTL-0");
+  });
 });
 
 describe("isNoWork", () => {

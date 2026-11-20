@@ -381,6 +381,7 @@ const ZH = {
     whoAgent: "agent",
     whoCi: "CI",
     whoExternal: "外部",
+    whoStackBelow: "栈的下一层",
     whoDone: "合了",
     whoIdle: "没开始",
     running: (n: number) => `进行中 ${n}`,

@@ -1,7 +1,8 @@
 // 首页「轮到你」（UI 重做第 2 层，spec §5.3）：标题和一句概况、要你动手的卡片、各个 epic 的小表、
 // 折起来的「进行中」和「运行情况」。数据都来自第 1 层的 turn:board，这里只排版。
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { NowView } from "../../../shared/types";
+import { api } from "../api";
 import type { Route } from "../App";
 import {
   barSegments, capCards, cardKey, homeLede, homeTitle, runningRows, scopeLine, scopeRoute, visibleScopes, youCards, type NameCtx,
@@ -71,6 +72,11 @@ export function HomeBody(p: HomeBodyProps) {
 /** App 用的：只多一个每分钟走一次的 now。 */
 export function HomePage({ state, ...p }: Omit<HomeBodyProps, "now" | "board" | "error" | "onRetry"> & { state: TurnBoardState }) {
   const now = useNow();
+  // 路由切到首页（这个组件挂上）时告诉第 1 层一次：它按需补查「请你 review」。turn:changed 引起的重取走 useTurnBoard，不发这个信号。
+  // 补查失败第 1 层自己记日志；这里吞掉错误，不为一个后台信号弹提示。
+  useEffect(() => {
+    api.turnHomeOpened().catch(() => undefined);
+  }, []);
   return <HomeBody {...p} now={now} board={state.board} error={state.error} onRetry={state.reload} />;
 }
 
