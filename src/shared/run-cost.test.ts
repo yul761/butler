@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { F1, F2, T1, T2, T3 } from "./__fixtures__/cli-cost";
-import { cumulativeWeight, runCostFromCumulative, runModel, runWeight } from "./run-cost";
+import { cumulativeIsThisRun, cumulativeWeight, runCostFromCumulative, runModel, runWeight } from "./run-cost";
 
 // 实测的 t2 的 usage 去掉 cache_creation 分档（CLI 不知道这些写入活多久的那种回复）
 const T2_USAGE = { input_tokens: 2, cache_read_input_tokens: 15039, cache_creation_input_tokens: 10649, output_tokens: 3 };
@@ -116,5 +116,20 @@ describe("runModel", () => {
     expect(runModel({ "claude-haiku-5-5": {}, "claude-opus-5-5": {} }, null, "opus")).toBe("claude-opus-5-5");
     expect(runModel({}, u, "opus")).toBeNull();
     expect(runModel(null, u, "opus")).toBeNull();
+  });
+});
+
+describe("cumulativeIsThisRun", () => {
+  it("a new session's first run: the cumulative is just this run (live t1)", () => {
+    expect(cumulativeIsThisRun(T1.usage, T1.modelUsage)).toBe(true);
+  });
+  it("a resumed one with its earlier turns restored: not (live t2, f1)", () => {
+    expect(cumulativeIsThisRun(T2.usage, T2.modelUsage)).toBe(false);
+    expect(cumulativeIsThisRun(F1.usage, F1.modelUsage)).toBe(false);
+  });
+  it("can't tell → false: no usage, no modelUsage, or a zero weight", () => {
+    expect(cumulativeIsThisRun(null, T1.modelUsage)).toBe(false);
+    expect(cumulativeIsThisRun(T1.usage, null)).toBe(false);
+    expect(cumulativeIsThisRun({ input_tokens: 0 }, { m: { inputTokens: 0 } })).toBe(false);
   });
 });

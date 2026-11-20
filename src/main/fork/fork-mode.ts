@@ -1,6 +1,6 @@
 import type { RegistryModel } from "../../shared/model-routing";
 import type { ForkMode } from "../../shared/fork";
-import { runCostFromCumulative } from "../../shared/run-cost";
+import { cumulativeIsThisRun, runCostFromCumulative } from "../../shared/run-cost";
 import { usdOf } from "../metrics/rollup";
 import type { UsageCounts } from "../usage/usage-parse";
 
@@ -52,11 +52,16 @@ export function runStart(args: readonly string[]): RunStart {
   return args.includes("--fork-session") ? "forked" : "resumed";
 }
 
+/** total 比上次见到的小多少算浮点误差。 */
+const TOTAL_EPS = 1e-9;
+
 /**
  * 一轮的花费。CLI 的 total_cost_usd 和 modelUsage 是被续的那个 session 的累计（--fork-session 时还带着被分叉 session 以前的全部花费），usage 才是这一轮的：
- * fresh 的 total 就是这一轮；resumed 知道上次见到的累计就取差（不小于 0）；
+ * fresh 的 total 就是这一轮；resumed 知道上次见到的累计就取差；
  * 其余（forked，或 resumed 但不知道上次的累计）有 modelUsage 就按份额拆（runCostFromCumulative：只看这一轮的模型 r.model 那一项；
  * 定不下模型而且累计里有好几个模型时按全部模型的权重拆，标 partial），没有再按价格表估。
+ * resumed 取差之前先看 CLI 有没有读回费用状态：total 比上次见到的小，或者累计里只有这一轮（cumulativeIsThisRun），说明它从 0 记起了，
+ * 差值是错的（会悄悄记成 0 或少算），改按份额拆（拆不出再估），标 partial。
  * cli：从 CLI 金额算出的这一轮（精确、差值或份额；估出来的为 null）；seenTotal：这一轮之后该记下的累计，CLI 没给金额就不变。
  */
 export function turnCost(
@@ -66,9 +71,19 @@ export function turnCost(
   registry: readonly RegistryModel[],
 ): { usd: number | null; partial: boolean; cli: number | null; seenTotal: number | null } {
   const total = r.costUsd;
-  const direct = total === null ? null : start === "fresh" ? total : start === "resumed" && seenTotal !== null ? Math.max(0, total - seenTotal) : null;
-  if (direct !== null) return { usd: direct, partial: false, cli: direct, seenTotal: total };
-  const share = total === null ? null : runCostFromCumulative(total, r.usageRaw, r.modelUsage, r.model);
+  const estimate = () => costOf({ ...r, costUsd: null }, registry);
+  if (total === null) return { ...estimate(), cli: null, seenTotal };
+  if (start === "fresh") return { usd: total, partial: false, cli: total, seenTotal: total };
+  const share = runCostFromCumulative(total, r.usageRaw, r.modelUsage, r.model);
+  if (start === "resumed" && seenTotal !== null) {
+    const lost = total < seenTotal - TOTAL_EPS || cumulativeIsThisRun(r.usageRaw, r.modelUsage);
+    if (!lost) {
+      const diff = Math.max(0, total - seenTotal);
+      return { usd: diff, partial: false, cli: diff, seenTotal: total };
+    }
+    if (share !== null) return { usd: share.usd, partial: true, cli: share.usd, seenTotal: total };
+    return { ...estimate(), partial: true, cli: null, seenTotal: total };
+  }
   if (share !== null) return { usd: share.usd, partial: share.partial, cli: share.usd, seenTotal: total };
-  return { ...costOf({ ...r, costUsd: null }, registry), cli: null, seenTotal: total ?? seenTotal };
+  return { ...estimate(), cli: null, seenTotal: total };
 }

@@ -84,7 +84,11 @@ describe("turnCost", () => {
     expect(r.usd).toBeCloseTo(0.02, 10);
     expect(r).toMatchObject({ partial: false, seenTotal: 0.03 });
     expect(r.cli).toBe(r.usd);
-    expect(turnCost(run(0.01), "resumed", 0.03, registry)).toEqual({ usd: 0, partial: false, cli: 0, seenTotal: 0.01 });
+  });
+  // CLI 读不回分叉 session 存的费用状态时会从 0 记起（CLI 的说明："continues from the total its transcript saved, when it has one"），
+  // total 就只是这一轮的，取差会悄悄记成 0 或者一个错的数。
+  it("a total below the last one seen: the CLI lost its running total, so no difference; estimate, partial", () => {
+    expect(turnCost(run(0.01), "resumed", 0.03, registry)).toEqual({ usd: 22.5, partial: true, cli: null, seenTotal: 0.01 });
   });
   // modelUsage 和 total 一样是累计的：这一轮的份额 = total × w(usage) / Σ w(modelUsage)
   const raw = { input_tokens: 100, cache_read_input_tokens: 9000, cache_creation_input_tokens: 0, output_tokens: 50 };
@@ -120,6 +124,19 @@ describe("turnCost", () => {
     expect(r.usd).toBeCloseTo(1.22 / 102, 12);
     expect(r).toMatchObject({ partial: true, seenTotal: 1.22 });
     expect(r.cli).toBe(r.usd);
+  });
+  it("a total seen but modelUsage holding only this run: the CLI started its total over, so the share (all of it), partial", () => {
+    const only = { "claude-opus-5": { inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 9000, cacheCreationInputTokens: 0, costUSD: 0.03 } };
+    // 精简分叉第一轮见过 0.01；这一轮没恢复，total 0.03 全是这一轮的，取差会记成 0.02。
+    const r = turnCost({ ...run(0.03), usageRaw: raw, modelUsage: only }, "resumed", 0.01, registry);
+    expect(r.usd).toBeCloseTo(0.03, 12);
+    expect(r).toMatchObject({ partial: true, seenTotal: 0.03 });
+    expect(r.cli).toBe(r.usd);
+  });
+  it("a total below the one seen with modelUsage: the share, partial", () => {
+    const r = turnCost(withCumulative(1.04), "resumed", 5.02, registry);
+    expect(r.usd).toBeCloseTo(1.04 / 50, 12);
+    expect(r).toMatchObject({ partial: true, seenTotal: 1.04 });
   });
   it("modelUsage with nothing in it falls back to the estimate", () => {
     expect(turnCost({ ...run(5), usageRaw: raw, modelUsage: {} }, "forked", null, registry)).toEqual({ usd: 22.5, partial: false, cli: null, seenTotal: 5 });

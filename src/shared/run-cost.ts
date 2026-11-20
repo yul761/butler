@@ -123,3 +123,14 @@ export function runCostFromCumulative(totalUsd: number | null, runUsage: unknown
   const usd = shareOf(totalUsd, run, weights.reduce((a, b) => a + b, 0));
   return usd === null ? null : { usd, partial: weights.filter((w) => w > 0).length > 1 };
 }
+
+/**
+ * 累计里只有这一轮：Σ w(modelUsage) 和 w(usage) 一样（差在浮点误差以内）。续 session 时这说明 CLI 没读回那个 session 存的费用状态，
+ * total 是从 0 记起的（"continues from the total its transcript saved, when it has one"）。之前的轮次总有权重，所以读回来了就一定比这一轮大。
+ * 这一轮里起了 subagent 或辅助调用时累计会比 usage 大，判断不出来（返回 false）。缺 usage、modelUsage，或权重为 0 → false。
+ */
+export function cumulativeIsThisRun(runUsage: unknown, modelUsage: unknown): boolean {
+  const run = runWeight(runUsage);
+  const all = cumulativeWeight(modelUsage);
+  return run !== null && all !== null && run > 0 && all <= run * (1 + OVER);
+}
