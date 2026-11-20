@@ -39,39 +39,19 @@ test("the Butler 总控 page: both inbox tabs on top and one terminal in its own
   expect(fakeLog(s).match(/ interactive new /g)).toHaveLength(1);
 });
 
-test("page tabs start collapsed, the toggle expands them and the choice survives a reload", async ({ makeSandbox, launch }) => {
+test("page tabs are always open and the last tab survives a reload", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
   await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
   const butler = page.locator(".butler-page");
-  const toggle = butler.locator(".page-tabs-toggle");
   const tab = (name: string) => butler.locator(".page-tabs-bar").getByRole("tab", { name: new RegExp(`^${name}`) });
 
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await expect(toggle).toHaveText(`▸ ${S.tabExpand}`);
-  await expect(butler.locator(".page-tabs-panel")).toHaveCount(0);
-  await expect(tab(S.inboxReports)).toHaveAttribute("aria-selected", "false");
-  await expect(tab(S.inboxDecisions)).toBeVisible();
-  // 收起时 tab 上的计数照样显示（没有待决事项时不标红）。
-  await expect(tab(S.inboxDecisions)).toHaveText(/\d/);
-
-  // 展开：回到最近的 tab（没记过就是默认的「待你决定」）；换到「汇报」。
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(butler.locator(".page-tabs-toggle")).toHaveCount(0);
+  await expect(butler.locator(".page-tabs-panel")).toHaveCount(1);
   await expect(tab(S.inboxDecisions)).toHaveAttribute("aria-selected", "true");
   await tab(S.inboxReports).click();
   await page.reload();
   await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  await expect(tab(S.inboxReports)).toHaveAttribute("aria-selected", "true");
-
-  // 收起后刷新，仍然收起；再展开回到「汇报」。
-  await toggle.click();
-  await expect(butler.locator(".page-tabs-panel")).toHaveCount(0);
-  await page.reload();
-  await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await toggle.click();
   await expect(tab(S.inboxReports)).toHaveAttribute("aria-selected", "true");
 });

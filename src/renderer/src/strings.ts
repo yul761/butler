@@ -803,11 +803,6 @@ const ZH = {
   inboxDecisions: "待你决定",
   inboxNoReports: "还没有汇报。",
   inboxNoDecisions: "没有要你决定的。",
-  tabCollapseHint: "再点一下收起",
-  tabToggleCollapseHint: "收起，让终端更大",
-  tabToggleExpandHint: "展开，回到上次停的 tab",
-  tabCollapse: "收起",
-  tabExpand: "展开",
   inboxReportKinds: { progress: "进展", done: "完成", blocked: "卡住", choice: "自己选了" } as Record<ReportKind, string>,
   inboxWho: (role: InboxRole, ticketKey: string | null, repo: string | null) =>
     role === "ticket" ? `${ticketKey ?? ""}${repo ? `（${repo}）` : ""}`

@@ -33,7 +33,8 @@ const STATE_DEBOUNCE_MS = 80;
 
 export type Route =
   | { page: "home" }
-  | { page: "ticket"; key: string }
+  /** landing：从「去看看」进来时，按这个 ticket 轮到谁落到对应的页签（TicketPage 读它）。 */
+  | { page: "ticket"; key: string; landing?: boolean }
   /** focusSession：从「现在」页点进来时先切到的那个 session 的终端。 */
   | { page: "feature"; id: number; focusSession?: string | null }
   | { page: "epic"; id: number; focusSession?: string | null }

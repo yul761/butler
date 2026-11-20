@@ -7,7 +7,7 @@ import { btError } from "../backtest-view";
 import { costAmount } from "../cost-view";
 import { reportError } from "../errors";
 import { intakeActError } from "../intake-view";
-import { saveTab, saveTabOpen } from "../local-prefs";
+import { saveTab } from "../local-prefs";
 import { S } from "../strings";
 import type { Route } from "../App";
 import { noticeKey } from "../home-view";
@@ -37,7 +37,6 @@ export function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; no
     } else if (a === "comments" && n.kind === "comments_waiting") {
       // 打开 ticket 时直接停在「评论」标签。
       saveTab(`ticket:${n.waiting.ticketKey}`, "comments");
-      saveTabOpen(`ticket:${n.waiting.ticketKey}`, true);
       onOpen(n.target);
     } else if (n.kind === "check_promoted" || n.kind === "check_demoted") {
       // 撤销：恢复成升降级之前的模式（提醒随之消失）；知道了：只关提醒。

@@ -19,6 +19,7 @@ function deps(o: Partial<CardDeps> = {}): CardDeps & { [K in keyof CardDeps]: Re
     prOpen: vi.fn(async () => ({ ok: true as const })),
     turnSendToAgent: vi.fn(async () => ({ ok: true })),
     onOpen: vi.fn(),
+    onGo: vi.fn(),
     onFix: vi.fn(),
     onChanged: vi.fn(),
     ...o,
@@ -80,9 +81,10 @@ describe("runCardAction", () => {
     expect(c.onFix).not.toHaveBeenCalled();
   });
 
-  it("look: lands on the ticket's session", async () => {
+  it("look: a ticket card goes to the ticket page and lands by whose turn it is", async () => {
     const d = deps();
     await runCardAction({ id: "look", primary: true }, item(stuck), d, S);
-    expect(d.onOpen).toHaveBeenCalledWith({ page: "ticket", key: "BTL-1", sessionId: "s1" });
+    expect(d.onGo).toHaveBeenCalledWith({ page: "ticket", key: "BTL-1", landing: true });
+    expect(d.onOpen).not.toHaveBeenCalled();
   });
 });

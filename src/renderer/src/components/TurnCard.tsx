@@ -41,7 +41,7 @@ export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: Tur
   const act = (a: CardAction) => {
     setBusy(true);
     setResult(null);
-    runCardAction(a, item, { ...api, onOpen, onFix, onChanged }, S)
+    runCardAction(a, item, { ...api, onOpen, onGo, onFix, onChanged }, S)
       .then((r) => {
         if (r === null) return;
         if ("answered" in r) setAnswered(r.answered);

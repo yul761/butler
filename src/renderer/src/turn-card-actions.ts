@@ -1,6 +1,7 @@
 // 轮到你卡片上按钮的动作（UI 重做第 2 层）：从 TurnCard 拿出来，好在 node 里用假的 api 测。
 import type { TurnItem, TurnSendReason } from "../../shared/turn";
 import type { NowTarget } from "../../shared/types";
+import type { Route } from "./App";
 import { ciReasonText } from "./availability-view";
 import { lookTarget, prUrl, type CardAction } from "./home-view";
 import type { UiStrings } from "./strings";
@@ -11,6 +12,8 @@ export interface CardDeps {
   prOpen: (url: string) => Promise<{ ok: true } | { ok: false; reason: "bad_url" }>;
   turnSendToAgent: (req: { ticketKey: string; pr: { repo: string; number: number } }) => Promise<{ ok: boolean; reason?: TurnSendReason }>;
   onOpen: (t: NowTarget) => void;
+  /** 挂在 ticket 上的卡片「去看看」：去 ticket 页，按轮到谁落到对应的页签（landing）。 */
+  onGo: (r: Route) => void;
   onFix: (featureId: number, sessionId: string) => void;
   /** 回答没送到、送出成功以后让首页重取。 */
   onChanged: () => void;
@@ -41,6 +44,10 @@ export async function runCardAction(a: CardAction, item: TurnItem, d: CardDeps, 
       return r.ok ? null : { message: S.hm.act.prOpenNot };
     }
     case "look": {
+      if (item.ticketKey !== null) {
+        d.onGo({ page: "ticket", key: item.ticketKey, landing: true });
+        return null;
+      }
       const target = lookTarget(item);
       if (target) d.onOpen(target);
       return null;
