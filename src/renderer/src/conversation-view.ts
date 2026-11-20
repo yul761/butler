@@ -168,3 +168,21 @@ export function draftCheck(target: "dev" | "fork", text: string): { blank: boole
   if (target === "dev") return { blank, over: text.length > TASK_LIMIT, max: TASK_LIMIT };
   return { blank, over: text.length > FORK_QUESTION_MAX * 2 || [...text.trim()].length > FORK_QUESTION_MAX, max: FORK_QUESTION_MAX };
 }
+
+/**
+ * 对话 tab 选中哪个 session：当前选的还在列表里就不动（默认的那个变了也不跟着跳）；不在了才回到默认。
+ * 列表是空的（还没取到、或者只有一个不出切换条）也不动。
+ */
+export function keepSelection(current: string, sessions: readonly { id: string }[], fallback: string): string {
+  if (sessions.length === 0 || sessions.some((s) => s.id === current)) return current;
+  return fallback;
+}
+
+/** 只认最后一次发出去的请求：每次 next() 拿一个检查函数，之后再 next() 过，之前的就过期了。 */
+export function latestOnly(): () => () => boolean {
+  let seq = 0;
+  return () => {
+    const mine = ++seq;
+    return () => mine === seq;
+  };
+}

@@ -109,7 +109,22 @@ export function terminalLanding(turn: Turn, sessions: Pick<SessionView, "id" | "
  * 从卡片的「去看看」进 ticket 页：按那张卡片自己的轮次落到哪个页签（landingTab），落在终端时顺手切到 / 恢复哪个 session。
  * 不等这个 ticket 的看板：卡片已经带着轮次，页面一打开就落；等看板的话，看板回来之前用户自己点的页签会被拉回去。
  */
-export function ticketLanding(turn: Turn, sessions: Pick<SessionView, "id" | "termId">[], panes: readonly string[]): { tab: TicketTab; terminal: { activate: string } | { open: string } | null } {
+export function ticketLanding(
+  turn: Turn, sessions: Pick<SessionView, "id" | "termId">[], panes: readonly string[],
+): { tab: TicketTab; terminal: { activate: string } | { open: string } | null; conversation: string | null } {
   const tab = landingTab(turn);
-  return { tab, terminal: tab === "terminal" ? terminalLanding(turn, sessions, panes) : null };
+  // 落在对话：对话 tab 选中轮到你的那个 session（修复 session、子 session 也一样），不是 ticket 的主链。
+  const conversation = tab === "conversation" && "sessionId" in turn ? turn.sessionId : null;
+  return { tab, terminal: tab === "terminal" ? terminalLanding(turn, sessions, panes) : null, conversation };
+}
+
+/** 落点给的 session（id、终端 id 或链根都行）→ 它的链根；没给或找不到时用 ticket 自己的链根。 */
+export function convFocusRoot(sessions: Pick<SessionView, "id" | "termId" | "rootId">[], focus: string | null, fallback: string): string {
+  if (focus === null) return fallback;
+  return sessions.find((s) => s.id === focus || s.termId === focus || s.rootId === focus)?.rootId ?? fallback;
+}
+
+/** 总控对话区默认显示哪条链：第一个不是修复 session 的（总控自己），没有就第一个；一个都没有为 null。 */
+export function defaultConvRoot(sessions: Pick<SessionView, "rootId" | "fixesSession">[]): string | null {
+  return (sessions.find((s) => s.fixesSession === null) ?? sessions[0])?.rootId ?? null;
 }

@@ -7,7 +7,7 @@ import { repoWhere } from "../repos";
 import { ticketRows } from "../scope-view";
 import { S, STATUS_LABEL } from "../strings";
 import type { TicketTab } from "../ticket-tabs";
-import { conversationSessions, ticketLanding } from "../ticket-view";
+import { convFocusRoot, conversationSessions, ticketLanding } from "../ticket-view";
 import { ConversationTab } from "./ConversationTab";
 import { hibernationOf } from "./HibernateParts";
 import { PageTabs } from "./PageTabs";
@@ -47,6 +47,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   const row = board === null ? null : (ticketRows([ticket], board.items)[0] ?? null);
   /** 落点只算一次：之后用户自己切页签不再被拉回；带着打开请求进来时落在终端，不再看卡片的轮次。 */
   const landed = useRef(false);
+  /** 落在对话时要选中的 session（轮到你的那个）；n 递增，让已经开着的对话 tab 也换过去。 */
+  const [convFocus, setConvFocus] = useState<{ sessionId: string; n: number } | null>(null);
 
   // 从别的页面跳进来时的打开请求：恢复 session 并预填提示，切到终端页签，只执行一次。
   useEffect(() => {
@@ -61,7 +63,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   useEffect(() => {
     if (!landing || landed.current) return;
     landed.current = true;
-    const { tab, terminal: to } = ticketLanding(landing, ticket.sessions, term.panesRef.current);
+    const { tab, terminal: to, conversation } = ticketLanding(landing, ticket.sessions, term.panesRef.current);
+    if (conversation !== null) setConvFocus((f) => ({ sessionId: conversation, n: (f?.n ?? 0) + 1 }));
     goTab(tab);
     // 落在终端：顺手切到（或恢复）轮到你的那个 session。
     if (to === null) return;
@@ -105,7 +108,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
           },
           {
             id: "conversation", label: S.lay.tabConversation,
-            content: <ConversationSlot ticket={ticket} renderTerminal={(id) => <SideTerminal ticket={ticket} term={term} sessionId={id} onGoTab={goTab} />} />,
+            content: <ConversationSlot ticket={ticket} focus={convFocus} renderTerminal={(id) => <SideTerminal ticket={ticket} term={term} sessionId={id} onGoTab={goTab} />} />,
           },
           { id: "terminal", label: S.lay.tabTerminal, content: <TicketTerminalTab ticket={ticket} term={term} /> },
           { id: "pr", label: S.lay.tabPr, content: <TicketPrTab ticketKey={ticket.key} /> },
@@ -117,13 +120,20 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
 }
 
 /** 「对话」页签：只在停在这个页签时取链根。 */
-function ConversationSlot({ ticket, renderTerminal }: { ticket: TicketView; renderTerminal: (sessionId: string) => ReactNode }) {
+function ConversationSlot({ ticket, focus, renderTerminal }: {
+  ticket: TicketView; focus: { sessionId: string; n: number } | null; renderTerminal: (sessionId: string) => ReactNode;
+}) {
   const glance = useStateRefetch(`glance:${ticket.key}`, () => api.ticketGlance(ticket.key));
   if (glance === null) return null;
-  const rootSessionId = glance.rootSessionId;
-  return rootSessionId
-    ? <ConversationTab rootSessionId={rootSessionId} sessions={conversationSessions(ticket.sessions, S)} renderTerminal={renderTerminal} page={`ticket:${ticket.key}`} />
-    : <p className="muted">{S.lay.convNoSession}</p>;
+  if (!glance.rootSessionId) return <p className="muted">{S.lay.convNoSession}</p>;
+  // 从卡片落进来：选中轮到你的那个 session 的链；否则是 ticket 的主链。
+  const rootSessionId = convFocusRoot(ticket.sessions, focus?.sessionId ?? null, glance.rootSessionId);
+  return (
+    <ConversationTab
+      rootSessionId={rootSessionId} focusKey={focus?.n} sessions={conversationSessions(ticket.sessions, S)}
+      renderTerminal={renderTerminal} page={`ticket:${ticket.key}`}
+    />
+  );
 }
 
 /**

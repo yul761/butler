@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TASK_LIMIT } from "../../../shared/control";
 import type { ConvMessage } from "../../../shared/conversation";
 import { FORK_QUESTION_MAX, type ForkView } from "../../../shared/fork";
@@ -8,8 +8,8 @@ import type { InboxItemView } from "../../../shared/types";
 import { resetClock } from "../availability-view";
 import { errorText, type TimelineItem } from "../conversation-view";
 import { S } from "../strings";
-import { ConversationFeed, SendBar } from "./ConversationTab";
-import { ForkBox, type ForkActions } from "./ForkBox";
+import { ConversationFeed, ConversationTab, SearchHits, SendBar } from "./ConversationTab";
+import { ForkBox, submitFollowUp, type ForkActions } from "./ForkBox";
 
 const NOW = new Date(2026, 10, 20, 15, 0).getTime();
 const AT = new Date(2026, 10, 20, 14, 32).getTime();
@@ -28,7 +28,7 @@ const report = (id: number): InboxItemView => ({
   text: `汇报${id}`, options: [], context: null, reportKind: "done", answer: null, createdAt: AT, open: true, target: {} as never,
 });
 const actions = (over: Partial<ForkActions> = {}): ForkActions => ({
-  followUp: noop, sendConclusion: noop, remember: noop, reaskFull: noop, retry: noop, pending: {}, notice: {}, memoryOn: true, ...over,
+  followUp: async () => true, sendConclusion: noop, remember: noop, reaskFull: noop, retry: noop, pending: {}, notice: {}, memoryOn: true, ...over,
 });
 const box = (f: Partial<ForkView>, a: Partial<ForkActions> = {}) => renderToStaticMarkup(createElement(ForkBox, { fork: fork(f), actions: actions(a), now: NOW }));
 
@@ -177,5 +177,44 @@ describe("SendBar", () => {
     const ask = bar({ draft: "问".repeat(FORK_QUESTION_MAX + 1) });
     expect(isDisabled(ask, S.conv.send)).toBe(true);
     expect(ask).toContain(S.conv.tooLong(FORK_QUESTION_MAX));
+  });
+});
+
+describe("submitFollowUp", () => {
+  it("clears and closes the follow-up input only when the question went out", async () => {
+    const clear = vi.fn();
+    await submitFollowUp(async () => false, 7, "  再问  ", clear);
+    expect(clear).not.toHaveBeenCalled();
+    const sent = vi.fn(async () => true);
+    await submitFollowUp(sent, 7, "  再问  ", clear);
+    expect(sent).toHaveBeenCalledWith(7, "再问");
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SearchHits", () => {
+  const hits = (h: ConvMessage[] | null) => renderToStaticMarkup(createElement(SearchHits, { hits: h }));
+
+  it("nothing searched yet: nothing", () => {
+    expect(hits(null)).toBe("");
+  });
+
+  it("no matches", () => {
+    expect(hits([])).toContain(S.conv.noMatch);
+  });
+
+  it("flat results; the fork message carries the fork tag, the user one says 你：", () => {
+    const html = hits([msg(1, { role: "user", text: "主流问" }), msg(2, { text: "分叉答", forkId: 7 })]);
+    expect(html).toMatch(/class="msg-u">(<!-- -->)?你：(<!-- -->)?主流问/);
+    expect(html).toMatch(/class="msg-a"><span class="fork-tag">讨论<\/span>分叉答/);
+    expect(html.match(/fork-tag/g)).toHaveLength(1);
+  });
+});
+
+describe("ConversationTab", () => {
+  it("the footer (Butler replies) sits above the send bar", () => {
+    const html = renderToStaticMarkup(createElement(ConversationTab, { rootSessionId: "r", sessions: [], footer: createElement("div", { className: "the-footer" }) }));
+    expect(html).toContain("the-footer");
+    expect(html.indexOf("the-footer")).toBeLessThan(html.indexOf("conv-input"));
   });
 });

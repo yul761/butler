@@ -5,7 +5,7 @@ import type { InboxItemView } from "../../shared/types";
 import { resetClock } from "./availability-view";
 import { TASK_LIMIT } from "../../shared/control";
 import { FORK_QUESTION_MAX } from "../../shared/fork";
-import { buildTimeline, costText, draftCheck, errorText, lastQuestion, mergeConvPage, mergeReportPage, modeText, refusalText, rememberText, sendBlockText, turnBlocks, type TimelineInput } from "./conversation-view";
+import { buildTimeline, costText, draftCheck, errorText, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, modeText, refusalText, rememberText, sendBlockText, turnBlocks, type TimelineInput } from "./conversation-view";
 import { STRINGS } from "./strings";
 
 const T = STRINGS.zh;
@@ -258,5 +258,30 @@ describe("draftCheck", () => {
     expect(draftCheck("fork", "😀".repeat(FORK_QUESTION_MAX)).over).toBe(false);
     expect(draftCheck("fork", `  ${"x".repeat(FORK_QUESTION_MAX)}  `).over).toBe(false);
     expect(draftCheck("fork", "问".repeat(FORK_QUESTION_MAX + 1)).over).toBe(true);
+  });
+});
+
+describe("keepSelection", () => {
+  const sessions = [{ id: "r1" }, { id: "r2" }];
+  it("keeps the current session while it is still listed, even if the default moved", () => {
+    expect(keepSelection("r2", sessions, "r1")).toBe("r2");
+  });
+  it("falls back to the default when the current one is gone", () => {
+    expect(keepSelection("gone", sessions, "r1")).toBe("r1");
+  });
+  it("an empty list does not move the selection", () => {
+    expect(keepSelection("r2", [], "r1")).toBe("r2");
+  });
+});
+
+describe("latestOnly", () => {
+  it("only the newest started request counts", () => {
+    const next = latestOnly();
+    const a = next();
+    const b = next();
+    expect(a()).toBe(false);
+    expect(b()).toBe(true);
+    next();
+    expect(b()).toBe(false);
   });
 });

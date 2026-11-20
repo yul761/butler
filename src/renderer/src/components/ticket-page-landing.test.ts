@@ -53,8 +53,10 @@ const board: TurnBoard = {
   scopes: [], stats: { mergedToday: 0, ciFixedToday: 0, staleCount: 0 },
 } as unknown as TurnBoard;
 
-/** 渲染一次：调 TicketPage，跑依赖变了的 effect，返回它交给 PageTabs 的落点。 */
-function render(props: Parameters<typeof TicketPage>[0]) {
+type Tabs = ReactElement<{ forceTab: string | null; forceSeq?: number; tabs: { id: string; content: ReactElement<{ focus?: unknown }> }[] }>;
+
+/** 渲染一次：调 TicketPage，跑依赖变了的 effect，返回它交给的 PageTabs。 */
+function renderTabs(props: Parameters<typeof TicketPage>[0]): Tabs {
   h.begin();
   const el = TicketPage(props) as ReactElement;
   h.flush();
@@ -64,9 +66,18 @@ function render(props: Parameters<typeof TicketPage>[0]) {
     const e = n as ReactElement<{ children?: ReactNode }>;
     return e.type === PageTabs ? e : find(e.props.children);
   };
-  const tabs = find(el) as ReactElement<{ forceTab: string | null; forceSeq?: number }>;
+  return find(el) as Tabs;
+}
+
+/** 渲染一次，返回交给 PageTabs 的落点。 */
+function render(props: Parameters<typeof TicketPage>[0]) {
+  const tabs = renderTabs(props);
   return { forceTab: tabs.props.forceTab, forceSeq: tabs.props.forceSeq };
 }
+
+/** 渲染一次，返回「对话」页签内容拿到的落点 session。 */
+const convFocus = (props: Parameters<typeof TicketPage>[0]): unknown =>
+  renderTabs(props).props.tabs.find((t) => t.id === "conversation")?.content.props.focus ?? null;
 
 describe("TicketPage lands once from the card's turn", () => {
   beforeEach(() => {
@@ -86,6 +97,15 @@ describe("TicketPage lands once from the card's turn", () => {
     render(props);
     expect(render(props)).toEqual({ forceTab: "terminal", forceSeq: 1 });
     expect(term.setActive).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stuck card on the fix session lands on the conversation with that session selected", () => {
+    const stuck: Turn = { owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s2" };
+    const p = { ticket, onArchived: () => {}, landing: stuck, onFix: () => {} };
+    render(p);
+    expect(render(p)).toEqual({ forceTab: "conversation", forceSeq: 1 });
+    expect(convFocus(p)).toEqual({ sessionId: "s2", n: 1 });
+    expect(term.setActive).not.toHaveBeenCalled();
   });
 
   it("without a landing it never forces a tab, board or not", () => {

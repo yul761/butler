@@ -6,7 +6,7 @@ import { summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary
 import type { NameCtx } from "../home-view";
 import { flatGroup, scopeBoardView, scopeTotal, ticketRows, ticketsWithPr } from "../scope-view";
 import { S } from "../strings";
-import { conversationSessions } from "../ticket-view";
+import { conversationSessions, defaultConvRoot } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
 import type { SummaryRunMessage } from "./EpicSummaryTab";
 import { FeatureSummaryTab } from "./FeatureSummaryTab";
@@ -175,7 +175,7 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
                     onError={showError}
                   />
                 }
-                right={<ControlConversation scope={{ featureId: feature.id }} rootSessionId={feature.sessions[0]?.rootId ?? null} sessions={conversationSessions(feature.sessions, S)} />}
+                right={<ControlConversation scope={{ featureId: feature.id }} rootSessionId={defaultConvRoot(feature.sessions)} sessions={conversationSessions(feature.sessions, S)} />}
               />
             ),
           },

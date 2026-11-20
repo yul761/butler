@@ -6,7 +6,7 @@ import type { ForkView } from "../../../shared/fork";
 import type { InboxScope } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import {
-  buildTimeline, draftCheck, lastQuestion, mergeConvPage, mergeReportPage, refusalText, rememberText, sendBlockText, turnBlocks,
+  buildTimeline, draftCheck, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, refusalText, rememberText, sendBlockText, turnBlocks,
   type ConvFilter, type ConvLoaded, type ReportsLoaded, type TimelineItem,
 } from "../conversation-view";
 import { reportError } from "../errors";
@@ -123,9 +123,19 @@ export function ConversationTab(p: {
   reportScope?: InboxScope;
   /** 「并排显示终端」按页面记，这是页面的名字（比如 `ticket:BTL-7`）；不给时用 rootSessionId。 */
   page?: string;
+  /** 落点要求换到 rootSessionId 时加一（ticket 页从卡片进来）；其余时候 rootSessionId 变了也不跟着跳。 */
+  focusKey?: number;
+  /** 放在输入框上面（总控页的 ButlerReplies）。 */
+  footer?: ReactNode;
 }) {
+  // 选中的 session 只在两种时候变：用户点了切换条；或者它从列表里没了（回到默认）。
+  // 默认的那个（rootSessionId）按最近活动变了不跟着跳；落点明确要换时由 focusKey 推一次。
   const [selected, setSelected] = useState(p.rootSessionId);
-  useEffect(() => setSelected(p.rootSessionId), [p.rootSessionId]);
+  const sessionIds = p.sessions.map((s) => s.id).join("\n");
+  useEffect(() => setSelected((cur) => keepSelection(cur, p.sessions, p.rootSessionId)), [sessionIds]);
+  useEffect(() => {
+    if (p.focusKey !== undefined) setSelected(p.rootSessionId);
+  }, [p.focusKey]);
   const scope = p.reportScope ?? null;
   const scopeKey = scope ? JSON.stringify(scope) : null;
 
@@ -147,6 +157,12 @@ export function ConversationTab(p: {
   const memorySetting = useMemoryOn();
   /** 这个范围记不了（remember 回了 disabled：记忆关着，或者没有 ticket / feature 可记）。 */
   const [memoryRefused, setMemoryRefused] = useState(false);
+  // 设置里重新打开了记忆：之前回过 disabled 的也再给一次机会。
+  useEffect(() => {
+    if (memorySetting) setMemoryRefused(false);
+  }, [memorySetting]);
+  /** 搜索只认最后一次：先发的晚回来不覆盖后发的。 */
+  const searchSeq = useRef(latestOnly());
 
   /** 每切一次 session 加一：旧 session 的回包不再写进来。 */
   const gen = useRef(0);
@@ -174,7 +190,12 @@ export function ConversationTab(p: {
       api.forkList(selected).then((fs) => live() && setForks(fs), reportError);
     };
     const latestReports = () => {
-      if (scope) api.inboxReports(scope, { limit: REPORT_PAGE }).then((pg) => live() && setReports((r) => mergeReportPage(r, pg, false)), reportError);
+      if (!scope) return;
+      api.inboxReports(scope, { limit: REPORT_PAGE }).then((pg) => live() && setReports((r) => mergeReportPage(r, pg, false)), (e) => {
+        // 汇报取不到：报错，但对话照常显示（当作没有汇报）。
+        reportError(e);
+        if (live()) setReports((r) => r ?? { reports: [], hasMore: false });
+      });
     };
     refreshRef.current = latest;
     latest();
@@ -221,21 +242,24 @@ export function ConversationTab(p: {
 
   function search(q: string) {
     const g = gen.current;
+    const latest = searchSeq.current();
     if (!q.trim()) return setHits(null);
-    api.convSearch(selected, q.trim()).then((h) => gen.current === g && setHits(h), reportError);
+    api.convSearch(selected, q.trim()).then((h) => gen.current === g && latest() && setHits(h), reportError);
   }
 
-  /** 一个黄框的动作：先占上 pending（连点只发一次），做完清掉；结果或原因写进这个框。 */
-  async function act(id: number, kind: NonNullable<Pending>, run: () => Promise<string | null>) {
-    if (pendingRef.current[id]) return;
+  /** 一个黄框的动作：先占上 pending（连点只发一次），做完清掉；结果或原因写进这个框。没抛错为 true。 */
+  async function act(id: number, kind: NonNullable<Pending>, run: () => Promise<string | null>): Promise<boolean> {
+    if (pendingRef.current[id]) return false;
     const g = gen.current;
     pendingRef.current = { ...pendingRef.current, [id]: kind };
     setPending(pendingRef.current);
     setForkNotice((n) => without(n, id));
     let text: string | null;
+    let ok = true;
     try {
       text = await run();
     } catch (e) {
+      ok = false;
       text = refusal(e);
     } finally {
       if (gen.current === g) {
@@ -245,13 +269,14 @@ export function ConversationTab(p: {
       }
     }
     if (gen.current === g && text !== null) setForkNotice((n) => ({ ...n, [id]: text }));
+    return ok;
   }
 
   const actions: ForkActions = {
     pending,
     notice: forkNotice,
     memoryOn: memorySetting && !memoryRefused,
-    followUp: (id, q) => void act(id, "ask", async () => {
+    followUp: (id, q) => act(id, "ask", async () => {
       await api.forkAsk(selected, id, q);
       return null;
     }),
@@ -294,9 +319,9 @@ export function ConversationTab(p: {
       if (target === "dev") {
         // 这句话由第 4 层从 transcript 记进对话，自己会出现；被挡下时草稿留着。
         const r = await api.convSend(selected, draft);
-        if (gen.current !== g) return;
+        // 发出去了就清草稿，不管这期间切没切 session（草稿是整个 tab 共用的）。
         if (r.ok) setDraft("");
-        else setNotice(sendBlockText(r.reason, S));
+        else if (gen.current === g) setNotice(sendBlockText(r.reason, S));
       } else {
         // 同一句还在答时主进程返回已有的 forkId：黄框按分叉列表画，不会多出一个。
         await api.forkAsk(selected, null, draft.trim());
@@ -357,6 +382,7 @@ export function ConversationTab(p: {
         ready && <ConversationFeed items={items} hasOlder={hasOlder} onOlder={loadOlder} actions={actions} now={now} emptyText={scope ? S.lay.ctlEmpty : undefined} />
       )}
       <div ref={end} />
+      {p.footer}
       <SendBar target={target} onTarget={pickTarget} busy={busy} notice={notice} draft={draft} onDraft={setDraft} onSend={() => void send()} />
     </div>
   );

@@ -7,7 +7,8 @@ import { costText, draftCheck, errorText, lastQuestion, modeText } from "../conv
 import { S } from "../strings";
 
 export interface ForkActions {
-  followUp(forkId: number, q: string): void;
+  /** 接着问：问出去了为 true；被挡下（原因写进 notice）为 false。 */
+  followUp(forkId: number, q: string): Promise<boolean>;
   sendConclusion(forkId: number): void;
   remember(forkId: number): void;
   reaskFull(forkId: number): void;
@@ -18,6 +19,11 @@ export interface ForkActions {
   notice: Record<number, string | undefined>;
   /** 记忆开着（设置里的开关，且这个范围能记）；关着时「记进记忆」不能点。 */
   memoryOn: boolean;
+}
+
+/** 「接着问」：问出去了才清掉并收起小输入框；被挡下时那句话留着，改一改还能再发。 */
+export async function submitFollowUp(followUp: ForkActions["followUp"], id: number, q: string, clear: () => void): Promise<void> {
+  if (await followUp(id, q.trim())) clear();
 }
 
 export function ForkBox({ fork, actions, now }: { fork: ForkView; actions: ForkActions; now: number }) {
@@ -33,9 +39,10 @@ export function ForkBox({ fork, actions, now }: { fork: ForkView; actions: ForkA
   const notice = actions.notice[id];
 
   function ask() {
-    actions.followUp(id, q.trim());
-    setQ("");
-    setAsking(false);
+    void submitFollowUp(actions.followUp, id, q, () => {
+      setQ("");
+      setAsking(false);
+    });
   }
 
   return (

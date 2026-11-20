@@ -3,7 +3,7 @@ import type { PrStageCell, PrStagesView } from "../../shared/pr-stages";
 import type { Turn } from "../../shared/turn";
 import type { SessionView } from "../../shared/types";
 import { STRINGS } from "./strings";
-import { clipSaid, contextLine, conversationSessions, mainActions, prStageLine, prUrlOf, terminalLanding, ticketLanding } from "./ticket-view";
+import { clipSaid, contextLine, convFocusRoot, conversationSessions, defaultConvRoot, mainActions, prStageLine, prUrlOf, terminalLanding, ticketLanding } from "./ticket-view";
 
 const S = STRINGS.zh;
 const ids = (t: Turn, o = { hasPr: true, canFix: false }) => mainActions(t, o, S).map((a) => a.id);
@@ -141,16 +141,38 @@ describe("terminalLanding", () => {
 describe("ticketLanding", () => {
   const sessions = [sess("s1", { termId: "t1" }), sess("s2")];
   it("lands by the card's own turn: a PR waiting to be merged stays on the overview, even if the ticket's session is stuck", () => {
-    expect(ticketLanding({ owner: "you", kind: "merge", risk: null }, sessions, ["t1"])).toEqual({ tab: "overview", terminal: null });
+    expect(ticketLanding({ owner: "you", kind: "merge", risk: null }, sessions, ["t1"])).toEqual({ tab: "overview", terminal: null, conversation: null });
   });
   it("a failing-CI card lands on PR details; a stopped agent on the terminal of its own session", () => {
-    expect(ticketLanding({ owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "pr", terminal: null });
-    expect(ticketLanding({ owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "terminal", terminal: { activate: "t1" } });
-    expect(ticketLanding({ owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s2" }, sessions, ["t1"])).toEqual({ tab: "terminal", terminal: { open: "s2" } });
+    expect(ticketLanding({ owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "pr", terminal: null, conversation: null });
+    expect(ticketLanding({ owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "terminal", terminal: { activate: "t1" }, conversation: null });
+    expect(ticketLanding({ owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s2" }, sessions, ["t1"])).toEqual({ tab: "terminal", terminal: { open: "s2" }, conversation: null });
   });
-  it("a stuck or answer card lands on the conversation and leaves the terminals alone", () => {
-    expect(ticketLanding({ owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "conversation", terminal: null });
-    expect(ticketLanding({ owner: "you", kind: "answer", question: "q", options: [], askId: null, sessionId: "s2" }, sessions, ["t1"])).toEqual({ tab: "conversation", terminal: null });
+  it("a stuck or answer card lands on the conversation of its own session and leaves the terminals alone", () => {
+    expect(ticketLanding({ owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s2" }, sessions, ["t1"])).toEqual({ tab: "conversation", terminal: null, conversation: "s2" });
+    expect(ticketLanding({ owner: "you", kind: "answer", question: "q", options: [], askId: null, sessionId: "s2" }, sessions, ["t1"])).toEqual({ tab: "conversation", terminal: null, conversation: "s2" });
+    expect(ticketLanding({ owner: "you", kind: "answer", question: "q", options: [], askId: null, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "conversation", terminal: null, conversation: "s1" });
+  });
+});
+
+describe("convFocusRoot", () => {
+  const sessions = [sess("h1", { rootId: "r1", termId: "t1" }), sess("h2", { rootId: "r2", termId: "t2" })];
+  it("maps the landing session (by id, termId or root) to its chain root", () => {
+    expect(convFocusRoot(sessions, "h2", "r1")).toBe("r2");
+    expect(convFocusRoot(sessions, "t2", "r1")).toBe("r2");
+    expect(convFocusRoot(sessions, "r2", "r1")).toBe("r2");
+  });
+  it("no focus, or a session that is gone: the ticket's own root", () => {
+    expect(convFocusRoot(sessions, null, "r1")).toBe("r1");
+    expect(convFocusRoot(sessions, "gone", "r1")).toBe("r1");
+  });
+});
+
+describe("defaultConvRoot", () => {
+  it("the first session that is not a fix session, else the first; none: null", () => {
+    expect(defaultConvRoot([sess("f", { rootId: "rf", fixesSession: "x" }), sess("c", { rootId: "rc" })])).toBe("rc");
+    expect(defaultConvRoot([sess("f", { rootId: "rf", fixesSession: "x" })])).toBe("rf");
+    expect(defaultConvRoot([])).toBeNull();
   });
 });
 
