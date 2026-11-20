@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EpicView, FeatureView, TicketView } from "../../shared/types";
-import { fixLanding, routeGone } from "./route-view";
+import { fixLanding, missingTicket, routeGone } from "./route-view";
 
 const tickets = [{ key: "DMS-1" }] as TicketView[];
 const features = [{ id: 2 }] as FeatureView[];
@@ -37,5 +37,14 @@ describe("fixLanding", () => {
     // 同一个修复 session 再开一次（已经开着）：别的字段都一样，只有 landingSeq 不同，页面才会再落一次。
     expect(fixLanding(2, "term-1", 2)).not.toEqual(fixLanding(2, "term-1", 1));
     expect(fixLanding(2, null, 3)).toMatchObject({ landing: "control", focusTerm: null });
+  });
+});
+
+describe("missingTicket", () => {
+  const tickets = [{ key: "BTL-1" }] as TicketView[];
+  it("a card's look into a ticket that was just archived (the board not refreshed yet) is caught, not a blank page", () => {
+    expect(missingTicket({ page: "ticket", key: "BTL-9", landing: { owner: "you", kind: "merge", risk: null } }, tickets)).toBe("BTL-9");
+    expect(missingTicket({ page: "ticket", key: "BTL-1" }, tickets)).toBeNull();
+    expect(missingTicket({ page: "home" }, tickets)).toBeNull();
   });
 });

@@ -3,7 +3,7 @@ import type { EpicView, FeatureView, NowTarget, NowView, OpenSessionRequest, Tic
 import { api } from "./api";
 import { onError, reportError } from "./errors";
 import { firstRunProps, homeOpenedSignal, isNoWork, type NameCtx } from "./home-view";
-import { fixLanding, routeGone } from "./route-view";
+import { fixLanding, missingTicket, routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
 import { ButlerPage } from "./components/ButlerPage";
@@ -149,12 +149,18 @@ export function App() {
   /** 跳到 ticket 页；req 是到了那里要打开（已经开着就切过去）的 session。 */
   const openTicket = (key: string, req?: OpenSessionRequest) => {
     // 要去的 ticket 可能已经归档：不跳到空白页，也不留下悬空的打开请求。
-    if (!allTickets.some((t) => t.key === key)) {
+    if (missingTicket({ page: "ticket", key }, allTickets) !== null) {
       reportError(new Error(S.ticketMissing(key)));
       return;
     }
     setPendingOpen(req ?? null);
     setRoute({ page: "ticket", key });
+  };
+  /** 卡片的「去看看」等跳转：去 ticket 页时同 openTicket，先看它还在不在。 */
+  const go = (r: Route) => {
+    const gone = missingTicket(r, allTickets);
+    if (gone !== null) reportError(new Error(S.ticketMissing(gone)));
+    else setRoute(r);
   };
 
   /** 「现在」页的一行点开：ticket 走 openTicket（切到那个终端）；feature、epic 页打开时先看那个 session 的终端。 */
@@ -221,7 +227,7 @@ export function App() {
                 state={turn} noWork={isNoWork(allTickets.length + epics.length + features.length, turn.board?.items ?? null, nowView?.notices.length ?? 0)}
                 firstRun={<FirstRunHome {...firstRunProps({ onNewTicket: () => setShowNew(true), onNewFeature: () => setShowNewFeature(true), onNewEpic: () => setShowNewEpic(true), onGo: setRoute })} />}
                 ctx={ctx} nowView={nowView} liveTickets={new Set(allTickets.map((t) => t.key))}
-                onFix={openFix} onOpen={openTarget} onGo={setRoute} onOpenTicket={(key) => openTicket(key)} onChanged={turn.reload}
+                onFix={openFix} onOpen={openTarget} onGo={go} onOpenTicket={(key) => openTicket(key)} onChanged={turn.reload}
                 onResumeSetup={() => dispatchOnboarding({ type: "rerun" })}
               />
             )}
@@ -252,7 +258,7 @@ export function App() {
                 onOpenTarget={openTarget}
                 ctx={ctx}
                 onFix={openFix}
-                onGo={setRoute}
+                onGo={go}
               />
             )}
             {route.page === "epic" && currentEpic && (
@@ -267,7 +273,7 @@ export function App() {
                 onOpenTarget={openTarget}
                 ctx={ctx}
                 onFix={openFix}
-                onGo={setRoute}
+                onGo={go}
               />
             )}
             {route.page === "butler" && <ButlerPage key={route.focusSession ?? ""} focusSession={route.focusSession} />}
