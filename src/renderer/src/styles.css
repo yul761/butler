@@ -220,51 +220,9 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .merge-event .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .merge-event .chip { padding: 0 2px; border: none; color: var(--accent); }
 .notice-line { color: var(--muted); margin: 4px 0; }
-/* 首页「现在」（计划 14）：颜色只用上面的变量（浅色、深色主题都看得清），底色用 color-mix 从变量调淡。 */
-.now-page { max-width: 960px; }
-.now-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 10px; }
-.now-top h2 { margin: 0; font-size: 16px; }
-.now-top .muted { font-size: 12px; }
-.now-needs { background: color-mix(in srgb, var(--danger) 9%, var(--bg)); border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; }
-.now-needs h3 { display: flex; gap: 6px; align-items: baseline; margin: 0 0 4px; font-size: 13px; color: var(--danger); }
-.now-needs h3 .count { font-weight: normal; }
-.now-need { display: flex; gap: 10px; align-items: baseline; width: 100%; padding: 3px 0; border: none; border-radius: 0; background: transparent; text-align: left; }
-/* 淡红底上 --muted 和 --accent 不到 4.5:1（浅色主题）：这一块的文字都用 --text，“打开”用 --danger。 */
-.now-need .now-key { color: var(--text); }
-.now-need .name { color: var(--text); white-space: nowrap; }
-.now-need .why { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
-.now-need .since { color: var(--text); white-space: nowrap; }
-.now-need .go { color: var(--danger); white-space: nowrap; }
-.now-need:hover .go { text-decoration: underline; }
-.now-epic { margin: 2px 0 8px; }
-.now-epic > h3, .now-feature > h4 { margin: 0; padding: 4px; border-radius: 6px; }
-.now-epic > h3:hover, .now-feature > h4:hover { background: var(--panel); }
-.now-epic > h3 { font-size: 14px; }
-.now-butler > h3:hover { background: none; }
-.now-feature { margin-left: 16px; }
-.now-feature > h4 { font-size: 13px; }
+/* 首页「运行情况」里搬来的旧块（最近合并、接活记录、用量）：颜色只用上面的变量。 */
 .now-summary { margin-left: 4px; color: var(--muted); font-size: 12px; font-weight: normal; }
-.now-rows { margin-left: 22px; }
-.now-row { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto auto 72px; gap: 8px; align-items: center; width: 100%; padding: 4px 6px; border: none; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; text-align: left; font-size: 12.5px; }
-.now-row:hover { background: var(--panel); }
-.now-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; }
-.now-key small { margin-left: 6px; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
-.now-what { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
-.now-what .main { color: var(--text); overflow-wrap: anywhere; }
-.now-what small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11.5px; }
-.now-dot { flex-shrink: 0; align-self: center; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-.now-row.ok .now-dot { background: var(--ok); }
-.now-row.warn .now-dot { background: var(--pill-pending); }
-.now-row.danger .now-dot { background: var(--danger); }
-.now-row.danger .main { color: var(--danger); }
-.now-row.muted .main { color: var(--muted); }
-.now-prs { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
-.now-prs .pill { margin: 0; }
-.now-since { color: var(--muted); text-align: right; white-space: nowrap; }
-/* 行上的内存（WS-M A）：小字，悬停看明细；没读数时是空的一格。 */
-.now-mem { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
 .mem-spark { display: block; color: var(--accent, currentColor); }
-.now-idle > .section-toggle { padding: 4px 6px; color: var(--muted); font-size: 12px; }
 .now-merges, .now-usage { margin-top: 14px; }
 .now-merges h3 { margin: 0 0 4px; font-size: 13px; }
 .now-usage > .section-toggle { color: var(--muted); font-size: 12px; text-align: left; }
@@ -398,7 +356,6 @@ p.inbox-reports, p.inbox-decisions { margin: 2px 0; }
 .inbox-answer { display: flex; gap: 6px; align-items: flex-end; }
 .inbox-queued { margin: 0; color: var(--ok); }
 .inbox-card .actions { display: flex; gap: 6px; }
-.now-decisions { display: flex; flex-direction: column; margin: 4px 0 6px; }
 /* Butler 总控页（BTL-190 第 5 点）。 */
 .butler-intro { margin: 0; padding: 0 16px 8px; }
 .lesson-sessions h3 { margin: 8px 16px 0; font-size: 12px; font-weight: 600; color: var(--muted); }

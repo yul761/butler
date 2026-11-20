@@ -1,65 +1,12 @@
-import type { ActivityEvent, SessionActivity } from "../../shared/activity";
-import type { InboxItemView, NowCounts, NowRow, NowView, UsageKind, UsageSummary, WatchedPr } from "../../shared/types";
-import { activityText } from "./components/TicketActivity";
+import type { ActivityEvent } from "../../shared/activity";
+import type { InboxItemView, NowRow, NowView, UsageKind, UsageSummary, WatchedPr } from "../../shared/types";
 import type { UiStrings } from "./strings";
-
-/** 「现在」页一行的文字和颜色（设计文档 2026-11-06）。tone 对应样式里的 --ok、--pill-pending、--danger、--muted。 */
-export type RowTone = "ok" | "warn" | "danger" | "muted";
-
-/** 停着的活动：回合结束在等下一条指令，或者没在干活。 */
-const stoppedKind = (a: SessionActivity): boolean => a.kind === "waiting" || a.kind === "idle";
 
 /** 卡住：停在确认上的不算（那是在等你确认）。 */
 const isStuck = (r: NowRow): boolean => r.activity?.stuck === true && r.activity.kind !== "approval";
 
 /** 行的 key：有 session 用 session id，只有 PR 的行用 ticket 号。 */
 export const rowKey = (r: NowRow): string => r.sessionId ?? `pr:${r.ticketKey ?? ""}`;
-
-/** 需要你的理由：卡住的写“卡住：理由”（没有理由就是“卡住了”），其余直接是理由。 */
-export function needsYouText(r: NowRow, S: UiStrings): string {
-  const reason = r.needsYou ?? "";
-  if (isStuck(r) || reason === "") return reason ? S.nowStuckWith(reason) : S.nowStuckNoReason;
-  return reason;
-}
-
-/** 没有在干活的行看 PR：CI 失败、CI 在跑、review 的结论。没有开着的 PR 时为 null。 */
-function prText(prs: WatchedPr[], S: UiStrings): { main: string; tone: RowTone } | null {
-  const open = prs.filter((p) => p.state === "open");
-  if (open.some((p) => p.ci === "failing")) return { main: S.nowCiFailed, tone: "danger" };
-  // 合并、关闭了的 PR 留着最后一次读到的 CI：只看开着的 PR 和还没有 PR 的分支。
-  if (prs.some((p) => (p.state === "open" || p.state === null) && p.ci === "pending")) return { main: S.nowWaitCi, tone: "warn" };
-  if (open.length === 0) return null;
-  if (open.some((p) => p.review === "changes_requested")) return { main: S.nowChangesRequested, tone: "muted" };
-  if (open.every((p) => p.review === "approved")) return { main: S.nowApproved, tone: "muted" };
-  return { main: S.nowWaitReview, tone: "muted" };
-}
-
-/**
- * 一行的文字：需要你 → 等你决定 → 换新中 → 卡住 → 合并排队 → 正在做的事 → PR 和 CI → 已停下。
- * sub 是活动的细节（文件、命令、多久没有输出）；停着的不写（时长在最右边一列）。
- * 换新中的 session 在跑的是 Butler 输入的 /handoff、/clear，活动和卡住都不看；只有停在确认上（needsYou 不为 null）的照样显示出来。
- */
-export function rowText(r: NowRow, S: UiStrings, now: number): { main: string; sub: string | null; tone: RowTone } {
-  const a = r.activity;
-  const live = a && !stoppedKind(a) ? activityText(a, S, now) : null;
-  const sub = live?.sub ?? null;
-  if (r.needsYou !== null) return { main: isStuck(r) || r.needsYou === "" ? needsYouText(r, S) : S.nowWaitingFor(r.needsYou), sub, tone: "danger" };
-  // 用 ask_user 提了问题（BTL-190 第 2+3 点）：问题本身在「需要你」的卡片上，这里只说在等你决定。
-  if (r.decisions > 0) return { main: S.nowWaitingDecision, sub, tone: "danger" };
-  if (r.refreshing !== null) return { main: r.refreshing === "close" ? S.nowClosing : S.nowRefreshing, sub: null, tone: "warn" };
-  if (isStuck(r)) return { main: S.nowStuck, sub, tone: "danger" };
-  // 撞了限额：activityText 写的是哪种限额和恢复时间，原文放在 sub 里。
-  if (a?.limit) return { ...activityText(a, S, now), tone: "danger" };
-  if (r.mergeQueued) return { main: S.nowMergeQueued, sub, tone: "warn" };
-  // 自动唤醒失败（WS-M B）：现在是关着的，等的东西送不进去了。
-  if (r.wakeError) return { main: S.hib.wakeFailedNow, sub: r.wakeError, tone: "danger" };
-  // 休眠着（WS-M B）：等的东西来了会自己醒，点开也会醒。
-  if (r.hibernated) return { main: S.hib.now, sub: S.hib.reason[r.hibernated], tone: "muted" };
-  if (live) return { main: live.main, sub, tone: "ok" };
-  const pr = prText(r.prs, S);
-  if (pr) return { ...pr, sub: null };
-  return { main: S.nowStopped, sub: null, tone: "muted" };
-}
 
 /** PR 标签：CI 失败用“要改”的颜色，CI 在跑用“待 review”的颜色，其余按 PR 的状态和 review。没有 PR 或已关闭的不显示；上一次 gh 没读成的显示灰色的“PR 状态不可用”。 */
 export function prPill(p: WatchedPr, S: UiStrings): { text: string; tone: "merged" | "approved" | "changes" | "pending" | "none" } | null {
@@ -73,16 +20,6 @@ export function prPill(p: WatchedPr, S: UiStrings): { text: string; tone: "merge
   if (p.review === "approved") return { text: text(S.prPill.approved), tone: "approved" };
   if (p.review === "changes_requested") return { text: text(S.prPill.changes), tone: "changes" };
   return { text: text(S.prPill.pending), tone: "pending" };
-}
-
-/** 一组标题后面的汇总，为 0 的项不写：“3 个进行中 · 1 需要你”；全是 0 时是“无进行中”。 */
-export function groupSummary(c: NowCounts, S: UiStrings): string {
-  const parts = [
-    c.active > 0 ? S.nowActive(c.active) : null,
-    c.needsYou > 0 ? S.nowNeedsYouCount(c.needsYou) : null,
-    c.stuck > 0 ? S.nowStuckCount(c.stuck) : null,
-  ].filter((p): p is string => p !== null);
-  return parts.length > 0 ? parts.join(" · ") : S.nowNoneActive;
 }
 
 /** token 数：12_345_678 → "12.3M"，45_600 → "45.6K"，不到 1000 原样。 */
@@ -116,22 +53,6 @@ export function usageDetails(u: UsageSummary, S: UiStrings): { byKind: string[];
 /** 一行是谁：ticket 号，总控写“总控”，修复 session 写“修复”。 */
 export const rowLabel = (r: NowRow, S: UiStrings): string =>
   r.target.page === "butler" ? S.butlerNav : r.ticketKey ?? (r.coordinator ? S.coordinator : S.fixSessionFor(null));
-
-/** 「需要你」里一条的前半段：ticket 号（总控、修复 session 写它是什么）和它所在的 feature 或 epic；不属于 feature 的 ticket 写它的标题。 */
-export function rowPlace(view: NowView, r: NowRow, S: UiStrings): { label: string; name: string } {
-  const label = rowLabel(r, S);
-  const key = rowKey(r);
-  for (const e of view.epics) {
-    if (e.rows.some((x) => rowKey(x) === key)) return { label, name: e.name };
-    for (const f of e.features) {
-      if (f.rows.some((x) => rowKey(x) === key)) return { label, name: f.id === null ? (r.title ?? "") : f.name };
-    }
-  }
-  return { label, name: r.title ?? "" };
-}
-
-/** 侧栏上「需要你」的数：需要你的行加上未决的「待你决定」（每条一件）。 */
-export const needsYouTotal = (v: NowView | null): number => (v ? v.needsYou.length + v.decisions.filter((d) => d.answer === null).length : 0);
 
 /** 「待你决定」、汇报是谁发的：ticket 号（多仓库时带仓库名）、某某总控、修复 session、epic session。 */
 export const inboxWho = (i: InboxItemView, S: UiStrings): string => S.inboxWho(i.role, i.ticketKey, i.repo);
