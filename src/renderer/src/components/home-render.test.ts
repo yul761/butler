@@ -1,9 +1,10 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { EpicView, FeatureView, NowNotice, TicketView } from "../../../shared/types";
+import type { EpicView, FeatureView, NowNotice, NowView, TicketView } from "../../../shared/types";
 import { dotKey, type Dot } from "../sidebar-view";
 import { S } from "../strings";
+import { HomeMore } from "./HomeMore";
 import { Notice, noticeKey } from "./Notice";
 import { Sidebar } from "./Sidebar";
 
@@ -75,5 +76,29 @@ describe("Notice (moved out of the Now page)", () => {
     expect(html).toContain(S.noticeApproval("登录"));
     expect(html).toContain(`>${S.hm.act.look}</button>`);
     expect(noticeKey(n)).toBe("approval:ticket:BTL-1:s");
+  });
+});
+
+describe("HomeMore (the old Now page's run-status blocks)", () => {
+  const view = (o: Partial<NowView> = {}): NowView => ({
+    notices: [], needsYou: [], decisions: [], epics: [], butler: null, running: 0, memory: [], merges: [], ...o,
+  });
+  const render = (v: NowView) => renderToStaticMarkup(createElement(HomeMore, { view: v, onOpen: () => {}, onOpenTicket: () => {}, liveTickets: new Set<string>(), onGo: () => {} }));
+
+  it("shows the live window, recent merges and the intake log", () => {
+    const html = render(view({
+      merges: [{ id: 1, repoPath: "/r/app", kind: "wait", ticketKey: "BTL-1", branch: "b", otherTicket: null, otherBranch: null, files: [], createdAt: 1 }],
+      intake: [{ at: 1, key: "BTL-2", what: "started", detail: null }],
+    }));
+    expect(html).toContain(S.liveTitle);
+    expect(html).toContain(S.nowRecentMerges);
+    expect(html).toContain('data-testid="now-intake"');
+  });
+
+  it("leaves out empty blocks", () => {
+    const html = render(view());
+    expect(html).not.toContain(S.nowRecentMerges);
+    expect(html).not.toContain('data-testid="now-intake"');
+    expect(html).not.toContain("now-mem-card");
   });
 });
