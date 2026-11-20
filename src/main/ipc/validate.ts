@@ -3,6 +3,7 @@ import { isBgKind, type BackgroundAction } from "../../shared/background";
 import { isModelName, isTaskId, isTier, POLICIES, type LimitPolicy, type LimitRuleKind, type RegistryModel, type RoutingAction, type Tier } from "../../shared/model-routing";
 import type { SensitiveTerm } from "../../shared/llm";
 import { CONTEXT_LIMIT } from "../../shared/control";
+import { CONV_LIST_MAX, CONV_QUERY_MAX, type ConvListOpts } from "../../shared/conversation";
 import type {
   AddRepoInput, CiItemRef, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
@@ -131,6 +132,33 @@ export function clipboardTextArg(v: unknown): string {
 export function sessionIdArg(v: unknown): string {
   if (typeof v !== "string" || !/^[A-Za-z0-9-]{1,100}$/.test(v)) throw new Error("invalid session id");
   return v;
+}
+
+/** conv:list 的选项：limit 必须是正整数（大于 CONV_LIST_MAX 的取 CONV_LIST_MAX），before 是正整数或不给，qaOnly 是布尔或不给。 */
+export function convListOptsArg(v: unknown): ConvListOpts {
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("invalid conversation list options");
+  const o = v as { limit?: unknown; before?: unknown; qaOnly?: unknown };
+  const posInt = (x: unknown): x is number => typeof x === "number" && Number.isSafeInteger(x) && x > 0;
+  if (!posInt(o.limit)) throw new Error("invalid conversation page size");
+  if (o.before !== undefined && !posInt(o.before)) throw new Error("invalid conversation cursor");
+  if (o.qaOnly !== undefined && typeof o.qaOnly !== "boolean") throw new Error("invalid conversation filter");
+  return {
+    limit: Math.min(o.limit, CONV_LIST_MAX),
+    ...(o.before !== undefined && { before: o.before }),
+    ...(o.qaOnly !== undefined && { qaOnly: o.qaOnly }),
+  };
+}
+
+/** 搜索词：必须是字符串，超出 CONV_QUERY_MAX 的部分截掉。 */
+export function convQueryArg(v: unknown): string {
+  if (typeof v !== "string") throw new Error("invalid search query");
+  const cps = [...v];
+  return cps.length <= CONV_QUERY_MAX ? v : cps.slice(0, CONV_QUERY_MAX).join("");
+}
+
+/** null（所有对话）或 sessionIdArg。 */
+export function convRootArg(v: unknown): string | null {
+  return v === null ? null : sessionIdArg(v);
 }
 
 /** 一组 session id（「清理闲置」「全部删除」）：最多 500 个，每个都按 sessionIdArg 检查。 */

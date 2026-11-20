@@ -154,6 +154,7 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.auditList, IPC.externalAuditList, IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory, IPC.appAutostartGet, IPC.appKeepAwakeGet,
   IPC.clipboardRead, IPC.admissionState, IPC.wizardEstimate, IPC.calibrationSample, IPC.calibrationStats,
   IPC.costView, IPC.costBreakers, IPC.backgroundStatus,
+  IPC.convList, IPC.convSearch,
   IPC.clipboardRead, IPC.loopPolicyGet, IPC.loopCommentsList, IPC.loopFlakyList, IPC.loopEffect,
   IPC.prAssessment, IPC.prPolicyGet, IPC.reviewEffect, IPC.reviewQueue,
   IPC.baselinesView, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyViolations, IPC.checkExportList, IPC.backtestView,
