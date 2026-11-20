@@ -42,6 +42,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   const [force, setForce] = useState<{ tab: TicketTab; n: number } | null>(() => (initialOpen ? { tab: "terminal", n: 0 } : null));
   const goTab = (tab: TicketTab) => setForce((f) => ({ tab, n: (f?.n ?? 0) + 1 }));
   const { board } = useTurnBoard({ ticketKey: ticket.key });
+  /** 概况提问行上答过、还没送进去的提问（askId -> 回答）：放在页面上，切到别的页签再回来还在。 */
+  const [answered, setAnswered] = useState<Record<number, string>>({});
   const row = board === null ? null : (ticketRows([ticket], board.items)[0] ?? null);
   /** 落点只算一次：之后用户自己切页签不再被拉回；带着打开请求进来时落在终端，不再看卡片的轮次。 */
   const landed = useRef(false);
@@ -99,7 +101,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         tabs={[
           {
             id: "overview", label: S.lay.tabOverview, className: row !== null && (row.turn.owner === "you" || row.asks.length > 0) ? "attention" : undefined,
-            content: <TicketHomeTab ticket={ticket} onGoTab={goTab} onFix={onFix} />,
+            content: <TicketHomeTab ticket={ticket} onGoTab={goTab} onFix={onFix} answered={answered} onAnswered={(id, text) => setAnswered((m) => ({ ...m, [id]: text }))} />,
           },
           {
             id: "conversation", label: S.lay.tabConversation,

@@ -106,6 +106,38 @@ test("a question for you is a card that opens its terminal and takes an answer",
   await expect(card).toContainText(S.hm.act.answered("可以"));
 });
 
+test("a question answered on the ticket page stays answered after switching tabs", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await newTicket(page, s, "HOME-4");
+  // session A 问完就结束：它的提问成了孤儿提问，回答只能存下来，等它恢复以后再送。
+  const a = await openSession(page);
+  await typeLine(page, `/fake-mcp ask_user ${JSON.stringify({ question: "先问的？", options: ["甲", "乙"] })}`);
+  await expect.poll(() => terminalText(page)).toContain("工具返回：ask_user");
+  const wrapA = page.locator(".sessions-bar .session-wrap").filter({ has: page.locator(`.session[title*="${a}"]`) });
+  const end = wrapA.getByRole("button", { name: /^结束 / });
+  await end.click();
+  await expect(end).toHaveText(S.endSessionConfirm);
+  await end.click();
+  await expect(wrapA.locator(".session .action")).toHaveText(S.open);
+  // session B 再问一个，占着 ticket 的主行；A 的提问在下面的提问行上。
+  await openSession(page);
+  await typeLine(page, `/fake-mcp ask_user ${JSON.stringify({ question: "后问的？", options: ["丙", "丁"] })}`);
+  await expect.poll(() => terminalText(page)).toContain("工具返回：ask_user");
+  await openTicketTab(page, "overview");
+  const asks = page.locator(".ticket-home-asks");
+  await expect(asks.getByRole("button", { name: "甲", exact: true })).toBeVisible({ timeout: 20_000 });
+  await asks.getByRole("button", { name: "甲", exact: true }).click();
+  await expect(asks).toContainText(S.hm.act.answered("甲"));
+  // 切到终端再回来：还写着已回答，不会再给选项（再点会悄悄换掉答案）。
+  await openTicketTab(page, "terminal");
+  await openTicketTab(page, "overview");
+  await expect(asks).toContainText(S.hm.act.answered("甲"));
+  await expect(asks.getByRole("button", { name: "乙", exact: true })).toHaveCount(0);
+});
+
 test("with nothing for you the title says so and the scope table still lists the feature", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const { page } = await launch(s);

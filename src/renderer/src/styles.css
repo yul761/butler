@@ -351,7 +351,7 @@ p.inbox-reports { margin: 2px 0; }
 .butler-sent > summary { cursor: pointer; color: var(--muted); }
 .lesson-sessions h3 { margin: 8px 16px 0; font-size: 12px; font-weight: 600; color: var(--muted); }
 
-/* PR 进度 tab：边框和底色用 --ok / --accent / --danger，字用 --stage-*（浅色更深，styles-contrast.test.ts 查对比度）。 */
+/* PR 阶段（ticket 页「PR 详情」的「阶段」小节）：边框和底色用 --ok / --accent / --danger，字用 --stage-*（浅色更深，styles-contrast.test.ts 查对比度）。 */
 .pr-stages { display: flex; flex-direction: column; gap: 10px; }
 .pr-steps { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .pr-repo-name { font-weight: 600; margin-right: 4px; }

@@ -32,7 +32,7 @@ export interface TicketHomeProps {
   canFix: boolean;
   /** 「送给 agent」没送成时的一句话。 */
   notice: string | null;
-  /** 在这一页答过、还没送进去的提问：askId -> 回答。这一行改成「已回答…」，不再出选项（和首页卡片一样只记在页面上）。 */
+  /** 在 ticket 页答过、还没送进去的提问：askId -> 回答。这一行改成「已回答…」，不再出选项（记在 TicketPage 上，切页签不丢；离开这个 ticket 就没了）。 */
   answered: Readonly<Record<number, string>>;
   /** 提问的回答正在送：提问行的按钮先禁用，免得连点覆盖答案。 */
   busy: boolean;
@@ -135,15 +135,17 @@ export interface TicketHomeTabProps {
   onGoTab: (t: TicketTab) => void;
   /** 开修复 session 并导航由页面做，失败也由页面报。 */
   onFix: (featureId: number, stuckSessionId: string) => void;
+  /** 答过的提问由 TicketPage 记着：页签切走时这一块会卸载，状态放这里会丢，再回来又能点选项悄悄换掉答案。 */
+  answered: Readonly<Record<number, string>>;
+  onAnswered: (askId: number, text: string) => void;
 }
 
-export function TicketHomeTab({ ticket, onGoTab, onFix }: TicketHomeTabProps) {
+export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered }: TicketHomeTabProps) {
   const key = ticket.key;
   const { board, reload } = useTurnBoard({ ticketKey: key });
   const glance = useStateRefetch(`glance:${key}`, () => api.ticketGlance(key));
   const stages = usePrStages({ ticketKey: key })?.find((t) => t.ticketKey === key) ?? null;
   const [notice, setNotice] = useState<string | null>(null);
-  const [answered, setAnswered] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState(false);
   const row = board === null ? null : (ticketRows([ticket], board.items)[0] ?? null);
   const turn = row?.turn;
@@ -169,11 +171,10 @@ export function TicketHomeTab({ ticket, onGoTab, onFix }: TicketHomeTabProps) {
         setNotice(null);
         setBusy(true);
         runTicketAsk(a, item, { answerInbox: api.answerInbox, onGoTab, onChanged: reload }, S).then((r) => {
-          if (r !== null && "answered" in r) {
-            const askId = item.turn.kind === "answer" ? item.turn.askId : null;
-            if (askId !== null) setAnswered((m) => ({ ...m, [askId]: r.answered }));
-            else setNotice(S.hm.act.answered(r.answered));
-          } else setNotice(r?.message ?? null);
+          if (r === null) return;
+          if ("message" in r) setNotice(r.message);
+          // 有回答就一定有 askId（runCardAction 对没有 askId 的提问不回答）。
+          else if (item.turn.kind === "answer" && item.turn.askId !== null) onAnswered(item.turn.askId, r.answered);
         }, reportError).finally(() => setBusy(false));
       }}
     />

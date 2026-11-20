@@ -149,7 +149,7 @@ export function buildProgress(input: ProgressInput, filter: ProgressFilter = {})
   const tickets = input.tickets.filter((t) => inScope(t.featureId));
   const keys = new Set(tickets.map((t) => t.key));
   const watched = input.prs.filter((p) => keys.has(p.ticketKey) && p.prId !== null);
-  // 从没读成功过的行（checkedAt 0）只是链接时的说法（handoff 里的 URL 可能是编的），和 PR 进度 tab 一样不当 PR 算。
+  // 从没读成功过的行（checkedAt 0）只是链接时的说法（handoff 里的 URL 可能是编的），不当 PR 算。
   // 放弃读了的也不算：它的"开着"不再当真（和 PR 监视里一样不再挡 ticket），只在新鲜度里算读取失败。
   const givenUp = watched.filter((p) => p.checkedAt > 0 && p.gaveUp === true).length;
   const read = watched.filter((p) => p.checkedAt > 0 && p.gaveUp !== true).map((p) => toProgressPr(p, input.turnOf)).filter((p): p is ProgressPr => p !== null);
