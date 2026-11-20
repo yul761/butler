@@ -148,7 +148,7 @@ export const COUNTED_ELSEWHERE: ReadonlySet<string> = new Set([IPC.inboxAnswer, 
 /** 不算人介入：只读的、配置和整理（搭环境，不是推动一次工作）。 */
 export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   // 只读
-  IPC.ticketsList, IPC.ticketsArchived, IPC.featuresList, IPC.featuresArchived, IPC.epicsList, IPC.epicsArchived, IPC.butlerView,
+  IPC.ticketsList, IPC.ticketsGlance, IPC.ticketsArchived, IPC.featuresList, IPC.featuresArchived, IPC.epicsList, IPC.epicsArchived, IPC.butlerView,
   IPC.butlerMessages, IPC.progressGet, IPC.metricsView, IPC.sessionsUnclaimed, IPC.usageSummary, IPC.ptySnapshot, IPC.healthGet, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsRuns, IPC.lessonsPending, IPC.lessonsBatches,
   IPC.lessonsBatch, IPC.policiesGet, IPC.checksView, IPC.checksHits, IPC.configStatus, IPC.availabilityGet, IPC.routingView,

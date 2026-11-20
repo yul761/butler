@@ -1,3 +1,4 @@
+import type { TicketGlance } from "../../shared/ticket-glance";
 import type { TurnBoard, TurnFilter, TurnSendReason } from "../../shared/turn";
 import type { MetricsOverview } from "../../shared/metrics";
 import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
@@ -203,6 +204,8 @@ export interface IpcDeps {
   nowView: (merges: MergeEvent[]) => NowView;
   /** 「谁该动」看板（UI 重做第 1 层）；filter 为 null 是首页。 */
   turnBoard: (filter: TurnFilter | null) => TurnBoard;
+  /** 单个 ticket 的概览（agent 最后说的话、上下文占用、链根）。 */
+  ticketGlance: (ticketKey: string) => TicketGlance;
   /** 首页「发给 agent」：只有 you/unattended 且 canSend 时才走现有的递送路径。 */
   turnSendToAgent: (item: { ticketKey: string; pr: { repo: string; number: number } }) => Promise<{ ok: boolean; reason?: TurnSendReason }>;
   /** 切到首页：补查请你 review 的 PR（turn:board 本身不触发查询）。 */
@@ -752,6 +755,7 @@ export function registerIpc(d: IpcDeps): void {
   });
   handle(IPC.nowView, (): NowView => d.nowView(recentMerges()));
   handle(IPC.ciResend, (raw: unknown): Promise<string> => d.ciResend(ciItemArg(raw)));
+  handle(IPC.ticketsGlance, (raw: unknown): TicketGlance => d.ticketGlance(ticketKeyArg(raw)));
   handle(IPC.turnBoard, (raw: unknown): TurnBoard => d.turnBoard(turnFilterArg(raw)));
   handle(IPC.turnSendToAgent, (raw: unknown) => d.turnSendToAgent(turnSendArg(raw)));
   handle(IPC.turnHomeOpened, (): void => d.turnHomeOpened());

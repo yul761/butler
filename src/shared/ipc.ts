@@ -1,6 +1,7 @@
 
 export const IPC = {
   ticketsList: "tickets:list",
+  ticketsGlance: "tickets:glance",
   ticketsCreate: "tickets:create",
   ticketsSetStatus: "tickets:setStatus",
   ticketsArchive: "tickets:archive",
@@ -242,7 +243,7 @@ export const IPC = {
 
 /** 渲染进程 → 主进程，有返回值（ipcRenderer.invoke）。 */
 export const INVOKE_CHANNELS: readonly string[] = [
-  IPC.ticketsList, IPC.ticketsCreate, IPC.ticketsSetStatus, IPC.ticketsArchive, IPC.ticketsSwitchBranch,
+  IPC.ticketsList, IPC.ticketsGlance, IPC.ticketsCreate, IPC.ticketsSetStatus, IPC.ticketsArchive, IPC.ticketsSwitchBranch,
   IPC.ticketsUpdate, IPC.ticketsArchived, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
   IPC.featuresList, IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive,
   IPC.featuresSummaryRun, IPC.featuresArchived, IPC.featuresUnarchive, IPC.featuresOpenSession, IPC.featuresMove, IPC.reposScan, IPC.ticketsRecheckCleanup,
