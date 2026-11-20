@@ -16,5 +16,6 @@ export function ControlFeed({ reports, footer }: { reports: InboxItemView[]; foo
 
 export function ControlConversation(p: { scope: InboxScope; rootSessionId: string | null; sessions: { id: string; label: string }[]; footer?: ReactNode }) {
   const view = useInbox(p.scope);
-  return <ControlFeed reports={view?.reports ?? []} footer={p.footer} />;
+  if (view === null) return null;
+  return <ControlFeed reports={view.reports} footer={p.footer} />;
 }

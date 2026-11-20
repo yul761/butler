@@ -15,7 +15,7 @@ const total: ScopeTurnRow = { kind: "epic", id: 1, name: "E", total: 15, merged:
 const feat: ScopeTurnRow = { kind: "feature", id: 3, name: "工作流 J–N", total: 8, merged: 6, bar: { ...bar, done: 6 }, youCount: 0, slowest: null };
 const youItem: TurnItem = { ticketKey: "T-1", pr: { repo: "r", number: 5, title: "t", url: "u" }, epicId: 1, featureId: 3, turn: { owner: "you", kind: "merge", risk: null }, since: 0, others: 0 };
 const cards = { ctx, now: 1000, onFix: noop, onOpen: noop, onGo: noop, onChanged: noop };
-const overview = (o: object = {}) => renderToStaticMarkup(createElement(ScopeOverview, { rows: [feat], total, youItems: [youItem], kind: "epic", emptyText: "EMPTY", cards, ...o }));
+const overview = (o: Partial<Parameters<typeof ScopeOverview>[0]> = {}) => renderToStaticMarkup(createElement(ScopeOverview, { rows: [feat], total, youItems: [youItem], kind: "epic", emptyText: "EMPTY", cards, ...o }));
 
 describe("ScopeOverview", () => {
   it("shows progress, slowest, you cards and feature rows", () => {
@@ -31,6 +31,18 @@ describe("ScopeOverview", () => {
     expect(html).toContain("EMPTY");
     expect(html).toContain("<button");
     expect(html).not.toContain("NaN");
+    expect(html).not.toContain("turn-bar");
+  });
+  it("epic with features but no tickets still lists the features", () => {
+    const zero = { done: 0, agent: 0, you: 0, external: 0, idle: 0 };
+    const html = overview({
+      rows: [{ ...feat, name: "空 feature", total: 0, merged: 0, bar: zero }],
+      total: { ...total, total: 0, merged: 0, youCount: 0, bar: zero, slowest: null }, youItems: [],
+    });
+    expect(html).toContain("空 feature");
+    expect(html).toContain("0/0 合了");
+    expect(html).not.toContain("NaN");
+    expect(html).not.toContain("EMPTY");
     expect(html).not.toContain("turn-bar");
   });
   it("no you items says so", () => {
@@ -56,12 +68,12 @@ describe("ScopeTicketTable", () => {
     key, title: "标题", featureId: 3, turn: { owner: "external", kind: "awaiting_review", names: [] }, others,
     item: { ...youItem, turn: { owner: "external", kind: "awaiting_review", names: [] } }, since: 0, prs,
   });
-  const html = (groups: object[], emptyText = "EMPTY") => renderToStaticMarkup(createElement(ScopeTicketTable, { groups: groups as never, onOpenTicket: noop, emptyText }));
+  const html = (groups: Parameters<typeof ScopeTicketTable>[0]["groups"], emptyText = "EMPTY") => renderToStaticMarkup(createElement(ScopeTicketTable, { groups, onOpenTicket: noop, emptyText }));
   it("groups, columns, PR cells", () => {
     const h = html([{ name: "工作流 J–N", merged: 3, total: 5, rows: [mk("A-1", []), mk("A-2", [{ tag: "#52", number: 52, repo: "r" }, { tag: "#53", number: 53, repo: "r" }], 1)] }]);
     expect(h).toContain("ticket-table");
     expect(h).toContain("工作流 J–N · 3/5 合了");
-    for (const c of ["ticket", "谁该动", "现在怎么样", "PR"]) expect(h).toContain(c);
+    for (const c of ["ticket", "谁该动", "现在怎么样", "PR"]) expect(h).toContain(`<th>${c}</th>`);
     expect(h).toContain("—");
     expect(h).toContain("#52 #53");
     expect(h).toContain("另有 1 个 PR");

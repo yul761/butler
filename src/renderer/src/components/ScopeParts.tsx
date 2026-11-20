@@ -1,5 +1,5 @@
 // 范围页（epic / feature）共用的展示件：只吃 props，不调 api。
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import type { ScopeTurnRow, Turn, TurnItem } from "../../../shared/turn";
 import { barSegments, cardKey, type RunningRow } from "../home-view";
 import { progressLine, slowestLine, whoLabel, type TicketRow } from "../scope-view";
@@ -34,8 +34,8 @@ export function ScopeOverview(p: {
   rows: ScopeTurnRow[]; total: ScopeTurnRow | null; youItems: TurnItem[]; kind: "epic" | "feature"; emptyText: string;
   cards: Omit<TurnCardProps, "item">; onOpenRow?: (id: number | string) => void; onCreate?: () => void;
 }) {
-  const empty = p.total === null || p.total.total === 0;
-  if (empty || p.total === null) {
+  // 有 feature 但还没有 ticket 时 total 是 0，feature 行仍要显示。
+  if (p.total === null || (p.total.total === 0 && p.rows.length === 0)) {
     return (
       <div className="scope-overview">
         <p className="muted">{p.emptyText}</p>
@@ -83,18 +83,20 @@ export function ScopeTicketTable(p: {
         <tr><th>{S.lay.colTicket}</th><th>{S.lay.colWho}</th><th>{S.lay.colNow}</th><th>{S.lay.colPr}</th></tr>
       </thead>
       <tbody>
-        {p.groups.map((g, n) => [
-          g.name !== null && <tr key={`g${n}`} className="group-row"><th colSpan={4}>{S.lay.groupHeader(g.name, g.merged, g.total)}</th></tr>,
-          g.rows.length === 0 && <tr key={`e${n}`}><td colSpan={4} className="muted">{S.lay.noTicketsInGroup}</td></tr>,
-          ...g.rows.map((r) => (
-            <tr key={r.key} onClick={() => p.onOpenTicket(r.key)}>
-              <td><span className="key">{r.key}</span>{r.title && <span className="muted"> {r.title}</span>}</td>
-              <td><WhoTag turn={r.turn} /></td>
-              <td>{turnSentence(r.turn, r.item, S)}{r.others > 0 && <span className="muted"> · {S.lay.morePrs(r.others)}</span>}</td>
-              <td>{r.prs.length === 0 ? "—" : r.prs.map((x) => x.tag).join(" ")}</td>
-            </tr>
-          )),
-        ])}
+        {p.groups.map((g, n) => (
+          <Fragment key={g.name ?? n}>
+            {g.name !== null && <tr className="group-row"><th colSpan={4}>{S.lay.groupHeader(g.name, g.merged, g.total)}</th></tr>}
+            {g.rows.length === 0 && <tr><td colSpan={4} className="muted">{S.lay.noTicketsInGroup}</td></tr>}
+            {g.rows.map((r) => (
+              <tr key={r.key} onClick={() => p.onOpenTicket(r.key)}>
+                <td><span className="key">{r.key}</span>{r.title && <span className="muted"> {r.title}</span>}</td>
+                <td><WhoTag turn={r.turn} /></td>
+                <td>{turnSentence(r.turn, r.item, S)}{r.others > 0 && <span className="muted"> · {S.lay.morePrs(r.others)}</span>}</td>
+                <td>{r.prs.length === 0 ? "—" : r.prs.map((x) => x.tag).join(" ")}</td>
+              </tr>
+            ))}
+          </Fragment>
+        ))}
       </tbody>
     </table>
   );
