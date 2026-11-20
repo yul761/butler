@@ -112,9 +112,10 @@ function forkedFrom(args: readonly string[]): string | null {
   return at >= 0 ? (args[at + 1] ?? null) : null;
 }
 
-/** 没有结果的一轮：起不来（spawn_failed）、被限额挡在门外（rate_limited）没花 token；别的（超时、中途退出）可能花了，记成一部分不知道。 */
+/** 没有结果的一轮：起不来（spawn_failed）、被限额挡在门外（rate_limited）、模型不可用（model_unavailable）没花 token；别的（超时、中途退出）可能花了，记成一部分不知道。 */
+const NO_SPEND: ReadonlySet<string> = new Set(["spawn_failed", "rate_limited", "model_unavailable"]);
 function noResultCost(out: HeadlessOutcome): { usd: null; partial: boolean } {
-  return { usd: null, partial: out.ok ? false : out.reason !== "spawn_failed" && out.reason !== "rate_limited" };
+  return { usd: null, partial: out.ok ? false : !NO_SPEND.has(out.reason) };
 }
 
 /** 各种语言的「要结论」那句：重问时不算用户的问题。 */
@@ -224,6 +225,16 @@ export class ForkService {
     const row = this.d.repo.get(forkId);
     if (!row || row.rootSessionId !== this.rootOf(anyId)) throw new ForkError("not_found");
     if (this.running.has(forkId)) throw new ForkError("fork_busy");
+    if (row.forkSessionId === null) {
+      // 第一轮按原参数重跑：CLI 上次没分叉出来（not_forked）就不再盲目重跑；完整的要跟开分叉时一样，开发 session 得空着、有 transcript。
+      if (row.status === "failed" && row.errorCode === "not_forked") throw new ForkError("not_forked");
+      if (row.mode === "full") {
+        const head = this.d.sessions.head(row.rootSessionId);
+        if (!head) throw new ForkError("not_found");
+        const block = fullBlock({ transcriptExists: this.d.transcriptExists(head.id), devIdle: head.waitingForInput });
+        if (block) throw new ForkError(block);
+      }
+    }
     const { path, pathValue } = this.d.claude();
     if (!path) throw new ForkError("no_claude");
     if (!this.continueTurn(row, q, path, pathValue, false)) throw new ForkError("fork_busy");
@@ -340,16 +351,16 @@ export class ForkService {
       }
       const sid = r?.sessionId ?? null;
       // 返回的就是 --resume 的那个开发 session：CLI 没分叉出来，这一轮写进了开发 session 自己的对话。不记成 headless、不存成分叉 id
-      // （否则接着问会直接续上正在用的开发 session），这一轮按 bad_output 算失败。
+      // （否则接着问会直接续上正在用的开发 session）。跑成功的这一轮记 not_forked；本来就失败的保留真正的原因（限额的 resetAt 也在）。
       const unforked = sid !== null && sid === forkedFrom(o.args);
-      if (unforked) this.d.log(`fork ${row.id}: the CLI resumed the dev session ${sid} instead of forking it`);
+      if (unforked && out.ok) this.d.log(`fork ${row.id}: the CLI resumed the dev session ${sid} instead of forking it`);
       if (sid && !unforked) this.hook("recordHeadless", () => this.d.recordHeadless(sid, row.cwd, at));
       const text = out.ok && !unforked ? out.result.resultText.trim() : "";
       if (text) {
         this.d.conv.append({ rootSessionId: row.rootSessionId, sessionId: o.sessionId, role: "assistant", text, at, forkId: row.id, qa: false, turnId: 0 });
         if (o.conclude) this.d.repo.setConclusion(row.id, text, at);
       }
-      const error = unforked ? failure("bad_output") : out.ok ? (text ? null : failure("no_answer")) : failure(out.reason, out.limit?.resetsAt ?? null);
+      const error = !out.ok ? failure(out.reason, out.limit?.resetsAt ?? null) : unforked ? failure("not_forked") : text ? null : failure("no_answer");
       if (!out.ok) this.d.log(`fork ${row.id}: ${out.reason}: ${out.message.slice(0, 500)}`);
       this.d.repo.finish(row.id, { at, ...(out.ok && sid && !unforked ? { forkSessionId: sid } : {}), addCost: cost.usd, partial: cost.partial, error });
       this.hook("changed", () => this.d.changed(row.rootSessionId));

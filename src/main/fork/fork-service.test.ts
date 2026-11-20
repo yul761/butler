@@ -421,7 +421,7 @@ describe("ForkService 失败", () => {
     s.svc.ask("root-1", forkId, "q2");
     await s.svc.idle();
     expect(s.repo.get(forkId)).toMatchObject({ status: "failed", errorCode: "timeout", costUsd: 0.05, costPartial: true });
-    for (const reason of ["spawn_failed", "rate_limited"] as const) {
+    for (const reason of ["spawn_failed", "rate_limited", "model_unavailable"] as const) {
       const n = setup();
       n.queue.push({ ok: false, reason, message: "", limit: null, stderr: "", result: null });
       const f = n.svc.ask("root-1", null, "q");
@@ -430,20 +430,49 @@ describe("ForkService 失败", () => {
     }
   });
 
-  it("CLI 没分叉（返回的就是 --resume 的开发 session）：不存成分叉 id、不记 headless、这一轮 bad_output，接着问不会续开发 session", async () => {
+  it("CLI 没分叉（返回的就是 --resume 的开发 session）：不存成分叉 id、不记 headless、这一轮 not_forked，接着问直接拒绝、不起跑", async () => {
     const s = setup();
     s.queue.push(ok({ sessionId: "head-2" }));
     const { forkId } = s.svc.ask("root-1", null, "q");
     await s.svc.idle();
     expect(s.calls[0].args).toContain("--fork-session");
-    expect(s.repo.get(forkId)).toMatchObject({ status: "failed", errorCode: "bad_output", forkSessionId: null, costUsd: 0.05 });
+    expect(s.repo.get(forkId)).toMatchObject({ status: "failed", errorCode: "not_forked", forkSessionId: null, costUsd: 0.05 });
     expect(s.deps.recordHeadless).not.toHaveBeenCalled();
     expect(s.msgs.map((m) => m.role)).toEqual(["user"]);
     expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("instead of forking"));
-    s.svc.ask("root-1", forkId, "q2");
+    forkErr(() => s.svc.ask("root-1", forkId, "q2"), "not_forked");
     await s.svc.idle();
-    expect(s.calls[1].args).toEqual(s.repo.get(forkId)!.launchArgs);
-    expect(s.calls[1].args).toContain("--fork-session");
+    expect(s.deps.run).toHaveBeenCalledTimes(1);
+    expect(s.msgs.map((m) => m.role)).toEqual(["user"]);
+    expect(s.svc.list("root-1")[0]).toMatchObject({ status: "failed", error: { code: "not_forked", resetAt: null } });
+  });
+
+  it("失败的一轮带着 --resume 那个 id：保留真正的失败原因和 resetAt，也不存成分叉 id、不记 headless", async () => {
+    const s = setup();
+    const limit = { kind: "rate_limit" as const, resetsAt: 77, message: "limit" };
+    s.queue.push({ ok: false, reason: "rate_limited", message: "limit", limit, stderr: "", result: result({ sessionId: "head-2", isError: true, resultText: "limit" }) });
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)).toMatchObject({ status: "failed", errorCode: "rate_limited", errorResetAt: 77, forkSessionId: null });
+    expect(s.deps.recordHeadless).not.toHaveBeenCalled();
+    expect(s.deps.log).not.toHaveBeenCalledWith(expect.stringContaining("instead of forking"));
+  });
+
+  it("完整分叉第一轮失败后重跑：开发 session 现在在跑 → dev_busy，没有 transcript → no_transcript，都不起跑", async () => {
+    const s = setup();
+    s.queue.push({ ok: false, reason: "timeout", message: "t", limit: null, stderr: "", result: null });
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)).toMatchObject({ mode: "full", status: "failed", errorCode: "timeout", forkSessionId: null });
+    s.heads.set("root-1", session("head-2", { waitingForInput: false }));
+    forkErr(() => s.svc.ask("root-1", forkId, "q again"), "dev_busy");
+    s.heads.set("root-1", session("head-2"));
+    s.deps.transcriptExists.mockReturnValue(false);
+    forkErr(() => s.svc.ask("root-1", forkId, "q again"), "no_transcript");
+    await s.svc.idle();
+    expect(s.deps.run).toHaveBeenCalledTimes(1);
+    expect(s.msgs.map((m) => m.role)).toEqual(["user"]);
+    expect(s.repo.get(forkId)).toMatchObject({ status: "failed", errorCode: "timeout" });
   });
 
   it("记回答出错：已经算出的费用照记，行标 bad_output", async () => {
