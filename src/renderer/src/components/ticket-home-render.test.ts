@@ -28,6 +28,20 @@ const props = (o: Partial<TicketHomeProps> = {}): TicketHomeProps => ({
   stages: stages([stageRow]), onGoTab: noop, onOpenPr: noop, onSend: noop, onFix: noop, ...o,
 });
 const html = (o?: Partial<TicketHomeProps>) => renderToStaticMarkup(createElement(TicketHome, props(o)));
+/** 在 TicketHome 返回的元素树里找文字是 label 的按钮（只有原生元素，不用渲染）。 */
+type El = { type: unknown; props: { children?: unknown; onClick?: () => void } };
+function findButton(node: unknown, label: string): El & { props: { onClick: () => void } } {
+  const walk = (n: unknown): El | null => {
+    if (Array.isArray(n)) { for (const c of n) { const f = walk(c); if (f) return f; } return null; }
+    if (n === null || typeof n !== "object" || !("props" in n)) return null;
+    const e = n as El;
+    if (e.type === "button" && e.props.children === label) return e;
+    return walk(e.props.children);
+  };
+  const b = walk(node);
+  if (!b || !b.props.onClick) throw new Error(`no button ${label}`);
+  return b as never;
+}
 
 describe("TicketHome", () => {
   it("mergeable: sentence, primary button, last said, basic info", () => {
@@ -58,6 +72,17 @@ describe("TicketHome", () => {
     const h = html({ row: null });
     expect(h).toContain("ticket-home-skeleton");
     expect(h).not.toContain("没开始");
+  });
+  it("two repos with the same PR number: open PR uses this PR's repo, not the first with that number", () => {
+    const opened: string[] = [];
+    const row = mkRow();
+    row.item = { ...row.item, pr: { repo: "acme/api", number: 52, title: "t", url: "https://github.com/acme/api/pull/52" } };
+    const other: PrStagesView = { ...stageRow, repoId: 2, repoName: "web", prUrl: "https://github.com/acme/web/pull/52" };
+    const mine: PrStagesView = { ...stageRow, repoId: 1, repoName: "api", prUrl: "https://github.com/acme/api/pull/52" };
+    const el = TicketHome({ ...props({ row, stages: stages([other, mine]) }), onOpenPr: (u) => opened.push(u) });
+    const button = findButton(el, S.hm.act.openPr);
+    button.props.onClick();
+    expect(opened).toEqual(["https://github.com/acme/api/pull/52"]);
   });
   it("several PRs", () => {
     expect(html({ row: mkRow(merge, 1) })).toContain("另有 1 个 PR");

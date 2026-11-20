@@ -3,7 +3,7 @@ import type { PrStageCell, PrStagesView } from "../../shared/pr-stages";
 import type { Turn } from "../../shared/turn";
 import type { SessionView } from "../../shared/types";
 import { STRINGS } from "./strings";
-import { clipSaid, contextLine, conversationSessions, mainActions, prStageLine, primarySession, terminalLanding, ticketLanding } from "./ticket-view";
+import { clipSaid, contextLine, conversationSessions, mainActions, prStageLine, primarySession, prUrlOf, terminalLanding, ticketLanding } from "./ticket-view";
 
 const S = STRINGS.zh;
 const ids = (t: Turn, o = { hasPr: true, canFix: false }) => mainActions(t, o, S).map((a) => a.id);
@@ -152,5 +152,25 @@ describe("ticketLanding", () => {
     expect(ticketLanding({ owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "pr", terminal: null });
     expect(ticketLanding({ owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "terminal", terminal: { activate: "t1" } });
     expect(ticketLanding({ owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s2" }, sessions, ["t1"])).toEqual({ tab: "terminal", terminal: { open: "s2" } });
+  });
+});
+
+describe("prUrlOf", () => {
+  const pr = { repo: "acme/api", number: 7, url: "https://github.com/acme/api/pull/7" };
+  const row = (o: { prNumber: number | null; prUrl: string | null; slug?: string | null }) => ({ slug: null, ...o }) as never;
+  it("uses the turn's url until the stages arrive; no PR, no url", () => {
+    expect(prUrlOf(pr, null)).toBe(pr.url);
+    expect(prUrlOf(null, { rows: [] })).toBeNull();
+  });
+  it("one row with that number is it; none means no button", () => {
+    expect(prUrlOf(pr, { rows: [row({ prNumber: 7, prUrl: "https://github.com/acme/api/pull/7?x" })] })).toBe("https://github.com/acme/api/pull/7?x");
+    expect(prUrlOf(pr, { rows: [row({ prNumber: 8, prUrl: "u8" })] })).toBeNull();
+  });
+  it("same number in two repos: the one whose url or slug names this repo", () => {
+    const web = row({ prNumber: 7, prUrl: "https://github.com/acme/web/pull/7" });
+    const api = row({ prNumber: 7, prUrl: "https://github.com/Acme/API/pull/7" });
+    expect(prUrlOf(pr, { rows: [web, api] })).toBe("https://github.com/Acme/API/pull/7");
+    expect(prUrlOf(pr, { rows: [web, row({ prNumber: 7, prUrl: "https://ghe.example/x", slug: "acme/api" })] })).toBe("https://ghe.example/x");
+    expect(prUrlOf(pr, { rows: [web, row({ prNumber: 7, prUrl: "https://github.com/acme/other/pull/7" })] })).toBeNull();
   });
 });

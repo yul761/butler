@@ -61,6 +61,25 @@ export function prStageLine(t: Pick<PrStagesTicket, "rows"> | null, S: UiStrings
   return others > 0 ? `${line} · ${S.lay.morePrs(others)}` : line;
 }
 
+/** PR 地址里的 owner/repo（github.com/owner/repo/pull/N）；看不出来为 null。 */
+function urlSlug(url: string | null): string | null {
+  const m = url === null ? null : /\/([^/]+\/[^/]+)\/pull\/\d+/.exec(url);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * 概况「打开 PR」的地址：PR 进度取到了就以它为准（没有这个 PR 就没有按钮），还没取到时用 turn 带的地址。
+ * 多仓库的 ticket 可能有同号的 PR：同号不止一个时按地址里的仓库（turn 的 repo 是 owner/repo）对上。
+ */
+export function prUrlOf(pr: { repo: string; number: number; url: string } | null, stages: Pick<PrStagesTicket, "rows"> | null): string | null {
+  if (pr === null) return null;
+  if (stages === null) return pr.url;
+  const same = stages.rows.filter((r) => r.prNumber === pr.number);
+  if (same.length <= 1) return same[0]?.prUrl ?? null;
+  const repo = pr.repo.toLowerCase();
+  return same.find((r) => r.prUrl === pr.url || urlSlug(r.prUrl) === repo || r.slug?.toLowerCase() === repo)?.prUrl ?? null;
+}
+
 /** 主 session：sessions 已按最近活动排序；先找不是修复、也不是总控开的最近一个，没有就取第一个。 */
 export function primarySession(sessions: SessionView[]): SessionView | null {
   return sessions.find((s) => s.fixesSession === null && s.spawnedBy === null) ?? sessions[0] ?? null;

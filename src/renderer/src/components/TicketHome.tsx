@@ -11,7 +11,7 @@ import type { TicketRow } from "../scope-view";
 import { ticketRows } from "../scope-view";
 import { S } from "../strings";
 import type { TicketTab } from "../ticket-tabs";
-import { clipSaid, contextLine, mainActions, prStageLine, type MainAction } from "../ticket-view";
+import { clipSaid, contextLine, mainActions, prStageLine, prUrlOf, type MainAction } from "../ticket-view";
 import { turnSentence } from "../turn-text";
 import { WhoTag } from "./ScopeParts";
 import { sendReasonText } from "../turn-card-actions";
@@ -36,17 +36,9 @@ export interface TicketHomeProps {
   onFix: () => void;
 }
 
-/** 要打开的 PR 地址：PR 进度取到了就以它为准（没有这个 PR 就没有按钮），还没取到时用 turn 带的地址。 */
-function prUrlOf(row: TicketRow, stages: PrStagesTicket | null): string | null {
-  const pr = row.item.pr;
-  if (pr === null) return null;
-  if (stages === null) return pr.url;
-  return stages.rows.find((r) => r.prNumber === pr.number)?.prUrl ?? null;
-}
-
 export function TicketHome({ ticket, row, glance, stages, canFix, notice, onGoTab, onOpenPr, onSend, onFix }: TicketHomeProps) {
   if (row === null) return <div className="ticket-home ticket-home-skeleton" aria-busy="true"><p className="muted">…</p></div>;
-  const url = prUrlOf(row, stages);
+  const url = prUrlOf(row.item.pr, stages);
   const actions = mainActions(row.turn, { hasPr: url !== null, canFix }, S);
   const run = (a: MainAction) => {
     if (a.id === "open_pr") {
